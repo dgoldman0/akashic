@@ -35,6 +35,24 @@ instead of rebinding it and stranding an old port or credential-bearing
 arena. Successful configuration clears all three arenas and copies the
 target into the descriptor.
 
+Composition code can qualify storage without depending on the owner's
+private offsets:
+
+```forth
+OAUTH2-HTTP-POST-EXTERNAL-SPAN-STATUS
+  ( address length post -- status )
+```
+
+The post must be structurally valid and the external span must be canonical,
+nonempty, and caller-qualified. Success proves that the complete span is
+disjoint from the owner descriptor and the complete configured request,
+form, and response backing arenas. Exact adjacency is accepted. Invalid
+shape returns `S-INVALID`, physical admission failures preserve
+`S-RANGE`, `S-PROTECTED`, or `S-PLATFORM`, and any overlap returns
+`S-ALIAS`. This read-only check neither exposes private arena offsets nor
+claims the admitted storage; the caller must keep all addresses stable for
+the later synchronous composition.
+
 `OAUTH2-HTTP-POST-TARGET@` returns the copied target, and
 `OAUTH2-HTTP-POST-HTU$` returns its RFC 9449 `htu` view. The underlying
 generic `HTARGET-HTU$` removes the query and preserves the canonical absolute
@@ -54,6 +72,9 @@ or a token-style operation, whose expected status is `200`:
 ```forth
 OAUTH2-HTTP-POST-KIND-TOKEN post OAUTH2-HTTP-POST-BEGIN
 
+operation-token-a operation-token-u
+    post OAUTH2-HTTP-POST-CORRELATION!
+
 S" grant_type" S" authorization_code"
     post OAUTH2-HTTP-POST-FIELD
 S" code" code-a code-u post OAUTH2-HTTP-POST-FIELD
@@ -61,6 +82,21 @@ S" code" code-a code-u post OAUTH2-HTTP-POST-FIELD
 dpop-a dpop-u authorization-a authorization-u
     post OAUTH2-HTTP-POST-SEAL
 ```
+
+`CORRELATION!` is an optional, provider-neutral composition seam. In
+`BUILDING`, it copies one canonical nonempty opaque token of at most
+`OAUTH2-HTTP-POST-CORRELATION-CAPACITY` bytes into the owner. The source
+must be caller-qualified and disjoint from the complete owner descriptor;
+the call returns `S-CAPACITY` or `S-ALIAS` for those two failures.
+`CORRELATION@ ( post -- address length present? )` borrows the retained copy.
+Outside `BUILDING`, `CORRELATION!` returns `S-STATE` without changing the
+owner or replacing retained terminal diagnostics.
+The token is not serialized into the HTTP request and has no provider-defined
+meaning at this layer. It remains stable through `SEALED`, `ACTIVE`,
+quarantined cleanup, and terminal `RESULT`, including build or transport
+failure, so an orchestrator can bind a result to the operation it started.
+The next admitted `BEGIN`, successful configuration into reusable storage, or
+`WIPE` scrubs the complete token slot and clears presence.
 
 `FIELD` delegates encoding to the generic bounded form writer. Field order is
 preserved. Names and values are borrowed only for the call. `SEAL` accepts
@@ -147,8 +183,9 @@ such work after the outer lifecycle call returns.
 
 On every cleanup-certain terminal path, the complete request and form arenas,
 embedded request/writer state, and copied Authorization/DPoP request bytes
-are scrubbed. A completed response body and valid nonce remain available
-until `BEGIN` or `WIPE`; an incomplete response arena is cleared.
+are scrubbed. A completed response body, valid nonce, and optional opaque
+correlation token remain available until `BEGIN` or `WIPE`; an incomplete
+response arena is cleared.
 
 A retained success or OAuth-error body may itself contain access tokens,
 refresh tokens, or other credentials. The caller must decode or copy only
@@ -191,10 +228,13 @@ OAUTH2-HTTP-POST-LAST-STATUS@           ( post -- status )
 OAUTH2-HTTP-POST-HTTP-STATUS@           ( post -- http-status )
 OAUTH2-HTTP-POST-BODY@                  ( post -- address length )
 OAUTH2-HTTP-POST-NONCE@                 ( post -- address length present? )
+OAUTH2-HTTP-POST-CORRELATION@           ( post -- address length present? )
 OAUTH2-HTTP-POST-DPOP-INCLUDED?          ( post -- flag )
 OAUTH2-HTTP-POST-AUTHORIZATION-INCLUDED? ( post -- flag )
 OAUTH2-HTTP-POST-DPOP-SENT?              ( post -- flag )
 OAUTH2-HTTP-POST-AUTHORIZATION-SENT?     ( post -- flag )
+OAUTH2-HTTP-POST-EXTERNAL-SPAN-STATUS
+  ( address length post -- status )
 ```
 
 Lower diagnostic accessors retain the last `FUEW`, `HREQ`, `HBUF`, `HSTR`,

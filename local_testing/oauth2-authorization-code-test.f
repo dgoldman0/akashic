@@ -10,6 +10,8 @@ VARIABLE _o2ct-query-u
 VARIABLE _o2ct-copy-u
 VARIABLE _o2ct-callback-count
 VARIABLE _o2ct-seen-binding-u
+VARIABLE _o2ct-seen-issuer-u
+VARIABLE _o2ct-seen-issuer-required
 VARIABLE _o2ct-seen-state-u
 VARIABLE _o2ct-seen-challenge-u
 VARIABLE _o2ct-seen-request-uri-u
@@ -86,6 +88,7 @@ CREATE _o2ct-challenge-copy O2CODE-CHALLENGE-SIZE ALLOT
 CREATE _o2ct-state-copy O2CODE-STATE-SIZE ALLOT
 CREATE _o2ct-verifier-copy O2CODE-VERIFIER-SIZE ALLOT
 CREATE _o2ct-binding-copy O2CODE-BINDING-CAPACITY ALLOT
+CREATE _o2ct-issuer-copy O2CODE-ISSUER-CAPACITY ALLOT
 CREATE _o2ct-request-uri-copy O2CODE-REQUEST-URI-CAPACITY ALLOT
 CREATE _o2ct-code-copy O2CODE-CODE-CAPACITY ALLOT
 CREATE _o2ct-recomputed O2CODE-CHALLENGE-SIZE ALLOT
@@ -430,6 +433,13 @@ CREATE _o2ct-pkce-work OAUTH2-PKCE-WORKSPACE-SIZE ALLOT
     0= _o2ct-assert
     _o2ct-binding-copy SWAP MOVE ;
 
+: _o2ct-capture-issuer  ( address length -- )
+    DUP _o2ct-seen-issuer-u !
+    2DUP _o2ct-object _O2C.ISSUER
+    _o2ct-object _O2C.ISSUER-U @ COMPARE
+    0= _o2ct-assert
+    _o2ct-issuer-copy SWAP MOVE ;
+
 : _o2ct-capture-state  ( address length -- )
     DUP _o2ct-seen-state-u !
     2DUP _o2ct-object _O2C.STATE O2CODE-STATE-SIZE
@@ -450,19 +460,30 @@ CREATE _o2ct-pkce-work OAUTH2-PKCE-WORKSPACE-SIZE ALLOT
     _o2ct-request-uri-copy SWAP MOVE ;
 
 : _o2ct-callback-never
-  \ ( context binding binding-u state state-u challenge challenge-u
-  \   -- callback-status )
+  ( x1 x2 x3 x4 x5 x6 x7 -- callback-status )
     1 _o2ct-callback-count +!
     _O2C-DROP7
     0 _o2ct-assert
     0 ;
 
+: _o2ct-par-callback-never
+  \ ( context binding binding-u issuer issuer-u issuer-required
+  \   state state-u challenge challenge-u -- callback-status )
+    1 _o2ct-callback-count +!
+    _O2C-DROP10
+    0 _o2ct-assert
+    0 ;
+
 : _o2ct-par-callback
-  \ ( context binding binding-u state state-u challenge challenge-u
-  \   -- callback-status )
+  \ ( context binding binding-u issuer issuer-u issuer-required
+  \   state state-u challenge challenge-u -- callback-status )
     1 _o2ct-callback-count +!
     _o2ct-capture-challenge
     _o2ct-capture-state
+    DUP _o2ct-seen-issuer-required !
+    DUP O2CODE-ISSUER-REQUIRED = _o2ct-assert
+    DROP
+    _o2ct-capture-issuer
     _o2ct-capture-binding
     DUP _o2ct-object = _o2ct-assert
     DUP O2CODE-PHASE@
@@ -470,29 +491,33 @@ CREATE _o2ct-pkce-work OAUTH2-PKCE-WORKSPACE-SIZE ALLOT
     O2CODE-PHASE-PREPARED = _o2ct-assert
     DUP _O2C.BORROWED @ -1 = _o2ct-assert
     DUP O2CODE-CLEAR? O2CODE-S-BUSY _o2ct-status
-    ['] _o2ct-callback-never 0 2 PICK
+    ['] _o2ct-par-callback-never 0 2 PICK
     O2CODE-WITH-PAR O2CODE-S-BUSY _o2ct-status
     DROP 701 ;
 
 : _o2ct-par-throw
-  \ ( context binding binding-u state state-u challenge challenge-u
-  \   -- callback-status )
+  \ ( context binding binding-u issuer issuer-u issuer-required
+  \   state state-u challenge challenge-u -- callback-status )
     1 _o2ct-callback-count +!
-    _O2C-DROP7
+    _O2C-DROP10
     -818 THROW ;
 
 : _o2ct-par-extra
-  \ ( context binding binding-u state state-u challenge challenge-u
-  \   -- callback-status extra )
+  \ ( context binding binding-u issuer issuer-u issuer-required
+  \   state state-u challenge challenge-u -- callback-status extra )
     1 _o2ct-callback-count +!
-    _O2C-DROP7
+    _O2C-DROP10
     701 702 ;
 
 : _o2ct-start-prepared  ( -- )
     _o2ct-fresh
     _o2ct-fill-work
     _o2ct-prepare-required O2CODE-S-OK _o2ct-status
-    _o2ct-work-zero? _o2ct-assert ;
+    _o2ct-work-zero? _o2ct-assert
+    _o2ct-object _O2C.STATE
+    _o2ct-state-copy O2CODE-STATE-SIZE MOVE
+    _o2ct-object _O2C.CHALLENGE
+    _o2ct-challenge-copy O2CODE-CHALLENGE-SIZE MOVE ;
 
 : _o2ct-test-par-borrow  ( -- )
     _o2ct-start-prepared
@@ -504,6 +529,12 @@ CREATE _o2ct-pkce-work OAUTH2-PKCE-WORKSPACE-SIZE ALLOT
     _o2ct-object _O2C.BORROWED @ 0= _o2ct-assert
     _o2ct-seen-binding-u @ _o2ct-binding NIP =
     _o2ct-assert
+    _o2ct-seen-issuer-u @ _o2ct-issuer NIP =
+    _o2ct-assert
+    _o2ct-seen-issuer-required @ O2CODE-ISSUER-REQUIRED =
+    _o2ct-assert
+    _o2ct-issuer-copy _o2ct-seen-issuer-u @
+    _o2ct-issuer COMPARE 0= _o2ct-assert
     _o2ct-seen-state-u @ O2CODE-STATE-SIZE =
     _o2ct-assert
     _o2ct-seen-challenge-u @ O2CODE-CHALLENGE-SIZE =
@@ -528,43 +559,81 @@ CREATE _o2ct-pkce-work OAUTH2-PKCE-WORKSPACE-SIZE ALLOT
     O2CODE-PHASE-PREPARED _o2ct-phase?
     _o2ct-stack ;
 
+: _o2ct-accept-par-required
+  ( request-uri request-uri-u expires-in now-seconds object -- status )
+    >R >R >R >R >R
+    _o2ct-issuer O2CODE-ISSUER-REQUIRED
+    _o2ct-state-copy O2CODE-STATE-SIZE
+    R> R> R> R> R>
+    O2CODE-ACCEPT-PAR ;
+
+: _o2ct-accept-par-optional
+  ( request-uri request-uri-u expires-in now-seconds object -- status )
+    >R >R >R >R >R
+    _o2ct-issuer O2CODE-ISSUER-OPTIONAL
+    _o2ct-state-copy O2CODE-STATE-SIZE
+    R> R> R> R> R>
+    O2CODE-ACCEPT-PAR ;
+
 : _o2ct-test-accept-par  ( -- )
     _o2ct-start-prepared
     _o2ct-object-copy!
-    _o2ct-request-uri 0 100 _o2ct-object O2CODE-ACCEPT-PAR
+    _o2ct-request-uri 0 100 _o2ct-object
+    _o2ct-accept-par-required
     O2CODE-S-INVALID _o2ct-status
     _o2ct-object-unchanged? _o2ct-assert
 
     _o2ct-request-uri O2CODE-MAX-PAR-EXPIRES-IN 1+
-    100 _o2ct-object O2CODE-ACCEPT-PAR
+    100 _o2ct-object _o2ct-accept-par-required
     O2CODE-S-INVALID _o2ct-status
     _o2ct-object-unchanged? _o2ct-assert
 
-    _o2ct-request-uri 1 -1 _o2ct-object O2CODE-ACCEPT-PAR
+    _o2ct-request-uri 1 -1 _o2ct-object
+    _o2ct-accept-par-required
     O2CODE-S-INVALID _o2ct-status
     _o2ct-object-unchanged? _o2ct-assert
 
     _o2ct-request-uri 1 _O2C-CELL-MAX
-    _o2ct-object O2CODE-ACCEPT-PAR
+    _o2ct-object _o2ct-accept-par-required
     O2CODE-S-OVERFLOW _o2ct-status
     _o2ct-object-unchanged? _o2ct-assert
 
     31 _o2ct-query C!
-    _o2ct-query 1 1 100 _o2ct-object O2CODE-ACCEPT-PAR
+    _o2ct-query 1 1 100 _o2ct-object
+    _o2ct-accept-par-required
     O2CODE-S-INVALID _o2ct-status
     _o2ct-object-unchanged? _o2ct-assert
 
     _o2ct-query O2CODE-REQUEST-URI-CAPACITY 1+
-    1 100 _o2ct-object O2CODE-ACCEPT-PAR
+    1 100 _o2ct-object _o2ct-accept-par-required
     O2CODE-S-CAPACITY _o2ct-status
     _o2ct-object-unchanged? _o2ct-assert
 
     _o2ct-object _O2C.BINDING 1
-    1 100 _o2ct-object O2CODE-ACCEPT-PAR
+    1 100 _o2ct-object _o2ct-accept-par-required
     O2CODE-S-ALIAS _o2ct-status
     _o2ct-object-unchanged? _o2ct-assert
 
+    S" https://other.example" O2CODE-ISSUER-REQUIRED
+    _o2ct-state-copy O2CODE-STATE-SIZE
     _o2ct-request-uri 60 100 _o2ct-object O2CODE-ACCEPT-PAR
+    O2CODE-S-ISSUER _o2ct-status
+    _o2ct-object-unchanged? _o2ct-assert
+
+    _o2ct-issuer O2CODE-ISSUER-OPTIONAL
+    _o2ct-state-copy O2CODE-STATE-SIZE
+    _o2ct-request-uri 60 100 _o2ct-object O2CODE-ACCEPT-PAR
+    O2CODE-S-ISSUER _o2ct-status
+    _o2ct-object-unchanged? _o2ct-assert
+
+    _o2ct-issuer O2CODE-ISSUER-REQUIRED
+    _o2ct-challenge-copy O2CODE-CHALLENGE-SIZE
+    _o2ct-request-uri 60 100 _o2ct-object O2CODE-ACCEPT-PAR
+    O2CODE-S-STATE _o2ct-status
+    _o2ct-object-unchanged? _o2ct-assert
+
+    _o2ct-request-uri 60 100 _o2ct-object
+    _o2ct-accept-par-required
     O2CODE-S-OK _o2ct-status
     O2CODE-PHASE-PAR-READY _o2ct-phase?
     _o2ct-object _O2C.REQUEST-URI
@@ -573,7 +642,8 @@ CREATE _o2ct-pkce-work OAUTH2-PKCE-WORKSPACE-SIZE ALLOT
     _o2ct-object _O2C.DEADLINE @ 160 = _o2ct-assert
 
     _o2ct-object-copy!
-    _o2ct-request-uri 1 100 _o2ct-object O2CODE-ACCEPT-PAR
+    _o2ct-request-uri 1 100 _o2ct-object
+    _o2ct-accept-par-required
     O2CODE-S-PHASE _o2ct-status
     _o2ct-object-unchanged? _o2ct-assert
     _o2ct-stack ;
@@ -610,7 +680,8 @@ CREATE _o2ct-pkce-work OAUTH2-PKCE-WORKSPACE-SIZE ALLOT
 
 : _o2ct-start-par-ready  ( -- )
     _o2ct-start-prepared
-    _o2ct-request-uri 60 100 _o2ct-object O2CODE-ACCEPT-PAR
+    _o2ct-request-uri 60 100 _o2ct-object
+    _o2ct-accept-par-required
     O2CODE-S-OK _o2ct-status ;
 
 : _o2ct-assert-launch-finished  ( -- )
@@ -671,7 +742,10 @@ CREATE _o2ct-pkce-work OAUTH2-PKCE-WORKSPACE-SIZE ALLOT
     _o2ct-binding _o2ct-issuer O2CODE-ISSUER-OPTIONAL
     _o2ct-object _o2ct-work O2CODE-PREPARE
     O2CODE-S-OK _o2ct-status
-    _o2ct-request-uri 60 100 _o2ct-object O2CODE-ACCEPT-PAR
+    _o2ct-object _O2C.STATE
+    _o2ct-state-copy O2CODE-STATE-SIZE MOVE
+    _o2ct-request-uri 60 100 _o2ct-object
+    _o2ct-accept-par-optional
     O2CODE-S-OK _o2ct-status
     ['] _o2ct-launch-ok 0 100 _o2ct-object
     O2CODE-WITH-LAUNCH 704 = _o2ct-assert ;

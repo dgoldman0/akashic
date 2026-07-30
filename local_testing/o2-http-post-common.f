@@ -251,6 +251,22 @@ VARIABLE _o2hpt-expected-http
         2DROP -1
     THEN ;
 
+: _o2hpt-correlation?  ( -- flag )
+    _o2hpt-post OAUTH2-HTTP-POST-CORRELATION@
+    IF
+        S" operation-binding-1" STR-STR=
+    ELSE
+        2DROP 0
+    THEN ;
+
+: _o2hpt-correlation-absent?  ( -- flag )
+    _o2hpt-post OAUTH2-HTTP-POST-CORRELATION@
+    IF
+        2DROP 0
+    ELSE
+        2DROP -1
+    THEN ;
+
 : _o2hpt-semantic  ( outcome detail http-status -- )
     _o2hpt-expected-http !
     _o2hpt-expected-detail !

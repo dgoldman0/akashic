@@ -580,6 +580,10 @@ _O2C-DESCRIPTION-OFF O2CODE-ERROR-DESCRIPTION-CAPACITY +
 : _O2C-DROP6  ( x1 x2 x3 x4 x5 x6 -- ) 2DROP 2DROP 2DROP ;
 : _O2C-DROP7  ( x1 x2 x3 x4 x5 x6 x7 -- )
     2DROP 2DROP 2DROP DROP ;
+: _O2C-DROP9  ( x1 x2 x3 x4 x5 x6 x7 x8 x9 -- )
+    2DROP 2DROP 2DROP 2DROP DROP ;
+: _O2C-DROP10  ( x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 -- )
+    2DROP 2DROP 2DROP 2DROP 2DROP ;
 
 : _O2C-RETURN7  ( x1 x2 x3 x4 x5 x6 x7 status -- status )
     >R _O2C-DROP7 R> ;
@@ -767,66 +771,135 @@ _O2C-DESCRIPTION-OFF O2CODE-ERROR-DESCRIPTION-CAPACITY +
 \  PAR binding, acceptance, and one-shot authorization launch
 \ =====================================================================
 
-: _O2C-RETURN5  ( x1 x2 x3 x4 x5 status -- status )
-    >R _O2C-DROP5 R> ;
+: _O2C-RETURN10
+  \ ( x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 status -- status )
+    >R _O2C-DROP10 R> ;
 
-: _O2C-5DUP
-  ( x1 x2 x3 x4 x5 -- x1 x2 x3 x4 x5 x1 x2 x3 x4 x5 )
-    4 PICK 4 PICK 4 PICK 4 PICK 4 PICK ;
+: _O2C-10DUP
+  \ ( x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 --
+  \   x1 x2 x3 x4 x5 x6 x7 x8 x9 x10
+  \   x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 )
+    9 PICK 9 PICK 9 PICK 9 PICK 9 PICK
+    9 PICK 9 PICK 9 PICK 9 PICK 9 PICK ;
+
+: _O2C-PAR-ISSUER-MATCH?
+  ( issuer issuer-u issuer-required object -- flag )
+    >R
+    DUP R@ _O2C.ISSUER-REQUIRED @ <> IF
+        _O2C-DROP3 R> DROP 0 EXIT
+    THEN
+    DROP
+    DUP R@ _O2C.ISSUER-U @ <> IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    R@ _O2C.ISSUER R@ _O2C.ISSUER-U @ COMPARE 0=
+    R> DROP ;
+
+: _O2C-PAR-CORRELATION-MATCH?
+  ( correlation correlation-u object -- flag )
+    >R
+    DUP O2CODE-STATE-SIZE <> IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    DROP
+    R@ _O2C.STATE O2CODE-STATE-SIZE _O2C-CT-BYTES=
+    R> DROP ;
 
 : _O2C-ACCEPT-PAR-GEOMETRY
-  ( request-uri request-uri-u expires-in now-seconds object -- status )
+  \ ( issuer issuer-u issuer-required correlation correlation-u
+  \   request-uri request-uri-u expires-in now-seconds object -- status )
     DUP _O2C-OBJECT-STATUS ?DUP IF
-        _O2C-RETURN5 EXIT
+        _O2C-RETURN10 EXIT
     THEN
     DUP _O2C.BORROWED @ IF
-        O2CODE-S-BUSY _O2C-RETURN5 EXIT
+        O2CODE-S-BUSY _O2C-RETURN10 EXIT
     THEN
     DUP _O2C.PHASE @ O2CODE-PHASE-PREPARED <> IF
-        O2CODE-S-PHASE _O2C-RETURN5 EXIT
+        O2CODE-S-PHASE _O2C-RETURN10 EXIT
+    THEN
+
+    7 PICK _O2C-BOOLEAN? 0= IF
+        O2CODE-S-INVALID _O2C-RETURN10 EXIT
+    THEN
+    8 PICK DUP 1 < IF
+        DROP O2CODE-S-INVALID _O2C-RETURN10 EXIT
+    THEN
+    O2CODE-ISSUER-CAPACITY U> IF
+        O2CODE-S-CAPACITY _O2C-RETURN10 EXIT
+    THEN
+    9 PICK 9 PICK _O2C-ADMIT-SPAN ?DUP IF
+        _O2C-RETURN10 EXIT
+    THEN
+    9 PICK 9 PICK _O2C-URI-CHAR? 0= IF
+        O2CODE-S-INVALID _O2C-RETURN10 EXIT
+    THEN
+
+    5 PICK O2CODE-STATE-SIZE <> IF
+        O2CODE-S-STATE _O2C-RETURN10 EXIT
+    THEN
+    6 PICK 6 PICK _O2C-ADMIT-SPAN ?DUP IF
+        _O2C-RETURN10 EXIT
     THEN
 
     3 PICK DUP 1 < IF
-        DROP O2CODE-S-INVALID _O2C-RETURN5 EXIT
+        DROP O2CODE-S-INVALID _O2C-RETURN10 EXIT
     THEN
     O2CODE-REQUEST-URI-CAPACITY U> IF
-        O2CODE-S-CAPACITY _O2C-RETURN5 EXIT
+        O2CODE-S-CAPACITY _O2C-RETURN10 EXIT
     THEN
     4 PICK 4 PICK _O2C-ADMIT-SPAN ?DUP IF
-        _O2C-RETURN5 EXIT
+        _O2C-RETURN10 EXIT
     THEN
     4 PICK 4 PICK _O2C-VSCHAR? 0= IF
-        O2CODE-S-INVALID _O2C-RETURN5 EXIT
+        O2CODE-S-INVALID _O2C-RETURN10 EXIT
     THEN
 
     2 PICK DUP 1 < IF
-        DROP O2CODE-S-INVALID _O2C-RETURN5 EXIT
+        DROP O2CODE-S-INVALID _O2C-RETURN10 EXIT
     THEN
     O2CODE-MAX-PAR-EXPIRES-IN U> IF
-        O2CODE-S-INVALID _O2C-RETURN5 EXIT
+        O2CODE-S-INVALID _O2C-RETURN10 EXIT
     THEN
     1 PICK DUP 0< IF
-        DROP O2CODE-S-INVALID _O2C-RETURN5 EXIT
+        DROP O2CODE-S-INVALID _O2C-RETURN10 EXIT
     THEN
     _O2C-CELL-MAX U> IF
-        O2CODE-S-INVALID _O2C-RETURN5 EXIT
+        O2CODE-S-INVALID _O2C-RETURN10 EXIT
     THEN
     2 PICK _O2C-CELL-MAX 3 PICK -
     U> IF
-        O2CODE-S-OVERFLOW _O2C-RETURN5 EXIT
+        O2CODE-S-OVERFLOW _O2C-RETURN10 EXIT
     THEN
 
+    9 PICK 9 PICK
+    2 PICK O2CODE-TRANSACTION-SIZE MSPAN-OVERLAP? IF
+        O2CODE-S-ALIAS _O2C-RETURN10 EXIT
+    THEN
+    6 PICK 6 PICK
+    2 PICK O2CODE-TRANSACTION-SIZE MSPAN-OVERLAP? IF
+        O2CODE-S-ALIAS _O2C-RETURN10 EXIT
+    THEN
     4 PICK 4 PICK
     2 PICK O2CODE-TRANSACTION-SIZE MSPAN-OVERLAP? IF
-        O2CODE-S-ALIAS _O2C-RETURN5 EXIT
+        O2CODE-S-ALIAS _O2C-RETURN10 EXIT
     THEN
-    O2CODE-S-OK _O2C-RETURN5 ;
+
+    9 PICK 9 PICK 9 PICK 3 PICK
+    _O2C-PAR-ISSUER-MATCH? 0= IF
+        O2CODE-S-ISSUER _O2C-RETURN10 EXIT
+    THEN
+    6 PICK 6 PICK 2 PICK
+    _O2C-PAR-CORRELATION-MATCH? 0= IF
+        O2CODE-S-STATE _O2C-RETURN10 EXIT
+    THEN
+    O2CODE-S-OK _O2C-RETURN10 ;
 
 : O2CODE-ACCEPT-PAR
-  ( request-uri request-uri-u expires-in now-seconds object -- status )
-    _O2C-5DUP _O2C-ACCEPT-PAR-GEOMETRY
+  \ ( issuer issuer-u issuer-required correlation correlation-u
+  \   request-uri request-uri-u expires-in now-seconds object -- status )
+    _O2C-10DUP _O2C-ACCEPT-PAR-GEOMETRY
     DUP IF
-        >R _O2C-DROP5 R> EXIT
+        >R _O2C-DROP10 R> EXIT
     THEN
     DROP
     >R
@@ -834,7 +907,7 @@ _O2C-DESCRIPTION-OFF O2CODE-ERROR-DESCRIPTION-CAPACITY +
     2 PICK R@ _O2C.REQUEST-URI-U !
     2DUP + R@ _O2C.DEADLINE !
     O2CODE-PHASE-PAR-READY R@ _O2C.PHASE !
-    _O2C-DROP4
+    _O2C-DROP9
     R> DROP
     O2CODE-S-OK ;
 
@@ -859,14 +932,17 @@ _O2C-DESCRIPTION-OFF O2CODE-ERROR-DESCRIPTION-CAPACITY +
 
 : _O2C-PAR-CALLBACK-RUN
   \ callback receives
-  \   ( context binding binding-u state state-u challenge challenge-u
-  \     -- callback-status )
+  \   ( context binding binding-u issuer issuer-u issuer-required
+  \     state state-u challenge challenge-u -- callback-status )
   \ stack effect here is ( callback context object -- callback-status )
     DEPTH 2 - >R
     ROT >R
     >R
     R@ _O2C.BINDING
     R@ _O2C.BINDING-U @
+    R@ _O2C.ISSUER
+    R@ _O2C.ISSUER-U @
+    R@ _O2C.ISSUER-REQUIRED @
     R@ _O2C.STATE
     O2CODE-STATE-SIZE
     R@ _O2C.CHALLENGE

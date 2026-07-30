@@ -229,16 +229,24 @@ def _assert_source_contracts() -> None:
     accept_par_geometry = _word_body(
         source, "_O2C-ACCEPT-PAR-GEOMETRY"
     )
+    assert accept_par_geometry.count("_O2C-ADMIT-SPAN") == 3
     assert "O2CODE-MAX-PAR-EXPIRES-IN" in accept_par_geometry
     assert "_O2C-CELL-MAX" in accept_par_geometry
     assert "O2CODE-S-OVERFLOW" in accept_par_geometry
-    assert "MSPAN-OVERLAP?" in accept_par_geometry
+    assert accept_par_geometry.count("MSPAN-OVERLAP?") == 3
+    assert "_O2C-PAR-ISSUER-MATCH?" in accept_par_geometry
+    assert "_O2C-PAR-CORRELATION-MATCH?" in accept_par_geometry
+    assert "O2CODE-S-ISSUER" in accept_par_geometry
+    assert "O2CODE-S-STATE" in accept_par_geometry
     assert not re.search(
         r"(?<![A-Za-z0-9_-])(?:C!|W!|!|MOVE|FILL)"
         r"(?![A-Za-z0-9_-])",
         accept_par_geometry,
     ), "ACCEPT-PAR geometry must not mutate the transaction"
     accept_par = _word_body(source, "O2CODE-ACCEPT-PAR")
+    assert accept_par.index("_O2C-10DUP") < (
+        accept_par.index("_O2C-ACCEPT-PAR-GEOMETRY")
+    )
     assert accept_par.index("_O2C-ACCEPT-PAR-GEOMETRY") < (
         accept_par.index("MOVE")
     )
@@ -247,6 +255,21 @@ def _assert_source_contracts() -> None:
     callback_run = _word_body(source, "_O2C-PAR-CALLBACK-RUN")
     assert "DEPTH" in callback_run
     assert "EXECUTE" in callback_run
+    for retained_field in (
+        "_O2C.BINDING",
+        "_O2C.ISSUER",
+        "_O2C.ISSUER-U @",
+        "_O2C.ISSUER-REQUIRED @",
+        "_O2C.STATE",
+        "_O2C.CHALLENGE",
+    ):
+        assert retained_field in callback_run
+    assert callback_run.index("_O2C.BINDING") < (
+        callback_run.index("_O2C.ISSUER")
+    )
+    assert callback_run.index("_O2C.ISSUER-REQUIRED @") < (
+        callback_run.index("_O2C.STATE")
+    )
     par_borrow = _word_body(source, "_O2C-WITH-PAR-CALL")
     assert par_borrow.index("-1 R@ _O2C.BORROWED !") < (
         par_borrow.index("CATCH")
@@ -374,6 +397,8 @@ def _assert_source_contracts() -> None:
         "_o2ct-test-prepare-preflight-and-throw",
         "_o2ct-test-par-borrow",
         "_o2ct-test-accept-par",
+        "_o2ct-accept-par-required",
+        "_o2ct-seen-issuer-required",
         "_o2ct-test-launch-one-shot",
         "_o2ct-test-callback-rejections-and-success",
         "_o2ct-test-issuer-optional",

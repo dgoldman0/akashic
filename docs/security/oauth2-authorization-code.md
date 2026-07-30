@@ -34,8 +34,11 @@ EMPTY -> PREPARED -> PAR-READY -> AWAITING
 
 - `PREPARE` generates separate state and PKCE secrets.
 - `WITH-PAR` may be repeated while `PREPARED`, including after an HTTP-layer
-  DPoP nonce challenge.
-- `ACCEPT-PAR` binds the opaque request URI and its caller-clock deadline.
+  DPoP nonce challenge. Its guarded loan includes the retained issuer policy
+  and state so the outgoing request owner can retain exact provenance.
+- `ACCEPT-PAR` first matches that outgoing issuer policy and correlation
+  token against the still-`PREPARED` transaction, then binds the opaque
+  request URI and its caller-clock deadline.
 - `WITH-LAUNCH` consumes that URI exactly once and enters `AWAITING` before
   calling external code.
 - `ACCEPT-CALLBACK` either leaves `AWAITING` unchanged, installs a code and
@@ -74,7 +77,9 @@ O2CODE-WITH-PAR
   ( callback context object -- callback-status-or-O2CODE-status )
 
 O2CODE-ACCEPT-PAR
-  ( request-uri request-uri-u expires-in now-seconds object -- status )
+  ( expected-issuer expected-issuer-u issuer-required
+    correlation correlation-u request-uri request-uri-u
+    expires-in now-seconds object -- status )
 
 O2CODE-WITH-LAUNCH
   ( callback context now-seconds object
@@ -93,13 +98,14 @@ O2CODE-ERROR@
 The `WITH-PAR` callback receives:
 
 ```forth
-( context binding binding-u state state-u challenge challenge-u
-  -- callback-status )
+( context binding binding-u issuer issuer-u issuer-required
+  state state-u challenge challenge-u -- callback-status )
 ```
 
-The HTTP owner copies those values into its PAR request and supplies the
-literal `S256` code-challenge method. The callback's borrowed addresses are
-valid only for that invocation.
+The HTTP owner copies those values into its PAR request, retains the exact
+issuer policy and state as result provenance, and supplies the literal
+`S256` code-challenge method. The callback's borrowed addresses are valid
+only for that invocation.
 
 The `WITH-LAUNCH` callback receives:
 
@@ -147,7 +153,12 @@ random fallback. Entropy and crypto failures are explicit statuses.
 `O2CODE-ACCEPT-PAR` accepts the already-decoded successful PAR fields. The
 HTTP owner must first require exactly `201 Created` and a JSON media type,
 then use `OAUTH2-PAR-RESPONSE-WITH` to decode `request_uri` and
-`expires_in`.
+`expires_in`. It must also return the exact issuer bytes, issuer-required
+policy, and correlation token retained from the outgoing `WITH-PAR` loan.
+The issuer and policy must match the transaction or acceptance returns
+`O2CODE-S-ISSUER`; the correlation token must match the retained state or
+acceptance returns `O2CODE-S-STATE`. These checks, including all span and
+alias admission, precede mutation.
 
 `request_uri` remains opaque. This module binds its bytes to the current
 transaction and enforces one-shot release, but does not impose a

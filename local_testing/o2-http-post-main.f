@@ -75,11 +75,28 @@ PROVIDED akashic-o2http-main
         _o2hpt-target HTARGET-EQUAL? _o2hpt-assert
     _o2hpt-post OAUTH2-HTTP-POST-HTU$
         S" https://pds.example.test:8443/oauth/token"
-        STR-STR= _o2hpt-assert ;
+        STR-STR= _o2hpt-assert
+    _o2hpt-expected 16 _o2hpt-post
+        OAUTH2-HTTP-POST-EXTERNAL-SPAN-STATUS
+        OAUTH2-HTTP-POST-S-OK _o2hpt-status
+    _o2hpt-post OAUTH2-HTTP-POST-SIZE _o2hpt-post
+        OAUTH2-HTTP-POST-EXTERNAL-SPAN-STATUS
+        OAUTH2-HTTP-POST-S-ALIAS _o2hpt-status
+    _o2hpt-request _O2HPT-REQUEST-CAPACITY _o2hpt-post
+        OAUTH2-HTTP-POST-EXTERNAL-SPAN-STATUS
+        OAUTH2-HTTP-POST-S-ALIAS _o2hpt-status ;
 
 : _o2hpt-build-request  ( -- )
     OAUTH2-HTTP-POST-KIND-TOKEN _o2hpt-post OAUTH2-HTTP-POST-BEGIN
         OAUTH2-HTTP-POST-S-OK _o2hpt-status
+    _o2hpt-correlation-absent? _o2hpt-assert
+    S" operation-binding-1" _o2hpt-post
+        OAUTH2-HTTP-POST-CORRELATION!
+        OAUTH2-HTTP-POST-S-OK _o2hpt-status
+    _o2hpt-correlation? _o2hpt-assert
+    _o2hpt-post 1 _o2hpt-post OAUTH2-HTTP-POST-CORRELATION!
+        OAUTH2-HTTP-POST-S-ALIAS _o2hpt-status
+    _o2hpt-correlation? _o2hpt-assert
     S" grant_type" S" authorization_code"
         _o2hpt-post OAUTH2-HTTP-POST-FIELD
         OAUTH2-HTTP-POST-S-OK _o2hpt-status
@@ -105,6 +122,7 @@ PROVIDED akashic-o2http-main
 : _o2hpt-build-par-request  ( -- )
     OAUTH2-HTTP-POST-KIND-PAR _o2hpt-post OAUTH2-HTTP-POST-BEGIN
         OAUTH2-HTTP-POST-S-OK _o2hpt-status
+    _o2hpt-correlation-absent? _o2hpt-assert
     S" client_id" S" https://client.example/metadata.json"
         _o2hpt-post OAUTH2-HTTP-POST-FIELD
         OAUTH2-HTTP-POST-S-OK _o2hpt-status
@@ -129,6 +147,15 @@ PROVIDED akashic-o2http-main
     _o2hpt-post OAUTH2-HTTP-POST-BODY@
         S" {}" STR-STR= _o2hpt-assert
     _o2hpt-nonce? _o2hpt-assert
+    _o2hpt-correlation? _o2hpt-assert
+    _o2hpt-post OAUTH2-HTTP-POST-LAST-STATUS@
+        OAUTH2-HTTP-POST-S-OK = _o2hpt-assert
+    S" replacement-binding" _o2hpt-post
+        OAUTH2-HTTP-POST-CORRELATION!
+        OAUTH2-HTTP-POST-S-STATE _o2hpt-status
+    _o2hpt-post OAUTH2-HTTP-POST-LAST-STATUS@
+        OAUTH2-HTTP-POST-S-OK = _o2hpt-assert
+    _o2hpt-correlation? _o2hpt-assert
     _o2hpt-post OAUTH2-HTTP-POST-DPOP-SENT? _o2hpt-assert
     _o2hpt-post OAUTH2-HTTP-POST-AUTHORIZATION-SENT?
         _o2hpt-assert

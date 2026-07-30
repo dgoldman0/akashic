@@ -424,6 +424,10 @@ def _assert_source_contracts() -> None:
         "OAUTH2-HTTP-POST-SIZE",
         "OAUTH2-HTTP-POST-CONFIGURE",
         "OAUTH2-HTTP-POST-BEGIN",
+        "OAUTH2-HTTP-POST-CORRELATION-CAPACITY",
+        "OAUTH2-HTTP-POST-CORRELATION!",
+        "OAUTH2-HTTP-POST-CORRELATION@",
+        "OAUTH2-HTTP-POST-EXTERNAL-SPAN-STATUS",
         "OAUTH2-HTTP-POST-FIELD",
         "OAUTH2-HTTP-POST-SEAL",
         "OAUTH2-HTTP-POST-START",
@@ -463,6 +467,7 @@ def _assert_source_contracts() -> None:
     assert "_O2HP-KIND-EXPECTED?" in valid
     assert "_O2HP-SUBORDINATE-BINDINGS?" in valid
     assert "_O2HP-FLAGS-CONSISTENT?" in valid
+    assert "_O2HP-CORRELATION-CANONICAL?" in valid
     flags = _word_body(source, "_O2HP-FLAGS-CONSISTENT?")
     assert "OAUTH2-HTTP-POST-F-DPOP-SENT" in flags
     assert "OAUTH2-HTTP-POST-F-DPOP-INCLUDED" in flags
@@ -493,6 +498,36 @@ def _assert_source_contracts() -> None:
     assert "HBUF-STATE-IDLE" in subordinate
     assert "_O2HP-HBUF-ACTIVE-STATE?" in subordinate
     assert "_O2HP-HBUF-CLEANUP-STATE?" in subordinate
+
+    external = _word_body(
+        source, "OAUTH2-HTTP-POST-EXTERNAL-SPAN-STATUS"
+    )
+    assert "OAUTH2-HTTP-POST-VALID?" in external
+    assert "_O2HP-SPAN-STATUS" in external
+    assert external.count("MSPAN-OVERLAP?") == 4
+    for arena in (
+        "_O2HP.REQUEST-A",
+        "_O2HP.REQUEST-CAP",
+        "_O2HP.FORM-A",
+        "_O2HP.FORM-CAP",
+        "_O2HP.RESPONSE-A",
+        "_O2HP.RESPONSE-CAP",
+    ):
+        assert arena in external
+
+    correlation = _word_body(
+        source, "OAUTH2-HTTP-POST-CORRELATION!"
+    )
+    assert "OAUTH2-HTTP-POST-STATE-BUILDING" in correlation
+    assert "OAUTH2-HTTP-POST-CORRELATION-CAPACITY" in correlation
+    assert "_O2HP-SPAN-STATUS" in correlation
+    assert "OAUTH2-HTTP-POST-S-CAPACITY" in correlation
+    assert "OAUTH2-HTTP-POST-S-ALIAS" in correlation
+    assert correlation.index("_O2HP-CLEAR-CORRELATION") < (
+        correlation.index("MOVE")
+    )
+    reset = _word_body(source, "_O2HP-RESET-OPERATION")
+    assert "_O2HP-CLEAR-CORRELATION" in reset
 
     seal = _word_body(source, "OAUTH2-HTTP-POST-SEAL")
     assert "FUEW-SEAL" in seal
@@ -576,6 +611,9 @@ def _assert_source_contracts() -> None:
         "OAUTH2-HTTP-POST-O-SUCCESS",
         "OAUTH2-HTTP-POST-DPOP-INCLUDED?",
         "OAUTH2-HTTP-POST-DPOP-SENT?",
+        "OAUTH2-HTTP-POST-CORRELATION!",
+        "OAUTH2-HTTP-POST-CORRELATION@",
+        "OAUTH2-HTTP-POST-EXTERNAL-SPAN-STATUS",
         "OAUTH2-HTTP-POST-WIPE",
         "HTARGET-HTU$",
         "OAUTH2-HTTP-POST-HTU$",
@@ -592,6 +630,10 @@ def _assert_source_contracts() -> None:
     assert "borrowed source spans" in documentation
     assert "credential-bearing request" in documentation
     assert "exclusively owned and protected" in documentation
+    assert re.search(
+        r"optional opaque\s+correlation token remain", documentation
+    )
+    assert "Exact adjacency is accepted" in documentation
     assert not re.search(
         r"(?mi)\b(?:\?DO|DO|\+LOOP|LOOP)\b", fixture
     ), "the fixture must use cursor walks rather than indexed loops"
