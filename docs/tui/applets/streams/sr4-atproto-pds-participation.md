@@ -97,9 +97,14 @@ Landing 3 currently includes:
 - `79c2c03` — retained Client Identifier Metadata provenance for the inline
   deployment;
 - `bcb04b4` — provider-neutral published P-256 key ownership extracted from
-  the AT inline composition; and
-- this checkpoint — retained two-resource provenance and remote `jwks_uri`
-  composition over that generic owner.
+  the AT inline composition;
+- `18d5e72` — retained two-resource provenance and remote `jwks_uri`
+  composition over that generic owner;
+- `0194dc0` — provider-neutral durable P-256 DPoP proof construction;
+- `2f5c887` — provider-neutral POST correlation and authorization-transaction
+  PAR provenance; and
+- this checkpoint — focused AT public-client PAR/PKCE composition through
+  strict successful-response acceptance.
 
 These commits do not close landing 3. `ff5bbbd` completes the local
 AT-specific deployment binder: one validated immutable client configuration,
@@ -150,7 +155,7 @@ generic owner. Its public status/API and 111,928-byte workspace remain stable;
 the reusable 58,056-byte key owner is shared by both AT key-source paths
 without duplicating selector or vault logic.
 
-The current checkpoint closes the AT-side retained-result boundary for remote
+`18d5e72` closes the AT-side retained-result boundary for remote
 `jwks_uri`. `AT-OAUTH-REMOTE-HRES-JWKS-TARGET!` transactionally exports a
 normalized HTTPS target from exact retained Client Identifier Metadata, and
 `AT-OAUTH-REMOTE-HRES-WITH` freshly reparses that metadata before binding a
@@ -160,11 +165,36 @@ to inline `jwks`. The used set, configuration binding, checked client key,
 durable local public identity, and distinct DPoP identity are delegated to
 the generic published-P256 owner.
 
-The immediate next boundary is production PAR/PKCE and authorization-response
-composition, followed by DPoP-aware token exchange and nonce retry, durable
-generic session installation, and cold recovery, refresh rotation, logout,
-revocation/reauthorization, cancellation, and complete cleanup. Existing
-generic pieces should be composed rather than reimplemented.
+`0194dc0` adds proof construction to the provider-neutral durable P-256 key
+owner. The operation authenticates the exact DPoP slot and generation, keeps
+the private scalar and proof staging inside its exclusive workspace, releases
+the vault borrow, then publishes the compact proof to caller-owned storage
+under complete cleanup and throw preservation.
+
+`2f5c887` gives the generic HTTP POST owner a bounded opaque correlation slot
+and a public way for composition code to qualify storage against its complete
+descriptor and request/form/response arenas. O2CODE now loans its retained
+issuer policy with state and challenge, and accepts a PAR result only when the
+returned issuer policy and constant-time correlation match the still-prepared
+transaction before mutation.
+
+The current checkpoint adds the state-free `atproto/oauth-par.f` policy
+adapter. Its public path prepares O2CODE from one admitted immutable AT client
+and ready profile, serializes exact AT PAR fields into the generic POST owner,
+retains the outgoing state as local request provenance, accepts only an exact
+terminal 201 JSON result with a DPoP nonce, and moves the same transaction to
+`PAR-READY`. The focused vertical uses real production entropy, PKCE, form,
+HTTP, parser, profile, client, transaction, and response-decoder code; only
+the deterministic server bytes and the still-opaque compact DPoP proof are
+fixture inputs.
+
+The immediate next boundary is to compose `0194dc0` directly into the public
+PAR build so the mandatory proof is derived from the configuration-bound
+durable DPoP key, exact POST target/method, trusted time, and retained nonce
+rather than accepted as opaque caller bytes. Authorization-response and
+DPoP-aware token/nonce composition follow, then durable generic session
+installation and cold recovery, refresh rotation, logout,
+revocation/reauthorization, cancellation, and complete cleanup.
 
 ## Current repository handoff
 
@@ -173,10 +203,10 @@ At preparation time:
 ```text
 repository: /home/kir/Documents/Projects/fantasy-computing/akashic
 branch:     main
-code base:  this retained remote-jwks_uri checkpoint
+code base:  this focused AT public-client PAR checkpoint
 record:     updated in the same checkpoint
-upstream:   origin/main at cc37ce8
-ahead:      3 commits after committing this checkpoint
+upstream:   origin/main at bcb04b4
+ahead:      4 commits after committing this checkpoint
 tests:      no test process running
 ```
 
@@ -188,7 +218,10 @@ baa640b Advance SR4 to deployment key composition
 5ea452f Compose confidential inline AT OAuth keys
 79c2c03 Bind retained client metadata to inline OAuth
 bcb04b4 Extract generic OAuth published P-256 ownership
-this checkpoint: bind retained remote AT OAuth keys
+18d5e72 Bind retained remote AT OAuth keys
+0194dc0 Bind durable OAuth DPoP proofs to P-256 keys
+2f5c887 Bind generic PAR results to initiating requests
+this checkpoint: compose AT OAuth pushed authorization requests
 ```
 
 `2ae49bc` added `OAUTH2-P256-KEY-PROVISION-*`,
@@ -222,13 +255,24 @@ Metadata source selection and deployment policy; the generic owner proves
 that one checked published set agrees with durable local client ownership and
 then lends distinct client/DPoP public identity.
 
-The current checkpoint adds the state-free
+`18d5e72` adds the state-free
 `akashic/atproto/oauth-remote-hres.f` adapter over one 115,336-byte
 caller-owned workspace. The AT-specific layer owns only metadata/source
 policy, transactional target export, and two-resource canonical provenance.
 Generic HRES retains transport and response ownership, `HTARGET` retains URI
 normalization, and `security/oauth2/published-key-p256.f` retains checked set
 and durable P-256 ownership.
+
+`0194dc0` extends `security/oauth2/key-p256.f` with a provider-neutral durable
+DPoP proof operation. `2f5c887` extends only the generic OAuth transaction and
+HTTP POST owners needed to correlate one returned PAR result with its
+initiating issuer and state. Neither module depends on AT Protocol or Streams.
+
+The current checkpoint adds `akashic/atproto/oauth-par.f`, its focused
+documentation, and a staged public-client fixture. The adapter owns AT policy
+only; generic O2CODE retains state/PKCE/issuer lifecycle, generic HTTP owns
+form serialization and transport evidence, and the generic PAR decoder owns
+successful-response schema validation.
 
 The following files are preserved unrelated user/old-L13 work. Do not stage,
 restore, rewrite, or delete them as part of SR4:
@@ -385,6 +429,27 @@ Completed evidence:
   outer workspace. The largest phase was the HRES fixture load at 113,934,407
   steps; the focused remote success phase used 97,927,300. Every phase stayed
   below the checked-in 180,000,000-step ceiling.
+- The durable P-256 DPoP operation committed at `0194dc0` passed its focused
+  exact-vault lifecycle and a separate real production-dependency compile
+  gate. It covered exact role/generation pinning, private-scalar confinement,
+  internal proof staging, post-borrow publication, mapped failure, and
+  complete owner-workspace cleanup without duplicating the constructor's
+  cryptographic vector matrix.
+- The generic provenance seam committed at `2f5c887` passed both static gates.
+  The focused HTTP POST runtime loaded 15 modules and passed in 240,304,263
+  guest steps across load and entry; the complete authorization-code
+  lifecycle passed in 191,068,273 guest steps. Both ran sequentially on one
+  core with 128 MiB of external machine memory and unchanged checked-in
+  ceilings.
+- The current AT PAR checkpoint passed its static gate and all 34 sequential
+  production-module loads, four fixture loads, four focused runtime groups,
+  and the finish marker in 858,463,933 guest steps and 489.35 summed stage
+  seconds on one core with 128 MiB of external machine memory. It covers one
+  real public-client PREPARE/BUILD/201-plus-nonce/ACCEPT path through
+  `PAR-READY`, exact wire bytes, binding and issuer cross-wire rejection, a
+  POST-arena alias canary, correlation continuity, nonce borrowing, and
+  workspace/request/form cleanup. Its largest phase was the first dependency
+  load at 89,641,539 steps, below the checked-in 180,000,000-step ceiling.
 
 Recorded, non-gating deferrals for this retained-HRES boundary are the broad
 HRES header/outcome/media cross-product, every inline-status pass-through
@@ -426,6 +491,15 @@ public-address/SSRF admission, authenticated TLS, deadlines, cancellation,
 and truthful lease cleanup remain gates for the deterministic fake-PDS
 transport vertical slice.
 
+Recorded, non-gating deferrals for the raw AT PAR adapter are the confidential
+`private_key_jwt` path, broad login-hint and malformed-response matrices,
+400/401 DPoP nonce-retry orchestration, the full media/header/capacity/
+protected-alias/canary cross-product, durable restart, live TLS/browser
+integration, and direct durable-key proof composition. The last item is the
+immediate vertical gate: the current low-level BUILD correctly transports a
+compact proof but does not yet derive it from the configuration-bound P-256
+owner.
+
 The 16-minute-52-second result is a complete staged module-load and contract
 qualification, not the measured latency of one OAuth admission or one network
 operation. Its cost exposed repeated full-record scans and heavy fixture
@@ -440,21 +514,24 @@ delta. Do not run another suite or a test subagent concurrently.
 ## Exact next actions
 
 1. Read `AGENTS.md`, this record,
-   `docs/atproto/oauth-deployment.md`,
-   `docs/atproto/oauth-deployment-inline.md`,
-   `docs/atproto/oauth-inline-http-resource.md`,
-   `docs/atproto/oauth-remote-http-resource.md`,
-   `docs/security/oauth2-client-metadata.md`,
-   `docs/security/jose-jwk-p256.md`,
-   `docs/security/jose-jwk-set-p256.md`, and
-   `docs/security/oauth2-published-key-p256.md`. Treat the inline and remote
-   retained-HRES checkpoints plus the generic published-key owner as the
-   completed confidential client-deployment/key-source boundary.
-2. Close landing 3 with production PAR/PKCE, authorization-response,
-   DPoP/token/nonce, durable install/recovery/refresh/logout, cancellation, and
-   reauthorization composition. Do not begin XRPC, repository/blob,
-   subscription, and Streams wiring simultaneously.
-3. Return for a landing-boundary status report, then begin landing 4 by
+   `docs/atproto/oauth-par.md`,
+   `docs/security/oauth2-authorization-code.md`,
+   `docs/security/oauth2-http-post.md`,
+   `docs/security/oauth2-key-p256.md`, and
+   `docs/security/oauth2-dpop-es256.md`. Treat the raw public-client PAR
+   vertical and its generic provenance seams as the completed low-level
+   boundary.
+2. Add the public-client composition that obtains the exact configuration
+   DPoP binding, constructs `POST` proof bytes through the durable P-256 owner
+   for the generic post's exact `htu`, and invokes the raw AT PAR BUILD.
+   Qualify one deterministic proof-bearing vertical and the binding/nonce
+   failures that gate it; record the broader matrix rather than expanding it
+   now.
+3. Continue landing 3 with authorization-response, DPoP/token/nonce, durable
+   install/recovery/refresh/logout, cancellation, and reauthorization
+   composition. Do not begin XRPC, repository/blob, subscription, and Streams
+   wiring simultaneously.
+4. Return for a landing-boundary status report, then begin landing 4 by
    replacing—not wrapping—the global XRPC/session/repository prototypes.
 
 No live credential, account, public client metadata deployment, redirect

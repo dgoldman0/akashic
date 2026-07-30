@@ -1,0 +1,1217 @@
+\ =====================================================================
+\  oauth-par.f - AT Protocol pushed authorization request composition
+\ =====================================================================
+\  This state-free adapter composes one immutable AT OAuth client
+\  selection, one ready AT OAuth discovery profile, one generic O2CODE
+\  authorization transaction, one configured generic OAuth HTTP POST,
+\  and the generic successful PAR response decoder.
+\
+\  PREPARE admits the client/profile pair and binds the exact immutable
+\  configuration identity and exact selected issuer into O2CODE while
+\  requiring RFC 9207 issuer return.  BUILD borrows O2CODE state and S256
+\  PKCE material to seal one AT-profile PAR request.  ACCEPT admits one
+\  terminal 201 JSON result, installs its decoded request URI and lifetime
+\  into O2CODE, and returns the mandatory retained DPoP nonce as a borrow
+\  from the HTTP POST owner.
+\
+\  This module performs no transport, DPoP construction, assertion signing,
+\  clock sampling, browser launch, callback parsing, token exchange,
+\  persistence, key ownership, XRPC, or Streams work.
+\
+\  Public API:
+\    AT-OAUTH-PAR-WORKSPACE-SIZE
+\    AT-OAUTH-PAR-WORKSPACE-CLEAR
+\    AT-OAUTH-PAR-STATUS-VALID?
+\    AT-OAUTH-PAR-PREPARE
+\    AT-OAUTH-PAR-BUILD
+\    AT-OAUTH-PAR-ACCEPT
+\ =====================================================================
+
+PROVIDED akashic-at-oauth-par
+
+REQUIRE ../utils/memory-span.f
+REQUIRE ../utils/caller-span.f
+REQUIRE ../net/http-target.f
+REQUIRE ../security/oauth2/client-config.f
+REQUIRE ../security/oauth2/authorization-code.f
+REQUIRE ../security/oauth2/http-post.f
+REQUIRE ../security/oauth2/par-response.f
+REQUIRE did.f
+REQUIRE handle.f
+REQUIRE oauth-profile.f
+REQUIRE oauth-client.f
+
+\ =====================================================================
+\  Public status vocabulary
+\ =====================================================================
+
+0  CONSTANT AT-OAUTH-PAR-S-OK
+1  CONSTANT AT-OAUTH-PAR-S-INVALID
+2  CONSTANT AT-OAUTH-PAR-S-CAPACITY
+3  CONSTANT AT-OAUTH-PAR-S-ALIAS
+4  CONSTANT AT-OAUTH-PAR-S-CONFIG
+5  CONSTANT AT-OAUTH-PAR-S-PROFILE
+6  CONSTANT AT-OAUTH-PAR-S-TRANSACTION
+7  CONSTANT AT-OAUTH-PAR-S-BINDING
+8  CONSTANT AT-OAUTH-PAR-S-LOGIN-HINT
+9  CONSTANT AT-OAUTH-PAR-S-AUTH
+10 CONSTANT AT-OAUTH-PAR-S-DPOP
+11 CONSTANT AT-OAUTH-PAR-S-TARGET
+12 CONSTANT AT-OAUTH-PAR-S-POST
+13 CONSTANT AT-OAUTH-PAR-S-HTTP
+14 CONSTANT AT-OAUTH-PAR-S-RESPONSE
+15 CONSTANT AT-OAUTH-PAR-S-NONCE
+16 CONSTANT AT-OAUTH-PAR-S-CALLBACK
+17 CONSTANT AT-OAUTH-PAR-S-ENTROPY
+18 CONSTANT AT-OAUTH-PAR-S-CRYPTO
+19 CONSTANT AT-OAUTH-PAR-S-RANGE
+20 CONSTANT AT-OAUTH-PAR-S-PROTECTED
+21 CONSTANT AT-OAUTH-PAR-S-PLATFORM
+22 CONSTANT AT-OAUTH-PAR-S-INTERNAL
+
+: AT-OAUTH-PAR-STATUS-VALID?  ( status -- flag )
+    DUP AT-OAUTH-PAR-S-OK >=
+    SWAP AT-OAUTH-PAR-S-INTERNAL <= AND ;
+
+\ =====================================================================
+\  Caller-owned sequential operation workspace
+\ =====================================================================
+
+\ The nine header cells are deliberately reused between operations.
+\ During BUILD, OBJECT and AUX retain the DPoP span while ACTIVE retains
+\ the config view until the O2CODE callback replaces it with a ran marker.
+\ PROFILE retains the exact selected issuer owner.  During ACCEPT, OBJECT,
+\ POST, PROFILE, and AUX retain the transaction, retained result, selected
+\ issuer owner, and caller time.
+ 0 CONSTANT _ATPARW-ACTIVE
+ 8 CONSTANT _ATPARW-OBJECT
+16 CONSTANT _ATPARW-POST
+24 CONSTANT _ATPARW-AUX
+32 CONSTANT _ATPARW-LOGIN-A
+40 CONSTANT _ATPARW-LOGIN-U
+48 CONSTANT _ATPARW-ASSERTION-A
+56 CONSTANT _ATPARW-ASSERTION-U
+64 CONSTANT _ATPARW-PROFILE
+72 CONSTANT _ATPARW-CHILD-OFF
+
+O2CODE-WORKSPACE-SIZE
+AT-OAUTH-CLIENT-WORKSPACE-SIZE MAX
+OAUTH2-PAR-RESPONSE-WORKSPACE-SIZE MAX
+CONSTANT _ATPARW-CHILD-SIZE
+
+_ATPARW-CHILD-OFF _ATPARW-CHILD-SIZE +
+CONSTANT AT-OAUTH-PAR-WORKSPACE-SIZE
+
+: _ATPARW.ACTIVE       ( workspace -- field ) _ATPARW-ACTIVE + ;
+: _ATPARW.OBJECT       ( workspace -- field ) _ATPARW-OBJECT + ;
+: _ATPARW.POST         ( workspace -- field ) _ATPARW-POST + ;
+: _ATPARW.AUX          ( workspace -- field ) _ATPARW-AUX + ;
+: _ATPARW.LOGIN-A      ( workspace -- field ) _ATPARW-LOGIN-A + ;
+: _ATPARW.LOGIN-U      ( workspace -- field ) _ATPARW-LOGIN-U + ;
+: _ATPARW.ASSERTION-A  ( workspace -- field )
+    _ATPARW-ASSERTION-A + ;
+: _ATPARW.ASSERTION-U  ( workspace -- field )
+    _ATPARW-ASSERTION-U + ;
+: _ATPARW.PROFILE      ( workspace -- field ) _ATPARW-PROFILE + ;
+: _ATPARW.CHILD        ( workspace -- child-workspace )
+    _ATPARW-CHILD-OFF + ;
+
+: _ATPAR-WIPE  ( workspace -- )
+    AT-OAUTH-PAR-WORKSPACE-SIZE 0 FILL ;
+
+\ =====================================================================
+\  Small stack and caller-memory helpers
+\ =====================================================================
+
+: _ATPAR-DROP3   ( three-values -- ) 2DROP DROP ;
+: _ATPAR-DROP4   ( four-values -- ) 2DROP 2DROP ;
+: _ATPAR-DROP5   ( five-values -- ) 2DROP 2DROP DROP ;
+: _ATPAR-DROP10  ( ten-values -- )
+    2DROP 2DROP 2DROP 2DROP 2DROP ;
+: _ATPAR-DROP11  ( eleven-values -- )
+    2DROP 2DROP 2DROP 2DROP 2DROP DROP ;
+
+: _ATPAR-4DUP
+  ( x1 x2 x3 x4 -- x1 x2 x3 x4 x1 x2 x3 x4 )
+    3 PICK 3 PICK 3 PICK 3 PICK ;
+
+: _ATPAR-5DUP
+  ( x1 x2 x3 x4 x5 -- x1 x2 x3 x4 x5 x1 x2 x3 x4 x5 )
+    4 PICK 4 PICK 4 PICK 4 PICK 4 PICK ;
+
+: _ATPAR-11DUP
+  \ ( eleven-values -- the-same-eleven-values twice )
+    10 PICK 10 PICK 10 PICK 10 PICK 10 PICK 10 PICK
+    10 PICK 10 PICK 10 PICK 10 PICK 10 PICK ;
+
+: _ATPAR-RETURN4  ( four-values status -- status )
+    >R _ATPAR-DROP4 R> ;
+
+: _ATPAR-RETURN5  ( five-values status -- status )
+    >R _ATPAR-DROP5 R> ;
+
+: _ATPAR-RETURN11  ( eleven-values status -- status )
+    >R _ATPAR-DROP11 R> ;
+
+: _ATPAR-CALLER>STATUS  ( caller-status -- status )
+    CASE
+        CALLER-SPAN-S-OK OF AT-OAUTH-PAR-S-OK ENDOF
+        CALLER-SPAN-S-RANGE OF AT-OAUTH-PAR-S-RANGE ENDOF
+        CALLER-SPAN-S-PROTECTED OF
+            AT-OAUTH-PAR-S-PROTECTED
+        ENDOF
+        CALLER-SPAN-S-PLATFORM OF
+            AT-OAUTH-PAR-S-PLATFORM
+        ENDOF
+        AT-OAUTH-PAR-S-PLATFORM SWAP
+    ENDCASE ;
+
+: _ATPAR-SPAN-STATUS  ( address length -- status )
+    DUP 0< IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    DUP 0= IF 2DROP AT-OAUTH-PAR-S-OK EXIT THEN
+    OVER 0= IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS _ATPAR-CALLER>STATUS ;
+
+: _ATPAR-OPTIONAL-SPAN-STATUS  ( address length -- status )
+    DUP 0< IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    DUP 0= IF
+        DROP 0= IF
+            AT-OAUTH-PAR-S-OK
+        ELSE
+            AT-OAUTH-PAR-S-INVALID
+        THEN
+        EXIT
+    THEN
+    OVER 0= IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS _ATPAR-CALLER>STATUS ;
+
+: _ATPAR-REQUIRED-SPAN-STATUS  ( address length -- status )
+    DUP 0> 0= IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    OVER 0= IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS _ATPAR-CALLER>STATUS ;
+
+: _ATPAR-FIXED-STATUS  ( address size -- status )
+    OVER 0= IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    OVER 7 AND IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    _ATPAR-SPAN-STATUS ;
+
+: AT-OAUTH-PAR-WORKSPACE-CLEAR  ( workspace -- status )
+    DUP AT-OAUTH-PAR-WORKSPACE-SIZE _ATPAR-FIXED-STATUS
+    ?DUP IF NIP EXIT THEN
+    _ATPAR-WIPE
+    AT-OAUTH-PAR-S-OK ;
+
+\ =====================================================================
+\  Public-operation geometry
+\ =====================================================================
+
+: _ATPAR-PREPARE-GEOMETRY
+  ( config profile transaction workspace -- status )
+    DUP AT-OAUTH-PAR-WORKSPACE-SIZE _ATPAR-FIXED-STATUS
+    ?DUP IF _ATPAR-RETURN4 EXIT THEN
+    3 PICK OAUTH2-CLIENT-CONFIG-SIZE _ATPAR-FIXED-STATUS
+    ?DUP IF _ATPAR-RETURN4 EXIT THEN
+    2 PICK AT-OAUTH-PROFILE-SIZE _ATPAR-FIXED-STATUS
+    ?DUP IF _ATPAR-RETURN4 EXIT THEN
+    1 PICK O2CODE-TRANSACTION-SIZE _ATPAR-FIXED-STATUS
+    ?DUP IF _ATPAR-RETURN4 EXIT THEN
+
+    3 PICK OAUTH2-CLIENT-CONFIG-SIZE
+    2 PICK AT-OAUTH-PAR-WORKSPACE-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN4 EXIT
+    THEN
+    2 PICK AT-OAUTH-PROFILE-SIZE
+    2 PICK AT-OAUTH-PAR-WORKSPACE-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN4 EXIT
+    THEN
+    1 PICK O2CODE-TRANSACTION-SIZE
+    2 PICK AT-OAUTH-PAR-WORKSPACE-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN4 EXIT
+    THEN
+
+    1 PICK O2CODE-TRANSACTION-SIZE
+    5 PICK OAUTH2-CLIENT-CONFIG-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN4 EXIT
+    THEN
+    1 PICK O2CODE-TRANSACTION-SIZE
+    4 PICK AT-OAUTH-PROFILE-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN4 EXIT
+    THEN
+    AT-OAUTH-PAR-S-OK _ATPAR-RETURN4 ;
+
+: _ATPAR-BUILD-GEOMETRY
+  \ ( login-a login-u assertion-a assertion-u dpop-a dpop-u
+  \   config profile transaction post workspace -- status )
+    DUP AT-OAUTH-PAR-WORKSPACE-SIZE _ATPAR-FIXED-STATUS
+    ?DUP IF _ATPAR-RETURN11 EXIT THEN
+    10 PICK 10 PICK _ATPAR-OPTIONAL-SPAN-STATUS
+    ?DUP IF _ATPAR-RETURN11 EXIT THEN
+    8 PICK 8 PICK _ATPAR-OPTIONAL-SPAN-STATUS
+    ?DUP IF _ATPAR-RETURN11 EXIT THEN
+    6 PICK 6 PICK _ATPAR-REQUIRED-SPAN-STATUS
+    ?DUP IF _ATPAR-RETURN11 EXIT THEN
+    4 PICK OAUTH2-CLIENT-CONFIG-SIZE _ATPAR-FIXED-STATUS
+    ?DUP IF _ATPAR-RETURN11 EXIT THEN
+    3 PICK AT-OAUTH-PROFILE-SIZE _ATPAR-FIXED-STATUS
+    ?DUP IF _ATPAR-RETURN11 EXIT THEN
+    2 PICK O2CODE-TRANSACTION-SIZE _ATPAR-FIXED-STATUS
+    ?DUP IF _ATPAR-RETURN11 EXIT THEN
+    1 PICK OAUTH2-HTTP-POST-SIZE _ATPAR-FIXED-STATUS
+    ?DUP IF _ATPAR-RETURN11 EXIT THEN
+
+    10 PICK 10 PICK 2 PICK AT-OAUTH-PAR-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    8 PICK 8 PICK 2 PICK AT-OAUTH-PAR-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    6 PICK 6 PICK 2 PICK AT-OAUTH-PAR-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    4 PICK OAUTH2-CLIENT-CONFIG-SIZE
+    2 PICK AT-OAUTH-PAR-WORKSPACE-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    3 PICK AT-OAUTH-PROFILE-SIZE
+    2 PICK AT-OAUTH-PAR-WORKSPACE-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    2 PICK O2CODE-TRANSACTION-SIZE
+    2 PICK AT-OAUTH-PAR-WORKSPACE-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    1 PICK OAUTH2-HTTP-POST-SIZE
+    2 PICK AT-OAUTH-PAR-WORKSPACE-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+
+    2 PICK O2CODE-TRANSACTION-SIZE
+    6 PICK OAUTH2-CLIENT-CONFIG-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    2 PICK O2CODE-TRANSACTION-SIZE
+    5 PICK AT-OAUTH-PROFILE-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    2 PICK O2CODE-TRANSACTION-SIZE
+    3 PICK OAUTH2-HTTP-POST-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    1 PICK OAUTH2-HTTP-POST-SIZE
+    6 PICK OAUTH2-CLIENT-CONFIG-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    1 PICK OAUTH2-HTTP-POST-SIZE
+    5 PICK AT-OAUTH-PROFILE-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+
+    10 PICK 10 PICK 4 PICK O2CODE-TRANSACTION-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    8 PICK 8 PICK 4 PICK O2CODE-TRANSACTION-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    6 PICK 6 PICK 4 PICK O2CODE-TRANSACTION-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    10 PICK 10 PICK 3 PICK OAUTH2-HTTP-POST-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    8 PICK 8 PICK 3 PICK OAUTH2-HTTP-POST-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    6 PICK 6 PICK 3 PICK OAUTH2-HTTP-POST-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN11 EXIT
+    THEN
+    AT-OAUTH-PAR-S-OK _ATPAR-RETURN11 ;
+
+: _ATPAR-ACCEPT-GEOMETRY
+  ( post now-seconds profile transaction workspace -- status )
+    DUP AT-OAUTH-PAR-WORKSPACE-SIZE _ATPAR-FIXED-STATUS
+    ?DUP IF _ATPAR-RETURN5 EXIT THEN
+    4 PICK OAUTH2-HTTP-POST-SIZE _ATPAR-FIXED-STATUS
+    ?DUP IF _ATPAR-RETURN5 EXIT THEN
+    2 PICK AT-OAUTH-PROFILE-SIZE _ATPAR-FIXED-STATUS
+    ?DUP IF _ATPAR-RETURN5 EXIT THEN
+    1 PICK O2CODE-TRANSACTION-SIZE _ATPAR-FIXED-STATUS
+    ?DUP IF _ATPAR-RETURN5 EXIT THEN
+    3 PICK 0< IF
+        AT-OAUTH-PAR-S-INVALID _ATPAR-RETURN5 EXIT
+    THEN
+
+    4 PICK OAUTH2-HTTP-POST-SIZE
+    2 PICK AT-OAUTH-PAR-WORKSPACE-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN5 EXIT
+    THEN
+    2 PICK AT-OAUTH-PROFILE-SIZE
+    2 PICK AT-OAUTH-PAR-WORKSPACE-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN5 EXIT
+    THEN
+    1 PICK O2CODE-TRANSACTION-SIZE
+    2 PICK AT-OAUTH-PAR-WORKSPACE-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN5 EXIT
+    THEN
+    1 PICK O2CODE-TRANSACTION-SIZE
+    6 PICK OAUTH2-HTTP-POST-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN5 EXIT
+    THEN
+    1 PICK O2CODE-TRANSACTION-SIZE
+    4 PICK AT-OAUTH-PROFILE-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-PAR-S-ALIAS _ATPAR-RETURN5 EXIT
+    THEN
+    AT-OAUTH-PAR-S-OK _ATPAR-RETURN5 ;
+
+\ =====================================================================
+\  Explicit subordinate status mappings
+\ =====================================================================
+
+: _ATPAR-CONFIG>STATUS  ( config-status -- status )
+    CASE
+        OAUTH2-CLIENT-CONFIG-S-OK OF AT-OAUTH-PAR-S-OK ENDOF
+        OAUTH2-CLIENT-CONFIG-S-INVALID OF
+            AT-OAUTH-PAR-S-CONFIG
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-CALLBACK OF
+            AT-OAUTH-PAR-S-CALLBACK
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-RANGE OF
+            AT-OAUTH-PAR-S-RANGE
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-PROTECTED OF
+            AT-OAUTH-PAR-S-PROTECTED
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-PLATFORM OF
+            AT-OAUTH-PAR-S-PLATFORM
+        ENDOF
+        AT-OAUTH-PAR-S-INTERNAL SWAP
+    ENDCASE ;
+
+: _ATPAR-CLIENT>STATUS  ( client-status -- status )
+    CASE
+        AT-OAUTH-CLIENT-S-OK OF AT-OAUTH-PAR-S-OK ENDOF
+        AT-OAUTH-CLIENT-S-INVALID OF AT-OAUTH-PAR-S-INVALID ENDOF
+        AT-OAUTH-CLIENT-S-ALIAS OF AT-OAUTH-PAR-S-ALIAS ENDOF
+        AT-OAUTH-CLIENT-S-CONFIG OF AT-OAUTH-PAR-S-CONFIG ENDOF
+        AT-OAUTH-CLIENT-S-PROFILE OF AT-OAUTH-PAR-S-PROFILE ENDOF
+        AT-OAUTH-CLIENT-S-RANGE OF AT-OAUTH-PAR-S-RANGE ENDOF
+        AT-OAUTH-CLIENT-S-PROTECTED OF
+            AT-OAUTH-PAR-S-PROTECTED
+        ENDOF
+        AT-OAUTH-CLIENT-S-PLATFORM OF
+            AT-OAUTH-PAR-S-PLATFORM
+        ENDOF
+        AT-OAUTH-CLIENT-S-CLIENT-ID OF AT-OAUTH-PAR-S-CONFIG ENDOF
+        AT-OAUTH-CLIENT-S-REDIRECT OF AT-OAUTH-PAR-S-CONFIG ENDOF
+        AT-OAUTH-CLIENT-S-SCOPE OF AT-OAUTH-PAR-S-CONFIG ENDOF
+        AT-OAUTH-CLIENT-S-AUTH-METHOD OF AT-OAUTH-PAR-S-CONFIG ENDOF
+        AT-OAUTH-CLIENT-S-AUTH-ALGORITHM OF
+            AT-OAUTH-PAR-S-CONFIG
+        ENDOF
+        AT-OAUTH-CLIENT-S-DPOP OF AT-OAUTH-PAR-S-CONFIG ENDOF
+        AT-OAUTH-PAR-S-INTERNAL SWAP
+    ENDCASE ;
+
+: _ATPAR-PROFILE>STATUS  ( profile-status -- status )
+    CASE
+        AT-OAUTH-PROFILE-S-OK OF AT-OAUTH-PAR-S-OK ENDOF
+        AT-OAUTH-PROFILE-S-RANGE OF AT-OAUTH-PAR-S-RANGE ENDOF
+        AT-OAUTH-PROFILE-S-PROTECTED OF
+            AT-OAUTH-PAR-S-PROTECTED
+        ENDOF
+        AT-OAUTH-PROFILE-S-PLATFORM OF
+            AT-OAUTH-PAR-S-PLATFORM
+        ENDOF
+        AT-OAUTH-PAR-S-PROFILE SWAP
+    ENDCASE ;
+
+: _ATPAR-O2CODE>STATUS  ( o2code-status -- status )
+    CASE
+        O2CODE-S-OK OF AT-OAUTH-PAR-S-OK ENDOF
+        O2CODE-S-CAPACITY OF AT-OAUTH-PAR-S-CAPACITY ENDOF
+        O2CODE-S-ALIAS OF AT-OAUTH-PAR-S-ALIAS ENDOF
+        O2CODE-S-ENTROPY OF AT-OAUTH-PAR-S-ENTROPY ENDOF
+        O2CODE-S-CRYPTO OF AT-OAUTH-PAR-S-CRYPTO ENDOF
+        O2CODE-S-CALLBACK OF AT-OAUTH-PAR-S-CALLBACK ENDOF
+        O2CODE-S-RANGE OF AT-OAUTH-PAR-S-RANGE ENDOF
+        O2CODE-S-PROTECTED OF AT-OAUTH-PAR-S-PROTECTED ENDOF
+        O2CODE-S-PLATFORM OF AT-OAUTH-PAR-S-PLATFORM ENDOF
+        O2CODE-S-INVALID OF AT-OAUTH-PAR-S-TRANSACTION ENDOF
+        O2CODE-S-PHASE OF AT-OAUTH-PAR-S-TRANSACTION ENDOF
+        O2CODE-S-BUSY OF AT-OAUTH-PAR-S-TRANSACTION ENDOF
+        O2CODE-S-STATE OF AT-OAUTH-PAR-S-BINDING ENDOF
+        O2CODE-S-ISSUER OF AT-OAUTH-PAR-S-BINDING ENDOF
+        O2CODE-S-OVERFLOW OF AT-OAUTH-PAR-S-CAPACITY ENDOF
+        AT-OAUTH-PAR-S-INTERNAL SWAP
+    ENDCASE ;
+
+: _ATPAR-POST>STATUS  ( post-status -- status )
+    CASE
+        OAUTH2-HTTP-POST-S-OK OF AT-OAUTH-PAR-S-OK ENDOF
+        OAUTH2-HTTP-POST-S-CAPACITY OF
+            AT-OAUTH-PAR-S-CAPACITY
+        ENDOF
+        OAUTH2-HTTP-POST-S-ALIAS OF AT-OAUTH-PAR-S-ALIAS ENDOF
+        OAUTH2-HTTP-POST-S-RANGE OF AT-OAUTH-PAR-S-RANGE ENDOF
+        OAUTH2-HTTP-POST-S-PROTECTED OF
+            AT-OAUTH-PAR-S-PROTECTED
+        ENDOF
+        OAUTH2-HTTP-POST-S-PLATFORM OF
+            AT-OAUTH-PAR-S-PLATFORM
+        ENDOF
+        OAUTH2-HTTP-POST-S-INTERNAL OF
+            AT-OAUTH-PAR-S-INTERNAL
+        ENDOF
+        AT-OAUTH-PAR-S-POST SWAP
+    ENDCASE ;
+
+: _ATPAR-POST-EXTERNAL>STATUS  ( address length post -- status )
+    OAUTH2-HTTP-POST-EXTERNAL-SPAN-STATUS
+    _ATPAR-POST>STATUS ;
+
+: _ATPAR-OPTIONAL-POST-EXTERNAL>STATUS
+  ( address length post -- status )
+    1 PICK 0= IF
+        _ATPAR-DROP3 AT-OAUTH-PAR-S-OK EXIT
+    THEN
+    _ATPAR-POST-EXTERNAL>STATUS ;
+
+: _ATPAR-BUILD-POST-ARENAS
+  \ ( login-a login-u assertion-a assertion-u dpop-a dpop-u
+  \   config profile transaction post workspace -- status )
+    1 PICK >R
+    10 PICK 10 PICK R@ _ATPAR-OPTIONAL-POST-EXTERNAL>STATUS
+    ?DUP IF R> DROP _ATPAR-RETURN11 EXIT THEN
+    8 PICK 8 PICK R@ _ATPAR-OPTIONAL-POST-EXTERNAL>STATUS
+    ?DUP IF R> DROP _ATPAR-RETURN11 EXIT THEN
+    6 PICK 6 PICK R@ _ATPAR-POST-EXTERNAL>STATUS
+    ?DUP IF R> DROP _ATPAR-RETURN11 EXIT THEN
+    4 PICK OAUTH2-CLIENT-CONFIG-SIZE R@
+    _ATPAR-POST-EXTERNAL>STATUS
+    ?DUP IF R> DROP _ATPAR-RETURN11 EXIT THEN
+    3 PICK AT-OAUTH-PROFILE-SIZE R@
+    _ATPAR-POST-EXTERNAL>STATUS
+    ?DUP IF R> DROP _ATPAR-RETURN11 EXIT THEN
+    2 PICK O2CODE-TRANSACTION-SIZE R@
+    _ATPAR-POST-EXTERNAL>STATUS
+    ?DUP IF R> DROP _ATPAR-RETURN11 EXIT THEN
+    DUP AT-OAUTH-PAR-WORKSPACE-SIZE R@
+    _ATPAR-POST-EXTERNAL>STATUS
+    R> DROP
+    ?DUP IF _ATPAR-RETURN11 EXIT THEN
+    AT-OAUTH-PAR-S-OK _ATPAR-RETURN11 ;
+
+: _ATPAR-ACCEPT-POST-ARENAS
+  ( post now-seconds profile transaction workspace -- status )
+    4 PICK >R
+    2 PICK AT-OAUTH-PROFILE-SIZE R@
+    _ATPAR-POST-EXTERNAL>STATUS
+    ?DUP IF R> DROP _ATPAR-RETURN5 EXIT THEN
+    1 PICK O2CODE-TRANSACTION-SIZE R@
+    _ATPAR-POST-EXTERNAL>STATUS
+    ?DUP IF R> DROP _ATPAR-RETURN5 EXIT THEN
+    DUP AT-OAUTH-PAR-WORKSPACE-SIZE R@
+    _ATPAR-POST-EXTERNAL>STATUS
+    R> DROP
+    ?DUP IF _ATPAR-RETURN5 EXIT THEN
+    AT-OAUTH-PAR-S-OK _ATPAR-RETURN5 ;
+
+: _ATPAR-RESPONSE>STATUS  ( response-status -- status )
+    CASE
+        OAUTH2-PAR-RESPONSE-S-OK OF AT-OAUTH-PAR-S-OK ENDOF
+        OAUTH2-PAR-RESPONSE-S-CAPACITY OF
+            AT-OAUTH-PAR-S-CAPACITY
+        ENDOF
+        OAUTH2-PAR-RESPONSE-S-ALIAS OF
+            AT-OAUTH-PAR-S-ALIAS
+        ENDOF
+        OAUTH2-PAR-RESPONSE-S-CALLBACK OF
+            AT-OAUTH-PAR-S-CALLBACK
+        ENDOF
+        OAUTH2-PAR-RESPONSE-S-RANGE OF
+            AT-OAUTH-PAR-S-RANGE
+        ENDOF
+        OAUTH2-PAR-RESPONSE-S-PROTECTED OF
+            AT-OAUTH-PAR-S-PROTECTED
+        ENDOF
+        OAUTH2-PAR-RESPONSE-S-PLATFORM OF
+            AT-OAUTH-PAR-S-PLATFORM
+        ENDOF
+        OAUTH2-PAR-RESPONSE-S-INTERNAL OF
+            AT-OAUTH-PAR-S-INTERNAL
+        ENDOF
+        OAUTH2-PAR-RESPONSE-S-INVALID OF
+            AT-OAUTH-PAR-S-INTERNAL
+        ENDOF
+        AT-OAUTH-PAR-S-RESPONSE SWAP
+    ENDCASE ;
+
+\ =====================================================================
+\  Shared AT policy, login, authentication, and target checks
+\ =====================================================================
+
+: _ATPAR-CLIENT-ADMIT
+  ( view profile workspace -- status )
+    DUP >R _ATPARW.CHILD
+    AT-OAUTH-CLIENT-VIEW-ADMIT
+    _ATPAR-CLIENT>STATUS
+    R> DROP ;
+
+: _ATPAR-LOGIN-HINT-STATUS  ( address length -- status )
+    DUP 0= IF 2DROP AT-OAUTH-PAR-S-OK EXIT THEN
+    2DUP DID-VALIDATE DID-S-OK = IF
+        2DROP AT-OAUTH-PAR-S-OK EXIT
+    THEN
+    AT-HANDLE-VALIDATE AT-HANDLE-S-OK = IF
+        AT-OAUTH-PAR-S-OK
+    ELSE
+        AT-OAUTH-PAR-S-LOGIN-HINT
+    THEN ;
+
+: _ATPAR-AUTH-STATUS
+  ( assertion-a assertion-u config-view -- status )
+    >R
+    R@ OAUTH2-CLIENT-VIEW-AUTH-METHOD@
+    2DUP S" none" COMPARE 0= IF
+        2DROP
+        OR 0=
+        IF AT-OAUTH-PAR-S-OK ELSE AT-OAUTH-PAR-S-AUTH THEN
+        R> DROP EXIT
+    THEN
+    S" private_key_jwt" COMPARE 0= IF
+        NIP 0>
+        IF AT-OAUTH-PAR-S-OK ELSE AT-OAUTH-PAR-S-AUTH THEN
+        R> DROP EXIT
+    THEN
+    2DROP
+    R> DROP AT-OAUTH-PAR-S-AUTH ;
+
+: _ATPAR-EXACT-PAR-TARGET
+  ( post profile -- status )
+    >R
+    DUP OAUTH2-HTTP-POST-TARGET@
+    DUP HTARGET-REDIRECT-COUNT@ IF
+        2DROP
+        R> DROP AT-OAUTH-PAR-S-TARGET EXIT
+    THEN
+    R> AT-OAUTH-PROFILE-PAR-TARGET@
+    DUP AT-OAUTH-PROFILE-S-OK <> IF
+        _ATPAR-PROFILE>STATUS >R
+        _ATPAR-DROP3 R> EXIT
+    THEN
+    DROP
+    HTARGET-EQUAL?
+    SWAP DROP
+    IF AT-OAUTH-PAR-S-OK ELSE AT-OAUTH-PAR-S-TARGET THEN ;
+
+: _ATPAR-BUILD-POST-STATUS  ( post profile -- status )
+    OVER OAUTH2-HTTP-POST-VALID? 0= IF
+        2DROP AT-OAUTH-PAR-S-POST EXIT
+    THEN
+    OVER OAUTH2-HTTP-POST-STATE@
+    OAUTH2-HTTP-POST-STATE-CONFIGURED <> IF
+        2DROP AT-OAUTH-PAR-S-POST EXIT
+    THEN
+    _ATPAR-EXACT-PAR-TARGET ;
+
+\ =====================================================================
+\  PREPARE
+\ =====================================================================
+
+: _ATPAR-PREPARE-WITH-CONFIG  ( config-view workspace -- status )
+    DUP >R
+    1 PICK 6 PICK R@ _ATPAR-CLIENT-ADMIT
+    DUP IF
+        DUP AT-OAUTH-PAR-S-PROFILE <> IF
+            R@ _ATPAR-WIPE
+        THEN
+        R> DROP
+        >R 2DROP R> EXIT
+    THEN
+    DROP
+
+    R@ _ATPAR-WIPE
+    4 PICK R@ _ATPARW.OBJECT !
+
+    1 PICK OAUTH2-CLIENT-VIEW-BINDING@
+    7 PICK AT-OAUTH-PROFILE-ISSUER@
+    DUP AT-OAUTH-PROFILE-S-OK <> IF
+        _ATPAR-PROFILE>STATUS >R
+        _ATPAR-DROP4
+        R>
+        R> DROP
+        >R 2DROP R> EXIT
+    THEN
+    DROP
+    O2CODE-ISSUER-REQUIRED
+    R@ _ATPARW.OBJECT @
+    R@ _ATPARW.CHILD
+    O2CODE-PREPARE
+    _ATPAR-O2CODE>STATUS
+
+    R@ _ATPAR-WIPE
+    R> DROP
+    >R 2DROP R> ;
+
+: _ATPAR-PREPARE-OP
+  ( config profile transaction workspace -- status )
+    3 PICK
+    ['] _ATPAR-PREPARE-WITH-CONFIG
+    2 PICK
+    OAUTH2-CLIENT-CONFIG-WITH
+
+    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
+        DUP OAUTH2-CLIENT-CONFIG-S-CALLBACK = IF
+            2 PICK _ATPAR-WIPE
+        THEN
+        _ATPAR-CONFIG>STATUS >R
+        DROP
+        _ATPAR-DROP4
+        R> EXIT
+    THEN
+    DROP
+    DUP AT-OAUTH-PAR-STATUS-VALID? 0= IF
+        DROP AT-OAUTH-PAR-S-INTERNAL
+    THEN
+    >R _ATPAR-DROP4 R> ;
+
+: _ATPAR-PREPARE-CALL
+  ( config profile transaction workspace operation-xt -- status )
+    1 PICK >R
+    CATCH
+    DUP IF
+        DROP
+        R@ _ATPAR-WIPE
+        _ATPAR-DROP4
+        R> DROP
+        AT-OAUTH-PAR-S-INTERNAL EXIT
+    THEN
+    DROP
+    R> DROP ;
+
+: AT-OAUTH-PAR-PREPARE
+  ( config profile transaction workspace -- status )
+    _ATPAR-4DUP _ATPAR-PREPARE-GEOMETRY
+    ?DUP IF _ATPAR-RETURN4 EXIT THEN
+    ['] _ATPAR-PREPARE-OP _ATPAR-PREPARE-CALL ;
+
+\ =====================================================================
+\  BUILD
+\ =====================================================================
+
+: _ATPAR-FIELD
+  ( name-a name-u value-a value-u workspace -- status )
+    _ATPARW.POST @
+    OAUTH2-HTTP-POST-FIELD
+    _ATPAR-POST>STATUS ;
+
+: _ATPAR-BINDING-MATCH?
+  ( binding-a binding-u workspace -- flag )
+    _ATPARW.ACTIVE @
+    OAUTH2-CLIENT-VIEW-BINDING@
+    COMPARE 0= ;
+
+: _ATPAR-BORROWED-ISSUER-STATUS
+  ( issuer-a issuer-u issuer-required workspace -- status )
+    >R
+    O2CODE-ISSUER-REQUIRED <> IF
+        2DROP R> DROP AT-OAUTH-PAR-S-BINDING EXIT
+    THEN
+    R@ _ATPARW.PROFILE @ AT-OAUTH-PROFILE-ISSUER@
+    DUP AT-OAUTH-PROFILE-S-OK <> IF
+        _ATPAR-PROFILE>STATUS >R
+        _ATPAR-DROP4
+        R> R> DROP EXIT
+    THEN
+    DROP
+    COMPARE 0=
+    IF AT-OAUTH-PAR-S-OK ELSE AT-OAUTH-PAR-S-BINDING THEN
+    R> DROP ;
+
+: _ATPAR-ADD-AUTH-FIELDS  ( workspace -- status )
+    >R
+    R@ _ATPARW.ACTIVE @ OAUTH2-CLIENT-VIEW-AUTH-METHOD@
+    2DUP S" none" COMPARE 0= IF
+        2DROP R> DROP AT-OAUTH-PAR-S-OK EXIT
+    THEN
+    S" private_key_jwt" COMPARE 0= 0= IF
+        R> DROP AT-OAUTH-PAR-S-INTERNAL EXIT
+    THEN
+    S" client_assertion_type"
+    S" urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+    R@ _ATPAR-FIELD
+    ?DUP IF R> DROP EXIT THEN
+    S" client_assertion"
+    R@ _ATPARW.ASSERTION-A @
+    R@ _ATPARW.ASSERTION-U @
+    R@ _ATPAR-FIELD
+    R> DROP ;
+
+: _ATPAR-ADD-LOGIN-HINT  ( workspace -- status )
+    DUP _ATPARW.LOGIN-U @ 0= IF
+        DROP AT-OAUTH-PAR-S-OK EXIT
+    THEN
+    >R
+    S" login_hint"
+    R@ _ATPARW.LOGIN-A @
+    R@ _ATPARW.LOGIN-U @
+    R@ _ATPAR-FIELD
+    R> DROP ;
+
+: _ATPAR-SEAL  ( workspace -- status )
+    >R
+    R@ _ATPARW.OBJECT @
+    R@ _ATPARW.AUX @
+    0 0
+    R@ _ATPARW.POST @
+    OAUTH2-HTTP-POST-SEAL
+    _ATPAR-POST>STATUS
+    R> DROP ;
+
+: _ATPAR-BUILD-PAR-RETURN
+  \ ( context binding-a binding-u issuer-a issuer-u issuer-required
+  \   state-a state-u challenge-a challenge-u status workspace -- status )
+    >R
+    -1 R@ _ATPARW.ACTIVE !
+    >R _ATPAR-DROP10 R> R> DROP ;
+
+: _ATPAR-BUILD-PAR-CALLBACK
+  \ ( workspace binding-a binding-u issuer-a issuer-u issuer-required
+  \   state-a state-u challenge-a challenge-u -- status )
+    9 PICK >R
+
+    8 PICK 8 PICK R@ _ATPAR-BINDING-MATCH? 0= IF
+        AT-OAUTH-PAR-S-BINDING
+        R> _ATPAR-BUILD-PAR-RETURN EXIT
+    THEN
+
+    6 PICK 6 PICK 6 PICK R@
+    _ATPAR-BORROWED-ISSUER-STATUS
+    ?DUP IF R> _ATPAR-BUILD-PAR-RETURN EXIT THEN
+
+    OAUTH2-HTTP-POST-KIND-PAR
+    R@ _ATPARW.POST @
+    OAUTH2-HTTP-POST-BEGIN
+    _ATPAR-POST>STATUS
+    ?DUP IF R> _ATPAR-BUILD-PAR-RETURN EXIT THEN
+
+    3 PICK 3 PICK
+    R@ _ATPARW.POST @
+    OAUTH2-HTTP-POST-CORRELATION!
+    _ATPAR-POST>STATUS
+    ?DUP IF R> _ATPAR-BUILD-PAR-RETURN EXIT THEN
+
+    S" client_id"
+    R@ _ATPARW.ACTIVE @ OAUTH2-CLIENT-VIEW-CLIENT-ID@
+    R@ _ATPAR-FIELD
+    ?DUP IF R> _ATPAR-BUILD-PAR-RETURN EXIT THEN
+
+    S" response_type" S" code" R@ _ATPAR-FIELD
+    ?DUP IF R> _ATPAR-BUILD-PAR-RETURN EXIT THEN
+
+    1 PICK 1 PICK
+    S" code_challenge" 2SWAP
+    R@ _ATPAR-FIELD
+    ?DUP IF R> _ATPAR-BUILD-PAR-RETURN EXIT THEN
+
+    S" code_challenge_method" S" S256" R@ _ATPAR-FIELD
+    ?DUP IF R> _ATPAR-BUILD-PAR-RETURN EXIT THEN
+
+    3 PICK 3 PICK
+    S" state" 2SWAP
+    R@ _ATPAR-FIELD
+    ?DUP IF R> _ATPAR-BUILD-PAR-RETURN EXIT THEN
+
+    S" redirect_uri"
+    R@ _ATPARW.ACTIVE @ OAUTH2-CLIENT-VIEW-REDIRECT-URI@
+    R@ _ATPAR-FIELD
+    ?DUP IF R> _ATPAR-BUILD-PAR-RETURN EXIT THEN
+
+    S" scope"
+    R@ _ATPARW.ACTIVE @ OAUTH2-CLIENT-VIEW-SCOPE@
+    R@ _ATPAR-FIELD
+    ?DUP IF R> _ATPAR-BUILD-PAR-RETURN EXIT THEN
+
+    R@ _ATPAR-ADD-AUTH-FIELDS
+    ?DUP IF R> _ATPAR-BUILD-PAR-RETURN EXIT THEN
+
+    R@ _ATPAR-ADD-LOGIN-HINT
+    ?DUP IF R> _ATPAR-BUILD-PAR-RETURN EXIT THEN
+
+    R@ _ATPAR-SEAL
+    ?DUP IF R> _ATPAR-BUILD-PAR-RETURN EXIT THEN
+
+    R@ _ATPARW.POST @ OAUTH2-HTTP-POST-DPOP-INCLUDED? 0= IF
+        AT-OAUTH-PAR-S-INTERNAL
+        R> _ATPAR-BUILD-PAR-RETURN EXIT
+    THEN
+    R@ _ATPARW.POST @
+    OAUTH2-HTTP-POST-AUTHORIZATION-INCLUDED? IF
+        AT-OAUTH-PAR-S-INTERNAL
+        R> _ATPAR-BUILD-PAR-RETURN EXIT
+    THEN
+
+    AT-OAUTH-PAR-S-OK
+    R> _ATPAR-BUILD-PAR-RETURN ;
+
+: _ATPAR-BUILD-WITH-CONFIG  ( config-view workspace -- status )
+    DUP >R
+    1 PICK 7 PICK R@ _ATPAR-CLIENT-ADMIT
+    ?DUP IF
+        DUP AT-OAUTH-PAR-S-PROFILE <> IF
+            R@ _ATPAR-WIPE
+        THEN
+        R> DROP
+        >R 2DROP R> EXIT
+    THEN
+
+    13 PICK 13 PICK _ATPAR-LOGIN-HINT-STATUS
+    ?DUP IF
+        R@ _ATPAR-WIPE
+        R> DROP
+        >R 2DROP R> EXIT
+    THEN
+    11 PICK 11 PICK 3 PICK _ATPAR-AUTH-STATUS
+    ?DUP IF
+        R@ _ATPAR-WIPE
+        R> DROP
+        >R 2DROP R> EXIT
+    THEN
+    4 PICK 7 PICK _ATPAR-BUILD-POST-STATUS
+    ?DUP IF
+        R@ _ATPAR-WIPE
+        R> DROP
+        >R 2DROP R> EXIT
+    THEN
+
+    R@ _ATPAR-WIPE
+    1 PICK R@ _ATPARW.ACTIVE !
+    9 PICK R@ _ATPARW.OBJECT !
+    4 PICK R@ _ATPARW.POST !
+    6 PICK R@ _ATPARW.PROFILE !
+    8 PICK R@ _ATPARW.AUX !
+    13 PICK R@ _ATPARW.LOGIN-A !
+    12 PICK R@ _ATPARW.LOGIN-U !
+    11 PICK R@ _ATPARW.ASSERTION-A !
+    10 PICK R@ _ATPARW.ASSERTION-U !
+
+    5 PICK
+    ['] _ATPAR-BUILD-PAR-CALLBACK
+    R@
+    ROT
+    O2CODE-WITH-PAR
+
+    R@ _ATPARW.ACTIVE @ -1 = IF
+        DUP O2CODE-S-CALLBACK = IF
+            DROP AT-OAUTH-PAR-S-CALLBACK
+        ELSE
+            DUP AT-OAUTH-PAR-STATUS-VALID? 0= IF
+                DROP AT-OAUTH-PAR-S-INTERNAL
+            THEN
+        THEN
+    ELSE
+        _ATPAR-O2CODE>STATUS
+    THEN
+
+    R@ _ATPAR-WIPE
+    R> DROP
+    >R 2DROP R> ;
+
+: _ATPAR-BUILD-OP
+  \ ( login-a login-u assertion-a assertion-u dpop-a dpop-u
+  \   config profile transaction post workspace -- status )
+    _ATPAR-11DUP _ATPAR-BUILD-POST-ARENAS
+    ?DUP IF _ATPAR-RETURN11 EXIT THEN
+    4 PICK
+    ['] _ATPAR-BUILD-WITH-CONFIG
+    2 PICK
+    OAUTH2-CLIENT-CONFIG-WITH
+
+    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
+        DUP OAUTH2-CLIENT-CONFIG-S-CALLBACK = IF
+            2 PICK _ATPAR-WIPE
+        THEN
+        _ATPAR-CONFIG>STATUS >R
+        DROP
+        _ATPAR-DROP11
+        R> EXIT
+    THEN
+    DROP
+    DUP AT-OAUTH-PAR-STATUS-VALID? 0= IF
+        DROP AT-OAUTH-PAR-S-INTERNAL
+    THEN
+    >R _ATPAR-DROP11 R> ;
+
+: _ATPAR-BUILD-CALL
+  \ ( eleven-values operation-xt -- status )
+    1 PICK >R
+    CATCH
+    DUP IF
+        DROP
+        R@ _ATPAR-WIPE
+        _ATPAR-DROP11
+        R> DROP
+        AT-OAUTH-PAR-S-INTERNAL EXIT
+    THEN
+    DROP
+    R> DROP ;
+
+: AT-OAUTH-PAR-BUILD
+  \ ( login-a login-u assertion-a assertion-u dpop-a dpop-u
+  \   config profile transaction post workspace -- status )
+    _ATPAR-11DUP _ATPAR-BUILD-GEOMETRY
+    ?DUP IF _ATPAR-RETURN11 EXIT THEN
+    ['] _ATPAR-BUILD-OP _ATPAR-BUILD-CALL ;
+
+\ =====================================================================
+\  ACCEPT
+\ =====================================================================
+
+: _ATPAR-ACCEPT-ENVELOPE  ( post profile -- status )
+    OVER OAUTH2-HTTP-POST-VALID? 0= IF
+        2DROP AT-OAUTH-PAR-S-POST EXIT
+    THEN
+    OVER OAUTH2-HTTP-POST-STATE@
+    OAUTH2-HTTP-POST-STATE-RESULT <> IF
+        2DROP AT-OAUTH-PAR-S-POST EXIT
+    THEN
+    OVER OAUTH2-HTTP-POST-CLEANUP@
+    OAUTH2-HTTP-POST-CLEANUP-CERTAIN <> IF
+        2DROP AT-OAUTH-PAR-S-POST EXIT
+    THEN
+    OVER OAUTH2-HTTP-POST-LAST-STATUS@
+    OAUTH2-HTTP-POST-S-OK <> IF
+        2DROP AT-OAUTH-PAR-S-POST EXIT
+    THEN
+    2DUP _ATPAR-EXACT-PAR-TARGET
+    ?DUP IF >R 2DROP R> EXIT THEN
+
+    OVER OAUTH2-HTTP-POST-DPOP-INCLUDED? 0= IF
+        2DROP AT-OAUTH-PAR-S-DPOP EXIT
+    THEN
+    OVER OAUTH2-HTTP-POST-DPOP-SENT? 0= IF
+        2DROP AT-OAUTH-PAR-S-DPOP EXIT
+    THEN
+    OVER OAUTH2-HTTP-POST-AUTHORIZATION-INCLUDED? IF
+        2DROP AT-OAUTH-PAR-S-AUTH EXIT
+    THEN
+    OVER OAUTH2-HTTP-POST-AUTHORIZATION-SENT? IF
+        2DROP AT-OAUTH-PAR-S-AUTH EXIT
+    THEN
+    OVER OAUTH2-HTTP-POST-CORRELATION@
+    0= IF
+        2DROP 2DROP AT-OAUTH-PAR-S-BINDING EXIT
+    THEN
+    DUP 0= IF
+        2DROP 2DROP AT-OAUTH-PAR-S-BINDING EXIT
+    THEN
+    2DROP
+
+    OVER OAUTH2-HTTP-POST-OUTCOME@
+    OAUTH2-HTTP-POST-O-SUCCESS <> IF
+        2DROP AT-OAUTH-PAR-S-HTTP EXIT
+    THEN
+    OVER OAUTH2-HTTP-POST-DETAIL@
+    OAUTH2-HTTP-POST-D-NONE <> IF
+        2DROP AT-OAUTH-PAR-S-HTTP EXIT
+    THEN
+    OVER OAUTH2-HTTP-POST-HTTP-STATUS@ 201 <> IF
+        2DROP AT-OAUTH-PAR-S-HTTP EXIT
+    THEN
+    OVER OAUTH2-HTTP-POST-BODY@ NIP 0= IF
+        2DROP AT-OAUTH-PAR-S-HTTP EXIT
+    THEN
+    OVER OAUTH2-HTTP-POST-NONCE@
+    0= IF
+        2DROP 2DROP AT-OAUTH-PAR-S-NONCE EXIT
+    THEN
+    DUP 0= IF
+        2DROP 2DROP AT-OAUTH-PAR-S-NONCE EXIT
+    THEN
+    2DROP
+    2DROP AT-OAUTH-PAR-S-OK ;
+
+: _ATPAR-ACCEPT-BODY-STATUS  ( post workspace -- status )
+    >R
+    OAUTH2-HTTP-POST-BODY@
+    2DUP _ATPAR-REQUIRED-SPAN-STATUS
+    ?DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN
+    2DUP R@ AT-OAUTH-PAR-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        2DROP R> DROP AT-OAUTH-PAR-S-ALIAS EXIT
+    THEN
+    2DROP R> DROP AT-OAUTH-PAR-S-OK ;
+
+: _ATPAR-ACCEPT-PAR-CALLBACK  ( par-view workspace -- status )
+    >R
+    DUP OAUTH2-PAR-VIEW-REQUEST-URI@
+    DUP OAUTH2-PAR-RESPONSE-S-OK <> IF
+        _ATPAR-RESPONSE>STATUS >R
+        _ATPAR-DROP3
+        R> R> DROP EXIT
+    THEN
+    DROP
+    DUP R@ _ATPARW.LOGIN-U !
+    OVER R@ _ATPARW.LOGIN-A !
+    2DROP
+
+    DUP OAUTH2-PAR-VIEW-EXPIRES-IN@
+    DUP OAUTH2-PAR-RESPONSE-S-OK <> IF
+        _ATPAR-RESPONSE>STATUS >R
+        2DROP
+        R> R> DROP EXIT
+    THEN
+    DROP
+    DUP R@ _ATPARW.ASSERTION-U !
+    DROP
+
+    R@ _ATPARW.PROFILE @ AT-OAUTH-PROFILE-ISSUER@
+    DUP AT-OAUTH-PROFILE-S-OK <> IF
+        _ATPAR-PROFILE>STATUS >R
+        _ATPAR-DROP3
+        R> R> DROP EXIT
+    THEN
+    DROP
+    O2CODE-ISSUER-REQUIRED
+    R@ _ATPARW.POST @ OAUTH2-HTTP-POST-CORRELATION@
+    0= IF
+        _ATPAR-DROP5
+        DROP R> DROP AT-OAUTH-PAR-S-BINDING EXIT
+    THEN
+
+    R@ _ATPARW.LOGIN-A @
+    R@ _ATPARW.LOGIN-U @
+    R@ _ATPARW.ASSERTION-U @
+    R@ _ATPARW.AUX @
+    R@ _ATPARW.OBJECT @
+    O2CODE-ACCEPT-PAR
+    _ATPAR-O2CODE>STATUS
+    >R DROP R>
+    R> DROP ;
+
+: _ATPAR-ACCEPT-OP
+  ( post now-seconds profile transaction workspace -- nonce-a nonce-u status )
+    2 PICK AT-OAUTH-PROFILE-READY? 0= IF
+        _ATPAR-DROP5 0 0 AT-OAUTH-PAR-S-PROFILE EXIT
+    THEN
+    4 PICK 3 PICK _ATPAR-ACCEPT-ENVELOPE
+    ?DUP IF
+        >R _ATPAR-DROP5 0 0 R> EXIT
+    THEN
+    4 PICK 1 PICK _ATPAR-ACCEPT-BODY-STATUS
+    ?DUP IF
+        >R _ATPAR-DROP5 0 0 R> EXIT
+    THEN
+
+    DUP >R
+    R@ _ATPAR-WIPE
+    1 PICK R@ _ATPARW.OBJECT !
+    4 PICK R@ _ATPARW.POST !
+    2 PICK R@ _ATPARW.PROFILE !
+    3 PICK R@ _ATPARW.AUX !
+
+    4 PICK OAUTH2-HTTP-POST-BODY@
+    ['] _ATPAR-ACCEPT-PAR-CALLBACK
+    R@
+    R@ _ATPARW.CHILD
+    OAUTH2-PAR-RESPONSE-WITH
+
+    DUP OAUTH2-PAR-RESPONSE-S-OK <> IF
+        _ATPAR-RESPONSE>STATUS
+        >R DROP R>
+    ELSE
+        DROP
+        DUP AT-OAUTH-PAR-STATUS-VALID? 0= IF
+            DROP AT-OAUTH-PAR-S-INTERNAL
+        THEN
+    THEN
+
+    R@ _ATPAR-WIPE
+    R> DROP
+    ?DUP IF
+        >R _ATPAR-DROP5 0 0 R> EXIT
+    THEN
+
+    4 PICK OAUTH2-HTTP-POST-NONCE@
+    0= IF
+        2DROP _ATPAR-DROP5
+        0 0 AT-OAUTH-PAR-S-INTERNAL EXIT
+    THEN
+    2>R
+    _ATPAR-DROP5
+    2R>
+    AT-OAUTH-PAR-S-OK ;
+
+: _ATPAR-ACCEPT-CALL
+  \ ( post now-seconds profile transaction workspace operation-xt
+  \   -- nonce-a nonce-u status )
+    1 PICK >R
+    CATCH
+    DUP IF
+        DROP
+        R@ _ATPAR-WIPE
+        _ATPAR-DROP5
+        R> DROP
+        0 0 AT-OAUTH-PAR-S-INTERNAL EXIT
+    THEN
+    DROP
+    R> DROP ;
+
+: AT-OAUTH-PAR-ACCEPT
+  \ ( post now-seconds profile transaction workspace
+  \   -- nonce-a nonce-u status )
+    _ATPAR-5DUP _ATPAR-ACCEPT-GEOMETRY
+    ?DUP IF
+        >R _ATPAR-DROP5 0 0 R> EXIT
+    THEN
+    _ATPAR-5DUP _ATPAR-ACCEPT-POST-ARENAS
+    ?DUP IF
+        >R _ATPAR-DROP5 0 0 R> EXIT
+    THEN
+    ['] _ATPAR-ACCEPT-OP _ATPAR-ACCEPT-CALL ;
+
+\ =====================================================================
+\  Compile-time geometry assertions
+\ =====================================================================
+
+: _ATPAR-GEOMETRY-ABORT  ( -- )
+    ." AT OAuth PAR workspace geometry mismatch" CR ABORT ;
+
+1 CELLS 8 <> [IF]
+    _ATPAR-GEOMETRY-ABORT
+[THEN]
+
+_ATPARW-CHILD-OFF 7 AND [IF]
+    _ATPAR-GEOMETRY-ABORT
+[THEN]
+
+_ATPARW-PROFILE 1 CELLS + _ATPARW-CHILD-OFF <> [IF]
+    _ATPAR-GEOMETRY-ABORT
+[THEN]
+
+_ATPARW-CHILD-SIZE O2CODE-WORKSPACE-SIZE < [IF]
+    _ATPAR-GEOMETRY-ABORT
+[THEN]
+
+_ATPARW-CHILD-SIZE AT-OAUTH-CLIENT-WORKSPACE-SIZE < [IF]
+    _ATPAR-GEOMETRY-ABORT
+[THEN]
+
+_ATPARW-CHILD-SIZE OAUTH2-PAR-RESPONSE-WORKSPACE-SIZE < [IF]
+    _ATPAR-GEOMETRY-ABORT
+[THEN]
+
+AT-OAUTH-PAR-WORKSPACE-SIZE 7 AND [IF]
+    _ATPAR-GEOMETRY-ABORT
+[THEN]
