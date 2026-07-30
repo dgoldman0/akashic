@@ -165,6 +165,8 @@ def test_fixture_uses_the_public_discovery_job_and_receipt_path() -> None:
     fixture = _source(FIXTURE)
 
     assert "PROVIDED sbox-s4-desk-service" in fixture
+    assert "DESK-SBOX-JOB-CAPACITY" not in fixture
+    assert "DESK-SBOX-JOB-SERVICE-SIZE" not in fixture
     assert fixture.count('S" org.akashic.sandbox.pure-compute"') >= 1
     assert "CINST-SERVICE" in fixture
     assert fixture.count("DESK-SBOX-JOB-SUBMIT") == 1
@@ -184,16 +186,25 @@ def test_fixture_reports_caught_failures_with_the_active_phase() -> None:
     fixture = _source(FIXTURE)
     run = _definition(fixture, "_S4-RUN")
     failure = _definition(fixture, "_S4-FAIL")
+    depth = _definition(fixture, "_4D?")
 
     assert "['] _S4-BODY CATCH" in run
     assert "_S4-FAIL EXIT" in run
+    assert "DEPTH _4W @ -" in depth
+    assert "OVER _4U0 !" in depth
+    assert "2 PICK _4U1 !" in depth
+    assert "?DUP IF THROW THEN" in depth
     assert "SBOX STAGE4 DESK SERVICE FAIL PHASE" in failure
     assert "_4F @" in failure
     assert "STATUS" in failure
+    assert '" TOP "' in failure
+    assert "_4U0 @" in failure
+    assert '" NEXT "' in failure
+    assert "_4U1 @" in failure
     assert "TX-FLUSH" in failure
 
 
-def test_fixture_uses_the_fixed_desk_budgets_and_bounded_scheduler() -> None:
+def test_fixture_measures_capacity_four_and_uses_the_bounded_scheduler() -> None:
     fixture = _source(FIXTURE)
     candidate = _definition(fixture, "_4EC")
     limit_store = _definition(fixture, "_4L!")
@@ -209,10 +220,36 @@ def test_fixture_uses_the_fixed_desk_budgets_and_bounded_scheduler() -> None:
     assert "SBOX-VALUE-LIMITS-SEAL" in limits
     assert "DESK-SBOX-JOB-SERVICE-STATE@" in discovery
     assert "_DSJ.STATE" not in discovery
+
+    measured = re.search(
+        r"(?P<capacity>4|_4S[A-Z0-9-]*)\s+"
+        r"DESK-SBOX-JOB-SERVICE-MEASURE\s+"
+        r"(?:DROP|THROW)\s+CONSTANT\s+_4SU\b",
+        fixture,
+    )
+    assert measured is not None
+    capacity = measured.group("capacity")
+    if capacity != "4":
+        assert re.search(
+            rf"4\s+CONSTANT\s+{re.escape(capacity)}\b",
+            fixture,
+        )
+    assert re.search(
+        r"CREATE\s+_4SR\s+_4SU\s+7\s+\+\s+ALLOT",
+        fixture,
+    )
+    assert "_4S _4SU 0 FILL" in init
     assert re.search(
         r"100000\s+8192\s+262144\s+256\s+"
-        r"_4J\s+@\s+_4S\s+"
+        rf"_4J\s+@\s+{re.escape(capacity)}\s+"
+        r"_4S\s+_4SU\s+"
         r"DESK-SBOX-JOB-SERVICE-INIT",
+        init,
+    )
+    assert "DESK-SBOX-JOB-SERVICE-CAPACITY@" in init
+    assert re.search(
+        rf"_4S\s+DESK-SBOX-JOB-SERVICE-CAPACITY@\s+"
+        rf"{re.escape(capacity)}\s+=\s+_4\?",
         init,
     )
     assert invoke_take.count("DESK-SBOX-JOB-SERVICE-TICK") == 1
@@ -229,6 +266,10 @@ def test_receipts_are_read_only_after_all_borrowed_state_is_gone() -> None:
     plan = teardown.index("SBOX-PLAN-RELEASE")
     context = teardown.index("CTX-FREE")
     assert service < owner < plan < context
+    assert re.search(
+        r"_4S\s+_4SU\s+DESK-SBOX-JOB-SERVICE-RELEASE",
+        teardown,
+    )
     assert "DESK-SBOX-RECEIPT-ACTIVATION@" in detached
     assert "DESK-SBOX-RECEIPT-PAYLOAD@" in _definition(
         fixture,

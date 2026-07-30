@@ -28,37 +28,80 @@ def _definition(source: str, word: str) -> str:
     return match.group(0)
 
 
-def test_desk_accepts_only_a_borrowed_sealed_owner_before_run() -> None:
+def _stack_effect(source: str, word: str) -> str:
+    match = re.search(
+        rf"^:\s+{re.escape(word)}\s*\n?\s*\((.*?)\)",
+        source,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None, word
+    return " ".join(match.group(1).lower().split())
+
+
+def test_desk_accepts_only_a_measured_borrowed_configuration_before_run() -> None:
     source = _source()
-    setter = _definition(source, "DESK-SANDBOX-OWNER!")
+    configure = _definition(source, "DESK-SANDBOX-CONFIGURE")
 
     assert "REQUIRE sandbox-service.f" in source
-    assert "_DESK-CURRENT-STATE @" in setter
-    assert "SBOX-MODULE-OWNER-SEALED?" in setter
-    assert re.search(
-        r"_DESK-PENDING-(?:SBOX|SANDBOX)-OWNER\s+!",
-        setter,
+    assert _stack_effect(
+        source,
+        "DESK-SANDBOX-CONFIGURE",
+    ) == "owner|0 capacity -- status"
+    assert "_DESK-CURRENT-STATE @" in configure
+    assert "SBOX-MODULE-OWNER-SEALED?" in configure
+    assert "DESK-SBOX-JOB-SERVICE-MEASURE" in configure
+    assert "_DESK-PENDING-SBOX-OWNER !" in configure
+    assert "_DESK-PENDING-SBOX-CAPACITY !" in configure
+    assert not re.search(
+        r"^:\s+DESK-SANDBOX-OWNER!(?:\s|$)",
+        source,
+        re.MULTILINE,
     )
-    assert "ALLOCATE" not in setter
-    assert "SBOX-MODULE-OWNER-RELEASE" not in setter
+    assert "ALLOCATE" not in configure
+    assert "SBOX-MODULE-OWNER-RELEASE" not in configure
 
 
-def test_desk_embeds_the_service_and_materializes_fixed_policy() -> None:
+def test_desk_owns_a_dynamic_measured_service_and_materializes_policy() -> None:
     source = _source()
     layout = source.split("CMP-LAYOUT-BEGIN", 1)[1].split(
         "CMP-LAYOUT-SIZE", 1
     )[0]
 
-    assert re.search(
-        r"_DESK-CURRENT-STATE\s+DESK-SBOX-JOB-SERVICE-SIZE"
-        r"\s+CMP-FIELD:",
+    assert "DESK-SBOX-JOB-SERVICE-SIZE" not in source
+    assert not re.search(
+        r"CMP-FIELD:\s+_DESK-SANDBOX\b",
         layout,
     )
-    init_call = source.index("DESK-SBOX-JOB-SERVICE-INIT")
-    init_region = source[max(0, init_call - 5000) : init_call + 100]
-    assert "SBOX-VALUE-LIMITS-BEGIN" in init_region
-    assert "SBOX-VALUE-LIMIT!" in init_region
-    assert "SBOX-VALUE-LIMITS-SEAL" in init_region
+    assert re.search(
+        r"_DESK-CURRENT-STATE\s+CMP-CELL:\s+_DESK-SANDBOX\b",
+        layout,
+    )
+    assert re.search(
+        r"_DESK-CURRENT-STATE\s+CMP-CELL:\s+_DESK-SANDBOX-U\b",
+        layout,
+    )
+    assert "_DESK-PENDING-SBOX-CAPACITY @" in source
+    assert "_DESK-SBOX-CAPACITY !" in source
+    desk_init = _definition(source, "DESK-INIT-CB")
+    recovery = desk_init.split("DESK-RECOVERY? IF", 1)[1].split(
+        "THEN", 1
+    )[0]
+    assert "0 _DESK-SBOX-OWNER !" in recovery
+    assert "0 _DESK-SBOX-CAPACITY !" in recovery
+
+    init = _definition(source, "_DESK-SBOX-INIT")
+    assert "DESK-SBOX-JOB-SERVICE-MEASURE" in init
+    assert "ALLOCATE" in init
+    assert "SBOX-VALUE-LIMITS-BEGIN" in source
+    assert "SBOX-VALUE-LIMIT!" in source
+    assert "SBOX-VALUE-LIMITS-SEAL" in source
+    assert re.search(
+        r"_DESK-SBOX-CAPACITY\s+@\s+"
+        r"_DESK-SANDBOX\s+@\s+"
+        r"_DESK-SANDBOX-U\s+@\s+"
+        r"DESK-SBOX-JOB-SERVICE-INIT",
+        init,
+    )
     for budget in (
         "INSTRUCTION",
         "VALUE-OP",
@@ -113,6 +156,20 @@ def test_desk_releases_service_before_tables_context_and_practice() -> None:
     shutdown = _definition(source, "DESK-SHUTDOWN-CB")
 
     assert "DESK-SBOX-JOB-SERVICE-RELEASE" in sandbox_fini
+    assert re.search(
+        r"_DESK-SANDBOX\s+@\s+DUP\s+0=\s+IF",
+        sandbox_fini,
+    )
+    assert "?DUP 0=" not in sandbox_fini
+    assert re.search(
+        r"_DESK-SANDBOX\s+@\s+"
+        r"_DESK-SANDBOX-U\s+@\s+"
+        r"DESK-SBOX-JOB-SERVICE-RELEASE",
+        sandbox_fini,
+    )
+    assert "FREE" in sandbox_fini
+    assert "0 _DESK-SANDBOX !" in sandbox_fini
+    assert "0 _DESK-SANDBOX-U !" in sandbox_fini
     service_release = fini.index("_DESK-SBOX-FINI")
     table_release = fini.index("_DESK-SERVICE-TABLE-FINI")
     assert service_release < table_release

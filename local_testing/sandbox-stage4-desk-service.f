@@ -11,9 +11,13 @@ VARIABLE _4J
 VARIABLE _4Y
 VARIABLE _4G
 VARIABLE _4F
+VARIABLE _4U0
+VARIABLE _4U1
 
 136 CONSTANT _4CU
 SBOX-PLAN-DESCRIPTOR-SIZE _4CU + CONSTANT _4VU
+4 CONSTANT _4SC
+_4SC DESK-SBOX-JOB-SERVICE-MEASURE DROP CONSTANT _4SU
 
 : _4A  ( address -- aligned-address ) 7 + -8 AND ;
 
@@ -36,7 +40,7 @@ CREATE _4IR 31 ALLOT
 _4IR _4A CONSTANT _4I
 CREATE _4ER 31 ALLOT
 _4ER _4A CONSTANT _4E
-CREATE _4SR DESK-SBOX-JOB-SERVICE-SIZE 7 + ALLOT
+CREATE _4SR _4SU 7 + ALLOT
 _4SR _4A CONSTANT _4S
 CREATE _4NR IENDPOINT-SIZE 7 + ALLOT
 _4NR _4A CONSTANT _4N
@@ -46,7 +50,19 @@ _4TR _4A CONSTANT _4T
 
 : _4?  ( flag -- ) 0= THROW ;
 
-: _4PH  ( phase -- ) _4F ! ;
+: _4PH  ( phase -- )
+    0 _4U0 ! 0 _4U1 ! _4F ! ;
+
+: _4D?  ( phase -- )
+    _4PH
+    DEPTH _4W @ -
+    DUP 1 >= IF
+        OVER _4U0 !
+    THEN
+    DUP 2 >= IF
+        2 PICK _4U1 !
+    THEN
+    ?DUP IF THROW THEN ;
 
 : _4EC  ( -- )
     1 0 1 4 0 2 _4L SBOX-CANDIDATE-MEASURE
@@ -125,27 +141,34 @@ _4TR _4A CONSTANT _4T
     _4D @ _4N IEND.CONTEXT !
     ['] _4ES _4N IEND.SERVICE-XT !
     _4N _4K @ CINST.ENDPOINT !
-    _4S DESK-SBOX-JOB-SERVICE-SIZE 0 FILL
+    _4S _4SU 0 FILL
     _4O _4Q _4X @ _4M
-    100000 8192 262144 256 _4J @ _4S
-        DESK-SBOX-JOB-SERVICE-INIT THROW ;
+    100000 8192 262144 256 _4J @
+    _4SC _4S _4SU DESK-SBOX-JOB-SERVICE-INIT THROW
+    _4S DESK-SBOX-JOB-SERVICE-CAPACITY@ _4SC = _4? ;
 
 : _S4-INVOKE-TAKE  ( -- )
+    400 _4D?
     S" org.akashic.sandbox.pure-compute" _4K @ CINST-SERVICE
         _4S = _4?
+    401 _4D?
     0 _4I _4B! 0 _4E _4B!
     _4T DESK-SBOX-RECEIPT-SIZE 0 FILL
+    402 _4D?
     _4R 11 S" main" _4I 24 _4K @ _4S
         DESK-SBOX-JOB-SUBMIT
     >R _4G ! _4Y ! R> THROW
+    403 _4D?
     _4I 24 0xA5 FILL
     _4S DESK-SBOX-JOB-SERVICE-TICK THROW
+    404 _4D?
     _4T _4Y @ _4G @
         _4K @ _4S DESK-SBOX-JOB-RESULT-TAKE
-        THROW ;
+        THROW
+    405 _4D? ;
 
 : _S4-TEARDOWN  ( -- )
-    _4S DESK-SBOX-JOB-SERVICE-RELEASE THROW
+    _4S _4SU DESK-SBOX-JOB-SERVICE-RELEASE THROW
     _4O SBOX-MODULE-OWNER-RELEASE THROW
     _4V SBOX-PLAN-RELEASE THROW
     0 _4X @ CTX.FLAGS ! _4X @ CTX-FREE
@@ -166,30 +189,44 @@ _4TR _4A CONSTANT _4T
     6 _4PH
     _4T DESK-SBOX-RECEIPT-ACTIVATION@ _4?
     _4G @ = _4? _4J @ = _4?
+    106 _4D?
     7 _4PH
     _4T DESK-SBOX-RECEIPT-MODULE@ _4?
     S" main" COMPARE 0= _4?
     11 = _4? _4R RID= _4?
+    107 _4D?
     8 _4PH
     _4E 24 _4T _S4-RESULT=? _4?
+    108 _4D?
     9 _4PH
     _4T DESK-SBOX-RECEIPT-RELEASE THROW
+    109 _4D?
     10 _4PH
-    HEAP-FREE-BYTES _4H @ = _4? ;
+    HEAP-FREE-BYTES _4H @ = _4?
+    110 _4D? ;
 
 : _S4-BODY  ( -- )
+    100 _4D?
     1 _4PH _4II
+    101 _4D?
     2 _4PH _4MI
+    102 _4D?
     3 _4PH _S4-RUNTIME-INIT
+    103 _4D?
     4 _4PH _S4-INVOKE-TAKE
+    104 _4D?
     5 _4PH _S4-TEARDOWN
+    105 _4D?
     _S4-DETACHED-RESULT
-    11 _4PH DEPTH _4W @ = _4? ;
+    111 _4D? ;
 
 : _S4-FAIL  ( status -- )
     ." SBOX STAGE4 DESK SERVICE FAIL PHASE "
     _4F @ .
-    ." STATUS " . CR TX-FLUSH ;
+    ." STATUS " .
+    ." TOP " _4U0 @ .
+    ." NEXT " _4U1 @ .
+    CR TX-FLUSH ;
 
 : _S4-RUN  ( -- )
     DEPTH _4W !

@@ -24,6 +24,7 @@ HOST = Path("runtime/sandbox-host.f")
 VM = Path("sandbox/vm.f")
 
 PUBLIC_WORDS = (
+    "DESK-SBOX-JOB-SERVICE-MEASURE",
     "DESK-SBOX-JOB-SERVICE-INIT",
     "DESK-SBOX-JOB-SERVICE-VALID?",
     "DESK-SBOX-JOB-SERVICE-OWNER?",
@@ -39,6 +40,7 @@ PUBLIC_WORDS = (
     "DESK-SBOX-JOB-SERVICE-STATE@",
     "DESK-SBOX-JOB-SERVICE-ACTIVATION@",
     "DESK-SBOX-JOB-SERVICE-COUNT",
+    "DESK-SBOX-JOB-SERVICE-CAPACITY@",
     "DESK-SBOX-JOB-SERVICE-RELEASE",
 )
 
@@ -115,19 +117,118 @@ def test_service_dependency_boundary_excludes_deferred_concerns() -> None:
 def test_service_publishes_the_complete_bounded_job_lifecycle() -> None:
     source = _source()
 
-    assert "4 CONSTANT DESK-SBOX-JOB-CAPACITY" in source
-    assert "64 CONSTANT _DSJS-ADMISSION" in source
+    assert not re.search(
+        r"^\s*\d+\s+CONSTANT\s+DESK-SBOX-JOB-CAPACITY\s*$",
+        source,
+        re.MULTILINE,
+    )
+    assert "CONSTANT DESK-SBOX-JOB-SERVICE-SIZE" not in source
     assert (
-        "_DSJ-SLOTS DESK-SBOX-JOB-CAPACITY _DSJS-SIZE * +"
+        "256 CONSTANT DESK-SBOX-JOB-SERVICE-HEADER-SIZE"
         in source
     )
-    assert "CONSTANT DESK-SBOX-JOB-SERVICE-SIZE" in source
+    assert re.search(
+        r"^\s*\d+\s+CONSTANT\s+_DSJ-CAPACITY\s*$",
+        source,
+        re.MULTILINE,
+    )
+    assert re.search(
+        r"^:\s+_DSJ\.CAPACITY\s+"
+        r"\(\s*service\s+--\s+address\s*\)",
+        source,
+        re.MULTILINE,
+    )
+    assert "64 CONSTANT _DSJS-ADMISSION" in source
     for word in PUBLIC_WORDS:
         assert re.search(
             rf"^:\s+{re.escape(word)}(?:\s|$)",
             source,
             re.MULTILINE,
         ), word
+
+
+def test_capacity_is_measured_stored_and_part_of_exact_initialization() -> None:
+    source = _source()
+    measure = _definition(
+        source,
+        "DESK-SBOX-JOB-SERVICE-MEASURE",
+    )
+    init = _definition(source, "DESK-SBOX-JOB-SERVICE-INIT")
+    header = _definition(source, "_DSJ-HEADER?")
+    capacity_at = _definition(
+        source,
+        "DESK-SBOX-JOB-SERVICE-CAPACITY@",
+    )
+
+    measure_effect = " ".join(
+        _stack_effect(
+            source,
+            "DESK-SBOX-JOB-SERVICE-MEASURE",
+        ).split()
+    )
+    assert measure_effect == "capacity -- service-u|0 status"
+    assert "DESK-SBOX-JOB-SERVICE-HEADER-SIZE" in measure
+    assert "_DSJS-SIZE *" in measure
+    assert "_DSJ-SIGNED-MAX" in measure
+
+    init_effect = " ".join(
+        _stack_effect(
+            source,
+            "DESK-SBOX-JOB-SERVICE-INIT",
+        ).split()
+    )
+    assert init_effect.endswith(
+        "activation-id capacity service service-u -- status"
+    )
+    boundary = _definition(source, "_DSJI-BOUNDARY")
+    assert "_DSJI-BOUNDARY" in init
+    assert "DESK-SBOX-JOB-SERVICE-MEASURE" in boundary
+    assert "_DSJI-SERVICE-U @" in boundary
+    assert "_DSJ.CAPACITY !" in init
+    assert "_DSJ.SIZE !" in init
+
+    assert "_DSJ.CAPACITY @" in header
+    assert "_DSJ.SIZE @" in header
+    assert "DESK-SBOX-JOB-SERVICE-MEASURE" in header
+    assert "DESK-SBOX-JOB-SERVICE-VALID?" in capacity_at
+    assert "_DSJ.CAPACITY @" in capacity_at
+
+
+def test_every_slot_bound_and_rotation_uses_validated_service_capacity() -> None:
+    source = _source()
+
+    assert not re.search(
+        r"\bDESK-SBOX-JOB-CAPACITY\b",
+        source,
+    )
+    for word in (
+        "_DSJ-SLOTS-VALID?",
+        "_DSJ-ACTIVE-SHAPE?",
+        "_DSJ-LOOKUP",
+        "_DSJSUB-FREE-SLOT",
+        "_DSJSUB-BOUNDARY",
+        "_DSJT-ADVANCE-CURSOR",
+        "DESK-SBOX-JOB-SERVICE-TICK",
+        "DESK-SBOX-JOB-OWNER-DRAIN",
+        "DESK-SBOX-JOB-SERVICE-CLOSE",
+        "DESK-SBOX-JOB-SERVICE-DRAIN",
+    ):
+        assert "_DSJ.CAPACITY @" in _definition(source, word), word
+
+    for word in (
+        "_DSJ-SLOTS-VALID?",
+        "_DSJ-LOOKUP",
+        "_DSJSUB-FREE-SLOT",
+        "DESK-SBOX-JOB-OWNER-DRAIN",
+        "DESK-SBOX-JOB-SERVICE-CLOSE",
+        "DESK-SBOX-JOB-SERVICE-DRAIN",
+    ):
+        assert "0 ?DO" in _definition(source, word), word
+
+    tick = _definition(source, "DESK-SBOX-JOB-SERVICE-TICK")
+    advance = _definition(source, "_DSJT-ADVANCE-CURSOR")
+    assert "MOD" in tick
+    assert "MOD" in advance
 
 
 def test_submission_uses_service_policy_and_copies_caller_identity() -> None:
@@ -176,7 +277,8 @@ def test_tick_advances_at_most_one_job_by_one_fixed_slice() -> None:
     )
     assert "_DSJ.SLICE-STEPS @" in tick
     assert "_DSJ.CURSOR @" in tick
-    assert "DESK-SBOX-JOB-CAPACITY MOD" in tick
+    assert "_DSJ.CAPACITY @" in tick
+    assert "MOD" in tick
     assert "_DSJT-ADVANCE-CURSOR" in tick
     assert "_DSJT-STATUS @ EXIT" in tick
     assert (
@@ -209,7 +311,7 @@ def test_slot_validation_checks_the_embedded_graph_only_once() -> None:
     assert "_SHOST-RUN-STATE-VALIDATED" in slot
 
 
-def test_fixed_service_zero_scans_are_cellwise_and_exact() -> None:
+def test_measured_service_zero_scans_are_cellwise_and_exact() -> None:
     source = _source()
     zero = _definition(source, "_DSJ-ZERO?")
 
@@ -298,10 +400,17 @@ def test_result_and_shutdown_paths_end_borrows_before_reuse() -> None:
     assert drain.index("DESK-SBOX-JOB-SERVICE-CLOSE") < drain.index(
         "_DSJ-DRAIN-CLEAR"
     )
-    assert "DESK-SBOX-JOB-SERVICE-SIZE 0 FILL" in release
-    assert "OVER _DSJ-OWNER-CORE 0 FILL" in release
-    assert release.index("DESK-SBOX-JOB-SERVICE-DRAIN") < release.index(
-        "OVER _DSJ-OWNER-CORE 0 FILL"
+    release_effect = " ".join(
+        _stack_effect(
+            source,
+            "DESK-SBOX-JOB-SERVICE-RELEASE",
+        ).split()
+    )
+    assert release_effect == "service service-u -- status"
+    assert "_DSJ.SIZE @" in release
+    assert "0 FILL" in release
+    assert release.index("DESK-SBOX-JOB-SERVICE-DRAIN") < release.rindex(
+        "0 FILL"
     )
 
 
