@@ -130,14 +130,17 @@ from the opaque request URI.
 The `WITH-GRANT` callback receives:
 
 ```forth
-( context binding binding-u code code-u verifier verifier-u
-  -- callback-status )
+( context binding binding-u issuer issuer-u issuer-required
+  state state-u code code-u verifier verifier-u -- callback-status )
 ```
 
 The transaction enters `SPENT` before the callback. The code, verifier,
 state, and challenge are wiped after callback return, throw, or
 stack-contract violation. An asynchronous token request must copy the
 borrowed values into its own protected request transaction before returning.
+The retained state gives that request transaction one attempt-unique local
+correlation value; the issuer loan lets a provider adapter prove that its
+selected token endpoint belongs to the same authorization-server profile.
 
 Each callback must consume its documented arguments and return exactly one
 cell. A throw or wrong stack effect maps to `O2CODE-S-CALLBACK`. The phase

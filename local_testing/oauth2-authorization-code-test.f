@@ -917,11 +917,14 @@ CREATE _o2ct-pkce-work OAUTH2-PKCE-WORKSPACE-SIZE ALLOT
     _o2ct-verifier-copy SWAP MOVE ;
 
 : _o2ct-grant-callback
-  \ ( context binding binding-u code code-u verifier verifier-u
-  \   -- callback-status )
+  \ ( context binding binding-u issuer issuer-u issuer-required
+  \   state state-u code code-u verifier verifier-u -- callback-status )
     1 _o2ct-callback-count +!
     _o2ct-capture-verifier
     _o2ct-capture-code
+    _o2ct-capture-state
+    _o2ct-seen-issuer-required !
+    _o2ct-capture-issuer
     _o2ct-capture-binding
     DUP _o2ct-object = _o2ct-assert
     DUP O2CODE-PHASE@
@@ -934,17 +937,17 @@ CREATE _o2ct-pkce-work OAUTH2-PKCE-WORKSPACE-SIZE ALLOT
     DROP 703 ;
 
 : _o2ct-grant-throw
-  \ ( context binding binding-u code code-u verifier verifier-u
-  \   -- callback-status )
+  \ ( context binding binding-u issuer issuer-u issuer-required
+  \   state state-u code code-u verifier verifier-u -- callback-status )
     1 _o2ct-callback-count +!
-    _O2C-DROP7
+    _O2C-DROP4 _O2C-DROP4 _O2C-DROP4
     -821 THROW ;
 
 : _o2ct-grant-extra
-  \ ( context binding binding-u code code-u verifier verifier-u
-  \   -- callback-status extra )
+  \ ( context binding binding-u issuer issuer-u issuer-required
+  \   state state-u code code-u verifier verifier-u -- callback-status extra )
     1 _o2ct-callback-count +!
-    _O2C-DROP7
+    _O2C-DROP4 _O2C-DROP4 _O2C-DROP4
     703 704 ;
 
 : _o2ct-start-code-ready  ( -- )
@@ -979,6 +982,14 @@ CREATE _o2ct-pkce-work OAUTH2-PKCE-WORKSPACE-SIZE ALLOT
     O2CODE-WITH-GRANT 703 = _o2ct-assert
     _o2ct-callback-count @ 1 = _o2ct-assert
     _o2ct-seen-binding-u @ _o2ct-binding NIP =
+    _o2ct-assert
+    _o2ct-seen-issuer-u @ _o2ct-issuer NIP =
+    _o2ct-assert
+    _o2ct-issuer-copy _o2ct-seen-issuer-u @
+    _o2ct-issuer COMPARE 0= _o2ct-assert
+    _o2ct-seen-issuer-required @ O2CODE-ISSUER-REQUIRED =
+    _o2ct-assert
+    _o2ct-seen-state-u @ O2CODE-STATE-SIZE =
     _o2ct-assert
     _o2ct-seen-code-u @ S" opaque-authorization+code" NIP =
     _o2ct-assert

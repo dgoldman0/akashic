@@ -173,14 +173,17 @@ CREATE _ataut-transaction-copy O2CODE-TRANSACTION-SIZE ALLOT
     _ataut-stack ;
 
 : _ataut-grant-callback
-  \ ( context binding binding-u code code-u verifier verifier-u
-  \   -- callback-status )
+  \ ( context binding binding-u issuer issuer-u issuer-required
+  \   state state-u code code-u verifier verifier-u -- callback-status )
     DUP O2CODE-VERIFIER-SIZE = >R
     2DUP OAUTH2-PKCE-VERIFIER-VALID?
     R> AND
     _ataut-assert
     2DROP
     S" authorization-code-1" STR-STR= _ataut-assert
+    _atpart-state _atpart-state-u @ STR-STR= _ataut-assert
+    O2CODE-ISSUER-REQUIRED = _ataut-assert
+    S" https://auth.example" STR-STR= _ataut-assert
     _O2PKT-BINDING OAUTH2-P256-KEY-BINDING-SIZE
     STR-STR= _ataut-assert
     8401 = _ataut-assert

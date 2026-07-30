@@ -1555,14 +1555,19 @@ _O2C-DESCRIPTION-OFF O2CODE-ERROR-DESCRIPTION-CAPACITY +
 
 : _O2C-GRANT-CALLBACK-RUN
   \ callback receives
-  \   ( context binding binding-u code code-u verifier verifier-u
-  \     -- callback-status )
+  \   ( context binding binding-u issuer issuer-u issuer-required
+  \     state state-u code code-u verifier verifier-u -- callback-status )
   \ stack effect here is ( callback context object -- callback-status )
     DEPTH 2 - >R
     ROT >R
     >R
     R@ _O2C.BINDING
     R@ _O2C.BINDING-U @
+    R@ _O2C.ISSUER
+    R@ _O2C.ISSUER-U @
+    R@ _O2C.ISSUER-REQUIRED @
+    R@ _O2C.STATE
+    O2CODE-STATE-SIZE
     R@ _O2C.CODE
     R@ _O2C.CODE-U @
     R@ _O2C.VERIFIER
