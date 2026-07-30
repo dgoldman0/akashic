@@ -10,9 +10,12 @@
 \
 \  The application callback runs after CVAULT-WITH has returned.  The
 \  vault has therefore wiped its private borrow and released its busy
-\  state before arbitrary caller code runs.  This module owns no mutable
-\  operation state and does not depend on client configuration, AT
-\  Protocol, HTTP, JWK Set selection, or a signing policy.
+\  state before arbitrary caller code runs.  A separate purpose-scoped
+\  operation can construct one DPoP proof while the authenticated DPoP
+\  scalar is still inside that owner-controlled borrow; only the compact
+\  proof is published.  This module owns no mutable operation state and
+\  does not depend on client configuration, AT Protocol, HTTP, or JWK Set
+\  selection.
 \ =====================================================================
 
 PROVIDED akashic-oauth2-key-p256
@@ -22,6 +25,7 @@ REQUIRE ../../utils/caller-span.f
 REQUIRE ../../runtime/identity.f
 REQUIRE ../credential-vault.f
 REQUIRE ../jose/jwk-p256.f
+REQUIRE dpop-es256.f
 REQUIRE ../../math/p256.f
 
 \ =====================================================================
@@ -54,10 +58,15 @@ REQUIRE ../../math/p256.f
 23 CONSTANT OAUTH2-P256-KEY-S-PROTECTED
 24 CONSTANT OAUTH2-P256-KEY-S-PLATFORM
 25 CONSTANT OAUTH2-P256-KEY-S-INTERNAL
+26 CONSTANT OAUTH2-P256-KEY-S-METHOD
+27 CONSTANT OAUTH2-P256-KEY-S-HTU
+28 CONSTANT OAUTH2-P256-KEY-S-NONCE
+29 CONSTANT OAUTH2-P256-KEY-S-TOKEN
+30 CONSTANT OAUTH2-P256-KEY-S-TIME
 
 : OAUTH2-P256-KEY-STATUS-VALID?  ( status -- flag )
     DUP OAUTH2-P256-KEY-S-OK >=
-    SWAP OAUTH2-P256-KEY-S-INTERNAL <= AND ;
+    SWAP OAUTH2-P256-KEY-S-TIME <= AND ;
 
 1 CONSTANT OAUTH2-P256-KEY-ROLE-CLIENT
 2 CONSTANT OAUTH2-P256-KEY-ROLE-DPOP
@@ -82,6 +91,57 @@ JOSE-JWK-P256-THUMBPRINT-SIZE
 0x4F32503235364231 CONSTANT _O2PK-BINDING-MAGIC  \ "O2P256B1"
 0x4F32503235364B31 CONSTANT _O2PK-RECORD-MAGIC   \ "O2P256K1"
 1 CONSTANT _O2PK-FORMAT-VERSION
+
+\ =====================================================================
+\  Vault-backed DPoP proof input descriptor
+\ =====================================================================
+
+ 0 CONSTANT _O2PKDI-HTM-A
+ 8 CONSTANT _O2PKDI-HTM-U
+16 CONSTANT _O2PKDI-HTU-A
+24 CONSTANT _O2PKDI-HTU-U
+32 CONSTANT _O2PKDI-IAT
+40 CONSTANT _O2PKDI-NONCE-A
+48 CONSTANT _O2PKDI-NONCE-U
+56 CONSTANT _O2PKDI-TOKEN-A
+64 CONSTANT _O2PKDI-TOKEN-U
+72 CONSTANT _O2PKDI-DESTINATION
+80 CONSTANT _O2PKDI-CAPACITY
+88 CONSTANT OAUTH2-P256-KEY-DPOP-INPUT-SIZE
+
+: OAUTH2-P256-KEY-DPOP-I.HTM-A
+  ( input -- field )
+    _O2PKDI-HTM-A + ;
+: OAUTH2-P256-KEY-DPOP-I.HTM-U
+  ( input -- field )
+    _O2PKDI-HTM-U + ;
+: OAUTH2-P256-KEY-DPOP-I.HTU-A
+  ( input -- field )
+    _O2PKDI-HTU-A + ;
+: OAUTH2-P256-KEY-DPOP-I.HTU-U
+  ( input -- field )
+    _O2PKDI-HTU-U + ;
+: OAUTH2-P256-KEY-DPOP-I.IAT
+  ( input -- field )
+    _O2PKDI-IAT + ;
+: OAUTH2-P256-KEY-DPOP-I.NONCE-A
+  ( input -- field )
+    _O2PKDI-NONCE-A + ;
+: OAUTH2-P256-KEY-DPOP-I.NONCE-U
+  ( input -- field )
+    _O2PKDI-NONCE-U + ;
+: OAUTH2-P256-KEY-DPOP-I.TOKEN-A
+  ( input -- field )
+    _O2PKDI-TOKEN-A + ;
+: OAUTH2-P256-KEY-DPOP-I.TOKEN-U
+  ( input -- field )
+    _O2PKDI-TOKEN-U + ;
+: OAUTH2-P256-KEY-DPOP-I.DESTINATION
+  ( input -- field )
+    _O2PKDI-DESTINATION + ;
+: OAUTH2-P256-KEY-DPOP-I.CAPACITY
+  ( input -- field )
+    _O2PKDI-CAPACITY + ;
 
 \ =====================================================================
 \  Canonical binding, slot, and record geometry
@@ -152,6 +212,11 @@ JOSE-JWK-P256-THUMBPRINT-SIZE
 128 CONSTANT _O2PKW-CONSUMER-KIND
 136 CONSTANT _O2PKW-CALLBACK-DEPTH
 144 CONSTANT _O2PKW-RID-SNAPSHOT
+176 CONSTANT _O2PKW-OPERATION
+184 CONSTANT _O2PKW-RESULT-STATUS
+
+0 CONSTANT _O2PK-OP-IDENTITY
+1 CONSTANT _O2PK-OP-DPOP-PROOF
 
 192 CONSTANT _O2PKW-BINDING-OFF
 _O2PKW-BINDING-OFF OAUTH2-P256-KEY-BINDING-SIZE +
@@ -170,6 +235,11 @@ _O2PKW-P256-OFF P256-WORKSPACE-SIZE +
     CONSTANT _O2PKW-JWK-OFF
 _O2PKW-JWK-OFF JOSE-JWK-P256-WORKSPACE-SIZE +
     CONSTANT OAUTH2-P256-KEY-WORKSPACE-SIZE
+_O2PKW-P256-OFF CONSTANT _O2PKW-DPOP-PROOF-OFF
+OAUTH2-P256-KEY-WORKSPACE-SIZE 7 + 8 / 8 *
+    CONSTANT _O2PKW-DPOP-WORK-OFF
+_O2PKW-DPOP-WORK-OFF OAUTH2-DPOP-ES256-WORKSPACE-SIZE +
+    CONSTANT OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE
 
 : _O2PKW.CALLBACK  ( workspace -- field ) _O2PKW-CALLBACK + ;
 : _O2PKW.CONTEXT  ( workspace -- field ) _O2PKW-CONTEXT + ;
@@ -202,12 +272,21 @@ _O2PKW-JWK-OFF JOSE-JWK-P256-WORKSPACE-SIZE +
 : _O2PKW.RID-SNAPSHOT
   ( workspace -- rid )
     _O2PKW-RID-SNAPSHOT + ;
+: _O2PKW.OPERATION
+  ( workspace -- field )
+    _O2PKW-OPERATION + ;
+: _O2PKW.RESULT-STATUS
+  ( workspace -- field )
+    _O2PKW-RESULT-STATUS + ;
 
 : _O2PKW.BINDING
   ( workspace -- binding )
     _O2PKW-BINDING-OFF + ;
 : _O2PKW.RECORD
   ( workspace -- record )
+    _O2PKW-RECORD-OFF + ;
+: _O2PKW.DPOP-INPUT
+  ( workspace -- input )
     _O2PKW-RECORD-OFF + ;
 : _O2PKW.SLOT
   ( workspace -- slot )
@@ -227,9 +306,18 @@ _O2PKW-JWK-OFF JOSE-JWK-P256-WORKSPACE-SIZE +
 : _O2PKW.JWK
   ( workspace -- jwk-workspace )
     _O2PKW-JWK-OFF + ;
+: _O2PKW.DPOP-PROOF
+  ( workspace -- proof-stage )
+    _O2PKW-DPOP-PROOF-OFF + ;
+: _O2PKW.DPOP-WORK
+  ( workspace -- dpop-workspace )
+    _O2PKW-DPOP-WORK-OFF + ;
 
 : _O2PK-WIPE  ( workspace -- )
     OAUTH2-P256-KEY-WORKSPACE-SIZE 0 FILL ;
+
+: _O2PK-DPOP-WIPE  ( workspace -- )
+    OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE 0 FILL ;
 
 \ =====================================================================
 \  Fixed-width helpers
@@ -384,6 +472,43 @@ _O2PKW-JWK-OFF JOSE-JWK-P256-WORKSPACE-SIZE +
         OAUTH2-P256-KEY-S-INTERNAL SWAP
     ENDCASE ;
 
+: _O2PK-DPOP>STATUS  ( dpop-status -- owner-status )
+    CASE
+        OAUTH2-DPOP-ES256-S-OK OF
+            OAUTH2-P256-KEY-S-OK ENDOF
+        OAUTH2-DPOP-ES256-S-INVALID OF
+            OAUTH2-P256-KEY-S-INVALID ENDOF
+        OAUTH2-DPOP-ES256-S-METHOD OF
+            OAUTH2-P256-KEY-S-METHOD ENDOF
+        OAUTH2-DPOP-ES256-S-HTU OF
+            OAUTH2-P256-KEY-S-HTU ENDOF
+        OAUTH2-DPOP-ES256-S-NONCE OF
+            OAUTH2-P256-KEY-S-NONCE ENDOF
+        OAUTH2-DPOP-ES256-S-TOKEN OF
+            OAUTH2-P256-KEY-S-TOKEN ENDOF
+        OAUTH2-DPOP-ES256-S-TIME OF
+            OAUTH2-P256-KEY-S-TIME ENDOF
+        OAUTH2-DPOP-ES256-S-CAPACITY OF
+            OAUTH2-P256-KEY-S-CAPACITY ENDOF
+        OAUTH2-DPOP-ES256-S-ALIAS OF
+            OAUTH2-P256-KEY-S-ALIAS ENDOF
+        OAUTH2-DPOP-ES256-S-ENTROPY OF
+            OAUTH2-P256-KEY-S-ENTROPY ENDOF
+        OAUTH2-DPOP-ES256-S-KEY OF
+            OAUTH2-P256-KEY-S-KEY ENDOF
+        OAUTH2-DPOP-ES256-S-CRYPTO OF
+            OAUTH2-P256-KEY-S-CRYPTO ENDOF
+        OAUTH2-DPOP-ES256-S-INTERNAL OF
+            OAUTH2-P256-KEY-S-INTERNAL ENDOF
+        OAUTH2-DPOP-ES256-S-RANGE OF
+            OAUTH2-P256-KEY-S-RANGE ENDOF
+        OAUTH2-DPOP-ES256-S-PROTECTED OF
+            OAUTH2-P256-KEY-S-PROTECTED ENDOF
+        OAUTH2-DPOP-ES256-S-PLATFORM OF
+            OAUTH2-P256-KEY-S-PLATFORM ENDOF
+        OAUTH2-P256-KEY-S-INTERNAL SWAP
+    ENDCASE ;
+
 \ =====================================================================
 \  Caller-memory admission
 \ =====================================================================
@@ -394,6 +519,23 @@ _O2PKW-JWK-OFF JOSE-JWK-P256-WORKSPACE-SIZE +
 
 : _O2PK-REQUIRED-SPAN-STATUS  ( address length -- status )
     DUP 0> 0= IF
+        2DROP OAUTH2-P256-KEY-S-INVALID EXIT
+    THEN
+    OVER 0= IF
+        2DROP OAUTH2-P256-KEY-S-INVALID EXIT
+    THEN
+    _O2PK-SPAN-STATUS ;
+
+: _O2PK-OPTIONAL-SPAN-STATUS  ( address length -- status )
+    DUP 0= IF
+        DROP 0= IF
+            OAUTH2-P256-KEY-S-OK
+        ELSE
+            OAUTH2-P256-KEY-S-INVALID
+        THEN
+        EXIT
+    THEN
+    DUP 0< IF
         2DROP OAUTH2-P256-KEY-S-INVALID EXIT
     THEN
     OVER 0= IF
@@ -420,6 +562,20 @@ _O2PKW-JWK-OFF JOSE-JWK-P256-WORKSPACE-SIZE +
     _O2PK-ALIGNED-FIXED-STATUS
     ?DUP IF NIP EXIT THEN
     _O2PK-WIPE
+    OAUTH2-P256-KEY-S-OK ;
+
+: OAUTH2-P256-KEY-DPOP-WORKSPACE-CLEAR  ( workspace -- status )
+    DUP OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE
+    _O2PK-ALIGNED-FIXED-STATUS
+    ?DUP IF NIP EXIT THEN
+    _O2PK-DPOP-WIPE
+    OAUTH2-P256-KEY-S-OK ;
+
+: OAUTH2-P256-KEY-DPOP-INPUT-CLEAR  ( input -- status )
+    DUP OAUTH2-P256-KEY-DPOP-INPUT-SIZE
+    _O2PK-ALIGNED-FIXED-STATUS
+    ?DUP IF NIP EXIT THEN
+    OAUTH2-P256-KEY-DPOP-INPUT-SIZE 0 FILL
     OAUTH2-P256-KEY-S-OK ;
 
 \ =====================================================================
@@ -711,6 +867,42 @@ _O2PKW-JWK-OFF JOSE-JWK-P256-WORKSPACE-SIZE +
     THEN
     _O2PKW.BINDING _O2PKB.DPOP-SLOT ;
 
+: _O2PK-DPOP-CONSUME  ( private workspace -- owner-status )
+    >R
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTM-A @
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTM-U @
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTU-A @
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTU-U @
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.IAT @
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.NONCE-A @
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.NONCE-U @
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.TOKEN-A @
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.TOKEN-U @
+    9 ROLL
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.CAPACITY @
+    OAUTH2-DPOP-ES256-MAX-PROOF-BYTES MIN
+    R@ _O2PKW.DPOP-PROOF SWAP
+    R@ _O2PKW.DPOP-WORK
+    OAUTH2-DPOP-ES256-PROOF
+    DUP R@ _O2PKW.RESULT-STATUS !
+    DUP OAUTH2-DPOP-ES256-S-OK <> IF
+        _O2PK-DPOP>STATUS >R
+        DROP R> R> DROP EXIT
+    THEN
+    DROP
+    R@ _O2PKW.CALLBACK-RESULT !
+    R> DROP OAUTH2-P256-KEY-S-OK ;
+
 : _O2PK-VAULT-CONSUMER
   ( secret-a secret-u kind generation workspace -- owner-status )
     >R
@@ -746,26 +938,30 @@ _O2PKW-JWK-OFF JOSE-JWK-P256-WORKSPACE-SIZE +
         DUP _O2PKR.KID R@ _O2PKW.KID
         R@ _O2PKW.KID-U @ MOVE
     THEN
-    DROP
     R@ _O2PKW.PUBLIC
     R@ _O2PKW.THUMBPRINT
     R@ _O2PKW.JWK
     JOSE-JWK-P256-THUMBPRINT _O2PK-JWK>STATUS
-    ?DUP IF R> DROP EXIT THEN
+    ?DUP IF NIP R> DROP EXIT THEN
     R@ _O2PKW.PINNED @ IF
         R@ _O2PKW.THUMBPRINT
         OAUTH2-P256-KEY-THUMBPRINT-SIZE
         R@ _O2PKW.SELECTED-SLOT _O2PKS.THUMBPRINT
         OAUTH2-P256-KEY-THUMBPRINT-SIZE
         COMPARE IF
-            R> DROP OAUTH2-P256-KEY-S-MISMATCH EXIT
+            DROP R> DROP OAUTH2-P256-KEY-S-MISMATCH EXIT
         THEN
     ELSE
         R@ _O2PKW.THUMBPRINT
         R@ _O2PKW.SLOT _O2PKS.THUMBPRINT
         OAUTH2-P256-KEY-THUMBPRINT-SIZE MOVE
     THEN
-    R> DROP OAUTH2-P256-KEY-S-OK ;
+    R@ _O2PKW.OPERATION @ _O2PK-OP-DPOP-PROOF = IF
+        DUP _O2PKR.PRIVATE R@ _O2PK-DPOP-CONSUME
+        NIP
+        R> DROP EXIT
+    THEN
+    DROP R> DROP OAUTH2-P256-KEY-S-OK ;
 
 : _O2PK-VAULT-WITH  ( workspace -- status )
     >R
@@ -1249,6 +1445,225 @@ _O2PKW-JWK-OFF JOSE-JWK-P256-WORKSPACE-SIZE +
     OAUTH2-P256-KEY-ROLE-DPOP _O2PK-WITH ;
 
 \ =====================================================================
+\  Purpose-scoped vault-backed DPoP proof construction
+\ =====================================================================
+
+: _O2PK-DPOP-SPAN-STATUS
+  ( address length required? workspace -- status )
+    >R
+    IF
+        2DUP _O2PK-REQUIRED-SPAN-STATUS
+    ELSE
+        2DUP _O2PK-OPTIONAL-SPAN-STATUS
+    THEN
+    ?DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN
+    DUP 0= IF
+        2DROP R> DROP OAUTH2-P256-KEY-S-OK EXIT
+    THEN
+    2DUP
+    R@ OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        2DROP R> DROP OAUTH2-P256-KEY-S-ALIAS EXIT
+    THEN
+    R@ _O2PKW.VAULT @ _O2PK-VAULT-SPAN-STATUS
+    R> DROP ;
+
+: _O2PK-DPOP-STAGED-GEOMETRY  ( workspace -- status )
+    >R
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTM-A @
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTM-U @
+    -1 R@ _O2PK-DPOP-SPAN-STATUS
+    ?DUP IF R> DROP EXIT THEN
+
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTU-A @
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTU-U @
+    -1 R@ _O2PK-DPOP-SPAN-STATUS
+    ?DUP IF R> DROP EXIT THEN
+
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.NONCE-A @
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.NONCE-U @
+    0 R@ _O2PK-DPOP-SPAN-STATUS
+    ?DUP IF R> DROP EXIT THEN
+
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.TOKEN-A @
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.TOKEN-U @
+    0 R@ _O2PK-DPOP-SPAN-STATUS
+    ?DUP IF R> DROP EXIT THEN
+
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.DESTINATION @
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.CAPACITY @
+    0 R@ _O2PK-DPOP-SPAN-STATUS
+    ?DUP IF R> DROP EXIT THEN
+
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.DESTINATION @
+    R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.CAPACITY @
+    DUP IF
+        2DUP
+        R@ _O2PKW.KID-IN @
+        OAUTH2-P256-KEY-DPOP-INPUT-SIZE
+        MSPAN-OVERLAP? IF
+            2DROP R> DROP OAUTH2-P256-KEY-S-ALIAS EXIT
+        THEN
+        R@ _O2PKW.CALLBACK @ R@ _O2PKW.CONTEXT @
+        MSPAN-OVERLAP? IF
+            R> DROP OAUTH2-P256-KEY-S-ALIAS EXIT
+        THEN
+    ELSE
+        2DROP
+    THEN
+    R> DROP OAUTH2-P256-KEY-S-OK ;
+
+: _O2PK-DPOP-GEOMETRY
+  ( binding binding-u vault input workspace -- status )
+    DUP OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE
+    _O2PK-ALIGNED-FIXED-STATUS
+    ?DUP IF _O2PK-RETURN5 EXIT THEN
+    4 PICK 4 PICK _O2PK-BINDING-STATUS
+    ?DUP IF _O2PK-RETURN5 EXIT THEN
+    1 PICK OAUTH2-P256-KEY-DPOP-INPUT-SIZE
+    _O2PK-ALIGNED-FIXED-STATUS
+    ?DUP IF _O2PK-RETURN5 EXIT THEN
+    4 PICK _O2PKB.FLAGS _O2PK-BE64@
+    OAUTH2-P256-KEY-BINDING-F-DPOP AND 0= IF
+        _O2PK-DROP5 OAUTH2-P256-KEY-S-ABSENT EXIT
+    THEN
+
+    4 PICK 4 PICK
+    2 PICK OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        _O2PK-DROP5 OAUTH2-P256-KEY-S-ALIAS EXIT
+    THEN
+    1 PICK OAUTH2-P256-KEY-DPOP-INPUT-SIZE
+    2 PICK OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        _O2PK-DROP5 OAUTH2-P256-KEY-S-ALIAS EXIT
+    THEN
+    4 PICK 4 PICK
+    3 PICK OAUTH2-P256-KEY-DPOP-INPUT-SIZE
+    MSPAN-OVERLAP? IF
+        _O2PK-DROP5 OAUTH2-P256-KEY-S-ALIAS EXIT
+    THEN
+
+    DUP OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE
+    4 PICK _O2PK-VAULT-SPAN-STATUS
+    ?DUP IF _O2PK-RETURN5 EXIT THEN
+    4 PICK 4 PICK 4 PICK _O2PK-VAULT-SPAN-STATUS
+    ?DUP IF _O2PK-RETURN5 EXIT THEN
+    1 PICK OAUTH2-P256-KEY-DPOP-INPUT-SIZE
+    4 PICK _O2PK-VAULT-SPAN-STATUS
+    ?DUP IF _O2PK-RETURN5 EXIT THEN
+    _O2PK-DROP5 OAUTH2-P256-KEY-S-OK ;
+
+: _O2PK-DPOP-PUBLISH  ( workspace -- written )
+    DUP _O2PKW.DPOP-PROOF
+    OVER _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.DESTINATION @
+    2 PICK _O2PKW.CALLBACK-RESULT @ MOVE
+    _O2PKW.CALLBACK-RESULT @ ;
+
+\ An admitted caller-output publication THROW is rethrown after successful
+\ owner cleanup.  A cleanup THROW propagates directly and has precedence.
+: _O2PK-DPOP-CALL-FINALLY
+  ( workspace operation-xt cleanup-xt -- results... )
+    >R
+    OVER >R
+    CATCH
+    DUP IF
+        >R DROP
+        R> R> R> EXECUTE
+        THROW
+    THEN
+    DROP
+    R> R> EXECUTE ;
+
+: _O2PK-DPOP-OP
+  \ ( binding binding-u vault input workspace -- written status )
+    DUP >R
+    R@ _O2PK-DPOP-WIPE
+    4 PICK R@ _O2PKW.CALLBACK !
+    3 PICK R@ _O2PKW.CONTEXT !
+    2 PICK R@ _O2PKW.VAULT !
+    1 PICK R@ _O2PKW.KID-IN !
+    OAUTH2-P256-KEY-ROLE-DPOP R@ _O2PKW.ROLE !
+    _O2PK-OP-DPOP-PROOF R@ _O2PKW.OPERATION !
+    4 PICK R@ _O2PKW.BINDING
+    OAUTH2-P256-KEY-BINDING-SIZE MOVE
+    1 PICK R@ _O2PKW.DPOP-INPUT
+    OAUTH2-P256-KEY-DPOP-INPUT-SIZE MOVE
+    _O2PK-DROP5
+
+    R@ _O2PK-STAGED-BINDING-STATUS
+    ?DUP IF
+        R@ _O2PK-DPOP-WIPE 0 SWAP R> DROP EXIT
+    THEN
+    -1 R@ _O2PKW.PINNED !
+    R@ _O2PKW.SELECTED-SLOT _O2PKS.GENERATION
+    _O2PK-BE64@ R@ _O2PKW.EXPECTED !
+    R@ _O2PK-DPOP-STAGED-GEOMETRY
+    ?DUP IF
+        R@ _O2PK-DPOP-WIPE 0 SWAP R> DROP EXIT
+    THEN
+
+    R@ _O2PK-VAULT-WITH
+    ?DUP IF
+        R@ _O2PK-DPOP-WIPE 0 SWAP R> DROP EXIT
+    THEN
+    R@ _O2PKW.RESULT-STATUS @
+    OAUTH2-DPOP-ES256-S-OK <> IF
+        R@ _O2PK-DPOP-WIPE
+        0 OAUTH2-P256-KEY-S-INTERNAL R> DROP EXIT
+    THEN
+    R@ _O2PKW.CALLBACK-RESULT @
+    DUP 0> 0= IF
+        DROP R@ _O2PK-DPOP-WIPE
+        0 OAUTH2-P256-KEY-S-INTERNAL R> DROP EXIT
+    THEN
+    DUP OAUTH2-DPOP-ES256-MAX-PROOF-BYTES U> IF
+        DROP R@ _O2PK-DPOP-WIPE
+        0 OAUTH2-P256-KEY-S-INTERNAL R> DROP EXIT
+    THEN
+    DUP R@ _O2PKW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.CAPACITY @ U> IF
+        DROP R@ _O2PK-DPOP-WIPE
+        0 OAUTH2-P256-KEY-S-INTERNAL R> DROP EXIT
+    THEN
+    DROP
+    R@ ['] _O2PK-DPOP-PUBLISH ['] _O2PK-DPOP-WIPE
+        _O2PK-DPOP-CALL-FINALLY
+    OAUTH2-P256-KEY-S-OK
+    R> DROP ;
+
+: _O2PK-DPOP-CALL
+  ( five-values operation-xt -- written status )
+    1 PICK >R
+    CATCH
+    DUP IF
+        R@ _O2PK-DPOP-WIPE
+        >R _O2PK-DROP5 R> R> DROP THROW
+    THEN
+    DROP R> DROP ;
+
+: OAUTH2-P256-KEY-DPOP-PROOF
+  \ ( binding binding-u vault input workspace -- written status )
+    _O2PK-5DUP _O2PK-DPOP-GEOMETRY
+    ?DUP IF _O2PK-RETURN5 0 SWAP EXIT THEN
+    ['] _O2PK-DPOP-OP _O2PK-DPOP-CALL ;
+
+\ =====================================================================
 \  Compile-time geometry assertions
 \ =====================================================================
 
@@ -1268,10 +1683,28 @@ OAUTH2-P256-KEY-RECORD-SIZE 336 <> [IF]
     ." OAuth2 P-256 key record geometry mismatch" CR ABORT
 [THEN]
 
+OAUTH2-P256-KEY-DPOP-INPUT-SIZE 88 <> [IF]
+    ." OAuth2 P-256 key DPoP input geometry mismatch" CR ABORT
+[THEN]
+
 _O2PKW-JWK-OFF 2312 <> [IF]
     ." OAuth2 P-256 key nested workspace mismatch" CR ABORT
 [THEN]
 
 OAUTH2-P256-KEY-WORKSPACE-SIZE 17879 <> [IF]
     ." OAuth2 P-256 key workspace geometry mismatch" CR ABORT
+[THEN]
+
+_O2PKW-DPOP-PROOF-OFF OAUTH2-DPOP-ES256-MAX-PROOF-BYTES +
+_O2PKW-DPOP-WORK-OFF U> [IF]
+    ." OAuth2 P-256 key DPoP proof staging overlap" CR ABORT
+[THEN]
+
+_O2PKW-DPOP-WORK-OFF 7 AND [IF]
+    ." OAuth2 P-256 key DPoP workspace alignment mismatch" CR ABORT
+[THEN]
+
+_O2PKW-DPOP-WORK-OFF OAUTH2-DPOP-ES256-WORKSPACE-SIZE +
+OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE <> [IF]
+    ." OAuth2 P-256 key DPoP workspace geometry mismatch" CR ABORT
 [THEN]

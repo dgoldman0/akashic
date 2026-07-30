@@ -3,12 +3,16 @@
 `akashic/security/oauth2/key-p256.f` owns the durable identity boundary for
 OAuth client-authentication and DPoP P-256 keys. It generates private scalars
 inside transient caller-owned workspace, commits typed records through the
-credential vault, and resolves them into callback-scoped public identity.
-Private scalars are never returned to an application callback.
+credential vault, resolves them into callback-scoped public identity, and can
+construct one DPoP proof while the authenticated DPoP scalar remains inside
+an owner-controlled vault borrow. Private scalars are never returned to an
+application callback or copied into proof output.
 
 The module is provider-neutral. It does not interpret an OAuth client
-configuration, select a published JWK, construct an assertion or DPoP proof,
-or own HTTP, AT Protocol, session, or application state.
+configuration, select a published JWK, construct a client assertion, or own
+HTTP, AT Protocol, session, nonce-retry, or application state. The DPoP
+operation applies only generic RFC 9449/ES256 construction policy by
+delegating to `security/oauth2/dpop-es256.f`.
 
 ## Public geometry
 
@@ -20,6 +24,8 @@ OAUTH2-P256-KEY-KID-CAPACITY       \ 256 bytes
 OAUTH2-P256-KEY-PUBLIC-SIZE        \ 65 bytes
 OAUTH2-P256-KEY-THUMBPRINT-SIZE    \ 32 bytes
 OAUTH2-P256-KEY-WORKSPACE-SIZE     \ 17879 bytes
+OAUTH2-P256-KEY-DPOP-INPUT-SIZE    \ 88 bytes
+OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE \ derived bytes
 ```
 
 The two roles are:
@@ -184,6 +190,68 @@ guard violation returns a zero result with
 `OAUTH2-P256-KEY-S-CALLBACK`. Every earlier failure returns a zero result and
 does not invoke the callback.
 
+## Vault-backed DPoP proofs
+
+The purpose-scoped proof operation closes the generic boundary between a
+durable DPoP key and the standalone DPoP constructor without introducing a
+raw-private-key API:
+
+```forth
+OAUTH2-P256-KEY-DPOP-INPUT-CLEAR  ( input -- status )
+OAUTH2-P256-KEY-DPOP-WORKSPACE-CLEAR  ( workspace -- status )
+
+OAUTH2-P256-KEY-DPOP-PROOF
+  ( binding binding-u vault input owner-workspace
+    -- written status )
+```
+
+The caller clears and fills one aligned 88-byte descriptor through these
+field accessors:
+
+```forth
+OAUTH2-P256-KEY-DPOP-I.HTM-A
+OAUTH2-P256-KEY-DPOP-I.HTM-U
+OAUTH2-P256-KEY-DPOP-I.HTU-A
+OAUTH2-P256-KEY-DPOP-I.HTU-U
+OAUTH2-P256-KEY-DPOP-I.IAT
+OAUTH2-P256-KEY-DPOP-I.NONCE-A
+OAUTH2-P256-KEY-DPOP-I.NONCE-U
+OAUTH2-P256-KEY-DPOP-I.TOKEN-A
+OAUTH2-P256-KEY-DPOP-I.TOKEN-U
+OAUTH2-P256-KEY-DPOP-I.DESTINATION
+OAUTH2-P256-KEY-DPOP-I.CAPACITY
+```
+
+`HTM` and `HTU` are required. The nonce and access token are independently
+optional and use canonical `(0,0)` absence. `IAT` and destination capacity
+have the same meaning as in `OAUTH2-DPOP-ES256-PROOF`; zero output capacity
+uses canonical `(0,0)`. The proof operation takes the larger
+`OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE`, while every other key-owner operation
+continues to use `OAUTH2-P256-KEY-WORKSPACE-SIZE`.
+
+Like the module's provisioning workspace, the DPoP owner workspace is
+caller-allocated but exclusively lent to the owner for the synchronous call.
+The caller must not inspect, alias, or access it concurrently.
+
+The owner validates and snapshots the complete binding and descriptor,
+requires the DPoP role, pins its credential generation and thumbprint, and
+qualifies all public spans against both caller memory and the live credential
+vault. Its internal vault consumer authenticates the typed record, validates
+the scalar by deriving the expected public identity, and invokes the generic
+DPoP constructor before returning from `CVAULT-WITH`. The constructor's
+private-key scratch and first proof publication remain inside the exclusively
+borrowed owner-operation workspace; neither address is caller-selectable.
+The scalar address never crosses the owner API.
+
+Only after the vault borrow has released does the owner publish the fully
+staged compact proof to the advertised caller destination. The complete DPoP
+owner workspace is wiped on every admitted return and on terminal publication
+throws. Publication throws are rethrown after successful cleanup rather than
+being collapsed into an ordinary status. The caller owns the published proof
+and should clear it promptly after sealing the HTTP request. This operation
+performs no nonce caching, automatic retry, endpoint selection, HTTP work, or
+token/session mutation.
+
 ## Admission and cleanup
 
 The complete workspace, retained RID, output slot, binding, and client `kid`
@@ -203,9 +271,11 @@ borrowing, or output publication.
 
 Preflight failures leave the workspace and outputs unchanged. Once admitted,
 normal success and returned failure wipe the complete owner workspace.
-Unexpected operation, publication, or cleanup throws propagate; they are not
-converted into a status that could conceal an ambiguous durable or output
-effect.
+Terminal caller-output publication and outer cleanup throws propagate. An
+internal vault-consumer throw maps to `OAUTH2-P256-KEY-S-INTERNAL` only after
+the vault has wiped its private borrow; DPoP output is still confined to owner
+staging at that point, and the complete owner workspace is then wiped, so the
+status cannot conceal an ambiguous caller-output effect.
 
 ## Status values
 
@@ -240,6 +310,11 @@ arbitrary status cell.
 | `OAUTH2-P256-KEY-S-PROTECTED` | A caller span intersects protected platform storage |
 | `OAUTH2-P256-KEY-S-PLATFORM` | Caller-memory qualification failed unexpectedly |
 | `OAUTH2-P256-KEY-S-INTERNAL` | An undocumented subordinate result or owner invariant failed |
+| `OAUTH2-P256-KEY-S-METHOD` | The DPoP HTTP method is invalid |
+| `OAUTH2-P256-KEY-S-HTU` | The normalized DPoP target URI is invalid |
+| `OAUTH2-P256-KEY-S-NONCE` | The optional DPoP nonce is invalid |
+| `OAUTH2-P256-KEY-S-TOKEN` | The optional access token is invalid |
+| `OAUTH2-P256-KEY-S-TIME` | The DPoP issued-at time is invalid |
 
 Every credential-vault status is mapped explicitly. A vault callback status
 comes from the owner's internal consumer and maps to `INTERNAL`; only the

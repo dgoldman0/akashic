@@ -405,6 +405,16 @@ changed success/callback path and the security-relevant preflight/cleanup
 path. The remote consumer must still gate two-resource provenance and body
 ownership rather than treating these deferrals as remote-source evidence.
 
+Recorded, non-gating deferrals for the durable P-256 DPoP operation are every
+subordinate-status permutation beyond the focused HTU mapping, the full
+capacity/alias/protected-span cross-product, injected terminal `MOVE` faults,
+and concurrent caller-mutation experiments. The focused gate covers a real
+production dependency compile plus deterministic role/generation pinning,
+private-key confinement, internal proof staging, post-borrow publication, and
+complete owner-workspace cleanup. The standalone DPoP constructor retains its
+own direct cryptographic qualification; this owner seam does not duplicate
+that matrix.
+
 Recorded, non-gating deferrals for the remote retained-result adapter are the
 full HRES outcome/status/media/redirect matrix, broad canonical-URI spelling
 and parser fuzz, every published-key and vault subordinate status, the full

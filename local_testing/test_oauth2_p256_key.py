@@ -45,10 +45,20 @@ GROUP_STAGES = (
     ),
     ("dpop", "_O2PKT-TEST-DPOP", "OAUTH2 P256 KEY DPOP READY"),
     (
+        "dpop-proof",
+        "_O2PKT-TEST-DPOP-PROOF",
+        "OAUTH2 P256 KEY DPOP PROOF READY",
+    ),
+    (
         "preflight",
         "_O2PKT-TEST-PREFLIGHT",
         "OAUTH2 P256 KEY PREFLIGHT READY",
     ),
+)
+
+DPOP_PROOF_GROUP_STAGES = (
+    GROUP_STAGES[4],
+    GROUP_STAGES[5],
 )
 
 FAILURE_MARKERS = (
@@ -66,15 +76,16 @@ FAILURE_MARKERS = (
 )
 
 
-# The P-256 and JWK implementations already have exhaustive linked
-# qualification. This seam keeps their exact public geometry and status
-# vocabularies while making key generation, derivation, and thumbprinting
-# deterministic. The credential vault and key owner remain exact production
-# bodies.
+# The P-256 and JWK implementations have their own linked qualification, and
+# the standalone DPoP constructor has an independently scoped public contract.
+# This seam keeps those boundaries while making key generation, derivation,
+# thumbprinting, and proof construction deterministic. The credential vault
+# and key owner remain exact production bodies.
 P256_JWK_DOUBLES = r"""
 
 PROVIDED akashic-p256
 PROVIDED akashic-jose-jwk-p256
+PROVIDED akashic-oauth2-dpop256
 
 32 CONSTANT P256-SCALAR-SIZE
 32 CONSTANT P256-PRIVATE-SIZE
@@ -246,6 +257,92 @@ VARIABLE _O2PKD-CALLER-U
     DUP JOSE-JWK-P256-THUMBPRINT-SIZE 0x33 FILL
     2DROP R> DROP JOSE-JWK-P256-S-OK ;
 
+32    CONSTANT OAUTH2-DPOP-ES256-MAX-METHOD-BYTES
+4096  CONSTANT OAUTH2-DPOP-ES256-MAX-HTU-BYTES
+4096  CONSTANT OAUTH2-DPOP-ES256-MAX-NONCE-BYTES
+22    CONSTANT OAUTH2-DPOP-ES256-JTI-SIZE
+11459 CONSTANT OAUTH2-DPOP-ES256-MAX-PROOF-BYTES
+256   CONSTANT OAUTH2-DPOP-ES256-WORKSPACE-SIZE
+
+0  CONSTANT OAUTH2-DPOP-ES256-S-OK
+1  CONSTANT OAUTH2-DPOP-ES256-S-INVALID
+2  CONSTANT OAUTH2-DPOP-ES256-S-METHOD
+3  CONSTANT OAUTH2-DPOP-ES256-S-HTU
+4  CONSTANT OAUTH2-DPOP-ES256-S-NONCE
+5  CONSTANT OAUTH2-DPOP-ES256-S-TOKEN
+6  CONSTANT OAUTH2-DPOP-ES256-S-TIME
+7  CONSTANT OAUTH2-DPOP-ES256-S-CAPACITY
+8  CONSTANT OAUTH2-DPOP-ES256-S-ALIAS
+9  CONSTANT OAUTH2-DPOP-ES256-S-ENTROPY
+10 CONSTANT OAUTH2-DPOP-ES256-S-KEY
+11 CONSTANT OAUTH2-DPOP-ES256-S-CRYPTO
+12 CONSTANT OAUTH2-DPOP-ES256-S-INTERNAL
+13 CONSTANT OAUTH2-DPOP-ES256-S-RANGE
+14 CONSTANT OAUTH2-DPOP-ES256-S-PROTECTED
+15 CONSTANT OAUTH2-DPOP-ES256-S-PLATFORM
+
+: OAUTH2-DPOP-ES256-STATUS-VALID?  ( status -- flag )
+    DUP OAUTH2-DPOP-ES256-S-OK >=
+    SWAP OAUTH2-DPOP-ES256-S-PLATFORM <= AND ;
+
+VARIABLE _O2PKD-DPOP-STATUS
+VARIABLE _O2PKD-DPOP-CALLS
+VARIABLE _O2PKD-DPOP-PRIVATE-OK
+VARIABLE _O2PKD-DPOP-HTM-A
+VARIABLE _O2PKD-DPOP-HTM-U
+VARIABLE _O2PKD-DPOP-HTU-A
+VARIABLE _O2PKD-DPOP-HTU-U
+VARIABLE _O2PKD-DPOP-IAT
+VARIABLE _O2PKD-DPOP-NONCE-A
+VARIABLE _O2PKD-DPOP-NONCE-U
+VARIABLE _O2PKD-DPOP-TOKEN-A
+VARIABLE _O2PKD-DPOP-TOKEN-U
+VARIABLE _O2PKD-DPOP-DESTINATION
+VARIABLE _O2PKD-DPOP-CAPACITY
+VARIABLE _O2PKD-DPOP-WORK
+VARIABLE _O2PKD-DPOP-PUBLIC-A
+VARIABLE _O2PKD-DPOP-PUBLIC-U
+VARIABLE _O2PKD-DPOP-PUBLIC-UNCHANGED
+
+: OAUTH2-DPOP-ES256-WORKSPACE-CLEAR  ( workspace -- status )
+    DUP 0= IF DROP OAUTH2-DPOP-ES256-S-INVALID EXIT THEN
+    OAUTH2-DPOP-ES256-WORKSPACE-SIZE 0 FILL
+    OAUTH2-DPOP-ES256-S-OK ;
+
+: OAUTH2-DPOP-ES256-PROOF
+  \ ( htm htm-u htu htu-u iat nonce nonce-u token token-u private
+  \   destination capacity workspace -- written status )
+    _O2PKD-DPOP-WORK !
+    _O2PKD-DPOP-CAPACITY !
+    _O2PKD-DPOP-DESTINATION !
+    DUP P256-PRIVATE-SIZE 0x11 _O2PKD-FILLED?
+        _O2PKD-DPOP-PRIVATE-OK !
+    DROP
+    _O2PKD-DPOP-TOKEN-U !
+    _O2PKD-DPOP-TOKEN-A !
+    _O2PKD-DPOP-NONCE-U !
+    _O2PKD-DPOP-NONCE-A !
+    _O2PKD-DPOP-IAT !
+    _O2PKD-DPOP-HTU-U !
+    _O2PKD-DPOP-HTU-A !
+    _O2PKD-DPOP-HTM-U !
+    _O2PKD-DPOP-HTM-A !
+    1 _O2PKD-DPOP-CALLS +!
+    _O2PKD-DPOP-PUBLIC-A @
+    _O2PKD-DPOP-PUBLIC-U @ 0xA5 _O2PKD-FILLED?
+        _O2PKD-DPOP-PUBLIC-UNCHANGED !
+    _O2PKD-DPOP-WORK @
+    OAUTH2-DPOP-ES256-WORKSPACE-SIZE 0 FILL
+    _O2PKD-DPOP-STATUS @ ?DUP IF
+        0 SWAP EXIT
+    THEN
+    _O2PKD-DPOP-CAPACITY @ 24 U< IF
+        0 OAUTH2-DPOP-ES256-S-CAPACITY EXIT
+    THEN
+    S" deterministic-dpop-proof"
+    _O2PKD-DPOP-DESTINATION @ SWAP MOVE
+    24 OAUTH2-DPOP-ES256-S-OK ;
+
 : _O2PKD-RESET  ( -- )
     0 _O2PKD-P256-KEYGEN-STATUS !
     0 _O2PKD-P256-DERIVE-STATUS !
@@ -254,7 +351,25 @@ VARIABLE _O2PKD-CALLER-U
     0 _O2PKD-P256-MUTATE-A !
     0 _O2PKD-P256-MUTATE-BYTE !
     0 _O2PKD-JWK-STATUS !
-    0 _O2PKD-JWK-CALLS ! ;
+    0 _O2PKD-JWK-CALLS !
+    0 _O2PKD-DPOP-STATUS !
+    0 _O2PKD-DPOP-CALLS !
+    0 _O2PKD-DPOP-PRIVATE-OK !
+    0 _O2PKD-DPOP-HTM-A !
+    0 _O2PKD-DPOP-HTM-U !
+    0 _O2PKD-DPOP-HTU-A !
+    0 _O2PKD-DPOP-HTU-U !
+    0 _O2PKD-DPOP-IAT !
+    0 _O2PKD-DPOP-NONCE-A !
+    0 _O2PKD-DPOP-NONCE-U !
+    0 _O2PKD-DPOP-TOKEN-A !
+    0 _O2PKD-DPOP-TOKEN-U !
+    0 _O2PKD-DPOP-DESTINATION !
+    0 _O2PKD-DPOP-CAPACITY !
+    0 _O2PKD-DPOP-WORK !
+    0 _O2PKD-DPOP-PUBLIC-A !
+    0 _O2PKD-DPOP-PUBLIC-U !
+    0 _O2PKD-DPOP-PUBLIC-UNCHANGED ! ;
 """
 
 
@@ -320,6 +435,7 @@ def _assert_static_contracts() -> None:
         "../../runtime/identity.f",
         "../credential-vault.f",
         "../jose/jwk-p256.f",
+        "dpop-es256.f",
         "../../math/p256.f",
     ]
     assert not re.search(
@@ -357,6 +473,11 @@ def _assert_static_contracts() -> None:
             "PROTECTED",
             "PLATFORM",
             "INTERNAL",
+            "METHOD",
+            "HTU",
+            "NONCE",
+            "TOKEN",
+            "TIME",
         )
     ):
         assert re.search(
@@ -376,10 +497,17 @@ def _assert_static_contracts() -> None:
             source,
         )
     assert "OAUTH2-P256-KEY-WORKSPACE-SIZE 17879 <>" in source
+    assert (
+        "_O2PKW-DPOP-WORK-OFF OAUTH2-DPOP-ES256-WORKSPACE-SIZE +"
+        in source
+    )
+    assert "CONSTANT OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE" in source
 
     for word in (
         "OAUTH2-P256-KEY-STATUS-VALID?",
         "OAUTH2-P256-KEY-WORKSPACE-CLEAR",
+        "OAUTH2-P256-KEY-DPOP-WORKSPACE-CLEAR",
+        "OAUTH2-P256-KEY-DPOP-INPUT-CLEAR",
         "OAUTH2-P256-KEY-BINDING-CLEAR",
         "OAUTH2-P256-KEY-BINDING-INIT",
         "OAUTH2-P256-KEY-BINDING-PRESENCE@",
@@ -389,8 +517,30 @@ def _assert_static_contracts() -> None:
         "OAUTH2-P256-KEY-SLOT-LOAD-DPOP",
         "OAUTH2-P256-KEY-WITH-CLIENT",
         "OAUTH2-P256-KEY-WITH-DPOP",
+        "OAUTH2-P256-KEY-DPOP-PROOF",
     ):
         assert word in source
+
+    assert re.search(
+        r"(?m)^88 CONSTANT OAUTH2-P256-KEY-DPOP-INPUT-SIZE$",
+        source,
+    )
+    for field in (
+        "HTM-A",
+        "HTM-U",
+        "HTU-A",
+        "HTU-U",
+        "IAT",
+        "NONCE-A",
+        "NONCE-U",
+        "TOKEN-A",
+        "TOKEN-U",
+        "DESTINATION",
+        "CAPACITY",
+    ):
+        assert f"OAUTH2-P256-KEY-DPOP-I.{field}" in source
+    assert "OAUTH2-P256-KEY-DPOP-I.DPOP-WORK" not in source
+    assert "OAUTH2-P256-KEY-DPOP-I.DPOP-WORK" not in fixture
 
     for mapper, required in (
         (
@@ -428,6 +578,23 @@ def _assert_static_contracts() -> None:
                 "OAUTH2-P256-KEY-S-INTERNAL SWAP",
             ),
         ),
+        (
+            "_O2PK-DPOP>STATUS",
+            (
+                "OAUTH2-DPOP-ES256-S-METHOD",
+                "OAUTH2-DPOP-ES256-S-HTU",
+                "OAUTH2-DPOP-ES256-S-NONCE",
+                "OAUTH2-DPOP-ES256-S-TOKEN",
+                "OAUTH2-DPOP-ES256-S-TIME",
+                "OAUTH2-DPOP-ES256-S-ENTROPY",
+                "OAUTH2-DPOP-ES256-S-KEY",
+                "OAUTH2-DPOP-ES256-S-CRYPTO",
+                "OAUTH2-DPOP-ES256-S-RANGE",
+                "OAUTH2-DPOP-ES256-S-PROTECTED",
+                "OAUTH2-DPOP-ES256-S-PLATFORM",
+                "OAUTH2-P256-KEY-S-INTERNAL SWAP",
+            ),
+        ),
     ):
         body = _word_body(source, mapper)
         for marker in required:
@@ -458,6 +625,11 @@ def _assert_static_contracts() -> None:
     assert "P256-PUBLIC-FROM-PRIVATE" in consumer
     assert "JOSE-JWK-P256-THUMBPRINT" in consumer
     assert "_O2PK-CALLBACK" not in consumer
+    assert re.search(
+        r"DUP\s+_O2PKR\.PRIVATE\s+R@\s+_O2PK-DPOP-CONSUME",
+        consumer,
+    )
+    assert "_O2PKW.RID-IN !" not in consumer
     with_op = _word_body(source, "_O2PK-WITH-OP")
     assert with_op.index("MOVE") < with_op.index(
         "_O2PK-STAGED-BINDING-STATUS"
@@ -474,6 +646,33 @@ def _assert_static_contracts() -> None:
     assert "_O2PKW.PUBLIC" in callback
     assert "_O2PKW.THUMBPRINT" in callback
     assert "EXECUTE" in callback
+
+    dpop_consumer = _word_body(source, "_O2PK-DPOP-CONSUME")
+    assert "9 ROLL" in dpop_consumer
+    assert "_O2PKW.DPOP-PROOF" in dpop_consumer
+    assert "_O2PKW.DPOP-WORK" in dpop_consumer
+    assert "OAUTH2-DPOP-ES256-PROOF" in dpop_consumer
+    assert "EXECUTE" not in dpop_consumer
+    dpop_operation = _word_body(source, "_O2PK-DPOP-OP")
+    assert dpop_operation.index("MOVE") < dpop_operation.index(
+        "_O2PK-DPOP-STAGED-GEOMETRY"
+    )
+    assert dpop_operation.index("_O2PK-DPOP-STAGED-GEOMETRY") < (
+        dpop_operation.index("_O2PK-VAULT-WITH")
+    )
+    assert dpop_operation.index("_O2PK-VAULT-WITH") < (
+        dpop_operation.index("_O2PK-DPOP-PUBLISH")
+    )
+    assert "_O2PK-DPOP-CALL-FINALLY" in dpop_operation
+    assert dpop_operation.count("_O2PK-DPOP-WIPE") >= 4
+    dpop_publish = _word_body(source, "_O2PK-DPOP-PUBLISH")
+    assert "_O2PKW.DPOP-PROOF" in dpop_publish
+    assert "OAUTH2-P256-KEY-DPOP-I.DESTINATION" in dpop_publish
+    assert "MOVE" in dpop_publish
+    dpop_finally = _word_body(source, "_O2PK-DPOP-CALL-FINALLY")
+    assert "CATCH" in dpop_finally
+    assert "EXECUTE" in dpop_finally
+    assert "THROW" in dpop_finally
 
     record = _word_body(source, "_O2PK-RECORD-STRUCTURE?")
     for marker in (
@@ -498,12 +697,18 @@ def _assert_static_contracts() -> None:
         "_O2PKT-TEST-FAILURES",
         "_O2PKT-TEST-CALLBACKS",
         "_O2PKT-TEST-DPOP",
+        "_O2PKT-TEST-DPOP-PROOF",
         "_O2PKT-TEST-PREFLIGHT",
         "_O2PKT-FINISH",
         "CVAULT-METADATA",
         "OAUTH2-P256-KEY-S-MISMATCH",
         "OAUTH2-P256-KEY-S-FORMAT",
         "OAUTH2-P256-KEY-S-CALLBACK",
+        "OAUTH2-P256-KEY-S-HTU",
+        "deterministic-dpop-proof",
+        "_O2PKD-DPOP-PRIVATE-OK",
+        "_O2PKD-DPOP-PUBLIC-UNCHANGED",
+        "_O2PKT-DPOP-OWNER-CLEAN?",
         PASS_MARKER,
     ):
         assert marker in fixture
@@ -530,7 +735,12 @@ def _packed(path: Path, *, remove_requires: bool = False) -> bytes:
     ).encode("utf-8")
 
 
-def _run_lifecycle(timeout: float) -> int:
+def _run_lifecycle(
+    timeout: float,
+    *,
+    group_stages: tuple[tuple[str, str, str], ...] = GROUP_STAGES,
+    lifecycle_label: str = "lifecycle",
+) -> int:
     dependency_source = (
         DEPS.read_text(encoding="utf-8")
         + "\n"
@@ -561,7 +771,7 @@ def _run_lifecycle(timeout: float) -> int:
             )
         )
     autoexec.extend(("_O2PKT-INIT\n",))
-    for _, word, marker in GROUP_STAGES:
+    for _, word, marker in group_stages:
         autoexec.extend(
             (
                 f"{word}\n",
@@ -613,7 +823,7 @@ def _run_lifecycle(timeout: float) -> int:
         machine.boot()
         stages = (
             *(stage for stage in LOAD_STAGES),
-            *(stage for stage in GROUP_STAGES),
+            *(stage for stage in group_stages),
         )
         for index, stage in enumerate(stages):
             stage_name = stage[0]
@@ -689,7 +899,7 @@ def _run_lifecycle(timeout: float) -> int:
     total_steps = sum(report.steps for _, report in reports)
     total_elapsed = sum(report.elapsed_s for _, report in reports)
     print(
-        "OAuth2 P256 key lifecycle: PASS "
+        f"OAuth2 P256 key {lifecycle_label}: PASS "
         f"({total_steps:,} steps, {total_elapsed:.2f}s)"
     )
     return 0
@@ -700,6 +910,7 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--static-only", action="store_true")
     mode.add_argument("--lifecycle", action="store_true")
+    mode.add_argument("--dpop-proof-lifecycle", action="store_true")
     parser.add_argument("--timeout", type=float, default=240.0)
     args = parser.parse_args()
 
@@ -707,6 +918,12 @@ def main() -> int:
     print("OAUTH2 P256 KEY STATIC PASS", flush=True)
     if args.static_only:
         return 0
+    if args.dpop_proof_lifecycle:
+        return _run_lifecycle(
+            args.timeout,
+            group_stages=DPOP_PROOF_GROUP_STAGES,
+            lifecycle_label="DPoP proof lifecycle",
+        )
     return _run_lifecycle(args.timeout)
 
 
