@@ -87,12 +87,13 @@ Landing 3 currently includes:
 - `b1bb0ad` — generic single-validation OAuth client views;
 - `3cedab0` — single-validation AT OAuth client selection;
 - `a88a655` — structural OAuth Client ID Metadata Document parsing;
-- `ff5bbbd` — caller-owned AT OAuth deployment binding; and
+- `ff5bbbd` — caller-owned AT OAuth deployment binding;
 - `73ba6a3` — checked public P-256 JWK Set selection;
 - `66e603f` — credential-vault external composition-span admission;
-- `9e518e5` — compact SR4 security module-key normalization; and
+- `9e518e5` — compact SR4 security module-key normalization;
 - `2ae49bc` — durable OAuth client-authentication and DPoP P-256 key
-  ownership.
+  ownership; and
+- `5ea452f` — confidential inline AT OAuth deployment/key composition.
 
 These commits do not close landing 3. `ff5bbbd` completes the local
 AT-specific deployment binder: one validated immutable client configuration,
@@ -117,17 +118,25 @@ credential-vault borrow has ended. Client-authentication and DPoP keys have
 distinct kinds and authenticated roles; their binding requires distinct RIDs
 and RFC 7638 thumbprints.
 
-The next closeout applies the JWK Set selector to the deployment binder's
-borrowed inline `jwks` token and compares its selected public key and
-thumbprint with the new local owner. That composition must also resolve and
-recheck the distinct DPoP identity without nesting credential-vault borrows.
-Bounded remote `jwks_uri` acquisition follows with proof of Client Identifier
-and transport provenance that a structural parser cannot establish. After
-that, production composition must drive PAR/PKCE and the authorization
-response, perform DPoP-aware token exchange and nonce retry, admit the grant
-into the durable generic session, and prove cold recovery, refresh rotation,
-logout, revocation/reauthorization, cancellation, and complete cleanup.
-Existing generic pieces should be composed rather than reimplemented.
+`5ea452f` closes the local confidential inline-key boundary. Its state-free
+wrapper admits the complete outer workspace and every caller input before the
+first write, requires the exact two-role durable binding, selects the client
+key from the deployment binder's borrowed inline `jwks`, compares both the
+public point and RFC 7638 thumbprint with authenticated local ownership, then
+resolves the distinct DPoP identity through a completed second owner call.
+The final callback runs only after both vault borrows have returned and
+retains no private scalar or process-global operation state.
+
+The next closeout is bounded Client Identifier Metadata Document and remote
+`jwks_uri` acquisition with transport provenance that a structural parser
+cannot establish. The remote set must pass the same checked selector and
+durable local-identity comparison without weakening the completed inline
+path. After that, production composition must drive PAR/PKCE and the
+authorization response, perform DPoP-aware token exchange and nonce retry,
+admit the grant into the durable generic session, and prove cold recovery,
+refresh rotation, logout, revocation/reauthorization, cancellation, and
+complete cleanup. Existing generic pieces should be composed rather than
+reimplemented.
 
 ## Current repository handoff
 
@@ -136,19 +145,19 @@ At preparation time:
 ```text
 repository: /home/kir/Documents/Projects/fantasy-computing/akashic
 branch:     main
-code base:  2ae49bc (Add durable OAuth P-256 key ownership)
+code base:  5ea452f (Compose confidential inline AT OAuth keys)
 record:     this handoff is committed immediately after that code base
 upstream:   origin/main at 66e603f
-ahead:      3 commits after committing this record
+ahead:      5 commits after committing this record
 tests:      no test process running
 ```
 
 There is no current SR4-owned uncommitted work. The latest SR4 commits are:
 
 ```text
-66e603f Expose credential-vault composition span admission
-9e518e5 Normalize SR4 security module keys
 2ae49bc Add durable OAuth P-256 key ownership
+baa640b Advance SR4 to deployment key composition
+5ea452f Compose confidential inline AT OAuth keys
 ```
 
 `2ae49bc` added `OAUTH2-P256-KEY-PROVISION-*`,
@@ -158,8 +167,14 @@ immutable generic client configuration, retains no private scalar, pins each
 role to one credential RID/generation/thumbprint, snapshots caller identity
 before durable access, and invokes application code only after the exact
 vault borrow has returned and wiped. The deployment binder still does not
-invoke this owner or the JWK Set selector; their AT-layer composition is now
-the next production boundary.
+invoke this owner or the JWK Set selector by itself.
+
+`5ea452f` added `AT-OAUTH-INLINE-WITH` over one 111,928-byte caller-owned
+workspace. It composes the deployment binder, checked P-256 JWK Set selector,
+and durable client/DPoP owner for confidential inline deployments, performs
+the owner calls sequentially, copies only public identity into outer scratch,
+and rejects public or `jwks_uri` deployments as a separate key-source
+boundary.
 
 The following files are preserved unrelated user/old-L13 work. Do not stage,
 restore, rewrite, or delete them as part of SR4:
@@ -253,6 +268,17 @@ Completed evidence:
   throw/stack containment, protected-span precedence, complete cleanup,
   staged-binding validation, and adversarial mutation of the caller RID after
   snapshot.
+- The confidential inline composition committed at `5ea452f` passed its
+  static gate, all 27 staged loads, nine behavior groups, and the finish marker
+  in 1,297,257,153 guest steps and 972.60 summed stage seconds on one core with
+  128 MiB of external machine memory. It covered exact inline JWK selection,
+  public and remote key-source rejection, canonical binding failures,
+  public-key and thumbprint mismatch, client and DPoP owner failures,
+  identity distinctness, callback throw/stack containment, complete composed
+  caller/vault admission, input immutability, child and outer workspace
+  cleanup, and rejection-before-write preflight preservation. Its largest
+  phase was callback containment at 96,802,324 steps, below the checked-in
+  180,000,000-step ceiling.
 
 The 16-minute-52-second result is a complete staged module-load and contract
 qualification, not the measured latency of one OAuth admission or one network
@@ -269,26 +295,28 @@ delta. Do not run another suite or a test subagent concurrently.
 
 1. Read `AGENTS.md`, this record,
    `docs/atproto/oauth-deployment.md`,
+   `docs/atproto/oauth-deployment-inline.md`,
    `docs/security/oauth2-client-metadata.md`, and
    `docs/security/jose-jwk-p256.md`, and
-   `docs/security/jose-jwk-set-p256.md`. Treat `ff5bbbd` as local structural
-   and semantic deployment admission and `73ba6a3` as checked public-set
-   selection; neither proves transport provenance or private-key possession.
-2. Apply the checked set boundary to inline `jwks` and bounded
-   `jwks_uri` bodies. Resolve the configuration's opaque binding through the
-   durable private-key owner, compare the recovered public identity or RFC
-   7638 thumbprint with the selected published key, and keep the
-   client-authentication and per-session DPoP key identities distinct.
+   `docs/security/jose-jwk-set-p256.md`. Treat `5ea452f` as the completed local
+   confidential inline deployment/key boundary; it does not prove metadata
+   transport provenance and deliberately does not acquire `jwks_uri`.
+2. Compose bounded remote `jwks_uri` bodies with the checked set selector and
+   durable private-key owner. Compare both the recovered public point and RFC
+   7638 thumbprint with the selected published client key, preserve distinct
+   client-authentication and DPoP identities, and do not add fallback between
+   inline and remote sources.
 3. Build the bounded HTTP-resource acquisition adapter around
    `AT-OAUTH-DEPLOYMENT-WITH`. Require exact requested/effective target
    equality, status 200, zero redirects, accepted JSON media type, response
    bounds, HTTPS hostname verification, public-address/SSRF admission,
    deadlines, and truthful lease cleanup for both the Client Identifier and
    `jwks_uri`.
-4. Qualify the deployment/key-owner composition and acquisition with cheap
+4. Qualify remote deployment/key-owner composition and acquisition with cheap
    static gates first, then sequential deterministic fixtures. Preserve exact
-   preflight contents, borrowed-view lifetimes, source immutability, workspace
-   canaries, cleanup, and explicit error precedence.
+   requested/effective targets, preflight contents, borrowed-view lifetimes,
+   source immutability, workspace canaries, cleanup, and explicit error
+   precedence.
 5. Close landing 3 with production PAR/PKCE, authorization-response,
    DPoP/token/nonce, durable install/recovery/refresh/logout, cancellation, and
    reauthorization composition. Do not begin XRPC, repository/blob,
