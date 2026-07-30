@@ -19560,9 +19560,11 @@ CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
 _boot-practice-provision
 
 \ Streams is production-empty and launcher-only: no feed fixture, draft
-\ seed, or startup tile is installed by this profile.
+\ seed, or startup tile is installed by this profile.  Its launcher entry
+\ still uses the production online composition, so a launched instance owns
+\ both the public AT Protocol and configured syndication provider seams.
 CREATE _boot-streams-desc APP-DESC ALLOT
-_boot-streams-desc STREAMS-ENTRY
+_boot-streams-desc STREAMS-ONLINE-ENTRY
 _boot-streams-desc
 ACAT-F-ENABLED ACAT-F-PINNED OR ACAT-F-BUILTIN OR
 DESK-QUEUE-BUILTIN

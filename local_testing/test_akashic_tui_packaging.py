@@ -822,6 +822,13 @@ def test_explicit_bluesky_composition_still_does_not_supply_trust() -> None:
     assert _requires_megapad_networking(closure)
 
 
+def test_focused_desktop_streams_uses_online_composition() -> None:
+    profile = PROFILES["desktop-streams"]
+    assert "tui/applets/streams/streams-online.f" in profile.roots
+    assert "_boot-streams-desc STREAMS-ONLINE-ENTRY" in profile.autoexec
+    assert "_boot-streams-desc STREAMS-ENTRY\n" not in profile.autoexec
+
+
 def test_networking_boot_load_follows_userland_entry() -> None:
     autoexec = "\\ test autoexec\nENTER-USERLAND\nREQUIRE app.f\n"
     integrated = _with_megapad_networking(autoexec)
