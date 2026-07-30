@@ -727,6 +727,35 @@ REQUIRE ../sandbox/vm.f
     DUP SBOX-VM-S-STATE = IF DROP SBOX-HOST-S-STATE EXIT THEN
     DROP SBOX-HOST-S-RESULT ;
 
+\ A checked component TAKE has just validated the complete host graph and
+\ obtained REQUIRED from this host's VM.  Only the fresh result allocation
+\ needs span/capacity qualification before the transactional VM commit.
+: _SHOST-FINISH-MEASURED-VALIDATED
+  ( result result-capacity required host -- status )
+    >R
+    2 PICK 2 PICK _SHOST-SPAN? 0= IF
+        2DROP DROP R> DROP SBOX-HOST-S-RESULT EXIT
+    THEN
+    2 PICK 2 PICK R@ _SHOST-SPAN-DISJOINT-VALIDATED? 0= IF
+        2DROP DROP R> DROP SBOX-HOST-S-ALIAS EXIT
+    THEN
+    2 PICK 2 PICK _SVM-RESULT-SPAN-STATUS IF
+        2DROP DROP R> DROP SBOX-HOST-S-RESULT EXIT
+    THEN
+    DUP 2 PICK U> IF
+        2DROP DROP R> DROP SBOX-HOST-S-RESULT EXIT
+    THEN
+
+    2 PICK 2 PICK 2 PICK R@ _SHI.VM @
+        _SVM-FINISH-MEASURED-VALIDATED
+    DUP IF
+        _SHOST-FINISH>STATUS >R
+        2DROP DROP R> R> DROP EXIT
+    THEN
+    DROP
+    R@ _SHOST-CLEANUP-FINISHED
+    2DROP DROP R> DROP SBOX-HOST-S-OK ;
+
 : SBOX-HOST-FINISH  ( result result-capacity host -- status )
     DUP SBOX-HOST-VALID? 0= IF
         2DROP DROP SBOX-HOST-S-INVALID EXIT

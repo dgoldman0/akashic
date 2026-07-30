@@ -124,7 +124,7 @@ def test_successful_finish_does_not_rescrub_proven_zero_allocations() -> None:
     assert finish.index("SBOX-VM-FINISH") < finish.index(
         "_SHOST-CLEANUP-FINISHED"
     )
-    assert host.count("_SHOST-CLEANUP-FINISHED") == 2
+    assert host.count("_SHOST-CLEANUP-FINISHED") == 3
 
 
 def test_vm_total_accessor_reuses_its_complete_envelope_validation() -> None:
@@ -154,6 +154,12 @@ def test_finish_reuses_validated_measure_and_host_span_proofs() -> None:
     vm_finish = vm.split(": SBOX-VM-FINISH", 1)[1].split(
         ": _SVM-RELEASE-FINISHED-VALIDATED", 1
     )[0]
+    vm_commit = vm.split(
+        ": _SVM-FINISH-MEASURED-VALIDATED", 1
+    )[1].split(": SBOX-VM-FINISH", 1)[0]
+    host_commit = host.split(
+        ": _SHOST-FINISH-MEASURED-VALIDATED", 1
+    )[1].split(": SBOX-HOST-FINISH", 1)[0]
 
     assert "SBOX-HOST-VALID?" in host_finish
     assert "_SHOST-SPAN-DISJOINT-VALIDATED?" in host_finish
@@ -162,11 +168,19 @@ def test_finish_reuses_validated_measure_and_host_span_proofs() -> None:
     assert "_SVM-RESULT-MEASURE-VALIDATED" in vm_measure
     assert "_SVM-RESULT-MEASURE-VALIDATED" in vm_finish
     assert "SBOX-VM-RESULT-MEASURE" not in vm_finish
-    stage_failure = vm_finish.split(
+    assert "_SVM-FINISH-MEASURED-VALIDATED" in vm_finish
+    assert "_SVM-TYPED-RESOURCES-PREFLIGHT" in vm_commit
+    assert "_SVM-STAGE-RESULT" in vm_commit
+    assert "SBOX-VM-INSTANCE-VALID?" not in vm_commit
+    stage_failure = vm_commit.split(
         "_SVM-STAGE-RESULT", 1
     )[1].split("THEN", 1)[0]
     assert ">R 2DROP DROP R> R> DROP EXIT" in stage_failure
     assert ">R DROP 2DROP DROP" not in stage_failure
+    assert "_SHOST-SPAN-DISJOINT-VALIDATED?" in host_commit
+    assert "_SVM-RESULT-SPAN-STATUS" in host_commit
+    assert "_SVM-FINISH-MEASURED-VALIDATED" in host_commit
+    assert "SBOX-HOST-VALID?" not in host_commit
 
 
 def test_production_signature_parser_consumes_the_value_once() -> None:

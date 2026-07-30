@@ -146,6 +146,13 @@ def test_take_checks_the_complete_destination_against_the_live_host() -> None:
     assert "DESK-SBOX-RESULT-SIZE" in boundary
     assert "_DSC-TAKE-SPAN-STATUS" in boundary
     assert "_SHOST-RUN-STATE-VALIDATED" in commit
+    assert "_SHOST-FINISH-MEASURED-VALIDATED" in commit
+    assert "SBOX-HOST-FINISH" not in commit
+    assert re.search(
+        r"DUP\s+3 PICK\s+DUP\s+6 PICK _DSC\.HOST\s+"
+        r"_SHOST-FINISH-MEASURED-VALIDATED",
+        commit,
+    )
     assert "_DSC-TAKE-BOUNDARY" in public
     assert "_DSC-RESULT-TAKE-PRECHECKED" in public
 

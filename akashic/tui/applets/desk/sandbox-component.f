@@ -792,8 +792,9 @@ REQUIRE ../../../utils/memory-span.f
 
     DUP
     3 PICK
-    5 PICK _DSC.HOST
-    SBOX-HOST-FINISH
+    DUP
+    6 PICK _DSC.HOST
+    _SHOST-FINISH-MEASURED-VALIDATED
     DUP IF
         DROP
         DUP 3 PICK _DSC-SCRUB-FREE

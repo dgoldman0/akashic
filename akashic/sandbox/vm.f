@@ -4050,6 +4050,31 @@ PROVIDED akashic-sbx-vm
     _SVM-TYPED-RESOURCES-SCRUB!
     SBOX-VM-S-OK ;
 
+\ The same instance was fully validated and successfully measured, its result
+\ span/disjointness and capacity were checked, and no mutation, callback, or
+\ yield has occurred.  Keep only the transactional commit and ownership move.
+: _SVM-FINISH-MEASURED-VALIDATED
+  ( result result-capacity required instance -- status )
+    >R
+    R@ _SVM-TYPED-RESOURCES-PREFLIGHT ?DUP IF
+        >R 2DROP DROP R> R> DROP EXIT
+    THEN
+
+    2 PICK 2 PICK 2 PICK R@ _SVM-STAGE-RESULT
+    DUP IF
+        >R 2DROP DROP R> R> DROP EXIT
+    THEN
+    DROP
+    DROP
+
+    R@ _SVM-TYPED-RESOURCES-SCRUB!
+    R@ _SVM-SCRUB-FINISHED
+
+    \ This is the only seal write and the final operation that can affect the
+    \ result.  Every fallible check and ownership transition is complete.
+    _SVM-RESULT-MAGIC 2 PICK _SVT.MAGIC !
+    2DROP R> DROP SBOX-VM-S-OK ;
+
 : SBOX-VM-FINISH  ( result result-capacity instance -- status )
     DUP SBOX-VM-INSTANCE-VALID? 0= IF
         2DROP DROP SBOX-VM-S-INVALID EXIT
@@ -4081,25 +4106,7 @@ PROVIDED akashic-sbx-vm
     DUP 2 PICK U> IF
         2DROP DROP R> DROP SBOX-VM-S-CAPACITY EXIT
     THEN
-
-    R@ _SVM-TYPED-RESOURCES-PREFLIGHT ?DUP IF
-        >R 2DROP DROP R> R> DROP EXIT
-    THEN
-
-    2 PICK 2 PICK 2 PICK R@ _SVM-STAGE-RESULT
-    DUP IF
-        >R 2DROP DROP R> R> DROP EXIT
-    THEN
-    DROP
-    DROP
-
-    R@ _SVM-TYPED-RESOURCES-SCRUB!
-    R@ _SVM-SCRUB-FINISHED
-
-    \ This is the only seal write and the final operation that can affect the
-    \ result.  Every fallible check and every ownership transition is complete.
-    _SVM-RESULT-MAGIC 2 PICK _SVT.MAGIC !
-    2DROP R> DROP SBOX-VM-S-OK ;
+    R> _SVM-FINISH-MEASURED-VALIDATED ;
 
 \ FINISH has just scrubbed the mutable VM body, then established the
 \ FINISHED+SCRUBBED causal-state cells.  The invocation host uses this private
