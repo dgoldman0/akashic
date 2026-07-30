@@ -18,6 +18,7 @@ from forth_dependencies import dependency_closure, dependency_markers  # noqa: E
 
 
 COMPONENT = Path("tui/applets/desk/sandbox-component.f")
+JOB_SERVICE = Path("tui/applets/desk/sandbox-service.f")
 DESK = Path("tui/applets/desk/desk.f")
 HOST = Path("runtime/sandbox-host.f")
 FIXTURE = Path("sandbox-stage3-desk-component.f")
@@ -61,14 +62,16 @@ def _source(path: Path) -> str:
     return (AKASHIC_ROOT / path).read_text(encoding="utf-8")
 
 
-def test_desk_explicitly_imports_the_headless_component() -> None:
+def test_desk_reaches_the_headless_component_through_the_job_service() -> None:
     markers = dependency_markers(_source(DESK), DESK.as_posix())
 
     assert any(
-        marker.raw == "sandbox-component.f"
-        and marker.normalized == COMPONENT.as_posix()
+        marker.raw == "sandbox-service.f"
+        and marker.normalized == JOB_SERVICE.as_posix()
         for marker in markers
     )
+    closure = dependency_closure(AKASHIC_ROOT, (JOB_SERVICE.as_posix(),))
+    assert COMPONENT.as_posix() in closure
 
 
 def test_component_closure_stays_on_the_isolated_runtime_path() -> None:
@@ -94,7 +97,8 @@ def test_component_is_caller_owned_and_publishes_the_lifecycle_api() -> None:
     assert re.search(r"^\s+--", source, re.MULTILINE) is None
     assert "768 CONSTANT DESK-SBOX-COMPONENT-SIZE" in source
     assert "64 CONSTANT DESK-SBOX-RESULT-SIZE" in source
-    assert "SBOX-HOST-SPAN-DISJOINT?" in source
+    assert "_SHOST-SPAN-DISJOINT-VALIDATED?" in source
+    assert ": _SHOST-SPAN-DISJOINT-VALIDATED?" in _source(HOST)
     assert ": SBOX-HOST-SPAN-DISJOINT?" in _source(HOST)
     for word in PUBLIC_WORDS:
         assert re.search(
@@ -102,6 +106,33 @@ def test_component_is_caller_owned_and_publishes_the_lifecycle_api() -> None:
             source,
             re.MULTILINE,
         ), word
+
+
+def test_take_checks_the_complete_destination_against_the_live_host() -> None:
+    source = _source(COMPONENT)
+    helper = source.split(": _DSC-TAKE-SPAN-STATUS", 1)[1].split(
+        ": _DSC-TAKE-BOUNDARY", 1
+    )[0]
+    boundary = source.split(": _DSC-TAKE-BOUNDARY", 1)[1].split(
+        ": _DSC-ALLOCATE", 1
+    )[0]
+    commit = source.split(": _DSC-RESULT-TAKE-PRECHECKED", 1)[1].split(
+        ": DESK-SBOX-RESULT-TAKE", 1
+    )[0]
+    public = source.split(": DESK-SBOX-RESULT-TAKE", 1)[1].split(
+        "\\ =====================================================================",
+        1,
+    )[0]
+
+    assert "_DSC-HANDLE-STATUS" in helper
+    assert "_DSC-EXTERNAL-SPAN?" in helper
+    assert "_SHOST-SPAN-DISJOINT-VALIDATED?" in helper
+    assert "_SHOST-RUN-STATE-VALIDATED" in helper
+    assert "DESK-SBOX-RESULT-SIZE" in boundary
+    assert "_DSC-TAKE-SPAN-STATUS" in boundary
+    assert "_SHOST-RUN-STATE-VALIDATED" in commit
+    assert "_DSC-TAKE-BOUNDARY" in public
+    assert "_DSC-RESULT-TAKE-PRECHECKED" in public
 
 
 def test_close_publishes_admission_barrier_before_host_cancellation() -> None:

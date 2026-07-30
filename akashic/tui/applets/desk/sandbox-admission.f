@@ -262,11 +262,11 @@ REQUIRE ../../../utils/memory-span.f
         DROP 0 EXIT
     THEN
     DUP _DSA.STATE @ DESK-SBOX-ADMISSION-STATE-OPEN = IF
-        _DSA.COMPONENT DESK-SBOX-COMPONENT-STATE@
+        _DSA.COMPONENT _DSC.STATE @
         DESK-SBOX-COMPONENT-STATE-OPEN = EXIT
     THEN
     DUP _DSA.STATE @ DESK-SBOX-ADMISSION-STATE-CLOSING = IF
-        _DSA.COMPONENT DESK-SBOX-COMPONENT-STATE@
+        _DSA.COMPONENT _DSC.STATE @
         DESK-SBOX-COMPONENT-STATE-CLOSING = EXIT
     THEN
     DROP 0 ;
@@ -600,6 +600,15 @@ VARIABLE _DSAIV-ADMISSION
     _DSAIV-ADMISSION @ _DSA.COMPONENT
     DESK-SBOX-ADMIT ;
 
+\ The job service has just validated its complete embedded admission graph.
+\ This private path avoids validating that same admission a second time
+\ inside one serialized TICK; service slot validation already checked the
+\ exact component generation and VM run state before this call.
+: _DSA-RUN-SLICE-VALIDATED
+  ( max-steps invocation-generation admission -- run-state status )
+    _DSA.COMPONENT >R DROP R>
+    _DSC-RUN-SLICE-VALIDATED ;
+
 : DESK-SBOX-ADMISSION-RUN-SLICE
   ( max-steps invocation-generation admission -- run-state status )
     DUP DESK-SBOX-ADMISSION-VALID? 0= IF
@@ -788,12 +797,40 @@ VARIABLE _DSART-RECEIPT
 VARIABLE _DSART-GENERATION
 VARIABLE _DSART-ADMISSION
 
-: _DSART-BOUNDARY  ( -- status )
-    _DSART-RECEIPT @ _DSRC-FIXED? 0= IF
-        DESK-SBOX-S-INVALID EXIT
+: _DSA-RECEIPT-BOUNDARY  ( receipt -- status )
+    DUP _DSRC-FIXED? 0= IF
+        DROP DESK-SBOX-S-INVALID EXIT
     THEN
-    _DSART-RECEIPT @ DESK-SBOX-RECEIPT-SIZE
-        _DSA-ZERO? 0= IF DESK-SBOX-S-STATE EXIT THEN
+    DUP DESK-SBOX-RECEIPT-SIZE _DSA-ZERO? 0= IF
+        DROP DESK-SBOX-S-STATE EXIT
+    THEN
+    DUP DESK-SBOX-RECEIPT-SIZE
+        _DSART-RECEIPT 8 MSPAN-OVERLAP? IF
+        DROP DESK-SBOX-S-ALIAS EXIT
+    THEN
+    DUP DESK-SBOX-RECEIPT-SIZE
+        _DSART-GENERATION 8 MSPAN-OVERLAP? IF
+        DROP DESK-SBOX-S-ALIAS EXIT
+    THEN
+    DUP DESK-SBOX-RECEIPT-SIZE
+        _DSART-ADMISSION 8 MSPAN-OVERLAP? IF
+        DROP DESK-SBOX-S-ALIAS EXIT
+    THEN
+    DROP
+    DESK-SBOX-S-OK ;
+
+: _DSART-RECEIPT-BOUNDARY  ( -- status )
+    _DSART-RECEIPT @ _DSA-RECEIPT-BOUNDARY ;
+
+: _DSA-RESULT-SPAN-STATUS
+  ( receipt invocation-generation admission -- status )
+    2 PICK DESK-SBOX-RECEIPT-SIZE
+    3 PICK 3 PICK _DSA.COMPONENT
+    _DSC-TAKE-SPAN-STATUS
+    >R 2DROP DROP R> ;
+
+: _DSART-BOUNDARY  ( -- status )
+    _DSART-RECEIPT-BOUNDARY DUP IF EXIT THEN DROP
     _DSART-ADMISSION @ DESK-SBOX-ADMISSION-VALID? 0= IF
         DESK-SBOX-S-INVALID EXIT
     THEN
@@ -801,6 +838,10 @@ VARIABLE _DSART-ADMISSION
     _DSART-ADMISSION @ _DSA-EXTERNAL-SPAN? 0= IF
         DESK-SBOX-S-ALIAS EXIT
     THEN
+    _DSART-RECEIPT @
+    _DSART-GENERATION @
+    _DSART-ADMISSION @
+    _DSA-RESULT-SPAN-STATUS DUP IF EXIT THEN DROP
     DESK-SBOX-S-OK ;
 
 : _DSART-COPY-METADATA  ( -- )
@@ -835,16 +876,11 @@ VARIABLE _DSART-ADMISSION
         _DSART-ADMISSION @ _DSA.ENTRY-U @ CMOVE
     R> DROP ;
 
-: DESK-SBOX-ADMISSION-RESULT-TAKE
-  ( receipt invocation-generation admission -- status )
-    _DSART-ADMISSION !
-    _DSART-GENERATION !
-    _DSART-RECEIPT !
-    _DSART-BOUNDARY DUP IF EXIT THEN DROP
+: _DSART-COMMIT  ( -- status )
     _DSART-RECEIPT @ _DSRC.RESULT
     _DSART-GENERATION @
     _DSART-ADMISSION @ _DSA.COMPONENT
-    DESK-SBOX-RESULT-TAKE
+    _DSC-RESULT-TAKE-PRECHECKED
     DUP IF EXIT THEN
     DROP
     _DSART-COPY-METADATA
@@ -856,6 +892,24 @@ VARIABLE _DSART-ADMISSION
         DESK-SBOX-S-RESULT EXIT
     THEN
     DESK-SBOX-S-OK ;
+
+\ The serialized service has checked receipt shape/zero state, the complete
+\ admission graph, and the whole destination span immediately before this
+\ private commit.  No callback or yield separates that proof from publication.
+: _DSA-RESULT-TAKE-PRECHECKED
+  ( receipt invocation-generation admission -- status )
+    _DSART-ADMISSION !
+    _DSART-GENERATION !
+    _DSART-RECEIPT !
+    _DSART-COMMIT ;
+
+: DESK-SBOX-ADMISSION-RESULT-TAKE
+  ( receipt invocation-generation admission -- status )
+    _DSART-ADMISSION !
+    _DSART-GENERATION !
+    _DSART-RECEIPT !
+    _DSART-BOUNDARY DUP IF EXIT THEN DROP
+    _DSART-COMMIT ;
 
 \ =====================================================================
 \  Close, drain, and release

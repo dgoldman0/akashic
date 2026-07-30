@@ -576,6 +576,29 @@ REQUIRE ../sandbox/vm.f
     R@ SBOX-HOST-INVOCATION-SIZE 0 FILL
     R> DROP ;
 
+\ Successful FINISH has causally scrubbed these exact host-owned buffers.
+\ The private VM release checks that terminal seal and clears only its live
+\ descriptor; an impossible causal failure falls back to generic cleanup.
+: _SHOST-FREE-ZEROED  ( address -- )
+    ?DUP IF FREE THEN ;
+
+: _SHOST-CLEANUP-FINISHED  ( host -- )
+    DUP _SHI.VM @ _SVM-RELEASE-FINISHED-VALIDATED
+    SBOX-VM-S-OK <> IF
+        _SHOST-CLEANUP EXIT
+    THEN
+    >R
+    R@ _SHI.VM @ _SHOST-FREE-ZEROED
+    R@ _SHI.WORK @ _SHOST-FREE-ZEROED
+    R@ _SHI.OUTPUT @ _SHOST-FREE-ZEROED
+    R@ _SHI.INPUT @ _SHOST-FREE-ZEROED
+    R@ _SHI.CHILD @ ?DUP IF
+        0 OVER CTX.FLAGS !
+        CTX-FREE
+    THEN
+    R@ SBOX-HOST-INVOCATION-SIZE 0 FILL
+    R> DROP ;
+
 : _SHOST-DROP10
   ( x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 -- )
     2DROP 2DROP 2DROP 2DROP 2DROP ;
@@ -632,6 +655,12 @@ REQUIRE ../sandbox/vm.f
     THEN
     _SHI.VM @ SBOX-VM-RUN-STATE@ ;
 
+: _SHOST-RUN-STATE-VALIDATED  ( host -- run-state )
+    _SHI.VM @ _SVI.RUN-STATE @ ;
+
+: _SHOST-RUN-SLICE-VALIDATED  ( max-steps host -- run-state )
+    _SHI.VM @ _SVM-RUN-SLICE-VALIDATED ;
+
 : SBOX-HOST-RUN-SLICE  ( max-steps host -- run-state )
     DUP _SHOST-ACTIVE? 0= IF
         2DROP SBOX-VM-RUN-INVALID EXIT
@@ -659,14 +688,10 @@ REQUIRE ../sandbox/vm.f
         2DROP 0 SBOX-HOST-S-STATE
     THEN ;
 
-\ A live host owns one complete invocation graph, not merely its fixed
-\ descriptor.  Adapters use this predicate before publishing caller-owned
-\ metadata so neither that metadata nor a direct result buffer can alias a
-\ child Context, borrowed plan/profile, or any allocation FINISH will scrub.
-: SBOX-HOST-SPAN-DISJOINT?  ( address length host -- flag )
+\ The caller has already validated the host and the candidate span.  Keep the
+\ overlap walk private so a checked adapter can reuse that proof atomically.
+: _SHOST-SPAN-DISJOINT-VALIDATED?  ( address length host -- flag )
     >R
-    2DUP _SHOST-SPAN? 0= IF 2DROP R> DROP 0 EXIT THEN
-    R@ SBOX-HOST-VALID? 0= IF 2DROP R> DROP 0 EXIT THEN
     2DUP R@ SBOX-HOST-INVOCATION-SIZE
         MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
     2DUP R@ _SHI.CHILD @ CTX-SIZE
@@ -686,6 +711,16 @@ REQUIRE ../sandbox/vm.f
     2DUP R@ _SHI.VM @ R@ _SHI.VM-U @
         MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
     2DROP R> DROP -1 ;
+
+\ A live host owns one complete invocation graph, not merely its fixed
+\ descriptor.  Adapters use this predicate before publishing caller-owned
+\ metadata so neither that metadata nor a direct result buffer can alias a
+\ child Context, borrowed plan/profile, or any allocation FINISH will scrub.
+: SBOX-HOST-SPAN-DISJOINT?  ( address length host -- flag )
+    >R
+    2DUP _SHOST-SPAN? 0= IF 2DROP R> DROP 0 EXIT THEN
+    R@ SBOX-HOST-VALID? 0= IF 2DROP R> DROP 0 EXIT THEN
+    R> _SHOST-SPAN-DISJOINT-VALIDATED? ;
 
 : _SHOST-RESULT-DISJOINT?  ( result result-u host -- flag )
     SBOX-HOST-SPAN-DISJOINT? ;
@@ -711,7 +746,7 @@ REQUIRE ../sandbox/vm.f
         2DROP DROP R> EXIT
     THEN
     DROP
-    DUP _SHOST-CLEANUP
+    DUP _SHOST-CLEANUP-FINISHED
     2DROP DROP SBOX-HOST-S-OK ;
 
 : SBOX-HOST-CONTEXT-IDENTITY@

@@ -539,6 +539,17 @@ REQUIRE ../../../utils/memory-span.f
     _DSC.LIVE-GENERATION @ =
     IF DESK-SBOX-S-OK ELSE DESK-SBOX-S-STALE-GENERATION THEN ;
 
+: _DSC-RUN-SLICE-VALIDATED
+  ( max-steps component -- run-state status )
+    OVER 0> 0= IF
+        2DROP SBOX-VM-RUN-INVALID DESK-SBOX-S-INVALID EXIT
+    THEN
+    >R
+    R@ _DSC.HOST _SHOST-RUN-SLICE-VALIDATED
+    DUP SBOX-VM-RUN-INVALID =
+    IF DESK-SBOX-S-HOST ELSE DESK-SBOX-S-OK THEN
+    R> DROP ;
+
 : _DSC-DROP3>RUN-STATUS
   ( x1 x2 x3 run-state status -- run-state status )
     >R >R 2DROP DROP R> R> ;
@@ -691,27 +702,35 @@ REQUIRE ../../../utils/memory-span.f
     R> DROP
     DESK-SBOX-S-OK ;
 
+: _DSC-TAKE-SPAN-STATUS
+  ( address length generation component -- status )
+    >R
+    DUP R@ _DSC-HANDLE-STATUS
+    DUP IF
+        >R 2DROP DROP R> R> DROP EXIT
+    THEN
+    DROP
+    2 PICK 2 PICK R@ _DSC-EXTERNAL-SPAN? 0= IF
+        2DROP DROP R> DROP DESK-SBOX-S-ALIAS EXIT
+    THEN
+    2 PICK 2 PICK R@ _DSC.HOST
+        _SHOST-SPAN-DISJOINT-VALIDATED? 0= IF
+        2DROP DROP R> DROP DESK-SBOX-S-ALIAS EXIT
+    THEN
+    R@ _DSC.HOST _SHOST-RUN-STATE-VALIDATED
+        _DSC-TERMINAL? 0= IF
+        2DROP DROP R> DROP DESK-SBOX-S-STATE EXIT
+    THEN
+    2DROP DROP R> DROP DESK-SBOX-S-OK ;
+
 : _DSC-TAKE-BOUNDARY
   ( result generation component -- same status )
     2 PICK _DSR-FIXED? 0= IF DESK-SBOX-S-INVALID EXIT THEN
     2 PICK DESK-SBOX-RESULT-SIZE _DSC-ZERO? 0= IF
         DESK-SBOX-S-STATE EXIT
     THEN
-    1 PICK 1 PICK _DSC-HANDLE-STATUS
-    DUP IF EXIT THEN DROP
-    2 PICK DESK-SBOX-RESULT-SIZE 2 PICK
-        _DSC-EXTERNAL-SPAN? 0= IF
-        DESK-SBOX-S-ALIAS EXIT
-    THEN
-    2 PICK DESK-SBOX-RESULT-SIZE 2 PICK _DSC.HOST
-        SBOX-HOST-SPAN-DISJOINT? 0= IF
-        DESK-SBOX-S-ALIAS EXIT
-    THEN
-    DUP _DSC.HOST SBOX-HOST-RUN-STATE@
-        _DSC-TERMINAL? 0= IF
-        DESK-SBOX-S-STATE EXIT
-    THEN
-    DESK-SBOX-S-OK ;
+    2 PICK DESK-SBOX-RESULT-SIZE 3 PICK 3 PICK
+        _DSC-TAKE-SPAN-STATUS ;
 
 : _DSC-ALLOCATE  ( bytes -- address status )
     DUP 0> 0= IF DROP 0 DESK-SBOX-S-RESULT EXIT THEN
@@ -738,20 +757,14 @@ REQUIRE ../../../utils/memory-span.f
 : _DSC-DROP6>STATUS  ( x1 x2 x3 x4 x5 x6 status -- status )
     >R 2DROP 2DROP 2DROP R> ;
 
-: DESK-SBOX-RESULT-TAKE
+: _DSC-RESULT-TAKE-PRECHECKED
   ( result generation component -- status )
-    _DSC-TAKE-BOUNDARY
-    DUP IF
-        >R 2DROP DROP R> EXIT
-    THEN
-    DROP
-
     DUP _DSC.HOST SBOX-HOST-RESULT-MEASURE
     DUP IF
         2DROP 2DROP DROP DESK-SBOX-S-HOST EXIT
     THEN
     DROP
-    1 PICK _DSC.HOST SBOX-HOST-RUN-STATE@
+    1 PICK _DSC.HOST _SHOST-RUN-STATE-VALIDATED
     1 PICK _DSC-ALLOCATE
     DUP IF
         >R 2DROP 2DROP 2DROP R> EXIT
@@ -789,6 +802,15 @@ REQUIRE ../../../utils/memory-span.f
     THEN
     R> DROP
     DESK-SBOX-S-OK _DSC-DROP6>STATUS ;
+
+: DESK-SBOX-RESULT-TAKE
+  ( result generation component -- status )
+    _DSC-TAKE-BOUNDARY
+    DUP IF
+        >R 2DROP DROP R> EXIT
+    THEN
+    DROP
+    _DSC-RESULT-TAKE-PRECHECKED ;
 
 \ =====================================================================
 \  Close, drain, and deterministic release

@@ -3711,11 +3711,7 @@ PROVIDED akashic-sbx-vm
     DUP _SVM-RESUME-READY? 0= IF _SVI.RUN-STATE @ EXIT THEN
     _SVM-STEP-ADMITTED ;
 
-: SBOX-VM-RUN-SLICE  ( max-steps instance -- run-state )
-    OVER 0< IF 2DROP SBOX-VM-RUN-INVALID EXIT THEN
-    DUP SBOX-VM-INSTANCE-VALID? 0= IF
-        2DROP SBOX-VM-RUN-INVALID EXIT
-    THEN
+: _SVM-RUN-SLICE-VALIDATED  ( max-steps instance -- run-state )
     DUP _SVM-RESUME-READY? 0= IF
         NIP _SVI.RUN-STATE @ EXIT
     THEN
@@ -3729,6 +3725,13 @@ PROVIDED akashic-sbx-vm
     REPEAT
     DROP R@ _SVI.RUN-STATE @
     R> DROP ;
+
+: SBOX-VM-RUN-SLICE  ( max-steps instance -- run-state )
+    OVER 0< IF 2DROP SBOX-VM-RUN-INVALID EXIT THEN
+    DUP SBOX-VM-INSTANCE-VALID? 0= IF
+        2DROP SBOX-VM-RUN-INVALID EXIT
+    THEN
+    _SVM-RUN-SLICE-VALIDATED ;
 
 : _SVM-CANCEL-DETAIL?  ( detail -- flag )
     DUP SBOX-VM-CANCEL-CALLER >=
@@ -4086,6 +4089,20 @@ PROVIDED akashic-sbx-vm
     \ result.  Every fallible check and every ownership transition is complete.
     _SVM-RESULT-MAGIC 2 PICK _SVT.MAGIC !
     2DROP R> DROP SBOX-VM-S-OK ;
+
+\ FINISH has just scrubbed the mutable VM body, then established the
+\ FINISHED+SCRUBBED causal-state cells.  The invocation host uses this private
+\ release before any caller can observe or mutate the VM again.
+: _SVM-RELEASE-FINISHED-VALIDATED  ( instance -- status )
+    DUP _SVI.RUN-STATE @ SBOX-VM-RUN-FINISHED <> IF
+        DROP SBOX-VM-S-INVALID EXIT
+    THEN
+    DUP _SVI.SCRUBBED @ 1 <> IF
+        DROP SBOX-VM-S-INVALID EXIT
+    THEN
+    0 OVER _SVI.MAGIC !
+    DUP SBOX-VM-INSTANCE-DESCRIPTOR-SIZE 0 FILL
+    DROP SBOX-VM-S-OK ;
 
 : SBOX-VM-RELEASE  ( instance -- status )
     DUP _SVM-INSTANCE-HEADER-STATUS ?DUP IF NIP EXIT THEN

@@ -140,9 +140,32 @@ def test_receipt_copies_exact_correlation_before_publication() -> None:
     ):
         assert field in source
     take = _definition(source, "DESK-SBOX-ADMISSION-RESULT-TAKE")
-    assert "_DSART-COPY-METADATA" in take
-    assert "_DSRC-MAGIC" in take
-    assert take.index("_DSART-COPY-METADATA") < take.index("_DSRC-MAGIC")
+    commit = _definition(source, "_DSART-COMMIT")
+    assert "_DSART-COMMIT" in take
+    assert "_DSC-RESULT-TAKE-PRECHECKED" in commit
+    assert "_DSART-COPY-METADATA" in commit
+    assert "_DSRC-MAGIC" in commit
+    assert commit.index("_DSART-COPY-METADATA") < commit.index("_DSRC-MAGIC")
+
+
+def test_receipt_preflight_covers_the_whole_live_invocation_graph() -> None:
+    source = _source()
+    active = _definition(source, "_DSA-ACTIVE-SHAPE?")
+    receipt = _definition(source, "_DSA-RECEIPT-BOUNDARY")
+    boundary = _definition(source, "_DSART-BOUNDARY")
+    span = _definition(source, "_DSA-RESULT-SPAN-STATUS")
+
+    assert active.count("DESK-SBOX-COMPONENT-VALID?") == 1
+    assert "DESK-SBOX-COMPONENT-STATE@" not in active
+    assert "_DSC.STATE @" in active
+    assert "_DSART-RECEIPT 8 MSPAN-OVERLAP?" in receipt
+    assert "_DSART-GENERATION 8 MSPAN-OVERLAP?" in receipt
+    assert "_DSART-ADMISSION 8 MSPAN-OVERLAP?" in receipt
+    assert "DESK-SBOX-RECEIPT-SIZE" in span
+    assert "_DSC-TAKE-SPAN-STATUS" in span
+    assert boundary.index("_DSA-EXTERNAL-SPAN?") < boundary.index(
+        "_DSA-RESULT-SPAN-STATUS"
+    )
 
 
 def test_admission_profile_is_registered_for_link_validation() -> None:

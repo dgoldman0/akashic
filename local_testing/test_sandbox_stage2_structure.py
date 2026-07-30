@@ -19,6 +19,7 @@ from forth_dependencies import dependency_closure  # noqa: E402
 
 OWNER = Path("runtime/sandbox-module-owner.f")
 HOST = Path("runtime/sandbox-host.f")
+VM = Path("sandbox/vm.f")
 VERTICAL = Path("sandbox-stage2-vertical.f")
 
 
@@ -94,6 +95,36 @@ def test_invocation_host_is_per_run_and_uses_exact_vm_ownership() -> None:
     assert "SBOX-HOST-RELEASE" in host
     assert "SBOX-VM-INSTANCE-BOUND?" in host
     assert ": SBOX-VM-INSTANCE-BOUND?" in vm
+
+
+def test_successful_finish_does_not_rescrub_proven_zero_allocations() -> None:
+    host = (AKASHIC_ROOT / HOST).read_text(encoding="utf-8")
+    vm = (AKASHIC_ROOT / VM).read_text(encoding="utf-8")
+    generic = host.split(": _SHOST-CLEANUP  ", 1)[1].split(
+        ": _SHOST-FREE-ZEROED", 1
+    )[0]
+    finished = host.split(": _SHOST-CLEANUP-FINISHED", 1)[1].split(
+        ": _SHOST-DROP10", 1
+    )[0]
+    finish = host.split(": SBOX-HOST-FINISH", 1)[1].split(
+        ": SBOX-HOST-CONTEXT-IDENTITY@", 1
+    )[0]
+    vm_release = vm.split(
+        ": _SVM-RELEASE-FINISHED-VALIDATED", 1
+    )[1].split(": SBOX-VM-RELEASE", 1)[0]
+
+    assert generic.count("_SHOST-SCRUB-FREE") == 4
+    assert "_SVM-RELEASE-FINISHED-VALIDATED" in finished
+    assert "_SHOST-CLEANUP EXIT" in finished
+    assert finished.count("_SHOST-FREE-ZEROED") == 4
+    assert "SBOX-VM-RUN-FINISHED <>" in vm_release
+    assert "_SVI.SCRUBBED @ 1 <>" in vm_release
+    assert "SBOX-VM-INSTANCE-VALID?" not in vm_release
+    assert "SBOX-VM-INSTANCE-DESCRIPTOR-SIZE 0 FILL" in vm_release
+    assert finish.index("SBOX-VM-FINISH") < finish.index(
+        "_SHOST-CLEANUP-FINISHED"
+    )
+    assert host.count("_SHOST-CLEANUP-FINISHED") == 2
 
 
 def test_production_signature_parser_consumes_the_value_once() -> None:
