@@ -1000,14 +1000,17 @@ _O2C-DESCRIPTION-OFF O2CODE-ERROR-DESCRIPTION-CAPACITY +
 
 : _O2C-LAUNCH-CALLBACK-RUN
   \ callback receives
-  \   ( context binding binding-u request-uri request-uri-u
-  \     -- callback-status )
+  \   ( context binding binding-u issuer issuer-u issuer-required
+  \     request-uri request-uri-u -- callback-status )
   \ stack effect here is ( callback context object -- callback-status )
     DEPTH 2 - >R
     ROT >R
     >R
     R@ _O2C.BINDING
     R@ _O2C.BINDING-U @
+    R@ _O2C.ISSUER
+    R@ _O2C.ISSUER-U @
+    R@ _O2C.ISSUER-REQUIRED @
     R@ _O2C.REQUEST-URI
     R@ _O2C.REQUEST-URI-U @
     R> DROP

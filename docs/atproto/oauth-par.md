@@ -300,19 +300,20 @@ This adapter intentionally stops at `PAR-READY`. The durable caller should:
 1. copy the returned nonce into its selected authorization-server/DPoP nonce
    owner;
 2. checkpoint the nonborrowed `PAR-READY` transaction;
-3. use `O2CODE-WITH-LAUNCH` to borrow the exact binding and one-shot
-   `request_uri`, copy the resulting browser-launch command, and checkpoint
-   the resulting `AWAITING` phase before launching it;
-4. send only the PAR continuation parameters required by the authorization
-   server, normally the configured `client_id` and returned `request_uri`;
+3. use
+   [`AT-OAUTH-AUTHORIZATION-LAUNCH`](oauth-authorization.md) to bind the
+   selected configuration and profile to the one-shot `request_uri` and
+   construct the exact `client_id`/`request_uri` browser continuation;
+4. checkpoint the resulting `AWAITING` transaction and caller-owned launch URI
+   before performing the browser side effect;
 5. pass the raw redirect query to `O2CODE-ACCEPT-CALLBACK`, which enforces the
    generated state and the mandatory exact issuer selected by `PREPARE`; and
 6. use `O2CODE-WITH-GRANT` to copy the one-shot authorization code and PKCE
    verifier into the separately owned token request.
 
 Browser launch, redirect listening, durable ordering, and token exchange
-remain O2CODE caller continuations rather than hidden side effects of PAR
-acceptance.
+remain caller continuations rather than hidden side effects of PAR acceptance
+or authorization-URI construction.
 
 ## Focused qualification and deferred matrices
 

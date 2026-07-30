@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify durable P-256 ownership through the public AT PAR wrapper."""
+"""Qualify durable public AT OAuth from proof-bearing PAR through grant."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ IMAGE = Path("/tmp/akashic-at-par-p256-vertical.img")
 PASS_MARKER = "AT PAR P256 PASS"
 
 WRAPPER = SOURCE_ROOT / "atproto" / "oauth-par-p256.f"
+AUTHORIZATION = SOURCE_ROOT / "atproto" / "oauth-authorization.f"
 RAW_PAR = SOURCE_ROOT / "atproto" / "oauth-par.f"
 VAULT = SOURCE_ROOT / "security" / "credential-vault.f"
 KEY_OWNER = SOURCE_ROOT / "security" / "oauth2" / "key-p256.f"
@@ -35,6 +36,9 @@ HTTP_FIXTURE = LOCAL_TESTING / "o2-http-post-common.f"
 RAW_FIXTURE = LOCAL_TESTING / "at-oauth-par-test.f"
 KEY_FIXTURE = LOCAL_TESTING / "oauth2-p256-key-test.f"
 CONTRACT = LOCAL_TESTING / "at-par-p256-test.f"
+AUTHORIZATION_CONTRACT = (
+    LOCAL_TESTING / "at-oauth-authz-test.f"
+)
 FIXTURES = (
     PROFILE_FIXTURE,
     CLIENT_FIXTURE,
@@ -42,6 +46,7 @@ FIXTURES = (
     RAW_FIXTURE,
     KEY_FIXTURE,
     CONTRACT,
+    AUTHORIZATION_CONTRACT,
 )
 
 MAX_PHASE_STEPS = 180_000_000
@@ -69,6 +74,7 @@ SEAM_GUEST = "local_testing/p2-seam.f"
 VAULT_GUEST = "local_testing/p2-vault.f"
 KEY_GUEST = "local_testing/p2-key.f"
 WRAPPER_GUEST = "local_testing/p2-wrap.f"
+AUTHORIZATION_GUEST = "local_testing/p2-auth.f"
 OWNER_LOAD_STAGES = (
     ("seam", SEAM_GUEST, "AT PAR P256 SEAM READY", MAX_PHASE_STEPS),
     ("vault", VAULT_GUEST, "AT PAR P256 VAULT READY", MAX_PHASE_STEPS),
@@ -77,6 +83,12 @@ OWNER_LOAD_STAGES = (
         "wrapper",
         WRAPPER_GUEST,
         "AT PAR P256 WRAPPER READY",
+        MAX_PHASE_STEPS,
+    ),
+    (
+        "authorization",
+        AUTHORIZATION_GUEST,
+        "AT PAR P256 AUTHORIZATION READY",
         MAX_PHASE_STEPS,
     ),
 )
@@ -109,6 +121,30 @@ RUNTIME_STAGES = (
         "AT PAR P256 HAPPY READY",
         MAX_PHASE_STEPS,
     ),
+    (
+        "auth-setup",
+        "_ATAUT-INIT",
+        "AT AUTHORIZATION SETUP READY",
+        MAX_PHASE_STEPS,
+    ),
+    (
+        "auth-launch",
+        "_ATAUT-TEST-LAUNCH",
+        "AT AUTHORIZATION LAUNCH READY",
+        MAX_PHASE_STEPS,
+    ),
+    (
+        "auth-issuer",
+        "_ATAUT-TEST-ISSUER-REJECTION",
+        "AT AUTHORIZATION ISSUER READY",
+        MAX_PHASE_STEPS,
+    ),
+    (
+        "auth-grant",
+        "_ATAUT-TEST-CALLBACK-GRANT",
+        "AT AUTHORIZATION GRANT READY",
+        MAX_PHASE_STEPS,
+    ),
 )
 
 FAILURE_MARKERS = (
@@ -124,6 +160,10 @@ FAILURE_MARKERS = (
     "AT OAUTH PROFILE STATUS",
     "AT OAUTH CLIENT ASSERT",
     "AT OAUTH CLIENT STATUS",
+    "AT OAUTH AUTHORIZATION FAIL",
+    "AT OAUTH AUTHORIZATION ASSERT",
+    "AT OAUTH AUTHORIZATION STATUS",
+    "AT OAUTH AUTHORIZATION STACK",
     "OAUTH2 HTTP POST ASSERT",
     "OAUTH2 HTTP POST STATUS",
     "OAUTH2 P256 KEY FAIL",
@@ -176,10 +216,14 @@ def _assert_physical_comments(path: Path, source: str) -> None:
 
 def _assert_static_contracts() -> None:
     wrapper = WRAPPER.read_text(encoding="utf-8")
+    authorization = AUTHORIZATION.read_text(encoding="utf-8")
     raw = RAW_PAR.read_text(encoding="utf-8")
     vault = VAULT.read_text(encoding="utf-8")
     owner = KEY_OWNER.read_text(encoding="utf-8")
     fixture = CONTRACT.read_text(encoding="utf-8")
+    authorization_fixture = AUTHORIZATION_CONTRACT.read_text(
+        encoding="utf-8"
+    )
     seam = (
         CV_DEPS.read_text(encoding="utf-8")
         + "\n"
@@ -240,6 +284,64 @@ def _assert_static_contracts() -> None:
     assert all(
         len(module_id.encode("ascii")) <= 23
         for module_id in wrapper_ids
+    )
+    authorization_ids = _provided_ids(authorization)
+    assert authorization_ids == ["akashic-at-oauth-authz"]
+    assert authorization_ids[0] not in raw_ids
+    assert authorization_ids[0] not in seam_ids
+    assert all(
+        len(module_id.encode("ascii")) <= 23
+        for module_id in authorization_ids
+    )
+    assert _requires(AUTHORIZATION) == [
+        "../utils/memory-span.f",
+        "../utils/caller-span.f",
+        "../net/form-urlencoded.f",
+        "../net/http-target.f",
+        "../security/oauth2/client-config.f",
+        "../security/oauth2/authorization-code.f",
+        "oauth-profile.f",
+        "oauth-client.f",
+    ]
+    assert not re.search(
+        r"(?mi)^[ \t]*(?:CREATE|VARIABLE|VALUE|DEFER|GUARD)\b",
+        authorization,
+    ), "AT authorization adapter must own no mutable module-global state"
+    for marker in (
+        "AT-OAUTH-AUTHORIZATION-URL-CAPACITY",
+        "AT-OAUTH-AUTHORIZATION-WORKSPACE-SIZE",
+        "AT-OAUTH-AUTHORIZATION-WORKSPACE-CLEAR",
+        "AT-OAUTH-AUTHORIZATION-STATUS-VALID?",
+        "AT-OAUTH-AUTHORIZATION-LAUNCH",
+        "AT-OAUTH-CLIENT-VIEW-ADMIT",
+        "OAUTH2-CLIENT-VIEW-BINDING@",
+        "AT-OAUTH-PROFILE-ISSUER@",
+        "AT-OAUTH-PROFILE-AUTHORIZATION-TARGET@",
+        "FORM-URLENCODED-ENCODE",
+        "O2CODE-WITH-LAUNCH",
+        "O2CODE-ISSUER-REQUIRED",
+    ):
+        assert marker in authorization
+    assert (
+        "AT-OAUTH-AUTHORIZATION-URL-CAPACITY 19480 <>"
+        in authorization
+    )
+    launch_callback = _word_body(
+        authorization, "_ATAU-LAUNCH-CALLBACK"
+    )
+    for earlier, later in (
+        ("O2CODE-ISSUER-REQUIRED", "_ATAU-BINDING-MATCH?"),
+        ("_ATAU-BINDING-MATCH?", "_ATAU-ISSUER-STATUS"),
+        ("_ATAU-ISSUER-STATUS", "_ATAU-BUILD-URL"),
+    ):
+        assert launch_callback.index(earlier) < launch_callback.index(
+            later
+        )
+    launch = _word_body(
+        authorization, "AT-OAUTH-AUTHORIZATION-LAUNCH"
+    )
+    assert launch.index("_ATAU-LAUNCH-GEOMETRY") < launch.index(
+        "_ATAU-LAUNCH-CALL"
     )
     assert _requires(WRAPPER) == [
         "../utils/memory-span.f",
@@ -428,6 +530,35 @@ def _assert_static_contracts() -> None:
         fixture,
     ), "focused fixture must not borrow the DO-loop return stack"
 
+    assert _requires(AUTHORIZATION_CONTRACT) == [
+        "at-par-p256-test.f",
+    ]
+    for marker in (
+        "PROVIDED at-oauth-authorization-test",
+        "_ATAUT-INIT",
+        "_ATAUT-TEST-LAUNCH",
+        "_ATAUT-TEST-ISSUER-REJECTION",
+        "_ATAUT-TEST-CALLBACK-GRANT",
+        "_ATAUT-FINISH",
+        "AT-OAUTH-AUTHORIZATION-LAUNCH",
+        "O2CODE-ACCEPT-CALLBACK",
+        "O2CODE-S-ISSUER",
+        "O2CODE-WITH-GRANT",
+        "O2CODE-PHASE-SPENT",
+    ):
+        assert marker in authorization_fixture
+    assert authorization_fixture.count(
+        "AT-OAUTH-AUTHORIZATION-LAUNCH"
+    ) == 1
+    assert authorization_fixture.count(
+        "O2CODE-ACCEPT-CALLBACK"
+    ) == 2
+    assert not re.search(
+        r"(?i)(?<![A-Za-z0-9_-])(?:\?DO|DO|\+LOOP|LOOP)"
+        r"(?![A-Za-z0-9_-])",
+        authorization_fixture,
+    ), "focused authorization fixture must not borrow the DO-loop stack"
+
     # This vertical deliberately does not requalify real P-256, JWK, or
     # ES256 cryptography. test_oauth2_dpop_es256.py verifies the real compact
     # proof and signature; this runner keeps the exact durable owner and raw
@@ -449,7 +580,13 @@ def _assert_static_contracts() -> None:
             path,
             path.read_text(encoding="utf-8"),
         )
-    for path in (VAULT, KEY_OWNER, WRAPPER, *FIXTURES):
+    for path in (
+        VAULT,
+        KEY_OWNER,
+        WRAPPER,
+        AUTHORIZATION,
+        *FIXTURES,
+    ):
         _assert_physical_comments(
             path,
             path.read_text(encoding="utf-8"),
@@ -492,7 +629,7 @@ def _autoexec() -> str:
                 "KEY DROP\n",
             )
         )
-    lines.append("_ATP2T-FINISH\nTX-FLUSH\n")
+    lines.append("_ATAUT-FINISH\n_ATP2T-FINISH\nTX-FLUSH\n")
     return "".join(lines)
 
 
@@ -519,6 +656,10 @@ def _run_vertical(timeout: float) -> int:
             (VAULT_GUEST, _packed(VAULT, remove_requires=True)),
             (KEY_GUEST, _packed(KEY_OWNER, remove_requires=True)),
             (WRAPPER_GUEST, _packed(WRAPPER, remove_requires=True)),
+            (
+                AUTHORIZATION_GUEST,
+                _packed(AUTHORIZATION, remove_requires=True),
+            ),
         )
         + tuple(
             (
@@ -655,7 +796,7 @@ def main() -> int:
     mode.add_argument(
         "--vertical",
         action="store_true",
-        help="run the staged one-core durable P256 AT PAR vertical",
+        help="run the staged one-core durable public AT OAuth vertical",
     )
     parser.add_argument("--timeout", type=float, default=180.0)
     args = parser.parse_args()

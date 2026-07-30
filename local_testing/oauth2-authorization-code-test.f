@@ -649,10 +649,12 @@ CREATE _o2ct-pkce-work OAUTH2-PKCE-WORKSPACE-SIZE ALLOT
     _o2ct-stack ;
 
 : _o2ct-launch-callback
-  \ ( context binding binding-u request-uri request-uri-u
-  \   -- callback-status )
+  \ ( context binding binding-u issuer issuer-u issuer-required
+  \   request-uri request-uri-u -- callback-status )
     1 _o2ct-callback-count +!
     _o2ct-capture-request-uri
+    _o2ct-seen-issuer-required !
+    _o2ct-capture-issuer
     _o2ct-capture-binding
     DUP _o2ct-object = _o2ct-assert
     DUP O2CODE-PHASE@
@@ -665,17 +667,17 @@ CREATE _o2ct-pkce-work OAUTH2-PKCE-WORKSPACE-SIZE ALLOT
     DROP 702 ;
 
 : _o2ct-launch-throw
-  \ ( context binding binding-u request-uri request-uri-u
-  \   -- callback-status )
+  \ ( context binding binding-u issuer issuer-u issuer-required
+  \   request-uri request-uri-u -- callback-status )
     1 _o2ct-callback-count +!
-    _O2C-DROP5
+    _O2C-DROP4 _O2C-DROP4
     -819 THROW ;
 
 : _o2ct-launch-extra
-  \ ( context binding binding-u request-uri request-uri-u
-  \   -- callback-status extra )
+  \ ( context binding binding-u issuer issuer-u issuer-required
+  \   request-uri request-uri-u -- callback-status extra )
     1 _o2ct-callback-count +!
-    _O2C-DROP5
+    _O2C-DROP4 _O2C-DROP4
     702 703 ;
 
 : _o2ct-start-par-ready  ( -- )
@@ -704,6 +706,12 @@ CREATE _o2ct-pkce-work OAUTH2-PKCE-WORKSPACE-SIZE ALLOT
     _o2ct-callback-count @ 1 = _o2ct-assert
     _o2ct-seen-binding-u @ _o2ct-binding NIP =
     _o2ct-assert
+    _o2ct-seen-issuer-u @ _o2ct-issuer NIP =
+    _o2ct-assert
+    _o2ct-issuer-copy _o2ct-seen-issuer-u @
+    _o2ct-issuer COMPARE 0= _o2ct-assert
+    _o2ct-seen-issuer-required @ O2CODE-ISSUER-REQUIRED =
+    _o2ct-assert
     _o2ct-seen-request-uri-u @ _o2ct-request-uri NIP =
     _o2ct-assert
     _o2ct-assert-launch-finished
@@ -726,9 +734,9 @@ CREATE _o2ct-pkce-work OAUTH2-PKCE-WORKSPACE-SIZE ALLOT
     _o2ct-stack ;
 
 : _o2ct-launch-ok
-  \ ( context binding binding-u request-uri request-uri-u
-  \   -- callback-status )
-    _O2C-DROP5 704 ;
+  \ ( context binding binding-u issuer issuer-u issuer-required
+  \   request-uri request-uri-u -- callback-status )
+    _O2C-DROP4 _O2C-DROP4 704 ;
 
 : _o2ct-start-awaiting  ( -- )
     _o2ct-start-par-ready

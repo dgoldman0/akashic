@@ -110,13 +110,22 @@ only for that invocation.
 The `WITH-LAUNCH` callback receives:
 
 ```forth
-( context binding binding-u request-uri request-uri-u -- callback-status )
+( context binding binding-u issuer issuer-u issuer-required
+  request-uri request-uri-u -- callback-status )
 ```
 
 The transaction enters `AWAITING` before the callback. The request URI is
 wiped after callback return, throw, or stack-contract violation. Because the
 external launch may have occurred before a failure became observable, it is
 never made retryable.
+
+The binding, issuer, and request-URI spans are read-only borrows valid only for
+that invocation. The issuer loan is the exact policy retained during
+`PREPARE`. A provider adapter uses it with its independently retained metadata
+to prove that the selected authorization endpoint belongs to the same
+authorization-server profile that issued the accepted PAR result. This is
+metadata provenance, not a same-origin inference, and it must not be inferred
+from the opaque request URI.
 
 The `WITH-GRANT` callback receives:
 

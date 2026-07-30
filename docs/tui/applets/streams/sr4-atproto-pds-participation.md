@@ -1,6 +1,6 @@
 # Streams SR4 — AT Protocol/PDS participation
 
-**Prepared:** 2026-07-29
+**Prepared:** 2026-07-29; updated 2026-07-30
 
 **Status:** active; landings 1 and 2 are complete, landing 3 is in progress
 
@@ -104,9 +104,11 @@ Landing 3 currently includes:
 - `2f5c887` — provider-neutral POST correlation and authorization-transaction
   PAR provenance;
 - `e992c5e` — focused raw AT public-client PAR/PKCE composition through
-  strict successful-response acceptance; and
-- this checkpoint — configuration-bound durable P-256 proof composition for
-  public AT PAR.
+  strict successful-response acceptance;
+- `d302ccb` — configuration-bound durable P-256 proof composition for public
+  AT PAR; and
+- this checkpoint — provenance-bound AT browser authorization through strict
+  generic callback acceptance and the one-shot grant loan.
 
 These commits do not close landing 3. `ff5bbbd` completes the local
 AT-specific deployment binder: one validated immutable client configuration,
@@ -190,7 +192,7 @@ HTTP, parser, profile, client, transaction, and response-decoder code; only
 the deterministic server bytes and the then-opaque compact DPoP proof are
 fixture inputs.
 
-The current checkpoint adds the state-free public-client composition in
+`d302ccb` adds the state-free public-client composition in
 `atproto/oauth-par-p256.f`. It revalidates one admitted public AT client,
 requires its canonical DPoP-only durable binding, configures the generic POST
 against the ready profile's exact PAR target and caller-owned request, form,
@@ -210,10 +212,30 @@ admission, durable DPoP proof, and raw PAR workspaces. It reuses the closed
 selected durable-key lifecycle/proof-policy failure is `DPOP`, and capacity,
 alias, entropy, crypto, and platform-memory classes remain distinct.
 
-The immediate next boundary is authorization-response composition followed by
-DPoP-aware token exchange and authorization-server nonce handling. Durable
-generic session installation and cold recovery, refresh rotation, logout,
-revocation/reauthorization, cancellation, and complete cleanup follow.
+The current checkpoint extends the provider-neutral O2CODE launch loan with
+the exact retained issuer policy and adds the state-free
+`atproto/oauth-authorization.f` adapter. The generic transaction continues to
+own the `PAR-READY`/`AWAITING`/`CODE-READY`/`SPENT` lifecycle, issuer and state
+checking, PKCE material, and callback/grant containment. The AT-specific layer
+freshly revalidates the selected immutable client and ready profile, matches
+their binding and issuer inside the one-shot loan, and writes only the exact
+form-encoded `client_id` and opaque `request_uri` against the profile's
+authorization endpoint. Its destination honors any positive caller-provided
+bound; the symbolic 19,480-byte allocation is sufficient for every admitted
+input rather than a required exact capacity. An undersized destination
+discovered after the loan begins is terminal because O2CODE has already
+published `AWAITING` and consumed the request URI.
+
+Browser launch, redirect-route admission, durable ordering, and token
+transport remain explicit caller continuations. The focused vertical passes
+the raw redirect query directly to generic `O2CODE-ACCEPT-CALLBACK` and then
+uses `O2CODE-WITH-GRANT`; there is no AT-specific duplicate parser or token
+owner hidden in this checkpoint.
+
+The immediate next boundary is the DPoP-aware token request and explicit
+authorization-server nonce owner. Durable generic session installation and
+cold recovery, refresh rotation, logout, revocation/reauthorization,
+cancellation, and complete cleanup follow.
 
 ## Current repository handoff
 
@@ -222,11 +244,11 @@ At preparation time:
 ```text
 repository: /home/kir/Documents/Projects/fantasy-computing/akashic
 branch:     main
-code base:  this durable public-client AT PAR composition checkpoint
+code base:  this AT browser authorization/callback-grant checkpoint
 record:     updated in the same checkpoint
 upstream:   origin/main at bcb04b4
-ahead:      5 commits after committing the durable public PAR checkpoint
-tests:      static gate and focused one-core vertical pass
+ahead:      6 commits after committing this authorization checkpoint
+tests:      static gates, generic linked suite, focused one-core vertical pass
 ```
 
 There is no current SR4-owned uncommitted work. The latest SR4 commits are:
@@ -241,7 +263,8 @@ bcb04b4 Extract generic OAuth published P-256 ownership
 0194dc0 Bind durable OAuth DPoP proofs to P-256 keys
 2f5c887 Bind generic PAR results to initiating requests
 e992c5e Compose AT OAuth pushed authorization requests
-this checkpoint: compose durable P-256 proofs into public AT PAR
+d302ccb Compose durable DPoP proofs into public AT PAR
+this checkpoint: compose AT browser authorization through the grant loan
 ```
 
 `2ae49bc` added `OAUTH2-P256-KEY-PROVISION-*`,
@@ -294,7 +317,7 @@ response policy only; generic O2CODE retains state/PKCE/issuer lifecycle,
 generic HTTP owns form serialization and transport evidence, and the generic
 PAR decoder owns successful-response schema validation.
 
-The current checkpoint adds `akashic/atproto/oauth-par-p256.f` and its focused
+`d302ccb` adds `akashic/atproto/oauth-par-p256.f` and its focused
 documentation and fixture. The wrapper owns only the AT public-client
 composition: exact PAR POST setup, immutable configuration revalidation,
 selection of the configuration-bound durable DPoP identity, exact proof
@@ -302,6 +325,16 @@ inputs, and prompt proof cleanup. Credential-vault, P-256 key, and generic
 DPoP ownership remain under `akashic/security/oauth2/`; the raw AT form and
 response policy remains in `akashic/atproto/oauth-par.f`; transport remains
 with the caller.
+
+The current checkpoint changes the generic
+`security/oauth2/authorization-code.f` callback loan only by adding its
+already-retained issuer bytes and policy. Exact AT endpoint, client, and
+profile binding stays in the new `akashic/atproto/oauth-authorization.f`
+adapter. That adapter owns no provider-neutral transaction, browser, redirect
+listener, token request, nonce cache, or application state. Its focused
+fixture continues the existing durable public PAR transaction through one
+exact browser URI, strict generic callback acceptance, and a grant callback;
+the generic and AT layers remain usable without Streams.
 
 The following files are preserved unrelated user/old-L13 work. Do not stage,
 restore, rewrite, or delete them as part of SR4:
@@ -499,6 +532,22 @@ Completed evidence:
   requirement and complete arena/vault admission order are also enforced by
   the static source gate. This does not claim another real-cryptography vector
   run.
+- The authorization checkpoint passed both static gates. The generic
+  authorization-code linked suite loaded 12 modules and passed in 191,292,455
+  guest steps and 104.79 seconds. The combined durable public AT OAuth
+  vertical then passed 54 sequential phases: 34 raw production-module loads,
+  five composition loads, seven fixture loads, seven focused runtime groups,
+  and finish. It completed in 1,205,055,297 guest steps and 677.68 summed stage
+  seconds on one core with 128 MiB of external machine memory. Its largest
+  phase used 90,150,958 steps, below the unchanged 180,000,000-step ceiling.
+  Starting from the exact proof-bearing PAR success, the focused authorization
+  groups cover the exact `client_id`/`request_uri` browser URI, transition to
+  `AWAITING`, request-URI consumption, workspace and output cleanup, one
+  wrong-issuer callback preserving the genuine attempt, one exact callback to
+  `CODE-READY`, and one guarded grant loan exposing the exact durable binding,
+  authorization code, and valid PKCE verifier before `SPENT` and secret
+  cleanup. Browser launch, redirect routing, and token transport are not
+  claimed by this state-free gate.
 
 Recorded, non-gating deferrals for this retained-HRES boundary are the broad
 HRES header/outcome/media cross-product, every inline-status pass-through
@@ -560,6 +609,18 @@ Authorization-server nonce ownership and retry orchestration remain part of
 the DPoP-aware token/nonce continuation rather than hidden state in this
 state-free wrapper.
 
+Recorded, non-gating deferrals for the AT browser-authorization boundary are
+authorization endpoints with preexisting query/separator variants, broad
+percent-encoding and boundary-capacity matrices, cross-wired
+configuration/profile/binding and expiry matrices, and the full alias,
+protected-span, canary, subordinate-status, callback-denial, and
+malformed-query cross-products. The generic O2CODE suite retains its broader
+parser, denial, throw, and callback stack-containment evidence rather than
+duplicating it here. Live browser and redirect-route integration, durable
+restart, and token transport remain later vertical gates. A too-small caller
+destination is already defined as a terminal post-loan result, but the broad
+capacity matrix is not claimed by the focused success gate.
+
 The 16-minute-52-second result is a complete staged module-load and contract
 qualification, not the measured latency of one OAuth admission or one network
 operation. Its cost exposed repeated full-record scans and heavy fixture
@@ -576,16 +637,17 @@ delta. Do not run another suite or a test subagent concurrently.
 1. Read `AGENTS.md`, this record,
    `docs/atproto/oauth-par.md`,
    `docs/atproto/oauth-par-p256.md`,
+   `docs/atproto/oauth-authorization.md`,
    `docs/security/oauth2-authorization-code.md`,
    `docs/security/oauth2-http-post.md`,
    `docs/security/oauth2-key-p256.md`, and
    `docs/security/oauth2-dpop-es256.md`. Treat the raw PAR adapter, durable
-   public proof composition, and their generic ownership seams as completed
-   lower boundaries.
-2. Continue landing 3 with authorization-response composition and then the
-   DPoP-aware token request and authorization-server nonce owner. Preserve the
-   exact transaction/configuration/profile binding and keep browser,
-   transport, deadlines, retry, and durable ordering explicit.
+   public proof composition, browser-authorization adapter, strict callback,
+   and guarded grant loan as completed lower boundaries.
+2. Continue landing 3 with the DPoP-aware token request and explicit
+   authorization-server nonce owner. Preserve the exact
+   transaction/configuration/profile/key binding and keep transport,
+   deadlines, nonce challenge/retry, and durable ordering explicit.
 3. Continue with durable
    install/recovery/refresh/logout, cancellation, and reauthorization
    composition. Do not begin XRPC, repository/blob, subscription, and Streams

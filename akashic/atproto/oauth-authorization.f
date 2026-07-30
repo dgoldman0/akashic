@@ -1,0 +1,684 @@
+\ =====================================================================
+\  oauth-authorization.f - AT Protocol post-PAR browser continuation
+\ =====================================================================
+\  This state-free adapter consumes one generic O2CODE PAR continuation
+\  into an exact AT OAuth browser authorization URI.  It freshly admits
+\  the immutable client selection and ready discovery profile, proves the
+\  transaction's retained binding and issuer policy inside the one-shot
+\  launch loan, then writes only client_id and request_uri.
+\
+\  Browser launch, redirect-route admission, durable ordering, callback
+\  parsing, token exchange, DPoP, nonce ownership, and sessions remain
+\  caller-owned.  Redirect query bytes go directly to the generic
+\  O2CODE-ACCEPT-CALLBACK operation.
+\
+\  Public API:
+\    AT-OAUTH-AUTHORIZATION-URL-CAPACITY
+\    AT-OAUTH-AUTHORIZATION-WORKSPACE-SIZE
+\    AT-OAUTH-AUTHORIZATION-WORKSPACE-CLEAR
+\    AT-OAUTH-AUTHORIZATION-STATUS-VALID?
+\    AT-OAUTH-AUTHORIZATION-LAUNCH
+\ =====================================================================
+
+PROVIDED akashic-at-oauth-authz
+
+REQUIRE ../utils/memory-span.f
+REQUIRE ../utils/caller-span.f
+REQUIRE ../net/form-urlencoded.f
+REQUIRE ../net/http-target.f
+REQUIRE ../security/oauth2/client-config.f
+REQUIRE ../security/oauth2/authorization-code.f
+REQUIRE oauth-profile.f
+REQUIRE oauth-client.f
+
+\ =====================================================================
+\  Public status vocabulary and bounded result
+\ =====================================================================
+
+0  CONSTANT AT-OAUTH-AUTHORIZATION-S-OK
+1  CONSTANT AT-OAUTH-AUTHORIZATION-S-INVALID
+2  CONSTANT AT-OAUTH-AUTHORIZATION-S-CAPACITY
+3  CONSTANT AT-OAUTH-AUTHORIZATION-S-ALIAS
+4  CONSTANT AT-OAUTH-AUTHORIZATION-S-CONFIG
+5  CONSTANT AT-OAUTH-AUTHORIZATION-S-PROFILE
+6  CONSTANT AT-OAUTH-AUTHORIZATION-S-TRANSACTION
+7  CONSTANT AT-OAUTH-AUTHORIZATION-S-BINDING
+8  CONSTANT AT-OAUTH-AUTHORIZATION-S-ISSUER
+9  CONSTANT AT-OAUTH-AUTHORIZATION-S-EXPIRED
+10 CONSTANT AT-OAUTH-AUTHORIZATION-S-ENCODING
+11 CONSTANT AT-OAUTH-AUTHORIZATION-S-RANGE
+12 CONSTANT AT-OAUTH-AUTHORIZATION-S-PROTECTED
+13 CONSTANT AT-OAUTH-AUTHORIZATION-S-PLATFORM
+14 CONSTANT AT-OAUTH-AUTHORIZATION-S-INTERNAL
+15 CONSTANT AT-OAUTH-AUTHORIZATION-S-CALLBACK
+
+: AT-OAUTH-AUTHORIZATION-STATUS-VALID?  ( status -- flag )
+    DUP AT-OAUTH-AUTHORIZATION-S-OK >=
+    SWAP AT-OAUTH-AUTHORIZATION-S-CALLBACK <= AND ;
+
+\ Worst case is a maximum canonical endpoint, one query delimiter, literal
+\ field syntax, and three output bytes for every byte in both values.
+HTARGET-URI-CAPACITY
+OAUTH2-CLIENT-CONFIG-CLIENT-ID-CAPACITY 3 * +
+O2CODE-REQUEST-URI-CAPACITY 3 * +
+24 +
+CONSTANT AT-OAUTH-AUTHORIZATION-URL-CAPACITY
+
+\ =====================================================================
+\  Caller-owned sequential operation workspace
+\ =====================================================================
+
+ 0 CONSTANT _ATAUW-RAN
+ 8 CONSTANT _ATAUW-VIEW
+16 CONSTANT _ATAUW-PROFILE
+24 CONSTANT _ATAUW-TRANSACTION
+32 CONSTANT _ATAUW-OUTPUT
+40 CONSTANT _ATAUW-CAPACITY
+48 CONSTANT _ATAUW-NOW
+56 CONSTANT _ATAUW-WRITTEN
+64 CONSTANT _ATAUW-CHILD-OFF
+
+_ATAUW-CHILD-OFF AT-OAUTH-CLIENT-WORKSPACE-SIZE +
+CONSTANT AT-OAUTH-AUTHORIZATION-WORKSPACE-SIZE
+
+: _ATAUW.RAN          ( workspace -- field ) _ATAUW-RAN + ;
+: _ATAUW.VIEW         ( workspace -- field ) _ATAUW-VIEW + ;
+: _ATAUW.PROFILE      ( workspace -- field ) _ATAUW-PROFILE + ;
+: _ATAUW.TRANSACTION  ( workspace -- field ) _ATAUW-TRANSACTION + ;
+: _ATAUW.OUTPUT       ( workspace -- field ) _ATAUW-OUTPUT + ;
+: _ATAUW.CAPACITY     ( workspace -- field ) _ATAUW-CAPACITY + ;
+: _ATAUW.NOW          ( workspace -- field ) _ATAUW-NOW + ;
+: _ATAUW.WRITTEN      ( workspace -- field ) _ATAUW-WRITTEN + ;
+: _ATAUW.CHILD        ( workspace -- child-workspace )
+    _ATAUW-CHILD-OFF + ;
+
+: _ATAU-WIPE  ( workspace -- )
+    AT-OAUTH-AUTHORIZATION-WORKSPACE-SIZE 0 FILL ;
+
+\ =====================================================================
+\  Admission and geometry
+\ =====================================================================
+
+: _ATAU-DROP3  ( three-values -- )
+    2DROP DROP ;
+
+: _ATAU-DROP7  ( seven-values -- )
+    2DROP 2DROP 2DROP DROP ;
+
+: _ATAU-DROP8  ( eight-values -- )
+    2DROP 2DROP 2DROP 2DROP ;
+
+: _ATAU-7DUP
+  \ ( seven-values -- the-same-seven-values twice )
+    6 PICK 6 PICK 6 PICK 6 PICK 6 PICK 6 PICK 6 PICK ;
+
+: _ATAU-RETURN7  ( seven-values status -- status )
+    >R _ATAU-DROP7 R> ;
+
+: _ATAU-CALLER>STATUS  ( caller-status -- status )
+    DUP CALLER-SPAN-S-OK = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-OK EXIT
+    THEN
+    DUP CALLER-SPAN-S-RANGE = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-RANGE EXIT
+    THEN
+    DUP CALLER-SPAN-S-PROTECTED = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-PROTECTED EXIT
+    THEN
+    DUP CALLER-SPAN-S-PLATFORM = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-PLATFORM EXIT
+    THEN
+    DROP AT-OAUTH-AUTHORIZATION-S-PLATFORM ;
+
+: _ATAU-SPAN-STATUS  ( address length -- status )
+    DUP 0< IF
+        2DROP AT-OAUTH-AUTHORIZATION-S-INVALID EXIT
+    THEN
+    DUP 0= IF
+        2DROP AT-OAUTH-AUTHORIZATION-S-OK EXIT
+    THEN
+    OVER 0= IF
+        2DROP AT-OAUTH-AUTHORIZATION-S-INVALID EXIT
+    THEN
+    CALLER-SPAN-STATUS _ATAU-CALLER>STATUS ;
+
+: _ATAU-FIXED-STATUS  ( address size -- status )
+    OVER 0= IF
+        2DROP AT-OAUTH-AUTHORIZATION-S-INVALID EXIT
+    THEN
+    OVER 7 AND IF
+        2DROP AT-OAUTH-AUTHORIZATION-S-INVALID EXIT
+    THEN
+    _ATAU-SPAN-STATUS ;
+
+: AT-OAUTH-AUTHORIZATION-WORKSPACE-CLEAR  ( workspace -- status )
+    DUP AT-OAUTH-AUTHORIZATION-WORKSPACE-SIZE
+    _ATAU-FIXED-STATUS
+    ?DUP IF NIP EXIT THEN
+    _ATAU-WIPE
+    AT-OAUTH-AUTHORIZATION-S-OK ;
+
+: _ATAU-LAUNCH-GEOMETRY
+  ( config profile now transaction destination capacity workspace -- status )
+    DUP AT-OAUTH-AUTHORIZATION-WORKSPACE-SIZE
+    _ATAU-FIXED-STATUS
+    ?DUP IF _ATAU-RETURN7 EXIT THEN
+
+    6 PICK OAUTH2-CLIENT-CONFIG-SIZE _ATAU-FIXED-STATUS
+    ?DUP IF _ATAU-RETURN7 EXIT THEN
+    5 PICK AT-OAUTH-PROFILE-SIZE _ATAU-FIXED-STATUS
+    ?DUP IF _ATAU-RETURN7 EXIT THEN
+    3 PICK O2CODE-TRANSACTION-SIZE _ATAU-FIXED-STATUS
+    ?DUP IF _ATAU-RETURN7 EXIT THEN
+
+    4 PICK 0< IF
+        AT-OAUTH-AUTHORIZATION-S-INVALID
+        _ATAU-RETURN7 EXIT
+    THEN
+    1 PICK DUP 0< IF
+        DROP AT-OAUTH-AUTHORIZATION-S-INVALID
+        _ATAU-RETURN7 EXIT
+    THEN
+    DUP 0= IF
+        DROP AT-OAUTH-AUTHORIZATION-S-CAPACITY
+        _ATAU-RETURN7 EXIT
+    THEN
+    DROP
+    2 PICK 2 PICK
+    _ATAU-SPAN-STATUS
+    ?DUP IF _ATAU-RETURN7 EXIT THEN
+
+    6 PICK OAUTH2-CLIENT-CONFIG-VALID? 0= IF
+        AT-OAUTH-AUTHORIZATION-S-CONFIG
+        _ATAU-RETURN7 EXIT
+    THEN
+    5 PICK AT-OAUTH-PROFILE-READY? 0= IF
+        AT-OAUTH-AUTHORIZATION-S-PROFILE
+        _ATAU-RETURN7 EXIT
+    THEN
+    3 PICK O2CODE-PHASE@
+    DUP O2CODE-S-OK <> IF
+        2DROP
+        AT-OAUTH-AUTHORIZATION-S-TRANSACTION
+        _ATAU-RETURN7 EXIT
+    THEN
+    DROP O2CODE-PHASE-PAR-READY <> IF
+        AT-OAUTH-AUTHORIZATION-S-TRANSACTION
+        _ATAU-RETURN7 EXIT
+    THEN
+
+    6 PICK OAUTH2-CLIENT-CONFIG-SIZE
+    7 PICK AT-OAUTH-PROFILE-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-AUTHORIZATION-S-ALIAS
+        _ATAU-RETURN7 EXIT
+    THEN
+    6 PICK OAUTH2-CLIENT-CONFIG-SIZE
+    5 PICK O2CODE-TRANSACTION-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-AUTHORIZATION-S-ALIAS
+        _ATAU-RETURN7 EXIT
+    THEN
+    6 PICK OAUTH2-CLIENT-CONFIG-SIZE
+    4 PICK 4 PICK
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-AUTHORIZATION-S-ALIAS
+        _ATAU-RETURN7 EXIT
+    THEN
+    6 PICK OAUTH2-CLIENT-CONFIG-SIZE
+    2 PICK AT-OAUTH-AUTHORIZATION-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-AUTHORIZATION-S-ALIAS
+        _ATAU-RETURN7 EXIT
+    THEN
+
+    5 PICK AT-OAUTH-PROFILE-SIZE
+    5 PICK O2CODE-TRANSACTION-SIZE MSPAN-OVERLAP? IF
+        AT-OAUTH-AUTHORIZATION-S-ALIAS
+        _ATAU-RETURN7 EXIT
+    THEN
+    5 PICK AT-OAUTH-PROFILE-SIZE
+    4 PICK 4 PICK
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-AUTHORIZATION-S-ALIAS
+        _ATAU-RETURN7 EXIT
+    THEN
+    5 PICK AT-OAUTH-PROFILE-SIZE
+    2 PICK AT-OAUTH-AUTHORIZATION-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-AUTHORIZATION-S-ALIAS
+        _ATAU-RETURN7 EXIT
+    THEN
+
+    3 PICK O2CODE-TRANSACTION-SIZE
+    4 PICK 4 PICK
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-AUTHORIZATION-S-ALIAS
+        _ATAU-RETURN7 EXIT
+    THEN
+    3 PICK O2CODE-TRANSACTION-SIZE
+    2 PICK AT-OAUTH-AUTHORIZATION-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-AUTHORIZATION-S-ALIAS
+        _ATAU-RETURN7 EXIT
+    THEN
+    2 PICK 2 PICK
+    2 PICK AT-OAUTH-AUTHORIZATION-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        AT-OAUTH-AUTHORIZATION-S-ALIAS
+        _ATAU-RETURN7 EXIT
+    THEN
+
+    AT-OAUTH-AUTHORIZATION-S-OK _ATAU-RETURN7 ;
+
+\ =====================================================================
+\  Subordinate status mapping
+\ =====================================================================
+
+: _ATAU-CLIENT>STATUS  ( client-status -- status )
+    DUP AT-OAUTH-CLIENT-S-OK = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-OK EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-ALIAS = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-ALIAS EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-PROFILE = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-PROFILE EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-RANGE = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-RANGE EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-PROTECTED = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-PROTECTED EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-PLATFORM = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-PLATFORM EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-S-INTERNAL = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-INTERNAL EXIT
+    THEN
+    DUP AT-OAUTH-CLIENT-STATUS-VALID? IF
+        DROP AT-OAUTH-AUTHORIZATION-S-CONFIG EXIT
+    THEN
+    DROP AT-OAUTH-AUTHORIZATION-S-INTERNAL ;
+
+: _ATAU-CONFIG>STATUS  ( config-status -- status )
+    DUP OAUTH2-CLIENT-CONFIG-S-RANGE = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-RANGE EXIT
+    THEN
+    DUP OAUTH2-CLIENT-CONFIG-S-PROTECTED = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-PROTECTED EXIT
+    THEN
+    DUP OAUTH2-CLIENT-CONFIG-S-PLATFORM = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-PLATFORM EXIT
+    THEN
+    DUP OAUTH2-CLIENT-CONFIG-S-CALLBACK = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-CALLBACK EXIT
+    THEN
+    DUP OAUTH2-CLIENT-CONFIG-STATUS-VALID? IF
+        DROP AT-OAUTH-AUTHORIZATION-S-CONFIG EXIT
+    THEN
+    DROP AT-OAUTH-AUTHORIZATION-S-INTERNAL ;
+
+: _ATAU-O2CODE>STATUS  ( o2code-status -- status )
+    DUP O2CODE-S-OK = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-OK EXIT
+    THEN
+    DUP O2CODE-S-CAPACITY = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-CAPACITY EXIT
+    THEN
+    DUP O2CODE-S-ALIAS = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-ALIAS EXIT
+    THEN
+    DUP O2CODE-S-EXPIRED = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-EXPIRED EXIT
+    THEN
+    DUP O2CODE-S-CALLBACK = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-CALLBACK EXIT
+    THEN
+    DUP O2CODE-S-RANGE = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-RANGE EXIT
+    THEN
+    DUP O2CODE-S-PROTECTED = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-PROTECTED EXIT
+    THEN
+    DUP O2CODE-S-PLATFORM = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-PLATFORM EXIT
+    THEN
+    DUP O2CODE-S-PHASE =
+    OVER O2CODE-S-BUSY = OR
+    OVER O2CODE-S-INVALID = OR IF
+        DROP AT-OAUTH-AUTHORIZATION-S-TRANSACTION EXIT
+    THEN
+    DROP AT-OAUTH-AUTHORIZATION-S-INTERNAL ;
+
+: _ATAU-FORM>STATUS  ( form-status -- status )
+    DUP FORM-URLENCODED-S-OK = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-OK EXIT
+    THEN
+    DUP FORM-URLENCODED-S-CAPACITY = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-CAPACITY EXIT
+    THEN
+    DUP FORM-URLENCODED-S-ALIAS = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-ALIAS EXIT
+    THEN
+    DUP FORM-URLENCODED-S-RANGE = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-RANGE EXIT
+    THEN
+    DUP FORM-URLENCODED-S-PROTECTED = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-PROTECTED EXIT
+    THEN
+    DUP FORM-URLENCODED-S-PLATFORM = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-PLATFORM EXIT
+    THEN
+    DUP FORM-URLENCODED-S-ENCODING = IF
+        DROP AT-OAUTH-AUTHORIZATION-S-ENCODING EXIT
+    THEN
+    DROP AT-OAUTH-AUTHORIZATION-S-INTERNAL ;
+
+\ =====================================================================
+\  Exact authorization URI construction
+\ =====================================================================
+
+: _ATAU-OUTPUT-WIPE  ( workspace -- )
+    DUP _ATAUW.OUTPUT @
+    SWAP _ATAUW.CAPACITY @ 0 FILL ;
+
+: _ATAU-ROOM?  ( contribution-u workspace -- flag )
+    >R
+    DUP R@ _ATAUW.CAPACITY @
+    R@ _ATAUW.WRITTEN @ - U>
+    0=
+    SWAP DROP
+    R> DROP ;
+
+: _ATAU-TEXT,
+  ( source source-u workspace -- status )
+    >R
+    DUP R@ _ATAU-ROOM? 0= IF
+        2DROP R> DROP
+        AT-OAUTH-AUTHORIZATION-S-CAPACITY EXIT
+    THEN
+    2DUP
+    R@ _ATAUW.OUTPUT @ R@ _ATAUW.WRITTEN @ +
+    SWAP MOVE
+    NIP R@ _ATAUW.WRITTEN +!
+    R> DROP
+    AT-OAUTH-AUTHORIZATION-S-OK ;
+
+: _ATAU-BYTE,  ( byte workspace -- status )
+    >R
+    1 R@ _ATAU-ROOM? 0= IF
+        DROP R> DROP
+        AT-OAUTH-AUTHORIZATION-S-CAPACITY EXIT
+    THEN
+    R@ _ATAUW.OUTPUT @ R@ _ATAUW.WRITTEN @ + C!
+    1 R@ _ATAUW.WRITTEN +!
+    R> DROP
+    AT-OAUTH-AUTHORIZATION-S-OK ;
+
+: _ATAU-ENCODE,  ( source source-u workspace -- status )
+    >R
+    R@ _ATAUW.OUTPUT @ R@ _ATAUW.WRITTEN @ +
+    R@ _ATAUW.CAPACITY @
+    R@ _ATAUW.WRITTEN @ -
+    FORM-URLENCODED-ENCODE
+    DUP FORM-URLENCODED-S-OK <> IF
+        _ATAU-FORM>STATUS >R
+        DROP
+        R> R> DROP EXIT
+    THEN
+    DROP
+    R@ _ATAUW.WRITTEN +!
+    R> DROP
+    AT-OAUTH-AUTHORIZATION-S-OK ;
+
+: _ATAU-HAS-QUERY?  ( address length -- flag )
+    BEGIN DUP WHILE
+        OVER C@ [CHAR] ? = IF
+            2DROP -1 EXIT
+        THEN
+        1 /STRING
+    REPEAT
+    2DROP 0 ;
+
+: _ATAU-QUERY-SEPARATOR,
+  ( endpoint-a endpoint-u workspace -- status )
+    >R
+    2DUP _ATAU-HAS-QUERY? 0= IF
+        2DROP [CHAR] ? R> _ATAU-BYTE, EXIT
+    THEN
+    DUP 0= IF
+        2DROP R> DROP
+        AT-OAUTH-AUTHORIZATION-S-INTERNAL EXIT
+    THEN
+    2DUP + 1- C@
+    DUP [CHAR] ? = SWAP [CHAR] & = OR IF
+        2DROP R> DROP
+        AT-OAUTH-AUTHORIZATION-S-OK EXIT
+    THEN
+    2DROP [CHAR] & R> _ATAU-BYTE, ;
+
+: _ATAU-BUILD-URL
+  ( request-uri request-uri-u workspace -- status )
+    >R
+    R@ _ATAUW.PROFILE @
+    AT-OAUTH-PROFILE-AUTHORIZATION-TARGET@
+    DUP AT-OAUTH-PROFILE-S-OK <> IF
+        2DROP 2DROP
+        R> DROP
+        AT-OAUTH-AUTHORIZATION-S-INTERNAL EXIT
+    THEN
+    DROP
+    HTARGET-URI$
+
+    2DUP R@ _ATAU-TEXT,
+    ?DUP IF
+        >R 2DROP 2DROP R> R> DROP EXIT
+    THEN
+    2DUP R@ _ATAU-QUERY-SEPARATOR,
+    ?DUP IF
+        >R 2DROP 2DROP R> R> DROP EXIT
+    THEN
+    2DROP
+
+    S" client_id=" R@ _ATAU-TEXT,
+    ?DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN
+    R@ _ATAUW.VIEW @ OAUTH2-CLIENT-VIEW-CLIENT-ID@
+    R@ _ATAU-ENCODE,
+    ?DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN
+
+    S" &request_uri=" R@ _ATAU-TEXT,
+    ?DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN
+    R@ _ATAU-ENCODE,
+    R> DROP ;
+
+\ =====================================================================
+\  Provenance-bound one-shot launch
+\ =====================================================================
+
+: _ATAU-BINDING-MATCH?
+  ( binding binding-u workspace -- flag )
+    _ATAUW.VIEW @ OAUTH2-CLIENT-VIEW-BINDING@
+    COMPARE 0= ;
+
+: _ATAU-ISSUER-STATUS
+  ( issuer issuer-u workspace -- status )
+    >R
+    R@ _ATAUW.PROFILE @ AT-OAUTH-PROFILE-ISSUER@
+    DUP AT-OAUTH-PROFILE-S-OK <> IF
+        _ATAU-DROP3
+        2DROP R> DROP
+        AT-OAUTH-AUTHORIZATION-S-INTERNAL EXIT
+    THEN
+    DROP
+    COMPARE 0= IF
+        R> DROP AT-OAUTH-AUTHORIZATION-S-OK
+    ELSE
+        R> DROP AT-OAUTH-AUTHORIZATION-S-ISSUER
+    THEN ;
+
+: _ATAU-LAUNCH-RETURN
+  \ ( workspace binding binding-u issuer issuer-u issuer-required
+  \   request-uri request-uri-u status -- status )
+    >R _ATAU-DROP8 R> ;
+
+: _ATAU-LAUNCH-CALLBACK
+  \ ( workspace binding binding-u issuer issuer-u issuer-required
+  \   request-uri request-uri-u -- status )
+    7 PICK >R
+    -1 R@ _ATAUW.RAN !
+    R@ _ATAU-OUTPUT-WIPE
+    0 R@ _ATAUW.WRITTEN !
+
+    2 PICK O2CODE-ISSUER-REQUIRED <> IF
+        AT-OAUTH-AUTHORIZATION-S-ISSUER
+        R> DROP _ATAU-LAUNCH-RETURN EXIT
+    THEN
+    6 PICK 6 PICK R@ _ATAU-BINDING-MATCH? 0= IF
+        AT-OAUTH-AUTHORIZATION-S-BINDING
+        R> DROP _ATAU-LAUNCH-RETURN EXIT
+    THEN
+    4 PICK 4 PICK R@ _ATAU-ISSUER-STATUS
+    ?DUP IF
+        R> DROP _ATAU-LAUNCH-RETURN EXIT
+    THEN
+    1 PICK 1 PICK R@ _ATAU-BUILD-URL
+    DUP IF
+        R@ _ATAU-OUTPUT-WIPE
+        0 R@ _ATAUW.WRITTEN !
+    THEN
+    R> DROP _ATAU-LAUNCH-RETURN ;
+
+: _ATAU-CONFIG-CALLBACK  ( view workspace -- status )
+    DUP >R
+    OVER R@ _ATAUW.VIEW !
+    OVER
+    R@ _ATAUW.PROFILE @
+    R@ _ATAUW.CHILD
+    AT-OAUTH-CLIENT-VIEW-ADMIT
+    ?DUP IF
+        _ATAU-CLIENT>STATUS >R
+        2DROP R> R> DROP EXIT
+    THEN
+
+    0 R@ _ATAUW.RAN !
+    ['] _ATAU-LAUNCH-CALLBACK
+    R@
+    R@ _ATAUW.NOW @
+    R@ _ATAUW.TRANSACTION @
+    O2CODE-WITH-LAUNCH
+
+    R@ _ATAUW.RAN @ IF
+        DUP O2CODE-S-CALLBACK = IF
+            DROP
+            R@ _ATAU-OUTPUT-WIPE
+            0 R@ _ATAUW.WRITTEN !
+            AT-OAUTH-AUTHORIZATION-S-CALLBACK
+        ELSE
+            DUP AT-OAUTH-AUTHORIZATION-STATUS-VALID? 0= IF
+                DROP AT-OAUTH-AUTHORIZATION-S-INTERNAL
+            THEN
+        THEN
+    ELSE
+        _ATAU-O2CODE>STATUS
+    THEN
+    >R 2DROP R> R> DROP ;
+
+: _ATAU-LAUNCH-OP
+  \ ( config profile now transaction destination capacity workspace
+  \   -- written status )
+    DUP >R
+    R@ _ATAU-WIPE
+    5 PICK R@ _ATAUW.PROFILE !
+    4 PICK R@ _ATAUW.NOW !
+    3 PICK R@ _ATAUW.TRANSACTION !
+    2 PICK R@ _ATAUW.OUTPUT !
+    1 PICK R@ _ATAUW.CAPACITY !
+    0 R@ _ATAUW.WRITTEN !
+
+    6 PICK ['] _ATAU-CONFIG-CALLBACK R@
+    OAUTH2-CLIENT-CONFIG-WITH
+    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
+        DUP OAUTH2-CLIENT-CONFIG-S-CALLBACK =
+        R@ _ATAUW.RAN @ AND IF
+            R@ _ATAU-OUTPUT-WIPE
+            0 R@ _ATAUW.WRITTEN !
+        THEN
+        _ATAU-CONFIG>STATUS
+        >R DROP R>
+    ELSE
+        DROP
+        DUP AT-OAUTH-AUTHORIZATION-STATUS-VALID? 0= IF
+            DROP AT-OAUTH-AUTHORIZATION-S-INTERNAL
+        THEN
+    THEN
+
+    DUP IF
+        >R 0
+    ELSE
+        DROP
+        R@ _ATAUW.WRITTEN @
+        AT-OAUTH-AUTHORIZATION-S-OK >R
+    THEN
+
+    R> R>
+    DUP _ATAU-WIPE
+    DROP
+    2>R _ATAU-DROP7 2R> ;
+
+: _ATAU-LAUNCH-CALL
+  ( seven-values operation-xt -- written status )
+    1 PICK >R
+    CATCH
+    DUP IF
+        DROP
+        2 PICK 2 PICK 0 FILL
+        DUP _ATAU-WIPE
+        _ATAU-DROP7
+        R> DROP
+        0 AT-OAUTH-AUTHORIZATION-S-INTERNAL EXIT
+    THEN
+    DROP
+    R> DROP ;
+
+: AT-OAUTH-AUTHORIZATION-LAUNCH
+  \ ( config profile now transaction destination capacity workspace
+  \   -- written status )
+    _ATAU-7DUP _ATAU-LAUNCH-GEOMETRY
+    ?DUP IF
+        >R _ATAU-DROP7 0 R> EXIT
+    THEN
+    ['] _ATAU-LAUNCH-OP _ATAU-LAUNCH-CALL ;
+
+\ =====================================================================
+\  Compile-time geometry assertions
+\ =====================================================================
+
+: _ATAU-GEOMETRY-ABORT  ( -- )
+    ." AT OAuth authorization geometry mismatch" CR ABORT ;
+
+1 CELLS 8 <> [IF]
+    _ATAU-GEOMETRY-ABORT
+[THEN]
+
+AT-OAUTH-AUTHORIZATION-URL-CAPACITY 19480 <> [IF]
+    _ATAU-GEOMETRY-ABORT
+[THEN]
+
+_ATAUW-CHILD-OFF 7 AND [IF]
+    _ATAU-GEOMETRY-ABORT
+[THEN]
+
+_ATAUW-CHILD-OFF AT-OAUTH-CLIENT-WORKSPACE-SIZE +
+AT-OAUTH-AUTHORIZATION-WORKSPACE-SIZE <> [IF]
+    _ATAU-GEOMETRY-ABORT
+[THEN]
+
+AT-OAUTH-AUTHORIZATION-WORKSPACE-SIZE 496 <> [IF]
+    _ATAU-GEOMETRY-ABORT
+[THEN]

@@ -274,6 +274,9 @@ After transport completion, callers use `AT-OAUTH-PAR-ACCEPT` exactly as
 documented by [AT Protocol OAuth pushed authorization
 requests](oauth-par.md). They copy the returned nonce into their explicit
 authorization-server nonce owner, checkpoint the `PAR-READY` transaction, and
-continue through browser launch and redirect acceptance. The next SR4
-boundary composes that authorization response and then the DPoP-aware token
-request; this module deliberately stops at the sealed public PAR request.
+continue through the exact browser URI, strict redirect callback, and guarded
+grant loan documented by
+[AT Protocol OAuth browser authorization](oauth-authorization.md). That
+continuation is now composed, while this module itself still stops at the
+sealed public PAR request. The next SR4 boundary is the DPoP-aware token
+request and explicit authorization-server nonce owner.
