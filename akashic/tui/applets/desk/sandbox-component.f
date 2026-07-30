@@ -648,6 +648,21 @@ REQUIRE ../../../utils/memory-span.f
     DUP SBOX-VM-RUN-COMPLETE >=
     SWAP SBOX-VM-RUN-CANCELLED <= AND ;
 
+\ These private accessors require a successful result proof, either directly
+\ or nested in a just-completed receipt proof, with no intervening mutation,
+\ callback, or yield.
+: _DSR-GENERATION-VALIDATED@  ( result -- generation )
+    _DSR.GENERATION @ ;
+
+: _DSR-RUN-STATE-VALIDATED@  ( result -- run-state )
+    _DSR.RUN-STATE @ ;
+
+: _DSR-PAYLOAD-VALIDATED@
+  ( result -- payload payload-u flag )
+    DUP _DSR.PAYLOAD @
+    SWAP _DSR.PAYLOAD-U @
+    -1 ;
+
 : DESK-SBOX-RESULT-VALID?  ( result -- flag )
     DUP _DSR-FIXED? 0= IF DROP 0 EXIT THEN
     DUP _DSR.MAGIC @ _DSR-MAGIC <> IF DROP 0 EXIT THEN
@@ -656,27 +671,26 @@ REQUIRE ../../../utils/memory-span.f
     DUP _DSR.RUN-STATE @ _DSC-TERMINAL? 0= IF DROP 0 EXIT THEN
     DUP _DSR.PAYLOAD @ DUP 0= IF 2DROP 0 EXIT THEN
     DUP SBOX-VM-RESULT-VALID? 0= IF 2DROP 0 EXIT THEN
-    SBOX-VM-RESULT-TOTAL@
+    _SVM-RESULT-TOTAL-VALIDATED@
     OVER _DSR.PAYLOAD-U @ =
     OVER _DSR.PAYLOAD-U @ 2 PICK _DSR.PAYLOAD-CAP @ = AND
     SWAP _DSR.RESERVED @ 0= AND ;
 
 : DESK-SBOX-RESULT-GENERATION@  ( result -- generation|0 )
     DUP DESK-SBOX-RESULT-VALID?
-    IF _DSR.GENERATION @ ELSE DROP 0 THEN ;
+    IF _DSR-GENERATION-VALIDATED@ ELSE DROP 0 THEN ;
 
 : DESK-SBOX-RESULT-RUN-STATE@  ( result -- run-state )
     DUP DESK-SBOX-RESULT-VALID?
-    IF _DSR.RUN-STATE @ ELSE DROP SBOX-VM-RUN-INVALID THEN ;
+    IF _DSR-RUN-STATE-VALIDATED@
+    ELSE DROP SBOX-VM-RUN-INVALID THEN ;
 
 : DESK-SBOX-RESULT-PAYLOAD@
   ( result -- payload payload-u flag )
     DUP DESK-SBOX-RESULT-VALID? 0= IF
         DROP 0 0 0 EXIT
     THEN
-    DUP _DSR.PAYLOAD @
-    SWAP _DSR.PAYLOAD-U @
-    -1 ;
+    _DSR-PAYLOAD-VALIDATED@ ;
 
 : _DSC-SCRUB-FREE  ( address length -- )
     OVER 0= IF 2DROP EXIT THEN
@@ -702,6 +716,22 @@ REQUIRE ../../../utils/memory-span.f
     R> DROP
     DESK-SBOX-S-OK ;
 
+: _DSC-TAKE-SPAN-VALIDATED
+  ( address length component -- status )
+    >R
+    2DUP R@ _DSC-EXTERNAL-SPAN? 0= IF
+        2DROP R> DROP DESK-SBOX-S-ALIAS EXIT
+    THEN
+    2DUP R@ _DSC.HOST
+        _SHOST-SPAN-DISJOINT-VALIDATED? 0= IF
+        2DROP R> DROP DESK-SBOX-S-ALIAS EXIT
+    THEN
+    R@ _DSC.HOST _SHOST-RUN-STATE-VALIDATED
+        _DSC-TERMINAL? 0= IF
+        2DROP R> DROP DESK-SBOX-S-STATE EXIT
+    THEN
+    2DROP R> DROP DESK-SBOX-S-OK ;
+
 : _DSC-TAKE-SPAN-STATUS
   ( address length generation component -- status )
     >R
@@ -710,18 +740,7 @@ REQUIRE ../../../utils/memory-span.f
         >R 2DROP DROP R> R> DROP EXIT
     THEN
     DROP
-    2 PICK 2 PICK R@ _DSC-EXTERNAL-SPAN? 0= IF
-        2DROP DROP R> DROP DESK-SBOX-S-ALIAS EXIT
-    THEN
-    2 PICK 2 PICK R@ _DSC.HOST
-        _SHOST-SPAN-DISJOINT-VALIDATED? 0= IF
-        2DROP DROP R> DROP DESK-SBOX-S-ALIAS EXIT
-    THEN
-    R@ _DSC.HOST _SHOST-RUN-STATE-VALIDATED
-        _DSC-TERMINAL? 0= IF
-        2DROP DROP R> DROP DESK-SBOX-S-STATE EXIT
-    THEN
-    2DROP DROP R> DROP DESK-SBOX-S-OK ;
+    DROP R> _DSC-TAKE-SPAN-VALIDATED ;
 
 : _DSC-TAKE-BOUNDARY
   ( result generation component -- same status )

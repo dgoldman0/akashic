@@ -127,6 +127,48 @@ def test_successful_finish_does_not_rescrub_proven_zero_allocations() -> None:
     assert host.count("_SHOST-CLEANUP-FINISHED") == 2
 
 
+def test_vm_total_accessor_reuses_its_complete_envelope_validation() -> None:
+    vm = (AKASHIC_ROOT / VM).read_text(encoding="utf-8")
+    private = vm.split(
+        ": _SVM-RESULT-TOTAL-VALIDATED@", 1
+    )[1].split(": SBOX-VM-RESULT-TOTAL@", 1)[0]
+    public = vm.split(": SBOX-VM-RESULT-TOTAL@", 1)[1].split(
+        ": SBOX-VM-RESULT-CLASS@", 1
+    )[0]
+
+    assert "_SVT.TOTAL @" in private
+    assert "SBOX-VM-RESULT-VALID?" not in private
+    assert "SBOX-VM-RESULT-VALID?" in public
+    assert "_SVM-RESULT-TOTAL-VALIDATED@" in public
+
+
+def test_finish_reuses_validated_measure_and_host_span_proofs() -> None:
+    host = (AKASHIC_ROOT / HOST).read_text(encoding="utf-8")
+    vm = (AKASHIC_ROOT / VM).read_text(encoding="utf-8")
+    host_finish = host.split(": SBOX-HOST-FINISH", 1)[1].split(
+        ": SBOX-HOST-CONTEXT-IDENTITY@", 1
+    )[0]
+    vm_measure = vm.split(
+        ": SBOX-VM-RESULT-MEASURE", 1
+    )[1].split(": _SVM-STAGE-RESULT", 1)[0]
+    vm_finish = vm.split(": SBOX-VM-FINISH", 1)[1].split(
+        ": _SVM-RELEASE-FINISHED-VALIDATED", 1
+    )[0]
+
+    assert "SBOX-HOST-VALID?" in host_finish
+    assert "_SHOST-SPAN-DISJOINT-VALIDATED?" in host_finish
+    assert "_SHOST-RESULT-DISJOINT?" not in host_finish
+    assert "SBOX-VM-INSTANCE-VALID?" in vm_measure
+    assert "_SVM-RESULT-MEASURE-VALIDATED" in vm_measure
+    assert "_SVM-RESULT-MEASURE-VALIDATED" in vm_finish
+    assert "SBOX-VM-RESULT-MEASURE" not in vm_finish
+    stage_failure = vm_finish.split(
+        "_SVM-STAGE-RESULT", 1
+    )[1].split("THEN", 1)[0]
+    assert ">R 2DROP DROP R> R> DROP EXIT" in stage_failure
+    assert ">R DROP 2DROP DROP" not in stage_failure
+
+
 def test_production_signature_parser_consumes_the_value_once() -> None:
     compiler = (AKASHIC_ROOT / "sandbox/compiler.f").read_text(
         encoding="utf-8"

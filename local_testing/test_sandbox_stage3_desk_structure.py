@@ -62,6 +62,16 @@ def _source(path: Path) -> str:
     return (AKASHIC_ROOT / path).read_text(encoding="utf-8")
 
 
+def _definition(source: str, word: str) -> str:
+    match = re.search(
+        rf"^:\s+{re.escape(word)}(?:\s|$).*?;\s*$",
+        source,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None, word
+    return match.group(0)
+
+
 def test_desk_reaches_the_headless_component_through_the_job_service() -> None:
     markers = dependency_markers(_source(DESK), DESK.as_posix())
 
@@ -110,6 +120,9 @@ def test_component_is_caller_owned_and_publishes_the_lifecycle_api() -> None:
 
 def test_take_checks_the_complete_destination_against_the_live_host() -> None:
     source = _source(COMPONENT)
+    validated = source.split(
+        ": _DSC-TAKE-SPAN-VALIDATED", 1
+    )[1].split(": _DSC-TAKE-SPAN-STATUS", 1)[0]
     helper = source.split(": _DSC-TAKE-SPAN-STATUS", 1)[1].split(
         ": _DSC-TAKE-BOUNDARY", 1
     )[0]
@@ -125,14 +138,30 @@ def test_take_checks_the_complete_destination_against_the_live_host() -> None:
     )[0]
 
     assert "_DSC-HANDLE-STATUS" in helper
-    assert "_DSC-EXTERNAL-SPAN?" in helper
-    assert "_SHOST-SPAN-DISJOINT-VALIDATED?" in helper
-    assert "_SHOST-RUN-STATE-VALIDATED" in helper
+    assert "_DSC-TAKE-SPAN-VALIDATED" in helper
+    assert "_DSC-HANDLE-STATUS" not in validated
+    assert "_DSC-EXTERNAL-SPAN?" in validated
+    assert "_SHOST-SPAN-DISJOINT-VALIDATED?" in validated
+    assert "_SHOST-RUN-STATE-VALIDATED" in validated
     assert "DESK-SBOX-RESULT-SIZE" in boundary
     assert "_DSC-TAKE-SPAN-STATUS" in boundary
     assert "_SHOST-RUN-STATE-VALIDATED" in commit
     assert "_DSC-TAKE-BOUNDARY" in public
     assert "_DSC-RESULT-TAKE-PRECHECKED" in public
+
+
+def test_detached_result_accessors_reuse_one_nested_envelope_proof() -> None:
+    source = _source(COMPONENT)
+    valid = _definition(source, "DESK-SBOX-RESULT-VALID?")
+    generation = _definition(source, "DESK-SBOX-RESULT-GENERATION@")
+    run_state = _definition(source, "DESK-SBOX-RESULT-RUN-STATE@")
+    payload = _definition(source, "DESK-SBOX-RESULT-PAYLOAD@")
+
+    assert valid.count("SBOX-VM-RESULT-VALID?") == 1
+    assert "_SVM-RESULT-TOTAL-VALIDATED@" in valid
+    assert "_DSR-GENERATION-VALIDATED@" in generation
+    assert "_DSR-RUN-STATE-VALIDATED@" in run_state
+    assert "_DSR-PAYLOAD-VALIDATED@" in payload
 
 
 def test_close_publishes_admission_barrier_before_host_cancellation() -> None:

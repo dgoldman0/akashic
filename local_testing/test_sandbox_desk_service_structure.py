@@ -254,9 +254,9 @@ def test_result_and_shutdown_paths_end_borrows_before_reuse() -> None:
         "_DSA-RESULT-TAKE-PRECHECKED"
     )
     assert take.index("_DSA-RECEIPT-BOUNDARY") < take.index(
-        "_DSA-RESULT-SPAN-STATUS"
+        "_DSA-RESULT-SPAN-VALIDATED-STATUS"
     )
-    assert take.index("_DSA-RESULT-SPAN-STATUS") < take.index(
+    assert take.index("_DSA-RESULT-SPAN-VALIDATED-STATUS") < take.index(
         "_DSA-RESULT-TAKE-PRECHECKED"
     )
     assert "_DSJTAKE-STATUS" not in source

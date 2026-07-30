@@ -357,8 +357,13 @@ PROVIDED akashic-sbx-vm
     DUP _SVT.RESERVED0 @
     SWAP _SVT.RESERVED1 @ OR 0= ;
 
+\ The caller has just validated the complete sealed result envelope.
+: _SVM-RESULT-TOTAL-VALIDATED@  ( result -- total )
+    _SVT.TOTAL @ ;
+
 : SBOX-VM-RESULT-TOTAL@  ( result -- total|0 )
-    DUP SBOX-VM-RESULT-VALID? IF _SVT.TOTAL @ ELSE DROP 0 THEN ;
+    DUP SBOX-VM-RESULT-VALID?
+    IF _SVM-RESULT-TOTAL-VALIDATED@ ELSE DROP 0 THEN ;
 
 : SBOX-VM-RESULT-CLASS@  ( result -- class|-1 )
     DUP SBOX-VM-RESULT-VALID? IF _SVT.CLASS @ ELSE DROP -1 THEN ;
@@ -3837,10 +3842,10 @@ PROVIDED akashic-sbx-vm
     DROP 2DROP DROP -1
     R> DROP ;
 
-: SBOX-VM-RESULT-MEASURE  ( instance -- result-u|0 status )
-    DUP SBOX-VM-INSTANCE-VALID? 0= IF
-        DROP 0 SBOX-VM-S-INVALID EXIT
-    THEN
+\ The caller has just validated the complete instance graph.  Measurement may
+\ still convert an incoherent typed return into a deterministic terminal
+\ failure, but it does not yield or substitute the instance.
+: _SVM-RESULT-MEASURE-VALIDATED  ( instance -- result-u|0 status )
     DUP _SVI.ENTRY-SIGNATURE @
         SBOX-ABI-SIGNATURE-VALUE-TO-VALUE <> IF
         DROP 0 SBOX-VM-S-STATE EXIT
@@ -3866,6 +3871,12 @@ PROVIDED akashic-sbx-vm
         THEN
     THEN
     DROP SBOX-VM-RESULT-HEADER-SIZE SBOX-VM-S-OK ;
+
+: SBOX-VM-RESULT-MEASURE  ( instance -- result-u|0 status )
+    DUP SBOX-VM-INSTANCE-VALID? 0= IF
+        DROP 0 SBOX-VM-S-INVALID EXIT
+    THEN
+    _SVM-RESULT-MEASURE-VALIDATED ;
 
 \ Stage a complete native envelope with a deliberately zero magic cell.
 \ The caller-provided capacity is scrubbed in full, while TOTAL records only
@@ -4062,7 +4073,7 @@ PROVIDED akashic-sbx-vm
         2DROP R> DROP SBOX-VM-S-ALIAS EXIT
     THEN
 
-    R@ SBOX-VM-RESULT-MEASURE
+    R@ _SVM-RESULT-MEASURE-VALIDATED
     DUP IF
         >R DROP 2DROP R> R> DROP EXIT
     THEN
@@ -4077,7 +4088,7 @@ PROVIDED akashic-sbx-vm
 
     2 PICK 2 PICK 2 PICK R@ _SVM-STAGE-RESULT
     DUP IF
-        >R DROP 2DROP DROP R> R> DROP EXIT
+        >R 2DROP DROP R> R> DROP EXIT
     THEN
     DROP
     DROP

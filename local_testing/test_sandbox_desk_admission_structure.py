@@ -148,12 +148,30 @@ def test_receipt_copies_exact_correlation_before_publication() -> None:
     assert commit.index("_DSART-COPY-METADATA") < commit.index("_DSRC-MAGIC")
 
 
+def test_receipt_accessors_reuse_the_validated_nested_result() -> None:
+    source = _source()
+    valid = _definition(source, "DESK-SBOX-RECEIPT-VALID?")
+    payload = _definition(source, "DESK-SBOX-RECEIPT-PAYLOAD@")
+
+    assert valid.count("DESK-SBOX-RESULT-VALID?") == 1
+    assert "DESK-SBOX-RESULT-GENERATION@" not in valid
+    assert "DESK-SBOX-RESULT-RUN-STATE@" not in valid
+    assert "_DSR-GENERATION-VALIDATED@" in valid
+    assert "_DSR-RUN-STATE-VALIDATED@" in valid
+    assert "DESK-SBOX-RESULT-PAYLOAD@" not in payload
+    assert "_DSR-PAYLOAD-VALIDATED@" in payload
+
+
 def test_receipt_preflight_covers_the_whole_live_invocation_graph() -> None:
     source = _source()
     active = _definition(source, "_DSA-ACTIVE-SHAPE?")
     receipt = _definition(source, "_DSA-RECEIPT-BOUNDARY")
     boundary = _definition(source, "_DSART-BOUNDARY")
     span = _definition(source, "_DSA-RESULT-SPAN-STATUS")
+    validated_span = _definition(
+        source,
+        "_DSA-RESULT-SPAN-VALIDATED-STATUS",
+    )
 
     assert active.count("DESK-SBOX-COMPONENT-VALID?") == 1
     assert "DESK-SBOX-COMPONENT-STATE@" not in active
@@ -163,6 +181,8 @@ def test_receipt_preflight_covers_the_whole_live_invocation_graph() -> None:
     assert "_DSART-ADMISSION 8 MSPAN-OVERLAP?" in receipt
     assert "DESK-SBOX-RECEIPT-SIZE" in span
     assert "_DSC-TAKE-SPAN-STATUS" in span
+    assert "DESK-SBOX-RECEIPT-SIZE" in validated_span
+    assert "_DSC-TAKE-SPAN-VALIDATED" in validated_span
     assert boundary.index("_DSA-EXTERNAL-SPAN?") < boundary.index(
         "_DSA-RESULT-SPAN-STATUS"
     )
