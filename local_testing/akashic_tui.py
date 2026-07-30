@@ -201,6 +201,13 @@ FORTH_CONDITIONAL_TOKENS = frozenset(("[IF]", "[ELSE]", "[THEN]"))
 # transfers.  This bounds source prescan/evaluation work and leaves room for
 # profile growth without changing the generated chunk topology on every edit.
 LINK_CHUNK_BYTES = 120 * 1024
+MEGAPAD_EVALUATE_SOURCE_MAX_BYTES = 255
+FORTH_LINE_COALESCE_BARRIERS = frozenset(
+    ("(", 'S"', 'C"', '."', 'ABORT"', ".(", "[IF]", "[ELSE]", "[THEN]")
+)
+FORTH_SPLIT_STACK_EFFECT_RE = re.compile(
+    r"^\( [^()\r\n]*--[^()\r\n]*\) *$"
+)
 CODEX_AUTH_CHECKPOINT_FORMAT = "akashic-local-codex-auth-checkpoint"
 
 
@@ -262,6 +269,10 @@ class Profile:
     include_large_sample: bool = True
     total_sectors: int = 4096
     link_chunk_bytes: int = LINK_CHUNK_BYTES
+    # Physical-line joining is safe only for a source closure audited for
+    # line-sensitive custom parsing words.  It is never a default transform.
+    audited_link_line_bytes: int | None = None
+    audited_initial_forth_line_bytes: int | None = None
 
 
 # Akashic modules that bind directly to the networking surface exported by
@@ -22087,6 +22098,63 @@ REQUIRE tui/applets/desk/sandbox-service.f
 )
 
 
+def _sandbox_stage4_desk_service_fixture_bytes() -> bytes:
+    source = (
+        AKASHIC_ROOT / "local_testing" /
+        "sandbox-stage4-desk-service.f"
+    ).read_text(encoding="utf-8")
+    lines: list[str] = []
+    for source_line in source.splitlines():
+        line = source_line.lstrip(" ")
+        if not line or line.startswith("\\"):
+            continue
+        match = COLON_STACK_EFFECT_RE.match(source_line)
+        if match:
+            suffix = source_line[match.end() :].lstrip(" ")
+            line = match.group("head").lstrip(" ")
+            if suffix:
+                line += " " + suffix
+        lines.append(line)
+    return "".join(line + "\n" for line in lines).encode("utf-8")
+
+
+PROFILES["sandbox-stage4-desk-service"] = Profile(
+    roots=(
+        "tui/applets/desk/sandbox-service.f",
+        "interop/service-endpoint.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - transient Desk sandbox service composition
+ENTER-USERLAND
+REQUIRE tui/applets/desk/sandbox-service.f
+REQUIRE interop/service-endpoint.f
+REQUIRE local_testing/sbox-s4-desk-service.f
+""",
+    ready_markers=("SBOX STAGE4 DESK SERVICE PASS",),
+    stable_markers=("SBOX STAGE4 DESK SERVICE PASS",),
+    failure_markers=(
+        "SBOX STAGE4 DESK SERVICE FAIL",
+        "SBOX STAGE4 DESK SERVICE ASSERT",
+        "SBOX STAGE4 DESK SERVICE STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    link_chunk_bytes=192 * 1024,
+    audited_link_line_bytes=MEGAPAD_EVALUATE_SOURCE_MAX_BYTES,
+    audited_initial_forth_line_bytes=MEGAPAD_EVALUATE_SOURCE_MAX_BYTES,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-s4-desk-service.f",
+            _sandbox_stage4_desk_service_fixture_bytes(),
+        ),
+    ),
+)
+
+
 PROFILES["sandbox-core-contracts"] = Profile(
     roots=("sandbox/binding.f",),
     resources=(),
@@ -23080,9 +23148,88 @@ def _strip_forth_noncode_lines(text: str) -> str:
     return _compact_forth(text)
 
 
+def _coalesce_audited_forth_lines(
+    source: bytes,
+    maximum_bytes: int,
+) -> bytes:
+    """Join physical lines in a specifically audited Forth source closure.
+
+    MegaPad evaluates each physical loader line through a 256-byte TIB, so
+    generated lines may contain at most 255 source bytes.  A flat stack-effect
+    comment immediately following a bare colon header is also redundant and
+    removed.  Backslash comments consume the remainder of their input line,
+    and delimiter parsers can do so when their closing delimiter is absent.
+    Conditional tokens retain physical boundaries for the raw skip scanner,
+    while PROVIDED must remain the first token on a line for KDOS's module
+    pre-scan.  Those lines are therefore emitted unchanged and in isolation.
+
+    This barrier set covers the built-in parsers used by the opted-in closure;
+    it cannot infer arbitrary custom immediate words that observe an input-line
+    boundary.  Callers must leave this transform disabled unless their complete
+    source closure has been audited for that property.
+    """
+    if not 0 < maximum_bytes <= MEGAPAD_EVALUATE_SOURCE_MAX_BYTES:
+        raise ValueError(
+            "Linked Forth line limit must be between 1 and "
+            f"{MEGAPAD_EVALUATE_SOURCE_MAX_BYTES} bytes"
+        )
+
+    output: list[bytes] = []
+    current = bytearray()
+    previous_tokens: tuple[str, ...] = ()
+
+    def flush() -> None:
+        if current:
+            output.append(bytes(current))
+            current.clear()
+
+    for line in source.split(b"\n"):
+        if not line:
+            continue
+        if len(line) > maximum_bytes:
+            raise RuntimeError(
+                f"Linked Forth source line exceeds {maximum_bytes} bytes"
+            )
+        text = line.decode("utf-8")
+        tokens = tuple(token for token in text.split(" ") if token)
+        if (
+            len(previous_tokens) == 2
+            and previous_tokens[0] == ":"
+            and FORTH_SPLIT_STACK_EFFECT_RE.fullmatch(text)
+            and not _has_forth_conditional_token(text)
+        ):
+            previous_tokens = tokens
+            continue
+        barrier = (
+            any(token.startswith("\\") for token in tokens)
+            or bool(tokens and tokens[0].upper() == "PROVIDED")
+            or any(
+                token.upper() in FORTH_LINE_COALESCE_BARRIERS
+                for token in tokens
+            )
+        )
+        if barrier:
+            flush()
+            output.append(line)
+            previous_tokens = tokens
+            continue
+
+        separator = b" " if current else b""
+        if len(current) + len(separator) + len(line) > maximum_bytes:
+            flush()
+            separator = b""
+        current.extend(separator)
+        current.extend(line)
+        previous_tokens = tokens
+
+    flush()
+    return b"".join(line + b"\n" for line in output)
+
+
 def _linked_chunks(
     modules: tuple[str, ...],
     maximum_bytes: int = LINK_CHUNK_BYTES,
+    audited_maximum_line_bytes: int | None = None,
 ) -> dict[str, bytes]:
     """Pack ordered source units into loader-safe native Forth chunks.
 
@@ -23091,6 +23238,10 @@ def _linked_chunks(
     compilation region.  KDOS retains dictionary state between loads, so
     top-level data declarations remain contiguous without exposing a partial
     definition to the next chunk's ``REQUIRE`` line.
+
+    Opt-in physical-line coalescing is applied only after those chunk
+    boundaries are fixed.  The caller must have audited the complete closure
+    for custom words that observe physical input-line boundaries.
     """
     chunks: list[bytearray] = []
     current = bytearray()
@@ -23138,10 +23289,16 @@ def _linked_chunks(
             current.extend(source_unit)
     if current:
         chunks.append(current)
-    return {
-        f".akashic/link-{index:02d}.f": bytes(content)
-        for index, content in enumerate(chunks)
-    }
+    linked_chunks: dict[str, bytes] = {}
+    for index, content in enumerate(chunks):
+        source = bytes(content)
+        if audited_maximum_line_bytes is not None:
+            source = _coalesce_audited_forth_lines(
+                source,
+                audited_maximum_line_bytes,
+            )
+        linked_chunks[f".akashic/link-{index:02d}.f"] = source
+    return linked_chunks
 
 
 def _linked_autoexec(
@@ -23334,7 +23491,11 @@ def build_image(
     requires_networking = _requires_megapad_networking(modules)
     resources = set(profile.resources)
     linked_chunks = (
-        _linked_chunks(modules, profile.link_chunk_bytes)
+        _linked_chunks(
+            modules,
+            profile.link_chunk_bytes,
+            profile.audited_link_line_bytes,
+        )
         if profile.linked
         else {}
     )
@@ -23398,6 +23559,14 @@ def build_image(
 
     for path, content in profile.initial_files:
         disk_path = PurePosixPath(path)
+        if (
+            profile.audited_initial_forth_line_bytes is not None
+            and disk_path.suffix.lower() == ".f"
+        ):
+            content = _coalesce_audited_forth_lines(
+                content,
+                profile.audited_initial_forth_line_bytes,
+            )
         parent = "/" if str(disk_path.parent) == "." else "/" + str(disk_path.parent)
         fs.inject_file(disk_path.name, content, path=parent)
 
