@@ -19,6 +19,7 @@ import akashic_tui as harness  # noqa: E402
 PROFILE = "at-oauth-hres-contracts"
 IMAGE = Path("/tmp/akashic-at-oauth-hres-contracts.img")
 SOURCE = ROOT / "akashic" / "atproto" / "oauth-profile-hres.f"
+SHARED_SOURCE = ROOT / "akashic" / "atproto" / "oauth-hres.f"
 PROFILE_SOURCE = ROOT / "akashic" / "atproto" / "oauth-profile.f"
 DOC = ROOT / "docs" / "atproto" / "oauth-profile-http-resource.md"
 HRES_CONTRACT = LOCAL_TESTING / "hres-contracts.f"
@@ -226,6 +227,7 @@ def _assert_physical_comments(path: Path, source: str) -> None:
 
 def _assert_static_contracts() -> None:
     source = SOURCE.read_text(encoding="utf-8")
+    shared_source = SHARED_SOURCE.read_text(encoding="utf-8")
     profile_source = PROFILE_SOURCE.read_text(encoding="utf-8")
     doc = DOC.read_text(encoding="utf-8")
     hres_fixture = HRES_CONTRACT.read_text(encoding="utf-8")
@@ -249,17 +251,27 @@ def _assert_static_contracts() -> None:
     assert _requires(SOURCE) == [
         "../utils/memory-span.f",
         "../utils/caller-span.f",
-        "../utils/string.f",
         "../net/http-resource.f",
         "../security/oauth2/resource-metadata.f",
         "../security/oauth2/metadata.f",
+        "oauth-hres.f",
         "oauth-profile.f",
     ]
+    assert _requires(SHARED_SOURCE) == [
+        "../utils/caller-span.f",
+        "../utils/string.f",
+        "../net/http-resource.f",
+    ]
     assert "PROVIDED akashic-at-oauth-hres" in source
+    assert "PROVIDED akashic-at-oauth-http" in shared_source
     assert not re.search(
         r"(?mi)^[ \t]*(?:CREATE|VARIABLE|VALUE|DEFER|GUARD)\b",
         source,
     ), "AT OAuth HTTP adapter owns mutable module state"
+    assert not re.search(
+        r"(?mi)^[ \t]*(?:CREATE|VARIABLE|VALUE|DEFER|GUARD)\b",
+        shared_source,
+    ), "shared AT OAuth HTTP policy owns mutable module state"
     for forbidden in (
         "streams",
         "session.f",
@@ -279,7 +291,7 @@ def _assert_static_contracts() -> None:
     ):
         assert word in source
 
-    policy = _word_body(source, "AT-OAUTH-HRES-SPEC-POLICY!")
+    policy = _word_body(shared_source, "AT-OAUTH-HRES-SPEC-POLICY!")
     for word in (
         "HRES-SPEC-ACCEPT!",
         "HRES-SPEC-SUCCESS-RANGE!",
@@ -292,17 +304,19 @@ def _assert_static_contracts() -> None:
     assert "200 200" in policy
     assert "HRES-MEDIA-REQUIRED" in policy
 
-    envelope = _word_body(source, "_ATOH-ENVELOPE?")
+    envelope = _word_body(
+        shared_source, "AT-OAUTH-HRES-URI-ENVELOPE?"
+    )
     for word in (
         "HRES-VALID?",
         "HRES-RESULT-VALID?",
         "HRES-HTTP-STATUS@",
         "HRES-REDIRECT-COUNT@",
-        "HRES-REQUESTED-TARGET",
-        "HRES-EFFECTIVE-TARGET",
-        "HTARGET-EQUAL?",
+        "HRES-REQUESTED-URI$",
+        "HRES-EFFECTIVE-URI$",
+        "STR-STR=",
         "HRES-MEDIA@",
-        "_ATOH-JSON-MEDIA?",
+        "_ATOHTTP-JSON-MEDIA?",
     ):
         assert word in envelope
     assert "200 <>" in envelope
@@ -351,6 +365,7 @@ def _assert_static_contracts() -> None:
         assert phrase in doc
 
     _assert_physical_comments(SOURCE, source)
+    _assert_physical_comments(SHARED_SOURCE, shared_source)
     _assert_physical_comments(CONTRACT, fixture)
 
 

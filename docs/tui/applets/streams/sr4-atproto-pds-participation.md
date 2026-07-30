@@ -127,15 +127,22 @@ resolves the distinct DPoP identity through a completed second owner call.
 The final callback runs only after both vault borrows have returned and
 retains no private scalar or process-global operation state.
 
-The next closeout is bounded Client Identifier Metadata Document and remote
-`jwks_uri` acquisition with transport provenance that a structural parser
-cannot establish. The remote set must pass the same checked selector and
-durable local-identity comparison without weakening the completed inline
-path. After that, production composition must drive PAR/PKCE and the
-authorization response, perform DPoP-aware token exchange and nonce retry,
-admit the grant into the durable generic session, and prove cold recovery,
-refresh rotation, logout, revocation/reauthorization, cancellation, and
-complete cleanup. Existing generic pieces should be composed rather than
+This checkpoint closes the retained-HTTP-resource path for the Client
+Identifier Metadata Document. `AT-OAUTH-INLINE-HRES-WITH` binds the configured
+`client_id` to exact requested and effective targets, status 200, zero
+redirects, accepted JSON media, complete response-storage ownership, and the
+existing confidential inline composition. The shared state-free HRES policy
+now lives in `atproto/oauth-hres.f`; the profile and inline adapters consume it
+without moving generic transport ownership into AT-specific code.
+
+The immediate next boundary is remote `jwks_uri` acquisition as a separate
+key-source path. Its set must pass the same checked selector and durable
+local-identity comparison without weakening or adding fallback to the
+completed inline path. After that, production composition must drive PAR/PKCE
+and the authorization response, perform DPoP-aware token exchange and nonce
+retry, admit the grant into the durable generic session, and prove cold
+recovery, refresh rotation, logout, revocation/reauthorization, cancellation,
+and complete cleanup. Existing generic pieces should be composed rather than
 reimplemented.
 
 ## Current repository handoff
@@ -145,10 +152,10 @@ At preparation time:
 ```text
 repository: /home/kir/Documents/Projects/fantasy-computing/akashic
 branch:     main
-code base:  5ea452f (Compose confidential inline AT OAuth keys)
-record:     this handoff is committed immediately after that code base
-upstream:   origin/main at 66e603f
-ahead:      5 commits after committing this record
+code base:  this retained-HRES checkpoint
+record:     updated in the same checkpoint
+upstream:   origin/main at cc37ce8
+ahead:      1 commit after committing this checkpoint
 tests:      no test process running
 ```
 
@@ -158,6 +165,7 @@ There is no current SR4-owned uncommitted work. The latest SR4 commits are:
 2ae49bc Add durable OAuth P-256 key ownership
 baa640b Advance SR4 to deployment key composition
 5ea452f Compose confidential inline AT OAuth keys
+this checkpoint: bind retained Client Identifier Metadata to inline deployment
 ```
 
 `2ae49bc` added `OAUTH2-P256-KEY-PROVISION-*`,
@@ -176,6 +184,13 @@ the owner calls sequentially, copies only public identity into outer scratch,
 and rejects public or `jwks_uri` deployments as a separate key-source
 boundary.
 
+This checkpoint adds the state-free shared AT OAuth HRES policy and
+`AT-OAUTH-INLINE-HRES-WITH`. The adapter independently rechecks status,
+redirect, requested/effective URI and JSON-media provenance, admits the
+complete caller-owned response storage before any workspace write, and then
+borrows the exact retained body into the existing inline deployment. It does
+not own DNS, sockets, TLS, deadlines, leases, or response cleanup.
+
 The following files are preserved unrelated user/old-L13 work. Do not stage,
 restore, rewrite, or delete them as part of SR4:
 
@@ -190,6 +205,29 @@ restore, rewrite, or delete them as part of SR4:
 ```
 
 ## Qualification and accelerator facts
+
+### Vertical-slice qualification policy
+
+Until SR4 reaches actual AT OAuth/PDS integration, qualification effort is
+intentionally weighted toward the shortest production-shaped vertical slice.
+Each new boundary is gated now by static and compile checks, one deterministic
+happy path, and the failures that protect transport provenance, security,
+ownership, callback containment, and truthful cleanup. Tests remain
+sequential, and checked-in resource ceilings remain authoritative.
+
+Exhaustive edge-case matrices are not gating the next vertical step. Broad
+media and parser permutations, every subordinate-status permutation, repeated
+alias/canary variants, and other non-gating combinatorics may be deferred when
+the focused gates establish the boundary needed by the end-to-end path. Each
+deferral must be recorded beside the affected boundary rather than silently
+treated as covered.
+
+This is a sequencing decision, not a relaxation of the production contract.
+Before landing 3 or the corresponding production boundary is declared closed,
+the recorded deferrals must be reviewed and either qualified or explicitly
+assigned to a later acceptance boundary with rationale. Deterministic fake-PDS
+integration and the security, cancellation, corruption, and cleanup behavior
+required by the six-landings ledger remain final acceptance requirements.
 
 The staged MegaPad tests already use the compiled native C++ accelerator.
 `MachineSession` constructs `MegapadSystem`; positive run batches reach
@@ -279,6 +317,23 @@ Completed evidence:
   cleanup, and rejection-before-write preflight preservation. Its largest
   phase was callback containment at 96,802,324 steps, below the checked-in
   180,000,000-step ceiling.
+- The retained Client Identifier Metadata adapter in this checkpoint passed
+  its static gate and the complete sequential staged lifecycle in
+  1,326,867,836 guest steps and 856.64 summed stage seconds. Its focused
+  adapter groups cover shared policy, one exact confidential-inline success,
+  wrong target, redirect, media and HTTP-status provenance, and full
+  response-storage alias preflight. The linked HRES, profile, deployment, and
+  inline fixture loads also passed; their broader behavior remains supported
+  by the separately recorded suites rather than being duplicated here.
+
+Recorded, non-gating deferrals for this retained-HRES boundary are the broad
+HRES header/outcome/media cross-product, every inline-status pass-through
+permutation, and canonical-target spelling/fuzz cases beyond the focused
+provenance gate. Real DNS, public-address/SSRF, authenticated TLS, deadline,
+cancellation and lease-cleanup evidence is deferred to the generic
+transport-owner/fake-PDS vertical slice rather than duplicated in this
+state-free retained-result adapter. Review these items before declaring the
+affected production boundaries finally closed.
 
 The 16-minute-52-second result is a complete staged module-load and contract
 qualification, not the measured latency of one OAuth admission or one network
@@ -296,32 +351,27 @@ delta. Do not run another suite or a test subagent concurrently.
 1. Read `AGENTS.md`, this record,
    `docs/atproto/oauth-deployment.md`,
    `docs/atproto/oauth-deployment-inline.md`,
+   `docs/atproto/oauth-inline-http-resource.md`,
    `docs/security/oauth2-client-metadata.md`, and
    `docs/security/jose-jwk-p256.md`, and
-   `docs/security/jose-jwk-set-p256.md`. Treat `5ea452f` as the completed local
-   confidential inline deployment/key boundary; it does not prove metadata
-   transport provenance and deliberately does not acquire `jwks_uri`.
-2. Compose bounded remote `jwks_uri` bodies with the checked set selector and
-   durable private-key owner. Compare both the recovered public point and RFC
-   7638 thumbprint with the selected published client key, preserve distinct
-   client-authentication and DPoP identities, and do not add fallback between
-   inline and remote sources.
-3. Build the bounded HTTP-resource acquisition adapter around
-   `AT-OAUTH-DEPLOYMENT-WITH`. Require exact requested/effective target
-   equality, status 200, zero redirects, accepted JSON media type, response
-   bounds, HTTPS hostname verification, public-address/SSRF admission,
-   deadlines, and truthful lease cleanup for both the Client Identifier and
+   `docs/security/jose-jwk-set-p256.md`. Treat the retained-HRES checkpoint
+   containing this record as the completed confidential inline
+   deployment/metadata-provenance boundary; it deliberately does not acquire
    `jwks_uri`.
-4. Qualify remote deployment/key-owner composition and acquisition with cheap
-   static gates first, then sequential deterministic fixtures. Preserve exact
-   requested/effective targets, preflight contents, borrowed-view lifetimes,
-   source immutability, workspace canaries, cleanup, and explicit error
-   precedence.
-5. Close landing 3 with production PAR/PKCE, authorization-response,
+2. Compose bounded remote `jwks_uri` acquisition with the checked set selector
+   and durable private-key owner. Compare both the recovered public point and
+   RFC 7638 thumbprint with the selected published client key, preserve
+   distinct client-authentication and DPoP identities, and do not add fallback
+   between inline and remote sources.
+3. Gate remote key acquisition with one exact deterministic success and the
+   provenance, selected-key, durable-identity, ownership, callback, and cleanup
+   failures that protect the vertical path. Record non-gating permutations
+   under the same deferral policy.
+4. Close landing 3 with production PAR/PKCE, authorization-response,
    DPoP/token/nonce, durable install/recovery/refresh/logout, cancellation, and
    reauthorization composition. Do not begin XRPC, repository/blob,
    subscription, and Streams wiring simultaneously.
-6. Return for a landing-boundary status report, then begin landing 4 by
+5. Return for a landing-boundary status report, then begin landing 4 by
    replacing—not wrapping—the global XRPC/session/repository prototypes.
 
 No live credential, account, public client metadata deployment, redirect

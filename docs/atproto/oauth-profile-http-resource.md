@@ -3,6 +3,9 @@
 `atproto/oauth-profile-hres.f` composes the transport-neutral AT OAuth
 discovery profile with a caller-owned generic HTTPS resource. It owns no DNS,
 socket, TLS, browser, token, session, XRPC, Streams, or application state.
+The exact JSON response policy and retained-envelope checks are shared with
+other AT OAuth resources through `atproto/oauth-hres.f`; they remain
+AT-specific policy over the generic `net/http-resource.f` owner.
 
 The public API is:
 

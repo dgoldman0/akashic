@@ -25,10 +25,10 @@ PROVIDED akashic-at-oauth-hres
 
 REQUIRE ../utils/memory-span.f
 REQUIRE ../utils/caller-span.f
-REQUIRE ../utils/string.f
 REQUIRE ../net/http-resource.f
 REQUIRE ../security/oauth2/resource-metadata.f
 REQUIRE ../security/oauth2/metadata.f
+REQUIRE oauth-hres.f
 REQUIRE oauth-profile.f
 
 \ =====================================================================
@@ -145,52 +145,6 @@ _ATOH-PARSER-OFF _ATOH-PARSER-SIZE +
     R@ _ATOH-WIPE
     R> DROP ;
 
-\ =====================================================================
-\  Exact JSON HTTP policy
-\ =====================================================================
-
-: _ATOH-JSON-MEDIA?  ( media -- flag )
-    DUP MTYPE-VALID? 0= IF DROP 0 EXIT THEN
-    DUP MTYPE-TYPE$ S" application" STR-STRI= 0= IF
-        DROP 0 EXIT
-    THEN
-    MTYPE-SUBTYPE$ S" json" STR-STRI= ;
-
-: _ATOH-MEDIA-POLICY  ( media context -- media-status )
-    DROP
-    _ATOH-JSON-MEDIA? IF HRES-S-OK ELSE HRES-S-INVALID THEN ;
-
-: AT-OAUTH-HRES-SPEC-POLICY!  ( spec -- hres-status )
-    DUP HRES-SPEC-SIZE _ATOH-SPAN-STATUS
-    AT-OAUTH-PROFILE-S-OK <> IF DROP HRES-S-INVALID EXIT THEN
-    >R
-    S" application/json" R@ HRES-SPEC-ACCEPT!
-    DUP HRES-S-OK <> IF R> DROP EXIT THEN DROP
-    200 200 R@ HRES-SPEC-SUCCESS-RANGE!
-    DUP HRES-S-OK <> IF R> DROP EXIT THEN DROP
-    0 R@ HRES-SPEC-REDIRECT-MAX!
-    DUP HRES-S-OK <> IF R> DROP EXIT THEN DROP
-    HRES-MEDIA-REQUIRED R@ HRES-SPEC-MEDIA-MODE!
-    DUP HRES-S-OK <> IF R> DROP EXIT THEN DROP
-    0 ['] _ATOH-MEDIA-POLICY R> HRES-SPEC-MEDIA! ;
-
-: _ATOH-ENVELOPE?  ( resource expected-target -- flag )
-    OVER HRES-VALID? 0= IF 2DROP 0 EXIT THEN
-    OVER HRES-RESULT-VALID? 0= IF 2DROP 0 EXIT THEN
-    OVER HRES-HTTP-STATUS@ 200 <> IF 2DROP 0 EXIT THEN
-    OVER HRES-REDIRECT-COUNT@ 0<> IF 2DROP 0 EXIT THEN
-    OVER HRES-REQUESTED-TARGET OVER HTARGET-EQUAL? 0= IF
-        2DROP 0 EXIT
-    THEN
-    OVER HRES-EFFECTIVE-TARGET OVER HTARGET-EQUAL? 0= IF
-        2DROP 0 EXIT
-    THEN
-    OVER HRES-MEDIA@ 0= IF
-        DROP 2DROP 0 EXIT
-    THEN
-    _ATOH-JSON-MEDIA? 0= IF 2DROP 0 EXIT THEN
-    2DROP -1 ;
-
 : _ATOH-PREPARE
   ( resource workspace profile target-xt -- same... body-a body-u status )
     >R
@@ -199,7 +153,7 @@ _ATOH-PARSER-OFF _ATOH-PARSER-SIZE +
         >R DROP 0 0 R> EXIT
     THEN
     DROP
-    3 PICK OVER _ATOH-ENVELOPE? 0= IF
+    3 PICK OVER AT-OAUTH-HRES-TARGET-ENVELOPE? 0= IF
         DROP 0 0 AT-OAUTH-PROFILE-S-HTTP EXIT
     THEN
     DROP
