@@ -1,0 +1,984 @@
+\ =====================================================================
+\  oauth-token-p256.f - Durable public-client DPoP for AT token requests
+\ =====================================================================
+\  This state-free AT-specific composition configures one fresh generic
+\  OAuth HTTP POST for the exact selected token target, borrows the current
+\  issuer-bound authorization-server nonce, constructs the mandatory DPoP
+\  proof from the public client's durable P-256 binding, and delegates the
+\  protected form construction to oauth-token.f.
+\
+\  The caller supplies every persistent owner and bounded HTTP arena through
+\  one immutable descriptor.  Complete geometry, including credential-vault
+\  exclusion, is admitted before caller memory is changed.  The selected
+\  configuration must pass normal AT client policy and additionally be an
+\  explicit public client: method "none", no authentication algorithm,
+\  DPoP-bound, and carrying one canonical DPoP-only P-256 binding.
+\
+\  Proof generation and the raw build run synchronously inside the guarded
+\  nonce loan.  The proof, copied binding, DPoP descriptor, input snapshot,
+\  and serial child workspace are wiped after every admitted result and
+\  caught THROW.  A successful raw BUILD has already copied the proof into
+\  the caller's request arena before that wipe.
+\
+\  Public API:
+\    AT-OAUTH-TOKEN-P256-INPUT-SIZE
+\    AT-OAUTH-TOKEN-P256-I.*
+\    AT-OAUTH-TOKEN-P256-INPUT-CLEAR
+\    AT-OAUTH-TOKEN-P256-WORKSPACE-SIZE
+\    AT-OAUTH-TOKEN-P256-WORKSPACE-CLEAR
+\    AT-OAUTH-TOKEN-P256-BUILD  ( input workspace -- status )
+\ =====================================================================
+
+PROVIDED akashic-at-oauth-tok256
+
+REQUIRE ../utils/memory-span.f
+REQUIRE ../utils/caller-span.f
+REQUIRE ../security/credential-vault.f
+REQUIRE ../security/oauth2/client-config.f
+REQUIRE ../security/oauth2/http-post.f
+REQUIRE ../security/oauth2/token-request.f
+REQUIRE ../security/oauth2/dpop-nonce.f
+REQUIRE ../security/oauth2/key-p256.f
+REQUIRE oauth-profile.f
+REQUIRE oauth-client.f
+REQUIRE oauth-token.f
+
+\ =====================================================================
+\  Immutable caller input descriptor
+\ =====================================================================
+
+0 CONSTANT _ATTP-I-IAT
+_ATTP-I-IAT 1 CELLS + CONSTANT _ATTP-I-VAULT
+_ATTP-I-VAULT 1 CELLS + CONSTANT _ATTP-I-CONFIG
+_ATTP-I-CONFIG 1 CELLS + CONSTANT _ATTP-I-PROFILE
+_ATTP-I-PROFILE 1 CELLS + CONSTANT _ATTP-I-TOKEN-REQUEST
+_ATTP-I-TOKEN-REQUEST 1 CELLS + CONSTANT _ATTP-I-NONCE-OWNER
+_ATTP-I-NONCE-OWNER 1 CELLS + CONSTANT _ATTP-I-POST
+_ATTP-I-POST 1 CELLS + CONSTANT _ATTP-I-REQUEST-A
+_ATTP-I-REQUEST-A 1 CELLS + CONSTANT _ATTP-I-REQUEST-CAP
+_ATTP-I-REQUEST-CAP 1 CELLS + CONSTANT _ATTP-I-FORM-A
+_ATTP-I-FORM-A 1 CELLS + CONSTANT _ATTP-I-FORM-CAP
+_ATTP-I-FORM-CAP 1 CELLS + CONSTANT _ATTP-I-RESPONSE-A
+_ATTP-I-RESPONSE-A 1 CELLS + CONSTANT _ATTP-I-RESPONSE-CAP
+_ATTP-I-RESPONSE-CAP 1 CELLS +
+CONSTANT AT-OAUTH-TOKEN-P256-INPUT-SIZE
+
+: AT-OAUTH-TOKEN-P256-I.IAT  ( input -- field )
+    _ATTP-I-IAT + ;
+: AT-OAUTH-TOKEN-P256-I.VAULT  ( input -- field )
+    _ATTP-I-VAULT + ;
+: AT-OAUTH-TOKEN-P256-I.CONFIG  ( input -- field )
+    _ATTP-I-CONFIG + ;
+: AT-OAUTH-TOKEN-P256-I.PROFILE  ( input -- field )
+    _ATTP-I-PROFILE + ;
+: AT-OAUTH-TOKEN-P256-I.TOKEN-REQUEST  ( input -- field )
+    _ATTP-I-TOKEN-REQUEST + ;
+: AT-OAUTH-TOKEN-P256-I.NONCE-OWNER  ( input -- field )
+    _ATTP-I-NONCE-OWNER + ;
+: AT-OAUTH-TOKEN-P256-I.POST  ( input -- field )
+    _ATTP-I-POST + ;
+: AT-OAUTH-TOKEN-P256-I.REQUEST-A  ( input -- field )
+    _ATTP-I-REQUEST-A + ;
+: AT-OAUTH-TOKEN-P256-I.REQUEST-CAP  ( input -- field )
+    _ATTP-I-REQUEST-CAP + ;
+: AT-OAUTH-TOKEN-P256-I.FORM-A  ( input -- field )
+    _ATTP-I-FORM-A + ;
+: AT-OAUTH-TOKEN-P256-I.FORM-CAP  ( input -- field )
+    _ATTP-I-FORM-CAP + ;
+: AT-OAUTH-TOKEN-P256-I.RESPONSE-A  ( input -- field )
+    _ATTP-I-RESPONSE-A + ;
+: AT-OAUTH-TOKEN-P256-I.RESPONSE-CAP  ( input -- field )
+    _ATTP-I-RESPONSE-CAP + ;
+
+\ =====================================================================
+\  Symbolically derived serial workspace
+\ =====================================================================
+
+0 CONSTANT _ATTPW-PROOF-U
+_ATTPW-PROOF-U 1 CELLS + CONSTANT _ATTPW-INPUT-OFF
+_ATTPW-INPUT-OFF AT-OAUTH-TOKEN-P256-INPUT-SIZE +
+    CONSTANT _ATTPW-BINDING-OFF
+_ATTPW-BINDING-OFF OAUTH2-P256-KEY-BINDING-SIZE +
+    CONSTANT _ATTPW-DPOP-INPUT-OFF
+_ATTPW-DPOP-INPUT-OFF OAUTH2-P256-KEY-DPOP-INPUT-SIZE +
+    CONSTANT _ATTPW-PROOF-OFF
+_ATTPW-PROOF-OFF OAUTH2-DPOP-ES256-MAX-PROOF-BYTES +
+7 + 8 / 8 * CONSTANT _ATTPW-CHILD-OFF
+
+AT-OAUTH-CLIENT-WORKSPACE-SIZE
+OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE MAX
+AT-OAUTH-TOKEN-WORKSPACE-SIZE MAX
+CONSTANT _ATTPW-CHILD-SIZE
+
+_ATTPW-CHILD-OFF _ATTPW-CHILD-SIZE +
+CONSTANT AT-OAUTH-TOKEN-P256-WORKSPACE-SIZE
+
+: _ATTPW.PROOF-U  ( workspace -- field )
+    _ATTPW-PROOF-U + ;
+: _ATTPW.INPUT  ( workspace -- input-snapshot )
+    _ATTPW-INPUT-OFF + ;
+: _ATTPW.BINDING  ( workspace -- binding )
+    _ATTPW-BINDING-OFF + ;
+: _ATTPW.DPOP-INPUT  ( workspace -- dpop-input )
+    _ATTPW-DPOP-INPUT-OFF + ;
+: _ATTPW.PROOF  ( workspace -- proof )
+    _ATTPW-PROOF-OFF + ;
+: _ATTPW.CHILD  ( workspace -- child-workspace )
+    _ATTPW-CHILD-OFF + ;
+
+: _ATTP-WIPE  ( workspace -- )
+    AT-OAUTH-TOKEN-P256-WORKSPACE-SIZE 0 FILL ;
+
+\ =====================================================================
+\  Stack, span, and status helpers
+\ =====================================================================
+
+: _ATTP-DROP2  ( x1 x2 -- ) 2DROP ;
+
+: _ATTP-RETURN2  ( x1 x2 status -- status )
+    >R _ATTP-DROP2 R> ;
+
+: _ATTP-CALLER>STATUS  ( caller-status -- status )
+    CASE
+        CALLER-SPAN-S-OK OF AT-OAUTH-TOKEN-S-OK ENDOF
+        CALLER-SPAN-S-RANGE OF AT-OAUTH-TOKEN-S-RANGE ENDOF
+        CALLER-SPAN-S-PROTECTED OF
+            AT-OAUTH-TOKEN-S-PROTECTED
+        ENDOF
+        CALLER-SPAN-S-PLATFORM OF
+            AT-OAUTH-TOKEN-S-PLATFORM
+        ENDOF
+        AT-OAUTH-TOKEN-S-PLATFORM SWAP
+    ENDCASE ;
+
+: _ATTP-SPAN-STATUS  ( address length -- status )
+    DUP 0< IF 2DROP AT-OAUTH-TOKEN-S-INVALID EXIT THEN
+    DUP 0= IF 2DROP AT-OAUTH-TOKEN-S-OK EXIT THEN
+    OVER 0= IF 2DROP AT-OAUTH-TOKEN-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS _ATTP-CALLER>STATUS ;
+
+: _ATTP-REQUIRED-SPAN-STATUS  ( address length -- status )
+    DUP 0> 0= IF 2DROP AT-OAUTH-TOKEN-S-INVALID EXIT THEN
+    OVER 0= IF 2DROP AT-OAUTH-TOKEN-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS _ATTP-CALLER>STATUS ;
+
+: _ATTP-FIXED-STATUS  ( address length -- status )
+    OVER 0= IF 2DROP AT-OAUTH-TOKEN-S-INVALID EXIT THEN
+    OVER 7 AND IF 2DROP AT-OAUTH-TOKEN-S-INVALID EXIT THEN
+    _ATTP-SPAN-STATUS ;
+
+\ CVAULT external-span admission deliberately reports INVALID for both a
+\ malformed vault and overlap with vault-owned/private storage.
+: _ATTP-CVAULT>STATUS  ( vault-status -- status )
+    CASE
+        CVAULT-S-OK OF AT-OAUTH-TOKEN-S-OK ENDOF
+        CVAULT-S-INVALID OF AT-OAUTH-TOKEN-S-INVALID ENDOF
+        CVAULT-S-RANGE OF AT-OAUTH-TOKEN-S-RANGE ENDOF
+        CVAULT-S-PROTECTED OF
+            AT-OAUTH-TOKEN-S-PROTECTED
+        ENDOF
+        CVAULT-S-PLATFORM OF
+            AT-OAUTH-TOKEN-S-PLATFORM
+        ENDOF
+        CVAULT-S-BUSY OF AT-OAUTH-TOKEN-S-DPOP ENDOF
+        AT-OAUTH-TOKEN-S-DPOP SWAP
+    ENDCASE ;
+
+: _ATTP-CONFIG>STATUS  ( config-status -- status )
+    CASE
+        OAUTH2-CLIENT-CONFIG-S-OK OF
+            AT-OAUTH-TOKEN-S-OK
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-CAPACITY OF
+            AT-OAUTH-TOKEN-S-CAPACITY
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-ALIAS OF
+            AT-OAUTH-TOKEN-S-ALIAS
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-CALLBACK OF
+            AT-OAUTH-TOKEN-S-CALLBACK
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-RANGE OF
+            AT-OAUTH-TOKEN-S-RANGE
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-PROTECTED OF
+            AT-OAUTH-TOKEN-S-PROTECTED
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-PLATFORM OF
+            AT-OAUTH-TOKEN-S-PLATFORM
+        ENDOF
+        AT-OAUTH-TOKEN-S-CONFIG SWAP
+    ENDCASE ;
+
+: _ATTP-CLIENT>STATUS  ( client-status -- status )
+    CASE
+        AT-OAUTH-CLIENT-S-OK OF AT-OAUTH-TOKEN-S-OK ENDOF
+        AT-OAUTH-CLIENT-S-INVALID OF
+            AT-OAUTH-TOKEN-S-INVALID
+        ENDOF
+        AT-OAUTH-CLIENT-S-ALIAS OF
+            AT-OAUTH-TOKEN-S-ALIAS
+        ENDOF
+        AT-OAUTH-CLIENT-S-PROFILE OF
+            AT-OAUTH-TOKEN-S-PROFILE
+        ENDOF
+        AT-OAUTH-CLIENT-S-RANGE OF
+            AT-OAUTH-TOKEN-S-RANGE
+        ENDOF
+        AT-OAUTH-CLIENT-S-PROTECTED OF
+            AT-OAUTH-TOKEN-S-PROTECTED
+        ENDOF
+        AT-OAUTH-CLIENT-S-PLATFORM OF
+            AT-OAUTH-TOKEN-S-PLATFORM
+        ENDOF
+        AT-OAUTH-CLIENT-S-INTERNAL OF
+            AT-OAUTH-TOKEN-S-INTERNAL
+        ENDOF
+        AT-OAUTH-TOKEN-S-CONFIG SWAP
+    ENDCASE ;
+
+: _ATTP-PROFILE>STATUS  ( profile-status -- status )
+    CASE
+        AT-OAUTH-PROFILE-S-OK OF
+            AT-OAUTH-TOKEN-S-OK
+        ENDOF
+        AT-OAUTH-PROFILE-S-RANGE OF
+            AT-OAUTH-TOKEN-S-RANGE
+        ENDOF
+        AT-OAUTH-PROFILE-S-PROTECTED OF
+            AT-OAUTH-TOKEN-S-PROTECTED
+        ENDOF
+        AT-OAUTH-PROFILE-S-PLATFORM OF
+            AT-OAUTH-TOKEN-S-PLATFORM
+        ENDOF
+        AT-OAUTH-TOKEN-S-PROFILE SWAP
+    ENDCASE ;
+
+: _ATTP-POST>STATUS  ( post-status -- status )
+    CASE
+        OAUTH2-HTTP-POST-S-OK OF
+            AT-OAUTH-TOKEN-S-OK
+        ENDOF
+        OAUTH2-HTTP-POST-S-CAPACITY OF
+            AT-OAUTH-TOKEN-S-CAPACITY
+        ENDOF
+        OAUTH2-HTTP-POST-S-ALIAS OF
+            AT-OAUTH-TOKEN-S-ALIAS
+        ENDOF
+        OAUTH2-HTTP-POST-S-RANGE OF
+            AT-OAUTH-TOKEN-S-RANGE
+        ENDOF
+        OAUTH2-HTTP-POST-S-PROTECTED OF
+            AT-OAUTH-TOKEN-S-PROTECTED
+        ENDOF
+        OAUTH2-HTTP-POST-S-PLATFORM OF
+            AT-OAUTH-TOKEN-S-PLATFORM
+        ENDOF
+        OAUTH2-HTTP-POST-S-INTERNAL OF
+            AT-OAUTH-TOKEN-S-INTERNAL
+        ENDOF
+        AT-OAUTH-TOKEN-S-POST SWAP
+    ENDCASE ;
+
+: _ATTP-NONCE>STATUS  ( nonce-status -- status )
+    CASE
+        OAUTH2-DPOP-NONCE-S-OK OF
+            AT-OAUTH-TOKEN-S-OK
+        ENDOF
+        OAUTH2-DPOP-NONCE-S-CAPACITY OF
+            AT-OAUTH-TOKEN-S-CAPACITY
+        ENDOF
+        OAUTH2-DPOP-NONCE-S-ALIAS OF
+            AT-OAUTH-TOKEN-S-ALIAS
+        ENDOF
+        OAUTH2-DPOP-NONCE-S-RANGE OF
+            AT-OAUTH-TOKEN-S-RANGE
+        ENDOF
+        OAUTH2-DPOP-NONCE-S-PROTECTED OF
+            AT-OAUTH-TOKEN-S-PROTECTED
+        ENDOF
+        OAUTH2-DPOP-NONCE-S-PLATFORM OF
+            AT-OAUTH-TOKEN-S-PLATFORM
+        ENDOF
+        OAUTH2-DPOP-NONCE-S-CALLBACK OF
+            AT-OAUTH-TOKEN-S-CALLBACK
+        ENDOF
+        OAUTH2-DPOP-NONCE-S-INTERNAL OF
+            AT-OAUTH-TOKEN-S-INTERNAL
+        ENDOF
+        AT-OAUTH-TOKEN-S-NONCE SWAP
+    ENDCASE ;
+
+\ The token vocabulary intentionally exposes DPoP policy rather than durable
+\ key lifecycle detail.  Preserve general caller-memory classes; canonical
+\ binding shape is BINDING and all other key/proof failures are DPOP.
+: _ATTP-KEY>STATUS  ( key-status -- status )
+    CASE
+        OAUTH2-P256-KEY-S-OK OF
+            AT-OAUTH-TOKEN-S-OK
+        ENDOF
+        OAUTH2-P256-KEY-S-CAPACITY OF
+            AT-OAUTH-TOKEN-S-CAPACITY
+        ENDOF
+        OAUTH2-P256-KEY-S-ALIAS OF
+            AT-OAUTH-TOKEN-S-ALIAS
+        ENDOF
+        OAUTH2-P256-KEY-S-INVALID OF
+            AT-OAUTH-TOKEN-S-BINDING
+        ENDOF
+        OAUTH2-P256-KEY-S-FORMAT OF
+            AT-OAUTH-TOKEN-S-BINDING
+        ENDOF
+        OAUTH2-P256-KEY-S-RANGE OF
+            AT-OAUTH-TOKEN-S-RANGE
+        ENDOF
+        OAUTH2-P256-KEY-S-PROTECTED OF
+            AT-OAUTH-TOKEN-S-PROTECTED
+        ENDOF
+        OAUTH2-P256-KEY-S-PLATFORM OF
+            AT-OAUTH-TOKEN-S-PLATFORM
+        ENDOF
+        OAUTH2-P256-KEY-S-INTERNAL OF
+            AT-OAUTH-TOKEN-S-INTERNAL
+        ENDOF
+        OAUTH2-P256-KEY-S-CALLBACK OF
+            AT-OAUTH-TOKEN-S-INTERNAL
+        ENDOF
+        AT-OAUTH-TOKEN-S-DPOP SWAP
+    ENDCASE ;
+
+\ =====================================================================
+\  Public clearing operations
+\ =====================================================================
+
+: AT-OAUTH-TOKEN-P256-INPUT-CLEAR  ( input -- status )
+    DUP AT-OAUTH-TOKEN-P256-INPUT-SIZE _ATTP-FIXED-STATUS
+    ?DUP IF NIP EXIT THEN
+    AT-OAUTH-TOKEN-P256-INPUT-SIZE 0 FILL
+    AT-OAUTH-TOKEN-S-OK ;
+
+: AT-OAUTH-TOKEN-P256-WORKSPACE-CLEAR  ( workspace -- status )
+    DUP AT-OAUTH-TOKEN-P256-WORKSPACE-SIZE _ATTP-FIXED-STATUS
+    ?DUP IF NIP EXIT THEN
+    _ATTP-WIPE
+    AT-OAUTH-TOKEN-S-OK ;
+
+\ =====================================================================
+\  Complete non-mutating geometry admission
+\ =====================================================================
+
+: _ATTP-ZERO?  ( address length -- flag )
+    BEGIN DUP WHILE
+        OVER C@ IF 2DROP 0 EXIT THEN
+        1 /STRING
+    REPEAT
+    2DROP -1 ;
+
+\ This composition owns POST configuration, so it accepts only fresh
+\ all-zero storage or the canonical EMPTY descriptor produced by WIPE.
+\ A live descriptor can hide old arenas that this input does not name.
+: _ATTP-FRESH-POST?  ( post -- flag )
+    DUP OAUTH2-HTTP-POST-SIZE _ATTP-ZERO? IF
+        DROP -1 EXIT
+    THEN
+    DUP OAUTH2-HTTP-POST-VALID? 0= IF DROP 0 EXIT THEN
+    OAUTH2-HTTP-POST-STATE@
+    OAUTH2-HTTP-POST-STATE-EMPTY = ;
+
+: _ATTP-FIELD-GEOMETRY  ( input workspace -- status )
+    >R
+    DUP AT-OAUTH-TOKEN-P256-INPUT-SIZE _ATTP-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-WORKSPACE-SIZE _ATTP-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+
+    DUP AT-OAUTH-TOKEN-P256-I.IAT @ 0< IF
+        DROP R> DROP AT-OAUTH-TOKEN-S-INVALID EXIT
+    THEN
+    DUP AT-OAUTH-TOKEN-P256-I.VAULT @
+    CVAULT-SIZE _ATTP-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.CONFIG @
+    OAUTH2-CLIENT-CONFIG-SIZE _ATTP-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.PROFILE @
+    AT-OAUTH-PROFILE-SIZE _ATTP-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.TOKEN-REQUEST @
+    O2TREQ-SIZE _ATTP-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.NONCE-OWNER @
+    OAUTH2-DPOP-NONCE-SIZE _ATTP-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.POST @
+    OAUTH2-HTTP-POST-SIZE _ATTP-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.POST @
+    _ATTP-FRESH-POST? 0= IF
+        DROP R> DROP AT-OAUTH-TOKEN-S-POST EXIT
+    THEN
+
+    DUP AT-OAUTH-TOKEN-P256-I.REQUEST-A @
+    OVER AT-OAUTH-TOKEN-P256-I.REQUEST-CAP @
+    _ATTP-REQUIRED-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.FORM-A @
+    OVER AT-OAUTH-TOKEN-P256-I.FORM-CAP @
+    _ATTP-REQUIRED-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.RESPONSE-A @
+    OVER AT-OAUTH-TOKEN-P256-I.RESPONSE-CAP @
+    _ATTP-REQUIRED-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+
+    DROP R> DROP AT-OAUTH-TOKEN-S-OK ;
+
+: _ATTP-MUTABLE-OVERLAP?
+  ( address length input -- flag )
+    >R
+    2DUP R@ AT-OAUTH-TOKEN-P256-I.POST @
+    OAUTH2-HTTP-POST-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP -1 EXIT
+    THEN
+    2DUP R@ AT-OAUTH-TOKEN-P256-I.REQUEST-A @
+    R@ AT-OAUTH-TOKEN-P256-I.REQUEST-CAP @
+    MSPAN-OVERLAP? IF
+        2DROP R> DROP -1 EXIT
+    THEN
+    2DUP R@ AT-OAUTH-TOKEN-P256-I.FORM-A @
+    R@ AT-OAUTH-TOKEN-P256-I.FORM-CAP @
+    MSPAN-OVERLAP? IF
+        2DROP R> DROP -1 EXIT
+    THEN
+    R@ AT-OAUTH-TOKEN-P256-I.RESPONSE-A @
+    R@ AT-OAUTH-TOKEN-P256-I.RESPONSE-CAP @
+    MSPAN-OVERLAP?
+    R> DROP ;
+
+: _ATTP-WS-OVERLAP?
+  ( address length workspace -- flag )
+    >R
+    R@ AT-OAUTH-TOKEN-P256-WORKSPACE-SIZE MSPAN-OVERLAP?
+    R> DROP ;
+
+: _ATTP-MUTABLES-DISJOINT?  ( input -- flag )
+    >R
+    R@ AT-OAUTH-TOKEN-P256-I.POST @ OAUTH2-HTTP-POST-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.REQUEST-A @
+    R@ AT-OAUTH-TOKEN-P256-I.REQUEST-CAP @
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-I.POST @ OAUTH2-HTTP-POST-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.FORM-A @
+    R@ AT-OAUTH-TOKEN-P256-I.FORM-CAP @
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-I.POST @ OAUTH2-HTTP-POST-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.RESPONSE-A @
+    R@ AT-OAUTH-TOKEN-P256-I.RESPONSE-CAP @
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-I.REQUEST-A @
+    R@ AT-OAUTH-TOKEN-P256-I.REQUEST-CAP @
+    R@ AT-OAUTH-TOKEN-P256-I.FORM-A @
+    R@ AT-OAUTH-TOKEN-P256-I.FORM-CAP @
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-I.REQUEST-A @
+    R@ AT-OAUTH-TOKEN-P256-I.REQUEST-CAP @
+    R@ AT-OAUTH-TOKEN-P256-I.RESPONSE-A @
+    R@ AT-OAUTH-TOKEN-P256-I.RESPONSE-CAP @
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-I.FORM-A @
+    R@ AT-OAUTH-TOKEN-P256-I.FORM-CAP @
+    R@ AT-OAUTH-TOKEN-P256-I.RESPONSE-A @
+    R@ AT-OAUTH-TOKEN-P256-I.RESPONSE-CAP @
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R> DROP -1 ;
+
+\ All complete source objects are separate ownership domains.  Rejecting
+\ their direct overlap up front prevents a later nonce borrow or protected
+\ request transition from changing an allegedly immutable peer object.
+: _ATTP-SOURCE-OBJECTS-DISJOINT?  ( input -- flag )
+    >R
+    R@ AT-OAUTH-TOKEN-P256-INPUT-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.VAULT @ CVAULT-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-INPUT-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.CONFIG @ OAUTH2-CLIENT-CONFIG-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-INPUT-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.PROFILE @ AT-OAUTH-PROFILE-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-INPUT-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.TOKEN-REQUEST @ O2TREQ-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-INPUT-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.NONCE-OWNER @
+    OAUTH2-DPOP-NONCE-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+
+    R@ AT-OAUTH-TOKEN-P256-I.VAULT @ CVAULT-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.CONFIG @ OAUTH2-CLIENT-CONFIG-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-I.VAULT @ CVAULT-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.PROFILE @ AT-OAUTH-PROFILE-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-I.VAULT @ CVAULT-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.TOKEN-REQUEST @ O2TREQ-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-I.VAULT @ CVAULT-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.NONCE-OWNER @
+    OAUTH2-DPOP-NONCE-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+
+    R@ AT-OAUTH-TOKEN-P256-I.CONFIG @ OAUTH2-CLIENT-CONFIG-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.PROFILE @ AT-OAUTH-PROFILE-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-I.CONFIG @ OAUTH2-CLIENT-CONFIG-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.TOKEN-REQUEST @ O2TREQ-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-I.CONFIG @ OAUTH2-CLIENT-CONFIG-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.NONCE-OWNER @
+    OAUTH2-DPOP-NONCE-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+
+    R@ AT-OAUTH-TOKEN-P256-I.PROFILE @ AT-OAUTH-PROFILE-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.TOKEN-REQUEST @ O2TREQ-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-I.PROFILE @ AT-OAUTH-PROFILE-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.NONCE-OWNER @
+    OAUTH2-DPOP-NONCE-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+
+    R@ AT-OAUTH-TOKEN-P256-I.TOKEN-REQUEST @ O2TREQ-SIZE
+    R@ AT-OAUTH-TOKEN-P256-I.NONCE-OWNER @
+    OAUTH2-DPOP-NONCE-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R> DROP -1 ;
+
+: _ATTP-SOURCE-MUTABLES-DISJOINT?  ( input workspace -- flag )
+    >R
+    DUP AT-OAUTH-TOKEN-P256-INPUT-SIZE
+    2 PICK _ATTP-MUTABLE-OVERLAP? IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-OAUTH-TOKEN-P256-I.VAULT @ CVAULT-SIZE
+    2 PICK _ATTP-MUTABLE-OVERLAP? IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-OAUTH-TOKEN-P256-I.CONFIG @ OAUTH2-CLIENT-CONFIG-SIZE
+    2 PICK _ATTP-MUTABLE-OVERLAP? IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-OAUTH-TOKEN-P256-I.PROFILE @ AT-OAUTH-PROFILE-SIZE
+    2 PICK _ATTP-MUTABLE-OVERLAP? IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-OAUTH-TOKEN-P256-I.TOKEN-REQUEST @ O2TREQ-SIZE
+    2 PICK _ATTP-MUTABLE-OVERLAP? IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-OAUTH-TOKEN-P256-I.NONCE-OWNER @
+    OAUTH2-DPOP-NONCE-SIZE
+    2 PICK _ATTP-MUTABLE-OVERLAP? IF
+        DROP R> DROP 0 EXIT
+    THEN
+    R@ AT-OAUTH-TOKEN-P256-WORKSPACE-SIZE
+    2 PICK _ATTP-MUTABLE-OVERLAP? IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DROP R> DROP -1 ;
+
+: _ATTP-SOURCES-WORKSPACE-DISJOINT?  ( input workspace -- flag )
+    >R
+    DUP AT-OAUTH-TOKEN-P256-INPUT-SIZE R@
+    _ATTP-WS-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.VAULT @ CVAULT-SIZE R@
+    _ATTP-WS-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.CONFIG @ OAUTH2-CLIENT-CONFIG-SIZE R@
+    _ATTP-WS-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.PROFILE @ AT-OAUTH-PROFILE-SIZE R@
+    _ATTP-WS-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.TOKEN-REQUEST @ O2TREQ-SIZE R@
+    _ATTP-WS-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.NONCE-OWNER @
+    OAUTH2-DPOP-NONCE-SIZE R@
+    _ATTP-WS-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    DROP R> DROP -1 ;
+
+: _ATTP-ALIAS-GEOMETRY  ( input workspace -- status )
+    OVER _ATTP-SOURCE-OBJECTS-DISJOINT? 0= IF
+        _ATTP-DROP2 AT-OAUTH-TOKEN-S-ALIAS EXIT
+    THEN
+    2DUP _ATTP-SOURCE-MUTABLES-DISJOINT? 0= IF
+        _ATTP-DROP2 AT-OAUTH-TOKEN-S-ALIAS EXIT
+    THEN
+    2DUP _ATTP-SOURCES-WORKSPACE-DISJOINT? 0= IF
+        _ATTP-DROP2 AT-OAUTH-TOKEN-S-ALIAS EXIT
+    THEN
+    OVER _ATTP-MUTABLES-DISJOINT? 0= IF
+        _ATTP-DROP2 AT-OAUTH-TOKEN-S-ALIAS EXIT
+    THEN
+    _ATTP-DROP2 AT-OAUTH-TOKEN-S-OK ;
+
+: _ATTP-VAULT-SPAN-STATUS
+  ( address length input -- status )
+    AT-OAUTH-TOKEN-P256-I.VAULT @
+    CVAULT-EXTERNAL-SPAN-STATUS
+    _ATTP-CVAULT>STATUS ;
+
+: _ATTP-VAULT-GEOMETRY  ( input workspace -- status )
+    >R
+    DUP AT-OAUTH-TOKEN-P256-INPUT-SIZE
+    2 PICK _ATTP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.CONFIG @ OAUTH2-CLIENT-CONFIG-SIZE
+    2 PICK _ATTP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.PROFILE @ AT-OAUTH-PROFILE-SIZE
+    2 PICK _ATTP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.TOKEN-REQUEST @ O2TREQ-SIZE
+    2 PICK _ATTP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.NONCE-OWNER @
+    OAUTH2-DPOP-NONCE-SIZE
+    2 PICK _ATTP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.POST @ OAUTH2-HTTP-POST-SIZE
+    2 PICK _ATTP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.REQUEST-A @
+    OVER AT-OAUTH-TOKEN-P256-I.REQUEST-CAP @
+    2 PICK _ATTP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.FORM-A @
+    OVER AT-OAUTH-TOKEN-P256-I.FORM-CAP @
+    2 PICK _ATTP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-TOKEN-P256-I.RESPONSE-A @
+    OVER AT-OAUTH-TOKEN-P256-I.RESPONSE-CAP @
+    2 PICK _ATTP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-WORKSPACE-SIZE
+    2 PICK _ATTP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DROP R> DROP AT-OAUTH-TOKEN-S-OK ;
+
+: _ATTP-GEOMETRY  ( input workspace -- status )
+    2DUP _ATTP-FIELD-GEOMETRY
+    ?DUP IF _ATTP-RETURN2 EXIT THEN
+    2DUP _ATTP-ALIAS-GEOMETRY
+    ?DUP IF _ATTP-RETURN2 EXIT THEN
+    _ATTP-VAULT-GEOMETRY ;
+
+\ =====================================================================
+\  Public-client configuration admission and binding snapshot
+\ =====================================================================
+
+: _ATTP-CONFIG-CALLBACK  ( config-view workspace -- status )
+    >R
+    DUP
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.PROFILE @
+    R@ _ATTPW.CHILD
+    AT-OAUTH-CLIENT-VIEW-ADMIT
+    _ATTP-CLIENT>STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+
+    DUP OAUTH2-CLIENT-VIEW-AUTH-METHOD@
+    S" none" COMPARE 0<> IF
+        DROP R> DROP AT-OAUTH-TOKEN-S-CONFIG EXIT
+    THEN
+    DUP OAUTH2-CLIENT-VIEW-AUTH-ALGORITHM@
+    OR IF
+        DROP R> DROP AT-OAUTH-TOKEN-S-CONFIG EXIT
+    THEN
+    DUP OAUTH2-CLIENT-VIEW-DPOP-BOUND? 0= IF
+        DROP R> DROP AT-OAUTH-TOKEN-S-CONFIG EXIT
+    THEN
+
+    OAUTH2-CLIENT-VIEW-BINDING@
+    2DUP OAUTH2-P256-KEY-BINDING-PRESENCE@
+    DUP OAUTH2-P256-KEY-S-OK <> IF
+        _ATTP-KEY>STATUS >R
+        DROP 2DROP R> R> DROP EXIT
+    THEN
+    DROP
+    OAUTH2-P256-KEY-BINDING-F-DPOP <> IF
+        2DROP R> DROP AT-OAUTH-TOKEN-S-BINDING EXIT
+    THEN
+    DROP
+    R@ _ATTPW.BINDING
+    OAUTH2-P256-KEY-BINDING-SIZE MOVE
+    R> DROP AT-OAUTH-TOKEN-S-OK ;
+
+: _ATTP-ADMIT-CONFIG  ( workspace -- status )
+    >R
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.CONFIG @
+    ['] _ATTP-CONFIG-CALLBACK
+    R@
+    OAUTH2-CLIENT-CONFIG-WITH
+    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
+        _ATTP-CONFIG>STATUS >R
+        DROP R> R> DROP EXIT
+    THEN
+    DROP
+    DUP AT-OAUTH-TOKEN-STATUS-VALID? 0= IF
+        DROP AT-OAUTH-TOKEN-S-INTERNAL
+    THEN
+    R> DROP ;
+
+\ =====================================================================
+\  Fresh POST configuration and its external ownership boundary
+\ =====================================================================
+
+: _ATTP-CONFIGURE-POST  ( workspace -- status )
+    >R
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.PROFILE @
+    AT-OAUTH-PROFILE-TOKEN-TARGET@
+    DUP AT-OAUTH-PROFILE-S-OK <> IF
+        _ATTP-PROFILE>STATUS >R
+        DROP R> R> DROP EXIT
+    THEN
+    DROP
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.REQUEST-A @
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.REQUEST-CAP @
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.FORM-A @
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.FORM-CAP @
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.RESPONSE-A @
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.RESPONSE-CAP @
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.POST @
+    OAUTH2-HTTP-POST-CONFIGURE
+    _ATTP-POST>STATUS
+    R> DROP ;
+
+: _ATTP-POST-SPAN-STATUS
+  ( address length workspace -- status )
+    _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.POST @
+    OAUTH2-HTTP-POST-EXTERNAL-SPAN-STATUS
+    _ATTP-POST>STATUS ;
+
+\ Re-admit every non-POST persistent owner through the now-configured POST
+\ boundary.  The complete wrapper workspace covers its input snapshot,
+\ copied binding, DPoP descriptor, proof destination, and child scratch.
+: _ATTP-POST-GEOMETRY  ( workspace -- status )
+    >R
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.VAULT @ CVAULT-SIZE
+    R@ _ATTP-POST-SPAN-STATUS
+    ?DUP IF R> DROP EXIT THEN
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.CONFIG @
+    OAUTH2-CLIENT-CONFIG-SIZE
+    R@ _ATTP-POST-SPAN-STATUS
+    ?DUP IF R> DROP EXIT THEN
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.PROFILE @
+    AT-OAUTH-PROFILE-SIZE
+    R@ _ATTP-POST-SPAN-STATUS
+    ?DUP IF R> DROP EXIT THEN
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.TOKEN-REQUEST @
+    O2TREQ-SIZE
+    R@ _ATTP-POST-SPAN-STATUS
+    ?DUP IF R> DROP EXIT THEN
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.NONCE-OWNER @
+    OAUTH2-DPOP-NONCE-SIZE
+    R@ _ATTP-POST-SPAN-STATUS
+    ?DUP IF R> DROP EXIT THEN
+    R@ AT-OAUTH-TOKEN-P256-WORKSPACE-SIZE
+    R@ _ATTP-POST-SPAN-STATUS
+    R> DROP ;
+
+\ =====================================================================
+\  Nonce-scoped durable proof construction and raw token build
+\ =====================================================================
+
+: _ATTP-PREPARE-DPOP-INPUT
+  ( nonce-a nonce-u workspace -- )
+    >R
+    R@ _ATTPW.DPOP-INPUT
+    OAUTH2-P256-KEY-DPOP-INPUT-SIZE 0 FILL
+
+    S" POST"
+    DUP R@ _ATTPW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTM-U !
+    SWAP R@ _ATTPW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTM-A !
+    DROP
+
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.POST @
+    OAUTH2-HTTP-POST-HTU$
+    DUP R@ _ATTPW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTU-U !
+    SWAP R@ _ATTPW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTU-A !
+    DROP
+
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.IAT @
+    R@ _ATTPW.DPOP-INPUT OAUTH2-P256-KEY-DPOP-I.IAT !
+
+    DUP R@ _ATTPW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.NONCE-U !
+    SWAP R@ _ATTPW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.NONCE-A !
+    DROP
+
+    0 R@ _ATTPW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.TOKEN-A !
+    0 R@ _ATTPW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.TOKEN-U !
+    R@ _ATTPW.PROOF
+    R@ _ATTPW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.DESTINATION !
+    OAUTH2-DPOP-ES256-MAX-PROOF-BYTES
+    R@ _ATTPW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.CAPACITY !
+    R> DROP ;
+
+: _ATTP-SIGN  ( workspace -- status )
+    >R
+    R@ _ATTPW.BINDING
+    OAUTH2-P256-KEY-BINDING-SIZE
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.VAULT @
+    R@ _ATTPW.DPOP-INPUT
+    R@ _ATTPW.CHILD
+    OAUTH2-P256-KEY-DPOP-PROOF
+    DUP OAUTH2-P256-KEY-S-OK <> IF
+        _ATTP-KEY>STATUS >R
+        DROP R> R> DROP EXIT
+    THEN
+    DROP
+    DUP 0> 0= IF
+        DROP R> DROP AT-OAUTH-TOKEN-S-INTERNAL EXIT
+    THEN
+    DUP OAUTH2-DPOP-ES256-MAX-PROOF-BYTES U> IF
+        DROP R> DROP AT-OAUTH-TOKEN-S-INTERNAL EXIT
+    THEN
+    R@ _ATTPW.PROOF-U !
+    R> DROP AT-OAUTH-TOKEN-S-OK ;
+
+: _ATTP-RAW-BUILD  ( workspace -- status )
+    >R
+    R@ _ATTPW.PROOF
+    R@ _ATTPW.PROOF-U @
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.CONFIG @
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.PROFILE @
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.TOKEN-REQUEST @
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.POST @
+    R@ _ATTPW.CHILD
+    AT-OAUTH-TOKEN-BUILD
+    DUP AT-OAUTH-TOKEN-STATUS-VALID? 0= IF
+        DROP AT-OAUTH-TOKEN-S-INTERNAL
+    THEN
+    R> DROP ;
+
+: _ATTP-NONCE-CALLBACK
+  \ ( nonce-a nonce-u generation workspace -- token-status )
+    >R
+    DROP
+    R@ _ATTP-CONFIGURE-POST
+    ?DUP IF _ATTP-RETURN2 R> DROP EXIT THEN
+    R@ _ATTP-POST-GEOMETRY
+    ?DUP IF _ATTP-RETURN2 R> DROP EXIT THEN
+    R@ _ATTP-PREPARE-DPOP-INPUT
+    R@ _ATTP-SIGN
+    ?DUP IF R> DROP EXIT THEN
+    R@ _ATTP-RAW-BUILD
+    R> DROP ;
+
+: _ATTP-WITH-NONCE  ( workspace -- status )
+    >R
+    ['] _ATTP-NONCE-CALLBACK
+    R@
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.PROFILE @
+    AT-OAUTH-PROFILE-ISSUER@
+    DUP AT-OAUTH-PROFILE-S-OK <> IF
+        _ATTP-PROFILE>STATUS >R
+        2DROP 2DROP
+        R> R> DROP EXIT
+    THEN
+    DROP
+    R@ _ATTPW.INPUT AT-OAUTH-TOKEN-P256-I.NONCE-OWNER @
+    OAUTH2-DPOP-NONCE-WITH
+    DUP OAUTH2-DPOP-NONCE-S-OK <> IF
+        _ATTP-NONCE>STATUS >R
+        DROP
+        R> R> DROP EXIT
+    THEN
+    DROP
+    DUP AT-OAUTH-TOKEN-STATUS-VALID? 0= IF
+        DROP AT-OAUTH-TOKEN-S-INTERNAL
+    THEN
+    R> DROP ;
+
+\ =====================================================================
+\  Operation, caught cleanup, and public entry point
+\ =====================================================================
+
+: _ATTP-SNAPSHOT  ( input workspace -- )
+    >R
+    R@ _ATTP-WIPE
+    R@ _ATTPW.INPUT
+    AT-OAUTH-TOKEN-P256-INPUT-SIZE MOVE
+    R> DROP ;
+
+: _ATTP-FINISH  ( status workspace -- status )
+    >R
+    DUP AT-OAUTH-TOKEN-STATUS-VALID? 0= IF
+        DROP AT-OAUTH-TOKEN-S-INTERNAL
+    THEN
+    R@ _ATTP-WIPE
+    R> DROP ;
+
+: _ATTP-OP  ( input workspace -- status )
+    DUP >R
+    _ATTP-SNAPSHOT
+
+    R@ _ATTP-ADMIT-CONFIG
+    ?DUP IF R> _ATTP-FINISH EXIT THEN
+    R@ _ATTP-WITH-NONCE
+    R> _ATTP-FINISH ;
+
+: _ATTP-CALL  ( input workspace operation-xt -- status )
+    1 PICK >R
+    CATCH
+    DUP IF
+        DROP
+        R@ _ATTP-WIPE
+        _ATTP-DROP2
+        R> DROP
+        AT-OAUTH-TOKEN-S-INTERNAL EXIT
+    THEN
+    DROP R> DROP ;
+
+: AT-OAUTH-TOKEN-P256-BUILD  ( input workspace -- status )
+    2DUP _ATTP-GEOMETRY
+    ?DUP IF _ATTP-RETURN2 EXIT THEN
+    ['] _ATTP-OP _ATTP-CALL ;
+
+\ =====================================================================
+\  Compile-time geometry assertions
+\ =====================================================================
+
+1 CELLS 8 <> [IF]
+    ." AT OAuth token P-256 cell geometry mismatch" CR ABORT
+[THEN]
+
+_ATTP-I-RESPONSE-CAP 1 CELLS +
+AT-OAUTH-TOKEN-P256-INPUT-SIZE <> [IF]
+    ." AT OAuth token P-256 input geometry mismatch" CR ABORT
+[THEN]
+
+_ATTPW-INPUT-OFF AT-OAUTH-TOKEN-P256-INPUT-SIZE +
+_ATTPW-BINDING-OFF <> [IF]
+    ." AT OAuth token P-256 workspace geometry mismatch" CR ABORT
+[THEN]
+
+_ATTPW-BINDING-OFF OAUTH2-P256-KEY-BINDING-SIZE +
+_ATTPW-DPOP-INPUT-OFF <> [IF]
+    ." AT OAuth token P-256 workspace geometry mismatch" CR ABORT
+[THEN]
+
+_ATTPW-DPOP-INPUT-OFF OAUTH2-P256-KEY-DPOP-INPUT-SIZE +
+_ATTPW-PROOF-OFF <> [IF]
+    ." AT OAuth token P-256 workspace geometry mismatch" CR ABORT
+[THEN]
+
+_ATTPW-CHILD-OFF _ATTPW-CHILD-SIZE +
+AT-OAUTH-TOKEN-P256-WORKSPACE-SIZE <> [IF]
+    ." AT OAuth token P-256 workspace geometry mismatch" CR ABORT
+[THEN]
