@@ -727,9 +727,11 @@ REQUIRE ../sandbox/vm.f
     DUP SBOX-VM-S-STATE = IF DROP SBOX-HOST-S-STATE EXIT THEN
     DROP SBOX-HOST-S-RESULT ;
 
-\ A checked component TAKE has just validated the complete host graph and
-\ obtained REQUIRED from this host's VM.  Only the fresh result allocation
-\ needs span/capacity qualification before the transactional VM commit.
+\ The caller has validated the complete host graph and obtained REQUIRED from
+\ this host's VM.  The proof may cross only a non-reentrant allocation of the
+\ fresh, disjoint result buffer: no callback, yield, host/VM mutation, or
+\ ownership change may intervene.  Recheck the new result span and capacity
+\ before the transactional VM commit.
 : _SHOST-FINISH-MEASURED-VALIDATED
   ( result result-capacity required host -- status )
     >R

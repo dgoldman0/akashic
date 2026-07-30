@@ -827,9 +827,10 @@ VARIABLE _DSART-ADMISSION
     _DSC-TAKE-SPAN-STATUS
     >R 2DROP DROP R> ;
 
-\ The serialized service has already validated and correlated the admission,
-\ component generation, host, and VM graph for this exact slot.
-: _DSA-RESULT-SPAN-VALIDATED-STATUS
+\ A serialized service TAKE has already validated and correlated the exact
+\ slot, admission, component generation, host, and VM graph.  No callback,
+\ yield, substitution, or mutation may intervene before this span check.
+: _DSA-SERVICE-RESULT-SPAN-STATUS
   ( receipt admission -- status )
     _DSA.COMPONENT >R
     DESK-SBOX-RECEIPT-SIZE R>

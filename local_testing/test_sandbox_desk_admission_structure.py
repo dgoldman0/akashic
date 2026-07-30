@@ -179,7 +179,7 @@ def test_receipt_preflight_covers_the_whole_live_invocation_graph() -> None:
     span = _definition(source, "_DSA-RESULT-SPAN-STATUS")
     validated_span = _definition(
         source,
-        "_DSA-RESULT-SPAN-VALIDATED-STATUS",
+        "_DSA-SERVICE-RESULT-SPAN-STATUS",
     )
 
     assert active.count("DESK-SBOX-COMPONENT-VALID?") == 1

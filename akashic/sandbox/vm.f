@@ -413,10 +413,10 @@ PROVIDED akashic-sbx-vm
     LOOP
     DROP -1 ;
 
-\ The exact caller-owned writable span has been validated and any envelope
-\ validity result has already been saved.  Clear a possible seal first, then
-\ scrub the entire supplied capacity atomically.
-: _SVM-RESULT-RELEASE-VALIDATED  ( result result-capacity -- )
+\ The exact caller-owned writable span has been validated.  The envelope may
+\ be valid or invalid: clear a possible seal first, then scrub the entire
+\ supplied capacity atomically.
+: _SVM-RESULT-SCRUB-SPAN-VALIDATED  ( result result-capacity -- )
     0 2 PICK _SVT.MAGIC !
     0 FILL ;
 
@@ -434,7 +434,7 @@ PROVIDED akashic-sbx-vm
         0
     THEN
     >R
-    _SVM-RESULT-RELEASE-VALIDATED
+    _SVM-RESULT-SCRUB-SPAN-VALIDATED
     R> IF SBOX-VM-S-OK ELSE SBOX-VM-S-RESULT THEN ;
 
 \ =====================================================================
@@ -4056,9 +4056,12 @@ PROVIDED akashic-sbx-vm
     _SVM-TYPED-RESOURCES-SCRUB!
     SBOX-VM-S-OK ;
 
-\ The same instance was fully validated and successfully measured, its result
-\ span/disjointness and capacity were checked, and no mutation, callback, or
-\ yield has occurred.  Keep only the transactional commit and ownership move.
+\ The same instance was fully validated and successfully measured.  A
+\ disjoint result allocation may have occurred since measurement, but the
+\ caller must guarantee that allocation was non-reentrant and that no
+\ instance mutation, callback, or yield occurred.  Result span/disjointness
+\ and capacity have just been checked.  Keep only the transactional commit
+\ and ownership move.
 : _SVM-FINISH-MEASURED-VALIDATED
   ( result result-capacity required instance -- status )
     >R

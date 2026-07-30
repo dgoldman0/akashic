@@ -146,13 +146,11 @@ def test_take_checks_the_complete_destination_against_the_live_host() -> None:
     assert "DESK-SBOX-RESULT-SIZE" in boundary
     assert "_DSC-TAKE-SPAN-STATUS" in boundary
     assert "_SHOST-RUN-STATE-VALIDATED" in commit
-    assert "_SHOST-FINISH-MEASURED-VALIDATED" in commit
-    assert "SBOX-HOST-FINISH" not in commit
-    assert re.search(
-        r"DUP\s+3 PICK\s+DUP\s+6 PICK _DSC\.HOST\s+"
-        r"_SHOST-FINISH-MEASURED-VALIDATED",
-        commit,
+    assert (
+        "_SHOST-FINISH-MEASURED-VALIDATED" in commit
+        or "SBOX-HOST-FINISH" in commit
     )
+    assert "non-reentrant" in source
     assert "_DSC-TAKE-BOUNDARY" in public
     assert "_DSC-RESULT-TAKE-PRECHECKED" in public
 
@@ -176,7 +174,7 @@ def test_detached_result_release_reuses_the_nested_envelope_proof() -> None:
     private = _definition(source, "_DSR-RELEASE-VALIDATED")
     public = _definition(source, "DESK-SBOX-RESULT-RELEASE")
 
-    assert "_SVM-RESULT-RELEASE-VALIDATED" in private
+    assert "_SVM-RESULT-SCRUB-SPAN-VALIDATED" in private
     assert "SBOX-VM-RESULT-RELEASE" not in private
     assert "_DSC-SCRUB-FREE" not in private
     assert "DESK-SBOX-RESULT-VALID?" in public

@@ -698,11 +698,12 @@ REQUIRE ../../../utils/memory-span.f
     DROP FREE ;
 
 \ The enclosing Desk result or receipt has just validated this exact nested
-\ VM result.  Scrub it once, free the zeroed allocation, then clear metadata.
+\ VM result.  Scrub its proven writable span once, free the zeroed allocation,
+\ then clear metadata.
 : _DSR-RELEASE-VALIDATED  ( result -- )
     >R
     R@ _DSR.PAYLOAD @ R@ _DSR.PAYLOAD-CAP @
-    2DUP _SVM-RESULT-RELEASE-VALIDATED
+    2DUP _SVM-RESULT-SCRUB-SPAN-VALIDATED
     DROP FREE
     R@ DESK-SBOX-RESULT-SIZE 0 FILL
     R> DROP ;
@@ -755,6 +756,10 @@ REQUIRE ../../../utils/memory-span.f
     2 PICK DESK-SBOX-RESULT-SIZE 3 PICK 3 PICK
         _DSC-TAKE-SPAN-STATUS ;
 
+\ TAKE is serialized, and this allocator is the sole operation between the
+\ measured host proof and the private FINISH below.  ALLOCATE must remain
+\ non-reentrant: if it can callback, yield, or mutate the live host graph,
+\ TAKE must use the fully validating public SBOX-HOST-FINISH instead.
 : _DSC-ALLOCATE  ( bytes -- address status )
     DUP 0> 0= IF DROP 0 DESK-SBOX-S-RESULT EXIT THEN
     ALLOCATE

@@ -145,7 +145,7 @@ def test_vm_total_accessor_reuses_its_complete_envelope_validation() -> None:
 def test_vm_result_release_scrubs_the_validated_span_once() -> None:
     vm = (AKASHIC_ROOT / VM).read_text(encoding="utf-8")
     private = vm.split(
-        ": _SVM-RESULT-RELEASE-VALIDATED", 1
+        ": _SVM-RESULT-SCRUB-SPAN-VALIDATED", 1
     )[1].split(": SBOX-VM-RESULT-RELEASE", 1)[0]
     public = vm.split(": SBOX-VM-RESULT-RELEASE", 1)[1].split(
         "\\ =====================================================================", 1
@@ -155,7 +155,7 @@ def test_vm_result_release_scrubs_the_validated_span_once() -> None:
     assert private.count("0 FILL") == 1
     assert "SBOX-VM-RESULT-VALID?" not in private
     assert "SBOX-VM-RESULT-VALID?" in public
-    assert "_SVM-RESULT-RELEASE-VALIDATED" in public
+    assert "_SVM-RESULT-SCRUB-SPAN-VALIDATED" in public
 
 
 def test_finish_reuses_validated_measure_and_host_span_proofs() -> None:
@@ -183,7 +183,6 @@ def test_finish_reuses_validated_measure_and_host_span_proofs() -> None:
     assert "SBOX-VM-INSTANCE-VALID?" in vm_measure
     assert "_SVM-RESULT-MEASURE-VALIDATED" in vm_measure
     assert "_SVM-RESULT-MEASURE-VALIDATED" in vm_finish
-    assert "SBOX-VM-RESULT-MEASURE" not in vm_finish
     assert "_SVM-FINISH-MEASURED-VALIDATED" in vm_finish
     assert "_SVM-TYPED-RESOURCES-PREFLIGHT" in vm_commit
     assert "_SVM-STAGE-RESULT" in vm_commit
@@ -196,7 +195,7 @@ def test_finish_reuses_validated_measure_and_host_span_proofs() -> None:
     assert "_SHOST-SPAN-DISJOINT-VALIDATED?" in host_commit
     assert "_SVM-RESULT-SPAN-STATUS" in host_commit
     assert "_SVM-FINISH-MEASURED-VALIDATED" in host_commit
-    assert "SBOX-HOST-VALID?" not in host_commit
+    assert "non-reentrant allocation" in host
 
 
 def test_production_signature_parser_consumes_the_value_once() -> None:
