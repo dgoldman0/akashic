@@ -93,7 +93,11 @@ Landing 3 currently includes:
 - `9e518e5` — compact SR4 security module-key normalization;
 - `2ae49bc` — durable OAuth client-authentication and DPoP P-256 key
   ownership; and
-- `5ea452f` — confidential inline AT OAuth deployment/key composition.
+- `5ea452f` — confidential inline AT OAuth deployment/key composition;
+- `79c2c03` — retained Client Identifier Metadata provenance for the inline
+  deployment; and
+- this checkpoint — provider-neutral published P-256 key ownership extracted
+  from the AT inline composition.
 
 These commits do not close landing 3. `ff5bbbd` completes the local
 AT-specific deployment binder: one validated immutable client configuration,
@@ -127,13 +131,22 @@ resolves the distinct DPoP identity through a completed second owner call.
 The final callback runs only after both vault borrows have returned and
 retains no private scalar or process-global operation state.
 
-This checkpoint closes the retained-HTTP-resource path for the Client
+`79c2c03` closes the retained-HTTP-resource path for the Client
 Identifier Metadata Document. `AT-OAUTH-INLINE-HRES-WITH` binds the configured
 `client_id` to exact requested and effective targets, status 200, zero
 redirects, accepted JSON media, complete response-storage ownership, and the
 existing confidential inline composition. The shared state-free HRES policy
 now lives in `atproto/oauth-hres.f`; the profile and inline adapters consume it
 without moving generic transport ownership into AT-specific code.
+
+The current checkpoint moves checked published-key selection, durable
+client-authentication ownership, sequential DPoP ownership, public-identity
+comparison, and final callback containment into the provider-neutral
+`security/oauth2/published-key-p256.f` module. The AT inline composition now
+retains only deployment and inline-source policy before delegating to that
+generic owner. Its public status/API and 111,928-byte workspace remain stable;
+the reusable 58,056-byte key owner is now ready for the remote source path
+without duplicating AT-specific selector and vault logic.
 
 The immediate next boundary is remote `jwks_uri` acquisition as a separate
 key-source path. Its set must pass the same checked selector and durable
@@ -152,10 +165,10 @@ At preparation time:
 ```text
 repository: /home/kir/Documents/Projects/fantasy-computing/akashic
 branch:     main
-code base:  this retained-HRES checkpoint
+code base:  this generic published-key extraction checkpoint
 record:     updated in the same checkpoint
 upstream:   origin/main at cc37ce8
-ahead:      1 commit after committing this checkpoint
+ahead:      2 commits after committing this checkpoint
 tests:      no test process running
 ```
 
@@ -165,7 +178,8 @@ There is no current SR4-owned uncommitted work. The latest SR4 commits are:
 2ae49bc Add durable OAuth P-256 key ownership
 baa640b Advance SR4 to deployment key composition
 5ea452f Compose confidential inline AT OAuth keys
-this checkpoint: bind retained Client Identifier Metadata to inline deployment
+79c2c03 Bind retained client metadata to inline OAuth
+this checkpoint: extract generic published P-256 key ownership
 ```
 
 `2ae49bc` added `OAUTH2-P256-KEY-PROVISION-*`,
@@ -184,12 +198,20 @@ the owner calls sequentially, copies only public identity into outer scratch,
 and rejects public or `jwks_uri` deployments as a separate key-source
 boundary.
 
-This checkpoint adds the state-free shared AT OAuth HRES policy and
+`79c2c03` adds the state-free shared AT OAuth HRES policy and
 `AT-OAUTH-INLINE-HRES-WITH`. The adapter independently rechecks status,
 redirect, requested/effective URI and JSON-media provenance, admits the
 complete caller-owned response storage before any workspace write, and then
 borrows the exact retained body into the existing inline deployment. It does
 not own DNS, sockets, TLS, deadlines, leases, or response cleanup.
+
+The current checkpoint adds `OAUTH2-P256-PUBLISHED-WITH` under
+`akashic/security/oauth2/` and refactors `AT-OAUTH-INLINE-WITH` to consume it.
+The generic module has no AT, HTTP, token, session, XRPC, Streams, or
+application-state dependency. AT remains responsible for exact Client
+Metadata source selection and deployment policy; the generic owner proves
+that one checked published set agrees with durable local client ownership and
+then lends distinct client/DPoP public identity.
 
 The following files are preserved unrelated user/old-L13 work. Do not stage,
 restore, rewrite, or delete them as part of SR4:
@@ -325,6 +347,16 @@ Completed evidence:
   response-storage alias preflight. The linked HRES, profile, deployment, and
   inline fixture loads also passed; their broader behavior remains supported
   by the separately recorded suites rather than being duplicated here.
+- The generic published-key extraction passed both inline-consumer static
+  gates. A sequential diagnostic run compiled the full 28-module graph and
+  passed contracts, success, key-source, binding, mismatch, owner, and
+  distinctness groups before exposing a missing nested guard around the AT
+  nine-argument callback. After that guard was restored, a focused
+  success-and-callback run passed in 948,770,399 guest steps and 650.25 summed
+  stage seconds, and a focused rejection-before-write preflight run passed in
+  877,258,595 guest steps and 533.40 summed stage seconds. Both used one core,
+  128 MiB of external machine memory, and the checked-in 180,000,000-step
+  phase ceiling.
 
 Recorded, non-gating deferrals for this retained-HRES boundary are the broad
 HRES header/outcome/media cross-product, every inline-status pass-through
@@ -334,6 +366,16 @@ cancellation and lease-cleanup evidence is deferred to the generic
 transport-owner/fake-PDS vertical slice rather than duplicated in this
 state-free retained-result adapter. Review these items before declaring the
 affected production boundaries finally closed.
+
+Recorded, non-gating deferrals for the provider-neutral published-key owner
+are a standalone direct-API matrix, every subordinate-status permutation, the
+full protected-alias/canary/capacity cross-product, and concurrent
+caller-mutation experiments. A second complete nine-group inline rerun was
+also not performed after the isolated callback-bridge correction: all
+unchanged groups had already passed, while patched focused runs covered the
+changed success/callback path and the security-relevant preflight/cleanup
+path. The remote consumer must still gate two-resource provenance and body
+ownership rather than treating these deferrals as remote-source evidence.
 
 The 16-minute-52-second result is a complete staged module-load and contract
 qualification, not the measured latency of one OAuth admission or one network
@@ -352,12 +394,13 @@ delta. Do not run another suite or a test subagent concurrently.
    `docs/atproto/oauth-deployment.md`,
    `docs/atproto/oauth-deployment-inline.md`,
    `docs/atproto/oauth-inline-http-resource.md`,
-   `docs/security/oauth2-client-metadata.md`, and
-   `docs/security/jose-jwk-p256.md`, and
-   `docs/security/jose-jwk-set-p256.md`. Treat the retained-HRES checkpoint
-   containing this record as the completed confidential inline
-   deployment/metadata-provenance boundary; it deliberately does not acquire
-   `jwks_uri`.
+   `docs/security/oauth2-client-metadata.md`,
+   `docs/security/jose-jwk-p256.md`,
+   `docs/security/jose-jwk-set-p256.md`, and
+   `docs/security/oauth2-published-key-p256.md`. Treat the retained-HRES and
+   generic published-key checkpoints containing this record as the completed
+   confidential inline deployment/metadata-provenance boundary; they
+   deliberately do not acquire `jwks_uri`.
 2. Compose bounded remote `jwks_uri` acquisition with the checked set selector
    and durable private-key owner. Compare both the recovered public point and
    RFC 7638 thumbprint with the selected published client key, preserve

@@ -338,7 +338,7 @@ VARIABLE _atoit-cb-context
     _ATOID-VIOLATIONS @ 0= _atoit-assert
     _ATOID-SELECT-CLEAN @ _atoit-assert
     _ATOID-WHOLE-SEEN @ _atoit-assert
-    _ATOID-EXTERNAL-CALLS @ 4 = _atoit-assert
+    _ATOID-EXTERNAL-CALLS @ 7 = _atoit-assert
     _atoit-stack ;
 
 : _ATOIT-TEST-KEY-SOURCE  ( -- )

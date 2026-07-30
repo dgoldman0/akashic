@@ -1,9 +1,9 @@
 # AT OAuth Confidential Inline Deployment
 
 `akashic/atproto/oauth-deployment-inline.f` composes the local AT OAuth
-deployment binder, checked P-256 JWK Set selection, and durable local P-256 key
-ownership for one confidential client whose Client ID Metadata Document embeds
-`jwks`.
+deployment binder with the provider-neutral
+`akashic/security/oauth2/published-key-p256.f` owner for one confidential
+client whose Client ID Metadata Document embeds `jwks`.
 
 The module is published as:
 
@@ -76,7 +76,9 @@ an unchecked key source.
 
 The operation remains inside the deployment callback while the validated
 configuration and metadata views, including the raw inline `jwks` token, are
-live. It then performs the key work in this order:
+live. It passes that borrowed token and the canonical configured binding to
+`OAUTH2-P256-PUBLISHED-WITH`, which performs the reusable key work in this
+order:
 
 1. Resolve the client-authentication role with
    `OAUTH2-P256-KEY-WITH-CLIENT`.
@@ -113,26 +115,17 @@ The fixed 111,928-byte workspace has this exact layout:
 
 | Offset | Size | Purpose |
 |---:|---:|---|
-| 0 | 192 | Orchestration header |
-| 192 | 256 | Copied client `kid` |
-| 448 | 65 | Copied client public key |
-| 513 | 7 | Alignment padding |
-| 520 | 32 | Copied client thumbprint |
-| 552 | 65 | Copied DPoP public key |
-| 617 | 7 | Alignment padding |
-| 624 | 32 | Copied DPoP thumbprint |
-| 656 | 65 | Selected published public key |
-| 721 | 7 | Alignment padding |
-| 728 | 32 | Selected published thumbprint |
-| 760 | 53,760 | `AT-OAUTH-DEPLOYMENT-WITH` child workspace |
-| 54,520 | 17,879 | Sequential P-256 key-owner child workspace |
-| 72,399 | 1 | Alignment padding |
-| 72,400 | 39,528 | Checked P-256 JWK Set child workspace |
+| 0 | 112 | AT inline orchestration header |
+| 112 | 53,760 | `AT-OAUTH-DEPLOYMENT-WITH` child workspace |
+| 53,872 | 58,056 | `OAUTH2-P256-PUBLISHED-WITH` child workspace |
 | 111,928 | 0 | End of workspace |
 
-The header is orchestration-only. The dedicated public-output regions preserve
-the client result while the owner child workspace is wiped and reused for
-DPoP. They do not extend lifetime beyond the final callback.
+The header is orchestration-only. The published-key child owns its copied
+public-output regions, sequential durable-owner child, and checked JWK Set
+child. Their exact internal layout and provider-neutral ownership rules are
+documented in
+[`oauth2-published-key-p256.md`](../security/oauth2-published-key-p256.md).
+No copied identity extends beyond the final callback.
 
 After an admitted operation begins, every normal success or failure wipes the
 complete workspace. A caught unexpected operation failure also wipes it before

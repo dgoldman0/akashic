@@ -20,6 +20,13 @@ from test_at_oauth_inline import SEAM_DOUBLES, _packed  # noqa: E402
 SOURCE = ROOT / "akashic" / "atproto" / "oauth-inline-hres.f"
 SHARED_SOURCE = ROOT / "akashic" / "atproto" / "oauth-hres.f"
 INLINE_SOURCE = ROOT / "akashic" / "atproto" / "oauth-deployment-inline.f"
+PUBLISHED_SOURCE = (
+    ROOT
+    / "akashic"
+    / "security"
+    / "oauth2"
+    / "published-key-p256.f"
+)
 HRES_FIXTURE = LOCAL_TESTING / "hres-contracts.f"
 PROFILE_FIXTURE = LOCAL_TESTING / "at-oauth-prof-test.f"
 DEPLOYMENT_FIXTURE = LOCAL_TESTING / "at-oauth-deploy-test.f"
@@ -81,6 +88,11 @@ LOAD_STAGES = (
     ("jwk-p256", "security/jose/jwk-p256.f", "ATOIH JWK READY"),
     ("jwk-set", "security/jose/jwk-set-p256.f", "ATOIH JWK SET READY"),
     ("seam", "local_testing/atoi-seam.f", "ATOIH SEAM READY"),
+    (
+        "published-key",
+        "local_testing/o2pp-source.f",
+        "ATOIH PUBLISHED KEY READY",
+    ),
     ("inline", "local_testing/atoi-source.f", "ATOIH INLINE READY"),
     ("shared-hres", "local_testing/atohttp-source.f", "ATOIH POLICY READY"),
     ("source", "local_testing/atoih-source.f", "ATOIH SOURCE READY"),
@@ -174,6 +186,8 @@ def _assert_physical_comments(path: Path, source: str) -> None:
 def _assert_static_contracts() -> None:
     source = SOURCE.read_text(encoding="utf-8")
     shared = SHARED_SOURCE.read_text(encoding="utf-8")
+    inline = INLINE_SOURCE.read_text(encoding="utf-8")
+    published = PUBLISHED_SOURCE.read_text(encoding="utf-8")
     fixture = FIXTURE.read_text(encoding="utf-8")
     source_code = _forth_code(source).lower()
     fixture_code = _forth_code(fixture)
@@ -184,6 +198,7 @@ def _assert_static_contracts() -> None:
     assert len({marker for _, _, marker in stages}) == len(stages)
     for guest_name in (
         "atoi-seam.f",
+        "o2pp-source.f",
         "atoi-source.f",
         "atohttp-source.f",
         "atoih-source.f",
@@ -196,7 +211,9 @@ def _assert_static_contracts() -> None:
 
     assert "PROVIDED akashic-at-oauth-ihres" in source
     assert "PROVIDED akashic-at-oauth-http" in shared
+    assert "PROVIDED akashic-oauth2-p256-pub" in published
     assert "PROVIDED at-oauth-ihres-test" in fixture
+    assert "published-key-p256.f" in inline
     assert not re.search(
         r"(?mi)^[ \t]*(?:CREATE|VARIABLE|VALUE|DEFER|GUARD)\b",
         source,
@@ -260,6 +277,7 @@ def _assert_static_contracts() -> None:
     ), "focused fixture must not borrow the DO-loop return stack"
     _assert_physical_comments(SOURCE, source)
     _assert_physical_comments(SHARED_SOURCE, shared)
+    _assert_physical_comments(PUBLISHED_SOURCE, published)
     _assert_physical_comments(FIXTURE, fixture)
 
 
@@ -306,6 +324,10 @@ def _run_lifecycle(timeout: float) -> int:
             (
                 "local_testing/atoi-seam.f",
                 harness._minify_forth(SEAM_DOUBLES).encode("utf-8"),
+            ),
+            (
+                "local_testing/o2pp-source.f",
+                _packed(PUBLISHED_SOURCE, remove_requires=True),
             ),
             (
                 "local_testing/atoi-source.f",

@@ -24,6 +24,13 @@ DEPLOYMENT = ROOT / "akashic" / "atproto" / "oauth-deployment.f"
 JWK = ROOT / "akashic" / "security" / "jose" / "jwk-p256.f"
 JWK_SET = ROOT / "akashic" / "security" / "jose" / "jwk-set-p256.f"
 KEY_OWNER = ROOT / "akashic" / "security" / "oauth2" / "key-p256.f"
+PUBLISHED = (
+    ROOT
+    / "akashic"
+    / "security"
+    / "oauth2"
+    / "published-key-p256.f"
+)
 VAULT = ROOT / "akashic" / "security" / "credential-vault.f"
 PROFILE_FIXTURE = LOCAL_TESTING / "at-oauth-prof-test.f"
 DEPLOYMENT_FIXTURE = LOCAL_TESTING / "at-oauth-deploy-test.f"
@@ -440,6 +447,11 @@ LOAD_STAGES = (
         "ATOI JWK SET READY",
     ),
     ("seam", "local_testing/atoi-seam.f", "ATOI SEAM READY"),
+    (
+        "published-key",
+        "local_testing/o2pp-source.f",
+        "ATOI PUBLISHED KEY READY",
+    ),
     ("source", "local_testing/atoi-source.f", "ATOI SOURCE READY"),
     (
         "profile-fixture",
@@ -540,6 +552,7 @@ def _assert_vectors() -> None:
 
 def _assert_static_contracts() -> None:
     source = SOURCE.read_text(encoding="utf-8")
+    published = PUBLISHED.read_text(encoding="utf-8")
     fixture = FIXTURE.read_text(encoding="utf-8")
     fixture_code = _forth_code(fixture)
     seam_code = _forth_code(SEAM_DOUBLES)
@@ -553,6 +566,7 @@ def _assert_static_contracts() -> None:
     assert len(set(markers)) == len(markers)
     for name in (
         "atoi-seam.f",
+        "o2pp-source.f",
         "atoi-source.f",
         PROFILE_FIXTURE.name,
         DEPLOYMENT_FIXTURE.name,
@@ -561,16 +575,26 @@ def _assert_static_contracts() -> None:
         assert len(name.encode("ascii")) <= 23
 
     assert "PROVIDED akashic-at-oauth-inline" in source
+    assert "PROVIDED akashic-oauth2-p256-pub" in published
     assert "PROVIDED at-oauth-inline-test" in fixture
     assert "111928 CONSTANT AT-OAUTH-INLINE-WORKSPACE-SIZE" in source
+    assert (
+        "58056 CONSTANT OAUTH2-P256-PUBLISHED-WORKSPACE-SIZE"
+        in published
+    )
     assert not re.search(
         r"(?mi)^[ \t]*(?:CREATE|VARIABLE|VALUE|DEFER|GUARD)\b",
         source,
     ), "inline composition must retain no module-owned mutable state"
+    assert not re.search(
+        r"(?mi)^[ \t]*(?:CREATE|VARIABLE|VALUE|DEFER|GUARD)\b",
+        published,
+    ), "published-key composition must retain no module-owned mutable state"
     for required in (
         "oauth-deployment.f",
-        "jwk-set-p256.f",
+        "jwk-p256.f",
         "key-p256.f",
+        "published-key-p256.f",
         "credential-vault.f",
     ):
         assert any(required in item for item in _requires(SOURCE))
@@ -597,45 +621,74 @@ def _assert_static_contracts() -> None:
         "AT-OAUTH-INLINE-STATUS-VALID?",
         "AT-OAUTH-INLINE-WITH",
         "AT-OAUTH-DEPLOYMENT-WITH",
+        "OAUTH2-P256-PUBLISHED-WITH",
+        "CVAULT-EXTERNAL-SPAN-STATUS",
+    ):
+        assert word in source
+
+    for word in (
+        "OAUTH2-P256-PUBLISHED-WORKSPACE-CLEAR",
+        "OAUTH2-P256-PUBLISHED-STATUS-VALID?",
+        "OAUTH2-P256-PUBLISHED-WITH",
         "JOSE-JWK-SET-P256-SELECT",
         "OAUTH2-P256-KEY-BINDING-PRESENCE@",
         "OAUTH2-P256-KEY-WITH-CLIENT",
         "OAUTH2-P256-KEY-WITH-DPOP",
         "CVAULT-EXTERNAL-SPAN-STATUS",
     ):
-        assert word in source
+        assert word in published
 
     callback = _word_body(source, "_ATOI-DEPLOYMENT-CALLBACK-RUN")
     ordered = (
-        "_ATOI-CLIENT-OWNER-SAFE",
-        "_ATOI-DPOP-OWNER-SAFE",
-        "_ATOI-APPLICATION-SAFE",
+        "_ATOI-DEPLOYMENT-PREP",
+        "_ATOI-PUBLISHED-SAFE",
     )
     positions = [callback.index(marker) for marker in ordered]
     assert positions == sorted(positions)
-    client_callback = _word_body(source, "_ATOI-CLIENT-KEY-CALLBACK")
-    assert "_ATOI-SELECT-SAFE" in client_callback
+    published_op = _word_body(published, "_O2PP-WITH-OP")
+    published_ordered = (
+        "_O2PP-BINDING-PREP",
+        "_O2PP-CLIENT-OWNER-SAFE",
+        "_O2PP-DPOP-OWNER-SAFE",
+        "_O2PP-APPLICATION-SAFE",
+    )
+    positions = [published_op.index(marker) for marker in published_ordered]
+    assert positions == sorted(positions)
+    client_callback = _word_body(published, "_O2PP-CLIENT-KEY-CALLBACK")
+    assert "_O2PP-SELECT-SAFE" in client_callback
     for internal in (
-        "_ATOI-CLIENT-KEY-CALLBACK",
-        "_ATOI-DPOP-KEY-CALLBACK",
+        "_O2PP-CLIENT-KEY-CALLBACK",
+        "_O2PP-DPOP-KEY-CALLBACK",
+        "_O2PP-SELECT-CALL",
+    ):
+        assert internal in published
+    for internal in (
         "_ATOI-DEPLOYMENT-CALL",
-        "_ATOI-SELECT-CALL",
+        "_ATOI-PUBLISHED-CALL",
+        "_ATOI-PUBLISHED-CALLBACK",
     ):
         assert internal in source
+    inline_callback = _word_body(source, "_ATOI-PUBLISHED-CALLBACK")
+    assert "_ATOI-CALLBACK-GUARD" in inline_callback
+    assert "DEPTH" in inline_callback
 
     assert "CVAULT-EXTERNAL-SPAN-STATUS" in source
     assert source.count("_ATOI-EXTERNAL-STATUS") >= 5
+    assert "CVAULT-EXTERNAL-SPAN-STATUS" in published
+    assert published.count("_O2PP-EXTERNAL-STATUS") >= 4
     assert "JOSE-JWK-P256-CALLER-SPAN-STATUS" in source
     assert source.count("_ATOI-SPAN-STATUS") >= 7
     assert "MSPAN-OVERLAP?" in source
     assert source.index("CVAULT-EXTERNAL-SPAN-STATUS") < source.index(
         "AT-OAUTH-DEPLOYMENT-WITH"
     )
-    for number in (
-        "192", "448", "520", "552", "624", "656", "728", "760",
-        "53760", "54520", "17879", "72400", "39528", "111928",
-    ):
+    for number in ("112", "53760", "53872", "58056", "111928"):
         assert number in source
+    for number in (
+        "80", "336", "408", "440", "512", "544", "616",
+        "648", "17879", "18528", "39528", "58056",
+    ):
+        assert number in published
 
     for marker in (
         "_ATOIT-TEST-CONTRACTS",
@@ -658,6 +711,7 @@ def _assert_static_contracts() -> None:
 
     for code, label in (
         (_forth_code(source), "production source"),
+        (_forth_code(published), "published-key source"),
         (fixture_code, "fixture"),
         (seam_code, "seam doubles"),
     ):
@@ -667,6 +721,7 @@ def _assert_static_contracts() -> None:
             code,
         ), f"{label} must not borrow the DO-loop return stack"
     _assert_physical_comments(SOURCE, source)
+    _assert_physical_comments(PUBLISHED, published)
     _assert_physical_comments(FIXTURE, fixture)
     _assert_physical_comments(Path("SEAM_DOUBLES"), SEAM_DOUBLES)
     _assert_vectors()
@@ -721,6 +776,10 @@ def _run_lifecycle(timeout: float) -> int:
             (
                 "local_testing/atoi-seam.f",
                 harness._minify_forth(SEAM_DOUBLES).encode("utf-8"),
+            ),
+            (
+                "local_testing/o2pp-source.f",
+                _packed(PUBLISHED, remove_requires=True),
             ),
             (
                 "local_testing/atoi-source.f",
