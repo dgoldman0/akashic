@@ -159,6 +159,11 @@ def test_submission_uses_service_policy_and_copies_caller_identity() -> None:
     assert submit.index("DESK-SBOX-ADMISSION-INVOKE") < submit.index(
         "DESK-SBOX-JOB-STATE-RUNNABLE"
     )
+    assert re.search(
+        r"_DSJSUB-FREE-SLOT\s+_DSJSUB-SLOT\s+!",
+        submit,
+    )
+    assert not re.search(r"_DSJSUB-FREE-SLOT\s+DUP", submit)
 
 
 def test_tick_advances_at_most_one_job_by_one_fixed_slice() -> None:
@@ -174,6 +179,14 @@ def test_tick_advances_at_most_one_job_by_one_fixed_slice() -> None:
     assert "DESK-SBOX-JOB-CAPACITY MOD" in tick
     assert "_DSJT-ADVANCE-CURSOR" in tick
     assert "_DSJT-STATUS @ EXIT" in tick
+    assert (
+        "_DSJT-STATUS @ DESK-SBOX-JOB-STATUS-VALID? 0=" in tick
+    )
+    assert not re.search(
+        r"_DSJT-STATUS\s+@\s+DUP\s+"
+        r"DESK-SBOX-JOB-STATUS-VALID\?",
+        tick,
+    )
 
 
 def test_slot_validation_checks_the_embedded_graph_only_once() -> None:
