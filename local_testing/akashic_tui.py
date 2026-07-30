@@ -19583,6 +19583,195 @@ THEN
     total_sectors=PROFILES["desktop"].total_sectors,
 )
 
+_STREAMS_VERTICAL_FEED_URL = (
+    "https://foo-dogsquared.github.io/"
+    "hugo-theme-more-contentful/feed.rss"
+)
+_STREAMS_VERTICAL_ACTOR = "did:plc:z72i7hdynmk6r22z27h6tvur"
+_STREAMS_VERTICAL_COMPOSITION = r"""
+REQUIRE atproto/public-trust.f
+REQUIRE local_testing/streams-live-trust.f
+
+VARIABLE _dsv-source
+VARIABLE _dsv-target
+
+: _dsv-syndication-authorized?
+  ( exact-source canonical-target context -- allowed? )
+    DROP _dsv-target ! _dsv-source !
+    _dsv-source @ STREAMS-SOURCE-VALID? 0= IF 0 EXIT THEN
+    _dsv-target @ HTARGET-VALID? 0= IF 0 EXIT THEN
+    _dsv-source @ SSOURCE.KIND @ SSOURCE-KIND-SYNDICATION <>
+        IF 0 EXIT THEN
+    _dsv-source @ SSOURCE.FORMAT @
+        DUP SSOURCE-FORMAT-AUTO =
+        SWAP SSOURCE-FORMAT-RSS = OR 0= IF 0 EXIT THEN
+    _dsv-source @ STREAMS-SOURCE-ENDPOINT$
+        S" https://foo-dogsquared.github.io/hugo-theme-more-contentful/feed.rss"
+        STR-STR= 0= IF 0 EXIT THEN
+    _dsv-target @ HTARGET-HOST$
+        S" foo-dogsquared.github.io" STR-STRI=
+    _dsv-target @ HTARGET-PORT@ 443 = AND
+    _dsv-target @ HTARGET-REQUEST-TARGET$
+        S" /hugo-theme-more-contentful/feed.rss" STR-STR= AND ;
+
+: _dsv-syndication-factory  ( -- provider status )
+    ['] _dsv-syndication-authorized? 0
+        STREAMS-CONFIGURED-SYNDICATION-NEW-AUTHORIZED ;
+
+: _dsv-syndication-trust  ( builder context -- status )
+    DROP _lrc-artifact _lrc-artifact-u ROT MTRUST-MPTA+ ;
+
+ATPUBLIC-TRUST-REGISTER DUP MTRUST-S-OK <> IF
+    ." STREAMS VERTICAL AT TRUST FAIL status=" . CR TX-FLUSH ABORT
+THEN DROP
+S" org.akashic.trust.streams-vertical-syndication"
+    ['] _dsv-syndication-trust 0 MTRUST-REGISTER
+    DUP MTRUST-S-OK <> IF
+        ." STREAMS VERTICAL RSS TRUST FAIL status=" . CR TX-FLUSH ABORT
+    THEN DROP
+MTRUST-FREEZE DUP MTRUST-S-OK <> IF
+    ." STREAMS VERTICAL TRUST FREEZE FAIL status=" . CR TX-FLUSH ABORT
+THEN DROP
+"""
+
+PROFILES["desktop-streams-vertical"] = Profile(
+    roots=(
+        "tui/applets/desk/desk.f",
+        "tui/applets/streams/streams-online.f",
+        "atproto/public-trust.f",
+    ),
+    resources=PROFILES["desktop-streams"].resources,
+    autoexec=(
+        PROFILES["desktop-streams"].autoexec
+        .replace(
+            "REQUIRE tui/applets/streams/streams-online.f\n",
+            "REQUIRE tui/applets/streams/streams-online.f\n"
+            + _STREAMS_VERTICAL_COMPOSITION,
+            1,
+        )
+        .replace(
+            "_boot-streams-desc STREAMS-ONLINE-ENTRY",
+            "['] _dsv-syndication-factory _boot-streams-desc "
+            "STREAMS-ONLINE-ENTRY-WITH-CONFIGURED",
+            1,
+        )
+        .replace(
+            "ENTER-USERLAND",
+            "ENTER-USERLAND\n"
+            "10 64 0 2 IP-SET\n"
+            "10 64 0 1 GW-IP IP!\n"
+            "255 255 255 0 NET-MASK IP!\n"
+            "8 8 8 8 DNS-SERVER-IP IP!",
+            1,
+        )
+    ),
+    ready_markers=PROFILES["desktop-streams"].ready_markers,
+    stable_markers=("[Agent: offline]",),
+    linked=True,
+    requires_tap=True,
+    failure_markers=(
+        "STREAMS VERTICAL AT TRUST FAIL",
+        "STREAMS VERTICAL RSS TRUST FAIL",
+        "STREAMS VERTICAL TRUST FREEZE FAIL",
+    ),
+    initial_files=(
+        (
+            "local_testing/streams-live-trust.f",
+            _streams_live_exact_host_trust_leaf(),
+        ),
+    ),
+    include_large_sample=False,
+    total_sectors=PROFILES["desktop-streams"].total_sectors,
+)
+
+PROFILES["streams-multiprotocol-composition"] = Profile(
+    roots=(
+        "tui/applets/streams/streams-online.f",
+        "atproto/public-trust.f",
+    ),
+    resources=(),
+    autoexec=(
+        r"""\ autoexec.f - deterministic Streams multiprotocol composition
+ENTER-USERLAND
+." [akashic] loading Streams multiprotocol composition" CR
+REQUIRE tui/applets/streams/streams-online.f
+"""
+        + _STREAMS_VERTICAL_COMPOSITION
+        + r"""
+VARIABLE _dsvc-fails
+VARIABLE _dsvc-checks
+VARIABLE _dsvc-provider
+CREATE _dsvc-source STREAMS-SOURCE-SIZE ALLOT
+
+: _dsvc-assert  ( flag -- )
+    1 _dsvc-checks +! 0= IF
+        1 _dsvc-fails +! ." STREAMS MULTIPROTOCOL ASSERT "
+        _dsvc-checks @ . CR
+    THEN ;
+
+: _dsvc-run  ( -- )
+    0 _dsvc-fails ! 0 _dsvc-checks ! 0 _dsvc-provider !
+
+    _dsv-syndication-factory
+    DUP SCONF-S-OK = _dsvc-assert DROP
+    DUP _dsvc-provider ! SCONF-VALID? _dsvc-assert
+    _dsvc-source STREAMS-SOURCE-INIT
+    S" Reviewed vertical RSS" _dsvc-source STREAMS-SOURCE-LABEL!
+        SSREG-S-OK = _dsvc-assert
+    S" https://foo-dogsquared.github.io/hugo-theme-more-contentful/feed.rss"
+        _dsvc-source STREAMS-SOURCE-ENDPOINT!
+        SSREG-S-OK = _dsvc-assert
+    SSOURCE-KIND-SYNDICATION _dsvc-source SSOURCE.KIND !
+    SSOURCE-FORMAT-RSS _dsvc-source SSOURCE.FORMAT !
+    1 _dsvc-source SSOURCE.REVISION !
+    _dsvc-source STREAMS-SOURCE-VALID? _dsvc-assert
+    _dsvc-source _dsvc-provider @ SCONF-CONFIGURE
+        SCONF-S-OK = _dsvc-assert
+    _dsvc-provider @ SCONF-REQUESTED$
+        S" https://foo-dogsquared.github.io/hugo-theme-more-contentful/feed.rss"
+        STR-STR= _dsvc-assert
+    _dsvc-provider @ SCONF-RELEASE SCONF-S-OK = _dsvc-assert
+    0 _dsvc-provider !
+
+    STREAMS-BLUESKY-PUBLIC-NEW
+    DUP SPUB-S-OK = _dsvc-assert DROP
+    DUP _dsvc-provider ! SPUB-VALID? _dsvc-assert
+    S" did:plc:z72i7hdynmk6r22z27h6tvur" _dsvc-provider @
+        SPUB-CONFIGURE SPUB-S-OK = _dsvc-assert
+    _dsvc-provider @ SPUB-FREE SPUB-S-OK = _dsvc-assert
+    0 _dsvc-provider !
+
+    _dsvc-fails @ 0= IF
+        ." STREAMS MULTIPROTOCOL COMPOSITION PASS "
+        _dsvc-checks @ . CR
+    ELSE
+        ." STREAMS MULTIPROTOCOL COMPOSITION FAIL "
+        _dsvc-fails @ . ." /" _dsvc-checks @ . CR
+    THEN ;
+
+_dsvc-run
+"""
+    ),
+    ready_markers=("STREAMS MULTIPROTOCOL COMPOSITION PASS",),
+    stable_markers=("STREAMS MULTIPROTOCOL COMPOSITION PASS",),
+    linked=True,
+    failure_markers=(
+        "STREAMS MULTIPROTOCOL ASSERT",
+        "STREAMS MULTIPROTOCOL COMPOSITION FAIL",
+        "STREAMS VERTICAL AT TRUST FAIL",
+        "STREAMS VERTICAL RSS TRUST FAIL",
+        "STREAMS VERTICAL TRUST FREEZE FAIL",
+    ),
+    initial_files=(
+        (
+            "local_testing/streams-live-trust.f",
+            _streams_live_exact_host_trust_leaf(),
+        ),
+    ),
+    include_large_sample=False,
+    total_sectors=PROFILES["desktop"].total_sectors,
+)
+
 PROFILES["desktop-local-applet"] = Profile(
     roots=PROFILES["desktop"].roots,
     resources=PROFILES["desktop"].resources,
@@ -25156,6 +25345,136 @@ def smoke(
                 "Desk Streams did not preserve its draft after source removal",
             )
 
+        def run_streams_vertical_journey() -> None:
+            source_url = _STREAMS_VERTICAL_FEED_URL
+
+            session.send_key("alt+h")
+            if not wait_screen(
+                "Applets",
+                "Desk did not open the launcher for the Streams vertical",
+            ):
+                return
+            session.send_key("end")
+            if not wait_screen(
+                "Streams",
+                "Desk launcher did not select Streams for the vertical",
+            ):
+                return
+            session.send_key("enter")
+            if not wait_screen(
+                ":Streams*]",
+                "Desk did not launch Streams for the vertical",
+                step_budget=1_000_000_000,
+                wall_timeout=25.0,
+            ):
+                return
+            if not wait_screen(
+                "No feed is loaded",
+                "Streams did not begin with an empty public timeline",
+            ):
+                return
+
+            # First cross the real configured-provider, HTTPS, decoder, and
+            # repository path.  The profile authorizes only this exact source
+            # and trust scope; arbitrary URLs remain denied.
+            session.send_key("ctrl+s")
+            if not wait_screen(
+                "No sources configured",
+                "Streams did not open its empty source manager",
+            ):
+                return
+            session.send_key("f")
+            if not wait_screen(
+                "HTTPS feed URL:",
+                "Streams did not prompt for the reviewed RSS source",
+            ):
+                return
+            session.send_text(source_url)
+            session.send_key("enter")
+            if not wait_screen(
+                source_url,
+                "Streams did not retain the reviewed RSS source",
+                step_budget=1_200_000_000,
+                wall_timeout=30.0,
+            ):
+                return
+            session.send_key("r")
+            if not wait_screen(
+                "Source refresh complete / observations retained",
+                "Streams did not complete the reviewed RSS refresh",
+                step_budget=3_000_000_000,
+                wall_timeout=100.0,
+            ):
+                return
+            syndication_view = session.snapshot().text()
+            if (
+                "succeeded" not in syndication_view
+                or "latest" not in syndication_view
+                or "no retained observations" in syndication_view
+            ):
+                journey_errors.append(
+                    "Streams did not visibly project the retained RSS result"
+                )
+                return
+
+            # Then cross the independent production AT public-XRPC path in
+            # the same applet instance and prove that it reaches the timeline.
+            session.send_key("esc")
+            if not wait_screen(
+                "No feed is loaded",
+                "Streams did not return to its public timeline",
+            ):
+                return
+            session.send_key("a")
+            if not wait_screen(
+                "Bluesky handle or DID:",
+                "Streams did not prompt for a public AT actor",
+            ):
+                return
+            session.send_text(_STREAMS_VERTICAL_ACTOR)
+            session.send_key("enter")
+            if not wait_screen(
+                "Public actor selected; press R to refresh",
+                "Streams did not retain the selected AT actor",
+            ):
+                return
+            session.send_key("r")
+            if not wait_screen(
+                "Retained public page / R refresh",
+                "Streams did not complete the public AT author-feed refresh",
+                step_budget=3_000_000_000,
+                wall_timeout=100.0,
+            ):
+                return
+            at_view = session.snapshot().text()
+            if "No feed is loaded" in at_view:
+                journey_errors.append(
+                    "Streams reported an AT refresh without visible timeline rows"
+                )
+                return
+
+            # Returning to Sources proves the first protocol result remained
+            # visible after the independent AT refresh.
+            session.send_key("ctrl+s")
+            if not wait_screen(
+                source_url,
+                "Streams lost the reviewed RSS source after the AT refresh",
+            ):
+                return
+            retained_view = session.snapshot().text()
+            if "succeeded" not in retained_view or "latest" not in retained_view:
+                journey_errors.append(
+                    "Streams lost the visible RSS observation after the AT refresh"
+                )
+                return
+            session.send_key("alt+w")
+            wait_screen_gone(
+                ":Streams",
+                "Desk did not close the multiprotocol Streams instance cleanly",
+                step_budget=800_000_000,
+                wall_timeout=20.0,
+            )
+
         if initial_ready and profile_name == "desktop-agent":
             run_desk_agent_journey()
 
@@ -25170,6 +25489,9 @@ def smoke(
 
         if initial_ready and profile_name == "desktop-streams":
             run_streams_persistence_journey()
+
+        if initial_ready and profile_name == "desktop-streams-vertical":
+            run_streams_vertical_journey()
 
         if initial_ready and profile_name == "desktop-recovery":
             recovery_text = session.snapshot().text()

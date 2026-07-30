@@ -829,6 +829,34 @@ def test_focused_desktop_streams_uses_online_composition() -> None:
     assert "_boot-streams-desc STREAMS-ENTRY\n" not in profile.autoexec
 
 
+def test_streams_vertical_binds_both_reviewed_live_providers() -> None:
+    profile = PROFILES["desktop-streams-vertical"]
+    reviewed_url = (
+        "https://foo-dogsquared.github.io/"
+        "hugo-theme-more-contentful/feed.rss"
+    )
+    assert profile.requires_tap
+    assert "atproto/public-trust.f" in profile.roots
+    assert "ATPUBLIC-TRUST-REGISTER" in profile.autoexec
+    assert (
+        "STREAMS-ONLINE-ENTRY-WITH-CONFIGURED" in profile.autoexec
+    )
+    assert (
+        "STREAMS-CONFIGURED-SYNDICATION-NEW-AUTHORIZED"
+        in profile.autoexec
+    )
+    assert reviewed_url in profile.autoexec
+    for module in (
+        "tui/applets/streams/streams.f",
+        "tui/applets/streams/streams-online.f",
+        "tui/applets/streams/syndication-http.f",
+        "atproto/public-author-feed.f",
+    ):
+        assert reviewed_url not in (SOURCE_ROOT / module).read_text(
+            encoding="utf-8"
+        )
+
+
 def test_networking_boot_load_follows_userland_entry() -> None:
     autoexec = "\\ test autoexec\nENTER-USERLAND\nREQUIRE app.f\n"
     integrated = _with_megapad_networking(autoexec)
