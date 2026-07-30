@@ -386,6 +386,20 @@ The Streams qualification path is intentionally split by boundary:
 - `streams` covers the standalone timeline, context, search, and draft UI.
 - `desktop-streams` covers real launcher-driven source create/toggle/removal,
   exact source/draft persistence, close, relaunch, and recovery through Desk.
+  Its launcher now uses the production online composition; no fixture, source,
+  actor, or startup tile is preseeded.
+- `streams-multiprotocol-composition` is the focused no-network composition
+  gate for the reviewed vertical. It registers the public AT trust
+  contribution, imports the exact-host RSS trust artifact, configures the
+  authorized production syndication provider, and configures the production
+  public Bluesky provider.
+- `desktop-streams-vertical` is the opt-in TAP-facing product journey. In one
+  Desk-hosted Streams instance it fetches and visibly retains the reviewed RSS
+  source, fetches a public Bluesky author feed through AT Protocol XRPC, then
+  returns to Sources and proves the RSS result remains visible before clean
+  close. This is a real public-XRPC-plus-syndication vertical, not evidence of
+  authenticated PDS participation, repository writes, raw sync, subscriptions,
+  or a general arbitrary-host feed policy.
 - `desktop-agent-hardening` keeps Streams live while proving Desk exposes only
   its two sanitized Observe operations in ordinary read/assist facets.
 - `streams-live-public` is the opt-in TAP-facing component journey; it directly
@@ -400,6 +414,31 @@ Desk-hosted responsiveness journey. The connector records cycles per poll,
 but the complete live certificate-chain and signature phases do not yet have a
 measured per-poll CPU ceiling. Context cleanup also does not prove that every
 machine-global KDOS TLS/cryptographic scratch buffer has been sanitized.
+
+The no-network construction/configuration gate is:
+
+```text
+python3 local_testing/akashic_tui.py smoke \
+  --profile streams-multiprotocol-composition \
+  --max-steps 9000000000 --timeout 300
+```
+
+Its linked image builds, but the current checkpoint has not recorded a PASS:
+the latest bounded run stopped before autoexec at 355,500,000 guest steps and
+180 seconds with no guest output. The combined Desk-hosted live witness is
+also intentionally opt-in and not yet recorded as passing:
+
+```text
+python3 local_testing/akashic_tui.py smoke \
+  --profile desktop-streams-vertical --nic-tap mp64tap0 \
+  --max-steps 9000000000 --timeout 300
+```
+
+The profile authorizes only
+`https://foo-dogsquared.github.io/hugo-theme-more-contentful/feed.rss`;
+the public actor used by the journey is
+`did:plc:z72i7hdynmk6r22z27h6tvur`. The ordinary configured provider remains
+fail-closed without a host-supplied authorization policy.
 
 The synthetic Streams page lives at
 `local_testing/fixtures/atproto/timeline.json`. The harness copies it into the

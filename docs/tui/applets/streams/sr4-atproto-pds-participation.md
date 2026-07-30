@@ -2,7 +2,9 @@
 
 **Prepared:** 2026-07-29; updated 2026-07-30
 
-**Status:** active; landings 1 and 2 are complete, landing 3 is in progress
+**Status:** active; landings 1 and 2 are complete, landing 3 is in progress;
+the interim public-AT-plus-syndication Streams vertical is wired and awaiting
+its combined live witness
 
 **Continuation authority:**
 [Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
@@ -106,9 +108,11 @@ Landing 3 currently includes:
 - `e992c5e` — focused raw AT public-client PAR/PKCE composition through
   strict successful-response acceptance;
 - `d302ccb` — configuration-bound durable P-256 proof composition for public
-  AT PAR; and
-- this checkpoint — provenance-bound AT browser authorization through strict
-  generic callback acceptance and the one-shot grant loan.
+  AT PAR;
+- `c389e2c` — provenance-bound AT browser authorization through strict
+  generic callback acceptance and the one-shot grant loan; and
+- `2000c30` — issuer, issuer-policy, state, binding, code, and verifier
+  provenance carried together through that terminal grant loan.
 
 These commits do not close landing 3. `ff5bbbd` completes the local
 AT-specific deployment binder: one validated immutable client configuration,
@@ -212,7 +216,7 @@ admission, durable DPoP proof, and raw PAR workspaces. It reuses the closed
 selected durable-key lifecycle/proof-policy failure is `DPOP`, and capacity,
 alias, entropy, crypto, and platform-memory classes remain distinct.
 
-The current checkpoint extends the provider-neutral O2CODE launch loan with
+`c389e2c` extends the provider-neutral O2CODE launch loan with
 the exact retained issuer policy and adds the state-free
 `atproto/oauth-authorization.f` adapter. The generic transaction continues to
 own the `PAR-READY`/`AWAITING`/`CODE-READY`/`SPENT` lifecycle, issuer and state
@@ -232,26 +236,116 @@ the raw redirect query directly to generic `O2CODE-ACCEPT-CALLBACK` and then
 uses `O2CODE-WITH-GRANT`; there is no AT-specific duplicate parser or token
 owner hidden in this checkpoint.
 
+`2000c30` completes the grant-loan provenance needed by that token
+continuation. `O2CODE-WITH-GRANT` now lends the retained issuer bytes,
+issuer-required policy, attempt-unique state, exact client binding, code, and
+PKCE verifier together before publishing `SPENT` and wiping the transaction.
+This remains provider-neutral under `security/oauth2/`; it neither sends an AT
+token request nor installs a Streams session.
+
 The immediate next boundary is the DPoP-aware token request and explicit
 authorization-server nonce owner. Durable generic session installation and
 cold recovery, refresh rotation, logout, revocation/reauthorization,
 cancellation, and complete cleanup follow.
 
+## Accelerated visible Streams vertical
+
+The first visible multiprotocol slice no longer waits for all six landings.
+Commit `d503a84` changes the focused Desk profile from the offline
+`STREAMS-ENTRY` to `STREAMS-ONLINE-ENTRY`. A launched instance therefore owns
+the existing production public-AT provider factory and the configured
+syndication-provider seam while remaining empty until the user selects an
+actor or creates a source.
+
+The working vertical adds two qualification profiles:
+
+- `streams-multiprotocol-composition` registers the reviewed trust
+  contributions, admits one exact RSS endpoint, constructs and configures the
+  production syndication provider, and constructs and configures the
+  production public Bluesky provider without doing network I/O.
+- `desktop-streams-vertical` supplies the same exact host policy to
+  `STREAMS-ONLINE-ENTRY-WITH-CONFIGURED`. Its one Desk-hosted TAP journey
+  creates and refreshes the reviewed RSS source, proves a retained observation
+  is visible in Sources, refreshes a public Bluesky actor through
+  `app.bsky.feed.getAuthorFeed`, proves timeline rows are visible, returns to
+  Sources to prove the RSS result remains visible, and closes the instance.
+
+This is an honest interim product vertical: real RSS over HTTPS plus real
+credential-free Bluesky AppView XRPC in one Streams applet. It does not claim
+authenticated PDS participation, a raw AT repository/sync connector, a
+unified cross-protocol event timeline, or completion of landing 3 or landing
+6. The exact-host demo authorization remains in the qualification
+composition; no provider-specific trust or demo policy was moved into the
+general Streams, HTTP, syndication, or AT libraries.
+
+Current evidence for this checkpoint is deliberately narrow:
+
+- the focused online-entry and dependency-boundary packaging checks pass;
+- both new linked images build successfully;
+- the no-network composition smoke reached 355,500,000 guest steps at its
+  180-second wall bound without reaching autoexec or emitting guest output, so
+  it is recorded as **not yet executed to its marker**, not as a pass or a
+  product failure; and
+- the combined TAP journey has not yet been run. The prior separate public-AT
+  and configured-syndication live witnesses remain useful component evidence
+  but do not substitute for the combined product witness.
+
+The combined witness command is:
+
+```text
+python3 local_testing/akashic_tui.py smoke \
+  --profile desktop-streams-vertical --nic-tap mp64tap0 \
+  --max-steps 9000000000 --timeout 300
+```
+
+### Work still required after this slice
+
+The following debt is explicit so it can be sequenced without blocking the
+first visible slice:
+
+1. **Close landing 3:** retain and update the authorization-server DPoP nonce,
+   perform the exact protected token request and one authorized nonce retry,
+   admit the token response, install/recover the durable generic session, and
+   qualify refresh rotation, logout, revocation/reauthorization,
+   cancellation, and cleanup.
+2. **Build landing 4:** hard-replace the process-global `atproto/xrpc.f`,
+   `atproto/session.f`, and `atproto/repo.f` prototypes with caller-owned
+   XRPC, structured error, pagination/rate/retry, repository-operation, blob,
+   and atomic/batch-write contracts.
+3. **Build landing 5:** implement raw repository export/sync and subscription
+   input, CAR/DAG-CBOR handling where required, durable cursors, reconnect,
+   cancellation, backpressure, and only then the separately qualified
+   Jetstream convenience adapter.
+4. **Complete landing 6:** add authenticated AT ingress and generic
+   record/blob egress as real Streams connector instances with event, queue,
+   retry, cursor, cleanup, cold-restart, and deterministic fake-PDS
+   qualification. A live-account capstone remains optional and requires
+   explicit account/credential handoff.
+5. **Converge the applet presentation:** project durable configured-source
+   observations and AT items through a common bounded row/event view with
+   truthful source attribution, ordering, search, context/thread behavior,
+   and refresh state. The interim slice intentionally shows AT on Timeline and
+   syndication in Sources instead of delaying the slice for that convergence.
+6. **Review deferred qualification:** complete the recorded broad parser,
+   alias/canary, subordinate-status, retry, corruption, cancellation, and
+   cleanup matrices at the landing that claims the corresponding production
+   boundary. They are documented debt, not silently covered behavior.
+
 ## Current repository handoff
 
-At preparation time:
+At this checkpoint:
 
 ```text
 repository: /home/kir/Documents/Projects/fantasy-computing/akashic
 branch:     main
-code base:  this AT browser authorization/callback-grant checkpoint
-record:     updated in the same checkpoint
+code base:  2000c30 grant provenance plus d503a84 online launcher composition
+record:     updated with the interim multiprotocol vertical and explicit debt
 upstream:   origin/main at bcb04b4
-ahead:      6 commits after committing this authorization checkpoint
-tests:      static gates, generic linked suite, focused one-core vertical pass
+tests:      focused packaging checks pass; both new images build
+pending:    composition marker and combined TAP product witness
 ```
 
-There is no current SR4-owned uncommitted work. The latest SR4 commits are:
+The latest SR4 and vertical-acceleration commits are:
 
 ```text
 2ae49bc Add durable OAuth P-256 key ownership
@@ -264,7 +358,10 @@ bcb04b4 Extract generic OAuth published P-256 ownership
 2f5c887 Bind generic PAR results to initiating requests
 e992c5e Compose AT OAuth pushed authorization requests
 d302ccb Compose durable DPoP proofs into public AT PAR
-this checkpoint: compose AT browser authorization through the grant loan
+c389e2c Bind AT browser authorization to PAR provenance
+2000c30 Carry token provenance through the grant loan
+d503a84 Launch focused Streams through its online composition
+this checkpoint: add the reviewed multiprotocol Desk vertical
 ```
 
 `2ae49bc` added `OAUTH2-P256-KEY-PROVISION-*`,
@@ -326,7 +423,7 @@ DPoP ownership remain under `akashic/security/oauth2/`; the raw AT form and
 response policy remains in `akashic/atproto/oauth-par.f`; transport remains
 with the caller.
 
-The current checkpoint changes the generic
+`c389e2c` changes the generic
 `security/oauth2/authorization-code.f` callback loan only by adding its
 already-retained issuer bytes and policy. Exact AT endpoint, client, and
 profile binding stays in the new `akashic/atproto/oauth-authorization.f`
@@ -336,8 +433,14 @@ fixture continues the existing durable public PAR transaction through one
 exact browser URI, strict generic callback acceptance, and a grant callback;
 the generic and AT layers remain usable without Streams.
 
-The following files are preserved unrelated user/old-L13 work. Do not stage,
-restore, rewrite, or delete them as part of SR4:
+`2000c30` extends the same terminal loan with exact issuer, issuer policy,
+state, binding, code, and verifier provenance so a protected token attempt can
+retain everything it needs before O2CODE wipes the spent transaction.
+
+The following remaining dirty paths are preserved user/old-L13 work. The
+vertical touches separate, selectively staged hunks in
+`local_testing/akashic_tui.py`; do not stage, restore, rewrite, or delete the
+other hunks merely because that file also carries the vertical profiles:
 
 ```text
  M README.md
@@ -634,26 +737,25 @@ delta. Do not run another suite or a test subagent concurrently.
 
 ## Exact next actions
 
-1. Read `AGENTS.md`, this record,
-   `docs/atproto/oauth-par.md`,
-   `docs/atproto/oauth-par-p256.md`,
-   `docs/atproto/oauth-authorization.md`,
-   `docs/security/oauth2-authorization-code.md`,
-   `docs/security/oauth2-http-post.md`,
-   `docs/security/oauth2-key-p256.md`, and
-   `docs/security/oauth2-dpop-es256.md`. Treat the raw PAR adapter, durable
-   public proof composition, browser-authorization adapter, strict callback,
-   and guarded grant loan as completed lower boundaries.
+1. Run the focused `streams-multiprotocol-composition` marker and the
+   `desktop-streams-vertical` TAP journey when the required execution window
+   and TAP access are available. Fix only blockers to the stated two-protocol
+   acceptance; record broader UI/event convergence as debt.
 2. Continue landing 3 with the DPoP-aware token request and explicit
    authorization-server nonce owner. Preserve the exact
    transaction/configuration/profile/key binding and keep transport,
    deadlines, nonce challenge/retry, and durable ordering explicit.
 3. Continue with durable
    install/recovery/refresh/logout, cancellation, and reauthorization
-   composition. Do not begin XRPC, repository/blob, subscription, and Streams
-   wiring simultaneously.
-4. Return for a landing-boundary status report, then begin landing 4 by
-   replacing—not wrapping—the global XRPC/session/repository prototypes.
+   composition, using only the focused happy path and security/ownership
+   failures needed to reach one authenticated PDS read.
+4. Begin landing 4 by replacing—not wrapping—the global
+   XRPC/session/repository prototypes, then place the first authenticated
+   caller-owned read behind an AT connector seam that the visible Streams
+   applet can consume.
+5. Return for a landing-boundary status report before expanding into raw sync,
+   subscriptions, general writes, or the deferred cross-protocol presentation
+   work.
 
 No live credential, account, public client metadata deployment, redirect
 registration, or user secret is needed for the next actions. Ask for those
