@@ -150,10 +150,14 @@ The DPoP proof span is mandatory and nonempty. `BUILD` supplies it as the
 Authorization header. A successful build verifies that DPoP was included and
 Authorization was not.
 
-DPoP proof construction remains a caller responsibility. The proof owner must
-use `POST`, the exact `OAUTH2-HTTP-POST-HTU$`, the `POST` method, its protected
-DPoP key, trusted time and identifier sources, and any authorization-server
-nonce required for the attempt. See
+At this low-level raw API, DPoP proof construction remains a caller
+responsibility. The proof owner must use `POST`, the exact
+`OAUTH2-HTTP-POST-HTU$`, its protected DPoP key, trusted time and identifier
+sources, and any authorization-server nonce required for the attempt. The
+public-client composition in
+[AT Protocol public PAR with durable P-256 DPoP](oauth-par-p256.md) performs
+that work from the configuration-bound durable key and then invokes this
+`BUILD`; confidential-client assertion composition remains separate. See also
 [OAuth 2 DPoP ES256](../security/oauth2-dpop-es256.md).
 
 `BUILD` returns with the generic post in `SEALED` state. The caller binds a
@@ -322,6 +326,8 @@ The following are recorded non-gating follow-up work rather than implied
 coverage: the confidential `private_key_jwt` assertion path; the full
 login-hint matrix; 400/401 DPoP nonce retry orchestration; broad malformed
 response, media, header, capacity, alias, protected-span, and canary
-cross-products; live TLS and browser integration; durable restart; and direct
-composition of the retained P-256 key owner into proof generation. Those
-items remain required at their production acceptance boundaries.
+cross-products; live TLS and browser integration; and durable restart. Direct
+public-client composition of the retained P-256 key owner into proof
+generation is now covered by the focused
+[durable P-256 PAR composition](oauth-par-p256.md) gate. The remaining items
+stay required at their production acceptance boundaries.

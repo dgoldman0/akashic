@@ -1,0 +1,851 @@
+\ =====================================================================
+\  oauth-par-p256.f - Durable public-client DPoP for AT OAuth PAR
+\ =====================================================================
+\  This state-free AT-specific composition configures one generic OAuth
+\  HTTP POST for the exact selected PAR target, constructs its mandatory
+\  DPoP proof from the public client's durable P-256 binding, and delegates
+\  form construction to oauth-par.f.  The caller supplies all persistent
+\  objects and all bounded HTTP arenas through one immutable descriptor.
+\
+\  The complete operation geometry, including credential-vault exclusion,
+\  is admitted before any caller memory is changed.  The descriptor is then
+\  snapshotted.  The selected configuration must pass the normal AT client
+\  policy and additionally be an explicit public client: method "none", no
+\  authentication algorithm, DPoP-bound, and carrying one canonical
+\  DPoP-only OAUTH2-P256 binding.
+\
+\  The proof, copied binding, key-owner input, and serial child workspace
+\  are caller-owned but private to this operation and are wiped after every
+\  admitted result and caught THROW.  A successful raw PAR BUILD has already
+\  copied the proof into the caller's request arena before that wipe.
+\
+\  Public API:
+\    AT-OAUTH-PAR-P256-INPUT-SIZE
+\    AT-OAUTH-PAR-P256-I.*
+\    AT-OAUTH-PAR-P256-INPUT-CLEAR
+\    AT-OAUTH-PAR-P256-WORKSPACE-SIZE
+\    AT-OAUTH-PAR-P256-WORKSPACE-CLEAR
+\    AT-OAUTH-PAR-P256-BUILD  ( input workspace -- status )
+\ =====================================================================
+
+PROVIDED akashic-at-oauth-par256
+
+REQUIRE ../utils/memory-span.f
+REQUIRE ../utils/caller-span.f
+REQUIRE ../security/credential-vault.f
+REQUIRE ../security/oauth2/client-config.f
+REQUIRE ../security/oauth2/http-post.f
+REQUIRE ../security/oauth2/key-p256.f
+REQUIRE oauth-profile.f
+REQUIRE oauth-client.f
+REQUIRE oauth-par.f
+
+\ =====================================================================
+\  Immutable caller input descriptor
+\ =====================================================================
+
+  0 CONSTANT _ATPP-I-LOGIN-A
+  8 CONSTANT _ATPP-I-LOGIN-U
+ 16 CONSTANT _ATPP-I-NONCE-A
+ 24 CONSTANT _ATPP-I-NONCE-U
+ 32 CONSTANT _ATPP-I-IAT
+ 40 CONSTANT _ATPP-I-VAULT
+ 48 CONSTANT _ATPP-I-CONFIG
+ 56 CONSTANT _ATPP-I-PROFILE
+ 64 CONSTANT _ATPP-I-TRANSACTION
+ 72 CONSTANT _ATPP-I-POST
+ 80 CONSTANT _ATPP-I-REQUEST-A
+ 88 CONSTANT _ATPP-I-REQUEST-CAP
+ 96 CONSTANT _ATPP-I-FORM-A
+104 CONSTANT _ATPP-I-FORM-CAP
+112 CONSTANT _ATPP-I-RESPONSE-A
+120 CONSTANT _ATPP-I-RESPONSE-CAP
+128 CONSTANT AT-OAUTH-PAR-P256-INPUT-SIZE
+
+: AT-OAUTH-PAR-P256-I.LOGIN-A  ( input -- field )
+    _ATPP-I-LOGIN-A + ;
+: AT-OAUTH-PAR-P256-I.LOGIN-U  ( input -- field )
+    _ATPP-I-LOGIN-U + ;
+: AT-OAUTH-PAR-P256-I.NONCE-A  ( input -- field )
+    _ATPP-I-NONCE-A + ;
+: AT-OAUTH-PAR-P256-I.NONCE-U  ( input -- field )
+    _ATPP-I-NONCE-U + ;
+: AT-OAUTH-PAR-P256-I.IAT  ( input -- field )
+    _ATPP-I-IAT + ;
+: AT-OAUTH-PAR-P256-I.VAULT  ( input -- field )
+    _ATPP-I-VAULT + ;
+: AT-OAUTH-PAR-P256-I.CONFIG  ( input -- field )
+    _ATPP-I-CONFIG + ;
+: AT-OAUTH-PAR-P256-I.PROFILE  ( input -- field )
+    _ATPP-I-PROFILE + ;
+: AT-OAUTH-PAR-P256-I.TRANSACTION  ( input -- field )
+    _ATPP-I-TRANSACTION + ;
+: AT-OAUTH-PAR-P256-I.POST  ( input -- field )
+    _ATPP-I-POST + ;
+: AT-OAUTH-PAR-P256-I.REQUEST-A  ( input -- field )
+    _ATPP-I-REQUEST-A + ;
+: AT-OAUTH-PAR-P256-I.REQUEST-CAP  ( input -- field )
+    _ATPP-I-REQUEST-CAP + ;
+: AT-OAUTH-PAR-P256-I.FORM-A  ( input -- field )
+    _ATPP-I-FORM-A + ;
+: AT-OAUTH-PAR-P256-I.FORM-CAP  ( input -- field )
+    _ATPP-I-FORM-CAP + ;
+: AT-OAUTH-PAR-P256-I.RESPONSE-A  ( input -- field )
+    _ATPP-I-RESPONSE-A + ;
+: AT-OAUTH-PAR-P256-I.RESPONSE-CAP  ( input -- field )
+    _ATPP-I-RESPONSE-CAP + ;
+
+\ =====================================================================
+\  Symbolically derived serial workspace
+\ =====================================================================
+
+0 CONSTANT _ATPPW-PROOF-U
+1 CELLS CONSTANT _ATPPW-INPUT-OFF
+_ATPPW-INPUT-OFF AT-OAUTH-PAR-P256-INPUT-SIZE +
+    CONSTANT _ATPPW-BINDING-OFF
+_ATPPW-BINDING-OFF OAUTH2-P256-KEY-BINDING-SIZE +
+    CONSTANT _ATPPW-DPOP-INPUT-OFF
+_ATPPW-DPOP-INPUT-OFF OAUTH2-P256-KEY-DPOP-INPUT-SIZE +
+    CONSTANT _ATPPW-PROOF-OFF
+_ATPPW-PROOF-OFF OAUTH2-DPOP-ES256-MAX-PROOF-BYTES +
+7 + 8 / 8 * CONSTANT _ATPPW-CHILD-OFF
+
+AT-OAUTH-CLIENT-WORKSPACE-SIZE
+OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE MAX
+AT-OAUTH-PAR-WORKSPACE-SIZE MAX
+CONSTANT _ATPPW-CHILD-SIZE
+
+_ATPPW-CHILD-OFF _ATPPW-CHILD-SIZE +
+    CONSTANT AT-OAUTH-PAR-P256-WORKSPACE-SIZE
+
+: _ATPPW.PROOF-U  ( workspace -- field )
+    _ATPPW-PROOF-U + ;
+: _ATPPW.INPUT  ( workspace -- input-snapshot )
+    _ATPPW-INPUT-OFF + ;
+: _ATPPW.BINDING  ( workspace -- binding )
+    _ATPPW-BINDING-OFF + ;
+: _ATPPW.DPOP-INPUT  ( workspace -- dpop-input )
+    _ATPPW-DPOP-INPUT-OFF + ;
+: _ATPPW.PROOF  ( workspace -- proof )
+    _ATPPW-PROOF-OFF + ;
+: _ATPPW.CHILD  ( workspace -- child-workspace )
+    _ATPPW-CHILD-OFF + ;
+
+: _ATPP-WIPE  ( workspace -- )
+    AT-OAUTH-PAR-P256-WORKSPACE-SIZE 0 FILL ;
+
+\ =====================================================================
+\  Stack, span, and status helpers
+\ =====================================================================
+
+: _ATPP-DROP2  ( x1 x2 -- ) 2DROP ;
+
+: _ATPP-RETURN2  ( x1 x2 status -- status )
+    >R _ATPP-DROP2 R> ;
+
+: _ATPP-CALLER>STATUS  ( caller-status -- status )
+    CASE
+        CALLER-SPAN-S-OK OF AT-OAUTH-PAR-S-OK ENDOF
+        CALLER-SPAN-S-RANGE OF AT-OAUTH-PAR-S-RANGE ENDOF
+        CALLER-SPAN-S-PROTECTED OF
+            AT-OAUTH-PAR-S-PROTECTED
+        ENDOF
+        CALLER-SPAN-S-PLATFORM OF
+            AT-OAUTH-PAR-S-PLATFORM
+        ENDOF
+        AT-OAUTH-PAR-S-PLATFORM SWAP
+    ENDCASE ;
+
+: _ATPP-SPAN-STATUS  ( address length -- status )
+    DUP 0< IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    DUP 0= IF 2DROP AT-OAUTH-PAR-S-OK EXIT THEN
+    OVER 0= IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS _ATPP-CALLER>STATUS ;
+
+: _ATPP-OPTIONAL-SPAN-STATUS  ( address length -- status )
+    DUP 0< IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    DUP 0= IF
+        DROP 0= IF
+            AT-OAUTH-PAR-S-OK
+        ELSE
+            AT-OAUTH-PAR-S-INVALID
+        THEN
+        EXIT
+    THEN
+    OVER 0= IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS _ATPP-CALLER>STATUS ;
+
+: _ATPP-REQUIRED-SPAN-STATUS  ( address length -- status )
+    DUP 0> 0= IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    OVER 0= IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS _ATPP-CALLER>STATUS ;
+
+: _ATPP-FIXED-STATUS  ( address length -- status )
+    OVER 0= IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    OVER 7 AND IF 2DROP AT-OAUTH-PAR-S-INVALID EXIT THEN
+    _ATPP-SPAN-STATUS ;
+
+\ CVAULT external-span admission deliberately reports INVALID for both a
+\ malformed vault and overlap with vault-owned/private storage.  Preserve
+\ that exact collapse.  The compact PAR vocabulary retains the platform
+\ classes, while busy and other vault-policy failures become DPOP.
+: _ATPP-CVAULT>STATUS  ( vault-status -- status )
+    CASE
+        CVAULT-S-OK OF AT-OAUTH-PAR-S-OK ENDOF
+        CVAULT-S-INVALID OF AT-OAUTH-PAR-S-INVALID ENDOF
+        CVAULT-S-RANGE OF AT-OAUTH-PAR-S-RANGE ENDOF
+        CVAULT-S-PROTECTED OF AT-OAUTH-PAR-S-PROTECTED ENDOF
+        CVAULT-S-PLATFORM OF AT-OAUTH-PAR-S-PLATFORM ENDOF
+        CVAULT-S-BUSY OF AT-OAUTH-PAR-S-DPOP ENDOF
+        AT-OAUTH-PAR-S-DPOP SWAP
+    ENDCASE ;
+
+: _ATPP-CONFIG>STATUS  ( config-status -- status )
+    CASE
+        OAUTH2-CLIENT-CONFIG-S-OK OF AT-OAUTH-PAR-S-OK ENDOF
+        OAUTH2-CLIENT-CONFIG-S-INVALID OF
+            AT-OAUTH-PAR-S-CONFIG
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-CAPACITY OF
+            AT-OAUTH-PAR-S-CAPACITY
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-ALIAS OF
+            AT-OAUTH-PAR-S-ALIAS
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-STATE OF
+            AT-OAUTH-PAR-S-CONFIG
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-RANGE OF
+            AT-OAUTH-PAR-S-RANGE
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-PROTECTED OF
+            AT-OAUTH-PAR-S-PROTECTED
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-PLATFORM OF
+            AT-OAUTH-PAR-S-PLATFORM
+        ENDOF
+        OAUTH2-CLIENT-CONFIG-S-CALLBACK OF
+            AT-OAUTH-PAR-S-CALLBACK
+        ENDOF
+        AT-OAUTH-PAR-S-INTERNAL SWAP
+    ENDCASE ;
+
+: _ATPP-CLIENT>STATUS  ( client-status -- status )
+    CASE
+        AT-OAUTH-CLIENT-S-OK OF AT-OAUTH-PAR-S-OK ENDOF
+        AT-OAUTH-CLIENT-S-INVALID OF AT-OAUTH-PAR-S-INVALID ENDOF
+        AT-OAUTH-CLIENT-S-ALIAS OF AT-OAUTH-PAR-S-ALIAS ENDOF
+        AT-OAUTH-CLIENT-S-PROFILE OF AT-OAUTH-PAR-S-PROFILE ENDOF
+        AT-OAUTH-CLIENT-S-RANGE OF AT-OAUTH-PAR-S-RANGE ENDOF
+        AT-OAUTH-CLIENT-S-PROTECTED OF
+            AT-OAUTH-PAR-S-PROTECTED
+        ENDOF
+        AT-OAUTH-CLIENT-S-PLATFORM OF
+            AT-OAUTH-PAR-S-PLATFORM
+        ENDOF
+        AT-OAUTH-CLIENT-S-INTERNAL OF
+            AT-OAUTH-PAR-S-INTERNAL
+        ENDOF
+        AT-OAUTH-PAR-S-CONFIG SWAP
+    ENDCASE ;
+
+: _ATPP-PROFILE>STATUS  ( profile-status -- status )
+    CASE
+        AT-OAUTH-PROFILE-S-OK OF AT-OAUTH-PAR-S-OK ENDOF
+        AT-OAUTH-PROFILE-S-RANGE OF AT-OAUTH-PAR-S-RANGE ENDOF
+        AT-OAUTH-PROFILE-S-PROTECTED OF
+            AT-OAUTH-PAR-S-PROTECTED
+        ENDOF
+        AT-OAUTH-PROFILE-S-PLATFORM OF
+            AT-OAUTH-PAR-S-PLATFORM
+        ENDOF
+        AT-OAUTH-PAR-S-PROFILE SWAP
+    ENDCASE ;
+
+: _ATPP-POST>STATUS  ( post-status -- status )
+    CASE
+        OAUTH2-HTTP-POST-S-OK OF AT-OAUTH-PAR-S-OK ENDOF
+        OAUTH2-HTTP-POST-S-CAPACITY OF
+            AT-OAUTH-PAR-S-CAPACITY
+        ENDOF
+        OAUTH2-HTTP-POST-S-ALIAS OF AT-OAUTH-PAR-S-ALIAS ENDOF
+        OAUTH2-HTTP-POST-S-RANGE OF AT-OAUTH-PAR-S-RANGE ENDOF
+        OAUTH2-HTTP-POST-S-PROTECTED OF
+            AT-OAUTH-PAR-S-PROTECTED
+        ENDOF
+        OAUTH2-HTTP-POST-S-PLATFORM OF
+            AT-OAUTH-PAR-S-PLATFORM
+        ENDOF
+        OAUTH2-HTTP-POST-S-INTERNAL OF
+            AT-OAUTH-PAR-S-INTERNAL
+        ENDOF
+        AT-OAUTH-PAR-S-POST SWAP
+    ENDCASE ;
+
+\ The raw PAR vocabulary intentionally has no durable-key lifecycle detail.
+\ Preserve capacity/alias/entropy/crypto/platform classes.  Canonical-shape
+\ failure is BINDING; all missing, stale, locked, revoked, authentication,
+\ method/HTU/nonce/time, and persistence failures collapse to DPOP.
+: _ATPP-KEY>STATUS  ( key-status -- status )
+    CASE
+        OAUTH2-P256-KEY-S-OK OF AT-OAUTH-PAR-S-OK ENDOF
+        OAUTH2-P256-KEY-S-CAPACITY OF
+            AT-OAUTH-PAR-S-CAPACITY
+        ENDOF
+        OAUTH2-P256-KEY-S-ALIAS OF AT-OAUTH-PAR-S-ALIAS ENDOF
+        OAUTH2-P256-KEY-S-INVALID OF
+            AT-OAUTH-PAR-S-BINDING
+        ENDOF
+        OAUTH2-P256-KEY-S-FORMAT OF
+            AT-OAUTH-PAR-S-BINDING
+        ENDOF
+        OAUTH2-P256-KEY-S-ENTROPY OF
+            AT-OAUTH-PAR-S-ENTROPY
+        ENDOF
+        OAUTH2-P256-KEY-S-CRYPTO OF
+            AT-OAUTH-PAR-S-CRYPTO
+        ENDOF
+        OAUTH2-P256-KEY-S-RANGE OF AT-OAUTH-PAR-S-RANGE ENDOF
+        OAUTH2-P256-KEY-S-PROTECTED OF
+            AT-OAUTH-PAR-S-PROTECTED
+        ENDOF
+        OAUTH2-P256-KEY-S-PLATFORM OF
+            AT-OAUTH-PAR-S-PLATFORM
+        ENDOF
+        OAUTH2-P256-KEY-S-INTERNAL OF
+            AT-OAUTH-PAR-S-INTERNAL
+        ENDOF
+        OAUTH2-P256-KEY-S-CALLBACK OF
+            AT-OAUTH-PAR-S-INTERNAL
+        ENDOF
+        AT-OAUTH-PAR-S-DPOP SWAP
+    ENDCASE ;
+
+\ =====================================================================
+\  Public clearing operations
+\ =====================================================================
+
+: AT-OAUTH-PAR-P256-INPUT-CLEAR  ( input -- status )
+    DUP AT-OAUTH-PAR-P256-INPUT-SIZE _ATPP-FIXED-STATUS
+    ?DUP IF NIP EXIT THEN
+    AT-OAUTH-PAR-P256-INPUT-SIZE 0 FILL
+    AT-OAUTH-PAR-S-OK ;
+
+: AT-OAUTH-PAR-P256-WORKSPACE-CLEAR  ( workspace -- status )
+    DUP AT-OAUTH-PAR-P256-WORKSPACE-SIZE _ATPP-FIXED-STATUS
+    ?DUP IF NIP EXIT THEN
+    _ATPP-WIPE
+    AT-OAUTH-PAR-S-OK ;
+
+\ =====================================================================
+\  Complete non-mutating geometry admission
+\ =====================================================================
+
+: _ATPP-ZERO?  ( address length -- flag )
+    BEGIN DUP WHILE
+        OVER C@ IF 2DROP 0 EXIT THEN
+        1 /STRING
+    REPEAT
+    2DROP -1 ;
+
+\ This composition owns POST configuration, so it accepts only fresh
+\ all-zero storage or the canonical EMPTY descriptor produced by WIPE.
+\ A live descriptor can hide old arenas that this input does not name.
+: _ATPP-FRESH-POST?  ( post -- flag )
+    DUP OAUTH2-HTTP-POST-SIZE _ATPP-ZERO? IF
+        DROP -1 EXIT
+    THEN
+    DUP OAUTH2-HTTP-POST-VALID? 0= IF DROP 0 EXIT THEN
+    OAUTH2-HTTP-POST-STATE@
+    OAUTH2-HTTP-POST-STATE-EMPTY = ;
+
+: _ATPP-FIELD-GEOMETRY  ( input workspace -- status )
+    >R
+    DUP AT-OAUTH-PAR-P256-INPUT-SIZE _ATPP-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    R@ AT-OAUTH-PAR-P256-WORKSPACE-SIZE _ATPP-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+
+    DUP AT-OAUTH-PAR-P256-I.LOGIN-A @
+    OVER AT-OAUTH-PAR-P256-I.LOGIN-U @
+    _ATPP-OPTIONAL-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.NONCE-A @
+    OVER AT-OAUTH-PAR-P256-I.NONCE-U @
+    _ATPP-OPTIONAL-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.IAT @ 0< IF
+        DROP R> DROP AT-OAUTH-PAR-S-INVALID EXIT
+    THEN
+
+    DUP AT-OAUTH-PAR-P256-I.VAULT @
+    CVAULT-SIZE _ATPP-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.CONFIG @
+    OAUTH2-CLIENT-CONFIG-SIZE _ATPP-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.PROFILE @
+    AT-OAUTH-PROFILE-SIZE _ATPP-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.TRANSACTION @
+    O2CODE-TRANSACTION-SIZE _ATPP-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.POST @
+    OAUTH2-HTTP-POST-SIZE _ATPP-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.POST @
+    _ATPP-FRESH-POST? 0= IF
+        DROP R> DROP AT-OAUTH-PAR-S-POST EXIT
+    THEN
+
+    DUP AT-OAUTH-PAR-P256-I.REQUEST-A @
+    OVER AT-OAUTH-PAR-P256-I.REQUEST-CAP @
+    _ATPP-REQUIRED-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.FORM-A @
+    OVER AT-OAUTH-PAR-P256-I.FORM-CAP @
+    _ATPP-REQUIRED-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.RESPONSE-A @
+    OVER AT-OAUTH-PAR-P256-I.RESPONSE-CAP @
+    _ATPP-REQUIRED-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+
+    DROP R> DROP AT-OAUTH-PAR-S-OK ;
+
+: _ATPP-MUTABLE-OVERLAP?
+  ( address length input -- flag )
+    >R
+    2DUP R@ AT-OAUTH-PAR-P256-I.POST @
+    OAUTH2-HTTP-POST-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP -1 EXIT
+    THEN
+    2DUP R@ AT-OAUTH-PAR-P256-I.REQUEST-A @
+    R@ AT-OAUTH-PAR-P256-I.REQUEST-CAP @
+    MSPAN-OVERLAP? IF
+        2DROP R> DROP -1 EXIT
+    THEN
+    2DUP R@ AT-OAUTH-PAR-P256-I.FORM-A @
+    R@ AT-OAUTH-PAR-P256-I.FORM-CAP @
+    MSPAN-OVERLAP? IF
+        2DROP R> DROP -1 EXIT
+    THEN
+    R@ AT-OAUTH-PAR-P256-I.RESPONSE-A @
+    R@ AT-OAUTH-PAR-P256-I.RESPONSE-CAP @
+    MSPAN-OVERLAP?
+    R> DROP ;
+
+: _ATPP-WS-OVERLAP?
+  ( address length workspace -- flag )
+    >R
+    R@ AT-OAUTH-PAR-P256-WORKSPACE-SIZE MSPAN-OVERLAP?
+    R> DROP ;
+
+: _ATPP-MUTABLES-DISJOINT?  ( input -- flag )
+    >R
+    R@ AT-OAUTH-PAR-P256-I.POST @ OAUTH2-HTTP-POST-SIZE
+    R@ AT-OAUTH-PAR-P256-I.REQUEST-A @
+    R@ AT-OAUTH-PAR-P256-I.REQUEST-CAP @
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-PAR-P256-I.POST @ OAUTH2-HTTP-POST-SIZE
+    R@ AT-OAUTH-PAR-P256-I.FORM-A @
+    R@ AT-OAUTH-PAR-P256-I.FORM-CAP @
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-PAR-P256-I.POST @ OAUTH2-HTTP-POST-SIZE
+    R@ AT-OAUTH-PAR-P256-I.RESPONSE-A @
+    R@ AT-OAUTH-PAR-P256-I.RESPONSE-CAP @
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-PAR-P256-I.REQUEST-A @
+    R@ AT-OAUTH-PAR-P256-I.REQUEST-CAP @
+    R@ AT-OAUTH-PAR-P256-I.FORM-A @
+    R@ AT-OAUTH-PAR-P256-I.FORM-CAP @
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-PAR-P256-I.REQUEST-A @
+    R@ AT-OAUTH-PAR-P256-I.REQUEST-CAP @
+    R@ AT-OAUTH-PAR-P256-I.RESPONSE-A @
+    R@ AT-OAUTH-PAR-P256-I.RESPONSE-CAP @
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ AT-OAUTH-PAR-P256-I.FORM-A @
+    R@ AT-OAUTH-PAR-P256-I.FORM-CAP @
+    R@ AT-OAUTH-PAR-P256-I.RESPONSE-A @
+    R@ AT-OAUTH-PAR-P256-I.RESPONSE-CAP @
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R> DROP -1 ;
+
+: _ATPP-SOURCE-MUTABLES-DISJOINT?  ( input workspace -- flag )
+    >R
+    DUP AT-OAUTH-PAR-P256-INPUT-SIZE
+    2 PICK _ATPP-MUTABLE-OVERLAP? IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-OAUTH-PAR-P256-I.LOGIN-U @ IF
+        DUP AT-OAUTH-PAR-P256-I.LOGIN-A @
+        OVER AT-OAUTH-PAR-P256-I.LOGIN-U @
+        2 PICK _ATPP-MUTABLE-OVERLAP? IF
+            DROP R> DROP 0 EXIT
+        THEN
+    THEN
+    DUP AT-OAUTH-PAR-P256-I.NONCE-U @ IF
+        DUP AT-OAUTH-PAR-P256-I.NONCE-A @
+        OVER AT-OAUTH-PAR-P256-I.NONCE-U @
+        2 PICK _ATPP-MUTABLE-OVERLAP? IF
+            DROP R> DROP 0 EXIT
+        THEN
+    THEN
+    DUP AT-OAUTH-PAR-P256-I.VAULT @ CVAULT-SIZE
+    2 PICK _ATPP-MUTABLE-OVERLAP? IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-OAUTH-PAR-P256-I.CONFIG @ OAUTH2-CLIENT-CONFIG-SIZE
+    2 PICK _ATPP-MUTABLE-OVERLAP? IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-OAUTH-PAR-P256-I.PROFILE @ AT-OAUTH-PROFILE-SIZE
+    2 PICK _ATPP-MUTABLE-OVERLAP? IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-OAUTH-PAR-P256-I.TRANSACTION @ O2CODE-TRANSACTION-SIZE
+    2 PICK _ATPP-MUTABLE-OVERLAP? IF
+        DROP R> DROP 0 EXIT
+    THEN
+    R@ AT-OAUTH-PAR-P256-WORKSPACE-SIZE
+    2 PICK _ATPP-MUTABLE-OVERLAP? IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DROP R> DROP -1 ;
+
+: _ATPP-SOURCES-WORKSPACE-DISJOINT?  ( input workspace -- flag )
+    >R
+    DUP AT-OAUTH-PAR-P256-INPUT-SIZE R@
+    _ATPP-WS-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.LOGIN-U @ IF
+        DUP AT-OAUTH-PAR-P256-I.LOGIN-A @
+        OVER AT-OAUTH-PAR-P256-I.LOGIN-U @ R@
+        _ATPP-WS-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    THEN
+    DUP AT-OAUTH-PAR-P256-I.NONCE-U @ IF
+        DUP AT-OAUTH-PAR-P256-I.NONCE-A @
+        OVER AT-OAUTH-PAR-P256-I.NONCE-U @ R@
+        _ATPP-WS-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    THEN
+    DUP AT-OAUTH-PAR-P256-I.VAULT @ CVAULT-SIZE R@
+    _ATPP-WS-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.CONFIG @ OAUTH2-CLIENT-CONFIG-SIZE R@
+    _ATPP-WS-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.PROFILE @ AT-OAUTH-PROFILE-SIZE R@
+    _ATPP-WS-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.TRANSACTION @ O2CODE-TRANSACTION-SIZE R@
+    _ATPP-WS-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    DROP R> DROP -1 ;
+
+: _ATPP-ALIAS-GEOMETRY  ( input workspace -- status )
+    2DUP _ATPP-SOURCE-MUTABLES-DISJOINT? 0= IF
+        _ATPP-DROP2 AT-OAUTH-PAR-S-ALIAS EXIT
+    THEN
+    2DUP _ATPP-SOURCES-WORKSPACE-DISJOINT? 0= IF
+        _ATPP-DROP2 AT-OAUTH-PAR-S-ALIAS EXIT
+    THEN
+    OVER _ATPP-MUTABLES-DISJOINT? 0= IF
+        _ATPP-DROP2 AT-OAUTH-PAR-S-ALIAS EXIT
+    THEN
+    _ATPP-DROP2 AT-OAUTH-PAR-S-OK ;
+
+: _ATPP-VAULT-SPAN-STATUS
+  ( address length input -- status )
+    AT-OAUTH-PAR-P256-I.VAULT @
+    CVAULT-EXTERNAL-SPAN-STATUS
+    _ATPP-CVAULT>STATUS ;
+
+: _ATPP-VAULT-GEOMETRY  ( input workspace -- status )
+    >R
+    DUP AT-OAUTH-PAR-P256-INPUT-SIZE
+    2 PICK _ATPP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.LOGIN-U @ IF
+        DUP AT-OAUTH-PAR-P256-I.LOGIN-A @
+        OVER AT-OAUTH-PAR-P256-I.LOGIN-U @
+        2 PICK _ATPP-VAULT-SPAN-STATUS
+        ?DUP IF NIP R> DROP EXIT THEN
+    THEN
+    DUP AT-OAUTH-PAR-P256-I.NONCE-U @ IF
+        DUP AT-OAUTH-PAR-P256-I.NONCE-A @
+        OVER AT-OAUTH-PAR-P256-I.NONCE-U @
+        2 PICK _ATPP-VAULT-SPAN-STATUS
+        ?DUP IF NIP R> DROP EXIT THEN
+    THEN
+    DUP AT-OAUTH-PAR-P256-I.CONFIG @ OAUTH2-CLIENT-CONFIG-SIZE
+    2 PICK _ATPP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.PROFILE @ AT-OAUTH-PROFILE-SIZE
+    2 PICK _ATPP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.TRANSACTION @ O2CODE-TRANSACTION-SIZE
+    2 PICK _ATPP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.POST @ OAUTH2-HTTP-POST-SIZE
+    2 PICK _ATPP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.REQUEST-A @
+    OVER AT-OAUTH-PAR-P256-I.REQUEST-CAP @
+    2 PICK _ATPP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.FORM-A @
+    OVER AT-OAUTH-PAR-P256-I.FORM-CAP @
+    2 PICK _ATPP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-OAUTH-PAR-P256-I.RESPONSE-A @
+    OVER AT-OAUTH-PAR-P256-I.RESPONSE-CAP @
+    2 PICK _ATPP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    R@ AT-OAUTH-PAR-P256-WORKSPACE-SIZE
+    2 PICK _ATPP-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DROP R> DROP AT-OAUTH-PAR-S-OK ;
+
+: _ATPP-GEOMETRY  ( input workspace -- status )
+    2DUP _ATPP-FIELD-GEOMETRY
+    ?DUP IF _ATPP-RETURN2 EXIT THEN
+    2DUP _ATPP-ALIAS-GEOMETRY
+    ?DUP IF _ATPP-RETURN2 EXIT THEN
+    _ATPP-VAULT-GEOMETRY ;
+
+\ =====================================================================
+\  Public-client configuration admission and binding snapshot
+\ =====================================================================
+
+: _ATPP-CONFIG-CALLBACK  ( config-view workspace -- status )
+    >R
+    DUP
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.PROFILE @
+    R@ _ATPPW.CHILD
+    AT-OAUTH-CLIENT-VIEW-ADMIT
+    _ATPP-CLIENT>STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+
+    DUP OAUTH2-CLIENT-VIEW-AUTH-METHOD@
+    S" none" COMPARE 0<> IF
+        DROP R> DROP AT-OAUTH-PAR-S-CONFIG EXIT
+    THEN
+    DUP OAUTH2-CLIENT-VIEW-AUTH-ALGORITHM@
+    OR IF
+        DROP R> DROP AT-OAUTH-PAR-S-CONFIG EXIT
+    THEN
+    DUP OAUTH2-CLIENT-VIEW-DPOP-BOUND? 0= IF
+        DROP R> DROP AT-OAUTH-PAR-S-CONFIG EXIT
+    THEN
+
+    OAUTH2-CLIENT-VIEW-BINDING@
+    2DUP OAUTH2-P256-KEY-BINDING-PRESENCE@
+    DUP OAUTH2-P256-KEY-S-OK <> IF
+        _ATPP-KEY>STATUS >R
+        DROP 2DROP R> R> DROP EXIT
+    THEN
+    DROP
+    OAUTH2-P256-KEY-BINDING-F-DPOP <> IF
+        2DROP R> DROP AT-OAUTH-PAR-S-BINDING EXIT
+    THEN
+    DROP
+    R@ _ATPPW.BINDING
+    OAUTH2-P256-KEY-BINDING-SIZE MOVE
+    R> DROP AT-OAUTH-PAR-S-OK ;
+
+: _ATPP-ADMIT-CONFIG  ( workspace -- status )
+    >R
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.CONFIG @
+    ['] _ATPP-CONFIG-CALLBACK
+    R@
+    OAUTH2-CLIENT-CONFIG-WITH
+    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
+        _ATPP-CONFIG>STATUS >R
+        DROP R> R> DROP EXIT
+    THEN
+    DROP
+    DUP AT-OAUTH-PAR-STATUS-VALID? 0= IF
+        DROP AT-OAUTH-PAR-S-INTERNAL
+    THEN
+    R> DROP ;
+
+\ =====================================================================
+\  POST configuration and durable proof construction
+\ =====================================================================
+
+: _ATPP-CONFIGURE-POST  ( workspace -- status )
+    >R
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.PROFILE @
+    AT-OAUTH-PROFILE-PAR-TARGET@
+    DUP AT-OAUTH-PROFILE-S-OK <> IF
+        _ATPP-PROFILE>STATUS >R
+        DROP R> R> DROP EXIT
+    THEN
+    DROP
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.REQUEST-A @
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.REQUEST-CAP @
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.FORM-A @
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.FORM-CAP @
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.RESPONSE-A @
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.RESPONSE-CAP @
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.POST @
+    OAUTH2-HTTP-POST-CONFIGURE
+    _ATPP-POST>STATUS
+    ?DUP IF R> DROP EXIT THEN
+
+    R@ AT-OAUTH-PAR-P256-WORKSPACE-SIZE
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.POST @
+    OAUTH2-HTTP-POST-EXTERNAL-SPAN-STATUS
+    _ATPP-POST>STATUS
+    R> DROP ;
+
+: _ATPP-PREPARE-DPOP-INPUT  ( workspace -- )
+    >R
+    R@ _ATPPW.DPOP-INPUT
+    OAUTH2-P256-KEY-DPOP-INPUT-SIZE 0 FILL
+
+    S" POST"
+    DUP R@ _ATPPW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTM-U !
+    SWAP R@ _ATPPW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTM-A !
+    DROP
+
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.POST @
+    OAUTH2-HTTP-POST-HTU$
+    DUP R@ _ATPPW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTU-U !
+    SWAP R@ _ATPPW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTU-A !
+    DROP
+
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.IAT @
+    R@ _ATPPW.DPOP-INPUT OAUTH2-P256-KEY-DPOP-I.IAT !
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.NONCE-A @
+    R@ _ATPPW.DPOP-INPUT OAUTH2-P256-KEY-DPOP-I.NONCE-A !
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.NONCE-U @
+    R@ _ATPPW.DPOP-INPUT OAUTH2-P256-KEY-DPOP-I.NONCE-U !
+    R@ _ATPPW.PROOF
+    R@ _ATPPW.DPOP-INPUT OAUTH2-P256-KEY-DPOP-I.DESTINATION !
+    OAUTH2-DPOP-ES256-MAX-PROOF-BYTES
+    R@ _ATPPW.DPOP-INPUT OAUTH2-P256-KEY-DPOP-I.CAPACITY !
+    R> DROP ;
+
+: _ATPP-SIGN  ( workspace -- status )
+    >R
+    R@ _ATPPW.BINDING
+    OAUTH2-P256-KEY-BINDING-SIZE
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.VAULT @
+    R@ _ATPPW.DPOP-INPUT
+    R@ _ATPPW.CHILD
+    OAUTH2-P256-KEY-DPOP-PROOF
+    DUP OAUTH2-P256-KEY-S-OK <> IF
+        _ATPP-KEY>STATUS >R
+        DROP R> R> DROP EXIT
+    THEN
+    DROP
+    DUP 0> 0= IF
+        DROP R> DROP AT-OAUTH-PAR-S-INTERNAL EXIT
+    THEN
+    DUP OAUTH2-DPOP-ES256-MAX-PROOF-BYTES U> IF
+        DROP R> DROP AT-OAUTH-PAR-S-INTERNAL EXIT
+    THEN
+    R@ _ATPPW.PROOF-U !
+    R> DROP AT-OAUTH-PAR-S-OK ;
+
+: _ATPP-RAW-BUILD  ( workspace -- status )
+    >R
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.LOGIN-A @
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.LOGIN-U @
+    0 0
+    R@ _ATPPW.PROOF
+    R@ _ATPPW.PROOF-U @
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.CONFIG @
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.PROFILE @
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.TRANSACTION @
+    R@ _ATPPW.INPUT AT-OAUTH-PAR-P256-I.POST @
+    R@ _ATPPW.CHILD
+    AT-OAUTH-PAR-BUILD
+    DUP AT-OAUTH-PAR-STATUS-VALID? 0= IF
+        DROP AT-OAUTH-PAR-S-INTERNAL
+    THEN
+    R> DROP ;
+
+\ =====================================================================
+\  Operation, caught cleanup, and public entry point
+\ =====================================================================
+
+: _ATPP-SNAPSHOT  ( input workspace -- )
+    >R
+    R@ _ATPP-WIPE
+    R@ _ATPPW.INPUT
+    AT-OAUTH-PAR-P256-INPUT-SIZE MOVE
+    R> DROP ;
+
+: _ATPP-FINISH  ( status workspace -- status )
+    >R
+    DUP AT-OAUTH-PAR-STATUS-VALID? 0= IF
+        DROP AT-OAUTH-PAR-S-INTERNAL
+    THEN
+    R@ _ATPP-WIPE
+    R> DROP ;
+
+: _ATPP-OP  ( input workspace -- status )
+    DUP >R
+    _ATPP-SNAPSHOT
+
+    R@ _ATPP-ADMIT-CONFIG
+    ?DUP IF R> _ATPP-FINISH EXIT THEN
+    R@ _ATPP-CONFIGURE-POST
+    ?DUP IF R> _ATPP-FINISH EXIT THEN
+    R@ _ATPP-PREPARE-DPOP-INPUT
+    R@ _ATPP-SIGN
+    ?DUP IF R> _ATPP-FINISH EXIT THEN
+    R@ _ATPP-RAW-BUILD
+    R> _ATPP-FINISH ;
+
+: _ATPP-CALL  ( input workspace operation-xt -- status )
+    1 PICK >R
+    CATCH
+    DUP IF
+        DROP
+        R@ _ATPP-WIPE
+        _ATPP-DROP2
+        R> DROP
+        AT-OAUTH-PAR-S-INTERNAL EXIT
+    THEN
+    DROP R> DROP ;
+
+: AT-OAUTH-PAR-P256-BUILD  ( input workspace -- status )
+    2DUP _ATPP-GEOMETRY
+    ?DUP IF _ATPP-RETURN2 EXIT THEN
+    ['] _ATPP-OP _ATPP-CALL ;
+
+\ =====================================================================
+\  Compile-time geometry assertions
+\ =====================================================================
+
+1 CELLS 8 <> [IF]
+    ." AT OAuth PAR P-256 cell geometry mismatch" CR ABORT
+[THEN]
+
+_ATPP-I-RESPONSE-CAP 8 +
+AT-OAUTH-PAR-P256-INPUT-SIZE <> [IF]
+    ." AT OAuth PAR P-256 input geometry mismatch" CR ABORT
+[THEN]
+
+_ATPPW-INPUT-OFF AT-OAUTH-PAR-P256-INPUT-SIZE +
+_ATPPW-BINDING-OFF <> [IF]
+    ." AT OAuth PAR P-256 workspace geometry mismatch" CR ABORT
+[THEN]
+
+_ATPPW-BINDING-OFF OAUTH2-P256-KEY-BINDING-SIZE +
+_ATPPW-DPOP-INPUT-OFF <> [IF]
+    ." AT OAuth PAR P-256 workspace geometry mismatch" CR ABORT
+[THEN]
+
+_ATPPW-DPOP-INPUT-OFF OAUTH2-P256-KEY-DPOP-INPUT-SIZE +
+_ATPPW-PROOF-OFF <> [IF]
+    ." AT OAuth PAR P-256 workspace geometry mismatch" CR ABORT
+[THEN]
+
+_ATPPW-CHILD-OFF _ATPPW-CHILD-SIZE +
+AT-OAUTH-PAR-P256-WORKSPACE-SIZE <> [IF]
+    ." AT OAuth PAR P-256 workspace geometry mismatch" CR ABORT
+[THEN]
