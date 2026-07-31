@@ -233,21 +233,34 @@ VARIABLE _HRH-R
 : HREQ-CONNECTION-CLOSE  ( request -- status )
     >R S" Connection" S" close" R> HREQ-HEADER ;
 
-VARIABLE _HRAB-A
-VARIABLE _HRAB-U
-VARIABLE _HRAB-R
+VARIABLE _HRAU-SA
+VARIABLE _HRAU-SU
+VARIABLE _HRAU-CA
+VARIABLE _HRAU-CU
+VARIABLE _HRAU-R
+
+\ Append a bounded RFC 7235-style Authorization field without requiring
+\ callers to join the scheme and credential in temporary storage.  The
+\ credential syntax deliberately retains the existing bearer-token policy:
+\ one or more visible ASCII bytes with no whitespace or controls.
+: HREQ-AUTHORIZATION
+  ( scheme-a scheme-u credential-a credential-u request -- status )
+    _HRAU-R ! _HRAU-CU ! _HRAU-CA ! _HRAU-SU ! _HRAU-SA !
+    _HRAU-SA @ _HRAU-SU @ _HREQ-TOKEN? 0=
+    _HRAU-CA @ _HRAU-CU @ _HREQ-BEARER? 0= OR IF
+        HREQ-S-INVALID _HRAU-R @ _HREQ-FAIL EXIT
+    THEN
+    _HRAU-R @ HREQ.STATE @ HREQ-STATE-BUILDING <> IF
+        HREQ-S-STATE _HRAU-R @ _HREQ-FAIL EXIT
+    THEN
+    S" Authorization: " _HRAU-R @ _HREQ-APPEND ?DUP IF EXIT THEN
+    _HRAU-SA @ _HRAU-SU @ _HRAU-R @ _HREQ-APPEND ?DUP IF EXIT THEN
+    S"  " _HRAU-R @ _HREQ-APPEND ?DUP IF EXIT THEN
+    _HRAU-CA @ _HRAU-CU @ _HRAU-R @ _HREQ-APPEND ?DUP IF EXIT THEN
+    _HREQ-CRLF 2 _HRAU-R @ _HREQ-APPEND ;
 
 : HREQ-AUTH-BEARER  ( token-a token-u request -- status )
-    _HRAB-R ! _HRAB-U ! _HRAB-A !
-    _HRAB-A @ _HRAB-U @ _HREQ-BEARER? 0= IF
-        HREQ-S-INVALID _HRAB-R @ _HREQ-FAIL EXIT
-    THEN
-    _HRAB-R @ HREQ.STATE @ HREQ-STATE-BUILDING <> IF
-        HREQ-S-STATE _HRAB-R @ _HREQ-FAIL EXIT
-    THEN
-    S" Authorization: Bearer " _HRAB-R @ _HREQ-APPEND ?DUP IF EXIT THEN
-    _HRAB-A @ _HRAB-U @ _HRAB-R @ _HREQ-APPEND ?DUP IF EXIT THEN
-    _HREQ-CRLF 2 _HRAB-R @ _HREQ-APPEND ;
+    >R S" Bearer" 2SWAP R> HREQ-AUTHORIZATION ;
 
 : HREQ-CONTENT-LENGTH  ( length request -- status )
     >R DUP 0< IF DROP HREQ-S-INVALID R> _HREQ-FAIL EXIT THEN
