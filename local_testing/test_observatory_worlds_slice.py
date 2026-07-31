@@ -16,10 +16,13 @@ import akashic_tui as harness  # noqa: E402
 
 PROFILE = "observatory-worlds-slice"
 IMAGE = Path("/tmp/akashic-observatory-worlds-slice.img")
+SOURCE_ROOT = LOCAL_TESTING.parent / "akashic"
 
 AUTOEXEC = r'''\ autoexec.f - Observatory/Worlds focused contracts
 ENTER-USERLAND
 REQUIRE tui/applets/worlds/run.f
+REQUIRE tui/applets/worlds/worlds.f
+REQUIRE tui/applets/observatory/observatory.f
 
 VARIABLE _OW-FAILS
 VARIABLE _OW-CHECKS
@@ -76,6 +79,22 @@ VARIABLE _OW-SAMPLE-OK
 VARIABLE _OW-SAVED-REVISION
 VARIABLE _OW-SAVED-UPPER
 VARIABLE _OW-SAVED-JOURNAL-N
+VARIABLE _OW-OBS-INSTANCE
+VARIABLE _OW-WORLD-INSTANCE
+VARIABLE _OW-OBS-RUN-SEQUENCE
+VARIABLE _OW-OBS-REQUEST
+VARIABLE _OW-SNAPSHOT-U
+
+CREATE _OW-WORLDS-DESC APP-DESC ALLOT
+CREATE _OW-OBS-DESC APP-DESC ALLOT
+CREATE _OW-WORLDS-SNAPSHOT 512 ALLOT
+CREATE _OW-WORLDS-HEX 1024 ALLOT
+CREATE _OW-EVENT 24 ALLOT
+
+: _OW-REHASH-SNAPSHOT  ( -- )
+    _OW-WORLDS-SNAPSHOT _OBS-HASH-CHECK OBS-TS-CONTENT-DIGEST DROP
+    _OBS-HASH-CHECK _OW-WORLDS-SNAPSHOT _OTS.CONTENT-DIGEST +
+        SHA3-256-LEN MOVE ;
 
 : _OW-INIT-A  ( -- )
     _OW-JOURNAL-A _OW-CAP _OW-TELEMETRY-A _OW-CAP
@@ -136,7 +155,7 @@ VARIABLE _OW-SEQ-RUN
         WRUN-S-OK _OW-STATUS
     2 _OW-SEQ-RUN @ WRUN.REVISION @ _OW-SEQ-RUN @ WRUN-BRANCH
         WRUN-S-OK _OW-STATUS
-    750 _OW-SEQ-RUN @ WRUN.REVISION @ _OW-SEQ-RUN @ WRUN-VALVE-SET
+    1000 _OW-SEQ-RUN @ WRUN.REVISION @ _OW-SEQ-RUN @ WRUN-VALVE-SET
         WRUN-S-OK _OW-STATUS
     _OW-SEQ-RUN @ WRUN.REVISION @ _OW-SEQ-RUN @ WRUN-STEP
         WRUN-S-OK _OW-STATUS
@@ -155,8 +174,8 @@ VARIABLE _OW-SEQ-RUN
     _OW-RUN-A WRUN.PARENT-REVISION @ 2 = _OW-ASSERT
     _OW-RUN-A WRUN.REVISION @ 4 = _OW-ASSERT
     _OW-RUN-A WRUN.TICK @ 3 = _OW-ASSERT
-    _OW-RUN-A WRUN.UPPER @ 6000 = _OW-ASSERT
-    _OW-RUN-A WRUN.LOWER @ 4000 = _OW-ASSERT
+    _OW-RUN-A WRUN.UPPER @ 5500 = _OW-ASSERT
+    _OW-RUN-A WRUN.LOWER @ 4500 = _OW-ASSERT
     _OW-RUN-A WRUN.JOURNAL-N @ 3 = _OW-ASSERT
     _OW-RUN-A WRUN.TELEMETRY-N @ 3 = _OW-ASSERT
     0 _OW-RUN-A _OW-SAMPLE
@@ -166,7 +185,7 @@ VARIABLE _OW-SEQ-RUN
     2 _OW-RUN-A _OW-SAMPLE
     _OW-SAMPLE-OK @ _OW-ASSERT
     _OW-SAMPLE-X @ 3 = _OW-ASSERT
-    _OW-SAMPLE-Y @ 6000 = _OW-ASSERT
+    _OW-SAMPLE-Y @ 5500 = _OW-ASSERT
     _OW-REPLAY _OW-RUN-A WRUN-REPLAY WRUN-S-OK _OW-STATUS
     _OW-STACK ;
 
@@ -197,6 +216,113 @@ VARIABLE _OW-SEQ-RUN
     _OW-REPLAY _OW-RUN-A WRUN-REPLAY WRUN-S-OK _OW-STATUS
     _OW-STACK ;
 
+: _OW-APP-CONTRACTS  ( -- )
+    _OW-WORLDS-DESC WORLDS-ENTRY
+    _OW-WORLDS-DESC APP-DESC-VALID? _OW-ASSERT
+    _OW-WORLDS-DESC APP.COMP-DESC @ COMP-CAPS-VALID? _OW-ASSERT
+    WORLDS-COMP-DESC CINST-NEW
+        DUP 0= _OW-ASSERT DROP _OW-WORLD-INSTANCE !
+    _OW-WORLD-INSTANCE @ WORLDS-INIT-CB
+    _WORLD-RUN WRUN-VALID? _OW-ASSERT
+    _OW-EVENT 24 0 FILL
+    KEY-T-CHAR _OW-EVENT ! [CHAR] z _OW-EVENT 8 + !
+    _OW-EVENT _WORLD-PANEL _WORLD-PANEL-HANDLE 0= _OW-ASSERT
+    _OW-STACK
+    _OW-WORLD-INSTANCE @ WORLDS-SHUTDOWN-CB
+    _OW-WORLD-INSTANCE @ CINST-FREE 0 _OW-WORLD-INSTANCE !
+    _OW-OBS-DESC OBSERVATORY-ENTRY
+    _OW-OBS-DESC APP-DESC-VALID? _OW-ASSERT
+    _OW-OBS-DESC APP.COMP-DESC @ COMP-CAPS-VALID? _OW-ASSERT
+    OBSERVATORY-CAP CAP-DESC-VALID? _OW-ASSERT
+    OBSERVATORY-INTENT CINT-DESC-VALID? _OW-ASSERT
+    OBSERVATORY-COMP-DESC CINST-NEW
+        DUP 0= _OW-ASSERT DROP _OW-OBS-INSTANCE !
+    _OW-OBS-INSTANCE @ OBSERVATORY-INIT-CB
+    _OW-EVENT 24 0 FILL
+    KEY-T-CHAR _OW-EVENT ! [CHAR] z _OW-EVENT 8 + !
+    _OW-EVENT 0 _OBS-PANEL-HANDLE 0= _OW-ASSERT
+    _OW-STACK
+    _OBS-COUNT @ _OBS-DEMO-N = _OW-ASSERT
+    _OBS-EXACT-MIN @ 4500 = _OW-ASSERT
+    _OBS-EXACT-MAX @ 8000 = _OW-ASSERT
+    _OBS-RUN-SEQUENCE @ DUP _OW-OBS-RUN-SEQUENCE ! 1 = _OW-ASSERT
+    _OBS-DEMO _OTS.SAMPLES + 8 + DUP C@ 1 XOR SWAP C!
+    _OBS-DEMO _OBS-DEMO-SIZE _OBS-ACCEPT-SNAPSHOT
+        OBS-S-DIGEST _OW-STATUS
+    _OBS-RUN-SEQUENCE @ _OW-OBS-RUN-SEQUENCE @ = _OW-ASSERT
+    _OBS-COUNT @ _OBS-DEMO-N = _OW-ASSERT
+    _OBS-DEMO _OTS.SAMPLES + 8 + DUP C@ 1 XOR SWAP C!
+    _OW-RUN-A WORLD-TELEMETRY-SNAPSHOT-SIZE
+        DUP WRUN-S-OK = _OW-ASSERT DROP _OW-SNAPSHOT-U !
+    _OW-SNAPSHOT-U @ 512 <= _OW-ASSERT
+    _OW-RUN-A _OW-WORLDS-SNAPSHOT 512 WORLD-TELEMETRY-SNAPSHOT
+        DUP WRUN-S-OK = _OW-ASSERT DROP _OW-SNAPSHOT-U @ = _OW-ASSERT
+    _OW-WORLDS-SNAPSHOT 31 + DUP C@ 1 XOR SWAP C!
+    _OW-WORLDS-SNAPSHOT _OW-SNAPSHOT-U @ _OBS-ACCEPT-SNAPSHOT
+        OBS-S-DIGEST _OW-STATUS
+    _OBS-COUNT @ _OBS-DEMO-N = _OW-ASSERT
+    _OW-WORLDS-SNAPSHOT 31 + DUP C@ 1 XOR SWAP C!
+    _OW-WORLDS-SNAPSHOT 112 + DUP C@ 1 XOR SWAP C!
+    _OW-WORLDS-SNAPSHOT _OW-SNAPSHOT-U @ _OBS-ACCEPT-SNAPSHOT
+        OBS-S-DIGEST _OW-STATUS
+    _OBS-COUNT @ _OBS-DEMO-N = _OW-ASSERT
+    _OW-WORLDS-SNAPSHOT 112 + DUP C@ 1 XOR SWAP C!
+    0x8000000000000000
+        _OW-WORLDS-SNAPSHOT _OTS.SAMPLES + OBS-TS-BE64!
+    _OW-REHASH-SNAPSHOT
+    _OW-WORLDS-SNAPSHOT _OW-SNAPSHOT-U @ _OBS-ACCEPT-SNAPSHOT
+        OBS-S-INVALID _OW-STATUS
+    _OBS-COUNT @ _OBS-DEMO-N = _OW-ASSERT
+    1 _OW-WORLDS-SNAPSHOT _OTS.SAMPLES + OBS-TS-BE64!
+    6750 _OW-WORLDS-SNAPSHOT _OTS.SAMPLES + OBS-TS-SAMPLE-SIZE + 8 +
+        OBS-TS-BE64!
+    _OW-REHASH-SNAPSHOT
+    _OW-WORLDS-SNAPSHOT _OW-SNAPSHOT-U @ _OBS-ACCEPT-SNAPSHOT
+        OBS-S-PRECISION _OW-STATUS
+    _OBS-COUNT @ _OBS-DEMO-N = _OW-ASSERT
+    6500 _OW-WORLDS-SNAPSHOT _OTS.SAMPLES + OBS-TS-SAMPLE-SIZE + 8 +
+        OBS-TS-BE64!
+    _OW-REHASH-SNAPSHOT
+    CBR-NEW DUP 0= _OW-ASSERT DROP _OW-OBS-REQUEST !
+    CPRINC-COMPONENT _OW-OBS-REQUEST @ CBR.PRINCIPAL !
+    _OW-WORLDS-SNAPSHOT _OW-SNAPSHOT-U @ _OW-WORLDS-HEX FMT->HEX
+        _OW-SNAPSHOT-U @ 2* = _OW-ASSERT
+    _OW-WORLDS-HEX _OW-SNAPSHOT-U @ 2*
+        _OW-OBS-REQUEST @ CBR.ARGS CV-STRING! 0= _OW-ASSERT
+    _OW-OBS-REQUEST @ CBR-ARGS-SEAL! CBUS-S-OK = _OW-ASSERT
+    _OW-OBS-REQUEST @ CBR-ARGS-SEAL-MATCH? _OW-ASSERT
+    _OW-OBS-REQUEST @ CBR.ARGS CV-DATA@ 8 + DUP C@ 1 XOR SWAP C!
+    _OW-OBS-REQUEST @ CBR-ARGS-SEAL-MATCH? 0= _OW-ASSERT
+    _OW-OBS-REQUEST @ CBR.ARGS CV-DATA@ 8 + DUP C@ 1 XOR SWAP C!
+    _OW-OBS-REQUEST @ CBR-ARGS-SEAL-MATCH? _OW-ASSERT
+    _OW-OBS-REQUEST @ CBR.ARGS CV.LEN DUP @ 1- SWAP !
+    _OW-OBS-REQUEST @ _OW-OBS-INSTANCE @ _OBS-CAP-OPEN-HANDLER
+        CBUS-S-INVALID _OW-STATUS
+    1 _OW-OBS-REQUEST @ CBR.ARGS CV.LEN +!
+    [CHAR] F _OW-OBS-REQUEST @ CBR.ARGS CV-DATA@ 1+ C!
+    _OW-OBS-REQUEST @ _OW-OBS-INSTANCE @ _OBS-CAP-OPEN-HANDLER
+        CBUS-S-INVALID _OW-STATUS
+    [CHAR] g _OW-OBS-REQUEST @ CBR.ARGS CV-DATA@ 1+ C!
+    _OW-OBS-REQUEST @ _OW-OBS-INSTANCE @ _OBS-CAP-OPEN-HANDLER
+        CBUS-S-INVALID _OW-STATUS
+    [CHAR] f _OW-OBS-REQUEST @ CBR.ARGS CV-DATA@ 1+ C!
+    _OBS-COUNT @ _OBS-DEMO-N = _OW-ASSERT
+    _OW-OBS-REQUEST @ CBR-ERROR-CLEAR
+    _OW-OBS-REQUEST @ _OW-OBS-INSTANCE @ _OBS-CAP-OPEN-HANDLER
+        CBUS-S-OK _OW-STATUS
+    _OBS-COUNT @ 3 = _OW-ASSERT
+    _OBS-SOURCE-RUN @ 101 = _OW-ASSERT
+    _OBS-SOURCE-BRANCH @ 2 = _OW-ASSERT
+    _OBS-SOURCE-REVISION @ 4 = _OW-ASSERT
+    _OBS-EXACT-MIN @ 5500 = _OW-ASSERT
+    _OBS-EXACT-MAX @ 7500 = _OW-ASSERT
+    _OW-OBS-REQUEST @ CBR-FREE
+    0 _OW-OBS-REQUEST !
+    _OW-OBS-INSTANCE @ OBSERVATORY-SHUTDOWN-CB
+    _OW-OBS-INSTANCE @ CINST-FREE
+    0 _OW-OBS-INSTANCE !
+    _OW-STACK ;
+
 : _OW-RUN  ( -- )
     0 _OW-FAILS ! 0 _OW-CHECKS ! DEPTH _OW-DEPTH !
     ." OW START" CR
@@ -213,6 +339,9 @@ VARIABLE _OW-SEQ-RUN
     _OW-DETERMINISM
     ." OW DETERMINISM" CR
     _OW-CORRUPTION
+    ." OW CORRUPTION" CR
+    _OW-APP-CONTRACTS
+    ." OW APP CONTRACTS" CR
     _OW-STACK
     _OW-FAILS @ IF
         ." OBSERVATORY WORLDS SLICE FAIL "
@@ -225,15 +354,113 @@ _OW-RUN
 '''
 
 
+APPLET_REQUIRE_BLOCK = """REQUIRE tui/applets/worlds/run.f
+REQUIRE tui/applets/worlds/worlds.f
+REQUIRE tui/applets/observatory/observatory.f"""
+
+TUI_STUBS = r'''\ Focused semantic fixture: compile applet sources against
+\ exact component/interop/math contracts and inert presentation adapters.
+VARIABLE _UTUI-MENU-OPEN
+0 CONSTANT CELL-A-BOLD
+0 CONSTANT CELL-A-DIM
+0 CONSTANT KEY-T-CHAR
+1 CONSTANT KEY-T-SPECIAL
+3 CONSTANT KEY-RIGHT
+4 CONSTANT KEY-LEFT
+: WDG-DIRTY DROP ;
+: UIDL-DIRTY! DROP ;
+: ASHELL-DIRTY! ;
+: ASHELL-TOAST DROP 2DROP ;
+: ASHELL-QUIT ;
+: ASHELL-RUN DROP ;
+: WDG-REGION DROP 0 ;
+: WDG-INIT DROP DROP DROP DROP DROP ;
+: WDG-HANDLE 2DROP 0 ;
+: RGN-W DROP 80 ;
+: RGN-H DROP 30 ;
+: RGN-NEW 2DROP 2DROP 0 ;
+: RGN-FREE DROP ;
+: DRW-STYLE! DROP DROP DROP ;
+: DRW-STYLE-RESET ;
+: DRW-FILL-RECT DROP DROP DROP DROP DROP ;
+: DRW-TEXT DROP DROP DROP DROP ;
+: DRW-HLINE DROP DROP DROP DROP ;
+: DRW-CHAR DROP DROP DROP ;
+: UTUI-BY-ID 2DROP 0 ;
+: UTUI-ELEM-RGN DROP 0 0 80 30 ;
+: UTUI-WIDGET-SET 2DROP ;
+: UTUI-FOCUS! DROP ;
+: UTUI-DO! DROP 2DROP ;
+REQUIRE local_testing/ow-worlds.f
+REQUIRE local_testing/ow-observatory.f'''
+
+
+def _stripped_applet(relative: str) -> bytes:
+    lines = (SOURCE_ROOT / relative).read_text(encoding="utf-8").splitlines()
+    retained = [
+        line
+        for line in lines
+        if not line.strip().startswith(("REQUIRE ", "PROVIDED "))
+    ]
+    return ("\n".join(retained) + "\n").encode("utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument(
+        "--full-ui",
+        action="store_true",
+        help="Compile the complete TUI closure instead of inert presentation adapters",
+    )
     args = parser.parse_args()
 
+    if args.full_ui:
+        roots = (
+            "tui/applets/worlds/worlds.f",
+            "tui/applets/observatory/observatory.f",
+        )
+        resources = (
+            "tui/applets/worlds/worlds.uidl",
+            "tui/applets/observatory/observatory.uidl",
+        )
+        autoexec = AUTOEXEC
+        initial_files = ()
+        max_steps = 800_000_000
+    else:
+        roots = (
+            "tui/applets/worlds/run.f",
+            "runtime/state-layout.f",
+            "tui/app-desc.f",
+            "interop/capability.f",
+            "interop/intent.f",
+            "interop/request-bus.f",
+            "interop/endpoint.f",
+            "math/stats.f",
+            "utils/fmt.f",
+        )
+        resources = ()
+        autoexec = AUTOEXEC.replace(
+            APPLET_REQUIRE_BLOCK,
+            "REQUIRE tui/applets/worlds/run.f\n" + TUI_STUBS,
+            1,
+        )
+        initial_files = (
+            (
+                "local_testing/ow-worlds.f",
+                _stripped_applet("tui/applets/worlds/worlds.f"),
+            ),
+            (
+                "local_testing/ow-observatory.f",
+                _stripped_applet("tui/applets/observatory/observatory.f"),
+            ),
+        )
+        max_steps = 500_000_000
+
     harness.PROFILES[PROFILE] = harness.Profile(
-        roots=("tui/applets/worlds/run.f",),
-        resources=(),
-        autoexec=AUTOEXEC,
+        roots=roots,
+        resources=resources,
+        autoexec=autoexec,
         ready_markers=("OBSERVATORY WORLDS CORE PASS",),
         stable_markers=("OBSERVATORY WORLDS CORE PASS",),
         failure_markers=(
@@ -249,6 +476,7 @@ def main() -> int:
         linked=True,
         include_large_sample=False,
         total_sectors=2048,
+        initial_files=initial_files,
     )
     image = harness.build_image(PROFILE, IMAGE)
     ok = harness.smoke(
@@ -256,7 +484,7 @@ def main() -> int:
         image,
         cols=120,
         rows=40,
-        max_steps=500_000_000,
+        max_steps=max_steps,
         timeout=args.timeout,
         ext_mem_mib=64,
     )

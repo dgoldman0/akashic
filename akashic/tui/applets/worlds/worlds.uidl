@@ -1,0 +1,24 @@
+<uidl arrange=stack>
+<menubar id=mbar>
+<menu label=Run>
+<item text=Step do=step/>
+<item text=Run_or_Pause do=run/>
+<item text=Set_Next_Valve do=valve/>
+<separator/>
+<item text=Checkpoint do=checkpoint/>
+<item text=Branch do=branch/>
+<item text=Verify_Replay do=replay/>
+<separator/>
+<item text=Analyze_in_Observatory do=analyze/>
+</menu>
+<menu label=File>
+<item text=Quit do=quit key=Ctrl+Q/>
+</menu>
+</menubar>
+<region id=worlds-body style=color:#eeeeee;background-color:#121212/>
+<status id=sbar style=color:white;background-color:#005f5f>
+<label id=sbar-model text=Two-reservoir_facility/>
+<label id=sbar-state text=Session-only_deterministic_run/>
+</status>
+<action do=quit key=Ctrl+Q/>
+</uidl>
