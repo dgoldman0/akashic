@@ -11,7 +11,7 @@ callbacks. The authenticated path instead composes explicit OAuth profile,
 durable session, DPoP key, target, request, and transport owners.
 
 ```forth
-REQUIRE aturi.f    \ AT URI parser + builder
+REQUIRE aturi.f    \ restricted normalized AT URI views + builder
 REQUIRE did.f      \ strict generic DID identifier syntax
 REQUIRE handle.f   \ AT Protocol handle syntax + lowercase normalization
 REQUIRE did-document.f \ strict caller-owned AT Protocol identity profile
@@ -28,7 +28,7 @@ REQUIRE feed-model.f \ owned app.bsky timeline response model
 REQUIRE public-author-feed.f \ bounded cooperative public-feed provider
 ```
 
-`PROVIDED akashic-aturi` / `akashic-did` /
+`PROVIDED akashic-atproto-aturi` / `akashic-did` /
 `akashic-atproto-handle` / `akashic-tid` /
 `akashic-atproto-diddoc` / `akashic-atproto-identity` /
 `akashic-atid-hres` / `akashic-at-oauth-prof` /
@@ -78,44 +78,41 @@ REQUIRE public-author-feed.f \ bounded cooperative public-feed provider
 
 ## AT URI — aturi.f
 
-AT URIs follow the format `at://authority/collection/rkey`.
+This state-free boundary accepts only the normalized Lexicon shape
+`at://AUTHORITY[/COLLECTION[/RKEY]]`. The authority is a normalized DID or
+lowercase handle, the optional collection is a normalized NSID, and the
+optional record key uses the exact general record-key grammar. Query,
+fragment, trailing-slash, userinfo, port, relative, and generic URI forms are
+rejected. The protocol-wide source bound is exported as
+`ATURI-LENGTH-MAX` (8,192 bytes).
 
-### Storage
-
-Parsed components are copied into static buffers:
-
-| Buffer | Size | Length Variable | Component |
-|---|---|---|---|
-| `ATURI-AUTHORITY` | 64 bytes | `ATURI-AUTH-LEN` | DID or handle |
-| `ATURI-COLLECTION` | 64 bytes | `ATURI-COLL-LEN` | NSID (e.g. `app.bsky.feed.post`) |
-| `ATURI-RKEY` | 32 bytes | `ATURI-RKEY-LEN` | Record key |
-
-A length of `0` means the component is absent.
-
-### ATURI-PARSE
+`ATURI-VALIDATE` returns a precise `ATURI-S-*` status. `ATURI-SPLIT` returns
+synchronous borrowed views into the admitted source; absent optional
+components are published as `0 0`. The module owns no component buffers or
+mutable parsing state.
 
 ```forth
-ATURI-PARSE  ( addr len -- ior )
+ATURI-VALIDATE  ( source source-u -- status )
+ATURI-VALID?    ( source source-u -- flag )
+ATURI-SPLIT     ( source source-u -- authority-a authority-u
+                                      collection-a collection-u
+                                      rkey-a rkey-u status )
 ```
-
-Parse an AT URI string.  Returns `0` on success, `-1` on failure.
-
-Validates:
-- Scheme must be `at`
-- Authority must be non-empty
-- Collection and rkey are optional
-
-Internally delegates to `URI-PARSE` from `uri.f`, then verifies the
-scheme and splits the path into collection and rkey on `/`.
 
 ### ATURI-BUILD
 
 ```forth
-ATURI-BUILD  ( auth-a auth-u coll-a coll-u rkey-a rkey-u dst max -- written )
+ATURI-BUILD  ( authority-a authority-u collection-a collection-u
+               rkey-a rkey-u destination capacity writer
+               -- written status )
 ```
 
-Build an AT URI from components.  Pass `0 0` for collection and/or
-rkey to omit them.  Returns bytes written to `dst`.
+Construction accepts caller-provided destination storage and a caller-owned
+`CBW-SIZE` workspace. It validates and measures all components before
+initializing the writer or changing the destination, rejects every source or
+workspace overlap with the exact output span, and never truncates. Pass `0 0`
+for both collection and record key to build an authority-only URI; a record
+key cannot be present without a collection.
 
 ---
 
@@ -412,14 +409,12 @@ API is preserved in parallel.
 
 | Word | Stack | Purpose |
 |---|---|---|
-| `ATURI-PARSE` | `( addr len -- ior )` | Parse AT URI |
-| `ATURI-BUILD` | `( auth coll rkey dst max -- written )` | Build AT URI |
-| `ATURI-AUTHORITY` | CREATE | 64-byte authority buffer |
-| `ATURI-AUTH-LEN` | VARIABLE | Authority length |
-| `ATURI-COLLECTION` | CREATE | 64-byte collection buffer |
-| `ATURI-COLL-LEN` | VARIABLE | Collection length |
-| `ATURI-RKEY` | CREATE | 32-byte rkey buffer |
-| `ATURI-RKEY-LEN` | VARIABLE | Rkey length |
+| `ATURI-LENGTH-MAX` | `( -- 8192 )` | Protocol-wide source bound |
+| `ATURI-STATUS-VALID?` | `( status -- flag )` | Recognize the status vocabulary |
+| `ATURI-VALIDATE` | `( source source-u -- status )` | Validate restricted normalized syntax |
+| `ATURI-VALID?` | `( source source-u -- flag )` | Boolean validation convenience |
+| `ATURI-SPLIT` | `( source source-u -- authority collection rkey status )` | Borrow validated component views |
+| `ATURI-BUILD` | `( authority collection rkey destination capacity writer -- written status )` | Transactionally build into caller storage |
 
 ### did.f
 
@@ -472,34 +467,37 @@ API is preserved in parallel.
 
 ## Cookbook
 
-### Parse an AT URI
+### Validate and split an AT URI
 
 ```forth
-S" at://did:plc:abc/app.bsky.feed.post/3k2la" ATURI-PARSE DROP
-ATURI-AUTHORITY ATURI-AUTH-LEN @ TYPE   \ → did:plc:abc
-ATURI-COLLECTION ATURI-COLL-LEN @ TYPE \ → app.bsky.feed.post
-ATURI-RKEY ATURI-RKEY-LEN @ TYPE       \ → 3k2la
+S" at://did:plc:abc/app.bsky.feed.post/3k2la" ATURI-SPLIT
+DUP ATURI-S-OK = IF
+    DROP
+    TYPE CR  \ record key: 3k2la
+    TYPE CR  \ collection: app.bsky.feed.post
+    TYPE CR  \ authority: did:plc:abc
+ELSE
+    >R 2DROP 2DROP 2DROP R> .  \ report the failure status
+THEN
 ```
 
 ### Build an AT URI
 
 ```forth
 CREATE _BUF 128 ALLOT
+CREATE _ATURI-WRITER CBW-SIZE ALLOT
 S" did:plc:test" S" app.bsky.feed.post" S" 3k2la"
-_BUF 128 ATURI-BUILD
-_BUF SWAP TYPE
+_BUF 128 _ATURI-WRITER ATURI-BUILD
+DUP ATURI-S-OK = IF DROP _BUF SWAP TYPE ELSE 2DROP THEN
 \ → at://did:plc:test/app.bsky.feed.post/3k2la
 ```
 
 ### Round-trip
 
 ```forth
-S" at://did:plc:round/trip.test.ns/rk42" ATURI-PARSE DROP
-ATURI-AUTHORITY ATURI-AUTH-LEN @
-ATURI-COLLECTION ATURI-COLL-LEN @
-ATURI-RKEY ATURI-RKEY-LEN @
-_BUF 128 ATURI-BUILD
-_BUF SWAP TYPE
+S" at://did:plc:round/trip.test.ns/rk42" ATURI-SPLIT DROP
+_BUF 128 _ATURI-WRITER ATURI-BUILD
+DUP ATURI-S-OK = IF DROP _BUF SWAP TYPE ELSE 2DROP THEN
 \ → at://did:plc:round/trip.test.ns/rk42
 ```
 
