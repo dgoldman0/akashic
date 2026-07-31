@@ -18,8 +18,10 @@ utils/string.f                            ← foundation: every module uses this
     │       ├── dom/dom.f → css/css.f → css/bridge.f
     │       ├── sml/core.f → sml/tree.f
     │       └── liraq/uidl.f
-    ├── net/url.f → uri.f → headers.f → http.f → ws.f
-    │       └── atproto/xrpc.f → session.f → repo.f
+    ├── net/url.f → uri.f → http-target.f → http-request.f → http-buffered.f
+    │       └── atproto/public-author-feed.f
+    ├── security/oauth2/session.f + key-p256.f
+    │       └── atproto/oauth-*.f → atproto/xrpc.f
     ├── web/server.f → router.f → middleware.f → template.f
     ├── audio/pcm.f → osc.f → env.f → synth.f → fm.f → seq.f → ...
     ├── render/surface.f → draw.f → composite.f → layout.f → paint.f → dom2bmp.f
@@ -607,20 +609,25 @@ DAG-CBOR for AT Protocol / IPLD (InterPlanetary Linked Data):
 - **Canonical key ordering validation**: shorter keys first, then lexicographic
 - `DCBOR-SORT-MAP` validates key order on decoded maps (no duplicates allowed)
 
-### AT Protocol Stack (6 files)
+### Selected AT Protocol modules
 
-A complete Bluesky / AT Protocol client:
+AT identity, OAuth policy, caller-owned authenticated XRPC construction, and
+bounded Bluesky presentation primitives:
 
 | File | Purpose |
 |------|---------|
-| `session.f` (~130 lines) | JWT session management: `SESS-LOGIN` (createSession), `SESS-REFRESH` (refreshSession), bearer token setting |
-| `xrpc.f` (~180 lines) | XRPC client: URL builder (`https://<host>/xrpc/<nsid>`), query parameters, cursor pagination (128-byte cursor buffer) |
-| `repo.f` (~200 lines) | Repository CRUD: `REPO-GET`, `REPO-CREATE`, `REPO-PUT`, `REPO-DELETE` — manual JSON building via ASCII char codes (34 for `"`) since KDOS lacks `S\"` |
+| `oauth-profile.f` | Identity-to-OAuth/PDS discovery profile |
+| `oauth-client.f` | AT policy over immutable generic OAuth client configurations |
+| `xrpc.f` | State-free authenticated GET construction over caller-owned HTTP storage and durable generic session/key owners |
+| `feed-model.f` | Bounded owned Bluesky feed-response model |
 | `aturi.f` | AT URI parser + builder: `at://authority/collection/rkey` |
 | `did.f` | DID validation (did:plc: and did:web:) |
 | `tid.f` | TID generation (base32-sort encoded 64-bit timestamps) |
 
-Token storage: accessJwt (512B), refreshJwt (512B), DID (128B).  Default PDS host: `bsky.social`.
+Durable token and DPoP-key storage belongs to the provider-neutral credential
+vault and OAuth session/key owners under `akashic/security/`. The AT XRPC
+builder owns no default host, ambient bearer token, cursor, response buffer,
+transport, connector, or repository singleton.
 
 ---
 

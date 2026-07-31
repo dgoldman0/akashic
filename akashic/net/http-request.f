@@ -92,6 +92,11 @@ VARIABLE _HRA-A
 VARIABLE _HRA-U
 VARIABLE _HRA-R
 
+: _HRA-CLEAR  ( -- )
+    0 _HRA-A !
+    0 _HRA-U !
+    0 _HRA-R ! ;
+
 : _HREQ-APPEND  ( addr len request -- status )
     _HRA-R ! _HRA-U ! _HRA-A !
     _HRA-U @ 0< _HRA-A @ 0= _HRA-U @ 0> AND OR IF
@@ -239,13 +244,19 @@ VARIABLE _HRAU-CA
 VARIABLE _HRAU-CU
 VARIABLE _HRAU-R
 
+: _HRAU-CLEAR  ( -- )
+    0 _HRAU-SA !
+    0 _HRAU-SU !
+    0 _HRAU-CA !
+    0 _HRAU-CU !
+    0 _HRAU-R !
+    _HRA-CLEAR ;
+
 \ Append a bounded RFC 7235-style Authorization field without requiring
 \ callers to join the scheme and credential in temporary storage.  The
 \ credential syntax deliberately retains the existing bearer-token policy:
 \ one or more visible ASCII bytes with no whitespace or controls.
-: HREQ-AUTHORIZATION
-  ( scheme-a scheme-u credential-a credential-u request -- status )
-    _HRAU-R ! _HRAU-CU ! _HRAU-CA ! _HRAU-SU ! _HRAU-SA !
+: _HRAU-BUILD  ( -- status )
     _HRAU-SA @ _HRAU-SU @ _HREQ-TOKEN? 0=
     _HRAU-CA @ _HRAU-CU @ _HREQ-BEARER? 0= OR IF
         HREQ-S-INVALID _HRAU-R @ _HREQ-FAIL EXIT
@@ -258,6 +269,16 @@ VARIABLE _HRAU-R
     S"  " _HRAU-R @ _HREQ-APPEND ?DUP IF EXIT THEN
     _HRAU-CA @ _HRAU-CU @ _HRAU-R @ _HREQ-APPEND ?DUP IF EXIT THEN
     _HREQ-CRLF 2 _HRAU-R @ _HREQ-APPEND ;
+
+: HREQ-AUTHORIZATION
+  ( scheme-a scheme-u credential-a credential-u request -- status )
+    _HRAU-R ! _HRAU-CU ! _HRAU-CA ! _HRAU-SU ! _HRAU-SA !
+    ['] _HRAU-BUILD CATCH
+    DUP IF
+        >R _HRAU-CLEAR R> THROW
+    THEN
+    DROP
+    >R _HRAU-CLEAR R> ;
 
 : HREQ-AUTH-BEARER  ( token-a token-u request -- status )
     >R S" Bearer" 2SWAP R> HREQ-AUTHORIZATION ;

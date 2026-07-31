@@ -2,12 +2,15 @@
 
 **Prepared:** 2026-07-29; updated 2026-07-30
 
-**Status:** active; landings 1 and 2 are complete, landing 3 is in progress;
-the protected public-client AT token exchange and accepted-session install
-plus distinct-owner same-process reopen are qualified. Simultaneous durable
-DPoP-key/session continuity, refresh/logout, and authenticated XRPC remain,
-and the interim public-AT-plus-syndication Streams vertical is wired but still
-awaits its combined live witness
+**Status:** active; landings 1 and 2 are complete, landing 3 remains in
+progress, and landing 4 has started. The focused path now qualifies a
+simultaneously durable DPoP key and active session, distinct-owner
+reconstruction, one sealed authenticated
+`GET /xrpc/com.atproto.server.getSession`, and a synthetic buffered `200 {}`
+read. It does not yet execute that operation through live DNS/socket/TLS/PDS,
+admit the returned session DID, feed an authenticated AT connector into
+Streams, or show an authenticated feed. Refresh/logout and broader landing-4
+work also remain.
 
 **Continuation authority:**
 [Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
@@ -15,8 +18,9 @@ awaits its combined live witness
 This is the tracked continuation record for SR4. It records the settled
 architecture, landing sequence, completed evidence, current dirty work, and
 the next safe actions. A fresh implementation session should read this file
-before interpreting the older `atproto/xrpc.f`, `atproto/session.f`,
-`atproto/repo.f`, or rejected Streams L13 code as the target architecture.
+and the current `atproto/xrpc.f` contract rather than treating the removed
+AT-local session/repository prototypes or rejected Streams L13 code as the
+target architecture.
 
 ## Fixed decisions
 
@@ -71,7 +75,7 @@ committed when qualified instead of accumulating until the landing closes.
 | 1 | Generic checked crypto, JOSE, OAuth transactions/token handling, durable credential vault, and reboot-capable provider-neutral session ownership | Complete |
 | 2 | Production AT syntax, DID documents, handle/DID/PDS discovery, generic DNS/HTTPS composition, and shared network ownership | Complete |
 | 3 | AT OAuth discovery, client deployment selection, authorization/token composition, durable session install/recovery/refresh/logout | In progress |
-| 4 | Caller-owned XRPC, structured protocol errors, pagination/rate/retry evidence, repository operations, blob upload/reference, and atomic/batch writes; hard-replace the old global APIs | Not started |
+| 4 | Caller-owned XRPC, structured protocol errors, pagination/rate/retry evidence, repository operations, blob upload/reference, and atomic/batch writes; hard-replace the old global APIs | In progress |
 | 5 | Raw sync/repository export and subscription input, durable cursors, reconnect/cancellation/backpressure, then a Jetstream adapter | Not started |
 | 6 | Streams ingress/egress connectors over SR2/SR3, cold-restart qualification, generic record/blob output, and deterministic fake-PDS capstone; optional live evidence afterward | Not started |
 
@@ -120,10 +124,18 @@ Landing 3 currently includes:
   nonce ownership;
 - `a04a843` — the raw AT token adapter and durable P-256 composition
   through one exact nonce challenge, sole retry, accepted grant, and terminal
-  secret cleanup; and
-- this checkpoint — the accepted AT grant installed into the existing generic
+  secret cleanup;
+- `bd58d1f` — the accepted AT grant installed into the existing generic
   durable session owner and ordinarily reopened by distinct session/vault
-  objects against the retained deterministic store.
+  objects against the retained deterministic store;
+- `50e3b24` — bounded generic HTTP Authorization construction without
+  AT-specific policy in the network layer;
+- `ef53918` — generic cached/READDIR VFS lookup for bindings without targeted
+  lookup; and
+- this checkpoint — simultaneous production RAM-VFS persistence of the bound
+  DPoP key and session, hard replacement of the global XRPC/session/repository
+  prototypes, and the first caller-owned authenticated request plus synthetic
+  buffered read.
 
 These commits do not close landing 3. `ff5bbbd` completes the local
 AT-specific deployment binder: one validated immutable client configuration,
@@ -267,8 +279,8 @@ proof/request aliasing; the P-256 wrapper obtains a fresh durable proof for
 each send. The focused vertical reaches an accepted AT grant after exactly one
 nonce retry and then proves callback completion and terminal secret cleanup.
 
-This checkpoint adds no new production owner. The token-success continuation
-passes its ephemeral accepted grant directly to the existing provider-neutral
+`bd58d1f` adds no new production owner. The token-success continuation passes
+its ephemeral accepted grant directly to the existing provider-neutral
 `O2SESSION-INSTALL`, preserving the exact client binding, AT issuer, and
 caller-owned session RID. It then closes and finalizes the first session/vault
 objects, constructs genuinely distinct objects, and reaches `ACTIVE` through
@@ -276,16 +288,28 @@ ordinary `O2SESSION-OPEN`; access token, DPoP token type, scope, binding,
 issuer, RID, and generation are checked through public loans, while the
 transient record is shown wiped.
 
-The qualification boundary is intentionally narrow. The deterministic vault
-seam persists one record, so the fixture releases the completed DPoP-key vault
-before installing the session record. It proves initial session durability and
-same-process reconstruction against retained fake-VFS state, not a cold reboot
-or simultaneous DPoP-key/session persistence. The response contains no refresh
-token or expiry. Therefore the immediate gate is retaining both the bound DPoP
-key and active session at once, then using them in the first caller-owned
-authenticated PDS read. Refresh rotation, logout, revocation/reauthorization,
-cancellation, and broader edge matrices remain explicit follow-on debt rather
-than prerequisites for that vertical.
+That checkpoint's qualification boundary was intentionally narrow. Its
+deterministic vault seam persisted one record, so the fixture released the
+completed DPoP-key vault before installing the session record. It proved
+initial session durability and same-process reconstruction against retained
+fake-VFS state, not a cold reboot or simultaneous DPoP-key/session
+persistence.
+
+The current checkpoint closes that immediate limitation with the exact
+production RAM VFS and one credential vault large enough for distinct durable
+key and session RIDs. After provisioning and install, it finalizes the first
+vault/session owners, constructs distinct owners over the retained VFS,
+reloads the P-256 slot and active session, and seals one authenticated
+`com.atproto.server.getSession` request. The hard-replaced state-free
+`atproto/xrpc.f` borrows the access token synchronously, constructs the
+matching vault-backed DPoP proof, and leaves transport and response ownership
+with its caller. A fake NIO source then carries that exact sealed request
+through production HBUF to a synthetic `200 {}` response.
+
+This is the first landing-4 read gate, not a live connector. DNS, sockets, TLS,
+PDS response semantics and DID admission, a valid DPoP-nonce retry, refresh
+rotation, logout, revocation/reauthorization, cancellation, and broader edge
+matrices remain explicit follow-on work.
 
 ## Accelerated visible Streams vertical
 
@@ -342,32 +366,33 @@ python3 local_testing/akashic_tui.py smoke \
 The following debt is explicit so it can be sequenced without blocking the
 first visible slice:
 
-1. **Close the authenticated-session gate:** retain the bound DPoP key and
-   accepted active session as simultaneously reopenable durable records, then
-   qualify only the ownership/security path needed by the first authenticated
-   PDS request. Initial session install and distinct-owner same-process reopen
-   are covered; cold reboot, refresh rotation, logout,
-   revocation/reauthorization, cancellation, and broader cleanup matrices
-   remain recorded debt.
-2. **Build landing 4:** hard-replace the process-global `atproto/xrpc.f`,
-   `atproto/session.f`, and `atproto/repo.f` prototypes with caller-owned
-   XRPC, structured error, pagination/rate/retry, repository-operation, blob,
-   and atomic/batch-write contracts.
-3. **Build landing 5:** implement raw repository export/sync and subscription
+1. **Execute the authenticated read:** attach the sealed caller-owned request
+   to the real cooperative TLS/HBUF operation owner, strictly admit XRPC
+   success/error response semantics and the returned account DID, and qualify
+   the one allowed fresh-proof retry after a valid PDS DPoP-nonce challenge.
+2. **Admit authenticated AT into Streams:** issue the PDS-proxied Bluesky feed
+   request through that owner, decode it through the existing bounded feed
+   model, and publish its observations through one real per-instance Streams
+   connector rather than an AT-specific applet shortcut.
+3. **Continue landing 4:** add structured XRPC errors,
+   pagination/rate/retry evidence, repository-operation and blob contracts,
+   and atomic/batch writes over caller-owned operation state. The obsolete
+   global XRPC/session/repository surfaces have already been removed.
+4. **Build landing 5:** implement raw repository export/sync and subscription
    input, CAR/DAG-CBOR handling where required, durable cursors, reconnect,
    cancellation, backpressure, and only then the separately qualified
    Jetstream convenience adapter.
-4. **Complete landing 6:** add authenticated AT ingress and generic
+5. **Complete landing 6:** add authenticated AT ingress and generic
    record/blob egress as real Streams connector instances with event, queue,
    retry, cursor, cleanup, cold-restart, and deterministic fake-PDS
    qualification. A live-account capstone remains optional and requires
    explicit account/credential handoff.
-5. **Converge the applet presentation:** project durable configured-source
+6. **Converge the applet presentation:** project durable configured-source
    observations and AT items through a common bounded row/event view with
    truthful source attribution, ordering, search, context/thread behavior,
    and refresh state. The interim slice intentionally shows AT on Timeline and
    syndication in Sources instead of delaying the slice for that convergence.
-6. **Review deferred qualification:** complete the recorded broad parser,
+7. **Review deferred qualification:** complete the recorded broad parser,
    alias/canary, subordinate-status, retry, corruption, cancellation, and
    cleanup matrices at the landing that claims the corresponding production
    boundary. They are documented debt, not silently covered behavior.
@@ -379,11 +404,11 @@ At this checkpoint:
 ```text
 repository: /home/kir/Documents/Projects/fantasy-computing/akashic
 branch:     main
-code base:  a04a843 protected AT token exchange plus this session checkpoint
-record:     protected public AT exchange carried into durable session ownership
+code base:  ef53918 generic VFS lookup plus this XRPC checkpoint
+record:     durable authenticated getSession request and synthetic HBUF read
 upstream:   origin/main at a04a843
-tests:      static gates and full 70-phase serial token/session vertical pass
-pending:    simultaneous durable key/session ownership and authenticated read
+tests:      static gate, focused VFS lookup, and full 55-phase serial vertical pass
+pending:    real TLS/PDS response owner, semantic DID admission, Streams connector
 ```
 
 The latest SR4 and vertical-acceleration commits are:
@@ -406,7 +431,10 @@ d503a84 Launch focused Streams through its online composition
 19e52bb Record the accelerated Streams vertical and remaining SR4 debt
 3ad9b0a Add protected OAuth token-attempt and DPoP nonce owners
 a04a843 Complete the protected public AT OAuth token exchange
-this checkpoint: carry the accepted grant into durable session ownership
+bd58d1f Carry the accepted AT grant into durable session ownership
+50e3b24 Generalize bounded HTTP Authorization construction
+ef53918 Let VFS lookup fall back to complete READDIR
+this checkpoint: replace global XRPC with a durable authenticated read gate
 ```
 
 `2ae49bc` added `OAUTH2-P256-KEY-PROVISION-*`,
@@ -482,10 +510,24 @@ the generic and AT layers remain usable without Streams.
 state, binding, code, and verifier provenance so a protected token attempt can
 retain everything it needs before O2CODE wipes the spent transaction.
 
-The following remaining dirty paths are preserved user/old-L13 work. The
-vertical touches separate, selectively staged hunks in
-`local_testing/akashic_tui.py`; do not stage, restore, rewrite, or delete the
-other hunks merely because that file also carries the vertical profiles:
+`bd58d1f` carries that accepted grant directly into the generic durable
+session owner and proves an ordinary reopen through distinct session/vault
+objects. `50e3b24` adds the provider-neutral bounded Authorization-field
+builder required by DPoP without placing AT token policy in `akashic/net/`.
+
+`ef53918` supplies the general cached/complete-READDIR lookup semantics needed
+by the production RAM-VFS-backed vault without adding AT policy to the VFS.
+The current checkpoint hard-replaces the obsolete process-global XRPC client,
+AT-local session singleton, and repository wrapper. The new
+`AT-XRPC-AUTH-GET-BUILD` is a state-free AT composition over caller-owned HTTP
+target/request storage plus the generic OAuth client, durable session,
+credential vault, and P-256 key owners. The supporting VFS change is likewise
+general rather than Streams- or AT-specific. Streams policy and UI code are
+not part of this checkpoint.
+
+The following remaining dirty paths are preserved user/old-L13 work. They are
+not part of the authenticated-read checkpoint; do not stage, restore, rewrite,
+or delete them:
 
 ```text
  M README.md
@@ -711,6 +753,21 @@ Completed evidence:
   `O2SESSION-OPEN` through distinct vault/session objects. The one-record
   deterministic seam cannot prove simultaneous durable DPoP-key/session
   ownership, cold reboot, refresh/logout, or authenticated XRPC readiness.
+- The authenticated-read checkpoint passed its static gate and all 55 serial
+  phases on one core with 128 MiB of external machine memory and the unchanged
+  180,000,000-step phase ceiling. It compiles the production RAM VFS,
+  credential vault, P-256 key owner, OAuth session owner, authenticated XRPC
+  builder, HTTP request/stream/buffered stack, and their real dependency
+  bodies. Only the already-qualified P-256/JWK/DPoP mathematical constructors
+  and the remote peer are deterministic seams. Runtime setup, key provision,
+  session install, distinct-owner reopen, request build, buffered read, and
+  final cleanup used 15,912,128, 24,845,869, 28,687,952, 73,000,000,
+  34,780,832, 425,729, and 18,500,000 guest steps respectively. The exact
+  sealed request and synthetic `200 {}` response passed with clean stacks and
+  complete final owner cleanup. Separately, the focused VFS READDIR-fallback
+  lookup contract passed in 117,914,562 guest steps. This evidence does not
+  claim live DNS, sockets, TLS, a PDS response, semantic session-DID
+  validation, or visible Streams admission.
 
 Recorded, non-gating deferrals for this retained-HRES boundary are the broad
 HRES header/outcome/media cross-product, every inline-status pass-through
@@ -785,8 +842,25 @@ restart remain later vertical gates. A too-small caller destination is already
 defined as a terminal post-loan result, but the broad capacity matrix is not
 claimed by the focused success gate. The separate token checkpoint now covers
 the retained grant's protected token transport, and the session checkpoint
-covers initial install plus same-process distinct-owner reopen. Simultaneous
-key/session persistence and authenticated use remain the next continuation.
+covers initial install plus same-process distinct-owner reopen. The current
+authenticated-read checkpoint adds simultaneous key/session persistence and
+request construction; refresh/logout and live transport remain.
+
+Recorded, non-gating deferrals for the authenticated XRPC checkpoint are the
+broad target/nonce/proxy/capacity/alias/subordinate-status matrices, repeated
+real-cryptography vectors, structured XRPC error decoding, semantic response
+admission, cancellation, and live DNS/socket/TLS/PDS execution. The focused
+success gate proves the exact production ownership and request/read path
+needed for the next transport integration without claiming those matrices.
+
+Only the focused VFS lookup contract was rerun after adding the generic
+READDIR fallback; the full VFS suite is deferred. A pre-existing
+`VFS-CACHE-DROP` invariant also remains: dropping a child from a READDIR-only
+parent can leave the parent's complete-children flag set, so a later lookup
+can return stale `NOENT` without re-enumeration. This is recorded in the VFS
+documentation and must be corrected and broadly qualified before the VFS
+cache boundary is declared closed; it does not gate the current append-only
+credential-vault vertical.
 
 The 19-minute-32-second summed-stage result is a complete staged module-load
 and contract qualification, not the measured latency of one OAuth admission or
@@ -801,24 +875,27 @@ delta. Do not run another suite or a test subagent concurrently.
 
 ## Exact next actions
 
-1. Preserve the accepted active session and its exact bound DPoP key as
-   simultaneously reopenable durable records. Use the smallest production
-   persistence composition needed for that association; do not expand generic
-   foundation beyond a blocker to the authenticated read.
-2. Begin landing 4 by replacing—not wrapping—the global XRPC path with the
-   smallest caller-owned authenticated PDS read. Borrow the session token and
-   bound durable key only for proof/request construction, preserve structured
-   response evidence, and leave refresh/logout as documented follow-on debt.
-3. Put that authenticated read behind one real AT connector instance that the
-   visible Streams applet can consume. Existing public Bluesky elements may be
-   reused for presentation, but not as authentication or PDS architecture.
+1. Build the smallest caller-owned authenticated operation around the sealed
+   `getSession` request using the existing cooperative TLS/HBUF transport
+   owners. Retain structured response provenance, admit the success schema and
+   exact account DID, and implement only the valid one-nonce fresh-proof retry.
+2. Reuse that operation for a PDS-proxied
+   `app.bsky.feed.getAuthorFeed` request with the exact `atproto-proxy`
+   service reference, then decode the bounded feed response.
+3. Put that authenticated feed behind one real per-instance AT connector and
+   publish its observations through the existing Streams event/admission
+   boundary. Existing public Bluesky elements may be reused for presentation,
+   but not as authentication or PDS architecture.
 4. Run the focused `streams-multiprotocol-composition` marker and the
    `desktop-streams-vertical` TAP journey when the required execution window
    and TAP access are available. Fix only blockers to the stated two-protocol
    acceptance; record broader UI/event convergence as debt.
-5. Return for a landing-boundary status report before expanding into raw sync,
-   subscriptions, general writes, or the deferred cross-protocol presentation
-   work.
+5. Keep refresh/logout, pagination/rate policy, general repository writes,
+   blobs, raw sync, subscriptions, and broad edge matrices documented while
+   the connector slice is being established; implement only a blocker to that
+   slice.
+6. Return for a landing-boundary status report before expanding beyond the
+   authenticated connector and visible Streams proof.
 
 No live credential, account, public client metadata deployment, redirect
 registration, or user secret is needed for the next actions. Ask for those

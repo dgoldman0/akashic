@@ -1,167 +1,1010 @@
-\ akashic/atproto/xrpc.f — XRPC client for AT Protocol
+\ =====================================================================
+\  xrpc.f - Caller-owned authenticated AT Protocol XRPC GET builder
+\ =====================================================================
+\  This state-free composition turns one admitted OAuth session loan into
+\  one bounded HTTP/1.1 GET request for the exact PDS selected by a ready
+\  AT OAuth profile.  The access token never leaves the session callback
+\  except through the caller-owned request arena.  Its matching DPoP proof
+\  is generated from the durable P-256 key named by the session binding.
 \
-\ XRPC (Cross-RPC) wraps HTTP GET/POST calls to the AT Protocol
-\ lexicon endpoint format:  https://<host>/xrpc/<nsid>
+\  The target must be HTTPS, same-origin with the profile PDS, and name one
+\  exact top-level /xrpc/<nsid> endpoint.  Optional query parameters are
+\  already part of the caller-owned HTARGET and therefore of the request
+\  target, while the proof HTU deliberately excludes that query.  An
+\  optional atproto-proxy service reference is copied as a request header.
 \
-\ Depends on: http.f (HTTP client), string.f (STR-INDEX, /STRING),
-\             json.f (JSON-KEY? for cursor extraction)
+\  This module owns no socket, TLS connection, response storage, retry
+\  policy, nonce persistence, clock, cursor, repository model, Streams
+\  state, or UI state.  A higher operation owner supplies trusted epoch
+\  seconds and may rebuild once with a newly admitted resource nonce.
 \
-REQUIRE ../net/http.f
-REQUIRE ../utils/string.f
-REQUIRE ../utils/json.f
+\  Public API:
+\    AT-XRPC-AUTH-GET-INPUT-SIZE
+\    AT-XRPC-AUTH-GET-I.*
+\    AT-XRPC-AUTH-GET-INPUT-CLEAR
+\    AT-XRPC-AUTH-GET-WORKSPACE-SIZE
+\    AT-XRPC-AUTH-GET-WORKSPACE-CLEAR
+\    AT-XRPC-AUTH-GET-BUILD  ( input workspace -- status )
+\ =====================================================================
 
 PROVIDED akashic-xrpc
 
+REQUIRE ../utils/memory-span.f
+REQUIRE ../utils/caller-span.f
+REQUIRE ../utils/string.f
+REQUIRE ../net/http-target.f
+REQUIRE ../net/http-request.f
+REQUIRE ../security/credential-vault.f
+REQUIRE ../security/oauth2/client-config.f
+REQUIRE ../security/oauth2/session.f
+REQUIRE ../security/oauth2/key-p256.f
+REQUIRE oauth-profile.f
+REQUIRE oauth-client.f
+REQUIRE nsid.f
 
-\ ─── Host Configuration ───────────────────────────────────────
+\ =====================================================================
+\  Public status vocabulary
+\ =====================================================================
 
-CREATE XRPC-HOST  64 ALLOT              \ PDS hostname buffer
-VARIABLE XRPC-HOST-LEN                  \ hostname length
+0  CONSTANT AT-XRPC-S-OK
+1  CONSTANT AT-XRPC-S-INVALID
+2  CONSTANT AT-XRPC-S-CAPACITY
+3  CONSTANT AT-XRPC-S-ALIAS
+4  CONSTANT AT-XRPC-S-RANGE
+5  CONSTANT AT-XRPC-S-PROTECTED
+6  CONSTANT AT-XRPC-S-PLATFORM
+7  CONSTANT AT-XRPC-S-CONFIG
+8  CONSTANT AT-XRPC-S-PROFILE
+9  CONSTANT AT-XRPC-S-SESSION
+10 CONSTANT AT-XRPC-S-BINDING
+11 CONSTANT AT-XRPC-S-TOKEN
+12 CONSTANT AT-XRPC-S-TARGET
+13 CONSTANT AT-XRPC-S-DPOP
+14 CONSTANT AT-XRPC-S-REQUEST
+15 CONSTANT AT-XRPC-S-STALE
+16 CONSTANT AT-XRPC-S-INTERNAL
 
-\ Default: bsky.social
-: _XRPC-DEFAULT-HOST  ( -- )
-  S" bsky.social" XRPC-HOST SWAP        ( src len )
-  DUP XRPC-HOST-LEN !                   ( src len )
-  MOVE ;
-_XRPC-DEFAULT-HOST
+: AT-XRPC-STATUS-VALID?  ( status -- flag )
+    DUP AT-XRPC-S-OK >= SWAP AT-XRPC-S-INTERNAL <= AND ;
 
-\ Set default Accept header.  Wrapped in a colon definition
-\ because interpret-mode S" returns a garbage length on KDOS.
-: _XRPC-DEFAULT-ACCEPT  ( -- )
-  S" application/json" HTTP-SET-ACCEPT ;
-_XRPC-DEFAULT-ACCEPT
+\ =====================================================================
+\  Immutable caller input descriptor
+\ =====================================================================
 
-: XRPC-SET-HOST  ( addr len -- )
-  DUP 63 > IF  2DROP EXIT  THEN
-  DUP XRPC-HOST-LEN !
-  XRPC-HOST SWAP MOVE ;
+ 0 CONSTANT _ATX-I-IAT
+ 8 CONSTANT _ATX-I-VAULT
+16 CONSTANT _ATX-I-CONFIG
+24 CONSTANT _ATX-I-PROFILE
+32 CONSTANT _ATX-I-SESSION
+40 CONSTANT _ATX-I-TARGET
+48 CONSTANT _ATX-I-NONCE-A
+56 CONSTANT _ATX-I-NONCE-U
+64 CONSTANT _ATX-I-PROXY-A
+72 CONSTANT _ATX-I-PROXY-U
+80 CONSTANT _ATX-I-REQUEST-A
+88 CONSTANT _ATX-I-REQUEST-CAP
+96 CONSTANT _ATX-I-REQUEST
+104 CONSTANT AT-XRPC-AUTH-GET-INPUT-SIZE
 
+: AT-XRPC-AUTH-GET-I.IAT  ( input -- field )
+    _ATX-I-IAT + ;
+: AT-XRPC-AUTH-GET-I.VAULT  ( input -- field )
+    _ATX-I-VAULT + ;
+: AT-XRPC-AUTH-GET-I.CONFIG  ( input -- field )
+    _ATX-I-CONFIG + ;
+: AT-XRPC-AUTH-GET-I.PROFILE  ( input -- field )
+    _ATX-I-PROFILE + ;
+: AT-XRPC-AUTH-GET-I.SESSION  ( input -- field )
+    _ATX-I-SESSION + ;
+: AT-XRPC-AUTH-GET-I.TARGET  ( input -- field )
+    _ATX-I-TARGET + ;
+: AT-XRPC-AUTH-GET-I.NONCE-A  ( input -- field )
+    _ATX-I-NONCE-A + ;
+: AT-XRPC-AUTH-GET-I.NONCE-U  ( input -- field )
+    _ATX-I-NONCE-U + ;
+: AT-XRPC-AUTH-GET-I.PROXY-A  ( input -- field )
+    _ATX-I-PROXY-A + ;
+: AT-XRPC-AUTH-GET-I.PROXY-U  ( input -- field )
+    _ATX-I-PROXY-U + ;
+: AT-XRPC-AUTH-GET-I.REQUEST-A  ( input -- field )
+    _ATX-I-REQUEST-A + ;
+: AT-XRPC-AUTH-GET-I.REQUEST-CAP  ( input -- field )
+    _ATX-I-REQUEST-CAP + ;
+: AT-XRPC-AUTH-GET-I.REQUEST  ( input -- field )
+    _ATX-I-REQUEST + ;
 
-\ ─── URL Builder ──────────────────────────────────────────────
+\ =====================================================================
+\  Symbolically derived serial workspace
+\ =====================================================================
 
-CREATE _XR-URL  512 ALLOT               \ assembled URL buffer
-VARIABLE _XR-POS                         \ current write position
+HTARGET-HOST-CAPACITY 6 + CONSTANT _ATX-HOST-CAPACITY
 
-: _XR-APPEND  ( addr len -- )
-  _XR-POS @ OVER + 512 > IF  2DROP EXIT  THEN
-  _XR-URL _XR-POS @ +                   ( addr len dst )
-  SWAP                                   ( addr dst len )
-  DUP _XR-POS +!                        ( addr dst len )
-  MOVE ;
+ 0 CONSTANT _ATXW-REQUEST-READY
+ 8 CONSTANT _ATXW-GENERATION
+16 CONSTANT _ATXW-PROOF-U
+24 CONSTANT _ATXW-EXPECTED-A
+32 CONSTANT _ATXW-EXPECTED-U
+40 CONSTANT _ATXW-RESERVED
+48 CONSTANT _ATXW-INPUT-OFF
+_ATXW-INPUT-OFF AT-XRPC-AUTH-GET-INPUT-SIZE +
+    CONSTANT _ATXW-BINDING-OFF
+_ATXW-BINDING-OFF OAUTH2-P256-KEY-BINDING-SIZE +
+    CONSTANT _ATXW-DPOP-INPUT-OFF
+_ATXW-DPOP-INPUT-OFF OAUTH2-P256-KEY-DPOP-INPUT-SIZE +
+    CONSTANT _ATXW-PROOF-OFF
+_ATXW-PROOF-OFF OAUTH2-DPOP-ES256-MAX-PROOF-BYTES +
+7 + 8 / 8 * CONSTANT _ATXW-HOST-OFF
+_ATXW-HOST-OFF _ATX-HOST-CAPACITY +
+7 + 8 / 8 * CONSTANT _ATXW-CHILD-OFF
 
-: _XR-C!  ( char -- )
-  _XR-POS @ 511 > IF  DROP EXIT  THEN
-  _XR-URL _XR-POS @ + C!
-  1 _XR-POS +! ;
+AT-OAUTH-CLIENT-WORKSPACE-SIZE
+OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE MAX
+CONSTANT _ATXW-CHILD-SIZE
 
-\ Build "https://<host>/xrpc/<nsid>" into _XR-URL
-: _XRPC-BUILD-URL  ( nsid-a nsid-u -- )
-  0 _XR-POS !
-  S" https://" _XR-APPEND
-  XRPC-HOST XRPC-HOST-LEN @ _XR-APPEND
-  S" /xrpc/" _XR-APPEND
-  _XR-APPEND ;
+_ATXW-CHILD-OFF _ATXW-CHILD-SIZE +
+CONSTANT AT-XRPC-AUTH-GET-WORKSPACE-SIZE
 
+: _ATXW.REQUEST-READY  ( workspace -- field )
+    _ATXW-REQUEST-READY + ;
+: _ATXW.GENERATION  ( workspace -- field )
+    _ATXW-GENERATION + ;
+: _ATXW.PROOF-U  ( workspace -- field )
+    _ATXW-PROOF-U + ;
+: _ATXW.EXPECTED-A  ( workspace -- field )
+    _ATXW-EXPECTED-A + ;
+: _ATXW.EXPECTED-U  ( workspace -- field )
+    _ATXW-EXPECTED-U + ;
+: _ATXW.INPUT  ( workspace -- input )
+    _ATXW-INPUT-OFF + ;
+: _ATXW.BINDING  ( workspace -- binding )
+    _ATXW-BINDING-OFF + ;
+: _ATXW.DPOP-INPUT  ( workspace -- input )
+    _ATXW-DPOP-INPUT-OFF + ;
+: _ATXW.PROOF  ( workspace -- address )
+    _ATXW-PROOF-OFF + ;
+: _ATXW.HOST  ( workspace -- address )
+    _ATXW-HOST-OFF + ;
+: _ATXW.CHILD  ( workspace -- address )
+    _ATXW-CHILD-OFF + ;
 
-\ ─── Query String Append ─────────────────────────────────────
+: _ATX-WIPE  ( workspace -- )
+    AT-XRPC-AUTH-GET-WORKSPACE-SIZE 0 FILL ;
 
-\ Append "?<params>" to _XR-URL (if params non-empty)
-: _XRPC-APPEND-PARAMS  ( params-a params-u -- )
-  DUP 0= IF  2DROP EXIT  THEN
-  [CHAR] ? _XR-C!
-  _XR-APPEND ;
+\ =====================================================================
+\  Stack, caller-span, and status helpers
+\ =====================================================================
 
+: _ATX-DROP2  ( x1 x2 -- ) 2DROP ;
 
-\ ─── Cursor / Pagination (CR-7 §19) ──────────────────────────
+: _ATX-RETURN2  ( x1 x2 status -- status )
+    >R _ATX-DROP2 R> ;
 
-CREATE XRPC-CURSOR  128 ALLOT           \ cursor value buffer
-VARIABLE XRPC-CURSOR-LEN                \ cursor length
+: _ATX-CALLER>STATUS  ( caller-status -- status )
+    CASE
+        CALLER-SPAN-S-OK OF AT-XRPC-S-OK ENDOF
+        CALLER-SPAN-S-RANGE OF AT-XRPC-S-RANGE ENDOF
+        CALLER-SPAN-S-PROTECTED OF AT-XRPC-S-PROTECTED ENDOF
+        CALLER-SPAN-S-PLATFORM OF AT-XRPC-S-PLATFORM ENDOF
+        AT-XRPC-S-PLATFORM SWAP
+    ENDCASE ;
 
-: XRPC-CLEAR-CURSOR  ( -- )
-  0 XRPC-CURSOR-LEN ! ;
-XRPC-CLEAR-CURSOR
-
-: XRPC-SET-CURSOR  ( addr len -- )
-  DUP 127 > IF  2DROP EXIT  THEN
-  DUP XRPC-CURSOR-LEN !
-  XRPC-CURSOR SWAP MOVE ;
-
-: XRPC-HAS-CURSOR?  ( -- flag )
-  XRPC-CURSOR-LEN @ 0<> ;
-
-\ Append "&cursor=<val>" or "?cursor=<val>" to _XR-URL if cursor set
-: _XRPC-APPEND-CURSOR  ( -- )
-  XRPC-HAS-CURSOR? 0= IF EXIT THEN
-  \ Check if URL already has '?'
-  _XR-URL _XR-POS @ [CHAR] ? STR-INDEX
-  -1 = IF  [CHAR] ?  ELSE  [CHAR] &  THEN
-  _XR-C!
-  S" cursor=" _XR-APPEND
-  XRPC-CURSOR XRPC-CURSOR-LEN @ _XR-APPEND ;
-
-
-\ ─── Extract Cursor from JSON Response ───────────────────────
-\
-\ Scans response JSON for "cursor":"<value>" and stores into
-\ XRPC-CURSOR.  If not present, clears cursor (no more pages).
-
-: XRPC-EXTRACT-CURSOR  ( json-a json-u -- )
-  DUP 0= IF  2DROP XRPC-CLEAR-CURSOR EXIT  THEN
-  JSON-ENTER                             ( addr' len' — inside {} )
-  S" cursor" JSON-KEY?                   ( val-a val-u flag )
-  IF
-    JSON-GET-STRING                       ( str-a str-u )
+: _ATX-SPAN-STATUS  ( address length -- status )
+    DUP 0< IF 2DROP AT-XRPC-S-INVALID EXIT THEN
     DUP 0= IF
-      2DROP XRPC-CLEAR-CURSOR EXIT
+        DROP IF AT-XRPC-S-INVALID ELSE AT-XRPC-S-OK THEN
+        EXIT
     THEN
-    DUP 127 > IF
-      2DROP XRPC-CLEAR-CURSOR EXIT
+    OVER 0= IF 2DROP AT-XRPC-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS _ATX-CALLER>STATUS ;
+
+: _ATX-REQUIRED-SPAN-STATUS  ( address length -- status )
+    DUP 0> 0= IF 2DROP AT-XRPC-S-INVALID EXIT THEN
+    OVER 0= IF 2DROP AT-XRPC-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS _ATX-CALLER>STATUS ;
+
+: _ATX-FIXED-STATUS  ( address length -- status )
+    OVER 0= IF 2DROP AT-XRPC-S-INVALID EXIT THEN
+    OVER 7 AND IF 2DROP AT-XRPC-S-INVALID EXIT THEN
+    _ATX-REQUIRED-SPAN-STATUS ;
+
+: _ATX-ZERO?  ( address length -- flag )
+    BEGIN DUP WHILE
+        OVER C@ IF 2DROP 0 EXIT THEN
+        1 /STRING
+    REPEAT
+    2DROP -1 ;
+
+: _ATX-CVAULT>STATUS  ( vault-status -- status )
+    CASE
+        CVAULT-S-OK OF AT-XRPC-S-OK ENDOF
+        CVAULT-S-INVALID OF AT-XRPC-S-ALIAS ENDOF
+        CVAULT-S-RANGE OF AT-XRPC-S-RANGE ENDOF
+        CVAULT-S-PROTECTED OF AT-XRPC-S-PROTECTED ENDOF
+        CVAULT-S-PLATFORM OF AT-XRPC-S-PLATFORM ENDOF
+        CVAULT-S-CAPACITY OF AT-XRPC-S-CAPACITY ENDOF
+        CVAULT-S-BUSY OF AT-XRPC-S-DPOP ENDOF
+        AT-XRPC-S-DPOP SWAP
+    ENDCASE ;
+
+: _ATX-CLIENT>STATUS  ( client-status -- status )
+    CASE
+        AT-OAUTH-CLIENT-S-OK OF AT-XRPC-S-OK ENDOF
+        AT-OAUTH-CLIENT-S-ALIAS OF AT-XRPC-S-ALIAS ENDOF
+        AT-OAUTH-CLIENT-S-RANGE OF AT-XRPC-S-RANGE ENDOF
+        AT-OAUTH-CLIENT-S-PROTECTED OF AT-XRPC-S-PROTECTED ENDOF
+        AT-OAUTH-CLIENT-S-PLATFORM OF AT-XRPC-S-PLATFORM ENDOF
+        AT-OAUTH-CLIENT-S-PROFILE OF AT-XRPC-S-PROFILE ENDOF
+        AT-XRPC-S-CONFIG SWAP
+    ENDCASE ;
+
+: _ATX-PROFILE>STATUS  ( profile-status -- status )
+    CASE
+        AT-OAUTH-PROFILE-S-OK OF AT-XRPC-S-OK ENDOF
+        AT-OAUTH-PROFILE-S-RANGE OF AT-XRPC-S-RANGE ENDOF
+        AT-OAUTH-PROFILE-S-PROTECTED OF AT-XRPC-S-PROTECTED ENDOF
+        AT-OAUTH-PROFILE-S-PLATFORM OF AT-XRPC-S-PLATFORM ENDOF
+        AT-XRPC-S-PROFILE SWAP
+    ENDCASE ;
+
+: _ATX-SESSION>STATUS  ( session-status -- status )
+    CASE
+        O2SESSION-S-OK OF AT-XRPC-S-OK ENDOF
+        O2SESSION-S-CAPACITY OF AT-XRPC-S-CAPACITY ENDOF
+        O2SESSION-S-RANGE OF AT-XRPC-S-RANGE ENDOF
+        O2SESSION-S-PROTECTED OF AT-XRPC-S-PROTECTED ENDOF
+        O2SESSION-S-PLATFORM OF AT-XRPC-S-PLATFORM ENDOF
+        O2SESSION-S-CONFLICT OF AT-XRPC-S-STALE ENDOF
+        AT-XRPC-S-SESSION SWAP
+    ENDCASE ;
+
+: _ATX-KEY>STATUS  ( key-status -- status )
+    CASE
+        OAUTH2-P256-KEY-S-OK OF AT-XRPC-S-OK ENDOF
+        OAUTH2-P256-KEY-S-CAPACITY OF AT-XRPC-S-CAPACITY ENDOF
+        OAUTH2-P256-KEY-S-ALIAS OF AT-XRPC-S-ALIAS ENDOF
+        OAUTH2-P256-KEY-S-RANGE OF AT-XRPC-S-RANGE ENDOF
+        OAUTH2-P256-KEY-S-PROTECTED OF AT-XRPC-S-PROTECTED ENDOF
+        OAUTH2-P256-KEY-S-PLATFORM OF AT-XRPC-S-PLATFORM ENDOF
+        OAUTH2-P256-KEY-S-INVALID OF AT-XRPC-S-BINDING ENDOF
+        OAUTH2-P256-KEY-S-FORMAT OF AT-XRPC-S-BINDING ENDOF
+        OAUTH2-P256-KEY-S-MISMATCH OF AT-XRPC-S-BINDING ENDOF
+        OAUTH2-P256-KEY-S-TOKEN OF AT-XRPC-S-TOKEN ENDOF
+        AT-XRPC-S-DPOP SWAP
+    ENDCASE ;
+
+: _ATX-HREQ>STATUS  ( request-status -- status )
+    CASE
+        HREQ-S-OK OF AT-XRPC-S-OK ENDOF
+        HREQ-S-CAPACITY OF AT-XRPC-S-CAPACITY ENDOF
+        AT-XRPC-S-REQUEST SWAP
+    ENDCASE ;
+
+\ =====================================================================
+\  Public clearing operations
+\ =====================================================================
+
+: AT-XRPC-AUTH-GET-INPUT-CLEAR  ( input -- status )
+    DUP AT-XRPC-AUTH-GET-INPUT-SIZE _ATX-FIXED-STATUS
+    ?DUP IF NIP EXIT THEN
+    AT-XRPC-AUTH-GET-INPUT-SIZE 0 FILL
+    AT-XRPC-S-OK ;
+
+: AT-XRPC-AUTH-GET-WORKSPACE-CLEAR  ( workspace -- status )
+    DUP AT-XRPC-AUTH-GET-WORKSPACE-SIZE _ATX-FIXED-STATUS
+    ?DUP IF NIP EXIT THEN
+    _ATX-WIPE
+    AT-XRPC-S-OK ;
+
+\ =====================================================================
+\  Complete non-mutating geometry admission
+\ =====================================================================
+
+: _ATX-FIELD-GEOMETRY  ( input workspace -- status )
+    >R
+    DUP AT-XRPC-AUTH-GET-INPUT-SIZE _ATX-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    R@ AT-XRPC-AUTH-GET-WORKSPACE-SIZE _ATX-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+
+    DUP AT-XRPC-AUTH-GET-I.IAT @ 0< IF
+        DROP R> DROP AT-XRPC-S-INVALID EXIT
     THEN
-    XRPC-SET-CURSOR
-  ELSE
-    2DROP
-    XRPC-CLEAR-CURSOR
-  THEN ;
+    DUP AT-XRPC-AUTH-GET-I.VAULT @
+        CVAULT-SIZE _ATX-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.CONFIG @
+        OAUTH2-CLIENT-CONFIG-SIZE _ATX-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.PROFILE @
+        AT-OAUTH-PROFILE-SIZE _ATX-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.SESSION @
+        OAUTH2-SESSION-SIZE _ATX-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.TARGET @
+        HTARGET-SIZE _ATX-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.REQUEST @
+        HTTP-REQUEST-SIZE _ATX-FIXED-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
 
+    DUP AT-XRPC-AUTH-GET-I.NONCE-A @
+    OVER AT-XRPC-AUTH-GET-I.NONCE-U @
+    _ATX-SPAN-STATUS ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.PROXY-A @
+    OVER AT-XRPC-AUTH-GET-I.PROXY-U @
+    _ATX-SPAN-STATUS ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.REQUEST-A @
+    OVER AT-XRPC-AUTH-GET-I.REQUEST-CAP @
+    _ATX-REQUIRED-SPAN-STATUS ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.REQUEST-CAP @ 64 < IF
+        DROP R> DROP AT-XRPC-S-CAPACITY EXIT
+    THEN
 
-\ ─── XRPC Query (GET) ────────────────────────────────────────
+    DUP AT-XRPC-AUTH-GET-I.VAULT @ CVAULT-VALID? 0= IF
+        DROP R> DROP AT-XRPC-S-INVALID EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.CONFIG @
+        OAUTH2-CLIENT-CONFIG-VALID? 0= IF
+        DROP R> DROP AT-XRPC-S-CONFIG EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.PROFILE @
+        AT-OAUTH-PROFILE-VALID? 0= IF
+        DROP R> DROP AT-XRPC-S-PROFILE EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.SESSION @ O2SESSION-VALID? 0= IF
+        DROP R> DROP AT-XRPC-S-SESSION EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.TARGET @ HTARGET-VALID? 0= IF
+        DROP R> DROP AT-XRPC-S-TARGET EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.REQUEST @ HTTP-REQUEST-SIZE
+        _ATX-ZERO? 0= IF
+        DROP R> DROP AT-XRPC-S-REQUEST EXIT
+    THEN
+    DROP R> DROP AT-XRPC-S-OK ;
 
-: XRPC-QUERY  ( nsid-a nsid-u params-a params-u -- body-a body-u ior )
-  2SWAP _XRPC-BUILD-URL                 ( params-a params-u )
-  _XRPC-APPEND-PARAMS                   ( )
-  _XRPC-APPEND-CURSOR
-  _XR-URL _XR-POS @
-  HTTP-GET                               ( body-a body-u )
-  DUP 0= IF  HTTP-ERR @  ELSE  0  THEN ;
+\ A source may be borrowed while request publication and workspace wiping
+\ occur.  Reject its overlap with either mutable, with the input descriptor,
+\ and with the workspace.
+: _ATX-SOURCE-DISJOINT?
+  ( source-a source-u input workspace -- flag )
+    >R
+    2 PICK 2 PICK 2 PICK AT-XRPC-AUTH-GET-INPUT-SIZE
+    MSPAN-OVERLAP? IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    2 PICK 2 PICK R@ AT-XRPC-AUTH-GET-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    2 PICK 2 PICK 2 PICK AT-XRPC-AUTH-GET-I.REQUEST @
+        HTTP-REQUEST-SIZE MSPAN-OVERLAP? IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    2 PICK 2 PICK 2 PICK AT-XRPC-AUTH-GET-I.REQUEST-A @
+        3 PICK AT-XRPC-AUTH-GET-I.REQUEST-CAP @
+        MSPAN-OVERLAP? IF
+        2DROP DROP R> DROP 0 EXIT
+    THEN
+    2DROP DROP R> DROP -1 ;
 
+: _ATX-SESSION-SOURCE-DISJOINT?
+  ( source-a source-u input -- flag )
+    >R
+    R@ AT-XRPC-AUTH-GET-I.SESSION @ OAUTH2-SESSION-SIZE
+    MSPAN-OVERLAP? 0=
+    R> DROP ;
 
-\ ─── XRPC Procedure (POST) ───────────────────────────────────
+: _ATX-SESSION-SOURCES-DISJOINT?  ( input -- flag )
+    DUP AT-XRPC-AUTH-GET-I.CONFIG @ OAUTH2-CLIENT-CONFIG-SIZE
+    2 PICK _ATX-SESSION-SOURCE-DISJOINT? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.PROFILE @ AT-OAUTH-PROFILE-SIZE
+    2 PICK _ATX-SESSION-SOURCE-DISJOINT? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.TARGET @ HTARGET-SIZE
+    2 PICK _ATX-SESSION-SOURCE-DISJOINT? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.NONCE-A @
+    OVER AT-XRPC-AUTH-GET-I.NONCE-U @
+    2 PICK _ATX-SESSION-SOURCE-DISJOINT? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.PROXY-A @
+    OVER AT-XRPC-AUTH-GET-I.PROXY-U @
+    2 PICK _ATX-SESSION-SOURCE-DISJOINT? 0= IF
+        DROP 0 EXIT
+    THEN
+    DROP -1 ;
 
-: XRPC-PROCEDURE  ( nsid-a nsid-u body-a body-u -- resp-a resp-u ior )
-  2SWAP _XRPC-BUILD-URL                 ( body-a body-u )
-  _XR-URL _XR-POS @                     ( body-a body-u url-a url-u )
-  2SWAP                                  ( url-a url-u body-a body-u )
-  HTTP-POST-JSON                         ( resp-a resp-u )
-  DUP 0= IF  HTTP-ERR @  ELSE  0  THEN ;
+: _ATX-SOURCES-DISJOINT?  ( input workspace -- flag )
+    >R
+    DUP _ATX-SESSION-SOURCES-DISJOINT? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.VAULT @ CVAULT-SIZE
+    2 PICK R@ _ATX-SOURCE-DISJOINT? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.CONFIG @ OAUTH2-CLIENT-CONFIG-SIZE
+    2 PICK R@ _ATX-SOURCE-DISJOINT? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.PROFILE @ AT-OAUTH-PROFILE-SIZE
+    2 PICK R@ _ATX-SOURCE-DISJOINT? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.SESSION @ OAUTH2-SESSION-SIZE
+    2 PICK R@ _ATX-SOURCE-DISJOINT? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.TARGET @ HTARGET-SIZE
+    2 PICK R@ _ATX-SOURCE-DISJOINT? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.NONCE-A @
+    OVER AT-XRPC-AUTH-GET-I.NONCE-U @
+    2 PICK R@ _ATX-SOURCE-DISJOINT? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AT-XRPC-AUTH-GET-I.PROXY-A @
+    OVER AT-XRPC-AUTH-GET-I.PROXY-U @
+    2 PICK R@ _ATX-SOURCE-DISJOINT? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DROP R> DROP -1 ;
 
-\ ── guard ────────────────────────────────────────────────
-[DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
-GUARD _xrpc-guard
+: _ATX-MUTABLES-DISJOINT?  ( input workspace -- flag )
+    >R
+    DUP AT-XRPC-AUTH-GET-INPUT-SIZE
+    R@ AT-XRPC-AUTH-GET-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF DROP R> DROP 0 EXIT THEN
 
-' XRPC-SET-HOST   CONSTANT _xrpc-set-host-xt
-' XRPC-CLEAR-CURSOR CONSTANT _xrpc-clear-cursor-xt
-' XRPC-SET-CURSOR CONSTANT _xrpc-set-cursor-xt
-' XRPC-HAS-CURSOR? CONSTANT _xrpc-has-cursor-q-xt
-' XRPC-EXTRACT-CURSOR CONSTANT _xrpc-extract-cursor-xt
-' XRPC-QUERY      CONSTANT _xrpc-query-xt
-' XRPC-PROCEDURE  CONSTANT _xrpc-procedure-xt
+    DUP AT-XRPC-AUTH-GET-INPUT-SIZE
+    2 PICK AT-XRPC-AUTH-GET-I.REQUEST @ HTTP-REQUEST-SIZE
+    MSPAN-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    DUP AT-XRPC-AUTH-GET-INPUT-SIZE
+    2 PICK AT-XRPC-AUTH-GET-I.REQUEST-A @
+    3 PICK AT-XRPC-AUTH-GET-I.REQUEST-CAP @
+    MSPAN-OVERLAP? IF DROP R> DROP 0 EXIT THEN
 
-: XRPC-SET-HOST   _xrpc-set-host-xt _xrpc-guard WITH-GUARD ;
-: XRPC-CLEAR-CURSOR _xrpc-clear-cursor-xt _xrpc-guard WITH-GUARD ;
-: XRPC-SET-CURSOR _xrpc-set-cursor-xt _xrpc-guard WITH-GUARD ;
-: XRPC-HAS-CURSOR? _xrpc-has-cursor-q-xt _xrpc-guard WITH-GUARD ;
-: XRPC-EXTRACT-CURSOR _xrpc-extract-cursor-xt _xrpc-guard WITH-GUARD ;
-: XRPC-QUERY      _xrpc-query-xt _xrpc-guard WITH-GUARD ;
-: XRPC-PROCEDURE  _xrpc-procedure-xt _xrpc-guard WITH-GUARD ;
-[THEN] [THEN]
+    R@ AT-XRPC-AUTH-GET-WORKSPACE-SIZE
+    2 PICK AT-XRPC-AUTH-GET-I.REQUEST @ HTTP-REQUEST-SIZE
+    MSPAN-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    R@ AT-XRPC-AUTH-GET-WORKSPACE-SIZE
+    2 PICK AT-XRPC-AUTH-GET-I.REQUEST-A @
+    3 PICK AT-XRPC-AUTH-GET-I.REQUEST-CAP @
+    MSPAN-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+
+    DUP AT-XRPC-AUTH-GET-I.REQUEST @ HTTP-REQUEST-SIZE
+    2 PICK AT-XRPC-AUTH-GET-I.REQUEST-A @
+    3 PICK AT-XRPC-AUTH-GET-I.REQUEST-CAP @
+    MSPAN-OVERLAP? IF DROP R> DROP 0 EXIT THEN
+    DROP R> DROP -1 ;
+
+: _ATX-ALIAS-GEOMETRY  ( input workspace -- status )
+    2DUP _ATX-MUTABLES-DISJOINT? 0= IF
+        _ATX-DROP2 AT-XRPC-S-ALIAS EXIT
+    THEN
+    _ATX-SOURCES-DISJOINT? IF
+        AT-XRPC-S-OK
+    ELSE
+        AT-XRPC-S-ALIAS
+    THEN ;
+
+: _ATX-VAULT-SPAN-STATUS  ( address length input -- status )
+    >R
+    DUP 0= IF
+        2DROP R> DROP AT-XRPC-S-OK EXIT
+    THEN
+    R> AT-XRPC-AUTH-GET-I.VAULT @
+    CVAULT-EXTERNAL-SPAN-STATUS
+    _ATX-CVAULT>STATUS ;
+
+: _ATX-VAULT-GEOMETRY  ( input workspace -- status )
+    >R
+    DUP AT-XRPC-AUTH-GET-INPUT-SIZE
+    2 PICK _ATX-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    R@ AT-XRPC-AUTH-GET-WORKSPACE-SIZE
+    2 PICK _ATX-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.CONFIG @ OAUTH2-CLIENT-CONFIG-SIZE
+    2 PICK _ATX-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.PROFILE @ AT-OAUTH-PROFILE-SIZE
+    2 PICK _ATX-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.SESSION @ OAUTH2-SESSION-SIZE
+    2 PICK _ATX-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.TARGET @ HTARGET-SIZE
+    2 PICK _ATX-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.REQUEST @ HTTP-REQUEST-SIZE
+    2 PICK _ATX-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.REQUEST-A @
+    OVER AT-XRPC-AUTH-GET-I.REQUEST-CAP @
+    2 PICK _ATX-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.NONCE-A @
+    OVER AT-XRPC-AUTH-GET-I.NONCE-U @
+    2 PICK _ATX-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DUP AT-XRPC-AUTH-GET-I.PROXY-A @
+    OVER AT-XRPC-AUTH-GET-I.PROXY-U @
+    2 PICK _ATX-VAULT-SPAN-STATUS
+    ?DUP IF NIP R> DROP EXIT THEN
+    DROP R> DROP AT-XRPC-S-OK ;
+
+: _ATX-GEOMETRY  ( input workspace -- status )
+    2DUP _ATX-FIELD-GEOMETRY
+    ?DUP IF _ATX-RETURN2 EXIT THEN
+    2DUP _ATX-ALIAS-GEOMETRY
+    ?DUP IF _ATX-RETURN2 EXIT THEN
+    _ATX-VAULT-GEOMETRY ;
+
+\ =====================================================================
+\  Exact AT client, PDS target, and session admission
+\ =====================================================================
+
+: _ATX-XRPC-TARGET?  ( target -- flag )
+    HTARGET-REQUEST-TARGET$
+    2DUP S" /xrpc/" STR-STARTS? 0= IF
+        2DROP 0 EXIT
+    THEN
+    6 /STRING
+    2DUP [CHAR] ? STR-INDEX
+    DUP 0< IF
+        DROP NSID-VALID? EXIT
+    THEN
+    >R DROP R> NSID-VALID? ;
+
+: _ATX-ADMIT-CONFIG  ( workspace -- status )
+    >R
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.CONFIG @
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.PROFILE @
+    R@ _ATXW.CHILD
+    AT-OAUTH-CLIENT-ADMIT
+    _ATX-CLIENT>STATUS
+    ?DUP IF R> DROP EXIT THEN
+
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.CONFIG @
+    OAUTH2-CLIENT-CONFIG-AUTH-METHOD@
+    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
+        >R 2DROP R> DROP R> DROP AT-XRPC-S-CONFIG EXIT
+    THEN
+    DROP S" none" COMPARE IF
+        R> DROP AT-XRPC-S-CONFIG EXIT
+    THEN
+
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.CONFIG @
+    OAUTH2-CLIENT-CONFIG-AUTH-ALGORITHM@
+    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
+        >R 2DROP R> DROP R> DROP AT-XRPC-S-CONFIG EXIT
+    THEN
+    DROP OR IF R> DROP AT-XRPC-S-CONFIG EXIT THEN
+
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.CONFIG @
+    OAUTH2-CLIENT-CONFIG-DPOP-BOUND?
+    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
+        2DROP R> DROP AT-XRPC-S-CONFIG EXIT
+    THEN
+    DROP 0= IF R> DROP AT-XRPC-S-CONFIG EXIT THEN
+
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.CONFIG @
+    OAUTH2-CLIENT-CONFIG-BINDING@
+    DUP OAUTH2-CLIENT-CONFIG-S-OK <> IF
+        >R 2DROP R> DROP R> DROP AT-XRPC-S-CONFIG EXIT
+    THEN
+    DROP
+    2DUP OAUTH2-P256-KEY-BINDING-PRESENCE@
+    DUP OAUTH2-P256-KEY-S-OK <> IF
+        _ATX-KEY>STATUS >R
+        DROP 2DROP R> R> DROP EXIT
+    THEN
+    DROP
+    OAUTH2-P256-KEY-BINDING-F-DPOP <> IF
+        2DROP R> DROP AT-XRPC-S-BINDING EXIT
+    THEN
+    DUP OAUTH2-P256-KEY-BINDING-SIZE <> IF
+        2DROP R> DROP AT-XRPC-S-BINDING EXIT
+    THEN
+    R@ _ATXW.BINDING SWAP MOVE
+    R> DROP AT-XRPC-S-OK ;
+
+: _ATX-ADMIT-TARGET  ( workspace -- status )
+    >R
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.PROFILE @
+    AT-OAUTH-PROFILE-PDS-TARGET@
+    DUP AT-OAUTH-PROFILE-S-OK <> IF
+        _ATX-PROFILE>STATUS >R
+        DROP R> R> DROP EXIT
+    THEN
+    DROP
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.TARGET @
+    HTARGET-SAME-ORIGIN? 0= IF
+        R> DROP AT-XRPC-S-TARGET EXIT
+    THEN
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.TARGET @
+    _ATX-XRPC-TARGET? 0= IF
+        R> DROP AT-XRPC-S-TARGET EXIT
+    THEN
+
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.PROFILE @
+    AT-OAUTH-PROFILE-ISSUER@
+    DUP AT-OAUTH-PROFILE-S-OK <> IF
+        _ATX-PROFILE>STATUS >R
+        2DROP
+        R> R> DROP EXIT
+    THEN
+    DROP
+    DUP R@ _ATXW.EXPECTED-U !
+    SWAP R@ _ATXW.EXPECTED-A !
+    DROP
+    R> DROP AT-XRPC-S-OK ;
+
+: _ATX-BINDING-CALLBACK
+  ( binding-a binding-u workspace -- status )
+    >R
+    DUP OAUTH2-P256-KEY-BINDING-SIZE <> IF
+        2DROP R> DROP AT-XRPC-S-BINDING EXIT
+    THEN
+    R@ _ATXW.BINDING OAUTH2-P256-KEY-BINDING-SIZE
+    COMPARE IF AT-XRPC-S-BINDING ELSE AT-XRPC-S-OK THEN
+    R> DROP ;
+
+: _ATX-ISSUER-CALLBACK
+  ( issuer-a issuer-u workspace -- status )
+    >R
+    R@ _ATXW.EXPECTED-A @ R@ _ATXW.EXPECTED-U @
+    COMPARE IF AT-XRPC-S-SESSION ELSE AT-XRPC-S-OK THEN
+    R> DROP ;
+
+: _ATX-TYPE-CALLBACK
+  ( type-a type-u workspace -- status )
+    DROP S" DPoP" STR-STRI=
+    IF AT-XRPC-S-OK ELSE AT-XRPC-S-TOKEN THEN ;
+
+: _ATX-SCOPE-HAS-ATPROTO?  ( scope-a scope-u -- flag )
+    BEGIN
+        DUP 0> IF OVER C@ BL = ELSE 0 THEN
+    WHILE
+        1 /STRING
+    REPEAT
+    DUP 0= IF 2DROP 0 EXIT THEN
+    2DUP BL STR-INDEX
+    DUP 0< IF
+        DROP S" atproto" STR-STR= EXIT
+    THEN
+    >R
+    OVER R@ S" atproto" STR-STR= IF
+        2DROP R> DROP -1 EXIT
+    THEN
+    R> 1+ /STRING
+    RECURSE ;
+
+: _ATX-SCOPE-CALLBACK
+  ( scope-a scope-u workspace -- status )
+    DROP _ATX-SCOPE-HAS-ATPROTO?
+    IF AT-XRPC-S-OK ELSE AT-XRPC-S-TOKEN THEN ;
+
+: _ATX-LOAN>STATUS  ( callback-status session-status -- status )
+    DUP O2SESSION-S-OK <> IF
+        NIP _ATX-SESSION>STATUS EXIT
+    THEN
+    DROP
+    DUP AT-XRPC-STATUS-VALID? 0= IF
+        DROP AT-XRPC-S-INTERNAL
+    THEN ;
+
+: _ATX-ADMIT-SESSION  ( workspace -- status )
+    >R
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.SESSION @
+    O2SESSION-STATE@
+    DUP O2SESSION-S-OK <> IF
+        _ATX-SESSION>STATUS >R
+        2DROP R> R> DROP EXIT
+    THEN
+    DROP
+    DUP O2SESSION-PHASE-ACTIVE <> IF
+        2DROP R> DROP AT-XRPC-S-SESSION EXIT
+    THEN
+    DROP R@ _ATXW.GENERATION !
+
+    ['] _ATX-BINDING-CALLBACK R@
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.SESSION @
+    O2SESSION-WITH-BINDING _ATX-LOAN>STATUS
+    ?DUP IF R> DROP EXIT THEN
+
+    ['] _ATX-ISSUER-CALLBACK R@
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.SESSION @
+    O2SESSION-WITH-ISSUER _ATX-LOAN>STATUS
+    ?DUP IF R> DROP EXIT THEN
+
+    ['] _ATX-TYPE-CALLBACK R@
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.SESSION @
+    O2SESSION-WITH-TOKEN-TYPE _ATX-LOAN>STATUS
+    ?DUP IF R> DROP EXIT THEN
+
+    ['] _ATX-SCOPE-CALLBACK R@
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.SESSION @
+    O2SESSION-WITH-SCOPE _ATX-LOAN>STATUS
+    R> DROP ;
+
+\ =====================================================================
+\  Durable DPoP construction and request publication
+\ =====================================================================
+
+: _ATX-HOST-BUILD  ( workspace -- status )
+    >R
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.TARGET @ HTARGET-HOST$
+    DUP _ATX-HOST-CAPACITY U> IF
+        2DROP R> DROP AT-XRPC-S-CAPACITY EXIT
+    THEN
+    DUP R@ _ATXW.EXPECTED-U !
+    R@ _ATXW.HOST SWAP MOVE
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.TARGET @
+    HTARGET-PORT@ DUP 443 = IF
+        DROP R> DROP AT-XRPC-S-OK EXIT
+    THEN
+    NUM>STR
+    DUP R@ _ATXW.EXPECTED-U @ + 1+
+    _ATX-HOST-CAPACITY U> IF
+        2DROP R> DROP AT-XRPC-S-CAPACITY EXIT
+    THEN
+    [CHAR] : R@ _ATXW.HOST R@ _ATXW.EXPECTED-U @ + C!
+    1 R@ _ATXW.EXPECTED-U +!
+    2DUP
+    R@ _ATXW.HOST R@ _ATXW.EXPECTED-U @ +
+    SWAP MOVE
+    NIP R@ _ATXW.EXPECTED-U +!
+    R> DROP AT-XRPC-S-OK ;
+
+: _ATX-PREPARE-DPOP-INPUT
+  ( token-a token-u workspace -- )
+    >R
+    R@ _ATXW.DPOP-INPUT
+    OAUTH2-P256-KEY-DPOP-INPUT-SIZE 0 FILL
+
+    S" GET"
+    DUP R@ _ATXW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTM-U !
+    SWAP R@ _ATXW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTM-A !
+    DROP
+
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.TARGET @
+    HTARGET-HTU$
+    DUP R@ _ATXW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTU-U !
+    SWAP R@ _ATXW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.HTU-A !
+    DROP
+
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.IAT @
+    R@ _ATXW.DPOP-INPUT OAUTH2-P256-KEY-DPOP-I.IAT !
+
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.NONCE-A @
+    R@ _ATXW.DPOP-INPUT OAUTH2-P256-KEY-DPOP-I.NONCE-A !
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.NONCE-U @
+    R@ _ATXW.DPOP-INPUT OAUTH2-P256-KEY-DPOP-I.NONCE-U !
+
+    DUP R@ _ATXW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.TOKEN-U !
+    SWAP R@ _ATXW.DPOP-INPUT
+        OAUTH2-P256-KEY-DPOP-I.TOKEN-A !
+    DROP
+
+    R@ _ATXW.PROOF
+    R@ _ATXW.DPOP-INPUT OAUTH2-P256-KEY-DPOP-I.DESTINATION !
+    OAUTH2-DPOP-ES256-MAX-PROOF-BYTES
+    R@ _ATXW.DPOP-INPUT OAUTH2-P256-KEY-DPOP-I.CAPACITY !
+    R> DROP ;
+
+: _ATX-SIGN  ( workspace -- status )
+    >R
+    R@ _ATXW.BINDING OAUTH2-P256-KEY-BINDING-SIZE
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.VAULT @
+    R@ _ATXW.DPOP-INPUT
+    R@ _ATXW.CHILD
+    OAUTH2-P256-KEY-DPOP-PROOF
+    DUP OAUTH2-P256-KEY-S-OK <> IF
+        _ATX-KEY>STATUS >R
+        DROP R> R> DROP EXIT
+    THEN
+    DROP
+    DUP 0> 0= IF
+        DROP R> DROP AT-XRPC-S-INTERNAL EXIT
+    THEN
+    DUP OAUTH2-DPOP-ES256-MAX-PROOF-BYTES U> IF
+        DROP R> DROP AT-XRPC-S-INTERNAL EXIT
+    THEN
+    R@ _ATXW.PROOF-U !
+    R> DROP AT-XRPC-S-OK ;
+
+: _ATX-BUILD-REQUEST
+  ( token-a token-u workspace -- status )
+    >R
+    2DUP R@ _ATX-PREPARE-DPOP-INPUT
+    R@ _ATX-SIGN ?DUP IF
+        _ATX-RETURN2 R> DROP EXIT
+    THEN
+    R@ _ATX-HOST-BUILD ?DUP IF
+        _ATX-RETURN2 R> DROP EXIT
+    THEN
+
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.REQUEST-A @
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.REQUEST-CAP @
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.REQUEST @
+    HREQ-INIT _ATX-HREQ>STATUS ?DUP IF
+        _ATX-RETURN2 R> DROP EXIT
+    THEN
+    -1 R@ _ATXW.REQUEST-READY !
+
+    S" GET"
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.TARGET @
+        HTARGET-REQUEST-TARGET$
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.REQUEST @
+    HREQ-BEGIN _ATX-HREQ>STATUS ?DUP IF
+        _ATX-RETURN2 R> DROP EXIT
+    THEN
+
+    R@ _ATXW.HOST R@ _ATXW.EXPECTED-U @
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.REQUEST @
+    HREQ-HOST _ATX-HREQ>STATUS ?DUP IF
+        _ATX-RETURN2 R> DROP EXIT
+    THEN
+
+    S" application/json"
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.REQUEST @
+    HREQ-ACCEPT _ATX-HREQ>STATUS ?DUP IF
+        _ATX-RETURN2 R> DROP EXIT
+    THEN
+
+    S" DPoP" 2SWAP
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.REQUEST @
+    HREQ-AUTHORIZATION _ATX-HREQ>STATUS ?DUP IF
+        R> DROP EXIT
+    THEN
+
+    S" DPoP" R@ _ATXW.PROOF R@ _ATXW.PROOF-U @
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.REQUEST @
+    HREQ-HEADER _ATX-HREQ>STATUS ?DUP IF
+        R> DROP EXIT
+    THEN
+
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.PROXY-U @ IF
+        S" atproto-proxy"
+        R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.PROXY-A @
+        R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.PROXY-U @
+        R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.REQUEST @
+        HREQ-HEADER _ATX-HREQ>STATUS ?DUP IF
+            R> DROP EXIT
+        THEN
+    THEN
+
+    S" Accept-Encoding" S" identity"
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.REQUEST @
+    HREQ-HEADER _ATX-HREQ>STATUS ?DUP IF
+        R> DROP EXIT
+    THEN
+
+    S" akashic-atproto/1"
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.REQUEST @
+    HREQ-USER-AGENT _ATX-HREQ>STATUS ?DUP IF
+        R> DROP EXIT
+    THEN
+
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.REQUEST @
+    HREQ-CONNECTION-CLOSE _ATX-HREQ>STATUS ?DUP IF
+        R> DROP EXIT
+    THEN
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.REQUEST @
+    HREQ-SEAL _ATX-HREQ>STATUS
+    R> DROP ;
+
+: _ATX-ACCESS-CALLBACK
+  ( token-a token-u workspace -- status )
+    _ATX-BUILD-REQUEST ;
+
+: _ATX-BUILD-WITH-ACCESS  ( workspace -- status )
+    >R
+    ['] _ATX-ACCESS-CALLBACK R@
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.SESSION @
+    O2SESSION-WITH-ACCESS
+    _ATX-LOAN>STATUS
+    R> DROP ;
+
+: _ATX-VERIFY-STABLE  ( workspace -- status )
+    >R
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.SESSION @
+    O2SESSION-STATE@
+    DUP O2SESSION-S-OK <> IF
+        _ATX-SESSION>STATUS >R
+        2DROP R> R> DROP EXIT
+    THEN
+    DROP
+    O2SESSION-PHASE-ACTIVE <> IF
+        DROP R> DROP AT-XRPC-S-STALE EXIT
+    THEN
+    R@ _ATXW.GENERATION @ <> IF
+        R> DROP AT-XRPC-S-STALE EXIT
+    THEN
+    R> DROP AT-XRPC-S-OK ;
+
+\ =====================================================================
+\  Operation and public entry point
+\ =====================================================================
+
+: _ATX-SNAPSHOT  ( input workspace -- )
+    >R
+    R@ _ATX-WIPE
+    R@ _ATXW.INPUT AT-XRPC-AUTH-GET-INPUT-SIZE MOVE
+    R> DROP ;
+
+: _ATX-FINISH  ( status workspace -- status )
+    >R
+    DUP AT-XRPC-STATUS-VALID? 0= IF
+        DROP AT-XRPC-S-INTERNAL
+    THEN
+    DUP AT-XRPC-S-OK <> R@ _ATXW.REQUEST-READY @ AND IF
+        R@ _ATXW.INPUT AT-XRPC-AUTH-GET-I.REQUEST @
+        DUP HREQ-CLEAR
+        HTTP-REQUEST-SIZE 0 FILL
+    THEN
+    R@ _ATX-WIPE
+    R> DROP ;
+
+: _ATX-OP  ( input workspace -- status )
+    DUP >R
+    _ATX-SNAPSHOT
+    R@ _ATX-ADMIT-CONFIG ?DUP IF R> _ATX-FINISH EXIT THEN
+    R@ _ATX-ADMIT-TARGET ?DUP IF R> _ATX-FINISH EXIT THEN
+    R@ _ATX-ADMIT-SESSION ?DUP IF R> _ATX-FINISH EXIT THEN
+    R@ _ATX-BUILD-WITH-ACCESS ?DUP IF R> _ATX-FINISH EXIT THEN
+    R@ _ATX-VERIFY-STABLE
+    R> _ATX-FINISH ;
+
+: _ATX-CALL  ( input workspace operation-xt -- status )
+    1 PICK >R
+    CATCH
+    DUP IF
+        DROP
+        AT-XRPC-S-INTERNAL R@ _ATX-FINISH
+        >R _ATX-DROP2 R> R> DROP EXIT
+    THEN
+    DROP R> DROP ;
+
+: AT-XRPC-AUTH-GET-BUILD  ( input workspace -- status )
+    2DUP _ATX-GEOMETRY
+    ?DUP IF _ATX-RETURN2 EXIT THEN
+    ['] _ATX-OP _ATX-CALL ;
+
+\ =====================================================================
+\  Compile-time geometry assertions
+\ =====================================================================
+
+1 CELLS 8 <> [IF]
+    ." AT XRPC cell geometry mismatch" CR ABORT
+[THEN]
+
+_ATXW-INPUT-OFF AT-XRPC-AUTH-GET-INPUT-SIZE +
+_ATXW-BINDING-OFF <> [IF]
+    ." AT XRPC input geometry mismatch" CR ABORT
+[THEN]
+
+_ATXW-BINDING-OFF OAUTH2-P256-KEY-BINDING-SIZE +
+_ATXW-DPOP-INPUT-OFF <> [IF]
+    ." AT XRPC binding geometry mismatch" CR ABORT
+[THEN]
+
+_ATXW-DPOP-INPUT-OFF OAUTH2-P256-KEY-DPOP-INPUT-SIZE +
+_ATXW-PROOF-OFF <> [IF]
+    ." AT XRPC DPoP input geometry mismatch" CR ABORT
+[THEN]
