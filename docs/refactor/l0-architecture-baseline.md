@@ -617,6 +617,8 @@ record shape.
 
 ## Sandbox Stage 4 integration ratchet update
 
+The reviewed `sandbox-stage4-main-integration-20260731` graph is anchored to
+merge commit `85d54e31d6d44651af25067506b73e7ff28a8572`.
 The sandbox integration adds the reusable compiler, verifier, typed-value,
 plan, profile and VM machinery under `akashic/sandbox/`; exact installed-module
 ownership and invocation-local hosting under `akashic/runtime/`; explicit

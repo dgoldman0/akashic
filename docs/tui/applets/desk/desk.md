@@ -201,24 +201,30 @@ the builder pointer is cleared before the catalog is freed.
 
 Desk's interoperability endpoint resolves services through an activation-local
 table in Desk component state. The table has a fixed capacity of 16 and Desk
-currently installs eleven entries. Each entry borrows an immutable exact service
+currently installs twelve entries. Each entry borrows an immutable exact service
 ID and stores a getter XT; it does not cache or own the returned service. Lookups
 are exact byte matches, and an unknown ID returns `0`.
 
 Getters evaluate owner availability at lookup time. An unbound external-I/O
-service, absent Agent composition, or inactive/unowned Daybook resource
-therefore returns `0` without changing the table. The Daybook getter lends the
-owner's `ROFFER`, which pairs that named resource's exact RID with its owning
-pool. There is no separate global resource-pool service. The table is private
-lifecycle-routing metadata, not a general `interop/` registry: discovery
-confers no authority, and each domain owner retains its own semantics and
-validation.
+service, unconfigured or non-open sandbox service, absent Agent composition,
+or inactive/unowned Daybook resource therefore returns `0` without changing
+the table. `org.akashic.sandbox.pure-compute` exposes only the transient Desk
+sandbox job service configured before activation with an exact module owner
+and caller-selected positive admission capacity. Its getter grants no guest
+authority and returns `0` when that service is absent or closing. The Daybook
+getter lends the owner's `ROFFER`, which pairs that named resource's exact RID
+with its owning pool. There is no separate global resource-pool service. The
+table is private lifecycle-routing metadata, not a general `interop/` registry:
+discovery confers no authority, and each domain owner retains its own semantics
+and validation.
 
 Desk fills the table after constructing its service owners and before publishing
 the endpoint. During dispatch-quiesced teardown it zeroes every entry after
-request cancellation and before deactivating or freeing those owners. A retained
-endpoint can consequently expose neither a stale getter nor a freed service, and
-the existing owner dependency order remains unchanged.
+request cancellation and before deactivating or freeing those owners. Sandbox
+jobs drain before child component release, and the sandbox service releases
+before the root Context and Practice state it borrows. A retained endpoint can
+consequently expose neither a stale getter nor a freed service, and the existing
+owner dependency order remains unchanged.
 
 ## Desk-hosted Agent composition
 

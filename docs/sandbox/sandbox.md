@@ -1,13 +1,16 @@
 # Akashic sandbox architecture
 
-**Status:** Stage 0 architecture reference; Stage 1 is implemented and
-qualified on the isolated `sandbox-stage1` branch
+**Status:** the narrowed production critical path is implemented through the
+transient Desk sandbox service landing (sandbox Stage 4) on `main`
 
-**Active implementation boundary:** [`stage1-implementation.md`](stage1-implementation.md)
-controls the current critical path. Where the older Stage 0 documents make
-canonical profile codecs, digests, typed value graphs, or production import
-hardening part of Stage 1, those items are now later architecture reference
-rather than prerequisites for the pure neutral runtime.
+**Implemented boundary:** [`stage1-implementation.md`](stage1-implementation.md)
+records the permanent neutral runtime. The landed path additionally includes
+the exact `(RID, positive revision)` installed-module owner, isolated
+capability-empty invocation host, explicit Agent operations, headless Desk
+component and admission, and caller-capacity-selected transient Desk service.
+Module declarations, schemas, digests, verified-plan caches, Practice binding,
+persistence, mediated effects, declarative UI, and contract-VM porting remain
+later architecture rather than prerequisites for this critical path.
 
 **Selected production baseline profile:** `org.akashic.sandbox.pure-compute`
 **Security scope:** hostile source, hostile artifacts, hostile typed input, and
@@ -25,8 +28,10 @@ detailed contracts are:
 - [Restricted production source language](source-language.md)
 - [Stage 0 adversarial acceptance matrix](stage0-acceptance.md)
 
-These documents specify the intended boundary. They do not claim that the
-current implementation meets it.
+These documents specify both the implemented least-authority boundary and
+later extensions. A section describing deferred declarations, persistence,
+effects, UI, or contract behavior is architecture reference, not a claim that
+the current implementation supplies it.
 
 ## Executive decision
 
@@ -248,10 +253,12 @@ They are not pointers, capabilities, resource handles, or durable
 identifiers. Zero is invalid.
 
 Concrete entry schemas are not executable artifact sections and are not
-embedded in the generic profile. They belong to a separately owned,
-digest-pinned module declaration. Stage 0 fixes the following logical binding;
-Stage 2 must ratify the declaration/schema codecs and canonical digest domains
-before host invocation:
+embedded in the generic profile. The narrowed Stage 2 host intentionally
+accepts an already-resolved verified plan, exact entry, typed input, and
+materialized limits; its installed owner resolves only an exact `(RID,
+positive revision)` key to a borrowed verified plan/profile pair. A later,
+separately owned declaration layer may add the following digest-pinned logical
+binding without changing that host or VM boundary:
 
 - exact semantic artifact owner and artifact digest;
 - exact profile identifier and digest;
@@ -346,10 +353,11 @@ lifecycle callbacks.
 
 | Concern | Owner | Boundary |
 |---|---|---|
-| Executable artifact bytes | Dedicated module/package owner, potentially using Library storage | Exact semantic owner, domain revision, digest, and provenance |
+| Executable artifact bytes | Future dedicated module/package owner, potentially using Library storage | Not owned or persisted by the current transient verified-plan catalog |
 | Artifact verification | Neutral sandbox library | Complete bounded span plus exact profile; no ambient dictionary |
-| Module declaration and schemas | Module/package owner | Stage 2 canonical digest-pinned metadata; declaration is not authority |
-| Practice binding | Practice | Pins relevance, exact module/profile, and policy; stores no live VM or grant |
+| Installed verified plans | Runtime sandbox module owner | Exact `(RID, positive revision)` to borrowed sealed plan/profile; bounded caller-provided storage |
+| Module declaration and schemas | Future module/package owner | Deferred canonical digest-pinned metadata; declaration is not authority |
+| Practice binding | Future Practice integration | Pins relevance, exact module/profile, and policy; stores no live VM or grant |
 | Execution instance | Trusted sandbox host | Owns child Context, VM state, budgets, cancellation, result, and teardown |
 | Desk lifecycle | Desk/applet host | Owns component instance, hosting, close, and release |
 | Agent invocation | Agent through an exact typed host capability | Receives no VM, pointer, import table, or automatic installation right |
@@ -373,7 +381,7 @@ the current UI selection, or ambient VFS access.
 
 ## Agent boundary
 
-Agent can eventually use typed operations such as:
+The Agent-owned sandbox boundary exposes explicit typed operations to:
 
 - compile restricted source into a candidate artifact;
 - independently verify an exact artifact/profile pair;
@@ -385,6 +393,11 @@ Agent can eventually use typed operations such as:
 Agent-generated source remains inert until compilation and independent
 verification succeed. Agent receives no VM object, Context pointer, host
 callback, service endpoint, or implicit capability.
+
+These operations are provider-invisible and are not silently dispatched by
+the ordinary Agent UI, provider selection, or Practice presets. Results are
+detached typed copies owned by the caller and have an explicit scrub-and-free
+release operation.
 
 The pure guest profile itself has no observation effect. A trusted
 Agent-facing wrapper may be classified as observation because it discloses a
@@ -398,13 +411,14 @@ not narrowed to fit one current adapter.
 
 ## Desk and custom applets
 
-Desk hosts a trusted sandbox component. It does not execute arbitrary code
-through the native package loader.
-
-The baseline Desk consumer should copy an exact snapshot into a headless compute
-entry and render the copied validated result in trusted code. Full custom
-applets come later through a restricted structured view model or declarative
-UIDL subset.
+Desk hosts a trusted transient sandbox service when its caller configures an
+exact installed-module owner and positive admission capacity before Desk
+activation. Each admitted job owns its invocation host and detached typed
+result; service close drains live jobs before releasing their child components
+and borrowed parent state. Desk does not execute arbitrary code through the
+native package loader, and no sandbox UI adapter is part of this landing. Full
+custom applets come later through a restricted structured view model or
+declarative UIDL subset.
 
 Guest code must never supply:
 
@@ -484,26 +498,39 @@ than replacing the pure runtime with a second evaluator.
 
 ### Stage 2 — exact artifacts and Akashic host
 
-Add the module declaration/owner contract, exact resolution, verified-plan
-cache, child-Context host, copied typed input/output, and Practice binding.
+Add exact `(RID, positive revision)` ownership for borrowed verified
+plan/profile pairs and the child-Context invocation host with copied typed
+input/output and materialized limits. Prove two exact module revisions and two
+simultaneously live hosts. Do not add declarations, schemas, digests, caches,
+Practice, persistence, Desk, or Agent policy to this landing.
 
 ### Stage 3 — Desk and Agent
 
-Add the trusted headless Desk component and explicit Agent
-compile/test/verify/invoke operations. Do not silently add sandbox execution
-to existing Agent presets.
+Add explicit Agent compile/test/verify/invoke/result-release operations, the
+trusted headless Desk component, and exact transient Desk admission. Do not
+silently add sandbox execution to existing Agent providers or presets.
 
-### Stage 4 — mediated proposals
+### Stage 4 — transient Desk sandbox service
 
-Define typed proposals, filtering, exact targets/revisions, review, sealing,
-one-shot authority, dispatch, retry, idempotency, partial failure, and
-uncertain-effect truth before enabling consequential operations.
+Compose the caller-capacity-selected job service into Desk, publish it under
+the exact `org.akashic.sandbox.pure-compute` service ID only while open, make
+terminal results observable as detached typed copies, and drain/release every
+job before parent Context and Practice teardown.
 
-### Later — persistent state and declarative UI
+The earlier Stage 0 roadmap used “Stage 4” for mediated proposals. The landed
+schedule uses that number for the Desk-service composition gate; it does not
+implement effects. Typed proposals, filtering, exact targets/revisions,
+review, sealing, one-shot authority, dispatch, retry, idempotency, partial
+failure, and uncertain-effect truth all remain later work.
 
-Persistent state receives a separate semantic owner. UI uses trusted
-rendering of a restricted declarative model. Neither enlarges the neutral
-VM's authority.
+### Later — declarations, policy, effects, persistence, and UI
+
+Add separately owned module declarations, schemas, digest domains,
+verified-plan caches and Practice binding only when their consumers require
+them. Persistent state receives a separate semantic owner. Consequential
+effects use the mediated proposal path above. UI uses trusted rendering of a
+restricted declarative model, and the contract VM receives its own adapter and
+hardening. None enlarges the neutral VM's authority.
 
 ## Stage 0 stop conditions
 
@@ -525,10 +552,10 @@ Return for an explicit architecture decision if implementation would require:
 
 ## Qualification truth
 
-These documents are the Stage 0 design oracle. They become an implementation
-claim only after Stage 1 code and adversarial tests satisfy the acceptance
-matrix.
-
-No current ITC or contract test constitutes that evidence. Tests that
-canonize unsafe behavior must be replaced rather than retained as a legacy
-oracle.
+These documents remain the design oracle for later work. The narrowed Stages
+1 through 4 are implementation claims only where their focused structure,
+build, lifecycle and executable composition gates cover them; deferred
+declaration, policy, effect, persistence, UI and contract sections remain
+architecture claims. No current ITC or contract test constitutes sandbox
+evidence, and tests that canonize unsafe behavior must be replaced rather than
+retained as a legacy oracle.

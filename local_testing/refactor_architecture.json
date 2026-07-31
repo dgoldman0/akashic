@@ -1,8 +1,8 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "streams-sr3-complete-20260726",
-    "commit": "08472587bf8363c71803d6d659991bc73049a12f",
+    "name": "sandbox-stage4-main-integration-20260731",
+    "commit": "85d54e31d6d44651af25067506b73e7ff28a8572",
     "expected": {
       "module_count": 510,
       "resolved_require_occurrence_count": 1774,

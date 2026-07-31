@@ -251,7 +251,7 @@
           "id": "agent.access-and-tool-security",
           "coverage": "covered",
           "facets": ["interfaces", "failures", "journeys"],
-          "preserve": ["Chat-only, Practice read-only and Practice assist presets with exact targets and budgets", "Tool approval/denial, operand seals, audit, races, quiescence and capacity", "Desk-shared Agent review, cancellation, Daybook write policy and relaunch continuity"],
+          "preserve": ["Chat-only, Practice read-only and Practice assist presets with exact targets and budgets", "Tool approval/denial, operand seals, audit, races, quiescence and capacity", "Provider-invisible sandbox compile, verify and test operations, exact-revision invocation, detached copied results and scrubbed result release", "Desk-shared Agent review, cancellation, Daybook write policy and relaunch continuity"],
           "evidence": ["profile:agent-access", "profile:agent-security", "profile:sandbox-stage3-agent-operations", "profile:sandbox-stage3-agent-test", "profile:sandbox-stage3-agent-invoke", "profile:desktop-agent-hardening", "profile:desktop"]
         },
         {
