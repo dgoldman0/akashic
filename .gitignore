@@ -55,6 +55,7 @@ local_testing/*
 !local_testing/test_phase6_suite.py
 !local_testing/README.md
 !local_testing/akashic_tui.py
+!local_testing/test_observatory_worlds_slice.py
 # Refactor architecture inventory and ratchet
 !local_testing/forth_dependencies.py
 !local_testing/refactor_inventory.py
