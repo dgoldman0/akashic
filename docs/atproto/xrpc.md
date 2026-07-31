@@ -98,11 +98,13 @@ for an immediate rebuild. The closed status vocabulary preserves capacity,
 alias, caller-memory, profile, session, binding, token, target, proof, request,
 and stale-generation classes.
 
-The first SR4 transport owner will handle exactly one fresh-proof retry after
-a valid PDS `401 use_dpop_nonce` challenge. Automatic nonce replacement,
-response/XRPC error parsing, pagination, POST procedures, refresh, logout,
-repository CRUD, and long-lived connection reuse are intentionally outside
-this request-construction checkpoint.
+The caller-owned `AT-XRPC-EXCHANGE-*` transport owner now handles exactly one
+fresh-proof retry after a strict PDS `400` or `401 use_dpop_nonce` challenge.
+It replaces the retained nonce before rebuilding and treats any second
+response as terminal. The focused author-feed vertical witnesses the `400`
+path and subsequent nonce rotation. General structured XRPC error projection,
+pagination, POST procedures, refresh, logout, repository CRUD, and long-lived
+connection reuse remain outside this request-construction boundary.
 
 See the protocol's
 [XRPC and PDS service-proxy specification](https://atproto.com/specs/xrpc)
