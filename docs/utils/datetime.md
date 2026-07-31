@@ -1,254 +1,96 @@
-# akashic-datetime — Date / Time Vocabulary for KDOS / Megapad-64
+# Checked UTC date and time
 
-Integer-only POSIX epoch utilities: conversion between epoch seconds and
-broken-down (year, month, day, hour, minute, second) values, ISO 8601
-formatting and parsing, and live RTC clock access.
+`akashic/utils/datetime.f` provides state-free Gregorian calendar conversion
+and exact bounded UTC formatting. Load it with:
 
 ```forth
 REQUIRE datetime.f
 ```
 
-`PROVIDED akashic-datetime` — safe to include multiple times.
+The supported civil interval is `1970-01-01T00:00:00Z` through
+`9999-12-31T23:59:59Z`, corresponding to Unix epoch seconds
+`0..253402300799`. Units are part of every public word name; the module never
+silently guesses whether a scalar is seconds or milliseconds.
 
----
+## Statuses
 
-## Table of Contents
+| Status | Meaning |
+|---|---|
+| `DT-S-OK` | Operation completed |
+| `DT-S-INVALID` | Invalid call shape, such as negative capacity |
+| `DT-S-CAPACITY` | Destination is smaller than the exact result |
+| `DT-S-SYNTAX` | Invalid calendar month or day |
+| `DT-S-RANGE` | Epoch/year or caller span is outside its range |
+| `DT-S-PROTECTED` | Destination names protected memory |
+| `DT-S-PLATFORM` | The platform could not qualify the span |
+| `DT-S-INTERNAL` | Reserved internal failure class |
 
-- [Design Principles](#design-principles)
-- [Constants](#constants)
-- [Leap Year](#leap-year)
-- [Epoch → Broken-Down](#epoch--broken-down)
-- [Broken-Down → Epoch](#broken-down--epoch)
-- [Formatting](#formatting)
-- [Parsing](#parsing)
-- [RTC / Current Time](#rtc--current-time)
-- [Quick Reference](#quick-reference)
+`DT-STATUS-VALID? ( status -- flag )` admits exactly this status vocabulary.
 
----
-
-## Design Principles
-
-| Principle | Implementation |
-|-----------|---------------|
-| **Integer only** | All arithmetic uses 64-bit integers; no floating point. |
-| **UTC everywhere** | Epoch = seconds since 1970-01-01T00:00:00Z. No time-zone support. |
-| **BIOS RTC** | `DT-NOW*` words call `EPOCH@` (MMIO `0xFFFF_FF00_0000_0B08`). |
-| **No allocation** | Formatting writes into caller-supplied `(dst max)` buffers. |
-| **Prefix convention** | Public API: `DT-`. Internal helpers: `_DT-` / `_DTP-`. |
-
----
-
-## Constants
-
-| Word | Value | Meaning |
-|------|-------|---------|
-| `_DT-SPD` | 86 400 | Seconds per day |
-| `_DT-SPH` | 3 600 | Seconds per hour |
-| `_DT-SPM` | 60 | Seconds per minute |
-
-Tables (internal):
-
-| Word | Description |
-|------|-------------|
-| `_DT-DBM` | Days-before-month (non-leap), indexed 1–12 |
-| `_DT-DIM` | Days-in-month (non-leap), indexed 1–12 |
-
----
-
-## Leap Year
-
-### `DT-LEAP?`
+## Calendar conversion
 
 ```forth
-DT-LEAP? ( year -- flag )
+DT-MONTH-DAYS   ( year month -- days status )
+DT-EPOCH-S>YMD  ( epoch-s -- year month day status )
+DT-YMD>EPOCH-S  ( year month day -- epoch-s status )
 ```
 
-Gregorian leap-year test.  Returns `-1` (true) for leap years, `0`
-otherwise.
+These words validate their public inputs and use constant-time civil-date
+arithmetic. Failure results are zero-filled before the status: `0 status`, or
+`0 0 0 status` for `DT-EPOCH-S>YMD`.
 
 ```forth
-2024 DT-LEAP?  \ → -1
-1900 DT-LEAP?  \ → 0
-2000 DT-LEAP?  \ → -1
+2000 2 DT-MONTH-DAYS        \ 29 DT-S-OK
+0 DT-EPOCH-S>YMD            \ 1970 1 1 DT-S-OK
+2000 2 29 DT-YMD>EPOCH-S    \ 951782400 DT-S-OK
 ```
 
-### `_DT-DPY`
+## Exact formatters
 
 ```forth
-_DT-DPY ( year -- days )
+DT-DATE-S          ( epoch-s destination capacity -- written status )
+DT-RFC3339-UTC-S   ( epoch-s destination capacity -- written status )
 ```
 
-Days in year — 366 for leap years, 365 otherwise.
+`DT-DATE-S` writes exactly 10 bytes as `YYYY-MM-DD`.
+`DT-RFC3339-UTC-S` writes exactly 20 bytes as
+`YYYY-MM-DDTHH:MM:SSZ`. Neither appends a terminator.
 
-### `_DT-DIM@`
+The formatter qualifies the complete caller-advertised destination span before
+writing. Invalid epochs, negative or insufficient capacities, and inaccessible
+spans return `0 status` without changing any destination byte. On success only
+the exact 10- or 20-byte prefix is changed; additional capacity and canaries
+remain untouched.
 
 ```forth
-_DT-DIM@ ( month year -- days )
+CREATE stamp 32 ALLOT
+1718465400 stamp 32 DT-RFC3339-UTC-S
+\ returns 20 DT-S-OK; stamp contains 2024-06-15T15:30:00Z
 ```
 
-Days in month (1-based), with leap-February handling.
+The fixed lengths are available as `DT-DATE-S-LENGTH` and
+`DT-RFC3339-UTC-S-LENGTH`. The upper scalar bound is
+`DT-EPOCH-S-MAX`.
 
----
-
-## Epoch → Broken-Down
-
-### `DT-EPOCH>YMD`
+## Clock access
 
 ```forth
-DT-EPOCH>YMD ( epoch -- year month day )
+DT-NOW-MS  ( -- epoch-ms )
+DT-NOW-S   ( -- epoch-s )
 ```
 
-Convert Unix epoch seconds to calendar date.  Algorithm: count off
-whole years from 1970, then whole months, remainder + 1 = day.
+These thin BIOS accessors read `EPOCH@`; they do not participate in calendar
+conversion state. Code that needs deterministic or authenticated time should
+accept the scalar from its caller and use the conversion/formatting words
+directly.
 
-```forth
-0         DT-EPOCH>YMD   \ → 1970 1 1
-946684800 DT-EPOCH>YMD   \ → 2000 1 1
-951782400 DT-EPOCH>YMD   \ → 2000 2 29
-```
+## Ownership and concurrency
 
-### `DT-EPOCH>HMS`
+The module contains no `VARIABLE`, writable table, guard, clock singleton, or
+formatter workspace. Independent calls may be interleaved freely. The caller
+owns every output buffer and is responsible for serializing concurrent writes
+to the same bytes.
 
-```forth
-DT-EPOCH>HMS ( epoch -- hour min sec )
-```
-
-Extract time-of-day from epoch seconds via modular arithmetic.
-
-```forth
-1718465400 DT-EPOCH>HMS   \ → 15 30 0
-```
-
----
-
-## Broken-Down → Epoch
-
-### `DT-YMD>EPOCH`
-
-```forth
-DT-YMD>EPOCH ( year month day -- epoch )
-```
-
-Calendar date at midnight UTC → epoch seconds.  Adds days for
-complete years (1970 .. year−1), days-before-month, leap adjustment,
-and remaining days, then multiplies by 86 400.
-
-```forth
-1970 1  1  DT-YMD>EPOCH   \ → 0
-2000 2 29  DT-YMD>EPOCH   \ → 951782400
-```
-
-Round-trip property:
-
-```forth
-epoch DT-EPOCH>YMD DT-YMD>EPOCH  \ → epoch (at midnight)
-```
-
----
-
-## Formatting
-
-All formatting words share the signature:
-
-```forth
-( epoch dst max -- written )
-```
-
-They write formatted text into the caller's buffer at `dst` (up to
-`max` bytes) and return the number of bytes written.
-
-### `DT-DATE`
-
-Format epoch as `YYYY-MM-DD`.
-
-```forth
-1718409600 PAD 16 DT-DATE    \ PAD ← "2024-06-15", returns 10
-```
-
-### `DT-TIME`
-
-Format epoch as `HH:MM:SS`.
-
-```forth
-1718465400 PAD 16 DT-TIME    \ PAD ← "15:30:00", returns 8
-```
-
-### `DT-ISO8601`
-
-Format epoch as `YYYY-MM-DDTHH:MM:SSZ`.
-
-```forth
-1718465400 PAD 32 DT-ISO8601   \ PAD ← "2024-06-15T15:30:00Z", returns 20
-```
-
----
-
-## Parsing
-
-### `DT-PARSE-ISO`
-
-```forth
-DT-PARSE-ISO ( addr len -- epoch ior )
-```
-
-Parse an ISO 8601 date-time string (`YYYY-MM-DDTHH:MM:SS` with
-optional trailing `Z`) and return the epoch seconds.
-
-`ior` = 0 on success, −1 on failure.
-
-```forth
-S" 2024-06-15T15:30:00Z" DT-PARSE-ISO   \ → 1718465400 0
-S" bad" DT-PARSE-ISO                     \ → 0 -1
-```
-
----
-
-## RTC / Current Time
-
-### `DT-NOW-MS`
-
-```forth
-DT-NOW-MS ( -- epoch-ms )
-```
-
-Read the hardware RTC via `EPOCH@` and return the epoch in
-**milliseconds** (64-bit).
-
-### `DT-NOW-S`
-
-```forth
-DT-NOW-S ( -- epoch )
-```
-
-Read the hardware RTC and return epoch **seconds** (integer
-division: `EPOCH@ 1000 /`).
-
-### `DT-NOW`
-
-```forth
-DT-NOW ( -- epoch )
-```
-
-Alias for `DT-NOW-S`.  Default resolution is seconds.
-
-```forth
-DT-NOW PAD 32 DT-ISO8601   \ format the current time
-```
-
----
-
-## Quick Reference
-
-| Word | Stack Effect | Description |
-|------|-------------|-------------|
-| `DT-LEAP?` | `( year -- flag )` | Gregorian leap-year test |
-| `DT-EPOCH>YMD` | `( epoch -- year month day )` | Epoch → calendar date |
-| `DT-EPOCH>HMS` | `( epoch -- hour min sec )` | Epoch → time of day |
-| `DT-YMD>EPOCH` | `( year month day -- epoch )` | Calendar date → epoch |
-| `DT-DATE` | `( epoch dst max -- written )` | Format `YYYY-MM-DD` |
-| `DT-TIME` | `( epoch dst max -- written )` | Format `HH:MM:SS` |
-| `DT-ISO8601` | `( epoch dst max -- written )` | Format `YYYY-MM-DDTHH:MM:SSZ` |
-| `DT-PARSE-ISO` | `( addr len -- epoch ior )` | Parse ISO 8601 |
-| `DT-NOW-MS` | `( -- epoch-ms )` | Current time in milliseconds |
-| `DT-NOW-S` | `( -- epoch )` | Current time in seconds |
-| `DT-NOW` | `( -- epoch )` | Alias for `DT-NOW-S` |
+The former truncating formatters, permissive ISO parser, ambiguous `DT-NOW`
+alias, and process-global calendar scratch have been removed rather than kept
+as compatibility surfaces.

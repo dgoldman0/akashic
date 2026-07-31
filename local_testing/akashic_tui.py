@@ -11402,7 +11402,7 @@ CREATE _dt-binding VFS-BINDING-DESC-SIZE ALLOT
     S" > 2026-07-10 | A durable note" _dt-line ;
 : _dt-seed  ( -- )
     _DB-CLEAR
-    _DB-K-TASK 0 2026 7 10 DT-YMD>EPOCH -1 S" sentinel" _DB-ADD
+    _DB-K-TASK 0 2026 7 10 DT-YMD>EPOCH-S DROP -1 S" sentinel" _DB-ADD
     0= _dt-assert
     -1 _DB-DIRTY ! ;
 : _dt-short-read  ( buf len offset inode vfs -- actual ior )

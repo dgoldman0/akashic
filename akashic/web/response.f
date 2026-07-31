@@ -157,8 +157,9 @@ VARIABLE _RESP-SL-LEN
 CREATE _RESP-DT-BUF 32 ALLOT
 
 : RESP-DATE  ( -- )
-    DT-NOW-S _RESP-DT-BUF 32 DT-ISO8601     ( written )
-    S" Date" _RESP-DT-BUF ROT HDR-ADD ;
+    DT-NOW-S _RESP-DT-BUF 32 DT-RFC3339-UTC-S
+    DUP IF 2DROP EXIT THEN DROP
+    >R S" Date" _RESP-DT-BUF R> HDR-ADD ;
 
 \ RESP-CACHE ( seconds -- )
 \   Add Cache-Control: max-age=N header.

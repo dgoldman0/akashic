@@ -30,6 +30,7 @@ REQUIRE ../store/block.f
 REQUIRE ../consensus/consensus.f
 REQUIRE ../store/state.f
 REQUIRE ../web/server.f
+REQUIRE ../utils/datetime.f
 
 PROVIDED akashic-node
 
