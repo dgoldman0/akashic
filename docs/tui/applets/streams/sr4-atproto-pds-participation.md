@@ -1,22 +1,29 @@
 # Streams SR4 — AT Protocol/PDS participation
 
-**Prepared:** 2026-07-29; updated 2026-07-30
+**Prepared:** 2026-07-29; updated 2026-07-31
 
 **Status:** active; landings 1 and 2 are complete, landings 3 and 4 remain in
-progress, and landing 6 has started narrowly at authenticated ingress. The
-focused path now qualifies a simultaneously durable DPoP key and active
-session, distinct-owner reconstruction, caller-owned authenticated XRPC,
-strict `400`/`401 use_dpop_nonce` rollover, a PDS-proxied
-`app.bsky.feed.getAuthorFeed` read, bounded feed decoding, and publication of
-the validated raw page through one real per-instance Streams connector and
-the compact flow carrier.
+progress, and landing 6 now reaches authenticated ingress plus bounded
+Streams applet state. The focused path qualifies a simultaneously durable
+DPoP key and active session, distinct-owner reconstruction, caller-owned
+authenticated XRPC, strict `400`/`401 use_dpop_nonce` rollover, a PDS-proxied
+`app.bsky.feed.getAuthorFeed` read, bounded feed decoding, publication through
+one real per-instance connector and compact flow, and transactional admission
+of that exact page into a real Streams instance with retained authenticated
+provenance.
 
-This is a deterministic production-shaped connector-to-flow vertical, not a
-live-network or complete applet claim. The lower cryptography and KDOS peer
-remain deterministic seams; live DNS/socket/TLS/PDS execution, wiring the
-connector into the full Streams presentation/configuration path,
-refresh/logout, repository writes and blobs, pagination/rate policy, raw sync,
-subscriptions, and the recorded broad qualification matrices remain.
+This remains a deterministic production-shaped state-level vertical, not a
+live-network or complete visible applet claim. A development run reached the
+prepare, authenticated exchange, presentation, and close phases, including
+two retained items, truthful provenance, duplicate rejection, and survival
+after XRPC response wiping. The exact committed revision passes its Python
+compile and clean-index static gates. The latest teardown-staged serial rerun
+stopped at bundle 101 of 103 before fixtures or runtime, and the exact commit
+has not completed serial closure; final teardown and a terminal full-pass
+marker are therefore not claimed. Configured-source activation, visible Desk
+rows, live DNS/socket/TLS/PDS execution, refresh/logout, repository writes and
+blobs, pagination/rate policy, raw sync, subscriptions, and the recorded broad
+qualification matrices remain.
 
 **Continuation authority:**
 [Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
@@ -144,11 +151,16 @@ The current SR4 sequence includes:
   buffered read; and
 - `919f9b8` — a caller-owned cooperative XRPC exchange, PDS DPoP nonce
   ownership and bounded retry, terminal secret cleanup, and strict
-  `getSession` identity admission; and
+  `getSession` identity admission;
 - `51ead3a` — generalized `getAuthorFeed` target construction, strict
   `400`/`401 use_dpop_nonce` retry, and one per-instance authenticated Streams
   connector carrying a decoded feed and validated raw page through the compact
-  flow boundary.
+  flow boundary;
+- `42c15a9` — the authenticated ingress evidence and next vertical boundary
+  recorded for continuation; and
+- `63c6636` — applet-local authenticated feed presentation into bounded
+  Streams state with exact connector/event/body provenance, retained revision
+  and sequence, and stale or duplicate same-connector delivery rejection.
 
 These commits do not close landing 3. `ff5bbbd` completes the local
 AT-specific deployment binder: one validated immutable client configuration,
@@ -342,10 +354,21 @@ covers an exact `400 use_dpop_nonce` response and sole retry, nonce rollover
 into the second proof, owner restart, two decoded feed items, cursor and reply
 data, and flow-carrier survival after XRPC response cleanup.
 
+`63c6636` adds the narrow applet composition edge. The presenter revalidates a
+real Streams instance, the connector and current source event, prior bounded
+feed admission, and the exact response-body digest before transactionally
+decoding the page into existing Streams presentation state. It retains the
+connector ID, revision, and sequence, rejects stale or duplicate same-connector
+delivery, and prevents the legacy public refresher from overwriting an
+authenticated page. This is deliberately applet-local composition over the
+general AT connector; it adds no OAuth, transport, XRPC, or PDS primitive to
+Streams.
+
 This still does not claim live DNS, sockets, TLS or PDS execution, a complete
 configured-source lifecycle in the applet, visible authenticated rows in the
 Desk journey, refresh rotation, logout, revocation/reauthorization,
-pagination/rate behavior, cancellation, or the broader deferred matrices.
+pagination/rate behavior, cancellation, final teardown qualification for the
+new state-level edge, or the broader deferred matrices.
 
 ## Accelerated visible Streams vertical
 
@@ -371,13 +394,14 @@ The working vertical adds two qualification profiles:
 
 This is an honest interim product vertical: real RSS over HTTPS plus real
 credential-free Bluesky AppView XRPC in one Streams applet. The newer
-authenticated ingress owner now proves PDS-proxied feed-to-flow composition
-under deterministic peer seams, but it has not yet replaced or been folded
-into this visible applet path. Neither slice claims a raw AT repository/sync
-connector, a unified cross-protocol event timeline, or completion of landing
-3 or landing 6. The exact-host demo authorization remains in the qualification
-composition; no provider-specific trust or demo policy was moved into the
-general Streams, HTTP, syndication, or AT libraries.
+authenticated ingress owner and presenter now prove PDS-proxied feed-to-flow
+composition and transactional applet-state admission under deterministic peer
+seams. That path is not yet driven by configured-source activation and has not
+painted authenticated rows in the Desk journey. Neither slice claims a raw AT
+repository/sync connector, a unified cross-protocol event timeline, or
+completion of landing 3 or landing 6. The exact-host demo authorization
+remains in the qualification composition; no provider-specific trust or demo
+policy was moved into the general Streams, HTTP, syndication, or AT libraries.
 
 Current evidence for this checkpoint is deliberately narrow:
 
@@ -404,10 +428,11 @@ python3 local_testing/akashic_tui.py smoke \
 The following debt is explicit so it can be sequenced without blocking the
 first visible slice:
 
-1. **Integrate authenticated AT with the applet:** connect the qualified
-   per-instance owner to the configured-source lifecycle and common bounded
-   presentation, retaining the existing public Bluesky elements only as
-   reusable presentation code rather than authentication or PDS architecture.
+1. **Finish authenticated AT applet integration:** drive the qualified
+   per-instance owner and committed state-level presenter from the
+   configured-source lifecycle, then paint the retained items through the
+   visible Desk path. Retain existing public Bluesky elements only as reusable
+   presentation code, not as authentication or PDS architecture.
 2. **Continue landing 4:** add the general structured XRPC error projection,
    pagination/rate/retry evidence, repository-operation and blob contracts,
    and atomic/batch writes over caller-owned operation state. The obsolete
@@ -416,11 +441,12 @@ first visible slice:
    input, CAR/DAG-CBOR handling where required, durable cursors, reconnect,
    cancellation, backpressure, and only then the separately qualified
    Jetstream convenience adapter.
-4. **Complete landing 6:** add authenticated AT ingress and generic
-   record/blob egress as real Streams connector instances with event, queue,
-   retry, cursor, cleanup, cold-restart, and deterministic fake-PDS
-   qualification. A live-account capstone remains optional and requires
-   explicit account/credential handoff.
+4. **Complete landing 6:** finish wiring and qualify the existing
+   authenticated AT ingress through configured-source ownership, event,
+   queue, retry, cursor, cleanup, cold restart, and the deterministic fake
+   PDS. Add generic record/blob egress as a real companion connector. A
+   live-account capstone remains optional and requires explicit
+   account/credential handoff.
 5. **Converge the applet presentation:** project durable configured-source
    observations and AT items through a common bounded row/event view with
    truthful source attribution, ordering, search, context/thread behavior,
@@ -438,11 +464,15 @@ At this checkpoint:
 ```text
 repository: /home/kir/Documents/Projects/fantasy-computing/akashic
 branch:     main
-code base:  51ead3a authenticated getAuthorFeed-to-Streams flow vertical
-record:     durable PDS-proxied feed exchange, decode, event, and flow admission
+code base:  63c6636 authenticated feed-to-Streams-state vertical
+record:     PDS-proxied exchange, flow admission, and bounded applet state
 upstream:   origin/main at a04a843
-tests:      static gate plus full serial authenticated feed-to-flow vertical pass
-pending:    full applet integration, live TLS/PDS witness, refresh and AT writes
+evidence:    51ead3a feed-to-flow full pass; presentation phases passed later
+current:     exact 63c6636 Python compile and clean-index static gates pass
+closure:     teardown-staged serial run stopped at bundle 101/103 before runtime
+not claimed: final teardown/full PASS, configured-source activation, visible paint
+pending:     exact clean-export closure, visible integration, live TLS/PDS,
+             refresh, and AT writes
 ```
 
 The latest SR4 and vertical-acceleration commits are:
@@ -472,6 +502,8 @@ bcb1bc1 Replace global AT XRPC with durable authenticated reads
 919f9b8 Drive authenticated AT XRPC reads through HBUF
 d263e05 Advance the SR4 handoff past authenticated getSession
 51ead3a Carry authenticated AT feeds into Streams
+42c15a9 Record the authenticated Streams ingress vertical
+63c6636 Present authenticated AT feeds in Streams state
 ```
 
 `2ae49bc` added `OAUTH2-P256-KEY-PROVISION-*`,
@@ -573,9 +605,20 @@ general AT exchange and bounded feed model with the existing Streams
 connector/event/flow contracts. No OAuth, credential, cryptographic,
 transport, XRPC, or feed-model primitive moved into applet code.
 
-The following remaining dirty paths are preserved user/old-L13 work. They are
-not part of this authenticated-feed checkpoint; do not stage, restore, rewrite,
-or delete them:
+`63c6636` preserves that boundary. The new
+`streams/atproto-author-feed-present.f` is an applet-local admission edge over
+the already-general connector and existing bounded feed model. Its second
+transactional decode intentionally reuses the established Streams replacement
+and navigation boundary until a separately checked generic BFM model-copy API
+exists. Connector ID/revision/sequence retention and overwrite policy are
+Streams concerns; OAuth, PDS, XRPC, transport, and feed parsing remain outside
+the applet.
+
+The authenticated presentation files are committed. The following remaining
+dirty paths are preserved user/old-L13 work; do not stage, restore, rewrite,
+or delete them. In particular, the authenticated additions to `streams.f` are
+in `63c6636`; its remaining modified status is the separate broad
+runtime/source-owner migration.
 
 ```text
  M README.md
@@ -829,6 +872,17 @@ Completed evidence:
   and the flow-owned raw JSON remains valid after XRPC wipe. This does not
   claim a live account, DNS/socket/TLS/PDS execution, or full applet
   presentation integration.
+- The authenticated state-presentation checkpoint at `63c6636` passes Python
+  compilation and the clean-index static gate. Before teardown was separated
+  into shutdown, applet free, fixture release, and authentication finish, a
+  serial development run passed prepare, authenticated exchange,
+  presentation, and close. It installed two items in a real Streams instance,
+  retained truthful `PDS-authenticated / AppView proxy requested` provenance
+  plus connector ID/revision/sequence, rejected duplicate delivery, and kept
+  the applet state valid after XRPC response wiping. The subsequent
+  teardown-staged rerun was stopped after bundle 101 of 103, before fixture
+  loads or runtime. This is useful functional-phase evidence, but it is not a
+  terminal full pass and does not qualify final teardown.
 
 Recorded, non-gating deferrals for this retained-HRES boundary are the broad
 HRES header/outcome/media cross-product, every inline-status pass-through
@@ -926,11 +980,14 @@ authenticated connector without claiming those deferred matrices.
 Recorded, non-gating deferrals for the authenticated author-feed connector
 are broad actor/cursor/filter/capacity/alias and malformed-feed matrices,
 general XRPC error projection, pagination and rate policy, cancellation,
-repeated refreshes, concurrent mutation experiments, and full configured
-source/presentation convergence. The focused gate covers the exact happy path
-plus the security-relevant nonce retry, owner reconstruction, response
-ownership transfer, cleanup, and flow-carrier lifetime needed to continue the
-vertical slice.
+repeated refreshes, concurrent mutation experiments, configured-source
+activation, and visible presentation convergence. The focused connector gate
+covers the exact happy path plus the security-relevant nonce retry, owner
+reconstruction, response ownership transfer, cleanup, and flow-carrier
+lifetime. The newer state-level edge adds exact event/body admission,
+transactional bounded replacement, provenance retention, duplicate rejection,
+and post-XRPC state lifetime, subject to the explicitly pending terminal
+teardown rerun.
 
 Only the focused VFS lookup contract was rerun after adding the generic
 READDIR fallback; the full VFS suite is deferred. A pre-existing
@@ -954,22 +1011,28 @@ delta. Do not run another suite or a test subagent concurrently.
 
 ## Exact next actions
 
-1. Fold the qualified authenticated connector into the applet's configured
-   source and bounded presentation path. Reuse existing public Bluesky row and
-   context elements where useful, but do not retain the public provider as the
-   authentication, session, or PDS architecture.
-2. Run the focused `streams-multiprotocol-composition` marker and the
+1. In the next session, create a clean export or worktree at `63c6636` without
+   disturbing the preserved dirty paths, then run its serial vertical from the
+   beginning through all 103 bundles, every fixture and runtime phase,
+   shutdown, applet free, fixture release, authentication finish, and the
+   terminal marker. Preserve all checked-in limits and do not run another
+   suite concurrently.
+2. Connect the qualified connector and state-level presenter to configured
+   source activation and the visible Desk row path. Reuse existing public
+   Bluesky row and context elements where useful, but do not retain the public
+   provider as the authentication, session, or PDS architecture.
+3. Run the focused `streams-multiprotocol-composition` marker and the
    `desktop-streams-vertical` TAP journey when the required execution window
    and TAP access are available. Fix only blockers to the stated two-protocol
    acceptance; record broader UI/event convergence as debt.
-3. Add the first caller-owned generic repository record write after the
+4. Add the first caller-owned generic repository record write after the
    visible authenticated ingress path is connected; retain Bluesky
    post/reply behavior as an adapter over that primitive.
-4. Keep refresh/logout, pagination/rate policy, blobs, raw sync,
+5. Keep refresh/logout, pagination/rate policy, blobs, raw sync,
    subscriptions, and broad edge matrices documented while the visible
    connector integration is established; implement only a blocker to that
    slice.
-5. Return for a landing-boundary status report before expanding beyond the
+6. Return for a landing-boundary status report before expanding beyond the
    authenticated connector and visible Streams proof.
 
 No live credential, account, public client metadata deployment, redirect
