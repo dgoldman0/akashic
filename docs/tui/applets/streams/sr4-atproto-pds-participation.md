@@ -2,28 +2,29 @@
 
 **Prepared:** 2026-07-29; updated 2026-07-31
 
-**Status:** active; landings 1 and 2 are complete, landings 3 and 4 remain in
-progress, and landing 6 now reaches authenticated ingress plus bounded
-Streams applet state. The focused path qualifies a simultaneously durable
-DPoP key and active session, distinct-owner reconstruction, caller-owned
-authenticated XRPC, strict `400`/`401 use_dpop_nonce` rollover, a PDS-proxied
-`app.bsky.feed.getAuthorFeed` read, bounded feed decoding, publication through
-one real per-instance connector and compact flow, and transactional admission
-of that exact page into a real Streams instance with retained authenticated
-provenance.
+**Status:** active for the broad six-landing program; the practical narrow
+bidirectional slice is complete on `sr4-bidirectional` through `757b47f`.
+Landings 1 and 2 remain complete, landings 3 and 4 remain broad programs in
+progress, landing 5 is not started, and landing 6 now has a qualified
+authenticated state-level ingress-to-egress path. The branch composes durable
+DPoP/session ownership, caller-owned authenticated XRPC, PDS-proxied
+`app.bsky.feed.getAuthorFeed`, exact Bluesky text-record/TID construction, and
+authenticated `createRecord` behind independent per-instance Streams
+connectors.
 
-This remains a deterministic production-shaped state-level vertical, not a
-live-network or complete visible applet claim. A development run reached the
-prepare, authenticated exchange, presentation, and close phases, including
-two retained items, truthful provenance, duplicate rejection, and survival
-after XRPC response wiping. The exact committed revision passes its Python
-compile and clean-index static gates. The latest teardown-staged serial rerun
-stopped at bundle 101 of 103 before fixtures or runtime, and the exact commit
-has not completed serial closure; final teardown and a terminal full-pass
-marker are therefore not claimed. Configured-source activation, visible Desk
-rows, live DNS/socket/TLS/PDS execution, refresh/logout, repository writes and
-blobs, pagination/rate policy, raw sync, subscriptions, and the recorded broad
-qualification matrices remain.
+The final source-mode capstone passes on one machine. It carries the exact
+first authenticated feed item through a real flow, interleaves two live output
+graphs, proves created versus response-loss-uncertain truth, reuses the second
+graph for a no-send/no-effect attempt, and releases flows, connector graphs,
+authentication dependencies, and detached receipt storage in order. This is
+still not a live-network or complete visible applet claim: the capstone
+deliberately excludes `streams.f` and `atproto-author-feed-present.f`.
+Configured-source activation, visible Desk rows, a compose/publish lifecycle,
+delivery/receipt UI, and the earlier `63c6636` presenter's terminal teardown
+closure remain. Live DNS/socket/TLS/PDS execution, refresh/logout, blob and
+broader repository/applyWrites operations beyond the landed caller-owned
+`createRecord`, pagination/rate policy, raw sync, subscriptions, and recorded
+broad matrices also remain.
 
 **Continuation authority:**
 [Streams architectural reset handoff](../../../../../STREAMS_ARCHITECTURAL_RESET_HANDOFF.md)
@@ -90,7 +91,7 @@ committed when qualified instead of accumulating until the landing closes.
 | 3 | AT OAuth discovery, client deployment selection, authorization/token composition, durable session install/recovery/refresh/logout | In progress |
 | 4 | Caller-owned XRPC, structured protocol errors, pagination/rate/retry evidence, repository operations, blob upload/reference, and atomic/batch writes; hard-replace the old global APIs | In progress |
 | 5 | Raw sync/repository export and subscription input, durable cursors, reconnect/cancellation/backpressure, then a Jetstream adapter | Not started |
-| 6 | Streams ingress/egress connectors over SR2/SR3, cold-restart qualification, generic record/blob output, and deterministic fake-PDS capstone; optional live evidence afterward | In progress (authenticated ingress slice) |
+| 6 | Streams ingress/egress connectors over SR2/SR3, cold-restart qualification, generic record/blob output, and deterministic fake-PDS capstone; optional live evidence afterward | In progress (authenticated bidirectional state-level slice complete; applet wiring remains) |
 
 Landing 1 is represented by the production security/OAuth sequence beginning
 at `f6bfec4` and reaching the durable generic session qualification at
@@ -161,6 +162,22 @@ The current SR4 sequence includes:
 - `63c6636` — applet-local authenticated feed presentation into bounded
   Streams state with exact connector/event/body provenance, retained revision
   and sequence, and stale or duplicate same-connector delivery rejection.
+
+The isolated `sr4-bidirectional` continuation at the merged `a63af04`
+baseline adds:
+
+- `5cfe4b4` and `b15d8db` — caller-selected authenticated XRPC methods and
+  exact JSON procedure bodies;
+- `8342c6f`, `a7a3880`, and `1691252` — caller-owned exact AT codecs and the
+  authenticated createRecord owner with detached result storage;
+- `b45b166`, `e37afbe`, and `d29fe58` — checked state-free UTC conversion,
+  caller-owned monotonic TID clocks, and exact Bluesky text records;
+- `3576725` and `89f6ee6` — measurable atomic createRecord body publication
+  and admitted composition geometry;
+- `221901e` — the caller-owned Streams Bluesky text-post connector; and
+- `757b47f` — the authenticated bidirectional source-mode capstone with two
+  live output graphs, exact created/uncertain/no-effect truth, ordered release,
+  and detached receipt inspection.
 
 These commits do not close landing 3. `ff5bbbd` completes the local
 AT-specific deployment binder: one validated immutable client configuration,
@@ -370,10 +387,11 @@ Desk journey, refresh rotation, logout, revocation/reauthorization,
 pagination/rate behavior, cancellation, final teardown qualification for the
 new state-level edge, or the broader deferred matrices.
 
-## Accelerated visible Streams vertical
+## Historical visible Streams vertical checkpoint
 
-The first visible multiprotocol slice no longer waits for all six landings.
-Commit `d503a84` changes the focused Desk profile from the offline
+Before the isolated bidirectional branch, the first visible multiprotocol
+slice was accelerated without waiting for all six landings. Commit `d503a84`
+changes the focused Desk profile from the offline
 `STREAMS-ENTRY` to `STREAMS-ONLINE-ENTRY`. A launched instance therefore owns
 the existing production public-AT provider factory and the configured
 syndication-provider seam while remaining empty until the user selects an
@@ -392,8 +410,8 @@ The working vertical adds two qualification profiles:
   `app.bsky.feed.getAuthorFeed`, proves timeline rows are visible, returns to
   Sources to prove the RSS result remains visible, and closes the instance.
 
-This is an honest interim product vertical: real RSS over HTTPS plus real
-credential-free Bluesky AppView XRPC in one Streams applet. The newer
+This was intended as an interim product vertical: real RSS over HTTPS plus
+real credential-free Bluesky AppView XRPC in one Streams applet. The newer
 authenticated ingress owner and presenter now prove PDS-proxied feed-to-flow
 composition and transactional applet-state admission under deterministic peer
 seams. That path is not yet driven by configured-source activation and has not
@@ -403,7 +421,7 @@ completion of landing 3 or landing 6. The exact-host demo authorization
 remains in the qualification composition; no provider-specific trust or demo
 policy was moved into the general Streams, HTTP, syndication, or AT libraries.
 
-Current evidence for this checkpoint is deliberately narrow:
+Evidence recorded for that historical checkpoint is deliberately narrow:
 
 - the focused online-entry and dependency-boundary packaging checks pass;
 - both new linked images build successfully;
@@ -441,12 +459,14 @@ first visible slice:
    input, CAR/DAG-CBOR handling where required, durable cursors, reconnect,
    cancellation, backpressure, and only then the separately qualified
    Jetstream convenience adapter.
-4. **Complete landing 6:** finish wiring and qualify the existing
-   authenticated AT ingress through configured-source ownership, event,
-   queue, retry, cursor, cleanup, cold restart, and the deterministic fake
-   PDS. Add generic record/blob egress as a real companion connector. A
-   live-account capstone remains optional and requires explicit
-   account/credential handoff.
+4. **Complete landing 6:** connect the now-qualified authenticated ingress and
+   text-post egress owners to configured-source ownership, visible
+   presentation, compose/publish initiation, delivery/receipt state, cleanup,
+   and cold restart. The scripted-peer state-level capstone is green; the full
+   deterministic fake-PDS/Desk witness remains pending. Broader generic
+   repository/blob egress remains required for Landing 6 closure but may
+   follow the next useful applet slice. A live-account capstone is optional,
+   with live evidence requiring explicit account/credential handoff.
 5. **Converge the applet presentation:** project durable configured-source
    observations and AT items through a common bounded row/event view with
    truthful source attribution, ordering, search, context/thread behavior,
@@ -459,20 +479,20 @@ first visible slice:
 
 ## Current repository handoff
 
-At this checkpoint:
+At the current isolated checkpoint:
 
 ```text
-repository: /home/kir/Documents/Projects/fantasy-computing/akashic
-branch:     main
-code base:  63c6636 authenticated feed-to-Streams-state vertical
-record:     PDS-proxied exchange, flow admission, and bounded applet state
-upstream:   origin/main at a04a843
-evidence:    51ead3a feed-to-flow full pass; presentation phases passed later
-current:     exact 63c6636 Python compile and clean-index static gates pass
-closure:     teardown-staged serial run stopped at bundle 101/103 before runtime
-not claimed: final teardown/full PASS, configured-source activation, visible paint
-pending:     exact clean-export closure, visible integration, live TLS/PDS,
-             refresh, and AT writes
+repository: /home/kir/Documents/Projects/fantasy-computing/akashic-sr4-active
+branch:     sr4-bidirectional
+code base:  757b47f authenticated bidirectional state-level vertical
+record:     PDS-proxied ingress, two live text-post graphs, ordered teardown
+baseline:   a63af04 merged sandbox architecture baseline
+evidence:   focused text-post and bidirectional static + source-mode PASS
+closure:    created, uncertain, no-effect, flow/graph release, detached receipt
+capacity:   5,177/8,192 image sectors free; drive max 102M/180M guest steps
+not claimed: 63c presenter teardown closure, configured-source activation,
+             visible paint, compose/publish applet lifecycle, live TLS/PDS
+pending:    scoped applet/Desk integration decision and deterministic witness
 ```
 
 The latest SR4 and vertical-acceleration commits are:
@@ -614,21 +634,11 @@ exists. Connector ID/revision/sequence retention and overwrite policy are
 Streams concerns; OAuth, PDS, XRPC, transport, and feed parsing remain outside
 the applet.
 
-The authenticated presentation files are committed. The following remaining
-dirty paths are preserved user/old-L13 work; do not stage, restore, rewrite,
-or delete them. In particular, the authenticated additions to `streams.f` are
-in `63c6636`; its remaining modified status is the separate broad
-runtime/source-owner migration.
-
-```text
- M README.md
- M akashic/tui/applets/streams/runtime-owner.f
- M akashic/tui/applets/streams/streams.f
- M local_testing/akashic_tui.py
- M local_testing/streams-refresh-owner.f
-?? local_testing/streams-cold-l13-test.f
-?? local_testing/streams_l13_two_boot.py
-```
+The authenticated presentation files are committed. A historical main-tree
+checkpoint also listed seven unrelated dirty runtime/source-owner paths; that
+list does not describe this isolated branch and is intentionally omitted here.
+Do not stage, restore, rewrite, or delete unrelated changes if work later
+returns to the main checkout.
 
 ## Qualification and accelerator facts
 
@@ -656,14 +666,13 @@ assigned to a later acceptance boundary with rationale. Deterministic fake-PDS
 integration and the security, cancellation, corruption, and cleanup behavior
 required by the six-landings ledger remain final acceptance requirements.
 
-The staged MegaPad tests already use the compiled native C++ accelerator.
-`MachineSession` constructs `MegapadSystem`; positive run batches reach
-`_mp64_accel.SystemState.run_full_core_batch()`. Runtime inspection on this
-machine reported the CPython 3.13 `_mp64_accel` shared object and
-`ACCEL_AVAILABLE=True`. The earlier description of the run as
-“instruction-by-instruction Python emulation” was wrong. Python orchestrates
-native batches and exceptional/MMIO continuations; it is not the normal CPU
-interpreter.
+Current exact-single-full-core, zero-cluster qualification automatically uses
+MegaPad `79dedba`'s timing-correct native scheduler fast path. `MachineSession`
+still constructs `MegapadSystem`, and Python orchestrates native batches plus
+exceptional/MMIO continuations rather than interpreting the normal CPU path
+instruction by instruction. This is independent of userland compilation:
+source-mode evidence still loads and compiles the Forth sources and does not
+claim a precompiled module cache.
 
 The guest Forth compiler JIT is a separate mechanism. KDOS enables it while
 compiling KDOS and disables it at the end. The staged AT OAuth runner enters
@@ -1011,29 +1020,26 @@ delta. Do not run another suite or a test subagent concurrently.
 
 ## Exact next actions
 
-1. In the next session, create a clean export or worktree at `63c6636` without
-   disturbing the preserved dirty paths, then run its serial vertical from the
-   beginning through all 103 bundles, every fixture and runtime phase,
-   shutdown, applet free, fixture release, authentication finish, and the
-   terminal marker. Preserve all checked-in limits and do not run another
-   suite concurrently.
-2. Connect the qualified connector and state-level presenter to configured
-   source activation and the visible Desk row path. Reuse existing public
-   Bluesky row and context elements where useful, but do not retain the public
-   provider as the authentication, session, or PDS architecture.
-3. Run the focused `streams-multiprotocol-composition` marker and the
-   `desktop-streams-vertical` TAP journey when the required execution window
-   and TAP access are available. Fix only blockers to the stated two-protocol
-   acceptance; record broader UI/event convergence as debt.
-4. Add the first caller-owned generic repository record write after the
-   visible authenticated ingress path is connected; retain Bluesky
-   post/reply behavior as an adapter over that primitive.
-5. Keep refresh/logout, pagination/rate policy, blobs, raw sync,
-   subscriptions, and broad edge matrices documented while the visible
-   connector integration is established; implement only a blocker to that
-   slice.
-6. Return for a landing-boundary status report before expanding beyond the
-   authenticated connector and visible Streams proof.
+1. Treat `757b47f` as closure of the narrow protocol/runtime slice; do not
+   reopen datetime, TID, text encoding, createRecord, or the connector merely
+   to begin applet work.
+2. Scope the next landing explicitly around a useful applet: configured
+   authenticated-source activation, the existing checked presenter and Desk
+   rows, plus a compose/publish owner that drives the qualified text-post
+   connector and renders delivered/uncertain/no-effect truth with URI/CID.
+3. Finish the earlier `63c6636` presentation teardown witness inside that
+   applet landing. The `757b47f` capstone deliberately excludes `streams.f`
+   and `atproto-author-feed-present.f`, so it does not substitute for this
+   evidence.
+4. Add one deterministic fake-PDS/Desk vertical covering lifecycle init,
+   authenticated refresh, visible retained rows, user-triggered publication,
+   polling/cancellation/cleanup, receipt display, close, and relaunch. Keep
+   exact single-core source-mode execution and checked-in limits.
+5. Keep refresh/logout policy, broad pagination/rate matrices, blobs,
+   applyWrites, raw sync, subscriptions, Jetstream, and live-account evidence
+   deferred unless one is a demonstrated blocker to the useful applet slice.
+6. Return for a landing-boundary review before expanding into broad Landing 4
+   or Landing 5 work.
 
 No live credential, account, public client metadata deployment, redirect
 registration, or user secret is needed for the next actions. Ask for those
