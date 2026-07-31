@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify one durable authenticated AT XRPC GET and buffered read."""
+"""Qualify durable authenticated AT XRPC queries and JSON procedures."""
 
 from __future__ import annotations
 
@@ -170,6 +170,12 @@ RUNTIME_STAGES = (
         MAX_PHASE_STEPS,
     ),
     (
+        "procedure-build",
+        "_ATXR-BUILD-PROCEDURE",
+        "AT XRPC PROCEDURE READY",
+        MAX_PHASE_STEPS,
+    ),
+    (
         "buffered-read",
         "_ATXR-READ",
         "AT XRPC RESPONSE READY",
@@ -324,6 +330,7 @@ def _assert_static_contracts() -> None:
         "_ATXR-INSTALL",
         "_ATXR-RESTART",
         "_ATXR-BUILD",
+        "_ATXR-BUILD-PROCEDURE",
         "_ATXR-READ",
         "_ATXR-FINISH",
         "O2SESSION-RECORD-SIZE CVAULT-BACKING-SIZE",
@@ -337,7 +344,9 @@ def _assert_static_contracts() -> None:
         "OAUTH2-P256-KEY-BINDING-INIT",
         "O2SESSION-INSTALL",
         "O2SESSION-OPEN",
-        "AT-XRPC-AUTH-GET-BUILD",
+        "AT-XRPC-AUTH-REQUEST-BUILD",
+        "AT-XRPC-METHOD-POST",
+        "Content-Type: application/json",
         "com.atproto.server.getSession",
         "Authorization: DPoP access-vertical",
         "DPoP: deterministic-dpop-proof",
@@ -355,7 +364,7 @@ def _assert_static_contracts() -> None:
     assert _word_count(fixture, "OAUTH2-P256-KEY-SLOT-LOAD-DPOP") == 1
     assert _word_count(fixture, "O2SESSION-INSTALL") == 1
     assert _word_count(fixture, "O2SESSION-OPEN") == 1
-    assert _word_count(fixture, "AT-XRPC-AUTH-GET-BUILD") == 1
+    assert _word_count(fixture, "AT-XRPC-AUTH-REQUEST-BUILD") == 2
     assert _word_count(fixture, "HBUF-START") == 1
     assert not re.search(
         r"(?i)(?<![A-Za-z0-9_-])(?:\?DO|DO|\+LOOP|LOOP)"
@@ -373,9 +382,9 @@ def _assert_static_contracts() -> None:
         assert restart.index(earlier) < restart.index(later)
     build = _word_body(fixture, "_ATXR-BUILD")
     assert build.index("_O2PKD-RESET") < build.index(
-        "AT-XRPC-AUTH-GET-BUILD"
+        "AT-XRPC-AUTH-REQUEST-BUILD"
     )
-    assert build.index("AT-XRPC-AUTH-GET-BUILD") < build.index(
+    assert build.index("AT-XRPC-AUTH-REQUEST-BUILD") < build.index(
         "Authorization: DPoP access-vertical"
     )
     read = _word_body(fixture, "_ATXR-READ")
@@ -398,9 +407,12 @@ def _assert_static_contracts() -> None:
         "nsid.f",
     ]
     for marker in (
-        "AT-XRPC-AUTH-GET-INPUT-SIZE",
-        "AT-XRPC-AUTH-GET-WORKSPACE-SIZE",
-        "AT-XRPC-AUTH-GET-BUILD",
+        "AT-XRPC-AUTH-REQUEST-INPUT-SIZE",
+        "AT-XRPC-AUTH-REQUEST-WORKSPACE-SIZE",
+        "AT-XRPC-AUTH-REQUEST-BUILD",
+        "AT-XRPC-METHOD-GET",
+        "AT-XRPC-METHOD-POST",
+        "HREQ-BODY",
         "HTARGET-HTU$",
         "OAUTH2-P256-KEY-DPOP-PROOF",
         "O2SESSION-WITH-ACCESS",
@@ -447,6 +459,7 @@ def _assert_static_contracts() -> None:
         "install",
         "owner-restart",
         "request-build",
+        "procedure-build",
         "buffered-read",
         "finish",
     ]

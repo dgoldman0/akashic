@@ -1,8 +1,8 @@
 # Authenticated XRPC request construction
 
 `akashic/atproto/xrpc.f` builds one caller-owned authenticated AT Protocol
-query request. It replaces the former process-global host, bearer, cursor,
-URL, and response buffers with explicit owners:
+query or JSON procedure request. It replaces the former process-global host,
+bearer, cursor, URL, and response buffers with explicit owners:
 
 - a ready AT OAuth profile selects the account PDS and issuer;
 - an immutable AT OAuth client configuration selects one DPoP-only P-256
@@ -22,37 +22,46 @@ is a sealed `HREQ` ready for a cooperative transport owner.
 ## Public API
 
 ```forth
-AT-XRPC-AUTH-GET-INPUT-SIZE
+AT-XRPC-AUTH-REQUEST-INPUT-SIZE
 
-AT-XRPC-AUTH-GET-I.IAT
-AT-XRPC-AUTH-GET-I.VAULT
-AT-XRPC-AUTH-GET-I.CONFIG
-AT-XRPC-AUTH-GET-I.PROFILE
-AT-XRPC-AUTH-GET-I.SESSION
-AT-XRPC-AUTH-GET-I.TARGET
-AT-XRPC-AUTH-GET-I.NONCE-A
-AT-XRPC-AUTH-GET-I.NONCE-U
-AT-XRPC-AUTH-GET-I.PROXY-A
-AT-XRPC-AUTH-GET-I.PROXY-U
-AT-XRPC-AUTH-GET-I.REQUEST-A
-AT-XRPC-AUTH-GET-I.REQUEST-CAP
-AT-XRPC-AUTH-GET-I.REQUEST
+AT-XRPC-AUTH-REQUEST-I.IAT
+AT-XRPC-AUTH-REQUEST-I.VAULT
+AT-XRPC-AUTH-REQUEST-I.CONFIG
+AT-XRPC-AUTH-REQUEST-I.PROFILE
+AT-XRPC-AUTH-REQUEST-I.SESSION
+AT-XRPC-AUTH-REQUEST-I.TARGET
+AT-XRPC-AUTH-REQUEST-I.NONCE-A
+AT-XRPC-AUTH-REQUEST-I.NONCE-U
+AT-XRPC-AUTH-REQUEST-I.PROXY-A
+AT-XRPC-AUTH-REQUEST-I.PROXY-U
+AT-XRPC-AUTH-REQUEST-I.REQUEST-A
+AT-XRPC-AUTH-REQUEST-I.REQUEST-CAP
+AT-XRPC-AUTH-REQUEST-I.REQUEST
+AT-XRPC-AUTH-REQUEST-I.METHOD
+AT-XRPC-AUTH-REQUEST-I.BODY-A
+AT-XRPC-AUTH-REQUEST-I.BODY-U
 
-AT-XRPC-AUTH-GET-INPUT-CLEAR      ( input -- status )
-AT-XRPC-AUTH-GET-WORKSPACE-SIZE
-AT-XRPC-AUTH-GET-WORKSPACE-CLEAR  ( workspace -- status )
-AT-XRPC-AUTH-GET-BUILD            ( input workspace -- status )
+AT-XRPC-METHOD-GET
+AT-XRPC-METHOD-POST
+
+AT-XRPC-AUTH-REQUEST-INPUT-CLEAR      ( input -- status )
+AT-XRPC-AUTH-REQUEST-WORKSPACE-SIZE
+AT-XRPC-AUTH-REQUEST-WORKSPACE-CLEAR  ( workspace -- status )
+AT-XRPC-AUTH-REQUEST-BUILD            ( input workspace -- status )
 ```
 
 `IAT` is trusted Unix epoch seconds supplied by the higher operation owner.
-`NONCE-A/U` and `PROXY-A/U` are optional canonical spans: absent means
-`0 0`. `TARGET` is an already parsed `HTARGET`. `REQUEST` must name fresh
-all-zero `HTTP-REQUEST-SIZE` storage, and `REQUEST-A/CAP` names its disjoint
-caller-owned wire arena.
+`NONCE-A/U`, `PROXY-A/U`, and `BODY-A/U` are optional canonical spans: absent
+means `0 0`. `TARGET` is an already parsed `HTARGET`. `METHOD` is exactly
+`AT-XRPC-METHOD-GET` or `AT-XRPC-METHOD-POST`. GET requires an absent body;
+POST copies the supplied bytes as an `application/json` body and excludes a
+query component. `REQUEST` must name fresh all-zero `HTTP-REQUEST-SIZE`
+storage, and `REQUEST-A/CAP` names its disjoint caller-owned wire arena. No
+body-size policy is imposed beyond the actual capacity of that arena.
 
 ## Exact request boundary
 
-`AT-XRPC-AUTH-GET-BUILD` admits the complete caller geometry before changing
+`AT-XRPC-AUTH-REQUEST-BUILD` admits the complete caller geometry before changing
 request storage. It then:
 
 1. qualifies the immutable client configuration against the ready AT OAuth
@@ -64,8 +73,8 @@ request storage. It then:
 4. loans and compares the exact session binding and issuer, then requires
    token type `DPoP` and exact `atproto` membership in the OAuth scope;
 5. loans the access token once, builds its `ath`-bound P-256 DPoP proof for
-   method `GET` and query-free `HTARGET-HTU$`, and copies both values directly
-   into the caller-owned request;
+   the exact GET or POST method and query-free `HTARGET-HTU$`, and copies both
+   values directly into the caller-owned request;
 6. seals the request and verifies that the session generation and active
    phase did not change.
 
@@ -83,6 +92,9 @@ User-Agent: akashic-atproto/1
 Connection: close
 ```
 
+POST additionally carries `Content-Type: application/json`, its exact
+`Content-Length`, and the copied caller body. GET is sealed without a body.
+
 The proof HTU excludes the query as required by DPoP even though the HTTP
 request target retains it. Non-default HTTPS ports are retained in both the
 canonical HTU and `Host`.
@@ -98,13 +110,11 @@ for an immediate rebuild. The closed status vocabulary preserves capacity,
 alias, caller-memory, profile, session, binding, token, target, proof, request,
 and stale-generation classes.
 
-The caller-owned `AT-XRPC-EXCHANGE-*` transport owner now handles exactly one
+The caller-owned `AT-XRPC-EXCHANGE-*` transport owner handles exactly one
 fresh-proof retry after a strict PDS `400` or `401 use_dpop_nonce` challenge.
 It replaces the retained nonce before rebuilding and treats any second
-response as terminal. The focused author-feed vertical witnesses the `400`
-path and subsequent nonce rotation. General structured XRPC error projection,
-pagination, POST procedures, refresh, logout, repository CRUD, and long-lived
-connection reuse remain outside this request-construction boundary.
+response as terminal. Exchange ownership of procedure bodies and write-effect
+truth remains a separate layer over this state-free construction boundary.
 
 See the protocol's
 [XRPC and PDS service-proxy specification](https://atproto.com/specs/xrpc)

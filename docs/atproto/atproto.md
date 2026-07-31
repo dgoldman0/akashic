@@ -448,9 +448,9 @@ being preserved in parallel.
 
 | Word | Stack | Purpose |
 |---|---|---|
-| `AT-XRPC-AUTH-GET-INPUT-CLEAR` | `( input -- status )` | Clear the caller input descriptor |
-| `AT-XRPC-AUTH-GET-WORKSPACE-CLEAR` | `( workspace -- status )` | Wipe transient proof/build storage |
-| `AT-XRPC-AUTH-GET-BUILD` | `( input workspace -- status )` | Seal one OAuth/DPoP-authenticated PDS GET |
+| `AT-XRPC-AUTH-REQUEST-INPUT-CLEAR` | `( input -- status )` | Clear the caller input descriptor |
+| `AT-XRPC-AUTH-REQUEST-WORKSPACE-CLEAR` | `( workspace -- status )` | Wipe transient proof/build storage |
+| `AT-XRPC-AUTH-REQUEST-BUILD` | `( input workspace -- status )` | Seal one OAuth/DPoP-authenticated PDS query or JSON procedure |
 | `AT-XRPC-STATUS-VALID?` | `( status -- flag )` | Recognize the closed published status vocabulary |
 
 ### feed-model.f
@@ -532,10 +532,10 @@ _T1 _T2 TID-COMPARE .    \ → -1 (T1 < T2, generated earlier)
 Prepare an exact HTTPS `HTARGET`, a fresh `HREQ` descriptor and wire arena,
 the ready OAuth client/profile, a reopened durable session, its shared
 credential vault, and trusted epoch seconds in
-`AT-XRPC-AUTH-GET-INPUT-SIZE` bytes. Then call:
+`AT-XRPC-AUTH-REQUEST-INPUT-SIZE` bytes. Then call:
 
 ```forth
-_xrpc-input _xrpc-work AT-XRPC-AUTH-GET-BUILD
+_xrpc-input _xrpc-work AT-XRPC-AUTH-REQUEST-BUILD
 AT-XRPC-S-OK = IF
   \ The caller-owned HREQ is sealed. Attach it to the cooperative
   \ HTTP/TLS operation owner, then clear it after transport detaches.

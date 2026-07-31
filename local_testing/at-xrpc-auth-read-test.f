@@ -420,9 +420,9 @@ VARIABLE _atxr-r-resolver-context
     OAUTH2-SESSION-SIZE _atxr-session-b _atxr-allocate
     OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE
         _atxr-key-work _atxr-allocate
-    AT-XRPC-AUTH-GET-INPUT-SIZE
+    AT-XRPC-AUTH-REQUEST-INPUT-SIZE
         _atxr-xrpc-input _atxr-allocate
-    AT-XRPC-AUTH-GET-WORKSPACE-SIZE
+    AT-XRPC-AUTH-REQUEST-WORKSPACE-SIZE
         _atxr-xrpc-work _atxr-allocate
     _ATXR-REQUEST-CAPACITY
         _atxr-request-arena _atxr-allocate
@@ -437,8 +437,8 @@ VARIABLE _atxr-r-resolver-context
     _atxr-session-a @ OAUTH2-SESSION-SIZE 0 FILL
     _atxr-session-b @ OAUTH2-SESSION-SIZE 0 FILL
     _atxr-key-work @ OAUTH2-P256-KEY-DPOP-WORKSPACE-SIZE 0 FILL
-    _atxr-xrpc-input @ AT-XRPC-AUTH-GET-INPUT-SIZE 0 FILL
-    _atxr-xrpc-work @ AT-XRPC-AUTH-GET-WORKSPACE-SIZE 0 FILL
+    _atxr-xrpc-input @ AT-XRPC-AUTH-REQUEST-INPUT-SIZE 0 FILL
+    _atxr-xrpc-work @ AT-XRPC-AUTH-REQUEST-WORKSPACE-SIZE 0 FILL
     _atxr-request-arena @ _ATXR-REQUEST-CAPACITY 0 FILL
     _atxr-sent @ _ATXR-REQUEST-CAPACITY 0 FILL
 
@@ -593,34 +593,34 @@ VARIABLE _atxr-r-resolver-context
     _atxr-target HTARGET-VALID? _atxr-assert
 
     _atxr-request HTTP-REQUEST-SIZE 0 FILL
-    _atxr-xrpc-input @ AT-XRPC-AUTH-GET-INPUT-CLEAR
+    _atxr-xrpc-input @ AT-XRPC-AUTH-REQUEST-INPUT-CLEAR
     AT-XRPC-S-OK _atxr-status
     _ATXR-IAT
-        _atxr-xrpc-input @ AT-XRPC-AUTH-GET-I.IAT !
+        _atxr-xrpc-input @ AT-XRPC-AUTH-REQUEST-I.IAT !
     _atxr-active-vault @
-        _atxr-xrpc-input @ AT-XRPC-AUTH-GET-I.VAULT !
+        _atxr-xrpc-input @ AT-XRPC-AUTH-REQUEST-I.VAULT !
     _atoct-config
-        _atxr-xrpc-input @ AT-XRPC-AUTH-GET-I.CONFIG !
+        _atxr-xrpc-input @ AT-XRPC-AUTH-REQUEST-I.CONFIG !
     _atopt-profile
-        _atxr-xrpc-input @ AT-XRPC-AUTH-GET-I.PROFILE !
+        _atxr-xrpc-input @ AT-XRPC-AUTH-REQUEST-I.PROFILE !
     _atxr-active-session @
-        _atxr-xrpc-input @ AT-XRPC-AUTH-GET-I.SESSION !
+        _atxr-xrpc-input @ AT-XRPC-AUTH-REQUEST-I.SESSION !
     _atxr-target
-        _atxr-xrpc-input @ AT-XRPC-AUTH-GET-I.TARGET !
+        _atxr-xrpc-input @ AT-XRPC-AUTH-REQUEST-I.TARGET !
     _atxr-request-arena @
-        _atxr-xrpc-input @ AT-XRPC-AUTH-GET-I.REQUEST-A !
+        _atxr-xrpc-input @ AT-XRPC-AUTH-REQUEST-I.REQUEST-A !
     _ATXR-REQUEST-CAPACITY
-        _atxr-xrpc-input @ AT-XRPC-AUTH-GET-I.REQUEST-CAP !
+        _atxr-xrpc-input @ AT-XRPC-AUTH-REQUEST-I.REQUEST-CAP !
     _atxr-request
-        _atxr-xrpc-input @ AT-XRPC-AUTH-GET-I.REQUEST !
+        _atxr-xrpc-input @ AT-XRPC-AUTH-REQUEST-I.REQUEST !
 
-    _atxr-xrpc-work @ AT-XRPC-AUTH-GET-WORKSPACE-SIZE
+    _atxr-xrpc-work @ AT-XRPC-AUTH-REQUEST-WORKSPACE-SIZE
         0xC3 FILL
     _O2PKD-RESET
     _atxr-xrpc-input @ _atxr-xrpc-work @
-    AT-XRPC-AUTH-GET-BUILD
+    AT-XRPC-AUTH-REQUEST-BUILD
     AT-XRPC-S-OK _atxr-status
-    _atxr-xrpc-work @ AT-XRPC-AUTH-GET-WORKSPACE-SIZE
+    _atxr-xrpc-work @ AT-XRPC-AUTH-REQUEST-WORKSPACE-SIZE
         _atxr-zero? _atxr-assert
     _atxr-request HREQ.STATE @
         HREQ-STATE-SEALED = _atxr-assert
@@ -656,6 +656,42 @@ VARIABLE _atxr-r-resolver-context
     S" Connection: close"
         _atxr-request-contains? _atxr-assert
     _atxr-stack ;
+
+: _ATXR-BUILD-PROCEDURE  ( -- )
+    _atxr-request HTTP-REQUEST-SIZE 0 FILL
+    AT-XRPC-METHOD-POST
+        _atxr-xrpc-input @ AT-XRPC-AUTH-REQUEST-I.METHOD !
+    S" {}"
+    DUP _atxr-xrpc-input @ AT-XRPC-AUTH-REQUEST-I.BODY-U !
+    SWAP _atxr-xrpc-input @ AT-XRPC-AUTH-REQUEST-I.BODY-A !
+    DROP
+    _atxr-xrpc-work @ AT-XRPC-AUTH-REQUEST-WORKSPACE-SIZE
+        0xC3 FILL
+    _O2PKD-RESET
+    _atxr-xrpc-input @ _atxr-xrpc-work @
+    AT-XRPC-AUTH-REQUEST-BUILD
+    AT-XRPC-S-OK _atxr-status
+    _atxr-xrpc-work @ AT-XRPC-AUTH-REQUEST-WORKSPACE-SIZE
+        _atxr-zero? _atxr-assert
+    _atxr-request HREQ.STATE @
+        HREQ-STATE-SEALED = _atxr-assert
+
+    _O2PKD-DPOP-CALLS @ 1 = _atxr-assert
+    _O2PKD-DPOP-HTM-A @ _O2PKD-DPOP-HTM-U @
+        S" POST" COMPARE 0= _atxr-assert
+    S" POST /xrpc/com.atproto.server.getSession HTTP/1.1"
+        _atxr-request-contains? _atxr-assert
+    S" Content-Type: application/json"
+        _atxr-request-contains? _atxr-assert
+    S" Content-Length: 2"
+        _atxr-request-contains? _atxr-assert
+    _atxr-request HREQ.BUFFER @
+    _atxr-request HREQ.LENGTH @ 2 -
+    S" {}" COMPARE 0= _atxr-assert
+
+    \ Leave the original authenticated query sealed for the buffered-read
+    \ phase; the procedure build above is an independent construction gate.
+    _ATXR-BUILD ;
 
 \ =====================================================================
 \  Tiny fake NIO transport and exact HBUF 200 response
@@ -826,11 +862,11 @@ VARIABLE _atxr-io-n
         _ATXR-REQUEST-CAPACITY 0 FILL
     THEN
     _atxr-xrpc-input @ ?DUP IF
-        AT-XRPC-AUTH-GET-INPUT-CLEAR
+        AT-XRPC-AUTH-REQUEST-INPUT-CLEAR
         AT-XRPC-S-OK _atxr-status
     THEN
     _atxr-xrpc-work @ ?DUP IF
-        AT-XRPC-AUTH-GET-WORKSPACE-CLEAR
+        AT-XRPC-AUTH-REQUEST-WORKSPACE-CLEAR
         AT-XRPC-S-OK _atxr-status
     THEN
     _atxr-key-work @ ?DUP IF

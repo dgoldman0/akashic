@@ -588,7 +588,7 @@ builder required by DPoP without placing AT token policy in `akashic/net/`.
 by the production RAM-VFS-backed vault without adding AT policy to the VFS.
 The current checkpoint hard-replaces the obsolete process-global XRPC client,
 AT-local session singleton, and repository wrapper. The new
-`AT-XRPC-AUTH-GET-BUILD` is a state-free AT composition over caller-owned HTTP
+`AT-XRPC-AUTH-REQUEST-BUILD` is a state-free AT composition over caller-owned HTTP
 target/request storage plus the generic OAuth client, durable session,
 credential vault, and P-256 key owners. The supporting VFS change is likewise
 general rather than Streams- or AT-specific. Streams policy and UI code are
