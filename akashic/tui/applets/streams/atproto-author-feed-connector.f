@@ -30,6 +30,7 @@ REQUIRE ../../../atproto/get-author-feed.f
 REQUIRE ../../../atproto/xrpc-exchange.f
 REQUIRE ../../../atproto/feed-model.f
 REQUIRE flow-core.f
+REQUIRE atproto.f
 
 \ =====================================================================
 \  Closed public vocabulary
@@ -54,11 +55,6 @@ REQUIRE flow-core.f
 : AT-AUTHOR-FEED-CONNECTOR-STATUS-VALID?  ( status -- flag )
     DUP AT-AUTHOR-FEED-CONNECTOR-S-OK >=
     SWAP AT-AUTHOR-FEED-CONNECTOR-S-INTERNAL <= AND ;
-
-\ Four-byte local registry values.  They name the AT Protocol producer and
-\ an app.bsky author-feed JSON page without pretending to be wire media IDs.
-0x61747072 CONSTANT STREAMS-PROTOCOL-ATPROTO       \ "atpr"
-0x62736B79 CONSTANT STREAMS-MEDIA-BSKY-FEED-JSON  \ "bsky"
 
 -4741 CONSTANT AT-AUTHOR-FEED-CONNECTOR-XERR-INVALID
 -4742 CONSTANT AT-AUTHOR-FEED-CONNECTOR-XERR-DECODE
