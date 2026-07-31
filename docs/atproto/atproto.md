@@ -22,7 +22,7 @@ REQUIRE oauth-profile-hres.f \ OAuth discovery over HTTPS resources
 REQUIRE oauth-client.f \ AT policy over generic OAuth client configuration
 REQUIRE oauth-deployment.f \ local Client ID Metadata deployment binding
 REQUIRE oauth-grant.f \ AT token policy over generic OAuth grants
-REQUIRE tid.f      \ TID generation + comparison
+REQUIRE tid.f      \ caller-owned TID clocks, validation, comparison
 REQUIRE xrpc.f     \ caller-owned authenticated XRPC request construction
 REQUIRE create-record.f \ exact authenticated createRecord operation
 REQUIRE feed-model.f \ owned app.bsky timeline response model
@@ -303,23 +303,43 @@ Bits 9–0:   Clock ID (10 bits, 0–1023)
 Index 0 = `2`, index 31 = `z`.  Characters sort lexicographically
 in timestamp order.
 
-### TID-NOW
+### Caller-owned clocks
+
+A clock is a caller-owned, eight-byte-aligned 24-byte object containing a
+fixed ID in `0..1023` and the last committed logical microsecond. The module
+does not read `EPOCH@` or own a process-wide counter.
 
 ```forth
-TID-NOW  ( dst -- )
+TID-CLOCK-INIT     ( clock-id clock -- status )
+TID-CLOCK-VALID?   ( clock -- flag )
+TID-CLOCK-NEXT-MS  ( epoch-ms destination capacity clock -- status )
 ```
 
-Generate a 13-character TID at `dst`.  Uses `EPOCH@` (milliseconds)
-multiplied by 1000 for approximate microsecond resolution.  Clock ID
-auto-increments on each call and wraps at 1023.
+`TID-CLOCK-NEXT-MS` converts trusted Unix epoch milliseconds to physical
+microseconds, then chooses the greater of physical time and the prior logical
+microsecond plus one. Equal and backward physical inputs therefore remain
+strictly increasing. The fixed clock ID is encoded into the low ten bits; it
+does not wrap or mutate.
 
-### TID-COMPARE
+Generation qualifies the complete caller-advertised output span and rejects
+overlap with the clock. Every failure preserves both output and clock. Success
+publishes all 13 bytes before committing the new logical microsecond.
+
+### Validation and comparison
 
 ```forth
-TID-COMPARE  ( tid1 tid2 -- n )
+TID-VALIDATE  ( address length -- status )
+TID-VALID?    ( address length -- flag )
+TID-COMPARE   ( tid-a tid-b -- order )
 ```
 
-Lexicographic comparison of two 13-byte TIDs.
+Validation enforces exact length, the base32-sort alphabet, and the restricted
+first character `234567abcdefghij`. `TID-COMPARE` performs lexicographic
+comparison of two already admitted 13-byte TIDs.
+
+The explicit status classes are `TID-S-OK`, `TID-S-INVALID`,
+`TID-S-CAPACITY`, `TID-S-ALIAS`, `TID-S-SYNTAX`, `TID-S-RANGE`,
+`TID-S-PROTECTED`, `TID-S-PLATFORM`, and `TID-S-EXHAUSTED`.
 
 Returns:
 - `-1` if tid1 < tid2
@@ -441,8 +461,15 @@ API is preserved in parallel.
 
 | Word | Stack | Purpose |
 |---|---|---|
-| `TID-NOW` | `( dst -- )` | Generate 13-char TID |
-| `TID-COMPARE` | `( tid1 tid2 -- n )` | Compare two TIDs |
+| `TID-LENGTH` | `( -- 13 )` | Exact encoded length |
+| `TID-CLOCK-SIZE` | `( -- 24 )` | Caller clock object size |
+| `TID-STATUS-VALID?` | `( status -- flag )` | Admit the status vocabulary |
+| `TID-VALIDATE` | `( address length -- status )` | Validate exact TID syntax |
+| `TID-VALID?` | `( address length -- flag )` | Boolean syntax convenience |
+| `TID-COMPARE` | `( tid-a tid-b -- order )` | Compare admitted TIDs |
+| `TID-CLOCK-INIT` | `( clock-id clock -- status )` | Initialize a fixed-ID clock |
+| `TID-CLOCK-VALID?` | `( clock -- flag )` | Inspect clock shape/state |
+| `TID-CLOCK-NEXT-MS` | `( epoch-ms destination capacity clock -- status )` | Publish the next TID |
 
 ### xrpc.f
 
@@ -522,12 +549,15 @@ DID-S-OK = IF TYPE ELSE 2DROP THEN        \ → web
 ### Generate and compare TIDs
 
 ```forth
+CREATE _TC-RAW TID-CLOCK-SIZE 7 + ALLOT
+: _TC  _TC-RAW 7 + -8 AND ;
 CREATE _T1 16 ALLOT
 CREATE _T2 16 ALLOT
-_T1 TID-NOW
-_T2 TID-NOW
+7 _TC TID-CLOCK-INIT DROP
+1718465400123 _T1 16 _TC TID-CLOCK-NEXT-MS DROP
+1718465400123 _T2 16 _TC TID-CLOCK-NEXT-MS DROP
 _T1 13 TYPE              \ → e.g. 3kfg7h2abc222
-_T1 _T2 TID-COMPARE .    \ → -1 (T1 < T2, generated earlier)
+_T1 _T2 TID-COMPARE .    \ → -1 (logical time advanced by one)
 ```
 
 ### Authenticated XRPC
@@ -556,7 +586,8 @@ state belongs to the response/connector owner rather than XRPC globals.
   (for `STR-INDEX`).
 - **did.f** — requires caller-span and memory-span qualification.
 - **handle.f** — requires caller-span and memory-span qualification.
-- **tid.f** — standalone, uses BIOS `EPOCH@` for timestamps.
+- **tid.f** — requires caller-span and memory-span qualification; trusted Unix
+  epoch milliseconds are injected by the caller.
 - **xrpc.f** — composes caller-owned HTTP target/request, AT OAuth
   client/profile policy, generic durable OAuth session, credential vault, and
   vault-backed P-256 DPoP proof owners.
@@ -579,9 +610,9 @@ The identity syntax modules contain no mutable module operation state.
 
 ### tid.f — prefixed `_TID-`
 
-- `_TID-ALPHA` — 32-byte base32-sort lookup table
-- `_TID-VAL` — 64-bit value being encoded
-- `_TID-CLK` — clock ID counter (wraps at 1023)
+The module has no mutable operation state or clock singleton. Its private
+constants describe the 24-byte caller-owned clock layout, the representable
+53-bit microsecond bound, and arithmetic base32-sort mapping.
 
 ### xrpc.f — prefixed `_ATX-`
 

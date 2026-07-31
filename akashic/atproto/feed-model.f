@@ -13,6 +13,7 @@ PROVIDED akashic-atproto-feed-model
 REQUIRE ../utils/json.f
 REQUIRE ../utils/string.f
 REQUIRE ../text/utf8.f
+REQUIRE tid.f
 
 0 CONSTANT BFM-S-OK
 1 CONSTANT BFM-S-INVALID
@@ -323,19 +324,6 @@ VARIABLE _BFM-DID-METHOD-END
     LOOP
     _BFM-DID-A @ _BFM-DID-U @ 1- + C@ _BFM-DID-END-CHAR? ;
 
-: _BFM-TID-CHAR?  ( char -- flag )
-    DUP [CHAR] 2 >= OVER [CHAR] 7 <= AND >R
-    DUP [CHAR] a >= SWAP [CHAR] z <= AND R> OR ;
-
-: _BFM-TID?  ( addr len -- flag )
-    DUP 13 <> IF 2DROP 0 EXIT THEN
-    OVER C@ DUP [CHAR] 2 >= OVER [CHAR] 7 <= AND >R
-    DUP [CHAR] a >= SWAP [CHAR] j <= AND R> OR 0= IF 2DROP 0 EXIT THEN
-    13 1 ?DO
-        OVER I + C@ _BFM-TID-CHAR? 0= IF 2DROP 0 UNLOOP EXIT THEN
-    LOOP
-    2DROP -1 ;
-
 : _BFM-POST-URI?  ( addr len -- flag )
     _BFM-PU-U ! _BFM-PU-A !
     _BFM-PU-A @ _BFM-PU-U @ _BFM-NO-CONTROL? 0= IF 0 EXIT THEN
@@ -353,7 +341,7 @@ VARIABLE _BFM-DID-METHOD-END
     S" /app.bsky.feed.post/" STR-STARTS? 0= IF 0 EXIT THEN
     _BFM-PU-SLASH @ 20 + _BFM-PU-U @ >= IF 0 EXIT THEN
     _BFM-PU-A @ _BFM-PU-SLASH @ 20 + +
-    _BFM-PU-U @ _BFM-PU-SLASH @ 20 + - _BFM-TID? ;
+    _BFM-PU-U @ _BFM-PU-SLASH @ 20 + - TID-VALID? ;
 
 VARIABLE _BFM-AU-UA
 VARIABLE _BFM-AU-UU

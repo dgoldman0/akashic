@@ -1,103 +1,177 @@
-\ tid.f — TID (Timestamp Identifier) for KDOS / Megapad-64
-\
-\ AT Protocol TID: 13-character base32-sortable identifier.
-\ 64-bit value: bit 63 = 0, bits 62..10 = microseconds since epoch,
-\ bits 9..0 = clock ID.
-\
-\ Base32-sort alphabet: 234567abcdefghijklmnopqrstuvwxyz
-\ Each char encodes 5 bits.  13 chars × 5 = 65 bits (bit 64 unused).
-\
-\ BIOS provides EPOCH@ ( -- epoch-ms-u64 ).
-\ We multiply by 1000 for approximate microseconds (ms resolution).
-\
-\ Prefix: TID-   (public API)
-\         _TID-  (internal helpers)
-\
-\ Load with:   REQUIRE tid.f
+\ =====================================================================
+\  tid.f - Caller-owned AT Protocol Timestamp Identifiers
+\ =====================================================================
+\  A clock is a caller-owned 24-byte object containing a fixed 10-bit ID
+\  and the last committed logical microsecond.  Generation accepts trusted
+\  Unix epoch milliseconds, remains monotonic across equal/backward input,
+\  and changes neither output nor clock on any rejected operation.
+\ =====================================================================
+
+REQUIRE ../utils/memory-span.f
+REQUIRE ../utils/caller-span.f
 
 PROVIDED akashic-tid
 
-\ =====================================================================
-\  Base32-Sort Alphabet
-\ =====================================================================
+0 CONSTANT TID-S-OK
+1 CONSTANT TID-S-INVALID
+2 CONSTANT TID-S-CAPACITY
+3 CONSTANT TID-S-ALIAS
+4 CONSTANT TID-S-SYNTAX
+5 CONSTANT TID-S-RANGE
+6 CONSTANT TID-S-PROTECTED
+7 CONSTANT TID-S-PLATFORM
+8 CONSTANT TID-S-EXHAUSTED
 
-\ "234567abcdefghijklmnopqrstuvwxyz" — 32 chars, index 0..31
-CREATE _TID-ALPHA
-    50 C,  51 C,  52 C,  53 C,  54 C,  55 C,     \ 2-7
-    97 C,  98 C,  99 C, 100 C, 101 C, 102 C,      \ a-f
-   103 C, 104 C, 105 C, 106 C, 107 C, 108 C,      \ g-l
-   109 C, 110 C, 111 C, 112 C, 113 C, 114 C,      \ m-r
-   115 C, 116 C, 117 C, 118 C, 119 C, 120 C,      \ s-x
-   121 C, 122 C,                                    \ y-z
+13 CONSTANT TID-LENGTH
+24 CONSTANT TID-CLOCK-SIZE
 
-\ _TID-ALPHA@ ( 5bit -- char )
-: _TID-ALPHA@  ( n -- c )
-    31 AND _TID-ALPHA + C@ ;
+0 CONSTANT _TID-CLOCK-MAGIC-OFF
+8 CONSTANT _TID-CLOCK-ID-OFF
+16 CONSTANT _TID-CLOCK-LAST-OFF
 
-\ _TID-RVAL ( char -- 5bit | -1 )
-\   Reverse lookup: char → 5-bit value.
-: _TID-RVAL  ( c -- n )
-    DUP 50 >= OVER 55 <= AND IF 50 - EXIT THEN    \ '2'-'7' → 0-5
-    DUP 97 >= OVER 122 <= AND IF 91 - EXIT THEN   \ 'a'-'z' → 6-31
+0x544944434C4F434B CONSTANT _TID-CLOCK-MAGIC
+1023 CONSTANT _TID-CLOCK-ID-MAX
+9007199254740991 CONSTANT _TID-MICROSECOND-MAX
+9007199254740 CONSTANT _TID-EPOCH-MS-MAX
+
+: TID-STATUS-VALID?  ( status -- flag )
+    DUP TID-S-OK >= SWAP TID-S-EXHAUSTED <= AND ;
+
+: _TID-3DROP  ( x1 x2 x3 -- )
+    DROP 2DROP ;
+
+: _TID-4DUP  ( x1 x2 x3 x4 -- x1 x2 x3 x4 x1 x2 x3 x4 )
+    3 PICK 3 PICK 3 PICK 3 PICK ;
+
+: _TID-4DROP  ( x1 x2 x3 x4 -- )
+    2DROP 2DROP ;
+
+: _TID-CALLER>STATUS  ( caller-status -- status )
+    DUP CALLER-SPAN-S-OK = IF DROP TID-S-OK EXIT THEN
+    DUP CALLER-SPAN-S-RANGE = IF DROP TID-S-RANGE EXIT THEN
+    DUP CALLER-SPAN-S-PROTECTED = IF DROP TID-S-PROTECTED EXIT THEN
+    DROP TID-S-PLATFORM ;
+
+: _TID-ID-VALID?  ( clock-id -- flag )
+    DUP 0< IF DROP 0 EXIT THEN
+    _TID-CLOCK-ID-MAX <= ;
+
+: _TID-EPOCH-MS-VALID?  ( epoch-ms -- flag )
+    DUP 0< IF DROP 0 EXIT THEN
+    _TID-EPOCH-MS-MAX <= ;
+
+: _TID-LAST-VALID?  ( last-us -- flag )
+    DUP -1 = IF DROP -1 EXIT THEN
+    DUP 0< IF DROP 0 EXIT THEN
+    _TID-MICROSECOND-MAX <= ;
+
+: _TID-ALPHA@  ( value -- character )
+    DUP 6 < IF [CHAR] 2 + ELSE 91 + THEN ;
+
+: _TID-CHAR?  ( character -- flag )
+    DUP [CHAR] 2 >= OVER [CHAR] 7 <= AND >R
+    DUP [CHAR] a >= SWAP [CHAR] z <= AND R> OR ;
+
+: _TID-FIRST-CHAR?  ( character -- flag )
+    DUP [CHAR] 2 >= OVER [CHAR] 7 <= AND >R
+    DUP [CHAR] a >= SWAP [CHAR] j <= AND R> OR ;
+
+: _TID-SYNTAX?  ( address -- flag )
+    DUP C@ _TID-FIRST-CHAR? 0= IF DROP 0 EXIT THEN
+    TID-LENGTH 1 ?DO
+        DUP I + C@ _TID-CHAR? 0= IF
+            DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
     DROP -1 ;
 
-\ =====================================================================
-\  TID Encoding
-\ =====================================================================
+: TID-VALIDATE  ( address length -- status )
+    DUP 0< IF 2DROP TID-S-INVALID EXIT THEN
+    DUP TID-LENGTH > IF 2DROP TID-S-CAPACITY EXIT THEN
+    DUP TID-LENGTH < IF 2DROP TID-S-SYNTAX EXIT THEN
+    OVER 0= IF 2DROP TID-S-INVALID EXIT THEN
+    2DUP CALLER-SPAN-STATUS _TID-CALLER>STATUS
+    DUP IF >R 2DROP R> EXIT THEN DROP
+    DROP _TID-SYNTAX? IF TID-S-OK ELSE TID-S-SYNTAX THEN ;
 
-VARIABLE _TID-VAL      \ 64-bit value to encode
-VARIABLE _TID-CLK      \ clock ID counter (0-1023)
+: TID-VALID?  ( address length -- flag )
+    TID-VALIDATE TID-S-OK = ;
 
-0 _TID-CLK !
-
-\ TID-NOW ( dst -- )
-\   Generate a 13-char TID at dst.
-\   Uses EPOCH@ for timestamp (ms → approximate µs).
-\   Clock ID increments each call (wraps at 1023).
-: TID-NOW  ( dst -- )
-    \ Build 64-bit value: (µs << 10) | clock_id, bit 63 = 0
-    EPOCH@ 1000 *                \ ms → µs (approximate)
-    10 LSHIFT                    \ shift left 10 for clock ID
-    _TID-CLK @ OR                \ OR in clock ID
-    9223372036854775807 AND      \ clear bit 63
-    _TID-VAL !
-    \ Increment clock ID (wrap at 1024)
-    _TID-CLK @ 1+ 1023 AND _TID-CLK !
-    \ Encode 13 chars, most-significant first
-    \ 13 × 5 = 65 bits.  We have 64 bits.
-    \ char 0 = bits 64..60 (top 5), char 12 = bits 4..0
-    13 0 ?DO
-        12 I - 5 *              \ bit position for this char
-        _TID-VAL @ SWAP RSHIFT
-        31 AND
-        _TID-ALPHA@
-        OVER I + C!
-    LOOP DROP ;
-
-\ =====================================================================
-\  TID Comparison
-\ =====================================================================
-
-\ TID-COMPARE ( tid1 tid2 -- n )
-\   Lexicographic comparison of two 13-byte TIDs.
-\   Returns: -1 if tid1 < tid2, 0 if equal, 1 if tid1 > tid2.
-: TID-COMPARE  ( tid1 tid2 -- n )
-    13 0 ?DO
+: TID-COMPARE  ( tid-a tid-b -- order )
+    TID-LENGTH 0 ?DO
         OVER I + C@
         OVER I + C@
-        OVER OVER < IF 2DROP 2DROP -1 UNLOOP EXIT THEN
-        >       IF       2DROP  1 UNLOOP EXIT THEN
+        2DUP < IF 2DROP 2DROP -1 UNLOOP EXIT THEN
+        > IF 2DROP 1 UNLOOP EXIT THEN
     LOOP
     2DROP 0 ;
 
-\ ── guard ────────────────────────────────────────────────
-[DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
-GUARD _tid-guard
+: _TID-CLOCK-STATUS  ( clock -- status )
+    DUP 0= IF DROP TID-S-INVALID EXIT THEN
+    DUP 7 AND IF DROP TID-S-INVALID EXIT THEN
+    DUP TID-CLOCK-SIZE CALLER-SPAN-STATUS _TID-CALLER>STATUS
+    DUP IF NIP EXIT THEN DROP
+    DUP _TID-CLOCK-MAGIC-OFF + @ _TID-CLOCK-MAGIC <> IF
+        DROP TID-S-INVALID EXIT
+    THEN
+    DUP _TID-CLOCK-ID-OFF + @ _TID-ID-VALID? 0= IF
+        DROP TID-S-INVALID EXIT
+    THEN
+    _TID-CLOCK-LAST-OFF + @ _TID-LAST-VALID? 0= IF
+        TID-S-INVALID EXIT
+    THEN
+    TID-S-OK ;
 
-' TID-NOW         CONSTANT _tid-now-xt
-' TID-COMPARE     CONSTANT _tid-compare-xt
+: TID-CLOCK-VALID?  ( clock -- flag )
+    _TID-CLOCK-STATUS TID-S-OK = ;
 
-: TID-NOW         _tid-now-xt _tid-guard WITH-GUARD ;
-: TID-COMPARE     _tid-compare-xt _tid-guard WITH-GUARD ;
-[THEN] [THEN]
+: TID-CLOCK-INIT  ( clock-id clock -- status )
+    OVER _TID-ID-VALID? 0= IF 2DROP TID-S-RANGE EXIT THEN
+    DUP 0= IF 2DROP TID-S-INVALID EXIT THEN
+    DUP 7 AND IF 2DROP TID-S-INVALID EXIT THEN
+    DUP TID-CLOCK-SIZE CALLER-SPAN-STATUS _TID-CALLER>STATUS
+    DUP IF >R 2DROP R> EXIT THEN DROP
+    _TID-CLOCK-MAGIC OVER _TID-CLOCK-MAGIC-OFF + !
+    OVER OVER _TID-CLOCK-ID-OFF + !
+    -1 OVER _TID-CLOCK-LAST-OFF + !
+    2DROP TID-S-OK ;
+
+: _TID-NEXT-STATUS  ( epoch-ms destination capacity clock -- status )
+    DUP _TID-CLOCK-STATUS
+    DUP IF >R _TID-4DROP R> EXIT THEN DROP
+    DUP _TID-CLOCK-LAST-OFF + @ _TID-MICROSECOND-MAX = IF
+        _TID-4DROP TID-S-EXHAUSTED EXIT
+    THEN
+    3 PICK _TID-EPOCH-MS-VALID? 0= IF
+        _TID-4DROP TID-S-RANGE EXIT
+    THEN
+    OVER 0< IF _TID-4DROP TID-S-INVALID EXIT THEN
+    OVER TID-LENGTH < IF _TID-4DROP TID-S-CAPACITY EXIT THEN
+    2 PICK 0= IF _TID-4DROP TID-S-INVALID EXIT THEN
+    2 PICK 2 PICK CALLER-SPAN-STATUS _TID-CALLER>STATUS
+    DUP IF >R _TID-4DROP R> EXIT THEN DROP
+    2 PICK 2 PICK 2 PICK TID-CLOCK-SIZE MSPAN-OVERLAP? IF
+        _TID-4DROP TID-S-ALIAS EXIT
+    THEN
+    _TID-4DROP TID-S-OK ;
+
+: _TID-LOGICAL-US  ( epoch-ms clock -- logical-us )
+    SWAP 1000 *
+    OVER _TID-CLOCK-LAST-OFF + @ 1+
+    MAX NIP ;
+
+: _TID-ENCODE  ( value destination -- )
+    TID-LENGTH 0 ?DO
+        OVER 12 I - 5 * RSHIFT 31 AND _TID-ALPHA@
+        OVER I + C!
+    LOOP
+    2DROP ;
+
+: TID-CLOCK-NEXT-MS  ( epoch-ms destination capacity clock -- status )
+    _TID-4DUP _TID-NEXT-STATUS
+    DUP IF >R _TID-4DROP R> EXIT THEN DROP
+    3 PICK OVER _TID-LOGICAL-US
+    DUP 10 LSHIFT 2 PICK _TID-CLOCK-ID-OFF + @ OR
+    4 PICK _TID-ENCODE
+    OVER _TID-CLOCK-LAST-OFF + !
+    _TID-4DROP TID-S-OK ;
