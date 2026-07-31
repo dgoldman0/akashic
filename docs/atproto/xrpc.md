@@ -127,6 +127,12 @@ AT-XRPC-EXCHANGE-PREPARE
 AT-XRPC-EXCHANGE-WIRE-STATE@
   ( owner -- wire-state status )
 
+AT-XRPC-EXCHANGE-DID@
+  ( owner -- did-a did-u status )
+
+AT-XRPC-EXCHANGE-EXTERNAL-SPAN-STATUS
+  ( address length owner -- status )
+
 AT-XRPC-EXCHANGE-WIRE-NONE
 AT-XRPC-EXCHANGE-WIRE-UNCERTAIN
 AT-XRPC-EXCHANGE-WIRE-RESPONSE
@@ -134,6 +140,14 @@ AT-XRPC-EXCHANGE-WIRE-RESPONSE
 
 The payload span is a stable caller loan, not embedded storage or a fixed-size
 slot. It must remain admitted and byte-stable until `XIO-WIPE` releases it.
+
+`DID@` synchronously borrows the exact DID from the bound OAuth profile.
+`EXTERNAL-SPAN-STATUS` lets a higher operation owner qualify its mutable
+caller-provided storage without knowing exchange-private offsets. Success
+proves that the complete span is caller-admitted and disjoint from the exchange
+owner, request and response arenas, credential vault, OAuth client
+configuration, profile, and durable session. The read-only check claims no
+storage and introduces no instance or payload capacity.
 
 See the protocol's
 [XRPC and PDS service-proxy specification](https://atproto.com/specs/xrpc)

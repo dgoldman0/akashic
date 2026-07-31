@@ -24,6 +24,7 @@ REQUIRE oauth-deployment.f \ local Client ID Metadata deployment binding
 REQUIRE oauth-grant.f \ AT token policy over generic OAuth grants
 REQUIRE tid.f      \ TID generation + comparison
 REQUIRE xrpc.f     \ caller-owned authenticated XRPC request construction
+REQUIRE create-record.f \ exact authenticated createRecord operation
 REQUIRE feed-model.f \ owned app.bsky timeline response model
 REQUIRE public-author-feed.f \ bounded cooperative public-feed provider
 ```
@@ -35,7 +36,8 @@ REQUIRE public-author-feed.f \ bounded cooperative public-feed provider
 `akashic-at-oauth-hres` / `akashic-at-oauth-client` /
 `akashic-at-oauth-deployment` /
 `akashic-at-oauth-grant` /
-`akashic-xrpc` / `akashic-atproto-feed-model` /
+`akashic-xrpc` / `akashic-at-crec-codec` / `akashic-at-create-rec` /
+`akashic-atproto-feed-model` /
 `akashic-atp-pubfeed` — safe to include multiple times.
 
 ---
@@ -56,6 +58,7 @@ REQUIRE public-author-feed.f \ bounded cooperative public-feed provider
 - [OAuth token-grant admission — oauth-grant.f](#oauth-token-grant-admission--oauth-grantf)
 - [TID — tid.f](#tid--tidf)
 - [Authenticated XRPC — xrpc.f](#authenticated-xrpc--xrpcf)
+- [Exact createRecord operation](create-record.md)
 - [Feed Model — feed-model.f](#feed-model--feed-modelf)
 - [Session and repository ownership](#session-and-repository-ownership)
 - [Quick Reference](#quick-reference)
