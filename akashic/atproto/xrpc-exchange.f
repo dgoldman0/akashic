@@ -13,8 +13,8 @@
 \
 \  A distinct embedded nonce owner is keyed to the canonical PDS resource.
 \  Every clean DPoP response must carry exactly one valid DPoP-Nonce.  Only
-\  the first 401 response whose strict JSON error is use_dpop_nonce may
-\  rebuild and retry; the second response is always terminal.
+\  the first 400 or 401 response whose strict JSON error is use_dpop_nonce
+\  may rebuild and retry; the second response is always terminal.
 \
 \  This module owns no endpoint schema, feed model, cursor, clock, Streams
 \  state, UI, credential vault, OAuth session, or response arena.
@@ -801,6 +801,10 @@ VARIABLE _ATXEM-FOUND
     DROP
     R> DROP ;
 
+: _ATXE-DPOP-NONCE-CHALLENGE?  ( owner -- flag )
+    DUP ATXE.HTTP-CODE @ DUP 400 = SWAP 401 = OR
+    SWAP _ATXE-USE-DPOP-NONCE? AND ;
+
 VARIABLE _ATXES-OP
 VARIABLE _ATXES-X
 VARIABLE _ATXES-STATUS
@@ -896,9 +900,9 @@ VARIABLE _ATXES-STATUS
         _ATXES-X @ _ATXES-OP @ XIOO.RESULT !
         XIO-STEP-SUCCEEDED EXIT
     THEN
-    _ATXES-X @ ATXE.HTTP-CODE @ 401 =
+    _ATXES-X @ _ATXE-DPOP-NONCE-CHALLENGE?
     _ATXES-X @ ATXE.ATTEMPTS @ 1 = AND
-    _ATXES-X @ _ATXE-USE-DPOP-NONCE? AND IF
+    IF
         _ATXES-X @ _ATXE-RETRY DUP _ATXES-STATUS !
         AT-XRPC-EXCHANGE-S-OK = IF
             XIO-STEP-PENDING EXIT
@@ -911,8 +915,7 @@ VARIABLE _ATXES-STATUS
         THEN
         _ATXES-OP @ _ATXES-X @ _ATXE-STEP-FAIL EXIT
     THEN
-    _ATXES-X @ ATXE.HTTP-CODE @ 401 =
-    _ATXES-X @ _ATXE-USE-DPOP-NONCE? AND IF
+    _ATXES-X @ _ATXE-DPOP-NONCE-CHALLENGE? IF
         AT-XRPC-EXCHANGE-S-RETRY
     ELSE
         AT-XRPC-EXCHANGE-S-HTTP
