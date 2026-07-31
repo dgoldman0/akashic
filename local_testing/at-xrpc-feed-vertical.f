@@ -6,8 +6,10 @@
 \ document and a rotated nonce.  Production code builds both authenticated
 \ proxy requests, decodes the BFM projection, and admits the validated raw
 \ JSON through the production AT input connector into a compact Streams
-\ flow.  The flow carrier must retain the page after XRPC cleanup wipes the
-\ caller-owned response arena.
+\ flow.  The authenticated presentation edge must then transactionally
+\ install that exact page in a real Streams applet instance with truthful
+\ provenance.  Both the flow carrier and applet must retain it after XRPC
+\ cleanup wipes the caller-owned response arena.
 
 REQUIRE at-xrpc-auth-read-test.f
 
@@ -41,6 +43,8 @@ VARIABLE _atfv-expected-u
 VARIABLE _atfv-readback-a
 VARIABLE _atfv-exchange
 VARIABLE _atfv-generation
+VARIABLE _atfv-instance
+VARIABLE _atfv-applet-vfs
 
 VARIABLE _atfv-open-count
 VARIABLE _atfv-close-count
@@ -453,6 +457,27 @@ VARIABLE _atfv-io-n
     STREAMS-FLOW-S-OK _atxr-status
     _atfv-flow STREAMS-FLOW-VALID? _atxr-assert ;
 
+: _atfv-setup-applet  ( -- )
+    STREAMS-DESC STREAMS-ENTRY
+    STREAMS-DESC APP.COMP-DESC @ CINST-NEW
+    DUP 0= _atxr-assert DROP
+    DUP _atfv-instance !
+    \ This witness supplies its own authenticated connector.  Keep the
+    \ unrelated configured-source repository and legacy public refresher in
+    \ their supported offline mode instead of attaching them to the auth
+    \ fixture's private vault VFS.
+    VFS-CUR _atfv-applet-vfs !
+    0 VFS-USE
+    STREAMS-DESC APP.INIT-XT @ EXECUTE
+    _atfv-applet-vfs @ VFS-USE
+    _atfv-instance @ CINST-STATE 0<> _atxr-assert
+    _atfv-instance @ _STM-ACTIVATE
+    _atfv-instance @ STREAMS-SOURCE-STORAGE-READY? 0= _atxr-assert
+    STREAMS-DESC APP.SHUTDOWN-XT @
+        ['] STREAMS-SHUTDOWN-CB = _atxr-assert
+    STREAMS-COMP-DESC COMP.STATE-FINI-XT @
+        ['] _STM-STATE-FINI = _atxr-assert ;
+
 \ ---------------------------------------------------------------------
 \ Production owner setup and cooperative exchange drive
 \ ---------------------------------------------------------------------
@@ -641,6 +666,25 @@ VARIABLE _atfv-io-n
     AT-AUTHOR-FEED-CONNECTOR-S-OK _atxr-status
     _atfv-check-feed ;
 
+: _atfv-check-applet  ( -- )
+    _atfv-instance @ _STM-ACTIVATE
+    _STM-ITEM-COUNT 2 = _atxr-assert
+    _STM-FEED-PROVENANCE$
+    S" PDS-authenticated / AppView proxy requested"
+    COMPARE 0= _atxr-assert
+    _STM-CV-FEED-STATE
+    S" authenticated-retained"
+    COMPARE 0= _atxr-assert
+    _STM-FEED-CONNECTOR-ID _atfv-input-id RID=
+    _atxr-assert
+    _STM-FEED-CONNECTOR-REVISION @ 1 = _atxr-assert
+    _STM-FEED-SEQUENCE @ 1 = _atxr-assert
+    0 _STM-ITEM BFM.ITEM.TEXT
+    S" Injected fixtures make network behavior reviewable."
+    COMPARE 0= _atxr-assert
+    1 _STM-ITEM BFM.ITEM.FLAGS @ BFM-F-REPLY AND 0<>
+    _atxr-assert ;
+
 : _atfv-run-flow  ( -- )
     _ATFV-FLOW-REVISION _ATFV-NOW
     _atfv-flow _atfv-owner @
@@ -656,9 +700,18 @@ VARIABLE _atfv-io-n
     DUP STREAMS-EVENT-VALID? _atxr-assert
     SEVT.PAYLOAD-A @ 0= _atxr-assert
 
+    _atfv-owner @ _atfv-instance @
+    STREAMS-AT-AUTHOR-FEED-PRESENT
+    STREAMS-AT-VIEW-S-OK _atxr-status
+    _atfv-check-applet
+    _atfv-owner @ _atfv-instance @
+    STREAMS-AT-AUTHOR-FEED-PRESENT
+    STREAMS-AT-VIEW-S-PRESENTATION _atxr-status
+
     _atfv-op _atfv-owner @
     AT-AUTHOR-FEED-CONNECTOR-XIO-WIPE
     _atfv-check-carrier-after-wipe
+    _atfv-check-applet
 
     _ATFV-NOW 1+ _atfv-flow STREAMS-FLOW-STEP
     STREAMS-FLOW-S-ACKNOWLEDGED _atxr-status
@@ -676,11 +729,21 @@ VARIABLE _atfv-io-n
     _atfv-flow SFLOW.STATE @
     STREAMS-FLOW-STATE-IDLE = _atxr-assert ;
 
-: _ATFV-QUALIFY  ( -- )
+: _ATFV-PREPARE  ( -- )
     _atfv-prepare-owner
+    _atfv-setup-applet
+    _atxr-stack ;
+
+: _ATFV-EXCHANGE  ( -- )
     _atfv-drive
     _atfv-check-ready
+    _atxr-stack ;
+
+: _ATFV-PRESENT  ( -- )
     _atfv-run-flow
+    _atxr-stack ;
+
+: _ATFV-CLOSE  ( -- )
     _atfv-owner @ AT-AUTHOR-FEED-CONNECTOR-UNBIND
     AT-AUTHOR-FEED-CONNECTOR-S-OK _atxr-status
     _atfv-owner @ AT-AUTHOR-FEED-CONNECTOR-EXCHANGE@
@@ -690,11 +753,38 @@ VARIABLE _atfv-io-n
     AT-XRPC-EXCHANGE-STATE-IDLE = _atxr-assert
     _atxr-stack ;
 
+: _ATFV-QUALIFY  ( -- )
+    _ATFV-PREPARE
+    _ATFV-EXCHANGE
+    _ATFV-PRESENT
+    _ATFV-CLOSE ;
+
 \ ---------------------------------------------------------------------
 \ Cleanup
 \ ---------------------------------------------------------------------
 
-: _ATFV-FINISH  ( -- )
+: _ATFV-SHUTDOWN  ( -- )
+    STREAMS-DESC APP.SHUTDOWN-XT @
+        ['] STREAMS-SHUTDOWN-CB = _atxr-assert
+    STREAMS-COMP-DESC COMP.STATE-FINI-XT @
+        ['] _STM-STATE-FINI = _atxr-assert
+    _atfv-instance @ STREAMS-SHUTDOWN-CB
+    VFS-CUR _atfv-applet-vfs @ = _atxr-assert
+    _atxr-active-vault @ CVAULT-VALID? _atxr-assert
+    _atxr-active-session @ O2SESSION-VALID? _atxr-assert
+    _atxr-stack ;
+
+: _ATFV-FREE-APPLET  ( -- )
+    _atfv-instance @ ?DUP IF
+        CINST-FREE
+        0 _atfv-instance !
+    THEN
+    VFS-CUR _atfv-applet-vfs @ = _atxr-assert
+    _atxr-active-vault @ CVAULT-VALID? _atxr-assert
+    _atxr-active-session @ O2SESSION-VALID? _atxr-assert
+    _atxr-stack ;
+
+: _ATFV-RELEASE  ( -- )
     _atfv-readback-a @ ?DUP IF
         _atfv-document-u @ 0 FILL
     THEN
@@ -757,4 +847,12 @@ VARIABLE _atfv-io-n
     0 _atfv-expected-u !
     0 _atfv-exchange !
     0 _atfv-generation !
+    0 _atfv-instance !
+    0 _atfv-applet-vfs !
+    _atxr-stack ;
+
+: _ATFV-FINISH  ( -- )
+    _ATFV-SHUTDOWN
+    _ATFV-FREE-APPLET
+    _ATFV-RELEASE
     _ATXR-FINISH ;

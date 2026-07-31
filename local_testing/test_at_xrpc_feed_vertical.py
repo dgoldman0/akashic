@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -26,6 +27,9 @@ PASS_MARKER = "AT XRPC FEED VERTICAL PASS"
 MAX_PHASE_STEPS = 180_000_000
 EXT_MEM_SIZE = 128 << 20
 NUM_CORES = 1
+MODULE_BUNDLE_BYTES = 64 * 1024
+MODULE_PAIR_ITEM_BYTES = 32 * 1024
+MODULE_STAGE_BYTES = 24 * 1024
 
 FEED_TARGET = SOURCE_ROOT / "atproto" / "get-author-feed.f"
 FEED_CONNECTOR = (
@@ -34,6 +38,13 @@ FEED_CONNECTOR = (
     / "applets"
     / "streams"
     / "atproto-author-feed-connector.f"
+)
+FEED_PRESENT = (
+    SOURCE_ROOT
+    / "tui"
+    / "applets"
+    / "streams"
+    / "atproto-author-feed-present.f"
 )
 CONTRACT = LOCAL_TESTING / "at-xrpc-feed-vertical.f"
 TIMELINE = LOCAL_TESTING / "fixtures" / "atproto" / "timeline.json"
@@ -63,7 +74,7 @@ _ATFVT-KDOS-PORT NET-IO-PORT-SIZE + CONSTANT KDOSTLS-SIZE
 RAW_MODULES = dependency_order(
     SOURCE_ROOT,
     (
-        "tui/applets/streams/atproto-author-feed-connector.f",
+        "tui/applets/streams/atproto-author-feed-present.f",
         "utils/fs/vfs.f",
     ),
 )
@@ -115,6 +126,127 @@ def _module_items() -> tuple[auth_read.LoadItem, ...]:
 
 
 MODULE_ITEMS = _module_items()
+
+
+@dataclass(frozen=True)
+class ModuleBundle:
+    name: str
+    guest: str
+    marker: str
+    payload: bytes
+    stages: tuple[tuple[str, str], ...]
+
+
+def _module_stage_fragments(payload: bytes) -> tuple[bytes, ...]:
+    """Split prepared Forth only while its evaluator is back at top level."""
+    units: list[bytearray] = []
+    unit = bytearray()
+    definition_depth = 0
+    conditional_depth = 0
+    for line in payload.splitlines(keepends=True):
+        unit.extend(line)
+        text = line.decode("utf-8").rstrip("\r\n")
+        tokens = harness._forth_line_tokens(text)  # noqa: SLF001
+        if tokens and (
+            tokens[0] == ":" or tokens[0].upper() == ":NONAME"
+        ):
+            definition_depth = 1
+        if definition_depth and any(
+            token == ";"
+            and (
+                index == 0
+                or tokens[index - 1].upper() not in {"CHAR", "[CHAR]"}
+            )
+            for index, token in enumerate(tokens)
+        ):
+            definition_depth = 0
+        for token in tokens:
+            upper = token.upper()
+            if upper == "[IF]":
+                conditional_depth += 1
+            elif upper == "[THEN]" and conditional_depth:
+                conditional_depth -= 1
+        if definition_depth == 0 and conditional_depth == 0:
+            units.append(unit)
+            unit = bytearray()
+    if unit:
+        raise RuntimeError("Prepared module bundle ends inside a source unit")
+
+    fragments: list[bytearray] = []
+    current = bytearray()
+    for source_unit in units:
+        if len(source_unit) > MODULE_STAGE_BYTES:
+            raise RuntimeError(
+                "Prepared Forth source unit exceeds the vertical stage ceiling"
+            )
+        if current and len(current) + len(source_unit) > MODULE_STAGE_BYTES:
+            fragments.append(current)
+            current = bytearray()
+        current.extend(source_unit)
+    if current:
+        fragments.append(current)
+    return tuple(bytes(fragment) for fragment in fragments)
+
+
+def _module_bundles() -> tuple[ModuleBundle, ...]:
+    """Pack adjacent prepared modules under the fixed MP64FS entry ceiling."""
+    groups: list[list[bytes]] = []
+    current: list[bytes] = []
+    current_bytes = 0
+    for item in MODULE_ITEMS:
+        payload = auth_read._load_bytes(item)  # noqa: SLF001
+        if current and (
+            len(current) == 2
+            or current_bytes + len(payload) > MODULE_BUNDLE_BYTES
+            or max(len(part) for part in current) > MODULE_PAIR_ITEM_BYTES
+            or len(payload) > MODULE_PAIR_ITEM_BYTES
+        ):
+            groups.append(current)
+            current = []
+            current_bytes = 0
+        current.append(payload)
+        current_bytes += len(payload)
+    if current:
+        groups.append(current)
+    bundles: list[ModuleBundle] = []
+    for index, group in enumerate(groups, start=1):
+        fragments = _module_stage_fragments(b"\n".join(group))
+        payload = bytearray()
+        internal_stages: list[tuple[str, str]] = []
+        for part, fragment in enumerate(fragments, start=1):
+            payload.extend(fragment)
+            if part == len(fragments):
+                continue
+            marker = (
+                f"AT XRPC FEED BUNDLE {index:02d} "
+                f"PART {part:02d} READY"
+            )
+            internal_stages.append(
+                (f"module-bundle-{index:02d}-part-{part:02d}", marker)
+            )
+            payload.extend(
+                (
+                    f'\n." {marker}" CR TX-FLUSH\n'
+                    "KEY DROP\n"
+                ).encode("utf-8")
+            )
+        final_marker = f"AT XRPC FEED BUNDLE {index:02d} READY"
+        bundles.append(
+            ModuleBundle(
+                name=f"module-bundle-{index:02d}",
+                guest=f"local_testing/atfv-b{index:02d}.f",
+                marker=final_marker,
+                payload=bytes(payload),
+                stages=(
+                    *internal_stages,
+                    (f"module-bundle-{index:02d}", final_marker),
+                ),
+            )
+        )
+    return tuple(bundles)
+
+
+MODULE_BUNDLES = _module_bundles()
 FIXTURE_ITEMS = (
     auth_read.LoadItem(
         name="profile-fixture",
@@ -150,8 +282,34 @@ RUNTIME_STAGES = (
     ("provision", "_ATXR-PROVISION", "AT XRPC FEED KEY READY"),
     ("install", "_ATXR-INSTALL", "AT XRPC FEED SESSION READY"),
     ("owner-restart", "_ATXR-RESTART", "AT XRPC FEED REOPEN READY"),
-    ("vertical", "_ATFV-QUALIFY", "AT XRPC FEED FLOW READY"),
-    ("finish", "_ATFV-FINISH", PASS_MARKER),
+    (
+        "vertical-prepare",
+        "_ATFV-PREPARE",
+        "AT XRPC FEED OWNER READY",
+    ),
+    (
+        "vertical-exchange",
+        "_ATFV-EXCHANGE",
+        "AT XRPC FEED EXCHANGE READY",
+    ),
+    (
+        "vertical-present",
+        "_ATFV-PRESENT",
+        "AT XRPC FEED PRESENTATION READY",
+    ),
+    ("vertical-close", "_ATFV-CLOSE", "AT XRPC FEED FLOW READY"),
+    (
+        "shutdown",
+        "_ATFV-SHUTDOWN",
+        "AT XRPC FEED SHUTDOWN READY",
+    ),
+    (
+        "free-applet",
+        "_ATFV-FREE-APPLET",
+        "AT XRPC FEED APPLET FREE READY",
+    ),
+    ("release", "_ATFV-RELEASE", "AT XRPC FEED RELEASE READY"),
+    ("finish", "_ATXR-FINISH", PASS_MARKER),
 )
 
 FAILURE_MARKERS = (
@@ -173,6 +331,7 @@ def _requires(path: Path) -> list[str]:
 def _assert_static() -> None:
     target = FEED_TARGET.read_text(encoding="utf-8")
     connector = FEED_CONNECTOR.read_text(encoding="utf-8")
+    presenter = FEED_PRESENT.read_text(encoding="utf-8")
     fixture = CONTRACT.read_text(encoding="utf-8")
     timeline = TIMELINE.read_bytes()
 
@@ -182,10 +341,15 @@ def _assert_static() -> None:
         "tui/applets/streams/atproto-author-feed-connector.f"
         in RAW_MODULES
     )
+    assert "tui/applets/streams/atproto-author-feed-present.f" in RAW_MODULES
+    assert "tui/applets/streams/streams.f" in RAW_MODULES
     assert REPLACED_CRYPTO_MODULES < set(RAW_MODULES)
     assert 0 < MAX_PHASE_STEPS <= 180_000_000
     assert EXT_MEM_SIZE == 128 << 20
     assert NUM_CORES == 1
+    assert MODULE_BUNDLE_BYTES == 64 * 1024
+    assert MODULE_PAIR_ITEM_BYTES == 32 * 1024
+    assert MODULE_STAGE_BYTES == 24 * 1024
 
     for marker in (
         "PROVIDED akashic-at-getauthfeed",
@@ -208,6 +372,17 @@ def _assert_static() -> None:
     ):
         assert marker in connector
 
+    for marker in (
+        "PROVIDED akashic-streams-atview",
+        "STREAMS-AT-AUTHOR-FEED-PRESENT",
+        "_STM-LOAD-AUTHOR-FEED-JSON",
+        "AT-AUTHOR-FEED-CONNECTOR-EVENT@",
+        "AT-AUTHOR-FEED-CONNECTOR-FEED@",
+        "AT-AUTHOR-FEED-CONNECTOR-BODY@",
+        "SHA3-256-HASH-COMPARE",
+    ):
+        assert marker in presenter
+
     assert _requires(CONTRACT) == ["at-xrpc-auth-read-test.f"]
     for marker in (
         "_ATFV-LOAD",
@@ -220,6 +395,10 @@ def _assert_static() -> None:
         "did:web:api.bsky.app#bsky_appview",
         "app.bsky.feed.getAuthorFeed",
         "AT-AUTHOR-FEED-CONNECTOR-PUBLISH",
+        "STREAMS-AT-AUTHOR-FEED-PRESENT",
+        "STREAMS-DESC APP.INIT-XT @ EXECUTE",
+        "STREAMS-SOURCE-STORAGE-READY? 0=",
+        "authenticated-retained",
         "STREAMS-RUNTIME-PROFILE-COMPACT",
     ):
         assert marker in fixture
@@ -236,12 +415,24 @@ def _assert_static() -> None:
     for item in all_items:
         assert len(Path(item.guest).name.encode("utf-8")) <= 23
         assert (item.source is None) != (item.inline is None)
+    assert MODULE_BUNDLES
+    assert b"".join(bundle.payload for bundle in MODULE_BUNDLES)
+    assert len({bundle.name for bundle in MODULE_BUNDLES}) == len(
+        MODULE_BUNDLES
+    )
+    bundle_stages = tuple(
+        stage for bundle in MODULE_BUNDLES for stage in bundle.stages
+    )
+    assert len({marker for _, marker in bundle_stages}) == len(bundle_stages)
+    for bundle in MODULE_BUNDLES:
+        assert len(Path(bundle.guest).name.encode("utf-8")) <= 23
     assert len(Path(TIMELINE_GUEST).name.encode("utf-8")) <= 23
 
     for path in (
         *(item.source for item in all_items if item.source),
         FEED_TARGET,
         FEED_CONNECTOR,
+        FEED_PRESENT,
         CONTRACT,
     ):
         auth_read._assert_physical_comments(  # noqa: SLF001
@@ -253,9 +444,10 @@ def _assert_static() -> None:
 def _initial_files() -> tuple[tuple[str, bytes], ...]:
     return (
         (TIMELINE_GUEST, TIMELINE.read_bytes()),
+        *((bundle.guest, bundle.payload) for bundle in MODULE_BUNDLES),
         *(
             (item.guest, auth_read._load_bytes(item))  # noqa: SLF001
-            for item in (*MODULE_ITEMS, *FIXTURE_ITEMS)
+            for item in FIXTURE_ITEMS
         ),
     )
 
@@ -265,7 +457,7 @@ def _autoexec() -> str:
         "\\ autoexec.f - authenticated PDS feed to Streams vertical\n",
         "ENTER-USERLAND\n",
     ]
-    for item in (*MODULE_ITEMS, *FIXTURE_ITEMS):
+    for item in (*MODULE_BUNDLES, *FIXTURE_ITEMS):
         lines.extend(
             (
                 f"REQUIRE {item.guest}\n",
@@ -302,10 +494,8 @@ def _run_vertical(timeout: float) -> int:
     image_path = harness.build_image(PROFILE, IMAGE)
     profile = harness.PROFILES[PROFILE]
     stages = (
-        *(
-            (item.name, item.marker)
-            for item in (*MODULE_ITEMS, *FIXTURE_ITEMS)
-        ),
+        *(stage for bundle in MODULE_BUNDLES for stage in bundle.stages),
+        *((item.name, item.marker) for item in FIXTURE_ITEMS),
         *((name, marker) for name, _, marker in RUNTIME_STAGES),
     )
 
