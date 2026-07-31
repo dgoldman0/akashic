@@ -1,8 +1,8 @@
 # akashic-atproto — AT Protocol Primitives for KDOS / Megapad-64
 
 AT Protocol identity, record-addressing, authenticated XRPC request
-construction, and bounded Bluesky feed decoding. Foundation layer for Bluesky
-and other AT Protocol applications.
+construction, exact Bluesky text-record encoding, and bounded feed decoding.
+Foundation layer for Bluesky and other AT Protocol applications.
 
 The bounded, credential-free public author-feed exchange has a separate
 [lifecycle contract](public-author-feed.md). It uses the XIO/HBUF provider
@@ -23,6 +23,7 @@ REQUIRE oauth-client.f \ AT policy over generic OAuth client configuration
 REQUIRE oauth-deployment.f \ local Client ID Metadata deployment binding
 REQUIRE oauth-grant.f \ AT token policy over generic OAuth grants
 REQUIRE tid.f      \ caller-owned TID clocks, validation, comparison
+REQUIRE bluesky-text-record.f \ exact caller-owned app.bsky.feed.post record
 REQUIRE xrpc.f     \ caller-owned authenticated XRPC request construction
 REQUIRE create-record.f \ exact authenticated createRecord operation
 REQUIRE feed-model.f \ owned app.bsky timeline response model
@@ -36,7 +37,8 @@ REQUIRE public-author-feed.f \ bounded cooperative public-feed provider
 `akashic-at-oauth-hres` / `akashic-at-oauth-client` /
 `akashic-at-oauth-deployment` /
 `akashic-at-oauth-grant` /
-`akashic-xrpc` / `akashic-at-crec-codec` / `akashic-at-create-rec` /
+`akashic-bsky-text-rec` / `akashic-xrpc` / `akashic-at-crec-codec` /
+`akashic-at-create-rec` /
 `akashic-atproto-feed-model` /
 `akashic-atp-pubfeed` — safe to include multiple times.
 
@@ -57,6 +59,7 @@ REQUIRE public-author-feed.f \ bounded cooperative public-feed provider
 - [OAuth deployment binding — oauth-deployment.f](#oauth-deployment-binding--oauth-deploymentf)
 - [OAuth token-grant admission — oauth-grant.f](#oauth-token-grant-admission--oauth-grantf)
 - [TID — tid.f](#tid--tidf)
+- [Bluesky text record](bluesky-text-record.md)
 - [Authenticated XRPC — xrpc.f](#authenticated-xrpc--xrpcf)
 - [Exact createRecord operation](create-record.md)
 - [Feed Model — feed-model.f](#feed-model--feed-modelf)
@@ -348,6 +351,24 @@ Returns:
 
 ---
 
+## Bluesky text record — bluesky-text-record.f
+
+The state-free text-record adapter encodes exactly one
+`app.bsky.feed.post` object with deterministic member order:
+
+```json
+{"$type":"app.bsky.feed.post","text":"...","createdAt":"..."}
+```
+
+It admits at most 3,000 raw UTF-8 bytes, uses the shared JSON writer for all
+escaping, and formats caller-injected Unix epoch milliseconds as whole-second
+UTC RFC3339. A fixed caller-owned staging workspace preserves the destination
+on every failure, including unexpected subordinate writer failures. It owns no
+clock, credentials, transport, schema registry, or persistence. See the
+[complete encoder contract](bluesky-text-record.md).
+
+---
+
 ## Authenticated XRPC — xrpc.f
 
 `xrpc.f` is a state-free authenticated query/JSON-procedure composition. It
@@ -471,6 +492,18 @@ API is preserved in parallel.
 | `TID-CLOCK-VALID?` | `( clock -- flag )` | Inspect clock shape/state |
 | `TID-CLOCK-NEXT-MS` | `( epoch-ms destination capacity clock -- status )` | Publish the next TID |
 
+### bluesky-text-record.f
+
+| Word | Stack | Purpose |
+|---|---|---|
+| `BSKY-TEXT-RECORD-TEXT-MAX` | `( -- 3000 )` | Protocol raw-text byte ceiling |
+| `BSKY-TEXT-RECORD-BODY-MAX` | `( -- 18075 )` | Worst-case escaped record size |
+| `BSKY-TEXT-RECORD-WORKSPACE-SIZE` | `( -- 18176 )` | Aligned caller staging workspace |
+| `BSKY-TEXT-RECORD-STATUS-VALID?` | `( status -- flag )` | Admit the status vocabulary |
+| `BSKY-TEXT-RECORD-MEASURE` | `( text-a text-u -- written status )` | Measure exact encoded bytes |
+| `BSKY-TEXT-RECORD-WORKSPACE-CLEAR` | `( workspace -- status )` | Wipe a qualified workspace |
+| `BSKY-TEXT-RECORD-ENCODE` | `( epoch-ms text-a text-u destination capacity workspace -- written status )` | Publish an exact record |
+
 ### xrpc.f
 
 | Word | Stack | Purpose |
@@ -588,6 +621,8 @@ state belongs to the response/connector owner rather than XRPC globals.
 - **handle.f** — requires caller-span and memory-span qualification.
 - **tid.f** — requires caller-span and memory-span qualification; trusted Unix
   epoch milliseconds are injected by the caller.
+- **bluesky-text-record.f** — composes caller-span, memory-span, the checked
+  buffer/JSON writers, UTF-8 validation, and the checked UTC formatter.
 - **xrpc.f** — composes caller-owned HTTP target/request, AT OAuth
   client/profile policy, generic durable OAuth session, credential vault, and
   vault-backed P-256 DPoP proof owners.
@@ -613,6 +648,12 @@ The identity syntax modules contain no mutable module operation state.
 The module has no mutable operation state or clock singleton. Its private
 constants describe the 24-byte caller-owned clock layout, the representable
 53-bit microsecond bound, and arithmetic base32-sort mapping.
+
+### bluesky-text-record.f — prefixed `_BSKYTR-`
+
+The module has no mutable module state. Operation fields, the checked writer,
+timestamp, and maximum escaped body staging arena live entirely in the
+caller-owned workspace and are wiped after each admitted operation.
 
 ### xrpc.f — prefixed `_ATX-`
 
