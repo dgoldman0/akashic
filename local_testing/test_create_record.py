@@ -24,10 +24,13 @@ from test_oauth2_p256_key import P256_JWK_DOUBLES  # noqa: E402
 PROFILE = "at-create-record"
 IMAGE = Path("/tmp/akashic-at-create-record.img")
 PASS_MARKER = "CREATE RECORD E2E PASS"
+BOOT_MARKER = "CREATE RECORD USERLAND READY"
 MAX_PHASE_STEPS = 180_000_000
 EXT_MEM_SIZE = 128 << 20
 NUM_CORES = 1
 LINKED = False
+COALESCED_LOAD = True
+BUNDLE_BYTES = 80 * 1024
 
 OWNER = SOURCE_ROOT / "atproto" / "create-record.f"
 CODEC = SOURCE_ROOT / "atproto" / "create-record-codec.f"
@@ -130,6 +133,50 @@ FIXTURE_ITEMS = (
     ),
 )
 
+
+def _bundle_source(item: auth_read.LoadItem) -> bytes:
+    if item.inline is not None:
+        source = item.inline
+    else:
+        assert item.source is not None
+        source = item.source.read_text(encoding="utf-8")
+    return harness._minify_forth(  # noqa: SLF001
+        source,
+        remove_requires=True,
+    ).encode("utf-8")
+
+
+def _bundle_files() -> tuple[tuple[str, bytes], ...]:
+    chunks: list[bytes] = []
+    current = bytearray()
+    for item in (*MODULE_ITEMS, *FIXTURE_ITEMS):
+        source = _bundle_source(item)
+        if len(source) > BUNDLE_BYTES:
+            raise RuntimeError(f"createRecord source item too large: {item.name}")
+        if current and len(current) + len(source) > BUNDLE_BYTES:
+            chunks.append(bytes(current))
+            current.clear()
+        current.extend(source)
+    if current:
+        chunks.append(bytes(current))
+    return tuple(
+        (
+            f"local_testing/cr-link-{index:02d}.f",
+            harness._coalesce_audited_forth_lines(  # noqa: SLF001
+                source,
+                harness.MEGAPAD_EVALUATE_SOURCE_MAX_BYTES,
+            ),
+        )
+        for index, source in enumerate(chunks)
+    )
+
+
+BUNDLE_FILES = _bundle_files()
+
+
+def _bundle_marker(index: int) -> str:
+    return f"CREATE RECORD BUNDLE {index:02d} READY"
+
 RUNTIME_STAGES = (
     ("setup", "_ATXR-SETUP", "CREATE RECORD SETUP READY"),
     ("provision", "_ATXR-PROVISION", "CREATE RECORD KEY READY"),
@@ -212,6 +259,12 @@ def _assert_static() -> None:
     assert EXT_MEM_SIZE == 128 << 20
     assert MAX_PHASE_STEPS == 180_000_000
     assert LINKED is False
+    assert COALESCED_LOAD is True
+    assert BUNDLE_FILES
+    assert all(
+        len(source) <= BUNDLE_BYTES
+        for _, source in BUNDLE_FILES
+    )
 
     assert _requires(OWNER) == [
         "../utils/memory-span.f",
@@ -251,6 +304,9 @@ def _assert_static() -> None:
         "AT-CREATE-RECORD-RESULT-URI@",
         "AT-CREATE-RECORD-RESULT-CID@",
         "AT-CREATE-RECORD-INIT",
+        "AT-CREATE-RECORD-RESULT@",
+        "AT-CREATE-RECORD-TARGET?",
+        "AT-CREATE-RECORD-EXTERNAL-SPAN-STATUS",
         "AT-CREATE-RECORD-PREPARE",
         "AT-CREATE-RECORD-XIO-START",
         "AT-CREATE-RECORD-XIO-POLL",
@@ -295,6 +351,7 @@ def _assert_static() -> None:
         "_ATCRT-XREQUEST-B-CAPACITY",
         "_atcrt-owner-a",
         "_atcrt-owner-b",
+        "_atcrt-composition-seams",
         "_atcrt-context-a",
         "_atcrt-context-b",
         "NIO.CONTEXT !",
@@ -347,6 +404,7 @@ def _assert_static() -> None:
     failures_body = _word_body(fixture, "_ATCRT-FAILURES")
     assert "_atcrt-init-results-and-owners" in setup_body
     assert "_atcrt-prepare-durable-b" in local_body
+    assert "_atcrt-composition-seams" in local_body
     assert failures_body.index("_atcrt-no-send") < failures_body.index(
         "_atcrt-loss-after-send"
     )
@@ -397,28 +455,40 @@ def _assert_static() -> None:
             path.read_text(encoding="utf-8"),
         )
 
-
-def _initial_files() -> tuple[tuple[str, bytes], ...]:
-    return tuple(
-        (item.guest, auth_read._load_bytes(item))  # noqa: SLF001
-        for item in (*MODULE_ITEMS, *FIXTURE_ITEMS)
-    )
+    forbidden_line_parsers = {
+        "SOURCE",
+        ">IN",
+        "REFILL",
+        "PARSE",
+        "WORD",
+        "EVALUATE",
+    }
+    for item in all_items:
+        if item.inline is not None:
+            item_source = item.inline
+        else:
+            assert item.source is not None
+            item_source = item.source.read_text(encoding="utf-8")
+        tokens = set(_forth_code(item_source).split())
+        assert not forbidden_line_parsers & tokens, item.name
 
 
 def _autoexec() -> str:
     lines = [
-        "\\ autoexec.f - authenticated createRecord qualification\n",
+        "\\ autoexec.f - focused authenticated createRecord qualification\n",
         "ENTER-USERLAND\n",
+        f'." {BOOT_MARKER}" CR TX-FLUSH\n',
+        "KEY DROP\n",
     ]
-    for item in (*MODULE_ITEMS, *FIXTURE_ITEMS):
+    for index, (guest, _) in enumerate(BUNDLE_FILES, start=1):
         lines.extend(
             (
-                f"REQUIRE {item.guest}\n",
+                f"REQUIRE {guest}\n",
                 (
                     'DEPTH IF ." CREATE RECORD LOAD STACK FAIL '
-                    f'{item.name}" CR TX-FLUSH THEN\n'
+                    f'bundle-{index:02d}" CR TX-FLUSH THEN\n'
                 ),
-                f'." {item.marker}" CR TX-FLUSH\n',
+                f'." {_bundle_marker(index)}" CR TX-FLUSH\n',
                 "KEY DROP\n",
             )
         )
@@ -444,7 +514,7 @@ def _run_vertical(timeout: float) -> int:
         ready_markers=(PASS_MARKER,),
         stable_markers=(PASS_MARKER,),
         failure_markers=FAILURE_MARKERS,
-        initial_files=_initial_files(),
+        initial_files=BUNDLE_FILES,
         linked=LINKED,
         include_large_sample=False,
         total_sectors=8192,
@@ -452,9 +522,10 @@ def _run_vertical(timeout: float) -> int:
     image_path = harness.build_image(PROFILE, IMAGE)
     profile = harness.PROFILES[PROFILE]
     stages = (
+        ("boot", BOOT_MARKER),
         *(
-            (item.name, item.marker)
-            for item in (*MODULE_ITEMS, *FIXTURE_ITEMS)
+            (f"bundle-{index:02d}", _bundle_marker(index))
+            for index in range(1, len(BUNDLE_FILES) + 1)
         ),
         *((name, marker) for name, _, marker in RUNTIME_STAGES),
     )

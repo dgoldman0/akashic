@@ -361,6 +361,12 @@ CONSTANT AT-CREATE-RECORD-SIZE
     AT-CREATE-RECORD-S-OK <> IF DROP 0 EXIT THEN
     _ATCR-OBJECT-SHAPE? ;
 
+: AT-CREATE-RECORD-RESULT@  ( owner -- result status )
+    DUP AT-CREATE-RECORD-VALID? 0= IF
+        DROP 0 AT-CREATE-RECORD-S-INVALID EXIT
+    THEN
+    ATCR.RESULT @ AT-CREATE-RECORD-S-OK ;
+
 : AT-CREATE-RECORD-STATE@  ( owner -- state status )
     DUP AT-CREATE-RECORD-VALID? 0= IF
         DROP 0 AT-CREATE-RECORD-S-INVALID EXIT
@@ -515,7 +521,7 @@ CONSTANT AT-CREATE-RECORD-SIZE
     THEN
     DROP AT-CREATE-RECORD-S-URI ;
 
-: _ATCR-ENDPOINT?  ( target -- flag )
+: AT-CREATE-RECORD-TARGET?  ( target -- flag )
     DUP HTARGET-VALID? 0= IF DROP 0 EXIT THEN
     HTARGET-REQUEST-TARGET$
     S" /xrpc/com.atproto.repo.createRecord" COMPARE 0= ;
@@ -550,6 +556,20 @@ CONSTANT AT-CREATE-RECORD-SIZE
         R> DROP AT-CREATE-RECORD-S-ALIAS EXIT
     THEN
     R> DROP AT-CREATE-RECORD-S-OK ;
+
+\ Qualify a composing owner's contiguous storage against this operation and
+\ the complete bound exchange graph without claiming or retaining the span.
+: AT-CREATE-RECORD-EXTERNAL-SPAN-STATUS
+  ( address length owner -- status )
+    >R
+    R@ AT-CREATE-RECORD-VALID? 0= IF
+        2DROP R> DROP AT-CREATE-RECORD-S-INVALID EXIT
+    THEN
+    2DUP R@ _ATCR-INPUT-SPAN-STATUS ?DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN
+    R@ ATCR.EXCHANGE @ _ATCR-XRPC-EXTERNAL-STATUS
+    R> DROP ;
 
 : _ATCR-PREPARE-GEOMETRY
   \ ( iat target collection-a collection-u rkey-a rkey-u
@@ -624,7 +644,7 @@ CONSTANT AT-CREATE-RECORD-SIZE
     8 PICK 8 PICK 8 PICK 8 PICK
     _ATCR-PREPARE-GEOMETRY
     ?DUP IF >R _ATCR-DROP9 R> EXIT THEN
-    7 PICK _ATCR-ENDPOINT? 0= IF
+    7 PICK AT-CREATE-RECORD-TARGET? 0= IF
         2DROP 2DROP 2DROP 2DROP DROP
         AT-CREATE-RECORD-S-TARGET EXIT
     THEN

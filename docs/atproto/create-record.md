@@ -95,10 +95,14 @@ AT-CREATE-RECORD-INIT
   ( exchange body-a body-cap workspace result owner -- status )
 
 AT-CREATE-RECORD-VALID?          ( owner -- flag )
+AT-CREATE-RECORD-RESULT@         ( owner -- result status )
 AT-CREATE-RECORD-STATE@          ( owner -- state status )
 AT-CREATE-RECORD-LAST-STATUS@    ( owner -- status )
 AT-CREATE-RECORD-PORT            ( owner -- port | 0 )
 AT-CREATE-RECORD-CLEANUP-ERROR@  ( owner -- error )
+AT-CREATE-RECORD-TARGET?         ( target -- flag )
+AT-CREATE-RECORD-EXTERNAL-SPAN-STATUS
+  ( address length owner -- status )
 
 AT-CREATE-RECORD-PREPARE
   ( iat target collection-a collection-u rkey-a rkey-u
@@ -117,6 +121,13 @@ exchange can send. The target must name exactly
 `/xrpc/com.atproto.repo.createRecord`. Once preparation returns successfully,
 the caller may overwrite every collection, record-key, record, and target
 input buffer.
+
+`RESULT@` exposes the result descriptor already owned by the operation; a
+composing layer does not supply or reconcile a second result pointer.
+`EXTERNAL-SPAN-STATUS` is a read-only geometry proof for one caller-owned
+contiguous span. It rejects overlap with the operation owner, body, codec
+workspace, result descriptor/bytes, and the complete bound XRPC, OAuth,
+session, profile, client-configuration, and credential-vault graph.
 
 The result descriptor publishes one of four outcomes:
 

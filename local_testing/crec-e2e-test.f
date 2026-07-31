@@ -934,6 +934,46 @@ CREATE _atcrt-crlfcrlf 13 C, 10 C, 13 C, 10 C,
     _atcrt-create-body-a @ _ATCRT-CREATE-BODY-A-CAPACITY 0 FILL
     _atcrt-work-a @ AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE 0 FILL ;
 
+: _atcrt-composition-seams  ( -- )
+    _atcrt-build-target
+    _atcrt-target AT-CREATE-RECORD-TARGET? _atxr-assert
+    S" https://pds.example/xrpc/com.atproto.repo.getRecord"
+    _atcrt-target HTARGET-PARSE HTARGET-S-OK _atxr-status
+    _atcrt-target AT-CREATE-RECORD-TARGET? 0= _atxr-assert
+    _atcrt-build-target
+
+    _atcrt-owner-a @ AT-CREATE-RECORD-RESULT@
+    AT-CREATE-RECORD-S-OK _atxr-status
+    _atcrt-result-a @ = _atxr-assert
+    0 AT-CREATE-RECORD-RESULT@
+    AT-CREATE-RECORD-S-INVALID _atxr-status
+    0= _atxr-assert
+
+    _atcrt-record _ATCRT-VECTOR-CAPACITY _atcrt-owner-a @
+    AT-CREATE-RECORD-EXTERNAL-SPAN-STATUS
+    AT-CREATE-RECORD-S-OK _atxr-status
+    _atcrt-owner-a @ AT-CREATE-RECORD-SIZE _atcrt-owner-a @
+    AT-CREATE-RECORD-EXTERNAL-SPAN-STATUS
+    AT-CREATE-RECORD-S-ALIAS _atxr-status
+    _atcrt-create-body-a @ _ATCRT-CREATE-BODY-A-CAPACITY
+    _atcrt-owner-a @ AT-CREATE-RECORD-EXTERNAL-SPAN-STATUS
+    AT-CREATE-RECORD-S-ALIAS _atxr-status
+    _atcrt-work-a @ AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE
+    _atcrt-owner-a @ AT-CREATE-RECORD-EXTERNAL-SPAN-STATUS
+    AT-CREATE-RECORD-S-ALIAS _atxr-status
+    _atcrt-result-a @ AT-CREATE-RECORD-RESULT-SIZE _atcrt-owner-a @
+    AT-CREATE-RECORD-EXTERNAL-SPAN-STATUS
+    AT-CREATE-RECORD-S-ALIAS _atxr-status
+    _atcrt-result-bytes-a @ _ATCRT-RESULT-A-CAPACITY
+    _atcrt-owner-a @ AT-CREATE-RECORD-EXTERNAL-SPAN-STATUS
+    AT-CREATE-RECORD-S-ALIAS _atxr-status
+    _atcrt-exchange-a @ AT-XRPC-EXCHANGE-SIZE _atcrt-owner-a @
+    AT-CREATE-RECORD-EXTERNAL-SPAN-STATUS
+    AT-CREATE-RECORD-S-ALIAS _atxr-status
+    0 1 _atcrt-owner-a @ AT-CREATE-RECORD-EXTERNAL-SPAN-STATUS
+    AT-CREATE-RECORD-S-INVALID _atxr-status
+    _atxr-stack ;
+
 : _atcrt-prepare-durable-b  ( -- )
     _atcrt-build-inputs
     _atcrt-build-target
@@ -963,6 +1003,7 @@ CREATE _atcrt-crlfcrlf 13 C, 10 C, 13 C, 10 C,
 : _ATCRT-LOCAL  ( -- )
     _atcrt-small-result
     _atcrt-reinit-a
+    _atcrt-composition-seams
     _atcrt-target-alias-no-write
     _atcrt-prepare-durable-b
     _atxr-stack ;
