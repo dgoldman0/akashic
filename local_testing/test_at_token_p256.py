@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify one durable public AT OAuth token exchange with a nonce retry."""
+"""Qualify public AT token exchange through durable session reopen."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from test_oauth2_p256_key import P256_JWK_DOUBLES  # noqa: E402
 
 PROFILE = "at-token-p256-vertical"
 IMAGE = Path("/tmp/akashic-at-token-p256-vertical.img")
-PASS_MARKER = "AT TOKEN P256 PASS"
+PASS_MARKER = "AT SESSION INSTALL PASS"
 
 RAW_PAR = SOURCE_ROOT / "atproto" / "oauth-par.f"
 PAR_WRAPPER = SOURCE_ROOT / "atproto" / "oauth-par-p256.f"
@@ -47,6 +47,7 @@ KEY_FIXTURE = LOCAL_TESTING / "oauth2-p256-key-test.f"
 PAR_P256_FIXTURE = LOCAL_TESTING / "at-par-p256-test.f"
 AUTHORIZATION_FIXTURE = LOCAL_TESTING / "at-oauth-authz-test.f"
 CONTRACT = LOCAL_TESTING / "at-token-p256-test.f"
+SESSION_CONTRACT = LOCAL_TESTING / "at-session-test.f"
 FIXTURES = (
     PROFILE_FIXTURE,
     CLIENT_FIXTURE,
@@ -56,10 +57,11 @@ FIXTURES = (
     PAR_P256_FIXTURE,
     AUTHORIZATION_FIXTURE,
     CONTRACT,
+    SESSION_CONTRACT,
 )
 
 MAX_PHASE_STEPS = 180_000_000
-# Final reporting composes the authorization and durable-PAR teardown words,
+# Final reporting composes session, authorization, and durable-PAR teardown,
 # so it receives the same approved ceiling as every other serial phase.
 FINISH_STEPS = MAX_PHASE_STEPS
 
@@ -188,9 +190,21 @@ RUNTIME_STAGES = (
         MAX_PHASE_STEPS,
     ),
     (
-        "success",
-        "_ATTT-SUCCESS",
-        "AT TOKEN SUCCESS READY",
+        "session-setup",
+        "_ATSI-SETUP",
+        "AT SESSION SETUP READY",
+        MAX_PHASE_STEPS,
+    ),
+    (
+        "success-install",
+        "_ATSI-SUCCESS-INSTALL",
+        "AT SESSION INSTALL READY",
+        MAX_PHASE_STEPS,
+    ),
+    (
+        "session-reopen",
+        "_ATSI-REOPEN",
+        "AT SESSION REOPEN READY",
         MAX_PHASE_STEPS,
     ),
 )
@@ -200,6 +214,7 @@ FAILURE_MARKERS = (
     "AT TOKEN P256 ASSERT",
     "AT TOKEN P256 STATUS",
     "AT TOKEN P256 STACK",
+    "AT SESSION INSTALL FAIL",
     "AT TOKEN LOAD STACK FAIL",
     "AT PAR P256 FAIL",
     "AT PAR P256 ASSERT",
@@ -289,6 +304,7 @@ def _assert_static_contracts() -> None:
     token_request = TOKEN_REQUEST.read_text(encoding="utf-8")
     nonce = DPOP_NONCE.read_text(encoding="utf-8")
     fixture = CONTRACT.read_text(encoding="utf-8")
+    session_fixture = SESSION_CONTRACT.read_text(encoding="utf-8")
     seam = CV_DEPS.read_text(encoding="utf-8") + "\n" + P256_JWK_DOUBLES
 
     all_stages = (
@@ -507,6 +523,7 @@ def _assert_static_contracts() -> None:
     assert "PROVIDED akashic-oauth2-trequest" in token_request
     assert "PROVIDED akashic-oauth2-dpnonce" in nonce
     assert _requires(CONTRACT) == ["at-oauth-authz-test.f"]
+    assert _requires(SESSION_CONTRACT) == ["at-token-p256-test.f"]
     for marker in (
         "PROVIDED at-token-p256-test",
         "_ATTT-PREPARE",
@@ -528,7 +545,7 @@ def _assert_static_contracts() -> None:
         "O2TREQ-ATTEMPT-RETRY",
         "O2TREQ-PHASE-TERMINAL",
         "_attt-terminal-payload-zero?",
-        PASS_MARKER,
+        "AT TOKEN P256 PASS",
     ):
         assert marker in fixture
     assert _word_count(fixture, "AT-OAUTH-TOKEN-PREPARE") == 1
@@ -544,6 +561,45 @@ def _assert_static_contracts() -> None:
         r"(?![A-Za-z0-9_-])",
         _forth_code(fixture),
     ), "focused fixture must not borrow the DO-loop return stack"
+    for marker in (
+        "PROVIDED at-session-install-test",
+        "_ATSI-SETUP",
+        "_ATSI-SUCCESS-INSTALL",
+        "_ATSI-REOPEN",
+        "_ATSI-FINISH",
+        "O2SESSION-RECORD-SIZE CVAULT-BACKING-SIZE",
+        "OAUTH2-CLIENT-CONFIG-BINDING@",
+        "AT-OAUTH-PROFILE-ISSUER@",
+        "O2SESSION-INSTALL",
+        "O2SESSION-OPEN",
+        "O2SESSION-PHASE-ACTIVE",
+        "O2SESSION-WITH-ACCESS",
+        "O2SESSION-WITH-TOKEN-TYPE",
+        "O2SESSION-WITH-SCOPE",
+        PASS_MARKER,
+    ):
+        assert marker in session_fixture
+    assert "O2SESSION-RECOVER" not in session_fixture
+    assert "O2SESSION-REFRESH-" not in session_fixture
+    assert 'S" /vault"' in session_fixture
+    assert 'S" /session-vault"' not in session_fixture
+    assert _word_count(session_fixture, "O2SESSION-INSTALL") == 1
+    assert _word_count(session_fixture, "O2SESSION-OPEN") == 1
+    assert not re.search(
+        r"(?i)(?<![A-Za-z0-9_-])(?:\?DO|DO|\+LOOP|LOOP)"
+        r"(?![A-Za-z0-9_-])",
+        _forth_code(session_fixture),
+    ), "session continuation must not borrow the DO-loop return stack"
+    stage_names = [name for name, _, _, _ in RUNTIME_STAGES]
+    assert stage_names.index("retry-build") < stage_names.index(
+        "session-setup"
+    )
+    assert stage_names.index("session-setup") < stage_names.index(
+        "success-install"
+    )
+    assert stage_names.index("success-install") < stage_names.index(
+        "session-reopen"
+    )
 
     # The deterministic seam exposes proof invocations and every proof input.
     # Real JTI entropy/signature construction remains covered by the exact
@@ -614,7 +670,7 @@ def _autoexec() -> str:
                 "KEY DROP\n",
             )
         )
-    lines.append("_ATTT-FINISH\nTX-FLUSH\n")
+    lines.append("_ATSI-FINISH\nTX-FLUSH\n")
     return "".join(lines)
 
 
@@ -722,7 +778,7 @@ def _run_vertical(timeout: float) -> int:
             )
             reports.append((stage_name, report))
             if marker not in raw_text or failures:
-                print(f"AT TOKEN P256 {stage_name}: FAIL")
+                print(f"AT SESSION P256 {stage_name}: FAIL")
                 print(
                     f"  {report.steps:,} steps in {report.elapsed_s:.2f}s; "
                     f"stop={report.reason}"
@@ -732,7 +788,7 @@ def _run_vertical(timeout: float) -> int:
                 print(raw_text[-4000:])
                 return 1
             print(
-                f"AT TOKEN P256 {stage_name}: PASS "
+                f"AT SESSION P256 {stage_name}: PASS "
                 f"({report.steps:,} steps, {report.elapsed_s:.2f}s)",
                 flush=True,
             )
@@ -759,7 +815,7 @@ def _run_vertical(timeout: float) -> int:
             )
         )
         ok = PASS_MARKER in raw_text and not failures
-        print(f"AT TOKEN P256 vertical: {'PASS' if ok else 'FAIL'}")
+        print(f"AT SESSION P256 vertical: {'PASS' if ok else 'FAIL'}")
         for stage_name, stage_report in reports:
             print(
                 f"  {stage_name}: {stage_report.steps:,} steps in "
@@ -789,14 +845,14 @@ def main() -> int:
     mode.add_argument(
         "--vertical",
         action="store_true",
-        help="run the staged one-core public AT token nonce-retry vertical",
+        help="run token exchange through durable session install/reopen",
     )
     parser.add_argument("--timeout", type=float, default=180.0)
     args = parser.parse_args()
 
     _assert_static_contracts()
     if args.static_only:
-        print("AT TOKEN P256 STATIC PASS")
+        print("AT SESSION P256 STATIC PASS")
         return 0
     return _run_vertical(args.timeout)
 

@@ -19,6 +19,8 @@ VARIABLE _attt-fails
 VARIABLE _attt-depth
 VARIABLE _attt-callback-count
 VARIABLE _attt-saved-grant
+VARIABLE _attt-grant-callback-xt
+VARIABLE _attt-grant-context
 
 CREATE _attt-request-store O2TREQ-SIZE 7 + ALLOT
 CREATE _attt-nonce-store OAUTH2-DPOP-NONCE-SIZE 7 + ALLOT
@@ -365,9 +367,7 @@ VARIABLE _attt-response-a
 \  Initial grant callback
 \ =====================================================================
 
-: _attt-grant-callback  ( grant context -- callback-result )
-    1 _attt-callback-count +!
-    _ATTT-GRANT-CONTEXT = _attt-assert
+: _attt-check-grant  ( grant -- )
     DUP _attt-saved-grant !
     DUP O2SESSION-G.ACCESS-A @
     OVER O2SESSION-G.ACCESS-U @
@@ -384,7 +384,12 @@ VARIABLE _attt-response-a
     DUP O2SESSION-G.ID-U @ 0= _attt-assert
     DUP O2SESSION-G.EXPIRES-AT-MS @ 0= _attt-assert
     O2SESSION-G.FLAGS @
-    O2SESSION-GRANT-F-SCOPE = _attt-assert
+    O2SESSION-GRANT-F-SCOPE = _attt-assert ;
+
+: _attt-grant-callback  ( grant context -- callback-result )
+    1 _attt-callback-count +!
+    _ATTT-GRANT-CONTEXT = _attt-assert
+    _attt-check-grant
     _ATTT-GRANT-RESULT ;
 
 \ =====================================================================
@@ -535,7 +540,9 @@ VARIABLE _attt-response-a
     S" token-nonce-2" STR-STR= _attt-assert
     _attt-stack ;
 
-: _ATTT-SUCCESS  ( -- )
+: _ATTT-SUCCESS-WITH  ( callback context -- )
+    _attt-grant-context !
+    _attt-grant-callback-xt !
     _attt-build-success-server
     O2TREQ-ATTEMPT-RETRY _attt-exchange
     _attt-post OAUTH2-HTTP-POST-OUTCOME@
@@ -556,8 +563,8 @@ VARIABLE _attt-response-a
     _attt-request
     _attt-post
     _attt-nonce
-    ['] _attt-grant-callback
-    _ATTT-GRANT-CONTEXT
+    _attt-grant-callback-xt @
+    _attt-grant-context @
     _attt-token-work
     AT-OAUTH-TOKEN-ACCEPT-SUCCESS
     AT-OAUTH-TOKEN-S-OK _attt-status
@@ -572,7 +579,15 @@ VARIABLE _attt-response-a
     _attt-check-nonce-three
     _attt-stack ;
 
+: _ATTT-SUCCESS  ( -- )
+    ['] _attt-grant-callback
+    _ATTT-GRANT-CONTEXT
+    _ATTT-SUCCESS-WITH ;
+
 : _ATTT-FINISH  ( -- )
+    0 _attt-saved-grant !
+    0 _attt-grant-callback-xt !
+    0 _attt-grant-context !
     _o2hpt-post OAUTH2-HTTP-POST-WIPE
     OAUTH2-HTTP-POST-S-OK _attt-status
     _attt-retry-post OAUTH2-HTTP-POST-WIPE
