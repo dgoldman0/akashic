@@ -267,10 +267,11 @@ Intermediate links are followed under both policies. `OPEN` and `CD` follow
 their terminal link; unlink, create-existence checks, and `VFS-STAT` select
 no-follow so they continue to address the named namespace object.
 
-On a cached-name miss, resolution uses targeted `VFS-LOOKUP` when the binding
-advertises it; otherwise it loads the complete directory through `READDIR`.
-`LOOKUP` returns `VFS-E-NOENT` for an absent name and preserves every other
-binding error. A cached hit never invokes the callback.
+Name lookup and resolution check the dentry cache first. On a cached-name
+miss, they use targeted binding `LOOKUP` when advertised; otherwise they load
+the complete directory through `READDIR` and treat a remaining miss as
+authoritative `VFS-E-NOENT`. Other binding errors are preserved. A cached hit
+never invokes either binding callback.
 
 `VFS-READ?` and `VFS-WRITE?` return progress and error together. Legal partial
 progress advances the cursor even when the same call returns a nonzero ior.
@@ -439,6 +440,14 @@ count from disk. `VFS-CACHE-DROP` removes only the cache reference and returns
 busy for an open dentry. Once the last dentry and open reference disappears,
 the vnode is reclaimable even while its on-disk link count is nonzero.
 
+Known deferred invariant: dropping a child manually from a READDIR-only
+parent does not yet clear that parent's `VFS-IF-CHILDREN` completeness flag.
+A later lookup can therefore treat the reduced cache as a still-complete
+enumeration and return stale `VFS-E-NOENT` without invoking `READDIR` again.
+Automatic eviction remains disabled for these bindings; callers must not use
+manual cache drop as a namespace-refresh mechanism until completeness
+invalidation and its broad VFS qualification are added.
+
 ## Binding ABI 1
 
 ### Descriptor (`VFS-BINDING-DESC-SIZE` = 80)
@@ -542,7 +551,10 @@ newly exposed truncate bytes are zeroed.
 The RAM binding supports mount/unmount, readdir, open/release, read/write,
 create/mkdir, unlink/rmdir, rename, truncate, getattr, hard link, syncfs, and
 fsync. It truthfully leaves lookup, setattr, symlink/readlink, xattrs, and
-statfs unadvertised; public calls return `VFS-E-UNSUPPORTED`.
+statfs unadvertised. Operation-specific public calls return
+`VFS-E-UNSUPPORTED`; `VFS-LOOKUP` can still answer from the dentry cache or
+the advertised complete-directory `READDIR` fallback without pretending the
+binding has targeted lookup.
 
 ## Concurrency
 

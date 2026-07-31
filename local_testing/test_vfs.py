@@ -426,7 +426,7 @@ def test_volume_readonly_authority_propagates():
     ], "RO BLOCKED NO-FILE")
 
 def test_lookup_capability_and_dispatch():
-    """LOOKUP cannot call an unadvertised XT and publishes one cached dentry."""
+    """LOOKUP falls back to READDIR and never redispatches a cached dentry."""
     check("lookup capability and dispatch", [
         'VARIABLE _LOOKUP-CALLS VARIABLE _LOOKUP-A VARIABLE _LOOKUP-U',
         'VARIABLE _LOOKUP-P VARIABLE _LOOKUP-V',
@@ -437,15 +437,16 @@ def test_lookup_capability_and_dispatch():
         "' T-LOOKUP _BIND VB.OPS @ VFS-OP-LOOKUP CELLS + !",
         '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
         ': T-LOOKUP-ABI',
-        '  S" disk" _V1 V.ROOT @ _V1 VFS-LOOKUP DUP VFS-IOR-REASON 11 = IF ." UNSUPPORTED " THEN SWAP 0= IF ." ZERO " THEN DROP',
+        '  S" disk" _V1 V.ROOT @ _V1 VFS-LOOKUP DUP VFS-IOR-REASON VFS-R-NOENT = IF ." NOENT " THEN SWAP 0= IF ." ZERO " THEN DROP',
         '  _LOOKUP-CALLS @ 0= IF ." NO-CALL " THEN',
         '  _BIND VB.CAPS DUP @ VFS-CAP-LOOKUP OR SWAP !',
         '  S" disk" _V1 V.ROOT @ _V1 VFS-LOOKUP ?DUP IF THROW THEN',
         '  DUP IN.BID @ 99 = OVER D.VNODE @ VN.GEN @ 7 = AND IF ." FOUND " THEN DROP',
+        '  _BIND VB.CAPS DUP @ VFS-CAP-LOOKUP INVERT AND SWAP !',
         '  S" disk" _V1 V.ROOT @ _V1 VFS-LOOKUP ?DUP IF THROW THEN DROP',
         '  _LOOKUP-CALLS @ 1 = IF ." CACHED" THEN ;',
         'T-LOOKUP-ABI CR',
-    ], "UNSUPPORTED ZERO NO-CALL FOUND CACHED")
+    ], "NOENT ZERO NO-CALL FOUND CACHED")
 
 def test_unadvertised_operation_is_unsupported():
     """A populated XT is unavailable when its capability is not advertised."""
