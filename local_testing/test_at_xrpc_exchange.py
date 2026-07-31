@@ -193,6 +193,10 @@ def _assert_static() -> None:
         "AT-XRPC-EXCHANGE-BIND",
         "AT-XRPC-EXCHANGE-PREPARE",
         "AT-XRPC-AUTH-REQUEST-BUILD",
+        "AT-XRPC-EXCHANGE-WIRE-STATE@",
+        "AT-XRPC-EXCHANGE-WIRE-UNCERTAIN",
+        "ATXE.PAYLOAD-A",
+        "ATXE.PAYLOAD-U",
         "OAUTH2-DPOP-NONCE-REPLACE",
         "OAUTH2-ERROR-RESPONSE-WITH",
         "AT-XRPC-EXCHANGE-XIO-START",
@@ -203,6 +207,7 @@ def _assert_static() -> None:
     assert "HRES-" not in exchange
     assert "PAF-" not in exchange
     assert "STREAMS-" not in exchange
+    assert "PAYLOAD-CAPACITY" not in exchange
 
     for marker in (
         "PROVIDED akashic-at-getsession",
@@ -221,6 +226,11 @@ def _assert_static() -> None:
         "AT-XRPC-EXCHANGE-INIT",
         "AT-XRPC-EXCHANGE-BIND",
         "AT-XRPC-EXCHANGE-PREPARE",
+        "AT-XRPC-METHOD-POST",
+        "com.atproto.repo.createRecord",
+        "AT-XRPC-EXCHANGE-WIRE-RESPONSE",
+        "AT-XRPC-EXCHANGE-WIRE-UNCERTAIN",
+        "_atxet-drive-loss",
         "AT-GETSESSION-ADMIT",
         "DPoP-Nonce: pds-nonce-1",
         "Authorization: DPoP access-vertical",

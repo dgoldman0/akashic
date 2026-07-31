@@ -113,8 +113,27 @@ and stale-generation classes.
 The caller-owned `AT-XRPC-EXCHANGE-*` transport owner handles exactly one
 fresh-proof retry after a strict PDS `400` or `401 use_dpop_nonce` challenge.
 It replaces the retained nonce before rebuilding and treats any second
-response as terminal. Exchange ownership of procedure bodies and write-effect
-truth remains a separate layer over this state-free construction boundary.
+response as terminal. `PREPARE` copies the target and optional proxy while
+borrowing a stable procedure body through terminal wipe; the request arena
+receives a fresh copy on each authorized build. `WIRE-STATE@` reports `NONE`,
+`UNCERTAIN`, or `RESPONSE` for the current attempt so a repository operation
+can distinguish a pre-send failure from response loss without mistaking wire
+progress for a confirmed repository effect.
+
+```forth
+AT-XRPC-EXCHANGE-PREPARE
+  ( iat method target proxy-a proxy-u payload-a payload-u owner -- status )
+
+AT-XRPC-EXCHANGE-WIRE-STATE@
+  ( owner -- wire-state status )
+
+AT-XRPC-EXCHANGE-WIRE-NONE
+AT-XRPC-EXCHANGE-WIRE-UNCERTAIN
+AT-XRPC-EXCHANGE-WIRE-RESPONSE
+```
+
+The payload span is a stable caller loan, not embedded storage or a fixed-size
+slot. It must remain admitted and byte-stable until `XIO-WIPE` releases it.
 
 See the protocol's
 [XRPC and PDS service-proxy specification](https://atproto.com/specs/xrpc)

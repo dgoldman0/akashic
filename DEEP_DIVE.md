@@ -618,7 +618,7 @@ bounded Bluesky presentation primitives:
 |------|---------|
 | `oauth-profile.f` | Identity-to-OAuth/PDS discovery profile |
 | `oauth-client.f` | AT policy over immutable generic OAuth client configurations |
-| `xrpc.f` | State-free authenticated GET construction over caller-owned HTTP storage and durable generic session/key owners |
+| `xrpc.f` | State-free authenticated query/JSON-procedure construction over caller-owned HTTP storage and durable generic session/key owners |
 | `feed-model.f` | Bounded owned Bluesky feed-response model |
 | `aturi.f` | AT URI parser + builder: `at://authority/collection/rkey` |
 | `did.f` | DID validation (did:plc: and did:web:) |

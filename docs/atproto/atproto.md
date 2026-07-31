@@ -23,7 +23,7 @@ REQUIRE oauth-client.f \ AT policy over generic OAuth client configuration
 REQUIRE oauth-deployment.f \ local Client ID Metadata deployment binding
 REQUIRE oauth-grant.f \ AT token policy over generic OAuth grants
 REQUIRE tid.f      \ TID generation + comparison
-REQUIRE xrpc.f     \ caller-owned authenticated XRPC GET construction
+REQUIRE xrpc.f     \ caller-owned authenticated XRPC request construction
 REQUIRE feed-model.f \ owned app.bsky timeline response model
 REQUIRE public-author-feed.f \ bounded cooperative public-feed provider
 ```
@@ -330,10 +330,11 @@ Returns:
 
 ## Authenticated XRPC — xrpc.f
 
-`xrpc.f` is a state-free authenticated GET request composition. It accepts an
-already parsed caller-owned `HTARGET`, requires its origin to equal the ready
-OAuth profile's PDS, validates the top-level `/xrpc/<nsid>` path, and seals one
-caller-owned `HREQ`.
+`xrpc.f` is a state-free authenticated query/JSON-procedure composition. It
+accepts an already parsed caller-owned `HTARGET`, requires its origin to equal
+the ready OAuth profile's PDS, validates the top-level `/xrpc/<nsid>` path, and
+seals one caller-owned `HREQ`. GET admits no body; POST borrows exact JSON bytes
+only long enough to copy them into the caller-sized request arena.
 
 The builder sequentially qualifies the AT client configuration and durable
 session metadata before borrowing the access token once. Inside that loan it
@@ -345,8 +346,10 @@ requests through the PDS.
 There is no default host, ambient bearer token, cursor singleton, response
 buffer, blocking HTTP call, or compatibility alias for the removed prototype.
 Pagination belongs to the operation/connector that owns the response model.
-POST procedures and repository writes follow after the authenticated read
-vertical.
+The cooperative exchange borrows a stable procedure body through completion so
+the sole strict DPoP nonce retry can rebuild it. It publishes whether the
+current attempt never reached send, may have reached the peer, or has a
+detached response; it does not infer repository effects from transport state.
 
 See [Authenticated XRPC request construction](xrpc.md) for the complete input,
 workspace, status, cleanup, and wire contract.
@@ -398,9 +401,8 @@ address.
 The former AT-local password/JWT singleton and global repository CRUD wrapper
 have been retired. They were incompatible with per-connector ownership,
 durable DPoP identity, explicit cancellation, and secret cleanup. Repository
-query/procedure builders will be added as state-free XRPC compositions after
-the authenticated read and Streams connector vertical; no obsolete API is
-being preserved in parallel.
+operations compose the caller-owned XRPC request/exchange seam; no obsolete
+API is preserved in parallel.
 
 ---
 
