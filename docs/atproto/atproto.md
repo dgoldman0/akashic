@@ -504,6 +504,15 @@ API is preserved in parallel.
 | `BSKY-TEXT-RECORD-WORKSPACE-CLEAR` | `( workspace -- status )` | Wipe a qualified workspace |
 | `BSKY-TEXT-RECORD-ENCODE` | `( epoch-ms text-a text-u destination capacity workspace -- written status )` | Publish an exact record |
 
+### create-record-codec.f
+
+| Word | Stack | Purpose |
+|---|---|---|
+| `AT-CREATE-RECORD-BODY-MAX` | `( -- 68460 )` | Maximum admitted outer JSON body |
+| `AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE` | `( -- bytes )` | Aligned parser and atomic staging workspace |
+| `AT-CREATE-RECORD-BODY-MEASURE` | `( repo-a repo-u collection-a collection-u rkey-a rkey-u record-a record-u workspace -- bytes status )` | Admit and measure an exact request body |
+| `AT-CREATE-RECORD-BODY` | `( repo-a repo-u collection-a collection-u rkey-a rkey-u record-a record-u destination capacity workspace -- written status )` | Atomically publish an exact request body |
+
 ### xrpc.f
 
 | Word | Stack | Purpose |

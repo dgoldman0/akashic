@@ -20,6 +20,8 @@ VARIABLE _crct-collection-u
 VARIABLE _crct-rkey-u
 VARIABLE _crct-expected-uri-u
 VARIABLE _crct-written
+VARIABLE _crct-measured
+VARIABLE _crct-long-u
 VARIABLE _crct-part-a
 VARIABLE _crct-part-u
 VARIABLE _crct-build-uri-a
@@ -44,6 +46,7 @@ CREATE _crct-expected-uri ATURI-LENGTH-MAX 1+ ALLOT
 CREATE _crct-uri-snapshot ATURI-LENGTH-MAX ALLOT
 CREATE _crct-cid-snapshot AT-CID-TEXT-LENGTH ALLOT
 CREATE _crct-long-document JOSE-JSON-MAX-DOCUMENT-BYTES 1+ ALLOT
+CREATE _crct-max-output AT-CREATE-RECORD-BODY-MAX 1+ ALLOT
 CREATE _crct-long-type NSID-LENGTH-MAX 1+ ALLOT
 CREATE _crct-long-uri ATURI-LENGTH-MAX 1+ ALLOT
 CREATE _crct-long-cid AT-CID-TEXT-LENGTH 1+ ALLOT
@@ -83,6 +86,21 @@ CREATE _crct-long-cid AT-CID-TEXT-LENGTH 1+ ALLOT
         1- SWAP 1+ SWAP
     REPEAT
     2DROP R> DROP -1 ;
+
+: _crct-long+  ( address length -- )
+    DUP _crct-long-u @ + JOSE-JSON-MAX-DOCUMENT-BYTES U> IF
+        2DROP 0 _crct-assert EXIT
+    THEN
+    DUP >R
+    _crct-long-document _crct-long-u @ + SWAP CMOVE
+    R> _crct-long-u +! ;
+
+: _crct-long-c!  ( byte -- )
+    _crct-long-u @ JOSE-JSON-MAX-DOCUMENT-BYTES U< 0= IF
+        DROP 0 _crct-assert EXIT
+    THEN
+    _crct-long-document _crct-long-u @ + C!
+    1 _crct-long-u +! ;
 
 : _crct-work-span?  ( address length -- flag )
     2DUP +
@@ -233,16 +251,41 @@ CREATE _crct-long-cid AT-CID-TEXT-LENGTH 1+ ALLOT
     _crct-output _CRCT-BODY-CAPACITY _crct-work
     AT-CREATE-RECORD-BODY ;
 
+: _crct-body-measure  ( -- bytes status )
+    _crct-repo _crct-repo-u @
+    _crct-collection _crct-collection-u @
+    _crct-rkey _crct-rkey-u @
+    _crct-record _crct-record-u @
+    _crct-work AT-CREATE-RECORD-BODY-MEASURE ;
+
 : _crct-body-result  ( written status expected -- )
     >R R> _crct-status
     0= _crct-assert ;
 
 : _crct-expect-body  ( expected -- )
     >R
+    _crct-output _CRCT-BODY-CAPACITY 0xA5 FILL
     _crct-work AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE 0xA5 FILL
     _crct-body R> _crct-body-result
+    _crct-output _CRCT-BODY-CAPACITY 0xA5
+    _crct-filled? _crct-assert
     _crct-work AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE
     0 _crct-filled? _crct-assert ;
+
+: _crct-build-max-record  ( -- )
+    _crct-long-document JOSE-JSON-MAX-DOCUMENT-BYTES 0 FILL
+    0 _crct-long-u !
+    123 _crct-long-c!
+    34 _crct-long-c! S" $type" _crct-long+ 34 _crct-long-c!
+    58 _crct-long-c! 34 _crct-long-c!
+    S" app.bsky.feed.post" _crct-long+ 34 _crct-long-c!
+    44 _crct-long-c!
+    34 _crct-long-c! S" x" _crct-long+ 34 _crct-long-c!
+    58 _crct-long-c! 34 _crct-long-c!
+    JOSE-JSON-MAX-DOCUMENT-BYTES _crct-long-u @ - 2 -
+    _crct-long-document _crct-long-u @ + SWAP [CHAR] a FILL
+    JOSE-JSON-MAX-DOCUMENT-BYTES 2 - _crct-long-u !
+    34 _crct-long-c! 125 _crct-long-c! ;
 
 : _crct-build-type-only  ( type-a type-u -- )
     _crct-record-start
@@ -430,8 +473,35 @@ CREATE _crct-long-cid AT-CID-TEXT-LENGTH 1+ ALLOT
     -1 AT-CREATE-RECORD-STATUS-VALID? 0= _crct-assert
     AT-CREATE-RECORD-S-INTERNAL 1+
     AT-CREATE-RECORD-STATUS-VALID? 0= _crct-assert
+    _ATCRC-BODY-FIXED-BYTES 47 = _crct-assert
+    AT-CREATE-RECORD-BODY-MAX 68460 = _crct-assert
     AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE 0> _crct-assert
     _crct-work 7 AND 0= _crct-assert
+    _ATCRW-STAGING-OFF 7 AND 0= _crct-assert
+    _ATCRW-STAGING-OFF AT-CREATE-RECORD-BODY-MAX +
+    7 + -8 AND AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE =
+    _crct-assert
+    _crct-stack ;
+
+: _crct-test-body-measure  ( -- )
+    _crct-prepare-body
+    _crct-build-expected-body
+    _crct-work AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE 0x5A FILL
+    _crct-body-measure
+    DUP AT-CREATE-RECORD-S-OK _crct-status DROP
+    DUP _crct-measured !
+    _crct-expected-u @ = _crct-assert
+    _crct-work AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE
+    0 _crct-filled? _crct-assert
+
+    _crct-prepare-body
+    S" App.bsky.feed.post"
+    DUP _crct-collection-u ! _crct-collection SWAP CMOVE
+    _crct-work AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE 0x5A FILL
+    _crct-body-measure
+    AT-CREATE-RECORD-S-COLLECTION _crct-body-result
+    _crct-work AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE
+    0 _crct-filled? _crct-assert
     _crct-stack ;
 
 : _crct-test-body-exact  ( -- )
@@ -442,6 +512,7 @@ CREATE _crct-long-cid AT-CID-TEXT-LENGTH 1+ ALLOT
     _crct-body
     DUP AT-CREATE-RECORD-S-OK _crct-status DROP
     DUP _crct-written !
+    DUP _crct-measured @ = _crct-assert
     _crct-expected-u @ = _crct-assert
     _crct-output _crct-written @
     _crct-expected _crct-expected-u @ COMPARE 0= _crct-assert
@@ -465,10 +536,10 @@ CREATE _crct-long-cid AT-CID-TEXT-LENGTH 1+ ALLOT
     _crct-collection _crct-collection-u @
     _crct-rkey _crct-rkey-u @
     _crct-record _crct-record-u @
-    _crct-output _crct-written @ _crct-work
+    _crct-output _crct-measured @ _crct-work
     AT-CREATE-RECORD-BODY
     DUP AT-CREATE-RECORD-S-OK _crct-status DROP
-    _crct-written @ = _crct-assert
+    _crct-measured @ = _crct-assert
     _crct-output _crct-written @
     _crct-expected _crct-expected-u @ COMPARE 0= _crct-assert
     _crct-output _crct-written @ + C@ 0xA5 = _crct-assert
@@ -479,9 +550,47 @@ CREATE _crct-long-cid AT-CID-TEXT-LENGTH 1+ ALLOT
     _crct-collection _crct-collection-u @
     _crct-rkey _crct-rkey-u @
     _crct-record _crct-record-u @
-    _crct-output _crct-written @ 1- _crct-work
+    _crct-output _crct-measured @ 1- _crct-work
     AT-CREATE-RECORD-BODY
     AT-CREATE-RECORD-S-CAPACITY _crct-body-result
+    _crct-output _CRCT-BODY-CAPACITY 0xA5
+    _crct-filled? _crct-assert
+    _crct-work AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE
+    0 _crct-filled? _crct-assert
+    _crct-stack ;
+
+: _crct-test-body-maximum-measure  ( -- )
+    _crct-copy-inputs
+    _crct-build-max-record
+    _crct-long-u @ JOSE-JSON-MAX-DOCUMENT-BYTES = _crct-assert
+    _crct-repo _crct-repo-u @
+    _crct-collection _crct-collection-u @
+    _crct-rkey _crct-rkey-u @
+    _crct-long-document _crct-long-u @
+    _crct-work AT-CREATE-RECORD-BODY-MEASURE
+    DUP AT-CREATE-RECORD-S-OK _crct-status DROP
+    DUP _crct-measured !
+    _ATCRC-BODY-FIXED-BYTES
+    _crct-repo-u @ + _crct-collection-u @ +
+    _crct-rkey-u @ + JOSE-JSON-MAX-DOCUMENT-BYTES +
+    = _crct-assert
+    _crct-stack ;
+
+: _crct-test-body-maximum-encode  ( -- )
+    _crct-copy-inputs
+    _crct-build-max-record
+    _crct-long-u @ JOSE-JSON-MAX-DOCUMENT-BYTES = _crct-assert
+    _crct-max-output AT-CREATE-RECORD-BODY-MAX 1+ 0xA5 FILL
+    _crct-repo _crct-repo-u @
+    _crct-collection _crct-collection-u @
+    _crct-rkey _crct-rkey-u @
+    _crct-long-document _crct-long-u @
+    _crct-max-output _crct-measured @ _crct-work
+    AT-CREATE-RECORD-BODY
+    DUP AT-CREATE-RECORD-S-OK _crct-status DROP
+    DUP _crct-measured @ = _crct-assert
+    1- _crct-max-output + C@ 125 = _crct-assert
+    _crct-max-output _crct-measured @ + C@ 0xA5 = _crct-assert
     _crct-work AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE
     0 _crct-filled? _crct-assert
     _crct-stack ;
@@ -543,6 +652,7 @@ CREATE _crct-long-cid AT-CID-TEXT-LENGTH 1+ ALLOT
     _crct-long-document JOSE-JSON-MAX-DOCUMENT-BYTES 1+
     [CHAR] a FILL
     _crct-work AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE 0 FILL
+    _crct-output _CRCT-BODY-CAPACITY 0xA5 FILL
     _crct-repo _crct-repo-u @
     _crct-collection _crct-collection-u @
     _crct-rkey _crct-rkey-u @
@@ -550,6 +660,8 @@ CREATE _crct-long-cid AT-CID-TEXT-LENGTH 1+ ALLOT
     _crct-output _CRCT-BODY-CAPACITY _crct-work
     AT-CREATE-RECORD-BODY
     AT-CREATE-RECORD-S-CAPACITY _crct-body-result
+    _crct-output _CRCT-BODY-CAPACITY 0xA5
+    _crct-filled? _crct-assert
     _crct-stack ;
 
 : _crct-test-receipt-detachment  ( -- )
@@ -604,7 +716,7 @@ CREATE _crct-long-cid AT-CID-TEXT-LENGTH 1+ ALLOT
     _crct-dag-cid COMPARE 0= _crct-assert
     _crct-stack ;
 
-: _crct-test-receipt-admission  ( -- )
+: _crct-test-receipt-admission-a  ( -- )
     _crct-set-standard-uri
     _crct-expected-uri _crct-expected-uri-u @
     _crct-raw-cid _crct-build-simple-receipt
@@ -626,7 +738,9 @@ CREATE _crct-long-cid AT-CID-TEXT-LENGTH 1+ ALLOT
     _crct-set-standard-uri
     _crct-build-duplicate-cid-receipt
     AT-CREATE-RECORD-S-JSON _crct-expect-receipt-failure
+    _crct-stack ;
 
+: _crct-test-receipt-admission-b  ( -- )
     _crct-set-standard-uri
     _crct-build-missing-uri-receipt
     AT-CREATE-RECORD-S-MISSING _crct-expect-receipt-failure
@@ -652,7 +766,9 @@ CREATE _crct-long-cid AT-CID-TEXT-LENGTH 1+ ALLOT
     _crct-long-uri ATURI-LENGTH-MAX 1+
     _crct-dag-cid _crct-build-simple-receipt
     AT-CREATE-RECORD-S-URI _crct-expect-receipt-failure
+    _crct-stack ;
 
+: _crct-test-receipt-admission-c  ( -- )
     _crct-set-standard-uri
     _crct-dag-cid _crct-long-cid SWAP CMOVE
     [CHAR] a _crct-long-cid AT-CID-TEXT-LENGTH + C!
@@ -683,11 +799,30 @@ CREATE _crct-long-cid AT-CID-TEXT-LENGTH 1+ ALLOT
     0 _crct-fails !
     DEPTH _crct-depth !
     _crct-test-statuses
+    _crct-test-body-measure
     _crct-test-body-exact
     _crct-test-body-capacity
+    ." CREATE RECORD CODEC BODY BASIC READY" CR TX-FLUSH
+    KEY DROP
     _crct-test-body-admission
+    ." CREATE RECORD CODEC BODY ADMISSION READY" CR TX-FLUSH
+    KEY DROP
     _crct-test-receipt-detachment
-    _crct-test-receipt-admission
+    ." CREATE RECORD CODEC RECEIPT DETACHMENT READY" CR TX-FLUSH
+    KEY DROP
+    _crct-test-receipt-admission-a
+    ." CREATE RECORD CODEC RECEIPT ADMISSION A READY" CR TX-FLUSH
+    KEY DROP
+    _crct-test-receipt-admission-b
+    ." CREATE RECORD CODEC RECEIPT ADMISSION B READY" CR TX-FLUSH
+    KEY DROP
+    _crct-test-receipt-admission-c
+    ." CREATE RECORD CODEC ORDINARY READY" CR TX-FLUSH
+    KEY DROP
+    _crct-test-body-maximum-measure
+    ." CREATE RECORD CODEC MAXIMUM MEASURE READY" CR TX-FLUSH
+    KEY DROP
+    _crct-test-body-maximum-encode
     _crct-fails @ IF
         ." CREATE RECORD CODEC FAIL checks/fails "
         _crct-checks @ . _crct-fails @ . CR

@@ -18,7 +18,8 @@ The caller independently supplies:
 
 - the authenticated XRPC exchange and its arenas;
 - a request-body arena of the caller's chosen capacity;
-- `AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE` bytes of aligned scratch;
+- `AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE` bytes of aligned scratch, including
+  the protocol-derived body staging bound;
 - an initialized result descriptor and a result byte arena; and
 - `AT-CREATE-RECORD-SIZE` aligned owner storage.
 
@@ -36,8 +37,13 @@ capacities.
 ## Codec API
 
 ```forth
+AT-CREATE-RECORD-BODY-MAX              ( -- bytes )
 AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE  ( -- bytes )
 AT-CREATE-RECORD-CODEC-WORKSPACE-CLEAR ( workspace -- status )
+
+AT-CREATE-RECORD-BODY-MEASURE
+  ( repo-a repo-u collection-a collection-u rkey-a rkey-u
+    record-a record-u workspace -- bytes status )
 
 AT-CREATE-RECORD-BODY
   ( repo-a repo-u collection-a collection-u rkey-a rkey-u
@@ -51,7 +57,18 @@ AT-CREATE-RECORD-RECEIPT
 
 The body encoder requires an exact DID repository, normalized collection,
 valid record key, and strict record object. It returns zero written on failure;
-only a successful length publishes the destination bytes.
+only a successful length publishes the destination bytes. `BODY-MEASURE`
+performs the same semantic admission without a destination and returns the
+exact envelope length. After workspace geometry is admitted, both calls wipe
+the workspace before returning. Geometry rejection cannot safely touch an
+invalid, protected, or overlapping workspace.
+
+`AT-CREATE-RECORD-BODY-MAX` is 68,460 bytes, derived from the published DID,
+NSID, record-key, and strict JSON-document bounds plus the 47 fixed envelope
+bytes. Encoding occurs in that workspace staging region after full semantic
+and destination-capacity admission, then one final move publishes the exact
+body. Every failure therefore leaves the complete destination unchanged,
+including late writer failures; callers do not need to preclear it.
 
 Receipt admission requires exactly one `uri` and one `cid`. The URI must be a
 DID-backed record URI and byte-for-byte equal to the expected URI. The CID must
