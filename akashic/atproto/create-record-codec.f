@@ -1,0 +1,668 @@
+\ =====================================================================
+\  create-record-codec.f - Exact caller-owned createRecord JSON codec
+\ =====================================================================
+\  This state-free codec frames one authenticated repository record for
+\  com.atproto.repo.createRecord and admits its required uri/cid receipt.
+\  The caller supplies every byte arena and one reusable scratch workspace.
+\  No schema registry, record model, clock, transport, retry policy, or
+\  retained borrow lives here.
+\
+\  Request admission requires an exact DID repository, normalized NSID,
+\  caller-selected valid record key, and a strict JSON object whose $type
+\  equals the collection.  The record object is copied verbatim beneath the
+\  deterministic outer envelope; endpoint-specific schemas remain outside
+\  this protocol operation.
+\
+\  Receipt admission strictly decodes required uri and cid strings while
+\  accepting completely validated unknown members.  The URI must be the
+\  exact expected record URI and the CID must be a blessed DAG-CBOR CID.
+\  Successful returned spans borrow the caller workspace until it is cleared.
+\ =====================================================================
+
+PROVIDED akashic-at-crec-codec
+
+REQUIRE ../utils/memory-span.f
+REQUIRE ../utils/caller-span.f
+REQUIRE ../utils/buffer-writer.f
+REQUIRE ../utils/json-writer.f
+REQUIRE ../security/jose/json-object.f
+REQUIRE did.f
+REQUIRE nsid.f
+REQUIRE record-key.f
+REQUIRE aturi.f
+REQUIRE cid.f
+
+\ =====================================================================
+\  Public status vocabulary
+\ =====================================================================
+
+0  CONSTANT AT-CREATE-RECORD-S-OK
+1  CONSTANT AT-CREATE-RECORD-S-INVALID
+2  CONSTANT AT-CREATE-RECORD-S-BUSY
+3  CONSTANT AT-CREATE-RECORD-S-CAPACITY
+4  CONSTANT AT-CREATE-RECORD-S-ALIAS
+5  CONSTANT AT-CREATE-RECORD-S-RANGE
+6  CONSTANT AT-CREATE-RECORD-S-PROTECTED
+7  CONSTANT AT-CREATE-RECORD-S-PLATFORM
+8  CONSTANT AT-CREATE-RECORD-S-STATE
+9  CONSTANT AT-CREATE-RECORD-S-TARGET
+10 CONSTANT AT-CREATE-RECORD-S-REPOSITORY
+11 CONSTANT AT-CREATE-RECORD-S-COLLECTION
+12 CONSTANT AT-CREATE-RECORD-S-RKEY
+13 CONSTANT AT-CREATE-RECORD-S-RECORD
+14 CONSTANT AT-CREATE-RECORD-S-TYPE
+15 CONSTANT AT-CREATE-RECORD-S-JSON
+16 CONSTANT AT-CREATE-RECORD-S-MISSING
+17 CONSTANT AT-CREATE-RECORD-S-URI
+18 CONSTANT AT-CREATE-RECORD-S-CID
+19 CONSTANT AT-CREATE-RECORD-S-XRPC
+20 CONSTANT AT-CREATE-RECORD-S-CLEANUP
+21 CONSTANT AT-CREATE-RECORD-S-INTERNAL
+
+: AT-CREATE-RECORD-STATUS-VALID?  ( status -- flag )
+    DUP AT-CREATE-RECORD-S-OK >=
+    SWAP AT-CREATE-RECORD-S-INTERNAL <= AND ;
+
+\ =====================================================================
+\  Caller-owned codec workspace
+\ =====================================================================
+
+1 CONSTANT _ATCRC-P-TYPE
+1 CONSTANT _ATCRC-P-URI
+2 CONSTANT _ATCRC-P-CID
+3 CONSTANT _ATCRC-P-RECEIPT
+
+JOSE-JSON-MAX-MEMBERS CONSTANT _ATCRC-MEMBER-CAPACITY
+JOSE-JSON-MAX-NAME-BYTES CONSTANT _ATCRC-NAMES-CAPACITY
+
+_ATCRC-MEMBER-CAPACITY JOSE-JSON-OBJECT-BYTES
+JOSE-JSON-S-OK <> [IF]
+    ." createRecord codec descriptor geometry failed" CR ABORT
+[THEN]
+CONSTANT _ATCRC-DESCRIPTOR-SIZE
+
+  0 CONSTANT _ATCRW-SOURCE-A
+  8 CONSTANT _ATCRW-SOURCE-U
+ 16 CONSTANT _ATCRW-NAME-A
+ 24 CONSTANT _ATCRW-NAME-U
+ 32 CONSTANT _ATCRW-VALUE-A
+ 40 CONSTANT _ATCRW-VALUE-U
+ 48 CONSTANT _ATCRW-VALUE-TYPE
+ 56 CONSTANT _ATCRW-PRESENT
+ 64 CONSTANT _ATCRW-SCAN
+ 72 CONSTANT _ATCRW-COUNT
+ 80 CONSTANT _ATCRW-STAGED-U1
+ 88 CONSTANT _ATCRW-STAGED-U2
+ 96 CONSTANT _ATCRW-REPO-A
+104 CONSTANT _ATCRW-REPO-U
+112 CONSTANT _ATCRW-COLLECTION-A
+120 CONSTANT _ATCRW-COLLECTION-U
+128 CONSTANT _ATCRW-RKEY-A
+136 CONSTANT _ATCRW-RKEY-U
+144 CONSTANT _ATCRW-RECORD-A
+152 CONSTANT _ATCRW-RECORD-U
+160 CONSTANT _ATCRW-DESTINATION
+168 CONSTANT _ATCRW-DESTINATION-CAP
+176 CONSTANT _ATCRW-EXPECTED-A
+184 CONSTANT _ATCRW-EXPECTED-U
+192 CONSTANT _ATCRW-TMP-A
+200 CONSTANT _ATCRW-TMP-CAP
+208 CONSTANT _ATCRW-TMP-LENGTH-FIELD
+216 CONSTANT _ATCRW-HEADER-SIZE
+
+_ATCRW-HEADER-SIZE CONSTANT _ATCRW-WRITER-OFF
+_ATCRW-WRITER-OFF CBW-SIZE +
+    CONSTANT _ATCRW-DESCRIPTOR-OFF
+_ATCRW-DESCRIPTOR-OFF _ATCRC-DESCRIPTOR-SIZE +
+    CONSTANT _ATCRW-NAMES-OFF
+_ATCRW-NAMES-OFF _ATCRC-NAMES-CAPACITY +
+    CONSTANT _ATCRW-JSON-OFF
+_ATCRW-JSON-OFF JOSE-JSON-OBJECT-WORKSPACE-SIZE +
+    CONSTANT _ATCRW-TYPE-OFF
+_ATCRW-TYPE-OFF NSID-LENGTH-MAX +
+    CONSTANT _ATCRW-URI-OFF
+_ATCRW-URI-OFF ATURI-LENGTH-MAX +
+    CONSTANT _ATCRW-CID-OFF
+_ATCRW-CID-OFF AT-CID-TEXT-LENGTH +
+7 + -8 AND CONSTANT AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE
+
+: _ATCRW.SOURCE-A        ( workspace -- field ) _ATCRW-SOURCE-A + ;
+: _ATCRW.SOURCE-U        ( workspace -- field ) _ATCRW-SOURCE-U + ;
+: _ATCRW.NAME-A          ( workspace -- field ) _ATCRW-NAME-A + ;
+: _ATCRW.NAME-U          ( workspace -- field ) _ATCRW-NAME-U + ;
+: _ATCRW.VALUE-A         ( workspace -- field ) _ATCRW-VALUE-A + ;
+: _ATCRW.VALUE-U         ( workspace -- field ) _ATCRW-VALUE-U + ;
+: _ATCRW.VALUE-TYPE      ( workspace -- field ) _ATCRW-VALUE-TYPE + ;
+: _ATCRW.PRESENT         ( workspace -- field ) _ATCRW-PRESENT + ;
+: _ATCRW.SCAN            ( workspace -- field ) _ATCRW-SCAN + ;
+: _ATCRW.COUNT           ( workspace -- field ) _ATCRW-COUNT + ;
+: _ATCRW.STAGED-U1       ( workspace -- field ) _ATCRW-STAGED-U1 + ;
+: _ATCRW.STAGED-U2       ( workspace -- field ) _ATCRW-STAGED-U2 + ;
+: _ATCRW.REPO-A          ( workspace -- field ) _ATCRW-REPO-A + ;
+: _ATCRW.REPO-U          ( workspace -- field ) _ATCRW-REPO-U + ;
+: _ATCRW.COLLECTION-A    ( workspace -- field ) _ATCRW-COLLECTION-A + ;
+: _ATCRW.COLLECTION-U    ( workspace -- field ) _ATCRW-COLLECTION-U + ;
+: _ATCRW.RKEY-A          ( workspace -- field ) _ATCRW-RKEY-A + ;
+: _ATCRW.RKEY-U          ( workspace -- field ) _ATCRW-RKEY-U + ;
+: _ATCRW.RECORD-A        ( workspace -- field ) _ATCRW-RECORD-A + ;
+: _ATCRW.RECORD-U        ( workspace -- field ) _ATCRW-RECORD-U + ;
+: _ATCRW.DESTINATION     ( workspace -- field ) _ATCRW-DESTINATION + ;
+: _ATCRW.DESTINATION-CAP ( workspace -- field ) _ATCRW-DESTINATION-CAP + ;
+: _ATCRW.EXPECTED-A      ( workspace -- field ) _ATCRW-EXPECTED-A + ;
+: _ATCRW.EXPECTED-U      ( workspace -- field ) _ATCRW-EXPECTED-U + ;
+: _ATCRW.TMP-A           ( workspace -- field ) _ATCRW-TMP-A + ;
+: _ATCRW.TMP-CAP         ( workspace -- field ) _ATCRW-TMP-CAP + ;
+: _ATCRW.TMP-LENGTH-FIELD ( workspace -- field )
+    _ATCRW-TMP-LENGTH-FIELD + ;
+
+: _ATCRW.WRITER      ( workspace -- writer ) _ATCRW-WRITER-OFF + ;
+: _ATCRW.DESCRIPTOR  ( workspace -- address ) _ATCRW-DESCRIPTOR-OFF + ;
+: _ATCRW.NAMES       ( workspace -- address ) _ATCRW-NAMES-OFF + ;
+: _ATCRW.JSON        ( workspace -- address ) _ATCRW-JSON-OFF + ;
+: _ATCRW.TYPE        ( workspace -- address ) _ATCRW-TYPE-OFF + ;
+: _ATCRW.URI         ( workspace -- address ) _ATCRW-URI-OFF + ;
+: _ATCRW.CID         ( workspace -- address ) _ATCRW-CID-OFF + ;
+
+: _ATCRC-WIPE  ( workspace -- )
+    AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE 0 FILL ;
+
+\ =====================================================================
+\  Admission and subordinate status mapping
+\ =====================================================================
+
+: _ATCRC-CALLER>STATUS  ( caller-status -- status )
+    CASE
+        CALLER-SPAN-S-OK OF AT-CREATE-RECORD-S-OK ENDOF
+        CALLER-SPAN-S-RANGE OF AT-CREATE-RECORD-S-RANGE ENDOF
+        CALLER-SPAN-S-PROTECTED OF
+            AT-CREATE-RECORD-S-PROTECTED
+        ENDOF
+        CALLER-SPAN-S-PLATFORM OF
+            AT-CREATE-RECORD-S-PLATFORM
+        ENDOF
+        AT-CREATE-RECORD-S-PLATFORM SWAP
+    ENDCASE ;
+
+: _ATCRC-SPAN-STATUS  ( address length -- status )
+    DUP 0< IF 2DROP AT-CREATE-RECORD-S-INVALID EXIT THEN
+    DUP 0= IF
+        DROP IF
+            AT-CREATE-RECORD-S-INVALID
+        ELSE
+            AT-CREATE-RECORD-S-OK
+        THEN
+        EXIT
+    THEN
+    OVER 0= IF 2DROP AT-CREATE-RECORD-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS _ATCRC-CALLER>STATUS ;
+
+: _ATCRC-REQUIRED-SPAN-STATUS  ( address length -- status )
+    DUP 0> 0= IF 2DROP AT-CREATE-RECORD-S-INVALID EXIT THEN
+    OVER 0= IF 2DROP AT-CREATE-RECORD-S-INVALID EXIT THEN
+    CALLER-SPAN-STATUS _ATCRC-CALLER>STATUS ;
+
+: _ATCRC-FIXED-STATUS  ( address length -- status )
+    OVER 0= IF 2DROP AT-CREATE-RECORD-S-INVALID EXIT THEN
+    OVER 7 AND IF 2DROP AT-CREATE-RECORD-S-INVALID EXIT THEN
+    _ATCRC-REQUIRED-SPAN-STATUS ;
+
+: _ATCRC-JSON>STATUS  ( json-status -- status )
+    CASE
+        JOSE-JSON-S-OK OF AT-CREATE-RECORD-S-OK ENDOF
+        JOSE-JSON-S-CAPACITY OF AT-CREATE-RECORD-S-CAPACITY ENDOF
+        JOSE-JSON-S-MEMBERS OF AT-CREATE-RECORD-S-CAPACITY ENDOF
+        JOSE-JSON-S-STRING OF AT-CREATE-RECORD-S-CAPACITY ENDOF
+        JOSE-JSON-S-DOCUMENT OF AT-CREATE-RECORD-S-CAPACITY ENDOF
+        JOSE-JSON-S-ALIAS OF AT-CREATE-RECORD-S-ALIAS ENDOF
+        JOSE-JSON-S-SYNTAX OF AT-CREATE-RECORD-S-JSON ENDOF
+        JOSE-JSON-S-UTF8 OF AT-CREATE-RECORD-S-JSON ENDOF
+        JOSE-JSON-S-DEPTH OF AT-CREATE-RECORD-S-JSON ENDOF
+        JOSE-JSON-S-DUPLICATE OF AT-CREATE-RECORD-S-JSON ENDOF
+        AT-CREATE-RECORD-S-INTERNAL SWAP
+    ENDCASE ;
+
+: _ATCRC-CBW>STATUS  ( writer-status -- status )
+    CASE
+        CBW-S-OK OF AT-CREATE-RECORD-S-OK ENDOF
+        CBW-S-CAPACITY OF AT-CREATE-RECORD-S-CAPACITY ENDOF
+        CBW-S-INVALID OF AT-CREATE-RECORD-S-INVALID ENDOF
+        AT-CREATE-RECORD-S-INTERNAL SWAP
+    ENDCASE ;
+
+: AT-CREATE-RECORD-CODEC-WORKSPACE-CLEAR  ( workspace -- status )
+    DUP AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE _ATCRC-FIXED-STATUS
+    ?DUP IF NIP EXIT THEN
+    _ATCRC-WIPE
+    AT-CREATE-RECORD-S-OK ;
+
+\ =====================================================================
+\  Shared strict-object member mechanics
+\ =====================================================================
+
+: _ATCRC-MEMBER-LOAD  ( index workspace -- status )
+    >R
+    R@ _ATCRW.DESCRIPTOR JOSE-JSON-OBJECT-MEMBER@
+    DUP JOSE-JSON-S-OK <> IF
+        2DROP 2DROP 2DROP
+        R> DROP AT-CREATE-RECORD-S-INTERNAL EXIT
+    THEN
+    DROP
+    R@ _ATCRW.VALUE-TYPE !
+    R@ _ATCRW.VALUE-U !
+    R@ _ATCRW.SOURCE-A @ + R@ _ATCRW.VALUE-A !
+    R@ _ATCRW.NAME-U !
+    R@ _ATCRW.NAMES + R@ _ATCRW.NAME-A !
+    R> DROP AT-CREATE-RECORD-S-OK ;
+
+: _ATCRC-NAME=  ( expected-a expected-u workspace -- flag )
+    >R
+    R@ _ATCRW.NAME-A @ R@ _ATCRW.NAME-U @
+    2SWAP COMPARE 0=
+    R> DROP ;
+
+: _ATCRC-MARK  ( presence-bit workspace -- status )
+    >R
+    DUP R@ _ATCRW.PRESENT @ AND IF
+        DROP R> DROP AT-CREATE-RECORD-S-JSON EXIT
+    THEN
+    R@ _ATCRW.PRESENT @ OR R@ _ATCRW.PRESENT !
+    R> DROP AT-CREATE-RECORD-S-OK ;
+
+: _ATCRC-COPY-STRING
+  ( destination capacity length-field workspace -- status )
+    >R
+    R@ _ATCRW.VALUE-TYPE @ JOSE-JSON-T-STRING <> IF
+        2DROP DROP R> DROP AT-CREATE-RECORD-S-TYPE EXIT
+    THEN
+    R@ _ATCRW.TMP-LENGTH-FIELD !
+    R@ _ATCRW.TMP-CAP !
+    R@ _ATCRW.TMP-A !
+    R@ _ATCRW.VALUE-A @ R@ _ATCRW.VALUE-U @
+    R@ _ATCRW.TMP-A @ R@ _ATCRW.TMP-CAP @
+    R@ _ATCRW.JSON
+    JOSE-JSON-STRING-DECODE
+    DUP JOSE-JSON-S-OK <> IF
+        _ATCRC-JSON>STATUS >R
+        DROP R> R> DROP EXIT
+    THEN
+    DROP
+    R@ _ATCRW.TMP-LENGTH-FIELD @ !
+    R> DROP AT-CREATE-RECORD-S-OK ;
+
+: _ATCRC-PARSE-OBJECT  ( workspace -- count status )
+    >R
+    R@ _ATCRW.SOURCE-A @ R@ _ATCRW.SOURCE-U @
+    R@ _ATCRW.DESCRIPTOR _ATCRC-MEMBER-CAPACITY
+    R@ _ATCRW.NAMES _ATCRC-NAMES-CAPACITY
+    R@ _ATCRW.JSON
+    JOSE-JSON-OBJECT-PARSE _ATCRC-JSON>STATUS
+    ?DUP IF R> DROP 0 SWAP EXIT THEN
+    R@ _ATCRW.DESCRIPTOR JOSE-JSON-OBJECT-COUNT@
+    DUP JOSE-JSON-S-OK <> IF
+        2DROP R> DROP 0 AT-CREATE-RECORD-S-INTERNAL EXIT
+    THEN
+    DROP
+    R> DROP AT-CREATE-RECORD-S-OK ;
+
+\ =====================================================================
+\  Request record admission
+\ =====================================================================
+
+: _ATCRC-DROP11  ( eleven-values -- )
+    2DROP 2DROP 2DROP 2DROP 2DROP DROP ;
+
+: _ATCRC-RETURN11  ( eleven-values status -- status )
+    >R _ATCRC-DROP11 R> ;
+
+: _ATCRC-BODY-GEOMETRY
+  \ ( repo-a repo-u collection-a collection-u rkey-a rkey-u
+  \   record-a record-u destination capacity workspace -- status )
+    DUP AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE _ATCRC-FIXED-STATUS
+    ?DUP IF _ATCRC-RETURN11 EXIT THEN
+    10 PICK 10 PICK _ATCRC-REQUIRED-SPAN-STATUS
+    ?DUP IF _ATCRC-RETURN11 EXIT THEN
+    8 PICK 8 PICK _ATCRC-REQUIRED-SPAN-STATUS
+    ?DUP IF _ATCRC-RETURN11 EXIT THEN
+    6 PICK 6 PICK _ATCRC-REQUIRED-SPAN-STATUS
+    ?DUP IF _ATCRC-RETURN11 EXIT THEN
+    4 PICK 4 PICK _ATCRC-REQUIRED-SPAN-STATUS
+    ?DUP IF _ATCRC-RETURN11 EXIT THEN
+    2 PICK 2 PICK _ATCRC-REQUIRED-SPAN-STATUS
+    ?DUP IF _ATCRC-RETURN11 EXIT THEN
+    3 PICK JOSE-JSON-MAX-DOCUMENT-BYTES U> IF
+        _ATCRC-DROP11 AT-CREATE-RECORD-S-CAPACITY EXIT
+    THEN
+
+    10 PICK 10 PICK 2 PICK AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        _ATCRC-DROP11 AT-CREATE-RECORD-S-ALIAS EXIT
+    THEN
+    8 PICK 8 PICK 2 PICK AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        _ATCRC-DROP11 AT-CREATE-RECORD-S-ALIAS EXIT
+    THEN
+    6 PICK 6 PICK 2 PICK AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        _ATCRC-DROP11 AT-CREATE-RECORD-S-ALIAS EXIT
+    THEN
+    4 PICK 4 PICK 2 PICK AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        _ATCRC-DROP11 AT-CREATE-RECORD-S-ALIAS EXIT
+    THEN
+    2 PICK 2 PICK 2 PICK AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        _ATCRC-DROP11 AT-CREATE-RECORD-S-ALIAS EXIT
+    THEN
+
+    10 PICK 10 PICK 4 PICK 4 PICK MSPAN-OVERLAP? IF
+        _ATCRC-DROP11 AT-CREATE-RECORD-S-ALIAS EXIT
+    THEN
+    8 PICK 8 PICK 4 PICK 4 PICK MSPAN-OVERLAP? IF
+        _ATCRC-DROP11 AT-CREATE-RECORD-S-ALIAS EXIT
+    THEN
+    6 PICK 6 PICK 4 PICK 4 PICK MSPAN-OVERLAP? IF
+        _ATCRC-DROP11 AT-CREATE-RECORD-S-ALIAS EXIT
+    THEN
+    4 PICK 4 PICK 4 PICK 4 PICK MSPAN-OVERLAP? IF
+        _ATCRC-DROP11 AT-CREATE-RECORD-S-ALIAS EXIT
+    THEN
+    _ATCRC-DROP11 AT-CREATE-RECORD-S-OK ;
+
+: _ATCRC-SAVE-BODY
+  \ ( repo-a repo-u collection-a collection-u rkey-a rkey-u
+  \   record-a record-u destination capacity workspace -- )
+    >R
+    R@ _ATCRW.DESTINATION-CAP ! R@ _ATCRW.DESTINATION !
+    R@ _ATCRW.RECORD-U ! R@ _ATCRW.RECORD-A !
+    R@ _ATCRW.RKEY-U ! R@ _ATCRW.RKEY-A !
+    R@ _ATCRW.COLLECTION-U ! R@ _ATCRW.COLLECTION-A !
+    R@ _ATCRW.REPO-U ! R@ _ATCRW.REPO-A !
+    R> DROP ;
+
+: _ATCRC-CANONICAL-COLLECTION?  ( workspace -- flag )
+    >R
+    R@ _ATCRW.COLLECTION-A @ R@ _ATCRW.COLLECTION-U @
+    R@ _ATCRW.TYPE NSID-LENGTH-MAX
+    NSID-CANONICALIZE
+    DUP NSID-S-OK <> IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    DROP
+    R@ _ATCRW.TYPE SWAP
+    R@ _ATCRW.COLLECTION-A @ R@ _ATCRW.COLLECTION-U @
+    COMPARE 0=
+    R> DROP ;
+
+: _ATCRC-RECORD-TYPE  ( workspace -- status )
+    >R
+    _ATCRC-P-TYPE R@ _ATCRC-MARK ?DUP IF R> DROP EXIT THEN
+    R@ _ATCRW.TYPE NSID-LENGTH-MAX
+    R@ _ATCRW.STAGED-U1 R@ _ATCRC-COPY-STRING
+    DUP AT-CREATE-RECORD-S-CAPACITY = IF
+        DROP AT-CREATE-RECORD-S-TYPE
+    THEN
+    ?DUP IF R> DROP EXIT THEN
+    R@ _ATCRW.TYPE R@ _ATCRW.STAGED-U1 @
+    R@ _ATCRW.COLLECTION-A @ R@ _ATCRW.COLLECTION-U @
+    COMPARE 0=
+    IF AT-CREATE-RECORD-S-OK ELSE AT-CREATE-RECORD-S-TYPE THEN
+    R> DROP ;
+
+: _ATCRC-RECORD-MEMBER  ( workspace -- status )
+    >R
+    S" $type" R@ _ATCRC-NAME= IF
+        R> _ATCRC-RECORD-TYPE EXIT
+    THEN
+    R> DROP AT-CREATE-RECORD-S-OK ;
+
+: _ATCRC-PROCESS-RECORD  ( count workspace -- status )
+    >R
+    R@ _ATCRW.COUNT !
+    0 R@ _ATCRW.SCAN !
+    BEGIN
+        R@ _ATCRW.SCAN @ R@ _ATCRW.COUNT @ U<
+    WHILE
+        R@ _ATCRW.SCAN @ R@ _ATCRC-MEMBER-LOAD
+        ?DUP IF R> DROP EXIT THEN
+        R@ _ATCRC-RECORD-MEMBER ?DUP IF R> DROP EXIT THEN
+        1 R@ _ATCRW.SCAN +!
+    REPEAT
+    R@ _ATCRW.PRESENT @ _ATCRC-P-TYPE AND
+    _ATCRC-P-TYPE =
+    IF AT-CREATE-RECORD-S-OK ELSE AT-CREATE-RECORD-S-MISSING THEN
+    R> DROP ;
+
+: _ATCRC-ADMIT-RECORD  ( workspace -- status )
+    >R
+    R@ _ATCRW.RECORD-A @ R@ _ATCRW.SOURCE-A !
+    R@ _ATCRW.RECORD-U @ R@ _ATCRW.SOURCE-U !
+    0 R@ _ATCRW.PRESENT !
+    R@ _ATCRC-PARSE-OBJECT
+    ?DUP IF NIP R> DROP EXIT THEN
+    R@ _ATCRC-PROCESS-RECORD
+    R> DROP ;
+
+: _ATCRC-APPEND  ( address length workspace -- status )
+    _ATCRW.WRITER CBW-APPEND _ATCRC-CBW>STATUS ;
+
+: _ATCRC-STRING  ( address length workspace -- status )
+    _ATCRW.WRITER JSONW-STRING _ATCRC-CBW>STATUS ;
+
+: _ATCRC-CHAR  ( byte workspace -- status )
+    _ATCRW.WRITER CBW-CHAR _ATCRC-CBW>STATUS ;
+
+: _ATCRC-ENCODE-BODY  ( workspace -- written status )
+    >R
+    R@ _ATCRW.DESTINATION @ R@ _ATCRW.DESTINATION-CAP @
+    R@ _ATCRW.WRITER CBW-INIT _ATCRC-CBW>STATUS
+    ?DUP IF R> DROP 0 SWAP EXIT THEN
+
+    [CHAR] { R@ _ATCRC-CHAR ?DUP IF R> DROP 0 SWAP EXIT THEN
+    S" repo" R@ _ATCRC-STRING ?DUP IF R> DROP 0 SWAP EXIT THEN
+    [CHAR] : R@ _ATCRC-CHAR ?DUP IF R> DROP 0 SWAP EXIT THEN
+    R@ _ATCRW.REPO-A @ R@ _ATCRW.REPO-U @
+    R@ _ATCRC-STRING ?DUP IF R> DROP 0 SWAP EXIT THEN
+    [CHAR] , R@ _ATCRC-CHAR ?DUP IF R> DROP 0 SWAP EXIT THEN
+    S" collection" R@ _ATCRC-STRING
+    ?DUP IF R> DROP 0 SWAP EXIT THEN
+    [CHAR] : R@ _ATCRC-CHAR ?DUP IF R> DROP 0 SWAP EXIT THEN
+    R@ _ATCRW.COLLECTION-A @ R@ _ATCRW.COLLECTION-U @
+    R@ _ATCRC-STRING ?DUP IF R> DROP 0 SWAP EXIT THEN
+    [CHAR] , R@ _ATCRC-CHAR ?DUP IF R> DROP 0 SWAP EXIT THEN
+    S" rkey" R@ _ATCRC-STRING ?DUP IF R> DROP 0 SWAP EXIT THEN
+    [CHAR] : R@ _ATCRC-CHAR ?DUP IF R> DROP 0 SWAP EXIT THEN
+    R@ _ATCRW.RKEY-A @ R@ _ATCRW.RKEY-U @
+    R@ _ATCRC-STRING ?DUP IF R> DROP 0 SWAP EXIT THEN
+    [CHAR] , R@ _ATCRC-CHAR ?DUP IF R> DROP 0 SWAP EXIT THEN
+    S" record" R@ _ATCRC-STRING ?DUP IF R> DROP 0 SWAP EXIT THEN
+    [CHAR] : R@ _ATCRC-CHAR ?DUP IF R> DROP 0 SWAP EXIT THEN
+    R@ _ATCRW.RECORD-A @ R@ _ATCRW.RECORD-U @
+    R@ _ATCRC-APPEND ?DUP IF R> DROP 0 SWAP EXIT THEN
+    [CHAR] } R@ _ATCRC-CHAR ?DUP IF R> DROP 0 SWAP EXIT THEN
+    R@ _ATCRW.WRITER CBW-RESULT
+    _ATCRC-CBW>STATUS
+    ROT DROP
+    R> DROP ;
+
+: _ATCRC-BODY-OP  ( workspace -- written status )
+    >R
+    R@ _ATCRW.REPO-A @ R@ _ATCRW.REPO-U @ DID-VALIDATE
+    DID-S-OK <> IF R> DROP 0 AT-CREATE-RECORD-S-REPOSITORY EXIT THEN
+    R@ _ATCRW.COLLECTION-A @ R@ _ATCRW.COLLECTION-U @ NSID-CHECK
+    NSID-S-OK <> IF R> DROP 0 AT-CREATE-RECORD-S-COLLECTION EXIT THEN
+    R@ _ATCRC-CANONICAL-COLLECTION? 0= IF
+        R> DROP 0 AT-CREATE-RECORD-S-COLLECTION EXIT
+    THEN
+    R@ _ATCRW.RKEY-A @ R@ _ATCRW.RKEY-U @ AT-RKEY-VALIDATE
+    AT-RKEY-S-OK <> IF R> DROP 0 AT-CREATE-RECORD-S-RKEY EXIT THEN
+    R@ _ATCRC-ADMIT-RECORD ?DUP IF R> DROP 0 SWAP EXIT THEN
+    R@ _ATCRC-ENCODE-BODY
+    R> DROP ;
+
+: AT-CREATE-RECORD-BODY
+  \ ( repo-a repo-u collection-a collection-u rkey-a rkey-u
+  \   record-a record-u destination capacity workspace -- written status )
+    10 PICK 10 PICK 10 PICK 10 PICK 10 PICK 10 PICK
+    10 PICK 10 PICK 10 PICK 10 PICK 10 PICK
+    _ATCRC-BODY-GEOMETRY
+    ?DUP IF >R _ATCRC-DROP11 0 R> EXIT THEN
+    DUP _ATCRC-WIPE
+    DUP >R _ATCRC-SAVE-BODY
+    R@ _ATCRC-BODY-OP
+    R> _ATCRC-WIPE ;
+
+\ =====================================================================
+\  Strict createRecord receipt admission
+\ =====================================================================
+
+: _ATCRC-RECEIPT-GEOMETRY
+  \ ( source-a source-u expected-a expected-u workspace -- status )
+    DUP AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE _ATCRC-FIXED-STATUS
+    ?DUP IF >R 2DROP 2DROP DROP R> EXIT THEN
+    4 PICK 4 PICK _ATCRC-REQUIRED-SPAN-STATUS
+    ?DUP IF >R 2DROP 2DROP DROP R> EXIT THEN
+    2 PICK 2 PICK _ATCRC-REQUIRED-SPAN-STATUS
+    ?DUP IF >R 2DROP 2DROP DROP R> EXIT THEN
+    3 PICK JOSE-JSON-MAX-DOCUMENT-BYTES U> IF
+        2DROP 2DROP DROP AT-CREATE-RECORD-S-CAPACITY EXIT
+    THEN
+    1 PICK ATURI-LENGTH-MAX U> IF
+        2DROP 2DROP DROP AT-CREATE-RECORD-S-CAPACITY EXIT
+    THEN
+    4 PICK 4 PICK 2 PICK AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        2DROP 2DROP DROP AT-CREATE-RECORD-S-ALIAS EXIT
+    THEN
+    2 PICK 2 PICK 2 PICK AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE
+    MSPAN-OVERLAP? IF
+        2DROP 2DROP DROP AT-CREATE-RECORD-S-ALIAS EXIT
+    THEN
+    2DROP 2DROP DROP AT-CREATE-RECORD-S-OK ;
+
+: _ATCRC-SAVE-RECEIPT
+  ( source-a source-u expected-a expected-u workspace -- )
+    >R
+    R@ _ATCRW.EXPECTED-U ! R@ _ATCRW.EXPECTED-A !
+    R@ _ATCRW.SOURCE-U ! R@ _ATCRW.SOURCE-A !
+    R> DROP ;
+
+: _ATCRC-RECEIPT-URI  ( workspace -- status )
+    >R
+    _ATCRC-P-URI R@ _ATCRC-MARK ?DUP IF R> DROP EXIT THEN
+    R@ _ATCRW.URI ATURI-LENGTH-MAX
+    R@ _ATCRW.STAGED-U1 R@ _ATCRC-COPY-STRING
+    DUP AT-CREATE-RECORD-S-CAPACITY = IF
+        DROP AT-CREATE-RECORD-S-URI
+    THEN
+    ?DUP IF R> DROP EXIT THEN
+    R@ _ATCRW.URI R@ _ATCRW.STAGED-U1 @ ATURI-VALIDATE
+    ATURI-S-OK <> IF R> DROP AT-CREATE-RECORD-S-URI EXIT THEN
+    R@ _ATCRW.URI R@ _ATCRW.STAGED-U1 @
+    R@ _ATCRW.EXPECTED-A @ R@ _ATCRW.EXPECTED-U @
+    COMPARE 0=
+    IF AT-CREATE-RECORD-S-OK ELSE AT-CREATE-RECORD-S-URI THEN
+    R> DROP ;
+
+: _ATCRC-RECEIPT-CID  ( workspace -- status )
+    >R
+    _ATCRC-P-CID R@ _ATCRC-MARK ?DUP IF R> DROP EXIT THEN
+    R@ _ATCRW.CID AT-CID-TEXT-LENGTH
+    R@ _ATCRW.STAGED-U2 R@ _ATCRC-COPY-STRING
+    DUP AT-CREATE-RECORD-S-CAPACITY = IF
+        DROP AT-CREATE-RECORD-S-CID
+    THEN
+    ?DUP IF R> DROP EXIT THEN
+    R@ _ATCRW.CID R@ _ATCRW.STAGED-U2 @ AT-CID-TEXT-CHECK
+    DUP AT-CID-S-OK <> IF
+        2DROP R> DROP AT-CREATE-RECORD-S-CID EXIT
+    THEN
+    DROP AT-CID-CODEC-DAG-CBOR =
+    IF AT-CREATE-RECORD-S-OK ELSE AT-CREATE-RECORD-S-CID THEN
+    R> DROP ;
+
+: _ATCRC-RECEIPT-MEMBER  ( workspace -- status )
+    >R
+    S" uri" R@ _ATCRC-NAME= IF R> _ATCRC-RECEIPT-URI EXIT THEN
+    S" cid" R@ _ATCRC-NAME= IF R> _ATCRC-RECEIPT-CID EXIT THEN
+    R> DROP AT-CREATE-RECORD-S-OK ;
+
+: _ATCRC-PROCESS-RECEIPT  ( count workspace -- status )
+    >R
+    R@ _ATCRW.COUNT !
+    0 R@ _ATCRW.SCAN !
+    BEGIN
+        R@ _ATCRW.SCAN @ R@ _ATCRW.COUNT @ U<
+    WHILE
+        R@ _ATCRW.SCAN @ R@ _ATCRC-MEMBER-LOAD
+        ?DUP IF R> DROP EXIT THEN
+        R@ _ATCRC-RECEIPT-MEMBER ?DUP IF R> DROP EXIT THEN
+        1 R@ _ATCRW.SCAN +!
+    REPEAT
+    R@ _ATCRW.PRESENT @ _ATCRC-P-RECEIPT AND
+    _ATCRC-P-RECEIPT =
+    IF AT-CREATE-RECORD-S-OK ELSE AT-CREATE-RECORD-S-MISSING THEN
+    R> DROP ;
+
+: _ATCRC-RECORD-URI?  ( source-a source-u -- flag )
+    ATURI-SPLIT
+    ?DUP IF
+        >R 2DROP 2DROP 2DROP R> DROP 0 EXIT
+    THEN
+    DUP 0> 0= IF 2DROP 2DROP 2DROP 0 EXIT THEN
+    2 PICK 0> 0= IF 2DROP 2DROP 2DROP 0 EXIT THEN
+    5 PICK 5 PICK DID-VALIDATE DID-S-OK =
+    >R 2DROP 2DROP 2DROP R> ;
+
+: _ATCRC-RECEIPT-OP  ( workspace -- status )
+    >R
+    R@ _ATCRW.EXPECTED-A @ R@ _ATCRW.EXPECTED-U @
+    _ATCRC-RECORD-URI? 0= IF
+        R> DROP AT-CREATE-RECORD-S-URI EXIT
+    THEN
+    0 R@ _ATCRW.PRESENT !
+    R@ _ATCRC-PARSE-OBJECT
+    ?DUP IF NIP R> DROP EXIT THEN
+    R@ _ATCRC-PROCESS-RECEIPT
+    R> DROP ;
+
+: _ATCRC-RECEIPT-DETACH
+  ( workspace -- uri-a uri-u cid-a cid-u )
+    >R
+    R@ _ATCRW.URI R@ _ATCRW.STAGED-U1 @
+    R@ _ATCRW.CID R@ _ATCRW.STAGED-U2 @
+    R@ _ATCRW-URI-OFF 0 FILL
+    R> DROP ;
+
+: AT-CREATE-RECORD-RECEIPT
+  \ ( source-a source-u expected-a expected-u workspace
+  \   -- uri-a uri-u cid-a cid-u status )
+    4 PICK 4 PICK 4 PICK 4 PICK 4 PICK
+    _ATCRC-RECEIPT-GEOMETRY
+    ?DUP IF >R 2DROP 2DROP DROP 0 0 0 0 R> EXIT THEN
+    DUP _ATCRC-WIPE
+    DUP >R _ATCRC-SAVE-RECEIPT
+    R@ _ATCRC-RECEIPT-OP DUP IF
+        R> _ATCRC-WIPE
+        >R 0 0 0 0 R> EXIT
+    THEN
+    DROP
+    R> _ATCRC-RECEIPT-DETACH
+    AT-CREATE-RECORD-S-OK ;
+
+\ =====================================================================
+\  Compile-time geometry assertions
+\ =====================================================================
+
+1 CELLS 8 <> [IF]
+    ." createRecord codec cell geometry mismatch" CR ABORT
+[THEN]
+
+_ATCRW-DESCRIPTOR-OFF _ATCRC-DESCRIPTOR-SIZE +
+_ATCRW-NAMES-OFF <> [IF]
+    ." createRecord codec descriptor size mismatch" CR ABORT
+[THEN]
+
+_ATCRW-CID-OFF AT-CID-TEXT-LENGTH +
+7 + -8 AND AT-CREATE-RECORD-CODEC-WORKSPACE-SIZE <> [IF]
+    ." createRecord codec workspace size mismatch" CR ABORT
+[THEN]
