@@ -201,6 +201,13 @@ FORTH_CONDITIONAL_TOKENS = frozenset(("[IF]", "[ELSE]", "[THEN]"))
 # transfers.  This bounds source prescan/evaluation work and leaves room for
 # profile growth without changing the generated chunk topology on every edit.
 LINK_CHUNK_BYTES = 120 * 1024
+MEGAPAD_EVALUATE_SOURCE_MAX_BYTES = 255
+FORTH_LINE_COALESCE_BARRIERS = frozenset(
+    ("(", 'S"', 'C"', '."', 'ABORT"', ".(", "[IF]", "[ELSE]", "[THEN]")
+)
+FORTH_SPLIT_STACK_EFFECT_RE = re.compile(
+    r"^\( [^()\r\n]*--[^()\r\n]*\) *$"
+)
 CODEX_AUTH_CHECKPOINT_FORMAT = "akashic-local-codex-auth-checkpoint"
 
 
@@ -262,6 +269,10 @@ class Profile:
     include_large_sample: bool = True
     total_sectors: int = 4096
     link_chunk_bytes: int = LINK_CHUNK_BYTES
+    # Physical-line joining is safe only for a source closure audited for
+    # line-sensitive custom parsing words.  It is never a default transform.
+    audited_link_line_bytes: int | None = None
+    audited_initial_forth_line_bytes: int | None = None
 
 
 # Akashic modules that bind directly to the networking surface exported by
@@ -2080,6 +2091,7 @@ _dx-run
         failure_markers=("DESK EXTERNAL IO FAIL",),
         linked=True,
         include_large_sample=False,
+        total_sectors=8192,
     ),
     "tls-trust-registry": Profile(
         roots=("tui/applets/agent/providers/codex/trust.f",),
@@ -10273,6 +10285,7 @@ AGENT-RUN
 """,
         ready_markers=("Agent", "Run", "Review", "Ready"),
         stable_markers=("Agent", "Run", "Review", "Ready"),
+        linked=True,
     ),
     "agent-auth-ui": Profile(
         roots=(
@@ -10320,6 +10333,7 @@ AGENT-RUN
 """,
         ready_markers=("Agent", "Connection", "Sign-in required"),
         stable_markers=("Agent", "Connection"),
+        linked=True,
     ),
     "uidl-lifecycle": Profile(
         roots=("tui/uidl-tui.f",),
@@ -18687,6 +18701,7 @@ PROFILES["agent-layout-ui"] = Profile(
     ),
     ready_markers=PROFILES["agent-ui"].ready_markers,
     stable_markers=PROFILES["agent-ui"].stable_markers,
+    linked=PROFILES["agent-ui"].linked,
 )
 
 PROFILES["agent-applet-capabilities"] = Profile(
@@ -21898,6 +21913,633 @@ REQUIRE local_testing/crec-contracts.f
 )
 
 
+PROFILES["sandbox-format-contracts"] = Profile(
+    roots=("sandbox/format.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - neutral sandbox format contracts
+ENTER-USERLAND
+." [akashic] loading sandbox format contracts" CR
+REQUIRE sandbox/format.f
+REQUIRE local_testing/sbox-format-contracts.f
+""",
+    ready_markers=("SBOX FORMAT CONTRACTS PASS",),
+    stable_markers=("SBOX FORMAT CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX FORMAT CONTRACTS FAIL",
+        "SBOX FORMAT ASSERT",
+        "SBOX FORMAT STACK",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-format-contracts.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-format-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["sandbox-abi-contracts"] = Profile(
+    roots=("sandbox/abi.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - neutral sandbox ABI contracts
+ENTER-USERLAND
+." [akashic] loading sandbox ABI contracts" CR TX-FLUSH
+REQUIRE sandbox/abi.f
+REQUIRE local_testing/sbox-abi-test.f
+""",
+    ready_markers=("SBOX ABI CONTRACTS PASS",),
+    stable_markers=("SBOX ABI CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX ABI CONTRACTS FAIL",
+        "SBOX ABI ASSERT",
+        "SBOX ABI STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-abi-test.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-abi-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["sandbox-signature-contracts"] = Profile(
+    roots=("sandbox/compiler.f", "sandbox/verifier.f"),
+    resources=(),
+    autoexec=r"""\ autoexec.f - sandbox signature contracts
+ENTER-USERLAND
+." [akashic] loading sandbox signature contracts" CR TX-FLUSH
+REQUIRE sandbox/compiler.f
+REQUIRE sandbox/verifier.f
+REQUIRE local_testing/sbox-signature-test.f
+""",
+    ready_markers=("SBOX SIGNATURE CONTRACTS PASS",),
+    stable_markers=("SBOX SIGNATURE CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX SIGNATURE CONTRACTS FAIL",
+        "SBOX SIGNATURE ASSERT",
+        "SBOX SIGNATURE STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-signature-test.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-signature-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["sandbox-value-contracts"] = Profile(
+    roots=("sandbox/value.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - canonical Stage 2 sandbox value contracts
+ENTER-USERLAND
+." [akashic] loading sandbox value contracts" CR TX-FLUSH
+REQUIRE sandbox/value.f
+REQUIRE local_testing/sbox-value-contracts.f
+""",
+    ready_markers=("SBOX VALUE CONTRACTS PASS",),
+    stable_markers=("SBOX VALUE CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX VALUE CONTRACTS FAIL",
+        "SBOX VALUE ASSERT",
+        "SBOX VALUE STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-value-contracts.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-value-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["sandbox-module-owner-contracts"] = Profile(
+    roots=("runtime/sandbox-module-owner.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - installed sandbox module owner contracts
+ENTER-USERLAND
+." [akashic] loading sandbox module owner contracts" CR TX-FLUSH
+REQUIRE runtime/sandbox-module-owner.f
+REQUIRE local_testing/sbox-mod-owner-test.f
+""",
+    ready_markers=("SBOX MODULE OWNER CONTRACTS PASS",),
+    stable_markers=("SBOX MODULE OWNER CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX MODULE OWNER CONTRACTS FAIL",
+        "SBOX MODULE OWNER ASSERT",
+        "SBOX MODULE OWNER STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-mod-owner-test.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-module-owner-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["sandbox-stage2-vertical"] = Profile(
+    roots=(
+        "runtime/sandbox-module-owner.f",
+        "runtime/sandbox-host.f",
+        "sandbox/compiler.f",
+        "sandbox/verifier.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - focused sandbox Stage 2 composition gate
+ENTER-USERLAND
+." [akashic] loading sandbox Stage 2 vertical" CR TX-FLUSH
+REQUIRE runtime/sandbox-module-owner.f
+REQUIRE runtime/sandbox-host.f
+REQUIRE sandbox/compiler.f
+REQUIRE sandbox/verifier.f
+REQUIRE local_testing/sbox-stage2-vertical.f
+""",
+    ready_markers=("SBOX STAGE2 VERTICAL PASS",),
+    stable_markers=("SBOX STAGE2 VERTICAL PASS",),
+    failure_markers=(
+        "SBOX STAGE2 VERTICAL FAIL",
+        "SBOX STAGE2 ASSERT",
+        "SBOX STAGE2 STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-stage2-vertical.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-stage2-vertical.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+def _sandbox_stage3_fixture_bytes() -> bytes:
+    source = (
+        AKASHIC_ROOT / "local_testing" /
+        "sandbox-stage3-agent-operations.f"
+    ).read_text(encoding="utf-8")
+    lines: list[str] = []
+    for source_line in source.splitlines():
+        line = source_line.lstrip(" ")
+        if not line or line.startswith("\\"):
+            continue
+        match = COLON_STACK_EFFECT_RE.match(source_line)
+        if match:
+            suffix = source_line[match.end() :].lstrip(" ")
+            line = match.group("head").lstrip(" ")
+            if suffix:
+                line += " " + suffix
+        lines.append(line)
+    return "".join(line + "\n" for line in lines).encode("utf-8")
+
+
+def _sandbox_stage3_agent_profile(
+    entry_word: str,
+    marker: str,
+) -> Profile:
+    return Profile(
+        roots=("tui/applets/agent/sandbox-operations.f",),
+        resources=(),
+        autoexec=rf"""\ autoexec.f - explicit Stage 3 Agent sandbox operations
+ENTER-USERLAND
+1 CONSTANT SBOX-STAGE3-DEFER-AUTORUN
+." [akashic] loading Stage 3 Agent sandbox operations" CR TX-FLUSH
+REQUIRE tui/applets/agent/sandbox-operations.f
+REQUIRE local_testing/sbox-s3-agent-ops.f
+{entry_word}
+""",
+        ready_markers=(f"{marker} PASS",),
+        stable_markers=(f"{marker} PASS",),
+        failure_markers=(
+            f"{marker} FAIL",
+            "SBOX STAGE3 AGENT ASSERT",
+            "SBOX STAGE3 AGENT STACK",
+            "? (not found)",
+            "Branch offset overflow",
+            "dictionary full",
+            "exception",
+        ),
+        linked=True,
+        include_large_sample=False,
+        initial_files=(
+            (
+                "local_testing/sbox-s3-agent-ops.f",
+                _sandbox_stage3_fixture_bytes(),
+            ),
+        ),
+    )
+
+
+PROFILES["sandbox-stage3-agent-operations"] = (
+    _sandbox_stage3_agent_profile(
+        "_S3A-COMPILE-VERIFY-RUN",
+        "SBOX STAGE3 AGENT COMPILE VERIFY",
+    )
+)
+
+PROFILES["sandbox-stage3-agent-test"] = (
+    _sandbox_stage3_agent_profile(
+        "_S3A-TEST-RUN",
+        "SBOX STAGE3 AGENT TEST",
+    )
+)
+
+PROFILES["sandbox-stage3-agent-invoke"] = (
+    _sandbox_stage3_agent_profile(
+        "_S3A-INVOKE-RUN",
+        "SBOX STAGE3 AGENT INVOKE",
+    )
+)
+
+
+def _sandbox_stage3_desk_fixture_bytes(group: str) -> bytes:
+    source = (
+        AKASHIC_ROOT / "local_testing" /
+        "sandbox-stage3-desk-component.f"
+    ).read_text(encoding="utf-8")
+    lines: list[str] = []
+    selected = True
+    for source_line in source.splitlines():
+        line = source_line.lstrip(" ")
+        if line.startswith("\\ @profile ") and line.endswith(" begin"):
+            selected = group in line.split()[2].split(",")
+            continue
+        if line.startswith("\\ @profile ") and line.endswith(" end"):
+            selected = True
+            continue
+        if not selected:
+            continue
+        if not line or line.startswith("\\"):
+            continue
+        match = COLON_STACK_EFFECT_RE.match(source_line)
+        if match:
+            suffix = source_line[match.end() :].lstrip(" ")
+            line = match.group("head").lstrip(" ")
+            if suffix:
+                line += " " + suffix
+        lines.append(line)
+    return "".join(line + "\n" for line in lines).encode("utf-8")
+
+
+def _sandbox_stage3_desk_profile(
+    group: str,
+    entry_word: str,
+    marker: str,
+) -> Profile:
+    return Profile(
+        roots=(
+            "tui/applets/desk/sandbox-component.f",
+            "sandbox/verifier.f",
+        ),
+        resources=(),
+        autoexec=rf"""\ autoexec.f - headless Stage 3 Desk sandbox component
+ENTER-USERLAND
+1 CONSTANT SBOX-STAGE3-DESK-DEFER-AUTORUN
+." [akashic] loading Stage 3 Desk sandbox component" CR TX-FLUSH
+REQUIRE tui/applets/desk/sandbox-component.f
+REQUIRE sandbox/verifier.f
+REQUIRE local_testing/sbox-s3-desk-comp.f
+{entry_word}
+""",
+        ready_markers=(f"{marker} PASS",),
+        stable_markers=(f"{marker} PASS",),
+        failure_markers=(
+            f"{marker} FAIL",
+            "SBOX STAGE3 DESK ASSERT",
+            "SBOX STAGE3 DESK STACK",
+            "? (not found)",
+            "Branch offset overflow",
+            "dictionary full",
+            "exception",
+        ),
+        linked=True,
+        include_large_sample=False,
+        initial_files=(
+            (
+                "local_testing/sbox-s3-desk-comp.f",
+                _sandbox_stage3_desk_fixture_bytes(group),
+            ),
+        ),
+    )
+
+
+PROFILES["sandbox-stage3-desk-component"] = (
+    _sandbox_stage3_desk_profile(
+        "compose",
+        "_S3D-COMPOSE-RUN",
+        "SBOX STAGE3 DESK COMPOSE",
+    )
+)
+
+PROFILES["sandbox-stage3-desk-cancel"] = (
+    _sandbox_stage3_desk_profile(
+        "cancel",
+        "_S3D-CANCEL-RUN",
+        "SBOX STAGE3 DESK CANCEL",
+    )
+)
+
+PROFILES["sandbox-stage3-desk-drain"] = (
+    _sandbox_stage3_desk_profile(
+        "drain",
+        "_S3D-DRAIN-RUN",
+        "SBOX STAGE3 DESK DRAIN",
+    )
+)
+
+PROFILES["sandbox-stage3-desk-close"] = (
+    _sandbox_stage3_desk_profile(
+        "close",
+        "_S3D-CLOSE-RUN",
+        "SBOX STAGE3 DESK CLOSE",
+    )
+)
+
+
+PROFILES["sandbox-desk-admission"] = Profile(
+    roots=(
+        "tui/applets/desk/sandbox-admission.f",
+        "sandbox/verifier.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - exact transient Desk sandbox admission
+ENTER-USERLAND
+." [akashic] loading exact Desk sandbox admission" CR TX-FLUSH
+REQUIRE tui/applets/desk/sandbox-admission.f
+." SBOX DESK ADMISSION LOAD PASS" CR TX-FLUSH
+""",
+    ready_markers=("SBOX DESK ADMISSION LOAD PASS",),
+    stable_markers=("SBOX DESK ADMISSION LOAD PASS",),
+    failure_markers=(
+        "SBOX DESK ADMISSION LOAD FAIL",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+)
+
+
+PROFILES["sandbox-desk-service"] = Profile(
+    roots=(
+        "tui/applets/desk/sandbox-service.f",
+        "sandbox/verifier.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - bounded transient Desk sandbox job service
+ENTER-USERLAND
+." [akashic] loading bounded Desk sandbox job service" CR TX-FLUSH
+REQUIRE tui/applets/desk/sandbox-service.f
+." SBOX DESK SERVICE LOAD PASS" CR TX-FLUSH
+""",
+    ready_markers=("SBOX DESK SERVICE LOAD PASS",),
+    stable_markers=("SBOX DESK SERVICE LOAD PASS",),
+    failure_markers=(
+        "SBOX DESK SERVICE LOAD FAIL",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    include_large_sample=False,
+)
+
+
+def _sandbox_stage4_desk_service_fixture_bytes() -> bytes:
+    source = (
+        AKASHIC_ROOT / "local_testing" /
+        "sandbox-stage4-desk-service.f"
+    ).read_text(encoding="utf-8")
+    lines: list[str] = []
+    for source_line in source.splitlines():
+        line = source_line.lstrip(" ")
+        if not line or line.startswith("\\"):
+            continue
+        match = COLON_STACK_EFFECT_RE.match(source_line)
+        if match:
+            suffix = source_line[match.end() :].lstrip(" ")
+            line = match.group("head").lstrip(" ")
+            if suffix:
+                line += " " + suffix
+        lines.append(line)
+    return "".join(line + "\n" for line in lines).encode("utf-8")
+
+
+PROFILES["sandbox-stage4-desk-service"] = Profile(
+    roots=(
+        "tui/applets/desk/sandbox-service.f",
+        "interop/service-endpoint.f",
+    ),
+    resources=(),
+    autoexec=r"""\ autoexec.f - transient Desk sandbox service composition
+ENTER-USERLAND
+REQUIRE tui/applets/desk/sandbox-service.f
+REQUIRE interop/service-endpoint.f
+REQUIRE local_testing/sbox-s4-desk-service.f
+""",
+    ready_markers=("SBOX STAGE4 DESK SERVICE PASS",),
+    stable_markers=("SBOX STAGE4 DESK SERVICE PASS",),
+    failure_markers=(
+        "SBOX STAGE4 DESK SERVICE FAIL",
+        "SBOX STAGE4 DESK SERVICE ASSERT",
+        "SBOX STAGE4 DESK SERVICE STACK",
+        "? (not found)",
+        "Branch offset overflow",
+        "dictionary full",
+        "exception",
+    ),
+    linked=True,
+    link_chunk_bytes=192 * 1024,
+    audited_link_line_bytes=MEGAPAD_EVALUATE_SOURCE_MAX_BYTES,
+    audited_initial_forth_line_bytes=MEGAPAD_EVALUATE_SOURCE_MAX_BYTES,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-s4-desk-service.f",
+            _sandbox_stage4_desk_service_fixture_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["sandbox-core-contracts"] = Profile(
+    roots=("sandbox/binding.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - neutral sandbox core contracts
+ENTER-USERLAND
+." [akashic] loading sandbox core contracts" CR
+REQUIRE sandbox/binding.f
+REQUIRE local_testing/sbox-core-contracts.f
+""",
+    ready_markers=("SBOX CORE CONTRACTS PASS",),
+    stable_markers=("SBOX CORE CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX CORE CONTRACTS FAIL",
+        "SBOX CORE ASSERT",
+        "SBOX CORE STACK",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-core-contracts.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-core-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+PROFILES["sandbox-stage1-contracts"] = Profile(
+    roots=("sandbox/vm.f", "sandbox/compiler.f", "sandbox/verifier.f"),
+    resources=(),
+    autoexec=r"""\ autoexec.f - pure neutral sandbox Stage 1 contracts
+ENTER-USERLAND
+." [akashic] loading sandbox Stage 1 contracts" CR TX-FLUSH
+REQUIRE sandbox/vm.f
+REQUIRE sandbox/compiler.f
+REQUIRE sandbox/verifier.f
+REQUIRE local_testing/sbox-stage1-contracts.f
+""",
+    ready_markers=("SBOX STAGE1 CONTRACTS PASS",),
+    stable_markers=("SBOX STAGE1 CONTRACTS PASS",),
+    failure_markers=(
+        "SBOX STAGE1 CONTRACTS FAIL",
+        "SBOX STAGE1 ASSERT",
+        "SBOX STAGE1 STACK",
+    ),
+    linked=True,
+    include_large_sample=False,
+    initial_files=(
+        (
+            "local_testing/sbox-stage1-contracts.f",
+            (
+                AKASHIC_ROOT / "local_testing" /
+                "sandbox-stage1-contracts.f"
+            ).read_bytes(),
+        ),
+    ),
+)
+
+
+def _sandbox_stage1_group_profile(
+    entry_word: str,
+    marker: str,
+) -> Profile:
+    return Profile(
+        roots=("sandbox/vm.f", "sandbox/compiler.f", "sandbox/verifier.f"),
+        resources=(),
+        autoexec=rf"""\ autoexec.f - bounded pure sandbox VM contracts
+ENTER-USERLAND
+1 CONSTANT SBOX-STAGE1-DEFER-AUTORUN
+." [akashic] loading bounded sandbox VM contracts" CR TX-FLUSH
+REQUIRE sandbox/vm.f
+REQUIRE sandbox/compiler.f
+REQUIRE sandbox/verifier.f
+REQUIRE local_testing/sbox-stage1-contracts.f
+{entry_word}
+""",
+        ready_markers=(f"{marker} PASS",),
+        stable_markers=(f"{marker} PASS",),
+        failure_markers=(
+            f"{marker} FAIL",
+            "SBOX STAGE1 ASSERT",
+            "SBOX STAGE1 STACK",
+        ),
+        linked=True,
+        include_large_sample=False,
+        initial_files=(
+            (
+                "local_testing/sbox-stage1-contracts.f",
+                (
+                    AKASHIC_ROOT / "local_testing" /
+                    "sandbox-stage1-contracts.f"
+                ).read_bytes(),
+            ),
+        ),
+    )
+
+
+PROFILES["sandbox-stage1-vm-scalar-contracts"] = (
+    _sandbox_stage1_group_profile(
+        "_S1-RUN-VM-SCALAR",
+        "SBOX STAGE1 VM SCALAR",
+    )
+)
+PROFILES["sandbox-stage1-vm-state-contracts"] = (
+    _sandbox_stage1_group_profile(
+        "_S1-RUN-VM-STATE",
+        "SBOX STAGE1 VM STATE",
+    )
+)
+PROFILES["sandbox-stage1-vm-terminal-contracts"] = (
+    _sandbox_stage1_group_profile(
+        "_S1-RUN-VM-TERMINAL",
+        "SBOX STAGE1 VM TERMINAL",
+    )
+)
+PROFILES["sandbox-stage1-vm-hotloop-contracts"] = (
+    _sandbox_stage1_group_profile(
+        "_S1-RUN-VM-HOTLOOP",
+        "SBOX STAGE1 VM HOTLOOP",
+    )
+)
+
+
 PROFILES["vfs-ram-capacity-contracts"] = Profile(
     roots=("utils/fs/vfs.f",),
     resources=(),
@@ -22765,9 +23407,88 @@ def _strip_forth_noncode_lines(text: str) -> str:
     return _compact_forth(text)
 
 
+def _coalesce_audited_forth_lines(
+    source: bytes,
+    maximum_bytes: int,
+) -> bytes:
+    """Join physical lines in a specifically audited Forth source closure.
+
+    MegaPad evaluates each physical loader line through a 256-byte TIB, so
+    generated lines may contain at most 255 source bytes.  A flat stack-effect
+    comment immediately following a bare colon header is also redundant and
+    removed.  Backslash comments consume the remainder of their input line,
+    and delimiter parsers can do so when their closing delimiter is absent.
+    Conditional tokens retain physical boundaries for the raw skip scanner,
+    while PROVIDED must remain the first token on a line for KDOS's module
+    pre-scan.  Those lines are therefore emitted unchanged and in isolation.
+
+    This barrier set covers the built-in parsers used by the opted-in closure;
+    it cannot infer arbitrary custom immediate words that observe an input-line
+    boundary.  Callers must leave this transform disabled unless their complete
+    source closure has been audited for that property.
+    """
+    if not 0 < maximum_bytes <= MEGAPAD_EVALUATE_SOURCE_MAX_BYTES:
+        raise ValueError(
+            "Linked Forth line limit must be between 1 and "
+            f"{MEGAPAD_EVALUATE_SOURCE_MAX_BYTES} bytes"
+        )
+
+    output: list[bytes] = []
+    current = bytearray()
+    previous_tokens: tuple[str, ...] = ()
+
+    def flush() -> None:
+        if current:
+            output.append(bytes(current))
+            current.clear()
+
+    for line in source.split(b"\n"):
+        if not line:
+            continue
+        if len(line) > maximum_bytes:
+            raise RuntimeError(
+                f"Linked Forth source line exceeds {maximum_bytes} bytes"
+            )
+        text = line.decode("utf-8")
+        tokens = tuple(token for token in text.split(" ") if token)
+        if (
+            len(previous_tokens) == 2
+            and previous_tokens[0] == ":"
+            and FORTH_SPLIT_STACK_EFFECT_RE.fullmatch(text)
+            and not _has_forth_conditional_token(text)
+        ):
+            previous_tokens = tokens
+            continue
+        barrier = (
+            any(token.startswith("\\") for token in tokens)
+            or bool(tokens and tokens[0].upper() == "PROVIDED")
+            or any(
+                token.upper() in FORTH_LINE_COALESCE_BARRIERS
+                for token in tokens
+            )
+        )
+        if barrier:
+            flush()
+            output.append(line)
+            previous_tokens = tokens
+            continue
+
+        separator = b" " if current else b""
+        if len(current) + len(separator) + len(line) > maximum_bytes:
+            flush()
+            separator = b""
+        current.extend(separator)
+        current.extend(line)
+        previous_tokens = tokens
+
+    flush()
+    return b"".join(line + b"\n" for line in output)
+
+
 def _linked_chunks(
     modules: tuple[str, ...],
     maximum_bytes: int = LINK_CHUNK_BYTES,
+    audited_maximum_line_bytes: int | None = None,
 ) -> dict[str, bytes]:
     """Pack ordered source units into loader-safe native Forth chunks.
 
@@ -22776,6 +23497,10 @@ def _linked_chunks(
     compilation region.  KDOS retains dictionary state between loads, so
     top-level data declarations remain contiguous without exposing a partial
     definition to the next chunk's ``REQUIRE`` line.
+
+    Opt-in physical-line coalescing is applied only after those chunk
+    boundaries are fixed.  The caller must have audited the complete closure
+    for custom words that observe physical input-line boundaries.
     """
     chunks: list[bytearray] = []
     current = bytearray()
@@ -22823,10 +23548,16 @@ def _linked_chunks(
             current.extend(source_unit)
     if current:
         chunks.append(current)
-    return {
-        f".akashic/link-{index:02d}.f": bytes(content)
-        for index, content in enumerate(chunks)
-    }
+    linked_chunks: dict[str, bytes] = {}
+    for index, content in enumerate(chunks):
+        source = bytes(content)
+        if audited_maximum_line_bytes is not None:
+            source = _coalesce_audited_forth_lines(
+                source,
+                audited_maximum_line_bytes,
+            )
+        linked_chunks[f".akashic/link-{index:02d}.f"] = source
+    return linked_chunks
 
 
 def _linked_autoexec(
@@ -23019,7 +23750,11 @@ def build_image(
     requires_networking = _requires_megapad_networking(modules)
     resources = set(profile.resources)
     linked_chunks = (
-        _linked_chunks(modules, profile.link_chunk_bytes)
+        _linked_chunks(
+            modules,
+            profile.link_chunk_bytes,
+            profile.audited_link_line_bytes,
+        )
         if profile.linked
         else {}
     )
@@ -23083,6 +23818,14 @@ def build_image(
 
     for path, content in profile.initial_files:
         disk_path = PurePosixPath(path)
+        if (
+            profile.audited_initial_forth_line_bytes is not None
+            and disk_path.suffix.lower() == ".f"
+        ):
+            content = _coalesce_audited_forth_lines(
+                content,
+                profile.audited_initial_forth_line_bytes,
+            )
         parent = "/" if str(disk_path.parent) == "." else "/" + str(disk_path.parent)
         fs.inject_file(disk_path.name, content, path=parent)
 
@@ -27540,8 +28283,9 @@ CREATE _dst-daybook-owner 8 ALLOT
     ['] _dst-value@ _DESK-SERVICE+ _DSS-S-OK = _dst-assert ;
 
 : _dst-production-ids  ( -- )
-    _DESK-SERVICE-COUNT @ 11 = _dst-assert
+    _DESK-SERVICE-COUNT @ 12 = _dst-assert
     S" org.akashic.net.external-io" _DESK-SERVICE-FIND 0<> _dst-assert
+    S" org.akashic.sandbox.pure-compute" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.agent.runtime" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.agent.tool-gateway" _DESK-SERVICE-FIND 0<> _dst-assert
     S" org.akashic.agent.provider-source" _DESK-SERVICE-FIND 0<> _dst-assert
@@ -27560,6 +28304,8 @@ CREATE _dst-daybook-owner 8 ALLOT
     _DESK-XIO-INIT XIO-S-OK = _dst-assert
     S" org.akashic.net.external-io" _dst-service
         _DESK-EXTERNAL-IO = _dst-assert
+    S" org.akashic.sandbox.pure-compute" _dst-service
+        0= _dst-assert
     S" org.akashic.agent.runtime" _dst-service
         _dst-runtime = _dst-assert
     S" org.akashic.agent.tool-gateway" _dst-service
@@ -27655,7 +28401,7 @@ CREATE _dst-daybook-owner 8 ALLOT
 
 : _dst-teardown-wipe  ( -- )
     _DESK-SERVICE-TABLE-SETUP _DSS-S-OK = _dst-assert
-    _DESK-SERVICE-COUNT @ 11 = _dst-assert
+    _DESK-SERVICE-COUNT @ 12 = _dst-assert
     _DESK-SERVICE-TABLE-FINI
     _DESK-SERVICE-COUNT @ 0= _dst-assert
     _DESK-SERVICES _DSS-ENTRY-SIZE _DESK-SERVICE-CAPACITY *
@@ -27723,6 +28469,7 @@ _dst-run
     ),
     linked=True,
     include_large_sample=False,
+    total_sectors=8192,
 )
 
 
@@ -27912,6 +28659,7 @@ _smrc-run
     linked=True,
     link_chunk_bytes=192 * 1024,
     include_large_sample=False,
+    total_sectors=8192,
     initial_files=(
         (
             "local_testing/smrc-contracts.f",

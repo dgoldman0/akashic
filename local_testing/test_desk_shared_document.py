@@ -314,6 +314,7 @@ def test_desk_shared_document_contract(tmp_path: Path) -> None:
             "DESK SHARED DOCUMENT FAIL",
             "DESK SHARED DOCUMENT SHUTDOWN FAIL",
         ),
+        total_sectors=8192,
     )
     image = build_image(PROFILE_NAME, tmp_path / "desk-shared-document.img")
     assert smoke(

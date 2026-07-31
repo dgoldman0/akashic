@@ -17,7 +17,9 @@ from akashic_tui import (  # noqa: E402
     APP_SHELL_MODULE,
     DEFAULT_SMOKE_MAX_STEPS,
     DEFAULT_SMOKE_TIMEOUT,
+    FORTH_LINE_COALESCE_BARRIERS,
     LINK_CHUNK_BYTES,
+    MEGAPAD_EVALUATE_SOURCE_MAX_BYTES,
     MEGAPAD_NETWORKING_BOOT_LINE,
     MEGAPAD_ROOT,
     MP64FS_VFS_PLATFORM_BOOT_LINE,
@@ -26,6 +28,7 @@ from akashic_tui import (  # noqa: E402
     PROVIDED_RE,
     REQUIRE_RE,
     SOURCE_ROOT,
+    _coalesce_audited_forth_lines,
     _has_forth_error,
     _linked_autoexec,
     _minify_forth,
@@ -761,6 +764,121 @@ def test_conditional_control_tokens_are_never_compacted_out() -> None:
         assert _minify_forth(comment) == comment.lstrip(" ")
         stack_effect = f": WORD ( -- {token} ) ;\n"
         assert _minify_forth(stack_effect) == stack_effect
+
+
+def test_audited_line_coalescer_preserves_order_and_byte_ceiling() -> None:
+    source = b"one two\nthree four\nfive six\nseven eight\n"
+    coalesced = _coalesce_audited_forth_lines(source, 20)
+    lines = coalesced.splitlines()
+
+    assert coalesced == b"one two three four\nfive six seven eight\n"
+    assert all(len(line) <= 20 for line in lines)
+    assert b" ".join(lines).split() == source.split()
+    assert coalesced.endswith(b"\n")
+    with pytest.raises(RuntimeError, match="exceeds 20 bytes"):
+        _coalesce_audited_forth_lines(b"x" * 21 + b"\n", 20)
+    with pytest.raises(ValueError, match="between 1 and 255"):
+        _coalesce_audited_forth_lines(
+            source,
+            MEGAPAD_EVALUATE_SOURCE_MAX_BYTES + 1,
+        )
+
+
+def test_audited_line_coalescer_isolates_module_and_comment_barriers() -> None:
+    source = (
+        b"before\n"
+        b"PROVIDED exact-module\n"
+        b"middle\n"
+        b"1 DROP \\ keep the physical end of line\n"
+        b"after\n"
+    )
+    assert _coalesce_audited_forth_lines(source, 240).splitlines() == [
+        b"before",
+        b"PROVIDED exact-module",
+        b"middle",
+        b"1 DROP \\ keep the physical end of line",
+        b"after",
+    ]
+
+
+def test_audited_line_coalescer_removes_only_split_colon_stack_effects() -> None:
+    source = (
+        b": EXACT-WORD\n"
+        b"( value -- value )\n"
+        b"DUP ;\n"
+        b"( ordinary parenthesized input ) DROP\n"
+    )
+    assert _coalesce_audited_forth_lines(source, 240).splitlines() == [
+        b": EXACT-WORD DUP ;",
+        b"( ordinary parenthesized input ) DROP",
+    ]
+    for non_comment in (
+        b"(value -- value )",
+        b"(\tvalue -- value )",
+        b"( -- value )\t",
+    ):
+        source = b": EXACT-WORD\n" + non_comment + b"\nDUP ;\n"
+        assert non_comment in _coalesce_audited_forth_lines(source, 240)
+
+
+@pytest.mark.parametrize(
+    "parser_line",
+    (
+        b"( parenthesized parser input ) DROP",
+        b'S" string parser input" 2DROP',
+        b'C" counted parser input" DROP',
+        b'." output parser input"',
+        b'0 ABORT" abort parser input"',
+        b".( immediate output parser input )",
+    ),
+)
+def test_audited_line_coalescer_isolates_delimiter_parsers(
+    parser_line: bytes,
+) -> None:
+    source = b"before\n" + parser_line + b"\nafter\n"
+    assert _coalesce_audited_forth_lines(source, 240).splitlines() == [
+        b"before",
+        parser_line,
+        b"after",
+    ]
+
+
+@pytest.mark.parametrize(
+    "conditional",
+    ("[IF]", "[ELSE]", "[THEN]"),
+)
+def test_audited_line_coalescer_isolates_conditional_tokens(
+    conditional: str,
+) -> None:
+    assert conditional in FORTH_LINE_COALESCE_BARRIERS
+    source = f"before\n1 {conditional} DROP\nafter\n".encode("ascii")
+    assert _coalesce_audited_forth_lines(source, 240).splitlines() == [
+        b"before",
+        f"1 {conditional} DROP".encode("ascii"),
+        b"after",
+    ]
+
+
+def test_only_stage4_profile_opts_into_audited_line_coalescing() -> None:
+    stage4 = PROFILES["sandbox-stage4-desk-service"]
+    assert (
+        stage4.audited_link_line_bytes
+        == MEGAPAD_EVALUATE_SOURCE_MAX_BYTES
+    )
+    assert (
+        stage4.audited_initial_forth_line_bytes
+        == MEGAPAD_EVALUATE_SOURCE_MAX_BYTES
+    )
+    assert all(
+        profile.audited_link_line_bytes is None
+        for name, profile in PROFILES.items()
+        if name != "sandbox-stage4-desk-service"
+    )
+    assert all(
+        profile.audited_initial_forth_line_bytes is None
+        for name, profile in PROFILES.items()
+        if name != "sandbox-stage4-desk-service"
+    )
 
 
 def test_ordinary_streams_excludes_public_network_composition() -> None:

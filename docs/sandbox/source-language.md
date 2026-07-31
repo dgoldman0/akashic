@@ -1,6 +1,11 @@
 # Canonical restricted sandbox source language
 
-**Status:** Stage 0 permanent production source-language contract
+**Status:** Stage 0 language reference, narrowed for active Stage 1
+
+The active compiler retains this document's bounded, non-evaluating grammar
+and scalar control/stack/integer/memory forms. Typed-value forms and
+production import declarations are deferred from the Stage 1 gate; see
+[`stage1-implementation.md`](stage1-implementation.md).
 
 **Source identity:** `org.akashic.sandbox.source`
 **Scope:** bounded, non-evaluating compilation of restricted source into the
@@ -15,9 +20,10 @@ interpreter, bootstrap syntax, native-Forth subset, compatibility language for
 profiles or imports are added.
 
 The source compiler accepts an exact immutable target profile as a separate API
-input. Successful compilation emits one candidate artifact bound to that
-profile's exact digest. The source does not select a profile, grant authority,
-embed a module declaration, or bypass independent verification.
+input. Successful compilation emits one candidate bound to that profile's
+semantic tag. The source does not select a profile, grant authority, embed a
+module declaration, or bypass independent verification. Durable package
+identity and cryptographic digests remain outside the active runtime path.
 
 The security and ownership boundaries in
 [`sandbox.md`](sandbox.md),
@@ -109,7 +115,29 @@ The consuming source form supplies the exact range:
 An operand token is syntax owned by the preceding source form. It does not also
 emit a runtime literal.
 
-## 2. Complete top-level grammar
+## 2. Top-level grammar
+
+The active Stage 1 compiler accepts the permanent pure-machine subset:
+
+```text
+source          = function-declaration { function-declaration }
+                  entry-declaration { entry-declaration }
+
+function-declaration
+                = FUNCTION function-name
+                  PARAMS parameter-count
+                  RESULTS result-count
+                  LOCALS local-count
+                  { form }
+                  END
+
+entry-declaration
+                = ENTRY entry-name function-name
+```
+
+It accepts no import declaration or import call. The broader import grammar
+below records the later extension point; it is not an alternate Stage 1 parser
+and does not block qualification of the pure runtime.
 
 The grammar below is token grammar. Juxtaposition means whitespace-separated
 tokens. Braces mean repetition and brackets mean an optional group; those
@@ -132,7 +160,8 @@ function-declaration
                   END
 
 entry-declaration
-                = ENTRY entry-name function-name entry-signature-id
+                = ENTRY [ SIGNATURE entry-signature-id ]
+                  entry-name function-name
 
 form            = simple-form
                 | IF { form } [ ELSE { form } ] THEN
@@ -146,6 +175,13 @@ form            = simple-form
 At least one function and one entry are required. Imports, if any, precede all
 functions; functions precede all entries. No token may follow the final entry
 except whitespace or a line comment.
+
+Omitting `SIGNATURE` selects signature zero, the internal scalar qualification
+surface retained for Stage 1 regression. Production pure-computation entries
+spell `SIGNATURE 1` explicitly and bind a one-parameter, one-result function.
+All entries in one candidate currently use the same signature. A
+signature-zero candidate cannot contain typed-value opcodes, so a scalar entry
+cannot indirectly reach the production typed surface.
 
 Import declarations must be strictly increasing by numeric profile import ID.
 Entry declarations must be strictly increasing by raw entry-name bytes. These
@@ -185,14 +221,13 @@ does not call the function. `RETURN` is explicit; `END` emits no implicit
 return. Every reachable non-control fallthrough must remain within the
 function, and no reachable edge may fall through `END`. Reachable cycles are
 valid and need not have a path to `RETURN` or `ABORT`; instruction accounting
-and cancellation contain them at runtime. Falling through `END`, emitting
-unreachable source after a terminal path, or producing a wrong return stack
-shape is a compile error.
+and cancellation contain them at runtime.
 
-The compiler checks stack heights and typed control state from declared
-signatures and opcode effects. Independent verification reconstructs the same
-facts from artifact and profile bytes; compiler acceptance never substitutes
-for verifier acceptance.
+The compiler checks bounded lexical control and lowers only the closed opcode
+set. The independent verifier owns stack-height, call-signature, target, and
+reachability proofs from candidate and profile bytes. It rejects reachable
+fallthrough through `END`, unreachable instructions, and wrong return shapes;
+compiler acceptance never substitutes for verifier acceptance.
 
 Recursion is permitted only when the exact target profile permits it. It remains
 bounded by the invocation's instruction and call-frame budgets.
@@ -472,10 +507,10 @@ inherit lexical eligibility for `R`.
 properly with every conditional and branch-loop frame. The compiler patches
 both typed loop targets; source cannot supply either target.
 
-At every branch merge the compiler requires identical ordered loop-frame
-identity and operand-stack height. `RETURN` with a live counted-loop frame is a
-compile error. The independent verifier enforces the same loop ownership,
-target, nesting, and merge invariants from emitted instructions.
+The compiler requires lexically matched loop forms and rejects `RETURN` with a
+live counted-loop frame. The independent verifier proves loop ownership,
+targets, nesting, ordered loop scope, and operand-stack height at every merge
+from emitted instructions.
 
 There is no source `LEAVE`, `UNLOOP`, `I`, `J`, return-stack transfer, or
 user-visible loop-frame operation. `R` is the loop counter.

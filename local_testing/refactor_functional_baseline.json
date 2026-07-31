@@ -235,6 +235,7 @@
         {"path": "akashic/tui/applets/agent/providers/openai/source.f", "required_literals": ["org.akashic.agent.source.openai"]},
         {"path": "akashic/tui/applets/agent/providers/codex/source.f", "required_literals": ["org.akashic.agent.source.codex"]},
         {"path": "akashic/tui/applets/agent/access-profile.f", "required_literals": ["AAP-PRESET-CHAT-ONLY", "AAP-PRESET-PRACTICE-READ", "AAP-PRESET-PRACTICE-ASSIST", "AAP-VALID?"]},
+        {"path": "akashic/tui/applets/agent/sandbox-operations.f", "required_literals": ["AGENT-SBOX-COMPILE", "AGENT-SBOX-VERIFY", "AGENT-SBOX-TEST", "AGENT-SBOX-INVOKE", "AGENT-SBOX-RESULT-RELEASE"]},
         {"path": "akashic/tui/applets/desk/agent-access-policy.f", "required_literals": ["desk.chat-only", "desk.practice-read", "desk.practice-assist", "DAP-PROFILE-VALID?", "DAP-RUNTIME-POLICY", "DAP-RUNTIME-VALID?"]}
       ],
       "behaviors": [
@@ -251,7 +252,7 @@
           "coverage": "covered",
           "facets": ["interfaces", "failures", "journeys"],
           "preserve": ["Chat-only, Practice read-only and Practice assist presets with exact targets and budgets", "Tool approval/denial, operand seals, audit, races, quiescence and capacity", "Desk-shared Agent review, cancellation, Daybook write policy and relaunch continuity"],
-          "evidence": ["profile:agent-access", "profile:agent-security", "profile:desktop-agent-hardening", "profile:desktop"]
+          "evidence": ["profile:agent-access", "profile:agent-security", "profile:sandbox-stage3-agent-operations", "profile:sandbox-stage3-agent-test", "profile:sandbox-stage3-agent-invoke", "profile:desktop-agent-hardening", "profile:desktop"]
         },
         {
           "id": "agent.providers-and-account",
@@ -546,9 +547,9 @@
         }
       ],
       "capability_surface": {"path": "akashic/tui/applets/desk/desk.f", "literal_prefix": "desk.", "ignored_literals": ["desk.agent.facet", "desk.agent.mandate", "desk.hotbar", "desk.theme"], "ids": []},
-      "service_surface": {"path": "akashic/tui/applets/desk/desk.f", "word": "_DESK-SERVICE-TABLE-SETUP", "ids": ["org.akashic.net.external-io", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.interop.endpoint"]},
+      "service_surface": {"path": "akashic/tui/applets/desk/desk.f", "word": "_DESK-SERVICE-TABLE-SETUP", "ids": ["org.akashic.net.external-io", "org.akashic.sandbox.pure-compute", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.interop.endpoint"]},
       "source_contracts": [
-        {"path": "akashic/tui/applets/desk/desk.f", "required_literals": ["org.akashic.desk", "DESK-RUN", "DESK-TRY-LAUNCH", "DESK-REQUEST-CLOSE-ID", "DESK-FOCUS-ID", "DESK-MINIMIZE-ID", "DESK-RESTORE", "DESK-FULLFRAME!", "DESK-TOGGLE-VH", "org.akashic.net.external-io", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.interop.endpoint"]}
+        {"path": "akashic/tui/applets/desk/desk.f", "required_literals": ["org.akashic.desk", "DESK-RUN", "DESK-TRY-LAUNCH", "DESK-REQUEST-CLOSE-ID", "DESK-FOCUS-ID", "DESK-MINIMIZE-ID", "DESK-RESTORE", "DESK-FULLFRAME!", "DESK-TOGGLE-VH", "DESK-SANDBOX-CONFIGURE", "org.akashic.net.external-io", "org.akashic.sandbox.pure-compute", "org.akashic.agent.runtime", "org.akashic.agent.tool-gateway", "org.akashic.agent.provider-source", "org.akashic.agent.access-profile", "org.akashic.runtime.registry", "org.akashic.runtime.context", "org.akashic.runtime.resource-registry", "org.akashic.interop.request-bus", "org.akashic.resource.daybook", "org.akashic.interop.endpoint"]}
       ],
       "not_applicable": {"providers": "Desk composes and retains provider sources for child applets, but it is a host/product composition rather than a selectable domain provider."},
       "behaviors": [
@@ -570,8 +571,8 @@
           "id": "desk.service-and-product-composition",
           "coverage": "covered",
           "facets": ["interfaces", "journeys", "failures"],
-          "preserve": ["Exact eleven Desk-private service IDs, exact lookup, dynamic availability, duplicate/full statuses and teardown wipe", "Agent provider/runtime/tool/access policy, Daybook resource offer, request bus, XIO and frozen trust composition", "Practice recovery/fallback, Daybook/Pad shared resource, Agent hardening and Streams close/relaunch journeys"],
-          "evidence": ["profile:desk-service-table-contracts", "profile:desktop-resource", "profile:desktop-agent-hardening", "profile:desktop-streams", "profile:desktop-recovery", "profile:desktop-fallback", "pytest:local_testing/test_desk_shared_document.py::test_desk_shared_document_contract"]
+          "preserve": ["Exact twelve Desk-private service IDs, exact lookup, dynamic availability, duplicate/full statuses and teardown wipe", "Agent provider/runtime/tool/access policy, transient sandbox compute, Daybook resource offer, request bus, XIO and frozen trust composition", "Practice recovery/fallback, Daybook/Pad shared resource, Agent hardening and Streams close/relaunch journeys"],
+          "evidence": ["profile:desk-service-table-contracts", "profile:sandbox-stage4-desk-service", "profile:desktop-resource", "profile:desktop-agent-hardening", "profile:desktop-streams", "profile:desktop-recovery", "profile:desktop-fallback", "pytest:local_testing/test_desk_shared_document.py::test_desk_shared_document_contract"]
         }
       ],
       "prerequisites": []

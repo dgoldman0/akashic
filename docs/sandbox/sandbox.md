@@ -1,6 +1,13 @@
 # Akashic sandbox architecture
 
-**Status:** Stage 0 architecture contract; implementation has not begun
+**Status:** Stage 0 architecture reference; Stage 1 is implemented and
+qualified on the isolated `sandbox-stage1` branch
+
+**Active implementation boundary:** [`stage1-implementation.md`](stage1-implementation.md)
+controls the current critical path. Where the older Stage 0 documents make
+canonical profile codecs, digests, typed value graphs, or production import
+hardening part of Stage 1, those items are now later architecture reference
+rather than prerequisites for the pure neutral runtime.
 
 **Selected production baseline profile:** `org.akashic.sandbox.pure-compute`
 **Security scope:** hostile source, hostile artifacts, hostile typed input, and
@@ -465,14 +472,15 @@ No production runtime implementation or contract hardening belongs in Stage
 
 ### Stage 1 — production neutral runtime
 
-Implement the compiler, independent verifier, sealed execution plan, and
-fresh-invocation executor at the selected production boundary. Implement the
-generic profile and typed-import record/binding machinery even though the
-pure-computation profile binds no imports and admits no effects. Qualify
-malformed source/artifacts, every instruction path, bounds, budgets, cleanup,
-determinism, and cross-instance isolation. A shortcut interpreter or
-pure-only artifact/verifier design that must later be replaced does not
-satisfy this stage.
+Implement the bounded compiler, independent verifier, owned sealed execution
+plan, immutable internal profile, empty pure binding, and resumable
+caller-owned executor. Retain the generic import-call boundary in the machine
+model, but do not put production import adapters, typed value graphs,
+canonical profile codecs, or digest identity on this gate. Qualify malformed
+source and candidates, instruction and target checks, bounds, budgets,
+cancellation, cleanup, and cross-instance isolation. These are the permanent
+runtime interfaces; later codecs and hosts construct or transport them rather
+than replacing the pure runtime with a second evaluator.
 
 ### Stage 2 — exact artifacts and Akashic host
 

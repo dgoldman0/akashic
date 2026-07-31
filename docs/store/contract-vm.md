@@ -1,5 +1,13 @@
 # akashic-contract-vm — Blockchain Contract VM
 
+**Status:** experimental ITC consumer; not a production sandbox.
+
+This module is not the reusable sandbox foundation. The shared implementation
+belongs in `akashic/sandbox/`; a later contract adapter must consume that core
+and the ITC path must then be removed rather than retained as a compatibility
+runtime. Porting does not production-harden the chain behavior described
+below.
+
 Sandboxed Forth contract execution engine built on top of the ITC
 (Interpreted Threaded Code) compiler.  Contracts are compiled from
 Forth source, serialized as ITC images, stored in XMEM, and executed
@@ -12,6 +20,25 @@ REQUIRE store/contract-vm.f
 `PROVIDED akashic-contract-vm` — depends on `akashic-itc`,
 `akashic-state`, `akashic-block`, `akashic-consensus`, `akashic-tx`,
 `akashic-sha3`, `akashic-guard`.
+
+## Remaining contract-specific work
+
+The current neutral-runtime critical path does not include this work. A future
+contract owner must separately specify and qualify:
+
+- the chain gas schedule and economic correctness;
+- deployment and code identity;
+- caller and contract-self representation;
+- storage ownership, quotas, persistence, revisioning, and rollback;
+- transaction atomicity;
+- log, return, and revert ordering and failure truth;
+- durable code/storage cleanup and recovery; and
+- chain-specific adversarial behavior.
+
+The common sandbox may supply isolated execution state, checked memory,
+instruction accounting, immutable profiles, structured results, and
+deterministic cleanup. None of those facts by itself settles the chain
+semantics above.
 
 ---
 

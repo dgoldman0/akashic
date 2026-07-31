@@ -1,8 +1,15 @@
 # Canonical sandbox artifact and verifier contract
 
-**Status:** Stage 0 architecture contract
+**Status:** Stage 0 long-term architecture reference
 **Scope:** neutral executable artifact bytes, mechanical and semantic
 verification, and the sealed verified plan consumed by the sandbox runtime
+
+The active Stage 1 runtime uses the smaller address-free semantic candidate
+defined by `akashic/sandbox/candidate.f`; see
+[`stage1-implementation.md`](stage1-implementation.md). Canonical packaging,
+profile digests, durable cache identity, and typed-value ABI fields in this
+document are intentionally deferred. The function/import/entry/instruction
+model and the independent-verifier/owned-plan boundary remain applicable.
 
 This document defines the deliberately ratified executable artifact for the
 Akashic sandbox. It is a canonical, address-free byte format. It carries

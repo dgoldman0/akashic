@@ -1,0 +1,1093 @@
+\ =====================================================================
+\  sandbox-operations.f - Explicit provider-invisible Agent sandbox API
+\ =====================================================================
+\
+\  This adapter gives trusted Agent-side code four explicit operations:
+\  compile restricted source to inert candidate bytes, independently verify
+\  candidate bytes, compile/verify/run a transient test, and invoke one exact
+\  installed module revision.  It is deliberately not a CAP-DESC, tool,
+\  provider callback, preset, transcript item, or request-bus handler.
+\
+\  One caller-owned AGENT-SBOX-OPS-SIZE object holds the immutable production
+\  profile, fixed materialized value limits, one embedded invocation host, and
+\  transient ownership fields.  Calls are synchronous and caller-serialized.
+\  Every returned payload belongs to a separate caller-owned result envelope
+\  and survives operation-owner, module-owner, plan, and parent-Context
+\  teardown.  AGENT-SBOX-RESULT-RELEASE scrubs and frees that payload.
+\
+\  Compiler success is never execution authority.  TEST always invokes the
+\  independent verifier, and INVOKE resolves only an exact copied RID plus a
+\  positive owner revision.  No plan, VM, Context, handler, service, native
+\  address, or execution token is returned in a result.
+\ =====================================================================
+
+PROVIDED akashic-agent-sandbox-operations
+
+REQUIRE ../../../runtime/sandbox-module-owner.f
+REQUIRE ../../../runtime/sandbox-host.f
+REQUIRE ../../../sandbox/compiler.f
+REQUIRE ../../../sandbox/verifier.f
+REQUIRE ../../../utils/caller-span.f
+REQUIRE ../../../utils/memory-span.f
+
+\ =====================================================================
+\  Adapter and operation result vocabularies
+\ =====================================================================
+
+0  CONSTANT AGENT-SBOX-S-OK
+1  CONSTANT AGENT-SBOX-S-INVALID
+2  CONSTANT AGENT-SBOX-S-STATE
+3  CONSTANT AGENT-SBOX-S-NOMEM
+4  CONSTANT AGENT-SBOX-S-COMPILER
+5  CONSTANT AGENT-SBOX-S-PLAN
+6  CONSTANT AGENT-SBOX-S-VERIFIER
+7  CONSTANT AGENT-SBOX-S-PROFILE
+8  CONSTANT AGENT-SBOX-S-OWNER
+9  CONSTANT AGENT-SBOX-S-ENTRY
+10 CONSTANT AGENT-SBOX-S-HOST
+11 CONSTANT AGENT-SBOX-S-RESULT
+
+: AGENT-SBOX-STATUS-VALID?  ( status -- flag )
+    DUP AGENT-SBOX-S-OK >=
+    SWAP AGENT-SBOX-S-RESULT <= AND ;
+
+1 CONSTANT AGENT-SBOX-OP-COMPILE
+2 CONSTANT AGENT-SBOX-OP-VERIFY
+3 CONSTANT AGENT-SBOX-OP-TEST
+4 CONSTANT AGENT-SBOX-OP-INVOKE
+
+: AGENT-SBOX-OP-VALID?  ( operation -- flag )
+    DUP AGENT-SBOX-OP-COMPILE >=
+    SWAP AGENT-SBOX-OP-INVOKE <= AND ;
+
+: _ASBOX-TERMINAL-RUN-STATE?  ( run-state -- flag )
+    DUP SBOX-VM-RUN-COMPLETE >=
+    SWAP SBOX-VM-RUN-CANCELLED <= AND ;
+
+0 CONSTANT AGENT-SBOX-PAYLOAD-NONE
+1 CONSTANT AGENT-SBOX-PAYLOAD-CANDIDATE
+2 CONSTANT AGENT-SBOX-PAYLOAD-VM-RESULT
+
+1 CONSTANT _ASBOX-OPS-IDLE
+2 CONSTANT _ASBOX-OPS-BUSY
+
+0x415342584F505321 CONSTANT _ASBOX-OPS-MAGIC  \ "ASBXOPS!"
+0x4153425852455321 CONSTANT _ASBOX-RESULT-MAGIC  \ "ASBXRES!"
+
+\ The first Agent preset is fixed and deliberately below the neutral pure
+\ profile's hard ceilings.  Model-token and disclosure budgets are unrelated
+\ and are never mapped into these units.
+100000 CONSTANT AGENT-SBOX-INSTRUCTION-BUDGET
+8192   CONSTANT AGENT-SBOX-VALUE-OP-BUDGET
+262144 CONSTANT AGENT-SBOX-COPY-BUDGET
+256    CONSTANT AGENT-SBOX-SLICE-STEPS
+64     CONSTANT AGENT-SBOX-MEMORY-BYTES
+
+\ =====================================================================
+\  Self-contained result envelope
+\ =====================================================================
+
+  0 CONSTANT _ASR-MAGIC
+  8 CONSTANT _ASR-SELF
+ 16 CONSTANT _ASR-OP
+ 24 CONSTANT _ASR-STATUS
+ 32 CONSTANT _ASR-COMPILER-STATUS
+ 40 CONSTANT _ASR-VERIFIER-STATUS
+ 48 CONSTANT _ASR-VERIFIER-DETAIL
+ 56 CONSTANT _ASR-VERIFIER-INDEX
+ 64 CONSTANT _ASR-PLAN-STATUS
+ 72 CONSTANT _ASR-OWNER-STATUS
+ 80 CONSTANT _ASR-HOST-STATUS
+ 88 CONSTANT _ASR-RUN-STATE
+ 96 CONSTANT _ASR-PAYLOAD-KIND
+104 CONSTANT _ASR-PAYLOAD
+112 CONSTANT _ASR-PAYLOAD-U
+120 CONSTANT _ASR-PAYLOAD-CAP
+128 CONSTANT _ASR-MEMORY-U
+136 CONSTANT _ASR-FUNCTION-N
+144 CONSTANT _ASR-ENTRY-N
+152 CONSTANT _ASR-INSTRUCTION-N
+160 CONSTANT _ASR-RESERVED
+168 CONSTANT AGENT-SBOX-RESULT-SIZE
+
+: _ASR.MAGIC              ( result -- address ) _ASR-MAGIC + ;
+: _ASR.SELF               ( result -- address ) _ASR-SELF + ;
+: _ASR.OP                 ( result -- address ) _ASR-OP + ;
+: _ASR.STATUS             ( result -- address ) _ASR-STATUS + ;
+: _ASR.COMPILER-STATUS    ( result -- address ) _ASR-COMPILER-STATUS + ;
+: _ASR.VERIFIER-STATUS    ( result -- address ) _ASR-VERIFIER-STATUS + ;
+: _ASR.VERIFIER-DETAIL    ( result -- address ) _ASR-VERIFIER-DETAIL + ;
+: _ASR.VERIFIER-INDEX     ( result -- address ) _ASR-VERIFIER-INDEX + ;
+: _ASR.PLAN-STATUS        ( result -- address ) _ASR-PLAN-STATUS + ;
+: _ASR.OWNER-STATUS       ( result -- address ) _ASR-OWNER-STATUS + ;
+: _ASR.HOST-STATUS        ( result -- address ) _ASR-HOST-STATUS + ;
+: _ASR.RUN-STATE          ( result -- address ) _ASR-RUN-STATE + ;
+: _ASR.PAYLOAD-KIND       ( result -- address ) _ASR-PAYLOAD-KIND + ;
+: _ASR.PAYLOAD            ( result -- address ) _ASR-PAYLOAD + ;
+: _ASR.PAYLOAD-U          ( result -- address ) _ASR-PAYLOAD-U + ;
+: _ASR.PAYLOAD-CAP        ( result -- address ) _ASR-PAYLOAD-CAP + ;
+: _ASR.MEMORY-U           ( result -- address ) _ASR-MEMORY-U + ;
+: _ASR.FUNCTION-N         ( result -- address ) _ASR-FUNCTION-N + ;
+: _ASR.ENTRY-N            ( result -- address ) _ASR-ENTRY-N + ;
+: _ASR.INSTRUCTION-N      ( result -- address ) _ASR-INSTRUCTION-N + ;
+: _ASR.RESERVED           ( result -- address ) _ASR-RESERVED + ;
+
+: _ASBOX-SPAN?  ( address length -- flag )
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    CALLER-SPAN-STATUS CALLER-SPAN-S-OK = ;
+
+: _ASBOX-FIXED-SPAN?  ( address length -- flag )
+    OVER 0= IF 2DROP 0 EXIT THEN
+    OVER 7 AND IF 2DROP 0 EXIT THEN
+    _ASBOX-SPAN? ;
+
+: _ASBOX-ZERO?  ( address length -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
+
+: _ASBOX-RESULT-FIXED?  ( result -- flag )
+    AGENT-SBOX-RESULT-SIZE _ASBOX-FIXED-SPAN? ;
+
+: _ASBOX-RESULT-ZERO?  ( result -- flag )
+    AGENT-SBOX-RESULT-SIZE _ASBOX-ZERO? ;
+
+: _ASBOX-RESULT-HEADER?  ( result -- flag )
+    DUP _ASBOX-RESULT-FIXED? 0= IF DROP 0 EXIT THEN
+    DUP _ASR.MAGIC @ _ASBOX-RESULT-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _ASR.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _ASR.OP @ AGENT-SBOX-OP-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _ASR.STATUS @ AGENT-SBOX-STATUS-VALID? 0= IF DROP 0 EXIT THEN
+    _ASR.RESERVED @ 0= ;
+
+: _ASBOX-RESULT-PAYLOAD-SPAN?  ( result -- flag )
+    >R
+    R@ _ASR.PAYLOAD @ R@ _ASR.PAYLOAD-CAP @
+    2DUP _ASBOX-SPAN? 0= IF 2DROP R> DROP 0 EXIT THEN
+    R@ _ASR.PAYLOAD-U @ OVER U> IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP R@ AGENT-SBOX-RESULT-SIZE MSPAN-OVERLAP? 0=
+    NIP NIP
+    R> DROP ;
+
+: _ASBOX-RESULT-CANDIDATE?  ( result -- flag )
+    >R
+    R@ _ASBOX-RESULT-PAYLOAD-SPAN? 0= IF R> DROP 0 EXIT THEN
+    R@ _ASR.PAYLOAD-CAP @
+        SBOX-VERIFIER-CANDIDATE-MAX-SIZE <> IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _ASR.PAYLOAD @ SBOX-CANDIDATE-TOTAL@
+    R@ _ASR.PAYLOAD-U @ =
+    R> DROP ;
+
+: _ASBOX-RESULT-VM?  ( result -- flag )
+    >R
+    R@ _ASBOX-RESULT-PAYLOAD-SPAN? 0= IF R> DROP 0 EXIT THEN
+    R@ _ASR.PAYLOAD-CAP @ R@ _ASR.PAYLOAD-U @ <> IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _ASR.PAYLOAD @ DUP SBOX-VM-RESULT-VALID?
+    SWAP SBOX-VM-RESULT-TOTAL@ R@ _ASR.PAYLOAD-U @ = AND
+    R> DROP ;
+
+: AGENT-SBOX-RESULT-VALID?  ( result -- flag )
+    DUP _ASBOX-RESULT-HEADER? 0= IF DROP 0 EXIT THEN
+    DUP _ASR.COMPILER-STATUS @ SBOX-COMPILER-STATUS-VALID? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _ASR.VERIFIER-STATUS @ SBOX-VERIFIER-STATUS-VALID? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _ASR.VERIFIER-DETAIL @ SBOX-VERIFIER-DETAIL-VALID? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _ASR.PLAN-STATUS @ SBOX-PLAN-STATUS-VALID? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _ASR.OWNER-STATUS @ SBOX-MODULE-OWNER-STATUS-VALID? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _ASR.HOST-STATUS @ SBOX-HOST-STATUS-VALID? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _ASR.VERIFIER-INDEX @ -1 < IF DROP 0 EXIT THEN
+    DUP _ASR.RUN-STATE @ DUP SBOX-VM-RUN-INVALID <
+        SWAP SBOX-VM-RUN-FINISHED > OR IF DROP 0 EXIT THEN
+    DUP _ASR.MEMORY-U @ 0< IF DROP 0 EXIT THEN
+    DUP _ASR.FUNCTION-N @ 0< IF DROP 0 EXIT THEN
+    DUP _ASR.ENTRY-N @ 0< IF DROP 0 EXIT THEN
+    DUP _ASR.INSTRUCTION-N @ 0< IF DROP 0 EXIT THEN
+
+    DUP _ASR.STATUS @ AGENT-SBOX-S-OK <> IF
+        DUP _ASR.PAYLOAD-KIND @ AGENT-SBOX-PAYLOAD-NONE =
+        OVER _ASR.PAYLOAD @ 0= AND
+        OVER _ASR.PAYLOAD-U @ 0= AND
+        SWAP _ASR.PAYLOAD-CAP @ 0= AND EXIT
+    THEN
+
+    DUP _ASR.OP @ CASE
+        AGENT-SBOX-OP-COMPILE OF
+            DUP _ASR.PAYLOAD-KIND @
+                AGENT-SBOX-PAYLOAD-CANDIDATE =
+            SWAP _ASBOX-RESULT-CANDIDATE? AND
+        ENDOF
+        AGENT-SBOX-OP-VERIFY OF
+            DUP _ASR.PAYLOAD-KIND @ AGENT-SBOX-PAYLOAD-NONE =
+            OVER _ASR.PAYLOAD @ 0= AND
+            OVER _ASR.PAYLOAD-U @ 0= AND
+            SWAP _ASR.PAYLOAD-CAP @ 0= AND
+        ENDOF
+        AGENT-SBOX-OP-TEST OF
+            DUP _ASR.PAYLOAD-KIND @
+                AGENT-SBOX-PAYLOAD-VM-RESULT =
+            OVER _ASR.RUN-STATE @ _ASBOX-TERMINAL-RUN-STATE? AND
+            SWAP _ASBOX-RESULT-VM? AND
+        ENDOF
+        AGENT-SBOX-OP-INVOKE OF
+            DUP _ASR.PAYLOAD-KIND @
+                AGENT-SBOX-PAYLOAD-VM-RESULT =
+            OVER _ASR.RUN-STATE @ _ASBOX-TERMINAL-RUN-STATE? AND
+            SWAP _ASBOX-RESULT-VM? AND
+        ENDOF
+        DROP 0 SWAP
+    ENDCASE ;
+
+: AGENT-SBOX-RESULT-OP@  ( result -- operation|0 )
+    DUP AGENT-SBOX-RESULT-VALID? IF _ASR.OP @ ELSE DROP 0 THEN ;
+
+: AGENT-SBOX-RESULT-STATUS@  ( result -- status )
+    DUP AGENT-SBOX-RESULT-VALID?
+    IF _ASR.STATUS @ ELSE DROP AGENT-SBOX-S-INVALID THEN ;
+
+: AGENT-SBOX-RESULT-COMPILER-STATUS@  ( result -- status )
+    DUP AGENT-SBOX-RESULT-VALID?
+    IF _ASR.COMPILER-STATUS @ ELSE DROP SBOX-COMPILER-S-INVALID THEN ;
+
+: AGENT-SBOX-RESULT-VERIFIER@
+  ( result -- status detail index flag )
+    DUP AGENT-SBOX-RESULT-VALID? 0= IF
+        DROP SBOX-VERIFIER-S-INVALID
+        SBOX-VERIFIER-D-NONE -1 0 EXIT
+    THEN
+    DUP _ASR.VERIFIER-STATUS @
+    OVER _ASR.VERIFIER-DETAIL @
+    ROT _ASR.VERIFIER-INDEX @
+    -1 ;
+
+: AGENT-SBOX-RESULT-OWNER-STATUS@  ( result -- status )
+    DUP AGENT-SBOX-RESULT-VALID? IF
+        _ASR.OWNER-STATUS @
+    ELSE
+        DROP SBOX-MODULE-OWNER-S-INVALID
+    THEN ;
+
+: AGENT-SBOX-RESULT-HOST-STATUS@  ( result -- status )
+    DUP AGENT-SBOX-RESULT-VALID?
+    IF _ASR.HOST-STATUS @ ELSE DROP SBOX-HOST-S-INVALID THEN ;
+
+: AGENT-SBOX-RESULT-FACTS@
+  ( result -- memory-u functions entries instructions flag )
+    DUP AGENT-SBOX-RESULT-VALID? 0= IF
+        DROP 0 0 0 0 0 EXIT
+    THEN
+    >R
+    R@ _ASR.MEMORY-U @
+    R@ _ASR.FUNCTION-N @
+    R@ _ASR.ENTRY-N @
+    R@ _ASR.INSTRUCTION-N @
+    R> DROP -1 ;
+
+: AGENT-SBOX-RESULT-PAYLOAD@
+  ( result -- address length flag )
+    DUP AGENT-SBOX-RESULT-VALID? 0= IF DROP 0 0 0 EXIT THEN
+    DUP _ASR.PAYLOAD @
+    SWAP _ASR.PAYLOAD-U @
+    2DUP OR 0<> ;
+
+: _ASBOX-SCRUB-FREE  ( address length -- )
+    OVER 0= IF 2DROP EXIT THEN
+    DUP 0> IF 2DUP 0 FILL THEN
+    DROP FREE ;
+
+: AGENT-SBOX-RESULT-RELEASE  ( result -- status )
+    DUP _ASBOX-RESULT-FIXED? 0= IF
+        DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    DUP _ASBOX-RESULT-ZERO? IF
+        DROP AGENT-SBOX-S-OK EXIT
+    THEN
+    DUP AGENT-SBOX-RESULT-VALID? 0= IF
+        DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    >R
+    R@ _ASR.PAYLOAD-KIND @ AGENT-SBOX-PAYLOAD-VM-RESULT = IF
+        R@ _ASR.PAYLOAD @ R@ _ASR.PAYLOAD-CAP @
+            SBOX-VM-RESULT-RELEASE DROP
+    THEN
+    R@ _ASR.PAYLOAD @ R@ _ASR.PAYLOAD-CAP @ _ASBOX-SCRUB-FREE
+    R@ AGENT-SBOX-RESULT-SIZE 0 FILL
+    R> DROP
+    AGENT-SBOX-S-OK ;
+
+\ =====================================================================
+\  Caller-owned operation object
+\ =====================================================================
+
+  0 CONSTANT _ASO-MAGIC
+  8 CONSTANT _ASO-SELF
+ 16 CONSTANT _ASO-OWNER
+ 24 CONSTANT _ASO-PARENT
+ 32 CONSTANT _ASO-STATE
+ 40 CONSTANT _ASO-INSTRUCTION-BUDGET
+ 48 CONSTANT _ASO-VALUE-OP-BUDGET
+ 56 CONSTANT _ASO-COPY-BUDGET
+ 64 CONSTANT _ASO-SLICE-STEPS
+ 72 CONSTANT _ASO-MEMORY-U
+ 80 CONSTANT _ASO-ARG-A
+ 88 CONSTANT _ASO-ARG-U
+ 96 CONSTANT _ASO-ENTRY-A
+104 CONSTANT _ASO-ENTRY-U
+112 CONSTANT _ASO-INPUT-A
+120 CONSTANT _ASO-INPUT-U
+128 CONSTANT _ASO-REVISION
+136 CONSTANT _ASO-RESULT
+144 CONSTANT _ASO-CANDIDATE
+152 CONSTANT _ASO-CANDIDATE-U
+160 CONSTANT _ASO-CANDIDATE-CAP
+168 CONSTANT _ASO-COMPILER-WORK
+176 CONSTANT _ASO-VERIFIER-WORK
+184 CONSTANT _ASO-PLAN
+192 CONSTANT _ASO-PLAN-U
+200 CONSTANT _ASO-PLAN-OWNED
+208 CONSTANT _ASO-OUTPUT
+216 CONSTANT _ASO-OUTPUT-U
+224 CONSTANT _ASO-OUTPUT-CAP
+232 CONSTANT _ASO-RESERVED
+240 CONSTANT _ASO-PROFILE
+_ASO-PROFILE SBOX-PROFILE-SIZE + CONSTANT _ASO-LIMITS
+_ASO-LIMITS SBOX-VALUE-LIMITS-SIZE + CONSTANT _ASO-HOST
+_ASO-HOST SBOX-HOST-INVOCATION-SIZE +
+    CONSTANT AGENT-SBOX-OPS-SIZE
+
+: _ASO.MAGIC              ( ops -- address ) _ASO-MAGIC + ;
+: _ASO.SELF               ( ops -- address ) _ASO-SELF + ;
+: _ASO.OWNER              ( ops -- address ) _ASO-OWNER + ;
+: _ASO.PARENT             ( ops -- address ) _ASO-PARENT + ;
+: _ASO.STATE              ( ops -- address ) _ASO-STATE + ;
+: _ASO.INSTRUCTION-BUDGET ( ops -- address ) _ASO-INSTRUCTION-BUDGET + ;
+: _ASO.VALUE-OP-BUDGET    ( ops -- address ) _ASO-VALUE-OP-BUDGET + ;
+: _ASO.COPY-BUDGET        ( ops -- address ) _ASO-COPY-BUDGET + ;
+: _ASO.SLICE-STEPS        ( ops -- address ) _ASO-SLICE-STEPS + ;
+: _ASO.MEMORY-U           ( ops -- address ) _ASO-MEMORY-U + ;
+: _ASO.ARG-A              ( ops -- address ) _ASO-ARG-A + ;
+: _ASO.ARG-U              ( ops -- address ) _ASO-ARG-U + ;
+: _ASO.ENTRY-A            ( ops -- address ) _ASO-ENTRY-A + ;
+: _ASO.ENTRY-U            ( ops -- address ) _ASO-ENTRY-U + ;
+: _ASO.INPUT-A            ( ops -- address ) _ASO-INPUT-A + ;
+: _ASO.INPUT-U            ( ops -- address ) _ASO-INPUT-U + ;
+: _ASO.REVISION           ( ops -- address ) _ASO-REVISION + ;
+: _ASO.RESULT             ( ops -- address ) _ASO-RESULT + ;
+: _ASO.CANDIDATE          ( ops -- address ) _ASO-CANDIDATE + ;
+: _ASO.CANDIDATE-U        ( ops -- address ) _ASO-CANDIDATE-U + ;
+: _ASO.CANDIDATE-CAP      ( ops -- address ) _ASO-CANDIDATE-CAP + ;
+: _ASO.COMPILER-WORK      ( ops -- address ) _ASO-COMPILER-WORK + ;
+: _ASO.VERIFIER-WORK      ( ops -- address ) _ASO-VERIFIER-WORK + ;
+: _ASO.PLAN               ( ops -- address ) _ASO-PLAN + ;
+: _ASO.PLAN-U             ( ops -- address ) _ASO-PLAN-U + ;
+: _ASO.PLAN-OWNED         ( ops -- address ) _ASO-PLAN-OWNED + ;
+: _ASO.OUTPUT             ( ops -- address ) _ASO-OUTPUT + ;
+: _ASO.OUTPUT-U           ( ops -- address ) _ASO-OUTPUT-U + ;
+: _ASO.OUTPUT-CAP         ( ops -- address ) _ASO-OUTPUT-CAP + ;
+: _ASO.RESERVED           ( ops -- address ) _ASO-RESERVED + ;
+: _ASO.PROFILE            ( ops -- profile ) _ASO-PROFILE + ;
+: _ASO.LIMITS             ( ops -- limits ) _ASO-LIMITS + ;
+: _ASO.HOST               ( ops -- host ) _ASO-HOST + ;
+
+: _ASBOX-OPS-FIXED?  ( ops -- flag )
+    AGENT-SBOX-OPS-SIZE _ASBOX-FIXED-SPAN? ;
+
+: _ASBOX-OPS-ZERO?  ( ops -- flag )
+    AGENT-SBOX-OPS-SIZE _ASBOX-ZERO? ;
+
+: _ASBOX-OPS-HEADER?  ( ops -- flag )
+    DUP _ASBOX-OPS-FIXED? 0= IF DROP 0 EXIT THEN
+    DUP _ASO.MAGIC @ _ASBOX-OPS-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _ASO.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _ASO.STATE @ DUP _ASBOX-OPS-IDLE =
+        SWAP _ASBOX-OPS-BUSY = OR 0= IF DROP 0 EXIT THEN
+    _ASO.RESERVED @ 0= ;
+
+: _ASBOX-PURE-PROFILE?  ( profile -- flag )
+    DUP SBOX-PROFILE-VALID? 0= IF DROP 0 EXIT THEN
+    SBOX-PROFILE-TAG@
+    DUP IF 2DROP 0 EXIT THEN
+    DROP SBOX-PROFILE-PURE-TAG = ;
+
+: _ASBOX-OPS-TEMPS-ZERO?  ( ops -- flag )
+    DUP _ASO-ARG-A +
+    _ASO-PROFILE _ASO-ARG-A - _ASBOX-ZERO? 0= IF DROP 0 EXIT THEN
+    _ASO.HOST SBOX-HOST-INVOCATION-SIZE _ASBOX-ZERO? ;
+
+: _ASBOX-OPS-INIT-DISJOINT?
+  ( owner|0 parent ops -- flag )
+    >R
+    R@ AGENT-SBOX-OPS-SIZE
+    2 PICK CTX-SIZE
+        MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    OVER IF
+        R@ AGENT-SBOX-OPS-SIZE
+        3 PICK SBOX-MODULE-OWNER-SPAN-DISJOINT? 0= IF
+            2DROP R> DROP 0 EXIT
+        THEN
+        DUP CTX-SIZE
+        3 PICK SBOX-MODULE-OWNER-SPAN-DISJOINT? 0= IF
+            2DROP R> DROP 0 EXIT
+        THEN
+    THEN
+    2DROP R> DROP -1 ;
+
+: _ASBOX-OPS-LIFETIMES-DISJOINT?  ( ops -- flag )
+    >R
+    R@ AGENT-SBOX-OPS-SIZE
+    R@ _ASO.PARENT @ CTX-SIZE
+        MSPAN-OVERLAP? IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _ASO.OWNER @ IF
+        R@ AGENT-SBOX-OPS-SIZE
+        R@ _ASO.OWNER @
+            SBOX-MODULE-OWNER-SPAN-DISJOINT? 0= IF
+            R> DROP 0 EXIT
+        THEN
+        R@ _ASO.PARENT @ CTX-SIZE
+        R@ _ASO.OWNER @
+            SBOX-MODULE-OWNER-SPAN-DISJOINT? 0= IF
+            R> DROP 0 EXIT
+        THEN
+    THEN
+    R> DROP -1 ;
+
+: AGENT-SBOX-OPS-VALID?  ( ops -- flag )
+    DUP _ASBOX-OPS-HEADER? 0= IF DROP 0 EXIT THEN
+    DUP _ASO.OWNER @ ?DUP IF
+        SBOX-MODULE-OWNER-SEALED? 0= IF DROP 0 EXIT THEN
+    THEN
+    DUP _ASO.PARENT @ DUP CTX-VALID? 0= IF 2DROP 0 EXIT THEN
+    CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF DROP 0 EXIT THEN
+    DUP _ASBOX-OPS-LIFETIMES-DISJOINT? 0= IF DROP 0 EXIT THEN
+    DUP _ASO.PROFILE _ASBOX-PURE-PROFILE? 0= IF DROP 0 EXIT THEN
+    DUP _ASO.LIMITS SBOX-VALUE-LIMITS-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _ASO.INSTRUCTION-BUDGET @
+        AGENT-SBOX-INSTRUCTION-BUDGET <> IF DROP 0 EXIT THEN
+    DUP _ASO.VALUE-OP-BUDGET @
+        AGENT-SBOX-VALUE-OP-BUDGET <> IF DROP 0 EXIT THEN
+    DUP _ASO.COPY-BUDGET @
+        AGENT-SBOX-COPY-BUDGET <> IF DROP 0 EXIT THEN
+    DUP _ASO.SLICE-STEPS @
+        AGENT-SBOX-SLICE-STEPS <> IF DROP 0 EXIT THEN
+    DUP _ASO.MEMORY-U @
+        AGENT-SBOX-MEMORY-BYTES <> IF DROP 0 EXIT THEN
+    DUP _ASO.STATE @ _ASBOX-OPS-IDLE = IF
+        _ASBOX-OPS-TEMPS-ZERO?
+    ELSE
+        DROP -1
+    THEN ;
+
+: _ASBOX-LIMITS-INIT  ( limits -- status )
+    >R
+    R@ SBOX-VALUE-LIMITS-BEGIN DUP IF R> DROP EXIT THEN DROP
+    8 SBOX-VALUE-LIMIT-DEPTH R@
+        SBOX-VALUE-LIMIT! DUP IF R> DROP EXIT THEN DROP
+    65536 SBOX-VALUE-LIMIT-BLOB-BYTES R@
+        SBOX-VALUE-LIMIT! DUP IF R> DROP EXIT THEN DROP
+    64 SBOX-VALUE-LIMIT-LIST-COUNT R@
+        SBOX-VALUE-LIMIT! DUP IF R> DROP EXIT THEN DROP
+    32 SBOX-VALUE-LIMIT-MAP-COUNT R@
+        SBOX-VALUE-LIMIT! DUP IF R> DROP EXIT THEN DROP
+    256 SBOX-VALUE-LIMIT-INPUT-NODES R@
+        SBOX-VALUE-LIMIT! DUP IF R> DROP EXIT THEN DROP
+    65536 SBOX-VALUE-LIMIT-INPUT-BYTES R@
+        SBOX-VALUE-LIMIT! DUP IF R> DROP EXIT THEN DROP
+    256 SBOX-VALUE-LIMIT-OUTPUT-ARENA-NODES R@
+        SBOX-VALUE-LIMIT! DUP IF R> DROP EXIT THEN DROP
+    65536 SBOX-VALUE-LIMIT-OUTPUT-ARENA-BYTES R@
+        SBOX-VALUE-LIMIT! DUP IF R> DROP EXIT THEN DROP
+    256 SBOX-VALUE-LIMIT-OUTPUT-RESULT-NODES R@
+        SBOX-VALUE-LIMIT! DUP IF R> DROP EXIT THEN DROP
+    131072 SBOX-VALUE-LIMIT-OUTPUT-RESULT-BYTES R@
+        SBOX-VALUE-LIMIT! DUP IF R> DROP EXIT THEN DROP
+    R> SBOX-VALUE-LIMITS-SEAL ;
+
+: AGENT-SBOX-OPS-INIT  ( owner|0 parent ops -- status )
+    >R
+    R@ _ASBOX-OPS-FIXED? 0= IF
+        2DROP R> DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    R@ _ASBOX-OPS-ZERO? 0= IF
+        2DROP R> DROP AGENT-SBOX-S-STATE EXIT
+    THEN
+    OVER 0<> IF
+        OVER SBOX-MODULE-OWNER-SEALED? 0= IF
+            2DROP R> DROP AGENT-SBOX-S-OWNER EXIT
+        THEN
+    THEN
+    DUP CTX-VALID? 0= IF
+        2DROP R> DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    DUP CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF
+        2DROP R> DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    2DUP R@ _ASBOX-OPS-INIT-DISJOINT? 0= IF
+        2DROP R> DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+
+    R@ AGENT-SBOX-OPS-SIZE 0 FILL
+    R@ R@ _ASO.SELF !
+    OVER R@ _ASO.OWNER !
+    DUP R@ _ASO.PARENT !
+    2DROP
+    AGENT-SBOX-INSTRUCTION-BUDGET R@ _ASO.INSTRUCTION-BUDGET !
+    AGENT-SBOX-VALUE-OP-BUDGET R@ _ASO.VALUE-OP-BUDGET !
+    AGENT-SBOX-COPY-BUDGET R@ _ASO.COPY-BUDGET !
+    AGENT-SBOX-SLICE-STEPS R@ _ASO.SLICE-STEPS !
+    AGENT-SBOX-MEMORY-BYTES R@ _ASO.MEMORY-U !
+
+    R@ _ASO.PROFILE SBOX-PROFILE-PURE-INIT
+    DUP IF
+        DROP R@ AGENT-SBOX-OPS-SIZE 0 FILL
+        R> DROP AGENT-SBOX-S-PROFILE EXIT
+    THEN
+    DROP
+    R@ _ASO.LIMITS _ASBOX-LIMITS-INIT
+    DUP IF
+        DROP R@ AGENT-SBOX-OPS-SIZE 0 FILL
+        R> DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    DROP
+
+    _ASBOX-OPS-IDLE R@ _ASO.STATE !
+    _ASBOX-OPS-MAGIC R@ _ASO.MAGIC !
+    R@ AGENT-SBOX-OPS-VALID? 0= IF
+        R@ AGENT-SBOX-OPS-SIZE 0 FILL
+        R> DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    R> DROP AGENT-SBOX-S-OK ;
+
+: AGENT-SBOX-OPS-RELEASE  ( ops -- status )
+    DUP _ASBOX-OPS-FIXED? 0= IF
+        DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    DUP _ASBOX-OPS-ZERO? IF
+        DROP AGENT-SBOX-S-OK EXIT
+    THEN
+    DUP _ASBOX-OPS-HEADER? 0= IF
+        DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    DUP _ASO.STATE @ _ASBOX-OPS-IDLE <> IF
+        DROP AGENT-SBOX-S-STATE EXIT
+    THEN
+    DUP _ASBOX-OPS-TEMPS-ZERO? 0= IF
+        DROP AGENT-SBOX-S-STATE EXIT
+    THEN
+    AGENT-SBOX-OPS-SIZE 0 FILL
+    AGENT-SBOX-S-OK ;
+
+\ =====================================================================
+\  Per-call framing and transient ownership
+\ =====================================================================
+
+: _ASBOX-RESULT-BEGIN  ( operation result -- result status )
+    DUP _ASBOX-RESULT-FIXED? 0= IF
+        2DROP 0 AGENT-SBOX-S-INVALID EXIT
+    THEN
+    DUP _ASBOX-RESULT-ZERO? 0= IF
+        2DROP 0 AGENT-SBOX-S-STATE EXIT
+    THEN
+    >R
+    R@ AGENT-SBOX-RESULT-SIZE 0 FILL
+    R@ R@ _ASR.SELF !
+    R@ _ASR.OP !
+    AGENT-SBOX-S-STATE R@ _ASR.STATUS !
+    SBOX-COMPILER-S-OK R@ _ASR.COMPILER-STATUS !
+    SBOX-VERIFIER-S-OK R@ _ASR.VERIFIER-STATUS !
+    SBOX-VERIFIER-D-NONE R@ _ASR.VERIFIER-DETAIL !
+    -1 R@ _ASR.VERIFIER-INDEX !
+    SBOX-PLAN-S-OK R@ _ASR.PLAN-STATUS !
+    SBOX-MODULE-OWNER-S-OK R@ _ASR.OWNER-STATUS !
+    SBOX-HOST-S-OK R@ _ASR.HOST-STATUS !
+    SBOX-VM-RUN-INVALID R@ _ASR.RUN-STATE !
+    R> AGENT-SBOX-S-OK ;
+
+: _ASBOX-OPS-READY?  ( ops -- flag )
+    DUP AGENT-SBOX-OPS-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _ASO.STATE @ _ASBOX-OPS-IDLE <> IF DROP 0 EXIT THEN
+    _ASBOX-OPS-TEMPS-ZERO? ;
+
+: _ASBOX-RESULT-LIFETIMES-DISJOINT?  ( result ops -- flag )
+    >R
+    DUP _ASBOX-RESULT-FIXED? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AGENT-SBOX-RESULT-SIZE
+    R@ AGENT-SBOX-OPS-SIZE
+        MSPAN-OVERLAP? IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP AGENT-SBOX-RESULT-SIZE
+    R@ _ASO.PARENT @ CTX-SIZE
+        MSPAN-OVERLAP? IF
+        DROP R> DROP 0 EXIT
+    THEN
+    R@ _ASO.OWNER @ IF
+        DUP AGENT-SBOX-RESULT-SIZE
+        R@ _ASO.OWNER @
+            SBOX-MODULE-OWNER-SPAN-DISJOINT? 0= IF
+            DROP R> DROP 0 EXIT
+        THEN
+    THEN
+    DROP R> DROP -1 ;
+
+: _ASBOX-BEGIN  ( result operation ops -- status )
+    >R
+    R@ _ASBOX-OPS-READY? 0= IF
+        2DROP R> DROP AGENT-SBOX-S-STATE EXIT
+    THEN
+    OVER R@ _ASBOX-RESULT-LIFETIMES-DISJOINT? 0= IF
+        2DROP R> DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    SWAP _ASBOX-RESULT-BEGIN
+    DUP IF
+        >R DROP R> R> DROP EXIT
+    THEN
+    DROP
+    R@ _ASO.RESULT !
+    _ASBOX-OPS-BUSY R@ _ASO.STATE !
+    R> DROP AGENT-SBOX-S-OK ;
+
+: _ASBOX-ALLOCATE  ( bytes -- address status )
+    DUP 0> 0= IF DROP 0 AGENT-SBOX-S-INVALID EXIT THEN
+    ALLOCATE
+    DUP IF
+        2DROP 0 AGENT-SBOX-S-NOMEM EXIT
+    THEN
+    DROP
+    DUP 0= IF
+        DROP 0 AGENT-SBOX-S-NOMEM
+    ELSE
+        AGENT-SBOX-S-OK
+    THEN ;
+
+: _ASBOX-EXTERNAL-SPAN?  ( address length ops -- flag )
+    >R
+    2DUP _ASBOX-SPAN? 0= IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ AGENT-SBOX-OPS-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    R@ _ASO.RESULT @ AGENT-SBOX-RESULT-SIZE
+        MSPAN-OVERLAP? 0=
+    R> DROP ;
+
+: _ASBOX-FRAME-CLEAR  ( ops -- )
+    _ASO.ARG-A
+    _ASO-CANDIDATE _ASO-ARG-A - 0 FILL ;
+
+: _ASBOX-TRANSIENT-CLEANUP  ( ops -- )
+    >R
+    R@ _ASO.HOST SBOX-HOST-RELEASE DROP
+    R@ _ASO.OUTPUT @ R@ _ASO.OUTPUT-CAP @ _ASBOX-SCRUB-FREE
+    R@ _ASO.PLAN @ ?DUP IF
+        R@ _ASO.PLAN-OWNED @ IF SBOX-PLAN-RELEASE DROP ELSE DROP THEN
+    THEN
+    R@ _ASO.PLAN-OWNED @ IF
+        R@ _ASO.PLAN @ R@ _ASO.PLAN-U @ _ASBOX-SCRUB-FREE
+    THEN
+    R@ _ASO.VERIFIER-WORK @ SBOX-VERIFIER-WORKSPACE-SIZE
+        _ASBOX-SCRUB-FREE
+    R@ _ASO.COMPILER-WORK @ SBOX-COMPILER-WORKSPACE-SIZE
+        _ASBOX-SCRUB-FREE
+    R@ _ASO.CANDIDATE @ R@ _ASO.CANDIDATE-CAP @
+        _ASBOX-SCRUB-FREE
+    0 R@ _ASO.CANDIDATE !
+    0 R@ _ASO.CANDIDATE-U !
+    0 R@ _ASO.CANDIDATE-CAP !
+    0 R@ _ASO.COMPILER-WORK !
+    0 R@ _ASO.VERIFIER-WORK !
+    0 R@ _ASO.PLAN !
+    0 R@ _ASO.PLAN-U !
+    0 R@ _ASO.PLAN-OWNED !
+    0 R@ _ASO.OUTPUT !
+    0 R@ _ASO.OUTPUT-U !
+    0 R@ _ASO.OUTPUT-CAP !
+    R@ _ASO.HOST SBOX-HOST-INVOCATION-SIZE 0 FILL
+    R> DROP ;
+
+: _ASBOX-RESULT-SEAL  ( status result -- status )
+    >R
+    DUP R@ _ASR.STATUS !
+    _ASBOX-RESULT-MAGIC R@ _ASR.MAGIC !
+    R@ AGENT-SBOX-RESULT-VALID? 0= IF
+        R@ _ASR.PAYLOAD @ R@ _ASR.PAYLOAD-CAP @
+        2DUP _ASBOX-SPAN? IF
+            _ASBOX-SCRUB-FREE
+        ELSE
+            2DROP
+        THEN
+        R@ AGENT-SBOX-RESULT-SIZE 0 FILL
+        DROP AGENT-SBOX-S-RESULT
+    THEN
+    R> DROP ;
+
+: _ASBOX-COMPLETE  ( status ops -- status )
+    >R
+    R@ _ASBOX-TRANSIENT-CLEANUP
+    R@ _ASO.RESULT @ _ASBOX-RESULT-SEAL
+    R@ _ASBOX-FRAME-CLEAR
+    _ASBOX-OPS-IDLE R@ _ASO.STATE !
+    R> DROP ;
+
+\ =====================================================================
+\  Compile and independent verification helpers
+\ =====================================================================
+
+: _ASBOX-CANDIDATE-FACTS!  ( candidate result -- )
+    >R
+    DUP SBOX-CANDIDATE-MEMORY-U@ R@ _ASR.MEMORY-U !
+    DUP SBOX-CANDIDATE-FUNCTION-N@ R@ _ASR.FUNCTION-N !
+    DUP SBOX-CANDIDATE-ENTRY-N@ R@ _ASR.ENTRY-N !
+    SBOX-CANDIDATE-INSTRUCTION-N@ R@ _ASR.INSTRUCTION-N !
+    R> DROP ;
+
+: _ASBOX-PLAN-FACTS!  ( plan result -- )
+    >R
+    DUP SBOX-PLAN-MEMORY-U@ R@ _ASR.MEMORY-U !
+    DUP SBOX-PLAN-FUNCTION-N@ R@ _ASR.FUNCTION-N !
+    DUP SBOX-PLAN-ENTRY-N@ R@ _ASR.ENTRY-N !
+    SBOX-PLAN-INSTRUCTION-N@ R@ _ASR.INSTRUCTION-N !
+    R> DROP ;
+
+: _ASBOX-COMPILE-SOURCE  ( ops -- status )
+    >R
+    R@ _ASO.ARG-A @ R@ _ASO.ARG-U @ R@
+        _ASBOX-EXTERNAL-SPAN? 0= IF
+        R> DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    SBOX-VERIFIER-CANDIDATE-MAX-SIZE _ASBOX-ALLOCATE
+    DUP IF
+        >R DROP R> R> DROP EXIT
+    THEN
+    DROP
+    DUP R@ _ASO.CANDIDATE !
+    SBOX-VERIFIER-CANDIDATE-MAX-SIZE R@ _ASO.CANDIDATE-CAP !
+    DROP
+    SBOX-COMPILER-WORKSPACE-SIZE _ASBOX-ALLOCATE
+    DUP IF
+        >R DROP R> R> DROP EXIT
+    THEN
+    DROP R@ _ASO.COMPILER-WORK !
+
+    R@ _ASO.ARG-A @
+    R@ _ASO.ARG-U @
+    R@ _ASO.PROFILE
+    R@ _ASO.MEMORY-U @
+    R@ _ASO.CANDIDATE @
+    R@ _ASO.CANDIDATE-CAP @
+    R@ _ASO.COMPILER-WORK @
+    SBOX-COMPILE
+    DUP R@ _ASO.RESULT @ _ASR.COMPILER-STATUS !
+    DUP IF
+        2DROP R> DROP AGENT-SBOX-S-COMPILER EXIT
+    THEN
+    DROP
+    DUP R@ _ASO.CANDIDATE-U !
+    R@ _ASO.CANDIDATE @ SBOX-CANDIDATE-TOTAL@ <> IF
+        R> DROP AGENT-SBOX-S-COMPILER EXIT
+    THEN
+    R@ _ASO.CANDIDATE @ R@ _ASO.RESULT @
+        _ASBOX-CANDIDATE-FACTS!
+    R> DROP AGENT-SBOX-S-OK ;
+
+: _ASBOX-VERIFY-CANDIDATE-A@  ( ops -- address )
+    DUP _ASO.CANDIDATE @ ?DUP IF NIP ELSE _ASO.ARG-A @ THEN ;
+
+: _ASBOX-VERIFY-CANDIDATE-U@  ( ops -- length )
+    DUP _ASO.CANDIDATE @ IF _ASO.CANDIDATE-U @ ELSE _ASO.ARG-U @ THEN ;
+
+: _ASBOX-CAPTURE-VERIFIER-DIAGNOSTICS  ( ops -- )
+    >R
+    R@ _ASO.VERIFIER-WORK @ SBOX-VERIFIER-ERROR-DETAIL@
+    DUP SBOX-VERIFIER-S-OK = IF
+        DROP R@ _ASO.RESULT @ _ASR.VERIFIER-DETAIL !
+    ELSE
+        2DROP
+    THEN
+    R@ _ASO.VERIFIER-WORK @ SBOX-VERIFIER-ERROR-INDEX@
+    DUP SBOX-VERIFIER-S-OK = IF
+        DROP R@ _ASO.RESULT @ _ASR.VERIFIER-INDEX !
+    ELSE
+        2DROP
+    THEN
+    R> DROP ;
+
+: _ASBOX-VERIFY-TEMP  ( ops -- status )
+    >R
+    R@ _ASBOX-VERIFY-CANDIDATE-U@
+    DUP SBOX-CANDIDATE-HEADER-SIZE <
+    SWAP SBOX-VERIFIER-CANDIDATE-MAX-SIZE U> OR IF
+        R> DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    R@ _ASBOX-VERIFY-CANDIDATE-A@
+    R@ _ASBOX-VERIFY-CANDIDATE-U@
+    R@ _ASBOX-EXTERNAL-SPAN? 0= IF
+        R> DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    R@ _ASBOX-VERIFY-CANDIDATE-U@ SBOX-PLAN-MEASURE
+    DUP R@ _ASO.RESULT @ _ASR.PLAN-STATUS !
+    DUP IF
+        2DROP R> DROP AGENT-SBOX-S-PLAN EXIT
+    THEN
+    DROP
+    DUP R@ _ASO.PLAN-U !
+    _ASBOX-ALLOCATE
+    DUP IF
+        >R DROP R> R> DROP EXIT
+    THEN
+    DROP R@ _ASO.PLAN !
+    -1 R@ _ASO.PLAN-OWNED !
+    SBOX-VERIFIER-WORKSPACE-SIZE _ASBOX-ALLOCATE
+    DUP IF
+        >R DROP R> R> DROP EXIT
+    THEN
+    DROP R@ _ASO.VERIFIER-WORK !
+
+    R@ _ASBOX-VERIFY-CANDIDATE-A@
+    R@ _ASBOX-VERIFY-CANDIDATE-U@
+    R@ _ASO.PROFILE
+    R@ _ASO.PLAN @
+    R@ _ASO.PLAN-U @
+    R@ _ASO.VERIFIER-WORK @
+    SBOX-VERIFY
+    DUP R@ _ASO.RESULT @ _ASR.VERIFIER-STATUS !
+    R@ _ASBOX-CAPTURE-VERIFIER-DIAGNOSTICS
+    DUP IF
+        DROP R> DROP AGENT-SBOX-S-VERIFIER EXIT
+    THEN
+    DROP
+    R@ _ASO.PLAN @ R@ _ASO.RESULT @ _ASBOX-PLAN-FACTS!
+    R> DROP AGENT-SBOX-S-OK ;
+
+: _ASBOX-TRANSFER-CANDIDATE  ( ops -- )
+    >R
+    AGENT-SBOX-PAYLOAD-CANDIDATE
+        R@ _ASO.RESULT @ _ASR.PAYLOAD-KIND !
+    R@ _ASO.CANDIDATE @ R@ _ASO.RESULT @ _ASR.PAYLOAD !
+    R@ _ASO.CANDIDATE-U @ R@ _ASO.RESULT @ _ASR.PAYLOAD-U !
+    R@ _ASO.CANDIDATE-CAP @ R@ _ASO.RESULT @ _ASR.PAYLOAD-CAP !
+    0 R@ _ASO.CANDIDATE !
+    0 R@ _ASO.CANDIDATE-U !
+    0 R@ _ASO.CANDIDATE-CAP !
+    R> DROP ;
+
+\ =====================================================================
+\  Exact entry execution and self-contained result publication
+\ =====================================================================
+
+: _ASBOX-ENTRY-RESOLVE  ( ops -- status )
+    >R
+    R@ _ASO.ENTRY-A @ R@ _ASO.ENTRY-U @ R@
+        _ASBOX-EXTERNAL-SPAN? 0= IF
+        R> DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    R@ _ASO.ENTRY-A @
+    R@ _ASO.ENTRY-U @
+    R@ _ASO.PLAN @
+    SBOX-HOST-ENTRY-RESOLVE-EXACT
+    DUP R@ _ASO.RESULT @ _ASR.HOST-STATUS !
+    DUP IF
+        2DROP R> DROP AGENT-SBOX-S-ENTRY EXIT
+    THEN
+    DROP R@ _ASO.REVISION !
+    R> DROP AGENT-SBOX-S-OK ;
+
+: _ASBOX-RUN-PLAN  ( ops -- status )
+    >R
+    R@ _ASO.INPUT-A @ R@ _ASO.INPUT-U @ R@
+        _ASBOX-EXTERNAL-SPAN? 0= IF
+        R> DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    R@ _ASO.PARENT @
+    R@ _ASO.PLAN @
+    R@ _ASO.REVISION @
+    R@ _ASO.INPUT-A @
+    R@ _ASO.INPUT-U @
+    R@ _ASO.LIMITS
+    R@ _ASO.INSTRUCTION-BUDGET @
+    R@ _ASO.VALUE-OP-BUDGET @
+    R@ _ASO.COPY-BUDGET @
+    R@ _ASO.HOST
+    SBOX-HOST-INIT
+    DUP R@ _ASO.RESULT @ _ASR.HOST-STATUS !
+    DUP IF
+        DROP R> DROP AGENT-SBOX-S-HOST EXIT
+    THEN
+    DROP
+
+    BEGIN
+        R@ _ASO.SLICE-STEPS @ R@ _ASO.HOST
+            SBOX-HOST-RUN-SLICE
+        DUP R@ _ASO.RESULT @ _ASR.RUN-STATE !
+        DUP SBOX-VM-RUN-RUNNABLE =
+    WHILE
+        DROP
+    REPEAT
+    DUP _ASBOX-TERMINAL-RUN-STATE? 0= IF
+        DROP R> DROP AGENT-SBOX-S-HOST EXIT
+    THEN
+    DROP
+
+    R@ _ASO.HOST SBOX-HOST-RESULT-MEASURE
+    DUP R@ _ASO.RESULT @ _ASR.HOST-STATUS !
+    DUP IF
+        2DROP R> DROP AGENT-SBOX-S-HOST EXIT
+    THEN
+    DROP
+    DUP R@ _ASO.OUTPUT-U !
+    DUP R@ _ASO.OUTPUT-CAP !
+    _ASBOX-ALLOCATE
+    DUP IF
+        >R DROP R> R> DROP EXIT
+    THEN
+    DROP R@ _ASO.OUTPUT !
+
+    R@ _ASO.OUTPUT @
+    R@ _ASO.OUTPUT-CAP @
+    R@ _ASO.HOST
+    SBOX-HOST-FINISH
+    DUP R@ _ASO.RESULT @ _ASR.HOST-STATUS !
+    DUP IF
+        DROP R> DROP AGENT-SBOX-S-HOST EXIT
+    THEN
+    DROP
+
+    AGENT-SBOX-PAYLOAD-VM-RESULT
+        R@ _ASO.RESULT @ _ASR.PAYLOAD-KIND !
+    R@ _ASO.OUTPUT @ R@ _ASO.RESULT @ _ASR.PAYLOAD !
+    R@ _ASO.OUTPUT-U @ R@ _ASO.RESULT @ _ASR.PAYLOAD-U !
+    R@ _ASO.OUTPUT-CAP @ R@ _ASO.RESULT @ _ASR.PAYLOAD-CAP !
+    0 R@ _ASO.OUTPUT !
+    0 R@ _ASO.OUTPUT-U !
+    0 R@ _ASO.OUTPUT-CAP !
+    R> DROP AGENT-SBOX-S-OK ;
+
+: _ASBOX-RESOLVE-INSTALLED  ( ops -- status )
+    >R
+    R@ _ASO.OWNER @ 0= IF
+        SBOX-MODULE-OWNER-S-INVALID
+            R@ _ASO.RESULT @ _ASR.OWNER-STATUS !
+        R> DROP AGENT-SBOX-S-OWNER EXIT
+    THEN
+    R@ _ASO.ARG-A @ RID-SIZE R@
+        _ASBOX-EXTERNAL-SPAN? 0= IF
+        R> DROP AGENT-SBOX-S-INVALID EXIT
+    THEN
+    R@ _ASO.ARG-A @
+    R@ _ASO.REVISION @
+    R@ _ASO.OWNER @
+    SBOX-MODULE-OWNER-RESOLVE-EXACT
+    DUP R@ _ASO.RESULT @ _ASR.OWNER-STATUS !
+    DUP IF
+        >R 2DROP R> DROP
+        R> DROP AGENT-SBOX-S-OWNER EXIT
+    THEN
+    DROP
+    DUP _ASBOX-PURE-PROFILE? 0= IF
+        2DROP R> DROP AGENT-SBOX-S-PROFILE EXIT
+    THEN
+    OVER SBOX-PLAN-IMPORT-N@ IF
+        2DROP R> DROP AGENT-SBOX-S-PROFILE EXIT
+    THEN
+    OVER R@ _ASO.PLAN !
+    0 R@ _ASO.PLAN-OWNED !
+    OVER R@ _ASO.RESULT @ _ASBOX-PLAN-FACTS!
+    2DROP
+    R> DROP AGENT-SBOX-S-OK ;
+
+\ =====================================================================
+\  Public explicit operations
+\ =====================================================================
+
+: AGENT-SBOX-COMPILE  ( source source-u result ops -- status )
+    >R
+    AGENT-SBOX-OP-COMPILE R@ _ASBOX-BEGIN
+    DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN
+    DROP
+    R@ _ASO.ARG-U !
+    R@ _ASO.ARG-A !
+    R@ _ASBOX-COMPILE-SOURCE
+    DUP AGENT-SBOX-S-OK = IF
+        DROP R@ _ASBOX-TRANSFER-CANDIDATE AGENT-SBOX-S-OK
+    THEN
+    R@ _ASBOX-COMPLETE
+    R> DROP ;
+
+: AGENT-SBOX-VERIFY  ( candidate candidate-u result ops -- status )
+    >R
+    AGENT-SBOX-OP-VERIFY R@ _ASBOX-BEGIN
+    DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN
+    DROP
+    R@ _ASO.ARG-U !
+    R@ _ASO.ARG-A !
+    R@ _ASBOX-VERIFY-TEMP
+    R@ _ASBOX-COMPLETE
+    R> DROP ;
+
+: AGENT-SBOX-TEST
+  ( source source-u entry entry-u input input-u result ops -- status )
+    >R
+    AGENT-SBOX-OP-TEST R@ _ASBOX-BEGIN
+    DUP IF
+        >R 2DROP 2DROP 2DROP R> R> DROP EXIT
+    THEN
+    DROP
+    R@ _ASO.INPUT-U !
+    R@ _ASO.INPUT-A !
+    R@ _ASO.ENTRY-U !
+    R@ _ASO.ENTRY-A !
+    R@ _ASO.ARG-U !
+    R@ _ASO.ARG-A !
+
+    R@ _ASBOX-COMPILE-SOURCE
+    DUP 0= IF DROP R@ _ASBOX-VERIFY-TEMP THEN
+    DUP 0= IF DROP R@ _ASBOX-ENTRY-RESOLVE THEN
+    DUP 0= IF DROP R@ _ASBOX-RUN-PLAN THEN
+    R@ _ASBOX-COMPLETE
+    R> DROP ;
+
+: AGENT-SBOX-INVOKE
+  ( rid revision entry entry-u input input-u result ops -- status )
+    >R
+    AGENT-SBOX-OP-INVOKE R@ _ASBOX-BEGIN
+    DUP IF
+        >R 2DROP 2DROP 2DROP R> R> DROP EXIT
+    THEN
+    DROP
+    R@ _ASO.INPUT-U !
+    R@ _ASO.INPUT-A !
+    R@ _ASO.ENTRY-U !
+    R@ _ASO.ENTRY-A !
+    R@ _ASO.REVISION !
+    R@ _ASO.ARG-A !
+
+    R@ _ASBOX-RESOLVE-INSTALLED
+    DUP 0= IF DROP R@ _ASBOX-ENTRY-RESOLVE THEN
+    DUP 0= IF DROP R@ _ASBOX-RUN-PLAN THEN
+    R@ _ASBOX-COMPLETE
+    R> DROP ;

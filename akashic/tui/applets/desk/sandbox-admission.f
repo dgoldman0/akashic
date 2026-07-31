@@ -1,0 +1,970 @@
+\ =====================================================================
+\  sandbox-admission.f - Exact transient Desk sandbox admission
+\ =====================================================================
+\  This is the trusted activation-local binding above the headless Desk
+\  sandbox component.  It binds one accepted Practice head and live root
+\  Context identity to one exact installed module revision and one typed
+\  VALUE -> VALUE entry.  The caller supplies already materialized value
+\  and execution limits; neither module metadata nor guest input can raise
+\  them.
+\
+\  The admission object embeds and exclusively owns one
+\  DESK-SBOX-COMPONENT.  Its public invocation surface accepts only typed
+\  input bytes, so a later caller cannot substitute a different module,
+\  revision, entry, parent Context, or budget tuple.
+\
+\  RESULT-TAKE publishes a caller-owned transient receipt which copies the
+\  Practice, Context, activation, module, entry, invocation, and terminal
+\  run identities around the component's detached typed result.  The
+\  receipt therefore remains identifiable and readable after admission,
+\  owner, plan/profile, and Practice teardown.  It is not persistent audit
+\  state and its typed payload is inert data.
+\
+\  This module is deliberately disjoint from the native package path.  It
+\  has no manifest, source/image path, APP-DESC, XT, callback, widget,
+\  service getter, UIDL, Agent, provider, schema, digest, cache, VFS, or
+\  capability behavior.  Initialization writes the SANDBOX/PURE execution
+\  class internally; callers cannot relabel a native descriptor into it.
+\ =====================================================================
+
+PROVIDED akashic-tui-desk-sbox-admission
+
+REQUIRE sandbox-component.f
+REQUIRE ../../../runtime/practice-head.f
+REQUIRE ../../../utils/caller-span.f
+REQUIRE ../../../utils/memory-span.f
+
+\ =====================================================================
+\  Fixed execution class and lifecycle
+\ =====================================================================
+
+0x53414E44424F5800 CONSTANT DESK-SBOX-CLASS-PURE  \ "SANDBOX\0"
+
+1 CONSTANT DESK-SBOX-ADMISSION-STATE-OPEN
+2 CONSTANT DESK-SBOX-ADMISSION-STATE-CLOSING
+3 CONSTANT DESK-SBOX-ADMISSION-STATE-DRAINED
+
+0x4453425841444D31 CONSTANT _DSA-MAGIC  \ "DSBXADM1"
+0x4453425852435031 CONSTANT _DSRC-MAGIC \ "DSBXRCP1"
+
+\ =====================================================================
+\  Sealed caller-owned admission
+\ =====================================================================
+
+  0 CONSTANT _DSA-MAGIC-OFF
+  8 CONSTANT _DSA-SELF
+ 16 CONSTANT _DSA-SIZE
+ 24 CONSTANT _DSA-CLASS
+ 32 CONSTANT _DSA-STATE
+ 40 CONSTANT _DSA-OWNER
+ 48 CONSTANT _DSA-HEAD
+ 56 CONSTANT _DSA-PARENT
+ 64 CONSTANT _DSA-PRACTICE-REVISION
+ 72 CONSTANT _DSA-CONTEXT-ID
+ 80 CONSTANT _DSA-CONTEXT-GENERATION
+ 88 CONSTANT _DSA-CONTEXT-EPOCH
+ 96 CONSTANT _DSA-MODULE-REVISION
+104 CONSTANT _DSA-ENTRY-U
+112 CONSTANT _DSA-INSTRUCTION-BUDGET
+120 CONSTANT _DSA-VALUE-OP-BUDGET
+128 CONSTANT _DSA-COPY-BUDGET
+136 CONSTANT _DSA-ACTIVATION-ID
+144 CONSTANT _DSA-ACTIVATION-GENERATION
+152 CONSTANT _DSA-RESERVED0
+160 CONSTANT _DSA-PRACTICE-RID
+192 CONSTANT _DSA-MODULE-RID
+224 CONSTANT _DSA-ENTRY
+288 CONSTANT _DSA-RESERVED1
+320 CONSTANT _DSA-COMPONENT
+1088 CONSTANT DESK-SBOX-ADMISSION-SIZE
+
+: _DSA.MAGIC                 ( admission -- address ) _DSA-MAGIC-OFF + ;
+: _DSA.SELF                  ( admission -- address ) _DSA-SELF + ;
+: _DSA.SIZE                  ( admission -- address ) _DSA-SIZE + ;
+: _DSA.CLASS                 ( admission -- address ) _DSA-CLASS + ;
+: _DSA.STATE                 ( admission -- address ) _DSA-STATE + ;
+: _DSA.OWNER                 ( admission -- address ) _DSA-OWNER + ;
+: _DSA.HEAD                  ( admission -- address ) _DSA-HEAD + ;
+: _DSA.PARENT                ( admission -- address ) _DSA-PARENT + ;
+: _DSA.PRACTICE-REVISION     ( admission -- address )
+    _DSA-PRACTICE-REVISION + ;
+: _DSA.CONTEXT-ID            ( admission -- address ) _DSA-CONTEXT-ID + ;
+: _DSA.CONTEXT-GENERATION    ( admission -- address )
+    _DSA-CONTEXT-GENERATION + ;
+: _DSA.CONTEXT-EPOCH         ( admission -- address )
+    _DSA-CONTEXT-EPOCH + ;
+: _DSA.MODULE-REVISION       ( admission -- address )
+    _DSA-MODULE-REVISION + ;
+: _DSA.ENTRY-U               ( admission -- address ) _DSA-ENTRY-U + ;
+: _DSA.INSTRUCTION-BUDGET    ( admission -- address )
+    _DSA-INSTRUCTION-BUDGET + ;
+: _DSA.VALUE-OP-BUDGET       ( admission -- address )
+    _DSA-VALUE-OP-BUDGET + ;
+: _DSA.COPY-BUDGET           ( admission -- address ) _DSA-COPY-BUDGET + ;
+: _DSA.ACTIVATION-ID         ( admission -- address )
+    _DSA-ACTIVATION-ID + ;
+: _DSA.ACTIVATION-GENERATION ( admission -- address )
+    _DSA-ACTIVATION-GENERATION + ;
+: _DSA.RESERVED0             ( admission -- address ) _DSA-RESERVED0 + ;
+: _DSA.PRACTICE-RID          ( admission -- rid ) _DSA-PRACTICE-RID + ;
+: _DSA.MODULE-RID            ( admission -- rid ) _DSA-MODULE-RID + ;
+: _DSA.ENTRY                 ( admission -- address ) _DSA-ENTRY + ;
+: _DSA.RESERVED1             ( admission -- address ) _DSA-RESERVED1 + ;
+: _DSA.COMPONENT             ( admission -- component ) _DSA-COMPONENT + ;
+
+: _DSA-SPAN?  ( address length -- flag )
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    CALLER-SPAN-STATUS CALLER-SPAN-S-OK = ;
+
+: _DSA-ZERO?  ( address length -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
+
+: _DSA-FIXED?  ( admission -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DESK-SBOX-ADMISSION-SIZE _DSA-SPAN? ;
+
+: _DSA-LOWERCASE?  ( byte -- flag )
+    DUP [CHAR] a >= SWAP [CHAR] z <= AND ;
+
+: _DSA-DIGIT?  ( byte -- flag )
+    DUP [CHAR] 0 >= SWAP [CHAR] 9 <= AND ;
+
+: _DSA-ENTRY-REST-CHAR?  ( byte -- flag )
+    DUP _DSA-LOWERCASE? IF DROP -1 EXIT THEN
+    DUP _DSA-DIGIT? IF DROP -1 EXIT THEN
+    DUP [CHAR] . = IF DROP -1 EXIT THEN
+    DUP [CHAR] _ = IF DROP -1 EXIT THEN
+    DUP [CHAR] - = IF DROP -1 EXIT THEN
+    DROP 0 ;
+
+: _DSA-ENTRY-NAME?  ( address length -- flag )
+    DUP 1 < OVER 63 > OR IF 2DROP 0 EXIT THEN
+    OVER C@ _DSA-LOWERCASE? 0= IF 2DROP 0 EXIT THEN
+    1 ?DO
+        DUP I + C@ _DSA-ENTRY-REST-CHAR? 0= IF
+            DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    DROP -1 ;
+
+: _DSA-COPIED-ENTRY?  ( admission -- flag )
+    DUP _DSA.ENTRY
+    OVER _DSA.ENTRY-U @
+    _DSA-ENTRY-NAME? 0= IF DROP 0 EXIT THEN
+    DUP _DSA.ENTRY
+    OVER _DSA.ENTRY-U @ +
+    SWAP _DSA.ENTRY-U @ 64 SWAP -
+    _DSA-ZERO? ;
+
+: _DSA-HEADER?  ( admission -- flag )
+    DUP _DSA-FIXED? 0= IF DROP 0 EXIT THEN
+    DUP _DSA.MAGIC @ _DSA-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _DSA.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _DSA.SIZE @ DESK-SBOX-ADMISSION-SIZE <> IF DROP 0 EXIT THEN
+    DUP _DSA.CLASS @ DESK-SBOX-CLASS-PURE <> IF DROP 0 EXIT THEN
+    _DSA.STATE @ DUP DESK-SBOX-ADMISSION-STATE-OPEN =
+    OVER DESK-SBOX-ADMISSION-STATE-CLOSING = OR
+    SWAP DESK-SBOX-ADMISSION-STATE-DRAINED = OR ;
+
+: _DSA-BORROWS?  ( admission -- flag )
+    >R
+    R@ _DSA.OWNER @ DUP SBOX-MODULE-OWNER-SEALED? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DROP
+    R@ _DSA.HEAD @ DUP PHEAD-VALID? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP PHEAD.SIZE @ PHEAD-SIZE <> IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DROP
+    R@ _DSA.PARENT @ DUP CTX-VALID? 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP CTX.FLAGS @ CTX-F-RECOVERY AND IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DUP CTX.PRACTICE @ R@ _DSA.HEAD @ <> IF
+        DROP R> DROP 0 EXIT
+    THEN
+    DROP
+
+    R@ _DSA.PRACTICE-RID
+    R@ _DSA.HEAD @ PHEAD.ID RID= 0= IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _DSA.PRACTICE-REVISION @
+    R@ _DSA.HEAD @ PHEAD.REVISION @ <> IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _DSA.CONTEXT-ID @
+    R@ _DSA.PARENT @ CTX.ID @ <> IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _DSA.CONTEXT-GENERATION @
+    R@ _DSA.PARENT @ CTX.GENERATION @ <> IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _DSA.CONTEXT-EPOCH @
+    R@ _DSA.PARENT @ CTX.EPOCH @ <> IF
+        R> DROP 0 EXIT
+    THEN
+
+    R@ DESK-SBOX-ADMISSION-SIZE
+    R@ _DSA.OWNER @
+    SBOX-MODULE-OWNER-SPAN-DISJOINT? 0= IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _DSA.HEAD @ PHEAD-SIZE
+    R@ DESK-SBOX-ADMISSION-SIZE MSPAN-OVERLAP? IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _DSA.PARENT @ CTX-SIZE
+    R@ DESK-SBOX-ADMISSION-SIZE MSPAN-OVERLAP? IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _DSA.HEAD @ PHEAD-SIZE
+    R@ _DSA.OWNER @
+    SBOX-MODULE-OWNER-SPAN-DISJOINT? 0= IF
+        R> DROP 0 EXIT
+    THEN
+    R@ _DSA.PARENT @ CTX-SIZE
+    R@ _DSA.OWNER @
+    SBOX-MODULE-OWNER-SPAN-DISJOINT?
+    R> DROP ;
+
+: _DSA-ACTIVE-SHAPE?  ( admission -- flag )
+    DUP _DSA.RESERVED0 @ IF DROP 0 EXIT THEN
+    DUP _DSA.RESERVED1 32 _DSA-ZERO? 0= IF DROP 0 EXIT THEN
+    DUP _DSA.PRACTICE-REVISION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSA.CONTEXT-ID @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSA.CONTEXT-GENERATION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSA.CONTEXT-EPOCH @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSA.MODULE-REVISION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSA.INSTRUCTION-BUDGET @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSA.VALUE-OP-BUDGET @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSA.COPY-BUDGET @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSA.ACTIVATION-ID @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSA.ACTIVATION-GENERATION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSA.PRACTICE-RID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP _DSA.MODULE-RID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP _DSA-COPIED-ENTRY? 0= IF DROP 0 EXIT THEN
+    DUP _DSA-BORROWS? 0= IF DROP 0 EXIT THEN
+    DUP _DSA.COMPONENT DESK-SBOX-COMPONENT-VALID? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _DSA.STATE @ DESK-SBOX-ADMISSION-STATE-OPEN = IF
+        _DSA.COMPONENT _DSC.STATE @
+        DESK-SBOX-COMPONENT-STATE-OPEN = EXIT
+    THEN
+    DUP _DSA.STATE @ DESK-SBOX-ADMISSION-STATE-CLOSING = IF
+        _DSA.COMPONENT _DSC.STATE @
+        DESK-SBOX-COMPONENT-STATE-CLOSING = EXIT
+    THEN
+    DROP 0 ;
+
+: DESK-SBOX-ADMISSION-VALID?  ( admission -- flag )
+    DUP _DSA-HEADER? 0= IF DROP 0 EXIT THEN
+    DUP _DSA.STATE @ DESK-SBOX-ADMISSION-STATE-DRAINED = IF
+        _DSA.OWNER
+        DESK-SBOX-ADMISSION-SIZE _DSA-OWNER -
+        _DSA-ZERO? EXIT
+    THEN
+    _DSA-ACTIVE-SHAPE? ;
+
+\ =====================================================================
+\  Exact binding initialization
+\ =====================================================================
+
+\ INIT is deliberately caller-serialized.  These cells only stage trusted
+\ native arguments while the exact binding is validated and atomically
+\ published into the caller-owned admission object.
+VARIABLE _DSAI-OWNER
+VARIABLE _DSAI-HEAD
+VARIABLE _DSAI-PARENT
+VARIABLE _DSAI-LIMITS
+VARIABLE _DSAI-INSTRUCTION
+VARIABLE _DSAI-VALUE-OPS
+VARIABLE _DSAI-COPY
+VARIABLE _DSAI-ACTIVATION-ID
+VARIABLE _DSAI-ACTIVATION-GENERATION
+VARIABLE _DSAI-RID
+VARIABLE _DSAI-REVISION
+VARIABLE _DSAI-ENTRY-A
+VARIABLE _DSAI-ENTRY-U
+VARIABLE _DSAI-ADMISSION
+VARIABLE _DSAI-PLAN
+VARIABLE _DSAI-PROFILE
+VARIABLE _DSAI-ENTRY-INDEX
+
+: _DSAI-EXTERNAL-SPAN?  ( address length -- flag )
+    2DUP _DSA-SPAN? 0= IF 2DROP 0 EXIT THEN
+    2DUP _DSAI-ADMISSION @ DESK-SBOX-ADMISSION-SIZE
+        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _DSAI-HEAD @ PHEAD-SIZE
+        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _DSAI-PARENT @ CTX-SIZE
+        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    _DSAI-OWNER @ SBOX-MODULE-OWNER-SPAN-DISJOINT? ;
+
+: _DSAI-LIFETIMES?  ( -- flag )
+    _DSAI-OWNER @ SBOX-MODULE-OWNER-SEALED? 0= IF 0 EXIT THEN
+    _DSAI-HEAD @ DUP PHEAD-VALID? 0= IF DROP 0 EXIT THEN
+    PHEAD.SIZE @ PHEAD-SIZE <> IF 0 EXIT THEN
+    _DSAI-PARENT @ DUP CTX-VALID? 0= IF DROP 0 EXIT THEN
+    DUP CTX.FLAGS @ CTX-F-ACTIVE AND 0= IF DROP 0 EXIT THEN
+    DUP CTX.FLAGS @ CTX-F-RECOVERY AND IF DROP 0 EXIT THEN
+    CTX.PRACTICE @ _DSAI-HEAD @ <> IF 0 EXIT THEN
+    _DSAI-HEAD @ PHEAD-SIZE
+    _DSAI-PARENT @ CTX-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
+    _DSAI-HEAD @ PHEAD-SIZE
+    _DSAI-OWNER @ SBOX-MODULE-OWNER-SPAN-DISJOINT? 0= IF 0 EXIT THEN
+    _DSAI-PARENT @ CTX-SIZE
+    _DSAI-OWNER @ SBOX-MODULE-OWNER-SPAN-DISJOINT? ;
+
+: _DSA-OWNER>STATUS  ( owner-status -- admission-status )
+    DUP SBOX-MODULE-OWNER-S-NOT-FOUND = IF
+        DROP DESK-SBOX-S-NOT-FOUND EXIT
+    THEN
+    SBOX-MODULE-OWNER-S-STALE-REVISION = IF
+        DESK-SBOX-S-STALE-REVISION
+    ELSE
+        DESK-SBOX-S-OWNER
+    THEN ;
+
+: _DSAI-BUDGET-WITHIN?  ( requested profile-field -- flag )
+    _DSAI-PROFILE @ SBOX-PROFILE-LIMIT@
+    DUP IF 2DROP DROP 0 EXIT THEN
+    DROP U> 0= ;
+
+: _DSAI-BUDGETS?  ( -- flag )
+    _DSAI-INSTRUCTION @ SBOX-PROFILE-LIMIT-MAX-BUDGET
+        _DSAI-BUDGET-WITHIN?
+    _DSAI-VALUE-OPS @ SBOX-PROFILE-LIMIT-VALUE-OPS
+        _DSAI-BUDGET-WITHIN? AND
+    _DSAI-COPY @ SBOX-PROFILE-LIMIT-COPY-BYTES
+        _DSAI-BUDGET-WITHIN? AND ;
+
+: _DSAI-BINDING-STATUS  ( -- status )
+    _DSAI-RID @ _DSAI-REVISION @ _DSAI-OWNER @
+    SBOX-MODULE-OWNER-RESOLVE-EXACT
+    DUP IF
+        >R 2DROP R> _DSA-OWNER>STATUS EXIT
+    THEN
+    DROP
+    _DSAI-PROFILE ! _DSAI-PLAN !
+
+    _DSAI-PLAN @ SBOX-PLAN-VALID? 0= IF
+        DESK-SBOX-S-PROFILE EXIT
+    THEN
+    _DSAI-PROFILE @ SBOX-PROFILE-VALID? 0= IF
+        DESK-SBOX-S-PROFILE EXIT
+    THEN
+    _DSAI-PLAN @ SBOX-PLAN-PROFILE@
+    _DSAI-PROFILE @ <> IF DESK-SBOX-S-PROFILE EXIT THEN
+    _DSAI-PROFILE @ SBOX-PROFILE-TAG@
+    DUP IF 2DROP DESK-SBOX-S-PROFILE EXIT THEN
+    DROP
+    SBOX-PROFILE-PURE-TAG <> IF DESK-SBOX-S-PROFILE EXIT THEN
+    _DSAI-PLAN @ SBOX-PLAN-IMPORT-N@ IF
+        DESK-SBOX-S-PROFILE EXIT
+    THEN
+    _DSAI-BUDGETS? 0= IF DESK-SBOX-S-BUDGET EXIT THEN
+
+    _DSAI-ENTRY-A @ _DSAI-ENTRY-U @ _DSAI-PLAN @
+    SBOX-HOST-ENTRY-RESOLVE-EXACT
+    DUP IF 2DROP DESK-SBOX-S-ENTRY EXIT THEN
+    DROP
+    DUP _DSAI-ENTRY-INDEX !
+    _DSAI-PLAN @ SBOX-PLAN-ENTRY-SIGNATURE@
+    0= IF DROP DESK-SBOX-S-ENTRY EXIT THEN
+    SBOX-ABI-SIGNATURE-VALUE-TO-VALUE <> IF
+        DESK-SBOX-S-ENTRY EXIT
+    THEN
+    DESK-SBOX-S-OK ;
+
+: _DSAI-BOUNDARY  ( -- status )
+    _DSAI-ADMISSION @ _DSA-FIXED? 0= IF
+        DESK-SBOX-S-INVALID EXIT
+    THEN
+    _DSAI-ADMISSION @ DESK-SBOX-ADMISSION-SIZE _DSA-ZERO? 0= IF
+        DESK-SBOX-S-STATE EXIT
+    THEN
+    _DSAI-LIFETIMES? 0= IF DESK-SBOX-S-INVALID EXIT THEN
+    _DSAI-INSTRUCTION @ 0> 0= IF DESK-SBOX-S-BUDGET EXIT THEN
+    _DSAI-VALUE-OPS @ 0> 0= IF DESK-SBOX-S-BUDGET EXIT THEN
+    _DSAI-COPY @ 0> 0= IF DESK-SBOX-S-BUDGET EXIT THEN
+    _DSAI-ACTIVATION-ID @ 0> 0= IF DESK-SBOX-S-INVALID EXIT THEN
+    _DSAI-ACTIVATION-GENERATION @ 0> 0= IF
+        DESK-SBOX-S-INVALID EXIT
+    THEN
+    _DSAI-REVISION @ 0> 0= IF DESK-SBOX-S-INVALID EXIT THEN
+    _DSAI-RID @ RID-SIZE _DSAI-EXTERNAL-SPAN? 0= IF
+        DESK-SBOX-S-ALIAS EXIT
+    THEN
+    _DSAI-RID @ RID-PRESENT? 0= IF DESK-SBOX-S-INVALID EXIT THEN
+    _DSAI-ENTRY-A @ _DSAI-ENTRY-U @
+        _DSAI-EXTERNAL-SPAN? 0= IF
+        DESK-SBOX-S-ALIAS EXIT
+    THEN
+    _DSAI-LIMITS @ SBOX-VALUE-LIMITS-SIZE
+        _DSAI-EXTERNAL-SPAN? 0= IF
+        DESK-SBOX-S-ALIAS EXIT
+    THEN
+    _DSAI-ENTRY-A @ _DSAI-ENTRY-U @ _DSA-ENTRY-NAME? 0= IF
+        DESK-SBOX-S-ENTRY EXIT
+    THEN
+    _DSAI-LIMITS @ SBOX-VALUE-LIMITS-VALID? 0= IF
+        DESK-SBOX-S-INVALID EXIT
+    THEN
+    _DSAI-ADMISSION @ DESK-SBOX-ADMISSION-SIZE
+    _DSAI-OWNER @ SBOX-MODULE-OWNER-SPAN-DISJOINT? 0= IF
+        DESK-SBOX-S-ALIAS EXIT
+    THEN
+    _DSAI-HEAD @ PHEAD-SIZE
+    _DSAI-ADMISSION @ DESK-SBOX-ADMISSION-SIZE
+        MSPAN-OVERLAP? IF DESK-SBOX-S-ALIAS EXIT THEN
+    _DSAI-PARENT @ CTX-SIZE
+    _DSAI-ADMISSION @ DESK-SBOX-ADMISSION-SIZE
+        MSPAN-OVERLAP? IF DESK-SBOX-S-ALIAS EXIT THEN
+    _DSAI-BINDING-STATUS ;
+
+: _DSAI-COPY-METADATA  ( -- )
+    _DSAI-ADMISSION @ >R
+    R@ R@ _DSA.SELF !
+    DESK-SBOX-ADMISSION-SIZE R@ _DSA.SIZE !
+    DESK-SBOX-CLASS-PURE R@ _DSA.CLASS !
+    DESK-SBOX-ADMISSION-STATE-OPEN R@ _DSA.STATE !
+    _DSAI-OWNER @ R@ _DSA.OWNER !
+    _DSAI-HEAD @ R@ _DSA.HEAD !
+    _DSAI-PARENT @ R@ _DSA.PARENT !
+    _DSAI-HEAD @ PHEAD.REVISION @ R@ _DSA.PRACTICE-REVISION !
+    _DSAI-PARENT @ CTX.ID @ R@ _DSA.CONTEXT-ID !
+    _DSAI-PARENT @ CTX.GENERATION @ R@ _DSA.CONTEXT-GENERATION !
+    _DSAI-PARENT @ CTX.EPOCH @ R@ _DSA.CONTEXT-EPOCH !
+    _DSAI-REVISION @ R@ _DSA.MODULE-REVISION !
+    _DSAI-ENTRY-U @ R@ _DSA.ENTRY-U !
+    _DSAI-INSTRUCTION @ R@ _DSA.INSTRUCTION-BUDGET !
+    _DSAI-VALUE-OPS @ R@ _DSA.VALUE-OP-BUDGET !
+    _DSAI-COPY @ R@ _DSA.COPY-BUDGET !
+    _DSAI-ACTIVATION-ID @ R@ _DSA.ACTIVATION-ID !
+    _DSAI-ACTIVATION-GENERATION @ R@ _DSA.ACTIVATION-GENERATION !
+    _DSAI-HEAD @ PHEAD.ID R@ _DSA.PRACTICE-RID RID-COPY
+    _DSAI-RID @ R@ _DSA.MODULE-RID RID-COPY
+    _DSAI-ENTRY-A @ R@ _DSA.ENTRY _DSAI-ENTRY-U @ CMOVE
+    R> DROP ;
+
+: DESK-SBOX-ADMISSION-INIT
+  ( owner head parent limits instruction value-ops copy activation-id activation-generation rid revision entry entry-u admission -- status )
+    _DSAI-ADMISSION !
+    _DSAI-ENTRY-U !
+    _DSAI-ENTRY-A !
+    _DSAI-REVISION !
+    _DSAI-RID !
+    _DSAI-ACTIVATION-GENERATION !
+    _DSAI-ACTIVATION-ID !
+    _DSAI-COPY !
+    _DSAI-VALUE-OPS !
+    _DSAI-INSTRUCTION !
+    _DSAI-LIMITS !
+    _DSAI-PARENT !
+    _DSAI-HEAD !
+    _DSAI-OWNER !
+
+    _DSAI-BOUNDARY DUP IF EXIT THEN DROP
+    _DSAI-COPY-METADATA
+    _DSAI-OWNER @
+    _DSAI-PARENT @
+    _DSAI-LIMITS @
+    _DSAI-INSTRUCTION @
+    _DSAI-VALUE-OPS @
+    _DSAI-COPY @
+    _DSAI-ADMISSION @ _DSA.COMPONENT
+    DESK-SBOX-COMPONENT-INIT
+    DUP IF
+        _DSAI-ADMISSION @ DESK-SBOX-ADMISSION-SIZE 0 FILL
+        EXIT
+    THEN
+    DROP
+    _DSA-MAGIC _DSAI-ADMISSION @ _DSA.MAGIC !
+    _DSAI-ADMISSION @ DESK-SBOX-ADMISSION-VALID? 0= IF
+        _DSAI-ADMISSION @ _DSA.COMPONENT
+            DESK-SBOX-COMPONENT-RELEASE DROP
+        _DSAI-ADMISSION @ DESK-SBOX-ADMISSION-SIZE 0 FILL
+        DESK-SBOX-S-INVALID EXIT
+    THEN
+    DESK-SBOX-S-OK ;
+
+\ =====================================================================
+\  Immutable admission identity
+\ =====================================================================
+
+: DESK-SBOX-ADMISSION-CLASS@  ( admission -- class|0 )
+    DUP DESK-SBOX-ADMISSION-VALID?
+    IF _DSA.CLASS @ ELSE DROP 0 THEN ;
+
+: DESK-SBOX-ADMISSION-PRACTICE@
+  ( admission -- practice-rid practice-revision flag )
+    DUP DESK-SBOX-ADMISSION-VALID? 0= IF
+        DROP 0 0 0 EXIT
+    THEN
+    DUP _DSA.PRACTICE-RID
+    SWAP _DSA.PRACTICE-REVISION @
+    -1 ;
+
+: DESK-SBOX-ADMISSION-CONTEXT@
+  ( admission -- id generation epoch flag )
+    DUP DESK-SBOX-ADMISSION-VALID? 0= IF
+        DROP 0 0 0 0 EXIT
+    THEN
+    DUP _DSA.CONTEXT-ID @
+    OVER _DSA.CONTEXT-GENERATION @
+    ROT _DSA.CONTEXT-EPOCH @
+    -1 ;
+
+: DESK-SBOX-ADMISSION-ACTIVATION@
+  ( admission -- id generation flag )
+    DUP DESK-SBOX-ADMISSION-VALID? 0= IF
+        DROP 0 0 0 EXIT
+    THEN
+    DUP _DSA.ACTIVATION-ID @
+    SWAP _DSA.ACTIVATION-GENERATION @
+    -1 ;
+
+: DESK-SBOX-ADMISSION-MODULE@
+  ( admission -- module-rid revision entry entry-u flag )
+    DUP DESK-SBOX-ADMISSION-VALID? 0= IF
+        DROP 0 0 0 0 0 EXIT
+    THEN
+    >R
+    R@ _DSA.MODULE-RID
+    R@ _DSA.MODULE-REVISION @
+    R@ _DSA.ENTRY
+    R@ _DSA.ENTRY-U @
+    -1
+    R> DROP ;
+
+\ =====================================================================
+\  Tuple-closed invocation and execution
+\ =====================================================================
+
+VARIABLE _DSAIV-INPUT
+VARIABLE _DSAIV-INPUT-U
+VARIABLE _DSAIV-ADMISSION
+
+: _DSA-EXTERNAL-SPAN?  ( address length admission -- flag )
+    >R
+    2DUP _DSA-SPAN? 0= IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ DESK-SBOX-ADMISSION-SIZE
+        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ _DSA.HEAD @ PHEAD-SIZE
+        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
+    2DUP R@ _DSA.PARENT @ CTX-SIZE
+        MSPAN-OVERLAP? IF 2DROP R> DROP 0 EXIT THEN
+    R@ _DSA.OWNER @ SBOX-MODULE-OWNER-SPAN-DISJOINT?
+    R> DROP ;
+
+: DESK-SBOX-ADMISSION-INVOKE
+  ( input input-u admission -- invocation-generation|0 status )
+    _DSAIV-ADMISSION !
+    _DSAIV-INPUT-U !
+    _DSAIV-INPUT !
+    _DSAIV-ADMISSION @ DESK-SBOX-ADMISSION-VALID? 0= IF
+        0 DESK-SBOX-S-INVALID EXIT
+    THEN
+    _DSAIV-ADMISSION @ _DSA.STATE @
+    DESK-SBOX-ADMISSION-STATE-OPEN <> IF
+        0 DESK-SBOX-S-STATE EXIT
+    THEN
+    _DSAIV-INPUT-U @ 0> 0= IF
+        0 DESK-SBOX-S-INVALID EXIT
+    THEN
+    _DSAIV-INPUT @ _DSAIV-INPUT-U @ _DSAIV-ADMISSION @
+        _DSA-EXTERNAL-SPAN? 0= IF
+        0 DESK-SBOX-S-ALIAS EXIT
+    THEN
+    _DSAIV-ADMISSION @ _DSA.MODULE-RID
+    _DSAIV-ADMISSION @ _DSA.MODULE-REVISION @
+    _DSAIV-ADMISSION @ _DSA.ENTRY
+    _DSAIV-ADMISSION @ _DSA.ENTRY-U @
+    _DSAIV-INPUT @
+    _DSAIV-INPUT-U @
+    _DSAIV-ADMISSION @ _DSA.COMPONENT
+    DESK-SBOX-ADMIT ;
+
+\ The job service has just validated its complete embedded admission graph.
+\ This private path avoids validating that same admission a second time
+\ inside one serialized TICK; service slot validation already checked the
+\ exact component generation and VM run state before this call.
+: _DSA-RUN-SLICE-VALIDATED
+  ( max-steps invocation-generation admission -- run-state status )
+    _DSA.COMPONENT >R DROP R>
+    _DSC-RUN-SLICE-VALIDATED ;
+
+: DESK-SBOX-ADMISSION-RUN-SLICE
+  ( max-steps invocation-generation admission -- run-state status )
+    DUP DESK-SBOX-ADMISSION-VALID? 0= IF
+        2DROP DROP SBOX-VM-RUN-INVALID DESK-SBOX-S-INVALID EXIT
+    THEN
+    _DSA.COMPONENT DESK-SBOX-RUN-SLICE ;
+
+: DESK-SBOX-ADMISSION-RUN-STATE@
+  ( invocation-generation admission -- run-state status )
+    DUP DESK-SBOX-ADMISSION-VALID? 0= IF
+        2DROP SBOX-VM-RUN-INVALID DESK-SBOX-S-INVALID EXIT
+    THEN
+    _DSA.COMPONENT DESK-SBOX-RUN-STATE@ ;
+
+: DESK-SBOX-ADMISSION-CANCEL
+  ( invocation-generation admission -- status )
+    DUP DESK-SBOX-ADMISSION-VALID? 0= IF
+        2DROP DESK-SBOX-S-INVALID EXIT
+    THEN
+    _DSA.COMPONENT DESK-SBOX-CANCEL ;
+
+: DESK-SBOX-ADMISSION-LIVE?  ( admission -- flag )
+    DUP DESK-SBOX-ADMISSION-VALID?
+    IF _DSA.COMPONENT DESK-SBOX-COMPONENT-LIVE? ELSE DROP 0 THEN ;
+
+: DESK-SBOX-ADMISSION-INVOCATION@  ( admission -- generation|0 )
+    DUP DESK-SBOX-ADMISSION-VALID?
+    IF _DSA.COMPONENT DESK-SBOX-COMPONENT-GENERATION@ ELSE DROP 0 THEN ;
+
+\ =====================================================================
+\  Detached correlated transient receipt
+\ =====================================================================
+
+  0 CONSTANT _DSRC-MAGIC-OFF
+  8 CONSTANT _DSRC-SELF
+ 16 CONSTANT _DSRC-SIZE
+ 24 CONSTANT _DSRC-CLASS
+ 32 CONSTANT _DSRC-ACTIVATION-ID
+ 40 CONSTANT _DSRC-ACTIVATION-GENERATION
+ 48 CONSTANT _DSRC-INVOCATION-GENERATION
+ 56 CONSTANT _DSRC-RUN-STATE
+ 64 CONSTANT _DSRC-PRACTICE-REVISION
+ 72 CONSTANT _DSRC-CONTEXT-ID
+ 80 CONSTANT _DSRC-CONTEXT-GENERATION
+ 88 CONSTANT _DSRC-CONTEXT-EPOCH
+ 96 CONSTANT _DSRC-MODULE-REVISION
+104 CONSTANT _DSRC-ENTRY-U
+112 CONSTANT _DSRC-RESERVED0
+120 CONSTANT _DSRC-RESERVED1
+128 CONSTANT _DSRC-PRACTICE-RID
+160 CONSTANT _DSRC-MODULE-RID
+192 CONSTANT _DSRC-ENTRY
+256 CONSTANT _DSRC-RESULT
+320 CONSTANT DESK-SBOX-RECEIPT-SIZE
+
+: _DSRC.MAGIC                 ( receipt -- address ) _DSRC-MAGIC-OFF + ;
+: _DSRC.SELF                  ( receipt -- address ) _DSRC-SELF + ;
+: _DSRC.SIZE                  ( receipt -- address ) _DSRC-SIZE + ;
+: _DSRC.CLASS                 ( receipt -- address ) _DSRC-CLASS + ;
+: _DSRC.ACTIVATION-ID         ( receipt -- address )
+    _DSRC-ACTIVATION-ID + ;
+: _DSRC.ACTIVATION-GENERATION ( receipt -- address )
+    _DSRC-ACTIVATION-GENERATION + ;
+: _DSRC.INVOCATION-GENERATION ( receipt -- address )
+    _DSRC-INVOCATION-GENERATION + ;
+: _DSRC.RUN-STATE             ( receipt -- address ) _DSRC-RUN-STATE + ;
+: _DSRC.PRACTICE-REVISION     ( receipt -- address )
+    _DSRC-PRACTICE-REVISION + ;
+: _DSRC.CONTEXT-ID            ( receipt -- address ) _DSRC-CONTEXT-ID + ;
+: _DSRC.CONTEXT-GENERATION    ( receipt -- address )
+    _DSRC-CONTEXT-GENERATION + ;
+: _DSRC.CONTEXT-EPOCH         ( receipt -- address ) _DSRC-CONTEXT-EPOCH + ;
+: _DSRC.MODULE-REVISION       ( receipt -- address )
+    _DSRC-MODULE-REVISION + ;
+: _DSRC.ENTRY-U               ( receipt -- address ) _DSRC-ENTRY-U + ;
+: _DSRC.RESERVED0             ( receipt -- address ) _DSRC-RESERVED0 + ;
+: _DSRC.RESERVED1             ( receipt -- address ) _DSRC-RESERVED1 + ;
+: _DSRC.PRACTICE-RID          ( receipt -- rid ) _DSRC-PRACTICE-RID + ;
+: _DSRC.MODULE-RID            ( receipt -- rid ) _DSRC-MODULE-RID + ;
+: _DSRC.ENTRY                 ( receipt -- address ) _DSRC-ENTRY + ;
+: _DSRC.RESULT                ( receipt -- result ) _DSRC-RESULT + ;
+
+: _DSRC-FIXED?  ( receipt -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DESK-SBOX-RECEIPT-SIZE _DSA-SPAN? ;
+
+: _DSRC-COPIED-ENTRY?  ( receipt -- flag )
+    DUP _DSRC.ENTRY
+    OVER _DSRC.ENTRY-U @
+    _DSA-ENTRY-NAME? 0= IF DROP 0 EXIT THEN
+    DUP _DSRC.ENTRY
+    OVER _DSRC.ENTRY-U @ +
+    SWAP _DSRC.ENTRY-U @ 64 SWAP -
+    _DSA-ZERO? ;
+
+: DESK-SBOX-RECEIPT-VALID?  ( receipt -- flag )
+    DUP _DSRC-FIXED? 0= IF DROP 0 EXIT THEN
+    DUP _DSRC.MAGIC @ _DSRC-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _DSRC.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _DSRC.SIZE @ DESK-SBOX-RECEIPT-SIZE <> IF DROP 0 EXIT THEN
+    DUP _DSRC.CLASS @ DESK-SBOX-CLASS-PURE <> IF DROP 0 EXIT THEN
+    DUP _DSRC.ACTIVATION-ID @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSRC.ACTIVATION-GENERATION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSRC.INVOCATION-GENERATION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSRC.PRACTICE-REVISION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSRC.CONTEXT-ID @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSRC.CONTEXT-GENERATION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSRC.CONTEXT-EPOCH @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSRC.MODULE-REVISION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _DSRC.PRACTICE-RID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP _DSRC.MODULE-RID RID-PRESENT? 0= IF DROP 0 EXIT THEN
+    DUP _DSRC-COPIED-ENTRY? 0= IF DROP 0 EXIT THEN
+    DUP _DSRC.RESERVED0 @
+    OVER _DSRC.RESERVED1 @ OR IF DROP 0 EXIT THEN
+    DUP _DSRC.RESULT DESK-SBOX-RESULT-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _DSRC.INVOCATION-GENERATION @
+    OVER _DSRC.RESULT _DSR-GENERATION-VALIDATED@ <> IF
+        DROP 0 EXIT
+    THEN
+    DUP _DSRC.RUN-STATE @
+    SWAP _DSRC.RESULT _DSR-RUN-STATE-VALIDATED@ = ;
+
+: DESK-SBOX-RECEIPT-ACTIVATION@
+  ( receipt -- id generation flag )
+    DUP DESK-SBOX-RECEIPT-VALID? 0= IF DROP 0 0 0 EXIT THEN
+    DUP _DSRC.ACTIVATION-ID @
+    SWAP _DSRC.ACTIVATION-GENERATION @
+    -1 ;
+
+: DESK-SBOX-RECEIPT-INVOCATION@
+  ( receipt -- generation run-state flag )
+    DUP DESK-SBOX-RECEIPT-VALID? 0= IF DROP 0 0 0 EXIT THEN
+    DUP _DSRC.INVOCATION-GENERATION @
+    SWAP _DSRC.RUN-STATE @
+    -1 ;
+
+: DESK-SBOX-RECEIPT-PRACTICE@
+  ( receipt -- practice-rid practice-revision flag )
+    DUP DESK-SBOX-RECEIPT-VALID? 0= IF DROP 0 0 0 EXIT THEN
+    DUP _DSRC.PRACTICE-RID
+    SWAP _DSRC.PRACTICE-REVISION @
+    -1 ;
+
+: DESK-SBOX-RECEIPT-CONTEXT@
+  ( receipt -- id generation epoch flag )
+    DUP DESK-SBOX-RECEIPT-VALID? 0= IF DROP 0 0 0 0 EXIT THEN
+    DUP _DSRC.CONTEXT-ID @
+    OVER _DSRC.CONTEXT-GENERATION @
+    ROT _DSRC.CONTEXT-EPOCH @
+    -1 ;
+
+: DESK-SBOX-RECEIPT-MODULE@
+  ( receipt -- module-rid revision entry entry-u flag )
+    DUP DESK-SBOX-RECEIPT-VALID? 0= IF
+        DROP 0 0 0 0 0 EXIT
+    THEN
+    >R
+    R@ _DSRC.MODULE-RID
+    R@ _DSRC.MODULE-REVISION @
+    R@ _DSRC.ENTRY
+    R@ _DSRC.ENTRY-U @
+    -1
+    R> DROP ;
+
+: DESK-SBOX-RECEIPT-PAYLOAD@
+  ( receipt -- payload payload-u flag )
+    DUP DESK-SBOX-RECEIPT-VALID? 0= IF DROP 0 0 0 EXIT THEN
+    _DSRC.RESULT _DSR-PAYLOAD-VALIDATED@ ;
+
+: DESK-SBOX-RECEIPT-RELEASE  ( receipt -- status )
+    DUP _DSRC-FIXED? 0= IF DROP DESK-SBOX-S-INVALID EXIT THEN
+    DUP DESK-SBOX-RECEIPT-SIZE _DSA-ZERO? IF
+        DROP DESK-SBOX-S-OK EXIT
+    THEN
+    DUP DESK-SBOX-RECEIPT-VALID? 0= IF
+        DROP DESK-SBOX-S-INVALID EXIT
+    THEN
+    DUP _DSRC.RESULT _DSR-RELEASE-VALIDATED
+    DESK-SBOX-RECEIPT-SIZE 0 FILL
+    DESK-SBOX-S-OK ;
+
+VARIABLE _DSART-RECEIPT
+VARIABLE _DSART-GENERATION
+VARIABLE _DSART-ADMISSION
+
+: _DSA-RECEIPT-BOUNDARY  ( receipt -- status )
+    DUP _DSRC-FIXED? 0= IF
+        DROP DESK-SBOX-S-INVALID EXIT
+    THEN
+    DUP DESK-SBOX-RECEIPT-SIZE _DSA-ZERO? 0= IF
+        DROP DESK-SBOX-S-STATE EXIT
+    THEN
+    DUP DESK-SBOX-RECEIPT-SIZE
+        _DSART-RECEIPT 8 MSPAN-OVERLAP? IF
+        DROP DESK-SBOX-S-ALIAS EXIT
+    THEN
+    DUP DESK-SBOX-RECEIPT-SIZE
+        _DSART-GENERATION 8 MSPAN-OVERLAP? IF
+        DROP DESK-SBOX-S-ALIAS EXIT
+    THEN
+    DUP DESK-SBOX-RECEIPT-SIZE
+        _DSART-ADMISSION 8 MSPAN-OVERLAP? IF
+        DROP DESK-SBOX-S-ALIAS EXIT
+    THEN
+    DROP
+    DESK-SBOX-S-OK ;
+
+: _DSART-RECEIPT-BOUNDARY  ( -- status )
+    _DSART-RECEIPT @ _DSA-RECEIPT-BOUNDARY ;
+
+: _DSA-RESULT-SPAN-STATUS
+  ( receipt invocation-generation admission -- status )
+    2 PICK DESK-SBOX-RECEIPT-SIZE
+    3 PICK 3 PICK _DSA.COMPONENT
+    _DSC-TAKE-SPAN-STATUS
+    >R 2DROP DROP R> ;
+
+\ A serialized service TAKE has already validated and correlated the exact
+\ slot, admission, component generation, host, and VM graph.  No callback,
+\ yield, substitution, or mutation may intervene before this span check.
+: _DSA-SERVICE-RESULT-SPAN-STATUS
+  ( receipt admission -- status )
+    _DSA.COMPONENT >R
+    DESK-SBOX-RECEIPT-SIZE R>
+    _DSC-TAKE-SPAN-VALIDATED ;
+
+: _DSART-BOUNDARY  ( -- status )
+    _DSART-RECEIPT-BOUNDARY DUP IF EXIT THEN DROP
+    _DSART-ADMISSION @ DESK-SBOX-ADMISSION-VALID? 0= IF
+        DESK-SBOX-S-INVALID EXIT
+    THEN
+    _DSART-RECEIPT @ DESK-SBOX-RECEIPT-SIZE
+    _DSART-ADMISSION @ _DSA-EXTERNAL-SPAN? 0= IF
+        DESK-SBOX-S-ALIAS EXIT
+    THEN
+    _DSART-RECEIPT @
+    _DSART-GENERATION @
+    _DSART-ADMISSION @
+    _DSA-RESULT-SPAN-STATUS DUP IF EXIT THEN DROP
+    DESK-SBOX-S-OK ;
+
+: _DSART-COPY-METADATA  ( -- )
+    _DSART-RECEIPT @ >R
+    R@ R@ _DSRC.SELF !
+    DESK-SBOX-RECEIPT-SIZE R@ _DSRC.SIZE !
+    DESK-SBOX-CLASS-PURE R@ _DSRC.CLASS !
+    _DSART-ADMISSION @ _DSA.ACTIVATION-ID @
+        R@ _DSRC.ACTIVATION-ID !
+    _DSART-ADMISSION @ _DSA.ACTIVATION-GENERATION @
+        R@ _DSRC.ACTIVATION-GENERATION !
+    _DSART-GENERATION @ R@ _DSRC.INVOCATION-GENERATION !
+    R@ _DSRC.RESULT DESK-SBOX-RESULT-RUN-STATE@
+        R@ _DSRC.RUN-STATE !
+    _DSART-ADMISSION @ _DSA.PRACTICE-REVISION @
+        R@ _DSRC.PRACTICE-REVISION !
+    _DSART-ADMISSION @ _DSA.CONTEXT-ID @
+        R@ _DSRC.CONTEXT-ID !
+    _DSART-ADMISSION @ _DSA.CONTEXT-GENERATION @
+        R@ _DSRC.CONTEXT-GENERATION !
+    _DSART-ADMISSION @ _DSA.CONTEXT-EPOCH @
+        R@ _DSRC.CONTEXT-EPOCH !
+    _DSART-ADMISSION @ _DSA.MODULE-REVISION @
+        R@ _DSRC.MODULE-REVISION !
+    _DSART-ADMISSION @ _DSA.ENTRY-U @ R@ _DSRC.ENTRY-U !
+    _DSART-ADMISSION @ _DSA.PRACTICE-RID
+        R@ _DSRC.PRACTICE-RID RID-COPY
+    _DSART-ADMISSION @ _DSA.MODULE-RID
+        R@ _DSRC.MODULE-RID RID-COPY
+    _DSART-ADMISSION @ _DSA.ENTRY
+        R@ _DSRC.ENTRY
+        _DSART-ADMISSION @ _DSA.ENTRY-U @ CMOVE
+    R> DROP ;
+
+: _DSART-COMMIT  ( -- status )
+    _DSART-RECEIPT @ _DSRC.RESULT
+    _DSART-GENERATION @
+    _DSART-ADMISSION @ _DSA.COMPONENT
+    _DSC-RESULT-TAKE-PRECHECKED
+    DUP IF EXIT THEN
+    DROP
+    _DSART-COPY-METADATA
+    _DSRC-MAGIC _DSART-RECEIPT @ _DSRC.MAGIC !
+    _DSART-RECEIPT @ DESK-SBOX-RECEIPT-VALID? 0= IF
+        _DSART-RECEIPT @ _DSRC.RESULT
+            DESK-SBOX-RESULT-RELEASE DROP
+        _DSART-RECEIPT @ DESK-SBOX-RECEIPT-SIZE 0 FILL
+        DESK-SBOX-S-RESULT EXIT
+    THEN
+    DESK-SBOX-S-OK ;
+
+\ The serialized service has checked receipt shape/zero state, the complete
+\ admission graph, and the whole destination span immediately before this
+\ private commit.  No callback or yield separates that proof from publication.
+: _DSA-RESULT-TAKE-PRECHECKED
+  ( receipt invocation-generation admission -- status )
+    _DSART-ADMISSION !
+    _DSART-GENERATION !
+    _DSART-RECEIPT !
+    _DSART-COMMIT ;
+
+: DESK-SBOX-ADMISSION-RESULT-TAKE
+  ( receipt invocation-generation admission -- status )
+    _DSART-ADMISSION !
+    _DSART-GENERATION !
+    _DSART-RECEIPT !
+    _DSART-BOUNDARY DUP IF EXIT THEN DROP
+    _DSART-COMMIT ;
+
+\ =====================================================================
+\  Close, drain, and release
+\ =====================================================================
+
+: DESK-SBOX-ADMISSION-CLOSE  ( admission -- status )
+    DUP _DSA-HEADER? 0= IF DROP DESK-SBOX-S-INVALID EXIT THEN
+    DUP _DSA.STATE @ DESK-SBOX-ADMISSION-STATE-DRAINED = IF
+        DROP DESK-SBOX-S-OK EXIT
+    THEN
+    DUP _DSA.COMPONENT DESK-SBOX-COMPONENT-VALID? 0= IF
+        DROP DESK-SBOX-S-INVALID EXIT
+    THEN
+    DESK-SBOX-ADMISSION-STATE-CLOSING OVER _DSA.STATE !
+    _DSA.COMPONENT DESK-SBOX-CLOSE ;
+
+: _DSA-DRAIN-CLEAR  ( admission -- )
+    DUP _DSA.OWNER
+    DESK-SBOX-ADMISSION-SIZE _DSA-OWNER -
+    0 FILL
+    DESK-SBOX-ADMISSION-STATE-DRAINED SWAP _DSA.STATE ! ;
+
+: DESK-SBOX-ADMISSION-DRAIN  ( admission -- status )
+    DUP _DSA-HEADER? 0= IF DROP DESK-SBOX-S-INVALID EXIT THEN
+    DUP _DSA.STATE @ DESK-SBOX-ADMISSION-STATE-DRAINED = IF
+        DROP DESK-SBOX-S-OK EXIT
+    THEN
+    DUP DESK-SBOX-ADMISSION-CLOSE >R
+    DUP _DSA.COMPONENT DESK-SBOX-DRAIN
+    DUP IF
+        R> DROP NIP EXIT
+    THEN
+    DROP
+    _DSA-DRAIN-CLEAR
+    R> ;
+
+: DESK-SBOX-ADMISSION-STATE@  ( admission -- state|0 )
+    DUP DESK-SBOX-ADMISSION-VALID?
+    IF _DSA.STATE @ ELSE DROP 0 THEN ;
+
+: DESK-SBOX-ADMISSION-RELEASE  ( admission -- status )
+    DUP _DSA-FIXED? 0= IF DROP DESK-SBOX-S-INVALID EXIT THEN
+    DUP DESK-SBOX-ADMISSION-SIZE _DSA-ZERO? IF
+        DROP DESK-SBOX-S-OK EXIT
+    THEN
+    DUP _DSA-HEADER? 0= IF DROP DESK-SBOX-S-INVALID EXIT THEN
+    DUP DESK-SBOX-ADMISSION-DRAIN
+    OVER _DSA.STATE @ DESK-SBOX-ADMISSION-STATE-DRAINED = IF
+        OVER DESK-SBOX-ADMISSION-SIZE 0 FILL
+    THEN
+    NIP ;

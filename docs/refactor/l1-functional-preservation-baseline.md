@@ -37,7 +37,8 @@ UIDL is recorded as a human-readable key-to-action map and anchored to the
 normalized handler body, so dropping or remapping a key requires a reviewed
 ledger update. Every applet also pins its current component identity, public
 lifecycle entry words, exact capability-ID set and named provider identities;
-Desk's exact eleven service IDs are parsed from its setup word. The named
+Desk's exact twelve service IDs are parsed from its setup word, including the
+transient capability-empty sandbox compute service. The named
 Daybook resource service now returns the owner-lent offer containing its exact
 RID and owning pool; no extra global-pool service changes that service set.
 
@@ -51,14 +52,14 @@ emulator profiles, pytest nodes or standalone qualification drivers.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Library | 4 | 4 | 0 | 0 | 0 | 19 |
 | Streams | 7 | 4 | 3 | 0 | 1 | 34 |
-| Agent | 4 | 3 | 1 | 0 | 1 | 23 |
+| Agent | 4 | 3 | 1 | 0 | 1 | 26 |
 | Daybook | 3 | 2 | 1 | 0 | 1 | 9 |
 | Pad | 3 | 2 | 1 | 0 | 2 | 10 |
 | Grid | 2 | 0 | 2 | 0 | 2 | 5 |
 | FExplorer | 3 | 1 | 2 | 0 | 3 | 8 |
-| Desk | 3 | 3 | 0 | 0 | 0 | 14 |
+| Desk | 3 | 3 | 0 | 0 | 0 | 15 |
 | SoundLab | 3 | 0 | 1 | 2 | 3 | 2 |
-| **Total** | **32** | **19** | **11** | **2** | **13** | **124** |
+| **Total** | **32** | **19** | **11** | **2** | **13** | **128** |
 
 `partial` does not mean the entire behavior group is untested. It means at
 least one explicitly listed edge still needs characterization before the
@@ -126,7 +127,10 @@ than a reason to redesign the qualified runtime semantics or durable records.
   gates.
 - Agent retains offline, scripted, OpenAI and Codex providers, all access
   presets, authentication/device/settings behavior and durable transcript
-  semantics. L7's `agent-provider-ui-commands` profile closes the provider
+  semantics. Its explicit compile, verify, test, invoke and result-release
+  sandbox operations remain separate from provider and Practice policy, and
+  the three Stage 3 profiles pin those copied-result and cleanup boundaries.
+  L7's `agent-provider-ui-commands` profile closes the provider
   action prerequisite by driving the real Clear, Reconnect and Refresh Models
   callbacks through parsed UIDL state, pinning rendered idle/running/loading/
   error text, exact success/failure toasts, dirtying and one provider callback

@@ -1,6 +1,7 @@
 # Sandbox threat model
 
-**Status:** Stage 0 ratified design; implementation has not begun
+**Status:** Stage 0 ratified threat model; Stage 1 implementation is tracked in
+[`stage1-implementation.md`](stage1-implementation.md)
 **Scope:** neutral sandbox compilation, artifact admission, verification,
 profile-bound execution, Akashic hosting, and consumer boundaries
 

@@ -1,0 +1,2821 @@
+\ =====================================================================
+\  value.f - Canonical, caller-owned sandbox typed values
+\ =====================================================================
+\  This module implements the neutral value boundary shared by sandbox
+\  profiles.  It owns canonical value bytes and invocation-local value
+\  arenas; it owns no schema, module declaration, authority, allocator,
+\  VM, digest accumulator, or mutable dictionary scratch.
+\
+\  All operation state is supplied by the caller.  Limits are built and
+\  sealed before use.  Input decode is two-pass: the complete canonical
+\  tree and its budgets are proved before an arena is touched, then the
+\  same bytes are decoded into a measured arena whose seal is written last.
+\  Output nodes are immutable and append-only; every constructor validates
+\  its complete input and reserves all semantic/native capacity before the
+\  new handle becomes visible.
+\
+\  A SBOX-VALUE-STATE binds exactly one sealed input arena and one sealed
+\  output arena.  Handles are numbers, never addresses:
+\       input  n = 1 .. 0x7fff_ffff_ffff_ffff
+\       output n = high-bit OR (1 .. 0x7fff_ffff_ffff_ffff)
+\
+\  The caller must keep every admitted span mapped and quiescent for the
+\  duration of the synchronous operation.  Public boundaries qualify spans
+\  before access and reject overlap wherever mutation could invalidate a
+\  borrowed input.
+\ =====================================================================
+
+REQUIRE format.f
+REQUIRE ../utils/caller-span.f
+
+PROVIDED akashic-sbx-value
+
+\ =====================================================================
+\  Public status, tags, and hard implementation geometry
+\ =====================================================================
+
+ 0 CONSTANT SBOX-VALUE-S-OK
+ 1 CONSTANT SBOX-VALUE-S-INVALID
+ 2 CONSTANT SBOX-VALUE-S-CAPACITY
+ 3 CONSTANT SBOX-VALUE-S-ALIAS
+ 4 CONSTANT SBOX-VALUE-S-HANDLE
+ 5 CONSTANT SBOX-VALUE-S-TYPE
+ 6 CONSTANT SBOX-VALUE-S-RANGE
+ 7 CONSTANT SBOX-VALUE-S-UTF8
+ 8 CONSTANT SBOX-VALUE-S-MAP-ORDER
+ 9 CONSTANT SBOX-VALUE-S-DUPLICATE-KEY
+10 CONSTANT SBOX-VALUE-S-INVALID-LENGTH
+11 CONSTANT SBOX-VALUE-S-DEPTH
+12 CONSTANT SBOX-VALUE-S-INPUT-NODES
+13 CONSTANT SBOX-VALUE-S-INPUT-BYTES
+14 CONSTANT SBOX-VALUE-S-ARENA-NODES
+15 CONSTANT SBOX-VALUE-S-ARENA-BYTES
+16 CONSTANT SBOX-VALUE-S-RESULT-NODES
+17 CONSTANT SBOX-VALUE-S-RESULT-BYTES
+18 CONSTANT SBOX-VALUE-S-STATE
+19 CONSTANT SBOX-VALUE-S-CYCLE
+20 CONSTANT SBOX-VALUE-S-CORRUPT
+
+: SBOX-VALUE-STATUS-VALID?  ( status -- flag )
+    DUP SBOX-VALUE-S-OK >=
+    SWAP SBOX-VALUE-S-CORRUPT <= AND ;
+
+0 CONSTANT SBOX-VALUE-T-NULL
+1 CONSTANT SBOX-VALUE-T-BOOL
+2 CONSTANT SBOX-VALUE-T-I64
+3 CONSTANT SBOX-VALUE-T-BYTES
+4 CONSTANT SBOX-VALUE-T-UTF8
+5 CONSTANT SBOX-VALUE-T-LIST
+6 CONSTANT SBOX-VALUE-T-MAP
+
+16 CONSTANT SBOX-VALUE-WIRE-HEADER-SIZE
+0x8000000000000000 CONSTANT SBOX-VALUE-OUTPUT-HANDLE-BIT
+0x7FFFFFFFFFFFFFFF CONSTANT SBOX-VALUE-HANDLE-INDEX-MAX
+
+\ Native recursion is not used by the input decoder or output encoder.
+\ This is only the maximum number of caller-owned traversal frames that one
+\ implementation instance will admit.  A profile remains free to choose a
+\ smaller effective value_depth (the pure profile chooses eight).
+64 CONSTANT SBOX-VALUE-IMPLEMENTATION-DEPTH-MAX
+
+\ =====================================================================
+\  Stateless byte and span helpers
+\ =====================================================================
+
+: _SVAL-SPAN-STATUS  ( address length -- status )
+    DUP 0< IF 2DROP SBOX-VALUE-S-INVALID EXIT THEN
+    DUP 0= IF 2DROP SBOX-VALUE-S-OK EXIT THEN
+    OVER 0= IF 2DROP SBOX-VALUE-S-INVALID EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF
+        2DROP SBOX-VALUE-S-INVALID EXIT
+    THEN
+    CALLER-SPAN-STATUS IF
+        SBOX-VALUE-S-INVALID
+    ELSE
+        SBOX-VALUE-S-OK
+    THEN ;
+
+: _SVAL-DESCRIPTOR-STATUS  ( address length -- status )
+    OVER 0= IF 2DROP SBOX-VALUE-S-INVALID EXIT THEN
+    OVER 7 AND IF 2DROP SBOX-VALUE-S-INVALID EXIT THEN
+    _SVAL-SPAN-STATUS ;
+
+: _SVAL-U16@  ( address -- value )
+    DUP C@ SWAP 1+ C@ 8 LSHIFT OR ;
+
+: _SVAL-U32@  ( address -- value )
+    DUP _SVAL-U16@
+    SWAP 2 + _SVAL-U16@ 16 LSHIFT OR ;
+
+: _SVAL-U64@  ( address -- bits )
+    DUP _SVAL-U32@
+    SWAP 4 + _SVAL-U32@ 32 LSHIFT OR ;
+
+: _SVAL-U16!  ( value address -- )
+    2DUP C!
+    SWAP 8 RSHIFT SWAP 1+ C! ;
+
+: _SVAL-U32!  ( value address -- )
+    2DUP _SVAL-U16!
+    SWAP 16 RSHIFT SWAP 2 + _SVAL-U16! ;
+
+: _SVAL-U64!  ( value address -- )
+    2DUP _SVAL-U32!
+    SWAP 32 RSHIFT SWAP 4 + _SVAL-U32! ;
+
+: _SVAL-ADD  ( a b -- sum status )
+    SBOX-BYTE-LENGTH+
+    DUP SBOX-BYTE-S-OK = IF EXIT THEN
+    2DROP 0 SBOX-VALUE-S-CAPACITY ;
+
+: _SVAL-MUL  ( a b -- product status )
+    SBOX-BYTE-LENGTH*
+    DUP SBOX-BYTE-S-OK = IF EXIT THEN
+    2DROP 0 SBOX-VALUE-S-CAPACITY ;
+
+: _SVAL-PAD8  ( length -- padded status )
+    SBOX-BYTE-PAD8
+    DUP SBOX-BYTE-S-OK = IF EXIT THEN
+    2DROP 0 SBOX-VALUE-S-CAPACITY ;
+
+: _SVAL-CONT?  ( address -- flag )
+    C@ 0xC0 AND 0x80 = ;
+
+: _SVAL-SKIP  ( address length count -- address' length' )
+    ROT OVER + -ROT - ;
+
+\ Exact shortest-form UTF-8 validation without shared decoder cursors.
+: _SVAL-UTF8-2?  ( address length -- flag )
+    DUP 2 < IF 2DROP 0 EXIT THEN
+    DROP 1+ _SVAL-CONT? ;
+
+: _SVAL-UTF8-3?  ( address length -- flag )
+    DUP 3 < IF 2DROP 0 EXIT THEN
+    OVER C@ >R
+    OVER 1+ C@
+    R@ 0xE0 = IF
+        0xA0 0xC0 WITHIN
+    ELSE
+        R@ 0xED = IF
+            0x80 0xA0 WITHIN
+        ELSE
+            0x80 0xC0 WITHIN
+        THEN
+    THEN
+    2 PICK 2 + _SVAL-CONT? AND
+    R> DROP -ROT 2DROP ;
+
+: _SVAL-UTF8-4?  ( address length -- flag )
+    DUP 4 < IF 2DROP 0 EXIT THEN
+    OVER C@ >R
+    OVER 1+ C@
+    R@ 0xF0 = IF
+        0x90 0xC0 WITHIN
+    ELSE
+        R@ 0xF4 = IF
+            0x80 0x90 WITHIN
+        ELSE
+            0x80 0xC0 WITHIN
+        THEN
+    THEN
+    2 PICK 2 + _SVAL-CONT? AND
+    2 PICK 3 + _SVAL-CONT? AND
+    R> DROP -ROT 2DROP ;
+
+: _SVAL-UTF8-MULTI  ( address length lead -- count flag )
+    DUP 0xC2 >= OVER 0xDF <= AND IF
+        DROP 2DUP _SVAL-UTF8-2? >R 2DROP 2 R> EXIT
+    THEN
+    DUP 0xE0 >= OVER 0xEF <= AND IF
+        DROP 2DUP _SVAL-UTF8-3? >R 2DROP 3 R> EXIT
+    THEN
+    DUP 0xF0 >= SWAP 0xF4 <= AND IF
+        2DUP _SVAL-UTF8-4? >R 2DROP 4 R> EXIT
+    THEN
+    2DROP 0 0 ;
+
+: _SVAL-UTF8?  ( address length -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    BEGIN DUP 0> WHILE
+        OVER C@ DUP 0x80 < IF
+            DROP 1 _SVAL-SKIP
+        ELSE
+            >R 2DUP R> _SVAL-UTF8-MULTI 0= IF
+                DROP 2DROP 0 EXIT
+            THEN
+            _SVAL-SKIP
+        THEN
+    REPEAT
+    2DROP -1 ;
+
+\ Unsigned lexicographic raw-byte comparison.
+: _SVAL-BYTES-COMPARE  ( a a-u b b-u -- order )
+    2 PICK OVER MIN 0 ?DO
+        3 PICK I + C@
+        2 PICK I + C@
+        2DUP <> IF
+            U< IF
+                2DROP 2DROP -1
+            ELSE
+                2DROP 2DROP 1
+            THEN
+            UNLOOP EXIT
+        THEN
+        2DROP
+    LOOP
+    NIP ROT DROP
+    2DUP = IF 2DROP 0 EXIT THEN
+    U< IF -1 ELSE 1 THEN ;
+
+\ =====================================================================
+\  Sealed effective value limits
+\ =====================================================================
+
+0 CONSTANT SBOX-VALUE-LIMIT-DEPTH
+1 CONSTANT SBOX-VALUE-LIMIT-BLOB-BYTES
+2 CONSTANT SBOX-VALUE-LIMIT-LIST-COUNT
+3 CONSTANT SBOX-VALUE-LIMIT-MAP-COUNT
+4 CONSTANT SBOX-VALUE-LIMIT-INPUT-NODES
+5 CONSTANT SBOX-VALUE-LIMIT-INPUT-BYTES
+6 CONSTANT SBOX-VALUE-LIMIT-OUTPUT-ARENA-NODES
+7 CONSTANT SBOX-VALUE-LIMIT-OUTPUT-ARENA-BYTES
+8 CONSTANT SBOX-VALUE-LIMIT-OUTPUT-RESULT-NODES
+9 CONSTANT SBOX-VALUE-LIMIT-OUTPUT-RESULT-BYTES
+10 CONSTANT SBOX-VALUE-LIMIT-COUNT
+
+0x534258564C494D54 CONSTANT _SVAL-LIMITS-MAGIC \ "SBXVLIMT"
+
+  0 CONSTANT _SVL-MAGIC
+  8 CONSTANT _SVL-SELF
+ 16 CONSTANT _SVL-VALUES
+ 96 CONSTANT _SVL-RESERVED
+104 CONSTANT SBOX-VALUE-LIMITS-SIZE
+
+: _SVL.MAGIC     ( limits -- address ) _SVL-MAGIC + ;
+: _SVL.SELF      ( limits -- address ) _SVL-SELF + ;
+: _SVL.RESERVED  ( limits -- address ) _SVL-RESERVED + ;
+
+: _SVL-NTH  ( field limits -- address )
+    _SVL-VALUES + SWAP 8 * + ;
+
+: _SVL-BUILDER?  ( limits -- flag )
+    DUP SBOX-VALUE-LIMITS-SIZE _SVAL-DESCRIPTOR-STATUS IF
+        DROP 0 EXIT
+    THEN
+    DUP _SVL.MAGIC @ IF DROP 0 EXIT THEN
+    DUP _SVL.SELF @ OVER <> IF DROP 0 EXIT THEN
+    _SVL.RESERVED @ 0= ;
+
+: SBOX-VALUE-LIMITS-BEGIN  ( limits -- status )
+    DUP SBOX-VALUE-LIMITS-SIZE _SVAL-DESCRIPTOR-STATUS
+    DUP IF NIP EXIT THEN DROP
+    DUP SBOX-VALUE-LIMITS-SIZE 0 FILL
+    DUP OVER _SVL.SELF !
+    DROP SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-LIMIT!  ( value field limits -- status )
+    DUP _SVL-BUILDER? 0= IF
+        2DROP DROP SBOX-VALUE-S-STATE EXIT
+    THEN
+    >R
+    DUP 0< OVER SBOX-VALUE-LIMIT-COUNT >= OR IF
+        2DROP R> DROP SBOX-VALUE-S-RANGE EXIT
+    THEN
+    OVER 0< IF
+        2DROP R> DROP SBOX-VALUE-S-RANGE EXIT
+    THEN
+    R> _SVL-NTH !
+    SBOX-VALUE-S-OK ;
+
+: _SVL-VALUES-VALID?  ( limits -- flag )
+    DUP SBOX-VALUE-LIMIT-DEPTH SWAP _SVL-NTH @
+        DUP 0> SWAP SBOX-VALUE-IMPLEMENTATION-DEPTH-MAX <= AND 0= IF
+        DROP 0 EXIT
+    THEN
+    SBOX-VALUE-LIMIT-COUNT 1 ?DO
+        DUP I SWAP _SVL-NTH @ DUP 0> SWAP SBOX-BYTE-LENGTH-MAX <=
+        AND 0= IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DUP SBOX-VALUE-LIMIT-INPUT-NODES SWAP _SVL-NTH @
+        SBOX-VALUE-HANDLE-INDEX-MAX U> IF DROP 0 EXIT THEN
+    DUP SBOX-VALUE-LIMIT-OUTPUT-ARENA-NODES SWAP _SVL-NTH @
+        SBOX-VALUE-HANDLE-INDEX-MAX U> IF DROP 0 EXIT THEN
+    SBOX-VALUE-LIMIT-OUTPUT-RESULT-NODES SWAP _SVL-NTH @
+        SBOX-VALUE-HANDLE-INDEX-MAX U> 0= ;
+
+: SBOX-VALUE-LIMITS-VALID?  ( limits -- flag )
+    DUP SBOX-VALUE-LIMITS-SIZE _SVAL-DESCRIPTOR-STATUS IF
+        DROP 0 EXIT
+    THEN
+    DUP _SVL.MAGIC @ _SVAL-LIMITS-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _SVL.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _SVL.RESERVED @ IF DROP 0 EXIT THEN
+    _SVL-VALUES-VALID? ;
+
+: SBOX-VALUE-LIMITS-SEAL  ( limits -- status )
+    DUP _SVL-BUILDER? 0= IF DROP SBOX-VALUE-S-STATE EXIT THEN
+    DUP _SVL-VALUES-VALID? 0= IF
+        DROP SBOX-VALUE-S-INVALID-LENGTH EXIT
+    THEN
+    _SVAL-LIMITS-MAGIC SWAP _SVL.MAGIC !
+    SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-LIMIT@  ( field limits -- value status )
+    DUP SBOX-VALUE-LIMITS-VALID? 0= IF
+        2DROP 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    >R
+    DUP 0< OVER SBOX-VALUE-LIMIT-COUNT >= OR IF
+        DROP R> DROP 0 SBOX-VALUE-S-RANGE EXIT
+    THEN
+    R> _SVL-NTH @ SBOX-VALUE-S-OK ;
+
+\ =====================================================================
+\  Caller-owned traversal work
+\ =====================================================================
+
+0x53425856574F524B CONSTANT _SVAL-WORK-MAGIC \ "SBXVWORK"
+
+  0 CONSTANT _SVW-MAGIC
+  8 CONSTANT _SVW-SELF
+ 16 CONSTANT _SVW-TOTAL
+ 24 CONSTANT _SVW-MODE
+ 32 CONSTANT _SVW-SOURCE
+ 40 CONSTANT _SVW-SOURCE-U
+ 48 CONSTANT _SVW-OFFSET
+ 56 CONSTANT _SVW-LIMITS
+ 64 CONSTANT _SVW-ARENA
+ 72 CONSTANT _SVW-FRAME-N
+ 80 CONSTANT _SVW-NODE-N
+ 88 CONSTANT _SVW-VALUE-BYTES
+ 96 CONSTANT _SVW-MAX-DEPTH
+104 CONSTANT _SVW-STORAGE-BYTES
+112 CONSTANT _SVW-ROOT-DONE
+120 CONSTANT _SVW-STATUS
+128 CONSTANT _SVW-CHILD-DEPTH
+136 CONSTANT _SVW-DEST-U
+144 CONSTANT _SVW-TEMP-TAG
+152 CONSTANT _SVW-TEMP-COUNT
+160 CONSTANT _SVW-TEMP-PAYLOAD
+168 CONSTANT _SVW-TEMP-HEADER
+176 CONSTANT _SVW-TEMP-NODE
+184 CONSTANT _SVW-TEMP-OWN
+192 CONSTANT _SVW-TEMP-STORAGE
+200 CONSTANT _SVW-TEMP-A
+208 CONSTANT _SVW-TEMP-U
+216 CONSTANT _SVW-RESERVED
+224 CONSTANT _SVW-FRAMES
+224 CONSTANT _SVAL-WORK-HEADER-SIZE
+
+80 CONSTANT _SVAL-WORK-FRAME-SIZE
+ 0 CONSTANT _SVF-A
+ 8 CONSTANT _SVF-B
+16 CONSTANT _SVF-C
+24 CONSTANT _SVF-D
+32 CONSTANT _SVF-E
+40 CONSTANT _SVF-F
+48 CONSTANT _SVF-G
+56 CONSTANT _SVF-H
+64 CONSTANT _SVF-I
+72 CONSTANT _SVF-J
+
+: _SVW.MAGIC          ( work -- a ) _SVW-MAGIC + ;
+: _SVW.SELF           ( work -- a ) _SVW-SELF + ;
+: _SVW.TOTAL          ( work -- a ) _SVW-TOTAL + ;
+: _SVW.MODE           ( work -- a ) _SVW-MODE + ;
+: _SVW.SOURCE         ( work -- a ) _SVW-SOURCE + ;
+: _SVW.SOURCE-U       ( work -- a ) _SVW-SOURCE-U + ;
+: _SVW.OFFSET         ( work -- a ) _SVW-OFFSET + ;
+: _SVW.LIMITS         ( work -- a ) _SVW-LIMITS + ;
+: _SVW.ARENA          ( work -- a ) _SVW-ARENA + ;
+: _SVW.FRAME-N        ( work -- a ) _SVW-FRAME-N + ;
+: _SVW.NODE-N         ( work -- a ) _SVW-NODE-N + ;
+: _SVW.VALUE-BYTES    ( work -- a ) _SVW-VALUE-BYTES + ;
+: _SVW.MAX-DEPTH      ( work -- a ) _SVW-MAX-DEPTH + ;
+: _SVW.STORAGE-BYTES  ( work -- a ) _SVW-STORAGE-BYTES + ;
+: _SVW.ROOT-DONE      ( work -- a ) _SVW-ROOT-DONE + ;
+: _SVW.STATUS         ( work -- a ) _SVW-STATUS + ;
+: _SVW.CHILD-DEPTH    ( work -- a ) _SVW-CHILD-DEPTH + ;
+: _SVW.DEST-U         ( work -- a ) _SVW-DEST-U + ;
+: _SVW.TEMP-TAG       ( work -- a ) _SVW-TEMP-TAG + ;
+: _SVW.TEMP-COUNT     ( work -- a ) _SVW-TEMP-COUNT + ;
+: _SVW.TEMP-PAYLOAD   ( work -- a ) _SVW-TEMP-PAYLOAD + ;
+: _SVW.TEMP-HEADER    ( work -- a ) _SVW-TEMP-HEADER + ;
+: _SVW.TEMP-NODE      ( work -- a ) _SVW-TEMP-NODE + ;
+: _SVW.TEMP-OWN       ( work -- a ) _SVW-TEMP-OWN + ;
+: _SVW.TEMP-STORAGE   ( work -- a ) _SVW-TEMP-STORAGE + ;
+: _SVW.TEMP-A         ( work -- a ) _SVW-TEMP-A + ;
+: _SVW.TEMP-U         ( work -- a ) _SVW-TEMP-U + ;
+: _SVW.RESERVED       ( work -- a ) _SVW-RESERVED + ;
+
+: _SVW-FRAME  ( index work -- frame )
+    _SVW-FRAMES + SWAP _SVAL-WORK-FRAME-SIZE * + ;
+
+: _SVW-TOP  ( work -- frame )
+    DUP _SVW.FRAME-N @ 1- SWAP _SVW-FRAME ;
+
+: _SVW-LIMIT@  ( field work -- value )
+    _SVW.LIMITS @ _SVL-NTH @ ;
+
+: SBOX-VALUE-WORK-MEASURE  ( limits -- bytes status )
+    DUP SBOX-VALUE-LIMITS-VALID? 0= IF
+        DROP 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    SBOX-VALUE-LIMIT-DEPTH SWAP _SVL-NTH @
+    _SVAL-WORK-FRAME-SIZE _SVAL-MUL
+    DUP IF EXIT THEN DROP
+    _SVAL-WORK-HEADER-SIZE _SVAL-ADD ;
+
+: _SVAL-WORK-BEGIN  ( limits work work-u -- work status )
+    2 PICK SBOX-VALUE-WORK-MEASURE
+    DUP IF
+        >R DROP 2DROP DROP 0 R> EXIT
+    THEN
+    DROP
+    2DUP U< IF
+        2DROP 2DROP 0 SBOX-VALUE-S-CAPACITY EXIT
+    THEN
+    2 PICK OVER _SVAL-DESCRIPTOR-STATUS
+    DUP IF
+        >R 2DROP 2DROP 0 R> EXIT
+    THEN DROP
+    3 PICK SBOX-VALUE-LIMITS-SIZE
+    4 PICK 3 PICK MSPAN-OVERLAP? IF
+        2DROP 2DROP 0 SBOX-VALUE-S-ALIAS EXIT
+    THEN
+    >R
+    DROP
+    DUP R@ 0 FILL
+    DUP DUP _SVW.SELF !
+    R@ OVER _SVW.TOTAL !
+    OVER OVER _SVW.LIMITS !
+    _SVAL-WORK-MAGIC OVER _SVW.MAGIC !
+    NIP R> DROP SBOX-VALUE-S-OK ;
+
+: _SVAL-WORK-VALID?  ( work -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP _SVAL-WORK-HEADER-SIZE _SVAL-DESCRIPTOR-STATUS IF
+        DROP 0 EXIT
+    THEN
+    DUP _SVW.MAGIC @ _SVAL-WORK-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _SVW.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _SVW.TOTAL @ DUP _SVAL-WORK-HEADER-SIZE < IF
+        2DROP 0 EXIT
+    THEN
+    2DUP _SVAL-DESCRIPTOR-STATUS IF 2DROP 0 EXIT THEN
+    DROP
+    DUP _SVW.LIMITS @ SBOX-VALUE-LIMITS-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _SVW.FRAME-N @ DUP 0< IF 2DROP 0 EXIT THEN
+    SBOX-VALUE-LIMIT-DEPTH 2 PICK _SVW-LIMIT@
+        > IF DROP 0 EXIT THEN
+    _SVW.RESERVED @ 0= ;
+
+: SBOX-VALUE-WORK-RELEASE  ( work work-u -- status )
+    2DUP _SVAL-DESCRIPTOR-STATUS
+    DUP IF >R 2DROP R> EXIT THEN DROP
+    0 FILL SBOX-VALUE-S-OK ;
+
+\ =====================================================================
+\  Arena and node representation
+\ =====================================================================
+
+0x534258564152454E CONSTANT _SVAL-ARENA-MAGIC \ "SBXVAREN"
+0x534258564E4F4445 CONSTANT _SVAL-NODE-MAGIC  \ "SBXVNODE"
+
+1 CONSTANT _SVAL-ARENA-KIND-INPUT
+2 CONSTANT _SVAL-ARENA-KIND-OUTPUT
+
+  0 CONSTANT _SVA-MAGIC
+  8 CONSTANT _SVA-SELF
+ 16 CONSTANT _SVA-TOTAL
+ 24 CONSTANT _SVA-KIND
+ 32 CONSTANT _SVA-NODE-N
+ 40 CONSTANT _SVA-NODE-CAP
+ 48 CONSTANT _SVA-OWN-USED
+ 56 CONSTANT _SVA-OWN-CAP
+ 64 CONSTANT _SVA-NODE-OFF
+ 72 CONSTANT _SVA-STORAGE-OFF
+ 80 CONSTANT _SVA-STORAGE-USED
+ 88 CONSTANT _SVA-STORAGE-CAP
+ 96 CONSTANT _SVA-ROOT
+104 CONSTANT _SVA-INPUT-NODES
+112 CONSTANT _SVA-INPUT-BYTES
+120 CONSTANT _SVA-INPUT-DEPTH
+128 CONSTANT _SVA-BUSY
+136 CONSTANT _SVA-RESERVED0
+144 CONSTANT _SVA-LIMITS
+224 CONSTANT _SVA-RESERVED1
+232 CONSTANT _SVA-RESERVED2
+240 CONSTANT _SVA-RESERVED3
+248 CONSTANT _SVA-RESERVED4
+256 CONSTANT SBOX-VALUE-ARENA-HEADER-SIZE
+
+ 0 CONSTANT _SVN-SEAL
+ 8 CONSTANT _SVN-ID
+16 CONSTANT _SVN-TAG
+24 CONSTANT _SVN-COUNT
+32 CONSTANT _SVN-DATA
+40 CONSTANT _SVN-DEPTH
+48 CONSTANT _SVN-NODES
+56 CONSTANT _SVN-VALUE-BYTES
+64 CONSTANT _SVN-WIRE-BYTES
+72 CONSTANT _SVN-RESERVED
+80 CONSTANT SBOX-VALUE-NODE-SIZE
+
+: _SVA.MAGIC         ( arena -- a ) _SVA-MAGIC + ;
+: _SVA.SELF          ( arena -- a ) _SVA-SELF + ;
+: _SVA.TOTAL         ( arena -- a ) _SVA-TOTAL + ;
+: _SVA.KIND          ( arena -- a ) _SVA-KIND + ;
+: _SVA.NODE-N        ( arena -- a ) _SVA-NODE-N + ;
+: _SVA.NODE-CAP      ( arena -- a ) _SVA-NODE-CAP + ;
+: _SVA.OWN-USED      ( arena -- a ) _SVA-OWN-USED + ;
+: _SVA.OWN-CAP       ( arena -- a ) _SVA-OWN-CAP + ;
+: _SVA.NODE-OFF      ( arena -- a ) _SVA-NODE-OFF + ;
+: _SVA.STORAGE-OFF   ( arena -- a ) _SVA-STORAGE-OFF + ;
+: _SVA.STORAGE-USED  ( arena -- a ) _SVA-STORAGE-USED + ;
+: _SVA.STORAGE-CAP   ( arena -- a ) _SVA-STORAGE-CAP + ;
+: _SVA.ROOT          ( arena -- a ) _SVA-ROOT + ;
+: _SVA.INPUT-NODES   ( arena -- a ) _SVA-INPUT-NODES + ;
+: _SVA.INPUT-BYTES   ( arena -- a ) _SVA-INPUT-BYTES + ;
+: _SVA.INPUT-DEPTH   ( arena -- a ) _SVA-INPUT-DEPTH + ;
+: _SVA.BUSY          ( arena -- a ) _SVA-BUSY + ;
+: _SVA.RESERVED0     ( arena -- a ) _SVA-RESERVED0 + ;
+: _SVA.RESERVED1     ( arena -- a ) _SVA-RESERVED1 + ;
+: _SVA.RESERVED2     ( arena -- a ) _SVA-RESERVED2 + ;
+: _SVA.RESERVED3     ( arena -- a ) _SVA-RESERVED3 + ;
+: _SVA.RESERVED4     ( arena -- a ) _SVA-RESERVED4 + ;
+
+: _SVA-LIMIT@  ( field arena -- value )
+    _SVA-LIMITS + SWAP 8 * + @ ;
+
+: _SVA-LIMIT-NTH  ( field arena -- address )
+    _SVA-LIMITS + SWAP 8 * + ;
+
+: _SVA-LIMITS-COPY  ( limits arena -- )
+    SBOX-VALUE-LIMIT-COUNT 0 ?DO
+        OVER I SWAP _SVL-NTH @
+        I 2 PICK _SVA-LIMIT-NTH !
+    LOOP
+    2DROP ;
+
+: _SVA-NODE  ( id arena -- node )
+    DUP _SVA.NODE-OFF @ +
+    SWAP 1- SBOX-VALUE-NODE-SIZE * + ;
+
+: _SVN.SEAL        ( node -- a ) _SVN-SEAL + ;
+: _SVN.ID          ( node -- a ) _SVN-ID + ;
+: _SVN.TAG         ( node -- a ) _SVN-TAG + ;
+: _SVN.COUNT       ( node -- a ) _SVN-COUNT + ;
+: _SVN.DATA        ( node -- a ) _SVN-DATA + ;
+: _SVN.DEPTH       ( node -- a ) _SVN-DEPTH + ;
+: _SVN.NODES       ( node -- a ) _SVN-NODES + ;
+: _SVN.VALUE-BYTES ( node -- a ) _SVN-VALUE-BYTES + ;
+: _SVN.WIRE-BYTES  ( node -- a ) _SVN-WIRE-BYTES + ;
+: _SVN.RESERVED    ( node -- a ) _SVN-RESERVED + ;
+
+: _SVA-GEOMETRY  ( node-cap storage-cap -- total storage-off status )
+    SWAP SBOX-VALUE-NODE-SIZE _SVAL-MUL
+    DUP IF >R DROP DROP 0 0 R> EXIT THEN DROP
+    SBOX-VALUE-ARENA-HEADER-SIZE _SVAL-ADD
+    DUP IF >R DROP DROP 0 0 R> EXIT THEN DROP
+    DUP >R
+    SWAP _SVAL-ADD
+    DUP IF >R DROP R> DROP 0 0 R> EXIT THEN
+    DROP R> SBOX-VALUE-S-OK ;
+
+: _SVA-EMBEDDED-LIMITS-VALID?  ( arena -- flag )
+    DUP SBOX-VALUE-LIMIT-DEPTH SWAP _SVA-LIMIT@
+        DUP 0> SWAP SBOX-VALUE-IMPLEMENTATION-DEPTH-MAX <= AND 0= IF
+        DROP 0 EXIT
+    THEN
+    SBOX-VALUE-LIMIT-COUNT 1 ?DO
+        DUP I SWAP _SVA-LIMIT@ DUP 0> SWAP SBOX-BYTE-LENGTH-MAX <=
+        AND 0= IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
+
+: SBOX-VALUE-ARENA-VALID?  ( arena -- flag )
+    DUP SBOX-VALUE-ARENA-HEADER-SIZE _SVAL-DESCRIPTOR-STATUS IF
+        DROP 0 EXIT
+    THEN
+    DUP _SVA.MAGIC @ _SVAL-ARENA-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _SVA.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _SVA.TOTAL @ DUP SBOX-VALUE-ARENA-HEADER-SIZE < IF
+        2DROP 0 EXIT
+    THEN
+    2DUP _SVAL-DESCRIPTOR-STATUS IF 2DROP 0 EXIT THEN DROP
+    DUP _SVA.KIND @ DUP _SVAL-ARENA-KIND-INPUT =
+        SWAP _SVAL-ARENA-KIND-OUTPUT = OR 0= IF DROP 0 EXIT THEN
+    DUP _SVA.NODE-N @ DUP 0< IF 2DROP 0 EXIT THEN
+    OVER _SVA.NODE-CAP @ OVER U< IF 2DROP 0 EXIT THEN DROP
+    DUP _SVA.OWN-USED @ DUP 0< IF 2DROP 0 EXIT THEN
+    OVER _SVA.OWN-CAP @ OVER U< IF 2DROP 0 EXIT THEN DROP
+    DUP _SVA.STORAGE-USED @ DUP 0< IF 2DROP 0 EXIT THEN
+    OVER _SVA.STORAGE-CAP @ OVER U< IF 2DROP 0 EXIT THEN DROP
+    DUP _SVA.NODE-OFF @ SBOX-VALUE-ARENA-HEADER-SIZE <> IF
+        DROP 0 EXIT
+    THEN
+    DUP _SVA.NODE-CAP @ OVER _SVA.STORAGE-CAP @ _SVA-GEOMETRY
+    DUP IF >R 2DROP DROP R> DROP 0 EXIT THEN DROP
+    2 PICK _SVA.STORAGE-OFF @ <> IF 2DROP 0 EXIT THEN
+    OVER _SVA.TOTAL @ <> IF DROP 0 EXIT THEN
+    DUP _SVA.BUSY @ IF DROP 0 EXIT THEN
+    DUP _SVA.RESERVED0 @
+    OVER _SVA.RESERVED1 @ OR
+    OVER _SVA.RESERVED2 @ OR
+    OVER _SVA.RESERVED3 @ OR
+    OVER _SVA.RESERVED4 @ OR IF DROP 0 EXIT THEN
+    DUP _SVA-EMBEDDED-LIMITS-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _SVA.KIND @ _SVAL-ARENA-KIND-INPUT = IF
+        DUP _SVA.NODE-N @ DUP 0> SWAP
+            2 PICK _SVA.NODE-CAP @ = AND 0= IF DROP 0 EXIT THEN
+        DUP _SVA.ROOT @ 1 <> IF DROP 0 EXIT THEN
+        DUP _SVA.INPUT-NODES @ OVER _SVA.NODE-N @ <> IF DROP 0 EXIT THEN
+        DUP _SVA.INPUT-BYTES @ DUP 0> SWAP
+            SBOX-VALUE-LIMIT-INPUT-BYTES 3 PICK _SVA-LIMIT@ <=
+            AND 0= IF DROP 0 EXIT THEN
+        DUP _SVA.INPUT-DEPTH @ DUP 0> SWAP
+            SBOX-VALUE-LIMIT-DEPTH 3 PICK _SVA-LIMIT@ <=
+            AND 0= IF DROP 0 EXIT THEN
+    ELSE
+        DUP _SVA.ROOT @
+        OVER _SVA.INPUT-NODES @ OR
+        OVER _SVA.INPUT-BYTES @ OR
+        OVER _SVA.INPUT-DEPTH @ OR IF DROP 0 EXIT THEN
+    THEN
+    DROP -1 ;
+
+: SBOX-VALUE-ARENA-RELEASE  ( arena arena-u -- status )
+    2DUP _SVAL-DESCRIPTOR-STATUS
+    DUP IF >R 2DROP R> EXIT THEN DROP
+    0 FILL SBOX-VALUE-S-OK ;
+
+: _SVA-RAW-ALLOC  ( bytes arena -- offset status )
+    OVER 0= IF 2DROP 0 SBOX-VALUE-S-OK EXIT THEN
+    >R
+    DUP 0< IF DROP R> DROP 0 SBOX-VALUE-S-CAPACITY EXIT THEN
+    R@ _SVA.STORAGE-CAP @ R@ _SVA.STORAGE-USED @ -
+    OVER U< IF DROP R> DROP 0 SBOX-VALUE-S-CAPACITY EXIT THEN
+    R@ _SVA.STORAGE-OFF @ R@ _SVA.STORAGE-USED @ +
+    SWAP R@ _SVA.STORAGE-USED +!
+    R> DROP SBOX-VALUE-S-OK ;
+
+: _SVN-SPAN-VALID?  ( offset bytes arena -- flag )
+    >R
+    DUP 0= IF DROP 0= R> DROP EXIT THEN
+    2DUP 0< SWAP 0< OR IF 2DROP R> DROP 0 EXIT THEN
+    OVER R@ _SVA.STORAGE-OFF @ U< IF 2DROP R> DROP 0 EXIT THEN
+    R@ _SVA.STORAGE-OFF @ R@ _SVA.STORAGE-USED @ +
+    2 PICK OVER U> IF 2DROP DROP R> DROP 0 EXIT THEN
+    2 PICK - OVER U< IF 2DROP R> DROP 0 EXIT THEN
+    2DROP R> DROP -1 ;
+
+: _SVN-VALID-NULL?  ( id arena node -- id arena flag )
+    DUP _SVN.COUNT @
+    OVER _SVN.DATA @ OR
+    OVER _SVN.DEPTH @ 1- OR
+    OVER _SVN.NODES @ 1- OR
+    SWAP _SVN.VALUE-BYTES @ 16 - OR 0= ;
+
+: _SVN-VALID-BOOL?  ( id arena node -- id arena flag )
+    DUP _SVN.COUNT @ IF
+        DROP 0
+    ELSE
+        DUP _SVN.DATA @ DUP 0= SWAP -1 = OR
+        OVER _SVN.DEPTH @ 1 = AND
+        OVER _SVN.NODES @ 1 = AND
+        SWAP _SVN.VALUE-BYTES @ 24 = AND
+    THEN ;
+
+: _SVN-VALID-I64?  ( id arena node -- id arena flag )
+    DUP _SVN.COUNT @ 0=
+    OVER _SVN.DEPTH @ 1 = AND
+    OVER _SVN.NODES @ 1 = AND
+    SWAP _SVN.VALUE-BYTES @ 24 = AND ;
+
+: _SVN-BLOB-BYTES?  ( node -- flag )
+    DUP _SVN.COUNT @ _SVAL-PAD8
+    DUP IF 2DROP DROP 0 EXIT THEN
+    DROP 16 _SVAL-ADD
+    DUP IF 2DROP DROP 0 EXIT THEN
+    DROP SWAP _SVN.VALUE-BYTES @ = ;
+
+: _SVN-VALID-BLOB?  ( id arena node -- id arena flag )
+    >R
+    R@ _SVN.COUNT @ DUP 0< IF
+        DROP 0 R> DROP EXIT
+    THEN
+    DUP
+    SBOX-VALUE-LIMIT-BLOB-BYTES 3 PICK _SVA-LIMIT@ U> IF
+        DROP 0 R> DROP EXIT
+    THEN
+    _SVAL-PAD8
+    DUP IF 2DROP 0 R> DROP EXIT THEN
+    DROP
+    R@ _SVN.DATA @ SWAP 2 PICK _SVN-SPAN-VALID?
+    R@ _SVN.DEPTH @ 1 = AND
+    R@ _SVN.NODES @ 1 = AND
+    R@ _SVN-BLOB-BYTES? AND
+    R> DROP ;
+
+: _SVN-VALID-EDGES?  ( id arena node scale -- id arena flag )
+    >R
+    DUP _SVN.COUNT @ DUP 0< IF
+        DROP DROP R> DROP 0 EXIT
+    THEN
+    R> _SVAL-MUL
+    DUP IF
+        >R 2DROP R> DROP 0 EXIT
+    THEN
+    DROP
+    OVER _SVN.DATA @ SWAP 3 PICK _SVN-SPAN-VALID?
+    >R DROP R> ;
+
+: _SVN-VALID-LIST?  ( id arena node -- id arena flag )
+    DUP _SVN.COUNT @
+    SBOX-VALUE-LIMIT-LIST-COUNT 3 PICK _SVA-LIMIT@ U> IF
+        DROP 0 EXIT
+    THEN
+    8 _SVN-VALID-EDGES? ;
+
+: _SVN-VALID-MAP?  ( id arena node -- id arena flag )
+    DUP _SVN.COUNT @
+    SBOX-VALUE-LIMIT-MAP-COUNT 3 PICK _SVA-LIMIT@ U> IF
+        DROP 0 EXIT
+    THEN
+    16 _SVN-VALID-EDGES? ;
+
+: _SVN-VALID-TAG?  ( id arena node -- flag )
+    DUP _SVN.TAG @ CASE
+        SBOX-VALUE-T-NULL OF _SVN-VALID-NULL? ENDOF
+        SBOX-VALUE-T-BOOL OF _SVN-VALID-BOOL? ENDOF
+        SBOX-VALUE-T-I64 OF _SVN-VALID-I64? ENDOF
+        SBOX-VALUE-T-BYTES OF _SVN-VALID-BLOB? ENDOF
+        SBOX-VALUE-T-UTF8 OF _SVN-VALID-BLOB? ENDOF
+        SBOX-VALUE-T-LIST OF _SVN-VALID-LIST? ENDOF
+        SBOX-VALUE-T-MAP OF _SVN-VALID-MAP? ENDOF
+        >R DROP 0 R>
+    ENDCASE
+    >R 2DROP R> ;
+
+: _SVN-VALID?  ( id arena node -- flag )
+    DUP _SVN.SEAL @ _SVAL-NODE-MAGIC <> IF 2DROP DROP 0 EXIT THEN
+    DUP _SVN.ID @ 3 PICK <> IF 2DROP DROP 0 EXIT THEN
+    DUP _SVN.RESERVED @ IF 2DROP DROP 0 EXIT THEN
+    DUP _SVN.TAG @ DUP SBOX-VALUE-T-NULL <
+        SWAP SBOX-VALUE-T-MAP > OR IF 2DROP DROP 0 EXIT THEN
+    DUP _SVN.DEPTH @ DUP 0> SWAP
+        SBOX-VALUE-LIMIT-DEPTH 4 PICK _SVA-LIMIT@ <= AND 0= IF
+        2DROP DROP 0 EXIT
+    THEN
+    DUP _SVN.NODES @ 0> 0= IF 2DROP DROP 0 EXIT THEN
+    DUP _SVN.VALUE-BYTES @ 16 < IF 2DROP DROP 0 EXIT THEN
+    _SVN-VALID-TAG? ;
+
+\ =====================================================================
+\  Canonical input inspection and decode
+\ =====================================================================
+
+0 CONSTANT _SVAL-WORK-MODE-INSPECT
+1 CONSTANT _SVAL-WORK-MODE-DECODE
+2 CONSTANT _SVAL-WORK-MODE-ENCODE-MEASURE
+3 CONSTANT _SVAL-WORK-MODE-ENCODE-WRITE
+
+: _SVW-PARSE-RESET  ( mode arena work -- )
+    >R
+    OVER R@ _SVW.MODE !
+    DUP R@ _SVW.ARENA !
+    2DROP
+    0 R@ _SVW.OFFSET !
+    0 R@ _SVW.FRAME-N !
+    0 R@ _SVW.NODE-N !
+    0 R@ _SVW.VALUE-BYTES !
+    0 R@ _SVW.MAX-DEPTH !
+    0 R@ _SVW.STORAGE-BYTES !
+    0 R@ _SVW.ROOT-DONE !
+    0 R@ _SVW.STATUS !
+    0 R@ _SVW.CHILD-DEPTH !
+    0 R@ _SVW.DEST-U !
+    0 R@ _SVW.TEMP-TAG !
+    0 R@ _SVW.TEMP-COUNT !
+    0 R@ _SVW.TEMP-PAYLOAD !
+    0 R@ _SVW.TEMP-HEADER !
+    0 R@ _SVW.TEMP-NODE !
+    0 R@ _SVW.TEMP-OWN !
+    0 R@ _SVW.TEMP-STORAGE !
+    0 R@ _SVW.TEMP-A !
+    0 R@ _SVW.TEMP-U !
+    R@ _SVW-FRAMES +
+    SBOX-VALUE-LIMIT-DEPTH R@ _SVW-LIMIT@
+    _SVAL-WORK-FRAME-SIZE * 0 FILL
+    R> DROP ;
+
+: _SVW-BOUND@  ( work -- offset )
+    DUP _SVW.FRAME-N @ IF
+        _SVW-TOP _SVF-A + @
+    ELSE
+        _SVW.SOURCE-U @
+    THEN ;
+
+: _SVW-CURRENT-DEPTH  ( work -- depth )
+    _SVW.FRAME-N @ 1+ ;
+
+: _SVW-REQUIRE  ( bytes work -- address status )
+    >R
+    DUP 0< IF DROP R> DROP 0 SBOX-VALUE-S-INVALID EXIT THEN
+    R@ _SVW.OFFSET @ R@ _SVW-BOUND@ >
+    IF DROP R> DROP 0 SBOX-VALUE-S-INVALID EXIT THEN
+    R@ _SVW-BOUND@ R@ _SVW.OFFSET @ -
+    OVER U< IF DROP R> DROP 0 SBOX-VALUE-S-INVALID EXIT THEN
+    R@ _SVW.SOURCE @ R@ _SVW.OFFSET @ +
+    NIP R> DROP SBOX-VALUE-S-OK ;
+
+: _SVW-ADVANCE  ( bytes work -- status )
+    >R
+    DUP R@ _SVW-REQUIRE
+    DUP IF >R 2DROP R> R> DROP EXIT THEN
+    DROP DROP
+    R@ _SVW.OFFSET +!
+    R> DROP SBOX-VALUE-S-OK ;
+
+: _SVW-NODE+  ( work -- status )
+    DUP _SVW.NODE-N @
+    SBOX-VALUE-LIMIT-INPUT-NODES 2 PICK _SVW-LIMIT@ >= IF
+        DROP SBOX-VALUE-S-INPUT-NODES EXIT
+    THEN
+    1 SWAP _SVW.NODE-N +!
+    SBOX-VALUE-S-OK ;
+
+: _SVW-VALUE+  ( bytes work -- status )
+    >R
+    R@ _SVW.VALUE-BYTES @ SWAP _SVAL-ADD
+    DUP IF NIP R> DROP SBOX-VALUE-S-INPUT-BYTES EXIT THEN
+    DROP
+    DUP SBOX-VALUE-LIMIT-INPUT-BYTES R@ _SVW-LIMIT@ U> IF
+        DROP R> DROP SBOX-VALUE-S-INPUT-BYTES EXIT
+    THEN
+    R> _SVW.VALUE-BYTES !
+    SBOX-VALUE-S-OK ;
+
+: _SVW-STORAGE+  ( bytes work -- status )
+    >R
+    R@ _SVW.STORAGE-BYTES @ SWAP _SVAL-ADD
+    DUP IF NIP R> DROP SBOX-VALUE-S-CAPACITY EXIT THEN
+    DROP R> _SVW.STORAGE-BYTES !
+    SBOX-VALUE-S-OK ;
+
+: _SVW-DEPTH-CHECK  ( work -- status )
+    DUP _SVW-CURRENT-DEPTH
+    DUP SBOX-VALUE-LIMIT-DEPTH 3 PICK _SVW-LIMIT@ > IF
+        2DROP SBOX-VALUE-S-DEPTH EXIT
+    THEN
+    OVER _SVW.MAX-DEPTH @ OVER < IF
+        OVER _SVW.MAX-DEPTH !
+    ELSE
+        DROP
+    THEN
+    DROP SBOX-VALUE-S-OK ;
+
+: _SVW-PARENT-EXPECTS-KEY?  ( work -- flag )
+    DUP _SVW.FRAME-N @ 0= IF DROP 0 EXIT THEN
+    _SVW-TOP
+    DUP _SVF-C + @ SBOX-VALUE-T-MAP <> IF DROP 0 EXIT THEN
+    _SVF-B + @ 1 AND 0= ;
+
+: _SVW-MAP-KEY-ORDER  ( payload-address length work -- status )
+    >R
+    R@ _SVW-TOP _SVF-G + @ -1 = IF
+        2DROP R> DROP SBOX-VALUE-S-OK EXIT
+    THEN
+    R@ _SVW-TOP _SVF-G + @ R@ _SVW.SOURCE @ +
+    R@ _SVW-TOP _SVF-H + @
+    3 PICK 3 PICK _SVAL-BYTES-COMPARE
+    DUP 0= IF
+        DROP 2DROP R> DROP SBOX-VALUE-S-DUPLICATE-KEY EXIT
+    THEN
+    0> IF
+        2DROP R> DROP SBOX-VALUE-S-MAP-ORDER EXIT
+    THEN
+    2DROP R> DROP SBOX-VALUE-S-OK ;
+
+: _SVW-MAP-KEY-CHECK  ( payload-address length work -- status )
+    DUP _SVW-PARENT-EXPECTS-KEY? 0= IF
+        2DROP DROP SBOX-VALUE-S-OK EXIT
+    THEN
+    >R
+    2DUP R@ _SVW-MAP-KEY-ORDER
+    DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN DROP
+    OVER R@ _SVW.SOURCE @ - R@ _SVW-TOP _SVF-G + !
+    DUP R@ _SVW-TOP _SVF-H + !
+    2DROP R> DROP SBOX-VALUE-S-OK ;
+
+: _SVW-READ-HEADER  ( work -- status )
+    >R
+    SBOX-VALUE-WIRE-HEADER-SIZE R@ _SVW-REQUIRE
+    DUP IF NIP R> DROP EXIT THEN DROP
+    DUP R@ _SVW.TEMP-HEADER !
+    DUP C@ R@ _SVW.TEMP-TAG !
+    DUP 1+ C@ IF
+        DROP R> DROP SBOX-VALUE-S-INVALID EXIT
+    THEN
+    DUP 2 + _SVAL-U16@ IF
+        DROP R> DROP SBOX-VALUE-S-INVALID EXIT
+    THEN
+    DUP 4 + _SVAL-U32@ R@ _SVW.TEMP-COUNT !
+    8 + _SVAL-U64@ DUP 0< IF
+        DROP R> DROP SBOX-VALUE-S-INVALID EXIT
+    THEN
+    R@ _SVW.TEMP-PAYLOAD !
+    R@ _SVW.TEMP-TAG @
+    DUP SBOX-VALUE-T-NULL <
+    SWAP SBOX-VALUE-T-MAP > OR IF
+        R> DROP SBOX-VALUE-S-INVALID EXIT
+    THEN
+    R@ _SVW.TEMP-PAYLOAD @
+    SBOX-VALUE-WIRE-HEADER-SIZE _SVAL-ADD
+    DUP IF
+        2DROP R> DROP SBOX-VALUE-S-INVALID EXIT
+    THEN
+    DROP R> _SVW-REQUIRE NIP ;
+
+: _SVW-SHAPE-NULL  ( work -- aggregate? status )
+    >R
+    R@ _SVW.TEMP-COUNT @
+    R@ _SVW.TEMP-PAYLOAD @ OR IF
+        R> DROP 0 SBOX-VALUE-S-INVALID EXIT
+    THEN
+    16 R@ _SVW.TEMP-OWN !
+    0 R@ _SVW.TEMP-STORAGE !
+    R> DROP 0 SBOX-VALUE-S-OK ;
+
+: _SVW-SHAPE-FIXED  ( own work -- aggregate? status )
+    >R
+    R@ _SVW.TEMP-COUNT @ IF
+        DROP R> DROP 0 SBOX-VALUE-S-INVALID EXIT
+    THEN
+    R@ _SVW.TEMP-PAYLOAD @ 8 <> IF
+        DROP R> DROP 0 SBOX-VALUE-S-INVALID EXIT
+    THEN
+    R@ _SVW.TEMP-OWN !
+    0 R@ _SVW.TEMP-STORAGE !
+    R> DROP 0 SBOX-VALUE-S-OK ;
+
+: _SVW-SHAPE-BLOB  ( utf8? work -- aggregate? status )
+    >R
+    R@ _SVW.TEMP-COUNT @ IF
+        DROP R> DROP 0 SBOX-VALUE-S-INVALID EXIT
+    THEN
+    R@ _SVW.TEMP-PAYLOAD @
+    SBOX-VALUE-LIMIT-BLOB-BYTES R@ _SVW-LIMIT@ U> IF
+        DROP R> DROP 0 SBOX-VALUE-S-INVALID-LENGTH EXIT
+    THEN
+    DUP IF
+        R@ _SVW.TEMP-HEADER @ SBOX-VALUE-WIRE-HEADER-SIZE +
+        R@ _SVW.TEMP-PAYLOAD @ _SVAL-UTF8? 0= IF
+            DROP R> DROP 0 SBOX-VALUE-S-UTF8 EXIT
+        THEN
+    THEN
+    DROP
+    R@ _SVW.TEMP-PAYLOAD @ _SVAL-PAD8
+    DUP IF
+        NIP R> DROP 0 SBOX-VALUE-S-INVALID EXIT
+    THEN
+    DROP
+    DUP R@ _SVW.TEMP-STORAGE !
+    16 _SVAL-ADD
+    DUP IF
+        NIP R> DROP 0 SBOX-VALUE-S-INVALID EXIT
+    THEN
+    DROP
+    R@ _SVW.TEMP-OWN !
+    R> DROP 0 SBOX-VALUE-S-OK ;
+
+: _SVW-SHAPE-AGGREGATE
+  ( stride limit-field work -- aggregate? status )
+    >R
+    R@ _SVW.TEMP-COUNT @
+    1 PICK R@ _SVW-LIMIT@ U> IF
+        2DROP R> DROP 0 SBOX-VALUE-S-INVALID-LENGTH EXIT
+    THEN
+    DROP
+    R@ _SVW.TEMP-COUNT @ SWAP _SVAL-MUL
+    DUP IF
+        NIP R> DROP 0 SBOX-VALUE-S-INVALID EXIT
+    THEN
+    DROP
+    DUP R@ _SVW.TEMP-STORAGE !
+    16 _SVAL-ADD
+    DUP IF
+        NIP R> DROP 0 SBOX-VALUE-S-INVALID EXIT
+    THEN
+    DROP
+    R@ _SVW.TEMP-OWN !
+    R> DROP -1 SBOX-VALUE-S-OK ;
+
+: _SVW-SHAPE  ( work -- aggregate? status )
+    DUP _SVW.TEMP-TAG @ CASE
+        SBOX-VALUE-T-NULL OF
+            _SVW-SHAPE-NULL
+        ENDOF
+        SBOX-VALUE-T-BOOL OF
+            24 SWAP _SVW-SHAPE-FIXED
+        ENDOF
+        SBOX-VALUE-T-I64 OF
+            24 SWAP _SVW-SHAPE-FIXED
+        ENDOF
+        SBOX-VALUE-T-BYTES OF
+            0 SWAP _SVW-SHAPE-BLOB
+        ENDOF
+        SBOX-VALUE-T-UTF8 OF
+            -1 SWAP _SVW-SHAPE-BLOB
+        ENDOF
+        SBOX-VALUE-T-LIST OF
+            8 SBOX-VALUE-LIMIT-LIST-COUNT ROT
+            _SVW-SHAPE-AGGREGATE
+        ENDOF
+        SBOX-VALUE-T-MAP OF
+            16 SBOX-VALUE-LIMIT-MAP-COUNT ROT
+            _SVW-SHAPE-AGGREGATE
+        ENDOF
+        >R DROP 0 SBOX-VALUE-S-INVALID R>
+    ENDCASE ;
+
+: _SVW-LINK-NODE  ( work -- )
+    DUP _SVW-TOP >R
+    R@ _SVF-D + @
+    OVER _SVW.ARENA @ _SVA-NODE _SVN.DATA @
+    OVER _SVW.ARENA @ +
+    R@ _SVF-I + @ 8 * +
+    OVER _SVW.NODE-N @ SWAP !
+    1 R@ _SVF-I + +!
+    R> DROP DROP ;
+
+: _SVW-BUILD-NODE-BEGIN  ( work -- status )
+    DUP _SVW.MODE @ _SVAL-WORK-MODE-DECODE <> IF
+        DROP SBOX-VALUE-S-OK EXIT
+    THEN
+    DUP _SVW.ARENA @ >R
+    DUP _SVW.TEMP-STORAGE @ R@ _SVA-RAW-ALLOC
+    DUP IF NIP R> DROP NIP EXIT THEN
+    DROP OVER _SVW.TEMP-A !
+    DUP _SVW.NODE-N @ R@ _SVA-NODE DUP >R
+    SBOX-VALUE-NODE-SIZE 0 FILL
+    DUP _SVW.NODE-N @ R@ _SVN.ID !
+    DUP _SVW.TEMP-TAG @ R@ _SVN.TAG !
+    DUP _SVW.TEMP-TAG @
+    DUP SBOX-VALUE-T-BYTES = SWAP SBOX-VALUE-T-UTF8 = OR IF
+        DUP _SVW.TEMP-PAYLOAD @
+    ELSE
+        DUP _SVW.TEMP-COUNT @
+    THEN
+    R@ _SVN.COUNT !
+    DUP _SVW.TEMP-A @ R@ _SVN.DATA !
+    R@ OVER _SVW.TEMP-NODE !
+    DUP _SVW.FRAME-N @ IF
+        DUP _SVW-LINK-NODE
+    THEN
+    DROP R> DROP R> DROP SBOX-VALUE-S-OK ;
+
+: _SVW-SEAL-SCALAR  ( data depth nodes value-bytes wire-bytes work -- )
+    DUP _SVW.MODE @ _SVAL-WORK-MODE-DECODE <> IF
+        2DROP 2DROP 2DROP EXIT
+    THEN
+    _SVW.TEMP-NODE @ >R
+    R@ _SVN.WIRE-BYTES !
+    R@ _SVN.VALUE-BYTES !
+    R@ _SVN.NODES !
+    R@ _SVN.DEPTH !
+    R@ _SVN.DATA !
+    _SVAL-NODE-MAGIC R> _SVN.SEAL ! ;
+
+: _SVW-SEAL-TOP-DECODE  ( work -- )
+    DUP _SVW.TEMP-A @ _SVF-D + @
+    OVER _SVW.ARENA @ _SVA-NODE
+    OVER _SVW.TEMP-NODE !
+    DUP _SVW.CHILD-DEPTH @
+        OVER _SVW.TEMP-NODE @ _SVN.DEPTH !
+    DUP _SVW.NODE-N @
+    OVER _SVW.TEMP-A @ _SVF-D + @ - 1+
+        OVER _SVW.TEMP-NODE @ _SVN.NODES !
+    DUP _SVW.VALUE-BYTES @
+    OVER _SVW.TEMP-A @ _SVF-F + @ -
+        OVER _SVW.TEMP-NODE @ _SVN.VALUE-BYTES !
+    DUP _SVW.TEMP-A @ _SVF-A + @
+    OVER _SVW.TEMP-A @ _SVF-E + @ -
+        OVER _SVW.TEMP-NODE @ _SVN.WIRE-BYTES !
+    _SVAL-NODE-MAGIC
+        OVER _SVW.TEMP-NODE @ _SVN.SEAL !
+    DROP ;
+
+: _SVW-SEAL-TOP  ( work -- depth status )
+    DUP _SVW-TOP OVER _SVW.TEMP-A !
+    DUP _SVW.OFFSET @
+    OVER _SVW.TEMP-A @ _SVF-A + @ <> IF
+        DROP 0 SBOX-VALUE-S-INVALID EXIT
+    THEN
+    DUP _SVW.TEMP-A @ _SVF-J + @
+    DUP IF 1+ ELSE DROP 1 THEN
+    OVER _SVW.CHILD-DEPTH !
+    DUP _SVW.MODE @ _SVAL-WORK-MODE-DECODE = IF
+        DUP _SVW-SEAL-TOP-DECODE
+    THEN
+    DUP _SVW.CHILD-DEPTH @
+    SWAP DROP SBOX-VALUE-S-OK ;
+
+: _SVW-COMPLETE-STEP  ( work -- done status )
+    DUP _SVW.FRAME-N @ 0= IF
+        1 OVER _SVW.ROOT-DONE !
+        DROP -1 SBOX-VALUE-S-OK EXIT
+    THEN
+    DUP _SVW-TOP DUP _SVF-B + @ 0> 0= IF
+        2DROP -1 SBOX-VALUE-S-CORRUPT EXIT
+    THEN
+    DUP _SVF-J + @ 2 PICK _SVW.CHILD-DEPTH @ MAX
+    OVER _SVF-J + !
+    DROP
+    -1 OVER _SVW-TOP _SVF-B + +!
+    DUP _SVW-TOP _SVF-B + @ 0> IF
+        DROP -1 SBOX-VALUE-S-OK EXIT
+    THEN
+    DUP _SVW-SEAL-TOP
+    DUP IF
+        >R 2DROP -1 R> EXIT
+    THEN DROP
+    OVER _SVW.CHILD-DEPTH !
+    -1 OVER _SVW.FRAME-N +!
+    DROP 0 SBOX-VALUE-S-OK ;
+
+: _SVW-COMPLETE  ( child-depth work -- status )
+    >R R@ _SVW.CHILD-DEPTH !
+    BEGIN
+        R@ _SVW-COMPLETE-STEP
+        DUP IF NIP R> DROP EXIT THEN DROP
+        IF R> DROP SBOX-VALUE-S-OK EXIT THEN
+    AGAIN ;
+
+: _SVW-CLOSE-EMPTY  ( work -- status )
+    DUP _SVW-TOP _SVF-B + @ IF
+        DROP SBOX-VALUE-S-CORRUPT EXIT
+    THEN
+    DUP _SVW-SEAL-TOP
+    DUP IF NIP EXIT THEN DROP
+    >R
+    -1 OVER _SVW.FRAME-N +!
+    R> SWAP _SVW-COMPLETE ;
+
+: _SVW-PUSH-AGGREGATE  ( work -- status )
+    DUP _SVW.FRAME-N @
+    SBOX-VALUE-LIMIT-DEPTH 2 PICK _SVW-LIMIT@ >= IF
+        DROP SBOX-VALUE-S-DEPTH EXIT
+    THEN
+    DUP _SVW.FRAME-N @ OVER _SVW-FRAME >R
+    R@ _SVAL-WORK-FRAME-SIZE 0 FILL
+    DUP _SVW.TEMP-HEADER @ SBOX-VALUE-WIRE-HEADER-SIZE +
+    OVER _SVW.TEMP-PAYLOAD @ _SVAL-ADD
+    DUP IF 2DROP DROP R> DROP SBOX-VALUE-S-INVALID EXIT THEN DROP
+    OVER _SVW.SOURCE @ -
+    R@ _SVF-A + !
+    DUP _SVW.TEMP-COUNT @
+    OVER _SVW.TEMP-TAG @ SBOX-VALUE-T-MAP = IF 2* THEN
+    R@ _SVF-B + !
+    DUP _SVW.TEMP-TAG @ R@ _SVF-C + !
+    DUP _SVW.NODE-N @ R@ _SVF-D + !
+    DUP _SVW.OFFSET @ SBOX-VALUE-WIRE-HEADER-SIZE -
+        R@ _SVF-E + !
+    DUP _SVW.VALUE-BYTES @
+    OVER _SVW.TEMP-OWN @ - R@ _SVF-F + !
+    -1 R@ _SVF-G + !
+    0 R@ _SVF-H + !
+    0 R@ _SVF-I + !
+    0 R@ _SVF-J + !
+    1 OVER _SVW.FRAME-N +!
+    R> _SVF-B + @ 0= IF
+        _SVW-CLOSE-EMPTY
+    ELSE
+        DROP SBOX-VALUE-S-OK
+    THEN ;
+
+: _SVW-PARSE-NULL  ( work -- status )
+    0 1 1 16 16 5 PICK _SVW-SEAL-SCALAR
+    SBOX-VALUE-WIRE-HEADER-SIZE OVER _SVW-ADVANCE
+    DUP IF NIP EXIT THEN DROP
+    1 SWAP _SVW-COMPLETE ;
+
+: _SVW-PARSE-BOOL  ( work -- status )
+    DUP _SVW.TEMP-HEADER @ SBOX-VALUE-WIRE-HEADER-SIZE +
+        _SVAL-U64@
+    DUP DUP 0= SWAP -1 = OR 0= IF
+        2DROP SBOX-VALUE-S-INVALID EXIT
+    THEN
+    1 1 24 24 5 PICK _SVW-SEAL-SCALAR
+    24 OVER _SVW-ADVANCE
+    DUP IF NIP EXIT THEN DROP
+    1 SWAP _SVW-COMPLETE ;
+
+: _SVW-PARSE-I64  ( work -- status )
+    DUP _SVW.TEMP-HEADER @ SBOX-VALUE-WIRE-HEADER-SIZE +
+        _SVAL-U64@
+    1 1 24 24 5 PICK _SVW-SEAL-SCALAR
+    24 OVER _SVW-ADVANCE
+    DUP IF NIP EXIT THEN DROP
+    1 SWAP _SVW-COMPLETE ;
+
+: _SVW-COPY-BLOB  ( source length work -- )
+    >R
+    R@ _SVW.MODE @ _SVAL-WORK-MODE-DECODE <> IF
+        2DROP R> DROP EXIT
+    THEN
+    OVER
+    R@ _SVW.ARENA @ R@ _SVW.TEMP-A @ +
+    2 PICK MOVE
+    R@ _SVW.TEMP-STORAGE @ OVER - ?DUP IF
+        R@ _SVW.ARENA @ R@ _SVW.TEMP-A @ +
+        2 PICK +
+        SWAP 0 FILL
+    THEN
+    2DROP R> DROP ;
+
+: _SVW-PARSE-BYTES  ( work -- status )
+    DUP _SVW.TEMP-HEADER @ SBOX-VALUE-WIRE-HEADER-SIZE +
+    OVER _SVW.TEMP-PAYLOAD @
+    2DUP 4 PICK _SVW-COPY-BLOB
+    2DROP
+    DUP _SVW.TEMP-A @ 1 1
+    3 PICK _SVW.TEMP-OWN @
+    4 PICK _SVW.TEMP-PAYLOAD @ SBOX-VALUE-WIRE-HEADER-SIZE +
+    5 PICK _SVW-SEAL-SCALAR
+    DUP _SVW.TEMP-PAYLOAD @ SBOX-VALUE-WIRE-HEADER-SIZE +
+    OVER _SVW-ADVANCE
+    DUP IF NIP EXIT THEN DROP
+    1 SWAP _SVW-COMPLETE ;
+
+: _SVW-PARSE-UTF8  ( work -- status )
+    DUP _SVW.TEMP-HEADER @ SBOX-VALUE-WIRE-HEADER-SIZE +
+    OVER _SVW.TEMP-PAYLOAD @
+    2DUP 4 PICK _SVW-MAP-KEY-CHECK
+    DUP IF >R 2DROP DROP R> EXIT THEN DROP
+    2DUP 4 PICK _SVW-COPY-BLOB
+    2DROP
+    DUP _SVW.TEMP-A @ 1 1
+    3 PICK _SVW.TEMP-OWN @
+    4 PICK _SVW.TEMP-PAYLOAD @ SBOX-VALUE-WIRE-HEADER-SIZE +
+    5 PICK _SVW-SEAL-SCALAR
+    DUP _SVW.TEMP-PAYLOAD @ SBOX-VALUE-WIRE-HEADER-SIZE +
+    OVER _SVW-ADVANCE
+    DUP IF NIP EXIT THEN DROP
+    1 SWAP _SVW-COMPLETE ;
+
+: _SVW-PARSE-SCALAR  ( work -- status )
+    DUP _SVW.TEMP-TAG @ CASE
+        SBOX-VALUE-T-NULL OF _SVW-PARSE-NULL ENDOF
+        SBOX-VALUE-T-BOOL OF _SVW-PARSE-BOOL ENDOF
+        SBOX-VALUE-T-I64 OF _SVW-PARSE-I64 ENDOF
+        SBOX-VALUE-T-BYTES OF _SVW-PARSE-BYTES ENDOF
+        SBOX-VALUE-T-UTF8 OF _SVW-PARSE-UTF8 ENDOF
+        >R DROP SBOX-VALUE-S-CORRUPT R>
+    ENDCASE ;
+
+: _SVW-PARSE-ONE  ( work -- status )
+    DUP _SVW-DEPTH-CHECK DUP IF NIP EXIT THEN DROP
+    DUP _SVW-READ-HEADER DUP IF NIP EXIT THEN DROP
+    DUP _SVW-PARENT-EXPECTS-KEY? IF
+        DUP _SVW.TEMP-TAG @ SBOX-VALUE-T-UTF8 <> IF
+            DROP SBOX-VALUE-S-TYPE EXIT
+        THEN
+    THEN
+    DUP _SVW-SHAPE
+    DUP IF >R DROP DROP R> EXIT THEN DROP >R
+    DUP _SVW-NODE+ DUP IF R> DROP NIP EXIT THEN DROP
+    DUP _SVW.TEMP-OWN @ OVER _SVW-VALUE+
+    DUP IF R> DROP NIP EXIT THEN DROP
+    DUP _SVW.TEMP-STORAGE @ OVER _SVW-STORAGE+
+    DUP IF R> DROP NIP EXIT THEN DROP
+    DUP _SVW-BUILD-NODE-BEGIN
+    DUP IF R> DROP NIP EXIT THEN DROP
+    R> IF
+        SBOX-VALUE-WIRE-HEADER-SIZE OVER _SVW-ADVANCE
+        DUP IF NIP EXIT THEN DROP
+        _SVW-PUSH-AGGREGATE
+    ELSE
+        _SVW-PARSE-SCALAR
+    THEN ;
+
+: _SVW-PARSE  ( work -- status )
+    DUP _SVAL-WORK-VALID? 0= IF DROP SBOX-VALUE-S-STATE EXIT THEN
+    BEGIN
+        DUP _SVW.ROOT-DONE @ 0=
+    WHILE
+        DUP _SVW-PARSE-ONE
+        DUP IF NIP EXIT THEN DROP
+    REPEAT
+    DUP _SVW.FRAME-N @ IF DROP SBOX-VALUE-S-INVALID EXIT THEN
+    DUP _SVW.OFFSET @ OVER _SVW.SOURCE-U @ <> IF
+        DROP SBOX-VALUE-S-INVALID EXIT
+    THEN
+    DUP _SVW.NODE-N @ 0= IF DROP SBOX-VALUE-S-INVALID EXIT THEN
+    DROP SBOX-VALUE-S-OK ;
+
+: _SVW-ARENA-MEASURE  ( work -- arena-u status )
+    DUP _SVW.NODE-N @
+    SWAP _SVW.STORAGE-BYTES @
+    _SVA-GEOMETRY NIP ;
+
+: _SVAL-INPUT-PREFLIGHT
+    ( source source-u limits work work-u -- work arena-u status )
+    >R >R >R
+    2DUP _SVAL-SPAN-STATUS
+    DUP IF
+        >R 2DROP
+        R> R> DROP R> DROP R> DROP
+        0 0 ROT EXIT
+    THEN DROP
+    R> R> R> _SVAL-WORK-BEGIN
+    DUP IF
+        >R DROP 2DROP 0 0 R> EXIT
+    THEN
+    DROP >R
+    DUP R@ _SVW.SOURCE-U !
+    OVER R@ _SVW.SOURCE !
+    2DROP
+    _SVAL-WORK-MODE-INSPECT 0 R@ _SVW-PARSE-RESET
+    R@ _SVW-PARSE
+    DUP IF
+        >R R> R> 0 ROT EXIT
+    THEN DROP
+    R@ _SVW-ARENA-MEASURE
+    DUP IF
+        >R DROP R> R> 0 ROT EXIT
+    THEN
+    DROP R> SWAP SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-INPUT-MEASURE
+    ( source source-u limits work work-u -- arena-u nodes value-bytes depth status )
+    _SVAL-INPUT-PREFLIGHT
+    DUP IF
+        >R 2DROP 0 0 0 0 R> EXIT
+    THEN DROP
+    SWAP >R
+    R@ _SVW.NODE-N @
+    R@ _SVW.VALUE-BYTES @
+    R@ _SVW.MAX-DEPTH @
+    R> DROP SBOX-VALUE-S-OK ;
+
+: _SVA-INPUT-BEGIN  ( total work arena -- status )
+    >R
+    DUP _SVW.NODE-N @
+    OVER _SVW.STORAGE-BYTES @
+    2DUP _SVA-GEOMETRY
+    DUP IF
+        >R 2DROP 2DROP 2DROP R> R> DROP EXIT
+    THEN
+    DROP
+    5 PICK 2 PICK <> IF
+        2DROP 2DROP 2DROP R> DROP SBOX-VALUE-S-CORRUPT EXIT
+    THEN
+    SWAP DROP
+    R@ 5 PICK 0 FILL
+    R@ R@ _SVA.SELF !
+    4 PICK R@ _SVA.TOTAL !
+    _SVAL-ARENA-KIND-INPUT R@ _SVA.KIND !
+    3 PICK _SVW.NODE-N @ R@ _SVA.NODE-CAP !
+    3 PICK _SVW.VALUE-BYTES @ R@ _SVA.OWN-CAP !
+    SBOX-VALUE-ARENA-HEADER-SIZE R@ _SVA.NODE-OFF !
+    DUP R@ _SVA.STORAGE-OFF !
+    1 PICK R@ _SVA.STORAGE-CAP !
+    3 PICK _SVW.LIMITS @ R@ _SVA-LIMITS-COPY
+    2DROP 2DROP DROP R> DROP SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-INPUT-DECODE
+    ( source source-u limits work work-u arena arena-u -- root status )
+    >R >R
+    _SVAL-INPUT-PREFLIGHT
+    DUP IF
+        >R 2DROP R> R> DROP R> DROP 0 SWAP EXIT
+    THEN
+    DROP
+    R> R>                  \ work required arena arena-u
+    3 PICK _SVW.TEMP-U !  \ work required arena
+    2 PICK _SVW.TEMP-A !  \ work required
+    DUP 2 PICK _SVW.TEMP-U @ U> IF
+        2DROP 0 SBOX-VALUE-S-CAPACITY EXIT
+    THEN
+    OVER _SVW.TEMP-A @ OVER _SVAL-DESCRIPTOR-STATUS
+    DUP IF >R 2DROP 0 R> EXIT THEN DROP
+    OVER _SVW.SOURCE @ 2 PICK _SVW.SOURCE-U @
+    3 PICK _SVW.TEMP-A @ 3 PICK MSPAN-OVERLAP? IF
+        2DROP 0 SBOX-VALUE-S-ALIAS EXIT
+    THEN
+    OVER DUP _SVW.TOTAL @
+    3 PICK _SVW.TEMP-A @ 3 PICK MSPAN-OVERLAP? IF
+        2DROP 0 SBOX-VALUE-S-ALIAS EXIT
+    THEN
+    OVER _SVW.LIMITS @ SBOX-VALUE-LIMITS-SIZE
+    3 PICK _SVW.TEMP-A @ 3 PICK MSPAN-OVERLAP? IF
+        2DROP 0 SBOX-VALUE-S-ALIAS EXIT
+    THEN
+    SWAP >R                 \ required ; R: work
+    DUP R@ R@ _SVW.TEMP-A @ _SVA-INPUT-BEGIN
+    DUP IF NIP R> DROP 0 SWAP EXIT THEN DROP
+    _SVAL-WORK-MODE-DECODE
+    R@ _SVW.TEMP-A @ R@ _SVW-PARSE-RESET
+    R@ _SVW-PARSE
+    DUP IF
+        DUP R@ _SVW.STATUS !
+        R@ _SVW.ARENA @ 2 PICK 0 FILL
+        2DROP
+        R@ _SVW.STATUS @ R> DROP
+        0 SWAP EXIT
+    THEN DROP
+    R@ _SVW.NODE-N @ R@ _SVW.ARENA @ _SVA.INPUT-NODES !
+    R@ _SVW.VALUE-BYTES @ R@ _SVW.ARENA @ _SVA.INPUT-BYTES !
+    R@ _SVW.MAX-DEPTH @ R@ _SVW.ARENA @ _SVA.INPUT-DEPTH !
+    R@ _SVW.NODE-N @ R@ _SVW.ARENA @ _SVA.NODE-N !
+    R@ _SVW.VALUE-BYTES @ R@ _SVW.ARENA @ _SVA.OWN-USED !
+    1 R@ _SVW.ARENA @ _SVA.ROOT !
+    _SVAL-ARENA-MAGIC R@ _SVW.ARENA @ _SVA.MAGIC !
+    R> DROP DROP 1 SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-INPUT-ROOT@  ( input-arena -- root status )
+    DUP SBOX-VALUE-ARENA-VALID? 0= IF
+        DROP 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    DUP _SVA.KIND @ _SVAL-ARENA-KIND-INPUT <> IF
+        DROP 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    _SVA.ROOT @ SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-OUTPUT-MEASURE  ( limits -- arena-u status )
+    DUP SBOX-VALUE-LIMITS-VALID? 0= IF
+        DROP 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    DUP SBOX-VALUE-LIMIT-OUTPUT-ARENA-NODES SWAP _SVL-NTH @
+    SWAP SBOX-VALUE-LIMIT-OUTPUT-ARENA-BYTES SWAP _SVL-NTH @
+    _SVA-GEOMETRY NIP ;
+
+: SBOX-VALUE-OUTPUT-INIT  ( limits arena arena-u -- status )
+    >R
+    OVER SBOX-VALUE-OUTPUT-MEASURE
+    DUP IF
+        >R 2DROP DROP R> R> DROP EXIT
+    THEN DROP
+    DUP R@ U> IF
+        2DROP DROP R> DROP SBOX-VALUE-S-CAPACITY EXIT
+    THEN
+    OVER OVER _SVAL-DESCRIPTOR-STATUS
+    DUP IF
+        >R 2DROP DROP R> R> DROP EXIT
+    THEN DROP
+    2 PICK SBOX-VALUE-LIMITS-SIZE
+    3 PICK 3 PICK MSPAN-OVERLAP? IF
+        2DROP DROP R> DROP SBOX-VALUE-S-ALIAS EXIT
+    THEN
+    >R                        \ limits arena ; R: total arena-u
+    DUP R@ 0 FILL
+    DUP DUP _SVA.SELF !
+    R@ OVER _SVA.TOTAL !
+    _SVAL-ARENA-KIND-OUTPUT OVER _SVA.KIND !
+    SBOX-VALUE-LIMIT-OUTPUT-ARENA-NODES
+        2 PICK _SVL-NTH @ OVER _SVA.NODE-CAP !
+    SBOX-VALUE-LIMIT-OUTPUT-ARENA-BYTES
+        2 PICK _SVL-NTH @ DUP 2 PICK _SVA.OWN-CAP !
+        OVER _SVA.STORAGE-CAP !
+    SBOX-VALUE-ARENA-HEADER-SIZE OVER _SVA.NODE-OFF !
+    DUP _SVA.NODE-CAP @ OVER _SVA.STORAGE-CAP @ _SVA-GEOMETRY
+    DROP NIP OVER _SVA.STORAGE-OFF !
+    2DUP _SVA-LIMITS-COPY
+    _SVAL-ARENA-MAGIC OVER _SVA.MAGIC !
+    2DROP R> DROP R> DROP SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-OUTPUT-NODES@  ( output-arena -- count status )
+    DUP SBOX-VALUE-ARENA-VALID? 0= IF
+        DROP 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    DUP _SVA.KIND @ _SVAL-ARENA-KIND-OUTPUT <> IF
+        DROP 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    _SVA.NODE-N @ SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-OUTPUT-BYTES@  ( output-arena -- bytes status )
+    DUP SBOX-VALUE-ARENA-VALID? 0= IF
+        DROP 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    DUP _SVA.KIND @ _SVAL-ARENA-KIND-OUTPUT <> IF
+        DROP 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    _SVA.OWN-USED @ SBOX-VALUE-S-OK ;
+
+\ =====================================================================
+\  Invocation-local input/output binding and read-only queries
+\ =====================================================================
+
+0x5342585653544154 CONSTANT _SVAL-STATE-MAGIC \ "SBXVSTAT"
+
+  0 CONSTANT _SVS-MAGIC
+  8 CONSTANT _SVS-SELF
+ 16 CONSTANT _SVS-INPUT
+ 24 CONSTANT _SVS-OUTPUT
+ 32 CONSTANT _SVS-BUSY
+ 40 CONSTANT _SVS-A
+ 48 CONSTANT _SVS-U
+ 56 CONSTANT _SVS-I
+ 64 CONSTANT _SVS-N
+ 72 CONSTANT _SVS-DEPTH
+ 80 CONSTANT _SVS-NODES
+ 88 CONSTANT _SVS-BYTES
+ 96 CONSTANT _SVS-OWN
+104 CONSTANT _SVS-KEY-BYTES
+112 CONSTANT _SVS-PREV-A
+120 CONSTANT _SVS-PREV-U
+128 CONSTANT _SVS-AUX
+136 CONSTANT _SVS-STATUS
+144 CONSTANT _SVS-RESERVED0
+152 CONSTANT _SVS-RESERVED1
+160 CONSTANT SBOX-VALUE-STATE-SIZE
+
+1 CONSTANT _SVAL-STATE-BUSY-CONSTRUCTOR
+2 CONSTANT _SVAL-STATE-BUSY-FIND
+
+: _SVS.MAGIC      ( state -- a ) _SVS-MAGIC + ;
+: _SVS.SELF       ( state -- a ) _SVS-SELF + ;
+: _SVS.INPUT      ( state -- a ) _SVS-INPUT + ;
+: _SVS.OUTPUT     ( state -- a ) _SVS-OUTPUT + ;
+: _SVS.BUSY       ( state -- a ) _SVS-BUSY + ;
+: _SVS.A          ( state -- a ) _SVS-A + ;
+: _SVS.U          ( state -- a ) _SVS-U + ;
+: _SVS.I          ( state -- a ) _SVS-I + ;
+: _SVS.N          ( state -- a ) _SVS-N + ;
+: _SVS.DEPTH      ( state -- a ) _SVS-DEPTH + ;
+: _SVS.NODES      ( state -- a ) _SVS-NODES + ;
+: _SVS.BYTES      ( state -- a ) _SVS-BYTES + ;
+: _SVS.OWN        ( state -- a ) _SVS-OWN + ;
+: _SVS.KEY-BYTES  ( state -- a ) _SVS-KEY-BYTES + ;
+: _SVS.PREV-A     ( state -- a ) _SVS-PREV-A + ;
+: _SVS.PREV-U     ( state -- a ) _SVS-PREV-U + ;
+: _SVS.AUX        ( state -- a ) _SVS-AUX + ;
+: _SVS.STATUS     ( state -- a ) _SVS-STATUS + ;
+: _SVS.RESERVED0  ( state -- a ) _SVS-RESERVED0 + ;
+: _SVS.RESERVED1  ( state -- a ) _SVS-RESERVED1 + ;
+
+: _SVA-LIMITS=?  ( arena-a arena-b -- flag )
+    SBOX-VALUE-LIMIT-COUNT 0 ?DO
+        OVER I SWAP _SVA-LIMIT@
+        1 PICK I SWAP _SVA-LIMIT@ <> IF
+            2DROP 0 UNLOOP EXIT
+        THEN
+    LOOP
+    2DROP -1 ;
+
+: _SVS-BASE-VALID?  ( state -- flag )
+    DUP SBOX-VALUE-STATE-SIZE _SVAL-DESCRIPTOR-STATUS IF
+        DROP 0 EXIT
+    THEN
+    DUP _SVS.MAGIC @ _SVAL-STATE-MAGIC <> IF DROP 0 EXIT THEN
+    DUP _SVS.SELF @ OVER <> IF DROP 0 EXIT THEN
+    DUP _SVS.RESERVED0 @ OVER _SVS.RESERVED1 @ OR IF DROP 0 EXIT THEN
+    DUP _SVS.INPUT @ DUP SBOX-VALUE-ARENA-VALID? 0= IF
+        2DROP 0 EXIT
+    THEN
+    _SVA.KIND @ _SVAL-ARENA-KIND-INPUT <> IF DROP 0 EXIT THEN
+    DUP _SVS.OUTPUT @ DUP SBOX-VALUE-ARENA-VALID? 0= IF
+        2DROP 0 EXIT
+    THEN
+    _SVA.KIND @ _SVAL-ARENA-KIND-OUTPUT <> IF DROP 0 EXIT THEN
+    DUP _SVS.INPUT @ OVER _SVS.OUTPUT @ _SVA-LIMITS=? 0= IF
+        DROP 0 EXIT
+    THEN
+    DROP -1 ;
+
+: SBOX-VALUE-STATE-VALID?  ( state -- flag )
+    DUP _SVS-BASE-VALID? 0= IF DROP 0 EXIT THEN
+    _SVS.BUSY @ 0= ;
+
+: SBOX-VALUE-STATE-INPUT-SPAN@
+    ( state -- address length status )
+    DUP SBOX-VALUE-STATE-VALID? 0= IF
+        DROP 0 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    _SVS.INPUT @ DUP _SVA.TOTAL @ SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-STATE-OUTPUT-SPAN@
+    ( state -- address length status )
+    DUP SBOX-VALUE-STATE-VALID? 0= IF
+        DROP 0 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    _SVS.OUTPUT @ DUP _SVA.TOTAL @ SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-STATE-INPUT-ROOT@  ( state -- root status )
+    DUP SBOX-VALUE-STATE-VALID? 0= IF
+        DROP 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    _SVS.INPUT @ SBOX-VALUE-INPUT-ROOT@ ;
+
+: SBOX-VALUE-STATE-WORK-MEASURE  ( state -- bytes status )
+    DUP SBOX-VALUE-STATE-VALID? 0= IF
+        DROP 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    _SVS.INPUT @
+    SBOX-VALUE-LIMIT-DEPTH SWAP _SVA-LIMIT@
+    _SVAL-WORK-FRAME-SIZE _SVAL-MUL
+    DUP IF EXIT THEN DROP
+    _SVAL-WORK-HEADER-SIZE _SVAL-ADD ;
+
+: SBOX-VALUE-STATE-LIMIT@  ( field state -- value status )
+    DUP SBOX-VALUE-STATE-VALID? 0= IF
+        2DROP 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    >R
+    DUP 0< OVER SBOX-VALUE-LIMIT-COUNT >= OR IF
+        DROP R> DROP 0 SBOX-VALUE-S-RANGE EXIT
+    THEN
+    R> _SVS.INPUT @ _SVA-LIMIT@ SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-STATE-INIT  ( input-arena output-arena state -- status )
+    >R
+    OVER SBOX-VALUE-ARENA-VALID? 0= IF
+        2DROP R> DROP SBOX-VALUE-S-STATE EXIT
+    THEN
+    DUP SBOX-VALUE-ARENA-VALID? 0= IF
+        2DROP R> DROP SBOX-VALUE-S-STATE EXIT
+    THEN
+    OVER _SVA.KIND @ _SVAL-ARENA-KIND-INPUT <>
+    OVER _SVA.KIND @ _SVAL-ARENA-KIND-OUTPUT <> OR IF
+        2DROP R> DROP SBOX-VALUE-S-STATE EXIT
+    THEN
+    2DUP _SVA-LIMITS=? 0= IF
+        2DROP R> DROP SBOX-VALUE-S-STATE EXIT
+    THEN
+    2DUP >R DUP _SVA.TOTAL @ R> DUP _SVA.TOTAL @
+    MSPAN-OVERLAP? IF
+        2DROP R> DROP SBOX-VALUE-S-ALIAS EXIT
+    THEN
+    R@ SBOX-VALUE-STATE-SIZE _SVAL-DESCRIPTOR-STATUS IF
+        2DROP R> DROP SBOX-VALUE-S-INVALID EXIT
+    THEN
+    OVER DUP _SVA.TOTAL @
+    R@ SBOX-VALUE-STATE-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP SBOX-VALUE-S-ALIAS EXIT
+    THEN
+    DUP DUP _SVA.TOTAL @
+    R@ SBOX-VALUE-STATE-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP SBOX-VALUE-S-ALIAS EXIT
+    THEN
+    R@ SBOX-VALUE-STATE-SIZE 0 FILL
+    R@ R@ _SVS.SELF !
+    OVER R@ _SVS.INPUT !
+    DUP R@ _SVS.OUTPUT !
+    _SVAL-STATE-MAGIC R@ _SVS.MAGIC !
+    2DROP R> DROP SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-STATE-RELEASE  ( state -- status )
+    DUP SBOX-VALUE-STATE-SIZE _SVAL-DESCRIPTOR-STATUS
+    DUP IF NIP EXIT THEN DROP
+    SBOX-VALUE-STATE-SIZE 0 FILL SBOX-VALUE-S-OK ;
+
+: _SVS-SCRATCH-CLEAR  ( state -- )
+    DUP _SVS-A + SBOX-VALUE-STATE-SIZE _SVS-A - 0 FILL
+    0 SWAP _SVS.BUSY ! ;
+
+: _SVAL-RESOLVE  ( handle state -- node arena status )
+    DUP _SVS-BASE-VALID? 0= IF
+        2DROP 0 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    >R
+    DUP 0= IF DROP R> DROP 0 0 SBOX-VALUE-S-HANDLE EXIT THEN
+    DUP 0< IF
+        SBOX-VALUE-HANDLE-INDEX-MAX AND
+        R@ _SVS.OUTPUT @
+    ELSE
+        R@ _SVS.INPUT @
+    THEN
+    OVER 0= IF 2DROP R> DROP 0 0 SBOX-VALUE-S-HANDLE EXIT THEN
+    OVER OVER _SVA.NODE-N @ U> IF
+        2DROP R> DROP 0 0 SBOX-VALUE-S-HANDLE EXIT
+    THEN
+    2DUP _SVA-NODE
+    2 PICK 2 PICK 2 PICK _SVN-VALID? 0= IF
+        2DROP DROP R> DROP 0 0 SBOX-VALUE-S-CORRUPT EXIT
+    THEN
+    ROT DROP SWAP R> DROP SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-TYPE@  ( handle state -- tag status )
+    _SVAL-RESOLVE
+    DUP IF >R 2DROP 0 R> EXIT THEN DROP
+    DROP _SVN.TAG @ SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-BOOL@  ( handle state -- flag status )
+    _SVAL-RESOLVE
+    DUP IF >R 2DROP 0 R> EXIT THEN DROP
+    DROP
+    DUP _SVN.TAG @ SBOX-VALUE-T-BOOL <> IF
+        DROP 0 SBOX-VALUE-S-TYPE EXIT
+    THEN
+    _SVN.DATA @ SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-I64@  ( handle state -- n status )
+    _SVAL-RESOLVE
+    DUP IF >R 2DROP 0 R> EXIT THEN DROP
+    DROP
+    DUP _SVN.TAG @ SBOX-VALUE-T-I64 <> IF
+        DROP 0 SBOX-VALUE-S-TYPE EXIT
+    THEN
+    _SVN.DATA @ SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-LEN@  ( handle state -- length status )
+    _SVAL-RESOLVE
+    DUP IF >R 2DROP 0 R> EXIT THEN DROP
+    DROP
+    DUP _SVN.TAG @ DUP SBOX-VALUE-T-BYTES =
+    OVER SBOX-VALUE-T-UTF8 = OR
+    OVER SBOX-VALUE-T-LIST = OR
+    SWAP SBOX-VALUE-T-MAP = OR 0= IF
+        DROP 0 SBOX-VALUE-S-TYPE EXIT
+    THEN
+    _SVN.COUNT @ SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-BLOB@  ( handle state -- address length status )
+    _SVAL-RESOLVE
+    DUP IF >R 2DROP 0 0 R> EXIT THEN DROP
+    >R
+    DUP _SVN.TAG @ DUP SBOX-VALUE-T-BYTES =
+    SWAP SBOX-VALUE-T-UTF8 = OR 0= IF
+        DROP R> DROP 0 0 SBOX-VALUE-S-TYPE EXIT
+    THEN
+    DUP _SVN.COUNT @ DUP 0= IF
+        2DROP R> DROP 0 0 SBOX-VALUE-S-OK EXIT
+    THEN
+    SWAP _SVN.DATA @ R> + SWAP SBOX-VALUE-S-OK ;
+
+: _SVAL-EDGE-CELL@
+  ( index handle expected-tag edge-scale cell-offset state -- child status )
+    >R
+    3 PICK R@ _SVAL-RESOLVE
+    DUP IF
+        >R 2DROP 2DROP 2DROP DROP
+        R> R> DROP 0 SWAP EXIT
+    THEN
+    DROP >R >R
+    R@ _SVN.TAG @ 3 PICK <> IF
+        2DROP 2DROP DROP
+        R> DROP R> DROP R> DROP
+        0 SBOX-VALUE-S-TYPE EXIT
+    THEN
+    4 PICK 0<
+    5 PICK R@ _SVN.COUNT @ >= OR IF
+        2DROP 2DROP DROP
+        R> DROP R> DROP R> DROP
+        0 SBOX-VALUE-S-RANGE EXIT
+    THEN
+    R> _SVN.DATA @ R> +
+    5 PICK 3 PICK * + + @
+    >R 2DROP 2DROP
+    R> R> DROP SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-LIST@  ( index list-handle state -- child status )
+    >R SBOX-VALUE-T-LIST 8 0 R> _SVAL-EDGE-CELL@ ;
+
+: SBOX-VALUE-MAP-KEY@  ( index map-handle state -- key-handle status )
+    >R SBOX-VALUE-T-MAP 16 0 R> _SVAL-EDGE-CELL@ ;
+
+: SBOX-VALUE-MAP-VALUE@  ( index map-handle state -- value-handle status )
+    >R SBOX-VALUE-T-MAP 16 8 R> _SVAL-EDGE-CELL@ ;
+
+: _SVS-BORROW-DISJOINT?  ( address length state -- flag )
+    >R
+    2DUP R@ SBOX-VALUE-STATE-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP R@ _SVS.INPUT @ DUP _SVA.TOTAL @ MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    R@ _SVS.OUTPUT @ DUP _SVA.TOTAL @ MSPAN-OVERLAP? 0=
+    R> DROP ;
+
+: _SVS-MAP-FIND-FAIL
+    ( status state -- value found compared-entries compared-key-bytes status )
+    SWAP >R _SVS-SCRATCH-CLEAR
+    0 0 0 0 R> ;
+
+: _SVS-MAP-FIND-STEP  ( state -- value found status )
+    >R
+    R@ _SVS.N @ R@ _SVS.I @ - 2 /
+    R@ _SVS.I @ + R@ _SVS.DEPTH !
+    R@ _SVS.A @ R@ _SVS.DEPTH @ 16 * + @
+    R@ _SVAL-RESOLVE
+    DUP IF
+        >R 2DROP 0 0 R> R> DROP EXIT
+    THEN DROP
+    OVER _SVN.TAG @ SBOX-VALUE-T-UTF8 <> IF
+        2DROP R> DROP 0 0 SBOX-VALUE-S-CORRUPT EXIT
+    THEN
+    2DROP
+    R@ _SVS.A @ R@ _SVS.DEPTH @ 16 * + @
+    R@ SBOX-VALUE-BLOB@
+    DUP IF
+        >R 2DROP 0 0 R> R> DROP EXIT
+    THEN DROP
+    1 R@ _SVS.NODES +!
+    DUP R@ _SVS.KEY-BYTES @ SWAP _SVAL-ADD
+    DUP IF
+        >R DROP 2DROP R> DROP R> DROP
+        0 0 SBOX-VALUE-S-CORRUPT EXIT
+    THEN
+    DROP R@ _SVS.KEY-BYTES !
+    R@ _SVS.PREV-A @ R@ _SVS.PREV-U @
+    2SWAP _SVAL-BYTES-COMPARE
+    DUP 0= IF
+        DROP
+        R@ _SVS.A @ R@ _SVS.DEPTH @ 16 * + 8 + @
+        -1 R> DROP SBOX-VALUE-S-OK EXIT
+    THEN
+    0< IF
+        R@ _SVS.DEPTH @ R@ _SVS.N !
+    ELSE
+        R@ _SVS.DEPTH @ 1+ R@ _SVS.I !
+    THEN
+    R> DROP 0 0 SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-MAP-FIND
+    ( key-a key-u map state -- value found compared-entries compared-key-bytes status )
+    DUP SBOX-VALUE-STATE-VALID? 0= IF
+        2DROP 2DROP 0 0 0 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    >R
+    2 PICK 2 PICK _SVAL-SPAN-STATUS
+    DUP IF
+        >R 2DROP DROP R>
+        R@ _SVS-MAP-FIND-FAIL R> DROP EXIT
+    THEN DROP
+    OVER SBOX-VALUE-LIMIT-BLOB-BYTES
+        R@ _SVS.INPUT @ _SVA-LIMIT@ U> IF
+        2DROP DROP R> DROP
+        0 0 0 0 SBOX-VALUE-S-INVALID-LENGTH EXIT
+    THEN
+    2 PICK 2 PICK _SVAL-UTF8? 0= IF
+        2DROP DROP R> DROP
+        0 0 0 0 SBOX-VALUE-S-UTF8 EXIT
+    THEN
+    2 PICK 2 PICK R@ _SVS-BORROW-DISJOINT? 0= IF
+        2DROP DROP R> DROP
+        0 0 0 0 SBOX-VALUE-S-ALIAS EXIT
+    THEN
+    _SVAL-STATE-BUSY-FIND R@ _SVS.BUSY !
+    R@ _SVS.AUX !
+    R@ _SVS.PREV-U !
+    R@ _SVS.PREV-A !
+    R@ _SVS.AUX @ R@ _SVAL-RESOLVE
+    DUP IF
+        >R 2DROP R>
+        R@ _SVS-MAP-FIND-FAIL R> DROP EXIT
+    THEN DROP
+    >R
+    DUP _SVN.TAG @ SBOX-VALUE-T-MAP <> IF
+        DROP R> DROP
+        R@ _SVS-SCRATCH-CLEAR R> DROP
+        0 0 0 0 SBOX-VALUE-S-TYPE EXIT
+    THEN
+    DUP _SVN.DATA @ R> + R@ _SVS.A !
+    _SVN.COUNT @ R@ _SVS.N !
+    0 R@ _SVS.I !
+    0 R@ _SVS.NODES !
+    0 R@ _SVS.KEY-BYTES !
+    BEGIN
+        R@ _SVS.I @ R@ _SVS.N @ <
+    WHILE
+        R@ _SVS-MAP-FIND-STEP
+        DUP IF
+            >R 2DROP R>
+            R@ _SVS-MAP-FIND-FAIL R> DROP EXIT
+        THEN DROP
+        IF
+            -1
+            R@ _SVS.NODES @ R@ _SVS.KEY-BYTES @
+            R@ _SVS-SCRATCH-CLEAR R> DROP
+            SBOX-VALUE-S-OK EXIT
+        THEN
+        DROP
+    REPEAT
+    0 0 R@ _SVS.NODES @ R@ _SVS.KEY-BYTES @
+    R@ _SVS-SCRATCH-CLEAR R> DROP SBOX-VALUE-S-OK ;
+
+\ =====================================================================
+\  Two-phase append-only output constructors
+\ =====================================================================
+\
+\  PREPARE validates the complete operation, stages its exact operands and
+\  metrics in the caller's state, and locks that state.  The separate
+\  PREPARED-CAPACITY query lets an executor reserve instruction/value/copy
+\  counters before the arena/result resources without publishing anything.
+\  Borrowed source spans must remain mapped and quiescent until
+\  PUBLISH-PREPARED or DISCARD-PREPARED.  Publishing is the sole visibility
+\  point.  NEW-* words are synchronous prepare-plus-publish conveniences.
+
+: _SVS-CONSTRUCTOR-BEGIN  ( state -- status )
+    DUP SBOX-VALUE-STATE-VALID? 0= IF
+        DROP SBOX-VALUE-S-STATE EXIT
+    THEN
+    DUP _SVS-SCRATCH-CLEAR
+    _SVAL-STATE-BUSY-CONSTRUCTOR SWAP _SVS.BUSY !
+    SBOX-VALUE-S-OK ;
+
+: _SVS-CONSTRUCTOR-FAIL  ( status state -- status )
+    SWAP >R _SVS-SCRATCH-CLEAR R> ;
+
+: _SVS-CONSTRUCTOR-CAPACITY  ( state -- status )
+    >R
+    R@ _SVS.OUTPUT @ DUP _SVA.NODE-N @
+        SWAP _SVA.NODE-CAP @ >= IF
+        R> DROP SBOX-VALUE-S-ARENA-NODES EXIT
+    THEN
+    R@ _SVS.OUTPUT @ _SVA.OWN-USED @
+        R@ _SVS.OWN @ _SVAL-ADD
+    DUP IF
+        2DROP R> DROP SBOX-VALUE-S-ARENA-BYTES EXIT
+    THEN DROP
+    DUP R@ _SVS.OUTPUT @ _SVA.OWN-CAP @ U> IF
+        DROP R> DROP SBOX-VALUE-S-ARENA-BYTES EXIT
+    THEN DROP
+    R@ _SVS.OUTPUT @ _SVA.STORAGE-USED @
+        R@ _SVS.U @ _SVAL-ADD
+    DUP IF
+        2DROP R> DROP SBOX-VALUE-S-ARENA-BYTES EXIT
+    THEN DROP
+    DUP R@ _SVS.OUTPUT @ _SVA.STORAGE-CAP @ U> IF
+        DROP R> DROP SBOX-VALUE-S-ARENA-BYTES EXIT
+    THEN DROP
+    R@ _SVS.DEPTH @
+        SBOX-VALUE-LIMIT-DEPTH
+        R@ _SVS.OUTPUT @ _SVA-LIMIT@ U> IF
+        R> DROP SBOX-VALUE-S-DEPTH EXIT
+    THEN
+    R@ _SVS.NODES @ DUP 0< IF
+        DROP R> DROP SBOX-VALUE-S-RESULT-NODES EXIT
+    THEN
+        SBOX-VALUE-LIMIT-OUTPUT-RESULT-NODES
+        R@ _SVS.OUTPUT @ _SVA-LIMIT@ U> IF
+        R> DROP SBOX-VALUE-S-RESULT-NODES EXIT
+    THEN
+    R@ _SVS.BYTES @ DUP 0< IF
+        DROP R> DROP SBOX-VALUE-S-RESULT-BYTES EXIT
+    THEN
+        SBOX-VALUE-LIMIT-OUTPUT-RESULT-BYTES
+        R@ _SVS.OUTPUT @ _SVA-LIMIT@ U> IF
+        R> DROP SBOX-VALUE-S-RESULT-BYTES EXIT
+    THEN
+    R> DROP SBOX-VALUE-S-OK ;
+
+: _SVS-PREPARE-SCALAR  ( scalar tag own state -- status )
+    DUP _SVS-CONSTRUCTOR-BEGIN
+    DUP IF >R 2DROP 2DROP R> EXIT THEN DROP
+    >R
+    DUP R@ _SVS.OWN !
+    R@ _SVS.BYTES !
+    0 R@ _SVS.U !
+    1 R@ _SVS.DEPTH !
+    1 R@ _SVS.NODES !
+    SWAP R@ _SVS.STATUS !
+    R@ _SVS.N !
+    0 R@ _SVS.AUX !
+    R> DROP SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-PREPARE-NULL  ( state -- status )
+    >R
+    0 SBOX-VALUE-T-NULL 16 R>
+    _SVS-PREPARE-SCALAR ;
+
+: SBOX-VALUE-PREPARE-BOOL  ( flag state -- status )
+    OVER DUP 0= SWAP -1 = OR 0= IF
+        2DROP SBOX-VALUE-S-TYPE EXIT
+    THEN
+    >R
+    SBOX-VALUE-T-BOOL 24 R>
+    _SVS-PREPARE-SCALAR ;
+
+: SBOX-VALUE-PREPARE-I64  ( n state -- status )
+    >R
+    SBOX-VALUE-T-I64 24 R>
+    _SVS-PREPARE-SCALAR ;
+
+: _SVS-PREPARE-BLOB  ( address length tag state -- status )
+    DUP _SVS-CONSTRUCTOR-BEGIN
+    DUP IF >R 2DROP 2DROP R> EXIT THEN DROP
+    >R
+    DUP R@ _SVS.N !
+    DROP
+    2DUP _SVAL-SPAN-STATUS
+    DUP IF
+        >R 2DROP R>
+        R@ _SVS-CONSTRUCTOR-FAIL R> DROP EXIT
+    THEN DROP
+    DUP SBOX-VALUE-LIMIT-BLOB-BYTES
+        R@ _SVS.OUTPUT @ _SVA-LIMIT@ U> IF
+        2DROP SBOX-VALUE-S-INVALID-LENGTH
+        R@ _SVS-CONSTRUCTOR-FAIL R> DROP EXIT
+    THEN
+    2DUP R@ _SVS-BORROW-DISJOINT? 0= IF
+        2DROP SBOX-VALUE-S-ALIAS
+        R@ _SVS-CONSTRUCTOR-FAIL R> DROP EXIT
+    THEN
+    R@ _SVS.N @ SBOX-VALUE-T-UTF8 = IF
+        2DUP _SVAL-UTF8? 0= IF
+            2DROP SBOX-VALUE-S-UTF8
+            R@ _SVS-CONSTRUCTOR-FAIL R> DROP EXIT
+        THEN
+    THEN
+    DUP _SVAL-PAD8
+    DUP IF
+        >R DROP 2DROP R>
+        R@ _SVS-CONSTRUCTOR-FAIL R> DROP EXIT
+    THEN DROP
+    DUP R@ _SVS.U !
+    16 _SVAL-ADD
+    DUP IF
+        >R DROP 2DROP R>
+        R@ _SVS-CONSTRUCTOR-FAIL R> DROP EXIT
+    THEN DROP
+    DUP R@ _SVS.OWN !
+    R@ _SVS.BYTES !
+    OVER R@ _SVS.A !
+    DUP R@ _SVS.AUX !
+    2DROP
+    0 R@ _SVS.STATUS !
+    1 R@ _SVS.DEPTH !
+    1 R@ _SVS.NODES !
+    R> DROP SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-PREPARE-BYTES  ( address length state -- status )
+    >R SBOX-VALUE-T-BYTES R> _SVS-PREPARE-BLOB ;
+
+: SBOX-VALUE-PREPARE-UTF8  ( address length state -- status )
+    >R SBOX-VALUE-T-UTF8 R> _SVS-PREPARE-BLOB ;
+
+\ PREPARE must still validate every child after an expanded result ceiling
+\ is crossed, while leaving resource-priority selection to the executor.
+: _SVS-SATURATING-METRIC+
+    ( increment current limit -- saturated-total )
+    >R
+    DUP 0< IF NIP R> DROP EXIT THEN
+    DUP R@ U> IF NIP R> DROP EXIT THEN
+    _SVAL-ADD
+    DUP IF
+        2DROP R> DROP -1 EXIT
+    THEN
+    DROP
+    DUP R@ U> IF DROP R@ 1+ THEN
+    R> DROP ;
+
+: _SVS-ADD-CHILD-METRICS  ( node state -- status )
+    >R
+    DUP _SVN.NODES @
+    R@ _SVS.NODES @
+    SBOX-VALUE-LIMIT-OUTPUT-RESULT-NODES
+        R@ _SVS.OUTPUT @ _SVA-LIMIT@
+    _SVS-SATURATING-METRIC+ R@ _SVS.NODES !
+    DUP _SVN.VALUE-BYTES @
+    R@ _SVS.BYTES @
+    SBOX-VALUE-LIMIT-OUTPUT-RESULT-BYTES
+        R@ _SVS.OUTPUT @ _SVA-LIMIT@
+    _SVS-SATURATING-METRIC+ R@ _SVS.BYTES !
+    _SVN.DEPTH @ 1+
+    R@ _SVS.DEPTH @ MAX
+    DUP R@ _SVS.DEPTH !
+    SBOX-VALUE-LIMIT-DEPTH
+        R@ _SVS.OUTPUT @ _SVA-LIMIT@ U> IF
+        R> DROP SBOX-VALUE-S-DEPTH EXIT
+    THEN
+    R> DROP SBOX-VALUE-S-OK ;
+
+: _SVS-AGGREGATE-BEGIN
+    ( address count tag edge-size count-limit-field state -- status )
+    DUP _SVS-CONSTRUCTOR-BEGIN
+    DUP IF >R 2DROP 2DROP 2DROP R> EXIT THEN DROP
+    >R
+    R@ _SVS.STATUS !
+    R@ _SVS.PREV-U !
+    R@ _SVS.N !
+    R@ _SVS.AUX !
+    R@ _SVS.A !
+    R@ _SVS.AUX @ 0< IF
+        SBOX-VALUE-S-INVALID-LENGTH
+        R@ _SVS-CONSTRUCTOR-FAIL R> DROP EXIT
+    THEN
+    R@ _SVS.AUX @ R@ _SVS.STATUS @
+        R@ _SVS.OUTPUT @ _SVA-LIMIT@ U> IF
+        SBOX-VALUE-S-INVALID-LENGTH
+        R@ _SVS-CONSTRUCTOR-FAIL R> DROP EXIT
+    THEN
+    R@ _SVS.AUX @ R@ _SVS.PREV-U @ _SVAL-MUL
+    DUP IF
+        NIP R@ _SVS-CONSTRUCTOR-FAIL R> DROP EXIT
+    THEN DROP
+    DUP R@ _SVS.U !
+    R@ _SVS.A @ OVER _SVAL-SPAN-STATUS
+    DUP IF
+        >R DROP R>
+        R@ _SVS-CONSTRUCTOR-FAIL R> DROP EXIT
+    THEN DROP
+    R@ _SVS.A @ OVER R@ _SVS-BORROW-DISJOINT? 0= IF
+        DROP SBOX-VALUE-S-ALIAS
+        R@ _SVS-CONSTRUCTOR-FAIL R> DROP EXIT
+    THEN
+    16 _SVAL-ADD
+    DUP IF
+        NIP R@ _SVS-CONSTRUCTOR-FAIL R> DROP EXIT
+    THEN DROP
+    DUP R@ _SVS.OWN !
+    R@ _SVS.BYTES !
+    0 R@ _SVS.STATUS !
+    0 R@ _SVS.I !
+    0 R@ _SVS.KEY-BYTES !
+    0 R@ _SVS.PREV-A !
+    0 R@ _SVS.PREV-U !
+    1 R@ _SVS.DEPTH !
+    1 R@ _SVS.NODES !
+    R> DROP SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-PREPARE-LIST  ( handles count state -- status )
+    >R
+    SBOX-VALUE-T-LIST 8 SBOX-VALUE-LIMIT-LIST-COUNT
+        R@ _SVS-AGGREGATE-BEGIN
+    DUP IF R> DROP EXIT THEN DROP
+    BEGIN R@ _SVS.I @ R@ _SVS.AUX @ < WHILE
+        R@ _SVS.A @ R@ _SVS.I @ 8 * + _SVAL-U64@
+        R@ _SVAL-RESOLVE
+        DUP IF
+            >R 2DROP R>
+            R@ _SVS-CONSTRUCTOR-FAIL R> DROP EXIT
+        THEN DROP DROP
+        R@ _SVS-ADD-CHILD-METRICS
+        DUP IF
+            R@ _SVS-CONSTRUCTOR-FAIL R> DROP EXIT
+        THEN DROP
+        1 R@ _SVS.I +!
+    REPEAT
+    R> DROP SBOX-VALUE-S-OK ;
+
+: _SVS-PREPARE-MAP-ENTRY  ( state -- status )
+    >R
+    R@ _SVS.A @ R@ _SVS.I @ 16 * + _SVAL-U64@
+    R@ _SVAL-RESOLVE
+    DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN DROP
+    OVER _SVN.TAG @ SBOX-VALUE-T-UTF8 <> IF
+        2DROP R> DROP SBOX-VALUE-S-TYPE EXIT
+    THEN
+    OVER R@ _SVS-ADD-CHILD-METRICS
+    DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN DROP
+    OVER _SVN.DATA @ OVER +
+    2 PICK _SVN.COUNT @
+    2SWAP 2DROP
+    R@ _SVS.PREV-A @ IF
+        R@ _SVS.PREV-A @ R@ _SVS.PREV-U @
+        2OVER _SVAL-BYTES-COMPARE
+        DUP 0= IF
+            DROP 2DROP R> DROP SBOX-VALUE-S-DUPLICATE-KEY EXIT
+        THEN
+        0> IF
+            2DROP R> DROP SBOX-VALUE-S-MAP-ORDER EXIT
+        THEN
+    THEN
+    OVER R@ _SVS.PREV-A !
+    DUP R@ _SVS.PREV-U !
+    DUP R@ _SVS.KEY-BYTES @ SWAP _SVAL-ADD
+    DUP IF
+        >R DROP 2DROP R> DROP R> DROP
+        SBOX-VALUE-S-CORRUPT EXIT
+    THEN DROP
+    R@ _SVS.KEY-BYTES !
+    2DROP
+    R@ _SVS.A @ R@ _SVS.I @ 16 * + 8 + _SVAL-U64@
+    R@ _SVAL-RESOLVE
+    DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN DROP DROP
+    R@ _SVS-ADD-CHILD-METRICS
+    DUP IF R> DROP EXIT THEN DROP
+    1 R@ _SVS.I +!
+    R> DROP SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-PREPARE-MAP
+    ( pairs count state -- key-bytes status )
+    >R
+    SBOX-VALUE-T-MAP 16 SBOX-VALUE-LIMIT-MAP-COUNT
+        R@ _SVS-AGGREGATE-BEGIN
+    DUP IF R> DROP 0 SWAP EXIT THEN DROP
+    BEGIN R@ _SVS.I @ R@ _SVS.AUX @ < WHILE
+        R@ _SVS-PREPARE-MAP-ENTRY
+        DUP IF
+            R@ _SVS-CONSTRUCTOR-FAIL
+            0 SWAP R> DROP EXIT
+        THEN DROP
+    REPEAT
+    R@ _SVS.KEY-BYTES @
+    R> DROP SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-PREPARED-CAPACITY  ( state -- status )
+    DUP _SVS-BASE-VALID? 0= IF
+        DROP SBOX-VALUE-S-STATE EXIT
+    THEN
+    DUP _SVS.BUSY @ _SVAL-STATE-BUSY-CONSTRUCTOR <> IF
+        DROP SBOX-VALUE-S-STATE EXIT
+    THEN
+    _SVS-CONSTRUCTOR-CAPACITY ;
+
+: SBOX-VALUE-PUBLISH-PREPARED  ( state -- handle status )
+    DUP _SVS-BASE-VALID? 0= IF
+        DROP 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    DUP _SVS.BUSY @ _SVAL-STATE-BUSY-CONSTRUCTOR <> IF
+        DROP 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    DUP >R _SVS-CONSTRUCTOR-CAPACITY
+    DUP IF
+        R@ _SVS-CONSTRUCTOR-FAIL
+        R> DROP 0 SWAP EXIT
+    THEN DROP
+    \ Allocate/copy storage before the node or count is published.
+    R@ _SVS.U @ R@ _SVS.OUTPUT @ _SVA-RAW-ALLOC
+    DUP IF
+        NIP R@ _SVS-CONSTRUCTOR-FAIL
+        R> DROP 0 SWAP EXIT
+    THEN
+    DROP R@ _SVS.PREV-A !
+    R@ _SVS.U @ IF
+        R@ _SVS.N @ DUP SBOX-VALUE-T-BYTES =
+        SWAP SBOX-VALUE-T-UTF8 = OR IF
+            R@ _SVS.A @
+            R@ _SVS.OUTPUT @ R@ _SVS.PREV-A @ +
+            R@ _SVS.AUX @ MOVE
+            R@ _SVS.U @ R@ _SVS.AUX @ - ?DUP IF
+                R@ _SVS.OUTPUT @ R@ _SVS.PREV-A @ +
+                R@ _SVS.AUX @ +
+                SWAP 0 FILL
+            THEN
+        ELSE
+            0 R@ _SVS.I !
+            BEGIN R@ _SVS.I @ R@ _SVS.U @ < WHILE
+                R@ _SVS.A @
+                R@ _SVS.I @ + _SVAL-U64@
+                R@ _SVS.OUTPUT @ R@ _SVS.PREV-A @ +
+                R@ _SVS.I @ + !
+                8 R@ _SVS.I +!
+            REPEAT
+        THEN
+    THEN
+    \ Build the unpublished node and make its index visible last.
+    R@ _SVS.OUTPUT @ _SVA.NODE-N @ 1+ R@ _SVS.I !
+    R@ _SVS.I @ R@ _SVS.OUTPUT @ _SVA-NODE
+    R@ _SVS.PREV-U !
+    R@ _SVS.PREV-U @ SBOX-VALUE-NODE-SIZE 0 FILL
+    R@ _SVS.I @ R@ _SVS.PREV-U @ _SVN.ID !
+    R@ _SVS.N @ R@ _SVS.PREV-U @ _SVN.TAG !
+    R@ _SVS.AUX @ R@ _SVS.PREV-U @ _SVN.COUNT !
+    R@ _SVS.U @ IF
+        R@ _SVS.PREV-A @ R@ _SVS.PREV-U @ _SVN.DATA !
+    ELSE
+        R@ _SVS.STATUS @ R@ _SVS.PREV-U @ _SVN.DATA !
+    THEN
+    R@ _SVS.DEPTH @ R@ _SVS.PREV-U @ _SVN.DEPTH !
+    R@ _SVS.NODES @ R@ _SVS.PREV-U @ _SVN.NODES !
+    R@ _SVS.BYTES @ R@ _SVS.PREV-U @ _SVN.VALUE-BYTES !
+    _SVAL-NODE-MAGIC R@ _SVS.PREV-U @ _SVN.SEAL !
+    R@ _SVS.OWN @ R@ _SVS.OUTPUT @ _SVA.OWN-USED +!
+    1 R@ _SVS.OUTPUT @ _SVA.NODE-N +!
+    R@ _SVS.I @ SBOX-VALUE-OUTPUT-HANDLE-BIT OR
+    R@ _SVS-SCRATCH-CLEAR R> DROP
+    SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-DISCARD-PREPARED  ( state -- status )
+    DUP _SVS-BASE-VALID? 0= IF
+        DROP SBOX-VALUE-S-STATE EXIT
+    THEN
+    DUP _SVS.BUSY @ _SVAL-STATE-BUSY-CONSTRUCTOR <> IF
+        DROP SBOX-VALUE-S-STATE EXIT
+    THEN
+    _SVS-SCRATCH-CLEAR SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-NEW-NULL  ( state -- handle status )
+    DUP >R SBOX-VALUE-PREPARE-NULL
+    DUP IF R> DROP 0 SWAP EXIT THEN DROP
+    R> SBOX-VALUE-PUBLISH-PREPARED ;
+
+: SBOX-VALUE-NEW-BOOL  ( flag state -- handle status )
+    DUP >R SBOX-VALUE-PREPARE-BOOL
+    DUP IF R> DROP 0 SWAP EXIT THEN DROP
+    R> SBOX-VALUE-PUBLISH-PREPARED ;
+
+: SBOX-VALUE-NEW-I64  ( n state -- handle status )
+    DUP >R SBOX-VALUE-PREPARE-I64
+    DUP IF R> DROP 0 SWAP EXIT THEN DROP
+    R> SBOX-VALUE-PUBLISH-PREPARED ;
+
+: SBOX-VALUE-NEW-BYTES  ( address length state -- handle status )
+    DUP >R SBOX-VALUE-PREPARE-BYTES
+    DUP IF R> DROP 0 SWAP EXIT THEN DROP
+    R> SBOX-VALUE-PUBLISH-PREPARED ;
+
+: SBOX-VALUE-NEW-UTF8  ( address length state -- handle status )
+    DUP >R SBOX-VALUE-PREPARE-UTF8
+    DUP IF R> DROP 0 SWAP EXIT THEN DROP
+    R> SBOX-VALUE-PUBLISH-PREPARED ;
+
+: SBOX-VALUE-MAP-MEASURE  ( pairs count state -- key-bytes status )
+    DUP >R SBOX-VALUE-PREPARE-MAP
+    DUP IF R> DROP EXIT THEN DROP
+    R> SBOX-VALUE-DISCARD-PREPARED ;
+
+: SBOX-VALUE-NEW-LIST  ( handles count state -- handle status )
+    DUP >R SBOX-VALUE-PREPARE-LIST
+    DUP IF R> DROP 0 SWAP EXIT THEN DROP
+    R> SBOX-VALUE-PUBLISH-PREPARED ;
+
+: SBOX-VALUE-NEW-MAP  ( pairs count state -- handle status )
+    DUP >R SBOX-VALUE-PREPARE-MAP
+    DUP IF NIP R> DROP 0 SWAP EXIT THEN
+    2DROP R> SBOX-VALUE-PUBLISH-PREPARED ;
+
+\ =====================================================================
+\  Defensive expanded traversal and canonical output encoding
+\ =====================================================================
+
+: _SVE-LIMIT@  ( field work -- value )
+    _SVW.ARENA @ _SVS.INPUT @ _SVA-LIMIT@ ;
+
+: _SVE-WORK-BEGIN  ( root state work work-u -- work status )
+    >R
+    OVER SBOX-VALUE-STATE-VALID? 0= IF
+        2DROP DROP R> DROP 0 SBOX-VALUE-S-STATE EXIT
+    THEN
+    SBOX-VALUE-LIMIT-DEPTH 2 PICK _SVS.INPUT @ _SVA-LIMIT@
+    _SVAL-WORK-FRAME-SIZE _SVAL-MUL
+    DUP IF
+        >R DROP 2DROP DROP R> R> DROP 0 SWAP EXIT
+    THEN DROP
+    _SVAL-WORK-HEADER-SIZE _SVAL-ADD
+    DUP IF
+        >R DROP 2DROP DROP R> R> DROP 0 SWAP EXIT
+    THEN DROP
+    DUP R@ U> IF
+        2DROP 2DROP R> DROP 0 SBOX-VALUE-S-CAPACITY EXIT
+    THEN
+    OVER OVER _SVAL-DESCRIPTOR-STATUS
+    DUP IF
+        >R 2DROP 2DROP R> R> DROP 0 SWAP EXIT
+    THEN DROP
+    2 PICK SBOX-VALUE-STATE-SIZE
+    3 PICK 3 PICK MSPAN-OVERLAP? IF
+        2DROP 2DROP R> DROP 0 SBOX-VALUE-S-ALIAS EXIT
+    THEN
+    2 PICK _SVS.INPUT @ DUP _SVA.TOTAL @
+    3 PICK 3 PICK MSPAN-OVERLAP? IF
+        2DROP 2DROP R> DROP 0 SBOX-VALUE-S-ALIAS EXIT
+    THEN
+    2 PICK _SVS.OUTPUT @ DUP _SVA.TOTAL @
+    3 PICK 3 PICK MSPAN-OVERLAP? IF
+        2DROP 2DROP R> DROP 0 SBOX-VALUE-S-ALIAS EXIT
+    THEN
+    >R                       \ root state work ; R: required work-u
+    DUP R@ 0 FILL
+    DUP DUP _SVW.SELF !
+    R@ OVER _SVW.TOTAL !
+    _SVAL-WORK-MODE-ENCODE-MEASURE OVER _SVW.MODE !
+    2 PICK OVER _SVW.SOURCE !
+    1 PICK OVER _SVW.ARENA !
+    2 PICK OVER _SVW.TEMP-A !
+    _SVAL-WORK-MAGIC OVER _SVW.MAGIC !
+    >R 2DROP R> R> DROP R> DROP SBOX-VALUE-S-OK ;
+
+: _SVE-CYCLE?  ( handle work -- flag )
+    DUP _SVW.FRAME-N @ 0 ?DO
+        2DUP I SWAP _SVW-FRAME _SVF-A + @ = IF
+            2DROP -1 UNLOOP EXIT
+        THEN
+    LOOP
+    2DROP 0 ;
+
+: _SVE-OFFSET+  ( bytes work -- status )
+    >R
+    R@ _SVW.OFFSET @ SWAP _SVAL-ADD
+    DUP IF 2DROP R> DROP SBOX-VALUE-S-RESULT-BYTES EXIT THEN
+    DROP
+    R@ _SVW.MODE @ _SVAL-WORK-MODE-ENCODE-WRITE = IF
+        DUP R@ _SVW.DEST-U @ U> IF
+            DROP R> DROP SBOX-VALUE-S-CAPACITY EXIT
+        THEN
+    THEN
+    R> _SVW.OFFSET ! SBOX-VALUE-S-OK ;
+
+: _SVE-WRITE-HEADER  ( tag count payload work -- status )
+    >R
+    R@ _SVW.OFFSET @ R@ _SVW.TEMP-U !
+    SBOX-VALUE-WIRE-HEADER-SIZE R@ _SVE-OFFSET+
+    DUP IF R> DROP >R 2DROP DROP R> EXIT THEN DROP
+    R@ _SVW.MODE @ _SVAL-WORK-MODE-ENCODE-WRITE = IF
+        R@ _SVW.LIMITS @ R@ _SVW.TEMP-U @ + DUP
+            SBOX-VALUE-WIRE-HEADER-SIZE 0 FILL
+        3 PICK OVER C!
+        2 PICK OVER 4 + _SVAL-U32!
+        8 + _SVAL-U64!
+        2DROP
+    ELSE
+        2DROP DROP
+    THEN
+    R> DROP SBOX-VALUE-S-OK ;
+
+: _SVE-NODE-OWN-BYTES  ( node -- bytes status )
+    DUP _SVN.TAG @ CASE
+        SBOX-VALUE-T-NULL OF
+            DROP 16 SBOX-VALUE-S-OK
+        ENDOF
+        SBOX-VALUE-T-BOOL OF
+            DROP 24 SBOX-VALUE-S-OK
+        ENDOF
+        SBOX-VALUE-T-I64 OF
+            DROP 24 SBOX-VALUE-S-OK
+        ENDOF
+        SBOX-VALUE-T-BYTES OF
+            _SVN.COUNT @ _SVAL-PAD8
+            DUP IF EXIT THEN DROP
+            16 _SVAL-ADD
+        ENDOF
+        SBOX-VALUE-T-UTF8 OF
+            _SVN.COUNT @ _SVAL-PAD8
+            DUP IF EXIT THEN DROP
+            16 _SVAL-ADD
+        ENDOF
+        SBOX-VALUE-T-LIST OF
+            _SVN.COUNT @ 8 _SVAL-MUL
+            DUP IF EXIT THEN DROP
+            16 _SVAL-ADD
+        ENDOF
+        SBOX-VALUE-T-MAP OF
+            _SVN.COUNT @ 16 _SVAL-MUL
+            DUP IF EXIT THEN DROP
+            16 _SVAL-ADD
+        ENDOF
+        >R DROP 0 SBOX-VALUE-S-CORRUPT R>
+    ENDCASE ;
+
+: _SVE-ADD-METRICS  ( node work -- status )
+    >R
+    R@ _SVW.NODE-N @ 1 _SVAL-ADD
+    DUP IF
+        2DROP DROP R> DROP SBOX-VALUE-S-RESULT-NODES EXIT
+    THEN
+    DROP DUP
+    SBOX-VALUE-LIMIT-OUTPUT-RESULT-NODES R@ _SVE-LIMIT@ U> IF
+        2DROP R> DROP SBOX-VALUE-S-RESULT-NODES EXIT
+    THEN
+    DUP R@ _SVW.NODE-N !
+    DROP
+    _SVE-NODE-OWN-BYTES
+    DUP IF
+        2DROP R> DROP SBOX-VALUE-S-RESULT-BYTES EXIT
+    THEN
+    DROP
+    R@ _SVW.VALUE-BYTES @ SWAP _SVAL-ADD
+    DUP IF 2DROP R> DROP SBOX-VALUE-S-RESULT-BYTES EXIT THEN
+    DROP DUP
+    SBOX-VALUE-LIMIT-OUTPUT-RESULT-BYTES R@ _SVE-LIMIT@ U> IF
+        DROP R> DROP SBOX-VALUE-S-RESULT-BYTES EXIT
+    THEN
+    R@ _SVW.VALUE-BYTES !
+    R@ _SVW.FRAME-N @ 1+ DUP
+    SBOX-VALUE-LIMIT-DEPTH R@ _SVE-LIMIT@ > IF
+        DROP R> DROP SBOX-VALUE-S-DEPTH EXIT
+    THEN
+    R@ _SVW.MAX-DEPTH @ MAX R@ _SVW.MAX-DEPTH !
+    R> DROP SBOX-VALUE-S-OK ;
+
+: _SVE-KEY-ORDER  ( key-a key-u frame -- status )
+    DUP _SVF-G + @ 0= IF
+        2DROP DROP SBOX-VALUE-S-OK EXIT
+    THEN
+    DUP _SVF-G + @ OVER _SVF-H + @
+    4 PICK 4 PICK _SVAL-BYTES-COMPARE
+    DUP 0= IF
+        DROP 2DROP DROP SBOX-VALUE-S-DUPLICATE-KEY EXIT
+    THEN
+    0> IF
+        2DROP DROP SBOX-VALUE-S-MAP-ORDER EXIT
+    THEN
+    2DROP DROP SBOX-VALUE-S-OK ;
+
+: _SVE-KEY-CHECK  ( handle work -- status )
+    >R
+    R@ _SVW.ARENA @ _SVAL-RESOLVE
+    DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN DROP
+    >R
+    DUP _SVN.TAG @ SBOX-VALUE-T-UTF8 <> IF
+        DROP R> DROP R> DROP SBOX-VALUE-S-TYPE EXIT
+    THEN
+    DUP _SVN.COUNT @
+    SWAP _SVN.DATA @ R> +
+    SWAP
+    2DUP R@ _SVW-TOP _SVE-KEY-ORDER
+    DUP IF
+        >R 2DROP R> R> DROP EXIT
+    THEN DROP
+    R@ _SVW-TOP >R
+    OVER R@ _SVF-G + !
+    DUP R@ _SVF-H + !
+    2DROP R> DROP R> DROP SBOX-VALUE-S-OK ;
+
+: _SVE-SELECT-CHILD  ( work -- status )
+    DUP _SVW-TOP >R
+    R@ _SVF-D + @ R@ _SVF-E + @ >= IF
+        R> DROP DROP SBOX-VALUE-S-CORRUPT EXIT
+    THEN
+    R@ _SVF-C + @ R@ _SVF-B + @ _SVN.DATA @ +
+    R@ _SVF-D + @ 8 * + @
+    R@ _SVF-I + @ SBOX-VALUE-T-MAP =
+    R@ _SVF-D + @ 1 AND 0= AND IF
+        2DUP SWAP _SVE-KEY-CHECK
+        DUP IF
+            >R 2DROP R> R> DROP EXIT
+        THEN
+        DROP
+    THEN
+    SWAP _SVW.TEMP-A !
+    R> DROP SBOX-VALUE-S-OK ;
+
+: _SVE-CLOSE-TOP  ( work -- status )
+    DUP _SVW-TOP >R
+    DUP _SVW.MODE @ _SVAL-WORK-MODE-ENCODE-WRITE = IF
+        DUP _SVW.OFFSET @ R@ _SVF-F + @ -
+        SBOX-VALUE-WIRE-HEADER-SIZE -
+        OVER _SVW.LIMITS @ R@ _SVF-F + @ + 8 + _SVAL-U64!
+    THEN
+    -1 OVER _SVW.FRAME-N +!
+    DROP R> DROP SBOX-VALUE-S-OK ;
+
+: _SVE-COMPLETE-STEP  ( work -- done status )
+    DUP _SVW.FRAME-N @ 0= IF
+        1 OVER _SVW.ROOT-DONE !
+        DROP -1 SBOX-VALUE-S-OK EXIT
+    THEN
+    1 OVER _SVW-TOP _SVF-D + +!
+    DUP _SVW-TOP DUP _SVF-D + @ SWAP _SVF-E + @ < IF
+        _SVE-SELECT-CHILD -1 SWAP EXIT
+    THEN
+    DUP _SVE-CLOSE-TOP
+    DUP IF
+        NIP -1 SWAP EXIT
+    THEN
+    2DROP 0 SBOX-VALUE-S-OK ;
+
+: _SVE-COMPLETE  ( work -- status )
+    >R
+    BEGIN
+        R@ _SVE-COMPLETE-STEP
+        DUP IF NIP R> DROP EXIT THEN DROP
+        IF R> DROP SBOX-VALUE-S-OK EXIT THEN
+    AGAIN ;
+
+: _SVE-EDGE-CELLS  ( node -- count )
+    DUP _SVN.COUNT @
+    SWAP _SVN.TAG @ SBOX-VALUE-T-MAP = IF 2* THEN ;
+
+: _SVE-PUSH-FRAME  ( node arena handle work -- work empty? )
+    DUP _SVW.FRAME-N @ OVER _SVW-FRAME >R
+    R@ _SVAL-WORK-FRAME-SIZE 0 FILL
+    1 PICK R@ _SVF-A + !
+    3 PICK R@ _SVF-B + !
+    2 PICK R@ _SVF-C + !
+    0 R@ _SVF-D + !
+    3 PICK _SVE-EDGE-CELLS R@ _SVF-E + !
+    DUP _SVW.TEMP-U @ R@ _SVF-F + !
+    0 R@ _SVF-G + !
+    0 R@ _SVF-H + !
+    3 PICK _SVN.TAG @ R@ _SVF-I + !
+    DUP 1 SWAP _SVW.FRAME-N +!
+    R@ _SVF-E + @ 0=
+    R> DROP
+    >R >R 2DROP DROP R> R> ;
+
+: _SVE-PUSH-AGGREGATE  ( node arena handle work -- status )
+    DUP _SVW.FRAME-N @
+    SBOX-VALUE-LIMIT-DEPTH 2 PICK _SVE-LIMIT@ >= IF
+        2DROP 2DROP SBOX-VALUE-S-DEPTH EXIT
+    THEN
+    _SVE-PUSH-FRAME IF
+        DUP _SVE-CLOSE-TOP
+        DUP IF NIP EXIT THEN DROP
+        _SVE-COMPLETE
+    ELSE
+        _SVE-SELECT-CHILD
+    THEN ;
+
+: _SVE-VISIT-NULL  ( work -- status )
+    _SVE-COMPLETE ;
+
+: _SVE-VISIT-FIXED  ( work -- status )
+    >R
+    8 R@ _SVE-OFFSET+
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _SVW.MODE @ _SVAL-WORK-MODE-ENCODE-WRITE = IF
+        R@ _SVW.TEMP-NODE @ _SVN.DATA @
+        R@ _SVW.LIMITS @ R@ _SVW.OFFSET @ 8 - +
+        _SVAL-U64!
+    THEN
+    R> _SVE-COMPLETE ;
+
+: _SVE-VISIT-BYTES  ( work -- status )
+    >R
+    R@ _SVW.TEMP-NODE @ _SVN.COUNT @ R@ _SVE-OFFSET+
+    DUP IF R> DROP EXIT THEN DROP
+    R@ _SVW.MODE @ _SVAL-WORK-MODE-ENCODE-WRITE = IF
+        R@ _SVW.TEMP-STORAGE @
+        R@ _SVW.TEMP-NODE @ _SVN.DATA @ +
+        R@ _SVW.LIMITS @ R@ _SVW.OFFSET @
+        R@ _SVW.TEMP-NODE @ _SVN.COUNT @ - +
+        R@ _SVW.TEMP-NODE @ _SVN.COUNT @ MOVE
+    THEN
+    R> _SVE-COMPLETE ;
+
+: _SVE-VISIT-UTF8  ( work -- status )
+    >R
+    R@ _SVW.TEMP-STORAGE @
+    R@ _SVW.TEMP-NODE @ _SVN.DATA @ +
+    R@ _SVW.TEMP-NODE @ _SVN.COUNT @ _SVAL-UTF8? 0= IF
+        R> DROP SBOX-VALUE-S-UTF8 EXIT
+    THEN
+    R> _SVE-VISIT-BYTES ;
+
+: _SVE-VISIT-AGGREGATE  ( work -- status )
+    >R
+    R@ _SVW.TEMP-NODE @
+    R@ _SVW.TEMP-STORAGE @
+    R@ _SVW.TEMP-A @
+    R> _SVE-PUSH-AGGREGATE ;
+
+: _SVE-VISIT-TAG  ( work -- status )
+    DUP _SVW.TEMP-NODE @ _SVN.TAG @ CASE
+        SBOX-VALUE-T-NULL OF _SVE-VISIT-NULL ENDOF
+        SBOX-VALUE-T-BOOL OF _SVE-VISIT-FIXED ENDOF
+        SBOX-VALUE-T-I64 OF _SVE-VISIT-FIXED ENDOF
+        SBOX-VALUE-T-BYTES OF _SVE-VISIT-BYTES ENDOF
+        SBOX-VALUE-T-UTF8 OF _SVE-VISIT-UTF8 ENDOF
+        SBOX-VALUE-T-LIST OF _SVE-VISIT-AGGREGATE ENDOF
+        SBOX-VALUE-T-MAP OF _SVE-VISIT-AGGREGATE ENDOF
+        >R DROP SBOX-VALUE-S-CORRUPT R>
+    ENDCASE ;
+
+: _SVE-HEADER-PAYLOAD  ( node -- payload status )
+    DUP _SVN.TAG @ CASE
+        SBOX-VALUE-T-NULL OF
+            DROP 0 SBOX-VALUE-S-OK
+        ENDOF
+        SBOX-VALUE-T-BOOL OF
+            DROP 8 SBOX-VALUE-S-OK
+        ENDOF
+        SBOX-VALUE-T-I64 OF
+            DROP 8 SBOX-VALUE-S-OK
+        ENDOF
+        SBOX-VALUE-T-BYTES OF
+            _SVN.COUNT @ SBOX-VALUE-S-OK
+        ENDOF
+        SBOX-VALUE-T-UTF8 OF
+            _SVN.COUNT @ SBOX-VALUE-S-OK
+        ENDOF
+        SBOX-VALUE-T-LIST OF
+            DROP 0 SBOX-VALUE-S-OK
+        ENDOF
+        SBOX-VALUE-T-MAP OF
+            DROP 0 SBOX-VALUE-S-OK
+        ENDOF
+        >R DROP 0 SBOX-VALUE-S-CORRUPT R>
+    ENDCASE ;
+
+: _SVE-HEADER-COUNT  ( node -- count )
+    DUP _SVN.TAG @
+    DUP SBOX-VALUE-T-LIST = SWAP SBOX-VALUE-T-MAP = OR IF
+        _SVN.COUNT @
+    ELSE
+        DROP 0
+    THEN ;
+
+: _SVE-VISIT  ( work -- status )
+    DUP _SVW.TEMP-A @ OVER _SVE-CYCLE? IF
+        DROP SBOX-VALUE-S-CYCLE EXIT
+    THEN
+    DUP _SVW.TEMP-A @ OVER _SVW.ARENA @ _SVAL-RESOLVE
+    DUP IF
+        >R 2DROP DROP R> EXIT
+    THEN DROP
+    2 PICK _SVW.TEMP-STORAGE !
+    OVER _SVW.TEMP-NODE !
+    DUP _SVW.TEMP-NODE @ OVER _SVE-ADD-METRICS
+    DUP IF NIP EXIT THEN DROP
+    DUP _SVW.TEMP-NODE @ _SVE-HEADER-PAYLOAD
+    DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    DROP
+    OVER _SVW.TEMP-PAYLOAD !
+    DUP _SVW.TEMP-NODE @ _SVN.TAG @
+    OVER _SVW.TEMP-NODE @ _SVE-HEADER-COUNT
+    2 PICK _SVW.TEMP-PAYLOAD @
+    3 PICK _SVE-WRITE-HEADER
+    DUP IF NIP EXIT THEN DROP
+    _SVE-VISIT-TAG ;
+
+: _SVE-RUN  ( work -- status )
+    BEGIN DUP _SVW.ROOT-DONE @ 0= WHILE
+        DUP _SVE-VISIT
+        DUP IF NIP EXIT THEN DROP
+    REPEAT
+    DROP SBOX-VALUE-S-OK ;
+
+: SBOX-VALUE-ENCODE-MEASURE
+    ( root state work work-u -- wire-u nodes value-bytes depth status )
+    _SVE-WORK-BEGIN
+    DUP IF
+        >R DROP 0 0 0 0 R> EXIT
+    THEN DROP
+    DUP _SVE-RUN
+    DUP IF
+        >R DROP 0 0 0 0 R> EXIT
+    THEN DROP
+    DUP _SVW.OFFSET @
+    OVER _SVW.NODE-N @
+    2 PICK _SVW.VALUE-BYTES @
+    3 PICK _SVW.MAX-DEPTH @
+    4 ROLL DROP
+    SBOX-VALUE-S-OK ;
+
+: _SVE-WRITE-RESET  ( destination destination-u work -- )
+    >R
+    R@ _SVW.DEST-U !
+    R@ _SVW.LIMITS !
+    _SVAL-WORK-MODE-ENCODE-WRITE R@ _SVW.MODE !
+    0 R@ _SVW.OFFSET !
+    0 R@ _SVW.FRAME-N !
+    0 R@ _SVW.NODE-N !
+    0 R@ _SVW.VALUE-BYTES !
+    0 R@ _SVW.MAX-DEPTH !
+    0 R@ _SVW.ROOT-DONE !
+    R@ _SVW.SOURCE @ R@ _SVW.TEMP-A !
+    R@ _SVW.TOTAL @ _SVAL-WORK-HEADER-SIZE -
+        R@ _SVW-FRAMES + SWAP 0 FILL
+    R> DROP ;
+
+: _SVE-DESTINATION-DISJOINT?
+    ( destination required work -- flag )
+    >R
+    2DUP R@ DUP _SVW.TOTAL @ MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP R@ _SVW.ARENA @ SBOX-VALUE-STATE-SIZE
+        MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP R@ _SVW.ARENA @ _SVS.INPUT @
+        DUP _SVA.TOTAL @ MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DUP R@ _SVW.ARENA @ _SVS.OUTPUT @
+        DUP _SVA.TOTAL @ MSPAN-OVERLAP? IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    2DROP R> DROP -1 ;
+
+: SBOX-VALUE-ENCODE
+    ( root state work work-u output output-u -- written status )
+    >R >R
+    _SVE-WORK-BEGIN
+    DUP IF
+        NIP R> DROP R> DROP 0 SWAP EXIT
+    THEN DROP
+    DUP _SVE-RUN
+    DUP IF
+        NIP R> DROP R> DROP 0 SWAP EXIT
+    THEN DROP
+    DUP _SVW.OFFSET @
+    R> R>                   \ work required output output-u
+    3 PICK _SVW.TEMP-U !   \ work required output
+    2 PICK _SVW.TEMP-A !   \ work required
+    DUP 2 PICK _SVW.TEMP-U @ U> IF
+        2DROP 0 SBOX-VALUE-S-CAPACITY EXIT
+    THEN
+    OVER _SVW.TEMP-A @ OVER _SVAL-SPAN-STATUS
+    DUP IF >R 2DROP 0 R> EXIT THEN DROP
+    OVER _SVW.TEMP-A @ OVER 3 PICK
+        _SVE-DESTINATION-DISJOINT? 0= IF
+        2DROP 0 SBOX-VALUE-S-ALIAS EXIT
+    THEN
+    SWAP >R
+    R@ _SVW.TEMP-A @ R@ _SVW.TEMP-U @ R@ _SVE-WRITE-RESET
+    R@ _SVE-RUN
+    DUP IF
+        R@ _SVW.LIMITS @ 2 PICK 0 FILL
+        NIP R> DROP 0 SWAP EXIT
+    THEN DROP
+    R@ _SVW.OFFSET @
+    R> DROP NIP SBOX-VALUE-S-OK ;

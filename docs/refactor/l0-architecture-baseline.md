@@ -614,3 +614,26 @@ payload and queue distributions, throughput, latency, memory, disk
 amplification, and recovery time. Those qualifications use the landed runtime
 and durable path; they do not preserve a prototype limit or introduce a second
 record shape.
+
+## Sandbox Stage 4 integration ratchet update
+
+The sandbox integration adds the reusable compiler, verifier, typed-value,
+plan, profile and VM machinery under `akashic/sandbox/`; exact installed-module
+ownership and invocation-local hosting under `akashic/runtime/`; explicit
+Agent operations; and caller-capacity-selected transient Desk admission and
+service composition. The child invocation context remains capability-empty,
+and the integration introduces no schema, digest, cache, persistence or
+Streams dependency.
+
+Against the combined main tree this intentionally raises the reviewed graph to
+510 production modules and 1,774 resolved `REQUIRE` occurrences and unique
+edges. The 78 reviewed unresolved imports, empty cycle/layer/placement sets,
+two known FExplorer provider issues and one known addressability issue are
+unchanged. The combined graph digest is
+`da2573ede7cc9f0d35f5b0f91c8eafde3630553402c249e80c516dabc4fca86e`;
+the mutable-state digest is
+`20f6588f03e80b32018a1e11f2f6a656624b26d7e34ccf1171b7ae33e2ca5797`.
+The placement and unresolved-import digests remain
+`4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`
+and
+`98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb`.
