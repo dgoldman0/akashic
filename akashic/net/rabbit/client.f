@@ -34,6 +34,11 @@
 \  before return; no connection parser pointer is retained.  ACK/CREDIT and strict typed
 \  HELLO/PONG responses are committed internally.
 \
+\  After establishment, APP-LANE-ENSURE opens one exact nonzero application
+\  Lane through the owning client.  An already-open Lane is successful and
+\  does not allocate another session record.  Callers therefore need not
+\  reach through the client into its nested session during reconnect/rebind.
+\
 \  Persistent state and all variable-size storage are caller-owned.  Private
 \  VARIABLEs are synchronous operation scratch.  One cooperative owner must
 \  serialize calls; this module makes no multicore/reentrancy claim while the
@@ -1055,6 +1060,57 @@ VARIABLE _RCLIENTH-SLOT
     THEN
     RCLIENT-S-OK RCLIENT-DETAIL-NONE 0 _RCLIENT-HELLO-STATUS! DROP
     _RCLIENTH-SLOT @ RCLIENT-S-OK ;
+
+\ Establish one exact application Lane through the owning client.  Session
+\ DUPLICATE means that the requested Lane already exists and is the successful
+\ idempotent result.  Every other lower refusal remains visible in DETAIL@.
+VARIABLE _RCLIENTLANE-LANE
+VARIABLE _RCLIENTLANE-C
+VARIABLE _RCLIENTLANE-RS
+VARIABLE _RCLIENTLANE-DOMAIN
+VARIABLE _RCLIENTLANE-DETAIL
+
+: _RCLIENT-LANE-STATUS!  ( status domain detail -- status )
+    _RCLIENTLANE-DETAIL ! _RCLIENTLANE-DOMAIN !
+    DUP _RCLIENTLANE-C @ RCLIENT.LAST-STATUS !
+    _RCLIENTLANE-DOMAIN @ _RCLIENTLANE-C @ RCLIENT.DETAIL-DOMAIN !
+    _RCLIENTLANE-DETAIL @ _RCLIENTLANE-C @ RCLIENT.DETAIL-STATUS ! ;
+
+: _RCLIENT-LANE-SESSION>STATUS  ( session-status -- client-status )
+    CASE
+        RABBIT-S-OK OF RCLIENT-S-OK ENDOF
+        RABBIT-S-DUPLICATE OF RCLIENT-S-OK ENDOF
+        RABBIT-S-INVALID OF RCLIENT-S-INVALID ENDOF
+        RABBIT-S-CAPACITY OF RCLIENT-S-CAPACITY ENDOF
+        RCLIENT-S-SESSION SWAP
+    ENDCASE ;
+
+: RABBIT-CLIENT-APP-LANE-ENSURE  ( lane client -- status )
+    _RCLIENTLANE-C ! _RCLIENTLANE-LANE !
+    _RCLIENTLANE-C @ RABBIT-CLIENT-VALID? 0= IF
+        RCLIENT-S-INVALID EXIT
+    THEN
+    _RCLIENTLANE-C @ RCLIENT.STATE @ DUP RCLIENT-ST-READY =
+    SWAP RCLIENT-ST-ACTIVE = OR 0= IF
+        RCLIENT-S-STATE RCLIENT-DETAIL-NONE 0
+            _RCLIENT-LANE-STATUS! EXIT
+    THEN
+    _RCLIENTLANE-C @ RCLIENT.CONNECTION @ RCONN.STATE @
+        RCONN-ST-OPEN <> IF
+        RCLIENT-S-CONNECTION RCLIENT-DETAIL-CONNECTION RCONN-S-STATE
+            _RCLIENT-LANE-STATUS! EXIT
+    THEN
+    _RCLIENTLANE-C @ RCLIENT.SESSION @ RABBIT-SESSION-ESTABLISHED? 0= IF
+        RCLIENT-S-SESSION RCLIENT-DETAIL-SESSION RABBIT-S-STATE
+            _RCLIENT-LANE-STATUS! EXIT
+    THEN
+    _RCLIENTLANE-LANE @ _RCLIENTLANE-C @ RCLIENT.SESSION @
+        RABBIT-SESSION-APP-LANE-OPEN DUP _RCLIENTLANE-RS !
+        _RCLIENT-LANE-SESSION>STATUS
+    DUP RCLIENT-S-OK = IF
+        RCLIENT-DETAIL-NONE 0 _RCLIENT-LANE-STATUS! EXIT
+    THEN
+    RCLIENT-DETAIL-SESSION _RCLIENTLANE-RS @ _RCLIENT-LANE-STATUS! ;
 
 \ Publish an already typed ACK, CREDIT, or PING through the client's control
 \ queue.  This intentionally does not expose general request publication,

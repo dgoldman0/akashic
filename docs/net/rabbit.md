@@ -376,6 +376,13 @@ disjoint READY HELLO builder, delegates capability equality and HELLO-BEGIN to
 the owning connection, and publishes the resulting control slot without
 exposing the connection as the application's protocol interface.
 
+Once established, `RABBIT-CLIENT-APP-LANE-ENSURE` opens one exact nonzero
+application lane through that same client facade. Repeating an already-open
+lane is successful without consuming another caller-provided session record;
+invalid, unavailable, and capacity-limited lanes retain the exact session
+detail. Reconnect and subscription owners can therefore rebuild their lane
+state without reaching through the client into its nested session.
+
 ## Subscription and replay ownership
 
 `net/rabbit/subscription.f` owns a caller-sized table of generic subscription
