@@ -48,6 +48,10 @@ REQUIRE ../vfs.f
 16   CONSTANT _EXT4-JBD2-TAG3-SIZE
 4    CONSTANT _EXT4-JBD2-TAIL-SIZE
 
+0 CONSTANT _EXT4-JSCAN-PREFLIGHT
+1 CONSTANT _EXT4-JSCAN-REVOKES
+2 CONSTANT _EXT4-JSCAN-REPLAY
+
 0x0000103C CONSTANT _EXT4-COMPAT-V1
 0x0000046B CONSTANT _EXT4-RO-V1
 0x0000042B CONSTANT _EXT4-RO-I128-V1
@@ -228,6 +232,8 @@ REQUIRE ../vfs.f
 \ +14216   committed primary-super repair proof
 \ +14232   persistent journal-workspace pointers and allocation geometry
 \ +14272   checksum-valid designated sparse-super witness
+\ +15296   persistent revoke-workspace pointer and allocation geometry
+\ +15312   committed-revoke scan statistics and build epoch
 
    0 CONSTANT _EXT4-C.SB
 1024 CONSTANT _EXT4-C.BLOCK
@@ -305,7 +311,12 @@ REQUIRE ../vfs.f
 14256 CONSTANT _EXT4-C.J.MAP-HASH-SLOTS
 14264 CONSTANT _EXT4-C.ARENA
 14272 CONSTANT _EXT4-C.J.WITNESS-SUPER
-15296 CONSTANT _EXT4-CTX-SIZE
+15296 CONSTANT _EXT4-C.J.REVOKE-TABLE
+15304 CONSTANT _EXT4-C.J.REVOKE-SLOTS
+15312 CONSTANT _EXT4-C.J.REVOKE-COUNT
+15320 CONSTANT _EXT4-C.J.REVOKE-HITS
+15328 CONSTANT _EXT4-C.J.REVOKE-READY
+15336 CONSTANT _EXT4-CTX-SIZE
 
 : _EXT4-CTX  ( vfs -- ctx )  V.BCTX @ ;
 : _EXT4-READY?  ( vfs -- flag )
@@ -3072,6 +3083,24 @@ VARIABLE _EXT4-JW-MAXLEN
 VARIABLE _EXT4-JW-SLOTS
 VARIABLE _EXT4-JW-MAP-BYTES
 VARIABLE _EXT4-JW-BYTES
+VARIABLE _EXT4-JRW-CTX
+VARIABLE _EXT4-JRW-COUNT
+VARIABLE _EXT4-JRW-SLOTS
+VARIABLE _EXT4-JRW-BYTES
+
+-1 1 RSHIFT 2 CELLS / CONSTANT _EXT4-REVOKE-SLOTS-MAX
+
+\ Recovery workspace survives a failed mount so the same VFS can retry
+\ without leaking arena storage.  Treat only the completely empty geometry
+\ or a bounded power-of-two table as valid persisted state.
+: _EXT4-REVOKE-GEOMETRY?  ( ctx -- flag )
+    DUP _EXT4-C.J.REVOKE-TABLE + @
+    SWAP _EXT4-C.J.REVOKE-SLOTS + @
+    2DUP OR 0= IF 2DROP TRUE EXIT THEN
+    OVER 0= OVER 0= OR IF 2DROP FALSE EXIT THEN
+    DUP 2 U< IF 2DROP FALSE EXIT THEN
+    DUP _EXT4-REVOKE-SLOTS-MAX U> IF 2DROP FALSE EXIT THEN
+    DUP 1- AND 0= NIP ;
 
 \ Allocate the exact journal snapshot and a power-of-two uniqueness table at
 \ no more than one-half load.  These are arena capacity, not format limits.
@@ -3121,6 +3150,128 @@ VARIABLE _EXT4-JW-BYTES
     _EXT4-JW-SLOTS @
     _EXT4-JW-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + !
     0 ;
+
+\ Revoke recovery needs the latest committed transaction ID for each home
+\ block.  Size an open-addressed table from the exact number of committed
+\ on-disk records found by preflight.  A half-full power-of-two table makes
+\ lookup bounded without imposing a journal-size policy.  One binding reuses
+\ its first recovery allocation on retry rather than leaking monotonic arena
+\ storage; a writer must negotiate separate transaction workspace.
+: _EXT4-ENSURE-REVOKE-WORKSPACE  ( count ctx -- ior )
+    _EXT4-JRW-CTX ! DUP _EXT4-JRW-COUNT !
+    DROP
+    0 _EXT4-JRW-CTX @ _EXT4-C.J.REVOKE-READY + !
+    _EXT4-JRW-CTX @ _EXT4-REVOKE-GEOMETRY? 0= IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JRW-COUNT @ -1 1 RSHIFT 2 / U> IF
+        EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT
+    THEN
+    0 _EXT4-JRW-SLOTS !
+    _EXT4-JRW-COUNT @ IF
+        1 _EXT4-JRW-SLOTS !
+        BEGIN
+            _EXT4-JRW-SLOTS @ _EXT4-JRW-COUNT @ 2* U<
+        WHILE
+            _EXT4-JRW-SLOTS @
+            _EXT4-REVOKE-SLOTS-MAX 2 / U> IF
+                EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT
+            THEN
+            _EXT4-JRW-SLOTS @ 2* _EXT4-JRW-SLOTS !
+        REPEAT
+    THEN
+    _EXT4-JRW-CTX @ _EXT4-C.J.REVOKE-TABLE + @ IF
+        _EXT4-JRW-CTX @ _EXT4-C.J.REVOKE-SLOTS + @
+        _EXT4-JRW-SLOTS @ U< IF VFS-E-NOMEM EXIT THEN
+        _EXT4-JRW-CTX @ _EXT4-C.J.REVOKE-TABLE + @
+        _EXT4-JRW-CTX @ _EXT4-C.J.REVOKE-SLOTS + @ 2* CELLS
+        0 FILL
+        0 EXIT
+    THEN
+    _EXT4-JRW-COUNT @ 0= IF 0 EXIT THEN
+    _EXT4-JRW-SLOTS @ _EXT4-REVOKE-SLOTS-MAX U> IF
+        EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-JRW-SLOTS @ 2* CELLS _EXT4-JRW-BYTES !
+    _EXT4-JRW-CTX @ _EXT4-C.ARENA + @
+    _EXT4-JRW-BYTES @ ARENA-ALLOT? IF DROP VFS-E-NOMEM EXIT THEN
+    DUP _EXT4-JRW-CTX @ _EXT4-C.J.REVOKE-TABLE + !
+    _EXT4-JRW-BYTES @ 0 FILL
+    _EXT4-JRW-SLOTS @
+    _EXT4-JRW-CTX @ _EXT4-C.J.REVOKE-SLOTS + !
+    0 ;
+
+VARIABLE _EXT4-JRH-BLOCK
+VARIABLE _EXT4-JRH-SEQUENCE
+VARIABLE _EXT4-JRH-CTX
+VARIABLE _EXT4-JRH-KEY
+VARIABLE _EXT4-JRH-SLOT
+VARIABLE _EXT4-JRH-ENTRY
+
+: _EXT4-JOURNAL-TID-AFTER?  ( candidate previous -- flag )
+    - 0xFFFFFFFF AND DUP 0<> SWAP 0x80000000 U< AND ;
+
+: _EXT4-REVOKE-ENTRY  ( slot ctx -- entry )
+    _EXT4-C.J.REVOKE-TABLE + @ SWAP 2* CELLS + ;
+
+: _EXT4-REVOKE-PUT  ( block sequence ctx -- ior )
+    _EXT4-JRH-CTX ! _EXT4-JRH-SEQUENCE ! _EXT4-JRH-BLOCK !
+    _EXT4-JRH-BLOCK @ _EXT4-JRH-CTX @ _EXT4-C.BLOCKS + @ U< 0= IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JRH-CTX @ _EXT4-REVOKE-GEOMETRY? 0= IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JRH-CTX @ _EXT4-C.J.REVOKE-TABLE + @ 0= IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JRH-BLOCK @ 1+ _EXT4-JRH-KEY !
+    _EXT4-JRH-BLOCK @
+    _EXT4-JRH-CTX @ _EXT4-C.J.REVOKE-SLOTS + @ 1- AND
+    _EXT4-JRH-SLOT !
+    _EXT4-JRH-CTX @ _EXT4-C.J.REVOKE-SLOTS + @ 0 DO
+        _EXT4-JRH-SLOT @ _EXT4-JRH-CTX @ _EXT4-REVOKE-ENTRY
+        DUP _EXT4-JRH-ENTRY ! @ DUP 0= IF
+            DROP
+            _EXT4-JRH-KEY @ _EXT4-JRH-ENTRY @ !
+            _EXT4-JRH-SEQUENCE @ _EXT4-JRH-ENTRY @ CELL+ !
+            0 UNLOOP EXIT
+        THEN
+        _EXT4-JRH-KEY @ = IF
+            _EXT4-JRH-SEQUENCE @
+            _EXT4-JRH-ENTRY @ CELL+ @ _EXT4-JOURNAL-TID-AFTER? IF
+                _EXT4-JRH-SEQUENCE @ _EXT4-JRH-ENTRY @ CELL+ !
+            THEN
+            0 UNLOOP EXIT
+        THEN
+        _EXT4-JRH-SLOT @ 1+
+        _EXT4-JRH-CTX @ _EXT4-C.J.REVOKE-SLOTS + @ 1- AND
+        _EXT4-JRH-SLOT !
+    LOOP
+    EXT4-D-JOURNAL _EXT4-CORRUPT ;
+
+: _EXT4-JOURNAL-REVOKED?  ( block sequence ctx -- flag )
+    _EXT4-JRH-CTX ! _EXT4-JRH-SEQUENCE ! _EXT4-JRH-BLOCK !
+    _EXT4-JRH-CTX @ _EXT4-C.J.REVOKE-TABLE + @ 0= IF
+        FALSE EXIT
+    THEN
+    _EXT4-JRH-BLOCK @ 1+ _EXT4-JRH-KEY !
+    _EXT4-JRH-BLOCK @
+    _EXT4-JRH-CTX @ _EXT4-C.J.REVOKE-SLOTS + @ 1- AND
+    _EXT4-JRH-SLOT !
+    _EXT4-JRH-CTX @ _EXT4-C.J.REVOKE-SLOTS + @ 0 DO
+        _EXT4-JRH-SLOT @ _EXT4-JRH-CTX @ _EXT4-REVOKE-ENTRY
+        DUP @ DUP 0= IF 2DROP FALSE UNLOOP EXIT THEN
+        _EXT4-JRH-KEY @ = IF
+            CELL+ @ _EXT4-JRH-SEQUENCE @ SWAP
+            _EXT4-JOURNAL-TID-AFTER? 0= UNLOOP EXIT
+        THEN
+        DROP
+        _EXT4-JRH-SLOT @ 1+
+        _EXT4-JRH-CTX @ _EXT4-C.J.REVOKE-SLOTS + @ 1- AND
+        _EXT4-JRH-SLOT !
+    LOOP
+    FALSE ;
 
 : _EXT4-JOURNAL-MAP@  ( logical ctx -- physical )
     _EXT4-C.J.MAP + @ SWAP CELLS + @ ;
@@ -3971,7 +4122,7 @@ VARIABLE _EXT4-JS-CTX
 VARIABLE _EXT4-JS-POS
 VARIABLE _EXT4-JS-SEQUENCE
 VARIABLE _EXT4-JS-LEFT
-VARIABLE _EXT4-JS-REPLAY
+VARIABLE _EXT4-JS-PASS
 VARIABLE _EXT4-JS-DONE
 VARIABLE _EXT4-JS-TYPE
 VARIABLE _EXT4-JS-DESC
@@ -3985,6 +4136,11 @@ VARIABLE _EXT4-JS-LAST
 VARIABLE _EXT4-JS-COMMIT-CURSOR
 VARIABLE _EXT4-JS-CURRENT
 VARIABLE _EXT4-JS-FIRST
+VARIABLE _EXT4-JS-TX-REVOKES
+VARIABLE _EXT4-JS-REVOKE-COUNT
+VARIABLE _EXT4-JS-REVOKE-OFF
+VARIABLE _EXT4-JS-REVOKE-HIGH
+VARIABLE _EXT4-JS-REVOKE-BLOCK
 
 : _EXT4-JSCAN-READ-NEXT  ( -- ior )
     _EXT4-JS-LEFT @ 0= IF EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN
@@ -4093,6 +4249,52 @@ VARIABLE _EXT4-RAP-CTX
     THEN
     TRUE ;
 
+\ A checksum-v3/64-bit revoke block carries a byte count followed by exact
+\ big-endian 64-bit home-block numbers and a checksum tail.  Preflight counts
+\ records provisionally until the transaction commit is authenticated; the
+\ revoke pass records the latest committed sequence for each block.
+: _EXT4-JSCAN-REVOKE  ( -- ior )
+    _EXT4-JS-CTX @ _EXT4-C.J.FEATURES + @
+    _EXT4-JBD2-I-REVOKE AND 0= IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JS-CTX @ _EXT4-C.BLOCK + DUP
+    _EXT4-JS-CTX @ _EXT4-JBD2-BLOCK-CHECKSUM? 0= IF
+        DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    12 + _EXT4-BE32@ DUP _EXT4-JS-REVOKE-COUNT !
+    DUP 16 U< IF DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN
+    DUP _EXT4-JS-CTX @ _EXT4-C.BSIZE + @ _EXT4-JBD2-TAIL-SIZE -
+    U> IF DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN
+    16 - DUP 8 MOD IF DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN
+    8 / _EXT4-JS-REVOKE-COUNT !
+    _EXT4-JS-PASS @ _EXT4-JSCAN-PREFLIGHT = IF
+        _EXT4-JS-TX-REVOKES @ _EXT4-JS-REVOKE-COUNT @ + DUP
+        _EXT4-JS-TX-REVOKES @ U< IF
+            DROP EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT
+        THEN
+        _EXT4-JS-TX-REVOKES !
+        0 EXIT
+    THEN
+    _EXT4-JS-PASS @ _EXT4-JSCAN-REVOKES <> IF 0 EXIT THEN
+    16 _EXT4-JS-REVOKE-OFF !
+    _EXT4-JS-REVOKE-COUNT @ 0 ?DO
+        _EXT4-JS-CTX @ _EXT4-C.BLOCK + _EXT4-JS-REVOKE-OFF @ + DUP
+        _EXT4-BE32@ _EXT4-JS-REVOKE-HIGH !
+        4 + _EXT4-BE32@ _EXT4-JS-REVOKE-BLOCK !
+        _EXT4-JS-REVOKE-HIGH @ IF
+            EXT4-D-JOURNAL _EXT4-UNSUPPORTED UNLOOP EXIT
+        THEN
+        _EXT4-JS-REVOKE-BLOCK @ _EXT4-JS-CTX @
+        _EXT4-JOURNAL-DATA? IF
+            EXT4-D-JOURNAL _EXT4-CORRUPT UNLOOP EXIT
+        THEN
+        _EXT4-JS-REVOKE-BLOCK @ _EXT4-JS-SEQUENCE @ _EXT4-JS-CTX @
+        _EXT4-REVOKE-PUT ?DUP IF UNLOOP EXIT THEN
+        8 _EXT4-JS-REVOKE-OFF +!
+    LOOP
+    0 ;
+
 : _EXT4-JSCAN-DESCRIPTOR  ( -- ior )
     _EXT4-JS-CTX @ _EXT4-C.BLOCK +
     _EXT4-JS-CTX @ _EXT4-C.DIR-BLOCK +
@@ -4148,14 +4350,20 @@ VARIABLE _EXT4-RAP-CTX
         \ A checksum-torn primary super is admitted provisionally so this
         \ authenticated payload can be inspected.  Do not grant replay
         \ authority until the enclosing transaction's commit is verified.
-        _EXT4-JS-REPLAY @ 0=
+        _EXT4-JS-PASS @ _EXT4-JSCAN-PREFLIGHT =
         _EXT4-JS-HOME @ _EXT4-JS-CTX @ _EXT4-PRIMARY-SUPER-BLOCK = AND IF
-            -1 _EXT4-JS-CTX @ _EXT4-C.J.SUPER-REPAIR-PENDING + !
+            _EXT4-JS-SEQUENCE @ 1+
+            _EXT4-JS-CTX @ _EXT4-C.J.SUPER-REPAIR-PENDING + !
         THEN
-        _EXT4-JS-REPLAY @ IF
-            _EXT4-JS-CTX @ _EXT4-C.BLOCK + _EXT4-JS-HOME @
-            _EXT4-JS-CTX @ _EXT4-WRITE-BLOCK ?DUP IF EXIT THEN
-            1 _EXT4-JS-CTX @ _EXT4-C.J.HOME-WRITES + +!
+        _EXT4-JS-PASS @ _EXT4-JSCAN-REPLAY = IF
+            _EXT4-JS-HOME @ _EXT4-JS-SEQUENCE @ _EXT4-JS-CTX @
+            _EXT4-JOURNAL-REVOKED? IF
+                1 _EXT4-JS-CTX @ _EXT4-C.J.REVOKE-HITS + +!
+            ELSE
+                _EXT4-JS-CTX @ _EXT4-C.BLOCK + _EXT4-JS-HOME @
+                _EXT4-JS-CTX @ _EXT4-WRITE-BLOCK ?DUP IF EXIT THEN
+                1 _EXT4-JS-CTX @ _EXT4-C.J.HOME-WRITES + +!
+            THEN
         THEN
         _EXT4-JS-FLAGS @ _EXT4-JBD2-F-LAST AND IF
             -1 _EXT4-JS-LAST !
@@ -4172,26 +4380,39 @@ VARIABLE _EXT4-RAP-CTX
     _EXT4-JS-COMMIT-CURSOR @ _EXT4-JS-CTX @ _EXT4-C.J.CURSOR + !
     0 ;
 
-: _EXT4-JSCAN  ( replay? ctx -- ior )
-    _EXT4-JS-CTX ! _EXT4-JS-REPLAY !
+: _EXT4-JSCAN  ( pass ctx -- ior )
+    _EXT4-JS-CTX ! _EXT4-JS-PASS !
+    _EXT4-JS-PASS @ _EXT4-JSCAN-REPLAY = IF
+        _EXT4-JS-CTX @ _EXT4-C.J.REVOKE-READY + @ 0= IF
+            EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+        THEN
+        _EXT4-JS-CTX @ _EXT4-REVOKE-GEOMETRY? 0= IF
+            EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+        THEN
+    THEN
     _EXT4-JS-CTX @ _EXT4-C.J.START + @ _EXT4-JS-POS !
     _EXT4-JS-CTX @ _EXT4-C.J.SEQUENCE + @ _EXT4-JS-SEQUENCE !
     _EXT4-JS-CTX @ _EXT4-C.J.MAXLEN + @
     _EXT4-JS-CTX @ _EXT4-C.J.FIRST + @ - _EXT4-JS-LEFT !
     0 _EXT4-JS-DONE !
+    0 _EXT4-JS-TX-REVOKES !
     _EXT4-JS-POS @ _EXT4-JS-COMMIT-CURSOR !
     0 _EXT4-JS-CTX @ _EXT4-C.J.SUPER-REPAIR-PENDING + !
-    _EXT4-JS-REPLAY @ 0= IF
+    _EXT4-JS-PASS @ _EXT4-JSCAN-PREFLIGHT = IF
         0 _EXT4-JS-CTX @ _EXT4-C.J.COMMITTED + !
         0 _EXT4-JS-CTX @ _EXT4-C.J.SUPER-REPAIR-SEEN + !
+        0 _EXT4-JS-CTX @ _EXT4-C.J.REVOKE-COUNT + !
+        0 _EXT4-JS-CTX @ _EXT4-C.J.REVOKE-HITS + !
     THEN
     BEGIN
-        _EXT4-JS-REPLAY @ IF
+        _EXT4-JS-PASS @ _EXT4-JSCAN-PREFLIGHT <> IF
             _EXT4-JS-DONE @
             _EXT4-JS-CTX @ _EXT4-C.J.COMMITTED + @ >= IF 0 EXIT THEN
         THEN
         _EXT4-JS-LEFT @ 0= IF
-            _EXT4-JS-REPLAY @ IF EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN
+            _EXT4-JS-PASS @ _EXT4-JSCAN-PREFLIGHT <> IF
+                EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+            THEN
             _EXT4-JS-DONE @ IF EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT THEN
             _EXT4-JSCAN-FINISH EXIT
         THEN
@@ -4200,7 +4421,9 @@ VARIABLE _EXT4-RAP-CTX
         _EXT4-BE32@ _EXT4-JBD2-MAGIC <>
         OVER 8 + _EXT4-BE32@ _EXT4-JS-SEQUENCE @ <> OR IF
             DROP
-            _EXT4-JS-REPLAY @ IF EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN
+            _EXT4-JS-PASS @ _EXT4-JSCAN-PREFLIGHT <> IF
+                EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+            THEN
             _EXT4-JSCAN-FINISH EXIT
         THEN
         4 + _EXT4-BE32@ _EXT4-JS-TYPE !
@@ -4212,21 +4435,29 @@ VARIABLE _EXT4-RAP-CTX
                 EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
             THEN
             1 _EXT4-JS-DONE +!
-            _EXT4-JS-REPLAY @ 0= IF
+            _EXT4-JS-PASS @ _EXT4-JSCAN-PREFLIGHT = IF
                 _EXT4-JS-DONE @
                 _EXT4-JS-CTX @ _EXT4-C.J.COMMITTED + !
+                _EXT4-JS-CTX @ _EXT4-C.J.REVOKE-COUNT + @
+                _EXT4-JS-TX-REVOKES @ + DUP
+                _EXT4-JS-CTX @ _EXT4-C.J.REVOKE-COUNT + @ U< IF
+                    DROP EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT
+                THEN
+                _EXT4-JS-CTX @ _EXT4-C.J.REVOKE-COUNT + !
                 _EXT4-JS-CTX @ _EXT4-C.J.SUPER-REPAIR-PENDING + @ IF
-                    -1 _EXT4-JS-CTX @ _EXT4-C.J.SUPER-REPAIR-SEEN + !
+                    _EXT4-JS-CTX @ _EXT4-C.J.SUPER-REPAIR-PENDING + @
+                    _EXT4-JS-CTX @ _EXT4-C.J.SUPER-REPAIR-SEEN + !
                 THEN
                 0 _EXT4-JS-CTX @ _EXT4-C.J.SUPER-REPAIR-PENDING + !
+                0 _EXT4-JS-TX-REVOKES !
             THEN
             _EXT4-JS-SEQUENCE @ 1+ 0xFFFFFFFF AND _EXT4-JS-SEQUENCE !
             _EXT4-JS-POS @ _EXT4-JS-COMMIT-CURSOR !
         ELSE _EXT4-JS-TYPE @ _EXT4-JBD2-REVOKE = IF
-            EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT
+            _EXT4-JSCAN-REVOKE ?DUP IF EXIT THEN
         ELSE
             _EXT4-JS-TYPE @ _EXT4-JBD2-SUPER-V2 =
-            _EXT4-JS-REPLAY @ 0= AND IF
+            _EXT4-JS-PASS @ _EXT4-JSCAN-PREFLIGHT = AND IF
                 _EXT4-JS-CTX @ _EXT4-C.J.FIRST + @ _EXT4-JS-FIRST !
                 _EXT4-JS-CURRENT @ _EXT4-JS-CTX @
                 _EXT4-JBD2-ANCHOR-BLOCK? IF
@@ -4456,21 +4687,44 @@ VARIABLE _EXT4-RT-V
     _EXT4-RJ-CTX @ _EXT4-RECOVERY-MEDIA ?DUP IF EXIT THEN
     0 _EXT4-RJ-CTX @ _EXT4-C.J.REPLAYED + !
     0 _EXT4-RJ-CTX @ _EXT4-C.J.HOME-WRITES + !
+    0 _EXT4-RJ-CTX @ _EXT4-C.J.REVOKE-COUNT + !
+    0 _EXT4-RJ-CTX @ _EXT4-C.J.REVOKE-HITS + !
+    0 _EXT4-RJ-CTX @ _EXT4-C.J.REVOKE-READY + !
     _EXT4-RJ-CTX @ _EXT4-C.J.START + @ IF
-        _EXT4-RJ-CTX @ _EXT4-C.J.FEATURES + @
-        _EXT4-JBD2-I-RECOVERY <> IF
+        _EXT4-RJ-CTX @ _EXT4-C.J.FEATURES + @ DUP
+        _EXT4-JBD2-I-RECOVERY = SWAP
+        _EXT4-JBD2-I-RECOVERY-REVOKE = OR 0= IF
             EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT
         THEN
-        0 _EXT4-RJ-CTX @ _EXT4-JSCAN ?DUP IF EXIT THEN
-        \ A dirty checksum-torn primary super has no authority of its own.
-        \ The read-only pass must have found its authenticated replacement in
-        \ a fully committed transaction before any home write is permitted.
-        _EXT4-RJ-CTX @ _EXT4-C.SUPER-TORN + @
-        _EXT4-RJ-CTX @ _EXT4-C.J.WITNESS + @ 0= AND
-        _EXT4-RJ-CTX @ _EXT4-C.J.SUPER-REPAIR-SEEN + @ 0= AND IF
-            EXT4-D-SUPER-CHECKSUM _EXT4-CORRUPT EXIT
+        _EXT4-JSCAN-PREFLIGHT _EXT4-RJ-CTX @ _EXT4-JSCAN
+        ?DUP IF EXIT THEN
+        _EXT4-RJ-CTX @ _EXT4-C.J.REVOKE-COUNT + @ _EXT4-RJ-CTX @
+        _EXT4-ENSURE-REVOKE-WORKSPACE ?DUP IF EXIT THEN
+        _EXT4-RJ-CTX @ _EXT4-C.J.REVOKE-COUNT + @ IF
+            _EXT4-JSCAN-REVOKES _EXT4-RJ-CTX @ _EXT4-JSCAN
+            ?DUP IF EXIT THEN
         THEN
-        -1 _EXT4-RJ-CTX @ _EXT4-JSCAN ?DUP IF EXIT THEN
+        -1 _EXT4-RJ-CTX @ _EXT4-C.J.REVOKE-READY + !
+        \ A dirty checksum-torn primary super has no authority of its own.
+        \ Its latest authenticated replacement must be committed and must
+        \ survive the completed revoke pass before any home write is allowed.
+        _EXT4-RJ-CTX @ _EXT4-C.SUPER-TORN + @
+        _EXT4-RJ-CTX @ _EXT4-C.J.WITNESS + @ 0= AND IF
+            _EXT4-RJ-CTX @ _EXT4-C.J.SUPER-REPAIR-SEEN + @ 0= IF
+                0 _EXT4-RJ-CTX @ _EXT4-C.J.REVOKE-READY + !
+                EXT4-D-SUPER-CHECKSUM _EXT4-CORRUPT EXIT
+            THEN
+            _EXT4-RJ-CTX @ _EXT4-PRIMARY-SUPER-BLOCK
+            _EXT4-RJ-CTX @ _EXT4-C.J.SUPER-REPAIR-SEEN + @ 1-
+            0xFFFFFFFF AND
+            _EXT4-RJ-CTX @ _EXT4-JOURNAL-REVOKED? IF
+                0 _EXT4-RJ-CTX @ _EXT4-C.J.REVOKE-READY + !
+                EXT4-D-SUPER-CHECKSUM _EXT4-CORRUPT EXIT
+            THEN
+        THEN
+        _EXT4-JSCAN-REPLAY _EXT4-RJ-CTX @ _EXT4-JSCAN
+        0 _EXT4-RJ-CTX @ _EXT4-C.J.REVOKE-READY + !
+        ?DUP IF EXIT THEN
     ELSE
         _EXT4-RJ-CTX @ _EXT4-C.J.SEQUENCE + @ 1+ 0xFFFFFFFF AND
         _EXT4-RJ-CTX @ _EXT4-C.J.NEXT-SEQUENCE + !
@@ -4535,6 +4789,9 @@ VARIABLE _EXT4-M-FRESH
         \ a failed-mount retry while resetting all media-derived state.
         _EXT4-M-CTX @ _EXT4-CTX-RESET-SIZE 0 FILL
     THEN
+    0 _EXT4-M-CTX @ _EXT4-C.J.REVOKE-COUNT + !
+    0 _EXT4-M-CTX @ _EXT4-C.J.REVOKE-HITS + !
+    0 _EXT4-M-CTX @ _EXT4-C.J.REVOKE-READY + !
     _EXT4-M-CTX @ _EXT4-C.SB + 2 2 _EXT4-READ-SECTORS
     DUP IF EXIT THEN DROP
     _EXT4-M-CTX @ _EXT4-M-V @ _EXT4-VALIDATE-SUPER

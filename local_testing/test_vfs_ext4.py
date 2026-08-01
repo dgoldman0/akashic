@@ -160,6 +160,34 @@ def _copy_sparse_file(source: Path, destination: Path) -> None:
         raise OSError("sparse image copy changed the logical size")
 
 
+def _jbd2_metadata_with_checksum(
+    block: bytes | bytearray, journal_uuid: bytes
+) -> bytes:
+    """Stamp a checksum-v2/v3 descriptor or revoke block."""
+    assert len(journal_uuid) == 16
+    result = bytearray(block)
+    assert len(result) >= 1024
+    struct.pack_into(">I", result, len(result) - 4, 0)
+    seed = _crc32c_raw(journal_uuid)
+    struct.pack_into(">I", result, len(result) - 4, _crc32c_raw(result, seed))
+    return bytes(result)
+
+
+def _jbd2_commit_with_checksum(
+    block: bytes | bytearray, journal_uuid: bytes, sequence: int
+) -> bytes:
+    """Restamp a checksum-v2/v3 commit block for one transaction ID."""
+    assert len(journal_uuid) == 16
+    result = bytearray(block)
+    assert len(result) >= 1024
+    assert struct.unpack_from(">II", result, 0x00) == (0xC03B3998, 2)
+    struct.pack_into(">I", result, 0x08, sequence & 0xFFFF_FFFF)
+    struct.pack_into(">I", result, 0x10, 0)
+    seed = _crc32c_raw(journal_uuid)
+    struct.pack_into(">I", result, 0x10, _crc32c_raw(result, seed))
+    return bytes(result)
+
+
 def _relocate_jbd2_transaction(
     source: Path,
     destination: Path,
@@ -329,6 +357,46 @@ def _ext4_recovery_layout(path: Path) -> dict[str, int]:
         "journal_block": journal_block,
         "journal_commit_block": journal_commit_block,
     }
+
+
+def _ext4_journal_physical_map(
+    path: Path, logical_blocks: tuple[int, ...]
+) -> dict[int, int]:
+    with path.open("rb") as source:
+        source.seek(1024)
+        superblock = source.read(1024)
+    assert len(superblock) == 1024
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    journal_root = superblock[0x10C : 0x10C + 60]
+    assert struct.unpack_from("<H", journal_root, 0x00)[0] == 0xF30A
+    assert struct.unpack_from("<H", journal_root, 0x06)[0] == 0
+    entries = struct.unpack_from("<H", journal_root, 0x02)[0]
+    maximum = struct.unpack_from("<H", journal_root, 0x04)[0]
+    assert 1 <= entries <= maximum <= 4
+    journal_bytes = (
+        struct.unpack_from("<I", superblock, 0x10C + 60)[0] << 32
+    ) | struct.unpack_from("<I", superblock, 0x10C + 64)[0]
+    assert journal_bytes > 0 and journal_bytes % block_size == 0
+    journal_blocks = journal_bytes // block_size
+
+    result: dict[int, int] = {}
+    for logical in logical_blocks:
+        assert 0 <= logical < journal_blocks
+        for index in range(entries):
+            entry = 0x0C + index * 0x0C
+            first_logical = struct.unpack_from("<I", journal_root, entry)[0]
+            raw_length = struct.unpack_from("<H", journal_root, entry + 0x04)[0]
+            assert 0 < raw_length <= 0x8000
+            if first_logical <= logical < first_logical + raw_length:
+                first_physical = (
+                    struct.unpack_from("<H", journal_root, entry + 0x06)[0]
+                    << 32
+                ) | struct.unpack_from("<I", journal_root, entry + 0x08)[0]
+                result[logical] = first_physical + logical - first_logical
+                break
+        else:
+            raise AssertionError(f"journal logical block {logical} is unmapped")
+    return result
 
 
 def _journal_metadata_alias_patches(
@@ -521,6 +589,44 @@ def _author_jbd2_transactions(
     assert authored.returncode == 0, authored.stdout + authored.stderr
     assert "Command not found" not in authored.stdout + authored.stderr
     return image
+
+
+def _assert_e2fsck_clean(
+    image: Path, jbd2_toolchain: dict[str, object]
+) -> None:
+    e2fsck = jbd2_toolchain["e2fsck"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(e2fsck, Path)
+    assert isinstance(env, dict)
+    checked = subprocess.run(
+        [str(e2fsck), "-f", "-n", str(image)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+
+
+def _recover_with_e2fsck(
+    source: Path,
+    destination: Path,
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    e2fsck = jbd2_toolchain["e2fsck"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(e2fsck, Path)
+    assert isinstance(env, dict)
+    _copy_sparse_file(source, destination)
+    recovered = subprocess.run(
+        [str(e2fsck), "-E", "journal_only", "-y", str(destination)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert recovered.returncode in (0, 1), recovered.stdout + recovered.stderr
+    _assert_e2fsck_clean(destination, jbd2_toolchain)
 
 
 def _feed_until_idle(system, payload: bytes, max_steps: int) -> int:
@@ -806,7 +912,13 @@ def jbd2_toolchain() -> dict[str, object]:
     except ext4_fixture_generator.ProfileError as error:
         pytest.fail(str(error))
     debugfs = Path(tools["debugfs"]["path"])
-    return {"tool_dir": tool_dir, "debugfs": debugfs, "env": env}
+    e2fsck = Path(tools["e2fsck"]["path"])
+    return {
+        "tool_dir": tool_dir,
+        "debugfs": debugfs,
+        "e2fsck": e2fsck,
+        "env": env,
+    }
 
 
 @pytest.fixture(scope="session")
@@ -879,6 +991,232 @@ def replay_fixture(
         "target_block": 30000,
         "journal_block": journal_block,
         "journal_sequence": journal_sequence,
+    }
+
+
+@pytest.fixture(scope="session")
+def revoke_replay_fixture(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Build standard checksum-v3 revoke logs from debugfs transactions."""
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+    source_image = canonical_images["primary-1k-i256"]
+    block_size = 1024
+    target_block = 30000
+    directory = tmp_path_factory.mktemp("ext4-jbd2-revoke")
+    first_payload = (
+        b"JBD2-AKASHIC-REVOKED-FIRST\n" + bytes(range(256)) * 4
+    )[:block_size].ljust(block_size, b"\x51")
+    discarded_payload = (
+        b"JBD2-AKASHIC-REVOKE-CARRIER\n" + bytes(reversed(range(256))) * 4
+    )[:block_size].ljust(block_size, b"\x52")
+    later_payload = (
+        b"JBD2-AKASHIC-AFTER-REVOKE\n" + bytes(range(255, -1, -1)) * 4
+    )[:block_size].ljust(block_size, b"\x53")
+    authored = _author_jbd2_transactions(
+        debugfs=debugfs,
+        env=env,
+        source=source_image,
+        directory=directory,
+        name="revoke-source",
+        block_size=block_size,
+        transactions=(
+            ((target_block,), first_payload),
+            ((target_block,), discarded_payload),
+            ((target_block,), later_payload),
+        ),
+    )
+    physical_map = _ext4_journal_physical_map(authored, tuple(range(10)))
+
+    with authored.open("rb") as source:
+        journal_blocks: dict[int, bytes] = {}
+        for logical, physical in physical_map.items():
+            source.seek(physical * block_size)
+            journal_blocks[logical] = source.read(block_size)
+        source.seek(target_block * block_size)
+        home_before = source.read(block_size)
+        source.seek(1024)
+        ext4_superblock = source.read(1024)
+    assert all(len(block) == block_size for block in journal_blocks.values())
+    journal_superblock = bytearray(journal_blocks[0])
+    assert struct.unpack_from(">II", journal_superblock, 0x00) == (
+        0xC03B3998,
+        4,
+    )
+    assert struct.unpack_from(">I", journal_superblock, 0x1C)[0] == 1
+    assert struct.unpack_from(">I", journal_superblock, 0x28)[0] == 0x12
+    journal_uuid = bytes(journal_superblock[0x30:0x40])
+    sequences: list[int] = []
+    for descriptor_logical, commit_logical in ((1, 3), (4, 6), (7, 9)):
+        descriptor = journal_blocks[descriptor_logical]
+        commit = journal_blocks[commit_logical]
+        assert struct.unpack_from(">II", descriptor, 0x00) == (
+            0xC03B3998,
+            1,
+        )
+        assert struct.unpack_from(">II", commit, 0x00) == (
+            0xC03B3998,
+            2,
+        )
+        sequence = struct.unpack_from(">I", descriptor, 0x08)[0]
+        assert struct.unpack_from(">I", commit, 0x08)[0] == sequence
+        sequences.append(sequence)
+    assert sequences[1] == (sequences[0] + 1) & 0xFFFF_FFFF
+    assert sequences[2] == (sequences[1] + 1) & 0xFFFF_FFFF
+    assert struct.unpack_from(">I", journal_superblock, 0x18)[0] == sequences[0]
+    assert journal_superblock[0x50] == 4
+    assert home_before not in (first_payload, discarded_payload, later_payload)
+
+    struct.pack_into(">I", journal_superblock, 0x28, 0x13)
+    struct.pack_into(">I", journal_superblock, 0xFC, 0)
+    struct.pack_into(
+        ">I", journal_superblock, 0xFC, _crc32c_raw(journal_superblock)
+    )
+    stored_super_checksum = struct.unpack_from(">I", journal_superblock, 0xFC)[0]
+    checked_superblock = bytearray(journal_superblock)
+    struct.pack_into(">I", checked_superblock, 0xFC, 0)
+    assert stored_super_checksum == _crc32c_raw(checked_superblock)
+
+    def make_revoke(blocks: tuple[int, ...]) -> bytes:
+        result = bytearray(block_size)
+        struct.pack_into(
+            ">IIII", result, 0, 0xC03B3998, 5, sequences[1], 16 + 8 * len(blocks)
+        )
+        for index, block in enumerate(blocks):
+            struct.pack_into(">Q", result, 16 + 8 * index, block)
+        return _jbd2_metadata_with_checksum(result, journal_uuid)
+
+    revoke = make_revoke((target_block,))
+
+    zero = bytes(block_size)
+
+    def variant(name: str, replacements: dict[int, bytes]) -> Path:
+        image = directory / f"{name}.img"
+        _copy_sparse_file(authored, image)
+        complete = {0: bytes(journal_superblock), **replacements}
+        with image.open("r+b") as destination:
+            for logical, payload in complete.items():
+                assert len(payload) == block_size
+                destination.seek(physical_map[logical] * block_size)
+                destination.write(payload)
+        return image
+
+    revoked_image = variant(
+        "revoked",
+        {
+            4: bytes(revoke),
+            5: journal_blocks[6],
+            6: zero,
+            7: zero,
+            8: zero,
+            9: zero,
+        },
+    )
+    rewritten_image = variant(
+        "revoked-then-rewritten",
+        {
+            4: bytes(revoke),
+            5: journal_blocks[6],
+            6: journal_blocks[7],
+            7: journal_blocks[8],
+            8: journal_blocks[9],
+            9: zero,
+        },
+    )
+    incomplete_image = variant(
+        "incomplete-revoke",
+        {4: bytes(revoke), 5: zero, 6: zero, 7: zero, 8: zero, 9: zero},
+    )
+    corrupt_revoke = bytearray(revoke)
+    corrupt_revoke[23] ^= 0x80
+    corrupt_image = variant(
+        "corrupt-revoke",
+        {
+            4: bytes(corrupt_revoke),
+            5: journal_blocks[6],
+            6: zero,
+            7: zero,
+            8: zero,
+            9: zero,
+        },
+    )
+    collision_block = target_block + 4
+    assert collision_block % 4 == target_block % 4
+    multi_revoke_image = variant(
+        "multi-revoke-collision",
+        {
+            4: make_revoke((target_block, collision_block)),
+            5: journal_blocks[6],
+            6: zero,
+            7: zero,
+            8: zero,
+            9: zero,
+        },
+    )
+    filesystem_blocks = (
+        struct.unpack_from("<I", ext4_superblock, 0x150)[0] << 32
+    ) | struct.unpack_from("<I", ext4_superblock, 0x04)[0]
+    malformed_records: dict[str, tuple[bytes, str]] = {}
+
+    def malformed_count(name: str, count: int) -> None:
+        record = bytearray(revoke)
+        struct.pack_into(">I", record, 0x0C, count)
+        malformed_records[name] = (
+            _jbd2_metadata_with_checksum(record, journal_uuid),
+            "VFS-R-CORRUPT",
+        )
+
+    malformed_count("short-count", 15)
+    malformed_count("long-count", block_size)
+    malformed_count("unaligned-count", 25)
+    malformed_records["high-block"] = (
+        make_revoke(((1 << 32) | target_block,)),
+        "VFS-R-UNSUPPORTED",
+    )
+    malformed_records["outside-filesystem"] = (
+        make_revoke((filesystem_blocks,)),
+        "VFS-R-CORRUPT",
+    )
+    malformed_records["journal-owned"] = (
+        make_revoke((physical_map[0],)),
+        "VFS-R-CORRUPT",
+    )
+    malformed_images = {
+        name: (
+            variant(
+                f"malformed-revoke-{name}",
+                {
+                    4: record,
+                    5: journal_blocks[6],
+                    6: zero,
+                    7: zero,
+                    8: zero,
+                    9: zero,
+                },
+            ),
+            reason,
+        )
+        for name, (record, reason) in malformed_records.items()
+    }
+    return {
+        "revoked_image": revoked_image,
+        "rewritten_image": rewritten_image,
+        "incomplete_image": incomplete_image,
+        "corrupt_image": corrupt_image,
+        "multi_revoke_image": multi_revoke_image,
+        "malformed_images": malformed_images,
+        "target_block": target_block,
+        "collision_block": collision_block,
+        "home_before": home_before,
+        "first_payload": first_payload,
+        "later_payload": later_payload,
+        "journal_block": physical_map[0],
+        "journal_sequence": sequences[0],
     }
 
 
@@ -1029,6 +1367,112 @@ def recovery_authority_fixture(
         (layout["primary_super"],),
         super_repair,
     )
+    repair_map = _ext4_journal_physical_map(
+        primary_super_repair_image, tuple(range(5))
+    )
+    with primary_super_repair_image.open("rb") as source:
+        source.seek(1024)
+        repair_home_super = source.read(block_size)
+        source.seek(repair_map[0] * block_size)
+        repair_journal_super = bytearray(source.read(block_size))
+        source.seek(repair_map[1] * block_size)
+        repair_descriptor = source.read(block_size)
+        source.seek(repair_map[2] * block_size)
+        repair_data = source.read(block_size)
+        source.seek(repair_map[3] * block_size)
+        repair_commit = source.read(block_size)
+    assert struct.unpack_from("<I", repair_home_super, 0x60)[0] & 0x04
+    assert struct.unpack_from(">II", repair_descriptor, 0x00) == (
+        0xC03B3998,
+        1,
+    )
+    assert struct.unpack_from(">II", repair_commit, 0x00) == (
+        0xC03B3998,
+        2,
+    )
+    assert struct.unpack_from(">II", repair_journal_super, 0x00) == (
+        0xC03B3998,
+        4,
+    )
+    assert struct.unpack_from(">I", repair_journal_super, 0x28)[0] == 0x12
+    assert repair_journal_super[0x50] == 4
+    repair_sequence = struct.unpack_from(">I", repair_commit, 0x08)[0]
+    assert struct.unpack_from(">I", repair_descriptor, 0x08)[0] == repair_sequence
+    assert struct.unpack_from(">I", repair_journal_super, 0x18)[0] == repair_sequence
+    assert struct.unpack_from(">I", repair_journal_super, 0x1C)[0] == 1
+    assert struct.unpack_from(">I", repair_descriptor, 0x0C)[0] == layout[
+        "primary_super"
+    ]
+    assert struct.unpack_from(">I", repair_descriptor, 0x14)[0] == 0
+    repair_tag_flags = struct.unpack_from(">I", repair_descriptor, 0x10)[0]
+    assert repair_tag_flags & 0x08
+    assert repair_tag_flags & 0x01 == 0
+    assert repair_data == super_repair
+    repair_journal_uuid = bytes(repair_journal_super[0x30:0x40])
+    assert repair_descriptor == _jbd2_metadata_with_checksum(
+        repair_descriptor, repair_journal_uuid
+    )
+    assert repair_commit == _jbd2_commit_with_checksum(
+        repair_commit, repair_journal_uuid, repair_sequence
+    )
+    assert repair_commit[0x0C:0x0E] == bytes(2)
+    repair_tag_seed = _crc32c_raw(repair_journal_uuid)
+    repair_tag_seed = _crc32c_raw(
+        struct.pack(">I", repair_sequence), repair_tag_seed
+    )
+    assert struct.unpack_from(">I", repair_descriptor, 0x18)[0] == _crc32c_raw(
+        repair_data, repair_tag_seed
+    )
+    struct.pack_into(">I", repair_journal_super, 0x28, 0x13)
+    struct.pack_into(">I", repair_journal_super, 0xFC, 0)
+    struct.pack_into(
+        ">I",
+        repair_journal_super,
+        0xFC,
+        _crc32c_raw(repair_journal_super),
+    )
+    repair_super_checksum = struct.unpack_from(">I", repair_journal_super, 0xFC)[
+        0
+    ]
+    checked_repair_super = bytearray(repair_journal_super)
+    struct.pack_into(">I", checked_repair_super, 0xFC, 0)
+    assert repair_super_checksum == _crc32c_raw(checked_repair_super)
+    repair_revoke = bytearray(block_size)
+    struct.pack_into(
+        ">IIIIQ",
+        repair_revoke,
+        0,
+        0xC03B3998,
+        5,
+        repair_sequence,
+        24,
+        layout["primary_super"],
+    )
+    repair_revoke = _jbd2_metadata_with_checksum(
+        repair_revoke, repair_journal_uuid
+    )
+    assert repair_revoke == _jbd2_metadata_with_checksum(
+        repair_revoke, repair_journal_uuid
+    )
+    assert struct.unpack_from(">IIIIQ", repair_revoke, 0x00) == (
+        0xC03B3998,
+        5,
+        repair_sequence,
+        24,
+        layout["primary_super"],
+    )
+    revoked_primary_super_repair_image = directory / "revoked-super-repair.img"
+    _copy_sparse_file(
+        primary_super_repair_image, revoked_primary_super_repair_image
+    )
+    with revoked_primary_super_repair_image.open("r+b") as destination:
+        for logical, payload in (
+            (0, bytes(repair_journal_super)),
+            (3, repair_revoke),
+            (4, repair_commit),
+        ):
+            destination.seek(repair_map[logical] * block_size)
+            destination.write(payload)
     return {
         "source_image": source_image,
         "layout": layout,
@@ -1040,6 +1484,9 @@ def recovery_authority_fixture(
         "bootstrap_repair_image": bootstrap_repair_image,
         "authority_images": authority_images,
         "primary_super_repair_image": primary_super_repair_image,
+        "revoked_primary_super_repair_image": (
+            revoked_primary_super_repair_image
+        ),
         "primary_super_repair": super_repair,
     }
 
@@ -1275,10 +1722,50 @@ def large_journal_replay_fixture(
     _relocate_jbd2_transaction(
         image, wraparound_image, mapped, (8190, 8191, 1)
     )
+    with image.open("rb") as source:
+        transaction = []
+        for logical in (1, 2, 3):
+            source.seek(mapped[logical] * 1024)
+            transaction.append(source.read(1024))
+    descriptor, journal_data, first_commit = transaction
+    assert all(len(block) == 1024 for block in transaction)
+    first_sequence = struct.unpack_from(">I", descriptor, 0x08)[0]
+    assert struct.unpack_from(">I", first_commit, 0x08)[0] == first_sequence
+    second_sequence = (first_sequence + 1) & 0xFFFF_FFFF
+    journal_uuid = journal_superblock[0x30:0x40]
+    revoke = bytearray(1024)
+    struct.pack_into(
+        ">IIIIQ", revoke, 0, 0xC03B3998, 5, second_sequence, 24, 30000
+    )
+    revoke = _jbd2_metadata_with_checksum(revoke, journal_uuid)
+    second_commit = _jbd2_commit_with_checksum(
+        first_commit, journal_uuid, second_sequence
+    )
+    revoke_superblock = bytearray(journal_superblock)
+    struct.pack_into(">I", revoke_superblock, 0x1C, 8190)
+    struct.pack_into(">I", revoke_superblock, 0x28, 0x13)
+    struct.pack_into(">I", revoke_superblock, 0xFC, 0)
+    struct.pack_into(
+        ">I", revoke_superblock, 0xFC, _crc32c_raw(revoke_superblock)
+    )
+    revoke_wrap_image = directory / "replay-csum3-64bit-j8-revoke-wrap.img"
+    _copy_sparse_file(image, revoke_wrap_image)
+    with revoke_wrap_image.open("r+b") as destination:
+        for logical, block in (
+            (0, bytes(revoke_superblock)),
+            (8190, descriptor),
+            (8191, journal_data),
+            (1, first_commit),
+            (2, revoke),
+            (3, second_commit),
+        ):
+            destination.seek(mapped[logical] * 1024)
+            destination.write(block)
     return {
         "image": image,
         "high_slot_image": high_slot_image,
         "wraparound_image": wraparound_image,
+        "revoke_wrap_image": revoke_wrap_image,
         "payload": payload,
         "home_before": home_before,
         "target_block": 30000,
@@ -1363,6 +1850,229 @@ def test_jbd2_checksum_v3_replay_is_durable_and_idempotent(
         ],
     )
     _assert_emitted(second, "EXT4-JBD2-SECOND-MOUNT-OK")
+
+
+def test_jbd2_committed_revoke_suppresses_earlier_home_write(
+    revoke_replay_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    image = revoke_replay_fixture["revoked_image"]
+    assert isinstance(image, Path)
+    target_block = revoke_replay_fixture["target_block"]
+    home_before = revoke_replay_fixture["home_before"]
+    assert isinstance(target_block, int)
+    assert isinstance(home_before, bytes)
+    oracle = tmp_path / "revoked-e2fsck-oracle.img"
+    _recover_with_e2fsck(image, oracle, jbd2_toolchain)
+    with oracle.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == home_before
+    backing = tmp_path / "revoked-recovered.img"
+    output, trace, _ = run_recovery_forth(
+        image,
+        backing,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-HITS + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                'IF ." EXT4-JBD2-REVOKE-SUPPRESSED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-REVOKE-SUPPRESSED")
+    assert trace and trace[0] == ("flush", 0, 0)
+    with backing.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == home_before
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+
+def test_jbd2_later_write_replays_after_earlier_revoke(
+    revoke_replay_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    image = revoke_replay_fixture["rewritten_image"]
+    assert isinstance(image, Path)
+    target_block = revoke_replay_fixture["target_block"]
+    later_payload = revoke_replay_fixture["later_payload"]
+    assert isinstance(target_block, int)
+    assert isinstance(later_payload, bytes)
+    oracle = tmp_path / "revoke-later-e2fsck-oracle.img"
+    _recover_with_e2fsck(image, oracle, jbd2_toolchain)
+    with oracle.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == later_payload
+    backing = tmp_path / "revoke-later-write.img"
+    output, trace, _ = run_recovery_forth(
+        image,
+        backing,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-HITS + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 1 = AND "
+                'IF ." EXT4-JBD2-REVOKE-LATER-WRITE" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-REVOKE-LATER-WRITE")
+    assert trace and trace[0] == ("write", target_block * 2, 2)
+    assert trace[1] == ("flush", 0, 0)
+    with backing.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == later_payload
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+
+def test_jbd2_incomplete_revoke_does_not_suppress_committed_write(
+    revoke_replay_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    image = revoke_replay_fixture["incomplete_image"]
+    assert isinstance(image, Path)
+    target_block = revoke_replay_fixture["target_block"]
+    first_payload = revoke_replay_fixture["first_payload"]
+    assert isinstance(target_block, int)
+    assert isinstance(first_payload, bytes)
+    oracle = tmp_path / "incomplete-revoke-e2fsck-oracle.img"
+    _recover_with_e2fsck(image, oracle, jbd2_toolchain)
+    with oracle.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == first_payload
+    backing = tmp_path / "incomplete-revoke.img"
+    output, trace, _ = run_recovery_forth(
+        image,
+        backing,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.COMMITTED + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 0= AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-HITS + @ 0= AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 1 = AND "
+                'IF ." EXT4-JBD2-INCOMPLETE-REVOKE-DISCARDED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-INCOMPLETE-REVOKE-DISCARDED")
+    assert trace and trace[0] == ("write", target_block * 2, 2)
+    with backing.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == first_payload
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+
+def test_jbd2_corrupt_revoke_refuses_before_any_media_write(
+    revoke_replay_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = revoke_replay_fixture["corrupt_image"]
+    assert isinstance(image, Path)
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / "corrupt-revoke-must-not-persist.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-REASON VFS-R-CORRUPT = "
+                "_M-IOR VFS-IOR-DETAIL EXT4-D-JOURNAL = AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                'IF ." EXT4-JBD2-CORRUPT-REVOKE-NO-WRITE" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-CORRUPT-REVOKE-NO-WRITE")
+    assert trace == ()
+    assert media_sha256 == _sha256(image)
+
+
+def test_jbd2_multi_record_revoke_probes_collisions(
+    revoke_replay_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    image = revoke_replay_fixture["multi_revoke_image"]
+    target_block = revoke_replay_fixture["target_block"]
+    home_before = revoke_replay_fixture["home_before"]
+    assert isinstance(image, Path)
+    assert isinstance(target_block, int)
+    assert isinstance(home_before, bytes)
+    oracle = tmp_path / "multi-revoke-e2fsck-oracle.img"
+    _recover_with_e2fsck(image, oracle, jbd2_toolchain)
+    with oracle.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == home_before
+
+    backing = tmp_path / "multi-revoke-collision.img"
+    output, trace, _ = run_recovery_forth(
+        image,
+        backing,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 2 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-SLOTS + @ 4 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-HITS + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                'IF ." EXT4-JBD2-MULTI-REVOKE-COLLISION" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-MULTI-REVOKE-COLLISION")
+    assert trace and trace[0] == ("flush", 0, 0)
+    with backing.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == home_before
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+
+@pytest.mark.parametrize(
+    "case_name",
+    (
+        "short-count",
+        "long-count",
+        "unaligned-count",
+        "high-block",
+        "outside-filesystem",
+        "journal-owned",
+    ),
+)
+def test_jbd2_malformed_revoke_refuses_before_any_media_write(
+    revoke_replay_fixture: dict[str, object],
+    tmp_path: Path,
+    case_name: str,
+) -> None:
+    malformed_images = revoke_replay_fixture["malformed_images"]
+    assert isinstance(malformed_images, dict)
+    image, reason = malformed_images[case_name]
+    assert isinstance(image, Path)
+    assert isinstance(reason, str)
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / f"malformed-revoke-{case_name}.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                f"_M-IOR VFS-IOR-REASON {reason} = "
+                "_M-IOR VFS-IOR-DETAIL EXT4-D-JOURNAL = AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                'IF ." EXT4-JBD2-MALFORMED-REVOKE-NO-WRITE" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-MALFORMED-REVOKE-NO-WRITE")
+    assert trace == ()
+    assert media_sha256 == _sha256(image)
 
 
 @pytest.mark.parametrize(
@@ -1749,6 +2459,49 @@ def test_jbd2_committed_primary_super_payload_repairs_prefix_tear(
     )
 
 
+def test_jbd2_revoked_primary_super_payload_grants_no_repair_authority(
+    recovery_authority_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = recovery_authority_fixture["revoked_primary_super_repair_image"]
+    candidate = recovery_authority_fixture["primary_super_repair"]
+    layout = recovery_authority_fixture["layout"]
+    assert isinstance(image, Path)
+    assert isinstance(candidate, bytes)
+    assert isinstance(layout, dict)
+    block_size = layout["block_size"]
+    primary_offset = layout["primary_super"] * block_size
+    with image.open("rb") as source:
+        source.seek(primary_offset)
+        torn = bytearray(source.read(block_size))
+    torn[:0x34] = candidate[:0x34]
+    assert struct.unpack_from("<I", torn, 0x3FC)[0] != _crc32c_raw(
+        torn[:0x3FC]
+    )
+    patched = bytearray(image.read_bytes())
+    patched[primary_offset : primary_offset + block_size] = torn
+
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / "revoked-primary-super-repair.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-REASON VFS-R-CORRUPT = "
+                "_M-IOR VFS-IOR-DETAIL EXT4-D-SUPER-CHECKSUM = AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-READY + @ 0= AND "
+                'IF ." EXT4-REVOKED-SUPER-REPAIR-UNPROVEN" THEN'
+            ),
+        ],
+        patches=((primary_offset, bytes(torn)),),
+    )
+    _assert_emitted(output, "EXT4-REVOKED-SUPER-REPAIR-UNPROVEN")
+    assert trace == ()
+    assert media_sha256 == hashlib.sha256(patched).hexdigest()
+
+
 def test_jbd2_incomplete_primary_super_payload_grants_no_repair_authority(
     recovery_authority_fixture: dict[str, object], tmp_path: Path
 ) -> None:
@@ -1897,6 +2650,56 @@ def test_jbd2_replay_scans_high_slots_and_wraps_at_ring_end(
     with backing.open("rb") as source:
         source.seek(target_block * 1024)
         assert source.read(1024) == payload
+
+
+def test_jbd2_revoke_scan_wraps_across_large_journal_ring(
+    large_journal_replay_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    image = large_journal_replay_fixture["revoke_wrap_image"]
+    target_block = large_journal_replay_fixture["target_block"]
+    home_before = large_journal_replay_fixture["home_before"]
+    journal_map = large_journal_replay_fixture["journal_map"]
+    assert isinstance(image, Path)
+    assert isinstance(target_block, int)
+    assert isinstance(home_before, bytes)
+    assert isinstance(journal_map, dict)
+    with image.open("rb") as source:
+        source.seek(journal_map[0] * 1024)
+        journal_superblock = source.read(1024)
+    assert struct.unpack_from(">I", journal_superblock, 0x1C)[0] == 8190
+    assert struct.unpack_from(">I", journal_superblock, 0x28)[0] == 0x13
+    oracle = tmp_path / "j8-revoke-wrap-e2fsck-oracle.img"
+    _recover_with_e2fsck(image, oracle, jbd2_toolchain)
+    with oracle.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == home_before
+
+    backing = tmp_path / "recovered-j8-revoke-wrap.img"
+    output, trace, _ = run_recovery_forth(
+        image,
+        backing,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.MAXLEN + @ 8192 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.COMMITTED + @ 2 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-HITS + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                "_V _EXT4-CTX _EXT4-C.J.CURSOR + @ 4 = AND "
+                'IF ." EXT4-JBD2-J8-REVOKE-WRAP" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-J8-REVOKE-WRAP")
+    assert trace and trace[0] == ("flush", 0, 0)
+    with backing.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == home_before
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
 
 
 def test_jbd2_replay_allows_shared_inode_table_when_inode_8_is_preserved(
@@ -2617,6 +3420,126 @@ def test_binding_descriptor_is_valid_and_truthfully_read_only(
         ],
     )
     _assert_emitted(output, "EXT4-DESCRIPTOR-OK")
+
+
+def test_jbd2_revoke_workspace_is_arena_derived_and_wrap_aware(
+    tmp_path: Path,
+) -> None:
+    blank = tmp_path / "revoke-workspace.img"
+    blank.write_bytes(bytes(4 * 512))
+    output = run_forth(
+        blank,
+        [
+            "CREATE _E4-RCTX _EXT4-CTX-SIZE ALLOT",
+            "_E4-RCTX _EXT4-CTX-SIZE 0 FILL",
+            "1000 _E4-RCTX _EXT4-C.BLOCKS + !",
+            (
+                "8 2* CELLS 2 CELLS + A-XMEM ARENA-NEW "
+                "THROW CONSTANT _E4-R-ARENA"
+            ),
+            "_E4-R-ARENA _E4-RCTX _EXT4-C.ARENA + !",
+            (
+                "3 _E4-RCTX _EXT4-ENSURE-REVOKE-WORKSPACE "
+                "CONSTANT _E4-R-IOR"
+            ),
+            "42 0xFFFFFFFF _E4-RCTX _EXT4-REVOKE-PUT CONSTANT _E4-R-P1",
+            "42 0 _E4-RCTX _EXT4-REVOKE-PUT CONSTANT _E4-R-P2",
+            "43 5 _E4-RCTX _EXT4-REVOKE-PUT CONSTANT _E4-R-P3",
+            "42 0xFFFFFFFF _E4-RCTX _EXT4-JOURNAL-REVOKED? CONSTANT _E4-R-A",
+            "42 0 _E4-RCTX _EXT4-JOURNAL-REVOKED? CONSTANT _E4-R-B",
+            "42 1 _E4-RCTX _EXT4-JOURNAL-REVOKED? 0= CONSTANT _E4-R-C",
+            "43 4 _E4-RCTX _EXT4-JOURNAL-REVOKED? CONSTANT _E4-R-D",
+            "43 6 _E4-RCTX _EXT4-JOURNAL-REVOKED? 0= CONSTANT _E4-R-E",
+            (
+                "0 0xFFFFFFFF _EXT4-JOURNAL-TID-AFTER? "
+                "0xFFFFFFFF 0 _EXT4-JOURNAL-TID-AFTER? 0= AND "
+                "CONSTANT _E4-R-WRAP"
+            ),
+            (
+                "_E4-R-IOR 0= _E4-RCTX _EXT4-C.J.REVOKE-SLOTS + @ 8 = AND "
+                "_E4-R-P1 0= AND _E4-R-P2 0= AND _E4-R-P3 0= AND "
+                "_E4-R-A AND _E4-R-B AND _E4-R-C AND "
+                "_E4-R-D AND _E4-R-E AND _E4-R-WRAP AND "
+                'IF ." EXT4-REVOKE-WORKSPACE-OK" THEN'
+            ),
+            "_E4-RCTX _EXT4-C.J.REVOKE-TABLE + @ CONSTANT _E4-R-PTR",
+            "_E4-R-ARENA ARENA-USED CONSTANT _E4-R-USED",
+            (
+                "2 _E4-RCTX _EXT4-ENSURE-REVOKE-WORKSPACE "
+                "CONSTANT _E4-R-REUSE-IOR"
+            ),
+            (
+                "42 0 _E4-RCTX _EXT4-JOURNAL-REVOKED? 0= "
+                "CONSTANT _E4-R-CLEARED"
+            ),
+            (
+                "_EXT4-JSCAN-REPLAY _E4-RCTX _EXT4-JSCAN "
+                "CONSTANT _E4-R-NOT-READY"
+            ),
+            (
+                "_E4-R-REUSE-IOR 0= _E4-R-CLEARED AND "
+                "_E4-RCTX _EXT4-C.J.REVOKE-TABLE + @ _E4-R-PTR = AND "
+                "_E4-RCTX _EXT4-C.J.REVOKE-SLOTS + @ 8 = AND "
+                "_E4-R-ARENA ARENA-USED _E4-R-USED = AND "
+                "_E4-RCTX _EXT4-C.J.REVOKE-READY + @ 0= AND "
+                "_E4-R-NOT-READY VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_E4-R-NOT-READY VFS-IOR-DETAIL EXT4-D-JOURNAL = AND "
+                'IF ." EXT4-REVOKE-WORKSPACE-REUSED" THEN'
+            ),
+            (
+                "5 _E4-RCTX _EXT4-ENSURE-REVOKE-WORKSPACE "
+                "CONSTANT _E4-R-GROW-IOR"
+            ),
+            (
+                "_E4-R-GROW-IOR VFS-E-NOMEM = "
+                "_E4-RCTX _EXT4-C.J.REVOKE-TABLE + @ _E4-R-PTR = AND "
+                "_E4-RCTX _EXT4-C.J.REVOKE-SLOTS + @ 8 = AND "
+                "_E4-R-ARENA ARENA-USED _E4-R-USED = AND "
+                "_E4-RCTX _EXT4-C.J.REVOKE-READY + @ 0= AND "
+                'IF ." EXT4-REVOKE-WORKSPACE-GROWTH-REFUSED" THEN'
+            ),
+            "CREATE _E4-RNCTX _EXT4-CTX-SIZE ALLOT",
+            "_E4-RNCTX _EXT4-CTX-SIZE 0 FILL",
+            (
+                "16 2* CELLS 1 CELLS - A-XMEM ARENA-NEW "
+                "THROW CONSTANT _E4-RN-ARENA"
+            ),
+            (
+                "_E4-RN-ARENA _E4-RNCTX _EXT4-C.ARENA + ! "
+                "_E4-RN-ARENA ARENA-USED CONSTANT _E4-RN-BEFORE"
+            ),
+            (
+                "5 _E4-RNCTX _EXT4-ENSURE-REVOKE-WORKSPACE "
+                "CONSTANT _E4-RN-IOR"
+            ),
+            "_E4-RN-ARENA ARENA-USED CONSTANT _E4-RN-AFTER",
+            (
+                "_E4-RN-IOR VFS-E-NOMEM = "
+                "_E4-RN-BEFORE _E4-RN-AFTER = AND "
+                "_E4-RNCTX _EXT4-C.J.REVOKE-TABLE + @ 0= AND "
+                "_E4-RNCTX _EXT4-C.J.REVOKE-SLOTS + @ 0= AND "
+                'IF ." EXT4-REVOKE-WORKSPACE-NOMEM" THEN'
+            ),
+            "CREATE _E4-RGCTX _EXT4-CTX-SIZE ALLOT",
+            "_E4-RGCTX _EXT4-CTX-SIZE 0 FILL",
+            "1 _E4-RGCTX _EXT4-C.J.REVOKE-TABLE + !",
+            (
+                "1 _E4-RGCTX _EXT4-ENSURE-REVOKE-WORKSPACE "
+                "CONSTANT _E4-RG-IOR"
+            ),
+            (
+                "_E4-RG-IOR VFS-IOR-REASON VFS-R-CORRUPT = "
+                "_E4-RG-IOR VFS-IOR-DETAIL EXT4-D-JOURNAL = AND "
+                "_E4-RGCTX _EXT4-C.J.REVOKE-READY + @ 0= AND "
+                'IF ." EXT4-REVOKE-WORKSPACE-GEOMETRY" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-REVOKE-WORKSPACE-OK")
+    _assert_emitted(output, "EXT4-REVOKE-WORKSPACE-REUSED")
+    _assert_emitted(output, "EXT4-REVOKE-WORKSPACE-GROWTH-REFUSED")
+    _assert_emitted(output, "EXT4-REVOKE-WORKSPACE-NOMEM")
+    _assert_emitted(output, "EXT4-REVOKE-WORKSPACE-GEOMETRY")
 
 
 def test_zero_count_loops_and_invalid_dirent_type_are_total(tmp_path: Path) -> None:
@@ -3623,6 +4546,9 @@ def test_failed_mount_retry_reuses_journal_workspace(
             "_RETRY-ARENA ARENA-USED CONSTANT _RETRY-USED-1",
             "_RETRY-CTX _EXT4-C.J.MAP + @ CONSTANT _RETRY-MAP",
             "_RETRY-CTX _EXT4-C.J.MAP-HASH + @ CONSTANT _RETRY-HASH",
+            "7 _RETRY-CTX _EXT4-C.J.REVOKE-COUNT + !",
+            "8 _RETRY-CTX _EXT4-C.J.REVOKE-HITS + !",
+            "-1 _RETRY-CTX _EXT4-C.J.REVOKE-READY + !",
             "_RETRY-V _EXT4-MOUNT CONSTANT _RETRY-IOR-2",
             "_RETRY-ARENA ARENA-USED CONSTANT _RETRY-USED-2",
             (
@@ -3633,6 +4559,9 @@ def test_failed_mount_retry_reuses_journal_workspace(
                 "_RETRY-CTX _EXT4-C.J.MAP + @ _RETRY-MAP = AND "
                 "_RETRY-CTX _EXT4-C.J.MAP-HASH + @ _RETRY-HASH = AND "
                 "_RETRY-MAP 0<> AND "
+                "_RETRY-CTX _EXT4-C.J.REVOKE-COUNT + @ 0= AND "
+                "_RETRY-CTX _EXT4-C.J.REVOKE-HITS + @ 0= AND "
+                "_RETRY-CTX _EXT4-C.J.REVOKE-READY + @ 0= AND "
                 "_RETRY-CTX _EXT4-C.READY + @ 0= AND "
                 "_RETRY-V V.LIFECYCLE @ VFS-L-NEW = AND "
                 'IF ." EXT4-MOUNT-RETRY-WORKSPACE-OK" THEN'

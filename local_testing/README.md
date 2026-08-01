@@ -190,18 +190,25 @@ disagreement, and duplicate/overlapping xattr records. The suite also authors
 a private checksum-v3/64-bit JBD2 log with the pinned `debugfs`, and generates
 a second 8 MiB journal with pinned `mke2fs` to cross the canonical 4 MiB
 fixture size. Checksummed transactions are relocated above logical block 4095
-and across the ring end. A shared inode-table replay may update a neighboring
-inode but must preserve journal inode 8 exactly. The suite exercises
-arena-derived map geometry, committed replay, valid incomplete-tail discard,
-pre-write corruption and
-physical-read-only refusal, ordered flushes, idempotence, and both repairable
-and explicitly fail-closed tears in the journal/ext4 landing sequence. The
-repairable matrix includes exact sequential-prefix tears of primary witness
-removal; damaged locators that cannot prove that transition remain refused.
-Revoke and orphan recovery, checksum-torn tail classification, ACL
-enforcement, and every user-visible mutation remain outside this gate. This
-remains an explicit-volume emulator suite rather than a default boot-image or
-automount profile.
+and across the ring end. Standard 64-bit revoke records are exercised in a
+three-pass committed-prefix/revoke/replay flow: later committed revokes
+suppress same-or-earlier home images, a still-later descriptor remains
+replayable, and an incomplete revoke grants no authority. Revoke lookup is
+arena-derived and transaction-ID-wrap aware; the 8 MiB case also crosses the
+ring end between descriptor data, commit, revoke, and the following commit.
+Multi-record collisions, malformed counts and block addresses, and a
+same-transaction revoke of a proposed primary-super repair are all refused or
+resolved before the first media write. A shared inode-table replay may update
+a neighboring inode but must preserve journal inode 8 exactly. The suite exercises
+arena-derived map/revoke geometry, committed replay, valid incomplete-tail
+discard, pre-write corruption and physical-read-only refusal, ordered flushes,
+idempotence, and both repairable and explicitly fail-closed tears in the
+journal/ext4 landing sequence. The repairable matrix includes exact
+sequential-prefix tears of primary witness removal; damaged locators that
+cannot prove that transition remain refused. Orphan recovery, checksum-torn
+tail classification, ACL enforcement, and every user-visible mutation remain
+outside this gate. This remains an explicit-volume emulator suite rather than
+a default boot-image or automount profile.
 
 When a resolved profile closure binds directly to MegaPad networking, the
 harness injects the one canonical packed `networking.f` and loads it with

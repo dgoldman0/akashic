@@ -5,8 +5,9 @@ must implement. It closes the format-selection milestone independently of
 implementation status. The checksummed clean read-only reader now lives in
 `utils/fs/drivers/vfs-ext4.f`; its implemented structures and remaining
 limits are tracked in [the binding documentation](drivers/vfs-ext4.md).
-The first bounded checksum-v3 JBD2 replay slice now exists, but orphan
-recovery, general mutation, and the complete bidirectional gates remain open.
+The bounded checksum-v3 JBD2 replay slice now includes committed revoke
+records, but orphan recovery, general mutation, and the complete
+bidirectional gates remain open.
 MP64FS remains the working native storage binding and FAT/ext4 remain
 read-only interoperability bindings; ext4's mount path may perform the
 strictly ordered recovery writes described below.
@@ -204,13 +205,18 @@ Recovery is ordered as follows:
 5. Recover the legacy orphan chain and the orphan file transactionally and
    idempotently, then clear `ORPHAN_PRESENT` when appropriate.
 
-The current implementation covers steps 1 through 4 only for the exact
-`64bit | checksum_v3` journal mask (`0x12`) with no revoke record. It performs
-a complete non-mutating scan before replay and snapshots the complete journal
-mapping by expanding the checksum-covered inline tuple. Journal length comes
-from inode 8 and must exactly match the authenticated 32-bit JBD2 `s_maxlen`;
-the exact map and uniqueness hash come from the caller-provided arena, so 4 MiB
-is a canonical-fixture choice rather than a driver ceiling.
+The current implementation covers steps 1 through 4 for
+`64bit | checksum_v3` (`0x12`) with the optional standard `revoke` bit
+(`0x13`). It first authenticates the complete committed prefix, counts only
+revokes protected by a valid transaction commit, then builds the latest
+transaction ID for each revoked block before replaying unrevoked descriptor
+payloads. Journal length comes from inode 8 and must exactly match the
+authenticated 32-bit JBD2 `s_maxlen`; the exact map, uniqueness hash, and
+recovery-only half-full power-of-two revoke index come from the
+caller-provided arena, so 4 MiB is a canonical-fixture choice rather than a
+driver ceiling. Failed-mount retries clear and reuse an existing index instead
+of leaking arena storage; the later writer will reserve its own transaction
+workspace. Revoke comparison uses JBD2's wrapping 32-bit transaction ordering.
 The recovery profile additionally requires standard `s_jnl_backup_type=1`.
 All validated sparse-super copies must carry the same 68-byte `s_jnl_blocks`
 tuple as the primary, and that tuple must exactly reproduce inode 8's
@@ -456,17 +462,18 @@ read-side image, including checked HTree lookup, external extents, all legacy
 map levels, allocation-bitmap cross-checks, special metadata, namespaced raw
 xattrs, and bounded generic symlink traversal.
 
-The bounded reader now includes checksum-v3/64-bit committed-prefix replay and
-a crash-retry anchor for clearing `RECOVER`. Dirty replay is bootstrapped
-through the replay-frozen group-1 sparse-super/GDT witness, and a torn primary
-super requires a committed invariant-preserving replacement before any home
-write. The implementation still refuses revoke records, checksum-damaged
-incomplete tails, legacy and modern orphan recovery, and all user-visible
-mutation. Clean orphan-file admission remains bounded to 4096 filesystem
-blocks, ACLs are exposed but not enforced, the real extent fixture reaches
-depth 1 rather than the implemented profile limit of 5, and the special-inode
-fixture does not yet contain a socket. Those qualification and semantic limits
-remain explicit before any write path can be advertised.
+The bounded reader now includes checksum-v3/64-bit, revoke-aware
+committed-prefix replay and a crash-retry anchor for clearing `RECOVER`. Dirty
+replay is bootstrapped through the replay-frozen group-1 sparse-super/GDT
+witness, and a torn primary super requires a committed, unrevoked
+invariant-preserving replacement before any home write. The implementation
+still fails closed on checksum-damaged incomplete tails and refuses legacy and
+modern orphan recovery and all user-visible mutation. Clean orphan-file
+admission remains bounded to 4096 filesystem blocks, ACLs are exposed but not
+enforced, the real extent fixture reaches depth 1 rather than the implemented
+profile limit of 5, and the special-inode fixture does not yet contain a
+socket. Those qualification and semantic limits remain explicit before any
+write path can be advertised.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

@@ -98,31 +98,42 @@ object.
 
 ## Bounded mount recovery
 
-The implemented recovery slice admits an internal journal with the exact
-`64bit | checksum_v3` incompatibility mask (`0x12`) and JBD2 CRC32C type 4.
-It validates the complete journal tuple map, descriptor blocks, 64-bit tags,
-tagged payloads, escaped payload handling, commit blocks, sequence progression,
-and checksums in a non-mutating pass. It then replays only the committed prefix
-in a second pass. Both passes use the immutable map expanded from the
-checksum-valid group-1 tuple; no external extent node, legacy pointer block,
-primary descriptor, or block-allocation bitmap is needed to expand or locate
-that tuple during dirty bootstrap. The witnessed inode-allocation bitmap
-remains part of authenticating live inode 8. Before any journal read, every
-tuple extent is also proven disjoint from all backup-GDT-described bitmap and
-inode-table ranges and all deterministic sparse-super/GDT/reserved-GDT ranges.
-The exact map and its uniqueness table are derived from the journal length and
-bounded by the VFS arena. A structurally valid incomplete
+The implemented recovery slice admits an internal journal with the
+`64bit | checksum_v3` incompatibility mask (`0x12`) and its standard optional
+`revoke` bit (`0x13`), using JBD2 CRC32C type 4. It validates the complete
+journal tuple map, descriptor blocks, 64-bit tags, tagged payloads, escaped
+payload handling, revoke blocks, commit blocks, sequence progression, and
+checksums in a non-mutating pass. It counts only revokes whose enclosing
+transaction has an authenticated commit, builds the latest-sequence revoke
+index in a second non-mutating pass, and then replays only unrevoked home
+blocks from the committed prefix. All passes use the immutable map expanded
+from the checksum-valid group-1 tuple; no external extent node, legacy pointer
+block, primary descriptor, or block-allocation bitmap is needed to expand or
+locate that tuple during dirty bootstrap. The witnessed inode-allocation
+bitmap remains part of authenticating live inode 8. Before any journal read,
+every tuple extent is also proven disjoint from all backup-GDT-described
+bitmap and inode-table ranges and all deterministic
+sparse-super/GDT/reserved-GDT ranges.
+
+The exact map, its uniqueness table, and the recovery-only half-full
+power-of-two revoke index are derived from authenticated journal geometry and
+the exact committed revoke-record count. Their initial allocation is bounded
+by the VFS arena. Failed-mount retries on the same binding clear and reuse that
+index; they never abandon an arena allocation to grow it. The eventual
+transaction writer therefore negotiates separate reserved workspace rather
+than inheriting this recovery allocation policy. Transaction-ID comparison
+remains correct across 32-bit sequence wrap. A structurally valid incomplete
 tail identified by the next header or sequence discontinuity is discarded.
-Preflight also treats a
-matching-sequence `SUPER_V2` header as the known prefix-torn anchor boundary
-only when the complete block passes the anchor checksum, geometry, witness,
-and self-location checks; replay never admits it as a transaction record. A
-checksum-damaged descriptor, payload, or commit is currently refused rather
-than classified as a torn tail. Revoke records and orphan recovery are not yet
-admitted. Pinned qualification relocates a valid transaction above logical
-journal block 4095 and across the end of an 8192-block ring, proving that scan
-and replay use authenticated ring geometry rather than fixture-sized cursor
-assumptions.
+Preflight also treats a matching-sequence `SUPER_V2` header as the known
+prefix-torn anchor boundary only when the complete block passes the anchor
+checksum, geometry, witness, and self-location checks; replay never admits it
+as a transaction record. A checksum-damaged descriptor, payload, revoke, or
+commit is currently refused rather than classified as a torn tail. Orphan
+recovery is not yet admitted. Pinned qualification covers multi-record hash
+collisions, malformed revoke geometry and ownership, a revoked primary-super
+repair, and transactions relocated above logical journal block 4095 and
+across the end of an 8192-block ring. Scan and replay therefore use
+authenticated ring geometry rather than fixture-sized cursor assumptions.
 
 The type-1 journal tuple is validated without consulting allocation metadata,
 then cross-checked through the designated sparse-super/backup-GDT witness to
@@ -235,8 +246,9 @@ writable profile. The remaining boundaries are:
   validates and traverses the profile limit through depth 5;
 - the real special-inode fixture covers FIFO, character, and block devices,
   but not a socket inode;
-- replay currently requires checksum-v3/64-bit journal records, refuses every
-  revoke record, and fails closed on checksum-damaged incomplete tails;
+- replay currently requires checksum-v3/64-bit journal records, supports
+  checksummed 64-bit revoke records, and fails closed on checksum-damaged
+  incomplete tails;
 - the recovery profile deliberately requires the group-1 sparse-super/GDT
   witness and the checksum-covered inline depth-0 journal tuple; external
   journal-map nodes are not recovery authority;
