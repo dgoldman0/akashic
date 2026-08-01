@@ -59,6 +59,11 @@ LOAD_STAGES = (
         "BURROW SERVER SUBSCRIPTION READY",
     ),
     (
+        "capability-facet",
+        "interop/capability-facet.f",
+        "BURROW CAPABILITY FACET READY",
+    ),
+    (
         "burrow",
         "tui/applets/streams/rabbit-burrow.f",
         "STREAMS RABBIT BURROW READY",

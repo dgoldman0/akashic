@@ -2,6 +2,22 @@
 
 PROVIDED rabbit-burrow-test
 
+\ Later composition fixtures may replace one route and extend each peer
+\ facet before this shared Burrow journey starts.  Defaults preserve the
+\ standalone Burrow contract exactly.
+DEFER _RBT-BUR-FETCH-ROUTE-INIT
+DEFER _RBT-BUR-FACET-EXTEND
+
+: _RBT-BUR-DEFAULT-FETCH-ROUTE-INIT  ( -- )
+    S" FETCH" S" /fixture" ['] _RBT-CAP-APP-HANDLER
+        _RBT-CAP-APP-TOKEN _RBT-CAP-ROUTER RROUTER-ADD
+        RROUTER-S-OK = _RBT-ASSERT ;
+
+: _RBT-BUR-DEFAULT-FACET-EXTEND  ( facet -- ) DROP ;
+
+' _RBT-BUR-DEFAULT-FETCH-ROUTE-INIT IS _RBT-BUR-FETCH-ROUTE-INIT
+' _RBT-BUR-DEFAULT-FACET-EXTEND IS _RBT-BUR-FACET-EXTEND
+
 \ The neutral fixtures loaded first provide two independent client/server
 \ graphs, the shared four-route capstone router, bounded pumping helpers, and
 \ the common assertion counter.  This fixture reconstructs the server owners
@@ -54,6 +70,7 @@ VARIABLE _RBT-BUR-FACET
     1 _RBT-BUR-FACET @ CFACET.CONTEXT-ID !
     1 _RBT-BUR-FACET @ CFACET.CONTEXT-GEN !
     1 _RBT-BUR-FACET @ CFACET.REVISION !
+    _RBT-BUR-FACET @ _RBT-BUR-FACET-EXTEND
     _RBT-BUR-FACET @ CFACET-VALID? _RBT-ASSERT ;
 
 : _RBT-BUR-POLICY
@@ -96,9 +113,7 @@ VARIABLE _RBT-BUR-FACET
     S" LIST" S" /fixture" ['] _RBT-CAP-APP-HANDLER
         _RBT-CAP-APP-TOKEN _RBT-CAP-ROUTER RROUTER-ADD
         RROUTER-S-OK = _RBT-ASSERT
-    S" FETCH" S" /fixture" ['] _RBT-CAP-APP-HANDLER
-        _RBT-CAP-APP-TOKEN _RBT-CAP-ROUTER RROUTER-ADD
-        RROUTER-S-OK = _RBT-ASSERT
+    _RBT-BUR-FETCH-ROUTE-INIT
     S" PUBLISH" S" /fixture/action" ['] _RBT-CAP-APP-HANDLER
         _RBT-CAP-APP-TOKEN _RBT-CAP-ROUTER RROUTER-ADD
         RROUTER-S-OK = _RBT-ASSERT

@@ -345,6 +345,34 @@ VARIABLE _RROUTER-O-R
         _RROUTER-O-R @ _RROUTER.ARENA-A @
         _RROUTER-O-R @ _RROUTER.ARENA-CAPACITY @ MSPAN-OVERLAP? ;
 
+\ Stable enumeration of the three allocations in the router ownership
+\ graph.  This keeps the descriptor opaque while letting another neutral
+\ owner compare its own pointer graph against each router span.  A
+\ zero-capacity router reports empty entry and arena spans with OK status.
+3 CONSTANT RROUTER-OWNED-SPAN-COUNT
+
+: RROUTER-OWNED-SPAN@  ( index router -- address bytes status )
+    >R
+    DUP 0< OVER RROUTER-OWNED-SPAN-COUNT >= OR IF
+        DROP R> DROP 0 0 RROUTER-S-INVALID EXIT
+    THEN
+    R@ RROUTER-VALID? 0= IF
+        DROP R> DROP 0 0 RROUTER-S-INVALID EXIT
+    THEN
+    CASE
+        0 OF R@ RROUTER-SIZE RROUTER-S-OK ENDOF
+        1 OF
+            R@ _RROUTER.ENTRIES @
+            R@ _RROUTER.ENTRY-CAPACITY @ RROUTER-ENTRY-BYTES
+            RROUTER-S-OK
+        ENDOF
+        2 OF
+            R@ _RROUTER.ARENA-A @ R@ _RROUTER.ARENA-CAPACITY @
+            RROUTER-S-OK
+        ENDOF
+    ENDCASE
+    R> DROP ;
+
 \ =====================================================================
 \  Safe public evidence and route inspection
 \ =====================================================================
