@@ -20,12 +20,14 @@ CONNECTION = ROOT / "akashic" / "net" / "rabbit" / "connection.f"
 CLIENT = ROOT / "akashic" / "net" / "rabbit" / "client.f"
 SUBSCRIPTION = ROOT / "akashic" / "net" / "rabbit" / "subscription.f"
 ROUTER = ROOT / "akashic" / "net" / "rabbit" / "router.f"
+SERVER = ROOT / "akashic" / "net" / "rabbit" / "server.f"
 MEMORY = ROOT / "akashic" / "net" / "transports" / "memory-duplex.f"
 DOC = ROOT / "docs" / "net" / "rabbit.md"
 FIXTURE = LOCAL_TESTING / "rabbit-core-test.f"
 CLIENT_FIXTURE = LOCAL_TESTING / "rabbit-client-test.f"
 CLIENT_JOURNEY = LOCAL_TESTING / "rabbit-client-flow.f"
 SUBSCRIPTION_FIXTURE = LOCAL_TESTING / "rabbit-sub-test.f"
+SERVER_FIXTURE = LOCAL_TESTING / "rabbit-server-test.f"
 
 PASS_MARKER = "RABBIT CORE PASS"
 PHASE_MAX_STEPS = 120_000_000
@@ -56,6 +58,7 @@ LOAD_STAGES = (
         "RABBIT SUBSCRIPTION READY",
     ),
     ("router", "net/rabbit/router.f", "RABBIT ROUTER READY"),
+    ("server", "net/rabbit/server.f", "RABBIT SERVER READY"),
     (
         "fixture",
         "local_testing/rabbit-core-test.f",
@@ -75,6 +78,11 @@ LOAD_STAGES = (
         "subscription-fixture",
         "local_testing/rabbit-sub-test.f",
         "RABBIT SUBSCRIPTION FIXTURE READY",
+    ),
+    (
+        "server-fixture",
+        "local_testing/rabbit-server-test.f",
+        "RABBIT SERVER FIXTURE READY",
     ),
 )
 CONTRACT_STAGES = (
@@ -236,6 +244,90 @@ CONTRACT_STAGES = (
         "RABBIT SUBSCRIPTION FINI PASS",
         True,
     ),
+    (
+        "server-graph-init",
+        "_RBT-CLI-PHASE-INIT",
+        "RABBIT SERVER GRAPH INIT PASS",
+        True,
+    ),
+    (
+        "server-owner-init",
+        "_RBT-SRV-PHASE-OWNER-INIT",
+        "RABBIT SERVER OWNER INIT PASS",
+        True,
+    ),
+    (
+        "server-handshake-control",
+        "_RBT-SRV-PHASE-HANDSHAKE-CONTROL",
+        "RABBIT SERVER HANDSHAKE CONTROL PASS",
+        True,
+    ),
+    (
+        "server-fetch",
+        "_RBT-SRV-PHASE-FETCH",
+        "RABBIT SERVER FETCH PASS",
+        True,
+    ),
+    (
+        "server-miss-deny",
+        "_RBT-SRV-PHASE-MISS-DENY",
+        "RABBIT SERVER MISS DENY PASS",
+        True,
+    ),
+    (
+        "server-wrong-correlation",
+        "_RBT-SRV-PHASE-WRONG-CORRELATION",
+        "RABBIT SERVER WRONG CORRELATION PASS",
+        True,
+    ),
+    (
+        "server-handler-failures",
+        "_RBT-SRV-PHASE-HANDLER-FAILURES",
+        "RABBIT SERVER HANDLER FAILURES PASS",
+        True,
+    ),
+    (
+        "server-extension-lane-zero",
+        "_RBT-SRV-PHASE-EXTENSION-LANE-ZERO",
+        "RABBIT SERVER EXTENSION LANE ZERO PASS",
+        True,
+    ),
+    (
+        "server-backpressure",
+        "_RBT-SRV-PHASE-BACKPRESSURE",
+        "RABBIT SERVER BACKPRESSURE PASS",
+        True,
+    ),
+    (
+        "server-fini",
+        "_RBT-SRV-PHASE-FINI",
+        "RABBIT SERVER FINI PASS",
+        True,
+    ),
+    (
+        "server-denial-graph-init",
+        "_RBT-CLI-PHASE-INIT",
+        "RABBIT SERVER DENIAL GRAPH INIT PASS",
+        True,
+    ),
+    (
+        "server-denial-owner-init",
+        "_RBT-SRV-PHASE-OWNER-INIT",
+        "RABBIT SERVER DENIAL OWNER INIT PASS",
+        True,
+    ),
+    (
+        "server-admission-deny",
+        "_RBT-SRV-PHASE-ADMISSION-DENY",
+        "RABBIT SERVER ADMISSION DENY PASS",
+        True,
+    ),
+    (
+        "server-denial-fini",
+        "_RBT-SRV-PHASE-DENIAL-FINI",
+        "RABBIT SERVER DENIAL FINI PASS",
+        True,
+    ),
 )
 
 
@@ -273,12 +365,14 @@ def _assert_static_contracts() -> None:
     client = CLIENT.read_text(encoding="utf-8")
     subscription = SUBSCRIPTION.read_text(encoding="utf-8")
     router = ROUTER.read_text(encoding="utf-8")
+    server = SERVER.read_text(encoding="utf-8")
     memory = MEMORY.read_text(encoding="utf-8")
     doc = " ".join(DOC.read_text(encoding="utf-8").split())
     fixture = FIXTURE.read_text(encoding="utf-8")
     client_fixture = CLIENT_FIXTURE.read_text(encoding="utf-8")
     client_journey = CLIENT_JOURNEY.read_text(encoding="utf-8")
     subscription_fixture = SUBSCRIPTION_FIXTURE.read_text(encoding="utf-8")
+    server_fixture = SERVER_FIXTURE.read_text(encoding="utf-8")
 
     assert 0 < PHASE_MAX_STEPS <= 120_000_000
     assert len({name for name, _, _ in LOAD_STAGES}) == len(LOAD_STAGES)
@@ -325,6 +419,12 @@ def _assert_static_contracts() -> None:
         "../../utils/memory-span.f",
         "../../text/utf8.f",
     ]
+    assert _requires(SERVER) == [
+        "connection.f",
+        "router.f",
+        "../../utils/memory-span.f",
+        "../../text/utf8.f",
+    ]
     assert _requires(MEMORY) == [
         "../io-port.f",
         "../../utils/memory-span.f",
@@ -340,6 +440,7 @@ def _assert_static_contracts() -> None:
         (client, "PROVIDED akashic-rabbit-client"),
         (subscription, "PROVIDED akashic-rabbit-subscription"),
         (router, "PROVIDED akashic-rabbit-router"),
+        (server, "PROVIDED akashic-rabbit-server"),
         (memory, "PROVIDED akashic-net-memory-duplex"),
     ):
         assert provider in source
@@ -388,6 +489,12 @@ def _assert_static_contracts() -> None:
     assert all(kind == "VARIABLE" for kind, _ in router_declarations)
     assert all(name.startswith("_RROUTER") for _, name in router_declarations)
     assert "every call must be serialized" in router
+    server_declarations = _declarations(SERVER, server)
+    assert server_declarations
+    assert all(kind == "VARIABLE" for kind, _ in server_declarations)
+    assert all(name.startswith("_RSERVER") for _, name in server_declarations)
+    assert "deliberately a per-peer protocol owner" in server
+    assert "globally non-reentrant" in server
     assert not _declarations(PROFILE, profile)
     assert not _declarations(SESSION, session)
     assert not _declarations(MEMORY, memory)
@@ -474,6 +581,7 @@ def _assert_static_contracts() -> None:
         "RROUTER-ADD",
         "RROUTER-SEAL",
         "RROUTER-MATCH",
+        "RROUTER-OWNED-SPAN-OVERLAP?",
         "RROUTER-RESET",
         "RROUTER-FINI",
     ):
@@ -488,6 +596,8 @@ def _assert_static_contracts() -> None:
         "RABBIT-CONNECTION-RX-LOAN",
         "RABBIT-CONNECTION-RX-COMMIT",
         "RABBIT-CONNECTION-RX-DROP",
+        "RABBIT-CONNECTION-OWNED-SPAN-OVERLAP?",
+        "RABBIT-CONNECTION-BUILDER-OVERLAP?",
         "RABBIT-CONNECTION-WIRE-EVIDENCE@",
         "RABBIT-CONNECTION-CLOSE",
         "RABBIT-CONNECTION-CANCEL",
@@ -497,6 +607,7 @@ def _assert_static_contracts() -> None:
     for word in (
         "RABBIT-CLIENT-INIT",
         "RABBIT-CLIENT-OPEN",
+        "RABBIT-CLIENT-HELLO",
         "RABBIT-CLIENT-REQUEST",
         "RABBIT-CLIENT-OP-MATCH?",
         "RABBIT-CLIENT-BURROW-ID$",
@@ -535,6 +646,25 @@ def _assert_static_contracts() -> None:
     ):
         assert word in subscription
     for word in (
+        "RABBIT-SERVER-SIZE",
+        "RABBIT-SERVER-VALID?",
+        "RABBIT-SERVER-INIT",
+        "RABBIT-SERVER-STATE@",
+        "RABBIT-SERVER-LAST-STATUS@",
+        "RABBIT-SERVER-DETAIL@",
+        "RABBIT-SERVER-BURROW-ID$",
+        "RABBIT-SERVER-PEER@",
+        "RABBIT-SERVER-LAST-RESPONSE-CODE@",
+        "RABBIT-SERVER-OPEN",
+        "RABBIT-SERVER-DISPATCH",
+        "RABBIT-SERVER-POLL",
+        "RABBIT-SERVER-CLOSE",
+        "RABBIT-SERVER-CLOSE-POLL",
+        "RABBIT-SERVER-CANCEL",
+        "RABBIT-SERVER-FINI",
+    ):
+        assert word in server
+    for word in (
         "NMD-ENDPOINT-INIT",
         "NMD-PAIR",
         "NMD-BIND",
@@ -553,6 +683,7 @@ def _assert_static_contracts() -> None:
         *_requires(CLIENT),
         *_requires(SUBSCRIPTION),
         *_requires(ROUTER),
+        *_requires(SERVER),
         *_requires(MEMORY),
     )
     for forbidden in (
@@ -571,6 +702,11 @@ def _assert_static_contracts() -> None:
         "c79f25697868645d958d2a43aec1c2e4f566585a",
         "Streams will operate configured Rabbit instances",
         "does not own generic Rabbit pumping",
+        "generic one-peer server owner",
+        "stronger nonzero data requirement",
+        "RSERVER-S-NOT-FOUND",
+        "Backpressure therefore cannot repeat application work",
+        "Server-side EVENT publication",
         "no second Rabbit transport abstraction",
         "two distinct zero counters",
         "Event-Seq",
@@ -590,6 +726,8 @@ def _assert_static_contracts() -> None:
         + client_journey
         + "\n"
         + subscription_fixture
+        + "\n"
+        + server_fixture
     )
     for marker in (
         "_RBT-TEST-ENCODE",
@@ -604,6 +742,11 @@ def _assert_static_contracts() -> None:
         "_RBT-TEST-CONNECTION",
         "_RBT-CLI-PHASE-RESPONSES-GENERATION",
         "_RBT-TEST-ROUTER",
+        "_RBT-SRV-PHASE-FETCH",
+        "_RBT-SRV-PHASE-HANDLER-FAILURES",
+        "_RBT-SRV-PHASE-EXTENSION-LANE-ZERO",
+        "_RBT-SRV-PHASE-BACKPRESSURE",
+        "_RBT-SRV-PHASE-ADMISSION-DENY",
         "RBF-EOF",
     ):
         assert marker in fixture_contracts
@@ -618,11 +761,13 @@ def _assert_static_contracts() -> None:
         (CLIENT, client),
         (SUBSCRIPTION, subscription),
         (ROUTER, router),
+        (SERVER, server),
         (MEMORY, memory),
         (FIXTURE, fixture),
         (CLIENT_FIXTURE, client_fixture),
         (CLIENT_JOURNEY, client_journey),
         (SUBSCRIPTION_FIXTURE, subscription_fixture),
+        (SERVER_FIXTURE, server_fixture),
     ):
         _assert_physical_comments(path, source)
 
@@ -668,6 +813,7 @@ def _run_rabbit_core(timeout: float) -> int:
             "net/rabbit/client.f",
             "net/rabbit/subscription.f",
             "net/rabbit/router.f",
+            "net/rabbit/server.f",
         ),
         resources=(),
         autoexec="".join(autoexec),
@@ -708,6 +854,12 @@ def _run_rabbit_core(timeout: float) -> int:
                 "local_testing/rabbit-sub-test.f",
                 harness._minify_forth(
                     SUBSCRIPTION_FIXTURE.read_text(encoding="utf-8")
+                ).encode("utf-8"),
+            ),
+            (
+                "local_testing/rabbit-server-test.f",
+                harness._minify_forth(
+                    SERVER_FIXTURE.read_text(encoding="utf-8")
                 ).encode("utf-8"),
             ),
         ),

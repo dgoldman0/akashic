@@ -162,6 +162,13 @@ suffix until the caller commits or drops the loan. Commit alone applies
 handshake, EVENT, ACK, and CREDIT session mutation. Close and cancel invalidate
 loans and wipe queued/parser/carry bytes before delegating transport teardown.
 
+Higher neutral owners can ask whether an arbitrary span overlaps the complete
+connection graph, or whether a complete builder graph overlaps it. These
+queries cover the descriptor, session and its port/lane/transaction bindings,
+parser and parser arena, receive carry, and both complete queue allocations;
+invalid input fails closed. Client and server facades therefore do not need to
+duplicate the connection's private ownership map.
+
 The pinned ACK, CREDIT, and PING shapes forbid a control `Seq`, so the current
 connection records their order only through its control queue. The session's
 read-only/exact control ordinal seam remains available for a future wire
@@ -175,7 +182,74 @@ caller choices, including a canonical empty deny-all router. Finalization can
 recover from damaged route content when the original binding geometry remains
 valid, but—as with the other opaque records—caller forgery of stored binding
 pointers is outside the memory-safety contract without an external ownership
-witness.
+witness. A fail-closed owned-span query covers its descriptor, complete entry
+allocation, and complete arena allocation for composition by higher owners.
+
+## Server peer ownership
+
+`net/rabbit/server.f` is a generic one-peer server owner above one server-role
+connection. It owns that connection, one dedicated reply builder, and a copied
+Burrow identifier, while borrowing one immutable sealed router. A listener or
+host manager may compose any caller-chosen number of these peers; accepting
+transports, allocating peer graphs, scheduling them, and owning application
+state are deliberately not hidden inside this record.
+
+Initialization has one explicit caller-owned graph contract:
+
+```text
+RABBIT-SERVER-INIT
+( connection sealed-router empty-reply-builder
+  burrow-source-a burrow-source-u burrow-destination-a burrow-capacity
+  peer-evidence admission-xt admission-context server -- status )
+```
+
+The connection must have server role, be READY or already OPEN, have no held
+receive frame or queued output, and provide at least one control and one data
+slot. The stronger nonzero data requirement gives every admitted request an
+honest response path even though a lower connection without application output
+is otherwise valid. INIT copies the identity and rejects overlap among every
+persistent allocation before writing either destination. The server thereafter
+owns and finalizes the connection, builder, Burrow destination, and descriptor;
+it borrows the sealed router, admission callback, context, and peer evidence.
+
+HELLO admission is a synchronous callback over the borrowed HELLO frame,
+caller-supplied peer evidence, and opaque context. The callback returns an
+opaque peer token and an allow/deny decision. On allowance, the owner computes
+the capability intersection, prebuilds and validates the exact HELLO response,
+commits the inbound handshake, then enqueues the copied response. Admission
+denial or callback failure drops and cancels the peer: the current lower
+handshake cannot transmit a refusal before establishment without falsely
+establishing the denied session. A wire-visible pre-establishment refusal is a
+recorded lower-layer extension, not an invented success transition.
+
+For known requests, a sealed router maps the exact copied `(verb, selector)`
+to a synchronous handler and context. The handler receives the borrowed frame,
+typed request kind, admitted peer token, and an empty server-owned builder. A
+handler response is accepted only when its Lane and Txn exactly match the held
+request. Route misses become correlated 404 responses, handler denial becomes
+403, and thrown, invalid, or wrongly correlated handler results become bounded
+500 responses. Unknown extension verbs with complete correlation receive 501.
+The owner reserves output capacity before invoking a handler, copies the
+response into the connection while the request loan remains live, and commits
+the request only afterward. Backpressure therefore cannot repeat application
+work. PING/PONG and ACK/CREDIT remain internal control transitions.
+
+`POLL` and `DISPATCH` return an item plus a semantic server status. A useful
+handler response is `RSERVER-S-OK`; synthesized route miss, policy denial,
+unsupported extension, and handler failure remain distinguishable as
+`RSERVER-S-NOT-FOUND`, `RSERVER-S-DENIED`, `RSERVER-S-UNSUPPORTED`, and
+`RSERVER-S-CALLBACK` even though each also enqueues a valid numeric response.
+`RSERVER-S-PENDING` with no item means no callback ran and cooperative progress
+may be retried. Inspection retains the last response code and exact lower
+detail without making numeric application status the owner's control status.
+
+Polling and dispatch are cooperative and globally non-reentrant while module
+scratch holds a live loan. Callbacks must copy retained data and may not pump
+the peer, mutate the router, or retain the reply builder. Close, cancel, and
+finalization propagate through the owned connection; finalization also wipes
+the builder, copied identity, and server record, but leaves the borrowed router
+for its separate owner. Server-side EVENT publication and subscription fanout
+are the next generic checkpoint rather than Streams responsibilities.
 
 ## Client operation ownership
 
@@ -219,6 +293,11 @@ through the same owning connection. This narrow control surface validates the
 builder kind and graph disjointness and preserves the connection's
 encode-before-mutate behavior; it does not bypass correlated publication for
 ordinary requests.
+
+A READY client has an equally narrow typed HELLO surface. It accepts only a
+disjoint READY HELLO builder, delegates capability equality and HELLO-BEGIN to
+the owning connection, and publishes the resulting control slot without
+exposing the connection as the application's protocol interface.
 
 ## Subscription and replay ownership
 
