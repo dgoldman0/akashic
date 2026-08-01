@@ -13,6 +13,7 @@
 <item text=Manage_Sources do=sources key=Ctrl+S/>
 <item text=Add_Syndication_Source do=source-add-feed/>
 <item text=Add_Watched_Page do=source-add-page/>
+<item text=Add_Authenticated_AT_Source do=source-add-atproto/>
 <item text=Refresh_Selected_Source do=source-refresh/>
 <item text=Toggle_Selected_Source do=source-toggle/>
 <item text=Remove_Selected_Source do=source-remove/>
@@ -20,6 +21,7 @@
 <menu label=Post>
 <item text=Open_Thread do=thread/>
 <item text=Create_Local_Draft do=compose key=Ctrl+N/>
+<item text=Publish_Local_Draft do=publish/>
 </menu>
 <menu label=Help>
 <item text=About_Streams do=about/>

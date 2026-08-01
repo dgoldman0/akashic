@@ -4,9 +4,10 @@
 \ Streams owns durable source configuration alongside its existing bounded
 \ feed page, local context, search, and drafts.  Source discovery is sanitized;
 \ source configuration never starts acquisition by itself.  When explicitly
-\ composed with Desk it may still submit the legacy public Bluesky author-feed
-\ exchange through Desk's serialized external-I/O service.  It never starts
-\ network work during initialization or from an Observe surface.
+\ composed with Desk it may submit public Bluesky author-feed work or delegate
+\ explicit authenticated AT refresh/publication to a separately injected
+\ account provider through Desk's serialized external-I/O service.  It never
+\ starts network work during initialization or from an Observe surface.
 \ =====================================================================
 
 PROVIDED akashic-tui-streams
@@ -32,6 +33,7 @@ REQUIRE ../../../interop/schema-common.f
 REQUIRE ../../../net/external-io.f
 REQUIRE ../../../math/random.f
 REQUIRE public-provider.f
+REQUIRE authenticated-provider.f
 REQUIRE draft-store.f
 REQUIRE source-store.f
 REQUIRE refresh-owner.f
@@ -47,6 +49,7 @@ BFM-TEXT-CAP CONSTANT _STM-PROMPT-CAP
 4 CONSTANT _STM-PM-SOURCE-SYNDICATION
 5 CONSTANT _STM-PM-SOURCE-PAGE
 6 CONSTANT _STM-PM-SOURCE-REMOVE
+7 CONSTANT _STM-PM-SOURCE-ATPROTO
 
 0 CONSTANT _STM-V-TIMELINE
 1 CONSTANT _STM-V-THREAD
@@ -93,6 +96,13 @@ BFM-TEXT-CAP CONSTANT _STM-PROMPT-CAP
 1 CONSTANT _STM-SOURCE-INJECTED
 2 CONSTANT _STM-SOURCE-PUBLIC
 3 CONSTANT _STM-SOURCE-AUTHENTICATED
+
+0 CONSTANT _STM-REFRESH-PUBLIC
+1 CONSTANT _STM-REFRESH-AUTHENTICATED
+
+0 CONSTANT _STM-AUTH-OP-NONE
+1 CONSTANT _STM-AUTH-OP-FEED
+2 CONSTANT _STM-AUTH-OP-POST
 
 60000 CONSTANT _STM-REFRESH-TIMEOUT-MS
 -4801 CONSTANT _STM-E-CLEANUP
@@ -161,6 +171,14 @@ _STM-CURRENT-STATE STREAMS-PUBLIC-ACTOR-CAPACITY CMP-FIELD: _STM-ACTOR-BUF
 _STM-CURRENT-STATE CMP-CELL: _STM-CONFIGURED-FACTORY-XT
 _STM-CURRENT-STATE CMP-CELL: _STM-CONFIGURED-INIT-STATUS
 _STM-CURRENT-STATE STREAMS-REFRESH-OWNER-SIZE CMP-FIELD: _STM-CONFIGURED-REFRESH
+_STM-CURRENT-STATE CMP-CELL: _STM-AUTH-FACTORY-XT
+_STM-CURRENT-STATE CMP-CELL: _STM-AUTH-INIT-STATUS
+_STM-CURRENT-STATE CMP-CELL: _STM-AUTH-PROVIDER
+_STM-CURRENT-STATE CMP-CELL: _STM-AUTH-TICK-STATUS
+_STM-CURRENT-STATE CMP-CELL: _STM-AUTH-OP-KIND
+_STM-CURRENT-STATE CMP-CELL: _STM-AUTH-PUBLISH-DRAFT-REVISION
+_STM-CURRENT-STATE CMP-CELL: _STM-REFRESH-TARGET
+_STM-CURRENT-STATE CMP-CELL: _STM-OWNER-INSTANCE
 CMP-LAYOUT-SIZE CONSTANT _STM-STATE-SIZE
 
 \ Source UI construction is serialized by the ordinary app event loop.  The
@@ -187,6 +205,12 @@ CREATE _STM-SOURCE-UI-RID RID-SIZE ALLOT
     _STM-CURRENT-STATE @ >R
     _STM-CURRENT-STATE ! _STM-CONFIGURED-FACTORY-XT !
     R> _STM-CURRENT-STATE ! SCONF-S-OK ;
+
+: STREAMS-AUTH-FACTORY-STATE!  ( factory-xt state -- status )
+    DUP 0= IF 2DROP SAUTH-S-INVALID EXIT THEN
+    _STM-CURRENT-STATE @ >R
+    _STM-CURRENT-STATE ! _STM-AUTH-FACTORY-XT !
+    R> _STM-CURRENT-STATE ! SAUTH-S-OK ;
 
 : _STM-OWNER-TOUCH  ( -- )
     _STM-CURRENT-INSTANCE @ ?DUP IF CINST-TOUCH THEN ;
@@ -850,6 +874,56 @@ VARIABLE _STM-QU
 : _STM-LIVE-AVAILABLE?  ( -- flag )
     _STM-XIO-SERVICE @ 0<> _STM-PUBLIC-PROVIDER @ 0<> AND ;
 
+: _STM-AUTH-AVAILABLE?  ( -- flag )
+    _STM-AUTH-INIT-STATUS @ SAUTH-S-OK <> IF 0 EXIT THEN
+    _STM-AUTH-PROVIDER @ DUP 0= IF DROP 0 EXIT THEN
+    SAUTH-VALID? ;
+
+: _STM-AUTH-SOURCE?  ( source -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    SSOURCE.KIND @ SSOURCE-KIND-ATPROTO-AUTHENTICATED = ;
+
+VARIABLE _STM-AUTH-SOURCE-CANDIDATE
+
+: _STM-AUTH-CURRENT-SOURCE  ( -- source|0 )
+    _STM-AUTH-AVAILABLE? 0= IF 0 EXIT THEN
+    _STM-AUTH-PROVIDER @ SAUTH-SOURCE@
+    DUP 0= IF EXIT THEN
+    DUP _STM-AUTH-SOURCE-CANDIDATE !
+    SSOURCE.ID _STM-SOURCE-REGISTRY STREAMS-SOURCE-FIND
+    DUP 0= IF EXIT THEN
+    DUP SSOURCE.REVISION @
+    _STM-AUTH-SOURCE-CANDIDATE @ SSOURCE.REVISION @ <> IF DROP 0 EXIT THEN
+    DUP _STM-AUTH-SOURCE? 0= IF DROP 0 THEN ;
+
+VARIABLE _STM-AUTH-SOURCE-CHECK
+
+: _STM-AUTH-SOURCE-CURRENT?  ( source -- flag )
+    _STM-AUTH-SOURCE-CHECK !
+    _STM-AUTH-CURRENT-SOURCE DUP 0= IF DROP 0 EXIT THEN
+    DUP SSOURCE.ID _STM-AUTH-SOURCE-CHECK @ SSOURCE.ID RID=
+    SWAP SSOURCE.REVISION @
+        _STM-AUTH-SOURCE-CHECK @ SSOURCE.REVISION @ = AND ;
+
+VARIABLE _STM-AUTH-ADMIT-SOURCE
+VARIABLE _STM-AUTH-ADMIT-CURRENT
+
+: STREAMS-AUTH-SOURCE-ADMISSIBLE?  ( source instance -- flag )
+    DUP 0= IF 2DROP 0 EXIT THEN
+    SWAP _STM-AUTH-ADMIT-SOURCE ! _STM-ACTIVATE
+    _STM-AUTH-ADMIT-SOURCE @ DUP 0= IF DROP 0 EXIT THEN
+    DUP _STM-AUTH-SOURCE? 0= IF DROP 0 EXIT THEN
+    DUP SSOURCE.FLAGS @ SSOURCE-F-ENABLED AND 0= IF DROP 0 EXIT THEN
+    SSOURCE.ID _STM-SOURCE-REGISTRY STREAMS-SOURCE-FIND
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP _STM-AUTH-ADMIT-CURRENT !
+    DUP _STM-AUTH-SOURCE? 0= IF DROP 0 EXIT THEN
+    SSOURCE.FLAGS @ SSOURCE-F-ENABLED AND 0= IF 0 EXIT THEN
+    _STM-AUTH-ADMIT-CURRENT @ SSOURCE.REVISION @
+        _STM-AUTH-ADMIT-SOURCE @ SSOURCE.REVISION @ =
+    _STM-AUTH-ADMIT-CURRENT @ SSOURCE.ID
+        _STM-AUTH-ADMIT-SOURCE @ SSOURCE.ID RID= AND ;
+
 : _STM-ACTOR@  ( -- addr len )
     _STM-ACTOR-BUF _STM-ACTOR-U @ ;
 
@@ -888,6 +962,9 @@ VARIABLE _STM-QU
     _STM-LIVE-STATUS @ _STM-LIVE-BUSY = IF
         S" External I/O is busy" EXIT
     THEN
+    _STM-FEED-READY @ 0= _STM-AUTH-AVAILABLE? AND IF
+        S" Authenticated account ready / choose or add a source" EXIT
+    THEN
     _STM-LIVE-AVAILABLE? 0= IF
         _STM-FEED-READY @ IF
             S" Offline / retained feed"
@@ -904,6 +981,37 @@ VARIABLE _STM-QU
         THEN EXIT
     THEN
     S" Actor ready / R refresh" ;
+
+: _STM-AUTH-STATE@  ( -- state )
+    _STM-AUTH-AVAILABLE? 0= IF SAUTH-STATE-OFFLINE EXIT THEN
+    _STM-AUTH-PROVIDER @ SAUTH-STATE@ ;
+
+: _STM-AUTH-ACTIVE?  ( -- flag )
+    _STM-AUTH-STATE@ DUP SAUTH-STATE-FEED-ACTIVE =
+    SWAP SAUTH-STATE-POST-ACTIVE = OR ;
+
+: _STM-AUTH-STATE$  ( -- addr len )
+    _STM-AUTH-STATE@ CASE
+        SAUTH-STATE-OFFLINE OF S" Authenticated account offline" ENDOF
+        SAUTH-STATE-IDLE OF S" Authenticated account ready" ENDOF
+        SAUTH-STATE-FEED-ACTIVE OF S" Refreshing authenticated feed" ENDOF
+        SAUTH-STATE-FEED-READY OF S" Authenticated feed retained" ENDOF
+        SAUTH-STATE-POST-ACTIVE OF S" Publishing draft" ENDOF
+        SAUTH-STATE-POST-DELIVERED OF S" Published / receipt retained" ENDOF
+        SAUTH-STATE-POST-NO-EFFECT OF
+            S" Not published / no repository effect"
+        ENDOF
+        SAUTH-STATE-POST-UNCERTAIN OF S" Publication outcome uncertain" ENDOF
+        SAUTH-STATE-FAILED OF S" Authenticated operation failed" ENDOF
+        SAUTH-STATE-CANCELLED OF S" Authenticated operation cancelled" ENDOF
+        SAUTH-STATE-CLEANUP OF S" Authenticated cleanup failed" ENDOF
+        S" Authenticated account state is invalid" ROT
+    ENDCASE ;
+
+: _STM-AUTH-STATUS-IMPORTANT?  ( -- flag )
+    _STM-AUTH-AVAILABLE? 0= IF 0 EXIT THEN
+    _STM-AUTH-STATE@ DUP SAUTH-STATE-IDLE <>
+    SWAP SAUTH-STATE-FEED-READY <> AND ;
 
 : _STM-CONFIGURED-STATUS$  ( -- addr len )
     _STM-CONFIGURED-REFRESH STREAMS-REFRESH-OWNER-VALID? 0= IF
@@ -935,11 +1043,18 @@ VARIABLE _STM-QU
 : _STM-UPDATE-ACCOUNT  ( -- )
     _STM-E-SBAR-ACCOUNT @ ?DUP IF
         S" text"
-        _STM-ACTOR-U @ IF
+        _STM-FEED-READY @
+        _STM-FEED-SOURCE @ _STM-SOURCE-PUBLIC = AND
+        _STM-ACTOR-U @ 0<> AND IF
+            _STM-ACTOR@
+        ELSE _STM-AUTH-AVAILABLE? IF
+            _STM-AUTH-PROVIDER @ SAUTH-ACCOUNT$
+            DUP 0= IF 2DROP S" Authenticated" THEN
+        ELSE _STM-ACTOR-U @ IF
             _STM-ACTOR@
         ELSE
             _STM-LIVE-AVAILABLE? IF S" No actor" ELSE S" Offline" THEN
-        THEN
+        THEN THEN THEN
         UTUI-SET-ATTR
     THEN ;
 
@@ -948,14 +1063,20 @@ VARIABLE _STM-QU
     _STM-E-SBAR-STATE @ ?DUP IF
         S" text"
         _STM-VIEW @ _STM-V-SOURCES = IF
-            _STM-CONFIGURED-STATUS$
+            _STM-SOURCE-SELECTED@ DUP _STM-AUTH-SOURCE? IF
+                DROP _STM-AUTH-STATE$
+            ELSE
+                DROP _STM-CONFIGURED-STATUS$
+            THEN
+        ELSE _STM-AUTH-STATUS-IMPORTANT? IF
+            _STM-AUTH-STATE$
         ELSE _STM-LIVE-STATUS @ _STM-LIVE-ACTIVE = IF
             _STM-LIVE-STATUS$
         ELSE _STM-DRAFT-PERSIST-MODE @ _STM-DP-BLOCKED = IF
             _STM-DRAFT-BLOCKED-TEXT
         ELSE
             _STM-LIVE-STATUS$
-        THEN THEN THEN
+        THEN THEN THEN THEN
         UTUI-SET-ATTR
     THEN ;
 
@@ -999,10 +1120,23 @@ VARIABLE _STM-ROW
 
 3 CONSTANT _STM-THREAD-CARD-ROWS
 5 CONSTANT _STM-THREAD-FIRST-ROW
+4 CONSTANT _STM-AUTH-RESULT-ROWS
+
+: _STM-AUTH-RESULT-PANEL?  ( -- flag )
+    _STM-AUTH-AVAILABLE? 0= IF 0 EXIT THEN
+    _STM-AUTH-OP-KIND @ _STM-AUTH-OP-POST <> IF 0 EXIT THEN
+    _STM-AUTH-STATE@ DUP SAUTH-STATE-POST-ACTIVE =
+    OVER SAUTH-STATE-POST-DELIVERED = OR
+    OVER SAUTH-STATE-POST-NO-EFFECT = OR
+    OVER SAUTH-STATE-POST-UNCERTAIN = OR
+    OVER SAUTH-STATE-FAILED = OR
+    OVER SAUTH-STATE-CANCELLED = OR
+    SWAP SAUTH-STATE-CLEANUP = OR ;
 
 : _STM-VISIBLE-ITEMS  ( -- count )
     _STM-DH @ 3 -
     _STM-DRAFT-REV @ IF 3 - THEN
+    _STM-AUTH-RESULT-PANEL? IF _STM-AUTH-RESULT-ROWS - THEN
     _STM-NONNEG 3 / ;
 
 : _STM-ENSURE-VISIBLE  ( -- )
@@ -1024,6 +1158,7 @@ VARIABLE _STM-ROW
 : _STM-THREAD-VISIBLE-ITEMS  ( -- count )
     _STM-DH @
     _STM-DRAFT-REV @ IF 3 - THEN
+    _STM-AUTH-RESULT-PANEL? IF _STM-AUTH-RESULT-ROWS - THEN
     _STM-THREAD-FIRST-ROW - _STM-NONNEG
     _STM-THREAD-CARD-ROWS / ;
 
@@ -1071,11 +1206,13 @@ VARIABLE _STM-THREAD-ENSURE-VISIBLE-N
 : _STM-DRAW-TIMELINE  ( -- )
     _STM-ITEM-COUNT DUP 0= IF
         DROP 244 234 0 DRW-STYLE!
-        _STM-LIVE-AVAILABLE? IF
+        _STM-AUTH-AVAILABLE? IF
+            S" No feed is loaded. Open Sources and refresh an authenticated source."
+        ELSE _STM-LIVE-AVAILABLE? IF
             S" No feed is loaded. Press A to choose a public actor."
         ELSE
             S" No feed is loaded. Streams is offline."
-        THEN
+        THEN THEN
         4 2 DRW-TEXT EXIT
     THEN
     DROP _STM-ENSURE-VISIBLE
@@ -1130,6 +1267,16 @@ VARIABLE _STM-SOURCE-ATTEMPT-SOURCE
     ENDCASE ;
 
 : _STM-SOURCE-ACQUISITION-STATE$  ( source -- addr len )
+    DUP _STM-AUTH-SOURCE? IF
+        DUP _STM-AUTH-SOURCE-CURRENT? IF
+            DROP _STM-AUTH-STATE$ EXIT
+        THEN
+        DROP _STM-AUTH-AVAILABLE? IF
+            S" never refreshed"
+        ELSE
+            S" authenticated account offline"
+        THEN EXIT
+    THEN
     _STM-CONFIGURED-REFRESH STREAMS-REFRESH-OWNER-VALID? IF
         _STM-CONFIGURED-REFRESH STREAMS-REFRESH-OWNER-PHASE@
             SREF-PHASE-BLOCKED = IF DROP S" blocked" EXIT THEN
@@ -1168,6 +1315,9 @@ VARIABLE _STM-OBS-BEST-SEQUENCE
         SSOURCE-KIND-PAGE OF S" watched-page" ENDOF
         SSOURCE-KIND-NOTIFICATION OF S" notification" ENDOF
         SSOURCE-KIND-BLUESKY-PUBLIC OF S" bluesky-public" ENDOF
+        SSOURCE-KIND-ATPROTO-AUTHENTICATED OF
+            S" atproto-authenticated"
+        ENDOF
         S" unknown" ROT
     ENDCASE ;
 
@@ -1257,24 +1407,29 @@ VARIABLE _STM-SOURCE-DRAW-SOURCE
     S" last" _STM-ROW @ 3 + 4 DRW-TEXT
     _STM-SOURCE-DRAW-SOURCE @ _STM-SOURCE-ACQUISITION-STATE$
         _STM-ROW @ 3 + 9 DRW-TEXT
-    _STM-SOURCE-DRAW-SOURCE @ _STM-SOURCE-ATTEMPT-HEAD ?DUP IF
-        DUP OCS.STATE @ OCHK-ATTEMPT-SUCCEEDED = IF
-            S" new" _STM-ROW @ 3 + 24 DRW-TEXT
-            DUP OCS.NEW-COUNT @ NUM>STR _STM-ROW @ 3 + 28 DRW-TEXT
-            S" revised" _STM-ROW @ 3 + 34 DRW-TEXT
-            DUP OCS.REVISED-COUNT @ NUM>STR _STM-ROW @ 3 + 42 DRW-TEXT
-            S" unchanged" _STM-ROW @ 3 + 48 DRW-TEXT
-            OCS.UNCHANGED-COUNT @ NUM>STR _STM-ROW @ 3 + 58 DRW-TEXT
-        ELSE
-            DROP
-        THEN
-    THEN
-    _STM-SOURCE-DRAW-SOURCE @ _STM-SOURCE-LATEST-OBSERVATION ?DUP IF
-        S" latest" _STM-ROW @ 4 + 4 DRW-TEXT
-        _STM-CONFIGURED-CHECKPOINT OCHK-OBSERVATION-TITLE$
-            _STM-ROW @ 4 + 11 DRW-TEXT-UNTRUSTED
+    _STM-SOURCE-DRAW-SOURCE @ _STM-AUTH-SOURCE? IF
+        S" Authenticated rows are presented directly in the timeline"
+            _STM-ROW @ 4 + 4 DRW-TEXT
     ELSE
-        S" no retained observations" _STM-ROW @ 4 + 4 DRW-TEXT
+        _STM-SOURCE-DRAW-SOURCE @ _STM-SOURCE-ATTEMPT-HEAD ?DUP IF
+            DUP OCS.STATE @ OCHK-ATTEMPT-SUCCEEDED = IF
+                S" new" _STM-ROW @ 3 + 24 DRW-TEXT
+                DUP OCS.NEW-COUNT @ NUM>STR _STM-ROW @ 3 + 28 DRW-TEXT
+                S" revised" _STM-ROW @ 3 + 34 DRW-TEXT
+                DUP OCS.REVISED-COUNT @ NUM>STR _STM-ROW @ 3 + 42 DRW-TEXT
+                S" unchanged" _STM-ROW @ 3 + 48 DRW-TEXT
+                OCS.UNCHANGED-COUNT @ NUM>STR _STM-ROW @ 3 + 58 DRW-TEXT
+            ELSE
+                DROP
+            THEN
+        THEN
+        _STM-SOURCE-DRAW-SOURCE @ _STM-SOURCE-LATEST-OBSERVATION ?DUP IF
+            S" latest" _STM-ROW @ 4 + 4 DRW-TEXT
+            _STM-CONFIGURED-CHECKPOINT OCHK-OBSERVATION-TITLE$
+                _STM-ROW @ 4 + 11 DRW-TEXT-UNTRUSTED
+        ELSE
+            S" no retained observations" _STM-ROW @ 4 + 4 DRW-TEXT
+        THEN
     THEN ;
 
 : _STM-DRAW-SOURCES  ( -- )
@@ -1286,7 +1441,7 @@ VARIABLE _STM-SOURCE-DRAW-SOURCE
     THEN
     _STM-SOURCE-REGISTRY STREAMS-SOURCE-COUNT DUP 0= IF
         DROP 244 234 0 DRW-STYLE!
-        S" No sources configured. Press F for a feed or P for a page."
+        S" No sources configured. F feed | P page | B authenticated AT."
         4 2 DRW-TEXT EXIT
     THEN DROP
     _STM-SOURCE-ENSURE-VISIBLE
@@ -1298,6 +1453,38 @@ VARIABLE _STM-SOURCE-DRAW-SOURCE
         _STM-DRAW-SOURCE
     LOOP ;
 
+VARIABLE _STM-AUTH-PANEL-ROW
+
+: _STM-DRAW-AUTH-RESULT  ( -- )
+    _STM-AUTH-RESULT-PANEL? 0= IF EXIT THEN
+    _STM-DH @ _STM-AUTH-RESULT-ROWS -
+    _STM-DRAFT-REV @ IF 3 - THEN
+    _STM-NONNEG _STM-AUTH-PANEL-ROW !
+    81 234 CELL-A-BOLD DRW-STYLE!
+    S" Authenticated result for draft r"
+        _STM-AUTH-PANEL-ROW @ 2 DRW-TEXT
+    _STM-AUTH-PUBLISH-DRAFT-REVISION @ NUM>STR
+        _STM-AUTH-PANEL-ROW @ 35 DRW-TEXT
+    _STM-DRAFT-REV @ _STM-AUTH-PUBLISH-DRAFT-REVISION @ <> IF
+        S" local draft changed" _STM-AUTH-PANEL-ROW @ 44 DRW-TEXT
+    THEN
+    253 234 0 DRW-STYLE!
+    _STM-AUTH-STATE$ _STM-AUTH-PANEL-ROW @ 1+ 2 DRW-TEXT
+    _STM-AUTH-STATE@ SAUTH-STATE-POST-DELIVERED = IF
+        S" URI" _STM-AUTH-PANEL-ROW @ 2 + 2 DRW-TEXT
+        _STM-AUTH-PROVIDER @ SAUTH-URI$ DUP IF
+            _STM-AUTH-PANEL-ROW @ 2 + 7 DRW-TEXT-UNTRUSTED
+        ELSE
+            2DROP
+        THEN
+        S" CID" _STM-AUTH-PANEL-ROW @ 3 + 2 DRW-TEXT
+        _STM-AUTH-PROVIDER @ SAUTH-CID$ DUP IF
+            _STM-AUTH-PANEL-ROW @ 3 + 7 DRW-TEXT-UNTRUSTED
+        ELSE
+            2DROP
+        THEN
+    THEN ;
+
 : _STM-PANEL-DRAW  ( widget -- )
     DUP WDG-REGION RGN-W _STM-DW ! WDG-REGION RGN-H _STM-DH !
     253 234 0 DRW-STYLE! 32 0 0 _STM-DH @ _STM-DW @ DRW-FILL-RECT
@@ -1305,18 +1492,21 @@ VARIABLE _STM-SOURCE-DRAW-SOURCE
     S" STREAMS" 0 2 DRW-TEXT
     244 234 0 DRW-STYLE!
     _STM-VIEW @ _STM-V-SOURCES = IF
-        S" F add | P page | R refresh | E toggle | D remove | Esc timeline"
+        S" F feed | P page | B auth AT | R refresh | E toggle | D remove | Esc timeline"
+    ELSE _STM-AUTH-AVAILABLE? IF
+        S" A public | R refresh | P publish | arrows | T thread | / search | C draft | S sources"
     ELSE _STM-LIVE-AVAILABLE? IF
         S" A actor | R refresh | arrows select | T thread | / search | C draft | S sources"
     ELSE
         S" offline | arrows select | T thread | / search | C draft | S sources"
-    THEN THEN
+    THEN THEN THEN
     _STM-DW @ 4 - _STM-NONNEG MIN 1 2 DRW-TEXT
     _STM-VIEW @ _STM-V-SOURCES = IF
         _STM-DRAW-SOURCES
     ELSE
         _STM-VIEW @ _STM-V-THREAD = IF _STM-DRAW-THREAD ELSE _STM-DRAW-TIMELINE THEN
     THEN
+    _STM-VIEW @ _STM-V-SOURCES <> IF _STM-DRAW-AUTH-RESULT THEN
     _STM-VIEW @ _STM-V-SOURCES <> _STM-DRAFT-REV @ AND IF
         81 234 CELL-A-BOLD DRW-STYLE!
         S" Draft r" _STM-DH @ 3 - 2 DRW-TEXT
@@ -1456,6 +1646,7 @@ VARIABLE _STM-LIVE-CALL-STATUS
 
 : _STM-ACTOR!  ( addr len -- status )
     _STM-ACTOR-STORE DUP CBUS-S-OK = IF
+        _STM-REFRESH-PUBLIC _STM-REFRESH-TARGET !
         _STM-LIVE-READY 0 _STM-LIVE-MARK
     THEN ;
 
@@ -1556,6 +1747,7 @@ VARIABLE _STM-REFRESH-ROLLBACK-STATUS
         _STM-REFRESH-U @ _STM-ACTOR-U !
     THEN
     _STM-REFRESH-NEXT-GENERATION @ _STM-REQUEST-GENERATION !
+    _STM-REFRESH-PUBLIC _STM-REFRESH-TARGET !
     _STM-LIVE-ACTIVE 0 _STM-LIVE-MARK CBUS-S-OK ;
 
 : _STM-REFRESH-START  ( -- status )
@@ -1589,10 +1781,14 @@ VARIABLE _STM-SOURCE-UI-ENABLED
     _STM-VIEW @ _STM-V-SOURCES <> IF _STM-OPEN-SOURCES THEN ;
 
 : _STM-SOURCE-CREATE-LABEL!  ( kind source -- status )
-    SWAP SSOURCE-KIND-SYNDICATION = IF
+    SWAP DUP SSOURCE-KIND-SYNDICATION = IF
+        DROP
         S" Syndication feed" ROT STREAMS-SOURCE-LABEL!
-    ELSE
+    ELSE SSOURCE-KIND-PAGE = IF
         S" Watched page" ROT STREAMS-SOURCE-LABEL!
+    ELSE
+        DROP SSREG-S-UNSUPPORTED
+    THEN
     THEN ;
 
 : _STM-APPLY-SOURCE-CREATE  ( addr len kind -- )
@@ -1640,6 +1836,65 @@ VARIABLE _STM-SOURCE-UI-ENABLED
     THEN
     _STM-SOURCE-UI-SCRATCH-WIPE ;
 
+: _STM-APPLY-AUTH-SOURCE-CREATE  ( addr len -- )
+    STR-TRIM _STM-SOURCE-UI-U ! _STM-SOURCE-UI-A !
+    _STM-SOURCE-UI-SCRATCH-WIPE
+    _STM-SOURCE-READY? 0= IF
+        STREAMS-SOURCE-S-BLOCKED _STM-SOURCE-OWNER-ERROR-TOAST EXIT
+    THEN
+    _STM-AUTH-AVAILABLE? 0= IF
+        S" No authenticated AT account is available" 2600 ASHELL-TOAST EXIT
+    THEN
+    _STM-AUTH-ACTIVE? IF
+        S" Finish authenticated work before adding a source"
+        2800 ASHELL-TOAST EXIT
+    THEN
+    _STM-SOURCE-UI-U @ DUP 1 < SWAP STREAMS-SOURCE-ENDPOINT-MAX > OR IF
+        S" Enter an authenticated actor handle or DID" 2600 ASHELL-TOAST EXIT
+    THEN
+    _STM-SOURCE-UI-A @ _STM-SOURCE-UI-U @ UTF8-VALID? 0= IF
+        S" Authenticated actor identity is not valid UTF-8"
+        2600 ASHELL-TOAST EXIT
+    THEN
+    _STM-SOURCE-UI-A @ _STM-SOURCE-UI-U @
+    _STM-AUTH-OP-NONE _STM-AUTH-OP-KIND !
+    0 _STM-AUTH-PUBLISH-DRAFT-REVISION !
+    _STM-SOURCE-UI-CANDIDATE _STM-AUTH-PROVIDER @
+        SAUTH-SOURCE-BUILD DUP _STM-SOURCE-UI-STATUS !
+    SAUTH-S-OK <> IF
+        _STM-SOURCE-UI-SCRATCH-WIPE
+        _STM-SOURCE-UI-STATUS @
+        DUP SAUTH-S-UNAVAILABLE = IF
+            DROP S" Authenticated account is offline"
+        ELSE DUP SAUTH-S-BUSY = IF
+            DROP S" Finish authenticated work before adding a source"
+        ELSE DUP SAUTH-S-CAPACITY = IF
+            DROP S" Authenticated source exceeds bounded storage"
+        ELSE DUP SAUTH-S-STATE = IF
+            DROP S" Authenticated account cannot build a source in this state"
+        ELSE DUP SAUTH-S-CLEANUP = IF
+            DROP S" Authenticated cleanup failed; source was not saved"
+        ELSE DUP SAUTH-S-INVALID = IF
+            DROP S" Account rejected that actor identity or binding"
+        ELSE
+            DROP S" Authenticated source could not be built"
+        THEN THEN THEN THEN THEN THEN
+        3000 ASHELL-TOAST EXIT
+    THEN
+    _STM-SOURCE-UI-CANDIDATE _STM-SOURCE-UI-RID
+        _STM-CURRENT-INSTANCE @ STREAMS-SOURCE-CREATE-OWNER
+        DUP _STM-SOURCE-UI-STATUS !
+    STREAMS-SOURCE-S-OK = IF
+        _STM-SOURCE-REGISTRY STREAMS-SOURCE-COUNT 1- _STM-NONNEG
+            _STM-SOURCE-SELECTED !
+        _STM-SOURCE-ENSURE-VISIBLE
+        S" Authenticated AT source saved; press R to refresh"
+        2800 ASHELL-TOAST
+    ELSE
+        _STM-SOURCE-UI-STATUS @ _STM-SOURCE-OWNER-ERROR-TOAST
+    THEN
+    _STM-SOURCE-UI-SCRATCH-WIPE ;
+
 : _STM-SOURCE-CAN-ADD?  ( -- flag )
     _STM-SOURCE-ENSURE-MANAGEMENT-VIEW
     _STM-SOURCE-READY? 0= IF
@@ -1658,6 +1913,14 @@ VARIABLE _STM-SOURCE-UI-ENABLED
 : _STM-BEGIN-SOURCE-PAGE  ( -- )
     _STM-SOURCE-CAN-ADD? 0= IF EXIT THEN
     _STM-PM-SOURCE-PAGE S" HTTPS page URL:" 0 0
+        _STM-SHOW-PROMPT ;
+
+: _STM-BEGIN-SOURCE-ATPROTO  ( -- )
+    _STM-SOURCE-CAN-ADD? 0= IF EXIT THEN
+    _STM-AUTH-AVAILABLE? 0= IF
+        S" No authenticated AT account is available" 2600 ASHELL-TOAST EXIT
+    THEN
+    _STM-PM-SOURCE-ATPROTO S" Authenticated actor handle or DID:" 0 0
         _STM-SHOW-PROMPT ;
 
 : _STM-SOURCE-TOGGLE  ( -- )
@@ -1812,6 +2075,9 @@ VARIABLE _STM-ACTOR-SET-STATUS
             _STM-SUB-A @ _STM-SUB-U @ SSOURCE-KIND-PAGE
                 _STM-APPLY-SOURCE-CREATE
         ENDOF
+        _STM-PM-SOURCE-ATPROTO OF
+            _STM-SUB-A @ _STM-SUB-U @ _STM-APPLY-AUTH-SOURCE-CREATE
+        ENDOF
         _STM-PM-SOURCE-REMOVE OF
             _STM-SUB-A @ _STM-SUB-U @ _STM-APPLY-SOURCE-REMOVE
         ENDOF
@@ -1852,15 +2118,76 @@ VARIABLE _STM-ACTOR-SET-STATUS
     _STM-PM-ACTOR S" Bluesky handle or DID:"
     _STM-ACTOR@ _STM-SHOW-PROMPT ;
 
-: _STM-REFRESH-ACTION  ( -- )
-    _STM-FEED-READY @
-    _STM-FEED-SOURCE @ _STM-SOURCE-AUTHENTICATED = AND IF
-        S" Authenticated refresh is owned by its PDS connector"
+: _STM-AUTH-REFRESH-START  ( source -- status )
+    _STM-AUTH-AVAILABLE? 0= IF DROP SAUTH-S-UNAVAILABLE EXIT THEN
+    DUP _STM-AUTH-SOURCE? 0= IF DROP SAUTH-S-INVALID EXIT THEN
+    DUP _STM-AUTH-PROVIDER @ SAUTH-SOURCE-SUPPORTED? 0= IF
+        DROP SAUTH-S-INVALID EXIT
+    THEN
+    _STM-AUTH-ACTIVE? IF DROP SAUTH-S-BUSY EXIT THEN
+    _STM-AUTH-OP-FEED _STM-AUTH-OP-KIND !
+    0 _STM-AUTH-PUBLISH-DRAFT-REVISION !
+    _STM-CURRENT-INSTANCE @ _STM-AUTH-PROVIDER @ SAUTH-REFRESH ;
+
+: _STM-AUTH-REFRESH-RESULT  ( status -- )
+    DUP SAUTH-S-OK = IF
+        DROP
+        _STM-AUTH-OP-FEED _STM-AUTH-OP-KIND !
+        0 _STM-AUTH-PUBLISH-DRAFT-REVISION !
+        _STM-REFRESH-AUTHENTICATED _STM-REFRESH-TARGET !
+        _STM-OWNER-TOUCH _STM-INVALIDATE
+        S" Authenticated feed refresh accepted" 2400 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-UNAVAILABLE = IF
+        DROP S" Authenticated account is offline" 2400 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-BUSY = IF
+        DROP S" Authenticated account or external I/O is busy"
         2600 ASHELL-TOAST EXIT
     THEN
+    DUP SAUTH-S-INVALID = IF
+        DROP S" Authenticated source revision or account binding was rejected"
+        3000 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-CAPACITY = IF
+        DROP S" Authenticated refresh ran out of bounded capacity"
+        2800 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-CLEANUP = IF
+        DROP _STM-INVALIDATE
+        S" Authenticated cleanup failed; no new feed was presented"
+        3000 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-STATE = IF
+        DROP S" Authenticated provider is not ready for a feed refresh"
+        2800 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-POST = IF
+        DROP S" Finish the authenticated publication before refreshing"
+        2800 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-FEED = IF
+        DROP S" Authenticated feed operation was rejected"
+        2600 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-INDETERMINATE = IF
+        DROP _STM-INVALIDATE
+        S" Authenticated refresh start is indeterminate; no new feed was presented"
+        3200 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-CANCELLED = IF
+        DROP _STM-INVALIDATE
+        S" Authenticated refresh was cancelled before presentation"
+        2800 ASHELL-TOAST EXIT
+    THEN
+    DROP _STM-INVALIDATE
+    S" Authenticated feed refresh could not start" 2600 ASHELL-TOAST ;
+
+: _STM-PUBLIC-REFRESH-ACTION  ( -- )
     _STM-REFRESH-START
     DUP CBUS-S-OK = IF
-        DROP S" Public feed refresh started" 2400 ASHELL-TOAST EXIT
+        DROP _STM-REFRESH-PUBLIC _STM-REFRESH-TARGET !
+        S" Public feed refresh started" 2400 ASHELL-TOAST EXIT
     THEN
     DUP CBUS-S-NOT-FOUND = IF
         DROP S" Public feeds require the Desk external-I/O service"
@@ -1875,6 +2202,16 @@ VARIABLE _STM-ACTOR-SET-STATUS
         S" Public feed refresh could not start"
     THEN
     2400 ASHELL-TOAST ;
+
+: _STM-REFRESH-ACTION  ( -- )
+    _STM-REFRESH-TARGET @ _STM-REFRESH-AUTHENTICATED = IF
+        _STM-AUTH-CURRENT-SOURCE DUP 0= IF
+            DROP S" The retained authenticated source revision is no longer current"
+            3000 ASHELL-TOAST EXIT
+        THEN
+        _STM-AUTH-REFRESH-START _STM-AUTH-REFRESH-RESULT EXIT
+    THEN
+    _STM-PUBLIC-REFRESH-ACTION ;
 
 VARIABLE _STM-SOURCE-REFRESH-BEFORE
 VARIABLE _STM-SOURCE-REFRESH-STATUS
@@ -1900,6 +2237,9 @@ VARIABLE _STM-SOURCE-REFRESH-STATUS
     _STM-SOURCE-SELECTED@ DUP 0= IF
         DROP S" No source is selected" 1800 ASHELL-TOAST EXIT
     THEN
+    DUP _STM-AUTH-SOURCE? IF
+        _STM-AUTH-REFRESH-START _STM-AUTH-REFRESH-RESULT EXIT
+    THEN
     DUP STREAMS-REFRESH-SOURCE-SUPPORTED? 0= IF
         DROP S" Only enabled syndication sources can be refreshed"
         2800 ASHELL-TOAST EXIT
@@ -1924,6 +2264,91 @@ VARIABLE _STM-SOURCE-REFRESH-STATUS
         2800 ASHELL-TOAST EXIT
     THEN
     DROP S" Syndication refresh could not start" 2400 ASHELL-TOAST ;
+
+VARIABLE _STM-AUTH-ACTION-SOURCE
+
+: _STM-AUTH-PUBLISH-RESULT  ( status -- )
+    DUP SAUTH-S-OK = IF
+        DROP
+        _STM-AUTH-OP-POST _STM-AUTH-OP-KIND !
+        _STM-DRAFT-REV @ _STM-AUTH-PUBLISH-DRAFT-REVISION !
+        _STM-OWNER-TOUCH _STM-INVALIDATE
+        S" Publication accepted; waiting for the repository outcome"
+        2800 ASHELL-TOAST EXIT
+    THEN
+    _STM-AUTH-OP-NONE _STM-AUTH-OP-KIND !
+    0 _STM-AUTH-PUBLISH-DRAFT-REVISION !
+    DUP SAUTH-S-UNAVAILABLE = IF
+        DROP S" Authenticated account is offline" 2400 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-BUSY = IF
+        DROP S" Authenticated account or external I/O is busy"
+        2600 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-INVALID = IF
+        DROP S" Draft, source revision, or account binding was rejected"
+        2800 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-CAPACITY = IF
+        DROP S" Publication ran out of bounded capacity"
+        2600 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-CLEANUP = IF
+        DROP _STM-INVALIDATE
+        S" Publication cleanup failed; success was not reported"
+        3000 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-STATE = IF
+        DROP S" Authenticated provider is not ready to publish"
+        2600 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-FEED = IF
+        DROP S" Finish the authenticated feed refresh before publishing"
+        2800 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-POST = IF
+        DROP S" Authenticated publication was rejected"
+        2600 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-INDETERMINATE = IF
+        DROP _STM-INVALIDATE
+        S" Publication start is indeterminate; check account state before retrying"
+        3400 ASHELL-TOAST EXIT
+    THEN
+    DUP SAUTH-S-CANCELLED = IF
+        DROP _STM-INVALIDATE
+        S" Publication was cancelled before delivery"
+        2800 ASHELL-TOAST EXIT
+    THEN
+    DROP _STM-INVALIDATE
+    S" Publication could not start" 2400 ASHELL-TOAST ;
+
+: _STM-PUBLISH-ACTION  ( -- )
+    _STM-DRAFT-REV @ 0= _STM-DRAFT-U @ 0= OR IF
+        S" Create a non-empty local draft before publishing"
+        2600 ASHELL-TOAST EXIT
+    THEN
+    _STM-AUTH-AVAILABLE? 0= IF
+        S" No authenticated AT account is available" 2600 ASHELL-TOAST EXIT
+    THEN
+    _STM-AUTH-CURRENT-SOURCE DUP 0= IF
+        DROP S" Refresh a current authenticated source before publishing"
+        2800 ASHELL-TOAST EXIT
+    THEN
+    DUP _STM-AUTH-PROVIDER @ SAUTH-SOURCE-SUPPORTED? 0= IF
+        DROP S" The authenticated source is disabled, stale, or belongs to another account"
+        3200 ASHELL-TOAST EXIT
+    THEN
+    _STM-AUTH-ACTIVE? IF
+        DROP S" Finish the active authenticated operation before publishing"
+        3000 ASHELL-TOAST EXIT
+    THEN
+    _STM-AUTH-ACTION-SOURCE !
+    _STM-AUTH-OP-POST _STM-AUTH-OP-KIND !
+    _STM-DRAFT-REV @ _STM-AUTH-PUBLISH-DRAFT-REVISION !
+    _STM-DRAFT-BUF _STM-DRAFT-U @ _STM-AUTH-ACTION-SOURCE @
+    _STM-CURRENT-INSTANCE @ _STM-AUTH-PROVIDER @ SAUTH-PUBLISH
+    _STM-AUTH-PUBLISH-RESULT ;
 
 : _STM-PANEL-HANDLE  ( event widget -- consumed? )
     DROP
@@ -1951,6 +2376,8 @@ VARIABLE _STM-SOURCE-REFRESH-STATUS
                     [CHAR] F OF _STM-BEGIN-SOURCE-SYNDICATION -1 EXIT ENDOF
                     [CHAR] p OF _STM-BEGIN-SOURCE-PAGE -1 EXIT ENDOF
                     [CHAR] P OF _STM-BEGIN-SOURCE-PAGE -1 EXIT ENDOF
+                    [CHAR] b OF _STM-BEGIN-SOURCE-ATPROTO -1 EXIT ENDOF
+                    [CHAR] B OF _STM-BEGIN-SOURCE-ATPROTO -1 EXIT ENDOF
                     [CHAR] e OF _STM-SOURCE-TOGGLE -1 EXIT ENDOF
                     [CHAR] E OF _STM-SOURCE-TOGGLE -1 EXIT ENDOF
                     [CHAR] r OF _STM-SOURCE-REFRESH-ACTION -1 EXIT ENDOF
@@ -1969,10 +2396,13 @@ VARIABLE _STM-SOURCE-REFRESH-STATUS
                     [CHAR] A OF _STM-BEGIN-ACTOR -1 EXIT ENDOF
                     [CHAR] r OF _STM-REFRESH-ACTION -1 EXIT ENDOF
                     [CHAR] R OF _STM-REFRESH-ACTION -1 EXIT ENDOF
+                    [CHAR] p OF _STM-PUBLISH-ACTION -1 EXIT ENDOF
+                    [CHAR] P OF _STM-PUBLISH-ACTION -1 EXIT ENDOF
                     [CHAR] s OF _STM-OPEN-SOURCES -1 EXIT ENDOF
                     [CHAR] S OF _STM-OPEN-SOURCES -1 EXIT ENDOF
                 ENDCASE
             THEN
+            0 EXIT
         THEN
     THEN DROP 0 ;
 
@@ -1986,14 +2416,16 @@ VARIABLE _STM-SOURCE-REFRESH-STATUS
 : _STM-DO-SOURCE-SYNDICATION  ( elem -- )
     DROP _STM-BEGIN-SOURCE-SYNDICATION ;
 : _STM-DO-SOURCE-PAGE  ( elem -- ) DROP _STM-BEGIN-SOURCE-PAGE ;
+: _STM-DO-SOURCE-ATPROTO  ( elem -- ) DROP _STM-BEGIN-SOURCE-ATPROTO ;
 : _STM-DO-SOURCE-REFRESH  ( elem -- ) DROP _STM-SOURCE-REFRESH-ACTION ;
 : _STM-DO-SOURCE-TOGGLE  ( elem -- ) DROP _STM-SOURCE-TOGGLE ;
 : _STM-DO-SOURCE-REMOVE  ( elem -- ) DROP _STM-BEGIN-SOURCE-REMOVE ;
 : _STM-DO-THREAD  ( elem -- ) DROP _STM-OPEN-THREAD ;
 : _STM-DO-SEARCH  ( elem -- ) DROP _STM-BEGIN-SEARCH ;
 : _STM-DO-COMPOSE  ( elem -- ) DROP _STM-BEGIN-DRAFT ;
+: _STM-DO-PUBLISH  ( elem -- ) DROP _STM-PUBLISH-ACTION ;
 : _STM-DO-ACTOR  ( elem -- ) DROP _STM-BEGIN-ACTOR ;
-: _STM-DO-REFRESH  ( elem -- ) DROP _STM-REFRESH-ACTION ;
+: _STM-DO-REFRESH  ( elem -- ) DROP _STM-PUBLIC-REFRESH-ACTION ;
 : _STM-DO-ABOUT  ( elem -- )
     DROP S" Streams - bounded source, reading, and draft workbench"
     2600 ASHELL-TOAST ;
@@ -2040,6 +2472,71 @@ VARIABLE _STM-CONFIGURED-INIT-SERVICE
         _STM-CONFIGURED-FACTORY-XT @ _STM-CONFIGURED-REFRESH
         STREAMS-REFRESH-OWNER-INIT
     DUP _STM-CONFIGURED-INIT-STATUS ! ;
+
+VARIABLE _STM-AUTH-INIT-CANDIDATE
+VARIABLE _STM-AUTH-QUIESCE-CHANGED
+VARIABLE _STM-AUTH-QUIESCE-STATUS
+
+: _STM-AUTH-CANCEL-ACCEPTABLE?  ( status -- flag )
+    DUP SAUTH-S-OK =
+    OVER SAUTH-S-CANCELLED = OR
+    OVER SAUTH-S-INDETERMINATE = OR
+    SWAP SAUTH-S-POST = OR ;
+
+: _STM-AUTH-INIT  ( -- status )
+    0 _STM-AUTH-PROVIDER ! 0 _STM-AUTH-INIT-CANDIDATE !
+    SAUTH-S-UNAVAILABLE _STM-AUTH-INIT-STATUS !
+    _STM-AUTH-FACTORY-XT @ DUP 0= IF
+        DROP _STM-AUTH-INIT-STATUS @ EXIT
+    THEN DROP
+    VFS-CUR
+    _STM-XIO-SERVICE @ DUP 0= IF
+        DROP S" org.akashic.net.external-io"
+            _STM-CURRENT-INSTANCE @ CINST-SERVICE
+            DUP _STM-XIO-SERVICE !
+    THEN
+    _STM-AUTH-FACTORY-XT @ EXECUTE
+    _STM-AUTH-INIT-STATUS ! _STM-AUTH-INIT-CANDIDATE !
+    _STM-AUTH-INIT-STATUS @ SAUTH-S-OK = IF
+        _STM-AUTH-INIT-CANDIDATE @ SAUTH-VALID? IF
+            _STM-AUTH-INIT-CANDIDATE @ _STM-AUTH-PROVIDER !
+            _STM-AUTH-INIT-STATUS @ EXIT
+        THEN
+        SAUTH-S-INVALID _STM-AUTH-INIT-STATUS !
+    THEN
+    _STM-AUTH-INIT-CANDIDATE @ SAUTH-VALID? IF
+        _STM-AUTH-INIT-CANDIDATE @ SAUTH-RELEASE SAUTH-S-OK <> IF
+            _STM-AUTH-INIT-CANDIDATE @ _STM-AUTH-PROVIDER !
+            SAUTH-S-CLEANUP _STM-AUTH-INIT-STATUS !
+        THEN
+    THEN
+    _STM-AUTH-INIT-STATUS @ ;
+
+: _STM-AUTH-QUIESCE?  ( -- ready? )
+    0 _STM-AUTH-QUIESCE-CHANGED !
+    SAUTH-S-OK _STM-AUTH-QUIESCE-STATUS !
+    _STM-AUTH-PROVIDER @ DUP 0= IF DROP -1 EXIT THEN
+    DUP SAUTH-VALID? 0= IF DROP 0 EXIT THEN
+    DUP SAUTH-RELEASABLE? IF DROP -1 EXIT THEN
+    DROP
+    _STM-OWNER-INSTANCE @ DUP 0= IF DROP 0 EXIT THEN
+    _STM-AUTH-PROVIDER @ SAUTH-CANCEL
+    _STM-AUTH-QUIESCE-STATUS ! _STM-AUTH-QUIESCE-CHANGED !
+    _STM-AUTH-QUIESCE-STATUS @ _STM-AUTH-CANCEL-ACCEPTABLE?
+    _STM-AUTH-PROVIDER @ SAUTH-RELEASABLE? AND ;
+
+: _STM-AUTH-RELEASE  ( -- detached? )
+    _STM-AUTH-PROVIDER @ DUP 0= IF DROP -1 EXIT THEN
+    DUP SAUTH-VALID? 0= IF DROP 0 EXIT THEN
+    DUP SAUTH-RELEASABLE? 0= IF
+        DROP _STM-AUTH-QUIESCE? 0= IF 0 EXIT THEN
+    ELSE
+        DROP
+    THEN
+    _STM-AUTH-PROVIDER @ SAUTH-RELEASE SAUTH-S-OK = DUP IF
+        0 _STM-AUTH-PROVIDER !
+        SAUTH-S-UNAVAILABLE _STM-AUTH-INIT-STATUS !
+    THEN ;
 
 : _STM-CONFIGURED-RELEASE  ( -- detached? )
     _STM-CONFIGURED-REFRESH STREAMS-REFRESH-OWNER-VALID? 0= IF -1 EXIT THEN
@@ -2104,6 +2601,10 @@ VARIABLE _STM-FINI-PREV-STATE
     _STM-FINI-STATE !
     _STM-CURRENT-STATE @ _STM-FINI-PREV-STATE !
     _STM-FINI-STATE @ _STM-CURRENT-STATE !
+    _STM-AUTH-RELEASE 0= IF
+        _STM-FINI-PREV-STATE @ _STM-CURRENT-STATE !
+        _STM-E-CLEANUP THROW
+    THEN
     _STM-CONFIGURED-RELEASE 0= IF
         _STM-FINI-PREV-STATE @ _STM-CURRENT-STATE !
         _STM-E-CLEANUP THROW
@@ -2330,6 +2831,10 @@ VARIABLE _STM-TERMINAL-STATE
 
 : STREAMS-INIT-CB  ( instance -- )
     _STM-ACTIVATE
+    _STM-CURRENT-INSTANCE @ _STM-OWNER-INSTANCE !
+    _STM-AUTH-OP-NONE _STM-AUTH-OP-KIND !
+    0 _STM-AUTH-PUBLISH-DRAFT-REVISION !
+    _STM-REFRESH-PUBLIC _STM-REFRESH-TARGET !
     0 _STM-PANEL-RGN ! 0 _STM-PROMPT ! 0 _STM-PROMPT-RGN !
     _STM-PM-NONE _STM-PROMPT-MODE !
     _STM-V-TIMELINE _STM-VIEW !
@@ -2345,6 +2850,7 @@ VARIABLE _STM-TERMINAL-STATE
     _STM-FEED BFM-FEED-INIT
     _STM-LIVE-INIT
     _STM-CONFIGURED-INIT DROP
+    _STM-AUTH-INIT DROP
     S" streams-body" UTUI-BY-ID _STM-E-BODY !
     S" sbar" UTUI-BY-ID _STM-E-SBAR !
     S" sbar-account" UTUI-BY-ID _STM-E-SBAR-ACCOUNT !
@@ -2367,12 +2873,14 @@ VARIABLE _STM-TERMINAL-STATE
     S" sources" ['] _STM-DO-SOURCES UTUI-DO!
     S" source-add-feed" ['] _STM-DO-SOURCE-SYNDICATION UTUI-DO!
     S" source-add-page" ['] _STM-DO-SOURCE-PAGE UTUI-DO!
+    S" source-add-atproto" ['] _STM-DO-SOURCE-ATPROTO UTUI-DO!
     S" source-refresh" ['] _STM-DO-SOURCE-REFRESH UTUI-DO!
     S" source-toggle" ['] _STM-DO-SOURCE-TOGGLE UTUI-DO!
     S" source-remove" ['] _STM-DO-SOURCE-REMOVE UTUI-DO!
     S" thread" ['] _STM-DO-THREAD UTUI-DO!
     S" search" ['] _STM-DO-SEARCH UTUI-DO!
     S" compose" ['] _STM-DO-COMPOSE UTUI-DO!
+    S" publish" ['] _STM-DO-PUBLISH UTUI-DO!
     S" actor" ['] _STM-DO-ACTOR UTUI-DO!
     S" refresh" ['] _STM-DO-REFRESH UTUI-DO!
     S" about" ['] _STM-DO-ABOUT UTUI-DO!
@@ -2395,6 +2903,7 @@ VARIABLE _STM-TERMINAL-STATE
     _STM-PROMPT @ WDG-DRAW ;
 VARIABLE _STM-CONFIGURED-TICK-CHANGED
 VARIABLE _STM-CONFIGURED-TICK-STATUS
+VARIABLE _STM-AUTH-TICK-CHANGED
 
 : _STM-CONFIGURED-CURRENT-SOURCE  ( -- source|0 )
     _STM-CONFIGURED-REFRESH STREAMS-REFRESH-OWNER-VALID? 0= IF 0 EXIT THEN
@@ -2413,8 +2922,17 @@ VARIABLE _STM-CONFIGURED-TICK-STATUS
         _STM-OWNER-TOUCH _STM-INVALIDATE
     THEN ;
 
+: _STM-AUTH-TICK  ( -- )
+    _STM-AUTH-AVAILABLE? 0= IF EXIT THEN
+    _STM-CURRENT-INSTANCE @ _STM-AUTH-PROVIDER @ SAUTH-TICK
+    _STM-AUTH-TICK-STATUS ! _STM-AUTH-TICK-CHANGED !
+    _STM-AUTH-TICK-CHANGED @ IF
+        _STM-OWNER-TOUCH _STM-INVALIDATE
+    THEN ;
+
 : STREAMS-TICK-CB  ( instance -- )
-    _STM-ACTIVATE _STM-CONFIGURED-TICK _STM-LIVE-CONSUME-TERMINAL ;
+    _STM-ACTIVATE
+    _STM-AUTH-TICK _STM-CONFIGURED-TICK _STM-LIVE-CONSUME-TERMINAL ;
 
 : STREAMS-REQUEST-CLOSE-CB  ( reason instance -- decision )
     SWAP DROP _STM-ACTIVATE
@@ -2424,6 +2942,13 @@ VARIABLE _STM-CONFIGURED-TICK-STATUS
             2400 ASHELL-TOAST APP-CLOSE-D-CANCEL EXIT
         THEN
     THEN
+    _STM-AUTH-QUIESCE? 0= IF
+        S" Authenticated work could not detach safely; close was cancelled"
+        3000 ASHELL-TOAST APP-CLOSE-D-CANCEL EXIT
+    THEN
+    _STM-AUTH-QUIESCE-CHANGED @ IF
+        _STM-OWNER-TOUCH _STM-INVALIDATE
+    THEN
     APP-CLOSE-D-ALLOW ;
 
 VARIABLE _STM-SHUTDOWN-LIVE-OK
@@ -2431,6 +2956,7 @@ VARIABLE _STM-SHUTDOWN-CONFIGURED-OK
 
 : STREAMS-SHUTDOWN-CB  ( instance -- )
     _STM-ACTIVATE
+    _STM-AUTH-RELEASE 0= IF _STM-E-CLEANUP THROW THEN
     _STM-CONFIGURED-RELEASE _STM-SHUTDOWN-CONFIGURED-OK !
     _STM-LIVE-RELEASE _STM-SHUTDOWN-LIVE-OK !
     _STM-E-BODY @ ?DUP IF 0 SWAP UTUI-WIDGET-SET THEN
@@ -2591,6 +3117,9 @@ VARIABLE _STM-CV-SOURCE-VALUE
         SSOURCE-KIND-PAGE OF S" page" ENDOF
         SSOURCE-KIND-NOTIFICATION OF S" notification" ENDOF
         SSOURCE-KIND-BLUESKY-PUBLIC OF S" bluesky-public" ENDOF
+        SSOURCE-KIND-ATPROTO-AUTHENTICATED OF
+            S" atproto-authenticated"
+        ENDOF
         S" unknown" ROT
     ENDCASE ;
 

@@ -115,7 +115,7 @@
       "uidl_surface": {
         "path": "akashic/tui/applets/streams/streams.uidl",
         "menus": ["File", "Feed", "Sources", "Post", "Help"],
-        "actions": ["about", "actor", "compose", "quit", "refresh", "search", "source-add-feed", "source-add-page", "source-refresh", "source-remove", "source-toggle", "sources", "thread", "timeline"],
+        "actions": ["about", "actor", "compose", "publish", "quit", "refresh", "search", "source-add-atproto", "source-add-feed", "source-add-page", "source-refresh", "source-remove", "source-toggle", "sources", "thread", "timeline"],
         "shortcuts": {"compose": "Ctrl+N", "quit": "Ctrl+Q", "search": "Ctrl+F", "sources": "Ctrl+S", "thread": "Ctrl+T", "timeline": "Ctrl+L"},
         "element_ids": ["mbar", "sbar", "sbar-account", "sbar-state", "sbar-view", "streams-body"]
       },
@@ -123,8 +123,8 @@
         {
           "path": "akashic/tui/applets/streams/streams.f",
           "word": "_STM-PANEL-HANDLE",
-          "sha256": "64f95c51fb8eb8fc48f76f6fa197904f26a885d32b192fc6e69219113f64153e",
-          "bindings": ["Up -> previous row", "Down -> next row", "Enter in Sources -> toggle source", "Enter outside Sources -> open thread", "Escape -> timeline", "f/F in Sources -> add syndication source", "p/P in Sources -> add watched page", "e/E in Sources -> toggle source", "r/R in Sources -> refresh source", "d/D in Sources -> remove source", "t/T outside Sources -> open thread", "/ outside Sources -> search", "c/C outside Sources -> create draft", "a/A outside Sources -> set public actor", "r/R outside Sources -> refresh public feed", "s/S outside Sources -> source manager"]
+          "sha256": "746d23a9e1fe297165cc5c94c76ea23893cae25091180664520fe76b0f98e385",
+          "bindings": ["Up -> previous row", "Down -> next row", "Enter in Sources -> toggle source", "Enter outside Sources -> open thread", "Escape -> timeline", "f/F in Sources -> add syndication source", "p/P in Sources -> add watched page", "b/B in Sources -> add authenticated AT source", "e/E in Sources -> toggle source", "r/R in Sources -> refresh source", "d/D in Sources -> remove source", "t/T outside Sources -> open thread", "/ outside Sources -> search", "c/C outside Sources -> create draft", "a/A outside Sources -> set public actor", "r/R outside Sources -> refresh selected timeline route", "p/P outside Sources -> publish draft", "s/S outside Sources -> source manager"]
         }
       ],
       "capability_surface": {"path": "akashic/tui/applets/streams/streams.f", "literal_prefix": "streams.", "ids": ["streams.draft.create", "streams.draft.current", "streams.draft.read", "streams.draft.replace", "streams.draft.validate", "streams.feed.read", "streams.feed.refresh", "streams.item.read", "streams.search.local", "streams.selection.current", "streams.source.query", "streams.source.read", "streams.source.refresh", "streams.source.set-enabled", "streams.thread.read"]},
@@ -135,7 +135,7 @@
         },
         {
           "path": "akashic/tui/applets/streams/streams-online.f",
-          "required_literals": ["STREAMS-ONLINE-ENTRY", "STREAMS-ONLINE-ENTRY-WITH-CONFIGURED"]
+          "required_literals": ["STREAMS-ONLINE-ENTRY", "STREAMS-ONLINE-ENTRY-WITH-CONFIGURED", "STREAMS-ONLINE-ENTRY-WITH-PROVIDERS"]
         }
       ],
       "behaviors": [
@@ -144,8 +144,8 @@
           "coverage": "partial",
           "prerequisite_ids": ["streams.prerelease-replacement"],
           "facets": ["actions", "journeys"],
-          "preserve": ["Timeline, retained search and partial-thread navigation", "Local draft create, read, edit, validate and cancel without implicit publication", "Source manager creation, independent selection, enable/disable, exact confirmed removal and manual refresh"],
-          "evidence": ["profile:streams", "profile:streams-contracts", "profile:streams-source-ui-contracts", "profile:desktop-streams"]
+          "preserve": ["Timeline, retained search and partial-thread navigation", "Local draft create, read, edit, validate and cancel without implicit publication; explicit authenticated publication retains truthful delivered, no-effect, or uncertain outcome", "Source manager creation, independent selection, enable/disable, exact confirmed removal and public, configured, or authenticated manual refresh"],
+          "evidence": ["profile:streams", "profile:streams-contracts", "profile:streams-source-ui-contracts", "profile:desktop-streams", "driver:local_testing/test_streams_authenticated_applet.py"]
         },
         {
           "id": "streams.capabilities-and-providers",
