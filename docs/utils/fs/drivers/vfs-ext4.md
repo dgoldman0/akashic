@@ -1,10 +1,12 @@
 # akashic-vfs-ext4 — checksummed read-only ext4 binding
 
-This VFS ABI 1 binding reads clean filesystems in the pinned
-`akashic-ext4-rw-v1` profile from one explicit KDOS volume. It never uses the
-ambient filesystem volume and has no write fallback: all media access goes
-through checked `VOL-READ` calls relative to the supplied `VOL-RAW` or
-`VOL-SLICE` object.
+This VFS ABI 1 binding reads filesystems in the pinned
+`akashic-ext4-rw-v1` profile from one explicit KDOS volume. It also implements
+a bounded mount-time recovery slice for an internal checksum-v3 JBD2 journal.
+It never uses the ambient filesystem volume: reads and the narrowly scoped
+recovery writes go through checked volume operations relative to the supplied
+`VOL-RAW` or `VOL-SLICE` object. The published binding remains read-only and
+has no user-visible mutation fallback.
 
 ```forth
 REQUIRE utils/fs/drivers/vfs-ext4.f
@@ -39,16 +41,28 @@ Before setting its private ready marker or publishing inode 2 as the VFS
 root, mount verifies:
 
 - the unchanged volume cookie/generation and 512-byte logical sector size;
-- reflected raw CRC32C for the primary superblock and its UUID-derived seed;
+- reflected raw CRC32C for the primary superblock and its UUID-derived seed,
+  except for the narrowly authenticated torn-clear state described below;
 - the pinned 1/2/4 KiB geometry, 64-byte descriptors, 128/256-byte inode
-  forms, flex size, feature policy, clean state, and all volume bounds;
+  forms, flex size, feature policy, admitted clean/recovery state, and all
+  volume bounds;
 - every primary group descriptor and every initialized block/inode bitmap
   checksum, while honoring the admitted uninitialized-group flags;
 - every sparse-super backup copy and its invariant geometry, features, UUID,
   group number, and checksum, plus every backup GDT descriptor CRC and
   immutable metadata location;
 - allocation and checksum of each consumed inode;
-- the clean internal 4 MiB JBD2 journal superblock and matching UUID; and
+- the internal JBD2 journal superblock, size-derived inode map, and matching
+  UUID. The inode size must be a nonzero whole number of filesystem blocks,
+  fit JBD2's 32-bit `s_maxlen`, and not exceed the filesystem block count.
+  Mount allocates an exact map plus a half-full power-of-two uniqueness table
+  from the caller's arena; arena exhaustion returns `VFS-E-NOMEM` rather than
+  imposing a journal-size constant. Every mount materializes the complete
+  extent or legacy map in one EOF-bounded tree walk and rejects holes,
+  mappings beyond EOF, out-of-range or aliased data blocks, and aliases
+  between journal data and its own extent/indirect metadata. A separately
+  arena-sized ownership hash also prevents replay home tags from targeting
+  those map-metadata blocks; and
 - every clean orphan-file block, including its per-block CRC32C tail (the
   bounded reader currently admits one through 4096 blocks).
 
@@ -57,10 +71,75 @@ The driver contains its own reflected CRC32C implementation. Akashic's public
 ext4 checksum contract.
 
 Known refused feature bits return format-domain `VFS-R-UNSUPPORTED` with
-`EXT4-D-FEATURE`. `RECOVER`, `ORPHAN_PRESENT`, a dirty state, or a legacy
-orphan chain returns the distinct `EXT4-D-RECOVERY` refusal. Checksum and
-structural failures return format-domain `VFS-R-CORRUPT`. No such failure can
-leave a mounted or ready object.
+`EXT4-D-FEATURE`. `ORPHAN_PRESENT`, a nonzero legacy orphan chain, a dirty
+state without `RECOVER`, or a recovery state outside the implemented JBD2
+slice returns a stable refusal. Checksum and structural failures return
+format-domain `VFS-R-CORRUPT`. No such failure can leave a mounted or ready
+object.
+
+## Bounded mount recovery
+
+The implemented recovery slice admits an internal journal with the exact
+`64bit | checksum_v3` incompatibility mask (`0x12`) and JBD2 CRC32C type 4.
+It validates the complete journal inode map, descriptor blocks, 64-bit tags,
+tagged payloads, escaped payload handling, commit blocks, sequence progression,
+and checksums in a non-mutating pass. It then replays only the committed prefix
+in a second pass. With an ordinary usable primary, the immutable physical map
+used by both passes is populated after the JBD2 geometry is authenticated,
+using workspace derived from the journal inode length and bounded by the VFS
+arena. Torn-primary bootstrap must materialize that inode-derived map first to
+read the one named anchor; the filesystem bound, 32-bit length bound, complete
+inode-tree validation, and metadata ownership checks still precede that read.
+Tree validation rejects nonzero mappings beyond the inode length, so neither
+validation nor materialization can be driven through an attached tree past
+journal EOF. The one-pass mapper does not revalidate an entire extent
+allocation range once per logical block. A structurally valid
+incomplete tail identified by the next
+header or sequence discontinuity is discarded. Preflight also treats a
+matching-sequence `SUPER_V2` header as the known prefix-torn anchor boundary
+only when the complete block passes the anchor checksum, geometry, witness,
+and self-location checks; replay never admits it as a transaction record. A
+checksum-damaged descriptor, payload, or commit is currently refused rather
+than classified as a torn tail. Revoke records and orphan recovery are not yet
+admitted.
+
+Recovery requires a physically writable, flush-capable volume. Home writes are
+flushed and the resulting filesystem is strictly revalidated before journal
+authority changes. At the first noncommitted journal slot, the driver first
+writes and flushes the complete intended reset image with byte zero invalid.
+It then restores byte zero, writes and flushes the valid recovery anchor, resets
+the primary journal superblock and flushes again, and finally clears ext4
+`RECOVER` and flushes the primary ext4 superblock. The preseed and valid anchor
+differ in only byte zero, so a prefix tear cannot combine a new JBD2 header
+with stale cursor contents. Once the ext4 clear is durable, the driver removes
+the private witness from journal block 0, flushes, zeros the anchor slot, and
+flushes once more. Failed recovery leaves the VFS in `VFS-L-NEW`; a later mount
+can retry idempotently when the required witness survived.
+
+The anchor uses JBD2 superblock padding at offsets `0x5c..0x6f` for an `AKR1`
+marker, the intended ext4-superblock checksum and complement, and the anchor
+logical block and complement. The ordinary JBD2 `s_head` field at `0x58` is
+preserved as a standard field and set to that first-unused slot. Both the
+anchor and transitional primary copy carry valid JBD2 superblock CRCs. A torn
+primary may select only the exact anchor named by an intact marker, complement,
+and `s_head` tuple; the driver never scans for arbitrary historical anchors.
+Before mutating any intact-witness state, it also validates that exact anchor
+and requires the checksummed 1024-byte JBD2 superblocks to match. If only the
+padding of a larger filesystem block differs, the primary is treated as torn:
+the anchor is copied back and flushed before the ext4 clear. Thus every state
+that reaches witness removal has complete-block equality.
+
+A witness-removal tear is repairable only after the ext4 superblock is
+independently checksum-valid and clean. The raw primary must be exactly one
+sequential-write prefix of the standard zero-witness block followed by the
+unchanged suffix of the validated anchor, across the complete filesystem
+block. The driver rereads both blocks and repeats that proof immediately before
+it writes the standard form directly, flushes it, and retires the exact anchor.
+A damaged locator or any other mixture fails closed; there is no fallback scan.
+As with the rest of mount validation, this assumes exclusive ownership against
+concurrent raw-media mutation. Successful landing leaves no private recovery
+authority. External Linux/e2fsprogs mutation and broader hardware power-cut
+qualification of the transient convention remain release gates.
 
 ## Read-only inspection
 
@@ -107,7 +186,8 @@ read for the hole. `SYNCFS` and `FSYNC` are safe no-ops.
 
 `EXT4-BINDING` has `VFS-BF-NEEDS-VOLUME`, `VFS-BF-READ-ONLY`, and
 `VFS-BF-STABLE-IDS`. The VFS rejects all mutation before binding dispatch.
-There are no `VOL-WRITE` or `VOL-FLUSH` paths in this module.
+`VOL-WRITE` and `VOL-FLUSH` are used only by the mount-time recovery protocol
+above; they are not exposed as writable VFS capabilities.
 
 ## Deliberate remaining limits
 
@@ -120,13 +200,20 @@ writable profile. The remaining boundaries are:
 - the real external-tool extent fixture has depth 1 even though the reader
   validates and traverses the profile limit through depth 5;
 - the real special-inode fixture covers FIFO, character, and block devices,
-  but not a socket inode; and
-- journal replay, legacy/modern orphan recovery, and every mutation operation
-  remain unimplemented. Images requiring recovery are still refused before
-  mount publication.
+  but not a socket inode;
+- replay currently requires checksum-v3/64-bit journal records, refuses every
+  revoke record, and fails closed on checksum-damaged incomplete tails;
+- a primary tear with no intact locator fails closed unless the ext4
+  superblock is independently clean and the complete primary block proves the
+  exact sequential witness-removal prefix described above;
+- legacy and modern orphan recovery and every user-visible mutation operation
+  remain unimplemented; and
+- recovery-anchor interoperability and the controlled power-cut matrix still
+  require external-tool and emulator qualification.
 
-No write capability will be advertised until replay/recovery, ordered-data
-journaling, external-tool mutation checks, and power-cut qualification land.
+No write capability will be advertised until complete replay/orphan recovery,
+ordered-data journaling, external-tool mutation checks, and power-cut
+qualification land.
 
 ## Public reference
 

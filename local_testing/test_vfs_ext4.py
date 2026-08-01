@@ -7,7 +7,10 @@ import hashlib
 import json
 import mmap
 import os
+import re
+import shutil
 import struct
+import subprocess
 import sys
 from pathlib import Path
 
@@ -19,6 +22,11 @@ if str(LOCAL_TESTING) not in sys.path:
     sys.path.insert(0, str(LOCAL_TESTING))
 
 import test_vfs_fat as fat_harness  # noqa: E402
+import generate_ext4_profile_fixtures as ext4_fixture_generator  # noqa: E402
+from devices import (  # noqa: E402
+    STORAGE_CMD_WRITE,
+    STORAGE_RESULT_MEDIA_FAILURE,
+)
 
 
 EXT4_F = ROOT / "akashic" / "utils" / "fs" / "drivers" / "vfs-ext4.f"
@@ -93,7 +101,7 @@ def build_snapshot():
     bios, memory, cpu_state, ext_memory = fat_harness._snapshot
     system = fat_harness.MegapadSystem(
         ram_size=1024 * 1024,
-        ext_mem_size=16 * (1 << 20),
+        ext_mem_size=fat_harness.VFS_EXT_MEM_SIZE,
         storage_image=fat_harness._boot_img_path,
     )
     uart = fat_harness.capture_uart(system)
@@ -134,7 +142,7 @@ def run_forth(
     bios, memory, cpu_state, ext_memory = build_snapshot()
     system = fat_harness.MegapadSystem(
         ram_size=1024 * 1024,
-        ext_mem_size=16 * (1 << 20),
+        ext_mem_size=fat_harness.VFS_EXT_MEM_SIZE,
         storage_image=fat_harness._boot_img_path,
     )
     uart = fat_harness.capture_uart(system)
@@ -157,20 +165,21 @@ def run_forth(
         system.storage.write_protected = False
         write_requests = 0
         flush_requests = 0
-        run_write = system.storage._run_write
+        start_dma = system.storage._start_dma
         run_flush = system.storage._run_flush
 
-        def track_write(request):
+        def track_dma(request, phase):
             nonlocal write_requests
-            write_requests += 1
-            return run_write(request)
+            if phase == "write":
+                write_requests += 1
+            return start_dma(request, phase)
 
         def track_flush(request):
             nonlocal flush_requests
             flush_requests += 1
             return run_flush(request)
 
-        system.storage._run_write = track_write
+        system.storage._start_dma = track_dma
         system.storage._run_flush = track_flush
         for fault in storage_faults:
             system.storage.inject_fault(**fault)
@@ -192,6 +201,85 @@ def run_forth(
         assert flush_requests == 0
         _assert_emitted(output, "EXT4-STACK-CLEAN")
         return output
+
+
+def run_recovery_forth(
+    image: Path,
+    backing: Path,
+    lines: list[str],
+    *,
+    patches: tuple[tuple[int, bytes], ...] = (),
+    write_protected: bool = False,
+    storage_faults: tuple[dict, ...] = (),
+    write_faults_by_ordinal: dict[int, dict] | None = None,
+    capture_media: Path | None = None,
+    max_steps: int = 800_000_000,
+) -> tuple[str, tuple[tuple[str, int, int], ...], str]:
+    """Run recovery on private mutable media and return its ordered I/O trace."""
+    bios, memory, cpu_state, ext_memory = build_snapshot()
+    system = fat_harness.MegapadSystem(
+        ram_size=1024 * 1024,
+        ext_mem_size=fat_harness.VFS_EXT_MEM_SIZE,
+        storage_image=fat_harness._boot_img_path,
+    )
+    uart = fat_harness.capture_uart(system)
+    system.load_binary(0, bios)
+    system.boot()
+    for _ in range(5_000_000):
+        if system.cpu.idle and not system.uart.has_rx_data:
+            break
+        system.run_batch(10_000)
+    system.cpu.mem[: len(memory)] = memory
+    system._ext_mem[: len(ext_memory)] = ext_memory
+    fat_harness.restore_cpu_state(system.cpu, cpu_state)
+
+    media = bytearray(image.read_bytes())
+    for offset, data in patches:
+        media[offset : offset + len(data)] = data
+    system.storage._replace_media(media, str(backing))
+    system.storage.write_protected = write_protected
+    trace: list[tuple[str, int, int]] = []
+    start_dma = system.storage._start_dma
+    run_flush = system.storage._run_flush
+    write_ordinal = 0
+
+    def track_dma(request, phase):
+        nonlocal write_ordinal
+        if phase == "write":
+            write_ordinal += 1
+            trace.append(("write", request[1], request[3]))
+            if write_faults_by_ordinal and write_ordinal in write_faults_by_ordinal:
+                system.storage.inject_fault(
+                    **write_faults_by_ordinal[write_ordinal]
+                )
+        return start_dma(request, phase)
+
+    def track_flush(request):
+        trace.append(("flush", 0, 0))
+        return run_flush(request)
+
+    system.storage._start_dma = track_dma
+    system.storage._run_flush = track_flush
+    for fault in storage_faults:
+        system.storage.inject_fault(**fault)
+    uart.clear()
+    stack_check = (
+        'DEPTH DUP 0= IF DROP ." EXT4-STACK-CLEAN" '
+        'ELSE ." EXT4-STACK-LEAK " . THEN'
+    )
+    payload = ("\n".join((*lines, stack_check, "BYE")) + "\n").encode()
+    _feed_until_idle(system, payload, max_steps)
+    output = fat_harness.uart_text(uart)
+    _assert_no_forth_diagnostics(output)
+    if not system.cpu.halted or not output.endswith("Bye!\r\n"):
+        raise AssertionError(
+            "ext4 recovery journey did not consume BYE and halt:\n"
+            + output[-2000:]
+        )
+    _assert_emitted(output, "EXT4-STACK-CLEAN")
+    if capture_media is not None:
+        capture_media.write_bytes(media)
+    return output, tuple(trace), hashlib.sha256(media).hexdigest()
 
 
 def _assert_emitted(output: str, marker: str) -> None:
@@ -235,6 +323,993 @@ def read_side_image() -> Path:
     assert path.stat().st_size == row["image_bytes"]
     assert _sha256(path) == row["expected_sha256"]
     return path
+
+
+@pytest.fixture(scope="session")
+def replay_fixture(
+    canonical_images: dict[str, Path], tmp_path_factory: pytest.TempPathFactory
+) -> dict[str, object]:
+    tool_dir_value = os.environ.get("AKASHIC_E2FSPROGS_TOOL_DIR")
+    if not tool_dir_value:
+        pytest.skip("set AKASHIC_E2FSPROGS_TOOL_DIR for JBD2 recovery tests")
+    debugfs = Path(tool_dir_value).resolve() / "debugfs"
+    if not debugfs.is_file() or not os.access(debugfs, os.X_OK):
+        pytest.skip(f"pinned debugfs is absent: {debugfs}")
+    env = os.environ.copy()
+    env["LANG"] = "C"
+    env["PATH"] = f"{debugfs.parent}:/usr/bin:/bin"
+    version = subprocess.run(
+        [str(debugfs), "-V"],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    banner = version.stdout + version.stderr
+    assert version.returncode == 0
+    assert "debugfs 1.47.4" in banner
+    assert "Using EXT2FS Library version 1.47.4" in banner
+
+    directory = tmp_path_factory.mktemp("ext4-jbd2-replay")
+    image = directory / "replay-csum3-64bit.img"
+    shutil.copyfile(canonical_images["primary-1k-i256"], image)
+    payload = (
+        b"JBD2-AKASHIC-REPLAY\n" + bytes(range(256)) * 4
+    )[:1024].ljust(1024, b"\xa5")
+    payload_path = directory / "home-block.bin"
+    payload_path.write_bytes(payload)
+    commands = directory / "journal.cmd"
+    commands.write_text(
+        "\n".join(
+            (
+                "journal_open -c -v 3",
+                f"journal_write -b 30000 {payload_path}",
+                "journal_close",
+                "close",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    authored = subprocess.run(
+        [str(debugfs), "-w", "-f", str(commands), str(image)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert authored.returncode == 0, authored.stdout + authored.stderr
+    assert "Command not found" not in authored.stdout + authored.stderr
+
+    mapped = subprocess.run(
+        [str(debugfs), "-R", "bmap <8> 0", str(image)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert mapped.returncode == 0, mapped.stdout + mapped.stderr
+    journal_block = int(mapped.stdout.strip().splitlines()[-1])
+    with image.open("rb") as source:
+        source.seek(30000 * 1024)
+        home_before = source.read(1024)
+        source.seek(1024)
+        superblock = source.read(1024)
+        source.seek(journal_block * 1024)
+        journal_superblock = source.read(1024)
+    assert struct.unpack_from("<I", superblock, 0x60)[0] & 0x04
+    assert struct.unpack_from(">I", journal_superblock, 0x00)[0] == 0xC03B3998
+    assert struct.unpack_from(">I", journal_superblock, 0x28)[0] == 0x12
+    assert struct.unpack_from(">I", journal_superblock, 0x1C)[0] == 1
+    journal_sequence = struct.unpack_from(">I", journal_superblock, 0x18)[0]
+    return {
+        "image": image,
+        "payload": payload,
+        "home_before": home_before,
+        "target_block": 30000,
+        "journal_block": journal_block,
+        "journal_sequence": journal_sequence,
+    }
+
+
+@pytest.fixture(scope="session")
+def large_journal_replay_fixture(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Author recovery on a real 8 MiB journal, beyond the old 4096-block pin."""
+    tool_dir_value = os.environ.get("AKASHIC_E2FSPROGS_TOOL_DIR")
+    if not tool_dir_value:
+        pytest.skip("set AKASHIC_E2FSPROGS_TOOL_DIR for JBD2 recovery tests")
+    tool_dir = Path(tool_dir_value).resolve()
+    env = ext4_fixture_generator.pinned_environment(PROFILE, tool_dir, MANIFEST)
+    try:
+        tools = ext4_fixture_generator.verify_toolchain(PROFILE, tool_dir, env)
+    except ext4_fixture_generator.ProfileError as error:
+        pytest.fail(str(error))
+    debugfs = Path(tools["debugfs"]["path"])
+    config = MANIFEST.parent / "mke2fs.conf"
+    assert _sha256(config) == PROFILE["generator"]["mke2fs_config_sha256"]
+    directory = tmp_path_factory.mktemp("ext4-jbd2-replay-8m")
+    image = directory / "replay-csum3-64bit-j8.img"
+    with image.open("wb") as destination:
+        destination.truncate(64 * (1 << 20))
+    image_spec = {
+        "id": "replay-csum3-64bit-j8",
+        "profile": "primary",
+        "filename": image.name,
+        "image_bytes": 64 * (1 << 20),
+        "block_size": 1024,
+        "block_count": 65536,
+        "blocks_per_group": 8192,
+        "expected_groups": 8,
+        "expected_inodes": 4096,
+        "inode_size": 256,
+        "uuid": "71111111-1111-4111-8111-111111111111",
+        "hash_seed": "72111111-1111-4111-8111-111111111111",
+        "label": "AKEXT4-J8",
+    }
+    context = dict(image_spec)
+    context.update(
+        {
+            "tool_dir": tool_dir,
+            "image": image,
+            "feature_names": ",".join(
+                ext4_fixture_generator.profile_feature_names(PROFILE, image_spec)
+            ),
+        }
+    )
+    mkfs_argv = ext4_fixture_generator.render_argv(
+        PROFILE["generator"]["mkfs_argv"], context
+    )
+    assert mkfs_argv.count("size=4") == 1
+    mkfs_argv[mkfs_argv.index("size=4")] = "size=8"
+    made = subprocess.run(
+        mkfs_argv,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert made.returncode == 0, made.stdout + made.stderr
+    observed = ext4_fixture_generator.read_superblock(image)
+    ext4_fixture_generator.validate_observed_superblock(
+        PROFILE, image_spec, observed
+    )
+
+    payload = (
+        b"JBD2-AKASHIC-REPLAY-J8\n" + bytes(range(256)) * 4
+    )[:1024].ljust(1024, b"\x8a")
+    payload_path = directory / "home-block-j8.bin"
+    payload_path.write_bytes(payload)
+    commands = directory / "journal-j8.cmd"
+    commands.write_text(
+        "\n".join(
+            (
+                "journal_open -c -v 3",
+                f"journal_write -b 30000 {payload_path}",
+                "journal_close",
+                "close",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    authored = subprocess.run(
+        [str(debugfs), "-w", "-f", str(commands), str(image)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert authored.returncode == 0, authored.stdout + authored.stderr
+    assert "Command not found" not in authored.stdout + authored.stderr
+
+    journal_stat = subprocess.run(
+        [str(debugfs), "-R", "stat <8>", str(image)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert journal_stat.returncode == 0, journal_stat.stdout + journal_stat.stderr
+    assert re.search(r"\bSize:\s+8388608\b", journal_stat.stdout)
+
+    mapped: dict[int, int] = {}
+    for logical in (0, 8191):
+        result = subprocess.run(
+            [str(debugfs), "-R", f"bmap <8> {logical}", str(image)],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        mapped[logical] = int(result.stdout.strip().splitlines()[-1])
+        assert mapped[logical] != 0
+    with image.open("rb") as source:
+        source.seek(30000 * 1024)
+        home_before = source.read(1024)
+        source.seek(mapped[0] * 1024)
+        journal_superblock = source.read(1024)
+    assert struct.unpack_from(">I", journal_superblock, 0x00)[0] == 0xC03B3998
+    assert struct.unpack_from(">I", journal_superblock, 0x10)[0] == 8192
+    assert struct.unpack_from(">I", journal_superblock, 0x28)[0] == 0x12
+    assert home_before != payload
+    return {
+        "image": image,
+        "payload": payload,
+        "home_before": home_before,
+        "target_block": 30000,
+        "journal_block": mapped[0],
+        "journal_tail_block": mapped[8191],
+    }
+
+
+def test_jbd2_checksum_v3_replay_is_durable_and_idempotent(
+    replay_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = replay_fixture["image"]
+    assert isinstance(image, Path)
+    target_block = replay_fixture["target_block"]
+    journal_block = replay_fixture["journal_block"]
+    journal_sequence = replay_fixture["journal_sequence"]
+    payload = replay_fixture["payload"]
+    assert isinstance(target_block, int)
+    assert isinstance(journal_block, int)
+    assert isinstance(journal_sequence, int)
+    assert isinstance(payload, bytes)
+    backing = tmp_path / "recovered.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        backing,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REPLAYED + @ 0<> AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 1 = AND "
+                'IF ." EXT4-JBD2-REPLAY-OK" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-REPLAY-OK")
+    assert trace == (
+        ("write", target_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", 2, 2),
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+    )
+    assert backing.is_file()
+    assert _sha256(backing) == media_sha256
+    with backing.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == payload
+        source.seek(1024)
+        superblock = source.read(1024)
+        source.seek(journal_block * 1024)
+        journal_superblock = source.read(1024)
+        source.seek((journal_block + 4) * 1024)
+        retired_anchor = source.read(1024)
+    assert struct.unpack_from("<I", superblock, 0x60)[0] & 0x04 == 0
+    assert struct.unpack_from(">I", journal_superblock, 0x18)[0] == (
+        journal_sequence + 2
+    ) & 0xFFFF_FFFF
+    assert struct.unpack_from(">I", journal_superblock, 0x1C)[0] == 0
+    assert struct.unpack_from(">I", journal_superblock, 0x58)[0] == 4
+    assert journal_superblock[0x5C:0x70] == bytes(20)
+    assert retired_anchor == bytes(1024)
+
+    second = run_forth(
+        backing,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                'IF ." EXT4-JBD2-SECOND-MOUNT-OK" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(second, "EXT4-JBD2-SECOND-MOUNT-OK")
+
+
+def test_jbd2_replay_accepts_arena_bounded_8m_journal(
+    large_journal_replay_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = large_journal_replay_fixture["image"]
+    payload = large_journal_replay_fixture["payload"]
+    target_block = large_journal_replay_fixture["target_block"]
+    journal_tail_block = large_journal_replay_fixture["journal_tail_block"]
+    assert isinstance(image, Path)
+    assert isinstance(payload, bytes)
+    assert isinstance(target_block, int)
+    assert isinstance(journal_tail_block, int)
+
+    backing = tmp_path / "recovered-j8.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        backing,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REPLAYED + @ 0<> AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.MAXLEN + @ 8192 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.MAP-CAPACITY + @ 8192 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.MAP-HASH-SLOTS + @ 16384 = AND "
+                "8191 _V _EXT4-CTX _EXT4-JOURNAL-MAP@ 0<> AND "
+                'IF ." EXT4-JBD2-J8-REPLAY-OK" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-J8-REPLAY-OK")
+    assert ("write", target_block * 2, 2) in trace
+    assert any(operation == "flush" for operation, _, _ in trace)
+    assert backing.is_file()
+    assert _sha256(backing) == media_sha256
+    with backing.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == payload
+
+    second = run_forth(
+        backing,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.MAXLEN + @ 8192 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.MAP-CAPACITY + @ 8192 = AND "
+                "8191 _V _EXT4-CTX _EXT4-JOURNAL-MAP@ "
+                f"{journal_tail_block} = AND "
+                'IF ." EXT4-JBD2-J8-SECOND-MOUNT-OK" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(second, "EXT4-JBD2-J8-SECOND-MOUNT-OK")
+
+
+def test_jbd2_recovery_repairs_torn_ext4_superblock_clear(
+    replay_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = replay_fixture["image"]
+    target_block = replay_fixture["target_block"]
+    journal_block = replay_fixture["journal_block"]
+    payload = replay_fixture["payload"]
+    assert isinstance(image, Path)
+    assert isinstance(target_block, int)
+    assert isinstance(journal_block, int)
+    assert isinstance(payload, bytes)
+
+    torn = tmp_path / "torn-superblock-clear.img"
+    output, trace, _media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / "pre-tear-superblock.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = "
+                "_M-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                "_M-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL AND 0<> AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                'IF ." EXT4-JBD2-SUPER-TEAR-CAUGHT" THEN'
+            ),
+        ],
+        write_faults_by_ordinal={
+            5: {
+                "stage": "media",
+                "sector_index": 1,
+                "byte_index": 0,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=torn,
+    )
+    _assert_emitted(output, "EXT4-JBD2-SUPER-TEAR-CAUGHT")
+    assert trace == (
+        ("write", target_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", 2, 2),
+    )
+    assert torn.is_file()
+
+    repaired = tmp_path / "repaired-superblock-clear.img"
+    output, retry_trace, repaired_sha256 = run_recovery_forth(
+        torn,
+        repaired,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                'IF ." EXT4-JBD2-SUPER-TEAR-REPAIRED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-SUPER-TEAR-REPAIRED")
+    assert retry_trace == (
+        ("write", 2, 2),
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+    )
+    assert _sha256(repaired) == repaired_sha256
+    with repaired.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == payload
+        source.seek(1024 + 0x60)
+        assert struct.unpack("<I", source.read(4))[0] & 0x04 == 0
+
+
+def test_jbd2_retry_skips_rewriting_an_already_durable_reset(
+    replay_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = replay_fixture["image"]
+    target_block = replay_fixture["target_block"]
+    journal_block = replay_fixture["journal_block"]
+    assert isinstance(image, Path)
+    assert isinstance(target_block, int)
+    assert isinstance(journal_block, int)
+
+    interrupted = tmp_path / "before-superblock-clear.img"
+    output, trace, _media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / "pre-superblock-clear.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = "
+                "_M-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                "_M-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL AND 0<> AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                'IF ." EXT4-JBD2-BEFORE-SUPER-CLEAR" THEN'
+            ),
+        ],
+        write_faults_by_ordinal={
+            5: {
+                "stage": "media",
+                "sector_index": 0,
+                "byte_index": 1,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=interrupted,
+    )
+    _assert_emitted(output, "EXT4-JBD2-BEFORE-SUPER-CLEAR")
+    assert trace == (
+        ("write", target_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", 2, 2),
+    )
+
+    repaired = tmp_path / "already-reset-repaired.img"
+    output, retry_trace, repaired_sha256 = run_recovery_forth(
+        interrupted,
+        repaired,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                'IF ." EXT4-JBD2-ALREADY-RESET-REPAIRED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-ALREADY-RESET-REPAIRED")
+    assert retry_trace == (
+        ("flush", 0, 0),
+        ("write", 2, 2),
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+    )
+    assert _sha256(repaired) == repaired_sha256
+
+
+def test_jbd2_recovery_uses_anchor_after_torn_primary_journal_reset(
+    replay_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = replay_fixture["image"]
+    target_block = replay_fixture["target_block"]
+    journal_block = replay_fixture["journal_block"]
+    payload = replay_fixture["payload"]
+    assert isinstance(image, Path)
+    assert isinstance(target_block, int)
+    assert isinstance(journal_block, int)
+    assert isinstance(payload, bytes)
+
+    torn = tmp_path / "torn-primary-journal-reset.img"
+    output, trace, _media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / "pre-tear-journal.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = "
+                "_M-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                "_M-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL AND 0<> AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                'IF ." EXT4-JBD2-PRIMARY-TEAR-CAUGHT" THEN'
+            ),
+        ],
+        write_faults_by_ordinal={
+            4: {
+                "stage": "media",
+                "sector_index": 0,
+                "byte_index": 200,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=torn,
+    )
+    _assert_emitted(output, "EXT4-JBD2-PRIMARY-TEAR-CAUGHT")
+    assert trace == (
+        ("write", target_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+    )
+    assert torn.is_file()
+
+    repaired = tmp_path / "repaired-primary-journal.img"
+    output, retry_trace, repaired_sha256 = run_recovery_forth(
+        torn,
+        repaired,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REPLAYED + @ 0<> AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                'IF ." EXT4-JBD2-PRIMARY-TEAR-REPAIRED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-PRIMARY-TEAR-REPAIRED")
+    assert retry_trace == (
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", 2, 2),
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+    )
+    assert _sha256(repaired) == repaired_sha256
+    with repaired.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == payload
+        source.seek(1024 + 0x60)
+        assert struct.unpack("<I", source.read(4))[0] & 0x04 == 0
+        source.seek(journal_block * 1024 + 0x1C)
+        assert struct.unpack(">I", source.read(4))[0] == 0
+
+
+def test_jbd2_corrupt_descriptor_refuses_before_mutation(
+    replay_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = replay_fixture["image"]
+    journal_block = replay_fixture["journal_block"]
+    assert isinstance(image, Path)
+    assert isinstance(journal_block, int)
+    offset = (journal_block + 1) * 1024 + 1023
+    with image.open("rb") as source:
+        source.seek(offset)
+        replacement = bytes((source.read(1)[0] ^ 1,))
+    patched = bytearray(image.read_bytes())
+    patched[offset : offset + 1] = replacement
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / "must-not-flush.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-REASON VFS-R-CORRUPT = "
+                "_M-IOR VFS-IOR-DETAIL EXT4-D-JOURNAL = AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                "_V _EXT4-CTX _EXT4-C.READY + @ 0= AND "
+                'IF ." EXT4-JBD2-CORRUPT-NO-WRITE" THEN'
+            ),
+        ],
+        patches=((offset, replacement),),
+    )
+    _assert_emitted(output, "EXT4-JBD2-CORRUPT-NO-WRITE")
+    assert trace == ()
+    assert media_sha256 == hashlib.sha256(patched).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("phase", "write_ordinal", "byte_index"),
+    (("preseed", 2, 8), ("publish", 3, 1)),
+)
+def test_jbd2_prefix_torn_anchor_install_is_retryable(
+    replay_fixture: dict[str, object],
+    tmp_path: Path,
+    phase: str,
+    write_ordinal: int,
+    byte_index: int,
+) -> None:
+    image = replay_fixture["image"]
+    target_block = replay_fixture["target_block"]
+    journal_block = replay_fixture["journal_block"]
+    assert isinstance(image, Path)
+    assert isinstance(target_block, int)
+    assert isinstance(journal_block, int)
+
+    interrupted = tmp_path / f"prefix-torn-anchor-{phase}.img"
+    output, trace, _media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / f"pre-anchor-{phase}-tear.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = "
+                "_M-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                "_M-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL AND 0<> AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                'IF ." EXT4-JBD2-ANCHOR-INSTALL-TEAR" THEN'
+            ),
+        ],
+        write_faults_by_ordinal={
+            write_ordinal: {
+                "stage": "media",
+                "sector_index": 0,
+                "byte_index": byte_index,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=interrupted,
+    )
+    _assert_emitted(output, "EXT4-JBD2-ANCHOR-INSTALL-TEAR")
+    expected_trace = (
+        ("write", target_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+    )
+    if phase == "publish":
+        expected_trace += (
+            ("flush", 0, 0),
+            ("write", (journal_block + 4) * 2, 2),
+        )
+    assert trace == expected_trace
+
+    repaired = tmp_path / f"anchor-{phase}-repaired.img"
+    output, retry_trace, repaired_sha256 = run_recovery_forth(
+        interrupted,
+        repaired,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                'IF ." EXT4-JBD2-ANCHOR-INSTALL-REPAIRED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-ANCHOR-INSTALL-REPAIRED")
+    assert retry_trace == (
+        ("write", target_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", 2, 2),
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+    )
+    assert _sha256(repaired) == repaired_sha256
+
+
+def test_jbd2_primary_reset_tear_before_locator_fails_closed(
+    replay_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = replay_fixture["image"]
+    target_block = replay_fixture["target_block"]
+    journal_block = replay_fixture["journal_block"]
+    assert isinstance(image, Path)
+    assert isinstance(target_block, int)
+    assert isinstance(journal_block, int)
+
+    torn = tmp_path / "primary-tear-before-locator.img"
+    output, trace, _media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / "pre-early-primary-tear.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = "
+                "_M-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                "_M-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL AND 0<> AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                'IF ." EXT4-JBD2-EARLY-PRIMARY-TEAR" THEN'
+            ),
+        ],
+        write_faults_by_ordinal={
+            4: {
+                "stage": "media",
+                "sector_index": 0,
+                "byte_index": 50,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=torn,
+    )
+    _assert_emitted(output, "EXT4-JBD2-EARLY-PRIMARY-TEAR")
+    assert trace == (
+        ("write", target_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+    )
+
+    output, retry_trace, media_sha256 = run_recovery_forth(
+        torn,
+        tmp_path / "early-tear-refused.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-REASON VFS-R-CORRUPT = "
+                "_M-IOR VFS-IOR-DETAIL EXT4-D-JOURNAL = AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                'IF ." EXT4-JBD2-EARLY-TEAR-FAIL-CLOSED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-EARLY-TEAR-FAIL-CLOSED")
+    assert retry_trace == ()
+    assert media_sha256 == _sha256(torn)
+
+
+def test_jbd2_incomplete_tail_is_discarded_without_home_write(
+    replay_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = replay_fixture["image"]
+    target_block = replay_fixture["target_block"]
+    journal_block = replay_fixture["journal_block"]
+    home_before = replay_fixture["home_before"]
+    assert isinstance(image, Path)
+    assert isinstance(target_block, int)
+    assert isinstance(journal_block, int)
+    assert isinstance(home_before, bytes)
+
+    commit_magic = (journal_block + 3) * 1024
+    recovered = tmp_path / "discarded-incomplete-tail.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        recovered,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REPLAYED + @ 0<> AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                'IF ." EXT4-JBD2-INCOMPLETE-DISCARDED" THEN'
+            ),
+        ],
+        patches=((commit_magic, b"\x00\x00\x00\x00"),),
+    )
+    _assert_emitted(output, "EXT4-JBD2-INCOMPLETE-DISCARDED")
+    assert trace == (
+        ("flush", 0, 0),
+        ("write", (journal_block + 1) * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 1) * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", 2, 2),
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 1) * 2, 2),
+        ("flush", 0, 0),
+    )
+    assert _sha256(recovered) == media_sha256
+    with recovered.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == home_before
+
+
+def test_jbd2_torn_witness_removal_repairs_exact_prefix(
+    replay_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = replay_fixture["image"]
+    target_block = replay_fixture["target_block"]
+    journal_block = replay_fixture["journal_block"]
+    assert isinstance(image, Path)
+    assert isinstance(target_block, int)
+    assert isinstance(journal_block, int)
+
+    torn = tmp_path / "torn-witness-removal.img"
+    output, trace, _media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / "pre-witness-removal-tear.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = "
+                "_M-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                "_M-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL AND 0<> AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                'IF ." EXT4-JBD2-WITNESS-REMOVE-TEAR" THEN'
+            ),
+        ],
+        write_faults_by_ordinal={
+            6: {
+                "stage": "media",
+                "sector_index": 0,
+                "byte_index": 200,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=torn,
+    )
+    _assert_emitted(output, "EXT4-JBD2-WITNESS-REMOVE-TEAR")
+    assert trace == (
+        ("write", target_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", 2, 2),
+        ("flush", 0, 0),
+        ("write", journal_block * 2, 2),
+    )
+
+    unrelated_offset = journal_block * 1024 + 0x80
+    with torn.open("rb") as source:
+        source.seek(unrelated_offset)
+        unrelated_replacement = bytes((source.read(1)[0] ^ 1,))
+    nonprefix = bytearray(torn.read_bytes())
+    nonprefix[unrelated_offset : unrelated_offset + 1] = unrelated_replacement
+    output, refused_trace, refused_sha256 = run_recovery_forth(
+        torn,
+        tmp_path / "witness-removal-nonprefix-refused.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-REASON VFS-R-CORRUPT = "
+                "_M-IOR VFS-IOR-DETAIL EXT4-D-JOURNAL = AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                'IF ." EXT4-JBD2-WITNESS-NONPREFIX-REFUSED" THEN'
+            ),
+        ],
+        patches=((unrelated_offset, unrelated_replacement),),
+    )
+    _assert_emitted(output, "EXT4-JBD2-WITNESS-NONPREFIX-REFUSED")
+    assert refused_trace == ()
+    assert refused_sha256 == hashlib.sha256(nonprefix).hexdigest()
+
+    retried_torn = tmp_path / "witness-removal-retry-torn.img"
+    output, retry_trace, _media_sha256 = run_recovery_forth(
+        torn,
+        tmp_path / "pre-witness-removal-retry-tear.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = "
+                "_M-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                "_M-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL AND 0<> AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                'IF ." EXT4-JBD2-WITNESS-REMOVE-RETRY-TEAR" THEN'
+            ),
+        ],
+        write_faults_by_ordinal={
+            1: {
+                "stage": "media",
+                "sector_index": 0,
+                "byte_index": 220,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=retried_torn,
+    )
+    _assert_emitted(output, "EXT4-JBD2-WITNESS-REMOVE-RETRY-TEAR")
+    assert retry_trace == (("write", journal_block * 2, 2),)
+
+    repaired = tmp_path / "witness-removal-repaired.img"
+    output, final_trace, media_sha256 = run_recovery_forth(
+        retried_torn,
+        repaired,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                'IF ." EXT4-JBD2-WITNESS-REMOVE-REPAIRED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-WITNESS-REMOVE-REPAIRED")
+    assert final_trace == (
+        ("write", journal_block * 2, 2),
+        ("flush", 0, 0),
+        ("write", (journal_block + 4) * 2, 2),
+        ("flush", 0, 0),
+    )
+    assert _sha256(repaired) == media_sha256
+    with repaired.open("rb") as source:
+        source.seek(1024 + 0x60)
+        assert struct.unpack("<I", source.read(4))[0] & 0x04 == 0
+        source.seek(journal_block * 1024)
+        journal_superblock = source.read(1024)
+        source.seek((journal_block + 4) * 1024)
+        retired_anchor = source.read(1024)
+    assert journal_superblock[0x5C:0x70] == bytes(20)
+    assert retired_anchor == bytes(1024)
+
+
+def test_jbd2_recovery_refuses_physical_read_only_media(
+    replay_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = replay_fixture["image"]
+    assert isinstance(image, Path)
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / "read-only-must-not-flush.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = "
+                "_M-IOR VFS-IOR-REASON VFS-R-READONLY = AND "
+                "_M-IOR VFS-IOR-FLAGS VFS-IOR-F-READONLY AND 0<> AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                'IF ." EXT4-JBD2-PHYSICAL-RO" THEN'
+            ),
+        ],
+        write_protected=True,
+    )
+    _assert_emitted(output, "EXT4-JBD2-PHYSICAL-RO")
+    assert trace == ()
+    assert media_sha256 == _sha256(image)
 
 
 def test_binding_descriptor_is_valid_and_truthfully_read_only(
@@ -323,11 +1398,150 @@ def test_zero_count_loops_and_invalid_dirent_type_are_total(tmp_path: Path) -> N
                 "_E4CTX _EXT4-C.R.ATIME + @ -1 = AND "
                 'IF ." EXT4-TIMESTAMP-SIGN-OK" THEN'
             ),
+            (
+                ": _E4-SET-LEGACY-JOURNAL-MAP 12 0 DO "
+                "100 I + _E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + "
+                "I 4 * + L! LOOP ;"
+            ),
+            "_E4-SET-LEGACY-JOURNAL-MAP",
+            "0 _E4CTX _EXT4-C.INODE + _EXT4-I.FLAGS + L!",
+            "1000 _E4CTX _EXT4-C.BLOCKS + !",
+            "12 _E4CTX _EXT4-C.J.MAXLEN + !",
+            (
+                "12 CELLS 32 CELLS + 2 CELLS + A-XMEM ARENA-NEW "
+                "THROW CONSTANT _E4-JOURNAL-ARENA"
+            ),
+            (
+                "_E4-JOURNAL-ARENA _E4CTX _EXT4-C.ARENA + ! "
+                "12 _E4CTX _EXT4-ENSURE-JOURNAL-WORKSPACE "
+                "CONSTANT _LJM-WORK-IOR"
+            ),
+            (
+                "_E4CTX _EXT4-SNAPSHOT-JOURNAL-MAP "
+                "CONSTANT _LJM-IOR"
+            ),
+            "0 _E4CTX _EXT4-JOURNAL-MAP@ CONSTANT _LJM-FIRST",
+            "11 _E4CTX _EXT4-JOURNAL-MAP@ CONSTANT _LJM-LAST",
+            "100 _E4CTX _EXT4-JOURNAL-HOME? CONSTANT _LJM-HOME",
+            "999 _E4CTX _EXT4-JOURNAL-HOME? 0= CONSTANT _LJM-NONHOME",
+            (
+                "100 _E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + "
+                "11 4 * + L!"
+            ),
+            (
+                "_E4CTX _EXT4-SNAPSHOT-JOURNAL-MAP "
+                "CONSTANT _LJM-DUP-IOR"
+            ),
+            (
+                "_LJM-WORK-IOR 0= "
+                "_E4CTX _EXT4-C.J.MAP-CAPACITY + @ 12 = AND "
+                "_E4CTX _EXT4-C.J.MAP-HASH-SLOTS + @ 32 = AND "
+                "_LJM-IOR 0= AND _LJM-FIRST 100 = AND "
+                "_LJM-LAST 111 = AND _LJM-HOME AND _LJM-NONHOME AND "
+                "_LJM-DUP-IOR VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_LJM-DUP-IOR VFS-IOR-DETAIL EXT4-D-JOURNAL = AND "
+                'IF ." EXT4-LEGACY-JOURNAL-MAP-OK" THEN'
+            ),
+            "CREATE _E4-NOMEM-CTX _EXT4-CTX-SIZE ALLOT",
+            "_E4-NOMEM-CTX _EXT4-CTX-SIZE 0 FILL",
+            (
+                "12 CELLS 32 CELLS + 1 CELLS - A-XMEM ARENA-NEW "
+                "THROW CONSTANT _E4-NOMEM-ARENA"
+            ),
+            (
+                "_E4-NOMEM-ARENA _E4-NOMEM-CTX _EXT4-C.ARENA + ! "
+                "_E4-NOMEM-ARENA ARENA-USED CONSTANT _E4-NOMEM-BEFORE"
+            ),
+            (
+                "12 _E4-NOMEM-CTX _EXT4-ENSURE-JOURNAL-WORKSPACE "
+                "CONSTANT _E4-NOMEM-IOR"
+            ),
+            "_E4-NOMEM-ARENA ARENA-USED CONSTANT _E4-NOMEM-AFTER",
+            (
+                "_E4-NOMEM-IOR VFS-E-NOMEM = "
+                "_E4-NOMEM-BEFORE _E4-NOMEM-AFTER = AND "
+                "_E4-NOMEM-CTX _EXT4-C.J.MAP + @ 0= AND "
+                "_E4-NOMEM-CTX _EXT4-C.J.MAP-HASH + @ 0= AND "
+                "_E4-NOMEM-CTX _EXT4-C.J.MAP-CAPACITY + @ 0= AND "
+                "_E4-NOMEM-CTX _EXT4-C.J.MAP-HASH-SLOTS + @ 0= AND "
+                "_E4-NOMEM-CTX _EXT4-C.J.METADATA-HASH + @ 0= AND "
+                "_E4-NOMEM-CTX _EXT4-C.J.METADATA-CAPACITY + @ 0= AND "
+                "_E4-NOMEM-CTX _EXT4-C.J.METADATA-HASH-SLOTS + @ 0= AND "
+                'IF ." EXT4-JOURNAL-WORKSPACE-NOMEM" THEN'
+            ),
+            "_E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 60 0 FILL",
+            "11 _E4CTX _EXT4-C.J.MAXLEN + !",
+            (
+                "777 _E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + "
+                "11 4 * + L!"
+            ),
+            (
+                "_E4CTX _EXT4-VALIDATE-JOURNAL-INODE-MAP "
+                "CONSTANT _E4-BEYOND-EOF-IOR"
+            ),
+            (
+                "_E4-BEYOND-EOF-IOR VFS-IOR-REASON VFS-R-CORRUPT = "
+                "_EXT4-MAP-VALIDATION-LIMIT @ 0= AND "
+                'IF ." EXT4-JOURNAL-EOF-BOUND-OK" THEN'
+            ),
+            "_E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 60 0 FILL",
+            (
+                "_EXT4-EXTENT-MAGIC _E4CTX _EXT4-C.INODE + "
+                "_EXT4-I.BLOCK + W!"
+            ),
+            "1 _E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 2 + W!",
+            "4 _E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 4 + W!",
+            "13 _E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 16 + W!",
+            "1 _E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 20 + L!",
+            (
+                "_EXT4-EXTENTS-FL _E4CTX _EXT4-C.INODE + "
+                "_EXT4-I.FLAGS + L!"
+            ),
+            "12 _E4CTX _EXT4-C.J.MAXLEN + !",
+            (
+                "_E4CTX _EXT4-VALIDATE-JOURNAL-INODE-MAP "
+                "CONSTANT _E4-EXTENT-BEYOND-EOF-IOR"
+            ),
+            (
+                "_E4-EXTENT-BEYOND-EOF-IOR VFS-IOR-REASON "
+                "VFS-R-CORRUPT = "
+                "_EXT4-MAP-VALIDATION-LIMIT @ 0= AND "
+                'IF ." EXT4-JOURNAL-EXTENT-EOF-BOUND-OK" THEN'
+            ),
+            "_E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 60 0 FILL",
+            "0 _E4CTX _EXT4-C.INODE + _EXT4-I.FLAGS + L!",
+            "100 _E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 12 4 * + L!",
+            "13 _E4CTX _EXT4-C.J.MAXLEN + !",
+            "1 _E4CTX _EXT4-C.J.METADATA-COUNT + !",
+            (
+                "_E4CTX _EXT4-PREPARE-JOURNAL-METADATA-HASH "
+                "CONSTANT _E4-METADATA-PREP-IOR"
+            ),
+            "500 _E4CTX _EXT4-JOURNAL-METADATA-UNIQUE? CONSTANT _E4-META-ADD",
+            "500 _E4CTX _EXT4-JOURNAL-HOME? CONSTANT _E4-META-HOME",
+            (
+                "_E4CTX _EXT4-VERIFY-JOURNAL-METADATA-DISJOINT "
+                "CONSTANT _E4-METADATA-ALIAS-IOR"
+            ),
+            (
+                "_E4-METADATA-PREP-IOR 0= _E4-META-ADD AND "
+                "_E4-META-HOME AND "
+                "_E4-METADATA-ALIAS-IOR VFS-IOR-REASON "
+                "VFS-R-CORRUPT = AND "
+                "_E4-METADATA-ALIAS-IOR VFS-IOR-DETAIL "
+                "EXT4-D-JOURNAL = AND "
+                'IF ." EXT4-JOURNAL-METADATA-ALIAS-OK" THEN'
+            ),
         ],
     )
     _assert_emitted(output, "EXT4-PARSER-TOTAL-OK")
     _assert_emitted(output, "EXT4-HUGE-BLOCKS-OK")
     _assert_emitted(output, "EXT4-TIMESTAMP-SIGN-OK")
+    _assert_emitted(output, "EXT4-LEGACY-JOURNAL-MAP-OK")
+    _assert_emitted(output, "EXT4-JOURNAL-WORKSPACE-NOMEM")
+    _assert_emitted(output, "EXT4-JOURNAL-EOF-BOUND-OK")
+    _assert_emitted(output, "EXT4-JOURNAL-EXTENT-EOF-BOUND-OK")
+    _assert_emitted(output, "EXT4-JOURNAL-METADATA-ALIAS-OK")
 
 
 def test_htree_and_internal_extent_parser_semantics_are_total(
@@ -855,15 +2069,11 @@ def test_every_known_refused_feature_fails_before_mount_publication(
     assert "11 4 0" in output, output[-1500:]
 
 
-@pytest.mark.parametrize(
-    ("field_offset", "mask"),
-    ((0x60, 0x22C6), (0x64, 0x1046B)),
-)
-def test_recovery_required_states_are_distinct_refusals(
-    canonical_images: dict[str, Path], field_offset: int, mask: int
+def test_orphan_recovery_required_state_is_a_distinct_refusal(
+    canonical_images: dict[str, Path]
 ) -> None:
     path = canonical_images["primary-1k-i256"]
-    patched = _super_with_mask(path, field_offset, mask)
+    patched = _super_with_mask(path, 0x64, 0x1046B)
     output = run_forth(
         path,
         [
@@ -873,6 +2083,22 @@ def test_recovery_required_states_are_distinct_refusals(
         patches=((1024, patched),),
     )
     assert "11 5 0" in output, output[-1500:]
+
+
+def test_recover_without_checksum_v3_journal_refuses_before_writes(
+    canonical_images: dict[str, Path]
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patched = _super_with_mask(path, 0x60, 0x22C6)
+    output = run_forth(
+        path,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _IOR CONSTANT _V",
+            "_IOR VFS-IOR-REASON . _IOR VFS-IOR-DETAIL . _V V.LIFECYCLE @ .",
+        ],
+        patches=((1024, patched),),
+    )
+    assert "11 12 0" in output, output[-1500:]
 
 
 def test_superblock_checksum_corruption_is_not_published(
@@ -903,6 +2129,7 @@ MOUNT_CORRUPTION_CASES = (
     (0x1000400, 0xC0, 12),
     (0x1000443, 0x01, 12),
     (0x1000450, 0x00, 12),
+    (0x1000458, 0x00, 12),
     (0x1487F8, 0x04, 13),
     (0x1487FC, 0xA9, 13),
 )
@@ -976,6 +2203,41 @@ def test_journal_feature_variant_is_unsupported_not_corrupt(
     assert "11 3 0 12 0" in output, output[-1500:]
 
 
+def test_feature_zero_journal_rejects_private_recovery_witness(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    with path.open("rb") as source:
+        source.seek(1024 + 0x3FC)
+        intended_super_checksum = struct.unpack("<I", source.read(4))[0]
+    witness = struct.pack(
+        ">IIIIII",
+        1,
+        0x414B5231,
+        intended_super_checksum,
+        (~intended_super_checksum) & 0xFFFF_FFFF,
+        1,
+        0xFFFF_FFFE,
+    )
+    journal_witness_offset = 0x1000400 + 0x58
+    output = run_forth(
+        path,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _IOR CONSTANT _V",
+            (
+                "_IOR VFS-IOR-REASON . _IOR VFS-IOR-DOMAIN . "
+                "_IOR VFS-IOR-FLAGS . _IOR VFS-IOR-DETAIL . "
+                "_V V.LIFECYCLE @ ."
+            ),
+        ],
+        patches=_verified_patches(
+            path,
+            ((journal_witness_offset, bytes(24), witness),),
+        ),
+    )
+    assert "10 3 4 12 0" in output, output[-1500:]
+
+
 def test_mount_rejects_checksum_valid_nondirectory_root(
     canonical_images: dict[str, Path],
 ) -> None:
@@ -993,6 +2255,52 @@ def test_mount_rejects_checksum_valid_nondirectory_root(
         ),
     )
     assert "10 11 0" in output, output[-1500:]
+
+
+def test_failed_mount_retry_reuses_journal_workspace(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    output = run_forth(
+        path,
+        [
+            "T-ARENA CONSTANT _RETRY-ARENA",
+            (
+                "_RETRY-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _RETRY-IOR-1 CONSTANT _RETRY-V"
+            ),
+            "_RETRY-V _EXT4-CTX CONSTANT _RETRY-CTX",
+            "_RETRY-ARENA ARENA-USED CONSTANT _RETRY-USED-1",
+            "_RETRY-CTX _EXT4-C.J.MAP + @ CONSTANT _RETRY-MAP",
+            "_RETRY-CTX _EXT4-C.J.MAP-HASH + @ CONSTANT _RETRY-HASH",
+            (
+                "_RETRY-CTX _EXT4-C.J.METADATA-HASH + @ "
+                "CONSTANT _RETRY-METADATA-HASH"
+            ),
+            "_RETRY-V _EXT4-MOUNT CONSTANT _RETRY-IOR-2",
+            "_RETRY-ARENA ARENA-USED CONSTANT _RETRY-USED-2",
+            (
+                "_RETRY-IOR-1 VFS-IOR-DETAIL EXT4-D-ROOT-INODE = "
+                "_RETRY-IOR-2 VFS-IOR-DETAIL EXT4-D-ROOT-INODE = AND "
+                "_RETRY-USED-1 _RETRY-USED-2 = AND "
+                "_RETRY-V _EXT4-CTX _RETRY-CTX = AND "
+                "_RETRY-CTX _EXT4-C.J.MAP + @ _RETRY-MAP = AND "
+                "_RETRY-CTX _EXT4-C.J.MAP-HASH + @ _RETRY-HASH = AND "
+                "_RETRY-CTX _EXT4-C.J.METADATA-HASH + @ "
+                "_RETRY-METADATA-HASH = AND "
+                "_RETRY-MAP 0<> AND "
+                "_RETRY-CTX _EXT4-C.READY + @ 0= AND "
+                "_RETRY-V V.LIFECYCLE @ VFS-L-NEW = AND "
+                'IF ." EXT4-MOUNT-RETRY-WORKSPACE-OK" THEN'
+            ),
+        ],
+        patches=(
+            (0x044D01, b"\x81"),
+            (0x044D7C, b"\x85\x95"),
+            (0x044D82, b"\xC9\x51"),
+        ),
+    )
+    _assert_emitted(output, "EXT4-MOUNT-RETRY-WORKSPACE-OK")
 
 
 def test_directory_checksum_failure_rolls_back_cache_publication(

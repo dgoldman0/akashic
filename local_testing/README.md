@@ -168,7 +168,16 @@ python3 local_testing/generate_ext4_profile_fixtures.py \
 
 AKASHIC_E2FSPROGS_TOOL_DIR=/absolute/e2fsprogs-1.47.4-prefix/sbin \
   python3 -m pytest -q local_testing/test_ext4_profile.py
+
+AKASHIC_E2FSPROGS_TOOL_DIR=/absolute/e2fsprogs-1.47.4-prefix/sbin \
+  python3 -m pytest -q local_testing/test_vfs_ext4.py
 ```
+
+The shared FAT/ext4 emulator snapshot uses 64 MiB of external memory: KDOS
+owns its established 32 MiB userland dictionary zone and the remainder holds
+the VFS test arena and loader allocations. Snapshot construction requires an
+exact userland-ready marker, so a capacity refusal cannot silently fall back
+to compiling drivers into Bank 0.
 
 `test_vfs_ext4.py` then mounts those same images through the clean read-only
 ABI-1 binding.  It covers checksummed linear and HTree directories, depth-1
@@ -177,10 +186,19 @@ legacy direct/single/double/triple maps, allocation-bitmap cross-checks,
 special-inode metadata and unsupported opens, namespaced/raw-ACL xattrs, and
 bounded generic symlink traversal including a live block-backed target.  Its
 corruption cases include HTree and extent-node checksums, allocation
-disagreement, and duplicate/overlapping xattr records.  Journal replay,
-orphan recovery, ACL enforcement, and every mutation operation remain outside
-this read-side gate.  This remains an explicit-volume emulator suite rather
-than a default boot-image or automount profile.
+disagreement, and duplicate/overlapping xattr records. The suite also authors
+a private checksum-v3/64-bit JBD2 log with the pinned `debugfs`, and generates
+a second 8 MiB journal with pinned `mke2fs` to cross the canonical 4 MiB
+fixture size. It exercises arena-derived map geometry, committed replay,
+valid incomplete-tail discard, pre-write corruption and
+physical-read-only refusal, ordered flushes, idempotence, and both repairable
+and explicitly fail-closed tears in the journal/ext4 landing sequence. The
+repairable matrix includes exact sequential-prefix tears of primary witness
+removal; damaged locators that cannot prove that transition remain refused.
+Revoke and orphan recovery, checksum-torn tail classification, ACL
+enforcement, and every user-visible mutation remain outside this gate. This
+remains an explicit-volume emulator suite rather than a default boot-image or
+automount profile.
 
 When a resolved profile closure binds directly to MegaPad networking, the
 harness injects the one canonical packed `networking.f` and loads it with

@@ -5,9 +5,11 @@ must implement. It closes the format-selection milestone independently of
 implementation status. The checksummed clean read-only reader now lives in
 `utils/fs/drivers/vfs-ext4.f`; its implemented structures and remaining
 limits are tracked in [the binding documentation](drivers/vfs-ext4.md).
-Until replay, recovery, mutation, and the complete bidirectional gates below
-pass, MP64FS remains the working native storage binding and FAT/ext4 remain
-read-only interoperability work.
+The first bounded checksum-v3 JBD2 replay slice now exists, but orphan
+recovery, general mutation, and the complete bidirectional gates remain open.
+MP64FS remains the working native storage binding and FAT/ext4 remain
+read-only interoperability bindings; ext4's mount path may perform the
+strictly ordered recovery writes described below.
 
 The profile ID is `akashic-ext4-rw-v1`.  Its feature decisions are durable:
 the driver must not silently admit a refused bit because a host tool happens
@@ -202,6 +204,57 @@ Recovery is ordered as follows:
 5. Recover the legacy orphan chain and the orphan file transactionally and
    idempotently, then clear `ORPHAN_PRESENT` when appropriate.
 
+The current implementation covers steps 1 through 4 only for the exact
+`64bit | checksum_v3` journal mask (`0x12`) with no revoke record. It performs
+a complete non-mutating scan before replay and snapshots the complete journal
+mapping in one size-bounded walk after extent/legacy-tree validation. Journal
+length comes from inode 8 and must exactly match the authenticated 32-bit JBD2
+`s_maxlen`; the exact map and uniqueness hash come from the caller-provided
+arena, so 4 MiB is a canonical-fixture choice rather than a driver ceiling.
+The walker rejects holes, mappings beyond journal EOF, aliased or out-of-range
+data blocks, and aliases between journal data and its own map metadata. A
+separately sized metadata ownership hash makes both journal data and external
+map nodes forbidden replay-home targets. A valid
+incomplete tail is ignored, while a checksum-damaged tail remains a fail-closed
+limitation rather than being guessed incomplete. A matching-sequence JBD2
+`SUPER_V2` header terminates preflight only after the complete block validates
+as the checksummed, self-locating recovery anchor; it is never replayed as a
+transaction record.
+
+To make the checkpoint/reset/clear sequence retryable across 512-byte media
+tears, the implementation preseeds the first noncommitted journal slot with
+the complete intended reset image except for an invalid byte zero and flushes
+it. It then restores byte zero and writes and flushes the valid checksummed
+copy before updating journal block 0. Those two images differ in only byte
+zero, so no prefix cut can combine a new valid JBD2 header with stale cursor
+contents. The copy stores an `AKR1` witness in the JBD2 padding at
+`0x5c..0x6f`: intended ext4-superblock checksum plus complement and anchor
+logical block plus complement. Standard `s_head` at `0x58` is set to the same
+first-unused slot.
+The primary reset is flushed before the two-sector ext4-superblock clear, and
+that clear is flushed before the primary witness is removed and flushed. The
+anchor slot is then zeroed and flushed before mount publication. A torn primary
+may select only the exact self-locating anchor named by an intact primary
+marker/complement/`s_head` tuple; there is no historical-anchor scan. Before
+the first witness-removal write, the exact anchor must validate and its
+checksummed 1024-byte JBD2 superblock must match the primary. A mismatch only
+in larger-block padding marks the primary torn; the complete anchor is copied
+back and flushed so the whole primary filesystem block equals it before the
+clear proceeds.
+
+One narrower cleanup retry is admitted after an independently checksum-valid,
+clean ext4 superblock proves that witness removal had begun. The damaged
+primary must equal a single sequential-write prefix of the constructed
+standard zero-witness block followed by the unchanged suffix of that exact
+validated anchor, across the complete filesystem block. On that proof the
+driver rereads the raw primary and anchor and repeats the proof immediately
+before the standard block is installed and flushed directly, then retires the
+anchor. Every other torn or inconsistent locator fails closed. Mount requires
+exclusive ownership against concurrent raw-media mutation. The witness is
+transient private profile state, not a new JBD2 feature bit; stock
+Linux/e2fsprogs mutation and broader hardware power-cut qualification must
+pass before this landing can be called release-ready.
+
 A physically read-only volume that needs replay or orphan recovery is
 refused.  A nominal Linux read-only mount can write during recovery; Akashic
 must not misrepresent a dirty, unrecovered image as safe read-only access.
@@ -322,8 +375,10 @@ one supplemental read-side image:
 | `read-side-1k-i256.img` | supplemental read side | 64 MiB | 1 KiB | 8 | 256 | primary |
 
 Creation fixes the tool suite, private configuration, UUID, label, directory
-hash seed, 16 KiB inode ratio, blocks/group, flex size, internal 4 MiB journal,
-error policy, root owner, clock, locale, and timezone.  It explicitly clears
+hash seed, 16 KiB inode ratio, blocks/group, flex size, the canonical
+fixtures' internal 4 MiB journal, error policy, root owner, clock, locale, and
+timezone. The VFS qualification additionally generates a private 8 MiB journal
+to prove that this fixture value is not an admission limit. It explicitly clears
 all features with `-O none` and adds exactly the profile list.  Lazy inode and
 journal initialization and discard are disabled.
 
@@ -369,13 +424,14 @@ read-side image, including checked HTree lookup, external extents, all legacy
 map levels, allocation-bitmap cross-checks, special metadata, namespaced raw
 xattrs, and bounded generic symlink traversal.
 
-The bounded clean read-side landing does not implement journal replay, legacy
-or modern orphan recovery, or mutation; an image requiring recovery is still
-refused.  Clean orphan-file admission remains bounded to 4096 filesystem
-blocks, ACLs are exposed but not enforced, the real extent fixture reaches
-depth 1 rather than the implemented profile limit of 5, and the special-inode
-fixture does not yet contain a socket.  Those qualification and semantic
-limits remain explicit before any write path can be advertised.
+The bounded reader now includes checksum-v3/64-bit committed-prefix replay and
+a crash-retry anchor for clearing `RECOVER`. It still refuses revoke records,
+checksum-damaged incomplete tails, legacy and modern orphan recovery, and all
+user-visible mutation. Clean orphan-file admission remains bounded to 4096
+filesystem blocks, ACLs are exposed but not enforced, the real extent fixture
+reaches depth 1 rather than the implemented profile limit of 5, and the
+special-inode fixture does not yet contain a socket. Those qualification and
+semantic limits remain explicit before any write path can be advertised.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

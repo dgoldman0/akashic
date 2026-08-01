@@ -42,6 +42,11 @@ KDOS_PATH = os.path.join(MEGAPAD_ROOT, "kdos.f")
 
 SECTOR = 512
 
+# KDOS reserves a 32 MiB external-memory zone for the userland dictionary.
+# Keep additional room for the shared VFS test arena and loader allocations.
+VFS_EXT_MEM_SIZE = 64 * (1 << 20)
+VFS_USERLAND_MARKER = "VFS-USERLAND-READY"
+
 def _fat16_sfn(name):
     """Convert 'README.TXT' or 'readme.txt' → 11-byte space-padded SFN."""
     name = name.upper()
@@ -519,13 +524,16 @@ def build_snapshot():
         '    _TARN @ T-VOLUME VFAT-NEW THROW ;',
     ]
 
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20),
+    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=VFS_EXT_MEM_SIZE,
                             storage_image=_boot_img_path)
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
 
-    all_lines = kdos_lines + ["ENTER-USERLAND"] + dep_lines + helpers
+    all_lines = kdos_lines + [
+        "ENTER-USERLAND",
+        f'ULAND @ IF ." {VFS_USERLAND_MARKER}" CR THEN',
+    ] + dep_lines + helpers
     payload = "\n".join(all_lines) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 800_000_000
     while steps < mx:
@@ -542,11 +550,15 @@ def build_snapshot():
         steps += max(batch, 1)
     text = uart_text(buf)
     errors = []
-    for l in text.strip().split('\n'):
+    transcript_lines = text.strip().split('\n')
+    for l in transcript_lines:
         lo = l.lower()
-        if '?' in l and ('not found' in lo or 'undefined' in lo):
+        missing_word = '?' in l and ('not found' in lo or 'undefined' in lo)
+        if missing_word:
             errors.append(l.strip())
             print(f"  [!] {l.strip()}")
+    if VFS_USERLAND_MARKER not in {line.strip() for line in transcript_lines}:
+        errors.append("userland activation marker missing")
     if errors:
         print(f"  [FATAL] {len(errors)} errors during load!")
         for l in text.strip().split('\n')[-40:]:
@@ -565,7 +577,7 @@ def run_forth(lines, max_steps=800_000_000, disk_image=None,
     bios_code, mem_bytes, cpu_state, ext_mem_bytes = _snapshot
 
     # Use MP64FS boot image to create the system, then restore snapshot state
-    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=16 * (1 << 20),
+    sys_obj = MegapadSystem(ram_size=1024*1024, ext_mem_size=VFS_EXT_MEM_SIZE,
                             storage_image=_boot_img_path)
     buf = capture_uart(sys_obj)
     sys_obj.load_binary(0, bios_code)
