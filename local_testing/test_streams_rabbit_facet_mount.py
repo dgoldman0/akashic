@@ -79,26 +79,64 @@ LOAD_STAGES = (
     ),
 )
 
+def _request_case_stages(
+    name: str,
+    start_word: str,
+    results_word: str,
+    *,
+    step_word: str = "_RBT-FM-PHASE-REQUEST-STEP",
+) -> tuple[tuple[str, str, str], ...]:
+    label = name.replace("-", " ").upper()
+    return (
+        (
+            f"mount-{name}-start",
+            start_word,
+            f"STREAMS RABBIT FACET MOUNT {label} START PASS",
+        ),
+        *((
+            f"mount-{name}-step-{index}",
+            step_word,
+            f"STREAMS RABBIT FACET MOUNT {label} STEP {index} PASS",
+        ) for index in range(1, 9)),
+        (
+            f"mount-{name}-results",
+            results_word,
+            f"STREAMS RABBIT FACET MOUNT {label} RESULTS PASS",
+        ),
+    )
+
+
 MOUNT_CONTRACT_STAGES = (
     (
         "mount-bound",
         "_RBT-FM-PHASE-BOUND",
         "STREAMS RABBIT FACET MOUNT BOUND PASS",
     ),
-    (
-        "mount-success-start",
-        "_RBT-FM-PHASE-SUCCESS-START",
-        "STREAMS RABBIT FACET MOUNT SUCCESS START PASS",
+    *_request_case_stages(
+        "deny",
+        "_RBT-FM-PHASE-DENY-START",
+        "_RBT-FM-PHASE-DENY-RESULTS",
     ),
-    *((
-        f"mount-success-step-{index}",
-        f"_RBT-FM-PHASE-SUCCESS-STEP-{index}",
-        f"STREAMS RABBIT FACET MOUNT SUCCESS STEP {index} PASS",
-    ) for index in range(1, 9)),
-    (
-        "mount-success-results",
+    *_request_case_stages(
+        "throw",
+        "_RBT-FM-PHASE-THROW-START",
+        "_RBT-FM-PHASE-THROW-RESULTS",
+    ),
+    *_request_case_stages(
+        "stale-caller",
+        "_RBT-FM-PHASE-STALE-CALLER-START",
+        "_RBT-FM-PHASE-STALE-CALLER-RESULTS",
+    ),
+    *_request_case_stages(
+        "runtime-alias",
+        "_RBT-FM-PHASE-ALIAS-START",
+        "_RBT-FM-PHASE-ALIAS-RESULTS",
+        step_word="_RBT-FM-PHASE-ALIAS-STEP",
+    ),
+    *_request_case_stages(
+        "success",
+        "_RBT-FM-PHASE-SUCCESS-START",
         "_RBT-FM-PHASE-SUCCESS-RESULTS",
-        "STREAMS RABBIT FACET MOUNT SUCCESS RESULTS PASS",
     ),
     (
         "mount-fini-borrowed",
