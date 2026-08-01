@@ -93,7 +93,9 @@ REQUIRE ../vfs.f
 0x068 CONSTANT _EXT4-SB.UUID
 0x0E0 CONSTANT _EXT4-SB.JOURNAL-INO
 0x0E8 CONSTANT _EXT4-SB.LAST-ORPHAN
+0x0FD CONSTANT _EXT4-SB.JOURNAL-BACKUP-TYPE
 0x0FE CONSTANT _EXT4-SB.DESC-SIZE
+0x10C CONSTANT _EXT4-SB.JOURNAL-BLOCKS
 0x150 CONSTANT _EXT4-SB.BLOCKS-HI
 0x154 CONSTANT _EXT4-SB.RBLOCKS-HI
 0x158 CONSTANT _EXT4-SB.FREE-BLOCKS-HI
@@ -104,6 +106,8 @@ REQUIRE ../vfs.f
 0x270 CONSTANT _EXT4-SB.CSUM-SEED
 0x280 CONSTANT _EXT4-SB.ORPHAN-INO
 0x3FC CONSTANT _EXT4-SB.CHECKSUM
+
+1 CONSTANT _EXT4-JOURNAL-BACKUP-BLOCKS
 
 \ JBD2 superblock offsets (all JBD2 fields are big-endian).
 0x00 CONSTANT _EXT4-JS.MAGIC
@@ -1070,6 +1074,11 @@ VARIABLE _EXT4-BG-INODE-TABLE
         _EXT4-BS-PRIMARY @ _EXT4-SB.CSUM-SEED + L@ = AND
     _EXT4-BS-BUF @ _EXT4-SB.JOURNAL-INO + L@
         _EXT4-BS-PRIMARY @ _EXT4-SB.JOURNAL-INO + L@ = AND
+    _EXT4-BS-BUF @ _EXT4-SB.JOURNAL-BACKUP-TYPE + C@
+        _EXT4-BS-PRIMARY @ _EXT4-SB.JOURNAL-BACKUP-TYPE + C@ = AND
+    _EXT4-BS-BUF @ _EXT4-SB.JOURNAL-BLOCKS +
+        _EXT4-BS-PRIMARY @ _EXT4-SB.JOURNAL-BLOCKS +
+        68 _EXT4-BYTES=? AND
     _EXT4-BS-BUF @ _EXT4-SB.ORPHAN-INO + L@
         _EXT4-BS-PRIMARY @ _EXT4-SB.ORPHAN-INO + L@ = AND
     _EXT4-BS-BUF @ _EXT4-SB.UUID +
@@ -3718,6 +3727,110 @@ VARIABLE _EXT4-JVL-IOR
     0 _EXT4-MAP-VALIDATION-LIMIT !
     _EXT4-JVL-IOR @ ;
 
+VARIABLE _EXT4-JB-CTX
+VARIABLE _EXT4-JB-SB
+VARIABLE _EXT4-JB-IN
+
+VARIABLE _EXT4-JBR-CTX
+VARIABLE _EXT4-JBR-ROOT
+VARIABLE _EXT4-JBR-COUNT
+VARIABLE _EXT4-JBR-ENTRY
+VARIABLE _EXT4-JBR-LOGICAL
+VARIABLE _EXT4-JBR-LEN
+VARIABLE _EXT4-JBR-PHYS
+VARIABLE _EXT4-JBR-INDEX
+VARIABLE _EXT4-JBR-I
+VARIABLE _EXT4-JBR-OTHER
+VARIABLE _EXT4-JBR-OTHER-LEN
+
+\ The standard ext4 journal backup is a checksum-covered redundant copy of
+\ inode 8's complete i_block root plus size.  It omits flags, generation, and
+\ external-node authentication, so the recovery profile deliberately pins
+\ inode 8 to generation zero and a self-contained extent root.
+: _EXT4-JOURNAL-BACKUP-MATCHES-INODE?  ( ctx -- flag )
+    DUP _EXT4-JB-CTX !
+    DUP _EXT4-C.SB + _EXT4-JB-SB !
+    _EXT4-C.INODE + _EXT4-JB-IN !
+    _EXT4-JB-SB @ _EXT4-SB.JOURNAL-BACKUP-TYPE + C@
+        _EXT4-JOURNAL-BACKUP-BLOCKS =
+    _EXT4-JB-SB @ _EXT4-SB.JOURNAL-BLOCKS +
+        _EXT4-JB-IN @ _EXT4-I.BLOCK + 60 _EXT4-BYTES=? AND
+    _EXT4-JB-SB @ _EXT4-SB.JOURNAL-BLOCKS 60 + + L@
+        _EXT4-JB-IN @ _EXT4-I.SIZE-HI + L@ = AND
+    _EXT4-JB-SB @ _EXT4-SB.JOURNAL-BLOCKS 64 + + L@
+        _EXT4-JB-IN @ _EXT4-I.SIZE-LO + L@ = AND
+    _EXT4-JB-IN @ _EXT4-I.GENERATION + L@ 0= AND
+    _EXT4-JB-IN @ _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND 0<> AND ;
+
+\ Validate the tuple without consulting the primary GDT, allocation bitmaps,
+\ or inode table.  Exact, gapless coverage makes this root independently
+\ decodable during a retry; physical non-overlap makes every logical journal
+\ block unambiguous before the ordinary allocation-aware validation runs.
+: _EXT4-VALIDATE-JOURNAL-BACKUP-ROOT  ( ctx -- ior )
+    DUP _EXT4-JBR-CTX !
+    _EXT4-C.SB + _EXT4-SB.JOURNAL-BLOCKS + DUP _EXT4-JBR-ROOT !
+    W@ _EXT4-EXTENT-MAGIC <> IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JBR-ROOT @ 2 + W@ DUP _EXT4-JBR-COUNT !
+    DUP 0= SWAP 4 U> OR IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JBR-ROOT @ 4 + W@ 4 <>
+    _EXT4-JBR-ROOT @ 6 + W@ 0<> OR IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    0 _EXT4-JBR-LOGICAL !
+    _EXT4-JBR-COUNT @ 0 ?DO
+        _EXT4-JBR-ROOT @ 12 I 12 * + + DUP _EXT4-JBR-ENTRY !
+        L@ _EXT4-JBR-LOGICAL @ <> IF
+            EXT4-D-JOURNAL _EXT4-CORRUPT UNLOOP EXIT
+        THEN
+        _EXT4-JBR-ENTRY @ 4 + W@ DUP _EXT4-JBR-LEN !
+        DUP 0= SWAP 32768 U> OR IF
+            EXT4-D-JOURNAL _EXT4-CORRUPT UNLOOP EXIT
+        THEN
+        _EXT4-JBR-ENTRY @ 6 + W@ IF
+            EXT4-D-JOURNAL _EXT4-CORRUPT UNLOOP EXIT
+        THEN
+        _EXT4-JBR-ENTRY @ 8 + L@ _EXT4-JBR-PHYS !
+        _EXT4-JBR-PHYS @ 0=
+        _EXT4-JBR-PHYS @ _EXT4-JBR-CTX @ _EXT4-C.FIRST + @ U< OR IF
+            EXT4-D-JOURNAL _EXT4-CORRUPT UNLOOP EXIT
+        THEN
+        _EXT4-JBR-PHYS @ _EXT4-JBR-LEN @
+        _EXT4-JBR-CTX @ _EXT4-C.BLOCKS + @ BLOCK-RANGE? 0= IF
+            EXT4-D-JOURNAL _EXT4-CORRUPT UNLOOP EXIT
+        THEN
+        I _EXT4-JBR-INDEX !
+        0 _EXT4-JBR-I !
+        BEGIN _EXT4-JBR-I @ _EXT4-JBR-INDEX @ < WHILE
+            _EXT4-JBR-ROOT @ 12 _EXT4-JBR-I @ 12 * + + DUP
+            8 + L@ _EXT4-JBR-OTHER !
+            4 + W@ _EXT4-JBR-OTHER-LEN !
+            _EXT4-JBR-OTHER @ _EXT4-JBR-OTHER-LEN @ +
+                _EXT4-JBR-PHYS @ U>
+            _EXT4-JBR-PHYS @ _EXT4-JBR-LEN @ +
+                _EXT4-JBR-OTHER @ U> AND IF
+                EXT4-D-JOURNAL _EXT4-CORRUPT UNLOOP EXIT
+            THEN
+            1 _EXT4-JBR-I +!
+        REPEAT
+        _EXT4-JBR-LOGICAL @ _EXT4-JBR-LEN @ + DUP
+        _EXT4-JBR-LOGICAL @ U< IF
+            DROP EXT4-D-JOURNAL _EXT4-CORRUPT UNLOOP EXIT
+        THEN
+        DUP _EXT4-JBR-CTX @ _EXT4-C.J.MAXLEN + @ U> IF
+            DROP EXT4-D-JOURNAL _EXT4-CORRUPT UNLOOP EXIT
+        THEN
+        _EXT4-JBR-LOGICAL !
+    LOOP
+    _EXT4-JBR-LOGICAL @
+    _EXT4-JBR-CTX @ _EXT4-C.J.MAXLEN + @ <> IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
 : _EXT4-VALIDATE-JOURNAL  ( ctx -- ior )
     DUP _EXT4-JV-CTX !
     0 _EXT4-JV-CTX @ _EXT4-C.J.PRIMARY-TORN + !
@@ -3726,6 +3839,9 @@ VARIABLE _EXT4-JVL-IOR
     0 _EXT4-JV-CTX @ _EXT4-C.J.WITNESS-CHECKSUM + !
     0 _EXT4-JV-CTX @ _EXT4-C.J.CLEANUP + !
     8 SWAP _EXT4-LOAD-INODE ?DUP IF EXIT THEN
+    _EXT4-JV-CTX @ _EXT4-JOURNAL-BACKUP-MATCHES-INODE? 0= IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
     \ A replay tag may legitimately name the inode-table block shared with
     \ neighboring inodes.  Preserve its exact inode-8 byte range so preflight
     \ can allow the block without allowing the journal map to rewrite itself.
@@ -3749,6 +3865,8 @@ VARIABLE _EXT4-JVL-IOR
         DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
     THEN
     _EXT4-JV-CTX @ _EXT4-C.J.MAXLEN + !
+    _EXT4-JV-CTX @ _EXT4-VALIDATE-JOURNAL-BACKUP-ROOT
+    ?DUP IF EXIT THEN
     _EXT4-JV-CTX @ _EXT4-VALIDATE-JOURNAL-INODE-MAP ?DUP IF EXIT THEN
     0 _EXT4-JV-CTX @ _EXT4-MAP-BLOCK
     _EXT4-JV-IOR ! _EXT4-JV-PRESENT ! _EXT4-JV-PHYS !

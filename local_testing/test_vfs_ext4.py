@@ -792,6 +792,27 @@ def test_jbd2_checksum_v3_replay_is_durable_and_idempotent(
     _assert_emitted(second, "EXT4-JBD2-SECOND-MOUNT-OK")
 
 
+def test_jbd2_recovery_rejects_checksum_valid_journal_backup_mismatch(
+    replay_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = replay_fixture["image"]
+    assert isinstance(image, Path)
+    output, trace, _ = run_recovery_forth(
+        image,
+        tmp_path / "refused-journal-backup-mismatch.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-REASON . _M-IOR VFS-IOR-DETAIL . "
+                "_V V.LIFECYCLE @ ."
+            ),
+        ],
+        patches=((1024, _super_with_xor(image, 0x10C + 20)),),
+    )
+    assert "10 12 0" in output, output[-1500:]
+    assert trace == ()
+
+
 def test_jbd2_replay_accepts_arena_bounded_8m_journal(
     large_journal_replay_fixture: dict[str, object], tmp_path: Path
 ) -> None:
@@ -2044,6 +2065,16 @@ def _canonical_lines(row: dict) -> list[str]:
 
 
 @pytest.mark.parametrize("image_id", IMAGE_IDS)
+def test_canonical_images_publish_journal_recovery_authority(
+    canonical_images: dict[str, Path], image_id: str
+) -> None:
+    observed = ext4_fixture_generator.read_superblock(canonical_images[image_id])
+    ext4_fixture_generator.validate_observed_superblock(
+        PROFILE, IMAGE_ROWS[image_id], observed
+    )
+
+
+@pytest.mark.parametrize("image_id", IMAGE_IDS)
 def test_canonical_images_are_fully_inspectable(
     canonical_images: dict[str, Path], image_id: str
 ) -> None:
@@ -2065,6 +2096,70 @@ def test_canonical_images_are_fully_inspectable(
     ):
         _assert_emitted(output, marker)
     assert _sha256(path) == before
+
+
+def test_journal_backup_root_rejects_non_authoritative_shapes(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    output = run_forth(
+        path,
+        [
+            "CREATE _T-JBR-SAVED 60 ALLOT",
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            "_V _EXT4-CTX CONSTANT _T-JBR-CTX",
+            (
+                "_T-JBR-CTX _EXT4-C.SB + _EXT4-SB.JOURNAL-BLOCKS + "
+                "CONSTANT _T-JBR-ROOT"
+            ),
+            "_T-JBR-ROOT _T-JBR-SAVED 60 CMOVE",
+            (
+                "_T-JBR-CTX _EXT4-VALIDATE-JOURNAL-BACKUP-ROOT 0= "
+                "CONSTANT _T-JBR-GOOD"
+            ),
+            (
+                "1 _T-JBR-ROOT 6 + W! "
+                "_T-JBR-CTX _EXT4-VALIDATE-JOURNAL-BACKUP-ROOT 0<> "
+                "CONSTANT _T-JBR-DEPTH-BAD"
+            ),
+            "_T-JBR-SAVED _T-JBR-ROOT 60 CMOVE",
+            (
+                "1 _T-JBR-ROOT 12 + L! "
+                "_T-JBR-CTX _EXT4-VALIDATE-JOURNAL-BACKUP-ROOT 0<> "
+                "CONSTANT _T-JBR-GAP-BAD"
+            ),
+            "_T-JBR-SAVED _T-JBR-ROOT 60 CMOVE",
+            (
+                "32769 _T-JBR-ROOT 16 + W! "
+                "_T-JBR-CTX _EXT4-VALIDATE-JOURNAL-BACKUP-ROOT 0<> "
+                "CONSTANT _T-JBR-UNWRITTEN-BAD"
+            ),
+            "_T-JBR-SAVED _T-JBR-ROOT 60 CMOVE",
+            (
+                "_T-JBR-CTX _EXT4-C.BLOCKS + @ _T-JBR-ROOT 20 + L! "
+                "_T-JBR-CTX _EXT4-VALIDATE-JOURNAL-BACKUP-ROOT 0<> "
+                "CONSTANT _T-JBR-BOUNDS-BAD"
+            ),
+            "_T-JBR-SAVED _T-JBR-ROOT 60 CMOVE",
+            (
+                "2 _T-JBR-ROOT 2 + W! 2048 _T-JBR-ROOT 16 + W! "
+                "2048 _T-JBR-ROOT 24 + L! 2048 _T-JBR-ROOT 28 + W! "
+                "0 _T-JBR-ROOT 30 + W! _T-JBR-ROOT 20 + L@ "
+                "_T-JBR-ROOT 32 + L!"
+            ),
+            (
+                "_T-JBR-CTX _EXT4-VALIDATE-JOURNAL-BACKUP-ROOT 0<> "
+                "CONSTANT _T-JBR-ALIAS-BAD"
+            ),
+            (
+                "_M-IOR 0= _T-JBR-GOOD AND _T-JBR-DEPTH-BAD AND "
+                "_T-JBR-GAP-BAD AND _T-JBR-UNWRITTEN-BAD AND "
+                "_T-JBR-BOUNDS-BAD AND _T-JBR-ALIAS-BAD AND "
+                'IF ." EXT4-JOURNAL-BACKUP-ROOT-STRICT" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JOURNAL-BACKUP-ROOT-STRICT")
 
 
 def _read_side_lines() -> list[str]:
@@ -2292,12 +2387,25 @@ def test_supplemental_image_closes_read_side_structural_gaps(
 
 
 def _super_with_mask(path: Path, field_offset: int, value: int) -> bytes:
+    return _super_with_bytes(path, field_offset, struct.pack("<I", value))
+
+
+def _super_with_bytes(path: Path, field_offset: int, value: bytes) -> bytes:
     with path.open("rb") as source:
         source.seek(1024)
         superblock = bytearray(source.read(1024))
-    struct.pack_into("<I", superblock, field_offset, value)
+    assert 0 <= field_offset <= len(superblock) - len(value)
+    superblock[field_offset : field_offset + len(value)] = value
     struct.pack_into("<I", superblock, 0x3FC, _crc32c_raw(superblock[:0x3FC]))
     return bytes(superblock)
+
+
+def _super_with_xor(path: Path, field_offset: int, value: int = 1) -> bytes:
+    with path.open("rb") as source:
+        source.seek(1024 + field_offset)
+        original = source.read(1)
+    assert len(original) == 1
+    return _super_with_bytes(path, field_offset, bytes((original[0] ^ value,)))
 
 
 REFUSED_FEATURES = (
@@ -2382,6 +2490,25 @@ def test_superblock_checksum_corruption_is_not_published(
         patches=((1024 + 0x78, b"X"),),
     )
     assert "10 3 4 2 0" in output, output[-1500:]
+
+
+def test_checksum_valid_primary_journal_backup_disagreement_is_rejected(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    output = run_forth(
+        path,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _IOR CONSTANT _V",
+            (
+                "_IOR VFS-IOR-REASON . _IOR VFS-IOR-DOMAIN . "
+                "_IOR VFS-IOR-FLAGS . _IOR VFS-IOR-DETAIL . "
+                "_V V.LIFECYCLE @ ."
+            ),
+        ],
+        patches=((1024, _super_with_xor(path, 0x10C + 20)),),
+    )
+    assert "10 3 4 9 0" in output, output[-1500:]
 
 
 MOUNT_CORRUPTION_CASES = (

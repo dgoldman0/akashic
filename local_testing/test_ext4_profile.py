@@ -258,6 +258,20 @@ def test_jbd2_feature_ledger_is_complete_and_strict(manifest: dict) -> None:
     assert journal["writer_initial_incompat_mask"] == 0x12
     assert journal["writer_with_revoke_incompat_mask"] == 0x13
     assert journal["checksum_type"] == 4
+    assert journal["recovery_authority"] == {
+        "journal_inode": 8,
+        "journal_inode_generation": 0,
+        "journal_backup_type": 1,
+        "mapping": "inline_extent_root",
+        "extent_magic": 0xF30A,
+        "extent_depth": 0,
+        "extent_max": 4,
+        "minimum_extents": 1,
+        "maximum_extents": 4,
+        "extent_state": "initialized",
+        "logical_coverage": "gapless_exact_eof",
+        "physical_ranges": "bounded_pairwise_disjoint",
+    }
     admitted = {
         row["name"]
         for row in journal["incompat"]

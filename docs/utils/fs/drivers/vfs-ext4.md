@@ -49,12 +49,19 @@ root, mount verifies:
 - every primary group descriptor and every initialized block/inode bitmap
   checksum, while honoring the admitted uninitialized-group flags;
 - every sparse-super backup copy and its invariant geometry, features, UUID,
-  group number, and checksum, plus every backup GDT descriptor CRC and
-  immutable metadata location;
+  group number, journal-inode backup tuple, and checksum, plus every backup
+  GDT descriptor CRC and immutable metadata location;
 - allocation and checksum of each consumed inode;
 - the internal JBD2 journal superblock, size-derived inode map, and matching
-  UUID. The inode size must be a nonzero whole number of filesystem blocks,
-  fit JBD2's 32-bit `s_maxlen`, and not exceed the filesystem block count.
+  UUID. Superblock `s_jnl_backup_type` must be `1`; its 68-byte
+  `s_jnl_blocks` tuple must exactly reproduce inode 8's `i_block`, size-high,
+  and size-low fields. Journal inode 8 is pinned to generation zero and an
+  inline depth-0 extent root containing one through four initialized extents
+  with exact gapless EOF coverage and bounded, nonoverlapping physical
+  ranges. This recovery-authority constraint does not narrow the general
+  file reader's extent-depth or legacy-map support. The inode size must be a
+  nonzero whole number of filesystem blocks, fit JBD2's 32-bit `s_maxlen`,
+  and not exceed the filesystem block count.
   Mount allocates an exact map plus a half-full power-of-two uniqueness table
   from the caller's arena; arena exhaustion returns `VFS-E-NOMEM` rather than
   imposing a journal-size constant. Every mount materializes the complete
@@ -108,6 +115,14 @@ admitted. Pinned qualification relocates a valid transaction above logical
 journal block 4095 and across the end of an 8192-block ring, proving that scan
 and replay use authenticated ring geometry rather than fixture-sized cursor
 assumptions.
+
+The type-1 journal tuple is validated without consulting allocation metadata,
+then cross-checked against the checksum-valid live inode and all inspected
+sparse-super copies. The current dirty bootstrap still reaches inode 8 through
+the primary group descriptor before making that comparison. Selecting a
+designated replay-frozen sparse-super/GDT witness when those primary locator
+bytes are torn is the next recovery-authority step; this document does not yet
+claim that fallback.
 
 Recovery requires a physically writable, flush-capable volume. Home writes are
 flushed and the resulting filesystem is strictly revalidated before journal
@@ -209,6 +224,9 @@ writable profile. The remaining boundaries are:
   but not a socket inode;
 - replay currently requires checksum-v3/64-bit journal records, refuses every
   revoke record, and fails closed on checksum-damaged incomplete tails;
+- dirty bootstrap still requires readable primary group-0 inode locators even
+  though the type-1 journal tuple is already structurally validated and
+  cross-checked; designated sparse-witness fallback remains to be implemented;
 - a primary tear with no intact locator fails closed unless the ext4
   superblock is independently clean and the complete primary block proves the
   exact sequential witness-removal prefix described above;

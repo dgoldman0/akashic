@@ -139,6 +139,20 @@ def read_superblock(image: Path) -> dict[str, Any]:
     group_count = (
         blocks - first_data_block + blocks_per_group - 1
     ) // blocks_per_group
+    journal_extent_count = _u16(sb, 0x10C + 2)
+    journal_extents = []
+    for index in range(min(journal_extent_count, 4)):
+        extent = 0x10C + 12 + index * 12
+        journal_extents.append(
+            {
+                "logical": _u32(sb, extent),
+                "raw_length": _u16(sb, extent + 4),
+                "physical_hi": _u16(sb, extent + 6),
+                "physical": (
+                    (_u16(sb, extent + 6) << 32) | _u32(sb, extent + 8)
+                ),
+            }
+        )
 
     return {
         "magic": _u16(sb, 0x38),
@@ -165,6 +179,15 @@ def read_superblock(image: Path) -> dict[str, Any]:
         "uuid": str(uuid.UUID(bytes=bytes(sb[0x68:0x78]))),
         "label": bytes(sb[0x78:0x88]).split(b"\0", 1)[0].decode("ascii"),
         "journal_inode": _u32(sb, 0xE0),
+        "journal_backup_type": sb[0xFD],
+        "journal_backup_extent_magic": _u16(sb, 0x10C),
+        "journal_backup_extent_count": journal_extent_count,
+        "journal_backup_extent_max": _u16(sb, 0x10C + 4),
+        "journal_backup_extent_depth": _u16(sb, 0x10C + 6),
+        "journal_backup_size": (
+            (_u32(sb, 0x10C + 60) << 32) | _u32(sb, 0x10C + 64)
+        ),
+        "journal_backup_extents": journal_extents,
         "checksum_seed": _u32(sb, 0x270),
         "orphan_file_inode": _u32(sb, 0x280),
         "superblock_checksum": _u32(sb, 0x3FC),
@@ -192,6 +215,7 @@ def validate_observed_superblock(
 ) -> None:
     profile = manifest["profiles"][image_spec["profile"]]
     masks = profile["feature_masks"]
+    journal_authority = manifest["journal_feature_policy"]["recovery_authority"]
     expected = {
         "magic": 0xEF53,
         "revision": 1,
@@ -214,6 +238,10 @@ def validate_observed_superblock(
         "uuid": image_spec["uuid"],
         "label": image_spec["label"],
         "journal_inode": 8,
+        "journal_backup_type": journal_authority["journal_backup_type"],
+        "journal_backup_extent_magic": journal_authority["extent_magic"],
+        "journal_backup_extent_max": journal_authority["extent_max"],
+        "journal_backup_extent_depth": journal_authority["extent_depth"],
     }
     if image_spec["inode_size"] == 256:
         expected["minimum_extra_isize"] = 32
@@ -231,6 +259,51 @@ def validate_observed_superblock(
         raise ProfileError(
             f"{image_spec['id']} violates pinned superblock facts: "
             f"{json.dumps(differences, sort_keys=True)}"
+        )
+    extent_count = observed["journal_backup_extent_count"]
+    if not (
+        journal_authority["minimum_extents"]
+        <= extent_count
+        <= journal_authority["maximum_extents"]
+    ):
+        raise ProfileError(
+            f"{image_spec['id']} has {extent_count} journal backup extents"
+        )
+    journal_size = observed["journal_backup_size"]
+    if journal_size == 0 or journal_size % observed["block_size"]:
+        raise ProfileError(
+            f"{image_spec['id']} has invalid journal backup size {journal_size}"
+        )
+    logical = 0
+    physical_ranges: list[tuple[int, int]] = []
+    for extent in observed["journal_backup_extents"]:
+        raw_length = extent["raw_length"]
+        physical = extent["physical"]
+        if extent["logical"] != logical or not 1 <= raw_length <= 32768:
+            raise ProfileError(
+                f"{image_spec['id']} has a sparse or unwritten journal extent"
+            )
+        if extent["physical_hi"] != 0 or physical == 0:
+            raise ProfileError(
+                f"{image_spec['id']} has an unsupported journal extent address"
+            )
+        physical_end = physical + raw_length
+        if physical_end > observed["block_count"]:
+            raise ProfileError(
+                f"{image_spec['id']} has an out-of-bounds journal extent"
+            )
+        if any(
+            other_end > physical and physical_end > other_start
+            for other_start, other_end in physical_ranges
+        ):
+            raise ProfileError(
+                f"{image_spec['id']} has overlapping journal extents"
+            )
+        physical_ranges.append((physical, physical_end))
+        logical += raw_length
+    if logical != journal_size // observed["block_size"]:
+        raise ProfileError(
+            f"{image_spec['id']} journal backup does not exactly cover its size"
         )
     if observed["orphan_file_inode"] == 0:
         raise ProfileError(f"{image_spec['id']} lacks its required orphan file inode")

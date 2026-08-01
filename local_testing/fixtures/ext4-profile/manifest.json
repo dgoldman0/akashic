@@ -357,6 +357,20 @@
     "writer_with_revoke_incompat_mask": 19,
     "writer_with_revoke_incompat_hex": "0x00000013",
     "checksum_type": 4,
+    "recovery_authority": {
+      "journal_inode": 8,
+      "journal_inode_generation": 0,
+      "journal_backup_type": 1,
+      "mapping": "inline_extent_root",
+      "extent_magic": 62218,
+      "extent_depth": 0,
+      "extent_max": 4,
+      "minimum_extents": 1,
+      "maximum_extents": 4,
+      "extent_state": "initialized",
+      "logical_coverage": "gapless_exact_eof",
+      "physical_ranges": "bounded_pairwise_disjoint"
+    },
     "compat": [
       {"bit": 1, "hex": "0x00000001", "name": "checksum_v1", "disposition": "refuse"}
     ],

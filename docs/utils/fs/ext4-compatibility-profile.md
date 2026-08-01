@@ -211,6 +211,17 @@ mapping in one size-bounded walk after extent/legacy-tree validation. Journal
 length comes from inode 8 and must exactly match the authenticated 32-bit JBD2
 `s_maxlen`; the exact map and uniqueness hash come from the caller-provided
 arena, so 4 MiB is a canonical-fixture choice rather than a driver ceiling.
+The recovery profile additionally requires standard `s_jnl_backup_type=1`.
+All validated sparse-super copies must carry the same 68-byte `s_jnl_blocks`
+tuple as the primary, and that tuple must exactly reproduce inode 8's
+`i_block`, size-high, and size-low fields. Because the standard tuple omits
+inode flags, generation, and authentication inputs for external extent nodes,
+journal inode 8 is deliberately pinned to generation zero and a complete
+inline depth-0 extent root: one through four initialized extents, gapless
+logical coverage through journal EOF, and bounded, pairwise-disjoint physical
+ranges. This is a recovery-authority rule for the fixed internal journal, not
+a restriction on ordinary inode maps or journal capacity beyond the inline
+extent format itself.
 The walker rejects holes, mappings beyond journal EOF, aliased or out-of-range
 data blocks, and aliases between journal data and its own map metadata. A
 separately sized metadata ownership hash makes both journal data and external
@@ -222,6 +233,13 @@ limitation rather than being guessed incomplete. A matching-sequence JBD2
 `SUPER_V2` header terminates preflight only after the complete block validates
 as the checksummed, self-locating recovery anchor; it is never replayed as a
 transaction record.
+
+The current dirty bootstrap still loads inode 8 through the primary group-0
+descriptor before cross-validating this tuple. A later recovery-authority step
+will deterministically use a replay-frozen sparse-super and backup-GDT witness
+when the equivalent primary locator/checksum domains are torn. Until that
+lands, the tuple validation closes format ambiguity but does not by itself
+make every primary-locator tear retryable.
 
 To make the checkpoint/reset/clear sequence retryable across 512-byte media
 tears, the implementation preseeds the first noncommitted journal slot with
