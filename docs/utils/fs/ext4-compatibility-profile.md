@@ -466,9 +466,14 @@ The bounded reader now includes checksum-v3/64-bit, revoke-aware
 committed-prefix replay and a crash-retry anchor for clearing `RECOVER`. Dirty
 replay is bootstrapped through the replay-frozen group-1 sparse-super/GDT
 witness, and a torn primary super requires a committed, unrevoked
-invariant-preserving replacement before any home write. The implementation
-still fails closed on checksum-damaged incomplete tails and refuses legacy and
-modern orphan recovery and all user-visible mutation. Clean orphan-file
+invariant-preserving replacement before any home write. A private
+arena-bounded writer foundation now validates and reuses exact workspace
+geometry, reserves transaction/ring credits, and owns coalesced metadata,
+ordered-data, and revoke after-images without performing media I/O. Journal
+emission, checkpointing, and uncertain-write quarantine remain unimplemented.
+The implementation still fails closed on checksum-damaged incomplete tails
+and refuses legacy and modern orphan recovery and all user-visible mutation.
+Clean orphan-file
 admission remains bounded to 4096 filesystem blocks, ACLs are exposed but not
 enforced, the real extent fixture reaches depth 1 rather than the implemented
 profile limit of 5, and the special-inode fixture does not yet contain a

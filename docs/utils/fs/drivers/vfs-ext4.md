@@ -186,6 +186,35 @@ concurrent raw-media mutation. Successful landing leaves no private recovery
 authority. External Linux/e2fsprogs mutation and broader hardware power-cut
 qualification of the transient convention remain release gates.
 
+## Private transaction staging
+
+The driver now has a private, non-published foundation for the eventual
+ordered JBD2 writer. A caller supplies metadata, ordered-data, and revoke
+capacities; the driver derives exact half-full hash geometry and the complete
+byte requirement, makes one checked allocation from the binding arena, and
+publishes the workspace only after its internal layout is complete. The same
+geometry is reused without arena growth. On a clean failed-mount retry, an
+idle workspace is zeroed and rebased to the newly authenticated journal head
+and wrapped next transaction ID. Different requested geometry is refused
+rather than leaking another monotonic-arena allocation.
+
+A private transaction reserves journal credits and ring space before accepting
+any block. It owns complete block-sized metadata and ordered-data after-images,
+coalesces repeated writes by home block, records image CRC32C, and keeps
+cancelled metadata and revoke entries indexed so probe chains and consumed
+credits remain stable. Metadata and revoke operations cancel and reactivate
+one another without deleting hash slots; ordered data may coexist with a
+revoke, while one home block cannot be staged as both active metadata and
+ordered data. Abort zeroes staged authority, refunds the reservation, and
+reuses the same arena storage.
+
+This layer emits no descriptor, payload, revoke, commit, checkpoint, or home
+write. The object layout, counts, embedded pointers, ring fields, and hash
+indices are revalidated before they can drive a fill, copy, or lookup. The
+public binding and capability mask remain read-only until ordered emission,
+checkpointing, fault quarantine, both orphan mechanisms, mutation operations,
+and the release gates below are complete.
+
 ## Read-only inspection
 
 The current binding advertises directory enumeration, open/release, reads,
@@ -255,6 +284,8 @@ writable profile. The remaining boundaries are:
 - a checksum-torn dirty primary super fails closed unless a fully committed
   transaction carries its valid invariant-preserving replacement, or the
   private `AKR1` clear witness proves the exact cleanup state described above;
+- private transaction staging is implemented, but journal emission,
+  checkpointing, and uncertain-write quarantine are not;
 - legacy and modern orphan recovery and every user-visible mutation operation
   remain unimplemented; and
 - recovery-anchor interoperability and the controlled power-cut matrix still

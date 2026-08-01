@@ -3542,6 +3542,531 @@ def test_jbd2_revoke_workspace_is_arena_derived_and_wrap_aware(
     _assert_emitted(output, "EXT4-REVOKE-WORKSPACE-GEOMETRY")
 
 
+def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
+    tmp_path: Path,
+) -> None:
+    blank = tmp_path / "writer-workspace.img"
+    blank.write_bytes(bytes(4 * 512))
+    output = run_forth(
+        blank,
+        [
+            "3 3 3 1024 _EXT4-JWR-MEASURE CONSTANT _JW-M-IOR CONSTANT _JW-BYTES",
+            "CREATE _JW-CTX _EXT4-CTX-SIZE ALLOT",
+            "_JW-CTX _EXT4-CTX-SIZE 0 FILL",
+            "CREATE _JW-MAP 8 CELLS ALLOT _JW-MAP 8 CELLS 0 FILL",
+            "CREATE _JW-HASH 16 CELLS ALLOT _JW-HASH 16 CELLS 0 FILL",
+            "1000 _JW-CTX _EXT4-C.BLOCKS + !",
+            "1024 _JW-CTX _EXT4-C.BSIZE + !",
+            "8 _JW-CTX _EXT4-C.J.MAXLEN + !",
+            "1 _JW-CTX _EXT4-C.J.FIRST + !",
+            "7 _JW-CTX _EXT4-C.J.HEAD + !",
+            "0xFFFFFFFF _JW-CTX _EXT4-C.J.SEQUENCE + !",
+            "_JW-MAP _JW-CTX _EXT4-C.J.MAP + !",
+            "8 _JW-CTX _EXT4-C.J.MAP-CAPACITY + !",
+            "_JW-HASH _JW-CTX _EXT4-C.J.MAP-HASH + !",
+            "16 _JW-CTX _EXT4-C.J.MAP-HASH-SLOTS + !",
+            (
+                "_JW-BYTES 2 CELLS + A-XMEM ARENA-NEW THROW "
+                "CONSTANT _JW-ARENA"
+            ),
+            "_JW-ARENA _JW-CTX _EXT4-C.ARENA + !",
+            "_JW-ARENA ARENA-USED CONSTANT _JW-BEFORE",
+            (
+                "3 3 3 _JW-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _JW-IOR CONSTANT _JW"
+            ),
+            "_JW-ARENA ARENA-USED CONSTANT _JW-AFTER",
+            (
+                "_JW-M-IOR 0= _JW-IOR 0= AND _JW 0<> AND "
+                "_JW-CTX _EXT4-C.J.WRITER + @ _JW = AND "
+                "_JW _EXT4-JWR.TOTAL + @ _JW-BYTES = AND "
+                "_JW-AFTER _JW-BEFORE _JW-BYTES + = AND "
+                "_JW _EXT4-JWR.META-SLOTS + @ 8 = AND "
+                "_JW _EXT4-JWR.DATA-SLOTS + @ 8 = AND "
+                "_JW _EXT4-JWR.REVOKE-SLOTS + @ 8 = AND "
+                "_JW _EXT4-JWR.FREE + @ 6 = AND "
+                "_JW _EXT4-JWR.HEAD + @ 7 = AND "
+                "_JW _EXT4-JWR.NEXT-TID + @ 0= AND "
+                'IF ." EXT4-JWR-EXACT" THEN'
+            ),
+            "_JW-ARENA ARENA-USED CONSTANT _JW-REUSE-BEFORE",
+            "5 _JW-CTX _EXT4-C.J.HEAD + !",
+            "41 _JW-CTX _EXT4-C.J.SEQUENCE + !",
+            (
+                "3 3 3 _JW-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _JW-REUSE-IOR CONSTANT _JW-REUSE"
+            ),
+            "_JW-ARENA ARENA-USED CONSTANT _JW-REUSE-AFTER",
+            (
+                "_JW-REUSE-IOR 0= _JW-REUSE _JW = AND "
+                "_JW _EXT4-JWR.HEAD + @ 5 = AND "
+                "_JW _EXT4-JWR.TAIL + @ 5 = AND "
+                "_JW _EXT4-JWR.FREE + @ 6 = AND "
+                "_JW _EXT4-JWR.NEXT-TID + @ 42 = AND "
+                "_JW-REUSE-AFTER _JW-REUSE-BEFORE = AND "
+                'IF ." EXT4-JWR-REBASED" THEN'
+            ),
+            "7 _JW-CTX _EXT4-C.J.HEAD + !",
+            "0xFFFFFFFF _JW-CTX _EXT4-C.J.SEQUENCE + !",
+            (
+                "3 3 3 _JW-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _JW-WRAP-IOR CONSTANT _JW-WRAP"
+            ),
+            (
+                "4 3 3 _JW-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _JW-CONFLICT-IOR CONSTANT _JW-CONFLICT"
+            ),
+            (
+                "_JW-WRAP-IOR 0= _JW-WRAP _JW = AND "
+                "_JW-REUSE-AFTER _JW-REUSE-BEFORE = AND "
+                "_JW _EXT4-JWR.HEAD + @ 7 = AND "
+                "_JW _EXT4-JWR.NEXT-TID + @ 0= AND "
+                "_JW-CONFLICT 0= AND _JW-CONFLICT-IOR VFS-E-CONFLICT = AND "
+                "_JW-ARENA ARENA-USED _JW-REUSE-AFTER = AND "
+                'IF ." EXT4-JWR-REUSED" THEN'
+            ),
+            "3 _JW-CTX _EXT4-C.J.MAP-HASH-SLOTS + !",
+            (
+                "3 3 3 _JW-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _JW-BAD-HASH-IOR CONSTANT _JW-BAD-HASH"
+            ),
+            (
+                "1 0 0 _JW _EXT4-JTX-BEGIN "
+                "CONSTANT _JW-BAD-CTX-IOR CONSTANT _JW-BAD-CTX"
+            ),
+            "16 _JW-CTX _EXT4-C.J.MAP-HASH-SLOTS + !",
+            "_EXT4-NONNEG-MAX 1+ _JW-CTX _EXT4-C.J.MAP-HASH-SLOTS + !",
+            (
+                "3 3 3 _JW-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _JW-NEG-HASH-IOR CONSTANT _JW-NEG-HASH"
+            ),
+            "16 _JW-CTX _EXT4-C.J.MAP-HASH-SLOTS + !",
+            "9 _JW _EXT4-JWR.MAXLEN + !",
+            (
+                "1 0 0 _JW _EXT4-JTX-BEGIN "
+                "CONSTANT _JW-BAD-RING-IOR CONSTANT _JW-BAD-RING"
+            ),
+            "8 _JW _EXT4-JWR.MAXLEN + !",
+            "-1 _JW-CTX _EXT4-C.BLOCKS + !",
+            (
+                "1 0 0 _JW _EXT4-JTX-BEGIN "
+                "CONSTANT _JW-NEG-BLOCKS-IOR CONSTANT _JW-NEG-BLOCKS"
+            ),
+            "1000 _JW-CTX _EXT4-C.BLOCKS + !",
+            "-1 _JW-CTX _EXT4-C.J.HEAD + !",
+            (
+                "3 3 3 _JW-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _JW-NEG-HEAD-IOR CONSTANT _JW-NEG-HEAD"
+            ),
+            "7 _JW-CTX _EXT4-C.J.HEAD + !",
+            (
+                "_JW-BAD-HASH 0= _JW-BAD-HASH-IOR VFS-E-INVALID = AND "
+                "_JW-BAD-CTX 0= AND _JW-BAD-CTX-IOR VFS-E-INVALID = AND "
+                "_JW-NEG-HASH 0= AND "
+                "_JW-NEG-HASH-IOR VFS-E-INVALID = AND "
+                "_JW-BAD-RING 0= AND _JW-BAD-RING-IOR VFS-E-INVALID = AND "
+                "_JW-NEG-BLOCKS 0= AND "
+                "_JW-NEG-BLOCKS-IOR VFS-E-INVALID = AND "
+                "_JW-NEG-HEAD 0= AND _JW-NEG-HEAD-IOR VFS-E-INVALID = AND "
+                "_JW-CTX _EXT4-C.J.WRITER + @ _JW = AND "
+                "_JW-ARENA ARENA-USED _JW-REUSE-AFTER = AND "
+                'IF ." EXT4-JWR-CONTEXT-GEOMETRY" THEN'
+            ),
+            "_JW _EXT4-JWR.META-HASH + @ CONSTANT _JW-META-HASH",
+            "1 _JW _EXT4-JWR.META-HASH + !",
+            (
+                "3 3 3 _JW-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _JW-SHAPE-IOR CONSTANT _JW-SHAPE"
+            ),
+            "_JW-META-HASH _JW _EXT4-JWR.META-HASH + !",
+            "4 _JW _EXT4-JWR.META-USED + !",
+            "_JW _EXT4-JTX-ABORT CONSTANT _JW-COUNT-IOR",
+            "0 _JW _EXT4-JWR.META-USED + !",
+            (
+                "_JW-SHAPE 0= _JW-SHAPE-IOR VFS-E-CORRUPT = AND "
+                "_JW-COUNT-IOR VFS-E-INVALID = AND "
+                "_JW _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE = AND "
+                "_JW _EXT4-JWR.FREE + @ 6 = AND "
+                'IF ." EXT4-JWR-VALIDATION-GUARDS" THEN'
+            ),
+            (
+                "_JW  _EXT4-JTX-TAGS/BLOCK 62 = "
+                "_JW _EXT4-JTX-REVOKES/BLOCK 125 = AND "
+                "62 0 _JW _EXT4-JTX-LOG-BLOCKS 0= SWAP 64 = AND AND "
+                "63 0 _JW _EXT4-JTX-LOG-BLOCKS 0= SWAP 66 = AND AND "
+                "0 126 _JW _EXT4-JTX-LOG-BLOCKS 0= SWAP 3 = AND AND "
+                'IF ." EXT4-JWR-GEOMETRY" THEN'
+            ),
+            (
+                "1 1 1 _JW _EXT4-JTX-BEGIN "
+                "CONSTANT _JWT-IOR CONSTANT _JWT"
+            ),
+            (
+                "1 0 0 _JW _EXT4-JTX-BEGIN "
+                "CONSTANT _JW-BUSY-IOR CONSTANT _JW-BUSY"
+            ),
+            (
+                "_JWT-IOR 0= _JWT _JW = AND "
+                "_JW _EXT4-JWR.LOG-RESERVED + @ 4 = AND "
+                "_JW _EXT4-JWR.FREE + @ 2 = AND "
+                "_JW _EXT4-JWR.TX-START + @ 7 = AND "
+                "_JW _EXT4-JWR.TX-TID + @ 0= AND "
+                "7 _JW-CTX _EXT4-JOURNAL-NEXT 1 = AND "
+                "_JW-BUSY 0= AND _JW-BUSY-IOR VFS-E-BUSY = AND "
+                'IF ." EXT4-JWR-RESERVED" THEN'
+            ),
+            "_JW _EXT4-JTX-ABORT CONSTANT _JW-ABORT-IOR",
+            (
+                "_JW-ABORT-IOR 0= _JW _EXT4-JWR.STATE + @ "
+                "_EXT4-JWR-IDLE = AND _JW _EXT4-JWR.FREE + @ 6 = AND "
+                "_JW-ARENA ARENA-USED _JW-AFTER = AND "
+                'IF ." EXT4-JWR-ABORT-REUSED" THEN'
+            ),
+            "3 0 1 _JW _EXT4-JTX-BEGIN CONSTANT _JW-FIT-IOR CONSTANT _JW-FIT",
+            (
+                "_JW-FIT-IOR 0= _JW-FIT _JW = AND "
+                "_JW _EXT4-JWR.LOG-RESERVED + @ 6 = AND "
+                "_JW _EXT4-JWR.FREE + @ 0= AND "
+                'IF ." EXT4-JWR-EXACT-RING" THEN'
+            ),
+            "_JW _EXT4-JTX-ABORT DROP",
+            "5 _JW _EXT4-JWR.FREE + !",
+            (
+                "3 0 1 _JW _EXT4-JTX-BEGIN "
+                "CONSTANT _JW-SHORT-IOR CONSTANT _JW-SHORT"
+            ),
+            (
+                "_JW-SHORT 0= _JW-SHORT-IOR VFS-E-NOSPC = AND "
+                "_JW _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE = AND "
+                "_JW _EXT4-JWR.FREE + @ 5 = AND "
+                'IF ." EXT4-JWR-RING-ATOMIC" THEN'
+            ),
+            "6 _JW _EXT4-JWR.FREE + !",
+            "5 _JW-CTX _EXT4-C.J.MAX-TRANSACTION + !",
+            (
+                "3 0 1 _JW _EXT4-JTX-BEGIN "
+                "CONSTANT _JW-MAX-IOR CONSTANT _JW-MAX"
+            ),
+            "0 _JW-CTX _EXT4-C.J.MAX-TRANSACTION + !",
+            "1 _JW-CTX _EXT4-C.J.MAX-TRANS-DATA + !",
+            (
+                "0 2 0 _JW _EXT4-JTX-BEGIN "
+                "CONSTANT _JW-DMAX-IOR CONSTANT _JW-DMAX"
+            ),
+            (
+                "_JW-MAX 0= _JW-MAX-IOR VFS-E-NOSPC = AND "
+                "_JW-DMAX 0= AND _JW-DMAX-IOR VFS-E-NOSPC = AND "
+                "_JW _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE = AND "
+                "_JW _EXT4-JWR.FREE + @ 6 = AND "
+                'IF ." EXT4-JWR-LIMITS" THEN'
+            ),
+            "CREATE _JWN-CTX _EXT4-CTX-SIZE ALLOT",
+            "_JWN-CTX _EXT4-CTX-SIZE 0 FILL",
+            "1000 _JWN-CTX _EXT4-C.BLOCKS + ! 1024 _JWN-CTX _EXT4-C.BSIZE + !",
+            "8 _JWN-CTX _EXT4-C.J.MAXLEN + ! 1 _JWN-CTX _EXT4-C.J.FIRST + !",
+            "_JW-MAP _JWN-CTX _EXT4-C.J.MAP + !",
+            "8 _JWN-CTX _EXT4-C.J.MAP-CAPACITY + !",
+            "_JW-HASH _JWN-CTX _EXT4-C.J.MAP-HASH + !",
+            "16 _JWN-CTX _EXT4-C.J.MAP-HASH-SLOTS + !",
+            (
+                "_JW-BYTES 1 CELLS - A-XMEM ARENA-NEW THROW "
+                "CONSTANT _JWN-ARENA"
+            ),
+            "_JWN-ARENA _JWN-CTX _EXT4-C.ARENA + !",
+            "_JWN-ARENA ARENA-USED CONSTANT _JWN-BEFORE",
+            (
+                "3 3 3 _JWN-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _JWN-IOR CONSTANT _JWN"
+            ),
+            (
+                "_JWN 0= _JWN-IOR VFS-E-NOMEM = AND "
+                "_JWN-ARENA ARENA-USED _JWN-BEFORE = AND "
+                "_JWN-CTX _EXT4-C.J.WRITER + @ 0= AND "
+                'IF ." EXT4-JWR-NOMEM-ATOMIC" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JWR-EXACT")
+    _assert_emitted(output, "EXT4-JWR-REBASED")
+    _assert_emitted(output, "EXT4-JWR-REUSED")
+    _assert_emitted(output, "EXT4-JWR-CONTEXT-GEOMETRY")
+    _assert_emitted(output, "EXT4-JWR-VALIDATION-GUARDS")
+    _assert_emitted(output, "EXT4-JWR-GEOMETRY")
+    _assert_emitted(output, "EXT4-JWR-RESERVED")
+    _assert_emitted(output, "EXT4-JWR-ABORT-REUSED")
+    _assert_emitted(output, "EXT4-JWR-EXACT-RING")
+    _assert_emitted(output, "EXT4-JWR-RING-ATOMIC")
+    _assert_emitted(output, "EXT4-JWR-LIMITS")
+    _assert_emitted(output, "EXT4-JWR-NOMEM-ATOMIC")
+
+
+def test_jbd2_writer_arithmetic_and_4k_geometry_are_total(
+    tmp_path: Path,
+) -> None:
+    blank = tmp_path / "writer-geometry.img"
+    blank.write_bytes(bytes(4 * 512))
+    output = run_forth(
+        blank,
+        [
+            (
+                "_EXT4-NONNEG-MAX 1 _EXT4-UADD? "
+                "CONSTANT _JWG-A-IOR CONSTANT _JWG-A"
+            ),
+            (
+                "_EXT4-NONNEG-MAX 2 _EXT4-UMUL? "
+                "CONSTANT _JWG-M-IOR CONSTANT _JWG-M"
+            ),
+            (
+                "_EXT4-NONNEG-MAX _EXT4-JWR-HASH-SLOTS "
+                "CONSTANT _JWG-H-IOR CONSTANT _JWG-H"
+            ),
+            (
+                "-1 0 0 4096 _EXT4-JWR-MEASURE "
+                "CONSTANT _JWG-N-IOR CONSTANT _JWG-N"
+            ),
+            (
+                "0 0 0 8192 _EXT4-JWR-MEASURE "
+                "CONSTANT _JWG-B-IOR CONSTANT _JWG-B"
+            ),
+            (
+                "_JWG-A 0= _JWG-A-IOR VFS-E-OVERFLOW = AND "
+                "_JWG-M 0= AND _JWG-M-IOR VFS-E-OVERFLOW = AND "
+                "_JWG-H 0= AND _JWG-H-IOR VFS-E-OVERFLOW = AND "
+                "_JWG-N 0= AND _JWG-N-IOR VFS-E-INVALID = AND "
+                "_JWG-B 0= AND _JWG-B-IOR VFS-E-INVALID = AND "
+                'IF ." EXT4-JWR-ARITHMETIC-TOTAL" THEN'
+            ),
+            (
+                "0 0 0 4096 _EXT4-JWR-MEASURE "
+                "CONSTANT _JWG-4K-IOR CONSTANT _JWG-4K-BYTES"
+            ),
+            "CREATE _JWG-CTX _EXT4-CTX-SIZE ALLOT",
+            "_JWG-CTX _EXT4-CTX-SIZE 0 FILL",
+            "CREATE _JWG-MAP 500 CELLS ALLOT _JWG-MAP 500 CELLS 0 FILL",
+            "CREATE _JWG-HASH 1024 CELLS ALLOT _JWG-HASH 1024 CELLS 0 FILL",
+            "1000 _JWG-CTX _EXT4-C.BLOCKS + !",
+            "4096 _JWG-CTX _EXT4-C.BSIZE + !",
+            "500 _JWG-CTX _EXT4-C.J.MAXLEN + !",
+            "1 _JWG-CTX _EXT4-C.J.FIRST + !",
+            "_JWG-MAP _JWG-CTX _EXT4-C.J.MAP + !",
+            "500 _JWG-CTX _EXT4-C.J.MAP-CAPACITY + !",
+            "_JWG-HASH _JWG-CTX _EXT4-C.J.MAP-HASH + !",
+            "1024 _JWG-CTX _EXT4-C.J.MAP-HASH-SLOTS + !",
+            (
+                "_JWG-4K-BYTES 2 CELLS + A-XMEM ARENA-NEW THROW "
+                "CONSTANT _JWG-ARENA"
+            ),
+            "_JWG-ARENA _JWG-CTX _EXT4-C.ARENA + !",
+            (
+                "0 0 0 _JWG-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _JWG-W-IOR CONSTANT _JWG-W"
+            ),
+            (
+                "_JWG-4K-IOR 0= _JWG-4K-BYTES _EXT4-JWR-SIZE 8192 + = AND "
+                "_JWG-W-IOR 0= AND _JWG-W 0<> AND "
+                "_JWG-W _EXT4-JTX-TAGS/BLOCK 254 = AND "
+                "_JWG-W _EXT4-JTX-REVOKES/BLOCK 509 = AND "
+                "254 0 _JWG-W _EXT4-JTX-LOG-BLOCKS 0= SWAP 256 = AND AND "
+                "255 0 _JWG-W _EXT4-JTX-LOG-BLOCKS 0= SWAP 258 = AND AND "
+                "0 510 _JWG-W _EXT4-JTX-LOG-BLOCKS 0= SWAP 3 = AND AND "
+                "_JWG-W _EXT4-JWR.FREE + @ 498 = AND "
+                'IF ." EXT4-JWR-4K-GEOMETRY" THEN'
+            ),
+            (
+                "_JWG-W _EXT4-JWR.SCRATCH-A + @ -1 _JWG-CTX "
+                "_EXT4-WRITE-JBLOCK CONSTANT _JWG-WRANGE"
+            ),
+            "0 0 _JWG-CTX _EXT4-WRITE-JBLOCK CONSTANT _JWG-WNULL",
+            "-1 _JWG-CTX _EXT4-READ-JBLOCK CONSTANT _JWG-RRANGE",
+            (
+                "_JWG-WRANGE VFS-IOR-REASON VFS-R-CORRUPT = "
+                "_JWG-WRANGE VFS-IOR-DETAIL EXT4-D-JOURNAL = AND "
+                "_JWG-WNULL VFS-E-INVALID = AND "
+                "_JWG-RRANGE VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_JWG-RRANGE VFS-IOR-DETAIL EXT4-D-JOURNAL = AND "
+                'IF ." EXT4-JBLOCK-RANGE-GUARDS" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JWR-ARITHMETIC-TOTAL")
+    _assert_emitted(output, "EXT4-JWR-4K-GEOMETRY")
+    _assert_emitted(output, "EXT4-JBLOCK-RANGE-GUARDS")
+
+
+def test_jbd2_writer_staging_coalesces_and_cancels_without_io(
+    tmp_path: Path,
+) -> None:
+    blank = tmp_path / "writer-staging.img"
+    blank.write_bytes(bytes(4 * 512))
+    output = run_forth(
+        blank,
+        [
+            "3 3 3 1024 _EXT4-JWR-MEASURE DROP CONSTANT _JST-BYTES",
+            "CREATE _JST-CTX _EXT4-CTX-SIZE ALLOT",
+            "_JST-CTX _EXT4-CTX-SIZE 0 FILL",
+            "CREATE _JST-MAP 10 CELLS ALLOT _JST-MAP 10 CELLS 0 FILL",
+            "CREATE _JST-HASH 32 CELLS ALLOT _JST-HASH 32 CELLS 0 FILL",
+            "1000 _JST-CTX _EXT4-C.BLOCKS + !",
+            "1024 _JST-CTX _EXT4-C.BSIZE + !",
+            "10 _JST-CTX _EXT4-C.J.MAXLEN + !",
+            "1 _JST-CTX _EXT4-C.J.FIRST + !",
+            "_JST-MAP _JST-CTX _EXT4-C.J.MAP + !",
+            "10 _JST-CTX _EXT4-C.J.MAP-CAPACITY + !",
+            "_JST-HASH _JST-CTX _EXT4-C.J.MAP-HASH + !",
+            "32 _JST-CTX _EXT4-C.J.MAP-HASH-SLOTS + !",
+            "900 _JST-HASH 900 31 AND CELLS + !",
+            (
+                "_JST-BYTES 2 CELLS + A-XMEM ARENA-NEW THROW "
+                "CONSTANT _JST-ARENA"
+            ),
+            "_JST-ARENA _JST-CTX _EXT4-C.ARENA + !",
+            (
+                "3 3 3 _JST-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _JST-W-IOR CONSTANT _JST-W"
+            ),
+            "_JST-ARENA ARENA-USED CONSTANT _JST-ARENA-USED",
+            "CREATE _JST-M1 1024 ALLOT _JST-M1 1024 0x11 FILL",
+            "CREATE _JST-M2 1024 ALLOT _JST-M2 1024 0x22 FILL",
+            "CREATE _JST-D1 1024 ALLOT _JST-D1 1024 0x33 FILL",
+            "CREATE _JST-D2 1024 ALLOT _JST-D2 1024 0x44 FILL",
+            (
+                "2 2 2 _JST-W _EXT4-JTX-BEGIN "
+                "CONSTANT _JST-T-IOR CONSTANT _JST-T"
+            ),
+            "_JST-W _EXT4-JWR.LOG-RESERVED + @ CONSTANT _JST-LOG",
+            "_JST-LOG 1+ _JST-W _EXT4-JWR.LOG-RESERVED + !",
+            (
+                "_JST-M1 41 _JST-T _EXT4-JTX-META-PUT "
+                "CONSTANT _JST-BAD-LOG"
+            ),
+            "_JST-LOG _JST-W _EXT4-JWR.LOG-RESERVED + !",
+            "1 _JST-W _EXT4-JWR.TX-TID + +!",
+            (
+                "_JST-M1 41 _JST-T _EXT4-JTX-META-PUT "
+                "CONSTANT _JST-BAD-TID"
+            ),
+            "-1 _JST-W _EXT4-JWR.TX-TID + +!",
+            (
+                "_JST-BAD-LOG VFS-E-INVALID = "
+                "_JST-BAD-TID VFS-E-INVALID = AND "
+                "_JST-W _EXT4-JWR.META-USED + @ 0= AND "
+                'IF ." EXT4-JTX-RUNTIME-GUARDS" THEN'
+            ),
+            "_JST-M1 42 _JST-T _EXT4-JTX-META-PUT CONSTANT _JST-MP1",
+            "0 _JST-W _EXT4-JWR.META-ACTIVE + !",
+            (
+                "_JST-M2 42 _JST-T _EXT4-JTX-META-PUT "
+                "CONSTANT _JST-BAD-COUNT"
+            ),
+            "1 _JST-W _EXT4-JWR.META-ACTIVE + !",
+            (
+                "3 _JST-W _EXT4-JWR.META-HASH + @ "
+                "42 _JST-W _EXT4-JWR.META-SLOTS + @ 1- AND CELLS + !"
+            ),
+            (
+                "_JST-M2 42 _JST-T _EXT4-JTX-META-PUT "
+                "CONSTANT _JST-BAD-HASH"
+            ),
+            (
+                "1 _JST-W _EXT4-JWR.META-HASH + @ "
+                "42 _JST-W _EXT4-JWR.META-SLOTS + @ 1- AND CELLS + !"
+            ),
+            "_JST-M2 42 _JST-T _EXT4-JTX-META-PUT CONSTANT _JST-MP2",
+            "0 _JST-W _EXT4-JWR-META-IMAGE C@ CONSTANT _JST-META-LAST",
+            "0 _JST-W _EXT4-JWR-META-ENTRY 2 CELLS + @ CONSTANT _JST-META-CRC",
+            (
+                "_JST-W _EXT4-JWR.META-IMAGES + @ _JST-W "
+                "_EXT4-JTX-IMAGE-CRC CONSTANT _JST-META-CALC"
+            ),
+            (
+                "_JST-W-IOR 0= _JST-T-IOR 0= AND _JST-MP1 0= AND "
+                "_JST-BAD-COUNT VFS-E-CORRUPT = AND "
+                "_JST-BAD-HASH VFS-E-CORRUPT = AND "
+                "_JST-MP2 0= AND _JST-W _EXT4-JWR.META-USED + @ 1 = AND "
+                "_JST-W _EXT4-JWR.META-ACTIVE + @ 1 = AND "
+                "_JST-META-LAST 0x22 = AND "
+                "_JST-META-CRC _JST-META-CALC = AND "
+                'IF ." EXT4-JTX-META-COALESCED" THEN'
+            ),
+            "42 _JST-T _EXT4-JTX-REVOKE CONSTANT _JST-R1",
+            "42 _JST-T _EXT4-JTX-REVOKE CONSTANT _JST-R2",
+            (
+                "_JST-R1 0= _JST-R2 0= AND "
+                "_JST-W _EXT4-JWR.META-USED + @ 1 = AND "
+                "_JST-W _EXT4-JWR.META-ACTIVE + @ 0= AND "
+                "_JST-W _EXT4-JWR.REVOKE-USED + @ 1 = AND "
+                "_JST-W _EXT4-JWR.REVOKE-ACTIVE + @ 1 = AND "
+                "0 _JST-W _EXT4-JWR-META-ENTRY CELL+ @ "
+                "_EXT4-JE-CANCELLED = AND "
+                'IF ." EXT4-JTX-REVOKE-CANCELLED-META" THEN'
+            ),
+            "_JST-D1 42 _JST-T _EXT4-JTX-DATA-PUT CONSTANT _JST-DP1",
+            "_JST-D2 42 _JST-T _EXT4-JTX-DATA-PUT CONSTANT _JST-DP2",
+            "_JST-M1 42 _JST-T _EXT4-JTX-META-PUT CONSTANT _JST-CONFLICT",
+            (
+                "_JST-DP1 0= _JST-DP2 0= AND "
+                "_JST-W _EXT4-JWR.DATA-USED + @ 1 = AND "
+                "_JST-W _EXT4-JWR.DATA-ACTIVE + @ 1 = AND "
+                "0 _JST-W _EXT4-JWR-DATA-IMAGE C@ 0x44 = AND "
+                "_JST-CONFLICT VFS-E-CONFLICT = AND "
+                "_JST-W _EXT4-JWR.REVOKE-ACTIVE + @ 1 = AND "
+                'IF ." EXT4-JTX-DATA-REVOKE-COEXIST" THEN'
+            ),
+            "43 _JST-T _EXT4-JTX-DATA-ZERO CONSTANT _JST-ZERO",
+            "_JST-M2 58 _JST-T _EXT4-JTX-META-PUT CONSTANT _JST-M58",
+            "58 _JST-T _EXT4-JTX-REVOKE CONSTANT _JST-R58",
+            "_JST-M1 58 _JST-T _EXT4-JTX-META-PUT CONSTANT _JST-M58B",
+            (
+                "_JST-ZERO 0= 1 _JST-W _EXT4-JWR-DATA-IMAGE C@ 0= AND "
+                "_JST-M58 0= AND _JST-R58 0= AND _JST-M58B 0= AND "
+                "_JST-W _EXT4-JWR.META-USED + @ 2 = AND "
+                "_JST-W _EXT4-JWR.META-ACTIVE + @ 1 = AND "
+                "_JST-W _EXT4-JWR.REVOKE-USED + @ 2 = AND "
+                "_JST-W _EXT4-JWR.REVOKE-ACTIVE + @ 1 = AND "
+                "1 _JST-W _EXT4-JWR-META-IMAGE C@ 0x11 = AND "
+                'IF ." EXT4-JTX-CANCELLATION-REACTIVATES" THEN'
+            ),
+            "_JST-M1 74 _JST-T _EXT4-JTX-META-PUT CONSTANT _JST-META-FULL",
+            "74 _JST-T _EXT4-JTX-REVOKE CONSTANT _JST-REVOKE-FULL",
+            "_JST-D1 900 _JST-T _EXT4-JTX-DATA-PUT CONSTANT _JST-JOURNAL-HOME",
+            (
+                "_JST-META-FULL VFS-E-NOSPC = "
+                "_JST-REVOKE-FULL VFS-E-NOSPC = AND "
+                "_JST-JOURNAL-HOME VFS-E-INVALID = AND "
+                "_JST-W _EXT4-JWR.META-USED + @ 2 = AND "
+                "_JST-W _EXT4-JWR.REVOKE-USED + @ 2 = AND "
+                "_JST-W _EXT4-JWR.DATA-USED + @ 2 = AND "
+                'IF ." EXT4-JTX-CAPACITY-ATOMIC" THEN'
+            ),
+            "_JST-T _EXT4-JTX-ABORT CONSTANT _JST-ABORT",
+            (
+                "_JST-ABORT 0= _JST-W _EXT4-JWR.STATE + @ "
+                "_EXT4-JWR-IDLE = AND "
+                "_JST-W _EXT4-JWR.META-USED + @ 0= AND "
+                "_JST-W _EXT4-JWR.DATA-USED + @ 0= AND "
+                "_JST-W _EXT4-JWR.REVOKE-USED + @ 0= AND "
+                "_JST-W _EXT4-JWR.META-IMAGES + @ C@ 0= AND "
+                "_JST-W _EXT4-JWR.DATA-IMAGES + @ C@ 0= AND "
+                "_JST-ARENA ARENA-USED _JST-ARENA-USED = AND "
+                'IF ." EXT4-JTX-ABORT-ZEROIZED" THEN'
+            ),
+            "2 2 2 _JST-W _EXT4-JTX-BEGIN DROP _EXT4-JTX-ABORT CONSTANT _JST-REPEAT",
+            (
+                "_JST-REPEAT 0= _JST-ARENA ARENA-USED _JST-ARENA-USED = AND "
+                'IF ." EXT4-JTX-ARENA-REUSED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JTX-META-COALESCED")
+    _assert_emitted(output, "EXT4-JTX-RUNTIME-GUARDS")
+    _assert_emitted(output, "EXT4-JTX-REVOKE-CANCELLED-META")
+    _assert_emitted(output, "EXT4-JTX-DATA-REVOKE-COEXIST")
+    _assert_emitted(output, "EXT4-JTX-CANCELLATION-REACTIVATES")
+    _assert_emitted(output, "EXT4-JTX-CAPACITY-ATOMIC")
+    _assert_emitted(output, "EXT4-JTX-ABORT-ZEROIZED")
+    _assert_emitted(output, "EXT4-JTX-ARENA-REUSED")
+
+
 def test_zero_count_loops_and_invalid_dirent_type_are_total(tmp_path: Path) -> None:
     blank = tmp_path / "parser-storage.img"
     blank.write_bytes(bytes(4 * 512))

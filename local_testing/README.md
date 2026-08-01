@@ -210,6 +210,14 @@ tail classification, ACL enforcement, and every user-visible mutation remain
 outside this gate. This remains an explicit-volume emulator suite rather than
 a default boot-image or automount profile.
 
+Bounded synthetic cases also qualify the private writer workspace without
+issuing storage writes or flushes. They cover exact one-allocation sizing and
+reuse, failed-mount head/sequence rebasing, 1 KiB and 4 KiB descriptor/revoke
+geometry, checked arithmetic, journal-ring and on-disk transaction limits,
+full-block after-image ownership and CRCs, hash collisions and forged-index
+rejection, metadata/revoke cancellation, ordered-data conflicts, atomic
+capacity failures, abort zeroization, and malformed persistent-layout guards.
+
 When a resolved profile closure binds directly to MegaPad networking, the
 harness injects the one canonical packed `networking.f` and loads it with
 KDOS `REQUIRE` immediately after `ENTER-USERLAND`. This avoids re-entering the
