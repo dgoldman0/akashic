@@ -399,6 +399,270 @@ def _ext4_journal_physical_map(
     return result
 
 
+def _jbd2_super_with_checksum(block: bytes | bytearray) -> bytes:
+    """Stamp the standard CRC32C in a 1024-byte JBD2 superblock."""
+    result = bytearray(block)
+    assert len(result) == 1024
+    struct.pack_into(">I", result, 0xFC, 0)
+    struct.pack_into(">I", result, 0xFC, _crc32c_raw(result))
+    return bytes(result)
+
+
+def _jbd2_super_checksum_valid(block: bytes) -> bool:
+    if len(block) != 1024:
+        return False
+    stored = struct.unpack_from(">I", block, 0xFC)[0]
+    unstamped = bytearray(block)
+    struct.pack_into(">I", unstamped, 0xFC, 0)
+    return stored == _crc32c_raw(unstamped)
+
+
+def _sequential_prefix_merge(
+    new: bytes, old: bytes, observed: bytes
+) -> bool:
+    """Match one new-image prefix followed by the untouched old suffix."""
+    if not (len(new) == len(old) == len(observed)):
+        return False
+    old_phase = False
+    for new_byte, old_byte, observed_byte in zip(
+        new, old, observed, strict=True
+    ):
+        if new_byte == old_byte:
+            if observed_byte != new_byte:
+                return False
+        elif old_phase:
+            if observed_byte != old_byte:
+                return False
+        elif observed_byte == old_byte:
+            old_phase = True
+        elif observed_byte != new_byte:
+            return False
+    return True
+
+
+def _build_jbd2_activation_fixture(path: Path) -> dict[str, object]:
+    """Derive independent AKW1 activation images from one clean fixture."""
+    layout = _ext4_recovery_layout(path)
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    journal0_physical = layout["journal_block"]
+    with path.open("rb") as source:
+        source.seek(layout["primary_super"] * block_size)
+        clean_super = source.read(1024)
+        source.seek(journal0_physical * block_size)
+        source_journal = source.read(block_size)
+    assert len(clean_super) == 1024
+    assert len(source_journal) == block_size
+    assert clean_super == _ext4_super_with_checksum(clean_super)
+    assert struct.unpack_from("<I", clean_super, 0x60)[0] & 0x04 == 0
+    assert struct.unpack_from(">II", source_journal, 0x00) == (
+        0xC03B3998,
+        4,
+    )
+    assert struct.unpack_from(">I", source_journal, 0x1C)[0] == 0
+    assert struct.unpack_from(">I", source_journal, 0x28)[0] == 0
+    assert source_journal[0x50:0x58] == bytes(8)
+    assert source_journal[0x5C:0x88] == bytes(0x2C)
+    assert struct.unpack_from(">I", source_journal, 0xFC)[0] == 0
+
+    first = struct.unpack_from(">I", source_journal, 0x14)[0]
+    maxlen = struct.unpack_from(">I", source_journal, 0x10)[0]
+    assert struct.unpack_from(">I", source_journal, 0x58)[0] == 0
+    guard_logical = first + 1
+    assert 0 < first < guard_logical < maxlen
+    old_journal_buffer = bytearray(source_journal)
+    struct.pack_into(">I", old_journal_buffer, 0x58, guard_logical)
+    old_journal = bytes(old_journal_buffer)
+    source_patches = (
+        (
+            journal0_physical * block_size + 0x58,
+            struct.pack(">I", guard_logical),
+        ),
+    )
+    journal_map = _ext4_journal_physical_map(
+        path, (0, guard_logical)
+    )
+    guard_physical = journal_map[guard_logical]
+    with path.open("rb") as source:
+        source.seek(guard_physical * block_size)
+        old_guard = source.read(block_size)
+    assert len(old_guard) == block_size
+
+    dirty_super = bytearray(clean_super)
+    struct.pack_into(
+        "<I",
+        dirty_super,
+        0x60,
+        struct.unpack_from("<I", dirty_super, 0x60)[0] | 0x04,
+    )
+    struct.pack_into("<H", dirty_super, 0x3A, 1)
+    dirty_super = _ext4_super_with_checksum(dirty_super)
+
+    clean_checksum = struct.unpack_from("<I", clean_super, 0x3FC)[0]
+    dirty_checksum = struct.unpack_from("<I", dirty_super, 0x3FC)[0]
+    anchor = bytearray(old_journal)
+    anchor[0x78:0x7C] = old_journal[0x28:0x2C]
+    anchor[0x7C:0x80] = old_journal[0x58:0x5C]
+    anchor[0x80:0x84] = old_journal[0x50:0x54]
+    anchor[0x84:0x88] = old_journal[0xFC:0x100]
+    struct.pack_into(">I", anchor, 0x1C, 0)
+    struct.pack_into(">I", anchor, 0x28, 0x13)
+    anchor[0x50:0x54] = b"\x04\x00\x00\x00"
+    struct.pack_into(">I", anchor, 0x54, 0)
+    struct.pack_into(">I", anchor, 0x58, guard_logical)
+    struct.pack_into(">I", anchor, 0x5C, 0x414B5731)
+    struct.pack_into(">I", anchor, 0x60, clean_checksum)
+    struct.pack_into(">I", anchor, 0x64, clean_checksum ^ 0xFFFF_FFFF)
+    struct.pack_into(">I", anchor, 0x68, guard_logical)
+    struct.pack_into(">I", anchor, 0x6C, guard_logical ^ 0xFFFF_FFFF)
+    struct.pack_into(">I", anchor, 0x70, dirty_checksum)
+    struct.pack_into(">I", anchor, 0x74, dirty_checksum ^ 0xFFFF_FFFF)
+    anchor = _jbd2_super_with_checksum(anchor)
+
+    preseed = bytearray(anchor)
+    preseed[0] = 0
+    standard = bytearray(anchor)
+    standard[0x5C:0x88] = bytes(0x2C)
+    standard = _jbd2_super_with_checksum(standard)
+
+    success_trace = (
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+    )
+    return {
+        "image": path,
+        "layout": layout,
+        "journal0_physical": journal0_physical,
+        "guard_logical": guard_logical,
+        "guard_physical": guard_physical,
+        "source_patches": source_patches,
+        "clean_super": clean_super,
+        "dirty_super": dirty_super,
+        "old_journal": old_journal,
+        "old_guard": old_guard,
+        "anchor": anchor,
+        "preseed": bytes(preseed),
+        "standard": standard,
+        "success_trace": success_trace,
+    }
+
+
+def _read_jbd2_activation_media(
+    path: Path, fixture: dict[str, object]
+) -> tuple[bytes, bytes, bytes]:
+    layout = fixture["layout"]
+    journal0_physical = fixture["journal0_physical"]
+    guard_physical = fixture["guard_physical"]
+    assert isinstance(layout, dict)
+    assert isinstance(journal0_physical, int)
+    assert isinstance(guard_physical, int)
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    with path.open("rb") as source:
+        source.seek(layout["primary_super"] * block_size)
+        superblock = source.read(1024)
+        source.seek(journal0_physical * block_size)
+        journal = source.read(block_size)
+        source.seek(guard_physical * block_size)
+        guard = source.read(block_size)
+    assert len(superblock) == len(journal) == len(guard) == block_size
+    return superblock, journal, guard
+
+
+def _assert_activation_cleanup_trace(
+    trace: tuple[tuple[str, int, int], ...],
+    *,
+    journal0_physical: int,
+    guard_physical: int,
+) -> None:
+    allowed_writes = {
+        ("write", 2, 2),
+        ("write", journal0_physical * 2, 2),
+        ("write", guard_physical * 2, 2),
+    }
+    for index, event in enumerate(trace):
+        assert event[0] in {"write", "flush"}
+        if event[0] != "write":
+            continue
+        assert event in allowed_writes
+        assert index + 1 < len(trace)
+        assert trace[index + 1] == ("flush", 0, 0)
+
+
+def _activation_resolved_mount_lines(
+    marker: str, expected_features: int
+) -> list[str]:
+    return [
+        "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+        "_V _EXT4-CTX CONSTANT _AR-CTX",
+        (
+            "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+            "_V _EXT4-READY? AND "
+            "_AR-CTX _EXT4-C.RECOVERY + @ 0= AND "
+            "_AR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0= AND "
+            "_AR-CTX _EXT4-C.J.FEATURES + @ "
+            f"{expected_features} = AND "
+            "_AR-CTX _EXT4-C.J.START + @ 0= AND "
+            "_AR-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
+            "_AR-CTX _EXT4-C.J.WITNESS-CHECKSUM + @ 0= AND "
+            "_AR-CTX _EXT4-C.J.WITNESS-NEW-CHECKSUM + @ 0= AND "
+            "_AR-CTX _EXT4-C.J.ANCHOR + @ 0= AND "
+            "_AR-CTX _EXT4-C.J.CLEANUP + @ _EXT4-JC-NONE = AND "
+            "_AR-CTX _EXT4-C.SUPER-TORN + @ 0= AND "
+            "_AR-CTX _EXT4-C.J.PRIMARY-TORN + @ 0= AND "
+            "_AR-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+            "_AR-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+            "_AR-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
+            "_EXT4-INCOMPAT-RECOVER AND 0= AND "
+            f'IF ." {marker}" THEN'
+        ),
+    ]
+
+
+def _assert_activation_landed_media(
+    path: Path,
+    fixture: dict[str, object],
+    *,
+    expected_features: int,
+) -> None:
+    clean_super = fixture["clean_super"]
+    old_journal = fixture["old_journal"]
+    guard_logical = fixture["guard_logical"]
+    assert isinstance(clean_super, bytes)
+    assert isinstance(old_journal, bytes)
+    assert isinstance(guard_logical, int)
+
+    superblock, journal, guard = _read_jbd2_activation_media(path, fixture)
+    assert superblock == clean_super
+    if expected_features == 0:
+        assert journal == old_journal
+        return
+
+    assert expected_features == 0x13
+    assert struct.unpack_from(">II", journal, 0x00) == (0xC03B3998, 4)
+    assert struct.unpack_from(">I", journal, 0x0C)[0] == 1024
+    assert journal[0x10:0x18] == old_journal[0x10:0x18]
+    assert struct.unpack_from(">I", journal, 0x1C)[0] == 0
+    assert struct.unpack_from(">I", journal, 0x28)[0] == expected_features
+    assert journal[0x2C:0x50] == old_journal[0x2C:0x50]
+    assert journal[0x50:0x54] == b"\x04\x00\x00\x00"
+    assert struct.unpack_from(">I", journal, 0x54)[0] == 0
+    assert struct.unpack_from(">I", journal, 0x58)[0] == guard_logical
+    assert journal[0x5C:0x88] == bytes(0x2C)
+    assert _jbd2_super_checksum_valid(journal)
+    assert guard == bytes(1024)
+
+
 def _journal_metadata_alias_patches(
     image: Path, target_block: int
 ) -> tuple[tuple[tuple[int, bytes], ...], str]:
@@ -882,6 +1146,15 @@ def canonical_images() -> dict[str, Path]:
             + ", ".join(missing)
         )
     return paths
+
+
+@pytest.fixture(scope="session")
+def writer_activation_fixture(
+    canonical_images: dict[str, Path],
+) -> dict[str, object]:
+    return _build_jbd2_activation_fixture(
+        canonical_images["primary-1k-i256"]
+    )
 
 
 @pytest.fixture(scope="session")
@@ -4065,6 +4338,559 @@ def test_jbd2_writer_staging_coalesces_and_cancels_without_io(
     _assert_emitted(output, "EXT4-JTX-CAPACITY-ATOMIC")
     _assert_emitted(output, "EXT4-JTX-ABORT-ZEROIZED")
     _assert_emitted(output, "EXT4-JTX-ARENA-REUSED")
+
+
+def test_jbd2_writer_activation_is_ordered_and_publishes_after_cleanup(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = writer_activation_fixture["image"]
+    success_trace = writer_activation_fixture["success_trace"]
+    source_patches = writer_activation_fixture["source_patches"]
+    dirty_super = writer_activation_fixture["dirty_super"]
+    standard = writer_activation_fixture["standard"]
+    assert isinstance(image, Path)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(dirty_super, bytes)
+    assert isinstance(standard, bytes)
+
+    activated = tmp_path / "jbd2-writer-activated.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            image,
+            activated,
+            [
+                "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+                "_V _EXT4-CTX CONSTANT _AW-CTX",
+                (
+                    "1 0 0 _AW-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _AW-E-IOR CONSTANT _AW-W"
+                ),
+                "_AW-W _EXT4-JWR.HEAD + @ CONSTANT _AW-HEAD",
+                "_AW-W _EXT4-JWR.TAIL + @ CONSTANT _AW-TAIL",
+                "_AW-W _EXT4-JWR.FREE + @ CONSTANT _AW-FREE",
+                "_AW-W _EXT4-JWR.NEXT-TID + @ CONSTANT _AW-NEXT-TID",
+                "_AW-W _EXT4-JWR-ACTIVATE CONSTANT _AW-A-IOR",
+                (
+                    "1 0 0 _AW-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _AW-B-IOR CONSTANT _AW-T"
+                ),
+                "_AW-T _EXT4-JTX-ABORT CONSTANT _AW-ABORT-IOR",
+                "_AW-W _EXT4-JWR-ACTIVATE CONSTANT _AW-AGAIN-IOR",
+                (
+                    "_M-IOR 0= _AW-E-IOR 0= AND _AW-A-IOR 0= AND "
+                    "_AW-B-IOR 0= AND _AW-T _AW-W = AND "
+                    "_AW-ABORT-IOR 0= AND "
+                    "_AW-AGAIN-IOR VFS-E-BUSY = AND "
+                    "_AW-W _EXT4-JWR-VALID? AND "
+                    "_AW-W _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE = AND "
+                    "_AW-W _EXT4-JWR.PHASE + @ _EXT4-JWP-NONE = AND "
+                    "_AW-W _EXT4-JWR.FAULT + @ 0= AND "
+                    "_AW-W _EXT4-JWR.HEAD + @ _AW-HEAD = AND "
+                    "_AW-W _EXT4-JWR.TAIL + @ _AW-TAIL = AND "
+                    "_AW-W _EXT4-JWR.FREE + @ _AW-FREE = AND "
+                    "_AW-W _EXT4-JWR.NEXT-TID + @ _AW-NEXT-TID = AND "
+                    "_AW-CTX _EXT4-C.RECOVERY + @ 0<> AND "
+                    "_AW-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<> AND "
+                    "_AW-CTX _EXT4-C.J.FEATURES + @ "
+                    "_EXT4-JBD2-I-RECOVERY-REVOKE = AND "
+                    "_AW-CTX _EXT4-C.J.SEED + @ 0<> AND "
+                    "_AW-CTX _EXT4-C.J.START + @ 0= AND "
+                    "_AW-CTX _EXT4-C.J.HEAD + @ _AW-HEAD = AND "
+                    "_AW-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
+                    "_AW-CTX _EXT4-C.J.WITNESS-CHECKSUM + @ 0= AND "
+                    "_AW-CTX _EXT4-C.J.WITNESS-NEW-CHECKSUM + @ 0= AND "
+                    "_AW-CTX _EXT4-C.J.ANCHOR + @ 0= AND "
+                    "_AW-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                    "_AW-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
+                    "_EXT4-INCOMPAT-RECOVER AND 0<> AND "
+                    'IF ." EXT4-JWR-ACTIVATION-OK" THEN'
+                ),
+            ],
+            patches=source_patches,
+            capture_media=activated,
+        )
+        _assert_emitted(output, "EXT4-JWR-ACTIVATION-OK")
+        assert trace == success_trace
+        assert activated.is_file()
+        assert _sha256(activated) == media_sha256
+        superblock, journal, guard = _read_jbd2_activation_media(
+            activated, writer_activation_fixture
+        )
+        assert superblock == dirty_super
+        assert journal == standard
+        assert guard == bytes(1024)
+    finally:
+        activated.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    (
+        "phase",
+        "write_ordinal",
+        "sector_index",
+        "byte_index",
+        "phase_word",
+        "resolved_features",
+    ),
+    (
+        (
+            "preseed",
+            1,
+            0,
+            8,
+            "_EXT4-JWP-GUARD-PRESEED",
+            0,
+        ),
+        ("guard", 2, 0, 1, "_EXT4-JWP-GUARD", 0),
+        ("primary", 3, 0, 50, "_EXT4-JWP-PRIMARY", 0x13),
+        ("ext4-super", 4, 1, 0, "_EXT4-JWP-EXT4-SUPER", 0x13),
+        (
+            "witness-clear",
+            5,
+            0,
+            200,
+            "_EXT4-JWP-WITNESS-CLEAR",
+            0x13,
+        ),
+        (
+            "guard-retire",
+            6,
+            0,
+            200,
+            "_EXT4-JWP-GUARD-RETIRE",
+            0x13,
+        ),
+    ),
+)
+def test_jbd2_writer_activation_faults_quarantine_and_mount_resolves(
+    writer_activation_fixture: dict[str, object],
+    tmp_path: Path,
+    phase: str,
+    write_ordinal: int,
+    sector_index: int,
+    byte_index: int,
+    phase_word: str,
+    resolved_features: int,
+) -> None:
+    image = writer_activation_fixture["image"]
+    success_trace = writer_activation_fixture["success_trace"]
+    source_patches = writer_activation_fixture["source_patches"]
+    clean_super = writer_activation_fixture["clean_super"]
+    dirty_super = writer_activation_fixture["dirty_super"]
+    old_journal = writer_activation_fixture["old_journal"]
+    old_guard = writer_activation_fixture["old_guard"]
+    anchor = writer_activation_fixture["anchor"]
+    preseed = writer_activation_fixture["preseed"]
+    standard = writer_activation_fixture["standard"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    assert isinstance(image, Path)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(clean_super, bytes)
+    assert isinstance(dirty_super, bytes)
+    assert isinstance(old_journal, bytes)
+    assert isinstance(old_guard, bytes)
+    assert isinstance(anchor, bytes)
+    assert isinstance(preseed, bytes)
+    assert isinstance(standard, bytes)
+    assert isinstance(journal0_physical, int)
+    assert isinstance(guard_physical, int)
+
+    # The runner snapshots its input before writeback, so remount in place and
+    # keep each fault row to one sparse image on disk.
+    media_path = tmp_path / f"jbd2-activation-{phase}.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            image,
+            media_path,
+            [
+                "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+                "_V _EXT4-CTX CONSTANT _AF-CTX",
+                (
+                    "1 0 0 _AF-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _AF-E-IOR CONSTANT _AF-W"
+                ),
+                "_AF-W _EXT4-JWR.HEAD + @ CONSTANT _AF-HEAD",
+                "_AF-W _EXT4-JWR.TAIL + @ CONSTANT _AF-TAIL",
+                "_AF-W _EXT4-JWR.FREE + @ CONSTANT _AF-FREE",
+                "_AF-W _EXT4-JWR.NEXT-TID + @ CONSTANT _AF-NEXT-TID",
+                "_AF-W _EXT4-JWR-ACTIVATE CONSTANT _AF-A-IOR",
+                "_AF-W _EXT4-JWR-ACTIVATE CONSTANT _AF-AGAIN-IOR",
+                (
+                    "_M-IOR 0= _AF-E-IOR 0= AND "
+                    "_AF-A-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = AND "
+                    "_AF-A-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                    "_AF-A-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL "
+                    "AND 0<> AND "
+                    "_AF-W _EXT4-JWR.FAULT + @ _AF-A-IOR = AND "
+                    "_AF-W _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = AND "
+                    f"_AF-W _EXT4-JWR.PHASE + @ {phase_word} = AND "
+                    "_AF-W _EXT4-JWR.HEAD + @ _AF-HEAD = AND "
+                    "_AF-W _EXT4-JWR.TAIL + @ _AF-TAIL = AND "
+                    "_AF-W _EXT4-JWR.FREE + @ _AF-FREE = AND "
+                    "_AF-W _EXT4-JWR.NEXT-TID + @ _AF-NEXT-TID = AND "
+                    "_AF-W _EXT4-JWR-VALID? AND "
+                    "_AF-CTX _EXT4-C.RECOVERY + @ 0= AND "
+                    "_AF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0= AND "
+                    "_AF-CTX _EXT4-C.J.FEATURES + @ 0= AND "
+                    "_AF-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
+                    "_AF-AGAIN-IOR VFS-E-BUSY = AND "
+                    "_V V.FLAGS @ VFS-F-RO AND 0<> AND "
+                    "_V V.FLAGS @ VFS-F-DIRTY AND 0<> AND "
+                    'IF ." EXT4-JWR-ACTIVATION-FAULT" THEN'
+                ),
+            ],
+            patches=source_patches,
+            write_faults_by_ordinal={
+                write_ordinal: {
+                    "stage": "media",
+                    "sector_index": sector_index,
+                    "byte_index": byte_index,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-JWR-ACTIVATION-FAULT")
+        assert trace == success_trace[: 2 * (write_ordinal - 1) + 1]
+        assert media_path.is_file()
+        assert _sha256(media_path) == media_sha256
+        superblock, journal, guard = _read_jbd2_activation_media(
+            media_path, writer_activation_fixture
+        )
+        if phase == "preseed":
+            assert superblock == clean_super
+            assert journal == old_journal
+            assert _sequential_prefix_merge(preseed, old_guard, guard)
+            assert guard != anchor
+        elif phase == "guard":
+            assert superblock == clean_super
+            assert journal == old_journal
+            assert guard == anchor
+        elif phase == "primary":
+            assert superblock == clean_super
+            assert guard == anchor
+            assert _sequential_prefix_merge(anchor, old_journal, journal)
+            assert journal not in {old_journal, anchor}
+        elif phase == "ext4-super":
+            assert journal == anchor
+            assert guard == anchor
+            assert _sequential_prefix_merge(
+                dirty_super, clean_super, superblock
+            )
+            assert superblock not in {clean_super, dirty_super}
+        elif phase == "witness-clear":
+            assert superblock == dirty_super
+            assert guard == anchor
+            assert _sequential_prefix_merge(standard, anchor, journal)
+            assert journal not in {standard, anchor}
+        else:
+            assert phase == "guard-retire"
+            assert superblock == dirty_super
+            assert journal == standard
+            assert _sequential_prefix_merge(bytes(1024), anchor, guard)
+            assert guard not in {bytes(1024), anchor}
+
+        output, resolution_trace, resolved_sha256 = run_recovery_forth(
+            media_path,
+            media_path,
+            _activation_resolved_mount_lines(
+                "EXT4-JWR-ACTIVATION-RESOLVED", resolved_features
+            ),
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-JWR-ACTIVATION-RESOLVED")
+        _assert_activation_cleanup_trace(
+            resolution_trace,
+            journal0_physical=journal0_physical,
+            guard_physical=guard_physical,
+        )
+        assert media_path.is_file()
+        assert _sha256(media_path) == resolved_sha256
+        _assert_activation_landed_media(
+            media_path,
+            writer_activation_fixture,
+            expected_features=resolved_features,
+        )
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
+# The resolver faults split the endpoint checksum itself, advancing the
+# durable prefix while leaving a second-generation tear for the third mount.
+@pytest.mark.parametrize(
+    (
+        "phase",
+        "activation_write_ordinal",
+        "activation_sector_index",
+        "activation_byte_index",
+        "activation_phase_word",
+        "completion",
+        "resolver_sector_index",
+        "resolver_byte_index",
+    ),
+    (
+        pytest.param(
+            "ext4-super",
+            4,
+            1,
+            0,
+            "_EXT4-JWP-EXT4-SUPER",
+            "D",
+            1,
+            510,
+            id="W4-D-completion",
+        ),
+        pytest.param(
+            "witness-clear",
+            5,
+            0,
+            200,
+            "_EXT4-JWP-WITNESS-CLEAR",
+            "C",
+            0,
+            254,
+            id="W5-C-completion",
+        ),
+    ),
+)
+def test_jbd2_writer_activation_resolver_retries_second_generation_tears(
+    writer_activation_fixture: dict[str, object],
+    tmp_path: Path,
+    phase: str,
+    activation_write_ordinal: int,
+    activation_sector_index: int,
+    activation_byte_index: int,
+    activation_phase_word: str,
+    completion: str,
+    resolver_sector_index: int,
+    resolver_byte_index: int,
+) -> None:
+    image = writer_activation_fixture["image"]
+    success_trace = writer_activation_fixture["success_trace"]
+    source_patches = writer_activation_fixture["source_patches"]
+    clean_super = writer_activation_fixture["clean_super"]
+    dirty_super = writer_activation_fixture["dirty_super"]
+    anchor = writer_activation_fixture["anchor"]
+    standard = writer_activation_fixture["standard"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    assert isinstance(image, Path)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(clean_super, bytes)
+    assert isinstance(dirty_super, bytes)
+    assert isinstance(anchor, bytes)
+    assert isinstance(standard, bytes)
+    assert isinstance(journal0_physical, int)
+    assert isinstance(guard_physical, int)
+
+    media_path = tmp_path / f"jbd2-activation-{phase}-second-tear.img"
+    try:
+        output, activation_trace, activation_sha256 = run_recovery_forth(
+            image,
+            media_path,
+            [
+                "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+                "_V _EXT4-CTX CONSTANT _SG-CTX",
+                (
+                    "1 0 0 _SG-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _SG-E-IOR CONSTANT _SG-W"
+                ),
+                "_SG-W _EXT4-JWR-ACTIVATE CONSTANT _SG-A-IOR",
+                (
+                    "_M-IOR 0= _SG-E-IOR 0= AND "
+                    "_SG-A-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = AND "
+                    "_SG-A-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                    "_SG-A-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL "
+                    "AND 0<> AND "
+                    "_SG-W _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = AND "
+                    f"_SG-W _EXT4-JWR.PHASE + @ {activation_phase_word} "
+                    "= AND "
+                    'IF ." EXT4-JWR-ACTIVATION-FIRST-TEAR" THEN'
+                ),
+            ],
+            patches=source_patches,
+            write_faults_by_ordinal={
+                activation_write_ordinal: {
+                    "stage": "media",
+                    "sector_index": activation_sector_index,
+                    "byte_index": activation_byte_index,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-JWR-ACTIVATION-FIRST-TEAR")
+        assert activation_trace == success_trace[
+            : 2 * (activation_write_ordinal - 1) + 1
+        ]
+        assert media_path.is_file()
+        assert _sha256(media_path) == activation_sha256
+        superblock, journal, guard = _read_jbd2_activation_media(
+            media_path, writer_activation_fixture
+        )
+        if completion == "D":
+            assert _sequential_prefix_merge(
+                dirty_super, clean_super, superblock
+            )
+            assert superblock not in {clean_super, dirty_super}
+            assert journal == anchor
+        else:
+            assert completion == "C"
+            assert superblock == dirty_super
+            assert _sequential_prefix_merge(standard, anchor, journal)
+            assert journal not in {standard, anchor}
+        assert guard == anchor
+
+        completion_write = (
+            ("write", 2, 2)
+            if completion == "D"
+            else ("write", journal0_physical * 2, 2)
+        )
+        output, resolver_trace, resolver_sha256 = run_recovery_forth(
+            media_path,
+            media_path,
+            [
+                "T-ARENA T-VOLUME EXT4-NEW CONSTANT _R-IOR CONSTANT _V",
+                (
+                    "_R-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = "
+                    "_R-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                    "_R-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL "
+                    "AND 0<> AND "
+                    "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                    "_V _EXT4-READY? 0= AND "
+                    'IF ." EXT4-JWR-ACTIVATION-SECOND-TEAR" THEN'
+                ),
+            ],
+            write_faults_by_ordinal={
+                1: {
+                    "stage": "media",
+                    "sector_index": resolver_sector_index,
+                    "byte_index": resolver_byte_index,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-JWR-ACTIVATION-SECOND-TEAR")
+        assert resolver_trace == (completion_write,)
+        assert _sha256(media_path) == resolver_sha256
+        assert resolver_sha256 != activation_sha256
+        superblock, journal, guard = _read_jbd2_activation_media(
+            media_path, writer_activation_fixture
+        )
+        if completion == "D":
+            assert _sequential_prefix_merge(
+                dirty_super, clean_super, superblock
+            )
+            assert superblock not in {clean_super, dirty_super}
+            assert journal == anchor
+        else:
+            assert superblock == dirty_super
+            assert _sequential_prefix_merge(standard, anchor, journal)
+            assert journal not in {standard, anchor}
+        assert guard == anchor
+
+        output, convergence_trace, converged_sha256 = run_recovery_forth(
+            media_path,
+            media_path,
+            _activation_resolved_mount_lines(
+                "EXT4-JWR-ACTIVATION-RETRY-CONVERGED", 0x13
+            ),
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-JWR-ACTIVATION-RETRY-CONVERGED")
+        assert convergence_trace[:2] == (
+            completion_write,
+            ("flush", 0, 0),
+        )
+        _assert_activation_cleanup_trace(
+            convergence_trace,
+            journal0_physical=journal0_physical,
+            guard_physical=guard_physical,
+        )
+        assert ("write", 2, 2) in convergence_trace
+        assert ("write", journal0_physical * 2, 2) in convergence_trace
+        assert ("write", guard_physical * 2, 2) in convergence_trace
+        assert _sha256(media_path) == converged_sha256
+        _assert_activation_landed_media(
+            media_path,
+            writer_activation_fixture,
+            expected_features=0x13,
+        )
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
+def test_jbd2_writer_activation_primary_binding_rejects_stale_copies_without_io(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    assert isinstance(image, Path)
+    assert isinstance(source_patches, tuple)
+
+    backing = tmp_path / "jbd2-activation-stale-primary.img"
+    try:
+        output, trace, _media_sha256 = run_recovery_forth(
+            image,
+            backing,
+            [
+                "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+                "_V _EXT4-CTX CONSTANT _SP-CTX",
+                (
+                    "1 0 0 _SP-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _SP-E-IOR CONSTANT _SP-W"
+                ),
+                "_SP-W _EXT4-JWR.SCRATCH-A + @ CONSTANT _SP-BUF",
+                "0 _SP-CTX _EXT4-READ-JBLOCK CONSTANT _SP-R-IOR",
+                (
+                    "_SP-CTX _EXT4-C.BLOCK + _SP-BUF "
+                    "_SP-W _EXT4-JWR.BSIZE + @ MOVE"
+                ),
+                (
+                    "_SP-BUF _SP-W _EXT4-JWR-ACTIVATION-PRIMARY? "
+                    "CONSTANT _SP-EXACT"
+                ),
+                (
+                    "_SP-CTX _EXT4-C.BLOCK + _SP-BUF "
+                    "_SP-W _EXT4-JWR.BSIZE + @ MOVE"
+                ),
+                (
+                    "_SP-BUF _EXT4-JS.UUID + DUP C@ 1 XOR SWAP C! "
+                    "_SP-BUF _SP-W _EXT4-JWR-ACTIVATION-PRIMARY? "
+                    "CONSTANT _SP-UUID"
+                ),
+                (
+                    "_SP-CTX _EXT4-C.BLOCK + _SP-BUF "
+                    "_SP-W _EXT4-JWR.BSIZE + @ MOVE"
+                ),
+                (
+                    "_SP-BUF _EXT4-JS.SEQUENCE + DUP _EXT4-BE32@ "
+                    "1+ 0xFFFFFFFF AND SWAP _EXT4-BE32! "
+                    "_SP-BUF _SP-W _EXT4-JWR-ACTIVATION-PRIMARY? "
+                    "CONSTANT _SP-SEQUENCE"
+                ),
+                (
+                    "_M-IOR 0= _SP-E-IOR 0= AND _SP-R-IOR 0= AND "
+                    "_SP-EXACT AND _SP-UUID 0= AND _SP-SEQUENCE 0= AND "
+                    'IF ." EXT4-JWR-ACTIVATION-STALE-PRIMARY-REFUSED" THEN'
+                ),
+            ],
+            patches=source_patches,
+        )
+        _assert_emitted(
+            output, "EXT4-JWR-ACTIVATION-STALE-PRIMARY-REFUSED"
+        )
+        assert trace == ()
+    finally:
+        backing.unlink(missing_ok=True)
 
 
 def test_zero_count_loops_and_invalid_dirent_type_are_total(tmp_path: Path) -> None:

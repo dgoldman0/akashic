@@ -6,8 +6,10 @@ implementation status. The checksummed clean read-only reader now lives in
 `utils/fs/drivers/vfs-ext4.f`; its implemented structures and remaining
 limits are tracked in [the binding documentation](drivers/vfs-ext4.md).
 The bounded checksum-v3 JBD2 replay slice now includes committed revoke
-records, but orphan recovery, general mutation, and the complete
-bidirectional gates remain open.
+records, and the private writer can establish a crash-resolvable empty
+checksum-v3 journal plus ext4 `RECOVER` state. Descriptor/commit emission,
+orphan recovery, general mutation, and the complete bidirectional gates remain
+open.
 MP64FS remains the working native storage binding and FAT/ext4 remain
 read-only interoperability bindings; ext4's mount path may perform the
 strictly ordered recovery writes described below.
@@ -173,9 +175,9 @@ replay, allocation, or any other mutation.
 ## JBD2 profile
 
 A new v1.47.4 journal is superblock v2 with all three feature masks zero.
-Before its first Akashic transaction, the writer establishes incompat mask
-`0x12` (`64bit | checksum_v3`) with checksum type CRC32C (`4`).  The first
-revoke may add `revoke`, producing `0x13`.
+Before its first Akashic transaction, the private activation transition
+establishes incompat mask `0x13` (`64bit | checksum_v3 | revoke`) with checksum
+type CRC32C (`4`).
 
 | Class/bit | Feature | Decision |
 | --- | --- | --- |
@@ -189,6 +191,42 @@ revoke may add `revoke`, producing `0x13`.
 
 JBD2 has no admitted ro-compatible flags.  Any unknown journal flag refuses
 mount.
+
+### Private clean-to-RECOVER activation
+
+Before the first private transaction, the implementation can now move a clean,
+empty journal to incompat mask `0x13` and set ext4 `RECOVER` without exposing a
+public write operation. The transition begins by binding a fresh journal-block
+0 reread to the exact mounted writer and I/O target. Header form, geometry,
+sequence and wrapped next transaction ID, start/head state, feature masks,
+UUID, user/dynamic-super fields, transaction limits, and checksum state must
+all match. This prevents a feature-zero, unchecksummed old primary from having
+stale geometry or identity newly authenticated by activation. A mismatch is a
+pre-mutation failure and creates no witness.
+
+The transition has two valid copies of a private `AKW1` activation image: a
+guard at the current first-unused journal slot and the primary at journal block
+0. In addition to the `AKR1` checksum/anchor tuple, `AKW1` records the intended
+dirty ext4-superblock checksum and complement plus the old journal feature,
+head, checksum-type, and checksum fields. The guard is first written with byte
+zero invalid and flushed, then made valid and flushed. The identical primary
+is written and flushed before the two-sector ext4 `RECOVER` update. After that
+update is flushed, the implementation rereads and proves the primary, guard,
+and dirty ext4 endpoint before it removes `AKW1` from the primary and retires
+the guard. The durable result is an empty standard checksum-v3/revoke journal
+with `RECOVER` intentionally set, ready for transaction emission that is not
+yet implemented.
+
+Every admitted partial-write state resolves forward. An installation tear is
+completed from the exact `AKW1` guard and advanced to the dirty ext4 endpoint;
+an `AKW1`-clear tear is advanced to the standard primary. Once activation
+authority is removed, the already implemented `AKR1` empty-journal
+reset/clear protocol performs the ordinary clean landing. No
+activation-recovery path reverses a torn write or treats the transition as a
+committed user transaction. A failure after the first activation media phase
+latches its first ior and phase, faults the writer, and marks the VFS
+read-only/dirty so only remount recovery may resolve the uncertain durable
+state.
 
 Recovery is ordered as follows:
 
@@ -466,11 +504,15 @@ The bounded reader now includes checksum-v3/64-bit, revoke-aware
 committed-prefix replay and a crash-retry anchor for clearing `RECOVER`. Dirty
 replay is bootstrapped through the replay-frozen group-1 sparse-super/GDT
 witness, and a torn primary super requires a committed, unrevoked
-invariant-preserving replacement before any home write. A private
-arena-bounded writer foundation now validates and reuses exact workspace
-geometry, reserves transaction/ring credits, and owns coalesced metadata,
-ordered-data, and revoke after-images without performing media I/O. Journal
-emission, checkpointing, and uncertain-write quarantine remain unimplemented.
+invariant-preserving replacement before any home write. A private arena-bounded
+writer foundation now validates and reuses exact workspace geometry, reserves
+transaction/ring credits, and owns coalesced metadata, ordered-data, and revoke
+after-images. Its private `AKW1` two-copy activation performs exact
+fresh-primary rebinding, ordered clean-to-`RECOVER` media writes,
+phase-specific fault quarantine, and forward-only crash resolution through the
+existing `AKR1` clean landing. It still emits no transaction descriptor,
+payload, revoke, or commit record and performs no transaction checkpoint or
+home write. Public write capabilities remain disabled.
 The implementation still fails closed on checksum-damaged incomplete tails
 and refuses legacy and modern orphan recovery and all user-visible mutation.
 Clean orphan-file

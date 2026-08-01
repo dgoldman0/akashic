@@ -186,6 +186,53 @@ concurrent raw-media mutation. Successful landing leaves no private recovery
 authority. External Linux/e2fsprogs mutation and broader hardware power-cut
 qualification of the transient convention remain release gates.
 
+## Private clean-to-RECOVER activation
+
+The private writer can now activate an empty clean journal before its first
+transaction. This is not a transaction commit and is not reachable through a
+public VFS mutation operation. Before the first media write, activation binds
+the writer context and current I/O target to the same attached VFS and volume,
+rereads journal block 0, and compares its identity and complete writer-relevant
+state with the mounted primary: header form, block geometry, sequence, start,
+raw and normalized head, feature masks, UUID, user/dynamic-super fields,
+transaction limits, checksum fields, and wrapped next transaction ID. This
+exact rebinding is required even for a feature-zero journal, whose old primary
+has no JBD2 checksum and therefore must not have stale identity or geometry
+silently authenticated by the transition.
+
+Activation uses a private `AKW1` witness to change the journal to
+`64bit | checksum_v3 | revoke` (`0x13`) and the ext4 primary from clean to
+`RECOVER`. The witness extends the existing private JBD2-padding convention
+through offset `0x87`. It records the clean and dirty ext4-superblock checksums
+with complements, the exact guard logical block, and the old journal feature,
+head, checksum-type, and checksum fields needed to prove a torn installation.
+The writer first preseeds the guard block with the complete activation image
+except for invalid byte zero and flushes it. It then writes and flushes the
+valid guard, writes and flushes the identical activation primary at journal
+block 0, writes and flushes the checksummed ext4 `RECOVER` endpoint, and
+rereads all three durable images. Only after that proof does it remove `AKW1`
+from the primary, flush, zero and flush the guard, and publish the in-memory
+write-active state. Successful activation deliberately leaves an empty,
+standard checksum-v3 journal with ext4 `RECOVER` set for the future transaction
+emitter.
+
+Crash resolution is forward-only. A sequential-prefix tear while installing
+the primary is advanced to the exact `AKW1` guard, and a clean or torn ext4
+primary is advanced to the authenticated dirty endpoint; a tear while clearing
+`AKW1` is advanced to the standard checksum-v3 primary. The resolver then
+retires the activation guard and passes the empty dirty journal through the
+existing `AKR1` reset/clear landing, which returns the filesystem to a strictly
+validated clean mount without replaying a user transaction. A crash before the
+activation primary is installed leaves the old clean primary authoritative and
+the unreferenced guard harmless.
+
+Once activation has entered its first media phase, any write, flush, checksum,
+or reread-proof failure latches the first ior and exact phase in the writer,
+marks it faulted, and forces the VFS read-only and dirty. The same writer cannot
+retry activation or begin a transaction; remount recovery resolves whichever
+durable witness state survived. Failures in fresh-primary rebinding occur
+before mutation and are rejected without creating activation authority.
+
 ## Private transaction staging
 
 The driver now has a private, non-published foundation for the eventual
@@ -208,12 +255,14 @@ revoke, while one home block cannot be staged as both active metadata and
 ordered data. Abort zeroes staged authority, refunds the reservation, and
 reuses the same arena storage.
 
-This layer emits no descriptor, payload, revoke, commit, checkpoint, or home
-write. The object layout, counts, embedded pointers, ring fields, and hash
-indices are revalidated before they can drive a fill, copy, or lookup. The
-public binding and capability mask remain read-only until ordered emission,
-checkpointing, fault quarantine, both orphan mechanisms, mutation operations,
-and the release gates below are complete.
+Activation writes only the journal-superblock/guard transition and the ext4
+`RECOVER` bit described above. The transaction layer still emits no descriptor,
+payload, revoke, commit, checkpoint, or home write. The object layout, counts,
+embedded pointers, ring fields, phase/fault state, and hash indices are
+revalidated before they can drive a fill, copy, or lookup. The public binding
+and capability mask remain read-only until ordered transaction emission,
+checkpointing, both orphan mechanisms, mutation operations, and the release
+gates below are complete.
 
 ## Read-only inspection
 
@@ -261,7 +310,8 @@ read for the hole. `SYNCFS` and `FSYNC` are safe no-ops.
 `EXT4-BINDING` has `VFS-BF-NEEDS-VOLUME`, `VFS-BF-READ-ONLY`, and
 `VFS-BF-STABLE-IDS`. The VFS rejects all mutation before binding dispatch.
 `VOL-WRITE` and `VOL-FLUSH` are used only by the mount-time recovery protocol
-above; they are not exposed as writable VFS capabilities.
+and the private activation transition above; they are not exposed as writable
+VFS capabilities.
 
 ## Deliberate remaining limits
 
@@ -284,8 +334,9 @@ writable profile. The remaining boundaries are:
 - a checksum-torn dirty primary super fails closed unless a fully committed
   transaction carries its valid invariant-preserving replacement, or the
   private `AKR1` clear witness proves the exact cleanup state described above;
-- private transaction staging is implemented, but journal emission,
-  checkpointing, and uncertain-write quarantine are not;
+- private transaction staging and clean-to-`RECOVER` activation quarantine are
+  implemented, but descriptor/payload/revoke/commit emission and transaction
+  checkpointing are not;
 - legacy and modern orphan recovery and every user-visible mutation operation
   remain unimplemented; and
 - recovery-anchor interoperability and the controlled power-cut matrix still

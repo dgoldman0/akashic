@@ -218,6 +218,19 @@ full-block after-image ownership and CRCs, hash collisions and forged-index
 rejection, metadata/revoke cancellation, ordered-data conflicts, atomic
 capacity failures, abort zeroization, and malformed persistent-layout guards.
 
+The 1 KiB writer fixture separately qualifies private clean-to-`RECOVER`
+activation. An independently derived `AKW1` guard/primary pair checks the exact
+write/flush order, durable dirty-super and empty checksum-v3 result,
+write-active publication, and continued staging/abort behavior without any
+descriptor or commit emission. Injected sequential-prefix failures cover guard
+preseed, guard publication, primary publication, ext4-super update, witness
+clear, and guard retirement. Each row must latch the original fault and phase,
+force the VFS read-only/dirty, and remount through the forward-only `AKW1`
+resolver and existing `AKR1` clean landing with no home write. Follow-on rows
+tear the resolver's own dirty-super and standard-primary completions and require
+a third mount to converge; fresh-primary UUID and sequence drift must also fail
+before any activation write or flush.
+
 When a resolved profile closure binds directly to MegaPad networking, the
 harness injects the one canonical packed `networking.f` and loads it with
 KDOS `REQUIRE` immediately after `ENTER-USERLAND`. This avoids re-entering the
