@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify the transport-neutral Rabbit frame, message, and session core."""
+"""Qualify the transport-neutral Rabbit frame, message, builder, and session core."""
 
 from __future__ import annotations
 
@@ -11,8 +11,10 @@ from pathlib import Path
 
 LOCAL_TESTING = Path(__file__).resolve().parent
 ROOT = LOCAL_TESTING.parent
+PROFILE = ROOT / "akashic" / "net" / "rabbit" / "profile.f"
 FRAME = ROOT / "akashic" / "net" / "rabbit" / "frame.f"
 MESSAGE = ROOT / "akashic" / "net" / "rabbit" / "message.f"
+BUILDER = ROOT / "akashic" / "net" / "rabbit" / "builder.f"
 SESSION = ROOT / "akashic" / "net" / "rabbit" / "session.f"
 MEMORY = ROOT / "akashic" / "net" / "transports" / "memory-duplex.f"
 DOC = ROOT / "docs" / "net" / "rabbit.md"
@@ -21,6 +23,7 @@ FIXTURE = LOCAL_TESTING / "rabbit-core-test.f"
 PASS_MARKER = "RABBIT CORE PASS"
 PHASE_MAX_STEPS = 120_000_000
 LOAD_STAGES = (
+    ("profile", "net/rabbit/profile.f", "RABBIT PROFILE READY"),
     (
         "memory-span",
         "utils/memory-span.f",
@@ -37,6 +40,7 @@ LOAD_STAGES = (
         "RABBIT MEMORY DUPLEX READY",
     ),
     ("session", "net/rabbit/session.f", "RABBIT SESSION READY"),
+    ("builder", "net/rabbit/builder.f", "RABBIT BUILDER READY"),
     (
         "fixture",
         "local_testing/rabbit-core-test.f",
@@ -70,8 +74,10 @@ def _assert_physical_comments(path: Path, source: str) -> None:
 
 
 def _assert_static_contracts() -> None:
+    profile = PROFILE.read_text(encoding="utf-8")
     frame = FRAME.read_text(encoding="utf-8")
     message = MESSAGE.read_text(encoding="utf-8")
+    builder = BUILDER.read_text(encoding="utf-8")
     session = SESSION.read_text(encoding="utf-8")
     memory = MEMORY.read_text(encoding="utf-8")
     doc = " ".join(DOC.read_text(encoding="utf-8").split())
@@ -86,19 +92,34 @@ def _assert_static_contracts() -> None:
         "../../utils/string.f",
         "../../text/utf8.f",
     ]
+    assert _requires(PROFILE) == []
     assert _requires(SESSION) == [
+        "profile.f",
         "../io-port.f",
         "../../utils/memory-span.f",
     ]
-    assert _requires(MESSAGE) == ["frame.f", "../../utils/string.f"]
+    assert _requires(MESSAGE) == [
+        "frame.f",
+        "profile.f",
+        "../../utils/string.f",
+    ]
+    assert _requires(BUILDER) == [
+        "frame.f",
+        "message.f",
+        "profile.f",
+        "../../utils/memory-span.f",
+        "../../utils/string.f",
+    ]
     assert _requires(MEMORY) == [
         "../io-port.f",
         "../../utils/memory-span.f",
     ]
 
     for source, provider in (
+        (profile, "PROVIDED akashic-rabbit-profile"),
         (frame, "PROVIDED akashic-rabbit-frame"),
         (message, "PROVIDED akashic-rabbit-message"),
+        (builder, "PROVIDED akashic-rabbit-builder"),
         (session, "PROVIDED akashic-rabbit-session"),
         (memory, "PROVIDED akashic-net-memory-duplex"),
     ):
@@ -115,6 +136,13 @@ def _assert_static_contracts() -> None:
     assert all(kind == "VARIABLE" for kind, _ in message_declarations)
     assert all(name.startswith("_RMSG") for _, name in message_declarations)
     assert "deliberately state-free" in message
+    builder_declarations = _declarations(BUILDER, builder)
+    assert builder_declarations
+    assert all(kind == "VARIABLE" for kind, _ in builder_declarations)
+    assert all(name.startswith("_RMSGB") for _, name in builder_declarations)
+    assert "copies every start-line" in builder
+    assert "non-reentrant" in builder
+    assert not _declarations(PROFILE, profile)
     assert not _declarations(SESSION, session)
     assert not _declarations(MEMORY, memory)
 
@@ -140,8 +168,33 @@ def _assert_static_contracts() -> None:
         "RMSG-SEQ@",
         "RMSG-EVENT-SEQ@",
         "RMSG-CREDIT@",
+        "RMSG-ACCEPT-VIEW$",
+        "RMSG-BURROW-ID$",
+        "RMSG-TIMEOUT@",
+        "RMSG-CAPS@",
     ):
         assert word in message
+    for word in (
+        "RMSGB-BUILDER-BYTES",
+        "RMSGB-INIT",
+        "RMSGB-RESET",
+        "RMSGB-FINI",
+        "RMSGB-BEGIN-HELLO",
+        "RMSGB-BEGIN-REQUEST",
+        "RMSGB-BEGIN-EVENT",
+        "RMSGB-BEGIN-ACK",
+        "RMSGB-BEGIN-CREDIT",
+        "RMSGB-BEGIN-RESPONSE",
+        "RMSGB-BEGIN-CONTROL-RESPONSE",
+        "RMSGB-ACCEPT-VIEW!",
+        "RMSGB-BURROW-ID!",
+        "RMSGB-TIMEOUT!",
+        "RMSGB-BODY!",
+        "RMSGB-SEAL",
+        "RMSGB-MEASURE",
+        "RMSGB-ENCODE",
+    ):
+        assert word in builder
     for word in (
         "RABBIT-SESSION-INIT",
         "RABBIT-SESSION-CONFIGURE",
@@ -166,8 +219,10 @@ def _assert_static_contracts() -> None:
         assert word in memory
 
     production_requires = (
+        *_requires(PROFILE),
         *_requires(FRAME),
         *_requires(MESSAGE),
+        *_requires(BUILDER),
         *_requires(SESSION),
         *_requires(MEMORY),
     )
@@ -203,6 +258,9 @@ def _assert_static_contracts() -> None:
         "_RBT-TEST-PARSE",
         "_RBT-TEST-REJECTIONS",
         "_RBT-TEST-MESSAGE",
+        "_RBT-TEST-BUILDER-LIFECYCLE",
+        "_RBT-TEST-BUILDER-FAILURES",
+        "_RBT-TEST-BUILDER-TYPED-CONTROL",
         "_RBT-TEST-MEMORY-DUPLEX",
         "_RBT-TEST-SESSION",
         "RBF-EOF",
@@ -211,8 +269,10 @@ def _assert_static_contracts() -> None:
         assert marker in fixture
 
     for path, source in (
+        (PROFILE, profile),
         (FRAME, frame),
         (MESSAGE, message),
+        (BUILDER, builder),
         (SESSION, session),
         (MEMORY, memory),
         (FIXTURE, fixture),
@@ -246,8 +306,10 @@ def _run_rabbit_core(timeout: float) -> int:
     image = Path("/tmp/akashic-rabbit-streams-worlds-core.img")
     harness.PROFILES[profile_name] = harness.Profile(
         roots=(
+            "net/rabbit/profile.f",
             "net/rabbit/frame.f",
             "net/rabbit/message.f",
+            "net/rabbit/builder.f",
             "net/transports/memory-duplex.f",
             "net/rabbit/session.f",
         ),

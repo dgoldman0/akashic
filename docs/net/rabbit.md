@@ -22,6 +22,8 @@ Rabbit uses the existing `net/io-port.f` cooperative byte-stream interface.
 There is intentionally no second Rabbit transport abstraction. The deterministic
 fixture binds two caller-owned rings to two ordinary `NET-IO-PORT` records
 through `net/transports/memory-duplex.f`, which is itself protocol-neutral.
+Shared wire-scalar bounds and capability bits live in `net/rabbit/profile.f`,
+below both message construction and the NIO-owning session layer.
 
 ## Supported frame profile
 
@@ -73,8 +75,7 @@ does not retain a second descriptor: typed header and body accessors borrow the
 frame's arena and expire when that frame is reset. This prevents a connection
 from accidentally retaining an undetectably stale parser view. An outbound
 connection must encode into its own caller-provided queue slot before returning
-from enqueue; a later typed builder will supply the canonical construction side
-of this same boundary.
+from enqueue.
 
 Known request verbs require a nonempty target plus exact `Lane` and `Txn`.
 `EVENT` requires distinct nonzero `Seq` and `Event-Seq`; `ACK` and `CREDIT`
@@ -90,6 +91,45 @@ implementation's integer parser disagree and cannot both be honored silently.
 until the channel-binding, mutual-proof, and selected PQ profile exist. Numeric
 responses remain generic at this layer; the connection/client context must
 validate exact `200 PONG`, handshake, and `(Lane, Txn)` response shapes.
+
+## Typed outbound construction
+
+`net/rabbit/builder.f` supplies the construction side of that ownership
+boundary. Its opaque, caller-sized descriptor embeds an outbound frame, while
+a separate caller-provided byte arena owns copies of the start line, every
+header name and value, and the body. A successful constructor therefore keeps
+no application slice alive. Connections can encode synchronously into their
+own queue slots and immediately reset or reuse the application builder.
+From successful initialization until finalization, the builder has exclusive
+mutation rights over its opaque descriptor. During construction and while
+READY it also has exclusive rights over the entire byte arena; reset wipes and
+releases the live content without unbinding that arena. The caller may mutate
+the original source slices because they were copied, but must not mutate
+builder-owned bytes.
+
+Header count and byte capacity remain caller choices. Construction failures
+latch an error, reset the embedded frame, and wipe the bytes copied by the
+failed operation; explicit reset wipes all bytes used by the preceding
+successful construction. Seal performs both frame validation and typed message
+admission and refuses a result whose admitted kind differs from its constructor.
+Encoding is all-or-nothing and rejects output that overlaps either the opaque
+descriptor or its arena.
+
+The typed surface covers the admitted HELLO, request, EVENT, ACK, CREDIT,
+PING/PONG, correlated application responses, explicitly named uncorrelated
+control responses, and their headers. It also covers `Since`, `Event-Seq`,
+`Idem`, `View`, `Accept-View`, `Timeout`, `Burrow-ID`, QoS, extension headers,
+and length-coupled bodies. HELLO capability flags and the anonymous
+`Burrow-ID` round-trip through typed message accessors for connection/session
+negotiation. Scalar output spans the full canonical u64 decimal range. AUTH
+construction remains unavailable for the same security reason that AUTH
+admission remains unsupported.
+
+Frame, message, and builder operations still use private module scratch. Their
+persistent records and byte ownership are caller-local, but calls through these
+three modules must currently remain synchronous and serialized. Independent
+connections on separate cores are not yet a supported concurrency claim; the
+scratch must move into caller-owned connection workspaces before making one.
 
 ## Lane and transaction profile
 

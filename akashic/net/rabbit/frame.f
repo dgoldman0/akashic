@@ -56,6 +56,9 @@
 \    RBF-HEADER-COUNT@ ( frame -- count )
 \    RBF-HEADER@       ( index frame -- name-a name-u value-a value-u flag )
 \    RBF-HEADER$       ( name-a name-u frame -- value-a value-u flag )
+\    RBF-FRAME-VALID?  ( frame -- flag )
+\    RBF-DESCRIPTOR-BYTES@ ( frame -- bytes|0 )
+\    RBF-CORE-HEADER?  ( name-a name-u -- flag )
 \
 \  Outbound descriptors use the same caller-sized layout but borrow all
 \  supplied slices instead of copying them.  Parser and outbound descriptors
@@ -269,6 +272,13 @@ VARIABLE _RBFV-MAGIC
     DUP RBF-DESCRIPTOR-VALID? 0= IF DROP 0 EXIT THEN
     RBF.MAGIC @ RBF-FRAME-MAGIC = ;
 
+: RBF-FRAME-VALID?  ( frame -- flag )
+    _RBF-FRAME-DESCRIPTOR? ;
+
+: RBF-DESCRIPTOR-BYTES@  ( frame -- bytes|0 )
+    DUP RBF-DESCRIPTOR-VALID? 0= IF DROP 0 EXIT THEN
+    RBF.BYTES @ ;
+
 VARIABLE _RBFI-A
 VARIABLE _RBFI-U
 VARIABLE _RBFI-HCAP
@@ -449,6 +459,10 @@ VARIABLE _RBFBG-U
     2DUP S" Server-Proof" STR-STRI= IF 2DROP -1 EXIT THEN
     2DUP S" Since" STR-STRI= IF 2DROP -1 EXIT THEN
     S" Event-Seq" STR-STRI= ;
+
+: RBF-CORE-HEADER?  ( name-a name-u -- flag )
+    2DUP _RBF-SPAN-VALID? 0= IF 2DROP 0 EXIT THEN
+    _RBF-CORE-SINGLETON? ;
 
 VARIABLE _RBFP-A
 VARIABLE _RBFP-U

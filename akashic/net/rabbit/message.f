@@ -22,6 +22,7 @@
 PROVIDED akashic-rabbit-message
 
 REQUIRE frame.f
+REQUIRE profile.f
 REQUIRE ../../utils/string.f
 
 \ =====================================================================
@@ -75,8 +76,8 @@ REQUIRE ../../utils/string.f
 \  Canonical unsigned decimal and core-header accessors
 \ =====================================================================
 
-0x0CCCCCCCCCCCCCCC CONSTANT _RMSG-UDEC-QUOTIENT-MAX
-7                  CONSTANT _RMSG-UDEC-REMAINDER-MAX
+0x1999999999999999 CONSTANT _RMSG-UDEC-QUOTIENT-MAX
+5                  CONSTANT _RMSG-UDEC-REMAINDER-MAX
 
 VARIABLE _RMSG-D-A
 VARIABLE _RMSG-D-U
@@ -141,7 +142,7 @@ VARIABLE _RMSG-H-FRAME
     S" Lane" ROT _RMSG-U64-HEADER@
     DUP IF EXIT THEN
     DROP DUP IF
-        OVER 65535 U> IF 2DROP 0 0 RMSG-S-VALUE EXIT THEN
+        OVER RABBIT-LANE-MAX U> IF 2DROP 0 0 RMSG-S-VALUE EXIT THEN
     THEN
     RMSG-S-OK ;
 
@@ -168,7 +169,7 @@ VARIABLE _RMSG-C-U
     _RMSG-C-A @ 1+ _RMSG-C-U @ 1- _RMSG-UDEC 0= IF
         DROP 0 0 RMSG-S-VALUE EXIT
     THEN
-    DUP 0= OVER 0xFFFFFFFF U> OR IF
+    DUP 0= OVER RABBIT-CREDIT-MAX U> OR IF
         DROP 0 0 RMSG-S-VALUE EXIT
     THEN
     -1 RMSG-S-OK ;
@@ -184,6 +185,35 @@ VARIABLE _RMSG-C-U
 
 : RMSG-VIEW$  ( frame -- a u present status )
     S" View" ROT _RMSG-TEXT-HEADER$ ;
+
+: RMSG-ACCEPT-VIEW$  ( frame -- a u present status )
+    S" Accept-View" ROT _RMSG-TEXT-HEADER$ ;
+
+: RMSG-BURROW-ID$  ( frame -- a u present status )
+    S" Burrow-ID" ROT _RMSG-TEXT-HEADER$ ;
+
+: RMSG-TIMEOUT@  ( frame -- seconds present status )
+    S" Timeout" ROT _RMSG-U64-HEADER@ ;
+
+VARIABLE _RMSG-CAPS-A
+VARIABLE _RMSG-CAPS-U
+
+: RMSG-CAPS@  ( frame -- caps present status )
+    DUP RBF-READY? 0= IF DROP 0 0 RMSG-S-FRAME EXIT THEN
+    S" Caps" ROT RBF-HEADER$ 0= IF
+        2DROP 0 0 RMSG-S-OK EXIT
+    THEN
+    _RMSG-CAPS-U ! _RMSG-CAPS-A !
+    _RMSG-CAPS-A @ _RMSG-CAPS-U @ S" lanes" STR-STR= IF
+        RABBIT-CAP-F-LANES -1 RMSG-S-OK EXIT
+    THEN
+    _RMSG-CAPS-A @ _RMSG-CAPS-U @ S" async" STR-STR= IF
+        RABBIT-CAP-F-ASYNC -1 RMSG-S-OK EXIT
+    THEN
+    _RMSG-CAPS-A @ _RMSG-CAPS-U @ S" lanes,async" STR-STR= IF
+        RABBIT-CAPS-LANES-ASYNC -1 RMSG-S-OK EXIT
+    THEN
+    0 0 RMSG-S-VALUE ;
 
 : RMSG-BODY$  ( frame -- a u status )
     DUP RBF-READY? 0= IF DROP 0 0 RMSG-S-FRAME EXIT THEN
@@ -267,7 +297,11 @@ VARIABLE _RMSG-K-U
     DUP RMSG-SINCE@ >R 2DROP R> ?DUP IF NIP EXIT THEN
     DUP RMSG-EVENT-SEQ@ >R 2DROP R> ?DUP IF NIP EXIT THEN
     DUP RMSG-IDEM$ >R 2DROP DROP R> ?DUP IF NIP EXIT THEN
-    RMSG-VIEW$ >R 2DROP DROP R> ;
+    DUP RMSG-VIEW$ >R 2DROP DROP R> ?DUP IF NIP EXIT THEN
+    DUP RMSG-ACCEPT-VIEW$ >R 2DROP DROP R> ?DUP IF NIP EXIT THEN
+    DUP RMSG-BURROW-ID$ >R 2DROP DROP R> ?DUP IF NIP EXIT THEN
+    DUP RMSG-TIMEOUT@ >R 2DROP R> ?DUP IF NIP EXIT THEN
+    RMSG-CAPS@ >R 2DROP R> ;
 
 : _RMSG-ARGS-REQUIRED  ( frame -- status )
     RBF-ARGS$ NIP IF RMSG-S-OK ELSE RMSG-S-REQUIRED THEN ;

@@ -32,6 +32,7 @@
 
 PROVIDED akashic-rabbit-session
 
+REQUIRE profile.f
 REQUIRE ../io-port.f
 REQUIRE ../../utils/memory-span.f
 
@@ -65,12 +66,6 @@ REQUIRE ../../utils/memory-span.f
 6 CONSTANT RABBIT-ST-CLOSED
 7 CONSTANT RABBIT-ST-FAILED
 
-1 CONSTANT RABBIT-CAP-F-LANES
-2 CONSTANT RABBIT-CAP-F-ASYNC
-RABBIT-CAP-F-LANES RABBIT-CAP-F-ASYNC OR
-    CONSTANT RABBIT-CAPS-LANES-ASYNC
-RABBIT-CAPS-LANES-ASYNC CONSTANT RABBIT-CAPS-KNOWN
-
 0 CONSTANT RABBIT-INBOUND-NONE
 1 CONSTANT RABBIT-INBOUND-NEW
 2 CONSTANT RABBIT-INBOUND-DUPLICATE
@@ -78,8 +73,6 @@ RABBIT-CAPS-LANES-ASYNC CONSTANT RABBIT-CAPS-KNOWN
 
 \ Rabbit's reference lane credit scalar is u32.  This is a wire scalar
 \ bound, not a number of lanes, clients, queued frames, or product objects.
-0xFFFFFFFF CONSTANT RABBIT-CREDIT-MAX
--1           CONSTANT RABBIT-U64-MAX
 -1 1 RSHIFT  CONSTANT _RABBIT-CELL-MAX
 
 \ =====================================================================
@@ -181,7 +174,7 @@ RABBIT-CAPS-LANES-ASYNC CONSTANT RABBIT-CAPS-KNOWN
 
 : _RABBIT-LANE-ID?  ( lane -- flag )
     DUP 0< IF DROP 0 EXIT THEN
-    0xFFFF U> 0= ;
+    RABBIT-LANE-MAX U> 0= ;
 
 : _RABBIT-APP-LANE-ID?  ( lane -- flag )
     DUP 0> SWAP _RABBIT-LANE-ID? AND ;
