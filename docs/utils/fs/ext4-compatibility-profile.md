@@ -214,7 +214,9 @@ arena, so 4 MiB is a canonical-fixture choice rather than a driver ceiling.
 The walker rejects holes, mappings beyond journal EOF, aliased or out-of-range
 data blocks, and aliases between journal data and its own map metadata. A
 separately sized metadata ownership hash makes both journal data and external
-map nodes forbidden replay-home targets. A valid
+map nodes forbidden replay-home targets. A tag for the shared inode-table
+block is admitted only when its authenticated payload preserves journal inode
+8 byte-for-byte; neighboring inode records remain independently mutable. A valid
 incomplete tail is ignored, while a checksum-damaged tail remains a fail-closed
 limitation rather than being guessed incomplete. A matching-sequence JBD2
 `SUPER_V2` header terminates preflight only after the complete block validates
@@ -378,9 +380,11 @@ Creation fixes the tool suite, private configuration, UUID, label, directory
 hash seed, 16 KiB inode ratio, blocks/group, flex size, the canonical
 fixtures' internal 4 MiB journal, error policy, root owner, clock, locale, and
 timezone. The VFS qualification additionally generates a private 8 MiB journal
-to prove that this fixture value is not an admission limit. It explicitly clears
-all features with `-O none` and adds exactly the profile list.  Lazy inode and
-journal initialization and discard are disabled.
+and relocates a checksummed transaction above logical block 4095 and across
+the journal-ring boundary. This proves both that the fixture value is not an
+admission limit and that cursor wrap follows authenticated ring geometry. It
+explicitly clears all features with `-O none` and adds exactly the profile
+list. Lazy inode and journal initialization and discard are disabled.
 
 Pinned `debugfs` creates the baseline payload, hard link with correct link
 count, fast and block-backed symlinks, three-block sparse file with a middle

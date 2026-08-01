@@ -217,7 +217,8 @@ REQUIRE ../vfs.f
 \ +9904    third 4096-byte block buffer for map-tree validation
 \ +14000   recovery and JBD2 scan state
 \ +14104   torn-super and recovery-anchor state
-\ +14152   persistent journal-workspace pointers and allocation geometry
+\ +14152   journal-inode replay-preservation geometry
+\ +14168   persistent journal-workspace pointers and allocation geometry
 
    0 CONSTANT _EXT4-C.SB
 1024 CONSTANT _EXT4-C.BLOCK
@@ -278,16 +279,18 @@ REQUIRE ../vfs.f
 14128 CONSTANT _EXT4-C.J.WITNESS
 14136 CONSTANT _EXT4-C.J.WITNESS-CHECKSUM
 14144 CONSTANT _EXT4-C.J.CLEANUP
-14152 CONSTANT _EXT4-CTX-RESET-SIZE
-14152 CONSTANT _EXT4-C.J.MAP
-14160 CONSTANT _EXT4-C.J.MAP-HASH
-14168 CONSTANT _EXT4-C.J.MAP-CAPACITY
-14176 CONSTANT _EXT4-C.J.MAP-HASH-SLOTS
-14184 CONSTANT _EXT4-C.J.METADATA-HASH
-14192 CONSTANT _EXT4-C.J.METADATA-CAPACITY
-14200 CONSTANT _EXT4-C.J.METADATA-HASH-SLOTS
-14208 CONSTANT _EXT4-C.ARENA
-14216 CONSTANT _EXT4-CTX-SIZE
+14152 CONSTANT _EXT4-C.J.INODE-TABLE-BLOCK
+14160 CONSTANT _EXT4-C.J.INODE-TABLE-OFF
+14168 CONSTANT _EXT4-CTX-RESET-SIZE
+14168 CONSTANT _EXT4-C.J.MAP
+14176 CONSTANT _EXT4-C.J.MAP-HASH
+14184 CONSTANT _EXT4-C.J.MAP-CAPACITY
+14192 CONSTANT _EXT4-C.J.MAP-HASH-SLOTS
+14200 CONSTANT _EXT4-C.J.METADATA-HASH
+14208 CONSTANT _EXT4-C.J.METADATA-CAPACITY
+14216 CONSTANT _EXT4-C.J.METADATA-HASH-SLOTS
+14224 CONSTANT _EXT4-C.ARENA
+14232 CONSTANT _EXT4-CTX-SIZE
 
 : _EXT4-CTX  ( vfs -- ctx )  V.BCTX @ ;
 : _EXT4-READY?  ( vfs -- flag )
@@ -3723,6 +3726,11 @@ VARIABLE _EXT4-JVL-IOR
     0 _EXT4-JV-CTX @ _EXT4-C.J.WITNESS-CHECKSUM + !
     0 _EXT4-JV-CTX @ _EXT4-C.J.CLEANUP + !
     8 SWAP _EXT4-LOAD-INODE ?DUP IF EXIT THEN
+    \ A replay tag may legitimately name the inode-table block shared with
+    \ neighboring inodes.  Preserve its exact inode-8 byte range so preflight
+    \ can allow the block without allowing the journal map to rewrite itself.
+    _EXT4-IR-BLOCK @ _EXT4-JV-CTX @ _EXT4-C.J.INODE-TABLE-BLOCK + !
+    _EXT4-IR-OFF @ _EXT4-JV-CTX @ _EXT4-C.J.INODE-TABLE-OFF + !
     _EXT4-JV-CTX @ _EXT4-C.INODE + DUP _EXT4-JV-IN !
     _EXT4-I.MODE + W@ 0xF000 AND 0x8000 <> IF
         EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
@@ -3875,7 +3883,14 @@ VARIABLE _EXT4-JVL-IOR
             ?DUP IF EXIT THEN
         THEN
     THEN
-    _EXT4-JV-CTX @ _EXT4-SNAPSHOT-AND-VERIFY-JOURNAL-MAP ;
+    _EXT4-JV-CTX @ _EXT4-SNAPSHOT-AND-VERIFY-JOURNAL-MAP ?DUP IF EXIT THEN
+    \ Map validation is finished, so TREE-BLOCK can freeze the authenticated
+    \ journal inode until both scan passes finish.  This avoids relying on the
+    \ mutable general-purpose inode cache during replay preflight.
+    _EXT4-JV-CTX @ _EXT4-C.INODE +
+    _EXT4-JV-CTX @ _EXT4-C.TREE-BLOCK +
+    _EXT4-JV-CTX @ _EXT4-C.ISIZE + @ CMOVE
+    0 ;
 
 VARIABLE _EXT4-JN-BLOCK
 VARIABLE _EXT4-JN-CTX
@@ -3923,6 +3938,19 @@ VARIABLE _EXT4-JS-FIRST
     _EXT4-JC-BUF @ _EXT4-JS-CTX @ _EXT4-C.BSIZE + @ _EXT4-CRC-ADD
     _EXT4-CRC@ _EXT4-JC-STORED @ = ;
 
+VARIABLE _EXT4-JIP-BUF
+VARIABLE _EXT4-JIP-HOME
+VARIABLE _EXT4-JIP-CTX
+
+: _EXT4-JOURNAL-INODE-PRESERVED?  ( payload home ctx -- flag )
+    _EXT4-JIP-CTX ! _EXT4-JIP-HOME ! _EXT4-JIP-BUF !
+    _EXT4-JIP-HOME @
+    _EXT4-JIP-CTX @ _EXT4-C.J.INODE-TABLE-BLOCK + @ <> IF TRUE EXIT THEN
+    _EXT4-JIP-BUF @
+    _EXT4-JIP-CTX @ _EXT4-C.J.INODE-TABLE-OFF + @ +
+    _EXT4-JIP-CTX @ _EXT4-C.TREE-BLOCK +
+    _EXT4-JIP-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? ;
+
 : _EXT4-JSCAN-DESCRIPTOR  ( -- ior )
     _EXT4-JS-CTX @ _EXT4-C.BLOCK +
     _EXT4-JS-CTX @ _EXT4-C.DIR-BLOCK +
@@ -3965,11 +3993,17 @@ VARIABLE _EXT4-JS-FIRST
         _EXT4-JBD2-TAG-CHECKSUM? 0= IF
             EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
         THEN
+        \ Tag checksums cover the escaped on-disk form.  Reconstruct the
+        \ logical home image before comparing or writing it.
+        _EXT4-JS-FLAGS @ _EXT4-JBD2-F-ESCAPE AND IF
+            _EXT4-JBD2-MAGIC
+            _EXT4-JS-CTX @ _EXT4-C.BLOCK + _EXT4-BE32!
+        THEN
+        _EXT4-JS-CTX @ _EXT4-C.BLOCK + _EXT4-JS-HOME @ _EXT4-JS-CTX @
+        _EXT4-JOURNAL-INODE-PRESERVED? 0= IF
+            EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+        THEN
         _EXT4-JS-REPLAY @ IF
-            _EXT4-JS-FLAGS @ _EXT4-JBD2-F-ESCAPE AND IF
-                _EXT4-JBD2-MAGIC
-                _EXT4-JS-CTX @ _EXT4-C.BLOCK + _EXT4-BE32!
-            THEN
             _EXT4-JS-CTX @ _EXT4-C.BLOCK + _EXT4-JS-HOME @
             _EXT4-JS-CTX @ _EXT4-WRITE-BLOCK ?DUP IF EXIT THEN
             1 _EXT4-JS-CTX @ _EXT4-C.J.HOME-WRITES + +!

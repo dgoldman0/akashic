@@ -67,6 +67,58 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _crc32c_raw(data: bytes, seed: int = 0xFFFF_FFFF) -> int:
+    crc = seed
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ (0x82F63B78 if crc & 1 else 0)
+    return crc & 0xFFFF_FFFF
+
+
+def _relocate_jbd2_transaction(
+    source: Path,
+    destination: Path,
+    physical_map: dict[int, int],
+    destination_slots: tuple[int, int, int],
+) -> None:
+    """Move one debugfs-authored descriptor/data/commit tuple unchanged."""
+    block_size = 1024
+    source_slots = (1, 2, 3)
+    assert len(set(destination_slots)) == 3
+    assert 0 not in destination_slots
+    with source.open("rb") as image:
+        transaction = []
+        for logical in source_slots:
+            image.seek(physical_map[logical] * block_size)
+            transaction.append(image.read(block_size))
+        image.seek(physical_map[0] * block_size)
+        journal_superblock = bytearray(image.read(block_size))
+    assert all(len(block) == block_size for block in transaction)
+    assert struct.unpack_from(">I", transaction[0], 0x00)[0] == 0xC03B3998
+    assert struct.unpack_from(">I", transaction[0], 0x04)[0] == 1
+    assert struct.unpack_from(">I", transaction[2], 0x00)[0] == 0xC03B3998
+    assert struct.unpack_from(">I", transaction[2], 0x04)[0] == 2
+    assert struct.unpack_from(">I", transaction[0], 0x08)[0] == struct.unpack_from(
+        ">I", transaction[2], 0x08
+    )[0]
+
+    shutil.copyfile(source, destination)
+    with destination.open("r+b") as image:
+        for logical in source_slots:
+            if logical not in destination_slots:
+                image.seek(physical_map[logical] * block_size)
+                image.write(bytes(block_size))
+        for block, logical in zip(transaction, destination_slots, strict=True):
+            image.seek(physical_map[logical] * block_size)
+            image.write(block)
+        struct.pack_into(">I", journal_superblock, 0x1C, destination_slots[0])
+        struct.pack_into(">I", journal_superblock, 0xFC, 0)
+        struct.pack_into(">I", journal_superblock, 0xFC, _crc32c_raw(journal_superblock))
+        image.seek(physical_map[0] * block_size)
+        image.write(journal_superblock)
+
+
 def _feed_until_idle(system, payload: bytes, max_steps: int) -> int:
     position = 0
     steps = 0
@@ -413,6 +465,113 @@ def replay_fixture(
 
 
 @pytest.fixture(scope="session")
+def journal_inode_table_replay_fixture(
+    canonical_images: dict[str, Path], tmp_path_factory: pytest.TempPathFactory
+) -> dict[str, object]:
+    """Author valid replay payloads that preserve or alter journal inode 8."""
+    tool_dir_value = os.environ.get("AKASHIC_E2FSPROGS_TOOL_DIR")
+    if not tool_dir_value:
+        pytest.skip("set AKASHIC_E2FSPROGS_TOOL_DIR for JBD2 recovery tests")
+    tool_dir = Path(tool_dir_value).resolve()
+    env = ext4_fixture_generator.pinned_environment(PROFILE, tool_dir, MANIFEST)
+    try:
+        tools = ext4_fixture_generator.verify_toolchain(PROFILE, tool_dir, env)
+    except ext4_fixture_generator.ProfileError as error:
+        pytest.fail(str(error))
+    debugfs = Path(tools["debugfs"]["path"])
+    source_image = canonical_images["primary-1k-i256"]
+    located = subprocess.run(
+        [str(debugfs), "-R", "imap <8>", str(source_image)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert located.returncode == 0, located.stdout + located.stderr
+    match = re.search(
+        r"located at block\s+(\d+),\s+offset\s+0x([0-9a-fA-F]+)",
+        located.stdout,
+    )
+    assert match, located.stdout
+    inode_table_block = int(match.group(1))
+    inode_offset = int(match.group(2), 16)
+    inode_size = IMAGE_ROWS["primary-1k-i256"]["inode_size"]
+    assert inode_offset + inode_size <= 1024
+    with source_image.open("rb") as source:
+        source.seek(inode_table_block * 1024)
+        original_payload = source.read(1024)
+    assert len(original_payload) == 1024
+    directory = tmp_path_factory.mktemp("ext4-jbd2-inode-table")
+    neighbor_candidate = directory / "neighbor-inode-update.img"
+    shutil.copyfile(source_image, neighbor_candidate)
+    updated = subprocess.run(
+        [
+            str(debugfs),
+            "-w",
+            "-R",
+            "set_inode_field <7> atime 20260101000000",
+            str(neighbor_candidate),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert updated.returncode == 0, updated.stdout + updated.stderr
+    with neighbor_candidate.open("rb") as source:
+        source.seek(inode_table_block * 1024)
+        preserved_payload = source.read(1024)
+    assert preserved_payload != original_payload
+    assert (
+        preserved_payload[inode_offset : inode_offset + inode_size]
+        == original_payload[inode_offset : inode_offset + inode_size]
+    )
+    altered_payload = bytearray(preserved_payload)
+    altered_payload[inode_offset] ^= 0x01
+
+    images: dict[str, Path] = {}
+    for case_name, payload in (
+        ("preserved", preserved_payload),
+        ("altered", bytes(altered_payload)),
+    ):
+        image = directory / f"replay-inode-table-{case_name}.img"
+        shutil.copyfile(source_image, image)
+        payload_path = directory / f"inode-table-{case_name}.bin"
+        payload_path.write_bytes(payload)
+        commands = directory / f"journal-inode-table-{case_name}.cmd"
+        commands.write_text(
+            "\n".join(
+                (
+                    "journal_open -c -v 3",
+                    f"journal_write -b {inode_table_block} {payload_path}",
+                    "journal_close",
+                    "close",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        authored = subprocess.run(
+            [str(debugfs), "-w", "-f", str(commands), str(image)],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert authored.returncode == 0, authored.stdout + authored.stderr
+        assert "Command not found" not in authored.stdout + authored.stderr
+        images[case_name] = image
+    return {
+        "preserved_image": images["preserved"],
+        "altered_image": images["altered"],
+        "inode_table_block": inode_table_block,
+        "inode_offset": inode_offset,
+        "inode_size": inode_size,
+        "preserved_payload": preserved_payload,
+    }
+
+
+@pytest.fixture(scope="session")
 def large_journal_replay_fixture(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, object]:
@@ -515,7 +674,7 @@ def large_journal_replay_fixture(
     assert re.search(r"\bSize:\s+8388608\b", journal_stat.stdout)
 
     mapped: dict[int, int] = {}
-    for logical in (0, 8191):
+    for logical in (0, 1, 2, 3, 5000, 5001, 5002, 8190, 8191):
         result = subprocess.run(
             [str(debugfs), "-R", f"bmap <8> {logical}", str(image)],
             env=env,
@@ -535,13 +694,24 @@ def large_journal_replay_fixture(
     assert struct.unpack_from(">I", journal_superblock, 0x10)[0] == 8192
     assert struct.unpack_from(">I", journal_superblock, 0x28)[0] == 0x12
     assert home_before != payload
+    high_slot_image = directory / "replay-csum3-64bit-j8-high.img"
+    _relocate_jbd2_transaction(
+        image, high_slot_image, mapped, (5000, 5001, 5002)
+    )
+    wraparound_image = directory / "replay-csum3-64bit-j8-wrap.img"
+    _relocate_jbd2_transaction(
+        image, wraparound_image, mapped, (8190, 8191, 1)
+    )
     return {
         "image": image,
+        "high_slot_image": high_slot_image,
+        "wraparound_image": wraparound_image,
         "payload": payload,
         "home_before": home_before,
         "target_block": 30000,
         "journal_block": mapped[0],
         "journal_tail_block": mapped[8191],
+        "journal_map": mapped,
     }
 
 
@@ -676,6 +846,109 @@ def test_jbd2_replay_accepts_arena_bounded_8m_journal(
         ],
     )
     _assert_emitted(second, "EXT4-JBD2-J8-SECOND-MOUNT-OK")
+
+
+@pytest.mark.parametrize(
+    ("image_key", "expected_start", "case_name"),
+    (
+        ("high_slot_image", 5000, "high"),
+        ("wraparound_image", 8190, "wrap"),
+    ),
+)
+def test_jbd2_replay_scans_high_slots_and_wraps_at_ring_end(
+    large_journal_replay_fixture: dict[str, object],
+    tmp_path: Path,
+    image_key: str,
+    expected_start: int,
+    case_name: str,
+) -> None:
+    image = large_journal_replay_fixture[image_key]
+    payload = large_journal_replay_fixture["payload"]
+    target_block = large_journal_replay_fixture["target_block"]
+    journal_map = large_journal_replay_fixture["journal_map"]
+    assert isinstance(image, Path)
+    assert isinstance(payload, bytes)
+    assert isinstance(target_block, int)
+    assert isinstance(journal_map, dict)
+    with image.open("rb") as source:
+        source.seek(journal_map[0] * 1024)
+        journal_superblock = source.read(1024)
+    assert struct.unpack_from(">I", journal_superblock, 0x1C)[0] == expected_start
+
+    backing = tmp_path / f"recovered-j8-{case_name}.img"
+    output, trace, _ = run_recovery_forth(
+        image,
+        backing,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REPLAYED + @ 0<> AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.MAXLEN + @ 8192 = AND "
+                'IF ." EXT4-JBD2-J8-RING-REPLAY-OK" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-J8-RING-REPLAY-OK")
+    assert ("write", target_block * 2, 2) in trace
+    with backing.open("rb") as source:
+        source.seek(target_block * 1024)
+        assert source.read(1024) == payload
+
+
+def test_jbd2_replay_allows_shared_inode_table_when_inode_8_is_preserved(
+    journal_inode_table_replay_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = journal_inode_table_replay_fixture["preserved_image"]
+    inode_table_block = journal_inode_table_replay_fixture["inode_table_block"]
+    preserved_payload = journal_inode_table_replay_fixture["preserved_payload"]
+    assert isinstance(image, Path)
+    assert isinstance(inode_table_block, int)
+    assert isinstance(preserved_payload, bytes)
+    backing = tmp_path / "recovered-inode-table-preserved.img"
+    output, trace, _ = run_recovery_forth(
+        image,
+        backing,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REPLAYED + @ 0<> AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 1 = AND "
+                'IF ." EXT4-JBD2-INODE-TABLE-PRESERVED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-INODE-TABLE-PRESERVED")
+    assert ("write", inode_table_block * 2, 2) in trace
+    with backing.open("rb") as source:
+        source.seek(inode_table_block * 1024)
+        assert source.read(1024) == preserved_payload
+
+
+def test_jbd2_preflight_rejects_journal_inode_rewrite_before_any_write(
+    journal_inode_table_replay_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = journal_inode_table_replay_fixture["altered_image"]
+    assert isinstance(image, Path)
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / "refused-inode-table-altered.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-REASON VFS-R-CORRUPT = "
+                "_M-IOR VFS-IOR-DETAIL EXT4-D-JOURNAL = AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                "_V _EXT4-READY? 0= AND "
+                'IF ." EXT4-JBD2-INODE-REWRITE-REFUSED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-JBD2-INODE-REWRITE-REFUSED")
+    assert trace == ()
+    assert media_sha256 == _sha256(image)
 
 
 def test_jbd2_recovery_repairs_torn_ext4_superblock_clear(
@@ -2016,15 +2289,6 @@ def test_supplemental_image_closes_read_side_structural_gaps(
     ):
         _assert_emitted(output, marker)
     assert _sha256(read_side_image) == before
-
-
-def _crc32c_raw(data: bytes, seed: int = 0xFFFF_FFFF) -> int:
-    crc = seed
-    for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            crc = (crc >> 1) ^ (0x82F63B78 if crc & 1 else 0)
-    return crc & 0xFFFF_FFFF
 
 
 def _super_with_mask(path: Path, field_offset: int, value: int) -> bytes:

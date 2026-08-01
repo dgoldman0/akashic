@@ -189,8 +189,11 @@ corruption cases include HTree and extent-node checksums, allocation
 disagreement, and duplicate/overlapping xattr records. The suite also authors
 a private checksum-v3/64-bit JBD2 log with the pinned `debugfs`, and generates
 a second 8 MiB journal with pinned `mke2fs` to cross the canonical 4 MiB
-fixture size. It exercises arena-derived map geometry, committed replay,
-valid incomplete-tail discard, pre-write corruption and
+fixture size. Checksummed transactions are relocated above logical block 4095
+and across the ring end. A shared inode-table replay may update a neighboring
+inode but must preserve journal inode 8 exactly. The suite exercises
+arena-derived map geometry, committed replay, valid incomplete-tail discard,
+pre-write corruption and
 physical-read-only refusal, ordered flushes, idempotence, and both repairable
 and explicitly fail-closed tears in the journal/ext4 landing sequence. The
 repairable matrix includes exact sequential-prefix tears of primary witness

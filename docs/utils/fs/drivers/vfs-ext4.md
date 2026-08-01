@@ -62,7 +62,10 @@ root, mount verifies:
   mappings beyond EOF, out-of-range or aliased data blocks, and aliases
   between journal data and its own extent/indirect metadata. A separately
   arena-sized ownership hash also prevents replay home tags from targeting
-  those map-metadata blocks; and
+  those map-metadata blocks. If a replay tag names the inode-table block
+  shared with journal inode 8, its authenticated payload must preserve inode
+  8's exact 128- or 256-byte record; neighboring inode records may still
+  change; and
 - every clean orphan-file block, including its per-block CRC32C tail (the
   bounded reader currently admits one through 4096 blocks).
 
@@ -101,7 +104,10 @@ only when the complete block passes the anchor checksum, geometry, witness,
 and self-location checks; replay never admits it as a transaction record. A
 checksum-damaged descriptor, payload, or commit is currently refused rather
 than classified as a torn tail. Revoke records and orphan recovery are not yet
-admitted.
+admitted. Pinned qualification relocates a valid transaction above logical
+journal block 4095 and across the end of an 8192-block ring, proving that scan
+and replay use authenticated ring geometry rather than fixture-sized cursor
+assumptions.
 
 Recovery requires a physically writable, flush-capable volume. Home writes are
 flushed and the resulting filesystem is strictly revalidated before journal
