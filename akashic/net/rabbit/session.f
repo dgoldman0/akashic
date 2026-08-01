@@ -713,21 +713,56 @@ REQUIRE ../../utils/memory-span.f
     THEN
     >R 2DROP R> _RLANE-RESERVE-SEND ;
 
-: _RLANE-RESERVE-CONTROL  ( lane-record -- seq status )
+: _RLANE-NEXT-CONTROL@  ( lane-record -- seq status )
     >R
     R@ RLANE.NEXT-SEND @ DUP 0= IF
         DROP R> DROP 0 RABBIT-S-OVERFLOW EXIT
     THEN
+    R> DROP RABBIT-S-OK ;
+
+: _RLANE-RESERVE-CONTROL-EXACT  ( seq lane-record -- status )
+    >R
+    DUP 0= IF DROP R> DROP RABBIT-S-SEQUENCE EXIT THEN
+    R@ RLANE.NEXT-SEND @ DUP 0= IF
+        2DROP R> DROP RABBIT-S-OVERFLOW EXIT
+    THEN
+    2DUP <> IF
+        2DROP R> DROP RABBIT-S-SEQUENCE EXIT
+    THEN
+    NIP
     DUP RABBIT-U64-MAX = IF
-        0 R@ RLANE.NEXT-SEND !
+        DROP 0 R@ RLANE.NEXT-SEND !
     ELSE
-        DUP 1+ R@ RLANE.NEXT-SEND !
+        1+ R@ RLANE.NEXT-SEND !
     THEN
     R> DROP RABBIT-S-OK ;
 
+: _RLANE-RESERVE-CONTROL  ( lane-record -- seq status )
+    DUP _RLANE-NEXT-CONTROL@ DUP IF
+        >R 2DROP 0 R> EXIT
+    THEN
+    DROP DUP >R SWAP _RLANE-RESERVE-CONTROL-EXACT
+    R> SWAP ;
+
 \ Control traffic must be able to carry ACK/CREDIT/PING when every app lane
 \ is credit-starved.  Its inline lane therefore has an explicit no-app-credit
-\ reservation path; it does not manufacture credit for an application lane.
+\ path; it does not manufacture credit for an application lane.  Inspection
+\ is read-only so a connection can finish encoding before exact reservation.
+: RABBIT-SESSION-NEXT-CONTROL@  ( session -- seq status )
+    DUP RABBIT-SESSION-VALID? 0= IF DROP 0 RABBIT-S-INVALID EXIT THEN
+    DUP RSESS.STATE @ RABBIT-ST-ESTABLISHED <> IF
+        DROP 0 RABBIT-S-STATE EXIT
+    THEN
+    RSESS.CONTROL _RLANE-NEXT-CONTROL@ ;
+
+: RABBIT-SESSION-RESERVE-CONTROL-EXACT
+  ( expected-seq session -- status )
+    DUP RABBIT-SESSION-VALID? 0= IF 2DROP RABBIT-S-INVALID EXIT THEN
+    DUP RSESS.STATE @ RABBIT-ST-ESTABLISHED <> IF
+        2DROP RABBIT-S-STATE EXIT
+    THEN
+    RSESS.CONTROL _RLANE-RESERVE-CONTROL-EXACT ;
+
 : RABBIT-SESSION-RESERVE-CONTROL  ( session -- seq status )
     DUP RABBIT-SESSION-VALID? 0= IF DROP 0 RABBIT-S-INVALID EXIT THEN
     DUP RSESS.STATE @ RABBIT-ST-ESTABLISHED <> IF

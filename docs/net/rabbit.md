@@ -148,7 +148,9 @@ scratch must move into caller-owned connection workspaces before making one.
 - Outbound inspection and exact reservation are separate. A connection reads
   the next admissible `Seq`, encodes it into its owning queue slot, then commits
   that exact sequence. A stale decision, exhausted lane, or vanished credit
-  changes neither the sequence nor credit counter.
+  changes neither the sequence nor credit counter. Control traffic uses the
+  same split but remains application-credit-exempt, so failed ACK/CREDIT/PING
+  construction cannot consume a control sequence.
 - Inbound classification is likewise read-only. `Seq == expected` is NEW and
   requires an available receive grant on application lanes; `Seq < expected`
   is a duplicate; and `Seq > expected` is a gap carrying the unchanged expected
