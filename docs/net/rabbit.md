@@ -134,15 +134,27 @@ scratch must move into caller-owned connection workspaces before making one.
 ## Lane and transaction profile
 
 - Lane identifiers are decimal unsigned 16-bit values. Lane 0 is control.
-- Application lanes start with zero send credit. Only an explicit positive
-  `Credit` grant permits a new sequenced delivery.
+- Application lanes start with two distinct zero counters. Send credit records
+  peer grants received by this endpoint; receive credit records grants this
+  endpoint has successfully staged for the peer. ACK never changes either.
+- A connection encodes CREDIT into an unpublished owning slot, records the
+  receive grant, and only then publishes that slot. If grant recording refuses,
+  it discards the staged bytes. A failed encode therefore cannot authorize an
+  inbound delivery that the peer was never actually granted.
 - Lane `Seq` starts at 1, admits the complete unsigned 64-bit range, and is
   independent for each lane. After `2^64-1`, the lane is terminally exhausted
   rather than wrapping to zero. It is transport ordering, never a World or
   topic `Event-Seq`.
-- `Seq == expected` delivers once and advances. `Seq < expected` is a duplicate
-  and may be re-ACKed without redelivery. `Seq > expected` is a gap and carries
-  the unchanged expected sequence into a future `409 OUT-OF-ORDER` response.
+- Outbound inspection and exact reservation are separate. A connection reads
+  the next admissible `Seq`, encodes it into its owning queue slot, then commits
+  that exact sequence. A stale decision, exhausted lane, or vanished credit
+  changes neither the sequence nor credit counter.
+- Inbound classification is likewise read-only. `Seq == expected` is NEW and
+  requires an available receive grant on application lanes; `Seq < expected`
+  is a duplicate; and `Seq > expected` is a gap carrying the unchanged expected
+  sequence into a future `409 OUT-OF-ORDER` response. Only an exact NEW commit
+  advances expected `Seq` and consumes one receive grant. After terminal
+  sequence consumption, representable retransmissions remain duplicates.
 - ACK is cumulative, monotonic, and never grants credit. Acknowledging a
   sequence that was never reserved is refused.
 - Transaction identity is the exact `(Lane, Txn)` pair. Pending transactions

@@ -13,7 +13,8 @@
 \  Their capacities are caller choices.  Zero capacity is valid, and this
 \  module has no fallback allocation, product maximum, or default credit.
 \  Lane 0 is an inline control lane; application lane IDs are u16 values
-\  1..65535.  Every new application lane starts with zero send credit.
+\  1..65535.  Every new application lane starts with zero send credit and
+\  zero receive credit granted to its peer.
 \
 \  RTXN records borrow the transaction-token slice.  The token bytes must
 \  remain stable and readable from successful TXN-BEGIN until matching
@@ -88,14 +89,16 @@ REQUIRE ../../utils/memory-span.f
  8 CONSTANT _RLANE-NEXT-SEND
 16 CONSTANT _RLANE-EXPECTED-RECV
 24 CONSTANT _RLANE-ACKED
-32 CONSTANT _RLANE-CREDIT
-40 CONSTANT RLANE-SIZE
+32 CONSTANT _RLANE-SEND-CREDIT
+40 CONSTANT _RLANE-RECV-CREDIT
+48 CONSTANT RLANE-SIZE
 
 : RLANE.ID            ( lane-record -- a ) _RLANE-ID + ;
 : RLANE.NEXT-SEND     ( lane-record -- a ) _RLANE-NEXT-SEND + ;
 : RLANE.EXPECTED-RECV ( lane-record -- a ) _RLANE-EXPECTED-RECV + ;
 : RLANE.ACKED         ( lane-record -- a ) _RLANE-ACKED + ;
-: RLANE.CREDIT        ( lane-record -- a ) _RLANE-CREDIT + ;
+: RLANE.SEND-CREDIT   ( lane-record -- a ) _RLANE-SEND-CREDIT + ;
+: RLANE.RECV-CREDIT   ( lane-record -- a ) _RLANE-RECV-CREDIT + ;
 
 : _RLANE-INIT  ( lane-id lane-record -- )
     >R
@@ -125,7 +128,7 @@ REQUIRE ../../utils/memory-span.f
 \ =====================================================================
 
 0x53534552 CONSTANT RSESS-MAGIC       \ "RESS"
-1          CONSTANT RSESS-ABI-VERSION
+2          CONSTANT RSESS-ABI-VERSION
 
   0 CONSTANT _RSESS-MAGIC
   8 CONSTANT _RSESS-ABI
@@ -143,7 +146,7 @@ REQUIRE ../../utils/memory-span.f
 104 CONSTANT _RSESS-FLAGS
 112 CONSTANT _RSESS-CLOSE-STATUS
 120 CONSTANT _RSESS-CONTROL-LANE      \ inline RLANE-SIZE
-160 CONSTANT RABBIT-SESSION-SIZE
+168 CONSTANT RABBIT-SESSION-SIZE
 
 1 CONSTANT RSESS-F-CONFIGURED
 2 CONSTANT RSESS-F-STORAGE-CLEANED
@@ -559,11 +562,22 @@ REQUIRE ../../utils/memory-span.f
     >R
     DUP 0= IF DROP R> DROP RABBIT-S-INVALID EXIT THEN
     DUP RABBIT-CREDIT-MAX U> IF DROP R> DROP RABBIT-S-OVERFLOW EXIT THEN
-    R@ RLANE.CREDIT @
+    R@ RLANE.SEND-CREDIT @
     RABBIT-CREDIT-MAX OVER - 2 PICK SWAP U> IF
         2DROP R> DROP RABBIT-S-OVERFLOW EXIT
     THEN
-    + R@ RLANE.CREDIT !
+    + R@ RLANE.SEND-CREDIT !
+    R> DROP RABBIT-S-OK ;
+
+: _RLANE-RECV-CREDIT+  ( amount lane-record -- status )
+    >R
+    DUP 0= IF DROP R> DROP RABBIT-S-INVALID EXIT THEN
+    DUP RABBIT-CREDIT-MAX U> IF DROP R> DROP RABBIT-S-OVERFLOW EXIT THEN
+    R@ RLANE.RECV-CREDIT @
+    RABBIT-CREDIT-MAX OVER - 2 PICK SWAP U> IF
+        2DROP R> DROP RABBIT-S-OVERFLOW EXIT
+    THEN
+    + R@ RLANE.RECV-CREDIT !
     R> DROP RABBIT-S-OK ;
 
 \ CREDIT+ is application-lane-only.  The entire add is checked before the
@@ -585,21 +599,101 @@ REQUIRE ../../utils/memory-span.f
     THEN
     >R DROP NIP R> _RLANE-CREDIT+ ;
 
-: _RLANE-RESERVE-SEND  ( lane-record -- seq status )
-    >R
-    R@ RLANE.CREDIT @ 0= IF
-        R> DROP 0 RABBIT-S-CREDIT EXIT
+\ GRANT-CREDIT records credit that this endpoint has staged for its peer.
+\ A later NEW inbound delivery consumes exactly one grant at COMMIT; staging
+\ failure must occur before this mutation so unsent credit is never recorded.
+: RABBIT-SESSION-GRANT-CREDIT  ( lane-id amount session -- status )
+    DUP RABBIT-SESSION-VALID? 0= IF DROP 2DROP RABBIT-S-INVALID EXIT THEN
+    DUP RSESS.STATE @ RABBIT-ST-ESTABLISHED <> IF
+        DROP 2DROP RABBIT-S-STATE EXIT
     THEN
+    RABBIT-CAP-F-LANES OVER _RSESS-CAP? 0= IF
+        DROP 2DROP RABBIT-S-CAPABILITY EXIT
+    THEN
+    2 PICK _RABBIT-APP-LANE-ID? 0= IF
+        DROP 2DROP RABBIT-S-INVALID EXIT
+    THEN
+    2 PICK 1 PICK _RSESS-APP-LANE@ ?DUP 0= IF
+        DROP 2DROP RABBIT-S-NOT-FOUND EXIT
+    THEN
+    >R DROP NIP R> _RLANE-RECV-CREDIT+ ;
+
+: _RLANE-NEXT-SEND@  ( lane-record -- seq status )
+    >R
     R@ RLANE.NEXT-SEND @ DUP 0= IF
         DROP R> DROP 0 RABBIT-S-OVERFLOW EXIT
     THEN
-    DUP RABBIT-U64-MAX = IF
-        0 R@ RLANE.NEXT-SEND !
-    ELSE
-        DUP 1+ R@ RLANE.NEXT-SEND !
+    R@ RLANE.SEND-CREDIT @ 0= IF
+        DROP R> DROP 0 RABBIT-S-CREDIT EXIT
     THEN
-    R@ RLANE.CREDIT DUP @ 1- SWAP !
     R> DROP RABBIT-S-OK ;
+
+: _RLANE-RESERVE-SEND-EXACT  ( seq lane-record -- status )
+    >R
+    DUP 0= IF DROP R> DROP RABBIT-S-SEQUENCE EXIT THEN
+    R@ RLANE.NEXT-SEND @ DUP 0= IF
+        2DROP R> DROP RABBIT-S-OVERFLOW EXIT
+    THEN
+    2DUP <> IF
+        2DROP R> DROP RABBIT-S-SEQUENCE EXIT
+    THEN
+    R@ RLANE.SEND-CREDIT @ 0= IF
+        2DROP R> DROP RABBIT-S-CREDIT EXIT
+    THEN
+    NIP
+    DUP RABBIT-U64-MAX = IF
+        DROP 0 R@ RLANE.NEXT-SEND !
+    ELSE
+        1+ R@ RLANE.NEXT-SEND !
+    THEN
+    R@ RLANE.SEND-CREDIT DUP @ 1- SWAP !
+    R> DROP RABBIT-S-OK ;
+
+: _RLANE-RESERVE-SEND  ( lane-record -- seq status )
+    DUP _RLANE-NEXT-SEND@ DUP IF
+        >R 2DROP 0 R> EXIT
+    THEN
+    DROP DUP >R SWAP _RLANE-RESERVE-SEND-EXACT
+    R> SWAP ;
+
+\ NEXT-SEND@ is a read-only admission decision.  A connection can encode the
+\ returned sequence into caller-owned staging storage before it commits the
+\ exact reservation; neither this word nor any refusal changes lane state.
+: RABBIT-SESSION-NEXT-SEND@  ( lane-id session -- seq status )
+    DUP RABBIT-SESSION-VALID? 0= IF 2DROP 0 RABBIT-S-INVALID EXIT THEN
+    DUP RSESS.STATE @ RABBIT-ST-ESTABLISHED <> IF
+        2DROP 0 RABBIT-S-STATE EXIT
+    THEN
+    RABBIT-CAP-F-LANES OVER _RSESS-CAP? 0= IF
+        2DROP 0 RABBIT-S-CAPABILITY EXIT
+    THEN
+    OVER _RABBIT-APP-LANE-ID? 0= IF
+        2DROP 0 RABBIT-S-INVALID EXIT
+    THEN
+    2DUP _RSESS-APP-LANE@ ?DUP 0= IF
+        2DROP 0 RABBIT-S-NOT-FOUND EXIT
+    THEN
+    >R 2DROP R> _RLANE-NEXT-SEND@ ;
+
+\ RESERVE-SEND-EXACT is the mutation half of NEXT-SEND@.  It succeeds only
+\ while expected-seq is still the lane's next sequence and send credit is
+\ still available.  Every refusal leaves both fields unchanged.
+: RABBIT-SESSION-RESERVE-SEND-EXACT
+  ( lane-id expected-seq session -- status )
+    DUP RABBIT-SESSION-VALID? 0= IF DROP 2DROP RABBIT-S-INVALID EXIT THEN
+    DUP RSESS.STATE @ RABBIT-ST-ESTABLISHED <> IF
+        DROP 2DROP RABBIT-S-STATE EXIT
+    THEN
+    RABBIT-CAP-F-LANES OVER _RSESS-CAP? 0= IF
+        DROP 2DROP RABBIT-S-CAPABILITY EXIT
+    THEN
+    2 PICK _RABBIT-APP-LANE-ID? 0= IF
+        DROP 2DROP RABBIT-S-INVALID EXIT
+    THEN
+    2 PICK 1 PICK _RSESS-APP-LANE@ ?DUP 0= IF
+        DROP 2DROP RABBIT-S-NOT-FOUND EXIT
+    THEN
+    >R DROP NIP R> _RLANE-RESERVE-SEND-EXACT ;
 
 \ RESERVE-SEND is atomic with respect to refusal: it consumes exactly one
 \ previously granted credit and advances Seq exactly once, or changes neither.
@@ -659,7 +753,7 @@ REQUIRE ../../utils/memory-span.f
     R> DROP RABBIT-S-OK ;
 
 \ ACK is cumulative and monotonic, may acknowledge only an actually reserved
-\ Seq, and never changes RLANE.CREDIT.  Stale ACKs are successful no-ops.
+\ Seq, and never changes send credit.  Stale ACKs are successful no-ops.
 : RABBIT-SESSION-ACK  ( lane-id ack-seq session -- status )
     DUP RABBIT-SESSION-VALID? 0= IF DROP 2DROP RABBIT-S-INVALID EXIT THEN
     DUP RSESS.STATE @ RABBIT-ST-ESTABLISHED <> IF
@@ -676,18 +770,20 @@ REQUIRE ../../utils/memory-span.f
     THEN
     >R DROP NIP R> _RLANE-ACK ;
 
-: _RLANE-INBOUND  ( seq lane-record -- expected disposition status )
+: _RLANE-INBOUND-CLASSIFY
+  ( seq lane-record -- expected disposition status )
     >R
     R@ RLANE.EXPECTED-RECV @
     DUP 0= IF
-        NIP RABBIT-INBOUND-GAP RABBIT-S-OVERFLOW
+        NIP RABBIT-INBOUND-DUPLICATE RABBIT-S-OK
         R> DROP EXIT
     THEN
     2DUP = IF
-        DUP RABBIT-U64-MAX = IF
-            0 R@ RLANE.EXPECTED-RECV !
-        ELSE
-            DUP 1+ R@ RLANE.EXPECTED-RECV !
+        R@ RLANE.ID @ 0<> IF
+            R@ RLANE.RECV-CREDIT @ 0= IF
+                NIP RABBIT-INBOUND-NEW RABBIT-S-CREDIT
+                R> DROP EXIT
+            THEN
         THEN
         NIP RABBIT-INBOUND-NEW RABBIT-S-OK
         R> DROP EXIT
@@ -699,10 +795,94 @@ REQUIRE ../../utils/memory-span.f
     NIP RABBIT-INBOUND-GAP RABBIT-S-OK
     R> DROP ;
 
-\ INBOUND classifies against the lane's pre-operation expected Seq.  Only a
-\ NEW result advances the counter and authorizes upper-layer delivery.
-\ DUPLICATE and GAP never mutate the lane, so a caller cannot accidentally
-\ redeliver a duplicate by treating successful classification as delivery.
+: _RLANE-INBOUND-COMMIT  ( seq lane-record -- status )
+    >R
+    DUP 0= IF DROP R> DROP RABBIT-S-SEQUENCE EXIT THEN
+    R@ RLANE.EXPECTED-RECV @ DUP 0= IF
+        2DROP R> DROP RABBIT-S-OVERFLOW EXIT
+    THEN
+    2DUP <> IF
+        2DROP R> DROP RABBIT-S-SEQUENCE EXIT
+    THEN
+    R@ RLANE.ID @ 0<> IF
+        R@ RLANE.RECV-CREDIT @ 0= IF
+            2DROP R> DROP RABBIT-S-CREDIT EXIT
+        THEN
+    THEN
+    NIP
+    DUP RABBIT-U64-MAX = IF
+        DROP 0 R@ RLANE.EXPECTED-RECV !
+    ELSE
+        1+ R@ RLANE.EXPECTED-RECV !
+    THEN
+    R@ RLANE.ID @ 0<> IF
+        R@ RLANE.RECV-CREDIT DUP @ 1- SWAP !
+    THEN
+    R> DROP RABBIT-S-OK ;
+
+: _RLANE-INBOUND  ( seq lane-record -- expected disposition status )
+    OVER >R
+    DUP >R
+    _RLANE-INBOUND-CLASSIFY
+    DUP IF
+        R> DROP R> DROP EXIT
+    THEN
+    DROP
+    DUP RABBIT-INBOUND-NEW <> IF
+        R> DROP R> DROP RABBIT-S-OK EXIT
+    THEN
+    R> R> SWAP _RLANE-INBOUND-COMMIT ;
+
+\ INBOUND-CLASSIFY is read-only.  NEW/OK means that payload admission may run;
+\ NEW/CREDIT means that the peer has no unconsumed receive grant.  Terminal
+\ lanes classify all representable retransmissions as duplicates.
+: RABBIT-SESSION-INBOUND-CLASSIFY
+  ( lane-id seq session -- expected disposition status )
+    DUP RABBIT-SESSION-VALID? 0= IF
+        DROP 2DROP 0 RABBIT-INBOUND-NONE RABBIT-S-INVALID EXIT
+    THEN
+    DUP RSESS.STATE @ RABBIT-ST-ESTABLISHED <> IF
+        DROP 2DROP 0 RABBIT-INBOUND-NONE RABBIT-S-STATE EXIT
+    THEN
+    2 PICK _RABBIT-LANE-ID? 0= IF
+        DROP 2DROP 0 RABBIT-INBOUND-NONE RABBIT-S-INVALID EXIT
+    THEN
+    OVER 0= IF
+        DROP 2DROP 0 RABBIT-INBOUND-NONE RABBIT-S-SEQUENCE EXIT
+    THEN
+    2 PICK 0<> IF
+        RABBIT-CAP-F-LANES OVER _RSESS-CAP? 0= IF
+            DROP 2DROP 0 RABBIT-INBOUND-NONE RABBIT-S-CAPABILITY EXIT
+        THEN
+    THEN
+    2 PICK 1 PICK _RSESS-LANE@ ?DUP 0= IF
+        DROP 2DROP 0 RABBIT-INBOUND-NONE RABBIT-S-NOT-FOUND EXIT
+    THEN
+    >R DROP NIP R> _RLANE-INBOUND-CLASSIFY ;
+
+\ INBOUND-COMMIT is the exact mutation half.  A connection invokes it only
+\ after accepting a NEW payload; a stale decision, missing grant, or terminal
+\ lane refuses without advancing expected Seq or consuming receive credit.
+: RABBIT-SESSION-INBOUND-COMMIT  ( lane-id seq session -- status )
+    DUP RABBIT-SESSION-VALID? 0= IF DROP 2DROP RABBIT-S-INVALID EXIT THEN
+    DUP RSESS.STATE @ RABBIT-ST-ESTABLISHED <> IF
+        DROP 2DROP RABBIT-S-STATE EXIT
+    THEN
+    2 PICK _RABBIT-LANE-ID? 0= IF DROP 2DROP RABBIT-S-INVALID EXIT THEN
+    OVER 0= IF DROP 2DROP RABBIT-S-SEQUENCE EXIT THEN
+    2 PICK 0<> IF
+        RABBIT-CAP-F-LANES OVER _RSESS-CAP? 0= IF
+            DROP 2DROP RABBIT-S-CAPABILITY EXIT
+        THEN
+    THEN
+    2 PICK 1 PICK _RSESS-LANE@ ?DUP 0= IF
+        DROP 2DROP RABBIT-S-NOT-FOUND EXIT
+    THEN
+    >R DROP NIP R> _RLANE-INBOUND-COMMIT ;
+
+\ Convenience admission retains the original combined surface, but it is now
+\ implemented through the same read-only decision and exact mutation core.
+\ DUPLICATE and GAP remain successful no-ops; only NEW/OK commits state.
 : RABBIT-SESSION-INBOUND
   ( lane-id seq session -- expected disposition status )
     DUP RABBIT-SESSION-VALID? 0= IF
@@ -726,6 +906,26 @@ REQUIRE ../../utils/memory-span.f
         DROP 2DROP 0 RABBIT-INBOUND-NONE RABBIT-S-NOT-FOUND EXIT
     THEN
     >R DROP NIP R> _RLANE-INBOUND ;
+
+\ Receive-credit inspection is read-only and application-lane-only.  It lets
+\ the connection verify grant publication and refusal atomicity without
+\ exposing a second source of truth.
+: RABBIT-SESSION-RECV-CREDIT@
+  ( lane-id session -- amount status )
+    DUP RABBIT-SESSION-VALID? 0= IF 2DROP 0 RABBIT-S-INVALID EXIT THEN
+    DUP RSESS.STATE @ RABBIT-ST-ESTABLISHED <> IF
+        2DROP 0 RABBIT-S-STATE EXIT
+    THEN
+    RABBIT-CAP-F-LANES OVER _RSESS-CAP? 0= IF
+        2DROP 0 RABBIT-S-CAPABILITY EXIT
+    THEN
+    OVER _RABBIT-APP-LANE-ID? 0= IF
+        2DROP 0 RABBIT-S-INVALID EXIT
+    THEN
+    2DUP _RSESS-APP-LANE@ ?DUP 0= IF
+        2DROP 0 RABBIT-S-NOT-FOUND EXIT
+    THEN
+    >R 2DROP R> RLANE.RECV-CREDIT @ RABBIT-S-OK ;
 
 \ =====================================================================
 \  Exact (lane, transaction-token) pending transaction table
