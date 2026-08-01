@@ -1,0 +1,385 @@
+\ =====================================================================
+\  message.f - Typed semantic admission for Rabbit frames
+\ =====================================================================
+\  This layer is deliberately state-free.  It classifies and validates a
+\  READY RBF frame, and its accessors return borrowed slices owned by that
+\  frame.  They become invalid when the parser/frame is reset.  A retained
+\  message descriptor would make stale parser-arena views undetectable, so
+\  connection owners must either hold the READY frame or copy/encode bytes.
+\
+\  Unknown textual verbs remain admissible as RMSG-KIND-UNKNOWN.  Numeric
+\  response tokens, known verbs, and known scalar headers are strict.  This
+\  preserves extension routing without allowing malformed core semantics.
+\  Private VARIABLEs are synchronous operation scratch only.  There is no
+\  retained message state, but calls are serialized/non-reentrant until that
+\  scratch moves into a later caller-owned connection workspace.
+\
+\  The first profile pins Since and Event-Seq to canonical nonzero u64 event
+\  cursors and admits PING only on control Lane 0.  Response correlation and
+\  special 200 PONG/HELLO shapes remain connection-context validation.
+\ =====================================================================
+
+PROVIDED akashic-rabbit-message
+
+REQUIRE frame.f
+REQUIRE ../../utils/string.f
+
+\ =====================================================================
+\  Public status and kind vocabulary
+\ =====================================================================
+
+0 CONSTANT RMSG-S-OK
+1 CONSTANT RMSG-S-INVALID
+2 CONSTANT RMSG-S-FRAME
+3 CONSTANT RMSG-S-START
+4 CONSTANT RMSG-S-VALUE
+5 CONSTANT RMSG-S-REQUIRED
+6 CONSTANT RMSG-S-CONFLICT
+7 CONSTANT RMSG-S-UNSUPPORTED
+
+0  CONSTANT RMSG-KIND-INVALID
+1  CONSTANT RMSG-KIND-HELLO
+2  CONSTANT RMSG-KIND-AUTH
+3  CONSTANT RMSG-KIND-PING
+4  CONSTANT RMSG-KIND-LIST
+5  CONSTANT RMSG-KIND-DESCRIBE
+6  CONSTANT RMSG-KIND-FETCH
+7  CONSTANT RMSG-KIND-SEARCH
+8  CONSTANT RMSG-KIND-SUBSCRIBE
+9  CONSTANT RMSG-KIND-PUBLISH
+10 CONSTANT RMSG-KIND-EVENT
+11 CONSTANT RMSG-KIND-ACK
+12 CONSTANT RMSG-KIND-CREDIT
+13 CONSTANT RMSG-KIND-DELEGATE
+14 CONSTANT RMSG-KIND-OFFER
+15 CONSTANT RMSG-KIND-RESPONSE
+16 CONSTANT RMSG-KIND-UNKNOWN
+
+: RMSG-STATUS-VALID?  ( status -- flag )
+    DUP RMSG-S-OK >= SWAP RMSG-S-UNSUPPORTED <= AND ;
+
+: RMSG-KIND-VALID?  ( kind -- flag )
+    DUP RMSG-KIND-INVALID >= SWAP RMSG-KIND-UNKNOWN <= AND ;
+
+: RMSG-KIND-REQUEST?  ( kind -- flag )
+    DUP RMSG-KIND-LIST =
+    OVER RMSG-KIND-DESCRIBE = OR
+    OVER RMSG-KIND-FETCH = OR
+    OVER RMSG-KIND-SEARCH = OR
+    OVER RMSG-KIND-SUBSCRIBE = OR
+    OVER RMSG-KIND-PUBLISH = OR
+    OVER RMSG-KIND-DELEGATE = OR
+    SWAP RMSG-KIND-OFFER = OR ;
+
+\ =====================================================================
+\  Canonical unsigned decimal and core-header accessors
+\ =====================================================================
+
+0x0CCCCCCCCCCCCCCC CONSTANT _RMSG-UDEC-QUOTIENT-MAX
+7                  CONSTANT _RMSG-UDEC-REMAINDER-MAX
+
+VARIABLE _RMSG-D-A
+VARIABLE _RMSG-D-U
+VARIABLE _RMSG-D-V
+VARIABLE _RMSG-D-N
+
+: _RMSG-UDEC  ( address length -- value flag )
+    _RMSG-D-U ! _RMSG-D-A !
+    _RMSG-D-U @ 0= IF 0 0 EXIT THEN
+    _RMSG-D-U @ 1 > IF
+        _RMSG-D-A @ C@ [CHAR] 0 = IF 0 0 EXIT THEN
+    THEN
+    0 _RMSG-D-V !
+    _RMSG-D-U @ 0 DO
+        _RMSG-D-A @ I + C@ [CHAR] 0 - DUP _RMSG-D-N !
+        DUP 0< SWAP 9 > OR IF 0 0 UNLOOP EXIT THEN
+        _RMSG-D-V @ _RMSG-UDEC-QUOTIENT-MAX U> IF
+            0 0 UNLOOP EXIT
+        THEN
+        _RMSG-D-V @ _RMSG-UDEC-QUOTIENT-MAX =
+        _RMSG-D-N @ _RMSG-UDEC-REMAINDER-MAX > AND IF
+            0 0 UNLOOP EXIT
+        THEN
+        _RMSG-D-V @ 10 * _RMSG-D-N @ + _RMSG-D-V !
+    LOOP
+    _RMSG-D-V @ -1 ;
+
+VARIABLE _RMSG-H-FRAME
+
+: _RMSG-U64-HEADER@  ( name-a name-u frame -- value present status )
+    _RMSG-H-FRAME !
+    _RMSG-H-FRAME @ RBF-READY? 0= IF
+        2DROP 0 0 RMSG-S-FRAME EXIT
+    THEN
+    _RMSG-H-FRAME @ RBF-HEADER$ 0= IF
+        2DROP 0 0 RMSG-S-OK EXIT
+    THEN
+    _RMSG-UDEC 0= IF DROP 0 0 RMSG-S-VALUE EXIT THEN
+    -1 RMSG-S-OK ;
+
+: _RMSG-NONZERO-U64-HEADER@
+    ( name-a name-u frame -- value present status )
+    _RMSG-U64-HEADER@
+    DUP IF EXIT THEN
+    DROP DUP IF
+        OVER 0= IF 2DROP 0 0 RMSG-S-VALUE EXIT THEN
+    THEN
+    RMSG-S-OK ;
+
+: _RMSG-TEXT-HEADER$  ( name-a name-u frame -- a u present status )
+    _RMSG-H-FRAME !
+    _RMSG-H-FRAME @ RBF-READY? 0= IF
+        2DROP 0 0 0 RMSG-S-FRAME EXIT
+    THEN
+    _RMSG-H-FRAME @ RBF-HEADER$ 0= IF
+        2DROP 0 0 0 RMSG-S-OK EXIT
+    THEN
+    DUP 0= IF 2DROP 0 0 0 RMSG-S-VALUE EXIT THEN
+    -1 RMSG-S-OK ;
+
+: RMSG-LANE@  ( frame -- lane present status )
+    S" Lane" ROT _RMSG-U64-HEADER@
+    DUP IF EXIT THEN
+    DROP DUP IF
+        OVER 65535 U> IF 2DROP 0 0 RMSG-S-VALUE EXIT THEN
+    THEN
+    RMSG-S-OK ;
+
+: RMSG-TXN$  ( frame -- a u present status )
+    S" Txn" ROT _RMSG-TEXT-HEADER$ ;
+
+: RMSG-SEQ@  ( frame -- seq present status )
+    S" Seq" ROT _RMSG-NONZERO-U64-HEADER@ ;
+
+: RMSG-ACK@  ( frame -- ack present status )
+    S" ACK" ROT _RMSG-NONZERO-U64-HEADER@ ;
+
+VARIABLE _RMSG-C-A
+VARIABLE _RMSG-C-U
+
+: RMSG-CREDIT@  ( frame -- credit present status )
+    DUP RBF-READY? 0= IF DROP 0 0 RMSG-S-FRAME EXIT THEN
+    S" Credit" ROT RBF-HEADER$ 0= IF
+        2DROP 0 0 RMSG-S-OK EXIT
+    THEN
+    _RMSG-C-U ! _RMSG-C-A !
+    _RMSG-C-U @ 2 < IF 0 0 RMSG-S-VALUE EXIT THEN
+    _RMSG-C-A @ C@ [CHAR] + <> IF 0 0 RMSG-S-VALUE EXIT THEN
+    _RMSG-C-A @ 1+ _RMSG-C-U @ 1- _RMSG-UDEC 0= IF
+        DROP 0 0 RMSG-S-VALUE EXIT
+    THEN
+    DUP 0= OVER 0xFFFFFFFF U> OR IF
+        DROP 0 0 RMSG-S-VALUE EXIT
+    THEN
+    -1 RMSG-S-OK ;
+
+: RMSG-SINCE@  ( frame -- event-seq present status )
+    S" Since" ROT _RMSG-NONZERO-U64-HEADER@ ;
+
+: RMSG-EVENT-SEQ@  ( frame -- event-seq present status )
+    S" Event-Seq" ROT _RMSG-NONZERO-U64-HEADER@ ;
+
+: RMSG-IDEM$  ( frame -- a u present status )
+    S" Idem" ROT _RMSG-TEXT-HEADER$ ;
+
+: RMSG-VIEW$  ( frame -- a u present status )
+    S" View" ROT _RMSG-TEXT-HEADER$ ;
+
+: RMSG-BODY$  ( frame -- a u status )
+    DUP RBF-READY? 0= IF DROP 0 0 RMSG-S-FRAME EXIT THEN
+    RBF-BODY$ RMSG-S-OK ;
+
+\ =====================================================================
+\  Start-line classification
+\ =====================================================================
+
+VARIABLE _RMSG-R-A
+VARIABLE _RMSG-R-U
+
+: _RMSG-RESPONSE-CODE  ( verb-a verb-u -- code present status )
+    _RMSG-R-U ! _RMSG-R-A !
+    _RMSG-R-U @ 0= IF 0 0 RMSG-S-START EXIT THEN
+    _RMSG-R-A @ C@ DUP [CHAR] 0 >= SWAP [CHAR] 9 <= AND 0= IF
+        0 0 RMSG-S-OK EXIT
+    THEN
+    _RMSG-R-U @ 3 <> IF 0 0 RMSG-S-START EXIT THEN
+    _RMSG-R-A @ _RMSG-R-U @ _RMSG-UDEC 0= IF
+        DROP 0 0 RMSG-S-START EXIT
+    THEN
+    DUP 100 < OVER 599 > OR IF DROP 0 0 RMSG-S-START EXIT THEN
+    -1 RMSG-S-OK ;
+
+VARIABLE _RMSG-K-FRAME
+VARIABLE _RMSG-K-A
+VARIABLE _RMSG-K-U
+
+: RMSG-KIND@  ( frame -- kind status )
+    DUP RBF-READY? 0= IF DROP RMSG-KIND-INVALID RMSG-S-FRAME EXIT THEN
+    DUP _RMSG-K-FRAME ! RBF-VERB$ _RMSG-K-U ! _RMSG-K-A !
+    _RMSG-K-A @ _RMSG-K-U @ S" HELLO" STR-STR= IF RMSG-KIND-HELLO RMSG-S-OK EXIT THEN
+    _RMSG-K-A @ _RMSG-K-U @ S" AUTH" STR-STR= IF RMSG-KIND-AUTH RMSG-S-OK EXIT THEN
+    _RMSG-K-A @ _RMSG-K-U @ S" PING" STR-STR= IF RMSG-KIND-PING RMSG-S-OK EXIT THEN
+    _RMSG-K-A @ _RMSG-K-U @ S" LIST" STR-STR= IF RMSG-KIND-LIST RMSG-S-OK EXIT THEN
+    _RMSG-K-A @ _RMSG-K-U @ S" DESCRIBE" STR-STR= IF RMSG-KIND-DESCRIBE RMSG-S-OK EXIT THEN
+    _RMSG-K-A @ _RMSG-K-U @ S" FETCH" STR-STR= IF RMSG-KIND-FETCH RMSG-S-OK EXIT THEN
+    _RMSG-K-A @ _RMSG-K-U @ S" SEARCH" STR-STR= IF RMSG-KIND-SEARCH RMSG-S-OK EXIT THEN
+    _RMSG-K-A @ _RMSG-K-U @ S" SUBSCRIBE" STR-STR= IF RMSG-KIND-SUBSCRIBE RMSG-S-OK EXIT THEN
+    _RMSG-K-A @ _RMSG-K-U @ S" PUBLISH" STR-STR= IF RMSG-KIND-PUBLISH RMSG-S-OK EXIT THEN
+    _RMSG-K-A @ _RMSG-K-U @ S" EVENT" STR-STR= IF RMSG-KIND-EVENT RMSG-S-OK EXIT THEN
+    _RMSG-K-A @ _RMSG-K-U @ S" ACK" STR-STR= IF RMSG-KIND-ACK RMSG-S-OK EXIT THEN
+    _RMSG-K-A @ _RMSG-K-U @ S" CREDIT" STR-STR= IF RMSG-KIND-CREDIT RMSG-S-OK EXIT THEN
+    _RMSG-K-A @ _RMSG-K-U @ S" DELEGATE" STR-STR= IF RMSG-KIND-DELEGATE RMSG-S-OK EXIT THEN
+    _RMSG-K-A @ _RMSG-K-U @ S" OFFER" STR-STR= IF RMSG-KIND-OFFER RMSG-S-OK EXIT THEN
+    _RMSG-K-A @ _RMSG-K-U @ _RMSG-RESPONSE-CODE
+    DUP IF >R 2DROP RMSG-KIND-INVALID R> EXIT THEN
+    DROP IF DROP RMSG-KIND-RESPONSE RMSG-S-OK EXIT THEN
+    DROP RMSG-KIND-UNKNOWN RMSG-S-OK ;
+
+: RMSG-STATUS@  ( frame -- code present status )
+    DUP RBF-READY? 0= IF DROP 0 0 RMSG-S-FRAME EXIT THEN
+    RBF-VERB$ _RMSG-RESPONSE-CODE ;
+
+: RMSG-LABEL$  ( frame -- a u status )
+    DUP RMSG-STATUS@ >R SWAP DROP
+    R@ IF 2DROP R> 0 0 ROT EXIT THEN
+    R> DROP 0= IF DROP 0 0 RMSG-S-START EXIT THEN
+    RBF-ARGS$ RMSG-S-OK ;
+
+\ =====================================================================
+\  Semantic admission
+\ =====================================================================
+
+: _RMSG-HEADER-PRESENT?  ( name-a name-u frame -- flag )
+    RBF-HEADER$ IF 2DROP -1 ELSE 2DROP 0 THEN ;
+
+: _RMSG-REQUIRE-HEADER  ( name-a name-u frame -- status )
+    _RMSG-HEADER-PRESENT? IF RMSG-S-OK ELSE RMSG-S-REQUIRED THEN ;
+
+: _RMSG-FORBID-HEADER  ( name-a name-u frame -- status )
+    _RMSG-HEADER-PRESENT? IF RMSG-S-CONFLICT ELSE RMSG-S-OK THEN ;
+
+: _RMSG-SCALARS-STATUS  ( frame -- status )
+    DUP RMSG-LANE@ >R 2DROP R> ?DUP IF NIP EXIT THEN
+    DUP RMSG-TXN$ >R 2DROP DROP R> ?DUP IF NIP EXIT THEN
+    DUP RMSG-SEQ@ >R 2DROP R> ?DUP IF NIP EXIT THEN
+    DUP RMSG-ACK@ >R 2DROP R> ?DUP IF NIP EXIT THEN
+    DUP RMSG-CREDIT@ >R 2DROP R> ?DUP IF NIP EXIT THEN
+    DUP RMSG-SINCE@ >R 2DROP R> ?DUP IF NIP EXIT THEN
+    DUP RMSG-EVENT-SEQ@ >R 2DROP R> ?DUP IF NIP EXIT THEN
+    DUP RMSG-IDEM$ >R 2DROP DROP R> ?DUP IF NIP EXIT THEN
+    RMSG-VIEW$ >R 2DROP DROP R> ;
+
+: _RMSG-ARGS-REQUIRED  ( frame -- status )
+    RBF-ARGS$ NIP IF RMSG-S-OK ELSE RMSG-S-REQUIRED THEN ;
+
+: _RMSG-ARGS-EMPTY  ( frame -- status )
+    RBF-ARGS$ NIP IF RMSG-S-START ELSE RMSG-S-OK THEN ;
+
+: _RMSG-LANE0-STATUS  ( frame -- status )
+    RMSG-LANE@ >R
+    R@ IF 2DROP R> EXIT THEN
+    R> DROP 0= IF DROP RMSG-S-REQUIRED EXIT THEN
+    0= IF RMSG-S-OK ELSE RMSG-S-VALUE THEN ;
+
+: _RMSG-REQUEST-STATUS  ( frame -- status )
+    DUP _RMSG-ARGS-REQUIRED ?DUP IF NIP EXIT THEN
+    DUP S" Lane" ROT _RMSG-REQUIRE-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Txn" ROT _RMSG-REQUIRE-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" ACK" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Credit" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Seq" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    S" Event-Seq" ROT _RMSG-FORBID-HEADER ;
+
+: _RMSG-PLAIN-REQUEST-STATUS  ( frame -- status )
+    DUP _RMSG-REQUEST-STATUS ?DUP IF NIP EXIT THEN
+    S" Since" ROT _RMSG-FORBID-HEADER ;
+
+: _RMSG-HELLO-STATUS  ( frame -- status )
+    DUP RBF-ARGS$ S" RABBIT/1.0" STR-STR= 0= IF DROP RMSG-S-START EXIT THEN
+    DUP S" Lane" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Txn" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Seq" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" ACK" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Credit" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Since" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Event-Seq" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Idem" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    S" View" ROT _RMSG-FORBID-HEADER ;
+
+: _RMSG-PING-STATUS  ( frame -- status )
+    DUP _RMSG-ARGS-EMPTY ?DUP IF NIP EXIT THEN
+    DUP _RMSG-LANE0-STATUS ?DUP IF NIP EXIT THEN
+    DUP S" Txn" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Seq" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" ACK" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Credit" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Since" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Event-Seq" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Idem" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    S" View" ROT _RMSG-FORBID-HEADER ;
+
+: _RMSG-EVENT-STATUS  ( frame -- status )
+    DUP _RMSG-ARGS-REQUIRED ?DUP IF NIP EXIT THEN
+    DUP S" Lane" ROT _RMSG-REQUIRE-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Seq" ROT _RMSG-REQUIRE-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Event-Seq" ROT _RMSG-REQUIRE-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Txn" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" ACK" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Credit" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Since" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    S" Idem" ROT _RMSG-FORBID-HEADER ;
+
+: _RMSG-ACK-STATUS  ( frame -- status )
+    DUP _RMSG-ARGS-EMPTY ?DUP IF NIP EXIT THEN
+    DUP S" Lane" ROT _RMSG-REQUIRE-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" ACK" ROT _RMSG-REQUIRE-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Credit" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Seq" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Txn" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Since" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Event-Seq" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Idem" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    S" View" ROT _RMSG-FORBID-HEADER ;
+
+: _RMSG-CREDIT-STATUS  ( frame -- status )
+    DUP _RMSG-ARGS-EMPTY ?DUP IF NIP EXIT THEN
+    DUP S" Lane" ROT _RMSG-REQUIRE-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Credit" ROT _RMSG-REQUIRE-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" ACK" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Seq" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Txn" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Since" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Event-Seq" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Idem" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    S" View" ROT _RMSG-FORBID-HEADER ;
+
+VARIABLE _RMSG-A-FRAME
+VARIABLE _RMSG-A-KIND
+
+: RMSG-ADMIT  ( frame -- kind status )
+    DUP _RMSG-A-FRAME ! RMSG-KIND@
+    DUP IF EXIT THEN
+    DROP DUP _RMSG-A-KIND ! DROP
+    _RMSG-A-FRAME @ _RMSG-SCALARS-STATUS ?DUP IF
+        RMSG-KIND-INVALID SWAP EXIT
+    THEN
+    _RMSG-A-KIND @ CASE
+        RMSG-KIND-HELLO OF _RMSG-A-FRAME @ _RMSG-HELLO-STATUS ENDOF
+        RMSG-KIND-AUTH OF RMSG-S-UNSUPPORTED ENDOF
+        RMSG-KIND-PING OF _RMSG-A-FRAME @ _RMSG-PING-STATUS ENDOF
+        RMSG-KIND-LIST OF _RMSG-A-FRAME @ _RMSG-PLAIN-REQUEST-STATUS ENDOF
+        RMSG-KIND-DESCRIBE OF _RMSG-A-FRAME @ _RMSG-PLAIN-REQUEST-STATUS ENDOF
+        RMSG-KIND-FETCH OF _RMSG-A-FRAME @ _RMSG-PLAIN-REQUEST-STATUS ENDOF
+        RMSG-KIND-SEARCH OF _RMSG-A-FRAME @ _RMSG-PLAIN-REQUEST-STATUS ENDOF
+        RMSG-KIND-SUBSCRIBE OF _RMSG-A-FRAME @ _RMSG-REQUEST-STATUS ENDOF
+        RMSG-KIND-PUBLISH OF _RMSG-A-FRAME @ _RMSG-PLAIN-REQUEST-STATUS ENDOF
+        RMSG-KIND-EVENT OF _RMSG-A-FRAME @ _RMSG-EVENT-STATUS ENDOF
+        RMSG-KIND-ACK OF _RMSG-A-FRAME @ _RMSG-ACK-STATUS ENDOF
+        RMSG-KIND-CREDIT OF _RMSG-A-FRAME @ _RMSG-CREDIT-STATUS ENDOF
+        RMSG-KIND-DELEGATE OF _RMSG-A-FRAME @ _RMSG-PLAIN-REQUEST-STATUS ENDOF
+        RMSG-KIND-OFFER OF _RMSG-A-FRAME @ _RMSG-PLAIN-REQUEST-STATUS ENDOF
+        RMSG-KIND-RESPONSE OF _RMSG-A-FRAME @ _RMSG-ARGS-REQUIRED ENDOF
+        RMSG-S-OK SWAP
+    ENDCASE
+    DUP IF RMSG-KIND-INVALID SWAP EXIT THEN
+    DROP _RMSG-A-KIND @ RMSG-S-OK ;

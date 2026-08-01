@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify the transport-neutral Rabbit frame and session foundation."""
+"""Qualify the transport-neutral Rabbit frame, message, and session core."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pathlib import Path
 LOCAL_TESTING = Path(__file__).resolve().parent
 ROOT = LOCAL_TESTING.parent
 FRAME = ROOT / "akashic" / "net" / "rabbit" / "frame.f"
+MESSAGE = ROOT / "akashic" / "net" / "rabbit" / "message.f"
 SESSION = ROOT / "akashic" / "net" / "rabbit" / "session.f"
 MEMORY = ROOT / "akashic" / "net" / "transports" / "memory-duplex.f"
 DOC = ROOT / "docs" / "net" / "rabbit.md"
@@ -29,6 +30,7 @@ LOAD_STAGES = (
     ("utf8", "text/utf8.f", "RABBIT UTF8 READY"),
     ("io-port", "net/io-port.f", "RABBIT IO PORT READY"),
     ("frame", "net/rabbit/frame.f", "RABBIT FRAME READY"),
+    ("message", "net/rabbit/message.f", "RABBIT MESSAGE READY"),
     (
         "memory-duplex",
         "net/transports/memory-duplex.f",
@@ -69,6 +71,7 @@ def _assert_physical_comments(path: Path, source: str) -> None:
 
 def _assert_static_contracts() -> None:
     frame = FRAME.read_text(encoding="utf-8")
+    message = MESSAGE.read_text(encoding="utf-8")
     session = SESSION.read_text(encoding="utf-8")
     memory = MEMORY.read_text(encoding="utf-8")
     doc = " ".join(DOC.read_text(encoding="utf-8").split())
@@ -87,6 +90,7 @@ def _assert_static_contracts() -> None:
         "../io-port.f",
         "../../utils/memory-span.f",
     ]
+    assert _requires(MESSAGE) == ["frame.f", "../../utils/string.f"]
     assert _requires(MEMORY) == [
         "../io-port.f",
         "../../utils/memory-span.f",
@@ -94,6 +98,7 @@ def _assert_static_contracts() -> None:
 
     for source, provider in (
         (frame, "PROVIDED akashic-rabbit-frame"),
+        (message, "PROVIDED akashic-rabbit-message"),
         (session, "PROVIDED akashic-rabbit-session"),
         (memory, "PROVIDED akashic-net-memory-duplex"),
     ):
@@ -105,6 +110,11 @@ def _assert_static_contracts() -> None:
     assert all(name.startswith("_RBF") for _, name in frame_declarations)
     assert "synchronous and deliberately non-reentrant" in frame
     assert "operation scratch only" in frame
+    message_declarations = _declarations(MESSAGE, message)
+    assert message_declarations
+    assert all(kind == "VARIABLE" for kind, _ in message_declarations)
+    assert all(name.startswith("_RMSG") for _, name in message_declarations)
+    assert "deliberately state-free" in message
     assert not _declarations(SESSION, session)
     assert not _declarations(MEMORY, memory)
 
@@ -120,6 +130,18 @@ def _assert_static_contracts() -> None:
         "RBF-S-TRUNCATED",
     ):
         assert word in frame
+    for word in (
+        "RMSG-ADMIT",
+        "RMSG-KIND@",
+        "RMSG-STATUS@",
+        "RMSG-LABEL$",
+        "RMSG-LANE@",
+        "RMSG-TXN$",
+        "RMSG-SEQ@",
+        "RMSG-EVENT-SEQ@",
+        "RMSG-CREDIT@",
+    ):
+        assert word in message
     for word in (
         "RABBIT-SESSION-INIT",
         "RABBIT-SESSION-CONFIGURE",
@@ -145,6 +167,7 @@ def _assert_static_contracts() -> None:
 
     production_requires = (
         *_requires(FRAME),
+        *_requires(MESSAGE),
         *_requires(SESSION),
         *_requires(MEMORY),
     )
@@ -162,7 +185,8 @@ def _assert_static_contracts() -> None:
 
     for phrase in (
         "c79f25697868645d958d2a43aec1c2e4f566585a",
-        "Streams will eventually own Rabbit connectors",
+        "Streams will operate configured Rabbit instances",
+        "does not own generic Rabbit pumping",
         "no second Rabbit transport abstraction",
         "zero send credit",
         "Event-Seq",
@@ -178,6 +202,7 @@ def _assert_static_contracts() -> None:
         "_RBT-TEST-ENCODE",
         "_RBT-TEST-PARSE",
         "_RBT-TEST-REJECTIONS",
+        "_RBT-TEST-MESSAGE",
         "_RBT-TEST-MEMORY-DUPLEX",
         "_RBT-TEST-SESSION",
         "RBF-EOF",
@@ -187,6 +212,7 @@ def _assert_static_contracts() -> None:
 
     for path, source in (
         (FRAME, frame),
+        (MESSAGE, message),
         (SESSION, session),
         (MEMORY, memory),
         (FIXTURE, fixture),
@@ -221,6 +247,7 @@ def _run_rabbit_core(timeout: float) -> int:
     harness.PROFILES[profile_name] = harness.Profile(
         roots=(
             "net/rabbit/frame.f",
+            "net/rabbit/message.f",
             "net/transports/memory-duplex.f",
             "net/rabbit/session.f",
         ),

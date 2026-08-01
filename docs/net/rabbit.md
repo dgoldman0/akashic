@@ -9,11 +9,14 @@ that pin.
 
 ## Layer and ownership boundary
 
-`net/rabbit` owns only portable wire and session mechanics. It knows nothing
+`net/rabbit` owns the portable wire, message, session, connection, client,
+subscription, routing, and server mechanics. It knows nothing
 about Desk, Streams, Worlds, Practice, Library, Agent, TLS implementations, or
-socket devices. Streams will eventually own Rabbit connectors, selector
-mounts, application-profile adapters, subscriptions, replay orchestration, and
-visible delivery truth.
+socket devices. Streams will operate configured Rabbit instances for applets
+and own application-profile adapters, semantic caches, durable attempts,
+Practice integration, and visible delivery truth. It does not own generic
+Rabbit pumping, transaction correlation, subscription/replay state, selector
+routing, or server-peer dispatch. Worlds remains Rabbit-free.
 
 Rabbit uses the existing `net/io-port.f` cooperative byte-stream interface.
 There is intentionally no second Rabbit transport abstraction. The deterministic
@@ -62,6 +65,31 @@ geometry; it is not a memory-corruption recovery boundary.
 
 No product body, header, or frame limit is embedded in the module. The caller's
 arena is the bound and capacity failure is explicit.
+
+## Typed message profile
+
+`net/rabbit/message.f` is a state-free semantic layer over a READY frame. It
+does not retain a second descriptor: typed header and body accessors borrow the
+frame's arena and expire when that frame is reset. This prevents a connection
+from accidentally retaining an undetectably stale parser view. An outbound
+connection must encode into its own caller-provided queue slot before returning
+from enqueue; a later typed builder will supply the canonical construction side
+of this same boundary.
+
+Known request verbs require a nonempty target plus exact `Lane` and `Txn`.
+`EVENT` requires distinct nonzero `Seq` and `Event-Seq`; `ACK` and `CREDIT`
+target an exact lane and carry their one matching positive scalar. PING is
+canonicalized to control Lane 0. Response tokens are exactly three decimal
+digits in the 100–599 range, while unknown textual verbs remain structurally
+admissible for a generic router to reject or extend. Core unsigned values use
+canonical decimal spelling, so leading zeroes are refused except for zero
+itself. This provisional profile interprets `Since` as a nonzero u64
+`Event-Seq` cursor; the reference specification's timestamp example and the
+implementation's integer parser disagree and cannot both be honored silently.
+`AUTH` is recognized for routing but semantic admission returns unsupported
+until the channel-binding, mutual-proof, and selected PQ profile exist. Numeric
+responses remain generic at this layer; the connection/client context must
+validate exact `200 PONG`, handshake, and `(Lane, Txn)` response shapes.
 
 ## Lane and transaction profile
 
