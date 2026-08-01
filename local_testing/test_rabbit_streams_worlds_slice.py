@@ -668,6 +668,7 @@ def _assert_static_contracts() -> None:
         "RABBIT-SERVER-BURROW-ID$",
         "RABBIT-SERVER-PEER@",
         "RABBIT-SERVER-LAST-RESPONSE-CODE@",
+        "RABBIT-SERVER-GRAPH-SPAN-OVERLAP?",
         "RABBIT-SERVER-OPEN",
         "RABBIT-SERVER-DISPATCH",
         "RABBIT-SERVER-POLL",
@@ -675,6 +676,7 @@ def _assert_static_contracts() -> None:
         "RABBIT-SERVER-CLOSE-POLL",
         "RABBIT-SERVER-CANCEL",
         "RABBIT-SERVER-NEXT-EVENT-LANE-SEQ@",
+        "RABBIT-SERVER-HELD-APP-LANE-ENSURE",
         "RABBIT-SERVER-EVENT",
         "RABBIT-SERVER-FINI",
     ):
