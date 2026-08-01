@@ -3,10 +3,11 @@
 \ =====================================================================
 \  This product-neutral layer composes with one RABBIT-CLIENT.  The caller
 \  supplies a fixed-stride metadata array plus one target slot and one event
-\  staging slot per entry.  Targets are copied at registration.  Event bodies
-\  are copied completely before an application callback sees them and are
-\  wiped when the enclosing POLL/DISPATCH call returns; no parser view escapes
-\  the client callback.
+\  staging slot per entry.  Targets are copied at registration, and every
+\  registration names a nonzero application Lane; control Lane 0 cannot carry
+\  SUBSCRIBE/EVENT state.  Event bodies are copied completely before an
+\  application callback sees them and are wiped when the enclosing
+\  POLL/DISPATCH call returns; no parser view escapes the client callback.
 \
 \  Lane Seq and Event-Seq are deliberately independent.  Lane ordering and
 \  ACK state stay in the connection/session.  Each subscription records the
@@ -376,6 +377,9 @@ VARIABLE _RSUBSG-PREV-SPACE
     LOOP
     -1 ;
 
+: _RSUB-APP-LANE?  ( lane -- flag )
+    DUP 0> SWAP RABBIT-LANE-MAX U> 0= AND ;
+
 VARIABLE _RSUBV-O
 VARIABLE _RSUBV-E
 VARIABLE _RSUBV-I
@@ -427,8 +431,7 @@ VARIABLE _RSUBV-OPSTATUS
     RSUBE.STATE @ DUP RSUB-ENTRY-STATE-VALID? 0= IF DROP 0 EXIT THEN
     RSUB-ENTRY-EMPTY = IF _RSUBV-E @ _RSUB-ENTRY-ZERO? EXIT THEN
     _RSUBV-E @ RSUBE.GENERATION @ 0= IF 0 EXIT THEN
-    _RSUBV-E @ RSUBE.LANE @ DUP 0< IF DROP 0 EXIT THEN
-    RABBIT-LANE-MAX U> IF 0 EXIT THEN
+    _RSUBV-E @ RSUBE.LANE @ _RSUB-APP-LANE? 0= IF 0 EXIT THEN
     _RSUBV-E @ RSUBE.TARGET-U @ DUP 0> 0= IF DROP 0 EXIT THEN
     _RSUBV-O @ RSUB.TARGET-SLOT-BYTES @ U> IF 0 EXIT THEN
     _RSUBV-I @ _RSUBV-O @ _RSUB-TARGET@
@@ -744,7 +747,7 @@ VARIABLE _RSUBF-E
     _RSUBF-A @ _RSUBF-U @ _RSUB-SELECTOR-GRAMMAR? 0= IF
         0 0 RSUB-S-MESSAGE EXIT
     THEN
-    _RSUBF-LANE @ RABBIT-LANE-MAX U> IF
+    _RSUBF-LANE @ _RSUB-APP-LANE? 0= IF
         0 0 RSUB-S-INVALID EXIT
     THEN
     _RSUBF-A @ _RSUBF-U @ _RSUBF-LANE @ _RSUBF-O @
@@ -787,7 +790,7 @@ VARIABLE _RSUBA-G
     _RSUBA-A @ _RSUBA-U @ _RSUB-SELECTOR-GRAMMAR? 0= IF
         0 0 RSUB-S-MESSAGE RMSG-S-VALUE _RSUBA-O @ _RSUB-STATUS! EXIT
     THEN
-    _RSUBA-LANE @ RABBIT-LANE-MAX U> IF
+    _RSUBA-LANE @ _RSUB-APP-LANE? 0= IF
         0 0 RSUB-S-INVALID 0 _RSUBA-O @ _RSUB-STATUS! EXIT
     THEN
     _RSUBA-XT @ 0= IF
