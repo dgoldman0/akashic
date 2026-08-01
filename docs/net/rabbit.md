@@ -177,6 +177,42 @@ valid, but—as with the other opaque records—caller forgery of stored binding
 pointers is outside the memory-safety contract without an external ownership
 witness.
 
+## Client operation ownership
+
+`net/rabbit/client.f` owns a caller-sized correlated-operation table above one
+client-role connection. Each operation has a caller-selected transaction slot
+and result slot; request publication copies the exact `Txn`, begins the session
+transaction, and enqueues connection-owned bytes as one refusal-atomic action.
+If enqueue refuses, the session transaction is rolled back and unpublished
+bytes are wiped. An indeterminate rollback leaves a correlation tombstone
+rather than making the same transaction identity available to a late response.
+
+Responses match only the exact `(Lane, Txn)` pair. A fitting body is copied to
+the operation's result slot before the receive loan is committed; an oversized
+body publishes its exact required size and no prefix. A supplied synchronous
+callback also sees the complete correlated response before commit, allowing an
+application-profile adapter to validate the exact label, `View`, and extension
+metadata that the neutral operation does not persist. Rejecting that terminal
+response cancels the connection rather than leaving an impossible pending
+transaction. Operation pointers are paired with nonzero generations advanced
+on reuse so release and cancellation can reject stale handles. Local
+cancellation deliberately preserves a tombstone
+until the response or connection teardown makes reuse unambiguous.
+
+`POLL` and `DISPATCH` deliver EVENT, extension, and optionally correlated
+response frames to one synchronous opaque callback. The callback must copy any
+bytes it retains and explicitly chooses commit or drop; borrowed parser
+pointers are cleared before the call returns. Recursive polling or dispatch is
+refused before it can overwrite the live outer loan. An event may therefore be
+committed while an unrelated request is
+still pending without satisfying or disturbing that operation. HELLO,
+ACK/CREDIT, and the exact PONG control shape remain internal client/connection
+state transitions. The HELLO `Burrow-ID` is copied into its own caller span
+before commit and published only after session admission succeeds. Client
+records, operation metadata, transaction bytes, identity, and result bytes are
+all caller-owned, with a canonical zero-operation client remaining useful for
+handshake and unsolicited dispatch.
+
 ## Lane and transaction profile
 
 - Lane identifiers are decimal unsigned 16-bit values. Lane 0 is control.

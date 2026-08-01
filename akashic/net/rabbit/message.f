@@ -15,8 +15,9 @@
 \  scratch moves into a later caller-owned connection workspace.
 \
 \  The first profile pins Since and Event-Seq to canonical nonzero u64 event
-\  cursors and admits PING only on control Lane 0.  Response correlation and
-\  special 200 PONG/HELLO shapes remain connection-context validation.
+\  cursors and admits PING only on control Lane 0.  Response correlation stays
+\  with connection owners; exact state-free 200 HELLO and PONG validators are
+\  provided here so every owner applies the same serialized message contract.
 \ =====================================================================
 
 PROVIDED akashic-rabbit-message
@@ -417,3 +418,105 @@ VARIABLE _RMSG-A-KIND
     ENDCASE
     DUP IF RMSG-KIND-INVALID SWAP EXIT THEN
     DROP _RMSG-A-KIND @ RMSG-S-OK ;
+
+\ =====================================================================
+\  Exact state-free control-response admission
+\ =====================================================================
+\  These validators deliberately inspect only one READY frame.  They neither
+\  correlate it to an outstanding operation nor advance connection state.
+\  Unknown extension headers remain admissible; the per-response checks below
+\  reject every conflicting header in the protocol's known core vocabulary.
+
+VARIABLE _RMSGCR-F
+VARIABLE _RMSGCR-KIND
+VARIABLE _RMSGCR-STATUS
+VARIABLE _RMSGCR-CODE
+VARIABLE _RMSGCR-PRESENT
+VARIABLE _RMSGCR-A
+VARIABLE _RMSGCR-U
+VARIABLE _RMSGCR-EXPECTED-A
+VARIABLE _RMSGCR-EXPECTED-U
+
+: _RMSG-CONTROL-RESPONSE-STATUS  ( label-a label-u frame -- status )
+    _RMSGCR-F ! _RMSGCR-EXPECTED-U ! _RMSGCR-EXPECTED-A !
+    _RMSGCR-F @ RMSG-ADMIT
+    _RMSGCR-STATUS ! _RMSGCR-KIND !
+    _RMSGCR-STATUS @ IF _RMSGCR-STATUS @ EXIT THEN
+    _RMSGCR-KIND @ RMSG-KIND-RESPONSE <> IF RMSG-S-CONFLICT EXIT THEN
+    _RMSGCR-F @ RMSG-STATUS@
+    _RMSGCR-STATUS ! _RMSGCR-PRESENT ! _RMSGCR-CODE !
+    _RMSGCR-STATUS @ IF _RMSGCR-STATUS @ EXIT THEN
+    _RMSGCR-PRESENT @ 0= IF RMSG-S-REQUIRED EXIT THEN
+    _RMSGCR-CODE @ 200 <> IF RMSG-S-CONFLICT EXIT THEN
+    _RMSGCR-F @ RMSG-LABEL$
+    _RMSGCR-STATUS ! _RMSGCR-U ! _RMSGCR-A !
+    _RMSGCR-STATUS @ IF _RMSGCR-STATUS @ EXIT THEN
+    _RMSGCR-A @ _RMSGCR-U @
+        _RMSGCR-EXPECTED-A @ _RMSGCR-EXPECTED-U @ STR-STR= 0= IF
+        RMSG-S-CONFLICT EXIT
+    THEN
+    _RMSGCR-F @ RMSG-BODY$
+    _RMSGCR-STATUS ! _RMSGCR-U ! _RMSGCR-A !
+    _RMSGCR-STATUS @ IF _RMSGCR-STATUS @ EXIT THEN
+    _RMSGCR-U @ IF RMSG-S-CONFLICT ELSE RMSG-S-OK THEN ;
+
+: _RMSG-HELLO-OK-HEADERS-STATUS  ( frame -- status )
+    DUP S" Lane" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Txn" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Seq" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" ACK" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Credit" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Length" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" View" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Accept-View" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Idem" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Timeout" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" QoS" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Channel-Binding" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" PQ-Exchange" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" PQ-Proof" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Nonce" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Proof" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Session-Token" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Server-Proof" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Since" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    S" Event-Seq" ROT _RMSG-FORBID-HEADER ;
+
+: _RMSG-PONG-HEADERS-STATUS  ( frame -- status )
+    DUP _RMSG-LANE0-STATUS ?DUP IF NIP EXIT THEN
+    DUP S" Txn" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Seq" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" ACK" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Credit" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Length" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" View" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Accept-View" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Idem" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Timeout" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" QoS" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Burrow-ID" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Channel-Binding" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" PQ-Exchange" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" PQ-Proof" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Caps" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Nonce" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Proof" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Session-Token" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Server-Proof" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    DUP S" Since" ROT _RMSG-FORBID-HEADER ?DUP IF NIP EXIT THEN
+    S" Event-Seq" ROT _RMSG-FORBID-HEADER ;
+
+\ Validate the exact successful HELLO response shape.  Caps and Burrow-ID are
+\ the only known core headers admitted; both remain optional and their typed
+\ accessors have already validated any value present.
+: RMSG-HELLO-OK-STATUS  ( frame -- status )
+    DUP S" HELLO" ROT _RMSG-CONTROL-RESPONSE-STATUS
+    ?DUP IF NIP EXIT THEN
+    _RMSG-HELLO-OK-HEADERS-STATUS ;
+
+\ Validate the exact successful PONG response shape.  Lane is required and
+\ must be zero; every other known core header is forbidden.
+: RMSG-PONG-STATUS  ( frame -- status )
+    DUP S" PONG" ROT _RMSG-CONTROL-RESPONSE-STATUS
+    ?DUP IF NIP EXIT THEN
+    _RMSG-PONG-HEADERS-STATUS ;

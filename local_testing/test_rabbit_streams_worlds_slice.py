@@ -17,10 +17,13 @@ MESSAGE = ROOT / "akashic" / "net" / "rabbit" / "message.f"
 BUILDER = ROOT / "akashic" / "net" / "rabbit" / "builder.f"
 SESSION = ROOT / "akashic" / "net" / "rabbit" / "session.f"
 CONNECTION = ROOT / "akashic" / "net" / "rabbit" / "connection.f"
+CLIENT = ROOT / "akashic" / "net" / "rabbit" / "client.f"
 ROUTER = ROOT / "akashic" / "net" / "rabbit" / "router.f"
 MEMORY = ROOT / "akashic" / "net" / "transports" / "memory-duplex.f"
 DOC = ROOT / "docs" / "net" / "rabbit.md"
 FIXTURE = LOCAL_TESTING / "rabbit-core-test.f"
+CLIENT_FIXTURE = LOCAL_TESTING / "rabbit-client-test.f"
+CLIENT_JOURNEY = LOCAL_TESTING / "rabbit-client-flow.f"
 
 PASS_MARKER = "RABBIT CORE PASS"
 PHASE_MAX_STEPS = 120_000_000
@@ -44,11 +47,80 @@ LOAD_STAGES = (
     ("session", "net/rabbit/session.f", "RABBIT SESSION READY"),
     ("builder", "net/rabbit/builder.f", "RABBIT BUILDER READY"),
     ("connection", "net/rabbit/connection.f", "RABBIT CONNECTION READY"),
+    ("client", "net/rabbit/client.f", "RABBIT CLIENT READY"),
     ("router", "net/rabbit/router.f", "RABBIT ROUTER READY"),
     (
         "fixture",
         "local_testing/rabbit-core-test.f",
         "RABBIT CORE FIXTURE READY",
+    ),
+    (
+        "client-fixture",
+        "local_testing/rabbit-client-test.f",
+        "RABBIT CLIENT FIXTURE READY",
+    ),
+    (
+        "client-journey",
+        "local_testing/rabbit-client-flow.f",
+        "RABBIT CLIENT JOURNEY READY",
+    ),
+)
+CONTRACT_STAGES = (
+    ("base", "_RBT-RUN", "RABBIT CORE BASE PASS", False),
+    ("client-init", "_RBT-CLI-PHASE-INIT", "RABBIT CLIENT INIT PASS", True),
+    (
+        "client-handshake",
+        "_RBT-CLI-PHASE-HANDSHAKE",
+        "RABBIT CLIENT HANDSHAKE PASS",
+        True,
+    ),
+    (
+        "client-requests",
+        "_RBT-CLI-PHASE-REQUESTS-EVENT",
+        "RABBIT CLIENT REQUESTS PASS",
+        True,
+    ),
+    (
+        "client-responses",
+        "_RBT-CLI-PHASE-RESPONSES-GENERATION",
+        "RABBIT CLIENT RESPONSES PASS",
+        True,
+    ),
+    (
+        "client-cancellation",
+        "_RBT-CLI-PHASE-CANCELLATION",
+        "RABBIT CLIENT CANCELLATION PASS",
+        True,
+    ),
+    (
+        "client-teardown-client",
+        "_RBT-CLI-PHASE-TEARDOWN-CLIENT",
+        "RABBIT CLIENT TEARDOWN CLIENT PASS",
+        True,
+    ),
+    (
+        "client-teardown-connection-close",
+        "_RBT-CLI-PHASE-TEARDOWN-CONNECTION-CLOSE",
+        "RABBIT CLIENT TEARDOWN CONNECTION CLOSE PASS",
+        True,
+    ),
+    (
+        "client-teardown-connection-fini",
+        "_RBT-CLI-PHASE-TEARDOWN-CONNECTION-FINI",
+        "RABBIT CLIENT TEARDOWN CONNECTION FINI PASS",
+        True,
+    ),
+    (
+        "client-teardown-queues",
+        "_RBT-CLI-PHASE-TEARDOWN-QUEUES",
+        "RABBIT CLIENT TEARDOWN QUEUES PASS",
+        True,
+    ),
+    (
+        "client-teardown-transport",
+        "_RBT-CLI-PHASE-TEARDOWN-TRANSPORT",
+        "RABBIT CLIENT TEARDOWN TRANSPORT PASS",
+        True,
     ),
 )
 
@@ -84,10 +156,13 @@ def _assert_static_contracts() -> None:
     builder = BUILDER.read_text(encoding="utf-8")
     session = SESSION.read_text(encoding="utf-8")
     connection = CONNECTION.read_text(encoding="utf-8")
+    client = CLIENT.read_text(encoding="utf-8")
     router = ROUTER.read_text(encoding="utf-8")
     memory = MEMORY.read_text(encoding="utf-8")
     doc = " ".join(DOC.read_text(encoding="utf-8").split())
     fixture = FIXTURE.read_text(encoding="utf-8")
+    client_fixture = CLIENT_FIXTURE.read_text(encoding="utf-8")
+    client_journey = CLIENT_JOURNEY.read_text(encoding="utf-8")
 
     assert 0 < PHASE_MAX_STEPS <= 120_000_000
     assert len({name for name, _, _ in LOAD_STAGES}) == len(LOAD_STAGES)
@@ -125,6 +200,10 @@ def _assert_static_contracts() -> None:
         "session.f",
         "../../utils/memory-span.f",
     ]
+    assert _requires(CLIENT) == [
+        "connection.f",
+        "../../utils/memory-span.f",
+    ]
     assert _requires(MEMORY) == [
         "../io-port.f",
         "../../utils/memory-span.f",
@@ -137,6 +216,7 @@ def _assert_static_contracts() -> None:
         (builder, "PROVIDED akashic-rabbit-builder"),
         (session, "PROVIDED akashic-rabbit-session"),
         (connection, "PROVIDED akashic-rabbit-connection"),
+        (client, "PROVIDED akashic-rabbit-client"),
         (router, "PROVIDED akashic-rabbit-router"),
         (memory, "PROVIDED akashic-net-memory-duplex"),
     ):
@@ -169,6 +249,12 @@ def _assert_static_contracts() -> None:
     assert "one cooperative owner" in connection
     assert "control traffic takes priority" in connection
     assert "remain owned until a cumulative lane ACK" in connection
+    client_declarations = _declarations(CLIENT, client)
+    assert client_declarations
+    assert all(kind == "VARIABLE" for kind, _ in client_declarations)
+    assert all(name.startswith("_RCLI") for _, name in client_declarations)
+    assert "One cooperative owner must" in client
+    assert "exact session (Lane, Txn)" in client
     router_declarations = _declarations(ROUTER, router)
     assert router_declarations
     assert all(kind == "VARIABLE" for kind, _ in router_declarations)
@@ -204,6 +290,8 @@ def _assert_static_contracts() -> None:
         "RMSG-BURROW-ID$",
         "RMSG-TIMEOUT@",
         "RMSG-CAPS@",
+        "RMSG-HELLO-OK-STATUS",
+        "RMSG-PONG-STATUS",
     ):
         assert word in message
     for word in (
@@ -212,6 +300,7 @@ def _assert_static_contracts() -> None:
         "RMSGB-RESET",
         "RMSGB-FINI",
         "RMSGB-READY-FRAME@",
+        "RMSGB-OWNED-SPAN-OVERLAP?",
         "RMSGB-BEGIN-HELLO",
         "RMSGB-BEGIN-REQUEST",
         "RMSGB-BEGIN-EVENT",
@@ -278,6 +367,26 @@ def _assert_static_contracts() -> None:
     ):
         assert word in connection
     for word in (
+        "RABBIT-CLIENT-INIT",
+        "RABBIT-CLIENT-OPEN",
+        "RABBIT-CLIENT-REQUEST",
+        "RABBIT-CLIENT-OP-MATCH?",
+        "RABBIT-CLIENT-BURROW-ID$",
+        "RABBIT-CLIENT-OP-STATE@",
+        "RABBIT-CLIENT-OP-STATUS@",
+        "RABBIT-CLIENT-OP-RESPONSE-CODE@",
+        "RABBIT-CLIENT-OP-RESULT@",
+        "RABBIT-CLIENT-OP-REQUIRED@",
+        "RABBIT-CLIENT-OP-CANCEL",
+        "RABBIT-CLIENT-OP-RELEASE",
+        "RABBIT-CLIENT-DISPATCH",
+        "RABBIT-CLIENT-POLL",
+        "RABBIT-CLIENT-CLOSE",
+        "RABBIT-CLIENT-CANCEL",
+        "RABBIT-CLIENT-FINI",
+    ):
+        assert word in client
+    for word in (
         "NMD-ENDPOINT-INIT",
         "NMD-PAIR",
         "NMD-BIND",
@@ -293,6 +402,7 @@ def _assert_static_contracts() -> None:
         *_requires(BUILDER),
         *_requires(SESSION),
         *_requires(CONNECTION),
+        *_requires(CLIENT),
         *_requires(ROUTER),
         *_requires(MEMORY),
     )
@@ -323,6 +433,7 @@ def _assert_static_contracts() -> None:
     ):
         assert phrase in doc
 
+    fixture_contracts = fixture + "\n" + client_fixture + "\n" + client_journey
     for marker in (
         "_RBT-TEST-ENCODE",
         "_RBT-TEST-PARSE",
@@ -334,11 +445,11 @@ def _assert_static_contracts() -> None:
         "_RBT-TEST-MEMORY-DUPLEX",
         "_RBT-TEST-SESSION",
         "_RBT-TEST-CONNECTION",
+        "_RBT-CLI-PHASE-RESPONSES-GENERATION",
         "_RBT-TEST-ROUTER",
         "RBF-EOF",
-        "RABBIT CORE PASS",
     ):
-        assert marker in fixture
+        assert marker in fixture_contracts
 
     for path, source in (
         (PROFILE, profile),
@@ -347,9 +458,12 @@ def _assert_static_contracts() -> None:
         (BUILDER, builder),
         (SESSION, session),
         (CONNECTION, connection),
+        (CLIENT, client),
         (ROUTER, router),
         (MEMORY, memory),
         (FIXTURE, fixture),
+        (CLIENT_FIXTURE, client_fixture),
+        (CLIENT_JOURNEY, client_journey),
     ):
         _assert_physical_comments(path, source)
 
@@ -374,7 +488,12 @@ def _run_rabbit_core(timeout: float) -> int:
                 "KEY DROP\n",
             )
         )
-    autoexec.append("_RBT-RUN\nTX-FLUSH\n")
+    for _, word, marker, announce in CONTRACT_STAGES:
+        autoexec.append(f"{word}\n")
+        if announce:
+            autoexec.append(f'." {marker}" CR\n')
+        autoexec.append("TX-FLUSH\nKEY DROP\n")
+    autoexec.append('." RABBIT CORE PASS " _RBT-CHECKS @ . CR\nTX-FLUSH\n')
 
     profile_name = "rabbit-streams-worlds-core"
     image = Path("/tmp/akashic-rabbit-streams-worlds-core.img")
@@ -387,6 +506,7 @@ def _run_rabbit_core(timeout: float) -> int:
             "net/transports/memory-duplex.f",
             "net/rabbit/session.f",
             "net/rabbit/connection.f",
+            "net/rabbit/client.f",
             "net/rabbit/router.f",
         ),
         resources=(),
@@ -412,6 +532,18 @@ def _run_rabbit_core(timeout: float) -> int:
                     FIXTURE.read_text(encoding="utf-8")
                 ).encode("utf-8"),
             ),
+            (
+                "local_testing/rabbit-client-test.f",
+                harness._minify_forth(
+                    CLIENT_FIXTURE.read_text(encoding="utf-8")
+                ).encode("utf-8"),
+            ),
+            (
+                "local_testing/rabbit-client-flow.f",
+                harness._minify_forth(
+                    CLIENT_JOURNEY.read_text(encoding="utf-8")
+                ).encode("utf-8"),
+            ),
         ),
         linked=False,
         include_large_sample=False,
@@ -432,6 +564,7 @@ def _run_rabbit_core(timeout: float) -> int:
         machine.boot()
         reports = []
         for index, (stage_name, _, marker) in enumerate(LOAD_STAGES):
+            print(f"Rabbit load {stage_name}: starting", flush=True)
             if index:
                 machine.clear_output()
                 machine.send_text("x")
@@ -458,6 +591,44 @@ def _run_rabbit_core(timeout: float) -> int:
                 print(
                     f"  {report.steps:,} steps in {report.elapsed_s:.2f}s; "
                     f"stop={report.reason}"
+                )
+                for failure in failures:
+                    print(f"  {failure}")
+                if len(raw) > 8000:
+                    print(raw[:4000])
+                    print("\n... Rabbit trace middle omitted ...\n")
+                print(raw[-4000:])
+                print(machine.screen_text())
+                return 1
+
+        contract_reports = []
+        for stage_name, _, marker, _ in CONTRACT_STAGES:
+            print(f"Rabbit contract {stage_name}: starting", flush=True)
+            machine.clear_output()
+            machine.send_text("x")
+            stage_report = machine.run(
+                max_steps=PHASE_MAX_STEPS,
+                wall_timeout_s=timeout,
+                until_text=marker,
+                text_scope="raw",
+            )
+            raw = machine.raw_text()
+            failures = tuple(
+                dict.fromkeys(
+                    (
+                        *harness._has_forth_error(raw),
+                        *harness._matched_failure_markers(
+                            profile, raw, machine.screen_text()
+                        ),
+                    )
+                )
+            )
+            contract_reports.append((stage_name, stage_report))
+            if marker not in raw or failures:
+                print(f"Rabbit contract {stage_name}: FAIL")
+                print(
+                    f"  {stage_report.steps:,} steps in "
+                    f"{stage_report.elapsed_s:.2f}s; stop={stage_report.reason}"
                 )
                 for failure in failures:
                     print(f"  {failure}")
@@ -499,6 +670,11 @@ def _run_rabbit_core(timeout: float) -> int:
         for stage_name, stage_report in reports:
             print(
                 f"  {stage_name}: {stage_report.steps:,} steps in "
+                f"{stage_report.elapsed_s:.2f}s; stop={stage_report.reason}"
+            )
+        for stage_name, stage_report in contract_reports:
+            print(
+                f"  contract {stage_name}: {stage_report.steps:,} steps in "
                 f"{stage_report.elapsed_s:.2f}s; stop={stage_report.reason}"
             )
         print(

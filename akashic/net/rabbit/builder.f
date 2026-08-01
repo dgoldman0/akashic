@@ -260,6 +260,31 @@ VARIABLE _RMSGBF-BYTES
     DUP RMSGB-VALID? 0= IF DROP 0 EXIT THEN
     _RMSGB.ARENA-USED @ ;
 
+VARIABLE _RMSGBO-A
+VARIABLE _RMSGBO-U
+VARIABLE _RMSGBO-B
+
+\ Report whether a caller span touches any builder-owned storage: both the
+\ complete descriptor and the complete arena allocation, including currently
+\ unused arena bytes.  Invalid span geometry or an invalid builder reports
+\ overlap conservatively so ownership checks fail closed.  An otherwise valid
+\ empty span never overlaps.
+: RMSGB-OWNED-SPAN-OVERLAP?  ( address bytes builder -- flag )
+    _RMSGBO-B ! _RMSGBO-U ! _RMSGBO-A !
+    _RMSGBO-U @ 0< IF -1 EXIT THEN
+    _RMSGBO-U @ IF
+        _RMSGBO-A @ 0= IF -1 EXIT THEN
+    THEN
+    _RMSGBO-A @ _RMSGBO-U @ MSPAN-NONWRAPPING? 0= IF -1 EXIT THEN
+    _RMSGBO-B @ RMSGB-VALID? 0= IF -1 EXIT THEN
+    _RMSGBO-A @ _RMSGBO-U @
+        _RMSGBO-B @ _RMSGBO-B @ _RMSGB.BYTES @
+        MSPAN-OVERLAP? IF -1 EXIT THEN
+    _RMSGBO-A @ _RMSGBO-U @
+        _RMSGBO-B @ _RMSGB.ARENA @
+        _RMSGBO-B @ _RMSGB.ARENA-CAP @
+        MSPAN-OVERLAP? ;
+
 \ =====================================================================
 \  Failure mapping and owned-arena helpers
 \ =====================================================================
