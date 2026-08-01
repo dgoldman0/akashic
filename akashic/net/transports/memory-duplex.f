@@ -1,0 +1,329 @@
+\ =====================================================================
+\  memory-duplex.f - Caller-owned deterministic NET-IO-PORT pair
+\ =====================================================================
+\  Two independently sized byte rings form a deterministic full-duplex
+\  transport.  Each endpoint writes into its peer's inbound ring and reads
+\  from its own.  The adapter knows nothing about Rabbit or any other wire
+\  protocol.
+\
+\  Storage, endpoint records, and NET-IO-PORT records all belong to the
+\  caller.  SEND/RECV may make short progress; zero/OK means that the peer
+\  ring is full or that no bytes are currently available.  A drained ring
+\  reports EOF only after its peer closes.  CLOSE and CANCEL are idempotent.
+\ =====================================================================
+
+PROVIDED akashic-net-memory-duplex
+
+REQUIRE ../io-port.f
+REQUIRE ../../utils/memory-span.f
+
+0 CONSTANT NMD-STATE-INVALID
+1 CONSTANT NMD-STATE-READY
+2 CONSTANT NMD-STATE-OPEN
+3 CONSTANT NMD-STATE-CLOSED
+4 CONSTANT NMD-STATE-CANCELLED
+
+ 0 CONSTANT _NMD-BUFFER
+ 8 CONSTANT _NMD-CAPACITY
+16 CONSTANT _NMD-HEAD
+24 CONSTANT _NMD-COUNT
+32 CONSTANT _NMD-PEER
+40 CONSTANT _NMD-STATE
+48 CONSTANT NMD-ENDPOINT-SIZE
+
+: NMD.BUFFER    ( endpoint -- address ) _NMD-BUFFER + ;
+: NMD.CAPACITY  ( endpoint -- address ) _NMD-CAPACITY + ;
+: NMD.HEAD      ( endpoint -- address ) _NMD-HEAD + ;
+: NMD.COUNT     ( endpoint -- address ) _NMD-COUNT + ;
+: NMD.PEER      ( endpoint -- address ) _NMD-PEER + ;
+: NMD.STATE     ( endpoint -- address ) _NMD-STATE + ;
+
+: NMD-QUEUED@  ( endpoint -- count ) NMD.COUNT @ ;
+
+: NMD-FREE@  ( endpoint -- count )
+    DUP NMD.CAPACITY @ SWAP NMD.COUNT @ - ;
+
+: NMD-STATE@  ( endpoint -- state ) NMD.STATE @ ;
+
+: _NMD-BUFFER-SPAN  ( endpoint -- address length )
+    DUP NMD.BUFFER @ SWAP NMD.CAPACITY @ ;
+
+: _NMD-STATE-VALID?  ( state -- flag )
+    DUP NMD-STATE-READY >= SWAP NMD-STATE-CANCELLED <= AND ;
+
+: _NMD-CELL-ALIGNED?  ( address -- flag )
+    7 AND 0= ;
+
+: NMD-ENDPOINT-VALID?  ( endpoint -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP _NMD-CELL-ALIGNED? 0= IF DROP 0 EXIT THEN
+    DUP NMD-ENDPOINT-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    >R
+    R@ NMD.STATE @ _NMD-STATE-VALID? 0= IF R> DROP 0 EXIT THEN
+    R@ NMD.CAPACITY @ 0< IF R> DROP 0 EXIT THEN
+    R@ _NMD-BUFFER-SPAN MSPAN-NONWRAPPING? 0= IF R> DROP 0 EXIT THEN
+    R@ _NMD-BUFFER-SPAN R@ NMD-ENDPOINT-SIZE
+    MSPAN-OVERLAP? IF R> DROP 0 EXIT THEN
+    R@ NMD.COUNT @ DUP 0< IF DROP R> DROP 0 EXIT THEN
+    R@ NMD.CAPACITY @ > IF R> DROP 0 EXIT THEN
+    R@ NMD.CAPACITY @ 0= IF
+        R@ NMD.HEAD @ 0= R> DROP
+    ELSE
+        R@ NMD.HEAD @ DUP 0< IF DROP R> DROP 0 EXIT THEN
+        R@ NMD.CAPACITY @ < R> DROP
+    THEN ;
+
+\ The caller has already established that ENDPOINT itself is valid.
+: _NMD-PEER-VALID?  ( endpoint -- flag )
+    DUP NMD.PEER @ DUP 0= IF 2DROP 0 EXIT THEN
+    DUP NMD-ENDPOINT-VALID? 0= IF 2DROP 0 EXIT THEN
+    NMD.PEER @ = ;
+
+: _NMD-SPAN-OVERLAPS-ENDPOINT?  ( address length endpoint -- flag )
+    >R
+    2DUP R@ NMD-ENDPOINT-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP -1 EXIT
+    THEN
+    R@ _NMD-BUFFER-SPAN MSPAN-OVERLAP?
+    R> DROP ;
+
+: NMD-ENDPOINT-INIT  ( buffer capacity endpoint -- io-status )
+    >R
+    DUP 0< IF 2DROP R> DROP NIO-S-FAILED EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP NIO-S-FAILED EXIT
+    THEN
+    R@ 0= IF 2DROP R> DROP NIO-S-FAILED EXIT THEN
+    R@ _NMD-CELL-ALIGNED? 0= IF
+        2DROP R> DROP NIO-S-FAILED EXIT
+    THEN
+    R@ NMD-ENDPOINT-SIZE MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP NIO-S-FAILED EXIT
+    THEN
+    2DUP R@ NMD-ENDPOINT-SIZE MSPAN-OVERLAP? IF
+        2DROP R> DROP NIO-S-FAILED EXIT
+    THEN
+    R@ NMD-ENDPOINT-SIZE 0 FILL
+    OVER R@ NMD.BUFFER !
+    DUP R@ NMD.CAPACITY !
+    NMD-STATE-READY R@ NMD.STATE !
+    2DROP R> DROP NIO-S-OK ;
+
+: _NMD-BUFFER-OVERLAPS-RECORD?  ( buffer-endpoint record-endpoint -- flag )
+    >R _NMD-BUFFER-SPAN R> NMD-ENDPOINT-SIZE MSPAN-OVERLAP? ;
+
+: NMD-PAIR  ( endpoint-a endpoint-b -- io-status )
+    2DUP = IF 2DROP NIO-S-FAILED EXIT THEN
+    OVER NMD-ENDPOINT-VALID? 0= IF 2DROP NIO-S-FAILED EXIT THEN
+    DUP NMD-ENDPOINT-VALID? 0= IF 2DROP NIO-S-FAILED EXIT THEN
+    OVER NMD.STATE @ NMD-STATE-READY <> IF 2DROP NIO-S-FAILED EXIT THEN
+    DUP NMD.STATE @ NMD-STATE-READY <> IF 2DROP NIO-S-FAILED EXIT THEN
+    OVER NMD.PEER @ IF 2DROP NIO-S-FAILED EXIT THEN
+    DUP NMD.PEER @ IF 2DROP NIO-S-FAILED EXIT THEN
+    OVER NMD-ENDPOINT-SIZE 2 PICK NMD-ENDPOINT-SIZE
+    MSPAN-OVERLAP? IF 2DROP NIO-S-FAILED EXIT THEN
+    OVER _NMD-BUFFER-SPAN 2 PICK _NMD-BUFFER-SPAN
+    MSPAN-OVERLAP? IF 2DROP NIO-S-FAILED EXIT THEN
+    2DUP _NMD-BUFFER-OVERLAPS-RECORD? IF
+        2DROP NIO-S-FAILED EXIT
+    THEN
+    2DUP SWAP _NMD-BUFFER-OVERLAPS-RECORD? IF
+        2DROP NIO-S-FAILED EXIT
+    THEN
+    DUP 2 PICK NMD.PEER !
+    OVER OVER NMD.PEER !
+    2DROP NIO-S-OK ;
+
+\ Advance a ring index without forming INDEX + AMOUNT when that sum could
+\ overflow.  The caller has proved 0 <= INDEX < CAPACITY and
+\ 0 <= AMOUNT <= CAPACITY.
+: _NMD-RING-ADVANCE  ( index amount capacity -- result )
+    >R
+    R@ 2 PICK -
+    2DUP >= IF
+        - NIP
+    ELSE
+        DROP +
+    THEN
+    R> DROP ;
+
+\ Copy N bytes into ENDPOINT's ring.  The caller has already proved that
+\ N is positive and no larger than free capacity.
+: _NMD-RING-WRITE  ( source n endpoint -- )
+    >R
+    R@ NMD.HEAD @ R@ NMD.COUNT @ R@ NMD.CAPACITY @
+    _NMD-RING-ADVANCE
+    R@ NMD.CAPACITY @ OVER - 2 PICK MIN
+    SWAP R@ NMD.BUFFER @ + SWAP
+    3 PICK 2 PICK 2 PICK MOVE
+    SWAP DROP
+    DUP 3 PICK +
+    2 PICK 2 PICK -
+    R@ NMD.BUFFER @ SWAP MOVE
+    2DROP DROP R> DROP ;
+
+\ Copy N bytes out of ENDPOINT's ring.  The caller has already proved that
+\ N is positive and no larger than the queued byte count.
+: _NMD-RING-READ  ( destination n endpoint -- )
+    >R
+    R@ NMD.HEAD @
+    R@ NMD.CAPACITY @ OVER - 2 PICK MIN
+    SWAP R@ NMD.BUFFER @ + SWAP
+    OVER 4 PICK 2 PICK MOVE
+    SWAP DROP
+    DUP 3 PICK +
+    2 PICK 2 PICK -
+    R@ NMD.BUFFER @ ROT ROT MOVE
+    2DROP DROP R> DROP ;
+
+: _NMD-OPEN  ( endpoint -- io-status )
+    DUP NMD-ENDPOINT-VALID? 0= IF DROP NIO-S-FAILED EXIT THEN
+    DUP _NMD-PEER-VALID? 0= IF DROP NIO-S-FAILED EXIT THEN
+    DUP NMD.STATE @ DUP NMD-STATE-OPEN = IF
+        2DROP NIO-S-OK EXIT
+    THEN
+    NMD-STATE-READY <> IF DROP NIO-S-FAILED EXIT THEN
+    NMD-STATE-OPEN SWAP NMD.STATE ! NIO-S-OK ;
+
+: _NMD-SEND  ( source length endpoint -- count io-status )
+    >R
+    2DUP MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP 0 NIO-S-FAILED EXIT
+    THEN
+    R@ NMD-ENDPOINT-VALID? 0= IF
+        2DROP R> DROP 0 NIO-S-FAILED EXIT
+    THEN
+    R@ _NMD-PEER-VALID? 0= IF
+        2DROP R> DROP 0 NIO-S-FAILED EXIT
+    THEN
+    R@ NMD.STATE @ NMD-STATE-CANCELLED = IF
+        2DROP R> DROP 0 NIO-S-CANCELLED EXIT
+    THEN
+    R@ NMD.STATE @ NMD-STATE-OPEN <> IF
+        2DROP R> DROP 0 NIO-S-FAILED EXIT
+    THEN
+    R@ NMD.PEER @ DUP 0= IF
+        DROP 2DROP R> DROP 0 NIO-S-FAILED EXIT
+    THEN
+    DUP NMD-ENDPOINT-VALID? 0= IF
+        DROP 2DROP R> DROP 0 NIO-S-FAILED EXIT
+    THEN
+    DUP NMD.STATE @ NMD-STATE-CANCELLED = IF
+        DROP 2DROP R> DROP 0 NIO-S-CANCELLED EXIT
+    THEN
+    DUP NMD.STATE @ NMD-STATE-CLOSED = IF
+        DROP 2DROP R> DROP 0 NIO-S-FAILED EXIT
+    THEN
+    DUP NMD.STATE @ NMD-STATE-OPEN <> IF
+        DROP 2DROP R> DROP 0 NIO-S-OK EXIT
+    THEN
+    R> DROP >R
+    R@ NMD.CAPACITY @ R@ NMD.COUNT @ - OVER MIN
+    DUP 0= IF NIP NIP R> DROP NIO-S-OK EXIT THEN
+    2 PICK 1 PICK R@ _NMD-BUFFER-SPAN MSPAN-OVERLAP? IF
+        DROP 2DROP R> DROP 0 NIO-S-FAILED EXIT
+    THEN
+    2 PICK OVER R@ _NMD-RING-WRITE
+    DUP R@ NMD.COUNT +!
+    NIP NIP R> DROP NIO-S-OK ;
+
+: _NMD-RECV  ( destination capacity endpoint -- count io-status )
+    >R
+    2DUP MSPAN-NONWRAPPING? 0= IF
+        2DROP R> DROP 0 NIO-S-FAILED EXIT
+    THEN
+    R@ NMD-ENDPOINT-VALID? 0= IF
+        2DROP R> DROP 0 NIO-S-FAILED EXIT
+    THEN
+    R@ _NMD-PEER-VALID? 0= IF
+        2DROP R> DROP 0 NIO-S-FAILED EXIT
+    THEN
+    R@ NMD.STATE @ NMD-STATE-CANCELLED = IF
+        2DROP R> DROP 0 NIO-S-CANCELLED EXIT
+    THEN
+    R@ NMD.STATE @ NMD-STATE-CLOSED = IF
+        2DROP R> DROP 0 NIO-S-EOF EXIT
+    THEN
+    R@ NMD.STATE @ NMD-STATE-OPEN <> IF
+        2DROP R> DROP 0 NIO-S-FAILED EXIT
+    THEN
+    R@ NMD.COUNT @ 0= IF
+        2DROP
+        R@ NMD.PEER @ DUP 0= IF
+            DROP R> DROP 0 NIO-S-EOF EXIT
+        THEN
+        NMD.STATE @ DUP NMD-STATE-CLOSED = SWAP
+        NMD-STATE-CANCELLED = OR IF
+            R> DROP 0 NIO-S-EOF
+        ELSE
+            R> DROP 0 NIO-S-OK
+        THEN
+        EXIT
+    THEN
+    R@ NMD.COUNT @ OVER MIN
+    DUP 0= IF NIP NIP R> DROP NIO-S-OK EXIT THEN
+    2 PICK OVER R@ _NMD-SPAN-OVERLAPS-ENDPOINT? IF
+        DROP 2DROP R> DROP 0 NIO-S-FAILED EXIT
+    THEN
+    2 PICK OVER R@ NMD.PEER @ _NMD-SPAN-OVERLAPS-ENDPOINT? IF
+        DROP 2DROP R> DROP 0 NIO-S-FAILED EXIT
+    THEN
+    2 PICK OVER R@ _NMD-RING-READ
+    DUP R@ NMD.HEAD @ SWAP R@ NMD.CAPACITY @
+    _NMD-RING-ADVANCE R@ NMD.HEAD !
+    DUP NEGATE R@ NMD.COUNT +!
+    NIP NIP R> DROP NIO-S-OK ;
+
+: _NMD-CLOSE  ( endpoint -- )
+    DUP NMD-ENDPOINT-VALID? 0= IF DROP EXIT THEN
+    DUP NMD.STATE @ DUP NMD-STATE-CLOSED = SWAP
+    NMD-STATE-CANCELLED = OR IF DROP EXIT THEN
+    0 OVER NMD.HEAD !
+    0 OVER NMD.COUNT !
+    NMD-STATE-CLOSED SWAP NMD.STATE ! ;
+
+: _NMD-CANCEL  ( endpoint -- )
+    DUP NMD-ENDPOINT-VALID? 0= IF DROP EXIT THEN
+    DUP NMD.STATE @ DUP NMD-STATE-CLOSED = SWAP
+    NMD-STATE-CANCELLED = OR IF DROP EXIT THEN
+    0 OVER NMD.HEAD !
+    0 OVER NMD.COUNT !
+    NMD-STATE-CANCELLED SWAP NMD.STATE ! ;
+
+: NMD-BIND  ( endpoint port -- io-status )
+    OVER NMD-ENDPOINT-VALID? 0= IF 2DROP NIO-S-FAILED EXIT THEN
+    OVER _NMD-PEER-VALID? 0= IF 2DROP NIO-S-FAILED EXIT THEN
+    DUP 0= IF 2DROP NIO-S-FAILED EXIT THEN
+    DUP _NMD-CELL-ALIGNED? 0= IF 2DROP NIO-S-FAILED EXIT THEN
+    DUP NET-IO-PORT-SIZE MSPAN-NONWRAPPING? 0= IF
+        2DROP NIO-S-FAILED EXIT
+    THEN
+    DUP NET-IO-PORT-SIZE 3 PICK
+    _NMD-SPAN-OVERLAPS-ENDPOINT? IF
+        2DROP NIO-S-FAILED EXIT
+    THEN
+    DUP NET-IO-PORT-SIZE 3 PICK NMD.PEER @
+    _NMD-SPAN-OVERLAPS-ENDPOINT? IF
+        2DROP NIO-S-FAILED EXIT
+    THEN
+    DUP NIO-INIT
+    OVER OVER NIO.CONTEXT !
+    ['] _NMD-RECV OVER NIO.RECV-XT !
+    ['] _NMD-SEND OVER NIO.SEND-XT !
+    ['] _NMD-OPEN OVER NIO.OPEN-XT !
+    ['] _NMD-CLOSE OVER NIO.CLOSE-XT !
+    ['] _NMD-CANCEL OVER NIO.CANCEL-XT !
+    2DROP NIO-S-OK ;
+
+: _NMD-EXACT-PEERS?  ( endpoint-a endpoint-b -- flag )
+    OVER NMD.PEER @ OVER = >R
+    DUP NMD.PEER @ 2 PICK = R> AND
+    NIP NIP ;
+
+: NMD-PAIR-FINI  ( endpoint-a endpoint-b -- io-status )
+    OVER NMD-ENDPOINT-VALID? 0= IF 2DROP NIO-S-FAILED EXIT THEN
+    DUP NMD-ENDPOINT-VALID? 0= IF 2DROP NIO-S-FAILED EXIT THEN
+    2DUP _NMD-EXACT-PEERS? 0= IF 2DROP NIO-S-FAILED EXIT THEN
+    OVER NMD-ENDPOINT-SIZE 0 FILL
+    DUP NMD-ENDPOINT-SIZE 0 FILL
+    2DROP NIO-S-OK ;
