@@ -24,6 +24,14 @@ SERVER = ROOT / "akashic" / "net" / "rabbit" / "server.f"
 SERVER_SUBSCRIPTION = (
     ROOT / "akashic" / "net" / "rabbit" / "server-subscription.f"
 )
+STREAMS_CONNECTOR = (
+    ROOT
+    / "akashic"
+    / "tui"
+    / "applets"
+    / "streams"
+    / "rabbit-connector.f"
+)
 MEMORY = ROOT / "akashic" / "net" / "transports" / "memory-duplex.f"
 DOC = ROOT / "docs" / "net" / "rabbit.md"
 FIXTURE = LOCAL_TESTING / "rabbit-core-test.f"
@@ -35,6 +43,7 @@ SERVER_SUBSCRIPTION_FIXTURE = (
     LOCAL_TESTING / "rabbit-servsub-test.f"
 )
 CAPSTONE_FIXTURE = LOCAL_TESTING / "rabbit-cap-test.f"
+STREAMS_CONNECTOR_FIXTURE = LOCAL_TESTING / "rabbit-connector-test.f"
 
 PASS_MARKER = "RABBIT CORE PASS"
 PHASE_MAX_STEPS = 120_000_000
@@ -105,6 +114,16 @@ LOAD_STAGES = (
         "two-peer-capstone-fixture",
         "local_testing/rabbit-cap-test.f",
         "RABBIT TWO PEER CAPSTONE FIXTURE READY",
+    ),
+    (
+        "streams-connector",
+        "tui/applets/streams/rabbit-connector.f",
+        "STREAMS RABBIT CONNECTOR READY",
+    ),
+    (
+        "streams-connector-fixture",
+        "local_testing/rabbit-connector-test.f",
+        "STREAMS RABBIT CONNECTOR FIXTURE READY",
     ),
 )
 CONTRACT_STAGES = (
@@ -500,6 +519,30 @@ CONTRACT_STAGES = (
         "RABBIT CAPSTONE FINI PASS",
         True,
     ),
+    (
+        "streams-connector-init",
+        "_RBT-RCONN-PHASE-INIT",
+        "STREAMS RABBIT CONNECTOR INIT PASS",
+        True,
+    ),
+    (
+        "streams-connector-detach",
+        "_RBT-RCONN-PHASE-DETACH",
+        "STREAMS RABBIT CONNECTOR DETACH PASS",
+        True,
+    ),
+    (
+        "streams-connector-attach",
+        "_RBT-RCONN-PHASE-ATTACH",
+        "STREAMS RABBIT CONNECTOR ATTACH PASS",
+        True,
+    ),
+    (
+        "streams-connector-fini",
+        "_RBT-RCONN-PHASE-FINI",
+        "STREAMS RABBIT CONNECTOR FINI PASS",
+        True,
+    ),
 )
 
 
@@ -539,6 +582,7 @@ def _assert_static_contracts() -> None:
     router = ROUTER.read_text(encoding="utf-8")
     server = SERVER.read_text(encoding="utf-8")
     server_subscription = SERVER_SUBSCRIPTION.read_text(encoding="utf-8")
+    streams_connector = STREAMS_CONNECTOR.read_text(encoding="utf-8")
     memory = MEMORY.read_text(encoding="utf-8")
     doc = " ".join(DOC.read_text(encoding="utf-8").split())
     fixture = FIXTURE.read_text(encoding="utf-8")
@@ -550,6 +594,9 @@ def _assert_static_contracts() -> None:
         encoding="utf-8"
     )
     capstone_fixture = CAPSTONE_FIXTURE.read_text(encoding="utf-8")
+    streams_connector_fixture = STREAMS_CONNECTOR_FIXTURE.read_text(
+        encoding="utf-8"
+    )
 
     assert 0 < PHASE_MAX_STEPS <= 120_000_000
     assert len({name for name, _, _ in LOAD_STAGES}) == len(LOAD_STAGES)
@@ -607,6 +654,10 @@ def _assert_static_contracts() -> None:
         "../../utils/memory-span.f",
         "../../text/utf8.f",
     ]
+    assert _requires(STREAMS_CONNECTOR) == [
+        "../../../net/rabbit/subscription.f",
+        "../../../utils/memory-span.f",
+    ]
     assert _requires(MEMORY) == [
         "../io-port.f",
         "../../utils/memory-span.f",
@@ -627,6 +678,7 @@ def _assert_static_contracts() -> None:
             server_subscription,
             "PROVIDED akashic-rabbit-server-subscription",
         ),
+        (streams_connector, "PROVIDED akashic-streams-rconn"),
         (memory, "PROVIDED akashic-net-memory-duplex"),
     ):
         assert provider in source
@@ -695,6 +747,19 @@ def _assert_static_contracts() -> None:
     assert "takes exclusive ownership of one initialized" in server_subscription
     assert "Registration is commit-gated" in server_subscription
     assert "never treats the immutable router context" in server_subscription
+    streams_connector_declarations = _declarations(
+        STREAMS_CONNECTOR, streams_connector
+    )
+    assert streams_connector_declarations
+    assert all(
+        kind == "VARIABLE" for kind, _ in streams_connector_declarations
+    )
+    assert all(
+        name.startswith("_SRCONN")
+        for _, name in streams_connector_declarations
+    )
+    assert "long-lived Streams Rabbit client connector" in streams_connector
+    assert "retryable DETACH/FINI cleanup path" in streams_connector
     assert not _declarations(PROFILE, profile)
     assert not _declarations(SESSION, session)
     assert not _declarations(MEMORY, memory)
@@ -899,6 +964,28 @@ def _assert_static_contracts() -> None:
     ):
         assert word in server_subscription
     for word in (
+        "STREAMS-RABBIT-CONNECTOR-SIZE",
+        "STREAMS-RABBIT-CONNECTOR-VALID?",
+        "STREAMS-RABBIT-CONNECTOR-INIT",
+        "STREAMS-RABBIT-CONNECTOR-STATE@",
+        "STREAMS-RABBIT-CONNECTOR-LAST-STATUS@",
+        "STREAMS-RABBIT-CONNECTOR-DETAIL@",
+        "STREAMS-RABBIT-CONNECTOR-LAST-ACTIVITY@",
+        "STREAMS-RABBIT-CONNECTOR-POLL-COUNT@",
+        "STREAMS-RABBIT-CONNECTOR-RECONNECT-COUNT@",
+        "STREAMS-RABBIT-CONNECTOR-POLL",
+        "STREAMS-RABBIT-CONNECTOR-HELLO",
+        "STREAMS-RABBIT-CONNECTOR-LANE-ENSURE",
+        "STREAMS-RABBIT-CONNECTOR-REQUEST",
+        "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-BIND",
+        "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-BIND-RESOLVE",
+        "STREAMS-RABBIT-CONNECTOR-CONTROL",
+        "STREAMS-RABBIT-CONNECTOR-DETACH",
+        "STREAMS-RABBIT-CONNECTOR-ATTACH",
+        "STREAMS-RABBIT-CONNECTOR-FINI",
+    ):
+        assert word in streams_connector
+    for word in (
         "NMD-ENDPOINT-INIT",
         "NMD-PAIR",
         "NMD-BIND",
@@ -967,6 +1054,8 @@ def _assert_static_contracts() -> None:
         + server_subscription_fixture
         + "\n"
         + capstone_fixture
+        + "\n"
+        + streams_connector_fixture
     )
     for marker in (
         "_RBT-TEST-ENCODE",
@@ -1008,6 +1097,10 @@ def _assert_static_contracts() -> None:
         "_RBT-CAP-PHASE-B-REBUILD-REBIND",
         "_RBT-CAP-PHASE-B-EXACT-SUFFIX",
         "_RBT-CAP-PHASE-FINI",
+        "_RBT-RCONN-PHASE-INIT",
+        "_RBT-RCONN-PHASE-DETACH",
+        "_RBT-RCONN-PHASE-ATTACH",
+        "_RBT-RCONN-PHASE-FINI",
         "RBF-EOF",
     ):
         assert marker in fixture_contracts
@@ -1024,6 +1117,7 @@ def _assert_static_contracts() -> None:
         (ROUTER, router),
         (SERVER, server),
         (SERVER_SUBSCRIPTION, server_subscription),
+        (STREAMS_CONNECTOR, streams_connector),
         (MEMORY, memory),
         (FIXTURE, fixture),
         (CLIENT_FIXTURE, client_fixture),
@@ -1032,6 +1126,7 @@ def _assert_static_contracts() -> None:
         (SERVER_FIXTURE, server_fixture),
         (SERVER_SUBSCRIPTION_FIXTURE, server_subscription_fixture),
         (CAPSTONE_FIXTURE, capstone_fixture),
+        (STREAMS_CONNECTOR_FIXTURE, streams_connector_fixture),
     ):
         _assert_physical_comments(path, source)
 
@@ -1079,6 +1174,7 @@ def _run_rabbit_core(timeout: float) -> int:
             "net/rabbit/router.f",
             "net/rabbit/server.f",
             "net/rabbit/server-subscription.f",
+            "tui/applets/streams/rabbit-connector.f",
         ),
         resources=(),
         autoexec="".join(autoexec),
@@ -1137,6 +1233,12 @@ def _run_rabbit_core(timeout: float) -> int:
                 "local_testing/rabbit-cap-test.f",
                 harness._minify_forth(
                     CAPSTONE_FIXTURE.read_text(encoding="utf-8")
+                ).encode("utf-8"),
+            ),
+            (
+                "local_testing/rabbit-connector-test.f",
+                harness._minify_forth(
+                    STREAMS_CONNECTOR_FIXTURE.read_text(encoding="utf-8")
                 ).encode("utf-8"),
             ),
         ),
