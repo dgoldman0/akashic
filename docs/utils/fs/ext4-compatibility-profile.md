@@ -7,9 +7,10 @@ implementation status. The checksummed clean read-only reader now lives in
 limits are tracked in [the binding documentation](drivers/vfs-ext4.md).
 The bounded checksum-v3 JBD2 replay slice now includes committed revoke
 records, and the private writer can establish a crash-resolvable empty
-checksum-v3 journal plus ext4 `RECOVER` state. Descriptor/commit emission,
-orphan recovery, general mutation, and the complete bidirectional gates remain
-open.
+checksum-v3 journal plus ext4 `RECOVER` state and emit one durable ordered
+descriptor/payload/revoke/commit transaction. Metadata checkpointing,
+journal-space release, orphan recovery, general mutation, and the complete
+bidirectional gates remain open.
 MP64FS remains the working native storage binding and FAT/ext4 remain
 read-only interoperability bindings; ext4's mount path may perform the
 strictly ordered recovery writes described below.
@@ -214,8 +215,7 @@ is written and flushed before the two-sector ext4 `RECOVER` update. After that
 update is flushed, the implementation rereads and proves the primary, guard,
 and dirty ext4 endpoint before it removes `AKW1` from the primary and retires
 the guard. The durable result is an empty standard checksum-v3/revoke journal
-with `RECOVER` intentionally set, ready for transaction emission that is not
-yet implemented.
+with `RECOVER` intentionally set, ready for the private transaction emitter.
 
 Every admitted partial-write state resolves forward. An installation tear is
 completed from the exact `AKW1` guard and advanced to the dirty ext4 endpoint;
@@ -227,6 +227,69 @@ committed user transaction. A failure after the first activation media phase
 latches its first ior and phase, faults the writer, and marks the VFS
 read-only/dirty so only remount recovery may resolve the uncertain durable
 state.
+
+### Private one-transaction emission
+
+The current private writer can emit one fully staged ordered transaction. A
+reservation includes a standard active-super guard plus every descriptor,
+metadata payload, revoke, and commit block. The guard consumes journal-ring
+space but is not a JBD2 record, so the standard `s_max_transaction` bound is
+applied to the reservation minus the guard. The ring's separately excluded
+spare remains the all-zero sentinel immediately after the commit. Ordered-data
+credits are bounded by `s_max_trans_data` and do not consume log records.
+
+Before any commit can become authoritative, ordered data is written to its
+home blocks. The descriptor/payload/revoke body follows, including escaped
+metadata payloads and checksum-v3 tag/block checksums. The intended commit is
+then written with byte zero invalid, the following sentinel is zeroed, and the
+entire body is flushed. The invalid preseed and the final checksummed commit
+differ in exactly byte zero, so a sequential prefix is either invalid or the
+exact commit endpoint.
+
+The writer next publishes the active journal state through two identical
+standard checksum-v3/revoke superblocks: a guard `G` in the ring and journal
+block 0. Both use the transaction ID as `s_sequence`, the descriptor after
+`G` as `s_start`, `G` as `s_head`, and zero private padding. The guard is
+preseeded with byte zero invalid and flushed, then made valid and flushed; the
+identical primary is written and flushed, and both are reread for exact proof.
+Only after that proof is the valid commit written and flushed.
+
+Successful emission publishes the private workspace as `COMMITTED` and
+retains every staged entry and after-image. Ordered data is durable at home,
+but metadata home blocks are deliberately not checkpointed in the same
+session. Retry, abort, and another transaction remain busy until a future
+checkpoint layer consumes those images and releases the log reservation.
+
+The bounded 1 KiB qualification uses 63 metadata after-images and 126 revokes,
+the first counts that require two descriptor batches and two revoke batches
+for that geometry. These are test thresholds, not implementation capacities.
+It places the guard at `s_maxlen-3`, making the first descriptor's payload run
+cross from logical block 4095 to logical block 1. Independent media checks
+cover every emitted record and checksum. A clean remount must replay all 63
+metadata images, parse all 126 revokes with zero matching tag hits, leave the
+revoke-named homes unchanged, reset the journal, and rebase the existing
+workspace without arena growth.
+
+The active-to-empty recovery transition reuses `G` as the reset anchor. An
+`AKG1` subtype in the otherwise-zero activation-private `AKR1` fields records
+the marker and complement, active sequence and complement, and complete active
+filesystem-block CRC32C and complement. This authenticates the exact active
+predecessor if journal block 0 tears while changing from the active image to
+the reset image. Recovery reconstructs that predecessor, proves the complete
+primary is one sequential prefix between the active and reset endpoints, and
+then proceeds forward through ordinary `AKR1` reset/clear landing.
+
+Writer ownership is mount-generation scoped. Mount clears the private
+`WRITER-CURRENT` publication before rebuilding media-derived state. Failed
+mounts preserve but cannot use or scrub staged, committed, or faulted bytes.
+Only a successful recovery, strict reload, root/attachment validation, and
+static workspace-shape proof may zero the workspace, rebase it to the
+authenticated clean journal head/sequence, publish `IDLE`, and republish it as
+current. Same-mount faults remain quarantined; a write, flush, checksum, or
+reread-proof failure latches its first ior and phase, forces read-only/dirty
+state, and requires remount convergence. Unmount clears `WRITER-CURRENT` and
+binding readiness before detaching the block context; the retained allocation
+remains shape-inspectable but no longer has transaction authority.
 
 Recovery is ordered as follows:
 
@@ -329,6 +392,12 @@ transient private profile state, not a new JBD2 feature bit; stock
 Linux/e2fsprogs mutation and broader hardware power-cut qualification must
 pass before this landing can be called release-ready.
 
+For an emitted active transaction, reset uses the active guard rather than an
+unrelated first-unused slot and carries the `AKG1` predecessor proof described
+above. Ordinary `AKR1` reset anchors keep those six private words zero. This
+distinction preserves retry authority across an active-to-reset primary tear
+without turning stale historical guards into candidates.
+
 A physically read-only volume that needs replay or orphan recovery is
 refused.  A nominal Linux read-only mount can write during recovery; Akashic
 must not misrepresent a dirty, unrecovered image as safe read-only access.
@@ -337,8 +406,14 @@ The writer uses metadata journaling with ordered data.  New or changed data
 blocks must cross `VOL-FLUSH` before the journal commit that exposes their
 metadata.  Descriptor/data/revoke journal records cross a flush before their
 commit; checkpoint home writes cross a flush before journal-space reuse.  A
-checksum or I/O failure aborts the transaction and transitions the mount to a
-stable error/read-only state rather than reporting success.
+checksum or I/O failure latches the first error, quarantines the live
+transaction, and transitions the mount to a stable error/read-only state
+rather than reporting success. Because a failed commit write may nonetheless
+have reached the exact durable endpoint, only remount recovery may classify
+the log and replay an authenticated commit or discard an incomplete
+transaction. The implemented private slice reaches the durable-commit boundary
+and retains its after-images; it does not yet perform the checkpoint/home-write
+and space-reuse half of this profile rule.
 
 ## Required data and metadata behavior
 
@@ -510,9 +585,15 @@ transaction/ring credits, and owns coalesced metadata, ordered-data, and revoke
 after-images. Its private `AKW1` two-copy activation performs exact
 fresh-primary rebinding, ordered clean-to-`RECOVER` media writes,
 phase-specific fault quarantine, and forward-only crash resolution through the
-existing `AKR1` clean landing. It still emits no transaction descriptor,
-payload, revoke, or commit record and performs no transaction checkpoint or
-home write. Public write capabilities remain disabled.
+existing `AKR1` clean landing. The private emitter now writes one ordered-data
+home set, one checksummed descriptor/payload/revoke/commit stream, the exact
+invalid commit preseed and zero sentinel, and a standard active primary/guard.
+It publishes `COMMITTED` only after the final commit flush and retains all
+after-images. `AKG1` authenticates active-to-reset retry, while mount-owned
+writer-current publication prevents failed retries from erasing fault state.
+It still performs no metadata checkpoint, journal-space release, continued
+transaction stream, orphan mutation, or user-visible write. Public write
+capabilities remain disabled.
 The implementation still fails closed on checksum-damaged incomplete tails
 and refuses legacy and modern orphan recovery and all user-visible mutation.
 Clean orphan-file
@@ -521,6 +602,12 @@ enforced, the real extent fixture reaches depth 1 rather than the implemented
 profile limit of 5, and the special-inode fixture does not yet contain a
 socket. Those qualification and semantic limits remain explicit before any
 write path can be advertised.
+
+The remaining writer gate explicitly includes checkpoint/home writes,
+reservation release and continued transactions, both legacy and modern orphan
+protocols, the complete namespace/data/metadata/xattr mutation surface,
+external-tool inspection of Akashic-authored images, and the controlled
+power-cut/release matrix.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

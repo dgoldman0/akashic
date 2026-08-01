@@ -212,10 +212,11 @@ a default boot-image or automount profile.
 
 Bounded synthetic cases also qualify the private writer workspace without
 issuing storage writes or flushes. They cover exact one-allocation sizing and
-reuse, failed-mount head/sequence rebasing, 1 KiB and 4 KiB descriptor/revoke
-geometry, checked arithmetic, journal-ring and on-disk transaction limits,
+reuse, mount-owned `WRITER-CURRENT` admission, clean head/sequence rebasing,
+1 KiB and 4 KiB descriptor/revoke geometry, checked arithmetic, guard-inclusive
+journal-ring reservation with guard-exclusive `s_max_transaction` accounting,
 full-block after-image ownership and CRCs, hash collisions and forged-index
-rejection, metadata/revoke cancellation, ordered-data conflicts, atomic
+rejection, metadata/revoke cancellation, ordered-data/revoke conflicts, atomic
 capacity failures, abort zeroization, and malformed persistent-layout guards.
 
 The 1 KiB writer fixture separately qualifies private clean-to-`RECOVER`
@@ -230,6 +231,49 @@ resolver and existing `AKR1` clean landing with no home write. Follow-on rows
 tear the resolver's own dirty-super and standard-primary completions and require
 a third mount to converge; fresh-primary UUID and sequence drift must also fail
 before any activation write or flush.
+
+The same 1 KiB fixture now qualifies one private durable transaction after
+activation. It stages one escaped metadata after-image, one ordered-data home
+image, and one 64-bit revoke, then checks the exact serial trace: ordered data,
+descriptor, payload, revoke, invalid-byte commit preseed, zero sentinel, body
+flush, invalid and valid active-guard publication, identical active-primary
+publication, exact reread proof, and final commit/flush. The host independently
+reconstructs and verifies descriptor/tag, payload, revoke, commit, and
+superblock CRC32C; checks that the primary and guard are standard active
+checksum-v3 images; proves the metadata home block is still unchanged while
+ordered data is durable; and requires `COMMITTED` to retain all after-images
+and refuse retry, abort, or another transaction.
+
+A bounded multi-batch case stages 63 metadata after-images, one ordered-data
+image, and 126 revokes. This is the smallest 1 KiB transaction that requires
+two descriptor blocks and two revoke blocks. It starts the reservation three
+blocks before the journal-ring end so the first descriptor's payload run
+crosses from logical block 4095 to logical block 1, then independently verifies
+every descriptor tag, journal UUID slot, escaped payload, revoke entry,
+checksum, commit, and sentinel. A same-session remount must replay all 63
+metadata payloads, parse all 126 revokes with zero matching tag hits, leave
+every revoke-named home unchanged, reset the clean journal, and rebase the
+existing workspace without arena growth.
+
+Emission fault injection keeps the first failing ior and phase quarantined in
+the same mount and requires a later mount to classify the durable endpoint and
+converge forward. Primary-prefix rows exercise old-versus-active selection from
+the exact standard guard. Commit-prefix rows require an invalid preseed or the
+exact valid commit, never a mixed authoritative commit. Active-to-reset retry
+rows exercise the `AKG1` marker/complement, sequence, and full-block CRC proof
+before ordinary `AKR1` landing. A failed remount leaves the preserved writer
+non-current and unscrubbed; only the authenticated clean remount may scrub its
+staged/faulted state and rebase it to `IDLE`. The lifecycle matrix also forces
+an attachment failure after current-writer withdrawal, proving that the
+preserved workspace is structurally inspectable but unusable, and verifies
+that unmount clears both binding readiness and current-writer ownership with
+the block context detached.
+
+These are private durability qualifications, not writable-VFS claims. The
+suite still has no same-session metadata checkpoint or journal-space release,
+no legacy or modern orphan mutation, and no user-visible ext4 mutation
+operation. The public ext4 capability mask stays read-only until those full
+writer and release gates pass.
 
 When a resolved profile closure binds directly to MegaPad networking, the
 harness injects the one canonical packed `networking.f` and loads it with

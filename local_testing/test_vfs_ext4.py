@@ -399,6 +399,16 @@ def _ext4_journal_physical_map(
     return result
 
 
+def _jbd2_ring_advance(
+    logical: int, count: int, *, first: int, maxlen: int
+) -> int:
+    """Advance within the usable JBD2 ring without assuming contiguous media."""
+    assert 0 < first < maxlen
+    assert first <= logical < maxlen
+    assert count >= 0
+    return first + (logical - first + count) % (maxlen - first)
+
+
 def _jbd2_super_with_checksum(block: bytes | bytearray) -> bytes:
     """Stamp the standard CRC32C in a 1024-byte JBD2 superblock."""
     result = bytearray(block)
@@ -3838,6 +3848,7 @@ def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
             "8 _JW-CTX _EXT4-C.J.MAP-CAPACITY + !",
             "_JW-HASH _JW-CTX _EXT4-C.J.MAP-HASH + !",
             "16 _JW-CTX _EXT4-C.J.MAP-HASH-SLOTS + !",
+            "-1 _JW-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
                 "_JW-BYTES 2 CELLS + A-XMEM ARENA-NEW THROW "
                 "CONSTANT _JW-ARENA"
@@ -3965,9 +3976,9 @@ def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
             (
                 "_JW  _EXT4-JTX-TAGS/BLOCK 62 = "
                 "_JW _EXT4-JTX-REVOKES/BLOCK 125 = AND "
-                "62 0 _JW _EXT4-JTX-LOG-BLOCKS 0= SWAP 64 = AND AND "
-                "63 0 _JW _EXT4-JTX-LOG-BLOCKS 0= SWAP 66 = AND AND "
-                "0 126 _JW _EXT4-JTX-LOG-BLOCKS 0= SWAP 3 = AND AND "
+                "62 0 _JW _EXT4-JTX-LOG-BLOCKS 0= SWAP 65 = AND AND "
+                "63 0 _JW _EXT4-JTX-LOG-BLOCKS 0= SWAP 67 = AND AND "
+                "0 126 _JW _EXT4-JTX-LOG-BLOCKS 0= SWAP 4 = AND AND "
                 'IF ." EXT4-JWR-GEOMETRY" THEN'
             ),
             (
@@ -3980,8 +3991,8 @@ def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
             ),
             (
                 "_JWT-IOR 0= _JWT _JW = AND "
-                "_JW _EXT4-JWR.LOG-RESERVED + @ 4 = AND "
-                "_JW _EXT4-JWR.FREE + @ 2 = AND "
+                "_JW _EXT4-JWR.LOG-RESERVED + @ 5 = AND "
+                "_JW _EXT4-JWR.FREE + @ 1 = AND "
                 "_JW _EXT4-JWR.TX-START + @ 7 = AND "
                 "_JW _EXT4-JWR.TX-TID + @ 0= AND "
                 "7 _JW-CTX _EXT4-JOURNAL-NEXT 1 = AND "
@@ -3995,7 +4006,7 @@ def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
                 "_JW-ARENA ARENA-USED _JW-AFTER = AND "
                 'IF ." EXT4-JWR-ABORT-REUSED" THEN'
             ),
-            "3 0 1 _JW _EXT4-JTX-BEGIN CONSTANT _JW-FIT-IOR CONSTANT _JW-FIT",
+            "2 0 1 _JW _EXT4-JTX-BEGIN CONSTANT _JW-FIT-IOR CONSTANT _JW-FIT",
             (
                 "_JW-FIT-IOR 0= _JW-FIT _JW = AND "
                 "_JW _EXT4-JWR.LOG-RESERVED + @ 6 = AND "
@@ -4005,7 +4016,7 @@ def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
             "_JW _EXT4-JTX-ABORT DROP",
             "5 _JW _EXT4-JWR.FREE + !",
             (
-                "3 0 1 _JW _EXT4-JTX-BEGIN "
+                "2 0 1 _JW _EXT4-JTX-BEGIN "
                 "CONSTANT _JW-SHORT-IOR CONSTANT _JW-SHORT"
             ),
             (
@@ -4041,6 +4052,7 @@ def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
             "8 _JWN-CTX _EXT4-C.J.MAP-CAPACITY + !",
             "_JW-HASH _JWN-CTX _EXT4-C.J.MAP-HASH + !",
             "16 _JWN-CTX _EXT4-C.J.MAP-HASH-SLOTS + !",
+            "-1 _JWN-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
                 "_JW-BYTES 1 CELLS - A-XMEM ARENA-NEW THROW "
                 "CONSTANT _JWN-ARENA"
@@ -4125,6 +4137,7 @@ def test_jbd2_writer_arithmetic_and_4k_geometry_are_total(
             "500 _JWG-CTX _EXT4-C.J.MAP-CAPACITY + !",
             "_JWG-HASH _JWG-CTX _EXT4-C.J.MAP-HASH + !",
             "1024 _JWG-CTX _EXT4-C.J.MAP-HASH-SLOTS + !",
+            "-1 _JWG-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
                 "_JWG-4K-BYTES 2 CELLS + A-XMEM ARENA-NEW THROW "
                 "CONSTANT _JWG-ARENA"
@@ -4139,9 +4152,9 @@ def test_jbd2_writer_arithmetic_and_4k_geometry_are_total(
                 "_JWG-W-IOR 0= AND _JWG-W 0<> AND "
                 "_JWG-W _EXT4-JTX-TAGS/BLOCK 254 = AND "
                 "_JWG-W _EXT4-JTX-REVOKES/BLOCK 509 = AND "
-                "254 0 _JWG-W _EXT4-JTX-LOG-BLOCKS 0= SWAP 256 = AND AND "
-                "255 0 _JWG-W _EXT4-JTX-LOG-BLOCKS 0= SWAP 258 = AND AND "
-                "0 510 _JWG-W _EXT4-JTX-LOG-BLOCKS 0= SWAP 3 = AND AND "
+                "254 0 _JWG-W _EXT4-JTX-LOG-BLOCKS 0= SWAP 257 = AND AND "
+                "255 0 _JWG-W _EXT4-JTX-LOG-BLOCKS 0= SWAP 259 = AND AND "
+                "0 510 _JWG-W _EXT4-JTX-LOG-BLOCKS 0= SWAP 4 = AND AND "
                 "_JWG-W _EXT4-JWR.FREE + @ 498 = AND "
                 'IF ." EXT4-JWR-4K-GEOMETRY" THEN'
             ),
@@ -4187,6 +4200,7 @@ def test_jbd2_writer_staging_coalesces_and_cancels_without_io(
             "10 _JST-CTX _EXT4-C.J.MAP-CAPACITY + !",
             "_JST-HASH _JST-CTX _EXT4-C.J.MAP-HASH + !",
             "32 _JST-CTX _EXT4-C.J.MAP-HASH-SLOTS + !",
+            "-1 _JST-CTX _EXT4-C.J.WRITER-CURRENT + !",
             "900 _JST-HASH 900 31 AND CELLS + !",
             (
                 "_JST-BYTES 2 CELLS + A-XMEM ARENA-NEW THROW "
@@ -4275,15 +4289,30 @@ def test_jbd2_writer_staging_coalesces_and_cancels_without_io(
             ),
             "_JST-D1 42 _JST-T _EXT4-JTX-DATA-PUT CONSTANT _JST-DP1",
             "_JST-D2 42 _JST-T _EXT4-JTX-DATA-PUT CONSTANT _JST-DP2",
-            "_JST-M1 42 _JST-T _EXT4-JTX-META-PUT CONSTANT _JST-CONFLICT",
             (
-                "_JST-DP1 0= _JST-DP2 0= AND "
+                "_JST-DP1 VFS-E-CONFLICT = _JST-DP2 VFS-E-CONFLICT = AND "
+                "_JST-W _EXT4-JWR.DATA-USED + @ 0= AND "
+                "_JST-W _EXT4-JWR.DATA-ACTIVE + @ 0= AND "
+                "_JST-W _EXT4-JWR.REVOKE-USED + @ 1 = AND "
+                "_JST-W _EXT4-JWR.REVOKE-ACTIVE + @ 1 = AND "
+                'IF ." EXT4-JTX-DATA-REVOKE-CONFLICT-ATOMIC" THEN'
+            ),
+            "_JST-D1 44 _JST-T _EXT4-JTX-DATA-PUT CONSTANT _JST-D44A",
+            "_JST-D2 44 _JST-T _EXT4-JTX-DATA-PUT CONSTANT _JST-D44B",
+            "44 _JST-T _EXT4-JTX-REVOKE CONSTANT _JST-R44",
+            "_JST-M1 44 _JST-T _EXT4-JTX-META-PUT CONSTANT _JST-M44",
+            (
+                "_JST-D44A 0= _JST-D44B 0= AND "
                 "_JST-W _EXT4-JWR.DATA-USED + @ 1 = AND "
                 "_JST-W _EXT4-JWR.DATA-ACTIVE + @ 1 = AND "
                 "0 _JST-W _EXT4-JWR-DATA-IMAGE C@ 0x44 = AND "
-                "_JST-CONFLICT VFS-E-CONFLICT = AND "
+                "_JST-R44 VFS-E-CONFLICT = AND "
+                "_JST-M44 VFS-E-CONFLICT = AND "
+                "_JST-W _EXT4-JWR.META-USED + @ 1 = AND "
+                "_JST-W _EXT4-JWR.META-ACTIVE + @ 0= AND "
+                "_JST-W _EXT4-JWR.REVOKE-USED + @ 1 = AND "
                 "_JST-W _EXT4-JWR.REVOKE-ACTIVE + @ 1 = AND "
-                'IF ." EXT4-JTX-DATA-REVOKE-COEXIST" THEN'
+                'IF ." EXT4-JTX-DATA-COALESCED-CONFLICT-ATOMIC" THEN'
             ),
             "43 _JST-T _EXT4-JTX-DATA-ZERO CONSTANT _JST-ZERO",
             "_JST-M2 58 _JST-T _EXT4-JTX-META-PUT CONSTANT _JST-M58",
@@ -4333,7 +4362,8 @@ def test_jbd2_writer_staging_coalesces_and_cancels_without_io(
     _assert_emitted(output, "EXT4-JTX-META-COALESCED")
     _assert_emitted(output, "EXT4-JTX-RUNTIME-GUARDS")
     _assert_emitted(output, "EXT4-JTX-REVOKE-CANCELLED-META")
-    _assert_emitted(output, "EXT4-JTX-DATA-REVOKE-COEXIST")
+    _assert_emitted(output, "EXT4-JTX-DATA-REVOKE-CONFLICT-ATOMIC")
+    _assert_emitted(output, "EXT4-JTX-DATA-COALESCED-CONFLICT-ATOMIC")
     _assert_emitted(output, "EXT4-JTX-CANCELLATION-REACTIVATES")
     _assert_emitted(output, "EXT4-JTX-CAPACITY-ATOMIC")
     _assert_emitted(output, "EXT4-JTX-ABORT-ZEROIZED")
@@ -4422,6 +4452,1731 @@ def test_jbd2_writer_activation_is_ordered_and_publishes_after_cleanup(
         assert guard == bytes(1024)
     finally:
         activated.unlink(missing_ok=True)
+
+
+def test_jbd2_writer_emits_one_ordered_transaction_and_retains_afterimages(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = writer_activation_fixture["image"]
+    layout = writer_activation_fixture["layout"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    source_patches = writer_activation_fixture["source_patches"]
+    dirty_super = writer_activation_fixture["dirty_super"]
+    standard = writer_activation_fixture["standard"]
+    guard_logical = writer_activation_fixture["guard_logical"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    assert isinstance(image, Path)
+    assert isinstance(layout, dict)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(dirty_super, bytes)
+    assert isinstance(standard, bytes)
+    assert isinstance(guard_logical, int)
+    assert isinstance(journal0_physical, int)
+
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    metadata_home = 30000
+    data_home = 30001
+    revoke_home = 30002
+    assert revoke_home < layout["blocks"]
+
+    first = struct.unpack_from(">I", standard, 0x14)[0]
+    maxlen = struct.unpack_from(">I", standard, 0x10)[0]
+    assert first <= guard_logical < maxlen
+    logical = {
+        "guard": guard_logical,
+        "descriptor": _jbd2_ring_advance(
+            guard_logical, 1, first=first, maxlen=maxlen
+        ),
+        "payload": _jbd2_ring_advance(
+            guard_logical, 2, first=first, maxlen=maxlen
+        ),
+        "revoke": _jbd2_ring_advance(
+            guard_logical, 3, first=first, maxlen=maxlen
+        ),
+        "commit": _jbd2_ring_advance(
+            guard_logical, 4, first=first, maxlen=maxlen
+        ),
+        "sentinel": _jbd2_ring_advance(
+            guard_logical, 5, first=first, maxlen=maxlen
+        ),
+    }
+    assert len(set(logical.values())) == len(logical)
+    journal_map = _ext4_journal_physical_map(image, (0, *logical.values()))
+    physical = {name: journal_map[position] for name, position in logical.items()}
+
+    metadata_image = struct.pack(">I", 0xC03B3998) + bytes((0xA5,)) * 1020
+    data_image = bytes((0x5A,)) * block_size
+    with image.open("rb") as source:
+        source.seek(metadata_home * block_size)
+        metadata_before = source.read(block_size)
+        source.seek(data_home * block_size)
+        data_before = source.read(block_size)
+        source.seek(revoke_home * block_size)
+        revoke_before = source.read(block_size)
+    assert all(
+        len(block) == block_size
+        for block in (metadata_before, data_before, revoke_before)
+    )
+    assert data_before != data_image
+
+    emitted = tmp_path / "jbd2-writer-one-transaction.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            image,
+            emitted,
+            [
+                "CREATE _EW-META 1024 ALLOT _EW-META 1024 0xA5 FILL",
+                "0xC03B3998 _EW-META _EXT4-BE32!",
+                "CREATE _EW-DATA 1024 ALLOT _EW-DATA 1024 0x5A FILL",
+                "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+                "_V _EXT4-CTX CONSTANT _EW-CTX",
+                (
+                    "1 1 1 _EW-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _EW-E-IOR CONSTANT _EW-W"
+                ),
+                "_EW-W _EXT4-JWR.HEAD + @ CONSTANT _EW-GUARD",
+                "_EW-W _EXT4-JWR.FREE + @ CONSTANT _EW-FREE-BEFORE",
+                "_EW-W _EXT4-JWR.NEXT-TID + @ CONSTANT _EW-TID",
+                (
+                    "_EW-GUARD _EW-CTX _EXT4-JOURNAL-NEXT "
+                    "CONSTANT _EW-START"
+                ),
+                (
+                    "_EW-GUARD 5 _EW-CTX _EXT4-JOURNAL-ADVANCE "
+                    "CONSTANT _EW-SENTINEL"
+                ),
+                "_EW-W _EXT4-JWR-ACTIVATE CONSTANT _EW-A-IOR",
+                (
+                    "1 1 1 _EW-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _EW-B-IOR CONSTANT _EW-T"
+                ),
+                (
+                    "_EW-META 30000 _EW-T _EXT4-JTX-META-PUT "
+                    "CONSTANT _EW-M-IOR"
+                ),
+                (
+                    "_EW-DATA 30001 _EW-T _EXT4-JTX-DATA-PUT "
+                    "CONSTANT _EW-D-IOR"
+                ),
+                "30002 _EW-T _EXT4-JTX-REVOKE CONSTANT _EW-R-IOR",
+                "_EW-T _EXT4-JTX-EMIT CONSTANT _EW-EMIT-IOR",
+                "_EW-T _EXT4-JTX-EMIT CONSTANT _EW-RETRY-IOR",
+                "_EW-T _EXT4-JTX-ABORT CONSTANT _EW-ABORT-IOR",
+                (
+                    "1 1 1 _EW-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _EW-NEW-IOR CONSTANT _EW-NEW-T"
+                ),
+                (
+                    "_M-IOR 0= _EW-E-IOR 0= AND _EW-A-IOR 0= AND "
+                    "_EW-B-IOR 0= AND _EW-T _EW-W = AND "
+                    "_EW-M-IOR 0= AND _EW-D-IOR 0= AND "
+                    "_EW-R-IOR 0= AND _EW-EMIT-IOR 0= AND "
+                    'IF ." EXT4-JTX-EMIT-RESULT" THEN'
+                ),
+                (
+                    "_EW-W _EXT4-JWR-VALID? "
+                    "_EW-W _EXT4-JWR.STATE + @ _EXT4-JWR-COMMITTED = AND "
+                    "_EW-W _EXT4-JWR.PHASE + @ _EXT4-JWP-NONE = AND "
+                    "_EW-W _EXT4-JWR.FAULT + @ 0= AND "
+                    "_EW-W _EXT4-JWR.LOG-RESERVED + @ 5 = AND "
+                    "_EW-W _EXT4-JWR.FREE + @ _EW-FREE-BEFORE 5 - = AND "
+                    "_EW-W _EXT4-JWR.TX-START + @ _EW-GUARD = AND "
+                    "_EW-W _EXT4-JWR.TX-CURSOR + @ _EW-SENTINEL = AND "
+                    "_EW-W _EXT4-JWR.HEAD + @ _EW-SENTINEL = AND "
+                    "_EW-W _EXT4-JWR.TAIL + @ _EW-GUARD = AND "
+                    "_EW-W _EXT4-JWR.NEXT-TID + @ "
+                    "_EW-TID 1+ 0xFFFFFFFF AND = AND "
+                    'IF ." EXT4-JTX-EMIT-WRITER-STATE" THEN'
+                ),
+                (
+                    "_EW-CTX _EXT4-C.RECOVERY + @ 0<> "
+                    "_EW-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<> AND "
+                    "_EW-CTX _EXT4-C.J.START + @ _EW-START = AND "
+                    "_EW-CTX _EXT4-C.J.SEQUENCE + @ _EW-TID = AND "
+                    "_EW-CTX _EXT4-C.J.HEAD + @ _EW-GUARD = AND "
+                    "_EW-CTX _EXT4-C.J.ANCHOR + @ _EW-GUARD = AND "
+                    "_EW-CTX _EXT4-C.J.CURSOR + @ _EW-SENTINEL = AND "
+                    "_EW-CTX _EXT4-C.J.COMMITTED + @ 1 = AND "
+                    "_EW-CTX _EXT4-C.J.NEXT-SEQUENCE + @ "
+                    "_EW-TID 2 + 0xFFFFFFFF AND = AND "
+                    "_EW-CTX _EXT4-C.J.CLEANUP + @ _EXT4-JC-ACTIVE = AND "
+                    'IF ." EXT4-JTX-EMIT-CONTEXT-STATE" THEN'
+                ),
+                (
+                    "_EW-W _EXT4-JWR.META-USED + @ 1 = "
+                    "_EW-W _EXT4-JWR.META-ACTIVE + @ 1 = AND "
+                    "_EW-W _EXT4-JWR.DATA-USED + @ 1 = AND "
+                    "_EW-W _EXT4-JWR.DATA-ACTIVE + @ 1 = AND "
+                    "_EW-W _EXT4-JWR.REVOKE-USED + @ 1 = AND "
+                    "_EW-W _EXT4-JWR.REVOKE-ACTIVE + @ 1 = AND "
+                    "0 _EW-W _EXT4-JWR-META-ENTRY @ 30000 = AND "
+                    "0 _EW-W _EXT4-JWR-DATA-ENTRY @ 30001 = AND "
+                    "0 _EW-W _EXT4-JWR-REVOKE-ENTRY @ 30002 = AND "
+                    "_EW-META _EW-W _EXT4-JWR.META-IMAGES + @ "
+                    "1024 _EXT4-BYTES=? AND "
+                    "_EW-DATA _EW-W _EXT4-JWR.DATA-IMAGES + @ "
+                    "1024 _EXT4-BYTES=? AND "
+                    'IF ." EXT4-JTX-EMIT-AFTERIMAGES" THEN'
+                ),
+                (
+                    "_EW-RETRY-IOR VFS-E-BUSY = "
+                    "_EW-ABORT-IOR VFS-E-BUSY = AND "
+                    "_EW-NEW-T 0= AND _EW-NEW-IOR VFS-E-BUSY = AND "
+                    'IF ." EXT4-JTX-EMIT-BUSY" THEN'
+                ),
+            ],
+            patches=source_patches,
+            capture_media=emitted,
+        )
+        _assert_emitted(output, "EXT4-JTX-EMIT-RESULT")
+        _assert_emitted(output, "EXT4-JTX-EMIT-WRITER-STATE")
+        _assert_emitted(output, "EXT4-JTX-EMIT-CONTEXT-STATE")
+        _assert_emitted(output, "EXT4-JTX-EMIT-AFTERIMAGES")
+        _assert_emitted(output, "EXT4-JTX-EMIT-BUSY")
+
+        # Activation owns writes 1-6.  The emission ordinals are data 7,
+        # descriptor 8, payload 9, revoke 10, commit preseed 11, sentinel 12,
+        # active-guard preseed 13, active guard 14, active primary 15, and
+        # final commit 16.  Ordered data and the log body share the body flush.
+        emission_trace = (
+            ("write", data_home * 2, 2),
+            ("write", physical["descriptor"] * 2, 2),
+            ("write", physical["payload"] * 2, 2),
+            ("write", physical["revoke"] * 2, 2),
+            ("write", physical["commit"] * 2, 2),
+            ("write", physical["sentinel"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["guard"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["guard"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", journal0_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["commit"] * 2, 2),
+            ("flush", 0, 0),
+        )
+        assert trace == activation_trace + emission_trace
+        assert emitted.is_file()
+        assert _sha256(emitted) == media_sha256
+
+        superblock, journal, guard = _read_jbd2_activation_media(
+            emitted, writer_activation_fixture
+        )
+        assert superblock == dirty_super
+        expected_tid = (
+            struct.unpack_from(">I", standard, 0x18)[0] + 1
+        ) & 0xFFFF_FFFF
+        expected_active = bytearray(standard)
+        struct.pack_into(">I", expected_active, 0x18, expected_tid)
+        struct.pack_into(">I", expected_active, 0x1C, logical["descriptor"])
+        struct.pack_into(">I", expected_active, 0x28, 0x13)
+        expected_active[0x50:0x54] = b"\x04\x00\x00\x00"
+        struct.pack_into(">I", expected_active, 0x54, 0)
+        struct.pack_into(">I", expected_active, 0x58, guard_logical)
+        expected_active[0x5C:0x88] = bytes(0x2C)
+        expected_active = _jbd2_super_with_checksum(expected_active)
+        assert journal == expected_active
+        assert guard == expected_active
+        assert _jbd2_super_checksum_valid(journal)
+
+        with emitted.open("rb") as source:
+            def read_block(block: int) -> bytes:
+                source.seek(block * block_size)
+                result = source.read(block_size)
+                assert len(result) == block_size
+                return result
+
+            metadata_after = read_block(metadata_home)
+            data_after = read_block(data_home)
+            revoke_after = read_block(revoke_home)
+            descriptor = read_block(physical["descriptor"])
+            payload = read_block(physical["payload"])
+            revoke = read_block(physical["revoke"])
+            commit = read_block(physical["commit"])
+            sentinel = read_block(physical["sentinel"])
+
+        assert metadata_after == metadata_before
+        assert data_after == data_image
+        assert revoke_after == revoke_before
+
+        escaped_metadata = bytes(4) + metadata_image[4:]
+        journal_uuid = expected_active[0x30:0x40]
+        tag_seed = _crc32c_raw(journal_uuid)
+        tag_seed = _crc32c_raw(struct.pack(">I", expected_tid), tag_seed)
+        tag_checksum = _crc32c_raw(escaped_metadata, tag_seed)
+        expected_descriptor = bytearray(block_size)
+        struct.pack_into(
+            ">IIIIIII",
+            expected_descriptor,
+            0,
+            0xC03B3998,
+            1,
+            expected_tid,
+            metadata_home,
+            0x09,
+            0,
+            tag_checksum,
+        )
+        expected_descriptor[0x1C:0x2C] = journal_uuid
+        expected_descriptor = _jbd2_metadata_with_checksum(
+            expected_descriptor, journal_uuid
+        )
+        assert descriptor == expected_descriptor
+        assert descriptor[0x1C:0x2C] == journal_uuid
+        assert payload == escaped_metadata
+
+        expected_revoke = bytearray(block_size)
+        struct.pack_into(
+            ">IIIIQ",
+            expected_revoke,
+            0,
+            0xC03B3998,
+            5,
+            expected_tid,
+            24,
+            revoke_home,
+        )
+        expected_revoke = _jbd2_metadata_with_checksum(
+            expected_revoke, journal_uuid
+        )
+        assert revoke == expected_revoke
+
+        expected_commit = bytearray(block_size)
+        struct.pack_into(
+            ">III", expected_commit, 0, 0xC03B3998, 2, expected_tid
+        )
+        expected_commit = _jbd2_commit_with_checksum(
+            expected_commit, journal_uuid, expected_tid
+        )
+        assert commit == expected_commit
+        assert sentinel == bytes(block_size)
+    finally:
+        emitted.unlink(missing_ok=True)
+
+
+def test_jbd2_writer_batches_descriptors_and_revokes_across_ring_wrap(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    """Qualify the smallest two-batch transaction across an admitted wrap."""
+    image = writer_activation_fixture["image"]
+    layout = writer_activation_fixture["layout"]
+    source_patches = writer_activation_fixture["source_patches"]
+    clean_super = writer_activation_fixture["clean_super"]
+    standard = writer_activation_fixture["standard"]
+    fixture_guard = writer_activation_fixture["guard_logical"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    assert isinstance(image, Path)
+    assert isinstance(layout, dict)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(clean_super, bytes)
+    assert isinstance(standard, bytes)
+    assert isinstance(fixture_guard, int)
+    assert isinstance(journal0_physical, int)
+
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    tags_per_block = (block_size - 32) // 16
+    revokes_per_block = (block_size - 20) // 8
+    metadata_count = tags_per_block + 1
+    revoke_count = revokes_per_block + 1
+    assert (tags_per_block, revokes_per_block) == (62, 125)
+    assert (metadata_count, revoke_count) == (63, 126)
+
+    metadata_base = 30000
+    data_home = metadata_base + metadata_count
+    revoke_base = data_home + 1
+    assert revoke_base + revoke_count <= layout["blocks"]
+    metadata_homes = tuple(
+        range(metadata_base, metadata_base + metadata_count)
+    )
+    revoke_homes = tuple(range(revoke_base, revoke_base + revoke_count))
+    assert len(set((*metadata_homes, data_home, *revoke_homes))) == (
+        metadata_count + 1 + revoke_count
+    )
+
+    def metadata_image(index: int) -> bytes:
+        assert 0 <= index < metadata_count
+        result = bytearray((index + 1,) * block_size)
+        if index in (0, tags_per_block):
+            struct.pack_into(">I", result, 0, 0xC03B3998)
+        return bytes(result)
+
+    metadata_images = tuple(
+        metadata_image(index) for index in range(metadata_count)
+    )
+    escaped_images = tuple(
+        bytes(4) + payload[4:]
+        if payload[:4] == struct.pack(">I", 0xC03B3998)
+        else payload
+        for payload in metadata_images
+    )
+    data_image = bytes((0x5A,)) * block_size
+    with image.open("rb") as source:
+        metadata_before = []
+        for home in metadata_homes:
+            source.seek(home * block_size)
+            metadata_before.append(source.read(block_size))
+        source.seek(data_home * block_size)
+        data_before = source.read(block_size)
+        revoke_before = []
+        for home in revoke_homes:
+            source.seek(home * block_size)
+            revoke_before.append(source.read(block_size))
+    metadata_before = tuple(metadata_before)
+    revoke_before = tuple(revoke_before)
+    assert all(len(payload) == block_size for payload in metadata_before)
+    assert len(data_before) == block_size
+    assert all(len(payload) == block_size for payload in revoke_before)
+    assert all(
+        before != after
+        for before, after in zip(
+            metadata_before, metadata_images, strict=True
+        )
+    )
+    assert data_before != data_image
+
+    first = struct.unpack_from(">I", standard, 0x14)[0]
+    maxlen = struct.unpack_from(">I", standard, 0x10)[0]
+    max_transaction = struct.unpack_from(">I", standard, 0x48)[0]
+    max_trans_data = struct.unpack_from(">I", standard, 0x4C)[0]
+    ring_capacity = maxlen - first
+    descriptor_blocks = (
+        metadata_count + tags_per_block - 1
+    ) // tags_per_block
+    revoke_blocks = (
+        revoke_count + revokes_per_block - 1
+    ) // revokes_per_block
+    log_blocks = metadata_count + descriptor_blocks + revoke_blocks + 2
+    assert descriptor_blocks == revoke_blocks == 2
+    assert log_blocks == 69
+    assert log_blocks <= ring_capacity - 1
+    assert max_transaction == 0 or log_blocks - 1 <= max_transaction
+    assert max_trans_data == 0 or 1 <= max_trans_data
+
+    # The feature-zero primary's persisted private head is already the fixture's
+    # admitted cursor.  Move only that checked field three slots from the end;
+    # production validation, activation, and reservation then emit the first
+    # descriptor and payload high before the next payload wraps naturally.
+    # No live writer state or admission result is forged.
+    wrap_guard = maxlen - 3
+    assert first <= wrap_guard < maxlen
+    assert struct.unpack_from(">I", standard, 0x58)[0] == fixture_guard
+    head_offset = journal0_physical * block_size + 0x58
+    matching_head_patches = [
+        patch for patch in source_patches if patch[0] == head_offset
+    ]
+    assert matching_head_patches == [
+        (head_offset, struct.pack(">I", fixture_guard))
+    ]
+    wrap_source_patches = tuple(
+        (offset, struct.pack(">I", wrap_guard))
+        if offset == head_offset
+        else (offset, payload)
+        for offset, payload in source_patches
+    )
+
+    descriptor_batches = (
+        tuple(range(tags_per_block)),
+        (tags_per_block,),
+    )
+    revoke_batches = (
+        tuple(range(revokes_per_block)),
+        (revokes_per_block,),
+    )
+    record_logicals: list[int] = []
+    descriptor_logicals: list[int] = []
+    payload_logicals: dict[int, int] = {}
+    revoke_logicals: list[int] = []
+    cursor = _jbd2_ring_advance(
+        wrap_guard, 1, first=first, maxlen=maxlen
+    )
+    for batch in descriptor_batches:
+        descriptor_logicals.append(cursor)
+        record_logicals.append(cursor)
+        cursor = _jbd2_ring_advance(cursor, 1, first=first, maxlen=maxlen)
+        for index in batch:
+            payload_logicals[index] = cursor
+            record_logicals.append(cursor)
+            cursor = _jbd2_ring_advance(
+                cursor, 1, first=first, maxlen=maxlen
+            )
+    for _batch in revoke_batches:
+        revoke_logicals.append(cursor)
+        record_logicals.append(cursor)
+        cursor = _jbd2_ring_advance(cursor, 1, first=first, maxlen=maxlen)
+    commit_logical = cursor
+    record_logicals.append(commit_logical)
+    cursor = _jbd2_ring_advance(cursor, 1, first=first, maxlen=maxlen)
+    sentinel_logical = cursor
+    record_logicals.append(sentinel_logical)
+    assert tuple(descriptor_logicals) == (4094, 62)
+    assert payload_logicals[0] == 4095
+    assert payload_logicals[1] == first
+    assert tuple(revoke_logicals) == (64, 65)
+    assert commit_logical == 66
+    assert sentinel_logical == 67
+    assert commit_logical == _jbd2_ring_advance(
+        wrap_guard, log_blocks - 1, first=first, maxlen=maxlen
+    )
+    assert sentinel_logical == _jbd2_ring_advance(
+        wrap_guard, log_blocks, first=first, maxlen=maxlen
+    )
+    assert len(record_logicals) == log_blocks
+    assert len(set((wrap_guard, *record_logicals))) == log_blocks + 1
+
+    journal_map = _ext4_journal_physical_map(
+        image, (0, wrap_guard, *record_logicals)
+    )
+    wrap_guard_physical = journal_map[wrap_guard]
+    activation_trace = (
+        ("write", wrap_guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", wrap_guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", wrap_guard_physical * 2, 2),
+        ("flush", 0, 0),
+    )
+    source_sequence = struct.unpack_from(">I", standard, 0x18)[0]
+    expected_tid = (source_sequence + 1) & 0xFFFF_FFFF
+    descriptor_start = descriptor_logicals[0]
+    journal_uuid = standard[0x30:0x40]
+    client_uuid = clean_super[0x68:0x78]
+    assert len(journal_uuid) == len(client_uuid) == 16
+    assert journal_uuid == client_uuid
+
+    media_path = tmp_path / "jbd2-writer-multi-batch-wrap.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            image,
+            media_path,
+            [
+                "CREATE _GB-META 1024 ALLOT",
+                "CREATE _GB-DATA 1024 ALLOT _GB-DATA 1024 0x5A FILL",
+                "VARIABLE _GB-I VARIABLE _GB-STAGE-IOR",
+                (
+                    ": _GB-BUILD-META ( index -- ) "
+                    "DUP _GB-I ! 1+ _GB-META 1024 ROT FILL "
+                    "_GB-I @ DUP 0= SWAP 62 = OR IF "
+                    "0xC03B3998 _GB-META _EXT4-BE32! THEN ;"
+                ),
+                "T-ARENA CONSTANT _GB-ARENA",
+                (
+                    "_GB-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _GB-MOUNT-IOR CONSTANT _GB-V"
+                ),
+                "_GB-V _EXT4-CTX CONSTANT _GB-CTX",
+                (
+                    "63 1 126 _GB-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _GB-E-IOR CONSTANT _GB-W"
+                ),
+                (
+                    "63 126 _GB-W _EXT4-JTX-LOG-BLOCKS "
+                    "CONSTANT _GB-LOG-IOR CONSTANT _GB-LOG"
+                ),
+                (
+                    "_GB-MOUNT-IOR 0= _GB-E-IOR 0= AND "
+                    "_GB-W _EXT4-JTX-TAGS/BLOCK 62 = AND "
+                    "_GB-W _EXT4-JTX-REVOKES/BLOCK 125 = AND "
+                    "_GB-LOG-IOR 0= AND _GB-LOG 69 = AND "
+                    f"_GB-W _EXT4-JWR.HEAD + @ {wrap_guard} = AND "
+                    f"_GB-W _EXT4-JWR.FREE + @ {ring_capacity - 1} = AND "
+                    f"_GB-CTX _EXT4-C.J.MAX-TRANSACTION + @ "
+                    f"{max_transaction} = AND "
+                    f"_GB-CTX _EXT4-C.J.MAX-TRANS-DATA + @ "
+                    f"{max_trans_data} = AND "
+                    'IF ." EXT4-JTX-BATCH-LIMITS" THEN'
+                ),
+                "_GB-W _EXT4-JWR-ACTIVATE CONSTANT _GB-A-IOR",
+                (
+                    "63 1 126 _GB-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _GB-B-IOR CONSTANT _GB-T"
+                ),
+                (
+                    ": _GB-STAGE-META ( -- ior ) "
+                    "0 _GB-I ! 0 _GB-STAGE-IOR ! BEGIN "
+                    "_GB-I @ 63 < _GB-STAGE-IOR @ 0= AND WHILE "
+                    "_GB-I @ _GB-BUILD-META _GB-META "
+                    "30000 _GB-I @ + _GB-T _EXT4-JTX-META-PUT "
+                    "_GB-STAGE-IOR ! 1 _GB-I +! REPEAT "
+                    "_GB-STAGE-IOR @ ;"
+                ),
+                "_GB-STAGE-META CONSTANT _GB-META-IOR",
+                (
+                    "_GB-DATA 30063 _GB-T _EXT4-JTX-DATA-PUT "
+                    "CONSTANT _GB-DATA-IOR"
+                ),
+                (
+                    ": _GB-STAGE-REVOKES ( -- ior ) "
+                    "0 _GB-I ! 0 _GB-STAGE-IOR ! BEGIN "
+                    "_GB-I @ 126 < _GB-STAGE-IOR @ 0= AND WHILE "
+                    "30064 _GB-I @ + _GB-T _EXT4-JTX-REVOKE "
+                    "_GB-STAGE-IOR ! 1 _GB-I +! REPEAT "
+                    "_GB-STAGE-IOR @ ;"
+                ),
+                "_GB-STAGE-REVOKES CONSTANT _GB-REVOKE-IOR",
+                ": _GB-RETAINED? ( -- flag )",
+                (
+                    "_GB-W _EXT4-JWR.META-USED + @ 63 = "
+                    "_GB-W _EXT4-JWR.META-ACTIVE + @ 63 = AND "
+                    "_GB-W _EXT4-JWR.DATA-USED + @ 1 = AND "
+                    "_GB-W _EXT4-JWR.DATA-ACTIVE + @ 1 = AND"
+                ),
+                (
+                    "_GB-W _EXT4-JWR.REVOKE-USED + @ 126 = AND "
+                    "_GB-W _EXT4-JWR.REVOKE-ACTIVE + @ 126 = AND "
+                    "0= IF FALSE EXIT THEN"
+                ),
+                "0 _GB-I ! BEGIN _GB-I @ 63 < WHILE",
+                (
+                    "_GB-I @ _GB-W _EXT4-JWR-META-ENTRY DUP @ "
+                    "30000 _GB-I @ + = SWAP CELL+ @ "
+                    "_EXT4-JE-ACTIVE = AND 0= IF FALSE EXIT THEN"
+                ),
+                (
+                    "_GB-I @ _GB-BUILD-META _GB-META _GB-I @ _GB-W "
+                    "_EXT4-JWR-META-IMAGE 1024 _EXT4-BYTES=? "
+                    "0= IF FALSE EXIT THEN 1 _GB-I +! REPEAT"
+                ),
+                (
+                    "0 _GB-W _EXT4-JWR-DATA-ENTRY DUP @ 30063 = "
+                    "SWAP CELL+ @ _EXT4-JE-ACTIVE = AND "
+                    "0= IF FALSE EXIT THEN"
+                ),
+                (
+                    "_GB-DATA 0 _GB-W _EXT4-JWR-DATA-IMAGE "
+                    "1024 _EXT4-BYTES=? 0= IF FALSE EXIT THEN"
+                ),
+                "0 _GB-I ! BEGIN _GB-I @ 126 < WHILE",
+                (
+                    "_GB-I @ _GB-W _EXT4-JWR-REVOKE-ENTRY DUP @ "
+                    "30064 _GB-I @ + = SWAP CELL+ @ "
+                    "_EXT4-JE-ACTIVE = AND 0= IF FALSE EXIT THEN"
+                ),
+                "1 _GB-I +! REPEAT TRUE ;",
+                "_GB-T _EXT4-JTX-EMIT CONSTANT _GB-EMIT-IOR",
+                (
+                    "_GB-A-IOR 0= _GB-B-IOR 0= AND _GB-T _GB-W = AND "
+                    "_GB-META-IOR 0= AND _GB-DATA-IOR 0= AND "
+                    "_GB-REVOKE-IOR 0= AND _GB-EMIT-IOR 0= AND "
+                    "_GB-RETAINED? AND"
+                ),
+                (
+                    "_GB-W _EXT4-JWR-VALID? AND "
+                    "_GB-W _EXT4-JWR.STATE + @ _EXT4-JWR-COMMITTED = AND "
+                    "_GB-W _EXT4-JWR.LOG-RESERVED + @ 69 = AND "
+                    f"_GB-W _EXT4-JWR.FREE + @ "
+                    f"{ring_capacity - 1 - log_blocks} = AND"
+                ),
+                (
+                    f"_GB-W _EXT4-JWR.TX-START + @ {wrap_guard} = AND "
+                    f"_GB-W _EXT4-JWR.TX-CURSOR + @ {sentinel_logical} "
+                    "= AND _GB-W _EXT4-JWR.HEAD + @ "
+                    f"{sentinel_logical} = AND "
+                    f"_GB-W _EXT4-JWR.TAIL + @ {wrap_guard} = AND"
+                ),
+                (
+                    f"_GB-CTX _EXT4-C.J.START + @ {descriptor_start} = AND "
+                    f"_GB-CTX _EXT4-C.J.SEQUENCE + @ {expected_tid} = AND "
+                    f"_GB-CTX _EXT4-C.J.HEAD + @ {wrap_guard} = AND "
+                    f"_GB-CTX _EXT4-C.J.ANCHOR + @ {wrap_guard} = AND"
+                ),
+                (
+                    f"_GB-CTX _EXT4-C.J.CURSOR + @ {sentinel_logical} "
+                    "= AND _GB-CTX _EXT4-C.J.COMMITTED + @ 1 = AND "
+                    f"_GB-CTX _EXT4-C.J.NEXT-SEQUENCE + @ "
+                    f"{(expected_tid + 2) & 0xFFFF_FFFF} = AND"
+                ),
+                'IF ." EXT4-JTX-BATCH-EMITTED" THEN',
+                "_GB-V _EXT4-MOUNT CONSTANT _GB-REMOUNT-IOR",
+                "_GB-ARENA ARENA-USED CONSTANT _GB-USED-AFTER-REMOUNT",
+                (
+                    "_GB-CTX _EXT4-C.J.WRITER + @ _GB-W = "
+                    "_GB-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<> AND "
+                    "_GB-W _EXT4-JWR-VALID? AND "
+                    "_GB-W _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE = AND "
+                    "_GB-W _EXT4-JWR.FAULT + @ 0= AND"
+                ),
+                (
+                    "_GB-W _EXT4-JWR.META-USED + @ 0= AND "
+                    "_GB-W _EXT4-JWR.DATA-USED + @ 0= AND "
+                    "_GB-W _EXT4-JWR.REVOKE-USED + @ 0= AND "
+                    "0 _GB-W _EXT4-JWR-META-IMAGE C@ 0= AND "
+                    "62 _GB-W _EXT4-JWR-META-IMAGE C@ 0= AND"
+                ),
+                (
+                    "0 _GB-W _EXT4-JWR-DATA-IMAGE C@ 0= AND "
+                    "0 _GB-W _EXT4-JWR-REVOKE-ENTRY @ 0= AND "
+                    "125 _GB-W _EXT4-JWR-REVOKE-ENTRY @ 0= AND"
+                ),
+                (
+                    "_GB-W _EXT4-JWR.HEAD + @ "
+                    "_GB-CTX _EXT4-C.J.HEAD + @ = AND "
+                    "_GB-W _EXT4-JWR.TAIL + @ "
+                    "_GB-CTX _EXT4-C.J.HEAD + @ = AND"
+                ),
+                (
+                    "_GB-W _EXT4-JWR.NEXT-TID + @ "
+                    "_GB-CTX _EXT4-C.J.SEQUENCE + @ 1+ "
+                    "0xFFFFFFFF AND = AND CONSTANT _GB-MOUNT-REBASED"
+                ),
+                (
+                    ": _GB-HOMES? ( -- flag ) 0 _GB-I ! BEGIN "
+                    "_GB-I @ 63 < WHILE 30000 _GB-I @ + _GB-CTX "
+                    "_EXT4-READ-BLOCK ?DUP IF DROP FALSE EXIT THEN "
+                    "_GB-I @ _GB-BUILD-META _GB-CTX _EXT4-C.BLOCK + "
+                    "_GB-META 1024 _EXT4-BYTES=? "
+                    "0= IF FALSE EXIT THEN 1 _GB-I +! REPEAT TRUE ;"
+                ),
+                (
+                    "63 1 126 _GB-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _GB-REUSE-IOR CONSTANT _GB-REUSE-W"
+                ),
+                "_GB-ARENA ARENA-USED CONSTANT _GB-USED-AFTER-ENSURE",
+                (
+                    "_GB-REMOUNT-IOR 0= "
+                    "_GB-V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                    "_GB-V _EXT4-READY? AND _GB-MOUNT-REBASED AND "
+                    "_GB-CTX _EXT4-C.RECOVERY + @ 0= AND "
+                    "_GB-CTX _EXT4-C.J.REPLAYED + @ 0<> AND"
+                ),
+                (
+                    "_GB-CTX _EXT4-C.J.START + @ 0= AND "
+                    "_GB-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
+                    "_GB-CTX _EXT4-C.J.CLEANUP + @ _EXT4-JC-NONE = AND"
+                ),
+                (
+                    "_GB-CTX _EXT4-C.J.FEATURES + @ "
+                    "_EXT4-JBD2-I-RECOVERY-REVOKE = AND "
+                    "_GB-CTX _EXT4-C.J.COMMITTED + @ 1 = AND "
+                    "_GB-CTX _EXT4-C.J.HOME-WRITES + @ 63 = AND"
+                ),
+                (
+                    "_GB-CTX _EXT4-C.J.REVOKE-COUNT + @ 126 = AND "
+                    "_GB-CTX _EXT4-C.J.REVOKE-HITS + @ 0= AND "
+                    "_GB-CTX _EXT4-C.J.REVOKE-READY + @ 0= AND"
+                ),
+                (
+                    "_GB-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                    "_GB-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
+                    "_EXT4-INCOMPAT-RECOVER AND 0= AND _GB-HOMES? AND"
+                ),
+                (
+                    "_GB-REUSE-IOR 0= AND _GB-REUSE-W _GB-W = AND "
+                    "_GB-USED-AFTER-ENSURE _GB-USED-AFTER-REMOUNT = AND"
+                ),
+                'IF ." EXT4-JTX-BATCH-REMOUNTED" THEN',
+            ],
+            patches=wrap_source_patches,
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-JTX-BATCH-LIMITS")
+        _assert_emitted(output, "EXT4-JTX-BATCH-EMITTED")
+        _assert_emitted(output, "EXT4-JTX-BATCH-REMOUNTED")
+
+        emission_trace = (
+            (("write", data_home * 2, 2),)
+            + tuple(
+                ("write", journal_map[logical] * 2, 2)
+                for logical in record_logicals
+            )
+            + (
+                ("flush", 0, 0),
+                ("write", wrap_guard_physical * 2, 2),
+                ("flush", 0, 0),
+                ("write", wrap_guard_physical * 2, 2),
+                ("flush", 0, 0),
+                ("write", journal0_physical * 2, 2),
+                ("flush", 0, 0),
+                ("write", journal_map[commit_logical] * 2, 2),
+                ("flush", 0, 0),
+            )
+        )
+        recovery_trace = (
+            tuple(("write", home * 2, 2) for home in metadata_homes)
+            + (
+                ("flush", 0, 0),
+                ("write", wrap_guard_physical * 2, 2),
+                ("flush", 0, 0),
+                ("write", wrap_guard_physical * 2, 2),
+                ("flush", 0, 0),
+                ("write", journal0_physical * 2, 2),
+                ("flush", 0, 0),
+                ("write", 2, 2),
+                ("flush", 0, 0),
+                ("write", journal0_physical * 2, 2),
+                ("flush", 0, 0),
+                ("write", wrap_guard_physical * 2, 2),
+                ("flush", 0, 0),
+            )
+        )
+        assert trace == activation_trace + emission_trace + recovery_trace
+        assert ("write", data_home * 2, 2) not in recovery_trace
+        assert not any(
+            ("write", home * 2, 2) in recovery_trace
+            for home in revoke_homes
+        )
+
+        assert media_path.is_file()
+        media_stat = media_path.stat()
+        assert media_stat.st_size == image.stat().st_size
+        assert media_stat.st_blocks * 512 < media_stat.st_size
+        assert _sha256(media_path) == media_sha256
+        with media_path.open("rb") as source:
+            def read_block(physical_block: int) -> bytes:
+                source.seek(physical_block * block_size)
+                result = source.read(block_size)
+                assert len(result) == block_size
+                return result
+
+            final_super = read_block(layout["primary_super"])
+            final_journal = read_block(journal0_physical)
+            final_guard = read_block(wrap_guard_physical)
+            descriptors = tuple(
+                read_block(journal_map[logical])
+                for logical in descriptor_logicals
+            )
+            payloads = tuple(
+                read_block(journal_map[payload_logicals[index]])
+                for index in range(metadata_count)
+            )
+            revokes = tuple(
+                read_block(journal_map[logical])
+                for logical in revoke_logicals
+            )
+            commit = read_block(journal_map[commit_logical])
+            sentinel = read_block(journal_map[sentinel_logical])
+            metadata_after = tuple(read_block(home) for home in metadata_homes)
+            data_after = read_block(data_home)
+            revoke_after = tuple(read_block(home) for home in revoke_homes)
+
+        assert final_super == clean_super
+        expected_final_journal = bytearray(standard)
+        struct.pack_into(
+            ">I",
+            expected_final_journal,
+            0x18,
+            (expected_tid + 2) & 0xFFFF_FFFF,
+        )
+        struct.pack_into(">I", expected_final_journal, 0x1C, 0)
+        struct.pack_into(">I", expected_final_journal, 0x58, wrap_guard)
+        expected_final_journal = _jbd2_super_with_checksum(
+            expected_final_journal
+        )
+        assert final_journal == expected_final_journal
+        assert _jbd2_super_checksum_valid(final_journal)
+        assert final_guard == bytes(block_size)
+
+        tag_seed = _crc32c_raw(journal_uuid)
+        tag_seed = _crc32c_raw(struct.pack(">I", expected_tid), tag_seed)
+        for descriptor, batch in zip(
+            descriptors, descriptor_batches, strict=True
+        ):
+            expected_descriptor = bytearray(block_size)
+            struct.pack_into(
+                ">III",
+                expected_descriptor,
+                0,
+                0xC03B3998,
+                1,
+                expected_tid,
+            )
+            offset = 12
+            for batch_index, metadata_index in enumerate(batch):
+                flags = 0
+                if metadata_index in (0, tags_per_block):
+                    flags |= 0x01
+                if batch_index:
+                    flags |= 0x02
+                if batch_index == len(batch) - 1:
+                    flags |= 0x08
+                tag_checksum = _crc32c_raw(
+                    escaped_images[metadata_index], tag_seed
+                )
+                struct.pack_into(
+                    ">IIII",
+                    expected_descriptor,
+                    offset,
+                    metadata_homes[metadata_index],
+                    flags,
+                    0,
+                    tag_checksum,
+                )
+                assert struct.unpack_from(">IIII", descriptor, offset) == (
+                    metadata_homes[metadata_index],
+                    flags,
+                    0,
+                    tag_checksum,
+                )
+                offset += 16
+                if batch_index == 0:
+                    expected_descriptor[offset : offset + 16] = client_uuid
+                    assert descriptor[offset : offset + 16] == client_uuid
+                    offset += 16
+            assert descriptor[offset:-4] == bytes(block_size - 4 - offset)
+            expected_descriptor = _jbd2_metadata_with_checksum(
+                expected_descriptor, journal_uuid
+            )
+            assert descriptor == expected_descriptor
+            assert descriptor == _jbd2_metadata_with_checksum(
+                descriptor, journal_uuid
+            )
+        assert payloads == escaped_images
+
+        for revoke, batch in zip(revokes, revoke_batches, strict=True):
+            expected_revoke = bytearray(block_size)
+            struct.pack_into(
+                ">IIII",
+                expected_revoke,
+                0,
+                0xC03B3998,
+                5,
+                expected_tid,
+                16 + len(batch) * 8,
+            )
+            for batch_index, revoke_index in enumerate(batch):
+                struct.pack_into(
+                    ">Q",
+                    expected_revoke,
+                    16 + batch_index * 8,
+                    revoke_homes[revoke_index],
+                )
+            expected_revoke = _jbd2_metadata_with_checksum(
+                expected_revoke, journal_uuid
+            )
+            assert revoke == expected_revoke
+            assert revoke == _jbd2_metadata_with_checksum(
+                revoke, journal_uuid
+            )
+            assert struct.unpack_from(">I", revoke, 0x0C)[0] == (
+                16 + len(batch) * 8
+            )
+            assert tuple(
+                struct.unpack_from(">Q", revoke, 16 + index * 8)[0]
+                for index in range(len(batch))
+            ) == tuple(revoke_homes[index] for index in batch)
+
+        expected_commit = bytearray(block_size)
+        struct.pack_into(
+            ">III", expected_commit, 0, 0xC03B3998, 2, expected_tid
+        )
+        expected_commit = _jbd2_commit_with_checksum(
+            expected_commit, journal_uuid, expected_tid
+        )
+        assert commit == expected_commit
+        assert sentinel == bytes(block_size)
+        assert metadata_after == metadata_images
+        assert data_after == data_image
+        assert revoke_after == revoke_before
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
+def test_jbd2_active_reset_publication_retries_from_emitted_commit(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    """Converge both AKG1 guard endpoints and a torn primary publication."""
+    image = writer_activation_fixture["image"]
+    layout = writer_activation_fixture["layout"]
+    source_patches = writer_activation_fixture["source_patches"]
+    clean_super = writer_activation_fixture["clean_super"]
+    dirty_super = writer_activation_fixture["dirty_super"]
+    standard = writer_activation_fixture["standard"]
+    guard_logical = writer_activation_fixture["guard_logical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    assert isinstance(image, Path)
+    assert isinstance(layout, dict)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(clean_super, bytes)
+    assert isinstance(dirty_super, bytes)
+    assert isinstance(standard, bytes)
+    assert isinstance(guard_logical, int)
+    assert isinstance(guard_physical, int)
+    assert isinstance(journal0_physical, int)
+
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    metadata_home = 30000
+    data_home = 30001
+    revoke_home = 30002
+    assert revoke_home < layout["blocks"]
+    metadata_image = struct.pack(">I", 0xC03B3998) + bytes((0xA5,)) * 1020
+    data_image = bytes((0x5A,)) * block_size
+    with image.open("rb") as source:
+        source.seek(metadata_home * block_size)
+        metadata_before = source.read(block_size)
+        source.seek(data_home * block_size)
+        data_before = source.read(block_size)
+        source.seek(revoke_home * block_size)
+        revoke_before = source.read(block_size)
+    assert all(
+        len(block) == block_size
+        for block in (metadata_before, data_before, revoke_before)
+    )
+    assert metadata_before != metadata_image
+    assert data_before != data_image
+
+    first = struct.unpack_from(">I", standard, 0x14)[0]
+    maxlen = struct.unpack_from(">I", standard, 0x10)[0]
+    descriptor_logical = _jbd2_ring_advance(
+        guard_logical, 1, first=first, maxlen=maxlen
+    )
+    expected_tid = (
+        struct.unpack_from(">I", standard, 0x18)[0] + 1
+    ) & 0xFFFF_FFFF
+    expected_active = bytearray(standard)
+    struct.pack_into(">I", expected_active, 0x18, expected_tid)
+    struct.pack_into(">I", expected_active, 0x1C, descriptor_logical)
+    struct.pack_into(">I", expected_active, 0x28, 0x13)
+    expected_active[0x50:0x54] = b"\x04\x00\x00\x00"
+    struct.pack_into(">I", expected_active, 0x54, 0)
+    struct.pack_into(">I", expected_active, 0x58, guard_logical)
+    expected_active[0x5C:0x88] = bytes(0x2C)
+    expected_active = _jbd2_super_with_checksum(expected_active)
+
+    clean_checksum = struct.unpack_from("<I", clean_super, 0x3FC)[0]
+    active_crc = _crc32c_raw(expected_active)
+    expected_reset = bytearray(expected_active)
+    struct.pack_into(">I", expected_reset, 0x18, (expected_tid + 2) & 0xFFFF_FFFF)
+    struct.pack_into(">I", expected_reset, 0x1C, 0)
+    struct.pack_into(">I", expected_reset, 0x58, guard_logical)
+    struct.pack_into(">I", expected_reset, 0x5C, 0x414B5231)
+    struct.pack_into(">I", expected_reset, 0x60, clean_checksum)
+    struct.pack_into(">I", expected_reset, 0x64, clean_checksum ^ 0xFFFF_FFFF)
+    struct.pack_into(">I", expected_reset, 0x68, guard_logical)
+    struct.pack_into(">I", expected_reset, 0x6C, guard_logical ^ 0xFFFF_FFFF)
+    struct.pack_into(">I", expected_reset, 0x70, 0x414B4731)
+    struct.pack_into(">I", expected_reset, 0x74, 0xBEB4B8CE)
+    struct.pack_into(">I", expected_reset, 0x78, expected_tid)
+    struct.pack_into(">I", expected_reset, 0x7C, expected_tid ^ 0xFFFF_FFFF)
+    struct.pack_into(">I", expected_reset, 0x80, active_crc)
+    struct.pack_into(">I", expected_reset, 0x84, active_crc ^ 0xFFFF_FFFF)
+    expected_reset = _jbd2_super_with_checksum(expected_reset)
+    expected_preseed = bytearray(expected_reset)
+    expected_preseed[0] = 0
+    expected_preseed = bytes(expected_preseed)
+    expected_standard = bytearray(expected_reset)
+    expected_standard[0x5C:0x88] = bytes(0x2C)
+    expected_standard = _jbd2_super_with_checksum(expected_standard)
+    assert _jbd2_super_checksum_valid(expected_active)
+    assert _jbd2_super_checksum_valid(expected_reset)
+    assert _jbd2_super_checksum_valid(expected_standard)
+    assert expected_preseed[1:] == expected_reset[1:]
+
+    committed = tmp_path / "jbd2-active-reset-committed.img"
+    working = tmp_path / "jbd2-active-reset-working.img"
+    try:
+        output, _emit_trace, committed_sha256 = run_recovery_forth(
+            image,
+            committed,
+            [
+                "CREATE _RR-META 1024 ALLOT _RR-META 1024 0xA5 FILL",
+                "0xC03B3998 _RR-META _EXT4-BE32!",
+                "CREATE _RR-DATA 1024 ALLOT _RR-DATA 1024 0x5A FILL",
+                "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+                "_V _EXT4-CTX CONSTANT _RR-CTX",
+                (
+                    "1 1 1 _RR-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _RR-E-IOR CONSTANT _RR-W"
+                ),
+                "_RR-W _EXT4-JWR-ACTIVATE CONSTANT _RR-A-IOR",
+                (
+                    "1 1 1 _RR-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _RR-B-IOR CONSTANT _RR-T"
+                ),
+                (
+                    "_RR-META 30000 _RR-T _EXT4-JTX-META-PUT "
+                    "CONSTANT _RR-M-IOR"
+                ),
+                (
+                    "_RR-DATA 30001 _RR-T _EXT4-JTX-DATA-PUT "
+                    "CONSTANT _RR-D-IOR"
+                ),
+                "30002 _RR-T _EXT4-JTX-REVOKE CONSTANT _RR-R-IOR",
+                "_RR-T _EXT4-JTX-EMIT CONSTANT _RR-EMIT-IOR",
+                (
+                    "_M-IOR 0= _RR-E-IOR 0= AND _RR-A-IOR 0= AND "
+                    "_RR-B-IOR 0= AND _RR-M-IOR 0= AND "
+                    "_RR-D-IOR 0= AND _RR-R-IOR 0= AND "
+                    "_RR-EMIT-IOR 0= AND "
+                    "_RR-W _EXT4-JWR.STATE + @ _EXT4-JWR-COMMITTED = AND "
+                    "_RR-CTX _EXT4-C.J.CLEANUP + @ _EXT4-JC-ACTIVE = AND "
+                    'IF ." EXT4-JBD2-ACTIVE-RESET-BASE" THEN'
+                ),
+            ],
+            patches=source_patches,
+            capture_media=committed,
+        )
+        _assert_emitted(output, "EXT4-JBD2-ACTIVE-RESET-BASE")
+        assert committed.is_file()
+        assert _sha256(committed) == committed_sha256
+        superblock, journal, guard = _read_jbd2_activation_media(
+            committed, writer_activation_fixture
+        )
+        assert superblock == dirty_super
+        assert journal == expected_active
+        assert guard == expected_active
+        with committed.open("rb") as source:
+            source.seek(metadata_home * block_size)
+            assert source.read(block_size) == metadata_before
+            source.seek(data_home * block_size)
+            assert source.read(block_size) == data_image
+            source.seek(revoke_home * block_size)
+            assert source.read(block_size) == revoke_before
+
+        recovery_trace = (
+            ("write", metadata_home * 2, 2),
+            ("flush", 0, 0),
+            ("write", guard_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", guard_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", journal0_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", 2, 2),
+            ("flush", 0, 0),
+            ("write", journal0_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", guard_physical * 2, 2),
+            ("flush", 0, 0),
+        )
+        primary_retry_trace = (
+            ("flush", 0, 0),
+            ("write", journal0_physical * 2, 2),
+            ("flush", 0, 0),
+            ("flush", 0, 0),
+            ("write", 2, 2),
+            ("flush", 0, 0),
+            ("write", journal0_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", guard_physical * 2, 2),
+            ("flush", 0, 0),
+        )
+        rows = (
+            ("guard-preseed", 2, 8, 1),
+            ("guard-valid", 3, 1, 1),
+            ("primary", 4, 50, 0),
+        )
+        for phase, write_ordinal, byte_index, expected_home_writes in rows:
+            try:
+                output, interrupted_trace, interrupted_sha256 = (
+                    run_recovery_forth(
+                        committed,
+                        working,
+                        [
+                            (
+                                "T-ARENA T-VOLUME EXT4-NEW "
+                                "CONSTANT _M-IOR CONSTANT _V"
+                            ),
+                            (
+                                "_M-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = "
+                                "_M-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                                "_M-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL "
+                                "AND 0<> AND "
+                                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                                'IF ." EXT4-JBD2-ACTIVE-RESET-TEAR" THEN'
+                            ),
+                        ],
+                        write_faults_by_ordinal={
+                            write_ordinal: {
+                                "stage": "media",
+                                "sector_index": 0,
+                                "byte_index": byte_index,
+                                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                                "command": STORAGE_CMD_WRITE,
+                            }
+                        },
+                        capture_media=working,
+                    )
+                )
+                _assert_emitted(output, "EXT4-JBD2-ACTIVE-RESET-TEAR")
+                assert interrupted_trace == recovery_trace[
+                    : 2 * (write_ordinal - 1) + 1
+                ]
+                assert working.is_file()
+                assert _sha256(working) == interrupted_sha256
+
+                superblock, journal, guard = _read_jbd2_activation_media(
+                    working, writer_activation_fixture
+                )
+                assert superblock == dirty_super
+                if phase == "guard-preseed":
+                    torn_guard = expected_preseed[:8] + expected_active[8:]
+                    assert journal == expected_active
+                    assert guard == torn_guard
+                    assert _sequential_prefix_merge(
+                        expected_preseed, expected_active, guard
+                    )
+                    assert guard not in {expected_active, expected_reset}
+                    assert not _jbd2_super_checksum_valid(guard)
+                elif phase == "guard-valid":
+                    assert journal == expected_active
+                    assert guard == expected_reset
+                else:
+                    assert phase == "primary"
+                    torn_primary = expected_reset[:50] + expected_active[50:]
+                    assert guard == expected_reset
+                    assert journal == torn_primary
+                    assert _sequential_prefix_merge(
+                        expected_reset, expected_active, journal
+                    )
+                    assert journal not in {expected_active, expected_reset}
+                    assert journal[0x5C:0x88] == bytes(0x2C)
+                    assert not _jbd2_super_checksum_valid(journal)
+
+                with working.open("rb") as source:
+                    source.seek(metadata_home * block_size)
+                    assert source.read(block_size) == metadata_image
+                    source.seek(data_home * block_size)
+                    assert source.read(block_size) == data_image
+                    source.seek(revoke_home * block_size)
+                    assert source.read(block_size) == revoke_before
+
+                output, retry_trace, retry_sha256 = run_recovery_forth(
+                    working,
+                    working,
+                    [
+                        "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+                        "_V _EXT4-CTX CONSTANT _RRR-CTX",
+                        (
+                            "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                            "_V _EXT4-READY? AND "
+                            "_RRR-CTX _EXT4-C.RECOVERY + @ 0= AND "
+                            "_RRR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0= AND "
+                            "_RRR-CTX _EXT4-C.J.FEATURES + @ "
+                            "_EXT4-JBD2-I-RECOVERY-REVOKE = AND "
+                            "_RRR-CTX _EXT4-C.J.START + @ 0= AND "
+                            "_RRR-CTX _EXT4-C.J.WITNESS + @ "
+                            "_EXT4-JW-NONE = AND "
+                            "_RRR-CTX _EXT4-C.J.ANCHOR + @ 0= AND "
+                            "_RRR-CTX _EXT4-C.J.CLEANUP + @ "
+                            "_EXT4-JC-NONE = AND "
+                            "_RRR-CTX _EXT4-C.J.PRIMARY-TORN + @ 0= AND "
+                            "_RRR-CTX _EXT4-C.SUPER-TORN + @ 0= AND "
+                            "_RRR-CTX _EXT4-C.J.REPLAYED + @ 0<> AND "
+                            "_RRR-CTX _EXT4-C.J.HOME-WRITES + @ "
+                            f"{expected_home_writes} = AND "
+                            "_RRR-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                            "_RRR-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0= AND "
+                            'IF ." EXT4-JBD2-ACTIVE-RESET-RETRIED" THEN'
+                        ),
+                    ],
+                    capture_media=working,
+                )
+                _assert_emitted(output, "EXT4-JBD2-ACTIVE-RESET-RETRIED")
+                assert retry_trace == (
+                    primary_retry_trace
+                    if phase == "primary"
+                    else recovery_trace
+                )
+                assert _sha256(working) == retry_sha256
+                superblock, journal, guard = _read_jbd2_activation_media(
+                    working, writer_activation_fixture
+                )
+                assert superblock == clean_super
+                assert journal == expected_standard
+                assert guard == bytes(block_size)
+                with working.open("rb") as source:
+                    source.seek(metadata_home * block_size)
+                    assert source.read(block_size) == metadata_image
+                    source.seek(data_home * block_size)
+                    assert source.read(block_size) == data_image
+                    source.seek(revoke_home * block_size)
+                    assert source.read(block_size) == revoke_before
+            finally:
+                working.unlink(missing_ok=True)
+    finally:
+        committed.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    (
+        "case",
+        "write_ordinal",
+        "sector_index",
+        "byte_index",
+        "phase_word",
+        "commit_durable",
+    ),
+    (
+        pytest.param(
+            "primary-early",
+            15,
+            0,
+            50,
+            "_EXT4-JWP-ACTIVE-PRIMARY",
+            False,
+            id="active-primary-early",
+        ),
+        pytest.param(
+            "primary-checksum",
+            15,
+            0,
+            254,
+            "_EXT4-JWP-ACTIVE-PRIMARY",
+            False,
+            id="active-primary-checksum",
+        ),
+        pytest.param(
+            "commit-invalid",
+            16,
+            0,
+            0,
+            "_EXT4-JWP-COMMIT",
+            False,
+            id="commit-invalid-endpoint",
+        ),
+        pytest.param(
+            "commit-exact",
+            16,
+            0,
+            1,
+            "_EXT4-JWP-COMMIT",
+            True,
+            id="commit-exact-endpoint",
+        ),
+    ),
+)
+def test_jbd2_writer_publication_faults_remount_and_rebase_in_place(
+    writer_activation_fixture: dict[str, object],
+    tmp_path: Path,
+    case: str,
+    write_ordinal: int,
+    sector_index: int,
+    byte_index: int,
+    phase_word: str,
+    commit_durable: bool,
+) -> None:
+    """Resolve the four publication endpoints serially on one sparse image."""
+    image = writer_activation_fixture["image"]
+    layout = writer_activation_fixture["layout"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    source_patches = writer_activation_fixture["source_patches"]
+    standard = writer_activation_fixture["standard"]
+    guard_logical = writer_activation_fixture["guard_logical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    assert isinstance(image, Path)
+    assert isinstance(layout, dict)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(standard, bytes)
+    assert isinstance(guard_logical, int)
+    assert isinstance(guard_physical, int)
+    assert isinstance(journal0_physical, int)
+
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    metadata_home = 30000
+    data_home = 30001
+    revoke_home = 30002
+    assert revoke_home < layout["blocks"]
+    metadata_image = struct.pack(">I", 0xC03B3998) + bytes((0xA5,)) * 1020
+    data_image = bytes((0x5A,)) * block_size
+    with image.open("rb") as source:
+        source.seek(metadata_home * block_size)
+        metadata_before = source.read(block_size)
+        source.seek(data_home * block_size)
+        data_before = source.read(block_size)
+        source.seek(revoke_home * block_size)
+        revoke_before = source.read(block_size)
+    assert all(
+        len(block) == block_size
+        for block in (metadata_before, data_before, revoke_before)
+    )
+    assert data_before != data_image
+
+    first = struct.unpack_from(">I", standard, 0x14)[0]
+    maxlen = struct.unpack_from(">I", standard, 0x10)[0]
+    logical = {
+        "guard": guard_logical,
+        "descriptor": _jbd2_ring_advance(
+            guard_logical, 1, first=first, maxlen=maxlen
+        ),
+        "payload": _jbd2_ring_advance(
+            guard_logical, 2, first=first, maxlen=maxlen
+        ),
+        "revoke": _jbd2_ring_advance(
+            guard_logical, 3, first=first, maxlen=maxlen
+        ),
+        "commit": _jbd2_ring_advance(
+            guard_logical, 4, first=first, maxlen=maxlen
+        ),
+        "sentinel": _jbd2_ring_advance(
+            guard_logical, 5, first=first, maxlen=maxlen
+        ),
+    }
+    assert len(set(logical.values())) == len(logical)
+    journal_map = _ext4_journal_physical_map(image, (0, *logical.values()))
+    physical = {name: journal_map[position] for name, position in logical.items()}
+
+    expected_transactions = 1 if commit_durable else 0
+    expected_metadata = "_EF-META" if commit_durable else "_EF-META-BEFORE"
+    invalidate_expected_commit = (
+        [] if commit_durable else ["0 _EF-COMMIT C!"]
+    )
+    media_path = tmp_path / f"jbd2-writer-{case}.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            image,
+            media_path,
+            [
+                "CREATE _EF-META 1024 ALLOT _EF-META 1024 0xA5 FILL",
+                "0xC03B3998 _EF-META _EXT4-BE32!",
+                "CREATE _EF-DATA 1024 ALLOT _EF-DATA 1024 0x5A FILL",
+                "CREATE _EF-META-BEFORE 1024 ALLOT",
+                "CREATE _EF-COMMIT 1024 ALLOT",
+                "T-ARENA CONSTANT _EF-ARENA",
+                (
+                    "_EF-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _EF-MOUNT-IOR CONSTANT _EF-V"
+                ),
+                "_EF-V _EXT4-CTX CONSTANT _EF-CTX",
+                (
+                    "1 1 1 _EF-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _EF-E-IOR CONSTANT _EF-W"
+                ),
+                (
+                    "30000 _EF-CTX _EXT4-READ-BLOCK "
+                    "CONSTANT _EF-BEFORE-IOR"
+                ),
+                (
+                    "_EF-CTX _EXT4-C.BLOCK + _EF-META-BEFORE "
+                    "1024 MOVE"
+                ),
+                "_EF-W _EXT4-JWR.HEAD + @ CONSTANT _EF-GUARD",
+                (
+                    "_EF-GUARD 4 _EF-CTX _EXT4-JOURNAL-ADVANCE "
+                    "CONSTANT _EF-COMMIT-LOGICAL"
+                ),
+                "_EF-W _EXT4-JWR-ACTIVATE CONSTANT _EF-A-IOR",
+                (
+                    "1 1 1 _EF-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _EF-B-IOR CONSTANT _EF-T"
+                ),
+                (
+                    "_EF-META 30000 _EF-T _EXT4-JTX-META-PUT "
+                    "CONSTANT _EF-M-IOR"
+                ),
+                (
+                    "_EF-DATA 30001 _EF-T _EXT4-JTX-DATA-PUT "
+                    "CONSTANT _EF-D-IOR"
+                ),
+                "30002 _EF-T _EXT4-JTX-REVOKE CONSTANT _EF-R-IOR",
+                "_EF-T _EXT4-JTX-EMIT CONSTANT _EF-EMIT-IOR",
+                "_EF-T _EXT4-JTX-EMIT CONSTANT _EF-RETRY-IOR",
+                "_EF-T _EXT4-JTX-ABORT CONSTANT _EF-ABORT-IOR",
+                (
+                    "1 1 1 _EF-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _EF-NEW-IOR CONSTANT _EF-NEW-T"
+                ),
+                (
+                    "_EF-MOUNT-IOR 0= _EF-E-IOR 0= AND "
+                    "_EF-BEFORE-IOR 0= AND _EF-A-IOR 0= AND "
+                    "_EF-B-IOR 0= AND _EF-M-IOR 0= AND "
+                    "_EF-D-IOR 0= AND _EF-R-IOR 0= AND "
+                    "_EF-EMIT-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = AND "
+                    "_EF-EMIT-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                    "_EF-EMIT-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL "
+                    "AND 0<> AND "
+                    "_EF-W _EXT4-JWR.FAULT + @ _EF-EMIT-IOR = AND "
+                    "_EF-W _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = AND "
+                    f"_EF-W _EXT4-JWR.PHASE + @ {phase_word} = AND "
+                    "_EF-W _EXT4-JWR-VALID? AND "
+                    "_EF-V V.FLAGS @ VFS-F-RO AND 0<> AND "
+                    "_EF-V V.FLAGS @ VFS-F-DIRTY AND 0<> AND "
+                    'IF ." EXT4-JTX-EMIT-FAULTED" THEN'
+                ),
+                (
+                    "_EF-RETRY-IOR VFS-E-BUSY = "
+                    "_EF-ABORT-IOR VFS-E-BUSY = AND "
+                    "_EF-NEW-T 0= AND _EF-NEW-IOR VFS-E-BUSY = AND "
+                    'IF ." EXT4-JTX-EMIT-FAULT-BUSY" THEN'
+                ),
+                (
+                    "_EF-W _EXT4-JWR.META-USED + @ 1 = "
+                    "_EF-W _EXT4-JWR.DATA-USED + @ 1 = AND "
+                    "_EF-W _EXT4-JWR.REVOKE-USED + @ 1 = AND "
+                    "_EF-META _EF-W _EXT4-JWR.META-IMAGES + @ "
+                    "1024 _EXT4-BYTES=? AND "
+                    "_EF-DATA _EF-W _EXT4-JWR.DATA-IMAGES + @ "
+                    "1024 _EXT4-BYTES=? AND "
+                    'IF ." EXT4-JTX-EMIT-FAULT-AFTERIMAGES" THEN'
+                ),
+                "_EF-COMMIT _EF-W _EXT4-JTX-BUILD-COMMIT",
+                *invalidate_expected_commit,
+                (
+                    "30000 _EF-CTX _EXT4-READ-BLOCK "
+                    "CONSTANT _EF-META-READ-IOR"
+                ),
+                (
+                    "_EF-CTX _EXT4-C.BLOCK + _EF-META-BEFORE "
+                    "1024 _EXT4-BYTES=? CONSTANT _EF-META-UNCHANGED"
+                ),
+                (
+                    "30001 _EF-CTX _EXT4-READ-BLOCK "
+                    "CONSTANT _EF-DATA-READ-IOR"
+                ),
+                (
+                    "_EF-CTX _EXT4-C.BLOCK + _EF-DATA "
+                    "1024 _EXT4-BYTES=? CONSTANT _EF-DATA-DURABLE"
+                ),
+                (
+                    "_EF-COMMIT-LOGICAL _EF-CTX _EXT4-READ-JBLOCK "
+                    "CONSTANT _EF-COMMIT-READ-IOR"
+                ),
+                (
+                    "_EF-CTX _EXT4-C.BLOCK + _EF-COMMIT "
+                    "1024 _EXT4-BYTES=? CONSTANT _EF-COMMIT-ENDPOINT"
+                ),
+                (
+                    "_EF-META-READ-IOR 0= _EF-DATA-READ-IOR 0= AND "
+                    "_EF-COMMIT-READ-IOR 0= AND "
+                    "_EF-META-UNCHANGED AND _EF-DATA-DURABLE AND "
+                    "_EF-COMMIT-ENDPOINT AND "
+                    'IF ." EXT4-JTX-EMIT-FAULT-MEDIA" THEN'
+                ),
+                "_EF-W _EXT4-JWR.EPOCH + @ CONSTANT _EF-FAULT-EPOCH",
+                (
+                    "_EF-ARENA ARENA-USED "
+                    "CONSTANT _EF-USED-BEFORE-FAILED-MOUNT"
+                ),
+                "_EF-V V.VOL-COOKIE @ CONSTANT _EF-VOL-COOKIE",
+                "_EF-VOL-COOKIE INVERT _EF-V V.VOL-COOKIE !",
+                (
+                    "_EF-V _EXT4-MOUNT "
+                    "CONSTANT _EF-FAILED-MOUNT-IOR"
+                ),
+                "_EF-VOL-COOKIE _EF-V V.VOL-COOKIE !",
+                (
+                    "1 1 1 _EF-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _EF-STALE-ENSURE-IOR "
+                    "CONSTANT _EF-STALE-W"
+                ),
+                (
+                    "_EF-FAILED-MOUNT-IOR "
+                    "EXT4-D-ATTACHMENT _EXT4-CORRUPT = "
+                    "_EF-CTX _EXT4-C.J.WRITER + @ _EF-W = AND "
+                    "_EF-CTX _EXT4-C.J.WRITER-CURRENT + @ 0= AND "
+                    "_EF-W _EXT4-JWR-SHAPE? AND "
+                    "_EF-W _EXT4-JWR-VALID? 0= AND "
+                    "_EF-STALE-W 0= AND "
+                    "_EF-STALE-ENSURE-IOR VFS-E-INVALID = AND "
+                    "_EF-W _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = AND "
+                    f"_EF-W _EXT4-JWR.PHASE + @ {phase_word} = AND "
+                    "_EF-W _EXT4-JWR.FAULT + @ _EF-EMIT-IOR = AND "
+                    "_EF-W _EXT4-JWR.EPOCH + @ _EF-FAULT-EPOCH = AND "
+                    "_EF-W _EXT4-JWR.META-USED + @ 1 = AND "
+                    "_EF-W _EXT4-JWR.DATA-USED + @ 1 = AND "
+                    "_EF-W _EXT4-JWR.REVOKE-USED + @ 1 = AND "
+                    "_EF-META _EF-W _EXT4-JWR.META-IMAGES + @ "
+                    "1024 _EXT4-BYTES=? AND "
+                    "_EF-DATA _EF-W _EXT4-JWR.DATA-IMAGES + @ "
+                    "1024 _EXT4-BYTES=? AND "
+                    "_EF-ARENA ARENA-USED "
+                    "_EF-USED-BEFORE-FAILED-MOUNT = AND "
+                    'IF ." EXT4-JTX-FAILED-MOUNT-PRESERVED" THEN'
+                ),
+                "_EF-V _EXT4-MOUNT CONSTANT _EF-REMOUNT-IOR",
+                "_EF-ARENA ARENA-USED CONSTANT _EF-USED-AFTER-REMOUNT",
+                (
+                    "_EF-CTX _EXT4-C.J.WRITER + @ _EF-W = "
+                    "_EF-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<> AND "
+                    "_EF-W _EXT4-JWR-VALID? AND "
+                    "_EF-W _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE = AND "
+                    "_EF-W _EXT4-JWR.FAULT + @ 0= AND "
+                    "_EF-W _EXT4-JWR.META-USED + @ 0= AND "
+                    "_EF-W _EXT4-JWR.DATA-USED + @ 0= AND "
+                    "_EF-W _EXT4-JWR.REVOKE-USED + @ 0= AND "
+                    "_EF-W _EXT4-JWR.META-IMAGES + @ C@ 0= AND "
+                    "_EF-W _EXT4-JWR.DATA-IMAGES + @ C@ 0= AND "
+                    "_EF-W _EXT4-JWR.HEAD + @ "
+                    "_EF-CTX _EXT4-C.J.HEAD + @ = AND "
+                    "_EF-W _EXT4-JWR.TAIL + @ "
+                    "_EF-CTX _EXT4-C.J.HEAD + @ = AND "
+                    "_EF-W _EXT4-JWR.NEXT-TID + @ "
+                    "_EF-CTX _EXT4-C.J.SEQUENCE + @ 1+ "
+                    "0xFFFFFFFF AND = AND "
+                    "CONSTANT _EF-MOUNT-REBASED"
+                ),
+                (
+                    "30000 _EF-CTX _EXT4-READ-BLOCK "
+                    "CONSTANT _EF-FINAL-META-IOR"
+                ),
+                (
+                    f"_EF-CTX _EXT4-C.BLOCK + {expected_metadata} "
+                    "1024 _EXT4-BYTES=? CONSTANT _EF-FINAL-META"
+                ),
+                (
+                    "30001 _EF-CTX _EXT4-READ-BLOCK "
+                    "CONSTANT _EF-FINAL-DATA-IOR"
+                ),
+                (
+                    "_EF-CTX _EXT4-C.BLOCK + _EF-DATA "
+                    "1024 _EXT4-BYTES=? CONSTANT _EF-FINAL-DATA"
+                ),
+                (
+                    "1 1 1 _EF-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _EF-REUSE-IOR CONSTANT _EF-REUSE-W"
+                ),
+                "_EF-ARENA ARENA-USED CONSTANT _EF-USED-AFTER-ENSURE",
+                (
+                    "1 1 1 _EF-REUSE-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _EF-PROBE-IOR CONSTANT _EF-PROBE-T"
+                ),
+                (
+                    "_EF-PROBE-T _EXT4-JTX-ABORT "
+                    "CONSTANT _EF-PROBE-ABORT-IOR"
+                ),
+                (
+                    "_EF-REMOUNT-IOR 0= "
+                    "_EF-V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                    "_EF-V _EXT4-READY? AND "
+                    "_EF-CTX _EXT4-C.RECOVERY + @ 0= AND "
+                    "_EF-CTX _EXT4-C.J.START + @ 0= AND "
+                    "_EF-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
+                    "_EF-CTX _EXT4-C.J.CLEANUP + @ _EXT4-JC-NONE = AND "
+                    "_EF-CTX _EXT4-C.J.PRIMARY-TORN + @ 0= AND "
+                    "_EF-CTX _EXT4-C.SUPER-TORN + @ 0= AND "
+                    "_EF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0= AND "
+                    "_EF-CTX _EXT4-C.J.FEATURES + @ "
+                    "_EXT4-JBD2-I-RECOVERY-REVOKE = AND "
+                    f"_EF-CTX _EXT4-C.J.COMMITTED + @ {expected_transactions} "
+                    "= AND "
+                    f"_EF-CTX _EXT4-C.J.HOME-WRITES + @ "
+                    f"{expected_transactions} = AND "
+                    f"_EF-CTX _EXT4-C.J.REVOKE-COUNT + @ "
+                    f"{expected_transactions} = AND "
+                    "_EF-CTX _EXT4-C.J.REVOKE-HITS + @ 0= AND "
+                    "_EF-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                    "_EF-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
+                    "_EXT4-INCOMPAT-RECOVER AND 0= AND "
+                    "_EF-FINAL-META-IOR 0= AND _EF-FINAL-META AND "
+                    "_EF-FINAL-DATA-IOR 0= AND _EF-FINAL-DATA AND "
+                    'IF ." EXT4-JTX-EMIT-FAULT-REMOUNTED" THEN'
+                ),
+                (
+                    "_EF-MOUNT-REBASED "
+                    "_EF-REUSE-IOR 0= AND _EF-REUSE-W _EF-W = AND "
+                    "_EF-USED-AFTER-ENSURE _EF-USED-AFTER-REMOUNT = AND "
+                    "_EF-PROBE-IOR 0= AND _EF-PROBE-T _EF-W = AND "
+                    "_EF-PROBE-ABORT-IOR 0= AND "
+                    'IF ." EXT4-JTX-EMIT-FAULT-REBASED" THEN'
+                ),
+                "_EF-W _EXT4-JWR-VALID? CONSTANT _EF-PRE-UNMOUNT-VALID",
+                "0 _EF-V _EXT4-UNMOUNT CONSTANT _EF-UNMOUNT-IOR",
+                (
+                    "_EF-PRE-UNMOUNT-VALID _EF-UNMOUNT-IOR 0= AND "
+                    "_EF-V V.BCTX @ 0= AND "
+                    "_EF-CTX _EXT4-C.READY + @ 0= AND "
+                    "_EF-CTX _EXT4-C.J.WRITER-CURRENT + @ 0= AND "
+                    "_EF-W _EXT4-JWR-SHAPE? AND "
+                    "_EF-W _EXT4-JWR-VALID? 0= AND "
+                    'IF ." EXT4-JTX-UNMOUNT-INVALIDATED" THEN'
+                ),
+            ],
+            patches=source_patches,
+            write_faults_by_ordinal={
+                write_ordinal: {
+                    "stage": "media",
+                    "sector_index": sector_index,
+                    "byte_index": byte_index,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-JTX-EMIT-FAULTED")
+        _assert_emitted(output, "EXT4-JTX-EMIT-FAULT-BUSY")
+        _assert_emitted(output, "EXT4-JTX-EMIT-FAULT-AFTERIMAGES")
+        _assert_emitted(output, "EXT4-JTX-EMIT-FAULT-MEDIA")
+        _assert_emitted(output, "EXT4-JTX-FAILED-MOUNT-PRESERVED")
+        _assert_emitted(output, "EXT4-JTX-EMIT-FAULT-REMOUNTED")
+        _assert_emitted(output, "EXT4-JTX-EMIT-FAULT-REBASED")
+        _assert_emitted(output, "EXT4-JTX-UNMOUNT-INVALIDATED")
+
+        emission_trace = (
+            ("write", data_home * 2, 2),
+            ("write", physical["descriptor"] * 2, 2),
+            ("write", physical["payload"] * 2, 2),
+            ("write", physical["revoke"] * 2, 2),
+            ("write", physical["commit"] * 2, 2),
+            ("write", physical["sentinel"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["guard"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["guard"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", journal0_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["commit"] * 2, 2),
+            ("flush", 0, 0),
+        )
+        expected_prefix = list(activation_trace)
+        observed_writes = sum(
+            event[0] == "write" for event in activation_trace
+        )
+        for event in emission_trace:
+            expected_prefix.append(event)
+            if event[0] == "write":
+                observed_writes += 1
+                if observed_writes == write_ordinal:
+                    break
+        expected_prefix = tuple(expected_prefix)
+        assert trace[: len(expected_prefix)] == expected_prefix
+        recovery_trace = trace[len(expected_prefix) :]
+
+        allowed_recovery_writes = {
+            ("write", 2, 2),
+            ("write", journal0_physical * 2, 2),
+            ("write", guard_physical * 2, 2),
+        }
+        if commit_durable:
+            allowed_recovery_writes.add(("write", metadata_home * 2, 2))
+        for index, event in enumerate(recovery_trace):
+            assert event[0] in {"write", "flush"}
+            if event[0] != "write":
+                continue
+            assert event in allowed_recovery_writes
+            assert index + 1 < len(recovery_trace)
+            assert recovery_trace[index + 1] == ("flush", 0, 0)
+        assert recovery_trace.count(("write", metadata_home * 2, 2)) == (
+            expected_transactions
+        )
+        assert ("write", data_home * 2, 2) not in recovery_trace
+        assert ("write", revoke_home * 2, 2) not in recovery_trace
+
+        assert media_path.is_file()
+        assert _sha256(media_path) == media_sha256
+        _assert_activation_landed_media(
+            media_path,
+            writer_activation_fixture,
+            expected_features=0x13,
+        )
+        with media_path.open("rb") as source:
+            source.seek(metadata_home * block_size)
+            metadata_after = source.read(block_size)
+            source.seek(data_home * block_size)
+            data_after = source.read(block_size)
+            source.seek(revoke_home * block_size)
+            revoke_after = source.read(block_size)
+        assert metadata_after == (
+            metadata_image if commit_durable else metadata_before
+        )
+        assert data_after == data_image
+        assert revoke_after == revoke_before
+    finally:
+        media_path.unlink(missing_ok=True)
 
 
 @pytest.mark.parametrize(
