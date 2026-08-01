@@ -61,6 +61,8 @@ local_testing/*
 !local_testing/rabbit-servsub-test.f
 !local_testing/rabbit-cap-test.f
 !local_testing/rabbit-connector-test.f
+!local_testing/rabbit-burrow-test.f
+!local_testing/test_streams_rabbit_burrow.py
 # Refactor architecture inventory and ratchet
 !local_testing/forth_dependencies.py
 !local_testing/refactor_inventory.py

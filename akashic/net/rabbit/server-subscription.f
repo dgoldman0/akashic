@@ -350,18 +350,11 @@ VARIABLE _RSERVSUBG-A
 VARIABLE _RSERVSUBG-U
 VARIABLE _RSERVSUBG-O
 
-\ Report overlap with storage exclusively owned through a valid subscription
-\ server: the owner descriptor, its entry/target arrays, and the mutable graph
-\ owned by its per-peer server.  The server's immutable borrowed router is
-\ deliberately excluded so multiple peers may share one exact sealed router.
-\ Invalid span geometry or owner state reports overlap conservatively.
-: RABBIT-SERVER-SUBSCRIPTIONS-OWNED-SPAN-OVERLAP?
-  ( address bytes owner -- flag )
+\ Compare a checked span with an already-validated subscription-server
+\ graph.  Pairwise composition validates each graph once and then uses this
+\ core for its constituent spans, avoiding repeated recursive validation.
+: _RSERVSUB-OWNED-SPAN-OVERLAP-VALID?  ( address bytes owner -- flag )
     _RSERVSUBG-O ! _RSERVSUBG-U ! _RSERVSUBG-A !
-    _RSERVSUBG-U @ 0< IF -1 EXIT THEN
-    _RSERVSUBG-U @ IF _RSERVSUBG-A @ 0= IF -1 EXIT THEN THEN
-    _RSERVSUBG-A @ _RSERVSUBG-U @ MSPAN-NONWRAPPING? 0= IF -1 EXIT THEN
-    _RSERVSUBG-O @ RABBIT-SERVER-SUBSCRIPTIONS-VALID? 0= IF -1 EXIT THEN
     _RSERVSUBG-A @ _RSERVSUBG-U @ _RSERVSUBG-O @
         RABBIT-SERVER-SUBSCRIPTIONS-SIZE MSPAN-OVERLAP? IF -1 EXIT THEN
     _RSERVSUBG-O @ RSERVSUB.CAPACITY @ IF
@@ -377,7 +370,22 @@ VARIABLE _RSERVSUBG-O
         MSPAN-OVERLAP? IF -1 EXIT THEN
     THEN
     _RSERVSUBG-A @ _RSERVSUBG-U @ _RSERVSUBG-O @ RSERVSUB.SERVER @
-        RABBIT-SERVER-OWNED-SPAN-OVERLAP? ;
+        _RSERVER-OWNED-SPAN-OVERLAP-VALID? ;
+
+\ Report overlap with storage exclusively owned through a valid subscription
+\ server: the owner descriptor, its entry/target arrays, and the mutable graph
+\ owned by its per-peer server.  The server's immutable borrowed router is
+\ deliberately excluded so multiple peers may share one exact sealed router.
+\ Invalid span geometry or owner state reports overlap conservatively.
+: RABBIT-SERVER-SUBSCRIPTIONS-OWNED-SPAN-OVERLAP?
+  ( address bytes owner -- flag )
+    _RSERVSUBG-O ! _RSERVSUBG-U ! _RSERVSUBG-A !
+    _RSERVSUBG-U @ 0< IF -1 EXIT THEN
+    _RSERVSUBG-U @ IF _RSERVSUBG-A @ 0= IF -1 EXIT THEN THEN
+    _RSERVSUBG-A @ _RSERVSUBG-U @ MSPAN-NONWRAPPING? 0= IF -1 EXIT THEN
+    _RSERVSUBG-O @ RABBIT-SERVER-SUBSCRIPTIONS-VALID? 0= IF -1 EXIT THEN
+    _RSERVSUBG-A @ _RSERVSUBG-U @ _RSERVSUBG-O @
+        _RSERVSUB-OWNED-SPAN-OVERLAP-VALID? ;
 
 \ Compatibility predicate for callers that need the complete composed graph,
 \ including the borrowed router.  Pairwise host composition uses the owned
@@ -405,36 +413,36 @@ VARIABLE _RSERVSUBGG-B
     _RSERVSUBGG-A @ RABBIT-SERVER-SUBSCRIPTIONS-VALID? 0= IF 0 EXIT THEN
     _RSERVSUBGG-B @ RABBIT-SERVER-SUBSCRIPTIONS-VALID? 0= IF 0 EXIT THEN
     _RSERVSUBGG-A @ RABBIT-SERVER-SUBSCRIPTIONS-SIZE _RSERVSUBGG-B @
-        RABBIT-SERVER-SUBSCRIPTIONS-OWNED-SPAN-OVERLAP? IF 0 EXIT THEN
+        _RSERVSUB-OWNED-SPAN-OVERLAP-VALID? IF 0 EXIT THEN
     _RSERVSUBGG-A @ RSERVSUB.CAPACITY @ IF
         _RSERVSUBGG-A @ RSERVSUB.ENTRIES @
             _RSERVSUBGG-A @ RSERVSUB.CAPACITY @
             RABBIT-SERVER-SUBSCRIPTION-ENTRY-BYTES _RSERVSUBGG-B @
-            RABBIT-SERVER-SUBSCRIPTIONS-OWNED-SPAN-OVERLAP? IF
+            _RSERVSUB-OWNED-SPAN-OVERLAP-VALID? IF
             0 EXIT
         THEN
         _RSERVSUBGG-A @ RSERVSUB.TARGET-A @
             _RSERVSUBGG-A @ RSERVSUB.CAPACITY @
             _RSERVSUBGG-A @ RSERVSUB.TARGET-SLOT-BYTES @ *
             _RSERVSUBGG-B @
-            RABBIT-SERVER-SUBSCRIPTIONS-OWNED-SPAN-OVERLAP? IF
+            _RSERVSUB-OWNED-SPAN-OVERLAP-VALID? IF
             0 EXIT
         THEN
     THEN
     _RSERVSUBGG-B @ RABBIT-SERVER-SUBSCRIPTIONS-SIZE _RSERVSUBGG-A @
-        RABBIT-SERVER-SUBSCRIPTIONS-OWNED-SPAN-OVERLAP? IF 0 EXIT THEN
+        _RSERVSUB-OWNED-SPAN-OVERLAP-VALID? IF 0 EXIT THEN
     _RSERVSUBGG-B @ RSERVSUB.CAPACITY @ IF
         _RSERVSUBGG-B @ RSERVSUB.ENTRIES @
             _RSERVSUBGG-B @ RSERVSUB.CAPACITY @
             RABBIT-SERVER-SUBSCRIPTION-ENTRY-BYTES _RSERVSUBGG-A @
-            RABBIT-SERVER-SUBSCRIPTIONS-OWNED-SPAN-OVERLAP? IF
+            _RSERVSUB-OWNED-SPAN-OVERLAP-VALID? IF
             0 EXIT
         THEN
         _RSERVSUBGG-B @ RSERVSUB.TARGET-A @
             _RSERVSUBGG-B @ RSERVSUB.CAPACITY @
             _RSERVSUBGG-B @ RSERVSUB.TARGET-SLOT-BYTES @ *
             _RSERVSUBGG-A @
-            RABBIT-SERVER-SUBSCRIPTIONS-OWNED-SPAN-OVERLAP? IF
+            _RSERVSUB-OWNED-SPAN-OVERLAP-VALID? IF
             0 EXIT
         THEN
     THEN

@@ -264,6 +264,20 @@ VARIABLE _RMSGBO-A
 VARIABLE _RMSGBO-U
 VARIABLE _RMSGBO-B
 
+\ Compare a checked span with a builder whose complete validity has already
+\ been established by the enclosing graph operation.  Keeping this core
+\ separate prevents pairwise graph checks from re-walking the same builder
+\ frame and arena for every constituent span.
+: _RMSGB-OWNED-SPAN-OVERLAP-VALID?  ( address bytes builder -- flag )
+    _RMSGBO-B ! _RMSGBO-U ! _RMSGBO-A !
+    _RMSGBO-A @ _RMSGBO-U @
+        _RMSGBO-B @ _RMSGBO-B @ _RMSGB.BYTES @
+        MSPAN-OVERLAP? IF -1 EXIT THEN
+    _RMSGBO-A @ _RMSGBO-U @
+        _RMSGBO-B @ _RMSGB.ARENA @
+        _RMSGBO-B @ _RMSGB.ARENA-CAP @
+        MSPAN-OVERLAP? ;
+
 \ Report whether a caller span touches any builder-owned storage: both the
 \ complete descriptor and the complete arena allocation, including currently
 \ unused arena bytes.  Invalid span geometry or an invalid builder reports
@@ -277,13 +291,8 @@ VARIABLE _RMSGBO-B
     THEN
     _RMSGBO-A @ _RMSGBO-U @ MSPAN-NONWRAPPING? 0= IF -1 EXIT THEN
     _RMSGBO-B @ RMSGB-VALID? 0= IF -1 EXIT THEN
-    _RMSGBO-A @ _RMSGBO-U @
-        _RMSGBO-B @ _RMSGBO-B @ _RMSGB.BYTES @
-        MSPAN-OVERLAP? IF -1 EXIT THEN
-    _RMSGBO-A @ _RMSGBO-U @
-        _RMSGBO-B @ _RMSGB.ARENA @
-        _RMSGBO-B @ _RMSGB.ARENA-CAP @
-        MSPAN-OVERLAP? ;
+    _RMSGBO-A @ _RMSGBO-U @ _RMSGBO-B @
+        _RMSGB-OWNED-SPAN-OVERLAP-VALID? ;
 
 VARIABLE _RMSGBGG-A
 VARIABLE _RMSGBGG-B
@@ -297,10 +306,10 @@ VARIABLE _RMSGBGG-B
     _RMSGBGG-A @ RMSGB-VALID? 0= IF 0 EXIT THEN
     _RMSGBGG-B @ RMSGB-VALID? 0= IF 0 EXIT THEN
     _RMSGBGG-A @ _RMSGBGG-A @ _RMSGB.BYTES @ _RMSGBGG-B @
-        RMSGB-OWNED-SPAN-OVERLAP? IF 0 EXIT THEN
+        _RMSGB-OWNED-SPAN-OVERLAP-VALID? IF 0 EXIT THEN
     _RMSGBGG-A @ _RMSGB.ARENA @
         _RMSGBGG-A @ _RMSGB.ARENA-CAP @ _RMSGBGG-B @
-        RMSGB-OWNED-SPAN-OVERLAP? 0= ;
+        _RMSGB-OWNED-SPAN-OVERLAP-VALID? 0= ;
 
 \ =====================================================================
 \  Failure mapping and owned-arena helpers
