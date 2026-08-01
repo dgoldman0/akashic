@@ -78,8 +78,9 @@ connection must encode into its own caller-provided queue slot before returning
 from enqueue.
 
 Known request verbs require a nonempty target plus exact `Lane` and `Txn`.
-`EVENT` requires distinct nonzero `Seq` and `Event-Seq`; `ACK` and `CREDIT`
-target an exact lane and carry their one matching positive scalar. PING is
+`EVENT` requires a nonzero application `Lane` plus distinct nonzero `Seq` and
+`Event-Seq`; `ACK` and `CREDIT` target an exact lane and carry their one
+matching positive scalar. PING is
 canonicalized to control Lane 0. Response tokens are exactly three decimal
 digits in the 100–599 range, while unknown textual verbs remain structurally
 admissible for a generic router to reject or extend. Core unsigned values use
@@ -152,6 +153,14 @@ Application builders may be reset immediately. Fully transmitted EVENT bytes
 remain in their slot until a valid cumulative ACK releases them, so queue
 capacity models a genuinely slow peer rather than merely a slow local write.
 Other complete frames are wiped immediately.
+
+`RABBIT-CONNECTION-ENQUEUE-RESERVED` is the generalized publication seam for
+higher neutral owners that must retain structural progress capacity. Its
+caller-supplied reserve is the minimum number of empty slots that must remain
+in the selected control or data queue after success. Refusal occurs before
+encoding or session mutation; ordinary `RABBIT-CONNECTION-ENQUEUE` delegates
+with a zero reserve. The reserve is queue space, not a permanently assigned
+slot or a product capacity.
 
 The send pump never switches frames after a short write. Control traffic wins
 only at a frame boundary, preventing both control starvation and byte-stream
@@ -248,8 +257,37 @@ scratch holds a live loan. Callbacks must copy retained data and may not pump
 the peer, mutate the router, or retain the reply builder. Close, cancel, and
 finalization propagate through the owned connection; finalization also wipes
 the builder, copied identity, and server record, but leaves the borrowed router
-for its separate owner. Server-side EVENT publication and subscription fanout
-are the next generic checkpoint rather than Streams responsibilities.
+for its separate owner.
+
+Server-side EVENT publication is an owned operation rather than a Streams or
+application adapter concern:
+
+```text
+RABBIT-SERVER-NEXT-EVENT-LANE-SEQ@
+( lane server -- lane-seq|0 status )
+
+RABBIT-SERVER-EVENT
+( target-a target-u lane event-seq view-a view-u body-a body-u server
+  -- lane-seq|0 status )
+```
+
+The server verifies admission and application-lane credit, copies the selector,
+optional View, and body through its otherwise-empty reply builder, publishes
+the exact next Lane Seq, then resets the builder before returning. Source spans
+may not alias any storage the operation resets or mutates. The successful Lane
+Seq is returned separately from the caller's application `Event-Seq`; credit
+and terminal sequence exhaustion are explicit `RSERVER-S-CREDIT` and
+`RSERVER-S-OVERFLOW` results.
+
+Every server EVENT leaves one data-queue slot empty. Sent events remain in
+`WAIT-ACK`, while application responses use the same bounded data queue. Without
+that reserve, events could occupy every slot and a request received before its
+ACK could block the ACK behind a response that has nowhere to go. One peer has
+at most one held request, so the retained slot preserves request/ACK progress;
+capacity refusal consumes neither credit nor Lane Seq. The future generic
+server-subscription owner will copy registrations and drive exact-cursor replay
+through this operation. The application remains the sole event-journal owner,
+and Streams remains only the configured network operator/profile adapter.
 
 ## Client operation ownership
 

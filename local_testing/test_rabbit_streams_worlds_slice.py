@@ -293,6 +293,18 @@ CONTRACT_STAGES = (
         True,
     ),
     (
+        "server-event-delivery",
+        "_RBT-SRV-PHASE-EVENT-DELIVERY",
+        "RABBIT SERVER EVENT DELIVERY PASS",
+        True,
+    ),
+    (
+        "server-event-reserve-liveness",
+        "_RBT-SRV-PHASE-EVENT-RESERVE-LIVENESS",
+        "RABBIT SERVER EVENT RESERVE LIVENESS PASS",
+        True,
+    ),
+    (
         "server-backpressure",
         "_RBT-SRV-PHASE-BACKPRESSURE",
         "RABBIT SERVER BACKPRESSURE PASS",
@@ -591,6 +603,7 @@ def _assert_static_contracts() -> None:
         "RCONN-TXQ-FINI",
         "RABBIT-CONNECTION-INIT",
         "RABBIT-CONNECTION-OPEN",
+        "RABBIT-CONNECTION-ENQUEUE-RESERVED",
         "RABBIT-CONNECTION-ENQUEUE",
         "RABBIT-CONNECTION-PUMP",
         "RABBIT-CONNECTION-RX-LOAN",
@@ -661,6 +674,8 @@ def _assert_static_contracts() -> None:
         "RABBIT-SERVER-CLOSE",
         "RABBIT-SERVER-CLOSE-POLL",
         "RABBIT-SERVER-CANCEL",
+        "RABBIT-SERVER-NEXT-EVENT-LANE-SEQ@",
+        "RABBIT-SERVER-EVENT",
         "RABBIT-SERVER-FINI",
     ):
         assert word in server
