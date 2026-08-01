@@ -42,7 +42,8 @@ root, mount verifies:
 
 - the unchanged volume cookie/generation and 512-byte logical sector size;
 - reflected raw CRC32C for the primary superblock and its UUID-derived seed,
-  except for the narrowly authenticated torn-clear state described below;
+  except for a dirty prefix tear with a committed valid repair payload or the
+  narrowly authenticated torn-clear state described below;
 - the pinned 1/2/4 KiB geometry, 64-byte descriptors, 128/256-byte inode
   forms, flex size, feature policy, admitted clean/recovery state, and all
   volume bounds;
@@ -53,7 +54,7 @@ root, mount verifies:
   GDT descriptor CRC and immutable metadata location;
 - allocation and checksum of each consumed inode;
 - the internal JBD2 journal superblock, size-derived inode map, and matching
-  UUID. Superblock `s_jnl_backup_type` must be `1`; its 68-byte
+  UUID. Superblock `s_jnl_backup_type` must be `1`; its checksum-covered 68-byte
   `s_jnl_blocks` tuple must exactly reproduce inode 8's `i_block`, size-high,
   and size-low fields. Journal inode 8 is pinned to generation zero and an
   inline depth-0 extent root containing one through four initialized extents
@@ -61,18 +62,26 @@ root, mount verifies:
   ranges. This recovery-authority constraint does not narrow the general
   file reader's extent-depth or legacy-map support. The inode size must be a
   nonzero whole number of filesystem blocks, fit JBD2's 32-bit `s_maxlen`,
-  and not exceed the filesystem block count.
-  Mount allocates an exact map plus a half-full power-of-two uniqueness table
-  from the caller's arena; arena exhaustion returns `VFS-E-NOMEM` rather than
-  imposing a journal-size constant. Every mount materializes the complete
-  extent or legacy map in one EOF-bounded tree walk and rejects holes,
-  mappings beyond EOF, out-of-range or aliased data blocks, and aliases
-  between journal data and its own extent/indirect metadata. A separately
-  arena-sized ownership hash also prevents replay home tags from targeting
-  those map-metadata blocks. If a replay tag names the inode-table block
-  shared with journal inode 8, its authenticated payload must preserve inode
-  8's exact 128- or 256-byte record; neighboring inode records may still
-  change; and
+  and not exceed the filesystem block count. Mount expands that authenticated
+  inline tuple directly into an exact map plus a half-full power-of-two
+  uniqueness table from the caller's arena; arena exhaustion returns
+  `VFS-E-NOMEM` rather than imposing a journal-size constant. It rejects holes,
+  mappings beyond EOF, out-of-range or aliased blocks, and any journal block
+  that overlaps a descriptor-authenticated block/inode bitmap or inode-table
+  range, any deterministic sparse super/GDT/reserved-GDT range, or inode-8
+  bootstrap metadata; and
+- the designated group-1 recovery chain: checksum-valid sparse backup super,
+  checksum-valid backup-GDT group-0 descriptor, live inode-8 allocation bit,
+  checksum-valid inode 8, and exact tuple equality. Dirty bootstrap uses this
+  chain without trusting the primary GDT or aggregate free-space counters.
+  Replay may not target the designated sparse super or backup-GDT span.
+  Authenticated primary-super payloads must retain `RECOVER`, valid checksum
+  and seed, all next-mount profile checks, bounded aggregate counters, and all
+  witness invariants. A payload for the first primary-GDT block containing
+  group 0's descriptor must retain the witnessed bitmap/table locators and
+  descriptor checksum. An inode-bitmap payload must keep inode 8 allocated,
+  and an inode-table payload must preserve inode 8's exact 128- or 256-byte
+  record while allowing neighboring records to change; and
 - every clean orphan-file block, including its per-block CRC32C tail (the
   bounded reader currently admits one through 4096 blocks).
 
@@ -91,21 +100,20 @@ object.
 
 The implemented recovery slice admits an internal journal with the exact
 `64bit | checksum_v3` incompatibility mask (`0x12`) and JBD2 CRC32C type 4.
-It validates the complete journal inode map, descriptor blocks, 64-bit tags,
+It validates the complete journal tuple map, descriptor blocks, 64-bit tags,
 tagged payloads, escaped payload handling, commit blocks, sequence progression,
 and checksums in a non-mutating pass. It then replays only the committed prefix
-in a second pass. With an ordinary usable primary, the immutable physical map
-used by both passes is populated after the JBD2 geometry is authenticated,
-using workspace derived from the journal inode length and bounded by the VFS
-arena. Torn-primary bootstrap must materialize that inode-derived map first to
-read the one named anchor; the filesystem bound, 32-bit length bound, complete
-inode-tree validation, and metadata ownership checks still precede that read.
-Tree validation rejects nonzero mappings beyond the inode length, so neither
-validation nor materialization can be driven through an attached tree past
-journal EOF. The one-pass mapper does not revalidate an entire extent
-allocation range once per logical block. A structurally valid
-incomplete tail identified by the next
-header or sequence discontinuity is discarded. Preflight also treats a
+in a second pass. Both passes use the immutable map expanded from the
+checksum-valid group-1 tuple; no external extent node, legacy pointer block,
+primary descriptor, or block-allocation bitmap is needed to expand or locate
+that tuple during dirty bootstrap. The witnessed inode-allocation bitmap
+remains part of authenticating live inode 8. Before any journal read, every
+tuple extent is also proven disjoint from all backup-GDT-described bitmap and
+inode-table ranges and all deterministic sparse-super/GDT/reserved-GDT ranges.
+The exact map and its uniqueness table are derived from the journal length and
+bounded by the VFS arena. A structurally valid incomplete
+tail identified by the next header or sequence discontinuity is discarded.
+Preflight also treats a
 matching-sequence `SUPER_V2` header as the known prefix-torn anchor boundary
 only when the complete block passes the anchor checksum, geometry, witness,
 and self-location checks; replay never admits it as a transaction record. A
@@ -117,12 +125,17 @@ and replay use authenticated ring geometry rather than fixture-sized cursor
 assumptions.
 
 The type-1 journal tuple is validated without consulting allocation metadata,
-then cross-checked against the checksum-valid live inode and all inspected
-sparse-super copies. The current dirty bootstrap still reaches inode 8 through
-the primary group descriptor before making that comparison. Selecting a
-designated replay-frozen sparse-super/GDT witness when those primary locator
-bytes are torn is the next recovery-authority step; this document does not yet
-claim that fallback.
+then cross-checked through the designated sparse-super/backup-GDT witness to
+the checksum-valid live inode. The whole designated witness range is
+replay-frozen. Mutable primary authority may be replayed only when the
+authenticated candidate preserves the next retry's locators and inode-8
+identity. A primary-super candidate must also satisfy the same pre-witness
+profile and counter bounds as an ordinary checksum-valid mount, so a crash
+after its home write can still reach the journal on the next retry. If the raw
+primary super checksum is torn and no private `AKR1`
+witness exists, preflight must find a valid primary-super replacement and then
+authenticate that transaction's commit before the replay pass can perform its
+first home write. A candidate in an incomplete tail grants no authority.
 
 Recovery requires a physically writable, flush-capable volume. Home writes are
 flushed and the resulting filesystem is strictly revalidated before journal
@@ -224,12 +237,12 @@ writable profile. The remaining boundaries are:
   but not a socket inode;
 - replay currently requires checksum-v3/64-bit journal records, refuses every
   revoke record, and fails closed on checksum-damaged incomplete tails;
-- dirty bootstrap still requires readable primary group-0 inode locators even
-  though the type-1 journal tuple is already structurally validated and
-  cross-checked; designated sparse-witness fallback remains to be implemented;
-- a primary tear with no intact locator fails closed unless the ext4
-  superblock is independently clean and the complete primary block proves the
-  exact sequential witness-removal prefix described above;
+- the recovery profile deliberately requires the group-1 sparse-super/GDT
+  witness and the checksum-covered inline depth-0 journal tuple; external
+  journal-map nodes are not recovery authority;
+- a checksum-torn dirty primary super fails closed unless a fully committed
+  transaction carries its valid invariant-preserving replacement, or the
+  private `AKR1` clear witness proves the exact cleanup state described above;
 - legacy and modern orphan recovery and every user-visible mutation operation
   remain unimplemented; and
 - recovery-anchor interoperability and the controlled power-cut matrix still

@@ -119,6 +119,326 @@ def _relocate_jbd2_transaction(
         image.write(journal_superblock)
 
 
+def _ext4_super_with_checksum(superblock: bytes | bytearray) -> bytes:
+    result = bytearray(superblock)
+    assert len(result) == 1024
+    struct.pack_into("<I", result, 0x3FC, _crc32c_raw(result[:0x3FC]))
+    return bytes(result)
+
+
+def _group_descriptor_with_checksum(
+    superblock: bytes, descriptor: bytes | bytearray, group: int
+) -> bytes:
+    result = bytearray(descriptor)
+    assert len(superblock) == 1024
+    assert len(result) == 64
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    struct.pack_into("<H", result, 0x1E, 0)
+    checksum = _crc32c_raw(struct.pack("<I", group), seed)
+    checksum = _crc32c_raw(result, checksum)
+    struct.pack_into("<H", result, 0x1E, checksum & 0xFFFF)
+    return bytes(result)
+
+
+def _inode_with_checksum(
+    superblock: bytes, inode_number: int, inode: bytes | bytearray
+) -> bytes:
+    result = bytearray(inode)
+    assert len(superblock) == 1024
+    assert len(result) >= 128
+    assert inode_number > 0
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    struct.pack_into("<H", result, 0x7C, 0)
+    has_checksum_high = len(result) > 128
+    if has_checksum_high:
+        extra_size = struct.unpack_from("<H", result, 0x80)[0]
+        assert extra_size >= 4 and extra_size % 4 == 0
+        assert 128 + extra_size <= len(result)
+        struct.pack_into("<H", result, 0x82, 0)
+    checksum = _crc32c_raw(struct.pack("<I", inode_number), seed)
+    checksum = _crc32c_raw(result[0x64:0x68], checksum)
+    checksum = _crc32c_raw(result, checksum)
+    struct.pack_into("<H", result, 0x7C, checksum & 0xFFFF)
+    if has_checksum_high:
+        struct.pack_into("<H", result, 0x82, checksum >> 16)
+    return bytes(result)
+
+
+def _ext4_sparse_group(group: int) -> bool:
+    if group in (0, 1):
+        return True
+    for base in (3, 5, 7):
+        value = group
+        while value > 1 and value % base == 0:
+            value //= base
+        if value == 1:
+            return True
+    return False
+
+
+def _ext4_recovery_layout(path: Path) -> dict[str, int]:
+    with path.open("rb") as source:
+        source.seek(1024)
+        superblock = source.read(1024)
+    assert len(superblock) == 1024
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    blocks = struct.unpack_from("<I", superblock, 0x04)[0]
+    assert struct.unpack_from("<I", superblock, 0x150)[0] == 0
+    first = struct.unpack_from("<I", superblock, 0x14)[0]
+    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    groups = (blocks - first + blocks_per_group - 1) // blocks_per_group
+    descriptor_size = struct.unpack_from("<H", superblock, 0xFE)[0]
+    assert descriptor_size == 64
+    witness_super = first + blocks_per_group
+    witness_gdt = witness_super + 1
+    witness_gdt_span = (
+        groups * descriptor_size + block_size - 1
+    ) // block_size
+    with path.open("rb") as source:
+        source.seek(witness_gdt * block_size)
+        group0_descriptor = source.read(descriptor_size)
+    assert len(group0_descriptor) == descriptor_size
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    inode_index = 7
+    inode_table_base = struct.unpack_from("<I", group0_descriptor, 0x08)[0]
+    journal_root = superblock[0x10C : 0x10C + 60]
+    assert struct.unpack_from("<H", journal_root, 0x00)[0] == 0xF30A
+    assert struct.unpack_from("<H", journal_root, 0x06)[0] == 0
+
+    def map_journal_block(logical: int) -> int:
+        entries = struct.unpack_from("<H", journal_root, 0x02)[0]
+        for index in range(entries):
+            entry = 0x0C + index * 0x0C
+            first_logical = struct.unpack_from("<I", journal_root, entry)[0]
+            raw_length = struct.unpack_from("<H", journal_root, entry + 0x04)[0]
+            assert 0 < raw_length <= 0x8000
+            if first_logical <= logical < first_logical + raw_length:
+                first_physical = (
+                    struct.unpack_from("<H", journal_root, entry + 0x06)[0]
+                    << 32
+                ) | struct.unpack_from("<I", journal_root, entry + 0x08)[0]
+                return first_physical + logical - first_logical
+        raise AssertionError(f"journal logical block {logical} is unmapped")
+
+    journal_block = map_journal_block(0)
+    journal_commit_block = map_journal_block(3)
+    return {
+        "block_size": block_size,
+        "blocks": blocks,
+        "first": first,
+        "blocks_per_group": blocks_per_group,
+        "groups": groups,
+        "descriptor_size": descriptor_size,
+        "inode_size": inode_size,
+        "primary_super": 1 if block_size == 1024 else 0,
+        "primary_gdt": 2 if block_size == 1024 else 1,
+        "witness_super": witness_super,
+        "witness_gdt": witness_gdt,
+        "witness_gdt_span": witness_gdt_span,
+        "block_bitmap": struct.unpack_from("<I", group0_descriptor, 0x00)[0],
+        "inode_bitmap": struct.unpack_from("<I", group0_descriptor, 0x04)[0],
+        "inode_table_base": inode_table_base,
+        "journal_inode_block": (
+            inode_table_base + inode_index * inode_size // block_size
+        ),
+        "journal_inode_offset": inode_index * inode_size % block_size,
+        "journal_block": journal_block,
+        "journal_commit_block": journal_commit_block,
+    }
+
+
+def _journal_metadata_alias_patches(
+    image: Path, target_block: int
+) -> tuple[tuple[tuple[int, bytes], ...], str]:
+    """Relocate one committed journal data block onto ext4 metadata."""
+    layout = _ext4_recovery_layout(image)
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    media = image.read_bytes()
+
+    def read_block(block: int) -> bytes:
+        start = block * block_size
+        result = media[start : start + block_size]
+        assert len(result) == block_size
+        return result
+
+    primary_super = read_block(layout["primary_super"])
+    assert struct.unpack_from("<I", primary_super, 0x3FC)[0] == _crc32c_raw(
+        primary_super[:0x3FC]
+    )
+    assert struct.unpack_from("<I", primary_super, 0x60)[0] & 0x04
+    original_tuple = primary_super[0x10C : 0x10C + 68]
+    original_root = original_tuple[:60]
+    assert struct.unpack_from("<H", original_root, 0x00)[0] == 0xF30A
+    assert struct.unpack_from("<H", original_root, 0x02)[0] == 1
+    assert struct.unpack_from("<H", original_root, 0x04)[0] == 4
+    assert struct.unpack_from("<H", original_root, 0x06)[0] == 0
+    assert struct.unpack_from("<I", original_root, 0x0C)[0] == 0
+    journal_bytes = (
+        struct.unpack_from("<I", original_tuple, 0x3C)[0] << 32
+    ) | struct.unpack_from("<I", original_tuple, 0x40)[0]
+    assert journal_bytes > 3 * block_size
+    assert journal_bytes % block_size == 0
+    journal_blocks = journal_bytes // block_size
+    assert struct.unpack_from("<H", original_root, 0x10)[0] == journal_blocks
+    assert struct.unpack_from("<H", original_root, 0x12)[0] == 0
+    journal_base = struct.unpack_from("<I", original_root, 0x14)[0]
+    assert journal_base == layout["journal_block"]
+    assert journal_base + journal_blocks <= layout["blocks"]
+    assert 0 < target_block < layout["blocks"]
+    assert not journal_base <= target_block < journal_base + journal_blocks
+
+    physical_group = (target_block - layout["first"]) // layout[
+        "blocks_per_group"
+    ]
+    assert 0 <= physical_group < layout["groups"]
+    descriptor_offset = (
+        layout["witness_gdt"] * block_size
+        + physical_group * layout["descriptor_size"]
+    )
+    descriptor = media[
+        descriptor_offset : descriptor_offset + layout["descriptor_size"]
+    ]
+    assert descriptor == _group_descriptor_with_checksum(
+        primary_super, descriptor, physical_group
+    )
+    block_bitmap = struct.unpack_from("<I", descriptor, 0x00)[0]
+    group_first = layout["first"] + physical_group * layout[
+        "blocks_per_group"
+    ]
+    target_index = target_block - group_first
+    bitmap = read_block(block_bitmap)
+    assert bitmap[target_index // 8] & (1 << (target_index % 8))
+
+    descriptor_block = read_block(journal_base + 1)
+    journal_data = read_block(journal_base + 2)
+    commit_block = read_block(journal_base + 3)
+    assert read_block(target_block) != journal_data
+    assert struct.unpack_from(">II", descriptor_block, 0x00) == (
+        0xC03B3998,
+        1,
+    )
+    assert struct.unpack_from(">II", commit_block, 0x00) == (
+        0xC03B3998,
+        2,
+    )
+    assert struct.unpack_from(">I", descriptor_block, 0x08)[0] == (
+        struct.unpack_from(">I", commit_block, 0x08)[0]
+    )
+
+    relocated_root = bytearray(original_root)
+    relocated_root[0x0C:] = bytes(48)
+    struct.pack_into("<H", relocated_root, 0x02, 3)
+    struct.pack_into(
+        "<IHHI", relocated_root, 0x0C, 0, 2, 0, journal_base
+    )
+    struct.pack_into(
+        "<IHHI", relocated_root, 0x18, 2, 1, 0, target_block
+    )
+    struct.pack_into(
+        "<IHHI",
+        relocated_root,
+        0x24,
+        3,
+        journal_blocks - 3,
+        0,
+        journal_base + 3,
+    )
+
+    patches: list[tuple[int, bytes]] = []
+    for group in range(layout["groups"]):
+        if not _ext4_sparse_group(group):
+            continue
+        super_block = (
+            layout["primary_super"]
+            if group == 0
+            else layout["first"] + group * layout["blocks_per_group"]
+        )
+        superblock = bytearray(read_block(super_block))
+        assert struct.unpack_from("<H", superblock, 0x5A)[0] == group
+        assert struct.unpack_from("<I", superblock, 0x3FC)[0] == _crc32c_raw(
+            superblock[:0x3FC]
+        )
+        assert superblock[0x10C : 0x10C + 68] == original_tuple
+        superblock[0x10C : 0x10C + 60] = relocated_root
+        updated_super = _ext4_super_with_checksum(superblock)
+        assert struct.unpack_from("<I", updated_super, 0x3FC)[0] == (
+            _crc32c_raw(updated_super[:0x3FC])
+        )
+        assert updated_super[0x10C : 0x10C + 60] == relocated_root
+        patches.append((super_block * block_size, updated_super))
+
+    inode_block = bytearray(read_block(layout["journal_inode_block"]))
+    inode_start = layout["journal_inode_offset"]
+    inode_end = inode_start + layout["inode_size"]
+    inode = bytearray(inode_block[inode_start:inode_end])
+    assert len(inode) == layout["inode_size"]
+    assert inode == _inode_with_checksum(primary_super, 8, inode)
+    assert inode[0x28 : 0x28 + 60] == original_root
+    assert struct.unpack_from("<I", inode, 0x04)[0] == (
+        struct.unpack_from("<I", original_tuple, 0x40)[0]
+    )
+    assert struct.unpack_from("<I", inode, 0x6C)[0] == (
+        struct.unpack_from("<I", original_tuple, 0x3C)[0]
+    )
+    inode[0x28 : 0x28 + 60] = relocated_root
+    updated_inode = _inode_with_checksum(primary_super, 8, inode)
+    assert updated_inode == _inode_with_checksum(
+        primary_super, 8, updated_inode
+    )
+    assert updated_inode[0x28 : 0x28 + 60] == relocated_root
+    inode_block[inode_start:inode_end] = updated_inode
+    patches.append(
+        (layout["journal_inode_block"] * block_size, bytes(inode_block))
+    )
+
+    # Apply this last when TARGET is itself a sparse-super/GDT block: the
+    # intended hostile alias, rather than a stale tuple, is the sole damage.
+    patches.append((target_block * block_size, journal_data))
+    expected = bytearray(media)
+    for offset, payload in patches:
+        expected[offset : offset + len(payload)] = payload
+    assert expected[
+        target_block * block_size : (target_block + 1) * block_size
+    ] == journal_data
+    return tuple(patches), hashlib.sha256(expected).hexdigest()
+
+
+def _author_jbd2_transactions(
+    *,
+    debugfs: Path,
+    env: dict[str, str],
+    source: Path,
+    directory: Path,
+    name: str,
+    block_size: int,
+    transactions: tuple[tuple[tuple[int, ...], bytes], ...],
+) -> Path:
+    image = directory / f"{name}.img"
+    shutil.copyfile(source, image)
+    commands = ["journal_open -c -v 3"]
+    for index, (blocks, payload) in enumerate(transactions):
+        assert blocks
+        assert len(payload) == len(blocks) * block_size
+        payload_path = directory / f"{name}-{index}.bin"
+        payload_path.write_bytes(payload)
+        block_list = ",".join(str(block) for block in blocks)
+        commands.append(f"journal_write -b {block_list} {payload_path}")
+    commands.extend(("journal_close", "close"))
+    command_path = directory / f"{name}.cmd"
+    command_path.write_text("\n".join(commands) + "\n", encoding="utf-8")
+    authored = subprocess.run(
+        [str(debugfs), "-w", "-f", str(command_path), str(image)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert authored.returncode == 0, authored.stdout + authored.stderr
+    assert "Command not found" not in authored.stdout + authored.stderr
+    return image
+
+
 def _feed_until_idle(system, payload: bytes, max_steps: int) -> int:
     position = 0
     steps = 0
@@ -378,29 +698,30 @@ def read_side_image() -> Path:
 
 
 @pytest.fixture(scope="session")
-def replay_fixture(
-    canonical_images: dict[str, Path], tmp_path_factory: pytest.TempPathFactory
-) -> dict[str, object]:
+def jbd2_toolchain() -> dict[str, object]:
     tool_dir_value = os.environ.get("AKASHIC_E2FSPROGS_TOOL_DIR")
     if not tool_dir_value:
         pytest.skip("set AKASHIC_E2FSPROGS_TOOL_DIR for JBD2 recovery tests")
-    debugfs = Path(tool_dir_value).resolve() / "debugfs"
-    if not debugfs.is_file() or not os.access(debugfs, os.X_OK):
-        pytest.skip(f"pinned debugfs is absent: {debugfs}")
-    env = os.environ.copy()
-    env["LANG"] = "C"
-    env["PATH"] = f"{debugfs.parent}:/usr/bin:/bin"
-    version = subprocess.run(
-        [str(debugfs), "-V"],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    banner = version.stdout + version.stderr
-    assert version.returncode == 0
-    assert "debugfs 1.47.4" in banner
-    assert "Using EXT2FS Library version 1.47.4" in banner
+    tool_dir = Path(tool_dir_value).resolve()
+    env = ext4_fixture_generator.pinned_environment(PROFILE, tool_dir, MANIFEST)
+    try:
+        tools = ext4_fixture_generator.verify_toolchain(PROFILE, tool_dir, env)
+    except ext4_fixture_generator.ProfileError as error:
+        pytest.fail(str(error))
+    debugfs = Path(tools["debugfs"]["path"])
+    return {"tool_dir": tool_dir, "debugfs": debugfs, "env": env}
+
+
+@pytest.fixture(scope="session")
+def replay_fixture(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
 
     directory = tmp_path_factory.mktemp("ext4-jbd2-replay")
     image = directory / "replay-csum3-64bit.img"
@@ -465,20 +786,178 @@ def replay_fixture(
 
 
 @pytest.fixture(scope="session")
+def recovery_authority_fixture(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Author committed repairs and forbidden recovery-authority payloads."""
+    source_image = canonical_images["primary-1k-i256"]
+    layout = _ext4_recovery_layout(source_image)
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    def read_block(block: int) -> bytes:
+        with source_image.open("rb") as source:
+            source.seek(block * block_size)
+            payload = source.read(block_size)
+        assert len(payload) == block_size
+        return payload
+
+    primary_super = read_block(layout["primary_super"])
+    primary_gdt = read_block(layout["primary_gdt"])
+    witness_super = read_block(layout["witness_super"])
+    witness_gdt = read_block(layout["witness_gdt"])
+    with source_image.open("rb") as source:
+        source.seek(layout["witness_gdt"] * block_size)
+        witness_gdt_blocks = source.read(
+            layout["witness_gdt_span"] * block_size
+        )
+    assert len(witness_gdt_blocks) == layout["witness_gdt_span"] * block_size
+    inode_bitmap = read_block(layout["inode_bitmap"])
+
+    dirty_super = bytearray(primary_super)
+    struct.pack_into(
+        "<I",
+        dirty_super,
+        0x60,
+        struct.unpack_from("<I", dirty_super, 0x60)[0] | 0x04,
+    )
+    dirty_super = bytearray(_ext4_super_with_checksum(dirty_super))
+
+    super_repair = bytearray(dirty_super)
+    struct.pack_into(
+        "<I",
+        super_repair,
+        0x30,
+        struct.unpack_from("<I", super_repair, 0x30)[0] ^ 0x01010101,
+    )
+    super_repair = _ext4_super_with_checksum(super_repair)
+
+    changed_tuple = bytearray(dirty_super)
+    tuple_start = struct.unpack_from("<I", changed_tuple, 0x120)[0]
+    struct.pack_into("<I", changed_tuple, 0x120, tuple_start + 1)
+    changed_tuple = _ext4_super_with_checksum(changed_tuple)
+
+    stranded_orphan = bytearray(dirty_super)
+    struct.pack_into("<I", stranded_orphan, 0xE8, 11)
+    stranded_orphan = _ext4_super_with_checksum(stranded_orphan)
+    assert struct.unpack_from("<I", stranded_orphan, 0xE8)[0] == 11
+    assert struct.unpack_from("<I", stranded_orphan, 0x3FC)[0] == _crc32c_raw(
+        stranded_orphan[:0x3FC]
+    )
+
+    unbounded_counters = bytearray(dirty_super)
+    blocks = struct.unpack_from("<I", unbounded_counters, 0x04)[0]
+    struct.pack_into("<I", unbounded_counters, 0x0C, blocks + 1)
+    unbounded_counters = _ext4_super_with_checksum(unbounded_counters)
+    assert struct.unpack_from("<I", unbounded_counters, 0x0C)[0] > blocks
+    assert struct.unpack_from(
+        "<I", unbounded_counters, 0x3FC
+    )[0] == _crc32c_raw(unbounded_counters[:0x3FC])
+
+    changed_gdt = bytearray(primary_gdt)
+    descriptor = bytearray(changed_gdt[:64])
+    inode_table = struct.unpack_from("<I", descriptor, 0x08)[0]
+    struct.pack_into("<I", descriptor, 0x08, inode_table + 1)
+    descriptor = _group_descriptor_with_checksum(primary_super, descriptor, 0)
+    changed_gdt[:64] = descriptor
+
+    cleared_inode_bitmap = bytearray(inode_bitmap)
+    cleared_inode_bitmap[0] &= ~0x80
+
+    directory = tmp_path_factory.mktemp("ext4-recovery-authority")
+
+    def author(
+        name: str, blocks: tuple[int, ...], payload: bytes
+    ) -> Path:
+        return _author_jbd2_transactions(
+            debugfs=debugfs,
+            env=env,
+            source=source_image,
+            directory=directory,
+            name=name,
+            block_size=block_size,
+            transactions=((blocks, payload),),
+        )
+
+    bootstrap_repair_image = author(
+        "bootstrap-repair",
+        (layout["primary_gdt"], layout["inode_bitmap"]),
+        primary_gdt + inode_bitmap,
+    )
+    authority_images = {
+        "backup-super": author(
+            "forbidden-backup-super",
+            (layout["witness_super"],),
+            witness_super,
+        ),
+        "backup-gdt": author(
+            "forbidden-backup-gdt",
+            (layout["witness_gdt"],),
+            witness_gdt,
+        ),
+        "primary-super-tuple": author(
+            "forbidden-primary-super-tuple",
+            (layout["primary_super"],),
+            changed_tuple,
+        ),
+        "primary-super-orphan": author(
+            "forbidden-primary-super-orphan",
+            (layout["primary_super"],),
+            stranded_orphan,
+        ),
+        "primary-super-counters": author(
+            "forbidden-primary-super-counters",
+            (layout["primary_super"],),
+            unbounded_counters,
+        ),
+        "primary-gdt-locator": author(
+            "forbidden-primary-gdt-locator",
+            (layout["primary_gdt"],),
+            bytes(changed_gdt),
+        ),
+        "journal-inode-bit": author(
+            "forbidden-journal-inode-bit",
+            (layout["inode_bitmap"],),
+            bytes(cleared_inode_bitmap),
+        ),
+    }
+    primary_super_repair_image = author(
+        "primary-super-repair",
+        (layout["primary_super"],),
+        super_repair,
+    )
+    return {
+        "source_image": source_image,
+        "layout": layout,
+        "primary_gdt": primary_gdt,
+        "inode_bitmap": inode_bitmap,
+        "witness_super": witness_super,
+        "witness_gdt": witness_gdt,
+        "witness_gdt_blocks": witness_gdt_blocks,
+        "bootstrap_repair_image": bootstrap_repair_image,
+        "authority_images": authority_images,
+        "primary_super_repair_image": primary_super_repair_image,
+        "primary_super_repair": super_repair,
+    }
+
+
+@pytest.fixture(scope="session")
 def journal_inode_table_replay_fixture(
-    canonical_images: dict[str, Path], tmp_path_factory: pytest.TempPathFactory
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, object]:
     """Author valid replay payloads that preserve or alter journal inode 8."""
-    tool_dir_value = os.environ.get("AKASHIC_E2FSPROGS_TOOL_DIR")
-    if not tool_dir_value:
-        pytest.skip("set AKASHIC_E2FSPROGS_TOOL_DIR for JBD2 recovery tests")
-    tool_dir = Path(tool_dir_value).resolve()
-    env = ext4_fixture_generator.pinned_environment(PROFILE, tool_dir, MANIFEST)
-    try:
-        tools = ext4_fixture_generator.verify_toolchain(PROFILE, tool_dir, env)
-    except ext4_fixture_generator.ProfileError as error:
-        pytest.fail(str(error))
-    debugfs = Path(tools["debugfs"]["path"])
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
     source_image = canonical_images["primary-1k-i256"]
     located = subprocess.run(
         [str(debugfs), "-R", "imap <8>", str(source_image)],
@@ -573,19 +1052,16 @@ def journal_inode_table_replay_fixture(
 
 @pytest.fixture(scope="session")
 def large_journal_replay_fixture(
+    jbd2_toolchain: dict[str, object],
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, object]:
     """Author recovery on a real 8 MiB journal, beyond the old 4096-block pin."""
-    tool_dir_value = os.environ.get("AKASHIC_E2FSPROGS_TOOL_DIR")
-    if not tool_dir_value:
-        pytest.skip("set AKASHIC_E2FSPROGS_TOOL_DIR for JBD2 recovery tests")
-    tool_dir = Path(tool_dir_value).resolve()
-    env = ext4_fixture_generator.pinned_environment(PROFILE, tool_dir, MANIFEST)
-    try:
-        tools = ext4_fixture_generator.verify_toolchain(PROFILE, tool_dir, env)
-    except ext4_fixture_generator.ProfileError as error:
-        pytest.fail(str(error))
-    debugfs = Path(tools["debugfs"]["path"])
+    tool_dir = jbd2_toolchain["tool_dir"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(tool_dir, Path)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
     config = MANIFEST.parent / "mke2fs.conf"
     assert _sha256(config) == PROFILE["generator"]["mke2fs_config_sha256"]
     directory = tmp_path_factory.mktemp("ext4-jbd2-replay-8m")
@@ -792,6 +1268,148 @@ def test_jbd2_checksum_v3_replay_is_durable_and_idempotent(
     _assert_emitted(second, "EXT4-JBD2-SECOND-MOUNT-OK")
 
 
+@pytest.mark.parametrize(
+    ("alias_kind", "case_name"),
+    (
+        ("group2-inode-table", "later-inode-table"),
+        ("group3-backup-gdt", "later-sparse-gdt"),
+    ),
+)
+def test_jbd2_tuple_map_rejects_later_metadata_alias_before_write(
+    replay_fixture: dict[str, object],
+    tmp_path: Path,
+    alias_kind: str,
+    case_name: str,
+) -> None:
+    image = replay_fixture["image"]
+    assert isinstance(image, Path)
+    layout = _ext4_recovery_layout(image)
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    media = image.read_bytes()
+    primary_start = layout["primary_super"] * block_size
+    primary_super = media[primary_start : primary_start + block_size]
+    assert len(primary_super) == block_size
+
+    if alias_kind == "group2-inode-table":
+        group = 2
+        assert group < layout["groups"]
+        descriptor_start = (
+            layout["witness_gdt"] * block_size
+            + group * layout["descriptor_size"]
+        )
+        descriptor = media[
+            descriptor_start : descriptor_start + layout["descriptor_size"]
+        ]
+        assert descriptor == _group_descriptor_with_checksum(
+            primary_super, descriptor, group
+        )
+        inode_table_base = struct.unpack_from("<I", descriptor, 0x08)[0]
+        inode_table_blocks = (
+            struct.unpack_from("<I", primary_super, 0x28)[0]
+            * layout["inode_size"]
+            + block_size
+            - 1
+        ) // block_size
+        assert inode_table_blocks > 1
+        assert inode_table_base + inode_table_blocks <= layout["blocks"]
+        target_block = inode_table_base + inode_table_blocks - 1
+        assert target_block >= inode_table_base
+        assert target_block != layout["journal_inode_block"]
+    elif alias_kind == "group3-backup-gdt":
+        group = 3
+        assert group < layout["groups"]
+        assert _ext4_sparse_group(group)
+        backup_super_block = (
+            layout["first"] + group * layout["blocks_per_group"]
+        )
+        target_block = backup_super_block + 1
+        backup_super_start = backup_super_block * block_size
+        backup_super = media[
+            backup_super_start : backup_super_start + block_size
+        ]
+        assert len(backup_super) == block_size
+        assert struct.unpack_from("<H", backup_super, 0x5A)[0] == group
+        assert struct.unpack_from("<I", backup_super, 0x3FC)[0] == (
+            _crc32c_raw(backup_super[:0x3FC])
+        )
+        target_start = target_block * block_size
+        backup_descriptor = media[
+            target_start : target_start + layout["descriptor_size"]
+        ]
+        assert backup_descriptor == _group_descriptor_with_checksum(
+            backup_super, backup_descriptor, 0
+        )
+    else:
+        raise AssertionError(f"unknown journal alias case {alias_kind}")
+
+    assert target_block not in {
+        layout["primary_super"],
+        layout["primary_gdt"],
+        layout["witness_super"],
+        layout["witness_gdt"],
+        layout["block_bitmap"],
+        layout["inode_bitmap"],
+        layout["journal_inode_block"],
+    }
+    patches, expected_sha256 = _journal_metadata_alias_patches(
+        image, target_block
+    )
+    assert expected_sha256 != hashlib.sha256(media).hexdigest()
+
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / f"journal-map-alias-{case_name}.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-REASON VFS-R-CORRUPT = "
+                "_M-IOR VFS-IOR-DETAIL EXT4-D-JOURNAL = AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                "_V _EXT4-CTX _EXT4-C.J.REPLAYED + @ 0= AND "
+                'IF ." EXT4-JBD2-METADATA-ALIAS-REJECTED" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-JBD2-METADATA-ALIAS-REJECTED")
+    assert trace == ()
+    assert media_sha256 == expected_sha256
+
+
+def test_jbd2_torn_primary_requires_committed_super_repair(
+    replay_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = replay_fixture["image"]
+    assert isinstance(image, Path)
+    checksum_byte = 1024 + 0x3FC
+    with image.open("rb") as source:
+        source.seek(checksum_byte)
+        replacement = bytes((source.read(1)[0] ^ 1,))
+    patched = bytearray(image.read_bytes())
+    patched[checksum_byte : checksum_byte + 1] = replacement
+
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / "unproven-super-repair.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-REASON VFS-R-CORRUPT = "
+                "_M-IOR VFS-IOR-DETAIL EXT4-D-SUPER-CHECKSUM = AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                'IF ." EXT4-JBD2-SUPER-REPAIR-UNPROVEN" THEN'
+            ),
+        ],
+        patches=((checksum_byte, replacement),),
+    )
+    _assert_emitted(output, "EXT4-JBD2-SUPER-REPAIR-UNPROVEN")
+    assert trace == ()
+    assert media_sha256 == hashlib.sha256(patched).hexdigest()
+
+
 def test_jbd2_recovery_rejects_checksum_valid_journal_backup_mismatch(
     replay_fixture: dict[str, object], tmp_path: Path
 ) -> None:
@@ -811,6 +1429,272 @@ def test_jbd2_recovery_rejects_checksum_valid_journal_backup_mismatch(
     )
     assert "10 12 0" in output, output[-1500:]
     assert trace == ()
+
+
+@pytest.mark.parametrize(
+    ("witness_field", "field_offset", "detail"),
+    (
+        ("witness_super", 0x3FC, 9),
+        ("witness_gdt", 0x1E, 6),
+    ),
+)
+def test_dirty_recovery_requires_checksum_valid_sparse_witness(
+    replay_fixture: dict[str, object],
+    tmp_path: Path,
+    witness_field: str,
+    field_offset: int,
+    detail: int,
+) -> None:
+    image = replay_fixture["image"]
+    assert isinstance(image, Path)
+    layout = _ext4_recovery_layout(image)
+    offset = layout[witness_field] * layout["block_size"] + field_offset
+    with image.open("rb") as source:
+        source.seek(offset)
+        replacement = bytes((source.read(1)[0] ^ 1,))
+    patched = bytearray(image.read_bytes())
+    patched[offset : offset + 1] = replacement
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / f"corrupt-{witness_field}.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-REASON VFS-R-CORRUPT = "
+                f"_M-IOR VFS-IOR-DETAIL {detail} = AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                'IF ." EXT4-SPARSE-WITNESS-REQUIRED" THEN'
+            ),
+        ],
+        patches=((offset, replacement),),
+    )
+    _assert_emitted(output, "EXT4-SPARSE-WITNESS-REQUIRED")
+    assert trace == ()
+    assert media_sha256 == hashlib.sha256(patched).hexdigest()
+
+
+def test_jbd2_sparse_witness_bootstraps_primary_metadata_repairs(
+    recovery_authority_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = recovery_authority_fixture["bootstrap_repair_image"]
+    layout = recovery_authority_fixture["layout"]
+    primary_gdt = recovery_authority_fixture["primary_gdt"]
+    inode_bitmap = recovery_authority_fixture["inode_bitmap"]
+    witness_super = recovery_authority_fixture["witness_super"]
+    witness_gdt_blocks = recovery_authority_fixture["witness_gdt_blocks"]
+    assert isinstance(image, Path)
+    assert isinstance(layout, dict)
+    assert isinstance(primary_gdt, bytes)
+    assert isinstance(inode_bitmap, bytes)
+    assert isinstance(witness_super, bytes)
+    assert isinstance(witness_gdt_blocks, bytes)
+    block_size = layout["block_size"]
+    gdt_checksum = layout["primary_gdt"] * block_size + 0x1E
+    inode_bitmap_byte = layout["inode_bitmap"] * block_size + 2
+    with image.open("rb") as source:
+        source.seek(layout["primary_super"] * block_size)
+        dirty_super = source.read(block_size)
+        source.seek(layout["primary_gdt"] * block_size)
+        dirty_gdt = bytearray(source.read(block_size))
+        source.seek(layout["inode_bitmap"] * block_size)
+        dirty_inode_bitmap = bytearray(source.read(block_size))
+        source.seek(gdt_checksum)
+        gdt_replacement = bytes((source.read(1)[0] ^ 1,))
+        source.seek(inode_bitmap_byte)
+        bitmap_replacement = bytes((source.read(1)[0] ^ 1,))
+    assert len(dirty_super) == block_size
+    assert primary_gdt[:64] == _group_descriptor_with_checksum(
+        dirty_super, primary_gdt[:64], 0
+    )
+    dirty_gdt[0x1E] = gdt_replacement[0]
+    assert bytes(dirty_gdt[:64]) != _group_descriptor_with_checksum(
+        dirty_super, dirty_gdt[:64], 0
+    )
+    assert dirty_inode_bitmap[0] & 0x80
+    dirty_inode_bitmap[2] = bitmap_replacement[0]
+    checksum_seed = struct.unpack_from("<I", dirty_super, 0x270)[0]
+    inode_bitmap_bytes = struct.unpack_from("<I", dirty_super, 0x28)[0] // 8
+    stored_inode_bitmap_checksum = (
+        struct.unpack_from("<H", primary_gdt, 0x1A)[0]
+        | struct.unpack_from("<H", primary_gdt, 0x3A)[0] << 16
+    )
+    assert (
+        _crc32c_raw(inode_bitmap[:inode_bitmap_bytes], checksum_seed)
+        == stored_inode_bitmap_checksum
+    )
+    assert (
+        _crc32c_raw(dirty_inode_bitmap[:inode_bitmap_bytes], checksum_seed)
+        != stored_inode_bitmap_checksum
+    )
+
+    backing = tmp_path / "sparse-witness-bootstrap-repaired.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        backing,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 2 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REPLAYED + @ 0<> AND "
+                'IF ." EXT4-SPARSE-WITNESS-BOOTSTRAP-OK" THEN'
+            ),
+        ],
+        patches=(
+            (gdt_checksum, gdt_replacement),
+            (inode_bitmap_byte, bitmap_replacement),
+        ),
+    )
+    _assert_emitted(output, "EXT4-SPARSE-WITNESS-BOOTSTRAP-OK")
+    assert trace[:3] == (
+        ("write", layout["primary_gdt"] * 2, 2),
+        ("write", layout["inode_bitmap"] * 2, 2),
+        ("flush", 0, 0),
+    )
+    assert backing.is_file()
+    assert _sha256(backing) == media_sha256
+    with backing.open("rb") as source:
+        source.seek(layout["primary_gdt"] * block_size)
+        assert source.read(block_size) == primary_gdt
+        source.seek(layout["inode_bitmap"] * block_size)
+        assert source.read(block_size) == inode_bitmap
+        source.seek(layout["witness_super"] * block_size)
+        assert source.read(block_size) == witness_super
+        source.seek(layout["witness_gdt"] * block_size)
+        assert source.read(len(witness_gdt_blocks)) == witness_gdt_blocks
+
+
+@pytest.mark.parametrize(
+    "case_name",
+    (
+        "backup-super",
+        "backup-gdt",
+        "primary-super-tuple",
+        "primary-super-orphan",
+        "primary-super-counters",
+        "primary-gdt-locator",
+        "journal-inode-bit",
+    ),
+)
+def test_jbd2_preflight_freezes_recovery_authority(
+    recovery_authority_fixture: dict[str, object],
+    tmp_path: Path,
+    case_name: str,
+) -> None:
+    authority_images = recovery_authority_fixture["authority_images"]
+    assert isinstance(authority_images, dict)
+    image = authority_images[case_name]
+    assert isinstance(image, Path)
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / f"refused-{case_name}.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-REASON VFS-R-CORRUPT = "
+                "_M-IOR VFS-IOR-DETAIL EXT4-D-JOURNAL = AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                'IF ." EXT4-RECOVERY-AUTHORITY-FROZEN" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-RECOVERY-AUTHORITY-FROZEN")
+    assert trace == ()
+    assert media_sha256 == _sha256(image)
+
+
+def test_jbd2_committed_primary_super_payload_repairs_prefix_tear(
+    recovery_authority_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = recovery_authority_fixture["primary_super_repair_image"]
+    candidate = recovery_authority_fixture["primary_super_repair"]
+    layout = recovery_authority_fixture["layout"]
+    assert isinstance(image, Path)
+    assert isinstance(candidate, bytes)
+    assert isinstance(layout, dict)
+    block_size = layout["block_size"]
+    primary_offset = layout["primary_super"] * block_size
+    with image.open("rb") as source:
+        source.seek(primary_offset)
+        torn = bytearray(source.read(block_size))
+    torn[:0x34] = candidate[:0x34]
+    assert struct.unpack_from("<I", torn, 0x3FC)[0] != _crc32c_raw(torn[:0x3FC])
+
+    backing = tmp_path / "committed-primary-super-repaired.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        backing,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REPLAYED + @ 0<> AND "
+                'IF ." EXT4-COMMITTED-SUPER-REPAIR-OK" THEN'
+            ),
+        ],
+        patches=((primary_offset, bytes(torn)),),
+    )
+    _assert_emitted(output, "EXT4-COMMITTED-SUPER-REPAIR-OK")
+    assert trace[0] == ("write", layout["primary_super"] * 2, 2)
+    assert backing.is_file()
+    assert _sha256(backing) == media_sha256
+    with backing.open("rb") as source:
+        source.seek(primary_offset)
+        repaired = source.read(block_size)
+    assert struct.unpack_from("<I", repaired, 0x30)[0] == struct.unpack_from(
+        "<I", candidate, 0x30
+    )[0]
+    assert struct.unpack_from("<I", repaired, 0x60)[0] & 0x04 == 0
+    assert struct.unpack_from("<I", repaired, 0x3FC)[0] == _crc32c_raw(
+        repaired[:0x3FC]
+    )
+
+
+def test_jbd2_incomplete_primary_super_payload_grants_no_repair_authority(
+    recovery_authority_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    image = recovery_authority_fixture["primary_super_repair_image"]
+    candidate = recovery_authority_fixture["primary_super_repair"]
+    layout = recovery_authority_fixture["layout"]
+    assert isinstance(image, Path)
+    assert isinstance(candidate, bytes)
+    assert isinstance(layout, dict)
+    block_size = layout["block_size"]
+    primary_offset = layout["primary_super"] * block_size
+    with image.open("rb") as source:
+        source.seek(primary_offset)
+        torn = bytearray(source.read(block_size))
+    torn[:0x34] = candidate[:0x34]
+    commit_magic = layout["journal_commit_block"] * block_size
+    patched = bytearray(image.read_bytes())
+    assert struct.unpack_from(">I", patched, commit_magic)[0] == 0xC03B3998
+    assert struct.unpack_from(">I", patched, commit_magic + 4)[0] == 2
+    patched[primary_offset : primary_offset + block_size] = torn
+    patched[commit_magic : commit_magic + 4] = bytes(4)
+
+    output, trace, media_sha256 = run_recovery_forth(
+        image,
+        tmp_path / "incomplete-primary-super-repair.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            (
+                "_M-IOR VFS-IOR-REASON VFS-R-CORRUPT = "
+                "_M-IOR VFS-IOR-DETAIL EXT4-D-SUPER-CHECKSUM = AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                'IF ." EXT4-INCOMPLETE-SUPER-REPAIR-UNPROVEN" THEN'
+            ),
+        ],
+        patches=(
+            (primary_offset, bytes(torn)),
+            (commit_magic, bytes(4)),
+        ),
+    )
+    _assert_emitted(output, "EXT4-INCOMPLETE-SUPER-REPAIR-UNPROVEN")
+    assert trace == ()
+    assert media_sha256 == hashlib.sha256(patched).hexdigest()
 
 
 def test_jbd2_replay_accepts_arena_bounded_8m_journal(
@@ -1692,15 +2576,16 @@ def test_zero_count_loops_and_invalid_dirent_type_are_total(tmp_path: Path) -> N
                 "_E4CTX _EXT4-C.R.ATIME + @ -1 = AND "
                 'IF ." EXT4-TIMESTAMP-SIGN-OK" THEN'
             ),
-            (
-                ": _E4-SET-LEGACY-JOURNAL-MAP 12 0 DO "
-                "100 I + _E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + "
-                "I 4 * + L! LOOP ;"
-            ),
-            "_E4-SET-LEGACY-JOURNAL-MAP",
-            "0 _E4CTX _EXT4-C.INODE + _EXT4-I.FLAGS + L!",
             "1000 _E4CTX _EXT4-C.BLOCKS + !",
             "12 _E4CTX _EXT4-C.J.MAXLEN + !",
+            (
+                "_E4CTX _EXT4-C.J.WITNESS-SUPER + "
+                "_EXT4-SB.JOURNAL-BLOCKS + CONSTANT _E4-JOURNAL-ROOT"
+            ),
+            "_E4-JOURNAL-ROOT 60 0 FILL",
+            "_EXT4-EXTENT-MAGIC _E4-JOURNAL-ROOT W!",
+            "1 _E4-JOURNAL-ROOT 2 + W! 4 _E4-JOURNAL-ROOT 4 + W!",
+            "12 _E4-JOURNAL-ROOT 16 + W! 100 _E4-JOURNAL-ROOT 20 + L!",
             (
                 "12 CELLS 32 CELLS + 2 CELLS + A-XMEM ARENA-NEW "
                 "THROW CONSTANT _E4-JOURNAL-ARENA"
@@ -1716,11 +2601,13 @@ def test_zero_count_loops_and_invalid_dirent_type_are_total(tmp_path: Path) -> N
             ),
             "0 _E4CTX _EXT4-JOURNAL-MAP@ CONSTANT _LJM-FIRST",
             "11 _E4CTX _EXT4-JOURNAL-MAP@ CONSTANT _LJM-LAST",
-            "100 _E4CTX _EXT4-JOURNAL-HOME? CONSTANT _LJM-HOME",
-            "999 _E4CTX _EXT4-JOURNAL-HOME? 0= CONSTANT _LJM-NONHOME",
+            "100 _E4CTX _EXT4-JOURNAL-DATA? CONSTANT _LJM-HOME",
+            "999 _E4CTX _EXT4-JOURNAL-DATA? 0= CONSTANT _LJM-NONHOME",
+            "2 _E4-JOURNAL-ROOT 2 + W! 11 _E4-JOURNAL-ROOT 16 + W!",
             (
-                "100 _E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + "
-                "11 4 * + L!"
+                "11 _E4-JOURNAL-ROOT 24 + L! "
+                "1 _E4-JOURNAL-ROOT 28 + W! "
+                "100 _E4-JOURNAL-ROOT 32 + L!"
             ),
             (
                 "_E4CTX _EXT4-SNAPSHOT-JOURNAL-MAP "
@@ -1734,7 +2621,19 @@ def test_zero_count_loops_and_invalid_dirent_type_are_total(tmp_path: Path) -> N
                 "_LJM-LAST 111 = AND _LJM-HOME AND _LJM-NONHOME AND "
                 "_LJM-DUP-IOR VFS-IOR-REASON VFS-R-CORRUPT = AND "
                 "_LJM-DUP-IOR VFS-IOR-DETAIL EXT4-D-JOURNAL = AND "
-                'IF ." EXT4-LEGACY-JOURNAL-MAP-OK" THEN'
+                'IF ." EXT4-TUPLE-JOURNAL-MAP-OK" THEN'
+            ),
+            (
+                "200 _E4CTX _EXT4-C.J.WITNESS-SUPER-BLOCK + ! "
+                "201 _E4CTX _EXT4-C.J.WITNESS-GDT-BLOCK + ! "
+                "2 _E4CTX _EXT4-C.J.WITNESS-GDT-SPAN + !"
+            ),
+            (
+                "200 _E4CTX _EXT4-RECOVERY-FROZEN-BLOCK? "
+                "201 _E4CTX _EXT4-RECOVERY-FROZEN-BLOCK? AND "
+                "202 _E4CTX _EXT4-RECOVERY-FROZEN-BLOCK? AND "
+                "203 _E4CTX _EXT4-RECOVERY-FROZEN-BLOCK? 0= AND "
+                'IF ." EXT4-RECOVERY-AUTHORITY-SPAN-OK" THEN'
             ),
             "CREATE _E4-NOMEM-CTX _EXT4-CTX-SIZE ALLOT",
             "_E4-NOMEM-CTX _EXT4-CTX-SIZE 0 FILL",
@@ -1758,25 +2657,7 @@ def test_zero_count_loops_and_invalid_dirent_type_are_total(tmp_path: Path) -> N
                 "_E4-NOMEM-CTX _EXT4-C.J.MAP-HASH + @ 0= AND "
                 "_E4-NOMEM-CTX _EXT4-C.J.MAP-CAPACITY + @ 0= AND "
                 "_E4-NOMEM-CTX _EXT4-C.J.MAP-HASH-SLOTS + @ 0= AND "
-                "_E4-NOMEM-CTX _EXT4-C.J.METADATA-HASH + @ 0= AND "
-                "_E4-NOMEM-CTX _EXT4-C.J.METADATA-CAPACITY + @ 0= AND "
-                "_E4-NOMEM-CTX _EXT4-C.J.METADATA-HASH-SLOTS + @ 0= AND "
                 'IF ." EXT4-JOURNAL-WORKSPACE-NOMEM" THEN'
-            ),
-            "_E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 60 0 FILL",
-            "11 _E4CTX _EXT4-C.J.MAXLEN + !",
-            (
-                "777 _E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + "
-                "11 4 * + L!"
-            ),
-            (
-                "_E4CTX _EXT4-VALIDATE-JOURNAL-INODE-MAP "
-                "CONSTANT _E4-BEYOND-EOF-IOR"
-            ),
-            (
-                "_E4-BEYOND-EOF-IOR VFS-IOR-REASON VFS-R-CORRUPT = "
-                "_EXT4-MAP-VALIDATION-LIMIT @ 0= AND "
-                'IF ." EXT4-JOURNAL-EOF-BOUND-OK" THEN'
             ),
             "_E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 60 0 FILL",
             (
@@ -1802,40 +2683,15 @@ def test_zero_count_loops_and_invalid_dirent_type_are_total(tmp_path: Path) -> N
                 "_EXT4-MAP-VALIDATION-LIMIT @ 0= AND "
                 'IF ." EXT4-JOURNAL-EXTENT-EOF-BOUND-OK" THEN'
             ),
-            "_E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 60 0 FILL",
-            "0 _E4CTX _EXT4-C.INODE + _EXT4-I.FLAGS + L!",
-            "100 _E4CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 12 4 * + L!",
-            "13 _E4CTX _EXT4-C.J.MAXLEN + !",
-            "1 _E4CTX _EXT4-C.J.METADATA-COUNT + !",
-            (
-                "_E4CTX _EXT4-PREPARE-JOURNAL-METADATA-HASH "
-                "CONSTANT _E4-METADATA-PREP-IOR"
-            ),
-            "500 _E4CTX _EXT4-JOURNAL-METADATA-UNIQUE? CONSTANT _E4-META-ADD",
-            "500 _E4CTX _EXT4-JOURNAL-HOME? CONSTANT _E4-META-HOME",
-            (
-                "_E4CTX _EXT4-VERIFY-JOURNAL-METADATA-DISJOINT "
-                "CONSTANT _E4-METADATA-ALIAS-IOR"
-            ),
-            (
-                "_E4-METADATA-PREP-IOR 0= _E4-META-ADD AND "
-                "_E4-META-HOME AND "
-                "_E4-METADATA-ALIAS-IOR VFS-IOR-REASON "
-                "VFS-R-CORRUPT = AND "
-                "_E4-METADATA-ALIAS-IOR VFS-IOR-DETAIL "
-                "EXT4-D-JOURNAL = AND "
-                'IF ." EXT4-JOURNAL-METADATA-ALIAS-OK" THEN'
-            ),
         ],
     )
     _assert_emitted(output, "EXT4-PARSER-TOTAL-OK")
     _assert_emitted(output, "EXT4-HUGE-BLOCKS-OK")
     _assert_emitted(output, "EXT4-TIMESTAMP-SIGN-OK")
-    _assert_emitted(output, "EXT4-LEGACY-JOURNAL-MAP-OK")
+    _assert_emitted(output, "EXT4-TUPLE-JOURNAL-MAP-OK")
+    _assert_emitted(output, "EXT4-RECOVERY-AUTHORITY-SPAN-OK")
     _assert_emitted(output, "EXT4-JOURNAL-WORKSPACE-NOMEM")
-    _assert_emitted(output, "EXT4-JOURNAL-EOF-BOUND-OK")
     _assert_emitted(output, "EXT4-JOURNAL-EXTENT-EOF-BOUND-OK")
-    _assert_emitted(output, "EXT4-JOURNAL-METADATA-ALIAS-OK")
 
 
 def test_htree_and_internal_extent_parser_semantics_are_total(
@@ -2114,30 +2970,35 @@ def test_journal_backup_root_rejects_non_authoritative_shapes(
             ),
             "_T-JBR-ROOT _T-JBR-SAVED 60 CMOVE",
             (
-                "_T-JBR-CTX _EXT4-VALIDATE-JOURNAL-BACKUP-ROOT 0= "
+                "_T-JBR-ROOT _T-JBR-CTX "
+                "_EXT4-VALIDATE-JOURNAL-BACKUP-ROOT-AT 0= "
                 "CONSTANT _T-JBR-GOOD"
             ),
             (
                 "1 _T-JBR-ROOT 6 + W! "
-                "_T-JBR-CTX _EXT4-VALIDATE-JOURNAL-BACKUP-ROOT 0<> "
+                "_T-JBR-ROOT _T-JBR-CTX "
+                "_EXT4-VALIDATE-JOURNAL-BACKUP-ROOT-AT 0<> "
                 "CONSTANT _T-JBR-DEPTH-BAD"
             ),
             "_T-JBR-SAVED _T-JBR-ROOT 60 CMOVE",
             (
                 "1 _T-JBR-ROOT 12 + L! "
-                "_T-JBR-CTX _EXT4-VALIDATE-JOURNAL-BACKUP-ROOT 0<> "
+                "_T-JBR-ROOT _T-JBR-CTX "
+                "_EXT4-VALIDATE-JOURNAL-BACKUP-ROOT-AT 0<> "
                 "CONSTANT _T-JBR-GAP-BAD"
             ),
             "_T-JBR-SAVED _T-JBR-ROOT 60 CMOVE",
             (
                 "32769 _T-JBR-ROOT 16 + W! "
-                "_T-JBR-CTX _EXT4-VALIDATE-JOURNAL-BACKUP-ROOT 0<> "
+                "_T-JBR-ROOT _T-JBR-CTX "
+                "_EXT4-VALIDATE-JOURNAL-BACKUP-ROOT-AT 0<> "
                 "CONSTANT _T-JBR-UNWRITTEN-BAD"
             ),
             "_T-JBR-SAVED _T-JBR-ROOT 60 CMOVE",
             (
                 "_T-JBR-CTX _EXT4-C.BLOCKS + @ _T-JBR-ROOT 20 + L! "
-                "_T-JBR-CTX _EXT4-VALIDATE-JOURNAL-BACKUP-ROOT 0<> "
+                "_T-JBR-ROOT _T-JBR-CTX "
+                "_EXT4-VALIDATE-JOURNAL-BACKUP-ROOT-AT 0<> "
                 "CONSTANT _T-JBR-BOUNDS-BAD"
             ),
             "_T-JBR-SAVED _T-JBR-ROOT 60 CMOVE",
@@ -2148,7 +3009,8 @@ def test_journal_backup_root_rejects_non_authoritative_shapes(
                 "_T-JBR-ROOT 32 + L!"
             ),
             (
-                "_T-JBR-CTX _EXT4-VALIDATE-JOURNAL-BACKUP-ROOT 0<> "
+                "_T-JBR-ROOT _T-JBR-CTX "
+                "_EXT4-VALIDATE-JOURNAL-BACKUP-ROOT-AT 0<> "
                 "CONSTANT _T-JBR-ALIAS-BAD"
             ),
             (
@@ -2664,10 +3526,6 @@ def test_failed_mount_retry_reuses_journal_workspace(
             "_RETRY-ARENA ARENA-USED CONSTANT _RETRY-USED-1",
             "_RETRY-CTX _EXT4-C.J.MAP + @ CONSTANT _RETRY-MAP",
             "_RETRY-CTX _EXT4-C.J.MAP-HASH + @ CONSTANT _RETRY-HASH",
-            (
-                "_RETRY-CTX _EXT4-C.J.METADATA-HASH + @ "
-                "CONSTANT _RETRY-METADATA-HASH"
-            ),
             "_RETRY-V _EXT4-MOUNT CONSTANT _RETRY-IOR-2",
             "_RETRY-ARENA ARENA-USED CONSTANT _RETRY-USED-2",
             (
@@ -2677,8 +3535,6 @@ def test_failed_mount_retry_reuses_journal_workspace(
                 "_RETRY-V _EXT4-CTX _RETRY-CTX = AND "
                 "_RETRY-CTX _EXT4-C.J.MAP + @ _RETRY-MAP = AND "
                 "_RETRY-CTX _EXT4-C.J.MAP-HASH + @ _RETRY-HASH = AND "
-                "_RETRY-CTX _EXT4-C.J.METADATA-HASH + @ "
-                "_RETRY-METADATA-HASH = AND "
                 "_RETRY-MAP 0<> AND "
                 "_RETRY-CTX _EXT4-C.READY + @ 0= AND "
                 "_RETRY-V V.LIFECYCLE @ VFS-L-NEW = AND "

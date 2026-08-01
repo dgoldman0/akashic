@@ -207,10 +207,10 @@ Recovery is ordered as follows:
 The current implementation covers steps 1 through 4 only for the exact
 `64bit | checksum_v3` journal mask (`0x12`) with no revoke record. It performs
 a complete non-mutating scan before replay and snapshots the complete journal
-mapping in one size-bounded walk after extent/legacy-tree validation. Journal
-length comes from inode 8 and must exactly match the authenticated 32-bit JBD2
-`s_maxlen`; the exact map and uniqueness hash come from the caller-provided
-arena, so 4 MiB is a canonical-fixture choice rather than a driver ceiling.
+mapping by expanding the checksum-covered inline tuple. Journal length comes
+from inode 8 and must exactly match the authenticated 32-bit JBD2 `s_maxlen`;
+the exact map and uniqueness hash come from the caller-provided arena, so 4 MiB
+is a canonical-fixture choice rather than a driver ceiling.
 The recovery profile additionally requires standard `s_jnl_backup_type=1`.
 All validated sparse-super copies must carry the same 68-byte `s_jnl_blocks`
 tuple as the primary, and that tuple must exactly reproduce inode 8's
@@ -222,24 +222,34 @@ logical coverage through journal EOF, and bounded, pairwise-disjoint physical
 ranges. This is a recovery-authority rule for the fixed internal journal, not
 a restriction on ordinary inode maps or journal capacity beyond the inline
 extent format itself.
-The walker rejects holes, mappings beyond journal EOF, aliased or out-of-range
-data blocks, and aliases between journal data and its own map metadata. A
-separately sized metadata ownership hash makes both journal data and external
-map nodes forbidden replay-home targets. A tag for the shared inode-table
-block is admitted only when its authenticated payload preserves journal inode
-8 byte-for-byte; neighboring inode records remain independently mutable. A valid
-incomplete tail is ignored, while a checksum-damaged tail remains a fail-closed
-limitation rather than being guessed incomplete. A matching-sequence JBD2
-`SUPER_V2` header terminates preflight only after the complete block validates
-as the checksummed, self-locating recovery anchor; it is never replayed as a
-transaction record.
+The tuple expander rejects holes, mappings beyond journal EOF, and aliased or
+out-of-range data blocks. Before any journal read, the group-1 backup GDT
+authenticates every group's block/inode bitmap and inode-table ranges; the
+tuple must be disjoint from all of them and from every deterministic sparse
+super/GDT/reserved-GDT range. Dirty bootstrap follows a deterministic
+independent chain: checksum-valid group-1 backup super, checksum-valid backup
+GDT, live inode-8 allocation bit, checksum-valid inode 8, and exact tuple
+equality. It does not trust a torn primary descriptor or prefix-mixed
+aggregate free-space counters.
 
-The current dirty bootstrap still loads inode 8 through the primary group-0
-descriptor before cross-validating this tuple. A later recovery-authority step
-will deterministically use a replay-frozen sparse-super and backup-GDT witness
-when the equivalent primary locator/checksum domains are torn. Until that
-lands, the tuple validation closes format ambiguity but does not by itself
-make every primary-locator tear retryable.
+The designated sparse super and its geometry-derived backup-GDT span are
+replay-frozen. A tag for the shared inode-table block is admitted only when its
+authenticated payload preserves journal inode 8 byte-for-byte; neighboring
+inode records remain independently mutable. An inode-bitmap payload must keep
+inode 8 allocated. A payload for the first primary-GDT block containing group
+0's descriptor must retain the witnessed bitmap and inode-table locators and a
+valid descriptor checksum. A primary-super payload must retain `RECOVER`, a
+valid checksum/seed, every invariant authenticated by the sparse witness, and
+all profile/counter bounds needed for the next mount to reach recovery. If the
+raw primary checksum is torn, the read-only scan must also prove that such a
+replacement belongs to an authenticated committed transaction before replay
+writes any home block. A descriptor in an incomplete tail does not suffice.
+
+A valid incomplete tail is ignored, while a checksum-damaged tail remains a
+fail-closed limitation rather than being guessed incomplete. A
+matching-sequence JBD2 `SUPER_V2` header terminates preflight only after the
+complete block validates as the checksummed, self-locating recovery anchor; it
+is never replayed as a transaction record.
 
 To make the checkpoint/reset/clear sequence retryable across 512-byte media
 tears, the implementation preseeds the first noncommitted journal slot with
@@ -447,13 +457,16 @@ map levels, allocation-bitmap cross-checks, special metadata, namespaced raw
 xattrs, and bounded generic symlink traversal.
 
 The bounded reader now includes checksum-v3/64-bit committed-prefix replay and
-a crash-retry anchor for clearing `RECOVER`. It still refuses revoke records,
-checksum-damaged incomplete tails, legacy and modern orphan recovery, and all
-user-visible mutation. Clean orphan-file admission remains bounded to 4096
-filesystem blocks, ACLs are exposed but not enforced, the real extent fixture
-reaches depth 1 rather than the implemented profile limit of 5, and the
-special-inode fixture does not yet contain a socket. Those qualification and
-semantic limits remain explicit before any write path can be advertised.
+a crash-retry anchor for clearing `RECOVER`. Dirty replay is bootstrapped
+through the replay-frozen group-1 sparse-super/GDT witness, and a torn primary
+super requires a committed invariant-preserving replacement before any home
+write. The implementation still refuses revoke records, checksum-damaged
+incomplete tails, legacy and modern orphan recovery, and all user-visible
+mutation. Clean orphan-file admission remains bounded to 4096 filesystem
+blocks, ACLs are exposed but not enforced, the real extent fixture reaches
+depth 1 rather than the implemented profile limit of 5, and the special-inode
+fixture does not yet contain a socket. Those qualification and semantic limits
+remain explicit before any write path can be advertised.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
