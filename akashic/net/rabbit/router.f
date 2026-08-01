@@ -321,6 +321,30 @@ VARIABLE _RROUTER-V-ENTRY-BYTES
     DUP RROUTER-VALID? 0= IF DROP 0 EXIT THEN
     _RROUTER.STATE @ RROUTER-STATE-SEALED = ;
 
+VARIABLE _RROUTER-O-A
+VARIABLE _RROUTER-O-U
+VARIABLE _RROUTER-O-R
+
+\ Report whether a caller span touches the complete allocation owned by a
+\ valid router.  Invalid span geometry or an invalid router reports overlap
+\ conservatively so higher neutral owners can fail closed without importing
+\ this descriptor's private layout.
+: RROUTER-OWNED-SPAN-OVERLAP?  ( address bytes router -- flag )
+    _RROUTER-O-R ! _RROUTER-O-U ! _RROUTER-O-A !
+    _RROUTER-O-U @ 0< IF -1 EXIT THEN
+    _RROUTER-O-U @ IF _RROUTER-O-A @ 0= IF -1 EXIT THEN THEN
+    _RROUTER-O-A @ _RROUTER-O-U @ MSPAN-NONWRAPPING? 0= IF -1 EXIT THEN
+    _RROUTER-O-R @ RROUTER-VALID? 0= IF -1 EXIT THEN
+    _RROUTER-O-A @ _RROUTER-O-U @
+        _RROUTER-O-R @ RROUTER-SIZE MSPAN-OVERLAP? IF -1 EXIT THEN
+    _RROUTER-O-A @ _RROUTER-O-U @
+        _RROUTER-O-R @ _RROUTER.ENTRIES @
+        _RROUTER-O-R @ _RROUTER.ENTRY-CAPACITY @ RROUTER-ENTRY-SIZE *
+        MSPAN-OVERLAP? IF -1 EXIT THEN
+    _RROUTER-O-A @ _RROUTER-O-U @
+        _RROUTER-O-R @ _RROUTER.ARENA-A @
+        _RROUTER-O-R @ _RROUTER.ARENA-CAPACITY @ MSPAN-OVERLAP? ;
+
 \ =====================================================================
 \  Safe public evidence and route inspection
 \ =====================================================================
@@ -665,6 +689,9 @@ VARIABLE _RROUTER-M-E
     0 _RROUTER-EV-U !
     0 _RROUTER-V-R !
     0 _RROUTER-V-ENTRY-BYTES !
+    0 _RROUTER-O-A !
+    0 _RROUTER-O-U !
+    0 _RROUTER-O-R !
     0 _RROUTER-I-ENTRIES !
     0 _RROUTER-I-CAPACITY !
     0 _RROUTER-I-ENTRY-BYTES !
