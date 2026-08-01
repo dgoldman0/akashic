@@ -259,6 +259,13 @@ finalization propagate through the owned connection; finalization also wipes
 the builder, copied identity, and server record, but leaves the borrowed router
 for its separate owner.
 
+Higher neutral owners can query overlap against the server's complete composed
+graph, including the borrowed router, without importing private record layout.
+During a routed request callback they can also ensure only the exact nonzero
+Lane carried by that held request. The latter operation refuses outside the
+same server's active callback scope and does not expose arbitrary session-lane
+allocation.
+
 Server-side EVENT publication is an owned operation rather than a Streams or
 application adapter concern:
 
@@ -284,10 +291,42 @@ Every server EVENT leaves one data-queue slot empty. Sent events remain in
 that reserve, events could occupy every slot and a request received before its
 ACK could block the ACK behind a response that has nowhere to go. One peer has
 at most one held request, so the retained slot preserves request/ACK progress;
-capacity refusal consumes neither credit nor Lane Seq. The future generic
-server-subscription owner will copy registrations and drive exact-cursor replay
-through this operation. The application remains the sole event-journal owner,
-and Streams remains only the configured network operator/profile adapter.
+capacity refusal consumes neither credit nor Lane Seq.
+
+## Server subscription ownership
+
+`net/rabbit/server-subscription.f` takes exclusive operational ownership of one
+initialized per-peer server and adds a caller-sized copied selector table. A
+shared sealed router registers its SUBSCRIBE route with one stable shared token,
+not a per-peer owner pointer. Wrapper `POLL` and `DISPATCH` establish the active
+per-peer owner only for the synchronous server call, allowing any number of
+peer wrappers to borrow the same immutable router under Rabbit's serialized
+scratch contract. Driving the wrapped server directly is outside the ownership
+contract. The router owner must install the exact shared route/token pair before
+sealing; wrapper initialization validates the supplied token and ownership
+geometry but does not guess which application selectors should mount it.
+
+Registration is commit-gated. The route validates Lane, selector, `Txn`, and
+`Since`, builds a correlated 200 response, lazily establishes only the held
+application Lane, and copies a CANDIDATE. The wrapper publishes and counts that
+entry only after the underlying server reports that exact response successfully
+enqueued and committed; every substitution or failure wipes it. Cursor state is
+therefore never live merely because a handler happened to run.
+
+The owner receives one deterministic, read-only exact-suffix callback. SERVICE
+preflights Lane/credit before calling it, asks for exactly `cursor + 1`, and
+publishes at most one EVENT. The published cursor and last Lane Seq advance only
+after server enqueue succeeds. Queue-reserve refusal may repeat the same suffix
+lookup, so the callback must be retryable; it remains the application's sole
+journal rather than copied Rabbit state. The wrapper owns server lifecycle and
+wipes its registrations, selectors, server, connection, builder, and identity
+on successful finalization, while the router and source context remain borrowed.
+Streams remains only the configured network operator/profile adapter.
+
+`RESET` stops future publication by wiping registrations and copied selectors;
+it does not pretend to retract EVENT bytes already queued or awaiting ACK, and
+it does not close application Lanes in the nested session. Whole-peer teardown
+continues through the wrapper lifecycle and finalization operations.
 
 ## Client operation ownership
 
@@ -341,7 +380,8 @@ exposing the connection as the application's protocol interface.
 
 `net/rabbit/subscription.f` owns a caller-sized table of generic subscription
 registrations above one client. Each registration copies its exact selector,
-records its lane and application callback, and carries a nonzero generation so
+records its nonzero application lane and callback, and carries a nonzero
+generation so
 released or reused entry pointers cannot be mistaken for live handles. The
 caller supplies the metadata array plus uniform selector and event slots. A
 zero-entry table is a valid configuration; no product subscription count or

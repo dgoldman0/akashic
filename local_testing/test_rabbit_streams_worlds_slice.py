@@ -21,6 +21,9 @@ CLIENT = ROOT / "akashic" / "net" / "rabbit" / "client.f"
 SUBSCRIPTION = ROOT / "akashic" / "net" / "rabbit" / "subscription.f"
 ROUTER = ROOT / "akashic" / "net" / "rabbit" / "router.f"
 SERVER = ROOT / "akashic" / "net" / "rabbit" / "server.f"
+SERVER_SUBSCRIPTION = (
+    ROOT / "akashic" / "net" / "rabbit" / "server-subscription.f"
+)
 MEMORY = ROOT / "akashic" / "net" / "transports" / "memory-duplex.f"
 DOC = ROOT / "docs" / "net" / "rabbit.md"
 FIXTURE = LOCAL_TESTING / "rabbit-core-test.f"
@@ -28,6 +31,9 @@ CLIENT_FIXTURE = LOCAL_TESTING / "rabbit-client-test.f"
 CLIENT_JOURNEY = LOCAL_TESTING / "rabbit-client-flow.f"
 SUBSCRIPTION_FIXTURE = LOCAL_TESTING / "rabbit-sub-test.f"
 SERVER_FIXTURE = LOCAL_TESTING / "rabbit-server-test.f"
+SERVER_SUBSCRIPTION_FIXTURE = (
+    LOCAL_TESTING / "rabbit-servsub-test.f"
+)
 
 PASS_MARKER = "RABBIT CORE PASS"
 PHASE_MAX_STEPS = 120_000_000
@@ -83,6 +89,16 @@ LOAD_STAGES = (
         "server-fixture",
         "local_testing/rabbit-server-test.f",
         "RABBIT SERVER FIXTURE READY",
+    ),
+    (
+        "server-subscription",
+        "net/rabbit/server-subscription.f",
+        "RABBIT SERVER SUBSCRIPTION READY",
+    ),
+    (
+        "server-subscription-fixture",
+        "local_testing/rabbit-servsub-test.f",
+        "RABBIT SERVER SUBSCRIPTION FIXTURE READY",
     ),
 )
 CONTRACT_STAGES = (
@@ -340,6 +356,60 @@ CONTRACT_STAGES = (
         "RABBIT SERVER DENIAL FINI PASS",
         True,
     ),
+    (
+        "server-sub-graph-init",
+        "_RBT-CLI-PHASE-INIT",
+        "RABBIT SERVER SUBSCRIPTION GRAPH INIT PASS",
+        True,
+    ),
+    (
+        "server-sub-owner-init",
+        "_RBT-SSRV-PHASE-OWNER-INIT",
+        "RABBIT SERVER SUBSCRIPTION OWNER INIT PASS",
+        True,
+    ),
+    (
+        "server-sub-handshake",
+        "_RBT-SSRV-PHASE-HANDSHAKE",
+        "RABBIT SERVER SUBSCRIPTION HANDSHAKE PASS",
+        True,
+    ),
+    (
+        "server-sub-bind-since",
+        "_RBT-SSRV-PHASE-BIND-SINCE",
+        "RABBIT SERVER SUBSCRIPTION BIND SINCE PASS",
+        True,
+    ),
+    (
+        "server-sub-no-credit",
+        "_RBT-SSRV-PHASE-NO-CREDIT",
+        "RABBIT SERVER SUBSCRIPTION NO CREDIT PASS",
+        True,
+    ),
+    (
+        "server-sub-events-retained",
+        "_RBT-SSRV-PHASE-EVENTS-RETAINED",
+        "RABBIT SERVER SUBSCRIPTION EVENTS RETAINED PASS",
+        True,
+    ),
+    (
+        "server-sub-event14-reserve",
+        "_RBT-SSRV-PHASE-EVENT14-RESERVE",
+        "RABBIT SERVER SUBSCRIPTION EVENT14 RESERVE PASS",
+        True,
+    ),
+    (
+        "server-sub-event14-retry",
+        "_RBT-SSRV-PHASE-EVENT14-RETRY",
+        "RABBIT SERVER SUBSCRIPTION EVENT14 RETRY PASS",
+        True,
+    ),
+    (
+        "server-sub-fini",
+        "_RBT-SSRV-PHASE-FINI",
+        "RABBIT SERVER SUBSCRIPTION FINI PASS",
+        True,
+    ),
 )
 
 
@@ -378,6 +448,7 @@ def _assert_static_contracts() -> None:
     subscription = SUBSCRIPTION.read_text(encoding="utf-8")
     router = ROUTER.read_text(encoding="utf-8")
     server = SERVER.read_text(encoding="utf-8")
+    server_subscription = SERVER_SUBSCRIPTION.read_text(encoding="utf-8")
     memory = MEMORY.read_text(encoding="utf-8")
     doc = " ".join(DOC.read_text(encoding="utf-8").split())
     fixture = FIXTURE.read_text(encoding="utf-8")
@@ -385,6 +456,9 @@ def _assert_static_contracts() -> None:
     client_journey = CLIENT_JOURNEY.read_text(encoding="utf-8")
     subscription_fixture = SUBSCRIPTION_FIXTURE.read_text(encoding="utf-8")
     server_fixture = SERVER_FIXTURE.read_text(encoding="utf-8")
+    server_subscription_fixture = SERVER_SUBSCRIPTION_FIXTURE.read_text(
+        encoding="utf-8"
+    )
 
     assert 0 < PHASE_MAX_STEPS <= 120_000_000
     assert len({name for name, _, _ in LOAD_STAGES}) == len(LOAD_STAGES)
@@ -437,6 +511,11 @@ def _assert_static_contracts() -> None:
         "../../utils/memory-span.f",
         "../../text/utf8.f",
     ]
+    assert _requires(SERVER_SUBSCRIPTION) == [
+        "server.f",
+        "../../utils/memory-span.f",
+        "../../text/utf8.f",
+    ]
     assert _requires(MEMORY) == [
         "../io-port.f",
         "../../utils/memory-span.f",
@@ -453,6 +532,10 @@ def _assert_static_contracts() -> None:
         (subscription, "PROVIDED akashic-rabbit-subscription"),
         (router, "PROVIDED akashic-rabbit-router"),
         (server, "PROVIDED akashic-rabbit-server"),
+        (
+            server_subscription,
+            "PROVIDED akashic-rabbit-server-subscription",
+        ),
         (memory, "PROVIDED akashic-net-memory-duplex"),
     ):
         assert provider in source
@@ -507,6 +590,20 @@ def _assert_static_contracts() -> None:
     assert all(name.startswith("_RSERVER") for _, name in server_declarations)
     assert "deliberately a per-peer protocol owner" in server
     assert "globally non-reentrant" in server
+    server_subscription_declarations = _declarations(
+        SERVER_SUBSCRIPTION, server_subscription
+    )
+    assert server_subscription_declarations
+    assert all(
+        kind == "VARIABLE" for kind, _ in server_subscription_declarations
+    )
+    assert all(
+        name.startswith("_RSERVSUB")
+        for _, name in server_subscription_declarations
+    )
+    assert "takes exclusive ownership of one initialized" in server_subscription
+    assert "Registration is commit-gated" in server_subscription
+    assert "never treats the immutable router context" in server_subscription
     assert not _declarations(PROFILE, profile)
     assert not _declarations(SESSION, session)
     assert not _declarations(MEMORY, memory)
@@ -682,6 +779,34 @@ def _assert_static_contracts() -> None:
     ):
         assert word in server
     for word in (
+        "RABBIT-SERVER-SUBSCRIPTIONS-SIZE",
+        "RABBIT-SERVER-SUBSCRIPTION-ENTRY-SIZE",
+        "RABBIT-SERVER-SUBSCRIPTION-CAPACITY-VALID?",
+        "RABBIT-SERVER-SUBSCRIPTION-ENTRY-BYTES",
+        "RABBIT-SERVER-SUBSCRIPTIONS-VALID?",
+        "RABBIT-SERVER-SUBSCRIPTIONS-GRAPH-SPAN-OVERLAP?",
+        "RABBIT-SERVER-SUBSCRIPTIONS-INIT",
+        "RABBIT-SERVER-SUBSCRIPTIONS-COUNT@",
+        "RABBIT-SERVER-SUBSCRIPTIONS-LAST-STATUS@",
+        "RABBIT-SERVER-SUBSCRIPTIONS-DETAIL@",
+        "RABBIT-SERVER-SUBSCRIPTION-FIND",
+        "RABBIT-SERVER-SUBSCRIPTION-TARGET$",
+        "RABBIT-SERVER-SUBSCRIPTION-LANE@",
+        "RABBIT-SERVER-SUBSCRIPTION-CURSOR@",
+        "RABBIT-SERVER-SUBSCRIPTION-LAST-LANE-SEQ@",
+        "RABBIT-SERVER-SUBSCRIPTIONS-ROUTE",
+        "RABBIT-SERVER-SUBSCRIPTIONS-DISPATCH",
+        "RABBIT-SERVER-SUBSCRIPTIONS-POLL",
+        "RABBIT-SERVER-SUBSCRIPTIONS-SERVICE",
+        "RABBIT-SERVER-SUBSCRIPTIONS-RESET",
+        "RABBIT-SERVER-SUBSCRIPTIONS-OPEN",
+        "RABBIT-SERVER-SUBSCRIPTIONS-CLOSE",
+        "RABBIT-SERVER-SUBSCRIPTIONS-CLOSE-POLL",
+        "RABBIT-SERVER-SUBSCRIPTIONS-CANCEL",
+        "RABBIT-SERVER-SUBSCRIPTIONS-FINI",
+    ):
+        assert word in server_subscription
+    for word in (
         "NMD-ENDPOINT-INIT",
         "NMD-PAIR",
         "NMD-BIND",
@@ -701,6 +826,7 @@ def _assert_static_contracts() -> None:
         *_requires(SUBSCRIPTION),
         *_requires(ROUTER),
         *_requires(SERVER),
+        *_requires(SERVER_SUBSCRIPTION),
         *_requires(MEMORY),
     )
     for forbidden in (
@@ -745,6 +871,8 @@ def _assert_static_contracts() -> None:
         + subscription_fixture
         + "\n"
         + server_fixture
+        + "\n"
+        + server_subscription_fixture
     )
     for marker in (
         "_RBT-TEST-ENCODE",
@@ -764,6 +892,14 @@ def _assert_static_contracts() -> None:
         "_RBT-SRV-PHASE-EXTENSION-LANE-ZERO",
         "_RBT-SRV-PHASE-BACKPRESSURE",
         "_RBT-SRV-PHASE-ADMISSION-DENY",
+        "_RBT-SSRV-PHASE-OWNER-INIT",
+        "_RBT-SSRV-PHASE-HANDSHAKE",
+        "_RBT-SSRV-PHASE-BIND-SINCE",
+        "_RBT-SSRV-PHASE-NO-CREDIT",
+        "_RBT-SSRV-PHASE-EVENTS-RETAINED",
+        "_RBT-SSRV-PHASE-EVENT14-RESERVE",
+        "_RBT-SSRV-PHASE-EVENT14-RETRY",
+        "_RBT-SSRV-PHASE-FINI",
         "RBF-EOF",
     ):
         assert marker in fixture_contracts
@@ -779,12 +915,14 @@ def _assert_static_contracts() -> None:
         (SUBSCRIPTION, subscription),
         (ROUTER, router),
         (SERVER, server),
+        (SERVER_SUBSCRIPTION, server_subscription),
         (MEMORY, memory),
         (FIXTURE, fixture),
         (CLIENT_FIXTURE, client_fixture),
         (CLIENT_JOURNEY, client_journey),
         (SUBSCRIPTION_FIXTURE, subscription_fixture),
         (SERVER_FIXTURE, server_fixture),
+        (SERVER_SUBSCRIPTION_FIXTURE, server_subscription_fixture),
     ):
         _assert_physical_comments(path, source)
 
@@ -831,6 +969,7 @@ def _run_rabbit_core(timeout: float) -> int:
             "net/rabbit/subscription.f",
             "net/rabbit/router.f",
             "net/rabbit/server.f",
+            "net/rabbit/server-subscription.f",
         ),
         resources=(),
         autoexec="".join(autoexec),
@@ -877,6 +1016,12 @@ def _run_rabbit_core(timeout: float) -> int:
                 "local_testing/rabbit-server-test.f",
                 harness._minify_forth(
                     SERVER_FIXTURE.read_text(encoding="utf-8")
+                ).encode("utf-8"),
+            ),
+            (
+                "local_testing/rabbit-servsub-test.f",
+                harness._minify_forth(
+                    SERVER_SUBSCRIPTION_FIXTURE.read_text(encoding="utf-8")
                 ).encode("utf-8"),
             ),
         ),

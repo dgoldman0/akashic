@@ -58,6 +58,7 @@ local_testing/*
 !local_testing/test_observatory_worlds_slice.py
 !local_testing/test_rabbit_streams_worlds_slice.py
 !local_testing/rabbit-core-test.f
+!local_testing/rabbit-servsub-test.f
 # Refactor architecture inventory and ratchet
 !local_testing/forth_dependencies.py
 !local_testing/refactor_inventory.py
