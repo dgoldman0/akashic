@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify the transport-neutral Rabbit frame, message, builder, and session core."""
+"""Qualify the transport-neutral Rabbit protocol foundation."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ FRAME = ROOT / "akashic" / "net" / "rabbit" / "frame.f"
 MESSAGE = ROOT / "akashic" / "net" / "rabbit" / "message.f"
 BUILDER = ROOT / "akashic" / "net" / "rabbit" / "builder.f"
 SESSION = ROOT / "akashic" / "net" / "rabbit" / "session.f"
+CONNECTION = ROOT / "akashic" / "net" / "rabbit" / "connection.f"
+ROUTER = ROOT / "akashic" / "net" / "rabbit" / "router.f"
 MEMORY = ROOT / "akashic" / "net" / "transports" / "memory-duplex.f"
 DOC = ROOT / "docs" / "net" / "rabbit.md"
 FIXTURE = LOCAL_TESTING / "rabbit-core-test.f"
@@ -41,6 +43,8 @@ LOAD_STAGES = (
     ),
     ("session", "net/rabbit/session.f", "RABBIT SESSION READY"),
     ("builder", "net/rabbit/builder.f", "RABBIT BUILDER READY"),
+    ("connection", "net/rabbit/connection.f", "RABBIT CONNECTION READY"),
+    ("router", "net/rabbit/router.f", "RABBIT ROUTER READY"),
     (
         "fixture",
         "local_testing/rabbit-core-test.f",
@@ -79,6 +83,8 @@ def _assert_static_contracts() -> None:
     message = MESSAGE.read_text(encoding="utf-8")
     builder = BUILDER.read_text(encoding="utf-8")
     session = SESSION.read_text(encoding="utf-8")
+    connection = CONNECTION.read_text(encoding="utf-8")
+    router = ROUTER.read_text(encoding="utf-8")
     memory = MEMORY.read_text(encoding="utf-8")
     doc = " ".join(DOC.read_text(encoding="utf-8").split())
     fixture = FIXTURE.read_text(encoding="utf-8")
@@ -110,6 +116,15 @@ def _assert_static_contracts() -> None:
         "../../utils/memory-span.f",
         "../../utils/string.f",
     ]
+    assert _requires(ROUTER) == [
+        "../../utils/memory-span.f",
+        "../../text/utf8.f",
+    ]
+    assert _requires(CONNECTION) == [
+        "builder.f",
+        "session.f",
+        "../../utils/memory-span.f",
+    ]
     assert _requires(MEMORY) == [
         "../io-port.f",
         "../../utils/memory-span.f",
@@ -121,6 +136,8 @@ def _assert_static_contracts() -> None:
         (message, "PROVIDED akashic-rabbit-message"),
         (builder, "PROVIDED akashic-rabbit-builder"),
         (session, "PROVIDED akashic-rabbit-session"),
+        (connection, "PROVIDED akashic-rabbit-connection"),
+        (router, "PROVIDED akashic-rabbit-router"),
         (memory, "PROVIDED akashic-net-memory-duplex"),
     ):
         assert provider in source
@@ -142,6 +159,21 @@ def _assert_static_contracts() -> None:
     assert all(name.startswith("_RMSGB") for _, name in builder_declarations)
     assert "copies every start-line" in builder
     assert "non-reentrant" in builder
+    connection_declarations = _declarations(CONNECTION, connection)
+    assert connection_declarations
+    assert all(kind == "VARIABLE" for kind, _ in connection_declarations)
+    assert all(
+        name.startswith("_RCONN") or name.startswith("_RTXQ")
+        for _, name in connection_declarations
+    )
+    assert "one cooperative owner" in connection
+    assert "control traffic takes priority" in connection
+    assert "remain owned until a cumulative lane ACK" in connection
+    router_declarations = _declarations(ROUTER, router)
+    assert router_declarations
+    assert all(kind == "VARIABLE" for kind, _ in router_declarations)
+    assert all(name.startswith("_RROUTER") for _, name in router_declarations)
+    assert "every call must be serialized" in router
     assert not _declarations(PROFILE, profile)
     assert not _declarations(SESSION, session)
     assert not _declarations(MEMORY, memory)
@@ -179,6 +211,7 @@ def _assert_static_contracts() -> None:
         "RMSGB-INIT",
         "RMSGB-RESET",
         "RMSGB-FINI",
+        "RMSGB-READY-FRAME@",
         "RMSGB-BEGIN-HELLO",
         "RMSGB-BEGIN-REQUEST",
         "RMSGB-BEGIN-EVENT",
@@ -219,6 +252,32 @@ def _assert_static_contracts() -> None:
     ):
         assert word in session
     for word in (
+        "RROUTER-ENTRY-BYTES",
+        "RROUTER-INIT",
+        "RROUTER-ADD",
+        "RROUTER-SEAL",
+        "RROUTER-MATCH",
+        "RROUTER-RESET",
+        "RROUTER-FINI",
+    ):
+        assert word in router
+    for word in (
+        "RCONN-TXQ-INIT",
+        "RCONN-TXQ-FINI",
+        "RABBIT-CONNECTION-INIT",
+        "RABBIT-CONNECTION-OPEN",
+        "RABBIT-CONNECTION-ENQUEUE",
+        "RABBIT-CONNECTION-PUMP",
+        "RABBIT-CONNECTION-RX-LOAN",
+        "RABBIT-CONNECTION-RX-COMMIT",
+        "RABBIT-CONNECTION-RX-DROP",
+        "RABBIT-CONNECTION-WIRE-EVIDENCE@",
+        "RABBIT-CONNECTION-CLOSE",
+        "RABBIT-CONNECTION-CANCEL",
+        "RABBIT-CONNECTION-FINI",
+    ):
+        assert word in connection
+    for word in (
         "NMD-ENDPOINT-INIT",
         "NMD-PAIR",
         "NMD-BIND",
@@ -233,6 +292,8 @@ def _assert_static_contracts() -> None:
         *_requires(MESSAGE),
         *_requires(BUILDER),
         *_requires(SESSION),
+        *_requires(CONNECTION),
+        *_requires(ROUTER),
         *_requires(MEMORY),
     )
     for forbidden in (
@@ -272,6 +333,8 @@ def _assert_static_contracts() -> None:
         "_RBT-TEST-BUILDER-TYPED-CONTROL",
         "_RBT-TEST-MEMORY-DUPLEX",
         "_RBT-TEST-SESSION",
+        "_RBT-TEST-CONNECTION",
+        "_RBT-TEST-ROUTER",
         "RBF-EOF",
         "RABBIT CORE PASS",
     ):
@@ -283,6 +346,8 @@ def _assert_static_contracts() -> None:
         (MESSAGE, message),
         (BUILDER, builder),
         (SESSION, session),
+        (CONNECTION, connection),
+        (ROUTER, router),
         (MEMORY, memory),
         (FIXTURE, fixture),
     ):
@@ -321,6 +386,8 @@ def _run_rabbit_core(timeout: float) -> int:
             "net/rabbit/builder.f",
             "net/transports/memory-duplex.f",
             "net/rabbit/session.f",
+            "net/rabbit/connection.f",
+            "net/rabbit/router.f",
         ),
         resources=(),
         autoexec="".join(autoexec),

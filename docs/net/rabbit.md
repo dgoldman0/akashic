@@ -115,6 +115,11 @@ admission and refuses a result whose admitted kind differs from its constructor.
 Encoding is all-or-nothing and rejects output that overlaps either the opaque
 descriptor or its arena.
 
+An owning connection may borrow the builder's immutable READY frame only for
+the duration of synchronous enqueue, allowing it to verify exact Lane, Seq,
+Credit, and Txn facts before it copies the encoded bytes and commits session
+state. Reset or finalization immediately expires that inspection view.
+
 The typed surface covers the admitted HELLO, request, EVENT, ACK, CREDIT,
 PING/PONG, correlated application responses, explicitly named uncorrelated
 control responses, and their headers. It also covers `Since`, `Event-Seq`,
@@ -130,6 +135,47 @@ persistent records and byte ownership are caller-local, but calls through these
 three modules must currently remain synchronous and serialized. Independent
 connections on separate cores are not yet a supported concurrency claim; the
 scratch must move into caller-owned connection workspaces before making one.
+
+## Connection and route ownership
+
+`net/rabbit/connection.f` is the persistent cooperative owner above one
+session, one incremental parser, and its injected NIO port. The caller chooses
+and supplies the receive carry buffer plus separate control and data queues.
+Each queue has caller-owned slot metadata and uniform byte slots; one control
+slot is the protocol progress minimum, while a zero-slot data queue is valid.
+There is no hidden allocation, default depth, or product frame limit.
+
+Enqueue first measures and encodes a READY builder into an unpublished byte
+slot. Only then does it reserve an exact EVENT sequence, record a CREDIT grant,
+or begin the client HELLO transition before infallibly publishing the slot.
+Application builders may be reset immediately. Fully transmitted EVENT bytes
+remain in their slot until a valid cumulative ACK releases them, so queue
+capacity models a genuinely slow peer rather than merely a slow local write.
+Other complete frames are wiped immediately.
+
+The send pump never switches frames after a short write. Control traffic wins
+only at a frame boundary, preventing both control starvation and byte-stream
+interleaving. Attempt count, confirmed offset, frame identity, and cumulative
+confirmed wire bytes remain inspectable after failure. Receive owns one stable
+READY parser view at a time; a distinct carry buffer retains any coalesced
+suffix until the caller commits or drops the loan. Commit alone applies
+handshake, EVENT, ACK, and CREDIT session mutation. Close and cancel invalidate
+loans and wipe queued/parser/carry bytes before delegating transport teardown.
+
+The pinned ACK, CREDIT, and PING shapes forbid a control `Seq`, so the current
+connection records their order only through its control queue. The session's
+read-only/exact control ordinal seam remains available for a future wire
+profile that actually emits such a field; this implementation does not invent
+an unobservable ordinal and call it interoperability evidence.
+
+`net/rabbit/router.f` separately owns an exact copied `(verb, selector)` table.
+It never invokes handlers: sealed lookup returns a borrowed handler token and
+opaque context for the generic server owner. Entry count and arena size are
+caller choices, including a canonical empty deny-all router. Finalization can
+recover from damaged route content when the original binding geometry remains
+valid, but—as with the other opaque records—caller forgery of stored binding
+pointers is outside the memory-safety contract without an external ownership
+witness.
 
 ## Lane and transaction profile
 
@@ -148,9 +194,9 @@ scratch must move into caller-owned connection workspaces before making one.
 - Outbound inspection and exact reservation are separate. A connection reads
   the next admissible `Seq`, encodes it into its owning queue slot, then commits
   that exact sequence. A stale decision, exhausted lane, or vanished credit
-  changes neither the sequence nor credit counter. Control traffic uses the
-  same split but remains application-credit-exempt, so failed ACK/CREDIT/PING
-  construction cannot consume a control sequence.
+  changes neither the sequence nor credit counter. Failed ACK/CREDIT/PING
+  construction likewise publishes no control bytes; the current profile does
+  not put a synthetic control sequence on those frames.
 - Inbound classification is likewise read-only. `Seq == expected` is NEW and
   requires an available receive grant on application lanes; `Seq < expected`
   is a duplicate; and `Seq > expected` is a gap carrying the unchanged expected

@@ -248,6 +248,14 @@ VARIABLE _RMSGBF-BYTES
     DUP RMSGB-VALID? 0= IF DROP RMSG-KIND-INVALID EXIT THEN
     _RMSGB.KIND @ ;
 
+\ Immutable synchronous inspection for an owning connection.  The returned
+\ READY frame is builder-owned and expires on RESET or FINI; callers may read
+\ typed message fields during enqueue but must never retain or mutate it.
+: RMSGB-READY-FRAME@  ( builder -- frame|0 )
+    DUP RMSGB-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _RMSGB.STATE @ RMSGB-STATE-READY <> IF DROP 0 EXIT THEN
+    _RMSGB.FRAME ;
+
 : RMSGB-ARENA-USED@  ( builder -- bytes )
     DUP RMSGB-VALID? 0= IF DROP 0 EXIT THEN
     _RMSGB.ARENA-USED @ ;
