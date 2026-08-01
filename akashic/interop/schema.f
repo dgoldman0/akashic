@@ -6,6 +6,7 @@ PROVIDED akashic-interop-schema
 
 REQUIRE value.f
 REQUIRE ../text/utf8.f
+REQUIRE ../utils/memory-span.f
 REQUIRE ../concurrency/guard.f
 
 1 CONSTANT CS-F-MIN
@@ -422,13 +423,93 @@ DEFER _CSSV-SCHEMA
 : CS-VALIDATE-FIELDS  ( map schema -- ior )
     CS-VALIDATE-DEEP ;
 
+\ Report whether a caller span touches any borrowed storage reachable from a
+\ valid schema: the schema records themselves, map-field arrays and keys, and
+\ recursively referenced item/field schemas.  Invalid query geometry or an
+\ invalid schema graph reports overlap conservatively.  The ordinary schema
+\ depth and node bounds also bound this traversal and reject cycles first.
+CREATE _CSGO-S CS-MAX-DEPTH 8 * ALLOT
+VARIABLE _CSGO-A
+VARIABLE _CSGO-U
+VARIABLE _CSGO-ROOT
+VARIABLE _CSGO-DEPTH
+VARIABLE _CSGO-NODES
+
+: _CSGO-SLOT  ( -- address ) _CSGO-DEPTH @ 8 * _CSGO-S + ;
+: _CSGO-S@  ( -- schema ) _CSGO-SLOT @ ;
+: _CSGO-S!  ( schema -- ) _CSGO-SLOT ! ;
+
+: _CSGO-SPAN?  ( address bytes -- flag )
+    _CSGO-A @ _CSGO-U @ 2SWAP MSPAN-OVERLAP? ;
+
+DEFER _CSGO-SCHEMA
+
+: _CSGO-SCHEMA-R  ( schema -- flag )
+    1 _CSGO-NODES +!
+    _CSGO-NODES @ CS-MAX-NODES > IF DROP -1 EXIT THEN
+    1 _CSGO-DEPTH +!
+    _CSGO-DEPTH @ CS-MAX-DEPTH >= IF
+        DROP -1 _CSGO-DEPTH +! -1 EXIT
+    THEN
+    DUP _CSGO-S!
+    DUP CS-SIZE _CSGO-SPAN? IF
+        DROP -1 _CSGO-DEPTH +! -1 EXIT
+    THEN
+    DROP
+
+    _CSGO-S@ CS.TYPE-MASK @ CV-T-LIST CS-TYPE-BIT AND IF
+        _CSGO-S@ CS.ITEM @ ?DUP IF
+            _CSGO-SCHEMA IF -1 _CSGO-DEPTH +! -1 EXIT THEN
+        THEN
+    THEN
+
+    _CSGO-S@ CS.TYPE-MASK @ CV-T-MAP CS-TYPE-BIT AND IF
+        _CSGO-S@ CS.FIELD-N @ DUP IF
+            CS-FIELD-SIZE * _CSGO-S@ CS.FIELDS @ SWAP
+            _CSGO-SPAN? IF -1 _CSGO-DEPTH +! -1 EXIT THEN
+        ELSE
+            DROP
+        THEN
+        _CSGO-S@ CS.FIELD-N @ 0 ?DO
+            _CSGO-S@ CS.FIELDS @ I CS-FIELD-SIZE * + DUP
+            CSF.KEY-A @ SWAP CSF.KEY-U @ _CSGO-SPAN? IF
+                -1 _CSGO-DEPTH +! -1 UNLOOP EXIT
+            THEN
+            _CSGO-S@ CS.FIELDS @ I CS-FIELD-SIZE * + CSF.SCHEMA @
+            _CSGO-SCHEMA IF
+                -1 _CSGO-DEPTH +! -1 UNLOOP EXIT
+            THEN
+        LOOP
+    THEN
+
+    -1 _CSGO-DEPTH +! 0 ;
+
+' _CSGO-SCHEMA-R IS _CSGO-SCHEMA
+
+: _CS-SCHEMA-GRAPH-SPAN-OVERLAP?
+  ( address bytes schema -- flag )
+    _CSGO-ROOT ! _CSGO-U ! _CSGO-A !
+    _CSGO-U @ 0< IF -1 EXIT THEN
+    _CSGO-U @ IF _CSGO-A @ 0= IF -1 EXIT THEN THEN
+    _CSGO-A @ _CSGO-U @ MSPAN-NONWRAPPING? 0= IF -1 EXIT THEN
+    _CSGO-ROOT @ _CSSV-VALIDATE IF -1 EXIT THEN
+    0 _CSGO-NODES ! -1 _CSGO-DEPTH !
+    _CSGO-ROOT @ _CSGO-SCHEMA ;
+
+: CS-SCHEMA-GRAPH-SPAN-OVERLAP?
+  ( address bytes schema -- flag )
+    _CS-SCHEMA-GRAPH-SPAN-OVERLAP? ;
+
 GUARD _cs-guard
 ' CS-VALIDATE CONSTANT _cs-validate-xt
 ' CS-SCHEMA-VALIDATE CONSTANT _cs-schema-validate-xt
 ' CS-VALIDATE-DEEP CONSTANT _cs-validate-deep-xt
 ' CS-VALIDATE-FIELDS CONSTANT _cs-validate-fields-xt
+' CS-SCHEMA-GRAPH-SPAN-OVERLAP? CONSTANT _cs-schema-graph-overlap-xt
 : CS-VALIDATE  _cs-validate-xt _cs-guard WITH-GUARD ;
 : CS-SCHEMA-VALIDATE
     _cs-schema-validate-xt _cs-guard WITH-GUARD ;
 : CS-VALIDATE-DEEP  _cs-validate-deep-xt _cs-guard WITH-GUARD ;
 : CS-VALIDATE-FIELDS  _cs-validate-fields-xt _cs-guard WITH-GUARD ;
+: CS-SCHEMA-GRAPH-SPAN-OVERLAP?
+    _cs-schema-graph-overlap-xt _cs-guard WITH-GUARD ;
