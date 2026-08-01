@@ -297,10 +297,12 @@ VARIABLE _RSERVEROWN-A
 VARIABLE _RSERVEROWN-U
 VARIABLE _RSERVEROWN-S
 
-\ Report overlap with the complete persistent graph composed by a valid
-\ server, including its borrowed router.  Invalid input fails closed so a
-\ higher neutral owner need not import any private record layout.
-: RABBIT-SERVER-GRAPH-SPAN-OVERLAP?  ( address bytes server -- flag )
+\ Report overlap with storage exclusively owned through a valid server: its
+\ descriptor, Burrow-ID destination, connection graph, and reply builder
+\ graph.  The sealed router is deliberately excluded because it is immutable
+\ borrowed infrastructure that multiple per-peer servers may share.  Invalid
+\ input fails closed.
+: RABBIT-SERVER-OWNED-SPAN-OVERLAP?  ( address bytes server -- flag )
     _RSERVEROWN-S ! _RSERVEROWN-U ! _RSERVEROWN-A !
     _RSERVEROWN-U @ 0< IF -1 EXIT THEN
     _RSERVEROWN-U @ IF _RSERVEROWN-A @ 0= IF -1 EXIT THEN THEN
@@ -316,9 +318,54 @@ VARIABLE _RSERVEROWN-S
         RABBIT-CONNECTION-OWNED-SPAN-OVERLAP? IF -1 EXIT THEN
     _RSERVEROWN-A @ _RSERVEROWN-U @
         _RSERVEROWN-S @ RSERVER.BUILDER @
-        RMSGB-OWNED-SPAN-OVERLAP? IF -1 EXIT THEN
+        RMSGB-OWNED-SPAN-OVERLAP? ;
+
+\ Report overlap with the complete persistent graph composed by a valid
+\ server, including its borrowed router.  This compatibility word retains the
+\ stronger single-owner admission check; pairwise host composition uses the
+\ owned-only predicate above so the exact sealed router may be shared.
+: RABBIT-SERVER-GRAPH-SPAN-OVERLAP?  ( address bytes server -- flag )
+    _RSERVEROWN-S ! _RSERVEROWN-U ! _RSERVEROWN-A !
+    _RSERVEROWN-A @ _RSERVEROWN-U @ _RSERVEROWN-S @
+        RABBIT-SERVER-OWNED-SPAN-OVERLAP? IF -1 EXIT THEN
     _RSERVEROWN-A @ _RSERVEROWN-U @ _RSERVEROWN-S @ RSERVER.ROUTER @
         RROUTER-OWNED-SPAN-OVERLAP? ;
+
+VARIABLE _RSERVERGG-A
+VARIABLE _RSERVERGG-B
+
+\ Verify that two per-peer servers share no mutable owned allocation.  Router
+\ storage is absent from this comparison by design, so two valid servers may
+\ borrow the exact same sealed router.  The four top-level span checks cover
+\ descriptor/Burrow cross-aliasing; the graph helpers cover both homogeneous
+\ and connection-to-builder aliases.  Invalid and identical inputs fail
+\ closed.
+: RABBIT-SERVER-OWNED-GRAPHS-DISJOINT?  ( server-a server-b -- flag )
+    _RSERVERGG-B ! _RSERVERGG-A !
+    _RSERVERGG-A @ RABBIT-SERVER-VALID? 0= IF 0 EXIT THEN
+    _RSERVERGG-B @ RABBIT-SERVER-VALID? 0= IF 0 EXIT THEN
+    _RSERVERGG-A @ RABBIT-SERVER-SIZE _RSERVERGG-B @
+        RABBIT-SERVER-OWNED-SPAN-OVERLAP? IF 0 EXIT THEN
+    _RSERVERGG-A @ RSERVER.BURROW-A @
+        _RSERVERGG-A @ RSERVER.BURROW-CAP @ _RSERVERGG-B @
+        RABBIT-SERVER-OWNED-SPAN-OVERLAP? IF 0 EXIT THEN
+    _RSERVERGG-B @ RABBIT-SERVER-SIZE _RSERVERGG-A @
+        RABBIT-SERVER-OWNED-SPAN-OVERLAP? IF 0 EXIT THEN
+    _RSERVERGG-B @ RSERVER.BURROW-A @
+        _RSERVERGG-B @ RSERVER.BURROW-CAP @ _RSERVERGG-A @
+        RABBIT-SERVER-OWNED-SPAN-OVERLAP? IF 0 EXIT THEN
+    _RSERVERGG-A @ RSERVER.CONNECTION @
+        _RSERVERGG-B @ RSERVER.CONNECTION @
+        RABBIT-CONNECTION-OWNED-GRAPHS-DISJOINT? 0= IF 0 EXIT THEN
+    _RSERVERGG-A @ RSERVER.BUILDER @
+        _RSERVERGG-B @ RSERVER.BUILDER @
+        RMSGB-OWNED-GRAPHS-DISJOINT? 0= IF 0 EXIT THEN
+    _RSERVERGG-B @ RSERVER.BUILDER @
+        _RSERVERGG-A @ RSERVER.CONNECTION @
+        RABBIT-CONNECTION-BUILDER-OVERLAP? IF 0 EXIT THEN
+    _RSERVERGG-A @ RSERVER.BUILDER @
+        _RSERVERGG-B @ RSERVER.CONNECTION @
+        RABBIT-CONNECTION-BUILDER-OVERLAP? 0= ;
 
 VARIABLE _RSERVERI-CONN
 VARIABLE _RSERVERI-ROUTER

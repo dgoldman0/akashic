@@ -285,6 +285,23 @@ VARIABLE _RMSGBO-B
         _RMSGBO-B @ _RMSGB.ARENA-CAP @
         MSPAN-OVERLAP? ;
 
+VARIABLE _RMSGBGG-A
+VARIABLE _RMSGBGG-B
+
+\ Compare the complete owned allocations of two builders.  This is the
+\ pairwise composition seam for higher protocol owners: both descriptors and
+\ both complete caller-provided arenas must be valid and disjoint.  Invalid
+\ inputs, including a builder compared with itself, fail closed.
+: RMSGB-OWNED-GRAPHS-DISJOINT?  ( builder-a builder-b -- flag )
+    _RMSGBGG-B ! _RMSGBGG-A !
+    _RMSGBGG-A @ RMSGB-VALID? 0= IF 0 EXIT THEN
+    _RMSGBGG-B @ RMSGB-VALID? 0= IF 0 EXIT THEN
+    _RMSGBGG-A @ _RMSGBGG-A @ _RMSGB.BYTES @ _RMSGBGG-B @
+        RMSGB-OWNED-SPAN-OVERLAP? IF 0 EXIT THEN
+    _RMSGBGG-A @ _RMSGB.ARENA @
+        _RMSGBGG-A @ _RMSGB.ARENA-CAP @ _RMSGBGG-B @
+        RMSGB-OWNED-SPAN-OVERLAP? 0= ;
+
 \ =====================================================================
 \  Failure mapping and owned-arena helpers
 \ =====================================================================
