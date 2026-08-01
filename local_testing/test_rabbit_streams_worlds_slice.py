@@ -34,6 +34,7 @@ SERVER_FIXTURE = LOCAL_TESTING / "rabbit-server-test.f"
 SERVER_SUBSCRIPTION_FIXTURE = (
     LOCAL_TESTING / "rabbit-servsub-test.f"
 )
+CAPSTONE_FIXTURE = LOCAL_TESTING / "rabbit-cap-test.f"
 
 PASS_MARKER = "RABBIT CORE PASS"
 PHASE_MAX_STEPS = 120_000_000
@@ -99,6 +100,11 @@ LOAD_STAGES = (
         "server-subscription-fixture",
         "local_testing/rabbit-servsub-test.f",
         "RABBIT SERVER SUBSCRIPTION FIXTURE READY",
+    ),
+    (
+        "two-peer-capstone-fixture",
+        "local_testing/rabbit-cap-test.f",
+        "RABBIT TWO PEER CAPSTONE FIXTURE READY",
     ),
 )
 CONTRACT_STAGES = (
@@ -410,6 +416,90 @@ CONTRACT_STAGES = (
         "RABBIT SERVER SUBSCRIPTION FINI PASS",
         True,
     ),
+    (
+        "capstone-graphs-init",
+        "_RBT-CAP-PHASE-GRAPHS-INIT",
+        "RABBIT CAPSTONE GRAPHS INIT PASS",
+        True,
+    ),
+    (
+        "capstone-handshakes",
+        "_RBT-CAP-PHASE-HANDSHAKES",
+        "RABBIT CAPSTONE HANDSHAKES PASS",
+        True,
+    ),
+    (
+        "capstone-discovery",
+        "_RBT-CAP-PHASE-DISCOVERY",
+        "RABBIT CAPSTONE DISCOVERY PASS",
+        True,
+    ),
+    (
+        "capstone-bind-both",
+        "_RBT-CAP-PHASE-BIND-BOTH",
+        "RABBIT CAPSTONE BIND BOTH PASS",
+        True,
+    ),
+    (
+        "capstone-actions",
+        "_RBT-CAP-PHASE-ACTIONS",
+        "RABBIT CAPSTONE ACTIONS PASS",
+        True,
+    ),
+    (
+        "capstone-actions-complete",
+        "_RBT-CAP-PHASE-ACTIONS-COMPLETE",
+        "RABBIT CAPSTONE ACTIONS COMPLETE PASS",
+        True,
+    ),
+    (
+        "capstone-post-action-fetch",
+        "_RBT-CAP-PHASE-POST-ACTION-FETCH",
+        "RABBIT CAPSTONE POST ACTION FETCH PASS",
+        True,
+    ),
+    (
+        "capstone-independent-pressure",
+        "_RBT-CAP-PHASE-INDEPENDENT-PRESSURE",
+        "RABBIT CAPSTONE INDEPENDENT PRESSURE PASS",
+        True,
+    ),
+    (
+        "capstone-b-saturates",
+        "_RBT-CAP-PHASE-B-SATURATES",
+        "RABBIT CAPSTONE B SATURATES PASS",
+        True,
+    ),
+    (
+        "capstone-a-continues",
+        "_RBT-CAP-PHASE-A-CONTINUES",
+        "RABBIT CAPSTONE A CONTINUES PASS",
+        True,
+    ),
+    (
+        "capstone-b-disconnect",
+        "_RBT-CAP-PHASE-B-DISCONNECT",
+        "RABBIT CAPSTONE B DISCONNECT PASS",
+        True,
+    ),
+    (
+        "capstone-b-rebuild-rebind",
+        "_RBT-CAP-PHASE-B-REBUILD-REBIND",
+        "RABBIT CAPSTONE B REBUILD REBIND PASS",
+        True,
+    ),
+    (
+        "capstone-b-exact-suffix",
+        "_RBT-CAP-PHASE-B-EXACT-SUFFIX",
+        "RABBIT CAPSTONE B EXACT SUFFIX PASS",
+        True,
+    ),
+    (
+        "capstone-fini",
+        "_RBT-CAP-PHASE-FINI",
+        "RABBIT CAPSTONE FINI PASS",
+        True,
+    ),
 )
 
 
@@ -459,6 +549,7 @@ def _assert_static_contracts() -> None:
     server_subscription_fixture = SERVER_SUBSCRIPTION_FIXTURE.read_text(
         encoding="utf-8"
     )
+    capstone_fixture = CAPSTONE_FIXTURE.read_text(encoding="utf-8")
 
     assert 0 < PHASE_MAX_STEPS <= 120_000_000
     assert len({name for name, _, _ in LOAD_STAGES}) == len(LOAD_STAGES)
@@ -717,6 +808,7 @@ def _assert_static_contracts() -> None:
     for word in (
         "RABBIT-CLIENT-INIT",
         "RABBIT-CLIENT-OPEN",
+        "RABBIT-CLIENT-APP-LANE-ENSURE",
         "RABBIT-CLIENT-HELLO",
         "RABBIT-CLIENT-REQUEST",
         "RABBIT-CLIENT-OP-MATCH?",
@@ -873,6 +965,8 @@ def _assert_static_contracts() -> None:
         + server_fixture
         + "\n"
         + server_subscription_fixture
+        + "\n"
+        + capstone_fixture
     )
     for marker in (
         "_RBT-TEST-ENCODE",
@@ -900,6 +994,20 @@ def _assert_static_contracts() -> None:
         "_RBT-SSRV-PHASE-EVENT14-RESERVE",
         "_RBT-SSRV-PHASE-EVENT14-RETRY",
         "_RBT-SSRV-PHASE-FINI",
+        "_RBT-CAP-PHASE-GRAPHS-INIT",
+        "_RBT-CAP-PHASE-HANDSHAKES",
+        "_RBT-CAP-PHASE-DISCOVERY",
+        "_RBT-CAP-PHASE-BIND-BOTH",
+        "_RBT-CAP-PHASE-ACTIONS",
+        "_RBT-CAP-PHASE-ACTIONS-COMPLETE",
+        "_RBT-CAP-PHASE-POST-ACTION-FETCH",
+        "_RBT-CAP-PHASE-INDEPENDENT-PRESSURE",
+        "_RBT-CAP-PHASE-B-SATURATES",
+        "_RBT-CAP-PHASE-A-CONTINUES",
+        "_RBT-CAP-PHASE-B-DISCONNECT",
+        "_RBT-CAP-PHASE-B-REBUILD-REBIND",
+        "_RBT-CAP-PHASE-B-EXACT-SUFFIX",
+        "_RBT-CAP-PHASE-FINI",
         "RBF-EOF",
     ):
         assert marker in fixture_contracts
@@ -923,6 +1031,7 @@ def _assert_static_contracts() -> None:
         (SUBSCRIPTION_FIXTURE, subscription_fixture),
         (SERVER_FIXTURE, server_fixture),
         (SERVER_SUBSCRIPTION_FIXTURE, server_subscription_fixture),
+        (CAPSTONE_FIXTURE, capstone_fixture),
     ):
         _assert_physical_comments(path, source)
 
@@ -1022,6 +1131,12 @@ def _run_rabbit_core(timeout: float) -> int:
                 "local_testing/rabbit-servsub-test.f",
                 harness._minify_forth(
                     SERVER_SUBSCRIPTION_FIXTURE.read_text(encoding="utf-8")
+                ).encode("utf-8"),
+            ),
+            (
+                "local_testing/rabbit-cap-test.f",
+                harness._minify_forth(
+                    CAPSTONE_FIXTURE.read_text(encoding="utf-8")
                 ).encode("utf-8"),
             ),
         ),
