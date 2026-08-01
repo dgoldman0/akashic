@@ -195,7 +195,8 @@ application-profile adapter to validate the exact label, `View`, and extension
 metadata that the neutral operation does not persist. Rejecting that terminal
 response cancels the connection rather than leaving an impossible pending
 transaction. Operation pointers are paired with nonzero generations advanced
-on reuse so release and cancellation can reject stale handles. Local
+on reuse so release and cancellation can reject stale handles. Generation
+exhaustion refuses another publication rather than wrapping into an ABA. Local
 cancellation deliberately preserves a tombstone
 until the response or connection teardown makes reuse unambiguous.
 
@@ -205,13 +206,66 @@ bytes it retains and explicitly chooses commit or drop; borrowed parser
 pointers are cleared before the call returns. Recursive polling or dispatch is
 refused before it can overwrite the live outer loan. An event may therefore be
 committed while an unrelated request is
-still pending without satisfying or disturbing that operation. HELLO,
-ACK/CREDIT, and the exact PONG control shape remain internal client/connection
-state transitions. The HELLO `Burrow-ID` is copied into its own caller span
-before commit and published only after session admission succeeds. Client
-records, operation metadata, transaction bytes, identity, and result bytes are
-all caller-owned, with a canonical zero-operation client remaining useful for
-handshake and unsolicited dispatch.
+still pending without satisfying or disturbing that operation. Inbound HELLO,
+ACK/CREDIT, and the exact PONG control shape remain client/connection state
+transitions rather than callback items. The HELLO `Burrow-ID` is copied into
+its own caller span before commit and published only after session admission
+succeeds. Client records, operation metadata, transaction bytes, identity, and
+result bytes are all caller-owned. A canonical zero-operation client remains
+useful for handshake and unsolicited dispatch.
+
+An established client may also enqueue an already typed ACK, CREDIT, or PING
+through the same owning connection. This narrow control surface validates the
+builder kind and graph disjointness and preserves the connection's
+encode-before-mutate behavior; it does not bypass correlated publication for
+ordinary requests.
+
+## Subscription and replay ownership
+
+`net/rabbit/subscription.f` owns a caller-sized table of generic subscription
+registrations above one client. Each registration copies its exact selector,
+records its lane and application callback, and carries a nonzero generation so
+released or reused entry pointers cannot be mistaken for live handles. The
+caller supplies the metadata array plus uniform selector and event slots. A
+zero-entry table is a valid configuration; no product subscription count or
+event-body limit is embedded in the module. Entry-generation exhaustion likewise
+refuses registration rather than reissuing an old generation.
+
+Registration takes the caller's last durably applied application
+`Event-Seq`. Binding constructs an ordinary correlated `SUBSCRIBE` request and
+emits that cursor as `Since` when it is nonzero. The terminal response remains
+an inspectable client operation until the caller explicitly accepts or refuses
+the bind result; the neutral layer does not infer application success from an
+arbitrary numeric response. Selector registration state, transport lane
+sequence, last observed application sequence, and committed replay cursor are
+kept distinct.
+
+An exact next `Event-Seq` is copied in full and offered synchronously to the
+registered application callback. Only callback acceptance plus successful
+connection commit advances the replay cursor. An already committed sequence is
+reported as a duplicate and remains available for application digest or
+idempotency validation without advancing the cursor, including at the maximum
+cursor so a lost final transport ACK remains recoverable. A gap or oversized
+body invokes no application callback, copies no prefix, and leaves the
+committed cursor unchanged; `NEXT-EVENT@` reports cursor exhaustion directly.
+Event staging bytes are wiped before
+`POLL` or `DISPATCH` returns; callbacks may not retain any supplied slice or
+reenter subscription dispatch or lifecycle mutation. A callback throw or
+invalid decision remains explicit even for extension and other fallback traffic.
+
+Disconnect currently represents whole-connector loss: it cancels the attached
+client, clears lane-local and bind-operation evidence, preserves copied
+selectors, generations, callbacks, and committed cursors, and marks every live
+entry for rebind. The caller can attach a fresh READY or ACTIVE client and bind
+the same handles again, producing `Since` from the preserved cursor. Detach
+preflights every owned bind handle and releases only terminal operations before
+clearing entry evidence; an unsafe cleanup refusal retains the client and
+handles for recovery. This is
+the reconnect/replay foundation, not a complete subscription-management API:
+per-entry `UNSUBSCRIBE`, independent cancellation on a still-live connector,
+and automatic ACK-window policy remain to be added. Generic callers can send
+validated cumulative ACK and CREDIT controls through the client control seam
+without moving that policy into Streams.
 
 ## Lane and transaction profile
 

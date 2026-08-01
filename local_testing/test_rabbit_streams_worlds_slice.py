@@ -18,12 +18,14 @@ BUILDER = ROOT / "akashic" / "net" / "rabbit" / "builder.f"
 SESSION = ROOT / "akashic" / "net" / "rabbit" / "session.f"
 CONNECTION = ROOT / "akashic" / "net" / "rabbit" / "connection.f"
 CLIENT = ROOT / "akashic" / "net" / "rabbit" / "client.f"
+SUBSCRIPTION = ROOT / "akashic" / "net" / "rabbit" / "subscription.f"
 ROUTER = ROOT / "akashic" / "net" / "rabbit" / "router.f"
 MEMORY = ROOT / "akashic" / "net" / "transports" / "memory-duplex.f"
 DOC = ROOT / "docs" / "net" / "rabbit.md"
 FIXTURE = LOCAL_TESTING / "rabbit-core-test.f"
 CLIENT_FIXTURE = LOCAL_TESTING / "rabbit-client-test.f"
 CLIENT_JOURNEY = LOCAL_TESTING / "rabbit-client-flow.f"
+SUBSCRIPTION_FIXTURE = LOCAL_TESTING / "rabbit-sub-test.f"
 
 PASS_MARKER = "RABBIT CORE PASS"
 PHASE_MAX_STEPS = 120_000_000
@@ -48,6 +50,11 @@ LOAD_STAGES = (
     ("builder", "net/rabbit/builder.f", "RABBIT BUILDER READY"),
     ("connection", "net/rabbit/connection.f", "RABBIT CONNECTION READY"),
     ("client", "net/rabbit/client.f", "RABBIT CLIENT READY"),
+    (
+        "subscription",
+        "net/rabbit/subscription.f",
+        "RABBIT SUBSCRIPTION READY",
+    ),
     ("router", "net/rabbit/router.f", "RABBIT ROUTER READY"),
     (
         "fixture",
@@ -64,6 +71,11 @@ LOAD_STAGES = (
         "local_testing/rabbit-client-flow.f",
         "RABBIT CLIENT JOURNEY READY",
     ),
+    (
+        "subscription-fixture",
+        "local_testing/rabbit-sub-test.f",
+        "RABBIT SUBSCRIPTION FIXTURE READY",
+    ),
 )
 CONTRACT_STAGES = (
     ("base", "_RBT-RUN", "RABBIT CORE BASE PASS", False),
@@ -72,6 +84,12 @@ CONTRACT_STAGES = (
         "client-handshake",
         "_RBT-CLI-PHASE-HANDSHAKE",
         "RABBIT CLIENT HANDSHAKE PASS",
+        True,
+    ),
+    (
+        "client-builder-alias",
+        "_RBT-CLI-PHASE-BUILDER-ALIAS",
+        "RABBIT CLIENT BUILDER ALIAS PASS",
         True,
     ),
     (
@@ -122,6 +140,102 @@ CONTRACT_STAGES = (
         "RABBIT CLIENT TEARDOWN TRANSPORT PASS",
         True,
     ),
+    (
+        "subscription-graph-init",
+        "_RBT-CLI-PHASE-INIT",
+        "RABBIT SUBSCRIPTION GRAPH INIT PASS",
+        True,
+    ),
+    (
+        "subscription-handshake",
+        "_RBT-CLI-PHASE-HANDSHAKE",
+        "RABBIT SUBSCRIPTION HANDSHAKE PASS",
+        True,
+    ),
+    (
+        "subscription-owner-init",
+        "_RBT-SUB-PHASE-OWNER-INIT",
+        "RABBIT SUBSCRIPTION OWNER INIT PASS",
+        True,
+    ),
+    (
+        "subscription-first-bind",
+        "_RBT-SUB-PHASE-FIRST-BIND",
+        "RABBIT SUBSCRIPTION FIRST BIND PASS",
+        True,
+    ),
+    (
+        "subscription-fallback-invalid",
+        "_RBT-SUB-PHASE-FALLBACK-INVALID",
+        "RABBIT SUBSCRIPTION FALLBACK INVALID PASS",
+        True,
+    ),
+    (
+        "subscription-event-new",
+        "_RBT-SUB-PHASE-EVENT-NEW",
+        "RABBIT SUBSCRIPTION EVENT NEW PASS",
+        True,
+    ),
+    (
+        "subscription-event-new-ack",
+        "_RBT-SUB-PHASE-EVENT-NEW-ACK",
+        "RABBIT SUBSCRIPTION EVENT NEW ACK PASS",
+        True,
+    ),
+    (
+        "subscription-event-duplicate",
+        "_RBT-SUB-PHASE-EVENT-DUPLICATE",
+        "RABBIT SUBSCRIPTION EVENT DUPLICATE PASS",
+        True,
+    ),
+    (
+        "subscription-event-gap",
+        "_RBT-SUB-PHASE-EVENT-GAP",
+        "RABBIT SUBSCRIPTION EVENT GAP PASS",
+        True,
+    ),
+    (
+        "subscription-disconnect",
+        "_RBT-SUB-PHASE-DISCONNECT",
+        "RABBIT SUBSCRIPTION DISCONNECT PASS",
+        True,
+    ),
+    (
+        "subscription-disconnect-graph-fini",
+        "_RBT-SUB-PHASE-DISCONNECT-GRAPH-FINI",
+        "RABBIT SUBSCRIPTION DISCONNECT GRAPH FINI PASS",
+        True,
+    ),
+    (
+        "subscription-regraph-init",
+        "_RBT-CLI-PHASE-INIT",
+        "RABBIT SUBSCRIPTION REGRAPH INIT PASS",
+        True,
+    ),
+    (
+        "subscription-rehandshake",
+        "_RBT-CLI-PHASE-HANDSHAKE",
+        "RABBIT SUBSCRIPTION REHANDSHAKE PASS",
+        True,
+    ),
+    (
+        "subscription-rebind",
+        "_RBT-SUB-PHASE-REBIND",
+        "RABBIT SUBSCRIPTION REBIND PASS",
+        True,
+    ),
+    (
+        "subscription-replay",
+        "_RBT-SUB-PHASE-REPLAY",
+        "RABBIT SUBSCRIPTION REPLAY PASS",
+        True,
+    ),
+    (
+        "subscription-fini",
+        "_RBT-SUB-PHASE-FINI",
+        "RABBIT SUBSCRIPTION FINI PASS",
+        True,
+    ),
 )
 
 
@@ -157,12 +271,14 @@ def _assert_static_contracts() -> None:
     session = SESSION.read_text(encoding="utf-8")
     connection = CONNECTION.read_text(encoding="utf-8")
     client = CLIENT.read_text(encoding="utf-8")
+    subscription = SUBSCRIPTION.read_text(encoding="utf-8")
     router = ROUTER.read_text(encoding="utf-8")
     memory = MEMORY.read_text(encoding="utf-8")
     doc = " ".join(DOC.read_text(encoding="utf-8").split())
     fixture = FIXTURE.read_text(encoding="utf-8")
     client_fixture = CLIENT_FIXTURE.read_text(encoding="utf-8")
     client_journey = CLIENT_JOURNEY.read_text(encoding="utf-8")
+    subscription_fixture = SUBSCRIPTION_FIXTURE.read_text(encoding="utf-8")
 
     assert 0 < PHASE_MAX_STEPS <= 120_000_000
     assert len({name for name, _, _ in LOAD_STAGES}) == len(LOAD_STAGES)
@@ -204,6 +320,11 @@ def _assert_static_contracts() -> None:
         "connection.f",
         "../../utils/memory-span.f",
     ]
+    assert _requires(SUBSCRIPTION) == [
+        "client.f",
+        "../../utils/memory-span.f",
+        "../../text/utf8.f",
+    ]
     assert _requires(MEMORY) == [
         "../io-port.f",
         "../../utils/memory-span.f",
@@ -217,6 +338,7 @@ def _assert_static_contracts() -> None:
         (session, "PROVIDED akashic-rabbit-session"),
         (connection, "PROVIDED akashic-rabbit-connection"),
         (client, "PROVIDED akashic-rabbit-client"),
+        (subscription, "PROVIDED akashic-rabbit-subscription"),
         (router, "PROVIDED akashic-rabbit-router"),
         (memory, "PROVIDED akashic-net-memory-duplex"),
     ):
@@ -255,6 +377,12 @@ def _assert_static_contracts() -> None:
     assert all(name.startswith("_RCLI") for _, name in client_declarations)
     assert "One cooperative owner must" in client
     assert "exact session (Lane, Txn)" in client
+    subscription_declarations = _declarations(SUBSCRIPTION, subscription)
+    assert subscription_declarations
+    assert all(kind == "VARIABLE" for kind, _ in subscription_declarations)
+    assert all(name.startswith("_RSUB") for _, name in subscription_declarations)
+    assert "Lane Seq and Event-Seq are deliberately independent" in subscription
+    assert "recursive dispatch and registration/lifecycle mutation are refused" in subscription
     router_declarations = _declarations(ROUTER, router)
     assert router_declarations
     assert all(kind == "VARIABLE" for kind, _ in router_declarations)
@@ -379,6 +507,8 @@ def _assert_static_contracts() -> None:
         "RABBIT-CLIENT-OP-REQUIRED@",
         "RABBIT-CLIENT-OP-CANCEL",
         "RABBIT-CLIENT-OP-RELEASE",
+        "RABBIT-CLIENT-OWNED-SPAN-OVERLAP?",
+        "RABBIT-CLIENT-CONTROL",
         "RABBIT-CLIENT-DISPATCH",
         "RABBIT-CLIENT-POLL",
         "RABBIT-CLIENT-CLOSE",
@@ -386,6 +516,24 @@ def _assert_static_contracts() -> None:
         "RABBIT-CLIENT-FINI",
     ):
         assert word in client
+    for word in (
+        "RABBIT-SUBSCRIPTION-ENTRY-BYTES",
+        "RABBIT-SUBSCRIPTIONS-INIT",
+        "RABBIT-SUBSCRIPTIONS-ADD",
+        "RABBIT-SUBSCRIPTION-FIND",
+        "RABBIT-SUBSCRIPTION-BIND",
+        "RABBIT-SUBSCRIPTION-BIND-RESULT@",
+        "RABBIT-SUBSCRIPTION-BIND-RESOLVE",
+        "RABBIT-SUBSCRIPTION-LAST-OBSERVED-EVENT-SEQ@",
+        "RABBIT-SUBSCRIPTIONS-DISPATCH",
+        "RABBIT-SUBSCRIPTIONS-POLL",
+        "RABBIT-SUBSCRIPTIONS-DISCONNECT",
+        "RABBIT-SUBSCRIPTIONS-ATTACH",
+        "RABBIT-SUBSCRIPTIONS-BINDING-VALID?",
+        "RABBIT-SUBSCRIPTION-RELEASE",
+        "RABBIT-SUBSCRIPTIONS-FINI",
+    ):
+        assert word in subscription
     for word in (
         "NMD-ENDPOINT-INIT",
         "NMD-PAIR",
@@ -403,6 +551,7 @@ def _assert_static_contracts() -> None:
         *_requires(SESSION),
         *_requires(CONNECTION),
         *_requires(CLIENT),
+        *_requires(SUBSCRIPTION),
         *_requires(ROUTER),
         *_requires(MEMORY),
     )
@@ -433,7 +582,15 @@ def _assert_static_contracts() -> None:
     ):
         assert phrase in doc
 
-    fixture_contracts = fixture + "\n" + client_fixture + "\n" + client_journey
+    fixture_contracts = (
+        fixture
+        + "\n"
+        + client_fixture
+        + "\n"
+        + client_journey
+        + "\n"
+        + subscription_fixture
+    )
     for marker in (
         "_RBT-TEST-ENCODE",
         "_RBT-TEST-PARSE",
@@ -459,11 +616,13 @@ def _assert_static_contracts() -> None:
         (SESSION, session),
         (CONNECTION, connection),
         (CLIENT, client),
+        (SUBSCRIPTION, subscription),
         (ROUTER, router),
         (MEMORY, memory),
         (FIXTURE, fixture),
         (CLIENT_FIXTURE, client_fixture),
         (CLIENT_JOURNEY, client_journey),
+        (SUBSCRIPTION_FIXTURE, subscription_fixture),
     ):
         _assert_physical_comments(path, source)
 
@@ -507,6 +666,7 @@ def _run_rabbit_core(timeout: float) -> int:
             "net/rabbit/session.f",
             "net/rabbit/connection.f",
             "net/rabbit/client.f",
+            "net/rabbit/subscription.f",
             "net/rabbit/router.f",
         ),
         resources=(),
@@ -542,6 +702,12 @@ def _run_rabbit_core(timeout: float) -> int:
                 "local_testing/rabbit-client-flow.f",
                 harness._minify_forth(
                     CLIENT_JOURNEY.read_text(encoding="utf-8")
+                ).encode("utf-8"),
+            ),
+            (
+                "local_testing/rabbit-sub-test.f",
+                harness._minify_forth(
+                    SUBSCRIPTION_FIXTURE.read_text(encoding="utf-8")
                 ).encode("utf-8"),
             ),
         ),
