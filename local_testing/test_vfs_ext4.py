@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import mmap
@@ -26,6 +27,7 @@ import generate_ext4_profile_fixtures as ext4_fixture_generator  # noqa: E402
 from devices import (  # noqa: E402
     STORAGE_CMD_WRITE,
     STORAGE_RESULT_MEDIA_FAILURE,
+    STORAGE_STATUS_PRESENT,
 )
 
 
@@ -76,6 +78,88 @@ def _crc32c_raw(data: bytes, seed: int = 0xFFFF_FFFF) -> int:
     return crc & 0xFFFF_FFFF
 
 
+def _write_sparse_bytes(
+    path: Path, data: bytes | bytearray, *, durable: bool = False
+) -> None:
+    """Serialize exact bytes without allocating runs that are entirely zero."""
+    view = memoryview(data)
+    chunk_size = 64 * 1024
+    with path.open("wb") as destination:
+        destination.truncate(len(view))
+        for offset in range(0, len(view), chunk_size):
+            chunk = view[offset : offset + chunk_size]
+            if not any(chunk):
+                continue
+            destination.seek(offset)
+            written = destination.write(chunk)
+            if written != len(chunk):
+                raise OSError(
+                    f"short sparse image write: {written} of {len(chunk)} bytes"
+                )
+        destination.flush()
+        if durable:
+            os.fsync(destination.fileno())
+
+
+def _copy_sparse_file(source: Path, destination: Path) -> None:
+    """Copy a disk image while preserving filesystem holes when supported."""
+    size = source.stat().st_size
+    if not hasattr(os, "SEEK_DATA") or not hasattr(os, "SEEK_HOLE"):
+        shutil.copyfile(source, destination)
+        return
+
+    unsupported = {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP}
+    extents: list[tuple[int, int]] = []
+    with source.open("rb") as source_file:
+        offset = 0
+        while offset < size:
+            try:
+                data_offset = os.lseek(source_file.fileno(), offset, os.SEEK_DATA)
+            except OSError as error:
+                if error.errno == errno.ENXIO:
+                    break
+                if error.errno in unsupported:
+                    shutil.copyfile(source, destination)
+                    return
+                raise
+            try:
+                hole_offset = os.lseek(
+                    source_file.fileno(), data_offset, os.SEEK_HOLE
+                )
+            except OSError as error:
+                if error.errno == errno.ENXIO:
+                    hole_offset = size
+                elif error.errno in unsupported:
+                    shutil.copyfile(source, destination)
+                    return
+                else:
+                    raise
+            extent_end = min(hole_offset, size)
+            extents.append((data_offset, extent_end))
+            offset = extent_end
+
+        with destination.open("wb") as destination_file:
+            destination_file.truncate(size)
+            for extent_start, extent_end in extents:
+                source_file.seek(extent_start)
+                destination_file.seek(extent_start)
+                remaining = extent_end - extent_start
+                while remaining:
+                    chunk = source_file.read(min(1 << 20, remaining))
+                    if not chunk:
+                        raise OSError("short sparse image read")
+                    written = destination_file.write(chunk)
+                    if written != len(chunk):
+                        raise OSError(
+                            "short sparse image copy: "
+                            f"{written} of {len(chunk)} bytes"
+                        )
+                    remaining -= len(chunk)
+
+    if destination.stat().st_size != size:
+        raise OSError("sparse image copy changed the logical size")
+
+
 def _relocate_jbd2_transaction(
     source: Path,
     destination: Path,
@@ -103,7 +187,7 @@ def _relocate_jbd2_transaction(
         ">I", transaction[2], 0x08
     )[0]
 
-    shutil.copyfile(source, destination)
+    _copy_sparse_file(source, destination)
     with destination.open("r+b") as image:
         for logical in source_slots:
             if logical not in destination_slots:
@@ -415,7 +499,7 @@ def _author_jbd2_transactions(
     transactions: tuple[tuple[tuple[int, ...], bytes], ...],
 ) -> Path:
     image = directory / f"{name}.img"
-    shutil.copyfile(source, image)
+    _copy_sparse_file(source, image)
     commands = ["journal_open -c -v 3"]
     for index, (blocks, payload) in enumerate(transactions):
         assert blocks
@@ -610,6 +694,19 @@ def run_recovery_forth(
         media[offset : offset + len(data)] = data
     system.storage._replace_media(media, str(backing))
     system.storage.write_protected = write_protected
+
+    def save_sparse_media() -> None:
+        if (
+            system.storage.image_path is not None
+            and system.storage.status & STORAGE_STATUS_PRESENT
+        ):
+            _write_sparse_bytes(
+                Path(system.storage.image_path),
+                system.storage._image_data,
+                durable=True,
+            )
+
+    system.storage.save_image = save_sparse_media
     trace: list[tuple[str, int, int]] = []
     start_dma = system.storage._start_dma
     run_flush = system.storage._run_flush
@@ -650,7 +747,7 @@ def run_recovery_forth(
         )
     _assert_emitted(output, "EXT4-STACK-CLEAN")
     if capture_media is not None:
-        capture_media.write_bytes(media)
+        _write_sparse_bytes(capture_media, media)
     return output, tuple(trace), hashlib.sha256(media).hexdigest()
 
 
@@ -725,7 +822,7 @@ def replay_fixture(
 
     directory = tmp_path_factory.mktemp("ext4-jbd2-replay")
     image = directory / "replay-csum3-64bit.img"
-    shutil.copyfile(canonical_images["primary-1k-i256"], image)
+    _copy_sparse_file(canonical_images["primary-1k-i256"], image)
     payload = (
         b"JBD2-AKASHIC-REPLAY\n" + bytes(range(256)) * 4
     )[:1024].ljust(1024, b"\xa5")
@@ -982,7 +1079,7 @@ def journal_inode_table_replay_fixture(
     assert len(original_payload) == 1024
     directory = tmp_path_factory.mktemp("ext4-jbd2-inode-table")
     neighbor_candidate = directory / "neighbor-inode-update.img"
-    shutil.copyfile(source_image, neighbor_candidate)
+    _copy_sparse_file(source_image, neighbor_candidate)
     updated = subprocess.run(
         [
             str(debugfs),
@@ -1014,7 +1111,7 @@ def journal_inode_table_replay_fixture(
         ("altered", bytes(altered_payload)),
     ):
         image = directory / f"replay-inode-table-{case_name}.img"
-        shutil.copyfile(source_image, image)
+        _copy_sparse_file(source_image, image)
         payload_path = directory / f"inode-table-{case_name}.bin"
         payload_path.write_bytes(payload)
         commands = directory / f"journal-inode-table-{case_name}.cmd"
@@ -3852,3 +3949,26 @@ def test_private_crc32c_matches_ext4_raw_vector(tmp_path: Path) -> None:
         ],
     )
     _assert_emitted(output, "EXT4-CRC32C-OK")
+
+
+def test_sparse_image_helpers_preserve_bytes_and_holes(tmp_path: Path) -> None:
+    logical_size = 8 * (1 << 20)
+    source = tmp_path / "sparse-source.img"
+    with source.open("wb") as image:
+        image.truncate(logical_size)
+        image.seek(4096)
+        image.write(b"first sparse extent")
+        image.seek(logical_size - 4096)
+        image.write(b"last sparse extent")
+
+    expected = source.read_bytes()
+    copied = tmp_path / "sparse-copied.img"
+    _copy_sparse_file(source, copied)
+    serialized = tmp_path / "sparse-serialized.img"
+    _write_sparse_bytes(serialized, expected, durable=True)
+
+    assert copied.read_bytes() == expected
+    assert serialized.read_bytes() == expected
+    if source.stat().st_blocks * 512 < logical_size // 4:
+        assert copied.stat().st_blocks * 512 < logical_size // 4
+        assert serialized.stat().st_blocks * 512 < logical_size // 4
