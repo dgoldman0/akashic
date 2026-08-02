@@ -307,9 +307,38 @@ padding.
 Success publishes `COMMITTED` only after the final commit flush. Ordered data
 is already at home, while metadata home blocks remain unchanged. All staged
 metadata, data, and revoke entries and their after-images remain owned by the
-writer so the future checkpoint phase can consume the exact authenticated
-images; retry, abort, and a new transaction are therefore busy in this state.
-There is intentionally no same-session checkpoint or journal-space reuse yet.
+writer; retry, abort, and a new transaction remain busy until checkpoint
+finishes. Checkpoint first revalidates the complete workspace, performs an
+ordinary complete on-media scan, and then repeats that scan in lockstep with
+the retained emitter order before issuing a home write. The active primary and
+guard, transaction ID, start/head/cursor, every descriptor home and unescaped
+payload, every revoke identity, the commit, the exact zero sentinel, and the
+retained entry/image CRCs must describe the same single committed transaction.
+A mismatch fails before home mutation.
+
+After that preflight, checkpoint writes each retained active metadata
+after-image to its home block. Ordered data is not rewritten because emission
+made it durable before commit, and revoked/cancelled entries grant no home-write
+authority. All metadata home writes cross one volume flush, followed by a
+strict reload and root validation, before any journal block or reservation can
+be reused.
+
+Journal release preserves the mounted write-active state. It reuses the active
+guard `G` as an `AKG1`-qualified `AKR1` reset anchor, publishes and flushes the
+empty witnessed primary, then removes the primary witness and flushes it while
+the exact dirty ext4 superblock still has `RECOVER` set. During witness removal,
+`G` proves an admitted sequential prefix; after the ordinary empty primary is
+durable, ext4 `RECOVER` is the standard recovery authority. Only then is `G`
+zeroed and flushed. Thus checkpoint does not clear `RECOVER`, does not clear
+the in-memory write-active publication, and does not run clean-to-`RECOVER`
+activation again.
+
+An exact final reread rebases the same workspace to the reset journal
+head/sequence, restores the full ring reservation, scrubs retained transaction
+authority, and publishes `IDLE`. The next transaction immediately reuses that
+workspace and ring, including sequence wrap, without another arena allocation.
+Clean deactivation is a separate unmount/recovery operation rather than part of
+per-transaction space release.
 
 The bounded 1 KiB qualification uses 63 metadata after-images and 126 revokes,
 the first counts that require two descriptor batches and two revoke batches
@@ -326,16 +355,17 @@ latches the first ior and exact phase, faults the writer, and forces the VFS
 read-only and dirty. The same mount cannot retry or erase that uncertainty.
 Remount classifies the durable commit endpoint, replays only an authenticated
 commit, and converges through the standard active guard and `AKG1`-qualified
-reset path. Only the final authenticated clean remount may scrub and rebase the
-preserved writer workspace.
+reset path. Only a successful same-session checkpoint at the authenticated
+dirty/empty endpoint, or a final authenticated clean remount, may scrub and
+rebase the preserved writer workspace.
 
 The object layout, counts, embedded pointers, ring fields, phase/fault state,
 image checksums, and hash indices are revalidated before they can drive a
 fill, copy, lookup, or media write. The public binding and capability mask
-remain read-only. Checkpointing, both orphan mechanisms, the complete
-user-visible mutation layer, external-tool inspection of Akashic-created
-transactions, and the remaining release gates must all land before public
-write capabilities can be enabled.
+remain read-only. Clean write-active deactivation, both orphan mechanisms, the
+complete user-visible mutation layer, external-tool inspection of
+Akashic-created transactions, and the remaining release gates must all land
+before public write capabilities can be enabled.
 
 ## Read-only inspection
 
@@ -407,18 +437,19 @@ writable profile. The remaining boundaries are:
 - a checksum-torn dirty primary super fails closed unless a fully committed
   transaction carries its valid invariant-preserving replacement, or the
   private `AKR1` clear witness proves the exact cleanup state described above;
-- private transaction staging, clean-to-`RECOVER` activation quarantine, and
-  one ordered descriptor/payload/revoke/commit emission are implemented, but
-  metadata checkpointing, journal-space release/reuse, and continued
-  transactions are not;
+- private transaction staging, clean-to-`RECOVER` activation quarantine, one
+  ordered descriptor/payload/revoke/commit emission, full-log checkpoint
+  preflight, retained-image home writes, dirty-empty journal release, and
+  immediate sequential workspace reuse are implemented, but clean write-active
+  deactivation and clean-unmount integration are not;
 - legacy and modern orphan recovery and every user-visible mutation operation
   remain unimplemented; and
 - recovery-anchor interoperability and the controlled power-cut matrix still
   require external-tool and emulator qualification.
 
 No write capability will be advertised until complete replay/orphan recovery,
-checkpoint and journal-space-release logic, the full ordered-data mutation
-surface, external-tool mutation checks, and power-cut qualification land.
+clean write-active deactivation, the full ordered-data mutation surface,
+external-tool mutation checks, and power-cut qualification land.
 
 ## Public reference
 

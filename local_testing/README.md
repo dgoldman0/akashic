@@ -204,11 +204,12 @@ arena-derived map/revoke geometry, committed replay, valid incomplete-tail
 discard, pre-write corruption and physical-read-only refusal, ordered flushes,
 idempotence, and both repairable and explicitly fail-closed tears in the
 journal/ext4 landing sequence. The repairable matrix includes exact
-sequential-prefix tears of primary witness removal; damaged locators that
-cannot prove that transition remain refused. Orphan recovery, checksum-torn
-tail classification, ACL enforcement, and every user-visible mutation remain
-outside this gate. This remains an explicit-volume emulator suite rather than
-a default boot-image or automount profile.
+sequential-prefix tears of primary witness removal for both clean landing and
+write-active dirty-empty turnover; damaged locators that cannot prove that
+transition remain refused. Orphan recovery, checksum-torn tail classification,
+ACL enforcement, and every user-visible mutation remain outside this gate.
+This remains an explicit-volume emulator suite rather than a default boot-image
+or automount profile.
 
 Bounded synthetic cases also qualify the private writer workspace without
 issuing storage writes or flushes. They cover exact one-allocation sizing and
@@ -255,6 +256,46 @@ metadata payloads, parse all 126 revokes with zero matching tag hits, leave
 every revoke-named home unchanged, reset the clean journal, and rebase the
 existing workspace without arena growth.
 
+A persistent write-active case stages one metadata after-image, one ordered
+data image, and one revoke with the guard derived at `s_maxlen-3`. Its exact
+same-session lifecycle is `A + E1 + C + E2 + C`: one initial `AKW1` activation,
+two independent emission/commit cycles, and a checkpoint after each. Each `C`
+performs an ordinary complete log scan followed by a lockstep retained-authority
+scan before an exact six-write trace: metadata home, invalid `AKG1` reset guard,
+valid reset guard, witnessed empty primary, standard witness-free primary, and
+guard retirement. The binder compares every descriptor home and unescaped
+payload and every revoke identity in emitter order, requires exact retained
+stream exhaustion, and admits only the all-zero emitted sentinel. The existing
+63-metadata/126-revoke ring-wrap case also runs this binder across both
+descriptor batches and both revoke batches. Independently checksummed
+descriptor-home, payload, revoke-home, revoke-high-word, and nonzero-sentinel
+mutations prove that generic JBD2 scanning can accept coherent media which
+checkpoint must still reject before its first write or flush.
+
+The required flush boundaries separate home durability from release and each
+reset/authority transition. There is no ext4-superblock write: `RECOVER`,
+`WRITE-ACTIVE`, and VFS dirty remain set, so `E2` begins without a second
+activation or arena growth. The lifecycle starts the journal sequence at
+`0xfffffffa`, crosses the wrapping 32-bit transaction/reset sequence boundary,
+and checks the persisted empty-journal head and sequence after both checkpoints.
+It also checks full free space, every entry/hash slot, every byte of the retained
+metadata and data image regions, and the final `IDLE` workspace after each
+checkpoint. Corrupting a retained image must fail the checkpoint preflight
+before any checkpoint write or flush.
+
+Six checkpoint fault rows apply a sequential prefix at each of those six
+writes. Failures remain quarantined in the same mount and remount must converge
+through the surviving authority. The home, invalid-guard, and valid-guard rows
+retain the active committed log and therefore replay one metadata home image;
+the reset-primary, standard-primary, and guard-retirement rows have already
+crossed the durable home flush and replay zero. No row may release space or
+permit another same-session transaction after a checkpoint fault.
+Representative home and final-guard flush failures plus post-home and final
+strict-reread failures exercise the same quarantine rule at non-write
+boundaries. The first three retain the current writer publication; the final
+reread occurs after publication withdrawal and proves that the invalidated
+workspace cannot be reused.
+
 Emission fault injection keeps the first failing ior and phase quarantined in
 the same mount and requires a later mount to classify the durable endpoint and
 converge forward. Primary-prefix rows exercise old-versus-active selection from
@@ -270,10 +311,12 @@ that unmount clears both binding readiness and current-writer ownership with
 the block context detached.
 
 These are private durability qualifications, not writable-VFS claims. The
-suite still has no same-session metadata checkpoint or journal-space release,
-no legacy or modern orphan mutation, and no user-visible ext4 mutation
-operation. The public ext4 capability mask stays read-only until those full
-writer and release gates pass.
+suite now covers same-session metadata checkpoint, journal-space release, and
+immediate sequential private transactions, but still has no clean write-active
+deactivation, legacy or modern orphan mutation, or user-visible ext4 mutation
+operation. External-tool inspection and the complete release/power-cut matrix
+also remain open. The public ext4 capability mask stays read-only until those
+full writer and release gates pass.
 
 When a resolved profile closure binds directly to MegaPad networking, the
 harness injects the one canonical packed `networking.f` and loads it with

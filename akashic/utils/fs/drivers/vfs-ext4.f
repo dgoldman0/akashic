@@ -51,6 +51,7 @@ REQUIRE ../vfs.f
 0 CONSTANT _EXT4-JSCAN-PREFLIGHT
 1 CONSTANT _EXT4-JSCAN-REVOKES
 2 CONSTANT _EXT4-JSCAN-REPLAY
+3 CONSTANT _EXT4-JSCAN-BINDING
 
 0x0000103C CONSTANT _EXT4-COMPAT-V1
 0x0000046B CONSTANT _EXT4-RO-V1
@@ -519,6 +520,11 @@ VARIABLE _EXT4-WB-CTX
     0 ?DO
         2DUP I + C@ SWAP I + C@ <> IF 2DROP FALSE UNLOOP EXIT THEN
     LOOP 2DROP TRUE ;
+
+: _EXT4-BYTES-ZERO?  ( a len -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP FALSE UNLOOP EXIT THEN
+    LOOP DROP TRUE ;
 
 VARIABLE _EXT4-PO-N
 VARIABLE _EXT4-PO-B
@@ -4565,9 +4571,9 @@ VARIABLE _EXT4-JADV-CTX
 \ This layer owns complete metadata and ordered-data after-images before any
 \ transaction media mutation.  The downstream private emitter consumes the
 \ same bounded tables through activation, barriers, and commit while retaining
-\ them for the still-pending checkpoint layer.  The single allocation is
-\ preserved with the binding context and reused exactly, so failed-mount
-\ retries cannot leak the monotonic VFS arena.
+\ them for authenticated checkpoint.  The single allocation is preserved with
+\ the binding context and reused exactly, so failed-mount retries cannot leak
+\ the monotonic VFS arena.
 
 0x414B4A5752303031 CONSTANT _EXT4-JWR-MAGIC  \ "AKJWR001"
 
@@ -4576,7 +4582,8 @@ VARIABLE _EXT4-JADV-CTX
 2 CONSTANT _EXT4-JWR-ACTIVATING
 3 CONSTANT _EXT4-JWR-EMITTING
 4 CONSTANT _EXT4-JWR-COMMITTED
-5 CONSTANT _EXT4-JWR-FAULTED
+5 CONSTANT _EXT4-JWR-CHECKPOINTING
+6 CONSTANT _EXT4-JWR-FAULTED
 
 0 CONSTANT _EXT4-JWP-NONE
 1 CONSTANT _EXT4-JWP-GUARD-PRESEED
@@ -4598,6 +4605,17 @@ VARIABLE _EXT4-JADV-CTX
 17 CONSTANT _EXT4-JWP-ACTIVE-PRIMARY
 18 CONSTANT _EXT4-JWP-COMMIT
 19 CONSTANT _EXT4-JWP-COMMIT-FLUSH
+20 CONSTANT _EXT4-JWP-CHECKPOINT-PREFLIGHT
+21 CONSTANT _EXT4-JWP-CHECKPOINT-HOME
+22 CONSTANT _EXT4-JWP-CHECKPOINT-HOME-FLUSH
+23 CONSTANT _EXT4-JWP-CHECKPOINT-PROOF
+24 CONSTANT _EXT4-JWP-CHECKPOINT-RESET
+25 CONSTANT _EXT4-JWP-CHECKPOINT-RESET-FLUSH
+26 CONSTANT _EXT4-JWP-CHECKPOINT-WITNESS-CLEAR
+27 CONSTANT _EXT4-JWP-CHECKPOINT-WITNESS-FLUSH
+28 CONSTANT _EXT4-JWP-CHECKPOINT-GUARD-RETIRE
+29 CONSTANT _EXT4-JWP-CHECKPOINT-GUARD-FLUSH
+30 CONSTANT _EXT4-JWP-CHECKPOINT-FINAL-PROOF
 
 0 CONSTANT _EXT4-JE-UNUSED
 1 CONSTANT _EXT4-JE-ACTIVE
@@ -4785,6 +4803,7 @@ VARIABLE _EXT4-JWV-RING-CAP
 VARIABLE _EXT4-JWV-STATE
 VARIABLE _EXT4-JWV-PHASE
 VARIABLE _EXT4-JWV-TX-ACTIVE
+VARIABLE _EXT4-JWV-COMMITTED-SHAPE
 VARIABLE _EXT4-JWV-CAP
 VARIABLE _EXT4-JWV-CREDIT
 VARIABLE _EXT4-JWV-USED
@@ -4956,6 +4975,10 @@ VARIABLE _EXT4-JWV-RES-WRITER
     DUP _EXT4-JWP-ORDERED-DATA >=
     SWAP _EXT4-JWP-COMMIT-FLUSH <= AND ;
 
+: _EXT4-JWP-CHECKPOINT?  ( phase -- flag )
+    DUP _EXT4-JWP-CHECKPOINT-PREFLIGHT >=
+    SWAP _EXT4-JWP-CHECKPOINT-FINAL-PROOF <= AND ;
+
 : _EXT4-JWR-RUNTIME?  ( writer -- flag )
     DUP _EXT4-JWV-WRITER !
     _EXT4-JWR.STATE + @ DUP _EXT4-JWV-STATE !
@@ -4964,16 +4987,30 @@ VARIABLE _EXT4-JWV-RES-WRITER
     _EXT4-JWV-STATE @ _EXT4-JWR-FAULTED = IF
         _EXT4-JWV-WRITER @ _EXT4-JWR.FAULT + @ 0= IF FALSE EXIT THEN
         _EXT4-JWV-PHASE @ _EXT4-JWP-ACTIVATION?
-        _EXT4-JWV-PHASE @ _EXT4-JWP-EMISSION? OR 0= IF FALSE EXIT THEN
+        _EXT4-JWV-PHASE @ _EXT4-JWP-EMISSION? OR
+        _EXT4-JWV-PHASE @ _EXT4-JWP-CHECKPOINT? OR 0= IF
+            FALSE EXIT
+        THEN
     ELSE
         _EXT4-JWV-WRITER @ _EXT4-JWR.FAULT + @ IF FALSE EXIT THEN
         _EXT4-JWV-STATE @ _EXT4-JWR-ACTIVATING = IF
             _EXT4-JWV-PHASE @ _EXT4-JWP-ACTIVATION? 0= IF FALSE EXIT THEN
         ELSE _EXT4-JWV-STATE @ _EXT4-JWR-EMITTING = IF
             _EXT4-JWV-PHASE @ _EXT4-JWP-EMISSION? 0= IF FALSE EXIT THEN
+        ELSE _EXT4-JWV-STATE @ _EXT4-JWR-CHECKPOINTING = IF
+            _EXT4-JWV-PHASE @ _EXT4-JWP-CHECKPOINT? 0= IF
+                FALSE EXIT
+            THEN
         ELSE
             _EXT4-JWV-PHASE @ IF FALSE EXIT THEN
-        THEN THEN
+        THEN THEN THEN
+    THEN
+    0 _EXT4-JWV-COMMITTED-SHAPE !
+    _EXT4-JWV-STATE @ _EXT4-JWR-COMMITTED =
+    _EXT4-JWV-STATE @ _EXT4-JWR-CHECKPOINTING = OR
+    _EXT4-JWV-STATE @ _EXT4-JWR-FAULTED =
+    _EXT4-JWV-PHASE @ _EXT4-JWP-CHECKPOINT? AND OR IF
+        -1 _EXT4-JWV-COMMITTED-SHAPE !
     THEN
     _EXT4-JWV-STATE @ _EXT4-JWR-ACTIVATING = IF
         _EXT4-JWV-WRITER @ _EXT4-JWR-TRANSACTION-CLEAN? 0= IF
@@ -5020,7 +5057,7 @@ VARIABLE _EXT4-JWV-RES-WRITER
         DROP FALSE EXIT
     THEN
     _EXT4-JWV-RING-CAP @ U> IF FALSE EXIT THEN
-    _EXT4-JWV-STATE @ _EXT4-JWR-COMMITTED = IF
+    _EXT4-JWV-COMMITTED-SHAPE @ IF
         _EXT4-JWV-WRITER @ _EXT4-JWR.CTX + @ _EXT4-C.J.START + @
         _EXT4-JWV-WRITER @ _EXT4-JWR.TX-START + @
         _EXT4-JWV-WRITER @ _EXT4-JWR.CTX + @ _EXT4-JOURNAL-NEXT
@@ -5029,6 +5066,31 @@ VARIABLE _EXT4-JWV-RES-WRITER
         _EXT4-JWV-WRITER @ _EXT4-JWR.TX-TID + @ <> IF FALSE EXIT THEN
         _EXT4-JWV-WRITER @ _EXT4-JWR.CTX + @ _EXT4-C.J.HEAD + @
         _EXT4-JWV-WRITER @ _EXT4-JWR.TX-START + @ <> IF FALSE EXIT THEN
+        _EXT4-JWV-WRITER @ _EXT4-JWR.CTX + @ _EXT4-C.J.ANCHOR + @
+        _EXT4-JWV-WRITER @ _EXT4-JWR.TX-START + @ <> IF FALSE EXIT THEN
+        _EXT4-JWV-WRITER @ _EXT4-JWR.CTX + @ _EXT4-C.J.CURSOR + @
+        _EXT4-JWV-WRITER @ _EXT4-JWR.TX-CURSOR + @ <> IF FALSE EXIT THEN
+        _EXT4-JWV-WRITER @ _EXT4-JWR.CTX + @ _EXT4-C.J.COMMITTED + @
+        1 <> IF FALSE EXIT THEN
+        _EXT4-JWV-WRITER @ _EXT4-JWR.CTX + @
+        _EXT4-C.J.NEXT-SEQUENCE + @
+        _EXT4-JWV-WRITER @ _EXT4-JWR.TX-TID + @ 2 +
+        0xFFFFFFFF AND <> IF FALSE EXIT THEN
+        _EXT4-JWV-WRITER @ _EXT4-JWR.CTX + @ _EXT4-C.J.CLEANUP + @
+        _EXT4-JC-ACTIVE <> IF FALSE EXIT THEN
+        _EXT4-JWV-WRITER @ _EXT4-JWR.CTX + @
+        _EXT4-C.J.WITNESS + @ DUP IF
+            _EXT4-JW-RECOVERY <> IF FALSE EXIT THEN
+            _EXT4-JWV-PHASE @
+            _EXT4-JWP-CHECKPOINT-WITNESS-CLEAR < IF FALSE EXIT THEN
+        ELSE
+            DROP
+        THEN
+        _EXT4-JWV-WRITER @ _EXT4-JWR.CTX + @
+        _EXT4-C.J.PRIMARY-TORN + @ IF FALSE EXIT THEN
+        _EXT4-JWV-WRITER @ _EXT4-JWR.CTX + @ _EXT4-C.SUPER-TORN + @ IF
+            FALSE EXIT
+        THEN
     ELSE
         _EXT4-JWV-WRITER @ _EXT4-JWR.CTX + @ _EXT4-C.J.START + @ IF
             FALSE EXIT
@@ -5067,7 +5129,7 @@ VARIABLE _EXT4-JWV-RES-WRITER
         _EXT4-JWV-RING-CAP @ U> IF FALSE EXIT THEN
         TRUE EXIT
     THEN
-    _EXT4-JWV-STATE @ _EXT4-JWR-COMMITTED = IF
+    _EXT4-JWV-COMMITTED-SHAPE @ IF
         _EXT4-JWV-WRITER @ _EXT4-JWR.LOG-RESERVED + @ 0= IF
             FALSE EXIT
         THEN
@@ -5278,20 +5340,35 @@ VARIABLE _EXT4-JMR-CTX
 VARIABLE _EXT4-JMR-WRITER
 VARIABLE _EXT4-JMR-HEAD
 VARIABLE _EXT4-JMR-FREE
+VARIABLE _EXT4-JMR-WRITE-ACTIVE
 
-\ A failed mount preserves the one arena allocation and all of its bytes for
-\ diagnosis or retry, but never republishes it as a usable transaction.  Only
-\ the final authenticated clean endpoint may scrub stale staged/committed
-\ images and rebase the workspace onto the journal's persisted head/sequence.
-: _EXT4-JWR-REBASE-MOUNTED  ( ctx -- ior )
-    _EXT4-JMR-CTX !
-    _EXT4-JMR-CTX @ _EXT4-C.RECOVERY + @
-    _EXT4-JMR-CTX @ _EXT4-C.J.START + @ OR
+\ Rebase only after publication has been withdrawn and strict validation has
+\ authenticated an empty standard journal.  Mount recovery supplies a clean
+\ endpoint; a live checkpoint supplies the equally standard RECOVER-set,
+\ write-active endpoint so later transactions do not repeat AKW1 activation.
+: _EXT4-JWR-REBASE-ENDPOINT  ( ctx write-active? -- ior )
+    _EXT4-JMR-WRITE-ACTIVE ! _EXT4-JMR-CTX !
+    _EXT4-JMR-WRITE-ACTIVE @ IF
+        _EXT4-JMR-CTX @ _EXT4-C.RECOVERY + @ 0=
+        _EXT4-JMR-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ 0= OR IF
+            VFS-E-CORRUPT EXIT
+        THEN
+        _EXT4-JMR-CTX @ _EXT4-C.SB + DUP
+        _EXT4-SUPER-CHECKSUM? 0= IF DROP VFS-E-CORRUPT EXIT THEN
+        _EXT4-SB.INCOMPAT + L@ _EXT4-INCOMPAT-RECOVER AND 0= IF
+            VFS-E-CORRUPT EXIT
+        THEN
+    ELSE
+        _EXT4-JMR-CTX @ _EXT4-C.RECOVERY + @
+        _EXT4-JMR-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ OR IF
+            VFS-E-CORRUPT EXIT
+        THEN
+    THEN
+    _EXT4-JMR-CTX @ _EXT4-C.J.START + @
     _EXT4-JMR-CTX @ _EXT4-C.J.WITNESS + @ OR
     _EXT4-JMR-CTX @ _EXT4-C.J.PRIMARY-TORN + @ OR
     _EXT4-JMR-CTX @ _EXT4-C.J.CLEANUP + @ OR
     _EXT4-JMR-CTX @ _EXT4-C.SUPER-TORN + @ OR
-    _EXT4-JMR-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ OR
     _EXT4-JMR-CTX @ _EXT4-C.J.WRITER-CURRENT + @ OR IF
         VFS-E-CORRUPT EXIT
     THEN
@@ -5334,6 +5411,15 @@ VARIABLE _EXT4-JMR-FREE
     _EXT4-JMR-WRITER @ _EXT4-JWR.NEXT-TID + !
     _EXT4-JWR-IDLE _EXT4-JMR-WRITER @ _EXT4-JWR.STATE + !
     0 ;
+
+\ A failed mount preserves the one arena allocation and all of its bytes for
+\ diagnosis or retry, but never republishes it as a usable transaction.  Only
+\ the final authenticated clean endpoint may scrub those retained bytes.
+: _EXT4-JWR-REBASE-MOUNTED  ( ctx -- ior )
+    0 _EXT4-JWR-REBASE-ENDPOINT ;
+
+: _EXT4-JWR-REBASE-WRITE-ACTIVE  ( ctx -- ior )
+    -1 _EXT4-JWR-REBASE-ENDPOINT ;
 
 VARIABLE _EXT4-JHL-HOME
 VARIABLE _EXT4-JHL-ENTRIES
@@ -6012,6 +6098,97 @@ VARIABLE _EXT4-JS-REVOKE-OFF
 VARIABLE _EXT4-JS-REVOKE-HIGH
 VARIABLE _EXT4-JS-REVOKE-BLOCK
 
+VARIABLE _EXT4-JSB-WRITER
+VARIABLE _EXT4-JSB-META-INDEX
+VARIABLE _EXT4-JSB-META-BOUND
+VARIABLE _EXT4-JSB-REVOKE-INDEX
+VARIABLE _EXT4-JSB-REVOKE-BOUND
+VARIABLE _EXT4-JSB-PAYLOAD
+VARIABLE _EXT4-JSB-HOME
+VARIABLE _EXT4-JSB-ENTRY
+VARIABLE _EXT4-JSB-IOR
+
+: _EXT4-JSCAN-FULL?  ( pass -- flag )
+    DUP _EXT4-JSCAN-PREFLIGHT =
+    SWAP _EXT4-JSCAN-BINDING = OR ;
+
+: _EXT4-JSCAN-BIND-BEGIN  ( writer -- )
+    _EXT4-JSB-WRITER !
+    0 _EXT4-JSB-META-INDEX !
+    0 _EXT4-JSB-META-BOUND !
+    0 _EXT4-JSB-REVOKE-INDEX !
+    0 _EXT4-JSB-REVOKE-BOUND ! ;
+
+\ Compare the logical, unescaped descriptor stream in the same deterministic
+\ order used by emission.  Cancelled retained entries never entered the log.
+: _EXT4-JSCAN-BIND-METADATA  ( payload home -- ior )
+    _EXT4-JSB-HOME ! _EXT4-JSB-PAYLOAD !
+    _EXT4-JSB-WRITER @ 0= IF 0 EXIT THEN
+    BEGIN
+        _EXT4-JSB-META-INDEX @
+        _EXT4-JSB-WRITER @ _EXT4-JWR.META-USED + @ U<
+    WHILE
+        _EXT4-JSB-META-INDEX @ _EXT4-JSB-WRITER @
+        _EXT4-JWR-META-ENTRY DUP _EXT4-JSB-ENTRY !
+        CELL+ @ _EXT4-JE-ACTIVE = IF
+            _EXT4-JSB-ENTRY @ @ _EXT4-JSB-HOME @ <> IF
+                VFS-E-CORRUPT EXIT
+            THEN
+            _EXT4-JSB-PAYLOAD @
+            _EXT4-JSB-META-INDEX @ _EXT4-JSB-WRITER @
+            _EXT4-JWR-META-IMAGE
+            _EXT4-JSB-WRITER @ _EXT4-JWR.BSIZE + @
+            _EXT4-BYTES=? 0= IF VFS-E-CORRUPT EXIT THEN
+            1 _EXT4-JSB-META-INDEX +!
+            1 _EXT4-JSB-META-BOUND +!
+            0 EXIT
+        THEN
+        1 _EXT4-JSB-META-INDEX +!
+    REPEAT
+    VFS-E-CORRUPT ;
+
+\ Revoke records are emitted in retained insertion order as well.  Equality
+\ with the next admissible retained home rejects duplicates, omissions, and
+\ any reordered or substituted revoke identity without allocating a seen set.
+: _EXT4-JSCAN-BIND-REVOKE  ( home -- ior )
+    _EXT4-JSB-HOME !
+    _EXT4-JSB-WRITER @ 0= IF 0 EXIT THEN
+    _EXT4-JSB-HOME @ _EXT4-JSB-WRITER @ _EXT4-JTX-HOME? 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    BEGIN
+        _EXT4-JSB-REVOKE-INDEX @
+        _EXT4-JSB-WRITER @ _EXT4-JWR.REVOKE-USED + @ U<
+    WHILE
+        _EXT4-JSB-REVOKE-INDEX @ _EXT4-JSB-WRITER @
+        _EXT4-JWR-REVOKE-ENTRY DUP _EXT4-JSB-ENTRY !
+        CELL+ @ _EXT4-JE-ACTIVE = IF
+            _EXT4-JSB-ENTRY @ @ _EXT4-JSB-HOME @ <> IF
+                VFS-E-CORRUPT EXIT
+            THEN
+            1 _EXT4-JSB-REVOKE-INDEX +!
+            1 _EXT4-JSB-REVOKE-BOUND +!
+            0 EXIT
+        THEN
+        1 _EXT4-JSB-REVOKE-INDEX +!
+    REPEAT
+    VFS-E-CORRUPT ;
+
+\ Always withdraw the transient binding publication, including after a scan
+\ error.  On success every active retained identity must have appeared once.
+: _EXT4-JSCAN-BIND-FINISH  ( scan-ior -- ior )
+    _EXT4-JSB-IOR !
+    _EXT4-JSB-IOR @ 0= _EXT4-JSB-WRITER @ 0<> AND IF
+        _EXT4-JSB-META-BOUND @
+        _EXT4-JSB-WRITER @ _EXT4-JWR.META-ACTIVE + @ <>
+        _EXT4-JSB-REVOKE-BOUND @
+        _EXT4-JSB-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ <> OR IF
+            VFS-E-CORRUPT _EXT4-JSB-IOR !
+        THEN
+    THEN
+    0 _EXT4-JSB-WRITER !
+    _EXT4-JSB-IOR @ ;
+
 : _EXT4-JSCAN-READ-NEXT  ( -- ior )
     _EXT4-JS-LEFT @ 0= IF EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN
     _EXT4-JS-POS @ DUP _EXT4-JS-CURRENT !
@@ -6138,12 +6315,26 @@ VARIABLE _EXT4-RAP-CTX
     U> IF DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN
     16 - DUP 8 MOD IF DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN
     8 / _EXT4-JS-REVOKE-COUNT !
-    _EXT4-JS-PASS @ _EXT4-JSCAN-PREFLIGHT = IF
+    _EXT4-JS-PASS @ _EXT4-JSCAN-FULL? IF
         _EXT4-JS-TX-REVOKES @ _EXT4-JS-REVOKE-COUNT @ + DUP
         _EXT4-JS-TX-REVOKES @ U< IF
             DROP EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT
         THEN
         _EXT4-JS-TX-REVOKES !
+        _EXT4-JSB-WRITER @ 0= IF 0 EXIT THEN
+        16 _EXT4-JS-REVOKE-OFF !
+        _EXT4-JS-REVOKE-COUNT @ 0 ?DO
+            _EXT4-JS-CTX @ _EXT4-C.BLOCK +
+            _EXT4-JS-REVOKE-OFF @ + DUP
+            _EXT4-BE32@ _EXT4-JS-REVOKE-HIGH !
+            4 + _EXT4-BE32@ _EXT4-JS-REVOKE-BLOCK !
+            _EXT4-JS-REVOKE-HIGH @ IF
+                EXT4-D-JOURNAL _EXT4-UNSUPPORTED UNLOOP EXIT
+            THEN
+            _EXT4-JS-REVOKE-BLOCK @ _EXT4-JSCAN-BIND-REVOKE
+            ?DUP IF UNLOOP EXIT THEN
+            8 _EXT4-JS-REVOKE-OFF +!
+        LOOP
         0 EXIT
     THEN
     _EXT4-JS-PASS @ _EXT4-JSCAN-REVOKES <> IF 0 EXIT THEN
@@ -6220,6 +6411,8 @@ VARIABLE _EXT4-RAP-CTX
         _EXT4-RECOVERY-AUTHORITY-PRESERVED? 0= IF
             EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
         THEN
+        _EXT4-JS-CTX @ _EXT4-C.BLOCK + _EXT4-JS-HOME @
+        _EXT4-JSCAN-BIND-METADATA ?DUP IF EXIT THEN
         \ A checksum-torn primary super is admitted provisionally so this
         \ authenticated payload can be inspected.  Do not grant replay
         \ authority until the enclosing transaction's commit is verified.
@@ -6278,12 +6471,12 @@ VARIABLE _EXT4-RAP-CTX
         0 _EXT4-JS-CTX @ _EXT4-C.J.REVOKE-HITS + !
     THEN
     BEGIN
-        _EXT4-JS-PASS @ _EXT4-JSCAN-PREFLIGHT <> IF
+        _EXT4-JS-PASS @ _EXT4-JSCAN-FULL? 0= IF
             _EXT4-JS-DONE @
             _EXT4-JS-CTX @ _EXT4-C.J.COMMITTED + @ >= IF 0 EXIT THEN
         THEN
         _EXT4-JS-LEFT @ 0= IF
-            _EXT4-JS-PASS @ _EXT4-JSCAN-PREFLIGHT <> IF
+            _EXT4-JS-PASS @ _EXT4-JSCAN-FULL? 0= IF
                 EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
             THEN
             _EXT4-JS-DONE @ IF EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT THEN
@@ -6294,7 +6487,7 @@ VARIABLE _EXT4-RAP-CTX
         _EXT4-BE32@ _EXT4-JBD2-MAGIC <>
         OVER 8 + _EXT4-BE32@ _EXT4-JS-SEQUENCE @ <> OR IF
             DROP
-            _EXT4-JS-PASS @ _EXT4-JSCAN-PREFLIGHT <> IF
+            _EXT4-JS-PASS @ _EXT4-JSCAN-FULL? 0= IF
                 EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
             THEN
             _EXT4-JSCAN-FINISH EXIT
@@ -6330,7 +6523,7 @@ VARIABLE _EXT4-RAP-CTX
             _EXT4-JSCAN-REVOKE ?DUP IF EXIT THEN
         ELSE
             _EXT4-JS-TYPE @ _EXT4-JBD2-SUPER-V2 =
-            _EXT4-JS-PASS @ _EXT4-JSCAN-PREFLIGHT = AND IF
+            _EXT4-JS-PASS @ _EXT4-JSCAN-FULL? AND IF
                 _EXT4-JS-CTX @ _EXT4-C.J.FIRST + @ _EXT4-JS-FIRST !
                 _EXT4-JS-CURRENT @ _EXT4-JS-CTX @
                 _EXT4-JBD2-ANCHOR-BLOCK? IF
@@ -6394,7 +6587,11 @@ VARIABLE _EXT4-RJ-ACTIVE-CRC
     _EXT4-RJ-CTX @ _EXT4-C.BLOCK + _EXT4-JS.HEAD + _EXT4-BE32!
     _EXT4-JBD2-RECOVERY-MAGIC
     _EXT4-RJ-CTX @ _EXT4-C.BLOCK + _EXT4-JS.RECOVERY-MAGIC + _EXT4-BE32!
-    _EXT4-RJ-CTX @ _EXT4-C.SB + _EXT4-SB.CHECKSUM + L@ DUP
+    \ AKR1 authenticates the clean super image deterministically derived from
+    \ the durable current super.  This is unchanged after PREPARE-CLEAR and
+    \ also lets a live checkpoint retire AKG1 while deliberately retaining
+    \ the standard RECOVER-set endpoint for the next transaction.
+    _EXT4-RJ-CTX @ _EXT4-C.SB + _EXT4-INTENDED-SUPER-CHECKSUM DUP
     _EXT4-RJ-CTX @ _EXT4-C.BLOCK +
     _EXT4-JS.RECOVERY-CHECKSUM + _EXT4-BE32!
     INVERT 0xFFFFFFFF AND
@@ -6554,6 +6751,71 @@ VARIABLE _EXT4-AJS-NEW
     _EXT4-RJ-CTX @ _EXT4-C.BLOCK +
     0 _EXT4-RJ-CTX @ _EXT4-JOURNAL-MAP@ _EXT4-RJ-CTX @
     _EXT4-WRITE-BLOCK ;
+
+VARIABLE _EXT4-JDW-CTX
+
+\ A live checkpoint may retire AKG1 without first clearing ext4 RECOVER.
+\ The reset witness authenticates the clean image derived from this exact,
+\ checksum-valid dirty super; once the standard empty primary is installed,
+\ that dirty endpoint remains independently recoverable on the next mount.
+: _EXT4-CLEAR-JOURNAL-WITNESS-DIRTY  ( ctx -- ior )
+    DUP _EXT4-JDW-CTX ! _EXT4-C.RECOVERY + @ 0= IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-JDW-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ 0= IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-JDW-CTX @ _EXT4-C.SUPER-TORN + @ IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-JDW-CTX @ _EXT4-C.J.CLEANUP + @ _EXT4-JC-ACTIVE <> IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-JDW-CTX @ _EXT4-C.SB + DUP _EXT4-SUPER-CHECKSUM? 0= IF
+        DROP VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-SB.INCOMPAT + L@ _EXT4-INCOMPAT-RECOVER AND 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    0 _EXT4-JDW-CTX @ _EXT4-READ-JBLOCK ?DUP IF EXIT THEN
+    _EXT4-JDW-CTX @ _EXT4-C.BLOCK + DUP
+    _EXT4-JBD2-SUPER-CHECKSUM? 0= IF
+        DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    DUP _EXT4-JDW-CTX @ _EXT4-JBD2-WITNESS? 0= IF
+        DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JDW-CTX @ _EXT4-C.J.WITNESS + @
+    _EXT4-JW-RECOVERY <> IF DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN
+    DUP _EXT4-JBD2-ACTIVE-RESET? 0= IF
+        DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    DUP _EXT4-JS.START + _EXT4-BE32@ IF
+        DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    DUP _EXT4-JS.HEAD + _EXT4-BE32@
+    _EXT4-JDW-CTX @ _EXT4-C.J.ANCHOR + @ <> IF
+        DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JDW-CTX @ _EXT4-JOURNAL-WITNESS-SUPER? 0= IF
+        DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JDW-CTX @ _EXT4-C.DIR-BLOCK +
+    _EXT4-JDW-CTX @ _EXT4-C.BSIZE + @ CMOVE
+    _EXT4-JDW-CTX @ _EXT4-C.J.ANCHOR + @
+    _EXT4-JDW-CTX @ _EXT4-READ-JBLOCK ?DUP IF EXIT THEN
+    _EXT4-JDW-CTX @ _EXT4-C.J.ANCHOR + @ _EXT4-JDW-CTX @
+    _EXT4-JBD2-ANCHOR-BLOCK? 0= IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JDW-CTX @ _EXT4-C.BLOCK +
+    _EXT4-JDW-CTX @ _EXT4-C.DIR-BLOCK +
+    _EXT4-JDW-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JDW-CTX @ _EXT4-C.DIR-BLOCK + DUP
+    _EXT4-ZERO-JOURNAL-WITNESS
+    0 _EXT4-JDW-CTX @ _EXT4-WRITE-JBLOCK ;
 
 VARIABLE _EXT4-RA-CTX
 VARIABLE _EXT4-RA-LOGICAL
@@ -7378,6 +7640,215 @@ VARIABLE _EXT4-RS-V
 : _EXT4-VALIDATE-ROOT  ( ctx -- ior )
     DUP _EXT4-RJ-CTX ! 2 SWAP _EXT4-LOAD-INODE ?DUP IF EXIT THEN
     _EXT4-RJ-CTX @ _EXT4-STAGE-ROOT ;
+
+VARIABLE _EXT4-JCP-WRITER
+VARIABLE _EXT4-JCP-CTX
+VARIABLE _EXT4-JCP-V
+VARIABLE _EXT4-JCP-INDEX
+VARIABLE _EXT4-JCP-ENTRY
+VARIABLE _EXT4-JCP-WROTE
+
+: _EXT4-JCP-FAULT  ( ior -- ior )
+    _EXT4-JCP-WRITER @ _EXT4-JWR-LATCH-FAULT ;
+
+\ Reauthenticate both the persisted transaction and its retained checkpoint
+\ source before the first home write.  JSCAN proves the exact committed disk
+\ prefix; the bounded writer tables prove the home identities and images that
+\ will be consumed without allocating recovery-only revoke workspace.
+: _EXT4-JTX-CHECKPOINT-PREFLIGHT  ( -- ior )
+    _EXT4-JCP-CTX @ _EXT4-JCP-V @ _EXT4-RELOAD-STRICT ?DUP IF EXIT THEN
+    _EXT4-JCP-CTX @ _EXT4-VALIDATE-ROOT ?DUP IF EXIT THEN
+    _EXT4-JCP-WRITER @ _EXT4-JWR-VALID? 0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-JCP-WRITER @ _EXT4-JTX-TABLES-VALID? 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    0 _EXT4-JCP-CTX @ _EXT4-READ-JBLOCK ?DUP IF EXIT THEN
+    _EXT4-JCP-CTX @ _EXT4-C.BLOCK +
+    _EXT4-JCP-WRITER @ _EXT4-JWR.SCRATCH-A + @
+    _EXT4-JCP-WRITER @ _EXT4-JWR.BSIZE + @ _EXT4-BYTES=? 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-JCP-WRITER @ _EXT4-JWR.TX-START + @
+    _EXT4-JCP-CTX @ _EXT4-READ-JBLOCK ?DUP IF EXIT THEN
+    _EXT4-JCP-CTX @ _EXT4-C.BLOCK +
+    _EXT4-JCP-WRITER @ _EXT4-JWR.SCRATCH-A + @
+    _EXT4-JCP-WRITER @ _EXT4-JWR.BSIZE + @ _EXT4-BYTES=? 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-JCP-WRITER @ _EXT4-JWR.TX-START + @
+    _EXT4-JCP-WRITER @ _EXT4-JWR.LOG-RESERVED + @ 1-
+    _EXT4-JCP-CTX @ _EXT4-JOURNAL-ADVANCE
+    _EXT4-JCP-CTX @ _EXT4-READ-JBLOCK ?DUP IF EXIT THEN
+    _EXT4-JCP-CTX @ _EXT4-C.BLOCK +
+    _EXT4-JCP-WRITER @ _EXT4-JWR.SCRATCH-B + @
+    _EXT4-JCP-WRITER @ _EXT4-JWR.BSIZE + @ _EXT4-BYTES=? 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    \ Root staging may use TREE-BLOCK.  Freeze inode 8 again before JSCAN and
+    \ retained-image authority checks consume the retry-preservation proof.
+    8 _EXT4-JCP-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
+    _EXT4-JCP-CTX @ _EXT4-C.INODE +
+    _EXT4-JCP-CTX @ _EXT4-C.TREE-BLOCK +
+    _EXT4-JCP-CTX @ _EXT4-C.ISIZE + @ CMOVE
+    \ First prove an ordinary complete committed prefix, then repeat the same
+    \ bounded scan in lockstep with retained metadata and revoke order.  The
+    \ second pass cannot grant home-write authority merely because two valid
+    \ but different transaction descriptions happen to have the same shape.
+    _EXT4-JSCAN-PREFLIGHT _EXT4-JCP-CTX @ _EXT4-JSCAN ?DUP IF EXIT THEN
+    _EXT4-JCP-WRITER @ _EXT4-JSCAN-BIND-BEGIN
+    _EXT4-JSCAN-BINDING _EXT4-JCP-CTX @ _EXT4-JSCAN
+    _EXT4-JSCAN-BIND-FINISH ?DUP IF EXIT THEN
+    _EXT4-JCP-WRITER @ _EXT4-JWR.TX-CURSOR + @
+    _EXT4-JCP-CTX @ _EXT4-READ-JBLOCK ?DUP IF EXIT THEN
+    _EXT4-JCP-CTX @ _EXT4-C.BLOCK +
+    _EXT4-JCP-WRITER @ _EXT4-JWR.BSIZE + @
+    _EXT4-BYTES-ZERO? 0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-JCP-CTX @ _EXT4-C.J.COMMITTED + @ 1 <> IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-JCP-CTX @ _EXT4-C.J.CURSOR + @
+    _EXT4-JCP-WRITER @ _EXT4-JWR.TX-CURSOR + @ <> IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-JCP-CTX @ _EXT4-C.J.NEXT-SEQUENCE + @
+    _EXT4-JCP-WRITER @ _EXT4-JWR.TX-TID + @ 2 +
+    0xFFFFFFFF AND <> IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-JCP-CTX @ _EXT4-C.J.REVOKE-COUNT + @
+    _EXT4-JCP-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ <> IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-JCP-WRITER @ _EXT4-JTX-PREFLIGHT-IMAGES ?DUP IF EXIT THEN
+    _EXT4-JCP-WRITER @ _EXT4-JWR-VALID? 0= IF VFS-E-CORRUPT EXIT THEN
+    0 ;
+
+: _EXT4-JTX-CHECKPOINT-HOMES  ( -- ior )
+    _EXT4-JWP-CHECKPOINT-HOME
+    _EXT4-JCP-WRITER @ _EXT4-JWR.PHASE + !
+    0 _EXT4-JCP-INDEX ! 0 _EXT4-JCP-WROTE !
+    0 _EXT4-JCP-CTX @ _EXT4-C.J.HOME-WRITES + !
+    BEGIN
+        _EXT4-JCP-INDEX @
+        _EXT4-JCP-WRITER @ _EXT4-JWR.META-USED + @ U<
+    WHILE
+        _EXT4-JCP-INDEX @ _EXT4-JCP-WRITER @ _EXT4-JWR-META-ENTRY
+        DUP _EXT4-JCP-ENTRY ! CELL+ @ _EXT4-JE-ACTIVE = IF
+            _EXT4-JCP-INDEX @ _EXT4-JCP-WRITER @ _EXT4-JWR-META-IMAGE
+            _EXT4-JCP-ENTRY @ @ _EXT4-JCP-CTX @ _EXT4-WRITE-BLOCK
+            ?DUP IF EXIT THEN
+            1 _EXT4-JCP-WROTE +!
+            1 _EXT4-JCP-CTX @ _EXT4-C.J.HOME-WRITES + +!
+        THEN
+        1 _EXT4-JCP-INDEX +!
+    REPEAT
+    _EXT4-JCP-WROTE @
+    _EXT4-JCP-WRITER @ _EXT4-JWR.META-ACTIVE + @ <> IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-JWP-CHECKPOINT-HOME-FLUSH
+    _EXT4-JCP-WRITER @ _EXT4-JWR.PHASE + !
+    _EXT4-FLUSH ;
+
+\ Checkpoint one durable transaction, release its complete log reservation,
+\ and keep the mounted filesystem at a standard empty RECOVER-set journal.
+\ Any failure after publication enters CHECKPOINTING is quarantined for
+\ remount; same-session retry never guesses which prefix reached the medium.
+: _EXT4-JTX-CHECKPOINT  ( transaction -- ior )
+    DUP _EXT4-JCP-WRITER ! _EXT4-JWR-VALID? 0= IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-JCP-WRITER @ _EXT4-JWR.STATE + @
+    _EXT4-JWR-COMMITTED <> IF VFS-E-BUSY EXIT THEN
+    _EXT4-JCP-WRITER @ _EXT4-JWR.FAULT + @ IF VFS-E-BUSY EXIT THEN
+    _EXT4-JCP-WRITER @ _EXT4-JWR.CTX + @ DUP _EXT4-JCP-CTX !
+    _EXT4-C.J.WRITER-CURRENT + @ 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-JCP-CTX @ _EXT4-C.RECOVERY + @ 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-JCP-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ 0= IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-IO-VFS @ DUP 0= IF DROP VFS-E-INVALID EXIT THEN
+    DUP _EXT4-JCP-V ! _EXT4-CTX _EXT4-JCP-CTX @ <> IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-JCP-V @ _EXT4-ATTACHED? 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-JCP-V @ V.VOLUME @ _EXT4-IO-VOL @ <> IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-JCP-CTX @ _EXT4-RECOVERY-MEDIA ?DUP IF EXIT THEN
+    _EXT4-JWP-CHECKPOINT-PREFLIGHT
+    _EXT4-JCP-WRITER @ _EXT4-JWR.PHASE + !
+    _EXT4-JWR-CHECKPOINTING
+    _EXT4-JCP-WRITER @ _EXT4-JWR.STATE + !
+    _EXT4-JTX-CHECKPOINT-PREFLIGHT ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    _EXT4-JTX-CHECKPOINT-HOMES ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    _EXT4-JWP-CHECKPOINT-PROOF
+    _EXT4-JCP-WRITER @ _EXT4-JWR.PHASE + !
+    _EXT4-JCP-CTX @ _EXT4-JCP-V @ _EXT4-RELOAD-STRICT
+    ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    _EXT4-JCP-CTX @ _EXT4-VALIDATE-ROOT
+    ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    _EXT4-JCP-WRITER @ _EXT4-JWR-VALID? 0= IF
+        VFS-E-CORRUPT _EXT4-JCP-FAULT EXIT
+    THEN
+    _EXT4-JWP-CHECKPOINT-RESET
+    _EXT4-JCP-WRITER @ _EXT4-JWR.PHASE + !
+    _EXT4-JCP-CTX @ _EXT4-RESET-JOURNAL
+    ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    _EXT4-JWP-CHECKPOINT-RESET-FLUSH
+    _EXT4-JCP-WRITER @ _EXT4-JWR.PHASE + !
+    _EXT4-FLUSH ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    _EXT4-JWP-CHECKPOINT-WITNESS-CLEAR
+    _EXT4-JCP-WRITER @ _EXT4-JWR.PHASE + !
+    _EXT4-JCP-CTX @ _EXT4-CLEAR-JOURNAL-WITNESS-DIRTY
+    ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    _EXT4-JWP-CHECKPOINT-WITNESS-FLUSH
+    _EXT4-JCP-WRITER @ _EXT4-JWR.PHASE + !
+    _EXT4-FLUSH ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    _EXT4-JWP-CHECKPOINT-GUARD-RETIRE
+    _EXT4-JCP-WRITER @ _EXT4-JWR.PHASE + !
+    _EXT4-JCP-CTX @ _EXT4-RETIRE-JOURNAL-ANCHOR
+    ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    _EXT4-JWP-CHECKPOINT-GUARD-FLUSH
+    _EXT4-JCP-WRITER @ _EXT4-JWR.PHASE + !
+    _EXT4-FLUSH ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    _EXT4-JWP-CHECKPOINT-FINAL-PROOF
+    _EXT4-JCP-WRITER @ _EXT4-JWR.PHASE + !
+    _EXT4-JCP-CTX @ _EXT4-C.RECOVERY + @ 0= IF
+        VFS-E-CORRUPT _EXT4-JCP-FAULT EXIT
+    THEN
+    _EXT4-JCP-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ 0= IF
+        VFS-E-CORRUPT _EXT4-JCP-FAULT EXIT
+    THEN
+    _EXT4-JCP-CTX @ _EXT4-C.SB + DUP
+    _EXT4-SUPER-CHECKSUM? 0= IF
+        DROP VFS-E-CORRUPT _EXT4-JCP-FAULT EXIT
+    THEN
+    _EXT4-SB.INCOMPAT + L@ _EXT4-INCOMPAT-RECOVER AND 0= IF
+        VFS-E-CORRUPT _EXT4-JCP-FAULT EXIT
+    THEN
+    \ Context and writer publication are withdrawn before strict reload turns
+    \ the in-memory active-log view into the empty write-active endpoint.
+    0 _EXT4-JCP-CTX @ _EXT4-C.J.WRITER-CURRENT + !
+    0 _EXT4-JCP-CTX @ _EXT4-C.READY + !
+    _EXT4-JCP-CTX @ _EXT4-JCP-V @ _EXT4-RELOAD-STRICT
+    ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    _EXT4-JCP-CTX @ _EXT4-VALIDATE-ROOT
+    ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    _EXT4-JCP-V @ _EXT4-ATTACHED? 0= IF
+        VFS-E-STALE _EXT4-JCP-FAULT EXIT
+    THEN
+    0 _EXT4-JCP-CTX @ _EXT4-C.J.COMMITTED + !
+    0 _EXT4-JCP-CTX @ _EXT4-C.J.REVOKE-COUNT + !
+    0 _EXT4-JCP-CTX @ _EXT4-C.J.REVOKE-HITS + !
+    _EXT4-JCP-CTX @ _EXT4-C.J.SEQUENCE + @ 1+ 0xFFFFFFFF AND
+    _EXT4-JCP-CTX @ _EXT4-C.J.NEXT-SEQUENCE + !
+    _EXT4-JCP-CTX @ _EXT4-C.J.HEAD + @ DUP 0= IF
+        DROP _EXT4-JCP-CTX @ _EXT4-C.J.FIRST + @
+    THEN _EXT4-JCP-CTX @ _EXT4-C.J.CURSOR + !
+    _EXT4-JCP-CTX @ _EXT4-JWR-REBASE-WRITE-ACTIVE
+    ?DUP IF _EXT4-JCP-FAULT EXIT THEN
+    -1 _EXT4-JCP-CTX @ _EXT4-C.J.WRITER-CURRENT + !
+    -1 _EXT4-JCP-CTX @ _EXT4-C.READY + !
+    0 ;
 
 VARIABLE _EXT4-EL-CTX
 VARIABLE _EXT4-EL-V

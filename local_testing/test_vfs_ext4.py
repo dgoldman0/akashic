@@ -25,8 +25,12 @@ if str(LOCAL_TESTING) not in sys.path:
 import test_vfs_fat as fat_harness  # noqa: E402
 import generate_ext4_profile_fixtures as ext4_fixture_generator  # noqa: E402
 from devices import (  # noqa: E402
+    STORAGE_CMD_FLUSH,
+    STORAGE_CMD_READ,
     STORAGE_CMD_WRITE,
+    STORAGE_RESULT_FLUSH_FAILURE,
     STORAGE_RESULT_MEDIA_FAILURE,
+    STORAGE_RESULT_OK,
     STORAGE_STATUS_PRESENT,
 )
 
@@ -1048,6 +1052,7 @@ def run_recovery_forth(
     write_protected: bool = False,
     storage_faults: tuple[dict, ...] = (),
     write_faults_by_ordinal: dict[int, dict] | None = None,
+    read_faults_after_write_ordinal: dict[int, dict] | None = None,
     capture_media: Path | None = None,
     max_steps: int = 800_000_000,
 ) -> tuple[str, tuple[tuple[str, int, int], ...], str]:
@@ -1091,6 +1096,7 @@ def run_recovery_forth(
     start_dma = system.storage._start_dma
     run_flush = system.storage._run_flush
     write_ordinal = 0
+    pending_read_faults = dict(read_faults_after_write_ordinal or {})
 
     def track_dma(request, phase):
         nonlocal write_ordinal
@@ -1101,6 +1107,10 @@ def run_recovery_forth(
                 system.storage.inject_fault(
                     **write_faults_by_ordinal[write_ordinal]
                 )
+        elif phase == "read" and write_ordinal in pending_read_faults:
+            system.storage.inject_fault(
+                **pending_read_faults.pop(write_ordinal)
+            )
         return start_dma(request, phase)
 
     def track_flush(request):
@@ -5062,10 +5072,22 @@ def test_jbd2_writer_batches_descriptors_and_revokes_across_ring_wrap(
                 ),
                 "1 _GB-I +! REPEAT TRUE ;",
                 "_GB-T _EXT4-JTX-EMIT CONSTANT _GB-EMIT-IOR",
+                "_GB-W _EXT4-JSCAN-BIND-BEGIN",
+                (
+                    "_EXT4-JSCAN-BINDING _GB-CTX _EXT4-JSCAN "
+                    "_EXT4-JSCAN-BIND-FINISH CONSTANT _GB-BIND-IOR"
+                ),
+                (
+                    "_GB-BIND-IOR 0= _EXT4-JSB-META-BOUND @ 63 = AND "
+                    "_EXT4-JSB-REVOKE-BOUND @ 126 = AND "
+                    "_EXT4-JSB-WRITER @ 0= AND "
+                    'IF ." EXT4-JTX-BATCH-BOUND" THEN'
+                ),
                 (
                     "_GB-A-IOR 0= _GB-B-IOR 0= AND _GB-T _GB-W = AND "
                     "_GB-META-IOR 0= AND _GB-DATA-IOR 0= AND "
                     "_GB-REVOKE-IOR 0= AND _GB-EMIT-IOR 0= AND "
+                    "_GB-BIND-IOR 0= AND "
                     "_GB-RETAINED? AND"
                 ),
                 (
@@ -5178,6 +5200,7 @@ def test_jbd2_writer_batches_descriptors_and_revokes_across_ring_wrap(
             capture_media=media_path,
         )
         _assert_emitted(output, "EXT4-JTX-BATCH-LIMITS")
+        _assert_emitted(output, "EXT4-JTX-BATCH-BOUND")
         _assert_emitted(output, "EXT4-JTX-BATCH-EMITTED")
         _assert_emitted(output, "EXT4-JTX-BATCH-REMOUNTED")
 
@@ -5373,6 +5396,1723 @@ def test_jbd2_writer_batches_descriptors_and_revokes_across_ring_wrap(
         assert commit == expected_commit
         assert sentinel == bytes(block_size)
         assert metadata_after == metadata_images
+        assert data_after == data_image
+        assert revoke_after == revoke_before
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
+def test_jbd2_checkpoint_reuses_persistent_active_ring_across_wrap(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    """Checkpoint two transactions without reactivating the dirty journal."""
+    image = writer_activation_fixture["image"]
+    layout = writer_activation_fixture["layout"]
+    source_patches = writer_activation_fixture["source_patches"]
+    clean_super = writer_activation_fixture["clean_super"]
+    dirty_super = writer_activation_fixture["dirty_super"]
+    standard = writer_activation_fixture["standard"]
+    fixture_guard = writer_activation_fixture["guard_logical"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    assert isinstance(image, Path)
+    assert isinstance(layout, dict)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(clean_super, bytes)
+    assert isinstance(dirty_super, bytes)
+    assert isinstance(standard, bytes)
+    assert isinstance(fixture_guard, int)
+    assert isinstance(journal0_physical, int)
+
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    metadata_home = 30000
+    data_home = 30001
+    revoke_home = 30002
+    assert revoke_home < layout["blocks"]
+    metadata_image_1 = (
+        struct.pack(">I", 0xC03B3998) + bytes((0xA5,)) * 1020
+    )
+    metadata_image_2 = (
+        struct.pack(">I", 0xC03B3998) + bytes((0x3C,)) * 1020
+    )
+    data_image_1 = bytes((0x5A,)) * block_size
+    data_image_2 = bytes((0xC3,)) * block_size
+    with image.open("rb") as source:
+        source.seek(metadata_home * block_size)
+        metadata_before = source.read(block_size)
+        source.seek(data_home * block_size)
+        data_before = source.read(block_size)
+        source.seek(revoke_home * block_size)
+        revoke_before = source.read(block_size)
+    assert all(
+        len(payload) == block_size
+        for payload in (metadata_before, data_before, revoke_before)
+    )
+    assert metadata_before not in {metadata_image_1, metadata_image_2}
+    assert data_before not in {data_image_1, data_image_2}
+
+    first = struct.unpack_from(">I", standard, 0x14)[0]
+    maxlen = struct.unpack_from(">I", standard, 0x10)[0]
+    ring_capacity = maxlen - first - 1
+    wrap_guard = maxlen - 3
+    assert first <= wrap_guard < maxlen
+    assert struct.unpack_from(">I", standard, 0x58)[0] == fixture_guard
+    logical = {
+        "guard": wrap_guard,
+        "descriptor": _jbd2_ring_advance(
+            wrap_guard, 1, first=first, maxlen=maxlen
+        ),
+        "payload": _jbd2_ring_advance(
+            wrap_guard, 2, first=first, maxlen=maxlen
+        ),
+        "revoke": _jbd2_ring_advance(
+            wrap_guard, 3, first=first, maxlen=maxlen
+        ),
+        "commit": _jbd2_ring_advance(
+            wrap_guard, 4, first=first, maxlen=maxlen
+        ),
+        "sentinel": _jbd2_ring_advance(
+            wrap_guard, 5, first=first, maxlen=maxlen
+        ),
+    }
+    assert tuple(logical.values()) == (
+        wrap_guard,
+        maxlen - 2,
+        maxlen - 1,
+        first,
+        first + 1,
+        first + 2,
+    )
+    assert len(set(logical.values())) == len(logical)
+    journal_map = _ext4_journal_physical_map(
+        image, (0, *logical.values())
+    )
+    physical = {
+        name: journal_map[position] for name, position in logical.items()
+    }
+    head_offset = journal0_physical * block_size + 0x58
+    matching_head_patches = [
+        patch for patch in source_patches if patch[0] == head_offset
+    ]
+    assert matching_head_patches == [
+        (head_offset, struct.pack(">I", fixture_guard))
+    ]
+    wrap_source_patches = tuple(
+        (offset, struct.pack(">I", wrap_guard))
+        if offset == head_offset
+        else (offset, payload)
+        for offset, payload in source_patches
+    )
+    sequence_offset = journal0_physical * block_size + 0x18
+    source_sequence = 0xFFFF_FFFA
+    wrap_source_patches += (
+        (sequence_offset, struct.pack(">I", source_sequence)),
+    )
+    wrap_standard = bytearray(standard)
+    struct.pack_into(">I", wrap_standard, 0x18, source_sequence)
+    struct.pack_into(">I", wrap_standard, 0x58, wrap_guard)
+    wrap_standard = _jbd2_super_with_checksum(wrap_standard)
+
+    first_tid = (source_sequence + 1) & 0xFFFF_FFFF
+    first_reset_sequence = (first_tid + 2) & 0xFFFF_FFFF
+    second_tid = (first_tid + 3) & 0xFFFF_FFFF
+    second_reset_sequence = (first_tid + 5) & 0xFFFF_FFFF
+    final_next_tid = (first_tid + 6) & 0xFFFF_FFFF
+    assert (
+        first_tid,
+        first_reset_sequence,
+        second_tid,
+        second_reset_sequence,
+        final_next_tid,
+    ) == (0xFFFF_FFFB, 0xFFFF_FFFD, 0xFFFF_FFFE, 0, 1)
+    media_path = tmp_path / "jbd2-checkpoint-persistent-wrap.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            image,
+            media_path,
+            [
+                "CREATE _PC-META1 1024 ALLOT _PC-META1 1024 0xA5 FILL",
+                "0xC03B3998 _PC-META1 _EXT4-BE32!",
+                "CREATE _PC-META2 1024 ALLOT _PC-META2 1024 0x3C FILL",
+                "0xC03B3998 _PC-META2 _EXT4-BE32!",
+                "CREATE _PC-DATA1 1024 ALLOT _PC-DATA1 1024 0x5A FILL",
+                "CREATE _PC-DATA2 1024 ALLOT _PC-DATA2 1024 0xC3 FILL",
+                "T-ARENA CONSTANT _PC-ARENA",
+                (
+                    "_PC-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _PC-MOUNT-IOR CONSTANT _PC-V"
+                ),
+                "_PC-V _EXT4-CTX CONSTANT _PC-CTX",
+                (
+                    "1 1 1 _PC-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _PC-E-IOR CONSTANT _PC-W"
+                ),
+                "_PC-ARENA ARENA-USED CONSTANT _PC-ARENA-USED",
+                "_PC-W _EXT4-JWR-ACTIVATE CONSTANT _PC-A-IOR",
+                (
+                    "1 1 1 _PC-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _PC-B1-IOR CONSTANT _PC-T1"
+                ),
+                (
+                    "_PC-META1 30000 _PC-T1 _EXT4-JTX-META-PUT "
+                    "CONSTANT _PC-M1-IOR"
+                ),
+                (
+                    "_PC-DATA1 30001 _PC-T1 _EXT4-JTX-DATA-PUT "
+                    "CONSTANT _PC-D1-IOR"
+                ),
+                "30002 _PC-T1 _EXT4-JTX-REVOKE CONSTANT _PC-R1-IOR",
+                "_PC-T1 _EXT4-JTX-EMIT CONSTANT _PC-EMIT1-IOR",
+                "_PC-T1 _EXT4-JTX-CHECKPOINT CONSTANT _PC-CP1-IOR",
+                "_PC-ARENA ARENA-USED CONSTANT _PC-USED-AFTER-CP1",
+                (
+                    "_PC-MOUNT-IOR 0= _PC-E-IOR 0= AND "
+                    "_PC-A-IOR 0= AND _PC-B1-IOR 0= AND "
+                    "_PC-T1 _PC-W = AND _PC-M1-IOR 0= AND "
+                    "_PC-D1-IOR 0= AND _PC-R1-IOR 0= AND "
+                    "_PC-EMIT1-IOR 0= AND _PC-CP1-IOR 0= AND"
+                ),
+                (
+                    "_PC-W _EXT4-JWR-VALID? AND "
+                    "_PC-W _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE = AND "
+                    "_PC-W _EXT4-JWR-IDLE-CLEAN? AND "
+                    "_PC-W _EXT4-JWR.FAULT + @ 0= AND "
+                    "_PC-W _EXT4-JWR.EPOCH + @ 1 = AND"
+                ),
+                (
+                    f"_PC-W _EXT4-JWR.HEAD + @ {wrap_guard} = AND "
+                    f"_PC-W _EXT4-JWR.TAIL + @ {wrap_guard} = AND "
+                    f"_PC-W _EXT4-JWR.FREE + @ {ring_capacity} = AND "
+                    f"_PC-W _EXT4-JWR.NEXT-TID + @ "
+                    f"{second_tid} = AND"
+                ),
+                (
+                    "_PC-W _EXT4-JWR.META-ENTRIES + @ "
+                    "_EXT4-JWR-IMAGE-ENTRY-CELLS CELLS "
+                    "_EXT4-BYTES-ZERO? AND "
+                    "_PC-W _EXT4-JWR.DATA-ENTRIES + @ "
+                    "_EXT4-JWR-IMAGE-ENTRY-CELLS CELLS "
+                    "_EXT4-BYTES-ZERO? AND "
+                    "_PC-W _EXT4-JWR.REVOKE-ENTRIES + @ "
+                    "_EXT4-JWR-REVOKE-ENTRY-CELLS CELLS "
+                    "_EXT4-BYTES-ZERO? AND"
+                ),
+                (
+                    "_PC-W _EXT4-JWR.META-HASH + @ "
+                    "_PC-W _EXT4-JWR.META-SLOTS + @ CELLS "
+                    "_EXT4-BYTES-ZERO? AND "
+                    "_PC-W _EXT4-JWR.DATA-HASH + @ "
+                    "_PC-W _EXT4-JWR.DATA-SLOTS + @ CELLS "
+                    "_EXT4-BYTES-ZERO? AND "
+                    "_PC-W _EXT4-JWR.REVOKE-HASH + @ "
+                    "_PC-W _EXT4-JWR.REVOKE-SLOTS + @ CELLS "
+                    "_EXT4-BYTES-ZERO? AND"
+                ),
+                (
+                    "_PC-W _EXT4-JWR.META-IMAGES + @ "
+                    "_PC-W _EXT4-JWR.BSIZE + @ _EXT4-BYTES-ZERO? AND "
+                    "_PC-W _EXT4-JWR.DATA-IMAGES + @ "
+                    "_PC-W _EXT4-JWR.BSIZE + @ _EXT4-BYTES-ZERO? AND"
+                ),
+                (
+                    "_PC-CTX _EXT4-C.RECOVERY + @ 0<> AND "
+                    "_PC-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<> AND "
+                    "_PC-CTX _EXT4-C.J.START + @ 0= AND "
+                    f"_PC-CTX _EXT4-C.J.SEQUENCE + @ "
+                    f"{first_reset_sequence} = AND "
+                    f"_PC-CTX _EXT4-C.J.NEXT-SEQUENCE + @ "
+                    f"{second_tid} = AND"
+                ),
+                (
+                    f"_PC-CTX _EXT4-C.J.HEAD + @ {wrap_guard} = AND "
+                    f"_PC-CTX _EXT4-C.J.CURSOR + @ {wrap_guard} = AND "
+                    "_PC-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
+                    "_PC-CTX _EXT4-C.J.ANCHOR + @ 0= AND "
+                    "_PC-CTX _EXT4-C.J.CLEANUP + @ _EXT4-JC-NONE = AND"
+                ),
+                (
+                    "_PC-CTX _EXT4-C.J.PRIMARY-TORN + @ 0= AND "
+                    "_PC-CTX _EXT4-C.SUPER-TORN + @ 0= AND "
+                    "_PC-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<> AND "
+                    "_PC-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                    "_PC-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
+                    "_EXT4-INCOMPAT-RECOVER AND 0<> AND"
+                ),
+                (
+                    "_PC-V V.FLAGS @ VFS-F-DIRTY AND 0<> AND "
+                    "_PC-V V.FLAGS @ VFS-F-RO AND 0<> AND "
+                    "_PC-USED-AFTER-CP1 _PC-ARENA-USED = AND "
+                    'IF ." EXT4-JTX-CHECKPOINT-FIRST-IDLE" THEN'
+                ),
+                (
+                    "1 1 1 _PC-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _PC-B2-IOR CONSTANT _PC-T2"
+                ),
+                (
+                    "_PC-META2 30000 _PC-T2 _EXT4-JTX-META-PUT "
+                    "CONSTANT _PC-M2-IOR"
+                ),
+                (
+                    "_PC-DATA2 30001 _PC-T2 _EXT4-JTX-DATA-PUT "
+                    "CONSTANT _PC-D2-IOR"
+                ),
+                "30002 _PC-T2 _EXT4-JTX-REVOKE CONSTANT _PC-R2-IOR",
+                "_PC-T2 _EXT4-JTX-EMIT CONSTANT _PC-EMIT2-IOR",
+                "_PC-T2 _EXT4-JTX-CHECKPOINT CONSTANT _PC-CP2-IOR",
+                "_PC-ARENA ARENA-USED CONSTANT _PC-USED-AFTER-CP2",
+                (
+                    "_PC-B2-IOR 0= _PC-T2 _PC-W = AND "
+                    "_PC-M2-IOR 0= AND _PC-D2-IOR 0= AND "
+                    "_PC-R2-IOR 0= AND _PC-EMIT2-IOR 0= AND "
+                    "_PC-CP2-IOR 0= AND _PC-W _EXT4-JWR-VALID? AND "
+                    "_PC-W _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE = AND "
+                    "_PC-W _EXT4-JWR-IDLE-CLEAN? AND"
+                ),
+                (
+                    "_PC-W _EXT4-JWR.FAULT + @ 0= AND "
+                    "_PC-W _EXT4-JWR.EPOCH + @ 2 = AND "
+                    f"_PC-W _EXT4-JWR.HEAD + @ {wrap_guard} = AND "
+                    f"_PC-W _EXT4-JWR.TAIL + @ {wrap_guard} = AND "
+                    f"_PC-W _EXT4-JWR.FREE + @ {ring_capacity} = AND "
+                    f"_PC-W _EXT4-JWR.NEXT-TID + @ "
+                    f"{final_next_tid} = AND"
+                ),
+                (
+                    "_PC-W _EXT4-JWR.META-ENTRIES + @ "
+                    "_EXT4-JWR-IMAGE-ENTRY-CELLS CELLS "
+                    "_EXT4-BYTES-ZERO? AND "
+                    "_PC-W _EXT4-JWR.DATA-ENTRIES + @ "
+                    "_EXT4-JWR-IMAGE-ENTRY-CELLS CELLS "
+                    "_EXT4-BYTES-ZERO? AND "
+                    "_PC-W _EXT4-JWR.REVOKE-ENTRIES + @ "
+                    "_EXT4-JWR-REVOKE-ENTRY-CELLS CELLS "
+                    "_EXT4-BYTES-ZERO? AND"
+                ),
+                (
+                    "_PC-W _EXT4-JWR.META-HASH + @ "
+                    "_PC-W _EXT4-JWR.META-SLOTS + @ CELLS "
+                    "_EXT4-BYTES-ZERO? AND "
+                    "_PC-W _EXT4-JWR.DATA-HASH + @ "
+                    "_PC-W _EXT4-JWR.DATA-SLOTS + @ CELLS "
+                    "_EXT4-BYTES-ZERO? AND "
+                    "_PC-W _EXT4-JWR.REVOKE-HASH + @ "
+                    "_PC-W _EXT4-JWR.REVOKE-SLOTS + @ CELLS "
+                    "_EXT4-BYTES-ZERO? AND"
+                ),
+                (
+                    "_PC-W _EXT4-JWR.META-IMAGES + @ "
+                    "_PC-W _EXT4-JWR.BSIZE + @ _EXT4-BYTES-ZERO? AND "
+                    "_PC-W _EXT4-JWR.DATA-IMAGES + @ "
+                    "_PC-W _EXT4-JWR.BSIZE + @ _EXT4-BYTES-ZERO? AND"
+                ),
+                (
+                    "_PC-CTX _EXT4-C.RECOVERY + @ 0<> AND "
+                    "_PC-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<> AND "
+                    "_PC-CTX _EXT4-C.J.START + @ 0= AND "
+                    f"_PC-CTX _EXT4-C.J.SEQUENCE + @ "
+                    f"{second_reset_sequence} = AND "
+                    f"_PC-CTX _EXT4-C.J.NEXT-SEQUENCE + @ "
+                    f"{final_next_tid} = AND"
+                ),
+                (
+                    f"_PC-CTX _EXT4-C.J.HEAD + @ {wrap_guard} = AND "
+                    f"_PC-CTX _EXT4-C.J.CURSOR + @ {wrap_guard} = AND "
+                    "_PC-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
+                    "_PC-CTX _EXT4-C.J.ANCHOR + @ 0= AND "
+                    "_PC-CTX _EXT4-C.J.CLEANUP + @ _EXT4-JC-NONE = AND"
+                ),
+                (
+                    "_PC-CTX _EXT4-C.J.PRIMARY-TORN + @ 0= AND "
+                    "_PC-CTX _EXT4-C.SUPER-TORN + @ 0= AND "
+                    "_PC-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<> AND "
+                    "_PC-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                    "_PC-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
+                    "_EXT4-INCOMPAT-RECOVER AND 0<> AND"
+                ),
+                (
+                    "_PC-V V.FLAGS @ VFS-F-DIRTY AND 0<> AND "
+                    "_PC-V V.FLAGS @ VFS-F-RO AND 0<> AND "
+                    "_PC-USED-AFTER-CP2 _PC-ARENA-USED = AND "
+                    'IF ." EXT4-JTX-CHECKPOINT-SECOND-IDLE" THEN'
+                ),
+                (
+                    "30000 _PC-CTX _EXT4-READ-BLOCK "
+                    "CONSTANT _PC-META-HOME-IOR"
+                ),
+                (
+                    "_PC-CTX _EXT4-C.BLOCK + _PC-META2 "
+                    "1024 _EXT4-BYTES=? CONSTANT _PC-META-HOME"
+                ),
+                (
+                    "30001 _PC-CTX _EXT4-READ-BLOCK "
+                    "CONSTANT _PC-DATA-HOME-IOR"
+                ),
+                (
+                    "_PC-CTX _EXT4-C.BLOCK + _PC-DATA2 "
+                    "1024 _EXT4-BYTES=? CONSTANT _PC-DATA-HOME"
+                ),
+                (
+                    "_PC-META-HOME-IOR 0= _PC-META-HOME AND "
+                    "_PC-DATA-HOME-IOR 0= AND _PC-DATA-HOME AND "
+                    'IF ." EXT4-JTX-CHECKPOINT-SECOND-HOMES" THEN'
+                ),
+            ],
+            patches=wrap_source_patches,
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-FIRST-IDLE")
+        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-SECOND-IDLE")
+        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-SECOND-HOMES")
+
+        activation_trace = (
+            ("write", physical["guard"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["guard"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", journal0_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", 2, 2),
+            ("flush", 0, 0),
+            ("write", journal0_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["guard"] * 2, 2),
+            ("flush", 0, 0),
+        )
+        emission_trace = (
+            ("write", data_home * 2, 2),
+            ("write", physical["descriptor"] * 2, 2),
+            ("write", physical["payload"] * 2, 2),
+            ("write", physical["revoke"] * 2, 2),
+            ("write", physical["commit"] * 2, 2),
+            ("write", physical["sentinel"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["guard"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["guard"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", journal0_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["commit"] * 2, 2),
+            ("flush", 0, 0),
+        )
+        checkpoint_trace = (
+            ("write", metadata_home * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["guard"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["guard"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", journal0_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", journal0_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["guard"] * 2, 2),
+            ("flush", 0, 0),
+        )
+        assert trace == (
+            activation_trace
+            + emission_trace
+            + checkpoint_trace
+            + emission_trace
+            + checkpoint_trace
+        )
+        assert trace.count(("write", 2, 2)) == 1
+        assert media_path.is_file()
+        assert media_path.stat().st_blocks * 512 < media_path.stat().st_size
+        assert _sha256(media_path) == media_sha256
+
+        with media_path.open("rb") as source:
+            def read_block(physical_block: int) -> bytes:
+                source.seek(physical_block * block_size)
+                payload = source.read(block_size)
+                assert len(payload) == block_size
+                return payload
+
+            final_super = read_block(layout["primary_super"])
+            final_journal = read_block(journal0_physical)
+            final_guard = read_block(physical["guard"])
+            descriptor = read_block(physical["descriptor"])
+            payload = read_block(physical["payload"])
+            revoke = read_block(physical["revoke"])
+            commit = read_block(physical["commit"])
+            sentinel = read_block(physical["sentinel"])
+            metadata_after = read_block(metadata_home)
+            data_after = read_block(data_home)
+            revoke_after = read_block(revoke_home)
+
+        assert final_super == dirty_super
+        assert final_super != clean_super
+        expected_journal = bytearray(wrap_standard)
+        struct.pack_into(">I", expected_journal, 0x18, second_reset_sequence)
+        struct.pack_into(">I", expected_journal, 0x1C, 0)
+        struct.pack_into(">I", expected_journal, 0x58, wrap_guard)
+        expected_journal = _jbd2_super_with_checksum(expected_journal)
+        assert final_journal == expected_journal
+        assert final_guard == bytes(block_size)
+        assert struct.unpack_from(">III", descriptor, 0) == (
+            0xC03B3998,
+            1,
+            second_tid,
+        )
+        assert payload == bytes(4) + metadata_image_2[4:]
+        assert struct.unpack_from(">III", revoke, 0) == (
+            0xC03B3998,
+            5,
+            second_tid,
+        )
+        expected_commit = bytearray(block_size)
+        struct.pack_into(">III", expected_commit, 0, 0xC03B3998, 2, second_tid)
+        expected_commit = _jbd2_commit_with_checksum(
+            expected_commit, expected_journal[0x30:0x40], second_tid
+        )
+        assert commit == expected_commit
+        assert sentinel == bytes(block_size)
+        assert metadata_after == metadata_image_2
+        assert data_after == data_image_2
+        assert revoke_after == revoke_before
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
+def test_jbd2_checkpoint_rejects_corrupt_retained_image_without_io(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    """Do not turn damaged retained arena bytes into checkpoint authority."""
+    image = writer_activation_fixture["image"]
+    layout = writer_activation_fixture["layout"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    source_patches = writer_activation_fixture["source_patches"]
+    dirty_super = writer_activation_fixture["dirty_super"]
+    standard = writer_activation_fixture["standard"]
+    guard_logical = writer_activation_fixture["guard_logical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    assert isinstance(image, Path)
+    assert isinstance(layout, dict)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(dirty_super, bytes)
+    assert isinstance(standard, bytes)
+    assert isinstance(guard_logical, int)
+    assert isinstance(guard_physical, int)
+    assert isinstance(journal0_physical, int)
+
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    metadata_home = 30000
+    data_home = 30001
+    revoke_home = 30002
+    metadata_image = (
+        struct.pack(">I", 0xC03B3998) + bytes((0xA5,)) * 1020
+    )
+    data_image = bytes((0x5A,)) * block_size
+    with image.open("rb") as source:
+        source.seek(metadata_home * block_size)
+        metadata_before = source.read(block_size)
+        source.seek(revoke_home * block_size)
+        revoke_before = source.read(block_size)
+    assert len(metadata_before) == len(revoke_before) == block_size
+
+    first = struct.unpack_from(">I", standard, 0x14)[0]
+    maxlen = struct.unpack_from(">I", standard, 0x10)[0]
+    logical = {
+        "guard": guard_logical,
+        "descriptor": _jbd2_ring_advance(
+            guard_logical, 1, first=first, maxlen=maxlen
+        ),
+        "payload": _jbd2_ring_advance(
+            guard_logical, 2, first=first, maxlen=maxlen
+        ),
+        "revoke": _jbd2_ring_advance(
+            guard_logical, 3, first=first, maxlen=maxlen
+        ),
+        "commit": _jbd2_ring_advance(
+            guard_logical, 4, first=first, maxlen=maxlen
+        ),
+        "sentinel": _jbd2_ring_advance(
+            guard_logical, 5, first=first, maxlen=maxlen
+        ),
+    }
+    journal_map = _ext4_journal_physical_map(
+        image, (0, *logical.values())
+    )
+    physical = {
+        name: journal_map[position] for name, position in logical.items()
+    }
+    media_path = tmp_path / "jbd2-checkpoint-corrupt-retained.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            image,
+            media_path,
+            [
+                "CREATE _CI-META 1024 ALLOT _CI-META 1024 0xA5 FILL",
+                "0xC03B3998 _CI-META _EXT4-BE32!",
+                "CREATE _CI-DATA 1024 ALLOT _CI-DATA 1024 0x5A FILL",
+                "T-ARENA CONSTANT _CI-ARENA",
+                (
+                    "_CI-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _CI-MOUNT-IOR CONSTANT _CI-V"
+                ),
+                "_CI-V _EXT4-CTX CONSTANT _CI-CTX",
+                (
+                    "1 1 1 _CI-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _CI-E-IOR CONSTANT _CI-W"
+                ),
+                "_CI-ARENA ARENA-USED CONSTANT _CI-ARENA-USED",
+                "_CI-W _EXT4-JWR-ACTIVATE CONSTANT _CI-A-IOR",
+                (
+                    "1 1 1 _CI-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _CI-B-IOR CONSTANT _CI-T"
+                ),
+                (
+                    "_CI-META 30000 _CI-T _EXT4-JTX-META-PUT "
+                    "CONSTANT _CI-M-IOR"
+                ),
+                (
+                    "_CI-DATA 30001 _CI-T _EXT4-JTX-DATA-PUT "
+                    "CONSTANT _CI-D-IOR"
+                ),
+                "30002 _CI-T _EXT4-JTX-REVOKE CONSTANT _CI-R-IOR",
+                "_CI-T _EXT4-JTX-EMIT CONSTANT _CI-EMIT-IOR",
+                (
+                    "_CI-W _EXT4-JWR.META-IMAGES + @ 17 + "
+                    "DUP C@ 1 XOR SWAP C!"
+                ),
+                "_CI-T _EXT4-JTX-CHECKPOINT CONSTANT _CI-CP-IOR",
+                "_CI-T _EXT4-JTX-CHECKPOINT CONSTANT _CI-RETRY-IOR",
+                "_CI-T _EXT4-JTX-ABORT CONSTANT _CI-ABORT-IOR",
+                (
+                    "1 1 1 _CI-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _CI-NEW-IOR CONSTANT _CI-NEW-T"
+                ),
+                (
+                    "_CI-MOUNT-IOR 0= _CI-E-IOR 0= AND "
+                    "_CI-A-IOR 0= AND _CI-B-IOR 0= AND "
+                    "_CI-M-IOR 0= AND _CI-D-IOR 0= AND "
+                    "_CI-R-IOR 0= AND _CI-EMIT-IOR 0= AND "
+                    "_CI-CP-IOR VFS-E-CORRUPT = AND"
+                ),
+                (
+                    "_CI-W _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = AND "
+                    "_CI-W _EXT4-JWR.PHASE + @ "
+                    "_EXT4-JWP-CHECKPOINT-PREFLIGHT = AND "
+                    "_CI-W _EXT4-JWR.FAULT + @ _CI-CP-IOR = AND "
+                    "_CI-W _EXT4-JWR-VALID? AND"
+                ),
+                (
+                    "_CI-W _EXT4-JWR.META-USED + @ 1 = AND "
+                    "_CI-W _EXT4-JWR.DATA-USED + @ 1 = AND "
+                    "_CI-W _EXT4-JWR.REVOKE-USED + @ 1 = AND "
+                    "_CI-W _EXT4-JWR.META-IMAGES + @ 17 + C@ "
+                    "0xA4 = AND"
+                ),
+                (
+                    "_CI-RETRY-IOR VFS-E-BUSY = AND "
+                    "_CI-ABORT-IOR VFS-E-BUSY = AND "
+                    "_CI-NEW-T 0= AND _CI-NEW-IOR VFS-E-BUSY = AND "
+                    "_CI-V V.FLAGS @ VFS-F-RO AND 0<> AND "
+                    "_CI-V V.FLAGS @ VFS-F-DIRTY AND 0<> AND"
+                ),
+                (
+                    "_CI-ARENA ARENA-USED _CI-ARENA-USED = AND "
+                    'IF ." EXT4-JTX-CHECKPOINT-CORRUPT-NOIO" THEN'
+                ),
+            ],
+            patches=source_patches,
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-CORRUPT-NOIO")
+        emission_trace = (
+            ("write", data_home * 2, 2),
+            ("write", physical["descriptor"] * 2, 2),
+            ("write", physical["payload"] * 2, 2),
+            ("write", physical["revoke"] * 2, 2),
+            ("write", physical["commit"] * 2, 2),
+            ("write", physical["sentinel"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", guard_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", guard_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", journal0_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["commit"] * 2, 2),
+            ("flush", 0, 0),
+        )
+        assert trace == activation_trace + emission_trace
+        assert media_path.is_file()
+        assert media_path.stat().st_blocks * 512 < media_path.stat().st_size
+        assert _sha256(media_path) == media_sha256
+        superblock, journal, guard = _read_jbd2_activation_media(
+            media_path, writer_activation_fixture
+        )
+        assert superblock == dirty_super
+        assert journal == guard
+        assert _jbd2_super_checksum_valid(journal)
+        with media_path.open("rb") as source:
+            source.seek(metadata_home * block_size)
+            metadata_after = source.read(block_size)
+            source.seek(data_home * block_size)
+            data_after = source.read(block_size)
+            source.seek(revoke_home * block_size)
+            revoke_after = source.read(block_size)
+        assert metadata_after == metadata_before
+        assert data_after == data_image
+        assert revoke_after == revoke_before
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    "case",
+    (
+        "descriptor-home",
+        "payload",
+        "revoke-home",
+        "revoke-high",
+        "sentinel",
+    ),
+)
+def test_jbd2_checkpoint_rejects_coherent_log_mismatch_without_io(
+    writer_activation_fixture: dict[str, object], tmp_path: Path, case: str
+) -> None:
+    """Bind every logged identity and payload to the retained transaction."""
+    image = writer_activation_fixture["image"]
+    layout = writer_activation_fixture["layout"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    source_patches = writer_activation_fixture["source_patches"]
+    dirty_super = writer_activation_fixture["dirty_super"]
+    standard = writer_activation_fixture["standard"]
+    guard_logical = writer_activation_fixture["guard_logical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    assert isinstance(image, Path)
+    assert isinstance(layout, dict)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(dirty_super, bytes)
+    assert isinstance(standard, bytes)
+    assert isinstance(guard_logical, int)
+    assert isinstance(guard_physical, int)
+    assert isinstance(journal0_physical, int)
+
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    metadata_home = 30000
+    alternate_home = 30003
+    data_home = 30001
+    revoke_home = 30002
+    assert alternate_home < layout["blocks"]
+    metadata_image = (
+        struct.pack(">I", 0xC03B3998) + bytes((0xA5,)) * 1020
+    )
+    data_image = bytes((0x5A,)) * block_size
+    with image.open("rb") as source:
+        source.seek(metadata_home * block_size)
+        metadata_before = source.read(block_size)
+        source.seek(revoke_home * block_size)
+        revoke_before = source.read(block_size)
+    assert len(metadata_before) == len(revoke_before) == block_size
+
+    first = struct.unpack_from(">I", standard, 0x14)[0]
+    maxlen = struct.unpack_from(">I", standard, 0x10)[0]
+    logical = {
+        "guard": guard_logical,
+        "descriptor": _jbd2_ring_advance(
+            guard_logical, 1, first=first, maxlen=maxlen
+        ),
+        "payload": _jbd2_ring_advance(
+            guard_logical, 2, first=first, maxlen=maxlen
+        ),
+        "revoke": _jbd2_ring_advance(
+            guard_logical, 3, first=first, maxlen=maxlen
+        ),
+        "commit": _jbd2_ring_advance(
+            guard_logical, 4, first=first, maxlen=maxlen
+        ),
+        "sentinel": _jbd2_ring_advance(
+            guard_logical, 5, first=first, maxlen=maxlen
+        ),
+    }
+    journal_map = _ext4_journal_physical_map(
+        image, (0, *logical.values())
+    )
+    physical = {
+        name: journal_map[position] for name, position in logical.items()
+    }
+
+    read_block = (
+        lambda name: (
+            f"{logical[name]} _CB-CTX _EXT4-READ-JBLOCK _CB-KEEP-IOR"
+        )
+    )
+    write_block = (
+        lambda name: (
+            "_CB-CTX _EXT4-C.BLOCK + "
+            f"{logical[name]} _CB-CTX _EXT4-WRITE-JBLOCK _CB-KEEP-IOR"
+        )
+    )
+    mutation_lines: dict[str, tuple[str, ...]] = {
+        "descriptor-home": (
+            read_block("descriptor"),
+            f"{alternate_home} _CB-CTX _EXT4-C.BLOCK + 12 + _EXT4-BE32!",
+            (
+                "_CB-CTX _EXT4-C.BLOCK + _CB-CTX "
+                "_EXT4-JBD2-STAMP-BLOCK-CHECKSUM"
+            ),
+            write_block("descriptor"),
+        ),
+        "payload": (
+            read_block("payload"),
+            (
+                "_CB-CTX _EXT4-C.BLOCK + 17 + DUP C@ "
+                "1 XOR SWAP C!"
+            ),
+            "_CB-CTX _EXT4-C.BLOCK + _CB-MUT 1024 MOVE",
+            (
+                f"_CB-MUT {logical['payload']} _CB-CTX "
+                "_EXT4-WRITE-JBLOCK _CB-KEEP-IOR"
+            ),
+            read_block("descriptor"),
+            (
+                "_CB-MUT _CB-W _EXT4-JWR.TX-TID + @ _CB-CTX "
+                "_EXT4-JBD2-EMIT-TAG-CHECKSUM "
+                "_CB-CTX _EXT4-C.BLOCK + 24 + _EXT4-BE32!"
+            ),
+            (
+                "_CB-CTX _EXT4-C.BLOCK + _CB-CTX "
+                "_EXT4-JBD2-STAMP-BLOCK-CHECKSUM"
+            ),
+            write_block("descriptor"),
+        ),
+        "revoke-home": (
+            read_block("revoke"),
+            "0 _CB-CTX _EXT4-C.BLOCK + 16 + _EXT4-BE32!",
+            f"{metadata_home} _CB-CTX _EXT4-C.BLOCK + 20 + _EXT4-BE32!",
+            (
+                "_CB-CTX _EXT4-C.BLOCK + _CB-CTX "
+                "_EXT4-JBD2-STAMP-BLOCK-CHECKSUM"
+            ),
+            write_block("revoke"),
+        ),
+        "revoke-high": (
+            read_block("revoke"),
+            "1 _CB-CTX _EXT4-C.BLOCK + 16 + _EXT4-BE32!",
+            (
+                "_CB-CTX _EXT4-C.BLOCK + _CB-CTX "
+                "_EXT4-JBD2-STAMP-BLOCK-CHECKSUM"
+            ),
+            write_block("revoke"),
+        ),
+        "sentinel": (
+            read_block("sentinel"),
+            "0x5A _CB-CTX _EXT4-C.BLOCK + 17 + C!",
+            write_block("sentinel"),
+        ),
+    }
+    expected_bound = {
+        "descriptor-home": (0, 0),
+        "payload": (0, 0),
+        "revoke-home": (1, 0),
+        "revoke-high": (1, 0),
+        "sentinel": (1, 1),
+    }
+    expected_meta_bound, expected_revoke_bound = expected_bound[case]
+    mutation_writes = {
+        "descriptor-home": ("descriptor",),
+        "payload": ("payload", "descriptor"),
+        "revoke-home": ("revoke",),
+        "revoke-high": ("revoke",),
+        "sentinel": ("sentinel",),
+    }[case]
+
+    media_path = tmp_path / f"jbd2-checkpoint-log-mismatch-{case}.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            image,
+            media_path,
+            [
+                "CREATE _CB-META 1024 ALLOT _CB-META 1024 0xA5 FILL",
+                "0xC03B3998 _CB-META _EXT4-BE32!",
+                "CREATE _CB-DATA 1024 ALLOT _CB-DATA 1024 0x5A FILL",
+                "CREATE _CB-MUT 1024 ALLOT",
+                "VARIABLE _CB-MUT-IOR",
+                (
+                    ": _CB-KEEP-IOR ( ior -- ) DUP IF "
+                    "_CB-MUT-IOR @ 0= IF _CB-MUT-IOR ! ELSE DROP THEN "
+                    "ELSE DROP THEN ;"
+                ),
+                "T-ARENA CONSTANT _CB-ARENA",
+                (
+                    "_CB-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _CB-MOUNT-IOR CONSTANT _CB-V"
+                ),
+                "_CB-V _EXT4-CTX CONSTANT _CB-CTX",
+                (
+                    "1 1 1 _CB-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _CB-E-IOR CONSTANT _CB-W"
+                ),
+                "_CB-ARENA ARENA-USED CONSTANT _CB-ARENA-USED",
+                "_CB-W _EXT4-JWR-ACTIVATE CONSTANT _CB-A-IOR",
+                (
+                    "1 1 1 _CB-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _CB-B-IOR CONSTANT _CB-T"
+                ),
+                (
+                    "_CB-META 30000 _CB-T _EXT4-JTX-META-PUT "
+                    "CONSTANT _CB-M-IOR"
+                ),
+                (
+                    "_CB-DATA 30001 _CB-T _EXT4-JTX-DATA-PUT "
+                    "CONSTANT _CB-D-IOR"
+                ),
+                "30002 _CB-T _EXT4-JTX-REVOKE CONSTANT _CB-R-IOR",
+                "_CB-T _EXT4-JTX-EMIT CONSTANT _CB-EMIT-IOR",
+                *mutation_lines[case],
+                "_EXT4-FLUSH _CB-KEEP-IOR",
+                (
+                    "_EXT4-JSCAN-PREFLIGHT _CB-CTX _EXT4-JSCAN "
+                    "CONSTANT _CB-GENERIC-IOR"
+                ),
+                "_CB-T _EXT4-JTX-CHECKPOINT CONSTANT _CB-CP-IOR",
+                "_CB-T _EXT4-JTX-CHECKPOINT CONSTANT _CB-RETRY-IOR",
+                (
+                    "1 1 1 _CB-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _CB-NEW-IOR CONSTANT _CB-NEW-T"
+                ),
+                (
+                    "_CB-MOUNT-IOR 0= _CB-E-IOR 0= AND "
+                    "_CB-A-IOR 0= AND _CB-B-IOR 0= AND "
+                    "_CB-M-IOR 0= AND _CB-D-IOR 0= AND "
+                    "_CB-R-IOR 0= AND _CB-EMIT-IOR 0= AND "
+                    "_CB-MUT-IOR @ 0= AND _CB-GENERIC-IOR 0= AND "
+                    "_CB-CP-IOR 0<> AND"
+                ),
+                (
+                    "_CB-W _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = AND "
+                    "_CB-W _EXT4-JWR.PHASE + @ "
+                    "_EXT4-JWP-CHECKPOINT-PREFLIGHT = AND "
+                    "_CB-W _EXT4-JWR.FAULT + @ _CB-CP-IOR = AND "
+                    "_CB-W _EXT4-JWR-VALID? AND"
+                ),
+                (
+                    f"_EXT4-JSB-META-BOUND @ {expected_meta_bound} = AND "
+                    f"_EXT4-JSB-REVOKE-BOUND @ {expected_revoke_bound} "
+                    "= AND _EXT4-JSB-WRITER @ 0= AND"
+                ),
+                (
+                    "_CB-W _EXT4-JWR.META-USED + @ 1 = AND "
+                    "_CB-W _EXT4-JWR.DATA-USED + @ 1 = AND "
+                    "_CB-W _EXT4-JWR.REVOKE-USED + @ 1 = AND "
+                    "_CB-RETRY-IOR VFS-E-BUSY = AND"
+                ),
+                (
+                    "_CB-NEW-T 0= AND _CB-NEW-IOR VFS-E-BUSY = AND "
+                    "_CB-V V.FLAGS @ VFS-F-RO AND 0<> AND "
+                    "_CB-V V.FLAGS @ VFS-F-DIRTY AND 0<> AND "
+                    "_CB-ARENA ARENA-USED _CB-ARENA-USED = AND "
+                    'IF ." EXT4-JTX-CHECKPOINT-LOG-MISMATCH-NOIO" THEN'
+                ),
+            ],
+            patches=source_patches,
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-LOG-MISMATCH-NOIO")
+        emission_trace = (
+            ("write", data_home * 2, 2),
+            ("write", physical["descriptor"] * 2, 2),
+            ("write", physical["payload"] * 2, 2),
+            ("write", physical["revoke"] * 2, 2),
+            ("write", physical["commit"] * 2, 2),
+            ("write", physical["sentinel"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", guard_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", guard_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", journal0_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["commit"] * 2, 2),
+            ("flush", 0, 0),
+        )
+        mutation_trace = tuple(
+            ("write", physical[name] * 2, 2) for name in mutation_writes
+        ) + (("flush", 0, 0),)
+        assert trace == activation_trace + emission_trace + mutation_trace
+        assert media_path.is_file()
+        assert media_path.stat().st_blocks * 512 < media_path.stat().st_size
+        assert _sha256(media_path) == media_sha256
+        superblock, journal, guard = _read_jbd2_activation_media(
+            media_path, writer_activation_fixture
+        )
+        assert superblock == dirty_super
+        assert journal == guard
+        assert _jbd2_super_checksum_valid(journal)
+        with media_path.open("rb") as source:
+            source.seek(metadata_home * block_size)
+            metadata_after = source.read(block_size)
+            source.seek(data_home * block_size)
+            data_after = source.read(block_size)
+            source.seek(revoke_home * block_size)
+            revoke_after = source.read(block_size)
+        assert metadata_after == metadata_before
+        assert data_after == data_image
+        assert revoke_after == revoke_before
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    (
+        "case",
+        "fault_kind",
+        "checkpoint_ordinal",
+        "phase_word",
+        "expected_current",
+        "expected_valid",
+    ),
+    (
+        pytest.param(
+            "home-flush",
+            "flush",
+            1,
+            "_EXT4-JWP-CHECKPOINT-HOME-FLUSH",
+            True,
+            True,
+            id="home-flush",
+        ),
+        pytest.param(
+            "guard-flush",
+            "flush",
+            6,
+            "_EXT4-JWP-CHECKPOINT-GUARD-FLUSH",
+            True,
+            True,
+            id="guard-flush",
+        ),
+        pytest.param(
+            "post-home-proof-read",
+            "read",
+            1,
+            "_EXT4-JWP-CHECKPOINT-PROOF",
+            True,
+            True,
+            id="post-home-proof-read",
+        ),
+        pytest.param(
+            "final-proof-read",
+            "read",
+            6,
+            "_EXT4-JWP-CHECKPOINT-FINAL-PROOF",
+            False,
+            False,
+            id="final-proof-read",
+        ),
+    ),
+)
+def test_jbd2_checkpoint_flush_and_proof_faults_quarantine(
+    writer_activation_fixture: dict[str, object],
+    tmp_path: Path,
+    case: str,
+    fault_kind: str,
+    checkpoint_ordinal: int,
+    phase_word: str,
+    expected_current: bool,
+    expected_valid: bool,
+) -> None:
+    """Latch representative flush and reread failures without releasing RAM."""
+    image = writer_activation_fixture["image"]
+    layout = writer_activation_fixture["layout"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    source_patches = writer_activation_fixture["source_patches"]
+    standard = writer_activation_fixture["standard"]
+    guard_logical = writer_activation_fixture["guard_logical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    assert isinstance(image, Path)
+    assert isinstance(layout, dict)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(standard, bytes)
+    assert isinstance(guard_logical, int)
+    assert isinstance(guard_physical, int)
+    assert isinstance(journal0_physical, int)
+
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    metadata_home = 30000
+    data_home = 30001
+    revoke_home = 30002
+    first = struct.unpack_from(">I", standard, 0x14)[0]
+    maxlen = struct.unpack_from(">I", standard, 0x10)[0]
+    logical = {
+        "guard": guard_logical,
+        "descriptor": _jbd2_ring_advance(
+            guard_logical, 1, first=first, maxlen=maxlen
+        ),
+        "payload": _jbd2_ring_advance(
+            guard_logical, 2, first=first, maxlen=maxlen
+        ),
+        "revoke": _jbd2_ring_advance(
+            guard_logical, 3, first=first, maxlen=maxlen
+        ),
+        "commit": _jbd2_ring_advance(
+            guard_logical, 4, first=first, maxlen=maxlen
+        ),
+        "sentinel": _jbd2_ring_advance(
+            guard_logical, 5, first=first, maxlen=maxlen
+        ),
+    }
+    journal_map = _ext4_journal_physical_map(
+        image, (0, *logical.values())
+    )
+    physical = {
+        name: journal_map[position] for name, position in logical.items()
+    }
+    emission_trace = (
+        ("write", data_home * 2, 2),
+        ("write", physical["descriptor"] * 2, 2),
+        ("write", physical["payload"] * 2, 2),
+        ("write", physical["revoke"] * 2, 2),
+        ("write", physical["commit"] * 2, 2),
+        ("write", physical["sentinel"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["commit"] * 2, 2),
+        ("flush", 0, 0),
+    )
+    checkpoint_trace = (
+        ("write", metadata_home * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+    )
+    expected_checkpoint_trace = checkpoint_trace[: checkpoint_ordinal * 2]
+    base_flushes = sum(
+        event[0] == "flush" for event in activation_trace + emission_trace
+    )
+    base_writes = sum(
+        event[0] == "write" for event in activation_trace + emission_trace
+    )
+    storage_faults: tuple[dict, ...] = ()
+    read_faults: dict[int, dict] | None = None
+    if fault_kind == "flush":
+        flush_ordinal = base_flushes + checkpoint_ordinal
+        storage_faults = tuple(
+            {
+                "stage": "flush",
+                "result": STORAGE_RESULT_OK,
+                "command": STORAGE_CMD_FLUSH,
+            }
+            for _ in range(flush_ordinal - 1)
+        ) + (
+            {
+                "stage": "flush",
+                "result": STORAGE_RESULT_FLUSH_FAILURE,
+                "command": STORAGE_CMD_FLUSH,
+            },
+        )
+    else:
+        assert fault_kind == "read"
+        read_faults = {
+            base_writes + checkpoint_ordinal: {
+                "stage": "media",
+                "sector_index": 0,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_READ,
+            }
+        }
+
+    expected_current_cell = -1 if expected_current else 0
+    expected_valid_cell = -1 if expected_valid else 0
+    media_path = tmp_path / f"jbd2-checkpoint-{case}.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            image,
+            media_path,
+            [
+                "CREATE _QF-META 1024 ALLOT _QF-META 1024 0xA5 FILL",
+                "0xC03B3998 _QF-META _EXT4-BE32!",
+                "CREATE _QF-DATA 1024 ALLOT _QF-DATA 1024 0x5A FILL",
+                "T-ARENA CONSTANT _QF-ARENA",
+                (
+                    "_QF-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _QF-MOUNT-IOR CONSTANT _QF-V"
+                ),
+                "_QF-V _EXT4-CTX CONSTANT _QF-CTX",
+                (
+                    "1 1 1 _QF-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _QF-E-IOR CONSTANT _QF-W"
+                ),
+                "_QF-ARENA ARENA-USED CONSTANT _QF-ARENA-USED",
+                "_QF-W _EXT4-JWR-ACTIVATE CONSTANT _QF-A-IOR",
+                (
+                    "1 1 1 _QF-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _QF-B-IOR CONSTANT _QF-T"
+                ),
+                (
+                    "_QF-META 30000 _QF-T _EXT4-JTX-META-PUT "
+                    "CONSTANT _QF-M-IOR"
+                ),
+                (
+                    "_QF-DATA 30001 _QF-T _EXT4-JTX-DATA-PUT "
+                    "CONSTANT _QF-D-IOR"
+                ),
+                "30002 _QF-T _EXT4-JTX-REVOKE CONSTANT _QF-R-IOR",
+                "_QF-T _EXT4-JTX-EMIT CONSTANT _QF-EMIT-IOR",
+                "_QF-T _EXT4-JTX-CHECKPOINT CONSTANT _QF-CP-IOR",
+                "_QF-T _EXT4-JTX-CHECKPOINT CONSTANT _QF-RETRY-IOR",
+                (
+                    "1 1 1 _QF-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _QF-NEW-IOR CONSTANT _QF-NEW-T"
+                ),
+                (
+                    "_QF-MOUNT-IOR 0= _QF-E-IOR 0= AND "
+                    "_QF-A-IOR 0= AND _QF-B-IOR 0= AND "
+                    "_QF-M-IOR 0= AND _QF-D-IOR 0= AND "
+                    "_QF-R-IOR 0= AND _QF-EMIT-IOR 0= AND "
+                    "_QF-CP-IOR 0<> AND CONSTANT _QF-BASE"
+                ),
+                (
+                    "_QF-W _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = "
+                    f"_QF-W _EXT4-JWR.PHASE + @ {phase_word} = AND "
+                    "_QF-W _EXT4-JWR.FAULT + @ _QF-CP-IOR = AND "
+                    "CONSTANT _QF-STATE"
+                ),
+                (
+                    "_QF-CTX _EXT4-C.J.WRITER-CURRENT + @ "
+                    f"{expected_current_cell} = "
+                    "_QF-W _EXT4-JWR-VALID? "
+                    f"{expected_valid_cell} = AND CONSTANT _QF-CURRENT"
+                ),
+                (
+                    "_QF-W _EXT4-JWR.META-USED + @ 1 = "
+                    "_QF-W _EXT4-JWR.DATA-USED + @ 1 = AND "
+                    "_QF-W _EXT4-JWR.REVOKE-USED + @ 1 = AND "
+                    "_QF-W _EXT4-JWR.META-IMAGES + @ 4 + C@ "
+                    "0xA5 = AND CONSTANT _QF-RETAINED"
+                ),
+                (
+                    "_QF-RETRY-IOR 0<> _QF-NEW-T 0= AND "
+                    "_QF-NEW-IOR 0<> AND "
+                    "_QF-V V.FLAGS @ VFS-F-RO AND 0<> AND "
+                    "_QF-V V.FLAGS @ VFS-F-DIRTY AND 0<> AND "
+                    "CONSTANT _QF-BLOCKED"
+                ),
+                (
+                    "_QF-ARENA ARENA-USED _QF-ARENA-USED = "
+                    "CONSTANT _QF-ARENA-SAME"
+                ),
+                '_QF-BASE IF ." EXT4-JTX-CHECKPOINT-IO-BASE" THEN',
+                '_QF-STATE IF ." EXT4-JTX-CHECKPOINT-IO-STATE" THEN',
+                '_QF-CURRENT IF ." EXT4-JTX-CHECKPOINT-IO-CURRENT" THEN',
+                '_QF-RETAINED IF ." EXT4-JTX-CHECKPOINT-IO-RETAINED" THEN',
+                '_QF-BLOCKED IF ." EXT4-JTX-CHECKPOINT-IO-BLOCKED" THEN',
+                '_QF-ARENA-SAME IF ." EXT4-JTX-CHECKPOINT-IO-ARENA" THEN',
+                (
+                    "_QF-BASE _QF-STATE AND _QF-CURRENT AND "
+                    "_QF-RETAINED AND _QF-BLOCKED AND "
+                    "_QF-ARENA-SAME AND "
+                    'IF ." EXT4-JTX-CHECKPOINT-IO-FAULT" THEN'
+                ),
+            ],
+            patches=source_patches,
+            storage_faults=storage_faults,
+            read_faults_after_write_ordinal=read_faults,
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-IO-BASE")
+        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-IO-STATE")
+        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-IO-CURRENT")
+        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-IO-RETAINED")
+        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-IO-BLOCKED")
+        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-IO-ARENA")
+        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-IO-FAULT")
+        assert trace == (
+            activation_trace + emission_trace + expected_checkpoint_trace
+        )
+        assert media_path.is_file()
+        assert media_path.stat().st_blocks * 512 < media_path.stat().st_size
+        assert _sha256(media_path) == media_sha256
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    (
+        "case",
+        "checkpoint_write",
+        "sector_index",
+        "byte_index",
+        "phase_word",
+        "expected_home_writes",
+        "recovery_kind",
+        "final_sequence_delta",
+    ),
+    (
+        pytest.param(
+            "home-prefix",
+            1,
+            0,
+            8,
+            "_EXT4-JWP-CHECKPOINT-HOME",
+            1,
+            "active",
+            2,
+            id="home-prefix-before-flush",
+        ),
+        pytest.param(
+            "reset-guard-preseed-prefix",
+            2,
+            0,
+            8,
+            "_EXT4-JWP-CHECKPOINT-RESET",
+            1,
+            "active",
+            2,
+            id="reset-guard-preseed-after-home-flush",
+        ),
+        pytest.param(
+            "reset-guard-valid-endpoint",
+            3,
+            0,
+            1,
+            "_EXT4-JWP-CHECKPOINT-RESET",
+            1,
+            "active",
+            2,
+            id="reset-guard-valid-endpoint",
+        ),
+        pytest.param(
+            "reset-primary-prefix",
+            4,
+            0,
+            50,
+            "_EXT4-JWP-CHECKPOINT-RESET",
+            0,
+            "primary-retry",
+            2,
+            id="reset-primary-prefix",
+        ),
+        pytest.param(
+            "standard-primary-prefix",
+            5,
+            0,
+            200,
+            "_EXT4-JWP-CHECKPOINT-WITNESS-CLEAR",
+            0,
+            "primary-retry",
+            2,
+            id="standard-primary-prefix",
+        ),
+        pytest.param(
+            "guard-retire-prefix",
+            6,
+            0,
+            200,
+            "_EXT4-JWP-CHECKPOINT-GUARD-RETIRE",
+            0,
+            "empty-recovery",
+            3,
+            id="guard-retire-prefix",
+        ),
+    ),
+)
+def test_jbd2_checkpoint_prefix_faults_remount_and_release(
+    writer_activation_fixture: dict[str, object],
+    tmp_path: Path,
+    case: str,
+    checkpoint_write: int,
+    sector_index: int,
+    byte_index: int,
+    phase_word: str,
+    expected_home_writes: int,
+    recovery_kind: str,
+    final_sequence_delta: int,
+) -> None:
+    """Resolve one admitted prefix at each checkpoint publication write."""
+    image = writer_activation_fixture["image"]
+    layout = writer_activation_fixture["layout"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    source_patches = writer_activation_fixture["source_patches"]
+    clean_super = writer_activation_fixture["clean_super"]
+    standard = writer_activation_fixture["standard"]
+    guard_logical = writer_activation_fixture["guard_logical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    assert isinstance(image, Path)
+    assert isinstance(layout, dict)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(clean_super, bytes)
+    assert isinstance(standard, bytes)
+    assert isinstance(guard_logical, int)
+    assert isinstance(guard_physical, int)
+    assert isinstance(journal0_physical, int)
+
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    metadata_home = 30000
+    data_home = 30001
+    revoke_home = 30002
+    metadata_image = (
+        struct.pack(">I", 0xC03B3998) + bytes((0xA5,)) * 1020
+    )
+    data_image = bytes((0x5A,)) * block_size
+    with image.open("rb") as source:
+        source.seek(metadata_home * block_size)
+        metadata_before = source.read(block_size)
+        source.seek(data_home * block_size)
+        data_before = source.read(block_size)
+        source.seek(revoke_home * block_size)
+        revoke_before = source.read(block_size)
+    assert all(
+        len(payload) == block_size
+        for payload in (metadata_before, data_before, revoke_before)
+    )
+    assert metadata_before != metadata_image
+    assert data_before != data_image
+
+    first = struct.unpack_from(">I", standard, 0x14)[0]
+    maxlen = struct.unpack_from(">I", standard, 0x10)[0]
+    logical = {
+        "guard": guard_logical,
+        "descriptor": _jbd2_ring_advance(
+            guard_logical, 1, first=first, maxlen=maxlen
+        ),
+        "payload": _jbd2_ring_advance(
+            guard_logical, 2, first=first, maxlen=maxlen
+        ),
+        "revoke": _jbd2_ring_advance(
+            guard_logical, 3, first=first, maxlen=maxlen
+        ),
+        "commit": _jbd2_ring_advance(
+            guard_logical, 4, first=first, maxlen=maxlen
+        ),
+        "sentinel": _jbd2_ring_advance(
+            guard_logical, 5, first=first, maxlen=maxlen
+        ),
+    }
+    journal_map = _ext4_journal_physical_map(
+        image, (0, *logical.values())
+    )
+    physical = {
+        name: journal_map[position] for name, position in logical.items()
+    }
+    source_sequence = struct.unpack_from(">I", standard, 0x18)[0]
+    transaction_tid = (source_sequence + 1) & 0xFFFF_FFFF
+    final_sequence = (
+        transaction_tid + final_sequence_delta
+    ) & 0xFFFF_FFFF
+    final_next_tid = (final_sequence + 1) & 0xFFFF_FFFF
+
+    emission_trace = (
+        ("write", data_home * 2, 2),
+        ("write", physical["descriptor"] * 2, 2),
+        ("write", physical["payload"] * 2, 2),
+        ("write", physical["revoke"] * 2, 2),
+        ("write", physical["commit"] * 2, 2),
+        ("write", physical["sentinel"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["commit"] * 2, 2),
+        ("flush", 0, 0),
+    )
+    checkpoint_trace = (
+        ("write", metadata_home * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+    )
+    active_recovery_trace = (
+        ("write", metadata_home * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+    )
+    primary_retry_trace = (
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("flush", 0, 0),
+        ("write", 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+    )
+    empty_recovery_trace = (
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", guard_physical * 2, 2),
+        ("flush", 0, 0),
+    )
+    recovery_traces = {
+        "active": active_recovery_trace,
+        "primary-retry": primary_retry_trace,
+        "empty-recovery": empty_recovery_trace,
+    }
+    recovery_trace = recovery_traces[recovery_kind]
+    base_write_count = sum(
+        event[0] == "write" for event in activation_trace + emission_trace
+    )
+    fault_write_ordinal = base_write_count + checkpoint_write
+    checkpoint_prefix = checkpoint_trace[: 2 * (checkpoint_write - 1) + 1]
+
+    media_path = tmp_path / f"jbd2-checkpoint-{case}.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            image,
+            media_path,
+            [
+                "CREATE _CF-META 1024 ALLOT _CF-META 1024 0xA5 FILL",
+                "0xC03B3998 _CF-META _EXT4-BE32!",
+                "CREATE _CF-DATA 1024 ALLOT _CF-DATA 1024 0x5A FILL",
+                "T-ARENA CONSTANT _CF-ARENA",
+                (
+                    "_CF-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _CF-MOUNT-IOR CONSTANT _CF-V"
+                ),
+                "_CF-V _EXT4-CTX CONSTANT _CF-CTX",
+                (
+                    "1 1 1 _CF-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _CF-E-IOR CONSTANT _CF-W"
+                ),
+                "_CF-ARENA ARENA-USED CONSTANT _CF-USED-BEFORE",
+                "_CF-W _EXT4-JWR-ACTIVATE CONSTANT _CF-A-IOR",
+                (
+                    "1 1 1 _CF-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _CF-B-IOR CONSTANT _CF-T"
+                ),
+                (
+                    "_CF-META 30000 _CF-T _EXT4-JTX-META-PUT "
+                    "CONSTANT _CF-M-IOR"
+                ),
+                (
+                    "_CF-DATA 30001 _CF-T _EXT4-JTX-DATA-PUT "
+                    "CONSTANT _CF-D-IOR"
+                ),
+                "30002 _CF-T _EXT4-JTX-REVOKE CONSTANT _CF-R-IOR",
+                "_CF-T _EXT4-JTX-EMIT CONSTANT _CF-EMIT-IOR",
+                "_CF-T _EXT4-JTX-CHECKPOINT CONSTANT _CF-CP-IOR",
+                "_CF-T _EXT4-JTX-CHECKPOINT CONSTANT _CF-RETRY-IOR",
+                "_CF-T _EXT4-JTX-ABORT CONSTANT _CF-ABORT-IOR",
+                "_CF-W _EXT4-JWR-ACTIVATE CONSTANT _CF-A2-IOR",
+                (
+                    "1 1 1 _CF-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _CF-NEW-IOR CONSTANT _CF-NEW-T"
+                ),
+                (
+                    "_CF-MOUNT-IOR 0= _CF-E-IOR 0= AND "
+                    "_CF-A-IOR 0= AND _CF-B-IOR 0= AND "
+                    "_CF-M-IOR 0= AND _CF-D-IOR 0= AND "
+                    "_CF-R-IOR 0= AND _CF-EMIT-IOR 0= AND"
+                ),
+                (
+                    "_CF-CP-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = AND "
+                    "_CF-CP-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                    "_CF-CP-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL "
+                    "AND 0<> AND _CF-W _EXT4-JWR.FAULT + @ "
+                    "_CF-CP-IOR = AND"
+                ),
+                (
+                    "_CF-W _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = AND "
+                    f"_CF-W _EXT4-JWR.PHASE + @ {phase_word} = AND "
+                    "_CF-W _EXT4-JWR-VALID? AND "
+                    "_CF-V V.FLAGS @ VFS-F-RO AND 0<> AND "
+                    "_CF-V V.FLAGS @ VFS-F-DIRTY AND 0<> AND"
+                ),
+                (
+                    "_CF-W _EXT4-JWR.META-USED + @ 1 = AND "
+                    "_CF-W _EXT4-JWR.DATA-USED + @ 1 = AND "
+                    "_CF-W _EXT4-JWR.REVOKE-USED + @ 1 = AND "
+                    "_CF-META _CF-W _EXT4-JWR.META-IMAGES + @ "
+                    "1024 _EXT4-BYTES=? AND "
+                    "_CF-DATA _CF-W _EXT4-JWR.DATA-IMAGES + @ "
+                    "1024 _EXT4-BYTES=? AND"
+                ),
+                (
+                    "_CF-RETRY-IOR VFS-E-BUSY = AND "
+                    "_CF-ABORT-IOR VFS-E-BUSY = AND "
+                    "_CF-A2-IOR VFS-E-BUSY = AND "
+                    "_CF-NEW-T 0= AND _CF-NEW-IOR VFS-E-BUSY = AND "
+                    "_CF-ARENA ARENA-USED _CF-USED-BEFORE = AND "
+                    'IF ." EXT4-JTX-CHECKPOINT-PREFIX-FAULT" THEN'
+                ),
+                "_CF-V _EXT4-MOUNT CONSTANT _CF-REMOUNT-IOR",
+                "_CF-ARENA ARENA-USED CONSTANT _CF-USED-AFTER-REMOUNT",
+                (
+                    "30000 _CF-CTX _EXT4-READ-BLOCK "
+                    "CONSTANT _CF-META-HOME-IOR"
+                ),
+                (
+                    "_CF-CTX _EXT4-C.BLOCK + _CF-META "
+                    "1024 _EXT4-BYTES=? CONSTANT _CF-META-HOME"
+                ),
+                (
+                    "30001 _CF-CTX _EXT4-READ-BLOCK "
+                    "CONSTANT _CF-DATA-HOME-IOR"
+                ),
+                (
+                    "_CF-CTX _EXT4-C.BLOCK + _CF-DATA "
+                    "1024 _EXT4-BYTES=? CONSTANT _CF-DATA-HOME"
+                ),
+                (
+                    "1 1 1 _CF-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _CF-REUSE-IOR CONSTANT _CF-REUSE-W"
+                ),
+                "_CF-ARENA ARENA-USED CONSTANT _CF-USED-AFTER-ENSURE",
+                (
+                    "1 1 1 _CF-REUSE-W _EXT4-JTX-BEGIN "
+                    "CONSTANT _CF-PROBE-IOR CONSTANT _CF-PROBE-T"
+                ),
+                (
+                    "_CF-PROBE-T _EXT4-JTX-ABORT "
+                    "CONSTANT _CF-PROBE-ABORT-IOR"
+                ),
+                (
+                    "_CF-REMOUNT-IOR 0= "
+                    "_CF-V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                    "_CF-V _EXT4-READY? AND "
+                    "_CF-CTX _EXT4-C.RECOVERY + @ 0= AND "
+                    "_CF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0= AND "
+                    "_CF-CTX _EXT4-C.J.START + @ 0= AND"
+                ),
+                (
+                    "_CF-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
+                    "_CF-CTX _EXT4-C.J.ANCHOR + @ 0= AND "
+                    "_CF-CTX _EXT4-C.J.CLEANUP + @ _EXT4-JC-NONE = AND "
+                    "_CF-CTX _EXT4-C.J.PRIMARY-TORN + @ 0= AND "
+                    "_CF-CTX _EXT4-C.SUPER-TORN + @ 0= AND"
+                ),
+                (
+                    f"_CF-CTX _EXT4-C.J.SEQUENCE + @ "
+                    f"{final_sequence} = AND "
+                    f"_CF-CTX _EXT4-C.J.HEAD + @ {guard_logical} = AND "
+                    f"_CF-CTX _EXT4-C.J.HOME-WRITES + @ "
+                    f"{expected_home_writes} = AND "
+                    "_CF-CTX _EXT4-C.J.REPLAYED + @ 0<> AND"
+                ),
+                (
+                    "_CF-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                    "_CF-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
+                    "_EXT4-INCOMPAT-RECOVER AND 0= AND "
+                    "_CF-META-HOME-IOR 0= AND _CF-META-HOME AND "
+                    "_CF-DATA-HOME-IOR 0= AND _CF-DATA-HOME AND"
+                ),
+                (
+                    "_CF-CTX _EXT4-C.J.WRITER + @ _CF-W = AND "
+                    "_CF-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<> AND "
+                    "_CF-W _EXT4-JWR-VALID? AND "
+                    "_CF-W _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE = AND "
+                    "_CF-W _EXT4-JWR-IDLE-CLEAN? AND "
+                    "_CF-W _EXT4-JWR.FAULT + @ 0= AND"
+                ),
+                (
+                    f"_CF-W _EXT4-JWR.NEXT-TID + @ "
+                    f"{final_next_tid} = AND "
+                    "_CF-W _EXT4-JWR.META-ENTRIES + @ @ 0= AND "
+                    "_CF-W _EXT4-JWR.DATA-ENTRIES + @ @ 0= AND "
+                    "_CF-W _EXT4-JWR.REVOKE-ENTRIES + @ @ 0= AND "
+                    "_CF-W _EXT4-JWR.META-IMAGES + @ C@ 0= AND "
+                    "_CF-W _EXT4-JWR.DATA-IMAGES + @ C@ 0= AND"
+                ),
+                (
+                    "_CF-REUSE-IOR 0= AND _CF-REUSE-W _CF-W = AND "
+                    "_CF-USED-AFTER-ENSURE _CF-USED-AFTER-REMOUNT = AND "
+                    "_CF-PROBE-IOR 0= AND _CF-PROBE-T _CF-W = AND "
+                    "_CF-PROBE-ABORT-IOR 0= AND "
+                    'IF ." EXT4-JTX-CHECKPOINT-PREFIX-REMOUNTED" THEN'
+                ),
+            ],
+            patches=source_patches,
+            write_faults_by_ordinal={
+                fault_write_ordinal: {
+                    "stage": "media",
+                    "sector_index": sector_index,
+                    "byte_index": byte_index,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-PREFIX-FAULT")
+        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-PREFIX-REMOUNTED")
+        assert trace == (
+            activation_trace
+            + emission_trace
+            + checkpoint_prefix
+            + recovery_trace
+        )
+        assert media_path.is_file()
+        assert media_path.stat().st_blocks * 512 < media_path.stat().st_size
+        assert _sha256(media_path) == media_sha256
+        superblock, journal, guard = _read_jbd2_activation_media(
+            media_path, writer_activation_fixture
+        )
+        assert superblock == clean_super
+        expected_journal = bytearray(standard)
+        struct.pack_into(">I", expected_journal, 0x18, final_sequence)
+        struct.pack_into(">I", expected_journal, 0x1C, 0)
+        struct.pack_into(">I", expected_journal, 0x58, guard_logical)
+        expected_journal = _jbd2_super_with_checksum(expected_journal)
+        assert journal == expected_journal
+        assert guard == bytes(block_size)
+        with media_path.open("rb") as source:
+            source.seek(metadata_home * block_size)
+            metadata_after = source.read(block_size)
+            source.seek(data_home * block_size)
+            data_after = source.read(block_size)
+            source.seek(revoke_home * block_size)
+            revoke_after = source.read(block_size)
+        assert metadata_after == metadata_image
         assert data_after == data_image
         assert revoke_after == revoke_before
     finally:

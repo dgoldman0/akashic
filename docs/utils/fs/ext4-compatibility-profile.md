@@ -7,10 +7,11 @@ implementation status. The checksummed clean read-only reader now lives in
 limits are tracked in [the binding documentation](drivers/vfs-ext4.md).
 The bounded checksum-v3 JBD2 replay slice now includes committed revoke
 records, and the private writer can establish a crash-resolvable empty
-checksum-v3 journal plus ext4 `RECOVER` state and emit one durable ordered
-descriptor/payload/revoke/commit transaction. Metadata checkpointing,
-journal-space release, orphan recovery, general mutation, and the complete
-bidirectional gates remain open.
+checksum-v3 journal plus ext4 `RECOVER` state, emit one durable ordered
+descriptor/payload/revoke/commit transaction, checkpoint its retained metadata
+after-images, and release the journal for an immediate sequential transaction
+without leaving write-active state. Clean deactivation, orphan recovery,
+general mutation, and the complete bidirectional gates remain open.
 MP64FS remains the working native storage binding and FAT/ext4 remain
 read-only interoperability bindings; ext4's mount path may perform the
 strictly ordered recovery writes described below.
@@ -256,9 +257,46 @@ Only after that proof is the valid commit written and flushed.
 
 Successful emission publishes the private workspace as `COMMITTED` and
 retains every staged entry and after-image. Ordered data is durable at home,
-but metadata home blocks are deliberately not checkpointed in the same
-session. Retry, abort, and another transaction remain busy until a future
-checkpoint layer consumes those images and releases the log reservation.
+but metadata home blocks are unchanged at this boundary. Retry, abort, and
+another transaction remain busy until checkpoint consumes those retained
+images and releases the log reservation.
+
+### Private same-session checkpoint and reuse
+
+Checkpoint does not trust retained RAM alone. Before its first home write it
+revalidates the writer object, performs an ordinary complete read-only scan of
+the active on-media transaction, and repeats the scan in lockstep with retained
+emitter order. The active primary/guard pair, transaction ID,
+start/head/cursor, each descriptor home and unescaped payload, every revoke
+identity, the commit, the exact zero sentinel, the retained entry set, and
+retained image CRCs must agree on one complete committed stream. Corruption,
+an incomplete stream, stale workspace state, or any disagreement fails before
+home mutation.
+
+The checkpoint then writes only retained active metadata after-images to their
+home blocks. Ordered data was already made durable before commit and is not
+rewritten; cancelled and revoked entries carry no checkpoint authority. Every
+home write completes before one volume flush, and that flush plus a strict
+filesystem reload and root validation completes before journal-space release.
+Until then, the committed active log remains the retry authority.
+
+Release reuses active guard `G` as the `AKG1` reset anchor and publishes an
+empty `AKR1`-witnessed primary. Once that primary is durable, checkpoint may
+remove its witness while retaining the checksum-valid dirty ext4 superblock
+with `RECOVER` set. The exact anchor remains present during the witness-clear
+write so either endpoint or an admitted sequential prefix is recoverable.
+After the standard witness-free empty primary is flushed, ext4 `RECOVER`
+becomes the ordinary durable recovery authority and `G` can be retired and
+flushed. This authority handoff needs no additional private witness.
+
+The successful endpoint deliberately remains mounted dirty and write-active:
+ext4 `RECOVER`, the in-memory journal `WRITE-ACTIVE` publication, and the VFS
+dirty flag stay set. An exact final reread rebases the same workspace to the
+persisted empty-journal head and sequence, restores full ring space, scrubs the
+consumed transaction, and publishes `IDLE`. A second transaction can begin
+immediately, including across 32-bit sequence wrap, without another `AKW1`
+activation or arena allocation. Clean deactivation is reserved for clean
+unmount/recovery rather than conflated with per-transaction checkpoint.
 
 The bounded 1 KiB qualification uses 63 metadata after-images and 126 revokes,
 the first counts that require two descriptor batches and two revoke batches
@@ -285,7 +323,9 @@ mounts preserve but cannot use or scrub staged, committed, or faulted bytes.
 Only a successful recovery, strict reload, root/attachment validation, and
 static workspace-shape proof may zero the workspace, rebase it to the
 authenticated clean journal head/sequence, publish `IDLE`, and republish it as
-current. Same-mount faults remain quarantined; a write, flush, checksum, or
+current after remount. In the same mount, only the final authenticated
+dirty-empty checkpoint endpoint may perform the corresponding scrub and
+rebase. Same-mount faults remain quarantined; a write, flush, checksum, or
 reread-proof failure latches its first ior and phase, forces read-only/dirty
 state, and requires remount convergence. Unmount clears `WRITER-CURRENT` and
 binding readiness before detaching the block context; the retained allocation
@@ -316,8 +356,9 @@ authenticated 32-bit JBD2 `s_maxlen`; the exact map, uniqueness hash, and
 recovery-only half-full power-of-two revoke index come from the
 caller-provided arena, so 4 MiB is a canonical-fixture choice rather than a
 driver ceiling. Failed-mount retries clear and reuse an existing index instead
-of leaking arena storage; the later writer will reserve its own transaction
-workspace. Revoke comparison uses JBD2's wrapping 32-bit transaction ordering.
+of leaking arena storage; the private writer separately reserves its bounded
+transaction workspace. Revoke comparison uses JBD2's wrapping 32-bit
+transaction ordering.
 The recovery profile additionally requires standard `s_jnl_backup_type=1`.
 All validated sparse-super copies must carry the same 68-byte `s_jnl_blocks`
 tuple as the primary, and that tuple must exactly reproduce inode 8's
@@ -358,20 +399,21 @@ matching-sequence JBD2 `SUPER_V2` header terminates preflight only after the
 complete block validates as the checksummed, self-locating recovery anchor; it
 is never replayed as a transaction record.
 
-To make the checkpoint/reset/clear sequence retryable across 512-byte media
-tears, the implementation preseeds the first noncommitted journal slot with
-the complete intended reset image except for an invalid byte zero and flushes
-it. It then restores byte zero and writes and flushes the valid checksummed
-copy before updating journal block 0. Those two images differ in only byte
-zero, so no prefix cut can combine a new valid JBD2 header with stale cursor
-contents. The copy stores an `AKR1` witness in the JBD2 padding at
+To make the checkpoint/reset transition and eventual clean deactivation
+retryable across 512-byte media tears, the implementation preseeds the selected
+journal anchor with the complete intended reset image except for an invalid
+byte zero and flushes it. It then restores byte zero and writes and flushes the
+valid checksummed copy before updating journal block 0. Those two images differ
+in only byte zero, so no prefix cut can combine a new valid JBD2 header with
+stale cursor contents. The copy stores an `AKR1` witness in the JBD2 padding at
 `0x5c..0x6f`: intended ext4-superblock checksum plus complement and anchor
 logical block plus complement. Standard `s_head` at `0x58` is set to the same
 first-unused slot.
-The primary reset is flushed before the two-sector ext4-superblock clear, and
-that clear is flushed before the primary witness is removed and flushed. The
-anchor slot is then zeroed and flushed before mount publication. A torn primary
-may select only the exact self-locating anchor named by an intact primary
+For clean recovery or deactivation, the primary reset is flushed before the
+two-sector ext4-superblock clear, and that clear is flushed before the primary
+witness is removed and flushed. The anchor slot is then zeroed and flushed
+before clean mount publication. A torn primary may select only the exact
+self-locating anchor named by an intact primary
 marker/complement/`s_head` tuple; there is no historical-anchor scan. Before
 the first witness-removal write, the exact anchor must validate and its
 checksummed 1024-byte JBD2 superblock must match the primary. A mismatch only
@@ -379,18 +421,26 @@ in larger-block padding marks the primary torn; the complete anchor is copied
 back and flushed so the whole primary filesystem block equals it before the
 clear proceeds.
 
-One narrower cleanup retry is admitted after an independently checksum-valid,
-clean ext4 superblock proves that witness removal had begun. The damaged
-primary must equal a single sequential-write prefix of the constructed
-standard zero-witness block followed by the unchanged suffix of that exact
-validated anchor, across the complete filesystem block. On that proof the
-driver rereads the raw primary and anchor and repeats the proof immediately
-before the standard block is installed and flushed directly, then retires the
-anchor. Every other torn or inconsistent locator fails closed. Mount requires
-exclusive ownership against concurrent raw-media mutation. The witness is
-transient private profile state, not a new JBD2 feature bit; stock
-Linux/e2fsprogs mutation and broader hardware power-cut qualification must
-pass before this landing can be called release-ready.
+Same-session checkpoint uses a second, standard endpoint for that authority
+handoff. After metadata home writes and their flush, the `AKG1` active reset is
+made durable while the independently checksum-valid dirty ext4 superblock
+continues to carry `RECOVER`. The exact anchor remains authoritative while the
+primary changes from witnessed empty to standard empty. A damaged primary must
+equal a single sequential-write prefix of the constructed standard
+zero-witness block followed by the unchanged suffix of that exact validated
+anchor, across the complete filesystem block. The standard primary is written
+and flushed before the anchor is retired. At that point the combination of
+checksum-valid dirty ext4 `RECOVER` and a standard empty checksum-v3 journal is
+ordinary recovery authority, so clearing `RECOVER` is neither required nor
+permitted for per-transaction reuse.
+
+The clean and dirty-empty cleanup endpoints both reread the raw primary and
+anchor and repeat their prefix proof immediately before installing the
+standard block. Every other torn or inconsistent locator fails closed. Mount
+requires exclusive ownership against concurrent raw-media mutation. `AKR1`
+and `AKG1` remain transient private profile state, not new JBD2 feature bits;
+stock Linux/e2fsprogs mutation and broader hardware power-cut qualification
+must pass before either landing can be called release-ready.
 
 For an emitted active transaction, reset uses the active guard rather than an
 unrelated first-unused slot and carries the `AKG1` predecessor proof described
@@ -412,8 +462,9 @@ rather than reporting success. Because a failed commit write may nonetheless
 have reached the exact durable endpoint, only remount recovery may classify
 the log and replay an authenticated commit or discard an incomplete
 transaction. The implemented private slice reaches the durable-commit boundary
-and retains its after-images; it does not yet perform the checkpoint/home-write
-and space-reuse half of this profile rule.
+and retains its after-images, then performs a full-log preflight, checkpoint
+home-write flush, and dirty-empty journal release before permitting the next
+sequential transaction.
 
 ## Required data and metadata behavior
 
@@ -591,9 +642,12 @@ invalid commit preseed and zero sentinel, and a standard active primary/guard.
 It publishes `COMMITTED` only after the final commit flush and retains all
 after-images. `AKG1` authenticates active-to-reset retry, while mount-owned
 writer-current publication prevents failed retries from erasing fault state.
-It still performs no metadata checkpoint, journal-space release, continued
-transaction stream, orphan mutation, or user-visible write. Public write
-capabilities remain disabled.
+Checkpoint now authenticates the complete retained on-media log, writes and
+flushes metadata after-images, turns the active journal into a standard empty
+journal without clearing `RECOVER`, and rebases the same allocation for an
+immediate sequential transaction without reactivation or arena growth. It
+still performs no clean write-active deactivation, orphan mutation, or
+user-visible write. Public write capabilities remain disabled.
 The implementation still fails closed on checksum-damaged incomplete tails
 and refuses legacy and modern orphan recovery and all user-visible mutation.
 Clean orphan-file
@@ -603,11 +657,11 @@ profile limit of 5, and the special-inode fixture does not yet contain a
 socket. Those qualification and semantic limits remain explicit before any
 write path can be advertised.
 
-The remaining writer gate explicitly includes checkpoint/home writes,
-reservation release and continued transactions, both legacy and modern orphan
-protocols, the complete namespace/data/metadata/xattr mutation surface,
-external-tool inspection of Akashic-authored images, and the controlled
-power-cut/release matrix.
+The remaining writer gate explicitly includes clean write-active deactivation
+and clean-unmount integration, both legacy and modern orphan protocols, the
+complete namespace/data/metadata/xattr mutation surface, external-tool
+inspection of Akashic-authored active, dirty-empty, and clean images, and the
+controlled power-cut/release matrix.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
