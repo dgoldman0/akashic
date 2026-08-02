@@ -12010,6 +12010,16 @@ def test_singleton_legacy_depth0_credit_and_final_seal(
                         "_LF-WRITER _EXT4-JWR.DATA-USED + @ 0=",
                         "_LF-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
                         (
+                            "_LF-WRITER _EXT4-JWR.CP-MODE + @ "
+                            "_EXT4-JCPM-ORPHAN-LEGACY-FINAL ="
+                        ),
+                        "_LF-WRITER _EXT4-JWR.CP-O-LOGICAL + @ 0=",
+                        "_LF-WRITER _EXT4-JWR.CP-O-SLOT + @ 0=",
+                        (
+                            "_LF-WRITER _EXT4-JWR.CP-O-HOME + @ "
+                            "_LF-CTX _EXT4-PRIMARY-SUPER-BLOCK ="
+                        ),
+                        (
                             "_LF-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ "
                             f"{expected_target_entries} ="
                         ),
@@ -12129,11 +12139,24 @@ def test_mount_completes_singleton_modern_depth0_orphan_transaction(
     assert sum(kind == "flush" for kind, _, _ in trace) == 18
 
 
-def _assert_singleton_modern_cleanup_media_converges(
+def _assert_singleton_cleanup_media_converges(
     interrupted: Path,
     repaired: Path,
     stable: Path,
+    *,
+    protocol: str,
 ) -> tuple[tuple[tuple[str, int, int], ...], str]:
+    assert protocol in {"modern", "legacy"}
+    repaired_marker = f"EXT4-{protocol.upper()}-ORPHAN-PREFIX-REPAIRED"
+    stable_marker = f"EXT4-{protocol.upper()}-ORPHAN-PREFIX-STABLE"
+    protocol_checks = []
+    if protocol == "legacy":
+        protocol_checks = [
+            "_MR-CTX _EXT4-C.INODE + _EXT4-I.DTIME + L@ 0=",
+            "_MR-CTX _EXT4-C.INODE + _EXT4-I.LINKS + W@ 2 =",
+            "_MR-CTX _EXT4-C.INODE + _EXT4-I.FILE-ACL-LO + L@ 0<>",
+            "_MR-CTX _EXT4-C.INODE + _EXT4-I.FILE-ACL-HI + W@ 0=",
+        ]
     remount_output, remount_trace, repaired_sha256 = run_recovery_forth(
         interrupted,
         repaired,
@@ -12171,6 +12194,10 @@ def _assert_singleton_modern_cleanup_media_converges(
                         "_EXT4-MOC-MARK-VALID @ 0=",
                         (
                             "_MR-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.LAST-ORPHAN + L@ 0="
+                        ),
+                        (
+                            "_MR-CTX _EXT4-C.SB + "
                             "_EXT4-SB.INCOMPAT + L@ "
                             "_EXT4-INCOMPAT-RECOVER AND 0="
                         ),
@@ -12201,14 +12228,15 @@ def _assert_singleton_modern_cleanup_media_converges(
                             "_MR-CTX _EXT4-C.INODE + _EXT4-I.BLOCK + "
                             "2 + W@ 0="
                         ),
+                        *protocol_checks,
                     ]
                 )
-                + ' IF ." EXT4-MODERN-ORPHAN-PREFIX-REPAIRED" THEN'
+                + f' IF ." {repaired_marker}" THEN'
             ),
         ],
         capture_media=repaired,
     )
-    _assert_emitted(remount_output, "EXT4-MODERN-ORPHAN-PREFIX-REPAIRED")
+    _assert_emitted(remount_output, repaired_marker)
     assert repaired.is_file()
     assert _sha256(repaired) == repaired_sha256
 
@@ -12226,20 +12254,18 @@ def _assert_singleton_modern_cleanup_media_converges(
                         "_MS-V _EXT4-CTX _EXT4-C.J.WRITER + @ 0=",
                     ]
                 )
-                + ' IF ." EXT4-MODERN-ORPHAN-PREFIX-STABLE" THEN'
+                + f' IF ." {stable_marker}" THEN'
             ),
         ],
         capture_media=stable,
     )
-    _assert_emitted(stable_output, "EXT4-MODERN-ORPHAN-PREFIX-STABLE")
+    _assert_emitted(stable_output, stable_marker)
     assert stable_trace == ()
     assert stable_sha256 == repaired_sha256
     return remount_trace, repaired_sha256
 
 
-@pytest.mark.parametrize(
-    ("case", "write_ordinal", "sector_index", "byte_index"),
-    (
+_SINGLETON_MODERN_WRITE_PREFIX_CASES = (
         pytest.param(
             "activation-primary",
             3,
@@ -12345,24 +12371,28 @@ def _assert_singleton_modern_cleanup_media_converges(
             200,
             id="W29-guard-retire-prefix",
         ),
-    ),
 )
-def test_singleton_modern_cleanup_write_prefixes_converge_on_fresh_mount(
-    singleton_modern_cleanup_fixture: dict[str, object],
+
+
+def _exercise_singleton_cleanup_write_prefix(
+    cleanup_fixture: dict[str, object],
     tmp_path: Path,
+    protocol: str,
     case: str,
     write_ordinal: int,
     sector_index: int,
     byte_index: int,
 ) -> None:
-    source = singleton_modern_cleanup_fixture["source"]
-    patches = singleton_modern_cleanup_fixture["patches"]
-    success_trace = singleton_modern_cleanup_fixture["success_trace"]
+    assert protocol in {"modern", "legacy"}
+    source = cleanup_fixture["source"]
+    patches = cleanup_fixture["patches"]
+    success_trace = cleanup_fixture["success_trace"]
     assert isinstance(source, Path)
     assert isinstance(patches, tuple)
     assert isinstance(success_trace, tuple)
 
-    torn = tmp_path / f"modern-orphan-{case}-torn.img"
+    caught_marker = f"EXT4-{protocol.upper()}-ORPHAN-PREFIX-CAUGHT"
+    torn = tmp_path / f"{protocol}-orphan-{case}-torn.img"
     output, failed_trace, failed_sha256 = run_recovery_forth(
         source,
         torn,
@@ -12400,7 +12430,7 @@ def test_singleton_modern_cleanup_write_prefixes_converge_on_fresh_mount(
                         "_EXT4-MOC-TX @ 0=",
                     ]
                 )
-                + ' IF ." EXT4-MODERN-ORPHAN-PREFIX-CAUGHT" THEN'
+                + f' IF ." {caught_marker}" THEN'
             ),
         ],
         patches=patches,
@@ -12415,7 +12445,7 @@ def test_singleton_modern_cleanup_write_prefixes_converge_on_fresh_mount(
         },
         capture_media=torn,
     )
-    _assert_emitted(output, "EXT4-MODERN-ORPHAN-PREFIX-CAUGHT")
+    _assert_emitted(output, caught_marker)
     assert torn.is_file()
     assert _sha256(torn) == failed_sha256
 
@@ -12430,8 +12460,8 @@ def test_singleton_modern_cleanup_write_prefixes_converge_on_fresh_mount(
     assert trace_cut
     assert failed_trace == success_trace[:trace_cut]
 
-    if write_ordinal in {20, 21}:
-        clean_image = singleton_modern_cleanup_fixture["clean_image"]
+    if case in {"gdt-home", "bitmap-home"}:
+        clean_image = cleanup_fixture["clean_image"]
         assert isinstance(clean_image, Path)
         fault_event = failed_trace[-1]
         assert fault_event[0] == "write"
@@ -12450,46 +12480,127 @@ def test_singleton_modern_cleanup_write_prefixes_converge_on_fresh_mount(
         assert len(old_home) == len(new_home) == len(torn_home) == length
         assert old_home != new_home
         assert torn_home == new_home[:cut] + old_home[cut:]
-        if write_ordinal == 20:
+        if case == "gdt-home":
             assert torn_home not in {old_home, new_home}
 
-    _assert_singleton_modern_cleanup_media_converges(
+    _assert_singleton_cleanup_media_converges(
         torn,
-        tmp_path / f"modern-orphan-{case}-repaired.img",
-        tmp_path / f"modern-orphan-{case}-stable.img",
+        tmp_path / f"{protocol}-orphan-{case}-repaired.img",
+        tmp_path / f"{protocol}-orphan-{case}-stable.img",
+        protocol=protocol,
+    )
+
+
+_SINGLETON_LEGACY_WRITE_PREFIX_CASES = (
+    pytest.param(
+        "activation-primary", 3, 0, 50, id="W3-activation-primary-prefix"
+    ),
+    pytest.param(
+        "activation-super", 4, 1, 0, id="W4-activation-super-prefix"
+    ),
+    pytest.param(
+        "descriptor", 7, 0, 200, id="W7-transaction-descriptor-prefix"
+    ),
+    pytest.param(
+        "active-primary", 16, 0, 50, id="W16-active-primary-prefix"
+    ),
+    pytest.param(
+        "commit-empty-prefix", 17, 0, 0, id="W17-empty-commit-prefix"
+    ),
+    pytest.param(
+        "commit-first-byte", 17, 0, 1, id="W17-first-byte-commit-prefix"
+    ),
+    pytest.param("first-home", 18, 0, 200, id="W18-first-home-prefix"),
+    pytest.param("gdt-home", 19, 0, 13, id="W19-gdt-home-prefix"),
+    pytest.param("bitmap-home", 20, 0, 200, id="W20-bitmap-home-prefix"),
+    pytest.param("super-home", 21, 1, 0, id="W21-super-home-prefix"),
+    pytest.param("reset-primary", 24, 0, 50, id="W24-reset-primary-prefix"),
+    pytest.param("final-super", 25, 1, 0, id="W25-final-super-prefix"),
+    pytest.param(
+        "witness-clear", 26, 0, 200, id="W26-witness-clear-primary-prefix"
+    ),
+    pytest.param("guard-retire", 27, 0, 200, id="W27-guard-retire-prefix"),
+)
+
+
+@pytest.mark.parametrize(
+    ("case", "write_ordinal", "sector_index", "byte_index"),
+    _SINGLETON_MODERN_WRITE_PREFIX_CASES,
+)
+def test_singleton_modern_cleanup_write_prefixes_converge_on_fresh_mount(
+    singleton_modern_cleanup_fixture: dict[str, object],
+    tmp_path: Path,
+    case: str,
+    write_ordinal: int,
+    sector_index: int,
+    byte_index: int,
+) -> None:
+    _exercise_singleton_cleanup_write_prefix(
+        singleton_modern_cleanup_fixture,
+        tmp_path,
+        "modern",
+        case,
+        write_ordinal,
+        sector_index,
+        byte_index,
     )
 
 
 @pytest.mark.parametrize(
-    ("case", "flush_ordinal"),
-    (
-        pytest.param("activation-super", 4, id="F4-activation-super"),
-        pytest.param("transaction-body", 7, id="F7-transaction-body"),
-        pytest.param("active-primary", 10, id="F10-active-primary"),
-        pytest.param("commit", 11, id="F11-commit"),
-        pytest.param("replay-homes", 12, id="F12-replay-homes"),
-        pytest.param("reset-primary", 15, id="F15-reset-primary"),
-        pytest.param("final-super", 16, id="F16-final-super"),
-        pytest.param("witness-clear", 17, id="F17-witness-clear"),
-        pytest.param("guard-retire", 18, id="F18-guard-retire"),
-    ),
+    ("case", "write_ordinal", "sector_index", "byte_index"),
+    _SINGLETON_LEGACY_WRITE_PREFIX_CASES,
 )
-def test_singleton_modern_cleanup_flush_fences_converge_on_fresh_mount(
-    singleton_modern_cleanup_fixture: dict[str, object],
+def test_singleton_legacy_cleanup_write_prefixes_converge_on_fresh_mount(
+    singleton_legacy_cleanup_fixture: dict[str, object],
     tmp_path: Path,
+    case: str,
+    write_ordinal: int,
+    sector_index: int,
+    byte_index: int,
+) -> None:
+    _exercise_singleton_cleanup_write_prefix(
+        singleton_legacy_cleanup_fixture,
+        tmp_path,
+        "legacy",
+        case,
+        write_ordinal,
+        sector_index,
+        byte_index,
+    )
+
+
+_SINGLETON_CLEANUP_FLUSH_CASES = (
+    pytest.param("activation-super", 4, id="F4-activation-super"),
+    pytest.param("transaction-body", 7, id="F7-transaction-body"),
+    pytest.param("active-primary", 10, id="F10-active-primary"),
+    pytest.param("commit", 11, id="F11-commit"),
+    pytest.param("replay-homes", 12, id="F12-replay-homes"),
+    pytest.param("reset-primary", 15, id="F15-reset-primary"),
+    pytest.param("final-super", 16, id="F16-final-super"),
+    pytest.param("witness-clear", 17, id="F17-witness-clear"),
+    pytest.param("guard-retire", 18, id="F18-guard-retire"),
+)
+
+
+def _exercise_singleton_cleanup_flush_fence(
+    cleanup_fixture: dict[str, object],
+    tmp_path: Path,
+    protocol: str,
     case: str,
     flush_ordinal: int,
 ) -> None:
-    source = singleton_modern_cleanup_fixture["source"]
-    patches = singleton_modern_cleanup_fixture["patches"]
-    success_trace = singleton_modern_cleanup_fixture["success_trace"]
+    assert protocol in {"modern", "legacy"}
+    source = cleanup_fixture["source"]
+    patches = cleanup_fixture["patches"]
+    success_trace = cleanup_fixture["success_trace"]
     assert isinstance(source, Path)
     assert isinstance(patches, tuple)
     assert isinstance(success_trace, tuple)
 
-    working = tmp_path / f"modern-orphan-{case}-flush-working.img"
-    survived = tmp_path / f"modern-orphan-{case}-flush-survived.img"
-    prior_fence = tmp_path / f"modern-orphan-{case}-prior-fence.img"
+    caught_marker = f"EXT4-{protocol.upper()}-ORPHAN-FLUSH-CAUGHT"
+    working = tmp_path / f"{protocol}-orphan-{case}-flush-working.img"
+    survived = tmp_path / f"{protocol}-orphan-{case}-flush-survived.img"
+    prior_fence = tmp_path / f"{protocol}-orphan-{case}-prior-fence.img"
     output, failed_trace, survived_sha256 = run_recovery_forth(
         source,
         working,
@@ -12527,7 +12638,7 @@ def test_singleton_modern_cleanup_flush_fences_converge_on_fresh_mount(
                         "_EXT4-MOC-TX @ 0=",
                     ]
                 )
-                + ' IF ." EXT4-MODERN-ORPHAN-FLUSH-CAUGHT" THEN'
+                + f' IF ." {caught_marker}" THEN'
             ),
         ],
         patches=patches,
@@ -12541,7 +12652,7 @@ def test_singleton_modern_cleanup_flush_fences_converge_on_fresh_mount(
         capture_media=survived,
         capture_prior_flush_media=prior_fence,
     )
-    _assert_emitted(output, "EXT4-MODERN-ORPHAN-FLUSH-CAUGHT")
+    _assert_emitted(output, caught_marker)
     assert survived.is_file()
     assert prior_fence.is_file()
     assert working.is_file()
@@ -12564,11 +12675,50 @@ def test_singleton_modern_cleanup_flush_fences_converge_on_fresh_mount(
         ("survived", survived),
         ("prior", prior_fence),
     ):
-        _assert_singleton_modern_cleanup_media_converges(
+        _assert_singleton_cleanup_media_converges(
             interrupted,
-            tmp_path / f"modern-orphan-{case}-{durability}-repaired.img",
-            tmp_path / f"modern-orphan-{case}-{durability}-stable.img",
+            tmp_path / f"{protocol}-orphan-{case}-{durability}-repaired.img",
+            tmp_path / f"{protocol}-orphan-{case}-{durability}-stable.img",
+            protocol=protocol,
         )
+
+
+@pytest.mark.parametrize(
+    ("case", "flush_ordinal"),
+    _SINGLETON_CLEANUP_FLUSH_CASES,
+)
+def test_singleton_modern_cleanup_flush_fences_converge_on_fresh_mount(
+    singleton_modern_cleanup_fixture: dict[str, object],
+    tmp_path: Path,
+    case: str,
+    flush_ordinal: int,
+) -> None:
+    _exercise_singleton_cleanup_flush_fence(
+        singleton_modern_cleanup_fixture,
+        tmp_path,
+        "modern",
+        case,
+        flush_ordinal,
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "flush_ordinal"),
+    _SINGLETON_CLEANUP_FLUSH_CASES,
+)
+def test_singleton_legacy_cleanup_flush_fences_converge_on_fresh_mount(
+    singleton_legacy_cleanup_fixture: dict[str, object],
+    tmp_path: Path,
+    case: str,
+    flush_ordinal: int,
+) -> None:
+    _exercise_singleton_cleanup_flush_fence(
+        singleton_legacy_cleanup_fixture,
+        tmp_path,
+        "legacy",
+        case,
+        flush_ordinal,
+    )
 
 
 def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(

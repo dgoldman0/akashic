@@ -1,5 +1,7 @@
 # akashic-vfs-ext4 — checksummed read-only ext4 binding
 
+IMPORTANT: STEP CEILINGS ARE NOT CRITICAL COMPARED TO CRITICAL PROPER FUNCTIONING. DO NOT SCRUB PROPER FUNCTIONALITY FOR ARBITRARILY SET STEP LIMITS. STEP AND OTHER LIMITS DETERMINED BY IDENTIFIED SYSTEM RESOURCES AND MONITORING.
+
 This VFS ABI 1 binding reads filesystems in the pinned
 `akashic-ext4-rw-v1` profile from one explicit KDOS volume. It also implements
 a bounded mount-time recovery slice for an internal checksum-v3 JBD2 journal
@@ -13,6 +15,24 @@ fallback.
 ```forth
 REQUIRE utils/fs/drivers/vfs-ext4.f
 ```
+
+## Cold source qualification
+
+The real-image harness cold-compiles the production ext4 Forth source into
+the restored FAT/VFS snapshot. It does not use a compiled shard or warm cache.
+To avoid making UART echo volume an implementation-size limit, the host
+injects each compacted physical source line into the BIOS `FSLOAD`
+source-buffer span and invokes an immediate `EVALUATE-CHECKED` shim;
+`EVALUATE-FINISH` verifies that no definition remains open. The 255-byte
+transport bound applies to one injected physical line, not to total driver
+size.
+
+The checked-in 800,000,000-step value is a qualification watchdog and
+measurement guide, not an ext4 implementation capacity or a reason to weaken
+functionality. If correct source legitimately outgrows it, the budget must be
+revisited from measured system resources. The harness still performs a real
+cold source build and requires the `EXT4-SOURCE-READY` marker with no Forth
+diagnostic. The current source passes that cold-build qualification.
 
 ## Mounting
 
@@ -97,13 +117,33 @@ root, mount verifies:
   union-wide inode uniqueness, including modern duplicates and cross-protocol
   reuse; the bounded legacy walk independently rejects cycles. The scanner
   then authenticates every referenced inode's bounded `i_dtime`, type, size,
-  flags, and applicable data map. Linked entries must be truncatable. An
-  authenticated empty modern set is completed before mount publication only
-  when the legacy/modern union is empty, without changing an orphan inode,
-  orphan-file block, or legacy link. A nonempty union is still refused after
-  preflight because journaled truncate/delete orchestration and protocol
-  completion are not implemented, although one private non-emitting linked
-  truncation afterimage builder now exists below that mount boundary.
+  flags, and applicable data map. Linked entries must be truncatable.
+
+Mount admits one exact nonempty cleanup shape: the union contains one retained
+record, and that record is either one modern orphan-file slot with no legacy
+head, or one legacy head whose retained successor is zero with no active
+modern slot. The target must be a linked regular file whose zero size is
+already durable, whose retained data map is an inline depth-0 extent root, and
+which does not use journal-data mode. An authenticated external xattr is
+retained. The root may already be empty or may contain ranges that the bounded
+free-block builder can account for exactly. Every other nonempty union remains
+a stable `EXT4-D-RECOVERY` refusal after any required replay and before a
+cleanup-specific transaction is activated or emitted.
+
+For the admitted singleton, mount derives the exact coalesced metadata credit,
+proves journal capacity, dry-stages and aborts the transaction, activates or
+converges the recovery journal as required, stages and emits the same sealed
+transaction, and drives it through ordinary replay, strict empty-union
+validation, root validation, and clean landing before publication. Modern
+completion clears the exact orphan-file slot. Legacy completion clears
+`s_last_orphan` in the checksummed primary-super after-image and deliberately
+does not manufacture a no-op `i_dtime` rewrite. The temporary recovery writer
+is scrubbed and its arena tail rolled back, so the narrow mount transaction
+cannot pin a later public writer geometry.
+
+An authenticated empty modern set is completed before mount publication only
+when the legacy/modern union is empty, without changing an orphan inode,
+orphan-file block, or legacy link.
 
 The driver contains its own reflected CRC32C implementation. Akashic's public
 `CRC32C` word is deliberately MSB-first and is not interchangeable with the
@@ -118,13 +158,15 @@ before publication: a `RECOVER`-clear input first enters a tear-safe recovery
 epoch through writer-free `AKW1` activation while preserving
 `ORPHAN_PRESENT`; `AKR1` then lands an empty checksum-v3 journal and a
 checksummed primary superblock with both transient bits clear. A valid
-nonempty union returns the stable `EXT4-D-RECOVERY` refusal without orphan
-cleanup or public mutation. Malformed links, cycles, out-of-range locators,
-and duplicate inode membership return format-domain `VFS-R-CORRUPT`; inode
-allocation and checksum failures preserve their more specific corruption
-detail. A dirty state without `RECOVER` or a recovery state outside the
-implemented JBD2 slice remains a stable refusal. No such failure can leave a
-mounted or ready object.
+nonempty union outside the exact singleton linked zero-size inline-depth-0
+slice returns the stable `EXT4-D-RECOVERY` refusal. An admitted singleton is
+transactionally completed before mount publication; malformed authority still
+fails closed, and no public mutation capability is exposed. Malformed links,
+cycles, out-of-range locators, and duplicate inode membership return
+format-domain `VFS-R-CORRUPT`; inode allocation and checksum failures preserve
+their more specific corruption detail. A dirty state without `RECOVER` or a
+recovery state outside the implemented JBD2 slice remains a stable refusal. No
+such failure can leave a mounted or ready object.
 
 ## Bounded mount recovery
 
@@ -164,9 +206,9 @@ union count drives one arena-backed location plan, and failed-mount retries
 reuse a sufficient retained allocation rather than consume another monotonic
 arena allocation. The authenticated-empty modern branch completes recovery
 metadata only when both protocols are empty, without changing an orphan inode,
-orphan-file block, or legacy link; nonempty transactional truncate/delete and
-protocol cleanup are not yet admitted.
-Pinned
+orphan-file block, or legacy link. The exact singleton modern/legacy
+depth-zero cleanup is admitted through the sealed transaction path. Larger
+unions and broader truncate/delete shapes remain refused. Pinned
 qualification covers multi-record hash collisions, malformed revoke geometry
 and ownership, a revoked primary-super repair, and transactions relocated
 above logical journal block 4095 and across the end of an 8192-block ring.
@@ -407,6 +449,15 @@ contents. These checks bind discovery records back to current media before
 they can contribute an after-image; they do not validate a proposed inode
 record as a complete truncate/delete operation.
 
+`_EXT4-JTX-CLEAR-SINGLETON-LEGACY-HEAD` composes legacy protocol removal into
+the transaction-aware primary-super after-image. It requires exact singleton
+legacy authority, verifies that `s_last_orphan` still names the retained inode,
+preserves the mounted incompat and read-only-compatible feature state, writes
+zero to the head, and restamps the super checksum. If block-free accounting
+already staged the primary super, acquire/replace composes with that newer
+image. A singleton successor is already zero, so the builder does not
+manufacture a no-op `i_dtime` rewrite.
+
 `_EXT4-JTX-STAGE-FREE-BLOCK-RANGE` is the first private allocation-accounting
 builder. It accepts one nonempty contiguous physical range, proves the whole
 range in bounds and disjoint from the journal and every descriptor- or
@@ -466,34 +517,36 @@ leaves the orphan slot/list record active for a later durable
 protocol-completion step. It stages no data or revoke and performs no media
 write.
 
-`_EXT4-JTX-STAGE-MODERN-ORPHAN-DEPTH0-FINAL` owns an initially empty metadata-
-only transaction and composes that truncation with removal of the same modern
-orphan slot. It admits exactly one authenticated modern record, no legacy
-record or `s_last_orphan` link, and requires the supplied metadata credit to
-equal the final coalesced home count. After both builders succeed, it
-reauthenticates the still-raw singleton plan and seals the target inode
-generation/location/original inline-entry count, orphan logical block/slot/
-physical identity, and complete retained-image CRC32Cs in the arena-owned
-writer header. The explicit entry count distinguishes a slot-only cleanup from
-a staged target image without reserving any valid CRC32C value as a sentinel.
-The checkpoint mode and transaction epoch bind that certificate to this
-begin/abort cycle. Mode is published last; once published, every generic and
-typed staging entry point returns busy, while abort and emit remain legal.
-Abort and every successful writer rebase scrub the complete certificate.
+`_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL` owns an initially empty
+metadata-only transaction and supports either exact singleton protocol. It
+composes depth-zero truncation with modern slot removal or legacy-head removal,
+requires used and active metadata homes to equal the exact credit, then seals
+protocol-specific raw authority and retained after-image CRC32Cs into the
+arena-owned writer. Modern mode binds the logical block, slot, physical
+orphan-file home, and generation. Legacy mode binds the raw checksummed
+primary super, head inode, zero locators, and cleared-head after-image. Both
+modes bind the target inode generation, table location, original inline-entry
+count, transaction epoch, and applicable retained-image checksums. The explicit
+entry count distinguishes an already-truncated target from a staged target
+image without reserving any valid CRC32C value as a sentinel. Mode is
+published last; once published, every generic and typed staging entry point
+returns busy, while abort and emit remain legal. Abort and every successful
+writer rebase scrub the complete certificate.
 
-`_EXT4-MEASURE-MODERN-ORPHAN-DEPTH0` applies the same singleton, raw-slot,
-target-inode, extent-root, external-xattr, and writable-home authentication
-without acquiring a writer or publishing an after-image. An already-truncated
-root returns an exact metadata credit of one for the orphan-file block. A
-nonempty root returns three fixed homes (target inode table, primary super,
-and orphan-file block), plus one uniquely owned block bitmap for every touched
-group and one copy of every distinct primary GDT block covering those groups.
-It derives that count with a geometry-bounded, constant-space group scan;
-there is no candidate array or cleanup-specific capacity. Checked arithmetic,
-complete range/static/journal anti-alias validation, and unique bitmap-owner
-proofs make the result the coalesced home count rather than an upper bound.
-The final builder independently requires its staged active-home count to equal
-the measured credit, so any media or plan drift remains fail-closed.
+`_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0` applies the same authentication without
+allocating a writer or publishing an after-image. An already-truncated
+singleton costs one protocol home: the orphan-file block for modern or the
+primary super for legacy. A nonempty modern root starts with the target inode
+table, primary super, and orphan-file block; a nonempty legacy root starts with
+the target inode table and primary super. Both add one uniquely owned block
+bitmap per touched group and one copy of each distinct primary GDT page. Thus
+the canonical one-block legacy fixture has exact credit four, while its
+already-truncated form has credit one. The geometry-bounded, constant-space
+group scan imposes no candidate array or cleanup-specific capacity. Checked
+arithmetic, complete range/static/journal anti-alias validation, and unique
+bitmap-owner proofs make the result the coalesced home count rather than an
+upper bound. The final builder independently requires its staged active-home
+count to equal the measured credit, so media or plan drift remains fail-closed.
 
 This is a non-emitting staging boundary. The typed builders may issue checked
 reads for locator and checksum reauthentication, but they do not activate a
@@ -503,6 +556,16 @@ performs no volume I/O: it scrubs staged entries, images, and hashes, refunds
 the log reservation, clears both writer scratch blocks, and returns the writer
 to `IDLE`. Neither staging nor abort completes orphan cleanup or grants a
 public write capability.
+
+`_EXT4-COMPLETE-SINGLETON-ORPHAN` is the production mount client of that
+private transaction machinery. It finds the exact plan record, measures and
+preflights it before allocation, takes an arena mark, allocates only the
+measured temporary writer, dry-stages and aborts once, then activates or
+converges the recovery journal and emits the same sealed cleanup. Ordinary
+replay performs the home writes and clean landing. Strict reload, empty-union,
+root, and attachment proofs precede publication; every exit scrubs and rolls
+back the temporary arena tail so recovery geometry cannot constrain a later
+public writer.
 
 One fully staged transaction can now be emitted durably. Its ring reservation
 contains one standard active-super guard plus the descriptor blocks, metadata
@@ -537,12 +600,15 @@ nonempty orphan plan. The sealed singleton-final mode alone uses a private
 pre-home reload that performs the same super, group, backup, orphan-union, and
 journal authentication but replaces the public nonempty-policy refusal with
 an exact writer-certificate comparison. It requires the sole rebuilt plan
-record, raw target generation/table location, raw orphan generation/mapping/
-slot, and frozen retained target/orphan images to match. The active primary and
-guard, transaction ID, start/head/cursor, every descriptor home and unescaped
-payload, every revoke identity, the commit, the exact zero sentinel, and the
-retained entry/image CRCs must describe the same single committed transaction.
-A mismatch fails before home mutation.
+record, raw target identity and table location, the selected protocol's raw
+locator and authority, and the frozen retained target/protocol images to match.
+Modern authority is the orphan-file generation, mapping, physical home, and
+slot; legacy authority is the raw primary-super checksum, head inode, zero
+locators, and primary-super home. The active primary and guard, transaction ID,
+start/head/cursor, every descriptor home and unescaped payload, every revoke
+identity, the commit, the exact zero sentinel, and the retained entry/image
+CRCs must describe the same single committed transaction. A mismatch fails
+before home mutation.
 
 After that preflight, checkpoint writes each retained active metadata
 after-image to its home block. Ordered data is not rewritten because emission
@@ -640,10 +706,12 @@ rebase the preserved writer workspace.
 The object layout, counts, embedded pointers, ring fields, phase/fault state,
 image checksums, and hash indices are revalidated before they can drive a
 fill, copy, lookup, or media write. The public binding and capability mask
-remain read-only. Transactional cleanup for both orphan mechanisms, the
-complete user-visible mutation layer, external-tool inspection of
-Akashic-created transactions/endpoints, and the remaining release gates must
-all land before public write capabilities can be enabled.
+remain read-only. Transactional completion of the exact singleton linked
+zero-size inline-depth-0 case is implemented for both orphan mechanisms.
+Broader orphan recovery, the complete user-visible mutation layer,
+external-tool inspection of Akashic-created transactions/endpoints, and the
+remaining release gates must still land before public write capabilities can
+be enabled.
 
 ## Read-only inspection
 
@@ -699,7 +767,21 @@ they are not exposed as writable VFS capabilities.
 ## Deliberate remaining limits
 
 This is completion of the bounded clean read side, not completion of the
-writable profile. The remaining boundaries are:
+writable profile. The journaling and crash-recovery substrate is advanced, but
+public write support is not a capability-bit flip. `EXT4-OPS` still has no
+`WRITE`, `CREATE`, `MKDIR`, `UNLINK`, `RMDIR`, `RENAME`, `TRUNCATE`, `SETATTR`,
+`LINK`, `SYMLINK`, `SETXATTR`, or `REMOVEXATTR` callback;
+`EXT4-BINDING` remains `VFS-BF-READ-ONLY`, and `SYNCFS`/`FSYNC` remain
+read-only no-ops. Writable publication still needs a production
+workspace-sizing and chunking contract, general block and inode allocation,
+extent and legacy-map growth and shrink, directory-entry mutation,
+inode/link/time/accounting updates, xattr mutation, namespace/cache coherence,
+real sync semantics, broader orphan recovery, and interoperability plus
+power-cut qualification. The durable internal transaction engine now has a
+production recovery client, but the filesystem mutation layer and its
+qualification remain several major implementation phases away.
+
+The remaining boundaries are:
 
 - POSIX ACL xattrs are returned as raw bytes, but generic permission
   enforcement is not claimed;
@@ -718,24 +800,19 @@ writable profile. The remaining boundaries are:
   private `AKR1` clear witness proves the exact cleanup state described above;
 - private transaction staging, clean-to-`RECOVER` activation quarantine, one
   ordered descriptor/payload/revoke/commit emission, full-log checkpoint
-  preflight, retained-image home writes, dirty-empty journal release, and
+  preflight, retained-image home writes, dirty-empty journal release,
   immediate sequential workspace reuse, clean write-active deactivation, and
   public clean-unmount integration are implemented as private durability
-  foundations. Transaction-aware metadata acquisition and checksum-safe typed
-  orphan-inode replacement, modern-slot clearing, free-only physical-block
-  accounting, and linked zero-size inline depth-0 extent truncation can now
-  compose coalesced same-home after-images and abort without volume I/O.
-  Block-free staging covers split group ranges, primary GDT and superblock
-  counters/checksums, partial-overlap conflicts, automatic abort on late credit
-  failure, and writable metadata-home anti-alias admission. The linked
-  truncation slice additionally covers exact `i_blocks` reduction, retained
-  external xattrs, target/orphan-file ownership disjointness, exact plan
-  membership, and whole-transaction abort after a late credit failure. One
-  singleton modern final-cleanup mode now composes truncation and slot removal,
-  freezes the transaction behind exact plan/image authority, crosses only the
-  checkpoint pre-home nonempty refusal, and returns to ordinary strict-empty
-  validation after home writes. It has been exercised through activation,
-  emission, checkpoint, and clean deactivation;
+  foundations. Transaction-aware metadata acquisition, checksum-safe typed
+  orphan-inode replacement, free-only physical-block accounting, linked
+  zero-size inline depth-0 extent truncation, exact credit measurement,
+  modern-slot removal, legacy-head removal, and protocol-specific final
+  certificates now compose one sealed singleton transaction for either orphan
+  mechanism. Production mount selects that exact operation, preflights and
+  dry-stages it, handles a clean journal or retained recovery prefix, emits the
+  transaction, drives committed cleanup through ordinary replay, and publishes
+  only after strict empty-union validation. The temporary mount writer is
+  scrubbed and rolled back rather than becoming the production workspace;
 - unified legacy-chain and modern orphan-file discovery, inode preflight, and
   authenticated-empty `ORPHAN_PRESENT` completion are implemented. The shared
   exact-count plan retains protocol-specific locations and enforces inode
@@ -743,27 +820,29 @@ writable profile. The remaining boundaries are:
   protocol counts are zero and mutates only journal recovery state and the
   checksummed primary-super transient bits; it does not change an orphan
   inode/file, a legacy link, allocate writer workspace, or expose a
-  user-visible write. The typed staging components do not yet cover nonzero
-  tail truncation, depth-positive extent trees, legacy direct/indirect maps,
-  unlinked inode and inode-bitmap accounting, external-xattr block release,
-  link-count and legacy-chain/head updates, or retry-idempotent cleanup
-  orchestration. Exact metadata credit is now derived across arbitrary
-  crossed groups and coalesced primary GDT homes, but mount does not yet
-  select the singleton operation, invoke the available no-allocation
-  journal-fit gate and writer sizing, resume an activation/incomplete-emission
-  prefix that still retains the record, or drive committed cleanup through
-  replay. Those are the next integration boundary. Transactional cleanup
-  outside the singleton linked modern depth-zero slice and every user-visible
-  mutation operation remain unimplemented;
+  user-visible write. Cleanup still does not cover a union with more than one
+  active record, nonzero-size or tail truncation, depth-positive extent trees,
+  legacy direct/indirect map mutation, unlinked-inode and inode-bitmap/free-
+  inode accounting, external-xattr release, general link-count and multi-node
+  legacy-chain repair, or multi-transaction chunking. Every user-visible
+  mutation operation remains unimplemented;
 - focused 1 KiB coverage exercises one- and two-inode legacy chains, a mixed
   legacy/modern union, stable refusal with same-binding plan reuse, legacy
   cycles and invalid links, unallocated and checksum-invalid legacy inodes,
-  and cross-protocol duplicate rejection without writes. Unified discovery
-  still needs qualification across 2/4 KiB legacy geometry, longer chains,
-  journal-replayed orphan afterimages, later modern blocks and files beyond
-  the former 4096-block limit, unlinked and structurally invalid referenced
-  inodes, distinct-key hash collisions, and arena exhaustion or a retained
-  workspace that is too small; and
+  and cross-protocol duplicate rejection without writes. Passing singleton
+  legacy cleanup coverage now includes the 27-write/18-flush successful mount,
+  exact one-home already-truncated sealing with zero target entries, exact
+  four-home one-block sealing with one target entry, post-seal mutation
+  refusal, and abort scrubbing. The controlled crash matrix covers 14 write
+  prefixes spanning activation, transaction description and commit, every
+  legacy metadata home, reset, final-super publication, witness clearing, and
+  guard retirement. It also covers all nine durability fences; both the writes
+  surviving each failed flush and the preceding durable snapshot independently
+  repair and then remount without another write. Unified discovery still needs
+  qualification across 2/4 KiB legacy geometry, longer chains, later modern
+  blocks and files beyond the former 4096-block limit, unlinked and structurally
+  invalid referenced inodes, distinct-key hash collisions, and arena exhaustion
+  or a retained workspace that is too small; and
 - empty completion has 1/2/4 KiB happy-path and write-free-remount coverage,
   plus same-binding writer-free W3 retry and four controlled prefix cases:
   1 KiB AKW1 W3 primary, 1/4 KiB AKE1/AKR1 W9 early primary, and 1 KiB AKR1
