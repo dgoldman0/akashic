@@ -200,6 +200,7 @@ REQUIRE ../vfs.f
 0x68 CONSTANT _EXT4-I.FILE-ACL-LO
 0x6C CONSTANT _EXT4-I.SIZE-HI
 0x74 CONSTANT _EXT4-I.BLOCKS-HI
+0x76 CONSTANT _EXT4-I.FILE-ACL-HI
 0x78 CONSTANT _EXT4-I.UID-HI
 0x7A CONSTANT _EXT4-I.GID-HI
 0x7C CONSTANT _EXT4-I.CSUM-LO
@@ -253,6 +254,7 @@ REQUIRE ../vfs.f
 \ +15296   persistent revoke-workspace pointer and allocation geometry
 \ +15312   committed-revoke scan statistics and build epoch
 \ +15384   mount-generation ownership of the persistent writer workspace
+\ +15392   persistent modern-orphan uniqueness workspace and active count
 
    0 CONSTANT _EXT4-C.SB
 1024 CONSTANT _EXT4-C.BLOCK
@@ -342,7 +344,10 @@ REQUIRE ../vfs.f
 15368 CONSTANT _EXT4-C.J.WITNESS-NEW-CHECKSUM
 15376 CONSTANT _EXT4-C.J.WRITE-ACTIVE
 15384 CONSTANT _EXT4-C.J.WRITER-CURRENT
-15392 CONSTANT _EXT4-CTX-SIZE
+15392 CONSTANT _EXT4-C.O.TABLE
+15400 CONSTANT _EXT4-C.O.SLOTS
+15408 CONSTANT _EXT4-C.O.ACTIVE
+15416 CONSTANT _EXT4-CTX-SIZE
 
 : _EXT4-CTX  ( vfs -- ctx )  V.BCTX @ ;
 : _EXT4-READY?  ( vfs -- flag )
@@ -716,13 +721,11 @@ VARIABLE _EXT4-SCB-CTX
         EXT4-D-FEATURE _EXT4-UNSUPPORTED EXIT
     THEN
     _EXT4-SV-SB @ _EXT4-SB.RO-COMPAT + L@
-    DUP _EXT4-RO-ORPHAN-PRESENT AND IF
-        DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
     DUP _EXT4-RO-REFUSED AND IF
         DROP EXT4-D-FEATURE _EXT4-UNSUPPORTED EXIT
     THEN
-    _EXT4-RO-READONLY INVERT AND _EXT4-SV-RO !
+    _EXT4-RO-READONLY _EXT4-RO-ORPHAN-PRESENT OR INVERT AND
+    _EXT4-SV-RO !
     _EXT4-SV-SB @ _EXT4-SB.INODE-SIZE + W@ DUP
     128 = IF
         DROP _EXT4-SV-RO @ _EXT4-RO-I128-V1 AND
@@ -1152,8 +1155,9 @@ VARIABLE _EXT4-JBT-B
     0 ;
 
 \ Compare the immutable profile fields of one checksum-authenticated copy.
-\ Mutable counters, timestamps, state, and RECOVER may legitimately differ;
-\ the caller supplies the copy's required group number explicitly.
+\ Mutable counters, timestamps, state, RECOVER, and ORPHAN_PRESENT may
+\ legitimately differ; the caller supplies the copy's required group number
+\ explicitly.
 : _EXT4-SUPER-INVARIANTS?  ( candidate group reference -- flag )
     _EXT4-BS-PRIMARY ! _EXT4-BS-GROUP ! _EXT4-BS-BUF !
     _EXT4-BS-BUF @ _EXT4-SB.MAGIC + W@ _EXT4-MAGIC =
@@ -1195,7 +1199,9 @@ VARIABLE _EXT4-JBT-B
         _EXT4-BS-PRIMARY @ _EXT4-SB.INCOMPAT + L@
         _EXT4-INCOMPAT-RECOVER INVERT AND = AND
     _EXT4-BS-BUF @ _EXT4-SB.RO-COMPAT + L@
-        _EXT4-BS-PRIMARY @ _EXT4-SB.RO-COMPAT + L@ = AND
+        _EXT4-RO-ORPHAN-PRESENT INVERT AND
+        _EXT4-BS-PRIMARY @ _EXT4-SB.RO-COMPAT + L@
+        _EXT4-RO-ORPHAN-PRESENT INVERT AND = AND
     _EXT4-BS-BUF @ _EXT4-SB.DESC-SIZE + W@
         _EXT4-BS-PRIMARY @ _EXT4-SB.DESC-SIZE + W@ = AND
     _EXT4-BS-BUF @ _EXT4-SB.CSUM-TYPE + C@
@@ -1284,7 +1290,7 @@ VARIABLE _EXT4-IR-BIT
 \ Consume the descriptor already present in C.DESC.  Recovery can therefore
 \ authenticate inode 8 through a sparse backup GDT without ever consulting a
 \ damaged primary descriptor; ordinary inode loading uses the same body.
-: _EXT4-LOAD-INODE-FROM-DESC  ( -- ior )
+: _EXT4-LOAD-INODE-FROM-DESC-RAW  ( -- ior )
     _EXT4-GD-FLAGS @ _EXT4-BG-INODE-UNINIT AND IF
         EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
@@ -1339,6 +1345,13 @@ VARIABLE _EXT4-IR-BIT
     ELSE
         _EXT4-IR-CALC @ 0xFFFF AND _EXT4-IR-LO @ <>
     THEN IF EXT4-D-INODE-CHECKSUM _EXT4-CORRUPT EXIT THEN
+    0 ;
+
+\ Ordinary readers require i_dtime to be clear.  Orphan recovery instead
+\ interprets that field as the bounded legacy next-orphan value, so keep the
+\ common allocation, descriptor, and checksum authentication above reusable.
+: _EXT4-LOAD-INODE-FROM-DESC  ( -- ior )
+    _EXT4-LOAD-INODE-FROM-DESC-RAW ?DUP IF EXIT THEN
     _EXT4-IR-CTX @ _EXT4-C.INODE + _EXT4-I.DTIME + L@ IF
         EXT4-D-ROOT-INODE _EXT4-CORRUPT EXIT
     THEN
@@ -1348,6 +1361,16 @@ VARIABLE _EXT4-IR-BIT
     _EXT4-PREPARE-INODE-LOOKUP ?DUP IF EXIT THEN
     _EXT4-IR-GROUP @ _EXT4-IR-CTX @ _EXT4-LOAD-DESC ?DUP IF EXIT THEN
     _EXT4-LOAD-INODE-FROM-DESC ;
+
+: _EXT4-LOAD-ORPHAN-INODE  ( inode-number ctx -- ior )
+    _EXT4-PREPARE-INODE-LOOKUP ?DUP IF EXIT THEN
+    _EXT4-IR-GROUP @ _EXT4-IR-CTX @ _EXT4-LOAD-DESC ?DUP IF EXIT THEN
+    _EXT4-LOAD-INODE-FROM-DESC-RAW ?DUP IF EXIT THEN
+    _EXT4-IR-CTX @ _EXT4-C.INODE + _EXT4-I.DTIME + L@
+    _EXT4-IR-CTX @ _EXT4-C.INODES + @ U> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
 
 VARIABLE _EXT4-EV-CTX
 VARIABLE _EXT4-EV-IN
@@ -1994,8 +2017,25 @@ VARIABLE _EXT4-MS-TYPE
 VARIABLE _EXT4-MS-MODE
 VARIABLE _EXT4-MS-HI
 VARIABLE _EXT4-MS-EXTRA
-VARIABLE _EXT4-MS-BLOCKS
 VARIABLE _EXT4-MS-FLAGS
+
+VARIABLE _EXT4-FS-CTX
+VARIABLE _EXT4-FS-IN
+VARIABLE _EXT4-FS-EA-SECTORS
+
+\ With EA_INODE refused, a fast symlink has no data sectors beyond the one
+\ external xattr block, if present.  Keep staging, reads, and orphan
+\ truncatability on this single storage-shape predicate.
+: _EXT4-FAST-SYMLINK-STORAGE?  ( ctx type -- flag )
+    VFS-T-SYMLINK <> IF DROP FALSE EXIT THEN
+    DUP _EXT4-FS-CTX ! _EXT4-C.INODE + _EXT4-FS-IN !
+    _EXT4-FS-IN @ _EXT4-I.FILE-ACL-HI + W@ IF FALSE EXIT THEN
+    0 _EXT4-FS-EA-SECTORS !
+    _EXT4-FS-IN @ _EXT4-I.FILE-ACL-LO + L@ IF
+        _EXT4-FS-CTX @ _EXT4-C.SPB + @ _EXT4-FS-EA-SECTORS !
+    THEN
+    _EXT4-FS-CTX @ _EXT4-C.R.BLOCKS + @
+    _EXT4-FS-EA-SECTORS @ = ;
 
 : _EXT4-STAGE-CURRENT-INODE  ( ctx -- type ior )
     DUP _EXT4-MS-CTX ! _EXT4-C.INODE + _EXT4-MS-IN !
@@ -2026,8 +2066,11 @@ VARIABLE _EXT4-MS-FLAGS
     _EXT4-MS-IN @ _EXT4-I.GID-LO + W@ OR
     _EXT4-MS-CTX @ _EXT4-C.R.GID + !
     _EXT4-MS-IN @ _EXT4-MS-CTX @ _EXT4-DECODE-I-BLOCKS
-    ?DUP IF NIP 0 SWAP EXIT THEN DUP _EXT4-MS-BLOCKS !
+    ?DUP IF NIP 0 SWAP EXIT THEN
     _EXT4-MS-CTX @ _EXT4-C.R.BLOCKS + !
+    _EXT4-MS-IN @ _EXT4-I.FILE-ACL-HI + W@ IF
+        0 EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
     _EXT4-MS-IN @ _EXT4-I.GENERATION + L@
     _EXT4-MS-CTX @ _EXT4-C.R.GEN + !
     0 _EXT4-MS-CTX @ _EXT4-C.R.RDEV + !
@@ -2078,9 +2121,10 @@ VARIABLE _EXT4-MS-FLAGS
         _EXT4-MS-CTX @ _EXT4-C.R.RDEV + !
         _EXT4-MS-TYPE @ 0 EXIT
     THEN
-    _EXT4-MS-TYPE @ VFS-T-SYMLINK =
-    _EXT4-MS-CTX @ _EXT4-C.R.SIZE + @ 60 <= AND
-    _EXT4-MS-BLOCKS @ 0= AND IF
+    _EXT4-MS-CTX @ _EXT4-MS-TYPE @ _EXT4-FAST-SYMLINK-STORAGE? IF
+        _EXT4-MS-CTX @ _EXT4-C.R.SIZE + @ 60 U> IF
+            0 EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
         _EXT4-MS-TYPE @ 0 EXIT
     THEN
     _EXT4-MS-FLAGS @ _EXT4-EXTENTS-FL AND IF
@@ -2583,9 +2627,7 @@ VARIABLE _EXT4-DR-PRESENT
     _EXT4-DR-OFF @ _EXT4-DR-CTX @ _EXT4-C.R.SIZE + @ >= IF 0 EXIT THEN
     _EXT4-DR-CTX @ _EXT4-C.R.SIZE + @ _EXT4-DR-OFF @ -
     _EXT4-DR-LEN @ MIN _EXT4-DR-REM !
-    _EXT4-DR-TYPE @ VFS-T-SYMLINK =
-    _EXT4-DR-CTX @ _EXT4-C.R.SIZE + @ 60 <= AND
-    _EXT4-DR-CTX @ _EXT4-C.R.BLOCKS + @ 0= AND IF
+    _EXT4-DR-CTX @ _EXT4-DR-TYPE @ _EXT4-FAST-SYMLINK-STORAGE? IF
         _EXT4-DR-CTX @ _EXT4-C.INODE + _EXT4-I.BLOCK +
         _EXT4-DR-OFF @ + _EXT4-DR-BUF @ _EXT4-DR-REM @ CMOVE
         _EXT4-DR-REM @ _EXT4-DR-ACT +!
@@ -2654,7 +2696,6 @@ VARIABLE _EXT4-RL-V
 \ =====================================================================
 
 0xEA020000 CONSTANT _EXT4-XATTR-MAGIC
-0x76 CONSTANT _EXT4-I.FILE-ACL-HI
 
 VARIABLE _EXT4-XB-CTX
 VARIABLE _EXT4-XB-BLOCK
@@ -2981,7 +3022,7 @@ VARIABLE _EXT4-GX-CTX
     _EXT4-XA-FOUND-SIZE @ 0 ;
 
 \ =====================================================================
-\  Clean orphan-file validation
+\  Modern orphan-file block authentication
 \ =====================================================================
 
 VARIABLE _EXT4-OV-CTX
@@ -2989,33 +3030,35 @@ VARIABLE _EXT4-OV-INO
 VARIABLE _EXT4-OV-IN
 VARIABLE _EXT4-OV-GEN
 VARIABLE _EXT4-OV-BLOCKS
+VARIABLE _EXT4-OV-LOGICAL
 VARIABLE _EXT4-OV-PHYS
 VARIABLE _EXT4-OV-PRESENT
 VARIABLE _EXT4-OV-IOR
 VARIABLE _EXT4-OV-TAIL
 VARIABLE _EXT4-OV-STORED
+VARIABLE _EXT4-OV-HI
+VARIABLE _EXT4-OV-SIZE
 
-4096 CONSTANT _EXT4-MAX-ORPHAN-BLOCKS
-
-: _EXT4-VALIDATE-ORPHAN-FILE  ( ctx -- ior )
+: _EXT4-PREPARE-ORPHAN-FILE  ( ctx -- ior )
     DUP _EXT4-OV-CTX ! _EXT4-C.ORPHAN-INO + @ DUP _EXT4-OV-INO !
     _EXT4-OV-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
     _EXT4-OV-CTX @ _EXT4-C.INODE + DUP _EXT4-OV-IN !
     _EXT4-I.MODE + W@ 0xF000 AND 0x8000 <> IF
         EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
-    _EXT4-OV-IN @ _EXT4-I.SIZE-HI + L@ IF
-        EXT4-D-ORPHAN-FILE _EXT4-UNSUPPORTED EXIT
-    THEN
-    _EXT4-OV-IN @ _EXT4-I.SIZE-LO + L@ DUP 0= IF
+    _EXT4-OV-IN @ _EXT4-I.SIZE-HI + L@ DUP _EXT4-OV-HI !
+    0x80000000 AND IF EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT THEN
+    _EXT4-OV-HI @ 32 LSHIFT
+    _EXT4-OV-IN @ _EXT4-I.SIZE-LO + L@ OR DUP _EXT4-OV-SIZE !
+    DUP 0= IF
         DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
     DUP _EXT4-OV-CTX @ _EXT4-C.BSIZE + @ MOD IF
         DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
     _EXT4-OV-CTX @ _EXT4-C.BSIZE + @ / DUP
-    _EXT4-MAX-ORPHAN-BLOCKS U> IF
-        DROP EXT4-D-ORPHAN-FILE _EXT4-UNSUPPORTED EXIT
+    _EXT4-OV-CTX @ _EXT4-C.BLOCKS + @ U> IF
+        DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
     _EXT4-OV-BLOCKS !
     _EXT4-OV-IN @ _EXT4-I.GENERATION + L@ _EXT4-OV-GEN !
@@ -3023,40 +3066,39 @@ VARIABLE _EXT4-OV-STORED
         _EXT4-OV-CTX @ _EXT4-VALIDATE-EXTENT-TREE
     ELSE
         _EXT4-OV-CTX @ _EXT4-VALIDATE-LEGACY-MAP
-    THEN ?DUP IF EXIT THEN
-    _EXT4-OV-BLOCKS @ 0 ?DO
-        I _EXT4-OV-CTX @ _EXT4-MAP-BLOCK
-        _EXT4-OV-IOR ! _EXT4-OV-PRESENT ! _EXT4-OV-PHYS !
-        _EXT4-OV-IOR @ ?DUP IF UNLOOP EXIT THEN
-        _EXT4-OV-PRESENT @ 0= IF
-            EXT4-D-ORPHAN-FILE _EXT4-CORRUPT UNLOOP EXIT
-        THEN
-        _EXT4-OV-PHYS @ _EXT4-OV-CTX @ _EXT4-READ-BLOCK ?DUP IF
-            UNLOOP EXIT
-        THEN
-        _EXT4-OV-CTX @ _EXT4-C.BLOCK +
-        _EXT4-OV-CTX @ _EXT4-C.BSIZE + @ 8 - + DUP _EXT4-OV-TAIL !
-        DUP L@ _EXT4-ORPHAN-MAGIC <> IF
-            DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT UNLOOP EXIT
-        THEN
-        4 + L@ _EXT4-OV-STORED !
-        _EXT4-OV-INO @ _EXT4-OV-CTX @ _EXT4-C.TMP + L!
-        _EXT4-OV-GEN @ _EXT4-OV-CTX @ _EXT4-C.TMP 4 + + L!
-        _EXT4-OV-PHYS @ _EXT4-OV-CTX @ _EXT4-C.TMP 8 + + L!
-        0 _EXT4-OV-CTX @ _EXT4-C.TMP 12 + + L!
-        _EXT4-OV-CTX @ _EXT4-C.SEED + @ _EXT4-CRC-START
-        _EXT4-OV-CTX @ _EXT4-C.TMP + 16 _EXT4-CRC-ADD
-        _EXT4-OV-CTX @ _EXT4-C.BLOCK +
-        _EXT4-OV-CTX @ _EXT4-C.BSIZE + @ 8 - _EXT4-CRC-ADD
-        _EXT4-CRC@ _EXT4-OV-STORED @ <> IF
-            EXT4-D-ORPHAN-FILE _EXT4-CORRUPT UNLOOP EXIT
-        THEN
-        _EXT4-OV-CTX @ _EXT4-C.BSIZE + @ 8 - 4 / 0 DO
-            _EXT4-OV-CTX @ _EXT4-C.BLOCK + J 4 * + L@ IF
-                EXT4-D-RECOVERY _EXT4-UNSUPPORTED UNLOOP UNLOOP EXIT
-            THEN
-        LOOP
-    LOOP
+    THEN ;
+
+\ Read one mapped orphan-file block and authenticate its physical-location-
+\ bound tail.  The caller consumes entries before the next media read.
+: _EXT4-READ-ORPHAN-BLOCK  ( logical-block ctx -- ior )
+    _EXT4-OV-CTX ! DUP _EXT4-OV-LOGICAL !
+    _EXT4-OV-BLOCKS @ U< 0= IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-OV-LOGICAL @ _EXT4-OV-CTX @ _EXT4-MAP-BLOCK
+    _EXT4-OV-IOR ! _EXT4-OV-PRESENT ! _EXT4-OV-PHYS !
+    _EXT4-OV-IOR @ ?DUP IF EXIT THEN
+    _EXT4-OV-PRESENT @ 0= IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-OV-PHYS @ _EXT4-OV-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
+    _EXT4-OV-CTX @ _EXT4-C.BLOCK +
+    _EXT4-OV-CTX @ _EXT4-C.BSIZE + @ 8 - + DUP _EXT4-OV-TAIL !
+    DUP L@ _EXT4-ORPHAN-MAGIC <> IF
+        DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    4 + L@ _EXT4-OV-STORED !
+    _EXT4-OV-INO @ _EXT4-OV-CTX @ _EXT4-C.TMP + L!
+    _EXT4-OV-GEN @ _EXT4-OV-CTX @ _EXT4-C.TMP 4 + + L!
+    _EXT4-OV-PHYS @ _EXT4-OV-CTX @ _EXT4-C.TMP 8 + + L!
+    0 _EXT4-OV-CTX @ _EXT4-C.TMP 12 + + L!
+    _EXT4-OV-CTX @ _EXT4-C.SEED + @ _EXT4-CRC-START
+    _EXT4-OV-CTX @ _EXT4-C.TMP + 16 _EXT4-CRC-ADD
+    _EXT4-OV-CTX @ _EXT4-C.BLOCK +
+    _EXT4-OV-CTX @ _EXT4-C.BSIZE + @ 8 - _EXT4-CRC-ADD
+    _EXT4-CRC@ _EXT4-OV-STORED @ <> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
     0 ;
 
 \ =====================================================================
@@ -4707,22 +4749,22 @@ VARIABLE _EXT4-UB
     THEN
     _EXT4-UA @ _EXT4-UB @ * 0 ;
 
-VARIABLE _EXT4-JWG-CAP
-VARIABLE _EXT4-JWG-SLOTS
+VARIABLE _EXT4-HG-CAP
+VARIABLE _EXT4-HG-SLOTS
 
-: _EXT4-JWR-HASH-SLOTS  ( capacity -- slots ior )
+: _EXT4-HASH-SLOTS  ( capacity -- slots ior )
     DUP 0< IF DROP 0 VFS-E-INVALID EXIT THEN
-    DUP _EXT4-JWG-CAP ! 0= IF 0 0 EXIT THEN
-    2 _EXT4-JWG-SLOTS !
+    DUP _EXT4-HG-CAP ! 0= IF 0 0 EXIT THEN
+    2 _EXT4-HG-SLOTS !
     BEGIN
-        _EXT4-JWG-SLOTS @ 2 / _EXT4-JWG-CAP @ U<
+        _EXT4-HG-SLOTS @ 2 / _EXT4-HG-CAP @ U<
     WHILE
-        _EXT4-JWG-SLOTS @ _EXT4-NONNEG-MAX 2 / U> IF
+        _EXT4-HG-SLOTS @ _EXT4-NONNEG-MAX 2 / U> IF
             0 VFS-E-OVERFLOW EXIT
         THEN
-        _EXT4-JWG-SLOTS @ 2* _EXT4-JWG-SLOTS !
+        _EXT4-HG-SLOTS @ 2* _EXT4-HG-SLOTS !
     REPEAT
-    _EXT4-JWG-SLOTS @ 0 ;
+    _EXT4-HG-SLOTS @ 0 ;
 
 VARIABLE _EXT4-JWM-META
 VARIABLE _EXT4-JWM-DATA
@@ -4748,11 +4790,11 @@ VARIABLE _EXT4-JWM-COMPONENT
     _EXT4-JWM-BSIZE @ 1024 =
     _EXT4-JWM-BSIZE @ 2048 = OR
     _EXT4-JWM-BSIZE @ 4096 = OR 0= IF 0 VFS-E-INVALID EXIT THEN
-    _EXT4-JWM-META @ _EXT4-JWR-HASH-SLOTS
+    _EXT4-JWM-META @ _EXT4-HASH-SLOTS
     DUP IF NIP 0 SWAP EXIT THEN DROP _EXT4-JWM-META-SLOTS !
-    _EXT4-JWM-DATA @ _EXT4-JWR-HASH-SLOTS
+    _EXT4-JWM-DATA @ _EXT4-HASH-SLOTS
     DUP IF NIP 0 SWAP EXIT THEN DROP _EXT4-JWM-DATA-SLOTS !
-    _EXT4-JWM-REVOKE @ _EXT4-JWR-HASH-SLOTS
+    _EXT4-JWM-REVOKE @ _EXT4-HASH-SLOTS
     DUP IF NIP 0 SWAP EXIT THEN DROP _EXT4-JWM-REVOKE-SLOTS !
     _EXT4-JWR-SIZE _EXT4-JWM-BYTES !
     _EXT4-JWM-META @ _EXT4-JWR-IMAGE-ENTRY-CELLS CELLS _EXT4-UMUL?
@@ -7665,6 +7707,210 @@ VARIABLE _EXT4-JEM-OLD-RESERVED
     _EXT4-JTX-WRITE-COMMIT ?DUP IF EXIT THEN
     _EXT4-JTX-PUBLISH-COMMITTED ;
 
+\ =====================================================================
+\  Modern orphan-file recovery preflight
+\ =====================================================================
+\
+\ The orphan file is authoritative only after committed JBD2 after-images
+\ have reached home.  Mount therefore calls this through VALIDATE-REST after
+\ replay and strict reload.  This slice authenticates and classifies the full
+\ active set without changing any orphan inode or orphan-file block; recovery
+\ remains a stable refusal until transactional cleanup is implemented.
+
+VARIABLE _EXT4-OW-CTX
+VARIABLE _EXT4-OW-COUNT
+VARIABLE _EXT4-OW-REQUIRED
+VARIABLE _EXT4-OW-BYTES
+
+-1 1 RSHIFT 1 CELLS / CONSTANT _EXT4-ORPHAN-SLOTS-MAX
+
+: _EXT4-ORPHAN-WORKSPACE?  ( ctx -- flag )
+    DUP _EXT4-C.O.TABLE + @
+    SWAP _EXT4-C.O.SLOTS + @
+    2DUP OR 0= IF 2DROP TRUE EXIT THEN
+    OVER 0= OVER 0= OR IF 2DROP FALSE EXIT THEN
+    DUP 2 U< IF 2DROP FALSE EXIT THEN
+    DUP _EXT4-ORPHAN-SLOTS-MAX U> IF 2DROP FALSE EXIT THEN
+    DUP 1- AND 0= NIP ;
+
+\ Allocate a half-full power-of-two uniqueness table from the caller's arena.
+\ Failed-mount retries reuse and clear the original allocation.  A retry that
+\ needs a larger table fails without consuming a second monotonic allocation.
+: _EXT4-ENSURE-ORPHAN-WORKSPACE  ( active-count ctx -- ior )
+    _EXT4-OW-CTX ! DUP _EXT4-OW-COUNT ! DROP
+    _EXT4-OW-CTX @ _EXT4-ORPHAN-WORKSPACE? 0= IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-OW-COUNT @ _EXT4-HASH-SLOTS
+    DUP IF NIP EXIT THEN DROP _EXT4-OW-REQUIRED !
+    _EXT4-OW-CTX @ _EXT4-C.O.TABLE + @ IF
+        _EXT4-OW-CTX @ _EXT4-C.O.SLOTS + @
+        _EXT4-OW-REQUIRED @ U< IF VFS-E-NOMEM EXIT THEN
+        _EXT4-OW-CTX @ _EXT4-C.O.TABLE + @
+        _EXT4-OW-CTX @ _EXT4-C.O.SLOTS + @ CELLS 0 FILL
+        0 EXIT
+    THEN
+    _EXT4-OW-COUNT @ 0= IF 0 EXIT THEN
+    _EXT4-OW-REQUIRED @ _EXT4-ORPHAN-SLOTS-MAX U> IF
+        EXT4-D-ORPHAN-FILE _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-OW-REQUIRED @ CELLS _EXT4-OW-BYTES !
+    _EXT4-OW-CTX @ _EXT4-C.ARENA + @
+    _EXT4-OW-BYTES @ ARENA-ALLOT? IF DROP VFS-E-NOMEM EXIT THEN
+    DUP _EXT4-OW-CTX @ _EXT4-C.O.TABLE + !
+    _EXT4-OW-BYTES @ 0 FILL
+    _EXT4-OW-REQUIRED @ _EXT4-OW-CTX @ _EXT4-C.O.SLOTS + !
+    0 ;
+
+VARIABLE _EXT4-OH-CTX
+VARIABLE _EXT4-OH-INO
+VARIABLE _EXT4-OH-SLOT
+
+: _EXT4-ORPHAN-TABLE-ENTRY  ( slot ctx -- address )
+    _EXT4-C.O.TABLE + @ SWAP CELLS + ;
+
+: _EXT4-ORPHAN-TABLE-PUT  ( inode-number ctx -- ior )
+    _EXT4-OH-CTX ! _EXT4-OH-INO !
+    _EXT4-OH-CTX @ _EXT4-C.O.SLOTS + @ DUP 0= IF
+        DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    1- _EXT4-OH-INO @ SWAP AND _EXT4-OH-SLOT !
+    _EXT4-OH-CTX @ _EXT4-C.O.SLOTS + @ 0 ?DO
+        _EXT4-OH-SLOT @ _EXT4-OH-CTX @ _EXT4-ORPHAN-TABLE-ENTRY
+        DUP @ DUP 0= IF
+            DROP _EXT4-OH-INO @ SWAP ! 0 UNLOOP EXIT
+        THEN
+        NIP _EXT4-OH-INO @ = IF
+            EXT4-D-ORPHAN-FILE _EXT4-CORRUPT UNLOOP EXIT
+        THEN
+        _EXT4-OH-SLOT @ 1+
+        _EXT4-OH-CTX @ _EXT4-C.O.SLOTS + @ 1- AND
+        _EXT4-OH-SLOT !
+    LOOP
+    EXT4-D-ORPHAN-FILE _EXT4-CORRUPT ;
+
+VARIABLE _EXT4-OP-CTX
+VARIABLE _EXT4-OP-COUNT
+VARIABLE _EXT4-OP-ENTRIES
+
+: _EXT4-COUNT-ACTIVE-ORPHANS  ( ctx -- ior )
+    DUP _EXT4-OP-CTX !
+    _EXT4-C.BSIZE + @ 8 - 4 / _EXT4-OP-ENTRIES !
+    0 _EXT4-OP-COUNT !
+    _EXT4-OV-BLOCKS @ 0 ?DO
+        I _EXT4-OP-CTX @ _EXT4-READ-ORPHAN-BLOCK ?DUP IF
+            UNLOOP EXIT
+        THEN
+        _EXT4-OP-ENTRIES @ 0 ?DO
+            _EXT4-OP-CTX @ _EXT4-C.BLOCK + I 4 * + L@ IF
+                _EXT4-OP-COUNT @
+                _EXT4-OP-CTX @ _EXT4-C.INODES + @ U< 0= IF
+                    EXT4-D-ORPHAN-FILE _EXT4-CORRUPT
+                    UNLOOP UNLOOP EXIT
+                THEN
+                1 _EXT4-OP-COUNT +!
+            THEN
+        LOOP
+    LOOP
+    _EXT4-OP-COUNT @ _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + !
+    0 ;
+
+: _EXT4-INDEX-ACTIVE-ORPHANS  ( ctx -- ior )
+    DUP _EXT4-OP-CTX !
+    _EXT4-C.BSIZE + @ 8 - 4 / _EXT4-OP-ENTRIES !
+    _EXT4-OV-BLOCKS @ 0 ?DO
+        I _EXT4-OP-CTX @ _EXT4-READ-ORPHAN-BLOCK ?DUP IF
+            UNLOOP EXIT
+        THEN
+        _EXT4-OP-ENTRIES @ 0 ?DO
+            _EXT4-OP-CTX @ _EXT4-C.BLOCK + I 4 * + L@ ?DUP IF
+                _EXT4-OP-CTX @ _EXT4-ORPHAN-TABLE-PUT ?DUP IF
+                    UNLOOP UNLOOP EXIT
+                THEN
+            THEN
+        LOOP
+    LOOP
+    0 ;
+
+VARIABLE _EXT4-OI-CTX
+VARIABLE _EXT4-OI-INO
+VARIABLE _EXT4-OI-IN
+VARIABLE _EXT4-OI-NLINK
+VARIABLE _EXT4-OI-TYPE
+VARIABLE _EXT4-OI-IOR
+
+\ ext4_orphan_get() admits allocated, checksum-valid inodes at or above
+\ s_first_ino.  Linked entries must be truncatable; unlinked entries may be
+\ any valid inode type because cleanup deletes them.  STAGE-CURRENT-INODE
+\ already owns the complete type/size/flag/map checks.  For an unlinked inode
+\ only, temporarily substitute a nonzero link count in the authenticated cache
+\ while running that read-only validator, then restore the original bytes.
+: _EXT4-VALIDATE-ACTIVE-ORPHAN  ( inode-number ctx -- ior )
+    _EXT4-OI-CTX ! DUP _EXT4-OI-INO !
+    DUP _EXT4-OI-CTX @ _EXT4-C.SB + _EXT4-SB.FIRST-INO + L@ U<
+    OVER _EXT4-OI-CTX @ _EXT4-C.INODES + @ U> OR IF
+        DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    DROP
+    _EXT4-OI-INO @ _EXT4-OI-CTX @ _EXT4-LOAD-ORPHAN-INODE ?DUP IF
+        EXIT
+    THEN
+    _EXT4-OI-CTX @ _EXT4-C.INODE + DUP _EXT4-OI-IN !
+    _EXT4-I.LINKS + W@ DUP _EXT4-OI-NLINK ! 0= IF
+        1 _EXT4-OI-IN @ _EXT4-I.LINKS + W!
+    THEN
+    _EXT4-OI-CTX @ _EXT4-STAGE-CURRENT-INODE
+    _EXT4-OI-IOR ! _EXT4-OI-TYPE !
+    _EXT4-OI-NLINK @ 0= IF
+        0 _EXT4-OI-IN @ _EXT4-I.LINKS + W!
+    THEN
+    _EXT4-OI-IOR @ ?DUP IF EXIT THEN
+    _EXT4-OI-NLINK @ IF
+        _EXT4-OI-TYPE @ VFS-T-FILE =
+        _EXT4-OI-TYPE @ VFS-T-DIR = OR
+        _EXT4-OI-TYPE @ VFS-T-SYMLINK = OR 0= IF
+            EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+        THEN
+        _EXT4-OI-CTX @ _EXT4-OI-TYPE @ _EXT4-FAST-SYMLINK-STORAGE? IF
+            EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+        THEN
+    THEN
+    0 ;
+
+: _EXT4-VALIDATE-INDEXED-ORPHANS  ( ctx -- ior )
+    DUP _EXT4-OP-CTX !
+    _EXT4-C.O.SLOTS + @ 0 ?DO
+        I _EXT4-OP-CTX @ _EXT4-ORPHAN-TABLE-ENTRY @ ?DUP IF
+            _EXT4-OP-CTX @ _EXT4-VALIDATE-ACTIVE-ORPHAN ?DUP IF
+                UNLOOP EXIT
+            THEN
+        THEN
+    LOOP
+    0 ;
+
+: _EXT4-VALIDATE-ORPHAN-FILE  ( ctx -- ior )
+    _EXT4-OP-CTX !
+    0 _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + !
+    _EXT4-OP-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
+    _EXT4-OP-CTX @ _EXT4-COUNT-ACTIVE-ORPHANS ?DUP IF EXIT THEN
+    _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + @ IF
+        _EXT4-OP-CTX @ _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@
+        _EXT4-RO-ORPHAN-PRESENT AND 0= IF
+            EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+        THEN
+    THEN
+    _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + @ _EXT4-OP-CTX @
+    _EXT4-ENSURE-ORPHAN-WORKSPACE ?DUP IF EXIT THEN
+    _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + @ IF
+        _EXT4-OP-CTX @ _EXT4-INDEX-ACTIVE-ORPHANS ?DUP IF EXIT THEN
+        _EXT4-OP-CTX @ _EXT4-VALIDATE-INDEXED-ORPHANS ?DUP IF EXIT THEN
+    THEN
+    _EXT4-OP-CTX @ _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@
+    _EXT4-RO-ORPHAN-PRESENT AND IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    0 ;
+
 VARIABLE _EXT4-RS-CTX
 VARIABLE _EXT4-RS-V
 
@@ -8267,8 +8513,8 @@ VARIABLE _EXT4-M-FRESH
         _EXT4-M-CTX @ _EXT4-CTX-SIZE 0 FILL
         _EXT4-M-V @ V.ARENA @ _EXT4-M-CTX @ _EXT4-C.ARENA + !
     ELSE
-        \ Preserve journal workspace allocations owned by this binding across
-        \ a failed-mount retry while resetting all media-derived state.
+        \ Preserve arena workspace allocations owned by this binding across a
+        \ failed-mount retry while resetting all media-derived state.
         _EXT4-M-CTX @ _EXT4-CTX-RESET-SIZE 0 FILL
     THEN
     0 _EXT4-M-CTX @ _EXT4-C.J.REVOKE-COUNT + !
@@ -8280,6 +8526,7 @@ VARIABLE _EXT4-M-FRESH
     0 _EXT4-M-CTX @ _EXT4-C.J.WITNESS-NEW-CHECKSUM + !
     0 _EXT4-M-CTX @ _EXT4-C.J.WRITE-ACTIVE + !
     0 _EXT4-M-CTX @ _EXT4-C.J.WRITER-CURRENT + !
+    0 _EXT4-M-CTX @ _EXT4-C.O.ACTIVE + !
     _EXT4-M-CTX @ _EXT4-C.SB + 2 2 _EXT4-READ-SECTORS
     DUP IF EXIT THEN DROP
     _EXT4-M-CTX @ _EXT4-M-V @ _EXT4-VALIDATE-SUPER

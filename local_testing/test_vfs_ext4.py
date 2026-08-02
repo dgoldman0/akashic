@@ -363,6 +363,104 @@ def _ext4_recovery_layout(path: Path) -> dict[str, int]:
     }
 
 
+def _ext4_inode_record(path: Path, inode_number: int) -> tuple[bytes, bytes, int]:
+    """Return the primary super, one inode record, and its byte offset."""
+    with path.open("rb") as source:
+        source.seek(1024)
+        superblock = source.read(1024)
+    assert len(superblock) == 1024
+    assert inode_number > 0
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    inodes_per_group = struct.unpack_from("<I", superblock, 0x28)[0]
+    descriptor_size = struct.unpack_from("<H", superblock, 0xFE)[0]
+    assert descriptor_size == 64
+    group, index = divmod(inode_number - 1, inodes_per_group)
+    descriptor_table = 2 if block_size == 1024 else 1
+    with path.open("rb") as source:
+        source.seek(descriptor_table * block_size + group * descriptor_size)
+        descriptor = source.read(descriptor_size)
+    assert len(descriptor) == descriptor_size
+    inode_table = (
+        struct.unpack_from("<I", descriptor, 0x28)[0] << 32
+    ) | struct.unpack_from("<I", descriptor, 0x08)[0]
+    inode_offset = inode_table * block_size + index * inode_size
+    with path.open("rb") as source:
+        source.seek(inode_offset)
+        inode = source.read(inode_size)
+    assert len(inode) == inode_size
+    return superblock, inode, inode_offset
+
+
+def _extent_root_physical(inode: bytes, logical_block: int) -> int:
+    """Map one logical block through the fixture's inline depth-zero root."""
+    root = inode[0x28 : 0x28 + 60]
+    magic, entries, maximum, depth = struct.unpack_from("<HHHH", root, 0)
+    assert magic == 0xF30A
+    assert 0 < entries <= maximum <= 4
+    assert depth == 0
+    for index in range(entries):
+        offset = 0x0C + index * 0x0C
+        first_logical = struct.unpack_from("<I", root, offset)[0]
+        raw_length = struct.unpack_from("<H", root, offset + 0x04)[0]
+        length = raw_length - 0x8000 if raw_length > 0x8000 else raw_length
+        assert length > 0
+        if first_logical <= logical_block < first_logical + length:
+            first_physical = (
+                struct.unpack_from("<H", root, offset + 0x06)[0] << 32
+            ) | struct.unpack_from("<I", root, offset + 0x08)[0]
+            return first_physical + logical_block - first_logical
+    raise AssertionError(f"logical block {logical_block} is unmapped")
+
+
+def _modern_orphan_patches(
+    path: Path,
+    entries: tuple[int, ...],
+    *,
+    orphan_present: bool = True,
+) -> tuple[tuple[int, bytes], ...]:
+    """Create a checksum-valid modern orphan block and transient super state."""
+    with path.open("rb") as source:
+        source.seek(1024)
+        superblock = bytearray(source.read(1024))
+    assert len(superblock) == 1024
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    assert orphan_inode_number > 0
+    _, orphan_inode, _ = _ext4_inode_record(path, orphan_inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    orphan_physical = _extent_root_physical(orphan_inode, 0)
+    with path.open("rb") as source:
+        source.seek(orphan_physical * block_size)
+        orphan_block = bytearray(source.read(block_size))
+    assert len(orphan_block) == block_size
+    assert struct.unpack_from("<I", orphan_block, block_size - 8)[0] == 0x0B10CA04
+    assert not any(orphan_block[: block_size - 8])
+    assert len(entries) <= (block_size - 8) // 4
+    for index, inode_number in enumerate(entries):
+        assert 0 < inode_number <= 0xFFFF_FFFF
+        struct.pack_into("<I", orphan_block, index * 4, inode_number)
+
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    generation = struct.unpack_from("<I", orphan_inode, 0x64)[0]
+    checksum = _crc32c_raw(
+        struct.pack("<IIQ", orphan_inode_number, generation, orphan_physical),
+        seed,
+    )
+    checksum = _crc32c_raw(orphan_block[: block_size - 8], checksum)
+    struct.pack_into("<I", orphan_block, block_size - 4, checksum)
+
+    ro_compat = struct.unpack_from("<I", superblock, 0x64)[0]
+    if orphan_present:
+        ro_compat |= 0x0001_0000
+    else:
+        ro_compat &= ~0x0001_0000
+    struct.pack_into("<I", superblock, 0x64, ro_compat)
+    return (
+        (1024, _ext4_super_with_checksum(superblock)),
+        (orphan_physical * block_size, bytes(orphan_block)),
+    )
+
+
 def _ext4_journal_physical_map(
     path: Path, logical_blocks: tuple[int, ...]
 ) -> dict[int, int]:
@@ -4119,7 +4217,7 @@ def test_jbd2_writer_arithmetic_and_4k_geometry_are_total(
                 "CONSTANT _JWG-M-IOR CONSTANT _JWG-M"
             ),
             (
-                "_EXT4-NONNEG-MAX _EXT4-JWR-HASH-SLOTS "
+                "_EXT4-NONNEG-MAX _EXT4-HASH-SLOTS "
                 "CONSTANT _JWG-H-IOR CONSTANT _JWG-H"
             ),
             (
@@ -9622,11 +9720,70 @@ def test_orphan_recovery_required_state_is_a_distinct_refusal(
         path,
         [
             "T-ARENA T-VOLUME EXT4-NEW CONSTANT _IOR CONSTANT _V",
-            "_IOR VFS-IOR-REASON . _IOR VFS-IOR-DETAIL . _V V.LIFECYCLE @ .",
+            (
+                "_IOR VFS-IOR-REASON . _IOR VFS-IOR-DETAIL . "
+                "_V V.LIFECYCLE @ . _V V.BCTX @ DUP "
+                "_EXT4-C.O.ACTIVE + @ . "
+                "_EXT4-C.O.SLOTS + @ ."
+            ),
         ],
         patches=((1024, patched),),
     )
-    assert "11 5 0" in output, output[-1500:]
+    assert "11 5 0 0 0" in output, output[-1500:]
+
+
+def test_active_modern_orphan_is_authenticated_before_recovery_refusal(
+    canonical_images: dict[str, Path]
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    output = run_forth(
+        path,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _IOR CONSTANT _V",
+            (
+                "_IOR VFS-IOR-REASON . _IOR VFS-IOR-DETAIL . "
+                "_V V.LIFECYCLE @ . _V V.BCTX @ DUP "
+                "_EXT4-C.O.ACTIVE + @ . "
+                "_EXT4-C.O.SLOTS + @ ."
+            ),
+        ],
+        patches=_modern_orphan_patches(path, (11,)),
+    )
+    assert "11 5 0 1 2" in output, output[-1500:]
+
+
+@pytest.mark.parametrize(
+    ("entries", "orphan_present", "expected_state"),
+    (
+        ((11, 11), True, "2 4"),
+        ((2,), True, "1 2"),
+        ((11,), False, "1 0"),
+    ),
+)
+def test_invalid_modern_orphan_sets_are_corruption(
+    canonical_images: dict[str, Path],
+    entries: tuple[int, ...],
+    orphan_present: bool,
+    expected_state: str,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    output = run_forth(
+        path,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _IOR CONSTANT _V",
+            (
+                "_IOR VFS-IOR-REASON . _IOR VFS-IOR-DOMAIN . "
+                "_IOR VFS-IOR-FLAGS . _IOR VFS-IOR-DETAIL . "
+                "_V V.LIFECYCLE @ . _V V.BCTX @ DUP "
+                "_EXT4-C.O.ACTIVE + @ . "
+                "_EXT4-C.O.SLOTS + @ ."
+            ),
+        ],
+        patches=_modern_orphan_patches(
+            path, entries, orphan_present=orphan_present
+        ),
+    )
+    assert f"10 3 4 13 0 {expected_state}" in output, output[-1500:]
 
 
 def test_recover_without_checksum_v3_journal_refuses_before_writes(

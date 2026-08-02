@@ -84,19 +84,28 @@ root, mount verifies:
   descriptor checksum. An inode-bitmap payload must keep inode 8 allocated,
   and an inode-table payload must preserve inode 8's exact 128- or 256-byte
   record while allowing neighboring records to change; and
-- every clean orphan-file block, including its per-block CRC32C tail (the
-  bounded reader currently admits one through 4096 blocks).
+- every modern orphan-file block through its authenticated inode size, bounded
+  by filesystem geometry, including the physical-location-bound per-block
+  CRC32C tail. The scanner counts and indexes all nonzero entries in an
+  arena-derived half-full power-of-two table while rejecting duplicates, then
+  authenticates each allocated inode, bounded `i_dtime`, type, size, flags,
+  and applicable data map. Linked entries must be truncatable; checksum-valid
+  `ORPHAN_PRESENT` state is still refused after this non-mutating preflight
+  because cleanup is not implemented.
 
 The driver contains its own reflected CRC32C implementation. Akashic's public
 `CRC32C` word is deliberately MSB-first and is not interchangeable with the
 ext4 checksum contract.
 
 Known refused feature bits return format-domain `VFS-R-UNSUPPORTED` with
-`EXT4-D-FEATURE`. `ORPHAN_PRESENT`, a nonzero legacy orphan chain, a dirty
-state without `RECOVER`, or a recovery state outside the implemented JBD2
-slice returns a stable refusal. Checksum and structural failures return
-format-domain `VFS-R-CORRUPT`. No such failure can leave a mounted or ready
-object.
+`EXT4-D-FEATURE`. `ORPHAN_PRESENT` is admitted only far enough to complete any
+required committed-journal replay and strict reload, then validate the
+authoritative modern orphan set; it returns the stable `EXT4-D-RECOVERY`
+refusal. A
+nonzero legacy orphan chain, a dirty state without `RECOVER`, or a recovery
+state outside the implemented JBD2 slice likewise returns a stable refusal.
+Checksum and structural failures return format-domain `VFS-R-CORRUPT`. No such
+failure can leave a mounted or ready object.
 
 ## Bounded mount recovery
 
@@ -130,12 +139,14 @@ Preflight also treats a matching-sequence `SUPER_V2` header as the known
 prefix-torn anchor boundary only when the complete block passes the anchor
 checksum, geometry, witness, and self-location checks; replay never admits it
 as a transaction record. A checksum-damaged descriptor, payload, revoke, or
-commit is currently refused rather than classified as a torn tail. Orphan
-recovery is not yet admitted. Pinned qualification covers multi-record hash
-collisions, malformed revoke geometry and ownership, a revoked primary-super
-repair, and transactions relocated above logical journal block 4095 and
-across the end of an 8192-block ring. Scan and replay therefore use
-authenticated ring geometry rather than fixture-sized cursor assumptions.
+commit is currently refused rather than classified as a torn tail. Modern
+orphan discovery is admitted only as a post-replay, non-mutating preflight;
+transactional truncate/delete and slot clearing are not yet admitted. Pinned
+qualification covers multi-record hash collisions, malformed revoke geometry
+and ownership, a revoked primary-super repair, and transactions relocated
+above logical journal block 4095 and across the end of an 8192-block ring.
+Scan and replay therefore use authenticated ring geometry rather than
+fixture-sized cursor assumptions.
 
 The type-1 journal tuple is validated without consulting allocation metadata,
 then cross-checked through the designated sparse-super/backup-GDT witness to
@@ -407,10 +418,10 @@ rebase the preserved writer workspace.
 The object layout, counts, embedded pointers, ring fields, phase/fault state,
 image checksums, and hash indices are revalidated before they can drive a
 fill, copy, lookup, or media write. The public binding and capability mask
-remain read-only. Both orphan mechanisms, the complete user-visible mutation
-layer, external-tool inspection of Akashic-created transactions/endpoints, and
-the remaining release gates must all land before public write capabilities can
-be enabled.
+remain read-only. Legacy-orphan discovery, transactional cleanup for both
+orphan mechanisms, the complete user-visible mutation layer, external-tool
+inspection of Akashic-created transactions/endpoints, and the remaining
+release gates must all land before public write capabilities can be enabled.
 
 ## Read-only inspection
 
@@ -466,7 +477,6 @@ they are not exposed as writable VFS capabilities.
 This is completion of the bounded clean read side, not completion of the
 writable profile. The remaining boundaries are:
 
-- clean orphan-file admission remains bounded to 4096 filesystem blocks;
 - POSIX ACL xattrs are returned as raw bytes, but generic permission
   enforcement is not claimed;
 - the real external-tool extent fixture has depth 1 even though the reader
@@ -488,8 +498,13 @@ writable profile. The remaining boundaries are:
   immediate sequential workspace reuse, clean write-active deactivation, and
   public clean-unmount integration are implemented as private durability
   foundations;
-- legacy and modern orphan recovery and every user-visible mutation operation
-  remain unimplemented; and
+- modern orphan-file discovery and inode preflight are implemented without
+  mutation; legacy-chain discovery, transactional truncate/delete and orphan
+  removal, and every user-visible mutation operation remain unimplemented; and
+- modern preflight still needs qualification for journal-replayed orphan
+  afterimages, later blocks and files beyond the former 4096-block limit,
+  unlinked and structurally invalid referenced inodes, hash collisions, and
+  arena retry/exhaustion behavior; and
 - recovery-anchor interoperability and the controlled power-cut matrix still
   require external-tool and emulator qualification.
 

@@ -699,20 +699,30 @@ immediate sequential transaction without reactivation or arena growth. It
 now also checkpoints `COMMITTED` state during public unmount and performs the
 six-write clean deactivation with terminal fault quarantine. It still performs
 no orphan mutation or user-visible write. Public write capabilities remain
-disabled.
+disabled. Modern `ORPHAN_PRESENT` state is now admitted, after any required
+journal replay and strict reload, into a streaming, non-mutating orphan-file
+preflight. That pass removes the former 4096-block policy ceiling, uses
+authenticated filesystem geometry, initially sizes its uniqueness table from
+the exact active count and caller arena, rejects duplicates, and validates
+every referenced inode and applicable map before returning the stable
+recovery-required refusal. Failed-mount retries clear and reuse a retained
+table when it is large enough rather than abandoning monotonic arena storage.
 The implementation still fails closed on checksum-damaged incomplete tails
-and refuses legacy and modern orphan recovery and all user-visible mutation.
-Clean orphan-file
-admission remains bounded to 4096 filesystem blocks, ACLs are exposed but not
-enforced, the real extent fixture reaches depth 1 rather than the implemented
-profile limit of 5, and the special-inode fixture does not yet contain a
-socket. Those qualification and semantic limits remain explicit before any
-write path can be advertised.
+and refuses legacy-orphan recovery, modern orphan mutation, and all
+user-visible mutation. ACLs are exposed but not enforced, the real extent
+fixture reaches depth 1 rather than the implemented profile limit of 5, and
+the special-inode fixture does not yet contain a socket. Those qualification
+and semantic limits remain explicit before any write path can be advertised.
+The modern preflight also remains unqualified for journal-replayed orphan
+afterimages, later blocks and files beyond the former 4096-block limit,
+unlinked and structurally invalid referenced inodes, distinct-key hash
+collisions, and arena retry/exhaustion behavior.
 
-The remaining writer gate explicitly includes both legacy and modern orphan
-protocols, the complete namespace/data/metadata/xattr mutation surface,
-external-tool inspection of Akashic-authored active, dirty-empty, and clean
-images, and the controlled power-cut/release matrix.
+The remaining writer gate explicitly includes legacy-chain discovery,
+transactional cleanup for both orphan protocols, the complete
+namespace/data/metadata/xattr mutation surface, external-tool inspection of
+Akashic-authored active, dirty-empty, and clean images, and the controlled
+power-cut/release matrix.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
