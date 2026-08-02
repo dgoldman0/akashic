@@ -338,6 +338,16 @@ block context; a busy entry retains current authority, while a terminal fault
 preserves its exact phase for diagnosis. Different requested geometry is
 refused rather than leaking another monotonic-arena allocation.
 
+`_EXT4-JTX-PREFLIGHT-CAPACITY` is the no-allocation sizing gate for a known
+transaction profile. It checks the complete writer byte geometry and computes
+the exact JBD2 reservation from the block size: metadata payload blocks,
+ceiling-divided descriptor blocks, revoke blocks, one private guard, and one
+commit. It then applies the ring's excluded-spare capacity,
+`s_max_transaction` (excluding the private guard), and
+`s_max_trans_data`. Failure therefore occurs before `_EXT4-JWR-ENSURE` can
+consume the monotonic arena. `_EXT4-JTX-BEGIN` independently repeats the same
+limits against the allocated writer and current free reservation.
+
 The production workspace contract is not yet ratified. Public operations
 cannot size this allocate-once object from whichever mutation happens first,
 because a later operation with larger legitimate credits would then conflict.
@@ -739,12 +749,12 @@ writable profile. The remaining boundaries are:
   link-count and legacy-chain/head updates, or retry-idempotent cleanup
   orchestration. Exact metadata credit is now derived across arbitrary
   crossed groups and coalesced primary GDT homes, but mount does not yet
-  select the singleton operation, preflight its journal-log fit before writer
-  allocation, resume an activation/incomplete-emission prefix that still
-  retains the record, or drive committed cleanup through replay. Those are
-  the next integration boundary. Transactional cleanup outside the singleton
-  linked modern depth-zero slice and every user-visible mutation operation
-  remain unimplemented;
+  select the singleton operation, invoke the available no-allocation
+  journal-fit gate and writer sizing, resume an activation/incomplete-emission
+  prefix that still retains the record, or drive committed cleanup through
+  replay. Those are the next integration boundary. Transactional cleanup
+  outside the singleton linked modern depth-zero slice and every user-visible
+  mutation operation remain unimplemented;
 - focused 1 KiB coverage exercises one- and two-inode legacy chains, a mixed
   legacy/modern union, stable refusal with same-binding plan reuse, legacy
   cycles and invalid links, unallocated and checksum-invalid legacy inodes,

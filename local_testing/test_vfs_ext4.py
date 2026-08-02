@@ -4227,12 +4227,27 @@ def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
             "_JW-ARENA _JW-CTX _EXT4-C.ARENA + !",
             "_JW-ARENA ARENA-USED CONSTANT _JW-BEFORE",
             (
+                "1 1 1 _JW-CTX _EXT4-JTX-PREFLIGHT-CAPACITY "
+                "CONSTANT _JW-PREFLIGHT-FIT"
+            ),
+            (
+                "2 0 1 _JW-CTX _EXT4-JTX-PREFLIGHT-CAPACITY "
+                "CONSTANT _JW-PREFLIGHT-EXACT"
+            ),
+            (
+                "3 0 1 _JW-CTX _EXT4-JTX-PREFLIGHT-CAPACITY "
+                "CONSTANT _JW-PREFLIGHT-SHORT"
+            ),
+            (
                 "3 3 3 _JW-CTX _EXT4-JWR-ENSURE "
                 "CONSTANT _JW-IOR CONSTANT _JW"
             ),
             "_JW-ARENA ARENA-USED CONSTANT _JW-AFTER",
             (
-                "_JW-M-IOR 0= _JW-IOR 0= AND _JW 0<> AND "
+                "_JW-M-IOR 0= _JW-PREFLIGHT-FIT 0= AND "
+                "_JW-PREFLIGHT-EXACT 0= AND "
+                "_JW-PREFLIGHT-SHORT VFS-E-NOSPC = AND "
+                "_JW-IOR 0= AND _JW 0<> AND "
                 "_JW-CTX _EXT4-C.J.WRITER + @ _JW = AND "
                 "_JW _EXT4-JWR.TOTAL + @ _JW-BYTES = AND "
                 "_JW-AFTER _JW-BEFORE _JW-BYTES + = AND "
@@ -11480,6 +11495,11 @@ def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
                 "_EXT4-MEASURE-MODERN-ORPHAN-DEPTH0 "
                 "CONSTANT _OF-MEASURE-IOR CONSTANT _OF-CREDIT"
             ),
+            (
+                "_OF-CREDIT 0 0 _OF-CTX "
+                "_EXT4-JTX-PREFLIGHT-CAPACITY "
+                "CONSTANT _OF-CAPACITY-IOR"
+            ),
             "-1 _OF-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
                 "_OF-CREDIT 0 0 _OF-CTX _EXT4-JWR-ENSURE "
@@ -11521,6 +11541,7 @@ def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
                         ),
                         "_OF-MEASURE-IOR 0=",
                         "_OF-CREDIT 5 =",
+                        "_OF-CAPACITY-IOR 0=",
                         "_OF-WRITER-IOR 0=",
                         "_OF-TX-IOR 0=",
                         "_OF-STAGE-IOR 0=",

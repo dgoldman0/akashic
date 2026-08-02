@@ -5775,15 +5775,22 @@ VARIABLE _EXT4-JIC-WRITER
 : _EXT4-JTX-CEIL/  ( nonnegative-n positive-d -- quotient )
     /MOD SWAP 0<> IF 1+ THEN ;
 
+: _EXT4-JTX-TAGS/BLOCK-SIZE  ( block-size -- tags )
+    32 - _EXT4-JBD2-TAG3-SIZE / ;
+
+: _EXT4-JTX-REVOKES/BLOCK-SIZE  ( block-size -- revokes )
+    20 - 8 / ;
+
 : _EXT4-JTX-TAGS/BLOCK  ( writer -- tags )
-    _EXT4-JWR.BSIZE + @ 32 - _EXT4-JBD2-TAG3-SIZE / ;
+    _EXT4-JWR.BSIZE + @ _EXT4-JTX-TAGS/BLOCK-SIZE ;
 
 : _EXT4-JTX-REVOKES/BLOCK  ( writer -- revokes )
-    _EXT4-JWR.BSIZE + @ 20 - 8 / ;
+    _EXT4-JWR.BSIZE + @ _EXT4-JTX-REVOKES/BLOCK-SIZE ;
 
 VARIABLE _EXT4-JLG-META
 VARIABLE _EXT4-JLG-REVOKE
 VARIABLE _EXT4-JLG-WRITER
+VARIABLE _EXT4-JLG-BSIZE
 VARIABLE _EXT4-JLG-TOTAL
 VARIABLE _EXT4-JLG-ADD
 
@@ -5792,22 +5799,75 @@ VARIABLE _EXT4-JLG-ADD
     _EXT4-JLG-TOTAL @ _EXT4-JLG-ADD @ _EXT4-UADD?
     DUP IF NIP EXIT THEN DROP _EXT4-JLG-TOTAL ! 0 ;
 
-: _EXT4-JTX-LOG-BLOCKS  ( meta-credit revoke-credit writer -- blocks ior )
-    _EXT4-JLG-WRITER ! _EXT4-JLG-REVOKE ! _EXT4-JLG-META !
-    _EXT4-JLG-WRITER @ _EXT4-JWR-VALID? 0= IF 0 VFS-E-INVALID EXIT THEN
+: _EXT4-JTX-LOG-BLOCKS-FOR
+  ( meta-credit revoke-credit block-size -- blocks ior )
+    _EXT4-JLG-BSIZE ! _EXT4-JLG-REVOKE ! _EXT4-JLG-META !
     _EXT4-JLG-META @ 0< _EXT4-JLG-REVOKE @ 0< OR IF
         0 VFS-E-INVALID EXIT
     THEN
+    _EXT4-JLG-BSIZE @ 1024 =
+    _EXT4-JLG-BSIZE @ 2048 = OR
+    _EXT4-JLG-BSIZE @ 4096 = OR 0= IF 0 VFS-E-INVALID EXIT THEN
     _EXT4-JLG-META @ _EXT4-JLG-TOTAL !
-    _EXT4-JLG-META @ _EXT4-JLG-WRITER @ _EXT4-JTX-TAGS/BLOCK
+    _EXT4-JLG-META @
+    _EXT4-JLG-BSIZE @ _EXT4-JTX-TAGS/BLOCK-SIZE
     _EXT4-JTX-CEIL/ _EXT4-JTX-LOG-ADD ?DUP IF 0 SWAP EXIT THEN
-    _EXT4-JLG-REVOKE @ _EXT4-JLG-WRITER @ _EXT4-JTX-REVOKES/BLOCK
+    _EXT4-JLG-REVOKE @
+    _EXT4-JLG-BSIZE @ _EXT4-JTX-REVOKES/BLOCK-SIZE
     _EXT4-JTX-CEIL/ _EXT4-JTX-LOG-ADD ?DUP IF 0 SWAP EXIT THEN
     \ One block holds the standard active-super guard outside the JBD2
     \ record stream, and one holds the transaction commit.  The ring's
     \ separately excluded spare remains available as an exact terminator.
     2 _EXT4-JTX-LOG-ADD ?DUP IF 0 SWAP EXIT THEN
     _EXT4-JLG-TOTAL @ 0 ;
+
+: _EXT4-JTX-LOG-BLOCKS  ( meta-credit revoke-credit writer -- blocks ior )
+    DUP _EXT4-JLG-WRITER ! _EXT4-JWR-VALID? 0= IF
+        2DROP 0 VFS-E-INVALID EXIT
+    THEN
+    _EXT4-JLG-WRITER @ _EXT4-JWR.BSIZE + @
+    _EXT4-JTX-LOG-BLOCKS-FOR ;
+
+VARIABLE _EXT4-JPC-META
+VARIABLE _EXT4-JPC-DATA
+VARIABLE _EXT4-JPC-REVOKE
+VARIABLE _EXT4-JPC-CTX
+VARIABLE _EXT4-JPC-BSIZE
+VARIABLE _EXT4-JPC-BYTES
+VARIABLE _EXT4-JPC-LOG
+VARIABLE _EXT4-JPC-FREE
+VARIABLE _EXT4-JPC-IOR
+
+\ Prove that one requested workspace and transaction can fit the authenticated
+\ journal geometry before _EXT4-JWR-ENSURE can consume the monotonic arena.
+\ This performs arithmetic and context inspection only; it allocates, stages,
+\ publishes, writes, and flushes nothing.
+: _EXT4-JTX-PREFLIGHT-CAPACITY
+  ( meta-cap data-cap revoke-cap ctx -- ior )
+    _EXT4-JPC-CTX ! _EXT4-JPC-REVOKE !
+    _EXT4-JPC-DATA ! _EXT4-JPC-META !
+    _EXT4-JPC-CTX @ _EXT4-JWR-CONTEXT? 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-JPC-CTX @ _EXT4-C.BSIZE + @ _EXT4-JPC-BSIZE !
+    _EXT4-JPC-META @ _EXT4-JPC-DATA @ _EXT4-JPC-REVOKE @
+    _EXT4-JPC-BSIZE @
+    _EXT4-JWR-MEASURE _EXT4-JPC-IOR ! _EXT4-JPC-BYTES !
+    _EXT4-JPC-IOR @ ?DUP IF EXIT THEN
+    _EXT4-JPC-META @ _EXT4-JPC-REVOKE @ _EXT4-JPC-BSIZE @
+    _EXT4-JTX-LOG-BLOCKS-FOR _EXT4-JPC-IOR ! _EXT4-JPC-LOG !
+    _EXT4-JPC-IOR @ ?DUP IF EXIT THEN
+    _EXT4-JPC-CTX @ _EXT4-C.J.MAXLEN + @
+    _EXT4-JPC-CTX @ _EXT4-C.J.FIRST + @ - DUP 0= IF
+        DROP VFS-E-INVALID EXIT
+    THEN
+    1- DUP _EXT4-JPC-FREE ! 0< IF VFS-E-INVALID EXIT THEN
+    _EXT4-JPC-LOG @ _EXT4-JPC-FREE @ U> IF VFS-E-NOSPC EXIT THEN
+    _EXT4-JPC-CTX @ _EXT4-C.J.MAX-TRANSACTION + @ ?DUP IF
+        _EXT4-JPC-LOG @ 1- SWAP U> IF VFS-E-NOSPC EXIT THEN
+    THEN
+    _EXT4-JPC-CTX @ _EXT4-C.J.MAX-TRANS-DATA + @ ?DUP IF
+        _EXT4-JPC-DATA @ SWAP U> IF VFS-E-NOSPC EXIT THEN
+    THEN
+    0 ;
 
 : _EXT4-JTX-CLEAR-HASHES  ( writer -- )
     DUP _EXT4-JWR.META-SLOTS + @ ?DUP IF
