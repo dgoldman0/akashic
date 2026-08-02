@@ -498,6 +498,89 @@ def _zero_size_depth0_orphan_patches(
     return tuple(patches)
 
 
+def _cross_group_depth0_orphan_patches(
+    path: Path,
+) -> tuple[tuple[int, bytes], ...]:
+    """Move inode 14's retained extent across fixture groups 3 and 4."""
+    patches = list(_zero_size_depth0_orphan_patches(path))
+    superblock = bytearray(patches[0][1])
+    inode_offset, raw_inode = patches[2]
+    inode = bytearray(raw_inode)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert block_size == 1024
+    sectors_per_block = block_size // 512
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    descriptor_size = struct.unpack_from("<H", superblock, 0xFE)[0]
+    assert descriptor_size == 64
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    first_block = first_data + 4 * blocks_per_group - 1
+    group_bits = ((3, blocks_per_group - 1), (4, 0))
+    assert first_block == 32768
+
+    def read_block(block: int) -> bytearray:
+        with path.open("rb") as source:
+            source.seek(block * block_size)
+            result = bytearray(source.read(block_size))
+        assert len(result) == block_size
+        return result
+
+    gdt_home = 2
+    gdt = read_block(gdt_home)
+    bitmap_patches: list[tuple[int, bytes]] = []
+    for group, bit_index in group_bits:
+        descriptor_offset = group * descriptor_size
+        descriptor = bytearray(
+            gdt[descriptor_offset : descriptor_offset + descriptor_size]
+        )
+        bitmap_home = struct.unpack_from("<I", descriptor, 0x00)[0]
+        assert struct.unpack_from("<I", descriptor, 0x20)[0] == 0
+        bitmap = read_block(bitmap_home)
+        byte_index, bit_in_byte = divmod(bit_index, 8)
+        assert bitmap[byte_index] & (1 << bit_in_byte) == 0
+        bitmap[byte_index] |= 1 << bit_in_byte
+        bitmap_checksum = _crc32c_raw(bitmap, seed)
+        bitmap_patches.append((bitmap_home * block_size, bytes(bitmap)))
+
+        flags = struct.unpack_from("<H", descriptor, 0x12)[0]
+        if flags & 0x02:
+            assert group == 4
+            struct.pack_into("<H", descriptor, 0x12, flags & ~0x02)
+        group_free = struct.unpack_from("<H", descriptor, 0x0C)[0] | (
+            struct.unpack_from("<H", descriptor, 0x2C)[0] << 16
+        )
+        assert group_free > 0
+        group_free -= 1
+        struct.pack_into("<H", descriptor, 0x0C, group_free & 0xFFFF)
+        struct.pack_into("<H", descriptor, 0x2C, group_free >> 16)
+        struct.pack_into("<H", descriptor, 0x18, bitmap_checksum & 0xFFFF)
+        struct.pack_into("<H", descriptor, 0x38, bitmap_checksum >> 16)
+        descriptor = bytearray(
+            _group_descriptor_with_checksum(superblock, descriptor, group)
+        )
+        gdt[descriptor_offset : descriptor_offset + descriptor_size] = descriptor
+
+    super_free = struct.unpack_from("<I", superblock, 0x0C)[0]
+    assert struct.unpack_from("<I", superblock, 0x158)[0] == 0
+    assert super_free >= 2
+    struct.pack_into("<I", superblock, 0x0C, super_free - 2)
+    superblock = bytearray(_ext4_super_with_checksum(superblock))
+
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (0xF30A, 1, 4, 0)
+    struct.pack_into("<H", inode, 0x38, 2)
+    struct.pack_into("<H", inode, 0x3A, 0)
+    struct.pack_into("<I", inode, 0x3C, first_block)
+    struct.pack_into("<I", inode, 0x1C, 3 * sectors_per_block)
+    struct.pack_into("<H", inode, 0x74, 0)
+    inode = bytearray(_inode_with_checksum(superblock, 14, inode))
+
+    patches[0] = (1024, bytes(superblock))
+    patches[2] = (inode_offset, bytes(inode))
+    patches.extend(bitmap_patches)
+    patches.append((gdt_home * block_size, bytes(gdt)))
+    return tuple(patches)
+
+
 def _already_truncated_depth0_orphan_patches(
     path: Path,
 ) -> tuple[tuple[int, bytes], ...]:
@@ -11381,14 +11464,29 @@ def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
             ),
             "_OF-V _EXT4-CTX CONSTANT _OF-CTX",
             "0 _OF-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _OF-RECORD",
+            "CREATE _OF-COPY _EXT4-ORPHAN-RECORD-SIZE ALLOT",
+            (
+                "_OF-RECORD _OF-COPY _EXT4-ORPHAN-RECORD-SIZE "
+                "CMOVE"
+            ),
             "_OF-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OF-JOURNAL-IOR",
+            (
+                "_OF-COPY _OF-CTX "
+                "_EXT4-MEASURE-MODERN-ORPHAN-DEPTH0 "
+                "CONSTANT _OF-COPY-IOR CONSTANT _OF-COPY-CREDIT"
+            ),
+            (
+                "_OF-RECORD _OF-CTX "
+                "_EXT4-MEASURE-MODERN-ORPHAN-DEPTH0 "
+                "CONSTANT _OF-MEASURE-IOR CONSTANT _OF-CREDIT"
+            ),
             "-1 _OF-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
-                "5 0 0 _OF-CTX _EXT4-JWR-ENSURE "
+                "_OF-CREDIT 0 0 _OF-CTX _EXT4-JWR-ENSURE "
                 "CONSTANT _OF-WRITER-IOR CONSTANT _OF-WRITER"
             ),
             (
-                "5 0 0 _OF-WRITER _EXT4-JTX-BEGIN "
+                "_OF-CREDIT 0 0 _OF-WRITER _EXT4-JTX-BEGIN "
                 "CONSTANT _OF-TX-IOR CONSTANT _OF-TX"
             ),
             (
@@ -11412,6 +11510,17 @@ def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
                             "EXT4-D-RECOVERY ="
                         ),
                         "_OF-JOURNAL-IOR 0=",
+                        "_OF-COPY-CREDIT 0=",
+                        (
+                            "_OF-COPY-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_OF-COPY-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-ORPHAN-FILE ="
+                        ),
+                        "_OF-MEASURE-IOR 0=",
+                        "_OF-CREDIT 5 =",
                         "_OF-WRITER-IOR 0=",
                         "_OF-TX-IOR 0=",
                         "_OF-STAGE-IOR 0=",
@@ -11460,6 +11569,100 @@ def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
     )
     _assert_emitted(output, "EXT4-MODERN-FINAL-SEALED")
     _assert_emitted(output, "EXT4-MODERN-FINAL-ABORT-SCRUBBED")
+
+
+def test_singleton_modern_depth0_credit_counts_cross_group_homes_exactly(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _OM-MOUNT-IOR CONSTANT _OM-V"
+            ),
+            "_OM-V _EXT4-CTX CONSTANT _OM-CTX",
+            "0 _OM-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _OM-RECORD",
+            "_OM-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OM-JOURNAL-IOR",
+            (
+                "_OM-RECORD _OM-CTX "
+                "_EXT4-MEASURE-MODERN-ORPHAN-DEPTH0 "
+                "CONSTANT _OM-MEASURE1-IOR CONSTANT _OM-CREDIT1"
+            ),
+            (
+                "_OM-RECORD _OM-CTX "
+                "_EXT4-MEASURE-MODERN-ORPHAN-DEPTH0 "
+                "CONSTANT _OM-MEASURE2-IOR CONSTANT _OM-CREDIT2"
+            ),
+            "-1 _OM-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "_OM-CREDIT1 0 0 _OM-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _OM-WRITER-IOR CONSTANT _OM-WRITER"
+            ),
+            (
+                "_OM-CREDIT1 0 0 _OM-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _OM-BEGIN-IOR CONSTANT _OM-TX"
+            ),
+            (
+                "_OM-RECORD _OM-TX "
+                "_EXT4-JTX-STAGE-MODERN-ORPHAN-DEPTH0-FINAL "
+                "CONSTANT _OM-STAGE-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_OM-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_OM-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_OM-JOURNAL-IOR 0=",
+                        "_OM-MEASURE1-IOR 0=",
+                        "_OM-MEASURE2-IOR 0=",
+                        "_OM-CREDIT1 6 =",
+                        "_OM-CREDIT2 _OM-CREDIT1 =",
+                        "_OM-WRITER-IOR 0=",
+                        "_OM-BEGIN-IOR 0=",
+                        "_OM-STAGE-IOR 0=",
+                        (
+                            "_OM-WRITER _EXT4-JWR.META-USED + @ "
+                            "_OM-CREDIT1 ="
+                        ),
+                        (
+                            "_OM-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                            "_OM-CREDIT1 ="
+                        ),
+                        "_OM-WRITER _EXT4-JWR-CP-AUTHORITY?",
+                        "_OM-WRITER _EXT4-JTX-TABLES-VALID?",
+                        "_OM-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-MODERN-FINAL-CROSS-GROUP-CREDIT" THEN'
+            ),
+            "_OM-TX _EXT4-JTX-ABORT CONSTANT _OM-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_OM-ABORT-IOR 0=",
+                        (
+                            "_OM-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_OM-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                        "_OM-WRITER _EXT4-JWR-VALID?",
+                    ]
+                )
+                + ' IF ." EXT4-MODERN-FINAL-CROSS-GROUP-ABORTED" THEN'
+            ),
+        ],
+        patches=_cross_group_depth0_orphan_patches(path),
+    )
+    _assert_emitted(output, "EXT4-MODERN-FINAL-CROSS-GROUP-CREDIT")
+    _assert_emitted(output, "EXT4-MODERN-FINAL-CROSS-GROUP-ABORTED")
 
 
 def test_singleton_modern_depth0_cleanup_checkpoints_and_deactivates(
@@ -11597,9 +11800,14 @@ def test_already_truncated_modern_orphan_uses_slot_only_final_transaction(
                     "_OE-CTX _EXT4-VALIDATE-JOURNAL "
                     "CONSTANT _OE-JOURNAL-IOR"
                 ),
+                (
+                    "_OE-RECORD _OE-CTX "
+                    "_EXT4-MEASURE-MODERN-ORPHAN-DEPTH0 "
+                    "CONSTANT _OE-MEASURE-IOR CONSTANT _OE-CREDIT"
+                ),
                 "-1 _OE-CTX _EXT4-C.J.WRITER-CURRENT + !",
                 (
-                    "1 0 0 _OE-CTX _EXT4-JWR-ENSURE "
+                    "_OE-CREDIT 0 0 _OE-CTX _EXT4-JWR-ENSURE "
                     "CONSTANT _OE-WRITER-IOR CONSTANT _OE-WRITER"
                 ),
                 (
@@ -11607,7 +11815,7 @@ def test_already_truncated_modern_orphan_uses_slot_only_final_transaction(
                     "CONSTANT _OE-ACTIVATE-IOR"
                 ),
                 (
-                    "1 0 0 _OE-WRITER _EXT4-JTX-BEGIN "
+                    "_OE-CREDIT 0 0 _OE-WRITER _EXT4-JTX-BEGIN "
                     "CONSTANT _OE-BEGIN-IOR CONSTANT _OE-TX"
                 ),
                 (
@@ -11662,6 +11870,8 @@ def test_already_truncated_modern_orphan_uses_slot_only_final_transaction(
                                 "EXT4-D-RECOVERY ="
                             ),
                             "_OE-JOURNAL-IOR 0=",
+                            "_OE-MEASURE-IOR 0=",
+                            "_OE-CREDIT 1 =",
                             "_OE-WRITER-IOR 0=",
                             "_OE-ACTIVATE-IOR 0=",
                             "_OE-BEGIN-IOR 0=",

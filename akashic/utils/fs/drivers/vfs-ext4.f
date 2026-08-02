@@ -8795,6 +8795,24 @@ VARIABLE _EXT4-GBC-START
     _EXT4-GBC-CTX @ _EXT4-C.BLOCKS + @ _EXT4-GBC-START @ -
     _EXT4-GBC-CTX @ _EXT4-C.BPG + @ MIN 0 ;
 
+VARIABLE _EXT4-GBR-GROUP
+VARIABLE _EXT4-GBR-CTX
+VARIABLE _EXT4-GBR-COUNT
+
+\ Return the exact half-open physical interval owned by one block group.
+\ Reuse the canonical short-last-group calculation and keep every address
+\ operation checked so sizing cannot wrap malformed geometry into a match.
+: _EXT4-GROUP-BLOCK-RANGE  ( group ctx -- first count ior )
+    _EXT4-GBR-CTX ! _EXT4-GBR-GROUP !
+    _EXT4-GBR-GROUP @ _EXT4-GBR-CTX @ _EXT4-GROUP-BLOCK-COUNT
+    DUP IF NIP 0 0 ROT EXIT THEN DROP _EXT4-GBR-COUNT !
+    _EXT4-GBR-GROUP @
+    _EXT4-GBR-CTX @ _EXT4-C.BPG + @ _EXT4-UMUL?
+    DUP IF NIP 0 0 ROT EXIT THEN DROP
+    _EXT4-GBR-CTX @ _EXT4-C.FIRST + @ _EXT4-UADD?
+    DUP IF NIP 0 0 ROT EXIT THEN DROP
+    _EXT4-GBR-COUNT @ 0 ;
+
 VARIABLE _EXT4-GDC-DESC
 VARIABLE _EXT4-GDC-GROUP
 VARIABLE _EXT4-GDC-CTX
@@ -9010,17 +9028,11 @@ VARIABLE _EXT4-FRS-META-COUNT
     LOOP
     0 ;
 
-\ Clearing a modern orphan slot mutates an ordinary mapped file block, so its
-\ read-side checksum is necessary but not sufficient authority.  Prove the
-\ exact physical home is writable non-static storage, disjoint from the
-\ target's retained external xattr, then reread the locator because the
-\ descriptor-wide mutation scan necessarily clobbers C.BLOCK.
-: _EXT4-JTX-CLEAR-MODERN-ORPHAN-SLOT
-  ( plan-record transaction -- ior )
-    _EXT4-JOS-WRITER ! _EXT4-JOS-RECORD !
-    _EXT4-JOS-WRITER @ _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
-    _EXT4-JOS-RECORD @ 0= IF VFS-E-INVALID EXIT THEN
-    _EXT4-JOS-WRITER @ _EXT4-JWR.CTX + @ _EXT4-JOS-CTX !
+\ Authenticate the complete raw modern-slot mutation target without acquiring
+\ a transaction image.  The descriptor-wide mutation scan clobbers C.BLOCK,
+\ so restore the orphan-file mapping and slot after that scan.  On success the
+\ exact physical home, generation, owner, slot, and raw block remain current.
+: _EXT4-JOS-AUTH-PREFLIGHT  ( -- ior )
     _EXT4-JOS-RECORD @ _EXT4-JOS-CTX @ _EXT4-ORPHAN-PLAN-MEMBER? 0= IF
         EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
@@ -9067,6 +9079,19 @@ VARIABLE _EXT4-FRS-META-COUNT
     _EXT4-JOS-INO @ <> IF
         EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
+    0 ;
+
+\ Clearing a modern orphan slot mutates an ordinary mapped file block, so its
+\ read-side checksum is necessary but not sufficient authority.  Prove the
+\ exact physical home is writable non-static storage and disjoint from the
+\ target's retained external xattr before publishing its after-image.
+: _EXT4-JTX-CLEAR-MODERN-ORPHAN-SLOT
+  ( plan-record transaction -- ior )
+    _EXT4-JOS-WRITER ! _EXT4-JOS-RECORD !
+    _EXT4-JOS-WRITER @ _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
+    _EXT4-JOS-RECORD @ 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-JOS-WRITER @ _EXT4-JWR.CTX + @ _EXT4-JOS-CTX !
+    _EXT4-JOS-AUTH-PREFLIGHT ?DUP IF EXIT THEN
     _EXT4-JOS-CTX @ _EXT4-C.BLOCK + _EXT4-JOS-HOME @
     _EXT4-JOS-WRITER @ _EXT4-JTX-META-ACQUIRE
     DUP IF NIP EXIT THEN DROP _EXT4-JOS-IMAGE !
@@ -9642,6 +9667,19 @@ VARIABLE _EXT4-JOT-OF-LEN
     _EXT4-JOT-VALIDATE-ACCOUNTING ?DUP IF EXIT THEN
     _EXT4-JOT-VALIDATE-ORPHAN-FILE-DISJOINT ;
 
+\ Bind the retained record to its raw target inode and capture the complete
+\ depth-zero ownership ranges without acquiring or changing a transaction.
+\ The final orphan-file disjointness pass restores the target inode cache and
+\ its _EXT4-IR locator before returning.
+: _EXT4-JOT-AUTH-PREFLIGHT  ( -- ior )
+    _EXT4-JOT-RECORD @ 0= _EXT4-JOT-CTX @ 0= OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-JOT-RECORD @ _EXT4-JOT-CTX @
+    _EXT4-REAUTH-ORPHAN-PLAN-RECORD ?DUP IF EXIT THEN
+    _EXT4-JOT-CTX @ _EXT4-C.INODE + _EXT4-JOT-INODE !
+    _EXT4-JOT-PREFLIGHT ;
+
 : _EXT4-JOT-BUILD-INODE  ( -- ior )
     _EXT4-JOT-WRITER @ _EXT4-JWR.SCRATCH-B + @ DUP
     _EXT4-JOT-AFTERIMAGE !
@@ -9695,11 +9733,8 @@ VARIABLE _EXT4-JOT-OF-LEN
     0 _EXT4-JOT-PUBLISHED !
     _EXT4-JOT-WRITER @ _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
     _EXT4-JOT-RECORD @ 0= IF VFS-E-INVALID EXIT THEN
-    _EXT4-JOT-WRITER @ _EXT4-JWR.CTX + @ DUP _EXT4-JOT-CTX !
-    _EXT4-JOT-RECORD @ SWAP _EXT4-REAUTH-ORPHAN-PLAN-RECORD
-    ?DUP IF EXIT THEN
-    _EXT4-JOT-CTX @ _EXT4-C.INODE + _EXT4-JOT-INODE !
-    _EXT4-JOT-PREFLIGHT ?DUP IF EXIT THEN
+    _EXT4-JOT-WRITER @ _EXT4-JWR.CTX + @ _EXT4-JOT-CTX !
+    _EXT4-JOT-AUTH-PREFLIGHT ?DUP IF EXIT THEN
     _EXT4-JOT-COUNT @ 0= IF 0 EXIT THEN
     _EXT4-JOT-BUILD-INODE ?DUP IF EXIT THEN
     _EXT4-JOT-AFTERIMAGE @ _EXT4-JOT-RECORD @ _EXT4-JOT-WRITER @
@@ -9773,28 +9808,184 @@ VARIABLE _EXT4-JFC-ABORT-IOR
     THEN
     _EXT4-JFC-IOR @ ;
 
-: _EXT4-JFC-REQUIRE-SINGLETON  ( -- ior )
-    _EXT4-JFC-CTX @ _EXT4-C.O.ACTIVE + @ 1 <>
-    _EXT4-JFC-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ 1 <> OR
-    _EXT4-JFC-CTX @ _EXT4-C.O.LEGACY-ACTIVE + @ 0<> OR IF
+VARIABLE _EXT4-SMO-RECORD
+VARIABLE _EXT4-SMO-CTX
+
+\ Require one exact retained modern plan record before dereferencing any of
+\ its fields.  This shared read-only admission keeps sizing and staging on the
+\ same policy boundary without giving either operation the other's globals.
+: _EXT4-REQUIRE-SINGLETON-MODERN-ORPHAN
+  ( plan-record ctx -- ior )
+    _EXT4-SMO-CTX ! _EXT4-SMO-RECORD !
+    _EXT4-SMO-RECORD @ 0= _EXT4-SMO-CTX @ 0= OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-SMO-CTX @ _EXT4-C.O.ACTIVE + @ 1 <>
+    _EXT4-SMO-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ 1 <> OR
+    _EXT4-SMO-CTX @ _EXT4-C.O.LEGACY-ACTIVE + @ 0<> OR IF
         EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
     THEN
-    _EXT4-JFC-CTX @ _EXT4-C.SB + DUP
+    _EXT4-SMO-CTX @ _EXT4-C.SB + DUP
     _EXT4-SB.LAST-ORPHAN + L@ IF
         DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
     THEN
     _EXT4-SB.RO-COMPAT + L@ _EXT4-RO-ORPHAN-PRESENT AND 0= IF
         EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
-    _EXT4-JFC-RECORD @ _EXT4-JFC-CTX @
+    _EXT4-SMO-RECORD @ _EXT4-SMO-CTX @
     _EXT4-ORPHAN-PLAN-MEMBER? 0= IF
         EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
-    _EXT4-JFC-RECORD @ _EXT4-OE.KIND + @ _EXT4-OK-MODERN <> IF
+    _EXT4-SMO-RECORD @ _EXT4-OE.KIND + @ _EXT4-OK-MODERN <> IF
         EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
     THEN
-    _EXT4-JFC-RECORD @ _EXT4-JFC-CTX @
+    _EXT4-SMO-RECORD @ _EXT4-SMO-CTX @
     _EXT4-REAUTH-ORPHAN-PLAN-RECORD ;
+
+: _EXT4-JFC-REQUIRE-SINGLETON  ( -- ior )
+    _EXT4-JFC-RECORD @ _EXT4-JFC-CTX @
+    _EXT4-REQUIRE-SINGLETON-MODERN-ORPHAN ;
+
+VARIABLE _EXT4-JCM-RECORD
+VARIABLE _EXT4-JCM-CTX
+VARIABLE _EXT4-JCM-ORPHAN-HOME
+VARIABLE _EXT4-JCM-INODE-HOME
+VARIABLE _EXT4-JCM-SUPER-HOME
+VARIABLE _EXT4-JCM-GROUP
+VARIABLE _EXT4-JCM-GROUP-FIRST
+VARIABLE _EXT4-JCM-GROUP-COUNT
+VARIABLE _EXT4-JCM-RANGE-INDEX
+VARIABLE _EXT4-JCM-TOUCHED
+VARIABLE _EXT4-JCM-BITMAP-HOME
+VARIABLE _EXT4-JCM-GDT-HOME
+VARIABLE _EXT4-JCM-PREV-GDT
+VARIABLE _EXT4-JCM-HAVE-GDT
+VARIABLE _EXT4-JCM-CREDIT
+VARIABLE _EXT4-JCM-IOR
+
+: _EXT4-JCM-GROUP-TOUCHED?  ( group -- flag ior )
+    DUP _EXT4-JCM-GROUP ! _EXT4-JCM-CTX @ _EXT4-GROUP-BLOCK-RANGE
+    _EXT4-JCM-IOR ! _EXT4-JCM-GROUP-COUNT !
+    _EXT4-JCM-GROUP-FIRST !
+    _EXT4-JCM-IOR @ ?DUP IF FALSE SWAP EXIT THEN
+    0 _EXT4-JCM-RANGE-INDEX !
+    BEGIN
+        _EXT4-JCM-RANGE-INDEX @ _EXT4-JOT-COUNT @ U<
+    WHILE
+        _EXT4-JCM-RANGE-INDEX @ _EXT4-JOT-RANGE DUP @
+        SWAP CELL+ @
+        _EXT4-JCM-GROUP-FIRST @ _EXT4-JCM-GROUP-COUNT @
+        _EXT4-BLOCK-RANGES-OVERLAP? IF TRUE 0 EXIT THEN
+        1 _EXT4-JCM-RANGE-INDEX +!
+    REPEAT
+    FALSE 0 ;
+
+: _EXT4-JCM-ADD-CREDIT  ( -- ior )
+    _EXT4-JCM-CREDIT @ 1 _EXT4-UADD?
+    DUP IF NIP EXIT THEN DROP _EXT4-JCM-CREDIT !
+    0 ;
+
+: _EXT4-JCM-BASE-DISJOINT?  ( -- flag )
+    _EXT4-JCM-ORPHAN-HOME @ _EXT4-JCM-INODE-HOME @ =
+    _EXT4-JCM-ORPHAN-HOME @ _EXT4-JCM-SUPER-HOME @ = OR
+    _EXT4-JCM-INODE-HOME @ _EXT4-JCM-SUPER-HOME @ = OR 0= ;
+
+: _EXT4-JCM-GROUP-HOMES-DISJOINT?  ( -- flag )
+    _EXT4-JCM-BITMAP-HOME @ _EXT4-JCM-GDT-HOME @ =
+    _EXT4-JCM-BITMAP-HOME @ _EXT4-JCM-ORPHAN-HOME @ = OR
+    _EXT4-JCM-BITMAP-HOME @ _EXT4-JCM-INODE-HOME @ = OR
+    _EXT4-JCM-BITMAP-HOME @ _EXT4-JCM-SUPER-HOME @ = OR
+    _EXT4-JCM-GDT-HOME @ _EXT4-JCM-ORPHAN-HOME @ = OR
+    _EXT4-JCM-GDT-HOME @ _EXT4-JCM-INODE-HOME @ = OR
+    _EXT4-JCM-GDT-HOME @ _EXT4-JCM-SUPER-HOME @ = OR 0= ;
+
+: _EXT4-JCM-VALIDATE-RANGES  ( -- ior )
+    0 _EXT4-JCM-RANGE-INDEX !
+    BEGIN
+        _EXT4-JCM-RANGE-INDEX @ _EXT4-JOT-COUNT @ U<
+    WHILE
+        _EXT4-JCM-RANGE-INDEX @ _EXT4-JOT-RANGE DUP @
+        SWAP CELL+ @ _EXT4-JCM-CTX @
+        _EXT4-VALIDATE-FREE-RANGE-TARGETS ?DUP IF EXIT THEN
+        1 _EXT4-JCM-RANGE-INDEX +!
+    REPEAT
+    0 ;
+
+: _EXT4-JCM-COUNT-GROUP-HOMES  ( -- ior )
+    0 _EXT4-JCM-GROUP !
+    0 _EXT4-JCM-HAVE-GDT !
+    BEGIN
+        _EXT4-JCM-GROUP @ _EXT4-JCM-CTX @ _EXT4-C.GROUPS + @ U<
+    WHILE
+        _EXT4-JCM-GROUP @ _EXT4-JCM-GROUP-TOUCHED?
+        _EXT4-JCM-IOR ! _EXT4-JCM-TOUCHED !
+        _EXT4-JCM-IOR @ ?DUP IF EXIT THEN
+        _EXT4-JCM-TOUCHED @ IF
+            _EXT4-JCM-GROUP @ _EXT4-JCM-CTX @
+            _EXT4-LOAD-BLOCK-BITMAP
+            _EXT4-JCM-IOR ! _EXT4-JCM-BITMAP-HOME !
+            _EXT4-JCM-IOR @ ?DUP IF EXIT THEN
+            _EXT4-GD-BLOCK @ _EXT4-JCM-GDT-HOME !
+            _EXT4-JCM-BITMAP-HOME @ _EXT4-JCM-GROUP @
+            _EXT4-JCM-CTX @ _EXT4-VALIDATE-BLOCK-BITMAP-HOME
+            ?DUP IF EXIT THEN
+            _EXT4-JCM-GROUP-HOMES-DISJOINT? 0= IF
+                EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+            THEN
+            _EXT4-JCM-ADD-CREDIT ?DUP IF EXIT THEN
+            _EXT4-JCM-HAVE-GDT @ IF
+                _EXT4-JCM-GDT-HOME @ _EXT4-JCM-PREV-GDT @ U< IF
+                    EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+                THEN
+                _EXT4-JCM-GDT-HOME @ _EXT4-JCM-PREV-GDT @ <> IF
+                    _EXT4-JCM-ADD-CREDIT ?DUP IF EXIT THEN
+                THEN
+            ELSE
+                _EXT4-JCM-ADD-CREDIT ?DUP IF EXIT THEN
+                -1 _EXT4-JCM-HAVE-GDT !
+            THEN
+            _EXT4-JCM-GDT-HOME @ _EXT4-JCM-PREV-GDT !
+        THEN
+        1 _EXT4-JCM-GROUP +!
+    REPEAT
+    _EXT4-JCM-HAVE-GDT @ 0= IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
+\ Derive the exact coalesced metadata-home credit for the sealed singleton
+\ modern depth-zero cleanup.  A truncated inode needs only its orphan-file
+\ block.  A nonempty root adds the inode-table and primary-super homes, one
+\ uniquely owned bitmap per touched group, and one primary GDT block per
+\ distinct descriptor page.  The group scan is constant-space and imposes no
+\ policy capacity beyond the authenticated filesystem geometry.
+: _EXT4-MEASURE-MODERN-ORPHAN-DEPTH0
+  ( plan-record ctx -- meta-credit ior )
+    _EXT4-JCM-CTX ! _EXT4-JCM-RECORD !
+    _EXT4-JCM-RECORD @ 0= _EXT4-JCM-CTX @ 0= OR IF
+        0 VFS-E-INVALID EXIT
+    THEN
+    _EXT4-JCM-RECORD @ _EXT4-JCM-CTX @
+    _EXT4-REQUIRE-SINGLETON-MODERN-ORPHAN
+    ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-JCM-RECORD @ _EXT4-JOS-RECORD !
+    _EXT4-JCM-CTX @ _EXT4-JOS-CTX !
+    _EXT4-JOS-AUTH-PREFLIGHT ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-JOS-HOME @ _EXT4-JCM-ORPHAN-HOME !
+    _EXT4-JCM-RECORD @ _EXT4-JOT-RECORD !
+    _EXT4-JCM-CTX @ _EXT4-JOT-CTX !
+    _EXT4-JOT-AUTH-PREFLIGHT ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-IR-BLOCK @ _EXT4-JCM-INODE-HOME !
+    _EXT4-JOT-COUNT @ 0= IF 1 0 EXIT THEN
+    _EXT4-JCM-VALIDATE-RANGES ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-JCM-CTX @ _EXT4-PRIMARY-SUPER-BLOCK
+    _EXT4-JCM-SUPER-HOME !
+    _EXT4-JCM-BASE-DISJOINT? 0= IF
+        0 EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    3 _EXT4-JCM-CREDIT !
+    _EXT4-JCM-COUNT-GROUP-HOMES ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-JCM-CREDIT @ 0 ;
 
 : _EXT4-JFC-SEAL  ( -- ior )
     _EXT4-JFC-RECORD @ _EXT4-JFC-CTX @

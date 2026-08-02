@@ -471,6 +471,20 @@ begin/abort cycle. Mode is published last; once published, every generic and
 typed staging entry point returns busy, while abort and emit remain legal.
 Abort and every successful writer rebase scrub the complete certificate.
 
+`_EXT4-MEASURE-MODERN-ORPHAN-DEPTH0` applies the same singleton, raw-slot,
+target-inode, extent-root, external-xattr, and writable-home authentication
+without acquiring a writer or publishing an after-image. An already-truncated
+root returns an exact metadata credit of one for the orphan-file block. A
+nonempty root returns three fixed homes (target inode table, primary super,
+and orphan-file block), plus one uniquely owned block bitmap for every touched
+group and one copy of every distinct primary GDT block covering those groups.
+It derives that count with a geometry-bounded, constant-space group scan;
+there is no candidate array or cleanup-specific capacity. Checked arithmetic,
+complete range/static/journal anti-alias validation, and unique bitmap-owner
+proofs make the result the coalesced home count rather than an upper bound.
+The final builder independently requires its staged active-home count to equal
+the measured credit, so any media or plan drift remains fail-closed.
+
 This is a non-emitting staging boundary. The typed builders may issue checked
 reads for locator and checksum reauthentication, but they do not activate a
 journal, emit a transaction, checkpoint a home block, write, or flush. Before
@@ -723,13 +737,14 @@ writable profile. The remaining boundaries are:
   tail truncation, depth-positive extent trees, legacy direct/indirect maps,
   unlinked inode and inode-bitmap accounting, external-xattr block release,
   link-count and legacy-chain/head updates, or retry-idempotent cleanup
-  orchestration. Mount does not yet select this singleton operation, derive
-  its exact metadata credit across arbitrary crossed groups, resume an
-  activation/incomplete-emission prefix that still retains the record, or
-  drive committed cleanup through replay. Those are the next integration
-  boundary. Transactional cleanup outside the singleton linked modern
-  depth-zero slice and every user-visible mutation operation remain
-  unimplemented;
+  orchestration. Exact metadata credit is now derived across arbitrary
+  crossed groups and coalesced primary GDT homes, but mount does not yet
+  select the singleton operation, preflight its journal-log fit before writer
+  allocation, resume an activation/incomplete-emission prefix that still
+  retains the record, or drive committed cleanup through replay. Those are
+  the next integration boundary. Transactional cleanup outside the singleton
+  linked modern depth-zero slice and every user-visible mutation operation
+  remain unimplemented;
 - focused 1 KiB coverage exercises one- and two-inode legacy chains, a mixed
   legacy/modern union, stable refusal with same-binding plan reuse, legacy
   cycles and invalid links, unallocated and checksum-invalid legacy inodes,
