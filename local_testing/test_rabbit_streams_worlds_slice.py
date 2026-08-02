@@ -562,6 +562,12 @@ CONTRACT_STAGES = (
         True,
     ),
     (
+        "streams-connector-reconnect-aba",
+        "_RBT-RCONN-PHASE-RECONNECT-ABA",
+        "STREAMS RABBIT CONNECTOR RECONNECT ABA PASS",
+        True,
+    ),
+    (
         "streams-connector-fini",
         "_RBT-RCONN-PHASE-FINI",
         "STREAMS RABBIT CONNECTOR FINI PASS",
@@ -1003,6 +1009,7 @@ def _assert_static_contracts() -> None:
         "STREAMS-RABBIT-CONNECTOR-LAST-ACTIVITY@",
         "STREAMS-RABBIT-CONNECTOR-POLL-COUNT@",
         "STREAMS-RABBIT-CONNECTOR-RECONNECT-COUNT@",
+        "STREAMS-RABBIT-CONNECTOR-ATTACHMENT-GENERATION@",
         "STREAMS-RABBIT-CONNECTOR-POLL",
         "STREAMS-RABBIT-CONNECTOR-HELLO",
         "STREAMS-RABBIT-CONNECTOR-LANE-ENSURE",
