@@ -23,7 +23,10 @@
 \ The neutral Rabbit implementation currently uses serialized synchronous
 \ scratch.  All public operations here therefore refuse connector reentry and
 \ are intended to run on one Streams/Desk scheduling owner.  No word blocks,
-\ allocates, or retains a borrowed inbound frame.
+\ allocates, or retains a borrowed inbound frame.  Correlated operation
+\ results remain owned by the adopted client, but callers inspect and release
+\ them through generation-checked connector words rather than escaping through
+\ the nested client pointer.
 \ =====================================================================
 
 \ Keep the KDOS module identity within 23 bytes.
@@ -525,6 +528,124 @@ VARIABLE _SRCONNR-GEN
     _SRCONNO-RS @ _SRCONN-RCLIENT>STATUS DUP
         _SRCONNO-RS @ _SRCONNR-O @ _SRCONN-STATUS! DROP
     _SRCONNR-OP @ _SRCONNR-GEN @ ROT ;
+
+\ =====================================================================
+\ Generation-checked correlated result ownership
+\ =====================================================================
+
+VARIABLE _SRCONNQ-O
+VARIABLE _SRCONNQ-OP
+VARIABLE _SRCONNQ-GEN
+VARIABLE _SRCONNQ-MATCH
+VARIABLE _SRCONNQ-RS
+VARIABLE _SRCONNQ-CS
+VARIABLE _SRCONNQ-CODE
+VARIABLE _SRCONNQ-A
+VARIABLE _SRCONNQ-U
+VARIABLE _SRCONNQ-REQUIRED
+
+: _SRCONNQ-CLEAR  ( -- )
+    0 _SRCONNQ-O ! 0 _SRCONNQ-OP ! 0 _SRCONNQ-GEN !
+    0 _SRCONNQ-MATCH ! 0 _SRCONNQ-RS ! 0 _SRCONNQ-CS !
+    0 _SRCONNQ-CODE ! 0 _SRCONNQ-A ! 0 _SRCONNQ-U !
+    0 _SRCONNQ-REQUIRED ! ;
+
+: _SRCONNQ-PUBLISH  ( rclient-status -- connector-status )
+    DUP _SRCONN-RCLIENT>STATUS
+    SWAP _SRCONNQ-O @ _SRCONN-STATUS! ;
+
+: _SRCONNQ-MATCH?  ( -- flag )
+    _SRCONNQ-OP @ _SRCONNQ-GEN @
+    _SRCONNQ-O @ SRCONN.CLIENT @ RABBIT-CLIENT-OP-MATCH?
+    _SRCONNQ-RS ! _SRCONNQ-MATCH !
+    _SRCONNQ-RS @ RCLIENT-S-OK <> IF 0 EXIT THEN
+    _SRCONNQ-MATCH @ 0= IF
+        RCLIENT-S-NOT-FOUND _SRCONNQ-RS ! 0 EXIT
+    THEN
+    -1 ;
+
+: STREAMS-RABBIT-CONNECTOR-OP-RESULT@
+  ( operation generation connector -- code address length status )
+    _SRCONN-BUSY @ IF
+        2DROP DROP 0 0 0 STREAMS-RABBIT-CONNECTOR-S-BUSY EXIT
+    THEN
+    _SRCONNQ-O ! _SRCONNQ-GEN ! _SRCONNQ-OP !
+    _SRCONNQ-O @ STREAMS-RABBIT-CONNECTOR-VALID? 0= IF
+        _SRCONNQ-CLEAR
+        0 0 0 STREAMS-RABBIT-CONNECTOR-S-INVALID EXIT
+    THEN
+    _SRCONNQ-O @ SRCONN.STATE @
+        STREAMS-RABBIT-CONNECTOR-ST-ATTACHED <> IF
+        _SRCONNQ-CLEAR
+        0 0 0 STREAMS-RABBIT-CONNECTOR-S-DISCONNECTED EXIT
+    THEN
+    -1 _SRCONN-BUSY !
+    _SRCONNQ-MATCH? IF
+        _SRCONNQ-OP @ _SRCONNQ-O @ SRCONN.CLIENT @
+            RABBIT-CLIENT-OP-RESULT@
+            _SRCONNQ-RS ! _SRCONNQ-U ! _SRCONNQ-A ! _SRCONNQ-CODE !
+    THEN
+    0 _SRCONN-BUSY !
+    _SRCONNQ-RS @ _SRCONNQ-PUBLISH _SRCONNQ-CS !
+    _SRCONNQ-RS @ RCLIENT-S-OK = IF
+        _SRCONNQ-CODE @ _SRCONNQ-A @ _SRCONNQ-U @ _SRCONNQ-CS @
+    ELSE
+        0 0 0 _SRCONNQ-CS @
+    THEN
+    _SRCONNQ-CLEAR ;
+
+: STREAMS-RABBIT-CONNECTOR-OP-REQUIRED@
+  ( operation generation connector -- bytes status )
+    _SRCONN-BUSY @ IF
+        2DROP DROP 0 STREAMS-RABBIT-CONNECTOR-S-BUSY EXIT
+    THEN
+    _SRCONNQ-O ! _SRCONNQ-GEN ! _SRCONNQ-OP !
+    _SRCONNQ-O @ STREAMS-RABBIT-CONNECTOR-VALID? 0= IF
+        _SRCONNQ-CLEAR
+        0 STREAMS-RABBIT-CONNECTOR-S-INVALID EXIT
+    THEN
+    _SRCONNQ-O @ SRCONN.STATE @
+        STREAMS-RABBIT-CONNECTOR-ST-ATTACHED <> IF
+        _SRCONNQ-CLEAR
+        0 STREAMS-RABBIT-CONNECTOR-S-DISCONNECTED EXIT
+    THEN
+    -1 _SRCONN-BUSY !
+    _SRCONNQ-MATCH? IF
+        _SRCONNQ-OP @ _SRCONNQ-O @ SRCONN.CLIENT @
+            RABBIT-CLIENT-OP-REQUIRED@
+            _SRCONNQ-RS ! _SRCONNQ-REQUIRED !
+    THEN
+    0 _SRCONN-BUSY !
+    _SRCONNQ-RS @ _SRCONNQ-PUBLISH _SRCONNQ-CS !
+    _SRCONNQ-RS @ RCLIENT-S-OK = IF
+        _SRCONNQ-REQUIRED @ _SRCONNQ-CS @
+    ELSE
+        0 _SRCONNQ-CS @
+    THEN
+    _SRCONNQ-CLEAR ;
+
+: STREAMS-RABBIT-CONNECTOR-OP-RELEASE
+  ( operation generation connector -- status )
+    _SRCONN-BUSY @ IF
+        2DROP DROP STREAMS-RABBIT-CONNECTOR-S-BUSY EXIT
+    THEN
+    _SRCONNQ-O ! _SRCONNQ-GEN ! _SRCONNQ-OP !
+    _SRCONNQ-O @ STREAMS-RABBIT-CONNECTOR-VALID? 0= IF
+        _SRCONNQ-CLEAR STREAMS-RABBIT-CONNECTOR-S-INVALID EXIT
+    THEN
+    _SRCONNQ-O @ SRCONN.STATE @
+        STREAMS-RABBIT-CONNECTOR-ST-ATTACHED <> IF
+        _SRCONNQ-CLEAR STREAMS-RABBIT-CONNECTOR-S-DISCONNECTED EXIT
+    THEN
+    -1 _SRCONN-BUSY !
+    _SRCONNQ-MATCH? IF
+        _SRCONNQ-OP @ _SRCONNQ-GEN @
+        _SRCONNQ-O @ SRCONN.CLIENT @ RABBIT-CLIENT-OP-RELEASE
+            _SRCONNQ-RS !
+    THEN
+    0 _SRCONN-BUSY !
+    _SRCONNQ-RS @ _SRCONNQ-PUBLISH _SRCONNQ-CS !
+    _SRCONNQ-CS @ _SRCONNQ-CLEAR ;
 
 VARIABLE _SRCONNB-E
 VARIABLE _SRCONNB-EG
