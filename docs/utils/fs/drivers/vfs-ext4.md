@@ -882,7 +882,11 @@ The remaining boundaries are:
   inode-table lifecycle policy, and every user-visible mutation operation
   remain unimplemented;
 - focused storage-empty unlinked qualification now covers modern and legacy
-  singleton mount completion on the canonical 1 KiB/256-byte-inode geometry.
+  singleton mount completion on the canonical 1/2/4 KiB, 256-byte-inode
+  geometries. The fixture construction and post-mount allocation-accounting
+  oracle derive the primary GDT page, inode-bitmap home and bit, free-inode
+  counters, and conservative `itable_unused` result from each image rather
+  than relying on the 1 KiB layout.
   It pins exact three/four-home credit, delete-specific sealing and mutation
   freeze, complete abort scrubbing, allocation-bit clearing, descriptor and
   super free-inode accounting, conservative `itable_unused`, and the absence
@@ -895,9 +899,10 @@ The remaining boundaries are:
   home, and final-super publication. Three fences per protocol cover commit,
   replay-home durability, and final-super publication; both the writes that
   survived each failed flush and the preceding durable snapshot repair on a
-  fresh mount and then remount without another write. Unlinked geometry
-  expansion, the remaining shared activation/reset fences, external-xattr/data
-  ownership cases, and external-tool inspection remain to be qualified;
+  fresh mount and then remount without another write. The controlled crash
+  matrix remains pinned to the 1 KiB fixture; the remaining shared
+  activation/reset fences, external-xattr/data ownership cases, and
+  external-tool inspection remain to be qualified;
 - focused 1 KiB coverage exercises one- and two-inode legacy chains, a mixed
   legacy/modern union, stable refusal with same-binding plan reuse, legacy
   cycles and invalid links, unallocated and checksum-invalid legacy inodes,

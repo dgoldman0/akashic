@@ -818,7 +818,6 @@ def _already_empty_unlinked_orphan_patches(
         struct.pack_into("<I", superblock, 0xE8, inode_number)
         superblock = bytearray(_ext4_super_with_checksum(superblock))
     block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
-    assert block_size == 1024
     inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
     inodes_per_group = struct.unpack_from("<I", superblock, 0x28)[0]
     descriptor_size = struct.unpack_from("<H", superblock, 0xFE)[0]
@@ -850,7 +849,7 @@ def _already_empty_unlinked_orphan_patches(
     struct.pack_into("<H", inode, 0x76, 0)
     inode[0xA0:0x100] = bytes(0x60)
 
-    gdt_home = 2
+    gdt_home = struct.unpack_from("<I", superblock, 0x14)[0] + 1
     with path.open("rb") as source:
         source.seek(gdt_home * block_size)
         gdt = bytearray(source.read(block_size))
@@ -12281,6 +12280,28 @@ def _run_singleton_unlinked_cleanup(
     protocol: str,
 ) -> dict[str, object]:
     assert protocol in {"modern", "legacy"}
+    with path.open("rb") as source_media:
+        source_media.seek(1024)
+        canonical_super = source_media.read(1024)
+    assert len(canonical_super) == 1024
+    block_size = 1024 << struct.unpack_from("<I", canonical_super, 0x18)[0]
+    gdt_home = struct.unpack_from("<I", canonical_super, 0x14)[0] + 1
+    with path.open("rb") as source_media:
+        source_media.seek(gdt_home * block_size)
+        canonical_gdt = source_media.read(block_size)
+    assert len(canonical_gdt) == block_size
+    descriptor = canonical_gdt[:64]
+    inode_bitmap_home = struct.unpack_from("<I", descriptor, 0x04)[0]
+    expected_group_free = struct.unpack_from("<H", descriptor, 0x0E)[0] | (
+        struct.unpack_from("<H", descriptor, 0x2E)[0] << 16
+    )
+    canonical_itable_unused = struct.unpack_from("<H", descriptor, 0x1C)[0] | (
+        struct.unpack_from("<H", descriptor, 0x32)[0] << 16
+    )
+    expected_itable_unused = canonical_itable_unused - 1
+    expected_super_free = struct.unpack_from("<I", canonical_super, 0x10)[0]
+    bitmap_byte, bitmap_bit = divmod(18 - 1, 8)
+    bitmap_mask = 1 << bitmap_bit
     patches = _already_empty_unlinked_orphan_patches(
         path,
         protocol=protocol,
@@ -12303,7 +12324,8 @@ def _run_singleton_unlinked_cleanup(
                 "CONSTANT _UR-BITMAP-IOR CONSTANT _UR-BITMAP-HOME"
             ),
             (
-                "_UR-CTX _EXT4-C.BLOCK + 2 + C@ 0x02 AND "
+                f"_UR-CTX _EXT4-C.BLOCK + {bitmap_byte} + C@ "
+                f"{bitmap_mask} AND "
                 "CONSTANT _UR-INODE-BIT"
             ),
             "0 _UR-CTX _EXT4-LOAD-DESC CONSTANT _UR-DESC-IOR",
@@ -12353,25 +12375,29 @@ def _run_singleton_unlinked_cleanup(
                             "EXT4-D-BOUNDS ="
                         ),
                         "_UR-BITMAP-IOR 0=",
-                        "_UR-BITMAP-HOME 267 =",
+                        f"_UR-BITMAP-HOME {inode_bitmap_home} =",
                         "_UR-INODE-BIT 0=",
                         "_UR-DESC-IOR 0=",
                         (
                             "_UR-CTX _EXT4-C.DESC + "
-                            "_EXT4-JFI-DESC-FREE@ 495 ="
+                            "_EXT4-JFI-DESC-FREE@ "
+                            f"{expected_group_free} ="
                         ),
                         (
                             "_UR-CTX _EXT4-C.DESC + "
-                            "_EXT4-GD.ITABLE-UNUSED-LO + W@ 494 ="
+                            "DUP _EXT4-GD.ITABLE-UNUSED-LO + W@ "
+                            "SWAP _EXT4-GD.ITABLE-UNUSED-HI + W@ "
+                            "16 LSHIFT OR "
+                            f"{expected_itable_unused} ="
                         ),
                         (
-                            "_UR-CTX _EXT4-C.DESC + "
-                            "_EXT4-GD.ITABLE-UNUSED-HI + W@ 0="
+                            "_UR-CTX _EXT4-C.FREE-INODES + @ "
+                            f"{expected_super_free} ="
                         ),
-                        "_UR-CTX _EXT4-C.FREE-INODES + @ 4079 =",
                         (
                             "_UR-CTX _EXT4-C.SB + "
-                            "_EXT4-SB.FREE-INODES + L@ 4079 ="
+                            "_EXT4-SB.FREE-INODES + L@ "
+                            f"{expected_super_free} ="
                         ),
                     ]
                 )
@@ -12389,6 +12415,12 @@ def _run_singleton_unlinked_cleanup(
         "success_trace": trace,
         "clean_image": media_path,
         "clean_sha256": media_sha256,
+        "block_size": block_size,
+        "gdt_home": gdt_home,
+        "inode_bitmap_home": inode_bitmap_home,
+        "expected_group_free": expected_group_free,
+        "expected_itable_unused": expected_itable_unused,
+        "expected_super_free": expected_super_free,
     }
 
 
@@ -12409,14 +12441,14 @@ def singleton_unlinked_cleanup_fixture(
     )
 
 
-def test_mount_reclaims_already_empty_unlinked_singleton_orphan(
-    singleton_unlinked_cleanup_fixture: dict[str, object],
+def _assert_singleton_unlinked_cleanup_result(
+    result: dict[str, object],
 ) -> None:
-    protocol = singleton_unlinked_cleanup_fixture["protocol"]
-    output = singleton_unlinked_cleanup_fixture["output"]
-    trace = singleton_unlinked_cleanup_fixture["success_trace"]
-    clean_image = singleton_unlinked_cleanup_fixture["clean_image"]
-    clean_sha256 = singleton_unlinked_cleanup_fixture["clean_sha256"]
+    protocol = result["protocol"]
+    output = result["output"]
+    trace = result["success_trace"]
+    clean_image = result["clean_image"]
+    clean_sha256 = result["clean_sha256"]
     assert isinstance(protocol, str)
     assert isinstance(output, str)
     assert isinstance(trace, tuple)
@@ -12432,6 +12464,30 @@ def test_mount_reclaims_already_empty_unlinked_singleton_orphan(
     expected_writes = 27 if protocol == "modern" else 25
     assert sum(kind == "write" for kind, _, _ in trace) == expected_writes
     assert sum(kind == "flush" for kind, _, _ in trace) == 18
+
+
+def test_mount_reclaims_already_empty_unlinked_singleton_orphan(
+    singleton_unlinked_cleanup_fixture: dict[str, object],
+) -> None:
+    _assert_singleton_unlinked_cleanup_result(
+        singleton_unlinked_cleanup_fixture
+    )
+
+
+@pytest.mark.parametrize("protocol", ("modern", "legacy"))
+@pytest.mark.parametrize("image_id", ("primary-2k-i256", "primary-4k-i256"))
+def test_mount_reclaims_unlinked_singleton_orphan_across_geometry(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+    protocol: str,
+    image_id: str,
+) -> None:
+    result = _run_singleton_unlinked_cleanup(
+        canonical_images[image_id],
+        tmp_path / f"{image_id}-{protocol}-unlinked-cleanup.img",
+        protocol=protocol,
+    )
+    _assert_singleton_unlinked_cleanup_result(result)
 
 
 def _assert_unlinked_cleanup_media_converges(
