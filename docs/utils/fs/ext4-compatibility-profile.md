@@ -12,8 +12,8 @@ descriptor/payload/revoke/commit transaction, checkpoint its retained metadata
 after-images, and release the journal for an immediate sequential transaction
 without leaving write-active state. Public unmount can now checkpoint a
 `COMMITTED` transaction and cleanly deactivate the write-active journal.
-Nonempty modern-orphan cleanup, legacy-orphan recovery, general mutation, and
-the complete bidirectional gates remain open.
+Transactional cleanup of nonempty modern and legacy orphan state, general
+mutation, and the complete bidirectional gates remain open.
 MP64FS remains the working native storage binding and FAT/ext4 remain
 read-only interoperability bindings; ext4's mount path may perform the
 strictly ordered recovery writes described below.
@@ -95,8 +95,9 @@ Pinned v1.47.4 `mke2fs` images have these clean superblock masks:
 `INCOMPAT_RECOVER` is an admitted transient bit, producing incompat mask
 `0x000022c6`.  It requires successful journal replay before ordinary access.
 `RO_COMPAT_ORPHAN_PRESENT` is an admitted transient bit, producing ro-compat
-mask `0x0001046b`; it requires orphan-file recovery.  A nonzero legacy
-`s_last_orphan` likewise requires legacy orphan-chain recovery.
+mask `0x0001046b`; it requires orphan-file recovery. A nonzero legacy
+`s_last_orphan` is likewise admitted for authenticated post-replay discovery
+but requires legacy orphan-chain recovery before mount can be published.
 
 The 128-byte-inode fixture clears only `extra_isize`, giving ro-compat mask
 `0x0000042b`.
@@ -409,9 +410,11 @@ Recovery is ordered as follows:
 
 The current implementation covers steps 1 through 4 for
 `64bit | checksum_v3` (`0x12`) with the optional standard `revoke` bit
-(`0x13`). It also covers the authenticated-empty modern branch of steps 5 and
-6 for those journals and for a clean feature-zero journal, which writer-free
-`AKW1` upgrades before the clean landing. Replay first authenticates the
+(`0x13`). It also covers the authenticated discovery and classification
+precondition for step 5 across legacy and modern orphan state, plus the
+authenticated-empty modern branch of steps 5 and 6 for those journals and for
+a clean feature-zero journal, which writer-free `AKW1` upgrades before the
+clean landing. Replay first authenticates the
 complete committed prefix, counts only revokes protected by a valid
 transaction commit, then builds the latest transaction ID for each revoked
 block before replaying unrevoked descriptor payloads. Journal length comes
@@ -729,35 +732,51 @@ journal without clearing `RECOVER`, and rebases the same allocation for an
 immediate sequential transaction without reactivation or arena growth. It
 now also checkpoints `COMMITTED` state during public unmount and performs the
 six-write clean deactivation with terminal fault quarantine. Public write
-capabilities remain disabled. Modern `ORPHAN_PRESENT` state is now admitted,
-after any required journal replay and strict reload, into a streaming,
-non-mutating orphan-file preflight. An authenticated empty set is completed
-before mount publication through writer-free `AKW1` and
-`AKE1`-qualified `AKR1`, clearing `RECOVER` and `ORPHAN_PRESENT`
-together without changing the orphan inode/file or allocating a private
-writer. That pass removes the former 4096-block policy ceiling, uses
-authenticated filesystem geometry, initially sizes its uniqueness table from
-the exact active count and caller arena, rejects duplicates, and validates
-every referenced inode and applicable map; a nonempty set returns the stable
-recovery-required refusal. Failed-mount retries clear and reuse a retained
-table when it is large enough rather than abandoning monotonic arena storage.
-The implementation still fails closed on checksum-damaged incomplete tails
-and refuses legacy-orphan recovery, nonempty modern orphan mutation, and all
+capabilities remain disabled. Modern `ORPHAN_PRESENT` and a nonzero legacy
+`s_last_orphan` are now admitted, after any required journal replay and strict
+reload, into a unified, non-mutating two-pass preflight. Legacy discovery
+follows checksum-valid allocated inodes through `i_dtime` under a
+geometry-derived traversal bound; modern discovery streams the authenticated
+orphan file. Their exact combined active count sizes one caller-arena-backed,
+half-full power-of-two plan. Each four-cell record retains the inode, protocol,
+and cleanup locator as legacy `{ inode, legacy, next, 0 }` or modern
+`{ inode, modern, logical-block, slot }`; one hash enforces union-wide inode
+uniqueness, including modern duplicates and cross-protocol reuse, while the
+bounded legacy walk independently rejects cycles. Every referenced inode and
+applicable data map is then authenticated. A valid nonempty union returns the
+stable recovery-required refusal without orphan cleanup or public mutation.
+Structural chain, locator, or duplicate-membership failures return corruption,
+while inode allocation and checksum failures preserve their specific
+corruption detail. Failed-mount retries clear and reuse a retained table when
+it is large enough rather than abandoning monotonic arena storage; an
+insufficient caller arena or retained table fails without a second allocation.
+
+An authenticated empty modern set is completed before mount publication only
+when both protocol counts are zero. Writer-free `AKW1` and `AKE1`-qualified
+`AKR1` clear `RECOVER` and `ORPHAN_PRESENT` together without changing an
+orphan inode/file or legacy link and without allocating a private writer. The
+implementation still fails closed on checksum-damaged incomplete tails and
+refuses transactional cleanup for either nonempty orphan protocol and all
 user-visible mutation. ACLs are exposed but not enforced, the real extent
 fixture reaches depth 1 rather than the implemented profile limit of 5, and
 the special-inode fixture does not yet contain a socket. Those qualification
 and semantic limits remain explicit before any write path can be advertised.
-The modern preflight also remains unqualified for journal-replayed orphan
-afterimages, later blocks and files beyond the former 4096-block limit,
-unlinked and structurally invalid referenced inodes, distinct-key hash
-collisions, and arena retry/exhaustion behavior.
+Focused 1 KiB coverage exercises one- and two-inode legacy chains, a mixed
+legacy/modern union, stable refusal with same-binding plan reuse, corrupt
+legacy links and cycles, allocation/checksum failures, and cross-protocol
+duplicate rejection without writes. Unified discovery remains unqualified for
+2/4 KiB legacy geometry, longer chains, journal-replayed orphan afterimages,
+later modern blocks and files beyond the former 4096-block limit, unlinked and
+structurally invalid referenced inodes, distinct-key hash collisions, and
+arena exhaustion or retained-too-small retry behavior.
 
 The remaining writer gate explicitly includes a geometry-derived production
-workspace/capacity contract with bounded transaction chunking, legacy-chain
-discovery, transactional cleanup for both orphan protocols, the complete
-namespace/data/metadata/xattr mutation surface, real `SYNCFS`/`FSYNC`
-durability, external-tool inspection of Akashic-authored active, dirty-empty,
-and clean images, and the controlled power-cut/release matrix.
+workspace/capacity contract with bounded transaction chunking,
+reauthentication and transactional cleanup for both orphan protocols, the
+complete namespace/data/metadata/xattr mutation surface, real
+`SYNCFS`/`FSYNC` durability, external-tool inspection of Akashic-authored
+active, dirty-empty, and clean images, and the controlled power-cut/release
+matrix.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

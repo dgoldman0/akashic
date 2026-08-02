@@ -461,6 +461,50 @@ def _modern_orphan_patches(
     )
 
 
+def _legacy_orphan_patches(
+    path: Path,
+    head: int,
+    links: tuple[tuple[int, int], ...],
+    *,
+    modern_entries: tuple[int, ...] = (),
+    bad_checksum_inode: int | None = None,
+) -> tuple[tuple[int, bytes], ...]:
+    """Author a legacy orphan chain, optionally sharing modern discovery."""
+    modern = _modern_orphan_patches(
+        path, modern_entries, orphan_present=bool(modern_entries)
+    )
+    superblock = bytearray(modern[0][1])
+    assert len(superblock) == 1024
+    inode_count = struct.unpack_from("<I", superblock, 0x00)[0]
+    assert 0 <= head <= inode_count
+    struct.pack_into("<I", superblock, 0xE8, head)
+
+    patches: list[tuple[int, bytes]] = [
+        (1024, _ext4_super_with_checksum(superblock)),
+        modern[1],
+    ]
+    seen: set[int] = set()
+    for inode_number, next_inode in links:
+        assert inode_number not in seen
+        seen.add(inode_number)
+        assert 0 < inode_number <= inode_count
+        assert 0 <= next_inode <= 0xFFFF_FFFF
+        primary_super, inode, inode_offset = _ext4_inode_record(
+            path, inode_number
+        )
+        updated_inode = bytearray(inode)
+        struct.pack_into("<I", updated_inode, 0x14, next_inode)
+        updated_inode = bytearray(
+            _inode_with_checksum(primary_super, inode_number, updated_inode)
+        )
+        if inode_number == bad_checksum_inode:
+            updated_inode[0x7C] ^= 1
+        patches.append((inode_offset, bytes(updated_inode)))
+    if bad_checksum_inode is not None:
+        assert bad_checksum_inode in seen
+    return tuple(patches)
+
+
 def _ext4_journal_physical_map(
     path: Path, logical_blocks: tuple[int, ...]
 ) -> dict[int, int]:
@@ -1257,6 +1301,12 @@ def run_recovery_forth(
 def _assert_emitted(output: str, marker: str) -> None:
     """Require executed output, not the marker text echoed in Forth source."""
     assert f"\r\n{marker} ok\r\n" in output, output[-4000:]
+
+
+def _forth_conjunction(checks: list[str]) -> str:
+    """Join nonempty Forth predicates with postfix AND operations."""
+    assert checks
+    return " ".join((checks[0], *(f"{check} AND" for check in checks[1:])))
 
 
 @pytest.fixture(scope="session")
@@ -10458,8 +10508,8 @@ def test_active_modern_orphan_is_authenticated_before_recovery_refusal(
     ("entries", "orphan_present", "expected_state"),
     (
         ((11, 11), True, "2 4"),
-        ((2,), True, "1 2"),
-        ((11,), False, "1 0"),
+        ((2,), True, "0 0"),
+        ((11,), False, "0 0"),
     ),
 )
 def test_invalid_modern_orphan_sets_are_corruption(
@@ -10486,6 +10536,256 @@ def test_invalid_modern_orphan_sets_are_corruption(
         ),
     )
     assert f"10 3 4 13 0 {expected_state}" in output, output[-1500:]
+
+
+@pytest.mark.parametrize(
+    (
+        "case",
+        "links",
+        "modern_entries",
+        "expected_table",
+        "expected_modern",
+    ),
+    (
+        (
+            "legacy-one",
+            ((14, 0),),
+            (),
+            ((14, 1, 0, 0), (0, 0, 0, 0)),
+            0,
+        ),
+        (
+            "legacy-multi",
+            ((14, 17), (17, 0)),
+            (),
+            (
+                (0, 0, 0, 0),
+                (17, 1, 0, 0),
+                (14, 1, 17, 0),
+                (0, 0, 0, 0),
+            ),
+            0,
+        ),
+        (
+            "legacy-modern-union",
+            ((14, 0),),
+            (17,),
+            (
+                (0, 0, 0, 0),
+                (17, 2, 0, 0),
+                (14, 1, 0, 0),
+                (0, 0, 0, 0),
+            ),
+            1,
+        ),
+    ),
+)
+def test_unified_orphan_plan_refuses_stably_and_reuses_workspace(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+    case: str,
+    links: tuple[tuple[int, int], ...],
+    modern_entries: tuple[int, ...],
+    expected_table: tuple[tuple[int, int, int, int], ...],
+    expected_modern: int,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    expected_legacy = len(links)
+    expected_active = expected_legacy + expected_modern
+    expected_slots = len(expected_table)
+    patches = _legacy_orphan_patches(
+        path, 14, links, modern_entries=modern_entries
+    )
+
+    plan_lines: list[str] = []
+    plan_checks: list[str] = []
+    for slot, fields in enumerate(expected_table):
+        entry = f"_UO-PLAN-{slot}"
+        check = f"{entry}-OK"
+        plan_lines.append(
+            f"{slot} _UO-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT {entry}"
+        )
+        field_checks = []
+        for field, expected in enumerate(fields):
+            address = entry if field == 0 else f"{entry} {field} CELLS +"
+            field_checks.append(f"{address} @ {expected} =")
+        plan_lines.append(_forth_conjunction(field_checks) + f" CONSTANT {check}")
+        plan_checks.append(check)
+
+    output, trace, _media_sha256 = run_recovery_forth(
+        path,
+        tmp_path / f"{case}-stable-refusal.img",
+        [
+            "T-ARENA CONSTANT _UO-ARENA",
+            (
+                "_UO-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _UO-FIRST-IOR CONSTANT _UO-V"
+            ),
+            "_UO-V _EXT4-CTX CONSTANT _UO-CTX",
+            "_UO-ARENA ARENA-USED CONSTANT _UO-USED-BEFORE",
+            "_UO-CTX _EXT4-C.O.TABLE + @ CONSTANT _UO-TABLE",
+            "_UO-CTX _EXT4-C.O.SLOTS + @ CONSTANT _UO-SLOTS",
+            "_UO-CTX _EXT4-C.O.ACTIVE + @ CONSTANT _UO-ACTIVE",
+            (
+                "_UO-CTX _EXT4-C.O.MODERN-ACTIVE + @ "
+                "CONSTANT _UO-MODERN"
+            ),
+            (
+                "_UO-CTX _EXT4-C.O.LEGACY-ACTIVE + @ "
+                "CONSTANT _UO-LEGACY"
+            ),
+            "_UO-V _EXT4-MOUNT CONSTANT _UO-RETRY-IOR",
+            "_UO-ARENA ARENA-USED CONSTANT _UO-USED-AFTER",
+            *plan_lines,
+            (
+                _forth_conjunction(
+                    [
+                        "_UO-FIRST-IOR VFS-IOR-REASON "
+                        "VFS-R-UNSUPPORTED =",
+                        "_UO-FIRST-IOR VFS-IOR-DOMAIN "
+                        "VFS-IOR-D-FORMAT =",
+                        "_UO-FIRST-IOR VFS-IOR-FLAGS 0=",
+                        "_UO-FIRST-IOR VFS-IOR-DETAIL "
+                        "EXT4-D-RECOVERY =",
+                        "_UO-RETRY-IOR VFS-IOR-REASON "
+                        "VFS-R-UNSUPPORTED =",
+                        "_UO-RETRY-IOR VFS-IOR-DOMAIN "
+                        "VFS-IOR-D-FORMAT =",
+                        "_UO-RETRY-IOR VFS-IOR-FLAGS 0=",
+                        "_UO-RETRY-IOR VFS-IOR-DETAIL "
+                        "EXT4-D-RECOVERY =",
+                        "_UO-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_UO-V _EXT4-READY? 0=",
+                        "_UO-V _EXT4-CTX _UO-CTX =",
+                        "_UO-USED-BEFORE _UO-USED-AFTER =",
+                        "_UO-CTX _EXT4-C.O.TABLE + @ _UO-TABLE =",
+                        "_UO-TABLE 0<>",
+                        f"_UO-SLOTS {expected_slots} =",
+                        (
+                            "_UO-CTX _EXT4-C.O.SLOTS + @ "
+                            f"{expected_slots} ="
+                        ),
+                        f"_UO-ACTIVE {expected_active} =",
+                        (
+                            "_UO-CTX _EXT4-C.O.ACTIVE + @ "
+                            f"{expected_active} ="
+                        ),
+                        f"_UO-MODERN {expected_modern} =",
+                        (
+                            "_UO-CTX _EXT4-C.O.MODERN-ACTIVE + @ "
+                            f"{expected_modern} ="
+                        ),
+                        f"_UO-LEGACY {expected_legacy} =",
+                        (
+                            "_UO-CTX _EXT4-C.O.LEGACY-ACTIVE + @ "
+                            f"{expected_legacy} ="
+                        ),
+                        "_UO-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_UO-CTX _EXT4-C.J.WRITER + @ 0=",
+                        *plan_checks,
+                    ]
+                )
+                + ' IF ." EXT4-UNIFIED-ORPHAN-STABLE" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-UNIFIED-ORPHAN-STABLE")
+    assert trace == ()
+
+
+@pytest.mark.parametrize(
+    (
+        "case",
+        "head",
+        "links",
+        "modern_entries",
+        "bad_checksum_inode",
+        "detail",
+    ),
+    (
+        ("legacy-cycle", 14, ((14, 17), (17, 14)), (), None, 13),
+        ("legacy-next-out-of-range", 14, ((14, -1),), (), None, 13),
+        ("legacy-unallocated", 18, (), (), None, 8),
+        ("legacy-inode-checksum", 14, ((14, 0),), (), 14, 10),
+        ("cross-protocol-duplicate", 14, ((14, 0),), (14,), None, 13),
+    ),
+)
+def test_unified_orphan_discovery_rejects_corruption_without_writes(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+    case: str,
+    head: int,
+    links: tuple[tuple[int, int], ...],
+    modern_entries: tuple[int, ...],
+    bad_checksum_inode: int | None,
+    detail: int,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    layout = _ext4_recovery_layout(path)
+    with path.open("rb") as source:
+        source.seek(1024)
+        superblock = source.read(1024)
+    assert len(superblock) == 1024
+    inode_count = struct.unpack_from("<I", superblock, 0x00)[0]
+
+    if case == "legacy-next-out-of-range":
+        links = ((14, inode_count + 1),)
+    if case == "legacy-unallocated":
+        inode_index = head - 1
+        inodes_per_group = struct.unpack_from("<I", superblock, 0x28)[0]
+        assert inode_index < inodes_per_group
+        with path.open("rb") as source:
+            source.seek(
+                layout["inode_bitmap"] * layout["block_size"]
+                + inode_index // 8
+            )
+            bitmap_byte = source.read(1)
+        assert len(bitmap_byte) == 1
+        assert bitmap_byte[0] & (1 << (inode_index % 8)) == 0
+
+    patches = _legacy_orphan_patches(
+        path,
+        head,
+        links,
+        modern_entries=modern_entries,
+        bad_checksum_inode=bad_checksum_inode,
+    )
+    cross_protocol_checks = []
+    if case == "cross-protocol-duplicate":
+        cross_protocol_checks = [
+            "_UC-CTX _EXT4-C.O.ACTIVE + @ 2 =",
+            "_UC-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
+            "_UC-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 1 =",
+            "_UC-CTX _EXT4-C.O.SLOTS + @ 4 =",
+        ]
+
+    output, trace, _media_sha256 = run_recovery_forth(
+        path,
+        tmp_path / f"{case}-rejected.img",
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _UC-IOR CONSTANT _UC-V",
+            "_UC-V _EXT4-CTX CONSTANT _UC-CTX",
+            (
+                _forth_conjunction(
+                    [
+                        "_UC-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+                        "_UC-IOR VFS-IOR-DOMAIN VFS-IOR-D-FORMAT =",
+                        "_UC-IOR VFS-IOR-FLAGS VFS-IOR-F-CORRUPT =",
+                        f"_UC-IOR VFS-IOR-DETAIL {detail} =",
+                        "_UC-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_UC-V _EXT4-READY? 0=",
+                        "_UC-CTX _EXT4-C.J.WRITER + @ 0=",
+                        *cross_protocol_checks,
+                    ]
+                )
+                + ' IF ." EXT4-UNIFIED-ORPHAN-CORRUPTION" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-UNIFIED-ORPHAN-CORRUPTION")
+    assert trace == ()
 
 
 def test_recover_without_checksum_v3_journal_refuses_before_writes(

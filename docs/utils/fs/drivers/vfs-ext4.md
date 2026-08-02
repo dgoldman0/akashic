@@ -84,15 +84,24 @@ root, mount verifies:
   descriptor checksum. An inode-bitmap payload must keep inode 8 allocated,
   and an inode-table payload must preserve inode 8's exact 128- or 256-byte
   record while allowing neighboring records to change; and
-- every modern orphan-file block through its authenticated inode size, bounded
-  by filesystem geometry, including the physical-location-bound per-block
-  CRC32C tail. The scanner counts and indexes all nonzero entries in an
-  arena-derived half-full power-of-two table while rejecting duplicates, then
-  authenticates each allocated inode, bounded `i_dtime`, type, size, flags,
-  and applicable data map. Linked entries must be truncatable. An authenticated
-  empty modern set is completed before mount publication without changing the
-  orphan inode or any orphan-file block. A nonempty set is still refused after
-  preflight because journaled truncate/delete and slot cleanup are not
+- the legacy orphan chain rooted at `s_last_orphan` and every modern
+  orphan-file block through its authenticated inode size, bounded by filesystem
+  geometry. Legacy traversal authenticates each allocated, checksummed inode,
+  follows its `i_dtime` link, and uses the admissible inode-number range as a
+  nontermination bound. Modern traversal authenticates each
+  physical-location-bound per-block CRC32C tail. The exact combined active
+  count sizes one arena-derived half-full power-of-two plan. Each occupied
+  four-cell record retains the inode, protocol, and cleanup locator: legacy
+  `{ inode, legacy, next, 0 }` or modern
+  `{ inode, modern, logical-block, slot }`. One shared hash enforces
+  union-wide inode uniqueness, including modern duplicates and cross-protocol
+  reuse; the bounded legacy walk independently rejects cycles. The scanner
+  then authenticates every referenced inode's bounded `i_dtime`, type, size,
+  flags, and applicable data map. Linked entries must be truncatable. An
+  authenticated empty modern set is completed before mount publication only
+  when the legacy/modern union is empty, without changing an orphan inode,
+  orphan-file block, or legacy link. A nonempty union is still refused after
+  preflight because journaled truncate/delete and protocol cleanup are not
   implemented.
 
 The driver contains its own reflected CRC32C implementation. Akashic's public
@@ -100,18 +109,21 @@ The driver contains its own reflected CRC32C implementation. Akashic's public
 ext4 checksum contract.
 
 Known refused feature bits return format-domain `VFS-R-UNSUPPORTED` with
-`EXT4-D-FEATURE`. `ORPHAN_PRESENT` is admitted through any required
-committed-journal replay and strict reload. If the authoritative modern orphan
-set is empty, mount completes the transient recovery state before publication:
-a `RECOVER`-clear input first enters a tear-safe recovery epoch through
-writer-free `AKW1` activation while preserving `ORPHAN_PRESENT`; `AKR1`
-then lands an empty checksum-v3 journal and a checksummed primary superblock
-with both transient bits clear. A nonempty modern set returns the stable
-`EXT4-D-RECOVERY` refusal. A
-nonzero legacy orphan chain, a dirty state without `RECOVER`, or a recovery
-state outside the implemented JBD2 slice likewise returns a stable refusal.
-Checksum and structural failures return format-domain `VFS-R-CORRUPT`. No such
-failure can leave a mounted or ready object.
+`EXT4-D-FEATURE`. `ORPHAN_PRESENT` and a nonzero `s_last_orphan` are admitted
+through any required committed-journal replay and strict reload for
+authenticated discovery. If `ORPHAN_PRESENT` is set and the authoritative
+legacy/modern union is empty, mount completes the transient recovery state
+before publication: a `RECOVER`-clear input first enters a tear-safe recovery
+epoch through writer-free `AKW1` activation while preserving
+`ORPHAN_PRESENT`; `AKR1` then lands an empty checksum-v3 journal and a
+checksummed primary superblock with both transient bits clear. A valid
+nonempty union returns the stable `EXT4-D-RECOVERY` refusal without orphan
+cleanup or public mutation. Malformed links, cycles, out-of-range locators,
+and duplicate inode membership return format-domain `VFS-R-CORRUPT`; inode
+allocation and checksum failures preserve their more specific corruption
+detail. A dirty state without `RECOVER` or a recovery state outside the
+implemented JBD2 slice remains a stable refusal. No such failure can leave a
+mounted or ready object.
 
 ## Bounded mount recovery
 
@@ -145,10 +157,14 @@ Preflight also treats a matching-sequence `SUPER_V2` header as the known
 prefix-torn anchor boundary only when the complete block passes the anchor
 checksum, geometry, witness, and self-location checks; replay never admits it
 as a transaction record. A checksum-damaged descriptor, payload, revoke, or
-commit is currently refused rather than classified as a torn tail. Modern
-orphan discovery runs after replay and strict reload. The authenticated-empty
-branch completes recovery metadata without changing orphan-file contents;
-nonempty transactional truncate/delete and slot clearing are not yet admitted.
+commit is currently refused rather than classified as a torn tail. Unified
+legacy/modern orphan discovery runs after replay and strict reload. Its exact
+union count drives one arena-backed location plan, and failed-mount retries
+reuse a sufficient retained allocation rather than consume another monotonic
+arena allocation. The authenticated-empty modern branch completes recovery
+metadata only when both protocols are empty, without changing an orphan inode,
+orphan-file block, or legacy link; nonempty transactional truncate/delete and
+protocol cleanup are not yet admitted.
 Pinned
 qualification covers multi-record hash collisions, malformed revoke geometry
 and ownership, a revoked primary-super repair, and transactions relocated
@@ -462,10 +478,10 @@ rebase the preserved writer workspace.
 The object layout, counts, embedded pointers, ring fields, phase/fault state,
 image checksums, and hash indices are revalidated before they can drive a
 fill, copy, lookup, or media write. The public binding and capability mask
-remain read-only. Legacy-orphan discovery, transactional cleanup for both
-orphan mechanisms, the complete user-visible mutation layer, external-tool
-inspection of Akashic-created transactions/endpoints, and the remaining
-release gates must all land before public write capabilities can be enabled.
+remain read-only. Transactional cleanup for both orphan mechanisms, the
+complete user-visible mutation layer, external-tool inspection of
+Akashic-created transactions/endpoints, and the remaining release gates must
+all land before public write capabilities can be enabled.
 
 ## Read-only inspection
 
@@ -544,16 +560,24 @@ writable profile. The remaining boundaries are:
   immediate sequential workspace reuse, clean write-active deactivation, and
   public clean-unmount integration are implemented as private durability
   foundations;
-- modern orphan-file discovery, inode preflight, and authenticated-empty
-  `ORPHAN_PRESENT` completion are implemented. Empty completion mutates only
-  journal recovery state and the checksummed primary-super transient bits; it
-  does not change the orphan inode/file, allocate writer workspace, or expose a
-  user-visible write. Nonempty modern cleanup, legacy-chain discovery and
-  cleanup, and every user-visible mutation operation remain unimplemented;
-- modern preflight still needs qualification for journal-replayed orphan
-  afterimages, later blocks and files beyond the former 4096-block limit,
-  unlinked and structurally invalid referenced inodes, hash collisions, and
-  arena retry/exhaustion behavior; and
+- unified legacy-chain and modern orphan-file discovery, inode preflight, and
+  authenticated-empty `ORPHAN_PRESENT` completion are implemented. The shared
+  exact-count plan retains protocol-specific locations and enforces inode
+  uniqueness across the union. Empty completion is authorized only when both
+  protocol counts are zero and mutates only journal recovery state and the
+  checksummed primary-super transient bits; it does not change an orphan
+  inode/file, a legacy link, allocate writer workspace, or expose a
+  user-visible write. Transactional cleanup for either nonempty protocol and
+  every user-visible mutation operation remain unimplemented;
+- focused 1 KiB coverage exercises one- and two-inode legacy chains, a mixed
+  legacy/modern union, stable refusal with same-binding plan reuse, legacy
+  cycles and invalid links, unallocated and checksum-invalid legacy inodes,
+  and cross-protocol duplicate rejection without writes. Unified discovery
+  still needs qualification across 2/4 KiB legacy geometry, longer chains,
+  journal-replayed orphan afterimages, later modern blocks and files beyond
+  the former 4096-block limit, unlinked and structurally invalid referenced
+  inodes, distinct-key hash collisions, and arena exhaustion or a retained
+  workspace that is too small; and
 - empty completion has 1/2/4 KiB happy-path and write-free-remount coverage,
   plus same-binding writer-free W3 retry and four controlled prefix cases:
   1 KiB AKW1 W3 primary, 1/4 KiB AKE1/AKR1 W9 early primary, and 1 KiB AKR1
