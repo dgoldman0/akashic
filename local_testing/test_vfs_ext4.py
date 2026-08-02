@@ -1452,13 +1452,40 @@ def run_recovery_forth(
     write_protected: bool = False,
     storage_faults: tuple[dict, ...] = (),
     write_faults_by_ordinal: dict[int, dict] | None = None,
+    flush_faults_by_ordinal: dict[int, dict] | None = None,
     read_faults_by_write_and_ordinal: (
         dict[tuple[int, int], dict] | None
     ) = None,
     capture_media: Path | None = None,
+    capture_prior_flush_media: Path | None = None,
     max_steps: int = 800_000_000,
 ) -> tuple[str, tuple[tuple[str, int, int], ...], str]:
     """Run recovery on private mutable media and return its ordered I/O trace."""
+    assert (
+        capture_prior_flush_media is None or flush_faults_by_ordinal
+    ), "prior-fence capture requires an ordinal flush fault"
+    pending_flush_faults = dict(flush_faults_by_ordinal or {})
+    assert all(ordinal > 0 for ordinal in pending_flush_faults)
+    for target_fault in pending_flush_faults.values():
+        assert target_fault.get("stage") == "flush"
+        assert (
+            target_fault.get("command", STORAGE_CMD_FLUSH)
+            == STORAGE_CMD_FLUSH
+        )
+        assert target_fault.get("action", "fail") == "fail"
+        assert target_fault.get("result", 0) != STORAGE_RESULT_OK
+    if pending_flush_faults:
+        assert not any(
+            fault.get("stage") == "flush" for fault in storage_faults
+        )
+    if capture_prior_flush_media is not None:
+        assert len(pending_flush_faults) == 1
+        capture_paths = [image, backing, capture_prior_flush_media]
+        if capture_media is not None:
+            capture_paths.append(capture_media)
+        assert len({path.resolve() for path in capture_paths}) == len(
+            capture_paths
+        ), "flush durability captures must use distinct paths"
     bios, memory, cpu_state, ext_memory = build_snapshot()
     system = fat_harness.MegapadSystem(
         ram_size=1024 * 1024,
@@ -1479,6 +1506,8 @@ def run_recovery_forth(
     media = bytearray(image.read_bytes())
     for offset, data in patches:
         media[offset : offset + len(data)] = data
+    if capture_prior_flush_media is not None and 1 in pending_flush_faults:
+        _write_sparse_bytes(capture_prior_flush_media, media, durable=True)
     system.storage._replace_media(media, str(backing))
     system.storage.write_protected = write_protected
 
@@ -1498,6 +1527,7 @@ def run_recovery_forth(
     start_dma = system.storage._start_dma
     run_flush = system.storage._run_flush
     write_ordinal = 0
+    flush_ordinal = 0
     pending_read_faults = dict(read_faults_by_write_and_ordinal or {})
     read_ordinals: dict[int, int] = {}
 
@@ -1521,7 +1551,20 @@ def run_recovery_forth(
         return start_dma(request, phase)
 
     def track_flush(request):
+        nonlocal flush_ordinal
+        flush_ordinal += 1
         trace.append(("flush", 0, 0))
+        fault = pending_flush_faults.pop(flush_ordinal, None)
+        if fault is not None:
+            if capture_prior_flush_media is not None:
+                if flush_ordinal > 1:
+                    assert system.storage.image_path is not None
+                    durable_path = Path(system.storage.image_path)
+                    assert durable_path.is_file(), (
+                        "a prior successful flush did not publish backing media"
+                    )
+                    _copy_sparse_file(durable_path, capture_prior_flush_media)
+            system.storage.inject_fault(**fault)
         return run_flush(request)
 
     system.storage._start_dma = track_dma
@@ -1545,6 +1588,11 @@ def run_recovery_forth(
     _assert_emitted(output, "EXT4-STACK-CLEAN")
     if capture_media is not None:
         _write_sparse_bytes(capture_media, media)
+    if capture_prior_flush_media is not None:
+        assert capture_prior_flush_media.is_file()
+    assert not pending_flush_faults, (
+        f"unreached ordinal flush faults: {sorted(pending_flush_faults)}"
+    )
     return output, tuple(trace), hashlib.sha256(media).hexdigest()
 
 
@@ -11617,6 +11665,114 @@ def test_mount_completes_singleton_modern_depth0_orphan_transaction(
     assert sum(kind == "flush" for kind, _, _ in trace) == 18
 
 
+def _assert_singleton_modern_cleanup_media_converges(
+    interrupted: Path,
+    repaired: Path,
+    stable: Path,
+) -> tuple[tuple[tuple[str, int, int], ...], str]:
+    remount_output, remount_trace, repaired_sha256 = run_recovery_forth(
+        interrupted,
+        repaired,
+        [
+            "T-ARENA CONSTANT _MR-ARENA",
+            (
+                "_MR-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _MR-IOR CONSTANT _MR-V"
+            ),
+            "_MR-V _EXT4-CTX CONSTANT _MR-CTX",
+            "14 _MR-CTX _EXT4-LOAD-INODE CONSTANT _MR-INODE-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_MR-IOR 0=",
+                        "_MR-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_MR-V _EXT4-READY?",
+                        "_MR-V _EXT4-ATTACHED?",
+                        "_MR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_MR-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_MR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_MR-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
+                        "_MR-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_MR-CTX _EXT4-C.J.START + @ 0=",
+                        "_MR-CTX _EXT4-C.J.ANCHOR + @ 0=",
+                        "_MR-CTX _EXT4-C.J.WITNESS + @ 0=",
+                        "_MR-CTX _EXT4-C.J.CLEANUP + @ 0=",
+                        "_MR-CTX _EXT4-C.J.PRIMARY-TORN + @ 0=",
+                        "_MR-CTX _EXT4-C.SUPER-TORN + @ 0=",
+                        "_MR-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_MR-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_MR-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_MR-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_MR-CTX _EXT4-C.ARENA + @ _MR-ARENA =",
+                        "_EXT4-MOC-MARK-VALID @ 0=",
+                        (
+                            "_MR-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0="
+                        ),
+                        (
+                            "_MR-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                        "_MR-INODE-IOR 0=",
+                        (
+                            "_MR-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.SIZE-LO + L@ 0="
+                        ),
+                        (
+                            "_MR-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.SIZE-HI + L@ 0="
+                        ),
+                        (
+                            "_MR-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.BLOCKS-LO + L@ "
+                            "_MR-CTX _EXT4-C.SPB + @ ="
+                        ),
+                        (
+                            "_MR-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.BLOCKS-HI + W@ 0="
+                        ),
+                        (
+                            "_MR-CTX _EXT4-C.INODE + _EXT4-I.BLOCK + "
+                            "2 + W@ 0="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-MODERN-ORPHAN-PREFIX-REPAIRED" THEN'
+            ),
+        ],
+        capture_media=repaired,
+    )
+    _assert_emitted(remount_output, "EXT4-MODERN-ORPHAN-PREFIX-REPAIRED")
+    assert repaired.is_file()
+    assert _sha256(repaired) == repaired_sha256
+
+    stable_output, stable_trace, stable_sha256 = run_recovery_forth(
+        repaired,
+        stable,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _MS-IOR CONSTANT _MS-V",
+            (
+                _forth_conjunction(
+                    [
+                        "_MS-IOR 0=",
+                        "_MS-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_MS-V _EXT4-READY?",
+                        "_MS-V _EXT4-CTX _EXT4-C.J.WRITER + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-MODERN-ORPHAN-PREFIX-STABLE" THEN'
+            ),
+        ],
+        capture_media=stable,
+    )
+    _assert_emitted(stable_output, "EXT4-MODERN-ORPHAN-PREFIX-STABLE")
+    assert stable_trace == ()
+    assert stable_sha256 == repaired_sha256
+    return remount_trace, repaired_sha256
+
+
 @pytest.mark.parametrize(
     ("case", "write_ordinal", "sector_index", "byte_index"),
     (
@@ -11833,108 +11989,122 @@ def test_singleton_modern_cleanup_write_prefixes_converge_on_fresh_mount(
         if write_ordinal == 20:
             assert torn_home not in {old_home, new_home}
 
-    repaired = tmp_path / f"modern-orphan-{case}-repaired.img"
-    remount_output, _remount_trace, repaired_sha256 = run_recovery_forth(
+    _assert_singleton_modern_cleanup_media_converges(
         torn,
-        repaired,
-        [
-            "T-ARENA CONSTANT _MR-ARENA",
-            (
-                "_MR-ARENA T-VOLUME EXT4-NEW "
-                "CONSTANT _MR-IOR CONSTANT _MR-V"
-            ),
-            "_MR-V _EXT4-CTX CONSTANT _MR-CTX",
-            "14 _MR-CTX _EXT4-LOAD-INODE CONSTANT _MR-INODE-IOR",
-            (
-                _forth_conjunction(
-                    [
-                        "_MR-IOR 0=",
-                        "_MR-V V.LIFECYCLE @ VFS-L-MOUNTED =",
-                        "_MR-V _EXT4-READY?",
-                        "_MR-V _EXT4-ATTACHED?",
-                        "_MR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
-                        "_MR-CTX _EXT4-C.RECOVERY + @ 0=",
-                        "_MR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
-                        "_MR-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
-                        "_MR-CTX _EXT4-C.J.WRITER + @ 0=",
-                        "_MR-CTX _EXT4-C.J.START + @ 0=",
-                        "_MR-CTX _EXT4-C.J.ANCHOR + @ 0=",
-                        "_MR-CTX _EXT4-C.J.WITNESS + @ 0=",
-                        "_MR-CTX _EXT4-C.J.CLEANUP + @ 0=",
-                        "_MR-CTX _EXT4-C.J.PRIMARY-TORN + @ 0=",
-                        "_MR-CTX _EXT4-C.SUPER-TORN + @ 0=",
-                        "_MR-CTX _EXT4-C.O.ACTIVE + @ 0=",
-                        "_MR-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
-                        "_MR-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
-                        "_MR-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
-                        "_MR-CTX _EXT4-C.ARENA + @ _MR-ARENA =",
-                        "_EXT4-MOC-MARK-VALID @ 0=",
-                        (
-                            "_MR-CTX _EXT4-C.SB + "
-                            "_EXT4-SB.INCOMPAT + L@ "
-                            "_EXT4-INCOMPAT-RECOVER AND 0="
-                        ),
-                        (
-                            "_MR-CTX _EXT4-C.SB + "
-                            "_EXT4-SB.RO-COMPAT + L@ "
-                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
-                        ),
-                        "_MR-INODE-IOR 0=",
-                        (
-                            "_MR-CTX _EXT4-C.INODE + "
-                            "_EXT4-I.SIZE-LO + L@ 0="
-                        ),
-                        (
-                            "_MR-CTX _EXT4-C.INODE + "
-                            "_EXT4-I.SIZE-HI + L@ 0="
-                        ),
-                        (
-                            "_MR-CTX _EXT4-C.INODE + "
-                            "_EXT4-I.BLOCKS-LO + L@ "
-                            "_MR-CTX _EXT4-C.SPB + @ ="
-                        ),
-                        (
-                            "_MR-CTX _EXT4-C.INODE + "
-                            "_EXT4-I.BLOCKS-HI + W@ 0="
-                        ),
-                        (
-                            "_MR-CTX _EXT4-C.INODE + _EXT4-I.BLOCK + "
-                            "2 + W@ 0="
-                        ),
-                    ]
-                )
-                + ' IF ." EXT4-MODERN-ORPHAN-PREFIX-REPAIRED" THEN'
-            ),
-        ],
-        capture_media=repaired,
+        tmp_path / f"modern-orphan-{case}-repaired.img",
+        tmp_path / f"modern-orphan-{case}-stable.img",
     )
-    _assert_emitted(remount_output, "EXT4-MODERN-ORPHAN-PREFIX-REPAIRED")
-    assert repaired.is_file()
-    assert _sha256(repaired) == repaired_sha256
 
-    stable = tmp_path / f"modern-orphan-{case}-stable.img"
-    stable_output, stable_trace, stable_sha256 = run_recovery_forth(
-        repaired,
-        stable,
+
+@pytest.mark.parametrize(
+    ("case", "flush_ordinal"),
+    (
+        pytest.param("activation-super", 4, id="F4-activation-super"),
+        pytest.param("transaction-body", 7, id="F7-transaction-body"),
+        pytest.param("active-primary", 10, id="F10-active-primary"),
+        pytest.param("commit", 11, id="F11-commit"),
+        pytest.param("replay-homes", 12, id="F12-replay-homes"),
+        pytest.param("reset-primary", 15, id="F15-reset-primary"),
+        pytest.param("final-super", 16, id="F16-final-super"),
+        pytest.param("witness-clear", 17, id="F17-witness-clear"),
+        pytest.param("guard-retire", 18, id="F18-guard-retire"),
+    ),
+)
+def test_singleton_modern_cleanup_flush_fences_converge_on_fresh_mount(
+    singleton_modern_cleanup_fixture: dict[str, object],
+    tmp_path: Path,
+    case: str,
+    flush_ordinal: int,
+) -> None:
+    source = singleton_modern_cleanup_fixture["source"]
+    patches = singleton_modern_cleanup_fixture["patches"]
+    success_trace = singleton_modern_cleanup_fixture["success_trace"]
+    assert isinstance(source, Path)
+    assert isinstance(patches, tuple)
+    assert isinstance(success_trace, tuple)
+
+    working = tmp_path / f"modern-orphan-{case}-flush-working.img"
+    survived = tmp_path / f"modern-orphan-{case}-flush-survived.img"
+    prior_fence = tmp_path / f"modern-orphan-{case}-prior-fence.img"
+    output, failed_trace, survived_sha256 = run_recovery_forth(
+        source,
+        working,
         [
-            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _MS-IOR CONSTANT _MS-V",
+            "T-ARENA CONSTANT _FF-ARENA",
+            (
+                "_FF-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _FF-IOR CONSTANT _FF-V"
+            ),
+            "_FF-V _EXT4-CTX CONSTANT _FF-CTX",
             (
                 _forth_conjunction(
                     [
-                        "_MS-IOR 0=",
-                        "_MS-V V.LIFECYCLE @ VFS-L-MOUNTED =",
-                        "_MS-V _EXT4-READY?",
-                        "_MS-V _EXT4-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_FF-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME =",
+                        "_FF-IOR VFS-IOR-REASON VFS-R-IO =",
+                        (
+                            "_FF-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-PARTIAL AND 0="
+                        ),
+                        "_FF-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_FF-V _EXT4-READY? 0=",
+                        "_FF-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_FF-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_FF-CTX _EXT4-C.J.WRITER-CURRENT + @ 0=",
+                        "_FF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_FF-CTX _EXT4-C.ARENA + @ _FF-ARENA =",
+                        "_EXT4-MOC-MARK-VALID @ 0=",
+                        "_EXT4-MOC-MARK @ _FF-ARENA A.PTR @ =",
+                        "_EXT4-MOC-SPAN @ _EXT4-JWR-SIZE U< 0=",
+                        (
+                            "_EXT4-MOC-MARK @ _EXT4-MOC-SPAN @ "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        "_EXT4-MOC-WRITER @ 0=",
+                        "_EXT4-MOC-TX @ 0=",
                     ]
                 )
-                + ' IF ." EXT4-MODERN-ORPHAN-PREFIX-STABLE" THEN'
+                + ' IF ." EXT4-MODERN-ORPHAN-FLUSH-CAUGHT" THEN'
             ),
         ],
-        capture_media=stable,
+        patches=patches,
+        flush_faults_by_ordinal={
+            flush_ordinal: {
+                "stage": "flush",
+                "result": STORAGE_RESULT_FLUSH_FAILURE,
+                "command": STORAGE_CMD_FLUSH,
+            }
+        },
+        capture_media=survived,
+        capture_prior_flush_media=prior_fence,
     )
-    _assert_emitted(stable_output, "EXT4-MODERN-ORPHAN-PREFIX-STABLE")
-    assert stable_trace == ()
-    assert stable_sha256 == repaired_sha256
+    _assert_emitted(output, "EXT4-MODERN-ORPHAN-FLUSH-CAUGHT")
+    assert survived.is_file()
+    assert prior_fence.is_file()
+    assert working.is_file()
+    assert _sha256(survived) == survived_sha256
+    assert _sha256(working) == _sha256(prior_fence)
+    assert _sha256(survived) != _sha256(prior_fence)
+
+    seen_flushes = 0
+    trace_cut = 0
+    for index, event in enumerate(success_trace, start=1):
+        if event[0] == "flush":
+            seen_flushes += 1
+            if seen_flushes == flush_ordinal:
+                trace_cut = index
+                break
+    assert trace_cut
+    assert failed_trace == success_trace[:trace_cut]
+
+    for durability, interrupted in (
+        ("survived", survived),
+        ("prior", prior_fence),
+    ):
+        _assert_singleton_modern_cleanup_media_converges(
+            interrupted,
+            tmp_path / f"modern-orphan-{case}-{durability}-repaired.img",
+            tmp_path / f"modern-orphan-{case}-{durability}-stable.img",
+        )
 
 
 def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
