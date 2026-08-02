@@ -456,6 +456,21 @@ leaves the orphan slot/list record active for a later durable
 protocol-completion step. It stages no data or revoke and performs no media
 write.
 
+`_EXT4-JTX-STAGE-MODERN-ORPHAN-DEPTH0-FINAL` owns an initially empty metadata-
+only transaction and composes that truncation with removal of the same modern
+orphan slot. It admits exactly one authenticated modern record, no legacy
+record or `s_last_orphan` link, and requires the supplied metadata credit to
+equal the final coalesced home count. After both builders succeed, it
+reauthenticates the still-raw singleton plan and seals the target inode
+generation/location/original inline-entry count, orphan logical block/slot/
+physical identity, and complete retained-image CRC32Cs in the arena-owned
+writer header. The explicit entry count distinguishes a slot-only cleanup from
+a staged target image without reserving any valid CRC32C value as a sentinel.
+The checkpoint mode and transaction epoch bind that certificate to this
+begin/abort cycle. Mode is published last; once published, every generic and
+typed staging entry point returns busy, while abort and emit remain legal.
+Abort and every successful writer rebase scrub the complete certificate.
+
 This is a non-emitting staging boundary. The typed builders may issue checked
 reads for locator and checksum reauthentication, but they do not activate a
 journal, emit a transaction, checkpoint a home block, write, or flush. Before
@@ -491,8 +506,15 @@ is already at home, while metadata home blocks remain unchanged. All staged
 metadata, data, and revoke entries and their after-images remain owned by the
 writer; retry, abort, and a new transaction remain busy until checkpoint
 finishes. Checkpoint first revalidates the complete workspace, performs an
-ordinary complete on-media scan, and then repeats that scan in lockstep with
-the retained emitter order before issuing a home write. The active primary and
+complete on-media scan, and then repeats that scan in lockstep with the
+retained emitter order before issuing a home write. Generic transactions use
+the ordinary strict reload and therefore still gain no authority from a
+nonempty orphan plan. The sealed singleton-final mode alone uses a private
+pre-home reload that performs the same super, group, backup, orphan-union, and
+journal authentication but replaces the public nonempty-policy refusal with
+an exact writer-certificate comparison. It requires the sole rebuilt plan
+record, raw target generation/table location, raw orphan generation/mapping/
+slot, and frozen retained target/orphan images to match. The active primary and
 guard, transaction ID, start/head/cursor, every descriptor home and unescaped
 payload, every revoke identity, the commit, the exact zero sentinel, and the
 retained entry/image CRCs must describe the same single committed transaction.
@@ -503,7 +525,10 @@ after-image to its home block. Ordered data is not rewritten because emission
 made it durable before commit, and revoked/cancelled entries grant no home-write
 authority. All metadata home writes cross one volume flush, followed by a
 strict reload and root validation, before any journal block or reservation can
-be reused.
+be reused. Both the post-home proof and the final post-reset proof remain
+ordinary strict reloads. A singleton-final transaction additionally requires
+those reloads to derive the authenticated empty-orphan predicate, so its
+special admission cannot survive past the first home-write boundary.
 
 Journal release preserves the mounted write-active state. It reuses the active
 guard `G` as an `AKG1`-qualified `AKR1` reset anchor, publishes and flushes the
@@ -517,8 +542,11 @@ activation again.
 
 An exact final reread rebases the same workspace to the reset journal
 head/sequence, restores the full ring reservation, scrubs retained transaction
-authority, and publishes `IDLE`. The next transaction immediately reuses that
-workspace and ring, including sequence wrap, without another arena allocation.
+authority, publishes `IDLE`, and restores the binding readiness value present
+at checkpoint entry. Thus a private recovery checkpoint entered before mount
+publication remains unready; an ordinary live checkpoint remains ready. The
+next transaction immediately reuses that workspace and ring, including
+sequence wrap, without another arena allocation.
 Clean deactivation is the separate public-unmount operation described below,
 not part of per-transaction space release.
 
@@ -678,7 +706,12 @@ writable profile. The remaining boundaries are:
   failure, and writable metadata-home anti-alias admission. The linked
   truncation slice additionally covers exact `i_blocks` reduction, retained
   external xattrs, target/orphan-file ownership disjointness, exact plan
-  membership, and whole-transaction abort after a late credit failure;
+  membership, and whole-transaction abort after a late credit failure. One
+  singleton modern final-cleanup mode now composes truncation and slot removal,
+  freezes the transaction behind exact plan/image authority, crosses only the
+  checkpoint pre-home nonempty refusal, and returns to ordinary strict-empty
+  validation after home writes. It has been exercised through activation,
+  emission, checkpoint, and clean deactivation;
 - unified legacy-chain and modern orphan-file discovery, inode preflight, and
   authenticated-empty `ORPHAN_PRESENT` completion are implemented. The shared
   exact-count plan retains protocol-specific locations and enforces inode
@@ -690,13 +723,13 @@ writable profile. The remaining boundaries are:
   tail truncation, depth-positive extent trees, legacy direct/indirect maps,
   unlinked inode and inode-bitmap accounting, external-xattr block release,
   link-count and legacy-chain/head updates, or retry-idempotent cleanup
-  orchestration. Checkpoint preflight also still performs an ordinary strict
-  reload that refuses every nonempty orphan plan, so a committed nonempty
-  cleanup transaction cannot yet reach its home blocks through the production
-  checkpoint path. An internal authenticated-nonempty recovery mode and
-  durable protocol-removal sequencing are the next integration boundary.
-  Transactional cleanup for either complete nonempty protocol and every
-  user-visible mutation operation remain unimplemented;
+  orchestration. Mount does not yet select this singleton operation, derive
+  its exact metadata credit across arbitrary crossed groups, resume an
+  activation/incomplete-emission prefix that still retains the record, or
+  drive committed cleanup through replay. Those are the next integration
+  boundary. Transactional cleanup outside the singleton linked modern
+  depth-zero slice and every user-visible mutation operation remain
+  unimplemented;
 - focused 1 KiB coverage exercises one- and two-inode legacy chains, a mixed
   legacy/modern union, stable refusal with same-binding plan reuse, legacy
   cycles and invalid links, unallocated and checksum-invalid legacy inodes,
