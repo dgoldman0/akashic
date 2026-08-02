@@ -5989,6 +5989,66 @@ VARIABLE _EXT4-JTM-REVOKE-FOUND
     THEN
     0 ;
 
+VARIABLE _EXT4-JMA-SOURCE
+VARIABLE _EXT4-JMA-HOME
+VARIABLE _EXT4-JMA-WRITER
+VARIABLE _EXT4-JMA-INDEX
+VARIABLE _EXT4-JMA-ENTRY
+VARIABLE _EXT4-JMA-IMAGE
+VARIABLE _EXT4-JMA-SCRATCH
+
+\ Acquire a private editing copy of one authenticated metadata block.  A
+\ second typed edit of the same home must start from the retained transaction
+\ after-image, not from stale media, or the later full-block PUT would silently
+\ discard the earlier edit.  The writer-owned image remains immutable while
+\ the caller edits SCRATCH-A, so its stored CRC continues to authenticate both
+\ transaction preflight and abort until META-REPLACE atomically installs the
+\ new complete after-image.
+: _EXT4-JTX-META-ACQUIRE
+  ( authenticated-source home transaction -- afterimage ior )
+    _EXT4-JMA-WRITER ! _EXT4-JMA-HOME ! _EXT4-JMA-SOURCE !
+    _EXT4-JMA-WRITER @ _EXT4-JTX-ACTIVE? ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-JMA-SOURCE @ 0= IF 0 VFS-E-INVALID EXIT THEN
+    _EXT4-JMA-HOME @ _EXT4-JMA-WRITER @ _EXT4-JTX-HOME? 0= IF
+        0 VFS-E-INVALID EXIT
+    THEN
+    _EXT4-JMA-WRITER @ _EXT4-JWR.SCRATCH-A + @ _EXT4-JMA-SCRATCH !
+    _EXT4-JMA-HOME @
+    _EXT4-JMA-WRITER @ _EXT4-JWR.META-ENTRIES + @
+    _EXT4-JWR-IMAGE-ENTRY-CELLS
+    _EXT4-JMA-WRITER @ _EXT4-JWR.META-HASH + @
+    _EXT4-JMA-WRITER @ _EXT4-JWR.META-SLOTS + @
+    _EXT4-JMA-WRITER @ _EXT4-JWR.META-USED + @
+    _EXT4-JTX-HASH-FIND _EXT4-JHL-IOR !
+    _EXT4-JHL-IOR @ IF 2DROP 0 _EXT4-JHL-IOR @ EXIT THEN
+    IF
+        DUP _EXT4-JMA-INDEX !
+        _EXT4-JMA-WRITER @ _EXT4-JWR-META-ENTRY
+        DUP _EXT4-JMA-ENTRY ! CELL+ @ DUP _EXT4-JE-ACTIVE = IF
+            DROP
+            _EXT4-JMA-INDEX @ _EXT4-JMA-WRITER @ _EXT4-JWR-META-IMAGE
+            DUP _EXT4-JMA-IMAGE !
+            _EXT4-JMA-WRITER @ _EXT4-JTX-IMAGE-CRC
+            _EXT4-JMA-ENTRY @ 2 CELLS + @ <> IF
+                0 VFS-E-CORRUPT EXIT
+            THEN
+            _EXT4-JMA-IMAGE @
+        ELSE
+            _EXT4-JE-CANCELLED <> IF 0 VFS-E-CORRUPT EXIT THEN
+            _EXT4-JMA-SOURCE @
+        THEN
+    ELSE
+        DROP _EXT4-JMA-SOURCE @
+    THEN
+    _EXT4-JMA-SCRATCH @
+    _EXT4-JMA-WRITER @ _EXT4-JWR.BSIZE + @ MOVE
+    _EXT4-JMA-SCRATCH @ 0 ;
+
+\ Publish one complete scratch after-image through the ordinary conflict,
+\ credit, revoke-cancellation, and image-CRC authority of META-PUT.
+: _EXT4-JTX-META-REPLACE  ( afterimage home transaction -- ior )
+    _EXT4-JTX-META-PUT ;
+
 VARIABLE _EXT4-JTD-BUFFER
 VARIABLE _EXT4-JTD-HOME
 VARIABLE _EXT4-JTD-WRITER
@@ -6202,6 +6262,8 @@ VARIABLE _EXT4-JTR-META-FOUND
     OVER _EXT4-JWR.META-USED + @ 2 PICK _EXT4-JWR.BSIZE + @ * 0 FILL
     DUP _EXT4-JWR.DATA-IMAGES + @
     OVER _EXT4-JWR.DATA-USED + @ 2 PICK _EXT4-JWR.BSIZE + @ * 0 FILL
+    DUP _EXT4-JWR.SCRATCH-A + @ OVER _EXT4-JWR.BSIZE + @ 0 FILL
+    DUP _EXT4-JWR.SCRATCH-B + @ OVER _EXT4-JWR.BSIZE + @ 0 FILL
     DUP _EXT4-JTX-CLEAR-HASHES
     0 OVER _EXT4-JWR.META-CREDIT + !
     0 OVER _EXT4-JWR.DATA-CREDIT + !
@@ -8262,6 +8324,231 @@ VARIABLE _EXT4-OQ-RECORD
         -1 _EXT4-OP-CTX @ _EXT4-C.O.CLEAR-PENDING + !
     THEN
     0 ;
+
+\ =====================================================================
+\  Typed, non-emitting orphan-recovery metadata after-images
+\ =====================================================================
+\
+\ These private builders stop at the transaction-staging boundary.  They
+\ reauthenticate every plan locator against media, compose same-home edits in
+\ writer scratch, and restamp the affected ext4 checksum before replacing the
+\ complete retained after-image.  They neither activate nor emit a journal
+\ transaction and therefore grant no cleanup or public-write authority by
+\ themselves.
+
+VARIABLE _EXT4-RI-INODE
+VARIABLE _EXT4-RI-INO
+VARIABLE _EXT4-RI-CTX
+VARIABLE _EXT4-RI-EXTRA
+VARIABLE _EXT4-RI-HAS-HI
+VARIABLE _EXT4-RI-CALC
+
+: _EXT4-RESTAMP-INODE  ( inode inode-number ctx -- ior )
+    _EXT4-RI-CTX ! _EXT4-RI-INO ! _EXT4-RI-INODE !
+    _EXT4-RI-INODE @ 0= _EXT4-RI-CTX @ 0= OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-RI-INO @ 0=
+    _EXT4-RI-INO @ _EXT4-RI-CTX @ _EXT4-C.INODES + @ U> OR IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-RI-CTX @ _EXT4-C.ISIZE + @ 128 U< IF
+        EXT4-D-INODE-CHECKSUM _EXT4-CORRUPT EXIT
+    THEN
+    0 _EXT4-RI-HAS-HI !
+    _EXT4-RI-CTX @ _EXT4-C.ISIZE + @ 128 > IF
+        _EXT4-RI-INODE @ _EXT4-I.EXTRA-SIZE + W@
+        DUP _EXT4-RI-EXTRA ! 4 U< IF
+            EXT4-D-INODE-CHECKSUM _EXT4-CORRUPT EXIT
+        THEN
+        _EXT4-RI-EXTRA @ 4 MOD IF
+            EXT4-D-INODE-CHECKSUM _EXT4-CORRUPT EXIT
+        THEN
+        _EXT4-RI-EXTRA @ 128 +
+        _EXT4-RI-CTX @ _EXT4-C.ISIZE + @ U> IF
+            EXT4-D-INODE-CHECKSUM _EXT4-CORRUPT EXIT
+        THEN
+        -1 _EXT4-RI-HAS-HI !
+    THEN
+    0 _EXT4-RI-INODE @ _EXT4-I.CSUM-LO + W!
+    _EXT4-RI-HAS-HI @ IF
+        0 _EXT4-RI-INODE @ _EXT4-I.CSUM-HI + W!
+    THEN
+    _EXT4-RI-INO @ _EXT4-RI-CTX @ _EXT4-C.TMP + L!
+    _EXT4-RI-CTX @ _EXT4-C.SEED + @ _EXT4-CRC-START
+    _EXT4-RI-CTX @ _EXT4-C.TMP + 4 _EXT4-CRC-ADD
+    _EXT4-RI-INODE @ _EXT4-I.GENERATION + 4 _EXT4-CRC-ADD
+    _EXT4-RI-INODE @ _EXT4-RI-CTX @ _EXT4-C.ISIZE + @ _EXT4-CRC-ADD
+    _EXT4-CRC@ DUP _EXT4-RI-CALC !
+    _EXT4-RI-INODE @ _EXT4-I.CSUM-LO + W!
+    _EXT4-RI-HAS-HI @ IF
+        _EXT4-RI-CALC @ 16 RSHIFT
+        _EXT4-RI-INODE @ _EXT4-I.CSUM-HI + W!
+    THEN
+    0 ;
+
+VARIABLE _EXT4-ROB-BLOCK
+VARIABLE _EXT4-ROB-PHYS
+VARIABLE _EXT4-ROB-INO
+VARIABLE _EXT4-ROB-GEN
+VARIABLE _EXT4-ROB-CTX
+VARIABLE _EXT4-ROB-TAIL
+
+: _EXT4-RESTAMP-ORPHAN-BLOCK
+  ( block physical orphan-inode generation ctx -- ior )
+    _EXT4-ROB-CTX ! _EXT4-ROB-GEN ! _EXT4-ROB-INO !
+    _EXT4-ROB-PHYS ! _EXT4-ROB-BLOCK !
+    _EXT4-ROB-BLOCK @ 0= _EXT4-ROB-CTX @ 0= OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-ROB-INO @ _EXT4-ROB-CTX @ _EXT4-C.ORPHAN-INO + @ <> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-ROB-PHYS @
+    _EXT4-ROB-CTX @ _EXT4-C.BLOCKS + @ U< 0= IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-ROB-PHYS @ 0xFFFFFFFF U>
+    _EXT4-ROB-GEN @ 0xFFFFFFFF U> OR IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-ROB-BLOCK @ _EXT4-ROB-CTX @ _EXT4-C.BSIZE + @ 8 - +
+    DUP _EXT4-ROB-TAIL ! L@ _EXT4-ORPHAN-MAGIC <> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-ROB-INO @ _EXT4-ROB-CTX @ _EXT4-C.TMP + L!
+    _EXT4-ROB-GEN @ _EXT4-ROB-CTX @ _EXT4-C.TMP 4 + + L!
+    _EXT4-ROB-PHYS @ _EXT4-ROB-CTX @ _EXT4-C.TMP 8 + + L!
+    0 _EXT4-ROB-CTX @ _EXT4-C.TMP 12 + + L!
+    _EXT4-ROB-CTX @ _EXT4-C.SEED + @ _EXT4-CRC-START
+    _EXT4-ROB-CTX @ _EXT4-C.TMP + 16 _EXT4-CRC-ADD
+    _EXT4-ROB-BLOCK @
+    _EXT4-ROB-CTX @ _EXT4-C.BSIZE + @ 8 - _EXT4-CRC-ADD
+    _EXT4-CRC@
+    _EXT4-ROB-TAIL @ 4 + L!
+    0 ;
+
+VARIABLE _EXT4-JOI-NEW
+VARIABLE _EXT4-JOI-RECORD
+VARIABLE _EXT4-JOI-WRITER
+VARIABLE _EXT4-JOI-CTX
+VARIABLE _EXT4-JOI-INO
+VARIABLE _EXT4-JOI-KIND
+VARIABLE _EXT4-JOI-HOME
+VARIABLE _EXT4-JOI-OFF
+VARIABLE _EXT4-JOI-IMAGE
+VARIABLE _EXT4-JOI-SNAPSHOT
+
+: _EXT4-JTX-STAGE-ORPHAN-INODE
+  ( inode-afterimage plan-record transaction -- ior )
+    _EXT4-JOI-WRITER ! _EXT4-JOI-RECORD ! _EXT4-JOI-NEW !
+    _EXT4-JOI-WRITER @ _EXT4-JTX-ACTIVE? ?DUP IF EXIT THEN
+    _EXT4-JOI-NEW @ 0= _EXT4-JOI-RECORD @ 0= OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-JOI-WRITER @ _EXT4-JWR.CTX + @ _EXT4-JOI-CTX !
+    \ Preserve natural C.INODE, C.BLOCK, and SCRATCH-A caller inputs before
+    \ locator reauthentication overwrites those caches.  SCRATCH-B remains
+    \ private and unused by non-emitting transaction staging.
+    _EXT4-JOI-WRITER @ _EXT4-JWR.SCRATCH-B + @ DUP
+    _EXT4-JOI-SNAPSHOT !
+    _EXT4-JOI-NEW @ SWAP
+    _EXT4-JOI-CTX @ _EXT4-C.ISIZE + @ MOVE
+    _EXT4-JOI-RECORD @ _EXT4-OE.INO + @ DUP _EXT4-JOI-INO !
+    _EXT4-JOI-CTX @ _EXT4-VALIDATE-ACTIVE-ORPHAN ?DUP IF EXIT THEN
+    _EXT4-JOI-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
+    _EXT4-JOI-RECORD @ _EXT4-JOI-CTX @ _EXT4-ORPHAN-RECORD? 0= IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JOI-RECORD @ _EXT4-OE.KIND + @ DUP _EXT4-JOI-KIND !
+    _EXT4-OK-MODERN = IF
+        _EXT4-JOI-RECORD @ _EXT4-OE.LOCATOR-A + @
+        _EXT4-JOI-CTX @ _EXT4-READ-ORPHAN-BLOCK ?DUP IF EXIT THEN
+        _EXT4-JOI-CTX @ _EXT4-C.BLOCK +
+        _EXT4-JOI-RECORD @ _EXT4-OE.LOCATOR-B + @ 4 * + L@
+        _EXT4-JOI-INO @ <> IF
+            EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+        THEN
+    THEN
+    _EXT4-JOI-INO @ _EXT4-JOI-CTX @ _EXT4-LOAD-ORPHAN-INODE
+    ?DUP IF EXIT THEN
+    _EXT4-JOI-KIND @ _EXT4-OK-LEGACY = IF
+        _EXT4-JOI-CTX @ _EXT4-C.INODE + _EXT4-I.DTIME + L@
+        _EXT4-JOI-RECORD @ _EXT4-OE.LOCATOR-A + @ <> IF
+            EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+        THEN
+    THEN
+    _EXT4-JOI-SNAPSHOT @ _EXT4-I.GENERATION + L@
+    _EXT4-JOI-CTX @ _EXT4-C.INODE + _EXT4-I.GENERATION + L@ <> IF
+        VFS-E-STALE EXIT
+    THEN
+    _EXT4-IR-BLOCK @ _EXT4-JOI-HOME !
+    _EXT4-IR-OFF @ _EXT4-JOI-OFF !
+    _EXT4-JOI-CTX @ _EXT4-C.BLOCK + _EXT4-JOI-HOME @
+    _EXT4-JOI-WRITER @ _EXT4-JTX-META-ACQUIRE
+    DUP IF NIP EXIT THEN DROP _EXT4-JOI-IMAGE !
+    \ Different records in one table block compose, but a second full-record
+    \ replacement of this same inode must not silently discard its predecessor.
+    _EXT4-JOI-IMAGE @ _EXT4-JOI-OFF @ +
+    _EXT4-JOI-CTX @ _EXT4-C.INODE +
+    _EXT4-JOI-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    _EXT4-JOI-SNAPSHOT @ _EXT4-JOI-IMAGE @ _EXT4-JOI-OFF @ +
+    _EXT4-JOI-CTX @ _EXT4-C.ISIZE + @ MOVE
+    _EXT4-JOI-IMAGE @ _EXT4-JOI-OFF @ + _EXT4-JOI-INO @
+    _EXT4-JOI-CTX @ _EXT4-RESTAMP-INODE ?DUP IF EXIT THEN
+    _EXT4-JOI-IMAGE @ _EXT4-JOI-HOME @ _EXT4-JOI-WRITER @
+    _EXT4-JTX-META-REPLACE ;
+
+VARIABLE _EXT4-JOS-RECORD
+VARIABLE _EXT4-JOS-WRITER
+VARIABLE _EXT4-JOS-CTX
+VARIABLE _EXT4-JOS-INO
+VARIABLE _EXT4-JOS-HOME
+VARIABLE _EXT4-JOS-GEN
+VARIABLE _EXT4-JOS-ORPHAN-INO
+VARIABLE _EXT4-JOS-SLOT
+VARIABLE _EXT4-JOS-IMAGE
+
+: _EXT4-JTX-CLEAR-MODERN-ORPHAN-SLOT
+  ( plan-record transaction -- ior )
+    _EXT4-JOS-WRITER ! _EXT4-JOS-RECORD !
+    _EXT4-JOS-WRITER @ _EXT4-JTX-ACTIVE? ?DUP IF EXIT THEN
+    _EXT4-JOS-RECORD @ 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-JOS-WRITER @ _EXT4-JWR.CTX + @ _EXT4-JOS-CTX !
+    _EXT4-JOS-RECORD @ _EXT4-OE.INO + @ DUP _EXT4-JOS-INO !
+    _EXT4-JOS-CTX @ _EXT4-VALIDATE-ACTIVE-ORPHAN ?DUP IF EXIT THEN
+    _EXT4-JOS-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
+    _EXT4-JOS-RECORD @ _EXT4-JOS-CTX @ _EXT4-ORPHAN-RECORD? 0= IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JOS-RECORD @ _EXT4-OE.KIND + @ _EXT4-OK-MODERN <> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JOS-RECORD @ _EXT4-OE.LOCATOR-B + @ _EXT4-JOS-SLOT !
+    _EXT4-JOS-RECORD @ _EXT4-OE.LOCATOR-A + @
+    _EXT4-JOS-CTX @ _EXT4-READ-ORPHAN-BLOCK ?DUP IF EXIT THEN
+    _EXT4-JOS-CTX @ _EXT4-C.BLOCK + _EXT4-JOS-SLOT @ 4 * + L@
+    _EXT4-JOS-INO @ <> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-OV-PHYS @ _EXT4-JOS-HOME !
+    _EXT4-OV-GEN @ _EXT4-JOS-GEN !
+    _EXT4-OV-INO @ _EXT4-JOS-ORPHAN-INO !
+    _EXT4-JOS-CTX @ _EXT4-C.BLOCK + _EXT4-JOS-HOME @
+    _EXT4-JOS-WRITER @ _EXT4-JTX-META-ACQUIRE
+    DUP IF NIP EXIT THEN DROP _EXT4-JOS-IMAGE !
+    _EXT4-JOS-IMAGE @ _EXT4-JOS-SLOT @ 4 * + L@
+    _EXT4-JOS-INO @ <> IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    0 _EXT4-JOS-IMAGE @ _EXT4-JOS-SLOT @ 4 * + L!
+    _EXT4-JOS-IMAGE @ _EXT4-JOS-HOME @ _EXT4-JOS-ORPHAN-INO @
+    _EXT4-JOS-GEN @ _EXT4-JOS-CTX @ _EXT4-RESTAMP-ORPHAN-BLOCK
+    ?DUP IF EXIT THEN
+    _EXT4-JOS-IMAGE @ _EXT4-JOS-HOME @ _EXT4-JOS-WRITER @
+    _EXT4-JTX-META-REPLACE ;
 
 \ True only after the streaming orphan-file pass has proved that the transient
 \ superblock bit names an empty active set.  Callers must reach this predicate

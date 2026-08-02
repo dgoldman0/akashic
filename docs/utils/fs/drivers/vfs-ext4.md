@@ -355,6 +355,50 @@ carry active metadata and ordered data, or active ordered data and a revoke.
 Abort zeroes staged authority, refunds the reservation, and reuses the same
 arena storage.
 
+Typed metadata editing now uses a transaction-aware acquire/replace boundary.
+`_EXT4-JTX-META-ACQUIRE` accepts a freshly authenticated complete home-block
+source. If that home already has an active staged metadata entry, acquisition
+first validates the retained image CRC32C and copies that newer after-image,
+not the stale media source, into writer-owned scratch. A cancelled entry grants
+no retained-image authority, so acquisition again starts from the authenticated
+source. The retained image stays immutable while scratch is edited.
+`_EXT4-JTX-META-REPLACE` then delegates the complete scratch block to the
+ordinary coalescing metadata path, including credit checks, data/revoke
+conflicts, revoke cancellation, and a new retained image checksum. Consecutive
+typed edits to different records in one inode-table block or different slots
+in one orphan-file block therefore compose into one same-home after-image
+instead of overwriting one another from media.
+
+The first typed builders are private orphan-recovery components.
+`_EXT4-JTX-STAGE-ORPHAN-INODE` reauthenticates the plan record and active inode,
+requires the modern slot or legacy `i_dtime` link still to match its retained
+locator, and reloads the allocated checksum-valid inode and its exact table
+location. It snapshots the caller-supplied record in separate writer scratch
+before those reads can overwrite a natural context-cache input, requires the
+inode generation to retain the authenticated identity, and installs it into
+the coalesced block before recomputing the inode checksum. A different inode
+record in the same home composes normally; a second replacement of an already
+edited copy of the same inode returns `VFS-E-CONFLICT` instead of discarding
+the first edit. The checksum builder handles the admitted 128-byte low-half
+form and the validated 256-byte `extra_isize`-governed high half.
+`_EXT4-JTX-CLEAR-MODERN-ORPHAN-SLOT`
+reauthenticates the modern logical-block/slot locator and physical-location-
+bound source block, reacquires the newest same-home image, requires that the
+staged slot still names the planned inode, clears it, and recomputes the tail
+CRC32C from the orphan inode number, generation, physical block, and block
+contents. These checks bind discovery records back to current media before
+they can contribute an after-image; they do not validate a proposed inode
+record as a complete truncate/delete operation.
+
+This is a non-emitting staging boundary. The typed builders may issue checked
+reads for locator and checksum reauthentication, but they do not activate a
+journal, emit a transaction, checkpoint a home block, write, or flush. Before
+emission their results exist only in private writer memory. `_EXT4-JTX-ABORT`
+performs no volume I/O: it scrubs staged entries, images, and hashes, refunds
+the log reservation, clears both writer scratch blocks, and returns the writer
+to `IDLE`. Neither staging nor abort completes orphan cleanup or grants a
+public write capability.
+
 One fully staged transaction can now be emitted durably. Its ring reservation
 contains one standard active-super guard plus the descriptor blocks, metadata
 payload blocks, revoke blocks, and one commit block. The guard consumes ring
@@ -559,7 +603,9 @@ writable profile. The remaining boundaries are:
   preflight, retained-image home writes, dirty-empty journal release, and
   immediate sequential workspace reuse, clean write-active deactivation, and
   public clean-unmount integration are implemented as private durability
-  foundations;
+  foundations. Transaction-aware metadata acquisition and checksum-safe typed
+  orphan-inode replacement/modern-slot clearing can now compose coalesced
+  same-home after-images and abort without volume I/O;
 - unified legacy-chain and modern orphan-file discovery, inode preflight, and
   authenticated-empty `ORPHAN_PRESENT` completion are implemented. The shared
   exact-count plan retains protocol-specific locations and enforces inode
@@ -567,8 +613,11 @@ writable profile. The remaining boundaries are:
   protocol counts are zero and mutates only journal recovery state and the
   checksummed primary-super transient bits; it does not change an orphan
   inode/file, a legacy link, allocate writer workspace, or expose a
-  user-visible write. Transactional cleanup for either nonempty protocol and
-  every user-visible mutation operation remain unimplemented;
+  user-visible write. The typed staging components do not yet orchestrate
+  allocation/free bitmap and counter changes, data truncation or deletion,
+  link-count and legacy-chain/head updates, cleanup transaction ordering, or
+  retry-idempotent completion. Transactional cleanup for either nonempty
+  protocol and every user-visible mutation operation remain unimplemented;
 - focused 1 KiB coverage exercises one- and two-inode legacy chains, a mixed
   legacy/modern union, stable refusal with same-binding plan reuse, legacy
   cycles and invalid links, unallocated and checksum-invalid legacy inodes,

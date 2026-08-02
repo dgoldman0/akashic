@@ -10788,6 +10788,377 @@ def test_unified_orphan_discovery_rejects_corruption_without_writes(
     assert trace == ()
 
 
+@pytest.mark.parametrize(
+    "image_id",
+    ("primary-1k-i256", "primary-2k-i256", "primary-4k-i256"),
+)
+def test_typed_orphan_afterimages_coalesce_and_abort_without_io(
+    canonical_images: dict[str, Path], image_id: str,
+) -> None:
+    path = canonical_images[image_id]
+    patches = _modern_orphan_patches(path, (13, 14))
+    superblock = patches[0][1]
+    assert len(superblock) == 1024
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    assert block_size in (1024, 2048, 4096)
+    assert inode_size == 256
+
+    _, inode13, inode13_offset = _ext4_inode_record(path, 13)
+    _, inode14, inode14_offset = _ext4_inode_record(path, 14)
+    assert inode13_offset // block_size == inode14_offset // block_size
+    inode_home = inode13_offset // block_size
+    inode13_block_offset = inode13_offset % block_size
+    inode14_block_offset = inode14_offset % block_size
+    ctime13 = 0x1020_3040
+    ctime14 = 0x5060_7080
+    expected13 = bytearray(inode13)
+    expected14 = bytearray(inode14)
+    struct.pack_into("<I", expected13, 0x0C, ctime13)
+    struct.pack_into("<I", expected14, 0x0C, ctime14)
+    expected13 = bytearray(_inode_with_checksum(superblock, 13, expected13))
+    expected14 = bytearray(_inode_with_checksum(superblock, 14, expected14))
+    expected13_low = struct.unpack_from("<H", expected13, 0x7C)[0]
+    expected13_high = struct.unpack_from("<H", expected13, 0x82)[0]
+    expected14_low = struct.unpack_from("<H", expected14, 0x7C)[0]
+    expected14_high = struct.unpack_from("<H", expected14, 0x82)[0]
+
+    orphan_offset, authored_orphan = patches[1]
+    assert orphan_offset % block_size == 0
+    orphan_home = orphan_offset // block_size
+    expected_orphan = bytearray(authored_orphan)
+    assert struct.unpack_from("<II", expected_orphan, 0) == (13, 14)
+    struct.pack_into("<I", expected_orphan, 0, 0)
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, orphan_inode, _ = _ext4_inode_record(path, orphan_inode_number)
+    orphan_generation = struct.unpack_from("<I", orphan_inode, 0x64)[0]
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    orphan_checksum = _crc32c_raw(
+        struct.pack(
+            "<IIQ", orphan_inode_number, orphan_generation, orphan_home
+        ),
+        seed,
+    )
+    orphan_checksum = _crc32c_raw(
+        expected_orphan[: block_size - 8], orphan_checksum
+    )
+    struct.pack_into("<I", expected_orphan, block_size - 4, orphan_checksum)
+
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _TO-MOUNT-IOR CONSTANT _TO-V"
+            ),
+            "_TO-V _EXT4-CTX CONSTANT _TO-CTX",
+            "1 _TO-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _TO-R13",
+            "2 _TO-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _TO-R14",
+            (
+                _forth_conjunction(
+                    [
+                        "_TO-MOUNT-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED =",
+                        "_TO-MOUNT-IOR VFS-IOR-DETAIL EXT4-D-RECOVERY =",
+                        "_TO-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_TO-V _EXT4-READY? 0=",
+                        "_TO-CTX _EXT4-C.O.ACTIVE + @ 2 =",
+                        "_TO-CTX _EXT4-C.O.SLOTS + @ 4 =",
+                        "_TO-R13 _EXT4-OE.INO + @ 13 =",
+                        "_TO-R13 _EXT4-OE.KIND + @ _EXT4-OK-MODERN =",
+                        "_TO-R13 _EXT4-OE.LOCATOR-A + @ 0=",
+                        "_TO-R13 _EXT4-OE.LOCATOR-B + @ 0=",
+                        "_TO-R14 _EXT4-OE.INO + @ 14 =",
+                        "_TO-R14 _EXT4-OE.KIND + @ _EXT4-OK-MODERN =",
+                        "_TO-R14 _EXT4-OE.LOCATOR-A + @ 0=",
+                        "_TO-R14 _EXT4-OE.LOCATOR-B + @ 1 =",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-PLAN-AUTHENTICATED" THEN'
+            ),
+            (
+                "_TO-CTX _EXT4-VALIDATE-JOURNAL "
+                "CONSTANT _TO-JOURNAL-IOR"
+            ),
+            "-1 _TO-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "2 0 0 _TO-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _TO-WRITER-IOR CONSTANT _TO-WRITER"
+            ),
+            "_TO-WRITER _EXT4-JWR.FREE + @ CONSTANT _TO-FREE-BEFORE",
+            (
+                "2 0 0 _TO-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _TO-TX-IOR CONSTANT _TO-TX"
+            ),
+            "13 _TO-CTX _EXT4-LOAD-ORPHAN-INODE CONSTANT _TO-L13",
+            "_EXT4-IR-BLOCK @ CONSTANT _TO-INODE-HOME",
+            "_EXT4-IR-OFF @ CONSTANT _TO-OFF13",
+            (
+                f"{ctime13} _TO-CTX _EXT4-C.INODE + "
+                "_EXT4-I.CTIME + L!"
+            ),
+            (
+                "_TO-CTX _EXT4-C.INODE + _TO-R13 _TO-TX "
+                "_EXT4-JTX-STAGE-ORPHAN-INODE CONSTANT _TO-S13"
+            ),
+            "14 _TO-CTX _EXT4-LOAD-ORPHAN-INODE CONSTANT _TO-L14",
+            "_EXT4-IR-BLOCK @ CONSTANT _TO-INODE-HOME14",
+            "_EXT4-IR-OFF @ CONSTANT _TO-OFF14",
+            (
+                f"{ctime14} _TO-CTX _EXT4-C.INODE + "
+                "_EXT4-I.CTIME + L!"
+            ),
+            (
+                "_TO-CTX _EXT4-C.INODE + _TO-R14 _TO-TX "
+                "_EXT4-JTX-STAGE-ORPHAN-INODE CONSTANT _TO-S14"
+            ),
+            (
+                "_TO-R13 _TO-TX _EXT4-JTX-CLEAR-MODERN-ORPHAN-SLOT "
+                "CONSTANT _TO-SLOT-IOR"
+            ),
+            "_EXT4-OV-PHYS @ CONSTANT _TO-ORPHAN-HOME",
+            "0 _TO-WRITER _EXT4-JWR-META-IMAGE CONSTANT _TO-INODE-IMAGE",
+            "1 _TO-WRITER _EXT4-JWR-META-IMAGE CONSTANT _TO-ORPHAN-IMAGE",
+            (
+                _forth_conjunction(
+                    [
+                        "_TO-JOURNAL-IOR 0=",
+                        "_TO-WRITER-IOR 0=",
+                        "_TO-TX-IOR 0=",
+                        "_TO-L13 0=",
+                        "_TO-L14 0=",
+                        "_TO-S13 0=",
+                        "_TO-S14 0=",
+                        "_TO-SLOT-IOR 0=",
+                        f"_TO-INODE-HOME {inode_home} =",
+                        "_TO-INODE-HOME14 _TO-INODE-HOME =",
+                        f"_TO-OFF13 {inode13_block_offset} =",
+                        f"_TO-OFF14 {inode14_block_offset} =",
+                        f"_TO-ORPHAN-HOME {orphan_home} =",
+                        "_TO-WRITER _EXT4-JWR.META-USED + @ 2 =",
+                        "_TO-WRITER _EXT4-JWR.META-ACTIVE + @ 2 =",
+                        "_TO-WRITER _EXT4-JTX-TABLES-VALID?",
+                        (
+                            "0 _TO-WRITER _EXT4-JWR-META-ENTRY @ "
+                            "_TO-INODE-HOME ="
+                        ),
+                        (
+                            "1 _TO-WRITER _EXT4-JWR-META-ENTRY @ "
+                            "_TO-ORPHAN-HOME ="
+                        ),
+                        (
+                            f"_TO-INODE-IMAGE _TO-OFF13 + "
+                            f"_EXT4-I.CTIME + L@ {ctime13} ="
+                        ),
+                        (
+                            f"_TO-INODE-IMAGE _TO-OFF14 + "
+                            f"_EXT4-I.CTIME + L@ {ctime14} ="
+                        ),
+                        (
+                            f"_TO-INODE-IMAGE _TO-OFF13 + "
+                            f"_EXT4-I.CSUM-LO + W@ {expected13_low} ="
+                        ),
+                        (
+                            f"_TO-INODE-IMAGE _TO-OFF13 + "
+                            f"_EXT4-I.CSUM-HI + W@ {expected13_high} ="
+                        ),
+                        (
+                            f"_TO-INODE-IMAGE _TO-OFF14 + "
+                            f"_EXT4-I.CSUM-LO + W@ {expected14_low} ="
+                        ),
+                        (
+                            f"_TO-INODE-IMAGE _TO-OFF14 + "
+                            f"_EXT4-I.CSUM-HI + W@ {expected14_high} ="
+                        ),
+                        "_TO-ORPHAN-IMAGE L@ 0=",
+                        "_TO-ORPHAN-IMAGE 4 + L@ 14 =",
+                        (
+                            f"_TO-ORPHAN-IMAGE {block_size - 8} + L@ "
+                            "_EXT4-ORPHAN-MAGIC ="
+                        ),
+                        (
+                            f"_TO-ORPHAN-IMAGE {block_size - 4} + L@ "
+                            f"{orphan_checksum} ="
+                        ),
+                        (
+                            "_TO-INODE-IMAGE _TO-WRITER "
+                            "_EXT4-JTX-IMAGE-CRC 0 _TO-WRITER "
+                            "_EXT4-JWR-META-ENTRY 2 CELLS + @ ="
+                        ),
+                        (
+                            "_TO-ORPHAN-IMAGE _TO-WRITER "
+                            "_EXT4-JTX-IMAGE-CRC 1 _TO-WRITER "
+                            "_EXT4-JWR-META-ENTRY 2 CELLS + @ ="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-AFTERIMAGES-COALESCED" THEN'
+            ),
+            "_TO-TX _EXT4-JTX-ABORT CONSTANT _TO-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_TO-ABORT-IOR 0=",
+                        (
+                            "_TO-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        (
+                            "_TO-WRITER _EXT4-JWR.FREE + @ "
+                            "_TO-FREE-BEFORE ="
+                        ),
+                        "_TO-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_TO-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_TO-WRITER _EXT4-JWR.META-IMAGES + @ C@ 0=",
+                        "_TO-WRITER _EXT4-JWR.SCRATCH-A + @ C@ 0=",
+                        "_TO-WRITER _EXT4-JWR.SCRATCH-B + @ C@ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-AFTERIMAGES-ABORTED" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-TYPED-PLAN-AUTHENTICATED")
+    _assert_emitted(output, "EXT4-TYPED-AFTERIMAGES-COALESCED")
+    _assert_emitted(output, "EXT4-TYPED-AFTERIMAGES-ABORTED")
+
+
+def test_typed_orphan_staging_rejects_stale_and_conflicting_authority(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches = _modern_orphan_patches(path, (13, 14))
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _TR-MOUNT-IOR CONSTANT _TR-V"
+            ),
+            "_TR-V _EXT4-CTX CONSTANT _TR-CTX",
+            "1 _TR-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _TR-R13",
+            "_TR-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _TR-JOURNAL-IOR",
+            "-1 _TR-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "2 0 0 _TR-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _TR-WRITER-IOR CONSTANT _TR-WRITER"
+            ),
+            (
+                "2 0 0 _TR-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _TR-TX-IOR CONSTANT _TR-TX"
+            ),
+            "13 _TR-CTX _EXT4-LOAD-ORPHAN-INODE CONSTANT _TR-LOAD-IOR",
+            "_EXT4-IR-BLOCK @ CONSTANT _TR-INODE-HOME",
+            "_EXT4-IR-OFF @ CONSTANT _TR-INODE-OFF",
+            "CREATE _TR-FIRST 256 ALLOT",
+            (
+                "_TR-CTX _EXT4-C.INODE + _TR-FIRST 256 CMOVE "
+                "0x11223344 _TR-FIRST _EXT4-I.CTIME + L!"
+            ),
+            "CREATE _TR-SECOND 256 ALLOT",
+            (
+                "_TR-CTX _EXT4-C.INODE + _TR-SECOND 256 CMOVE "
+                "0x55667788 _TR-SECOND _EXT4-I.CTIME + L!"
+            ),
+            "CREATE _TR-BAD-RECORD _EXT4-ORPHAN-RECORD-SIZE ALLOT",
+            (
+                "_TR-R13 _TR-BAD-RECORD _EXT4-ORPHAN-RECORD-SIZE CMOVE "
+                "2 _TR-BAD-RECORD _EXT4-OE.LOCATOR-B + !"
+            ),
+            (
+                "_TR-FIRST _TR-BAD-RECORD _TR-TX "
+                "_EXT4-JTX-STAGE-ORPHAN-INODE CONSTANT _TR-STALE-IOR"
+            ),
+            "_TR-WRITER _EXT4-JWR.META-USED + @ CONSTANT _TR-USED-AFTER-STALE",
+            (
+                "_TR-FIRST _TR-R13 _TR-TX "
+                "_EXT4-JTX-STAGE-ORPHAN-INODE CONSTANT _TR-FIRST-IOR"
+            ),
+            (
+                "0 _TR-WRITER _EXT4-JWR-META-ENTRY 2 CELLS + @ "
+                "CONSTANT _TR-FIRST-CRC"
+            ),
+            (
+                "_TR-SECOND _TR-R13 _TR-TX "
+                "_EXT4-JTX-STAGE-ORPHAN-INODE CONSTANT _TR-SECOND-IOR"
+            ),
+            (
+                "_TR-R13 _TR-TX _EXT4-JTX-CLEAR-MODERN-ORPHAN-SLOT "
+                "CONSTANT _TR-CLEAR-IOR"
+            ),
+            (
+                "_TR-R13 _TR-TX _EXT4-JTX-CLEAR-MODERN-ORPHAN-SLOT "
+                "CONSTANT _TR-RECLEAR-IOR"
+            ),
+            "1 0 _TR-WRITER _EXT4-JWR-META-ENTRY 2 CELLS + +!",
+            "13 _TR-CTX _EXT4-LOAD-ORPHAN-INODE CONSTANT _TR-RELOAD-IOR",
+            (
+                "_TR-CTX _EXT4-C.BLOCK + _TR-INODE-HOME _TR-TX "
+                "_EXT4-JTX-META-ACQUIRE "
+                "CONSTANT _TR-ACQUIRE-IOR CONSTANT _TR-ACQUIRE-IMAGE"
+            ),
+            (
+                "_TR-FIRST-CRC 0 _TR-WRITER _EXT4-JWR-META-ENTRY "
+                "2 CELLS + !"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_TR-MOUNT-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED =",
+                        "_TR-MOUNT-IOR VFS-IOR-DETAIL EXT4-D-RECOVERY =",
+                        "_TR-JOURNAL-IOR 0=",
+                        "_TR-WRITER-IOR 0=",
+                        "_TR-TX-IOR 0=",
+                        "_TR-LOAD-IOR 0=",
+                        "_TR-STALE-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+                        (
+                            "_TR-STALE-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-ORPHAN-FILE ="
+                        ),
+                        "_TR-USED-AFTER-STALE 0=",
+                        "_TR-FIRST-IOR 0=",
+                        "_TR-SECOND-IOR VFS-E-CONFLICT =",
+                        "_TR-CLEAR-IOR 0=",
+                        "_TR-RECLEAR-IOR VFS-E-CONFLICT =",
+                        "_TR-RELOAD-IOR 0=",
+                        "_TR-ACQUIRE-IMAGE 0=",
+                        "_TR-ACQUIRE-IOR VFS-E-CORRUPT =",
+                        "_TR-WRITER _EXT4-JWR.META-USED + @ 2 =",
+                        "_TR-WRITER _EXT4-JWR.META-ACTIVE + @ 2 =",
+                        "_TR-WRITER _EXT4-JTX-TABLES-VALID?",
+                        (
+                            "0 _TR-WRITER _EXT4-JWR-META-IMAGE "
+                            "_TR-INODE-OFF + _EXT4-I.CTIME + L@ "
+                            "0x11223344 ="
+                        ),
+                        "1 _TR-WRITER _EXT4-JWR-META-IMAGE L@ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-STALE-CONFLICT-ATOMIC" THEN'
+            ),
+            "_TR-TX _EXT4-JTX-ABORT CONSTANT _TR-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_TR-ABORT-IOR 0=",
+                        (
+                            "_TR-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_TR-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_TR-WRITER _EXT4-JWR.SCRATCH-A + @ C@ 0=",
+                        "_TR-WRITER _EXT4-JWR.SCRATCH-B + @ C@ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-REJECTION-ABORTED" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-TYPED-STALE-CONFLICT-ATOMIC")
+    _assert_emitted(output, "EXT4-TYPED-REJECTION-ABORTED")
+
+
 def test_recover_without_checksum_v3_journal_refuses_before_writes(
     canonical_images: dict[str, Path]
 ) -> None:
