@@ -11449,7 +11449,7 @@ def test_typed_orphan_staging_rejects_stale_and_conflicting_authority(
     _assert_emitted(output, "EXT4-TYPED-REJECTION-ABORTED")
 
 
-def test_typed_modern_orphan_slot_clear_rejects_target_xattr_alias(
+def test_mount_cleanup_rejects_target_xattr_alias_without_writes(
     canonical_images: dict[str, Path],
 ) -> None:
     path = canonical_images["primary-1k-i256"]
@@ -11469,140 +11469,472 @@ def test_typed_modern_orphan_slot_clear_rejects_target_xattr_alias(
     output = run_forth(
         path,
         [
+            "T-ARENA CONSTANT _OX-ARENA",
             (
-                "T-ARENA T-VOLUME EXT4-NEW "
+                "_OX-ARENA T-VOLUME EXT4-NEW "
                 "CONSTANT _OX-MOUNT-IOR CONSTANT _OX-V"
             ),
             "_OX-V _EXT4-CTX CONSTANT _OX-CTX",
-            "0 _OX-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _OX-RECORD",
-            "_OX-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OX-JOURNAL-IOR",
-            "-1 _OX-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            "_OX-ARENA ARENA-USED CONSTANT _OX-USED-BEFORE",
             (
-                "1 0 0 _OX-CTX _EXT4-JWR-ENSURE "
-                "CONSTANT _OX-WRITER-IOR CONSTANT _OX-WRITER"
+                "_OX-CTX _OX-V _EXT4-COMPLETE-SINGLETON-MODERN-ORPHAN "
+                "CONSTANT _OX-RETRY-IOR"
             ),
-            (
-                "1 0 0 _OX-WRITER _EXT4-JTX-BEGIN "
-                "CONSTANT _OX-TX-IOR CONSTANT _OX-TX"
-            ),
-            (
-                "_OX-RECORD _OX-TX _EXT4-JTX-CLEAR-MODERN-ORPHAN-SLOT "
-                "CONSTANT _OX-CLEAR-IOR"
-            ),
+            "_OX-ARENA ARENA-USED CONSTANT _OX-USED-AFTER",
             (
                 _forth_conjunction(
                     [
                         (
                             "_OX-MOUNT-IOR VFS-IOR-REASON "
-                            "VFS-R-UNSUPPORTED ="
-                        ),
-                        (
-                            "_OX-MOUNT-IOR VFS-IOR-DETAIL "
-                            "EXT4-D-RECOVERY ="
-                        ),
-                        "_OX-JOURNAL-IOR 0=",
-                        "_OX-WRITER-IOR 0=",
-                        "_OX-TX-IOR 0=",
-                        (
-                            "_OX-CLEAR-IOR VFS-IOR-REASON "
                             "VFS-R-CORRUPT ="
                         ),
                         (
-                            "_OX-CLEAR-IOR VFS-IOR-DETAIL "
+                            "_OX-MOUNT-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-FORMAT ="
+                        ),
+                        (
+                            "_OX-MOUNT-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-CORRUPT ="
+                        ),
+                        (
+                            "_OX-MOUNT-IOR VFS-IOR-DETAIL "
                             "EXT4-D-DATA-MAP ="
                         ),
-                        (
-                            "_OX-WRITER _EXT4-JWR.STATE + @ "
-                            "_EXT4-JWR-STAGING ="
-                        ),
-                        "_OX-WRITER _EXT4-JWR.META-USED + @ 0=",
-                        "_OX-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
-                        "_OX-WRITER _EXT4-JTX-TABLES-VALID?",
+                        "_OX-RETRY-IOR _OX-MOUNT-IOR =",
+                        "_OX-USED-BEFORE _OX-USED-AFTER =",
+                        "_OX-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_OX-V V.LAST-IOR @ _OX-MOUNT-IOR =",
+                        "_OX-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_OX-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_OX-CTX _EXT4-C.READY + @ 0=",
+                        "_OX-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_OX-CTX _EXT4-C.J.WRITER-CURRENT + @ 0=",
+                        "_OX-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                         "_OX-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
-                    ]
-                )
-                + ' IF ." EXT4-TYPED-ORPHAN-XATTR-ALIAS-REJECTED" THEN'
-            ),
-            "_OX-TX _EXT4-JTX-ABORT CONSTANT _OX-ABORT-IOR",
-            (
-                _forth_conjunction(
-                    [
-                        "_OX-ABORT-IOR 0=",
+                        "_OX-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_OX-CTX _EXT4-C.J.START + @ 0=",
+                        "_OX-CTX _EXT4-C.J.WITNESS + @ 0=",
+                        "_OX-CTX _EXT4-C.J.CLEANUP + @ 0=",
+                        "_OX-CTX _EXT4-C.O.ACTIVE + @ 1 =",
+                        "_OX-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
+                        "_OX-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_OX-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_OX-CTX _EXT4-C.ARENA + @ _OX-ARENA =",
+                        "_EXT4-MOC-MARK-VALID @ 0=",
                         (
-                            "_OX-WRITER _EXT4-JWR.STATE + @ "
-                            "_EXT4-JWR-IDLE ="
+                            "_OX-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0<>"
                         ),
                     ]
                 )
-                + ' IF ." EXT4-TYPED-ORPHAN-XATTR-ALIAS-ABORTED" THEN'
+                + ' IF ." EXT4-MOUNT-ORPHAN-XATTR-ALIAS-REJECTED" THEN'
             ),
         ],
         patches=tuple(patches),
     )
-    _assert_emitted(output, "EXT4-TYPED-ORPHAN-XATTR-ALIAS-REJECTED")
-    _assert_emitted(output, "EXT4-TYPED-ORPHAN-XATTR-ALIAS-ABORTED")
+    _assert_emitted(output, "EXT4-MOUNT-ORPHAN-XATTR-ALIAS-REJECTED")
+
+
+@pytest.fixture(scope="session")
+def singleton_modern_cleanup_fixture(
+    canonical_images: dict[str, Path],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    path = canonical_images["primary-1k-i256"]
+    directory = tmp_path_factory.mktemp("ext4-modern-orphan-cleanup")
+    media_path = directory / "successful-cleanup.img"
+    patches = _zero_size_depth0_orphan_patches(path)
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        media_path,
+        [
+            "T-ARENA CONSTANT _MA-ARENA",
+            (
+                "_MA-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _MA-IOR CONSTANT _MA-V"
+            ),
+            "_MA-V _EXT4-CTX CONSTANT _MA-CTX",
+            (
+                _forth_conjunction(
+                    [
+                        "_MA-IOR 0=",
+                        "_MA-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_MA-V _EXT4-READY?",
+                        "_MA-V _EXT4-ATTACHED?",
+                        "_MA-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_MA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_MA-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
+                        "_MA-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_MA-CTX _EXT4-C.ARENA + @ _MA-ARENA =",
+                        "_EXT4-MOC-MARK-VALID @ 0=",
+                        "_EXT4-MOC-MARK @ _MA-ARENA A.PTR @ =",
+                        "_MA-CTX _EXT4-C.J.START + @ 0=",
+                        "_MA-CTX _EXT4-C.J.WITNESS + @ 0=",
+                        "_MA-CTX _EXT4-C.J.CLEANUP + @ 0=",
+                        "_MA-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_MA-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_MA-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_MA-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        (
+                            "_MA-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0="
+                        ),
+                        (
+                            "_MA-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-MODERN-ORPHAN-AUTO-CLEANED" THEN'
+            ),
+        ],
+        patches=patches,
+        capture_media=media_path,
+    )
+    return {
+        "source": path,
+        "patches": patches,
+        "output": output,
+        "success_trace": trace,
+        "clean_image": media_path,
+        "clean_sha256": media_sha256,
+    }
 
 
 def test_mount_completes_singleton_modern_depth0_orphan_transaction(
-    canonical_images: dict[str, Path], tmp_path: Path
+    singleton_modern_cleanup_fixture: dict[str, object],
 ) -> None:
-    path = canonical_images["primary-1k-i256"]
-    media_path = tmp_path / "modern-orphan-auto-cleanup.img"
-    try:
-        output, trace, _ = run_recovery_forth(
-            path,
-            media_path,
-            [
-                "T-ARENA CONSTANT _MA-ARENA",
-                (
-                    "_MA-ARENA T-VOLUME EXT4-NEW "
-                    "CONSTANT _MA-IOR CONSTANT _MA-V"
-                ),
-                "_MA-V _EXT4-CTX CONSTANT _MA-CTX",
-                (
-                    _forth_conjunction(
-                        [
-                            "_MA-IOR 0=",
-                            "_MA-V V.LIFECYCLE @ VFS-L-MOUNTED =",
-                            "_MA-V _EXT4-READY?",
-                            "_MA-V _EXT4-ATTACHED?",
-                            "_MA-CTX _EXT4-C.RECOVERY + @ 0=",
-                            "_MA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
-                            "_MA-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
-                            "_MA-CTX _EXT4-C.J.WRITER + @ 0=",
-                            "_MA-CTX _EXT4-C.ARENA + @ _MA-ARENA =",
-                            "_EXT4-MOC-MARK-VALID @ 0=",
-                            "_EXT4-MOC-MARK @ _MA-ARENA A.PTR @ =",
-                            "_MA-CTX _EXT4-C.J.START + @ 0=",
-                            "_MA-CTX _EXT4-C.J.WITNESS + @ 0=",
-                            "_MA-CTX _EXT4-C.J.CLEANUP + @ 0=",
-                            "_MA-CTX _EXT4-C.O.ACTIVE + @ 0=",
-                            "_MA-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
-                            "_MA-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
-                            "_MA-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
-                            (
-                                "_MA-CTX _EXT4-C.SB + "
-                                "_EXT4-SB.INCOMPAT + L@ "
-                                "_EXT4-INCOMPAT-RECOVER AND 0="
-                            ),
-                            (
-                                "_MA-CTX _EXT4-C.SB + "
-                                "_EXT4-SB.RO-COMPAT + L@ "
-                                "_EXT4-RO-ORPHAN-PRESENT AND 0="
-                            ),
-                        ]
-                    )
-                    + ' IF ." EXT4-MODERN-ORPHAN-AUTO-CLEANED" THEN'
-                ),
-            ],
-            patches=_zero_size_depth0_orphan_patches(path),
-        )
-    finally:
-        media_path.unlink(missing_ok=True)
+    output = singleton_modern_cleanup_fixture["output"]
+    trace = singleton_modern_cleanup_fixture["success_trace"]
+    assert isinstance(output, str)
+    assert isinstance(trace, tuple)
 
     _assert_emitted(output, "EXT4-MODERN-ORPHAN-AUTO-CLEANED")
-    assert any(kind == "write" for kind, _, _ in trace)
-    assert any(kind == "flush" for kind, _, _ in trace)
+    assert sum(kind == "write" for kind, _, _ in trace) == 29
+    assert sum(kind == "flush" for kind, _, _ in trace) == 18
+
+
+@pytest.mark.parametrize(
+    ("case", "write_ordinal", "sector_index", "byte_index"),
+    (
+        pytest.param(
+            "activation-primary",
+            3,
+            0,
+            50,
+            id="W3-activation-primary-prefix",
+        ),
+        pytest.param(
+            "activation-super",
+            4,
+            1,
+            0,
+            id="W4-activation-super-prefix",
+        ),
+        pytest.param(
+            "descriptor",
+            7,
+            0,
+            200,
+            id="W7-transaction-descriptor-prefix",
+        ),
+        pytest.param(
+            "active-primary",
+            17,
+            0,
+            50,
+            id="W17-active-primary-prefix",
+        ),
+        pytest.param(
+            "commit-empty-prefix",
+            18,
+            0,
+            0,
+            id="W18-empty-commit-prefix",
+        ),
+        pytest.param(
+            "commit-first-byte",
+            18,
+            0,
+            1,
+            id="W18-first-byte-commit-prefix",
+        ),
+        pytest.param(
+            "first-home",
+            19,
+            0,
+            200,
+            id="W19-first-home-prefix",
+        ),
+        pytest.param(
+            "gdt-home",
+            20,
+            0,
+            13,
+            id="W20-gdt-home-prefix",
+        ),
+        pytest.param(
+            "bitmap-home",
+            21,
+            0,
+            200,
+            id="W21-bitmap-home-prefix",
+        ),
+        pytest.param(
+            "super-home",
+            22,
+            1,
+            0,
+            id="W22-super-home-prefix",
+        ),
+        pytest.param(
+            "final-home",
+            23,
+            0,
+            200,
+            id="W23-final-home-prefix",
+        ),
+        pytest.param(
+            "reset-primary",
+            26,
+            0,
+            50,
+            id="W26-reset-primary-prefix",
+        ),
+        pytest.param(
+            "final-super",
+            27,
+            1,
+            0,
+            id="W27-final-super-prefix",
+        ),
+        pytest.param(
+            "witness-clear",
+            28,
+            0,
+            200,
+            id="W28-witness-clear-primary-prefix",
+        ),
+        pytest.param(
+            "guard-retire",
+            29,
+            0,
+            200,
+            id="W29-guard-retire-prefix",
+        ),
+    ),
+)
+def test_singleton_modern_cleanup_write_prefixes_converge_on_fresh_mount(
+    singleton_modern_cleanup_fixture: dict[str, object],
+    tmp_path: Path,
+    case: str,
+    write_ordinal: int,
+    sector_index: int,
+    byte_index: int,
+) -> None:
+    source = singleton_modern_cleanup_fixture["source"]
+    patches = singleton_modern_cleanup_fixture["patches"]
+    success_trace = singleton_modern_cleanup_fixture["success_trace"]
+    assert isinstance(source, Path)
+    assert isinstance(patches, tuple)
+    assert isinstance(success_trace, tuple)
+
+    torn = tmp_path / f"modern-orphan-{case}-torn.img"
+    output, failed_trace, failed_sha256 = run_recovery_forth(
+        source,
+        torn,
+        [
+            "T-ARENA CONSTANT _MF-ARENA",
+            (
+                "_MF-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _MF-IOR CONSTANT _MF-V"
+            ),
+            "_MF-V _EXT4-CTX CONSTANT _MF-CTX",
+            (
+                _forth_conjunction(
+                    [
+                        "_MF-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME =",
+                        "_MF-IOR VFS-IOR-REASON VFS-R-IO =",
+                        (
+                            "_MF-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-PARTIAL AND 0<>"
+                        ),
+                        "_MF-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_MF-V _EXT4-READY? 0=",
+                        "_MF-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_MF-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_MF-CTX _EXT4-C.J.WRITER-CURRENT + @ 0=",
+                        "_MF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_MF-CTX _EXT4-C.ARENA + @ _MF-ARENA =",
+                        "_EXT4-MOC-MARK-VALID @ 0=",
+                        "_EXT4-MOC-MARK @ _MF-ARENA A.PTR @ =",
+                        "_EXT4-MOC-SPAN @ _EXT4-JWR-SIZE U< 0=",
+                        (
+                            "_EXT4-MOC-MARK @ _EXT4-MOC-SPAN @ "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        "_EXT4-MOC-WRITER @ 0=",
+                        "_EXT4-MOC-TX @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-MODERN-ORPHAN-PREFIX-CAUGHT" THEN'
+            ),
+        ],
+        patches=patches,
+        write_faults_by_ordinal={
+            write_ordinal: {
+                "stage": "media",
+                "sector_index": sector_index,
+                "byte_index": byte_index,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=torn,
+    )
+    _assert_emitted(output, "EXT4-MODERN-ORPHAN-PREFIX-CAUGHT")
+    assert torn.is_file()
+    assert _sha256(torn) == failed_sha256
+
+    seen_writes = 0
+    trace_cut = 0
+    for index, event in enumerate(success_trace, start=1):
+        if event[0] == "write":
+            seen_writes += 1
+            if seen_writes == write_ordinal:
+                trace_cut = index
+                break
+    assert trace_cut
+    assert failed_trace == success_trace[:trace_cut]
+
+    if write_ordinal in {20, 21}:
+        clean_image = singleton_modern_cleanup_fixture["clean_image"]
+        assert isinstance(clean_image, Path)
+        fault_event = failed_trace[-1]
+        assert fault_event[0] == "write"
+        offset = fault_event[1] * 512
+        length = fault_event[2] * 512
+        with source.open("rb") as old_media:
+            old_media.seek(offset)
+            old_home = old_media.read(length)
+        with clean_image.open("rb") as clean_media:
+            clean_media.seek(offset)
+            new_home = clean_media.read(length)
+        with torn.open("rb") as torn_media:
+            torn_media.seek(offset)
+            torn_home = torn_media.read(length)
+        cut = sector_index * 512 + byte_index
+        assert len(old_home) == len(new_home) == len(torn_home) == length
+        assert old_home != new_home
+        assert torn_home == new_home[:cut] + old_home[cut:]
+        if write_ordinal == 20:
+            assert torn_home not in {old_home, new_home}
+
+    repaired = tmp_path / f"modern-orphan-{case}-repaired.img"
+    remount_output, _remount_trace, repaired_sha256 = run_recovery_forth(
+        torn,
+        repaired,
+        [
+            "T-ARENA CONSTANT _MR-ARENA",
+            (
+                "_MR-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _MR-IOR CONSTANT _MR-V"
+            ),
+            "_MR-V _EXT4-CTX CONSTANT _MR-CTX",
+            "14 _MR-CTX _EXT4-LOAD-INODE CONSTANT _MR-INODE-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_MR-IOR 0=",
+                        "_MR-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_MR-V _EXT4-READY?",
+                        "_MR-V _EXT4-ATTACHED?",
+                        "_MR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_MR-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_MR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_MR-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
+                        "_MR-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_MR-CTX _EXT4-C.J.START + @ 0=",
+                        "_MR-CTX _EXT4-C.J.ANCHOR + @ 0=",
+                        "_MR-CTX _EXT4-C.J.WITNESS + @ 0=",
+                        "_MR-CTX _EXT4-C.J.CLEANUP + @ 0=",
+                        "_MR-CTX _EXT4-C.J.PRIMARY-TORN + @ 0=",
+                        "_MR-CTX _EXT4-C.SUPER-TORN + @ 0=",
+                        "_MR-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_MR-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_MR-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_MR-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_MR-CTX _EXT4-C.ARENA + @ _MR-ARENA =",
+                        "_EXT4-MOC-MARK-VALID @ 0=",
+                        (
+                            "_MR-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0="
+                        ),
+                        (
+                            "_MR-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                        "_MR-INODE-IOR 0=",
+                        (
+                            "_MR-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.SIZE-LO + L@ 0="
+                        ),
+                        (
+                            "_MR-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.SIZE-HI + L@ 0="
+                        ),
+                        (
+                            "_MR-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.BLOCKS-LO + L@ "
+                            "_MR-CTX _EXT4-C.SPB + @ ="
+                        ),
+                        (
+                            "_MR-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.BLOCKS-HI + W@ 0="
+                        ),
+                        (
+                            "_MR-CTX _EXT4-C.INODE + _EXT4-I.BLOCK + "
+                            "2 + W@ 0="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-MODERN-ORPHAN-PREFIX-REPAIRED" THEN'
+            ),
+        ],
+        capture_media=repaired,
+    )
+    _assert_emitted(remount_output, "EXT4-MODERN-ORPHAN-PREFIX-REPAIRED")
+    assert repaired.is_file()
+    assert _sha256(repaired) == repaired_sha256
+
+    stable = tmp_path / f"modern-orphan-{case}-stable.img"
+    stable_output, stable_trace, stable_sha256 = run_recovery_forth(
+        repaired,
+        stable,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _MS-IOR CONSTANT _MS-V",
+            (
+                _forth_conjunction(
+                    [
+                        "_MS-IOR 0=",
+                        "_MS-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_MS-V _EXT4-READY?",
+                        "_MS-V _EXT4-CTX _EXT4-C.J.WRITER + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-MODERN-ORPHAN-PREFIX-STABLE" THEN'
+            ),
+        ],
+        capture_media=stable,
+    )
+    _assert_emitted(stable_output, "EXT4-MODERN-ORPHAN-PREFIX-STABLE")
+    assert stable_trace == ()
+    assert stable_sha256 == repaired_sha256
 
 
 def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
@@ -12734,7 +13066,7 @@ def test_typed_depth0_orphan_truncation_auto_aborts_partial_credit_failure(
     _assert_emitted(output, "EXT4-TYPED-DEPTH0-AUTO-ABORT-REUSABLE")
 
 
-def test_typed_depth0_orphan_truncation_rejects_orphan_storage_alias(
+def test_mount_cleanup_rejects_orphan_storage_alias_without_writes(
     canonical_images: dict[str, Path],
 ) -> None:
     path = canonical_images["primary-1k-i256"]
@@ -12755,83 +13087,74 @@ def test_typed_depth0_orphan_truncation_rejects_orphan_storage_alias(
     output = run_forth(
         path,
         [
+            "T-ARENA CONSTANT _OO-ARENA",
             (
-                "T-ARENA T-VOLUME EXT4-NEW "
+                "_OO-ARENA T-VOLUME EXT4-NEW "
                 "CONSTANT _OO-MOUNT-IOR CONSTANT _OO-V"
             ),
             "_OO-V _EXT4-CTX CONSTANT _OO-CTX",
-            "0 _OO-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _OO-RECORD",
-            "_OO-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OO-JOURNAL-IOR",
-            "-1 _OO-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            "_OO-ARENA ARENA-USED CONSTANT _OO-USED-BEFORE",
             (
-                "4 0 0 _OO-CTX _EXT4-JWR-ENSURE "
-                "CONSTANT _OO-WRITER-IOR CONSTANT _OO-WRITER"
+                "_OO-CTX _OO-V _EXT4-COMPLETE-SINGLETON-MODERN-ORPHAN "
+                "CONSTANT _OO-RETRY-IOR"
             ),
-            (
-                "4 0 0 _OO-WRITER _EXT4-JTX-BEGIN "
-                "CONSTANT _OO-TX-IOR CONSTANT _OO-TX"
-            ),
-            (
-                "_OO-RECORD _OO-TX "
-                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0-TRUNCATE "
-                "CONSTANT _OO-STAGE-IOR"
-            ),
+            "_OO-ARENA ARENA-USED CONSTANT _OO-USED-AFTER",
             (
                 _forth_conjunction(
                     [
                         (
                             "_OO-MOUNT-IOR VFS-IOR-REASON "
-                            "VFS-R-UNSUPPORTED ="
-                        ),
-                        (
-                            "_OO-MOUNT-IOR VFS-IOR-DETAIL "
-                            "EXT4-D-RECOVERY ="
-                        ),
-                        "_OO-JOURNAL-IOR 0=",
-                        "_OO-WRITER-IOR 0=",
-                        "_OO-TX-IOR 0=",
-                        (
-                            "_OO-STAGE-IOR VFS-IOR-REASON "
                             "VFS-R-CORRUPT ="
                         ),
                         (
-                            "_OO-STAGE-IOR VFS-IOR-DETAIL "
+                            "_OO-MOUNT-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-FORMAT ="
+                        ),
+                        (
+                            "_OO-MOUNT-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-CORRUPT ="
+                        ),
+                        (
+                            "_OO-MOUNT-IOR VFS-IOR-DETAIL "
                             "EXT4-D-DATA-MAP ="
                         ),
-                        (
-                            "_OO-WRITER _EXT4-JWR.STATE + @ "
-                            "_EXT4-JWR-STAGING ="
-                        ),
-                        "_OO-WRITER _EXT4-JWR.META-USED + @ 0=",
-                        "_OO-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
-                        "_OO-WRITER _EXT4-JTX-TABLES-VALID?",
+                        "_OO-RETRY-IOR _OO-MOUNT-IOR =",
+                        "_OO-USED-BEFORE _OO-USED-AFTER =",
+                        "_OO-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_OO-V V.LAST-IOR @ _OO-MOUNT-IOR =",
+                        "_OO-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_OO-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_OO-CTX _EXT4-C.READY + @ 0=",
+                        "_OO-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_OO-CTX _EXT4-C.J.WRITER-CURRENT + @ 0=",
+                        "_OO-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                         "_OO-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
-                    ]
-                )
-                + ' IF ." EXT4-TYPED-DEPTH0-ORPHAN-ALIAS-REJECTED" THEN'
-            ),
-            "_OO-TX _EXT4-JTX-ABORT CONSTANT _OO-ABORT-IOR",
-            (
-                _forth_conjunction(
-                    [
-                        "_OO-ABORT-IOR 0=",
+                        "_OO-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_OO-CTX _EXT4-C.J.START + @ 0=",
+                        "_OO-CTX _EXT4-C.J.WITNESS + @ 0=",
+                        "_OO-CTX _EXT4-C.J.CLEANUP + @ 0=",
+                        "_OO-CTX _EXT4-C.O.ACTIVE + @ 1 =",
+                        "_OO-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
+                        "_OO-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_OO-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_OO-CTX _EXT4-C.ARENA + @ _OO-ARENA =",
+                        "_EXT4-MOC-MARK-VALID @ 0=",
                         (
-                            "_OO-WRITER _EXT4-JWR.STATE + @ "
-                            "_EXT4-JWR-IDLE ="
+                            "_OO-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0<>"
                         ),
-                        "_OO-WRITER _EXT4-JWR.META-USED + @ 0=",
                     ]
                 )
-                + ' IF ." EXT4-TYPED-DEPTH0-ORPHAN-ALIAS-ABORTED" THEN'
+                + ' IF ." EXT4-MOUNT-DEPTH0-ORPHAN-ALIAS-REJECTED" THEN'
             ),
         ],
         patches=tuple(patches),
     )
-    _assert_emitted(output, "EXT4-TYPED-DEPTH0-ORPHAN-ALIAS-REJECTED")
-    _assert_emitted(output, "EXT4-TYPED-DEPTH0-ORPHAN-ALIAS-ABORTED")
+    _assert_emitted(output, "EXT4-MOUNT-DEPTH0-ORPHAN-ALIAS-REJECTED")
 
 
-def test_typed_depth0_orphan_truncation_rejects_xattr_orphan_preallocation(
+def test_mount_cleanup_rejects_xattr_orphan_preallocation_without_writes(
     canonical_images: dict[str, Path],
 ) -> None:
     path = canonical_images["primary-1k-i256"]
@@ -12889,80 +13212,71 @@ def test_typed_depth0_orphan_truncation_rejects_xattr_orphan_preallocation(
     output = run_forth(
         path,
         [
+            "T-ARENA CONSTANT _OP-ARENA",
             (
-                "T-ARENA T-VOLUME EXT4-NEW "
+                "_OP-ARENA T-VOLUME EXT4-NEW "
                 "CONSTANT _OP-MOUNT-IOR CONSTANT _OP-V"
             ),
             "_OP-V _EXT4-CTX CONSTANT _OP-CTX",
-            "0 _OP-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _OP-RECORD",
-            "_OP-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OP-JOURNAL-IOR",
-            "-1 _OP-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            "_OP-ARENA ARENA-USED CONSTANT _OP-USED-BEFORE",
             (
-                "4 0 0 _OP-CTX _EXT4-JWR-ENSURE "
-                "CONSTANT _OP-WRITER-IOR CONSTANT _OP-WRITER"
+                "_OP-CTX _OP-V _EXT4-COMPLETE-SINGLETON-MODERN-ORPHAN "
+                "CONSTANT _OP-RETRY-IOR"
             ),
-            (
-                "4 0 0 _OP-WRITER _EXT4-JTX-BEGIN "
-                "CONSTANT _OP-TX-IOR CONSTANT _OP-TX"
-            ),
-            (
-                "_OP-RECORD _OP-TX "
-                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0-TRUNCATE "
-                "CONSTANT _OP-STAGE-IOR"
-            ),
+            "_OP-ARENA ARENA-USED CONSTANT _OP-USED-AFTER",
             (
                 _forth_conjunction(
                     [
                         (
                             "_OP-MOUNT-IOR VFS-IOR-REASON "
-                            "VFS-R-UNSUPPORTED ="
-                        ),
-                        (
-                            "_OP-MOUNT-IOR VFS-IOR-DETAIL "
-                            "EXT4-D-RECOVERY ="
-                        ),
-                        "_OP-JOURNAL-IOR 0=",
-                        "_OP-WRITER-IOR 0=",
-                        "_OP-TX-IOR 0=",
-                        (
-                            "_OP-STAGE-IOR VFS-IOR-REASON "
                             "VFS-R-CORRUPT ="
                         ),
                         (
-                            "_OP-STAGE-IOR VFS-IOR-DETAIL "
+                            "_OP-MOUNT-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-FORMAT ="
+                        ),
+                        (
+                            "_OP-MOUNT-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-CORRUPT ="
+                        ),
+                        (
+                            "_OP-MOUNT-IOR VFS-IOR-DETAIL "
                             "EXT4-D-DATA-MAP ="
                         ),
-                        (
-                            "_OP-WRITER _EXT4-JWR.STATE + @ "
-                            "_EXT4-JWR-STAGING ="
-                        ),
-                        "_OP-WRITER _EXT4-JWR.META-USED + @ 0=",
-                        "_OP-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
-                        "_OP-WRITER _EXT4-JTX-TABLES-VALID?",
+                        "_OP-RETRY-IOR _OP-MOUNT-IOR =",
+                        "_OP-USED-BEFORE _OP-USED-AFTER =",
+                        "_OP-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_OP-V V.LAST-IOR @ _OP-MOUNT-IOR =",
+                        "_OP-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_OP-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_OP-CTX _EXT4-C.READY + @ 0=",
+                        "_OP-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_OP-CTX _EXT4-C.J.WRITER-CURRENT + @ 0=",
+                        "_OP-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                         "_OP-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
-                    ]
-                )
-                + ' IF ." EXT4-TYPED-DEPTH0-XATTR-PREALLOC-REJECTED" THEN'
-            ),
-            "_OP-TX _EXT4-JTX-ABORT CONSTANT _OP-ABORT-IOR",
-            (
-                _forth_conjunction(
-                    [
-                        "_OP-ABORT-IOR 0=",
+                        "_OP-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_OP-CTX _EXT4-C.J.START + @ 0=",
+                        "_OP-CTX _EXT4-C.J.WITNESS + @ 0=",
+                        "_OP-CTX _EXT4-C.J.CLEANUP + @ 0=",
+                        "_OP-CTX _EXT4-C.O.ACTIVE + @ 1 =",
+                        "_OP-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
+                        "_OP-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_OP-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_OP-CTX _EXT4-C.ARENA + @ _OP-ARENA =",
+                        "_EXT4-MOC-MARK-VALID @ 0=",
                         (
-                            "_OP-WRITER _EXT4-JWR.STATE + @ "
-                            "_EXT4-JWR-IDLE ="
+                            "_OP-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0<>"
                         ),
-                        "_OP-WRITER _EXT4-JWR.META-USED + @ 0=",
                     ]
                 )
-                + ' IF ." EXT4-TYPED-DEPTH0-XATTR-PREALLOC-ABORTED" THEN'
+                + ' IF ." EXT4-MOUNT-DEPTH0-XATTR-PREALLOC-REJECTED" THEN'
             ),
         ],
         patches=tuple(patches),
     )
-    _assert_emitted(output, "EXT4-TYPED-DEPTH0-XATTR-PREALLOC-REJECTED")
-    _assert_emitted(output, "EXT4-TYPED-DEPTH0-XATTR-PREALLOC-ABORTED")
+    _assert_emitted(output, "EXT4-MOUNT-DEPTH0-XATTR-PREALLOC-REJECTED")
 
 
 @pytest.mark.parametrize(
