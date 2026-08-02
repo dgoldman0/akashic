@@ -703,6 +703,103 @@ def _legacy_orphan_patches(
     return tuple(patches)
 
 
+def _zero_size_depth0_legacy_orphan_patches(
+    path: Path,
+) -> tuple[tuple[int, bytes], ...]:
+    """Model a linked singleton legacy orphan after its zero size is durable."""
+    patches = list(_legacy_orphan_patches(path, 14, ((14, 0),)))
+    assert len(patches) == 3
+    assert patches[0][0] == 1024
+    superblock = patches[0][1]
+    assert struct.unpack_from("<I", superblock, 0xE8)[0] == 14
+    assert not struct.unpack_from("<I", superblock, 0x64)[0] & 0x0001_0000
+    _, raw_inode, inode_offset = _ext4_inode_record(path, 14)
+    assert patches[2][0] == inode_offset
+    assert len(patches[2][1]) == len(raw_inode)
+    assert len({offset for offset, _ in patches}) == len(patches)
+    inode = bytearray(patches[2][1])
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    sectors_per_block = block_size // 512
+
+    assert struct.unpack_from("<H", inode, 0x00)[0] & 0xF000 == 0x8000
+    assert struct.unpack_from("<I", inode, 0x14)[0] == 0
+    assert struct.unpack_from("<H", inode, 0x1A)[0] == 2
+    assert struct.unpack_from("<I", inode, 0x04)[0] == 54
+    assert struct.unpack_from("<I", inode, 0x6C)[0] == 0
+    flags = struct.unpack_from("<I", inode, 0x20)[0]
+    assert flags & 0x0008_0000
+    assert not flags & 0x0000_4000
+    assert not flags & 0x0004_0000
+    assert struct.unpack_from("<H", inode, 0x76)[0] == 0
+    external_xattr = struct.unpack_from("<I", inode, 0x68)[0]
+    assert external_xattr != 0
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 2 * sectors_per_block
+    assert struct.unpack_from("<H", inode, 0x74)[0] == 0
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (0xF30A, 1, 4, 0)
+    assert struct.unpack_from("<I", inode, 0x34)[0] == 0
+    assert struct.unpack_from("<H", inode, 0x38)[0] == 1
+    assert struct.unpack_from("<H", inode, 0x3A)[0] == 0
+
+    struct.pack_into("<I", inode, 0x04, 0)
+    struct.pack_into("<I", inode, 0x6C, 0)
+    assert struct.unpack_from("<I", inode, 0x68)[0] == external_xattr
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 2 * sectors_per_block
+    assert struct.unpack_from("<H", inode, 0x74)[0] == 0
+    patches[2] = (
+        inode_offset,
+        _inode_with_checksum(superblock, 14, inode),
+    )
+    return tuple(patches)
+
+
+def _already_truncated_depth0_legacy_orphan_patches(
+    path: Path,
+) -> tuple[tuple[int, bytes], ...]:
+    """Model completed legacy storage truncation with its head still active."""
+    legacy = list(_zero_size_depth0_legacy_orphan_patches(path))
+    patches = list(_already_truncated_depth0_orphan_patches(path))
+    assert len(legacy) == 3
+    assert len(patches) == 5
+    assert tuple(offset for offset, _ in legacy) == tuple(
+        offset for offset, _ in patches[:3]
+    )
+
+    superblock = bytearray(patches[0][1])
+    ro_compat = struct.unpack_from("<I", superblock, 0x64)[0]
+    assert ro_compat & 0x0001_0000
+    assert struct.unpack_from("<I", superblock, 0xE8)[0] == 0
+    struct.pack_into("<I", superblock, 0x64, ro_compat & ~0x0001_0000)
+    struct.pack_into("<I", superblock, 0xE8, 14)
+    superblock = bytearray(_ext4_super_with_checksum(superblock))
+
+    inode_offset, raw_inode = patches[2]
+    assert inode_offset == legacy[2][0]
+    inode = bytearray(raw_inode)
+    legacy_inode = legacy[2][1]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    sectors_per_block = block_size // 512
+    external_xattr = struct.unpack_from("<I", legacy_inode, 0x68)[0]
+    assert external_xattr != 0
+    assert struct.unpack_from("<I", inode, 0x04)[0] == 0
+    assert struct.unpack_from("<I", inode, 0x6C)[0] == 0
+    assert struct.unpack_from("<I", inode, 0x14)[0] == 0
+    assert struct.unpack_from("<H", inode, 0x1A)[0] == 2
+    assert struct.unpack_from("<I", inode, 0x68)[0] == external_xattr
+    assert struct.unpack_from("<H", inode, 0x76)[0] == 0
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == sectors_per_block
+    assert struct.unpack_from("<H", inode, 0x74)[0] == 0
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (0xF30A, 0, 4, 0)
+
+    patches[0] = (1024, bytes(superblock))
+    patches[1] = legacy[1]
+    patches[2] = (
+        inode_offset,
+        _inode_with_checksum(superblock, 14, inode),
+    )
+    assert len({offset for offset, _ in patches}) == len(patches)
+    return tuple(patches)
+
+
 def _ext4_journal_physical_map(
     path: Path, logical_blocks: tuple[int, ...]
 ) -> dict[int, int]:
@@ -1328,6 +1425,18 @@ def build_snapshot():
 
     fat_harness.build_snapshot()
     bios, memory, cpu_state, ext_memory = fat_harness._snapshot
+    # Keep this a real cold source build without making UART echo volume an
+    # accidental implementation-size ceiling.  The BIOS reserves R2/2 as its
+    # FSLOAD source-buffer address: the data stack grows down from that point,
+    # while source extends upward below the return stack.  Host-inject each
+    # physical line there, then execute an IMMEDIATE checked-evaluator shim so
+    # multi-line definitions retain their compiler state without transmitting
+    # the source itself through the UART.
+    source_ready = "EXT4-SOURCE-READY"
+    lines = [*_compact_source_load_lines(
+        fat_harness._load_forth_lines(str(EXT4_F))
+    ), f'." {source_ready}"']
+
     system = fat_harness.MegapadSystem(
         ram_size=1024 * 1024,
         ext_mem_size=fat_harness.VFS_EXT_MEM_SIZE,
@@ -1345,15 +1454,57 @@ def build_snapshot():
     fat_harness.restore_cpu_state(system.cpu, cpu_state)
     uart.clear()
 
-    # Whitespace, comments, and per-line prompts have no executable Forth
-    # semantics but every echoed UART byte consumes emulator steps.  The
-    # packed input remains a real cold source-mode compilation.
-    lines = _compact_source_load_lines(
-        fat_harness._load_forth_lines(str(EXT4_F))
+    source_addr = system.cpu.regs[2] // 2
+    source_size_addr = source_addr + 256
+    source_end = source_size_addr + 1
+    source_limit = system.cpu.regs[15] - 128
+    assert source_end <= source_limit, (
+        "ext4 source exceeds the BIOS's checked RAM source-buffer span: "
+        f"{source_end - source_addr} bytes available={source_limit - source_addr}"
     )
-    source_ready = "EXT4-SOURCE-READY"
-    payload = "\n".join([*lines, f'." {source_ready}"']) + "\n"
-    _feed_until_idle(system, payload.encode(), 800_000_000)
+    bootstrap = "\n".join(
+        [
+            f"{source_addr} CONSTANT _EXT4-SOURCE-A",
+            f"{source_size_addr} CONSTANT _EXT4-SOURCE-U",
+            "VARIABLE _EXT4-SOURCE-N 0 _EXT4-SOURCE-N !",
+            ": _EXT4-SOURCE-DIAGNOSTIC",
+            'CR ." [EXT4-SOURCE-STATUS " DUP . EVAL-LINE @ .',
+            'EVAL-COLUMN @ . EVAL-TOKEN TYPE ."  THROW "',
+            'EVAL-THROW @ . ." ]" ;',
+            ": _EXT4-SOURCE-LINE",
+            "1 _EXT4-SOURCE-N +! _EXT4-SOURCE-N @ EVAL-LINE !",
+            "_EXT4-SOURCE-A _EXT4-SOURCE-U C@ EVALUATE-CHECKED",
+            "DUP IF _EXT4-SOURCE-DIAGNOSTIC THEN DROP ; IMMEDIATE",
+            ": _EXT4-SOURCE-FINISH",
+            "EVALUATE-FINISH DUP IF _EXT4-SOURCE-DIAGNOSTIC THEN DROP ;",
+            "IMMEDIATE",
+        ]
+    ).encode() + b"\n"
+    max_source_steps = 800_000_000
+    source_steps = _feed_until_idle(system, bootstrap, max_source_steps)
+    uart_offset = len(uart)
+    for line in lines:
+        encoded = line.encode()
+        assert len(encoded) <= 255
+        if source_steps >= max_source_steps:
+            break
+        system.load_binary(source_addr, encoded)
+        system.load_binary(source_size_addr, bytes([len(encoded)]))
+        source_steps += _feed_until_idle(
+            system,
+            b"_EXT4-SOURCE-LINE\n",
+            max_source_steps - source_steps,
+        )
+        new_output = fat_harness.uart_text(uart[uart_offset:])
+        uart_offset = len(uart)
+        if "[EXT4-SOURCE-STATUS" in new_output:
+            break
+    if source_steps < max_source_steps:
+        source_steps += _feed_until_idle(
+            system,
+            b"_EXT4-SOURCE-FINISH\n",
+            max_source_steps - source_steps,
+        )
     transcript = fat_harness.uart_text(uart)
     _assert_no_forth_diagnostics(transcript)
     assert f"\r\n{source_ready} ok\r\n" in transcript, (
@@ -11525,7 +11676,7 @@ def test_mount_cleanup_rejects_target_xattr_alias_without_writes(
             "_OX-V _EXT4-CTX CONSTANT _OX-CTX",
             "_OX-ARENA ARENA-USED CONSTANT _OX-USED-BEFORE",
             (
-                "_OX-CTX _OX-V _EXT4-COMPLETE-SINGLETON-MODERN-ORPHAN "
+                "_OX-CTX _OX-V _EXT4-COMPLETE-SINGLETON-ORPHAN "
                 "CONSTANT _OX-RETRY-IOR"
             ),
             "_OX-ARENA ARENA-USED CONSTANT _OX-USED-AFTER",
@@ -11582,6 +11733,319 @@ def test_mount_cleanup_rejects_target_xattr_alias_without_writes(
         patches=tuple(patches),
     )
     _assert_emitted(output, "EXT4-MOUNT-ORPHAN-XATTR-ALIAS-REJECTED")
+
+
+@pytest.fixture(scope="session")
+def singleton_legacy_cleanup_fixture(
+    canonical_images: dict[str, Path],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    path = canonical_images["primary-1k-i256"]
+    directory = tmp_path_factory.mktemp("ext4-legacy-orphan-cleanup")
+    media_path = directory / "successful-cleanup.img"
+    patches = _zero_size_depth0_legacy_orphan_patches(path)
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        media_path,
+        [
+            "T-ARENA CONSTANT _LA-ARENA",
+            (
+                "_LA-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _LA-IOR CONSTANT _LA-V"
+            ),
+            "_LA-V _EXT4-CTX CONSTANT _LA-CTX",
+            "14 _LA-CTX _EXT4-LOAD-INODE CONSTANT _LA-INODE-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_LA-IOR 0=",
+                        "_LA-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_LA-V _EXT4-READY?",
+                        "_LA-V _EXT4-ATTACHED?",
+                        "_LA-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_LA-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_LA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_LA-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
+                        "_LA-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_LA-CTX _EXT4-C.ARENA + @ _LA-ARENA =",
+                        "_LA-CTX _EXT4-C.J.START + @ 0=",
+                        "_LA-CTX _EXT4-C.J.WITNESS + @ 0=",
+                        "_LA-CTX _EXT4-C.J.CLEANUP + @ 0=",
+                        "_LA-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_LA-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_LA-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_LA-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        (
+                            "_LA-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.LAST-ORPHAN + L@ 0="
+                        ),
+                        (
+                            "_LA-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0="
+                        ),
+                        (
+                            "_LA-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                        "_LA-INODE-IOR 0=",
+                        (
+                            "_LA-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.SIZE-LO + L@ 0="
+                        ),
+                        (
+                            "_LA-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.SIZE-HI + L@ 0="
+                        ),
+                        (
+                            "_LA-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.DTIME + L@ 0="
+                        ),
+                        (
+                            "_LA-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.LINKS + W@ 2 ="
+                        ),
+                        (
+                            "_LA-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.BLOCKS-LO + L@ "
+                            "_LA-CTX _EXT4-C.SPB + @ ="
+                        ),
+                        (
+                            "_LA-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.BLOCKS-HI + W@ 0="
+                        ),
+                        (
+                            "_LA-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.FILE-ACL-LO + L@ 0<>"
+                        ),
+                        (
+                            "_LA-CTX _EXT4-C.INODE + "
+                            "_EXT4-I.FILE-ACL-HI + W@ 0="
+                        ),
+                        (
+                            "_LA-CTX _EXT4-C.INODE + _EXT4-I.BLOCK + "
+                            "2 + W@ 0="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-LEGACY-ORPHAN-AUTO-CLEANED" THEN'
+            ),
+        ],
+        patches=patches,
+        capture_media=media_path,
+    )
+    return {
+        "source": path,
+        "patches": patches,
+        "output": output,
+        "success_trace": trace,
+        "clean_image": media_path,
+        "clean_sha256": media_sha256,
+    }
+
+
+def test_mount_completes_singleton_legacy_depth0_orphan_transaction(
+    singleton_legacy_cleanup_fixture: dict[str, object],
+) -> None:
+    output = singleton_legacy_cleanup_fixture["output"]
+    trace = singleton_legacy_cleanup_fixture["success_trace"]
+    clean_image = singleton_legacy_cleanup_fixture["clean_image"]
+    clean_sha256 = singleton_legacy_cleanup_fixture["clean_sha256"]
+    assert isinstance(output, str)
+    assert isinstance(trace, tuple)
+    assert isinstance(clean_image, Path)
+    assert isinstance(clean_sha256, str)
+
+    _assert_emitted(output, "EXT4-LEGACY-ORPHAN-AUTO-CLEANED")
+    assert clean_image.is_file()
+    assert _sha256(clean_image) == clean_sha256
+    # Four metadata homes remove one payload and one home write from the
+    # otherwise identical five-home modern 29-write durability path.
+    assert sum(kind == "write" for kind, _, _ in trace) == 27
+    assert sum(kind == "flush" for kind, _, _ in trace) == 18
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_credit", "expected_target_entries"),
+    (
+        pytest.param(
+            "already-truncated",
+            1,
+            0,
+            id="primary-super-only",
+        ),
+        pytest.param(
+            "one-data-block",
+            4,
+            1,
+            id="target-plus-primary-plus-group-and-descriptor",
+        ),
+    ),
+)
+def test_singleton_legacy_depth0_credit_and_final_seal(
+    canonical_images: dict[str, Path],
+    case: str,
+    expected_credit: int,
+    expected_target_entries: int,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    if case == "already-truncated":
+        patches = _already_truncated_depth0_legacy_orphan_patches(path)
+    else:
+        assert case == "one-data-block"
+        # Current canonical geometry contributes one bitmap group and one
+        # primary descriptor page to the target-inode/primary-super base two.
+        patches = _zero_size_depth0_legacy_orphan_patches(path)
+    sealed_marker = f"EXT4-LEGACY-{case.upper()}-FINAL-SEALED"
+    aborted_marker = f"EXT4-LEGACY-{case.upper()}-FINAL-ABORTED"
+    primary_home_check = []
+    if expected_credit == 1:
+        primary_home_check.append(
+            (
+                "0 _LF-WRITER _EXT4-JWR-META-ENTRY @ "
+                "_LF-CTX _EXT4-PRIMARY-SUPER-BLOCK ="
+            )
+        )
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            "T-ARENA CONSTANT _LF-ARENA",
+            (
+                "_LF-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _LF-MOUNT-IOR CONSTANT _LF-V"
+            ),
+            "_LF-V _EXT4-CTX CONSTANT _LF-CTX",
+            (
+                "_LF-CTX _EXT4-FIND-SINGLETON-ORPHAN "
+                "CONSTANT _LF-FIND-IOR CONSTANT _LF-RECORD"
+            ),
+            "_LF-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _LF-JOURNAL-IOR",
+            (
+                "_LF-RECORD _LF-CTX "
+                "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
+                "CONSTANT _LF-MEASURE1-IOR CONSTANT _LF-CREDIT1"
+            ),
+            (
+                "_LF-RECORD _LF-CTX "
+                "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
+                "CONSTANT _LF-MEASURE2-IOR CONSTANT _LF-CREDIT2"
+            ),
+            (
+                "_LF-CREDIT1 0 0 _LF-CTX "
+                "_EXT4-JTX-PREFLIGHT-CAPACITY "
+                "CONSTANT _LF-CAPACITY-IOR"
+            ),
+            "-1 _LF-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "_LF-CREDIT1 0 0 _LF-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _LF-WRITER-IOR CONSTANT _LF-WRITER"
+            ),
+            (
+                "_LF-CREDIT1 0 0 _LF-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _LF-BEGIN-IOR CONSTANT _LF-TX"
+            ),
+            (
+                "_LF-RECORD _LF-TX "
+                "_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL "
+                "CONSTANT _LF-STAGE-IOR"
+            ),
+            (
+                "2000 _LF-TX _EXT4-JTX-DATA-ZERO "
+                "CONSTANT _LF-MUTATE-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_LF-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_LF-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_LF-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_LF-CTX _EXT4-C.READY + @ 0=",
+                        "_LF-CTX _EXT4-C.O.ACTIVE + @ 1 =",
+                        "_LF-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_LF-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 1 =",
+                        (
+                            "_LF-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.LAST-ORPHAN + L@ 14 ="
+                        ),
+                        "_LF-JOURNAL-IOR 0=",
+                        "_LF-FIND-IOR 0=",
+                        "_LF-RECORD 0<>",
+                        "_LF-RECORD _EXT4-OE.INO + @ 14 =",
+                        (
+                            "_LF-RECORD _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-LEGACY ="
+                        ),
+                        "_LF-RECORD _EXT4-OE.LOCATOR-A + @ 0=",
+                        "_LF-RECORD _EXT4-OE.LOCATOR-B + @ 0=",
+                        "_LF-MEASURE1-IOR 0=",
+                        "_LF-MEASURE2-IOR 0=",
+                        f"_LF-CREDIT1 {expected_credit} =",
+                        "_LF-CREDIT2 _LF-CREDIT1 =",
+                        "_LF-CAPACITY-IOR 0=",
+                        "_LF-WRITER-IOR 0=",
+                        "_LF-BEGIN-IOR 0=",
+                        "_LF-STAGE-IOR 0=",
+                        "_LF-MUTATE-IOR VFS-E-BUSY =",
+                        (
+                            "_LF-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-STAGING ="
+                        ),
+                        (
+                            "_LF-WRITER _EXT4-JWR.META-USED + @ "
+                            f"{expected_credit} ="
+                        ),
+                        (
+                            "_LF-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                            f"{expected_credit} ="
+                        ),
+                        "_LF-WRITER _EXT4-JWR.DATA-USED + @ 0=",
+                        "_LF-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
+                        (
+                            "_LF-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ "
+                            f"{expected_target_entries} ="
+                        ),
+                        "_LF-WRITER _EXT4-JWR-CP-AUTHORITY?",
+                        "_LF-WRITER _EXT4-JTX-TABLES-VALID?",
+                        "_LF-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        *primary_home_check,
+                    ]
+                )
+                + f' IF ." {sealed_marker}" THEN'
+            ),
+            "_LF-TX _EXT4-JTX-ABORT CONSTANT _LF-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_LF-ABORT-IOR 0=",
+                        (
+                            "_LF-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        (
+                            "_LF-WRITER _EXT4-JWR.CP-MODE + "
+                            "_EXT4-JWR-SIZE _EXT4-JWR.CP-MODE - "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        "_LF-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                        "_LF-WRITER _EXT4-JWR-VALID?",
+                    ]
+                )
+                + f' IF ." {aborted_marker}" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, sealed_marker)
+    _assert_emitted(output, aborted_marker)
 
 
 @pytest.fixture(scope="session")
@@ -12179,12 +12643,12 @@ def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
             "_OF-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OF-JOURNAL-IOR",
             (
                 "_OF-COPY _OF-CTX "
-                "_EXT4-MEASURE-MODERN-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
                 "CONSTANT _OF-COPY-IOR CONSTANT _OF-COPY-CREDIT"
             ),
             (
                 "_OF-RECORD _OF-CTX "
-                "_EXT4-MEASURE-MODERN-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
                 "CONSTANT _OF-MEASURE-IOR CONSTANT _OF-CREDIT"
             ),
             (
@@ -12203,7 +12667,7 @@ def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
             ),
             (
                 "_OF-RECORD _OF-TX "
-                "_EXT4-JTX-STAGE-MODERN-ORPHAN-DEPTH0-FINAL "
+                "_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL "
                 "CONSTANT _OF-STAGE-IOR"
             ),
             (
@@ -12305,12 +12769,12 @@ def test_singleton_modern_depth0_credit_counts_cross_group_homes_exactly(
             "_OM-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OM-JOURNAL-IOR",
             (
                 "_OM-RECORD _OM-CTX "
-                "_EXT4-MEASURE-MODERN-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
                 "CONSTANT _OM-MEASURE1-IOR CONSTANT _OM-CREDIT1"
             ),
             (
                 "_OM-RECORD _OM-CTX "
-                "_EXT4-MEASURE-MODERN-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
                 "CONSTANT _OM-MEASURE2-IOR CONSTANT _OM-CREDIT2"
             ),
             "-1 _OM-CTX _EXT4-C.J.WRITER-CURRENT + !",
@@ -12324,7 +12788,7 @@ def test_singleton_modern_depth0_credit_counts_cross_group_homes_exactly(
             ),
             (
                 "_OM-RECORD _OM-TX "
-                "_EXT4-JTX-STAGE-MODERN-ORPHAN-DEPTH0-FINAL "
+                "_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL "
                 "CONSTANT _OM-STAGE-IOR"
             ),
             (
@@ -12422,7 +12886,7 @@ def test_singleton_modern_depth0_cleanup_checkpoints_and_deactivates(
                 ),
                 (
                     "_OC-RECORD _OC-TX "
-                    "_EXT4-JTX-STAGE-MODERN-ORPHAN-DEPTH0-FINAL "
+                    "_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL "
                     "CONSTANT _OC-STAGE-IOR"
                 ),
                 "_OC-TX _EXT4-JTX-EMIT CONSTANT _OC-EMIT-IOR",
@@ -12522,7 +12986,7 @@ def test_already_truncated_modern_orphan_uses_slot_only_final_transaction(
                 ),
                 (
                     "_OE-RECORD _OE-CTX "
-                    "_EXT4-MEASURE-MODERN-ORPHAN-DEPTH0 "
+                    "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
                     "CONSTANT _OE-MEASURE-IOR CONSTANT _OE-CREDIT"
                 ),
                 "-1 _OE-CTX _EXT4-C.J.WRITER-CURRENT + !",
@@ -12540,7 +13004,7 @@ def test_already_truncated_modern_orphan_uses_slot_only_final_transaction(
                 ),
                 (
                     "_OE-RECORD _OE-TX "
-                    "_EXT4-JTX-STAGE-MODERN-ORPHAN-DEPTH0-FINAL "
+                    "_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL "
                     "CONSTANT _OE-STAGE-IOR"
                 ),
                 (
@@ -12660,7 +13124,7 @@ def test_singleton_modern_cleanup_rejects_certificate_substitution_prehome(
                 ),
                 (
                     "_OS-RECORD _OS-TX "
-                    "_EXT4-JTX-STAGE-MODERN-ORPHAN-DEPTH0-FINAL "
+                    "_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL "
                     "CONSTANT _OS-STAGE-IOR"
                 ),
                 "_OS-TX _EXT4-JTX-EMIT CONSTANT _OS-EMIT-IOR",
@@ -13265,7 +13729,7 @@ def test_mount_cleanup_rejects_orphan_storage_alias_without_writes(
             "_OO-V _EXT4-CTX CONSTANT _OO-CTX",
             "_OO-ARENA ARENA-USED CONSTANT _OO-USED-BEFORE",
             (
-                "_OO-CTX _OO-V _EXT4-COMPLETE-SINGLETON-MODERN-ORPHAN "
+                "_OO-CTX _OO-V _EXT4-COMPLETE-SINGLETON-ORPHAN "
                 "CONSTANT _OO-RETRY-IOR"
             ),
             "_OO-ARENA ARENA-USED CONSTANT _OO-USED-AFTER",
@@ -13390,7 +13854,7 @@ def test_mount_cleanup_rejects_xattr_orphan_preallocation_without_writes(
             "_OP-V _EXT4-CTX CONSTANT _OP-CTX",
             "_OP-ARENA ARENA-USED CONSTANT _OP-USED-BEFORE",
             (
-                "_OP-CTX _OP-V _EXT4-COMPLETE-SINGLETON-MODERN-ORPHAN "
+                "_OP-CTX _OP-V _EXT4-COMPLETE-SINGLETON-ORPHAN "
                 "CONSTANT _OP-RETRY-IOR"
             ),
             "_OP-ARENA ARENA-USED CONSTANT _OP-USED-AFTER",
