@@ -390,6 +390,33 @@ contents. These checks bind discovery records back to current media before
 they can contribute an after-image; they do not validate a proposed inode
 record as a complete truncate/delete operation.
 
+`_EXT4-JTX-STAGE-FREE-BLOCK-RANGE` is the first private allocation-accounting
+builder. It accepts one nonempty contiguous physical range, proves the whole
+range in bounds and disjoint from the journal and every descriptor- or
+geometry-authenticated static metadata interval, then walks actual group
+geometry including a partial final group. Each touched raw and effective
+bitmap must still mark the complete range allocated. Writable admission also
+proves that the primary super/GDT homes are not descriptor aliases and that
+each touched block bitmap has exactly one descriptor owner and overlaps no
+inode bitmap/table, sparse-super/GDT interval, or journal extent. This
+anti-alias proof is stronger than the read-side checksum and allocation
+admission needed merely to inspect a filesystem.
+
+For each group, the builder clears the retained effective bitmap bits,
+increments the split group free-block counter, installs the seeded bitmap
+CRC32C, and restamps the descriptor CRC. It coalesces descriptors sharing one
+primary GDT block, then increments and restamps the checksum-valid primary
+superblock inside its complete 1/2/4 KiB home-block image. Repeated disjoint
+calls compose through the transaction-aware acquire boundary; duplicate or
+partially overlapping staged frees return `VFS-E-CONFLICT`. Context caches
+remain media-derived and unchanged until a later strict reload. If any
+internal failure occurs after the first replacement is published, the
+operation automatically aborts and scrubs the whole transaction, so no
+descriptor/bitmap prefix can remain eligible for emission without its
+aggregate superblock update. This builder does not remove an extent or legacy
+map entry, change `i_blocks`, stage a revoke, or free an inode, and it emits no
+media write.
+
 This is a non-emitting staging boundary. The typed builders may issue checked
 reads for locator and checksum reauthentication, but they do not activate a
 journal, emit a transaction, checkpoint a home block, write, or flush. Before
@@ -604,8 +631,11 @@ writable profile. The remaining boundaries are:
   immediate sequential workspace reuse, clean write-active deactivation, and
   public clean-unmount integration are implemented as private durability
   foundations. Transaction-aware metadata acquisition and checksum-safe typed
-  orphan-inode replacement/modern-slot clearing can now compose coalesced
-  same-home after-images and abort without volume I/O;
+  orphan-inode replacement, modern-slot clearing, and free-only physical-block
+  accounting can now compose coalesced same-home after-images and abort without
+  volume I/O. Block-free staging covers split group ranges, primary GDT and
+  superblock counters/checksums, partial-overlap conflicts, automatic abort on
+  late credit failure, and writable metadata-home anti-alias admission;
 - unified legacy-chain and modern orphan-file discovery, inode preflight, and
   authenticated-empty `ORPHAN_PRESENT` completion are implemented. The shared
   exact-count plan retains protocol-specific locations and enforces inode
@@ -613,11 +643,12 @@ writable profile. The remaining boundaries are:
   protocol counts are zero and mutates only journal recovery state and the
   checksummed primary-super transient bits; it does not change an orphan
   inode/file, a legacy link, allocate writer workspace, or expose a
-  user-visible write. The typed staging components do not yet orchestrate
-  allocation/free bitmap and counter changes, data truncation or deletion,
-  link-count and legacy-chain/head updates, cleanup transaction ordering, or
-  retry-idempotent completion. Transactional cleanup for either nonempty
-  protocol and every user-visible mutation operation remain unimplemented;
+  user-visible write. The typed staging components do not yet orchestrate map
+  removal, `i_blocks` and inode-free accounting, data truncation or deletion,
+  external-xattr block release, link-count and legacy-chain/head updates,
+  cleanup transaction ordering, or retry-idempotent completion. Transactional
+  cleanup for either nonempty protocol and every user-visible mutation
+  operation remain unimplemented;
 - focused 1 KiB coverage exercises one- and two-inode legacy chains, a mixed
   legacy/modern union, stable refusal with same-binding plan reuse, legacy
   cycles and invalid links, unallocated and checksum-invalid legacy inodes,

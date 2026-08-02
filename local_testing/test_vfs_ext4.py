@@ -11159,6 +11159,825 @@ def test_typed_orphan_staging_rejects_stale_and_conflicting_authority(
     _assert_emitted(output, "EXT4-TYPED-REJECTION-ABORTED")
 
 
+@pytest.mark.parametrize(
+    ("image_id", "first_block", "bitmap_home"),
+    (
+        ("primary-1k-i256", 1346, 259),
+        ("primary-2k-i256", 1204, 129),
+        ("primary-4k-i256", 2160, 65),
+    ),
+)
+def test_typed_free_block_range_afterimages_compose_and_abort_without_io(
+    canonical_images: dict[str, Path],
+    image_id: str,
+    first_block: int,
+    bitmap_home: int,
+) -> None:
+    path = canonical_images[image_id]
+    with path.open("rb") as source:
+        source.seek(1024)
+        superblock = source.read(1024)
+    assert len(superblock) == 1024
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    group, first_index = divmod(first_block - first_data, blocks_per_group)
+    assert group == 0
+    assert first_index + 5 <= blocks_per_group
+    gdt_home = 2 if block_size == 1024 else 1
+    super_home = 1 if block_size == 1024 else 0
+    super_offset = 0 if block_size == 1024 else 1024
+
+    def read_block(block: int) -> bytearray:
+        with path.open("rb") as source:
+            source.seek(block * block_size)
+            result = bytearray(source.read(block_size))
+        assert len(result) == block_size
+        return result
+
+    expected_bitmap = read_block(bitmap_home)
+    for block_index in range(first_index, first_index + 5):
+        byte_index, bit_index = divmod(block_index, 8)
+        assert expected_bitmap[byte_index] & (1 << bit_index)
+        expected_bitmap[byte_index] &= ~(1 << bit_index)
+    bitmap_checksum = _crc32c_raw(expected_bitmap, seed)
+
+    expected_gdt = read_block(gdt_home)
+    descriptor_offset = group * 64 % block_size
+    descriptor = bytearray(
+        expected_gdt[descriptor_offset : descriptor_offset + 64]
+    )
+    group_free_before = struct.unpack_from("<H", descriptor, 0x0C)[0] | (
+        struct.unpack_from("<H", descriptor, 0x2C)[0] << 16
+    )
+    group_free_after = group_free_before + 5
+    struct.pack_into("<H", descriptor, 0x0C, group_free_after & 0xFFFF)
+    struct.pack_into("<H", descriptor, 0x2C, group_free_after >> 16)
+    struct.pack_into("<H", descriptor, 0x18, bitmap_checksum & 0xFFFF)
+    struct.pack_into("<H", descriptor, 0x38, bitmap_checksum >> 16)
+    descriptor = bytearray(
+        _group_descriptor_with_checksum(superblock, descriptor, group)
+    )
+    descriptor_checksum = struct.unpack_from("<H", descriptor, 0x1E)[0]
+    expected_gdt[descriptor_offset : descriptor_offset + 64] = descriptor
+
+    expected_super_home = read_block(super_home)
+    staged_super = bytearray(
+        expected_super_home[super_offset : super_offset + 1024]
+    )
+    super_free_before = struct.unpack_from("<I", staged_super, 0x0C)[0]
+    super_free_after = super_free_before + 5
+    struct.pack_into("<I", staged_super, 0x0C, super_free_after)
+    struct.pack_into("<I", staged_super, 0x158, 0)
+    staged_super = bytearray(_ext4_super_with_checksum(staged_super))
+    super_checksum = struct.unpack_from("<I", staged_super, 0x3FC)[0]
+    expected_super_home[super_offset : super_offset + 1024] = staged_super
+
+    expected_gdt_crc = _crc32c_raw(expected_gdt)
+    expected_bitmap_crc = _crc32c_raw(expected_bitmap)
+    expected_super_home_crc = _crc32c_raw(expected_super_home)
+
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _FB-MOUNT-IOR CONSTANT _FB-V"
+            ),
+            "_FB-V _EXT4-CTX CONSTANT _FB-CTX",
+            (
+                "_FB-CTX _EXT4-C.FREE-BLOCKS + @ "
+                "CONSTANT _FB-CONTEXT-FREE"
+            ),
+            (
+                "_FB-CTX _EXT4-C.SB + _EXT4-SB.FREE-BLOCKS-LO + L@ "
+                "CONSTANT _FB-CACHED-SUPER-FREE"
+            ),
+            (
+                "3 0 0 _FB-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _FB-WRITER-IOR CONSTANT _FB-WRITER"
+            ),
+            "_FB-WRITER _EXT4-JWR.FREE + @ CONSTANT _FB-FREE-BEFORE",
+            (
+                "3 0 0 _FB-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _FB-TX-IOR CONSTANT _FB-TX"
+            ),
+            (
+                f"{first_block} 2 _FB-TX "
+                "_EXT4-JTX-STAGE-FREE-BLOCK-RANGE CONSTANT _FB-FIRST-IOR"
+            ),
+            (
+                f"{first_block + 2} 3 _FB-TX "
+                "_EXT4-JTX-STAGE-FREE-BLOCK-RANGE CONSTANT _FB-SECOND-IOR"
+            ),
+            "0 _FB-WRITER _EXT4-JWR-META-IMAGE CONSTANT _FB-GDT-IMAGE",
+            "1 _FB-WRITER _EXT4-JWR-META-IMAGE CONSTANT _FB-BITMAP-IMAGE",
+            "2 _FB-WRITER _EXT4-JWR-META-IMAGE CONSTANT _FB-SUPER-IMAGE",
+            (
+                _forth_conjunction(
+                    [
+                        "_FB-MOUNT-IOR 0=",
+                        "_FB-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_FB-WRITER-IOR 0=",
+                        "_FB-TX-IOR 0=",
+                        "_FB-FIRST-IOR 0=",
+                        "_FB-SECOND-IOR 0=",
+                        "_FB-WRITER _EXT4-JWR.META-USED + @ 3 =",
+                        "_FB-WRITER _EXT4-JWR.META-ACTIVE + @ 3 =",
+                        "_FB-WRITER _EXT4-JTX-TABLES-VALID?",
+                        (
+                            f"0 _FB-WRITER _EXT4-JWR-META-ENTRY @ "
+                            f"{gdt_home} ="
+                        ),
+                        (
+                            f"1 _FB-WRITER _EXT4-JWR-META-ENTRY @ "
+                            f"{bitmap_home} ="
+                        ),
+                        (
+                            f"2 _FB-WRITER _EXT4-JWR-META-ENTRY @ "
+                            f"{super_home} ="
+                        ),
+                        (
+                            f"_FB-BITMAP-IMAGE {first_index} 5 "
+                            "_EXT4-BIT-RANGE-SET? 0="
+                        ),
+                        (
+                            f"_FB-GDT-IMAGE {descriptor_offset} + "
+                            f"_EXT4-GD.FREE-BLOCKS-LO + W@ "
+                            f"{group_free_after & 0xFFFF} ="
+                        ),
+                        (
+                            f"_FB-GDT-IMAGE {descriptor_offset} + "
+                            f"_EXT4-GD.FREE-BLOCKS-HI + W@ "
+                            f"{group_free_after >> 16} ="
+                        ),
+                        (
+                            f"_FB-GDT-IMAGE {descriptor_offset} + "
+                            f"_EXT4-GD.BLOCK-CSUM-LO + W@ "
+                            f"{bitmap_checksum & 0xFFFF} ="
+                        ),
+                        (
+                            f"_FB-GDT-IMAGE {descriptor_offset} + "
+                            f"_EXT4-GD.BLOCK-CSUM-HI + W@ "
+                            f"{bitmap_checksum >> 16} ="
+                        ),
+                        (
+                            f"_FB-GDT-IMAGE {descriptor_offset} + "
+                            f"_EXT4-GD.CHECKSUM + W@ "
+                            f"{descriptor_checksum} ="
+                        ),
+                        (
+                            f"_FB-SUPER-IMAGE {super_offset} + "
+                            "_EXT4-SB.FREE-BLOCKS-LO + L@ "
+                            f"{super_free_after} ="
+                        ),
+                        (
+                            f"_FB-SUPER-IMAGE {super_offset} + "
+                            "_EXT4-SB.FREE-BLOCKS-HI + L@ 0="
+                        ),
+                        (
+                            f"_FB-SUPER-IMAGE {super_offset} + "
+                            f"_EXT4-SB.CHECKSUM + L@ {super_checksum} ="
+                        ),
+                        (
+                            f"_FB-GDT-IMAGE _FB-WRITER "
+                            f"_EXT4-JTX-IMAGE-CRC {expected_gdt_crc} ="
+                        ),
+                        (
+                            f"_FB-BITMAP-IMAGE _FB-WRITER "
+                            f"_EXT4-JTX-IMAGE-CRC {expected_bitmap_crc} ="
+                        ),
+                        (
+                            f"_FB-SUPER-IMAGE _FB-WRITER "
+                            f"_EXT4-JTX-IMAGE-CRC {expected_super_home_crc} ="
+                        ),
+                        (
+                            "_FB-CTX _EXT4-C.FREE-BLOCKS + @ "
+                            "_FB-CONTEXT-FREE ="
+                        ),
+                        (
+                            "_FB-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.FREE-BLOCKS-LO + L@ "
+                            "_FB-CACHED-SUPER-FREE ="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-FREE-AFTERIMAGES" THEN'
+            ),
+            "_FB-TX _EXT4-JTX-ABORT CONSTANT _FB-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_FB-ABORT-IOR 0=",
+                        (
+                            "_FB-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        (
+                            "_FB-WRITER _EXT4-JWR.FREE + @ "
+                            "_FB-FREE-BEFORE ="
+                        ),
+                        "_FB-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_FB-WRITER _EXT4-JWR.META-IMAGES + @ C@ 0=",
+                        "_FB-WRITER _EXT4-JWR.SCRATCH-A + @ C@ 0=",
+                        "_FB-WRITER _EXT4-JWR.SCRATCH-B + @ C@ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-FREE-ABORTED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-TYPED-FREE-AFTERIMAGES")
+    _assert_emitted(output, "EXT4-TYPED-FREE-ABORTED")
+
+
+@pytest.mark.parametrize(
+    ("image_id", "valid_block", "free_block", "bitmap_home", "journal_home"),
+    (
+        ("primary-1k-i256", 1346, 1351, 259, 16385),
+        ("primary-2k-i256", 1204, 1209, 129, 32768),
+        ("primary-4k-i256", 2160, 2165, 65, 65536),
+    ),
+)
+def test_typed_free_block_range_rejects_stale_or_protected_ranges_without_io(
+    canonical_images: dict[str, Path],
+    image_id: str,
+    valid_block: int,
+    free_block: int,
+    bitmap_home: int,
+    journal_home: int,
+) -> None:
+    path = canonical_images[image_id]
+    with path.open("rb") as source:
+        source.seek(1024)
+        superblock = source.read(1024)
+    assert len(superblock) == 1024
+    block_count = struct.unpack_from("<I", superblock, 0x04)[0]
+    assert struct.unpack_from("<I", superblock, 0x150)[0] == 0
+
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _FR-MOUNT-IOR CONSTANT _FR-V"
+            ),
+            "_FR-V _EXT4-CTX CONSTANT _FR-CTX",
+            (
+                "3 0 0 _FR-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _FR-WRITER-IOR CONSTANT _FR-WRITER"
+            ),
+            (
+                "3 0 0 _FR-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _FR-TX-IOR CONSTANT _FR-TX"
+            ),
+            (
+                f"{valid_block} 0 _FR-TX "
+                "_EXT4-JTX-STAGE-FREE-BLOCK-RANGE CONSTANT _FR-ZERO-IOR"
+            ),
+            "_FR-WRITER _EXT4-JWR.META-USED + @ CONSTANT _FR-USED-ZERO",
+            (
+                f"{block_count} 1 _FR-TX "
+                "_EXT4-JTX-STAGE-FREE-BLOCK-RANGE CONSTANT _FR-BOUND-IOR"
+            ),
+            "_FR-WRITER _EXT4-JWR.META-USED + @ CONSTANT _FR-USED-BOUND",
+            (
+                f"{block_count - 1} 2 _FR-TX "
+                "_EXT4-JTX-STAGE-FREE-BLOCK-RANGE CONSTANT _FR-TAIL-IOR"
+            ),
+            "_FR-WRITER _EXT4-JWR.META-USED + @ CONSTANT _FR-USED-TAIL",
+            (
+                f"{free_block} 1 _FR-TX "
+                "_EXT4-JTX-STAGE-FREE-BLOCK-RANGE CONSTANT _FR-FREE-IOR"
+            ),
+            "_FR-WRITER _EXT4-JWR.META-USED + @ CONSTANT _FR-USED-FREE",
+            (
+                f"{bitmap_home} 1 _FR-TX "
+                "_EXT4-JTX-STAGE-FREE-BLOCK-RANGE CONSTANT _FR-STATIC-IOR"
+            ),
+            "_FR-WRITER _EXT4-JWR.META-USED + @ CONSTANT _FR-USED-STATIC",
+            (
+                f"{journal_home} 1 _FR-TX "
+                "_EXT4-JTX-STAGE-FREE-BLOCK-RANGE CONSTANT _FR-JOURNAL-IOR"
+            ),
+            "_FR-WRITER _EXT4-JWR.META-USED + @ CONSTANT _FR-USED-JOURNAL",
+            (
+                f"{valid_block} 1 _FR-TX "
+                "_EXT4-JTX-STAGE-FREE-BLOCK-RANGE CONSTANT _FR-VALID-IOR"
+            ),
+            (
+                "0 _FR-WRITER _EXT4-JWR-META-ENTRY 2 CELLS + @ "
+                "CONSTANT _FR-CRC0"
+            ),
+            (
+                "1 _FR-WRITER _EXT4-JWR-META-ENTRY 2 CELLS + @ "
+                "CONSTANT _FR-CRC1"
+            ),
+            (
+                "2 _FR-WRITER _EXT4-JWR-META-ENTRY 2 CELLS + @ "
+                "CONSTANT _FR-CRC2"
+            ),
+            (
+                f"{valid_block} 2 _FR-TX "
+                "_EXT4-JTX-STAGE-FREE-BLOCK-RANGE CONSTANT _FR-DUP-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_FR-MOUNT-IOR 0=",
+                        "_FR-WRITER-IOR 0=",
+                        "_FR-TX-IOR 0=",
+                        "_FR-ZERO-IOR VFS-E-INVALID =",
+                        "_FR-BOUND-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+                        "_FR-BOUND-IOR VFS-IOR-DETAIL EXT4-D-BOUNDS =",
+                        "_FR-TAIL-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+                        "_FR-TAIL-IOR VFS-IOR-DETAIL EXT4-D-BOUNDS =",
+                        "_FR-FREE-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+                        "_FR-FREE-IOR VFS-IOR-DETAIL EXT4-D-DATA-MAP =",
+                        "_FR-STATIC-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+                        "_FR-STATIC-IOR VFS-IOR-DETAIL EXT4-D-DATA-MAP =",
+                        "_FR-JOURNAL-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+                        "_FR-JOURNAL-IOR VFS-IOR-DETAIL EXT4-D-JOURNAL =",
+                        "_FR-USED-ZERO 0=",
+                        "_FR-USED-BOUND 0=",
+                        "_FR-USED-TAIL 0=",
+                        "_FR-USED-FREE 0=",
+                        "_FR-USED-STATIC 0=",
+                        "_FR-USED-JOURNAL 0=",
+                        "_FR-VALID-IOR 0=",
+                        "_FR-DUP-IOR VFS-E-CONFLICT =",
+                        "_FR-WRITER _EXT4-JWR.META-USED + @ 3 =",
+                        "_FR-WRITER _EXT4-JWR.META-ACTIVE + @ 3 =",
+                        "_FR-WRITER _EXT4-JTX-TABLES-VALID?",
+                        (
+                            "0 _FR-WRITER _EXT4-JWR-META-ENTRY "
+                            "2 CELLS + @ _FR-CRC0 ="
+                        ),
+                        (
+                            "1 _FR-WRITER _EXT4-JWR-META-ENTRY "
+                            "2 CELLS + @ _FR-CRC1 ="
+                        ),
+                        (
+                            "2 _FR-WRITER _EXT4-JWR-META-ENTRY "
+                            "2 CELLS + @ _FR-CRC2 ="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-FREE-REJECTIONS" THEN'
+            ),
+            "_FR-TX _EXT4-JTX-ABORT CONSTANT _FR-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_FR-ABORT-IOR 0=",
+                        (
+                            "_FR-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_FR-WRITER _EXT4-JWR.META-USED + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-FREE-REJECTION-ABORTED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-TYPED-FREE-REJECTIONS")
+    _assert_emitted(output, "EXT4-TYPED-FREE-REJECTION-ABORTED")
+
+
+def test_typed_free_block_range_crosses_group_boundary_atomically_without_io(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    with path.open("rb") as source:
+        source.seek(1024)
+        superblock = source.read(1024)
+    assert len(superblock) == 1024
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert block_size == 1024
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    first_block = first_data + 4 * blocks_per_group - 1
+    group_bits = ((3, blocks_per_group - 1), (4, 0))
+    assert first_block == 32768
+
+    def read_block(block: int) -> bytearray:
+        with path.open("rb") as source:
+            source.seek(block * block_size)
+            result = bytearray(source.read(block_size))
+        assert len(result) == block_size
+        return result
+
+    gdt_home = 2
+    super_home = 1
+    canonical_gdt = read_block(gdt_home)
+    expected_gdt = bytearray(canonical_gdt)
+    patched_gdt = bytearray(canonical_gdt)
+    bitmap_homes: list[int] = []
+    bitmap_patches: list[tuple[int, bytes]] = []
+    canonical_bitmap_crcs: list[int] = []
+    for group, bit_index in group_bits:
+        descriptor_offset = group * 64
+        descriptor = bytearray(
+            canonical_gdt[descriptor_offset : descriptor_offset + 64]
+        )
+        bitmap_home = struct.unpack_from("<I", descriptor, 0x00)[0]
+        assert struct.unpack_from("<I", descriptor, 0x20)[0] == 0
+        bitmap_homes.append(bitmap_home)
+        canonical_bitmap = read_block(bitmap_home)
+        byte_index, bit_in_byte = divmod(bit_index, 8)
+        assert canonical_bitmap[byte_index] & (1 << bit_in_byte) == 0
+        canonical_bitmap_crcs.append(_crc32c_raw(canonical_bitmap))
+        canonical_bitmap_checksum = _crc32c_raw(canonical_bitmap, seed)
+
+        flags = struct.unpack_from("<H", descriptor, 0x12)[0]
+        if flags & 0x02:
+            assert group == 4
+            flags &= ~0x02
+            struct.pack_into("<H", descriptor, 0x12, flags)
+        expected_descriptor = bytearray(descriptor)
+        struct.pack_into(
+            "<H", expected_descriptor, 0x18, canonical_bitmap_checksum & 0xFFFF
+        )
+        struct.pack_into(
+            "<H", expected_descriptor, 0x38, canonical_bitmap_checksum >> 16
+        )
+        expected_descriptor = bytearray(
+            _group_descriptor_with_checksum(
+                superblock, expected_descriptor, group
+            )
+        )
+        expected_gdt[
+            descriptor_offset : descriptor_offset + 64
+        ] = expected_descriptor
+
+        patched_bitmap = bytearray(canonical_bitmap)
+        patched_bitmap[byte_index] |= 1 << bit_in_byte
+        patched_bitmap_checksum = _crc32c_raw(patched_bitmap, seed)
+        bitmap_patches.append(
+            (bitmap_home * block_size, bytes(patched_bitmap))
+        )
+
+        group_free = struct.unpack_from("<H", descriptor, 0x0C)[0] | (
+            struct.unpack_from("<H", descriptor, 0x2C)[0] << 16
+        )
+        assert group_free > 0
+        patched_group_free = group_free - 1
+        struct.pack_into(
+            "<H", descriptor, 0x0C, patched_group_free & 0xFFFF
+        )
+        struct.pack_into("<H", descriptor, 0x2C, patched_group_free >> 16)
+        struct.pack_into(
+            "<H", descriptor, 0x18, patched_bitmap_checksum & 0xFFFF
+        )
+        struct.pack_into(
+            "<H", descriptor, 0x38, patched_bitmap_checksum >> 16
+        )
+        descriptor = bytearray(
+            _group_descriptor_with_checksum(superblock, descriptor, group)
+        )
+        patched_gdt[
+            descriptor_offset : descriptor_offset + 64
+        ] = descriptor
+
+    assert bitmap_homes == [262, 263]
+    canonical_super = read_block(super_home)
+    assert canonical_super == bytearray(superblock)
+    patched_super = bytearray(canonical_super)
+    super_free = struct.unpack_from("<I", patched_super, 0x0C)[0]
+    assert struct.unpack_from("<I", patched_super, 0x158)[0] == 0
+    assert super_free >= 2
+    struct.pack_into("<I", patched_super, 0x0C, super_free - 2)
+    patched_super = bytearray(_ext4_super_with_checksum(patched_super))
+
+    patches = tuple(
+        (
+            *bitmap_patches,
+            (gdt_home * block_size, bytes(patched_gdt)),
+            (super_home * block_size, bytes(patched_super)),
+        )
+    )
+    expected_gdt_crc = _crc32c_raw(expected_gdt)
+    canonical_super_crc = _crc32c_raw(canonical_super)
+
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _FC-MOUNT-IOR CONSTANT _FC-V"
+            ),
+            "_FC-V _EXT4-CTX CONSTANT _FC-CTX",
+            (
+                "_FC-CTX _EXT4-C.FREE-BLOCKS + @ "
+                "CONSTANT _FC-CONTEXT-FREE"
+            ),
+            (
+                "_FC-CTX _EXT4-C.SB + _EXT4-SB.FREE-BLOCKS-LO + L@ "
+                "CONSTANT _FC-CACHED-SUPER-FREE"
+            ),
+            (
+                "4 0 0 _FC-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _FC-WRITER-IOR CONSTANT _FC-WRITER"
+            ),
+            (
+                "4 0 0 _FC-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _FC-TX-IOR CONSTANT _FC-TX"
+            ),
+            (
+                f"{first_block} 2 _FC-TX "
+                "_EXT4-JTX-STAGE-FREE-BLOCK-RANGE CONSTANT _FC-STAGE-IOR"
+            ),
+            "0 _FC-WRITER _EXT4-JWR-META-IMAGE CONSTANT _FC-GDT-IMAGE",
+            "1 _FC-WRITER _EXT4-JWR-META-IMAGE CONSTANT _FC-BITMAP3-IMAGE",
+            "2 _FC-WRITER _EXT4-JWR-META-IMAGE CONSTANT _FC-BITMAP4-IMAGE",
+            "3 _FC-WRITER _EXT4-JWR-META-IMAGE CONSTANT _FC-SUPER-IMAGE",
+            (
+                _forth_conjunction(
+                    [
+                        "_FC-MOUNT-IOR 0=",
+                        "_FC-WRITER-IOR 0=",
+                        "_FC-TX-IOR 0=",
+                        "_FC-STAGE-IOR 0=",
+                        "_FC-WRITER _EXT4-JWR.META-USED + @ 4 =",
+                        "_FC-WRITER _EXT4-JWR.META-ACTIVE + @ 4 =",
+                        "_FC-WRITER _EXT4-JTX-TABLES-VALID?",
+                        (
+                            "0 _FC-WRITER _EXT4-JWR-META-ENTRY @ "
+                            f"{gdt_home} ="
+                        ),
+                        (
+                            "1 _FC-WRITER _EXT4-JWR-META-ENTRY @ "
+                            f"{bitmap_homes[0]} ="
+                        ),
+                        (
+                            "2 _FC-WRITER _EXT4-JWR-META-ENTRY @ "
+                            f"{bitmap_homes[1]} ="
+                        ),
+                        (
+                            "3 _FC-WRITER _EXT4-JWR-META-ENTRY @ "
+                            f"{super_home} ="
+                        ),
+                        (
+                            "_FC-GDT-IMAGE _FC-WRITER "
+                            f"_EXT4-JTX-IMAGE-CRC {expected_gdt_crc} ="
+                        ),
+                        (
+                            "_FC-BITMAP3-IMAGE _FC-WRITER "
+                            "_EXT4-JTX-IMAGE-CRC "
+                            f"{canonical_bitmap_crcs[0]} ="
+                        ),
+                        (
+                            "_FC-BITMAP4-IMAGE _FC-WRITER "
+                            "_EXT4-JTX-IMAGE-CRC "
+                            f"{canonical_bitmap_crcs[1]} ="
+                        ),
+                        (
+                            "_FC-SUPER-IMAGE _FC-WRITER "
+                            f"_EXT4-JTX-IMAGE-CRC {canonical_super_crc} ="
+                        ),
+                        (
+                            "_FC-CTX _EXT4-C.FREE-BLOCKS + @ "
+                            "_FC-CONTEXT-FREE ="
+                        ),
+                        (
+                            "_FC-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.FREE-BLOCKS-LO + L@ "
+                            "_FC-CACHED-SUPER-FREE ="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-FREE-CROSS-GROUP" THEN'
+            ),
+            "_FC-TX _EXT4-JTX-ABORT CONSTANT _FC-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_FC-ABORT-IOR 0=",
+                        (
+                            "_FC-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_FC-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_FC-WRITER _EXT4-JWR.META-IMAGES + @ C@ 0=",
+                        "_FC-WRITER _EXT4-JWR.SCRATCH-A + @ C@ 0=",
+                        "_FC-WRITER _EXT4-JWR.SCRATCH-B + @ C@ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-FREE-CROSS-GROUP-ABORTED" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-TYPED-FREE-CROSS-GROUP")
+    _assert_emitted(output, "EXT4-TYPED-FREE-CROSS-GROUP-ABORTED")
+
+
+def test_typed_free_block_range_auto_aborts_a_partial_credit_failure(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _FA-MOUNT-IOR CONSTANT _FA-V"
+            ),
+            "_FA-V _EXT4-CTX CONSTANT _FA-CTX",
+            (
+                "3 0 0 _FA-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _FA-WRITER-IOR CONSTANT _FA-WRITER"
+            ),
+            "_FA-WRITER _EXT4-JWR.FREE + @ CONSTANT _FA-FREE-BEFORE",
+            (
+                "2 0 0 _FA-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _FA-TX-IOR CONSTANT _FA-TX"
+            ),
+            (
+                "1346 1 _FA-TX _EXT4-JTX-STAGE-FREE-BLOCK-RANGE "
+                "CONSTANT _FA-STAGE-IOR"
+            ),
+            "_FA-TX _EXT4-JTX-EMIT CONSTANT _FA-EMIT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_FA-MOUNT-IOR 0=",
+                        "_FA-WRITER-IOR 0=",
+                        "_FA-TX-IOR 0=",
+                        "_FA-STAGE-IOR VFS-E-NOSPC =",
+                        "_FA-EMIT-IOR VFS-E-BUSY =",
+                        (
+                            "_FA-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_FA-WRITER _EXT4-JWR.FAULT + @ 0=",
+                        (
+                            "_FA-WRITER _EXT4-JWR.FREE + @ "
+                            "_FA-FREE-BEFORE ="
+                        ),
+                        "_FA-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_FA-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_FA-WRITER _EXT4-JWR.META-IMAGES + @ C@ 0=",
+                        "_FA-WRITER _EXT4-JWR.SCRATCH-A + @ C@ 0=",
+                        "_FA-WRITER _EXT4-JWR.SCRATCH-B + @ C@ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-FREE-AUTO-ABORT" THEN'
+            ),
+            (
+                "3 0 0 _FA-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _FA-RETRY-IOR CONSTANT _FA-RETRY"
+            ),
+            (
+                "1346 1 _FA-RETRY _EXT4-JTX-STAGE-FREE-BLOCK-RANGE "
+                "CONSTANT _FA-RETRY-STAGE-IOR"
+            ),
+            "_FA-RETRY _EXT4-JTX-ABORT CONSTANT _FA-RETRY-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_FA-RETRY-IOR 0=",
+                        "_FA-RETRY-STAGE-IOR 0=",
+                        "_FA-RETRY-ABORT-IOR 0=",
+                        (
+                            "_FA-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_FA-WRITER _EXT4-JWR.META-USED + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-FREE-AUTO-ABORT-REUSABLE" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-TYPED-FREE-AUTO-ABORT")
+    _assert_emitted(output, "EXT4-TYPED-FREE-AUTO-ABORT-REUSABLE")
+
+
+def test_typed_free_block_range_rejects_an_aliased_bitmap_home(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    with path.open("rb") as source:
+        source.seek(1024)
+        superblock = source.read(1024)
+    assert len(superblock) == 1024
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert block_size == 1024
+    block_count = struct.unpack_from("<I", superblock, 0x04)[0]
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    groups = (
+        block_count - first_data + blocks_per_group - 1
+    ) // blocks_per_group
+    alias_owner = 3
+    alias_home = 259
+    original_home = 262
+    descriptor_offset = alias_owner * 64
+
+    def read_block(block: int) -> bytearray:
+        with path.open("rb") as source:
+            source.seek(block * block_size)
+            result = bytearray(source.read(block_size))
+        assert len(result) == block_size
+        return result
+
+    alias_bitmap = read_block(alias_home)
+    alias_checksum = _crc32c_raw(alias_bitmap, seed)
+    gdt_bases = [2]
+    gdt_bases.extend(
+        first_data + group * blocks_per_group + 1
+        for group in range(1, groups)
+        if _ext4_sparse_group(group)
+    )
+    patches: list[tuple[int, bytes]] = []
+    for gdt_base in gdt_bases:
+        gdt = read_block(gdt_base)
+        descriptor = bytearray(
+            gdt[descriptor_offset : descriptor_offset + 64]
+        )
+        assert struct.unpack_from("<I", descriptor, 0x00)[0] == original_home
+        assert struct.unpack_from("<I", descriptor, 0x20)[0] == 0
+        struct.pack_into("<I", descriptor, 0x00, alias_home)
+        struct.pack_into("<H", descriptor, 0x18, alias_checksum & 0xFFFF)
+        struct.pack_into("<H", descriptor, 0x38, alias_checksum >> 16)
+        descriptor = bytearray(
+            _group_descriptor_with_checksum(
+                superblock, descriptor, alias_owner
+            )
+        )
+        gdt[descriptor_offset : descriptor_offset + 64] = descriptor
+        patches.append((gdt_base * block_size, bytes(gdt)))
+
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _FAL-MOUNT-IOR CONSTANT _FAL-V"
+            ),
+            "_FAL-V _EXT4-CTX CONSTANT _FAL-CTX",
+            (
+                "3 0 0 _FAL-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _FAL-WRITER-IOR CONSTANT _FAL-WRITER"
+            ),
+            (
+                "3 0 0 _FAL-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _FAL-TX-IOR CONSTANT _FAL-TX"
+            ),
+            (
+                "1346 1 _FAL-TX _EXT4-JTX-STAGE-FREE-BLOCK-RANGE "
+                "CONSTANT _FAL-STAGE-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_FAL-MOUNT-IOR 0=",
+                        "_FAL-WRITER-IOR 0=",
+                        "_FAL-TX-IOR 0=",
+                        (
+                            "_FAL-STAGE-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_FAL-STAGE-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        (
+                            "_FAL-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-STAGING ="
+                        ),
+                        "_FAL-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_FAL-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_FAL-WRITER _EXT4-JTX-TABLES-VALID?",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-FREE-ALIAS-REJECTED" THEN'
+            ),
+            "_FAL-TX _EXT4-JTX-ABORT CONSTANT _FAL-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_FAL-ABORT-IOR 0=",
+                        (
+                            "_FAL-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-FREE-ALIAS-ABORTED" THEN'
+            ),
+        ],
+        patches=tuple(patches),
+    )
+    _assert_emitted(output, "EXT4-TYPED-FREE-ALIAS-REJECTED")
+    _assert_emitted(output, "EXT4-TYPED-FREE-ALIAS-ABORTED")
+
+
 def test_recover_without_checksum_v3_journal_refuses_before_writes(
     canonical_images: dict[str, Path]
 ) -> None:
