@@ -714,6 +714,7 @@ def _assert_static_contracts() -> None:
         assert provider in source
 
     assert ": STREAMS-RABBIT-CONNECTOR-OWNED-SPAN-OVERLAP?" in streams_connector
+    assert ": STREAMS-RABBIT-CONNECTOR-OP-STATE@" in streams_connector
     assert "_SRCONN-SPAN-HITS-SUB-GRAPH?" in streams_connector
 
     frame_declarations = _declarations(FRAME, frame)
