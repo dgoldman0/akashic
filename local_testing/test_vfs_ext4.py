@@ -11735,15 +11735,14 @@ def test_mount_cleanup_rejects_target_xattr_alias_without_writes(
     _assert_emitted(output, "EXT4-MOUNT-ORPHAN-XATTR-ALIAS-REJECTED")
 
 
-@pytest.fixture(scope="session")
-def singleton_legacy_cleanup_fixture(
-    canonical_images: dict[str, Path],
-    tmp_path_factory: pytest.TempPathFactory,
+def _run_singleton_legacy_cleanup(
+    path: Path,
+    media_path: Path,
+    *,
+    patches: tuple[tuple[int, bytes], ...] | None = None,
 ) -> dict[str, object]:
-    path = canonical_images["primary-1k-i256"]
-    directory = tmp_path_factory.mktemp("ext4-legacy-orphan-cleanup")
-    media_path = directory / "successful-cleanup.img"
-    patches = _zero_size_depth0_legacy_orphan_patches(path)
+    if patches is None:
+        patches = _zero_size_depth0_legacy_orphan_patches(path)
     output, trace, media_sha256 = run_recovery_forth(
         path,
         media_path,
@@ -11845,13 +11844,27 @@ def singleton_legacy_cleanup_fixture(
     }
 
 
-def test_mount_completes_singleton_legacy_depth0_orphan_transaction(
-    singleton_legacy_cleanup_fixture: dict[str, object],
+@pytest.fixture(scope="session")
+def singleton_legacy_cleanup_fixture(
+    canonical_images: dict[str, Path],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    directory = tmp_path_factory.mktemp("ext4-legacy-orphan-cleanup")
+    return _run_singleton_legacy_cleanup(
+        canonical_images["primary-1k-i256"],
+        directory / "successful-cleanup.img",
+    )
+
+
+def _assert_singleton_legacy_cleanup_result(
+    result: dict[str, object],
+    *,
+    expected_writes: int = 27,
 ) -> None:
-    output = singleton_legacy_cleanup_fixture["output"]
-    trace = singleton_legacy_cleanup_fixture["success_trace"]
-    clean_image = singleton_legacy_cleanup_fixture["clean_image"]
-    clean_sha256 = singleton_legacy_cleanup_fixture["clean_sha256"]
+    output = result["output"]
+    trace = result["success_trace"]
+    clean_image = result["clean_image"]
+    clean_sha256 = result["clean_sha256"]
     assert isinstance(output, str)
     assert isinstance(trace, tuple)
     assert isinstance(clean_image, Path)
@@ -11862,8 +11875,42 @@ def test_mount_completes_singleton_legacy_depth0_orphan_transaction(
     assert _sha256(clean_image) == clean_sha256
     # Four metadata homes remove one payload and one home write from the
     # otherwise identical five-home modern 29-write durability path.
-    assert sum(kind == "write" for kind, _, _ in trace) == 27
+    assert sum(kind == "write" for kind, _, _ in trace) == expected_writes
     assert sum(kind == "flush" for kind, _, _ in trace) == 18
+
+
+def test_mount_completes_singleton_legacy_depth0_orphan_transaction(
+    singleton_legacy_cleanup_fixture: dict[str, object],
+) -> None:
+    _assert_singleton_legacy_cleanup_result(singleton_legacy_cleanup_fixture)
+
+
+@pytest.mark.parametrize("image_id", ("primary-2k-i256", "primary-4k-i256"))
+def test_mount_completes_singleton_legacy_depth0_orphan_across_geometry(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+    image_id: str,
+) -> None:
+    result = _run_singleton_legacy_cleanup(
+        canonical_images[image_id],
+        tmp_path / f"{image_id}-legacy-cleanup.img",
+    )
+    _assert_singleton_legacy_cleanup_result(result)
+
+
+def test_mount_completes_already_truncated_singleton_legacy_orphan(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    result = _run_singleton_legacy_cleanup(
+        path,
+        tmp_path / "primary-1k-legacy-already-truncated-cleanup.img",
+        patches=_already_truncated_depth0_legacy_orphan_patches(path),
+    )
+    # A one-home cleanup removes three payload/home pairs from the canonical
+    # four-home legacy transaction while retaining the same durability fences.
+    _assert_singleton_legacy_cleanup_result(result, expected_writes=21)
 
 
 @pytest.mark.parametrize(

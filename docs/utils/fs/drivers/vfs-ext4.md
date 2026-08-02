@@ -830,19 +830,20 @@ The remaining boundaries are:
   legacy/modern union, stable refusal with same-binding plan reuse, legacy
   cycles and invalid links, unallocated and checksum-invalid legacy inodes,
   and cross-protocol duplicate rejection without writes. Passing singleton
-  legacy cleanup coverage now includes the 27-write/18-flush successful mount,
+  legacy cleanup coverage across 1/2/4 KiB geometry now includes the
+  27-write/18-flush successful mount. Focused 1 KiB coverage additionally pins
   exact one-home already-truncated sealing with zero target entries, exact
   four-home one-block sealing with one target entry, post-seal mutation
-  refusal, and abort scrubbing. The controlled crash matrix covers 14 write
+  refusal, and abort scrubbing. Its controlled crash matrix covers 14 write
   prefixes spanning activation, transaction description and commit, every
   legacy metadata home, reset, final-super publication, witness clearing, and
   guard retirement. It also covers all nine durability fences; both the writes
   surviving each failed flush and the preceding durable snapshot independently
   repair and then remount without another write. Unified discovery still needs
-  qualification across 2/4 KiB legacy geometry, longer chains, later modern
-  blocks and files beyond the former 4096-block limit, unlinked and structurally
-  invalid referenced inodes, distinct-key hash collisions, and arena exhaustion
-  or a retained workspace that is too small; and
+  qualification across longer chains, later modern blocks and files beyond the
+  former 4096-block limit, unlinked and structurally invalid referenced inodes,
+  distinct-key hash collisions, and arena exhaustion or a retained workspace
+  that is too small; and
 - empty completion has 1/2/4 KiB happy-path and write-free-remount coverage,
   plus same-binding writer-free W3 retry and four controlled prefix cases:
   1 KiB AKW1 W3 primary, 1/4 KiB AKE1/AKR1 W9 early primary, and 1 KiB AKR1
