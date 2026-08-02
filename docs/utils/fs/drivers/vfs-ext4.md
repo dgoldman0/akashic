@@ -5,9 +5,10 @@ This VFS ABI 1 binding reads filesystems in the pinned
 a bounded mount-time recovery slice for an internal checksum-v3 JBD2 journal
 and a private one-transaction durable-emission slice. It never uses the
 ambient filesystem volume: reads and the narrowly scoped recovery, activation,
-and private-emission writes go through checked volume operations relative to
-the supplied `VOL-RAW` or `VOL-SLICE` object. The published binding remains
-read-only and has no user-visible mutation fallback.
+private-emission, checkpoint, and clean-deactivation writes go through checked
+volume operations relative to the supplied `VOL-RAW` or `VOL-SLICE` object.
+The published binding remains read-only and has no user-visible mutation
+fallback.
 
 ```forth
 REQUIRE utils/fs/drivers/vfs-ext4.f
@@ -268,10 +269,12 @@ validation, and attachment validation reach an authenticated clean endpoint
 does mount shape-check the allocation, zero its owned tables and images,
 rebase it to the persisted journal head and wrapped next transaction ID, and
 publish `IDLE` and then current ownership. Same-mount faults remain sticky.
-Unmount clears `WRITER-CURRENT` and binding readiness before detaching the
-block context; the retained allocation remains shape-inspectable but no longer
-has transaction authority. Different requested geometry is refused rather
-than leaking another monotonic-arena allocation.
+Successful clean unmount clears `WRITER-CURRENT` and binding readiness before
+detaching the block context; the retained allocation remains shape-inspectable
+but no longer has transaction authority. Busy or failed unmount retains the
+block context; a busy entry retains current authority, while a terminal fault
+preserves its exact phase for diagnosis. Different requested geometry is
+refused rather than leaking another monotonic-arena allocation.
 
 A private transaction reserves journal credits and ring space before accepting
 any block. It owns complete block-sized metadata and ordered-data after-images,
@@ -337,8 +340,50 @@ An exact final reread rebases the same workspace to the reset journal
 head/sequence, restores the full ring reservation, scrubs retained transaction
 authority, and publishes `IDLE`. The next transaction immediately reuses that
 workspace and ring, including sequence wrap, without another arena allocation.
-Clean deactivation is a separate unmount/recovery operation rather than part of
-per-transaction space release.
+Clean deactivation is the separate public-unmount operation described below,
+not part of per-transaction space release.
+
+## Clean write-active deactivation and unmount
+
+Public unmount applies the writer state rather than silently discarding it:
+
+| Entry state | Result |
+| --- | --- |
+| Clean and non-write-active, with or without retained writer storage | Prove the clean endpoint and detach without media writes. |
+| Write-active, transaction-clean `IDLE` | Perform the clean landing and detach only after its final proof. |
+| `COMMITTED` | Authenticate and checkpoint the retained transaction, require the resulting clean `IDLE` state, then deactivate. |
+| `STAGING`, `ACTIVATING`, `EMITTING`, `CHECKPOINTING`, or `DEACTIVATING` | Return `VFS-E-BUSY` with lifecycle, block context, readiness, and writer authority retained. |
+| `FAULTED` | Return the exact first writer error, retain the block context, and make the VFS terminal `VFS-L-STALE`. |
+| Malformed/missing authority or a non-clean final endpoint | Return corruption, retain the block context, and make the VFS terminal stale. |
+
+`VFS-UNMOUNT-F-FORCE` bypasses only the core VFS open-handle refusal. It does
+not bypass a checkpoint, a busy writer state, clean landing, final proof, or
+failure quarantine.
+
+Dirty-empty `IDLE` deactivation begins with a flush, strict reload, and root
+proof. It then uses the existing `AKR1` protocol: W1 installs an invalid-byte
+reset-anchor preseed; W2 installs the exact valid anchor; W3 installs the
+witnessed empty primary; W4 writes the checksummed clean ext4 superblock with
+`RECOVER` clear; W5 installs the standard witness-free primary; and W6 retires
+the anchor. The protocol has six writes and seven flush barriers, including
+the initial preflight flush. Immediately before W5,
+the driver rereads the raw primary and named anchor, revalidates their witness
+and ext4-super binding, and requires full-filesystem-block equality. A final
+strict reload, root and attachment proof precedes writer scrubbing, dirty-bit
+clear, publication withdrawal, and block-context detach.
+
+Any failure after deactivation enters its media protocol retains the first
+ior and exact phase, faults the writer, forces read-only/dirty state, preserves
+`V.BCTX`, and makes that VFS terminal stale. Pre-dispatch attachment drift or
+recovery-media refusal instead makes the VFS terminal stale without entering
+deactivation or issuing media I/O. The same instance cannot retry or claim a
+clean detach. A fresh VFS mount must classify the surviving authoritative
+endpoint or admitted sequential prefix and converge forward. That fresh VFS
+is mounted non-dirty while the original VFS remains terminal stale; a
+successful clean-unmount endpoint remounts without recovery writes. Once the
+clean ext4 superblock and standard witness-free primary are authoritative,
+leftover anchor bytes from a late failed landing are non-authoritative and a
+fresh mount need not read or zero that old slot.
 
 The bounded 1 KiB qualification uses 63 metadata after-images and 126 revokes,
 the first counts that require two descriptor batches and two revoke batches
@@ -362,10 +407,10 @@ rebase the preserved writer workspace.
 The object layout, counts, embedded pointers, ring fields, phase/fault state,
 image checksums, and hash indices are revalidated before they can drive a
 fill, copy, lookup, or media write. The public binding and capability mask
-remain read-only. Clean write-active deactivation, both orphan mechanisms, the
-complete user-visible mutation layer, external-tool inspection of
-Akashic-created transactions, and the remaining release gates must all land
-before public write capabilities can be enabled.
+remain read-only. Both orphan mechanisms, the complete user-visible mutation
+layer, external-tool inspection of Akashic-created transactions/endpoints, and
+the remaining release gates must all land before public write capabilities can
+be enabled.
 
 ## Read-only inspection
 
@@ -412,8 +457,8 @@ read for the hole. `SYNCFS` and `FSYNC` are safe no-ops.
 
 `EXT4-BINDING` has `VFS-BF-NEEDS-VOLUME`, `VFS-BF-READ-ONLY`, and
 `VFS-BF-STABLE-IDS`. The VFS rejects all mutation before binding dispatch.
-`VOL-WRITE` and `VOL-FLUSH` are used only by the mount-time recovery protocol,
-private activation transition, and private one-transaction emitter above;
+`VOL-WRITE` and `VOL-FLUSH` are used only by mount-time recovery, private
+activation and emission, same-session checkpoint, and clean deactivation;
 they are not exposed as writable VFS capabilities.
 
 ## Deliberate remaining limits
@@ -440,16 +485,17 @@ writable profile. The remaining boundaries are:
 - private transaction staging, clean-to-`RECOVER` activation quarantine, one
   ordered descriptor/payload/revoke/commit emission, full-log checkpoint
   preflight, retained-image home writes, dirty-empty journal release, and
-  immediate sequential workspace reuse are implemented, but clean write-active
-  deactivation and clean-unmount integration are not;
+  immediate sequential workspace reuse, clean write-active deactivation, and
+  public clean-unmount integration are implemented as private durability
+  foundations;
 - legacy and modern orphan recovery and every user-visible mutation operation
   remain unimplemented; and
 - recovery-anchor interoperability and the controlled power-cut matrix still
   require external-tool and emulator qualification.
 
 No write capability will be advertised until complete replay/orphan recovery,
-clean write-active deactivation, the full ordered-data mutation surface,
-external-tool mutation checks, and power-cut qualification land.
+the full ordered-data mutation surface, external-tool mutation checks, and
+power-cut qualification land.
 
 ## Public reference
 

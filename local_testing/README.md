@@ -258,30 +258,42 @@ existing workspace without arena growth.
 
 A persistent write-active case stages one metadata after-image, one ordered
 data image, and one revoke with the guard derived at `s_maxlen-3`. Its exact
-same-session lifecycle is `A + E1 + C + E2 + C`: one initial `AKW1` activation,
-two independent emission/commit cycles, and a checkpoint after each. Each `C`
-performs an ordinary complete log scan followed by a lockstep retained-authority
-scan before an exact six-write trace: metadata home, invalid `AKG1` reset guard,
-valid reset guard, witnessed empty primary, standard witness-free primary, and
-guard retirement. The binder compares every descriptor home and unescaped
-payload and every revoke identity in emitter order, requires exact retained
-stream exhaustion, and admits only the all-zero emitted sentinel. The existing
-63-metadata/126-revoke ring-wrap case also runs this binder across both
-descriptor batches and both revoke batches. Independently checksummed
-descriptor-home, payload, revoke-home, revoke-high-word, and nonzero-sentinel
-mutations prove that generic JBD2 scanning can accept coherent media which
-checkpoint must still reject before its first write or flush.
+same-session lifecycle is `A + E1 + C + E2 + U[C + D]`: one initial `AKW1`
+activation, two independent emission/commit cycles, one explicit checkpoint,
+then public unmount entered while the second transaction remains `COMMITTED`.
+Unmount performs its required checkpoint `C` before clean deactivation `D`.
+Each checkpoint performs an ordinary complete log scan followed by a lockstep
+retained-authority scan before an exact six-write trace: metadata home, invalid
+`AKG1` reset guard, valid reset guard, witnessed empty primary, standard
+witness-free primary, and guard retirement. The binder compares every
+descriptor home and unescaped payload and every revoke identity in emitter
+order, requires exact retained stream exhaustion, and admits only the all-zero
+emitted sentinel. The existing 63-metadata/126-revoke ring-wrap case also runs
+this binder across both descriptor batches and both revoke batches.
+Independently checksummed descriptor-home, payload, revoke-home,
+revoke-high-word, and nonzero-sentinel mutations prove that generic JBD2
+scanning can accept coherent media which checkpoint must still reject before
+its first write or flush.
 
-The required flush boundaries separate home durability from release and each
-reset/authority transition. There is no ext4-superblock write: `RECOVER`,
-`WRITE-ACTIVE`, and VFS dirty remain set, so `E2` begins without a second
-activation or arena growth. The lifecycle starts the journal sequence at
-`0xfffffffa`, crosses the wrapping 32-bit transaction/reset sequence boundary,
-and checks the persisted empty-journal head and sequence after both checkpoints.
-It also checks full free space, every entry/hash slot, every byte of the retained
-metadata and data image regions, and the final `IDLE` workspace after each
-checkpoint. Corrupting a retained image must fail the checkpoint preflight
+Checkpoint flush boundaries separate home durability from release and each
+reset/authority transition. Checkpoint does not write the ext4 superblock:
+`RECOVER`, `WRITE-ACTIVE`, and VFS dirty remain set, so `E2` begins without a
+second activation or arena growth. The lifecycle starts the journal sequence
+at `0xfffffffa`, crosses the wrapping 32-bit transaction/reset sequence
+boundary, checks the first checkpoint's persisted empty-journal head and
+sequence directly, and derives and verifies the final sequence across the
+unmount checkpoint and deactivation. It also checks full free space, every
+entry/hash slot, every byte of the retained metadata and data image regions,
+and the final `IDLE` workspace after the first checkpoint and clean
+deactivation. Corrupting a retained image must fail checkpoint preflight
 before any checkpoint write or flush.
+
+Deactivation `D` begins with an initial flush/reload/root proof and then writes
+the invalid reset preseed, valid reset anchor, witnessed primary, clean ext4
+superblock, standard primary, and retired anchor, with a flush after each
+authority transition. Public unmount clears readiness/current ownership, the
+VFS dirty bit, and `V.BCTX` only after final reload/root/attachment proof. The
+final clean image remounts without recovery I/O.
 
 Six checkpoint fault rows apply a sequential prefix at each of those six
 writes. Failures remain quarantined in the same mount and remount must converge
@@ -296,6 +308,18 @@ boundaries. The first three retain the current writer publication; the final
 reread occurs after publication withdrawal and proves that the invalidated
 workspace cannot be reused.
 
+Clean-deactivation qualification covers all six partial writes,
+representative flush barriers (initial, reset-primary, clean-super,
+standard-primary, and final-anchor), both fresh primary/anchor witness-proof
+reads, and the final strict reread. Every failure returns the exact first ior
+through public unmount, records the deactivation phase, forces
+read-only/dirty state, retains `V.BCTX`, and makes that VFS terminal stale; a
+forced retry returns `VFS-E-STALE` without more I/O. Each captured sparse image
+is then mounted through a fresh VFS, converged from its surviving endpoint or
+admitted sequential prefix, and cleanly unmounted. A staged transaction
+separately proves that both ordinary and forced public unmount return
+`VFS-E-BUSY` without waiving transaction authority.
+
 Emission fault injection keeps the first failing ior and phase quarantined in
 the same mount and requires a later mount to classify the durable endpoint and
 converge forward. Primary-prefix rows exercise old-versus-active selection from
@@ -307,16 +331,16 @@ non-current and unscrubbed; only the authenticated clean remount may scrub its
 staged/faulted state and rebase it to `IDLE`. The lifecycle matrix also forces
 an attachment failure after current-writer withdrawal, proving that the
 preserved workspace is structurally inspectable but unusable, and verifies
-that unmount clears both binding readiness and current-writer ownership with
-the block context detached.
+that successful clean unmount clears both binding readiness and current-writer
+ownership with the block context detached.
 
 These are private durability qualifications, not writable-VFS claims. The
-suite now covers same-session metadata checkpoint, journal-space release, and
-immediate sequential private transactions, but still has no clean write-active
-deactivation, legacy or modern orphan mutation, or user-visible ext4 mutation
-operation. External-tool inspection and the complete release/power-cut matrix
-also remain open. The public ext4 capability mask stays read-only until those
-full writer and release gates pass.
+suite now covers activation, emission, same-session metadata checkpoint,
+journal-space reuse, `COMMITTED` public-unmount checkpointing, and clean
+write-active deactivation. It still has no legacy or modern orphan mutation or
+user-visible ext4 mutation operation. External-tool inspection and the
+complete release/power-cut matrix also remain open. The public ext4 capability
+mask stays read-only until those full writer and release gates pass.
 
 When a resolved profile closure binds directly to MegaPad networking, the
 harness injects the one canonical packed `networking.f` and loads it with

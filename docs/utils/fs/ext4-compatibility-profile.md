@@ -10,8 +10,10 @@ records, and the private writer can establish a crash-resolvable empty
 checksum-v3 journal plus ext4 `RECOVER` state, emit one durable ordered
 descriptor/payload/revoke/commit transaction, checkpoint its retained metadata
 after-images, and release the journal for an immediate sequential transaction
-without leaving write-active state. Clean deactivation, orphan recovery,
-general mutation, and the complete bidirectional gates remain open.
+without leaving write-active state. Public unmount can now checkpoint a
+`COMMITTED` transaction and cleanly deactivate the write-active journal.
+Orphan recovery, general mutation, and the complete bidirectional gates remain
+open.
 MP64FS remains the working native storage binding and FAT/ext4 remain
 read-only interoperability bindings; ext4's mount path may perform the
 strictly ordered recovery writes described below.
@@ -298,6 +300,45 @@ immediately, including across 32-bit sequence wrap, without another `AKW1`
 activation or arena allocation. Clean deactivation is reserved for clean
 unmount/recovery rather than conflated with per-transaction checkpoint.
 
+### Clean write-active deactivation and public unmount
+
+The ext4 callback applies this state matrix:
+
+| Entry state | Public-unmount result |
+| --- | --- |
+| Clean, non-write-active, with or without retained writer storage | Authenticate the clean endpoint and detach without media mutation. |
+| Write-active, transaction-clean `IDLE` | Run the six-write clean landing, prove it, and detach. |
+| `COMMITTED` | Authenticate and checkpoint the retained transaction, require the resulting clean `IDLE` writer, then deactivate. |
+| `STAGING`, `ACTIVATING`, `EMITTING`, `CHECKPOINTING`, or `DEACTIVATING` | Return `VFS-E-BUSY` and retain mounted lifecycle, `V.BCTX`, readiness, and writer authority. |
+| `FAULTED` | Return the exact latched writer ior, retain `V.BCTX`, and transition the VFS to terminal `VFS-L-STALE`. |
+| Malformed/missing authority or a non-clean final endpoint | Return corruption, retain `V.BCTX`, and transition the VFS to terminal stale. |
+
+`VFS-UNMOUNT-F-FORCE` bypasses only the VFS core's open-handle refusal. It
+does not waive checkpointing, busy-state refusal, clean landing, the final
+proof, or failure quarantine.
+
+Dirty-empty `IDLE` deactivation starts with a flush, strict reload, and root
+proof. W1 writes and flushes the invalid-byte `AKR1` preseed; W2 writes and
+flushes the valid reset anchor; W3 writes and flushes the witnessed empty
+primary; W4 writes and flushes the checksum-valid clean ext4 superblock; W5
+writes and flushes the standard witness-free primary; and W6 zeroes and
+flushes the anchor: six writes and seven flush barriers including the initial
+preflight flush. Immediately before W5, fresh raw reads must prove the
+primary witness and ext4 endpoint, the named exact anchor, and equality across
+the complete filesystem block. Strict final reload/root/attachment proof
+precedes writer scrubbing, dirty/write-active/current/readiness withdrawal,
+and detach.
+
+Any failure after checkpoint or deactivation enters its media protocol
+preserves the first ior and phase, faults the writer, forces read-only/dirty
+state, retains `V.BCTX`, and makes the VFS terminal stale. Pre-dispatch
+attachment drift or recovery-media refusal instead makes the VFS terminal
+stale without entering deactivation or issuing media I/O. The same instance
+cannot retry or report clean detach. A fresh VFS must classify the surviving
+endpoint or admitted sequential prefix and converge forward; that fresh
+converged VFS is mounted non-dirty, while the original VFS remains terminal
+stale.
+
 The bounded 1 KiB qualification uses 63 metadata after-images and 126 revokes,
 the first counts that require two descriptor batches and two revoke batches
 for that geometry. These are test thresholds, not implementation capacities.
@@ -328,8 +369,10 @@ dirty-empty checkpoint endpoint may perform the corresponding scrub and
 rebase. Same-mount faults remain quarantined; a write, flush, checksum, or
 reread-proof failure latches its first ior and phase, forces read-only/dirty
 state, and requires remount convergence. Unmount clears `WRITER-CURRENT` and
-binding readiness before detaching the block context; the retained allocation
-remains shape-inspectable but no longer has transaction authority.
+binding readiness only after a successful clean proof and before detaching the
+block context. Busy and failed unmount paths retain `V.BCTX` and the relevant
+writer state for retry or diagnosis; late terminal faults need not republish
+authority already withdrawn after the final media proof.
 
 Recovery is ordered as follows:
 
@@ -399,7 +442,7 @@ matching-sequence JBD2 `SUPER_V2` header terminates preflight only after the
 complete block validates as the checksummed, self-locating recovery anchor; it
 is never replayed as a transaction record.
 
-To make the checkpoint/reset transition and eventual clean deactivation
+To make the checkpoint/reset transition and clean deactivation
 retryable across 512-byte media tears, the implementation preseeds the selected
 journal anchor with the complete intended reset image except for an invalid
 byte zero and flushes it. It then restores byte zero and writes and flushes the
@@ -412,7 +455,11 @@ first-unused slot.
 For clean recovery or deactivation, the primary reset is flushed before the
 two-sector ext4-superblock clear, and that clear is flushed before the primary
 witness is removed and flushed. The anchor slot is then zeroed and flushed
-before clean mount publication. A torn primary may select only the exact
+before successful live deactivation returns or recovery publishes a clean
+mount. Once the clean ext4 superblock and standard witness-free primary are
+authoritative, leftover anchor bytes from a late failed landing are
+non-authoritative; a fresh mount may accept that clean endpoint without
+reading or zeroing the old slot. A torn primary may select only the exact
 self-locating anchor named by an intact primary
 marker/complement/`s_head` tuple; there is no historical-anchor scan. Before
 the first witness-removal write, the exact anchor must validate and its
@@ -556,10 +603,13 @@ and media failures retain their structured causes.  Rename replacement,
 unlink-while-open, inode reuse, hard-link counts, truncate, and directory link
 counts must match the ABI-1 vnode/dentry lifetime rules.
 
-Clean unmount commits outstanding work, checkpoints the journal, performs the
-required volume flushes, clears transient recovery/orphan state, writes a
-clean superblock, and flushes again.  Detach, timeout, or media error cannot
-produce a false clean-success result.
+Clean unmount checkpoints a durable `COMMITTED` transaction before the clean
+landing. Staged or in-flight writer states return `VFS-E-BUSY`; force does not
+discard them. The landing performs the required volume flushes, clears
+transient recovery state, writes and proves a clean superblock/journal
+endpoint, and only then detaches. Orphan state will join this transition after
+orphan recovery is implemented. Detach, timeout, or media error cannot produce
+a false clean-success result.
 
 ## Canonical and supplemental external fixtures
 
@@ -646,8 +696,10 @@ Checkpoint now authenticates the complete retained on-media log, writes and
 flushes metadata after-images, turns the active journal into a standard empty
 journal without clearing `RECOVER`, and rebases the same allocation for an
 immediate sequential transaction without reactivation or arena growth. It
-still performs no clean write-active deactivation, orphan mutation, or
-user-visible write. Public write capabilities remain disabled.
+now also checkpoints `COMMITTED` state during public unmount and performs the
+six-write clean deactivation with terminal fault quarantine. It still performs
+no orphan mutation or user-visible write. Public write capabilities remain
+disabled.
 The implementation still fails closed on checksum-damaged incomplete tails
 and refuses legacy and modern orphan recovery and all user-visible mutation.
 Clean orphan-file
@@ -657,11 +709,10 @@ profile limit of 5, and the special-inode fixture does not yet contain a
 socket. Those qualification and semantic limits remain explicit before any
 write path can be advertised.
 
-The remaining writer gate explicitly includes clean write-active deactivation
-and clean-unmount integration, both legacy and modern orphan protocols, the
-complete namespace/data/metadata/xattr mutation surface, external-tool
-inspection of Akashic-authored active, dirty-empty, and clean images, and the
-controlled power-cut/release matrix.
+The remaining writer gate explicitly includes both legacy and modern orphan
+protocols, the complete namespace/data/metadata/xattr mutation surface,
+external-tool inspection of Akashic-authored active, dirty-empty, and clean
+images, and the controlled power-cut/release matrix.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

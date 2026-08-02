@@ -1052,7 +1052,9 @@ def run_recovery_forth(
     write_protected: bool = False,
     storage_faults: tuple[dict, ...] = (),
     write_faults_by_ordinal: dict[int, dict] | None = None,
-    read_faults_after_write_ordinal: dict[int, dict] | None = None,
+    read_faults_by_write_and_ordinal: (
+        dict[tuple[int, int], dict] | None
+    ) = None,
     capture_media: Path | None = None,
     max_steps: int = 800_000_000,
 ) -> tuple[str, tuple[tuple[str, int, int], ...], str]:
@@ -1096,7 +1098,8 @@ def run_recovery_forth(
     start_dma = system.storage._start_dma
     run_flush = system.storage._run_flush
     write_ordinal = 0
-    pending_read_faults = dict(read_faults_after_write_ordinal or {})
+    pending_read_faults = dict(read_faults_by_write_and_ordinal or {})
+    read_ordinals: dict[int, int] = {}
 
     def track_dma(request, phase):
         nonlocal write_ordinal
@@ -1107,10 +1110,14 @@ def run_recovery_forth(
                 system.storage.inject_fault(
                     **write_faults_by_ordinal[write_ordinal]
                 )
-        elif phase == "read" and write_ordinal in pending_read_faults:
-            system.storage.inject_fault(
-                **pending_read_faults.pop(write_ordinal)
+        elif phase == "read":
+            read_ordinal = read_ordinals.get(write_ordinal, 0) + 1
+            read_ordinals[write_ordinal] = read_ordinal
+            fault = pending_read_faults.pop(
+                (write_ordinal, read_ordinal), None
             )
+            if fault is not None:
+                system.storage.inject_fault(**fault)
         return start_dma(request, phase)
 
     def track_flush(request):
@@ -4415,11 +4422,20 @@ def test_jbd2_writer_activation_is_ordered_and_publishes_after_cleanup(
                     "1 0 0 _AW-W _EXT4-JTX-BEGIN "
                     "CONSTANT _AW-B-IOR CONSTANT _AW-T"
                 ),
+                "0 _V VFS-UNMOUNT CONSTANT _AW-UNMOUNT-IOR",
+                (
+                    "VFS-UNMOUNT-F-FORCE _V VFS-UNMOUNT "
+                    "CONSTANT _AW-FORCE-IOR"
+                ),
                 "_AW-T _EXT4-JTX-ABORT CONSTANT _AW-ABORT-IOR",
                 "_AW-W _EXT4-JWR-ACTIVATE CONSTANT _AW-AGAIN-IOR",
                 (
                     "_M-IOR 0= _AW-E-IOR 0= AND _AW-A-IOR 0= AND "
                     "_AW-B-IOR 0= AND _AW-T _AW-W = AND "
+                    "_AW-UNMOUNT-IOR VFS-E-BUSY = AND "
+                    "_AW-FORCE-IOR VFS-E-BUSY = AND "
+                    "_V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                    "_V V.BCTX @ _AW-CTX = AND "
                     "_AW-ABORT-IOR 0= AND "
                     "_AW-AGAIN-IOR VFS-E-BUSY = AND "
                     "_AW-W _EXT4-JWR-VALID? AND "
@@ -4441,6 +4457,8 @@ def test_jbd2_writer_activation_is_ordered_and_publishes_after_cleanup(
                     "_AW-CTX _EXT4-C.J.WITNESS-CHECKSUM + @ 0= AND "
                     "_AW-CTX _EXT4-C.J.WITNESS-NEW-CHECKSUM + @ 0= AND "
                     "_AW-CTX _EXT4-C.J.ANCHOR + @ 0= AND "
+                    "_AW-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<> AND "
+                    "_AW-CTX _EXT4-C.READY + @ 0<> AND "
                     "_AW-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
                     "_AW-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
                     "_EXT4-INCOMPAT-RECOVER AND 0<> AND "
@@ -5402,10 +5420,10 @@ def test_jbd2_writer_batches_descriptors_and_revokes_across_ring_wrap(
         media_path.unlink(missing_ok=True)
 
 
-def test_jbd2_checkpoint_reuses_persistent_active_ring_across_wrap(
+def test_jbd2_checkpoint_reuses_ring_and_cleanly_unmounts_across_wrap(
     writer_activation_fixture: dict[str, object], tmp_path: Path
 ) -> None:
-    """Checkpoint two transactions without reactivating the dirty journal."""
+    """Checkpoint twice, then cleanly deactivate the write-active mount."""
     image = writer_activation_fixture["image"]
     layout = writer_activation_fixture["layout"]
     source_patches = writer_activation_fixture["source_patches"]
@@ -5518,6 +5536,8 @@ def test_jbd2_checkpoint_reuses_persistent_active_ring_across_wrap(
     second_tid = (first_tid + 3) & 0xFFFF_FFFF
     second_reset_sequence = (first_tid + 5) & 0xFFFF_FFFF
     final_next_tid = (first_tid + 6) & 0xFFFF_FFFF
+    deactivation_sequence = (second_reset_sequence + 1) & 0xFFFF_FFFF
+    deactivation_next_tid = (deactivation_sequence + 1) & 0xFFFF_FFFF
     assert (
         first_tid,
         first_reset_sequence,
@@ -5658,72 +5678,29 @@ def test_jbd2_checkpoint_reuses_persistent_active_ring_across_wrap(
                 ),
                 "30002 _PC-T2 _EXT4-JTX-REVOKE CONSTANT _PC-R2-IOR",
                 "_PC-T2 _EXT4-JTX-EMIT CONSTANT _PC-EMIT2-IOR",
-                "_PC-T2 _EXT4-JTX-CHECKPOINT CONSTANT _PC-CP2-IOR",
-                "_PC-ARENA ARENA-USED CONSTANT _PC-USED-AFTER-CP2",
+                "_PC-ARENA ARENA-USED CONSTANT _PC-USED-BEFORE-UNMOUNT",
                 (
                     "_PC-B2-IOR 0= _PC-T2 _PC-W = AND "
                     "_PC-M2-IOR 0= AND _PC-D2-IOR 0= AND "
                     "_PC-R2-IOR 0= AND _PC-EMIT2-IOR 0= AND "
-                    "_PC-CP2-IOR 0= AND _PC-W _EXT4-JWR-VALID? AND "
-                    "_PC-W _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE = AND "
-                    "_PC-W _EXT4-JWR-IDLE-CLEAN? AND"
+                    "_PC-W _EXT4-JWR-VALID? AND "
+                    "_PC-W _EXT4-JWR.STATE + @ "
+                    "_EXT4-JWR-COMMITTED = AND "
+                    "_PC-W _EXT4-JWR-IDLE-CLEAN? 0= AND"
                 ),
                 (
                     "_PC-W _EXT4-JWR.FAULT + @ 0= AND "
                     "_PC-W _EXT4-JWR.EPOCH + @ 2 = AND "
-                    f"_PC-W _EXT4-JWR.HEAD + @ {wrap_guard} = AND "
-                    f"_PC-W _EXT4-JWR.TAIL + @ {wrap_guard} = AND "
-                    f"_PC-W _EXT4-JWR.FREE + @ {ring_capacity} = AND "
-                    f"_PC-W _EXT4-JWR.NEXT-TID + @ "
-                    f"{final_next_tid} = AND"
-                ),
-                (
-                    "_PC-W _EXT4-JWR.META-ENTRIES + @ "
-                    "_EXT4-JWR-IMAGE-ENTRY-CELLS CELLS "
-                    "_EXT4-BYTES-ZERO? AND "
-                    "_PC-W _EXT4-JWR.DATA-ENTRIES + @ "
-                    "_EXT4-JWR-IMAGE-ENTRY-CELLS CELLS "
-                    "_EXT4-BYTES-ZERO? AND "
-                    "_PC-W _EXT4-JWR.REVOKE-ENTRIES + @ "
-                    "_EXT4-JWR-REVOKE-ENTRY-CELLS CELLS "
-                    "_EXT4-BYTES-ZERO? AND"
-                ),
-                (
-                    "_PC-W _EXT4-JWR.META-HASH + @ "
-                    "_PC-W _EXT4-JWR.META-SLOTS + @ CELLS "
-                    "_EXT4-BYTES-ZERO? AND "
-                    "_PC-W _EXT4-JWR.DATA-HASH + @ "
-                    "_PC-W _EXT4-JWR.DATA-SLOTS + @ CELLS "
-                    "_EXT4-BYTES-ZERO? AND "
-                    "_PC-W _EXT4-JWR.REVOKE-HASH + @ "
-                    "_PC-W _EXT4-JWR.REVOKE-SLOTS + @ CELLS "
-                    "_EXT4-BYTES-ZERO? AND"
-                ),
-                (
-                    "_PC-W _EXT4-JWR.META-IMAGES + @ "
-                    "_PC-W _EXT4-JWR.BSIZE + @ _EXT4-BYTES-ZERO? AND "
-                    "_PC-W _EXT4-JWR.DATA-IMAGES + @ "
-                    "_PC-W _EXT4-JWR.BSIZE + @ _EXT4-BYTES-ZERO? AND"
+                    "_PC-W _EXT4-JWR.META-USED + @ 1 = AND "
+                    "_PC-W _EXT4-JWR.DATA-USED + @ 1 = AND "
+                    "_PC-W _EXT4-JWR.REVOKE-USED + @ 1 = AND "
+                    "_PC-W _EXT4-JWR.LOG-RESERVED + @ 0<> AND"
                 ),
                 (
                     "_PC-CTX _EXT4-C.RECOVERY + @ 0<> AND "
                     "_PC-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<> AND "
-                    "_PC-CTX _EXT4-C.J.START + @ 0= AND "
-                    f"_PC-CTX _EXT4-C.J.SEQUENCE + @ "
-                    f"{second_reset_sequence} = AND "
-                    f"_PC-CTX _EXT4-C.J.NEXT-SEQUENCE + @ "
-                    f"{final_next_tid} = AND"
-                ),
-                (
-                    f"_PC-CTX _EXT4-C.J.HEAD + @ {wrap_guard} = AND "
-                    f"_PC-CTX _EXT4-C.J.CURSOR + @ {wrap_guard} = AND "
-                    "_PC-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
-                    "_PC-CTX _EXT4-C.J.ANCHOR + @ 0= AND "
-                    "_PC-CTX _EXT4-C.J.CLEANUP + @ _EXT4-JC-NONE = AND"
-                ),
-                (
-                    "_PC-CTX _EXT4-C.J.PRIMARY-TORN + @ 0= AND "
-                    "_PC-CTX _EXT4-C.SUPER-TORN + @ 0= AND "
+                    "_PC-CTX _EXT4-C.J.START + @ 0<> AND "
+                    "_PC-CTX _EXT4-C.J.COMMITTED + @ 1 = AND "
                     "_PC-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<> AND "
                     "_PC-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
                     "_PC-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
@@ -5732,37 +5709,45 @@ def test_jbd2_checkpoint_reuses_persistent_active_ring_across_wrap(
                 (
                     "_PC-V V.FLAGS @ VFS-F-DIRTY AND 0<> AND "
                     "_PC-V V.FLAGS @ VFS-F-RO AND 0<> AND "
-                    "_PC-USED-AFTER-CP2 _PC-ARENA-USED = AND "
-                    'IF ." EXT4-JTX-CHECKPOINT-SECOND-IDLE" THEN'
+                    "_PC-USED-BEFORE-UNMOUNT _PC-ARENA-USED = AND "
+                    'IF ." EXT4-JTX-SECOND-COMMITTED" THEN'
+                ),
+                "_PC-W _EXT4-JWR-VALID? CONSTANT _PC-PRE-UNMOUNT-VALID",
+                "0 _PC-V VFS-UNMOUNT CONSTANT _PC-UNMOUNT-IOR",
+                (
+                    "_PC-PRE-UNMOUNT-VALID _PC-UNMOUNT-IOR 0= AND "
+                    "_PC-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_PC-V V.BCTX @ 0= AND "
+                    "_PC-CTX _EXT4-C.RECOVERY + @ 0= AND "
+                    "_PC-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0= AND "
+                    "_PC-CTX _EXT4-C.J.WRITER-CURRENT + @ 0= AND "
+                    "_PC-CTX _EXT4-C.READY + @ 0= AND"
                 ),
                 (
-                    "30000 _PC-CTX _EXT4-READ-BLOCK "
-                    "CONSTANT _PC-META-HOME-IOR"
+                    "_PC-W _EXT4-JWR-SHAPE? AND "
+                    "_PC-W _EXT4-JWR-VALID? 0= AND "
+                    "_PC-W _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE = AND "
+                    "_PC-W _EXT4-JWR-IDLE-CLEAN? AND "
+                    "_PC-W _EXT4-JWR.FAULT + @ 0= AND "
+                    f"_PC-W _EXT4-JWR.HEAD + @ {wrap_guard} = AND "
+                    f"_PC-W _EXT4-JWR.TAIL + @ {wrap_guard} = AND "
+                    f"_PC-W _EXT4-JWR.FREE + @ {ring_capacity} = AND "
+                    f"_PC-W _EXT4-JWR.NEXT-TID + @ "
+                    f"{deactivation_next_tid} = AND"
                 ),
                 (
-                    "_PC-CTX _EXT4-C.BLOCK + _PC-META2 "
-                    "1024 _EXT4-BYTES=? CONSTANT _PC-META-HOME"
-                ),
-                (
-                    "30001 _PC-CTX _EXT4-READ-BLOCK "
-                    "CONSTANT _PC-DATA-HOME-IOR"
-                ),
-                (
-                    "_PC-CTX _EXT4-C.BLOCK + _PC-DATA2 "
-                    "1024 _EXT4-BYTES=? CONSTANT _PC-DATA-HOME"
-                ),
-                (
-                    "_PC-META-HOME-IOR 0= _PC-META-HOME AND "
-                    "_PC-DATA-HOME-IOR 0= AND _PC-DATA-HOME AND "
-                    'IF ." EXT4-JTX-CHECKPOINT-SECOND-HOMES" THEN'
+                    "_PC-V V.FLAGS @ VFS-F-DIRTY AND 0= AND "
+                    "_PC-V V.FLAGS @ VFS-F-RO AND 0<> AND "
+                    "_PC-ARENA ARENA-USED _PC-USED-BEFORE-UNMOUNT = AND "
+                    'IF ." EXT4-JTX-CLEAN-UNMOUNTED" THEN'
                 ),
             ],
             patches=wrap_source_patches,
             capture_media=media_path,
         )
         _assert_emitted(output, "EXT4-JTX-CHECKPOINT-FIRST-IDLE")
-        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-SECOND-IDLE")
-        _assert_emitted(output, "EXT4-JTX-CHECKPOINT-SECOND-HOMES")
+        _assert_emitted(output, "EXT4-JTX-SECOND-COMMITTED")
+        _assert_emitted(output, "EXT4-JTX-CLEAN-UNMOUNTED")
 
         activation_trace = (
             ("write", physical["guard"] * 2, 2),
@@ -5809,14 +5794,30 @@ def test_jbd2_checkpoint_reuses_persistent_active_ring_across_wrap(
             ("write", physical["guard"] * 2, 2),
             ("flush", 0, 0),
         )
+        deactivation_trace = (
+            ("flush", 0, 0),
+            ("write", physical["guard"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["guard"] * 2, 2),
+            ("flush", 0, 0),
+            ("write", journal0_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", 2, 2),
+            ("flush", 0, 0),
+            ("write", journal0_physical * 2, 2),
+            ("flush", 0, 0),
+            ("write", physical["guard"] * 2, 2),
+            ("flush", 0, 0),
+        )
         assert trace == (
             activation_trace
             + emission_trace
             + checkpoint_trace
             + emission_trace
             + checkpoint_trace
+            + deactivation_trace
         )
-        assert trace.count(("write", 2, 2)) == 1
+        assert trace.count(("write", 2, 2)) == 2
         assert media_path.is_file()
         assert media_path.stat().st_blocks * 512 < media_path.stat().st_size
         assert _sha256(media_path) == media_sha256
@@ -5840,10 +5841,10 @@ def test_jbd2_checkpoint_reuses_persistent_active_ring_across_wrap(
             data_after = read_block(data_home)
             revoke_after = read_block(revoke_home)
 
-        assert final_super == dirty_super
-        assert final_super != clean_super
+        assert final_super == clean_super
+        assert final_super != dirty_super
         expected_journal = bytearray(wrap_standard)
-        struct.pack_into(">I", expected_journal, 0x18, second_reset_sequence)
+        struct.pack_into(">I", expected_journal, 0x18, deactivation_sequence)
         struct.pack_into(">I", expected_journal, 0x1C, 0)
         struct.pack_into(">I", expected_journal, 0x58, wrap_guard)
         expected_journal = _jbd2_super_with_checksum(expected_journal)
@@ -5870,6 +5871,438 @@ def test_jbd2_checkpoint_reuses_persistent_active_ring_across_wrap(
         assert metadata_after == metadata_image_2
         assert data_after == data_image_2
         assert revoke_after == revoke_before
+
+        remount_output, remount_trace, remount_sha256 = run_recovery_forth(
+            media_path,
+            media_path,
+            [
+                (
+                    "T-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _CU-MOUNT-IOR CONSTANT _CU-V"
+                ),
+                "_CU-V _EXT4-CTX CONSTANT _CU-CTX",
+                (
+                    "_CU-MOUNT-IOR 0= "
+                    "_CU-V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                    "_CU-V _EXT4-READY? AND "
+                    "_CU-CTX _EXT4-C.RECOVERY + @ 0= AND "
+                    "_CU-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0= AND "
+                    "_CU-CTX _EXT4-C.J.START + @ 0= AND "
+                    "_CU-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
+                    "_CU-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                    "_CU-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
+                    "_EXT4-INCOMPAT-RECOVER AND 0= AND "
+                    'IF ." EXT4-JTX-CLEAN-REMOUNTED" THEN'
+                ),
+            ],
+            capture_media=media_path,
+        )
+        _assert_emitted(remount_output, "EXT4-JTX-CLEAN-REMOUNTED")
+        assert remount_trace == ()
+        assert remount_sha256 == media_sha256
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    (
+        "case",
+        "fault_kind",
+        "deactivation_ordinal",
+        "sector_index",
+        "byte_index",
+        "read_ordinal",
+        "phase_word",
+    ),
+    (
+        pytest.param(
+            "preflight-flush",
+            "flush",
+            1,
+            0,
+            0,
+            0,
+            "_EXT4-JWP-DEACTIVATE-PREFLIGHT",
+            id="preflight-flush",
+        ),
+        pytest.param(
+            "reset-preseed",
+            "write",
+            1,
+            0,
+            8,
+            0,
+            "_EXT4-JWP-DEACTIVATE-RESET",
+            id="W1-reset-preseed",
+        ),
+        pytest.param(
+            "reset-guard",
+            "write",
+            2,
+            0,
+            1,
+            0,
+            "_EXT4-JWP-DEACTIVATE-RESET",
+            id="W2-reset-guard",
+        ),
+        pytest.param(
+            "reset-primary",
+            "write",
+            3,
+            0,
+            200,
+            0,
+            "_EXT4-JWP-DEACTIVATE-RESET",
+            id="W3-reset-primary",
+        ),
+        pytest.param(
+            "reset-flush",
+            "flush",
+            4,
+            0,
+            0,
+            0,
+            "_EXT4-JWP-DEACTIVATE-RESET-FLUSH",
+            id="reset-flush",
+        ),
+        pytest.param(
+            "ext4-super",
+            "write",
+            4,
+            1,
+            0,
+            0,
+            "_EXT4-JWP-DEACTIVATE-SUPER",
+            id="W4-ext4-super",
+        ),
+        pytest.param(
+            "super-flush",
+            "flush",
+            5,
+            0,
+            0,
+            0,
+            "_EXT4-JWP-DEACTIVATE-SUPER-FLUSH",
+            id="super-flush",
+        ),
+        pytest.param(
+            "primary-proof-read",
+            "read",
+            4,
+            0,
+            0,
+            1,
+            "_EXT4-JWP-DEACTIVATE-WITNESS-CLEAR",
+            id="primary-proof-read",
+        ),
+        pytest.param(
+            "anchor-proof-read",
+            "read",
+            4,
+            0,
+            0,
+            2,
+            "_EXT4-JWP-DEACTIVATE-WITNESS-CLEAR",
+            id="anchor-proof-read",
+        ),
+        pytest.param(
+            "witness-clear",
+            "write",
+            5,
+            0,
+            200,
+            0,
+            "_EXT4-JWP-DEACTIVATE-WITNESS-CLEAR",
+            id="W5-witness-clear",
+        ),
+        pytest.param(
+            "witness-flush",
+            "flush",
+            6,
+            0,
+            0,
+            0,
+            "_EXT4-JWP-DEACTIVATE-WITNESS-FLUSH",
+            id="witness-flush",
+        ),
+        pytest.param(
+            "guard-retire",
+            "write",
+            6,
+            0,
+            200,
+            0,
+            "_EXT4-JWP-DEACTIVATE-GUARD-RETIRE",
+            id="W6-guard-retire",
+        ),
+        pytest.param(
+            "guard-flush",
+            "flush",
+            7,
+            0,
+            0,
+            0,
+            "_EXT4-JWP-DEACTIVATE-GUARD-FLUSH",
+            id="guard-flush",
+        ),
+        pytest.param(
+            "final-proof-read",
+            "read",
+            6,
+            0,
+            0,
+            1,
+            "_EXT4-JWP-DEACTIVATE-FINAL-PROOF",
+            id="final-proof-read",
+        ),
+    ),
+)
+def test_jbd2_writer_deactivation_faults_quarantine_and_remount(
+    writer_activation_fixture: dict[str, object],
+    tmp_path: Path,
+    case: str,
+    fault_kind: str,
+    deactivation_ordinal: int,
+    sector_index: int,
+    byte_index: int,
+    read_ordinal: int,
+    phase_word: str,
+) -> None:
+    """Preserve exact landing faults and converge through a fresh mount."""
+    image = writer_activation_fixture["image"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    source_patches = writer_activation_fixture["source_patches"]
+    clean_super = writer_activation_fixture["clean_super"]
+    standard = writer_activation_fixture["standard"]
+    guard_logical = writer_activation_fixture["guard_logical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    assert isinstance(image, Path)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(clean_super, bytes)
+    assert isinstance(standard, bytes)
+    assert isinstance(guard_logical, int)
+    assert isinstance(guard_physical, int)
+    assert isinstance(journal0_physical, int)
+
+    deactivation_trace = (("flush", 0, 0),) + activation_trace
+    base_writes = sum(event[0] == "write" for event in activation_trace)
+    base_flushes = sum(event[0] == "flush" for event in activation_trace)
+    write_faults: dict[int, dict] | None = None
+    read_faults: dict[tuple[int, int], dict] | None = None
+    storage_faults: tuple[dict, ...] = ()
+    if fault_kind == "write":
+        write_faults = {
+            base_writes + deactivation_ordinal: {
+                "stage": "media",
+                "sector_index": sector_index,
+                "byte_index": byte_index,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        }
+    elif fault_kind == "flush":
+        flush_ordinal = base_flushes + deactivation_ordinal
+        storage_faults = tuple(
+            {
+                "stage": "flush",
+                "result": STORAGE_RESULT_OK,
+                "command": STORAGE_CMD_FLUSH,
+            }
+            for _ in range(flush_ordinal - 1)
+        ) + (
+            {
+                "stage": "flush",
+                "result": STORAGE_RESULT_FLUSH_FAILURE,
+                "command": STORAGE_CMD_FLUSH,
+            },
+        )
+    else:
+        assert fault_kind == "read"
+        assert read_ordinal > 0
+        read_faults = {
+            (base_writes + deactivation_ordinal, read_ordinal): {
+                "stage": "media",
+                "sector_index": sector_index,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_READ,
+            }
+        }
+
+    if fault_kind in {"write", "flush"}:
+        seen = 0
+        trace_cut = 0
+        for index, event in enumerate(deactivation_trace, start=1):
+            if event[0] == fault_kind:
+                seen += 1
+                if seen == deactivation_ordinal:
+                    trace_cut = index
+                    break
+        assert trace_cut
+        failed_deactivation_trace = deactivation_trace[:trace_cut]
+    else:
+        seen = 0
+        write_index = 0
+        for index, event in enumerate(deactivation_trace):
+            if event[0] == "write":
+                seen += 1
+                if seen == deactivation_ordinal:
+                    write_index = index
+                    break
+        assert seen == deactivation_ordinal
+        trace_cut = next(
+            index + 1
+            for index in range(write_index + 1, len(deactivation_trace))
+            if deactivation_trace[index][0] == "flush"
+        )
+        failed_deactivation_trace = deactivation_trace[:trace_cut]
+
+    source_sequence = struct.unpack_from(">I", standard, 0x18)[0]
+    clean_journal = bytearray(standard)
+    struct.pack_into(
+        ">I", clean_journal, 0x18, (source_sequence + 1) & 0xFFFF_FFFF
+    )
+    struct.pack_into(">I", clean_journal, 0x1C, 0)
+    struct.pack_into(">I", clean_journal, 0x58, guard_logical)
+    clean_journal = _jbd2_super_with_checksum(clean_journal)
+    clean_checksum = struct.unpack_from("<I", clean_super, 0x3FC)[0]
+    reset_anchor = bytearray(clean_journal)
+    struct.pack_into(">I", reset_anchor, 0x5C, 0x414B5231)
+    struct.pack_into(">I", reset_anchor, 0x60, clean_checksum)
+    struct.pack_into(
+        ">I", reset_anchor, 0x64, clean_checksum ^ 0xFFFF_FFFF
+    )
+    struct.pack_into(">I", reset_anchor, 0x68, guard_logical)
+    struct.pack_into(
+        ">I", reset_anchor, 0x6C, guard_logical ^ 0xFFFF_FFFF
+    )
+    reset_anchor = _jbd2_super_with_checksum(reset_anchor)
+
+    media_path = tmp_path / f"jbd2-deactivation-{case}.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            image,
+            media_path,
+            [
+                (
+                    "T-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _DF-MOUNT-IOR CONSTANT _DF-V"
+                ),
+                "_DF-V _EXT4-CTX CONSTANT _DF-CTX",
+                (
+                    "1 0 0 _DF-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _DF-E-IOR CONSTANT _DF-W"
+                ),
+                "T-ARENA ARENA-USED CONSTANT _DF-ARENA-USED",
+                "_DF-W _EXT4-JWR-ACTIVATE CONSTANT _DF-A-IOR",
+                "0 _DF-V VFS-UNMOUNT CONSTANT _DF-UNMOUNT-IOR",
+                (
+                    "VFS-UNMOUNT-F-FORCE _DF-V VFS-UNMOUNT "
+                    "CONSTANT _DF-RETRY-IOR"
+                ),
+                (
+                    "_DF-MOUNT-IOR 0= _DF-E-IOR 0= AND "
+                    "_DF-A-IOR 0= AND _DF-UNMOUNT-IOR 0<> AND "
+                    "_DF-UNMOUNT-IOR VFS-IOR-DOMAIN "
+                    "VFS-IOR-D-VOLUME = AND "
+                    "_DF-UNMOUNT-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                    + (
+                        "_DF-UNMOUNT-IOR VFS-IOR-FLAGS "
+                        "VFS-IOR-F-PARTIAL AND 0<> AND "
+                        if fault_kind == "write"
+                        else ""
+                    )
+                    +
+                    "_DF-W _EXT4-JWR.FAULT + @ "
+                    "_DF-UNMOUNT-IOR = AND"
+                ),
+                (
+                    "_DF-W _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = AND "
+                    f"_DF-W _EXT4-JWR.PHASE + @ {phase_word} = AND "
+                    "_DF-W _EXT4-JWR-VALID? AND "
+                    "_DF-W _EXT4-JWR-IDLE-CLEAN? 0= AND "
+                    "_DF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<> AND"
+                ),
+                (
+                    "_DF-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<> AND "
+                    "_DF-CTX _EXT4-C.READY + @ 0<> AND "
+                    "_DF-V V.LIFECYCLE @ VFS-L-STALE = AND "
+                    "_DF-V V.BCTX @ _DF-CTX = AND "
+                    "_DF-RETRY-IOR VFS-E-STALE = AND "
+                    "_DF-V V.FLAGS @ VFS-F-RO AND 0<> AND "
+                    "_DF-V V.FLAGS @ VFS-F-DIRTY AND 0<> AND "
+                    "T-ARENA ARENA-USED _DF-ARENA-USED = AND "
+                    'IF ." EXT4-JWR-DEACTIVATION-FAULT" THEN'
+                ),
+            ],
+            patches=source_patches,
+            storage_faults=storage_faults,
+            write_faults_by_ordinal=write_faults,
+            read_faults_by_write_and_ordinal=read_faults,
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-JWR-DEACTIVATION-FAULT")
+        assert trace == activation_trace + failed_deactivation_trace
+        assert media_path.is_file()
+        assert media_path.stat().st_blocks * 512 < media_path.stat().st_size
+        assert _sha256(media_path) == media_sha256
+
+        remount_output, remount_trace, remount_sha256 = run_recovery_forth(
+            media_path,
+            media_path,
+            [
+                (
+                    "T-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _DR-MOUNT-IOR CONSTANT _DR-V"
+                ),
+                "_DR-V _EXT4-CTX CONSTANT _DR-CTX",
+                "0 _DR-V VFS-UNMOUNT CONSTANT _DR-UNMOUNT-IOR",
+                (
+                    "_DR-MOUNT-IOR 0= _DR-UNMOUNT-IOR 0= AND "
+                    "_DR-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_DR-V V.BCTX @ 0= AND "
+                    "_DR-CTX _EXT4-C.RECOVERY + @ 0= AND "
+                    "_DR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0= AND "
+                    "_DR-CTX _EXT4-C.J.START + @ 0= AND "
+                    "_DR-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
+                    "_DR-CTX _EXT4-C.J.WRITER-CURRENT + @ 0= AND "
+                    "_DR-CTX _EXT4-C.READY + @ 0= AND "
+                    "_DR-V V.FLAGS @ VFS-F-DIRTY AND 0= AND "
+                    'IF ." EXT4-JWR-DEACTIVATION-REMOUNTED" THEN'
+                ),
+            ],
+            capture_media=media_path,
+        )
+        _assert_emitted(remount_output, "EXT4-JWR-DEACTIVATION-REMOUNTED")
+        _assert_activation_cleanup_trace(
+            remount_trace,
+            journal0_physical=journal0_physical,
+            guard_physical=guard_physical,
+        )
+        assert media_path.is_file()
+        assert _sha256(media_path) == remount_sha256
+        final_super, final_journal, final_guard = _read_jbd2_activation_media(
+            media_path, writer_activation_fixture
+        )
+        assert final_super == clean_super
+        assert final_journal == clean_journal
+        if case == "witness-flush":
+            assert final_guard == reset_anchor
+        elif case == "guard-retire":
+            assert _sequential_prefix_merge(
+                bytes(1024), reset_anchor, final_guard
+            )
+            assert final_guard not in {bytes(1024), reset_anchor}
+        else:
+            assert final_guard == bytes(1024)
+        if case in {
+            "witness-flush",
+            "guard-retire",
+            "guard-flush",
+            "final-proof-read",
+        }:
+            assert remount_trace == ()
     finally:
         media_path.unlink(missing_ok=True)
 
@@ -6508,7 +6941,7 @@ def test_jbd2_checkpoint_flush_and_proof_faults_quarantine(
         event[0] == "write" for event in activation_trace + emission_trace
     )
     storage_faults: tuple[dict, ...] = ()
-    read_faults: dict[int, dict] | None = None
+    read_faults: dict[tuple[int, int], dict] | None = None
     if fault_kind == "flush":
         flush_ordinal = base_flushes + checkpoint_ordinal
         storage_faults = tuple(
@@ -6528,7 +6961,7 @@ def test_jbd2_checkpoint_flush_and_proof_faults_quarantine(
     else:
         assert fault_kind == "read"
         read_faults = {
-            base_writes + checkpoint_ordinal: {
+            (base_writes + checkpoint_ordinal, 1): {
                 "stage": "media",
                 "sector_index": 0,
                 "result": STORAGE_RESULT_MEDIA_FAILURE,
@@ -6631,7 +7064,7 @@ def test_jbd2_checkpoint_flush_and_proof_faults_quarantine(
             ],
             patches=source_patches,
             storage_faults=storage_faults,
-            read_faults_after_write_ordinal=read_faults,
+            read_faults_by_write_and_ordinal=read_faults,
             capture_media=media_path,
         )
         _assert_emitted(output, "EXT4-JTX-CHECKPOINT-IO-BASE")
@@ -8013,6 +8446,11 @@ def test_jbd2_writer_activation_faults_quarantine_and_mount_resolves(
                 "_AF-W _EXT4-JWR.NEXT-TID + @ CONSTANT _AF-NEXT-TID",
                 "_AF-W _EXT4-JWR-ACTIVATE CONSTANT _AF-A-IOR",
                 "_AF-W _EXT4-JWR-ACTIVATE CONSTANT _AF-AGAIN-IOR",
+                "0 _V VFS-UNMOUNT CONSTANT _AF-UNMOUNT-IOR",
+                (
+                    "VFS-UNMOUNT-F-FORCE _V VFS-UNMOUNT "
+                    "CONSTANT _AF-RETRY-IOR"
+                ),
                 (
                     "_M-IOR 0= _AF-E-IOR 0= AND "
                     "_AF-A-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = AND "
@@ -8032,6 +8470,12 @@ def test_jbd2_writer_activation_faults_quarantine_and_mount_resolves(
                     "_AF-CTX _EXT4-C.J.FEATURES + @ 0= AND "
                     "_AF-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
                     "_AF-AGAIN-IOR VFS-E-BUSY = AND "
+                    "_AF-UNMOUNT-IOR _AF-A-IOR = AND "
+                    "_AF-RETRY-IOR VFS-E-STALE = AND "
+                    "_V V.LIFECYCLE @ VFS-L-STALE = AND "
+                    "_V V.BCTX @ _AF-CTX = AND "
+                    "_AF-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<> AND "
+                    "_AF-CTX _EXT4-C.READY + @ 0<> AND "
                     "_V V.FLAGS @ VFS-F-RO AND 0<> AND "
                     "_V V.FLAGS @ VFS-F-DIRTY AND 0<> AND "
                     'IF ." EXT4-JWR-ACTIVATION-FAULT" THEN'
