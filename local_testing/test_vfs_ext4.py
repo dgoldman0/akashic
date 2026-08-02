@@ -12434,6 +12434,450 @@ def test_mount_reclaims_already_empty_unlinked_singleton_orphan(
     assert sum(kind == "flush" for kind, _, _ in trace) == 18
 
 
+def _assert_unlinked_cleanup_media_converges(
+    interrupted: Path,
+    repaired: Path,
+    stable: Path,
+    *,
+    protocol: str,
+) -> tuple[tuple[tuple[str, int, int], ...], str]:
+    assert protocol in {"modern", "legacy"}
+    repaired_marker = (
+        f"EXT4-{protocol.upper()}-UNLINKED-PREFIX-REPAIRED"
+    )
+    stable_marker = f"EXT4-{protocol.upper()}-UNLINKED-PREFIX-STABLE"
+    output, repair_trace, repaired_sha256 = run_recovery_forth(
+        interrupted,
+        repaired,
+        [
+            "T-ARENA CONSTANT _UA-ARENA",
+            (
+                "_UA-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _UA-IOR CONSTANT _UA-V"
+            ),
+            "_UA-V _EXT4-CTX CONSTANT _UA-CTX",
+            "18 _UA-CTX _EXT4-LOAD-INODE CONSTANT _UA-INODE-IOR",
+            (
+                "0 _UA-CTX _EXT4-LOAD-INODE-BITMAP "
+                "CONSTANT _UA-BITMAP-IOR CONSTANT _UA-BITMAP-HOME"
+            ),
+            (
+                "_UA-CTX _EXT4-C.BLOCK + 2 + C@ 0x02 AND "
+                "CONSTANT _UA-INODE-BIT"
+            ),
+            "0 _UA-CTX _EXT4-LOAD-DESC CONSTANT _UA-DESC-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_UA-IOR 0=",
+                        "_UA-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_UA-V _EXT4-READY?",
+                        "_UA-V _EXT4-ATTACHED?",
+                        "_UA-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_UA-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_UA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_UA-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
+                        "_UA-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_UA-CTX _EXT4-C.J.START + @ 0=",
+                        "_UA-CTX _EXT4-C.J.ANCHOR + @ 0=",
+                        "_UA-CTX _EXT4-C.J.WITNESS + @ 0=",
+                        "_UA-CTX _EXT4-C.J.CLEANUP + @ 0=",
+                        "_UA-CTX _EXT4-C.J.PRIMARY-TORN + @ 0=",
+                        "_UA-CTX _EXT4-C.SUPER-TORN + @ 0=",
+                        "_UA-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_UA-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_UA-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_UA-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_UA-CTX _EXT4-C.ARENA + @ _UA-ARENA =",
+                        "_EXT4-MOC-MARK-VALID @ 0=",
+                        (
+                            "_UA-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.LAST-ORPHAN + L@ 0="
+                        ),
+                        (
+                            "_UA-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0="
+                        ),
+                        (
+                            "_UA-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                        (
+                            "_UA-INODE-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_UA-INODE-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-BOUNDS ="
+                        ),
+                        "_UA-BITMAP-IOR 0=",
+                        "_UA-BITMAP-HOME 267 =",
+                        "_UA-INODE-BIT 0=",
+                        "_UA-DESC-IOR 0=",
+                        (
+                            "_UA-CTX _EXT4-C.DESC + "
+                            "_EXT4-JFI-DESC-FREE@ 495 ="
+                        ),
+                        (
+                            "_UA-CTX _EXT4-C.DESC + "
+                            "_EXT4-GD.ITABLE-UNUSED-LO + W@ 494 ="
+                        ),
+                        (
+                            "_UA-CTX _EXT4-C.DESC + "
+                            "_EXT4-GD.ITABLE-UNUSED-HI + W@ 0="
+                        ),
+                        "_UA-CTX _EXT4-C.FREE-INODES + @ 4079 =",
+                    ]
+                )
+                + f' IF ." {repaired_marker}" THEN'
+            ),
+        ],
+        capture_media=repaired,
+    )
+    _assert_emitted(output, repaired_marker)
+    assert repaired.is_file()
+    assert _sha256(repaired) == repaired_sha256
+
+    stable_output, stable_trace, stable_sha256 = run_recovery_forth(
+        repaired,
+        stable,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _UB-IOR CONSTANT _UB-V",
+            "_UB-V _EXT4-CTX CONSTANT _UB-CTX",
+            "18 _UB-CTX _EXT4-LOAD-INODE CONSTANT _UB-INODE-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_UB-IOR 0=",
+                        "_UB-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_UB-V _EXT4-READY?",
+                        "_UB-CTX _EXT4-C.J.WRITER + @ 0=",
+                        (
+                            "_UB-INODE-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_UB-INODE-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-BOUNDS ="
+                        ),
+                        "_UB-CTX _EXT4-C.FREE-INODES + @ 4079 =",
+                    ]
+                )
+                + f' IF ." {stable_marker}" THEN'
+            ),
+        ],
+        capture_media=stable,
+    )
+    _assert_emitted(stable_output, stable_marker)
+    assert stable_trace == ()
+    assert stable_sha256 == repaired_sha256
+    return repair_trace, repaired_sha256
+
+
+def _write_ordinals_for_ext4_home(
+    trace: tuple[tuple[str, int, int], ...],
+    home: int,
+    *,
+    block_size: int = 1024,
+) -> tuple[int, ...]:
+    sector = home * (block_size // 512)
+    write_ordinal = 0
+    matches: list[int] = []
+    for kind, first_sector, sector_count in trace:
+        if kind != "write":
+            continue
+        write_ordinal += 1
+        if first_sector == sector and sector_count == block_size // 512:
+            matches.append(write_ordinal)
+    return tuple(matches)
+
+
+_UNLINKED_WRITE_PREFIX_CASES = (
+    "commit-empty-prefix",
+    "commit-first-byte",
+    "inode-bitmap-home",
+    "gdt-home",
+    "inode-super-home",
+    "orphan-home",
+    "final-super",
+)
+
+
+@pytest.mark.parametrize("case", _UNLINKED_WRITE_PREFIX_CASES)
+def test_unlinked_cleanup_write_prefixes_converge_on_fresh_mount(
+    singleton_unlinked_cleanup_fixture: dict[str, object],
+    tmp_path: Path,
+    case: str,
+) -> None:
+    protocol = singleton_unlinked_cleanup_fixture["protocol"]
+    source = singleton_unlinked_cleanup_fixture["source"]
+    patches = singleton_unlinked_cleanup_fixture["patches"]
+    success_trace = singleton_unlinked_cleanup_fixture["success_trace"]
+    clean_image = singleton_unlinked_cleanup_fixture["clean_image"]
+    assert isinstance(protocol, str)
+    assert isinstance(source, Path)
+    assert isinstance(patches, tuple)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(clean_image, Path)
+    if case == "orphan-home" and protocol == "legacy":
+        pytest.skip("legacy protocol removal coalesces into the primary super")
+
+    homes = {
+        "inode-bitmap-home": 267,
+        "gdt-home": 2,
+        "inode-super-home": 1,
+        "orphan-home": 1313,
+    }
+    home_ordinals = {
+        name: _write_ordinals_for_ext4_home(success_trace, home)
+        for name, home in homes.items()
+        if name != "orphan-home" or protocol == "modern"
+    }
+    assert len(home_ordinals["inode-bitmap-home"]) == 1
+    assert len(home_ordinals["gdt-home"]) == 1
+    assert len(home_ordinals["inode-super-home"]) == 3
+    if protocol == "modern":
+        assert len(home_ordinals["orphan-home"]) == 1
+
+    allocation_home_ordinals = [
+        home_ordinals["inode-bitmap-home"][0],
+        home_ordinals["gdt-home"][0],
+        home_ordinals["inode-super-home"][1],
+    ]
+    if protocol == "modern":
+        allocation_home_ordinals.append(home_ordinals["orphan-home"][0])
+    first_home_ordinal = min(allocation_home_ordinals)
+    if case in {"commit-empty-prefix", "commit-first-byte"}:
+        write_ordinal = first_home_ordinal - 1
+        sector_index = 0
+        byte_index = 0 if case == "commit-empty-prefix" else 1
+    elif case == "final-super":
+        write_ordinal = home_ordinals["inode-super-home"][2]
+        sector_index = 1
+        byte_index = 0
+    else:
+        ordinals = home_ordinals[case]
+        write_ordinal = ordinals[1] if case == "inode-super-home" else ordinals[0]
+        sector_index = 1 if case == "inode-super-home" else 0
+        if case == "gdt-home":
+            byte_index = 15
+        elif case == "inode-bitmap-home":
+            byte_index = 2
+        else:
+            byte_index = 200
+
+    caught_marker = f"EXT4-{protocol.upper()}-UNLINKED-PREFIX-CAUGHT"
+    torn = tmp_path / f"{protocol}-unlinked-{case}-torn.img"
+    output, failed_trace, failed_sha256 = run_recovery_forth(
+        source,
+        torn,
+        [
+            "T-ARENA CONSTANT _UC-ARENA",
+            (
+                "_UC-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _UC-IOR CONSTANT _UC-V"
+            ),
+            "_UC-V _EXT4-CTX CONSTANT _UC-CTX",
+            (
+                _forth_conjunction(
+                    [
+                        "_UC-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME =",
+                        "_UC-IOR VFS-IOR-REASON VFS-R-IO =",
+                        (
+                            "_UC-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-PARTIAL AND 0<>"
+                        ),
+                        "_UC-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_UC-V _EXT4-READY? 0=",
+                        "_UC-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_UC-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_UC-CTX _EXT4-C.J.WRITER-CURRENT + @ 0=",
+                        "_UC-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_UC-CTX _EXT4-C.ARENA + @ _UC-ARENA =",
+                        "_EXT4-MOC-MARK-VALID @ 0=",
+                        "_EXT4-MOC-WRITER @ 0=",
+                        "_EXT4-MOC-TX @ 0=",
+                    ]
+                )
+                + f' IF ." {caught_marker}" THEN'
+            ),
+        ],
+        patches=patches,
+        write_faults_by_ordinal={
+            write_ordinal: {
+                "stage": "media",
+                "sector_index": sector_index,
+                "byte_index": byte_index,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=torn,
+    )
+    _assert_emitted(output, caught_marker)
+    assert torn.is_file()
+    assert _sha256(torn) == failed_sha256
+
+    seen_writes = 0
+    trace_cut = 0
+    for index, event in enumerate(success_trace, start=1):
+        if event[0] == "write":
+            seen_writes += 1
+            if seen_writes == write_ordinal:
+                trace_cut = index
+                break
+    assert trace_cut
+    assert failed_trace == success_trace[:trace_cut]
+
+    if case in {"inode-bitmap-home", "gdt-home", "orphan-home"}:
+        fault_event = failed_trace[-1]
+        assert fault_event[0] == "write"
+        offset = fault_event[1] * 512
+        length = fault_event[2] * 512
+        with source.open("rb") as old_media:
+            old_media.seek(offset)
+            old_home = bytearray(old_media.read(length))
+        for patch_offset, patch_data in patches:
+            overlap_start = max(offset, patch_offset)
+            overlap_end = min(offset + length, patch_offset + len(patch_data))
+            if overlap_start < overlap_end:
+                old_home[overlap_start - offset : overlap_end - offset] = (
+                    patch_data[
+                        overlap_start - patch_offset : overlap_end - patch_offset
+                    ]
+                )
+        with clean_image.open("rb") as clean_media:
+            clean_media.seek(offset)
+            new_home = clean_media.read(length)
+        with torn.open("rb") as torn_media:
+            torn_media.seek(offset)
+            torn_home = torn_media.read(length)
+        old_home_bytes = bytes(old_home)
+        cut = sector_index * 512 + byte_index
+        assert len(old_home_bytes) == len(new_home) == len(torn_home) == length
+        assert old_home_bytes != new_home
+        assert torn_home == new_home[:cut] + old_home_bytes[cut:]
+
+    _assert_unlinked_cleanup_media_converges(
+        torn,
+        tmp_path / f"{protocol}-unlinked-{case}-repaired.img",
+        tmp_path / f"{protocol}-unlinked-{case}-stable.img",
+        protocol=protocol,
+    )
+
+
+_UNLINKED_FLUSH_FENCE_CASES = (
+    pytest.param("commit", 11, id="F11-commit"),
+    pytest.param("replay-homes", 12, id="F12-replay-homes"),
+    pytest.param("final-super", 16, id="F16-final-super"),
+)
+
+
+@pytest.mark.parametrize(
+    ("case", "flush_ordinal"),
+    _UNLINKED_FLUSH_FENCE_CASES,
+)
+def test_unlinked_cleanup_flush_fences_converge_on_fresh_mount(
+    singleton_unlinked_cleanup_fixture: dict[str, object],
+    tmp_path: Path,
+    case: str,
+    flush_ordinal: int,
+) -> None:
+    protocol = singleton_unlinked_cleanup_fixture["protocol"]
+    source = singleton_unlinked_cleanup_fixture["source"]
+    patches = singleton_unlinked_cleanup_fixture["patches"]
+    success_trace = singleton_unlinked_cleanup_fixture["success_trace"]
+    assert isinstance(protocol, str)
+    assert isinstance(source, Path)
+    assert isinstance(patches, tuple)
+    assert isinstance(success_trace, tuple)
+
+    caught_marker = f"EXT4-{protocol.upper()}-UNLINKED-FLUSH-CAUGHT"
+    working = tmp_path / f"{protocol}-unlinked-{case}-flush-working.img"
+    survived = tmp_path / f"{protocol}-unlinked-{case}-flush-survived.img"
+    prior_fence = tmp_path / f"{protocol}-unlinked-{case}-prior-fence.img"
+    output, failed_trace, survived_sha256 = run_recovery_forth(
+        source,
+        working,
+        [
+            "T-ARENA CONSTANT _UD-ARENA",
+            (
+                "_UD-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _UD-IOR CONSTANT _UD-V"
+            ),
+            "_UD-V _EXT4-CTX CONSTANT _UD-CTX",
+            (
+                _forth_conjunction(
+                    [
+                        "_UD-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME =",
+                        "_UD-IOR VFS-IOR-REASON VFS-R-IO =",
+                        (
+                            "_UD-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-PARTIAL AND 0="
+                        ),
+                        "_UD-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_UD-V _EXT4-READY? 0=",
+                        "_UD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_UD-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_UD-CTX _EXT4-C.J.WRITER-CURRENT + @ 0=",
+                        "_UD-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_UD-CTX _EXT4-C.ARENA + @ _UD-ARENA =",
+                        "_EXT4-MOC-MARK-VALID @ 0=",
+                        "_EXT4-MOC-WRITER @ 0=",
+                        "_EXT4-MOC-TX @ 0=",
+                    ]
+                )
+                + f' IF ." {caught_marker}" THEN'
+            ),
+        ],
+        patches=patches,
+        flush_faults_by_ordinal={
+            flush_ordinal: {
+                "stage": "flush",
+                "result": STORAGE_RESULT_FLUSH_FAILURE,
+                "command": STORAGE_CMD_FLUSH,
+            }
+        },
+        capture_media=survived,
+        capture_prior_flush_media=prior_fence,
+    )
+    _assert_emitted(output, caught_marker)
+    assert survived.is_file()
+    assert prior_fence.is_file()
+    assert working.is_file()
+    assert _sha256(survived) == survived_sha256
+    assert _sha256(working) == _sha256(prior_fence)
+    assert _sha256(survived) != _sha256(prior_fence)
+
+    seen_flushes = 0
+    trace_cut = 0
+    for index, event in enumerate(success_trace, start=1):
+        if event[0] == "flush":
+            seen_flushes += 1
+            if seen_flushes == flush_ordinal:
+                trace_cut = index
+                break
+    assert trace_cut
+    assert failed_trace == success_trace[:trace_cut]
+
+    for durability, interrupted in (
+        ("survived", survived),
+        ("prior", prior_fence),
+    ):
+        _assert_unlinked_cleanup_media_converges(
+            interrupted,
+            tmp_path / (
+                f"{protocol}-unlinked-{case}-{durability}-repaired.img"
+            ),
+            tmp_path / (
+                f"{protocol}-unlinked-{case}-{durability}-stable.img"
+            ),
+            protocol=protocol,
+        )
+
+
 def _run_singleton_legacy_cleanup(
     path: Path,
     media_path: Path,

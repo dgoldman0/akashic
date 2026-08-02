@@ -890,9 +890,14 @@ The remaining boundaries are:
   as unsupported and unexplained nonzero `i_blocks` is rejected as corruption;
   both fail before writer allocation or any write/flush. The established linked
   modern/legacy seal and mount paths pass against the shared mode/checkpoint
-  changes. Unlinked geometry expansion, controlled write/flush-prefix
-  convergence, external-xattr/data ownership cases, and external-tool
-  inspection remain to be qualified;
+  changes. A controlled matrix covers seven modern and six legacy write
+  prefixes: both sides of final commit, every operation-specific metadata
+  home, and final-super publication. Three fences per protocol cover commit,
+  replay-home durability, and final-super publication; both the writes that
+  survived each failed flush and the preceding durable snapshot repair on a
+  fresh mount and then remount without another write. Unlinked geometry
+  expansion, the remaining shared activation/reset fences, external-xattr/data
+  ownership cases, and external-tool inspection remain to be qualified;
 - focused 1 KiB coverage exercises one- and two-inode legacy chains, a mixed
   legacy/modern union, stable refusal with same-binding plan reuse, legacy
   cycles and invalid links, unallocated and checksum-invalid legacy inodes,
