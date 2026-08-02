@@ -101,8 +101,9 @@ root, mount verifies:
   authenticated empty modern set is completed before mount publication only
   when the legacy/modern union is empty, without changing an orphan inode,
   orphan-file block, or legacy link. A nonempty union is still refused after
-  preflight because journaled truncate/delete and protocol cleanup are not
-  implemented.
+  preflight because journaled truncate/delete orchestration and protocol
+  completion are not implemented, although one private non-emitting linked
+  truncation afterimage builder now exists below that mount boundary.
 
 The driver contains its own reflected CRC32C implementation. Akashic's public
 `CRC32C` word is deliberately MSB-first and is not interchangeable with the
@@ -417,6 +418,37 @@ aggregate superblock update. This builder does not remove an extent or legacy
 map entry, change `i_blocks`, stage a revoke, or free an inode, and it emits no
 media write.
 
+`_EXT4-JTX-STAGE-ORPHAN-DEPTH0-TRUNCATE` joins that accounting builder to one
+authenticated map-removal case. It accepts only the canonical retained plan
+slot found by the plan's own hash probe; an external byte copy, empty table
+slot, or injected duplicate in a later probe slot has no cleanup authority.
+The media locator is reauthenticated and the target must be a linked regular
+file whose zero size is already durable, whose data map is an inline depth-0
+extent root, and which does not use journal-data mode. Any external xattr block
+is allocation- and checksum-authenticated, retained, and proved disjoint from
+the target data ranges. The decoded `i_blocks` value must exactly equal all
+captured extent blocks plus that retained xattr block in 512-byte sectors.
+
+Writable ownership admission also reauthenticates the modern orphan file. For
+this first slice, that file must itself use inline depth-0 extents and no
+external xattr. Every complete orphan-file extent, including unwritten or
+preallocated blocks beyond EOF, must be disjoint from every target range, and
+every logical orphan block is reread through its physical-location-bound tail
+checksum. This deliberate mutation-side narrowing avoids freeing a
+checksum-valid cross-inode alias without narrowing read-side orphan discovery.
+
+For a nonempty captured root, the builder stages an inode with zero extent
+entries, clears all four inline entry slots, retains the extent header and
+external-xattr pointer, encodes the exact xattr-only `i_blocks` remainder
+(including `HUGE_FILE` units), and frees each captured range through the typed
+block-free builder. An already empty, exactly accounted root is a successful
+no-op. Once the inode afterimage is published, any later semantic, conflict, or
+credit failure aborts and scrubs the entire transaction; it recognizes a lower
+block-free auto-abort and does not abort twice. The operation intentionally
+leaves the orphan slot/list record active for a later durable
+protocol-completion step. It stages no data or revoke and performs no media
+write.
+
 This is a non-emitting staging boundary. The typed builders may issue checked
 reads for locator and checksum reauthentication, but they do not activate a
 journal, emit a transaction, checkpoint a home block, write, or flush. Before
@@ -631,11 +663,15 @@ writable profile. The remaining boundaries are:
   immediate sequential workspace reuse, clean write-active deactivation, and
   public clean-unmount integration are implemented as private durability
   foundations. Transaction-aware metadata acquisition and checksum-safe typed
-  orphan-inode replacement, modern-slot clearing, and free-only physical-block
-  accounting can now compose coalesced same-home after-images and abort without
-  volume I/O. Block-free staging covers split group ranges, primary GDT and
-  superblock counters/checksums, partial-overlap conflicts, automatic abort on
-  late credit failure, and writable metadata-home anti-alias admission;
+  orphan-inode replacement, modern-slot clearing, free-only physical-block
+  accounting, and linked zero-size inline depth-0 extent truncation can now
+  compose coalesced same-home after-images and abort without volume I/O.
+  Block-free staging covers split group ranges, primary GDT and superblock
+  counters/checksums, partial-overlap conflicts, automatic abort on late credit
+  failure, and writable metadata-home anti-alias admission. The linked
+  truncation slice additionally covers exact `i_blocks` reduction, retained
+  external xattrs, target/orphan-file ownership disjointness, exact plan
+  membership, and whole-transaction abort after a late credit failure;
 - unified legacy-chain and modern orphan-file discovery, inode preflight, and
   authenticated-empty `ORPHAN_PRESENT` completion are implemented. The shared
   exact-count plan retains protocol-specific locations and enforces inode
@@ -643,12 +679,17 @@ writable profile. The remaining boundaries are:
   protocol counts are zero and mutates only journal recovery state and the
   checksummed primary-super transient bits; it does not change an orphan
   inode/file, a legacy link, allocate writer workspace, or expose a
-  user-visible write. The typed staging components do not yet orchestrate map
-  removal, `i_blocks` and inode-free accounting, data truncation or deletion,
-  external-xattr block release, link-count and legacy-chain/head updates,
-  cleanup transaction ordering, or retry-idempotent completion. Transactional
-  cleanup for either nonempty protocol and every user-visible mutation
-  operation remain unimplemented;
+  user-visible write. The typed staging components do not yet cover nonzero
+  tail truncation, depth-positive extent trees, legacy direct/indirect maps,
+  unlinked inode and inode-bitmap accounting, external-xattr block release,
+  link-count and legacy-chain/head updates, or retry-idempotent cleanup
+  orchestration. Checkpoint preflight also still performs an ordinary strict
+  reload that refuses every nonempty orphan plan, so a committed nonempty
+  cleanup transaction cannot yet reach its home blocks through the production
+  checkpoint path. An internal authenticated-nonempty recovery mode and
+  durable protocol-removal sequencing are the next integration boundary.
+  Transactional cleanup for either complete nonempty protocol and every
+  user-visible mutation operation remain unimplemented;
 - focused 1 KiB coverage exercises one- and two-inode legacy chains, a mixed
   legacy/modern union, stable refusal with same-binding plan reuse, legacy
   cycles and invalid links, unallocated and checksum-invalid legacy inodes,

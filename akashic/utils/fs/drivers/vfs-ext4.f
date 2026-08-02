@@ -65,6 +65,7 @@ REQUIRE ../vfs.f
 0x00080000 CONSTANT _EXT4-EXTENTS-FL
 0x00001000 CONSTANT _EXT4-INDEX-FL
 0x00040000 CONSTANT _EXT4-HUGE-FILE-FL
+0x00004000 CONSTANT _EXT4-JOURNAL-DATA-FL
 5          CONSTANT _EXT4-MAX-EXTENT-DEPTH
 12         CONSTANT _EXT4-NDIRECT
 15         CONSTANT _EXT4-N-BLOCK-PTRS
@@ -8267,6 +8268,93 @@ VARIABLE _EXT4-OQ-RECORD
     THEN
     DROP FALSE ;
 
+VARIABLE _EXT4-OM-RECORD
+VARIABLE _EXT4-OM-CTX
+VARIABLE _EXT4-OM-BASE
+VARIABLE _EXT4-OM-OFF
+VARIABLE _EXT4-OM-INO
+VARIABLE _EXT4-OM-SLOT
+VARIABLE _EXT4-OM-ENTRY
+
+\ Cleanup authority belongs to the exact retained discovery plan, not to a
+\ caller-authored record that merely copies its four cells.
+: _EXT4-ORPHAN-PLAN-MEMBER?  ( record ctx -- flag )
+    _EXT4-OM-CTX ! _EXT4-OM-RECORD !
+    _EXT4-OM-RECORD @ 0= _EXT4-OM-CTX @ 0= OR IF FALSE EXIT THEN
+    _EXT4-OM-CTX @ _EXT4-ORPHAN-WORKSPACE? 0= IF FALSE EXIT THEN
+    _EXT4-OM-CTX @ _EXT4-C.O.TABLE + @ DUP _EXT4-OM-BASE !
+    _EXT4-OM-RECORD @ U> IF FALSE EXIT THEN
+    _EXT4-OM-RECORD @ _EXT4-OM-BASE @ - DUP _EXT4-OM-OFF !
+    _EXT4-ORPHAN-RECORD-SIZE MOD IF FALSE EXIT THEN
+    _EXT4-OM-OFF @
+    _EXT4-OM-CTX @ _EXT4-C.O.SLOTS + @
+    _EXT4-ORPHAN-RECORD-SIZE * U< 0= IF FALSE EXIT THEN
+    _EXT4-OM-RECORD @ @ DUP 0= IF DROP FALSE EXIT THEN
+    _EXT4-OM-INO !
+    _EXT4-OM-INO @
+    _EXT4-OM-CTX @ _EXT4-C.O.SLOTS + @ 1- AND _EXT4-OM-SLOT !
+    _EXT4-OM-CTX @ _EXT4-C.O.SLOTS + @ 0 ?DO
+        _EXT4-OM-SLOT @ _EXT4-OM-CTX @ _EXT4-ORPHAN-TABLE-ENTRY
+        DUP _EXT4-OM-ENTRY ! @ DUP 0= IF
+            DROP FALSE UNLOOP EXIT
+        THEN
+        _EXT4-OM-INO @ = IF
+            _EXT4-OM-ENTRY @ _EXT4-OM-RECORD @ = UNLOOP EXIT
+        THEN
+        _EXT4-OM-SLOT @ 1+
+        _EXT4-OM-CTX @ _EXT4-C.O.SLOTS + @ 1- AND
+        _EXT4-OM-SLOT !
+    LOOP
+    FALSE ;
+
+VARIABLE _EXT4-ORA-RECORD
+VARIABLE _EXT4-ORA-CTX
+VARIABLE _EXT4-ORA-INO
+VARIABLE _EXT4-ORA-KIND
+
+\ Reauthenticate both the retained discovery record and the current media
+\ locator, then leave the checksum-valid target inode in C.INODE.  This is a
+\ read-only authority check; staged transaction images never stand in for the
+\ plan or for the raw orphan chain that the plan names.
+: _EXT4-REAUTH-ORPHAN-PLAN-RECORD  ( plan-record ctx -- ior )
+    _EXT4-ORA-CTX ! _EXT4-ORA-RECORD !
+    _EXT4-ORA-RECORD @ 0= _EXT4-ORA-CTX @ 0= OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-ORA-RECORD @ _EXT4-ORA-CTX @
+    _EXT4-ORPHAN-PLAN-MEMBER? 0= IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-ORA-RECORD @ _EXT4-OE.INO + @ DUP _EXT4-ORA-INO !
+    _EXT4-ORA-CTX @ _EXT4-VALIDATE-ACTIVE-ORPHAN ?DUP IF EXIT THEN
+    _EXT4-ORA-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
+    _EXT4-ORA-RECORD @ _EXT4-ORA-CTX @ _EXT4-ORPHAN-RECORD? 0= IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-ORA-RECORD @ _EXT4-OE.KIND + @ DUP _EXT4-ORA-KIND !
+    _EXT4-OK-MODERN = IF
+        _EXT4-ORA-RECORD @ _EXT4-OE.LOCATOR-A + @
+        _EXT4-ORA-CTX @ _EXT4-READ-ORPHAN-BLOCK ?DUP IF EXIT THEN
+        _EXT4-ORA-CTX @ _EXT4-C.BLOCK +
+        _EXT4-ORA-RECORD @ _EXT4-OE.LOCATOR-B + @ 4 * + L@
+        _EXT4-ORA-INO @ <> IF
+            EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+        THEN
+    ELSE
+        _EXT4-ORA-KIND @ _EXT4-OK-LEGACY <> IF
+            EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+        THEN
+    THEN
+    _EXT4-ORA-INO @ _EXT4-ORA-CTX @ _EXT4-LOAD-ORPHAN-INODE
+    ?DUP IF EXIT THEN
+    _EXT4-ORA-KIND @ _EXT4-OK-LEGACY = IF
+        _EXT4-ORA-CTX @ _EXT4-C.INODE + _EXT4-I.DTIME + L@
+        _EXT4-ORA-RECORD @ _EXT4-OE.LOCATOR-A + @ <> IF
+            EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+        THEN
+    THEN
+    0 ;
+
 : _EXT4-VALIDATE-INDEXED-ORPHANS  ( ctx -- ior )
     DUP _EXT4-OP-CTX !
     _EXT4-C.O.SLOTS + @ 0 ?DO
@@ -8447,6 +8535,9 @@ VARIABLE _EXT4-JOI-SNAPSHOT
         VFS-E-INVALID EXIT
     THEN
     _EXT4-JOI-WRITER @ _EXT4-JWR.CTX + @ _EXT4-JOI-CTX !
+    _EXT4-JOI-RECORD @ _EXT4-JOI-CTX @ _EXT4-ORPHAN-PLAN-MEMBER? 0= IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
     \ Preserve natural C.INODE, C.BLOCK, and SCRATCH-A caller inputs before
     \ locator reauthentication overwrites those caches.  SCRATCH-B remains
     \ private and unused by non-emitting transaction staging.
@@ -8517,6 +8608,9 @@ VARIABLE _EXT4-JOS-IMAGE
     _EXT4-JOS-WRITER @ _EXT4-JTX-ACTIVE? ?DUP IF EXIT THEN
     _EXT4-JOS-RECORD @ 0= IF VFS-E-INVALID EXIT THEN
     _EXT4-JOS-WRITER @ _EXT4-JWR.CTX + @ _EXT4-JOS-CTX !
+    _EXT4-JOS-RECORD @ _EXT4-JOS-CTX @ _EXT4-ORPHAN-PLAN-MEMBER? 0= IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
     _EXT4-JOS-RECORD @ _EXT4-OE.INO + @ DUP _EXT4-JOS-INO !
     _EXT4-JOS-CTX @ _EXT4-VALIDATE-ACTIVE-ORPHAN ?DUP IF EXIT THEN
     _EXT4-JOS-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
@@ -9127,6 +9221,292 @@ VARIABLE _EXT4-JFB-ABORT-IOR
     _EXT4-JFB-STAGE-SUPER ?DUP IF
         _EXT4-JFB-FAIL-AFTER-PUBLISH EXIT
     THEN
+    0 ;
+
+\ =====================================================================
+\  Plan-bound linked orphan extent truncation after-images
+\ =====================================================================
+
+VARIABLE _EXT4-EIB-SECTORS
+VARIABLE _EXT4-EIB-INODE
+VARIABLE _EXT4-EIB-CTX
+VARIABLE _EXT4-EIB-RAW
+VARIABLE _EXT4-EIB-LIMIT
+
+\ Encode the on-disk 48-bit i_blocks field without silently changing the
+\ HUGE_FILE unit convention.  Callers supply the normalized 512-byte-sector
+\ count used by the rest of this driver.
+: _EXT4-ENCODE-I-BLOCKS  ( blocks-512 inode ctx -- ior )
+    _EXT4-EIB-CTX ! _EXT4-EIB-INODE ! _EXT4-EIB-SECTORS !
+    _EXT4-EIB-CTX @ 0= _EXT4-EIB-INODE @ 0= OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-EIB-SECTORS @ 0< IF VFS-E-INVALID EXIT THEN
+    _EXT4-EIB-CTX @ _EXT4-C.SPB + @ 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-EIB-CTX @ _EXT4-C.BLOCKS + @
+    _EXT4-EIB-CTX @ _EXT4-C.SPB + @ _EXT4-UMUL?
+    DUP IF NIP EXIT THEN DROP _EXT4-EIB-LIMIT !
+    _EXT4-EIB-SECTORS @ _EXT4-EIB-LIMIT @ U> IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-EIB-SECTORS @
+    _EXT4-EIB-INODE @ _EXT4-I.FLAGS + L@
+    _EXT4-HUGE-FILE-FL AND IF
+        _EXT4-EIB-CTX @ _EXT4-C.SPB + @ /MOD
+        SWAP IF DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
+    THEN
+    DUP _EXT4-EIB-RAW ! 0xFFFFFFFFFFFF U> IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-EIB-RAW @ DUP 0xFFFFFFFF AND
+    _EXT4-EIB-INODE @ _EXT4-I.BLOCKS-LO + L!
+    32 RSHIFT _EXT4-EIB-INODE @ _EXT4-I.BLOCKS-HI + W!
+    0 ;
+
+\ Four leaf entries are the format-defined capacity of an inline inode
+\ extent root.  Each retained pair is { first physical block, block count }.
+CREATE _EXT4-JOT-RANGES 8 CELLS ALLOT
+
+: _EXT4-JOT-RANGE  ( index -- pair-address )
+    2 * CELLS _EXT4-JOT-RANGES + ;
+
+VARIABLE _EXT4-JOT-RECORD
+VARIABLE _EXT4-JOT-WRITER
+VARIABLE _EXT4-JOT-CTX
+VARIABLE _EXT4-JOT-INODE
+VARIABLE _EXT4-JOT-ROOT
+VARIABLE _EXT4-JOT-COUNT
+VARIABLE _EXT4-JOT-ENTRY
+VARIABLE _EXT4-JOT-LEN
+VARIABLE _EXT4-JOT-PHYS
+VARIABLE _EXT4-JOT-DATA-BLOCKS
+VARIABLE _EXT4-JOT-EA
+VARIABLE _EXT4-JOT-EXPECTED
+VARIABLE _EXT4-JOT-ACTUAL
+VARIABLE _EXT4-JOT-AFTERIMAGE
+VARIABLE _EXT4-JOT-IOR
+VARIABLE _EXT4-JOT-PUBLISHED
+VARIABLE _EXT4-JOT-ABORT-IOR
+VARIABLE _EXT4-JOT-OF-ROOT
+VARIABLE _EXT4-JOT-OF-COUNT
+VARIABLE _EXT4-JOT-OF-INDEX
+VARIABLE _EXT4-JOT-OF-TARGET
+VARIABLE _EXT4-JOT-OF-ENTRY
+VARIABLE _EXT4-JOT-OF-PHYS
+VARIABLE _EXT4-JOT-OF-LEN
+
+: _EXT4-JOT-CAPTURE-RANGES  ( -- ior )
+    0 _EXT4-JOT-DATA-BLOCKS !
+    _EXT4-JOT-COUNT @ 0 ?DO
+        _EXT4-JOT-ROOT @ 12 I 12 * + + DUP _EXT4-JOT-ENTRY !
+        _EXT4-EXTENT-LEN@ _EXT4-JOT-LEN !
+        _EXT4-JOT-ENTRY @ 8 + L@ _EXT4-JOT-PHYS !
+        _EXT4-JOT-EA @ IF
+            _EXT4-JOT-PHYS @ _EXT4-JOT-LEN @
+            _EXT4-JOT-EA @ 1 _EXT4-BLOCK-RANGES-OVERLAP? IF
+                EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
+            THEN
+        THEN
+        _EXT4-JOT-PHYS @ I _EXT4-JOT-RANGE !
+        _EXT4-JOT-LEN @ I _EXT4-JOT-RANGE CELL+ !
+        _EXT4-JOT-DATA-BLOCKS @ _EXT4-JOT-LEN @ _EXT4-UADD?
+        DUP IF NIP UNLOOP EXIT THEN DROP _EXT4-JOT-DATA-BLOCKS !
+    LOOP
+    0 ;
+
+: _EXT4-JOT-VALIDATE-ACCOUNTING  ( -- ior )
+    _EXT4-JOT-DATA-BLOCKS @
+    _EXT4-JOT-EA @ IF 1 ELSE 0 THEN
+    _EXT4-UADD? DUP IF NIP EXIT THEN DROP
+    _EXT4-JOT-CTX @ _EXT4-C.SPB + @ _EXT4-UMUL?
+    DUP IF NIP EXIT THEN DROP _EXT4-JOT-EXPECTED !
+    _EXT4-JOT-INODE @ _EXT4-JOT-CTX @ _EXT4-DECODE-I-BLOCKS
+    DUP IF NIP EXIT THEN DROP _EXT4-JOT-ACTUAL !
+    _EXT4-JOT-ACTUAL @ _EXT4-JOT-EXPECTED @ <> IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
+\ Writable ownership is stricter than read-side map validity.  Narrow the
+\ orphan-file shape to one whose complete external ownership is enumerable,
+\ then prove that no target range aliases a live orphan protocol block.  Its
+\ inline root resides in an inode table already protected by free-range
+\ admission; depth zero and no external EA leave only these leaf ranges.
+: _EXT4-JOT-VALIDATE-ORPHAN-FILE-DISJOINT  ( -- ior )
+    _EXT4-JOT-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
+    _EXT4-JOT-CTX @ _EXT4-C.INODE +
+    DUP _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND 0= IF
+        DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    DUP _EXT4-I.FILE-ACL-HI + W@
+    OVER _EXT4-I.FILE-ACL-LO + L@ OR IF
+        DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-I.BLOCK + DUP _EXT4-JOT-OF-ROOT !
+    DUP W@ _EXT4-EXTENT-MAGIC <> IF
+        DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    DUP 4 + W@ 4 <> IF
+        DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    DUP 2 + W@ DUP _EXT4-JOT-OF-COUNT ! 4 U> IF
+        DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    6 + W@ IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    \ Include full preallocated/unwritten ranges beyond EOF in the ownership
+    \ proof; the logical stream below authenticates only blocks inside size.
+    0 _EXT4-JOT-OF-INDEX !
+    BEGIN _EXT4-JOT-OF-INDEX @ _EXT4-JOT-OF-COUNT @ < WHILE
+        _EXT4-JOT-OF-ROOT @ 12
+        _EXT4-JOT-OF-INDEX @ 12 * + + DUP _EXT4-JOT-OF-ENTRY !
+        DUP _EXT4-EXTENT-LEN@ _EXT4-JOT-OF-LEN !
+        8 + L@ _EXT4-JOT-OF-PHYS !
+        0 _EXT4-JOT-OF-TARGET !
+        BEGIN _EXT4-JOT-OF-TARGET @ _EXT4-JOT-COUNT @ < WHILE
+            _EXT4-JOT-OF-TARGET @ _EXT4-JOT-RANGE DUP @
+            SWAP CELL+ @
+            _EXT4-JOT-OF-PHYS @ _EXT4-JOT-OF-LEN @
+            _EXT4-BLOCK-RANGES-OVERLAP? IF
+                EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+            THEN
+            1 _EXT4-JOT-OF-TARGET +!
+        REPEAT
+        1 _EXT4-JOT-OF-INDEX +!
+    REPEAT
+    0 _EXT4-JOT-OF-INDEX !
+    BEGIN _EXT4-JOT-OF-INDEX @ _EXT4-OV-BLOCKS @ < WHILE
+        _EXT4-JOT-OF-INDEX @ _EXT4-JOT-CTX @
+        _EXT4-READ-ORPHAN-BLOCK ?DUP IF EXIT THEN
+        0 _EXT4-JOT-OF-TARGET !
+        BEGIN _EXT4-JOT-OF-TARGET @ _EXT4-JOT-COUNT @ < WHILE
+            _EXT4-JOT-OF-TARGET @ _EXT4-JOT-RANGE DUP @
+            SWAP CELL+ @
+            _EXT4-OV-PHYS @ 1
+            _EXT4-BLOCK-RANGES-OVERLAP? IF
+                EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+            THEN
+            1 _EXT4-JOT-OF-TARGET +!
+        REPEAT
+        1 _EXT4-JOT-OF-INDEX +!
+    REPEAT
+    \ PREPARE leaves the orphan inode cached; restore and reauthenticate the
+    \ target before the caller copies its proposed afterimage.
+    _EXT4-JOT-RECORD @ _EXT4-JOT-CTX @
+    _EXT4-REAUTH-ORPHAN-PLAN-RECORD ;
+
+: _EXT4-JOT-PREFLIGHT  ( -- ior )
+    _EXT4-JOT-INODE @ _EXT4-I.LINKS + W@ 0= IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-JOT-INODE @ _EXT4-I.MODE + W@ 0xF000 AND 0x8000 <> IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-JOT-INODE @ _EXT4-I.SIZE-LO + L@
+    _EXT4-JOT-INODE @ _EXT4-I.SIZE-HI + L@ OR IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-JOT-INODE @ _EXT4-I.FLAGS + L@
+    DUP _EXT4-EXTENTS-FL AND 0=
+    SWAP _EXT4-JOURNAL-DATA-FL AND 0<> OR IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-JOT-INODE @ _EXT4-I.BLOCK + DUP _EXT4-JOT-ROOT !
+    DUP W@ _EXT4-EXTENT-MAGIC <> IF
+        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    DUP 4 + W@ 4 <> IF
+        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    DUP 2 + W@ DUP _EXT4-JOT-COUNT ! 4 U> IF
+        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    6 + W@ IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-JOT-INODE @ _EXT4-I.FILE-ACL-HI + W@ IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JOT-INODE @ _EXT4-I.FILE-ACL-LO + L@ DUP _EXT4-JOT-EA ! IF
+        _EXT4-JOT-EA @ EXT4-D-XATTR _EXT4-JOT-CTX @
+        _EXT4-REQUIRE-ALLOCATED-BLOCK ?DUP IF EXIT THEN
+        _EXT4-JOT-EA @ _EXT4-JOT-CTX @ _EXT4-LOAD-XATTR-BLOCK
+        ?DUP IF EXIT THEN
+    THEN
+    _EXT4-JOT-CAPTURE-RANGES ?DUP IF EXIT THEN
+    _EXT4-JOT-VALIDATE-ACCOUNTING ?DUP IF EXIT THEN
+    _EXT4-JOT-VALIDATE-ORPHAN-FILE-DISJOINT ;
+
+: _EXT4-JOT-BUILD-INODE  ( -- ior )
+    _EXT4-JOT-WRITER @ _EXT4-JWR.SCRATCH-B + @ DUP
+    _EXT4-JOT-AFTERIMAGE !
+    _EXT4-JOT-INODE @ SWAP _EXT4-JOT-CTX @ _EXT4-C.ISIZE + @ MOVE
+    _EXT4-JOT-AFTERIMAGE @ _EXT4-I.BLOCK +
+    0 OVER 2 + W!
+    12 + 48 0 FILL
+    _EXT4-JOT-EA @ IF
+        _EXT4-JOT-CTX @ _EXT4-C.SPB + @
+    ELSE
+        0
+    THEN
+    _EXT4-JOT-AFTERIMAGE @ _EXT4-JOT-CTX @ _EXT4-ENCODE-I-BLOCKS ;
+
+\ If a lower range-free preflight fails, it has not necessarily published
+\ enough state to trigger its own abort.  Once the inode image exists, this
+\ outer operation owns the atomic discard boundary.  A lower auto-abort is
+\ observable as IDLE and must not be aborted a second time.
+: _EXT4-JOT-FAIL-AFTER-PUBLISH  ( ior -- ior )
+    _EXT4-JOT-IOR !
+    _EXT4-JOT-PUBLISHED @ IF
+        _EXT4-JOT-WRITER @ _EXT4-JWR.STATE + @ DUP
+        _EXT4-JWR-STAGING = IF
+            DROP
+            _EXT4-JOT-WRITER @ _EXT4-JTX-ABORT
+            DUP _EXT4-JOT-ABORT-IOR ! IF
+                _EXT4-JOT-ABORT-IOR @
+                _EXT4-JOT-WRITER @ _EXT4-JWR.FAULT + !
+                _EXT4-JWR-FAULTED
+                _EXT4-JOT-WRITER @ _EXT4-JWR.STATE + !
+            THEN
+        ELSE
+            DUP _EXT4-JWR-IDLE = SWAP _EXT4-JWR-FAULTED = OR 0= IF
+                _EXT4-JOT-IOR @
+                _EXT4-JOT-WRITER @ _EXT4-JWR.FAULT + !
+                _EXT4-JWR-FAULTED
+                _EXT4-JOT-WRITER @ _EXT4-JWR.STATE + !
+            THEN
+        THEN
+    THEN
+    _EXT4-JOT-IOR @ ;
+
+\ Complete the storage half of an interrupted linked-file truncation whose
+\ new size is already zero and whose old map fits the inode's depth-zero
+\ extent root.  The external xattr block remains referenced.  This operation
+\ intentionally leaves the authenticated orphan record active: slot/list
+\ removal is a later protocol-completion step after truncation is durable.
+: _EXT4-JTX-STAGE-ORPHAN-DEPTH0-TRUNCATE
+  ( plan-record transaction -- ior )
+    _EXT4-JOT-WRITER ! _EXT4-JOT-RECORD !
+    0 _EXT4-JOT-PUBLISHED !
+    _EXT4-JOT-WRITER @ _EXT4-JTX-ACTIVE? ?DUP IF EXIT THEN
+    _EXT4-JOT-RECORD @ 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-JOT-WRITER @ _EXT4-JWR.CTX + @ DUP _EXT4-JOT-CTX !
+    _EXT4-JOT-RECORD @ SWAP _EXT4-REAUTH-ORPHAN-PLAN-RECORD
+    ?DUP IF EXIT THEN
+    _EXT4-JOT-CTX @ _EXT4-C.INODE + _EXT4-JOT-INODE !
+    _EXT4-JOT-PREFLIGHT ?DUP IF EXIT THEN
+    _EXT4-JOT-COUNT @ 0= IF 0 EXIT THEN
+    _EXT4-JOT-BUILD-INODE ?DUP IF EXIT THEN
+    _EXT4-JOT-AFTERIMAGE @ _EXT4-JOT-RECORD @ _EXT4-JOT-WRITER @
+    _EXT4-JTX-STAGE-ORPHAN-INODE ?DUP IF EXIT THEN
+    -1 _EXT4-JOT-PUBLISHED !
+    _EXT4-JOT-COUNT @ 0 ?DO
+        I _EXT4-JOT-RANGE @
+        I _EXT4-JOT-RANGE CELL+ @
+        _EXT4-JOT-WRITER @ _EXT4-JTX-STAGE-FREE-BLOCK-RANGE
+        ?DUP IF _EXT4-JOT-FAIL-AFTER-PUBLISH UNLOOP EXIT THEN
+    LOOP
     0 ;
 
 \ True only after the streaming orphan-file pass has proved that the transient
