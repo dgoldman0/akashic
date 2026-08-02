@@ -212,6 +212,26 @@ VARIABLE _SRCONNG-S
     THEN
     DROP -1 ;
 
+VARIABLE _SRCONNG-O
+
+\ Fail-closed evidence for a higher Streams owner which borrows this complete
+\ connector graph.  The sealed application configuration above the connector
+\ can stay opaque without learning subscription or neutral-client layout.
+: STREAMS-RABBIT-CONNECTOR-OWNED-SPAN-OVERLAP?
+  ( address bytes connector -- flag )
+    _SRCONNG-O ! _SRCONNG-U ! _SRCONNG-A !
+    _SRCONNG-U @ 0< IF -1 EXIT THEN
+    _SRCONNG-U @ IF _SRCONNG-A @ 0= IF -1 EXIT THEN THEN
+    _SRCONNG-A @ _SRCONNG-U @ MSPAN-NONWRAPPING? 0= IF -1 EXIT THEN
+    _SRCONN-BUSY @ IF -1 EXIT THEN
+    _SRCONNG-O @ STREAMS-RABBIT-CONNECTOR-VALID? 0= IF -1 EXIT THEN
+    _SRCONNG-A @ _SRCONNG-U @
+        _SRCONNG-O @ STREAMS-RABBIT-CONNECTOR-SIZE
+        MSPAN-OVERLAP? IF -1 EXIT THEN
+    _SRCONNG-A @ _SRCONNG-U @
+        _SRCONNG-O @ SRCONN.SUBSCRIPTIONS @
+        _SRCONN-SPAN-HITS-SUB-GRAPH? ;
+
 : STREAMS-RABBIT-CONNECTOR-STATE@  ( connector -- state status )
     _SRCONN-BUSY @ IF
         DROP 0 STREAMS-RABBIT-CONNECTOR-S-BUSY EXIT
