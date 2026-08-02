@@ -4938,16 +4938,13 @@ VARIABLE _EXT4-JWM-COMPONENT
     ?DUP IF 0 SWAP EXIT THEN
     _EXT4-JWM-BYTES @ 0 ;
 
-: _EXT4-JWR-CONTEXT?  ( ctx -- flag )
+: _EXT4-JWR-GEOMETRY?  ( ctx -- flag )
     DUP 0= IF DROP FALSE EXIT THEN
     DUP _EXT4-C.ARENA + @ 0= IF DROP FALSE EXIT THEN
     DUP _EXT4-C.BSIZE + @ DUP 1024 = OVER 2048 = OR SWAP 4096 = OR 0= IF
         DROP FALSE EXIT
     THEN
     DUP _EXT4-C.BLOCKS + @ DUP 0< SWAP 0= OR IF DROP FALSE EXIT THEN
-    DUP _EXT4-C.RECOVERY + @ IF
-        DUP _EXT4-C.J.WRITE-ACTIVE + @ 0= IF DROP FALSE EXIT THEN
-    THEN
     DUP _EXT4-C.J.FIRST + @ DUP 0= IF 2DROP FALSE EXIT THEN
     OVER _EXT4-C.J.MAXLEN + @ U< 0= IF DROP FALSE EXIT THEN
     DUP _EXT4-C.J.MAP + @ 0= IF DROP FALSE EXIT THEN
@@ -4960,6 +4957,12 @@ VARIABLE _EXT4-JWM-COMPONENT
     DUP _EXT4-C.J.MAP-HASH-SLOTS + @ 2 /
     OVER _EXT4-C.J.MAP-CAPACITY + @ U< IF DROP FALSE EXIT THEN
     DROP TRUE ;
+
+: _EXT4-JWR-CONTEXT?  ( ctx -- flag )
+    DUP _EXT4-JWR-GEOMETRY? 0= IF DROP FALSE EXIT THEN
+    DUP _EXT4-C.RECOVERY + @ IF
+        _EXT4-C.J.WRITE-ACTIVE + @ 0<> EXIT
+    THEN DROP TRUE ;
 
 VARIABLE _EXT4-JWV-WRITER
 VARIABLE _EXT4-JWV-CTX
@@ -5846,12 +5849,16 @@ VARIABLE _EXT4-JPC-IOR
   ( meta-cap data-cap revoke-cap ctx -- ior )
     _EXT4-JPC-CTX ! _EXT4-JPC-REVOKE !
     _EXT4-JPC-DATA ! _EXT4-JPC-META !
-    _EXT4-JPC-CTX @ _EXT4-JWR-CONTEXT? 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-JPC-CTX @ _EXT4-JWR-GEOMETRY? 0= IF VFS-E-INVALID EXIT THEN
     _EXT4-JPC-CTX @ _EXT4-C.BSIZE + @ _EXT4-JPC-BSIZE !
     _EXT4-JPC-META @ _EXT4-JPC-DATA @ _EXT4-JPC-REVOKE @
     _EXT4-JPC-BSIZE @
     _EXT4-JWR-MEASURE _EXT4-JPC-IOR ! _EXT4-JPC-BYTES !
     _EXT4-JPC-IOR @ ?DUP IF EXIT THEN
+    _EXT4-JPC-CTX @ _EXT4-C.J.WRITER + @ 0= IF
+        _EXT4-JPC-BYTES @ _EXT4-JPC-CTX @ _EXT4-C.ARENA + @ ARENA-FREE
+        U> IF VFS-E-NOMEM EXIT THEN
+    THEN
     _EXT4-JPC-META @ _EXT4-JPC-REVOKE @ _EXT4-JPC-BSIZE @
     _EXT4-JTX-LOG-BLOCKS-FOR _EXT4-JPC-IOR ! _EXT4-JPC-LOG !
     _EXT4-JPC-IOR @ ?DUP IF EXIT THEN
@@ -7220,10 +7227,11 @@ VARIABLE _EXT4-AJS-NEW
 
 VARIABLE _EXT4-JDW-CTX
 
-\ A live checkpoint may retire AKG1 without first clearing ext4 RECOVER.
-\ The reset witness authenticates the clean image derived from this exact,
-\ checksum-valid dirty super; once the standard empty primary is installed,
-\ that dirty endpoint remains independently recoverable on the next mount.
+\ A live checkpoint or mount-time retained-orphan resume may retire AKG1
+\ without first clearing ext4 RECOVER.  The on-media reset predecessor tuple,
+\ not a same-session cleanup enum, proves that the witness came from an active
+\ journal.  This matters after remount, where validation reconstructs the
+\ witness but deliberately does not retain the emitter's in-memory enum.
 : _EXT4-CLEAR-JOURNAL-WITNESS-DIRTY  ( ctx -- ior )
     DUP _EXT4-JDW-CTX ! _EXT4-C.RECOVERY + @ 0= IF
         VFS-E-INVALID EXIT
@@ -7232,9 +7240,6 @@ VARIABLE _EXT4-JDW-CTX
         VFS-E-INVALID EXIT
     THEN
     _EXT4-JDW-CTX @ _EXT4-C.SUPER-TORN + @ IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    _EXT4-JDW-CTX @ _EXT4-C.J.CLEANUP + @ _EXT4-JC-ACTIVE <> IF
         VFS-E-CORRUPT EXIT
     THEN
     _EXT4-JDW-CTX @ _EXT4-C.SB + DUP _EXT4-SUPER-CHECKSUM? 0= IF
@@ -10181,18 +10186,32 @@ VARIABLE _EXT4-JCM-IOR
 VARIABLE _EXT4-RS-CTX
 VARIABLE _EXT4-RS-V
 
-: _EXT4-VALIDATE-REST  ( ctx -- ior )
+: _EXT4-AUTHENTICATE-REST  ( ctx -- ior )
     DUP _EXT4-C.J.STRICT + -1 SWAP !
     DUP _EXT4-VALIDATE-GROUPS ?DUP IF NIP EXIT THEN
     DUP _EXT4-VALIDATE-BACKUPS ?DUP IF NIP EXIT THEN
-    DUP _EXT4-VALIDATE-ORPHAN-FILE ?DUP IF NIP EXIT THEN
+    DUP _EXT4-AUTHENTICATE-ORPHAN-PLAN ?DUP IF NIP EXIT THEN
     _EXT4-VALIDATE-JOURNAL ;
 
-: _EXT4-RELOAD-STRICT  ( ctx vfs -- ior )
+: _EXT4-VALIDATE-REST  ( ctx -- ior )
+    DUP _EXT4-AUTHENTICATE-REST ?DUP IF NIP EXIT THEN
+    _EXT4-C.O.ACTIVE + @ IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    0 ;
+
+: _EXT4-RELOAD-AUTHENTICATED  ( ctx vfs -- ior )
     _EXT4-RS-V ! _EXT4-RS-CTX !
     _EXT4-RS-CTX @ _EXT4-C.SB + 2 2 _EXT4-READ-SECTORS ?DUP IF EXIT THEN
     _EXT4-RS-CTX @ _EXT4-RS-V @ _EXT4-VALIDATE-SUPER ?DUP IF EXIT THEN
-    _EXT4-RS-CTX @ _EXT4-VALIDATE-REST ;
+    _EXT4-RS-CTX @ _EXT4-AUTHENTICATE-REST ;
+
+: _EXT4-RELOAD-STRICT  ( ctx vfs -- ior )
+    _EXT4-RELOAD-AUTHENTICATED ?DUP IF EXIT THEN
+    _EXT4-RS-CTX @ _EXT4-C.O.ACTIVE + @ IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    0 ;
 
 VARIABLE _EXT4-JPF-WRITER
 VARIABLE _EXT4-JPF-CTX
@@ -10813,7 +10832,9 @@ VARIABLE _EXT4-AWR-PHYS
 \ Resolve either side, or an admitted prefix tear, of the clean-to-RECOVER
 \ transition without ever reversing a torn write.  Install tears advance to
 \ the exact AKW1 anchor and ext4 dirty endpoint; clear tears advance to the
-\ ordinary JBD2 primary.  Once AKW1 is gone, AKR1 performs the clean landing.
+\ ordinary JBD2 primary.  Once AKW1 is gone, the caller decides whether an
+\ authenticated empty orphan set may land clean or a retained orphan must keep
+\ RECOVER set and resume through a new transaction.
 : _EXT4-RESOLVE-ACTIVATION-WITNESS  ( ctx vfs -- ior )
     _EXT4-AWR-V ! _EXT4-AWR-CTX !
     _EXT4-AWR-CTX @ _EXT4-C.J.WITNESS + @
@@ -10871,7 +10892,7 @@ VARIABLE _EXT4-AWR-PHYS
     _EXT4-JC-NONE _EXT4-AWR-CTX @ _EXT4-C.J.CLEANUP + !
     0 _EXT4-AWR-CTX @ _EXT4-C.J.PRIMARY-TORN + !
     0 _EXT4-AWR-CTX @ _EXT4-C.J.WRITE-ACTIVE + !
-    _EXT4-AWR-CTX @ _EXT4-AWR-V @ 0 _EXT4-LAND-EMPTY-JOURNAL ;
+    0 ;
 
 VARIABLE _EXT4-RT-CTX
 VARIABLE _EXT4-RT-V
@@ -10882,7 +10903,8 @@ VARIABLE _EXT4-RT-V
     _EXT4-RT-CTX @ _EXT4-C.J.WITNESS + @
     _EXT4-JW-ACTIVATION = IF
         _EXT4-RT-CTX @ _EXT4-RT-V @
-        _EXT4-RESOLVE-ACTIVATION-WITNESS EXIT
+        _EXT4-RESOLVE-ACTIVATION-WITNESS ?DUP IF EXIT THEN
+        _EXT4-RT-CTX @ _EXT4-RT-V @ 0 _EXT4-LAND-EMPTY-JOURNAL EXIT
     THEN
     _EXT4-RT-CTX @ _EXT4-C.J.CLEANUP + @ DUP 0<> IF
         DUP _EXT4-JC-STANDARD = SWAP _EXT4-JC-ANCHOR = OR 0= IF
@@ -10940,7 +10962,7 @@ VARIABLE _EXT4-RT-V
     _EXT4-RJ-CTX @ _EXT4-C.J.WITNESS + @
     _EXT4-JW-ACTIVATION = IF
         _EXT4-RJ-CTX @ _EXT4-RJ-V @
-        _EXT4-RESOLVE-ACTIVATION-WITNESS EXIT
+        _EXT4-RESOLVE-ACTIVATION-WITNESS ?DUP IF EXIT THEN
     THEN
     0 _EXT4-RJ-CTX @ _EXT4-C.J.REPLAYED + !
     0 _EXT4-RJ-CTX @ _EXT4-C.J.HOME-WRITES + !
@@ -10995,8 +11017,16 @@ VARIABLE _EXT4-RT-V
         _EXT4-RJ-CTX @ _EXT4-C.J.CURSOR + !
     THEN
     _EXT4-FLUSH ?DUP IF EXIT THEN
-    _EXT4-RJ-CTX @ _EXT4-RJ-V @ _EXT4-RELOAD-STRICT ?DUP IF EXIT THEN
+    \ Replay may intentionally leave a durable orphan record when no cleanup
+    \ commit existed.  Authenticate that plan before deciding whether the
+    \ ordinary clear is authorized; policy refusal belongs after this branch.
+    _EXT4-RJ-CTX @ _EXT4-RJ-V @
+    _EXT4-RELOAD-AUTHENTICATED ?DUP IF EXIT THEN
     _EXT4-RJ-CTX @ _EXT4-VALIDATE-ROOT ?DUP IF EXIT THEN
+    _EXT4-RJ-CTX @ _EXT4-C.O.ACTIVE + @ IF
+        -1 _EXT4-RJ-CTX @ _EXT4-C.J.REPLAYED + !
+        0 EXIT
+    THEN
     _EXT4-RJ-CTX @ _EXT4-PREPARE-CLEAR
     _EXT4-RJ-CTX @ _EXT4-C.J.START + @ 0=
     _EXT4-RJ-CTX @ _EXT4-C.J.WITNESS + @ 0<> AND
@@ -11014,6 +11044,246 @@ VARIABLE _EXT4-RT-V
     -1 _EXT4-RJ-CTX @ _EXT4-C.J.REPLAYED + !
     0 ;
 
+VARIABLE _EXT4-MSF-CTX VARIABLE _EXT4-MSF-INDEX
+VARIABLE _EXT4-MSF-COUNT VARIABLE _EXT4-MSF-RECORD
+
+: _EXT4-FIND-SINGLETON-MODERN-ORPHAN
+  ( ctx -- plan-record ior )
+    DUP _EXT4-MSF-CTX ! 0= IF 0 VFS-E-INVALID EXIT THEN
+    _EXT4-MSF-CTX @ _EXT4-ORPHAN-WORKSPACE? 0= IF
+        0 EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT THEN
+    0 _EXT4-MSF-INDEX ! 0 _EXT4-MSF-COUNT ! 0 _EXT4-MSF-RECORD !
+    BEGIN
+        _EXT4-MSF-INDEX @ _EXT4-MSF-CTX @ _EXT4-C.O.SLOTS + @ U<
+    WHILE
+        _EXT4-MSF-INDEX @ _EXT4-MSF-CTX @ _EXT4-ORPHAN-TABLE-ENTRY DUP @ IF
+            DUP _EXT4-MSF-RECORD ! 1 _EXT4-MSF-COUNT +! THEN
+        DROP 1 _EXT4-MSF-INDEX +!
+    REPEAT
+    _EXT4-MSF-COUNT @ 1 <> IF 0 EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT THEN
+    _EXT4-MSF-RECORD @ _EXT4-MSF-CTX @
+    _EXT4-REQUIRE-SINGLETON-MODERN-ORPHAN
+    ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-MSF-RECORD @ 0 ;
+
+VARIABLE _EXT4-MOC-CTX VARIABLE _EXT4-MOC-V
+VARIABLE _EXT4-MOC-RECORD VARIABLE _EXT4-MOC-CREDIT
+VARIABLE _EXT4-MOC-WRITER VARIABLE _EXT4-MOC-TX VARIABLE _EXT4-MOC-IOR
+VARIABLE _EXT4-MOC-ARENA VARIABLE _EXT4-MOC-MARK VARIABLE _EXT4-MOC-END
+VARIABLE _EXT4-MOC-SPAN VARIABLE _EXT4-MOC-MARK-VALID
+VARIABLE _EXT4-MOC-TRANSIENT
+
+: _EXT4-MOC@  ( -- ctx )  _EXT4-MOC-CTX @ ;
+: _EXT4-MOC-V@  ( -- vfs )  _EXT4-MOC-V @ ;
+
+\ Prove that a remounted reset prefix was derived from an active journal, not
+\ from an empty-journal landing whose intended endpoint would clear the orphan
+\ protocol bit.  The exact AKG1 anchor is the durable authority in either an
+\ intact-witness or sequential-prefix-torn primary state.
+: _EXT4-MOC-REQUIRE-ACTIVE-RESET  ( -- ior )
+    _EXT4-MOC@ _EXT4-C.J.ANCHOR + @ DUP 0= IF
+        DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN
+    DUP _EXT4-MOC@ _EXT4-READ-JBLOCK ?DUP IF NIP EXIT THEN
+    DUP _EXT4-MOC@ _EXT4-JBD2-ANCHOR-BLOCK? 0= IF
+        DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN DROP
+    _EXT4-MOC@ _EXT4-C.BLOCK + _EXT4-JS.ACTIVATION-CHECKSUM + _EXT4-BE32@
+    _EXT4-JBD2-ACTIVE-RESET-MAGIC <> IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN 0 ;
+
+\ Convert only an authenticated, retained singleton-orphan recovery prefix to
+\ the standard empty RECOVER-set journal.  AKG1 is retired with the dirty
+\ superblock still authoritative; ORPHAN_PRESENT is never prepared or cleared.
+\ The caller may then emit a fresh cleanup transaction without repeating AKW1.
+: _EXT4-MOC-CONVERGE-RETAINED-JOURNAL  ( -- ior )
+    _EXT4-MOC@ _EXT4-C.RECOVERY + @ 0=
+    _EXT4-MOC@ _EXT4-C.J.REPLAYED + @ -1 <> OR IF VFS-E-INVALID EXIT THEN
+    _EXT4-MOC@ _EXT4-C.SUPER-TORN + @ IF
+        EXT4-D-SUPER-CHECKSUM _EXT4-CORRUPT EXIT THEN
+    0 _EXT4-MOC-TRANSIENT !
+    _EXT4-MOC@ _EXT4-C.J.START + @ IF
+        _EXT4-MOC@ _EXT4-C.J.CLEANUP + @
+        _EXT4-JC-ACTIVE <> IF EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT THEN
+        _EXT4-MOC@ _EXT4-C.J.WITNESS + @ IF
+            EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN -1 _EXT4-MOC-TRANSIENT !
+    ELSE
+        _EXT4-MOC@ _EXT4-C.J.WITNESS + @
+        _EXT4-MOC@ _EXT4-C.J.PRIMARY-TORN + @ OR
+        _EXT4-MOC@ _EXT4-C.J.CLEANUP + @ OR IF
+            _EXT4-MOC@ _EXT4-C.J.WITNESS + @ DUP IF
+                _EXT4-JW-RECOVERY <> IF
+                    EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN
+            ELSE
+                DROP
+                _EXT4-MOC@ _EXT4-C.J.PRIMARY-TORN + @ 0= IF
+                    EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN
+            THEN
+            _EXT4-MOC-REQUIRE-ACTIVE-RESET ?DUP IF EXIT THEN
+            -1 _EXT4-MOC-TRANSIENT ! THEN
+    THEN
+    -1 _EXT4-MOC@ _EXT4-C.J.WRITE-ACTIVE + !
+    _EXT4-MOC@ _EXT4-C.J.START + @
+    _EXT4-MOC@ _EXT4-C.J.PRIMARY-TORN + @ OR IF
+        _EXT4-MOC@ _EXT4-RESET-JOURNAL ?DUP IF EXIT THEN
+        _EXT4-FLUSH ?DUP IF EXIT THEN THEN
+    _EXT4-MOC-TRANSIENT @ IF
+        _EXT4-MOC@ _EXT4-CLEAR-JOURNAL-WITNESS-DIRTY
+        ?DUP IF EXIT THEN _EXT4-FLUSH ?DUP IF EXIT THEN
+        _EXT4-MOC@ _EXT4-RETIRE-JOURNAL-ANCHOR ?DUP IF EXIT THEN
+        _EXT4-FLUSH ?DUP IF EXIT THEN THEN
+    _EXT4-MOC@ _EXT4-MOC-V@ _EXT4-RELOAD-AUTHENTICATED ?DUP IF EXIT THEN
+    _EXT4-MOC@ _EXT4-VALIDATE-ROOT ?DUP IF EXIT THEN
+    -1 _EXT4-MOC@ _EXT4-C.J.WRITE-ACTIVE + !
+    _EXT4-MOC@ _EXT4-JWR-REBASE-WRITE-ACTIVE ?DUP IF EXIT THEN
+    -1 _EXT4-MOC@ _EXT4-C.J.REPLAYED + ! 0 ;
+
+: _EXT4-MOC-WITHDRAW  ( -- )
+    0 _EXT4-MOC@ _EXT4-C.J.WRITER-CURRENT + !
+    0 _EXT4-MOC@ _EXT4-C.J.WRITE-ACTIVE + ! ;
+
+\ Mount cleanup owns every allocation after this arena mark.  All exits scrub
+\ and roll back that tail, so its narrow writer geometry cannot pin the
+\ capacity needed by a later public writer.
+: _EXT4-MOC-MARK-ARENA  ( -- )
+    _EXT4-MOC@ _EXT4-C.ARENA + @ DUP _EXT4-MOC-ARENA !
+    ARENA-SNAP _EXT4-MOC-MARK !
+    -1 _EXT4-MOC-MARK-VALID ! ;
+
+: _EXT4-MOC-WRITER-ALLOCATION?  ( writer -- flag )
+    DUP _EXT4-MOC-MARK @ <> IF DROP FALSE EXIT THEN
+    DUP _EXT4-JWR.MAGIC + @ _EXT4-JWR-MAGIC <> IF DROP FALSE EXIT THEN
+    DUP _EXT4-JWR.SELF + @ OVER <> IF DROP FALSE EXIT THEN
+    DUP _EXT4-JWR.CTX + @ _EXT4-MOC@ <> IF DROP FALSE EXIT THEN
+    _EXT4-JWR.TOTAL + @ _EXT4-MOC-SPAN @ = ;
+
+: _EXT4-MOC-RELEASE  ( -- ior )
+    _EXT4-MOC-MARK-VALID @ 0= IF 0 EXIT THEN
+    _EXT4-MOC@ _EXT4-C.ARENA + @ _EXT4-MOC-ARENA @ <> IF
+        VFS-E-CORRUPT EXIT THEN
+    _EXT4-MOC-ARENA @ A.PTR @ _EXT4-MOC-END !
+    _EXT4-MOC-MARK @ _EXT4-MOC-ARENA @ A.BASE @ U<
+    _EXT4-MOC-END @ _EXT4-MOC-MARK @ U< OR
+    _EXT4-MOC-END @ _EXT4-MOC-ARENA @ A.BASE @
+    _EXT4-MOC-ARENA @ A.SIZE @ + U> OR IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-MOC-END @ _EXT4-MOC-MARK @ - _EXT4-MOC-SPAN !
+    _EXT4-MOC-WRITER @ ?DUP IF
+        DUP _EXT4-MOC@ _EXT4-C.J.WRITER + @ <> IF
+            DROP VFS-E-CORRUPT EXIT THEN
+        _EXT4-MOC-SPAN @ _EXT4-JWR-SIZE U< IF
+            DROP VFS-E-CORRUPT EXIT THEN
+        _EXT4-MOC-WRITER-ALLOCATION? 0= IF VFS-E-CORRUPT EXIT THEN
+    ELSE
+        _EXT4-MOC@ _EXT4-C.J.WRITER + @ IF VFS-E-CORRUPT EXIT THEN
+    THEN
+    0 _EXT4-MOC@ _EXT4-C.J.WRITER + !
+    _EXT4-MOC-MARK @ _EXT4-MOC-SPAN @ 0 FILL
+    _EXT4-MOC-ARENA @ _EXT4-MOC-MARK @ ARENA-ROLLBACK
+    0 _EXT4-MOC-WRITER ! 0 _EXT4-MOC-TX !
+    0 _EXT4-MOC-MARK-VALID ! 0 ;
+
+: _EXT4-MOC-RELEASE-RESULT  ( -- )
+    _EXT4-MOC-RELEASE ?DUP IF _EXT4-MOC-IOR ! THEN ;
+
+: _EXT4-MOC-FAIL-CLEAN  ( ior -- ior )
+    _EXT4-MOC-IOR !
+    _EXT4-MOC-WRITER @ ?DUP IF
+        DUP _EXT4-JWR.STATE + @ _EXT4-JWR-STAGING = IF
+            _EXT4-JTX-ABORT ?DUP IF _EXT4-MOC-IOR ! THEN
+        ELSE
+            DROP
+        THEN
+    THEN
+    _EXT4-MOC-WITHDRAW _EXT4-MOC-RELEASE-RESULT _EXT4-MOC-IOR @ ;
+
+: _EXT4-MOC-FAIL-DIRTY  ( ior -- ior )
+    _EXT4-MOC-IOR ! _EXT4-MOC-WITHDRAW
+    _EXT4-MOC-RELEASE-RESULT _EXT4-MOC-IOR @ ;
+
+\ Complete the first production-selected nonempty recovery case from either an
+\ exact clean journal or a crash-converged empty RECOVER-set endpoint.  Dry
+\ staging proves semantics and measured credit before the first transaction
+\ mutation.  The second identical staging is emitted durably, then fed through
+\ ordinary replay/landing so the orphan protocol bit is cleared only after
+\ committed afterimages have reached home.
+: _EXT4-COMPLETE-SINGLETON-MODERN-ORPHAN  ( ctx vfs -- ior )
+    _EXT4-MOC-V ! _EXT4-MOC-CTX !
+    0 _EXT4-MOC-WRITER ! 0 _EXT4-MOC-TX !
+    0 _EXT4-MOC-MARK-VALID !
+    _EXT4-MOC@ _EXT4-C.READY + @ _EXT4-MOC@ _EXT4-C.J.WRITER-CURRENT + @ OR
+    _EXT4-MOC@ _EXT4-C.J.WRITE-ACTIVE + @ OR
+    _EXT4-MOC@ _EXT4-C.J.WRITER + @ OR IF VFS-E-INVALID EXIT THEN
+    _EXT4-MOC-V@ _EXT4-CTX _EXT4-MOC@ <> IF
+        VFS-E-INVALID EXIT THEN
+    _EXT4-MOC-V@ _EXT4-ATTACHED? 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-MOC-V@ V.VOLUME @ _EXT4-IO-VOL @ <> IF
+        VFS-E-INVALID EXIT THEN
+    _EXT4-MOC@ _EXT4-RECOVERY-MEDIA ?DUP IF EXIT THEN
+    _EXT4-MOC@ _EXT4-FIND-SINGLETON-MODERN-ORPHAN
+    _EXT4-MOC-IOR ! _EXT4-MOC-RECORD !
+    _EXT4-MOC-IOR @ ?DUP IF EXIT THEN
+    _EXT4-MOC-RECORD @ _EXT4-MOC@
+    _EXT4-MEASURE-MODERN-ORPHAN-DEPTH0
+    _EXT4-MOC-IOR ! _EXT4-MOC-CREDIT !
+    _EXT4-MOC-IOR @ ?DUP IF EXIT THEN
+    _EXT4-MOC-CREDIT @ 0 0 _EXT4-MOC@
+    _EXT4-JTX-PREFLIGHT-CAPACITY ?DUP IF EXIT THEN
+    _EXT4-MOC@ _EXT4-C.RECOVERY + @ IF
+        _EXT4-MOC-CONVERGE-RETAINED-JOURNAL DUP IF
+            0 _EXT4-MOC@ _EXT4-C.J.WRITE-ACTIVE + ! EXIT
+        THEN DROP
+        \ Convergence performs a strict media reload and rebuilds the plan.
+        \ Reacquire its arena record and require the exact credit again.
+        _EXT4-MOC@ _EXT4-FIND-SINGLETON-MODERN-ORPHAN
+        _EXT4-MOC-IOR ! _EXT4-MOC-RECORD !
+        _EXT4-MOC-IOR @ ?DUP IF _EXT4-MOC-FAIL-DIRTY EXIT THEN
+        _EXT4-MOC-RECORD @ _EXT4-MOC@ _EXT4-MEASURE-MODERN-ORPHAN-DEPTH0
+        _EXT4-MOC-IOR ! _EXT4-MOC-CREDIT !
+        _EXT4-MOC-IOR @ ?DUP IF _EXT4-MOC-FAIL-DIRTY EXIT THEN
+        _EXT4-MOC-CREDIT @ 0 0 _EXT4-MOC@
+        _EXT4-JTX-PREFLIGHT-CAPACITY
+        ?DUP IF _EXT4-MOC-FAIL-DIRTY EXIT THEN
+    ELSE
+        _EXT4-MOC@ _EXT4-C.J.START + @ _EXT4-MOC@ _EXT4-C.J.WITNESS + @ OR
+        _EXT4-MOC@ _EXT4-C.J.PRIMARY-TORN + @ OR
+        _EXT4-MOC@ _EXT4-C.J.CLEANUP + @ OR
+        _EXT4-MOC@ _EXT4-C.SUPER-TORN + @ OR IF VFS-E-INVALID EXIT THEN
+        _EXT4-MOC@ _EXT4-JWR-REBASE-MOUNTED ?DUP IF EXIT THEN
+    THEN
+    _EXT4-MOC-MARK-ARENA
+    -1 _EXT4-MOC@ _EXT4-C.J.WRITER-CURRENT + !
+    _EXT4-MOC-CREDIT @ 0 0 _EXT4-MOC@ _EXT4-JWR-ENSURE
+    _EXT4-MOC-IOR ! _EXT4-MOC-WRITER !
+    _EXT4-MOC-IOR @ ?DUP IF _EXT4-MOC-FAIL-CLEAN EXIT THEN
+    _EXT4-MOC-CREDIT @ 0 0 _EXT4-MOC-WRITER @ _EXT4-JTX-BEGIN
+    _EXT4-MOC-IOR ! _EXT4-MOC-TX !
+    _EXT4-MOC-IOR @ ?DUP IF _EXT4-MOC-FAIL-CLEAN EXIT THEN
+    _EXT4-MOC-RECORD @ _EXT4-MOC-TX @
+    _EXT4-JTX-STAGE-MODERN-ORPHAN-DEPTH0-FINAL
+    ?DUP IF _EXT4-MOC-FAIL-CLEAN EXIT THEN
+    _EXT4-MOC-TX @ _EXT4-JTX-ABORT
+    ?DUP IF _EXT4-MOC-FAIL-CLEAN EXIT THEN
+    _EXT4-MOC@ _EXT4-C.J.WRITE-ACTIVE + @ 0= IF
+        _EXT4-MOC-WRITER @ _EXT4-JWR-ACTIVATE
+        ?DUP IF _EXT4-MOC-FAIL-DIRTY EXIT THEN
+    THEN
+    _EXT4-MOC-CREDIT @ 0 0 _EXT4-MOC-WRITER @ _EXT4-JTX-BEGIN
+    _EXT4-MOC-IOR ! _EXT4-MOC-TX !
+    _EXT4-MOC-IOR @ ?DUP IF _EXT4-MOC-FAIL-DIRTY EXIT THEN
+    _EXT4-MOC-RECORD @ _EXT4-MOC-TX @
+    _EXT4-JTX-STAGE-MODERN-ORPHAN-DEPTH0-FINAL
+    ?DUP IF _EXT4-MOC-FAIL-DIRTY EXIT THEN
+    _EXT4-MOC-TX @ _EXT4-JTX-EMIT
+    ?DUP IF _EXT4-MOC-FAIL-DIRTY EXIT THEN
+    _EXT4-MOC-WITHDRAW
+    _EXT4-MOC@ _EXT4-MOC-V@ _EXT4-RECOVER-JOURNAL
+    ?DUP IF _EXT4-MOC-FAIL-DIRTY EXIT THEN
+    _EXT4-MOC@ _EXT4-MOC-V@ _EXT4-RELOAD-STRICT
+    ?DUP IF _EXT4-MOC-FAIL-DIRTY EXIT THEN
+    _EXT4-MOC@ _EXT4-VALIDATE-ROOT
+    ?DUP IF _EXT4-MOC-FAIL-DIRTY EXIT THEN
+    _EXT4-MOC-V@ _EXT4-ATTACHED? 0= IF
+        VFS-E-STALE _EXT4-MOC-FAIL-DIRTY EXIT THEN
+    _EXT4-MOC-RELEASE ?DUP IF EXIT THEN 0 ;
+
 \ =====================================================================
 \  Mount, metadata callbacks, and read-only binding descriptor
 \ =====================================================================
@@ -11023,7 +11293,7 @@ VARIABLE _EXT4-M-CTX
 VARIABLE _EXT4-M-IOR
 VARIABLE _EXT4-M-FRESH
 
-: _EXT4-MOUNT  ( vfs -- ior )
+: _EXT4-MOUNT-AUTHENTICATE  ( vfs -- ior )
     DUP _EXT4-M-V !
     \ Invalidate every retained transaction pointer before any remount check
     \ or media-derived context reset can fail.
@@ -11076,19 +11346,47 @@ VARIABLE _EXT4-M-FRESH
         \ is still intact and replayable.
         _EXT4-M-CTX @ _EXT4-VALIDATE-JOURNAL ?DUP IF EXIT THEN
         _EXT4-M-CTX @ _EXT4-M-V @ _EXT4-RECOVER-JOURNAL ?DUP IF EXIT THEN
-        _EXT4-M-CTX @ _EXT4-M-V @ _EXT4-RELOAD-STRICT ?DUP IF EXIT THEN
+        _EXT4-M-CTX @ _EXT4-M-V @
+        _EXT4-RELOAD-AUTHENTICATED ?DUP IF EXIT THEN
     ELSE
-        _EXT4-M-CTX @ _EXT4-VALIDATE-REST ?DUP IF EXIT THEN
-        _EXT4-M-CTX @ _EXT4-C.SUPER-TORN + @
-        _EXT4-M-CTX @ _EXT4-C.J.PRIMARY-TORN + @ OR
-        _EXT4-M-CTX @ _EXT4-C.J.WITNESS + @ OR IF
-            _EXT4-M-CTX @ _EXT4-M-V @
-            _EXT4-FINISH-RECOVERY-LANDING ?DUP IF EXIT THEN
+        _EXT4-M-CTX @ _EXT4-AUTHENTICATE-REST ?DUP IF EXIT THEN
+        _EXT4-M-CTX @ _EXT4-C.O.ACTIVE + @ IF
+            _EXT4-M-CTX @ _EXT4-C.SUPER-TORN + @
+            _EXT4-M-CTX @ _EXT4-C.J.PRIMARY-TORN + @ OR
+            _EXT4-M-CTX @ _EXT4-C.J.WITNESS + @ OR
+            _EXT4-M-CTX @ _EXT4-C.J.CLEANUP + @ OR IF
+                _EXT4-M-CTX @ _EXT4-C.J.WITNESS + @
+                _EXT4-JW-ACTIVATION <> IF
+                    EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+                THEN
+                _EXT4-M-CTX @ _EXT4-M-V @
+                _EXT4-RECOVER-JOURNAL ?DUP IF EXIT THEN
+                _EXT4-M-CTX @ _EXT4-M-V @
+                _EXT4-RELOAD-AUTHENTICATED ?DUP IF EXIT THEN
+            THEN
+        ELSE
+            _EXT4-M-CTX @ _EXT4-C.SUPER-TORN + @
+            _EXT4-M-CTX @ _EXT4-C.J.PRIMARY-TORN + @ OR
+            _EXT4-M-CTX @ _EXT4-C.J.WITNESS + @ OR IF
+                _EXT4-M-CTX @ _EXT4-M-V @
+                _EXT4-FINISH-RECOVERY-LANDING ?DUP IF EXIT THEN
+            THEN
         THEN
     THEN
     _EXT4-M-CTX @ _EXT4-VALIDATE-ROOT ?DUP IF EXIT THEN
     _EXT4-M-V @ _EXT4-ATTACHED? 0= IF
         EXT4-D-ATTACHMENT _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
+: _EXT4-MOUNT  ( vfs -- ior )
+    _EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN
+    _EXT4-M-CTX @ _EXT4-C.O.ACTIVE + @ IF
+        _EXT4-M-CTX @ _EXT4-M-V @
+        _EXT4-COMPLETE-SINGLETON-MODERN-ORPHAN ?DUP IF EXIT THEN
+        _EXT4-M-V @ _EXT4-ATTACHED? 0= IF
+            EXT4-D-ATTACHMENT _EXT4-CORRUPT EXIT
+        THEN
     THEN
     _EXT4-M-CTX @ _EXT4-EMPTY-ORPHAN-RECOVERY? IF
         _EXT4-M-CTX @ _EXT4-M-V @

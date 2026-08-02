@@ -1276,7 +1276,48 @@ def _feed_until_idle(system, payload: bytes, max_steps: int) -> int:
 
 def _assert_no_forth_diagnostics(output: str) -> None:
     found = [marker for marker in FORTH_DIAGNOSTICS if marker.lower() in output.lower()]
-    assert not found, f"Forth diagnostics {found}:\n{output[-4000:]}"
+    snippets: list[str] = []
+    lowered = output.lower()
+    for marker in found:
+        offset = lowered.find(marker.lower())
+        snippets.append(output[max(0, offset - 1000):offset + 1000])
+    assert not found, (
+        f"Forth diagnostics {found}:\n"
+        + "\n--- diagnostic context ---\n".join(snippets)
+        + f"\n--- transcript tail ---\n{output[-4000:]}"
+    )
+
+
+def _compact_source_load_lines(lines: list[str]) -> list[str]:
+    """Preserve Forth tokens while amortizing per-line UART prompt work."""
+    result: list[str] = []
+    pending = ""
+    for raw_line in lines:
+        # vfs-ext4.f uses backslash only for Forth line comments.  Remove the
+        # comment before packing so its prose is not echoed through the UART.
+        # Its balanced parenthesized forms are likewise stack-effect comments,
+        # never executable strings, and need not consume source-loader steps.
+        source = raw_line.split("\\", 1)[0]
+        source = re.sub(r"\([^)]*\)", " ", source)
+        line = source.strip() if '"' in source else " ".join(source.split())
+        if not line:
+            continue
+        line_size = len(line.encode("utf-8"))
+        assert line_size <= 255, (
+            "one ext4 Forth source unit exceeds the MegaPad BIOS TIB: "
+            f"{line_size} bytes"
+        )
+        joined = f"{pending} {line}" if pending else line
+        # MegaPad's BIOS TIB holds at most 255 source bytes; never rely on its
+        # silent overflow behavior.
+        if pending and len(joined.encode("utf-8")) > 255:
+            result.append(pending)
+            pending = line
+        else:
+            pending = joined
+    if pending:
+        result.append(pending)
+    return result
 
 
 def build_snapshot():
@@ -1304,10 +1345,21 @@ def build_snapshot():
     fat_harness.restore_cpu_state(system.cpu, cpu_state)
     uart.clear()
 
-    lines = fat_harness._load_forth_lines(str(EXT4_F))
-    _feed_until_idle(system, ("\n".join(lines) + "\n").encode(), 800_000_000)
+    # Whitespace, comments, and per-line prompts have no executable Forth
+    # semantics but every echoed UART byte consumes emulator steps.  The
+    # packed input remains a real cold source-mode compilation.
+    lines = _compact_source_load_lines(
+        fat_harness._load_forth_lines(str(EXT4_F))
+    )
+    source_ready = "EXT4-SOURCE-READY"
+    payload = "\n".join([*lines, f'." {source_ready}"']) + "\n"
+    _feed_until_idle(system, payload.encode(), 800_000_000)
     transcript = fat_harness.uart_text(uart)
     _assert_no_forth_diagnostics(transcript)
+    assert f"\r\n{source_ready} ok\r\n" in transcript, (
+        "ext4 source load exceeded its checked-in step budget:\n"
+        + transcript[-4000:]
+    )
 
     _snapshot = (
         bios,
@@ -1505,6 +1557,31 @@ def _forth_conjunction(checks: list[str]) -> str:
     """Join nonempty Forth predicates with postfix AND operations."""
     assert checks
     return " ".join((checks[0], *(f"{check} AND" for check in checks[1:])))
+
+
+_EXT4_AUTH_ONLY_BINDING_FORTH = (
+    (
+        ": _EXT4-TEST-AUTH-MOUNT "
+        "_EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN "
+        "EXT4-D-RECOVERY _EXT4-UNSUPPORTED ;"
+    ),
+    "CREATE _EXT4-TEST-AUTH-OPS VFS-OPS-SIZE ALLOT",
+    "EXT4-OPS _EXT4-TEST-AUTH-OPS VFS-OPS-SIZE CMOVE",
+    (
+        "' _EXT4-TEST-AUTH-MOUNT _EXT4-TEST-AUTH-OPS "
+        "VFS-OP-MOUNT CELLS + !"
+    ),
+    "CREATE _EXT4-TEST-AUTH-BINDING VFS-BINDING-DESC-SIZE ALLOT",
+    (
+        "EXT4-BINDING _EXT4-TEST-AUTH-BINDING "
+        "VFS-BINDING-DESC-SIZE CMOVE"
+    ),
+    "_EXT4-TEST-AUTH-OPS _EXT4-TEST-AUTH-BINDING VB.OPS !",
+    (
+        ": EXT4-TEST-AUTH-NEW "
+        "_EXT4-TEST-AUTH-BINDING SWAP VFS-NEW ;"
+    ),
+)
 
 
 @pytest.fixture(scope="session")
@@ -11466,6 +11543,68 @@ def test_typed_modern_orphan_slot_clear_rejects_target_xattr_alias(
     _assert_emitted(output, "EXT4-TYPED-ORPHAN-XATTR-ALIAS-ABORTED")
 
 
+def test_mount_completes_singleton_modern_depth0_orphan_transaction(
+    canonical_images: dict[str, Path], tmp_path: Path
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    media_path = tmp_path / "modern-orphan-auto-cleanup.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            media_path,
+            [
+                "T-ARENA CONSTANT _MA-ARENA",
+                (
+                    "_MA-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _MA-IOR CONSTANT _MA-V"
+                ),
+                "_MA-V _EXT4-CTX CONSTANT _MA-CTX",
+                (
+                    _forth_conjunction(
+                        [
+                            "_MA-IOR 0=",
+                            "_MA-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                            "_MA-V _EXT4-READY?",
+                            "_MA-V _EXT4-ATTACHED?",
+                            "_MA-CTX _EXT4-C.RECOVERY + @ 0=",
+                            "_MA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                            "_MA-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
+                            "_MA-CTX _EXT4-C.J.WRITER + @ 0=",
+                            "_MA-CTX _EXT4-C.ARENA + @ _MA-ARENA =",
+                            "_EXT4-MOC-MARK-VALID @ 0=",
+                            "_EXT4-MOC-MARK @ _MA-ARENA A.PTR @ =",
+                            "_MA-CTX _EXT4-C.J.START + @ 0=",
+                            "_MA-CTX _EXT4-C.J.WITNESS + @ 0=",
+                            "_MA-CTX _EXT4-C.J.CLEANUP + @ 0=",
+                            "_MA-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                            "_MA-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                            "_MA-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                            "_MA-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                            (
+                                "_MA-CTX _EXT4-C.SB + "
+                                "_EXT4-SB.INCOMPAT + L@ "
+                                "_EXT4-INCOMPAT-RECOVER AND 0="
+                            ),
+                            (
+                                "_MA-CTX _EXT4-C.SB + "
+                                "_EXT4-SB.RO-COMPAT + L@ "
+                                "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-MODERN-ORPHAN-AUTO-CLEANED" THEN'
+                ),
+            ],
+            patches=_zero_size_depth0_orphan_patches(path),
+        )
+    finally:
+        media_path.unlink(missing_ok=True)
+
+    _assert_emitted(output, "EXT4-MODERN-ORPHAN-AUTO-CLEANED")
+    assert any(kind == "write" for kind, _, _ in trace)
+    assert any(kind == "flush" for kind, _, _ in trace)
+
+
 def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
     canonical_images: dict[str, Path],
 ) -> None:
@@ -11473,11 +11612,62 @@ def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
     output = run_forth(
         path,
         [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            "T-ARENA CONSTANT _OF-ARENA",
             (
-                "T-ARENA T-VOLUME EXT4-NEW "
+                "_OF-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
                 "CONSTANT _OF-MOUNT-IOR CONSTANT _OF-V"
             ),
             "_OF-V _EXT4-CTX CONSTANT _OF-CTX",
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_OF-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_OF-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_OF-V V.LIFECYCLE @ VFS-L-NEW =",
+                    ]
+                )
+                + ' IF ." EXT4-AUTH-ONLY-STOPPED" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_OF-CTX _EXT4-C.READY + @ 0=",
+                        "_OF-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_OF-CTX _EXT4-C.J.WRITER-CURRENT + @ 0=",
+                        "_OF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_OF-CTX _EXT4-C.ARENA + @ _OF-ARENA =",
+                    ]
+                )
+                + ' IF ." EXT4-AUTH-ONLY-WRITER-CLEAN" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_OF-CTX _EXT4-C.O.ACTIVE + @ 1 =",
+                        "_OF-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
+                        "_OF-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-AUTH-ONLY-ORPHAN" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_OF-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_OF-CTX _EXT4-C.J.START + @ 0=",
+                        "_OF-CTX _EXT4-C.J.WITNESS + @ 0=",
+                        "_OF-CTX _EXT4-C.J.CLEANUP + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-AUTH-ONLY-RECOVERY-CLEAN" THEN'
+            ),
             "0 _OF-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _OF-RECORD",
             "CREATE _OF-COPY _EXT4-ORPHAN-RECORD-SIZE ALLOT",
             (
@@ -11588,6 +11778,10 @@ def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
         ],
         patches=_zero_size_depth0_orphan_patches(path),
     )
+    _assert_emitted(output, "EXT4-AUTH-ONLY-STOPPED")
+    _assert_emitted(output, "EXT4-AUTH-ONLY-WRITER-CLEAN")
+    _assert_emitted(output, "EXT4-AUTH-ONLY-ORPHAN")
+    _assert_emitted(output, "EXT4-AUTH-ONLY-RECOVERY-CLEAN")
     _assert_emitted(output, "EXT4-MODERN-FINAL-SEALED")
     _assert_emitted(output, "EXT4-MODERN-FINAL-ABORT-SCRUBBED")
 
@@ -11599,8 +11793,9 @@ def test_singleton_modern_depth0_credit_counts_cross_group_homes_exactly(
     output = run_forth(
         path,
         [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
             (
-                "T-ARENA T-VOLUME EXT4-NEW "
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
                 "CONSTANT _OM-MOUNT-IOR CONSTANT _OM-V"
             ),
             "_OM-V _EXT4-CTX CONSTANT _OM-CTX",
@@ -11696,8 +11891,9 @@ def test_singleton_modern_depth0_cleanup_checkpoints_and_deactivates(
             path,
             media_path,
             [
+                *_EXT4_AUTH_ONLY_BINDING_FORTH,
                 (
-                    "T-ARENA T-VOLUME EXT4-NEW "
+                    "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
                     "CONSTANT _OC-MOUNT-IOR CONSTANT _OC-V"
                 ),
                 "_OC-V _EXT4-CTX CONSTANT _OC-CTX",
@@ -11808,8 +12004,9 @@ def test_already_truncated_modern_orphan_uses_slot_only_final_transaction(
             path,
             media_path,
             [
+                *_EXT4_AUTH_ONLY_BINDING_FORTH,
                 (
-                    "T-ARENA T-VOLUME EXT4-NEW "
+                    "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
                     "CONSTANT _OE-MOUNT-IOR CONSTANT _OE-V"
                 ),
                 "_OE-V _EXT4-CTX CONSTANT _OE-CTX",
@@ -11932,8 +12129,9 @@ def test_singleton_modern_cleanup_rejects_certificate_substitution_prehome(
             path,
             media_path,
             [
+                *_EXT4_AUTH_ONLY_BINDING_FORTH,
                 (
-                    "T-ARENA T-VOLUME EXT4-NEW "
+                    "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
                     "CONSTANT _OS-MOUNT-IOR CONSTANT _OS-V"
                 ),
                 "_OS-V _EXT4-CTX CONSTANT _OS-CTX",
@@ -12140,8 +12338,9 @@ def test_typed_depth0_orphan_truncation_stages_exact_afterimages_without_io(
     output = run_forth(
         path,
         [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
             (
-                "T-ARENA T-VOLUME EXT4-NEW "
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
                 "CONSTANT _OT-MOUNT-IOR CONSTANT _OT-V"
             ),
             "_OT-V _EXT4-CTX CONSTANT _OT-CTX",
@@ -12438,8 +12637,9 @@ def test_typed_depth0_orphan_truncation_auto_aborts_partial_credit_failure(
     output = run_forth(
         path,
         [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
             (
-                "T-ARENA T-VOLUME EXT4-NEW "
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
                 "CONSTANT _OA-MOUNT-IOR CONSTANT _OA-V"
             ),
             "_OA-V _EXT4-CTX CONSTANT _OA-CTX",
