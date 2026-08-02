@@ -89,19 +89,25 @@ root, mount verifies:
   CRC32C tail. The scanner counts and indexes all nonzero entries in an
   arena-derived half-full power-of-two table while rejecting duplicates, then
   authenticates each allocated inode, bounded `i_dtime`, type, size, flags,
-  and applicable data map. Linked entries must be truncatable; checksum-valid
-  `ORPHAN_PRESENT` state is still refused after this non-mutating preflight
-  because cleanup is not implemented.
+  and applicable data map. Linked entries must be truncatable. An authenticated
+  empty modern set is completed before mount publication without changing the
+  orphan inode or any orphan-file block. A nonempty set is still refused after
+  preflight because journaled truncate/delete and slot cleanup are not
+  implemented.
 
 The driver contains its own reflected CRC32C implementation. Akashic's public
 `CRC32C` word is deliberately MSB-first and is not interchangeable with the
 ext4 checksum contract.
 
 Known refused feature bits return format-domain `VFS-R-UNSUPPORTED` with
-`EXT4-D-FEATURE`. `ORPHAN_PRESENT` is admitted only far enough to complete any
-required committed-journal replay and strict reload, then validate the
-authoritative modern orphan set; it returns the stable `EXT4-D-RECOVERY`
-refusal. A
+`EXT4-D-FEATURE`. `ORPHAN_PRESENT` is admitted through any required
+committed-journal replay and strict reload. If the authoritative modern orphan
+set is empty, mount completes the transient recovery state before publication:
+a `RECOVER`-clear input first enters a tear-safe recovery epoch through
+writer-free `AKW1` activation while preserving `ORPHAN_PRESENT`; `AKR1`
+then lands an empty checksum-v3 journal and a checksummed primary superblock
+with both transient bits clear. A nonempty modern set returns the stable
+`EXT4-D-RECOVERY` refusal. A
 nonzero legacy orphan chain, a dirty state without `RECOVER`, or a recovery
 state outside the implemented JBD2 slice likewise returns a stable refusal.
 Checksum and structural failures return format-domain `VFS-R-CORRUPT`. No such
@@ -140,8 +146,10 @@ prefix-torn anchor boundary only when the complete block passes the anchor
 checksum, geometry, witness, and self-location checks; replay never admits it
 as a transaction record. A checksum-damaged descriptor, payload, revoke, or
 commit is currently refused rather than classified as a torn tail. Modern
-orphan discovery is admitted only as a post-replay, non-mutating preflight;
-transactional truncate/delete and slot clearing are not yet admitted. Pinned
+orphan discovery runs after replay and strict reload. The authenticated-empty
+branch completes recovery metadata without changing orphan-file contents;
+nonempty transactional truncate/delete and slot clearing are not yet admitted.
+Pinned
 qualification covers multi-record hash collisions, malformed revoke geometry
 and ownership, a revoked primary-super repair, and transactions relocated
 above logical journal block 4095 and across the end of an 8192-block ring.
@@ -162,12 +170,15 @@ authenticate that transaction's commit before the replay pass can perform its
 first home write. A candidate in an incomplete tail grants no authority.
 
 Recovery requires a physically writable, flush-capable volume. Home writes are
-flushed and the resulting filesystem is strictly revalidated before journal
-authority changes. At the first noncommitted journal slot, the driver first
+flushed and the resulting filesystem is strictly revalidated, including the
+authoritative orphan scan, while `RECOVER` remains set. Only an authenticated
+empty orphan result reaches the recovered-super endpoint. At the first
+noncommitted journal slot, the driver first
 writes and flushes the complete intended reset image with byte zero invalid.
 It then restores byte zero, writes and flushes the valid recovery anchor, resets
 the primary journal superblock and flushes again, and finally clears ext4
-`RECOVER` and flushes the primary ext4 superblock. The preseed and valid anchor
+`RECOVER` and `ORPHAN_PRESENT` together and flushes the primary ext4
+superblock. The preseed and valid anchor
 differ in only byte zero, so a prefix tear cannot combine a new JBD2 header
 with stale cursor contents. Once the ext4 clear is durable, the driver removes
 the private witness from journal block 0, flushes, zeros the anchor slot, and
@@ -214,8 +225,17 @@ complement, and the CRC32C and complement of the complete active filesystem
 block. Those authenticated predecessor fields let a later mount reconstruct
 the exact active primary if the primary write tore between the active and
 reset images, prove the full-block prefix, and continue forward through the
-ordinary reset/clear protocol. They are zero in an ordinary non-active `AKR1`
-landing.
+ordinary reset/clear protocol.
+
+An empty-to-reset landing uses the same private words for an `AKE1` subtype
+when the old journal is proven empty and its normalized head names the reset
+anchor. `AKE1` stores the old raw head and complete-block CRC32C with
+complements. Its anchor sequence authenticates the preceding sequence modulo
+32-bit wrap. Recovery can therefore reconstruct the exact old standard
+primary—including a raw zero-head spelling and 2/4 KiB padding—and prove an
+early reset-primary prefix even before the `AKR1` marker reached journal block
+0. Ordinary resets without that empty-predecessor relation retain the
+fail-closed zero private tuple.
 
 ## Private clean-to-RECOVER activation
 
@@ -257,12 +277,26 @@ validated clean mount without replaying a user transaction. A crash before the
 activation primary is installed leaves the old clean primary authoritative and
 the unreferenced guard harmless.
 
-Once activation has entered its first media phase, any write, flush, checksum,
-or reread-proof failure latches the first ior and exact phase in the writer,
-marks it faulted, and forces the VFS read-only and dirty. The same writer cannot
-retry activation or begin a transaction; remount recovery resolves whichever
-durable witness state survived. Failures in fresh-primary rebinding occur
-before mutation and are rejected without creating activation authority.
+Mount-time empty-orphan completion is a writer-free caller of the same
+activation primitive. It passes `writer|0` and borrows
+`_EXT4-C.DIR-BLOCK` and `_EXT4-C.TREE-BLOCK` for the two block buffers. It
+does not call `_EXT4-JWR-ENSURE`: private writer storage is allocated once
+from the monotonic mount arena, and later reuse requires identical metadata,
+data, revoke, and total geometry. Automatically allocating a small recovery
+writer would make a later production-sized reservation fail with
+`VFS-E-CONFLICT`. The writer-free path establishes recovery authority,
+immediately proceeds through `AKE1`-qualified `AKR1`, allocates no writer, and
+exposes no write-active endpoint through the successfully mounted VFS.
+
+For writer-backed activation, once the first media phase has begun, any write,
+flush, checksum, or reread-proof failure latches the first ior and exact phase
+in the writer, marks it faulted, and forces the VFS read-only and dirty. The
+same writer cannot retry activation or begin a transaction; remount recovery
+resolves whichever durable witness state survived. Writer-free mount recovery
+retains no synthetic writer fault: it returns the media error with the binding
+still unpublished, and a fresh mount resolves any durable witness prefix.
+Failures in fresh-primary rebinding occur before mutation and are rejected
+without creating activation authority.
 
 ## Private transaction staging and durable emission
 
@@ -286,6 +320,14 @@ but no longer has transaction authority. Busy or failed unmount retains the
 block context; a busy entry retains current authority, while a terminal fault
 preserves its exact phase for diagnosis. Different requested geometry is
 refused rather than leaking another monotonic-arena allocation.
+
+The production workspace contract is not yet ratified. Public operations
+cannot size this allocate-once object from whichever mutation happens first,
+because a later operation with larger legitimate credits would then conflict.
+Writable publication therefore also requires geometry-derived sizing from the
+authenticated journal and caller-provided storage, plus bounded transaction
+chunking for operations that cannot fit one reservation. It must not introduce
+an arbitrary operation-count ceiling.
 
 A private transaction reserves journal credits and ring space before accepting
 any block. It owns complete block-sized metadata and ordered-data after-images,
@@ -373,11 +415,13 @@ failure quarantine.
 
 Dirty-empty `IDLE` deactivation begins with a flush, strict reload, and root
 proof. It then uses the existing `AKR1` protocol: W1 installs an invalid-byte
-reset-anchor preseed; W2 installs the exact valid anchor; W3 installs the
-witnessed empty primary; W4 writes the checksummed clean ext4 superblock with
-`RECOVER` clear; W5 installs the standard witness-free primary; and W6 retires
-the anchor. The protocol has six writes and seven flush barriers, including
-the initial preflight flush. Immediately before W5,
+reset-anchor preseed; W2 installs the exact valid `AKE1`-qualified anchor; W3
+installs the witnessed empty primary; W4 writes the checksummed clean ext4
+superblock with `RECOVER` and `ORPHAN_PRESENT` clear; W5 installs the standard
+witness-free primary; and W6 retires the anchor. The protocol has six writes
+and seven flush barriers, including the initial preflight flush. `AKE1`
+authenticates the old empty primary across any W3 sequential-prefix tear.
+Immediately before W5,
 the driver rereads the raw primary and named anchor, revalidates their witness
 and ext4-super binding, and requires full-filesystem-block equality. A final
 strict reload, root and attachment proof precedes writer scrubbing, dirty-bit
@@ -464,7 +508,9 @@ the four geometry fixtures and the supplemental `read-side-1k-i256` fixture:
 Directory population snapshots the child head, inode count, and string-pool
 cursor. Any I/O, checksum, allocation, or structural failure rolls the cache
 back before returning. Sparse reads synthesize zeroes without issuing a media
-read for the hole. `SYNCFS` and `FSYNC` are safe no-ops.
+read for the hole. `SYNCFS` and `FSYNC` are safe no-ops while the binding is
+read-only; before writable capabilities are exposed they must drive the
+required transaction commit/checkpoint durability rather than remain no-ops.
 
 `EXT4-BINDING` has `VFS-BF-NEEDS-VOLUME`, `VFS-BF-READ-ONLY`, and
 `VFS-BF-STABLE-IDS`. The VFS rejects all mutation before binding dispatch.
@@ -498,15 +544,22 @@ writable profile. The remaining boundaries are:
   immediate sequential workspace reuse, clean write-active deactivation, and
   public clean-unmount integration are implemented as private durability
   foundations;
-- modern orphan-file discovery and inode preflight are implemented without
-  mutation; legacy-chain discovery, transactional truncate/delete and orphan
-  removal, and every user-visible mutation operation remain unimplemented; and
+- modern orphan-file discovery, inode preflight, and authenticated-empty
+  `ORPHAN_PRESENT` completion are implemented. Empty completion mutates only
+  journal recovery state and the checksummed primary-super transient bits; it
+  does not change the orphan inode/file, allocate writer workspace, or expose a
+  user-visible write. Nonempty modern cleanup, legacy-chain discovery and
+  cleanup, and every user-visible mutation operation remain unimplemented;
 - modern preflight still needs qualification for journal-replayed orphan
   afterimages, later blocks and files beyond the former 4096-block limit,
   unlinked and structurally invalid referenced inodes, hash collisions, and
   arena retry/exhaustion behavior; and
-- recovery-anchor interoperability and the controlled power-cut matrix still
-  require external-tool and emulator qualification.
+- empty completion has 1/2/4 KiB happy-path and write-free-remount coverage,
+  plus same-binding writer-free W3 retry and four controlled prefix cases:
+  1 KiB AKW1 W3 primary, 1/4 KiB AKE1/AKR1 W9 early primary, and 1 KiB AKR1
+  W10 recovered-super. Broader recovery-anchor interoperability and the full
+  controlled power-cut matrix still require external-tool and emulator
+  qualification.
 
 No write capability will be advertised until complete replay/orphan recovery,
 the full ordered-data mutation surface, external-tool mutation checks, and

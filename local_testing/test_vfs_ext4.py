@@ -520,6 +520,14 @@ def _jbd2_super_with_checksum(block: bytes | bytearray) -> bytes:
     return bytes(result)
 
 
+def _jbd2_block_with_super_checksum(block: bytes | bytearray) -> bytes:
+    """Stamp only the 1024-byte JBD2 super while preserving block padding."""
+    result = bytearray(block)
+    assert len(result) >= 1024
+    result[:1024] = _jbd2_super_with_checksum(result[:1024])
+    return bytes(result)
+
+
 def _jbd2_super_checksum_valid(block: bytes) -> bool:
     if len(block) != 1024:
         return False
@@ -6275,6 +6283,17 @@ def test_jbd2_writer_deactivation_faults_quarantine_and_remount(
     struct.pack_into(
         ">I", reset_anchor, 0x6C, guard_logical ^ 0xFFFF_FFFF
     )
+    standard_crc = _crc32c_raw(standard)
+    struct.pack_into(">I", reset_anchor, 0x70, 0x414B4531)
+    struct.pack_into(">I", reset_anchor, 0x74, 0xBEB4BACE)
+    struct.pack_into(">I", reset_anchor, 0x78, old_head)
+    struct.pack_into(
+        ">I", reset_anchor, 0x7C, old_head ^ 0xFFFF_FFFF
+    )
+    struct.pack_into(">I", reset_anchor, 0x80, standard_crc)
+    struct.pack_into(
+        ">I", reset_anchor, 0x84, standard_crc ^ 0xFFFF_FFFF
+    )
     reset_anchor = _jbd2_super_with_checksum(reset_anchor)
 
     media_path = tmp_path / f"jbd2-deactivation-{case}.img"
@@ -9711,25 +9730,708 @@ def test_every_known_refused_feature_fails_before_mount_publication(
     assert "11 4 0" in output, output[-1500:]
 
 
-def test_orphan_recovery_required_state_is_a_distinct_refusal(
-    canonical_images: dict[str, Path]
+@pytest.mark.parametrize(
+    "image_id",
+    ("primary-1k-i256", "primary-2k-i256", "primary-4k-i256"),
+)
+def test_empty_modern_orphan_state_is_cleared_through_recovery_landing(
+    canonical_images: dict[str, Path], tmp_path: Path, image_id: str
 ) -> None:
-    path = canonical_images["primary-1k-i256"]
-    patched = _super_with_mask(path, 0x64, 0x1046B)
-    output = run_forth(
+    path = canonical_images[image_id]
+    patches = _modern_orphan_patches(path, ())
+    layout = _ext4_recovery_layout(path)
+    block_size = layout["block_size"]
+    primary_block = layout["primary_super"]
+    super_offset = 0 if block_size == 1024 else 1024
+    journal_physical = layout["journal_block"]
+    orphan_offset, orphan_afterimage = patches[1]
+    media_path = tmp_path / f"{image_id}-empty-orphan-cleared.img"
+
+    with path.open("rb") as source:
+        source.seek(primary_block * block_size)
+        original_primary = source.read(block_size)
+        source.seek(journal_physical * block_size)
+        source_journal = source.read(block_size)
+    assert len(original_primary) == len(source_journal) == block_size
+    first = struct.unpack_from(">I", source_journal, 0x14)[0]
+    maxlen = struct.unpack_from(">I", source_journal, 0x10)[0]
+    old_head = struct.unpack_from(">I", source_journal, 0x58)[0]
+    guard_logical = first if old_head == 0 else old_head
+    assert first <= guard_logical < maxlen
+    guard_physical = _ext4_journal_physical_map(
+        path, (guard_logical,)
+    )[guard_logical]
+    sectors_per_block = block_size // 512
+    journal_write = (
+        "write",
+        journal_physical * sectors_per_block,
+        sectors_per_block,
+    )
+    guard_write = (
+        "write",
+        guard_physical * sectors_per_block,
+        sectors_per_block,
+    )
+    super_write = ("write", 2, 2)
+    flush = ("flush", 0, 0)
+    activation_trace = (
+        guard_write,
+        flush,
+        guard_write,
+        flush,
+        journal_write,
+        flush,
+        super_write,
+        flush,
+        journal_write,
+        flush,
+        guard_write,
+        flush,
+    )
+    landing_trace = (
+        flush,
+        guard_write,
+        flush,
+        guard_write,
+        flush,
+        journal_write,
+        flush,
+        super_write,
+        flush,
+        journal_write,
+        flush,
+        guard_write,
+        flush,
+    )
+
+    output, trace, media_sha256 = run_recovery_forth(
         path,
+        media_path,
         [
             "T-ARENA T-VOLUME EXT4-NEW CONSTANT _IOR CONSTANT _V",
+            "_V _EXT4-CTX CONSTANT _OEC-CTX",
             (
-                "_IOR VFS-IOR-REASON . _IOR VFS-IOR-DETAIL . "
-                "_V V.LIFECYCLE @ . _V V.BCTX @ DUP "
-                "_EXT4-C.O.ACTIVE + @ . "
-                "_EXT4-C.O.SLOTS + @ ."
+                "_IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_V _EXT4-READY? AND "
+                "_OEC-CTX _EXT4-C.O.ACTIVE + @ 0= AND "
+                "_OEC-CTX _EXT4-C.O.CLEAR-PENDING + @ 0= AND "
+                "_OEC-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
+                "_EXT4-RO-ORPHAN-PRESENT AND 0= AND "
+                "_OEC-CTX _EXT4-C.RECOVERY + @ 0= AND "
+                "_OEC-CTX _EXT4-C.J.START + @ 0= AND "
+                "_OEC-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
+                "_OEC-CTX _EXT4-C.J.WRITER + @ 0= AND "
+                'IF ." EXT4-EMPTY-ORPHAN-CLEARED" THEN'
             ),
         ],
-        patches=((1024, patched),),
+        patches=patches,
+        capture_media=media_path,
     )
-    assert "11 5 0 0 0" in output, output[-1500:]
+    _assert_emitted(output, "EXT4-EMPTY-ORPHAN-CLEARED")
+    assert trace == activation_trace + landing_trace
+
+    with media_path.open("rb") as recovered:
+        recovered.seek(primary_block * block_size)
+        final_primary = recovered.read(block_size)
+        recovered.seek(journal_physical * block_size)
+        final_journal = recovered.read(block_size)
+        recovered.seek(guard_physical * block_size)
+        final_guard = recovered.read(block_size)
+        recovered.seek(orphan_offset)
+        final_orphan = recovered.read(len(orphan_afterimage))
+    assert (
+        len(final_primary)
+        == len(final_journal)
+        == len(final_guard)
+        == block_size
+    )
+    final_super = final_primary[super_offset : super_offset + 1024]
+    assert struct.unpack_from("<I", final_super, 0x60)[0] & 0x04 == 0
+    assert struct.unpack_from("<I", final_super, 0x64)[0] & 0x0001_0000 == 0
+    assert struct.unpack_from("<I", final_super, 0x3FC)[0] == _crc32c_raw(
+        final_super[:0x3FC]
+    )
+    assert final_primary[:super_offset] == original_primary[:super_offset]
+    assert final_primary[super_offset + 1024 :] == original_primary[
+        super_offset + 1024 :
+    ]
+    assert final_orphan == orphan_afterimage
+    assert struct.unpack_from(">I", final_journal, 0x1C)[0] == 0
+    assert struct.unpack_from(">I", final_journal, 0x28)[0] == 0x13
+    assert not any(final_journal[0x5C:0x88])
+    assert _jbd2_super_checksum_valid(final_journal[:1024])
+    assert final_journal[1024:] == source_journal[1024:]
+    assert final_guard == bytes(block_size)
+
+    remount_output, remount_trace, remount_sha256 = run_recovery_forth(
+        media_path,
+        media_path,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _R-IOR CONSTANT _R-V",
+            (
+                "_R-IOR 0= _R-V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_R-V _EXT4-READY? AND "
+                'IF ." EXT4-EMPTY-ORPHAN-REMOUNTED" THEN'
+            ),
+        ],
+        capture_media=media_path,
+    )
+    _assert_emitted(remount_output, "EXT4-EMPTY-ORPHAN-REMOUNTED")
+    assert remount_trace == ()
+    assert remount_sha256 == media_sha256
+
+
+@pytest.mark.parametrize(
+    ("case", "image_id", "write_ordinal", "sector_index", "byte_index"),
+    (
+        pytest.param(
+            "akw1-primary",
+            "primary-1k-i256",
+            3,
+            0,
+            200,
+            id="W3-AKW1-journal-primary-prefix",
+        ),
+        pytest.param(
+            "akr1-primary",
+            "primary-1k-i256",
+            9,
+            0,
+            50,
+            id="W9-AKR1-journal-primary-early-prefix-1k",
+        ),
+        pytest.param(
+            "akr1-primary",
+            "primary-4k-i256",
+            9,
+            0,
+            50,
+            id="W9-AKR1-journal-primary-early-prefix-4k",
+        ),
+        pytest.param(
+            "akr1-super",
+            "primary-1k-i256",
+            10,
+            1,
+            0,
+            id="W10-AKR1-recovered-super-prefix",
+        ),
+    ),
+)
+def test_empty_modern_orphan_mount_prefix_tears_remount_clean(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+    case: str,
+    image_id: str,
+    write_ordinal: int,
+    sector_index: int,
+    byte_index: int,
+) -> None:
+    path = canonical_images[image_id]
+    patches = _modern_orphan_patches(path, ())
+    layout = _ext4_recovery_layout(path)
+    block_size = layout["block_size"]
+    sectors_per_block = block_size // 512
+    primary_block = layout["primary_super"]
+    super_offset = 0 if block_size == 1024 else 1024
+    journal_physical = layout["journal_block"]
+    assert patches[0][0] == 1024
+    orphan_super = patches[0][1]
+    orphan_offset, orphan_afterimage = patches[1]
+    assert len(orphan_super) == 1024
+    assert len(orphan_afterimage) == block_size
+
+    with path.open("rb") as source:
+        source.seek(primary_block * block_size)
+        original_primary = source.read(block_size)
+        source.seek(journal_physical * block_size)
+        old_journal = source.read(block_size)
+    assert len(original_primary) == len(old_journal) == block_size
+    first = struct.unpack_from(">I", old_journal, 0x14)[0]
+    maxlen = struct.unpack_from(">I", old_journal, 0x10)[0]
+    old_head = struct.unpack_from(">I", old_journal, 0x58)[0]
+    guard_logical = first if old_head == 0 else old_head
+    assert first <= guard_logical < maxlen
+    guard_physical = _ext4_journal_physical_map(
+        path, (guard_logical,)
+    )[guard_logical]
+
+    dirty_super = bytearray(orphan_super)
+    struct.pack_into(
+        "<I",
+        dirty_super,
+        0x60,
+        struct.unpack_from("<I", dirty_super, 0x60)[0] | 0x04,
+    )
+    struct.pack_into("<H", dirty_super, 0x3A, 1)
+    dirty_super = _ext4_super_with_checksum(dirty_super)
+    recovered_super = bytearray(dirty_super)
+    struct.pack_into(
+        "<I",
+        recovered_super,
+        0x60,
+        struct.unpack_from("<I", recovered_super, 0x60)[0] & ~0x04,
+    )
+    struct.pack_into(
+        "<I",
+        recovered_super,
+        0x64,
+        struct.unpack_from("<I", recovered_super, 0x64)[0] & ~0x0001_0000,
+    )
+    recovered_super = _ext4_super_with_checksum(recovered_super)
+    orphan_checksum = struct.unpack_from("<I", orphan_super, 0x3FC)[0]
+    dirty_checksum = struct.unpack_from("<I", dirty_super, 0x3FC)[0]
+    recovered_checksum = struct.unpack_from("<I", recovered_super, 0x3FC)[0]
+
+    activated_journal = bytearray(old_journal)
+    struct.pack_into(">I", activated_journal, 0x1C, 0)
+    struct.pack_into(">I", activated_journal, 0x28, 0x13)
+    activated_journal[0x50:0x54] = b"\x04\x00\x00\x00"
+    struct.pack_into(">I", activated_journal, 0x54, 0)
+    struct.pack_into(">I", activated_journal, 0x58, guard_logical)
+    activated_journal[0x5C:0x88] = bytes(0x2C)
+    activated_journal = _jbd2_block_with_super_checksum(activated_journal)
+
+    activation_anchor = bytearray(activated_journal)
+    struct.pack_into(">I", activation_anchor, 0x5C, 0x414B5731)
+    struct.pack_into(">I", activation_anchor, 0x60, orphan_checksum)
+    struct.pack_into(
+        ">I", activation_anchor, 0x64, orphan_checksum ^ 0xFFFF_FFFF
+    )
+    struct.pack_into(">I", activation_anchor, 0x68, guard_logical)
+    struct.pack_into(
+        ">I", activation_anchor, 0x6C, guard_logical ^ 0xFFFF_FFFF
+    )
+    struct.pack_into(">I", activation_anchor, 0x70, dirty_checksum)
+    struct.pack_into(
+        ">I", activation_anchor, 0x74, dirty_checksum ^ 0xFFFF_FFFF
+    )
+    struct.pack_into(
+        ">I",
+        activation_anchor,
+        0x78,
+        struct.unpack_from(">I", old_journal, 0x28)[0],
+    )
+    struct.pack_into(
+        ">I",
+        activation_anchor,
+        0x7C,
+        struct.unpack_from(">I", old_journal, 0x58)[0],
+    )
+    activation_anchor[0x80:0x84] = old_journal[0x50:0x54]
+    struct.pack_into(
+        ">I",
+        activation_anchor,
+        0x84,
+        struct.unpack_from(">I", old_journal, 0xFC)[0],
+    )
+    activation_anchor = _jbd2_block_with_super_checksum(activation_anchor)
+
+    old_sequence = struct.unpack_from(">I", activated_journal, 0x18)[0]
+    old_full_crc = _crc32c_raw(activated_journal)
+    reset_anchor = bytearray(activated_journal)
+    struct.pack_into(">I", reset_anchor, 0x18, (old_sequence + 1) & 0xFFFF_FFFF)
+    struct.pack_into(">I", reset_anchor, 0x5C, 0x414B5231)
+    struct.pack_into(">I", reset_anchor, 0x60, recovered_checksum)
+    struct.pack_into(
+        ">I", reset_anchor, 0x64, recovered_checksum ^ 0xFFFF_FFFF
+    )
+    struct.pack_into(">I", reset_anchor, 0x68, guard_logical)
+    struct.pack_into(
+        ">I", reset_anchor, 0x6C, guard_logical ^ 0xFFFF_FFFF
+    )
+    struct.pack_into(">I", reset_anchor, 0x70, 0x414B4531)
+    struct.pack_into(">I", reset_anchor, 0x74, 0xBEB4BACE)
+    struct.pack_into(">I", reset_anchor, 0x78, guard_logical)
+    struct.pack_into(
+        ">I", reset_anchor, 0x7C, guard_logical ^ 0xFFFF_FFFF
+    )
+    struct.pack_into(">I", reset_anchor, 0x80, old_full_crc)
+    struct.pack_into(
+        ">I", reset_anchor, 0x84, old_full_crc ^ 0xFFFF_FFFF
+    )
+    reset_anchor = _jbd2_block_with_super_checksum(reset_anchor)
+    final_journal = bytearray(reset_anchor)
+    final_journal[0x5C:0x88] = bytes(0x2C)
+    final_journal = _jbd2_block_with_super_checksum(final_journal)
+
+    journal_write = (
+        "write",
+        journal_physical * sectors_per_block,
+        sectors_per_block,
+    )
+    guard_write = (
+        "write",
+        guard_physical * sectors_per_block,
+        sectors_per_block,
+    )
+    super_write = ("write", 2, 2)
+    flush = ("flush", 0, 0)
+    activation_trace = (
+        guard_write,
+        flush,
+        guard_write,
+        flush,
+        journal_write,
+        flush,
+        super_write,
+        flush,
+        journal_write,
+        flush,
+        guard_write,
+        flush,
+    )
+
+    torn = tmp_path / f"{image_id}-empty-orphan-{case}-torn.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        torn,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
+            "_V _EXT4-CTX CONSTANT _T-CTX",
+            (
+                "_M-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = "
+                "_M-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                "_M-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL AND 0<> AND "
+                "_V V.LIFECYCLE @ VFS-L-NEW = AND "
+                "_V _EXT4-READY? 0= AND "
+                "_T-CTX _EXT4-C.J.WRITER + @ 0= AND "
+                'IF ." EXT4-EMPTY-ORPHAN-MOUNT-TEAR" THEN'
+            ),
+        ],
+        patches=patches,
+        write_faults_by_ordinal={
+            write_ordinal: {
+                "stage": "media",
+                "sector_index": sector_index,
+                "byte_index": byte_index,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=torn,
+    )
+    _assert_emitted(output, "EXT4-EMPTY-ORPHAN-MOUNT-TEAR")
+    if case == "akw1-primary":
+        assert trace == activation_trace[:5]
+    elif case == "akr1-primary":
+        assert trace == activation_trace + (
+            flush,
+            guard_write,
+            flush,
+            guard_write,
+            flush,
+            journal_write,
+        )
+    else:
+        assert case == "akr1-super"
+        assert trace == activation_trace + (
+            flush,
+            guard_write,
+            flush,
+            guard_write,
+            flush,
+            journal_write,
+            flush,
+            super_write,
+        )
+    assert torn.is_file()
+    assert _sha256(torn) == media_sha256
+
+    with torn.open("rb") as source:
+        source.seek(primary_block * block_size)
+        observed_primary = source.read(block_size)
+        source.seek(journal_physical * block_size)
+        observed_journal = source.read(block_size)
+        source.seek(guard_physical * block_size)
+        observed_guard = source.read(block_size)
+        source.seek(orphan_offset)
+        observed_orphan = source.read(len(orphan_afterimage))
+    assert len(observed_primary) == block_size
+    observed_super = observed_primary[super_offset : super_offset + 1024]
+    assert observed_orphan == orphan_afterimage
+    orphan_sector = orphan_offset // 512
+    orphan_sectors = len(orphan_afterimage) // 512
+    assert all(
+        event[0] != "write"
+        or not (
+            event[1] < orphan_sector + orphan_sectors
+            and orphan_sector < event[1] + event[2]
+        )
+        for event in trace
+    )
+
+    if case == "akw1-primary":
+        assert observed_super == orphan_super
+        assert observed_guard == activation_anchor
+        assert observed_journal == (
+            activation_anchor[:byte_index] + old_journal[byte_index:]
+        )
+        assert _sequential_prefix_merge(
+            activation_anchor, old_journal, observed_journal
+        )
+        assert not _jbd2_super_checksum_valid(observed_journal[:1024])
+    elif case == "akr1-primary":
+        assert observed_super == dirty_super
+        assert observed_guard == reset_anchor
+        assert observed_journal == (
+            reset_anchor[:byte_index] + activated_journal[byte_index:]
+        )
+        assert struct.unpack_from(">I", observed_journal, 0x5C)[0] == 0
+        assert _sequential_prefix_merge(
+            reset_anchor, activated_journal, observed_journal
+        )
+        assert not _jbd2_super_checksum_valid(observed_journal[:1024])
+    else:
+        assert observed_guard == reset_anchor
+        assert observed_journal == reset_anchor
+        assert observed_super == recovered_super[:512] + dirty_super[512:]
+        assert _sequential_prefix_merge(
+            recovered_super, dirty_super, observed_super
+        )
+        assert observed_super not in {dirty_super, recovered_super}
+        assert struct.unpack_from("<I", observed_super, 0x60)[0] & 0x04 == 0
+        assert (
+            struct.unpack_from("<I", observed_super, 0x64)[0]
+            & 0x0001_0000
+            == 0
+        )
+        assert struct.unpack_from("<I", observed_super, 0x3FC)[0] != _crc32c_raw(
+            observed_super[:0x3FC]
+        )
+
+    repaired = tmp_path / f"{image_id}-empty-orphan-{case}-repaired.img"
+    remount_output, retry_trace, repaired_sha256 = run_recovery_forth(
+        torn,
+        repaired,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _R-IOR CONSTANT _R-V",
+            "_R-V _EXT4-CTX CONSTANT _R-CTX",
+            (
+                "_R-IOR 0= _R-V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_R-V _EXT4-READY? AND "
+                "_R-CTX _EXT4-C.O.ACTIVE + @ 0= AND "
+                "_R-CTX _EXT4-C.O.CLEAR-PENDING + @ 0= AND "
+                "_R-CTX _EXT4-C.RECOVERY + @ 0= AND "
+                "_R-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0= AND "
+                "_R-CTX _EXT4-C.J.START + @ 0= AND "
+                "_R-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
+                "_R-CTX _EXT4-C.J.WRITER + @ 0= AND "
+                "_R-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                "_R-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
+                "_EXT4-INCOMPAT-RECOVER AND 0= AND "
+                "_R-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
+                "_EXT4-RO-ORPHAN-PRESENT AND 0= AND "
+                "_R-V V.FLAGS @ VFS-F-DIRTY AND 0= AND "
+                'IF ." EXT4-EMPTY-ORPHAN-TEAR-REMOUNTED" THEN'
+            ),
+        ],
+        capture_media=repaired,
+    )
+    _assert_emitted(remount_output, "EXT4-EMPTY-ORPHAN-TEAR-REMOUNTED")
+    if case == "akw1-primary":
+        assert retry_trace == (
+            journal_write,
+            flush,
+            super_write,
+            flush,
+            journal_write,
+            flush,
+            guard_write,
+            flush,
+            flush,
+            guard_write,
+            flush,
+            guard_write,
+            flush,
+            journal_write,
+            flush,
+            super_write,
+            flush,
+            journal_write,
+            flush,
+            guard_write,
+            flush,
+        )
+    elif case == "akr1-primary":
+        assert retry_trace == (
+            flush,
+            journal_write,
+            flush,
+            flush,
+            super_write,
+            flush,
+            journal_write,
+            flush,
+            guard_write,
+            flush,
+        )
+    else:
+        assert retry_trace == (
+            super_write,
+            flush,
+            journal_write,
+            flush,
+            guard_write,
+            flush,
+        )
+    assert repaired.is_file()
+    assert _sha256(repaired) == repaired_sha256
+    with repaired.open("rb") as source:
+        source.seek(primary_block * block_size)
+        final_super_block = source.read(block_size)
+        source.seek(journal_physical * block_size)
+        final_primary = source.read(block_size)
+        source.seek(guard_physical * block_size)
+        final_guard = source.read(block_size)
+        source.seek(orphan_offset)
+        final_orphan = source.read(len(orphan_afterimage))
+    assert len(final_super_block) == block_size
+    final_super = final_super_block[super_offset : super_offset + 1024]
+    assert final_super == recovered_super
+    assert final_super_block[:super_offset] == original_primary[:super_offset]
+    assert final_super_block[super_offset + 1024 :] == original_primary[
+        super_offset + 1024 :
+    ]
+    assert final_primary == final_journal
+    assert final_guard == bytes(block_size)
+    assert final_orphan == orphan_afterimage
+
+
+def test_empty_modern_orphan_writer_free_activation_retries_same_binding(
+    canonical_images: dict[str, Path], tmp_path: Path
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches = _modern_orphan_patches(path, ())
+    layout = _ext4_recovery_layout(path)
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    journal_physical = layout["journal_block"]
+    orphan_offset, orphan_afterimage = patches[1]
+
+    with path.open("rb") as source:
+        source.seek(journal_physical * block_size)
+        old_journal = source.read(block_size)
+    assert len(old_journal) == block_size
+    first = struct.unpack_from(">I", old_journal, 0x14)[0]
+    maxlen = struct.unpack_from(">I", old_journal, 0x10)[0]
+    old_head = struct.unpack_from(">I", old_journal, 0x58)[0]
+    guard_logical = first if old_head == 0 else old_head
+    assert first <= guard_logical < maxlen
+    guard_physical = _ext4_journal_physical_map(
+        path, (guard_logical,)
+    )[guard_logical]
+
+    journal_write = ("write", journal_physical * 2, 2)
+    guard_write = ("write", guard_physical * 2, 2)
+    super_write = ("write", 2, 2)
+    flush = ("flush", 0, 0)
+    first_mount_prefix = (
+        guard_write,
+        flush,
+        guard_write,
+        flush,
+        journal_write,
+    )
+    retry_trace = (
+        journal_write,
+        flush,
+        super_write,
+        flush,
+        journal_write,
+        flush,
+        guard_write,
+        flush,
+        flush,
+        guard_write,
+        flush,
+        guard_write,
+        flush,
+        journal_write,
+        flush,
+        super_write,
+        flush,
+        journal_write,
+        flush,
+        guard_write,
+        flush,
+    )
+
+    media_path = tmp_path / "empty-orphan-writer-free-same-binding.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        media_path,
+        [
+            "T-ARENA CONSTANT _SR-ARENA",
+            (
+                "_SR-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _SR-FIRST-IOR CONSTANT _SR-V"
+            ),
+            "_SR-V _EXT4-CTX CONSTANT _SR-CTX",
+            "_SR-ARENA ARENA-USED CONSTANT _SR-USED-BEFORE",
+            "_SR-CTX _EXT4-C.J.MAP + @ CONSTANT _SR-MAP",
+            "_SR-CTX _EXT4-C.J.MAP-HASH + @ CONSTANT _SR-HASH",
+            "_SR-CTX _EXT4-C.J.WRITER + @ 0= CONSTANT _SR-NO-WRITER",
+            "_SR-V V.FLAGS @ CONSTANT _SR-FLAGS-BEFORE",
+            "_SR-V _EXT4-MOUNT CONSTANT _SR-RETRY-IOR",
+            "_SR-ARENA ARENA-USED CONSTANT _SR-USED-AFTER",
+            (
+                "_SR-FIRST-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME = "
+                "_SR-FIRST-IOR VFS-IOR-REASON VFS-R-IO = AND "
+                "_SR-FIRST-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL "
+                "AND 0<> AND _SR-RETRY-IOR 0= AND "
+                "_SR-V _EXT4-CTX _SR-CTX = AND "
+                "_SR-USED-BEFORE _SR-USED-AFTER = AND "
+                "_SR-CTX _EXT4-C.J.MAP + @ _SR-MAP = AND "
+                "_SR-CTX _EXT4-C.J.MAP-HASH + @ _SR-HASH = AND "
+                "_SR-MAP 0<> AND _SR-HASH 0<> AND "
+                "_SR-NO-WRITER AND "
+                "_SR-CTX _EXT4-C.J.WRITER + @ 0= AND "
+                "_SR-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<> AND "
+                "_SR-V _EXT4-READY? AND "
+                "_SR-CTX _EXT4-C.RECOVERY + @ 0= AND "
+                "_SR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0= AND "
+                "_SR-CTX _EXT4-C.O.ACTIVE + @ 0= AND "
+                "_SR-CTX _EXT4-C.O.CLEAR-PENDING + @ 0= AND "
+                "_SR-FLAGS-BEFORE VFS-F-RO = AND "
+                "_SR-V V.FLAGS @ _SR-FLAGS-BEFORE = AND "
+                'IF ." EXT4-EMPTY-ORPHAN-SAME-BINDING-RETRIED" THEN'
+            ),
+        ],
+        patches=patches,
+        write_faults_by_ordinal={
+            3: {
+                "stage": "media",
+                "sector_index": 0,
+                "byte_index": 200,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=media_path,
+    )
+    _assert_emitted(output, "EXT4-EMPTY-ORPHAN-SAME-BINDING-RETRIED")
+    assert trace == first_mount_prefix + retry_trace
+    assert media_path.is_file()
+    assert _sha256(media_path) == media_sha256
+
+    with media_path.open("rb") as source:
+        source.seek(1024)
+        final_super = source.read(block_size)
+        source.seek(journal_physical * block_size)
+        final_journal = source.read(block_size)
+        source.seek(guard_physical * block_size)
+        final_guard = source.read(block_size)
+        source.seek(orphan_offset)
+        final_orphan = source.read(len(orphan_afterimage))
+    assert struct.unpack_from("<I", final_super, 0x60)[0] & 0x04 == 0
+    assert struct.unpack_from("<I", final_super, 0x64)[0] & 0x0001_0000 == 0
+    assert struct.unpack_from(">I", final_journal, 0x1C)[0] == 0
+    assert struct.unpack_from(">I", final_journal, 0x28)[0] == 0x13
+    assert not any(final_journal[0x5C:0x88])
+    assert _jbd2_super_checksum_valid(final_journal)
+    assert final_guard == bytes(block_size)
+    assert final_orphan == orphan_afterimage
 
 
 def test_active_modern_orphan_is_authenticated_before_recovery_refusal(

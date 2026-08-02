@@ -12,8 +12,8 @@ descriptor/payload/revoke/commit transaction, checkpoint its retained metadata
 after-images, and release the journal for an immediate sequential transaction
 without leaving write-active state. Public unmount can now checkpoint a
 `COMMITTED` transaction and cleanly deactivate the write-active journal.
-Orphan recovery, general mutation, and the complete bidirectional gates remain
-open.
+Nonempty modern-orphan cleanup, legacy-orphan recovery, general mutation, and
+the complete bidirectional gates remain open.
 MP64FS remains the working native storage binding and FAT/ext4 remain
 read-only interoperability bindings; ext4's mount path may perform the
 strictly ordered recovery writes described below.
@@ -145,7 +145,7 @@ cannot qualify a mutation it does not understand.
 | `0x00002000` | `project` | Refuse | Project IDs/quotas are outside profile. |
 | `0x00004000` | `shared_blocks` | Refuse | Filesystem-level shared blocks are outside profile. |
 | `0x00008000` | `verity` | Refuse | Fs-verity data is outside profile. |
-| `0x00010000` | `orphan_present` | Read/write recovery | Transient; recover and clear transactionally. |
+| `0x00010000` | `orphan_present` | Read/write recovery | Transient; preserve through replay/cleanup, then clear through witnessed clean landing only after authoritative empty proof. |
 
 An unknown ro-compatible bit may be admitted only for a clean,
 recovery-free, genuinely read-only mount.  It can never admit a writable
@@ -226,10 +226,22 @@ an `AKW1`-clear tear is advanced to the standard primary. Once activation
 authority is removed, the already implemented `AKR1` empty-journal
 reset/clear protocol performs the ordinary clean landing. No
 activation-recovery path reverses a torn write or treats the transition as a
-committed user transaction. A failure after the first activation media phase
-latches its first ior and phase, faults the writer, and marks the VFS
-read-only/dirty so only remount recovery may resolve the uncertain durable
-state.
+committed user transaction. For private-writer activation, a failure after the
+first media phase latches its first ior and phase, faults the writer, and marks
+the VFS read-only/dirty so only remount recovery may resolve the uncertain
+durable state. Writer-free mount recovery instead returns the media error with
+lifecycle `NEW`; a fresh mount resolves any durable witness prefix.
+
+The same `AKW1` primitive is mount-recovery infrastructure. A checksum-valid
+clean input with `ORPHAN_PRESENT` set and `RECOVER` clear enters a durable
+recovery epoch with `writer|0`, borrowing two existing mount-context block
+buffers instead of allocating private writer storage. Writer allocation is
+one-time and exact-geometry within a monotonic arena; a recovery-sized
+allocation would conflict with later production credits. The dirty endpoint
+sets `RECOVER` while preserving `ORPHAN_PRESENT`; the following
+`AKE1`-qualified `AKR1` landing clears both only after authenticated empty
+proof. No writer is allocated or published, and no write-active endpoint is
+exposed by a successfully mounted VFS.
 
 ### Private one-transaction emission
 
@@ -384,23 +396,32 @@ Recovery is ordered as follows:
    Replay only complete transactions whose descriptor, payload, revoke, and
    commit checksums validate.  An incomplete tail is ignored; corruption or
    an unsupported record refuses mount.
-4. Write replayed home metadata, flush, checkpoint/reset the journal, flush,
-   and only then clear `RECOVER`.
-5. Recover the legacy orphan chain and the orphan file transactionally and
-   idempotently, then clear `ORPHAN_PRESENT` when appropriate.
+4. Write replayed home metadata and flush. Strictly reload and validate the
+   authoritative post-replay filesystem, including legacy and modern orphan
+   state, before changing recovery authority.
+5. Recover any nonempty orphan state transactionally and idempotently while
+   preserving the applicable recovery authority. An authenticated empty modern
+   set requires no orphan inode or orphan-file-block mutation.
+6. Checkpoint/reset and flush the journal. After final empty proof, use the
+   witnessed clean landing to clear `RECOVER` and `ORPHAN_PRESENT` together,
+   then retire its witnesses. A clean input carrying `ORPHAN_PRESENT` without
+   `RECOVER` first establishes the recovery epoch through writer-free `AKW1`.
 
 The current implementation covers steps 1 through 4 for
 `64bit | checksum_v3` (`0x12`) with the optional standard `revoke` bit
-(`0x13`). It first authenticates the complete committed prefix, counts only
-revokes protected by a valid transaction commit, then builds the latest
-transaction ID for each revoked block before replaying unrevoked descriptor
-payloads. Journal length comes from inode 8 and must exactly match the
-authenticated 32-bit JBD2 `s_maxlen`; the exact map, uniqueness hash, and
-recovery-only half-full power-of-two revoke index come from the
-caller-provided arena, so 4 MiB is a canonical-fixture choice rather than a
-driver ceiling. Failed-mount retries clear and reuse an existing index instead
-of leaking arena storage; the private writer separately reserves its bounded
-transaction workspace. Revoke comparison uses JBD2's wrapping 32-bit
+(`0x13`). It also covers the authenticated-empty modern branch of steps 5 and
+6 for those journals and for a clean feature-zero journal, which writer-free
+`AKW1` upgrades before the clean landing. Replay first authenticates the
+complete committed prefix, counts only revokes protected by a valid
+transaction commit, then builds the latest transaction ID for each revoked
+block before replaying unrevoked descriptor payloads. Journal length comes
+from inode 8 and must exactly match the authenticated 32-bit JBD2 `s_maxlen`;
+the exact map, uniqueness hash, and recovery-only half-full power-of-two revoke
+index come from the caller-provided arena, so 4 MiB is a canonical-fixture
+choice rather than a driver ceiling. Failed-mount retries clear and reuse an
+existing index instead of leaking arena storage; the private writer separately
+reserves its bounded transaction workspace. Revoke comparison uses JBD2's
+wrapping 32-bit
 transaction ordering.
 The recovery profile additionally requires standard `s_jnl_backup_type=1`.
 All validated sparse-super copies must carry the same 68-byte `s_jnl_blocks`
@@ -452,8 +473,10 @@ stale cursor contents. The copy stores an `AKR1` witness in the JBD2 padding at
 `0x5c..0x6f`: intended ext4-superblock checksum plus complement and anchor
 logical block plus complement. Standard `s_head` at `0x58` is set to the same
 first-unused slot.
-For clean recovery or deactivation, the primary reset is flushed before the
-two-sector ext4-superblock clear, and that clear is flushed before the primary
+For clean recovery or deactivation, strict reload first proves the
+authoritative orphan state empty while `RECOVER` remains set. The primary
+reset is then flushed before the two-sector ext4-superblock clear of
+`RECOVER` and `ORPHAN_PRESENT`, and that clear is flushed before the primary
 witness is removed and flushed. The anchor slot is then zeroed and flushed
 before successful live deactivation returns or recovery publishes a clean
 mount. Once the clean ext4 superblock and standard witness-free primary are
@@ -484,16 +507,23 @@ permitted for per-transaction reuse.
 The clean and dirty-empty cleanup endpoints both reread the raw primary and
 anchor and repeat their prefix proof immediately before installing the
 standard block. Every other torn or inconsistent locator fails closed. Mount
-requires exclusive ownership against concurrent raw-media mutation. `AKR1`
-and `AKG1` remain transient private profile state, not new JBD2 feature bits;
-stock Linux/e2fsprogs mutation and broader hardware power-cut qualification
-must pass before either landing can be called release-ready.
+requires exclusive ownership against concurrent raw-media mutation. `AKR1`,
+`AKG1`, and `AKE1` remain transient private profile state, not new JBD2
+feature bits; stock Linux/e2fsprogs mutation and broader hardware power-cut
+qualification must pass before any landing can be called release-ready.
 
 For an emitted active transaction, reset uses the active guard rather than an
 unrelated first-unused slot and carries the `AKG1` predecessor proof described
-above. Ordinary `AKR1` reset anchors keep those six private words zero. This
-distinction preserves retry authority across an active-to-reset primary tear
-without turning stale historical guards into candidates.
+above. A proven empty predecessor whose normalized old head already names the
+selected anchor carries `AKE1`: marker/complement, old raw head/complement,
+and complete old filesystem-block CRC32C/complement. Its preceding sequence is
+derived from the authenticated reset sequence modulo 32 bits. This lets
+recovery reconstruct raw head zero or nonzero, authenticate 2/4 KiB padding,
+and prove a reset-primary prefix before the `AKR1` marker itself reached the
+primary. Ordinary resets without either predecessor relation keep those six
+private words zero and fail closed on such an early prefix. These distinctions
+preserve retry authority without turning stale historical guards into
+candidates.
 
 A physically read-only volume that needs replay or orphan recovery is
 refused.  A nominal Linux read-only mount can write during recovery; Akashic
@@ -607,9 +637,10 @@ Clean unmount checkpoints a durable `COMMITTED` transaction before the clean
 landing. Staged or in-flight writer states return `VFS-E-BUSY`; force does not
 discard them. The landing performs the required volume flushes, clears
 transient recovery state, writes and proves a clean superblock/journal
-endpoint, and only then detaches. Orphan state will join this transition after
-orphan recovery is implemented. Detach, timeout, or media error cannot produce
-a false clean-success result.
+endpoint, and only then detaches. Nonempty modern and legacy orphan cleanup
+will join this transition when implemented; authenticated-empty modern orphan
+state already uses it. Detach, timeout, or media
+error cannot produce a false clean-success result.
 
 ## Canonical and supplemental external fixtures
 
@@ -697,18 +728,21 @@ flushes metadata after-images, turns the active journal into a standard empty
 journal without clearing `RECOVER`, and rebases the same allocation for an
 immediate sequential transaction without reactivation or arena growth. It
 now also checkpoints `COMMITTED` state during public unmount and performs the
-six-write clean deactivation with terminal fault quarantine. It still performs
-no orphan mutation or user-visible write. Public write capabilities remain
-disabled. Modern `ORPHAN_PRESENT` state is now admitted, after any required
-journal replay and strict reload, into a streaming, non-mutating orphan-file
-preflight. That pass removes the former 4096-block policy ceiling, uses
+six-write clean deactivation with terminal fault quarantine. Public write
+capabilities remain disabled. Modern `ORPHAN_PRESENT` state is now admitted,
+after any required journal replay and strict reload, into a streaming,
+non-mutating orphan-file preflight. An authenticated empty set is completed
+before mount publication through writer-free `AKW1` and
+`AKE1`-qualified `AKR1`, clearing `RECOVER` and `ORPHAN_PRESENT`
+together without changing the orphan inode/file or allocating a private
+writer. That pass removes the former 4096-block policy ceiling, uses
 authenticated filesystem geometry, initially sizes its uniqueness table from
 the exact active count and caller arena, rejects duplicates, and validates
-every referenced inode and applicable map before returning the stable
+every referenced inode and applicable map; a nonempty set returns the stable
 recovery-required refusal. Failed-mount retries clear and reuse a retained
 table when it is large enough rather than abandoning monotonic arena storage.
 The implementation still fails closed on checksum-damaged incomplete tails
-and refuses legacy-orphan recovery, modern orphan mutation, and all
+and refuses legacy-orphan recovery, nonempty modern orphan mutation, and all
 user-visible mutation. ACLs are exposed but not enforced, the real extent
 fixture reaches depth 1 rather than the implemented profile limit of 5, and
 the special-inode fixture does not yet contain a socket. Those qualification
@@ -718,11 +752,12 @@ afterimages, later blocks and files beyond the former 4096-block limit,
 unlinked and structurally invalid referenced inodes, distinct-key hash
 collisions, and arena retry/exhaustion behavior.
 
-The remaining writer gate explicitly includes legacy-chain discovery,
-transactional cleanup for both orphan protocols, the complete
-namespace/data/metadata/xattr mutation surface, external-tool inspection of
-Akashic-authored active, dirty-empty, and clean images, and the controlled
-power-cut/release matrix.
+The remaining writer gate explicitly includes a geometry-derived production
+workspace/capacity contract with bounded transaction chunking, legacy-chain
+discovery, transactional cleanup for both orphan protocols, the complete
+namespace/data/metadata/xattr mutation surface, real `SYNCFS`/`FSYNC`
+durability, external-tool inspection of Akashic-authored active, dirty-empty,
+and clean images, and the controlled power-cut/release matrix.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
