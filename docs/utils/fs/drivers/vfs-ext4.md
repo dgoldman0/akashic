@@ -384,7 +384,13 @@ the first edit. The checksum builder handles the admitted 128-byte low-half
 form and the validated 256-byte `extra_isize`-governed high half.
 `_EXT4-JTX-CLEAR-MODERN-ORPHAN-SLOT`
 reauthenticates the modern logical-block/slot locator and physical-location-
-bound source block, reacquires the newest same-home image, requires that the
+bound source block. Mutation admission proves that exact physical block is in
+bounds and disjoint from the journal, every descriptor-owned bitmap/table,
+and every sparse-super/GDT interval, and also rejects an alias with the target
+inode's retained external xattr block. Because that descriptor-wide scan
+clobbers shared read caches, the builder reconstructs the orphan-file map and
+reauthenticates the planned record, physical home, orphan identity, and slot a
+second time. It then reacquires the newest same-home image, requires that the
 staged slot still names the planned inode, clears it, and recomputes the tail
 CRC32C from the orphan inode number, generation, physical block, and block
 contents. These checks bind discovery records back to current media before
@@ -432,10 +438,11 @@ captured extent blocks plus that retained xattr block in 512-byte sectors.
 Writable ownership admission also reauthenticates the modern orphan file. For
 this first slice, that file must itself use inline depth-0 extents and no
 external xattr. Every complete orphan-file extent, including unwritten or
-preallocated blocks beyond EOF, must be disjoint from every target range, and
-every logical orphan block is reread through its physical-location-bound tail
-checksum. This deliberate mutation-side narrowing avoids freeing a
-checksum-valid cross-inode alias without narrowing read-side orphan discovery.
+preallocated blocks beyond EOF, must be disjoint from every target range and
+from the target's retained external xattr block, and every logical orphan
+block is reread through its physical-location-bound tail checksum. This
+deliberate mutation-side narrowing avoids freeing a checksum-valid cross-inode
+alias without narrowing read-side orphan discovery.
 
 For a nonempty captured root, the builder stages an inode with zero extent
 entries, clears all four inline entry slots, retains the extent header and

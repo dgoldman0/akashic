@@ -8601,48 +8601,7 @@ VARIABLE _EXT4-JOS-GEN
 VARIABLE _EXT4-JOS-ORPHAN-INO
 VARIABLE _EXT4-JOS-SLOT
 VARIABLE _EXT4-JOS-IMAGE
-
-: _EXT4-JTX-CLEAR-MODERN-ORPHAN-SLOT
-  ( plan-record transaction -- ior )
-    _EXT4-JOS-WRITER ! _EXT4-JOS-RECORD !
-    _EXT4-JOS-WRITER @ _EXT4-JTX-ACTIVE? ?DUP IF EXIT THEN
-    _EXT4-JOS-RECORD @ 0= IF VFS-E-INVALID EXIT THEN
-    _EXT4-JOS-WRITER @ _EXT4-JWR.CTX + @ _EXT4-JOS-CTX !
-    _EXT4-JOS-RECORD @ _EXT4-JOS-CTX @ _EXT4-ORPHAN-PLAN-MEMBER? 0= IF
-        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-JOS-RECORD @ _EXT4-OE.INO + @ DUP _EXT4-JOS-INO !
-    _EXT4-JOS-CTX @ _EXT4-VALIDATE-ACTIVE-ORPHAN ?DUP IF EXIT THEN
-    _EXT4-JOS-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
-    _EXT4-JOS-RECORD @ _EXT4-JOS-CTX @ _EXT4-ORPHAN-RECORD? 0= IF
-        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-JOS-RECORD @ _EXT4-OE.KIND + @ _EXT4-OK-MODERN <> IF
-        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-JOS-RECORD @ _EXT4-OE.LOCATOR-B + @ _EXT4-JOS-SLOT !
-    _EXT4-JOS-RECORD @ _EXT4-OE.LOCATOR-A + @
-    _EXT4-JOS-CTX @ _EXT4-READ-ORPHAN-BLOCK ?DUP IF EXIT THEN
-    _EXT4-JOS-CTX @ _EXT4-C.BLOCK + _EXT4-JOS-SLOT @ 4 * + L@
-    _EXT4-JOS-INO @ <> IF
-        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-OV-PHYS @ _EXT4-JOS-HOME !
-    _EXT4-OV-GEN @ _EXT4-JOS-GEN !
-    _EXT4-OV-INO @ _EXT4-JOS-ORPHAN-INO !
-    _EXT4-JOS-CTX @ _EXT4-C.BLOCK + _EXT4-JOS-HOME @
-    _EXT4-JOS-WRITER @ _EXT4-JTX-META-ACQUIRE
-    DUP IF NIP EXIT THEN DROP _EXT4-JOS-IMAGE !
-    _EXT4-JOS-IMAGE @ _EXT4-JOS-SLOT @ 4 * + L@
-    _EXT4-JOS-INO @ <> IF
-        VFS-E-CONFLICT EXIT
-    THEN
-    0 _EXT4-JOS-IMAGE @ _EXT4-JOS-SLOT @ 4 * + L!
-    _EXT4-JOS-IMAGE @ _EXT4-JOS-HOME @ _EXT4-JOS-ORPHAN-INO @
-    _EXT4-JOS-GEN @ _EXT4-JOS-CTX @ _EXT4-RESTAMP-ORPHAN-BLOCK
-    ?DUP IF EXIT THEN
-    _EXT4-JOS-IMAGE @ _EXT4-JOS-HOME @ _EXT4-JOS-WRITER @
-    _EXT4-JTX-META-REPLACE ;
+VARIABLE _EXT4-JOS-EA
 
 \ =====================================================================
 \  Typed, non-emitting block-free accounting after-images
@@ -8884,6 +8843,77 @@ VARIABLE _EXT4-FRS-META-COUNT
         THEN
     LOOP
     0 ;
+
+\ Clearing a modern orphan slot mutates an ordinary mapped file block, so its
+\ read-side checksum is necessary but not sufficient authority.  Prove the
+\ exact physical home is writable non-static storage, disjoint from the
+\ target's retained external xattr, then reread the locator because the
+\ descriptor-wide mutation scan necessarily clobbers C.BLOCK.
+: _EXT4-JTX-CLEAR-MODERN-ORPHAN-SLOT
+  ( plan-record transaction -- ior )
+    _EXT4-JOS-WRITER ! _EXT4-JOS-RECORD !
+    _EXT4-JOS-WRITER @ _EXT4-JTX-ACTIVE? ?DUP IF EXIT THEN
+    _EXT4-JOS-RECORD @ 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-JOS-WRITER @ _EXT4-JWR.CTX + @ _EXT4-JOS-CTX !
+    _EXT4-JOS-RECORD @ _EXT4-JOS-CTX @ _EXT4-ORPHAN-PLAN-MEMBER? 0= IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JOS-RECORD @ _EXT4-OE.INO + @ DUP _EXT4-JOS-INO !
+    _EXT4-JOS-CTX @ _EXT4-VALIDATE-ACTIVE-ORPHAN ?DUP IF EXIT THEN
+    _EXT4-JOS-CTX @ _EXT4-C.INODE + DUP _EXT4-I.FILE-ACL-HI + W@ IF
+        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-I.FILE-ACL-LO + L@ _EXT4-JOS-EA !
+    _EXT4-JOS-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
+    _EXT4-JOS-RECORD @ _EXT4-JOS-CTX @ _EXT4-ORPHAN-RECORD? 0= IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JOS-RECORD @ _EXT4-OE.KIND + @ _EXT4-OK-MODERN <> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JOS-RECORD @ _EXT4-OE.LOCATOR-B + @ _EXT4-JOS-SLOT !
+    _EXT4-JOS-RECORD @ _EXT4-OE.LOCATOR-A + @
+    _EXT4-JOS-CTX @ _EXT4-READ-ORPHAN-BLOCK ?DUP IF EXIT THEN
+    _EXT4-JOS-CTX @ _EXT4-C.BLOCK + _EXT4-JOS-SLOT @ 4 * + L@
+    _EXT4-JOS-INO @ <> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-OV-PHYS @ DUP _EXT4-JOS-HOME !
+    _EXT4-JOS-EA @ = _EXT4-JOS-EA @ 0<> AND IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-OV-GEN @ _EXT4-JOS-GEN !
+    _EXT4-OV-INO @ _EXT4-JOS-ORPHAN-INO !
+    _EXT4-JOS-HOME @ 1 _EXT4-JOS-CTX @
+    _EXT4-VALIDATE-FREE-RANGE-TARGETS ?DUP IF EXIT THEN
+    _EXT4-JOS-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
+    _EXT4-JOS-RECORD @ _EXT4-JOS-CTX @ _EXT4-ORPHAN-RECORD? 0= IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JOS-RECORD @ _EXT4-OE.LOCATOR-A + @
+    _EXT4-JOS-CTX @ _EXT4-READ-ORPHAN-BLOCK ?DUP IF EXIT THEN
+    _EXT4-OV-PHYS @ _EXT4-JOS-HOME @ <>
+    _EXT4-OV-GEN @ _EXT4-JOS-GEN @ <> OR
+    _EXT4-OV-INO @ _EXT4-JOS-ORPHAN-INO @ <> OR IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JOS-CTX @ _EXT4-C.BLOCK + _EXT4-JOS-SLOT @ 4 * + L@
+    _EXT4-JOS-INO @ <> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JOS-CTX @ _EXT4-C.BLOCK + _EXT4-JOS-HOME @
+    _EXT4-JOS-WRITER @ _EXT4-JTX-META-ACQUIRE
+    DUP IF NIP EXIT THEN DROP _EXT4-JOS-IMAGE !
+    _EXT4-JOS-IMAGE @ _EXT4-JOS-SLOT @ 4 * + L@
+    _EXT4-JOS-INO @ <> IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    0 _EXT4-JOS-IMAGE @ _EXT4-JOS-SLOT @ 4 * + L!
+    _EXT4-JOS-IMAGE @ _EXT4-JOS-HOME @ _EXT4-JOS-ORPHAN-INO @
+    _EXT4-JOS-GEN @ _EXT4-JOS-CTX @ _EXT4-RESTAMP-ORPHAN-BLOCK
+    ?DUP IF EXIT THEN
+    _EXT4-JOS-IMAGE @ _EXT4-JOS-HOME @ _EXT4-JOS-WRITER @
+    _EXT4-JTX-META-REPLACE ;
 
 VARIABLE _EXT4-LBB-GROUP
 VARIABLE _EXT4-LBB-CTX
@@ -9329,9 +9359,10 @@ VARIABLE _EXT4-JOT-OF-LEN
 
 \ Writable ownership is stricter than read-side map validity.  Narrow the
 \ orphan-file shape to one whose complete external ownership is enumerable,
-\ then prove that no target range aliases a live orphan protocol block.  Its
-\ inline root resides in an inode table already protected by free-range
-\ admission; depth zero and no external EA leave only these leaf ranges.
+\ then prove that neither a target data range nor its retained external xattr
+\ aliases orphan-file storage.  Its inline root resides in an inode table
+\ already protected by free-range admission; depth zero and no external EA
+\ leave only these leaf ranges.
 : _EXT4-JOT-VALIDATE-ORPHAN-FILE-DISJOINT  ( -- ior )
     _EXT4-JOT-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
     _EXT4-JOT-CTX @ _EXT4-C.INODE +
@@ -9363,6 +9394,13 @@ VARIABLE _EXT4-JOT-OF-LEN
         _EXT4-JOT-OF-INDEX @ 12 * + + DUP _EXT4-JOT-OF-ENTRY !
         DUP _EXT4-EXTENT-LEN@ _EXT4-JOT-OF-LEN !
         8 + L@ _EXT4-JOT-OF-PHYS !
+        _EXT4-JOT-EA @ IF
+            _EXT4-JOT-EA @ 1
+            _EXT4-JOT-OF-PHYS @ _EXT4-JOT-OF-LEN @
+            _EXT4-BLOCK-RANGES-OVERLAP? IF
+                EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+            THEN
+        THEN
         0 _EXT4-JOT-OF-TARGET !
         BEGIN _EXT4-JOT-OF-TARGET @ _EXT4-JOT-COUNT @ < WHILE
             _EXT4-JOT-OF-TARGET @ _EXT4-JOT-RANGE DUP @

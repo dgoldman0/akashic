@@ -11196,6 +11196,100 @@ def test_typed_orphan_staging_rejects_stale_and_conflicting_authority(
     _assert_emitted(output, "EXT4-TYPED-REJECTION-ABORTED")
 
 
+def test_typed_modern_orphan_slot_clear_rejects_target_xattr_alias(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches = list(_modern_orphan_patches(path, (14,)))
+    superblock = patches[0][1]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    orphan_home = patches[1][0] // block_size
+    _, inode_bytes, inode_offset = _ext4_inode_record(path, 14)
+    inode = bytearray(inode_bytes)
+    assert struct.unpack_from("<H", inode, 0x76)[0] == 0
+    assert struct.unpack_from("<I", inode, 0x68)[0] != orphan_home
+    struct.pack_into("<I", inode, 0x68, orphan_home)
+    patches.append(
+        (inode_offset, _inode_with_checksum(superblock, 14, inode))
+    )
+
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _OX-MOUNT-IOR CONSTANT _OX-V"
+            ),
+            "_OX-V _EXT4-CTX CONSTANT _OX-CTX",
+            "0 _OX-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _OX-RECORD",
+            "_OX-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OX-JOURNAL-IOR",
+            "-1 _OX-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "1 0 0 _OX-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _OX-WRITER-IOR CONSTANT _OX-WRITER"
+            ),
+            (
+                "1 0 0 _OX-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _OX-TX-IOR CONSTANT _OX-TX"
+            ),
+            (
+                "_OX-RECORD _OX-TX _EXT4-JTX-CLEAR-MODERN-ORPHAN-SLOT "
+                "CONSTANT _OX-CLEAR-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_OX-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_OX-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_OX-JOURNAL-IOR 0=",
+                        "_OX-WRITER-IOR 0=",
+                        "_OX-TX-IOR 0=",
+                        (
+                            "_OX-CLEAR-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_OX-CLEAR-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        (
+                            "_OX-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-STAGING ="
+                        ),
+                        "_OX-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_OX-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_OX-WRITER _EXT4-JTX-TABLES-VALID?",
+                        "_OX-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-ORPHAN-XATTR-ALIAS-REJECTED" THEN'
+            ),
+            "_OX-TX _EXT4-JTX-ABORT CONSTANT _OX-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_OX-ABORT-IOR 0=",
+                        (
+                            "_OX-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-ORPHAN-XATTR-ALIAS-ABORTED" THEN'
+            ),
+        ],
+        patches=tuple(patches),
+    )
+    _assert_emitted(output, "EXT4-TYPED-ORPHAN-XATTR-ALIAS-REJECTED")
+    _assert_emitted(output, "EXT4-TYPED-ORPHAN-XATTR-ALIAS-ABORTED")
+
+
 @pytest.mark.parametrize(
     ("image_id", "data_block", "xattr_block", "bitmap_home"),
     (
@@ -11799,6 +11893,140 @@ def test_typed_depth0_orphan_truncation_rejects_orphan_storage_alias(
     )
     _assert_emitted(output, "EXT4-TYPED-DEPTH0-ORPHAN-ALIAS-REJECTED")
     _assert_emitted(output, "EXT4-TYPED-DEPTH0-ORPHAN-ALIAS-ABORTED")
+
+
+def test_typed_depth0_orphan_truncation_rejects_xattr_orphan_preallocation(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches = list(_zero_size_depth0_orphan_patches(path))
+    superblock = patches[0][1]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    sectors_per_block = block_size // 512
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, raw_orphan_inode, orphan_inode_offset = _ext4_inode_record(
+        path, orphan_inode_number
+    )
+    orphan_inode = bytearray(raw_orphan_inode)
+    assert struct.unpack_from("<HHHH", orphan_inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    orphan_blocks = struct.unpack_from("<I", orphan_inode, 0x04)[0] // block_size
+    assert orphan_blocks > 0
+    first_length = struct.unpack_from("<H", orphan_inode, 0x38)[0]
+    assert first_length == orphan_blocks
+    target_inode = patches[2][1]
+    assert struct.unpack_from("<H", target_inode, 0x76)[0] == 0
+    target_xattr = struct.unpack_from("<I", target_inode, 0x68)[0]
+    assert target_xattr > 0
+    first_physical = struct.unpack_from("<I", orphan_inode, 0x3C)[0]
+    assert not first_physical <= target_xattr < first_physical + first_length
+
+    struct.pack_into("<H", orphan_inode, 0x2A, 2)
+    struct.pack_into(
+        "<IHHI",
+        orphan_inode,
+        0x40,
+        orphan_blocks,
+        1,
+        0,
+        target_xattr,
+    )
+    struct.pack_into(
+        "<I",
+        orphan_inode,
+        0x1C,
+        struct.unpack_from("<I", orphan_inode, 0x1C)[0] + sectors_per_block,
+    )
+    patches.append(
+        (
+            orphan_inode_offset,
+            _inode_with_checksum(
+                superblock, orphan_inode_number, orphan_inode
+            ),
+        )
+    )
+
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _OP-MOUNT-IOR CONSTANT _OP-V"
+            ),
+            "_OP-V _EXT4-CTX CONSTANT _OP-CTX",
+            "0 _OP-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _OP-RECORD",
+            "_OP-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OP-JOURNAL-IOR",
+            "-1 _OP-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "4 0 0 _OP-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _OP-WRITER-IOR CONSTANT _OP-WRITER"
+            ),
+            (
+                "4 0 0 _OP-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _OP-TX-IOR CONSTANT _OP-TX"
+            ),
+            (
+                "_OP-RECORD _OP-TX "
+                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0-TRUNCATE "
+                "CONSTANT _OP-STAGE-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_OP-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_OP-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_OP-JOURNAL-IOR 0=",
+                        "_OP-WRITER-IOR 0=",
+                        "_OP-TX-IOR 0=",
+                        (
+                            "_OP-STAGE-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_OP-STAGE-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        (
+                            "_OP-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-STAGING ="
+                        ),
+                        "_OP-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_OP-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_OP-WRITER _EXT4-JTX-TABLES-VALID?",
+                        "_OP-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-DEPTH0-XATTR-PREALLOC-REJECTED" THEN'
+            ),
+            "_OP-TX _EXT4-JTX-ABORT CONSTANT _OP-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_OP-ABORT-IOR 0=",
+                        (
+                            "_OP-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_OP-WRITER _EXT4-JWR.META-USED + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-DEPTH0-XATTR-PREALLOC-ABORTED" THEN'
+            ),
+        ],
+        patches=tuple(patches),
+    )
+    _assert_emitted(output, "EXT4-TYPED-DEPTH0-XATTR-PREALLOC-REJECTED")
+    _assert_emitted(output, "EXT4-TYPED-DEPTH0-XATTR-PREALLOC-ABORTED")
 
 
 @pytest.mark.parametrize(
