@@ -910,15 +910,19 @@ def _already_empty_unlinked_orphan_patches(
     return tuple(patches.items())
 
 
-def _unsupported_unlinked_orphan_patches(
+def _unlinked_orphan_ownership_patches(
     path: Path,
     *,
     protocol: str,
     case: str,
     inode_number: int = 18,
 ) -> tuple[tuple[int, bytes], ...]:
-    """Retain authenticated ownership that the first reclaim slice excludes."""
-    assert case in {"nonzero-i-blocks", "inline-xattr"}
+    """Add authenticated ownership variants to an unlinked orphan."""
+    assert case in {
+        "nonzero-i-blocks",
+        "inline-xattr",
+        "inline-xattr-value-inode",
+    }
     patches = list(
         _already_empty_unlinked_orphan_patches(
             path,
@@ -941,6 +945,9 @@ def _unsupported_unlinked_orphan_patches(
         _, source_inode, _ = _ext4_inode_record(path, 14)
         assert struct.unpack_from("<I", source_inode, 0xA0)[0] == 0xEA02_0000
         inode[0xA0:0x100] = source_inode[0xA0:0x100]
+        if case == "inline-xattr-value-inode":
+            assert struct.unpack_from("<I", inode, 0xA8)[0] == 0
+            struct.pack_into("<I", inode, 0xA8, 14)
     patches[patch_index] = (
         inode_offset,
         _inode_with_checksum(superblock, inode_number, inode),
@@ -12161,10 +12168,10 @@ def test_unlinked_singleton_cleanup_measures_and_seals_exact_certificate(
             "EXT4-D-DATA-MAP",
         ),
         (
-            "inline-xattr",
+            "inline-xattr-value-inode",
             "VFS-R-UNSUPPORTED",
             "0",
-            "EXT4-D-RECOVERY",
+            "EXT4-D-XATTR",
         ),
     ),
 )
@@ -12177,7 +12184,7 @@ def test_mount_rejects_unlinked_reclaim_with_unreleased_ownership(
     expected_detail: str,
 ) -> None:
     path = canonical_images["primary-1k-i256"]
-    patches = _unsupported_unlinked_orphan_patches(
+    patches = _unlinked_orphan_ownership_patches(
         path,
         protocol=protocol,
         case=case,
@@ -12278,6 +12285,7 @@ def _run_singleton_unlinked_cleanup(
     media_path: Path,
     *,
     protocol: str,
+    patches: tuple[tuple[int, bytes], ...] | None = None,
 ) -> dict[str, object]:
     assert protocol in {"modern", "legacy"}
     with path.open("rb") as source_media:
@@ -12302,10 +12310,11 @@ def _run_singleton_unlinked_cleanup(
     expected_super_free = struct.unpack_from("<I", canonical_super, 0x10)[0]
     bitmap_byte, bitmap_bit = divmod(18 - 1, 8)
     bitmap_mask = 1 << bitmap_bit
-    patches = _already_empty_unlinked_orphan_patches(
-        path,
-        protocol=protocol,
-    )
+    if patches is None:
+        patches = _already_empty_unlinked_orphan_patches(
+            path,
+            protocol=protocol,
+        )
     marker = f"EXT4-{protocol.upper()}-UNLINKED-ORPHAN-RECLAIMED"
     expected_home_writes = 4 if protocol == "modern" else 3
     output, trace, media_sha256 = run_recovery_forth(
@@ -12488,6 +12497,34 @@ def test_mount_reclaims_unlinked_singleton_orphan_across_geometry(
         protocol=protocol,
     )
     _assert_singleton_unlinked_cleanup_result(result)
+
+
+@pytest.mark.parametrize("protocol", ("modern", "legacy"))
+def test_mount_reclaims_unlinked_singleton_orphan_with_inline_xattr(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+    protocol: str,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches = _unlinked_orphan_ownership_patches(
+        path,
+        protocol=protocol,
+        case="inline-xattr",
+    )
+    result = _run_singleton_unlinked_cleanup(
+        path,
+        tmp_path / f"{protocol}-inline-xattr-unlinked-cleanup.img",
+        protocol=protocol,
+        patches=patches,
+    )
+    _assert_singleton_unlinked_cleanup_result(result)
+
+    clean_image = result["clean_image"]
+    assert isinstance(clean_image, Path)
+    _, stale_inode, inode_offset = _ext4_inode_record(clean_image, 18)
+    expected_inode = dict(patches)[inode_offset]
+    assert struct.unpack_from("<I", stale_inode, 0xA0)[0] == 0xEA02_0000
+    assert stale_inode == expected_inode
 
 
 def _assert_unlinked_cleanup_media_converges(

@@ -9799,21 +9799,21 @@ VARIABLE _EXT4-JFI-PUBLISHED
 VARIABLE _EXT4-JFI-ABORT-IOR
 
 : _EXT4-JFI-INLINE-XATTR-PREFLIGHT  ( -- ior )
-    _EXT4-JFI-CTX @ _EXT4-C.ISIZE + @ 128 <= IF 0 EXIT THEN
-    _EXT4-JFI-INODE @ _EXT4-I.EXTRA-SIZE + W@ 128 +
-    _EXT4-JFI-INODE @ + DUP 4 +
-    _EXT4-JFI-INODE @ _EXT4-JFI-CTX @ _EXT4-C.ISIZE + @ + U> IF
-        DROP EXT4-D-XATTR _EXT4-CORRUPT EXIT
-    THEN
-    L@ DUP 0= IF DROP 0 EXIT THEN
-    _EXT4-XATTR-MAGIC = IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
-    EXT4-D-XATTR _EXT4-CORRUPT ;
+    \ Inline values die with the inode allocation bit and need no separate
+    \ metadata after-image.  Reuse the read-side structural walker to prove
+    \ that every admitted value is resident in this inode: e_value_inum must
+    \ be zero, names and values are bounded and nonoverlapping, and the
+    \ packed entry list is ordered and terminated.  No output buffer is live.
+    _EXT4-XOP-LIST _EXT4-XA-OP !
+    0 _EXT4-XA-TOTAL ! 0 _EXT4-XA-EMIT !
+    0 _EXT4-XA-INLINE-FIRST ! 0 _EXT4-XA-INLINE-LIMIT !
+    0 _EXT4-XA-CROSS !
+    _EXT4-JFI-CTX @ _EXT4-XA-INLINE ;
 
-\ Authenticate the smallest complete deletion shape.  Data and xattr release
-\ are deliberately outside this slice: the inode must already own no external
-\ storage and its inline depth-zero extent root must already be empty.
+\ Authenticate the smallest complete deletion shape.  Data and external-xattr
+\ release are deliberately outside this slice: the inode must already own no
+\ external storage and its inline depth-zero extent root must already be empty.
+\ Structurally valid resident inline xattrs require no separate release.
 : _EXT4-JFI-AUTH-PREFLIGHT  ( -- ior )
     _EXT4-JFI-RECORD @ 0= _EXT4-JFI-CTX @ 0= OR IF
         VFS-E-INVALID EXIT

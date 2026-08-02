@@ -128,9 +128,11 @@ does not use journal-data mode. An authenticated external xattr is retained;
 the root may already be empty or may contain ranges that the bounded
 free-block builder can account for exactly. An unlinked target must be an
 allocated regular file with zero links, zero size, an already-empty inline
-depth-0 extent root, no external or inline xattr, and an exact zero decoded
-`i_blocks` value. That narrower delete shape owns no storage other than its
-inode allocation. Every other nonempty union remains a stable
+depth-0 extent root, no external xattr block, and an exact zero decoded
+`i_blocks` value. A resident inline xattr area is admitted only after the
+structural walker proves bounded, ordered, nonoverlapping values with no
+value-inode reference. That narrower delete shape owns no storage other than
+its inode allocation. Every other nonempty union remains a stable
 `EXT4-D-RECOVERY` refusal after any required replay and before a
 cleanup-specific transaction is activated or emitted.
 
@@ -496,9 +498,11 @@ media write.
 `_EXT4-JTX-STAGE-FREE-ORPHAN-INODE` is the corresponding first inode-release
 builder. It reauthenticates one canonical singleton plan record and accepts
 only an allocated, unlinked regular inode whose size, inline depth-0 extent
-entries, decoded `i_blocks`, external xattr pointer, and inline xattr area are
-all empty. The target must be at or above `s_first_ino`; journal-data mode and
-all storage-owning shapes remain outside this slice. It derives the inode
+entries, decoded `i_blocks`, and external xattr pointer are all empty. A
+resident inline xattr area is structurally authenticated with the shared
+reader walker and may not refer to a value inode. The target must be at or
+above `s_first_ino`; journal-data mode and all external storage-owning shapes
+remain outside this slice. It derives the inode
 group, bitmap bit, table locator, primary GDT page, and primary-super home from
 authenticated geometry, proves the inode bitmap has one descriptor owner and
 aliases no block bitmap, inode table, sparse metadata, or journal range, and
@@ -876,8 +880,9 @@ The remaining boundaries are:
   user-visible write. Cleanup still does not cover a union with more than one
   active record, nonzero-size or tail truncation, depth-positive extent trees,
   legacy direct/indirect map mutation, an unlinked inode that still owns
-  extents, decoded `i_blocks`, or an inline/external xattr, external-xattr
-  release, general link-count and multi-node legacy-chain repair, or
+  extents, decoded `i_blocks`, an external xattr block, or an inline xattr
+  value inode, external-xattr/value-inode release, general link-count and
+  multi-node legacy-chain repair, or
   multi-transaction chunking. General inode allocation/free, deletion-time and
   inode-table lifecycle policy, and every user-visible mutation operation
   remain unimplemented;
@@ -890,10 +895,12 @@ The remaining boundaries are:
   It pins exact three/four-home credit, delete-specific sealing and mutation
   freeze, complete abort scrubbing, allocation-bit clearing, descriptor and
   super free-inode accounting, conservative `itable_unused`, and the absence
-  of a target inode-table after-image. Valid inline-xattr ownership is refused
-  as unsupported and unexplained nonzero `i_blocks` is rejected as corruption;
-  both fail before writer allocation or any write/flush. The established linked
-  modern/legacy seal and mount paths pass against the shared mode/checkpoint
+  of a target inode-table after-image. Structurally valid resident inline
+  xattrs are reclaimed without rewriting their now-stale inode-table bytes; an
+  inline value-inode reference is refused as unsupported, and unexplained
+  nonzero `i_blocks` is rejected as corruption. Both refusal cases fail before
+  writer allocation or any write/flush. The established linked modern/legacy
+  seal and mount paths pass against the shared mode/checkpoint
   changes. A controlled matrix covers seven modern and six legacy write
   prefixes: both sides of final commit, every operation-specific metadata
   home, and final-super publication. Three fences per protocol cover commit,
