@@ -872,6 +872,43 @@ block, descriptor tag and payload checksums, commit, clean superblock, and
 empty guard. A fresh read-only mount performs no recovery I/O and returns the
 complete modified file plus the exact nanosecond timestamps.
 
+`_EXT4-MOUNTED-ONEBLOCK-WRITE` now composes that exact slice as a reusable
+private mounted client. It accepts source/count, file offset, inode number,
+expected generation, explicit seconds/nanoseconds, and the mounted VFS, and
+returns `actual ior`. A zero-length request returns `0 0` without allocating a
+writer. Every nonempty request preflights and ensures the exact `1/1/0`
+workspace. Before either operation it copies the admitted source into one
+private `_EXT4-MAX-BLOCK` snapshot, preserving caller bytes even when the
+source aliases a shared ext4 cache or writer storage that dry staging,
+activation, or writer rebase will overwrite. Every post-copy return scrubs the
+complete snapshot; a caller span overlapping that private snapshot is invalid.
+The first clean request dry-stages and aborts before activation; after
+activation, successful calls synchronously stage, emit, and checkpoint, then
+retain the same scrubbed `IDLE` writer for the next call without arena growth.
+A staging refusal reports zero progress and aborts only a still-mutable
+transaction. Once emission has advanced, existing writer fault/quarantine
+semantics retain the uncertain durable state for remount recovery, and an
+already latched abort fault takes precedence over the staging error that led
+to it. `actual` counts only bytes whose complete checkpoint succeeded;
+`actual = 0` after an emission or checkpoint fault does not claim that ordered
+data or a replayable transaction is absent. That is another reason this result
+contract is not yet the public VFS `WRITE` contract.
+
+Focused mounted-client qualification separates media-clean refusal from the
+long durability journey so each remains within the canonical emulator step
+budget. Zero length leaves the arena unchanged; a stale generation allocates
+the one reusable workspace but emits no write or flush and leaves the clean
+journal inactive. A fresh journey performs two disjoint overwrites of the same
+file through one writer, preserves the first edit in the second full-block RMW,
+and checkpoints both inode after-images. The first source is deliberately
+placed in the shared ext4 block cache and the second in writer scratch, pinning
+the cross-phase snapshot rule. It then drops the volatile mount at the
+authenticated dirty/empty write-active endpoint. A fresh mount performs
+the clean landing, returns both edits and the second exact timestamp through
+the path and its hard-link alias, and leaves a subsequent unmount clean. The
+client remains absent from `EXT4-OPS`: it deliberately does not publish vnode
+timestamps or dirty state for continued public access.
+
 Controlled sequential-write qualification tears the first inode-table home
 write at byte 269, one byte into the target inode's new `i_ctime`. The ordered
 data and committed journal are already durable, while the torn home is neither
@@ -945,8 +982,9 @@ extent and legacy-map growth and shrink, directory-entry mutation,
 inode/link/time/accounting updates, xattr mutation, namespace/cache coherence,
 real sync semantics, broader orphan recovery, and interoperability plus
 power-cut qualification. The durable internal transaction engine now has a
-production recovery client, but the filesystem mutation layer and its
-qualification remain several major implementation phases away.
+mounted private client for its first ordinary-data shape, but the public
+filesystem mutation layer and its qualification remain several major
+implementation phases away.
 
 That narrow private write checkpoint has now reached private durability:
 one size-preserving regular-file overwrite contained in one already allocated
@@ -956,11 +994,14 @@ allocator or extent edit and fits the exact `1 metadata / 1 data / 0 revoke`
 transaction shape. End-to-end emit, checkpoint, clean unmount, write-free
 remount, and one checkpoint-home sequential tear/replay case pass. Pinned
 external-tool inspection and the broader controlled power-cut matrix remain
-qualification gates. The operation remains private until production writer
-workspace and chunking policy, a trustworthy clock source, VFS dirty/cache
-coherence, and real `FSYNC` and `SYNCFS` behavior are settled. Growth, holes,
-unwritten extents, cross-block writes, truncation, and namespace mutation
-remain later phases.
+qualification gates. The mounted private client adds zero-length behavior,
+stable pre-activation refusal, synchronous success, sequential writer reuse,
+and dirty/empty crash-remount cleanup without widening the supported data
+shape. The operation remains private until production writer workspace and
+chunking policy, a trustworthy clock source, VFS dirty/cache coherence, and
+real `FSYNC` and `SYNCFS` behavior are settled. Growth, holes, unwritten
+extents, cross-block writes, truncation, and namespace mutation remain later
+phases.
 
 The remaining boundaries are:
 

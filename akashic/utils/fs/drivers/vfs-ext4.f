@@ -13084,6 +13084,176 @@ VARIABLE _EXT4-JCE-DATA-GDT-HOME
     _EXT4-JCP-ENTRY-READY @ _EXT4-JCP-CTX @ _EXT4-C.READY + !
     0 ;
 
+VARIABLE _EXT4-MOW-SOURCE
+VARIABLE _EXT4-MOW-COUNT
+VARIABLE _EXT4-MOW-OFFSET
+VARIABLE _EXT4-MOW-INO
+VARIABLE _EXT4-MOW-GEN
+VARIABLE _EXT4-MOW-SECONDS
+VARIABLE _EXT4-MOW-NSEC
+VARIABLE _EXT4-MOW-V
+VARIABLE _EXT4-MOW-CTX
+VARIABLE _EXT4-MOW-WRITER
+VARIABLE _EXT4-MOW-TX
+VARIABLE _EXT4-MOW-IOR
+VARIABLE _EXT4-MOW-ACTIVE
+CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
+
+: _EXT4-MOW-SCRUB  ( -- )
+    _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK 0 FILL ;
+
+: _EXT4-MOW-ENTRY  ( -- ior )
+    _EXT4-MOW-V @ 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-MOW-V @ V.LIFECYCLE @ VFS-L-MOUNTED <> IF
+        VFS-E-STALE EXIT
+    THEN
+    _EXT4-MOW-V @ V.VOLUME @ DUP 0= IF
+        DROP VFS-E-INVALID EXIT
+    THEN _EXT4-IO-VOL !
+    _EXT4-MOW-V @ _EXT4-IO-VFS !
+    _EXT4-MOW-V @ V.BCTX @ DUP _EXT4-MOW-CTX ! 0= IF
+        VFS-E-STALE EXIT
+    THEN
+    _EXT4-MOW-V @ _EXT4-ATTACHED? 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-MOW-V @ _EXT4-READY? 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-MOW-CTX @ _EXT4-C.J.WRITER-CURRENT + @ 0= IF
+        VFS-E-STALE EXIT
+    THEN
+    _EXT4-MOW-CTX @ _EXT4-C.J.START + @
+    _EXT4-MOW-CTX @ _EXT4-C.J.WITNESS + @ OR
+    _EXT4-MOW-CTX @ _EXT4-C.J.PRIMARY-TORN + @ OR
+    _EXT4-MOW-CTX @ _EXT4-C.J.CLEANUP + @ OR
+    _EXT4-MOW-CTX @ _EXT4-C.SUPER-TORN + @ OR IF
+        VFS-E-BUSY EXIT
+    THEN
+    _EXT4-MOW-CTX @ _EXT4-C.O.ACTIVE + @
+    _EXT4-MOW-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ OR
+    _EXT4-MOW-CTX @ _EXT4-C.O.LEGACY-ACTIVE + @ OR
+    _EXT4-MOW-CTX @ _EXT4-C.O.CLEAR-PENDING + @ OR IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-MOW-CTX @ _EXT4-C.RECOVERY + @ 0<> DUP
+    _EXT4-MOW-ACTIVE !
+    _EXT4-MOW-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ 0<> = 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-MOW-ACTIVE @ IF
+        _EXT4-MOW-V @ V.FLAGS @ VFS-F-DIRTY AND 0= IF
+            VFS-E-CORRUPT EXIT
+        THEN
+        _EXT4-MOW-CTX @ _EXT4-C.J.WRITER + @ DUP 0= IF
+            DROP VFS-E-CORRUPT EXIT
+        THEN
+        DUP _EXT4-JWR-VALID? 0= IF DROP VFS-E-CORRUPT EXIT THEN
+        DUP _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <> IF
+            DUP _EXT4-JWR.FAULT + @ ?DUP IF NIP EXIT THEN
+            DROP VFS-E-BUSY EXIT
+        THEN
+        DUP _EXT4-JWR.FAULT + @ IF DROP VFS-E-CORRUPT EXIT THEN
+        _EXT4-JWR-IDLE-CLEAN? 0= IF VFS-E-CORRUPT EXIT THEN
+    ELSE
+        _EXT4-MOW-V @ V.FLAGS @ VFS-F-DIRTY AND IF
+            VFS-E-BUSY EXIT
+        THEN
+    THEN
+    _EXT4-MOW-CTX @ _EXT4-RECOVERY-MEDIA ;
+
+\ Clean staging errors retain no media authority.  Abort only when the
+\ transaction is still mutable; the typed builder may already have aborted
+\ itself after an internal ordered-data publication.  A structurally failed
+\ abort is latched because the persistent workspace can no longer be reused.
+: _EXT4-MOW-FAIL  ( ior -- actual ior )
+    _EXT4-MOW-IOR !
+    _EXT4-MOW-WRITER @ ?DUP IF
+        DUP _EXT4-JWR.STATE + @ _EXT4-JWR-STAGING = IF
+            _EXT4-JTX-ABORT ?DUP IF
+                _EXT4-MOW-WRITER @ _EXT4-JWR-LATCH-FAULT
+                _EXT4-MOW-IOR !
+            THEN
+        ELSE
+            DUP _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = IF
+                _EXT4-JWR.FAULT + @ ?DUP IF _EXT4-MOW-IOR ! THEN
+            ELSE
+                DROP
+            THEN
+        THEN
+    THEN
+    _EXT4-MOW-SCRUB
+    0 _EXT4-MOW-IOR @ ;
+
+\ Production-shaped private client for the exact qualified overwrite.  The
+\ first clean call dry-stages before it can activate the journal.  Successful
+\ calls checkpoint synchronously and retain one scrubbed write-active writer
+\ for sequential reuse; ordinary unmount performs final clean deactivation.
+\ This is deliberately absent from EXT4-OPS and does not update VFS vnodes.
+\ ACTUAL counts only fully checkpointed caller bytes: zero after an emission
+\ fault does not assert that ordered data or a replayable commit stayed absent.
+: _EXT4-MOUNTED-ONEBLOCK-WRITE
+  ( source count file-offset inode-number expected-generation
+    seconds nsec vfs -- actual ior )
+    _EXT4-MOW-V ! _EXT4-MOW-NSEC ! _EXT4-MOW-SECONDS !
+    _EXT4-MOW-GEN ! _EXT4-MOW-INO ! _EXT4-MOW-OFFSET !
+    _EXT4-MOW-COUNT ! _EXT4-MOW-SOURCE !
+    0 _EXT4-MOW-WRITER ! 0 _EXT4-MOW-TX !
+    _EXT4-MOW-ENTRY ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-MOW-COUNT @ 0< IF 0 VFS-E-INVALID EXIT THEN
+    _EXT4-MOW-COUNT @ 0= IF 0 0 EXIT THEN
+    _EXT4-MOW-SOURCE @ _EXT4-MOW-COUNT @ _VFS-BUFFER? 0= IF
+        0 VFS-E-INVALID EXIT
+    THEN
+    _EXT4-MOW-SOURCE @ _EXT4-MOW-COUNT @
+    _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK MSPAN-OVERLAP? IF
+        0 VFS-E-INVALID EXIT
+    THEN
+    _EXT4-MOW-OFFSET @ 0< IF 0 VFS-E-INVALID EXIT THEN
+    _EXT4-MOW-COUNT @ _EXT4-MOW-CTX @ _EXT4-C.BSIZE + @ U> IF
+        0 EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    \ Preserve caller bytes across dry-stage abort, activation cache reuse,
+    \ and live-stage writer rebase, then scrub them on every later return.
+    _EXT4-MOW-SOURCE @ _EXT4-MOW-SNAPSHOT _EXT4-MOW-COUNT @ MOVE
+    1 1 0 _EXT4-MOW-CTX @ _EXT4-JTX-PREFLIGHT-CAPACITY
+    ?DUP IF _EXT4-MOW-FAIL EXIT THEN
+    1 1 0 _EXT4-MOW-CTX @ _EXT4-JWR-ENSURE
+    _EXT4-MOW-IOR ! _EXT4-MOW-WRITER !
+    _EXT4-MOW-IOR @ ?DUP IF _EXT4-MOW-FAIL EXIT THEN
+    _EXT4-MOW-ACTIVE @ 0= IF
+        1 1 0 _EXT4-MOW-WRITER @ _EXT4-JTX-BEGIN
+        _EXT4-MOW-IOR ! _EXT4-MOW-TX !
+        _EXT4-MOW-IOR @ ?DUP IF _EXT4-MOW-FAIL EXIT THEN
+        _EXT4-MOW-SNAPSHOT _EXT4-MOW-COUNT @ _EXT4-MOW-OFFSET @
+        _EXT4-MOW-INO @ _EXT4-MOW-GEN @ _EXT4-MOW-SECONDS @
+        _EXT4-MOW-NSEC @ _EXT4-MOW-TX @
+        _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE
+        ?DUP IF _EXT4-MOW-FAIL EXIT THEN
+        _EXT4-MOW-TX @ _EXT4-JTX-ABORT
+        ?DUP IF _EXT4-MOW-FAIL EXIT THEN
+        _EXT4-MOW-WRITER @ _EXT4-JWR-ACTIVATE
+        ?DUP IF _EXT4-MOW-FAIL EXIT THEN
+    THEN
+    1 1 0 _EXT4-MOW-WRITER @ _EXT4-JTX-BEGIN
+    _EXT4-MOW-IOR ! _EXT4-MOW-TX !
+    _EXT4-MOW-IOR @ ?DUP IF _EXT4-MOW-FAIL EXIT THEN
+    _EXT4-MOW-SNAPSHOT _EXT4-MOW-COUNT @ _EXT4-MOW-OFFSET @
+    _EXT4-MOW-INO @ _EXT4-MOW-GEN @ _EXT4-MOW-SECONDS @
+    _EXT4-MOW-NSEC @ _EXT4-MOW-TX @
+    _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE
+    ?DUP IF _EXT4-MOW-FAIL EXIT THEN
+    _EXT4-MOW-TX @ _EXT4-JTX-EMIT
+    ?DUP IF _EXT4-MOW-FAIL EXIT THEN
+    _EXT4-MOW-TX @ _EXT4-JTX-CHECKPOINT
+    ?DUP IF _EXT4-MOW-FAIL EXIT THEN
+    _EXT4-MOW-WRITER @ _EXT4-JWR-VALID? 0= IF
+        VFS-E-CORRUPT _EXT4-MOW-WRITER @ _EXT4-JWR-LATCH-FAULT
+        _EXT4-MOW-FAIL EXIT
+    THEN
+    _EXT4-MOW-WRITER @ _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <>
+    _EXT4-MOW-WRITER @ _EXT4-JWR-IDLE-CLEAN? 0= OR IF
+        VFS-E-CORRUPT _EXT4-MOW-WRITER @ _EXT4-JWR-LATCH-FAULT
+        _EXT4-MOW-FAIL EXIT
+    THEN
+    _EXT4-MOW-COUNT @ _EXT4-MOW-SCRUB 0 ;
+
 VARIABLE _EXT4-EL-CTX
 VARIABLE _EXT4-EL-V
 VARIABLE _EXT4-EL-WRITER

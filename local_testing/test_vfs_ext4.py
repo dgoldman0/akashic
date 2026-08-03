@@ -19206,6 +19206,559 @@ def test_typed_one_block_write_checkpoint_tear_replays_exact_inode(
         stable_path.unlink(missing_ok=True)
 
 
+def test_mounted_one_block_write_refuses_then_reuses_one_writer(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    standard = writer_activation_fixture["standard"]
+    clean_super = writer_activation_fixture["clean_super"]
+    dirty_super = writer_activation_fixture["dirty_super"]
+    guard_logical = writer_activation_fixture["guard_logical"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(standard, bytes)
+    assert isinstance(clean_super, bytes)
+    assert isinstance(dirty_super, bytes)
+    assert isinstance(guard_logical, int)
+    assert isinstance(journal0_physical, int)
+
+    superblock, inode, inode_offset = _ext4_inode_record(path, 14)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    assert block_size == 1024
+    assert inode_size == 256
+    data_block = _extent_root_physical(inode, 0)
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    file_size = struct.unpack_from("<I", inode, 0x04)[0]
+    assert file_size == 54
+    first_replacement = b"WRITE-RMW"
+    first_offset = 11
+    first_seconds = 3_000_000_000
+    first_nanoseconds = 123_456_789
+    second_replacement = b"SECOND"
+    second_offset = 38
+    second_seconds = 3_000_000_005
+    second_nanoseconds = 987_654_321
+
+    with path.open("rb") as source:
+        source.seek(data_block * block_size)
+        original_data = source.read(block_size)
+        source.seek(inode_home * block_size)
+        original_inode_home = source.read(block_size)
+    assert len(original_data) == len(original_inode_home) == block_size
+    expected_data = bytearray(original_data)
+    expected_data[
+        first_offset : first_offset + len(first_replacement)
+    ] = first_replacement
+    expected_data[
+        second_offset : second_offset + len(second_replacement)
+    ] = second_replacement
+    expected_file = bytes(expected_data[:file_size])
+    expected_file_forth = "CREATE _MWR-EXPECTED " + " ".join(
+        f"{byte} C," for byte in expected_file
+    )
+    second_low = second_seconds & 0xFFFF_FFFF
+    second_signed_low = second_low - 0x1_0000_0000
+    second_epoch = (second_seconds - second_signed_low) >> 32
+    assert second_epoch == 1
+    second_extra = (second_nanoseconds << 2) | second_epoch
+    expected_inode = bytearray(inode)
+    struct.pack_into("<I", expected_inode, 0x0C, second_low)
+    struct.pack_into("<I", expected_inode, 0x10, second_low)
+    struct.pack_into("<I", expected_inode, 0x84, second_extra)
+    struct.pack_into("<I", expected_inode, 0x88, second_extra)
+    expected_inode = bytearray(
+        _inode_with_checksum(superblock, 14, expected_inode)
+    )
+    expected_inode_home = bytearray(original_inode_home)
+    expected_inode_home[
+        inode_block_offset : inode_block_offset + inode_size
+    ] = expected_inode
+
+    first = struct.unpack_from(">I", standard, 0x14)[0]
+    maxlen = struct.unpack_from(">I", standard, 0x10)[0]
+    source_sequence = struct.unpack_from(">I", standard, 0x18)[0]
+    logical = {
+        "guard": guard_logical,
+        "descriptor": _jbd2_ring_advance(
+            guard_logical, 1, first=first, maxlen=maxlen
+        ),
+        "payload": _jbd2_ring_advance(
+            guard_logical, 2, first=first, maxlen=maxlen
+        ),
+        "commit": _jbd2_ring_advance(
+            guard_logical, 3, first=first, maxlen=maxlen
+        ),
+        "sentinel": _jbd2_ring_advance(
+            guard_logical, 4, first=first, maxlen=maxlen
+        ),
+    }
+    journal_map = _ext4_journal_physical_map(
+        path, (0, *logical.values())
+    )
+    physical = {
+        name: journal_map[position] for name, position in logical.items()
+    }
+    emission_trace = (
+        ("write", data_block * 2, 2),
+        ("write", physical["descriptor"] * 2, 2),
+        ("write", physical["payload"] * 2, 2),
+        ("write", physical["commit"] * 2, 2),
+        ("write", physical["sentinel"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["commit"] * 2, 2),
+        ("flush", 0, 0),
+    )
+    checkpoint_trace = (
+        ("write", inode_home * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+    )
+    deactivation_trace = (
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+    )
+
+    refusal_path = tmp_path / "mounted-one-block-write-refusal.img"
+    media_path = tmp_path / "mounted-one-block-write-reuse.img"
+    try:
+        refusal_output, refusal_trace, _ = run_recovery_forth(
+            path,
+            refusal_path,
+            [
+                "T-ARENA CONSTANT _MWP-ARENA",
+                (
+                    "_MWP-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _MWP-MOUNT-IOR CONSTANT _MWP-V"
+                ),
+                "_MWP-V _EXT4-CTX CONSTANT _MWP-CTX",
+                "_MWP-ARENA ARENA-USED CONSTANT _MWP-USED-EMPTY",
+                (
+                    f"0 0 0 14 {generation} {first_seconds} "
+                    f"{first_nanoseconds} _MWP-V "
+                    "_EXT4-MOUNTED-ONEBLOCK-WRITE "
+                    "CONSTANT _MWP-ZERO-IOR CONSTANT _MWP-ZERO-ACTUAL"
+                ),
+                "_MWP-ARENA ARENA-USED CONSTANT _MWP-USED-AFTER-ZERO",
+                'S" X" _EXT4-MOW-SNAPSHOT SWAP MOVE',
+                (
+                    f"_EXT4-MOW-SNAPSHOT 1 0 14 {generation} "
+                    f"{first_seconds} {first_nanoseconds} _MWP-V "
+                    "_EXT4-MOUNTED-ONEBLOCK-WRITE "
+                    "CONSTANT _MWP-ALIAS-IOR CONSTANT _MWP-ALIAS-ACTUAL"
+                ),
+                "_MWP-ARENA ARENA-USED CONSTANT _MWP-USED-AFTER-ALIAS",
+                (
+                    f'S" X" 0 14 {generation + 1} {first_seconds} '
+                    f"{first_nanoseconds} _MWP-V "
+                    "_EXT4-MOUNTED-ONEBLOCK-WRITE "
+                    "CONSTANT _MWP-STALE-IOR CONSTANT _MWP-STALE-ACTUAL"
+                ),
+                "_MWP-CTX _EXT4-C.J.WRITER + @ CONSTANT _MWP-WRITER",
+                "_MWP-ARENA ARENA-USED CONSTANT _MWP-USED-WRITER",
+                (
+                    _forth_conjunction(
+                        [
+                            "_MWP-MOUNT-IOR 0=",
+                            "_MWP-ZERO-IOR 0=",
+                            "_MWP-ZERO-ACTUAL 0=",
+                            "_MWP-USED-AFTER-ZERO _MWP-USED-EMPTY =",
+                            "_MWP-ALIAS-IOR VFS-E-INVALID =",
+                            "_MWP-ALIAS-ACTUAL 0=",
+                            "_MWP-USED-AFTER-ALIAS _MWP-USED-EMPTY =",
+                            "_MWP-STALE-IOR VFS-E-STALE =",
+                            "_MWP-STALE-ACTUAL 0=",
+                            "_MWP-WRITER 0<>",
+                            "_MWP-WRITER _EXT4-JWR-VALID?",
+                            (
+                                "_MWP-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-IDLE ="
+                            ),
+                            "_MWP-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_MWP-CTX _EXT4-C.RECOVERY + @ 0=",
+                            "_MWP-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                            "_MWP-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-MOUNTED-WRITE-PREFLIGHT-REFUSAL" THEN'
+                ),
+                "0 _MWP-V VFS-UNMOUNT CONSTANT _MWP-UNMOUNT-IOR",
+                (
+                    "_MWP-UNMOUNT-IOR 0= "
+                    "_MWP-ARENA ARENA-USED _MWP-USED-WRITER = AND "
+                    'IF ." EXT4-MOUNTED-WRITE-REFUSAL-UNMOUNT" THEN'
+                ),
+            ],
+            patches=source_patches,
+            capture_media=refusal_path,
+        )
+        _assert_emitted(
+            refusal_output, "EXT4-MOUNTED-WRITE-PREFLIGHT-REFUSAL"
+        )
+        _assert_emitted(
+            refusal_output, "EXT4-MOUNTED-WRITE-REFUSAL-UNMOUNT"
+        )
+        assert refusal_trace == ()
+
+        output, trace, media_sha256 = run_recovery_forth(
+            path,
+            media_path,
+            [
+                "T-ARENA CONSTANT _MW-ARENA",
+                (
+                    "_MW-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _MW-MOUNT-IOR CONSTANT _MW-V"
+                ),
+                "_MW-V _EXT4-CTX CONSTANT _MW-CTX",
+                (
+                    f'S" {first_replacement.decode()}" '
+                    "_MW-CTX _EXT4-C.BLOCK + SWAP MOVE"
+                ),
+                (
+                    "_MW-CTX _EXT4-C.BLOCK + "
+                    f"{len(first_replacement)} {first_offset} 14 "
+                    f"{generation} {first_seconds} {first_nanoseconds} "
+                    "_MW-V _EXT4-MOUNTED-ONEBLOCK-WRITE "
+                    "CONSTANT _MW-FIRST-IOR CONSTANT _MW-FIRST-ACTUAL"
+                ),
+                "_MW-CTX _EXT4-C.J.WRITER + @ CONSTANT _MW-WRITER",
+                "_MW-ARENA ARENA-USED CONSTANT _MW-USED-WRITER",
+                (
+                    _forth_conjunction(
+                        [
+                            "_MW-MOUNT-IOR 0=",
+                            f"_MW-FIRST-ACTUAL {len(first_replacement)} =",
+                            "_MW-FIRST-IOR 0=",
+                            "_MW-WRITER 0<>",
+                            "_MW-WRITER _EXT4-JWR-VALID?",
+                            "_MW-CTX _EXT4-C.J.HOME-WRITES + @ 1 =",
+                            "_MW-CTX _EXT4-C.RECOVERY + @ 0<>",
+                            "_MW-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                            "_MW-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-MOUNTED-WRITE-FIRST-CHECKPOINT" THEN'
+                ),
+                (
+                    f"0 0 0 14 {generation} {second_seconds} "
+                    f"{second_nanoseconds} _MW-V "
+                    "_EXT4-MOUNTED-ONEBLOCK-WRITE "
+                    "CONSTANT _MW-ACTIVE-ZERO-IOR "
+                    "CONSTANT _MW-ACTIVE-ZERO-ACTUAL"
+                ),
+                "_MW-ARENA ARENA-USED CONSTANT _MW-USED-ACTIVE-ZERO",
+                (
+                    "_MW-ACTIVE-ZERO-IOR 0= "
+                    "_MW-ACTIVE-ZERO-ACTUAL 0= AND "
+                    "_MW-USED-ACTIVE-ZERO _MW-USED-WRITER = AND "
+                    "_MW-WRITER _EXT4-JWR-VALID? AND "
+                    "_MW-WRITER _EXT4-JWR-IDLE-CLEAN? AND "
+                    'IF ." EXT4-MOUNTED-WRITE-ACTIVE-ZERO" THEN'
+                ),
+                (
+                    f'S" {second_replacement.decode()}" '
+                    "_MW-WRITER _EXT4-JWR.SCRATCH-A + @ SWAP MOVE"
+                ),
+                (
+                    "_MW-WRITER _EXT4-JWR.SCRATCH-A + @ "
+                    f"{len(second_replacement)} {second_offset} 14 "
+                    f"{generation} {second_seconds} {second_nanoseconds} "
+                    "_MW-V _EXT4-MOUNTED-ONEBLOCK-WRITE "
+                    "CONSTANT _MW-SECOND-IOR CONSTANT _MW-SECOND-ACTUAL"
+                ),
+                "_MW-CTX _EXT4-C.J.WRITER + @ CONSTANT _MW-SECOND-WRITER",
+                "_MW-ARENA ARENA-USED CONSTANT _MW-USED-SECOND",
+                (
+                    _forth_conjunction(
+                        [
+                            f"_MW-SECOND-ACTUAL {len(second_replacement)} =",
+                            "_MW-SECOND-IOR 0=",
+                            "_MW-SECOND-WRITER _MW-WRITER =",
+                            "_MW-USED-SECOND _MW-USED-WRITER =",
+                            "_MW-CTX _EXT4-C.J.HOME-WRITES + @ 1 =",
+                            "_MW-WRITER _EXT4-JWR-VALID?",
+                            "_MW-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_MW-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                            "_MW-WRITER _EXT4-JTX-TABLES-VALID?",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-MOUNTED-WRITE-SECOND-REUSED" THEN'
+                ),
+                (
+                    _forth_conjunction(
+                        [
+                            "_MW-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                            "_MW-V V.BCTX @ _MW-CTX =",
+                            "_MW-CTX _EXT4-C.RECOVERY + @ 0<>",
+                            "_MW-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                            "_MW-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<>",
+                            "_MW-CTX _EXT4-C.READY + @ 0<>",
+                            "_MW-WRITER _EXT4-JWR-VALID?",
+                            "_MW-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_MW-ARENA ARENA-USED _MW-USED-WRITER =",
+                            "_MW-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        ]
+                    )
+                    + ' IF ." EXT4-MOUNTED-WRITE-IDLE-ACTIVE" THEN'
+                ),
+            ],
+            patches=source_patches,
+            capture_media=media_path,
+        )
+        for marker in (
+            "EXT4-MOUNTED-WRITE-FIRST-CHECKPOINT",
+            "EXT4-MOUNTED-WRITE-ACTIVE-ZERO",
+            "EXT4-MOUNTED-WRITE-SECOND-REUSED",
+            "EXT4-MOUNTED-WRITE-IDLE-ACTIVE",
+        ):
+            _assert_emitted(output, marker)
+        assert trace == (
+            activation_trace
+            + emission_trace
+            + checkpoint_trace
+            + emission_trace
+            + checkpoint_trace
+        )
+        assert sum(kind == "write" for kind, _, _ in trace) == 36
+        assert sum(kind == "flush" for kind, _, _ in trace) == 28
+        assert trace.count(("write", data_block * 2, 2)) == 2
+        assert trace.count(("write", inode_home * 2, 2)) == 2
+
+        with media_path.open("rb") as source:
+            def read_block(physical_block: int) -> bytes:
+                source.seek(physical_block * block_size)
+                payload = source.read(block_size)
+                assert len(payload) == block_size
+                return payload
+
+            final_super = read_block(1)
+            final_journal = read_block(journal0_physical)
+            final_guard = read_block(physical["guard"])
+            descriptor = read_block(physical["descriptor"])
+            payload = read_block(physical["payload"])
+            commit = read_block(physical["commit"])
+            sentinel = read_block(physical["sentinel"])
+            final_data = read_block(data_block)
+            final_inode_home = read_block(inode_home)
+
+        second_tid = (source_sequence + 4) & 0xFFFF_FFFF
+        active_sequence = (source_sequence + 6) & 0xFFFF_FFFF
+        final_sequence = (source_sequence + 7) & 0xFFFF_FFFF
+        journal_uuid = standard[0x30:0x40]
+        client_uuid = superblock[0x68:0x78]
+        escaped_payload = bytes(expected_inode_home)
+        tag_flags = 0x08
+        if struct.unpack_from(">I", escaped_payload, 0)[0] == 0xC03B3998:
+            escaped_payload = bytes(4) + escaped_payload[4:]
+            tag_flags |= 0x01
+        tag_seed = _crc32c_raw(journal_uuid)
+        tag_seed = _crc32c_raw(struct.pack(">I", second_tid), tag_seed)
+        tag_checksum = _crc32c_raw(escaped_payload, tag_seed)
+        expected_descriptor = bytearray(block_size)
+        struct.pack_into(
+            ">III", expected_descriptor, 0, 0xC03B3998, 1, second_tid
+        )
+        struct.pack_into(
+            ">IIII",
+            expected_descriptor,
+            0x0C,
+            inode_home,
+            tag_flags,
+            0,
+            tag_checksum,
+        )
+        expected_descriptor[0x1C:0x2C] = client_uuid
+        expected_descriptor = _jbd2_metadata_with_checksum(
+            expected_descriptor, journal_uuid
+        )
+        expected_commit = bytearray(block_size)
+        struct.pack_into(
+            ">III", expected_commit, 0, 0xC03B3998, 2, second_tid
+        )
+        expected_commit = _jbd2_commit_with_checksum(
+            expected_commit, journal_uuid, second_tid
+        )
+        expected_active_journal = bytearray(standard)
+        struct.pack_into(">I", expected_active_journal, 0x18, active_sequence)
+        struct.pack_into(">I", expected_active_journal, 0x1C, 0)
+        struct.pack_into(">I", expected_active_journal, 0x58, guard_logical)
+        expected_active_journal = _jbd2_super_with_checksum(
+            expected_active_journal
+        )
+        expected_clean_journal = bytearray(standard)
+        struct.pack_into(">I", expected_clean_journal, 0x18, final_sequence)
+        struct.pack_into(">I", expected_clean_journal, 0x1C, 0)
+        struct.pack_into(">I", expected_clean_journal, 0x58, guard_logical)
+        expected_clean_journal = _jbd2_super_with_checksum(
+            expected_clean_journal
+        )
+        assert final_super == dirty_super
+        assert final_journal == expected_active_journal
+        assert final_guard == bytes(block_size)
+        assert descriptor == expected_descriptor
+        assert payload == escaped_payload
+        assert commit == expected_commit
+        assert sentinel == bytes(block_size)
+        assert final_data == bytes(expected_data)
+        assert final_inode_home == bytes(expected_inode_home)
+
+        remount_output, remount_trace, remount_sha256 = run_recovery_forth(
+            media_path,
+            media_path,
+            [
+                "CREATE _MWR-A 64 ALLOT",
+                "CREATE _MWR-B 64 ALLOT",
+                expected_file_forth,
+                (
+                    "T-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _MWR-MOUNT-IOR CONSTANT _MWR-V"
+                ),
+                "_MWR-V _EXT4-CTX CONSTANT _MWR-CTX",
+                (
+                    'S" /fixture/payload.txt" _MWR-V VFS-RESOLVE? '
+                    "CONSTANT _MWR-P-IOR CONSTANT _MWR-P"
+                ),
+                (
+                    'S" /fixture/hardlink.txt" _MWR-V VFS-RESOLVE? '
+                    "CONSTANT _MWR-H-IOR CONSTANT _MWR-H"
+                ),
+                (
+                    'S" /fixture/payload.txt" VFS-FF-READ _MWR-V '
+                    "VFS-OPEN? CONSTANT _MWR-OA-IOR CONSTANT _MWR-FA"
+                ),
+                (
+                    'S" /fixture/hardlink.txt" VFS-FF-READ _MWR-V '
+                    "VFS-OPEN? CONSTANT _MWR-OB-IOR CONSTANT _MWR-FB"
+                ),
+                (
+                    "_MWR-A 64 _MWR-FA VFS-READ? "
+                    "CONSTANT _MWR-RA-IOR CONSTANT _MWR-NA"
+                ),
+                (
+                    "_MWR-B 64 _MWR-FB VFS-READ? "
+                    "CONSTANT _MWR-RB-IOR CONSTANT _MWR-NB"
+                ),
+                (
+                    _forth_conjunction(
+                        [
+                            "_MWR-MOUNT-IOR 0=",
+                            "_MWR-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                            "_MWR-V _EXT4-READY?",
+                            "_MWR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                            "_MWR-CTX _EXT4-C.RECOVERY + @ 0=",
+                            "_MWR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                            "_MWR-P-IOR 0=",
+                            "_MWR-H-IOR 0=",
+                            "_MWR-P D.VNODE @ _MWR-H D.VNODE @ =",
+                            (
+                                "_MWR-P D.VNODE @ VN.MTIME @ "
+                                f"{second_seconds} ="
+                            ),
+                            (
+                                "_MWR-P D.VNODE @ VN.CTIME @ "
+                                f"{second_seconds} ="
+                            ),
+                            (
+                                "_MWR-P D.VNODE @ VN.MTIME-NS @ "
+                                f"{second_nanoseconds} ="
+                            ),
+                            (
+                                "_MWR-P D.VNODE @ VN.CTIME-NS @ "
+                                f"{second_nanoseconds} ="
+                            ),
+                            "_MWR-OA-IOR 0=",
+                            "_MWR-OB-IOR 0=",
+                            "_MWR-RA-IOR 0=",
+                            "_MWR-RB-IOR 0=",
+                            f"_MWR-NA {file_size} =",
+                            f"_MWR-NB {file_size} =",
+                            (
+                                f"_MWR-A _MWR-EXPECTED {file_size} "
+                                "_EXT4-BYTES=?"
+                            ),
+                            (
+                                f"_MWR-B _MWR-EXPECTED {file_size} "
+                                "_EXT4-BYTES=?"
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-MOUNTED-WRITE-CLEAN-REMOUNT" THEN'
+                ),
+                "_MWR-FA VFS-CLOSE? CONSTANT _MWR-CA-IOR",
+                "_MWR-FB VFS-CLOSE? CONSTANT _MWR-CB-IOR",
+                "0 _MWR-V VFS-UNMOUNT CONSTANT _MWR-UNMOUNT-IOR",
+                (
+                    "_MWR-CA-IOR 0= _MWR-CB-IOR 0= AND "
+                    "_MWR-UNMOUNT-IOR 0= AND "
+                    'IF ." EXT4-MOUNTED-WRITE-REMOUNT-UNMOUNT" THEN'
+                ),
+            ],
+            capture_media=media_path,
+        )
+        _assert_emitted(remount_output, "EXT4-MOUNTED-WRITE-CLEAN-REMOUNT")
+        _assert_emitted(
+            remount_output, "EXT4-MOUNTED-WRITE-REMOUNT-UNMOUNT"
+        )
+        assert remount_trace == deactivation_trace
+        assert remount_sha256 != media_sha256
+        with media_path.open("rb") as source:
+            source.seek(block_size)
+            remounted_super = source.read(block_size)
+            source.seek(journal0_physical * block_size)
+            remounted_journal = source.read(block_size)
+            source.seek(physical["guard"] * block_size)
+            remounted_guard = source.read(block_size)
+        assert remounted_super == clean_super
+        assert remounted_journal == expected_clean_journal
+        assert remounted_guard == bytes(block_size)
+    finally:
+        refusal_path.unlink(missing_ok=True)
+        media_path.unlink(missing_ok=True)
+
+
 def test_recover_without_checksum_v3_journal_refuses_before_writes(
     canonical_images: dict[str, Path]
 ) -> None:
