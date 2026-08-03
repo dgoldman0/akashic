@@ -957,18 +957,22 @@ VARIABLE _EXT4-GD-SPAN
 \ not prove that a block referenced by an inode or metadata pointer is marked
 \ allocated.  Keep that ownership check explicit and reusable by every map.
 VARIABLE _EXT4-MUTATION-OWNER-TARGET
+VARIABLE _EXT4-MUTATION-OWNER-COUNT
 VARIABLE _EXT4-MOA-FIRST
 VARIABLE _EXT4-MOA-COUNT
 
-\ Normal read validation leaves MUTATION-OWNER-TARGET zero.  A bounded
-\ allocation-release proof temporarily sets it while validating every other
-\ allocated inode, turning any data or map-metadata reference into a corrupt
+\ Normal read validation leaves the mutation-owner range empty.  A bounded
+\ mutation proof temporarily sets it while validating every other allocated
+\ inode, turning any overlapping data or map-metadata reference into a corrupt
 \ cross-link refusal.
 : _EXT4-MUTATION-OWNER-ALIASES?  ( first count -- flag )
     _EXT4-MOA-COUNT ! _EXT4-MOA-FIRST !
-    _EXT4-MUTATION-OWNER-TARGET @ DUP 0= IF DROP FALSE EXIT THEN
-    DUP _EXT4-MOA-FIRST @ U< IF DROP FALSE EXIT THEN
-    _EXT4-MOA-FIRST @ - _EXT4-MOA-COUNT @ U< ;
+    _EXT4-MUTATION-OWNER-COUNT @ 0= IF FALSE EXIT THEN
+    _EXT4-MUTATION-OWNER-TARGET @
+    _EXT4-MOA-FIRST @ _EXT4-MOA-COUNT @ + U<
+    _EXT4-MOA-FIRST @
+    _EXT4-MUTATION-OWNER-TARGET @
+    _EXT4-MUTATION-OWNER-COUNT @ + U< AND ;
 
 VARIABLE _EXT4-BA-BLOCK
 VARIABLE _EXT4-BA-CTX
@@ -9262,6 +9266,69 @@ VARIABLE _EXT4-MIH-COUNT
     THEN
     0 ;
 
+VARIABLE _EXT4-MTH-HOME
+VARIABLE _EXT4-MTH-OWNER
+VARIABLE _EXT4-MTH-CTX
+VARIABLE _EXT4-MTH-FOUND
+VARIABLE _EXT4-MTH-BASE
+VARIABLE _EXT4-MTH-COUNT
+
+\ An inode-table page that will be replaced must belong to exactly one
+\ authenticated group table.  It may not also name an allocation bitmap,
+\ another group's table, sparse-super/GDT storage, or a journal extent.
+: _EXT4-VALIDATE-INODE-TABLE-HOME  ( home owner-group ctx -- ior )
+    _EXT4-MTH-CTX ! _EXT4-MTH-OWNER ! _EXT4-MTH-HOME !
+    _EXT4-MTH-CTX @ 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-MTH-OWNER @
+    _EXT4-MTH-CTX @ _EXT4-C.GROUPS + @ U< 0= IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-MTH-HOME @ 1 _EXT4-MTH-CTX @ _EXT4-C.BLOCKS + @
+    BLOCK-RANGE? 0= IF EXT4-D-BOUNDS _EXT4-CORRUPT EXIT THEN
+    _EXT4-MTH-HOME @ 1 _EXT4-MTH-CTX @
+    _EXT4-JOURNAL-RANGE-DISJOINT ?DUP IF EXIT THEN
+    0 _EXT4-MTH-FOUND !
+    _EXT4-MTH-CTX @ _EXT4-C.GROUPS + @ 0 ?DO
+        I _EXT4-MTH-CTX @ _EXT4-LOAD-DESC ?DUP IF UNLOOP EXIT THEN
+        _EXT4-MTH-HOME @ 1
+        _EXT4-MTH-CTX @ _EXT4-C.DESC +
+        _EXT4-GD.INODE-TABLE-LO + L@ _EXT4-GD-SPAN @
+        _EXT4-BLOCK-RANGES-OVERLAP? IF
+            I _EXT4-MTH-OWNER @ <> IF
+                EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
+            THEN
+            1 _EXT4-MTH-FOUND +!
+        THEN
+        _EXT4-MTH-HOME @ 1
+        _EXT4-MTH-CTX @ _EXT4-C.DESC +
+        _EXT4-GD.BLOCK-BITMAP-LO + L@ 1
+        _EXT4-BLOCK-RANGES-OVERLAP? IF
+            EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
+        THEN
+        _EXT4-MTH-HOME @ 1
+        _EXT4-MTH-CTX @ _EXT4-C.DESC +
+        _EXT4-GD.INODE-BITMAP-LO + L@ 1
+        _EXT4-BLOCK-RANGES-OVERLAP? IF
+            EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
+        THEN
+        I _EXT4-SPARSE-GROUP? IF
+            I _EXT4-MTH-CTX @ _EXT4-C.BPG + @ *
+            _EXT4-MTH-CTX @ _EXT4-C.FIRST + @ + _EXT4-MTH-BASE !
+            1 _EXT4-MTH-CTX @ _EXT4-C.J.WITNESS-GDT-SPAN + @ +
+            _EXT4-MTH-CTX @ _EXT4-C.SB +
+            _EXT4-SB.RESERVED-GDT + W@ + _EXT4-MTH-COUNT !
+            _EXT4-MTH-HOME @ 1
+            _EXT4-MTH-BASE @ _EXT4-MTH-COUNT @
+            _EXT4-BLOCK-RANGES-OVERLAP? IF
+                EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
+            THEN
+        THEN
+    LOOP
+    _EXT4-MTH-FOUND @ 1 <> IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
 VARIABLE _EXT4-FRS-FIRST
 VARIABLE _EXT4-FRS-COUNT
 VARIABLE _EXT4-FRS-CTX
@@ -10107,7 +10174,54 @@ VARIABLE _EXT4-JFO-CERT-COUNT
     REPEAT
     0 ;
 
-\ Prove exclusive filesystem-wide inode ownership of the admitted data block.
+VARIABLE _EXT4-UOW-INO
+VARIABLE _EXT4-UOW-FIRST
+VARIABLE _EXT4-UOW-COUNT
+VARIABLE _EXT4-UOW-CTX
+VARIABLE _EXT4-UOW-MAP-LIMIT
+VARIABLE _EXT4-UOW-IOR
+
+\ Prove that no allocated inode other than TARGET-INO maps any part of one
+\ proposed mutation range.  The caller has already authenticated the target's
+\ own mapping; reload it after the scan restores that authority in C.INODE.
+: _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER
+  ( target-ino first count ctx -- ior )
+    _EXT4-UOW-CTX ! _EXT4-UOW-COUNT !
+    _EXT4-UOW-FIRST ! _EXT4-UOW-INO !
+    _EXT4-UOW-CTX @ 0= _EXT4-UOW-COUNT @ 0= OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-UOW-INO @ 0=
+    _EXT4-UOW-INO @ _EXT4-UOW-CTX @ _EXT4-C.INODES + @ U> OR IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-UOW-FIRST @ _EXT4-UOW-CTX @ _EXT4-C.FIRST + @ U< IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-UOW-FIRST @ _EXT4-UOW-COUNT @
+    _EXT4-UOW-CTX @ _EXT4-C.BLOCKS + @ BLOCK-RANGE? 0= IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-MUTATION-OWNER-TARGET @
+    _EXT4-MUTATION-OWNER-COUNT @ OR IF VFS-E-BUSY EXIT THEN
+    _EXT4-JFO-CERT-INVALIDATE
+    _EXT4-UOW-CTX @ _EXT4-JFO-CTX !
+    _EXT4-UOW-INO @ _EXT4-JFO-TARGET-INO !
+    _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-UOW-MAP-LIMIT !
+    0 _EXT4-MAP-VALIDATION-LIMIT !
+    _EXT4-UOW-FIRST @ _EXT4-MUTATION-OWNER-TARGET !
+    _EXT4-UOW-COUNT @ _EXT4-MUTATION-OWNER-COUNT !
+    _EXT4-JFO-SCAN-OTHER-INODES _EXT4-UOW-IOR !
+    0 _EXT4-MUTATION-OWNER-TARGET !
+    0 _EXT4-MUTATION-OWNER-COUNT !
+    _EXT4-UOW-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
+    _EXT4-UOW-IOR @ 0= IF
+        _EXT4-UOW-INO @ _EXT4-UOW-CTX @
+        _EXT4-LOAD-INODE _EXT4-UOW-IOR !
+    THEN
+    _EXT4-UOW-IOR @ ;
+
+\ Prove exclusive filesystem-wide inode ownership of the admitted data range.
 \ The scan is allocation-free and geometry-bounded.  Mount cleanup may retain
 \ one exact proof while it exclusively owns the raw pre-home metadata epoch;
 \ journal-only activation, dry staging, and commit do not alter another inode's
@@ -10117,7 +10231,8 @@ VARIABLE _EXT4-JFO-CERT-COUNT
 \ error, then restore the plan-bound target inode because the scan necessarily
 \ reuses the shared inode cache.
 : _EXT4-JFI-REQUIRE-UNIQUE-DATA-OWNER  ( -- ior )
-    _EXT4-MUTATION-OWNER-TARGET @ IF VFS-E-BUSY EXIT THEN
+    _EXT4-MUTATION-OWNER-TARGET @
+    _EXT4-MUTATION-OWNER-COUNT @ OR IF VFS-E-BUSY EXIT THEN
     _EXT4-JFO-CERT-MATCH? IF 0 EXIT THEN
     _EXT4-JFO-CERT-INVALIDATE
     _EXT4-JFI-CTX @ _EXT4-JFO-CTX !
@@ -10126,8 +10241,10 @@ VARIABLE _EXT4-JFO-CERT-COUNT
     _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-JFO-MAP-LIMIT !
     0 _EXT4-MAP-VALIDATION-LIMIT !
     _EXT4-JFI-DATA-FIRST @ _EXT4-MUTATION-OWNER-TARGET !
+    _EXT4-JFI-DATA-COUNT @ _EXT4-MUTATION-OWNER-COUNT !
     _EXT4-JFO-SCAN-OTHER-INODES _EXT4-JFO-IOR !
     0 _EXT4-MUTATION-OWNER-TARGET !
+    0 _EXT4-MUTATION-OWNER-COUNT !
     _EXT4-JFO-IOR @ 0= IF
         _EXT4-JFO-RECORD @ _EXT4-JFO-CTX @
         _EXT4-REAUTH-ORPHAN-PLAN-RECORD _EXT4-JFO-IOR !

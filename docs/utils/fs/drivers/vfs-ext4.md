@@ -508,6 +508,21 @@ aggregate superblock update. This builder does not remove an extent or legacy
 map entry, change `i_blocks`, stage a revoke, or free an inode, and it emits no
 media write.
 
+Mutation-side admission now has two reusable authorities beyond that free-only
+builder. `_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER` scans every authenticated allocated
+inode and proves that an arbitrary nonempty physical range is mapped only by
+the caller's already-authenticated target inode. The ambient probe is
+count-delimited, so a valid range beginning at physical block zero is not
+mistaken for an inactive proof. Every return clears the probe and restores the
+caller's map-validation bound; a successful proof reloads the target inode.
+Because the scan reuses the cleanup scanner and shared inode cache, it also
+invalidates any retained operation-scoped orphan ownership certificate before
+starting. `_EXT4-VALIDATE-INODE-TABLE-HOME` independently requires a proposed
+inode-table after-image to fall in exactly the named descriptor's table and in
+no other table, block/inode bitmap, sparse-super/GDT interval, or journal
+extent. These words provide the range and live-inode-table authority needed by
+an in-place data mutation, but do not stage or emit one by themselves.
+
 `_EXT4-JTX-STAGE-FREE-ORPHAN-INODE` is the corresponding first inode-release
 builder. It reauthenticates one canonical singleton plan record and accepts
 only an allocated, unlinked regular inode whose size is zero and whose inline
@@ -894,6 +909,16 @@ real sync semantics, broader orphan recovery, and interoperability plus
 power-cut qualification. The durable internal transaction engine now has a
 production recovery client, but the filesystem mutation layer and its
 qualification remain several major implementation phases away.
+
+The next private write checkpoint is narrower and much closer than that full
+surface: one size-preserving regular-file overwrite contained in one already
+allocated initialized block, staged as a full-block ordered-data RMW plus one
+checksummed inode-table after-image for explicit `mtime`/`ctime`. It needs no
+allocator or extent edit and fits the existing exact `1 metadata / 1 data / 0
+revoke` transaction shape. It still remains private until writer workspace
+policy, real clock semantics, VFS dirty/cache handling, and real `FSYNC` and
+`SYNCFS` behavior are settled. Growth, holes, unwritten extents, cross-block
+writes, truncation, and namespace mutation remain later phases.
 
 The remaining boundaries are:
 
