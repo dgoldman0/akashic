@@ -699,8 +699,9 @@ writer; retry, abort, and a new transaction remain busy until checkpoint
 finishes. Checkpoint first revalidates the complete workspace, performs a
 complete on-media JBD2 log scan, and then repeats that scan in lockstep with the
 retained emitter order before issuing a home write. Generic transactions use
-the ordinary strict reload and therefore still gain no authority from a
-nonempty orphan plan. The sealed singleton-final mode alone uses a private
+the ordinary strict reload and require an authenticated empty orphan union
+both before and after their home writes; they therefore gain no authority from
+a nonempty orphan plan. The sealed singleton-final mode alone uses a private
 pre-home reload that performs the same super, group, backup, orphan-union, and
 journal authentication but replaces the public nonempty-policy refusal with
 an exact writer-certificate comparison. It requires the sole rebuilt plan
