@@ -863,6 +863,23 @@ generation, hole, unwritten extent, unsupported inode flag, cross-block write,
 growth, or ambiguous ownership fails before publication. Once ordered data has
 been retained, any later staging failure aborts and scrubs the transaction.
 
+The exact private write now also completes the real durability lifecycle. A
+write-free dry stage is aborted before clean-to-`RECOVER` activation; the live
+stage then emits ordered data before its descriptor and final commit,
+checkpoints only the inode-table home, and cleanly deactivates through public
+unmount. Independent media checks pin the full data block, full inode-table
+block, descriptor tag and payload checksums, commit, clean superblock, and
+empty guard. A fresh read-only mount performs no recovery I/O and returns the
+complete modified file plus the exact nanosecond timestamps.
+
+Controlled sequential-write qualification tears the first inode-table home
+write at byte 269, one byte into the target inode's new `i_ctime`. The ordered
+data and committed journal are already durable, while the torn home is neither
+the old nor new inode and fails its inode checksum. A fresh mount replays the
+retained inode-table after-image exactly, cleans the journal, and is stable on
+another write-free remount. This is one pinned checkpoint tear, not yet the
+complete power-cut matrix for ordinary writes.
+
 ## Read-only inspection
 
 The current binding advertises directory enumeration, open/release, reads,
@@ -931,17 +948,19 @@ power-cut qualification. The durable internal transaction engine now has a
 production recovery client, but the filesystem mutation layer and its
 qualification remain several major implementation phases away.
 
-That narrow private write checkpoint has now reached mutation-safe staging:
+That narrow private write checkpoint has now reached private durability:
 one size-preserving regular-file overwrite contained in one already allocated
 initialized block, represented by a full-block ordered-data RMW and one
 checksummed inode-table after-image for explicit `mtime`/`ctime`. It needs no
 allocator or extent edit and fits the exact `1 metadata / 1 data / 0 revoke`
-transaction shape. End-to-end emit, checkpoint, remount, external-tool, and
-controlled-tear qualification is the immediate next gate. It remains private
-after that gate until production writer workspace and chunking policy, a
-trustworthy clock source, VFS dirty/cache coherence, and real `FSYNC` and
-`SYNCFS` behavior are settled. Growth, holes, unwritten extents, cross-block
-writes, truncation, and namespace mutation remain later phases.
+transaction shape. End-to-end emit, checkpoint, clean unmount, write-free
+remount, and one checkpoint-home sequential tear/replay case pass. Pinned
+external-tool inspection and the broader controlled power-cut matrix remain
+qualification gates. The operation remains private until production writer
+workspace and chunking policy, a trustworthy clock source, VFS dirty/cache
+coherence, and real `FSYNC` and `SYNCFS` behavior are settled. Growth, holes,
+unwritten extents, cross-block writes, truncation, and namespace mutation
+remain later phases.
 
 The remaining boundaries are:
 
@@ -967,8 +986,10 @@ The remaining boundaries are:
   public clean-unmount integration are implemented as private durability
   foundations. Exact private one-block regular-file overwrite staging now
   composes a full ordered-data RMW with an explicitly timed, checksummed inode
-  after-image after mutation-range and filesystem-wide ownership proof; it has
-  not yet crossed the emit/checkpoint/remount qualification gate.
+  after-image after mutation-range and filesystem-wide ownership proof. Its
+  exact dry-stage/activation/emission/checkpoint/deactivation journey, clean
+  remount, and one partial inode-home replay case pass; public mutation and
+  broad crash/interoperability qualification remain gated.
   Transaction-aware metadata acquisition, checksum-safe typed
   orphan-inode replacement, free-only physical-block accounting, linked
   zero-size inline depth-0 extent truncation, exact zero-/one-block unlinked
