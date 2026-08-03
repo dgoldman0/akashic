@@ -17927,6 +17927,321 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
     _assert_emitted(output, "EXT4-MUTATION-AUTHORITY-RANGE-SAFE")
 
 
+def test_typed_one_block_write_stages_ordered_rmw_and_inode_times(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    superblock, inode, inode_offset = _ext4_inode_record(path, 14)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert block_size == 1024
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    assert inode_size == 256
+    data_block = _extent_root_physical(inode, 0)
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    _, crossing_inode, _ = _ext4_inode_record(path, 17)
+    crossing_generation = struct.unpack_from("<I", crossing_inode, 0x64)[0]
+    assert struct.unpack_from("<I", crossing_inode, 0x04)[0] > block_size
+    replacement = b"WRITE-RMW"
+    write_offset = 11
+    assert write_offset + len(replacement) <= struct.unpack_from(
+        "<I", inode, 0x04
+    )[0]
+
+    seconds = 3_000_000_000
+    nanoseconds = 123_456_789
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = (
+        low_seconds
+        if low_seconds < 0x8000_0000
+        else low_seconds - 0x1_0000_0000
+    )
+    epoch = (seconds - signed_low) >> 32
+    assert epoch == 1
+    extra_time = (nanoseconds << 2) | epoch
+    expected_inode = bytearray(inode)
+    struct.pack_into("<I", expected_inode, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_inode, 0x10, low_seconds)
+    struct.pack_into("<I", expected_inode, 0x84, extra_time)
+    struct.pack_into("<I", expected_inode, 0x88, extra_time)
+    expected_inode = bytearray(
+        _inode_with_checksum(superblock, 14, expected_inode)
+    )
+    expected_checksum_low = struct.unpack_from("<H", expected_inode, 0x7C)[0]
+    expected_checksum_high = struct.unpack_from("<H", expected_inode, 0x82)[0]
+
+    output = run_forth(
+        path,
+        [
+            "CREATE _TW-EXPECTED-INODE 256 ALLOT",
+            "CREATE _TW-TIME-PROBE 256 ALLOT",
+            "CREATE _TW-TIME-BEFORE 256 ALLOT",
+            "T-ARENA CONSTANT _TW-ARENA",
+            (
+                "_TW-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _TW-MOUNT-IOR CONSTANT _TW-V"
+            ),
+            "_TW-V _EXT4-CTX CONSTANT _TW-CTX",
+            (
+                "1 1 0 _TW-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _TW-WRITER-IOR CONSTANT _TW-WRITER"
+            ),
+            "_TW-ARENA ARENA-USED CONSTANT _TW-USED-BEFORE",
+            (
+                "1 1 0 _TW-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _TW-BEGIN-IOR CONSTANT _TW-TX"
+            ),
+            "DEPTH CONSTANT _TW-DEPTH-BEFORE",
+            (
+                f'S" {replacement.decode()}" {write_offset} 14 '
+                f"{generation} {seconds} {nanoseconds} _TW-TX "
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE "
+                "CONSTANT _TW-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _TW-DEPTH-AFTER",
+            (
+                "_TW-WRITER _EXT4-JWR.META-IMAGES + @ "
+                "CONSTANT _TW-META-IMAGE"
+            ),
+            (
+                "_TW-WRITER _EXT4-JWR.DATA-IMAGES + @ "
+                "CONSTANT _TW-DATA-IMAGE"
+            ),
+            (
+                "_TW-CTX _EXT4-C.INODE + _TW-EXPECTED-INODE "
+                "256 MOVE"
+            ),
+            (
+                f"{low_seconds} _TW-EXPECTED-INODE "
+                "_EXT4-I.CTIME + L!"
+            ),
+            (
+                f"{low_seconds} _TW-EXPECTED-INODE "
+                "_EXT4-I.MTIME + L!"
+            ),
+            (
+                f"{extra_time} _TW-EXPECTED-INODE "
+                "_EXT4-I.CTIME-EXTRA + L!"
+            ),
+            (
+                f"{extra_time} _TW-EXPECTED-INODE "
+                "_EXT4-I.MTIME-EXTRA + L!"
+            ),
+            (
+                f"{expected_checksum_low} _TW-EXPECTED-INODE "
+                "_EXT4-I.CSUM-LO + W!"
+            ),
+            (
+                f"{expected_checksum_high} _TW-EXPECTED-INODE "
+                "_EXT4-I.CSUM-HI + W!"
+            ),
+            (
+                f"{data_block} _TW-CTX _EXT4-READ-BLOCK "
+                "CONSTANT _TW-DATA-READ-IOR"
+            ),
+            (
+                "_TW-DATA-IMAGE _TW-CTX _EXT4-C.BLOCK + "
+                f"{write_offset} _EXT4-BYTES=? "
+                "CONSTANT _TW-DATA-PREFIX"
+            ),
+            (
+                f'_TW-DATA-IMAGE {write_offset} + S" '
+                f'{replacement.decode()}" _EXT4-BYTES=? '
+                "CONSTANT _TW-DATA-PAYLOAD"
+            ),
+            (
+                f"_TW-DATA-IMAGE {write_offset + len(replacement)} + "
+                "_TW-CTX _EXT4-C.BLOCK + "
+                f"{write_offset + len(replacement)} + "
+                f"{block_size - write_offset - len(replacement)} "
+                "_EXT4-BYTES=? CONSTANT _TW-DATA-SUFFIX"
+            ),
+            (
+                f"{inode_home} _TW-CTX _EXT4-READ-BLOCK "
+                "CONSTANT _TW-INODE-READ-IOR"
+            ),
+            (
+                "_TW-META-IMAGE _TW-CTX _EXT4-C.BLOCK + "
+                f"{inode_block_offset} _EXT4-BYTES=? "
+                "CONSTANT _TW-META-PREFIX"
+            ),
+            (
+                f"_TW-META-IMAGE {inode_block_offset} + "
+                "_TW-EXPECTED-INODE 256 _EXT4-BYTES=? "
+                "CONSTANT _TW-META-RECORD"
+            ),
+            (
+                f"_TW-META-IMAGE {inode_block_offset + inode_size} + "
+                "_TW-CTX _EXT4-C.BLOCK + "
+                f"{inode_block_offset + inode_size} + "
+                f"{block_size - inode_block_offset - inode_size} "
+                "_EXT4-BYTES=? CONSTANT _TW-META-SUFFIX"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_TW-MOUNT-IOR 0=",
+                        "_TW-WRITER-IOR 0=",
+                        "_TW-BEGIN-IOR 0=",
+                        "_TW-TX _TW-WRITER =",
+                        "_TW-STAGE-IOR 0=",
+                        "_TW-DEPTH-BEFORE _TW-DEPTH-AFTER =",
+                        (
+                            "_TW-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-STAGING ="
+                        ),
+                        "_TW-WRITER _EXT4-JWR.META-USED + @ 1 =",
+                        "_TW-WRITER _EXT4-JWR.META-ACTIVE + @ 1 =",
+                        "_TW-WRITER _EXT4-JWR.DATA-USED + @ 1 =",
+                        "_TW-WRITER _EXT4-JWR.DATA-ACTIVE + @ 1 =",
+                        "_TW-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
+                        "_TW-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                        (
+                            "_TW-WRITER _EXT4-JWR.META-ENTRIES + @ @ "
+                            f"{inode_home} ="
+                        ),
+                        (
+                            "_TW-WRITER _EXT4-JWR.DATA-ENTRIES + @ @ "
+                            f"{data_block} ="
+                        ),
+                        (
+                            "_TW-META-IMAGE _TW-WRITER "
+                            "_EXT4-JTX-IMAGE-CRC "
+                            "_TW-WRITER _EXT4-JWR.META-ENTRIES + @ "
+                            "2 CELLS + @ ="
+                        ),
+                        (
+                            "_TW-DATA-IMAGE _TW-WRITER "
+                            "_EXT4-JTX-IMAGE-CRC "
+                            "_TW-WRITER _EXT4-JWR.DATA-ENTRIES + @ "
+                            "2 CELLS + @ ="
+                        ),
+                        "_TW-DATA-READ-IOR 0=",
+                        "_TW-DATA-PREFIX",
+                        "_TW-DATA-PAYLOAD",
+                        "_TW-DATA-SUFFIX",
+                        "_TW-INODE-READ-IOR 0=",
+                        "_TW-META-PREFIX",
+                        "_TW-META-RECORD",
+                        "_TW-META-SUFFIX",
+                        "_TW-WRITER _EXT4-JTX-TABLES-VALID?",
+                        "_TW-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        "_EXT4-MUTATION-OWNER-TARGET @ 0=",
+                        "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-ONEBLOCK-WRITE-STAGED" THEN'
+            ),
+            "_TW-TX _EXT4-JTX-ABORT CONSTANT _TW-ABORT-IOR",
+            "_TW-ARENA ARENA-USED CONSTANT _TW-USED-AFTER",
+            (
+                _forth_conjunction(
+                    [
+                        "_TW-ABORT-IOR 0=",
+                        "_TW-USED-AFTER _TW-USED-BEFORE =",
+                        (
+                            "_TW-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_TW-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                        "_TW-WRITER _EXT4-JWR-VALID?",
+                        (
+                            "_TW-WRITER _EXT4-JWR.SCRATCH-A + @ "
+                            "1024 _EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_TW-WRITER _EXT4-JWR.SCRATCH-B + @ "
+                            "1024 _EXT4-BYTES-ZERO?"
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-ONEBLOCK-WRITE-ABORTED" THEN'
+            ),
+            (
+                "1 1 0 _TW-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _TW-STALE-BEGIN-IOR CONSTANT _TW-STALE-TX"
+            ),
+            (
+                f'S" X" 0 14 {generation + 1} {seconds} {nanoseconds} '
+                "_TW-STALE-TX _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE "
+                "CONSTANT _TW-STALE-IOR"
+            ),
+            (
+                "_TW-STALE-TX _EXT4-JTX-ABORT "
+                "CONSTANT _TW-STALE-ABORT-IOR"
+            ),
+            (
+                "1 1 0 _TW-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _TW-CROSS-BEGIN-IOR CONSTANT _TW-CROSS-TX"
+            ),
+            (
+                f'S" CROSSING" {block_size - 4} 17 '
+                f"{crossing_generation} {seconds} {nanoseconds} "
+                "_TW-CROSS-TX _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE "
+                "CONSTANT _TW-CROSS-IOR"
+            ),
+            (
+                "_TW-CROSS-TX _EXT4-JTX-ABORT "
+                "CONSTANT _TW-CROSS-ABORT-IOR"
+            ),
+            "14 _TW-CTX _EXT4-LOAD-INODE CONSTANT _TW-TIME-LOAD-IOR",
+            (
+                "_TW-CTX _EXT4-C.INODE + _TW-TIME-PROBE 256 MOVE "
+                "_TW-TIME-PROBE _TW-TIME-BEFORE 256 MOVE"
+            ),
+            (
+                "15032385536 0 _TW-TIME-PROBE _TW-CTX "
+                "_EXT4-SET-INODE-MTIME-CTIME "
+                "CONSTANT _TW-TIME-OVERFLOW-IOR"
+            ),
+            (
+                f"{seconds} 1000000000 _TW-TIME-PROBE _TW-CTX "
+                "_EXT4-SET-INODE-MTIME-CTIME "
+                "CONSTANT _TW-NSEC-INVALID-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_TW-STALE-BEGIN-IOR 0=",
+                        "_TW-STALE-IOR VFS-E-STALE =",
+                        "_TW-STALE-ABORT-IOR 0=",
+                        "_TW-CROSS-BEGIN-IOR 0=",
+                        (
+                            "_TW-CROSS-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_TW-CROSS-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_TW-CROSS-ABORT-IOR 0=",
+                        "_TW-TIME-LOAD-IOR 0=",
+                        "_TW-TIME-OVERFLOW-IOR VFS-E-OVERFLOW =",
+                        "_TW-NSEC-INVALID-IOR VFS-E-INVALID =",
+                        (
+                            "_TW-TIME-PROBE _TW-TIME-BEFORE 256 "
+                            "_EXT4-BYTES=?"
+                        ),
+                        (
+                            "_TW-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_TW-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                        "_TW-WRITER _EXT4-JWR-VALID?",
+                        "_TW-ARENA ARENA-USED _TW-USED-BEFORE =",
+                        "_EXT4-MUTATION-OWNER-TARGET @ 0=",
+                        "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-ONEBLOCK-WRITE-REFUSALS" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-TYPED-ONEBLOCK-WRITE-STAGED")
+    _assert_emitted(output, "EXT4-TYPED-ONEBLOCK-WRITE-ABORTED")
+    _assert_emitted(output, "EXT4-TYPED-ONEBLOCK-WRITE-REFUSALS")
+
+
 def test_recover_without_checksum_v3_journal_refuses_before_writes(
     canonical_images: dict[str, Path]
 ) -> None:
