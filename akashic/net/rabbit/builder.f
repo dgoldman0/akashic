@@ -260,6 +260,30 @@ VARIABLE _RMSGBF-BYTES
     DUP RMSGB-VALID? 0= IF DROP 0 EXIT THEN
     _RMSGB.ARENA-USED @ ;
 
+\ Stable enumeration of the two allocations in the builder ownership graph.
+\ This keeps field layout private while allowing another neutral owner to
+\ compare its complete pointer graph with both the descriptor and the full
+\ caller-provided arena.  Arena capacity, rather than currently used bytes,
+\ is the ownership boundary.  A valid zero-capacity arena reports an empty
+\ span with OK status.
+2 CONSTANT RMSGB-OWNED-SPAN-COUNT
+
+: RMSGB-OWNED-SPAN@  ( index builder -- address bytes status )
+    >R
+    DUP 0< OVER RMSGB-OWNED-SPAN-COUNT >= OR IF
+        DROP R> DROP 0 0 RMSGB-S-INVALID EXIT
+    THEN
+    R@ RMSGB-VALID? 0= IF
+        DROP R> DROP 0 0 RMSGB-S-INVALID EXIT
+    THEN
+    CASE
+        0 OF R@ R@ _RMSGB.BYTES @ RMSGB-S-OK ENDOF
+        1 OF
+            R@ _RMSGB.ARENA @ R@ _RMSGB.ARENA-CAP @ RMSGB-S-OK
+        ENDOF
+    ENDCASE
+    R> DROP ;
+
 VARIABLE _RMSGBO-A
 VARIABLE _RMSGBO-U
 VARIABLE _RMSGBO-B

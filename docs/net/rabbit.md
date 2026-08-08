@@ -116,6 +116,16 @@ admission and refuses a result whose admitted kind differs from its constructor.
 Encoding is all-or-nothing and rejects output that overlaps either the opaque
 descriptor or its arena.
 
+Higher neutral owners can enumerate the builder's stable ownership geometry
+without importing its private field layout. `RMSGB-OWNED-SPAN-COUNT` fixes the
+graph shape at two allocations, and `RMSGB-OWNED-SPAN@` reports the complete
+descriptor followed by the complete caller-provided arena. The arena span uses
+its bound capacity, including bytes not currently used by a construction; it
+does not shrink to `RMSGB-ARENA-USED@`. Invalid builders and indices fail with
+`RMSGB-S-INVALID`, while a valid zero-capacity arena is an empty span with OK
+status. Returned addresses are synchronous, read-only ownership evidence, not
+permission to inspect or mutate descriptor fields or builder-owned bytes.
+
 An owning connection may borrow the builder's immutable READY frame only for
 the duration of synchronous enqueue, allowing it to verify exact Lane, Seq,
 Credit, and Txn facts before it copies the encoded bytes and commits session

@@ -95,9 +95,24 @@ LOAD_STAGES = (
 
 CONTRACT_STAGES = (
     (
+        "dependencies",
+        "_RBT-RRES-PHASE-DEPENDENCIES",
+        "STREAMS RABBIT REMOTE RESOURCE DEPENDENCIES PASS",
+    ),
+    (
         "init",
         "_RBT-RRES-PHASE-INIT",
         "STREAMS RABBIT REMOTE RESOURCE INIT PASS",
+    ),
+    (
+        "init-stage-seams",
+        "_RBT-RRES-PHASE-INIT-STAGE-SEAMS",
+        "STREAMS RABBIT REMOTE RESOURCE INIT STAGE SEAMS PASS",
+    ),
+    (
+        "init-builder-geometry",
+        "_RBT-RRES-PHASE-INIT-BUILDER-GEOMETRY",
+        "STREAMS RABBIT REMOTE RESOURCE INIT BUILDER GEOMETRY PASS",
     ),
     (
         "handshake",
@@ -172,10 +187,13 @@ def _assert_static_contracts() -> None:
         "STREAMS-RABBIT-REMOTE-RESOURCE-CONSUME",
         "STREAMS-RABBIT-REMOTE-RESOURCE-CACHE@",
         "STREAMS-RABBIT-REMOTE-RESOURCE-CACHE-CALLBACK@",
+        "STREAMS-RABBIT-REMOTE-RESOURCE-CACHE-STAGE-MATCH?",
+        "STREAMS-RABBIT-REMOTE-RESOURCE-CACHE-STAGED-CALLBACK@",
         "STREAMS-RABBIT-REMOTE-RESOURCE-CACHE-STAGE-JSON-CALLBACK",
         "STREAMS-RABBIT-REMOTE-RESOURCE-CACHE-PUBLISH-STAGED",
         "STREAMS-RABBIT-REMOTE-RESOURCE-CACHE-DISCARD-STAGED",
         "STREAMS-RABBIT-REMOTE-RESOURCE-RETAINED-SPAN-OVERLAP?",
+        "STREAMS-RABBIT-REMOTE-RESOURCE-BUILDER-OVERLAP?",
         "STREAMS-RABBIT-REMOTE-RESOURCE-CONNECTOR-MATCH?",
         "STREAMS-RABBIT-REMOTE-RESOURCE-CLEANUP",
         "STREAMS-RABBIT-REMOTE-RESOURCE-ABANDON",
@@ -195,11 +213,44 @@ def _assert_static_contracts() -> None:
         "_SRRESC-ACCESS"
     )
     assert consume.index("_SRRESC-RELEASE") < consume.index("_SRRESC-FINISH")
+    builder_overlap = remote.split(
+        ": _SRRES-BUILDER-OVERLAP-INNER", 1
+    )[1].split(": _SRRES-BUILDER-OVERLAP?", 1)[0]
+    assert "RMSGB-OWNED-SPAN-COUNT 0 ?DO" in builder_overlap
+    assert "RMSGB-OWNED-SPAN@" in builder_overlap
+    assert "_SRRES-RETAINED-SPAN-OVERLAP-VALID?" in builder_overlap
+    fetch_busy_scope = remote.split(": _SRRESF-WITH-BUSY", 1)[1].split(
+        ": _SRRES-FETCH-BUSY", 1
+    )[0]
+    assert "-1 _SRRESF-O @ SRRES.BUSY !" in fetch_busy_scope
+    assert "CATCH" in fetch_busy_scope
+    assert "0 _SRRESF-O @ SRRES.BUSY !" in fetch_busy_scope
+    assert fetch_busy_scope.index("CATCH") < fetch_busy_scope.index(
+        "0 _SRRESF-O @ SRRES.BUSY !"
+    )
+    assert "?DUP IF THROW THEN" in fetch_busy_scope
+    fetch = remote.split(
+        ": _SRRES-FETCH  ( ready-builder owner -- status )", 1
+    )[1].split(": STREAMS-RABBIT-REMOTE-RESOURCE-FETCH", 1)[0]
+    assert "['] _SRRES-FETCH-BUSY _SRRESF-O @ _SRRESF-WITH-BUSY" in fetch
     assert "IVJSON-DECODE-AS" in remote
     assert "RABBIT-CLIENT-" not in remote
     assert "RCLIENT." not in remote
     for _, word, _ in CONTRACT_STAGES:
         assert f": {word}" in fixture
+    assert (
+        "_RBT-RRES-OVERLAP-BUILDER RMSGB-ARENA-USED@ 0=" in fixture
+    )
+    assert (
+        "0 _RBT-RRES STREAMS-RABBIT-REMOTE-RESOURCE-BUILDER-OVERLAP?"
+        in fixture
+    )
+    assert (
+        "_RBT-MSGB-BUILDER 0\n"
+        "        STREAMS-RABBIT-REMOTE-RESOURCE-BUILDER-OVERLAP?"
+        in fixture
+    )
+    assert "_RBT-RRES-FETCH-THROW-SCOPE CATCH" in fixture
     assert "128 0 ?DO" in fixture
 
 

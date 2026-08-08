@@ -881,6 +881,53 @@ VARIABLE _SRCONNE-CS
     _SRCONNE-RS @ RSUB-S-OK = IF _SRCONNE-VALUE @ ELSE 0 THEN
     _SRCONNE-CS @ _SRCONNE-CLEAR ;
 
+: _SRCONNE-SNAPSHOT-INNER  ( -- )
+    _SRCONNE-E @ _SRCONNE-EG @
+        _SRCONNE-O @ SRCONN.SUBSCRIPTIONS @
+        RABBIT-SUBSCRIPTION-STATE@
+        _SRCONNE-RS ! _SRCONNE-VALUE !
+    _SRCONNE-RS @ RSUB-S-OK <> IF EXIT THEN
+    _SRCONNE-E @ _SRCONNE-EG @
+        _SRCONNE-O @ SRCONN.SUBSCRIPTIONS @
+        RABBIT-SUBSCRIPTION-TARGET$
+        _SRCONNE-RS ! _SRCONNE-U ! _SRCONNE-A !
+    _SRCONNE-RS @ RSUB-S-OK <> IF EXIT THEN
+    _SRCONNE-E @ _SRCONNE-EG @
+        _SRCONNE-O @ SRCONN.SUBSCRIPTIONS @
+        RABBIT-SUBSCRIPTION-LANE@
+        _SRCONNE-RS ! _SRCONNE-LANE ! ;
+
+\ Return the stable identity-bearing subscription evidence in one checked
+\ snapshot.  Unlike the individual evidence facades, this word deliberately
+\ does not replace connector DETAIL/LAST-STATUS: a mux owner may validate its
+\ retained handle immediately after POLL without erasing that poll's outcome.
+\ A dependency THROW always releases the connector's serialized scratch
+\ before propagating.
+: STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-SNAPSHOT@
+  ( entry generation connector -- state target-a target-u lane status )
+    _SRCONN-BUSY @ IF
+        2DROP DROP RSUB-ENTRY-EMPTY 0 0 0
+        STREAMS-RABBIT-CONNECTOR-S-BUSY EXIT
+    THEN
+    _SRCONNE-O ! _SRCONNE-EG ! _SRCONNE-E !
+    _SRCONNE-O @ STREAMS-RABBIT-CONNECTOR-VALID? 0= IF
+        _SRCONNE-CLEAR RSUB-ENTRY-EMPTY 0 0 0
+        STREAMS-RABBIT-CONNECTOR-S-INVALID EXIT
+    THEN
+    -1 _SRCONN-BUSY !
+    ['] _SRCONNE-SNAPSHOT-INNER CATCH ?DUP IF
+        0 _SRCONN-BUSY !
+        >R _SRCONNE-CLEAR R> THROW
+    THEN
+    0 _SRCONN-BUSY !
+    _SRCONNE-RS @ _SRCONN-RSUB-FACADE>STATUS _SRCONNE-CS !
+    _SRCONNE-RS @ RSUB-S-OK = IF
+        _SRCONNE-VALUE @ _SRCONNE-A @ _SRCONNE-U @ _SRCONNE-LANE @
+    ELSE
+        RSUB-ENTRY-EMPTY 0 0 0
+    THEN
+    _SRCONNE-CS @ _SRCONNE-CLEAR ;
+
 : STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-CURSOR@
   ( entry generation connector -- event-seq status )
     _SRCONN-BUSY @ IF

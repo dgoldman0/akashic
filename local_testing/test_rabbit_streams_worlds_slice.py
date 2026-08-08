@@ -851,6 +851,21 @@ def _assert_static_contracts() -> None:
     assert "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTIONS@" not in streams_connector
     assert " RSUB." not in connector_subscription_facade
     assert " RSUBE." not in connector_subscription_facade
+    connector_subscription_snapshot = streams_connector[
+        streams_connector.index(
+            ": _SRCONNE-SNAPSHOT-INNER"
+        ) : streams_connector.index(
+            ": STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-CURSOR@"
+        )
+    ]
+    for snapshot_evidence_word in (
+        "RABBIT-SUBSCRIPTION-STATE@",
+        "RABBIT-SUBSCRIPTION-TARGET$",
+        "RABBIT-SUBSCRIPTION-LANE@",
+    ):
+        assert snapshot_evidence_word in connector_subscription_snapshot
+    assert "_SRCONN-RSUB-FACADE>STATUS" in connector_subscription_snapshot
+    assert "_SRCONNE-PUBLISH" not in connector_subscription_snapshot
     for neutral_word in (
         "RABBIT-SUBSCRIPTIONS-ADD",
         "RABBIT-SUBSCRIPTION-STATE@",
@@ -868,6 +883,26 @@ def _assert_static_contracts() -> None:
     ):
         assert neutral_word in connector_subscription_facade
     normalized_connector = " ".join(streams_connector.split())
+    normalized_streams_connector_fixture = " ".join(
+        streams_connector_fixture.split()
+    )
+    assert (
+        "entry generation connector -- state target-a target-u lane status"
+        in normalized_connector
+    )
+    assert ": _RBT-RCONN-ASSERT-SNAPSHOT" in streams_connector_fixture
+    assert (
+        "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-SNAPSHOT@"
+        in normalized_streams_connector_fixture
+    )
+    assert (
+        "RSUB-ENTRY-CONFIGURED _RBT-RCONN-ASSERT-SNAPSHOT"
+        in normalized_streams_connector_fixture
+    )
+    assert (
+        "RSUB-ENTRY-NEEDS-REBIND _RBT-RCONN-ASSERT-SNAPSHOT"
+        in normalized_streams_connector_fixture
+    )
     assert (
         "operation operation-generation attachment-generation status"
         in normalized_connector
@@ -927,6 +962,8 @@ def _assert_static_contracts() -> None:
         "RMSGB-RESET",
         "RMSGB-FINI",
         "RMSGB-READY-FRAME@",
+        "RMSGB-OWNED-SPAN-COUNT",
+        "RMSGB-OWNED-SPAN@",
         "RMSGB-OWNED-SPAN-OVERLAP?",
         "RMSGB-OWNED-GRAPHS-DISJOINT?",
         "RMSGB-BEGIN-HELLO",
@@ -945,6 +982,13 @@ def _assert_static_contracts() -> None:
         "RMSGB-ENCODE",
     ):
         assert word in builder
+    assert "2 CONSTANT RMSGB-OWNED-SPAN-COUNT" in builder
+    builder_owned_span = builder.split(": RMSGB-OWNED-SPAN@", 1)[1].split(
+        "VARIABLE _RMSGBO-A", 1
+    )[0]
+    assert "_RMSGB.BYTES @" in builder_owned_span
+    assert "_RMSGB.ARENA-CAP @" in builder_owned_span
+    assert "_RMSGB.ARENA-USED @" not in builder_owned_span
     for word in (
         "RABBIT-SESSION-INIT",
         "RABBIT-SESSION-CONFIGURE",
@@ -1118,6 +1162,7 @@ def _assert_static_contracts() -> None:
         "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-STATE@",
         "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-TARGET$",
         "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-LANE@",
+        "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-SNAPSHOT@",
         "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-CURSOR@",
         "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-LAST-OBSERVED-EVENT-SEQ@",
         "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-LAST-DELIVERY@",
