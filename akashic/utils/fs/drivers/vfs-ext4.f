@@ -263,6 +263,7 @@ REQUIRE ../vfs.f
 \ +15392   persistent unified orphan-plan workspace and union active count
 \ +15416   mount-generation authenticated-empty-orphan recovery authority
 \ +15424   mount-generation modern/legacy orphan protocol counts
+\ +15440   caller-installed trusted write-clock provider and context
 
    0 CONSTANT _EXT4-C.SB
 1024 CONSTANT _EXT4-C.BLOCK
@@ -358,7 +359,9 @@ REQUIRE ../vfs.f
 15416 CONSTANT _EXT4-C.O.CLEAR-PENDING
 15424 CONSTANT _EXT4-C.O.MODERN-ACTIVE
 15432 CONSTANT _EXT4-C.O.LEGACY-ACTIVE
-15440 CONSTANT _EXT4-CTX-SIZE
+15440 CONSTANT _EXT4-C.WCLOCK-XT
+15448 CONSTANT _EXT4-C.WCLOCK-CTX
+15456 CONSTANT _EXT4-CTX-SIZE
 
 : _EXT4-CTX  ( vfs -- ctx )  V.BCTX @ ;
 : _EXT4-READY?  ( vfs -- flag )
@@ -2761,9 +2764,6 @@ VARIABLE _EXT4-RL-V
     THEN
     _EXT4-RL-BUF @ _EXT4-RL-CAP @ 0
     _EXT4-RL-IN @ _EXT4-RL-V @ _EXT4-READ ;
-
-: _EXT4-SYNCFS  ( vfs -- ior )  DROP 0 ;
-: _EXT4-FSYNC   ( dentry vfs -- ior )  2DROP 0 ;
 
 \ =====================================================================
 \  In-inode and external-block namespaced xattrs
@@ -13254,6 +13254,169 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
     THEN
     _EXT4-MOW-COUNT @ _EXT4-MOW-SCRUB 0 ;
 
+\ =====================================================================
+\  Private VFS-shaped write boundary and trusted clock injection
+\ =====================================================================
+\
+\ The binding ABI does not carry a timestamp.  Keep the time authority on
+\ the ext4 instance instead of consulting EPOCH@ or another ambient clock.
+\ The provider returns one nonnegative Unix-epoch millisecond scalar:
+\
+\     now-ms-xt  ( clock-context -- epoch-ms ior )
+\
+\ Binding is allowed once, at the authenticated clean mounted endpoint and
+\ before any persistent writer allocation.  The XT is stored last so it is
+\ the publication word for the accompanying opaque context.
+
+VARIABLE _EXT4-BWC-XT
+VARIABLE _EXT4-BWC-CLOCK-CTX
+VARIABLE _EXT4-BWC-V
+VARIABLE _EXT4-BWC-CTX
+
+: _EXT4-BIND-WRITE-CLOCK  ( now-ms-xt clock-context vfs -- ior )
+    _EXT4-BWC-V ! _EXT4-BWC-CLOCK-CTX ! _EXT4-BWC-XT !
+    _EXT4-BWC-XT @ 0= _EXT4-BWC-V @ 0= OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-BWC-V @ V.LIFECYCLE @ VFS-L-MOUNTED <> IF
+        VFS-E-STALE EXIT
+    THEN
+    _EXT4-BWC-V @ V.BCTX @ DUP _EXT4-BWC-CTX ! 0= IF
+        VFS-E-STALE EXIT
+    THEN
+    _EXT4-BWC-V @ _EXT4-ATTACHED? 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-BWC-V @ _EXT4-READY? 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-BWC-V @ V.FLAGS @ VFS-F-DIRTY AND IF VFS-E-BUSY EXIT THEN
+    _EXT4-BWC-CTX @ _EXT4-C.RECOVERY + @
+    _EXT4-BWC-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ OR
+    _EXT4-BWC-CTX @ _EXT4-C.J.START + @ OR
+    _EXT4-BWC-CTX @ _EXT4-C.J.WITNESS + @ OR
+    _EXT4-BWC-CTX @ _EXT4-C.J.PRIMARY-TORN + @ OR
+    _EXT4-BWC-CTX @ _EXT4-C.J.CLEANUP + @ OR
+    _EXT4-BWC-CTX @ _EXT4-C.SUPER-TORN + @ OR
+    _EXT4-BWC-CTX @ _EXT4-C.J.WRITER + @ OR IF
+        VFS-E-BUSY EXIT
+    THEN
+    _EXT4-BWC-CTX @ _EXT4-C.WCLOCK-XT + @ IF VFS-E-CONFLICT EXIT THEN
+    _EXT4-BWC-CLOCK-CTX @ _EXT4-BWC-CTX @ _EXT4-C.WCLOCK-CTX + !
+    _EXT4-BWC-XT @ _EXT4-BWC-CTX @ _EXT4-C.WCLOCK-XT + !
+    0 ;
+
+15032385535 1000 * 999 + CONSTANT _EXT4-WRITE-EPOCH-MS-MAX
+
+VARIABLE _EXT4-WR-SOURCE
+VARIABLE _EXT4-WR-COUNT
+VARIABLE _EXT4-WR-OFFSET
+VARIABLE _EXT4-WR-D
+VARIABLE _EXT4-WR-V
+VARIABLE _EXT4-WR-CTX
+VARIABLE _EXT4-WR-VN
+VARIABLE _EXT4-WR-BID
+VARIABLE _EXT4-WR-GEN
+VARIABLE _EXT4-WR-END
+VARIABLE _EXT4-WR-MS
+VARIABLE _EXT4-WR-SECONDS
+VARIABLE _EXT4-WR-NSEC
+VARIABLE _EXT4-WR-ACTUAL
+VARIABLE _EXT4-WR-IOR
+
+: _EXT4-WRITE-VALIDATE  ( -- ior )
+    _EXT4-WR-D @ 0= _EXT4-WR-V @ 0= OR IF VFS-E-INVALID EXIT THEN
+    _EXT4-WR-V @ V.LIFECYCLE @ VFS-L-MOUNTED <> IF VFS-E-STALE EXIT THEN
+    _EXT4-WR-V @ V.BCTX @ DUP _EXT4-WR-CTX ! 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-WR-V @ _EXT4-ATTACHED? 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-WR-V @ _EXT4-READY? 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-WR-D @ _EXT4-WR-V @ _VFS-DENTRY-OWNED? 0= IF
+        VFS-E-STALE EXIT
+    THEN
+    _EXT4-WR-D @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
+    _EXT4-WR-D @ D.VNODE @ DUP _EXT4-WR-VN ! 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-WR-VN @ VN.TYPE @ VFS-T-DIR = IF VFS-E-ISDIR EXIT THEN
+    _EXT4-WR-VN @ VN.TYPE @ VFS-T-FILE <> IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-WR-VN @ VN.FLAGS @ VFS-IF-DIRTY AND IF VFS-E-BUSY EXIT THEN
+    _EXT4-WR-VN @ VN.BID @ DUP _EXT4-WR-BID ! 0= IF
+        VFS-E-STALE EXIT
+    THEN
+    _EXT4-WR-BID @ _EXT4-WR-CTX @ _EXT4-C.INODES + @ U> IF
+        VFS-E-STALE EXIT
+    THEN
+    _EXT4-WR-VN @ VN.GEN @ DUP _EXT4-WR-GEN ! 0xFFFFFFFF U> IF
+        VFS-E-STALE EXIT
+    THEN
+    _EXT4-WR-VN @ VN.SIZE-HI @ IF VFS-E-OVERFLOW EXIT THEN
+    _EXT4-WR-VN @ VN.SIZE-LO @ 0< IF VFS-E-OVERFLOW EXIT THEN
+    _EXT4-WR-COUNT @ 0< _EXT4-WR-OFFSET @ 0< OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-WR-COUNT @ 0= IF 0 EXIT THEN
+    _EXT4-WR-SOURCE @ _EXT4-WR-COUNT @ _VFS-BUFFER? 0= IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-WR-COUNT @ _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ U> IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-WR-OFFSET @ _EXT4-WR-COUNT @ _EXT4-UADD?
+    _EXT4-WR-IOR ! _EXT4-WR-END !
+    _EXT4-WR-IOR @ ?DUP IF EXIT THEN
+    _EXT4-WR-END @ _EXT4-WR-VN @ VN.SIZE-LO @ U> IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-WR-COUNT @
+    _EXT4-WR-CTX @ _EXT4-C.BSIZE + @
+    _EXT4-WR-OFFSET @ _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ MOD - U> IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-WR-CTX @ _EXT4-C.WCLOCK-XT + @ 0= IF
+        VFS-E-UNSUPPORTED EXIT
+    THEN
+    0 ;
+
+: _EXT4-WRITE-NOW  ( -- ior )
+    _EXT4-WR-CTX @ _EXT4-C.WCLOCK-CTX + @
+    _EXT4-WR-CTX @ _EXT4-C.WCLOCK-XT + @ EXECUTE
+    _EXT4-WR-IOR ! _EXT4-WR-MS !
+    _EXT4-WR-IOR @ ?DUP IF EXIT THEN
+    _EXT4-WR-MS @ 0< IF VFS-E-INVALID EXIT THEN
+    _EXT4-WR-MS @ _EXT4-WRITE-EPOCH-MS-MAX U> IF
+        VFS-E-OVERFLOW EXIT
+    THEN
+    _EXT4-WR-MS @ 1000 /MOD
+    _EXT4-WR-SECONDS ! 1000000 * _EXT4-WR-NSEC !
+    0 ;
+
+\ Exact binding-callback shape for the qualified slice.  It remains absent
+\ from EXT4-OPS and EXT4-CAPS: MOW still reports zero progress for every
+\ fault, including faults after ordered-data publication, so this word is not
+\ yet a safe public VFS retry/cursor contract.  Successful checkpointed writes
+\ publish only mtime/ctime into the shared vnode; no inode writeback remains.
+: _EXT4-WRITE  ( source count file-offset dentry vfs -- actual ior )
+    _EXT4-WR-V ! _EXT4-WR-D ! _EXT4-WR-OFFSET !
+    _EXT4-WR-COUNT ! _EXT4-WR-SOURCE !
+    _EXT4-WRITE-VALIDATE ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-WR-COUNT @ 0= IF
+        _EXT4-WR-SOURCE @ 0 _EXT4-WR-OFFSET @
+        _EXT4-WR-BID @ _EXT4-WR-GEN @ 0 0 _EXT4-WR-V @
+        _EXT4-MOUNTED-ONEBLOCK-WRITE EXIT
+    THEN
+    _EXT4-WRITE-NOW ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-WR-SOURCE @ _EXT4-WR-COUNT @ _EXT4-WR-OFFSET @
+    _EXT4-WR-BID @ _EXT4-WR-GEN @
+    _EXT4-WR-SECONDS @ _EXT4-WR-NSEC @ _EXT4-WR-V @
+    _EXT4-MOUNTED-ONEBLOCK-WRITE
+    _EXT4-WR-IOR ! _EXT4-WR-ACTUAL !
+    _EXT4-WR-IOR @ ?DUP IF _EXT4-WR-ACTUAL @ SWAP EXIT THEN
+    _EXT4-WR-ACTUAL @ _EXT4-WR-COUNT @ <> IF
+        0 VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-WR-SECONDS @ _EXT4-WR-VN @ VN.MTIME !
+    _EXT4-WR-NSEC @ _EXT4-WR-VN @ VN.MTIME-NS !
+    _EXT4-WR-SECONDS @ _EXT4-WR-VN @ VN.CTIME !
+    _EXT4-WR-NSEC @ _EXT4-WR-VN @ VN.CTIME-NS !
+    VFS-F-DIRTY _EXT4-WR-V @ V.FLAGS DUP @ ROT OR SWAP !
+    _EXT4-WR-ACTUAL @ 0 ;
+
 VARIABLE _EXT4-EL-CTX
 VARIABLE _EXT4-EL-V
 VARIABLE _EXT4-EL-WRITER
@@ -14155,6 +14318,73 @@ VARIABLE _EXT4-UM-STATE
     _EXT4-UM-WRITER @ _EXT4-JWR-IDLE-CLEAN? 0= IF
         VFS-E-CORRUPT _EXT4-UM-QUARANTINE EXIT
     THEN
+    0 ;
+
+VARIABLE _EXT4-SY-V
+VARIABLE _EXT4-SY-CTX
+VARIABLE _EXT4-SY-D
+
+\ Prepare the global writer at the same durability boundary used by unmount,
+\ but keep a live mounted instance published.  Every successful private write
+\ is already checkpointed; COMMITTED support is retained so FSYNC/SYNCFS also
+\ close a transaction produced by a lower-level private builder.
+: _EXT4-LIVE-SYNC-PREPARE  ( vfs -- ior )
+    DUP _EXT4-SY-V ! 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-SY-V @ V.LIFECYCLE @ VFS-L-MOUNTED <> IF VFS-E-STALE EXIT THEN
+    _EXT4-SY-V @ V.BCTX @ DUP _EXT4-SY-CTX ! 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-SY-V @ _EXT4-ATTACHED? 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-SY-V @ _EXT4-READY? 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-SY-V @ V.VOLUME @ _EXT4-IO-VOL !
+    _EXT4-SY-V @ _EXT4-IO-VFS !
+    _EXT4-SY-V @ _EXT4-UM-V !
+    _EXT4-SY-CTX @ _EXT4-UM-CTX !
+    _EXT4-UM-PREPARE-WRITER ?DUP IF EXIT THEN
+    _EXT4-SY-CTX @ _EXT4-C.J.START + @
+    _EXT4-SY-CTX @ _EXT4-C.J.WITNESS + @ OR
+    _EXT4-SY-CTX @ _EXT4-C.J.PRIMARY-TORN + @ OR
+    _EXT4-SY-CTX @ _EXT4-C.J.CLEANUP + @ OR
+    _EXT4-SY-CTX @ _EXT4-C.SUPER-TORN + @ OR IF
+        VFS-E-BUSY EXIT
+    THEN
+    _EXT4-SY-CTX @ _EXT4-C.RECOVERY + @ 0<>
+    _EXT4-SY-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ 0<> <> IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-SY-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ IF
+        _EXT4-SY-V @ V.FLAGS @ VFS-F-DIRTY AND 0= IF
+            VFS-E-CORRUPT EXIT
+        THEN
+    ELSE
+        _EXT4-SY-V @ V.FLAGS @ VFS-F-DIRTY AND IF
+            VFS-E-CORRUPT EXIT
+        THEN
+    THEN
+    0 ;
+
+\ Per-file state is checkpointed synchronously, so FSYNC validates (and, for
+\ a lower-level retained COMMITTED transaction, completes) the writer without
+\ deactivating the filesystem-wide empty journal.
+: _EXT4-FSYNC  ( dentry vfs -- ior )
+    _EXT4-SY-V ! _EXT4-SY-D !
+    _EXT4-SY-D @ 0= _EXT4-SY-V @ 0= OR IF VFS-E-INVALID EXIT THEN
+    _EXT4-SY-D @ _EXT4-SY-V @ _VFS-DENTRY-OWNED? 0= IF
+        VFS-E-STALE EXIT
+    THEN
+    _EXT4-SY-D @ D.VNODE @ 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-SY-V @ _EXT4-LIVE-SYNC-PREPARE ;
+
+\ Generic VFS-SYNC clears VFS-F-DIRTY after this callback returns success.
+\ Therefore a live ext4 sync must first land the write-active empty journal at
+\ a clean endpoint, then republish READY/current ownership for later writes.
+: _EXT4-SYNCFS  ( vfs -- ior )
+    DUP _EXT4-LIVE-SYNC-PREPARE ?DUP IF NIP EXIT THEN _EXT4-SY-V !
+    _EXT4-SY-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ IF
+        _EXT4-UM-WRITER @ DUP 0= IF DROP VFS-E-CORRUPT EXIT THEN
+        _EXT4-SY-V @ _EXT4-JWR-DEACTIVATE ?DUP IF EXIT THEN
+    THEN
+    _EXT4-UM-CLEAN-ENDPOINT? 0= IF VFS-E-CORRUPT EXIT THEN
+    -1 _EXT4-SY-CTX @ _EXT4-C.J.WRITER-CURRENT + !
+    -1 _EXT4-SY-CTX @ _EXT4-C.READY + !
     0 ;
 
 : _EXT4-UNMOUNT  ( flags vfs -- ior )

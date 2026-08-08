@@ -19759,6 +19759,495 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
         media_path.unlink(missing_ok=True)
 
 
+def test_private_vfs_shaped_write_publishes_shared_vnode_and_syncs_clean(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    standard = writer_activation_fixture["standard"]
+    clean_super = writer_activation_fixture["clean_super"]
+    guard_logical = writer_activation_fixture["guard_logical"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(standard, bytes)
+    assert isinstance(clean_super, bytes)
+    assert isinstance(guard_logical, int)
+    assert isinstance(journal0_physical, int)
+
+    superblock, inode, inode_offset = _ext4_inode_record(path, 14)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    assert block_size == 1024
+    assert inode_size == 256
+    data_block = _extent_root_physical(inode, 0)
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    replacement = b"WRITE-RMW"
+    write_offset = 11
+    epoch_ms = 3_000_000_123_456
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = low_seconds - 0x1_0000_0000
+    epoch = (seconds - signed_low) >> 32
+    assert epoch == 1
+    extra_time = (nanoseconds << 2) | epoch
+
+    with path.open("rb") as source:
+        source.seek(data_block * block_size)
+        original_data = source.read(block_size)
+        source.seek(inode_home * block_size)
+        original_inode_home = source.read(block_size)
+    assert len(original_data) == len(original_inode_home) == block_size
+    expected_data = bytearray(original_data)
+    expected_data[
+        write_offset : write_offset + len(replacement)
+    ] = replacement
+    file_size = struct.unpack_from("<I", inode, 0x04)[0]
+    assert file_size == 54
+    expected_file = bytes(expected_data[:file_size])
+    expected_file_forth = "CREATE _VA-EXPECTED " + " ".join(
+        f"{byte} C," for byte in expected_file
+    )
+    expected_inode = bytearray(inode)
+    struct.pack_into("<I", expected_inode, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_inode, 0x10, low_seconds)
+    struct.pack_into("<I", expected_inode, 0x84, extra_time)
+    struct.pack_into("<I", expected_inode, 0x88, extra_time)
+    expected_inode = bytearray(
+        _inode_with_checksum(superblock, 14, expected_inode)
+    )
+    expected_inode_home = bytearray(original_inode_home)
+    expected_inode_home[
+        inode_block_offset : inode_block_offset + inode_size
+    ] = expected_inode
+
+    first = struct.unpack_from(">I", standard, 0x14)[0]
+    maxlen = struct.unpack_from(">I", standard, 0x10)[0]
+    logical = {
+        "guard": guard_logical,
+        "descriptor": _jbd2_ring_advance(
+            guard_logical, 1, first=first, maxlen=maxlen
+        ),
+        "payload": _jbd2_ring_advance(
+            guard_logical, 2, first=first, maxlen=maxlen
+        ),
+        "commit": _jbd2_ring_advance(
+            guard_logical, 3, first=first, maxlen=maxlen
+        ),
+        "sentinel": _jbd2_ring_advance(
+            guard_logical, 4, first=first, maxlen=maxlen
+        ),
+    }
+    journal_map = _ext4_journal_physical_map(
+        path, (0, *logical.values())
+    )
+    physical = {
+        name: journal_map[position] for name, position in logical.items()
+    }
+    emission_trace = (
+        ("write", data_block * 2, 2),
+        ("write", physical["descriptor"] * 2, 2),
+        ("write", physical["payload"] * 2, 2),
+        ("write", physical["commit"] * 2, 2),
+        ("write", physical["sentinel"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["commit"] * 2, 2),
+        ("flush", 0, 0),
+    )
+    checkpoint_trace = (
+        ("write", inode_home * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+    )
+    deactivation_trace = (
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * 2, 2),
+        ("flush", 0, 0),
+        ("write", physical["guard"] * 2, 2),
+        ("flush", 0, 0),
+    )
+
+    media_path = tmp_path / "vfs-shaped-write-sync.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            media_path,
+            [
+                "CREATE _VA-A 64 ALLOT",
+                "CREATE _VA-B 64 ALLOT",
+                expected_file_forth,
+                f"CREATE _VA-CLOCK {epoch_ms} , 0 , 0 ,",
+                (
+                    ": _VA-NOW ( clock -- epoch-ms ior ) "
+                    "DUP 2 CELLS + DUP @ 1+ SWAP ! "
+                    "DUP @ SWAP CELL+ @ ;"
+                ),
+                "T-ARENA CONSTANT _VA-ARENA",
+                (
+                    "_VA-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _VA-MOUNT-IOR CONSTANT _VA-V"
+                ),
+                "_VA-V _EXT4-CTX CONSTANT _VA-CTX",
+                (
+                    'S" /fixture/payload.txt" _VA-V VFS-RESOLVE? '
+                    "CONSTANT _VA-P-IOR CONSTANT _VA-P"
+                ),
+                (
+                    'S" /fixture/hardlink.txt" _VA-V VFS-RESOLVE? '
+                    "CONSTANT _VA-H-IOR CONSTANT _VA-H"
+                ),
+                (
+                    'S" /fixture/sparse.bin" _VA-V VFS-RESOLVE? '
+                    "CONSTANT _VA-S-IOR CONSTANT _VA-S"
+                ),
+                (
+                    'S" /fixture/payload.txt" VFS-FF-READ _VA-V '
+                    "VFS-OPEN? CONSTANT _VA-PO-IOR CONSTANT _VA-PFD"
+                ),
+                (
+                    'S" /fixture/hardlink.txt" VFS-FF-READ _VA-V '
+                    "VFS-OPEN? CONSTANT _VA-HO-IOR CONSTANT _VA-HFD"
+                ),
+                "_VA-P D.VNODE @ CONSTANT _VA-VN",
+                "_VA-S D.VNODE @ CONSTANT _VA-SVN",
+                "_VA-VN VN.ATIME @ CONSTANT _VA-OLD-ATIME",
+                "_VA-VN VN.ATIME-NS @ CONSTANT _VA-OLD-ATIME-NS",
+                "_VA-VN VN.MTIME @ CONSTANT _VA-OLD-MTIME",
+                "_VA-VN VN.MTIME-NS @ CONSTANT _VA-OLD-MTIME-NS",
+                "_VA-VN VN.CTIME @ CONSTANT _VA-OLD-CTIME",
+                "_VA-VN VN.CTIME-NS @ CONSTANT _VA-OLD-CTIME-NS",
+                "_VA-VN VN.SIZE-LO @ CONSTANT _VA-OLD-SIZE",
+                "_VA-VN VN.GEN @ CONSTANT _VA-OLD-GEN",
+                "_VA-VN VN.NLINK @ CONSTANT _VA-OLD-NLINK",
+                "_VA-VN VN.BLOCKS @ CONSTANT _VA-OLD-BLOCKS",
+                "_VA-SVN VN.MTIME @ CONSTANT _VA-S-OLD-MTIME",
+                "_VA-SVN VN.MTIME-NS @ CONSTANT _VA-S-OLD-MTIME-NS",
+                "_VA-SVN VN.CTIME @ CONSTANT _VA-S-OLD-CTIME",
+                "_VA-SVN VN.CTIME-NS @ CONSTANT _VA-S-OLD-CTIME-NS",
+                "_VA-ARENA ARENA-USED CONSTANT _VA-USED-CLEAN",
+                (
+                    "0 0 0 _VA-P _VA-V _EXT4-WRITE "
+                    "CONSTANT _VA-ZERO-IOR CONSTANT _VA-ZERO-ACTUAL"
+                ),
+                (
+                    'S" X" 0 _VA-P _VA-V _EXT4-WRITE '
+                    "CONSTANT _VA-NOCLOCK-IOR CONSTANT _VA-NOCLOCK-ACTUAL"
+                ),
+                "_VA-CTX _EXT4-C.J.WRITER + @ CONSTANT _VA-PRE-WRITER",
+                "_VA-ARENA ARENA-USED CONSTANT _VA-USED-PRECLOCK",
+                (
+                    "' _VA-NOW _VA-CLOCK _VA-V _EXT4-BIND-WRITE-CLOCK "
+                    "CONSTANT _VA-BIND-IOR"
+                ),
+                (
+                    "' _VA-NOW _VA-CLOCK _VA-V _EXT4-BIND-WRITE-CLOCK "
+                    "CONSTANT _VA-REBIND-IOR"
+                ),
+                (
+                    'S" X" 1024 _VA-S _VA-V _EXT4-WRITE '
+                    "CONSTANT _VA-HOLE-IOR CONSTANT _VA-HOLE-ACTUAL"
+                ),
+                "_VA-CTX _EXT4-C.J.WRITER + @ CONSTANT _VA-WRITER",
+                "_VA-ARENA ARENA-USED CONSTANT _VA-USED-WRITER",
+                (
+                    _forth_conjunction(
+                        [
+                            "_VA-MOUNT-IOR 0=",
+                            "_VA-P-IOR 0=",
+                            "_VA-H-IOR 0=",
+                            "_VA-S-IOR 0=",
+                            "_VA-PO-IOR 0=",
+                            "_VA-HO-IOR 0=",
+                            "_VA-VN _VA-H D.VNODE @ =",
+                            "_VA-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "EXT4-CAPS VFS-CAP-WRITE AND 0=",
+                            "EXT4-OPS VFS-OP-WRITE CELLS + @ 0=",
+                            "_VA-ZERO-IOR 0=",
+                            "_VA-ZERO-ACTUAL 0=",
+                            "_VA-NOCLOCK-IOR VFS-E-UNSUPPORTED =",
+                            "_VA-NOCLOCK-ACTUAL 0=",
+                            "_VA-PRE-WRITER 0=",
+                            "_VA-USED-PRECLOCK _VA-USED-CLEAN =",
+                            "_VA-BIND-IOR 0=",
+                            "_VA-REBIND-IOR VFS-E-CONFLICT =",
+                            "_VA-HOLE-ACTUAL 0=",
+                            (
+                                "_VA-HOLE-IOR VFS-IOR-REASON "
+                                "VFS-R-UNSUPPORTED ="
+                            ),
+                            (
+                                "_VA-HOLE-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-RECOVERY ="
+                            ),
+                            "_VA-CLOCK 2 CELLS + @ 1 =",
+                            "_VA-VN VN.MTIME @ _VA-OLD-MTIME =",
+                            "_VA-VN VN.MTIME-NS @ _VA-OLD-MTIME-NS =",
+                            "_VA-VN VN.CTIME @ _VA-OLD-CTIME =",
+                            "_VA-VN VN.CTIME-NS @ _VA-OLD-CTIME-NS =",
+                            "_VA-SVN VN.MTIME @ _VA-S-OLD-MTIME =",
+                            (
+                                "_VA-SVN VN.MTIME-NS @ "
+                                "_VA-S-OLD-MTIME-NS ="
+                            ),
+                            "_VA-SVN VN.CTIME @ _VA-S-OLD-CTIME =",
+                            (
+                                "_VA-SVN VN.CTIME-NS @ "
+                                "_VA-S-OLD-CTIME-NS ="
+                            ),
+                            "_VA-PFD FD.CUR-LO @ 0=",
+                            "_VA-HFD FD.CUR-LO @ 0=",
+                            "_VA-WRITER 0<>",
+                            "_VA-WRITER _EXT4-JWR-VALID?",
+                            "_VA-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_VA-USED-WRITER _VA-USED-CLEAN >",
+                            "_VA-CTX _EXT4-C.RECOVERY + @ 0=",
+                            "_VA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                            "_VA-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        ]
+                    )
+                    + ' IF ." EXT4-VFS-WRITE-PREFLIGHT" THEN'
+                ),
+                (
+                    "_VA-WRITER _EXT4-JWR-ACTIVATE "
+                    "CONSTANT _VA-ACTIVATE-IOR"
+                ),
+                "_VA-V VFS-SYNC CONSTANT _VA-SYNC1-IOR",
+                (
+                    _forth_conjunction(
+                        [
+                            "_VA-ACTIVATE-IOR 0=",
+                            "_VA-SYNC1-IOR 0=",
+                            "_VA-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                            "_VA-V _EXT4-READY?",
+                            "_VA-CTX _EXT4-C.READY + @ -1 =",
+                            (
+                                "_VA-CTX _EXT4-C.J.WRITER-CURRENT + @ "
+                                "-1 ="
+                            ),
+                            "_VA-CTX _EXT4-C.J.WRITER + @ _VA-WRITER =",
+                            "_VA-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_VA-ARENA ARENA-USED _VA-USED-WRITER =",
+                            (
+                                "_VA-CTX _EXT4-C.WCLOCK-XT + @ "
+                                "' _VA-NOW ="
+                            ),
+                            (
+                                "_VA-CTX _EXT4-C.WCLOCK-CTX + @ "
+                                "_VA-CLOCK ="
+                            ),
+                            "_VA-CTX _EXT4-C.RECOVERY + @ 0=",
+                            "_VA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                            "_VA-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        ]
+                    )
+                    + ' IF ." EXT4-VFS-SYNC-REPUBLISHED" THEN'
+                ),
+                "11 _VA-PFD VFS-SEEK? CONSTANT _VA-SEEK-IOR",
+                (
+                    'S" WRITE-RMW" _VA-PFD FD.CUR-LO @ _VA-P _VA-V '
+                    "_EXT4-WRITE CONSTANT _VA-WRITE-IOR "
+                    "CONSTANT _VA-WRITE-ACTUAL"
+                ),
+                "_VA-PFD VFS-FSYNC CONSTANT _VA-FSYNC-IOR",
+                (
+                    _forth_conjunction(
+                        [
+                            "_VA-SEEK-IOR 0=",
+                            f"_VA-WRITE-ACTUAL {len(replacement)} =",
+                            "_VA-WRITE-IOR 0=",
+                            "_VA-FSYNC-IOR 0=",
+                            "_VA-PFD FD.CUR-LO @ 11 =",
+                            "_VA-HFD FD.CUR-LO @ 0=",
+                            "_VA-CLOCK 2 CELLS + @ 2 =",
+                            f"_VA-VN VN.MTIME @ {seconds} =",
+                            f"_VA-VN VN.MTIME-NS @ {nanoseconds} =",
+                            f"_VA-VN VN.CTIME @ {seconds} =",
+                            f"_VA-VN VN.CTIME-NS @ {nanoseconds} =",
+                            "_VA-VN VN.ATIME @ _VA-OLD-ATIME =",
+                            "_VA-VN VN.ATIME-NS @ _VA-OLD-ATIME-NS =",
+                            "_VA-VN VN.SIZE-LO @ _VA-OLD-SIZE =",
+                            "_VA-VN VN.GEN @ _VA-OLD-GEN =",
+                            "_VA-VN VN.NLINK @ _VA-OLD-NLINK =",
+                            "_VA-VN VN.BLOCKS @ _VA-OLD-BLOCKS =",
+                            "_VA-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                            "_VA-H D.VNODE @ _VA-VN =",
+                            f"_VA-H D.VNODE @ VN.MTIME @ {seconds} =",
+                            "_VA-CTX _EXT4-C.RECOVERY + @ 0<>",
+                            "_VA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                            "_VA-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            "_VA-CTX _EXT4-C.J.WRITER + @ _VA-WRITER =",
+                            "_VA-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_VA-ARENA ARENA-USED _VA-USED-WRITER =",
+                        ]
+                    )
+                    + ' IF ." EXT4-VFS-WRITE-PUBLISHED" THEN'
+                ),
+                (
+                    "_VA-A 64 _VA-HFD VFS-READ? "
+                    "CONSTANT _VA-HR-IOR CONSTANT _VA-HN"
+                ),
+                "0 _VA-PFD VFS-SEEK? CONSTANT _VA-REWIND-IOR",
+                (
+                    "_VA-B 64 _VA-PFD VFS-READ? "
+                    "CONSTANT _VA-PR-IOR CONSTANT _VA-PN"
+                ),
+                (
+                    _forth_conjunction(
+                        [
+                            "_VA-HR-IOR 0=",
+                            "_VA-PR-IOR 0=",
+                            "_VA-REWIND-IOR 0=",
+                            f"_VA-HN {file_size} =",
+                            f"_VA-PN {file_size} =",
+                            (
+                                f"_VA-A _VA-EXPECTED {file_size} "
+                                "_EXT4-BYTES=?"
+                            ),
+                            (
+                                f"_VA-B _VA-EXPECTED {file_size} "
+                                "_EXT4-BYTES=?"
+                            ),
+                            f"_VA-HFD FD.CUR-LO @ {file_size} =",
+                            f"_VA-PFD FD.CUR-LO @ {file_size} =",
+                        ]
+                    )
+                    + ' IF ." EXT4-VFS-WRITE-SHARED-READ" THEN'
+                ),
+                "_VA-V VFS-SYNC CONSTANT _VA-SYNC2-IOR",
+                (
+                    _forth_conjunction(
+                        [
+                            "_VA-SYNC2-IOR 0=",
+                            "_VA-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                            "_VA-V _EXT4-READY?",
+                            "_VA-CTX _EXT4-C.READY + @ -1 =",
+                            (
+                                "_VA-CTX _EXT4-C.J.WRITER-CURRENT + @ "
+                                "-1 ="
+                            ),
+                            "_VA-CTX _EXT4-C.J.WRITER + @ _VA-WRITER =",
+                            "_VA-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_VA-ARENA ARENA-USED _VA-USED-WRITER =",
+                            "_VA-CTX _EXT4-C.RECOVERY + @ 0=",
+                            "_VA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                            "_VA-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                            f"_VA-VN VN.MTIME @ {seconds} =",
+                            f"_VA-VN VN.MTIME-NS @ {nanoseconds} =",
+                            f"_VA-VN VN.CTIME @ {seconds} =",
+                            f"_VA-VN VN.CTIME-NS @ {nanoseconds} =",
+                            "_VA-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                            "_VA-CLOCK 2 CELLS + @ 2 =",
+                            (
+                                "_VA-CTX _EXT4-C.WCLOCK-XT + @ "
+                                "' _VA-NOW ="
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-VFS-WRITE-SYNCED" THEN'
+                ),
+                "_VA-PFD VFS-CLOSE? CONSTANT _VA-PCLOSE-IOR",
+                "_VA-HFD VFS-CLOSE? CONSTANT _VA-HCLOSE-IOR",
+                "0 _VA-V VFS-UNMOUNT CONSTANT _VA-UNMOUNT-IOR",
+                (
+                    _forth_conjunction(
+                        [
+                            "_VA-PCLOSE-IOR 0=",
+                            "_VA-HCLOSE-IOR 0=",
+                            "_VA-UNMOUNT-IOR 0=",
+                            "_VA-V V.LIFECYCLE @ VFS-L-UNMOUNTED =",
+                            "_VA-V V.BCTX @ 0=",
+                            "_VA-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        ]
+                    )
+                    + ' IF ." EXT4-VFS-WRITE-CLEAN-UNMOUNT" THEN'
+                ),
+            ],
+            patches=source_patches,
+            capture_media=media_path,
+        )
+        for marker in (
+            "EXT4-VFS-WRITE-PREFLIGHT",
+            "EXT4-VFS-SYNC-REPUBLISHED",
+            "EXT4-VFS-WRITE-PUBLISHED",
+            "EXT4-VFS-WRITE-SHARED-READ",
+            "EXT4-VFS-WRITE-SYNCED",
+            "EXT4-VFS-WRITE-CLEAN-UNMOUNT",
+        ):
+            _assert_emitted(output, marker)
+
+        assert trace == (
+            activation_trace
+            + deactivation_trace
+            + activation_trace
+            + emission_trace
+            + checkpoint_trace
+            + deactivation_trace
+        )
+        assert len(trace) == 76
+        assert sum(kind == "write" for kind, _, _ in trace) == 39
+        assert sum(kind == "flush" for kind, _, _ in trace) == 37
+        assert trace.count(("write", data_block * 2, 2)) == 1
+        assert trace.count(("write", inode_home * 2, 2)) == 1
+
+        with media_path.open("rb") as source:
+            def read_block(physical_block: int) -> bytes:
+                source.seek(physical_block * block_size)
+                payload = source.read(block_size)
+                assert len(payload) == block_size
+                return payload
+
+            final_super = read_block(1)
+            final_journal = read_block(journal0_physical)
+            final_guard = read_block(physical["guard"])
+            final_data = read_block(data_block)
+            final_inode_home = read_block(inode_home)
+
+        source_sequence = struct.unpack_from(">I", standard, 0x18)[0]
+        expected_final_journal = bytearray(standard)
+        struct.pack_into(
+            ">I", expected_final_journal, 0x18,
+            (source_sequence + 5) & 0xFFFF_FFFF,
+        )
+        struct.pack_into(">I", expected_final_journal, 0x1C, 0)
+        struct.pack_into(">I", expected_final_journal, 0x58, guard_logical)
+        expected_final_journal = _jbd2_super_with_checksum(
+            expected_final_journal
+        )
+        assert final_super == clean_super
+        assert final_journal == expected_final_journal
+        assert final_guard == bytes(block_size)
+        assert final_data == bytes(expected_data)
+        assert final_inode_home == bytes(expected_inode_home)
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
 def test_recover_without_checksum_v3_journal_refuses_before_writes(
     canonical_images: dict[str, Path]
 ) -> None:

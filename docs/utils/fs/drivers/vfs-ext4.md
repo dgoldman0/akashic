@@ -909,6 +909,43 @@ the path and its hard-link alias, and leaves a subsequent unmount clean. The
 client remains absent from `EXT4-OPS`: it deliberately does not publish vnode
 timestamps or dirty state for continued public access.
 
+A second private word, `_EXT4-WRITE`, now has the exact ABI-1 callback shape
+`( source count offset dentry vfs -- actual ior )`. It validates an owned,
+linked regular-file dentry, its shared vnode identity/generation and clean
+cached state, and a nonwrapping size-preserving single-block range. It then
+calls the mounted client with the vnode's ext4 inode number and generation;
+it never owns or advances an FD cursor. Exact checkpointed success publishes
+only `mtime`/`ctime` seconds and nanoseconds into the shared vnode, making the
+result immediately visible through every hard-link alias. Size, blocks,
+atime, link count, identity, generation, and vnode-dirty state remain
+unchanged. Any failure publishes no vnode fields.
+
+The callback obtains time from a caller-installed per-context provider rather
+than ambient `EPOCH@`. `_EXT4-BIND-WRITE-CLOCK` binds it once at an
+authenticated clean mounted endpoint before writer allocation. The provider
+contract is `( clock-context -- epoch-ms ior )`; one nonzero write samples it
+exactly once and converts the admitted scalar to ext4 seconds/nanoseconds.
+Zero-length writes do not sample or publish time. The binding survives strict
+reload, checkpoint, and live sync/deactivation.
+
+`FSYNC` and `SYNCFS` now validate the retained writer, checkpoint a lower-level
+`COMMITTED` transaction if present, return any latched fault, and require an
+idle-clean endpoint. `FSYNC` leaves the already-checkpointed filesystem's
+empty journal write-active. `SYNCFS` cleanly deactivates it before generic
+`VFS-SYNC` clears `VFS-F-DIRTY`, then republishes ready and writer-current
+authority so the still-mounted context can reactivate later. Focused
+qualification covers missing-clock and duplicate-bind refusal, a sparse-hole
+refusal with no cache publication, two live sync/deactivation boundaries,
+reactivation through the same writer, exact hard-link cache publication,
+unchanged callback-side FD cursors, alias readback, clean unmount, the exact
+76-event media trace, and independent raw data/inode/journal checks.
+
+`_EXT4-WRITE` remains absent from `EXT4-OPS` and `EXT4-CAPS`. Its mounted
+client still returns zero progress after faults that may follow ordered-data
+or commit publication. The next integration gate must derive confirmed byte
+progress from ordered-data sector completion and map progress-plus-error and
+quarantine flags honestly before generic VFS retry/cursor semantics are safe.
+
 Controlled sequential-write qualification tears the first inode-table home
 write at byte 269, one byte into the target inode's new `i_ctime`. The ordered
 data and committed journal are already durable, while the torn home is neither
@@ -958,9 +995,9 @@ the four geometry fixtures and the supplemental `read-side-1k-i256` fixture:
 Directory population snapshots the child head, inode count, and string-pool
 cursor. Any I/O, checksum, allocation, or structural failure rolls the cache
 back before returning. Sparse reads synthesize zeroes without issuing a media
-read for the hole. `SYNCFS` and `FSYNC` are safe no-ops while the binding is
-read-only; before writable capabilities are exposed they must drive the
-required transaction commit/checkpoint durability rather than remain no-ops.
+read for the hole. `FSYNC` now validates or checkpoints a retained writer;
+`SYNCFS` additionally lands a write-active empty journal clean while
+preserving the still-mounted instance's ready/current authority.
 
 `EXT4-BINDING` has `VFS-BF-NEEDS-VOLUME`, `VFS-BF-READ-ONLY`, and
 `VFS-BF-STABLE-IDS`. The VFS rejects all mutation before binding dispatch.
@@ -975,16 +1012,16 @@ writable profile. The journaling and crash-recovery substrate is advanced, but
 public write support is not a capability-bit flip. `EXT4-OPS` still has no
 `WRITE`, `CREATE`, `MKDIR`, `UNLINK`, `RMDIR`, `RENAME`, `TRUNCATE`, `SETATTR`,
 `LINK`, `SYMLINK`, `SETXATTR`, or `REMOVEXATTR` callback;
-`EXT4-BINDING` remains `VFS-BF-READ-ONLY`, and `SYNCFS`/`FSYNC` remain
-read-only no-ops. Writable publication still needs a production
-workspace-sizing and chunking contract, general block and inode allocation,
+`EXT4-BINDING` remains `VFS-BF-READ-ONLY`; the real `SYNCFS`/`FSYNC` callbacks
+do not themselves expose mutation. Writable publication still needs a
+production workspace-sizing and chunking contract, general block and inode
+allocation,
 extent and legacy-map growth and shrink, directory-entry mutation,
 inode/link/time/accounting updates, xattr mutation, namespace/cache coherence,
-real sync semantics, broader orphan recovery, and interoperability plus
-power-cut qualification. The durable internal transaction engine now has a
-mounted private client for its first ordinary-data shape, but the public
-filesystem mutation layer and its qualification remain several major
-implementation phases away.
+broader orphan recovery, and interoperability plus power-cut qualification.
+For the existing one-block shape, trusted time injection, shared-vnode
+publication, and live sync semantics are implemented. The durable engine and
+private callback still do not constitute the general public mutation layer.
 
 That narrow private write checkpoint has now reached private durability:
 one size-preserving regular-file overwrite contained in one already allocated
@@ -997,11 +1034,10 @@ external-tool inspection and the broader controlled power-cut matrix remain
 qualification gates. The mounted private client adds zero-length behavior,
 stable pre-activation refusal, synchronous success, sequential writer reuse,
 and dirty/empty crash-remount cleanup without widening the supported data
-shape. The operation remains private until production writer workspace and
-chunking policy, a trustworthy clock source, VFS dirty/cache coherence, and
-real `FSYNC` and `SYNCFS` behavior are settled. Growth, holes, unwritten
-extents, cross-block writes, truncation, and namespace mutation remain later
-phases.
+shape. The operation remains private until its post-publication
+progress/error policy is represented honestly and production writer
+workspace/chunking policy is settled. Growth, holes, unwritten extents,
+cross-block writes, truncation, and namespace mutation remain later phases.
 
 The remaining boundaries are:
 
