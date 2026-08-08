@@ -36,11 +36,13 @@ weaken functionality. If correct source legitimately outgrows it, the budget
 must be revisited from measured system resources. The harness still performs a
 real cold source build and requires the `EXT4-SOURCE-READY` marker with no
 Forth diagnostic. Runtime recovery journeys use a separate 1,200,000,000-step
-default watchdog. The geometry-bounded multi-record production and mixed
-second-commit fault journeys use a scoped 1,500,000,000-step watchdog because
+default watchdog. Geometry-bounded multi-record production and selected
+multi-record fault journeys use a scoped 1,500,000,000-step watchdog because
 the real cold-source path plus repeated whole-plan authentication legitimately
-crossed the default; the mixed successful cleanup measured 1,209,747,492
-steps. Neither value is an implementation capacity. The default was
+crossed the default. The mixed successful cleanup measured 1,209,747,492
+steps; the linked one-block `LEGACY_MORE` success measured 1,102,821,323, and
+repair from the durable image immediately before its commit fence measured
+1,366,762,951. Neither watchdog is an implementation capacity. The default was
 established after the fresh-proof W18 crash-repair
 journey exceeded the old ceiling; the measured journey completed in
 811,281,646 steps, on one core, below 1 GiB peak RSS with no swapping. It is
@@ -1428,14 +1430,23 @@ The remaining boundaries are:
   protocols. A replay-home flush fence is also exercised for both protocols.
   Substitution of the retained target-inode CRC remains structurally valid but
   is rejected during checkpoint preflight before any home write. These
-  controlled crash cases remain pinned to the 1 KiB fixture. The branch in
-  which the data- and inode-group descriptors occupy distinct primary GDT
-  pages, adding one metadata home, is implemented but not yet qualified; the
-  first `MORE` transaction still needs commit, partial-home, reset, witness,
-  guard-retirement, and flush-fence crash qualification while its successor
-  remains active; linked `MODERN_MORE` and modern/legacy
-  `DATA_DELETE_MORE`, plus successful multi-range linked release, also lack
-  positive oracles. The
+  controlled crash cases remain pinned to the 1 KiB fixture. The linked
+  one-block `LEGACY_MORE` path now has a successor-aware controlled matrix.
+  Eight trace-derived cuts tear the commit, each of the inode, GDT,
+  block-bitmap, and primary-super homes, and the reset-primary, witness-clear,
+  and guard-retirement writes. Seven failed durability fences cover commit,
+  the complete home batch, reset-preseed and reset-anchor durability,
+  primary-reset durability, witness clearing, and guard retirement; both the
+  writes surviving each failed flush and the preceding
+  durable snapshot independently finish successor 21, reproduce every
+  affected ext4 home exactly, preserve the payload without a data-home write,
+  and remount without another write or flush. The branch in which the data- and
+  inode-group descriptors occupy distinct primary GDT pages, adding one
+  metadata home, is implemented but not yet qualified. Linked `MODERN_MORE`,
+  modern/legacy `DATA_DELETE_MORE`, successful multi-range linked release, and
+  successor-aware crash cuts for those modes also lack positive oracles.
+  Activation, descriptor, and active-primary writes are qualified by singleton
+  matrices but are not duplicated here with an active successor. The
   one-block-specific commit and final-super flush fences, shared
   activation/reset prefixes, broader ownership shapes, and active-journal
   external-tool inspection also remain to be qualified;

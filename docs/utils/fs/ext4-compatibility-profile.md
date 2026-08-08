@@ -883,11 +883,22 @@ table and certificate return clean. Unified discovery and cleanup
 still need broader qualification for chains longer than two,
 later modern blocks and large orphan files, additional ownership and deletion
 shapes, distinct-key hash collisions, and arena exhaustion or retained-too-
-small retry behavior. No crash cut yet lands inside the first `MORE`
-transaction while its successor remains active; commit, partial-home, reset,
-witness, guard-retirement, and flush-fence coverage there remains a release
-gate. Linked `MODERN_MORE`, modern/legacy `DATA_DELETE_MORE`, and successful
-multi-range linked release also still need positive oracles.
+small retry behavior. The one-block linked chain now also qualifies crashes
+inside its first `LEGACY_MORE` while successor 21 remains active. Eight
+trace-derived write cuts tear the commit; the inode, GDT, block-bitmap, and
+primary-super homes; and the reset-primary, witness-clear, and guard-retirement
+writes. Seven durability cuts cross the commit, complete-home, reset-preseed,
+reset-anchor, reset-primary, witness-clear, and guard-retirement fences; for
+each failed flush, both the writes that survived and the preceding durable
+snapshot independently converge on the successful final values for every
+affected ext4 home and a write/flush-free remount. The payload is never a
+home-write target, and inode 21 remains byte-exact through its terminal
+`FINAL`; the synthetic fixture's no-e2fsck qualification remains unchanged.
+Linked `MODERN_MORE`, modern/legacy `DATA_DELETE_MORE`, successful multi-range
+linked release, and successor-aware crash cuts for those modes still need
+positive oracles. Activation, descriptor, and active-primary writes are
+qualified by singleton matrices but are not duplicated here with an active
+successor.
 
 The remaining writer gate explicitly includes bounded, filesystem-consistent
 per-operation chunk planning for requests larger than the selected profile,
