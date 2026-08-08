@@ -20475,6 +20475,190 @@ def test_private_vfs_write_faults_report_confirmed_caller_prefix(
             backing.unlink(missing_ok=True)
 
 
+def test_private_vfs_write_returns_block_bounded_short_success(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    superblock, inode, _ = _ext4_inode_record(path, 17)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert block_size == 1024
+    data_block = _extent_root_physical(inode, 0)
+    write_offset = block_size - 8
+    source_bytes = 1040
+    replacement_byte = 0x58
+    epoch_ms = 3_000_000_123_456
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    with path.open("rb") as source:
+        source.seek(data_block * block_size)
+        original_data = source.read(block_size)
+    assert len(original_data) == block_size
+
+    backing = tmp_path / "vfs-block-bounded-short-write.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            backing,
+            [
+                f"CREATE _SC-CLOCK {epoch_ms} , 0 , 0 ,",
+                f"CREATE _SC-SOURCE {source_bytes} ALLOT",
+                f"_SC-SOURCE {source_bytes} {replacement_byte} FILL",
+                (
+                    ": _SC-NOW ( clock -- epoch-ms ior ) "
+                    "DUP 2 CELLS + DUP @ 1+ SWAP ! "
+                    "DUP @ SWAP CELL+ @ ;"
+                ),
+                "T-ARENA CONSTANT _SC-ARENA",
+                (
+                    "_SC-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _SC-MOUNT-IOR CONSTANT _SC-V"
+                ),
+                "_SC-V _EXT4-CTX CONSTANT _SC-CTX",
+                (
+                    'S" /fixture/sparse.bin" _SC-V VFS-RESOLVE? '
+                    "CONSTANT _SC-RESOLVE-IOR CONSTANT _SC-D"
+                ),
+                "_SC-D D.VNODE @ CONSTANT _SC-VN",
+                (
+                    "' _SC-NOW _SC-CLOCK _SC-V "
+                    "_EXT4-BIND-WRITE-CLOCK CONSTANT _SC-BIND-IOR"
+                ),
+                "_SC-ARENA ARENA-USED CONSTANT _SC-USED-CLEAN",
+                (
+                    f"_SC-SOURCE {source_bytes} 2500 "
+                    "_SC-D _SC-V _EXT4-WRITE "
+                    "CONSTANT _SC-GROW-IOR CONSTANT _SC-GROW-ACTUAL"
+                ),
+                (
+                    "_SC-CTX _EXT4-C.J.WRITER + @ "
+                    "CONSTANT _SC-GROW-WRITER"
+                ),
+                "_SC-ARENA ARENA-USED CONSTANT _SC-USED-AFTER-GROW",
+                "_SC-CLOCK 2 CELLS + @ CONSTANT _SC-GROW-CLOCK",
+                (
+                    f"_SC-SOURCE {source_bytes} {write_offset} "
+                    "_SC-D _SC-V _EXT4-WRITE "
+                    "CONSTANT _SC-FIRST-IOR CONSTANT _SC-FIRST-ACTUAL"
+                ),
+                "_EXT4-WR-COUNT @ CONSTANT _SC-FIRST-COUNT",
+                "_EXT4-WR-CHUNK @ CONSTANT _SC-FIRST-CHUNK",
+                "_SC-CTX _EXT4-C.J.WRITER + @ CONSTANT _SC-WRITER",
+                "_SC-ARENA ARENA-USED CONSTANT _SC-USED",
+                "_SC-VN VN.MTIME @ CONSTANT _SC-FIRST-MTIME",
+                "_SC-VN VN.MTIME-NS @ CONSTANT _SC-FIRST-MTIME-NS",
+                "_SC-VN VN.CTIME @ CONSTANT _SC-FIRST-CTIME",
+                "_SC-VN VN.CTIME-NS @ CONSTANT _SC-FIRST-CTIME-NS",
+                (
+                    f"_SC-SOURCE 8 + {source_bytes - 8} 1024 "
+                    "_SC-D _SC-V _EXT4-WRITE "
+                    "CONSTANT _SC-SECOND-IOR CONSTANT _SC-SECOND-ACTUAL"
+                ),
+                "_EXT4-WR-COUNT @ CONSTANT _SC-SECOND-COUNT",
+                "_EXT4-WR-CHUNK @ CONSTANT _SC-SECOND-CHUNK",
+                (
+                    _forth_conjunction(
+                        [
+                            "_SC-MOUNT-IOR 0=",
+                            "_SC-RESOLVE-IOR 0=",
+                            "_SC-BIND-IOR 0=",
+                            "_SC-GROW-ACTUAL 0=",
+                            (
+                                "_SC-GROW-IOR VFS-IOR-REASON "
+                                "VFS-R-UNSUPPORTED ="
+                            ),
+                            (
+                                "_SC-GROW-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-RECOVERY ="
+                            ),
+                            "_SC-GROW-WRITER 0=",
+                            "_SC-USED-AFTER-GROW _SC-USED-CLEAN =",
+                            "_SC-GROW-CLOCK 0=",
+                            "_SC-FIRST-IOR 0=",
+                            "_SC-FIRST-ACTUAL 8 =",
+                            f"_SC-FIRST-COUNT {source_bytes} =",
+                            "_SC-FIRST-CHUNK 8 =",
+                            "_SC-SECOND-ACTUAL 0=",
+                            (
+                                "_SC-SECOND-IOR VFS-IOR-REASON "
+                                "VFS-R-UNSUPPORTED ="
+                            ),
+                            (
+                                "_SC-SECOND-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-RECOVERY ="
+                            ),
+                            f"_SC-SECOND-COUNT {source_bytes - 8} =",
+                            f"_SC-SECOND-CHUNK {block_size} =",
+                            "_SC-CLOCK 2 CELLS + @ 2 =",
+                            f"_SC-FIRST-MTIME {seconds} =",
+                            f"_SC-FIRST-MTIME-NS {nanoseconds} =",
+                            f"_SC-FIRST-CTIME {seconds} =",
+                            f"_SC-FIRST-CTIME-NS {nanoseconds} =",
+                            "_SC-VN VN.MTIME @ _SC-FIRST-MTIME =",
+                            (
+                                "_SC-VN VN.MTIME-NS @ "
+                                "_SC-FIRST-MTIME-NS ="
+                            ),
+                            "_SC-VN VN.CTIME @ _SC-FIRST-CTIME =",
+                            (
+                                "_SC-VN VN.CTIME-NS @ "
+                                "_SC-FIRST-CTIME-NS ="
+                            ),
+                            "_SC-VN VN.SIZE-LO @ 3072 =",
+                            "_SC-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                            "_SC-WRITER 0<>",
+                            (
+                                "_SC-CTX _EXT4-C.J.WRITER + @ "
+                                "_SC-WRITER ="
+                            ),
+                            "_SC-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_SC-WRITER _EXT4-JWR.FAULT + @ 0=",
+                            "_SC-ARENA ARENA-USED _SC-USED =",
+                            "_SC-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "_SC-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-VFS-WRITE-BLOCK-BOUNDED" THEN'
+                ),
+                "0 _SC-V VFS-UNMOUNT CONSTANT _SC-UNMOUNT-IOR",
+                (
+                    "_SC-UNMOUNT-IOR 0= "
+                    "_SC-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    'IF ." EXT4-VFS-WRITE-BLOCK-BOUNDED-UNMOUNT" THEN'
+                ),
+            ],
+            patches=source_patches,
+            capture_media=backing,
+        )
+        _assert_emitted(output, "EXT4-VFS-WRITE-BLOCK-BOUNDED")
+        _assert_emitted(
+            output, "EXT4-VFS-WRITE-BLOCK-BOUNDED-UNMOUNT"
+        )
+        assert trace[: len(activation_trace)] == activation_trace
+        assert len(trace) == 51
+        assert sum(kind == "write" for kind, _, _ in trace) == 27
+        assert sum(kind == "flush" for kind, _, _ in trace) == 24
+        assert trace.count(("write", data_block * 2, 2)) == 1
+
+        expected_data = bytearray(original_data)
+        expected_data[write_offset:block_size] = bytes((replacement_byte,)) * 8
+        with backing.open("rb") as source:
+            source.seek(data_block * block_size)
+            actual_data = source.read(block_size)
+        assert actual_data == bytes(expected_data)
+    finally:
+        backing.unlink(missing_ok=True)
+
+
 def test_recover_without_checksum_v3_journal_refuses_before_writes(
     canonical_images: dict[str, Path]
 ) -> None:

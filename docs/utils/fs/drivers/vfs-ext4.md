@@ -936,13 +936,28 @@ the old inode-table home, and publish no vnode timestamps.
 A second private word, `_EXT4-WRITE`, now has the exact ABI-1 callback shape
 `( source count offset dentry vfs -- actual ior )`. It validates an owned,
 linked regular-file dentry, its shared vnode identity/generation and clean
-cached state, and a nonwrapping size-preserving single-block range. It then
-calls the mounted client with the vnode's ext4 inode number and generation;
-it never owns or advances an FD cursor. Exact checkpointed success publishes
-only `mtime`/`ctime` seconds and nanoseconds into the shared vnode, making the
-result immediately visible through every hard-link alias. Size, blocks,
-atime, link count, identity, generation, and vnode-dirty state remain
-unchanged. Any failure publishes no vnode fields.
+cached state, and a nonwrapping size-preserving caller range. A nonempty call
+derives `min(count, block_size - (offset mod block_size))` and sends exactly
+that first block-bounded chunk to the mounted client. A larger request
+therefore returns legal short success rather than widening the qualified
+`1/1/0` transaction or refusing merely because the caller span crosses a
+block. `VFS-WRITE-EXACT` or another caller may advance the buffer and offset
+and invoke the callback again. The callback passes the vnode's ext4 inode
+number and generation and never owns or advances an FD cursor. Exact
+checkpointed success publishes only `mtime`/`ctime` seconds and nanoseconds
+into the shared vnode, making the result immediately visible through every
+hard-link alias. Size, blocks, atime, link count, identity, generation, and
+vnode-dirty state remain unchanged. Any failure publishes no vnode fields.
+
+Block-bounded qualification supplies 1,040 caller bytes at offset 1,016 of the
+3 KiB sparse fixture. The allocated first block checkpoints exactly eight
+bytes and returns `actual = 8, ior = 0`; the caller-shaped retry advances its
+buffer and submits the 1,032-byte suffix at offset 1,024, where the hole is
+refused before another media transaction. The first timestamp remains
+published, the writer stays idle-clean and allocation-stable, and clean
+unmount emits the ordinary deactivation trace. This pins both removal of the
+old `count <= block_size` limit and safe cross-block short progress without
+claiming hole allocation or a multi-block atomic transaction.
 
 The callback obtains time from a caller-installed per-context provider rather
 than ambient `EPOCH@`. `_EXT4-BIND-WRITE-CLOCK` binds it once at an
@@ -1063,8 +1078,8 @@ and dirty/empty crash-remount cleanup without widening the supported data
 shape. Its post-publication progress/error policy is now represented honestly;
 the operation remains private while production writer workspace/chunking,
 public admission, and broader crash/interoperability policy are unsettled.
-Growth, holes, unwritten extents, cross-block writes, truncation, and namespace
-mutation remain later phases.
+Growth, holes, unwritten extents, multi-block atomicity, truncation, and
+namespace mutation remain later phases.
 
 The remaining boundaries are:
 

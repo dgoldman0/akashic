@@ -13377,6 +13377,7 @@ VARIABLE _EXT4-WR-VN
 VARIABLE _EXT4-WR-BID
 VARIABLE _EXT4-WR-GEN
 VARIABLE _EXT4-WR-END
+VARIABLE _EXT4-WR-CHUNK
 VARIABLE _EXT4-WR-MS
 VARIABLE _EXT4-WR-SECONDS
 VARIABLE _EXT4-WR-NSEC
@@ -13417,9 +13418,6 @@ VARIABLE _EXT4-WR-IOR
     _EXT4-WR-SOURCE @ _EXT4-WR-COUNT @ _VFS-BUFFER? 0= IF
         VFS-E-INVALID EXIT
     THEN
-    _EXT4-WR-COUNT @ _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ U> IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
     _EXT4-WR-OFFSET @ _EXT4-WR-COUNT @ _EXT4-UADD?
     _EXT4-WR-IOR ! _EXT4-WR-END !
     _EXT4-WR-IOR @ ?DUP IF EXIT THEN
@@ -13428,9 +13426,8 @@ VARIABLE _EXT4-WR-IOR
     THEN
     _EXT4-WR-COUNT @
     _EXT4-WR-CTX @ _EXT4-C.BSIZE + @
-    _EXT4-WR-OFFSET @ _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ MOD - U> IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
+    _EXT4-WR-OFFSET @ _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ MOD - MIN
+    _EXT4-WR-CHUNK !
     _EXT4-WR-CTX @ _EXT4-C.WCLOCK-XT + @ 0= IF
         VFS-E-UNSUPPORTED EXIT
     THEN
@@ -13449,14 +13446,18 @@ VARIABLE _EXT4-WR-IOR
     _EXT4-WR-SECONDS ! 1000000 * _EXT4-WR-NSEC !
     0 ;
 
-\ Exact binding-callback shape for the qualified slice.  It remains absent
-\ from EXT4-OPS and EXT4-CAPS while the broader public-write gates remain.
+\ Exact binding-callback shape for the qualified slice.  A larger admitted
+\ caller range completes at most the first filesystem-block chunk and returns
+\ short success; VFS-WRITE-EXACT or the caller may advance and invoke it again.
+\ It remains absent from EXT4-OPS and EXT4-CAPS while the broader public-write
+\ gates remain.
 \ Confirmed progress and quarantine flags are safe for VFS cursor semantics;
 \ successful checkpointed writes publish only mtime/ctime into the shared
 \ vnode, while every error leaves all vnode fields unpublished.
 : _EXT4-WRITE  ( source count file-offset dentry vfs -- actual ior )
     _EXT4-WR-V ! _EXT4-WR-D ! _EXT4-WR-OFFSET !
     _EXT4-WR-COUNT ! _EXT4-WR-SOURCE !
+    0 _EXT4-WR-CHUNK !
     _EXT4-WRITE-VALIDATE ?DUP IF 0 SWAP EXIT THEN
     _EXT4-WR-COUNT @ 0= IF
         _EXT4-WR-SOURCE @ 0 _EXT4-WR-OFFSET @
@@ -13464,13 +13465,13 @@ VARIABLE _EXT4-WR-IOR
         _EXT4-MOUNTED-ONEBLOCK-WRITE EXIT
     THEN
     _EXT4-WRITE-NOW ?DUP IF 0 SWAP EXIT THEN
-    _EXT4-WR-SOURCE @ _EXT4-WR-COUNT @ _EXT4-WR-OFFSET @
+    _EXT4-WR-SOURCE @ _EXT4-WR-CHUNK @ _EXT4-WR-OFFSET @
     _EXT4-WR-BID @ _EXT4-WR-GEN @
     _EXT4-WR-SECONDS @ _EXT4-WR-NSEC @ _EXT4-WR-V @
     _EXT4-MOUNTED-ONEBLOCK-WRITE
     _EXT4-WR-IOR ! _EXT4-WR-ACTUAL !
     _EXT4-WR-IOR @ ?DUP IF _EXT4-WR-ACTUAL @ SWAP EXIT THEN
-    _EXT4-WR-ACTUAL @ _EXT4-WR-COUNT @ <> IF
+    _EXT4-WR-ACTUAL @ _EXT4-WR-CHUNK @ <> IF
         0 VFS-E-CORRUPT EXIT
     THEN
     _EXT4-WR-SECONDS @ _EXT4-WR-VN @ VN.MTIME !

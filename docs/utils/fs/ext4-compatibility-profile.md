@@ -788,6 +788,13 @@ namespace/data/metadata/xattr mutation surface, public-write integration,
 external-tool inspection of Akashic-authored active, dirty-empty, and clean
 images, and the controlled power-cut/release matrix.
 
+The exact private regular-file callback now provides one narrow chunking
+primitive: a larger size-preserving caller range completes only its first
+filesystem-block chunk and returns legal short progress, retaining the fixed
+`1 metadata / 1 data / 0 revoke` workspace. This removes a caller-size limit
+from the qualified slice but does not satisfy the general workspace/chunking
+gate for growth, allocation, multi-home metadata, or namespace operations.
+
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
 raw/MBR/GPT volumes, dirty and damaged images, controlled power cuts, complete
