@@ -932,6 +932,302 @@ def _already_empty_unlinked_orphan_patches(
     return tuple(patches.items())
 
 
+def _multi_empty_unlinked_orphan_patches(
+    path: Path,
+    *,
+    legacy_chain: tuple[int, ...],
+    modern_entries: tuple[int, ...],
+) -> tuple[tuple[int, bytes], ...]:
+    """Allocate two empty inodes behind one authenticated orphan union."""
+    inode_numbers = legacy_chain + modern_entries
+    assert len(inode_numbers) == 2
+    assert set(inode_numbers) == {18, 21}
+    assert len(set(inode_numbers)) == len(inode_numbers)
+
+    patches = dict(
+        _modern_orphan_patches(
+            path,
+            modern_entries,
+            orphan_present=bool(modern_entries),
+        )
+    )
+    superblock = bytearray(patches[1024])
+    struct.pack_into(
+        "<I",
+        superblock,
+        0xE8,
+        legacy_chain[0] if legacy_chain else 0,
+    )
+
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    inodes_per_group = struct.unpack_from("<I", superblock, 0x28)[0]
+    descriptor_size = struct.unpack_from("<H", superblock, 0xFE)[0]
+    checksum_seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    assert block_size == 1024
+    assert inode_size == 256
+    assert descriptor_size == 64
+
+    gdt_home = first_data + 1
+    with path.open("rb") as source:
+        source.seek(gdt_home * block_size)
+        gdt = bytearray(source.read(block_size))
+    assert len(gdt) == block_size
+    descriptor = bytearray(gdt[:descriptor_size])
+    inode_bitmap_home = struct.unpack_from("<I", descriptor, 0x04)[0]
+    with path.open("rb") as source:
+        source.seek(inode_bitmap_home * block_size)
+        inode_bitmap = bytearray(source.read(block_size))
+    assert len(inode_bitmap) == block_size
+
+    group_free = struct.unpack_from("<H", descriptor, 0x0E)[0] | (
+        struct.unpack_from("<H", descriptor, 0x2E)[0] << 16
+    )
+    itable_unused = struct.unpack_from("<H", descriptor, 0x1C)[0] | (
+        struct.unpack_from("<H", descriptor, 0x32)[0] << 16
+    )
+    initialized = inodes_per_group - itable_unused
+    highest_initialized = max(inode_numbers)
+    assert initialized < 18
+    assert highest_initialized == 21
+    assert group_free >= len(inode_numbers)
+
+    inode_offsets: dict[int, int] = {}
+    for inode_number in inode_numbers:
+        group, inode_index = divmod(inode_number - 1, inodes_per_group)
+        assert group == 0
+        _, free_inode, inode_offset = _ext4_inode_record(path, inode_number)
+        assert not any(free_inode)
+        bitmap_byte, bitmap_bit = divmod(inode_index, 8)
+        bitmap_mask = 1 << bitmap_bit
+        assert inode_bitmap[bitmap_byte] & bitmap_mask == 0
+        inode_bitmap[bitmap_byte] |= bitmap_mask
+        inode_offsets[inode_number] = inode_offset
+
+    group_free -= len(inode_numbers)
+    itable_unused = inodes_per_group - max(
+        initialized,
+        highest_initialized,
+    )
+    inode_bitmap_checksum = _crc32c_raw(
+        inode_bitmap[: inodes_per_group // 8],
+        checksum_seed,
+    )
+    struct.pack_into("<H", descriptor, 0x0E, group_free & 0xFFFF)
+    struct.pack_into("<H", descriptor, 0x2E, group_free >> 16)
+    struct.pack_into("<H", descriptor, 0x1C, itable_unused & 0xFFFF)
+    struct.pack_into("<H", descriptor, 0x32, itable_unused >> 16)
+    struct.pack_into(
+        "<H",
+        descriptor,
+        0x1A,
+        inode_bitmap_checksum & 0xFFFF,
+    )
+    struct.pack_into("<H", descriptor, 0x3A, inode_bitmap_checksum >> 16)
+
+    super_free = struct.unpack_from("<I", superblock, 0x10)[0]
+    assert super_free >= len(inode_numbers)
+    struct.pack_into(
+        "<I",
+        superblock,
+        0x10,
+        super_free - len(inode_numbers),
+    )
+    superblock = bytearray(_ext4_super_with_checksum(superblock))
+    descriptor = bytearray(
+        _group_descriptor_with_checksum(superblock, descriptor, 0)
+    )
+    gdt[:descriptor_size] = descriptor
+
+    _, source_inode, _ = _ext4_inode_record(path, 14)
+    assert struct.unpack_from("<H", source_inode, 0x00)[0] & 0xF000 == 0x8000
+    assert struct.unpack_from("<H", source_inode, 0x80)[0] == 32
+    legacy_successors = {
+        inode_number: (
+            legacy_chain[index + 1]
+            if index + 1 < len(legacy_chain)
+            else 0
+        )
+        for index, inode_number in enumerate(legacy_chain)
+    }
+    generations = {18: 0x1818_1818, 21: 0x2121_2121}
+    for inode_number in inode_numbers:
+        inode = bytearray(source_inode)
+        struct.pack_into("<I", inode, 0x04, 0)
+        struct.pack_into(
+            "<I",
+            inode,
+            0x14,
+            legacy_successors.get(inode_number, 0),
+        )
+        struct.pack_into("<H", inode, 0x1A, 0)
+        struct.pack_into("<I", inode, 0x1C, 0)
+        flags = struct.unpack_from("<I", inode, 0x20)[0]
+        assert flags & 0x0008_0000
+        assert not flags & 0x0000_4000
+        inode[0x28:0x64] = bytes(60)
+        struct.pack_into("<HHHHI", inode, 0x28, 0xF30A, 0, 4, 0, 0)
+        struct.pack_into("<I", inode, 0x64, generations[inode_number])
+        struct.pack_into("<I", inode, 0x68, 0)
+        struct.pack_into("<I", inode, 0x6C, 0)
+        struct.pack_into("<H", inode, 0x74, 0)
+        struct.pack_into("<H", inode, 0x76, 0)
+        inode[0xA0:0x100] = bytes(0x60)
+        patches[inode_offsets[inode_number]] = _inode_with_checksum(
+            superblock,
+            inode_number,
+            inode,
+        )
+
+    patches[1024] = bytes(superblock)
+    patches[inode_bitmap_home * block_size] = bytes(inode_bitmap)
+    patches[gdt_home * block_size] = bytes(gdt)
+    assert len(patches) == 6
+    return tuple(patches.items())
+
+
+def _multi_linked_legacy_orphan_patches(
+    path: Path,
+) -> tuple[tuple[int, bytes], ...]:
+    """Retain two linked, already-empty inodes in one legacy chain."""
+    patches = dict(
+        _multi_empty_unlinked_orphan_patches(
+            path,
+            legacy_chain=(18, 21),
+            modern_entries=(),
+        )
+    )
+    superblock = patches[1024]
+    assert struct.unpack_from("<I", superblock, 0xE8)[0] == 18
+
+    for inode_number, successor in ((18, 21), (21, 0)):
+        _, _, inode_offset = _ext4_inode_record(path, inode_number)
+        inode = bytearray(patches[inode_offset])
+        assert struct.unpack_from("<I", inode, 0x04)[0] == 0
+        assert struct.unpack_from("<I", inode, 0x14)[0] == successor
+        assert struct.unpack_from("<H", inode, 0x1A)[0] == 0
+        assert struct.unpack_from("<HHHH", inode, 0x28) == (
+            0xF30A,
+            0,
+            4,
+            0,
+        )
+        struct.pack_into("<H", inode, 0x1A, 2)
+        patches[inode_offset] = _inode_with_checksum(
+            superblock,
+            inode_number,
+            inode,
+        )
+
+    return tuple(patches.items())
+
+
+def _legacy_head_nlink2_one_block_patches(
+    path: Path,
+) -> tuple[tuple[tuple[int, bytes], ...], int]:
+    """Give legacy-chain head 18 one owned block while nlink remains two.
+
+    Both inodes are filesystem-linked (``i_links_count == 2``), separately
+    from the legacy orphan-list relationship 18 -> 21.  Recovery must truncate
+    and advance the nonterminal head before completing the terminal record.
+    """
+    base = _multi_linked_legacy_orphan_patches(path)
+    patches, data_block = _single_extent_unlinked_orphan_patches(
+        path,
+        protocol="legacy",
+        inode_number=18,
+        block_count=1,
+        seed_payloads=True,
+        base_patches=base,
+    )
+    patch_map = dict(patches)
+    _, _, inode18_offset = _ext4_inode_record(path, 18)
+    _, _, inode21_offset = _ext4_inode_record(path, 21)
+    inode18 = patch_map[inode18_offset]
+    inode21 = patch_map[inode21_offset]
+    assert struct.unpack_from("<H", inode18, 0x1A)[0] == 2
+    assert struct.unpack_from("<I", inode18, 0x14)[0] == 21
+    assert struct.unpack_from("<HHHH", inode18, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    assert _extent_root_physical(inode18, 0) == data_block
+    assert struct.unpack_from("<H", inode21, 0x1A)[0] == 2
+    assert struct.unpack_from("<I", inode21, 0x14)[0] == 0
+    assert struct.unpack_from("<HHHH", inode21, 0x28) == (
+        0xF30A,
+        0,
+        4,
+        0,
+    )
+    return patches, data_block
+
+
+def _mixed_union_with_later_multi_extent_orphan_patches(
+    path: Path,
+) -> tuple[tuple[int, bytes], ...]:
+    """Place one supported legacy record before a valid unsupported shape."""
+    base = _multi_empty_unlinked_orphan_patches(
+        path,
+        legacy_chain=(21,),
+        modern_entries=(18,),
+    )
+    patches, first_physical = _single_extent_unlinked_orphan_patches(
+        path,
+        protocol="modern",
+        inode_number=18,
+        block_count=2,
+        base_patches=base,
+    )
+    patch_map = dict(patches)
+    assert len(patch_map) == 7
+    superblock = patch_map[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    _, _, inode_offset = _ext4_inode_record(path, 18)
+    inode = bytearray(patch_map[inode_offset])
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    assert struct.unpack_from("<IHHI", inode, 0x34) == (
+        0,
+        2,
+        first_physical >> 32,
+        first_physical & 0xFFFF_FFFF,
+    )
+    assert struct.unpack_from("<I", inode, 0x04)[0] == 0
+    assert struct.unpack_from("<H", inode, 0x1A)[0] == 0
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 2 * (
+        block_size // 512
+    )
+
+    struct.pack_into("<H", inode, 0x2A, 2)
+    struct.pack_into("<H", inode, 0x38, 1)
+    second_physical = first_physical + 1
+    struct.pack_into(
+        "<IHHI",
+        inode,
+        0x40,
+        1,
+        0x8001,
+        second_physical >> 32,
+        second_physical & 0xFFFF_FFFF,
+    )
+    patch_map[inode_offset] = _inode_with_checksum(
+        superblock,
+        18,
+        inode,
+    )
+    assert _extent_root_physical(patch_map[inode_offset], 0) == first_physical
+    assert _extent_root_physical(patch_map[inode_offset], 1) == second_physical
+    return tuple(patch_map.items())
+
+
 def _single_extent_unlinked_orphan_patches(
     path: Path,
     *,
@@ -943,19 +1239,28 @@ def _single_extent_unlinked_orphan_patches(
     block_count: int = 1,
     unwritten: bool = False,
     seed_payloads: bool = False,
+    base_patches: tuple[tuple[int, bytes], ...] | None = None,
 ) -> tuple[tuple[tuple[int, bytes], ...], int]:
     """Give one unlinked inode a contiguous inline depth-zero extent."""
+    assert protocol in {"modern", "legacy"}
     assert logical_start >= 0
     assert block_count > 0
     assert block_count <= (0x7FFF if unwritten else 0x8000)
     assert logical_start + block_count <= 0xFFFF_FFFF
-    patches = dict(
-        _already_empty_unlinked_orphan_patches(
-            path,
-            protocol=protocol,
-            inode_number=inode_number,
+    if base_patches is None:
+        patches = dict(
+            _already_empty_unlinked_orphan_patches(
+                path,
+                protocol=protocol,
+                inode_number=inode_number,
+            )
         )
-    )
+    else:
+        patches = dict(base_patches)
+        assert len(patches) == len(base_patches)
+        _, _, existing_inode_offset = _ext4_inode_record(path, inode_number)
+        assert 1024 in patches
+        assert existing_inode_offset in patches
     superblock = bytearray(patches[1024])
     block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
     sectors_per_block = block_size // 512
@@ -1130,6 +1435,96 @@ def _single_extent_unlinked_orphan_patches(
     patches[1024] = bytes(superblock)
     patches[inode_offset] = bytes(inode)
     return tuple(patches.items()), physical_start
+
+
+def _later_linked_live_alias_orphan_patches(
+    path: Path,
+    *,
+    protocol: str,
+) -> tuple[tuple[tuple[int, bytes], ...], tuple[int, ...]]:
+    """Put a linked live-data alias in the later selected orphan record."""
+    assert protocol in {"modern", "legacy"}
+    extent_count = 2 if protocol == "modern" else 4
+    legacy_chain = (21,) if protocol == "modern" else (21, 18)
+    modern_entries = (18,) if protocol == "modern" else ()
+    base = _multi_empty_unlinked_orphan_patches(
+        path,
+        legacy_chain=legacy_chain,
+        modern_entries=modern_entries,
+    )
+    patches, first_physical = _single_extent_unlinked_orphan_patches(
+        path,
+        protocol=protocol,
+        inode_number=18,
+        block_count=extent_count - 1,
+        base_patches=base,
+    )
+    patch_map = dict(patches)
+    superblock = patch_map[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    sectors_per_block = block_size // 512
+
+    _, live_inode, _ = _ext4_inode_record(path, 14)
+    assert struct.unpack_from("<H", live_inode, 0x00)[0] & 0xF000 == 0x8000
+    assert struct.unpack_from("<H", live_inode, 0x1A)[0] > 0
+    assert struct.unpack_from("<HHHH", live_inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    alias_physical = _extent_root_physical(live_inode, 0)
+    owned_physical = tuple(
+        range(first_physical, first_physical + extent_count - 1)
+    )
+    assert alias_physical not in owned_physical
+
+    _, _, target_offset = _ext4_inode_record(path, 18)
+    target = bytearray(patch_map[target_offset])
+    assert struct.unpack_from("<I", target, 0x04)[0] == 0
+    assert struct.unpack_from("<I", target, 0x14)[0] == 0
+    assert struct.unpack_from("<H", target, 0x1A)[0] == 0
+    assert struct.unpack_from("<I", target, 0x6C)[0] == 0
+    assert struct.unpack_from("<H", target, 0x74)[0] == 0
+    assert struct.unpack_from("<I", target, 0x68)[0] == 0
+    assert struct.unpack_from("<HHHH", target, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    assert struct.unpack_from("<I", target, 0x1C)[0] == (
+        (extent_count - 1) * sectors_per_block
+    )
+
+    struct.pack_into("<H", target, 0x1A, 2)
+    struct.pack_into("<H", target, 0x2A, extent_count)
+    target[0x34:0x64] = bytes(48)
+    physical_blocks = (*owned_physical, alias_physical)
+    for logical, physical in enumerate(physical_blocks):
+        struct.pack_into(
+            "<IHHI",
+            target,
+            0x34 + logical * 12,
+            logical,
+            1,
+            physical >> 32,
+            physical & 0xFFFF_FFFF,
+        )
+    struct.pack_into("<I", target, 0x1C, extent_count * sectors_per_block)
+    patch_map[target_offset] = _inode_with_checksum(
+        superblock,
+        18,
+        target,
+    )
+    assert struct.unpack_from(
+        "<HHHH", patch_map[target_offset], 0x28
+    ) == (0xF30A, extent_count, 4, 0)
+    for logical, physical in enumerate(physical_blocks):
+        assert _extent_root_physical(
+            patch_map[target_offset], logical
+        ) == physical
+    return tuple(patch_map.items()), physical_blocks
 
 
 def _one_block_unlinked_orphan_patches(
@@ -1638,6 +2033,45 @@ def _assert_activation_cleanup_trace(
         assert event in allowed_writes
         assert index + 1 < len(trace)
         assert trace[index + 1] == ("flush", 0, 0)
+
+
+def _jbd2_writer_activation_trace(
+    path: Path,
+) -> tuple[tuple[str, int, int], ...]:
+    """Derive the exact activation prefix from this image's journal head."""
+    with path.open("rb") as source:
+        source.seek(1024)
+        superblock = source.read(1024)
+    assert len(superblock) == 1024
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    sectors_per_block = block_size // 512
+    journal0_physical = _ext4_journal_physical_map(path, (0,))[0]
+    with path.open("rb") as source:
+        source.seek(journal0_physical * block_size)
+        journal_super = source.read(block_size)
+    assert len(journal_super) == block_size
+    guard_logical = struct.unpack_from(">I", journal_super, 0x58)[0]
+    if guard_logical == 0:
+        guard_logical = struct.unpack_from(">I", journal_super, 0x18)[0]
+    assert guard_logical > 0
+    guard_physical = _ext4_journal_physical_map(
+        path,
+        (guard_logical,),
+    )[guard_logical]
+    return (
+        ("write", guard_physical * sectors_per_block, sectors_per_block),
+        ("flush", 0, 0),
+        ("write", guard_physical * sectors_per_block, sectors_per_block),
+        ("flush", 0, 0),
+        ("write", journal0_physical * sectors_per_block, sectors_per_block),
+        ("flush", 0, 0),
+        ("write", 2, 2),
+        ("flush", 0, 0),
+        ("write", journal0_physical * sectors_per_block, sectors_per_block),
+        ("flush", 0, 0),
+        ("write", guard_physical * sectors_per_block, sectors_per_block),
+        ("flush", 0, 0),
+    )
 
 
 def _activation_resolved_mount_lines(
@@ -2345,6 +2779,16 @@ def _forth_conjunction(checks: list[str]) -> str:
     """Join nonempty Forth predicates with postfix AND operations."""
     assert checks
     return " ".join((checks[0], *(f"{check} AND" for check in checks[1:])))
+
+
+_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH = (
+    "_EXT4-MUTATION-OWNER-RANGE-COUNT @ 0=",
+    (
+        "_EXT4-MUTATION-OWNER-RANGES "
+        "_EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS "
+        "_EXT4-BYTES-ZERO?"
+    ),
+)
 
 
 def _ext4_dedicated_writer_profile_forth(
@@ -6160,10 +6604,7 @@ def test_jbd2_writer_activation_rejects_other_inode_protocol_home_alias(
                             "_EXT4-MUTATION-MAP-TARGET @ 0=",
                             "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
                             "_EXT4-MUTATION-MAP-HITS @ 0=",
-                            "_EXT4-MUTATION-OWNER-TARGET @ 0=",
-                            "_EXT4-MUTATION-OWNER-COUNT @ 0=",
-                            "_EXT4-MUTATION-OWNER-TARGET-B @ 0=",
-                            "_EXT4-MUTATION-OWNER-COUNT-B @ 0=",
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                             "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                             "_EXT4-JFO-CERT-VALID @ 0=",
                         ]
@@ -12145,7 +12586,7 @@ def test_invalid_modern_orphan_sets_are_corruption(
         ),
     ),
 )
-def test_unified_orphan_plan_refuses_stably_and_reuses_workspace(
+def test_unified_orphan_plan_authenticates_stably_and_reuses_workspace(
     canonical_images: dict[str, Path],
     tmp_path: Path,
     case: str,
@@ -12179,11 +12620,12 @@ def test_unified_orphan_plan_refuses_stably_and_reuses_workspace(
 
     output, trace, _media_sha256 = run_recovery_forth(
         path,
-        tmp_path / f"{case}-stable-refusal.img",
+        tmp_path / f"{case}-stable-authentication.img",
         [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
             "T-ARENA CONSTANT _UO-ARENA",
             (
-                "_UO-ARENA T-VOLUME EXT4-NEW "
+                "_UO-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
                 "CONSTANT _UO-FIRST-IOR CONSTANT _UO-V"
             ),
             "_UO-V _EXT4-CTX CONSTANT _UO-CTX",
@@ -12199,7 +12641,10 @@ def test_unified_orphan_plan_refuses_stably_and_reuses_workspace(
                 "_UO-CTX _EXT4-C.O.LEGACY-ACTIVE + @ "
                 "CONSTANT _UO-LEGACY"
             ),
-            "_UO-V _EXT4-MOUNT CONSTANT _UO-RETRY-IOR",
+            (
+                "_UO-V _EXT4-TEST-AUTH-MOUNT "
+                "CONSTANT _UO-RETRY-IOR"
+            ),
             "_UO-ARENA ARENA-USED CONSTANT _UO-USED-AFTER",
             *plan_lines,
             (
@@ -12752,7 +13197,7 @@ def test_mount_cleanup_rejects_target_xattr_alias_without_writes(
             "_OX-V _EXT4-CTX CONSTANT _OX-CTX",
             "_OX-ARENA ARENA-USED CONSTANT _OX-USED-BEFORE",
             (
-                "_OX-CTX _OX-V _EXT4-COMPLETE-SINGLETON-ORPHAN "
+                "_OX-CTX _OX-V _EXT4-COMPLETE-ORPHAN-PLAN "
                 "CONSTANT _OX-RETRY-IOR"
             ),
             "_OX-ARENA ARENA-USED CONSTANT _OX-USED-AFTER",
@@ -12839,7 +13284,7 @@ def test_typed_unlinked_orphan_inode_release_stages_exact_accounting(
             ),
             "_UI-V _EXT4-CTX CONSTANT _UI-CTX",
             (
-                "_UI-CTX _EXT4-FIND-SINGLETON-ORPHAN "
+                "_UI-CTX _EXT4-FIND-SELECTED-ORPHAN "
                 "CONSTANT _UI-FIND-IOR CONSTANT _UI-RECORD"
             ),
             "_UI-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _UI-JOURNAL-IOR",
@@ -12961,13 +13406,13 @@ def test_unlinked_cleanup_rejects_target_crc_substitution_prehome(
             ),
             "_DC-V _EXT4-CTX CONSTANT _DC-CTX",
             (
-                "_DC-CTX _EXT4-FIND-SINGLETON-ORPHAN "
+                "_DC-CTX _EXT4-FIND-SELECTED-ORPHAN "
                 "CONSTANT _DC-FIND-IOR CONSTANT _DC-RECORD"
             ),
             "_DC-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _DC-JOURNAL-IOR",
             (
                 "_DC-RECORD _DC-CTX "
-                "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
                 "CONSTANT _DC-MEASURE-IOR CONSTANT _DC-CREDIT"
             ),
             "-1 _DC-CTX _EXT4-C.J.WRITER-CURRENT + !",
@@ -12985,7 +13430,7 @@ def test_unlinked_cleanup_rejects_target_crc_substitution_prehome(
             ),
             (
                 "_DC-RECORD _DC-TX "
-                "_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL "
+                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
                 "CONSTANT _DC-STAGE-IOR"
             ),
             "_DC-TX _EXT4-JTX-EMIT CONSTANT _DC-EMIT-IOR",
@@ -13079,13 +13524,13 @@ def test_unlinked_singleton_cleanup_measures_and_seals_exact_certificate(
             ),
             "_US-V _EXT4-CTX CONSTANT _US-CTX",
             (
-                "_US-CTX _EXT4-FIND-SINGLETON-ORPHAN "
+                "_US-CTX _EXT4-FIND-SELECTED-ORPHAN "
                 "CONSTANT _US-FIND-IOR CONSTANT _US-RECORD"
             ),
             "_US-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _US-JOURNAL-IOR",
             (
                 "_US-RECORD _US-CTX "
-                "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
                 "CONSTANT _US-MEASURE-IOR CONSTANT _US-CREDIT"
             ),
             (
@@ -13104,7 +13549,7 @@ def test_unlinked_singleton_cleanup_measures_and_seals_exact_certificate(
             "DEPTH CONSTANT _US-DEPTH-BEFORE-STAGE",
             (
                 "_US-RECORD _US-TX "
-                "_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL "
+                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
                 "CONSTANT _US-STAGE-IOR"
             ),
             "DEPTH CONSTANT _US-DEPTH-AFTER-STAGE",
@@ -13292,13 +13737,13 @@ def test_single_extent_unlinked_cleanup_measures_and_seals_exact_certificate(
             ),
             "_UD-V _EXT4-CTX CONSTANT _UD-CTX",
             (
-                "_UD-CTX _EXT4-FIND-SINGLETON-ORPHAN "
+                "_UD-CTX _EXT4-FIND-SELECTED-ORPHAN "
                 "CONSTANT _UD-FIND-IOR CONSTANT _UD-RECORD"
             ),
             "_UD-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _UD-JOURNAL-IOR",
             (
                 "_UD-RECORD _UD-CTX "
-                "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
                 "CONSTANT _UD-MEASURE-IOR CONSTANT _UD-CREDIT"
             ),
             (
@@ -13317,7 +13762,7 @@ def test_single_extent_unlinked_cleanup_measures_and_seals_exact_certificate(
             "DEPTH CONSTANT _UD-DEPTH-BEFORE-STAGE",
             (
                 "_UD-RECORD _UD-TX "
-                "_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL "
+                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
                 "CONSTANT _UD-STAGE-IOR"
             ),
             "DEPTH CONSTANT _UD-DEPTH-AFTER-STAGE",
@@ -13532,7 +13977,7 @@ def test_mount_rejects_unlinked_reclaim_with_unreleased_ownership(
             "_UJ-V _EXT4-CTX CONSTANT _UJ-CTX",
             "_UJ-ARENA ARENA-USED CONSTANT _UJ-USED-BEFORE",
             (
-                "_UJ-CTX _UJ-V _EXT4-COMPLETE-SINGLETON-ORPHAN "
+                "_UJ-CTX _UJ-V _EXT4-COMPLETE-ORPHAN-PLAN "
                 "CONSTANT _UJ-RETRY-IOR"
             ),
             "_UJ-ARENA ARENA-USED CONSTANT _UJ-USED-AFTER",
@@ -13572,8 +14017,7 @@ def test_mount_rejects_unlinked_reclaim_with_unreleased_ownership(
                         "_UJ-CTX _EXT4-C.J.CLEANUP + @ 0=",
                         "_EXT4-JFO-CERT-SCOPE @ 0=",
                         "_EXT4-JFO-CERT-VALID @ 0=",
-                        "_EXT4-MUTATION-OWNER-TARGET @ 0=",
-                        "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                         "_UJ-CTX _EXT4-C.O.ACTIVE + @ 1 =",
                         (
                             "_UJ-CTX _EXT4-C.O.MODERN-ACTIVE + @ "
@@ -14008,8 +14452,7 @@ def _run_singleton_unlinked_cleanup(
                         "_UR-CTX _EXT4-C.J.CLEANUP + @ 0=",
                         "_EXT4-JFO-CERT-SCOPE @ 0=",
                         "_EXT4-JFO-CERT-VALID @ 0=",
-                        "_EXT4-MUTATION-OWNER-TARGET @ 0=",
-                        "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                         "_UR-CTX _EXT4-C.O.ACTIVE + @ 0=",
                         "_UR-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
                         "_UR-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
@@ -14408,6 +14851,1448 @@ def _run_stable_unlinked_cleanup_remount(
     result["stable_sha256"] = media_sha256
 
 
+_MULTI_ORPHAN_RECOVERY_MAX_STEPS = 1_500_000_000
+
+
+_MULTI_EMPTY_ORPHAN_CASES = (
+    pytest.param(
+        "modern_multi_empty_unlinked_cleanup_fixture",
+        id="modern-two-record",
+    ),
+    pytest.param(
+        "legacy_multi_empty_unlinked_cleanup_fixture",
+        id="legacy-two-record",
+    ),
+    pytest.param(
+        "mixed_multi_empty_unlinked_cleanup_fixture",
+        id="legacy-modern-two-record",
+    ),
+)
+
+
+def test_linked_legacy_head_with_successor_stages_exact_more_transaction(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches, data_block = _legacy_head_nlink2_one_block_patches(path)
+    _, _, inode_offset = _ext4_inode_record(path, 18)
+    target_home, target_offset = divmod(inode_offset, 1024)
+    assert (target_home, target_offset) == (279, 256)
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            "T-ARENA CONSTANT _LM-ARENA",
+            (
+                "_LM-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _LM-MOUNT-IOR CONSTANT _LM-V"
+            ),
+            "_LM-V _EXT4-CTX CONSTANT _LM-CTX",
+            (
+                "_LM-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _LM-FIND-IOR CONSTANT _LM-RECORD"
+            ),
+            "_LM-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _LM-JOURNAL-IOR",
+            (
+                "_LM-RECORD _LM-CTX _EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "CONSTANT _LM-MEASURE-IOR CONSTANT _LM-CREDIT"
+            ),
+            (
+                "_LM-CREDIT 0 0 _LM-CTX _EXT4-JTX-PREFLIGHT-CAPACITY "
+                "CONSTANT _LM-CAPACITY-IOR"
+            ),
+            "-1 _LM-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "_LM-CREDIT 0 0 _LM-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _LM-WRITER-IOR CONSTANT _LM-WRITER"
+            ),
+            (
+                "_LM-CREDIT 0 0 _LM-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _LM-BEGIN-IOR CONSTANT _LM-TX"
+            ),
+            "DEPTH CONSTANT _LM-DEPTH-BEFORE-STAGE",
+            (
+                "_LM-RECORD _LM-TX _EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "CONSTANT _LM-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _LM-DEPTH-AFTER-STAGE",
+            (
+                "_LM-WRITER _LM-CTX _EXT4-JWR-ORPHAN-PREPLAN "
+                "CONSTANT _LM-PREPLAN-IOR"
+            ),
+            (
+                "_LM-WRITER _EXT4-JWR-ORPHAN-STAGED? "
+                "CONSTANT _LM-STAGED-IOR"
+            ),
+            (
+                f"{target_home} _LM-WRITER _EXT4-JFC-FIND-META "
+                "CONSTANT _LM-INODE-FIND-IOR"
+            ),
+            "_EXT4-JFC-FOUND @ 0<> CONSTANT _LM-INODE-FOUND",
+            (
+                f"_EXT4-JFC-IMAGE @ {target_offset} + "
+                "CONSTANT _LM-INODE-AFTER"
+            ),
+            (
+                "_LM-INODE-AFTER _EXT4-I.DTIME + L@ "
+                "CONSTANT _LM-AFTER-DTIME"
+            ),
+            (
+                "_LM-INODE-AFTER _EXT4-I.LINKS + W@ "
+                "CONSTANT _LM-AFTER-LINKS"
+            ),
+            (
+                "_LM-INODE-AFTER _EXT4-I.BLOCK + 2 + W@ "
+                "CONSTANT _LM-AFTER-ENTRIES"
+            ),
+            (
+                "1 _LM-WRITER _EXT4-JFC-FIND-META "
+                "CONSTANT _LM-SUPER-FIND-IOR"
+            ),
+            "_EXT4-JFC-FOUND @ 0<> CONSTANT _LM-SUPER-FOUND",
+            (
+                "_EXT4-JFC-IMAGE @ _LM-CTX _EXT4-PRIMARY-SUPER-OFF + "
+                "CONSTANT _LM-SUPER-AFTER"
+            ),
+            (
+                "_LM-SUPER-AFTER _EXT4-SB.LAST-ORPHAN + L@ "
+                "CONSTANT _LM-AFTER-HEAD"
+            ),
+            (
+                "_LM-SUPER-AFTER _EXT4-SUPER-CHECKSUM? "
+                "CONSTANT _LM-AFTER-SUPER-CRC"
+            ),
+            (
+                "18 _LM-CTX _EXT4-LOAD-ORPHAN-INODE "
+                "CONSTANT _LM-RAW-INODE-IOR"
+            ),
+            (
+                "_LM-CTX _EXT4-C.INODE + _EXT4-I.DTIME + L@ "
+                "CONSTANT _LM-RAW-DTIME"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_LM-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_LM-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_LM-FIND-IOR 0=",
+                        "_LM-JOURNAL-IOR 0=",
+                        "_LM-RECORD _EXT4-OE.INO + @ 18 =",
+                        (
+                            "_LM-RECORD _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-LEGACY ="
+                        ),
+                        "_LM-RECORD _EXT4-OE.LOCATOR-A + @ 21 =",
+                        "_LM-RECORD _EXT4-OE.LOCATOR-B + @ 0=",
+                        "_LM-CTX _EXT4-C.O.ACTIVE + @ 2 =",
+                        "_LM-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_LM-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 2 =",
+                        "_LM-MEASURE-IOR 0=",
+                        "_LM-CREDIT 4 =",
+                        "_LM-CAPACITY-IOR 0=",
+                        "_LM-WRITER-IOR 0=",
+                        "_LM-BEGIN-IOR 0=",
+                        "_LM-STAGE-IOR 0=",
+                        "_LM-DEPTH-BEFORE-STAGE _LM-DEPTH-AFTER-STAGE =",
+                        "_LM-PREPLAN-IOR 0=",
+                        "_LM-STAGED-IOR 0=",
+                        (
+                            "_LM-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-STAGING ="
+                        ),
+                        "_LM-WRITER _EXT4-JWR.META-CREDIT + @ 4 =",
+                        "_LM-WRITER _EXT4-JWR.META-USED + @ 4 =",
+                        "_LM-WRITER _EXT4-JWR.META-ACTIVE + @ 4 =",
+                        "_LM-WRITER _EXT4-JWR.DATA-USED + @ 0=",
+                        "_LM-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
+                        (
+                            "_LM-WRITER _EXT4-JWR.CP-MODE + @ "
+                            "_EXT4-JCPM-ORPHAN-LEGACY-MORE ="
+                        ),
+                        "_LM-WRITER _EXT4-JWR.CP-O-INO + @ 18 =",
+                        "_LM-WRITER _EXT4-JWR.CP-O-LOGICAL + @ 21 =",
+                        "_LM-WRITER _EXT4-JWR.CP-O-SLOT + @ 0=",
+                        "_LM-WRITER _EXT4-JWR.CP-O-HOME + @ 1 =",
+                        (
+                            "_LM-WRITER _EXT4-JWR.CP-TARGET-HOME + @ "
+                            f"{target_home} ="
+                        ),
+                        (
+                            "_LM-WRITER _EXT4-JWR.CP-TARGET-OFF + @ "
+                            f"{target_offset} ="
+                        ),
+                        (
+                            "_LM-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + "
+                            "@ 1 ="
+                        ),
+                        (
+                            "_LM-WRITER _EXT4-JWR.CP-DATA-FIRST + @ "
+                            "0="
+                        ),
+                        "_LM-WRITER _EXT4-JWR.CP-DATA-COUNT + @ 0=",
+                        "_LM-WRITER _EXT4-JWR.CP-PRE-ACTIVE + @ 2 =",
+                        "_LM-WRITER _EXT4-JWR.CP-PRE-MODERN + @ 0=",
+                        "_LM-WRITER _EXT4-JWR.CP-PRE-LEGACY + @ 2 =",
+                        "_LM-WRITER _EXT4-JWR-CP-AUTHORITY?",
+                        "_LM-WRITER _EXT4-JTX-TABLES-VALID?",
+                        "_LM-INODE-FIND-IOR 0=",
+                        "_LM-INODE-FOUND",
+                        "_LM-AFTER-DTIME 0=",
+                        "_LM-AFTER-LINKS 2 =",
+                        "_LM-AFTER-ENTRIES 0=",
+                        "_LM-SUPER-FIND-IOR 0=",
+                        "_LM-SUPER-FOUND",
+                        "_LM-AFTER-HEAD 21 =",
+                        "_LM-AFTER-SUPER-CRC",
+                        "_LM-RAW-INODE-IOR 0=",
+                        "_LM-RAW-DTIME 21 =",
+                        (
+                            "_LM-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.LAST-ORPHAN + L@ 18 ="
+                        ),
+                        "_LM-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-LEGACY-LINKED-MORE-SEALED" THEN'
+            ),
+            "_LM-TX _EXT4-JTX-ABORT CONSTANT _LM-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_LM-ABORT-IOR 0=",
+                        (
+                            "_LM-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_LM-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_LM-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                        "_LM-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_LM-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_LM-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-LEGACY-LINKED-MORE-ABORTED" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    assert data_block > 0
+    _assert_emitted(output, "EXT4-LEGACY-LINKED-MORE-SEALED")
+    _assert_emitted(output, "EXT4-LEGACY-LINKED-MORE-ABORTED")
+
+
+def test_modern_selection_and_staged_proof_are_cache_independent(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches = _multi_empty_unlinked_orphan_patches(
+        path,
+        legacy_chain=(),
+        modern_entries=(18, 21),
+    )
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            "T-ARENA CONSTANT _HM-ARENA",
+            (
+                "_HM-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _HM-MOUNT-IOR CONSTANT _HM-V"
+            ),
+            "_HM-V _EXT4-CTX CONSTANT _HM-CTX",
+            (
+                "_HM-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _HM-FIND-IOR CONSTANT _HM-SELECTED"
+            ),
+            (
+                "1 _HM-CTX _EXT4-ORPHAN-TABLE-ENTRY "
+                "CONSTANT _HM-HIGHER"
+            ),
+            (
+                "_HM-HIGHER _HM-CTX _EXT4-REQUIRE-SELECTED-ORPHAN "
+                "CONSTANT _HM-REQUIRE-IOR"
+            ),
+            "_HM-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _HM-JOURNAL-IOR",
+            (
+                "_HM-HIGHER _HM-CTX _EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "CONSTANT _HM-MEASURE-IOR CONSTANT _HM-CREDIT"
+            ),
+            (
+                "_HM-CREDIT 0 0 _HM-CTX _EXT4-JTX-PREFLIGHT-CAPACITY "
+                "CONSTANT _HM-CAPACITY-IOR"
+            ),
+            "-1 _HM-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "_HM-CREDIT 0 0 _HM-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _HM-WRITER-IOR CONSTANT _HM-WRITER"
+            ),
+            (
+                "_HM-CREDIT 0 0 _HM-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _HM-BEGIN-IOR CONSTANT _HM-TX"
+            ),
+            "DEPTH CONSTANT _HM-DEPTH-BEFORE-STAGE",
+            (
+                "_HM-HIGHER _HM-TX _EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "CONSTANT _HM-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _HM-DEPTH-AFTER-STAGE",
+            (
+                "_HM-WRITER _EXT4-JWR-IDLE-CLEAN? "
+                "CONSTANT _HM-REJECT-CLEAN"
+            ),
+            (
+                "_HM-CREDIT 0 0 _HM-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _HM-SELECT-BEGIN-IOR CONSTANT _HM-SELECT-TX"
+            ),
+            (
+                "_HM-SELECTED _HM-SELECT-TX "
+                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "CONSTANT _HM-SELECT-STAGE-IOR"
+            ),
+            (
+                "_HM-WRITER _HM-CTX _EXT4-JWR-ORPHAN-PREPLAN "
+                "CONSTANT _HM-PREPLAN-IOR"
+            ),
+            (
+                "_HM-CTX _EXT4-VALIDATE-ROOT "
+                "CONSTANT _HM-ROOT-IOR"
+            ),
+            (
+                "8 _HM-CTX _EXT4-LOAD-INODE "
+                "CONSTANT _HM-JOURNAL-INODE-IOR"
+            ),
+            (
+                "_HM-WRITER _EXT4-JWR-ORPHAN-STAGED? "
+                "CONSTANT _HM-STAGED-PROOF-IOR"
+            ),
+            (
+                "_HM-SELECT-TX _EXT4-JTX-ABORT "
+                "CONSTANT _HM-ABORT-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_HM-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_HM-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_HM-FIND-IOR 0=",
+                        "_HM-SELECTED _EXT4-OE.INO + @ 18 =",
+                        "_HM-HIGHER _EXT4-OE.INO + @ 21 =",
+                        (
+                            "_HM-HIGHER _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-MODERN ="
+                        ),
+                        "_HM-HIGHER _EXT4-OE.LOCATOR-A + @ 0=",
+                        "_HM-HIGHER _EXT4-OE.LOCATOR-B + @ 1 =",
+                        (
+                            "_HM-REQUIRE-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_HM-REQUIRE-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-ORPHAN-FILE ="
+                        ),
+                        "_HM-JOURNAL-IOR 0=",
+                        "_HM-MEASURE-IOR 0=",
+                        "_HM-CREDIT 5 =",
+                        "_HM-CAPACITY-IOR 0=",
+                        "_HM-WRITER-IOR 0=",
+                        "_HM-BEGIN-IOR 0=",
+                        (
+                            "_HM-STAGE-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_HM-STAGE-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-ORPHAN-FILE ="
+                        ),
+                        "_HM-DEPTH-BEFORE-STAGE _HM-DEPTH-AFTER-STAGE =",
+                        "_HM-REJECT-CLEAN",
+                        "_HM-SELECT-BEGIN-IOR 0=",
+                        "_HM-SELECT-STAGE-IOR 0=",
+                        "_HM-PREPLAN-IOR 0=",
+                        "_HM-ROOT-IOR 0=",
+                        "_HM-JOURNAL-INODE-IOR 0=",
+                        "_HM-STAGED-PROOF-IOR 0=",
+                        "_HM-ABORT-IOR 0=",
+                        (
+                            "_HM-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_HM-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_HM-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                        "_HM-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_HM-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_HM-WRITER _EXT4-JWR.CP-MODE + @ 0=",
+                        "_HM-CTX _EXT4-C.O.ACTIVE + @ 2 =",
+                        "_HM-CTX _EXT4-C.O.MODERN-ACTIVE + @ 2 =",
+                        "_HM-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_HM-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-MODERN-SELECTION-PROVED" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-MODERN-SELECTION-PROVED")
+
+
+def test_whole_orphan_union_refuses_later_unsupported_shape_before_io(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches = _mixed_union_with_later_multi_extent_orphan_patches(path)
+    media_path = tmp_path / "mixed-union-later-unsupported.img"
+    marker = "EXT4-ORPHAN-UNION-LATER-UNSUPPORTED-NO-IO"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        media_path,
+        [
+            "T-ARENA CONSTANT _UQ-ARENA",
+            (
+                "_UQ-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _UQ-IOR CONSTANT _UQ-V"
+            ),
+            "_UQ-V _EXT4-CTX CONSTANT _UQ-CTX",
+            "_UQ-ARENA ARENA-USED CONSTANT _UQ-USED-BEFORE-RETRY",
+            "1 _UQ-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _UQ-LEGACY",
+            "2 _UQ-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _UQ-MODERN",
+            (
+                "_UQ-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _UQ-SELECT-IOR CONSTANT _UQ-SELECTED"
+            ),
+            "18 _UQ-CTX _EXT4-LOAD-INODE CONSTANT _UQ-INODE-IOR",
+            (
+                "_UQ-CTX _EXT4-VALIDATE-INLINE-EXTENTS "
+                "CONSTANT _UQ-EXTENT-IOR"
+            ),
+            (
+                "_UQ-CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 2 + W@ "
+                "CONSTANT _UQ-EXTENT-ENTRIES"
+            ),
+            "_UQ-V _EXT4-MOUNT CONSTANT _UQ-RETRY-IOR",
+            "_UQ-ARENA ARENA-USED CONSTANT _UQ-USED-AFTER-RETRY",
+            (
+                _forth_conjunction(
+                    [
+                        "_UQ-IOR VFS-IOR-DOMAIN VFS-IOR-D-FORMAT =",
+                        "_UQ-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED =",
+                        "_UQ-IOR VFS-IOR-FLAGS 0=",
+                        "_UQ-IOR VFS-IOR-DETAIL EXT4-D-RECOVERY =",
+                        "_UQ-RETRY-IOR _UQ-IOR =",
+                        "_UQ-V V.LAST-IOR @ _UQ-IOR =",
+                        "_UQ-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_UQ-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_UQ-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_UQ-CTX _EXT4-C.READY + @ 0=",
+                        "_UQ-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_UQ-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_UQ-CTX _EXT4-C.J.WRITER-CURRENT + @ 0=",
+                        "_UQ-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_UQ-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        "_UQ-CTX _EXT4-C.J.START + @ 0=",
+                        "_UQ-CTX _EXT4-C.J.WITNESS + @ 0=",
+                        "_UQ-CTX _EXT4-C.J.CLEANUP + @ 0=",
+                        "_UQ-CTX _EXT4-C.J.PROTOCOL-OWNERS + @ 0=",
+                        "_UQ-CTX _EXT4-C.O.ACTIVE + @ 2 =",
+                        "_UQ-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
+                        "_UQ-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 1 =",
+                        "_UQ-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_UQ-CTX _EXT4-C.O.SLOTS + @ 4 =",
+                        (
+                            "_UQ-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.LAST-ORPHAN + L@ 21 ="
+                        ),
+                        (
+                            "_UQ-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0<>"
+                        ),
+                        "_UQ-LEGACY _EXT4-OE.INO + @ 21 =",
+                        (
+                            "_UQ-LEGACY _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-LEGACY ="
+                        ),
+                        "_UQ-MODERN _EXT4-OE.INO + @ 18 =",
+                        (
+                            "_UQ-MODERN _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-MODERN ="
+                        ),
+                        "_UQ-SELECT-IOR 0=",
+                        "_UQ-SELECTED _UQ-LEGACY =",
+                        "_UQ-INODE-IOR 0=",
+                        "_UQ-EXTENT-IOR 0=",
+                        "_UQ-EXTENT-ENTRIES 2 =",
+                        "_EXT4-MQ-INDEX @ 2 =",
+                        "_EXT4-MQ-COUNT @ 1 =",
+                        "_EXT4-MQ-MAX @ 4 =",
+                        "_EXT4-MQ-IOR @ _UQ-IOR =",
+                        "_EXT4-MOC-CAP @ 0=",
+                        "_EXT4-MOC-WRITER @ 0=",
+                        "_EXT4-MOC-TX @ 0=",
+                        "_EXT4-MOC-RECORD @ 0=",
+                        "_EXT4-MOC-MARK-VALID @ 0=",
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_UQ-USED-BEFORE-RETRY _UQ-USED-AFTER-RETRY =",
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+        ],
+        patches=patches,
+        capture_media=media_path,
+    )
+    _assert_emitted(output, marker)
+    assert trace == ()
+    assert _sha256(media_path) == media_sha256
+    with media_path.open("rb") as recovered:
+        for offset, expected in patches:
+            recovered.seek(offset)
+            assert recovered.read(len(expected)) == expected
+
+
+@pytest.mark.parametrize(
+    ("protocol", "extent_count"),
+    (
+        pytest.param("modern", 2, id="modern-two-extents"),
+        pytest.param("legacy", 4, id="legacy-four-extents"),
+    ),
+)
+def test_whole_orphan_union_rejects_later_linked_live_alias_before_io(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+    protocol: str,
+    extent_count: int,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches, physical_blocks = _later_linked_live_alias_orphan_patches(
+        path,
+        protocol=protocol,
+    )
+    assert len(physical_blocks) == extent_count
+    assert len(set(physical_blocks)) == extent_count
+    _, live_inode, _ = _ext4_inode_record(path, 14)
+    assert physical_blocks[-1] == _extent_root_physical(live_inode, 0)
+    expected_modern = 1 if protocol == "modern" else 0
+    expected_legacy = 1 if protocol == "modern" else 2
+    expected_present_check = "0<>" if protocol == "modern" else "0="
+    media_path = tmp_path / f"{protocol}-later-linked-live-alias.img"
+    marker = (
+        f"EXT4-{protocol.upper()}-LATER-LINKED-LIVE-ALIAS-"
+        "REJECTED-PREWRITE"
+    )
+
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        media_path,
+        [
+            "T-ARENA CONSTANT _LA-ARENA",
+            (
+                "_LA-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _LA-MOUNT-IOR CONSTANT _LA-V"
+            ),
+            "_LA-V _EXT4-CTX CONSTANT _LA-CTX",
+            "_LA-ARENA ARENA-USED CONSTANT _LA-USED-BEFORE",
+            (
+                "_LA-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _LA-SELECT-IOR CONSTANT _LA-SELECTED"
+            ),
+            "18 _LA-CTX _EXT4-LOAD-INODE CONSTANT _LA-INODE-IOR",
+            (
+                "_LA-CTX _EXT4-VALIDATE-INLINE-EXTENTS "
+                "CONSTANT _LA-EXTENT-IOR"
+            ),
+            (
+                "_LA-CTX _EXT4-C.INODE + _EXT4-I.LINKS + W@ "
+                "CONSTANT _LA-LINKS"
+            ),
+            (
+                "_LA-CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 2 + W@ "
+                "CONSTANT _LA-EXTENT-COUNT"
+            ),
+            (
+                "_LA-CTX _LA-V _EXT4-COMPLETE-ORPHAN-PLAN "
+                "CONSTANT _LA-RETRY-IOR"
+            ),
+            "_LA-ARENA ARENA-USED CONSTANT _LA-USED-AFTER",
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_LA-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_LA-MOUNT-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-FORMAT ="
+                        ),
+                        (
+                            "_LA-MOUNT-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-CORRUPT ="
+                        ),
+                        (
+                            "_LA-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        "_LA-RETRY-IOR _LA-MOUNT-IOR =",
+                        "_LA-V V.LAST-IOR @ _LA-MOUNT-IOR =",
+                        "_LA-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_LA-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_LA-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_LA-CTX _EXT4-C.READY + @ 0=",
+                        "_LA-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_LA-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_LA-CTX _EXT4-C.J.WRITER-CURRENT + @ 0=",
+                        "_LA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_LA-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        "_LA-CTX _EXT4-C.J.START + @ 0=",
+                        "_LA-CTX _EXT4-C.J.WITNESS + @ 0=",
+                        "_LA-CTX _EXT4-C.J.CLEANUP + @ 0=",
+                        "_LA-CTX _EXT4-C.J.PROTOCOL-OWNERS + @ 0=",
+                        "_LA-CTX _EXT4-C.O.ACTIVE + @ 2 =",
+                        (
+                            "_LA-CTX _EXT4-C.O.MODERN-ACTIVE + @ "
+                            f"{expected_modern} ="
+                        ),
+                        (
+                            "_LA-CTX _EXT4-C.O.LEGACY-ACTIVE + @ "
+                            f"{expected_legacy} ="
+                        ),
+                        "_LA-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_LA-CTX _EXT4-C.O.SLOTS + @ 4 =",
+                        (
+                            "_LA-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.LAST-ORPHAN + L@ 21 ="
+                        ),
+                        (
+                            "_LA-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND "
+                            f"{expected_present_check}"
+                        ),
+                        "_LA-SELECT-IOR 0=",
+                        "_LA-SELECTED _EXT4-OE.INO + @ 21 =",
+                        (
+                            "_LA-SELECTED _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-LEGACY ="
+                        ),
+                        "_LA-INODE-IOR 0=",
+                        "_LA-EXTENT-IOR 0=",
+                        "_LA-LINKS 2 =",
+                        f"_LA-EXTENT-COUNT {extent_count} =",
+                        "_EXT4-MOC-CAP @ 0=",
+                        "_EXT4-MOC-WRITER @ 0=",
+                        "_EXT4-MOC-TX @ 0=",
+                        "_EXT4-MOC-RECORD @ 0=",
+                        "_EXT4-MOC-MARK-VALID @ 0=",
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_EXT4-MUTATION-OWNER-INO @ 0=",
+                        "_EXT4-MUTATION-PROTOCOL-CTX @ 0=",
+                        "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0=",
+                        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                        "_LA-USED-BEFORE _LA-USED-AFTER =",
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+        ],
+        patches=patches,
+        capture_media=media_path,
+        max_steps=_MULTI_ORPHAN_RECOVERY_MAX_STEPS,
+    )
+    _assert_emitted(output, marker)
+    assert trace == ()
+    assert _sha256(media_path) == media_sha256
+    with media_path.open("rb") as recovered:
+        for offset, expected in patches:
+            recovered.seek(offset)
+            assert recovered.read(len(expected)) == expected
+
+
+def _run_multi_empty_unlinked_cleanup(
+    path: Path,
+    media_path: Path,
+    stable_path: Path,
+    *,
+    case: str,
+    legacy_chain: tuple[int, ...],
+    modern_entries: tuple[int, ...],
+    max_credit: int,
+    final_credit: int,
+) -> dict[str, object]:
+    assert case in {"modern", "legacy", "mixed"}
+    assert set(legacy_chain + modern_entries) == {18, 21}
+    patches = _multi_empty_unlinked_orphan_patches(
+        path,
+        legacy_chain=legacy_chain,
+        modern_entries=modern_entries,
+    )
+    with path.open("rb") as source:
+        source.seek(1024)
+        canonical_super = source.read(1024)
+    assert len(canonical_super) == 1024
+    block_size = 1024 << struct.unpack_from(
+        "<I", canonical_super, 0x18
+    )[0]
+    first_data = struct.unpack_from("<I", canonical_super, 0x14)[0]
+    inodes_per_group = struct.unpack_from(
+        "<I", canonical_super, 0x28
+    )[0]
+    descriptor_size = struct.unpack_from(
+        "<H", canonical_super, 0xFE
+    )[0]
+    assert block_size == 1024
+    assert descriptor_size == 64
+    gdt_home = first_data + 1
+    with path.open("rb") as source:
+        source.seek(gdt_home * block_size)
+        canonical_gdt = source.read(block_size)
+    assert len(canonical_gdt) == block_size
+    canonical_descriptor = canonical_gdt[:descriptor_size]
+    inode_bitmap_home = struct.unpack_from(
+        "<I", canonical_descriptor, 0x04
+    )[0]
+    canonical_group_free = struct.unpack_from(
+        "<H", canonical_descriptor, 0x0E
+    )[0] | (
+        struct.unpack_from("<H", canonical_descriptor, 0x2E)[0] << 16
+    )
+    canonical_itable_unused = struct.unpack_from(
+        "<H", canonical_descriptor, 0x1C
+    )[0] | (
+        struct.unpack_from("<H", canonical_descriptor, 0x32)[0] << 16
+    )
+    assert inodes_per_group - canonical_itable_unused == 17
+    expected_itable_unused = canonical_itable_unused - 4
+    canonical_super_free = struct.unpack_from(
+        "<I", canonical_super, 0x10
+    )[0]
+
+    _, orphan_inode, _ = _ext4_inode_record(
+        path,
+        struct.unpack_from("<I", canonical_super, 0x280)[0],
+    )
+    orphan_home = _extent_root_physical(orphan_inode, 0)
+    _, _, inode18_offset = _ext4_inode_record(path, 18)
+    _, _, inode21_offset = _ext4_inode_record(path, 21)
+    inode18_home, inode18_off = divmod(inode18_offset, block_size)
+    inode21_home, inode21_off = divmod(inode21_offset, block_size)
+    assert (inode18_home, inode18_off) == (279, 256)
+    assert (inode21_home, inode21_off) == (280, 0)
+    assert inode_bitmap_home == 267
+    assert gdt_home == 2
+    assert orphan_home == 1313
+    activation_trace = _jbd2_writer_activation_trace(path)
+
+    marker = f"EXT4-{case.upper()}-MULTI-ORPHAN-DRAINED"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        media_path,
+        [
+            "T-ARENA CONSTANT _MU-ARENA",
+            (
+                "_MU-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _MU-IOR CONSTANT _MU-V"
+            ),
+            "_MU-V _EXT4-CTX CONSTANT _MU-CTX",
+            "18 _MU-CTX _EXT4-LOAD-INODE CONSTANT _MU-I18-IOR",
+            "21 _MU-CTX _EXT4-LOAD-INODE CONSTANT _MU-I21-IOR",
+            (
+                "0 _MU-CTX _EXT4-LOAD-INODE-BITMAP "
+                "CONSTANT _MU-BITMAP-IOR CONSTANT _MU-BITMAP-HOME"
+            ),
+            (
+                "_MU-CTX _EXT4-C.BLOCK + 2 + C@ "
+                "CONSTANT _MU-INODE-BITS"
+            ),
+            "0 _MU-CTX _EXT4-LOAD-DESC CONSTANT _MU-DESC-IOR",
+            (
+                f"{max_credit} 0 0 {block_size} _EXT4-JWR-MEASURE "
+                "CONSTANT _MU-MEASURE-IOR CONSTANT _MU-WRITER-BYTES"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_MU-IOR 0=",
+                        "_MU-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_MU-V _EXT4-READY?",
+                        "_MU-V _EXT4-ATTACHED?",
+                        "_MU-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_MU-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_MU-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_MU-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
+                        "_MU-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_MU-CTX _EXT4-C.J.WRITER-STORE-KIND + @ 0=",
+                        "_MU-CTX _EXT4-C.J.WRITER-ARENA + @ 0=",
+                        (
+                            "_MU-CTX _EXT4-C.J.HOME-WRITES + @ "
+                            f"{final_credit} ="
+                        ),
+                        "_MU-CTX _EXT4-C.J.START + @ 0=",
+                        "_MU-CTX _EXT4-C.J.WITNESS + @ 0=",
+                        "_MU-CTX _EXT4-C.J.CLEANUP + @ 0=",
+                        "_MU-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_MU-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_MU-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_MU-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_MU-CTX _EXT4-C.O.TABLE + @ 0<>",
+                        "_MU-CTX _EXT4-C.O.SLOTS + @ 4 =",
+                        (
+                            "_MU-CTX _EXT4-C.O.TABLE + @ "
+                            "_MU-CTX _EXT4-C.O.SLOTS + @ "
+                            "_EXT4-ORPHAN-RECORD-SIZE * "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_MU-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.LAST-ORPHAN + L@ 0="
+                        ),
+                        (
+                            "_MU-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0="
+                        ),
+                        (
+                            "_MU-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                        (
+                            "_MU-I18-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_MU-I18-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-BOUNDS ="
+                        ),
+                        (
+                            "_MU-I21-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_MU-I21-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-BOUNDS ="
+                        ),
+                        "_MU-BITMAP-IOR 0=",
+                        f"_MU-BITMAP-HOME {inode_bitmap_home} =",
+                        "_MU-INODE-BITS 0x12 AND 0=",
+                        "_MU-DESC-IOR 0=",
+                        (
+                            "_MU-CTX _EXT4-C.DESC + "
+                            "_EXT4-JFI-DESC-FREE@ "
+                            f"{canonical_group_free} ="
+                        ),
+                        (
+                            "_MU-CTX _EXT4-C.DESC + DUP "
+                            "_EXT4-GD.ITABLE-UNUSED-LO + W@ SWAP "
+                            "_EXT4-GD.ITABLE-UNUSED-HI + W@ "
+                            "16 LSHIFT OR "
+                            f"{expected_itable_unused} ="
+                        ),
+                        (
+                            "_MU-CTX _EXT4-C.FREE-INODES + @ "
+                            f"{canonical_super_free} ="
+                        ),
+                        "_MU-MEASURE-IOR 0=",
+                        "_EXT4-MOC-MARK-VALID @ 0=",
+                        "_EXT4-MOC-MARK @ _MU-ARENA A.PTR @ =",
+                        "_EXT4-MOC-SPAN @ _MU-WRITER-BYTES =",
+                        (
+                            "_EXT4-MOC-MARK @ _EXT4-MOC-SPAN @ "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        "_EXT4-MOC-WRITER @ 0=",
+                        "_EXT4-MOC-TX @ 0=",
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+        ],
+        patches=patches,
+        capture_media=media_path,
+        max_steps=_MULTI_ORPHAN_RECOVERY_MAX_STEPS,
+    )
+    _assert_emitted(output, marker)
+    assert media_path.is_file()
+    assert _sha256(media_path) == media_sha256
+    assert trace[: len(activation_trace)] == activation_trace
+
+    inode18_ordinals = _write_ordinals_for_ext4_home(trace, inode18_home)
+    inode21_ordinals = _write_ordinals_for_ext4_home(trace, inode21_home)
+    assert len(inode18_ordinals) == len(inode21_ordinals) == 1
+    assert inode18_ordinals[0] < inode21_ordinals[0]
+    assert len(_write_ordinals_for_ext4_home(trace, inode_bitmap_home)) == 2
+    assert len(_write_ordinals_for_ext4_home(trace, gdt_home)) == 2
+    assert len(_write_ordinals_for_ext4_home(trace, 1)) == 4
+    assert len(_write_ordinals_for_ext4_home(trace, orphan_home)) == len(
+        modern_entries
+    )
+
+    for inode_number in (18, 21):
+        _, reclaimed_inode, _ = _ext4_inode_record(media_path, inode_number)
+        assert reclaimed_inode == bytes(256)
+    for home in (inode18_home, inode21_home, inode_bitmap_home, orphan_home):
+        with path.open("rb") as source:
+            source.seek(home * block_size)
+            canonical_home = source.read(block_size)
+        with media_path.open("rb") as recovered:
+            recovered.seek(home * block_size)
+            recovered_home = recovered.read(block_size)
+        assert recovered_home == canonical_home
+
+    expected_gdt = bytearray(canonical_gdt)
+    expected_descriptor = bytearray(expected_gdt[:descriptor_size])
+    struct.pack_into(
+        "<H",
+        expected_descriptor,
+        0x1C,
+        expected_itable_unused & 0xFFFF,
+    )
+    struct.pack_into(
+        "<H",
+        expected_descriptor,
+        0x32,
+        expected_itable_unused >> 16,
+    )
+    expected_descriptor = bytearray(
+        _group_descriptor_with_checksum(
+            canonical_super,
+            expected_descriptor,
+            0,
+        )
+    )
+    expected_gdt[:descriptor_size] = expected_descriptor
+    with media_path.open("rb") as recovered:
+        recovered.seek(gdt_home * block_size)
+        recovered_gdt = recovered.read(block_size)
+    assert recovered_gdt == bytes(expected_gdt)
+
+    stable_marker = f"EXT4-{case.upper()}-MULTI-ORPHAN-STABLE"
+    stable_output, stable_trace, stable_sha256 = run_recovery_forth(
+        media_path,
+        stable_path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _MUS-IOR CONSTANT _MUS-V"
+            ),
+            "_MUS-V _EXT4-CTX CONSTANT _MUS-CTX",
+            "18 _MUS-CTX _EXT4-LOAD-INODE CONSTANT _MUS-INODE-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_MUS-IOR 0=",
+                        "_MUS-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_MUS-V _EXT4-READY?",
+                        "_MUS-V _EXT4-ATTACHED?",
+                        "_MUS-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_MUS-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_MUS-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_MUS-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_MUS-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        "_MUS-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_MUS-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_MUS-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_MUS-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        (
+                            "_MUS-INODE-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_MUS-INODE-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-BOUNDS ="
+                        ),
+                    ]
+                )
+                + f' IF ." {stable_marker}" THEN'
+            ),
+        ],
+        capture_media=stable_path,
+    )
+    _assert_emitted(stable_output, stable_marker)
+    assert stable_trace == ()
+    assert stable_sha256 == media_sha256
+    assert _sha256(stable_path) == media_sha256
+    return {
+        "case": case,
+        "source": path,
+        "patches": patches,
+        "output": output,
+        "success_trace": trace,
+        "clean_image": media_path,
+        "clean_sha256": media_sha256,
+        "stable_image": stable_path,
+        "stable_trace": stable_trace,
+        "stable_sha256": stable_sha256,
+        "block_size": block_size,
+        "inode18_home": inode18_home,
+        "inode21_home": inode21_home,
+        "inode_bitmap_home": inode_bitmap_home,
+        "gdt_home": gdt_home,
+        "orphan_home": orphan_home,
+        "canonical_group_free": canonical_group_free,
+        "canonical_super_free": canonical_super_free,
+        "expected_itable_unused": expected_itable_unused,
+        "expected_gdt": bytes(expected_gdt),
+        "max_credit": max_credit,
+        "modern_count": len(modern_entries),
+    }
+
+
+def _run_multi_linked_legacy_cleanup(
+    path: Path,
+    media_path: Path,
+    stable_path: Path,
+    *,
+    head_data: bool = False,
+) -> dict[str, object]:
+    base_patches = _multi_linked_legacy_orphan_patches(path)
+    if head_data:
+        patches, data_block = _legacy_head_nlink2_one_block_patches(path)
+    else:
+        patches = base_patches
+        data_block = None
+    base_patch_map = dict(base_patches)
+    patch_map = dict(patches)
+    superblock = patch_map[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    inodes_per_group = struct.unpack_from("<I", superblock, 0x28)[0]
+    descriptor_size = struct.unpack_from("<H", superblock, 0xFE)[0]
+    assert block_size == 1024
+    assert descriptor_size == 64
+
+    _, _, inode18_offset = _ext4_inode_record(path, 18)
+    _, _, inode21_offset = _ext4_inode_record(path, 21)
+    inode18_home, inode18_off = divmod(inode18_offset, block_size)
+    inode21_home, inode21_off = divmod(inode21_offset, block_size)
+    assert (inode18_home, inode18_off) == (279, 256)
+    assert (inode21_home, inode21_off) == (280, 0)
+    inode18_before = patch_map[inode18_offset]
+    inode21_before = patch_map[inode21_offset]
+
+    gdt_home = first_data + 1
+    gdt_before = patch_map[gdt_home * block_size]
+    descriptor = gdt_before[:descriptor_size]
+    expected_gdt = base_patch_map[gdt_home * block_size]
+    expected_descriptor = expected_gdt[:descriptor_size]
+    block_bitmap_home = struct.unpack_from("<I", descriptor, 0x00)[0]
+    inode_bitmap_home = struct.unpack_from("<I", descriptor, 0x04)[0]
+    inode_bitmap_before = patch_map[inode_bitmap_home * block_size]
+    group_free = struct.unpack_from("<H", descriptor, 0x0E)[0] | (
+        struct.unpack_from("<H", descriptor, 0x2E)[0] << 16
+    )
+    itable_unused = struct.unpack_from("<H", descriptor, 0x1C)[0] | (
+        struct.unpack_from("<H", descriptor, 0x32)[0] << 16
+    )
+    super_free = struct.unpack_from("<I", superblock, 0x10)[0]
+    expected_group_free_blocks = struct.unpack_from(
+        "<H", expected_descriptor, 0x0C
+    )[0] | (struct.unpack_from("<H", expected_descriptor, 0x2C)[0] << 16)
+    expected_super_free_blocks = struct.unpack_from(
+        "<I", base_patch_map[1024], 0x0C
+    )[0] | (struct.unpack_from("<I", base_patch_map[1024], 0x158)[0] << 32)
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, orphan_inode, _ = _ext4_inode_record(path, orphan_inode_number)
+    orphan_home = _extent_root_physical(orphan_inode, 0)
+    orphan_before = patch_map[orphan_home * block_size]
+    activation_trace = _jbd2_writer_activation_trace(path)
+
+    data_probe_forth: tuple[str, ...] = ()
+    data_probe_checks: tuple[str, ...] = ()
+    if data_block is not None:
+        data_group, data_index = divmod(
+            data_block - first_data,
+            blocks_per_group,
+        )
+        assert data_group == 0
+        data_bitmap_byte, data_bitmap_bit = divmod(data_index, 8)
+        data_bitmap_mask = 1 << data_bitmap_bit
+        data_probe_forth = (
+            (
+                "0 _ML-CTX _EXT4-LOAD-BLOCK-BITMAP "
+                "CONSTANT _ML-DATA-BITMAP-IOR "
+                "CONSTANT _ML-DATA-BITMAP-HOME"
+            ),
+            (
+                f"_ML-CTX _EXT4-C.BLOCK + {data_bitmap_byte} + C@ "
+                f"{data_bitmap_mask} AND "
+                "CONSTANT _ML-DATA-BIT"
+            ),
+        )
+        data_probe_checks = (
+            "_ML-DATA-BITMAP-IOR 0=",
+            f"_ML-DATA-BITMAP-HOME {block_bitmap_home} =",
+            "_ML-DATA-BIT 0=",
+        )
+
+    marker = (
+        "EXT4-LINKED-LEGACY-HEAD-DATA-THEN-FINAL-CLEANED"
+        if head_data
+        else "EXT4-LINKED-LEGACY-MULTI-ORPHAN-CLEANED"
+    )
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        media_path,
+        [
+            "T-ARENA CONSTANT _ML-ARENA",
+            (
+                "_ML-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _ML-IOR CONSTANT _ML-V"
+            ),
+            "_ML-V _EXT4-CTX CONSTANT _ML-CTX",
+            "18 _ML-CTX _EXT4-LOAD-INODE CONSTANT _ML-I18-IOR",
+            (
+                "_ML-CTX _EXT4-C.INODE + _EXT4-I.DTIME + L@ "
+                "CONSTANT _ML-I18-DTIME"
+            ),
+            (
+                "_ML-CTX _EXT4-C.INODE + _EXT4-I.LINKS + W@ "
+                "CONSTANT _ML-I18-LINKS"
+            ),
+            (
+                "_ML-CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 2 + W@ "
+                "CONSTANT _ML-I18-ENTRIES"
+            ),
+            "21 _ML-CTX _EXT4-LOAD-INODE CONSTANT _ML-I21-IOR",
+            (
+                "_ML-CTX _EXT4-C.INODE + _EXT4-I.DTIME + L@ "
+                "CONSTANT _ML-I21-DTIME"
+            ),
+            (
+                "_ML-CTX _EXT4-C.INODE + _EXT4-I.LINKS + W@ "
+                "CONSTANT _ML-I21-LINKS"
+            ),
+            (
+                "_ML-CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 2 + W@ "
+                "CONSTANT _ML-I21-ENTRIES"
+            ),
+            (
+                "0 _ML-CTX _EXT4-LOAD-INODE-BITMAP "
+                "CONSTANT _ML-BITMAP-IOR CONSTANT _ML-BITMAP-HOME"
+            ),
+            (
+                "_ML-CTX _EXT4-C.BLOCK + 2 + C@ 0x12 AND "
+                "CONSTANT _ML-INODE-BITS"
+            ),
+            *data_probe_forth,
+            "0 _ML-CTX _EXT4-LOAD-DESC CONSTANT _ML-DESC-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_ML-IOR 0=",
+                        "_ML-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_ML-V _EXT4-READY?",
+                        "_ML-V _EXT4-ATTACHED?",
+                        "_ML-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_ML-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_ML-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_ML-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
+                        "_ML-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_ML-CTX _EXT4-C.J.WRITER-STORE-KIND + @ 0=",
+                        "_ML-CTX _EXT4-C.J.WRITER-ARENA + @ 0=",
+                        "_ML-CTX _EXT4-C.J.HOME-WRITES + @ 1 =",
+                        "_ML-CTX _EXT4-C.J.START + @ 0=",
+                        "_ML-CTX _EXT4-C.J.WITNESS + @ 0=",
+                        "_ML-CTX _EXT4-C.J.CLEANUP + @ 0=",
+                        "_ML-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_ML-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_ML-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_ML-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_ML-CTX _EXT4-C.O.SLOTS + @ 4 =",
+                        (
+                            "_ML-CTX _EXT4-C.O.TABLE + @ "
+                            "_ML-CTX _EXT4-C.O.SLOTS + @ "
+                            "_EXT4-ORPHAN-RECORD-SIZE * "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_ML-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.LAST-ORPHAN + L@ 0="
+                        ),
+                        (
+                            "_ML-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0="
+                        ),
+                        (
+                            "_ML-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                        "_ML-I18-IOR 0=",
+                        "_ML-I18-DTIME 0=",
+                        "_ML-I18-LINKS 2 =",
+                        "_ML-I18-ENTRIES 0=",
+                        "_ML-I21-IOR 0=",
+                        "_ML-I21-DTIME 0=",
+                        "_ML-I21-LINKS 2 =",
+                        "_ML-I21-ENTRIES 0=",
+                        "_ML-BITMAP-IOR 0=",
+                        f"_ML-BITMAP-HOME {inode_bitmap_home} =",
+                        "_ML-INODE-BITS 0x12 =",
+                        *data_probe_checks,
+                        "_ML-DESC-IOR 0=",
+                        (
+                            "_ML-CTX _EXT4-C.DESC + "
+                            f"_EXT4-JFI-DESC-FREE@ {group_free} ="
+                        ),
+                        (
+                            "_ML-CTX _EXT4-C.DESC + DUP "
+                            "_EXT4-GD.ITABLE-UNUSED-LO + W@ SWAP "
+                            "_EXT4-GD.ITABLE-UNUSED-HI + W@ "
+                            f"16 LSHIFT OR {itable_unused} ="
+                        ),
+                        (
+                            "_ML-CTX _EXT4-C.DESC + "
+                            "_EXT4-JFB-DESC-FREE@ "
+                            f"{expected_group_free_blocks} ="
+                        ),
+                        (
+                            "_ML-CTX _EXT4-C.FREE-INODES + @ "
+                            f"{super_free} ="
+                        ),
+                        (
+                            "_ML-CTX _EXT4-C.FREE-BLOCKS + @ "
+                            f"{expected_super_free_blocks} ="
+                        ),
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_EXT4-MOC-MARK-VALID @ 0=",
+                        "_EXT4-MOC-WRITER @ 0=",
+                        "_EXT4-MOC-TX @ 0=",
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+        ],
+        patches=patches,
+        capture_media=media_path,
+        max_steps=_MULTI_ORPHAN_RECOVERY_MAX_STEPS,
+    )
+    _assert_emitted(output, marker)
+    assert _sha256(media_path) == media_sha256
+    assert trace[: len(activation_trace)] == activation_trace
+    if not head_data:
+        assert (
+            sum(kind == "write" for kind, _, _ in trace),
+            sum(kind == "flush" for kind, _, _ in trace),
+        ) == (42, 35)
+
+    super_writes = _write_ordinals_for_ext4_home(trace, 1)
+    inode18_writes = _write_ordinals_for_ext4_home(trace, inode18_home)
+    inode21_writes = _write_ordinals_for_ext4_home(trace, inode21_home)
+    assert len(super_writes) == 4
+    assert len(inode18_writes) == 1
+    assert inode21_writes == ()
+    if data_block is None:
+        assert super_writes[0] < inode18_writes[0] < super_writes[1]
+        assert not _write_ordinals_for_ext4_home(trace, block_bitmap_home)
+        assert not _write_ordinals_for_ext4_home(trace, gdt_home)
+    else:
+        data_bitmap_writes = _write_ordinals_for_ext4_home(
+            trace,
+            block_bitmap_home,
+        )
+        gdt_writes = _write_ordinals_for_ext4_home(trace, gdt_home)
+        assert len(data_bitmap_writes) == len(gdt_writes) == 1
+        assert (
+            super_writes[0]
+            < inode18_writes[0]
+            < gdt_writes[0]
+            < data_bitmap_writes[0]
+            < super_writes[1]
+        )
+        assert not _write_ordinals_for_ext4_home(trace, data_block)
+    assert super_writes[1] < super_writes[2] < super_writes[3]
+    assert not _write_ordinals_for_ext4_home(trace, inode_bitmap_home)
+    assert not _write_ordinals_for_ext4_home(trace, orphan_home)
+
+    inode18_after = bytearray(inode18_before)
+    struct.pack_into("<I", inode18_after, 0x14, 0)
+    if data_block is not None:
+        struct.pack_into("<I", inode18_after, 0x1C, 0)
+        struct.pack_into("<H", inode18_after, 0x2A, 0)
+        inode18_after[0x34:0x64] = bytes(48)
+        struct.pack_into("<H", inode18_after, 0x74, 0)
+    inode18_after = bytearray(
+        _inode_with_checksum(superblock, 18, inode18_after)
+    )
+    with media_path.open("rb") as recovered:
+        recovered.seek(inode18_offset)
+        assert recovered.read(256) == bytes(inode18_after)
+        recovered.seek(inode21_offset)
+        assert recovered.read(256) == inode21_before
+        recovered.seek(inode_bitmap_home * block_size)
+        assert recovered.read(block_size) == inode_bitmap_before
+        recovered.seek(gdt_home * block_size)
+        assert recovered.read(block_size) == expected_gdt
+        recovered.seek(orphan_home * block_size)
+        assert recovered.read(block_size) == orphan_before
+        if data_block is not None:
+            with path.open("rb") as canonical:
+                canonical.seek(block_bitmap_home * block_size)
+                expected_block_bitmap = canonical.read(block_size)
+            recovered.seek(block_bitmap_home * block_size)
+            assert recovered.read(block_size) == expected_block_bitmap
+            recovered.seek(data_block * block_size)
+            assert recovered.read(block_size) == patch_map[
+                data_block * block_size
+            ]
+
+    stable_marker = (
+        "EXT4-LINKED-LEGACY-HEAD-DATA-THEN-FINAL-STABLE"
+        if head_data
+        else "EXT4-LINKED-LEGACY-MULTI-ORPHAN-STABLE"
+    )
+    stable_output, stable_trace, stable_sha256 = run_recovery_forth(
+        media_path,
+        stable_path,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _MLS-IOR CONSTANT _MLS-V",
+            (
+                _forth_conjunction(
+                    [
+                        "_MLS-IOR 0=",
+                        "_MLS-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_MLS-V _EXT4-READY?",
+                        "_MLS-V _EXT4-ATTACHED?",
+                        "_MLS-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_MLS-V _EXT4-CTX _EXT4-C.J.WRITER + @ 0=",
+                    ]
+                )
+                + f' IF ." {stable_marker}" THEN'
+            ),
+        ],
+        capture_media=stable_path,
+    )
+    _assert_emitted(stable_output, stable_marker)
+    assert stable_trace == ()
+    assert stable_sha256 == media_sha256
+    assert _sha256(stable_path) == media_sha256
+    return {
+        "output": output,
+        "success_trace": trace,
+        "clean_image": media_path,
+        "clean_sha256": media_sha256,
+        "stable_image": stable_path,
+        "stable_trace": stable_trace,
+        "stable_sha256": stable_sha256,
+        "data_block": data_block,
+    }
+
+
+@pytest.fixture(scope="session")
+def linked_multi_legacy_cleanup_fixture(
+    canonical_images: dict[str, Path],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    directory = tmp_path_factory.mktemp("ext4-linked-legacy-multi-cleanup")
+    return _run_multi_linked_legacy_cleanup(
+        canonical_images["primary-1k-i256"],
+        directory / "successful-cleanup.img",
+        directory / "stable-remount.img",
+    )
+
+
+def _build_multi_empty_unlinked_cleanup_fixture(
+    canonical_images: dict[str, Path],
+    tmp_path_factory: pytest.TempPathFactory,
+    *,
+    case: str,
+    legacy_chain: tuple[int, ...],
+    modern_entries: tuple[int, ...],
+    max_credit: int,
+    final_credit: int,
+) -> dict[str, object]:
+    directory = tmp_path_factory.mktemp(f"ext4-{case}-multi-orphan-cleanup")
+    return _run_multi_empty_unlinked_cleanup(
+        canonical_images["primary-1k-i256"],
+        directory / "successful-cleanup.img",
+        directory / "stable-remount.img",
+        case=case,
+        legacy_chain=legacy_chain,
+        modern_entries=modern_entries,
+        max_credit=max_credit,
+        final_credit=final_credit,
+    )
+
+
+@pytest.fixture(scope="session")
+def modern_multi_empty_unlinked_cleanup_fixture(
+    canonical_images: dict[str, Path],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    return _build_multi_empty_unlinked_cleanup_fixture(
+        canonical_images,
+        tmp_path_factory,
+        case="modern",
+        legacy_chain=(),
+        modern_entries=(18, 21),
+        max_credit=5,
+        final_credit=5,
+    )
+
+
+@pytest.fixture(scope="session")
+def legacy_multi_empty_unlinked_cleanup_fixture(
+    canonical_images: dict[str, Path],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    return _build_multi_empty_unlinked_cleanup_fixture(
+        canonical_images,
+        tmp_path_factory,
+        case="legacy",
+        legacy_chain=(18, 21),
+        modern_entries=(),
+        max_credit=4,
+        final_credit=4,
+    )
+
+
+@pytest.fixture(scope="session")
+def mixed_multi_empty_unlinked_cleanup_fixture(
+    canonical_images: dict[str, Path],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    return _build_multi_empty_unlinked_cleanup_fixture(
+        canonical_images,
+        tmp_path_factory,
+        case="mixed",
+        legacy_chain=(18,),
+        modern_entries=(21,),
+        max_credit=5,
+        final_credit=5,
+    )
+
+
+@pytest.fixture(scope="session", params=_MULTI_EMPTY_ORPHAN_CASES)
+def multi_empty_unlinked_cleanup_fixture(
+    request: pytest.FixtureRequest,
+) -> dict[str, object]:
+    fixture_name = request.param
+    assert isinstance(fixture_name, str)
+    result = request.getfixturevalue(fixture_name)
+    assert isinstance(result, dict)
+    return result
+
+
 @pytest.fixture(scope="session", params=("modern", "legacy"))
 def singleton_unlinked_cleanup_fixture(
     request: pytest.FixtureRequest,
@@ -14646,11 +16531,11 @@ def _assert_singleton_unlinked_cleanup_result(
     assert clean_image.is_file()
     assert _sha256(clean_image) == clean_sha256
     base_homes = 5 if protocol == "modern" else 4
-    expected_writes = (29 if protocol == "modern" else 27) + 2 * (
+    expected_writes = (34 if protocol == "modern" else 32) + 2 * (
         expected_home_writes - base_homes
     )
     assert sum(kind == "write" for kind, _, _ in trace) == expected_writes
-    assert sum(kind == "flush" for kind, _, _ in trace) == 18
+    assert sum(kind == "flush" for kind, _, _ in trace) == 24
 
 
 def test_mount_reclaims_already_empty_unlinked_singleton_orphan(
@@ -14666,6 +16551,63 @@ def test_empty_unlinked_cleanup_is_e2fsck_clean(
     jbd2_toolchain: dict[str, object],
 ) -> None:
     clean_image = singleton_unlinked_cleanup_fixture["clean_image"]
+    assert isinstance(clean_image, Path)
+    _assert_e2fsck_clean(clean_image, jbd2_toolchain)
+
+
+def test_mount_drains_two_record_modern_legacy_and_mixed_orphan_unions(
+    multi_empty_unlinked_cleanup_fixture: dict[str, object],
+) -> None:
+    result = multi_empty_unlinked_cleanup_fixture
+    case = result["case"]
+    clean_image = result["clean_image"]
+    stable_image = result["stable_image"]
+    assert case in {"modern", "legacy", "mixed"}
+    assert isinstance(clean_image, Path)
+    assert isinstance(stable_image, Path)
+    assert clean_image.is_file()
+    assert stable_image.is_file()
+    assert result["stable_trace"] == ()
+    assert result["stable_sha256"] == result["clean_sha256"]
+
+
+def test_mount_drains_two_record_linked_legacy_orphan_chain(
+    linked_multi_legacy_cleanup_fixture: dict[str, object],
+) -> None:
+    result = linked_multi_legacy_cleanup_fixture
+    assert isinstance(result["clean_image"], Path)
+    assert isinstance(result["stable_image"], Path)
+    assert result["clean_image"].is_file()
+    assert result["stable_image"].is_file()
+    assert result["stable_trace"] == ()
+
+
+def test_mount_truncates_linked_legacy_head_before_terminal_final(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "linked-legacy-head-data-then-final"
+    directory.mkdir()
+    result = _run_multi_linked_legacy_cleanup(
+        canonical_images["primary-1k-i256"],
+        directory / "successful-cleanup.img",
+        directory / "stable-remount.img",
+        head_data=True,
+    )
+    assert isinstance(result["data_block"], int)
+    assert isinstance(result["clean_image"], Path)
+    assert isinstance(result["stable_image"], Path)
+    assert result["clean_image"].is_file()
+    assert result["stable_image"].is_file()
+    assert result["stable_trace"] == ()
+    assert result["stable_sha256"] == result["clean_sha256"]
+
+
+def test_multi_record_orphan_cleanup_is_e2fsck_clean(
+    multi_empty_unlinked_cleanup_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    clean_image = multi_empty_unlinked_cleanup_fixture["clean_image"]
     assert isinstance(clean_image, Path)
     _assert_e2fsck_clean(clean_image, jbd2_toolchain)
 
@@ -14994,8 +16936,7 @@ def _assert_unlinked_cleanup_media_converges(
                         "_EXT4-MOC-MARK-VALID @ 0=",
                         "_EXT4-JFO-CERT-SCOPE @ 0=",
                         "_EXT4-JFO-CERT-VALID @ 0=",
-                        "_EXT4-MUTATION-OWNER-TARGET @ 0=",
-                        "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                         (
                             "_UA-CTX _EXT4-C.SB + "
                             "_EXT4-SB.LAST-ORPHAN + L@ 0="
@@ -15119,8 +17060,7 @@ def _assert_unlinked_cleanup_media_converges(
                         "_UB-CTX _EXT4-C.J.WRITER + @ 0=",
                         "_EXT4-JFO-CERT-SCOPE @ 0=",
                         "_EXT4-JFO-CERT-VALID @ 0=",
-                        "_EXT4-MUTATION-OWNER-TARGET @ 0=",
-                        "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                         (
                             "_UB-INODE-IOR VFS-IOR-REASON "
                             "VFS-R-CORRUPT ="
@@ -15169,6 +17109,432 @@ def _write_ordinals_for_ext4_home(
         if first_sector < target_limit and target_first < write_limit:
             matches.append(write_ordinal)
     return tuple(matches)
+
+
+def _assert_multi_empty_cleanup_media_converges(
+    interrupted: Path,
+    repaired: Path,
+    stable: Path,
+    *,
+    expectation: dict[str, object],
+) -> None:
+    source = expectation["source"]
+    block_size = expectation["block_size"]
+    inode18_home = expectation["inode18_home"]
+    inode21_home = expectation["inode21_home"]
+    inode_bitmap_home = expectation["inode_bitmap_home"]
+    gdt_home = expectation["gdt_home"]
+    orphan_home = expectation["orphan_home"]
+    canonical_group_free = expectation["canonical_group_free"]
+    canonical_super_free = expectation["canonical_super_free"]
+    expected_itable_unused = expectation["expected_itable_unused"]
+    expected_gdt = expectation["expected_gdt"]
+    assert isinstance(source, Path)
+    assert block_size == 1024
+    assert isinstance(inode18_home, int)
+    assert isinstance(inode21_home, int)
+    assert isinstance(inode_bitmap_home, int)
+    assert isinstance(gdt_home, int)
+    assert isinstance(orphan_home, int)
+    assert isinstance(canonical_group_free, int)
+    assert isinstance(canonical_super_free, int)
+    assert isinstance(expected_itable_unused, int)
+    assert isinstance(expected_gdt, bytes)
+
+    marker = "EXT4-MIXED-MULTI-ORPHAN-CRASH-REPAIRED"
+    output, _repair_trace, repaired_sha256 = run_recovery_forth(
+        interrupted,
+        repaired,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _MCR-IOR CONSTANT _MCR-V",
+            "_MCR-V _EXT4-CTX CONSTANT _MCR-CTX",
+            "18 _MCR-CTX _EXT4-LOAD-INODE CONSTANT _MCR-I18-IOR",
+            "21 _MCR-CTX _EXT4-LOAD-INODE CONSTANT _MCR-I21-IOR",
+            (
+                "0 _MCR-CTX _EXT4-LOAD-INODE-BITMAP "
+                "CONSTANT _MCR-BITMAP-IOR CONSTANT _MCR-BITMAP-HOME"
+            ),
+            "_MCR-CTX _EXT4-C.BLOCK + 2 + C@ CONSTANT _MCR-INODE-BITS",
+            "0 _MCR-CTX _EXT4-LOAD-DESC CONSTANT _MCR-DESC-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_MCR-IOR 0=",
+                        "_MCR-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_MCR-V _EXT4-READY?",
+                        "_MCR-V _EXT4-ATTACHED?",
+                        "_MCR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_MCR-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_MCR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_MCR-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_MCR-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_MCR-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_MCR-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_MCR-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        (
+                            "_MCR-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.LAST-ORPHAN + L@ 0="
+                        ),
+                        (
+                            "_MCR-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0="
+                        ),
+                        (
+                            "_MCR-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                        (
+                            "_MCR-I18-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_MCR-I18-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-BOUNDS ="
+                        ),
+                        (
+                            "_MCR-I21-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_MCR-I21-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-BOUNDS ="
+                        ),
+                        "_MCR-BITMAP-IOR 0=",
+                        f"_MCR-BITMAP-HOME {inode_bitmap_home} =",
+                        "_MCR-INODE-BITS 0x12 AND 0=",
+                        "_MCR-DESC-IOR 0=",
+                        (
+                            "_MCR-CTX _EXT4-C.DESC + "
+                            "_EXT4-JFI-DESC-FREE@ "
+                            f"{canonical_group_free} ="
+                        ),
+                        (
+                            "_MCR-CTX _EXT4-C.DESC + DUP "
+                            "_EXT4-GD.ITABLE-UNUSED-LO + W@ SWAP "
+                            "_EXT4-GD.ITABLE-UNUSED-HI + W@ "
+                            "16 LSHIFT OR "
+                            f"{expected_itable_unused} ="
+                        ),
+                        (
+                            "_MCR-CTX _EXT4-C.FREE-INODES + @ "
+                            f"{canonical_super_free} ="
+                        ),
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+        ],
+        capture_media=repaired,
+    )
+    _assert_emitted(output, marker)
+    assert _sha256(repaired) == repaired_sha256
+    for inode_number in (18, 21):
+        _, inode, _ = _ext4_inode_record(repaired, inode_number)
+        assert inode == bytes(256)
+    for home in (inode18_home, inode21_home, inode_bitmap_home, orphan_home):
+        with source.open("rb") as canonical_media:
+            canonical_media.seek(home * block_size)
+            canonical_home = canonical_media.read(block_size)
+        with repaired.open("rb") as repaired_media:
+            repaired_media.seek(home * block_size)
+            repaired_home = repaired_media.read(block_size)
+        assert repaired_home == canonical_home
+    with repaired.open("rb") as repaired_media:
+        repaired_media.seek(gdt_home * block_size)
+        repaired_gdt = repaired_media.read(block_size)
+    assert repaired_gdt == expected_gdt
+
+    stable_marker = "EXT4-MIXED-MULTI-ORPHAN-CRASH-STABLE"
+    stable_output, stable_trace, stable_sha256 = run_recovery_forth(
+        repaired,
+        stable,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _MCS-IOR CONSTANT _MCS-V",
+            (
+                _forth_conjunction(
+                    [
+                        "_MCS-IOR 0=",
+                        "_MCS-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_MCS-V _EXT4-READY?",
+                        "_MCS-V _EXT4-CTX _EXT4-C.J.WRITER + @ 0=",
+                    ]
+                )
+                + f' IF ." {stable_marker}" THEN'
+            ),
+        ],
+        capture_media=stable,
+    )
+    _assert_emitted(stable_output, stable_marker)
+    assert stable_trace == ()
+    assert stable_sha256 == repaired_sha256
+    assert _sha256(stable) == repaired_sha256
+
+
+@pytest.fixture(scope="session")
+def mixed_multi_record_second_commit_fence_fixture(
+    mixed_multi_empty_unlinked_cleanup_fixture: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    expectation = mixed_multi_empty_unlinked_cleanup_fixture
+    assert expectation["case"] == "mixed"
+    tmp_path = tmp_path_factory.mktemp("ext4-mixed-multi-second-commit")
+    source = expectation["source"]
+    patches = expectation["patches"]
+    success_trace = expectation["success_trace"]
+    block_size = expectation["block_size"]
+    inode21_home = expectation["inode21_home"]
+    inode_bitmap_home = expectation["inode_bitmap_home"]
+    gdt_home = expectation["gdt_home"]
+    orphan_home = expectation["orphan_home"]
+    canonical_group_free = expectation["canonical_group_free"]
+    canonical_super_free = expectation["canonical_super_free"]
+    expected_itable_unused = expectation["expected_itable_unused"]
+    assert isinstance(source, Path)
+    assert isinstance(patches, tuple)
+    assert isinstance(success_trace, tuple)
+    assert block_size == 1024
+    assert isinstance(inode21_home, int)
+    assert isinstance(inode_bitmap_home, int)
+    assert isinstance(gdt_home, int)
+    assert isinstance(orphan_home, int)
+    assert isinstance(canonical_group_free, int)
+    assert isinstance(canonical_super_free, int)
+    assert isinstance(expected_itable_unused, int)
+
+    second_home_first_sector = inode21_home * 2
+    second_home_event_indexes = [
+        index
+        for index, (kind, first_sector, sector_count) in enumerate(
+            success_trace
+        )
+        if kind == "write"
+        and first_sector < second_home_first_sector + 2
+        and second_home_first_sector < first_sector + sector_count
+    ]
+    assert len(second_home_event_indexes) == 1
+    second_home_event = second_home_event_indexes[0]
+    assert second_home_event > 0
+    assert success_trace[second_home_event - 1] == ("flush", 0, 0)
+    flush_ordinal = sum(
+        kind == "flush"
+        for kind, _first, _count in success_trace[:second_home_event]
+    )
+    assert flush_ordinal > 0
+
+    working = tmp_path / "mixed-multi-second-commit-working.img"
+    survived = tmp_path / "mixed-multi-second-commit-survived.img"
+    prior_fence = tmp_path / "mixed-multi-second-commit-prior.img"
+    caught_marker = "EXT4-MIXED-MULTI-SECOND-COMMIT-CAUGHT"
+    output, failed_trace, survived_sha256 = run_recovery_forth(
+        source,
+        working,
+        [
+            "T-ARENA CONSTANT _MC-ARENA",
+            (
+                "_MC-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _MC-IOR CONSTANT _MC-V"
+            ),
+            "_MC-V _EXT4-CTX CONSTANT _MC-CTX",
+            "1 _MC-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _MC-REMAINING",
+            (
+                "5 0 0 1024 _EXT4-JWR-MEASURE "
+                "CONSTANT _MC-MEASURE-IOR CONSTANT _MC-WRITER-BYTES"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_MC-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME =",
+                        "_MC-IOR VFS-IOR-REASON VFS-R-IO =",
+                        "_MC-IOR VFS-IOR-FLAGS VFS-IOR-F-PARTIAL AND 0=",
+                        "_MC-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_MC-V _EXT4-READY? 0=",
+                        "_MC-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_MC-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        "_MC-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_MC-CTX _EXT4-C.J.WRITER-CURRENT + @ 0=",
+                        "_MC-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_MC-CTX _EXT4-C.J.PROTOCOL-OWNERS + @ 0=",
+                        "_MC-CTX _EXT4-C.O.ACTIVE + @ 1 =",
+                        "_MC-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
+                        "_MC-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_MC-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_MC-CTX _EXT4-C.O.SLOTS + @ 4 =",
+                        "_MC-REMAINING _EXT4-OE.INO + @ 21 =",
+                        (
+                            "_MC-REMAINING _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-MODERN ="
+                        ),
+                        "_MC-REMAINING _EXT4-OE.LOCATOR-A + @ 0=",
+                        "_MC-REMAINING _EXT4-OE.LOCATOR-B + @ 0=",
+                        (
+                            "0 _MC-CTX _EXT4-ORPHAN-TABLE-ENTRY "
+                            "_EXT4-ORPHAN-RECORD-SIZE _EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "2 _MC-CTX _EXT4-ORPHAN-TABLE-ENTRY "
+                            "_EXT4-ORPHAN-RECORD-SIZE 2* "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_MC-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.LAST-ORPHAN + L@ 0="
+                        ),
+                        (
+                            "_MC-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0<>"
+                        ),
+                        "_MC-MEASURE-IOR 0=",
+                        "_EXT4-MOC-MARK-VALID @ 0=",
+                        "_EXT4-MOC-MARK @ _MC-ARENA A.PTR @ =",
+                        "_EXT4-MOC-SPAN @ _MC-WRITER-BYTES =",
+                        (
+                            "_EXT4-MOC-MARK @ _EXT4-MOC-SPAN @ "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        "_EXT4-MOC-WRITER @ 0=",
+                        "_EXT4-MOC-TX @ 0=",
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                    ]
+                )
+                + f' IF ." {caught_marker}" THEN'
+            ),
+        ],
+        patches=patches,
+        flush_faults_by_ordinal={
+            flush_ordinal: {
+                "stage": "flush",
+                "result": STORAGE_RESULT_FLUSH_FAILURE,
+                "command": STORAGE_CMD_FLUSH,
+            }
+        },
+        capture_media=survived,
+        capture_prior_flush_media=prior_fence,
+        max_steps=_MULTI_ORPHAN_RECOVERY_MAX_STEPS,
+    )
+    _assert_emitted(output, caught_marker)
+    assert failed_trace == success_trace[:second_home_event]
+    assert _sha256(survived) == survived_sha256
+    assert working.is_file()
+    assert survived.is_file()
+    assert prior_fence.is_file()
+    assert _sha256(working) == _sha256(prior_fence)
+    assert _sha256(survived) != _sha256(prior_fence)
+
+    with source.open("rb") as canonical_media:
+        canonical_media.seek(1024)
+        canonical_super = canonical_media.read(1024)
+    orphan_inode_number = struct.unpack_from("<I", canonical_super, 0x280)[0]
+    _, orphan_inode, _ = _ext4_inode_record(source, orphan_inode_number)
+    orphan_generation = struct.unpack_from("<I", orphan_inode, 0x64)[0]
+    checksum_seed = struct.unpack_from("<I", canonical_super, 0x270)[0]
+    for interrupted in (survived, prior_fence):
+        with interrupted.open("rb") as media:
+            media.seek(1024)
+            intermediate_super = media.read(1024)
+            media.seek(inode_bitmap_home * block_size)
+            intermediate_bitmap = media.read(block_size)
+            media.seek(gdt_home * block_size)
+            intermediate_gdt = media.read(block_size)
+            media.seek(orphan_home * block_size)
+            intermediate_orphan = media.read(block_size)
+        assert intermediate_super == _ext4_super_with_checksum(
+            intermediate_super
+        )
+        assert struct.unpack_from("<I", intermediate_super, 0x60)[0] & 0x04
+        assert (
+            struct.unpack_from("<I", intermediate_super, 0x64)[0]
+            & 0x0001_0000
+        )
+        assert struct.unpack_from("<I", intermediate_super, 0xE8)[0] == 0
+        assert struct.unpack_from("<I", intermediate_super, 0x10)[0] == (
+            canonical_super_free - 1
+        )
+        assert intermediate_bitmap[2] & 0x02 == 0
+        assert intermediate_bitmap[2] & 0x10
+        intermediate_descriptor = intermediate_gdt[:64]
+        intermediate_group_free = struct.unpack_from(
+            "<H", intermediate_descriptor, 0x0E
+        )[0] | (
+            struct.unpack_from("<H", intermediate_descriptor, 0x2E)[0]
+            << 16
+        )
+        intermediate_itable_unused = struct.unpack_from(
+            "<H", intermediate_descriptor, 0x1C
+        )[0] | (
+            struct.unpack_from("<H", intermediate_descriptor, 0x32)[0]
+            << 16
+        )
+        assert intermediate_group_free == canonical_group_free - 1
+        assert intermediate_itable_unused == expected_itable_unused
+        assert struct.unpack_from("<II", intermediate_orphan, 0) == (21, 0)
+        orphan_checksum = _crc32c_raw(
+            struct.pack(
+                "<IIQ",
+                orphan_inode_number,
+                orphan_generation,
+                orphan_home,
+            ),
+            checksum_seed,
+        )
+        orphan_checksum = _crc32c_raw(
+            intermediate_orphan[: block_size - 8],
+            orphan_checksum,
+        )
+        assert struct.unpack_from(
+            "<I", intermediate_orphan, block_size - 4
+        )[0] == orphan_checksum
+        _, inode18, _ = _ext4_inode_record(interrupted, 18)
+        _, inode21, _ = _ext4_inode_record(interrupted, 21)
+        assert inode18 == bytes(256)
+        assert inode21 != bytes(256)
+
+    repaired_images: list[Path] = []
+    stable_images: list[Path] = []
+    for durability, interrupted in (
+        ("survived", survived),
+        ("prior", prior_fence),
+    ):
+        repaired = tmp_path / f"mixed-multi-{durability}-repaired.img"
+        stable = tmp_path / f"mixed-multi-{durability}-stable.img"
+        _assert_multi_empty_cleanup_media_converges(
+            interrupted,
+            repaired,
+            stable,
+            expectation=expectation,
+        )
+        repaired_images.append(repaired)
+        stable_images.append(stable)
+
+    return {
+        "interrupted_images": (survived, prior_fence),
+        "repaired_images": tuple(repaired_images),
+        "stable_images": tuple(stable_images),
+        "failed_trace": failed_trace,
+    }
+
+
+def test_mixed_multi_record_cleanup_converges_across_second_commit_fence(
+    mixed_multi_record_second_commit_fence_fixture: dict[str, object],
+) -> None:
+    result = mixed_multi_record_second_commit_fence_fixture
+    assert len(result["interrupted_images"]) == 2
+    assert len(result["repaired_images"]) == 2
+    assert len(result["stable_images"]) == 2
+    assert result["failed_trace"]
+
+
+def test_mixed_multi_record_second_commit_repairs_are_e2fsck_clean(
+    mixed_multi_record_second_commit_fence_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    repaired_images = mixed_multi_record_second_commit_fence_fixture[
+        "repaired_images"
+    ]
+    assert isinstance(repaired_images, tuple)
+    for repaired in repaired_images:
+        assert isinstance(repaired, Path)
+        _assert_e2fsck_clean(repaired, jbd2_toolchain)
 
 
 _UNLINKED_WRITE_PREFIX_CASES = (
@@ -15294,8 +17660,7 @@ def test_unlinked_cleanup_write_prefixes_converge_on_fresh_mount(
                         "_EXT4-MOC-TX @ 0=",
                         "_EXT4-JFO-CERT-SCOPE @ 0=",
                         "_EXT4-JFO-CERT-VALID @ 0=",
-                        "_EXT4-MUTATION-OWNER-TARGET @ 0=",
-                        "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                     ]
                 )
                 + f' IF ." {caught_marker}" THEN'
@@ -15486,8 +17851,7 @@ def test_one_block_unlinked_cleanup_write_prefixes_converge(
                         "_EXT4-MOC-TX @ 0=",
                         "_EXT4-JFO-CERT-SCOPE @ 0=",
                         "_EXT4-JFO-CERT-VALID @ 0=",
-                        "_EXT4-MUTATION-OWNER-TARGET @ 0=",
-                        "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                     ]
                 )
                 + f' IF ." {caught_marker}" THEN'
@@ -15628,8 +17992,7 @@ def _exercise_unlinked_cleanup_flush_fence(
                         "_EXT4-MOC-TX @ 0=",
                         "_EXT4-JFO-CERT-SCOPE @ 0=",
                         "_EXT4-JFO-CERT-VALID @ 0=",
-                        "_EXT4-MUTATION-OWNER-TARGET @ 0=",
-                        "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                     ]
                 )
                 + f' IF ." {caught_marker}" THEN'
@@ -15850,7 +18213,7 @@ def singleton_legacy_cleanup_fixture(
 def _assert_singleton_legacy_cleanup_result(
     result: dict[str, object],
     *,
-    expected_writes: int = 27,
+    expected_writes: int = 32,
 ) -> None:
     output = result["output"]
     trace = result["success_trace"]
@@ -15865,9 +18228,9 @@ def _assert_singleton_legacy_cleanup_result(
     assert clean_image.is_file()
     assert _sha256(clean_image) == clean_sha256
     # Four metadata homes remove one payload and one home write from the
-    # otherwise identical five-home modern 29-write durability path.
+    # otherwise identical five-home modern durability path.
     assert sum(kind == "write" for kind, _, _ in trace) == expected_writes
-    assert sum(kind == "flush" for kind, _, _ in trace) == 18
+    assert sum(kind == "flush" for kind, _, _ in trace) == 24
 
 
 def test_mount_completes_singleton_legacy_depth0_orphan_transaction(
@@ -15901,7 +18264,7 @@ def test_mount_completes_already_truncated_singleton_legacy_orphan(
     )
     # A one-home cleanup removes three payload/home pairs from the canonical
     # four-home legacy transaction while retaining the same durability fences.
-    _assert_singleton_legacy_cleanup_result(result, expected_writes=21)
+    _assert_singleton_legacy_cleanup_result(result, expected_writes=26)
 
 
 @pytest.mark.parametrize(
@@ -15957,18 +18320,18 @@ def test_singleton_legacy_depth0_credit_and_final_seal(
             ),
             "_LF-V _EXT4-CTX CONSTANT _LF-CTX",
             (
-                "_LF-CTX _EXT4-FIND-SINGLETON-ORPHAN "
+                "_LF-CTX _EXT4-FIND-SELECTED-ORPHAN "
                 "CONSTANT _LF-FIND-IOR CONSTANT _LF-RECORD"
             ),
             "_LF-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _LF-JOURNAL-IOR",
             (
                 "_LF-RECORD _LF-CTX "
-                "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
                 "CONSTANT _LF-MEASURE1-IOR CONSTANT _LF-CREDIT1"
             ),
             (
                 "_LF-RECORD _LF-CTX "
-                "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
                 "CONSTANT _LF-MEASURE2-IOR CONSTANT _LF-CREDIT2"
             ),
             (
@@ -15987,7 +18350,7 @@ def test_singleton_legacy_depth0_credit_and_final_seal(
             ),
             (
                 "_LF-RECORD _LF-TX "
-                "_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL "
+                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
                 "CONSTANT _LF-STAGE-IOR"
             ),
             (
@@ -16177,8 +18540,8 @@ def test_mount_completes_singleton_modern_depth0_orphan_transaction(
     assert isinstance(trace, tuple)
 
     _assert_emitted(output, "EXT4-MODERN-ORPHAN-AUTO-CLEANED")
-    assert sum(kind == "write" for kind, _, _ in trace) == 29
-    assert sum(kind == "flush" for kind, _, _ in trace) == 18
+    assert sum(kind == "write" for kind, _, _ in trace) == 34
+    assert sum(kind == "flush" for kind, _, _ in trace) == 24
 
 
 def _assert_singleton_cleanup_media_converges(
@@ -16857,12 +19220,12 @@ def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
             "_OF-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OF-JOURNAL-IOR",
             (
                 "_OF-COPY _OF-CTX "
-                "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
                 "CONSTANT _OF-COPY-IOR CONSTANT _OF-COPY-CREDIT"
             ),
             (
                 "_OF-RECORD _OF-CTX "
-                "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
                 "CONSTANT _OF-MEASURE-IOR CONSTANT _OF-CREDIT"
             ),
             (
@@ -16881,7 +19244,7 @@ def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
             ),
             (
                 "_OF-RECORD _OF-TX "
-                "_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL "
+                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
                 "CONSTANT _OF-STAGE-IOR"
             ),
             (
@@ -16983,12 +19346,12 @@ def test_singleton_modern_depth0_credit_counts_cross_group_homes_exactly(
             "_OM-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OM-JOURNAL-IOR",
             (
                 "_OM-RECORD _OM-CTX "
-                "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
                 "CONSTANT _OM-MEASURE1-IOR CONSTANT _OM-CREDIT1"
             ),
             (
                 "_OM-RECORD _OM-CTX "
-                "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
                 "CONSTANT _OM-MEASURE2-IOR CONSTANT _OM-CREDIT2"
             ),
             "-1 _OM-CTX _EXT4-C.J.WRITER-CURRENT + !",
@@ -17002,7 +19365,7 @@ def test_singleton_modern_depth0_credit_counts_cross_group_homes_exactly(
             ),
             (
                 "_OM-RECORD _OM-TX "
-                "_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL "
+                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
                 "CONSTANT _OM-STAGE-IOR"
             ),
             (
@@ -17100,7 +19463,7 @@ def test_singleton_modern_depth0_cleanup_checkpoints_and_deactivates(
                 ),
                 (
                     "_OC-RECORD _OC-TX "
-                    "_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL "
+                    "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
                     "CONSTANT _OC-STAGE-IOR"
                 ),
                 "_OC-TX _EXT4-JTX-EMIT CONSTANT _OC-EMIT-IOR",
@@ -17200,7 +19563,7 @@ def test_already_truncated_modern_orphan_uses_slot_only_final_transaction(
                 ),
                 (
                     "_OE-RECORD _OE-CTX "
-                    "_EXT4-MEASURE-SINGLETON-ORPHAN-DEPTH0 "
+                    "_EXT4-MEASURE-ORPHAN-DEPTH0 "
                     "CONSTANT _OE-MEASURE-IOR CONSTANT _OE-CREDIT"
                 ),
                 "-1 _OE-CTX _EXT4-C.J.WRITER-CURRENT + !",
@@ -17218,7 +19581,7 @@ def test_already_truncated_modern_orphan_uses_slot_only_final_transaction(
                 ),
                 (
                     "_OE-RECORD _OE-TX "
-                    "_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL "
+                    "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
                     "CONSTANT _OE-STAGE-IOR"
                 ),
                 (
@@ -17338,7 +19701,7 @@ def test_singleton_modern_cleanup_rejects_certificate_substitution_prehome(
                 ),
                 (
                     "_OS-RECORD _OS-TX "
-                    "_EXT4-JTX-STAGE-SINGLETON-ORPHAN-DEPTH0-FINAL "
+                    "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
                     "CONSTANT _OS-STAGE-IOR"
                 ),
                 "_OS-TX _EXT4-JTX-EMIT CONSTANT _OS-EMIT-IOR",
@@ -17402,6 +19765,172 @@ def test_singleton_modern_cleanup_rejects_certificate_substitution_prehome(
         media_path.unlink(missing_ok=True)
 
     _assert_emitted(output, "EXT4-MODERN-FINAL-SUBSTITUTION-REJECTED")
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        pytest.param("aggregate-count", id="aggregate-count"),
+        pytest.param("protocol-split", id="protocol-split"),
+        pytest.param("more-to-final", id="more-to-final"),
+    ),
+)
+def test_linked_legacy_more_rejects_postseal_certificate_tamper_prehome(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    media_path = tmp_path / f"legacy-more-{tamper}-tamper.img"
+    if tamper == "aggregate-count":
+        mutation = [
+            "3 _LC-WRITER _EXT4-JWR.CP-PRE-ACTIVE + !",
+            "3 _LC-WRITER _EXT4-JWR.CP-PRE-LEGACY + !",
+        ]
+    elif tamper == "protocol-split":
+        mutation = [
+            "1 _LC-WRITER _EXT4-JWR.CP-PRE-MODERN + !",
+            "1 _LC-WRITER _EXT4-JWR.CP-PRE-LEGACY + !",
+        ]
+    else:
+        assert tamper == "more-to-final"
+        mutation = [
+            (
+                "_EXT4-JCPM-ORPHAN-LEGACY-FINAL _LC-WRITER "
+                "_EXT4-JWR.CP-MODE + !"
+            ),
+            "1 _LC-WRITER _EXT4-JWR.CP-PRE-ACTIVE + !",
+            "1 _LC-WRITER _EXT4-JWR.CP-PRE-LEGACY + !",
+        ]
+    marker = f"EXT4-LEGACY-MORE-{tamper.upper()}-TAMPER-REJECTED"
+    try:
+        output, _, _ = run_recovery_forth(
+            path,
+            media_path,
+            [
+                *_EXT4_AUTH_ONLY_BINDING_FORTH,
+                (
+                    "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                    "CONSTANT _LC-MOUNT-IOR CONSTANT _LC-V"
+                ),
+                "_LC-V _EXT4-CTX CONSTANT _LC-CTX",
+                (
+                    "_LC-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                    "CONSTANT _LC-FIND-IOR CONSTANT _LC-RECORD"
+                ),
+                (
+                    "_LC-CTX _EXT4-VALIDATE-JOURNAL "
+                    "CONSTANT _LC-JOURNAL-IOR"
+                ),
+                (
+                    "_LC-RECORD _LC-CTX _EXT4-MEASURE-ORPHAN-DEPTH0 "
+                    "CONSTANT _LC-MEASURE-IOR CONSTANT _LC-CREDIT"
+                ),
+                "-1 _LC-CTX _EXT4-C.J.WRITER-CURRENT + !",
+                (
+                    "_LC-CREDIT 0 0 _LC-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                    "CONSTANT _LC-WRITER-IOR CONSTANT _LC-WRITER"
+                ),
+                (
+                    "_LC-WRITER _EXT4-JWR-ACTIVATE "
+                    "CONSTANT _LC-ACTIVATE-IOR"
+                ),
+                (
+                    "_LC-CREDIT 0 0 _LC-WRITER _EXT4-JTX-BEGIN "
+                    "CONSTANT _LC-BEGIN-IOR CONSTANT _LC-TX"
+                ),
+                (
+                    "_LC-RECORD _LC-TX _EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                    "CONSTANT _LC-STAGE-IOR"
+                ),
+                "_LC-TX _EXT4-JTX-EMIT CONSTANT _LC-EMIT-IOR",
+                (
+                    _forth_conjunction(
+                        [
+                            (
+                                "_LC-WRITER _EXT4-JWR.CP-MODE + @ "
+                                "_EXT4-JCPM-ORPHAN-LEGACY-MORE ="
+                            ),
+                            (
+                                "_LC-WRITER "
+                                "_EXT4-JWR.CP-PRE-ACTIVE + @ 2 ="
+                            ),
+                            (
+                                "_LC-WRITER "
+                                "_EXT4-JWR.CP-PRE-MODERN + @ 0="
+                            ),
+                            (
+                                "_LC-WRITER "
+                                "_EXT4-JWR.CP-PRE-LEGACY + @ 2 ="
+                            ),
+                        ]
+                    )
+                    + " CONSTANT _LC-SEALED-CERTIFICATE"
+                ),
+                *mutation,
+                (
+                    "_LC-WRITER _EXT4-JWR-VALID? "
+                    "CONSTANT _LC-STRUCTURALLY-VALID"
+                ),
+                (
+                    "_LC-TX _EXT4-JTX-CHECKPOINT "
+                    "CONSTANT _LC-CHECKPOINT-IOR"
+                ),
+                (
+                    "_LC-TX _EXT4-JTX-CHECKPOINT "
+                    "CONSTANT _LC-RETRY-IOR"
+                ),
+                (
+                    _forth_conjunction(
+                        [
+                            (
+                                "_LC-MOUNT-IOR VFS-IOR-REASON "
+                                "VFS-R-UNSUPPORTED ="
+                            ),
+                            (
+                                "_LC-MOUNT-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-RECOVERY ="
+                            ),
+                            "_LC-FIND-IOR 0=",
+                            "_LC-JOURNAL-IOR 0=",
+                            "_LC-MEASURE-IOR 0=",
+                            "_LC-CREDIT 2 =",
+                            "_LC-WRITER-IOR 0=",
+                            "_LC-ACTIVATE-IOR 0=",
+                            "_LC-BEGIN-IOR 0=",
+                            "_LC-STAGE-IOR 0=",
+                            "_LC-EMIT-IOR 0=",
+                            "_LC-SEALED-CERTIFICATE",
+                            "_LC-STRUCTURALLY-VALID",
+                            (
+                                "_LC-CHECKPOINT-IOR VFS-IOR-REASON "
+                                "VFS-R-CORRUPT ="
+                            ),
+                            (
+                                "_LC-CHECKPOINT-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-ORPHAN-FILE ="
+                            ),
+                            "_LC-RETRY-IOR VFS-E-BUSY =",
+                            (
+                                "_LC-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-FAULTED ="
+                            ),
+                            (
+                                "_LC-WRITER _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-CHECKPOINT-PREFLIGHT ="
+                            ),
+                            "_LC-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        ]
+                    )
+                    + f' IF ." {marker}" THEN'
+                ),
+            ],
+            patches=_multi_linked_legacy_orphan_patches(path),
+        )
+    finally:
+        media_path.unlink(missing_ok=True)
+
+    _assert_emitted(output, marker)
 
 
 @pytest.mark.parametrize(
@@ -17943,7 +20472,7 @@ def test_mount_cleanup_rejects_orphan_storage_alias_without_writes(
             "_OO-V _EXT4-CTX CONSTANT _OO-CTX",
             "_OO-ARENA ARENA-USED CONSTANT _OO-USED-BEFORE",
             (
-                "_OO-CTX _OO-V _EXT4-COMPLETE-SINGLETON-ORPHAN "
+                "_OO-CTX _OO-V _EXT4-COMPLETE-ORPHAN-PLAN "
                 "CONSTANT _OO-RETRY-IOR"
             ),
             "_OO-ARENA ARENA-USED CONSTANT _OO-USED-AFTER",
@@ -18068,7 +20597,7 @@ def test_mount_cleanup_rejects_xattr_orphan_preallocation_without_writes(
             "_OP-V _EXT4-CTX CONSTANT _OP-CTX",
             "_OP-ARENA ARENA-USED CONSTANT _OP-USED-BEFORE",
             (
-                "_OP-CTX _OP-V _EXT4-COMPLETE-SINGLETON-ORPHAN "
+                "_OP-CTX _OP-V _EXT4-COMPLETE-ORPHAN-PLAN "
                 "CONSTANT _OP-RETRY-IOR"
             ),
             "_OP-ARENA ARENA-USED CONSTANT _OP-USED-AFTER",
@@ -19004,14 +21533,15 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                 "_EXT4-VALIDATE-INODE-TABLE-HOME "
                 "CONSTANT _MA-BAD-TABLE-IOR"
             ),
-            "0 _EXT4-MUTATION-OWNER-TARGET !",
-            "1 _EXT4-MUTATION-OWNER-COUNT !",
+            "_EXT4-MUTATION-OWNER-RANGES-CLEAR",
+            "0 0 _EXT4-MUTATION-OWNER-RANGE !",
+            "1 0 _EXT4-MUTATION-OWNER-RANGE CELL+ !",
+            "1 _EXT4-MUTATION-OWNER-RANGE-COUNT !",
             (
                 "0 1 _EXT4-MUTATION-OWNER-ALIASES? "
                 "CONSTANT _MA-ZERO-FIRST-ALIASES"
             ),
-            "0 _EXT4-MUTATION-OWNER-TARGET !",
-            "0 _EXT4-MUTATION-OWNER-COUNT !",
+            "_EXT4-MUTATION-OWNER-RANGES-CLEAR",
             "17 _EXT4-MAP-VALIDATION-LIMIT !",
             "_MA-ARENA ARENA-USED CONSTANT _MA-USED-BEFORE",
             "DEPTH CONSTANT _MA-DEPTH-BEFORE",
@@ -19021,12 +21551,13 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                 "CONSTANT _MA-LEADING-ALIAS-IOR"
             ),
             (
-                "_EXT4-MUTATION-OWNER-TARGET @ "
-                "CONSTANT _MA-LEADING-TARGET"
+                "_EXT4-MUTATION-OWNER-RANGE-COUNT @ "
+                "CONSTANT _MA-LEADING-RANGE-COUNT"
             ),
             (
-                "_EXT4-MUTATION-OWNER-COUNT @ "
-                "CONSTANT _MA-LEADING-COUNT"
+                "_EXT4-MUTATION-OWNER-RANGES "
+                "_EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS "
+                "_EXT4-BYTES-ZERO? CONSTANT _MA-LEADING-RANGES-ZERO"
             ),
             (
                 "_EXT4-MAP-VALIDATION-LIMIT @ "
@@ -19038,12 +21569,13 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                 "CONSTANT _MA-TRAILING-ALIAS-IOR"
             ),
             (
-                "_EXT4-MUTATION-OWNER-TARGET @ "
-                "CONSTANT _MA-TRAILING-TARGET"
+                "_EXT4-MUTATION-OWNER-RANGE-COUNT @ "
+                "CONSTANT _MA-TRAILING-RANGE-COUNT"
             ),
             (
-                "_EXT4-MUTATION-OWNER-COUNT @ "
-                "CONSTANT _MA-TRAILING-COUNT"
+                "_EXT4-MUTATION-OWNER-RANGES "
+                "_EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS "
+                "_EXT4-BYTES-ZERO? CONSTANT _MA-TRAILING-RANGES-ZERO"
             ),
             (
                 "_EXT4-MAP-VALIDATION-LIMIT @ "
@@ -19061,20 +21593,13 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                 "CONSTANT _MA-PAIR-ALIAS-IOR"
             ),
             (
-                "_EXT4-MUTATION-OWNER-TARGET @ "
-                "CONSTANT _MA-PAIR-ALIAS-TARGET"
+                "_EXT4-MUTATION-OWNER-RANGE-COUNT @ "
+                "CONSTANT _MA-PAIR-ALIAS-RANGE-COUNT"
             ),
             (
-                "_EXT4-MUTATION-OWNER-COUNT @ "
-                "CONSTANT _MA-PAIR-ALIAS-COUNT"
-            ),
-            (
-                "_EXT4-MUTATION-OWNER-TARGET-B @ "
-                "CONSTANT _MA-PAIR-ALIAS-TARGET-B"
-            ),
-            (
-                "_EXT4-MUTATION-OWNER-COUNT-B @ "
-                "CONSTANT _MA-PAIR-ALIAS-COUNT-B"
+                "_EXT4-MUTATION-OWNER-RANGES "
+                "_EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS "
+                "_EXT4-BYTES-ZERO? CONSTANT _MA-PAIR-ALIAS-RANGES-ZERO"
             ),
             (
                 "_EXT4-MAP-VALIDATION-LIMIT @ "
@@ -19186,21 +21711,16 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                         "_MA-PAIR-HOME-IOR 0=",
                         "_EXT4-IR-INO @ 14 =",
                         "_EXT4-IR-BLOCK @ _MA-INODE-HOME =",
-                        "_MA-LEADING-TARGET 0=",
-                        "_MA-LEADING-COUNT 0=",
+                        "_MA-LEADING-RANGE-COUNT 0=",
+                        "_MA-LEADING-RANGES-ZERO",
                         "_MA-LEADING-LIMIT 17 =",
-                        "_MA-TRAILING-TARGET 0=",
-                        "_MA-TRAILING-COUNT 0=",
+                        "_MA-TRAILING-RANGE-COUNT 0=",
+                        "_MA-TRAILING-RANGES-ZERO",
                         "_MA-TRAILING-LIMIT 17 =",
-                        "_MA-PAIR-ALIAS-TARGET 0=",
-                        "_MA-PAIR-ALIAS-COUNT 0=",
-                        "_MA-PAIR-ALIAS-TARGET-B 0=",
-                        "_MA-PAIR-ALIAS-COUNT-B 0=",
+                        "_MA-PAIR-ALIAS-RANGE-COUNT 0=",
+                        "_MA-PAIR-ALIAS-RANGES-ZERO",
                         "_MA-PAIR-ALIAS-LIMIT 17 =",
-                        "_EXT4-MUTATION-OWNER-TARGET @ 0=",
-                        "_EXT4-MUTATION-OWNER-COUNT @ 0=",
-                        "_EXT4-MUTATION-OWNER-TARGET-B @ 0=",
-                        "_EXT4-MUTATION-OWNER-COUNT-B @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                         "_EXT4-JFO-CERT-VALID @ 0=",
                         "_MA-MAP-LIMIT-AFTER 17 =",
                         "_MA-DEPTH-BEFORE _MA-DEPTH-AFTER =",
@@ -19415,8 +21935,7 @@ def test_typed_one_block_write_stages_ordered_rmw_and_inode_times(
                         "_TW-META-SUFFIX",
                         "_TW-WRITER _EXT4-JTX-TABLES-VALID?",
                         "_TW-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
-                        "_EXT4-MUTATION-OWNER-TARGET @ 0=",
-                        "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-TYPED-ONEBLOCK-WRITE-STAGED" THEN'
@@ -19518,8 +22037,7 @@ def test_typed_one_block_write_stages_ordered_rmw_and_inode_times(
                         "_TW-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
                         "_TW-WRITER _EXT4-JWR-VALID?",
                         "_TW-ARENA ARENA-USED _TW-USED-BEFORE =",
-                        "_EXT4-MUTATION-OWNER-TARGET @ 0=",
-                        "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                     ]
                 )
                 + ' IF ." EXT4-TYPED-ONEBLOCK-WRITE-REFUSALS" THEN'
@@ -22718,10 +25236,7 @@ def test_private_write_updates_initialized_depth_positive_extent(
                             "_EXT4-MUTATION-MAP-TARGET @ 0=",
                             "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
                             "_EXT4-MUTATION-MAP-HITS @ 0=",
-                            "_EXT4-MUTATION-OWNER-TARGET @ 0=",
-                            "_EXT4-MUTATION-OWNER-COUNT @ 0=",
-                            "_EXT4-MUTATION-OWNER-TARGET-B @ 0=",
-                            "_EXT4-MUTATION-OWNER-COUNT-B @ 0=",
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                             (
                                 "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
                                 "_EXT4-BYTES-ZERO?"
@@ -22979,10 +25494,7 @@ def test_depth_positive_write_rejects_own_extent_node_as_data(
                             "_EXT4-MUTATION-MAP-TARGET @ 0=",
                             "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
                             "_EXT4-MUTATION-MAP-HITS @ 0=",
-                            "_EXT4-MUTATION-OWNER-TARGET @ 0=",
-                            "_EXT4-MUTATION-OWNER-COUNT @ 0=",
-                            "_EXT4-MUTATION-OWNER-TARGET-B @ 0=",
-                            "_EXT4-MUTATION-OWNER-COUNT-B @ 0=",
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                             (
                                 "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
                                 "_EXT4-BYTES-ZERO?"
@@ -23157,10 +25669,7 @@ def test_depth_positive_write_rejects_extent_node_in_journal_ring(
                             "_EXT4-MUTATION-MAP-TARGET @ 0=",
                             "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
                             "_EXT4-MUTATION-MAP-HITS @ 0=",
-                            "_EXT4-MUTATION-OWNER-TARGET @ 0=",
-                            "_EXT4-MUTATION-OWNER-COUNT @ 0=",
-                            "_EXT4-MUTATION-OWNER-TARGET-B @ 0=",
-                            "_EXT4-MUTATION-OWNER-COUNT-B @ 0=",
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                             (
                                 "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
                                 "_EXT4-BYTES-ZERO?"
