@@ -264,6 +264,7 @@ REQUIRE ../vfs.f
 \ +15416   mount-generation authenticated-empty-orphan recovery authority
 \ +15424   mount-generation modern/legacy orphan protocol counts
 \ +15440   caller-installed trusted write-clock provider and context
+\ +15456   mount-scoped protocol-home ownership certificate
 
    0 CONSTANT _EXT4-C.SB
 1024 CONSTANT _EXT4-C.BLOCK
@@ -361,7 +362,8 @@ REQUIRE ../vfs.f
 15432 CONSTANT _EXT4-C.O.LEGACY-ACTIVE
 15440 CONSTANT _EXT4-C.WCLOCK-XT
 15448 CONSTANT _EXT4-C.WCLOCK-CTX
-15456 CONSTANT _EXT4-CTX-SIZE
+15456 CONSTANT _EXT4-C.J.PROTOCOL-OWNERS
+15464 CONSTANT _EXT4-CTX-SIZE
 
 : _EXT4-CTX  ( vfs -- ctx )  V.BCTX @ ;
 : _EXT4-READY?  ( vfs -- flag )
@@ -969,6 +971,11 @@ VARIABLE _EXT4-MUTATION-OWNER-TARGET
 VARIABLE _EXT4-MUTATION-OWNER-COUNT
 VARIABLE _EXT4-MUTATION-OWNER-TARGET-B
 VARIABLE _EXT4-MUTATION-OWNER-COUNT-B
+VARIABLE _EXT4-MUTATION-OWNER-INO
+VARIABLE _EXT4-MUTATION-PROTOCOL-CTX
+VARIABLE _EXT4-MUTATION-PROTOCOL-ACTIVE
+VARIABLE _EXT4-MUTATION-PROTOCOL-XT
+VARIABLE _EXT4-MUTATION-PROTOCOL-PROOF-XT
 VARIABLE _EXT4-MOA-FIRST
 VARIABLE _EXT4-MOA-COUNT
 
@@ -983,10 +990,11 @@ VARIABLE _EXT4-MUTATION-ROLE-XT
 VARIABLE _EXT4-MMA-FIRST
 VARIABLE _EXT4-MMA-COUNT
 
-\ Normal read validation leaves the mutation-owner range empty.  A bounded
-\ mutation proof temporarily sets it while validating every other allocated
-\ inode, turning any overlapping data or map-metadata reference into a corrupt
-\ cross-link refusal.
+\ Normal read validation leaves both mutation-owner ranges and the protocol
+\ scope empty.  A bounded mutation proof temporarily publishes them while
+\ validating every other allocated inode, turning any overlapping data or
+\ map-metadata reference into a corrupt cross-link refusal.  The protocol hook
+\ is late-bound after the journal geometry helpers have been defined.
 : _EXT4-MUTATION-OWNER-ALIASES?  ( first count -- flag )
     _EXT4-MOA-COUNT ! _EXT4-MOA-FIRST !
     _EXT4-MUTATION-OWNER-COUNT @ IF
@@ -996,12 +1004,31 @@ VARIABLE _EXT4-MMA-COUNT
         _EXT4-MUTATION-OWNER-TARGET @
         _EXT4-MUTATION-OWNER-COUNT @ + U< AND IF TRUE EXIT THEN
     THEN
-    _EXT4-MUTATION-OWNER-COUNT-B @ 0= IF FALSE EXIT THEN
-    _EXT4-MUTATION-OWNER-TARGET-B @
-    _EXT4-MOA-FIRST @ _EXT4-MOA-COUNT @ + U<
-    _EXT4-MOA-FIRST @
-    _EXT4-MUTATION-OWNER-TARGET-B @
-    _EXT4-MUTATION-OWNER-COUNT-B @ + U< AND ;
+    _EXT4-MUTATION-OWNER-COUNT-B @ IF
+        _EXT4-MUTATION-OWNER-TARGET-B @
+        _EXT4-MOA-FIRST @ _EXT4-MOA-COUNT @ + U<
+        _EXT4-MOA-FIRST @
+        _EXT4-MUTATION-OWNER-TARGET-B @
+        _EXT4-MUTATION-OWNER-COUNT-B @ + U< AND IF TRUE EXIT THEN
+    THEN
+    _EXT4-MUTATION-PROTOCOL-ACTIVE @ 0= IF FALSE EXIT THEN
+    _EXT4-MUTATION-PROTOCOL-CTX @ 0=
+    _EXT4-MUTATION-PROTOCOL-XT @ 0= OR IF TRUE EXIT THEN
+    _EXT4-MOA-FIRST @ _EXT4-MOA-COUNT @
+    _EXT4-MUTATION-PROTOCOL-CTX @
+    _EXT4-MUTATION-PROTOCOL-XT @ EXECUTE ;
+
+\ The filesystem-wide proof implementation follows the generic inode scanner.
+\ Every mutating entry point reaches this fail-closed forward hook only after
+\ the complete driver source has bound it.
+: _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS  ( ctx -- ior )
+    DUP 0= IF DROP VFS-E-INVALID EXIT THEN
+    DUP _EXT4-C.J.PROTOCOL-OWNERS + @ -1 = IF DROP 0 EXIT THEN
+    _EXT4-MUTATION-PROTOCOL-PROOF-XT @ ?DUP IF
+        EXECUTE
+    ELSE
+        DROP VFS-E-CORRUPT
+    THEN ;
 
 : _EXT4-MUTATION-MAP-ALIASES?  ( first count -- flag )
     _EXT4-MMA-COUNT ! _EXT4-MMA-FIRST !
@@ -4602,6 +4629,11 @@ VARIABLE _EXT4-RW-GDT-BLOCK
     _EXT4-IR-BLOCK @ _EXT4-JV-CTX @ _EXT4-C.J.INODE-TABLE-BLOCK + !
     _EXT4-IR-OFF @ _EXT4-JV-CTX @ _EXT4-C.J.INODE-TABLE-OFF + !
     _EXT4-JV-CTX @ _EXT4-C.INODE + DUP _EXT4-JV-IN !
+    DUP _EXT4-I.FILE-ACL-HI + W@
+    SWAP _EXT4-I.FILE-ACL-LO + L@ OR IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JV-IN @
     _EXT4-I.MODE + W@ 0xF000 AND 0x8000 <> IF
         EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
     THEN
@@ -7685,6 +7717,9 @@ VARIABLE _EXT4-JAC-WRITER
   ( ctx guard super-buffer scratch-buffer writer|0 -- ior )
     _EXT4-JAC-WRITER ! _EXT4-JAC-SCRATCH ! _EXT4-JAC-SUPER !
     _EXT4-JAC-GUARD ! _EXT4-JAC-CTX !
+    _EXT4-JAC-CTX @ _EXT4-C.J.PROTOCOL-OWNERS + @ -1 <> IF
+        VFS-E-CORRUPT EXIT
+    THEN
     _EXT4-JAC-CTX @ _EXT4-C.BLOCK + _EXT4-JAC-SUPER @
     _EXT4-JAC-CTX @ _EXT4-C.BSIZE + @ MOVE
     _EXT4-JAC-SUPER @ _EXT4-JAC-GUARD @ _EXT4-JAC-CTX @
@@ -7800,6 +7835,7 @@ VARIABLE _EXT4-JAC-WRITER
     _EXT4-SB.STATE + W@ 1 <> IF VFS-E-CORRUPT EXIT THEN
     _EXT4-JWA-CTX @ _EXT4-C.J.START + @ IF VFS-E-CORRUPT EXIT THEN
     _EXT4-JWA-CTX @ _EXT4-C.J.WITNESS + @ IF VFS-E-BUSY EXIT THEN
+    _EXT4-JWA-CTX @ _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS ?DUP IF EXIT THEN
     _EXT4-JWA-CTX @ _EXT4-RECOVERY-MEDIA ?DUP IF EXIT THEN
     0 _EXT4-JWA-CTX @ _EXT4-READ-JBLOCK ?DUP IF EXIT THEN
     _EXT4-JWA-CTX @ _EXT4-C.BLOCK + _EXT4-JWA-WRITER @
@@ -7998,6 +8034,9 @@ VARIABLE _EXT4-JEP-SENTINEL
 : _EXT4-JTX-PREFLIGHT  ( writer -- ior )
     DUP _EXT4-JEP-WRITER ! _EXT4-JTX-ACTIVE? ?DUP IF EXIT THEN
     _EXT4-JEP-WRITER @ _EXT4-JWR.CTX + @ DUP _EXT4-JEP-CTX !
+    DUP _EXT4-C.J.PROTOCOL-OWNERS + @ -1 <> IF
+        DROP VFS-E-CORRUPT EXIT
+    THEN
     _EXT4-C.RECOVERY + @ 0= IF VFS-E-INVALID EXIT THEN
     _EXT4-JEP-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ 0= IF
         VFS-E-INVALID EXIT
@@ -10168,6 +10207,33 @@ VARIABLE _EXT4-JFO-CERT-GEN
 VARIABLE _EXT4-JFO-CERT-FIRST
 VARIABLE _EXT4-JFO-CERT-COUNT
 
+VARIABLE _EXT4-MPH-FIRST
+VARIABLE _EXT4-MPH-COUNT
+VARIABLE _EXT4-MPH-CTX
+VARIABLE _EXT4-MPH-ROOT
+
+\ Activation, emission, checkpoint cleanup, and deactivation may replace the
+\ primary superblock and any block in the authenticated journal extent tuple.
+\ Test one inode-owned range against that complete protocol-home set without
+\ flattening its bounded, possibly discontiguous extents into a fixed table.
+: _EXT4-MUTATION-PROTOCOL-HOME-ALIASES?  ( first count ctx -- flag )
+    _EXT4-MPH-CTX ! _EXT4-MPH-COUNT ! _EXT4-MPH-FIRST !
+    _EXT4-MPH-FIRST @ _EXT4-MPH-COUNT @
+    _EXT4-MPH-CTX @ _EXT4-PRIMARY-SUPER-BLOCK 1
+    _EXT4-BLOCK-RANGES-OVERLAP? IF TRUE EXIT THEN
+    _EXT4-MPH-CTX @ _EXT4-C.J.WITNESS-SUPER +
+    _EXT4-SB.JOURNAL-BLOCKS + DUP _EXT4-MPH-ROOT !
+    2 + W@ 0 ?DO
+        _EXT4-MPH-FIRST @ _EXT4-MPH-COUNT @
+        _EXT4-MPH-ROOT @ 12 I 12 * + + DUP
+        8 + L@ SWAP 4 + W@
+        _EXT4-BLOCK-RANGES-OVERLAP? IF TRUE UNLOOP EXIT THEN
+    LOOP
+    FALSE ;
+
+' _EXT4-MUTATION-PROTOCOL-HOME-ALIASES?
+_EXT4-MUTATION-PROTOCOL-XT !
+
 : _EXT4-JFO-CERT-INVALIDATE  ( -- )
     0 _EXT4-JFO-CERT-VALID ! ;
 
@@ -10288,9 +10354,10 @@ VARIABLE _EXT4-JFO-CERT-COUNT
             _EXT4-JFO-GROUP-BASE @ I + 1+ DUP _EXT4-JFO-INO !
             _EXT4-JFO-TARGET-INO @ <> IF
                 _EXT4-JFO-LOAD-CURRENT-INODE ?DUP IF UNLOOP EXIT THEN
-                _EXT4-JFO-CHECK-CURRENT-INODE ?DUP IF
-                    UNLOOP EXIT
-                THEN
+                _EXT4-JFO-INO @ _EXT4-MUTATION-OWNER-INO !
+                _EXT4-JFO-CHECK-CURRENT-INODE _EXT4-JFO-IOR !
+                0 _EXT4-MUTATION-OWNER-INO !
+                _EXT4-JFO-IOR @ ?DUP IF UNLOOP EXIT THEN
             THEN
         THEN
     LOOP
@@ -10305,6 +10372,50 @@ VARIABLE _EXT4-JFO-CERT-COUNT
         1 _EXT4-JFO-GROUP +!
     REPEAT
     0 ;
+
+VARIABLE _EXT4-RPH-CTX
+VARIABLE _EXT4-RPH-MAP-LIMIT
+VARIABLE _EXT4-RPH-IOR
+
+\ Certify every activation/emission/reset home before a clean journal becomes
+\ writable.  Inode 8 is the sole excluded record: journal authentication has
+\ already required its checksum-covered, self-contained exact extent tuple,
+\ disjoint primary-super role, and zero external-xattr pointer.  Every other
+\ allocated inode is checked through the ordinary complete map/xattr parser
+\ while the protocol-home predicate is published.  The certificate lives in
+\ this mounted context and is invalidated by the next mount-state reset.
+: _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS-IMPL  ( ctx -- ior )
+    DUP _EXT4-RPH-CTX ! 0= IF VFS-E-INVALID EXIT THEN
+    0 _EXT4-RPH-CTX @ _EXT4-C.J.PROTOCOL-OWNERS + !
+    _EXT4-MUTATION-OWNER-TARGET @
+    _EXT4-MUTATION-OWNER-COUNT @ OR
+    _EXT4-MUTATION-OWNER-TARGET-B @ OR
+    _EXT4-MUTATION-OWNER-COUNT-B @ OR
+    _EXT4-MUTATION-OWNER-INO @ OR
+    _EXT4-MUTATION-MAP-TARGET @ OR
+    _EXT4-MUTATION-MAP-ACTIVE @ OR
+    _EXT4-MUTATION-MAP-HITS @ OR
+    _EXT4-MUTATION-PROTOCOL-CTX @ OR
+    _EXT4-MUTATION-PROTOCOL-ACTIVE @ OR IF VFS-E-BUSY EXIT THEN
+    _EXT4-JFO-CERT-INVALIDATE
+    _EXT4-RPH-CTX @ _EXT4-JFO-CTX !
+    _EXT4-JOURNAL-INODE _EXT4-JFO-TARGET-INO !
+    _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-RPH-MAP-LIMIT !
+    0 _EXT4-MAP-VALIDATION-LIMIT !
+    _EXT4-RPH-CTX @ _EXT4-MUTATION-PROTOCOL-CTX !
+    -1 _EXT4-MUTATION-PROTOCOL-ACTIVE !
+    _EXT4-JFO-SCAN-OTHER-INODES _EXT4-RPH-IOR !
+    0 _EXT4-MUTATION-PROTOCOL-ACTIVE !
+    0 _EXT4-MUTATION-OWNER-INO !
+    0 _EXT4-MUTATION-PROTOCOL-CTX !
+    _EXT4-RPH-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
+    _EXT4-RPH-IOR @ 0= IF
+        -1 _EXT4-RPH-CTX @ _EXT4-C.J.PROTOCOL-OWNERS + !
+    THEN
+    _EXT4-RPH-IOR @ ;
+
+' _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS-IMPL
+_EXT4-MUTATION-PROTOCOL-PROOF-XT !
 
 VARIABLE _EXT4-UOW-INO
 VARIABLE _EXT4-UOW-FIRST
@@ -13144,6 +13255,9 @@ VARIABLE _EXT4-JCE-DATA-GDT-HOME
     _EXT4-JWR-COMMITTED <> IF VFS-E-BUSY EXIT THEN
     _EXT4-JCP-WRITER @ _EXT4-JWR.FAULT + @ IF VFS-E-BUSY EXIT THEN
     _EXT4-JCP-WRITER @ _EXT4-JWR.CTX + @ DUP _EXT4-JCP-CTX !
+    DUP _EXT4-C.J.PROTOCOL-OWNERS + @ -1 <> IF
+        DROP VFS-E-CORRUPT EXIT
+    THEN
     _EXT4-C.J.WRITER-CURRENT + @ 0= IF VFS-E-INVALID EXIT THEN
     _EXT4-JCP-CTX @ _EXT4-C.READY + @ DUP _EXT4-JCP-ENTRY-READY !
     DUP 0= SWAP -1 = OR 0= IF VFS-E-INVALID EXIT THEN
@@ -13720,6 +13834,7 @@ VARIABLE _EXT4-OEC-NEXT
     _EXT4-OEC-V @ V.VOLUME @ _EXT4-IO-VOL @ <> IF
         VFS-E-INVALID EXIT
     THEN
+    _EXT4-OEC-CTX @ _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS ?DUP IF EXIT THEN
     _EXT4-OEC-CTX @ _EXT4-RECOVERY-MEDIA ?DUP IF EXIT THEN
     0 _EXT4-OEC-CTX @ _EXT4-READ-JBLOCK ?DUP IF EXIT THEN
     _EXT4-OEC-CTX @ _EXT4-C.J.HEAD + @ DUP 0= IF
@@ -13780,6 +13895,9 @@ VARIABLE _EXT4-JDE-IOR
     _EXT4-JDE-WRITER @ _EXT4-JWR.FAULT + @ IF VFS-E-BUSY EXIT THEN
     _EXT4-JDE-WRITER @ _EXT4-JWR-IDLE-CLEAN? 0= IF VFS-E-BUSY EXIT THEN
     _EXT4-JDE-WRITER @ _EXT4-JWR.CTX + @ DUP _EXT4-JDE-CTX !
+    DUP _EXT4-C.J.PROTOCOL-OWNERS + @ -1 <> IF
+        DROP VFS-E-CORRUPT EXIT
+    THEN
     _EXT4-C.RECOVERY + @ 0= IF VFS-E-INVALID EXIT THEN
     _EXT4-JDE-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ 0= IF
         VFS-E-INVALID EXIT
@@ -13904,6 +14022,7 @@ VARIABLE _EXT4-RT-V
 
 : _EXT4-FINISH-RECOVERY-LANDING  ( ctx vfs -- ior )
     _EXT4-RT-V ! _EXT4-RT-CTX !
+    _EXT4-RT-CTX @ _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS ?DUP IF EXIT THEN
     _EXT4-RT-CTX @ _EXT4-RECOVERY-MEDIA ?DUP IF EXIT THEN
     _EXT4-RT-CTX @ _EXT4-C.J.WITNESS + @
     _EXT4-JW-ACTIVATION = IF
@@ -13966,6 +14085,20 @@ VARIABLE _EXT4-RT-V
     _EXT4-RJ-CTX @ _EXT4-RECOVERY-MEDIA ?DUP IF EXIT THEN
     _EXT4-RJ-CTX @ _EXT4-C.J.WITNESS + @
     _EXT4-JW-ACTIVATION = IF
+        \ AKW1 precedes every inode-map mutation.  A dirty-super bootstrap
+        \ therefore can and must upgrade to strict whole-filesystem authority
+        \ before completing any witnessed protocol write.  Ordinary committed
+        \ replay keeps its independent recovery proof until its afterimages
+        \ have landed and can be authenticated as one current filesystem.
+        _EXT4-RJ-CTX @ _EXT4-C.J.STRICT + @ -1 <> IF
+            _EXT4-RJ-CTX @ _EXT4-AUTHENTICATE-REST ?DUP IF EXIT THEN
+            _EXT4-RJ-CTX @ _EXT4-C.J.WITNESS + @
+            _EXT4-JW-ACTIVATION <> IF
+                EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+            THEN
+        THEN
+        _EXT4-RJ-CTX @ _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS
+        ?DUP IF EXIT THEN
         _EXT4-RJ-CTX @ _EXT4-RJ-V @
         _EXT4-RESOLVE-ACTIVATION-WITNESS ?DUP IF EXIT THEN
     THEN
@@ -13975,6 +14108,7 @@ VARIABLE _EXT4-RT-V
     0 _EXT4-RJ-CTX @ _EXT4-C.J.REVOKE-HITS + !
     0 _EXT4-RJ-CTX @ _EXT4-C.J.REVOKE-READY + !
     _EXT4-RJ-CTX @ _EXT4-C.J.START + @ IF
+        0 _EXT4-RJ-CTX @ _EXT4-C.J.PROTOCOL-OWNERS + !
         _EXT4-RJ-CTX @ _EXT4-C.J.FEATURES + @ DUP
         _EXT4-JBD2-I-RECOVERY = SWAP
         _EXT4-JBD2-I-RECOVERY-REVOKE = OR 0= IF
@@ -14028,10 +14162,15 @@ VARIABLE _EXT4-RT-V
     _EXT4-RJ-CTX @ _EXT4-RJ-V @
     _EXT4-RELOAD-AUTHENTICATED ?DUP IF EXIT THEN
     _EXT4-RJ-CTX @ _EXT4-VALIDATE-ROOT ?DUP IF EXIT THEN
+    \ Untrusted replay can replace inode-table afterimages, so no certificate
+    \ obtained before it can authorize cleanup homes.  The current strict
+    \ image must pass a fresh complete scan.  A retained orphan performs that
+    \ scan itself after this routine returns.
     _EXT4-RJ-CTX @ _EXT4-C.O.ACTIVE + @ IF
         -1 _EXT4-RJ-CTX @ _EXT4-C.J.REPLAYED + !
         0 EXIT
     THEN
+    _EXT4-RJ-CTX @ _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS ?DUP IF EXIT THEN
     _EXT4-RJ-CTX @ _EXT4-PREPARE-CLEAR
     _EXT4-RJ-CTX @ _EXT4-C.J.START + @ 0=
     _EXT4-RJ-CTX @ _EXT4-C.J.WITNESS + @ 0<> AND
@@ -14221,6 +14360,7 @@ VARIABLE _EXT4-MOC-TRANSIENT
     _EXT4-MOC-V@ _EXT4-ATTACHED? 0= IF VFS-E-STALE EXIT THEN
     _EXT4-MOC-V@ V.VOLUME @ _EXT4-IO-VOL @ <> IF
         VFS-E-INVALID EXIT THEN
+    _EXT4-MOC@ _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS ?DUP IF EXIT THEN
     _EXT4-MOC@ _EXT4-RECOVERY-MEDIA ?DUP IF EXIT THEN
     _EXT4-MOC@ _EXT4-FIND-SINGLETON-ORPHAN
     _EXT4-MOC-IOR ! _EXT4-MOC-RECORD !
@@ -14311,10 +14451,11 @@ VARIABLE _EXT4-M-FRESH
 
 : _EXT4-MOUNT-AUTHENTICATE  ( vfs -- ior )
     DUP _EXT4-M-V !
-    \ Invalidate every retained transaction pointer before any remount check
-    \ or media-derived context reset can fail.
+    \ Invalidate retained transaction and protocol-write authority before any
+    \ remount check or media-derived context reset can fail.
     _EXT4-M-V @ V.BCTX @ ?DUP IF
-        0 SWAP _EXT4-C.J.WRITER-CURRENT + !
+        0 OVER _EXT4-C.J.WRITER-CURRENT + !
+        0 SWAP _EXT4-C.J.PROTOCOL-OWNERS + !
     THEN
     DUP _EXT4-ATTACHED? 0= IF DROP EXT4-D-ATTACHMENT _EXT4-CORRUPT EXIT THEN
     DROP
@@ -14348,6 +14489,7 @@ VARIABLE _EXT4-M-FRESH
     0 _EXT4-M-CTX @ _EXT4-C.J.WITNESS-NEW-CHECKSUM + !
     0 _EXT4-M-CTX @ _EXT4-C.J.WRITE-ACTIVE + !
     0 _EXT4-M-CTX @ _EXT4-C.J.WRITER-CURRENT + !
+    0 _EXT4-M-CTX @ _EXT4-C.J.PROTOCOL-OWNERS + !
     0 _EXT4-M-CTX @ _EXT4-C.O.ACTIVE + !
     0 _EXT4-M-CTX @ _EXT4-C.O.MODERN-ACTIVE + !
     0 _EXT4-M-CTX @ _EXT4-C.O.LEGACY-ACTIVE + !
@@ -14361,7 +14503,8 @@ VARIABLE _EXT4-M-FRESH
         \ strict whole-filesystem validation follows replay while the journal
         \ is still intact and replayable.
         _EXT4-M-CTX @ _EXT4-VALIDATE-JOURNAL ?DUP IF EXIT THEN
-        _EXT4-M-CTX @ _EXT4-M-V @ _EXT4-RECOVER-JOURNAL ?DUP IF EXIT THEN
+        _EXT4-M-CTX @ _EXT4-M-V @
+        _EXT4-RECOVER-JOURNAL ?DUP IF EXIT THEN
         _EXT4-M-CTX @ _EXT4-M-V @
         _EXT4-RELOAD-AUTHENTICATED ?DUP IF EXIT THEN
     ELSE

@@ -27,12 +27,17 @@ source-buffer span and invokes an immediate `EVALUATE-CHECKED` shim;
 transport bound applies to one injected physical line, not to total driver
 size.
 
-The checked-in 800,000,000-step value is a qualification watchdog and
-measurement guide, not an ext4 implementation capacity or a reason to weaken
-functionality. If correct source legitimately outgrows it, the budget must be
-revisited from measured system resources. The harness still performs a real
-cold source build and requires the `EXT4-SOURCE-READY` marker with no Forth
-diagnostic. The current source passes that cold-build qualification.
+The checked-in 800,000,000-step cold-source value is a qualification watchdog
+and measurement guide, not an ext4 implementation capacity or a reason to
+weaken functionality. If correct source legitimately outgrows it, the budget
+must be revisited from measured system resources. The harness still performs a
+real cold source build and requires the `EXT4-SOURCE-READY` marker with no
+Forth diagnostic. Runtime recovery journeys use a separate 1,200,000,000-step
+watchdog: the fresh-proof W18 crash-repair journey that exceeded the old
+ceiling completed in 811,281,646 steps, on one core, below 1 GiB peak RSS with
+no swapping. `EXT4_REPORT_STEPS` reports actual use and source/backing media;
+budget failures include used and allowed steps. The current source passes both
+qualifications without a compiled cache or certificate-preservation shortcut.
 
 ## Mounting
 
@@ -78,20 +83,20 @@ root, mount verifies:
 - the internal JBD2 journal superblock, size-derived inode map, and matching
   UUID. Superblock `s_jnl_backup_type` must be `1`; its checksum-covered 68-byte
   `s_jnl_blocks` tuple must exactly reproduce inode 8's `i_block`, size-high,
-  and size-low fields. Journal inode 8 is pinned to generation zero and an
-  inline depth-0 extent root containing one through four initialized extents
-  with exact gapless EOF coverage and bounded, nonoverlapping physical
-  ranges. This recovery-authority constraint does not narrow the general
-  file reader's extent-depth or legacy-map support. The inode size must be a
-  nonzero whole number of filesystem blocks, fit JBD2's 32-bit `s_maxlen`,
-  and not exceed the filesystem block count. Mount expands that authenticated
-  inline tuple directly into an exact map plus a half-full power-of-two
-  uniqueness table from the caller's arena; arena exhaustion returns
-  `VFS-E-NOMEM` rather than imposing a journal-size constant. It rejects holes,
-  mappings beyond EOF, out-of-range or aliased blocks, and any journal block
-  that overlaps a descriptor-authenticated block/inode bitmap or inode-table
-  range, any deterministic sparse super/GDT/reserved-GDT range, or inode-8
-  bootstrap metadata; and
+  and size-low fields. Journal inode 8 is pinned to generation zero, has no
+  external-xattr block, and uses an inline depth-0 extent root containing one
+  through four initialized extents with exact gapless EOF coverage and bounded,
+  nonoverlapping physical ranges. This recovery-authority constraint does not
+  narrow the general file reader's extent-depth or legacy-map support. The inode
+  size must be a nonzero whole number of filesystem blocks, fit JBD2's 32-bit
+  `s_maxlen`, and not exceed the filesystem block count. Mount expands that
+  authenticated inline tuple directly into an exact map plus a half-full
+  power-of-two uniqueness table from the caller's arena; arena exhaustion
+  returns `VFS-E-NOMEM` rather than imposing a journal-size constant. It rejects
+  holes, mappings beyond EOF, out-of-range or aliased blocks, and any journal
+  block that overlaps a descriptor-authenticated block/inode bitmap or
+  inode-table range, any deterministic sparse super/GDT/reserved-GDT range, or
+  inode-8 bootstrap metadata; and
 - the designated group-1 recovery chain: checksum-valid sparse backup super,
   checksum-valid backup-GDT group-0 descriptor, live inode-8 allocation bit,
   checksum-valid inode 8, and exact tuple equality. Dirty bootstrap uses this
@@ -248,6 +253,27 @@ primary super checksum is torn and no private `AKR1`
 witness exists, preflight must find a valid primary-super replacement and then
 authenticate that transaction's commit before the replay pass can perform its
 first home write. A candidate in an incomplete tail grants no authority.
+
+Before activation, private emission, checkpoint cleanup, clean deactivation,
+or recovery landing may replace a journal block or the filesystem block that
+contains the primary superblock, a mount-scoped reverse-ownership proof scans
+every allocated inode other than inode 8 through the complete ordinary
+map/external-xattr validator. Any referenced range that intersects the exact
+authenticated journal extent tuple or the primary-super home refuses the write
+before media mutation. Inode 8 is the sole exclusion because journal
+authentication requires its exact self-contained inline tuple and a zero
+external-xattr pointer. Proof scope is fail-closed and constant-workspace; every
+return restores the shared mutation/map bounds and clears its temporary inode,
+context, and active publications.
+
+A committed replay invalidates this certificate before preflight and keeps it
+invalid across replay, flush, authenticated reload, and root validation. The
+authoritative post-replay image must pass a fresh full proof before any journal
+reset, superblock clear, witness removal, or anchor retirement. If replay
+retains an orphan, recovery returns without the certificate and singleton
+cleanup performs the same proof before convergence, activation, or any other
+write. No retained writer image or pre-replay certificate substitutes for
+checking the current filesystem.
 
 Recovery requires a physically writable, flush-capable volume. Home writes are
 flushed and the resulting filesystem is strictly revalidated, including the
@@ -508,7 +534,7 @@ aggregate superblock update. This builder does not remove an extent or legacy
 map entry, change `i_blocks`, stage a revoke, or free an inode, and it emits no
 media write.
 
-Mutation-side admission now has two reusable authorities beyond that free-only
+Mutation-side admission also has reusable authorities beyond that free-only
 builder. `_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER` scans every authenticated allocated
 inode and proves that an arbitrary nonempty physical range is mapped only by
 the caller's already-authenticated target inode. The ambient probe is
@@ -522,6 +548,12 @@ inode-table after-image to fall in exactly the named descriptor's table and in
 no other table, block/inode bitmap, sparse-super/GDT interval, or journal
 extent. These words provide the range and live-inode-table authority needed by
 an in-place data mutation, but do not stage or emit one by themselves.
+
+The mounted context additionally caches the successful protocol-home proof
+described above. It is acquired lazily, so a clean read-only mount does not pay
+for another whole-filesystem scan. Activation, emission, checkpoint,
+deactivation, and recovery cleanup fail closed unless the certificate is
+exactly valid; mount-state reset and active replay clear it.
 
 `_EXT4-JTX-STAGE-FREE-ORPHAN-INODE` is the corresponding first inode-release
 builder. It reauthenticates one canonical singleton plan record and accepts
@@ -935,8 +967,8 @@ valid checkpoint phase rather than leaving replayable authority available for
 same-session retry.
 
 Focused mounted-client qualification separates media-clean refusal from the
-long durability journey so each remains within the canonical emulator step
-budget. Zero length leaves the arena unchanged; a stale generation allocates
+long durability journey so each remains within its measured emulator
+watchdog. Zero length leaves the arena unchanged; a stale generation allocates
 the one reusable workspace but emits no write or flush and leaves the clean
 journal inactive. A fresh journey performs two disjoint overwrites of the same
 file through one writer, preserves the first edit in the second full-block RMW,

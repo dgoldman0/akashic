@@ -2048,7 +2048,7 @@ def run_recovery_forth(
     ) = None,
     capture_media: Path | None = None,
     capture_prior_flush_media: Path | None = None,
-    max_steps: int = 800_000_000,
+    max_steps: int = 1_200_000_000,
 ) -> tuple[str, tuple[tuple[str, int, int], ...], str]:
     """Run recovery on private mutable media and return its ordered I/O trace."""
     assert (
@@ -2167,12 +2167,19 @@ def run_recovery_forth(
         'ELSE ." EXT4-STACK-LEAK " . THEN'
     )
     payload = ("\n".join((*lines, stack_check, "BYE")) + "\n").encode()
-    _feed_until_idle(system, payload, max_steps)
+    journey_steps = _feed_until_idle(system, payload, max_steps)
+    if os.environ.get("EXT4_REPORT_STEPS"):
+        print(
+            "[*] ext4 recovery journey: "
+            f"{journey_steps:,}/{max_steps:,} steps "
+            f"({image.name} -> {backing.name})"
+        )
     output = fat_harness.uart_text(uart)
     _assert_no_forth_diagnostics(output)
     if not system.cpu.halted or not output.endswith("Bye!\r\n"):
         raise AssertionError(
-            "ext4 recovery journey did not consume BYE and halt:\n"
+            "ext4 recovery journey did not consume BYE and halt "
+            f"after {journey_steps:,}/{max_steps:,} steps:\n"
             + output[-2000:]
         )
     _assert_emitted(output, "EXT4-STACK-CLEAN")
@@ -3640,6 +3647,78 @@ def test_jbd2_recovery_rejects_checksum_valid_journal_backup_mismatch(
     )
     assert "10 12 0" in output, output[-1500:]
     assert trace == ()
+
+
+def test_jbd2_journal_inode_rejects_checksum_valid_external_xattr(
+    canonical_images: dict[str, Path], tmp_path: Path
+) -> None:
+    image = canonical_images["primary-1k-i256"]
+    superblock, journal_inode, inode_offset = _ext4_inode_record(image, 8)
+    _, xattr_owner, _ = _ext4_inode_record(image, 14)
+    assert struct.unpack_from("<I", journal_inode, 0x68)[0] == 0
+    assert struct.unpack_from("<H", journal_inode, 0x76)[0] == 0
+    xattr_block = struct.unpack_from("<I", xattr_owner, 0x68)[0]
+    assert xattr_block != 0
+
+    patched_inode = bytearray(journal_inode)
+    struct.pack_into("<I", patched_inode, 0x68, xattr_block)
+    patched_inode = bytearray(
+        _inode_with_checksum(superblock, 8, patched_inode)
+    )
+    expected_media = bytearray(image.read_bytes())
+    expected_media[inode_offset : inode_offset + len(patched_inode)] = (
+        patched_inode
+    )
+
+    backing = tmp_path / "journal-inode-external-xattr.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            image,
+            backing,
+            [
+                "T-ARENA T-VOLUME EXT4-NEW CONSTANT _JX-IOR CONSTANT _JX-V",
+                "_JX-V _EXT4-CTX CONSTANT _JX-CTX",
+                (
+                    _forth_conjunction(
+                        [
+                            (
+                                "_JX-IOR VFS-IOR-REASON "
+                                "VFS-R-CORRUPT ="
+                            ),
+                            (
+                                "_JX-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-FORMAT ="
+                            ),
+                            (
+                                "_JX-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-CORRUPT ="
+                            ),
+                            (
+                                "_JX-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-JOURNAL ="
+                            ),
+                            "_JX-V V.LIFECYCLE @ VFS-L-NEW =",
+                            "_JX-V _EXT4-READY? 0=",
+                            "_JX-CTX _EXT4-C.J.WRITER + @ 0=",
+                            "_JX-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                            "_JX-CTX _EXT4-C.J.REPLAYED + @ 0=",
+                            (
+                                "_JX-CTX _EXT4-C.J.PROTOCOL-OWNERS + "
+                                "@ 0="
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-JOURNAL-XATTR-REFUSED" THEN'
+                ),
+            ],
+            patches=((inode_offset, bytes(patched_inode)),),
+            capture_media=backing,
+        )
+        _assert_emitted(output, "EXT4-JOURNAL-XATTR-REFUSED")
+        assert trace == ()
+        assert media_sha256 == hashlib.sha256(expected_media).hexdigest()
+    finally:
+        backing.unlink(missing_ok=True)
 
 
 @pytest.mark.parametrize(
@@ -5576,8 +5655,15 @@ def test_jbd2_writer_activation_is_ordered_and_publishes_after_cleanup(
                     "_AW-CTX _EXT4-C.J.WITNESS-CHECKSUM + @ 0= AND "
                     "_AW-CTX _EXT4-C.J.WITNESS-NEW-CHECKSUM + @ 0= AND "
                     "_AW-CTX _EXT4-C.J.ANCHOR + @ 0= AND "
+                    "_AW-CTX _EXT4-C.J.PROTOCOL-OWNERS + @ -1 = AND "
                     "_AW-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<> AND "
                     "_AW-CTX _EXT4-C.READY + @ 0<> AND "
+                    "_EXT4-MUTATION-PROTOCOL-CTX @ 0= AND "
+                    "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0= AND "
+                    "_EXT4-MUTATION-OWNER-INO @ 0= AND "
+                    "_EXT4-MUTATION-MAP-TARGET @ 0= AND "
+                    "_EXT4-MUTATION-MAP-ACTIVE @ 0= AND "
+                    "_EXT4-MUTATION-MAP-HITS @ 0= AND "
                     "_AW-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
                     "_AW-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
                     "_EXT4-INCOMPAT-RECOVER AND 0<> AND "
@@ -5599,6 +5685,178 @@ def test_jbd2_writer_activation_is_ordered_and_publishes_after_cleanup(
         assert guard == bytes(1024)
     finally:
         activated.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("home_role", ("journal-ring", "primary-super"))
+def test_jbd2_writer_activation_rejects_other_inode_protocol_home_alias(
+    writer_activation_fixture: dict[str, object],
+    tmp_path: Path,
+    home_role: str,
+) -> None:
+    image = writer_activation_fixture["image"]
+    layout = writer_activation_fixture["layout"]
+    source_patches = writer_activation_fixture["source_patches"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    clean_super = writer_activation_fixture["clean_super"]
+    old_journal = writer_activation_fixture["old_journal"]
+    old_guard = writer_activation_fixture["old_guard"]
+    assert isinstance(image, Path)
+    assert isinstance(layout, dict)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(guard_physical, int)
+    assert isinstance(journal0_physical, int)
+    assert isinstance(clean_super, bytes)
+    assert isinstance(old_journal, bytes)
+    assert isinstance(old_guard, bytes)
+
+    primary_super = layout["primary_super"]
+    assert isinstance(primary_super, int)
+    candidate = {
+        "journal-ring": guard_physical,
+        "primary-super": primary_super,
+    }[home_role]
+
+    inode_number = 16
+    superblock, inode, inode_offset = _ext4_inode_record(
+        image, inode_number
+    )
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    assert block_size == 1024
+    assert inode_size == len(inode) == 256
+    assert struct.unpack_from("<H", inode, 0x00)[0] & 0xF000 == 0xA000
+    assert struct.unpack_from("<I", inode, 0x20)[0] & 0x0008_0000
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    assert struct.unpack_from("<I", inode, 0x34)[0] == 0
+    assert struct.unpack_from("<H", inode, 0x38)[0] == 1
+    assert struct.unpack_from("<H", inode, 0x3A)[0] == 0
+    assert struct.unpack_from("<I", inode, 0x3C)[0] == 1347
+
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    with image.open("rb") as source:
+        source.seek(inode_home * block_size)
+        original_inode_home = source.read(block_size)
+    assert len(original_inode_home) == block_size
+    patched_inode = bytearray(inode)
+    struct.pack_into("<I", patched_inode, 0x3C, candidate)
+    patched_inode = bytearray(
+        _inode_with_checksum(superblock, inode_number, patched_inode)
+    )
+    expected_inode_home = bytearray(original_inode_home)
+    expected_inode_home[
+        inode_block_offset : inode_block_offset + inode_size
+    ] = patched_inode
+
+    backing = tmp_path / f"jbd2-protocol-owner-{home_role}.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            image,
+            backing,
+            [
+                "T-ARENA T-VOLUME EXT4-NEW CONSTANT _PO-M-IOR CONSTANT _PO-V",
+                "_PO-V _EXT4-CTX CONSTANT _PO-CTX",
+                (
+                    "1 0 0 _PO-CTX _EXT4-JWR-ENSURE "
+                    "CONSTANT _PO-E-IOR CONSTANT _PO-W"
+                ),
+                "_PO-W _EXT4-JWR-ACTIVATE CONSTANT _PO-A-IOR",
+                (
+                    _forth_conjunction(
+                        [
+                            "_PO-M-IOR 0=",
+                            "_PO-E-IOR 0=",
+                            (
+                                "_PO-A-IOR VFS-IOR-REASON "
+                                "VFS-R-CORRUPT ="
+                            ),
+                            (
+                                "_PO-A-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-FORMAT ="
+                            ),
+                            (
+                                "_PO-A-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-CORRUPT ="
+                            ),
+                            (
+                                "_PO-A-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-DATA-MAP ="
+                            ),
+                            "_PO-W 0<>",
+                            "_PO-W _EXT4-JWR-VALID?",
+                            "_PO-W _EXT4-JWR-IDLE-CLEAN?",
+                            (
+                                "_PO-W _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-IDLE ="
+                            ),
+                            (
+                                "_PO-W _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-NONE ="
+                            ),
+                            "_PO-W _EXT4-JWR.FAULT + @ 0=",
+                            "_PO-CTX _EXT4-C.RECOVERY + @ 0=",
+                            (
+                                "_PO-CTX _EXT4-C.J.WRITE-ACTIVE + "
+                                "@ 0="
+                            ),
+                            "_PO-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                            (
+                                "_PO-CTX _EXT4-C.J.PROTOCOL-OWNERS + "
+                                "@ 0="
+                            ),
+                            "_PO-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                            "_EXT4-MUTATION-PROTOCOL-CTX @ 0=",
+                            "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0=",
+                            "_EXT4-MUTATION-OWNER-INO @ 0=",
+                            "_EXT4-MUTATION-MAP-TARGET @ 0=",
+                            "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
+                            "_EXT4-MUTATION-MAP-HITS @ 0=",
+                            "_EXT4-MUTATION-OWNER-TARGET @ 0=",
+                            "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                            "_EXT4-MUTATION-OWNER-TARGET-B @ 0=",
+                            "_EXT4-MUTATION-OWNER-COUNT-B @ 0=",
+                            "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                            "_EXT4-JFO-CERT-VALID @ 0=",
+                        ]
+                    )
+                    + ' IF ." EXT4-PROTOCOL-HOME-OWNER-REFUSED" THEN'
+                ),
+                "0 _PO-V VFS-UNMOUNT CONSTANT _PO-U-IOR",
+                (
+                    "_PO-U-IOR 0= "
+                    "_PO-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    'IF ." EXT4-PROTOCOL-HOME-OWNER-UNMOUNT" THEN'
+                ),
+            ],
+            patches=(
+                *source_patches,
+                (inode_offset, bytes(patched_inode)),
+            ),
+            capture_media=backing,
+        )
+        _assert_emitted(output, "EXT4-PROTOCOL-HOME-OWNER-REFUSED")
+        _assert_emitted(output, "EXT4-PROTOCOL-HOME-OWNER-UNMOUNT")
+        assert trace == ()
+        with backing.open("rb") as source:
+            source.seek(inode_home * block_size)
+            actual_inode_home = source.read(block_size)
+            source.seek(primary_super * block_size)
+            actual_super = source.read(block_size)
+            source.seek(journal0_physical * block_size)
+            actual_journal = source.read(block_size)
+            source.seek(guard_physical * block_size)
+            actual_guard = source.read(block_size)
+        assert actual_inode_home == bytes(expected_inode_home)
+        assert actual_super == clean_super
+        assert actual_journal == old_journal
+        assert actual_guard == old_guard
+    finally:
+        backing.unlink(missing_ok=True)
 
 
 def test_jbd2_writer_emits_one_ordered_transaction_and_retains_afterimages(
@@ -14972,6 +15230,10 @@ def singleton_modern_cleanup_fixture(
                         "_MA-V _EXT4-ATTACHED?",
                         "_MA-CTX _EXT4-C.RECOVERY + @ 0=",
                         "_MA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        (
+                            "_MA-CTX _EXT4-C.J.PROTOCOL-OWNERS + "
+                            "@ -1 ="
+                        ),
                         "_MA-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
                         "_MA-CTX _EXT4-C.J.WRITER + @ 0=",
                         "_MA-CTX _EXT4-C.ARENA + @ _MA-ARENA =",
@@ -15064,6 +15326,10 @@ def _assert_singleton_cleanup_media_converges(
                         "_MR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
                         "_MR-CTX _EXT4-C.RECOVERY + @ 0=",
                         "_MR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        (
+                            "_MR-CTX _EXT4-C.J.PROTOCOL-OWNERS + "
+                            "@ -1 ="
+                        ),
                         "_MR-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
                         "_MR-CTX _EXT4-C.J.WRITER + @ 0=",
                         "_MR-CTX _EXT4-C.J.START + @ 0=",
@@ -15278,6 +15544,17 @@ def _exercise_singleton_cleanup_write_prefix(
     assert isinstance(success_trace, tuple)
 
     caught_marker = f"EXT4-{protocol.upper()}-ORPHAN-PREFIX-CAUGHT"
+    replay_failure_checks = []
+    if case in {
+        "first-home",
+        "gdt-home",
+        "bitmap-home",
+        "super-home",
+        "final-home",
+    }:
+        replay_failure_checks.append(
+            "_MF-CTX _EXT4-C.J.PROTOCOL-OWNERS + @ 0="
+        )
     torn = tmp_path / f"{protocol}-orphan-{case}-torn.img"
     output, failed_trace, failed_sha256 = run_recovery_forth(
         source,
@@ -15314,6 +15591,7 @@ def _exercise_singleton_cleanup_write_prefix(
                         ),
                         "_EXT4-MOC-WRITER @ 0=",
                         "_EXT4-MOC-TX @ 0=",
+                        *replay_failure_checks,
                     ]
                 )
                 + f' IF ." {caught_marker}" THEN'
@@ -15484,6 +15762,11 @@ def _exercise_singleton_cleanup_flush_fence(
     assert isinstance(success_trace, tuple)
 
     caught_marker = f"EXT4-{protocol.upper()}-ORPHAN-FLUSH-CAUGHT"
+    replay_failure_checks = []
+    if case == "replay-homes":
+        replay_failure_checks.append(
+            "_FF-CTX _EXT4-C.J.PROTOCOL-OWNERS + @ 0="
+        )
     working = tmp_path / f"{protocol}-orphan-{case}-flush-working.img"
     survived = tmp_path / f"{protocol}-orphan-{case}-flush-survived.img"
     prior_fence = tmp_path / f"{protocol}-orphan-{case}-prior-fence.img"
@@ -15522,6 +15805,7 @@ def _exercise_singleton_cleanup_flush_fence(
                         ),
                         "_EXT4-MOC-WRITER @ 0=",
                         "_EXT4-MOC-TX @ 0=",
+                        *replay_failure_checks,
                     ]
                 )
                 + f' IF ." {caught_marker}" THEN'
@@ -21947,6 +22231,7 @@ def test_failed_mount_retry_reuses_journal_workspace(
             "7 _RETRY-CTX _EXT4-C.J.REVOKE-COUNT + !",
             "8 _RETRY-CTX _EXT4-C.J.REVOKE-HITS + !",
             "-1 _RETRY-CTX _EXT4-C.J.REVOKE-READY + !",
+            "-1 _RETRY-CTX _EXT4-C.J.PROTOCOL-OWNERS + !",
             "_RETRY-V _EXT4-MOUNT CONSTANT _RETRY-IOR-2",
             "_RETRY-ARENA ARENA-USED CONSTANT _RETRY-USED-2",
             (
@@ -21960,6 +22245,7 @@ def test_failed_mount_retry_reuses_journal_workspace(
                 "_RETRY-CTX _EXT4-C.J.REVOKE-COUNT + @ 0= AND "
                 "_RETRY-CTX _EXT4-C.J.REVOKE-HITS + @ 0= AND "
                 "_RETRY-CTX _EXT4-C.J.REVOKE-READY + @ 0= AND "
+                "_RETRY-CTX _EXT4-C.J.PROTOCOL-OWNERS + @ 0= AND "
                 "_RETRY-CTX _EXT4-C.READY + @ 0= AND "
                 "_RETRY-V V.LIFECYCLE @ VFS-L-NEW = AND "
                 'IF ." EXT4-MOUNT-RETRY-WORKSPACE-OK" THEN'

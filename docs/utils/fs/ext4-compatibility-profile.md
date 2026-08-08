@@ -210,6 +210,10 @@ all match. This prevents a feature-zero, unchecksummed old primary from having
 stale geometry or identity newly authenticated by activation. A mismatch is a
 pre-mutation failure and creates no witness.
 
+Before the first activation write, the mounted-context protocol-home
+certificate must prove that no allocated non-journal inode owns either the
+primary-super home block or any extent in the authenticated journal tuple.
+
 The transition has two valid copies of a private `AKW1` activation image: a
 guard at the current first-unused journal slot and the primary at journal block
 0. In addition to the `AKR1` checksum/anchor tuple, `AKW1` records the intended
@@ -392,15 +396,20 @@ Recovery is ordered as follows:
 
 1. Validate ext4 superblock geometry, feature admission, all referenced
    bounds, and available metadata checksums without publishing a mount.
-2. Locate journal inode 8, validate the JBD2 superblock and matching UUID, and
-   admit only the feature states above.
-3. Scan from the declared sequence/start, honoring escaped blocks and revokes.
+2. Locate journal inode 8, require its external-xattr pointer to be zero,
+   validate the JBD2 superblock and matching UUID, and admit only the feature
+   states above.
+3. Before active replay, invalidate any cached protocol-home ownership
+   certificate. Scan from the declared sequence/start, honoring escaped blocks
+   and revokes.
    Replay only complete transactions whose descriptor, payload, revoke, and
    commit checksums validate.  An incomplete tail is ignored; corruption or
    an unsupported record refuses mount.
 4. Write replayed home metadata and flush. Strictly reload and validate the
    authoritative post-replay filesystem, including legacy and modern orphan
-   state, before changing recovery authority.
+   state, before changing recovery authority. A current full protocol-home
+   ownership proof is required before any cleanup/reset write; retained-orphan
+   completion obtains that proof before its own transaction.
 5. Recover any nonempty orphan state transactionally and idempotently while
    preserving the applicable recovery authority. An authenticated empty modern
    set requires no orphan inode or orphan-file-block mutation.
@@ -431,13 +440,13 @@ The recovery profile additionally requires standard `s_jnl_backup_type=1`.
 All validated sparse-super copies must carry the same 68-byte `s_jnl_blocks`
 tuple as the primary, and that tuple must exactly reproduce inode 8's
 `i_block`, size-high, and size-low fields. Because the standard tuple omits
-inode flags, generation, and authentication inputs for external extent nodes,
-journal inode 8 is deliberately pinned to generation zero and a complete
-inline depth-0 extent root: one through four initialized extents, gapless
-logical coverage through journal EOF, and bounded, pairwise-disjoint physical
-ranges. This is a recovery-authority rule for the fixed internal journal, not
-a restriction on ordinary inode maps or journal capacity beyond the inline
-extent format itself.
+inode flags, generation, external-xattr ownership, and authentication inputs
+for external extent nodes, journal inode 8 is deliberately pinned to generation
+zero, a zero external-xattr pointer, and a complete inline depth-0 extent root:
+one through four initialized extents, gapless logical coverage through journal
+EOF, and bounded, pairwise-disjoint physical ranges. This is a
+recovery-authority rule for the fixed internal journal, not a restriction on
+ordinary inode maps or journal capacity beyond the inline extent format itself.
 The tuple expander rejects holes, mappings beyond journal EOF, and aliased or
 out-of-range data blocks. Before any journal read, the group-1 backup GDT
 authenticates every group's block/inode bitmap and inode-table ranges; the
@@ -816,10 +825,20 @@ and inode-table destinations, including other inodes' external xattrs and map
 metadata. The implementation uses the reader's bounded depth-5 validator, but
 mutation media qualification is currently depth 1.
 
-This per-operation proof does not yet provide a mount-wide reverse-ownership
-certificate for every journal-ring and primary-super block that activation and
-emission can write against all non-target inodes. That remains a public-write
-release gate rather than being hidden by the private depth-positive support.
+The per-operation proof is now complemented by a mount-scoped protocol-home
+certificate. Before activation or any private protocol write, every allocated
+inode other than authenticated journal inode 8 is parsed through its complete
+data/map-metadata/external-xattr ownership surface and refused if any range
+intersects the exact journal tuple or the filesystem block containing the
+primary superblock. Journal inode 8 is excluded only because its exact inline
+tuple and zero external-xattr pointer are independently authenticated. A dirty
+replay clears the certificate before preflight and reacquires it only from the
+strictly reloaded, root-validated current filesystem before reset/clear/retire
+writes; a retained orphan reaches its cleanup proof with the certificate still
+clear. Hostile checksum-valid aliases through another inode are qualified for
+both a journal-ring block and the primary-super home. This closes that
+reverse-ownership release gate without changing the remaining production
+workspace, mutation-surface, and interoperability gates.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
