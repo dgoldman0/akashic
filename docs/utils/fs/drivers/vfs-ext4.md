@@ -57,6 +57,28 @@ the binding mount callback. Constructor failure returns an inspectable VFS in
 `VFS-L-NEW`, with the structured failure copied to `V.LAST-IOR`; it never
 publishes `VFS-L-MOUNTED`.
 
+The mounted instance can reserve a caller-selected private writer profile
+without enabling public mutation:
+
+```forth
+1 1 0 fs EXT4-WRITER-WORKSPACE-BYTES? THROW
+A-XMEM ARENA-NEW THROW CONSTANT writer-arena
+
+writer-arena 1 1 0 fs EXT4-BIND-WRITER-ARENA? THROW
+```
+
+The three capacities are maximum metadata, ordered-data, and revoke credits;
+there is no driver-chosen split or operation-count ceiling. The sizing query
+also proves that the complete tuple fits the authenticated journal ring,
+`s_max_transaction`, and `s_max_trans_data`. The binding requires a fresh
+dedicated arena whose backing is disjoint from the VFS arena. Its descriptor,
+backing, and bump pointer remain exclusively owned by ext4 until clean
+unmount, which scrubs the complete writer and rolls the arena back to fresh.
+Busy or faulted unmount retains it for retry or diagnosis. The caller may
+destroy the arena only after successful unmount. These words configure the
+private substrate; `EXT4-BINDING` remains read-only and still publishes no
+`WRITE` callback.
+
 Probe reads the 1024-byte primary superblock at volume-relative byte offset
 1024 and returns `EXT4-PROBE-SCORE` (90) for the ext4 magic. A clean nonmatch
 returns zero without an error. A checked read failure remains a volume-domain
@@ -386,13 +408,14 @@ the unreferenced guard harmless.
 Mount-time empty-orphan completion is a writer-free caller of the same
 activation primitive. It passes `writer|0` and borrows
 `_EXT4-C.DIR-BLOCK` and `_EXT4-C.TREE-BLOCK` for the two block buffers. It
-does not call `_EXT4-JWR-ENSURE`: private writer storage is allocated once
-from the monotonic mount arena, and later reuse requires identical metadata,
-data, revoke, and total geometry. Automatically allocating a small recovery
-writer would make a later production-sized reservation fail with
-`VFS-E-CONFLICT`. The writer-free path establishes recovery authority,
-immediately proceeds through `AKE1`-qualified `AKR1`, allocates no writer, and
-exposes no write-active endpoint through the successfully mounted VFS.
+allocates no writer: the path establishes recovery authority, immediately
+proceeds through `AKE1`-qualified `AKR1`, and exposes no write-active endpoint
+through the successfully mounted VFS. When singleton orphan deletion does
+need a transaction, that separate finalizer measures its exact credits,
+snapshots the ordinary mount arena, allocates a temporary mount-store writer,
+and scrubs and rolls the complete tail back on every exit. Recovery therefore
+cannot select or pin the production profile; a caller may bind an independently
+sized dedicated profile after mount.
 
 For writer-backed activation, once the first media phase has begun, any write,
 flush, checksum, or reread-proof failure latches the first ior and exact phase
@@ -407,11 +430,14 @@ without creating activation authority.
 ## Private transaction staging and durable emission
 
 The driver has a private, non-published foundation for the ordered JBD2
-writer. A caller supplies metadata, ordered-data, and revoke
+writer. A caller supplies maximum metadata, ordered-data, and revoke
 capacities; the driver derives exact half-full hash geometry and the complete
-byte requirement, makes one checked allocation from the binding arena, and
-publishes the workspace only after its internal layout is complete. The same
-geometry is reused without arena growth. A mount-generation `WRITER-CURRENT`
+byte requirement, admits the tuple against authenticated journal limits, and
+makes one checked allocation from a fresh dedicated arena. It publishes the
+store kind and arena before publishing the complete writer pointer last. Any
+componentwise-contained transaction request reuses that profile without arena
+growth; a larger request returns `VFS-E-NOSPC` without changing the selected
+profile. A mount-generation `WRITER-CURRENT`
 publication bit prevents preserved workspace bytes from becoming transaction
 authority during a retry. Mount clears it before rebuilding media-derived
 state; a failed mount neither republishes nor scrubs the old staged,
@@ -420,30 +446,30 @@ validation, and attachment validation reach an authenticated clean endpoint
 does mount shape-check the allocation, zero its owned tables and images,
 rebase it to the persisted journal head and wrapped next transaction ID, and
 publish `IDLE` and then current ownership. Same-mount faults remain sticky.
-Successful clean unmount clears `WRITER-CURRENT` and binding readiness before
-detaching the block context; the retained allocation remains shape-inspectable
-but no longer has transaction authority. Busy or failed unmount retains the
-block context; a busy entry retains current authority, while a terminal fault
-preserves its exact phase for diagnosis. Different requested geometry is
-refused rather than leaking another monotonic-arena allocation.
+Successful clean unmount withdraws current authority, scrubs the complete
+dedicated allocation, rolls its arena back to the original fresh mark, clears
+the storage publication, and only then detaches the block context. Busy or
+failed unmount retains the block context and arena; a busy entry retains
+current authority, while a terminal fault preserves its exact phase for
+diagnosis.
 
-`_EXT4-JTX-PREFLIGHT-CAPACITY` is the no-allocation sizing gate for a known
-transaction profile. It checks the complete writer byte geometry and computes
-the exact JBD2 reservation from the block size: metadata payload blocks,
+`_EXT4-JTX-PREFLIGHT-JOURNAL` is the storage-independent sizing gate for a
+candidate profile. It checks complete byte geometry and computes the exact
+JBD2 reservation from the block size: metadata payload blocks,
 ceiling-divided descriptor blocks, revoke blocks, one private guard, and one
 commit. It then applies the ring's excluded-spare capacity,
 `s_max_transaction` (excluding the private guard), and
-`s_max_trans_data`. Failure therefore occurs before `_EXT4-JWR-ENSURE` can
-consume the monotonic arena. `_EXT4-JTX-BEGIN` independently repeats the same
-limits against the allocated writer and current free reservation.
+`s_max_trans_data`. `_EXT4-JTX-PREFLIGHT-CAPACITY` additionally requires an
+existing profile to contain a transaction request, or proves ordinary mount
+arena space for the separate scoped recovery writer. `_EXT4-JTX-BEGIN`
+independently repeats the journal and selected-profile limits against current
+free reservation.
 
-The production workspace contract is not yet ratified. Public operations
-cannot size this allocate-once object from whichever mutation happens first,
-because a later operation with larger legitimate credits would then conflict.
-Writable publication therefore also requires geometry-derived sizing from the
-authenticated journal and caller-provided storage, plus bounded transaction
-chunking for operations that cannot fit one reservation. It must not introduce
-an arbitrary operation-count ceiling.
+This closes first-operation geometry selection: no mutation implicitly sizes
+the persistent writer. It does not make every future operation fit one
+transaction. Allocation, namespace, xattr, truncate, and orphan-batch paths
+still need bounded planners that split work only at filesystem-consistent
+intermediate states when their exact credits exceed the selected profile.
 
 A private transaction reserves journal credits and ring space before accepting
 any block. It owns complete block-sized metadata and ordered-data after-images,
@@ -805,7 +831,7 @@ Public unmount applies the writer state rather than silently discarding it:
 
 | Entry state | Result |
 | --- | --- |
-| Clean and non-write-active, with or without retained writer storage | Prove the clean endpoint and detach without media writes. |
+| Clean and non-write-active, with or without a dedicated writer profile | Prove the clean endpoint, scrub and release any dedicated profile, and detach without media writes. |
 | Write-active, transaction-clean `IDLE` | Perform the clean landing and detach only after its final proof. |
 | `COMMITTED` | Authenticate and checkpoint the retained transaction, require the resulting clean `IDLE` state, then deactivate. |
 | `STAGING`, `ACTIVATING`, `EMITTING`, `CHECKPOINTING`, or `DEACTIVATING` | Return `VFS-E-BUSY` with lifecycle, block context, readiness, and writer authority retained. |
@@ -1043,11 +1069,13 @@ effects and pins the retry boundary after quarantine.
 
 The callback obtains time from a caller-installed per-context provider rather
 than ambient `EPOCH@`. `_EXT4-BIND-WRITE-CLOCK` binds it once at an
-authenticated clean mounted endpoint before writer allocation. The provider
-contract is `( clock-context -- epoch-ms ior )`; one nonzero write samples it
-exactly once and converts the admitted scalar to ext4 seconds/nanoseconds.
-Zero-length writes do not sample or publish time. The binding survives strict
-reload, checkpoint, and live sync/deactivation.
+authenticated clean mounted endpoint before the first mutation. Clock and
+dedicated-profile binding may occur in either order while the profile remains
+untouched, idle, and clean. The provider contract is
+`( clock-context -- epoch-ms ior )`; one nonzero write samples it exactly once
+and converts the admitted scalar to ext4 seconds/nanoseconds. Zero-length
+writes do not sample or publish time. The binding survives strict reload,
+checkpoint, and live sync/deactivation.
 
 `FSYNC` and `SYNCFS` now validate the retained writer, checkpoint a lower-level
 `COMMITTED` transaction if present, return any latched fault, and require an
@@ -1065,9 +1093,9 @@ unchanged callback-side FD cursors, alias readback, clean unmount, the exact
 slice now has an honest VFS progress/error contract. Generic `VFS-WRITE?` may
 advance only the calling FD by the returned confirmed prefix; the callback
 itself still owns no FD. Public exposure remains a separate gate because the
-binding is still globally read-only and lacks the production workspace,
-chunking, general data-shape, and release qualification required by the
-writable profile.
+binding is still globally read-only and lacks operation-specific chunk
+planners, general data shapes, and the complete release qualification required
+by the writable profile.
 
 Controlled sequential-write qualification tears the first inode-table home
 write at byte 269, one byte into the target inode's new `i_ctime`. The ordered
@@ -1137,7 +1165,7 @@ public write support is not a capability-bit flip. `EXT4-OPS` still has no
 `LINK`, `SYMLINK`, `SETXATTR`, or `REMOVEXATTR` callback;
 `EXT4-BINDING` remains `VFS-BF-READ-ONLY`; the real `SYNCFS`/`FSYNC` callbacks
 do not themselves expose mutation. Writable publication still needs a
-production workspace-sizing and chunking contract, general block and inode
+bounded per-operation credit/chunking contract, general block and inode
 allocation,
 extent and legacy-map growth and shrink, directory-entry mutation,
 inode/link/time/accounting updates, xattr mutation, namespace/cache coherence,
@@ -1158,8 +1186,8 @@ qualification gates. The mounted private client adds zero-length behavior,
 stable pre-activation refusal, synchronous success, sequential writer reuse,
 and dirty/empty crash-remount cleanup without widening the supported data
 shape. Its post-publication progress/error policy is now represented honestly;
-the operation remains private while production writer workspace/chunking,
-public admission, and broader crash/interoperability policy are unsettled.
+the operation remains private while general operation planning, public
+admission, and broader crash/interoperability policy are unsettled.
 Growth, holes, unwritten extents, multi-block atomicity, truncation, and
 namespace mutation remain later phases.
 

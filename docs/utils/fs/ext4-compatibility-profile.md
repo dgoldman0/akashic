@@ -241,10 +241,8 @@ lifecycle `NEW`; a fresh mount resolves any durable witness prefix.
 The same `AKW1` primitive is mount-recovery infrastructure. A checksum-valid
 clean input with `ORPHAN_PRESENT` set and `RECOVER` clear enters a durable
 recovery epoch with `writer|0`, borrowing two existing mount-context block
-buffers instead of allocating private writer storage. Writer allocation is
-one-time and exact-geometry within a monotonic arena; a recovery-sized
-allocation would conflict with later production credits. The dirty endpoint
-sets `RECOVER` while preserving `ORPHAN_PRESENT`; the following
+buffers instead of allocating private writer storage. The dirty endpoint sets
+`RECOVER` while preserving `ORPHAN_PRESENT`; the following
 `AKE1`-qualified `AKR1` landing clears both only after authenticated empty
 proof. No writer is allocated or published, and no write-active endpoint is
 exposed by a successfully mounted VFS.
@@ -324,7 +322,7 @@ The ext4 callback applies this state matrix:
 
 | Entry state | Public-unmount result |
 | --- | --- |
-| Clean, non-write-active, with or without retained writer storage | Authenticate the clean endpoint and detach without media mutation. |
+| Clean, non-write-active, with or without a dedicated writer profile | Authenticate the clean endpoint, scrub and release any dedicated profile, and detach without media mutation. |
 | Write-active, transaction-clean `IDLE` | Run the six-write clean landing, prove it, and detach. |
 | `COMMITTED` | Authenticate and checkpoint the retained transaction, require the resulting clean `IDLE` writer, then deactivate. |
 | `STAGING`, `ACTIVATING`, `EMITTING`, `CHECKPOINTING`, or `DEACTIVATING` | Return `VFS-E-BUSY` and retain mounted lifecycle, `V.BCTX`, readiness, and writer authority. |
@@ -376,9 +374,20 @@ the reset image. Recovery reconstructs that predecessor, proves the complete
 primary is one sequential prefix between the active and reset endpoints, and
 then proceeds forward through ordinary `AKR1` reset/clear landing.
 
-Writer ownership is mount-generation scoped. Mount clears the private
+Writer ownership is mount-generation scoped and storage-kind explicit. The
+production profile is one caller-selected metadata/data/revoke tuple allocated
+at the base of a fresh dedicated arena; mount cleanup uses a separate scoped
+tail allocation in the ordinary mount arena. Mount clears the private
 `WRITER-CURRENT` publication before rebuilding media-derived state. Failed
 mounts preserve but cannot use or scrub staged, committed, or faulted bytes.
+`EXT4-WRITER-WORKSPACE-BYTES?` returns the exact tuple-specific byte count only
+after applying ring, `s_max_transaction`, and `s_max_trans_data` limits.
+`EXT4-BIND-WRITER-ARENA?` accepts a fresh live arena with a recognized backing
+source, nonwrapping aligned backing, and no overlap with the VFS arena; it
+allocates and publishes atomically. Live writer validation requires the same
+store kind and arena, the exact allocation endpoint, and exclusive bump-pointer
+ownership. A smaller later credit request reuses the profile; an oversized
+component returns `VFS-E-NOSPC` without reallocating or changing capacities.
 Only a successful recovery, strict reload, root/attachment validation, and
 static workspace-shape proof may zero the workspace, rebase it to the
 authenticated clean journal head/sequence, publish `IDLE`, and republish it as
@@ -386,11 +395,13 @@ current after remount. In the same mount, only the final authenticated
 dirty-empty checkpoint endpoint may perform the corresponding scrub and
 rebase. Same-mount faults remain quarantined; a write, flush, checksum, or
 reread-proof failure latches its first ior and phase, forces read-only/dirty
-state, and requires remount convergence. Unmount clears `WRITER-CURRENT` and
-binding readiness only after a successful clean proof and before detaching the
-block context. Busy and failed unmount paths retain `V.BCTX` and the relevant
-writer state for retry or diagnosis; late terminal faults need not republish
-authority already withdrawn after the final media proof.
+state, and requires remount convergence. After a successful clean proof,
+unmount withdraws `WRITER-CURRENT`, scrubs the complete dedicated writer,
+rolls its arena back to fresh, clears its storage publication and binding
+readiness, and detaches the block context. Busy and failed unmount paths retain
+`V.BCTX`, the dedicated arena, and the relevant writer state for retry or
+diagnosis; late terminal faults need not republish authority already withdrawn
+after the final media proof.
 
 Recovery is ordered as follows:
 
@@ -724,10 +735,12 @@ The bounded reader now includes checksum-v3/64-bit, revoke-aware
 committed-prefix replay and a crash-retry anchor for clearing `RECOVER`. Dirty
 replay is bootstrapped through the replay-frozen group-1 sparse-super/GDT
 witness, and a torn primary super requires a committed, unrevoked
-invariant-preserving replacement before any home write. A private arena-bounded
-writer foundation now validates and reuses exact workspace geometry, reserves
-transaction/ring credits, and owns coalesced metadata, ordered-data, and revoke
-after-images. Its private `AKW1` two-copy activation performs exact
+invariant-preserving replacement before any home write. A private writer
+foundation now validates a caller-selected capacity tuple against authenticated
+journal limits, binds it to a fresh dedicated arena, serves every
+componentwise-contained transaction without arena growth, and owns coalesced
+metadata, ordered-data, and revoke after-images. Its private `AKW1` two-copy
+activation performs exact
 fresh-primary rebinding, ordered clean-to-`RECOVER` media writes,
 phase-specific fault quarantine, and forward-only crash resolution through the
 existing `AKR1` clean landing. The private emitter now writes one ordered-data
@@ -790,8 +803,8 @@ qualification for longer chains, later modern blocks and large orphan files,
 additional ownership and deletion shapes, distinct-key hash collisions, and
 arena exhaustion or retained-too-small retry behavior.
 
-The remaining writer gate explicitly includes a geometry-derived production
-workspace/capacity contract with bounded transaction chunking,
+The remaining writer gate explicitly includes bounded, filesystem-consistent
+per-operation chunk planning for requests larger than the selected profile,
 general multi-record orphan cleanup, the complete
 namespace/data/metadata/xattr mutation surface, public-write integration,
 external-tool inspection of Akashic-authored active, dirty-empty, and clean
@@ -799,10 +812,11 @@ images, and the controlled power-cut/release matrix.
 
 The exact private regular-file callback now provides one narrow chunking
 primitive: a larger size-preserving caller range completes only its first
-filesystem-block chunk and returns legal short progress, retaining the fixed
-`1 metadata / 1 data / 0 revoke` workspace. This removes a caller-size limit
-from the qualified slice but does not satisfy the general workspace/chunking
-gate for growth, allocation, multi-home metadata, or namespace operations.
+filesystem-block chunk and returns legal short progress, consuming
+`1 metadata / 1 data / 0 revoke` credits from any containing caller profile.
+This removes both a caller-size limit and first-operation workspace selection
+from the qualified slice, but it does not supply the general chunk planners for
+growth, allocation, multi-home metadata, or namespace operations.
 The callback's short-progress and later-error behavior is also qualified
 through `VFS-WRITE?` and `VFS-WRITE-EXACT` using a cloned test-only binding;
 the production capability mask, operation table, and read-only flag remain
@@ -837,8 +851,8 @@ strictly reloaded, root-validated current filesystem before reset/clear/retire
 writes; a retained orphan reaches its cleanup proof with the certificate still
 clear. Hostile checksum-valid aliases through another inode are qualified for
 both a journal-ring block and the primary-super home. This closes that
-reverse-ownership release gate without changing the remaining production
-workspace, mutation-surface, and interoperability gates.
+reverse-ownership release gate without changing the remaining operation
+planning, mutation-surface, and interoperability gates.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

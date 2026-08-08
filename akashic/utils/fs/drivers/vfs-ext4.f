@@ -363,7 +363,9 @@ REQUIRE ../vfs.f
 15440 CONSTANT _EXT4-C.WCLOCK-XT
 15448 CONSTANT _EXT4-C.WCLOCK-CTX
 15456 CONSTANT _EXT4-C.J.PROTOCOL-OWNERS
-15464 CONSTANT _EXT4-CTX-SIZE
+15464 CONSTANT _EXT4-C.J.WRITER-STORE-KIND
+15472 CONSTANT _EXT4-C.J.WRITER-ARENA
+15480 CONSTANT _EXT4-CTX-SIZE
 
 : _EXT4-CTX  ( vfs -- ctx )  V.BCTX @ ;
 : _EXT4-READY?  ( vfs -- flag )
@@ -4851,9 +4853,10 @@ VARIABLE _EXT4-JADV-CTX
 \ This layer owns complete metadata and ordered-data after-images before any
 \ transaction media mutation.  The downstream private emitter consumes the
 \ same bounded tables through activation, barriers, and commit while retaining
-\ them for authenticated checkpoint.  The single allocation is preserved with
-\ the binding context and reused exactly, so failed-mount retries cannot leak
-\ the monotonic VFS arena.
+\ them for authenticated checkpoint.  A persistent production profile lives
+\ in its caller-owned dedicated arena and serves contained credit requests;
+\ mount-only recovery writers instead use a scoped ordinary-arena tail that is
+\ scrubbed and rolled back before mount publication.
 
 0x414B4A5752303032 CONSTANT _EXT4-JWR-MAGIC  \ "AKJWR002"
 
@@ -5132,6 +5135,69 @@ VARIABLE _EXT4-JWV-CREDIT
 VARIABLE _EXT4-JWV-USED
 VARIABLE _EXT4-JWV-ACTIVE
 
+VARIABLE _EXT4-JWS-WRITER
+VARIABLE _EXT4-JWS-CTX
+VARIABLE _EXT4-JWS-ARENA
+VARIABLE _EXT4-JWS-BASE
+VARIABLE _EXT4-JWS-SIZE
+VARIABLE _EXT4-JWS-END
+VARIABLE _EXT4-JWS-BYTES
+VARIABLE _EXT4-JWS-MOUNT-ARENA
+VARIABLE _EXT4-JWS-MOUNT-BASE
+VARIABLE _EXT4-JWS-MOUNT-SIZE
+
+1 CONSTANT _EXT4-JWR-STORE-MOUNT
+2 CONSTANT _EXT4-JWR-STORE-DEDICATED
+
+\ A production writer profile owns the first and only allocation in a
+\ dedicated caller arena.  Internal mount-time recovery writers instead own
+\ the current tail of the ordinary mount arena.  STORE-KIND prevents a
+\ damaged arena handle from silently downgrading either ownership contract.
+\ Revalidate the live arena descriptor, exact allocation endpoint, and
+\ dedicated-backing separation whenever writer shape is used.
+: _EXT4-JWR-PROFILE-STORAGE?  ( writer -- flag )
+    DUP _EXT4-JWS-WRITER ! _EXT4-JWR.CTX + @ DUP
+    _EXT4-JWS-CTX ! 0= IF FALSE EXIT THEN
+    _EXT4-JWS-CTX @ _EXT4-C.J.WRITER-ARENA + @ DUP
+    _EXT4-JWS-ARENA ! 0= IF FALSE EXIT THEN
+    _EXT4-JWS-ARENA @ 4 CELLS MSPAN-NONWRAPPING? 0= IF FALSE EXIT THEN
+    _EXT4-JWS-ARENA @ A.SOURCE @ DUP 0< SWAP 2 > OR IF FALSE EXIT THEN
+    _EXT4-JWS-ARENA @ A.BASE @ DUP _EXT4-JWS-BASE ! 0= IF FALSE EXIT THEN
+    _EXT4-JWS-ARENA @ A.SIZE @ DUP _EXT4-JWS-SIZE !
+    DUP 0< SWAP 0= OR IF FALSE EXIT THEN
+    _EXT4-JWS-ARENA @ A.PTR @ DUP _EXT4-JWS-END ! 0= IF FALSE EXIT THEN
+    _EXT4-JWS-BASE @ 7 AND _EXT4-JWS-END @ 7 AND OR IF FALSE EXIT THEN
+    _EXT4-JWS-BASE @ _EXT4-JWS-SIZE @ MSPAN-NONWRAPPING? 0= IF
+        FALSE EXIT
+    THEN
+    _EXT4-JWS-ARENA @ 4 CELLS _EXT4-JWS-BASE @ _EXT4-JWS-SIZE @
+    MSPAN-OVERLAP? IF FALSE EXIT THEN
+    _EXT4-JWS-WRITER @ _EXT4-JWS-BASE @ U< IF FALSE EXIT THEN
+    _EXT4-JWS-WRITER @ _EXT4-JWR.TOTAL + @ DUP _EXT4-JWS-BYTES !
+    _EXT4-JWS-WRITER @ SWAP MSPAN-NONWRAPPING? 0= IF FALSE EXIT THEN
+    _EXT4-JWS-WRITER @ _EXT4-JWS-BYTES @ + DUP
+    _EXT4-JWS-END @ <> IF DROP FALSE EXIT THEN
+    _EXT4-JWS-BASE @ _EXT4-JWS-SIZE @ + U> IF FALSE EXIT THEN
+    _EXT4-JWS-CTX @ _EXT4-C.ARENA + @ DUP
+    _EXT4-JWS-MOUNT-ARENA ! 0= IF FALSE EXIT THEN
+    _EXT4-JWS-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @ DUP
+    _EXT4-JWR-STORE-MOUNT = IF
+        DROP _EXT4-JWS-ARENA @ _EXT4-JWS-MOUNT-ARENA @ = EXIT
+    THEN
+    _EXT4-JWR-STORE-DEDICATED <> IF FALSE EXIT THEN
+    _EXT4-JWS-ARENA @ _EXT4-JWS-MOUNT-ARENA @ = IF FALSE EXIT THEN
+    _EXT4-JWS-WRITER @ _EXT4-JWS-BASE @ <> IF FALSE EXIT THEN
+    _EXT4-JWS-MOUNT-ARENA @ A.BASE @ DUP
+    _EXT4-JWS-MOUNT-BASE ! 0= IF FALSE EXIT THEN
+    _EXT4-JWS-MOUNT-ARENA @ A.SIZE @ DUP
+    _EXT4-JWS-MOUNT-SIZE ! DUP 0< SWAP 0= OR IF FALSE EXIT THEN
+    _EXT4-JWS-MOUNT-BASE @ 7 AND IF FALSE EXIT THEN
+    _EXT4-JWS-MOUNT-BASE @ _EXT4-JWS-MOUNT-SIZE @
+    MSPAN-NONWRAPPING? 0= IF FALSE EXIT THEN
+    _EXT4-JWS-BASE @ _EXT4-JWS-SIZE @
+    _EXT4-JWS-MOUNT-BASE @ _EXT4-JWS-MOUNT-SIZE @
+    MSPAN-OVERLAP? 0= ;
+
 : _EXT4-JWV-EXPECT  ( address -- )
     _EXT4-JWV-CURSOR @ <> IF 0 _EXT4-JWV-OK ! THEN ;
 
@@ -5152,6 +5218,7 @@ VARIABLE _EXT4-JWV-ACTIVE
     _EXT4-JWV-CTX @ _EXT4-JWR-CONTEXT? 0= IF FALSE EXIT THEN
     _EXT4-JWV-CTX @ _EXT4-C.J.WRITER + @
     _EXT4-JWV-WRITER @ <> IF FALSE EXIT THEN
+    _EXT4-JWV-WRITER @ _EXT4-JWR-PROFILE-STORAGE? 0= IF FALSE EXIT THEN
     _EXT4-JWV-WRITER @ _EXT4-JWR.BSIZE + @ DUP 1024 =
     OVER 2048 = OR SWAP 4096 = OR 0= IF FALSE EXIT THEN
     _EXT4-JWV-WRITER @ _EXT4-JWR.BSIZE + @
@@ -5739,13 +5806,12 @@ VARIABLE _EXT4-JWN-CURSOR
 : _EXT4-JWR-MATCH?  ( writer -- flag )
     DUP _EXT4-JWR-VALID? 0= IF DROP FALSE EXIT THEN
     DUP _EXT4-JWR.CTX + @ _EXT4-JWN-CTX @ =
-    OVER _EXT4-JWR.TOTAL + @ _EXT4-JWN-BYTES @ = AND
     OVER _EXT4-JWR.BSIZE + @ _EXT4-JWN-BSIZE @ = AND
     OVER _EXT4-JWR.MAXLEN + @ _EXT4-JWN-MAXLEN @ = AND
     OVER _EXT4-JWR.FIRST + @ _EXT4-JWN-FIRST @ = AND
-    OVER _EXT4-JWR.META-CAP + @ _EXT4-JWN-META @ = AND
-    OVER _EXT4-JWR.DATA-CAP + @ _EXT4-JWN-DATA @ = AND
-    SWAP _EXT4-JWR.REVOKE-CAP + @ _EXT4-JWN-REVOKE @ = AND ;
+    OVER _EXT4-JWR.META-CAP + @ _EXT4-JWN-META @ U< 0= AND
+    OVER _EXT4-JWR.DATA-CAP + @ _EXT4-JWN-DATA @ U< 0= AND
+    SWAP _EXT4-JWR.REVOKE-CAP + @ _EXT4-JWN-REVOKE @ U< 0= AND ;
 
 : _EXT4-JWR-ZERO-OWNED  ( writer -- )
     DUP _EXT4-JWR.META-ENTRIES + @
@@ -5793,25 +5859,26 @@ VARIABLE _EXT4-JWN-CURSOR
     _EXT4-JWN-CTX @ _EXT4-C.J.SEQUENCE + @ 1+ 0xFFFFFFFF AND
     OVER _EXT4-JWR.NEXT-TID + ! ;
 
-\ Allocate and publish exactly once.  A later request may reuse only the same
-\ complete geometry; a different request cannot be satisfied without leaking
-\ the monotonic mount arena, so it is a conflict rather than implicit growth.
-: _EXT4-JWR-ENSURE  ( meta-cap data-cap revoke-cap ctx -- writer ior )
+\ Validate and retain one requested capacity tuple in the shared constructor
+\ state.  Allocation policy is deliberately separate: production profiles use
+\ a fresh dedicated arena, while pre-publication recovery uses a scoped tail
+\ allocation from the ordinary mount arena.
+: _EXT4-JWR-PREPARE  ( meta-cap data-cap revoke-cap ctx -- ior )
     _EXT4-JWN-CTX ! _EXT4-JWN-REVOKE !
     _EXT4-JWN-DATA ! _EXT4-JWN-META !
-    _EXT4-JWN-CTX @ _EXT4-JWR-CONTEXT? 0= IF 0 VFS-E-INVALID EXIT THEN
+    _EXT4-JWN-CTX @ _EXT4-JWR-CONTEXT? 0= IF VFS-E-INVALID EXIT THEN
     _EXT4-JWN-CTX @ _EXT4-C.J.WRITER-CURRENT + @ 0= IF
-        0 VFS-E-INVALID EXIT
+        VFS-E-INVALID EXIT
     THEN
     _EXT4-JWN-CTX @ _EXT4-C.BSIZE + @ _EXT4-JWN-BSIZE !
     _EXT4-JWN-META @ _EXT4-JWN-DATA @ _EXT4-JWN-REVOKE @
     _EXT4-JWN-BSIZE @
     _EXT4-JWR-MEASURE _EXT4-JWN-IOR ! _EXT4-JWN-BYTES !
-    _EXT4-JWN-IOR @ IF 0 _EXT4-JWN-IOR @ EXIT THEN
+    _EXT4-JWN-IOR @ ?DUP IF EXIT THEN
     _EXT4-JWN-CTX @ _EXT4-C.J.MAXLEN + @ _EXT4-JWN-MAXLEN !
     _EXT4-JWN-CTX @ _EXT4-C.J.FIRST + @ _EXT4-JWN-FIRST !
     _EXT4-JWN-MAXLEN @ _EXT4-JWN-FIRST @ - DUP 0= IF
-        DROP 0 VFS-E-INVALID EXIT
+        DROP VFS-E-INVALID EXIT
     THEN
     1- _EXT4-JWN-FREE !
     _EXT4-JWN-CTX @ _EXT4-C.J.HEAD + @ DUP 0= IF
@@ -5819,20 +5886,13 @@ VARIABLE _EXT4-JWN-CURSOR
     ELSE
         DUP _EXT4-JWN-FIRST @ U<
         OVER _EXT4-JWN-MAXLEN @ U< 0= OR IF
-            DROP 0 VFS-E-INVALID EXIT
+            DROP VFS-E-INVALID EXIT
         THEN
-    THEN _EXT4-JWN-HEAD !
-    _EXT4-JWN-CTX @ _EXT4-C.J.WRITER + @ ?DUP IF
-        DUP _EXT4-JWR-VALID? 0= IF DROP 0 VFS-E-CORRUPT EXIT THEN
-        DUP _EXT4-JWR-MATCH? 0= IF DROP 0 VFS-E-CONFLICT EXIT THEN
-        DUP _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <> IF
-            DROP 0 VFS-E-BUSY EXIT
-        THEN
-        DUP _EXT4-JWR.FAULT + @ IF DROP 0 VFS-E-BUSY EXIT THEN
-        _EXT4-JWR-REBASE-IDLE 0 EXIT
-    THEN
-    _EXT4-JWN-CTX @ _EXT4-C.ARENA + @ _EXT4-JWN-BYTES @ ARENA-ALLOT?
-    IF DROP 0 VFS-E-NOMEM EXIT THEN
+    THEN _EXT4-JWN-HEAD ! 0 ;
+
+\ Construct one complete writer layout at an already-owned exact span.  This
+\ word neither allocates nor publishes the context pointer.
+: _EXT4-JWR-BUILD-AT  ( address -- writer ior )
     DUP _EXT4-JWN-WRITER ! _EXT4-JWN-BYTES @ 0 FILL
     _EXT4-JWR-MAGIC _EXT4-JWN-WRITER @ _EXT4-JWR.MAGIC + !
     _EXT4-JWN-WRITER @ DUP _EXT4-JWR.SELF + !
@@ -5886,8 +5946,124 @@ VARIABLE _EXT4-JWN-CURSOR
     \ it initializes the next running transaction, including 32-bit wrap.
     _EXT4-JWN-CTX @ _EXT4-C.J.SEQUENCE + @ 1+ 0xFFFFFFFF AND
     _EXT4-JWN-WRITER @ _EXT4-JWR.NEXT-TID + !
-    _EXT4-JWN-WRITER @ _EXT4-JWN-CTX @ _EXT4-C.J.WRITER + !
     _EXT4-JWN-WRITER @ 0 ;
+
+VARIABLE _EXT4-JAL-META
+VARIABLE _EXT4-JAL-DATA
+VARIABLE _EXT4-JAL-REVOKE
+VARIABLE _EXT4-JAL-KIND
+VARIABLE _EXT4-JAL-ARENA
+VARIABLE _EXT4-JAL-CTX
+VARIABLE _EXT4-JAL-MARK
+VARIABLE _EXT4-JAL-ALLOCATION
+VARIABLE _EXT4-JAL-WRITER
+VARIABLE _EXT4-JAL-IOR
+
+: _EXT4-JWR-ALLOCATE-ROLLBACK  ( -- )
+    0 _EXT4-JAL-CTX @ _EXT4-C.J.WRITER + !
+    0 _EXT4-JAL-CTX @ _EXT4-C.J.WRITER-STORE-KIND + !
+    0 _EXT4-JAL-CTX @ _EXT4-C.J.WRITER-ARENA + !
+    _EXT4-JAL-ALLOCATION @ ?DUP IF _EXT4-JWN-BYTES @ 0 FILL THEN
+    _EXT4-JAL-ARENA @ _EXT4-JAL-MARK @ ARENA-ROLLBACK ;
+
+\ Allocate exactly once in an explicitly selected store.  The caller has
+\ already applied any dedicated-arena admission policy; this shared boundary
+\ still proves live bounds and publishes storage kind/arena before publishing
+\ the writer pointer last.
+: _EXT4-JWR-ALLOCATE-IN
+  ( meta-cap data-cap revoke-cap store-kind arena ctx -- writer ior )
+    _EXT4-JAL-CTX ! _EXT4-JAL-ARENA ! _EXT4-JAL-KIND !
+    _EXT4-JAL-REVOKE ! _EXT4-JAL-DATA ! _EXT4-JAL-META !
+    0 _EXT4-JAL-ALLOCATION ! 0 _EXT4-JAL-WRITER !
+    _EXT4-JAL-META @ _EXT4-JAL-DATA @ _EXT4-JAL-REVOKE @
+    _EXT4-JAL-CTX @ _EXT4-JWR-PREPARE ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-JAL-CTX @ _EXT4-C.J.WRITER + @
+    _EXT4-JAL-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @ OR
+    _EXT4-JAL-CTX @ _EXT4-C.J.WRITER-ARENA + @ OR IF
+        0 VFS-E-CONFLICT EXIT
+    THEN
+    _EXT4-JAL-KIND @ _EXT4-JWR-STORE-MOUNT = IF
+        _EXT4-JAL-ARENA @ _EXT4-JAL-CTX @ _EXT4-C.ARENA + @ <> IF
+            0 VFS-E-INVALID EXIT
+        THEN
+    ELSE
+        _EXT4-JAL-KIND @ _EXT4-JWR-STORE-DEDICATED <> IF
+            0 VFS-E-INVALID EXIT
+        THEN
+        _EXT4-JAL-ARENA @ _EXT4-JAL-CTX @ _EXT4-C.ARENA + @ = IF
+            0 VFS-E-INVALID EXIT
+        THEN
+    THEN
+    _EXT4-JAL-ARENA @ DUP 0= IF DROP 0 VFS-E-INVALID EXIT THEN
+    DUP A.BASE @ DUP 0= IF 2DROP 0 VFS-E-INVALID EXIT THEN
+    DUP 7 AND IF 2DROP 0 VFS-E-INVALID EXIT THEN DROP
+    DUP A.SIZE @ DUP 0< SWAP 0= OR IF DROP 0 VFS-E-INVALID EXIT THEN
+    DUP A.BASE @ OVER A.SIZE @ MSPAN-NONWRAPPING? 0= IF
+        DROP 0 VFS-E-INVALID EXIT
+    THEN
+    DUP A.PTR @ DUP _EXT4-JAL-MARK ! DUP 7 AND IF
+        2DROP 0 VFS-E-INVALID EXIT
+    THEN
+    OVER A.BASE @ U< IF DROP 0 VFS-E-INVALID EXIT THEN
+    DUP A.BASE @ OVER A.SIZE @ + _EXT4-JAL-MARK @ U< IF
+        DROP 0 VFS-E-INVALID EXIT
+    THEN DROP
+    _EXT4-JWN-BYTES @ 7 AND IF 0 VFS-E-CORRUPT EXIT THEN
+    _EXT4-JAL-MARK @ _EXT4-JWN-BYTES @ MSPAN-NONWRAPPING? 0= IF
+        0 VFS-E-NOMEM EXIT
+    THEN
+    _EXT4-JAL-ARENA @ A.BASE @ _EXT4-JAL-ARENA @ A.SIZE @ +
+    _EXT4-JAL-MARK @ _EXT4-JWN-BYTES @ + U< IF
+        0 VFS-E-NOMEM EXIT
+    THEN
+    _EXT4-JAL-ARENA @ _EXT4-JWN-BYTES @ ARENA-ALLOT?
+    IF DROP 0 VFS-E-NOMEM EXIT THEN
+    DUP _EXT4-JAL-ALLOCATION ! DUP _EXT4-JAL-WRITER !
+    _EXT4-JAL-MARK @ <> IF
+        _EXT4-JWR-ALLOCATE-ROLLBACK 0 VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-JAL-WRITER @ _EXT4-JWR-BUILD-AT
+    _EXT4-JAL-IOR ! _EXT4-JAL-WRITER !
+    _EXT4-JAL-IOR @ IF
+        _EXT4-JWR-ALLOCATE-ROLLBACK 0 _EXT4-JAL-IOR @ EXIT
+    THEN
+    _EXT4-JAL-KIND @ _EXT4-JAL-CTX @
+    _EXT4-C.J.WRITER-STORE-KIND + !
+    _EXT4-JAL-ARENA @ _EXT4-JAL-CTX @ _EXT4-C.J.WRITER-ARENA + !
+    _EXT4-JAL-WRITER @ _EXT4-JAL-CTX @ _EXT4-C.J.WRITER + !
+    _EXT4-JAL-WRITER @ _EXT4-JWR-VALID? 0= IF
+        _EXT4-JWR-ALLOCATE-ROLLBACK 0 VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-JAL-WRITER @ 0 ;
+
+VARIABLE _EXT4-JAM-META
+VARIABLE _EXT4-JAM-DATA
+VARIABLE _EXT4-JAM-REVOKE
+VARIABLE _EXT4-JAM-CTX
+
+: _EXT4-JWR-ALLOCATE-MOUNT
+  ( meta-cap data-cap revoke-cap ctx -- writer ior )
+    _EXT4-JAM-CTX ! _EXT4-JAM-REVOKE !
+    _EXT4-JAM-DATA ! _EXT4-JAM-META !
+    _EXT4-JAM-META @ _EXT4-JAM-DATA @ _EXT4-JAM-REVOKE @
+    _EXT4-JWR-STORE-MOUNT _EXT4-JAM-CTX @ _EXT4-C.ARENA + @
+    _EXT4-JAM-CTX @ _EXT4-JWR-ALLOCATE-IN ;
+
+\ Consume an already configured writer profile.  A larger profile serves any
+\ componentwise-contained request; an insufficient profile is a bounded-space
+\ refusal and never selects new geometry or consumes another arena span.
+: _EXT4-JWR-ENSURE  ( meta-cap data-cap revoke-cap ctx -- writer ior )
+    _EXT4-JWR-PREPARE ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-JWN-CTX @ _EXT4-C.J.WRITER + @ DUP 0= IF
+        DROP 0 VFS-E-NOSPC EXIT
+    THEN
+    DUP _EXT4-JWR-VALID? 0= IF DROP 0 VFS-E-CORRUPT EXIT THEN
+    DUP _EXT4-JWR-MATCH? 0= IF DROP 0 VFS-E-NOSPC EXIT THEN
+    DUP _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <> IF
+        DROP 0 VFS-E-BUSY EXIT
+    THEN
+    DUP _EXT4-JWR.FAULT + @ IF DROP 0 VFS-E-BUSY EXIT THEN
+    _EXT4-JWR-REBASE-IDLE 0 ;
 
 VARIABLE _EXT4-JMR-CTX
 VARIABLE _EXT4-JMR-WRITER
@@ -6110,11 +6286,10 @@ VARIABLE _EXT4-JPC-LOG
 VARIABLE _EXT4-JPC-FREE
 VARIABLE _EXT4-JPC-IOR
 
-\ Prove that one requested workspace and transaction can fit the authenticated
-\ journal geometry before _EXT4-JWR-ENSURE can consume the monotonic arena.
-\ This performs arithmetic and context inspection only; it allocates, stages,
-\ publishes, writes, and flushes nothing.
-: _EXT4-JTX-PREFLIGHT-CAPACITY
+\ Prove that one requested profile and transaction can fit the authenticated
+\ journal.  Storage admission is separate so a dedicated production arena is
+\ never constrained by unrelated free space in the mount/VFS arena.
+: _EXT4-JTX-PREFLIGHT-JOURNAL
   ( meta-cap data-cap revoke-cap ctx -- ior )
     _EXT4-JPC-CTX ! _EXT4-JPC-REVOKE !
     _EXT4-JPC-DATA ! _EXT4-JPC-META !
@@ -6124,10 +6299,6 @@ VARIABLE _EXT4-JPC-IOR
     _EXT4-JPC-BSIZE @
     _EXT4-JWR-MEASURE _EXT4-JPC-IOR ! _EXT4-JPC-BYTES !
     _EXT4-JPC-IOR @ ?DUP IF EXIT THEN
-    _EXT4-JPC-CTX @ _EXT4-C.J.WRITER + @ 0= IF
-        _EXT4-JPC-BYTES @ _EXT4-JPC-CTX @ _EXT4-C.ARENA + @ ARENA-FREE
-        U> IF VFS-E-NOMEM EXIT THEN
-    THEN
     _EXT4-JPC-META @ _EXT4-JPC-REVOKE @ _EXT4-JPC-BSIZE @
     _EXT4-JTX-LOG-BLOCKS-FOR _EXT4-JPC-IOR ! _EXT4-JPC-LOG !
     _EXT4-JPC-IOR @ ?DUP IF EXIT THEN
@@ -6143,6 +6314,191 @@ VARIABLE _EXT4-JPC-IOR
     _EXT4-JPC-CTX @ _EXT4-C.J.MAX-TRANS-DATA + @ ?DUP IF
         _EXT4-JPC-DATA @ SWAP U> IF VFS-E-NOSPC EXIT THEN
     THEN
+    0 ;
+
+\ Internal preflight additionally proves that an existing profile contains
+\ the request, or that the ordinary mount arena can hold a not-yet-allocated
+\ temporary recovery writer.  This word still performs no allocation.
+: _EXT4-JTX-PREFLIGHT-CAPACITY
+  ( meta-cap data-cap revoke-cap ctx -- ior )
+    _EXT4-JTX-PREFLIGHT-JOURNAL ?DUP IF EXIT THEN
+    _EXT4-JPC-CTX @ _EXT4-C.J.WRITER + @ ?DUP IF
+        DUP _EXT4-JWR-VALID? 0= IF DROP VFS-E-CORRUPT EXIT THEN
+        DUP _EXT4-JWR.META-CAP + @ _EXT4-JPC-META @ U<
+        OVER _EXT4-JWR.DATA-CAP + @ _EXT4-JPC-DATA @ U< OR
+        SWAP _EXT4-JWR.REVOKE-CAP + @ _EXT4-JPC-REVOKE @ U< OR IF
+            VFS-E-NOSPC EXIT
+        THEN
+        0 EXIT
+    THEN
+    _EXT4-JPC-BYTES @ _EXT4-JPC-CTX @ _EXT4-C.ARENA + @ ARENA-FREE
+    U> IF VFS-E-NOMEM EXIT THEN
+    0 ;
+
+VARIABLE _EXT4-EWB-META
+VARIABLE _EXT4-EWB-DATA
+VARIABLE _EXT4-EWB-REVOKE
+VARIABLE _EXT4-EWB-V
+VARIABLE _EXT4-EWB-CTX
+
+\ Return the exact storage required by one caller-selected capacity tuple,
+\ but only when that complete tuple also fits the authenticated journal's
+\ ring and advertised transaction limits.
+: EXT4-WRITER-WORKSPACE-BYTES?
+  ( meta-cap data-cap revoke-cap vfs -- bytes ior )
+    _EXT4-EWB-V ! _EXT4-EWB-REVOKE !
+    _EXT4-EWB-DATA ! _EXT4-EWB-META !
+    _EXT4-EWB-V @ 0= IF 0 VFS-E-INVALID EXIT THEN
+    _EXT4-EWB-V @ V.LIFECYCLE @ VFS-L-MOUNTED <> IF
+        0 VFS-E-STALE EXIT
+    THEN
+    _EXT4-EWB-V @ V.BCTX @ DUP _EXT4-EWB-CTX ! 0= IF
+        0 VFS-E-STALE EXIT
+    THEN
+    _EXT4-EWB-V @ _EXT4-ATTACHED? 0= IF 0 VFS-E-STALE EXIT THEN
+    _EXT4-EWB-V @ _EXT4-READY? 0= IF 0 VFS-E-STALE EXIT THEN
+    _EXT4-EWB-META @ _EXT4-EWB-DATA @ _EXT4-EWB-REVOKE @
+    _EXT4-EWB-CTX @ _EXT4-JTX-PREFLIGHT-JOURNAL
+    ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-JPC-BYTES @ 0 ;
+
+VARIABLE _EXT4-BWA-ARENA
+VARIABLE _EXT4-BWA-META
+VARIABLE _EXT4-BWA-DATA
+VARIABLE _EXT4-BWA-REVOKE
+VARIABLE _EXT4-BWA-V
+VARIABLE _EXT4-BWA-CTX
+VARIABLE _EXT4-BWA-BYTES
+VARIABLE _EXT4-BWA-IOR
+VARIABLE _EXT4-BWA-BASE
+VARIABLE _EXT4-BWA-SIZE
+VARIABLE _EXT4-BWA-MOUNT-ARENA
+VARIABLE _EXT4-BWA-MOUNT-BASE
+VARIABLE _EXT4-BWA-MOUNT-SIZE
+VARIABLE _EXT4-BWA-MOUNT-PTR
+
+\ Bind one fresh, caller-owned arena as the persistent production profile.
+\ The backing region is exclusive through clean unmount; the driver owns its
+\ bump pointer and rejects overlap with the complete VFS/mount arena.
+: EXT4-BIND-WRITER-ARENA?
+  ( arena meta-cap data-cap revoke-cap vfs -- ior )
+    _EXT4-BWA-V ! _EXT4-BWA-REVOKE ! _EXT4-BWA-DATA !
+    _EXT4-BWA-META ! _EXT4-BWA-ARENA !
+    _EXT4-BWA-ARENA @ 0= _EXT4-BWA-V @ 0= OR IF VFS-E-INVALID EXIT THEN
+    _EXT4-BWA-META @ _EXT4-BWA-DATA @ _EXT4-BWA-REVOKE @ _EXT4-BWA-V @
+    EXT4-WRITER-WORKSPACE-BYTES? _EXT4-BWA-IOR ! _EXT4-BWA-BYTES !
+    _EXT4-BWA-IOR @ ?DUP IF EXIT THEN
+    _EXT4-BWA-V @ V.BCTX @ DUP _EXT4-BWA-CTX ! 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-BWA-V @ V.FLAGS @ VFS-F-DIRTY AND IF VFS-E-BUSY EXIT THEN
+    _EXT4-BWA-CTX @ _EXT4-C.RECOVERY + @
+    _EXT4-BWA-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ OR
+    _EXT4-BWA-CTX @ _EXT4-C.J.START + @ OR
+    _EXT4-BWA-CTX @ _EXT4-C.J.WITNESS + @ OR
+    _EXT4-BWA-CTX @ _EXT4-C.J.PRIMARY-TORN + @ OR
+    _EXT4-BWA-CTX @ _EXT4-C.J.CLEANUP + @ OR
+    _EXT4-BWA-CTX @ _EXT4-C.SUPER-TORN + @ OR IF VFS-E-BUSY EXIT THEN
+    _EXT4-BWA-CTX @ _EXT4-C.J.WRITER-CURRENT + @ 0= IF
+        VFS-E-STALE EXIT
+    THEN
+    _EXT4-BWA-CTX @ _EXT4-C.J.WRITER + @
+    _EXT4-BWA-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @ OR
+    _EXT4-BWA-CTX @ _EXT4-C.J.WRITER-ARENA + @ OR IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    _EXT4-BWA-ARENA @ _EXT4-BWA-V @ V.ARENA @ = IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-BWA-ARENA @ 4 CELLS MSPAN-NONWRAPPING? 0= IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-BWA-ARENA @ A.SOURCE @ DUP 0< SWAP 2 > OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-BWA-ARENA @ A.BASE @ DUP _EXT4-BWA-BASE ! 0= IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-BWA-BASE @ 7 AND IF VFS-E-INVALID EXIT THEN
+    _EXT4-BWA-ARENA @ A.SIZE @ DUP _EXT4-BWA-SIZE !
+    DUP 0< SWAP 0= OR IF VFS-E-INVALID EXIT THEN
+    _EXT4-BWA-BASE @ _EXT4-BWA-SIZE @ MSPAN-NONWRAPPING? 0= IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-BWA-ARENA @ A.PTR @ _EXT4-BWA-BASE @ <> IF
+        VFS-E-BUSY EXIT
+    THEN
+    _EXT4-BWA-ARENA @ 4 CELLS _EXT4-BWA-BASE @ _EXT4-BWA-SIZE @
+    MSPAN-OVERLAP? IF VFS-E-INVALID EXIT THEN
+    _EXT4-BWA-BYTES @ _EXT4-BWA-SIZE @ U> IF VFS-E-NOMEM EXIT THEN
+    _EXT4-BWA-V @ V.ARENA @ DUP _EXT4-BWA-MOUNT-ARENA ! 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-BWA-MOUNT-ARENA @ A.BASE @ DUP
+    _EXT4-BWA-MOUNT-BASE ! 0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-BWA-MOUNT-BASE @ 7 AND IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-BWA-MOUNT-ARENA @ A.SIZE @ DUP
+    _EXT4-BWA-MOUNT-SIZE ! DUP 0< SWAP 0= OR IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-BWA-MOUNT-ARENA @ A.PTR @ DUP _EXT4-BWA-MOUNT-PTR !
+    _EXT4-BWA-MOUNT-BASE @ U< IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-BWA-MOUNT-BASE @ _EXT4-BWA-MOUNT-SIZE @
+    MSPAN-NONWRAPPING? 0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-BWA-MOUNT-BASE @ _EXT4-BWA-MOUNT-SIZE @ +
+    _EXT4-BWA-MOUNT-PTR @ U< IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-BWA-BASE @ _EXT4-BWA-SIZE @
+    _EXT4-BWA-MOUNT-BASE @ _EXT4-BWA-MOUNT-SIZE @
+    MSPAN-OVERLAP? IF VFS-E-INVALID EXIT THEN
+    _EXT4-BWA-ARENA @ 4 CELLS
+    _EXT4-BWA-MOUNT-BASE @ _EXT4-BWA-MOUNT-SIZE @
+    MSPAN-OVERLAP? IF
+        _EXT4-BWA-ARENA @ _EXT4-BWA-MOUNT-BASE @ U< IF
+            VFS-E-INVALID EXIT
+        THEN
+        _EXT4-BWA-ARENA @ 4 CELLS + _EXT4-BWA-MOUNT-PTR @ U> IF
+            VFS-E-INVALID EXIT
+        THEN
+    THEN
+    _EXT4-BWA-META @ _EXT4-BWA-DATA @ _EXT4-BWA-REVOKE @
+    _EXT4-JWR-STORE-DEDICATED _EXT4-BWA-ARENA @ _EXT4-BWA-CTX @
+    _EXT4-JWR-ALLOCATE-IN _EXT4-BWA-IOR ! DROP
+    _EXT4-BWA-IOR @ ;
+
+VARIABLE _EXT4-JRD-CTX
+VARIABLE _EXT4-JRD-WRITER
+VARIABLE _EXT4-JRD-ARENA
+VARIABLE _EXT4-JRD-BYTES
+
+\ Retire only a clean dedicated profile.  Unpublish authority before
+\ scrubbing, then return the exclusive arena to its original fresh mark.
+: _EXT4-JWR-RELEASE-DEDICATED  ( ctx -- ior )
+    DUP _EXT4-JRD-CTX ! 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-JRD-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @ DUP 0= IF
+        DROP _EXT4-JRD-CTX @ _EXT4-C.J.WRITER-ARENA + @
+        _EXT4-JRD-CTX @ _EXT4-C.J.WRITER + @ OR IF VFS-E-CORRUPT EXIT THEN
+        0 EXIT
+    THEN
+    _EXT4-JWR-STORE-MOUNT = IF 0 EXIT THEN
+    _EXT4-JRD-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @
+    _EXT4-JWR-STORE-DEDICATED <> IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-JRD-CTX @ _EXT4-C.J.WRITER + @ DUP
+    _EXT4-JRD-WRITER ! 0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-JRD-CTX @ _EXT4-C.J.WRITER-ARENA + @ DUP
+    _EXT4-JRD-ARENA ! 0= IF VFS-E-CORRUPT EXIT THEN
+    \ A no-write profile still has current authority here; successful dirty
+    \ deactivation has deliberately withdrawn it before rebasing the writer
+    \ to the clean mounted endpoint.  Validate the complete shape and runtime
+    \ directly so both authenticated release paths are accepted.
+    _EXT4-JRD-WRITER @ _EXT4-JWR-SHAPE? 0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-JRD-WRITER @ _EXT4-JWR-RUNTIME? 0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-JRD-WRITER @ _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <> IF
+        VFS-E-BUSY EXIT
+    THEN
+    _EXT4-JRD-WRITER @ _EXT4-JWR-IDLE-CLEAN? 0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-JRD-WRITER @ _EXT4-JWR.TOTAL + @ _EXT4-JRD-BYTES !
+    0 _EXT4-JRD-CTX @ _EXT4-C.J.WRITER-CURRENT + !
+    0 _EXT4-JRD-CTX @ _EXT4-C.J.WRITER + !
+    0 _EXT4-JRD-CTX @ _EXT4-C.J.WRITER-STORE-KIND + !
+    0 _EXT4-JRD-CTX @ _EXT4-C.J.WRITER-ARENA + !
+    _EXT4-JRD-WRITER @ _EXT4-JRD-BYTES @ 0 FILL
+    _EXT4-JRD-ARENA @ _EXT4-JRD-WRITER @ ARENA-ROLLBACK
     0 ;
 
 : _EXT4-JTX-CLEAR-HASHES  ( writer -- )
@@ -13523,6 +13879,12 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
     _EXT4-MOW-ENTRY ?DUP IF 0 SWAP EXIT THEN
     _EXT4-MOW-COUNT @ 0< IF 0 VFS-E-INVALID EXIT THEN
     _EXT4-MOW-COUNT @ 0= IF 0 0 EXIT THEN
+    _EXT4-MOW-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @
+    _EXT4-JWR-STORE-DEDICATED <> IF 0 VFS-E-NOSPC EXIT THEN
+    _EXT4-MOW-CTX @ _EXT4-C.J.WRITER-ARENA + @ 0=
+    _EXT4-MOW-CTX @ _EXT4-C.J.WRITER + @ 0= OR IF
+        0 VFS-E-CORRUPT EXIT
+    THEN
     _EXT4-MOW-SOURCE @ _EXT4-MOW-COUNT @ _VFS-BUFFER? 0= IF
         0 VFS-E-INVALID EXIT
     THEN
@@ -13591,8 +13953,10 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
 \     now-ms-xt  ( clock-context -- epoch-ms ior )
 \
 \ Binding is allowed once, at the authenticated clean mounted endpoint and
-\ before any persistent writer allocation.  The XT is stored last so it is
-\ the publication word for the accompanying opaque context.
+\ before the first mutation.  Clock and workspace-profile binding may occur
+\ in either order while a dedicated writer remains untouched, idle, and
+\ clean.  The XT is stored last so it is the publication word for the
+\ accompanying opaque context.
 
 VARIABLE _EXT4-BWC-XT
 VARIABLE _EXT4-BWC-CLOCK-CTX
@@ -13619,9 +13983,18 @@ VARIABLE _EXT4-BWC-CTX
     _EXT4-BWC-CTX @ _EXT4-C.J.WITNESS + @ OR
     _EXT4-BWC-CTX @ _EXT4-C.J.PRIMARY-TORN + @ OR
     _EXT4-BWC-CTX @ _EXT4-C.J.CLEANUP + @ OR
-    _EXT4-BWC-CTX @ _EXT4-C.SUPER-TORN + @ OR
-    _EXT4-BWC-CTX @ _EXT4-C.J.WRITER + @ OR IF
+    _EXT4-BWC-CTX @ _EXT4-C.SUPER-TORN + @ OR IF
         VFS-E-BUSY EXIT
+    THEN
+    _EXT4-BWC-CTX @ _EXT4-C.J.WRITER + @ ?DUP IF
+        _EXT4-BWC-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @
+        _EXT4-JWR-STORE-DEDICATED <> IF DROP VFS-E-CORRUPT EXIT THEN
+        DUP _EXT4-JWR-VALID? 0= IF DROP VFS-E-CORRUPT EXIT THEN
+        DUP _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <> IF
+            DROP VFS-E-BUSY EXIT
+        THEN
+        DUP _EXT4-JWR.FAULT + @ IF DROP VFS-E-BUSY EXIT THEN
+        _EXT4-JWR-IDLE-CLEAN? 0= IF VFS-E-CORRUPT EXIT THEN
     THEN
     _EXT4-BWC-CTX @ _EXT4-C.WCLOCK-XT + @ IF VFS-E-CONFLICT EXIT THEN
     _EXT4-BWC-CLOCK-CTX @ _EXT4-BWC-CTX @ _EXT4-C.WCLOCK-CTX + !
@@ -14312,6 +14685,10 @@ VARIABLE _EXT4-MOC-TRANSIENT
     _EXT4-MOC-WRITER @ ?DUP IF
         DUP _EXT4-MOC@ _EXT4-C.J.WRITER + @ <> IF
             DROP VFS-E-CORRUPT EXIT THEN
+        _EXT4-MOC@ _EXT4-C.J.WRITER-STORE-KIND + @
+        _EXT4-JWR-STORE-MOUNT <> IF DROP VFS-E-CORRUPT EXIT THEN
+        _EXT4-MOC@ _EXT4-C.J.WRITER-ARENA + @
+        _EXT4-MOC-ARENA @ <> IF DROP VFS-E-CORRUPT EXIT THEN
         _EXT4-MOC-SPAN @ _EXT4-JWR-SIZE U< IF
             DROP VFS-E-CORRUPT EXIT THEN
         _EXT4-MOC-WRITER-ALLOCATION? 0= IF VFS-E-CORRUPT EXIT THEN
@@ -14319,6 +14696,8 @@ VARIABLE _EXT4-MOC-TRANSIENT
         _EXT4-MOC@ _EXT4-C.J.WRITER + @ IF VFS-E-CORRUPT EXIT THEN
     THEN
     0 _EXT4-MOC@ _EXT4-C.J.WRITER + !
+    0 _EXT4-MOC@ _EXT4-C.J.WRITER-STORE-KIND + !
+    0 _EXT4-MOC@ _EXT4-C.J.WRITER-ARENA + !
     _EXT4-MOC-MARK @ _EXT4-MOC-SPAN @ 0 FILL
     _EXT4-MOC-ARENA @ _EXT4-MOC-MARK @ ARENA-ROLLBACK
     0 _EXT4-MOC-WRITER ! 0 _EXT4-MOC-TX !
@@ -14354,7 +14733,9 @@ VARIABLE _EXT4-MOC-TRANSIENT
     0 _EXT4-MOC-MARK-VALID !
     _EXT4-MOC@ _EXT4-C.READY + @ _EXT4-MOC@ _EXT4-C.J.WRITER-CURRENT + @ OR
     _EXT4-MOC@ _EXT4-C.J.WRITE-ACTIVE + @ OR
-    _EXT4-MOC@ _EXT4-C.J.WRITER + @ OR IF VFS-E-INVALID EXIT THEN
+    _EXT4-MOC@ _EXT4-C.J.WRITER + @ OR
+    _EXT4-MOC@ _EXT4-C.J.WRITER-STORE-KIND + @ OR
+    _EXT4-MOC@ _EXT4-C.J.WRITER-ARENA + @ OR IF VFS-E-INVALID EXIT THEN
     _EXT4-MOC-V@ _EXT4-CTX _EXT4-MOC@ <> IF
         VFS-E-INVALID EXIT THEN
     _EXT4-MOC-V@ _EXT4-ATTACHED? 0= IF VFS-E-STALE EXIT THEN
@@ -14397,7 +14778,8 @@ VARIABLE _EXT4-MOC-TRANSIENT
     THEN
     _EXT4-MOC-MARK-ARENA
     -1 _EXT4-MOC@ _EXT4-C.J.WRITER-CURRENT + !
-    _EXT4-MOC-CREDIT @ 0 0 _EXT4-MOC@ _EXT4-JWR-ENSURE
+    _EXT4-MOC-CREDIT @ 0 0 _EXT4-MOC@
+    _EXT4-JWR-ALLOCATE-MOUNT
     _EXT4-MOC-IOR ! _EXT4-MOC-WRITER !
     _EXT4-MOC-IOR @ ?DUP IF _EXT4-MOC-FAIL-CLEAN EXIT THEN
     _EXT4-MOC-CREDIT @ 0 0 _EXT4-MOC-WRITER @ _EXT4-JTX-BEGIN
@@ -14759,6 +15141,8 @@ VARIABLE _EXT4-SY-D
     _EXT4-UM-CLEAN-ENDPOINT? 0= IF
         VFS-E-CORRUPT _EXT4-UM-QUARANTINE EXIT
     THEN
+    _EXT4-UM-CTX @ _EXT4-JWR-RELEASE-DEDICATED
+    ?DUP IF _EXT4-UM-QUARANTINE EXIT THEN
     0 _EXT4-UM-CTX @ _EXT4-C.J.WRITER-CURRENT + !
     0 _EXT4-UM-CTX @ _EXT4-C.READY + !
     0 _EXT4-UM-V @ V.BCTX !

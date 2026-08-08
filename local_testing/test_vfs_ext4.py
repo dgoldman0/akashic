@@ -2204,6 +2204,25 @@ def _forth_conjunction(checks: list[str]) -> str:
     return " ".join((checks[0], *(f"{check} AND" for check in checks[1:])))
 
 
+def _ext4_dedicated_writer_profile_forth(
+    prefix: str, vfs: str
+) -> tuple[str, ...]:
+    """Build and bind one exact 1/1/0 caller-owned writer profile."""
+    return (
+        (
+            f"1 1 0 {vfs} EXT4-WRITER-WORKSPACE-BYTES? "
+            f"CONSTANT {prefix}-SIZE-IOR CONSTANT {prefix}-SIZE"
+        ),
+        f"{prefix}-SIZE A-XMEM ARENA-NEW THROW CONSTANT {prefix}-ARENA",
+        f"{prefix}-ARENA A.BASE @ CONSTANT {prefix}-BASE",
+        (
+            f"{prefix}-ARENA 1 1 0 {vfs} "
+            f"EXT4-BIND-WRITER-ARENA? CONSTANT {prefix}-BIND-IOR"
+        ),
+        f"{prefix}-ARENA ARENA-USED CONSTANT {prefix}-USED",
+    )
+
+
 _EXT4_AUTH_ONLY_BINDING_FORTH = (
     (
         ": _EXT4-TEST-AUTH-MOUNT "
@@ -5025,6 +5044,180 @@ def test_jbd2_revoke_workspace_is_arena_derived_and_wrap_aware(
     _assert_emitted(output, "EXT4-REVOKE-WORKSPACE-GEOMETRY")
 
 
+def test_public_writer_profile_binds_dedicated_arena_atomically(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    output = run_forth(
+        path,
+        [
+            "T-ARENA CONSTANT _WBA-MAIN",
+            (
+                "_WBA-MAIN T-VOLUME EXT4-NEW "
+                "CONSTANT _WBA-MOUNT-IOR CONSTANT _WBA-V"
+            ),
+            "_WBA-V _EXT4-CTX CONSTANT _WBA-CTX",
+            "_WBA-MAIN ARENA-USED CONSTANT _WBA-MAIN-USED",
+            (
+                ": _WBA-UNPUBLISHED? "
+                "_WBA-CTX _EXT4-C.J.WRITER + @ "
+                "_WBA-CTX _EXT4-C.J.WRITER-STORE-KIND + @ OR "
+                "_WBA-CTX _EXT4-C.J.WRITER-ARENA + @ OR 0= ;"
+            ),
+            (
+                "3 2 1 _WBA-V EXT4-WRITER-WORKSPACE-BYTES? "
+                "CONSTANT _WBA-QUERY-IOR CONSTANT _WBA-BYTES"
+            ),
+            (
+                "3 2 1 _WBA-CTX _EXT4-C.BSIZE + @ _EXT4-JWR-MEASURE "
+                "CONSTANT _WBA-MEASURE-IOR CONSTANT _WBA-MEASURED"
+            ),
+            (
+                "_WBA-BYTES 1- A-XMEM ARENA-NEW THROW "
+                "CONSTANT _WBA-SHORT"
+            ),
+            "_WBA-SHORT A.PTR @ CONSTANT _WBA-SHORT-PTR",
+            (
+                "_WBA-SHORT 3 2 1 _WBA-V EXT4-BIND-WRITER-ARENA? "
+                "CONSTANT _WBA-SHORT-IOR"
+            ),
+            (
+                "_WBA-SHORT-IOR VFS-E-NOMEM = "
+                "_WBA-SHORT A.SIZE @ _WBA-BYTES 1- = AND "
+                "_WBA-SHORT A.PTR @ _WBA-SHORT-PTR = AND "
+                "_WBA-UNPUBLISHED? AND "
+                "_WBA-MAIN ARENA-USED _WBA-MAIN-USED = AND "
+                "CONSTANT _WBA-SHORT-ATOMIC"
+            ),
+            (
+                "_WBA-BYTES 1 CELLS + A-XMEM ARENA-NEW THROW "
+                "CONSTANT _WBA-NONFRESH"
+            ),
+            "_WBA-NONFRESH 1 ARENA-ALLOT? THROW DROP",
+            "_WBA-NONFRESH A.PTR @ CONSTANT _WBA-NONFRESH-PTR",
+            (
+                "_WBA-NONFRESH 3 2 1 _WBA-V "
+                "EXT4-BIND-WRITER-ARENA? CONSTANT _WBA-NONFRESH-IOR"
+            ),
+            (
+                "_WBA-NONFRESH-IOR VFS-E-BUSY = "
+                "_WBA-NONFRESH-PTR _WBA-NONFRESH A.BASE @ <> AND "
+                "_WBA-NONFRESH A.PTR @ _WBA-NONFRESH-PTR = AND "
+                "_WBA-UNPUBLISHED? AND "
+                "_WBA-MAIN ARENA-USED _WBA-MAIN-USED = AND "
+                "CONSTANT _WBA-NONFRESH-ATOMIC"
+            ),
+            "_WBA-MAIN A.PTR @ CONSTANT _WBA-MAIN-PTR",
+            (
+                "_WBA-MAIN 3 2 1 _WBA-V EXT4-BIND-WRITER-ARENA? "
+                "CONSTANT _WBA-SAME-IOR"
+            ),
+            (
+                "_WBA-SAME-IOR VFS-E-INVALID = "
+                "_WBA-V V.ARENA @ _WBA-MAIN = AND "
+                "_WBA-MAIN A.PTR @ _WBA-MAIN-PTR = AND "
+                "_WBA-UNPUBLISHED? AND "
+                "_WBA-MAIN ARENA-USED _WBA-MAIN-USED = AND "
+                "CONSTANT _WBA-SAME-ATOMIC"
+            ),
+            "CREATE _WBA-OVERLAP 4 CELLS ALLOT",
+            "_WBA-MAIN A.BASE @ _WBA-OVERLAP A.BASE !",
+            "_WBA-MAIN A.SIZE @ _WBA-OVERLAP A.SIZE !",
+            "_WBA-MAIN A.BASE @ _WBA-OVERLAP A.PTR !",
+            "_WBA-MAIN A.SOURCE @ _WBA-OVERLAP A.SOURCE !",
+            "_WBA-OVERLAP A.PTR @ CONSTANT _WBA-OVERLAP-PTR",
+            (
+                "_WBA-OVERLAP 3 2 1 _WBA-V "
+                "EXT4-BIND-WRITER-ARENA? CONSTANT _WBA-OVERLAP-IOR"
+            ),
+            (
+                "_WBA-OVERLAP-IOR VFS-E-INVALID = "
+                "_WBA-OVERLAP A.PTR @ _WBA-OVERLAP-PTR = AND "
+                "_WBA-OVERLAP A.BASE @ _WBA-OVERLAP A.SIZE @ "
+                "_WBA-MAIN A.BASE @ _WBA-MAIN A.SIZE @ "
+                "MSPAN-OVERLAP? AND _WBA-UNPUBLISHED? AND "
+                "_WBA-MAIN ARENA-USED _WBA-MAIN-USED = AND "
+                "CONSTANT _WBA-OVERLAP-ATOMIC"
+            ),
+            (
+                "_WBA-MOUNT-IOR 0= _WBA-QUERY-IOR 0= AND "
+                "_WBA-MEASURE-IOR 0= AND _WBA-BYTES 0> AND "
+                "_WBA-BYTES _WBA-MEASURED = AND "
+                "_WBA-SHORT-ATOMIC AND _WBA-NONFRESH-ATOMIC AND "
+                "_WBA-SAME-ATOMIC AND _WBA-OVERLAP-ATOMIC AND "
+                'IF ." EXT4-WRITER-PROFILE-PREBIND-ATOMIC" THEN'
+            ),
+            (
+                "_WBA-BYTES 3 CELLS + A-XMEM ARENA-NEW THROW "
+                "CONSTANT _WBA-DEDICATED"
+            ),
+            "_WBA-DEDICATED A.BASE @ CONSTANT _WBA-DEDICATED-BASE",
+            "_WBA-DEDICATED A.PTR @ CONSTANT _WBA-DEDICATED-FRESH",
+            (
+                "_WBA-DEDICATED 3 2 1 _WBA-V "
+                "EXT4-BIND-WRITER-ARENA? CONSTANT _WBA-BIND-IOR"
+            ),
+            "_WBA-CTX _EXT4-C.J.WRITER + @ CONSTANT _WBA-WRITER",
+            "_WBA-DEDICATED A.PTR @ CONSTANT _WBA-BOUND-PTR",
+            (
+                "_WBA-DEDICATED 3 2 1 _WBA-V "
+                "EXT4-BIND-WRITER-ARENA? CONSTANT _WBA-DUP-IOR"
+            ),
+            "_WBA-DEDICATED A.PTR @ CONSTANT _WBA-DUP-PTR",
+            (
+                "2 1 0 _WBA-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _WBA-FIT-IOR CONSTANT _WBA-FIT"
+            ),
+            "_WBA-DEDICATED A.PTR @ CONSTANT _WBA-FIT-PTR",
+            (
+                "2 3 0 _WBA-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _WBA-OVER-IOR CONSTANT _WBA-OVER"
+            ),
+            (
+                "_WBA-BIND-IOR 0= _WBA-WRITER _WBA-DEDICATED-BASE = AND "
+                "_WBA-DEDICATED-FRESH _WBA-DEDICATED-BASE = AND "
+                "_WBA-DEDICATED A.SIZE @ _WBA-BYTES U> AND "
+                "_WBA-BOUND-PTR _WBA-DEDICATED-BASE _WBA-BYTES + = AND "
+                "_WBA-DEDICATED ARENA-USED _WBA-BYTES = AND "
+                "_WBA-MAIN ARENA-USED _WBA-MAIN-USED = AND "
+                "_WBA-CTX _EXT4-C.J.WRITER-STORE-KIND + @ "
+                "_EXT4-JWR-STORE-DEDICATED = AND "
+                "_WBA-CTX _EXT4-C.J.WRITER-ARENA + @ "
+                "_WBA-DEDICATED = AND "
+                "_WBA-DUP-IOR VFS-E-CONFLICT = AND "
+                "_WBA-DUP-PTR _WBA-BOUND-PTR = AND "
+                "_WBA-FIT-IOR 0= AND _WBA-FIT _WBA-WRITER = AND "
+                "_WBA-FIT-PTR _WBA-BOUND-PTR = AND "
+                "_WBA-OVER 0= AND _WBA-OVER-IOR VFS-E-NOSPC = AND "
+                "_WBA-WRITER _EXT4-JWR.META-CAP + @ 3 = AND "
+                "_WBA-WRITER _EXT4-JWR.DATA-CAP + @ 2 = AND "
+                "_WBA-WRITER _EXT4-JWR.REVOKE-CAP + @ 1 = AND "
+                "_WBA-MAIN ARENA-USED _WBA-MAIN-USED = AND "
+                'IF ." EXT4-WRITER-PROFILE-BOUND" THEN'
+            ),
+            "0 _WBA-V VFS-UNMOUNT CONSTANT _WBA-UNMOUNT-IOR",
+            (
+                "_WBA-UNMOUNT-IOR 0= "
+                "_WBA-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_WBA-V V.BCTX @ 0= AND "
+                "_WBA-CTX _EXT4-C.J.WRITER-CURRENT + @ 0= AND "
+                "_WBA-CTX _EXT4-C.J.WRITER + @ 0= AND "
+                "_WBA-CTX _EXT4-C.J.WRITER-STORE-KIND + @ 0= AND "
+                "_WBA-CTX _EXT4-C.J.WRITER-ARENA + @ 0= AND "
+                "_WBA-CTX _EXT4-C.READY + @ 0= AND "
+                "_WBA-DEDICATED A.PTR @ _WBA-DEDICATED-BASE = AND "
+                "_WBA-DEDICATED ARENA-USED 0= AND "
+                "_WBA-WRITER _WBA-BYTES _EXT4-BYTES-ZERO? AND "
+                "_WBA-MAIN ARENA-USED _WBA-MAIN-USED = AND "
+                'IF ." EXT4-WRITER-PROFILE-UNMOUNT-SCRUBBED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-WRITER-PROFILE-PREBIND-ATOMIC")
+    _assert_emitted(output, "EXT4-WRITER-PROFILE-BOUND")
+    _assert_emitted(output, "EXT4-WRITER-PROFILE-UNMOUNT-SCRUBBED")
+
+
 def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
     tmp_path: Path,
 ) -> None:
@@ -5068,7 +5261,7 @@ def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
                 "CONSTANT _JW-PREFLIGHT-SHORT"
             ),
             (
-                "3 3 3 _JW-CTX _EXT4-JWR-ENSURE "
+                "3 3 3 _JW-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _JW-IOR CONSTANT _JW"
             ),
             "_JW-ARENA ARENA-USED CONSTANT _JW-AFTER",
@@ -5078,6 +5271,9 @@ def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
                 "_JW-PREFLIGHT-SHORT VFS-E-NOSPC = AND "
                 "_JW-IOR 0= AND _JW 0<> AND "
                 "_JW-CTX _EXT4-C.J.WRITER + @ _JW = AND "
+                "_JW-CTX _EXT4-C.J.WRITER-STORE-KIND + @ "
+                "_EXT4-JWR-STORE-MOUNT = AND "
+                "_JW-CTX _EXT4-C.J.WRITER-ARENA + @ _JW-ARENA = AND "
                 "_JW _EXT4-JWR.TOTAL + @ _JW-BYTES = AND "
                 "_JW-AFTER _JW-BEFORE _JW-BYTES + = AND "
                 "_JW _EXT4-JWR.META-SLOTS + @ 8 = AND "
@@ -5092,7 +5288,7 @@ def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
             "5 _JW-CTX _EXT4-C.J.HEAD + !",
             "41 _JW-CTX _EXT4-C.J.SEQUENCE + !",
             (
-                "3 3 3 _JW-CTX _EXT4-JWR-ENSURE "
+                "2 1 0 _JW-CTX _EXT4-JWR-ENSURE "
                 "CONSTANT _JW-REUSE-IOR CONSTANT _JW-REUSE"
             ),
             "_JW-ARENA ARENA-USED CONSTANT _JW-REUSE-AFTER",
@@ -5113,14 +5309,17 @@ def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
             ),
             (
                 "4 3 3 _JW-CTX _EXT4-JWR-ENSURE "
-                "CONSTANT _JW-CONFLICT-IOR CONSTANT _JW-CONFLICT"
+                "CONSTANT _JW-OVER-IOR CONSTANT _JW-OVER"
             ),
             (
                 "_JW-WRAP-IOR 0= _JW-WRAP _JW = AND "
                 "_JW-REUSE-AFTER _JW-REUSE-BEFORE = AND "
                 "_JW _EXT4-JWR.HEAD + @ 7 = AND "
                 "_JW _EXT4-JWR.NEXT-TID + @ 0= AND "
-                "_JW-CONFLICT 0= AND _JW-CONFLICT-IOR VFS-E-CONFLICT = AND "
+                "_JW-OVER 0= AND _JW-OVER-IOR VFS-E-NOSPC = AND "
+                "_JW _EXT4-JWR.META-CAP + @ 3 = AND "
+                "_JW _EXT4-JWR.DATA-CAP + @ 3 = AND "
+                "_JW _EXT4-JWR.REVOKE-CAP + @ 3 = AND "
                 "_JW-ARENA ARENA-USED _JW-REUSE-AFTER = AND "
                 'IF ." EXT4-JWR-REUSED" THEN'
             ),
@@ -5275,13 +5474,15 @@ def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
             "_JWN-ARENA _JWN-CTX _EXT4-C.ARENA + !",
             "_JWN-ARENA ARENA-USED CONSTANT _JWN-BEFORE",
             (
-                "3 3 3 _JWN-CTX _EXT4-JWR-ENSURE "
+                "3 3 3 _JWN-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _JWN-IOR CONSTANT _JWN"
             ),
             (
                 "_JWN 0= _JWN-IOR VFS-E-NOMEM = AND "
                 "_JWN-ARENA ARENA-USED _JWN-BEFORE = AND "
                 "_JWN-CTX _EXT4-C.J.WRITER + @ 0= AND "
+                "_JWN-CTX _EXT4-C.J.WRITER-STORE-KIND + @ 0= AND "
+                "_JWN-CTX _EXT4-C.J.WRITER-ARENA + @ 0= AND "
                 'IF ." EXT4-JWR-NOMEM-ATOMIC" THEN'
             ),
         ],
@@ -5359,7 +5560,7 @@ def test_jbd2_writer_arithmetic_and_4k_geometry_are_total(
             ),
             "_JWG-ARENA _JWG-CTX _EXT4-C.ARENA + !",
             (
-                "0 0 0 _JWG-CTX _EXT4-JWR-ENSURE "
+                "0 0 0 _JWG-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _JWG-W-IOR CONSTANT _JWG-W"
             ),
             (
@@ -5423,7 +5624,7 @@ def test_jbd2_writer_staging_coalesces_and_cancels_without_io(
             ),
             "_JST-ARENA _JST-CTX _EXT4-C.ARENA + !",
             (
-                "3 3 3 _JST-CTX _EXT4-JWR-ENSURE "
+                "3 3 3 _JST-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _JST-W-IOR CONSTANT _JST-W"
             ),
             "_JST-ARENA ARENA-USED CONSTANT _JST-ARENA-USED",
@@ -5608,7 +5809,7 @@ def test_jbd2_writer_activation_is_ordered_and_publishes_after_cleanup(
                 "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
                 "_V _EXT4-CTX CONSTANT _AW-CTX",
                 (
-                    "1 0 0 _AW-CTX _EXT4-JWR-ENSURE "
+                    "1 0 0 _AW-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _AW-E-IOR CONSTANT _AW-W"
                 ),
                 "_AW-W _EXT4-JWR.HEAD + @ CONSTANT _AW-HEAD",
@@ -5762,7 +5963,7 @@ def test_jbd2_writer_activation_rejects_other_inode_protocol_home_alias(
                 "T-ARENA T-VOLUME EXT4-NEW CONSTANT _PO-M-IOR CONSTANT _PO-V",
                 "_PO-V _EXT4-CTX CONSTANT _PO-CTX",
                 (
-                    "1 0 0 _PO-CTX _EXT4-JWR-ENSURE "
+                    "1 0 0 _PO-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _PO-E-IOR CONSTANT _PO-W"
                 ),
                 "_PO-W _EXT4-JWR-ACTIVATE CONSTANT _PO-A-IOR",
@@ -5938,7 +6139,7 @@ def test_jbd2_writer_emits_one_ordered_transaction_and_retains_afterimages(
                 "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
                 "_V _EXT4-CTX CONSTANT _EW-CTX",
                 (
-                    "1 1 1 _EW-CTX _EXT4-JWR-ENSURE "
+                    "1 1 1 _EW-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _EW-E-IOR CONSTANT _EW-W"
                 ),
                 "_EW-W _EXT4-JWR.HEAD + @ CONSTANT _EW-GUARD",
@@ -6379,7 +6580,7 @@ def test_jbd2_writer_batches_descriptors_and_revokes_across_ring_wrap(
                 ),
                 "_GB-V _EXT4-CTX CONSTANT _GB-CTX",
                 (
-                    "63 1 126 _GB-CTX _EXT4-JWR-ENSURE "
+                    "63 1 126 _GB-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _GB-E-IOR CONSTANT _GB-W"
                 ),
                 (
@@ -6941,7 +7142,7 @@ def test_jbd2_checkpoint_reuses_ring_and_cleanly_unmounts_across_wrap(
                 ),
                 "_PC-V _EXT4-CTX CONSTANT _PC-CTX",
                 (
-                    "1 1 1 _PC-CTX _EXT4-JWR-ENSURE "
+                    "1 1 1 _PC-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _PC-E-IOR CONSTANT _PC-W"
                 ),
                 "_PC-ARENA ARENA-USED CONSTANT _PC-ARENA-USED",
@@ -7579,7 +7780,7 @@ def test_jbd2_writer_deactivation_faults_quarantine_and_remount(
                 ),
                 "_DF-V _EXT4-CTX CONSTANT _DF-CTX",
                 (
-                    "1 0 0 _DF-CTX _EXT4-JWR-ENSURE "
+                    "1 0 0 _DF-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _DF-E-IOR CONSTANT _DF-W"
                 ),
                 "T-ARENA ARENA-USED CONSTANT _DF-ARENA-USED",
@@ -7776,7 +7977,7 @@ def test_jbd2_checkpoint_rejects_corrupt_retained_image_without_io(
                 ),
                 "_CI-V _EXT4-CTX CONSTANT _CI-CTX",
                 (
-                    "1 1 1 _CI-CTX _EXT4-JWR-ENSURE "
+                    "1 1 1 _CI-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _CI-E-IOR CONSTANT _CI-W"
                 ),
                 "_CI-ARENA ARENA-USED CONSTANT _CI-ARENA-USED",
@@ -8070,7 +8271,7 @@ def test_jbd2_checkpoint_rejects_coherent_log_mismatch_without_io(
                 ),
                 "_CB-V _EXT4-CTX CONSTANT _CB-CTX",
                 (
-                    "1 1 1 _CB-CTX _EXT4-JWR-ENSURE "
+                    "1 1 1 _CB-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _CB-E-IOR CONSTANT _CB-W"
                 ),
                 "_CB-ARENA ARENA-USED CONSTANT _CB-ARENA-USED",
@@ -8375,7 +8576,7 @@ def test_jbd2_checkpoint_flush_and_proof_faults_quarantine(
                 ),
                 "_QF-V _EXT4-CTX CONSTANT _QF-CTX",
                 (
-                    "1 1 1 _QF-CTX _EXT4-JWR-ENSURE "
+                    "1 1 1 _QF-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _QF-E-IOR CONSTANT _QF-W"
                 ),
                 "_QF-ARENA ARENA-USED CONSTANT _QF-ARENA-USED",
@@ -8742,7 +8943,7 @@ def test_jbd2_checkpoint_prefix_faults_remount_and_release(
                 ),
                 "_CF-V _EXT4-CTX CONSTANT _CF-CTX",
                 (
-                    "1 1 1 _CF-CTX _EXT4-JWR-ENSURE "
+                    "1 1 1 _CF-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _CF-E-IOR CONSTANT _CF-W"
                 ),
                 "_CF-ARENA ARENA-USED CONSTANT _CF-USED-BEFORE",
@@ -9045,7 +9246,7 @@ def test_jbd2_active_reset_publication_retries_from_emitted_commit(
                 "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
                 "_V _EXT4-CTX CONSTANT _RR-CTX",
                 (
-                    "1 1 1 _RR-CTX _EXT4-JWR-ENSURE "
+                    "1 1 1 _RR-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _RR-E-IOR CONSTANT _RR-W"
                 ),
                 "_RR-W _EXT4-JWR-ACTIVATE CONSTANT _RR-A-IOR",
@@ -9403,7 +9604,7 @@ def test_jbd2_writer_publication_faults_remount_and_rebase_in_place(
                 ),
                 "_EF-V _EXT4-CTX CONSTANT _EF-CTX",
                 (
-                    "1 1 1 _EF-CTX _EXT4-JWR-ENSURE "
+                    "1 1 1 _EF-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _EF-E-IOR CONSTANT _EF-W"
                 ),
                 (
@@ -9825,7 +10026,7 @@ def test_jbd2_writer_activation_faults_quarantine_and_mount_resolves(
                 "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
                 "_V _EXT4-CTX CONSTANT _AF-CTX",
                 (
-                    "1 0 0 _AF-CTX _EXT4-JWR-ENSURE "
+                    "1 0 0 _AF-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _AF-E-IOR CONSTANT _AF-W"
                 ),
                 "_AF-W _EXT4-JWR.HEAD + @ CONSTANT _AF-HEAD",
@@ -10024,7 +10225,7 @@ def test_jbd2_writer_activation_resolver_retries_second_generation_tears(
                 "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
                 "_V _EXT4-CTX CONSTANT _SG-CTX",
                 (
-                    "1 0 0 _SG-CTX _EXT4-JWR-ENSURE "
+                    "1 0 0 _SG-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _SG-E-IOR CONSTANT _SG-W"
                 ),
                 "_SG-W _EXT4-JWR-ACTIVATE CONSTANT _SG-A-IOR",
@@ -10172,7 +10373,7 @@ def test_jbd2_writer_activation_primary_binding_rejects_stale_copies_without_io(
                 "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
                 "_V _EXT4-CTX CONSTANT _SP-CTX",
                 (
-                    "1 0 0 _SP-CTX _EXT4-JWR-ENSURE "
+                    "1 0 0 _SP-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _SP-E-IOR CONSTANT _SP-W"
                 ),
                 "_SP-W _EXT4-JWR.SCRATCH-A + @ CONSTANT _SP-BUF",
@@ -12102,7 +12303,7 @@ def test_typed_orphan_afterimages_coalesce_and_abort_without_io(
             ),
             "-1 _TO-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
-                "2 0 0 _TO-CTX _EXT4-JWR-ENSURE "
+                "2 0 0 _TO-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _TO-WRITER-IOR CONSTANT _TO-WRITER"
             ),
             "_TO-WRITER _EXT4-JWR.FREE + @ CONSTANT _TO-FREE-BEFORE",
@@ -12261,7 +12462,7 @@ def test_typed_orphan_staging_rejects_stale_and_conflicting_authority(
             "_TR-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _TR-JOURNAL-IOR",
             "-1 _TR-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
-                "2 0 0 _TR-CTX _EXT4-JWR-ENSURE "
+                "2 0 0 _TR-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _TR-WRITER-IOR CONSTANT _TR-WRITER"
             ),
             (
@@ -12501,7 +12702,7 @@ def test_typed_unlinked_orphan_inode_release_stages_exact_accounting(
             "_UI-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _UI-JOURNAL-IOR",
             "-1 _UI-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
-                "4 0 0 _UI-CTX _EXT4-JWR-ENSURE "
+                "4 0 0 _UI-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _UI-WRITER-IOR CONSTANT _UI-WRITER"
             ),
             (
@@ -12628,7 +12829,7 @@ def test_unlinked_cleanup_rejects_target_crc_substitution_prehome(
             ),
             "-1 _DC-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
-                "_DC-CREDIT 0 0 _DC-CTX _EXT4-JWR-ENSURE "
+                "_DC-CREDIT 0 0 _DC-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _DC-WRITER-IOR CONSTANT _DC-WRITER"
             ),
             (
@@ -12750,7 +12951,7 @@ def test_unlinked_singleton_cleanup_measures_and_seals_exact_certificate(
             ),
             "-1 _US-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
-                "_US-CREDIT 0 0 _US-CTX _EXT4-JWR-ENSURE "
+                "_US-CREDIT 0 0 _US-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _US-WRITER-IOR CONSTANT _US-WRITER"
             ),
             (
@@ -12918,7 +13119,7 @@ def test_one_block_unlinked_cleanup_measures_and_seals_exact_certificate(
             ),
             "-1 _UD-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
-                "_UD-CREDIT 0 0 _UD-CTX _EXT4-JWR-ENSURE "
+                "_UD-CREDIT 0 0 _UD-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _UD-WRITER-IOR CONSTANT _UD-WRITER"
             ),
             (
@@ -13468,6 +13669,11 @@ def _run_singleton_unlinked_cleanup(
                         "_UR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                         "_UR-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
                         "_UR-CTX _EXT4-C.J.WRITER + @ 0=",
+                        (
+                            "_UR-CTX _EXT4-C.J.WRITER-STORE-KIND + @ "
+                            "0="
+                        ),
+                        "_UR-CTX _EXT4-C.J.WRITER-ARENA + @ 0=",
                         (
                             "_UR-CTX _EXT4-C.J.HOME-WRITES + @ "
                             f"{expected_home_writes} ="
@@ -15084,7 +15290,7 @@ def test_singleton_legacy_depth0_credit_and_final_seal(
             ),
             "-1 _LF-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
-                "_LF-CREDIT1 0 0 _LF-CTX _EXT4-JWR-ENSURE "
+                "_LF-CREDIT1 0 0 _LF-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _LF-WRITER-IOR CONSTANT _LF-WRITER"
             ),
             (
@@ -15978,7 +16184,7 @@ def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
             ),
             "-1 _OF-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
-                "_OF-CREDIT 0 0 _OF-CTX _EXT4-JWR-ENSURE "
+                "_OF-CREDIT 0 0 _OF-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _OF-WRITER-IOR CONSTANT _OF-WRITER"
             ),
             (
@@ -16099,7 +16305,7 @@ def test_singleton_modern_depth0_credit_counts_cross_group_homes_exactly(
             ),
             "-1 _OM-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
-                "_OM-CREDIT1 0 0 _OM-CTX _EXT4-JWR-ENSURE "
+                "_OM-CREDIT1 0 0 _OM-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _OM-WRITER-IOR CONSTANT _OM-WRITER"
             ),
             (
@@ -16193,7 +16399,7 @@ def test_singleton_modern_depth0_cleanup_checkpoints_and_deactivates(
                 ),
                 "-1 _OC-CTX _EXT4-C.J.WRITER-CURRENT + !",
                 (
-                    "5 0 0 _OC-CTX _EXT4-JWR-ENSURE "
+                    "5 0 0 _OC-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _OC-WRITER-IOR CONSTANT _OC-WRITER"
                 ),
                 (
@@ -16311,7 +16517,7 @@ def test_already_truncated_modern_orphan_uses_slot_only_final_transaction(
                 ),
                 "-1 _OE-CTX _EXT4-C.J.WRITER-CURRENT + !",
                 (
-                    "_OE-CREDIT 0 0 _OE-CTX _EXT4-JWR-ENSURE "
+                    "_OE-CREDIT 0 0 _OE-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _OE-WRITER-IOR CONSTANT _OE-WRITER"
                 ),
                 (
@@ -16431,7 +16637,7 @@ def test_singleton_modern_cleanup_rejects_certificate_substitution_prehome(
                 ),
                 "-1 _OS-CTX _EXT4-C.J.WRITER-CURRENT + !",
                 (
-                    "5 0 0 _OS-CTX _EXT4-JWR-ENSURE "
+                    "5 0 0 _OS-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _OS-WRITER-IOR CONSTANT _OS-WRITER"
                 ),
                 (
@@ -16654,7 +16860,7 @@ def test_typed_depth0_orphan_truncation_stages_exact_afterimages_without_io(
             "_OT-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OT-JOURNAL-IOR",
             "-1 _OT-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
-                "4 0 0 _OT-CTX _EXT4-JWR-ENSURE "
+                "4 0 0 _OT-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _OT-WRITER-IOR CONSTANT _OT-WRITER"
             ),
             "_OT-WRITER _EXT4-JWR.FREE + @ CONSTANT _OT-FREE-BEFORE",
@@ -16933,7 +17139,7 @@ def test_typed_depth0_orphan_truncation_auto_aborts_partial_credit_failure(
             "_OA-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OA-JOURNAL-IOR",
             "-1 _OA-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
-                "4 0 0 _OA-CTX _EXT4-JWR-ENSURE "
+                "4 0 0 _OA-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _OA-WRITER-IOR CONSTANT _OA-WRITER"
             ),
             "_OA-WRITER _EXT4-JWR.FREE + @ CONSTANT _OA-FREE-BEFORE",
@@ -17329,7 +17535,7 @@ def test_typed_free_block_range_afterimages_compose_and_abort_without_io(
                 "CONSTANT _FB-CACHED-SUPER-FREE"
             ),
             (
-                "3 0 0 _FB-CTX _EXT4-JWR-ENSURE "
+                "3 0 0 _FB-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _FB-WRITER-IOR CONSTANT _FB-WRITER"
             ),
             "_FB-WRITER _EXT4-JWR.FREE + @ CONSTANT _FB-FREE-BEFORE",
@@ -17499,7 +17705,7 @@ def test_typed_free_block_range_rejects_stale_or_protected_ranges_without_io(
             ),
             "_FR-V _EXT4-CTX CONSTANT _FR-CTX",
             (
-                "3 0 0 _FR-CTX _EXT4-JWR-ENSURE "
+                "3 0 0 _FR-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _FR-WRITER-IOR CONSTANT _FR-WRITER"
             ),
             (
@@ -17753,7 +17959,7 @@ def test_typed_free_block_range_crosses_group_boundary_atomically_without_io(
                 "CONSTANT _FC-CACHED-SUPER-FREE"
             ),
             (
-                "4 0 0 _FC-CTX _EXT4-JWR-ENSURE "
+                "4 0 0 _FC-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _FC-WRITER-IOR CONSTANT _FC-WRITER"
             ),
             (
@@ -17862,7 +18068,7 @@ def test_typed_free_block_range_auto_aborts_a_partial_credit_failure(
             ),
             "_FA-V _EXT4-CTX CONSTANT _FA-CTX",
             (
-                "3 0 0 _FA-CTX _EXT4-JWR-ENSURE "
+                "3 0 0 _FA-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _FA-WRITER-IOR CONSTANT _FA-WRITER"
             ),
             "_FA-WRITER _EXT4-JWR.FREE + @ CONSTANT _FA-FREE-BEFORE",
@@ -17996,7 +18202,7 @@ def test_typed_free_block_range_rejects_an_aliased_bitmap_home(
             ),
             "_FAL-V _EXT4-CTX CONSTANT _FAL-CTX",
             (
-                "3 0 0 _FAL-CTX _EXT4-JWR-ENSURE "
+                "3 0 0 _FAL-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _FAL-WRITER-IOR CONSTANT _FAL-WRITER"
             ),
             (
@@ -18378,7 +18584,7 @@ def test_typed_one_block_write_stages_ordered_rmw_and_inode_times(
             ),
             "_TW-V _EXT4-CTX CONSTANT _TW-CTX",
             (
-                "1 1 0 _TW-CTX _EXT4-JWR-ENSURE "
+                "1 1 0 _TW-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _TW-WRITER-IOR CONSTANT _TW-WRITER"
             ),
             "_TW-ARENA ARENA-USED CONSTANT _TW-USED-BEFORE",
@@ -18757,7 +18963,7 @@ def test_typed_one_block_write_emits_checkpoints_and_cleanly_remounts(
                     "CONSTANT _WD-CAPACITY-IOR"
                 ),
                 (
-                    "1 1 0 _WD-CTX _EXT4-JWR-ENSURE "
+                    "1 1 0 _WD-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _WD-WRITER-IOR CONSTANT _WD-WRITER"
                 ),
                 (
@@ -19268,7 +19474,7 @@ def test_typed_one_block_write_checkpoint_tear_replays_exact_inode(
                     "CONSTANT _WT-CAPACITY-IOR"
                 ),
                 (
-                    "1 1 0 _WT-CTX _EXT4-JWR-ENSURE "
+                    "1 1 0 _WT-CTX _EXT4-JWR-ALLOCATE-MOUNT "
                     "CONSTANT _WT-WRITER-IOR CONSTANT _WT-WRITER"
                 ),
                 "_WT-ARENA ARENA-USED CONSTANT _WT-USED-BEFORE",
@@ -19766,6 +19972,25 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
                     "CONSTANT _MWP-ZERO-IOR CONSTANT _MWP-ZERO-ACTUAL"
                 ),
                 "_MWP-ARENA ARENA-USED CONSTANT _MWP-USED-AFTER-ZERO",
+                (
+                    "_MWP-CTX _EXT4-C.J.WRITER + @ "
+                    "CONSTANT _MWP-ZERO-WRITER"
+                ),
+                (
+                    f'S" X" 0 14 {generation} {first_seconds} '
+                    f"{first_nanoseconds} _MWP-V "
+                    "_EXT4-MOUNTED-ONEBLOCK-WRITE "
+                    "CONSTANT _MWP-NOPROFILE-IOR "
+                    "CONSTANT _MWP-NOPROFILE-ACTUAL"
+                ),
+                "_MWP-ARENA ARENA-USED CONSTANT _MWP-USED-NOPROFILE",
+                (
+                    "_MWP-CTX _EXT4-C.J.WRITER + @ "
+                    "CONSTANT _MWP-NOPROFILE-WRITER"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_MWP-PROFILE", "_MWP-V"
+                ),
                 'S" X" _EXT4-MOW-SNAPSHOT SWAP MOVE',
                 (
                     f"_EXT4-MOW-SNAPSHOT 1 0 14 {generation} "
@@ -19789,12 +20014,22 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
                             "_MWP-ZERO-IOR 0=",
                             "_MWP-ZERO-ACTUAL 0=",
                             "_MWP-USED-AFTER-ZERO _MWP-USED-EMPTY =",
+                            "_MWP-ZERO-WRITER 0=",
+                            "_MWP-NOPROFILE-IOR VFS-E-NOSPC =",
+                            "_MWP-NOPROFILE-ACTUAL 0=",
+                            "_MWP-NOPROFILE-WRITER 0=",
+                            "_MWP-USED-NOPROFILE _MWP-USED-EMPTY =",
+                            "_MWP-PROFILE-SIZE-IOR 0=",
+                            "_MWP-PROFILE-SIZE 0>",
+                            "_MWP-PROFILE-BIND-IOR 0=",
+                            "_MWP-PROFILE-USED _MWP-PROFILE-SIZE =",
                             "_MWP-ALIAS-IOR VFS-E-INVALID =",
                             "_MWP-ALIAS-ACTUAL 0=",
                             "_MWP-USED-AFTER-ALIAS _MWP-USED-EMPTY =",
                             "_MWP-STALE-IOR VFS-E-STALE =",
                             "_MWP-STALE-ACTUAL 0=",
                             "_MWP-WRITER 0<>",
+                            "_MWP-WRITER _MWP-PROFILE-BASE =",
                             "_MWP-WRITER _EXT4-JWR-VALID?",
                             (
                                 "_MWP-WRITER _EXT4-JWR.STATE + @ "
@@ -19803,6 +20038,19 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
                             "_MWP-WRITER _EXT4-JWR-IDLE-CLEAN?",
                             "_MWP-CTX _EXT4-C.RECOVERY + @ 0=",
                             "_MWP-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                            (
+                                "_MWP-CTX _EXT4-C.J.WRITER-STORE-KIND + @ "
+                                "_EXT4-JWR-STORE-DEDICATED ="
+                            ),
+                            (
+                                "_MWP-CTX _EXT4-C.J.WRITER-ARENA + @ "
+                                "_MWP-PROFILE-ARENA ="
+                            ),
+                            "_MWP-USED-WRITER _MWP-USED-EMPTY =",
+                            (
+                                "_MWP-PROFILE-ARENA ARENA-USED "
+                                "_MWP-PROFILE-USED ="
+                            ),
                             "_MWP-V V.FLAGS @ VFS-F-DIRTY AND 0=",
                             (
                                 "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
@@ -19815,7 +20063,14 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
                 "0 _MWP-V VFS-UNMOUNT CONSTANT _MWP-UNMOUNT-IOR",
                 (
                     "_MWP-UNMOUNT-IOR 0= "
-                    "_MWP-ARENA ARENA-USED _MWP-USED-WRITER = AND "
+                    "_MWP-ARENA ARENA-USED _MWP-USED-EMPTY = AND "
+                    "_MWP-CTX _EXT4-C.J.WRITER + @ 0= AND "
+                    "_MWP-CTX _EXT4-C.J.WRITER-STORE-KIND + @ 0= AND "
+                    "_MWP-CTX _EXT4-C.J.WRITER-ARENA + @ 0= AND "
+                    "_MWP-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_MWP-PROFILE-ARENA A.PTR @ _MWP-PROFILE-BASE = AND "
+                    "_MWP-WRITER _MWP-PROFILE-SIZE "
+                    "_EXT4-BYTES-ZERO? AND "
                     'IF ." EXT4-MOUNTED-WRITE-REFUSAL-UNMOUNT" THEN'
                 ),
             ],
@@ -19840,6 +20095,11 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
                     "CONSTANT _MW-MOUNT-IOR CONSTANT _MW-V"
                 ),
                 "_MW-V _EXT4-CTX CONSTANT _MW-CTX",
+                "_MW-ARENA ARENA-USED CONSTANT _MW-MAIN-PREBIND",
+                *_ext4_dedicated_writer_profile_forth(
+                    "_MW-PROFILE", "_MW-V"
+                ),
+                "_MW-ARENA ARENA-USED CONSTANT _MW-MAIN-POSTBIND",
                 (
                     f'S" {first_replacement.decode()}" '
                     "_MW-CTX _EXT4-C.BLOCK + SWAP MOVE"
@@ -19857,10 +20117,29 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
                     _forth_conjunction(
                         [
                             "_MW-MOUNT-IOR 0=",
+                            "_MW-PROFILE-SIZE-IOR 0=",
+                            "_MW-PROFILE-SIZE 0>",
+                            "_MW-PROFILE-BIND-IOR 0=",
+                            "_MW-PROFILE-USED _MW-PROFILE-SIZE =",
+                            "_MW-MAIN-POSTBIND _MW-MAIN-PREBIND =",
                             f"_MW-FIRST-ACTUAL {len(first_replacement)} =",
                             "_MW-FIRST-IOR 0=",
                             "_MW-WRITER 0<>",
+                            "_MW-WRITER _MW-PROFILE-BASE =",
                             "_MW-WRITER _EXT4-JWR-VALID?",
+                            (
+                                "_MW-CTX _EXT4-C.J.WRITER-STORE-KIND + @ "
+                                "_EXT4-JWR-STORE-DEDICATED ="
+                            ),
+                            (
+                                "_MW-CTX _EXT4-C.J.WRITER-ARENA + @ "
+                                "_MW-PROFILE-ARENA ="
+                            ),
+                            "_MW-USED-WRITER _MW-MAIN-PREBIND =",
+                            (
+                                "_MW-PROFILE-ARENA ARENA-USED "
+                                "_MW-PROFILE-USED ="
+                            ),
                             "_MW-CTX _EXT4-C.J.HOME-WRITES + @ 1 =",
                             "_MW-CTX _EXT4-C.RECOVERY + @ 0<>",
                             "_MW-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
@@ -19909,6 +20188,10 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
                             "_MW-SECOND-IOR 0=",
                             "_MW-SECOND-WRITER _MW-WRITER =",
                             "_MW-USED-SECOND _MW-USED-WRITER =",
+                            (
+                                "_MW-PROFILE-ARENA ARENA-USED "
+                                "_MW-PROFILE-USED ="
+                            ),
                             "_MW-CTX _EXT4-C.J.HOME-WRITES + @ 1 =",
                             "_MW-WRITER _EXT4-JWR-VALID?",
                             "_MW-WRITER _EXT4-JWR-IDLE-CLEAN?",
@@ -20309,6 +20592,11 @@ def test_private_vfs_shaped_write_publishes_shared_vnode_and_syncs_clean(
                     "CONSTANT _VA-MOUNT-IOR CONSTANT _VA-V"
                 ),
                 "_VA-V _EXT4-CTX CONSTANT _VA-CTX",
+                "_VA-ARENA ARENA-USED CONSTANT _VA-MAIN-PREBIND",
+                *_ext4_dedicated_writer_profile_forth(
+                    "_VA-PROFILE", "_VA-V"
+                ),
+                "_VA-ARENA ARENA-USED CONSTANT _VA-MAIN-POSTBIND",
                 (
                     'S" /fixture/payload.txt" _VA-V VFS-RESOLVE? '
                     "CONSTANT _VA-P-IOR CONSTANT _VA-P"
@@ -20387,7 +20675,13 @@ def test_private_vfs_shaped_write_publishes_shared_vnode_and_syncs_clean(
                             "_VA-ZERO-ACTUAL 0=",
                             "_VA-NOCLOCK-IOR VFS-E-UNSUPPORTED =",
                             "_VA-NOCLOCK-ACTUAL 0=",
-                            "_VA-PRE-WRITER 0=",
+                            "_VA-PROFILE-SIZE-IOR 0=",
+                            "_VA-PROFILE-SIZE 0>",
+                            "_VA-PROFILE-BIND-IOR 0=",
+                            "_VA-PROFILE-USED _VA-PROFILE-SIZE =",
+                            "_VA-MAIN-POSTBIND _VA-MAIN-PREBIND =",
+                            "_VA-PRE-WRITER _VA-PROFILE-BASE =",
+                            "_VA-PRE-WRITER _EXT4-JWR-VALID?",
                             "_VA-USED-PRECLOCK _VA-USED-CLEAN =",
                             "_VA-BIND-IOR 0=",
                             "_VA-REBIND-IOR VFS-E-CONFLICT =",
@@ -20418,9 +20712,22 @@ def test_private_vfs_shaped_write_publishes_shared_vnode_and_syncs_clean(
                             "_VA-PFD FD.CUR-LO @ 0=",
                             "_VA-HFD FD.CUR-LO @ 0=",
                             "_VA-WRITER 0<>",
+                            "_VA-WRITER _VA-PRE-WRITER =",
                             "_VA-WRITER _EXT4-JWR-VALID?",
                             "_VA-WRITER _EXT4-JWR-IDLE-CLEAN?",
-                            "_VA-USED-WRITER _VA-USED-CLEAN >",
+                            "_VA-USED-WRITER _VA-USED-CLEAN =",
+                            (
+                                "_VA-PROFILE-ARENA ARENA-USED "
+                                "_VA-PROFILE-USED ="
+                            ),
+                            (
+                                "_VA-CTX _EXT4-C.J.WRITER-STORE-KIND + @ "
+                                "_EXT4-JWR-STORE-DEDICATED ="
+                            ),
+                            (
+                                "_VA-CTX _EXT4-C.J.WRITER-ARENA + @ "
+                                "_VA-PROFILE-ARENA ="
+                            ),
                             "_VA-CTX _EXT4-C.RECOVERY + @ 0=",
                             "_VA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                             "_VA-V V.FLAGS @ VFS-F-DIRTY AND 0=",
@@ -20448,6 +20755,10 @@ def test_private_vfs_shaped_write_publishes_shared_vnode_and_syncs_clean(
                             "_VA-CTX _EXT4-C.J.WRITER + @ _VA-WRITER =",
                             "_VA-WRITER _EXT4-JWR-IDLE-CLEAN?",
                             "_VA-ARENA ARENA-USED _VA-USED-WRITER =",
+                            (
+                                "_VA-PROFILE-ARENA ARENA-USED "
+                                "_VA-PROFILE-USED ="
+                            ),
                             (
                                 "_VA-CTX _EXT4-C.WCLOCK-XT + @ "
                                 "' _VA-NOW ="
@@ -20499,6 +20810,10 @@ def test_private_vfs_shaped_write_publishes_shared_vnode_and_syncs_clean(
                             "_VA-CTX _EXT4-C.J.WRITER + @ _VA-WRITER =",
                             "_VA-WRITER _EXT4-JWR-IDLE-CLEAN?",
                             "_VA-ARENA ARENA-USED _VA-USED-WRITER =",
+                            (
+                                "_VA-PROFILE-ARENA ARENA-USED "
+                                "_VA-PROFILE-USED ="
+                            ),
                         ]
                     )
                     + ' IF ." EXT4-VFS-WRITE-PUBLISHED" THEN'
@@ -20549,6 +20864,10 @@ def test_private_vfs_shaped_write_publishes_shared_vnode_and_syncs_clean(
                             "_VA-CTX _EXT4-C.J.WRITER + @ _VA-WRITER =",
                             "_VA-WRITER _EXT4-JWR-IDLE-CLEAN?",
                             "_VA-ARENA ARENA-USED _VA-USED-WRITER =",
+                            (
+                                "_VA-PROFILE-ARENA ARENA-USED "
+                                "_VA-PROFILE-USED ="
+                            ),
                             "_VA-CTX _EXT4-C.RECOVERY + @ 0=",
                             "_VA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                             "_VA-V V.FLAGS @ VFS-F-DIRTY AND 0=",
@@ -20578,6 +20897,22 @@ def test_private_vfs_shaped_write_publishes_shared_vnode_and_syncs_clean(
                             "_VA-V V.LIFECYCLE @ VFS-L-UNMOUNTED =",
                             "_VA-V V.BCTX @ 0=",
                             "_VA-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                            "_VA-CTX _EXT4-C.J.WRITER + @ 0=",
+                            (
+                                "_VA-CTX _EXT4-C.J.WRITER-STORE-KIND + @ "
+                                "0="
+                            ),
+                            "_VA-CTX _EXT4-C.J.WRITER-ARENA + @ 0=",
+                            "_VA-PROFILE-ARENA ARENA-USED 0=",
+                            (
+                                "_VA-PROFILE-ARENA A.PTR @ "
+                                "_VA-PROFILE-BASE ="
+                            ),
+                            (
+                                "_VA-WRITER _VA-PROFILE-SIZE "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_VA-ARENA ARENA-USED _VA-USED-WRITER =",
                         ]
                     )
                     + ' IF ." EXT4-VFS-WRITE-CLEAN-UNMOUNT" THEN'
@@ -20767,6 +21102,11 @@ def test_private_vfs_write_faults_report_confirmed_caller_prefix(
                         "' _VP-NOW 0 _VP-V _EXT4-BIND-WRITE-CLOCK "
                         "CONSTANT _VP-BIND-IOR"
                     ),
+                    "_VP-ARENA ARENA-USED CONSTANT _VP-MAIN-PREBIND",
+                    *_ext4_dedicated_writer_profile_forth(
+                        "_VP-PROFILE", "_VP-V"
+                    ),
+                    "_VP-ARENA ARENA-USED CONSTANT _VP-MAIN-POSTBIND",
                     (
                         f'S" {replacement_text}" {write_offset} '
                         "_VP-D _VP-V _EXT4-WRITE "
@@ -20776,12 +21116,19 @@ def test_private_vfs_write_faults_report_confirmed_caller_prefix(
                         "_VP-CTX _EXT4-C.J.WRITER + @ "
                         "CONSTANT _VP-WRITER"
                     ),
+                    "_VP-ARENA ARENA-USED CONSTANT _VP-MAIN-AFTER",
                     (
                         _forth_conjunction(
                             [
                                 "_VP-MOUNT-IOR 0=",
                                 "_VP-RESOLVE-IOR 0=",
                                 "_VP-BIND-IOR 0=",
+                                "_VP-PROFILE-SIZE-IOR 0=",
+                                "_VP-PROFILE-SIZE 0>",
+                                "_VP-PROFILE-BIND-IOR 0=",
+                                "_VP-PROFILE-USED _VP-PROFILE-SIZE =",
+                                "_VP-MAIN-POSTBIND _VP-MAIN-PREBIND =",
+                                "_VP-MAIN-AFTER _VP-MAIN-PREBIND =",
                                 f"_VP-ACTUAL {expected_actual} =",
                                 (
                                     "_VP-IOR VFS-IOR-DOMAIN "
@@ -20797,6 +21144,7 @@ def test_private_vfs_write_faults_report_confirmed_caller_prefix(
                                     "VFS-IOR-F-READONLY OR ="
                                 ),
                                 "_VP-WRITER 0<>",
+                                "_VP-WRITER _VP-PROFILE-BASE =",
                                 (
                                     "_VP-WRITER _EXT4-JWR.STATE + @ "
                                     "_EXT4-JWR-FAULTED ="
@@ -20815,6 +21163,24 @@ def test_private_vfs_write_faults_report_confirmed_caller_prefix(
                                     "_VP-WRITER _EXT4-JWR.FAULT + @ "
                                     "VFS-IOR-FLAGS "
                                     "VFS-IOR-F-READONLY AND 0="
+                                ),
+                                (
+                                    "_VP-CTX "
+                                    "_EXT4-C.J.WRITER-STORE-KIND + @ "
+                                    "_EXT4-JWR-STORE-DEDICATED ="
+                                ),
+                                (
+                                    "_VP-CTX _EXT4-C.J.WRITER-ARENA + @ "
+                                    "_VP-PROFILE-ARENA ="
+                                ),
+                                (
+                                    "_VP-PROFILE-ARENA ARENA-USED "
+                                    "_VP-PROFILE-USED ="
+                                ),
+                                (
+                                    "_VP-PROFILE-ARENA A.PTR @ "
+                                    "_VP-PROFILE-BASE "
+                                    "_VP-PROFILE-SIZE + ="
                                 ),
                                 "_VP-V V.LIFECYCLE @ VFS-L-MOUNTED =",
                                 "_VP-V V.FLAGS @ VFS-F-RO AND 0<>",
@@ -20924,6 +21290,15 @@ def test_private_vfs_write_returns_block_bounded_short_success(
                     "' _SC-NOW _SC-CLOCK _SC-V "
                     "_EXT4-BIND-WRITE-CLOCK CONSTANT _SC-BIND-IOR"
                 ),
+                "_SC-ARENA ARENA-USED CONSTANT _SC-MAIN-PREBIND",
+                *_ext4_dedicated_writer_profile_forth(
+                    "_SC-PROFILE", "_SC-V"
+                ),
+                "_SC-ARENA ARENA-USED CONSTANT _SC-MAIN-POSTBIND",
+                (
+                    "_SC-CTX _EXT4-C.J.WRITER + @ "
+                    "CONSTANT _SC-PROFILE-WRITER"
+                ),
                 "_SC-ARENA ARENA-USED CONSTANT _SC-USED-CLEAN",
                 (
                     f"_SC-SOURCE {source_bytes} 2500 "
@@ -20962,6 +21337,11 @@ def test_private_vfs_write_returns_block_bounded_short_success(
                             "_SC-MOUNT-IOR 0=",
                             "_SC-RESOLVE-IOR 0=",
                             "_SC-BIND-IOR 0=",
+                            "_SC-PROFILE-SIZE-IOR 0=",
+                            "_SC-PROFILE-SIZE 0>",
+                            "_SC-PROFILE-BIND-IOR 0=",
+                            "_SC-PROFILE-USED _SC-PROFILE-SIZE =",
+                            "_SC-MAIN-POSTBIND _SC-MAIN-PREBIND =",
                             "_SC-GROW-ACTUAL 0=",
                             (
                                 "_SC-GROW-IOR VFS-IOR-REASON "
@@ -20971,8 +21351,12 @@ def test_private_vfs_write_returns_block_bounded_short_success(
                                 "_SC-GROW-IOR VFS-IOR-DETAIL "
                                 "EXT4-D-RECOVERY ="
                             ),
-                            "_SC-GROW-WRITER 0=",
+                            "_SC-GROW-WRITER _SC-PROFILE-WRITER =",
                             "_SC-USED-AFTER-GROW _SC-USED-CLEAN =",
+                            (
+                                "_SC-PROFILE-ARENA ARENA-USED "
+                                "_SC-PROFILE-USED ="
+                            ),
                             "_SC-GROW-CLOCK 0=",
                             "_SC-FIRST-IOR 0=",
                             "_SC-FIRST-ACTUAL 8 =",
@@ -21007,6 +21391,7 @@ def test_private_vfs_write_returns_block_bounded_short_success(
                             "_SC-VN VN.SIZE-LO @ 3072 =",
                             "_SC-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
                             "_SC-WRITER 0<>",
+                            "_SC-WRITER _SC-PROFILE-BASE =",
                             (
                                 "_SC-CTX _EXT4-C.J.WRITER + @ "
                                 "_SC-WRITER ="
@@ -21014,6 +21399,11 @@ def test_private_vfs_write_returns_block_bounded_short_success(
                             "_SC-WRITER _EXT4-JWR-IDLE-CLEAN?",
                             "_SC-WRITER _EXT4-JWR.FAULT + @ 0=",
                             "_SC-ARENA ARENA-USED _SC-USED =",
+                            "_SC-USED _SC-USED-CLEAN =",
+                            (
+                                "_SC-PROFILE-ARENA ARENA-USED "
+                                "_SC-PROFILE-USED ="
+                            ),
                             "_SC-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_SC-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                             (
@@ -21028,6 +21418,8 @@ def test_private_vfs_write_returns_block_bounded_short_success(
                 (
                     "_SC-UNMOUNT-IOR 0= "
                     "_SC-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_SC-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_SC-PROFILE-ARENA A.PTR @ _SC-PROFILE-BASE = AND "
                     'IF ." EXT4-VFS-WRITE-BLOCK-BOUNDED-UNMOUNT" THEN'
                 ),
             ],
@@ -21106,6 +21498,11 @@ def test_private_write_callback_composes_with_generic_vfs_cursor(
                     "' _GV-NOW _GV-CLOCK _GV-V "
                     "_EXT4-BIND-WRITE-CLOCK CONSTANT _GV-BIND-IOR"
                 ),
+                "_GV-ARENA ARENA-USED CONSTANT _GV-MAIN-PREBIND",
+                *_ext4_dedicated_writer_profile_forth(
+                    "_GV-PROFILE", "_GV-V"
+                ),
+                "_GV-ARENA ARENA-USED CONSTANT _GV-MAIN-POSTBIND",
                 (
                     'S" /fixture/sparse.bin" VFS-FF-WRITE _GV-V '
                     "VFS-OPEN? CONSTANT _GV-OPEN-IOR CONSTANT _GV-FD"
@@ -21149,6 +21546,11 @@ def test_private_write_callback_composes_with_generic_vfs_cursor(
                                 "VFS-BF-STABLE-IDS OR ="
                             ),
                             "_GV-BIND-IOR 0=",
+                            "_GV-PROFILE-SIZE-IOR 0=",
+                            "_GV-PROFILE-SIZE 0>",
+                            "_GV-PROFILE-BIND-IOR 0=",
+                            "_GV-PROFILE-USED _GV-PROFILE-SIZE =",
+                            "_GV-MAIN-POSTBIND _GV-MAIN-PREBIND =",
                             "_GV-OPEN-IOR 0=",
                             "_GV-FD 0<>",
                             (
@@ -21182,13 +21584,18 @@ def test_private_write_callback_composes_with_generic_vfs_cursor(
                             "_GV-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
                             "_GV-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                             "_GV-WRITER 0<>",
+                            "_GV-WRITER _GV-PROFILE-BASE =",
                             (
                                 "_GV-CTX _EXT4-C.J.WRITER + @ "
                                 "_GV-WRITER ="
                             ),
                             "_GV-WRITER _EXT4-JWR-IDLE-CLEAN?",
                             "_GV-WRITER _EXT4-JWR.FAULT + @ 0=",
-                            "_GV-USED-EXACT _GV-USED-CLEAN >",
+                            "_GV-USED-EXACT _GV-USED-CLEAN =",
+                            (
+                                "_GV-PROFILE-ARENA ARENA-USED "
+                                "_GV-PROFILE-USED ="
+                            ),
                             (
                                 "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
                                 "_EXT4-BYTES-ZERO?"
@@ -21202,6 +21609,8 @@ def test_private_write_callback_composes_with_generic_vfs_cursor(
                 (
                     "_GV-CLOSE-IOR 0= _GV-UNMOUNT-IOR 0= AND "
                     "_GV-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_GV-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_GV-PROFILE-ARENA A.PTR @ _GV-PROFILE-BASE = AND "
                     'IF ." EXT4-GENERIC-VFS-WRITE-UNMOUNT" THEN'
                 ),
             ],
@@ -21280,6 +21689,11 @@ def test_private_write_fault_advances_generic_vfs_confirmed_prefix(
                     "' _GF-NOW _GF-CLOCK _GF-V "
                     "_EXT4-BIND-WRITE-CLOCK CONSTANT _GF-BIND-IOR"
                 ),
+                "_GF-ARENA ARENA-USED CONSTANT _GF-MAIN-PREBIND",
+                *_ext4_dedicated_writer_profile_forth(
+                    "_GF-PROFILE", "_GF-V"
+                ),
+                "_GF-ARENA ARENA-USED CONSTANT _GF-MAIN-POSTBIND",
                 (
                     'S" /fixture/sparse.bin" VFS-FF-WRITE _GF-V '
                     "VFS-OPEN? CONSTANT _GF-OPEN-IOR CONSTANT _GF-FD"
@@ -21289,6 +21703,7 @@ def test_private_write_fault_advances_generic_vfs_confirmed_prefix(
                 "_GF-VN VN.MTIME-NS @ CONSTANT _GF-OLD-MTIME-NS",
                 "_GF-VN VN.CTIME @ CONSTANT _GF-OLD-CTIME",
                 "_GF-VN VN.CTIME-NS @ CONSTANT _GF-OLD-CTIME-NS",
+                "_GF-ARENA ARENA-USED CONSTANT _GF-MAIN-CLEAN",
                 (
                     "_GF-V V.FLAGS @ VFS-F-RO AND 0= "
                     "CONSTANT _GF-STARTED-WRITABLE"
@@ -21312,11 +21727,18 @@ def test_private_write_fault_advances_generic_vfs_confirmed_prefix(
                 "_GF-FD FD.CUR-LO @ CONSTANT _GF-RETRY-CURSOR",
                 "_GF-V V.LAST-IOR @ CONSTANT _GF-RETRY-LAST-IOR",
                 "_GF-FD VFS-CLOSE? CONSTANT _GF-CLOSE-IOR",
+                "_GF-ARENA ARENA-USED CONSTANT _GF-MAIN-AFTER",
                 (
                     _forth_conjunction(
                         [
                             "_GF-MOUNT-IOR 0=",
                             "_GF-BIND-IOR 0=",
+                            "_GF-PROFILE-SIZE-IOR 0=",
+                            "_GF-PROFILE-SIZE 0>",
+                            "_GF-PROFILE-BIND-IOR 0=",
+                            "_GF-PROFILE-USED _GF-PROFILE-SIZE =",
+                            "_GF-MAIN-POSTBIND _GF-MAIN-PREBIND =",
+                            "_GF-MAIN-AFTER _GF-MAIN-CLEAN =",
                             "_GF-OPEN-IOR 0=",
                             "_GF-STARTED-WRITABLE",
                             "_GF-SEEK-IOR 0=",
@@ -21334,6 +21756,7 @@ def test_private_write_fault_advances_generic_vfs_confirmed_prefix(
                             f"_GF-CURSOR {write_offset + expected_actual} =",
                             "_GF-LAST-IOR _GF-IOR =",
                             "_GF-WRITER 0<>",
+                            "_GF-WRITER _GF-PROFILE-BASE =",
                             (
                                 "_GF-WRITER _EXT4-JWR.STATE + @ "
                                 "_EXT4-JWR-FAULTED ="
@@ -21351,6 +21774,24 @@ def test_private_write_fault_advances_generic_vfs_confirmed_prefix(
                                 "_GF-WRITER _EXT4-JWR.FAULT + @ "
                                 "VFS-IOR-F-READONLY 24 LSHIFT OR "
                                 "_GF-IOR ="
+                            ),
+                            (
+                                "_GF-CTX "
+                                "_EXT4-C.J.WRITER-STORE-KIND + @ "
+                                "_EXT4-JWR-STORE-DEDICATED ="
+                            ),
+                            (
+                                "_GF-CTX _EXT4-C.J.WRITER-ARENA + @ "
+                                "_GF-PROFILE-ARENA ="
+                            ),
+                            (
+                                "_GF-PROFILE-ARENA ARENA-USED "
+                                "_GF-PROFILE-USED ="
+                            ),
+                            (
+                                "_GF-PROFILE-ARENA A.PTR @ "
+                                "_GF-PROFILE-BASE "
+                                "_GF-PROFILE-SIZE + ="
                             ),
                             "_GF-V V.FLAGS @ VFS-F-RO AND 0<>",
                             "_GF-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
@@ -21503,12 +21944,18 @@ def test_private_write_updates_initialized_depth_positive_extent(
                     "' _DP-NOW _DP-CLOCK _DP-V "
                     "_EXT4-BIND-WRITE-CLOCK CONSTANT _DP-BIND-IOR"
                 ),
+                "_DP-ARENA ARENA-USED CONSTANT _DP-MAIN-PREBIND",
+                *_ext4_dedicated_writer_profile_forth(
+                    "_DP-PROFILE", "_DP-V"
+                ),
+                "_DP-ARENA ARENA-USED CONSTANT _DP-MAIN-POSTBIND",
                 (
                     'S" /fixture/extent-tree.bin" '
                     "VFS-FF-READ VFS-FF-WRITE OR _DP-V VFS-OPEN? "
                     "CONSTANT _DP-OPEN-IOR CONSTANT _DP-FD"
                 ),
                 "_DP-FD FD.INODE @ D.VNODE @ CONSTANT _DP-VN",
+                "_DP-ARENA ARENA-USED CONSTANT _DP-MAIN-CLEAN",
                 (
                     f"{write_offset} _DP-FD VFS-SEEK? "
                     "CONSTANT _DP-SEEK-IOR"
@@ -21521,6 +21968,7 @@ def test_private_write_updates_initialized_depth_positive_extent(
                 "_DP-V V.LAST-IOR @ CONSTANT _DP-WRITE-LAST",
                 "_DP-FD FD.CUR-LO @ CONSTANT _DP-WRITE-CURSOR",
                 "_DP-CTX _EXT4-C.J.WRITER + @ CONSTANT _DP-WRITER",
+                "_DP-ARENA ARENA-USED CONSTANT _DP-MAIN-AFTER",
                 (
                     f"{write_offset} _DP-FD VFS-SEEK? "
                     "CONSTANT _DP-READ-SEEK-IOR"
@@ -21534,6 +21982,12 @@ def test_private_write_updates_initialized_depth_positive_extent(
                         [
                             "_DP-MOUNT-IOR 0=",
                             "_DP-BIND-IOR 0=",
+                            "_DP-PROFILE-SIZE-IOR 0=",
+                            "_DP-PROFILE-SIZE 0>",
+                            "_DP-PROFILE-BIND-IOR 0=",
+                            "_DP-PROFILE-USED _DP-PROFILE-SIZE =",
+                            "_DP-MAIN-POSTBIND _DP-MAIN-PREBIND =",
+                            "_DP-MAIN-AFTER _DP-MAIN-CLEAN =",
                             "_DP-OPEN-IOR 0=",
                             "_DP-SEEK-IOR 0=",
                             "_DP-WRITE-IOR 0=",
@@ -21561,8 +22015,13 @@ def test_private_write_updates_initialized_depth_positive_extent(
                             "_DP-V V.FLAGS @ VFS-F-RO AND 0=",
                             "_DP-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                             "_DP-WRITER 0<>",
+                            "_DP-WRITER _DP-PROFILE-BASE =",
                             "_DP-WRITER _EXT4-JWR-IDLE-CLEAN?",
                             "_DP-WRITER _EXT4-JWR.FAULT + @ 0=",
+                            (
+                                "_DP-PROFILE-ARENA ARENA-USED "
+                                "_DP-PROFILE-USED ="
+                            ),
                             (
                                 "_DP-CTX _EXT4-C.INODE + "
                                 "_EXT4-I.BLOCK + 6 + W@ 1 ="
@@ -21588,6 +22047,8 @@ def test_private_write_updates_initialized_depth_positive_extent(
                 (
                     "_DP-CLOSE-IOR 0= _DP-UNMOUNT-IOR 0= AND "
                     "_DP-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_DP-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_DP-PROFILE-ARENA A.PTR @ _DP-PROFILE-BASE = AND "
                     'IF ." EXT4-DEPTH-POSITIVE-WRITE-UNMOUNT" THEN'
                 ),
             ],
@@ -21758,6 +22219,11 @@ def test_depth_positive_write_rejects_own_extent_node_as_data(
                     "' _DA-NOW _DA-CLOCK _DA-V "
                     "_EXT4-BIND-WRITE-CLOCK CONSTANT _DA-BIND-IOR"
                 ),
+                "_DA-ARENA ARENA-USED CONSTANT _DA-MAIN-PREBIND",
+                *_ext4_dedicated_writer_profile_forth(
+                    "_DA-PROFILE", "_DA-V"
+                ),
+                "_DA-ARENA ARENA-USED CONSTANT _DA-MAIN-POSTBIND",
                 (
                     'S" /fixture/extent-tree.bin" '
                     "VFS-FF-READ VFS-FF-WRITE OR _DA-V VFS-OPEN? "
@@ -21777,6 +22243,11 @@ def test_depth_positive_write_rejects_own_extent_node_as_data(
                         [
                             "_DA-MOUNT-IOR 0=",
                             "_DA-BIND-IOR 0=",
+                            "_DA-PROFILE-SIZE-IOR 0=",
+                            "_DA-PROFILE-SIZE 0>",
+                            "_DA-PROFILE-BIND-IOR 0=",
+                            "_DA-PROFILE-USED _DA-PROFILE-SIZE =",
+                            "_DA-MAIN-POSTBIND _DA-MAIN-PREBIND =",
                             "_DA-OPEN-IOR 0=",
                             "_DA-SEEK-IOR 0=",
                             "_DA-ACTUAL 0=",
@@ -21800,9 +22271,14 @@ def test_depth_positive_write_rejects_own_extent_node_as_data(
                             "_DA-CURSOR 100 =",
                             "_DA-CLOCK @ 1 =",
                             "_DA-WRITER 0<>",
+                            "_DA-WRITER _DA-PROFILE-BASE =",
                             "_DA-WRITER _EXT4-JWR-IDLE-CLEAN?",
                             "_DA-WRITER _EXT4-JWR.FAULT + @ 0=",
-                            "_DA-USED-AFTER _DA-USED-CLEAN >",
+                            "_DA-USED-AFTER _DA-USED-CLEAN =",
+                            (
+                                "_DA-PROFILE-ARENA ARENA-USED "
+                                "_DA-PROFILE-USED ="
+                            ),
                             (
                                 f"_EXT4-JOW-PHYS @ "
                                 f"{extent_node_block} ="
@@ -21832,6 +22308,8 @@ def test_depth_positive_write_rejects_own_extent_node_as_data(
                 (
                     "_DA-CLOSE-IOR 0= _DA-UNMOUNT-IOR 0= AND "
                     "_DA-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_DA-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_DA-PROFILE-ARENA A.PTR @ _DA-PROFILE-BASE = AND "
                     'IF ." EXT4-DEPTH-POSITIVE-SELF-ALIAS-UNMOUNT" THEN'
                 ),
             ],
@@ -21922,11 +22400,17 @@ def test_depth_positive_write_rejects_extent_node_in_journal_ring(
                     "' _DJ-NOW _DJ-CLOCK _DJ-V "
                     "_EXT4-BIND-WRITE-CLOCK CONSTANT _DJ-BIND-IOR"
                 ),
+                "_DJ-ARENA ARENA-USED CONSTANT _DJ-MAIN-PREBIND",
+                *_ext4_dedicated_writer_profile_forth(
+                    "_DJ-PROFILE", "_DJ-V"
+                ),
+                "_DJ-ARENA ARENA-USED CONSTANT _DJ-MAIN-POSTBIND",
                 (
                     'S" /fixture/extent-tree.bin" '
                     "VFS-FF-READ VFS-FF-WRITE OR _DJ-V VFS-OPEN? "
                     "CONSTANT _DJ-OPEN-IOR CONSTANT _DJ-FD"
                 ),
+                "_DJ-ARENA ARENA-USED CONSTANT _DJ-MAIN-CLEAN",
                 f"{write_offset} _DJ-FD VFS-SEEK? CONSTANT _DJ-SEEK-IOR",
                 (
                     'S" NO" _DJ-FD VFS-WRITE? '
@@ -21934,11 +22418,18 @@ def test_depth_positive_write_rejects_extent_node_in_journal_ring(
                 ),
                 "_DJ-FD FD.CUR-LO @ CONSTANT _DJ-CURSOR",
                 "_DJ-CTX _EXT4-C.J.WRITER + @ CONSTANT _DJ-WRITER",
+                "_DJ-ARENA ARENA-USED CONSTANT _DJ-MAIN-AFTER",
                 (
                     _forth_conjunction(
                         [
                             "_DJ-MOUNT-IOR 0=",
                             "_DJ-BIND-IOR 0=",
+                            "_DJ-PROFILE-SIZE-IOR 0=",
+                            "_DJ-PROFILE-SIZE 0>",
+                            "_DJ-PROFILE-BIND-IOR 0=",
+                            "_DJ-PROFILE-USED _DJ-PROFILE-SIZE =",
+                            "_DJ-MAIN-POSTBIND _DJ-MAIN-PREBIND =",
+                            "_DJ-MAIN-AFTER _DJ-MAIN-CLEAN =",
                             "_DJ-OPEN-IOR 0=",
                             "_DJ-SEEK-IOR 0=",
                             "_DJ-ACTUAL 0=",
@@ -21962,8 +22453,13 @@ def test_depth_positive_write_rejects_extent_node_in_journal_ring(
                             f"_DJ-CURSOR {write_offset} =",
                             "_DJ-CLOCK @ 1 =",
                             "_DJ-WRITER 0<>",
+                            "_DJ-WRITER _DJ-PROFILE-BASE =",
                             "_DJ-WRITER _EXT4-JWR-IDLE-CLEAN?",
                             "_DJ-WRITER _EXT4-JWR.FAULT + @ 0=",
+                            (
+                                "_DJ-PROFILE-ARENA ARENA-USED "
+                                "_DJ-PROFILE-USED ="
+                            ),
                             f"_EXT4-JOW-PHYS @ {data_block} =",
                             "_EXT4-MOW-ACTUAL @ 0=",
                             "_DJ-CTX _EXT4-C.RECOVERY + @ 0=",
@@ -21990,6 +22486,8 @@ def test_depth_positive_write_rejects_extent_node_in_journal_ring(
                 (
                     "_DJ-CLOSE-IOR 0= _DJ-UNMOUNT-IOR 0= AND "
                     "_DJ-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_DJ-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_DJ-PROFILE-ARENA A.PTR @ _DJ-PROFILE-BASE = AND "
                     'IF ." EXT4-DEPTH-POSITIVE-JOURNAL-NODE-UNMOUNT" THEN'
                 ),
             ],
