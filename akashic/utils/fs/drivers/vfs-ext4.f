@@ -528,6 +528,10 @@ VARIABLE _EXT4-WB-CTX
 
 : _EXT4-WRITE-BLOCK  ( buffer block ctx -- ior )
     _EXT4-WB-CTX ! _EXT4-WB-BLOCK ! _EXT4-WB-BUFFER !
+    \ A caller may use these counters as the certificate for this exact
+    \ block attempt.  Clear stale evidence even when validation refuses the
+    \ request before VOL-WRITE is dispatched.
+    0 _EXT4-IO-EXPECTED ! 0 _EXT4-IO-COMPLETED !
     _EXT4-WB-BLOCK @ _EXT4-WB-CTX @ _EXT4-C.BLOCKS + @ >= IF
         EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
@@ -8322,8 +8326,9 @@ VARIABLE _EXT4-JEM-OLD-RESERVED
 \ one arena-backed open-addressed plan.  Each occupied slot authenticates an
 \ inode and retains only protocol locators that can be reauthenticated before
 \ later cleanup: legacy { inode, next } or modern { logical block, slot }.
-\ This slice never changes an inode, orphan-file block, or legacy link;
-\ nonempty recovery remains a stable refusal.
+\ Discovery itself never mutates an inode, orphan-file block, or legacy link.
+\ The later mounted cleanup selector admits only the sealed singleton shapes;
+\ every broader nonempty union remains a stable refusal.
 
 VARIABLE _EXT4-OW-CTX
 VARIABLE _EXT4-OW-COUNT
@@ -13096,6 +13101,7 @@ VARIABLE _EXT4-MOW-CTX
 VARIABLE _EXT4-MOW-WRITER
 VARIABLE _EXT4-MOW-TX
 VARIABLE _EXT4-MOW-IOR
+VARIABLE _EXT4-MOW-ACTUAL
 VARIABLE _EXT4-MOW-ACTIVE
 CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
 
@@ -13158,10 +13164,58 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
     THEN
     _EXT4-MOW-CTX @ _EXT4-RECOVERY-MEDIA ;
 
+\ The exact client emits one full-block ordered image.  VOL-WRITE reports a
+\ contiguous prefix of fully completed 512-byte sectors; a tear inside the
+\ next sector deliberately proves none of that sector.  Intersect that media
+\ prefix with the caller's range to obtain the only byte prefix VFS may use
+\ for cursor advancement.  EXPECTED must describe this exact block attempt.
+: _EXT4-MOW-ORDERED-ACTUAL  ( -- actual )
+    _EXT4-IO-EXPECTED @ _EXT4-MOW-CTX @ _EXT4-C.SPB + @ <> IF
+        0 EXIT
+    THEN
+    _EXT4-IO-COMPLETED @ DUP 0< IF DROP 0 EXIT THEN
+    DUP _EXT4-IO-EXPECTED @ U> IF DROP 0 EXIT THEN
+    _EXT4-SECTOR *
+    _EXT4-MOW-OFFSET @ _EXT4-MOW-CTX @ _EXT4-C.BSIZE + @ MOD -
+    DUP 0< IF DROP 0 EXIT THEN
+    _EXT4-MOW-COUNT @ MIN ;
+
+\ Before ordered data, no caller byte has media authority.  Phase 8 retains
+\ the sector certificate for the ordered attempt.  Every later emission or
+\ checkpoint phase proves that the complete ordered block was accepted.
+: _EXT4-MOW-FAULT-ACTUAL  ( -- actual )
+    _EXT4-MOW-ACTUAL @ DUP IF EXIT THEN DROP
+    _EXT4-MOW-WRITER @ ?DUP 0= IF 0 EXIT THEN
+    DUP _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED <> IF DROP 0 EXIT THEN
+    _EXT4-JWR.PHASE + @ DUP _EXT4-JWP-ORDERED-DATA = IF
+        DROP _EXT4-MOW-ORDERED-ACTUAL EXIT
+    THEN
+    DUP _EXT4-JWP-EMISSION? SWAP _EXT4-JWP-CHECKPOINT? OR IF
+        _EXT4-MOW-COUNT @ EXIT
+    THEN
+    0 ;
+
+\ A quarantined writer cannot accept another mutation on this mount.  Retain
+\ the first error's domain, reason, detail, and causal flags, then add the
+\ read-only consequence.  PARTIAL is additionally required for every error
+\ accompanied by a confirmed caller-byte prefix, including actual=count.
+: _EXT4-MOW-RESULT  ( actual ior -- actual ior )
+    _EXT4-MOW-IOR ! _EXT4-MOW-ACTUAL !
+    _EXT4-MOW-WRITER @ ?DUP IF
+        _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = IF
+            _EXT4-MOW-IOR @ VFS-IOR-F-READONLY 24 LSHIFT OR
+            _EXT4-MOW-IOR !
+        THEN
+    THEN
+    _EXT4-MOW-ACTUAL @ _EXT4-MOW-IOR @ _EXT4-PARTIAL-IOR ;
+
 \ Clean staging errors retain no media authority.  Abort only when the
 \ transaction is still mutable; the typed builder may already have aborted
 \ itself after an internal ordered-data publication.  A structurally failed
 \ abort is latched because the persistent workspace can no longer be reused.
+\ A post-commit checkpoint-entry refusal is also terminal: give the latch a
+\ valid checkpoint phase rather than leaving replayable authority retryable in
+\ the same session.
 : _EXT4-MOW-FAIL  ( ior -- actual ior )
     _EXT4-MOW-IOR !
     _EXT4-MOW-WRITER @ ?DUP IF
@@ -13171,30 +13225,38 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
                 _EXT4-MOW-IOR !
             THEN
         ELSE
-            DUP _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = IF
+            DUP _EXT4-JWR.STATE + @ _EXT4-JWR-COMMITTED = IF
+                DROP
+                _EXT4-JWP-CHECKPOINT-PREFLIGHT
+                _EXT4-MOW-WRITER @ _EXT4-JWR.PHASE + !
+                _EXT4-MOW-IOR @
+                _EXT4-MOW-WRITER @ _EXT4-JWR-LATCH-FAULT
+                _EXT4-MOW-IOR !
+            ELSE DUP _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = IF
                 _EXT4-JWR.FAULT + @ ?DUP IF _EXT4-MOW-IOR ! THEN
             ELSE
                 DROP
-            THEN
+            THEN THEN
         THEN
     THEN
+    _EXT4-MOW-FAULT-ACTUAL _EXT4-MOW-ACTUAL !
     _EXT4-MOW-SCRUB
-    0 _EXT4-MOW-IOR @ ;
+    _EXT4-MOW-ACTUAL @ _EXT4-MOW-IOR @ _EXT4-MOW-RESULT ;
 
 \ Production-shaped private client for the exact qualified overwrite.  The
 \ first clean call dry-stages before it can activate the journal.  Successful
 \ calls checkpoint synchronously and retain one scrubbed write-active writer
 \ for sequential reuse; ordinary unmount performs final clean deactivation.
 \ This is deliberately absent from EXT4-OPS and does not update VFS vnodes.
-\ ACTUAL counts only fully checkpointed caller bytes: zero after an emission
-\ fault does not assert that ordered data or a replayable commit stayed absent.
+\ ACTUAL is the confirmed caller-byte prefix accepted by ordered-data media;
+\ bytes after ACTUAL remain indeterminate after a fault.
 : _EXT4-MOUNTED-ONEBLOCK-WRITE
   ( source count file-offset inode-number expected-generation
     seconds nsec vfs -- actual ior )
     _EXT4-MOW-V ! _EXT4-MOW-NSEC ! _EXT4-MOW-SECONDS !
     _EXT4-MOW-GEN ! _EXT4-MOW-INO ! _EXT4-MOW-OFFSET !
     _EXT4-MOW-COUNT ! _EXT4-MOW-SOURCE !
-    0 _EXT4-MOW-WRITER ! 0 _EXT4-MOW-TX !
+    0 _EXT4-MOW-WRITER ! 0 _EXT4-MOW-TX ! 0 _EXT4-MOW-ACTUAL !
     _EXT4-MOW-ENTRY ?DUP IF 0 SWAP EXIT THEN
     _EXT4-MOW-COUNT @ 0< IF 0 VFS-E-INVALID EXIT THEN
     _EXT4-MOW-COUNT @ 0= IF 0 0 EXIT THEN
@@ -13241,6 +13303,7 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
     ?DUP IF _EXT4-MOW-FAIL EXIT THEN
     _EXT4-MOW-TX @ _EXT4-JTX-EMIT
     ?DUP IF _EXT4-MOW-FAIL EXIT THEN
+    _EXT4-MOW-COUNT @ _EXT4-MOW-ACTUAL !
     _EXT4-MOW-TX @ _EXT4-JTX-CHECKPOINT
     ?DUP IF _EXT4-MOW-FAIL EXIT THEN
     _EXT4-MOW-WRITER @ _EXT4-JWR-VALID? 0= IF
@@ -13252,7 +13315,7 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
         VFS-E-CORRUPT _EXT4-MOW-WRITER @ _EXT4-JWR-LATCH-FAULT
         _EXT4-MOW-FAIL EXIT
     THEN
-    _EXT4-MOW-COUNT @ _EXT4-MOW-SCRUB 0 ;
+    _EXT4-MOW-ACTUAL @ _EXT4-MOW-SCRUB 0 ;
 
 \ =====================================================================
 \  Private VFS-shaped write boundary and trusted clock injection
@@ -13387,10 +13450,10 @@ VARIABLE _EXT4-WR-IOR
     0 ;
 
 \ Exact binding-callback shape for the qualified slice.  It remains absent
-\ from EXT4-OPS and EXT4-CAPS: MOW still reports zero progress for every
-\ fault, including faults after ordered-data publication, so this word is not
-\ yet a safe public VFS retry/cursor contract.  Successful checkpointed writes
-\ publish only mtime/ctime into the shared vnode; no inode writeback remains.
+\ from EXT4-OPS and EXT4-CAPS while the broader public-write gates remain.
+\ Confirmed progress and quarantine flags are safe for VFS cursor semantics;
+\ successful checkpointed writes publish only mtime/ctime into the shared
+\ vnode, while every error leaves all vnode fields unpublished.
 : _EXT4-WRITE  ( source count file-offset dentry vfs -- actual ior )
     _EXT4-WR-V ! _EXT4-WR-D ! _EXT4-WR-OFFSET !
     _EXT4-WR-COUNT ! _EXT4-WR-SOURCE !

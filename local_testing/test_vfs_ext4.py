@@ -20248,6 +20248,233 @@ def test_private_vfs_shaped_write_publishes_shared_vnode_and_syncs_clean(
         media_path.unlink(missing_ok=True)
 
 
+def test_private_vfs_write_faults_report_confirmed_caller_prefix(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    activation_writes = sum(
+        kind == "write" for kind, _, _ in activation_trace
+    )
+    activation_flushes = sum(
+        kind == "flush" for kind, _, _ in activation_trace
+    )
+    epoch_ms = 3_000_000_123_456
+    cases = (
+        {
+            "name": "ordered-sector-prefix",
+            "path": "/fixture/sparse.bin",
+            "inode": 17,
+            "offset": 500,
+            "replacement": b"ABCDEFGHIJKLMNOPQRSTUVWX",
+            "actual": 12,
+            "phase": "_EXT4-JWP-ORDERED-DATA",
+            "writer_flags": "VFS-IOR-F-PARTIAL",
+            "completed": 1,
+            "expected": 2,
+            "write_faults": {
+                activation_writes + 1: {
+                    "stage": "media",
+                    "sector_index": 1,
+                    "byte_index": 6,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            "flush_faults": None,
+            "effect_bytes": 18,
+            "tail_kinds": ("write",),
+        },
+        {
+            "name": "body-flush",
+            "path": "/fixture/payload.txt",
+            "inode": 14,
+            "offset": 11,
+            "replacement": b"WRITE-RMW",
+            "actual": 9,
+            "phase": "_EXT4-JWP-BODY-FLUSH",
+            "writer_flags": "0",
+            "completed": 0,
+            "expected": 0,
+            "write_faults": None,
+            "flush_faults": {
+                activation_flushes + 1: {
+                    "stage": "flush",
+                    "result": STORAGE_RESULT_FLUSH_FAILURE,
+                    "command": STORAGE_CMD_FLUSH,
+                }
+            },
+            "effect_bytes": 9,
+            "tail_kinds": (
+                "write", "write", "write", "write", "write", "flush"
+            ),
+        },
+    )
+
+    for case in cases:
+        inode_number = case["inode"]
+        assert isinstance(inode_number, int)
+        superblock, inode, inode_offset = _ext4_inode_record(
+            path, inode_number
+        )
+        block_size = 1024 << struct.unpack_from(
+            "<I", superblock, 0x18
+        )[0]
+        assert block_size == 1024
+        data_block = _extent_root_physical(inode, 0)
+        inode_home, _ = divmod(inode_offset, block_size)
+        with path.open("rb") as source:
+            source.seek(data_block * block_size)
+            original_data = source.read(block_size)
+            source.seek(inode_home * block_size)
+            original_inode_home = source.read(block_size)
+        assert len(original_data) == block_size
+        assert len(original_inode_home) == block_size
+
+        replacement = case["replacement"]
+        write_offset = case["offset"]
+        expected_actual = case["actual"]
+        assert isinstance(replacement, bytes)
+        assert isinstance(write_offset, int)
+        assert isinstance(expected_actual, int)
+        replacement_text = replacement.decode("ascii")
+        backing = tmp_path / f"vfs-progress-{case['name']}.img"
+        try:
+            output, trace, _ = run_recovery_forth(
+                path,
+                backing,
+                [
+                    (
+                        ": _VP-NOW ( context -- epoch-ms ior ) "
+                        f"DROP {epoch_ms} 0 ;"
+                    ),
+                    "T-ARENA CONSTANT _VP-ARENA",
+                    (
+                        "_VP-ARENA T-VOLUME EXT4-NEW "
+                        "CONSTANT _VP-MOUNT-IOR CONSTANT _VP-V"
+                    ),
+                    "_VP-V _EXT4-CTX CONSTANT _VP-CTX",
+                    (
+                        f'S" {case["path"]}" _VP-V VFS-RESOLVE? '
+                        "CONSTANT _VP-RESOLVE-IOR CONSTANT _VP-D"
+                    ),
+                    "_VP-D D.VNODE @ CONSTANT _VP-VN",
+                    "_VP-VN VN.MTIME @ CONSTANT _VP-OLD-MTIME",
+                    "_VP-VN VN.MTIME-NS @ CONSTANT _VP-OLD-MTIME-NS",
+                    "_VP-VN VN.CTIME @ CONSTANT _VP-OLD-CTIME",
+                    "_VP-VN VN.CTIME-NS @ CONSTANT _VP-OLD-CTIME-NS",
+                    (
+                        "' _VP-NOW 0 _VP-V _EXT4-BIND-WRITE-CLOCK "
+                        "CONSTANT _VP-BIND-IOR"
+                    ),
+                    (
+                        f'S" {replacement_text}" {write_offset} '
+                        "_VP-D _VP-V _EXT4-WRITE "
+                        "CONSTANT _VP-IOR CONSTANT _VP-ACTUAL"
+                    ),
+                    (
+                        "_VP-CTX _EXT4-C.J.WRITER + @ "
+                        "CONSTANT _VP-WRITER"
+                    ),
+                    (
+                        _forth_conjunction(
+                            [
+                                "_VP-MOUNT-IOR 0=",
+                                "_VP-RESOLVE-IOR 0=",
+                                "_VP-BIND-IOR 0=",
+                                f"_VP-ACTUAL {expected_actual} =",
+                                (
+                                    "_VP-IOR VFS-IOR-DOMAIN "
+                                    "VFS-IOR-D-VOLUME ="
+                                ),
+                                (
+                                    "_VP-IOR VFS-IOR-REASON "
+                                    "VFS-R-IO ="
+                                ),
+                                (
+                                    "_VP-IOR VFS-IOR-FLAGS "
+                                    "VFS-IOR-F-PARTIAL "
+                                    "VFS-IOR-F-READONLY OR ="
+                                ),
+                                "_VP-WRITER 0<>",
+                                (
+                                    "_VP-WRITER _EXT4-JWR.STATE + @ "
+                                    "_EXT4-JWR-FAULTED ="
+                                ),
+                                (
+                                    "_VP-WRITER _EXT4-JWR.PHASE + @ "
+                                    f"{case['phase']} ="
+                                ),
+                                "_VP-WRITER _EXT4-JWR-VALID?",
+                                (
+                                    "_VP-WRITER _EXT4-JWR.FAULT + @ "
+                                    "VFS-IOR-FLAGS "
+                                    f"{case['writer_flags']} ="
+                                ),
+                                (
+                                    "_VP-WRITER _EXT4-JWR.FAULT + @ "
+                                    "VFS-IOR-FLAGS "
+                                    "VFS-IOR-F-READONLY AND 0="
+                                ),
+                                "_VP-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                                "_VP-V V.FLAGS @ VFS-F-RO AND 0<>",
+                                "_VP-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                                "_VP-VN VN.MTIME @ _VP-OLD-MTIME =",
+                                (
+                                    "_VP-VN VN.MTIME-NS @ "
+                                    "_VP-OLD-MTIME-NS ="
+                                ),
+                                "_VP-VN VN.CTIME @ _VP-OLD-CTIME =",
+                                (
+                                    "_VP-VN VN.CTIME-NS @ "
+                                    "_VP-OLD-CTIME-NS ="
+                                ),
+                                "_VP-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                                f"_EXT4-IO-COMPLETED @ {case['completed']} =",
+                                f"_EXT4-IO-EXPECTED @ {case['expected']} =",
+                                f"_EXT4-MOW-ACTUAL @ {expected_actual} =",
+                                (
+                                    "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                    "_EXT4-BYTES-ZERO?"
+                                ),
+                            ]
+                        )
+                        + ' IF ." EXT4-VFS-WRITE-PROGRESS-FAULT" THEN'
+                    ),
+                ],
+                patches=source_patches,
+                write_faults_by_ordinal=case["write_faults"],
+                flush_faults_by_ordinal=case["flush_faults"],
+                capture_media=backing,
+            )
+            _assert_emitted(output, "EXT4-VFS-WRITE-PROGRESS-FAULT")
+            assert trace[: len(activation_trace)] == activation_trace
+            tail = trace[len(activation_trace):]
+            assert tuple(kind for kind, _, _ in tail) == case["tail_kinds"]
+            assert tail[0] == ("write", data_block * 2, 2)
+
+            expected_data = bytearray(original_data)
+            effect_bytes = case["effect_bytes"]
+            assert isinstance(effect_bytes, int)
+            expected_data[
+                write_offset : write_offset + effect_bytes
+            ] = replacement[:effect_bytes]
+            with backing.open("rb") as source:
+                source.seek(data_block * block_size)
+                actual_data = source.read(block_size)
+                source.seek(inode_home * block_size)
+                actual_inode_home = source.read(block_size)
+            assert actual_data == bytes(expected_data)
+            assert actual_inode_home == original_inode_home
+        finally:
+            backing.unlink(missing_ok=True)
+
+
 def test_recover_without_checksum_v3_journal_refuses_before_writes(
     canonical_images: dict[str, Path]
 ) -> None:

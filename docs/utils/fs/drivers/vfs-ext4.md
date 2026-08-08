@@ -889,10 +889,24 @@ A staging refusal reports zero progress and aborts only a still-mutable
 transaction. Once emission has advanced, existing writer fault/quarantine
 semantics retain the uncertain durable state for remount recovery, and an
 already latched abort fault takes precedence over the staging error that led
-to it. `actual` counts only bytes whose complete checkpoint succeeded;
-`actual = 0` after an emission or checkpoint fault does not claim that ordered
-data or a replayable transaction is absent. That is another reason this result
-contract is not yet the public VFS `WRITE` contract.
+to it. `actual` is now the conservative contiguous prefix of caller bytes
+confirmed by the ordered-data write, rather than a checkpoint-success bit. For
+the full-block RMW, if `c` whole 512-byte sectors completed and the caller
+range begins at byte `o` within the block, the exact rule is
+`min(count, max(0, c * 512 - o))`. A tear inside the next sector proves none of
+that sector. Once the full ordered block has been accepted, descriptor,
+commit, proof, or checkpoint failure reports the complete caller count.
+
+Every error with nonzero `actual` has `VFS-IOR-F-PARTIAL`, including an error
+with `actual = count`. A low-level torn-sector error may retain `PARTIAL` even
+when the conservative caller prefix is zero. Writer quarantine preserves the
+first error's domain, reason, detail, and causal flags, adds
+`VFS-IOR-F-READONLY` at the mounted-client boundary, and leaves the VFS
+`RO|DIRTY`; same-mount retry is therefore forbidden without discarding the
+original diagnostic. Bytes after `actual` are indeterminate, not asserted
+unchanged. A checkpoint-entry refusal after commit is explicitly latched at a
+valid checkpoint phase rather than leaving replayable authority available for
+same-session retry.
 
 Focused mounted-client qualification separates media-clean refusal from the
 long durability journey so each remains within the canonical emulator step
@@ -908,6 +922,16 @@ the clean landing, returns both edits and the second exact timestamp through
 the path and its hard-link alias, and leaves a subsequent unmount clean. The
 client remains absent from `EXT4-OPS`: it deliberately does not publish vnode
 timestamps or dirty state for continued public access.
+
+Fault qualification now crosses a 512-byte boundary inside one initialized
+block. A 24-byte request beginning at byte 500 tears six bytes into the second
+sector after the first sector completed: the callback reports exactly 12
+confirmed bytes even though raw-media inspection shows that six later caller
+bytes also changed. A separate body-flush failure occurs after the ordered
+block completed and reports the full nine-byte request with
+`PARTIAL|READONLY`. Both cases retain the exact underlying writer fault,
+quarantine the mounted instance, scrub the private source snapshot, preserve
+the old inode-table home, and publish no vnode timestamps.
 
 A second private word, `_EXT4-WRITE`, now has the exact ABI-1 callback shape
 `( source count offset dentry vfs -- actual ior )`. It validates an owned,
@@ -940,11 +964,13 @@ reactivation through the same writer, exact hard-link cache publication,
 unchanged callback-side FD cursors, alias readback, clean unmount, the exact
 76-event media trace, and independent raw data/inode/journal checks.
 
-`_EXT4-WRITE` remains absent from `EXT4-OPS` and `EXT4-CAPS`. Its mounted
-client still returns zero progress after faults that may follow ordered-data
-or commit publication. The next integration gate must derive confirmed byte
-progress from ordered-data sector completion and map progress-plus-error and
-quarantine flags honestly before generic VFS retry/cursor semantics are safe.
+`_EXT4-WRITE` remains absent from `EXT4-OPS` and `EXT4-CAPS`, but the exact
+slice now has an honest VFS progress/error contract. Generic `VFS-WRITE?` may
+advance only the calling FD by the returned confirmed prefix; the callback
+itself still owns no FD. Public exposure remains a separate gate because the
+binding is still globally read-only and lacks the production workspace,
+chunking, general data-shape, and release qualification required by the
+writable profile.
 
 Controlled sequential-write qualification tears the first inode-table home
 write at byte 269, one byte into the target inode's new `i_ctime`. The ordered
@@ -1034,10 +1060,11 @@ external-tool inspection and the broader controlled power-cut matrix remain
 qualification gates. The mounted private client adds zero-length behavior,
 stable pre-activation refusal, synchronous success, sequential writer reuse,
 and dirty/empty crash-remount cleanup without widening the supported data
-shape. The operation remains private until its post-publication
-progress/error policy is represented honestly and production writer
-workspace/chunking policy is settled. Growth, holes, unwritten extents,
-cross-block writes, truncation, and namespace mutation remain later phases.
+shape. Its post-publication progress/error policy is now represented honestly;
+the operation remains private while production writer workspace/chunking,
+public admission, and broader crash/interoperability policy are unsettled.
+Growth, holes, unwritten extents, cross-block writes, truncation, and namespace
+mutation remain later phases.
 
 The remaining boundaries are:
 

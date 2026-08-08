@@ -12,8 +12,9 @@ descriptor/payload/revoke/commit transaction, checkpoint its retained metadata
 after-images, and release the journal for an immediate sequential transaction
 without leaving write-active state. Public unmount can now checkpoint a
 `COMMITTED` transaction and cleanly deactivate the write-active journal.
-Transactional cleanup of nonempty modern and legacy orphan state, general
-mutation, and the complete bidirectional gates remain open.
+Exact singleton cleanup for admitted modern and legacy orphan state is now
+implemented; multi-record/general orphan mutation, user-visible mutation, and
+the complete bidirectional gates remain open.
 MP64FS remains the working native storage binding and FAT/ext4 remain
 read-only interoperability bindings; ext4's mount path may perform the
 strictly ordered recovery writes described below.
@@ -743,40 +744,49 @@ and cleanup locator as legacy `{ inode, legacy, next, 0 }` or modern
 `{ inode, modern, logical-block, slot }`; one hash enforces union-wide inode
 uniqueness, including modern duplicates and cross-protocol reuse, while the
 bounded legacy walk independently rejects cycles. Every referenced inode and
-applicable data map is then authenticated. A valid nonempty union returns the
-stable recovery-required refusal without orphan cleanup or public mutation.
-Structural chain, locator, or duplicate-membership failures return corruption,
-while inode allocation and checksum failures preserve their specific
-corruption detail. Failed-mount retries clear and reuse a retained table when
-it is large enough rather than abandoning monotonic arena storage; an
-insufficient caller arena or retained table fails without a second allocation.
+applicable data map is then authenticated. Mount may transactionally clean an
+exact one-record union when it is either a linked depth-zero truncation already
+at zero size or an unlinked depth-zero deletion with zero or one initialized
+block and the qualified allocation/xattr shape. The sealed transaction removes
+the modern slot or legacy head, updates and checksums the target inode, and for
+admitted deletions releases the exact data and inode allocation plus
+descriptor/super counters. Strict reload must prove the union empty before
+mount publication. A larger union or a structurally valid record outside those
+exact shapes returns the stable recovery-required refusal without partial
+cleanup or public mutation. Structural chain, locator, ownership, or
+duplicate-membership failures return corruption, while inode allocation and
+checksum failures preserve their specific corruption detail. Failed-mount
+retries clear and reuse a retained table when it is large enough rather than
+abandoning monotonic arena storage; an insufficient caller arena or retained
+table fails without a second allocation.
 
 An authenticated empty modern set is completed before mount publication only
 when both protocol counts are zero. Writer-free `AKW1` and `AKE1`-qualified
 `AKR1` clear `RECOVER` and `ORPHAN_PRESENT` together without changing an
 orphan inode/file or legacy link and without allocating a private writer. The
 implementation still fails closed on checksum-damaged incomplete tails and
-refuses transactional cleanup for either nonempty orphan protocol and all
+refuses multi-record or otherwise unqualified nonempty cleanup plus every
 user-visible mutation. ACLs are exposed but not enforced, the real extent
 fixture reaches depth 1 rather than the implemented profile limit of 5, and
 the special-inode fixture does not yet contain a socket. Those qualification
 and semantic limits remain explicit before any write path can be advertised.
-Focused 1 KiB coverage exercises one- and two-inode legacy chains, a mixed
+Focused discovery coverage exercises one- and two-inode legacy chains, a mixed
 legacy/modern union, stable refusal with same-binding plan reuse, corrupt
 legacy links and cycles, allocation/checksum failures, and cross-protocol
-duplicate rejection without writes. Unified discovery remains unqualified for
-2/4 KiB legacy geometry, longer chains, journal-replayed orphan afterimages,
-later modern blocks and files beyond the former 4096-block limit, unlinked and
-structurally invalid referenced inodes, distinct-key hash collisions, and
+duplicate rejection without writes. Exact singleton cleanup has modern and
+legacy zero-/one-block coverage across 1/2/4 KiB geometry, controlled 1 KiB
+write-prefix and durability-fence cases, and pinned e2fsprogs inspection of the
+admitted results. Unified discovery and cleanup still need broader
+qualification for longer chains, later modern blocks and large orphan files,
+additional ownership and deletion shapes, distinct-key hash collisions, and
 arena exhaustion or retained-too-small retry behavior.
 
 The remaining writer gate explicitly includes a geometry-derived production
 workspace/capacity contract with bounded transaction chunking,
-reauthentication and transactional cleanup for both orphan protocols, the
-complete namespace/data/metadata/xattr mutation surface, real
-`SYNCFS`/`FSYNC` durability, external-tool inspection of Akashic-authored
-active, dirty-empty, and clean images, and the controlled power-cut/release
-matrix.
+general multi-record orphan cleanup, the complete
+namespace/data/metadata/xattr mutation surface, public-write integration,
+external-tool inspection of Akashic-authored active, dirty-empty, and clean
+images, and the controlled power-cut/release matrix.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
