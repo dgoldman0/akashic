@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Focused synchronous request-bus reentrancy contracts."""
+"""Focused synchronous request-bus completion and reentrancy contracts."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from akashic_tui import Profile, PROFILES, build_image, smoke  # noqa: E402
 
 PROFILE_NAME = "request-bus-reentrancy"
 
-AUTOEXEC = r'''\ autoexec.f - synchronous request-bus reentrancy contracts
+AUTOEXEC = r'''\ autoexec.f - request-bus completion and reentrancy contracts
 ENTER-USERLAND
 ." [akashic] loading request-bus reentrancy contracts" CR
 REQUIRE interop/endpoint.f
@@ -38,6 +38,8 @@ VARIABLE _rb-inner-instance
 VARIABLE _rb-nested-request
 VARIABLE _rb-nested-status
 VARIABLE _rb-inner-ok-calls
+VARIABLE _rb-no-effect-calls
+VARIABLE _rb-no-effect-bad-output
 VARIABLE _rb-handler-request
 VARIABLE _rb-handler-nests
 
@@ -54,6 +56,8 @@ VARIABLE _rb-outer-throw
 VARIABLE _rb-inner-throw
 VARIABLE _rb-outer-policy
 VARIABLE _rb-inner-policy
+VARIABLE _rb-inner-no-effect
+VARIABLE _rb-inner-no-effect-bad
 
 VARIABLE _rb-outer-ok-done
 VARIABLE _rb-inner-ok-done
@@ -63,6 +67,8 @@ VARIABLE _rb-outer-throw-done
 VARIABLE _rb-inner-throw-done
 VARIABLE _rb-outer-policy-done
 VARIABLE _rb-inner-policy-done
+VARIABLE _rb-inner-no-effect-done
+VARIABLE _rb-inner-no-effect-bad-done
 
 : _rb-complete  ( request -- )
     CBR.COMPLETE-DATA @ 1 SWAP +! ;
@@ -88,6 +94,16 @@ VARIABLE _rb-inner-policy-done
 : _rb-inner-throw-handler  ( request instance -- status )
     2DROP -731 THROW ;
 
+: _rb-inner-no-effect-handler  ( request instance -- status )
+    DROP 1 _rb-no-effect-calls +!
+    DUP CBR.RESULT
+    _rb-no-effect-bad-output @ IF
+        S" wrong-result" ROT CV-STRING! 0= _rb-assert
+    ELSE
+        73 SWAP CV-INT!
+    THEN
+    DROP CBUS-S-NO-EFFECT ;
+
 : _rb-policy-decide  ( principal effects context -- decision )
     2DROP DROP
     CBUS-DISPATCHING? _rb-assert
@@ -100,15 +116,20 @@ VARIABLE _rb-inner-policy-done
     CPOL-ALLOW ;
 
 CREATE _rb-outer-cap CAP-DESC ALLOT
-CREATE _rb-inner-caps CAP-DESC 2 * ALLOT
+CREATE _rb-inner-caps CAP-DESC 3 * ALLOT
+CREATE _rb-int-schema CS-SIZE ALLOT
 
 : _rb-inner-ok-cap     ( -- cap ) _rb-inner-caps ;
 : _rb-inner-throw-cap  ( -- cap ) _rb-inner-caps CAP-DESC + ;
+: _rb-inner-no-effect-cap  ( -- cap ) _rb-inner-caps CAP-DESC 2 * + ;
 
 CREATE _rb-outer-component COMP-DESC ALLOT
 CREATE _rb-inner-component COMP-DESC ALLOT
 
 : _rb-capabilities-init  ( -- )
+    _rb-int-schema CS-INIT
+    CV-T-INT _rb-int-schema CS-ALLOW!
+
     _rb-outer-cap CAP-DESC-INIT
     CAP-K-COMMAND _rb-outer-cap CAP.KIND !
     S" org.akashic.test/nested-outer"
@@ -128,7 +149,17 @@ CREATE _rb-inner-component COMP-DESC ALLOT
     S" org.akashic.test/nested-throw"
         _rb-inner-throw-cap CAP.ID-U ! _rb-inner-throw-cap CAP.ID-A !
     CAP-E-OBSERVE _rb-inner-throw-cap CAP.EFFECTS !
-    ['] _rb-inner-throw-handler _rb-inner-throw-cap CAP.HANDLER-XT ! ;
+    ['] _rb-inner-throw-handler _rb-inner-throw-cap CAP.HANDLER-XT !
+
+    _rb-inner-no-effect-cap CAP-DESC-INIT
+    CAP-K-COMMAND _rb-inner-no-effect-cap CAP.KIND !
+    S" org.akashic.test/no-effect"
+        _rb-inner-no-effect-cap CAP.ID-U !
+        _rb-inner-no-effect-cap CAP.ID-A !
+    CAP-E-MUTATE _rb-inner-no-effect-cap CAP.EFFECTS !
+    _rb-int-schema _rb-inner-no-effect-cap CAP.OUT-SCHEMA !
+    ['] _rb-inner-no-effect-handler
+        _rb-inner-no-effect-cap CAP.HANDLER-XT ! ;
 
 : _rb-components-init  ( -- )
     _rb-outer-component COMP-DESC-INIT
@@ -147,7 +178,7 @@ CREATE _rb-inner-component COMP-DESC ALLOT
         _rb-inner-component COMP.VERSION-U !
         _rb-inner-component COMP.VERSION-A !
     _rb-inner-caps _rb-inner-component COMP.CAPS-A !
-    2 _rb-inner-component COMP.CAPS-N ! ;
+    3 _rb-inner-component COMP.CAPS-N ! ;
 
 VARIABLE _rb-new-cap
 VARIABLE _rb-new-instance
@@ -207,7 +238,13 @@ VARIABLE _rb-new-instance
         _rb-outer-policy-done OVER CBR.COMPLETE-DATA ! DROP
     _rb-inner-ok-cap _rb-inner-instance @ _rb-request-new
         DUP _rb-inner-policy !
-        _rb-inner-policy-done OVER CBR.COMPLETE-DATA ! DROP ;
+        _rb-inner-policy-done OVER CBR.COMPLETE-DATA ! DROP
+    _rb-inner-no-effect-cap _rb-inner-instance @ _rb-request-new
+        DUP _rb-inner-no-effect !
+        _rb-inner-no-effect-done OVER CBR.COMPLETE-DATA ! DROP
+    _rb-inner-no-effect-cap _rb-inner-instance @ _rb-request-new
+        DUP _rb-inner-no-effect-bad !
+        _rb-inner-no-effect-bad-done OVER CBR.COMPLETE-DATA ! DROP ;
 
 : _rb-success-case  ( -- )
     -1 _rb-handler-nests !
@@ -278,11 +315,49 @@ VARIABLE _rb-new-instance
     _rb-frame-restored
     _rb-stack ;
 
+: _rb-no-effect-case  ( -- )
+    CBUS-S-OK CBUS-RESULT-BEARING? _rb-assert
+    CBUS-S-NO-EFFECT CBUS-RESULT-BEARING? _rb-assert
+    CBUS-S-FAILED CBUS-RESULT-BEARING? 0= _rb-assert
+    0 _rb-no-effect-bad-output !
+    _rb-inner-no-effect @ _rb-inner-bus @ CBUS-DISPATCH
+        CBUS-S-NO-EFFECT = _rb-assert
+    _rb-inner-no-effect @ CBR.STATUS @
+        CBUS-S-NO-EFFECT = _rb-assert
+    _rb-inner-no-effect @ CBR.RESULT CV-TYPE@ CV-T-INT = _rb-assert
+    _rb-inner-no-effect @ CBR.RESULT CV-DATA@ 73 = _rb-assert
+    _rb-inner-instance @ CINST.REVISION @ 1 = _rb-assert
+    _rb-inner-no-effect @ CBR.ACTUAL-REV @ 1 = _rb-assert
+    _rb-inner-no-effect @ _rb-request-completed? _rb-assert
+    _rb-inner-no-effect @ CBR-LIFECYCLE-BUSY? 0= _rb-assert
+    _rb-inner-no-effect-done @ 1 = _rb-assert
+    _rb-no-effect-calls @ 1 = _rb-assert
+
+    \ NO-EFFECT is result-bearing, not a way around the declared output
+    \ contract.  A bad receipt becomes FAILED and is released without a
+    \ component revision advance.
+    -1 _rb-no-effect-bad-output !
+    _rb-inner-no-effect-bad @ _rb-inner-bus @ CBUS-DISPATCH
+        CBUS-S-FAILED = _rb-assert
+    _rb-inner-no-effect-bad @ CBR.STATUS @ CBUS-S-FAILED = _rb-assert
+    _rb-inner-no-effect-bad @ CBR.RESULT CV-TYPE@
+        CV-T-NULL = _rb-assert
+    _rb-inner-no-effect-bad @ CBR.ACTUAL-REV @ 0= _rb-assert
+    _rb-inner-instance @ CINST.REVISION @ 1 = _rb-assert
+    _rb-inner-no-effect-bad @ _rb-request-completed? _rb-assert
+    _rb-inner-no-effect-bad @ CBR-LIFECYCLE-BUSY? 0= _rb-assert
+    _rb-inner-no-effect-bad-done @ 1 = _rb-assert
+    _rb-no-effect-calls @ 2 = _rb-assert
+    _rb-frame-restored
+    _rb-stack ;
+
 : _rb-cleanup  ( -- )
     _rb-outer-ok @ CBR-FREE _rb-inner-ok @ CBR-FREE
     _rb-outer-stale @ CBR-FREE _rb-inner-stale @ CBR-FREE
     _rb-outer-throw @ CBR-FREE _rb-inner-throw @ CBR-FREE
     _rb-outer-policy @ CBR-FREE _rb-inner-policy @ CBR-FREE
+    _rb-inner-no-effect @ CBR-FREE
+    _rb-inner-no-effect-bad @ CBR-FREE
     _rb-outer-bus @ CBUS-FREE _rb-inner-bus @ CBUS-FREE
     _rb-outer-instance @ _rb-registry @ CREG-INST- 0= _rb-assert
     _rb-inner-instance @ _rb-registry @ CREG-INST- 0= _rb-assert
@@ -293,6 +368,7 @@ VARIABLE _rb-new-instance
 
 : _rb-run  ( -- )
     0 _rb-fails ! 0 _rb-checks ! 0 _rb-inner-ok-calls !
+    0 _rb-no-effect-calls ! 0 _rb-no-effect-bad-output !
     0 _rb-policy-calls ! 0 _rb-policy-enabled !
     _rb-setup
     101 _CBD-REQ ! 102 _CBD-INST ! 103 _CBD-CAP ! 104 _CBD-BUS !
@@ -301,6 +377,7 @@ VARIABLE _rb-new-instance
     _rb-stale-case
     _rb-throw-case
     _rb-policy-case
+    _rb-no-effect-case
     _rb-cleanup
     _rb-fails @ 0= IF
         ." REQUEST BUS REENTRANCY PASS " _rb-checks @ .

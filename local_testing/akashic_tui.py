@@ -8658,21 +8658,30 @@ VARIABLE _pc-first-epoch
     MS@ 10000 + _pc-grant AGR.EXPIRES ! ;
 
 CREATE _pc-cap CAP-DESC ALLOT
+CREATE _pc-result-schema CS-SIZE ALLOT
 CREATE _pc-comp COMP-DESC ALLOT
 VARIABLE _pc-inst
 VARIABLE _pc-registry
 VARIABLE _pc-bus
 VARIABLE _pc-request
 VARIABLE _pc-applied
+VARIABLE _pc-handler-calls
+VARIABLE _pc-no-effect
 
 : _pc-handler  ( request instance -- status )
-    2DROP 1 _pc-applied +! CBUS-S-OK ;
+    DROP 1 _pc-handler-calls +!
+    73 OVER CBR.RESULT CV-INT!
+    _pc-no-effect @ IF DROP CBUS-S-NO-EFFECT EXIT THEN
+    DROP 1 _pc-applied +! CBUS-S-OK ;
 
 : _pc-runtime-setup  ( -- )
+    _pc-result-schema CS-INIT
+    CV-T-INT _pc-result-schema CS-ALLOW!
     _pc-cap CAP-DESC-INIT
     CAP-K-COMMAND _pc-cap CAP.KIND !
     S" practice.test.mutate" _pc-cap CAP.ID-U ! _pc-cap CAP.ID-A !
     CAP-E-MUTATE CAP-E-PERSIST OR _pc-cap CAP.EFFECTS !
+    _pc-result-schema _pc-cap CAP.OUT-SCHEMA !
     ['] _pc-handler _pc-cap CAP.HANDLER-XT !
     _pc-comp COMP-DESC-INIT
     S" org.akashic.practice-test"
@@ -8699,7 +8708,8 @@ VARIABLE _pc-applied
     203 _pc-request @ CBR.MANDATE-ID _pc-id! ;
 
 : _pc-run  ( -- )
-    0 _pc-fails ! 0 _pc-checks ! 0 _pc-applied ! DEPTH _pc-depth !
+    0 _pc-fails ! 0 _pc-checks ! 0 _pc-applied !
+    0 _pc-handler-calls ! 0 _pc-no-effect ! DEPTH _pc-depth !
 
     _pc-head PHEAD-INIT
     1 _pc-head PHEAD.ID _pc-id!
@@ -8882,7 +8892,10 @@ VARIABLE _pc-applied
         AUTH-S-OK = _pc-assert
     _pc-request @ _pc-bus @ CBUS-DISPATCH CBUS-S-OK = _pc-assert
     _pc-applied @ 1 = _pc-assert
+    _pc-handler-calls @ 1 = _pc-assert
     _pc-inst @ CINST.REVISION @ 2 = _pc-assert
+    _pc-request @ CBR.RESULT CV-TYPE@ CV-T-INT = _pc-assert
+    _pc-request @ CBR.RESULT CV-DATA@ 73 = _pc-assert
     _pc-request @ CBR.TURN @ PTURN.STATE @
         PTURN-S-COMMITTED = _pc-assert
     _pc-request @ CBR.TURN @ PTURN.OBSERVED-REVISION @ 1 = _pc-assert
@@ -8894,6 +8907,37 @@ VARIABLE _pc-applied
     _pc-applied @ 1 = _pc-assert
     _pc-request @ CBR.TURN @ PTURN.STATE @
         PTURN-S-COMMITTED = _pc-assert
+
+    \ A fresh reviewed attempt can return a typed receipt while proving that
+    \ it made no change.  The owner revision remains exact and the already
+    \ RUNNING Practice turn must settle REJECTED in the same dispatch.
+    _pc-request @ CBR-TURN-PREPARE _pc-assert
+    _pc-request @ _pc-binding CBR-AUTH-BIND! AUTH-S-OK = _pc-assert
+    _pc-grant AGR-INIT
+    _pc-binding _pc-grant AGR-BIND! AUTH-S-OK = _pc-assert
+    AGR-F-REVIEWED-COMMIT _pc-grant AGR.FLAGS !
+    MS@ 10000 + _pc-grant AGR.EXPIRES !
+    _pc-grant _pc-request @ CBR.HANDLE _pc-table @ AHT-ISSUE
+        AUTH-S-OK = _pc-assert
+    -1 _pc-no-effect !
+    _pc-request @ _pc-bus @ CBUS-DISPATCH
+        CBUS-S-NO-EFFECT = _pc-assert
+    _pc-request @ CBR.STATUS @ CBUS-S-NO-EFFECT = _pc-assert
+    _pc-handler-calls @ 2 = _pc-assert
+    _pc-applied @ 1 = _pc-assert
+    _pc-inst @ CINST.REVISION @ 2 = _pc-assert
+    _pc-request @ CBR.ACTUAL-REV @ 2 = _pc-assert
+    _pc-request @ CBR.RESULT CV-TYPE@ CV-T-INT = _pc-assert
+    _pc-request @ CBR.RESULT CV-DATA@ 73 = _pc-assert
+    _pc-request @ CBR.TURN @ PTURN.STATE @
+        PTURN-S-REJECTED = _pc-assert
+    _pc-request @ CBR.TURN @ PTURN.STATUS @
+        CBUS-S-NO-EFFECT = _pc-assert
+    _pc-request @ CBR.TURN @ PTURN.OBSERVED-REVISION @ 2 = _pc-assert
+    _pc-request @ CBR.TURN @ PTURN.COMMITTED-REVISION @ 0= _pc-assert
+    _pc-request @ CBR.TURN @ PTURN.COMPLETED-MS @ 0> _pc-assert
+    _pc-request @ CBR.TURN @ PTURN-TERMINAL? _pc-assert
+    _pc-request @ CBR-LIFECYCLE-BUSY? 0= _pc-assert
     _pc-stack
 
     _pc-request @ CBR-FREE
