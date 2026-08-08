@@ -971,6 +971,18 @@ the failing attempt is not published, the writer remains idle-clean, the FD
 closes, and ordinary clean unmount succeeds. This qualifies ABI-1 composition;
 it does not change public ext4 write admission.
 
+The same cloned binding qualifies generic fault propagation. An ordered-data
+tear during a 24-byte `VFS-WRITE?` at offset 500 changes 18 raw caller bytes
+but certifies only the 12-byte prefix ending at the first complete sector.
+The call returns `actual = 12` with `PARTIAL | READONLY`, advances the FD to
+512, records that result in `V.LAST-IOR`, and quarantines the writable clone as
+read-only and dirty. The writer retains the causal volume fault with `PARTIAL`
+but without the derived `READONLY` consequence. A retry is rejected by generic
+VFS admission before callback or clock dispatch, leaves the cursor at 512, and
+does not replace `V.LAST-IOR`; vnode times, size, and dirty state remain
+unpublished. This distinguishes certified cursor progress from raw torn-sector
+effects and pins the retry boundary after quarantine.
+
 The callback obtains time from a caller-installed per-context provider rather
 than ambient `EPOCH@`. `_EXT4-BIND-WRITE-CLOCK` binds it once at an
 authenticated clean mounted endpoint before writer allocation. The provider

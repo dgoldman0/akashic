@@ -20860,6 +20860,205 @@ def test_private_write_callback_composes_with_generic_vfs_cursor(
         backing.unlink(missing_ok=True)
 
 
+def test_private_write_fault_advances_generic_vfs_confirmed_prefix(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    activation_writes = sum(
+        kind == "write" for kind, _, _ in activation_trace
+    )
+
+    superblock, inode, inode_offset = _ext4_inode_record(path, 17)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert block_size == 1024
+    data_block = _extent_root_physical(inode, 0)
+    inode_home = inode_offset // block_size
+    write_offset = 500
+    replacement = b"ABCDEFGHIJKLMNOPQRSTUVWX"
+    expected_actual = 12
+    effect_bytes = 18
+    epoch_ms = 3_000_000_123_456
+    with path.open("rb") as source:
+        source.seek(data_block * block_size)
+        original_data = source.read(block_size)
+        source.seek(inode_home * block_size)
+        original_inode_home = source.read(block_size)
+    assert len(original_data) == block_size
+    assert len(original_inode_home) == block_size
+
+    backing = tmp_path / "vfs-generic-confirmed-prefix-fault.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            backing,
+            [
+                *_EXT4_PRIVATE_WRITE_BINDING_FORTH,
+                f"CREATE _GF-CLOCK {epoch_ms} , 0 ,",
+                (
+                    ": _GF-NOW ( clock -- epoch-ms ior ) "
+                    "DUP CELL+ DUP @ 1+ SWAP ! @ 0 ;"
+                ),
+                "T-ARENA CONSTANT _GF-ARENA",
+                (
+                    "_GF-ARENA T-VOLUME EXT4-TEST-WRITE-NEW "
+                    "CONSTANT _GF-MOUNT-IOR CONSTANT _GF-V"
+                ),
+                "_GF-V _EXT4-CTX CONSTANT _GF-CTX",
+                (
+                    "' _GF-NOW _GF-CLOCK _GF-V "
+                    "_EXT4-BIND-WRITE-CLOCK CONSTANT _GF-BIND-IOR"
+                ),
+                (
+                    'S" /fixture/sparse.bin" VFS-FF-WRITE _GF-V '
+                    "VFS-OPEN? CONSTANT _GF-OPEN-IOR CONSTANT _GF-FD"
+                ),
+                "_GF-FD FD.INODE @ D.VNODE @ CONSTANT _GF-VN",
+                "_GF-VN VN.MTIME @ CONSTANT _GF-OLD-MTIME",
+                "_GF-VN VN.MTIME-NS @ CONSTANT _GF-OLD-MTIME-NS",
+                "_GF-VN VN.CTIME @ CONSTANT _GF-OLD-CTIME",
+                "_GF-VN VN.CTIME-NS @ CONSTANT _GF-OLD-CTIME-NS",
+                (
+                    "_GF-V V.FLAGS @ VFS-F-RO AND 0= "
+                    "CONSTANT _GF-STARTED-WRITABLE"
+                ),
+                (
+                    f"{write_offset} _GF-FD VFS-SEEK? "
+                    "CONSTANT _GF-SEEK-IOR"
+                ),
+                (
+                    f'S" {replacement.decode("ascii")}" _GF-FD '
+                    "VFS-WRITE? CONSTANT _GF-IOR CONSTANT _GF-ACTUAL"
+                ),
+                "_GF-FD FD.CUR-LO @ CONSTANT _GF-CURSOR",
+                "_GF-V V.LAST-IOR @ CONSTANT _GF-LAST-IOR",
+                "_EXT4-WR-SOURCE @ CONSTANT _GF-DISPATCH-SOURCE",
+                "_GF-CTX _EXT4-C.J.WRITER + @ CONSTANT _GF-WRITER",
+                (
+                    'S" Z" _GF-FD VFS-WRITE? '
+                    "CONSTANT _GF-RETRY-IOR CONSTANT _GF-RETRY-ACTUAL"
+                ),
+                "_GF-FD FD.CUR-LO @ CONSTANT _GF-RETRY-CURSOR",
+                "_GF-V V.LAST-IOR @ CONSTANT _GF-RETRY-LAST-IOR",
+                "_GF-FD VFS-CLOSE? CONSTANT _GF-CLOSE-IOR",
+                (
+                    _forth_conjunction(
+                        [
+                            "_GF-MOUNT-IOR 0=",
+                            "_GF-BIND-IOR 0=",
+                            "_GF-OPEN-IOR 0=",
+                            "_GF-STARTED-WRITABLE",
+                            "_GF-SEEK-IOR 0=",
+                            f"_GF-ACTUAL {expected_actual} =",
+                            (
+                                "_GF-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-VOLUME ="
+                            ),
+                            "_GF-IOR VFS-IOR-REASON VFS-R-IO =",
+                            (
+                                "_GF-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-PARTIAL "
+                                "VFS-IOR-F-READONLY OR ="
+                            ),
+                            f"_GF-CURSOR {write_offset + expected_actual} =",
+                            "_GF-LAST-IOR _GF-IOR =",
+                            "_GF-WRITER 0<>",
+                            (
+                                "_GF-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-FAULTED ="
+                            ),
+                            (
+                                "_GF-WRITER _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-ORDERED-DATA ="
+                            ),
+                            "_GF-WRITER _EXT4-JWR-VALID?",
+                            (
+                                "_GF-WRITER _EXT4-JWR.FAULT + @ "
+                                "VFS-IOR-FLAGS VFS-IOR-F-PARTIAL ="
+                            ),
+                            (
+                                "_GF-WRITER _EXT4-JWR.FAULT + @ "
+                                "VFS-IOR-F-READONLY 24 LSHIFT OR "
+                                "_GF-IOR ="
+                            ),
+                            "_GF-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "_GF-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            "_GF-VN VN.MTIME @ _GF-OLD-MTIME =",
+                            (
+                                "_GF-VN VN.MTIME-NS @ "
+                                "_GF-OLD-MTIME-NS ="
+                            ),
+                            "_GF-VN VN.CTIME @ _GF-OLD-CTIME =",
+                            (
+                                "_GF-VN VN.CTIME-NS @ "
+                                "_GF-OLD-CTIME-NS ="
+                            ),
+                            "_GF-VN VN.SIZE-LO @ 3072 =",
+                            "_GF-VN VN.SIZE-HI @ 0=",
+                            "_GF-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                            "_GF-RETRY-ACTUAL 0=",
+                            "_GF-RETRY-IOR VFS-E-READONLY =",
+                            (
+                                f"_GF-RETRY-CURSOR "
+                                f"{write_offset + expected_actual} ="
+                            ),
+                            "_GF-RETRY-LAST-IOR _GF-IOR =",
+                            "_GF-CLOCK CELL+ @ 1 =",
+                            "_EXT4-WR-SOURCE @ _GF-DISPATCH-SOURCE =",
+                            f"_EXT4-WR-COUNT @ {len(replacement)} =",
+                            f"_EXT4-WR-OFFSET @ {write_offset} =",
+                            f"_EXT4-WR-CHUNK @ {len(replacement)} =",
+                            f"_EXT4-WR-ACTUAL @ {expected_actual} =",
+                            "_EXT4-IO-COMPLETED @ 1 =",
+                            "_EXT4-IO-EXPECTED @ 2 =",
+                            "_GF-CLOSE-IOR 0=",
+                            "_GF-V V.OPEN-COUNT @ 0=",
+                            "_GF-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-GENERIC-VFS-WRITE-FAULT" THEN'
+                ),
+            ],
+            patches=source_patches,
+            write_faults_by_ordinal={
+                activation_writes + 1: {
+                    "stage": "media",
+                    "sector_index": 1,
+                    "byte_index": 6,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=backing,
+        )
+        _assert_emitted(output, "EXT4-GENERIC-VFS-WRITE-FAULT")
+        assert trace[: len(activation_trace)] == activation_trace
+        tail = trace[len(activation_trace):]
+        assert tail == (("write", data_block * 2, 2),)
+
+        expected_data = bytearray(original_data)
+        expected_data[
+            write_offset : write_offset + effect_bytes
+        ] = replacement[:effect_bytes]
+        with backing.open("rb") as source:
+            source.seek(data_block * block_size)
+            actual_data = source.read(block_size)
+            source.seek(inode_home * block_size)
+            actual_inode_home = source.read(block_size)
+        assert actual_data == bytes(expected_data)
+        assert actual_inode_home == original_inode_home
+    finally:
+        backing.unlink(missing_ok=True)
+
+
 def test_recover_without_checksum_v3_journal_refuses_before_writes(
     canonical_images: dict[str, Path]
 ) -> None:

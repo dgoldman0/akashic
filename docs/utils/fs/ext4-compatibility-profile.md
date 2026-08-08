@@ -797,7 +797,9 @@ gate for growth, allocation, multi-home metadata, or namespace operations.
 The callback's short-progress and later-error behavior is also qualified
 through `VFS-WRITE?` and `VFS-WRITE-EXACT` using a cloned test-only binding;
 the production capability mask, operation table, and read-only flag remain
-unchanged.
+unchanged. Ordered-data fault qualification also proves that generic VFS
+advances only by the confirmed prefix, preserves the partial read-only result,
+and blocks retry before redispatch after writer quarantine.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
