@@ -959,6 +959,18 @@ unmount emits the ordinary deactivation trace. This pins both removal of the
 old `count <= block_size` limit and safe cross-block short progress without
 claiming hole allocation or a multi-block atomic transaction.
 
+Generic cursor qualification uses a cloned test-only binding: its private
+copy of the operation table installs `_EXT4-WRITE`, its copied capability mask
+adds `WRITE`, and only its copied flags clear `READ_ONLY`. The production
+`EXT4-BINDING`, `EXT4-CAPS`, and `EXT4-OPS` are asserted unchanged. Through
+that clone, `VFS-WRITE-EXACT` starts an FD at 1,016 and drives `VFS-WRITE?`
+twice. The first call checkpoints eight bytes and advances the FD, source, and
+remaining count; the second preserves the later `EXT4-D-RECOVERY` refusal at
+the logical-block hole with the cursor at 1,024. The clock sample consumed by
+the failing attempt is not published, the writer remains idle-clean, the FD
+closes, and ordinary clean unmount succeeds. This qualifies ABI-1 composition;
+it does not change public ext4 write admission.
+
 The callback obtains time from a caller-installed per-context provider rather
 than ambient `EPOCH@`. `_EXT4-BIND-WRITE-CLOCK` binds it once at an
 authenticated clean mounted endpoint before writer allocation. The provider

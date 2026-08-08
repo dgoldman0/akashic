@@ -794,6 +794,10 @@ filesystem-block chunk and returns legal short progress, retaining the fixed
 `1 metadata / 1 data / 0 revoke` workspace. This removes a caller-size limit
 from the qualified slice but does not satisfy the general workspace/chunking
 gate for growth, allocation, multi-home metadata, or namespace operations.
+The callback's short-progress and later-error behavior is also qualified
+through `VFS-WRITE?` and `VFS-WRITE-EXACT` using a cloned test-only binding;
+the production capability mask, operation table, and read-only flag remain
+unchanged.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

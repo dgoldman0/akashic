@@ -2200,6 +2200,34 @@ _EXT4_AUTH_ONLY_BINDING_FORTH = (
 )
 
 
+_EXT4_PRIVATE_WRITE_BINDING_FORTH = (
+    "CREATE _EXT4-TEST-WRITE-OPS VFS-OPS-SIZE ALLOT",
+    "EXT4-OPS _EXT4-TEST-WRITE-OPS VFS-OPS-SIZE CMOVE",
+    (
+        "' _EXT4-WRITE _EXT4-TEST-WRITE-OPS "
+        "VFS-OP-WRITE CELLS + !"
+    ),
+    "CREATE _EXT4-TEST-WRITE-BINDING VFS-BINDING-DESC-SIZE ALLOT",
+    (
+        "EXT4-BINDING _EXT4-TEST-WRITE-BINDING "
+        "VFS-BINDING-DESC-SIZE CMOVE"
+    ),
+    "_EXT4-TEST-WRITE-OPS _EXT4-TEST-WRITE-BINDING VB.OPS !",
+    (
+        "_EXT4-TEST-WRITE-BINDING VB.CAPS DUP @ "
+        "VFS-CAP-WRITE OR SWAP !"
+    ),
+    (
+        "_EXT4-TEST-WRITE-BINDING VB.FLAGS DUP @ "
+        "VFS-BF-READ-ONLY INVERT AND SWAP !"
+    ),
+    (
+        ": EXT4-TEST-WRITE-NEW "
+        "_EXT4-TEST-WRITE-BINDING SWAP VFS-NEW ;"
+    ),
+)
+
+
 @pytest.fixture(scope="session")
 def canonical_images() -> dict[str, Path]:
     paths: dict[str, Path] = {}
@@ -20651,6 +20679,179 @@ def test_private_vfs_write_returns_block_bounded_short_success(
 
         expected_data = bytearray(original_data)
         expected_data[write_offset:block_size] = bytes((replacement_byte,)) * 8
+        with backing.open("rb") as source:
+            source.seek(data_block * block_size)
+            actual_data = source.read(block_size)
+        assert actual_data == bytes(expected_data)
+    finally:
+        backing.unlink(missing_ok=True)
+
+
+def test_private_write_callback_composes_with_generic_vfs_cursor(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    superblock, inode, inode_offset = _ext4_inode_record(path, 17)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert block_size == 1024
+    data_block = _extent_root_physical(inode, 0)
+    inode_home = inode_offset // block_size
+    write_offset = block_size - 8
+    source_bytes = 1040
+    exact_byte = 0x59
+    epoch_ms = 3_000_000_123_456
+    published_ms = epoch_ms + 1
+    seconds, milliseconds = divmod(published_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    with path.open("rb") as source:
+        source.seek(data_block * block_size)
+        original_data = source.read(block_size)
+    assert len(original_data) == block_size
+
+    backing = tmp_path / "vfs-generic-short-exact-write.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            backing,
+            [
+                *_EXT4_PRIVATE_WRITE_BINDING_FORTH,
+                f"CREATE _GV-CLOCK {epoch_ms} , 0 , 0 ,",
+                f"CREATE _GV-SOURCE {source_bytes} ALLOT",
+                f"_GV-SOURCE {source_bytes} {exact_byte} FILL",
+                (
+                    ": _GV-NOW ( clock -- epoch-ms ior ) "
+                    "DUP 2 CELLS + DUP @ 1+ SWAP ! "
+                    "DUP @ SWAP 2 CELLS + @ + 0 ;"
+                ),
+                "T-ARENA CONSTANT _GV-ARENA",
+                (
+                    "_GV-ARENA T-VOLUME EXT4-TEST-WRITE-NEW "
+                    "CONSTANT _GV-MOUNT-IOR CONSTANT _GV-V"
+                ),
+                "_GV-V _EXT4-CTX CONSTANT _GV-CTX",
+                (
+                    "' _GV-NOW _GV-CLOCK _GV-V "
+                    "_EXT4-BIND-WRITE-CLOCK CONSTANT _GV-BIND-IOR"
+                ),
+                (
+                    'S" /fixture/sparse.bin" VFS-FF-WRITE _GV-V '
+                    "VFS-OPEN? CONSTANT _GV-OPEN-IOR CONSTANT _GV-FD"
+                ),
+                "_GV-FD FD.INODE @ D.VNODE @ CONSTANT _GV-VN",
+                "_GV-ARENA ARENA-USED CONSTANT _GV-USED-CLEAN",
+                (
+                    f"{write_offset} _GV-FD VFS-SEEK? "
+                    "CONSTANT _GV-SEEK-IOR"
+                ),
+                (
+                    f"_GV-SOURCE {source_bytes} _GV-FD VFS-WRITE-EXACT "
+                    "CONSTANT _GV-EXACT-IOR"
+                ),
+                "_GV-FD FD.CUR-LO @ CONSTANT _GV-EXACT-CURSOR",
+                "_GV-CTX _EXT4-C.J.WRITER + @ CONSTANT _GV-WRITER",
+                "_GV-ARENA ARENA-USED CONSTANT _GV-USED-EXACT",
+                (
+                    _forth_conjunction(
+                        [
+                            "_GV-MOUNT-IOR 0=",
+                            "_EXT4-TEST-WRITE-BINDING VFS-BINDING-VALID?",
+                            (
+                                "_GV-V V.BINDING @ "
+                                "_EXT4-TEST-WRITE-BINDING ="
+                            ),
+                            "_GV-V V.FLAGS @ VFS-F-RO AND 0=",
+                            "VFS-CAP-WRITE _GV-V VFS-HAS?",
+                            (
+                                "_GV-V V.BINDING @ VB.OPS @ "
+                                "VFS-OP-WRITE CELLS + @ ' _EXT4-WRITE ="
+                            ),
+                            "EXT4-CAPS VFS-CAP-WRITE AND 0=",
+                            "EXT4-OPS VFS-OP-WRITE CELLS + @ 0=",
+                            "EXT4-BINDING VB.CAPS @ EXT4-CAPS =",
+                            "EXT4-BINDING VB.OPS @ EXT4-OPS =",
+                            (
+                                "EXT4-BINDING VB.FLAGS @ "
+                                "VFS-BF-NEEDS-VOLUME "
+                                "VFS-BF-READ-ONLY OR "
+                                "VFS-BF-STABLE-IDS OR ="
+                            ),
+                            "_GV-BIND-IOR 0=",
+                            "_GV-OPEN-IOR 0=",
+                            "_GV-FD 0<>",
+                            (
+                                "_GV-FD FD.FLAGS @ VFS-FF-WRITE "
+                                "AND 0<>"
+                            ),
+                            "_GV-SEEK-IOR 0=",
+                            (
+                                "_GV-EXACT-IOR VFS-IOR-REASON "
+                                "VFS-R-UNSUPPORTED ="
+                            ),
+                            (
+                                "_GV-EXACT-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-RECOVERY ="
+                            ),
+                            "_GV-EXACT-IOR VFS-IOR-FLAGS 0=",
+                            "_GV-V V.LAST-IOR @ _GV-EXACT-IOR =",
+                            f"_GV-EXACT-CURSOR {block_size} =",
+                            "_EXT4-WR-SOURCE @ _GV-SOURCE 8 + =",
+                            f"_EXT4-WR-COUNT @ {source_bytes - 8} =",
+                            f"_EXT4-WR-OFFSET @ {block_size} =",
+                            f"_EXT4-WR-CHUNK @ {block_size} =",
+                            "_EXT4-WR-ACTUAL @ 0=",
+                            "_GV-CLOCK 2 CELLS + @ 2 =",
+                            f"_GV-VN VN.MTIME @ {seconds} =",
+                            f"_GV-VN VN.MTIME-NS @ {nanoseconds} =",
+                            f"_GV-VN VN.CTIME @ {seconds} =",
+                            f"_GV-VN VN.CTIME-NS @ {nanoseconds} =",
+                            "_GV-VN VN.SIZE-LO @ 3072 =",
+                            "_GV-VN VN.SIZE-HI @ 0=",
+                            "_GV-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                            "_GV-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            "_GV-WRITER 0<>",
+                            (
+                                "_GV-CTX _EXT4-C.J.WRITER + @ "
+                                "_GV-WRITER ="
+                            ),
+                            "_GV-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_GV-WRITER _EXT4-JWR.FAULT + @ 0=",
+                            "_GV-USED-EXACT _GV-USED-CLEAN >",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-GENERIC-VFS-WRITE-CURSOR" THEN'
+                ),
+                "_GV-FD VFS-CLOSE? CONSTANT _GV-CLOSE-IOR",
+                "0 _GV-V VFS-UNMOUNT CONSTANT _GV-UNMOUNT-IOR",
+                (
+                    "_GV-CLOSE-IOR 0= _GV-UNMOUNT-IOR 0= AND "
+                    "_GV-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    'IF ." EXT4-GENERIC-VFS-WRITE-UNMOUNT" THEN'
+                ),
+            ],
+            patches=source_patches,
+            capture_media=backing,
+        )
+        _assert_emitted(output, "EXT4-GENERIC-VFS-WRITE-CURSOR")
+        _assert_emitted(output, "EXT4-GENERIC-VFS-WRITE-UNMOUNT")
+        assert trace[: len(activation_trace)] == activation_trace
+        assert len(trace) == 51
+        assert sum(kind == "write" for kind, _, _ in trace) == 27
+        assert sum(kind == "flush" for kind, _, _ in trace) == 24
+        assert trace.count(("write", data_block * 2, 2)) == 1
+        assert trace.count(("write", inode_home * 2, 2)) == 1
+
+        expected_data = bytearray(original_data)
+        expected_data[write_offset:block_size] = bytes((exact_byte,)) * 8
         with backing.open("rb") as source:
             source.seek(data_block * block_size)
             actual_data = source.read(block_size)
