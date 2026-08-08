@@ -7,7 +7,8 @@
 \  registration names a nonzero application Lane; control Lane 0 cannot carry
 \  SUBSCRIBE/EVENT state.  Event bodies are copied completely before an
 \  application callback sees them and are wiped when the enclosing
-\  POLL/DISPATCH call returns; no parser view escapes the client callback.
+\  POLL/DISPATCH call returns.  The optional View slice is borrowed directly
+\  from the held EVENT frame and is valid only during the synchronous callback.
 \
 \  Lane Seq and Event-Seq are deliberately independent.  Lane ordering and
 \  ACK state stay in the connection/session.  Each subscription records the
@@ -24,7 +25,8 @@
 \  Per-entry event callback contract:
 \
 \    ( entry generation lane-seq event-seq delivery
-\      target-a target-u event-a event-u context -- decision )
+\      target-a target-u view-a view-u event-a event-u
+\      context -- decision )
 \
 \  delivery is RSUB-DELIVERY-NEW or RSUB-DELIVERY-DUPLICATE.  decision is
 \  RSUB-DISPATCH-COMMIT or RSUB-DISPATCH-DROP.  DUPLICATE is always offered
@@ -34,11 +36,13 @@
 \  only after the callback accepts it and the enclosing client commit succeeds.
 \  A gap or oversized body calls no application handler, copies no prefix, and
 \  returns explicit evidence.  NEXT-EVENT@ reports cursor exhaustion directly.
-\  The entry handle plus target and event slices supplied to the callback are
-\  read-only.  COMMIT accepts the complete copied event; DROP leaves both
-\  Event-Seq and Lane Seq evidence unchanged.  Throwing or returning any other
-\  value is reported as CALLBACK and drops an EVENT.  The event slot is wiped
-\  before the enclosing wrapper returns in every case.
+\  The entry handle and every slice supplied to the callback are read-only.
+\  Missing View is reported as 0 0; a present View must not be retained after
+\  the callback.  Target and event slices are copied owner storage.  COMMIT
+\  accepts the complete copied event; DROP leaves both Event-Seq and Lane Seq
+\  evidence unchanged.  Throwing or returning any other value is reported as
+\  CALLBACK and drops an EVENT.  The event slot is wiped before the enclosing
+\  wrapper returns in every case.
 \
 \  Optional fallback callbacks passed to POLL/DISPATCH use the client's exact
 \  borrowed-view contract:
@@ -1150,6 +1154,8 @@ VARIABLE _RSUBP-DISPOSITION
 VARIABLE _RSUBP-CALL-CONTEXT
 VARIABLE _RSUBP-TARGET-A
 VARIABLE _RSUBP-TARGET-U
+VARIABLE _RSUBP-VIEW-A
+VARIABLE _RSUBP-VIEW-U
 VARIABLE _RSUBP-BODY-A
 VARIABLE _RSUBP-BODY-U
 VARIABLE _RSUBP-EVENT-SEQ
@@ -1174,6 +1180,7 @@ VARIABLE _RSUBP-OUT-DETAIL
 
 : _RSUBP-RESET  ( -- )
     0 _RSUBP-F ! 0 _RSUBP-TARGET-A ! 0 _RSUBP-TARGET-U !
+    0 _RSUBP-VIEW-A ! 0 _RSUBP-VIEW-U !
     0 _RSUBP-BODY-A ! 0 _RSUBP-BODY-U ! 0 _RSUBP-EVENT-SEQ !
     0 _RSUBP-MATCH-E ! 0 _RSUBP-MATCH-I ! 0 _RSUBP-MATCH-G !
     RSUB-DELIVERY-NONE _RSUBP-DELIVERY !
@@ -1215,6 +1222,7 @@ VARIABLE _RSUBP-OUT-DETAIL
     _RSUBP-LANE-SEQ @ _RSUBP-EVENT-SEQ @ _RSUBP-DELIVERY @
     _RSUBP-MATCH-I @ _RSUBP-O @ _RSUB-TARGET@
     _RSUBP-MATCH-E @ RSUBE.TARGET-U @
+    _RSUBP-VIEW-A @ _RSUBP-VIEW-U @
     _RSUBP-MATCH-I @ _RSUBP-O @ _RSUB-EVENT@ _RSUBP-BODY-U @
     _RSUBP-MATCH-E @ RSUBE.CALLBACK-CONTEXT @
     _RSUBP-MATCH-E @ RSUBE.CALLBACK-XT @ EXECUTE
@@ -1282,6 +1290,14 @@ VARIABLE _RSUBP-OUT-DETAIL
     THEN
     _RSUBP-EVENT-SEQ @ _RSUBP-MATCH-E @
         RSUBE.LAST-OBSERVED-EVENT-SEQ !
+    _RSUBP-F @ RMSG-VIEW$
+        _RSUBP-MESSAGE-STATUS ! _RSUBP-PRESENT !
+        _RSUBP-VIEW-U ! _RSUBP-VIEW-A !
+    _RSUBP-MESSAGE-STATUS @ IF
+        RSUB-DELIVERY-PROTOCOL _RSUBP-DELIVERY !
+        RSUB-S-MESSAGE _RSUBP-EVENT-STATUS !
+        RSUB-DISPATCH-DROP DUP _RSUBP-DECISION ! EXIT
+    THEN
     _RSUBP-F @ RMSG-BODY$
         _RSUBP-MESSAGE-STATUS ! _RSUBP-BODY-U ! _RSUBP-BODY-A !
     _RSUBP-MESSAGE-STATUS @ IF
@@ -1411,7 +1427,8 @@ VARIABLE _RSUBP-BOwner
     THEN ;
 
 : _RSUBP-CLEAR-BORROWED  ( -- )
-    0 _RSUBP-F ! 0 _RSUBP-TARGET-A ! 0 _RSUBP-BODY-A !
+    0 _RSUBP-F ! 0 _RSUBP-TARGET-A ! 0 _RSUBP-VIEW-A !
+    0 _RSUBP-BODY-A !
     0 _RSUBP-FALLBACK-XT ! 0 _RSUBP-FALLBACK-CONTEXT !
     0 _RSUBP-CALL-CONTEXT ! ;
 
@@ -1680,6 +1697,7 @@ VARIABLE _RSUBLC-MS
     0 _RSUBP-F ! 0 _RSUBP-KIND ! 0 _RSUBP-LANE !
     0 _RSUBP-LANE-SEQ ! 0 _RSUBP-EXPECTED ! 0 _RSUBP-DISPOSITION !
     0 _RSUBP-CALL-CONTEXT ! 0 _RSUBP-TARGET-A ! 0 _RSUBP-TARGET-U !
+    0 _RSUBP-VIEW-A ! 0 _RSUBP-VIEW-U !
     0 _RSUBP-BODY-A ! 0 _RSUBP-BODY-U ! 0 _RSUBP-EVENT-SEQ !
     0 _RSUBP-PRESENT ! 0 _RSUBP-MESSAGE-STATUS !
     0 _RSUBP-MATCH-E ! 0 _RSUBP-MATCH-I ! 0 _RSUBP-MATCH-G !

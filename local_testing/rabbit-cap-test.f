@@ -123,6 +123,8 @@ VARIABLE _RBT-CAP-CB-EVENT-A
 VARIABLE _RBT-CAP-CB-EVENT-U
 VARIABLE _RBT-CAP-CB-TARGET-A
 VARIABLE _RBT-CAP-CB-TARGET-U
+VARIABLE _RBT-CAP-CB-VIEW-A
+VARIABLE _RBT-CAP-CB-VIEW-U
 VARIABLE _RBT-CAP-CB-ENTRY
 VARIABLE _RBT-CAP-CB-GENERATION
 VARIABLE _RBT-CAP-CB-LANE
@@ -330,9 +332,12 @@ VARIABLE _RBT-CAP-FINI-SUB-OWNER
         _RBT-ASSERT ;
 
 : _RBT-CAP-EVENT-CALLBACK
-  ( entry generation lane-seq event-seq delivery target-a target-u event-a event-u context -- decision )
+  ( entry generation lane-seq event-seq delivery )
+  ( target-a target-u view-a view-u event-a event-u )
+  ( context -- decision )
     _RBT-CAP-CB-CONTEXT !
     _RBT-CAP-CB-EVENT-U ! _RBT-CAP-CB-EVENT-A !
+    _RBT-CAP-CB-VIEW-U ! _RBT-CAP-CB-VIEW-A !
     _RBT-CAP-CB-TARGET-U ! _RBT-CAP-CB-TARGET-A !
     _RBT-CAP-CB-DELIVERY ! _RBT-CAP-CB-EVENT !
     _RBT-CAP-CB-LANE ! _RBT-CAP-CB-GENERATION !
@@ -342,6 +347,8 @@ VARIABLE _RBT-CAP-FINI-SUB-OWNER
     _RBT-CAP-CB-DELIVERY @ RSUB-DELIVERY-NEW = _RBT-ASSERT
     _RBT-CAP-CB-TARGET-A @ _RBT-CAP-CB-TARGET-U @
         S" /fixture/events" STR-STR= _RBT-ASSERT
+    _RBT-CAP-CB-VIEW-A @ _RBT-CAP-CB-VIEW-U @
+        S" application/test" STR-STR= _RBT-ASSERT
     _RBT-CAP-CB-EVENT-A @ _RBT-CAP-CB-EVENT-U @
         _RBT-CAP-CB-EVENT @ _RBT-CAP-ASSERT-JOURNAL-BODY
     _RBT-CAP-CB-CONTEXT @ _RBT-CAP-EVENT-A = IF

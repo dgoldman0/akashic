@@ -313,6 +313,37 @@ entry only after the underlying server reports that exact response successfully
 enqueued and committed; every substitution or failure wipes it. Cursor state is
 therefore never live merely because a handler happened to run.
 
+Future binds may also pass through one optional neutral admission seam:
+
+```text
+RABBIT-SERVER-SUBSCRIPTIONS-BIND-ADMISSION!
+( bind-xt bind-context owner -- status )
+
+bind-xt
+( frame peer-token empty-builder context -- bind-decision )
+```
+
+A zero `bind-xt` disables the seam and behaves as
+`RSERVSUB-BIND-ALLOW`. Otherwise the callback runs after structural request,
+selector-size, duplicate, and table-capacity checks, but before selector
+copying, the ordinary 200 response, application-Lane creation, CANDIDATE
+state, or pending-index publication. It receives the admitted peer token, a
+read-only held request frame, and an explicitly reset server-owned builder.
+Both objects are synchronous loans that expire when the callback returns.
+
+`RSERVSUB-BIND-ALLOW` continues the existing commit-gated path.
+`RSERVSUB-BIND-RESPONSE` requires the callback to leave a sealed response whose
+Lane and `Txn` exactly match the held request and whose status is not 200. The
+server enqueues that response without creating a Lane or registration.
+`RSERVSUB-BIND-FAIL`, a callback throw or damaged stack, an invalid decision,
+an unsealed or wrongly correlated response, and a response carrying 200 all
+fail closed through the server's correlated 500 handler path; none publishes
+subscription state. Callback failure is retained as `RSERVSUB-S-CALLBACK` in
+the wrapper's last status. Bind callbacks may not reenter the owner, and policy
+replacement is refused while any wrapper operation is active. Reconfiguration
+affects only future binds and survives `RESET`; successful finalization wipes
+the configuration with the owner.
+
 The owner receives one deterministic, read-only exact-suffix callback. SERVICE
 preflights Lane/credit before calling it, asks for exactly `cursor + 1`, and
 publishes at most one EVENT. The published cursor and last Lane Seq advance only
@@ -404,18 +435,34 @@ arbitrary numeric response. Selector registration state, transport lane
 sequence, last observed application sequence, and committed replay cursor are
 kept distinct.
 
-An exact next `Event-Seq` is copied in full and offered synchronously to the
-registered application callback. Only callback acceptance plus successful
-connection commit advances the replay cursor. An already committed sequence is
-reported as a duplicate and remains available for application digest or
-idempotency validation without advancing the cursor, including at the maximum
-cursor so a lost final transport ACK remains recoverable. A gap or oversized
-body invokes no application callback, copies no prefix, and leaves the
-committed cursor unchanged; `NEXT-EVENT@` reports cursor exhaustion directly.
-Event staging bytes are wiped before
-`POLL` or `DISPATCH` returns; callbacks may not retain any supplied slice or
-reenter subscription dispatch or lifecycle mutation. A callback throw or
-invalid decision remains explicit even for extension and other fallback traffic.
+An EVENT carrying the exact next `Event-Seq` is staged and offered
+synchronously to the registered application callback with this exact contract:
+
+```text
+( entry generation lane-seq event-seq delivery
+  target-a target-u view-a view-u event-a event-u
+  context -- decision )
+```
+
+`delivery` is `RSUB-DELIVERY-NEW` or `RSUB-DELIVERY-DUPLICATE`; the
+callback returns `RSUB-DISPATCH-COMMIT` or `RSUB-DISPATCH-DROP`.
+The selector and complete event body are owner-copied bytes. The optional
+`View` is instead a read-only borrowed slice of the held EVENT frame; a missing
+header is represented as `0 0`, and a present slice expires as soon as the
+synchronous callback returns. The neutral owner does not persist or interpret
+it. Every supplied slice is read-only, and callers must copy anything they
+retain.
+
+Only callback acceptance plus successful connection commit advances the replay
+cursor. An already committed sequence is reported as a duplicate and remains
+available for application digest or idempotency validation without advancing
+the cursor, including at the maximum cursor so a lost final transport ACK
+remains recoverable. A gap, malformed View, or oversized body invokes no
+application callback, copies no body prefix, and leaves the committed cursor
+unchanged; `NEXT-EVENT@` reports cursor exhaustion directly. Event staging
+bytes are wiped before `POLL` or `DISPATCH` returns; callbacks may not reenter
+subscription dispatch or lifecycle mutation. A callback throw or invalid
+decision remains explicit even for extension and other fallback traffic.
 
 Disconnect currently represents whole-connector loss: it cancels the attached
 client, clears lane-local and bind-operation evidence, preserves copied

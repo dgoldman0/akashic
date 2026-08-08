@@ -400,6 +400,18 @@ CONTRACT_STAGES = (
         True,
     ),
     (
+        "server-sub-bind-prepare",
+        "_RBT-SSRV-PHASE-BIND-PREPARE",
+        "RABBIT SERVER SUBSCRIPTION BIND PREPARE PASS",
+        True,
+    ),
+    (
+        "server-sub-bind-refusals",
+        "_RBT-SSRV-PHASE-BIND-REFUSALS",
+        "RABBIT SERVER SUBSCRIPTION BIND REFUSALS PASS",
+        True,
+    ),
+    (
         "server-sub-bind-since",
         "_RBT-SSRV-PHASE-BIND-SINCE",
         "RABBIT SERVER SUBSCRIPTION BIND SINCE PASS",
@@ -756,6 +768,37 @@ def _assert_static_contracts() -> None:
     assert all(name.startswith("_RSUB") for _, name in subscription_declarations)
     assert "Lane Seq and Event-Seq are deliberately independent" in subscription
     assert "recursive dispatch and registration/lifecycle mutation are refused" in subscription
+    normalized_subscription = " ".join(subscription.split())
+    normalized_subscription_fixture = " ".join(subscription_fixture.split())
+    normalized_server_subscription_fixture = " ".join(
+        server_subscription_fixture.split()
+    )
+    normalized_capstone_fixture = " ".join(capstone_fixture.split())
+    assert (
+        "target-a target-u view-a view-u event-a event-u"
+        in normalized_subscription
+    )
+    assert "_RSUBP-F @ RMSG-VIEW$" in subscription
+    for event_fixture in (
+        subscription_fixture,
+        server_subscription_fixture,
+        capstone_fixture,
+    ):
+        assert "view-a view-u event-a event-u" in " ".join(
+            event_fixture.split()
+        )
+    assert (
+        "_RBT-SUB-CB-VIEW-A @ 0= _RBT-ASSERT"
+        in normalized_subscription_fixture
+    )
+    assert (
+        '_RBT-SUB-CB-VIEW-A @ _RBT-SUB-CB-VIEW-U @ S" application/test"'
+        in normalized_server_subscription_fixture
+    )
+    assert (
+        '_RBT-CAP-CB-VIEW-A @ _RBT-CAP-CB-VIEW-U @ S" application/test"'
+        in normalized_capstone_fixture
+    )
     router_declarations = _declarations(ROUTER, router)
     assert router_declarations
     assert all(kind == "VARIABLE" for kind, _ in router_declarations)
@@ -781,6 +824,12 @@ def _assert_static_contracts() -> None:
     assert "takes exclusive ownership of one initialized" in server_subscription
     assert "Registration is commit-gated" in server_subscription
     assert "never treats the immutable router context" in server_subscription
+    assert "RABBIT-SERVER-SUBSCRIPTIONS-BIND-ADMISSION!" in server_subscription
+    assert "RSERVSUB-BIND-ALLOW" in server_subscription
+    assert "RSERVSUB-BIND-RESPONSE" in server_subscription
+    assert "RSERVSUB-BIND-FAIL" in server_subscription
+    assert "_RSERVSUBH-BIND-RESPONSE?" in server_subscription
+    assert "_RBT-SSRV-BIND-ADMISSION" in server_subscription_fixture
     streams_connector_declarations = _declarations(
         STREAMS_CONNECTOR, streams_connector
     )
@@ -791,6 +840,49 @@ def _assert_static_contracts() -> None:
     assert all(
         name.startswith("_SRCONN")
         for _, name in streams_connector_declarations
+    )
+    connector_subscription_facade = streams_connector[
+        streams_connector.index(
+            ": STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-ADD"
+        ) : streams_connector.index(
+            ": STREAMS-RABBIT-CONNECTOR-CONTROL"
+        )
+    ]
+    assert "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTIONS@" not in streams_connector
+    assert " RSUB." not in connector_subscription_facade
+    assert " RSUBE." not in connector_subscription_facade
+    for neutral_word in (
+        "RABBIT-SUBSCRIPTIONS-ADD",
+        "RABBIT-SUBSCRIPTION-STATE@",
+        "RABBIT-SUBSCRIPTION-TARGET$",
+        "RABBIT-SUBSCRIPTION-LANE@",
+        "RABBIT-SUBSCRIPTION-CURSOR@",
+        "RABBIT-SUBSCRIPTION-LAST-DELIVERY@",
+        "RABBIT-SUBSCRIPTION-EVENT-REQUIRED@",
+        "RABBIT-SUBSCRIPTION-BIND-RESULT@",
+        "RABBIT-SUBSCRIPTION-BIND-REQUIRED@",
+        "RABBIT-SUBSCRIPTION-RELEASE",
+        "RABBIT-SUBSCRIPTION-BIND",
+        "RABBIT-SUBSCRIPTION-BIND-RESOLVE",
+    ):
+        assert neutral_word in connector_subscription_facade
+    normalized_connector = " ".join(streams_connector.split())
+    assert (
+        "operation operation-generation attachment-generation status"
+        in normalized_connector
+    )
+    assert (
+        "entry generation attachment-gen connector -- "
+        "code address length status"
+        in normalized_connector
+    )
+    assert (
+        "entry generation attachment-gen connector -- bytes status"
+        in normalized_connector
+    )
+    assert (
+        "entry generation attachment-generation accepted connector -- status"
+        in normalized_connector
     )
     assert "long-lived Streams Rabbit client connector" in streams_connector
     assert "retryable DETACH/FINI cleanup path" in streams_connector
@@ -1021,6 +1113,16 @@ def _assert_static_contracts() -> None:
         "STREAMS-RABBIT-CONNECTOR-OP-RESULT@",
         "STREAMS-RABBIT-CONNECTOR-OP-REQUIRED@",
         "STREAMS-RABBIT-CONNECTOR-OP-RELEASE",
+        "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-ADD",
+        "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-STATE@",
+        "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-TARGET$",
+        "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-LANE@",
+        "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-CURSOR@",
+        "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-LAST-DELIVERY@",
+        "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-EVENT-REQUIRED@",
+        "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-BIND-RESULT@",
+        "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-BIND-REQUIRED@",
+        "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-RELEASE",
         "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-BIND",
         "STREAMS-RABBIT-CONNECTOR-SUBSCRIPTION-BIND-RESOLVE",
         "STREAMS-RABBIT-CONNECTOR-CONTROL",
