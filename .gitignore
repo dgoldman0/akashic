@@ -69,8 +69,14 @@ local_testing/*
 !local_testing/test_streams_rabbit_remote_resource.py
 !local_testing/rabbit-remote-sub-test.f
 !local_testing/test_streams_rabbit_remote_subscription.py
+!local_testing/rabbit-remote-action-test.f
+!local_testing/test_streams_rabbit_remote_action.py
+!local_testing/rabbit-action-mount-test.f
+!local_testing/test_streams_rabbit_action_mount.py
 !local_testing/rabbit-mounted-test.f
 !local_testing/test_streams_rabbit_mounted_read.py
+!local_testing/rabbit-landing3-test.f
+!local_testing/test_streams_rabbit_landing3.py
 # Refactor architecture inventory and ratchet
 !local_testing/forth_dependencies.py
 !local_testing/refactor_inventory.py
