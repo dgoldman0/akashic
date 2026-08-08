@@ -801,6 +801,26 @@ unchanged. Ordered-data fault qualification also proves that generic VFS
 advances only by the confirmed prefix, preserves the partial read-only result,
 and blocks retry before redispatch after writer quarantine.
 
+The same private one-block overwrite now accepts an existing initialized block
+through an authenticated external extent tree rather than requiring an inline
+depth-0 root. The real supplemental depth-1 fixture qualifies data/inode
+checkpoint and readback while leaving its extent node byte-exact. A
+checksum-valid target leaf that aliases the selected data block to its own
+external extent node is rejected before media mutation. The scoped full-tree
+audit checks every target data range and external node against journal and
+static-metadata roles, requires exactly one leaf reference to the selected
+physical block, and rejects that block as node metadata. A valid node relocated
+into the journal ring and a selected block duplicated across distinct leaves
+are both qualified refusals. One paired reverse-owner scan covers both the data
+and inode-table destinations, including other inodes' external xattrs and map
+metadata. The implementation uses the reader's bounded depth-5 validator, but
+mutation media qualification is currently depth 1.
+
+This per-operation proof does not yet provide a mount-wide reverse-ownership
+certificate for every journal-ring and primary-super block that activation and
+emission can write against all non-target inodes. That remains a public-write
+release gate rather than being hidden by the private depth-positive support.
+
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
 raw/MBR/GPT volumes, dirty and damaged images, controlled power cuts, complete

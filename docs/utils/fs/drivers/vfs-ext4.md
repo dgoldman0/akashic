@@ -843,25 +843,51 @@ endpoints, and the remaining release gates must still land before public write
 capabilities can be enabled.
 
 The first ordinary-data mutation is also implemented as a private staging
-primitive. It admits a linked regular file with an authenticated inline
-depth-zero extent map and overwrites a nonempty byte range wholly contained in
-one existing initialized block. The transaction shape is exactly one ordered
-data block, one inode-table metadata block, and no revokes. The ordered image
-is a full-block read-modify-write copy; the metadata image preserves every
-other inode-table byte, updates `mtime` and `ctime` from explicit seconds and
-nanoseconds, and restamps the ext4 inode checksum. Staging neither emits nor
-checkpoints the transaction and grants no public write capability.
+primitive. It admits a linked regular file with an authenticated extent map,
+including maps with external extent-tree nodes, and overwrites a nonempty byte
+range wholly contained in one existing initialized block. The transaction
+shape is exactly one ordered data block, one inode-table metadata block, and
+no revokes. The ordered image is a full-block read-modify-write copy; the
+metadata image preserves every other inode-table byte, updates `mtime` and
+`ctime` from explicit seconds and nanoseconds, and restamps the ext4 inode
+checksum. Staging neither emits nor checkpoints the transaction and grants no
+public write capability.
 
-Before retaining either after-image, the primitive validates the selected data
-block against journal, descriptor, bitmap, inode-table, and sparse-super/GDT
-roles; proves that no other inode owns the block; and reauthenticates the
-target's generation, locator, complete inline extent map, size, link count,
-flags, and external-xattr pointer after every cache-clobbering scan. Inline
-depth-zero extent validation excludes target self-overlap, while an external
-xattr block equal to the selected data block is rejected separately. A stale
-generation, hole, unwritten extent, unsupported inode flag, cross-block write,
-growth, or ambiguous ownership fails before publication. Once ordered data has
-been retained, any later staging failure aborts and scrubs the transaction.
+Before retaining either after-image, the primitive authenticates the complete
+target tree under a scoped mutation audit. Every target leaf range and external
+extent node is checked against journal, primary-super/GDT, descriptor, bitmap,
+inode-table, and sparse-super/GDT roles. Leaf-local validation rejects physical
+overlap within each leaf; the scoped audit additionally requires the selected
+physical block to occur in exactly one leaf across the complete tree and never
+as an external node. A nonzero external-xattr block must differ from the
+selected block and pass the same mutation-role check.
+
+The exact inode-table home is authenticated separately. One filesystem-wide
+other-inode walk then publishes both transaction destinations—the selected
+data block and inode-table home—and refuses either range through another
+allocated inode's data, extent/legacy map metadata, or external-xattr pointer.
+The target's generation, locator, complete map, size, link count, flags, and
+external-xattr pointer are reauthenticated after each cache-clobbering scan. A
+stale generation, hole, unwritten extent, unsupported inode flag, cross-block
+write, growth, duplicate selected-block mapping, or ambiguous ownership fails
+before publication. Once ordered data has been retained, any later staging
+failure aborts and scrubs the transaction.
+
+Depth-positive qualification writes logical block 10 of the supplemental
+12-block extent-tree fixture through its real depth-1 root and external node.
+The generic VFS path checkpoints the selected data block and inode-table home,
+reads the replacement back through the unchanged tree, never writes the
+external extent node, and cleanly unmounts. A checksum-valid adversarial leaf
+that maps logical block 0 onto its own extent-node block is refused as
+`EXT4-D-DATA-MAP`; relocating the valid node into an unused journal-ring block
+is refused as `EXT4-D-JOURNAL`; and two independently valid external-leaf
+shapes that repeat the selected physical block are refused on the second hit.
+The paired other-owner qualification separately exercises refusal through its
+second range and success for the actual data/inode-home pair. The write-path
+refusals return with scoped authority cleared and perform no write or flush;
+the standalone two-leaf parser qualification explicitly closes its test scope.
+Deeper trees use the same bounded parser and mutation audit, but the real
+mutation fixture currently qualifies depth 1.
 
 The exact private write now also completes the real durability lifecycle. A
 write-free dry stage is aborted before clean-to-`RECOVER` activation; the live
@@ -1109,8 +1135,9 @@ The remaining boundaries are:
 
 - POSIX ACL xattrs are returned as raw bytes, but generic permission
   enforcement is not claimed;
-- the real external-tool extent fixture has depth 1 even though the reader
-  validates and traverses the profile limit through depth 5;
+- the real external-tool extent fixture has depth 1 and now qualifies both
+  reading and the private one-block overwrite, while deeper trees have only
+  bounded structural traversal through the profile limit of 5;
 - the real special-inode fixture covers FIFO, character, and block devices,
   but not a socket inode;
 - replay currently requires checksum-v3/64-bit journal records, supports

@@ -280,6 +280,28 @@ def _inode_with_checksum(
     return bytes(result)
 
 
+def _extent_node_with_checksum(
+    superblock: bytes,
+    inode_number: int,
+    generation: int,
+    node: bytes | bytearray,
+) -> bytes:
+    result = bytearray(node)
+    assert len(superblock) == 1024
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert len(result) == block_size
+    assert inode_number > 0
+    assert 0 <= generation <= 0xFFFF_FFFF
+    tail_offset = 12 + ((block_size - 12) // 12) * 12
+    assert tail_offset + 4 <= block_size
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    checksum = _crc32c_raw(struct.pack("<I", inode_number), seed)
+    checksum = _crc32c_raw(struct.pack("<I", generation), checksum)
+    checksum = _crc32c_raw(result[:tail_offset], checksum)
+    struct.pack_into("<I", result, tail_offset, checksum)
+    return bytes(result)
+
+
 def _ext4_sparse_group(group: int) -> bool:
     if group in (0, 1):
         return True
@@ -2273,6 +2295,13 @@ def read_side_image() -> Path:
     assert path.stat().st_size == row["image_bytes"]
     assert _sha256(path) == row["expected_sha256"]
     return path
+
+
+@pytest.fixture(scope="session")
+def extent_writer_activation_fixture(
+    read_side_image: Path,
+) -> dict[str, object]:
+    return _build_jbd2_activation_fixture(read_side_image)
 
 
 @pytest.fixture(scope="session")
@@ -17848,6 +17877,36 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                 "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER "
                 "CONSTANT _MA-UNIQUE-IOR"
             ),
+            (
+                f"14 {data_block} 1 {data_block - 1} 1 _MA-CTX "
+                "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR "
+                "CONSTANT _MA-PAIR-ALIAS-IOR"
+            ),
+            (
+                "_EXT4-MUTATION-OWNER-TARGET @ "
+                "CONSTANT _MA-PAIR-ALIAS-TARGET"
+            ),
+            (
+                "_EXT4-MUTATION-OWNER-COUNT @ "
+                "CONSTANT _MA-PAIR-ALIAS-COUNT"
+            ),
+            (
+                "_EXT4-MUTATION-OWNER-TARGET-B @ "
+                "CONSTANT _MA-PAIR-ALIAS-TARGET-B"
+            ),
+            (
+                "_EXT4-MUTATION-OWNER-COUNT-B @ "
+                "CONSTANT _MA-PAIR-ALIAS-COUNT-B"
+            ),
+            (
+                "_EXT4-MAP-VALIDATION-LIMIT @ "
+                "CONSTANT _MA-PAIR-ALIAS-LIMIT"
+            ),
+            (
+                f"14 {data_block} 1 _MA-INODE-HOME 1 _MA-CTX "
+                "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR "
+                "CONSTANT _MA-PAIR-HOME-IOR"
+            ),
             "DEPTH CONSTANT _MA-DEPTH-AFTER",
             "_MA-ARENA ARENA-USED CONSTANT _MA-USED-AFTER",
             (
@@ -17930,6 +17989,23 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                             "EXT4-D-DATA-MAP ="
                         ),
                         "_MA-UNIQUE-IOR 0=",
+                        (
+                            "_MA-PAIR-ALIAS-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_MA-PAIR-ALIAS-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-FORMAT ="
+                        ),
+                        (
+                            "_MA-PAIR-ALIAS-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-CORRUPT ="
+                        ),
+                        (
+                            "_MA-PAIR-ALIAS-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        "_MA-PAIR-HOME-IOR 0=",
                         "_EXT4-IR-INO @ 14 =",
                         "_EXT4-IR-BLOCK @ _MA-INODE-HOME =",
                         "_MA-LEADING-TARGET 0=",
@@ -17938,8 +18014,15 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                         "_MA-TRAILING-TARGET 0=",
                         "_MA-TRAILING-COUNT 0=",
                         "_MA-TRAILING-LIMIT 17 =",
+                        "_MA-PAIR-ALIAS-TARGET 0=",
+                        "_MA-PAIR-ALIAS-COUNT 0=",
+                        "_MA-PAIR-ALIAS-TARGET-B 0=",
+                        "_MA-PAIR-ALIAS-COUNT-B 0=",
+                        "_MA-PAIR-ALIAS-LIMIT 17 =",
                         "_EXT4-MUTATION-OWNER-TARGET @ 0=",
                         "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                        "_EXT4-MUTATION-OWNER-TARGET-B @ 0=",
+                        "_EXT4-MUTATION-OWNER-COUNT-B @ 0=",
                         "_EXT4-JFO-CERT-VALID @ 0=",
                         "_MA-MAP-LIMIT-AFTER 17 =",
                         "_MA-DEPTH-BEFORE _MA-DEPTH-AFTER =",
@@ -21055,6 +21138,601 @@ def test_private_write_fault_advances_generic_vfs_confirmed_prefix(
             actual_inode_home = source.read(block_size)
         assert actual_data == bytes(expected_data)
         assert actual_inode_home == original_inode_home
+    finally:
+        backing.unlink(missing_ok=True)
+
+
+def test_private_write_updates_initialized_depth_positive_extent(
+    extent_writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    path = extent_writer_activation_fixture["image"]
+    source_patches = extent_writer_activation_fixture["source_patches"]
+    activation_trace = extent_writer_activation_fixture["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    inode_number = 26
+    extent_node_block = 1353
+    logical_block = 10
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert block_size == 1024
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    assert struct.unpack_from("<H", inode, 0x2E)[0] == 1
+    assert struct.unpack_from("<I", inode, 0x38)[0] == extent_node_block
+    inode_home = inode_offset // block_size
+
+    with path.open("rb") as source:
+        source.seek(extent_node_block * block_size)
+        original_extent_node = source.read(block_size)
+    assert len(original_extent_node) == block_size
+    assert _extent_node_with_checksum(
+        superblock, inode_number, generation, original_extent_node
+    ) == original_extent_node
+    assert struct.unpack_from("<HHH", original_extent_node, 0) == (
+        0xF30A,
+        6,
+        84,
+    )
+    assert struct.unpack_from("<H", original_extent_node, 6)[0] == 0
+    target_entry = 12 + 5 * 12
+    assert struct.unpack_from("<I", original_extent_node, target_entry)[0] == 10
+    assert struct.unpack_from("<H", original_extent_node, target_entry + 4)[0] == 2
+    assert struct.unpack_from("<H", original_extent_node, target_entry + 6)[0] == 0
+    data_block = struct.unpack_from(
+        "<I", original_extent_node, target_entry + 8
+    )[0]
+    assert data_block == 1362
+
+    with path.open("rb") as source:
+        source.seek(data_block * block_size)
+        original_data = source.read(block_size)
+    assert len(original_data) == block_size
+    replacement = b"TREE-WRITE"
+    block_offset = 123
+    write_offset = logical_block * block_size + block_offset
+    epoch_ms = 3_000_000_123_456
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+
+    backing = tmp_path / "vfs-depth-positive-extent-write.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            backing,
+            [
+                *_EXT4_PRIVATE_WRITE_BINDING_FORTH,
+                "CREATE _DP-BUF 10 ALLOT",
+                "CREATE _DP-CLOCK 0 ,",
+                (
+                    ": _DP-NOW ( clock -- epoch-ms ior ) "
+                    f"DUP @ 1+ SWAP ! {epoch_ms} 0 ;"
+                ),
+                "T-ARENA CONSTANT _DP-ARENA",
+                (
+                    "_DP-ARENA T-VOLUME EXT4-TEST-WRITE-NEW "
+                    "CONSTANT _DP-MOUNT-IOR CONSTANT _DP-V"
+                ),
+                "_DP-V _EXT4-CTX CONSTANT _DP-CTX",
+                (
+                    "' _DP-NOW _DP-CLOCK _DP-V "
+                    "_EXT4-BIND-WRITE-CLOCK CONSTANT _DP-BIND-IOR"
+                ),
+                (
+                    'S" /fixture/extent-tree.bin" '
+                    "VFS-FF-READ VFS-FF-WRITE OR _DP-V VFS-OPEN? "
+                    "CONSTANT _DP-OPEN-IOR CONSTANT _DP-FD"
+                ),
+                "_DP-FD FD.INODE @ D.VNODE @ CONSTANT _DP-VN",
+                (
+                    f"{write_offset} _DP-FD VFS-SEEK? "
+                    "CONSTANT _DP-SEEK-IOR"
+                ),
+                (
+                    f'S" {replacement.decode("ascii")}" _DP-FD '
+                    "VFS-WRITE? CONSTANT _DP-WRITE-IOR "
+                    "CONSTANT _DP-ACTUAL"
+                ),
+                "_DP-V V.LAST-IOR @ CONSTANT _DP-WRITE-LAST",
+                "_DP-FD FD.CUR-LO @ CONSTANT _DP-WRITE-CURSOR",
+                "_DP-CTX _EXT4-C.J.WRITER + @ CONSTANT _DP-WRITER",
+                (
+                    f"{write_offset} _DP-FD VFS-SEEK? "
+                    "CONSTANT _DP-READ-SEEK-IOR"
+                ),
+                (
+                    f"_DP-BUF {len(replacement)} _DP-FD VFS-READ? "
+                    "CONSTANT _DP-READ-IOR CONSTANT _DP-READ-ACTUAL"
+                ),
+                (
+                    _forth_conjunction(
+                        [
+                            "_DP-MOUNT-IOR 0=",
+                            "_DP-BIND-IOR 0=",
+                            "_DP-OPEN-IOR 0=",
+                            "_DP-SEEK-IOR 0=",
+                            "_DP-WRITE-IOR 0=",
+                            f"_DP-ACTUAL {len(replacement)} =",
+                            "_DP-WRITE-LAST 0=",
+                            (
+                                f"_DP-WRITE-CURSOR "
+                                f"{write_offset + len(replacement)} ="
+                            ),
+                            "_DP-READ-SEEK-IOR 0=",
+                            "_DP-READ-IOR 0=",
+                            f"_DP-READ-ACTUAL {len(replacement)} =",
+                            (
+                                f'S" {replacement.decode("ascii")}" DROP '
+                                f"_DP-BUF {len(replacement)} _EXT4-BYTES=?"
+                            ),
+                            "_DP-CLOCK @ 1 =",
+                            f"_DP-VN VN.MTIME @ {seconds} =",
+                            f"_DP-VN VN.MTIME-NS @ {nanoseconds} =",
+                            f"_DP-VN VN.CTIME @ {seconds} =",
+                            f"_DP-VN VN.CTIME-NS @ {nanoseconds} =",
+                            "_DP-VN VN.SIZE-LO @ 12288 =",
+                            "_DP-VN VN.SIZE-HI @ 0=",
+                            "_DP-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                            "_DP-V V.FLAGS @ VFS-F-RO AND 0=",
+                            "_DP-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            "_DP-WRITER 0<>",
+                            "_DP-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_DP-WRITER _EXT4-JWR.FAULT + @ 0=",
+                            (
+                                "_DP-CTX _EXT4-C.INODE + "
+                                "_EXT4-I.BLOCK + 6 + W@ 1 ="
+                            ),
+                            f"_EXT4-JOW-PHYS @ {data_block} =",
+                            "_EXT4-MUTATION-MAP-TARGET @ 0=",
+                            "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
+                            "_EXT4-MUTATION-MAP-HITS @ 0=",
+                            "_EXT4-MUTATION-OWNER-TARGET @ 0=",
+                            "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                            "_EXT4-MUTATION-OWNER-TARGET-B @ 0=",
+                            "_EXT4-MUTATION-OWNER-COUNT-B @ 0=",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-DEPTH-POSITIVE-WRITE" THEN'
+                ),
+                "_DP-FD VFS-CLOSE? CONSTANT _DP-CLOSE-IOR",
+                "0 _DP-V VFS-UNMOUNT CONSTANT _DP-UNMOUNT-IOR",
+                (
+                    "_DP-CLOSE-IOR 0= _DP-UNMOUNT-IOR 0= AND "
+                    "_DP-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    'IF ." EXT4-DEPTH-POSITIVE-WRITE-UNMOUNT" THEN'
+                ),
+            ],
+            patches=source_patches,
+            capture_media=backing,
+        )
+        _assert_emitted(output, "EXT4-DEPTH-POSITIVE-WRITE")
+        _assert_emitted(output, "EXT4-DEPTH-POSITIVE-WRITE-UNMOUNT")
+        assert trace[: len(activation_trace)] == activation_trace
+        assert len(trace) == 51
+        assert sum(kind == "write" for kind, _, _ in trace) == 27
+        assert sum(kind == "flush" for kind, _, _ in trace) == 24
+        assert trace.count(("write", data_block * 2, 2)) == 1
+        assert trace.count(("write", inode_home * 2, 2)) == 1
+        assert trace.count(("write", extent_node_block * 2, 2)) == 0
+
+        expected_data = bytearray(original_data)
+        expected_data[
+            block_offset : block_offset + len(replacement)
+        ] = replacement
+        with backing.open("rb") as source:
+            source.seek(data_block * block_size)
+            actual_data = source.read(block_size)
+            source.seek(extent_node_block * block_size)
+            actual_extent_node = source.read(block_size)
+        assert actual_data == bytes(expected_data)
+        assert actual_extent_node == original_extent_node
+    finally:
+        backing.unlink(missing_ok=True)
+
+
+def test_mutation_map_audit_rejects_duplicate_selected_leaf_block(
+    read_side_image: Path,
+) -> None:
+    path = read_side_image
+    data_block = 1362
+    output = run_forth(
+        path,
+        [
+            "CREATE _DM-LEAF-A 1024 ALLOT",
+            "_DM-LEAF-A 1024 0 FILL",
+            "_EXT4-EXTENT-MAGIC _DM-LEAF-A W!",
+            "1 _DM-LEAF-A 2 + W!",
+            "84 _DM-LEAF-A 4 + W!",
+            "10 _DM-LEAF-A 12 + L!",
+            "1 _DM-LEAF-A 16 + W!",
+            f"{data_block} _DM-LEAF-A 20 + L!",
+            "CREATE _DM-LEAF-B 1024 ALLOT",
+            "_DM-LEAF-B 1024 0 FILL",
+            "_EXT4-EXTENT-MAGIC _DM-LEAF-B W!",
+            "1 _DM-LEAF-B 2 + W!",
+            "84 _DM-LEAF-B 4 + W!",
+            "11 _DM-LEAF-B 12 + L!",
+            "1 _DM-LEAF-B 16 + W!",
+            f"{data_block} _DM-LEAF-B 20 + L!",
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _DM-MOUNT-IOR CONSTANT _DM-V"
+            ),
+            "_DM-V _EXT4-CTX CONSTANT _DM-CTX",
+            "26 _DM-CTX _EXT4-LOAD-INODE CONSTANT _DM-LOAD-IOR",
+            f"{data_block} _EXT4-MUTATION-MAP-TARGET !",
+            "0 _EXT4-MUTATION-MAP-HITS !",
+            "-1 _EXT4-MUTATION-MAP-ACTIVE !",
+            (
+                "_DM-LEAF-A 84 0 _DM-CTX _EXT4-VALIDATE-EXTENT-NODE "
+                "CONSTANT _DM-FIRST-IOR"
+            ),
+            "_EXT4-MUTATION-MAP-HITS @ CONSTANT _DM-FIRST-HITS",
+            (
+                "_DM-LEAF-B 84 0 _DM-CTX _EXT4-VALIDATE-EXTENT-NODE "
+                "CONSTANT _DM-SECOND-IOR"
+            ),
+            "_EXT4-MUTATION-MAP-HITS @ CONSTANT _DM-SECOND-HITS",
+            "0 _EXT4-MUTATION-MAP-ACTIVE !",
+            "0 _EXT4-MUTATION-MAP-TARGET !",
+            "0 _EXT4-MUTATION-MAP-HITS !",
+            (
+                _forth_conjunction(
+                    [
+                        "_DM-MOUNT-IOR 0=",
+                        "_DM-LOAD-IOR 0=",
+                        "_DM-FIRST-IOR 0=",
+                        "_DM-FIRST-HITS 1 =",
+                        (
+                            "_DM-SECOND-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_DM-SECOND-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-FORMAT ="
+                        ),
+                        (
+                            "_DM-SECOND-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-CORRUPT ="
+                        ),
+                        (
+                            "_DM-SECOND-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        "_DM-SECOND-HITS 2 =",
+                        "_EXT4-MUTATION-MAP-TARGET @ 0=",
+                        "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
+                        "_EXT4-MUTATION-MAP-HITS @ 0=",
+                        "_DM-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-MUTATION-MAP-DUPLICATE-REFUSED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-MUTATION-MAP-DUPLICATE-REFUSED")
+
+
+def test_depth_positive_write_rejects_own_extent_node_as_data(
+    read_side_image: Path, tmp_path: Path
+) -> None:
+    path = read_side_image
+    inode_number = 26
+    extent_node_block = 1353
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert block_size == 1024
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    inode_home = inode_offset // block_size
+    with path.open("rb") as source:
+        source.seek(extent_node_block * block_size)
+        original_extent_node = source.read(block_size)
+        source.seek(inode_home * block_size)
+        original_inode_home = source.read(block_size)
+    assert len(original_extent_node) == block_size
+    assert len(original_inode_home) == block_size
+    assert _extent_node_with_checksum(
+        superblock, inode_number, generation, original_extent_node
+    ) == original_extent_node
+    assert struct.unpack_from("<I", original_extent_node, 20)[0] == 1352
+    patched_extent_node = bytearray(original_extent_node)
+    struct.pack_into("<I", patched_extent_node, 20, extent_node_block)
+    patched_extent_node = bytearray(
+        _extent_node_with_checksum(
+            superblock, inode_number, generation, patched_extent_node
+        )
+    )
+    assert patched_extent_node != original_extent_node
+    assert _extent_node_with_checksum(
+        superblock, inode_number, generation, patched_extent_node
+    ) == bytes(patched_extent_node)
+
+    backing = tmp_path / "vfs-depth-positive-self-alias.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            backing,
+            [
+                *_EXT4_PRIVATE_WRITE_BINDING_FORTH,
+                "CREATE _DA-CLOCK 0 ,",
+                (
+                    ": _DA-NOW ( clock -- epoch-ms ior ) "
+                    "DUP @ 1+ SWAP ! 3000000123456 0 ;"
+                ),
+                "T-ARENA CONSTANT _DA-ARENA",
+                (
+                    "_DA-ARENA T-VOLUME EXT4-TEST-WRITE-NEW "
+                    "CONSTANT _DA-MOUNT-IOR CONSTANT _DA-V"
+                ),
+                "_DA-V _EXT4-CTX CONSTANT _DA-CTX",
+                (
+                    "' _DA-NOW _DA-CLOCK _DA-V "
+                    "_EXT4-BIND-WRITE-CLOCK CONSTANT _DA-BIND-IOR"
+                ),
+                (
+                    'S" /fixture/extent-tree.bin" '
+                    "VFS-FF-READ VFS-FF-WRITE OR _DA-V VFS-OPEN? "
+                    "CONSTANT _DA-OPEN-IOR CONSTANT _DA-FD"
+                ),
+                "_DA-ARENA ARENA-USED CONSTANT _DA-USED-CLEAN",
+                "100 _DA-FD VFS-SEEK? CONSTANT _DA-SEEK-IOR",
+                (
+                    'S" NO" _DA-FD VFS-WRITE? '
+                    "CONSTANT _DA-IOR CONSTANT _DA-ACTUAL"
+                ),
+                "_DA-FD FD.CUR-LO @ CONSTANT _DA-CURSOR",
+                "_DA-CTX _EXT4-C.J.WRITER + @ CONSTANT _DA-WRITER",
+                "_DA-ARENA ARENA-USED CONSTANT _DA-USED-AFTER",
+                (
+                    _forth_conjunction(
+                        [
+                            "_DA-MOUNT-IOR 0=",
+                            "_DA-BIND-IOR 0=",
+                            "_DA-OPEN-IOR 0=",
+                            "_DA-SEEK-IOR 0=",
+                            "_DA-ACTUAL 0=",
+                            (
+                                "_DA-IOR VFS-IOR-REASON "
+                                "VFS-R-CORRUPT ="
+                            ),
+                            (
+                                "_DA-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-FORMAT ="
+                            ),
+                            (
+                                "_DA-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-CORRUPT ="
+                            ),
+                            (
+                                "_DA-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-DATA-MAP ="
+                            ),
+                            "_DA-V V.LAST-IOR @ _DA-IOR =",
+                            "_DA-CURSOR 100 =",
+                            "_DA-CLOCK @ 1 =",
+                            "_DA-WRITER 0<>",
+                            "_DA-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_DA-WRITER _EXT4-JWR.FAULT + @ 0=",
+                            "_DA-USED-AFTER _DA-USED-CLEAN >",
+                            (
+                                f"_EXT4-JOW-PHYS @ "
+                                f"{extent_node_block} ="
+                            ),
+                            "_EXT4-MOW-ACTUAL @ 0=",
+                            "_DA-CTX _EXT4-C.RECOVERY + @ 0=",
+                            "_DA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                            "_DA-V V.FLAGS @ VFS-F-RO AND 0=",
+                            "_DA-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                            "_EXT4-MUTATION-MAP-TARGET @ 0=",
+                            "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
+                            "_EXT4-MUTATION-MAP-HITS @ 0=",
+                            "_EXT4-MUTATION-OWNER-TARGET @ 0=",
+                            "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                            "_EXT4-MUTATION-OWNER-TARGET-B @ 0=",
+                            "_EXT4-MUTATION-OWNER-COUNT-B @ 0=",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-DEPTH-POSITIVE-SELF-ALIAS" THEN'
+                ),
+                "_DA-FD VFS-CLOSE? CONSTANT _DA-CLOSE-IOR",
+                "0 _DA-V VFS-UNMOUNT CONSTANT _DA-UNMOUNT-IOR",
+                (
+                    "_DA-CLOSE-IOR 0= _DA-UNMOUNT-IOR 0= AND "
+                    "_DA-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    'IF ." EXT4-DEPTH-POSITIVE-SELF-ALIAS-UNMOUNT" THEN'
+                ),
+            ],
+            patches=(
+                (extent_node_block * block_size, bytes(patched_extent_node)),
+            ),
+            capture_media=backing,
+        )
+        _assert_emitted(output, "EXT4-DEPTH-POSITIVE-SELF-ALIAS")
+        _assert_emitted(output, "EXT4-DEPTH-POSITIVE-SELF-ALIAS-UNMOUNT")
+        assert trace == ()
+        with backing.open("rb") as source:
+            source.seek(extent_node_block * block_size)
+            actual_extent_node = source.read(block_size)
+            source.seek(inode_home * block_size)
+            actual_inode_home = source.read(block_size)
+        assert actual_extent_node == bytes(patched_extent_node)
+        assert actual_inode_home == original_inode_home
+    finally:
+        backing.unlink(missing_ok=True)
+
+
+def test_depth_positive_write_rejects_extent_node_in_journal_ring(
+    extent_writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    path = extent_writer_activation_fixture["image"]
+    journal_node_block = extent_writer_activation_fixture["guard_physical"]
+    assert isinstance(path, Path)
+    assert isinstance(journal_node_block, int)
+
+    inode_number = 26
+    original_node_block = 1353
+    data_block = 1362
+    logical_block = 10
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert block_size == 1024
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    assert struct.unpack_from("<H", inode, 0x2E)[0] == 1
+    assert struct.unpack_from("<I", inode, 0x38)[0] == original_node_block
+    assert struct.unpack_from("<H", inode, 0x3C)[0] == 0
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+
+    with path.open("rb") as source:
+        source.seek(original_node_block * block_size)
+        original_extent_node = source.read(block_size)
+        source.seek(inode_home * block_size)
+        original_inode_home = source.read(block_size)
+        source.seek(data_block * block_size)
+        original_data = source.read(block_size)
+    assert len(original_extent_node) == block_size
+    assert len(original_inode_home) == block_size
+    assert len(original_data) == block_size
+    assert _extent_node_with_checksum(
+        superblock, inode_number, generation, original_extent_node
+    ) == original_extent_node
+
+    patched_inode = bytearray(inode)
+    struct.pack_into("<I", patched_inode, 0x38, journal_node_block)
+    patched_inode = bytearray(
+        _inode_with_checksum(superblock, inode_number, patched_inode)
+    )
+    expected_inode_home = bytearray(original_inode_home)
+    expected_inode_home[
+        inode_block_offset : inode_block_offset + len(patched_inode)
+    ] = patched_inode
+
+    write_offset = logical_block * block_size + 123
+    backing = tmp_path / "vfs-depth-positive-journal-node.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            backing,
+            [
+                *_EXT4_PRIVATE_WRITE_BINDING_FORTH,
+                "CREATE _DJ-CLOCK 0 ,",
+                (
+                    ": _DJ-NOW ( clock -- epoch-ms ior ) "
+                    "DUP @ 1+ SWAP ! 3000000123456 0 ;"
+                ),
+                "T-ARENA CONSTANT _DJ-ARENA",
+                (
+                    "_DJ-ARENA T-VOLUME EXT4-TEST-WRITE-NEW "
+                    "CONSTANT _DJ-MOUNT-IOR CONSTANT _DJ-V"
+                ),
+                "_DJ-V _EXT4-CTX CONSTANT _DJ-CTX",
+                (
+                    "' _DJ-NOW _DJ-CLOCK _DJ-V "
+                    "_EXT4-BIND-WRITE-CLOCK CONSTANT _DJ-BIND-IOR"
+                ),
+                (
+                    'S" /fixture/extent-tree.bin" '
+                    "VFS-FF-READ VFS-FF-WRITE OR _DJ-V VFS-OPEN? "
+                    "CONSTANT _DJ-OPEN-IOR CONSTANT _DJ-FD"
+                ),
+                f"{write_offset} _DJ-FD VFS-SEEK? CONSTANT _DJ-SEEK-IOR",
+                (
+                    'S" NO" _DJ-FD VFS-WRITE? '
+                    "CONSTANT _DJ-IOR CONSTANT _DJ-ACTUAL"
+                ),
+                "_DJ-FD FD.CUR-LO @ CONSTANT _DJ-CURSOR",
+                "_DJ-CTX _EXT4-C.J.WRITER + @ CONSTANT _DJ-WRITER",
+                (
+                    _forth_conjunction(
+                        [
+                            "_DJ-MOUNT-IOR 0=",
+                            "_DJ-BIND-IOR 0=",
+                            "_DJ-OPEN-IOR 0=",
+                            "_DJ-SEEK-IOR 0=",
+                            "_DJ-ACTUAL 0=",
+                            (
+                                "_DJ-IOR VFS-IOR-REASON "
+                                "VFS-R-CORRUPT ="
+                            ),
+                            (
+                                "_DJ-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-FORMAT ="
+                            ),
+                            (
+                                "_DJ-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-CORRUPT ="
+                            ),
+                            (
+                                "_DJ-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-JOURNAL ="
+                            ),
+                            "_DJ-V V.LAST-IOR @ _DJ-IOR =",
+                            f"_DJ-CURSOR {write_offset} =",
+                            "_DJ-CLOCK @ 1 =",
+                            "_DJ-WRITER 0<>",
+                            "_DJ-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_DJ-WRITER _EXT4-JWR.FAULT + @ 0=",
+                            f"_EXT4-JOW-PHYS @ {data_block} =",
+                            "_EXT4-MOW-ACTUAL @ 0=",
+                            "_DJ-CTX _EXT4-C.RECOVERY + @ 0=",
+                            "_DJ-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                            "_DJ-V V.FLAGS @ VFS-F-RO AND 0=",
+                            "_DJ-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                            "_EXT4-MUTATION-MAP-TARGET @ 0=",
+                            "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
+                            "_EXT4-MUTATION-MAP-HITS @ 0=",
+                            "_EXT4-MUTATION-OWNER-TARGET @ 0=",
+                            "_EXT4-MUTATION-OWNER-COUNT @ 0=",
+                            "_EXT4-MUTATION-OWNER-TARGET-B @ 0=",
+                            "_EXT4-MUTATION-OWNER-COUNT-B @ 0=",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-DEPTH-POSITIVE-JOURNAL-NODE" THEN'
+                ),
+                "_DJ-FD VFS-CLOSE? CONSTANT _DJ-CLOSE-IOR",
+                "0 _DJ-V VFS-UNMOUNT CONSTANT _DJ-UNMOUNT-IOR",
+                (
+                    "_DJ-CLOSE-IOR 0= _DJ-UNMOUNT-IOR 0= AND "
+                    "_DJ-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    'IF ." EXT4-DEPTH-POSITIVE-JOURNAL-NODE-UNMOUNT" THEN'
+                ),
+            ],
+            patches=(
+                (inode_offset, bytes(patched_inode)),
+                (journal_node_block * block_size, original_extent_node),
+            ),
+            capture_media=backing,
+        )
+        _assert_emitted(output, "EXT4-DEPTH-POSITIVE-JOURNAL-NODE")
+        _assert_emitted(
+            output, "EXT4-DEPTH-POSITIVE-JOURNAL-NODE-UNMOUNT"
+        )
+        assert trace == ()
+        with backing.open("rb") as source:
+            source.seek(inode_home * block_size)
+            actual_inode_home = source.read(block_size)
+            source.seek(original_node_block * block_size)
+            actual_original_node = source.read(block_size)
+            source.seek(journal_node_block * block_size)
+            actual_journal_node = source.read(block_size)
+            source.seek(data_block * block_size)
+            actual_data = source.read(block_size)
+        assert actual_inode_home == bytes(expected_inode_home)
+        assert actual_original_node == original_extent_node
+        assert actual_journal_node == original_extent_node
+        assert actual_data == original_data
     finally:
         backing.unlink(missing_ok=True)
 

@@ -967,8 +967,21 @@ VARIABLE _EXT4-GD-SPAN
 \ allocated.  Keep that ownership check explicit and reusable by every map.
 VARIABLE _EXT4-MUTATION-OWNER-TARGET
 VARIABLE _EXT4-MUTATION-OWNER-COUNT
+VARIABLE _EXT4-MUTATION-OWNER-TARGET-B
+VARIABLE _EXT4-MUTATION-OWNER-COUNT-B
 VARIABLE _EXT4-MOA-FIRST
 VARIABLE _EXT4-MOA-COUNT
+
+\ A target inode is excluded from the other-owner scan, so a scoped complete
+\ map audit separately proves that every target data/node range has a safe
+\ mutation role and that the selected physical block occurs exactly once as
+\ data and never as map metadata.  ACTIVE is the publication word.
+VARIABLE _EXT4-MUTATION-MAP-TARGET
+VARIABLE _EXT4-MUTATION-MAP-ACTIVE
+VARIABLE _EXT4-MUTATION-MAP-HITS
+VARIABLE _EXT4-MUTATION-ROLE-XT
+VARIABLE _EXT4-MMA-FIRST
+VARIABLE _EXT4-MMA-COUNT
 
 \ Normal read validation leaves the mutation-owner range empty.  A bounded
 \ mutation proof temporarily sets it while validating every other allocated
@@ -976,12 +989,36 @@ VARIABLE _EXT4-MOA-COUNT
 \ cross-link refusal.
 : _EXT4-MUTATION-OWNER-ALIASES?  ( first count -- flag )
     _EXT4-MOA-COUNT ! _EXT4-MOA-FIRST !
-    _EXT4-MUTATION-OWNER-COUNT @ 0= IF FALSE EXIT THEN
-    _EXT4-MUTATION-OWNER-TARGET @
+    _EXT4-MUTATION-OWNER-COUNT @ IF
+        _EXT4-MUTATION-OWNER-TARGET @
+        _EXT4-MOA-FIRST @ _EXT4-MOA-COUNT @ + U<
+        _EXT4-MOA-FIRST @
+        _EXT4-MUTATION-OWNER-TARGET @
+        _EXT4-MUTATION-OWNER-COUNT @ + U< AND IF TRUE EXIT THEN
+    THEN
+    _EXT4-MUTATION-OWNER-COUNT-B @ 0= IF FALSE EXIT THEN
+    _EXT4-MUTATION-OWNER-TARGET-B @
     _EXT4-MOA-FIRST @ _EXT4-MOA-COUNT @ + U<
     _EXT4-MOA-FIRST @
-    _EXT4-MUTATION-OWNER-TARGET @
-    _EXT4-MUTATION-OWNER-COUNT @ + U< AND ;
+    _EXT4-MUTATION-OWNER-TARGET-B @
+    _EXT4-MUTATION-OWNER-COUNT-B @ + U< AND ;
+
+: _EXT4-MUTATION-MAP-ALIASES?  ( first count -- flag )
+    _EXT4-MMA-COUNT ! _EXT4-MMA-FIRST !
+    _EXT4-MUTATION-MAP-ACTIVE @ 0= IF FALSE EXIT THEN
+    _EXT4-MUTATION-MAP-TARGET @
+    _EXT4-MMA-FIRST @ _EXT4-MMA-COUNT @ + U<
+    _EXT4-MMA-FIRST @
+    _EXT4-MUTATION-MAP-TARGET @ 1+ U< AND ;
+
+\ The descriptor-wide mutation-role validator is defined after the generic
+\ extent parser.  Publish its XT before any JOW client can activate this hook.
+: _EXT4-MUTATION-ROLE-RANGE  ( first count ctx -- ior )
+    _EXT4-MUTATION-ROLE-XT @ ?DUP IF
+        EXECUTE
+    ELSE
+        2DROP DROP VFS-E-CORRUPT
+    THEN ;
 
 VARIABLE _EXT4-BA-BLOCK
 VARIABLE _EXT4-BA-CTX
@@ -1522,6 +1559,17 @@ VARIABLE _EXT4-MAP-VALIDATION-LIMIT
     THEN
     _EXT4-EV-PHYS @ _EXT4-EV-LEN @ EXT4-D-DATA-MAP
     _EXT4-EV-CTX @ _EXT4-REQUIRE-ALLOCATED-RANGE ?DUP IF EXIT THEN
+    _EXT4-MUTATION-MAP-ACTIVE @ IF
+        _EXT4-EV-PHYS @ _EXT4-EV-LEN @ _EXT4-EV-CTX @
+        _EXT4-MUTATION-ROLE-RANGE ?DUP IF EXIT THEN
+        _EXT4-EV-PHYS @ _EXT4-EV-LEN @
+        _EXT4-MUTATION-MAP-ALIASES? IF
+            1 _EXT4-MUTATION-MAP-HITS +!
+            _EXT4-MUTATION-MAP-HITS @ 1 U> IF
+                EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+            THEN
+        THEN
+    THEN
     0 _EXT4-EV-J !
     BEGIN _EXT4-EV-J @ _EXT4-EV-INDEX @ < WHILE
         _EXT4-EV-IN @ 12 _EXT4-EV-J @ 12 * + + DUP
@@ -1589,6 +1637,15 @@ VARIABLE _EXT4-MAP-VALIDATION-LIMIT
 \ ordinary BLOCK cache without invalidating the parser's input.
 : _EXT4-LOAD-EXTENT-NODE  ( physical-block expected-depth ctx -- ior )
     _EXT4-EV-CTX ! _EXT4-EV-DEPTH ! DUP _EXT4-EV-BLOCK !
+    _EXT4-MUTATION-MAP-ACTIVE @ IF
+        DROP
+        _EXT4-EV-BLOCK @ 1 _EXT4-EV-CTX @
+        _EXT4-MUTATION-ROLE-RANGE ?DUP IF EXIT THEN
+        _EXT4-EV-BLOCK @ 1 _EXT4-MUTATION-MAP-ALIASES? IF
+            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
+        _EXT4-EV-BLOCK @
+    THEN
     EXT4-D-DATA-MAP _EXT4-EV-CTX @ _EXT4-REQUIRE-ALLOCATED-BLOCK
     ?DUP IF EXIT THEN
     _EXT4-EV-BLOCK @ _EXT4-EV-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
@@ -9464,6 +9521,9 @@ VARIABLE _EXT4-FRS-META-COUNT
     LOOP
     0 ;
 
+' _EXT4-VALIDATE-MUTATION-RANGE-TARGETS
+_EXT4-MUTATION-ROLE-XT !
+
 \ Authenticate the complete raw modern-slot mutation target without acquiring
 \ a transaction image.  The descriptor-wide mutation scan clobbers C.BLOCK,
 \ so restore the orphan-file mapping and slot after that scan.  On success the
@@ -10249,6 +10309,8 @@ VARIABLE _EXT4-JFO-CERT-COUNT
 VARIABLE _EXT4-UOW-INO
 VARIABLE _EXT4-UOW-FIRST
 VARIABLE _EXT4-UOW-COUNT
+VARIABLE _EXT4-UOW-FIRST-B
+VARIABLE _EXT4-UOW-COUNT-B
 VARIABLE _EXT4-UOW-CTX
 VARIABLE _EXT4-UOW-MAP-LIMIT
 VARIABLE _EXT4-UOW-IOR
@@ -10275,7 +10337,9 @@ VARIABLE _EXT4-UOW-IOR
         EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
     _EXT4-MUTATION-OWNER-TARGET @
-    _EXT4-MUTATION-OWNER-COUNT @ OR IF VFS-E-BUSY EXIT THEN
+    _EXT4-MUTATION-OWNER-COUNT @ OR
+    _EXT4-MUTATION-OWNER-TARGET-B @ OR
+    _EXT4-MUTATION-OWNER-COUNT-B @ OR IF VFS-E-BUSY EXIT THEN
     _EXT4-JFO-CERT-INVALIDATE
     _EXT4-UOW-CTX @ _EXT4-JFO-CTX !
     _EXT4-UOW-INO @ _EXT4-JFO-TARGET-INO !
@@ -10284,8 +10348,64 @@ VARIABLE _EXT4-UOW-IOR
     _EXT4-UOW-FIRST @ _EXT4-MUTATION-OWNER-TARGET !
     _EXT4-UOW-COUNT @ _EXT4-MUTATION-OWNER-COUNT !
     _EXT4-JFO-SCAN-OTHER-INODES _EXT4-UOW-IOR !
-    0 _EXT4-MUTATION-OWNER-TARGET !
     0 _EXT4-MUTATION-OWNER-COUNT !
+    0 _EXT4-MUTATION-OWNER-TARGET !
+    _EXT4-UOW-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
+    _EXT4-UOW-IOR @ 0= IF
+        _EXT4-UOW-INO @ _EXT4-UOW-CTX @
+        _EXT4-LOAD-INODE _EXT4-UOW-IOR !
+    THEN
+    _EXT4-UOW-IOR @ ;
+
+\ The exact one-block write replaces two disjoint homes.  Scan all other
+\ allocated inodes once while both ranges are published, rather than paying
+\ for two filesystem-wide walks or conservatively merging the gap between
+\ unrelated blocks.
+: _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR
+  ( target-ino first-a count-a first-b count-b ctx -- ior )
+    _EXT4-UOW-CTX ! _EXT4-UOW-COUNT-B ! _EXT4-UOW-FIRST-B !
+    _EXT4-UOW-COUNT ! _EXT4-UOW-FIRST ! _EXT4-UOW-INO !
+    _EXT4-UOW-CTX @ 0=
+    _EXT4-UOW-COUNT @ 0= OR _EXT4-UOW-COUNT-B @ 0= OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-UOW-INO @ 0=
+    _EXT4-UOW-INO @ _EXT4-UOW-CTX @ _EXT4-C.INODES + @ U> OR IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-UOW-FIRST @ _EXT4-UOW-CTX @ _EXT4-C.FIRST + @ U<
+    _EXT4-UOW-FIRST-B @ _EXT4-UOW-CTX @ _EXT4-C.FIRST + @ U< OR IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-UOW-FIRST @ _EXT4-UOW-COUNT @
+    _EXT4-UOW-CTX @ _EXT4-C.BLOCKS + @ BLOCK-RANGE? 0=
+    _EXT4-UOW-FIRST-B @ _EXT4-UOW-COUNT-B @
+    _EXT4-UOW-CTX @ _EXT4-C.BLOCKS + @ BLOCK-RANGE? 0= OR IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-UOW-FIRST @ _EXT4-UOW-COUNT @
+    _EXT4-UOW-FIRST-B @ _EXT4-UOW-COUNT-B @
+    _EXT4-BLOCK-RANGES-OVERLAP? IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-MUTATION-OWNER-TARGET @
+    _EXT4-MUTATION-OWNER-COUNT @ OR
+    _EXT4-MUTATION-OWNER-TARGET-B @ OR
+    _EXT4-MUTATION-OWNER-COUNT-B @ OR IF VFS-E-BUSY EXIT THEN
+    _EXT4-JFO-CERT-INVALIDATE
+    _EXT4-UOW-CTX @ _EXT4-JFO-CTX !
+    _EXT4-UOW-INO @ _EXT4-JFO-TARGET-INO !
+    _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-UOW-MAP-LIMIT !
+    0 _EXT4-MAP-VALIDATION-LIMIT !
+    _EXT4-UOW-FIRST @ _EXT4-MUTATION-OWNER-TARGET !
+    _EXT4-UOW-FIRST-B @ _EXT4-MUTATION-OWNER-TARGET-B !
+    _EXT4-UOW-COUNT @ _EXT4-MUTATION-OWNER-COUNT !
+    _EXT4-UOW-COUNT-B @ _EXT4-MUTATION-OWNER-COUNT-B !
+    _EXT4-JFO-SCAN-OTHER-INODES _EXT4-UOW-IOR !
+    0 _EXT4-MUTATION-OWNER-COUNT !
+    0 _EXT4-MUTATION-OWNER-COUNT-B !
+    0 _EXT4-MUTATION-OWNER-TARGET !
+    0 _EXT4-MUTATION-OWNER-TARGET-B !
     _EXT4-UOW-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
     _EXT4-UOW-IOR @ 0= IF
         _EXT4-UOW-INO @ _EXT4-UOW-CTX @
@@ -10324,6 +10444,7 @@ VARIABLE _EXT4-JOW-RECORD
 VARIABLE _EXT4-JOW-IOR
 VARIABLE _EXT4-JOW-PUBLISHED
 VARIABLE _EXT4-JOW-ABORT-IOR
+VARIABLE _EXT4-JOW-META-IOR
 
 : _EXT4-JOW-REQUIRE-FRESH-EXACT  ( -- ior )
     _EXT4-JOW-WRITER @ _EXT4-JWR.META-CREDIT + @ 1 <>
@@ -10352,10 +10473,32 @@ VARIABLE _EXT4-JOW-ABORT-IOR
     THEN
     0 ;
 
-\ Authenticate the target's complete inline depth-zero map before excluding
-\ that inode from the global other-owner scan.  The inline validator proves
-\ its own physical ranges do not overlap; the external xattr pointer remains
-\ an independent target-owned reference and must not name the selected block.
+\ Once mapping identifies the selected data block, audit the complete target
+\ tree.  Every data and node range must have a safe mutation role; the target
+\ physical block must occur in exactly one leaf range and in no external node.
+: _EXT4-JOW-REQUIRE-MAP-AUDIT  ( -- ior )
+    _EXT4-MUTATION-MAP-TARGET @
+    _EXT4-MUTATION-MAP-ACTIVE @ OR
+    _EXT4-MUTATION-MAP-HITS @ OR IF VFS-E-BUSY EXIT THEN
+    _EXT4-JOW-PHYS @ _EXT4-MUTATION-MAP-TARGET !
+    0 _EXT4-MUTATION-MAP-HITS !
+    -1 _EXT4-MUTATION-MAP-ACTIVE !
+    _EXT4-JOW-CTX @ _EXT4-VALIDATE-EXTENT-TREE _EXT4-JOW-META-IOR !
+    0 _EXT4-MUTATION-MAP-ACTIVE !
+    0 _EXT4-MUTATION-MAP-TARGET !
+    _EXT4-JOW-META-IOR @ 0=
+    _EXT4-MUTATION-MAP-HITS @ 1 <> AND IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT _EXT4-JOW-META-IOR !
+    THEN
+    0 _EXT4-MUTATION-MAP-HITS !
+    _EXT4-JOW-META-IOR @ ;
+
+\ Authenticate the target's complete extent map before excluding that inode
+\ from the global other-owner scan.  Extent validation excludes physical
+\ overlap within each leaf; the scoped walk above counts the selected block
+\ across the whole tree and excludes target map metadata.  The external xattr
+\ pointer remains an independent target-owned reference and must not name the
+\ selected block.
 : _EXT4-JOW-AUTH-TARGET  ( -- ior )
     _EXT4-JOW-INO @
     _EXT4-JOW-CTX @ _EXT4-C.SB + _EXT4-SB.FIRST-INO + L@ U< IF
@@ -10387,9 +10530,6 @@ VARIABLE _EXT4-JOW-ABORT-IOR
     _EXT4-JOW-ALLOWED-FLAGS INVERT AND IF
         DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
     THEN
-    DUP _EXT4-I.BLOCK + 6 + W@ IF
-        DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
     DUP _EXT4-I.GENERATION + L@ DUP _EXT4-JOW-GEN !
     _EXT4-JOW-EXPECTED-GEN @ <> IF
         DROP VFS-E-STALE EXIT
@@ -10416,10 +10556,13 @@ VARIABLE _EXT4-JOW-ABORT-IOR
     _EXT4-JOW-PRESENT @ 0= IF
         EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
     THEN
+    _EXT4-JOW-REQUIRE-MAP-AUDIT ?DUP IF EXIT THEN
     _EXT4-JOW-EA @ IF
         _EXT4-JOW-EA @ _EXT4-JOW-PHYS @ = IF
             EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
         THEN
+        _EXT4-JOW-EA @ 1 _EXT4-JOW-CTX @
+        _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
         _EXT4-JOW-EA @ EXT4-D-XATTR _EXT4-JOW-CTX @
         _EXT4-REQUIRE-ALLOCATED-BLOCK ?DUP IF EXIT THEN
         _EXT4-JOW-EA @ _EXT4-JOW-CTX @ _EXT4-LOAD-XATTR-BLOCK
@@ -10448,7 +10591,7 @@ VARIABLE _EXT4-JOW-ABORT-IOR
     OVER _EXT4-I.FLAGS + L@ _EXT4-JOW-FLAGS @ <> OR
     OVER _EXT4-I.LINKS + W@ _EXT4-JOW-NLINK @ <> OR
     OVER _EXT4-I.FILE-ACL-LO + L@ _EXT4-JOW-EA @ <> OR
-    SWAP _EXT4-I.BLOCK + 6 + W@ 0<> OR IF VFS-E-STALE EXIT THEN
+    NIP IF VFS-E-STALE EXIT THEN
     _EXT4-JOW-CTX @ _EXT4-C.R.SIZE + @ _EXT4-JOW-SIZE @ <> IF
         VFS-E-STALE EXIT
     THEN
@@ -10457,7 +10600,7 @@ VARIABLE _EXT4-JOW-ABORT-IOR
     _EXT4-JOW-IOR @ ?DUP IF NIP EXIT THEN
     _EXT4-JOW-PRESENT @ 0=
     SWAP _EXT4-JOW-PHYS @ <> OR IF VFS-E-STALE EXIT THEN
-    0 ;
+    _EXT4-JOW-REQUIRE-MAP-AUDIT ;
 
 : _EXT4-JOW-FAIL-AFTER-PUBLISH  ( ior -- ior )
     _EXT4-JOW-IOR !
@@ -10484,9 +10627,10 @@ VARIABLE _EXT4-JOW-ABORT-IOR
     _EXT4-JOW-IOR @ ;
 
 \ Stage one size-preserving regular-file overwrite wholly inside one already
-\ initialized inline depth-zero extent block.  Ordered data carries the full
-\ read-modify-write block; one checksummed inode-table after-image carries the
-\ explicit mtime/ctime.  This word neither emits nor checkpoints the journal.
+\ initialized extent block, whether its authenticated map is inline or uses
+\ external extent-tree nodes.  Ordered data carries the full read-modify-write
+\ block; one checksummed inode-table after-image carries the explicit
+\ mtime/ctime.  This word neither emits nor checkpoints the journal.
 : _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE
   ( source count file-offset inode-number expected-generation
     seconds nsec transaction -- ior )
@@ -10516,8 +10660,11 @@ VARIABLE _EXT4-JOW-ABORT-IOR
     _EXT4-JOW-AUTH-TARGET ?DUP IF EXIT THEN
     _EXT4-JOW-PHYS @ 1 _EXT4-JOW-CTX @
     _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
-    _EXT4-JOW-INO @ _EXT4-JOW-PHYS @ 1 _EXT4-JOW-CTX @
-    _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER ?DUP IF EXIT THEN
+    _EXT4-JOW-INODE-HOME @ _EXT4-JOW-GROUP @ _EXT4-JOW-CTX @
+    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
+    _EXT4-JOW-INO @ _EXT4-JOW-PHYS @ 1
+    _EXT4-JOW-INODE-HOME @ 1 _EXT4-JOW-CTX @
+    _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR ?DUP IF EXIT THEN
     _EXT4-JOW-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
     _EXT4-JOW-INODE-HOME @ _EXT4-JOW-GROUP @ _EXT4-JOW-CTX @
     _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
@@ -10569,7 +10716,9 @@ VARIABLE _EXT4-JOW-ABORT-IOR
 \ reuses the shared inode cache.
 : _EXT4-JFI-REQUIRE-UNIQUE-DATA-OWNER  ( -- ior )
     _EXT4-MUTATION-OWNER-TARGET @
-    _EXT4-MUTATION-OWNER-COUNT @ OR IF VFS-E-BUSY EXIT THEN
+    _EXT4-MUTATION-OWNER-COUNT @ OR
+    _EXT4-MUTATION-OWNER-TARGET-B @ OR
+    _EXT4-MUTATION-OWNER-COUNT-B @ OR IF VFS-E-BUSY EXIT THEN
     _EXT4-JFO-CERT-MATCH? IF 0 EXIT THEN
     _EXT4-JFO-CERT-INVALIDATE
     _EXT4-JFI-CTX @ _EXT4-JFO-CTX !
@@ -10580,8 +10729,8 @@ VARIABLE _EXT4-JOW-ABORT-IOR
     _EXT4-JFI-DATA-FIRST @ _EXT4-MUTATION-OWNER-TARGET !
     _EXT4-JFI-DATA-COUNT @ _EXT4-MUTATION-OWNER-COUNT !
     _EXT4-JFO-SCAN-OTHER-INODES _EXT4-JFO-IOR !
-    0 _EXT4-MUTATION-OWNER-TARGET !
     0 _EXT4-MUTATION-OWNER-COUNT !
+    0 _EXT4-MUTATION-OWNER-TARGET !
     _EXT4-JFO-IOR @ 0= IF
         _EXT4-JFO-RECORD @ _EXT4-JFO-CTX @
         _EXT4-REAUTH-ORPHAN-PLAN-RECORD _EXT4-JFO-IOR !
