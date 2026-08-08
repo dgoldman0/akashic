@@ -867,10 +867,13 @@ fresh mount and remount without another write. Pinned e2fsck 1.47.4 acceptance
 of those repaired outputs remains a pending release qualification gate. A
 linked two-record legacy chain additionally qualifies real `MORE`, successor
 rebuild, terminal `FINAL`, clean deactivation, exact media changes, and a
-zero-I/O remount. A companion success case gives the linked head one uniquely
-owned block and qualifies a four-credit `LEGACY_MORE` with one target extent,
-exact block-bitmap/GDT/super accounting, unchanged payload bytes, terminal
-`FINAL`, and a zero-I/O remount. That synthetic protocol-state fixture is the
+zero-I/O remount. Companion success cases give the linked head one or two
+uniquely owned, separately described extents and qualify four-credit
+`LEGACY_MORE` with an exact target-entry count of one or two. The two-range
+root has logical starts zero and two; both ranges receive exact
+block-bitmap/GDT/super accounting, retain distinct payload bytes without a
+data-home write, reach terminal `FINAL`, and remount with zero I/O. That
+synthetic protocol-state fixture is the
 `18 -> 21 -> 0` chain and intentionally has no namespace dirents for inodes 18
 or 21; it is not an e2fsck oracle and is not claimed as an e2fsck-clean
 namespace image. Whole-union refusal is qualified with an earlier supported
@@ -879,7 +882,17 @@ substitution is rejected before home writes. A later selected linked record
 whose final range aliases a live inode is also refused before emission: modern
 qualification covers a two-entry inline root, legacy qualification fills all
 four format-defined entries, retry preserves the arena, and the ambient owner
-table and certificate return clean. Unified discovery and cleanup
+table and certificate return clean. Unified discovery and cleanup now also
+has positive modern-only and legacy-only two-record `DATA_DELETE_MORE`
+coverage. Exact stage/abort oracles pin the six-credit modern and five-credit
+legacy modes, locators, pre-union counts, target identity, and single released
+range. Production mounts restore the canonical block/inode bitmaps and free
+counts while retaining the initialized-inode high-water mark, reclaim both
+inodes through `MORE` then `FINAL`, preserve the seeded payload, and remount
+without I/O. The modern path measured 1,573,133,619 guest steps and the legacy
+path 1,563,424,804 under their scoped 2,000,000,000-step watchdog; each stable
+remount measured 55,738,449. Pinned e2fsck 1.47.4 acceptance remains a pending
+release qualification gate. Unified discovery and cleanup
 still need broader qualification for chains longer than two,
 later modern blocks and large orphan files, additional ownership and deletion
 shapes, distinct-key hash collisions, and arena exhaustion or retained-too-
@@ -894,9 +907,9 @@ snapshot independently converge on the successful final values for every
 affected ext4 home and a write/flush-free remount. The payload is never a
 home-write target, and inode 21 remains byte-exact through its terminal
 `FINAL`; the synthetic fixture's no-e2fsck qualification remains unchanged.
-Linked `MODERN_MORE`, modern/legacy `DATA_DELETE_MORE`, successful multi-range
-linked release, and successor-aware crash cuts for those modes still need
-positive oracles. Activation, descriptor, and active-primary writes are
+Linked `MODERN_MORE` still needs a positive oracle. Successor-aware crash cuts
+for `MODERN_MORE`, modern/legacy `DATA_DELETE_MORE`, and multi-range
+`LEGACY_MORE` also remain. Activation, descriptor, and active-primary writes are
 qualified by singleton matrices but are not duplicated here with an active
 successor.
 

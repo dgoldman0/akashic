@@ -42,7 +42,11 @@ the real cold-source path plus repeated whole-plan authentication legitimately
 crossed the default. The mixed successful cleanup measured 1,209,747,492
 steps; the linked one-block `LEGACY_MORE` success measured 1,102,821,323, and
 repair from the durable image immediately before its commit fence measured
-1,366,762,951. Neither watchdog is an implementation capacity. The default was
+1,366,762,951. The data-bearing two-record unlinked journeys have a separate
+2,000,000,000-step watchdog: modern `DATA_DELETE_MORE` measured 1,573,133,619
+steps and legacy `DATA_DELETE_MORE` measured 1,563,424,804, followed in each
+case by a 55,738,449-step write-free stable remount. Neither watchdog is an
+implementation capacity. The default was
 established after the fresh-proof W18 crash-repair
 journey exceeded the old ceiling; the measured journey completed in
 811,281,646 steps, on one core, below 1 GiB peak RSS with no swapping. It is
@@ -1402,11 +1406,13 @@ The remaining boundaries are:
   the real `MORE`, successor-plan rebuild, terminal `FINAL`, and clean
   deactivation path. It proves the exact 42-write/35-flush trace, the
   intermediate `i_dtime` clear, byte preservation of the terminal inode, and a
-  zero-I/O remount. A companion journey gives the linked head one uniquely
-  owned block: its four-credit transaction seals plain `LEGACY_MORE` with one
-  target extent, clears the extent and `i_blocks`, restores the exact block
-  bitmap/GDT/super free counts without touching payload bytes, advances to the
-  terminal `FINAL`, and remounts with zero I/O. That synthetic protocol-state
+  zero-I/O remount. Companion journeys give the linked head one or two
+  uniquely owned, separately described extents. The four-credit transaction
+  seals plain `LEGACY_MORE` with an exact target-entry count of one or two;
+  the two-range root uses logical starts zero and two. Recovery clears every
+  extent and `i_blocks`, restores the exact block bitmap/GDT/super free counts
+  without touching either seeded payload, advances to terminal `FINAL`, and
+  remounts with zero I/O. That synthetic protocol-state
   fixture intentionally has no
   namespace dirents for inodes 18 or 21; it is not an e2fsck oracle and is not
   claimed as an e2fsck-clean namespace image. A
@@ -1418,7 +1424,17 @@ The remaining boundaries are:
   root and a four-entry legacy root both fail whole-union qualification as
   `EXT4-D-DATA-MAP`, leave the earlier safe record untouched, perform no write
   or flush, preserve the caller arena on retry, and clear the ambient range
-  table and operation certificate. The per-shape
+  table and operation certificate. Modern-only and legacy-only two-record
+  deletion fixtures give unlinked head 18 one uniquely owned block before
+  empty successor 21. Exact stage/abort qualification pins the six-credit
+  `MODERN_DATA_DELETE_MORE` and five-credit `LEGACY_DATA_DELETE_MORE`
+  certificates, including protocol locators, pre-union counts, target
+  generation/home/offset/entry count, and the released physical range. Full
+  production mounts restore the canonical block bitmap and free-block
+  counters, reclaim both inodes through `MORE` then `FINAL`, preserve the
+  seeded payload without a data-home write, and produce a byte-stable zero-I/O
+  remount. Their pinned e2fsprogs 1.47.4 acceptance test remains a pending
+  release qualification gate. The per-shape
   single-record empty-case controlled matrix covers
   eight modern and seven legacy write prefixes: both sides of final commit,
   every operation-specific metadata home, and final-super publication. Three fences
@@ -1442,9 +1458,10 @@ The remaining boundaries are:
   affected ext4 home exactly, preserve the payload without a data-home write,
   and remount without another write or flush. The branch in which the data- and
   inode-group descriptors occupy distinct primary GDT pages, adding one
-  metadata home, is implemented but not yet qualified. Linked `MODERN_MORE`,
-  modern/legacy `DATA_DELETE_MORE`, successful multi-range linked release, and
-  successor-aware crash cuts for those modes also lack positive oracles.
+  metadata home, is implemented but not yet qualified. Linked `MODERN_MORE`
+  still lacks a positive oracle. Successor-aware crash cuts for
+  `MODERN_MORE`, modern/legacy `DATA_DELETE_MORE`, and multi-range
+  `LEGACY_MORE` also remain to be qualified.
   Activation, descriptor, and active-primary writes are qualified by singleton
   matrices but are not duplicated here with an active successor. The
   one-block-specific commit and final-super flush fences, shared
