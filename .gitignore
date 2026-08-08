@@ -76,6 +76,7 @@ local_testing/*
 !local_testing/rabbit-mounted-test.f
 !local_testing/test_streams_rabbit_mounted_read.py
 !local_testing/rabbit-landing3-test.f
+!local_testing/rabbit-l3-mux-test.f
 !local_testing/test_streams_rabbit_landing3.py
 # Refactor architecture inventory and ratchet
 !local_testing/forth_dependencies.py
