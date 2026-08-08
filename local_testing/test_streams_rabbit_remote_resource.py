@@ -135,6 +135,16 @@ CONTRACT_STAGES = (
         "STREAMS RABBIT REMOTE RESOURCE NOT FOUND PASS",
     ),
     (
+        "cache-stage",
+        "_RBT-RRES-PHASE-CACHE-STAGE",
+        "STREAMS RABBIT REMOTE RESOURCE CACHE STAGE PASS",
+    ),
+    (
+        "stale-fetch",
+        "_RBT-RRES-PHASE-STALE-FETCH",
+        "STREAMS RABBIT REMOTE RESOURCE STALE FETCH PASS",
+    ),
+    (
         "replace",
         "_RBT-RRES-PHASE-REPLACE",
         "STREAMS RABBIT REMOTE RESOURCE REPLACE PASS",
@@ -161,17 +171,29 @@ def _assert_static_contracts() -> None:
         "STREAMS-RABBIT-REMOTE-RESOURCE-POLL-CALLBACK",
         "STREAMS-RABBIT-REMOTE-RESOURCE-CONSUME",
         "STREAMS-RABBIT-REMOTE-RESOURCE-CACHE@",
+        "STREAMS-RABBIT-REMOTE-RESOURCE-CACHE-CALLBACK@",
+        "STREAMS-RABBIT-REMOTE-RESOURCE-CACHE-STAGE-JSON-CALLBACK",
+        "STREAMS-RABBIT-REMOTE-RESOURCE-CACHE-PUBLISH-STAGED",
+        "STREAMS-RABBIT-REMOTE-RESOURCE-CACHE-DISCARD-STAGED",
+        "STREAMS-RABBIT-REMOTE-RESOURCE-RETAINED-SPAN-OVERLAP?",
+        "STREAMS-RABBIT-REMOTE-RESOURCE-CONNECTOR-MATCH?",
         "STREAMS-RABBIT-REMOTE-RESOURCE-CLEANUP",
         "STREAMS-RABBIT-REMOTE-RESOURCE-ABANDON",
         "STREAMS-RABBIT-REMOTE-RESOURCE-FINI",
     ):
         assert f": {word}" in remote
+    assert "STREAMS-RABBIT-REMOTE-RESOURCE-CACHE-ADOPT" not in remote
+    assert "STREAMS-RABBIT-REMOTE-RESOURCE-CACHE-VALIDATE" not in remote
     assert "STREAMS-RABBIT-CONNECTOR-POLL" not in remote
     assert "STREAMS-RABBIT-CONNECTOR-OP-RESULT@" in remote
     assert "STREAMS-RABBIT-CONNECTOR-OP-RELEASE" in remote
     consume = remote.split(": _SRRES-CONSUME", 1)[1].split(
         ": STREAMS-RABBIT-REMOTE-RESOURCE-CONSUME", 1
     )[0]
+    assert consume.index("_SRRESC-BUSY @") < consume.index("_SRRESC-O !")
+    assert consume.index("_SRRESC-MARK-STALE") < consume.index(
+        "_SRRESC-ACCESS"
+    )
     assert consume.index("_SRRESC-RELEASE") < consume.index("_SRRESC-FINISH")
     assert "IVJSON-DECODE-AS" in remote
     assert "RABBIT-CLIENT-" not in remote
