@@ -1087,21 +1087,29 @@ def _multi_empty_unlinked_orphan_patches(
     return tuple(patches.items())
 
 
-def _multi_linked_legacy_orphan_patches(
+def _multi_linked_orphan_patches(
     path: Path,
+    *,
+    protocol: str,
 ) -> tuple[tuple[int, bytes], ...]:
-    """Retain two linked, already-empty inodes in one legacy chain."""
+    """Retain two linked, already-empty inodes in one orphan protocol."""
+    assert protocol in {"modern", "legacy"}
+    legacy = protocol == "legacy"
     patches = dict(
         _multi_empty_unlinked_orphan_patches(
             path,
-            legacy_chain=(18, 21),
-            modern_entries=(),
+            legacy_chain=(18, 21) if legacy else (),
+            modern_entries=() if legacy else (18, 21),
         )
     )
     superblock = patches[1024]
-    assert struct.unpack_from("<I", superblock, 0xE8)[0] == 18
+    assert struct.unpack_from("<I", superblock, 0xE8)[0] == (
+        18 if legacy else 0
+    )
 
-    for inode_number, successor in ((18, 21), (21, 0)):
+    for inode_number, successor in (
+        ((18, 21), (21, 0)) if legacy else ((18, 0), (21, 0))
+    ):
         _, _, inode_offset = _ext4_inode_record(path, inode_number)
         inode = bytearray(patches[inode_offset])
         assert struct.unpack_from("<I", inode, 0x04)[0] == 0
@@ -1123,22 +1131,25 @@ def _multi_linked_legacy_orphan_patches(
     return tuple(patches.items())
 
 
-def _legacy_head_nlink2_extent_patches(
+def _linked_head_nlink2_extent_patches(
     path: Path,
     *,
+    protocol: str,
     extent_count: int,
 ) -> tuple[tuple[tuple[int, bytes], ...], tuple[int, ...]]:
-    """Give linked legacy head 18 exact separately described extents.
+    """Give linked orphan head 18 exact separately described extents.
 
     Both inodes are filesystem-linked (``i_links_count == 2``), separately
-    from the legacy orphan-list relationship 18 -> 21.  Recovery must truncate
-    and advance the nonterminal head before completing the terminal record.
+    from the modern orphan-file or legacy list relationship. Recovery must
+    truncate and advance the nonterminal head before completing the terminal
+    record.
     """
+    assert protocol in {"modern", "legacy"}
     assert 1 <= extent_count <= 4
-    base = _multi_linked_legacy_orphan_patches(path)
+    base = _multi_linked_orphan_patches(path, protocol=protocol)
     patches, first_data_block = _single_extent_unlinked_orphan_patches(
         path,
-        protocol="legacy",
+        protocol=protocol,
         inode_number=18,
         block_count=extent_count,
         seed_payloads=True,
@@ -1153,7 +1164,8 @@ def _legacy_head_nlink2_extent_patches(
     inode18 = bytearray(patch_map[inode18_offset])
     inode21 = patch_map[inode21_offset]
     assert struct.unpack_from("<H", inode18, 0x1A)[0] == 2
-    assert struct.unpack_from("<I", inode18, 0x14)[0] == 21
+    expected_successor = 21 if protocol == "legacy" else 0
+    assert struct.unpack_from("<I", inode18, 0x14)[0] == expected_successor
     assert struct.unpack_from("<HHHH", inode18, 0x28) == (
         0xF30A,
         1,
@@ -14923,8 +14935,9 @@ def test_linked_legacy_head_with_successor_stages_exact_more_transaction(
     extent_count: int,
 ) -> None:
     path = canonical_images["primary-1k-i256"]
-    patches, data_blocks = _legacy_head_nlink2_extent_patches(
+    patches, data_blocks = _linked_head_nlink2_extent_patches(
         path,
+        protocol="legacy",
         extent_count=extent_count,
     )
     _, _, inode_offset = _ext4_inode_record(path, 18)
@@ -15139,6 +15152,256 @@ def test_linked_legacy_head_with_successor_stages_exact_more_transaction(
     )
     assert len(data_blocks) == extent_count
     assert all(data_block > 0 for data_block in data_blocks)
+    _assert_emitted(output, marker)
+    _assert_emitted(output, aborted_marker)
+
+
+def test_linked_modern_head_with_successor_stages_exact_more_transaction(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches, data_blocks = _linked_head_nlink2_extent_patches(
+        path,
+        protocol="modern",
+        extent_count=1,
+    )
+    assert len(data_blocks) == 1
+    patch_map = dict(patches)
+    superblock = patch_map[1024]
+    _, _, inode_offset = _ext4_inode_record(path, 18)
+    target_home, target_offset = divmod(inode_offset, 1024)
+    assert (target_home, target_offset) == (279, 256)
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, orphan_inode, _ = _ext4_inode_record(path, orphan_inode_number)
+    orphan_home = _extent_root_physical(orphan_inode, 0)
+    assert orphan_home == 1313
+
+    expected_inode = bytearray(patch_map[inode_offset])
+    struct.pack_into("<I", expected_inode, 0x1C, 0)
+    struct.pack_into("<H", expected_inode, 0x2A, 0)
+    expected_inode[0x34:0x64] = bytes(48)
+    struct.pack_into("<H", expected_inode, 0x74, 0)
+    expected_inode = bytearray(
+        _inode_with_checksum(superblock, 18, expected_inode)
+    )
+    with path.open("rb") as source:
+        source.seek(target_home * 1024)
+        expected_target_home = bytearray(source.read(1024))
+    assert len(expected_target_home) == 1024
+    expected_target_home[
+        target_offset : target_offset + len(expected_inode)
+    ] = expected_inode
+    expected_target_crc = _crc32c_raw(expected_target_home)
+    marker = "EXT4-MODERN-LINKED-MORE-SEALED"
+    aborted_marker = f"{marker}-ABORTED"
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            "T-ARENA CONSTANT _MM-ARENA",
+            (
+                "_MM-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _MM-MOUNT-IOR CONSTANT _MM-V"
+            ),
+            "_MM-V _EXT4-CTX CONSTANT _MM-CTX",
+            (
+                "_MM-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _MM-FIND-IOR CONSTANT _MM-RECORD"
+            ),
+            "_MM-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _MM-JOURNAL-IOR",
+            (
+                "_MM-RECORD _MM-CTX _EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "CONSTANT _MM-MEASURE-IOR CONSTANT _MM-CREDIT"
+            ),
+            (
+                "_MM-CREDIT 0 0 _MM-CTX _EXT4-JTX-PREFLIGHT-CAPACITY "
+                "CONSTANT _MM-CAPACITY-IOR"
+            ),
+            "-1 _MM-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "_MM-CREDIT 0 0 _MM-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _MM-WRITER-IOR CONSTANT _MM-WRITER"
+            ),
+            (
+                "_MM-CREDIT 0 0 _MM-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _MM-BEGIN-IOR CONSTANT _MM-TX"
+            ),
+            "DEPTH CONSTANT _MM-DEPTH-BEFORE-STAGE",
+            (
+                "_MM-RECORD _MM-TX _EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "CONSTANT _MM-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _MM-DEPTH-AFTER-STAGE",
+            (
+                "_MM-WRITER _MM-CTX _EXT4-JWR-ORPHAN-PREPLAN "
+                "CONSTANT _MM-PREPLAN-IOR"
+            ),
+            (
+                "_MM-WRITER _EXT4-JWR-ORPHAN-STAGED? "
+                "CONSTANT _MM-STAGED-IOR"
+            ),
+            (
+                f"{target_home} _MM-WRITER _EXT4-JFC-FIND-META "
+                "CONSTANT _MM-INODE-FIND-IOR"
+            ),
+            "_EXT4-JFC-FOUND @ 0<> CONSTANT _MM-INODE-FOUND",
+            (
+                f"_EXT4-JFC-IMAGE @ {target_offset} + "
+                "CONSTANT _MM-INODE-AFTER"
+            ),
+            (
+                "_MM-INODE-AFTER _EXT4-I.LINKS + W@ "
+                "CONSTANT _MM-AFTER-LINKS"
+            ),
+            (
+                "_MM-INODE-AFTER _EXT4-I.DTIME + L@ "
+                "CONSTANT _MM-AFTER-DTIME"
+            ),
+            (
+                "_MM-INODE-AFTER _EXT4-I.BLOCK + 2 + W@ "
+                "CONSTANT _MM-AFTER-ENTRIES"
+            ),
+            (
+                "_MM-INODE-AFTER _EXT4-I.BLOCKS-LO + L@ "
+                "CONSTANT _MM-AFTER-BLOCKS-LO"
+            ),
+            (
+                "_MM-INODE-AFTER _EXT4-I.BLOCKS-HI + W@ "
+                "CONSTANT _MM-AFTER-BLOCKS-HI"
+            ),
+            (
+                f"{orphan_home} _MM-WRITER _EXT4-JFC-FIND-META "
+                "CONSTANT _MM-ORPHAN-FIND-IOR"
+            ),
+            "_EXT4-JFC-FOUND @ 0<> CONSTANT _MM-ORPHAN-FOUND",
+            "_EXT4-JFC-IMAGE @ L@ CONSTANT _MM-AFTER-SLOT0",
+            "_EXT4-JFC-IMAGE @ 4 + L@ CONSTANT _MM-AFTER-SLOT1",
+            (
+                "18 _MM-CTX _EXT4-LOAD-ORPHAN-INODE "
+                "CONSTANT _MM-RAW-INODE-IOR"
+            ),
+            (
+                "_MM-CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 2 + W@ "
+                "CONSTANT _MM-RAW-ENTRIES"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_MM-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_MM-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_MM-FIND-IOR 0=",
+                        "_MM-JOURNAL-IOR 0=",
+                        "_MM-RECORD _EXT4-OE.INO + @ 18 =",
+                        (
+                            "_MM-RECORD _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-MODERN ="
+                        ),
+                        "_MM-RECORD _EXT4-OE.LOCATOR-A + @ 0=",
+                        "_MM-RECORD _EXT4-OE.LOCATOR-B + @ 0=",
+                        "_MM-CTX _EXT4-C.O.ACTIVE + @ 2 =",
+                        "_MM-CTX _EXT4-C.O.MODERN-ACTIVE + @ 2 =",
+                        "_MM-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_MM-MEASURE-IOR 0=",
+                        "_MM-CREDIT 5 =",
+                        "_MM-CAPACITY-IOR 0=",
+                        "_MM-WRITER-IOR 0=",
+                        "_MM-BEGIN-IOR 0=",
+                        "_MM-STAGE-IOR 0=",
+                        "_MM-DEPTH-BEFORE-STAGE _MM-DEPTH-AFTER-STAGE =",
+                        "_MM-PREPLAN-IOR 0=",
+                        "_MM-STAGED-IOR 0=",
+                        (
+                            "_MM-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-STAGING ="
+                        ),
+                        "_MM-WRITER _EXT4-JWR.META-CREDIT + @ 5 =",
+                        "_MM-WRITER _EXT4-JWR.META-USED + @ 5 =",
+                        "_MM-WRITER _EXT4-JWR.META-ACTIVE + @ 5 =",
+                        "_MM-WRITER _EXT4-JWR.DATA-USED + @ 0=",
+                        "_MM-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
+                        (
+                            "_MM-WRITER _EXT4-JWR.CP-MODE + @ "
+                            "_EXT4-JCPM-ORPHAN-MODERN-MORE ="
+                        ),
+                        "_MM-WRITER _EXT4-JWR.CP-O-INO + @ 18 =",
+                        "_MM-WRITER _EXT4-JWR.CP-O-LOGICAL + @ 0=",
+                        "_MM-WRITER _EXT4-JWR.CP-O-SLOT + @ 0=",
+                        (
+                            "_MM-WRITER _EXT4-JWR.CP-O-HOME + @ "
+                            f"{orphan_home} ="
+                        ),
+                        (
+                            "_MM-WRITER _EXT4-JWR.CP-TARGET-GEN + @ "
+                            "0x18181818 ="
+                        ),
+                        (
+                            "_MM-WRITER _EXT4-JWR.CP-TARGET-HOME + @ "
+                            f"{target_home} ="
+                        ),
+                        (
+                            "_MM-WRITER _EXT4-JWR.CP-TARGET-OFF + @ "
+                            f"{target_offset} ="
+                        ),
+                        (
+                            "_MM-WRITER _EXT4-JWR.CP-TARGET-CRC + @ "
+                            f"{expected_target_crc} ="
+                        ),
+                        "_MM-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ 1 =",
+                        "_MM-WRITER _EXT4-JWR.CP-DATA-FIRST + @ 0=",
+                        "_MM-WRITER _EXT4-JWR.CP-DATA-COUNT + @ 0=",
+                        "_MM-WRITER _EXT4-JWR.CP-PRE-ACTIVE + @ 2 =",
+                        "_MM-WRITER _EXT4-JWR.CP-PRE-MODERN + @ 2 =",
+                        "_MM-WRITER _EXT4-JWR.CP-PRE-LEGACY + @ 0=",
+                        "_MM-WRITER _EXT4-JWR-CP-AUTHORITY?",
+                        "_MM-WRITER _EXT4-JTX-TABLES-VALID?",
+                        "_MM-INODE-FIND-IOR 0=",
+                        "_MM-INODE-FOUND",
+                        "_MM-AFTER-LINKS 2 =",
+                        "_MM-AFTER-DTIME 0=",
+                        "_MM-AFTER-ENTRIES 0=",
+                        "_MM-AFTER-BLOCKS-LO 0=",
+                        "_MM-AFTER-BLOCKS-HI 0=",
+                        "_MM-ORPHAN-FIND-IOR 0=",
+                        "_MM-ORPHAN-FOUND",
+                        "_MM-AFTER-SLOT0 0=",
+                        "_MM-AFTER-SLOT1 21 =",
+                        "_MM-RAW-INODE-IOR 0=",
+                        "_MM-RAW-ENTRIES 1 =",
+                        "_MM-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+            "_MM-TX _EXT4-JTX-ABORT CONSTANT _MM-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_MM-ABORT-IOR 0=",
+                        (
+                            "_MM-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_MM-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_MM-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                        "_MM-WRITER _EXT4-JWR-VALID?",
+                        "_MM-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_MM-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_MM-WRITER _EXT4-JWR.CP-MODE + @ 0=",
+                        "_MM-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + f' IF ." {aborted_marker}" THEN'
+            ),
+        ],
+        patches=patches,
+    )
     _assert_emitted(output, marker)
     _assert_emitted(output, aborted_marker)
 
@@ -16258,18 +16521,25 @@ def _run_multi_empty_unlinked_cleanup(
     }
 
 
-def _run_multi_linked_legacy_cleanup(
+def _run_multi_linked_cleanup(
     path: Path,
     media_path: Path,
     stable_path: Path,
     *,
+    protocol: str,
     head_extent_count: int = 0,
 ) -> dict[str, object]:
+    assert protocol in {"modern", "legacy"}
     assert 0 <= head_extent_count <= 4
-    base_patches = _multi_linked_legacy_orphan_patches(path)
+    assert protocol == "legacy" or head_extent_count > 0
+    base_patches = _multi_linked_orphan_patches(
+        path,
+        protocol=protocol,
+    )
     if head_extent_count:
-        patches, data_blocks = _legacy_head_nlink2_extent_patches(
+        patches, data_blocks = _linked_head_nlink2_extent_patches(
             path,
+            protocol=protocol,
             extent_count=head_extent_count,
         )
     else:
@@ -16321,6 +16591,13 @@ def _run_multi_linked_legacy_cleanup(
     _, orphan_inode, _ = _ext4_inode_record(path, orphan_inode_number)
     orphan_home = _extent_root_physical(orphan_inode, 0)
     orphan_before = patch_map[orphan_home * block_size]
+    if protocol == "modern":
+        with path.open("rb") as source:
+            source.seek(orphan_home * block_size)
+            expected_orphan_after = source.read(block_size)
+        assert len(expected_orphan_after) == block_size
+    else:
+        expected_orphan_after = orphan_before
     activation_trace = _jbd2_writer_activation_trace(path)
 
     data_bitmap_byte: int | None = None
@@ -16360,12 +16637,17 @@ def _run_multi_linked_legacy_cleanup(
         data_probe_forth = tuple(probe_lines)
         data_probe_checks = tuple(probe_checks)
 
+    protocol_tag = protocol.upper()
     if head_extent_count == 0:
-        marker = "EXT4-LINKED-LEGACY-MULTI-ORPHAN-CLEANED"
+        marker = f"EXT4-LINKED-{protocol_tag}-MULTI-ORPHAN-CLEANED"
     elif head_extent_count == 1:
-        marker = "EXT4-LINKED-LEGACY-HEAD-DATA-THEN-FINAL-CLEANED"
+        marker = (
+            f"EXT4-LINKED-{protocol_tag}-HEAD-DATA-THEN-FINAL-CLEANED"
+        )
     else:
-        marker = "EXT4-LINKED-LEGACY-MULTI-RANGE-THEN-FINAL-CLEANED"
+        marker = (
+            f"EXT4-LINKED-{protocol_tag}-MULTI-RANGE-THEN-FINAL-CLEANED"
+        )
     output, trace, media_sha256 = run_recovery_forth(
         path,
         media_path,
@@ -16516,10 +16798,12 @@ def _run_multi_linked_legacy_cleanup(
     super_writes = _write_ordinals_for_ext4_home(trace, 1)
     inode18_writes = _write_ordinals_for_ext4_home(trace, inode18_home)
     inode21_writes = _write_ordinals_for_ext4_home(trace, inode21_home)
-    assert len(super_writes) == 4
+    expected_super_writes = 4 if protocol == "legacy" else 3
+    assert len(super_writes) == expected_super_writes
     assert len(inode18_writes) == 1
     assert inode21_writes == ()
     if not data_blocks:
+        assert protocol == "legacy"
         assert super_writes[0] < inode18_writes[0] < super_writes[1]
         assert not _write_ordinals_for_ext4_home(trace, block_bitmap_home)
         assert not _write_ordinals_for_ext4_home(trace, gdt_home)
@@ -16539,9 +16823,36 @@ def _run_multi_linked_legacy_cleanup(
         )
         for physical in data_blocks:
             assert not _write_ordinals_for_ext4_home(trace, physical)
-    assert super_writes[1] < super_writes[2] < super_writes[3]
+    assert all(
+        earlier < later
+        for earlier, later in zip(super_writes, super_writes[1:])
+    )
     assert not _write_ordinals_for_ext4_home(trace, inode_bitmap_home)
-    assert not _write_ordinals_for_ext4_home(trace, orphan_home)
+    orphan_writes = _write_ordinals_for_ext4_home(trace, orphan_home)
+    if protocol == "modern":
+        assert len(orphan_writes) == 2
+        assert (
+            super_writes[1]
+            < orphan_writes[0]
+            < orphan_writes[1]
+            < super_writes[2]
+        )
+        first_home_batch = (
+            inode18_writes[0],
+            gdt_writes[0],
+            data_bitmap_writes[0],
+            super_writes[1],
+            orphan_writes[0],
+        )
+        assert first_home_batch == tuple(
+            range(first_home_batch[0], first_home_batch[0] + 5)
+        )
+        assert (
+            sum(kind == "write" for kind, _, _ in trace),
+            sum(kind == "flush" for kind, _, _ in trace),
+        ) == (48, 35)
+    else:
+        assert orphan_writes == ()
 
     inode18_after = bytearray(inode18_before)
     struct.pack_into("<I", inode18_after, 0x14, 0)
@@ -16563,7 +16874,7 @@ def _run_multi_linked_legacy_cleanup(
         recovered.seek(gdt_home * block_size)
         assert recovered.read(block_size) == expected_gdt
         recovered.seek(orphan_home * block_size)
-        assert recovered.read(block_size) == orphan_before
+        assert recovered.read(block_size) == expected_orphan_after
         if data_blocks:
             with path.open("rb") as canonical:
                 canonical.seek(block_bitmap_home * block_size)
@@ -16577,11 +16888,15 @@ def _run_multi_linked_legacy_cleanup(
                 ]
 
     if head_extent_count == 0:
-        stable_marker = "EXT4-LINKED-LEGACY-MULTI-ORPHAN-STABLE"
+        stable_marker = f"EXT4-LINKED-{protocol_tag}-MULTI-ORPHAN-STABLE"
     elif head_extent_count == 1:
-        stable_marker = "EXT4-LINKED-LEGACY-HEAD-DATA-THEN-FINAL-STABLE"
+        stable_marker = (
+            f"EXT4-LINKED-{protocol_tag}-HEAD-DATA-THEN-FINAL-STABLE"
+        )
     else:
-        stable_marker = "EXT4-LINKED-LEGACY-MULTI-RANGE-THEN-FINAL-STABLE"
+        stable_marker = (
+            f"EXT4-LINKED-{protocol_tag}-MULTI-RANGE-THEN-FINAL-STABLE"
+        )
     stable_output, stable_trace, stable_sha256 = run_recovery_forth(
         media_path,
         stable_path,
@@ -16608,6 +16923,7 @@ def _run_multi_linked_legacy_cleanup(
     assert stable_sha256 == media_sha256
     assert _sha256(stable_path) == media_sha256
     return {
+        "protocol": protocol,
         "source": path,
         "patches": patches,
         "output": output,
@@ -16637,10 +16953,11 @@ def linked_multi_legacy_cleanup_fixture(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, object]:
     directory = tmp_path_factory.mktemp("ext4-linked-legacy-multi-cleanup")
-    return _run_multi_linked_legacy_cleanup(
+    return _run_multi_linked_cleanup(
         canonical_images["primary-1k-i256"],
         directory / "successful-cleanup.img",
         directory / "stable-remount.img",
+        protocol="legacy",
     )
 
 
@@ -16652,10 +16969,11 @@ def linked_legacy_head_data_cleanup_fixture(
     directory = tmp_path_factory.mktemp(
         "ext4-linked-legacy-head-data-cleanup"
     )
-    return _run_multi_linked_legacy_cleanup(
+    return _run_multi_linked_cleanup(
         canonical_images["primary-1k-i256"],
         directory / "successful-cleanup.img",
         directory / "stable-remount.img",
+        protocol="legacy",
         head_extent_count=1,
     )
 
@@ -16668,11 +16986,29 @@ def linked_legacy_multi_range_cleanup_fixture(
     directory = tmp_path_factory.mktemp(
         "ext4-linked-legacy-multi-range-cleanup"
     )
-    return _run_multi_linked_legacy_cleanup(
+    return _run_multi_linked_cleanup(
         canonical_images["primary-1k-i256"],
         directory / "successful-cleanup.img",
         directory / "stable-remount.img",
+        protocol="legacy",
         head_extent_count=2,
+    )
+
+
+@pytest.fixture(scope="session")
+def linked_modern_head_data_cleanup_fixture(
+    canonical_images: dict[str, Path],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    directory = tmp_path_factory.mktemp(
+        "ext4-linked-modern-head-data-cleanup"
+    )
+    return _run_multi_linked_cleanup(
+        canonical_images["primary-1k-i256"],
+        directory / "successful-cleanup.img",
+        directory / "stable-remount.img",
+        protocol="modern",
+        head_extent_count=1,
     )
 
 
@@ -17127,6 +17463,20 @@ def test_mount_truncates_linked_legacy_head_before_terminal_final(
     linked_legacy_head_data_cleanup_fixture: dict[str, object],
 ) -> None:
     result = linked_legacy_head_data_cleanup_fixture
+    assert isinstance(result["data_block"], int)
+    assert isinstance(result["clean_image"], Path)
+    assert isinstance(result["stable_image"], Path)
+    assert result["clean_image"].is_file()
+    assert result["stable_image"].is_file()
+    assert result["stable_trace"] == ()
+    assert result["stable_sha256"] == result["clean_sha256"]
+
+
+def test_mount_truncates_linked_modern_head_before_terminal_final(
+    linked_modern_head_data_cleanup_fixture: dict[str, object],
+) -> None:
+    result = linked_modern_head_data_cleanup_fixture
+    assert result["protocol"] == "modern"
     assert isinstance(result["data_block"], int)
     assert isinstance(result["clean_image"], Path)
     assert isinstance(result["stable_image"], Path)
@@ -17703,6 +18053,7 @@ def _trace_ordinal_at_event(
 def _linked_legacy_first_more_trace_points(
     expectation: dict[str, object],
 ) -> dict[str, dict[str, int]]:
+    assert expectation["protocol"] == "legacy"
     trace = expectation["success_trace"]
     inode18_home = expectation["inode18_home"]
     gdt_home = expectation["gdt_home"]
@@ -17983,6 +18334,7 @@ def _assert_multi_linked_cleanup_media_converges(
     *,
     expectation: dict[str, object],
 ) -> None:
+    assert expectation["protocol"] == "legacy"
     clean_image = expectation["clean_image"]
     block_size = expectation["block_size"]
     inode18_home = expectation["inode18_home"]
@@ -21196,7 +21548,10 @@ def test_linked_legacy_more_rejects_postseal_certificate_tamper_prehome(
                     + f' IF ." {marker}" THEN'
                 ),
             ],
-            patches=_multi_linked_legacy_orphan_patches(path),
+            patches=_multi_linked_orphan_patches(
+                path,
+                protocol="legacy",
+            ),
         )
     finally:
         media_path.unlink(missing_ok=True)

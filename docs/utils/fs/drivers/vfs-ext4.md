@@ -40,9 +40,10 @@ default watchdog. Geometry-bounded multi-record production and selected
 multi-record fault journeys use a scoped 1,500,000,000-step watchdog because
 the real cold-source path plus repeated whole-plan authentication legitimately
 crossed the default. The mixed successful cleanup measured 1,209,747,492
-steps; the linked one-block `LEGACY_MORE` success measured 1,102,821,323, and
-repair from the durable image immediately before its commit fence measured
-1,366,762,951. The data-bearing two-record unlinked journeys have a separate
+steps; linked one-block `LEGACY_MORE` measured 1,102,821,323, linked one-block
+`MODERN_MORE` measured 1,134,032,080, and repair from the durable image
+immediately before the legacy commit fence measured 1,366,762,951. The
+data-bearing two-record unlinked journeys have a separate
 2,000,000,000-step watchdog: modern `DATA_DELETE_MORE` measured 1,573,133,619
 steps and legacy `DATA_DELETE_MORE` measured 1,563,424,804, followed in each
 case by a 55,738,449-step write-free stable remount. Neither watchdog is an
@@ -1412,10 +1413,17 @@ The remaining boundaries are:
   the two-range root uses logical starts zero and two. Recovery clears every
   extent and `i_blocks`, restores the exact block bitmap/GDT/super free counts
   without touching either seeded payload, advances to terminal `FINAL`, and
-  remounts with zero I/O. That synthetic protocol-state
-  fixture intentionally has no
-  namespace dirents for inodes 18 or 21; it is not an e2fsck oracle and is not
-  claimed as an e2fsck-clean namespace image. A
+  remounts with zero I/O. A parallel modern fixture seals a five-credit
+  `MODERN_MORE` over the inode, GDT, block bitmap, primary super, and orphan
+  file, then clears successor 21's orphan-file slot with one-credit
+  `MODERN_FINAL`. Its exact
+  48-write/35-flush trace contains three primary-super writes and two
+  orphan-home writes; inode 21 and the payload are never home-write targets.
+  Both modern slots finish zero with a valid checksum, allocation accounting
+  returns exactly to the linked-modern base, and the remount performs zero
+  I/O. These synthetic protocol-state fixtures intentionally have no
+  namespace dirents for inodes 18 or 21; they are not e2fsck oracles and are
+  not claimed as e2fsck-clean namespace images. A
   later-valid two-extent record proves whole-union refusal after an earlier
   supported record qualifies but before any write or flush. Structurally valid
   post-seal total-count, protocol-split, and `MORE`/`FINAL` substitutions all
@@ -1458,9 +1466,8 @@ The remaining boundaries are:
   affected ext4 home exactly, preserve the payload without a data-home write,
   and remount without another write or flush. The branch in which the data- and
   inode-group descriptors occupy distinct primary GDT pages, adding one
-  metadata home, is implemented but not yet qualified. Linked `MODERN_MORE`
-  still lacks a positive oracle. Successor-aware crash cuts for
-  `MODERN_MORE`, modern/legacy `DATA_DELETE_MORE`, and multi-range
+  metadata home, is implemented but not yet qualified. Successor-aware crash
+  cuts for `MODERN_MORE`, modern/legacy `DATA_DELETE_MORE`, and multi-range
   `LEGACY_MORE` also remain to be qualified.
   Activation, descriptor, and active-primary writes are qualified by singleton
   matrices but are not duplicated here with an active successor. The
