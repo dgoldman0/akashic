@@ -932,14 +932,23 @@ def _already_empty_unlinked_orphan_patches(
     return tuple(patches.items())
 
 
-def _one_block_unlinked_orphan_patches(
+def _single_extent_unlinked_orphan_patches(
     path: Path,
     *,
     protocol: str,
     inode_number: int = 18,
     data_group: int = 0,
+    physical_start: int | None = None,
+    logical_start: int = 0,
+    block_count: int = 1,
+    unwritten: bool = False,
+    seed_payloads: bool = False,
 ) -> tuple[tuple[tuple[int, bytes], ...], int]:
-    """Give the singleton unlinked inode one exact allocated data block."""
+    """Give one unlinked inode a contiguous inline depth-zero extent."""
+    assert logical_start >= 0
+    assert block_count > 0
+    assert block_count <= (0x7FFF if unwritten else 0x8000)
+    assert logical_start + block_count <= 0xFFFF_FFFF
     patches = dict(
         _already_empty_unlinked_orphan_patches(
             path,
@@ -964,69 +973,132 @@ def _one_block_unlinked_orphan_patches(
     ) // blocks_per_group
     assert 0 <= data_group < group_count
     descriptors_per_block = block_size // descriptor_size
-    data_gdt_home = first_data + 1 + data_group // descriptors_per_block
-    data_gdt_offset = data_gdt_home * block_size
-    descriptor_offset = (
-        data_group % descriptors_per_block
-    ) * descriptor_size
-    gdt_was_staged = data_gdt_offset in patches
-    if gdt_was_staged:
-        gdt = bytearray(patches[data_gdt_offset])
-    else:
-        with path.open("rb") as source:
-            source.seek(data_gdt_offset)
-            gdt = bytearray(source.read(block_size))
-    assert len(gdt) == block_size
-    descriptor = bytearray(
-        gdt[descriptor_offset : descriptor_offset + descriptor_size]
-    )
-    block_bitmap_home = struct.unpack_from("<I", descriptor, 0x00)[0]
-    with path.open("rb") as source:
-        source.seek(block_bitmap_home * block_size)
-        block_bitmap = bytearray(source.read(block_size))
-    assert len(block_bitmap) == block_size
 
-    group_first = first_data + data_group * blocks_per_group
-    group_blocks = min(blocks_per_group, blocks_count - group_first)
-    data_index = next(
-        index
-        for index in range(group_blocks)
-        if not block_bitmap[index // 8] & (1 << (index % 8))
-    )
-    data_block = group_first + data_index
-    data_byte, data_bit = divmod(data_index, 8)
-    block_bitmap[data_byte] |= 1 << data_bit
-    block_bitmap_checksum = _crc32c_raw(block_bitmap, seed)
+    def read_block(block: int) -> bytearray:
+        offset = block * block_size
+        if offset in patches:
+            result = bytearray(patches[offset])
+        else:
+            with path.open("rb") as source:
+                source.seek(offset)
+                result = bytearray(source.read(block_size))
+        assert len(result) == block_size
+        return result
 
-    group_free_blocks = struct.unpack_from("<H", descriptor, 0x0C)[0] | (
-        struct.unpack_from("<H", descriptor, 0x2C)[0] << 16
-    )
-    assert group_free_blocks > 0
-    group_free_blocks -= 1
-    struct.pack_into(
-        "<H", descriptor, 0x0C, group_free_blocks & 0xFFFF
-    )
-    struct.pack_into("<H", descriptor, 0x2C, group_free_blocks >> 16)
-    struct.pack_into(
-        "<H", descriptor, 0x18, block_bitmap_checksum & 0xFFFF
-    )
-    struct.pack_into(
-        "<H", descriptor, 0x38, block_bitmap_checksum >> 16
-    )
-    descriptor = bytearray(
-        _group_descriptor_with_checksum(
-            superblock,
-            descriptor,
-            data_group,
+    def descriptor_for(group: int) -> tuple[int, int, bytearray]:
+        gdt_home = first_data + 1 + group // descriptors_per_block
+        descriptor_offset = (
+            group % descriptors_per_block
+        ) * descriptor_size
+        gdt = read_block(gdt_home)
+        descriptor = bytearray(
+            gdt[
+                descriptor_offset : descriptor_offset + descriptor_size
+            ]
         )
-    )
-    gdt[descriptor_offset : descriptor_offset + descriptor_size] = descriptor
+        assert len(descriptor) == descriptor_size
+        return gdt_home, descriptor_offset, descriptor
+
+    if physical_start is None:
+        _, _, descriptor = descriptor_for(data_group)
+        block_bitmap_home = struct.unpack_from(
+            "<I", descriptor, 0x00
+        )[0]
+        block_bitmap = read_block(block_bitmap_home)
+        group_first = first_data + data_group * blocks_per_group
+        group_blocks = min(blocks_per_group, blocks_count - group_first)
+        assert block_count <= group_blocks
+        data_index = next(
+            index
+            for index in range(group_blocks - block_count + 1)
+            if all(
+                not block_bitmap[bit // 8] & (1 << (bit % 8))
+                for bit in range(index, index + block_count)
+            )
+        )
+        physical_start = group_first + data_index
+    assert physical_start >= first_data
+    assert physical_start + block_count <= blocks_count
+    assert physical_start <= 0xFFFF_FFFF
+
+    if seed_payloads:
+        for ordinal, physical in enumerate(
+            range(physical_start, physical_start + block_count)
+        ):
+            token = (ordinal + 1).to_bytes(8, "little")
+            payload = (token * ((block_size + len(token) - 1) // len(token)))[
+                :block_size
+            ]
+            assert payload != bytes(block_size)
+            offset = physical * block_size
+            assert offset not in patches
+            patches[offset] = payload
+
+    cursor = physical_start
+    remaining = block_count
+    while remaining:
+        group, data_index = divmod(
+            cursor - first_data,
+            blocks_per_group,
+        )
+        assert 0 <= group < group_count
+        group_first = first_data + group * blocks_per_group
+        group_blocks = min(blocks_per_group, blocks_count - group_first)
+        assert data_index < group_blocks
+        chunk = min(remaining, group_blocks - data_index)
+        gdt_home, descriptor_offset, descriptor = descriptor_for(group)
+        gdt = read_block(gdt_home)
+        block_bitmap_home = struct.unpack_from(
+            "<I", descriptor, 0x00
+        )[0]
+        block_bitmap = read_block(block_bitmap_home)
+        for bit in range(data_index, data_index + chunk):
+            byte_index, bit_in_byte = divmod(bit, 8)
+            mask = 1 << bit_in_byte
+            assert block_bitmap[byte_index] & mask == 0
+            block_bitmap[byte_index] |= mask
+        block_bitmap_checksum = _crc32c_raw(block_bitmap, seed)
+
+        flags = struct.unpack_from("<H", descriptor, 0x12)[0]
+        if flags & 0x02:
+            struct.pack_into("<H", descriptor, 0x12, flags & ~0x02)
+        group_free_blocks = struct.unpack_from(
+            "<H", descriptor, 0x0C
+        )[0] | (struct.unpack_from("<H", descriptor, 0x2C)[0] << 16)
+        assert group_free_blocks >= chunk
+        group_free_blocks -= chunk
+        struct.pack_into(
+            "<H", descriptor, 0x0C, group_free_blocks & 0xFFFF
+        )
+        struct.pack_into(
+            "<H", descriptor, 0x2C, group_free_blocks >> 16
+        )
+        struct.pack_into(
+            "<H", descriptor, 0x18, block_bitmap_checksum & 0xFFFF
+        )
+        struct.pack_into(
+            "<H", descriptor, 0x38, block_bitmap_checksum >> 16
+        )
+        descriptor = bytearray(
+            _group_descriptor_with_checksum(
+                superblock,
+                descriptor,
+                group,
+            )
+        )
+        gdt[
+            descriptor_offset : descriptor_offset + descriptor_size
+        ] = descriptor
+        patches[block_bitmap_home * block_size] = bytes(block_bitmap)
+        patches[gdt_home * block_size] = bytes(gdt)
+        cursor += chunk
+        remaining -= chunk
 
     super_free_blocks = struct.unpack_from("<I", superblock, 0x0C)[0] | (
         struct.unpack_from("<I", superblock, 0x158)[0] << 32
     )
-    assert super_free_blocks > 0
-    super_free_blocks -= 1
+    assert super_free_blocks >= block_count
+    super_free_blocks -= block_count
     struct.pack_into(
         "<I", superblock, 0x0C, super_free_blocks & 0xFFFF_FFFF
     )
@@ -1036,9 +1108,20 @@ def _one_block_unlinked_orphan_patches(
     _, _, inode_offset = _ext4_inode_record(path, inode_number)
     inode = bytearray(patches[inode_offset])
     assert struct.unpack_from("<HHHH", inode, 0x28) == (0xF30A, 0, 4, 0)
+    raw_length = block_count | (0x8000 if unwritten else 0)
     struct.pack_into("<H", inode, 0x2A, 1)
-    struct.pack_into("<IHHI", inode, 0x34, 0, 1, 0, data_block)
-    struct.pack_into("<I", inode, 0x1C, sectors_per_block)
+    struct.pack_into(
+        "<IHHI",
+        inode,
+        0x34,
+        logical_start,
+        raw_length,
+        physical_start >> 32,
+        physical_start & 0xFFFF_FFFF,
+    )
+    sectors = block_count * sectors_per_block
+    assert sectors <= 0xFFFF_FFFF
+    struct.pack_into("<I", inode, 0x1C, sectors)
     struct.pack_into("<H", inode, 0x74, 0)
     inode = bytearray(
         _inode_with_checksum(superblock, inode_number, inode)
@@ -1046,10 +1129,23 @@ def _one_block_unlinked_orphan_patches(
 
     patches[1024] = bytes(superblock)
     patches[inode_offset] = bytes(inode)
-    patches[block_bitmap_home * block_size] = bytes(block_bitmap)
-    patches[data_gdt_offset] = bytes(gdt)
-    assert len(patches) == 6 + int(not gdt_was_staged)
-    return tuple(patches.items()), data_block
+    return tuple(patches.items()), physical_start
+
+
+def _one_block_unlinked_orphan_patches(
+    path: Path,
+    *,
+    protocol: str,
+    inode_number: int = 18,
+    data_group: int = 0,
+) -> tuple[tuple[tuple[int, bytes], ...], int]:
+    """Give the singleton unlinked inode one exact allocated data block."""
+    return _single_extent_unlinked_orphan_patches(
+        path,
+        protocol=protocol,
+        inode_number=inode_number,
+        data_group=data_group,
+    )
 
 
 def _existing_block_unlinked_orphan_patches(
@@ -1104,8 +1200,6 @@ def _unlinked_orphan_ownership_patches(
         "nonzero-i-blocks",
         "inline-xattr",
         "inline-xattr-value-inode",
-        "one-block-unwritten",
-        "one-block-logical-offset",
         "one-block-high-word",
         "one-block-external-xattr",
         "one-block-inline-xattr",
@@ -1113,11 +1207,17 @@ def _unlinked_orphan_ownership_patches(
         "one-block-free-data",
         "one-block-live-data-alias",
         "one-block-live-xattr-alias",
+        "two-block-second-free-data",
+        "three-block-interior-live-data-alias",
     }
     exact_alias_cases = {
         "one-block-orphan-storage-alias",
         "one-block-live-data-alias",
         "one-block-live-xattr-alias",
+    }
+    range_admission_cases = {
+        "two-block-second-free-data",
+        "three-block-interior-live-data-alias",
     }
     one_block_case = case.startswith("one-block-")
     data_block: int | None = None
@@ -1160,6 +1260,55 @@ def _unlinked_orphan_ownership_patches(
                 inode_number=inode_number,
             )
         )
+    elif case == "two-block-second-free-data":
+        extent_patches, data_block = _single_extent_unlinked_orphan_patches(
+            path,
+            protocol=protocol,
+            inode_number=inode_number,
+            block_count=2,
+        )
+        one_block_patches, observed_data_block = (
+            _single_extent_unlinked_orphan_patches(
+                path,
+                protocol=protocol,
+                inode_number=inode_number,
+                physical_start=data_block,
+                block_count=1,
+            )
+        )
+        assert observed_data_block == data_block
+        extent_map = dict(extent_patches)
+        patch_map = dict(one_block_patches)
+        _, _, inode_offset = _ext4_inode_record(path, inode_number)
+        patch_map[inode_offset] = extent_map[inode_offset]
+        patches = list(patch_map.items())
+    elif case == "three-block-interior-live-data-alias":
+        range_patches, data_block = _single_extent_unlinked_orphan_patches(
+            path,
+            protocol=protocol,
+            inode_number=inode_number,
+            block_count=3,
+        )
+        patch_map = dict(range_patches)
+        superblock = patch_map[1024]
+        _, live_inode_bytes, live_inode_offset = _ext4_inode_record(path, 14)
+        live_inode = bytearray(live_inode_bytes)
+        assert struct.unpack_from("<HHHH", live_inode, 0x28) == (
+            0xF30A,
+            1,
+            4,
+            0,
+        )
+        assert struct.unpack_from("<H", live_inode, 0x38)[0] == 1
+        struct.pack_into("<H", live_inode, 0x3A, 0)
+        struct.pack_into("<I", live_inode, 0x3C, data_block + 1)
+        assert live_inode_offset not in patch_map
+        patch_map[live_inode_offset] = _inode_with_checksum(
+            superblock,
+            14,
+            live_inode,
+        )
+        patches = list(patch_map.items())
     elif one_block_case:
         one_block_patches, data_block = _one_block_unlinked_orphan_patches(
             path,
@@ -1206,19 +1355,13 @@ def _unlinked_orphan_ownership_patches(
     if case == "nonzero-i-blocks":
         struct.pack_into("<I", inode, 0x1C, 2)
         struct.pack_into("<H", inode, 0x74, 0)
-    elif case == "one-block-unwritten":
-        assert data_block is not None
-        struct.pack_into("<H", inode, 0x38, 0x8001)
-    elif case == "one-block-logical-offset":
-        assert data_block is not None
-        struct.pack_into("<I", inode, 0x34, 1)
     elif case == "one-block-high-word":
         assert data_block is not None
         struct.pack_into("<H", inode, 0x3A, 1)
     elif case == "one-block-external-xattr":
         assert data_block is not None
         struct.pack_into("<I", inode, 0x68, data_block)
-    elif case in exact_alias_cases:
+    elif case in exact_alias_cases | range_admission_cases:
         assert data_block is not None
     else:
         if case != "one-block-free-data":
@@ -13069,28 +13212,73 @@ def test_unlinked_singleton_cleanup_measures_and_seals_exact_certificate(
 
 
 @pytest.mark.parametrize("protocol", ("modern", "legacy"))
-def test_one_block_unlinked_cleanup_measures_and_seals_exact_certificate(
+@pytest.mark.parametrize(
+    "extent_case",
+    (
+        "one-block",
+        "initialized-offset",
+        "cross-group-unwritten-offset",
+    ),
+)
+def test_single_extent_unlinked_cleanup_measures_and_seals_exact_certificate(
     canonical_images: dict[str, Path],
     protocol: str,
+    extent_case: str,
 ) -> None:
     path = canonical_images["primary-1k-i256"]
-    patches, data_block = _one_block_unlinked_orphan_patches(
-        path,
-        protocol=protocol,
-    )
+    if extent_case == "one-block":
+        data_count = 1
+        expected_credit = 6 if protocol == "modern" else 5
+        patches, data_block = _one_block_unlinked_orphan_patches(
+            path,
+            protocol=protocol,
+        )
+    elif extent_case == "initialized-offset":
+        data_count = 3
+        expected_credit = 6 if protocol == "modern" else 5
+        patches, data_block = _single_extent_unlinked_orphan_patches(
+            path,
+            protocol=protocol,
+            logical_start=7,
+            block_count=data_count,
+        )
+    else:
+        assert extent_case == "cross-group-unwritten-offset"
+        with path.open("rb") as source:
+            source.seek(1024)
+            superblock = source.read(1024)
+        first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+        blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+        data_block = first_data + 4 * blocks_per_group - 1
+        assert data_block == 32768
+        data_count = 2
+        expected_credit = 7 if protocol == "modern" else 6
+        patches, observed_data_block = (
+            _single_extent_unlinked_orphan_patches(
+                path,
+                protocol=protocol,
+                physical_start=data_block,
+                logical_start=11,
+                block_count=data_count,
+                unwritten=True,
+            )
+        )
+        assert observed_data_block == data_block
     _, _, inode_offset = _ext4_inode_record(path, 18)
     with path.open("rb") as source:
         source.seek((inode_offset // 1024) * 1024)
         expected_target_home = source.read(1024)
     assert len(expected_target_home) == 1024
     expected_target_crc = _crc32c_raw(expected_target_home)
-    expected_credit = 6 if protocol == "modern" else 5
     expected_mode = (
         "_EXT4-JCPM-ORPHAN-MODERN-DATA-DELETE-FINAL"
         if protocol == "modern"
         else "_EXT4-JCPM-ORPHAN-LEGACY-DATA-DELETE-FINAL"
     )
-    marker = f"EXT4-{protocol.upper()}-ONE-BLOCK-UNLINKED-FINAL-SEALED"
+    marker = (
+        f"EXT4-{protocol.upper()}-{extent_case.upper()}-"
+        "UNLINKED-FINAL-SEALED"
+    )
     aborted_marker = f"{marker}-ABORTED"
 
     output = run_forth(
@@ -13199,7 +13387,10 @@ def test_one_block_unlinked_cleanup_measures_and_seals_exact_certificate(
                             "_UD-WRITER _EXT4-JWR.CP-DATA-FIRST + @ "
                             f"{data_block} ="
                         ),
-                        "_UD-WRITER _EXT4-JWR.CP-DATA-COUNT + @ 1 =",
+                        (
+                            "_UD-WRITER _EXT4-JWR.CP-DATA-COUNT + @ "
+                            f"{data_count} ="
+                        ),
                         (
                             "_UD-WRITER _EXT4-JWR.CP-INODE-BITMAP-HOME + @ "
                             "267 ="
@@ -13258,18 +13449,6 @@ def test_one_block_unlinked_cleanup_measures_and_seals_exact_certificate(
             "EXT4-D-XATTR",
         ),
         (
-            "one-block-unwritten",
-            "VFS-R-UNSUPPORTED",
-            "0",
-            "EXT4-D-RECOVERY",
-        ),
-        (
-            "one-block-logical-offset",
-            "VFS-R-UNSUPPORTED",
-            "0",
-            "EXT4-D-RECOVERY",
-        ),
-        (
             "one-block-high-word",
             "VFS-R-CORRUPT",
             "VFS-IOR-F-CORRUPT",
@@ -13294,7 +13473,19 @@ def test_one_block_unlinked_cleanup_measures_and_seals_exact_certificate(
             "EXT4-D-DATA-MAP",
         ),
         (
+            "two-block-second-free-data",
+            "VFS-R-CORRUPT",
+            "VFS-IOR-F-CORRUPT",
+            "EXT4-D-DATA-MAP",
+        ),
+        (
             "one-block-live-data-alias",
+            "VFS-R-CORRUPT",
+            "VFS-IOR-F-CORRUPT",
+            "EXT4-D-DATA-MAP",
+        ),
+        (
+            "three-block-interior-live-data-alias",
             "VFS-R-CORRUPT",
             "VFS-IOR-F-CORRUPT",
             "EXT4-D-DATA-MAP",
@@ -13428,14 +13619,6 @@ def test_mount_rejects_unlinked_reclaim_with_unreleased_ownership(
             id="two-extents",
         ),
         pytest.param(
-            "length-two",
-            "2 _XS-INODE _EXT4-I.BLOCK + 16 + W!",
-            "VFS-R-UNSUPPORTED",
-            "0",
-            "EXT4-D-RECOVERY",
-            id="length-two",
-        ),
-        pytest.param(
             "high-word",
             "1 _XS-INODE _EXT4-I.BLOCK + 18 + W!",
             "VFS-R-CORRUPT",
@@ -13453,7 +13636,7 @@ def test_mount_rejects_unlinked_reclaim_with_unreleased_ownership(
         ),
     ),
 )
-def test_unlinked_data_preflight_refuses_outside_exact_one_block_shape(
+def test_unlinked_data_preflight_refuses_outside_single_depth0_extent(
     canonical_images: dict[str, Path],
     case: str,
     mutation: str,
@@ -13521,6 +13704,87 @@ def test_unlinked_data_preflight_refuses_outside_exact_one_block_shape(
     _assert_emitted(output, marker)
 
 
+def test_extent_logical_end_rejects_u32_wrap_on_64bit_host(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    output = run_forth(
+        path,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _XE-MOUNT-IOR CONSTANT _XE-V",
+            "_XE-V _EXT4-CTX CONSTANT _XE-CTX",
+            "14 _XE-CTX _EXT4-LOAD-INODE CONSTANT _XE-LOAD-IOR",
+            "_XE-CTX _EXT4-C.INODE + CONSTANT _XE-INODE",
+            "0 _EXT4-MAP-VALIDATION-LIMIT !",
+            "0xFFFFFFFE _XE-INODE _EXT4-I.BLOCK + 12 + L!",
+            (
+                "_XE-CTX _EXT4-VALIDATE-INLINE-EXTENTS "
+                "CONSTANT _XE-BOUNDARY-IOR"
+            ),
+            "0xFFFFFFFF _XE-INODE _EXT4-I.BLOCK + 12 + L!",
+            "DEPTH CONSTANT _XE-DEPTH-BEFORE",
+            (
+                "_XE-CTX _EXT4-VALIDATE-INLINE-EXTENTS "
+                "CONSTANT _XE-OVERFLOW-IOR"
+            ),
+            "DEPTH CONSTANT _XE-DEPTH-AFTER",
+            "_XE-INODE _EXT4-JFI-INODE !",
+            "_XE-CTX _EXT4-JFI-CTX !",
+            "DEPTH CONSTANT _XE-JFI-DEPTH-BEFORE",
+            (
+                "_EXT4-JFI-DATA-PREFLIGHT "
+                "CONSTANT _XE-JFI-OVERFLOW-IOR"
+            ),
+            "DEPTH CONSTANT _XE-JFI-DEPTH-AFTER",
+            (
+                _forth_conjunction(
+                    [
+                        "_XE-MOUNT-IOR 0=",
+                        "_XE-LOAD-IOR 0=",
+                        "_XE-BOUNDARY-IOR 0=",
+                        (
+                            "_XE-OVERFLOW-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_XE-OVERFLOW-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-FORMAT ="
+                        ),
+                        (
+                            "_XE-OVERFLOW-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-CORRUPT ="
+                        ),
+                        (
+                            "_XE-OVERFLOW-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        "_XE-DEPTH-BEFORE _XE-DEPTH-AFTER =",
+                        (
+                            "_XE-JFI-OVERFLOW-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_XE-JFI-OVERFLOW-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-FORMAT ="
+                        ),
+                        (
+                            "_XE-JFI-OVERFLOW-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-CORRUPT ="
+                        ),
+                        (
+                            "_XE-JFI-OVERFLOW-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        "_XE-JFI-DEPTH-BEFORE _XE-JFI-DEPTH-AFTER =",
+                    ]
+                )
+                + ' IF ." EXT4-EXTENT-LOGICAL-U32-END-BOUNDED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-EXTENT-LOGICAL-U32-END-BOUNDED")
+
+
 def _run_singleton_unlinked_cleanup(
     path: Path,
     media_path: Path,
@@ -13528,17 +13792,29 @@ def _run_singleton_unlinked_cleanup(
     protocol: str,
     patches: tuple[tuple[int, bytes], ...] | None = None,
     data_block: int | None = None,
+    data_count: int | None = None,
 ) -> dict[str, object]:
     assert protocol in {"modern", "legacy"}
+    if data_block is None:
+        assert data_count in (None, 0)
+        data_count = 0
+    else:
+        if data_count is None:
+            data_count = 1
+        assert data_count > 0
     with path.open("rb") as source_media:
         source_media.seek(1024)
         canonical_super = source_media.read(1024)
     assert len(canonical_super) == 1024
     block_size = 1024 << struct.unpack_from("<I", canonical_super, 0x18)[0]
+    blocks_count = struct.unpack_from("<I", canonical_super, 0x04)[0] | (
+        struct.unpack_from("<I", canonical_super, 0x150)[0] << 32
+    )
     first_data = struct.unpack_from("<I", canonical_super, 0x14)[0]
     blocks_per_group = struct.unpack_from("<I", canonical_super, 0x20)[0]
     inodes_per_group = struct.unpack_from("<I", canonical_super, 0x28)[0]
     descriptor_size = struct.unpack_from("<H", canonical_super, 0xFE)[0]
+    checksum_seed = struct.unpack_from("<I", canonical_super, 0x270)[0]
     assert descriptor_size == 64
     descriptors_per_block = block_size // descriptor_size
 
@@ -13577,20 +13853,27 @@ def _run_singleton_unlinked_cleanup(
     )[0] | (struct.unpack_from("<I", canonical_super, 0x158)[0] << 32)
     bitmap_byte, bitmap_bit = divmod(inode_index, 8)
     bitmap_mask = 1 << bitmap_bit
-    data_group = inode_group
-    data_gdt_home = inode_gdt_home
-    block_bitmap_home = struct.unpack_from(
-        "<I", inode_descriptor, 0x00
-    )[0]
-    expected_data_group_free_blocks = expected_inode_group_free_blocks
-    data_bitmap_byte = 0
-    data_bitmap_mask = 0
-    if data_block is not None:
+    if patches is None:
+        patches = _already_empty_unlinked_orphan_patches(
+            path,
+            protocol=protocol,
+        )
+    data_segments: list[dict[str, int]] = []
+    cursor = data_block
+    remaining = data_count
+    while cursor is not None and remaining:
         data_group, data_index = divmod(
-            data_block - first_data,
+            cursor - first_data,
             blocks_per_group,
         )
         data_gdt_home, data_descriptor = canonical_descriptor(data_group)
+        group_first = first_data + data_group * blocks_per_group
+        group_blocks = min(
+            blocks_per_group,
+            blocks_count - group_first,
+        )
+        assert 0 <= data_index < group_blocks
+        chunk = min(remaining, group_blocks - data_index)
         block_bitmap_home = struct.unpack_from(
             "<I", data_descriptor, 0x00
         )[0]
@@ -13598,17 +13881,82 @@ def _run_singleton_unlinked_cleanup(
             struct.unpack_from("<H", data_descriptor, 0x0C)[0]
             | (struct.unpack_from("<H", data_descriptor, 0x2C)[0] << 16)
         )
-        data_bitmap_byte, data_bitmap_bit = divmod(data_index, 8)
-        data_bitmap_mask = 1 << data_bitmap_bit
-    if patches is None:
-        patches = _already_empty_unlinked_orphan_patches(
-            path,
-            protocol=protocol,
+        data_segments.append(
+            {
+                "group": data_group,
+                "index": data_index,
+                "count": chunk,
+                "bitmap_home": block_bitmap_home,
+                "gdt_home": data_gdt_home,
+                "gdt_offset": (
+                    data_group % descriptors_per_block
+                ) * descriptor_size,
+                "expected_free_blocks": expected_data_group_free_blocks,
+            }
         )
+        cursor += chunk
+        remaining -= chunk
+    assert remaining == 0
+    data_bitmap_homes = {
+        segment["bitmap_home"] for segment in data_segments
+    }
+    data_gdt_homes = {segment["gdt_home"] for segment in data_segments}
     marker = f"EXT4-{protocol.upper()}-UNLINKED-ORPHAN-RECLAIMED"
     expected_home_writes = 5 if protocol == "modern" else 4
-    if data_block is not None:
-        expected_home_writes += 1 + int(data_gdt_home != inode_gdt_home)
+    expected_home_writes += len(data_bitmap_homes)
+    expected_home_writes += len(data_gdt_homes - {inode_gdt_home})
+
+    data_probe_forth: list[str] = []
+    data_probe_checks: list[str] = []
+    for segment_number, segment in enumerate(data_segments):
+        prefix = f"_UR-DATA-{segment_number}"
+        bit_checks = []
+        for bit in range(
+            segment["index"],
+            segment["index"] + segment["count"],
+        ):
+            byte_index, bit_in_byte = divmod(bit, 8)
+            bit_checks.append(
+                f"_UR-CTX _EXT4-C.BLOCK + {byte_index} + C@ "
+                f"{1 << bit_in_byte} AND 0="
+            )
+        data_probe_forth.extend(
+            (
+                (
+                    f"{segment['group']} _UR-CTX "
+                    "_EXT4-LOAD-BLOCK-BITMAP "
+                    f"CONSTANT {prefix}-BITMAP-IOR "
+                    f"CONSTANT {prefix}-BITMAP-HOME"
+                ),
+                (
+                    _forth_conjunction(bit_checks)
+                    + f" CONSTANT {prefix}-BITS-CLEAR"
+                ),
+                (
+                    f"{segment['group']} _UR-CTX _EXT4-LOAD-DESC "
+                    f"CONSTANT {prefix}-DESC-IOR"
+                ),
+                (
+                    "_UR-CTX _EXT4-C.DESC + _EXT4-JFB-DESC-FREE@ "
+                    f"CONSTANT {prefix}-GROUP-FREE-BLOCKS"
+                ),
+            )
+        )
+        data_probe_checks.extend(
+            (
+                f"{prefix}-BITMAP-IOR 0=",
+                (
+                    f"{prefix}-BITMAP-HOME "
+                    f"{segment['bitmap_home']} ="
+                ),
+                f"{prefix}-BITS-CLEAR",
+                f"{prefix}-DESC-IOR 0=",
+                (
+                    f"{prefix}-GROUP-FREE-BLOCKS "
+                    f"{segment['expected_free_blocks']} ="
+                ),
+            )
+        )
     output, trace, media_sha256 = run_recovery_forth(
         path,
         media_path,
@@ -13629,30 +13977,7 @@ def _run_singleton_unlinked_cleanup(
                 f"{bitmap_mask} AND "
                 "CONSTANT _UR-INODE-BIT"
             ),
-            *(
-                [
-                    (
-                        f"{data_group} _UR-CTX _EXT4-LOAD-BLOCK-BITMAP "
-                        "CONSTANT _UR-DATA-BITMAP-IOR "
-                        "CONSTANT _UR-DATA-BITMAP-HOME"
-                    ),
-                    (
-                        f"_UR-CTX _EXT4-C.BLOCK + {data_bitmap_byte} + C@ "
-                        f"{data_bitmap_mask} AND "
-                        "CONSTANT _UR-DATA-BIT"
-                    ),
-                ]
-                if data_block is not None
-                else []
-            ),
-            (
-                f"{data_group} _UR-CTX _EXT4-LOAD-DESC "
-                "CONSTANT _UR-DATA-DESC-IOR"
-            ),
-            (
-                "_UR-CTX _EXT4-C.DESC + _EXT4-JFB-DESC-FREE@ "
-                "CONSTANT _UR-DATA-GROUP-FREE-BLOCKS"
-            ),
+            *data_probe_forth,
             (
                 f"{inode_group} _UR-CTX _EXT4-LOAD-DESC "
                 "CONSTANT _UR-INODE-DESC-IOR"
@@ -13714,23 +14039,7 @@ def _run_singleton_unlinked_cleanup(
                         "_UR-BITMAP-IOR 0=",
                         f"_UR-BITMAP-HOME {inode_bitmap_home} =",
                         "_UR-INODE-BIT 0=",
-                        *(
-                            [
-                                "_UR-DATA-BITMAP-IOR 0=",
-                                (
-                                    "_UR-DATA-BITMAP-HOME "
-                                    f"{block_bitmap_home} ="
-                                ),
-                                "_UR-DATA-BIT 0=",
-                            ]
-                            if data_block is not None
-                            else []
-                        ),
-                        "_UR-DATA-DESC-IOR 0=",
-                        (
-                            "_UR-DATA-GROUP-FREE-BLOCKS "
-                            f"{expected_data_group_free_blocks} ="
-                        ),
+                        *data_probe_checks,
                         "_UR-INODE-DESC-IOR 0=",
                         (
                             "_UR-CTX _EXT4-C.DESC + "
@@ -13791,17 +14100,26 @@ def _run_singleton_unlinked_cleanup(
         recovered_inode_home = recovered_media.read(block_size)
     assert len(canonical_inode_home) == len(recovered_inode_home) == block_size
     assert recovered_inode_home == canonical_inode_home
-    bitmap_homes = {inode_bitmap_home}
+    patch_map = dict(patches)
+    bitmap_homes = {inode_bitmap_home, *data_bitmap_homes}
     if data_block is not None:
-        bitmap_homes.add(block_bitmap_home)
-        with path.open("rb") as canonical_media:
-            canonical_media.seek(data_block * block_size)
-            canonical_data = canonical_media.read(block_size)
-        with media_path.open("rb") as recovered_media:
-            recovered_media.seek(data_block * block_size)
-            recovered_data = recovered_media.read(block_size)
-        assert len(canonical_data) == len(recovered_data) == block_size
-        assert recovered_data == canonical_data
+        for physical in range(data_block, data_block + data_count):
+            data_offset = physical * block_size
+            expected_data = patch_map.get(data_offset)
+            if expected_data is None:
+                with path.open("rb") as canonical_media:
+                    canonical_media.seek(data_offset)
+                    expected_data = canonical_media.read(block_size)
+            with media_path.open("rb") as recovered_media:
+                recovered_media.seek(data_offset)
+                recovered_data = recovered_media.read(block_size)
+            assert len(expected_data) == len(recovered_data) == block_size
+            assert recovered_data == expected_data
+            assert not _write_ordinals_for_ext4_home(
+                trace,
+                physical,
+                block_size=block_size,
+            )
     for home in bitmap_homes:
         with path.open("rb") as canonical_media:
             canonical_media.seek(home * block_size)
@@ -13811,48 +14129,157 @@ def _run_singleton_unlinked_cleanup(
             recovered_home = recovered_media.read(block_size)
         assert len(canonical_home) == len(recovered_home) == block_size
         assert recovered_home == canonical_home
+    expected_gdts: dict[int, bytearray] = {}
+    for home in {inode_gdt_home, *data_gdt_homes}:
+        if home * block_size in patch_map:
+            expected_gdt = bytearray(patch_map[home * block_size])
+        else:
+            with path.open("rb") as canonical_media:
+                canonical_media.seek(home * block_size)
+                expected_gdt = bytearray(canonical_media.read(block_size))
+        assert len(expected_gdt) == block_size
+        expected_gdts[home] = expected_gdt
+
+    touched_groups = {inode_group}
+    for segment in data_segments:
+        group = segment["group"]
+        touched_groups.add(group)
+        expected_gdt = expected_gdts[segment["gdt_home"]]
+        descriptor_offset = segment["gdt_offset"]
+        descriptor = bytearray(
+            expected_gdt[
+                descriptor_offset : descriptor_offset + descriptor_size
+            ]
+        )
+        struct.pack_into(
+            "<H",
+            descriptor,
+            0x0C,
+            segment["expected_free_blocks"] & 0xFFFF,
+        )
+        struct.pack_into(
+            "<H",
+            descriptor,
+            0x2C,
+            segment["expected_free_blocks"] >> 16,
+        )
+        with path.open("rb") as canonical_media:
+            canonical_media.seek(segment["bitmap_home"] * block_size)
+            canonical_bitmap = canonical_media.read(block_size)
+        assert len(canonical_bitmap) == block_size
+        bitmap_checksum = _crc32c_raw(canonical_bitmap, checksum_seed)
+        struct.pack_into(
+            "<H", descriptor, 0x18, bitmap_checksum & 0xFFFF
+        )
+        struct.pack_into("<H", descriptor, 0x38, bitmap_checksum >> 16)
+        expected_gdt[
+            descriptor_offset : descriptor_offset + descriptor_size
+        ] = descriptor
+
     inode_descriptor_offset = (
         inode_group % descriptors_per_block
     ) * descriptor_size
-    for home in {inode_gdt_home, data_gdt_home}:
-        with path.open("rb") as canonical_media:
-            canonical_media.seek(home * block_size)
-            expected_gdt = bytearray(canonical_media.read(block_size))
-        assert len(expected_gdt) == block_size
-        if home == inode_gdt_home:
-            expected_inode_descriptor = bytearray(
-                expected_gdt[
-                    inode_descriptor_offset :
-                    inode_descriptor_offset + descriptor_size
-                ]
-            )
-            struct.pack_into(
-                "<H",
-                expected_inode_descriptor,
-                0x1C,
-                expected_itable_unused & 0xFFFF,
-            )
-            struct.pack_into(
-                "<H",
-                expected_inode_descriptor,
-                0x32,
-                expected_itable_unused >> 16,
-            )
-            expected_inode_descriptor = bytearray(
-                _group_descriptor_with_checksum(
-                    canonical_super,
-                    expected_inode_descriptor,
-                    inode_group,
-                )
-            )
+    expected_inode_gdt = expected_gdts[inode_gdt_home]
+    expected_inode_descriptor = bytearray(
+        expected_inode_gdt[
+            inode_descriptor_offset :
+            inode_descriptor_offset + descriptor_size
+        ]
+    )
+    struct.pack_into(
+        "<H",
+        expected_inode_descriptor,
+        0x0E,
+        expected_group_free & 0xFFFF,
+    )
+    struct.pack_into(
+        "<H",
+        expected_inode_descriptor,
+        0x2E,
+        expected_group_free >> 16,
+    )
+    struct.pack_into(
+        "<H",
+        expected_inode_descriptor,
+        0x1C,
+        expected_itable_unused & 0xFFFF,
+    )
+    struct.pack_into(
+        "<H",
+        expected_inode_descriptor,
+        0x32,
+        expected_itable_unused >> 16,
+    )
+    with path.open("rb") as canonical_media:
+        canonical_media.seek(inode_bitmap_home * block_size)
+        canonical_inode_bitmap = canonical_media.read(block_size)
+    assert len(canonical_inode_bitmap) == block_size
+    inode_bitmap_checksum = _crc32c_raw(
+        canonical_inode_bitmap[: inodes_per_group // 8],
+        checksum_seed,
+    )
+    struct.pack_into(
+        "<H",
+        expected_inode_descriptor,
+        0x1A,
+        inode_bitmap_checksum & 0xFFFF,
+    )
+    struct.pack_into(
+        "<H",
+        expected_inode_descriptor,
+        0x3A,
+        inode_bitmap_checksum >> 16,
+    )
+    expected_inode_gdt[
+        inode_descriptor_offset :
+        inode_descriptor_offset + descriptor_size
+    ] = expected_inode_descriptor
+
+    for group in sorted(touched_groups):
+        home = first_data + 1 + group // descriptors_per_block
+        descriptor_offset = (
+            group % descriptors_per_block
+        ) * descriptor_size
+        expected_gdt = expected_gdts[home]
+        descriptor = _group_descriptor_with_checksum(
+            canonical_super,
             expected_gdt[
-                inode_descriptor_offset :
-                inode_descriptor_offset + descriptor_size
-            ] = expected_inode_descriptor
+                descriptor_offset : descriptor_offset + descriptor_size
+            ],
+            group,
+        )
+        expected_gdt[
+            descriptor_offset : descriptor_offset + descriptor_size
+        ] = descriptor
+
+    for home, expected_gdt in expected_gdts.items():
         with media_path.open("rb") as recovered_media:
             recovered_media.seek(home * block_size)
             recovered_gdt = recovered_media.read(block_size)
         assert recovered_gdt == bytes(expected_gdt)
+
+    if data_segments:
+        first_segment = data_segments[0]
+        data_group = first_segment["group"]
+        data_gdt_home = first_segment["gdt_home"]
+        block_bitmap_home = first_segment["bitmap_home"]
+        data_bitmap_byte, data_bitmap_bit = divmod(
+            first_segment["index"],
+            8,
+        )
+        data_bitmap_mask = 1 << data_bitmap_bit
+        expected_data_group_free_blocks = first_segment[
+            "expected_free_blocks"
+        ]
+    else:
+        data_group = inode_group
+        data_gdt_home = inode_gdt_home
+        block_bitmap_home = struct.unpack_from(
+            "<I", inode_descriptor, 0x00
+        )[0]
+        data_bitmap_byte = 0
+        data_bitmap_mask = 0
+        expected_data_group_free_blocks = expected_inode_group_free_blocks
     return {
         "protocol": protocol,
         "source": path,
@@ -13871,6 +14298,10 @@ def _run_singleton_unlinked_cleanup(
         "inode_group": inode_group,
         "data_group": data_group,
         "data_block": data_block,
+        "data_count": data_count,
+        "data_segments": tuple(data_segments),
+        "data_bitmap_homes": tuple(sorted(data_bitmap_homes)),
+        "data_gdt_homes": tuple(sorted(data_gdt_homes)),
         "inode_home": inode_home,
         "data_bitmap_byte": data_bitmap_byte,
         "data_bitmap_mask": data_bitmap_mask,
@@ -13884,6 +14315,97 @@ def _run_singleton_unlinked_cleanup(
         "expected_super_free": expected_super_free,
         "expected_home_writes": expected_home_writes,
     }
+
+
+def _run_stable_unlinked_cleanup_remount(
+    result: dict[str, object],
+    stable_path: Path,
+) -> None:
+    protocol = result["protocol"]
+    extent_case = result["extent_case"]
+    clean_image = result["clean_image"]
+    clean_sha256 = result["clean_sha256"]
+    expected_super_free = result["expected_super_free"]
+    expected_super_free_blocks = result["expected_super_free_blocks"]
+    assert isinstance(protocol, str)
+    assert isinstance(extent_case, str)
+    assert isinstance(clean_image, Path)
+    assert isinstance(clean_sha256, str)
+    assert isinstance(expected_super_free, int)
+    assert isinstance(expected_super_free_blocks, int)
+    marker = (
+        f"EXT4-{protocol.upper()}-{extent_case.upper()}-"
+        "UNLINKED-STABLE-REMOUNT"
+    )
+    output, trace, media_sha256 = run_recovery_forth(
+        clean_image,
+        stable_path,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _UR2-IOR CONSTANT _UR2-V",
+            "_UR2-V _EXT4-CTX CONSTANT _UR2-CTX",
+            "18 _UR2-CTX _EXT4-LOAD-INODE CONSTANT _UR2-INODE-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_UR2-IOR 0=",
+                        "_UR2-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_UR2-V _EXT4-READY?",
+                        "_UR2-V _EXT4-ATTACHED?",
+                        "_UR2-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_UR2-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_UR2-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_UR2-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_UR2-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        "_UR2-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_UR2-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_UR2-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_UR2-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        (
+                            "_UR2-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.LAST-ORPHAN + L@ 0="
+                        ),
+                        (
+                            "_UR2-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0="
+                        ),
+                        (
+                            "_UR2-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                        (
+                            "_UR2-INODE-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_UR2-INODE-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-BOUNDS ="
+                        ),
+                        (
+                            "_UR2-CTX _EXT4-C.FREE-INODES + @ "
+                            f"{expected_super_free} ="
+                        ),
+                        (
+                            "_UR2-CTX _EXT4-C.FREE-BLOCKS + @ "
+                            f"{expected_super_free_blocks} ="
+                        ),
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+        ],
+        capture_media=stable_path,
+    )
+    _assert_emitted(output, marker)
+    assert trace == ()
+    assert media_sha256 == clean_sha256
+    assert stable_path.is_file()
+    assert _sha256(stable_path) == clean_sha256
+    result["stable_output"] = output
+    result["stable_trace"] = trace
+    result["stable_image"] = stable_path
+    result["stable_sha256"] = media_sha256
 
 
 @pytest.fixture(scope="session", params=("modern", "legacy"))
@@ -13950,6 +14472,124 @@ def cross_group_one_block_unlinked_cleanup_fixture(
         patches=patches,
         data_block=data_block,
     )
+
+
+@pytest.fixture(
+    scope="session",
+    params=(
+        pytest.param(
+            ("modern", "initialized-offset"),
+            id="modern-initialized-offset",
+        ),
+        pytest.param(
+            ("legacy", "initialized-offset"),
+            id="legacy-initialized-offset",
+        ),
+        pytest.param(
+            ("modern", "cross-group-unwritten-offset"),
+            id="modern-cross-group-unwritten-offset",
+        ),
+        pytest.param(
+            ("legacy", "cross-group-unwritten-offset"),
+            id="legacy-cross-group-unwritten-offset",
+        ),
+    ),
+)
+def multiblock_depth0_unlinked_cleanup_fixture(
+    request: pytest.FixtureRequest,
+    canonical_images: dict[str, Path],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    protocol, extent_case = request.param
+    source = canonical_images["primary-1k-i256"]
+    with source.open("rb") as source_media:
+        source_media.seek(1024)
+        canonical_super = source_media.read(1024)
+    assert len(canonical_super) == 1024
+    block_size = 1024 << struct.unpack_from(
+        "<I", canonical_super, 0x18
+    )[0]
+    first_data = struct.unpack_from("<I", canonical_super, 0x14)[0]
+    blocks_per_group = struct.unpack_from("<I", canonical_super, 0x20)[0]
+    if extent_case == "initialized-offset":
+        logical_start = 7
+        data_count = 3
+        unwritten = False
+        patches, data_block = _single_extent_unlinked_orphan_patches(
+            source,
+            protocol=protocol,
+            logical_start=logical_start,
+            block_count=data_count,
+            seed_payloads=True,
+        )
+    else:
+        assert extent_case == "cross-group-unwritten-offset"
+        logical_start = 11
+        data_count = 2
+        unwritten = True
+        data_block = first_data + 4 * blocks_per_group - 1
+        assert data_block == 32768
+        patches, observed_data_block = (
+            _single_extent_unlinked_orphan_patches(
+                source,
+                protocol=protocol,
+                physical_start=data_block,
+                logical_start=logical_start,
+                block_count=data_count,
+                unwritten=unwritten,
+                seed_payloads=True,
+            )
+        )
+        assert observed_data_block == data_block
+        gdt_home = first_data + 1
+        group4_offset = 4 * 64
+        with source.open("rb") as source_media:
+            source_media.seek(gdt_home * block_size)
+            canonical_gdt = source_media.read(block_size)
+        patched_gdt = dict(patches)[gdt_home * block_size]
+        assert struct.unpack_from(
+            "<H", canonical_gdt, group4_offset + 0x12
+        )[0] & 0x02
+        assert not struct.unpack_from(
+            "<H", patched_gdt, group4_offset + 0x12
+        )[0] & 0x02
+
+    _, _, inode_offset = _ext4_inode_record(source, 18)
+    inode = dict(patches)[inode_offset]
+    expected_raw_length = data_count | (0x8000 if unwritten else 0)
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    assert struct.unpack_from("<I", inode, 0x34)[0] == logical_start
+    assert struct.unpack_from("<H", inode, 0x38)[0] == expected_raw_length
+    assert struct.unpack_from("<H", inode, 0x3A)[0] == 0
+    assert struct.unpack_from("<I", inode, 0x3C)[0] == data_block
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == (
+        data_count * (block_size // 512)
+    )
+
+    directory = tmp_path_factory.mktemp(
+        f"ext4-{protocol}-{extent_case}-unlinked-cleanup"
+    )
+    result = _run_singleton_unlinked_cleanup(
+        source,
+        directory / "successful-cleanup.img",
+        protocol=protocol,
+        patches=patches,
+        data_block=data_block,
+        data_count=data_count,
+    )
+    result["extent_case"] = extent_case
+    result["logical_start"] = logical_start
+    result["unwritten"] = unwritten
+    _run_stable_unlinked_cleanup_remount(
+        result,
+        directory / "stable-remount.img",
+    )
+    return result
 
 
 @pytest.fixture(scope="session", params=("modern", "legacy"))
@@ -14062,6 +14702,51 @@ def test_cross_group_one_block_unlinked_cleanup_is_e2fsck_clean(
     jbd2_toolchain: dict[str, object],
 ) -> None:
     clean_image = cross_group_one_block_unlinked_cleanup_fixture[
+        "clean_image"
+    ]
+    assert isinstance(clean_image, Path)
+    _assert_e2fsck_clean(clean_image, jbd2_toolchain)
+
+
+def test_mount_reclaims_single_multiblock_depth0_unlinked_extent(
+    multiblock_depth0_unlinked_cleanup_fixture: dict[str, object],
+) -> None:
+    result = multiblock_depth0_unlinked_cleanup_fixture
+    protocol = result["protocol"]
+    extent_case = result["extent_case"]
+    data_segments = result["data_segments"]
+    assert protocol in {"modern", "legacy"}
+    assert isinstance(extent_case, str)
+    assert isinstance(data_segments, tuple)
+    assert result["stable_trace"] == ()
+    assert result["stable_sha256"] == result["clean_sha256"]
+    assert result["data_count"] in {2, 3}
+    assert result["logical_start"] in {7, 11}
+    if extent_case == "initialized-offset":
+        assert result["unwritten"] is False
+        assert len(data_segments) == 1
+        assert result["expected_home_writes"] == (
+            6 if protocol == "modern" else 5
+        )
+    else:
+        assert extent_case == "cross-group-unwritten-offset"
+        assert result["unwritten"] is True
+        assert tuple(segment["group"] for segment in data_segments) == (
+            3,
+            4,
+        )
+        assert result["data_gdt_homes"] == (2,)
+        assert result["expected_home_writes"] == (
+            7 if protocol == "modern" else 6
+        )
+    _assert_singleton_unlinked_cleanup_result(result)
+
+
+def test_multiblock_depth0_unlinked_cleanup_is_e2fsck_clean(
+    multiblock_depth0_unlinked_cleanup_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    clean_image = multiblock_depth0_unlinked_cleanup_fixture[
         "clean_image"
     ]
     assert isinstance(clean_image, Path)
@@ -14471,14 +15156,17 @@ def _write_ordinals_for_ext4_home(
     *,
     block_size: int = 1024,
 ) -> tuple[int, ...]:
-    sector = home * (block_size // 512)
+    sectors_per_block = block_size // 512
+    target_first = home * sectors_per_block
+    target_limit = target_first + sectors_per_block
     write_ordinal = 0
     matches: list[int] = []
     for kind, first_sector, sector_count in trace:
         if kind != "write":
             continue
         write_ordinal += 1
-        if first_sector == sector and sector_count == block_size // 512:
+        write_limit = first_sector + sector_count
+        if first_sector < target_limit and target_first < write_limit:
             matches.append(write_ordinal)
     return tuple(matches)
 

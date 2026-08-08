@@ -768,14 +768,18 @@ uniqueness, including modern duplicates and cross-protocol reuse, while the
 bounded legacy walk independently rejects cycles. Every referenced inode and
 applicable data map is then authenticated. Mount may transactionally clean an
 exact one-record union when it is either a linked depth-zero truncation already
-at zero size or an unlinked depth-zero deletion with zero or one initialized
-block and the qualified allocation/xattr shape. The sealed transaction removes
+at zero size or an unlinked depth-zero deletion with an empty root or one
+authenticated contiguous inline extent and the qualified allocation/xattr
+shape. That extent may have an initialized decoded length of 1..32768 blocks or
+an unwritten decoded length of 1..32767 blocks, with
+`logical_start + decoded_length <= 0xffffffff`; these are ext4 `ee_len` and
+logical-domain bounds rather than cleanup caps. The sealed transaction removes
 the modern slot or legacy head, updates and checksums the target inode, and for
-admitted deletions releases the exact data and inode allocation plus
-descriptor/super counters. Strict reload must prove the union empty before
-mount publication. A larger union or a structurally valid record outside those
-exact shapes returns the stable recovery-required refusal without partial
-cleanup or public mutation. Structural chain, locator, ownership, or
+admitted deletions releases the exact physical range and inode allocation plus
+every touched descriptor and super counter. Strict reload must prove the union
+empty before mount publication. A larger union or a structurally valid record
+outside those exact shapes returns the stable recovery-required refusal without
+partial cleanup or public mutation. Structural chain, locator, ownership, or
 duplicate-membership failures return corruption, while inode allocation and
 checksum failures preserve their specific corruption detail. Failed-mount
 retries clear and reuse a retained table when it is large enough rather than
@@ -795,11 +799,18 @@ and semantic limits remain explicit before any write path can be advertised.
 Focused discovery coverage exercises one- and two-inode legacy chains, a mixed
 legacy/modern union, stable refusal with same-binding plan reuse, corrupt
 legacy links and cycles, allocation/checksum failures, and cross-protocol
-duplicate rejection without writes. Exact singleton cleanup has modern and
-legacy zero-/one-block coverage across 1/2/4 KiB geometry, controlled 1 KiB
-write-prefix and durability-fence cases, and pinned e2fsprogs inspection of the
-admitted results. Unified discovery and cleanup still need broader
-qualification for longer chains, later modern blocks and large orphan files,
+duplicate rejection without writes. Exact singleton cleanup retains modern
+and legacy empty/one-block coverage across 1/2/4 KiB geometry, controlled 1
+KiB one-block write-prefix and durability-fence cases, and pinned e2fsprogs
+inspection. The 1 KiB profile also qualifies a three-block initialized
+logical-offset extent and a two-block unwritten logical-offset extent crossing
+two data groups, including exact coalesced credit, per-group allocation
+accounting, distinct nonzero payload preservation with no overlapping
+data-home write, a byte-identical zero-I/O clean remount, and pinned e2fsprogs
+inspection. Range-wide negative admission also covers a two-block extent with
+only its second allocation bit clear and a three-block extent with only its
+middle block aliased by a live inode. Unified discovery and cleanup still need
+broader qualification for longer chains, later modern blocks and large orphan files,
 additional ownership and deletion shapes, distinct-key hash collisions, and
 arena exhaustion or retained-too-small retry behavior.
 
