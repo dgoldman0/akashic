@@ -20,6 +20,20 @@ identities are tracked in a growable set, so a malformed ownership cycle or
 duplicated owner cannot free the same allocation twice. Container shape and
 count are still validated before child memory is read.
 
+`CV-OWNED-SPAN-OVERLAP? ( address bytes value -- flag )` reports whether a
+caller span intersects the retained root or any recursively owned allocation.
+`CV-OWNED-GRAPHS-DISJOINT? ( left right -- flag )` proves that two complete
+ownership graphs share no root or allocation span. Both predicates use an
+iterative, dynamically growing walk rather than a semantic node limit. They
+fail closed on malformed or wrapping geometry, internal duplicate/partial
+allocation ownership, allocation failure, an unexpected throw, or recursive
+entry by the same execution owner.
+
+Positive-length borrowed `DATA` is checked for nonwrapping canonical shape but
+is not registered or traversed: it lies outside the root's `CV-FREE` authority.
+Consequently these predicates prove the geometry of the complete owned graph,
+not the lifetime or disjointness of memory retained by a borrowed child.
+
 `CV-MAP-FIND ( key-a key-u map -- value | 0 )` is a fail-closed lookup. The
 caller key must have a length from zero through `CV-MAX-STRING-LEN`; a positive
 length requires a non-null address. The map must have a valid bounded map
