@@ -1035,17 +1035,22 @@ three map blocks in 1,431,070,159 guest steps under a scoped
 1,600,000,000-step watchdog, preserves all six homes without a payload write,
 and reaches a byte-identical zero-I/O remount. Multi-child and external-xattr
 production, legacy-protocol qualification, crash qualification, and pinned
-e2fsck acceptance remain pending for this tier. Separate focused modern-only
-1 KiB qualification covers one unlinked inode with slots 0 through 13 zero,
-one allocated all-zero triple-indirect root, no data, and root-only `i_blocks`.
-Measurement pins six metadata credits and one revoke. Stage and seal retain
-zero target entries, one singleton map-metadata release range, one map block,
-the root's exact revoke, and distinct `LEGACY-SPARSE-TRIPLE` authority; the
-staged verifier accepts that exact certificate and abort returns the writer and
-ownership scope clean with no home write. Checkpoint-certificate tampering
-with target-entry count, range count, range span, or map kind is refused.
-Focused negative admission covers a nonzero triple child, composition with a
-lower direct map, and aliasing the triple root with the external-xattr home. The
+e2fsck acceptance remain pending for this tier. Separate focused 1 KiB staging
+qualification covers one unlinked inode with slots 0 through 13 zero, one
+allocated all-zero triple-indirect root, no data, and root-only `i_blocks`
+under both orphan protocols. The modern case completes in 534,963,472 guest
+steps under its 800,000,000-step watchdog and pins six metadata credits, one
+revoke, and `MODERN_DATA_DELETE_FINAL`. The legacy case completes in
+529,113,934 steps under the same watchdog and pins five metadata credits, one
+revoke, `LEGACY_DATA_DELETE_FINAL`, and the exact legacy head and locator
+authority. Both stage and seal retain zero target entries, one singleton
+map-metadata release range, one map block, the root's exact revoke, and distinct
+`LEGACY-SPARSE-TRIPLE` authority; preplan and staged verification pass, and
+abort returns the writer and ownership scope clean with zero home writes. The
+modern case additionally refuses checkpoint-certificate tampering with
+target-entry count, range count, range span, or map kind. Focused negative
+admission covers a nonzero triple child, composition with a lower direct map,
+and aliasing the triple root with the external-xattr home. The
 single-record modern production journey emits and checkpoints the cleanup in
 1,301,139,781 guest steps under its 1,500,000,000-step watchdog. Its exact
 37-write/24-flush trace has six distinct ext4 cleanup homes: the primary super
@@ -1054,8 +1059,9 @@ and orphan file are each written once. The released triple-root home is never
 written; its allocation bit and the target inode bit clear, all free counters
 return to their expected values, and a byte-identical zero-I/O stable remount
 completes in 55,196,975 guest steps under the standard 1,200,000,000-step
-watchdog. Crash recovery, e2fsck acceptance, and legacy-orphan-protocol
-qualification remain pending for this shape. A separate
+watchdog. Production and remount under the legacy orphan protocol, crash
+recovery under either protocol, and e2fsck acceptance remain pending for this
+shape. A separate
 checksum-valid modern orphan-file fixture maps 31 logical blocks through a
 preserved depth-1 external extent node. Linked production cleanup retains its
 exact 34-write/24-flush trace, completes in 1,111,798,161 steps, and reaches a

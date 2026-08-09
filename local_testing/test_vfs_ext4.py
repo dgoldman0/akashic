@@ -19243,14 +19243,45 @@ def test_unlinked_preflight_accepts_sparse_double_without_single_root(
 
 
 @pytest.mark.parametrize(
-    "shape",
-    ("empty-root", "multi-child", "multi-child-xattr", "empty-triple-root"),
+    ("shape", "protocol"),
+    (
+        pytest.param("empty-root", "modern", id="empty-root"),
+        pytest.param("multi-child", "modern", id="multi-child"),
+        pytest.param(
+            "multi-child-xattr",
+            "modern",
+            id="multi-child-xattr",
+        ),
+        pytest.param(
+            "empty-triple-root",
+            "modern",
+            id="empty-triple-root",
+        ),
+        pytest.param(
+            "empty-triple-root",
+            "legacy",
+            id="legacy-empty-triple-root",
+        ),
+    ),
 )
 def test_legacy_indirect_stages_canonical_map_revokes(
     canonical_images: dict[str, Path],
     shape: str,
+    protocol: str,
 ) -> None:
     path = canonical_images["primary-1k-i256"]
+    modern = protocol == "modern"
+    expected_record_kind = (
+        "_EXT4-OK-MODERN" if modern else "_EXT4-OK-LEGACY"
+    )
+    expected_mode = (
+        "_EXT4-JCPM-ORPHAN-MODERN-DATA-DELETE-FINAL"
+        if modern
+        else "_EXT4-JCPM-ORPHAN-LEGACY-DATA-DELETE-FINAL"
+    )
+    expected_modern = 1 if modern else 0
+    expected_legacy = 0 if modern else 1
+    expected_orphan_home = 1313 if modern else 1
     base_patches: tuple[tuple[int, bytes], ...] | None = None
     xattr_block = 0
     empty_triple_root = False
@@ -19270,7 +19301,7 @@ def test_legacy_indirect_stages_canonical_map_revokes(
         base_patches, base_data_ranges, xattr_block = (
             _unlinked_orphan_external_xattr_patches(
                 path,
-                protocol="modern",
+                protocol=protocol,
                 data_blocks=0,
             )
         )
@@ -19290,7 +19321,7 @@ def test_legacy_indirect_stages_canonical_map_revokes(
         expected_counts = (0, 1)
     patches, data_ranges, map_ranges = _legacy_indirect_unlinked_orphan_patches(
         path,
-        protocol="modern",
+        protocol=protocol,
         direct_slots=direct_slots,
         single_slots=single_slots,
         double_children=double_children,
@@ -19303,6 +19334,15 @@ def test_legacy_indirect_stages_canonical_map_revokes(
     )
     combined_ranges = (*data_ranges, *map_ranges)
     assert (len(data_ranges), len(map_ranges)) == expected_counts
+    superblock = dict(patches)[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    _, _, inode_offset = _ext4_inode_record(path, 18)
+    target_home, target_offset = divmod(inode_offset, block_size)
+    with path.open("rb") as source:
+        source.seek(target_home * block_size)
+        expected_target_image = source.read(block_size)
+    assert len(expected_target_image) == block_size
+    expected_target_crc = _crc32c_raw(expected_target_image)
     expected_revoke_homes = tuple(first for first, _ in map_ranges) + (
         (xattr_block,) if xattr_block else ()
     )
@@ -19311,13 +19351,29 @@ def test_legacy_indirect_stages_canonical_map_revokes(
         "_EXT4-JEA-RELEASE" if xattr_block else "_EXT4-JEA-NONE"
     )
     if empty_triple_root:
+        expected_meta = 6 if modern else 5
         expected_map_kind = "_EXT4-JDM-LEGACY-SPARSE-TRIPLE"
         triple_home = map_ranges[0][0]
         map_shape_checks = [
             f"_EXT4-JFI-LEGACY-TRIPLE-HOME @ {triple_home} =",
             "_EXT4-JFI-LEGACY-INDIRECT-HOME @ 0=",
             "_EXT4-JFI-LEGACY-DOUBLE-HOME @ 0=",
-            "_SD-S-META 6 =",
+            f"_SD-S-META {expected_meta} =",
+            (
+                "_SD-S-WRITER _EXT4-JWR.META-CREDIT + @ "
+                f"{expected_meta} ="
+            ),
+            (
+                "_SD-S-WRITER _EXT4-JWR.META-USED + @ "
+                f"{expected_meta} ="
+            ),
+            (
+                "_SD-S-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                f"{expected_meta} ="
+            ),
+            "_SD-S-WRITER _EXT4-JWR.DATA-CREDIT + @ 0=",
+            "_SD-S-WRITER _EXT4-JWR.DATA-USED + @ 0=",
+            "_SD-S-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
         ]
     else:
         expected_map_kind = "_EXT4-JDM-LEGACY-SPARSE-DOUBLE"
@@ -19339,12 +19395,16 @@ def test_legacy_indirect_stages_canonical_map_revokes(
             ),
             "_EXT4-JFI-LEGACY-TRIPLE-HOME @ 0=",
         ]
-    marker = f"EXT4-LEGACY-SPARSE-{shape.upper()}-STAGED"
-    abort_marker = f"EXT4-LEGACY-SPARSE-{shape.upper()}-ABORT-CLEAN"
+    marker = (
+        f"EXT4-{protocol.upper()}-LEGACY-SPARSE-{shape.upper()}-STAGED"
+    )
+    abort_marker = (
+        f"EXT4-{protocol.upper()}-LEGACY-SPARSE-{shape.upper()}-ABORT-CLEAN"
+    )
     tamper_marker = ""
     tamper_probe: list[str] = []
-    if empty_triple_root:
-        tamper_marker = "EXT4-LEGACY-SPARSE-TRIPLE-CP-TAMPER-REFUSED"
+    if empty_triple_root and modern:
+        tamper_marker = "EXT4-MODERN-LEGACY-SPARSE-TRIPLE-CP-TAMPER-REFUSED"
         tamper_probe = [
             "1 _SD-S-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + !",
             (
@@ -19463,7 +19523,28 @@ def test_legacy_indirect_stages_canonical_map_revokes(
                             "_SD-S-MOUNT-IOR VFS-IOR-REASON "
                             "VFS-R-UNSUPPORTED ="
                         ),
+                        (
+                            "_SD-S-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
                         "_SD-S-FIND-IOR 0=",
+                        "_SD-S-RECORD 0<>",
+                        "_SD-S-RECORD _EXT4-OE.INO + @ 18 =",
+                        (
+                            "_SD-S-RECORD _EXT4-OE.KIND + @ "
+                            f"{expected_record_kind} ="
+                        ),
+                        "_SD-S-RECORD _EXT4-OE.LOCATOR-A + @ 0=",
+                        "_SD-S-RECORD _EXT4-OE.LOCATOR-B + @ 0=",
+                        "_SD-S-CTX _EXT4-C.O.ACTIVE + @ 1 =",
+                        (
+                            "_SD-S-CTX _EXT4-C.O.MODERN-ACTIVE + @ "
+                            f"{expected_modern} ="
+                        ),
+                        (
+                            "_SD-S-CTX _EXT4-C.O.LEGACY-ACTIVE + @ "
+                            f"{expected_legacy} ="
+                        ),
                         "_SD-S-JOURNAL-IOR 0=",
                         "_SD-S-CERT-BEGIN-IOR 0=",
                         "_SD-S-MEASURE-IOR 0=",
@@ -19520,6 +19601,26 @@ def test_legacy_indirect_stages_canonical_map_revokes(
                         f"_EXT4-JFI-EA-ACTION @ {expected_ea_action} =",
                         *map_shape_checks,
                         (
+                            "_SD-S-WRITER _EXT4-JWR.CP-MODE + @ "
+                            f"{expected_mode} ="
+                        ),
+                        "_SD-S-WRITER _EXT4-JWR.CP-O-INO + @ 18 =",
+                        "_SD-S-WRITER _EXT4-JWR.CP-O-LOGICAL + @ 0=",
+                        "_SD-S-WRITER _EXT4-JWR.CP-O-SLOT + @ 0=",
+                        (
+                            "_SD-S-WRITER _EXT4-JWR.CP-O-HOME + @ "
+                            f"{expected_orphan_home} ="
+                        ),
+                        "_SD-S-WRITER _EXT4-JWR.CP-PRE-ACTIVE + @ 1 =",
+                        (
+                            "_SD-S-WRITER _EXT4-JWR.CP-PRE-MODERN + @ "
+                            f"{expected_modern} ="
+                        ),
+                        (
+                            "_SD-S-WRITER _EXT4-JWR.CP-PRE-LEGACY + @ "
+                            f"{expected_legacy} ="
+                        ),
+                        (
                             "_SD-S-WRITER "
                             "_EXT4-JWR.CP-DATA-MAP-KIND + @ "
                             f"{expected_map_kind} ="
@@ -19527,6 +19628,22 @@ def test_legacy_indirect_stages_canonical_map_revokes(
                         (
                             "_SD-S-WRITER "
                             f"_EXT4-JWR.CP-TARGET-ENTRIES + @ {len(data_ranges)} ="
+                        ),
+                        (
+                            "_SD-S-WRITER _EXT4-JWR.CP-TARGET-GEN + @ "
+                            "0x18181818 ="
+                        ),
+                        (
+                            "_SD-S-WRITER _EXT4-JWR.CP-TARGET-HOME + @ "
+                            f"{target_home} ="
+                        ),
+                        (
+                            "_SD-S-WRITER _EXT4-JWR.CP-TARGET-OFF + @ "
+                            f"{target_offset} ="
+                        ),
+                        (
+                            "_SD-S-WRITER _EXT4-JWR.CP-TARGET-CRC + @ "
+                            f"{expected_target_crc} ="
                         ),
                         (
                             "_SD-S-WRITER "
@@ -19575,6 +19692,7 @@ def test_legacy_indirect_stages_canonical_map_revokes(
                     [
                         "_SD-S-ABORT-IOR 0=",
                         "_SD-S-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_SD-S-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
                         "_EXT4-JFO-CERT-SCOPE @ 0=",
                         "_EXT4-JFO-CERT-VALID @ 0=",
                         *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
