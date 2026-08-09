@@ -1045,10 +1045,17 @@ staged verifier accepts that exact certificate and abort returns the writer and
 ownership scope clean with no home write. Checkpoint-certificate tampering
 with target-entry count, range count, range span, or map kind is refused.
 Focused negative admission covers a nonzero triple child, composition with a
-lower direct map, and aliasing the triple root with the external-xattr home.
-This is not qualification of production union drain, journal emission or
-checkpoint, crash recovery, remount, or e2fsck acceptance;
-legacy-orphan-protocol qualification is also pending for this shape. A separate
+lower direct map, and aliasing the triple root with the external-xattr home. The
+single-record modern production journey emits and checkpoints the cleanup in
+1,301,139,781 guest steps under its 1,500,000,000-step watchdog. Its exact
+37-write/24-flush trace has six distinct ext4 cleanup homes: the primary super
+is written three times, while the GDT, block bitmap, inode bitmap, inode table,
+and orphan file are each written once. The released triple-root home is never
+written; its allocation bit and the target inode bit clear, all free counters
+return to their expected values, and a byte-identical zero-I/O stable remount
+completes in 55,196,975 guest steps under the standard 1,200,000,000-step
+watchdog. Crash recovery, e2fsck acceptance, and legacy-orphan-protocol
+qualification remain pending for this shape. A separate
 checksum-valid modern orphan-file fixture maps 31 logical blocks through a
 preserved depth-1 external extent node. Linked production cleanup retains its
 exact 34-write/24-flush trace, completes in 1,111,798,161 steps, and reaches a

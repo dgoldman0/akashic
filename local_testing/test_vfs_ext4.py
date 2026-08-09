@@ -19960,7 +19960,7 @@ def test_legacy_single_indirect_rejects_node_data_alias(
 
 @pytest.mark.parametrize(
     "map_shape",
-    ("single-indirect", "sparse-double"),
+    ("single-indirect", "sparse-double", "empty-triple-root"),
 )
 def test_mount_reclaims_legacy_indirect_orphan(
     canonical_images: dict[str, Path],
@@ -19968,17 +19968,24 @@ def test_mount_reclaims_legacy_indirect_orphan(
     map_shape: str,
 ) -> None:
     source = canonical_images["primary-1k-i256"]
+    empty_triple_root = False
     if map_shape == "single-indirect":
         direct_slots = (0,)
         single_slots = (0, 3)
         double_children: tuple[tuple[int, tuple[int, ...]], ...] = ()
         max_steps = _LEGACY_MAP_RECOVERY_MAX_STEPS
-    else:
-        assert map_shape == "sparse-double"
+    elif map_shape == "sparse-double":
         direct_slots = (5,)
         single_slots = (3,)
         double_children = ((2, (4,)),)
         max_steps = _LEGACY_SPARSE_DOUBLE_RECOVERY_MAX_STEPS
+    else:
+        assert map_shape == "empty-triple-root"
+        direct_slots = ()
+        single_slots = ()
+        double_children = ()
+        empty_triple_root = True
+        max_steps = _LEGACY_MAP_RECOVERY_MAX_STEPS
     patches, data_ranges, map_ranges = (
         _legacy_indirect_unlinked_orphan_patches(
             source,
@@ -19986,6 +19993,7 @@ def test_mount_reclaims_legacy_indirect_orphan(
             direct_slots=direct_slots,
             single_slots=single_slots,
             double_children=double_children,
+            empty_triple_root=empty_triple_root,
             # The gapped auth-only fixture pins canonical boundaries; keeping
             # this lifecycle case contiguous avoids repeated accounting walks.
             physical_gap=0,
@@ -19993,6 +20001,9 @@ def test_mount_reclaims_legacy_indirect_orphan(
             size_bytes=(1 << 32) + 777,
         )
     )
+    if empty_triple_root:
+        assert data_ranges == ()
+        assert len(map_ranges) == 1
     released_ranges = (*data_ranges, *map_ranges)
     assert all(count == 1 for _, count in released_ranges)
     released_blocks = tuple(first for first, _ in released_ranges)
@@ -20016,6 +20027,56 @@ def test_mount_reclaims_legacy_indirect_orphan(
     assert isinstance(clean_sha256, str)
     _assert_emitted(output, "EXT4-MODERN-UNLINKED-ORPHAN-RECLAIMED")
     assert result["expected_home_writes"] == 6
+    if empty_triple_root:
+        trace = result["success_trace"]
+        block_size = result["block_size"]
+        inode_home = result["inode_home"]
+        block_bitmap_home = result["block_bitmap_home"]
+        inode_bitmap_home = result["inode_bitmap_home"]
+        gdt_home = result["gdt_home"]
+        assert isinstance(trace, tuple)
+        assert isinstance(block_size, int)
+        assert isinstance(inode_home, int)
+        assert isinstance(block_bitmap_home, int)
+        assert isinstance(inode_bitmap_home, int)
+        assert isinstance(gdt_home, int)
+        assert sum(kind == "write" for kind, _, _ in trace) == 37
+        assert sum(kind == "flush" for kind, _, _ in trace) == 24
+
+        superblock = dict(patches)[1024]
+        orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+        _, orphan_inode, _ = _ext4_inode_record(
+            source,
+            orphan_inode_number,
+        )
+        orphan_home = _extent_root_physical(orphan_inode, 0)
+        root_home = released_blocks[0]
+        assert len(
+            _write_ordinals_for_ext4_home(
+                trace,
+                1,
+                block_size=block_size,
+            )
+        ) == 3
+        for home in (
+            gdt_home,
+            block_bitmap_home,
+            inode_bitmap_home,
+            inode_home,
+            orphan_home,
+        ):
+            assert len(
+                _write_ordinals_for_ext4_home(
+                    trace,
+                    home,
+                    block_size=block_size,
+                )
+            ) == 1
+        assert not _write_ordinals_for_ext4_home(
+            trace,
+            root_home,
+            block_size=block_size,
+        )
 
     stable_marker = f"EXT4-LEGACY-{map_shape.upper()}-STABLE"
     stable_path = tmp_path / f"legacy-{map_shape}-stable.img"
