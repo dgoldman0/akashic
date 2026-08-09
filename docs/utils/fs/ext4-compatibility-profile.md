@@ -787,8 +787,10 @@ applicable data map is then authenticated.
 Before its first cleanup write, mount authenticates and exactly measures every
 record in the complete union. Each record must be either a linked depth-zero
 truncation already at zero size or an unlinked deletion with an empty or
-one-to-four-entry inline depth-zero extent root, or a legacy direct-only map
-using any of the 12 direct slots with all three indirect roots zero. An
+one-to-four-entry inline depth-zero extent root, a resident depth-1 root with
+one to four checksum-valid external leaves, or a legacy map using any of the
+12 direct slots and one optional complete single-indirect block while its
+double- and triple-indirect roots remain zero. An
 unlinked target may retain any
 authenticated nonnegative 63-bit size because deletion releases its complete
 map and inode rather than preserving an EOF-selected tail. It may reference one
@@ -802,13 +804,18 @@ have an initialized decoded length of 1..32768 blocks or an unwritten decoded
 length of 1..32767 blocks, with
 `logical_start + decoded_length <= 0xffffffff`; these are ext4 `ee_len` and
 logical-domain bounds rather than cleanup caps. Logical and physical ordering,
-aggregate data-plus-xattr `i_blocks`, every exact release range, and the zero
-inactive tail are authenticated and sealed together. Legacy zero direct slots
-are holes; nonzero slots become ordered singleton ranges, duplicate physical
-pointers are corruption, and any nonzero indirect root is unsupported
-recovery. The optional xattr block is independent of both map families and
-must not overlap their data ranges. If any record is outside those per-record
-shapes, the complete
+aggregate data-plus-map-metadata-plus-xattr `i_blocks`, every exact release
+range, and the zero inactive tail are authenticated and sealed together. Each
+resident root key must match the first logical block in its complete leaf, and
+the leaves must remain ordered and nonoverlapping across root bounds. Their
+blocks join the exact release vector and each receives a revoke. Legacy zero
+direct and single-indirect slots are holes; occupied direct slots followed by
+occupied single-indirect slots become ordered singleton data ranges, followed
+by the pointer-block singleton. Duplicate data pointers or a data/pointer-block
+alias are corruption, while a nonzero double- or triple-indirect root remains
+unsupported recovery. The optional xattr block is independent of both map
+families and must not overlap their data ranges. If any record is outside
+those per-record shapes, the complete
 union refuses before writer allocation or cleanup mutation. The largest exact
 current metadata credit across all records sizes one reusable writer, with one
 derived extra slot when a shared-EA decrement could become a final-owner
@@ -951,18 +958,33 @@ inactive tail. Persistence-traced production measures 1,786,988,013 modern and
 either clean remount measures 55,772,107. The corresponding direct
 stage/seal/abort workloads measured 615,185,969 and 825,905,086 steps. These
 watchdogs are qualification guards, not implementation capacities.
-Legacy-direct deletion qualification now fills all 12 direct slots under both
+Resident depth-1 deletion qualification admits one through four external
+leaves and every extent entry that fits each mounted block. A 13-entry
+one-leaf regression crosses the old 12-slot boundary, while a four-leaf
+fixture retains six data ranges followed by four leaf singletons and stages
+their exact revokes under both orphan protocols. Focused modern production
+reclaims all data and leaf blocks under the unchanged 1,800,000,000-step
+watchdog without writing released payload or leaf homes. Deeper extent trees
+remain unsupported for deletion.
+Legacy-direct deletion qualification fills all 12 direct slots under both
 orphan protocols while retaining 12 ordered singleton certificate/checkpoint
 ranges and an explicit map-family discriminator. Sparse slots 0, 5, and 11
 compact in slot order; duplicate pointers and mismatched `i_blocks` are corrupt,
-and a nonzero indirect root is unsupported. Contiguous singleton execution is
-combined only after exact-vector validation. Full production cleanup with
+and nonzero double- or triple-indirect roots are unsupported. Contiguous
+singleton execution is combined only after exact-vector validation. Full
+production cleanup with
 `i_size = 2^32 + 777` measures 1,156,337,987 modern and 1,157,813,068 legacy
 guest steps under a scoped 1,300,000,000-step watchdog and leaves released
 payload bytes unchanged. A maximum-union stage/abort regression adds the
 separate unique external-xattr block and exercises all 13 owner ranges in
 577,776,029 steps. Pinned e2fsck acceptance remains a release gate for this
-shape. A separate
+shape. A separate single-indirect tier fills all 12 direct slots plus the final
+1 KiB pointer entry, retains data then pointer-node authority, stages the exact
+node revoke, and rejects a node/data self-alias. Focused modern production
+releases three data blocks plus the pointer block under the unchanged
+1,300,000,000-step watchdog and reaches a byte-identical zero-I/O remount.
+Legacy-protocol, maximum-fanout, external-xattr, crash, and pinned e2fsck
+qualification remain pending for this tier. A separate
 checksum-valid modern orphan-file fixture maps 31 logical blocks through a
 preserved depth-1 external extent node. Linked production cleanup retains its
 exact 34-write/24-flush trace, completes in 1,111,798,161 steps, and reaches a

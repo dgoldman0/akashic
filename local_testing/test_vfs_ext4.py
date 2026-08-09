@@ -2109,6 +2109,104 @@ def _legacy_direct_unlinked_orphan_patches(
     return tuple(patch_map.items()), direct_ranges
 
 
+def _legacy_single_indirect_unlinked_orphan_patches(
+    path: Path,
+    *,
+    protocol: str,
+    direct_slots: tuple[int, ...] = (0,),
+    indirect_slots: tuple[int, ...] = (0, 3),
+    inode_number: int = 18,
+    physical_gap: int = 1,
+    seed_payloads: bool = False,
+    seed_gap_payloads: bool = False,
+    size_bytes: int = 0,
+    base_patches: tuple[tuple[int, bytes], ...] | None = None,
+) -> tuple[
+    tuple[tuple[int, bytes], ...],
+    tuple[tuple[int, int], ...],
+    int,
+]:
+    """Give one unlinked legacy inode a complete single-indirect map."""
+    assert protocol in {"modern", "legacy"}
+    assert tuple(sorted(set(direct_slots))) == direct_slots
+    assert not direct_slots or (0 <= direct_slots[0] and direct_slots[-1] < 12)
+    assert indirect_slots
+    assert tuple(sorted(set(indirect_slots))) == indirect_slots
+    assert physical_gap >= 0
+    assert 0 <= size_bytes < (1 << 63)
+
+    with path.open("rb") as source:
+        source.seek(1024)
+        source_superblock = source.read(1024)
+    assert len(source_superblock) == 1024
+    source_block_size = 1024 << struct.unpack_from(
+        "<I", source_superblock, 0x18
+    )[0]
+    pointer_count = source_block_size // 4
+    assert 0 <= indirect_slots[0] and indirect_slots[-1] < pointer_count
+
+    data_count = len(direct_slots) + len(indirect_slots)
+    allocation_specs = tuple(
+        (2 * index, 1, False) for index in range(data_count + 1)
+    )
+    patches, allocated_ranges = _allocate_unlinked_extent_ranges(
+        path,
+        protocol=protocol,
+        extent_specs=allocation_specs,
+        inode_number=inode_number,
+        physical_gap=physical_gap,
+        seed_payloads=seed_payloads,
+        seed_gap_payloads=seed_gap_payloads,
+        base_patches=base_patches,
+    )
+    assert len(allocated_ranges) == data_count + 1
+    assert all(count == 1 for _, count in allocated_ranges)
+    data_ranges = allocated_ranges[:data_count]
+    indirect_home = allocated_ranges[-1][0]
+
+    patch_map = dict(patches)
+    superblock = patch_map[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert block_size == source_block_size
+    direct_ranges = data_ranges[: len(direct_slots)]
+    indirect_ranges = data_ranges[len(direct_slots) :]
+    pointer_block = bytearray(block_size)
+    for slot, (physical, count) in zip(
+        indirect_slots,
+        indirect_ranges,
+        strict=True,
+    ):
+        assert count == 1
+        struct.pack_into("<I", pointer_block, slot * 4, physical)
+    patch_map[indirect_home * block_size] = bytes(pointer_block)
+
+    _, _, inode_offset = _ext4_inode_record(path, inode_number)
+    inode = bytearray(patch_map[inode_offset])
+    flags = struct.unpack_from("<I", inode, 0x20)[0]
+    assert flags & 0x0008_0000
+    struct.pack_into("<I", inode, 0x20, flags & ~0x0008_0000)
+    struct.pack_into("<I", inode, 0x04, size_bytes & 0xFFFF_FFFF)
+    struct.pack_into("<I", inode, 0x6C, size_bytes >> 32)
+    inode[0x28:0x64] = bytes(60)
+    for slot, (physical, count) in zip(
+        direct_slots,
+        direct_ranges,
+        strict=True,
+    ):
+        assert count == 1
+        struct.pack_into("<I", inode, 0x28 + slot * 4, physical)
+    struct.pack_into("<I", inode, 0x28 + 12 * 4, indirect_home)
+    sectors_per_block = block_size // 512
+    struct.pack_into("<I", inode, 0x1C, (data_count + 1) * sectors_per_block)
+    struct.pack_into("<H", inode, 0x74, 0)
+    patch_map[inode_offset] = _inode_with_checksum(
+        superblock,
+        inode_number,
+        inode,
+    )
+    return tuple(patch_map.items()), data_ranges, indirect_home
+
+
 def _single_extent_unlinked_orphan_patches(
     path: Path,
     *,
@@ -17033,7 +17131,7 @@ def _run_stable_unlinked_cleanup_remount(
 _MULTI_ORPHAN_RECOVERY_MAX_STEPS = 1_500_000_000
 _MULTI_ORPHAN_DATA_RECOVERY_MAX_STEPS = 3_000_000_000
 _EXTERNAL_XATTR_RECOVERY_MAX_STEPS = 1_500_000_000
-_LEGACY_DIRECT_RECOVERY_MAX_STEPS = 1_300_000_000
+_LEGACY_MAP_RECOVERY_MAX_STEPS = 1_300_000_000
 _DEPTH1_EXTENT_RECOVERY_MAX_STEPS = 1_800_000_000
 
 
@@ -18043,7 +18141,7 @@ def test_legacy_direct_unlinked_head_stages_all_twelve_slots(
     (
         ("duplicate", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
         ("i-blocks", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
-        ("indirect", "VFS-R-UNSUPPORTED", "EXT4-D-RECOVERY"),
+        ("double-indirect", "VFS-R-UNSUPPORTED", "EXT4-D-RECOVERY"),
     ),
 )
 def test_legacy_direct_unlinked_preflight_rejects_unsafe_shapes(
@@ -18076,9 +18174,9 @@ def test_legacy_direct_unlinked_preflight_rejects_unsafe_shapes(
             raw_blocks + block_size // 512,
         )
     else:
-        assert case == "indirect"
+        assert case == "double-indirect"
         struct.pack_into("<I", inode, 0x28 + 4, 0)
-        struct.pack_into("<I", inode, 0x28 + 12 * 4, second_physical)
+        struct.pack_into("<I", inode, 0x28 + 13 * 4, second_physical)
         patch_map[second_physical * block_size] = bytes(block_size)
     patch_map[inode_offset] = _inode_with_checksum(superblock, 18, inode)
     marker = f"EXT4-LEGACY-DIRECT-{case.upper()}-REFUSED"
@@ -18215,6 +18313,432 @@ def test_legacy_direct_decoder_compacts_sparse_slots_in_order(
         patches=patches,
     )
     _assert_emitted(output, "EXT4-LEGACY-DIRECT-SPARSE-ORDERED")
+
+
+def test_unlinked_preflight_accepts_legacy_single_indirect(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches, data_ranges, indirect_home = (
+        _legacy_single_indirect_unlinked_orphan_patches(
+            path,
+            protocol="modern",
+            direct_slots=tuple(range(12)),
+            indirect_slots=(255,),
+            seed_payloads=True,
+            seed_gap_payloads=True,
+            size_bytes=(1 << 32) + 777,
+        )
+    )
+    combined_ranges = (*data_ranges, (indirect_home, 1))
+    assert len(data_ranges) == 13
+    range_checks: list[str] = []
+    for index, (physical, count) in enumerate(combined_ranges):
+        range_checks.extend(
+            (
+                f"{index} _EXT4-JFI-RANGE @ {physical} =",
+                f"{index} _EXT4-JFI-RANGE CELL+ @ {count} =",
+                f"{index} _EXT4-JFO-CERT-RANGE @ {physical} =",
+                f"{index} _EXT4-JFO-CERT-RANGE CELL+ @ {count} =",
+            )
+        )
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _LI-IOR CONSTANT _LI-V"
+            ),
+            "_LI-V _EXT4-CTX CONSTANT _LI-CTX",
+            (
+                "_LI-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _LI-FIND-IOR CONSTANT _LI-RECORD"
+            ),
+            "_LI-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _LI-JOURNAL-IOR",
+            "_EXT4-JFO-CERT-BEGIN CONSTANT _LI-CERT-BEGIN-IOR",
+            "_LI-RECORD _EXT4-JFI-RECORD !",
+            "_LI-CTX _EXT4-JFI-CTX !",
+            "DEPTH CONSTANT _LI-DEPTH-BEFORE",
+            "_EXT4-JFI-AUTH-PREFLIGHT CONSTANT _LI-PREFLIGHT-IOR",
+            "DEPTH CONSTANT _LI-DEPTH-AFTER",
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_LI-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_LI-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_LI-FIND-IOR 0=",
+                        "_LI-JOURNAL-IOR 0=",
+                        "_LI-CERT-BEGIN-IOR 0=",
+                        "_LI-PREFLIGHT-IOR 0=",
+                        "_LI-DEPTH-BEFORE _LI-DEPTH-AFTER =",
+                        (
+                            "_EXT4-JFI-DATA-MAP-KIND @ "
+                            "_EXT4-JDM-LEGACY-SINGLE-INDIRECT ="
+                        ),
+                        f"_EXT4-JFI-DATA-ENTRIES @ {len(data_ranges)} =",
+                        f"_EXT4-JFI-DATA-BLOCKS @ {len(data_ranges)} =",
+                        "_EXT4-JFI-MAP-ENTRIES @ 1 =",
+                        "_EXT4-JFI-MAP-BLOCKS @ 1 =",
+                        f"_EXT4-JFI-RANGE-COUNT {len(combined_ranges)} =",
+                        f"_EXT4-JFI-RANGE-BLOCKS {len(combined_ranges)} =",
+                        f"_EXT4-JFI-ACCOUNTED-BLOCKS {len(combined_ranges)} =",
+                        f"_EXT4-JFI-RELEASE-BLOCKS {len(combined_ranges)} =",
+                        "_EXT4-JFI-REVOKE-COUNT 1 =",
+                        *range_checks,
+                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
+                        "_EXT4-JFO-CERT-VALID @ 0<>",
+                        (
+                            "_EXT4-JFO-CERT-DATA-MAP-KIND @ "
+                            "_EXT4-JDM-LEGACY-SINGLE-INDIRECT ="
+                        ),
+                        (
+                            "_EXT4-JFO-CERT-RANGE-COUNT @ "
+                            f"{len(combined_ranges)} ="
+                        ),
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                        "_LI-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-LEGACY-SINGLE-INDIRECT-PREFLIGHT" THEN'
+            ),
+            "_EXT4-JFO-CERT-END",
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-LEGACY-SINGLE-INDIRECT-PREFLIGHT")
+
+
+def test_legacy_single_indirect_stages_exact_root_revoke(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches, data_ranges, indirect_home = (
+        _legacy_single_indirect_unlinked_orphan_patches(
+            path,
+            protocol="modern",
+            direct_slots=(0,),
+            indirect_slots=(0, 3),
+            physical_gap=0,
+            seed_payloads=True,
+        )
+    )
+    combined_ranges = (*data_ranges, (indirect_home, 1))
+    cp_range_checks: list[str] = []
+    for index, (physical, count) in enumerate(combined_ranges):
+        cp_range_checks.extend(
+            (
+                (
+                    f"{index} _LI-S-WRITER "
+                    f"_EXT4-JWR-CP-DELETE-RANGE @ {physical} ="
+                ),
+                (
+                    f"{index} _LI-S-WRITER "
+                    "_EXT4-JWR-CP-DELETE-RANGE CELL+ "
+                    f"@ {count} ="
+                ),
+            )
+        )
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            "T-ARENA CONSTANT _LI-S-ARENA",
+            (
+                "_LI-S-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _LI-S-MOUNT-IOR CONSTANT _LI-S-V"
+            ),
+            "_LI-S-V _EXT4-CTX CONSTANT _LI-S-CTX",
+            (
+                "_LI-S-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _LI-S-FIND-IOR CONSTANT _LI-S-RECORD"
+            ),
+            (
+                "_LI-S-CTX _EXT4-VALIDATE-JOURNAL "
+                "CONSTANT _LI-S-JOURNAL-IOR"
+            ),
+            "_EXT4-JFO-CERT-BEGIN CONSTANT _LI-S-CERT-BEGIN-IOR",
+            (
+                "_LI-S-RECORD _LI-S-CTX _EXT4-MEASURE-ORPHAN-CLEANUP "
+                "CONSTANT _LI-S-MEASURE-IOR CONSTANT _LI-S-REVOKE "
+                "CONSTANT _LI-S-META"
+            ),
+            "-1 _LI-S-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "_LI-S-META 0 _LI-S-REVOKE _LI-S-CTX "
+                "_EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _LI-S-WRITER-IOR CONSTANT _LI-S-WRITER"
+            ),
+            (
+                "_LI-S-META 0 _LI-S-REVOKE _LI-S-WRITER "
+                "_EXT4-JTX-BEGIN "
+                "CONSTANT _LI-S-BEGIN-IOR CONSTANT _LI-S-TX"
+            ),
+            "DEPTH CONSTANT _LI-S-DEPTH-BEFORE",
+            (
+                "_LI-S-RECORD _LI-S-TX _EXT4-JTX-STAGE-ORPHAN-CLEANUP "
+                "CONSTANT _LI-S-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _LI-S-DEPTH-AFTER",
+            (
+                "_LI-S-WRITER _LI-S-CTX _EXT4-JWR-ORPHAN-PREPLAN "
+                "CONSTANT _LI-S-PREPLAN-IOR"
+            ),
+            (
+                "_LI-S-WRITER _EXT4-JWR-ORPHAN-STAGED? "
+                "CONSTANT _LI-S-STAGED-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_LI-S-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        "_LI-S-FIND-IOR 0=",
+                        "_LI-S-JOURNAL-IOR 0=",
+                        "_LI-S-CERT-BEGIN-IOR 0=",
+                        "_LI-S-MEASURE-IOR 0=",
+                        "_LI-S-META 0>",
+                        "_LI-S-REVOKE 1 =",
+                        "_LI-S-WRITER-IOR 0=",
+                        "_LI-S-BEGIN-IOR 0=",
+                        "_LI-S-STAGE-IOR 0=",
+                        "_LI-S-DEPTH-BEFORE _LI-S-DEPTH-AFTER =",
+                        "_LI-S-PREPLAN-IOR 0=",
+                        "_LI-S-STAGED-IOR 0=",
+                        (
+                            "_LI-S-WRITER _EXT4-JWR.REVOKE-USED + @ "
+                            "1 ="
+                        ),
+                        (
+                            "_LI-S-WRITER _EXT4-JWR.REVOKE-CREDIT + @ "
+                            "1 ="
+                        ),
+                        (
+                            "_LI-S-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ "
+                            "1 ="
+                        ),
+                        (
+                            "0 _LI-S-WRITER _EXT4-JWR-REVOKE-ENTRY @ "
+                            f"{indirect_home} ="
+                        ),
+                        (
+                            "0 _LI-S-WRITER _EXT4-JWR-REVOKE-ENTRY "
+                            "CELL+ @ _EXT4-JE-ACTIVE ="
+                        ),
+                        "_LI-S-WRITER _EXT4-JFI-REVOKES-EXACT?",
+                        (
+                            "_LI-S-WRITER "
+                            "_EXT4-JWR.CP-DATA-MAP-KIND + @ "
+                            "_EXT4-JDM-LEGACY-SINGLE-INDIRECT ="
+                        ),
+                        (
+                            "_LI-S-WRITER "
+                            "_EXT4-JWR.CP-TARGET-ENTRIES + @ 3 ="
+                        ),
+                        (
+                            "_LI-S-WRITER "
+                            "_EXT4-JWR.CP-DELETE-RANGE-COUNT + @ 4 ="
+                        ),
+                        (
+                            "_LI-S-WRITER "
+                            "_EXT4-JWR.CP-DELETE-BLOCKS + @ 4 ="
+                        ),
+                        *cp_range_checks,
+                        "_LI-S-WRITER _EXT4-JWR-CP-AUTHORITY?",
+                        "_LI-S-WRITER _EXT4-JTX-TABLES-VALID?",
+                        "_LI-S-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-LEGACY-SINGLE-INDIRECT-STAGED" THEN'
+            ),
+            "_LI-S-TX _EXT4-JTX-ABORT CONSTANT _LI-S-ABORT-IOR",
+            "_EXT4-JFO-CERT-END",
+            (
+                _forth_conjunction(
+                    [
+                        "_LI-S-ABORT-IOR 0=",
+                        "_LI-S-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_LI-S-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-LEGACY-SINGLE-INDIRECT-ABORT-CLEAN" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-LEGACY-SINGLE-INDIRECT-STAGED")
+    _assert_emitted(output, "EXT4-LEGACY-SINGLE-INDIRECT-ABORT-CLEAN")
+
+
+def test_legacy_single_indirect_rejects_node_data_alias(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches, _, indirect_home = (
+        _legacy_single_indirect_unlinked_orphan_patches(
+            path,
+            protocol="modern",
+            direct_slots=(0,),
+            indirect_slots=(0, 3),
+        )
+    )
+    patch_map = dict(patches)
+    superblock = patch_map[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    pointer_offset = indirect_home * block_size
+    pointer_block = bytearray(patch_map[pointer_offset])
+    struct.pack_into("<I", pointer_block, 0, indirect_home)
+    patch_map[pointer_offset] = bytes(pointer_block)
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _LI-A-IOR CONSTANT _LI-A-V"
+            ),
+            "_LI-A-V _EXT4-CTX CONSTANT _LI-A-CTX",
+            (
+                "_LI-A-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _LI-A-FIND-IOR CONSTANT _LI-A-RECORD"
+            ),
+            "_EXT4-JFO-CERT-BEGIN CONSTANT _LI-A-CERT-BEGIN-IOR",
+            "_LI-A-RECORD _EXT4-JFI-RECORD !",
+            "_LI-A-CTX _EXT4-JFI-CTX !",
+            "DEPTH CONSTANT _LI-A-DEPTH-BEFORE",
+            "_EXT4-JFI-AUTH-PREFLIGHT CONSTANT _LI-A-PREFLIGHT-IOR",
+            "DEPTH CONSTANT _LI-A-DEPTH-AFTER",
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_LI-A-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        "_LI-A-FIND-IOR 0=",
+                        "_LI-A-CERT-BEGIN-IOR 0=",
+                        (
+                            "_LI-A-PREFLIGHT-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_LI-A-PREFLIGHT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        "_LI-A-DEPTH-BEFORE _LI-A-DEPTH-AFTER =",
+                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                        "_LI-A-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-LEGACY-SINGLE-INDIRECT-ALIAS-REJECTED" THEN'
+            ),
+            "_EXT4-JFO-CERT-END",
+            (
+                _forth_conjunction(
+                    [
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                        "_LI-A-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-LEGACY-SINGLE-INDIRECT-ALIAS-CLEAN" THEN'
+            ),
+        ],
+        patches=tuple(patch_map.items()),
+    )
+    _assert_emitted(output, "EXT4-LEGACY-SINGLE-INDIRECT-ALIAS-REJECTED")
+    _assert_emitted(output, "EXT4-LEGACY-SINGLE-INDIRECT-ALIAS-CLEAN")
+
+
+def test_mount_reclaims_legacy_single_indirect_orphan(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+) -> None:
+    source = canonical_images["primary-1k-i256"]
+    patches, data_ranges, indirect_home = (
+        _legacy_single_indirect_unlinked_orphan_patches(
+            source,
+            protocol="modern",
+            direct_slots=(0,),
+            indirect_slots=(0, 3),
+            # The gapped auth-only fixture pins canonical boundaries; keeping
+            # this lifecycle case contiguous avoids repeated accounting walks.
+            physical_gap=0,
+            seed_payloads=True,
+            size_bytes=(1 << 32) + 777,
+        )
+    )
+    released_blocks = tuple(first for first, count in data_ranges)
+    assert all(count == 1 for _, count in data_ranges)
+    assert (*released_blocks, indirect_home) == tuple(
+        range(released_blocks[0], released_blocks[0] + 4)
+    )
+    result = _run_singleton_unlinked_cleanup(
+        source,
+        tmp_path / "legacy-single-indirect-clean.img",
+        protocol="modern",
+        patches=patches,
+        data_block=released_blocks[0],
+        data_count=4,
+        max_steps=_LEGACY_MAP_RECOVERY_MAX_STEPS,
+    )
+    output = result["output"]
+    clean_image = result["clean_image"]
+    clean_sha256 = result["clean_sha256"]
+    assert isinstance(output, str)
+    assert isinstance(clean_image, Path)
+    assert isinstance(clean_sha256, str)
+    _assert_emitted(output, "EXT4-MODERN-UNLINKED-ORPHAN-RECLAIMED")
+    assert result["expected_home_writes"] == 6
+
+    stable_path = tmp_path / "legacy-single-indirect-stable.img"
+    stable_output, stable_trace, stable_sha256 = run_recovery_forth(
+        clean_image,
+        stable_path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _LI-R-IOR CONSTANT _LI-R-V"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_LI-R-IOR 0=",
+                        "_LI-R-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_LI-R-V _EXT4-READY?",
+                        "_LI-R-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_LI-R-V _EXT4-CTX _EXT4-C.J.WRITER + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-LEGACY-SINGLE-INDIRECT-STABLE" THEN'
+            ),
+        ],
+        capture_media=stable_path,
+    )
+    _assert_emitted(stable_output, "EXT4-LEGACY-SINGLE-INDIRECT-STABLE")
+    assert stable_trace == ()
+    assert stable_sha256 == clean_sha256
+    assert _sha256(stable_path) == clean_sha256
 
 
 def test_modern_selection_and_staged_proof_are_cache_independent(
@@ -20570,7 +21094,7 @@ def full_legacy_direct_unlinked_cleanup_fixture(
         patches=patches,
         data_block=first_data,
         data_count=12,
-        max_steps=_LEGACY_DIRECT_RECOVERY_MAX_STEPS,
+        max_steps=_LEGACY_MAP_RECOVERY_MAX_STEPS,
     )
 
 
