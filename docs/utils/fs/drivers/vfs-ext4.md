@@ -1720,8 +1720,20 @@ The remaining boundaries are:
   every counter, and reaches a byte-identical zero-I/O stable remount in
   56,367,001 guest steps under the 1,200,000,000-step watchdog. This establishes
   modern/legacy production and remount parity for the exact root-only shape.
-  Pinned e2fsprogs 1.47.4 `e2fsck -f -n` accepts both recovered images. Crash
-  recovery under either protocol remains pending.
+  Pinned e2fsprogs 1.47.4 `e2fsck -f -n` accepts both recovered images. A
+  representative F12 replay-home flush failure now qualifies both protocols:
+  the modern fault journey reaches F12 in 1,034,182,900 guest steps and the
+  legacy journey in 1,051,627,465, each under the standard 1,200,000,000-step
+  watchdog. The F11-to-F12 interval contains exactly the six modern or five
+  legacy cleanup-home writes, excluding the triple root and, for legacy, the
+  orphan file. Fresh mounts converge both permitted failed-flush durability
+  views: the F12 writes surviving and only the prior F11 fence surviving.
+  Modern repairs complete in 270,728,727 guest steps and legacy repairs in
+  266,212,919 for either view. The expected cleanup homes, orphan-file home,
+  and preserved triple-root home match the known clean image; no repair writes
+  the triple-root home, and each result reaches a byte-identical zero-I/O
+  stable remount in 55,919,141 steps. Other crash windows and the full crash
+  matrix remain pending.
   Pinned
   e2fsprogs 1.47.4 accepts both protocols for the empty 1 KiB result, ordinary
   one-block 1/2/4 KiB results, the initialized-offset and cross-group unwritten

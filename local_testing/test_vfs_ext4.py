@@ -21874,6 +21874,10 @@ def empty_triple_root_unlinked_cleanup_fixture(
     root_home, root_count = map_ranges[0]
     assert root_count == 1
     assert map_ranges == ((root_home, 1),)
+    superblock = dict(patches)[1024]
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, orphan_inode, _ = _ext4_inode_record(source, orphan_inode_number)
+    orphan_home = _extent_root_physical(orphan_inode, 0)
     directory = tmp_path_factory.mktemp(
         f"ext4-{protocol}-empty-triple-root-unlinked-cleanup"
     )
@@ -21888,6 +21892,7 @@ def empty_triple_root_unlinked_cleanup_fixture(
     )
     result["extent_case"] = "legacy-empty-triple-root"
     result["triple_root_home"] = root_home
+    result["orphan_home"] = orphan_home
     result["data_ranges"] = data_ranges
     result["map_ranges"] = map_ranges
     _run_stable_unlinked_cleanup_remount(
@@ -22362,6 +22367,7 @@ def test_mount_reclaims_empty_triple_root_unlinked_orphan(
     inode_bitmap_home = result["inode_bitmap_home"]
     gdt_home = result["gdt_home"]
     root_home = result["triple_root_home"]
+    orphan_home = result["orphan_home"]
     stable_output = result["stable_output"]
     stable_image = result["stable_image"]
 
@@ -22378,6 +22384,7 @@ def test_mount_reclaims_empty_triple_root_unlinked_orphan(
     assert isinstance(inode_bitmap_home, int)
     assert isinstance(gdt_home, int)
     assert isinstance(root_home, int)
+    assert isinstance(orphan_home, int)
     assert isinstance(stable_output, str)
     assert isinstance(stable_image, Path)
     assert result["extent_case"] == "legacy-empty-triple-root"
@@ -22400,10 +22407,6 @@ def test_mount_reclaims_empty_triple_root_unlinked_orphan(
     )
     assert sum(kind == "flush" for kind, _, _ in trace) == 24
 
-    superblock = dict(patches)[1024]
-    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
-    _, orphan_inode, _ = _ext4_inode_record(source, orphan_inode_number)
-    orphan_home = _extent_root_physical(orphan_inode, 0)
     assert len(
         _write_ordinals_for_ext4_home(
             trace,
@@ -22786,6 +22789,7 @@ def _assert_unlinked_cleanup_media_converges(
 ) -> tuple[tuple[tuple[str, int, int], ...], str]:
     protocol = expectation["protocol"]
     source = expectation["source"]
+    patches = expectation["patches"]
     clean_image = expectation["clean_image"]
     block_size = expectation["block_size"]
     inode_home = expectation["inode_home"]
@@ -22810,6 +22814,7 @@ def _assert_unlinked_cleanup_media_converges(
     expected_super_free = expectation["expected_super_free"]
     assert protocol in {"modern", "legacy"}
     assert isinstance(source, Path)
+    assert isinstance(patches, tuple)
     assert isinstance(clean_image, Path)
     assert isinstance(block_size, int)
     assert isinstance(inode_home, int)
@@ -22999,13 +23004,16 @@ def _assert_unlinked_cleanup_media_converges(
         repaired_inode_home = repaired_media.read(block_size)
     assert repaired_inode_home == canonical_inode_home
     if data_block is not None:
-        with source.open("rb") as canonical_media:
-            canonical_media.seek(data_block * block_size)
-            canonical_data = canonical_media.read(block_size)
+        expected_data = dict(patches).get(data_block * block_size)
+        if expected_data is None:
+            with source.open("rb") as canonical_media:
+                canonical_media.seek(data_block * block_size)
+                expected_data = canonical_media.read(block_size)
+        assert len(expected_data) == block_size
         with repaired.open("rb") as repaired_media:
             repaired_media.seek(data_block * block_size)
             repaired_data = repaired_media.read(block_size)
-        assert repaired_data == canonical_data
+        assert repaired_data == expected_data
     for gdt_home in {inode_gdt_home, data_gdt_home}:
         with clean_image.open("rb") as clean_media:
             clean_media.seek(gdt_home * block_size)
@@ -24759,6 +24767,69 @@ def _exercise_unlinked_cleanup_flush_fence(
     assert isinstance(patches, tuple)
     assert isinstance(success_trace, tuple)
 
+    root_home = cleanup_fixture.get("triple_root_home")
+    checkpoint_homes: tuple[int, ...] = ()
+    if root_home is not None:
+        block_size = cleanup_fixture["block_size"]
+        inode_home = cleanup_fixture["inode_home"]
+        block_bitmap_home = cleanup_fixture["block_bitmap_home"]
+        inode_bitmap_home = cleanup_fixture["inode_bitmap_home"]
+        gdt_home = cleanup_fixture["gdt_home"]
+        orphan_home = cleanup_fixture["orphan_home"]
+        assert case == "replay-homes"
+        assert flush_ordinal == 12
+        assert isinstance(root_home, int)
+        assert isinstance(block_size, int)
+        assert isinstance(inode_home, int)
+        assert isinstance(block_bitmap_home, int)
+        assert isinstance(inode_bitmap_home, int)
+        assert isinstance(gdt_home, int)
+        assert isinstance(orphan_home, int)
+        checkpoint_homes = (
+            inode_home,
+            block_bitmap_home,
+            inode_bitmap_home,
+            gdt_home,
+            1,
+        )
+        if protocol == "modern":
+            checkpoint_homes += (orphan_home,)
+        assert len(set(checkpoint_homes)) == len(checkpoint_homes)
+        commit_flush_event = _trace_event_index_for_ordinal(
+            success_trace,
+            "flush",
+            11,
+        )
+        replay_homes_flush_event = _trace_event_index_for_ordinal(
+            success_trace,
+            "flush",
+            flush_ordinal,
+        )
+        checkpoint_batch = success_trace[
+            commit_flush_event + 1 : replay_homes_flush_event
+        ]
+        assert len(checkpoint_batch) == len(checkpoint_homes)
+        assert all(event[0] == "write" for event in checkpoint_batch)
+        sectors_per_block = block_size // 512
+        assert all(
+            first_sector % sectors_per_block == 0
+            and sector_count == sectors_per_block
+            for _, first_sector, sector_count in checkpoint_batch
+        )
+        observed_checkpoint_homes = tuple(
+            first_sector // sectors_per_block
+            for _, first_sector, _ in checkpoint_batch
+        )
+        assert len(set(observed_checkpoint_homes)) == len(
+            observed_checkpoint_homes
+        )
+        assert set(observed_checkpoint_homes) == set(checkpoint_homes)
+        assert not _write_ordinals_for_ext4_home(
+            checkpoint_batch,
+            root_home,
+            block_size=block_size,
+        )
+
     variant_marker = f"{variant.upper()}-" if variant else ""
     path_stem = f"{protocol}-{variant}-unlinked" if variant else (
         f"{protocol}-unlinked"
@@ -24835,21 +24906,53 @@ def _exercise_unlinked_cleanup_flush_fence(
                 break
     assert trace_cut
     assert failed_trace == success_trace[:trace_cut]
+    if root_home is not None:
+        assert not _write_ordinals_for_ext4_home(
+            failed_trace,
+            root_home,
+            block_size=block_size,
+        )
 
     for durability, interrupted in (
         ("survived", survived),
         ("prior", prior_fence),
     ):
-        _assert_unlinked_cleanup_media_converges(
+        repaired = tmp_path / (
+            f"{path_stem}-{case}-{durability}-repaired.img"
+        )
+        stable = tmp_path / (
+            f"{path_stem}-{case}-{durability}-stable.img"
+        )
+        repair_trace, _ = _assert_unlinked_cleanup_media_converges(
             interrupted,
-            tmp_path / (
-                f"{path_stem}-{case}-{durability}-repaired.img"
-            ),
-            tmp_path / (
-                f"{path_stem}-{case}-{durability}-stable.img"
-            ),
+            repaired,
+            stable,
             expectation=cleanup_fixture,
         )
+        if root_home is not None:
+            clean_image = cleanup_fixture["clean_image"]
+            orphan_home = cleanup_fixture["orphan_home"]
+            assert isinstance(clean_image, Path)
+            assert isinstance(orphan_home, int)
+            assert not _write_ordinals_for_ext4_home(
+                repair_trace,
+                root_home,
+                block_size=block_size,
+            )
+            comparison_homes = {
+                *checkpoint_homes,
+                orphan_home,
+                root_home,
+            }
+            for home in comparison_homes:
+                with clean_image.open("rb") as clean_media:
+                    clean_media.seek(home * block_size)
+                    clean_home = clean_media.read(block_size)
+                with repaired.open("rb") as repaired_media:
+                    repaired_media.seek(home * block_size)
+                    repaired_home = repaired_media.read(block_size)
+                assert len(clean_home) == len(repaired_home) == block_size
+                assert repaired_home == clean_home
 
 
 @pytest.mark.parametrize(
@@ -24894,6 +24997,27 @@ def test_cross_group_one_block_unlinked_cleanup_replay_home_flush_fence_converge
         case="replay-homes",
         flush_ordinal=12,
         variant="cross-group-one-block",
+    )
+
+
+def test_empty_triple_root_unlinked_cleanup_replay_home_flush_fence_converges(
+    empty_triple_root_unlinked_cleanup_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    root_home = empty_triple_root_unlinked_cleanup_fixture[
+        "triple_root_home"
+    ]
+    assert isinstance(root_home, int)
+    assert empty_triple_root_unlinked_cleanup_fixture["data_ranges"] == ()
+    assert empty_triple_root_unlinked_cleanup_fixture["map_ranges"] == (
+        (root_home, 1),
+    )
+    _exercise_unlinked_cleanup_flush_fence(
+        empty_triple_root_unlinked_cleanup_fixture,
+        tmp_path,
+        case="replay-homes",
+        flush_ordinal=12,
+        variant="empty-triple-root",
     )
 
 
