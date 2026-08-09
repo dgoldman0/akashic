@@ -2160,6 +2160,7 @@ def _legacy_indirect_unlinked_orphan_patches(
     double_children: tuple[tuple[int, tuple[int, ...]], ...] = (),
     empty_double_root: bool = False,
     empty_triple_root: bool = False,
+    triple_child_slot: int | None = None,
     inode_number: int = 18,
     physical_gap: int = 1,
     seed_payloads: bool = False,
@@ -2171,7 +2172,11 @@ def _legacy_indirect_unlinked_orphan_patches(
     tuple[tuple[int, int], ...],
     tuple[tuple[int, int], ...],
 ]:
-    """Give one unlinked legacy inode an exact direct/indirect map."""
+    """Give one unlinked legacy inode an exact direct/indirect map.
+
+    ``triple_child_slot`` selects the sole occupied triple-root slot and
+    constructs its child as an allocated all-zero pointer block.
+    """
     assert protocol in {"modern", "legacy"}
     assert tuple(sorted(set(direct_slots))) == direct_slots
     assert not direct_slots or (0 <= direct_slots[0] and direct_slots[-1] < 12)
@@ -2179,8 +2184,10 @@ def _legacy_indirect_unlinked_orphan_patches(
     double_outer_slots = tuple(outer for outer, _ in double_children)
     assert tuple(sorted(set(double_outer_slots))) == double_outer_slots
     assert not (empty_double_root and double_children)
+    assert not (empty_triple_root and triple_child_slot is not None)
+    has_triple_root = empty_triple_root or triple_child_slot is not None
     assert not (
-        empty_triple_root
+        has_triple_root
         and (single_slots or double_children or empty_double_root)
     )
     assert physical_gap >= 0
@@ -2194,6 +2201,9 @@ def _legacy_indirect_unlinked_orphan_patches(
         "<I", source_superblock, 0x18
     )[0]
     pointer_count = source_block_size // 4
+    assert triple_child_slot is None or (
+        0 <= triple_child_slot < pointer_count
+    )
     assert not single_slots or (
         0 <= single_slots[0] and single_slots[-1] < pointer_count
     )
@@ -2208,9 +2218,14 @@ def _legacy_indirect_unlinked_orphan_patches(
     )
     has_double_root = empty_double_root or bool(double_children)
     data_count = len(direct_slots) + len(single_slots) + double_data_count
-    map_count = (1 if single_slots else 0) + (
-        1 + len(double_children) if has_double_root else 0
-    ) + (1 if empty_triple_root else 0)
+    triple_map_count = (
+        2 if triple_child_slot is not None else int(has_triple_root)
+    )
+    map_count = (
+        (1 if single_slots else 0)
+        + (1 + len(double_children) if has_double_root else 0)
+        + triple_map_count
+    )
     assert data_count + map_count > 0
     allocation_specs = tuple(
         (2 * index, 1, False) for index in range(data_count + map_count)
@@ -2293,10 +2308,22 @@ def _legacy_indirect_unlinked_orphan_patches(
         patch_map[double_home * block_size] = bytes(double_root)
 
     triple_home = 0
-    if empty_triple_root:
+    if has_triple_root:
         triple_home = map_ranges[map_cursor][0]
         map_cursor += 1
-        patch_map[triple_home * block_size] = bytes(block_size)
+        triple_root = bytearray(block_size)
+        if triple_child_slot is not None:
+            triple_child_home, triple_child_count = map_ranges[map_cursor]
+            map_cursor += 1
+            assert triple_child_count == 1
+            struct.pack_into(
+                "<I",
+                triple_root,
+                triple_child_slot * 4,
+                triple_child_home,
+            )
+            patch_map[triple_child_home * block_size] = bytes(block_size)
+        patch_map[triple_home * block_size] = bytes(triple_root)
     assert map_cursor == len(map_ranges)
 
     _, _, inode_offset = _ext4_inode_record(path, inode_number)
@@ -18739,9 +18766,18 @@ def test_legacy_direct_unlinked_preflight_rejects_unsafe_shapes(
 @pytest.mark.parametrize(
     ("case", "reason", "detail"),
     (
-        ("nonzero-child", "VFS-R-UNSUPPORTED", "EXT4-D-RECOVERY"),
+        ("root-self-alias", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
+        ("duplicate-child", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
+        ("unallocated-child", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
+        ("child-i-blocks", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
+        ("two-root-children", "VFS-R-UNSUPPORTED", "EXT4-D-RECOVERY"),
+        ("nonzero-grandchild", "VFS-R-UNSUPPORTED", "EXT4-D-RECOVERY"),
+        ("direct-child-composition", "VFS-R-UNSUPPORTED", "EXT4-D-RECOVERY"),
+        ("direct-child-alias", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
         ("direct-root-alias", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
-        ("xattr-alias", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
+        ("child-xattr-composition", "VFS-R-UNSUPPORTED", "EXT4-D-RECOVERY"),
+        ("root-xattr-alias", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
+        ("child-xattr-alias", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
     ),
 )
 def test_sparse_triple_rejects_unadmitted_roots(
@@ -18751,79 +18787,193 @@ def test_sparse_triple_rejects_unadmitted_roots(
     detail: str,
 ) -> None:
     path = canonical_images["primary-1k-i256"]
-    expected_data_entries = 0
-    expected_map_entries = 0
-    if case in {"nonzero-child", "direct-root-alias"}:
-        direct_slots = (5,) if case == "direct-root-alias" else ()
-        patches, data_ranges, map_ranges = (
-            _legacy_indirect_unlinked_orphan_patches(
-                path,
-                protocol="modern",
-                direct_slots=direct_slots,
-                empty_triple_root=True,
-                physical_gap=0,
-                size_bytes=(1 << 32) + 777,
-            )
-        )
-        assert len(data_ranges) == len(direct_slots)
-        assert len(map_ranges) == 1
-        triple_home, triple_count = map_ranges[0]
-        assert triple_count == 1
-        patch_map = dict(patches)
-        superblock = patch_map[1024]
-        block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
-        triple_root = bytearray(patch_map[triple_home * block_size])
-        assert triple_root == bytes(block_size)
-        if case == "nonzero-child":
-            struct.pack_into("<I", triple_root, 0, triple_home)
-            patch_map[triple_home * block_size] = bytes(triple_root)
-        else:
-            _, _, inode_offset = _ext4_inode_record(path, 18)
-            inode = bytearray(patch_map[inode_offset])
-            struct.pack_into("<I", inode, 0x28 + 5 * 4, triple_home)
-            patch_map[inode_offset] = _inode_with_checksum(
-                superblock,
-                18,
-                inode,
-            )
-            expected_data_entries = 1
-        expected_map_entries = 1
-    else:
-        assert case == "xattr-alias"
-        patches, data_ranges, xattr_block = (
+    expected_counts: tuple[int, int] | None = None
+    xattr_block = 0
+    base_patches: tuple[tuple[int, bytes], ...] | None = None
+    if case in {
+        "child-xattr-composition",
+        "root-xattr-alias",
+        "child-xattr-alias",
+    }:
+        base_patches, base_data_ranges, xattr_block = (
             _unlinked_orphan_external_xattr_patches(
                 path,
                 protocol="modern",
                 data_blocks=0,
             )
         )
-        assert data_ranges == ()
-        patch_map = dict(patches)
-        superblock = patch_map[1024]
-        block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
-        _, _, inode_offset = _ext4_inode_record(path, 18)
-        inode = bytearray(patch_map[inode_offset])
-        flags = struct.unpack_from("<I", inode, 0x20)[0]
-        assert flags & 0x0008_0000
-        struct.pack_into("<I", inode, 0x20, flags & ~0x0008_0000)
-        inode[0x28:0x64] = bytes(60)
-        struct.pack_into("<I", inode, 0x28 + 14 * 4, xattr_block)
-        sectors_per_block = block_size // 512
-        raw_blocks = struct.unpack_from("<I", inode, 0x1C)[0]
-        assert raw_blocks == sectors_per_block
+        assert base_data_ranges == ()
+
+    child_cases = {
+        "duplicate-child",
+        "child-i-blocks",
+        "two-root-children",
+        "nonzero-grandchild",
+        "direct-child-composition",
+        "direct-child-alias",
+        "child-xattr-composition",
+        "child-xattr-alias",
+    }
+    spare_cases = {"two-root-children", "nonzero-grandchild"}
+    direct_slots = (
+        (5,)
+        if case
+        in {
+            "direct-root-alias",
+            "direct-child-composition",
+            "direct-child-alias",
+            *spare_cases,
+        }
+        else ()
+    )
+    patches, data_ranges, map_ranges = (
+        _legacy_indirect_unlinked_orphan_patches(
+            path,
+            protocol="modern",
+            direct_slots=direct_slots,
+            empty_triple_root=case not in child_cases,
+            triple_child_slot=7 if case in child_cases else None,
+            physical_gap=0,
+            seed_payloads=True,
+            size_bytes=(1 << 32) + 777,
+            base_patches=base_patches,
+        )
+    )
+    assert len(data_ranges) == len(direct_slots)
+    assert len(map_ranges) == (2 if case in child_cases else 1)
+    triple_home, triple_count = map_ranges[0]
+    assert triple_count == 1
+    patch_map = dict(patches)
+    superblock = patch_map[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+
+    if case == "root-self-alias":
+        triple_root = bytearray(patch_map[triple_home * block_size])
+        assert triple_root == bytes(block_size)
+        struct.pack_into("<I", triple_root, 0, triple_home)
+        patch_map[triple_home * block_size] = bytes(triple_root)
+        expected_counts = (0, 1)
+    elif case == "duplicate-child":
+        triple_child_home = map_ranges[1][0]
+        triple_root = bytearray(patch_map[triple_home * block_size])
+        struct.pack_into("<I", triple_root, 9 * 4, triple_child_home)
+        patch_map[triple_home * block_size] = bytes(triple_root)
+    elif case == "unallocated-child":
+        layout = _ext4_recovery_layout(path)
+        assert layout["block_size"] == block_size
+        bitmap_home = layout["block_bitmap"]
+        block_bitmap = patch_map[bitmap_home * block_size]
+        group_blocks = min(
+            layout["blocks_per_group"],
+            layout["blocks"] - layout["first"],
+        )
+        child_index = next(
+            index
+            for index in range(group_blocks)
+            if not block_bitmap[index // 8] & (1 << (index % 8))
+        )
+        triple_child_home = layout["first"] + child_index
+        assert triple_child_home != triple_home
+        assert not block_bitmap[child_index // 8] & (
+            1 << (child_index % 8)
+        )
+        assert not _ext4_block_allocation_state(
+            path,
+            (triple_child_home,),
+        )[triple_child_home]
+        triple_root = bytearray(patch_map[triple_home * block_size])
+        assert triple_root == bytes(block_size)
         struct.pack_into(
             "<I",
-            inode,
-            0x1C,
-            raw_blocks + sectors_per_block,
+            triple_root,
+            7 * 4,
+            triple_child_home,
         )
+        patch_map[triple_home * block_size] = bytes(triple_root)
+        _, _, inode_offset = _ext4_inode_record(path, 18)
+        inode = bytearray(patch_map[inode_offset])
+        sectors_per_block = block_size // 512
+        assert struct.unpack_from("<I", inode, 0x1C)[0] == sectors_per_block
+        assert struct.unpack_from("<H", inode, 0x74)[0] == 0
+        struct.pack_into("<I", inode, 0x1C, 2 * sectors_per_block)
         patch_map[inode_offset] = _inode_with_checksum(
             superblock,
             18,
             inode,
         )
+        expected_counts = (0, 2)
+    elif case == "child-i-blocks":
+        _, _, inode_offset = _ext4_inode_record(path, 18)
+        inode = bytearray(patch_map[inode_offset])
+        sectors_per_block = block_size // 512
+        assert struct.unpack_from("<I", inode, 0x1C)[0] == (
+            2 * sectors_per_block
+        )
+        assert struct.unpack_from("<H", inode, 0x74)[0] == 0
+        struct.pack_into("<I", inode, 0x1C, sectors_per_block)
+        patch_map[inode_offset] = _inode_with_checksum(
+            superblock,
+            18,
+            inode,
+        )
+        expected_counts = (0, 2)
+    elif case in {"direct-root-alias", "root-xattr-alias"}:
+        _, _, inode_offset = _ext4_inode_record(path, 18)
+        inode = bytearray(patch_map[inode_offset])
+        alias_home = triple_home if case == "direct-root-alias" else xattr_block
+        alias_slot = 5 if case == "direct-root-alias" else 14
+        struct.pack_into("<I", inode, 0x28 + alias_slot * 4, alias_home)
+        patch_map[inode_offset] = _inode_with_checksum(
+            superblock,
+            18,
+            inode,
+        )
+        if case == "direct-root-alias":
+            expected_counts = (1, 1)
+        else:
+            triple_home = xattr_block
+            expected_counts = (0, 0)
+    elif case in spare_cases:
+        assert len(data_ranges) == 1
+        spare_home = data_ranges[0][0]
+        triple_child_home = map_ranges[1][0]
+        _, _, inode_offset = _ext4_inode_record(path, 18)
+        inode = bytearray(patch_map[inode_offset])
+        struct.pack_into("<I", inode, 0x28 + 5 * 4, 0)
+        patch_map[inode_offset] = _inode_with_checksum(
+            superblock,
+            18,
+            inode,
+        )
+        patch_map[spare_home * block_size] = bytes(block_size)
+        if case == "two-root-children":
+            triple_root = bytearray(patch_map[triple_home * block_size])
+            struct.pack_into("<I", triple_root, 9 * 4, spare_home)
+            patch_map[triple_home * block_size] = bytes(triple_root)
+        else:
+            triple_child = bytearray(
+                patch_map[triple_child_home * block_size]
+            )
+            struct.pack_into("<I", triple_child, 3 * 4, spare_home)
+            patch_map[triple_child_home * block_size] = bytes(triple_child)
+    elif case == "direct-child-alias":
+        direct_home = data_ranges[0][0]
+        triple_root = bytearray(patch_map[triple_home * block_size])
+        struct.pack_into("<I", triple_root, 7 * 4, direct_home)
+        patch_map[triple_home * block_size] = bytes(triple_root)
+    elif case == "child-xattr-alias":
+        triple_root = bytearray(patch_map[triple_home * block_size])
+        struct.pack_into("<I", triple_root, 7 * 4, xattr_block)
+        patch_map[triple_home * block_size] = bytes(triple_root)
     marker = f"EXT4-LEGACY-SPARSE-TRIPLE-{case.upper()}-REFUSED"
-    if case == "xattr-alias":
+    manual_data_cases = {
+        "direct-child-alias",
+        "child-xattr-composition",
+        "root-xattr-alias",
+        "child-xattr-alias",
+        "unallocated-child",
+    }
+    if case in manual_data_cases:
         preflight_lines = [
             (
                 "18 _TR-CTX _EXT4-LOAD-ORPHAN-INODE "
@@ -18834,6 +18984,8 @@ def test_sparse_triple_rejects_unadmitted_roots(
             (
                 "_TR-CTX _EXT4-C.INODE + _EXT4-I.FILE-ACL-LO + L@ "
                 "_EXT4-JFI-EA !"
+                if xattr_block
+                else "0 _EXT4-JFI-EA !"
             ),
             "DEPTH CONSTANT _TR-DEPTH-BEFORE",
             "_EXT4-JFI-DATA-PREFLIGHT CONSTANT _TR-PREFLIGHT-IOR",
@@ -18842,7 +18994,7 @@ def test_sparse_triple_rejects_unadmitted_roots(
         case_checks = [
             "_TR-IOR 0<>",
             "_TR-LOAD-IOR 0=",
-            f"_EXT4-JFI-LEGACY-TRIPLE-HOME @ {xattr_block} =",
+            f"_EXT4-JFI-LEGACY-TRIPLE-HOME @ {triple_home} =",
         ]
     else:
         preflight_lines = [
@@ -18861,6 +19013,25 @@ def test_sparse_triple_rejects_unadmitted_roots(
             "_TR-IOR VFS-IOR-DETAIL EXT4-D-RECOVERY =",
             "_TR-FIND-IOR 0=",
         ]
+    count_checks = []
+    if expected_counts is not None:
+        expected_data_entries, expected_map_entries = expected_counts
+        count_checks = [
+            f"_EXT4-JFI-DATA-ENTRIES @ {expected_data_entries} =",
+            f"_EXT4-JFI-MAP-ENTRIES @ {expected_map_entries} =",
+        ]
+    expected_map_kind = (
+        "_EXT4-JDM-LEGACY-SPARSE-TRIPLE-CHILD"
+        if case
+        in {
+            "nonzero-grandchild",
+            "direct-child-composition",
+            "child-xattr-composition",
+            "unallocated-child",
+            "child-i-blocks",
+        }
+        else "_EXT4-JDM-LEGACY-SPARSE-TRIPLE"
+    )
     refusal_checks = [
         "_TR-JOURNAL-IOR 0=",
         *case_checks,
@@ -18869,10 +19040,9 @@ def test_sparse_triple_rejects_unadmitted_roots(
         "_TR-DEPTH-BEFORE _TR-DEPTH-AFTER =",
         (
             "_EXT4-JFI-DATA-MAP-KIND @ "
-            "_EXT4-JDM-LEGACY-SPARSE-TRIPLE ="
+            f"{expected_map_kind} ="
         ),
-        f"_EXT4-JFI-DATA-ENTRIES @ {expected_data_entries} =",
-        f"_EXT4-JFI-MAP-ENTRIES @ {expected_map_entries} =",
+        *count_checks,
         "_EXT4-JFO-CERT-VALID @ 0=",
         *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
         "_TR-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
@@ -19304,6 +19474,16 @@ def test_unlinked_preflight_accepts_sparse_double_without_single_root(
             "legacy",
             id="legacy-full-direct-empty-triple",
         ),
+        pytest.param(
+            "one-child-triple",
+            "modern",
+            id="one-child-triple",
+        ),
+        pytest.param(
+            "one-child-triple",
+            "legacy",
+            id="legacy-one-child-triple",
+        ),
     ),
 )
 def test_legacy_indirect_stages_canonical_map_revokes(
@@ -19327,6 +19507,8 @@ def test_legacy_indirect_stages_canonical_map_revokes(
     base_patches: tuple[tuple[int, bytes], ...] | None = None
     xattr_block = 0
     empty_triple_root = False
+    triple_child_slot: int | None = None
+    triple_child_home = 0
     if shape == "empty-root":
         direct_slots = (5,)
         single_slots: tuple[int, ...] = ()
@@ -19353,6 +19535,17 @@ def test_legacy_indirect_stages_canonical_map_revokes(
         double_children = ((2, (4,)),)
         empty_double_root = False
         expected_counts = (3, 3)
+    elif shape == "one-child-triple":
+        direct_slots = ()
+        single_slots = ()
+        double_children = ()
+        empty_double_root = False
+        triple_child_slot = (
+            _ext4_recovery_layout(path)["block_size"] // 4 - 1
+            if protocol == "legacy"
+            else 7
+        )
+        expected_counts = (0, 2)
     else:
         assert shape in {
             "empty-triple-root",
@@ -19378,6 +19571,7 @@ def test_legacy_indirect_stages_canonical_map_revokes(
         double_children=double_children,
         empty_double_root=empty_double_root,
         empty_triple_root=empty_triple_root,
+        triple_child_slot=triple_child_slot,
         physical_gap=0,
         seed_payloads=True,
         size_bytes=(1 << 32) + 777,
@@ -19387,6 +19581,24 @@ def test_legacy_indirect_stages_canonical_map_revokes(
     assert (len(data_ranges), len(map_ranges)) == expected_counts
     superblock = dict(patches)[1024]
     block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    if triple_child_slot is not None:
+        assert len(map_ranges) == 2
+        triple_home = map_ranges[0][0]
+        triple_child_home = map_ranges[1][0]
+        patch_map = dict(patches)
+        triple_root = patch_map[triple_home * block_size]
+        assert struct.unpack_from(
+            "<I",
+            triple_root,
+            triple_child_slot * 4,
+        )[0] == triple_child_home
+        assert triple_root[: triple_child_slot * 4] == bytes(
+            triple_child_slot * 4
+        )
+        assert triple_root[triple_child_slot * 4 + 4 :] == bytes(
+            block_size - triple_child_slot * 4 - 4
+        )
+        assert patch_map[triple_child_home * block_size] == bytes(block_size)
     _, _, inode_offset = _ext4_inode_record(path, 18)
     target_home, target_offset = divmod(inode_offset, block_size)
     with path.open("rb") as source:
@@ -19401,12 +19613,20 @@ def test_legacy_indirect_stages_canonical_map_revokes(
     expected_ea_action = (
         "_EXT4-JEA-RELEASE" if xattr_block else "_EXT4-JEA-NONE"
     )
-    if empty_triple_root:
+    if empty_triple_root or triple_child_slot is not None:
         expected_meta = 6 if modern else 5
-        expected_map_kind = "_EXT4-JDM-LEGACY-SPARSE-TRIPLE"
+        expected_map_kind = (
+            "_EXT4-JDM-LEGACY-SPARSE-TRIPLE-CHILD"
+            if triple_child_slot is not None
+            else "_EXT4-JDM-LEGACY-SPARSE-TRIPLE"
+        )
         triple_home = map_ranges[0][0]
         map_shape_checks = [
             f"_EXT4-JFI-LEGACY-TRIPLE-HOME @ {triple_home} =",
+            (
+                "_EXT4-JFI-LEGACY-TRIPLE-CHILD-HOME @ "
+                f"{triple_child_home} ="
+            ),
             "_EXT4-JFI-LEGACY-INDIRECT-HOME @ 0=",
             "_EXT4-JFI-LEGACY-DOUBLE-HOME @ 0=",
             f"_SD-S-META {expected_meta} =",
@@ -19484,7 +19704,7 @@ def test_legacy_indirect_stages_canonical_map_revokes(
             ),
             "1 _SD-S-WRITER _EXT4-JWR.CP-DELETE-BLOCKS + !",
             (
-                "_EXT4-JDM-LEGACY-DIRECT _SD-S-WRITER "
+                "_EXT4-JDM-LEGACY-SPARSE-TRIPLE-CHILD _SD-S-WRITER "
                 "_EXT4-JWR.CP-DATA-MAP-KIND + !"
             ),
             (
@@ -19625,6 +19845,249 @@ def test_legacy_indirect_stages_canonical_map_revokes(
                         "_SD-S-DTR-KIND-REJECTED",
                         "_SD-S-DTR-AUTHORITY-RESTORED",
                         "_SD-S-DTR-TABLES-RESTORED",
+                    ]
+                )
+                + f' IF ." {tamper_marker}" THEN'
+            ),
+        ]
+    elif shape == "one-child-triple" and modern:
+        tamper_marker = (
+            "EXT4-MODERN-LEGACY-TRIPLE-CHILD-CP-TAMPER-REFUSED"
+        )
+        tamper_probe = [
+            (
+                "0 _SD-S-WRITER _EXT4-JWR-CP-DELETE-RANGE @ "
+                "CONSTANT _SD-S-TCH-ROOT-HOME"
+            ),
+            (
+                "1 _SD-S-WRITER _EXT4-JWR-CP-DELETE-RANGE @ "
+                "CONSTANT _SD-S-TCH-CHILD-HOME"
+            ),
+            "1 _SD-S-WRITER _EXT4-JWR.CP-DELETE-RANGE-COUNT + !",
+            "1 _SD-S-WRITER _EXT4-JWR.CP-DELETE-BLOCKS + !",
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
+                "CONSTANT _SD-S-TCH-MISSING-MAP-REJECTED"
+            ),
+            "0 1 _SD-S-WRITER _EXT4-JWR-CP-DELETE-RANGE !",
+            "0 1 _SD-S-WRITER _EXT4-JWR-CP-DELETE-RANGE CELL+ !",
+            "1 _SD-S-WRITER _EXT4-JWR.REVOKE-CREDIT + !",
+            "1 _SD-S-WRITER _EXT4-JWR.REVOKE-USED + !",
+            "1 _SD-S-WRITER _EXT4-JWR.REVOKE-ACTIVE + !",
+            "0 1 _SD-S-WRITER _EXT4-JWR-REVOKE-ENTRY !",
+            "0 1 _SD-S-WRITER _EXT4-JWR-REVOKE-ENTRY CELL+ !",
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
+                "CONSTANT _SD-S-TCH-COORDINATED-MAP-DOWNGRADE-REJECTED"
+            ),
+            (
+                "_SD-S-TCH-CHILD-HOME 1 _SD-S-WRITER "
+                "_EXT4-JWR-CP-DELETE-RANGE !"
+            ),
+            "1 1 _SD-S-WRITER _EXT4-JWR-CP-DELETE-RANGE CELL+ !",
+            "2 _SD-S-WRITER _EXT4-JWR.CP-DELETE-RANGE-COUNT + !",
+            "2 _SD-S-WRITER _EXT4-JWR.CP-DELETE-BLOCKS + !",
+            "2 _SD-S-WRITER _EXT4-JWR.REVOKE-CREDIT + !",
+            "2 _SD-S-WRITER _EXT4-JWR.REVOKE-USED + !",
+            "2 _SD-S-WRITER _EXT4-JWR.REVOKE-ACTIVE + !",
+            (
+                "_SD-S-TCH-CHILD-HOME 1 _SD-S-WRITER "
+                "_EXT4-JWR-REVOKE-ENTRY !"
+            ),
+            (
+                "_EXT4-JE-ACTIVE 1 _SD-S-WRITER "
+                "_EXT4-JWR-REVOKE-ENTRY CELL+ !"
+            ),
+            (
+                "_EXT4-JDM-LEGACY-SPARSE-TRIPLE _SD-S-WRITER "
+                "_EXT4-JWR.CP-DATA-MAP-KIND + !"
+            ),
+            "1 _SD-S-WRITER _EXT4-JWR.CP-DELETE-RANGE-COUNT + !",
+            "1 _SD-S-WRITER _EXT4-JWR.CP-DELETE-BLOCKS + !",
+            "0 1 _SD-S-WRITER _EXT4-JWR-CP-DELETE-RANGE !",
+            "0 1 _SD-S-WRITER _EXT4-JWR-CP-DELETE-RANGE CELL+ !",
+            "1 _SD-S-WRITER _EXT4-JWR.REVOKE-CREDIT + !",
+            "1 _SD-S-WRITER _EXT4-JWR.REVOKE-USED + !",
+            "1 _SD-S-WRITER _EXT4-JWR.REVOKE-ACTIVE + !",
+            "0 1 _SD-S-WRITER _EXT4-JWR-REVOKE-ENTRY !",
+            "0 1 _SD-S-WRITER _EXT4-JWR-REVOKE-ENTRY CELL+ !",
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? "
+                "CONSTANT _SD-S-TCH-COHERENT-ROOT-CP-VALID"
+            ),
+            (
+                "_SD-S-WRITER _EXT4-JWR-ORPHAN-STAGED? "
+                "CONSTANT _SD-S-TCH-COHERENT-ROOT-STAGED-IOR"
+            ),
+            (
+                "_SD-S-TCH-COHERENT-ROOT-STAGED-IOR VFS-IOR-REASON "
+                "VFS-R-CORRUPT = _SD-S-TCH-COHERENT-ROOT-STAGED-IOR "
+                "VFS-IOR-DETAIL EXT4-D-DATA-MAP = AND CONSTANT "
+                "_SD-S-TCH-COHERENT-ROOT-STAGED-REJECTED"
+            ),
+            (
+                "_SD-S-TCH-CHILD-HOME 1+ _SD-S-WRITER "
+                "_EXT4-JWR.CP-EA-HOME + !"
+            ),
+            (
+                "_EXT4-JEA-REFDEC _SD-S-WRITER "
+                "_EXT4-JWR.CP-EA-ACTION + !"
+            ),
+            "1 _SD-S-WRITER _EXT4-JWR.CP-EA-REFCOUNT + !",
+            "0 _SD-S-WRITER _EXT4-JWR.CP-EA-CRC + !",
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? "
+                "CONSTANT _SD-S-TCH-COHERENT-ROOT-XATTR-VALID"
+            ),
+            (
+                "_EXT4-JDM-LEGACY-SPARSE-TRIPLE-CHILD _SD-S-WRITER "
+                "_EXT4-JWR.CP-DATA-MAP-KIND + !"
+            ),
+            (
+                "_SD-S-TCH-CHILD-HOME 1 _SD-S-WRITER "
+                "_EXT4-JWR-CP-DELETE-RANGE !"
+            ),
+            "1 1 _SD-S-WRITER _EXT4-JWR-CP-DELETE-RANGE CELL+ !",
+            "2 _SD-S-WRITER _EXT4-JWR.CP-DELETE-RANGE-COUNT + !",
+            "2 _SD-S-WRITER _EXT4-JWR.CP-DELETE-BLOCKS + !",
+            "2 _SD-S-WRITER _EXT4-JWR.REVOKE-CREDIT + !",
+            "2 _SD-S-WRITER _EXT4-JWR.REVOKE-USED + !",
+            "2 _SD-S-WRITER _EXT4-JWR.REVOKE-ACTIVE + !",
+            (
+                "_SD-S-TCH-CHILD-HOME 1 _SD-S-WRITER "
+                "_EXT4-JWR-REVOKE-ENTRY !"
+            ),
+            (
+                "_EXT4-JE-ACTIVE 1 _SD-S-WRITER "
+                "_EXT4-JWR-REVOKE-ENTRY CELL+ !"
+            ),
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
+                "CONSTANT _SD-S-TCH-XATTR-COMPOSITION-REJECTED"
+            ),
+            "0 _SD-S-WRITER _EXT4-JWR.CP-EA-HOME + !",
+            (
+                "_EXT4-JEA-NONE _SD-S-WRITER "
+                "_EXT4-JWR.CP-EA-ACTION + !"
+            ),
+            "0 _SD-S-WRITER _EXT4-JWR.CP-EA-REFCOUNT + !",
+            "1 _SD-S-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + !",
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
+                "CONSTANT _SD-S-TCH-FORGED-TARGET-REJECTED"
+            ),
+            "1 _SD-S-WRITER _EXT4-JWR.REVOKE-CREDIT + !",
+            "1 _SD-S-WRITER _EXT4-JWR.REVOKE-USED + !",
+            "1 _SD-S-WRITER _EXT4-JWR.REVOKE-ACTIVE + !",
+            (
+                "_SD-S-TCH-CHILD-HOME 0 _SD-S-WRITER "
+                "_EXT4-JWR-REVOKE-ENTRY !"
+            ),
+            "0 1 _SD-S-WRITER _EXT4-JWR-REVOKE-ENTRY !",
+            "0 1 _SD-S-WRITER _EXT4-JWR-REVOKE-ENTRY CELL+ !",
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
+                "CONSTANT _SD-S-TCH-COORDINATED-TARGET-DOWNGRADE-REJECTED"
+            ),
+            "0 _SD-S-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + !",
+            "2 _SD-S-WRITER _EXT4-JWR.REVOKE-CREDIT + !",
+            "2 _SD-S-WRITER _EXT4-JWR.REVOKE-USED + !",
+            "2 _SD-S-WRITER _EXT4-JWR.REVOKE-ACTIVE + !",
+            (
+                "_SD-S-TCH-ROOT-HOME 0 _SD-S-WRITER "
+                "_EXT4-JWR-REVOKE-ENTRY !"
+            ),
+            (
+                "_SD-S-TCH-CHILD-HOME 1 _SD-S-WRITER "
+                "_EXT4-JWR-REVOKE-ENTRY !"
+            ),
+            (
+                "_EXT4-JE-ACTIVE 1 _SD-S-WRITER "
+                "_EXT4-JWR-REVOKE-ENTRY CELL+ !"
+            ),
+            (
+                "2 1 _SD-S-WRITER _EXT4-JWR-CP-DELETE-RANGE "
+                "CELL+ !"
+            ),
+            "3 _SD-S-WRITER _EXT4-JWR.CP-DELETE-BLOCKS + !",
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
+                "CONSTANT _SD-S-TCH-CHILD-SPAN-REJECTED"
+            ),
+            (
+                "1 1 _SD-S-WRITER _EXT4-JWR-CP-DELETE-RANGE "
+                "CELL+ !"
+            ),
+            "2 _SD-S-WRITER _EXT4-JWR.CP-DELETE-BLOCKS + !",
+            (
+                "_SD-S-TCH-CHILD-HOME 0 _SD-S-WRITER "
+                "_EXT4-JWR-CP-DELETE-RANGE !"
+            ),
+            (
+                "_SD-S-TCH-ROOT-HOME 1 _SD-S-WRITER "
+                "_EXT4-JWR-CP-DELETE-RANGE !"
+            ),
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
+                "CONSTANT _SD-S-TCH-ORDER-REJECTED"
+            ),
+            (
+                "_SD-S-TCH-ROOT-HOME 0 _SD-S-WRITER "
+                "_EXT4-JWR-CP-DELETE-RANGE !"
+            ),
+            (
+                "_SD-S-TCH-CHILD-HOME 1 _SD-S-WRITER "
+                "_EXT4-JWR-CP-DELETE-RANGE !"
+            ),
+            (
+                "_SD-S-TCH-ROOT-HOME 1 _SD-S-WRITER "
+                "_EXT4-JWR-REVOKE-ENTRY !"
+            ),
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
+                "CONSTANT _SD-S-TCH-REVOKE-REJECTED"
+            ),
+            (
+                "_SD-S-TCH-CHILD-HOME 1 _SD-S-WRITER "
+                "_EXT4-JWR-REVOKE-ENTRY !"
+            ),
+            (
+                "_EXT4-JDM-LEGACY-SPARSE-TRIPLE _SD-S-WRITER "
+                "_EXT4-JWR.CP-DATA-MAP-KIND + !"
+            ),
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
+                "CONSTANT _SD-S-TCH-KIND-REJECTED"
+            ),
+            (
+                "_EXT4-JDM-LEGACY-SPARSE-TRIPLE-CHILD _SD-S-WRITER "
+                "_EXT4-JWR.CP-DATA-MAP-KIND + !"
+            ),
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? "
+                "CONSTANT _SD-S-TCH-AUTHORITY-RESTORED"
+            ),
+            (
+                "_SD-S-WRITER _EXT4-JTX-TABLES-VALID? "
+                "CONSTANT _SD-S-TCH-TABLES-RESTORED"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_SD-S-TCH-MISSING-MAP-REJECTED",
+                        "_SD-S-TCH-COORDINATED-MAP-DOWNGRADE-REJECTED",
+                        "_SD-S-TCH-COHERENT-ROOT-CP-VALID",
+                        "_SD-S-TCH-COHERENT-ROOT-STAGED-REJECTED",
+                        "_SD-S-TCH-COHERENT-ROOT-XATTR-VALID",
+                        "_SD-S-TCH-FORGED-TARGET-REJECTED",
+                        "_SD-S-TCH-COORDINATED-TARGET-DOWNGRADE-REJECTED",
+                        "_SD-S-TCH-XATTR-COMPOSITION-REJECTED",
+                        "_SD-S-TCH-CHILD-SPAN-REJECTED",
+                        "_SD-S-TCH-ORDER-REJECTED",
+                        "_SD-S-TCH-REVOKE-REJECTED",
+                        "_SD-S-TCH-KIND-REJECTED",
+                        "_SD-S-TCH-AUTHORITY-RESTORED",
+                        "_SD-S-TCH-TABLES-RESTORED",
                     ]
                 )
                 + f' IF ." {tamper_marker}" THEN'

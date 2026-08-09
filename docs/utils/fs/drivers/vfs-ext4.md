@@ -204,7 +204,12 @@ double-indirect slots remain zero. Direct slots may be occupied. Their ordered
 data singletons precede the root's one map singleton under
 `LEGACY-SPARSE-TRIPLE` authority; the root contributes one block to `i_blocks`
 and receives one exact revoke. This shape remains subject to the same
-caller-workspace bound. Each depth-1 leaf may use
+caller-workspace bound. As a second triple shape, when every direct slot and
+the external-xattr pointer are zero, the root may contain exactly one nonzero
+pointer to one allocated all-zero level-2 pointer block. Its ordered
+`{ triple-root, level-2-child }` map vector is sealed under
+`LEGACY-SPARSE-TRIPLE-CHILD` authority; both blocks contribute to `i_blocks`
+and each receives an exact revoke. Each depth-1 leaf may use
 every entry that fits the mounted block size. Every resident root key must equal its leaf's
 first logical block, and each nonfinal leaf must end no later than the next
 root key. The external leaves join the exact release and reverse-owner
@@ -232,9 +237,14 @@ optional single root, double root, and every child in outer-slot order.
 Duplicate physical pointers or data/map and map/map aliases are corrupt. An
 empty double root is admitted as one map singleton. The all-zero triple root is
 likewise one trailing map singleton after zero or more direct data entries. A
-triple root containing any nonzero pointer, or a present triple root combined
-with a single- or double-indirect map, remains unsupported. A
-double-indirect vector larger than the caller workspace also remains an
+separate child-bearing triple root is admitted only with zero direct data and
+no external xattr: it may contain one pointer to one allocated all-zero child,
+and the root and child become two ordered trailing map singletons. A repeated
+child or an alias with the root, direct data, or external-xattr home is
+corrupt. A second distinct root child, any nonzero pointer in the admitted
+child, direct-data or external-xattr composition with that child, or a present
+triple root combined with a single- or double-indirect map remain unsupported.
+A double-indirect vector larger than the caller workspace also remains an
 unsupported recovery shape. Physical ranges must not overlap each other or the
 optional xattr block, and decoded `i_blocks` must exactly equal the aggregate
 data, map-metadata, and xattr block count in filesystem sectors.
@@ -705,12 +715,14 @@ whose data map is an empty or one-to-four-entry inline depth-0 extent root, a
 resident depth-1 root with one to four external leaves, or a legacy map with
 direct slots, at most one complete single-indirect block, and an optional
 double-indirect root with zero or more occupied children whose exact canonical
-authority fits the caller workspace. It separately admits one allocated,
-all-zero triple-indirect root with zero or more direct data slots only when the
-single- and double-indirect slots are zero. Unlike linked truncation, unlinked
-deletion does not require zero size: it releases the complete authenticated
-map and zeroes the inode. Every extent entry must have a zero physical high
-word. The depth-1 root and every external leaf are checksum- and
+authority fits the caller workspace. It separately admits either one allocated
+all-zero triple-indirect root with zero or more direct data slots, or—with
+every direct slot and the external-xattr pointer zero—one triple root
+containing exactly one pointer to one allocated all-zero level-2 child. The
+single- and double-indirect slots must be zero in both cases. Unlike linked
+truncation, unlinked deletion does not require zero size: it releases the
+complete authenticated map and zeroes the inode. Every extent entry must have
+a zero physical high word. The depth-1 root and every external leaf are checksum- and
 allocation-checked; each root key must equal its leaf's first key, sibling
 logical bounds must agree, and no leaf may alias data or another leaf.
 Initialized decoded lengths are 1..32768 blocks and unwritten decoded lengths
@@ -730,13 +742,18 @@ map/map aliases are corrupt. An empty double root contributes its exact root
 singleton and revoke. The empty triple root contributes one trailing map
 singleton and one revoke under distinct `LEGACY-SPARSE-TRIPLE` authority after
 any direct data entries. Its complete block and both lower indirect slots must
-remain zero. Exact double-indirect authority larger than the caller workspace,
-a nonempty triple root, and any triple root combined with a single- or
-double-indirect map are unsupported.
+remain zero. The child-bearing shape contributes the exact ordered
+`{ triple-root, level-2-child }` map vector and two revokes under
+`LEGACY-SPARSE-TRIPLE-CHILD` authority. Duplicate or known-owner aliases are
+corrupt. Exact double-indirect authority larger than the caller workspace, a
+second distinct triple-root child, a nonzero grandchild, child composition
+with direct data or an external xattr, and any triple root combined with a
+single- or double-indirect map are unsupported.
 Decoded `i_blocks` must exactly match all data and map blocks plus that
 optional xattr singleton. The target must be at or above `s_first_ino`.
 Journal-data mode, extent trees deeper than the admitted resident depth-1
-fanout, over-budget double-indirect maps, nonempty or single-/double-combined
+fanout, over-budget double-indirect maps, triple-indirect fanout or data beyond
+the admitted all-zero child, child composition, single-/double-combined
 triple-indirect maps, malformed lengths or ranges,
 inconsistent shared-xattr
 owner counts or aliases, and xattr value inodes remain refused. Every candidate
@@ -1521,8 +1538,10 @@ The remaining boundaries are:
   fixed constant, but still does not cover linked nonzero-size/tail truncation,
   target extent trees deeper than the resident depth-1 fanout, target legacy
   double-indirect maps with authority larger than the caller workspace,
-  nonempty triple-indirect map mutation or a triple root combined with a
-  single- or double-indirect legacy map, a nonzero physical high word,
+  triple-indirect fanout beyond one allocated all-zero level-2 child, any
+  nonzero grandchild, child composition with direct data or an external xattr,
+  or a triple root combined with a single- or double-indirect legacy map, a
+  nonzero physical high word,
   inconsistent or out-of-range
   shared external-xattr ownership, inline or external xattr value-inode
   release, or general
@@ -1678,9 +1697,11 @@ The remaining boundaries are:
   when no xattr is present, while a present xattr or one additional data
   pointer returns unsupported recovery. Child/data aliasing and duplicate
   child homes are corrupt; over-budget double-indirect authority remains
-  unsupported. Triple-indirect admission is limited to an all-zero root with
-  optional direct data; a nonzero child or any single-/double-indirect
-  composition remains unsupported.
+  unsupported. Triple-indirect admission covers either an all-zero root with
+  optional direct data, or exactly one allocated all-zero level-2 child when
+  direct data and the external-xattr pointer are absent. Additional root
+  children, nonzero grandchildren, child composition, and any
+  single-/double-indirect composition remain unsupported.
   Focused one-child modern production cleanup
   releases three data blocks and all three map blocks in 1,431,070,159 guest
   steps under a scoped 1,600,000,000-step watchdog. It preserves all six homes
@@ -1693,7 +1714,7 @@ The remaining boundaries are:
   data, and root-only `i_blocks` under both orphan protocols. The modern case
   completes in 534,968,795 guest steps under its 800,000,000-step watchdog and
   pins six metadata credits, one revoke, and `MODERN_DATA_DELETE_FINAL`. The
-  legacy case completes in 529,117,618 steps under the same watchdog and pins
+  legacy case completes in 529,173,143 steps under the same watchdog and pins
   five metadata credits, one revoke, `LEGACY_DATA_DELETE_FINAL`, and the exact
   legacy head and locator authority. Both stage and seal retain zero target
   entries, one singleton map-metadata release range, one map block, the root's exact
@@ -1705,18 +1726,36 @@ The remaining boundaries are:
   watchdog. Both bind one target data entry, the exact ordered
   `{ direct, triple-root }` release vector, one root revoke, and the same
   protocol-specific credit and locator authority. A maximum-bound pair fills
-  direct slots 0 through 11 ahead of the root. Modern completes in 538,411,505
+  direct slots 0 through 11 ahead of the root. Modern completes in 538,468,086
   guest steps and legacy in 546,064,724 under the unchanged 800,000,000-step
   watchdog. Both pin 12 target data entries and blocks, the exact 13-singleton
   release vector with the root last, one map entry and block, the sole trailing
   root revoke, six modern or five legacy metadata credits, zero home
-  writes, and clean abort. The one-direct modern certificate
+  writes, and clean abort. A further focused 1 KiB staging pair admits zero
+  data with one triple root naming one allocated all-zero level-2 child. The
+  modern case uses root slot 7 and completes in 597,938,156 guest steps; the
+  legacy case exercises the final legal root slot and completes in 560,613,920
+  steps, both under the unchanged 800,000,000-step watchdog. Each binds zero
+  target entries, the ordered `{ triple-root, level-2-child }` release vector,
+  two map blocks and exact revokes, exact root-plus-child `i_blocks`, distinct
+  `LEGACY-SPARSE-TRIPLE-CHILD` authority, six modern or five legacy metadata
+  credits, zero home writes, and clean abort. The modern authority refuses
+  partial and coordinated count/revoke downgrades while the child type remains
+  sealed. A fully coherent rewrite into the older root-only type is still a
+  structurally valid checkpoint certificate, but staged-source reauthentication
+  rejects it as a data-map mismatch. Focused refusal coverage treats a repeated
+  child, root/direct/xattr aliases, an unallocated child, and incorrect
+  root-plus-child `i_blocks` as corruption; a second distinct child, a nonzero
+  grandchild, and direct-data or external-xattr composition remain unsupported.
+  Production, stable-remount, pinned-e2fsck, crash, broader-geometry, and
+  additional-fanout qualification remain pending for this child-bearing tier.
+  The one-direct modern certificate
   refuses missing or extra target counts, a missing range, widened data or root
   singletons, swapped data/root order, and a downgraded map kind before its
-  restored authority and transaction tables pass. Focused negative admission
-  covers a nonzero triple child, single- or double-indirect composition,
-  direct/root aliasing, and aliasing the triple root with the external-xattr
-  home. Focused single-record production and byte-identical zero-I/O stable
+  restored authority and transaction tables pass. Root-only negative admission
+  covers single- or double-indirect composition, direct/root aliasing, and
+  aliasing the triple root with the external-xattr home. Focused single-record
+  production and byte-identical zero-I/O stable
   remount qualification now cover the direct composition under both orphan
   protocols. The modern journey checkpoints the cleanup in 1,305,226,732 guest
   steps and the legacy journey in 1,318,122,553, each under the unchanged
