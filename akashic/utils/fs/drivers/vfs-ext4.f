@@ -974,12 +974,11 @@ VARIABLE _EXT4-GD-SPAN
 \ A format checksum proves that a bitmap was not silently altered; it does
 \ not prove that a block referenced by an inode or metadata pointer is marked
 \ allocated.  Keep that ownership check explicit and reusable by every map.
-\ An inline extent root has four format-defined leaf slots.  A direct-only
-\ legacy inode has twelve format-defined data slots.  The fixed writer
-\ checkpoint and short-lived owner certificate retain that currently admitted
-\ bound; the ambient mutation proof itself borrows a caller-bounded vector so
-\ a later external extent leaf does not require another global policy cap.
-4 CONSTANT _EXT4-INLINE-EXTENT-RANGE-MAX
+\ A resident extent root has four format-defined entry slots, used either as
+\ depth-zero extents or as child indexes.  A direct-only legacy inode has
+\ twelve format-defined data slots.  Transaction and owner authority derive
+\ their larger external-leaf storage from this format geometry.
+4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX
 _EXT4-NDIRECT CONSTANT _EXT4-LEGACY-DIRECT-RANGE-MAX
 VARIABLE _EXT4-MUTATION-OWNER-RANGES
 VARIABLE _EXT4-MUTATION-OWNER-RANGE-CAP
@@ -5071,7 +5070,7 @@ VARIABLE _EXT4-JADV-CTX
 0 CONSTANT _EXT4-JDM-NONE
 1 CONSTANT _EXT4-JDM-INLINE-EXTENTS
 2 CONSTANT _EXT4-JDM-LEGACY-DIRECT
-3 CONSTANT _EXT4-JDM-DEPTH1-ONELEAF
+3 CONSTANT _EXT4-JDM-DEPTH1-LEAVES
 
 0 CONSTANT _EXT4-JEA-NONE
 1 CONSTANT _EXT4-JEA-RELEASE
@@ -5154,9 +5153,6 @@ VARIABLE _EXT4-JADV-CTX
 592 CONSTANT _EXT4-JWR.CP-EA-CRC
 600 CONSTANT _EXT4-JWR-SIZE
 
-: _EXT4-JWR-CP-DELETE-RANGE-CAPACITY  ( block-size -- capacity )
-    12 - 12 / 2 + ;
-
 : _EXT4-JWR-CP-DELETE-RANGES  ( writer -- ranges )
     _EXT4-JWR.CP-DELETE-RANGES + @ ;
 
@@ -5191,6 +5187,26 @@ VARIABLE _EXT4-UB
         0 VFS-E-OVERFLOW EXIT
     THEN
     _EXT4-UA @ _EXT4-UB @ * 0 ;
+
+\ A depth-one resident root may fill all four index slots, and every child
+\ may fill its external leaf.  Retain every data extent, every leaf block,
+\ and one optional external-xattr singleton.  This is a format-derived arena
+\ size, not an admitted-record policy limit.
+: _EXT4-DEPTH1-DELETE-RANGE-CAPACITY  ( block-size -- capacity ior )
+    DUP
+    DUP 1024 = OVER 2048 = OR SWAP 4096 = OR 0= IF
+        DROP 0 VFS-E-INVALID EXIT
+    THEN
+    12 - 12 /
+    _EXT4-RESIDENT-EXTENT-ENTRY-MAX _EXT4-UMUL?
+    DUP IF NIP EXIT THEN DROP
+    _EXT4-RESIDENT-EXTENT-ENTRY-MAX _EXT4-UADD?
+    DUP IF NIP EXIT THEN DROP
+    1 _EXT4-UADD? ;
+
+: _EXT4-JWR-CP-DELETE-RANGE-CAPACITY
+  ( block-size -- capacity ior )
+    _EXT4-DEPTH1-DELETE-RANGE-CAPACITY ;
 
 VARIABLE _EXT4-HG-CAP
 VARIABLE _EXT4-HG-SLOTS
@@ -5241,7 +5257,7 @@ VARIABLE _EXT4-JWM-COMPONENT
     _EXT4-JWM-REVOKE @ _EXT4-HASH-SLOTS
     DUP IF NIP 0 SWAP EXIT THEN DROP _EXT4-JWM-REVOKE-SLOTS !
     _EXT4-JWM-BSIZE @ _EXT4-JWR-CP-DELETE-RANGE-CAPACITY
-    _EXT4-JWM-CP-RANGE-CAP !
+    DUP IF NIP 0 SWAP EXIT THEN DROP _EXT4-JWM-CP-RANGE-CAP !
     _EXT4-JWR-SIZE _EXT4-JWM-BYTES !
     _EXT4-JWM-META @ _EXT4-JWR-IMAGE-ENTRY-CELLS CELLS _EXT4-UMUL?
     DUP IF NIP 0 SWAP EXIT THEN DROP _EXT4-JWR-ADD-BYTES
@@ -5622,6 +5638,9 @@ VARIABLE _EXT4-JCA-EA-ACTION
 VARIABLE _EXT4-JCA-EA-REFCOUNT
 VARIABLE _EXT4-JCA-EA-CRC
 VARIABLE _EXT4-JCA-DATA-MAP-KIND
+VARIABLE _EXT4-JCA-MAP-ENTRIES
+VARIABLE _EXT4-JCA-MAP-DATA-CAP
+VARIABLE _EXT4-JCA-MAP-INDEX
 VARIABLE _EXT4-JCA-REVOKE-COUNT
 VARIABLE _EXT4-JCA-REVOKE-INDEX
 VARIABLE _EXT4-JCA-REVOKE-HOME
@@ -5735,22 +5754,40 @@ VARIABLE _EXT4-JCA-PRE-LEGACY
 \ range vector.  Legacy direct slots stay as singleton ranges in logical-slot
 \ order; an arbitrary coalesced range is not an equivalent direct-map proof.
 : _EXT4-JCA-DELETE-DATA-MAP?  ( -- flag )
+    0 _EXT4-JCA-MAP-ENTRIES !
     _EXT4-JCA-WRITER @ _EXT4-JWR.CP-DATA-MAP-KIND + @ DUP
     _EXT4-JCA-DATA-MAP-KIND !
     _EXT4-JDM-INLINE-EXTENTS = IF
         _EXT4-JCA-TARGET-ENTRIES @
-        _EXT4-INLINE-EXTENT-RANGE-MAX U> IF FALSE EXIT THEN
+        _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> IF FALSE EXIT THEN
         _EXT4-JCA-TARGET-ENTRIES @ _EXT4-JCA-RANGE-COUNT @ = EXIT
     THEN
-    _EXT4-JCA-DATA-MAP-KIND @ _EXT4-JDM-DEPTH1-ONELEAF = IF
-        _EXT4-JCA-TARGET-ENTRIES @
-        _EXT4-JCA-WRITER @ _EXT4-JWR.BSIZE + @ 12 - 12 / U> IF
+    _EXT4-JCA-DATA-MAP-KIND @ _EXT4-JDM-DEPTH1-LEAVES = IF
+        _EXT4-JCA-TARGET-ENTRIES @ _EXT4-JCA-RANGE-COUNT @ U> IF
             FALSE EXIT
         THEN
-        _EXT4-JCA-TARGET-ENTRIES @ 1+
-        _EXT4-JCA-RANGE-COUNT @ <> IF FALSE EXIT THEN
-        _EXT4-JCA-RANGE-COUNT @ 1-
-        _EXT4-JCA-WRITER @ _EXT4-JWR-CP-DELETE-RANGE CELL+ @ 1 = EXIT
+        _EXT4-JCA-RANGE-COUNT @ _EXT4-JCA-TARGET-ENTRIES @ -
+        DUP _EXT4-JCA-MAP-ENTRIES !
+        DUP 0= SWAP _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> OR IF
+            FALSE EXIT
+        THEN
+        _EXT4-JCA-TARGET-ENTRIES @
+        _EXT4-JCA-MAP-ENTRIES @ U< IF FALSE EXIT THEN
+        _EXT4-JCA-WRITER @ _EXT4-JWR.BSIZE + @ 12 - 12 /
+        _EXT4-JCA-MAP-ENTRIES @ _EXT4-UMUL?
+        DUP IF 2DROP FALSE EXIT THEN DROP _EXT4-JCA-MAP-DATA-CAP !
+        _EXT4-JCA-TARGET-ENTRIES @
+        _EXT4-JCA-MAP-DATA-CAP @ U> IF FALSE EXIT THEN
+        0 _EXT4-JCA-MAP-INDEX !
+        BEGIN
+            _EXT4-JCA-MAP-INDEX @ _EXT4-JCA-MAP-ENTRIES @ U<
+        WHILE
+            _EXT4-JCA-TARGET-ENTRIES @ _EXT4-JCA-MAP-INDEX @ +
+            _EXT4-JCA-WRITER @ _EXT4-JWR-CP-DELETE-RANGE
+            CELL+ @ 1 <> IF FALSE EXIT THEN
+            1 _EXT4-JCA-MAP-INDEX +!
+        REPEAT
+        TRUE EXIT
     THEN
     _EXT4-JCA-DATA-MAP-KIND @ _EXT4-JDM-LEGACY-DIRECT <> IF
         FALSE EXIT
@@ -5775,12 +5812,16 @@ VARIABLE _EXT4-JCA-PRE-LEGACY
     SWAP CELL+ @ _EXT4-JE-ACTIVE = AND ;
 
 \ Bind generic revoke storage back to the typed deletion authority retained
-\ in the checkpoint certificate.  The final singleton range is the admitted
-\ depth-one leaf; a released xattr follows it in deterministic insertion order.
+\ in the checkpoint certificate.  Every trailing depth-one leaf singleton is
+\ revoked in vector order; a released xattr follows all leaves.
 : _EXT4-JCA-DELETE-REVOKES?  ( -- flag )
     0 _EXT4-JCA-REVOKE-COUNT !
-    _EXT4-JCA-DATA-MAP-KIND @ _EXT4-JDM-DEPTH1-ONELEAF = IF
-        1 _EXT4-JCA-REVOKE-COUNT +!
+    _EXT4-JCA-DATA-MAP-KIND @ _EXT4-JDM-DEPTH1-LEAVES = IF
+        _EXT4-JCA-MAP-ENTRIES @ DUP 0=
+        SWAP _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> OR IF FALSE EXIT THEN
+        _EXT4-JCA-MAP-ENTRIES @ _EXT4-JCA-REVOKE-COUNT !
+    ELSE
+        _EXT4-JCA-MAP-ENTRIES @ IF FALSE EXIT THEN
     THEN
     _EXT4-JCA-EA-ACTION @ _EXT4-JEA-RELEASE = IF
         1 _EXT4-JCA-REVOKE-COUNT +!
@@ -5795,15 +5836,20 @@ VARIABLE _EXT4-JCA-PRE-LEGACY
     SWAP _EXT4-JCA-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ <> OR IF
         FALSE EXIT
     THEN
-    _EXT4-JCA-DATA-MAP-KIND @ _EXT4-JDM-DEPTH1-ONELEAF = IF
-        0 _EXT4-JCA-TARGET-ENTRIES @ _EXT4-JCA-WRITER @
-        _EXT4-JWR-CP-DELETE-RANGE @ _EXT4-JCA-REVOKE-ENTRY? 0= IF
+    0 _EXT4-JCA-MAP-INDEX !
+    BEGIN
+        _EXT4-JCA-MAP-INDEX @ _EXT4-JCA-MAP-ENTRIES @ U<
+    WHILE
+        _EXT4-JCA-MAP-INDEX @
+        _EXT4-JCA-TARGET-ENTRIES @ _EXT4-JCA-MAP-INDEX @ +
+        _EXT4-JCA-WRITER @ _EXT4-JWR-CP-DELETE-RANGE @
+        _EXT4-JCA-REVOKE-ENTRY? 0= IF
             FALSE EXIT
         THEN
-    THEN
+        1 _EXT4-JCA-MAP-INDEX +!
+    REPEAT
     _EXT4-JCA-EA-ACTION @ _EXT4-JEA-RELEASE = IF
-        _EXT4-JCA-DATA-MAP-KIND @ _EXT4-JDM-DEPTH1-ONELEAF =
-        IF 1 ELSE 0 THEN
+        _EXT4-JCA-MAP-ENTRIES @
         _EXT4-JCA-EA-HOME @ _EXT4-JCA-REVOKE-ENTRY? 0= IF
             FALSE EXIT
         THEN
@@ -5875,7 +5921,12 @@ VARIABLE _EXT4-JCA-PRE-LEGACY
 \ authority; raw locators and staged images are authenticated again at
 \ checkpoint.
 : _EXT4-JWR-CP-AUTHORITY?  ( writer -- flag )
-    DUP _EXT4-JCA-WRITER ! _EXT4-JWR.CP-MODE + @
+    DUP _EXT4-JCA-WRITER !
+    0 _EXT4-JCA-MAP-ENTRIES !
+    0 _EXT4-JCA-MAP-DATA-CAP !
+    0 _EXT4-JCA-MAP-INDEX !
+    _EXT4-JDM-NONE _EXT4-JCA-DATA-MAP-KIND !
+    _EXT4-JWR.CP-MODE + @
     DUP _EXT4-JCA-MODE ! _EXT4-JCPM-NONE = IF
         _EXT4-JCA-WRITER @ _EXT4-JWR.CP-EPOCH +
         _EXT4-JWR-SIZE _EXT4-JWR.CP-EPOCH - _EXT4-BYTES-ZERO?
@@ -5963,7 +6014,7 @@ VARIABLE _EXT4-JCA-PRE-LEGACY
             _EXT4-JCA-WRITER @ _EXT4-JWR.CP-DATA-MAP-KIND + @
             _EXT4-JDM-NONE <> IF FALSE EXIT THEN
             _EXT4-JCA-TARGET-ENTRIES @
-            _EXT4-INLINE-EXTENT-RANGE-MAX U> IF FALSE EXIT THEN
+            _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> IF FALSE EXIT THEN
             _EXT4-JCA-TARGET-ENTRIES @ 0=
             _EXT4-JCA-MODE @ _EXT4-JCPM-ORPHAN-MODERN?
             _EXT4-JCA-WRITER @ _EXT4-JWR.CP-O-LOGICAL + @ 0= OR AND IF
@@ -9311,19 +9362,13 @@ _EXT4-ORPHAN-RECORD-CELLS CELLS CONSTANT _EXT4-ORPHAN-RECORD-SIZE
 _EXT4-NONNEG-MAX _EXT4-ORPHAN-RECORD-SIZE /
 CONSTANT _EXT4-ORPHAN-SLOTS-MAX
 
-\ One external leaf beneath a resident depth-one root can contain every
-\ format-defined entry that fits the mounted block size.  Reserve one
-\ additional pair for that leaf's own metadata block and one for an external
-\ xattr singleton.  This is storage geometry, not a policy cap.  Deletion
-\ currently admits inline extents, direct legacy blocks, and exactly that
-\ one-leaf depth-one shape.
+\ Retain the complete format-defined depth-one fanout: every extent in all
+\ four possible external leaves, each leaf block itself, and one optional
+\ external-xattr singleton.  Inline and legacy-direct shapes share this
+\ geometry-sized workspace rather than introducing smaller policy caps.
 : _EXT4-MUTATION-RANGE-WORKSPACE-CAPACITY  ( ctx -- capacity ior )
     DUP 0= IF DROP 0 VFS-E-INVALID EXIT THEN
-    _EXT4-C.BSIZE + @ DUP
-    DUP 1024 = OVER 2048 = OR SWAP 4096 = OR 0= IF
-        DROP 0 VFS-E-INVALID EXIT
-    THEN
-    12 - 12 / 2 _EXT4-UADD? ;
+    _EXT4-C.BSIZE + @ _EXT4-DEPTH1-DELETE-RANGE-CAPACITY ;
 
 : _EXT4-MUTATION-RANGE-WORKSPACE?  ( ctx -- flag )
     DUP _EXT4-C.MUTATION-RANGES + @
@@ -11410,12 +11455,19 @@ VARIABLE _EXT4-JFI-IOR
 VARIABLE _EXT4-JFI-PUBLISHED
 VARIABLE _EXT4-JFI-ABORT-IOR
 VARIABLE _EXT4-JFI-DATA-ENTRIES
+VARIABLE _EXT4-JFI-EXTENT-ROOT
+VARIABLE _EXT4-JFI-ROOT-ENTRIES
+VARIABLE _EXT4-JFI-ROOT-INDEX
+VARIABLE _EXT4-JFI-ROOT-ENTRY
+VARIABLE _EXT4-JFI-ROOT-KEY
 VARIABLE _EXT4-JFI-DATA-ROOT
 VARIABLE _EXT4-JFI-DATA-ENTRY
 VARIABLE _EXT4-JFI-DATA-BLOCKS
+VARIABLE _EXT4-JFI-LEAF-ENTRIES
+VARIABLE _EXT4-JFI-LEAF-HOME
 VARIABLE _EXT4-JFI-MAP-ENTRIES
 VARIABLE _EXT4-JFI-MAP-BLOCKS
-VARIABLE _EXT4-JFI-MAP-HOME
+VARIABLE _EXT4-JFI-MAP-INDEX
 VARIABLE _EXT4-JFI-DATA-MAP-KIND
 VARIABLE _EXT4-JFI-DATA-ACTUAL
 VARIABLE _EXT4-JFI-DATA-PHYSICAL
@@ -11439,6 +11491,13 @@ CREATE _EXT4-JFI-EA-RANGE
 
 : _EXT4-JFI-RANGE  ( index -- pair-address )
     2* CELLS _EXT4-JFI-RANGES + ;
+
+: _EXT4-JFI-MAP-RANGE  ( map-index -- pair-address )
+    _EXT4-JFI-DATA-ENTRIES @ + _EXT4-JFI-RANGE ;
+
+: _EXT4-JFI-MAP-SCRATCH-RANGE  ( map-index -- pair-address )
+    _EXT4-JFI-RANGE-CAP _EXT4-JFI-MAP-ENTRIES @ - +
+    _EXT4-JFI-RANGE ;
 
 : _EXT4-JFI-EA-RELEASE?  ( -- flag )
     _EXT4-JFI-EA-ACTION @ _EXT4-JEA-RELEASE = ;
@@ -11479,29 +11538,43 @@ CREATE _EXT4-JFI-EA-RANGE
     _EXT4-JFI-EA-RELEASE? IF 1+ THEN ;
 
 VARIABLE _EXT4-JRV-WRITER
+VARIABLE _EXT4-JRV-INDEX
 
 \ Prove the exact retained revoke vector in its deterministic insertion order:
-\ the admitted external extent leaf first, then a uniquely released external
-\ xattr block.  Ordinary data blocks and shared-xattr decrements are never
-\ revoked by orphan cleanup.
+\ every admitted external extent leaf in resident-root order, then a uniquely
+\ released external xattr block.  Ordinary data blocks and shared-xattr
+\ decrements are never revoked by orphan cleanup.
 : _EXT4-JFI-REVOKES-EXACT?  ( writer -- flag )
     _EXT4-JRV-WRITER !
-    _EXT4-JFI-MAP-ENTRIES @ 1 U> IF FALSE EXIT THEN
-    _EXT4-JFI-MAP-ENTRIES @ IF
-        _EXT4-JFI-MAP-HOME @ 0= IF FALSE EXIT THEN
+    _EXT4-JFI-DATA-MAP-KIND @ _EXT4-JDM-DEPTH1-LEAVES = IF
+        _EXT4-JFI-MAP-ENTRIES @ DUP 0= SWAP
+        _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> OR IF FALSE EXIT THEN
+    ELSE
+        _EXT4-JFI-MAP-ENTRIES @ IF FALSE EXIT THEN
     THEN
     _EXT4-JFI-EA-RELEASE? _EXT4-JFI-EA @ 0= AND IF FALSE EXIT THEN
-    _EXT4-JFI-REVOKE-COUNT DUP
+    _EXT4-JFI-REVOKE-COUNT
+    DUP _EXT4-JRV-WRITER @ _EXT4-JWR.REVOKE-CAP + @ U> IF
+        DROP FALSE EXIT
+    THEN
+    DUP
     _EXT4-JRV-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ <>
     OVER _EXT4-JRV-WRITER @ _EXT4-JWR.REVOKE-USED + @ <> OR
     SWAP _EXT4-JRV-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ <> OR IF
         FALSE EXIT
     THEN
-    _EXT4-JFI-MAP-ENTRIES @ IF
-        0 _EXT4-JRV-WRITER @ _EXT4-JWR-REVOKE-ENTRY DUP @
-        _EXT4-JFI-MAP-HOME @ <>
+    0 _EXT4-JRV-INDEX !
+    BEGIN
+        _EXT4-JRV-INDEX @ _EXT4-JFI-MAP-ENTRIES @ U<
+    WHILE
+        _EXT4-JRV-INDEX @ _EXT4-JFI-MAP-RANGE DUP
+        CELL+ @ 1 <> SWAP @ 0= OR IF FALSE EXIT THEN
+        _EXT4-JRV-INDEX @ _EXT4-JRV-WRITER @
+        _EXT4-JWR-REVOKE-ENTRY DUP @
+        _EXT4-JRV-INDEX @ _EXT4-JFI-MAP-RANGE @ <>
         SWAP CELL+ @ _EXT4-JE-ACTIVE <> OR IF FALSE EXIT THEN
-    THEN
+        1 _EXT4-JRV-INDEX +!
+    REPEAT
     _EXT4-JFI-EA-RELEASE? IF
         _EXT4-JFI-MAP-ENTRIES @ _EXT4-JRV-WRITER @
         _EXT4-JWR-REVOKE-ENTRY DUP @ _EXT4-JFI-EA @ <>
@@ -12336,7 +12409,37 @@ VARIABLE _EXT4-JOW-META-IOR
     THEN
     0 ;
 
+VARIABLE _EXT4-JFI-OVERLAP-INDEX
+VARIABLE _EXT4-JFI-OVERLAP-OTHER
+
+: _EXT4-JFI-RANGES-DISJOINT?  ( -- flag )
+    _EXT4-JFI-RANGE-COUNT DUP 0<
+    SWAP _EXT4-JFI-RANGE-CAP U> OR IF FALSE EXIT THEN
+    0 _EXT4-JFI-OVERLAP-INDEX !
+    BEGIN
+        _EXT4-JFI-OVERLAP-INDEX @ _EXT4-JFI-RANGE-COUNT U<
+    WHILE
+        0 _EXT4-JFI-OVERLAP-OTHER !
+        BEGIN
+            _EXT4-JFI-OVERLAP-OTHER @
+            _EXT4-JFI-OVERLAP-INDEX @ U<
+        WHILE
+            _EXT4-JFI-OVERLAP-INDEX @ _EXT4-JFI-RANGE
+            DUP @ SWAP CELL+ @
+            _EXT4-JFI-OVERLAP-OTHER @ _EXT4-JFI-RANGE
+            DUP @ SWAP CELL+ @ _EXT4-BLOCK-RANGES-OVERLAP? IF
+                FALSE EXIT
+            THEN
+            1 _EXT4-JFI-OVERLAP-OTHER +!
+        REPEAT
+        1 _EXT4-JFI-OVERLAP-INDEX +!
+    REPEAT
+    TRUE ;
+
 : _EXT4-JFI-DATA-COMMON-PREFLIGHT  ( -- ior )
+    _EXT4-JFI-RANGES-DISJOINT? 0= IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
     _EXT4-JFI-INODE @ _EXT4-JFI-CTX @ _EXT4-DECODE-I-BLOCKS
     DUP IF NIP EXIT THEN DROP _EXT4-JFI-DATA-ACTUAL !
     _EXT4-JFI-ACCOUNTED-BLOCKS
@@ -12358,13 +12461,15 @@ VARIABLE _EXT4-JOW-META-IOR
     0 ;
 
 : _EXT4-JFI-CAPTURE-EXTENT-LEAF  ( -- ior )
-    _EXT4-JFI-DATA-ROOT @ 2 + W@ _EXT4-JFI-DATA-ENTRIES !
-    _EXT4-JFI-RANGE-COUNT 1+ _EXT4-JFI-RANGE-CAP U> IF
+    _EXT4-JFI-DATA-ROOT @ 2 + W@ _EXT4-JFI-LEAF-ENTRIES !
+    _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFI-LEAF-ENTRIES @
+    _EXT4-UADD? DUP IF NIP EXIT THEN DROP
+    _EXT4-JFI-RANGE-CAP _EXT4-JFI-MAP-ENTRIES @ - 1- U> IF
         EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
     THEN
     0 _EXT4-JFI-DATA-INDEX !
     BEGIN
-        _EXT4-JFI-DATA-INDEX @ _EXT4-JFI-DATA-ENTRIES @ U<
+        _EXT4-JFI-DATA-INDEX @ _EXT4-JFI-LEAF-ENTRIES @ U<
     WHILE
         _EXT4-JFI-DATA-ROOT @ 12
         _EXT4-JFI-DATA-INDEX @ 12 * + + DUP _EXT4-JFI-DATA-ENTRY !
@@ -12373,7 +12478,7 @@ VARIABLE _EXT4-JOW-META-IOR
             EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
         THEN
         _EXT4-JFI-DATA-ENTRY @ _EXT4-EXTENT-LEN@
-        DUP _EXT4-JFI-DATA-INDEX @ _EXT4-JFI-RANGE CELL+ !
+        DUP _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFI-RANGE CELL+ !
         _EXT4-JFI-DATA-LOGICAL @ SWAP _EXT4-UADD?
         DUP IF NIP EXIT THEN DROP 0xFFFFFFFF U> IF
             EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
@@ -12385,52 +12490,90 @@ VARIABLE _EXT4-JOW-META-IOR
         DUP 0= IF
             EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
         THEN
-        _EXT4-JFI-DATA-INDEX @ _EXT4-JFI-RANGE !
+        _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFI-RANGE !
         _EXT4-JFI-DATA-BLOCKS @
-        _EXT4-JFI-DATA-INDEX @ _EXT4-JFI-RANGE CELL+ @
+        _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFI-RANGE CELL+ @
         _EXT4-UADD? DUP IF NIP EXIT THEN DROP _EXT4-JFI-DATA-BLOCKS !
+        1 _EXT4-JFI-DATA-ENTRIES +!
         1 _EXT4-JFI-DATA-INDEX +!
     REPEAT
-    _EXT4-JFI-MAP-ENTRIES @ IF
-        _EXT4-JFI-DATA-ENTRIES @ 0 ?DO
-            _EXT4-JFI-MAP-HOME @ 1 I _EXT4-JFI-RANGE
-            DUP @ SWAP CELL+ @ _EXT4-BLOCK-RANGES-OVERLAP? IF
-                EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
-            THEN
-        LOOP
-        _EXT4-JFI-MAP-HOME @
-        _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFI-RANGE !
-        1 _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFI-RANGE CELL+ !
-    THEN
-    _EXT4-JFI-DATA-COMMON-PREFLIGHT ;
+    0 ;
 
-\ Admit a resident depth-one root with one external leaf as the first
-\ non-inline deletion shape.  The resident root must contain exactly one
-\ index.  General extent validation
-\ authenticates the root entry; the explicit child reload authenticates its
-\ checksum and leaf entries, while the root-key equality closes its bounds.
+: _EXT4-JFI-EXTENT-ROOT-ENTRY  ( index -- entry )
+    12 * 12 + _EXT4-JFI-EXTENT-ROOT @ + ;
+
+: _EXT4-JFI-CURRENT-LEAF-IN-ROOT-BOUNDS?  ( -- flag )
+    _EXT4-JFI-ROOT-INDEX @ 1+ _EXT4-JFI-ROOT-ENTRIES @ U< 0= IF
+        TRUE EXIT
+    THEN
+    _EXT4-JFI-DATA-ROOT @ 12
+    _EXT4-JFI-LEAF-ENTRIES @ 1- 12 * + + DUP
+    L@ SWAP _EXT4-EXTENT-LEN@ +
+    _EXT4-JFI-ROOT-INDEX @ 1+ _EXT4-JFI-EXTENT-ROOT-ENTRY L@
+    U> 0= ;
+
+: _EXT4-JFI-COMPACT-MAP-RANGES  ( -- )
+    0 _EXT4-JFI-MAP-INDEX !
+    BEGIN
+        _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-ENTRIES @ U<
+    WHILE
+        _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-SCRATCH-RANGE
+        _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-RANGE
+        2 CELLS CMOVE
+        1 _EXT4-JFI-MAP-INDEX +!
+    REPEAT
+    _EXT4-JFI-RANGES _EXT4-JFI-RANGE-COUNT 2* CELLS +
+    _EXT4-JFI-RANGE-CAP _EXT4-JFI-RANGE-COUNT -
+    2* CELLS 0 FILL ;
+
+\ Admit every format-valid resident depth-one fanout.  Root and child keys,
+\ child checksums, and sibling logical bounds are reauthenticated while leaf
+\ homes are parked at the workspace tail.  The final canonical vector keeps
+\ all data extents first and all leaf singletons in resident-root order.
 : _EXT4-JFI-EXTENT-DATA-PREFLIGHT  ( -- ior )
     _EXT4-JFI-CTX @ _EXT4-VALIDATE-INLINE-EXTENTS ?DUP IF EXIT THEN
-    _EXT4-JFI-INODE @ _EXT4-I.BLOCK + DUP _EXT4-JFI-DATA-ROOT !
+    _EXT4-JFI-INODE @ _EXT4-I.BLOCK + DUP _EXT4-JFI-EXTENT-ROOT !
     6 + W@ DUP 0= IF
-        DROP _EXT4-JDM-INLINE-EXTENTS _EXT4-JFI-DATA-MAP-KIND !
-        _EXT4-JFI-CAPTURE-EXTENT-LEAF EXIT
+        DROP
+        _EXT4-JDM-INLINE-EXTENTS _EXT4-JFI-DATA-MAP-KIND !
+        _EXT4-JFI-EXTENT-ROOT @ _EXT4-JFI-DATA-ROOT !
+        _EXT4-JFI-CAPTURE-EXTENT-LEAF ?DUP IF EXIT THEN
+        _EXT4-JFI-DATA-COMMON-PREFLIGHT EXIT
     THEN
     1 <> IF EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT THEN
-    _EXT4-JFI-DATA-ROOT @ 2 + W@ 1 <> IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _EXT4-JDM-DEPTH1-ONELEAF _EXT4-JFI-DATA-MAP-KIND !
-    1 _EXT4-JFI-MAP-ENTRIES !
-    1 _EXT4-JFI-MAP-BLOCKS !
-    _EXT4-JFI-DATA-ROOT @ 12 + L@ _EXT4-JFI-DATA-LOGICAL !
-    _EXT4-JFI-DATA-ROOT @ 16 + L@ DUP _EXT4-JFI-MAP-HOME !
-    0 _EXT4-JFI-CTX @ _EXT4-LOAD-EXTENT-NODE ?DUP IF EXIT THEN
-    _EXT4-JFI-CTX @ _EXT4-C.TREE-BLOCK + DUP _EXT4-JFI-DATA-ROOT !
-    12 + L@ _EXT4-JFI-DATA-LOGICAL @ <> IF
+    _EXT4-JFI-EXTENT-ROOT @ 2 + W@ DUP _EXT4-JFI-ROOT-ENTRIES !
+    DUP 0= SWAP _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> OR IF
         EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
     THEN
-    _EXT4-JFI-CAPTURE-EXTENT-LEAF ;
+    _EXT4-JDM-DEPTH1-LEAVES _EXT4-JFI-DATA-MAP-KIND !
+    _EXT4-JFI-ROOT-ENTRIES @ DUP _EXT4-JFI-MAP-ENTRIES !
+    _EXT4-JFI-MAP-BLOCKS !
+    0 _EXT4-JFI-ROOT-INDEX !
+    BEGIN
+        _EXT4-JFI-ROOT-INDEX @ _EXT4-JFI-ROOT-ENTRIES @ U<
+    WHILE
+        _EXT4-JFI-ROOT-INDEX @ _EXT4-JFI-EXTENT-ROOT-ENTRY
+        DUP _EXT4-JFI-ROOT-ENTRY !
+        DUP L@ _EXT4-JFI-ROOT-KEY !
+        4 + L@ DUP _EXT4-JFI-LEAF-HOME !
+        _EXT4-JFI-ROOT-INDEX @ _EXT4-JFI-MAP-SCRATCH-RANGE !
+        1 _EXT4-JFI-ROOT-INDEX @
+        _EXT4-JFI-MAP-SCRATCH-RANGE CELL+ !
+        _EXT4-JFI-LEAF-HOME @ 0 _EXT4-JFI-CTX @
+        _EXT4-LOAD-EXTENT-NODE ?DUP IF EXIT THEN
+        _EXT4-JFI-CTX @ _EXT4-C.TREE-BLOCK +
+        DUP _EXT4-JFI-DATA-ROOT !
+        12 + L@ _EXT4-JFI-ROOT-KEY @ <> IF
+            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
+        _EXT4-JFI-CAPTURE-EXTENT-LEAF ?DUP IF EXIT THEN
+        _EXT4-JFI-CURRENT-LEAF-IN-ROOT-BOUNDS? 0= IF
+            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
+        1 _EXT4-JFI-ROOT-INDEX +!
+    REPEAT
+    _EXT4-JFI-COMPACT-MAP-RANGES
+    _EXT4-JFI-DATA-COMMON-PREFLIGHT ;
 
 \ Legacy deletion presently decodes every slot in the direct-only
 \ representation.  Holes do not enter release authority, while every occupied
@@ -12467,9 +12610,18 @@ VARIABLE _EXT4-JOW-META-IOR
 : _EXT4-JFI-DATA-PREFLIGHT  ( -- ior )
     0 _EXT4-JFI-DATA-ENTRIES !
     0 _EXT4-JFI-DATA-BLOCKS !
+    0 _EXT4-JFI-EXTENT-ROOT !
+    0 _EXT4-JFI-ROOT-ENTRIES !
+    0 _EXT4-JFI-ROOT-INDEX !
+    0 _EXT4-JFI-ROOT-ENTRY !
+    0 _EXT4-JFI-ROOT-KEY !
+    0 _EXT4-JFI-DATA-ROOT !
+    0 _EXT4-JFI-DATA-ENTRY !
+    0 _EXT4-JFI-LEAF-ENTRIES !
+    0 _EXT4-JFI-LEAF-HOME !
     0 _EXT4-JFI-MAP-ENTRIES !
     0 _EXT4-JFI-MAP-BLOCKS !
-    0 _EXT4-JFI-MAP-HOME !
+    0 _EXT4-JFI-MAP-INDEX !
     _EXT4-JDM-NONE _EXT4-JFI-DATA-MAP-KIND !
     _EXT4-JFI-RANGES
     _EXT4-JFI-RANGE-CAP 2* CELLS 0 FILL
@@ -12547,11 +12699,11 @@ VARIABLE _EXT4-JFI-CP-WRITER
         _EXT4-JWR-CP-DELETE-RANGE CELL+ !
     LOOP ;
 
-\ Authenticate one complete deletion shape: an inline extent root, a resident
-\ depth-one root with exactly one external leaf, or all twelve direct legacy
-\ slots with no indirect roots.  Retain each represented data and map-metadata range
-\ separately and bind the map family, ordered release vector, and explicit
-\ external-xattr disposition into the owner certificate.
+\ Authenticate one complete deletion shape: an inline extent root, every
+\ format-valid resident depth-one leaf fanout, or all twelve direct legacy
+\ slots with no indirect roots.  Retain each represented data and map-metadata
+\ range separately and bind the map family, ordered release vector, and
+\ explicit external-xattr disposition into the owner certificate.
 \ Structurally valid resident inline xattrs die with the inode allocation bit.
 : _EXT4-JFI-AUTH-PREFLIGHT  ( -- ior )
     _EXT4-JFI-RECORD @ 0= _EXT4-JFI-CTX @ 0= OR IF
@@ -12864,11 +13016,16 @@ VARIABLE _EXT4-JFI-CP-WRITER
         ?DUP IF _EXT4-JFI-FAIL-AFTER-PUBLISH EXIT THEN
         -1 _EXT4-JFI-PUBLISHED !
     THEN
-    _EXT4-JFI-MAP-ENTRIES @ IF
-        _EXT4-JFI-MAP-HOME @ _EXT4-JFI-WRITER @ _EXT4-JTX-REVOKE
+    0 _EXT4-JFI-MAP-INDEX !
+    BEGIN
+        _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-ENTRIES @ U<
+    WHILE
+        _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-RANGE @
+        _EXT4-JFI-WRITER @ _EXT4-JTX-REVOKE
         ?DUP IF _EXT4-JFI-FAIL-AFTER-PUBLISH EXIT THEN
         -1 _EXT4-JFI-PUBLISHED !
-    THEN
+        1 _EXT4-JFI-MAP-INDEX +!
+    REPEAT
     _EXT4-JFI-EA @ IF
         _EXT4-JFI-EA-RELEASE? IF
             _EXT4-JFI-EA @ 1 _EXT4-JFI-WRITER @
@@ -12937,7 +13094,7 @@ VARIABLE _EXT4-EIB-LIMIT
 \ Four leaf entries are the format-defined capacity of an inline inode
 \ extent root.  Each retained pair is { first physical block, block count }.
 CREATE _EXT4-JOT-RANGES
-_EXT4-INLINE-EXTENT-RANGE-MAX 2* CELLS ALLOT
+_EXT4-RESIDENT-EXTENT-ENTRY-MAX 2* CELLS ALLOT
 
 : _EXT4-JOT-RANGE  ( index -- pair-address )
     2 * CELLS _EXT4-JOT-RANGES + ;
@@ -13026,7 +13183,7 @@ CREATE _EXT4-JOT-EA-RANGE 2 CELLS ALLOT
 \ it before the first home write can begin.
 : _EXT4-JOT-REQUIRE-UNIQUE-DATA-OWNER  ( -- ior )
     _EXT4-JOT-COUNT @ 0= IF 0 EXIT THEN
-    _EXT4-JOT-COUNT @ _EXT4-INLINE-EXTENT-RANGE-MAX U> IF
+    _EXT4-JOT-COUNT @ _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> IF
         EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
     THEN
     _EXT4-MUTATION-OWNER-RANGES-BUSY?
@@ -13040,7 +13197,7 @@ CREATE _EXT4-JOT-EA-RANGE 2 CELLS ALLOT
     0 _EXT4-MAP-VALIDATION-LIMIT !
     _EXT4-MUTATION-OWNER-RANGES-CLEAR
     _EXT4-JOT-RANGES _EXT4-JOT-COUNT @
-    _EXT4-INLINE-EXTENT-RANGE-MAX
+    _EXT4-RESIDENT-EXTENT-ENTRY-MAX
     _EXT4-MUTATION-OWNER-RANGES-PUBLISH
     ?DUP IF
         _EXT4-JOT-OWNER-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT ! EXIT
@@ -13093,7 +13250,8 @@ CREATE _EXT4-JOT-EA-RANGE 2 CELLS ALLOT
 \ takes a second scoped pass rather than turning that format boundary into a
 \ larger ambient-table policy limit.
 : _EXT4-JOT-VALIDATE-ORPHAN-FILE-DISJOINT  ( -- ior )
-    _EXT4-JOT-RANGES _EXT4-JOT-COUNT @ _EXT4-INLINE-EXTENT-RANGE-MAX
+    _EXT4-JOT-RANGES _EXT4-JOT-COUNT @
+    _EXT4-RESIDENT-EXTENT-ENTRY-MAX
     _EXT4-JOT-RECORD @ _EXT4-JOT-CTX @
     _EXT4-ORPHAN-FILE-RANGES-DISJOINT ?DUP IF EXIT THEN
     _EXT4-JOT-EA @ IF
@@ -14241,7 +14399,7 @@ VARIABLE _EXT4-JCM-DELETE
         0 EXIT
     THEN
     _EXT4-JOT-RANGES _EXT4-JCM-RANGE-COUNT
-    _EXT4-INLINE-EXTENT-RANGE-MAX _EXT4-JCM-CTX @
+    _EXT4-RESIDENT-EXTENT-ENTRY-MAX _EXT4-JCM-CTX @
     _EXT4-VALIDATE-MUTATION-RANGES-TARGETS ;
 
 : _EXT4-JCM-COUNT-GROUP-HOMES  ( -- ior )

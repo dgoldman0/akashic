@@ -1807,24 +1807,34 @@ def _inline_depth0_unlinked_orphan_patches(
     return tuple(patches.items()), physical_ranges
 
 
-def _depth1_one_leaf_unlinked_orphan_patches(
+_DEPTH1_FOUR_LEAF_EXTENT_SPECS = (
+    ((0, 1, False), (3, 2, True)),
+    ((8, 1, False),),
+    ((12, 2, True), (16, 1, False)),
+    ((20, 1, False),),
+)
+
+
+def _depth1_external_leaves_unlinked_orphan_patches(
     path: Path,
     *,
     protocol: str,
     inode_number: int = 18,
-    extent_specs: tuple[tuple[int, int, bool], ...] = (
-        (0, 1, False),
-        (3, 2, True),
-    ),
+    leaf_extent_specs: tuple[
+        tuple[tuple[int, int, bool], ...], ...
+    ] = _DEPTH1_FOUR_LEAF_EXTENT_SPECS,
+    physical_gap: int = 1,
     size_bytes: int = (1 << 32) + 777,
 ) -> tuple[
     tuple[tuple[int, bytes], ...],
     tuple[tuple[int, int], ...],
-    int,
+    tuple[int, ...],
 ]:
-    """Give one unlinked inode a depth-one root and one external leaf."""
+    """Give one unlinked inode a complete resident depth-one fanout."""
     assert protocol in {"modern", "legacy"}
-    assert extent_specs
+    assert 1 <= len(leaf_extent_specs) <= 4
+    assert all(leaf_extent_specs)
+    assert physical_gap >= 0
     assert 0 <= size_bytes < (1 << 63)
     with path.open("rb") as source:
         source.seek(1024)
@@ -1834,110 +1844,153 @@ def _depth1_one_leaf_unlinked_orphan_patches(
         "<I", source_superblock, 0x18
     )[0]
     source_leaf_max = (source_block_size - 12) // 12
-    assert len(extent_specs) <= source_leaf_max
+    assert all(
+        len(extent_specs) <= source_leaf_max
+        for extent_specs in leaf_extent_specs
+    )
+    flattened_specs = tuple(
+        extent
+        for extent_specs in leaf_extent_specs
+        for extent in extent_specs
+    )
+    previous_logical_end = 0
+    for leaf_index, extent_specs in enumerate(leaf_extent_specs):
+        for extent_index, (logical_start, block_count, _) in enumerate(
+            extent_specs
+        ):
+            if leaf_index or extent_index:
+                assert logical_start >= previous_logical_end
+            previous_logical_end = logical_start + block_count
     final_logical = max(
         logical_start + block_count
-        for logical_start, block_count, _ in extent_specs
+        for logical_start, block_count, _ in flattened_specs
     )
-    dummy_spec = (final_logical + 1, 1, False)
-    allocation_specs = (*extent_specs, dummy_spec)
+    leaf_allocation_specs = tuple(
+        (final_logical + 1 + 2 * index, 1, False)
+        for index in range(len(leaf_extent_specs))
+    )
+    allocation_specs = (*flattened_specs, *leaf_allocation_specs)
     _, _, inode_offset = _ext4_inode_record(path, inode_number)
     patches, allocated_ranges = _allocate_unlinked_extent_ranges(
         path,
         protocol=protocol,
         inode_number=inode_number,
         extent_specs=allocation_specs,
-        physical_gap=1,
+        physical_gap=physical_gap,
         seed_payloads=True,
         seed_gap_payloads=True,
     )
     patch_map = dict(patches)
-    assert len(allocated_ranges) == len(extent_specs) + 1
-    data_ranges = allocated_ranges[:-1]
-    leaf_block, leaf_count = allocated_ranges[-1]
-    assert leaf_count == 1
-    for expected, observed in zip(extent_specs, data_ranges, strict=True):
+    data_count = len(flattened_specs)
+    assert len(allocated_ranges) == data_count + len(leaf_extent_specs)
+    data_ranges = allocated_ranges[:data_count]
+    leaf_ranges = allocated_ranges[data_count:]
+    assert all(count == 1 for _, count in leaf_ranges)
+    leaf_blocks = tuple(first for first, _ in leaf_ranges)
+    for expected, observed in zip(flattened_specs, data_ranges, strict=True):
         assert expected[1] == observed[1]
 
     superblock = patch_map[1024]
     block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
     leaf_max = (block_size - 12) // 12
-    assert len(extent_specs) <= leaf_max
-    leaf = bytearray(block_size)
-    struct.pack_into(
-        "<HHHHI",
-        leaf,
-        0,
-        0xF30A,
-        len(extent_specs),
-        leaf_max,
-        0,
-        0,
-    )
-    for index, (
-        (logical_start, block_count, unwritten),
-        (physical_start, observed_count),
-    ) in enumerate(zip(extent_specs, data_ranges, strict=True)):
-        assert observed_count == block_count
-        raw_length = block_count | (0x8000 if unwritten else 0)
-        struct.pack_into(
-            "<IHHI",
-            leaf,
-            12 + index * 12,
-            logical_start,
-            raw_length,
-            physical_start >> 32,
-            physical_start & 0xFFFF_FFFF,
-        )
-
     inode = bytearray(patch_map[inode_offset])
     generation = struct.unpack_from("<I", inode, 0x64)[0]
-    patch_map[leaf_block * block_size] = _extent_node_with_checksum(
-        superblock,
-        inode_number,
-        generation,
-        leaf,
-    )
+    data_index = 0
+    for extent_specs, leaf_block in zip(
+        leaf_extent_specs, leaf_blocks, strict=True
+    ):
+        assert len(extent_specs) <= leaf_max
+        leaf = bytearray(block_size)
+        struct.pack_into(
+            "<HHHHI",
+            leaf,
+            0,
+            0xF30A,
+            len(extent_specs),
+            leaf_max,
+            0,
+            0,
+        )
+        for leaf_entry, (logical_start, block_count, unwritten) in enumerate(
+            extent_specs
+        ):
+            physical_start, observed_count = data_ranges[data_index]
+            data_index += 1
+            assert observed_count == block_count
+            raw_length = block_count | (0x8000 if unwritten else 0)
+            struct.pack_into(
+                "<IHHI",
+                leaf,
+                12 + leaf_entry * 12,
+                logical_start,
+                raw_length,
+                physical_start >> 32,
+                physical_start & 0xFFFF_FFFF,
+            )
+        patch_map[leaf_block * block_size] = _extent_node_with_checksum(
+            superblock,
+            inode_number,
+            generation,
+            leaf,
+        )
+    assert data_index == len(data_ranges)
     sectors_per_block = block_size // 512
-    total_blocks = sum(count for _, count in data_ranges) + 1
+    total_blocks = sum(count for _, count in data_ranges) + len(leaf_blocks)
     sectors = total_blocks * sectors_per_block
     assert sectors <= 0xFFFF_FFFF
     struct.pack_into("<I", inode, 0x04, size_bytes & 0xFFFF_FFFF)
     struct.pack_into("<I", inode, 0x6C, size_bytes >> 32)
     struct.pack_into("<I", inode, 0x1C, sectors)
     struct.pack_into("<H", inode, 0x74, 0)
-    struct.pack_into("<HHHHI", inode, 0x28, 0xF30A, 1, 4, 1, 0)
-    inode[0x34:0x64] = bytes(48)
     struct.pack_into(
-        "<IIHH",
+        "<HHHHI",
         inode,
-        0x34,
-        extent_specs[0][0],
-        leaf_block & 0xFFFF_FFFF,
-        leaf_block >> 32,
+        0x28,
+        0xF30A,
+        len(leaf_extent_specs),
+        4,
+        1,
         0,
     )
+    inode[0x34:0x64] = bytes(48)
+    for root_index, (extent_specs, leaf_block) in enumerate(
+        zip(leaf_extent_specs, leaf_blocks, strict=True)
+    ):
+        struct.pack_into(
+            "<IIHH",
+            inode,
+            0x34 + root_index * 12,
+            extent_specs[0][0],
+            leaf_block & 0xFFFF_FFFF,
+            leaf_block >> 32,
+            0,
+        )
     patch_map[inode_offset] = _inode_with_checksum(
         superblock,
         inode_number,
         inode,
     )
-    return tuple(patch_map.items()), data_ranges, leaf_block
+    return tuple(patch_map.items()), data_ranges, leaf_blocks
 
 
-def _malformed_depth1_one_leaf_unlinked_orphan_patches(
+def _malformed_depth1_external_leaves_unlinked_orphan_patches(
     path: Path,
     case: str,
 ) -> tuple[
     tuple[tuple[int, bytes], ...],
     tuple[tuple[int, int], ...],
-    int,
+    tuple[int, ...],
 ]:
-    """Derive one checksum-coherent malformed depth-one deletion map."""
-    patches, data_ranges, leaf_block = (
-        _depth1_one_leaf_unlinked_orphan_patches(
+    """Derive one checksum-coherent malformed depth-one fanout."""
+    leaf_extent_specs = (
+        ((0, 1, False), (3, 2, True)),
+        ((8, 1, False),),
+    )
+    patches, data_ranges, leaf_blocks = (
+        _depth1_external_leaves_unlinked_orphan_patches(
             path,
             protocol="modern",
+            leaf_extent_specs=leaf_extent_specs,
         )
     )
     patch_map = dict(patches)
@@ -1947,78 +2000,34 @@ def _malformed_depth1_one_leaf_unlinked_orphan_patches(
     inode = bytearray(patch_map[inode_offset])
     generation = struct.unpack_from("<I", inode, 0x64)[0]
 
-    if case == "two-root-indexes":
-        extra_patches, extra_ranges = _allocate_unlinked_extent_ranges(
-            path,
-            protocol="modern",
-            inode_number=18,
-            extent_specs=((6, 1, False), (8, 1, False)),
-            physical_gap=1,
-            seed_payloads=True,
-            seed_gap_payloads=True,
-            base_patches=tuple(patch_map.items()),
-        )
-        patch_map = dict(extra_patches)
-        superblock = patch_map[1024]
-        inode = bytearray(patch_map[inode_offset])
-        second_data, second_leaf = (first for first, count in extra_ranges)
-        assert all(count == 1 for _, count in extra_ranges)
-        leaf_max = (block_size - 12) // 12
-        second_leaf_image = bytearray(block_size)
-        struct.pack_into(
-            "<HHHHI",
-            second_leaf_image,
-            0,
-            0xF30A,
-            1,
-            leaf_max,
-            0,
-            0,
-        )
-        struct.pack_into(
-            "<IHHI",
-            second_leaf_image,
-            12,
-            6,
-            1,
-            second_data >> 32,
-            second_data & 0xFFFF_FFFF,
-        )
-        patch_map[second_leaf * block_size] = _extent_node_with_checksum(
+    if case == "cross-leaf-data-alias":
+        leaf_offset = leaf_blocks[1] * block_size
+        leaf = bytearray(patch_map[leaf_offset])
+        alias = data_ranges[0][0]
+        struct.pack_into("<H", leaf, 18, alias >> 32)
+        struct.pack_into("<I", leaf, 20, alias & 0xFFFF_FFFF)
+        patch_map[leaf_offset] = _extent_node_with_checksum(
             superblock,
             18,
             generation,
-            second_leaf_image,
-        )
-        assert struct.unpack_from("<HHHH", inode, 0x28) == (
-            0xF30A,
-            1,
-            4,
-            1,
-        )
-        struct.pack_into("<H", inode, 0x2A, 2)
-        struct.pack_into(
-            "<IIHH",
-            inode,
-            0x40,
-            6,
-            second_leaf & 0xFFFF_FFFF,
-            second_leaf >> 32,
-            0,
-        )
-        sectors = struct.unpack_from("<I", inode, 0x1C)[0]
-        sectors += 2 * (block_size // 512)
-        struct.pack_into("<I", inode, 0x1C, sectors)
-        patch_map[inode_offset] = _inode_with_checksum(
-            superblock,
-            18,
-            inode,
+            leaf,
         )
     elif case == "leaf-data-alias":
-        leaf_offset = leaf_block * block_size
+        leaf_offset = leaf_blocks[0] * block_size
         leaf = bytearray(patch_map[leaf_offset])
-        struct.pack_into("<H", leaf, 18, leaf_block >> 32)
-        struct.pack_into("<I", leaf, 20, leaf_block & 0xFFFF_FFFF)
+        struct.pack_into("<H", leaf, 18, leaf_blocks[0] >> 32)
+        struct.pack_into("<I", leaf, 20, leaf_blocks[0] & 0xFFFF_FFFF)
+        patch_map[leaf_offset] = _extent_node_with_checksum(
+            superblock,
+            18,
+            generation,
+            leaf,
+        )
+    elif case == "leaf-to-other-leaf-alias":
+        leaf_offset = leaf_blocks[0] * block_size
+        leaf = bytearray(patch_map[leaf_offset])
+        struct.pack_into("<H", leaf, 18, leaf_blocks[1] >> 32)
+        struct.pack_into("<I", leaf, 20, leaf_blocks[1] & 0xFFFF_FFFF)
         patch_map[leaf_offset] = _extent_node_with_checksum(
             superblock,
             18,
@@ -2036,14 +2045,14 @@ def _malformed_depth1_one_leaf_unlinked_orphan_patches(
             0,
         )
         assert struct.unpack_from("<H", owner, 0x38)[0] == 1
-        struct.pack_into("<H", owner, 0x3A, leaf_block >> 32)
-        struct.pack_into("<I", owner, 0x3C, leaf_block & 0xFFFF_FFFF)
+        struct.pack_into("<H", owner, 0x3A, leaf_blocks[-1] >> 32)
+        struct.pack_into("<I", owner, 0x3C, leaf_blocks[-1] & 0xFFFF_FFFF)
         patch_map[owner_offset] = _inode_with_checksum(
             superblock,
             14,
             owner,
         )
-    return tuple(patch_map.items()), data_ranges, leaf_block
+    return tuple(patch_map.items()), data_ranges, leaf_blocks
 
 
 def _legacy_direct_unlinked_orphan_patches(
@@ -6814,7 +6823,8 @@ def test_mutation_range_workspace_is_geometry_derived_and_reused(
 ) -> None:
     blank = tmp_path / f"mutation-ranges-{block_size}.img"
     blank.write_bytes(bytes(4 * 512))
-    capacity = (block_size - 12) // 12 + 2
+    leaf_capacity = (block_size - 12) // 12
+    capacity = 4 * leaf_capacity + 4 + 1
     workspace_bytes = capacity * 2 * 8
     output = run_forth(
         blank,
@@ -7539,9 +7549,9 @@ def test_jbd2_writer_arithmetic_and_4k_geometry_are_total(
             ),
             (
                 "_JWG-4K-IOR 0= "
-                "_JWG-4K-BYTES _EXT4-JWR-SIZE 8192 + 342 2* CELLS + = AND "
+                "_JWG-4K-BYTES _EXT4-JWR-SIZE 8192 + 1365 2* CELLS + = AND "
                 "_JWG-W-IOR 0= AND _JWG-W 0<> AND "
-                "_JWG-W _EXT4-JWR.CP-DELETE-RANGE-CAP + @ 342 = AND "
+                "_JWG-W _EXT4-JWR.CP-DELETE-RANGE-CAP + @ 1365 = AND "
                 "_JWG-W _EXT4-JWR-CP-DELETE-RANGES "
                 "_JWG-W _EXT4-JWR.SCRATCH-B + @ 4096 + = AND "
                 "_JWG-W _EXT4-JTX-TAGS/BLOCK 254 = AND "
@@ -17024,7 +17034,7 @@ _MULTI_ORPHAN_RECOVERY_MAX_STEPS = 1_500_000_000
 _MULTI_ORPHAN_DATA_RECOVERY_MAX_STEPS = 3_000_000_000
 _EXTERNAL_XATTR_RECOVERY_MAX_STEPS = 1_500_000_000
 _LEGACY_DIRECT_RECOVERY_MAX_STEPS = 1_300_000_000
-_ONE_EXTENT_LEAF_RECOVERY_MAX_STEPS = 1_800_000_000
+_DEPTH1_EXTENT_RECOVERY_MAX_STEPS = 1_800_000_000
 
 
 _MULTI_EMPTY_ORPHAN_CASES = (
@@ -23285,19 +23295,19 @@ def test_unlinked_preflight_accepts_depth1_orphan_file_map(
     _assert_emitted(output, "EXT4-DEPTH1-ORPHAN-FILE-JFI-CLEAN")
 
 
-def test_unlinked_preflight_accepts_one_external_extent_leaf(
+def test_unlinked_preflight_accepts_four_external_extent_leaves(
     canonical_images: dict[str, Path],
 ) -> None:
     path = canonical_images["primary-1k-i256"]
-    patches, data_ranges, leaf_block = (
-        _depth1_one_leaf_unlinked_orphan_patches(
+    patches, data_ranges, leaf_blocks = (
+        _depth1_external_leaves_unlinked_orphan_patches(
             path,
             protocol="modern",
         )
     )
     range_checks: list[str] = []
     for index, (physical, count) in enumerate(
-        (*data_ranges, (leaf_block, 1))
+        (*data_ranges, *((leaf, 1) for leaf in leaf_blocks))
     ):
         range_checks.extend(
             (
@@ -23347,17 +23357,16 @@ def test_unlinked_preflight_accepts_one_external_extent_leaf(
                         "_DL-DEPTH-BEFORE _DL-DEPTH-AFTER =",
                         (
                             "_EXT4-JFI-DATA-MAP-KIND @ "
-                            "_EXT4-JDM-DEPTH1-ONELEAF ="
+                            "_EXT4-JDM-DEPTH1-LEAVES ="
                         ),
                         f"_EXT4-JFI-DATA-ENTRIES @ {len(data_ranges)} =",
-                        "_EXT4-JFI-DATA-BLOCKS @ 3 =",
-                        "_EXT4-JFI-MAP-ENTRIES @ 1 =",
-                        "_EXT4-JFI-MAP-BLOCKS @ 1 =",
-                        f"_EXT4-JFI-MAP-HOME @ {leaf_block} =",
-                        f"_EXT4-JFI-RANGE-COUNT {len(data_ranges) + 1} =",
-                        "_EXT4-JFI-RANGE-BLOCKS 4 =",
-                        "_EXT4-JFI-ACCOUNTED-BLOCKS 4 =",
-                        "_EXT4-JFI-RELEASE-BLOCKS 4 =",
+                        "_EXT4-JFI-DATA-BLOCKS @ 8 =",
+                        f"_EXT4-JFI-MAP-ENTRIES @ {len(leaf_blocks)} =",
+                        f"_EXT4-JFI-MAP-BLOCKS @ {len(leaf_blocks)} =",
+                        f"_EXT4-JFI-RANGE-COUNT {len(data_ranges) + len(leaf_blocks)} =",
+                        "_EXT4-JFI-RANGE-BLOCKS 12 =",
+                        "_EXT4-JFI-ACCOUNTED-BLOCKS 12 =",
+                        "_EXT4-JFI-RELEASE-BLOCKS 12 =",
                         *range_checks,
                         "_EXT4-JFO-CERT-SCOPE @ 0<>",
                         "_EXT4-JFO-CERT-VALID @ 0<>",
@@ -23367,18 +23376,18 @@ def test_unlinked_preflight_accepts_one_external_extent_leaf(
                         ),
                         (
                             "_EXT4-JFO-CERT-DATA-MAP-KIND @ "
-                            "_EXT4-JDM-DEPTH1-ONELEAF ="
+                            "_EXT4-JDM-DEPTH1-LEAVES ="
                         ),
                         (
                             "_EXT4-JFO-CERT-RANGE-COUNT @ "
-                            f"{len(data_ranges) + 1} ="
+                            f"{len(data_ranges) + len(leaf_blocks)} ="
                         ),
                         *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                         "_DL-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
-                + ' IF ." EXT4-DEPTH1-ONELEAF-JFI-PREFLIGHT" THEN'
+                + ' IF ." EXT4-DEPTH1-FOUR-LEAF-JFI-PREFLIGHT" THEN'
             ),
             "_EXT4-JFO-CERT-END",
             (
@@ -23391,13 +23400,13 @@ def test_unlinked_preflight_accepts_one_external_extent_leaf(
                         "_DL-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
-                + ' IF ." EXT4-DEPTH1-ONELEAF-JFI-CLEAN" THEN'
+                + ' IF ." EXT4-DEPTH1-FOUR-LEAF-JFI-CLEAN" THEN'
             ),
         ],
         patches=patches,
     )
-    _assert_emitted(output, "EXT4-DEPTH1-ONELEAF-JFI-PREFLIGHT")
-    _assert_emitted(output, "EXT4-DEPTH1-ONELEAF-JFI-CLEAN")
+    _assert_emitted(output, "EXT4-DEPTH1-FOUR-LEAF-JFI-PREFLIGHT")
+    _assert_emitted(output, "EXT4-DEPTH1-FOUR-LEAF-JFI-CLEAN")
 
 
 def test_one_external_extent_leaf_has_no_legacy_twelve_range_cap(
@@ -23407,14 +23416,16 @@ def test_one_external_extent_leaf_has_no_legacy_twelve_range_cap(
     extent_specs = tuple(
         (index * 2, 1, bool(index & 1)) for index in range(13)
     )
-    patches, data_ranges, leaf_block = (
-        _depth1_one_leaf_unlinked_orphan_patches(
+    patches, data_ranges, leaf_blocks = (
+        _depth1_external_leaves_unlinked_orphan_patches(
             path,
             protocol="modern",
-            extent_specs=extent_specs,
+            leaf_extent_specs=(extent_specs,),
             size_bytes=(1 << 32) + 777,
         )
     )
+    assert len(leaf_blocks) == 1
+    leaf_block = leaf_blocks[0]
     assert len(data_ranges) == 13
     assert all(count == 1 for _, count in data_ranges)
     patch_map = dict(patches)
@@ -23472,17 +23483,17 @@ def test_one_external_extent_leaf_has_no_legacy_twelve_range_cap(
                         "_D13-DEPTH-BEFORE _D13-DEPTH-AFTER =",
                         (
                             "_EXT4-JFI-DATA-MAP-KIND @ "
-                            "_EXT4-JDM-DEPTH1-ONELEAF ="
+                            "_EXT4-JDM-DEPTH1-LEAVES ="
                         ),
                         "_EXT4-JFI-DATA-ENTRIES @ 13 =",
                         "_EXT4-JFI-DATA-BLOCKS @ 13 =",
                         "_EXT4-JFI-MAP-ENTRIES @ 1 =",
-                        f"_EXT4-JFI-MAP-HOME @ {leaf_block} =",
+                        f"0 _EXT4-JFI-MAP-RANGE @ {leaf_block} =",
                         "_EXT4-JFI-RANGE-COUNT 14 =",
                         "_EXT4-JFI-RANGE-BLOCKS 14 =",
                         "_EXT4-JFI-RELEASE-RANGE-COUNT 14 =",
                         "_EXT4-JFI-RELEASE-BLOCKS 14 =",
-                        "_D13-CTX _EXT4-C.MUTATION-RANGE-CAP + @ 86 =",
+                        "_D13-CTX _EXT4-C.MUTATION-RANGE-CAP + @ 341 =",
                         "_EXT4-JFO-CERT-RANGE-COUNT @ 14 =",
                         *range_checks,
                         *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
@@ -23502,16 +23513,22 @@ def test_one_external_extent_leaf_has_no_legacy_twelve_range_cap(
     ("case", "expected_reason", "expected_detail"),
     (
         pytest.param(
-            "two-root-indexes",
-            "VFS-R-UNSUPPORTED",
-            "EXT4-D-RECOVERY",
-            id="two-root-indexes",
+            "cross-leaf-data-alias",
+            "VFS-R-CORRUPT",
+            "EXT4-D-DATA-MAP",
+            id="cross-leaf-data-alias",
         ),
         pytest.param(
             "leaf-data-alias",
             "VFS-R-CORRUPT",
             "EXT4-D-DATA-MAP",
             id="leaf-data-alias",
+        ),
+        pytest.param(
+            "leaf-to-other-leaf-alias",
+            "VFS-R-CORRUPT",
+            "EXT4-D-DATA-MAP",
+            id="leaf-to-other-leaf-alias",
         ),
         pytest.param(
             "other-inode-owns-leaf",
@@ -23521,19 +23538,19 @@ def test_one_external_extent_leaf_has_no_legacy_twelve_range_cap(
         ),
     ),
 )
-def test_unlinked_preflight_rejects_malformed_one_external_extent_leaf(
+def test_unlinked_preflight_rejects_malformed_external_extent_leaves(
     canonical_images: dict[str, Path],
     case: str,
     expected_reason: str,
     expected_detail: str,
 ) -> None:
     path = canonical_images["primary-1k-i256"]
-    patches, _, _ = _malformed_depth1_one_leaf_unlinked_orphan_patches(
+    patches, _, _ = _malformed_depth1_external_leaves_unlinked_orphan_patches(
         path,
         case,
     )
-    marker = f"EXT4-DEPTH1-ONELEAF-{case.upper()}-REJECTED"
-    clean_marker = f"EXT4-DEPTH1-ONELEAF-{case.upper()}-CLEAN"
+    marker = f"EXT4-DEPTH1-LEAVES-{case.upper()}-REJECTED"
+    clean_marker = f"EXT4-DEPTH1-LEAVES-{case.upper()}-CLEAN"
 
     output = run_forth(
         path,
@@ -23609,22 +23626,26 @@ def test_unlinked_preflight_rejects_malformed_one_external_extent_leaf(
 
 
 @pytest.mark.parametrize("protocol", ("modern", "legacy"))
-def test_one_external_extent_leaf_stages_exact_revoke(
+def test_external_extent_leaves_stage_exact_revokes(
     canonical_images: dict[str, Path],
     protocol: str,
 ) -> None:
     path = canonical_images["primary-1k-i256"]
-    patches, data_ranges, leaf_block = (
-        _depth1_one_leaf_unlinked_orphan_patches(
+    patches, data_ranges, leaf_blocks = (
+        _depth1_external_leaves_unlinked_orphan_patches(
             path,
             protocol=protocol,
+            # Keep this exact-authority check below the focused watchdog. The
+            # gapped preflight fixture separately pins the uncoalesced
+            # canonical data-then-map range vector.
+            physical_gap=0,
         )
     )
-    marker = f"EXT4-DEPTH1-ONELEAF-{protocol.upper()}-STAGED"
-    clean_marker = f"EXT4-DEPTH1-ONELEAF-{protocol.upper()}-ABORT-CLEAN"
+    marker = f"EXT4-DEPTH1-LEAVES-{protocol.upper()}-STAGED"
+    clean_marker = f"EXT4-DEPTH1-LEAVES-{protocol.upper()}-ABORT-CLEAN"
     cp_range_checks: list[str] = []
     for index, (physical, count) in enumerate(
-        (*data_ranges, (leaf_block, 1))
+        (*data_ranges, *((leaf, 1) for leaf in leaf_blocks))
     ):
         cp_range_checks.extend(
             (
@@ -23638,6 +23659,23 @@ def test_one_external_extent_leaf_stages_exact_revoke(
                 ),
             )
         )
+    revoke_checks: list[str] = []
+    for index, leaf_block in enumerate(leaf_blocks):
+        revoke_checks.extend(
+            (
+                (
+                    f"{index} _DS-WRITER _EXT4-JWR-REVOKE-ENTRY @ "
+                    f"{leaf_block} ="
+                ),
+                (
+                    f"{index} _DS-WRITER _EXT4-JWR-REVOKE-ENTRY "
+                    "CELL+ @ _EXT4-JE-ACTIVE ="
+                ),
+            )
+        )
+    released_blocks = sum(count for _, count in data_ranges) + len(
+        leaf_blocks
+    )
 
     output = run_forth(
         path,
@@ -23717,7 +23755,7 @@ def test_one_external_extent_leaf_stages_exact_revoke(
                         "_DS-CERT-BEGIN-IOR 0=",
                         "_DS-MEASURE-IOR 0=",
                         "_DS-META 0>",
-                        "_DS-REVOKE 1 =",
+                        f"_DS-REVOKE {len(leaf_blocks)} =",
                         "_DS-CAPACITY-IOR 0=",
                         "_DS-WRITER-IOR 0=",
                         "_DS-BEGIN-IOR 0=",
@@ -23742,18 +23780,11 @@ def test_one_external_extent_leaf_stages_exact_revoke(
                             "_DS-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ "
                             "_DS-REVOKE ="
                         ),
-                        (
-                            "0 _DS-WRITER _EXT4-JWR-REVOKE-ENTRY @ "
-                            f"{leaf_block} ="
-                        ),
-                        (
-                            "0 _DS-WRITER _EXT4-JWR-REVOKE-ENTRY "
-                            "CELL+ @ _EXT4-JE-ACTIVE ="
-                        ),
+                        *revoke_checks,
                         "_DS-WRITER _EXT4-JFI-REVOKES-EXACT?",
                         (
                             "_DS-WRITER _EXT4-JWR.CP-DATA-MAP-KIND + @ "
-                            "_EXT4-JDM-DEPTH1-ONELEAF ="
+                            "_EXT4-JDM-DEPTH1-LEAVES ="
                         ),
                         (
                             "_DS-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ "
@@ -23761,9 +23792,12 @@ def test_one_external_extent_leaf_stages_exact_revoke(
                         ),
                         (
                             "_DS-WRITER _EXT4-JWR.CP-DELETE-RANGE-COUNT + @ "
-                            f"{len(data_ranges) + 1} ="
+                            f"{len(data_ranges) + len(leaf_blocks)} ="
                         ),
-                        "_DS-WRITER _EXT4-JWR.CP-DELETE-BLOCKS + @ 4 =",
+                        (
+                            "_DS-WRITER _EXT4-JWR.CP-DELETE-BLOCKS + @ "
+                            f"{released_blocks} ="
+                        ),
                         *cp_range_checks,
                         "_DS-WRITER _EXT4-JTX-TABLES-VALID?",
                         "_DS-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
@@ -23798,11 +23832,11 @@ def test_one_external_extent_leaf_stages_exact_revoke(
     _assert_emitted(output, clean_marker)
 
 
-def test_one_external_extent_leaf_qualification_sizes_revoke_capacity(
+def test_external_extent_leaves_qualification_sizes_revoke_capacity(
     canonical_images: dict[str, Path],
 ) -> None:
     path = canonical_images["primary-1k-i256"]
-    patches, _, _ = _depth1_one_leaf_unlinked_orphan_patches(
+    patches, _, leaf_blocks = _depth1_external_leaves_unlinked_orphan_patches(
         path,
         protocol="modern",
     )
@@ -23836,7 +23870,7 @@ def test_one_external_extent_leaf_qualification_sizes_revoke_capacity(
                         "_DQ-CERT-BEGIN-IOR 0=",
                         "_DQ-IOR 0=",
                         "_DQ-META 0>",
-                        "_DQ-REVOKE 1 =",
+                        f"_DQ-REVOKE {len(leaf_blocks)} =",
                         "_DQ-DEPTH-BEFORE _DQ-DEPTH-AFTER =",
                         "_EXT4-JFO-CERT-SCOPE @ 0<>",
                         "_EXT4-JFO-CERT-VALID @ 0<>",
@@ -23844,29 +23878,36 @@ def test_one_external_extent_leaf_qualification_sizes_revoke_capacity(
                         "_DQ-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
-                + ' IF ." EXT4-DEPTH1-ONELEAF-QUALIFIED" THEN'
+                + ' IF ." EXT4-DEPTH1-LEAVES-QUALIFIED" THEN'
             ),
             "_EXT4-JFO-CERT-END",
         ],
         patches=patches,
     )
-    _assert_emitted(output, "EXT4-DEPTH1-ONELEAF-QUALIFIED")
+    _assert_emitted(output, "EXT4-DEPTH1-LEAVES-QUALIFIED")
 
 
-def test_mount_reclaims_one_external_extent_leaf(
+def test_mount_reclaims_four_external_extent_leaves(
     canonical_images: dict[str, Path],
     tmp_path: Path,
 ) -> None:
     source = canonical_images["primary-1k-i256"]
-    patches, data_ranges, leaf_block = (
-        _depth1_one_leaf_unlinked_orphan_patches(
+    patches, data_ranges, leaf_blocks = (
+        _depth1_external_leaves_unlinked_orphan_patches(
             source,
             protocol="modern",
+            # Ten fixture-only physical gaps make every release invoke a
+            # separate bitmap-accounting walk. Other production fixtures pin
+            # gap canaries; this case isolates full four-leaf fanout.
+            physical_gap=0,
         )
     )
     released_blocks = tuple(
         block
-        for first, count in (*data_ranges, (leaf_block, 1))
+        for first, count in (
+            *data_ranges,
+            *((leaf, 1) for leaf in leaf_blocks),
+        )
         for block in range(first, first + count)
     )
     released_set = set(released_blocks)
@@ -23885,8 +23926,8 @@ def test_mount_reclaims_one_external_extent_leaf(
     for block in observed_blocks:
         assert block * block_size in patch_map
 
-    recovered = tmp_path / "depth1-oneleaf-clean.img"
-    marker = "EXT4-DEPTH1-ONELEAF-MODERN-RECLAIMED"
+    recovered = tmp_path / "depth1-four-leaf-clean.img"
+    marker = "EXT4-DEPTH1-FOUR-LEAF-MODERN-RECLAIMED"
     output, trace, _ = run_recovery_forth(
         source,
         recovered,
@@ -23918,7 +23959,7 @@ def test_mount_reclaims_one_external_extent_leaf(
         ],
         patches=patches,
         capture_media=recovered,
-        max_steps=_ONE_EXTENT_LEAF_RECOVERY_MAX_STEPS,
+        max_steps=_DEPTH1_EXTENT_RECOVERY_MAX_STEPS,
     )
     _assert_emitted(output, marker)
     _, reclaimed_inode, _ = _ext4_inode_record(recovered, 18)
