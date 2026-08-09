@@ -2010,6 +2010,113 @@ def _unlinked_orphan_shared_external_xattr_patches(
     return tuple(patch_map.items()), data_ranges, xattr_block
 
 
+def _multi_unlinked_orphan_shared_external_xattr_patches(
+    path: Path,
+) -> tuple[tuple[tuple[int, bytes], ...], int]:
+    """Give two modern unlinked orphans one freshly allocated xattr block."""
+    base_patches = _multi_empty_unlinked_orphan_patches(
+        path,
+        legacy_chain=(),
+        modern_entries=(18, 21),
+    )
+    patches, allocated_ranges = _inline_depth0_unlinked_orphan_patches(
+        path,
+        protocol="modern",
+        extent_specs=((0, 1, False),),
+        inode_number=18,
+        physical_gap=0,
+        base_patches=base_patches,
+    )
+    assert len(allocated_ranges) == 1
+    xattr_block, allocated_count = allocated_ranges[0]
+    assert allocated_count == 1
+
+    patch_map = dict(patches)
+    superblock = patch_map[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    sectors_per_block = block_size // 512
+    _, source_inode, _ = _ext4_inode_record(path, 14)
+    source_xattr = struct.unpack_from("<I", source_inode, 0x68)[0]
+    assert source_xattr > 0 and source_xattr != xattr_block
+    assert struct.unpack_from("<H", source_inode, 0x76)[0] == 0
+    with path.open("rb") as source:
+        source.seek(source_xattr * block_size)
+        canonical_xattr = source.read(block_size)
+    assert len(canonical_xattr) == block_size
+    assert struct.unpack_from("<I", canonical_xattr, 0x04)[0] == 1
+    assert _external_xattr_block_with_checksum(
+        superblock,
+        source_xattr,
+        canonical_xattr,
+    ) == canonical_xattr
+
+    xattr_offset = xattr_block * block_size
+    assert xattr_offset not in patch_map
+    shared_xattr = bytearray(
+        _external_xattr_block_with_checksum(
+            superblock,
+            xattr_block,
+            canonical_xattr,
+        )
+    )
+    struct.pack_into("<I", shared_xattr, 0x04, 2)
+    shared_xattr = bytearray(
+        _external_xattr_block_with_checksum(
+            superblock,
+            xattr_block,
+            shared_xattr,
+        )
+    )
+    restored_xattr = bytearray(shared_xattr)
+    struct.pack_into("<I", restored_xattr, 0x04, 1)
+    expected_retained_xattr = _external_xattr_block_with_checksum(
+        superblock,
+        xattr_block,
+        restored_xattr,
+    )
+    assert expected_retained_xattr == _external_xattr_block_with_checksum(
+        superblock,
+        xattr_block,
+        canonical_xattr,
+    )
+    patch_map[xattr_offset] = bytes(shared_xattr)
+
+    for inode_number in (18, 21):
+        _, _, inode_offset = _ext4_inode_record(path, inode_number)
+        inode = bytearray(patch_map[inode_offset])
+        assert struct.unpack_from("<I", inode, 0x68)[0] == 0
+        assert struct.unpack_from("<H", inode, 0x76)[0] == 0
+        if inode_number == 18:
+            assert struct.unpack_from("<HHHH", inode, 0x28) == (
+                0xF30A,
+                1,
+                4,
+                0,
+            )
+            struct.pack_into("<H", inode, 0x2A, 0)
+            inode[0x34:0x64] = bytes(48)
+            assert struct.unpack_from("<I", inode, 0x1C)[0] == (
+                sectors_per_block
+            )
+        else:
+            assert struct.unpack_from("<HHHH", inode, 0x28) == (
+                0xF30A,
+                0,
+                4,
+                0,
+            )
+            assert struct.unpack_from("<I", inode, 0x1C)[0] == 0
+            struct.pack_into("<I", inode, 0x1C, sectors_per_block)
+        struct.pack_into("<I", inode, 0x68, xattr_block)
+        patch_map[inode_offset] = _inode_with_checksum(
+            superblock,
+            inode_number,
+            inode,
+        )
+
+    return tuple(patch_map.items()), xattr_block
+
+
 def _legacy_direct_unlinked_external_xattr_patches(
     path: Path,
     *,
@@ -17783,16 +17890,24 @@ def _run_multi_empty_unlinked_cleanup(
     max_credit: int,
     final_credit: int,
     head_extent_specs: tuple[tuple[int, int, bool], ...] = (),
+    patches_override: tuple[tuple[int, bytes], ...] | None = None,
+    shared_xattr_block: int | None = None,
 ) -> dict[str, object]:
     assert case in {"modern", "legacy", "mixed"}
     assert set(legacy_chain + modern_entries) == {18, 21}
     assert len(head_extent_specs) <= 4
     assert not head_extent_specs or case in {"modern", "legacy"}
-    base_patches = _multi_empty_unlinked_orphan_patches(
-        path,
-        legacy_chain=legacy_chain,
-        modern_entries=modern_entries,
-    )
+    if patches_override is None:
+        base_patches = _multi_empty_unlinked_orphan_patches(
+            path,
+            legacy_chain=legacy_chain,
+            modern_entries=modern_entries,
+        )
+    else:
+        assert not head_extent_specs
+        assert shared_xattr_block is not None
+        assert case == "modern"
+        base_patches = patches_override
     if head_extent_specs:
         patches, data_ranges = _inline_depth0_unlinked_orphan_patches(
             path,
@@ -17823,6 +17938,9 @@ def _run_multi_empty_unlinked_cleanup(
         data_block = None
         data_blocks = ()
         gap_blocks = ()
+    released_blocks = data_blocks + (
+        (shared_xattr_block,) if shared_xattr_block is not None else ()
+    )
     patch_map = dict(patches)
     with path.open("rb") as source:
         source.seek(1024)
@@ -17896,7 +18014,7 @@ def _run_multi_empty_unlinked_cleanup(
 
     data_probe_forth: tuple[str, ...] = ()
     data_probe_checks: tuple[str, ...] = ()
-    if data_blocks:
+    if released_blocks:
         probe_lines = [
             (
                 "0 _MU-CTX _EXT4-LOAD-BLOCK-BITMAP "
@@ -17911,7 +18029,7 @@ def _run_multi_empty_unlinked_cleanup(
         blocks_per_group = struct.unpack_from(
             "<I", canonical_super, 0x20
         )[0]
-        for ordinal, physical in enumerate((*data_blocks, *gap_blocks)):
+        for ordinal, physical in enumerate((*released_blocks, *gap_blocks)):
             data_group, data_index = divmod(
                 physical - first_data,
                 blocks_per_group,
@@ -18066,7 +18184,7 @@ def _run_multi_empty_unlinked_cleanup(
         capture_media=media_path,
         max_steps=(
             _MULTI_ORPHAN_DATA_RECOVERY_MAX_STEPS
-            if data_blocks
+            if released_blocks
             else _MULTI_ORPHAN_RECOVERY_MAX_STEPS
         ),
     )
@@ -18077,25 +18195,62 @@ def _run_multi_empty_unlinked_cleanup(
 
     inode18_ordinals = _write_ordinals_for_ext4_home(trace, inode18_home)
     inode21_ordinals = _write_ordinals_for_ext4_home(trace, inode21_home)
+    inode_bitmap_ordinals = _write_ordinals_for_ext4_home(
+        trace,
+        inode_bitmap_home,
+    )
+    gdt_ordinals = _write_ordinals_for_ext4_home(trace, gdt_home)
+    super_ordinals = _write_ordinals_for_ext4_home(trace, 1)
+    orphan_ordinals = _write_ordinals_for_ext4_home(trace, orphan_home)
     assert len(inode18_ordinals) == len(inode21_ordinals) == 1
     assert inode18_ordinals[0] < inode21_ordinals[0]
-    assert len(_write_ordinals_for_ext4_home(trace, inode_bitmap_home)) == 2
-    assert len(_write_ordinals_for_ext4_home(trace, gdt_home)) == 2
-    assert len(_write_ordinals_for_ext4_home(trace, 1)) == 4
-    assert len(_write_ordinals_for_ext4_home(trace, orphan_home)) == len(
-        modern_entries
-    )
+    assert len(inode_bitmap_ordinals) == 2
+    assert len(gdt_ordinals) == 2
+    assert len(super_ordinals) == 4
+    assert len(orphan_ordinals) == len(modern_entries)
     block_bitmap_ordinals = _write_ordinals_for_ext4_home(
         trace,
         block_bitmap_home,
     )
-    assert len(block_bitmap_ordinals) == (1 if data_blocks else 0)
+    assert len(block_bitmap_ordinals) == (1 if released_blocks else 0)
     if data_blocks:
         assert (
             inode18_ordinals[0]
             < block_bitmap_ordinals[0]
             < inode21_ordinals[0]
         )
+    if shared_xattr_block is not None:
+        xattr_ordinals = _write_ordinals_for_ext4_home(
+            trace,
+            shared_xattr_block,
+        )
+        assert len(xattr_ordinals) == 1
+        assert inode18_ordinals[0] < xattr_ordinals[0] < inode21_ordinals[0]
+        first_home_batch = (
+            inode18_ordinals[0],
+            xattr_ordinals[0],
+            gdt_ordinals[0],
+            inode_bitmap_ordinals[0],
+            super_ordinals[1],
+            orphan_ordinals[0],
+        )
+        second_home_batch = (
+            inode21_ordinals[0],
+            gdt_ordinals[1],
+            block_bitmap_ordinals[0],
+            super_ordinals[2],
+            inode_bitmap_ordinals[1],
+            orphan_ordinals[1],
+        )
+        assert first_home_batch == tuple(
+            range(first_home_batch[0], first_home_batch[0] + 6)
+        )
+        assert second_home_batch == tuple(
+            range(second_home_batch[0], second_home_batch[0] + 6)
+        )
+        assert super_ordinals[0] < first_home_batch[0]
+        assert first_home_batch[-1] < second_home_batch[0]
+        assert second_home_batch[-1] < super_ordinals[3]
     for physical in (*data_blocks, *gap_blocks):
         assert not _write_ordinals_for_ext4_home(trace, physical)
 
@@ -18137,13 +18292,28 @@ def _run_multi_empty_unlinked_cleanup(
         recovered.seek(gdt_home * block_size)
         recovered_gdt = recovered.read(block_size)
     assert recovered_gdt == bytes(expected_gdt)
-    if data_blocks:
+    if released_blocks:
         with path.open("rb") as source:
             source.seek(block_bitmap_home * block_size)
             canonical_block_bitmap = source.read(block_size)
         with media_path.open("rb") as recovered:
             recovered.seek(block_bitmap_home * block_size)
             assert recovered.read(block_size) == canonical_block_bitmap
+    if shared_xattr_block is not None:
+        xattr_offset = shared_xattr_block * block_size
+        retained_xattr = bytearray(patch_map[xattr_offset])
+        assert struct.unpack_from("<I", retained_xattr, 0x04)[0] == 2
+        struct.pack_into("<I", retained_xattr, 0x04, 1)
+        expected_xattr = _external_xattr_block_with_checksum(
+            patch_map[1024],
+            shared_xattr_block,
+            retained_xattr,
+        )
+        with media_path.open("rb") as recovered:
+            recovered.seek(xattr_offset)
+            assert recovered.read(block_size) == expected_xattr
+    if data_blocks:
+        with media_path.open("rb") as recovered:
             for physical in (*data_blocks, *gap_blocks):
                 recovered.seek(physical * block_size)
                 assert recovered.read(block_size) == patch_map[
@@ -18224,6 +18394,7 @@ def _run_multi_empty_unlinked_cleanup(
         "data_ranges": data_ranges,
         "data_blocks": data_blocks,
         "gap_blocks": gap_blocks,
+        "shared_xattr_block": shared_xattr_block,
     }
 
 
@@ -18760,6 +18931,32 @@ def modern_multi_empty_unlinked_cleanup_fixture(
 
 
 @pytest.fixture(scope="session")
+def modern_multi_shared_xattr_unlinked_cleanup_fixture(
+    canonical_images: dict[str, Path],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    source = canonical_images["primary-1k-i256"]
+    patches, xattr_block = (
+        _multi_unlinked_orphan_shared_external_xattr_patches(source)
+    )
+    directory = tmp_path_factory.mktemp(
+        "ext4-modern-multi-shared-xattr-unlinked-cleanup"
+    )
+    return _run_multi_empty_unlinked_cleanup(
+        source,
+        directory / "successful-cleanup.img",
+        directory / "stable-remount.img",
+        case="modern",
+        legacy_chain=(),
+        modern_entries=(18, 21),
+        max_credit=7,
+        final_credit=6,
+        patches_override=patches,
+        shared_xattr_block=xattr_block,
+    )
+
+
+@pytest.fixture(scope="session")
 def legacy_multi_empty_unlinked_cleanup_fixture(
     canonical_images: dict[str, Path],
     tmp_path_factory: pytest.TempPathFactory,
@@ -19184,6 +19381,32 @@ def test_mount_drains_two_record_modern_legacy_and_mixed_orphan_unions(
     assert stable_image.is_file()
     assert result["stable_trace"] == ()
     assert result["stable_sha256"] == result["clean_sha256"]
+
+
+def test_mount_decrements_then_releases_multi_orphan_shared_xattr(
+    modern_multi_shared_xattr_unlinked_cleanup_fixture: dict[str, object],
+) -> None:
+    result = modern_multi_shared_xattr_unlinked_cleanup_fixture
+    trace = result["success_trace"]
+    assert isinstance(trace, tuple)
+    assert result["case"] == "modern"
+    assert result["max_credit"] == 7
+    assert isinstance(result["shared_xattr_block"], int)
+    assert sum(kind == "write" for kind, _, _ in trace) == 60
+    assert sum(kind == "flush" for kind, _, _ in trace) == 35
+    assert result["stable_trace"] == ()
+    assert result["stable_sha256"] == result["clean_sha256"]
+
+
+def test_multi_orphan_shared_xattr_cleanup_is_e2fsck_clean(
+    modern_multi_shared_xattr_unlinked_cleanup_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    clean_image = modern_multi_shared_xattr_unlinked_cleanup_fixture[
+        "clean_image"
+    ]
+    assert isinstance(clean_image, Path)
+    _assert_e2fsck_clean(clean_image, jbd2_toolchain)
 
 
 def test_mount_reclaims_data_bearing_head_before_unlinked_successor(

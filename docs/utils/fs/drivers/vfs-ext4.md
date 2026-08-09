@@ -1502,12 +1502,22 @@ The remaining boundaries are:
   transition bound and rejects a substituted nonzero checkpoint CRC when the
   reconstructed CRC is the valid value zero. A header refcount that exceeds
   the exact counted owner set is corrupt rather than an unsupported shape.
+  A two-record modern production fixture now qualifies the state transition
+  that requires the capacity reserve: two unlinked inodes begin as the only
+  owners of one freshly allocated group-0 xattr block, inode 18 decrements it
+  from two to one, and inode 21 then releases the final allocation. Both exact
+  transactions use six metadata homes inside a writer sized to seven. The
+  complete drain has the pinned 60-write/35-flush trace, restores the block
+  bitmap and free-block counters to canonical values, preserves the valid
+  refcount-one payload without a release overwrite, and remounts with zero I/O.
   These production cases use a scoped 1,500,000,000-step watchdog, a moderate
   increase over the general 1,200,000,000 guard; this is qualification
-  headroom rather than an implementation capacity. Shared-EA legacy
-  production, the actual multi-orphan decrement-to-final-release transition,
-  the remaining negative/crash matrix, and pinned e2fsck acceptance remain
-  pending before this shape closes its release-qualification gate.
+  headroom rather than an implementation capacity. The two-record transition
+  uses the existing 3,000,000,000 multi-data watchdog because it performs two
+  complete ownership proofs; it completed in 155.6 host seconds. Shared-EA
+  legacy production, the remaining negative/crash matrix, and pinned e2fsck
+  acceptance remain pending before this shape closes its
+  release-qualification gate.
   Multi-range qualification admits a separated two-entry modern root and the
   four-entry inline maximum under legacy cleanup, mixing initialized and
   unwritten entries and logical gaps. Inline-extent exact-shape preflight still

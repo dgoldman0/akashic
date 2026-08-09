@@ -978,12 +978,19 @@ stage/seal/abort, modern data-plus-EA staging, corrupt owner-count mismatch,
 and one complete modern production decrement. That run performs exactly one
 retained-xattr home write, completes with 36 writes and 24 flushes, and reaches
 a byte-identical zero-I/O remount. The seal regression also proves the derived
-one-slot writer-capacity delta and zero-CRC strict comparison. These production
-cases use a scoped 1,500,000,000-step watchdog, moderately above the general
+one-slot writer-capacity delta and zero-CRC strict comparison. A two-record
+modern fixture now exercises the corresponding live transition: the first
+orphan decrements the only shared block from two references to one and the
+second releases its allocation. Its exact credits are six and six inside a
+seven-home writer; the 60-write/35-flush result restores allocation accounting,
+preserves the freed refcount-one payload, and remounts with zero I/O. The
+single-record production cases use a scoped 1,500,000,000-step watchdog,
+moderately above the general
 1,200,000,000 guard; it is qualification headroom, not a format or driver
-capacity. Shared legacy production, the multi-orphan decrement-to-release
-transition, remaining negative/crash cases, and pinned e2fsck acceptance are
-still pending. Broader qualification is also
+capacity. The transition uses the existing 3,000,000,000 multi-record/data
+watchdog and completed in 155.6 host seconds. Shared legacy production,
+remaining negative/crash cases, and pinned e2fsck acceptance are still
+pending. Broader qualification is also
 needed for chains longer than two,
 later modern blocks and large orphan files, additional ownership and deletion
 shapes, distinct-key hash collisions, and arena exhaustion or retained-too-

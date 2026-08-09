@@ -210,7 +210,10 @@ transition remain refused. Focused private orphan recovery is qualified later
 in this suite. Its external-xattr cases distinguish unique-block release from
 shared-block reference decrement, count the complete allocated-inode owner set,
 bind the decrement after-image and checksum into checkpoint authority, and
-require the retained allocation to survive a clean remount. The complete
+require the retained allocation to survive a clean remount. A two-orphan case
+then proves that the next transaction reclassifies the remaining singleton as
+a release, restores canonical allocation accounting, and leaves the freed
+xattr payload unchanged. The complete
 crash/interoperability matrix, checksum-torn tail classification, ACL
 enforcement, and every user-visible mutation remain outside this replay gate.
 This remains an explicit-volume emulator suite rather than a default boot-image
