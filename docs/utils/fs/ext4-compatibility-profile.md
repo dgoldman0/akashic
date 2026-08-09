@@ -791,10 +791,13 @@ one-to-four-entry inline depth-zero extent root, or a legacy direct-only map
 using any of the 12 direct slots with all three indirect roots zero. An
 unlinked target may retain any
 authenticated nonnegative 63-bit size because deletion releases its complete
-map and inode rather than preserving an EOF-selected tail. It may own one
-authenticated external xattr block only when its on-media reference count is
-exactly one;
-shared blocks and xattr value inodes remain unsupported. Each extent entry may
+map and inode rather than preserving an EOF-selected tail. It may reference one
+authenticated external xattr block. A refcount of one releases that
+allocation; a count from 2 through ext4's 1024-reference limit retains it and
+authorizes only an exact decrement plus checksum restamp. The authenticated
+count must equal a complete role-aware scan of allocated `i_file_acl` owners,
+while data and map-metadata aliases remain corrupt. Xattr value inodes remain
+unsupported. Each extent entry may
 have an initialized decoded length of 1..32768 blocks or an unwritten decoded
 length of 1..32767 blocks, with
 `logical_start + decoded_length <= 0xffffffff`; these are ext4 `ee_len` and
@@ -806,8 +809,11 @@ pointers are corruption, and any nonzero indirect root is unsupported
 recovery. The optional xattr block is independent of both map families and
 must not overlap their data ranges. If any record is outside those per-record
 shapes, the complete
-union refuses before writer allocation or cleanup mutation. The maximum exact
-coalesced metadata credit across all records sizes one reusable writer. The
+union refuses before writer allocation or cleanup mutation. The largest exact
+current metadata credit across all records sizes one reusable writer, with one
+derived extra slot when a shared-EA decrement could become a final-owner
+release after an earlier orphan is deleted. Per-transaction credit remains
+exact. The
 count remains bounded by authenticated filesystem geometry, checked
 arithmetic, and available caller-arena storage; cleanup adds no separate fixed
 record-count constant.
@@ -825,10 +831,13 @@ Cleanup selects the current legacy head until its authenticated successor
 chain is empty, then selects modern entries in unsigned `(logical block, slot)`
 order. One exact transaction removes each selected modern slot or advances the
 legacy head to its retained successor, updates and checksums the target inode,
-and for admitted deletions releases every exact data range, the optional
-unique external-xattr block, and the inode allocation plus every touched
-descriptor and super counter. The sealed authority retains the map family and
-complete ordered range vector; adjacent physical members may execute as one
+and for admitted deletions releases every exact data range, an optional unique
+external-xattr block, and the inode allocation plus every touched descriptor
+and super counter. A shared xattr remains allocated and receives one exact
+metadata after-image changing only `h_refcount` and `h_checksum`. The sealed
+authority retains the map family, complete ordered range vector, xattr
+`NONE`/`RELEASE`/`REFDEC` action, post-refcount, and retained CRC; adjacent
+physical members may execute as one
 checked allocation-accounting run without replacing those certificate
 entries. A linked legacy
 intermediate record clears its consumed `i_dtime` successor in the same
@@ -853,9 +862,11 @@ Every linked data range and every unlinked release range is admitted through
 one combined filesystem-wide other-inode ownership scan before release. For an
 unlinked target, up to four inline extents or 12 direct-slot singletons and the
 optional external-xattr singleton are published together. An overlap through
-another allocated inode's data, map metadata, or external-xattr pointer is a
-corrupt data-map refusal. The scoped proof is bound to the context, inode,
-generation, map family, exact ordered data tuple, and separate xattr home; it
+another allocated inode's data or map metadata is a corrupt data-map refusal.
+For a shared xattr, exact `i_file_acl` references are counted and must match the
+authenticated refcount; any other role remains corrupt. The scoped proof is
+bound to the context, inode, generation, map family, exact ordered data tuple,
+xattr home, action, and raw refcount; it
 may survive journal-only staging and emission but is invalidated before checkpoint can
 write a home.
 Whole-union qualification completes this proof for every retained supported
@@ -959,14 +970,20 @@ zero-I/O byte-stable remount in 67,492,163; unlinked JFI admission completes
 without writes in 240,654,652. A valid external xattr simultaneously named as
 orphan-file preallocation is rejected as a corrupt data map in 121,741,936
 steps with no residual ownership scope. Unified discovery and cleanup also has
-focused modern evidence for unique external-xattr deletion: direct
-stage/seal/abort passes for xattr-only and data-plus-xattr targets, shared-block
-and data/xattr self-alias refusals pass, and one data-plus-xattr production
-mount reaches checkpoint with canonical allocation accounting. That production
-case uses a scoped 1,500,000,000-step watchdog, moderately above the general
+focused evidence for unique external-xattr deletion: direct stage/seal/abort
+passes for xattr-only and data-plus-xattr targets, and one modern
+data-plus-xattr production mount reaches checkpoint with canonical allocation
+accounting. Shared-xattr evidence now covers exact EA-only modern and legacy
+stage/seal/abort, modern data-plus-EA staging, corrupt owner-count mismatch,
+and one complete modern production decrement. That run performs exactly one
+retained-xattr home write, completes with 36 writes and 24 flushes, and reaches
+a byte-identical zero-I/O remount. The seal regression also proves the derived
+one-slot writer-capacity delta and zero-CRC strict comparison. These production
+cases use a scoped 1,500,000,000-step watchdog, moderately above the general
 1,200,000,000 guard; it is qualification headroom, not a format or driver
-capacity. Legacy variants, the remaining negative cases, and pinned e2fsck
-acceptance for this new shape are still pending. Broader qualification is also
+capacity. Shared legacy production, the multi-orphan decrement-to-release
+transition, remaining negative/crash cases, and pinned e2fsck acceptance are
+still pending. Broader qualification is also
 needed for chains longer than two,
 later modern blocks and large orphan files, additional ownership and deletion
 shapes, distinct-key hash collisions, and arena exhaustion or retained-too-
