@@ -973,11 +973,12 @@ steps with no residual ownership scope. Unified discovery and cleanup also has
 focused evidence for unique external-xattr deletion: direct stage/seal/abort
 passes for xattr-only and data-plus-xattr targets, and one modern
 data-plus-xattr production mount reaches checkpoint with canonical allocation
-accounting. Shared-xattr evidence now covers exact EA-only modern and legacy
-stage/seal/abort, modern data-plus-EA staging, corrupt owner-count mismatch,
-and one complete modern production decrement. That run performs exactly one
-retained-xattr home write, completes with 36 writes and 24 flushes, and reaches
-a byte-identical zero-I/O remount. The seal regression also proves the derived
+accounting. Shared-xattr evidence now covers exact EA-only and data-plus-EA
+stage/seal/abort under both protocols, corrupt owner-count mismatch, and
+complete modern and legacy production decrements. Each run performs exactly
+one retained-xattr home write and reaches a byte-identical zero-I/O remount;
+modern pins 36 writes/24 flushes and legacy pins 34 writes/24 flushes. The seal
+regression also proves the derived
 one-slot writer-capacity delta and zero-CRC strict comparison. A two-record
 modern fixture now exercises the corresponding live transition: the first
 orphan decrements the only shared block from two references to one and the
@@ -988,9 +989,8 @@ single-record production cases use a scoped 1,500,000,000-step watchdog,
 moderately above the general
 1,200,000,000 guard; it is qualification headroom, not a format or driver
 capacity. The transition uses the existing 3,000,000,000 multi-record/data
-watchdog and completed in 155.6 host seconds. Shared legacy production,
-remaining negative/crash cases, and pinned e2fsck acceptance are still
-pending. Broader qualification is also
+watchdog and completed in 155.6 host seconds. Remaining negative/crash cases
+and pinned e2fsck acceptance are still pending. Broader qualification is also
 needed for chains longer than two,
 later modern blocks and large orphan files, additional ownership and deletion
 shapes, distinct-key hash collisions, and arena exhaustion or retained-too-

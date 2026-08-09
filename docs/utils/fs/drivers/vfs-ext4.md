@@ -1494,14 +1494,15 @@ The remaining boundaries are:
   Focused unique-external-xattr qualification covers xattr-only and
   data-plus-xattr deletion plus a complete modern production checkpoint.
   Shared-xattr qualification now separately passes exact EA-only
-  stage/seal/abort under modern and legacy protocols, modern data-plus-EA
-  staging, and a complete modern EA-only production cleanup. That production
-  case performs exactly one retained-xattr home write, retains the allocation,
-  completes with 36 writes and 24 flushes, and remounts byte-identically with
-  zero I/O. The focused seal proof also exercises the one-slot plan-capacity
-  transition bound and rejects a substituted nonzero checkpoint CRC when the
-  reconstructed CRC is the valid value zero. A header refcount that exceeds
-  the exact counted owner set is corrupt rather than an unsupported shape.
+  stage/seal/abort and data-plus-EA staging under both protocols, plus complete
+  EA-only modern and legacy production cleanup. Each production case performs
+  exactly one retained-xattr home write, retains the allocation, and remounts
+  byte-identically with zero I/O; modern pins 36 writes/24 flushes and legacy
+  pins 34 writes/24 flushes. The focused seal proof also exercises the one-slot
+  plan-capacity transition bound and rejects a substituted nonzero checkpoint
+  CRC when the reconstructed CRC is the valid value zero. A header refcount
+  that exceeds the exact counted owner set is corrupt rather than an
+  unsupported shape.
   A two-record modern production fixture now qualifies the state transition
   that requires the capacity reserve: two unlinked inodes begin as the only
   owners of one freshly allocated group-0 xattr block, inode 18 decrements it
@@ -1514,10 +1515,9 @@ The remaining boundaries are:
   increase over the general 1,200,000,000 guard; this is qualification
   headroom rather than an implementation capacity. The two-record transition
   uses the existing 3,000,000,000 multi-data watchdog because it performs two
-  complete ownership proofs; it completed in 155.6 host seconds. Shared-EA
-  legacy production, the remaining negative/crash matrix, and pinned e2fsck
-  acceptance remain pending before this shape closes its
-  release-qualification gate.
+  complete ownership proofs; it completed in 155.6 host seconds. The remaining
+  negative/crash matrix and pinned e2fsck acceptance remain pending before this
+  shape closes its release-qualification gate.
   Multi-range qualification admits a separated two-entry modern root and the
   four-entry inline maximum under legacy cleanup, mixing initialized and
   unwritten entries and logical gaps. Inline-extent exact-shape preflight still

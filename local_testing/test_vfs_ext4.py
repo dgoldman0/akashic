@@ -19078,26 +19078,28 @@ def singleton_unlinked_cleanup_fixture(
     )
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="session", params=("modern", "legacy"))
 def shared_external_xattr_unlinked_cleanup_fixture(
+    request: pytest.FixtureRequest,
     canonical_images: dict[str, Path],
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, object]:
+    protocol = str(request.param)
     source = canonical_images["primary-1k-i256"]
     patches, data_ranges, xattr_block = (
         _unlinked_orphan_shared_external_xattr_patches(
             source,
-            protocol="modern",
+            protocol=protocol,
         )
     )
     assert data_ranges == ()
     directory = tmp_path_factory.mktemp(
-        "ext4-modern-shared-xattr-unlinked-cleanup"
+        f"ext4-{protocol}-shared-xattr-unlinked-cleanup"
     )
     result = _run_singleton_unlinked_cleanup(
         source,
         directory / "successful-cleanup.img",
-        protocol="modern",
+        protocol=protocol,
         patches=patches,
         retained_xattr_block=xattr_block,
         max_steps=_EXTERNAL_XATTR_RECOVERY_MAX_STEPS,
@@ -19351,11 +19353,23 @@ def test_mount_reclaims_shared_external_xattr_reference(
 ) -> None:
     result = shared_external_xattr_unlinked_cleanup_fixture
     _assert_singleton_unlinked_cleanup_result(result)
-    assert result["protocol"] == "modern"
-    assert result["expected_home_writes"] == 6
+    protocol = result["protocol"]
+    assert protocol in {"modern", "legacy"}
+    assert result["expected_home_writes"] == (
+        6 if protocol == "modern" else 5
+    )
     assert isinstance(result["retained_xattr_block"], int)
     assert result["stable_trace"] == ()
     assert result["stable_sha256"] == result["clean_sha256"]
+
+
+def test_shared_external_xattr_cleanup_is_e2fsck_clean(
+    shared_external_xattr_unlinked_cleanup_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    clean_image = shared_external_xattr_unlinked_cleanup_fixture["clean_image"]
+    assert isinstance(clean_image, Path)
+    _assert_e2fsck_clean(clean_image, jbd2_toolchain)
 
 
 def test_empty_unlinked_cleanup_is_e2fsck_clean(
