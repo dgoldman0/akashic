@@ -183,10 +183,13 @@ credit. The record count is bounded by
 authenticated filesystem geometry, checked arithmetic, and available
 caller-arena storage; cleanup adds no separate fixed record-count constant. A
 linked record is supported only for a regular file whose zero size is already
-durable, whose retained data map is an inline depth-0 extent root, and which
-does not use journal-data mode. An authenticated external xattr is retained;
-the root may already be empty or may contain ranges that the bounded
-free-block builder can account for exactly. An unlinked target must be an
+durable and which does not use journal-data mode. Its retained data map may be
+an inline depth-0 extent root, or an exact empty legacy-format map with the
+`EXTENTS` flag clear and all 60 bytes of `i_block` zero. An authenticated
+external xattr is retained. An empty map has no release ranges or revokes and
+its decoded `i_blocks` must equal only that retained xattr contribution; a
+nonempty inline extent root may contain ranges that the bounded free-block
+builder can account for exactly. An unlinked target must be an
 allocated regular file with zero links and an authenticated nonnegative
 63-bit size. Its complete data map may be an empty or one-to-four-entry inline
 depth-0 extent root, a resident depth-1 root with one to four checksum-valid
@@ -246,11 +249,12 @@ activates or converges the recovery journal as required, then stages, emits,
 and checkpoints the same sealed cleanup before selecting again from the
 strictly rebuilt plan. Modern completion clears the exact orphan-file slot.
 Legacy completion advances `s_last_orphan` to the retained successor in the
-checksummed primary-super after-image. A linked legacy intermediate record also
-clears its consumed `i_dtime` link in that transaction; a terminal
-zero-successor record whose extent root is already empty does not manufacture a
-no-op inode rewrite. A linked modern record is admitted only with `i_dtime`
-already zero. An unlinked delete zeroes the complete target inode record,
+checksummed primary-super after-image. A linked intermediate record under the
+legacy orphan protocol also clears its consumed `i_dtime` link in that
+transaction; a terminal zero-successor record whose admitted map is already
+empty does not manufacture a no-op inode rewrite. A linked record under the
+modern orphan protocol is admitted only with `i_dtime` already zero. An
+unlinked delete zeroes the complete target inode record,
 including `i_dtime`, without synthesizing a deletion timestamp; the same
 transaction clears its inode-bitmap bit and increments the owning descriptor
 and primary-super free-inode counters.
@@ -294,9 +298,9 @@ before publication: a `RECOVER`-clear input first enters a tear-safe recovery
 epoch through writer-free `AKW1` activation while preserving
 `ORPHAN_PRESENT`; `AKR1` then lands an empty checksum-v3 journal and a
 checksummed primary superblock with both transient bits clear. Any union whose
-records all fit the exact linked-truncate, empty/one-to-four-entry inline-
-depth-0, resident depth-1 fanout, or admitted legacy direct/indirect
-unlinked-delete slices is
+records all fit the exact linked-truncate shapes (an inline depth-0 extent map
+or an exact empty legacy-format map), empty/one-to-four-entry inline-depth-0,
+resident depth-1 fanout, or admitted legacy direct/indirect unlinked-delete slices is
 transactionally drained before mount
 publication; a union containing any other record returns stable
 `EXT4-D-RECOVERY` without a cleanup write. Malformed authority still fails
@@ -346,8 +350,7 @@ reuse a sufficient retained allocation rather than consume another monotonic
 arena allocation. The authenticated-empty modern branch completes recovery
 metadata only when both protocols are empty, without changing an orphan inode,
 orphan-file block, or legacy link. A union whose records all fit the supported
-linked-depth-zero or admitted unlinked deletion shapes is processed as a
-sequence of sealed one-record
+linked map or admitted unlinked deletion shapes is processed as a sequence of sealed one-record
 transactions; its count is constrained by authenticated geometry, checked
 arithmetic, and caller-arena capacity rather than a cleanup-specific constant.
 Broader truncate/delete shapes remain refused. Pinned qualification covers
@@ -800,16 +803,20 @@ before replay can write homes, and cleared on every return. It is never
 context-persistent and grants no authority across remount, a home write, or an
 external raw-media mutator.
 
-`_EXT4-JTX-STAGE-ORPHAN-DEPTH0-TRUNCATE` joins that accounting builder to one
+`_EXT4-JTX-STAGE-LINKED-ORPHAN-TRUNCATE` joins that accounting builder to one
 authenticated map-removal case. It accepts only the canonical retained plan
 slot found by the plan's own hash probe; an external byte copy, empty table
 slot, or injected duplicate in a later probe slot has no cleanup authority.
 The media locator is reauthenticated and the target must be a linked regular
-file whose zero size is already durable, whose data map is an inline depth-0
-extent root, and which does not use journal-data mode. Any external xattr block
-is allocation- and checksum-authenticated, retained, and proved disjoint from
-the target data ranges. The decoded `i_blocks` value must exactly equal all
-captured extent blocks plus that retained xattr block in 512-byte sectors.
+file whose zero size is already durable, whose data map is either an inline
+depth-0 extent root or an exact empty legacy-format `i_block` array, and which
+does not use journal-data mode. The legacy-format case requires the `EXTENTS`
+flag clear and all 12 direct pointers plus the single-, double-, and
+triple-indirect roots zero. Any external xattr block is allocation- and
+checksum-authenticated, retained, and proved disjoint from the target data
+ranges. The decoded `i_blocks` value must exactly equal all captured extent
+blocks plus that retained xattr block in 512-byte sectors; for an empty map,
+only the retained xattr contribution may remain.
 
 Writable ownership admission also reauthenticates the modern orphan file
 through the complete read-profile mapper; cleanup no longer narrows that
@@ -828,24 +835,27 @@ target cleanup shapes remain the deliberately bounded inline-depth-0,
 resident depth-1 fanout, and admitted legacy direct/indirect deletion cases described
 above.
 
-For a nonempty captured root, the builder stages an inode with zero extent
+For a nonempty captured extent root, the builder stages an inode with zero extent
 entries, clears all four inline entry slots, retains the extent header and
 external-xattr pointer, encodes the exact xattr-only `i_blocks` remainder
 (including `HUGE_FILE` units), and frees each captured range through the typed
-block-free builder. An already empty, exactly accounted root is a successful
-no-op. Once the inode afterimage is published, any later semantic, conflict, or
-credit failure aborts and scrubs the entire transaction; it recognizes a lower
-block-free auto-abort and does not abort twice. The operation intentionally
-leaves the orphan slot/list record active for a later durable
-protocol-completion step. It stages no data images and performs no media write.
+block-free builder. An already-empty, exactly accounted extent or legacy-format
+map has no storage work. Modern orphan-protocol cleanup therefore needs only
+its slot after-image, while a nonterminal legacy orphan-protocol record still
+stages the target inode to clear its consumed `i_dtime` successor. Once the
+inode afterimage is published, any later semantic, conflict, or credit failure
+aborts and scrubs the entire transaction; it recognizes a lower block-free
+auto-abort and does not abort twice. The operation intentionally leaves the
+orphan slot/list record active for a later durable protocol-completion step. It
+stages no data images and performs no media write.
 Reusable external metadata freed by the transaction—the admitted extent leaves
 or legacy pointer blocks and a uniquely released external xattr—is retained in
 canonical map order followed by the xattr.
 
 `_EXT4-JTX-STAGE-ORPHAN-CLEANUP` owns an initially empty metadata-only
 transaction for one deterministically selected record of either protocol. It
-dispatches by the authenticated link count, and composes either depth-zero
-linked truncation or an admitted unlinked inode release with modern slot
+dispatches by the authenticated link count, and composes either admitted
+zero-size linked truncation or an admitted unlinked inode release with modern slot
 removal or legacy-head advancement. It requires used and active
 metadata homes to equal the exact credit, then seals protocol- and operation-specific
 raw authority plus retained after-image CRC32Cs into the arena-owned writer.
@@ -873,12 +883,15 @@ valid zero CRC distinct from “not reconstructed yet,” so the strict pre-home
 comparison cannot skip a zero-valued checksum. The retained
 transaction entries and
 semantic verifier bind every distinct touched block-bitmap after-image and
-coalesced data-group GDT page. The explicit target-entry count binds the raw
-extent-entry count for linked truncation and the authenticated semantic entry
-count for deletion: an already-truncated linked target has zero, a linked
-target being truncated is nonzero, and a delete has the admitted inline,
-external-leaf, direct, single-indirect, or sparse-double data-entry count plus a
-mandatory zero target after-image. No valid CRC32C value is
+coalesced data-group GDT page. For linked truncation the explicit target-entry
+count binds the authenticated pre-truncation data-entry count: an empty extent
+root or exact empty legacy-format map has zero, while a nonempty inline extent
+root binds raw `eh_entries`. An empty legacy-format map additionally seals
+data-map kind `NONE` and a zero range/revoke vector; the raw and staged checks
+bind the clear `EXTENTS` flag and all-zero `i_block` array. For deletion, the
+target-entry count binds the admitted inline, external-leaf, direct,
+single-indirect, or sparse-double semantic data-entry count plus a mandatory
+zero target after-image. No valid CRC32C value is
 reserved as a sentinel. Mode is published last; once published, every generic
 and typed staging entry point returns busy, while abort and emit remain legal.
 The certificate also binds the exact pre-transaction total, modern, and legacy
@@ -890,15 +903,17 @@ this is distinct from the operation-scoped reverse-owner proof.
 `_EXT4-MEASURE-ORPHAN-CLEANUP` applies the same per-record authentication
 without allocating a writer or publishing an after-image. It returns exact
 metadata and revoke credits as explicit values; no caller depends on ambient
-post-measurement state. An already-truncated record
-costs one protocol home for a modern slot or a terminal legacy head; a
+post-measurement state. An already-empty-map record costs one protocol home for
+a modern orphan-file slot or a terminal legacy orphan-protocol head; a
 nonterminal legacy head also needs the target inode-table home to clear its
-consumed `i_dtime` successor. A nonempty modern root starts with the target
-inode table, primary super, and orphan-file block; a nonempty legacy root
-starts with the target inode table and primary super. Both add one uniquely owned block
+consumed `i_dtime` successor. A nonempty linked extent map under the modern orphan
+protocol starts with the target inode table, primary super, and orphan-file
+block; under the legacy orphan protocol it starts with the target inode table
+and primary super. Both add one uniquely owned block
 bitmap per touched group and one copy of each distinct primary GDT page. Thus
-the canonical one-block linked-truncate legacy fixture has exact credit four, while its
-already-truncated form has credit one. The geometry-bounded, constant-space
+the canonical one-block linked-truncate legacy-protocol fixture has exact
+credit four, while its already-empty-map form has credit one. The
+geometry-bounded, constant-space
 group scan imposes no candidate array or cleanup-specific capacity. A deletion
 adds one revoke for every admitted external map-metadata block (each depth-1
 extent leaf or legacy pointer block) and one for a uniquely
@@ -1105,8 +1120,9 @@ The object layout, counts, embedded pointers, ring fields, phase/fault state,
 image checksums, and hash indices are revalidated before they can drive a
 fill, copy, lookup, or media write. The public binding and capability mask
 remain read-only. Geometry- and arena-bounded transactional completion is
-implemented for unions of the exact linked zero-size inline-depth-0 and
-nonnegative-size inline-depth-0, resident depth-1 fanout, or legacy
+implemented for unions of the exact linked zero-size inline-depth-0 extent or
+exact empty legacy-format map and nonnegative-size inline-depth-0, resident
+depth-1 fanout, or legacy
 direct/indirect unlinked-inode cases admitted above under both orphan mechanisms. The
 implementation adds no fixed cleanup
 record-count constant; positive union-drain qualification currently reaches
@@ -1115,10 +1131,10 @@ Before a supported linked truncation or unlinked deletion may release storage,
 it publishes every physical range in the admitted map together and performs one
 complete allocated-inode scan. Any data, map-metadata, or external-xattr
 reference from another inode to any of those ranges is a corrupt cross-link
-refusal. The operation-scoped
-certificate binds the context, inode, generation, map family, range count, and
-all ordered range pairs; it may bridge measurement, dry staging, activation,
-restaging, and journal emission, but checkpoint invalidates it before its first home
+refusal. When physical ranges are present, the operation-scoped certificate
+binds the context, inode, generation, map family, range count, and all ordered
+range pairs; it may bridge measurement, dry staging, activation, restaging,
+and journal emission, but checkpoint invalidates it before its first home
 write. Whole-union qualification performs this proof for every retained linked
 or unlinked record before the first cleanup transaction may mutate media.
 Per-shape single-record qualification includes initialized and unwritten
@@ -1461,7 +1477,8 @@ The remaining boundaries are:
   broad crash/interoperability qualification remain gated.
   Transaction-aware metadata acquisition, checksum-safe typed
   orphan-inode replacement, free-only physical-block accounting, linked
-  zero-size inline depth-0 extent truncation, exact nonnegative-size
+  zero-size inline depth-0 extent or exact empty legacy-format-map truncation,
+  exact nonnegative-size
   inline-depth-0, resident depth-1 fanout, or legacy
   direct/indirect unlinked data and inode allocation release, target-record
   scrubbing, exact credit measurement, modern-slot removal, legacy-head
@@ -1667,7 +1684,7 @@ The remaining boundaries are:
   durability fence: both the surviving writes and the preceding durable
   snapshot converge on a fresh mount and then remount without another write.
   Pinned e2fsck 1.47.4 acceptance of those repaired outputs remains a pending
-  release qualification gate. A linked legacy `18 -> 21 -> 0` fixture
+  release qualification gate. A linked legacy-orphan-protocol `18 -> 21 -> 0` fixture
   additionally runs
   the real `MORE`, successor-plan rebuild, terminal `FINAL`, and clean
   deactivation path. It proves the exact 42-write/35-flush trace, the
@@ -1688,7 +1705,15 @@ The remaining boundaries are:
   returns exactly to the linked-modern base, and the remount performs zero
   I/O. These synthetic protocol-state fixtures intentionally have no
   namespace dirents for inodes 18 or 21; they are not e2fsck oracles and are
-  not claimed as e2fsck-clean namespace images. A
+  not claimed as e2fsck-clean namespace images. Separate focused dry-stage
+  qualification admits an exact empty legacy-format linked map under both the
+  modern and legacy orphan protocols in a two-record `MORE` prestate. It pins
+  a clear `EXTENTS` flag, all 60 `i_block` bytes zero, zero `i_blocks`, target
+  entry count zero, data-map kind `NONE`, no release ranges or revokes, exact
+  one-home modern and two-home legacy metadata credit, the corresponding
+  protocol after-images, staged verification, and abort. A nonempty
+  legacy-format linked map remains unsupported. This focused evidence makes no
+  production, crash-recovery, or e2fsck claim. A
   later four-extent unlinked record whose fourth range is also owned by a live
   inode proves combined all-range ownership refusal after an earlier supported
   record qualifies but before any write or flush. Structurally valid

@@ -1339,6 +1339,48 @@ def _multi_linked_orphan_patches(
     return tuple(patches.items())
 
 
+def _multi_linked_empty_legacy_map_orphan_patches(
+    path: Path,
+    *,
+    protocol: str,
+) -> tuple[tuple[int, bytes], ...]:
+    """Retain two linked empty legacy-map inodes in one orphan protocol."""
+    patches = dict(_multi_linked_orphan_patches(path, protocol=protocol))
+    superblock = patches[1024]
+
+    for inode_number, successor in (
+        ((18, 21), (21, 0))
+        if protocol == "legacy"
+        else ((18, 0), (21, 0))
+    ):
+        _, _, inode_offset = _ext4_inode_record(path, inode_number)
+        inode = bytearray(patches[inode_offset])
+        assert struct.unpack_from("<I", inode, 0x04)[0] == 0
+        assert struct.unpack_from("<I", inode, 0x6C)[0] == 0
+        assert struct.unpack_from("<I", inode, 0x14)[0] == successor
+        assert struct.unpack_from("<H", inode, 0x1A)[0] == 2
+        assert struct.unpack_from("<I", inode, 0x1C)[0] == 0
+        assert struct.unpack_from("<I", inode, 0x68)[0] == 0
+        assert struct.unpack_from("<H", inode, 0x76)[0] == 0
+        assert struct.unpack_from("<HHHH", inode, 0x28) == (
+            0xF30A,
+            0,
+            4,
+            0,
+        )
+        flags = struct.unpack_from("<I", inode, 0x20)[0]
+        assert flags & 0x0008_0000
+        struct.pack_into("<I", inode, 0x20, flags & ~0x0008_0000)
+        inode[0x28:0x64] = bytes(60)
+        patches[inode_offset] = _inode_with_checksum(
+            superblock,
+            inode_number,
+            inode,
+        )
+
+    return tuple(patches.items())
+
+
 def _linked_head_nlink2_extent_patches(
     path: Path,
     *,
@@ -17238,6 +17280,370 @@ _MULTI_DATA_DELETE_MORE_CASES = (
 )
 
 
+@pytest.mark.parametrize("protocol", ("modern", "legacy"))
+def test_linked_empty_legacy_map_head_with_successor_stages_exact_more_transaction(
+    canonical_images: dict[str, Path],
+    protocol: str,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches = _multi_linked_empty_legacy_map_orphan_patches(
+        path,
+        protocol=protocol,
+    )
+    superblock = dict(patches)[1024]
+    _, _, inode_offset = _ext4_inode_record(path, 18)
+    target_home, target_offset = divmod(inode_offset, 1024)
+    assert (target_home, target_offset) == (279, 256)
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, orphan_inode, _ = _ext4_inode_record(path, orphan_inode_number)
+    orphan_home = _extent_root_physical(orphan_inode, 0)
+    assert orphan_home == 1313
+
+    modern = protocol == "modern"
+    expected_credit = 1 if modern else 2
+    expected_logical = 0 if modern else 21
+    expected_kind = "_EXT4-OK-MODERN" if modern else "_EXT4-OK-LEGACY"
+    expected_mode = (
+        "_EXT4-JCPM-ORPHAN-MODERN-MORE"
+        if modern
+        else "_EXT4-JCPM-ORPHAN-LEGACY-MORE"
+    )
+    marker = f"EXT4-{protocol.upper()}-LINKED-EMPTY-LEGACY-MAP-MORE-SEALED"
+    aborted_marker = f"{marker}-ABORTED"
+
+    if modern:
+        protocol_probe = [
+            (
+                f"{orphan_home} _EL-WRITER _EXT4-JFC-FIND-META "
+                "CONSTANT _EL-PROTOCOL-FIND-IOR"
+            ),
+            "_EXT4-JFC-FOUND @ 0<> CONSTANT _EL-PROTOCOL-FOUND",
+            "_EXT4-JFC-IMAGE @ L@ CONSTANT _EL-AFTER-SLOT0",
+            "_EXT4-JFC-IMAGE @ 4 + L@ CONSTANT _EL-AFTER-SLOT1",
+        ]
+        protocol_checks = [
+            "_EL-INODE-FOUND 0=",
+            "_EL-PROTOCOL-FIND-IOR 0=",
+            "_EL-PROTOCOL-FOUND",
+            "_EL-AFTER-SLOT0 0=",
+            "_EL-AFTER-SLOT1 21 =",
+            "_EL-WRITER _EXT4-JWR.CP-TARGET-CRC + @ 0=",
+        ]
+    else:
+        protocol_probe = [
+            (
+                f"_EXT4-JFC-IMAGE @ {target_offset} + "
+                "CONSTANT _EL-INODE-AFTER"
+            ),
+            (
+                "_EL-INODE-AFTER _EXT4-I.DTIME + L@ "
+                "CONSTANT _EL-AFTER-DTIME"
+            ),
+            (
+                "_EL-INODE-AFTER _EXT4-I.LINKS + W@ "
+                "CONSTANT _EL-AFTER-LINKS"
+            ),
+            (
+                "_EL-INODE-AFTER _EXT4-I.FLAGS + L@ "
+                "CONSTANT _EL-AFTER-FLAGS"
+            ),
+            (
+                "_EL-INODE-AFTER _EXT4-I.BLOCK + 60 "
+                "_EXT4-BYTES-ZERO? CONSTANT _EL-AFTER-MAP-ZERO"
+            ),
+            (
+                "1 _EL-WRITER _EXT4-JFC-FIND-META "
+                "CONSTANT _EL-PROTOCOL-FIND-IOR"
+            ),
+            "_EXT4-JFC-FOUND @ 0<> CONSTANT _EL-PROTOCOL-FOUND",
+            (
+                "_EXT4-JFC-IMAGE @ _EL-CTX _EXT4-PRIMARY-SUPER-OFF + "
+                "CONSTANT _EL-SUPER-AFTER"
+            ),
+            (
+                "_EL-SUPER-AFTER _EXT4-SB.LAST-ORPHAN + L@ "
+                "CONSTANT _EL-AFTER-HEAD"
+            ),
+            (
+                "_EL-SUPER-AFTER _EXT4-SUPER-CHECKSUM? "
+                "CONSTANT _EL-AFTER-SUPER-CRC"
+            ),
+        ]
+        protocol_checks = [
+            "_EL-INODE-FOUND",
+            "_EL-AFTER-DTIME 0=",
+            "_EL-AFTER-LINKS 2 =",
+            "_EL-AFTER-FLAGS _EXT4-EXTENTS-FL AND 0=",
+            "_EL-AFTER-MAP-ZERO",
+            "_EL-PROTOCOL-FIND-IOR 0=",
+            "_EL-PROTOCOL-FOUND",
+            "_EL-AFTER-HEAD 21 =",
+            "_EL-AFTER-SUPER-CRC",
+        ]
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            "T-ARENA CONSTANT _EL-ARENA",
+            (
+                "_EL-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _EL-MOUNT-IOR CONSTANT _EL-V"
+            ),
+            "_EL-V _EXT4-CTX CONSTANT _EL-CTX",
+            (
+                "_EL-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _EL-FIND-IOR CONSTANT _EL-RECORD"
+            ),
+            "_EL-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _EL-JOURNAL-IOR",
+            (
+                "_EL-RECORD _EL-CTX _EXT4-MEASURE-ORPHAN-CLEANUP "
+                "CONSTANT _EL-MEASURE-IOR CONSTANT _EL-REVOKE-CREDIT "
+                "CONSTANT _EL-CREDIT"
+            ),
+            (
+                "_EL-CREDIT 0 _EL-REVOKE-CREDIT _EL-CTX "
+                "_EXT4-JTX-PREFLIGHT-CAPACITY CONSTANT _EL-CAPACITY-IOR"
+            ),
+            "-1 _EL-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "_EL-CREDIT 0 _EL-REVOKE-CREDIT _EL-CTX "
+                "_EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _EL-WRITER-IOR CONSTANT _EL-WRITER"
+            ),
+            (
+                "_EL-CREDIT 0 _EL-REVOKE-CREDIT _EL-WRITER "
+                "_EXT4-JTX-BEGIN CONSTANT _EL-BEGIN-IOR CONSTANT _EL-TX"
+            ),
+            "DEPTH CONSTANT _EL-DEPTH-BEFORE-STAGE",
+            (
+                "_EL-RECORD _EL-TX _EXT4-JTX-STAGE-ORPHAN-CLEANUP "
+                "CONSTANT _EL-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _EL-DEPTH-AFTER-STAGE",
+            (
+                "_EL-WRITER _EL-CTX _EXT4-JWR-ORPHAN-PREPLAN "
+                "CONSTANT _EL-PREPLAN-IOR"
+            ),
+            (
+                "_EL-WRITER _EXT4-JWR-ORPHAN-STAGED? "
+                "CONSTANT _EL-STAGED-IOR"
+            ),
+            (
+                f"{target_home} _EL-WRITER _EXT4-JFC-FIND-META "
+                "CONSTANT _EL-INODE-FIND-IOR"
+            ),
+            "_EXT4-JFC-FOUND @ 0<> CONSTANT _EL-INODE-FOUND",
+            *protocol_probe,
+            (
+                "18 _EL-CTX _EXT4-LOAD-ORPHAN-INODE "
+                "CONSTANT _EL-RAW-INODE-IOR"
+            ),
+            (
+                "_EL-CTX _EXT4-C.INODE + _EXT4-I.FLAGS + L@ "
+                "CONSTANT _EL-RAW-FLAGS"
+            ),
+            (
+                "_EL-CTX _EXT4-C.INODE + _EXT4-I.DTIME + L@ "
+                "CONSTANT _EL-RAW-DTIME"
+            ),
+            (
+                "0 _EL-CTX _EXT4-I-BLOCK-ZERO-FROM? "
+                "CONSTANT _EL-RAW-MAP-ZERO"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_EL-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_EL-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_EL-FIND-IOR 0=",
+                        "_EL-JOURNAL-IOR 0=",
+                        "_EL-RECORD _EXT4-OE.INO + @ 18 =",
+                        (
+                            "_EL-RECORD _EXT4-OE.KIND + @ "
+                            f"{expected_kind} ="
+                        ),
+                        (
+                            "_EL-RECORD _EXT4-OE.LOCATOR-A + @ "
+                            f"{expected_logical} ="
+                        ),
+                        "_EL-RECORD _EXT4-OE.LOCATOR-B + @ 0=",
+                        "_EL-CTX _EXT4-C.O.ACTIVE + @ 2 =",
+                        (
+                            "_EL-CTX _EXT4-C.O.MODERN-ACTIVE + @ "
+                            f"{2 if modern else 0} ="
+                        ),
+                        (
+                            "_EL-CTX _EXT4-C.O.LEGACY-ACTIVE + @ "
+                            f"{0 if modern else 2} ="
+                        ),
+                        "_EL-MEASURE-IOR 0=",
+                        "_EL-REVOKE-CREDIT 0=",
+                        f"_EL-CREDIT {expected_credit} =",
+                        "_EL-CAPACITY-IOR 0=",
+                        "_EL-WRITER-IOR 0=",
+                        "_EL-BEGIN-IOR 0=",
+                        "_EL-STAGE-IOR 0=",
+                        "_EL-DEPTH-BEFORE-STAGE _EL-DEPTH-AFTER-STAGE =",
+                        "_EL-PREPLAN-IOR 0=",
+                        "_EL-STAGED-IOR 0=",
+                        (
+                            "_EL-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-STAGING ="
+                        ),
+                        (
+                            "_EL-WRITER _EXT4-JWR.META-CREDIT + @ "
+                            f"{expected_credit} ="
+                        ),
+                        (
+                            "_EL-WRITER _EXT4-JWR.META-USED + @ "
+                            f"{expected_credit} ="
+                        ),
+                        (
+                            "_EL-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                            f"{expected_credit} ="
+                        ),
+                        "_EL-WRITER _EXT4-JWR.DATA-CREDIT + @ 0=",
+                        "_EL-WRITER _EXT4-JWR.DATA-USED + @ 0=",
+                        "_EL-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                        "_EL-WRITER _EXT4-JWR.REVOKE-CREDIT + @ 0=",
+                        "_EL-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
+                        "_EL-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                        (
+                            "_EL-WRITER _EXT4-JWR.CP-MODE + @ "
+                            f"{expected_mode} ="
+                        ),
+                        "_EL-WRITER _EXT4-JWR.CP-O-INO + @ 18 =",
+                        (
+                            "_EL-WRITER _EXT4-JWR.CP-O-LOGICAL + @ "
+                            f"{expected_logical} ="
+                        ),
+                        "_EL-WRITER _EXT4-JWR.CP-O-SLOT + @ 0=",
+                        (
+                            "_EL-WRITER _EXT4-JWR.CP-O-HOME + @ "
+                            f"{orphan_home if modern else 1} ="
+                        ),
+                        (
+                            "_EL-WRITER _EXT4-JWR.CP-TARGET-GEN + @ "
+                            "0x18181818 ="
+                        ),
+                        (
+                            "_EL-WRITER _EXT4-JWR.CP-TARGET-HOME + @ "
+                            f"{target_home} ="
+                        ),
+                        (
+                            "_EL-WRITER _EXT4-JWR.CP-TARGET-OFF + @ "
+                            f"{target_offset} ="
+                        ),
+                        "_EL-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ 0=",
+                        (
+                            "_EL-WRITER _EXT4-JWR.CP-DATA-MAP-KIND + @ "
+                            "_EXT4-JDM-NONE ="
+                        ),
+                        *_forth_cp_delete_vector_checks("_EL-WRITER", ()),
+                        "_EL-WRITER _EXT4-JWR.CP-PRE-ACTIVE + @ 2 =",
+                        (
+                            "_EL-WRITER _EXT4-JWR.CP-PRE-MODERN + @ "
+                            f"{2 if modern else 0} ="
+                        ),
+                        (
+                            "_EL-WRITER _EXT4-JWR.CP-PRE-LEGACY + @ "
+                            f"{0 if modern else 2} ="
+                        ),
+                        "_EL-WRITER _EXT4-JWR-CP-AUTHORITY?",
+                        "_EL-WRITER _EXT4-JTX-TABLES-VALID?",
+                        "_EL-INODE-FIND-IOR 0=",
+                        *protocol_checks,
+                        "_EL-RAW-INODE-IOR 0=",
+                        "_EL-RAW-FLAGS _EXT4-EXTENTS-FL AND 0=",
+                        "_EL-RAW-MAP-ZERO",
+                        f"_EL-RAW-DTIME {expected_logical} =",
+                        "_EL-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+            "_EL-TX _EXT4-JTX-ABORT CONSTANT _EL-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_EL-ABORT-IOR 0=",
+                        (
+                            "_EL-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_EL-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_EL-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                        "_EL-WRITER _EXT4-JWR-VALID?",
+                        "_EL-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_EL-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_EL-WRITER _EXT4-JWR.CP-MODE + @ 0=",
+                        "_EL-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + f' IF ." {aborted_marker}" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, marker)
+    _assert_emitted(output, aborted_marker)
+
+
+def test_linked_nonempty_legacy_map_remains_unsupported(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches, data_ranges = _legacy_direct_unlinked_orphan_patches(
+        path,
+        protocol="legacy",
+        direct_slots=(0,),
+        base_patches=_multi_linked_orphan_patches(
+            path,
+            protocol="legacy",
+        ),
+    )
+    assert len(data_ranges) == 1
+    assert data_ranges[0][0] > 0
+    assert data_ranges[0][1] == 1
+    marker = "EXT4-LINKED-NONEMPTY-LEGACY-MAP-UNSUPPORTED"
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            "T-ARENA CONSTANT _LN-ARENA",
+            (
+                "_LN-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _LN-MOUNT-IOR CONSTANT _LN-V"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_LN-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_LN-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, marker)
+
+
 @pytest.mark.parametrize("extent_count", (1, 2))
 def test_linked_legacy_head_with_successor_stages_exact_more_transaction(
     canonical_images: dict[str, Path],
@@ -26929,7 +27335,7 @@ def test_typed_depth0_orphan_truncation_stages_exact_afterimages_without_io(
             ),
             (
                 "_OT-COPY _OT-TX "
-                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0-TRUNCATE "
+                "_EXT4-JTX-STAGE-LINKED-ORPHAN-TRUNCATE "
                 "CONSTANT _OT-COPY-IOR"
             ),
             (
@@ -26938,7 +27344,7 @@ def test_typed_depth0_orphan_truncation_stages_exact_afterimages_without_io(
             ),
             (
                 "_OT-RECORD _OT-TX "
-                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0-TRUNCATE "
+                "_EXT4-JTX-STAGE-LINKED-ORPHAN-TRUNCATE "
                 "CONSTANT _OT-STAGE-IOR"
             ),
             (
@@ -27208,7 +27614,7 @@ def test_typed_depth0_orphan_truncation_auto_aborts_partial_credit_failure(
             ),
             (
                 "_OA-RECORD _OA-TX "
-                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0-TRUNCATE "
+                "_EXT4-JTX-STAGE-LINKED-ORPHAN-TRUNCATE "
                 "CONSTANT _OA-STAGE-IOR"
             ),
             "_OA-TX _EXT4-JTX-EMIT CONSTANT _OA-EMIT-IOR",
@@ -27255,7 +27661,7 @@ def test_typed_depth0_orphan_truncation_auto_aborts_partial_credit_failure(
             ),
             (
                 "_OA-RECORD _OA-RETRY "
-                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0-TRUNCATE "
+                "_EXT4-JTX-STAGE-LINKED-ORPHAN-TRUNCATE "
                 "CONSTANT _OA-RETRY-STAGE-IOR"
             ),
             (

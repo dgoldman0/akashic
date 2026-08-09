@@ -785,15 +785,20 @@ bounded legacy walk independently rejects cycles. Every referenced inode and
 applicable data map is then authenticated.
 
 Before its first cleanup write, mount authenticates and exactly measures every
-record in the complete union. Each record must be either a linked depth-zero
-truncation already at zero size or an unlinked deletion with an empty or
-one-to-four-entry inline depth-zero extent root, a resident depth-1 root with
-one to four checksum-valid external leaves, or a legacy map using any of the
+record in the complete union. Each record must be either a linked truncation
+already at zero size whose data map is an inline depth-zero extent root or an
+exact empty legacy-format `i_block` array, or an unlinked deletion with an
+empty or one-to-four-entry inline depth-zero extent root, a resident depth-1
+root with one to four checksum-valid external leaves, or a legacy map using any of the
 12 direct slots and one optional complete single-indirect block. The legacy
 map may additionally use an optional double-indirect root with zero or more
 occupied children when its exact canonical data-plus-map vector, plus any
 present external-xattr owner range, fits the `2P+16` caller workspace; its
-triple-indirect root remains zero. An
+triple-indirect root remains zero. The linked legacy-format alternative
+requires the `EXTENTS` flag clear and all 12 direct pointers plus the single-,
+double-, and triple-indirect roots zero. It contributes no release ranges or
+revokes, and its decoded `i_blocks` may contain only the contribution from an
+authenticated retained external xattr block. An
 unlinked target may retain any
 authenticated nonnegative 63-bit size because deletion releases its complete
 map and inode rather than preserving an EOF-selected tail. It may reference one
@@ -845,17 +850,18 @@ order. One exact transaction removes each selected modern slot or advances the
 legacy head to its retained successor, updates and checksums the target inode,
 and for admitted deletions releases every exact data range, an optional unique
 external-xattr block, and the inode allocation plus every touched descriptor
-and super counter. A shared xattr remains allocated and receives one exact
+and super counter. An already-empty linked extent or legacy-format map releases
+no storage. A shared xattr remains allocated and receives one exact
 metadata after-image changing only `h_refcount` and `h_checksum`. The sealed
 authority retains the map family, complete ordered range vector, xattr
 `NONE`/`RELEASE`/`REFDEC` action, post-refcount, and retained CRC; adjacent
 physical members may execute as one
 checked allocation-accounting run without replacing those certificate
-entries. A linked legacy
-intermediate record clears its consumed `i_dtime` successor in the same
-transaction; the terminal zero-successor/empty-root case avoids a no-op inode
-rewrite, while linked modern records require `i_dtime` to be zero. Every sealed
-record carries a `FINAL` or `MORE` certificate and the exact pre-transaction
+entries. A linked intermediate record under the legacy orphan protocol clears
+its consumed `i_dtime` successor in the same transaction; the terminal
+zero-successor/already-empty-map case avoids a no-op inode rewrite, while
+linked records under the modern orphan protocol require `i_dtime` to be zero.
+Every sealed record carries a `FINAL` or `MORE` certificate and the exact pre-transaction
 total, modern, and legacy counts. Checkpoint reauthenticates that complete
 prestate before home writes and proves afterward that the selected inode is
 absent from the orphan union, the selected protocol and total counts fell by
@@ -920,7 +926,7 @@ mixed case also crosses the second-transaction commit/home durability fence;
 both the surviving prefix and the preceding durable snapshot converge on a
 fresh mount and remount without another write. Pinned e2fsck 1.47.4 acceptance
 of those repaired outputs remains a pending release qualification gate. A
-linked two-record legacy chain additionally qualifies real `MORE`, successor
+linked two-record legacy-orphan-protocol chain additionally qualifies real `MORE`, successor
 rebuild, terminal `FINAL`, clean deactivation, exact media changes, and a
 zero-I/O remount. Companion success cases give the linked head one or two
 uniquely owned, separately described extents and qualify four-credit
@@ -938,7 +944,15 @@ two orphan-home writes, unchanged inode 21 and payload media, restored
 allocation accounting, zero final slots, and a zero-I/O stable remount. It now
 measures 1,185,669,720 guest steps under the existing 1,500,000,000-step
 watchdog; the remount measures 55,255,628. It is likewise synthetic and not an
-e2fsck namespace oracle. Whole-union refusal is qualified with an earlier
+e2fsck namespace oracle. Separate focused dry-stage qualification admits an
+exact empty legacy-format linked map under both the modern and legacy orphan
+protocols in a two-record `MORE` prestate. It pins a clear `EXTENTS` flag, all
+60 `i_block` bytes zero, zero `i_blocks`, target entry count zero, data-map kind
+`NONE`, no release ranges or revokes, exact one-home modern and two-home legacy
+metadata credit, the corresponding protocol after-images, staged verification,
+and abort. A nonempty legacy-format linked map remains unsupported. This
+focused evidence makes no production, crash-recovery, or e2fsck claim.
+Whole-union refusal is qualified with an earlier
 supported record followed by a valid two-extent record, and post-seal
 count/mode substitution is rejected before home writes. A later selected
 linked record whose final range aliases a live inode is also refused before

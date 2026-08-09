@@ -13334,7 +13334,7 @@ VARIABLE _EXT4-JFI-CP-WRITER
     0 ;
 
 \ =====================================================================
-\  Plan-bound linked orphan extent truncation after-images
+\  Plan-bound linked orphan truncation after-images
 \ =====================================================================
 
 VARIABLE _EXT4-EIB-SECTORS
@@ -13402,6 +13402,26 @@ VARIABLE _EXT4-JOT-OWNER-IOR
 VARIABLE _EXT4-JOT-OWNER-MAP-LIMIT
 CREATE _EXT4-JOT-EA-RANGE 2 CELLS ALLOT
 
+\ A linked truncate always produces an empty data map.  Bind that after-image
+\ to the representation authenticated in the raw inode: a canonical empty
+\ inline extent root, or an exact all-zero legacy i_block array.  Comparing
+\ the EXTENTS flag across both images prevents a staged representation switch.
+: _EXT4-JOT-EMPTY-AFTERIMAGE-MAP?  ( expected-extents? after-inode -- flag )
+    OVER
+    OVER _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND 0<> <> IF
+        2DROP FALSE EXIT
+    THEN
+    OVER IF
+        NIP _EXT4-I.BLOCK + DUP
+        W@ _EXT4-EXTENT-MAGIC =
+        OVER 2 + W@ 0= AND
+        OVER 4 + W@ _EXT4-RESIDENT-EXTENT-ENTRY-MAX = AND
+        OVER 6 + W@ 0= AND
+        SWAP 12 + 48 _EXT4-BYTES-ZERO? AND
+    ELSE
+        NIP _EXT4-I.BLOCK + 60 _EXT4-BYTES-ZERO?
+    THEN ;
+
 : _EXT4-JOT-OWNER-CERT-MATCH?  ( -- flag )
     _EXT4-JFO-CERT-SCOPE @ 0= IF FALSE EXIT THEN
     _EXT4-JFO-CERT-VALID @ 0= IF FALSE EXIT THEN
@@ -13458,8 +13478,9 @@ CREATE _EXT4-JOT-EA-RANGE 2 CELLS ALLOT
     -1 _EXT4-JFO-CERT-VALID ! ;
 
 \ Scan every other allocated inode once while all linked target ranges are
-\ published.  The four-range table is the format capacity of an inline
-\ depth-zero extent root, not a cleanup policy limit.  A scoped certificate
+\ published.  The four-range table is the format capacity of a nonempty
+\ inline depth-zero extent root, not a cleanup policy limit; an admitted empty
+\ legacy map contributes no ranges.  A scoped certificate
 \ retains the exact ctx/inode/generation/range tuple across measurement, dry
 \ staging, abort, activation, restaging, and emission; checkpoint invalidates
 \ it before the first home write can begin.
@@ -13557,22 +13578,30 @@ CREATE _EXT4-JOT-EA-RANGE 2 CELLS ALLOT
         EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
     THEN
     _EXT4-JOT-INODE @ _EXT4-I.FLAGS + L@
-    DUP _EXT4-EXTENTS-FL AND 0=
-    SWAP _EXT4-JOURNAL-DATA-FL AND 0<> OR IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    DUP _EXT4-JOURNAL-DATA-FL AND IF
+        DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
     THEN
-    _EXT4-JOT-INODE @ _EXT4-I.BLOCK + DUP _EXT4-JOT-ROOT !
-    DUP W@ _EXT4-EXTENT-MAGIC <> IF
-        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    DUP 4 + W@ 4 <> IF
-        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    DUP 2 + W@ DUP _EXT4-JOT-COUNT ! 4 U> IF
-        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    6 + W@ IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    _EXT4-EXTENTS-FL AND IF
+        _EXT4-JOT-INODE @ _EXT4-I.BLOCK + DUP _EXT4-JOT-ROOT !
+        DUP W@ _EXT4-EXTENT-MAGIC <> IF
+            DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
+        DUP 4 + W@ _EXT4-RESIDENT-EXTENT-ENTRY-MAX <> IF
+            DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
+        DUP 2 + W@ DUP _EXT4-JOT-COUNT !
+        _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> IF
+            DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
+        6 + W@ IF
+            EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+        THEN
+    ELSE
+        _EXT4-JOT-INODE @ _EXT4-I.BLOCK + DUP _EXT4-JOT-ROOT !
+        60 _EXT4-BYTES-ZERO? 0= IF
+            EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+        THEN
+        0 _EXT4-JOT-COUNT !
     THEN
     _EXT4-JOT-INODE @ _EXT4-I.FILE-ACL-HI + W@ IF
         EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
@@ -13605,9 +13634,12 @@ CREATE _EXT4-JOT-EA-RANGE 2 CELLS ALLOT
     _EXT4-JOT-WRITER @ _EXT4-JWR.SCRATCH-B + @ DUP
     _EXT4-JOT-AFTERIMAGE !
     _EXT4-JOT-INODE @ SWAP _EXT4-JOT-CTX @ _EXT4-C.ISIZE + @ MOVE
-    _EXT4-JOT-AFTERIMAGE @ _EXT4-I.BLOCK +
-    0 OVER 2 + W!
-    12 + 48 0 FILL
+    _EXT4-JOT-AFTERIMAGE @ _EXT4-I.FLAGS + L@
+    _EXT4-EXTENTS-FL AND IF
+        _EXT4-JOT-AFTERIMAGE @ _EXT4-I.BLOCK +
+        0 OVER 2 + W!
+        12 + 48 0 FILL
+    THEN
     _EXT4-JOT-RECORD @ _EXT4-OE.KIND + @ _EXT4-OK-LEGACY = IF
         0 _EXT4-JOT-AFTERIMAGE @ _EXT4-I.DTIME + L!
     THEN
@@ -13616,7 +13648,12 @@ CREATE _EXT4-JOT-EA-RANGE 2 CELLS ALLOT
     ELSE
         0
     THEN
-    _EXT4-JOT-AFTERIMAGE @ _EXT4-JOT-CTX @ _EXT4-ENCODE-I-BLOCKS ;
+    _EXT4-JOT-AFTERIMAGE @ _EXT4-JOT-CTX @ _EXT4-ENCODE-I-BLOCKS
+    ?DUP IF EXIT THEN
+    _EXT4-JOT-INODE @ _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND 0<>
+    _EXT4-JOT-AFTERIMAGE @
+    _EXT4-JOT-EMPTY-AFTERIMAGE-MAP? 0= IF VFS-E-CORRUPT EXIT THEN
+    0 ;
 
 \ If a lower range-free preflight fails, it has not necessarily published
 \ enough state to trigger its own abort.  Once the inode image exists, this
@@ -13647,11 +13684,14 @@ CREATE _EXT4-JOT-EA-RANGE 2 CELLS ALLOT
     _EXT4-JOT-IOR @ ;
 
 \ Complete the storage half of an interrupted linked-file truncation whose
-\ new size is already zero and whose old map fits the inode's depth-zero
-\ extent root.  The external xattr block remains referenced.  This operation
+\ new size is already zero and whose old map is either an inline depth-zero
+\ extent root or an exact empty legacy i_block array.  The external xattr
+\ block remains referenced.  An empty legacy map contributes no release
+\ ranges or revokes, though legacy MORE still stages i_dtime clearing.  This
+\ operation
 \ leaves the authenticated orphan record active; the wrapper composes its
 \ slot/list removal into this same transaction before the transaction seals.
-: _EXT4-JTX-STAGE-ORPHAN-DEPTH0-TRUNCATE
+: _EXT4-JTX-STAGE-LINKED-ORPHAN-TRUNCATE
   ( plan-record transaction -- ior )
     _EXT4-JOT-WRITER ! _EXT4-JOT-RECORD !
     0 _EXT4-JOT-PUBLISHED !
@@ -13701,6 +13741,7 @@ VARIABLE _EXT4-JFC-KIND
 VARIABLE _EXT4-JFC-MODE
 VARIABLE _EXT4-JFC-SUPER
 VARIABLE _EXT4-JFC-TARGET
+VARIABLE _EXT4-JFC-RAW-EXTENTS
 VARIABLE _EXT4-JFC-DELETE
 VARIABLE _EXT4-JFC-INODE-BITMAP-HOME
 VARIABLE _EXT4-JFC-INODE-BITMAP-CRC
@@ -14904,6 +14945,8 @@ VARIABLE _EXT4-JCM-DELETE
     _EXT4-JFC-CTX @ _EXT4-C.INODE +
     _EXT4-I.LINKS + W@ 0= _EXT4-JFC-DELETE !
     _EXT4-JFC-CTX @ _EXT4-C.INODE + DUP
+    _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND 0<>
+    _EXT4-JFC-RAW-EXTENTS ! DUP
     _EXT4-I.GENERATION + L@ _EXT4-JFC-TARGET-GEN !
     _EXT4-JFC-DELETE @ IF
         DROP 0 _EXT4-JFC-TARGET-ENTRIES !
@@ -14949,12 +14992,10 @@ VARIABLE _EXT4-JCM-DELETE
         THEN
         _EXT4-JFC-TARGET @ DUP _EXT4-I.SIZE-LO + L@
         SWAP _EXT4-I.SIZE-HI + L@ OR IF VFS-E-CORRUPT EXIT THEN
-        _EXT4-JFC-TARGET @ _EXT4-I.BLOCK + DUP
-        W@ _EXT4-EXTENT-MAGIC <> IF
-            DROP VFS-E-CORRUPT EXIT
+        _EXT4-JFC-RAW-EXTENTS @ _EXT4-JFC-TARGET @
+        _EXT4-JOT-EMPTY-AFTERIMAGE-MAP? 0= IF
+            VFS-E-CORRUPT EXIT
         THEN
-        DUP 2 + W@ IF DROP VFS-E-CORRUPT EXIT THEN
-        6 + W@ IF VFS-E-CORRUPT EXIT THEN
         _EXT4-JFC-KIND @ _EXT4-OK-LEGACY = IF
             _EXT4-JFC-TARGET @ _EXT4-I.DTIME + L@ IF
                 VFS-E-CORRUPT EXIT
@@ -15075,7 +15116,7 @@ VARIABLE _EXT4-JCM-DELETE
         _EXT4-JFC-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ IF
             VFS-E-INVALID
         ELSE
-            _EXT4-JTX-STAGE-ORPHAN-DEPTH0-TRUNCATE
+            _EXT4-JTX-STAGE-LINKED-ORPHAN-TRUNCATE
         THEN
     THEN
     ?DUP IF _EXT4-JFC-FAIL EXIT THEN
@@ -15160,6 +15201,7 @@ VARIABLE _EXT4-JPF-COUNT
 VARIABLE _EXT4-JPF-MODE
 VARIABLE _EXT4-JPF-KIND
 VARIABLE _EXT4-JPF-TARGET
+VARIABLE _EXT4-JPF-RAW-EXTENTS
 VARIABLE _EXT4-JPF-OFF
 VARIABLE _EXT4-JPF-AFTER
 
@@ -15222,6 +15264,8 @@ VARIABLE _EXT4-JPF-AFTER
     _EXT4-JPF-RECORD @ _EXT4-JPF-CTX @
     _EXT4-REQUIRE-SELECTED-ORPHAN ?DUP IF EXIT THEN
     _EXT4-JPF-CTX @ _EXT4-C.INODE + DUP _EXT4-JPF-TARGET !
+    DUP _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND 0<>
+    _EXT4-JPF-RAW-EXTENTS !
     _EXT4-I.LINKS + W@ 0=
     _EXT4-JPF-MODE @ _EXT4-JCPM-ORPHAN-DELETE? <> IF
         EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
@@ -15442,12 +15486,10 @@ VARIABLE _EXT4-JPF-AFTER
         THEN
         _EXT4-JPF-TARGET @ DUP _EXT4-I.SIZE-LO + L@
         SWAP _EXT4-I.SIZE-HI + L@ OR IF VFS-E-CORRUPT EXIT THEN
-        _EXT4-JPF-TARGET @ _EXT4-I.BLOCK + DUP
-        W@ _EXT4-EXTENT-MAGIC <> IF
-            DROP VFS-E-CORRUPT EXIT
+        _EXT4-JPF-RAW-EXTENTS @ _EXT4-JPF-TARGET @
+        _EXT4-JOT-EMPTY-AFTERIMAGE-MAP? 0= IF
+            VFS-E-CORRUPT EXIT
         THEN
-        DUP 2 + W@ IF DROP VFS-E-CORRUPT EXIT THEN
-        6 + W@ IF VFS-E-CORRUPT EXIT THEN
         _EXT4-JPF-WRITER @ _EXT4-JWR.CP-MODE + @
         _EXT4-JCPM-ORPHAN-LEGACY? IF
             _EXT4-JPF-TARGET @ _EXT4-I.DTIME + L@ IF
