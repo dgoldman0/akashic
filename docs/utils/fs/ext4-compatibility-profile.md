@@ -1063,9 +1063,19 @@ singletons, swapped data/root order, and a downgraded map kind before its
 restored authority and transaction tables pass. Focused negative admission
 covers a nonzero triple child, single- or double-indirect composition,
 direct/root aliasing, and aliasing the triple root with the external-xattr
-home. Production, stable-remount, pinned-e2fsck, and crash qualification for
-the new direct composition remain pending. The
-single-record modern production journey emits and checkpoints the cleanup in
+home. Focused single-record production and byte-identical zero-I/O stable
+remount qualification now cover the direct composition under both orphan
+protocols. The modern journey checkpoints the cleanup in 1,305,226,732 guest
+steps and the legacy journey in 1,318,122,553, each under the unchanged
+1,500,000,000-step watchdog; both stable remounts complete in 56,367,757 steps
+under the standard 1,200,000,000-step watchdog. Their exact
+37-write/24-flush modern and 35-write/24-flush legacy traces retain the same
+six or five cleanup homes as the root-only shape, clear the direct-block,
+triple-root, and target-inode allocation bits, restore every free counter, and
+never write either released block home. Pinned e2fsprogs 1.47.4
+`e2fsck -f -n` accepts both recovered images. Crash qualification for the
+direct composition remains pending. For the root-only shape, the single-record
+modern production journey emits and checkpoints the cleanup in
 1,301,139,781 guest steps under its 1,500,000,000-step watchdog. Its exact
 37-write/24-flush trace has six distinct ext4 cleanup homes: the primary super
 is written three times, while the GDT, block bitmap, inode bitmap, inode table,

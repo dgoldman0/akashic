@@ -21987,6 +21987,108 @@ def singleton_unlinked_cleanup_fixture(
     )
 
 
+def _build_empty_triple_root_unlinked_cleanup_fixture(
+    source: Path,
+    directory: Path,
+    *,
+    protocol: str,
+    direct_slots: tuple[int, ...],
+    extent_case: str,
+) -> dict[str, object]:
+    patches, data_ranges, map_ranges = (
+        _legacy_indirect_unlinked_orphan_patches(
+            source,
+            protocol=protocol,
+            direct_slots=direct_slots,
+            single_slots=(),
+            double_children=(),
+            empty_triple_root=True,
+            physical_gap=0,
+            seed_payloads=True,
+            size_bytes=(1 << 32) + 777,
+        )
+    )
+    assert len(data_ranges) == len(direct_slots)
+    assert len(map_ranges) == 1
+    root_home, root_count = map_ranges[0]
+    assert root_count == 1
+    assert map_ranges == ((root_home, 1),)
+    released_ranges = (*data_ranges, *map_ranges)
+    assert all(count == 1 for _, count in released_ranges)
+    released_homes = tuple(first for first, _ in released_ranges)
+    assert released_homes == tuple(
+        range(released_homes[0], released_homes[0] + len(released_homes))
+    )
+    patch_map = dict(patches)
+    superblock = patch_map[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    assert len(
+        {
+            (home - first_data) // blocks_per_group
+            for home in released_homes
+        }
+    ) == 1
+    _, _, inode_offset = _ext4_inode_record(source, 18)
+    patched_inode = patch_map[inode_offset]
+    assert len(patched_inode) == 256
+    patched_flags = struct.unpack_from("<I", patched_inode, 0x20)[0]
+    assert patched_flags & 0x0008_0000 == 0
+    observed_direct_slots = tuple(
+        slot
+        for slot in range(12)
+        if struct.unpack_from("<I", patched_inode, 0x28 + slot * 4)[0]
+    )
+    assert observed_direct_slots == direct_slots
+    for slot, (home, count) in zip(
+        direct_slots,
+        data_ranges,
+        strict=True,
+    ):
+        assert count == 1
+        assert struct.unpack_from(
+            "<I", patched_inode, 0x28 + slot * 4
+        )[0] == home
+        payload = patch_map[home * block_size]
+        assert len(payload) == block_size
+        assert payload != bytes(block_size)
+    assert struct.unpack_from("<I", patched_inode, 0x58)[0] == 0
+    assert struct.unpack_from("<I", patched_inode, 0x5C)[0] == 0
+    assert struct.unpack_from("<I", patched_inode, 0x60)[0] == root_home
+    assert struct.unpack_from("<I", patched_inode, 0x68)[0] == 0
+    assert struct.unpack_from("<I", patched_inode, 0x1C)[0] == (
+        len(released_ranges) * (block_size // 512)
+    )
+    assert struct.unpack_from("<I", patched_inode, 0x04)[0] == 777
+    assert struct.unpack_from("<I", patched_inode, 0x6C)[0] == 1
+    assert patch_map[root_home * block_size] == bytes(block_size)
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, orphan_inode, _ = _ext4_inode_record(source, orphan_inode_number)
+    orphan_home = _extent_root_physical(orphan_inode, 0)
+    result = _run_singleton_unlinked_cleanup(
+        source,
+        directory / "successful-cleanup.img",
+        protocol=protocol,
+        patches=patches,
+        data_block=released_homes[0],
+        data_count=len(released_homes),
+        max_steps=_LEGACY_MAP_RECOVERY_MAX_STEPS,
+    )
+    result["extent_case"] = extent_case
+    result["direct_slots"] = direct_slots
+    result["triple_root_home"] = root_home
+    result["orphan_home"] = orphan_home
+    result["data_ranges"] = data_ranges
+    result["map_ranges"] = map_ranges
+    result["release_ranges"] = released_ranges
+    _run_stable_unlinked_cleanup_remount(
+        result,
+        directory / "stable-remount.img",
+    )
+    return result
+
+
 @pytest.fixture(
     scope="session",
     params=(
@@ -22000,51 +22102,41 @@ def empty_triple_root_unlinked_cleanup_fixture(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, object]:
     protocol = str(request.param)
-    source = canonical_images["primary-1k-i256"]
-    patches, data_ranges, map_ranges = (
-        _legacy_indirect_unlinked_orphan_patches(
-            source,
-            protocol=protocol,
-            direct_slots=(),
-            single_slots=(),
-            double_children=(),
-            empty_triple_root=True,
-            physical_gap=0,
-            seed_payloads=True,
-            size_bytes=(1 << 32) + 777,
-        )
-    )
-    assert data_ranges == ()
-    assert len(map_ranges) == 1
-    root_home, root_count = map_ranges[0]
-    assert root_count == 1
-    assert map_ranges == ((root_home, 1),)
-    superblock = dict(patches)[1024]
-    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
-    _, orphan_inode, _ = _ext4_inode_record(source, orphan_inode_number)
-    orphan_home = _extent_root_physical(orphan_inode, 0)
     directory = tmp_path_factory.mktemp(
         f"ext4-{protocol}-empty-triple-root-unlinked-cleanup"
     )
-    result = _run_singleton_unlinked_cleanup(
-        source,
-        directory / "successful-cleanup.img",
+    return _build_empty_triple_root_unlinked_cleanup_fixture(
+        canonical_images["primary-1k-i256"],
+        directory,
         protocol=protocol,
-        patches=patches,
-        data_block=root_home,
-        data_count=1,
-        max_steps=_LEGACY_MAP_RECOVERY_MAX_STEPS,
+        direct_slots=(),
+        extent_case="legacy-empty-triple-root",
     )
-    result["extent_case"] = "legacy-empty-triple-root"
-    result["triple_root_home"] = root_home
-    result["orphan_home"] = orphan_home
-    result["data_ranges"] = data_ranges
-    result["map_ranges"] = map_ranges
-    _run_stable_unlinked_cleanup_remount(
-        result,
-        directory / "stable-remount.img",
+
+
+@pytest.fixture(
+    scope="session",
+    params=(
+        pytest.param("modern", id="modern"),
+        pytest.param("legacy", id="legacy"),
+    ),
+)
+def direct_empty_triple_root_unlinked_cleanup_fixture(
+    request: pytest.FixtureRequest,
+    canonical_images: dict[str, Path],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    protocol = str(request.param)
+    directory = tmp_path_factory.mktemp(
+        f"ext4-{protocol}-direct-empty-triple-root-unlinked-cleanup"
     )
-    return result
+    return _build_empty_triple_root_unlinked_cleanup_fixture(
+        canonical_images["primary-1k-i256"],
+        directory,
+        protocol=protocol,
+        direct_slots=(5,),
+        extent_case="legacy-direct-empty-triple-root",
+    )
 
 
 @pytest.fixture(scope="session", params=("modern", "legacy"))
@@ -22495,10 +22587,11 @@ def test_multi_record_data_cleanup_is_e2fsck_clean(
     _assert_e2fsck_clean(clean_image, jbd2_toolchain)
 
 
-def test_mount_reclaims_empty_triple_root_unlinked_orphan(
-    empty_triple_root_unlinked_cleanup_fixture: dict[str, object],
+def _assert_empty_triple_root_unlinked_cleanup_result(
+    result: dict[str, object],
+    *,
+    expected_direct_slots: tuple[int, ...],
 ) -> None:
-    result = empty_triple_root_unlinked_cleanup_fixture
     protocol = result["protocol"]
     source = result["source"]
     patches = result["patches"]
@@ -22513,6 +22606,11 @@ def test_mount_reclaims_empty_triple_root_unlinked_orphan(
     gdt_home = result["gdt_home"]
     root_home = result["triple_root_home"]
     orphan_home = result["orphan_home"]
+    direct_slots = result["direct_slots"]
+    data_ranges = result["data_ranges"]
+    map_ranges = result["map_ranges"]
+    release_ranges = result["release_ranges"]
+    extent_case = result["extent_case"]
     stable_output = result["stable_output"]
     stable_image = result["stable_image"]
 
@@ -22530,13 +22628,32 @@ def test_mount_reclaims_empty_triple_root_unlinked_orphan(
     assert isinstance(gdt_home, int)
     assert isinstance(root_home, int)
     assert isinstance(orphan_home, int)
+    assert isinstance(direct_slots, tuple)
+    assert isinstance(data_ranges, tuple)
+    assert isinstance(map_ranges, tuple)
+    assert isinstance(release_ranges, tuple)
+    assert isinstance(extent_case, str)
     assert isinstance(stable_output, str)
     assert isinstance(stable_image, Path)
-    assert result["extent_case"] == "legacy-empty-triple-root"
-    assert result["data_ranges"] == ()
-    assert result["map_ranges"] == ((root_home, 1),)
-    assert result["data_block"] == root_home
-    assert result["data_count"] == 1
+    assert expected_direct_slots in {(), (5,)}
+    expected_extent_case = (
+        "legacy-direct-empty-triple-root"
+        if expected_direct_slots
+        else "legacy-empty-triple-root"
+    )
+    assert extent_case == expected_extent_case
+    assert direct_slots == expected_direct_slots
+    assert len(data_ranges) == len(expected_direct_slots)
+    assert all(count == 1 for _, count in data_ranges)
+    assert map_ranges == ((root_home, 1),)
+    assert release_ranges == (*data_ranges, *map_ranges)
+    released_homes = tuple(home for home, _ in release_ranges)
+    assert all(count == 1 for _, count in release_ranges)
+    assert released_homes == tuple(
+        range(released_homes[0], released_homes[0] + len(released_homes))
+    )
+    assert result["data_block"] == released_homes[0]
+    assert result["data_count"] == len(released_homes)
     _assert_emitted(
         output,
         f"EXT4-{protocol.upper()}-UNLINKED-ORPHAN-RECLAIMED",
@@ -22581,16 +22698,17 @@ def test_mount_reclaims_empty_triple_root_unlinked_orphan(
             orphan_home,
             block_size=block_size,
         )
-    assert not _write_ordinals_for_ext4_home(
-        trace,
-        root_home,
-        block_size=block_size,
-    )
+    for released_home in released_homes:
+        assert not _write_ordinals_for_ext4_home(
+            trace,
+            released_home,
+            block_size=block_size,
+        )
 
     _assert_emitted(
         stable_output,
         (
-            f"EXT4-{protocol.upper()}-LEGACY-EMPTY-TRIPLE-ROOT-"
+            f"EXT4-{protocol.upper()}-{extent_case.upper()}-"
             "UNLINKED-STABLE-REMOUNT"
         ),
     )
@@ -22600,11 +22718,40 @@ def test_mount_reclaims_empty_triple_root_unlinked_orphan(
     assert _sha256(stable_image) == clean_sha256
 
 
+def test_mount_reclaims_empty_triple_root_unlinked_orphan(
+    empty_triple_root_unlinked_cleanup_fixture: dict[str, object],
+) -> None:
+    _assert_empty_triple_root_unlinked_cleanup_result(
+        empty_triple_root_unlinked_cleanup_fixture,
+        expected_direct_slots=(),
+    )
+
+
+def test_mount_reclaims_direct_empty_triple_root_unlinked_orphan(
+    direct_empty_triple_root_unlinked_cleanup_fixture: dict[str, object],
+) -> None:
+    _assert_empty_triple_root_unlinked_cleanup_result(
+        direct_empty_triple_root_unlinked_cleanup_fixture,
+        expected_direct_slots=(5,),
+    )
+
+
 def test_empty_triple_root_unlinked_cleanup_is_e2fsck_clean(
     empty_triple_root_unlinked_cleanup_fixture: dict[str, object],
     jbd2_toolchain: dict[str, object],
 ) -> None:
     clean_image = empty_triple_root_unlinked_cleanup_fixture["clean_image"]
+    assert isinstance(clean_image, Path)
+    _assert_e2fsck_clean(clean_image, jbd2_toolchain)
+
+
+def test_direct_empty_triple_root_unlinked_cleanup_is_e2fsck_clean(
+    direct_empty_triple_root_unlinked_cleanup_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    clean_image = direct_empty_triple_root_unlinked_cleanup_fixture[
+        "clean_image"
+    ]
     assert isinstance(clean_image, Path)
     _assert_e2fsck_clean(clean_image, jbd2_toolchain)
 
