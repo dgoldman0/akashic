@@ -1058,7 +1058,7 @@ is written three times, while the GDT, block bitmap, inode bitmap, inode table,
 and orphan file are each written once. The released triple-root home is never
 written; its allocation bit and the target inode bit clear, all free counters
 return to their expected values, and a byte-identical zero-I/O stable remount
-completes in 55,196,975 guest steps under the standard 1,200,000,000-step
+completes in 56,367,001 guest steps under the standard 1,200,000,000-step
 watchdog. The corresponding single-record legacy production journey completes
 in 1,314,117,314 guest steps under the same 1,500,000,000-step production
 watchdog. Its exact 35-write/24-flush trace has five distinct cleanup homes:
@@ -1066,10 +1066,10 @@ the primary super is written three times, and the GDT, block bitmap, inode
 bitmap, and inode table are each written once; neither the orphan-file home nor
 the triple-root home is written. It likewise clears the root and inode
 allocation bits, restores every counter, and reaches a byte-identical zero-I/O
-stable remount in 55,197,731 guest steps under the 1,200,000,000-step watchdog.
+stable remount in 56,367,001 guest steps under the 1,200,000,000-step watchdog.
 This establishes modern/legacy production and remount parity for the exact
-root-only shape. Crash recovery under either protocol and e2fsck acceptance
-remain pending. A separate
+root-only shape. Pinned e2fsprogs 1.47.4 `e2fsck -f -n` accepts both recovered
+images. Crash recovery under either protocol remains pending. A separate
 checksum-valid modern orphan-file fixture maps 31 logical blocks through a
 preserved depth-1 external extent node. Linked production cleanup retains its
 exact 34-write/24-flush trace, completes in 1,111,798,161 steps, and reaches a

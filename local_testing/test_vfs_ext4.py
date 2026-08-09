@@ -20076,48 +20076,25 @@ def test_legacy_single_indirect_rejects_node_data_alias(
     _assert_emitted(output, "EXT4-LEGACY-SINGLE-INDIRECT-ALIAS-CLEAN")
 
 
-@pytest.mark.parametrize(
-    ("map_shape", "protocol"),
-    (
-        pytest.param("single-indirect", "modern", id="single-indirect"),
-        pytest.param("sparse-double", "modern", id="sparse-double"),
-        pytest.param(
-            "empty-triple-root",
-            "modern",
-            id="empty-triple-root",
-        ),
-        pytest.param(
-            "empty-triple-root",
-            "legacy",
-            id="legacy-empty-triple-root",
-        ),
-    ),
-)
+@pytest.mark.parametrize("map_shape", ("single-indirect", "sparse-double"))
 def test_mount_reclaims_legacy_indirect_orphan(
     canonical_images: dict[str, Path],
     tmp_path: Path,
     map_shape: str,
-    protocol: str,
 ) -> None:
     source = canonical_images["primary-1k-i256"]
-    empty_triple_root = False
+    protocol = "modern"
     if map_shape == "single-indirect":
         direct_slots = (0,)
         single_slots = (0, 3)
         double_children: tuple[tuple[int, tuple[int, ...]], ...] = ()
         max_steps = _LEGACY_MAP_RECOVERY_MAX_STEPS
-    elif map_shape == "sparse-double":
+    else:
+        assert map_shape == "sparse-double"
         direct_slots = (5,)
         single_slots = (3,)
         double_children = ((2, (4,)),)
         max_steps = _LEGACY_SPARSE_DOUBLE_RECOVERY_MAX_STEPS
-    else:
-        assert map_shape == "empty-triple-root"
-        direct_slots = ()
-        single_slots = ()
-        double_children = ()
-        empty_triple_root = True
-        max_steps = _LEGACY_MAP_RECOVERY_MAX_STEPS
     patches, data_ranges, map_ranges = (
         _legacy_indirect_unlinked_orphan_patches(
             source,
@@ -20125,7 +20102,6 @@ def test_mount_reclaims_legacy_indirect_orphan(
             direct_slots=direct_slots,
             single_slots=single_slots,
             double_children=double_children,
-            empty_triple_root=empty_triple_root,
             # The gapped auth-only fixture pins canonical boundaries; keeping
             # this lifecycle case contiguous avoids repeated accounting walks.
             physical_gap=0,
@@ -20133,9 +20109,6 @@ def test_mount_reclaims_legacy_indirect_orphan(
             size_bytes=(1 << 32) + 777,
         )
     )
-    if empty_triple_root:
-        assert data_ranges == ()
-        assert len(map_ranges) == 1
     released_ranges = (*data_ranges, *map_ranges)
     assert all(count == 1 for _, count in released_ranges)
     released_blocks = tuple(first for first, _ in released_ranges)
@@ -20161,69 +20134,7 @@ def test_mount_reclaims_legacy_indirect_orphan(
         output,
         f"EXT4-{protocol.upper()}-UNLINKED-ORPHAN-RECLAIMED",
     )
-    expected_home_writes = 6 if protocol == "modern" else 5
-    assert result["expected_home_writes"] == expected_home_writes
-    if empty_triple_root:
-        trace = result["success_trace"]
-        block_size = result["block_size"]
-        inode_home = result["inode_home"]
-        block_bitmap_home = result["block_bitmap_home"]
-        inode_bitmap_home = result["inode_bitmap_home"]
-        gdt_home = result["gdt_home"]
-        assert isinstance(trace, tuple)
-        assert isinstance(block_size, int)
-        assert isinstance(inode_home, int)
-        assert isinstance(block_bitmap_home, int)
-        assert isinstance(inode_bitmap_home, int)
-        assert isinstance(gdt_home, int)
-        expected_write_count = 37 if protocol == "modern" else 35
-        assert sum(kind == "write" for kind, _, _ in trace) == (
-            expected_write_count
-        )
-        assert sum(kind == "flush" for kind, _, _ in trace) == 24
-
-        superblock = dict(patches)[1024]
-        orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
-        _, orphan_inode, _ = _ext4_inode_record(
-            source,
-            orphan_inode_number,
-        )
-        orphan_home = _extent_root_physical(orphan_inode, 0)
-        root_home = released_blocks[0]
-        assert len(
-            _write_ordinals_for_ext4_home(
-                trace,
-                1,
-                block_size=block_size,
-            )
-        ) == 3
-        single_write_homes = [
-            gdt_home,
-            block_bitmap_home,
-            inode_bitmap_home,
-            inode_home,
-        ]
-        if protocol == "modern":
-            single_write_homes.append(orphan_home)
-        for home in single_write_homes:
-            assert len(
-                _write_ordinals_for_ext4_home(
-                    trace,
-                    home,
-                    block_size=block_size,
-                )
-            ) == 1
-        if protocol == "legacy":
-            assert not _write_ordinals_for_ext4_home(
-                trace,
-                orphan_home,
-                block_size=block_size,
-            )
-        assert not _write_ordinals_for_ext4_home(
-            trace,
-            root_home,
-            block_size=block_size,
-        )
+    assert result["expected_home_writes"] == 6
 
     stable_marker = (
         f"EXT4-{protocol.upper()}-LEGACY-{map_shape.upper()}-STABLE"
@@ -21931,6 +21842,61 @@ def singleton_unlinked_cleanup_fixture(
     )
 
 
+@pytest.fixture(
+    scope="session",
+    params=(
+        pytest.param("modern", id="modern"),
+        pytest.param("legacy", id="legacy"),
+    ),
+)
+def empty_triple_root_unlinked_cleanup_fixture(
+    request: pytest.FixtureRequest,
+    canonical_images: dict[str, Path],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    protocol = str(request.param)
+    source = canonical_images["primary-1k-i256"]
+    patches, data_ranges, map_ranges = (
+        _legacy_indirect_unlinked_orphan_patches(
+            source,
+            protocol=protocol,
+            direct_slots=(),
+            single_slots=(),
+            double_children=(),
+            empty_triple_root=True,
+            physical_gap=0,
+            seed_payloads=True,
+            size_bytes=(1 << 32) + 777,
+        )
+    )
+    assert data_ranges == ()
+    assert len(map_ranges) == 1
+    root_home, root_count = map_ranges[0]
+    assert root_count == 1
+    assert map_ranges == ((root_home, 1),)
+    directory = tmp_path_factory.mktemp(
+        f"ext4-{protocol}-empty-triple-root-unlinked-cleanup"
+    )
+    result = _run_singleton_unlinked_cleanup(
+        source,
+        directory / "successful-cleanup.img",
+        protocol=protocol,
+        patches=patches,
+        data_block=root_home,
+        data_count=1,
+        max_steps=_LEGACY_MAP_RECOVERY_MAX_STEPS,
+    )
+    result["extent_case"] = "legacy-empty-triple-root"
+    result["triple_root_home"] = root_home
+    result["data_ranges"] = data_ranges
+    result["map_ranges"] = map_ranges
+    _run_stable_unlinked_cleanup_remount(
+        result,
+        directory / "stable-remount.img",
+    )
+    return result
+
+
 @pytest.fixture(scope="session", params=("modern", "legacy"))
 def shared_external_xattr_unlinked_cleanup_fixture(
     request: pytest.FixtureRequest,
@@ -22375,6 +22341,122 @@ def test_multi_record_data_cleanup_is_e2fsck_clean(
 ) -> None:
     result, jbd2_toolchain = multi_data_unlinked_cleanup_e2fsck_fixture
     clean_image = result["clean_image"]
+    assert isinstance(clean_image, Path)
+    _assert_e2fsck_clean(clean_image, jbd2_toolchain)
+
+
+def test_mount_reclaims_empty_triple_root_unlinked_orphan(
+    empty_triple_root_unlinked_cleanup_fixture: dict[str, object],
+) -> None:
+    result = empty_triple_root_unlinked_cleanup_fixture
+    protocol = result["protocol"]
+    source = result["source"]
+    patches = result["patches"]
+    output = result["output"]
+    trace = result["success_trace"]
+    clean_image = result["clean_image"]
+    clean_sha256 = result["clean_sha256"]
+    block_size = result["block_size"]
+    inode_home = result["inode_home"]
+    block_bitmap_home = result["block_bitmap_home"]
+    inode_bitmap_home = result["inode_bitmap_home"]
+    gdt_home = result["gdt_home"]
+    root_home = result["triple_root_home"]
+    stable_output = result["stable_output"]
+    stable_image = result["stable_image"]
+
+    assert protocol in {"modern", "legacy"}
+    assert isinstance(source, Path)
+    assert isinstance(patches, tuple)
+    assert isinstance(output, str)
+    assert isinstance(trace, tuple)
+    assert isinstance(clean_image, Path)
+    assert isinstance(clean_sha256, str)
+    assert isinstance(block_size, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(block_bitmap_home, int)
+    assert isinstance(inode_bitmap_home, int)
+    assert isinstance(gdt_home, int)
+    assert isinstance(root_home, int)
+    assert isinstance(stable_output, str)
+    assert isinstance(stable_image, Path)
+    assert result["extent_case"] == "legacy-empty-triple-root"
+    assert result["data_ranges"] == ()
+    assert result["map_ranges"] == ((root_home, 1),)
+    assert result["data_block"] == root_home
+    assert result["data_count"] == 1
+    _assert_emitted(
+        output,
+        f"EXT4-{protocol.upper()}-UNLINKED-ORPHAN-RECLAIMED",
+    )
+    assert clean_image.is_file()
+    assert _sha256(clean_image) == clean_sha256
+
+    expected_home_writes = 6 if protocol == "modern" else 5
+    expected_write_count = 37 if protocol == "modern" else 35
+    assert result["expected_home_writes"] == expected_home_writes
+    assert sum(kind == "write" for kind, _, _ in trace) == (
+        expected_write_count
+    )
+    assert sum(kind == "flush" for kind, _, _ in trace) == 24
+
+    superblock = dict(patches)[1024]
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, orphan_inode, _ = _ext4_inode_record(source, orphan_inode_number)
+    orphan_home = _extent_root_physical(orphan_inode, 0)
+    assert len(
+        _write_ordinals_for_ext4_home(
+            trace,
+            1,
+            block_size=block_size,
+        )
+    ) == 3
+    single_write_homes = [
+        gdt_home,
+        block_bitmap_home,
+        inode_bitmap_home,
+        inode_home,
+    ]
+    if protocol == "modern":
+        single_write_homes.append(orphan_home)
+    for home in single_write_homes:
+        assert len(
+            _write_ordinals_for_ext4_home(
+                trace,
+                home,
+                block_size=block_size,
+            )
+        ) == 1
+    if protocol == "legacy":
+        assert not _write_ordinals_for_ext4_home(
+            trace,
+            orphan_home,
+            block_size=block_size,
+        )
+    assert not _write_ordinals_for_ext4_home(
+        trace,
+        root_home,
+        block_size=block_size,
+    )
+
+    _assert_emitted(
+        stable_output,
+        (
+            f"EXT4-{protocol.upper()}-LEGACY-EMPTY-TRIPLE-ROOT-"
+            "UNLINKED-STABLE-REMOUNT"
+        ),
+    )
+    assert stable_image.is_file()
+    assert result["stable_trace"] == ()
+    assert result["stable_sha256"] == clean_sha256
+    assert _sha256(stable_image) == clean_sha256
+
+
+def test_empty_triple_root_unlinked_cleanup_is_e2fsck_clean(
+    empty_triple_root_unlinked_cleanup_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    clean_image = empty_triple_root_unlinked_cleanup_fixture["clean_image"]
     assert isinstance(clean_image, Path)
     _assert_e2fsck_clean(clean_image, jbd2_toolchain)
 

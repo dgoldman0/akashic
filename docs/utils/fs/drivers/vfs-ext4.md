@@ -1709,7 +1709,7 @@ The remaining boundaries are:
   the GDT, block bitmap, inode bitmap, inode table, and orphan file are each
   written once. The released triple-root home is never written; its allocation
   bit and the target inode bit clear, all free counters return to their expected
-  values, and a byte-identical zero-I/O stable remount completes in 55,196,975
+  values, and a byte-identical zero-I/O stable remount completes in 56,367,001
   guest steps under the standard 1,200,000,000-step watchdog. The corresponding
   single-record legacy production journey completes in 1,314,117,314 guest
   steps under the same 1,500,000,000-step production watchdog. Its exact
@@ -1718,9 +1718,10 @@ The remaining boundaries are:
   are each written once; neither the orphan-file home nor the triple-root home
   is written. It likewise clears the root and inode allocation bits, restores
   every counter, and reaches a byte-identical zero-I/O stable remount in
-  55,197,731 guest steps under the 1,200,000,000-step watchdog. This establishes
+  56,367,001 guest steps under the 1,200,000,000-step watchdog. This establishes
   modern/legacy production and remount parity for the exact root-only shape.
-  Crash recovery under either protocol and e2fsck acceptance remain pending.
+  Pinned e2fsprogs 1.47.4 `e2fsck -f -n` accepts both recovered images. Crash
+  recovery under either protocol remains pending.
   Pinned
   e2fsprogs 1.47.4 accepts both protocols for the empty 1 KiB result, ordinary
   one-block 1/2/4 KiB results, the initialized-offset and cross-group unwritten
