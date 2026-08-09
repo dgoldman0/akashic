@@ -2116,6 +2116,7 @@ def _legacy_indirect_unlinked_orphan_patches(
     direct_slots: tuple[int, ...] = (0,),
     single_slots: tuple[int, ...] = (),
     double_children: tuple[tuple[int, tuple[int, ...]], ...] = (),
+    empty_double_root: bool = False,
     inode_number: int = 18,
     physical_gap: int = 1,
     seed_payloads: bool = False,
@@ -2134,6 +2135,7 @@ def _legacy_indirect_unlinked_orphan_patches(
     assert tuple(sorted(set(single_slots))) == single_slots
     double_outer_slots = tuple(outer for outer, _ in double_children)
     assert tuple(sorted(set(double_outer_slots))) == double_outer_slots
+    assert not (empty_double_root and double_children)
     assert physical_gap >= 0
     assert 0 <= size_bytes < (1 << 63)
 
@@ -2157,9 +2159,10 @@ def _legacy_indirect_unlinked_orphan_patches(
     double_data_count = sum(
         len(inner_slots) for _, inner_slots in double_children
     )
+    has_double_root = empty_double_root or bool(double_children)
     data_count = len(direct_slots) + len(single_slots) + double_data_count
     map_count = (1 if single_slots else 0) + (
-        1 + len(double_children) if double_children else 0
+        1 + len(double_children) if has_double_root else 0
     )
     assert data_count + map_count > 0
     allocation_specs = tuple(
@@ -2214,7 +2217,7 @@ def _legacy_indirect_unlinked_orphan_patches(
         patch_map[single_home * block_size] = bytes(single_block)
 
     double_home = 0
-    if double_children:
+    if has_double_root:
         double_home = map_ranges[map_cursor][0]
         map_cursor += 1
         child_ranges = map_ranges[
@@ -18675,23 +18678,69 @@ def test_unlinked_preflight_accepts_sparse_double_without_single_root(
     _assert_emitted(output, "EXT4-LEGACY-SPARSE-DOUBLE-PREFLIGHT")
 
 
-def test_sparse_double_stages_canonical_multi_child_revokes(
+@pytest.mark.parametrize(
+    "shape",
+    ("empty-root", "multi-child", "multi-child-xattr"),
+)
+def test_sparse_double_stages_canonical_map_revokes(
     canonical_images: dict[str, Path],
+    shape: str,
 ) -> None:
     path = canonical_images["primary-1k-i256"]
+    base_patches: tuple[tuple[int, bytes], ...] | None = None
+    xattr_block = 0
+    if shape == "empty-root":
+        direct_slots = (5,)
+        single_slots: tuple[int, ...] = ()
+        double_children: tuple[tuple[int, tuple[int, ...]], ...] = ()
+        empty_double_root = True
+        expected_counts = (1, 1)
+    elif shape == "multi-child":
+        direct_slots = (5,)
+        single_slots = (3,)
+        double_children = ((2, (4,)), (7, (9,)))
+        empty_double_root = False
+        expected_counts = (4, 4)
+    else:
+        assert shape == "multi-child-xattr"
+        base_patches, base_data_ranges, xattr_block = (
+            _unlinked_orphan_external_xattr_patches(
+                path,
+                protocol="modern",
+                data_blocks=0,
+            )
+        )
+        assert base_data_ranges == ()
+        direct_slots = (5,)
+        single_slots = (3,)
+        double_children = ((2, (4,)),)
+        empty_double_root = False
+        expected_counts = (3, 3)
     patches, data_ranges, map_ranges = _legacy_indirect_unlinked_orphan_patches(
         path,
         protocol="modern",
-        direct_slots=(5,),
-        single_slots=(3,),
-        double_children=((2, (4,)), (7, (9,))),
+        direct_slots=direct_slots,
+        single_slots=single_slots,
+        double_children=double_children,
+        empty_double_root=empty_double_root,
         physical_gap=0,
         seed_payloads=True,
         size_bytes=(1 << 32) + 777,
+        base_patches=base_patches,
     )
     combined_ranges = (*data_ranges, *map_ranges)
-    assert len(data_ranges) == 4
-    assert len(map_ranges) == 4
+    assert (len(data_ranges), len(map_ranges)) == expected_counts
+    expected_revoke_homes = tuple(first for first, _ in map_ranges) + (
+        (xattr_block,) if xattr_block else ()
+    )
+    expected_owner_count = len(combined_ranges) + (1 if xattr_block else 0)
+    expected_ea_action = (
+        "_EXT4-JEA-RELEASE" if xattr_block else "_EXT4-JEA-NONE"
+    )
+    double_map_index = 1 if single_slots else 0
+    expected_double_home = map_ranges[double_map_index][0]
+    expected_double_child_base = double_map_index + 1
+    marker = f"EXT4-LEGACY-SPARSE-{shape.upper()}-STAGED"
 
     output = run_forth(
         path,
@@ -18754,7 +18803,7 @@ def test_sparse_double_stages_canonical_multi_child_revokes(
                         "_SD-S-CERT-BEGIN-IOR 0=",
                         "_SD-S-MEASURE-IOR 0=",
                         "_SD-S-META 0>",
-                        f"_SD-S-REVOKE {len(map_ranges)} =",
+                        f"_SD-S-REVOKE {len(expected_revoke_homes)} =",
                         "_SD-S-WRITER-IOR 0=",
                         "_SD-S-BEGIN-IOR 0=",
                         "_SD-S-STAGE-IOR 0=",
@@ -18763,22 +18812,24 @@ def test_sparse_double_stages_canonical_multi_child_revokes(
                         "_SD-S-STAGED-IOR 0=",
                         (
                             "_SD-S-WRITER _EXT4-JWR.REVOKE-CREDIT + @ "
-                            f"{len(map_ranges)} ="
+                            f"{len(expected_revoke_homes)} ="
                         ),
                         (
                             "_SD-S-WRITER _EXT4-JWR.REVOKE-USED + @ "
-                            f"{len(map_ranges)} ="
+                            f"{len(expected_revoke_homes)} ="
                         ),
                         (
                             "_SD-S-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ "
-                            f"{len(map_ranges)} ="
+                            f"{len(expected_revoke_homes)} ="
                         ),
                         *[
                             (
                                 f"{index} _SD-S-WRITER "
                                 f"_EXT4-JWR-REVOKE-ENTRY @ {physical} ="
                             )
-                            for index, (physical, _) in enumerate(map_ranges)
+                            for index, physical in enumerate(
+                                expected_revoke_homes
+                            )
                         ],
                         *[
                             (
@@ -18786,9 +18837,30 @@ def test_sparse_double_stages_canonical_multi_child_revokes(
                                 "_EXT4-JWR-REVOKE-ENTRY CELL+ "
                                 "@ _EXT4-JE-ACTIVE ="
                             )
-                            for index in range(len(map_ranges))
+                            for index in range(len(expected_revoke_homes))
                         ],
                         "_SD-S-WRITER _EXT4-JFI-REVOKES-EXACT?",
+                        f"_EXT4-JFI-ACCOUNTED-BLOCKS {expected_owner_count} =",
+                        (
+                            "_EXT4-JFI-RELEASE-RANGE-COUNT "
+                            f"{expected_owner_count} ="
+                        ),
+                        f"_EXT4-JFI-RELEASE-BLOCKS {expected_owner_count} =",
+                        f"_EXT4-JFI-REVOKE-COUNT {len(expected_revoke_homes)} =",
+                        f"_EXT4-JFI-EA @ {xattr_block} =",
+                        f"_EXT4-JFI-EA-ACTION @ {expected_ea_action} =",
+                        (
+                            "_EXT4-JFI-LEGACY-DOUBLE-HOME @ "
+                            f"{expected_double_home} ="
+                        ),
+                        (
+                            "_EXT4-JFI-LEGACY-DOUBLE-CHILDREN @ "
+                            f"{len(double_children)} ="
+                        ),
+                        (
+                            "_EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE @ "
+                            f"{expected_double_child_base} ="
+                        ),
                         (
                             "_SD-S-WRITER "
                             "_EXT4-JWR.CP-DATA-MAP-KIND + @ "
@@ -18808,16 +18880,30 @@ def test_sparse_double_stages_canonical_multi_child_revokes(
                             "_EXT4-JWR.CP-DELETE-BLOCKS + @ "
                             f"{len(combined_ranges)} ="
                         ),
+                        (
+                            "_SD-S-WRITER _EXT4-JWR.CP-EA-HOME + @ "
+                            f"{xattr_block} ="
+                        ),
+                        (
+                            "_SD-S-WRITER _EXT4-JWR.CP-EA-ACTION + @ "
+                            f"{expected_ea_action} ="
+                        ),
                         *_forth_cp_delete_vector_checks(
                             "_SD-S-WRITER",
                             combined_ranges,
                         ),
+                        f"_EXT4-JFO-CERT-EA @ {xattr_block} =",
+                        (
+                            "_EXT4-JFO-CERT-RANGE-COUNT @ "
+                            f"{len(combined_ranges)} ="
+                        ),
+                        "_EXT4-JFO-CERT-MATCH?",
                         "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY?",
                         "_SD-S-WRITER _EXT4-JTX-TABLES-VALID?",
                         "_SD-S-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
-                + ' IF ." EXT4-LEGACY-SPARSE-MULTI-CHILD-STAGED" THEN'
+                + f' IF ." {marker}" THEN'
             ),
             "_SD-S-TX _EXT4-JTX-ABORT CONSTANT _SD-S-ABORT-IOR",
             "_EXT4-JFO-CERT-END",
@@ -18836,8 +18922,9 @@ def test_sparse_double_stages_canonical_multi_child_revokes(
             ),
         ],
         patches=patches,
+        max_steps=900_000_000 if xattr_block else 800_000_000,
     )
-    _assert_emitted(output, "EXT4-LEGACY-SPARSE-MULTI-CHILD-STAGED")
+    _assert_emitted(output, marker)
     _assert_emitted(output, "EXT4-LEGACY-SPARSE-DOUBLE-ABORT-CLEAN")
 
 
