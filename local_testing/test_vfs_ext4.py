@@ -20077,13 +20077,27 @@ def test_legacy_single_indirect_rejects_node_data_alias(
 
 
 @pytest.mark.parametrize(
-    "map_shape",
-    ("single-indirect", "sparse-double", "empty-triple-root"),
+    ("map_shape", "protocol"),
+    (
+        pytest.param("single-indirect", "modern", id="single-indirect"),
+        pytest.param("sparse-double", "modern", id="sparse-double"),
+        pytest.param(
+            "empty-triple-root",
+            "modern",
+            id="empty-triple-root",
+        ),
+        pytest.param(
+            "empty-triple-root",
+            "legacy",
+            id="legacy-empty-triple-root",
+        ),
+    ),
 )
 def test_mount_reclaims_legacy_indirect_orphan(
     canonical_images: dict[str, Path],
     tmp_path: Path,
     map_shape: str,
+    protocol: str,
 ) -> None:
     source = canonical_images["primary-1k-i256"]
     empty_triple_root = False
@@ -20107,7 +20121,7 @@ def test_mount_reclaims_legacy_indirect_orphan(
     patches, data_ranges, map_ranges = (
         _legacy_indirect_unlinked_orphan_patches(
             source,
-            protocol="modern",
+            protocol=protocol,
             direct_slots=direct_slots,
             single_slots=single_slots,
             double_children=double_children,
@@ -20130,8 +20144,8 @@ def test_mount_reclaims_legacy_indirect_orphan(
     )
     result = _run_singleton_unlinked_cleanup(
         source,
-        tmp_path / f"legacy-{map_shape}-clean.img",
-        protocol="modern",
+        tmp_path / f"{protocol}-{map_shape}-clean.img",
+        protocol=protocol,
         patches=patches,
         data_block=released_blocks[0],
         data_count=len(released_blocks),
@@ -20143,8 +20157,12 @@ def test_mount_reclaims_legacy_indirect_orphan(
     assert isinstance(output, str)
     assert isinstance(clean_image, Path)
     assert isinstance(clean_sha256, str)
-    _assert_emitted(output, "EXT4-MODERN-UNLINKED-ORPHAN-RECLAIMED")
-    assert result["expected_home_writes"] == 6
+    _assert_emitted(
+        output,
+        f"EXT4-{protocol.upper()}-UNLINKED-ORPHAN-RECLAIMED",
+    )
+    expected_home_writes = 6 if protocol == "modern" else 5
+    assert result["expected_home_writes"] == expected_home_writes
     if empty_triple_root:
         trace = result["success_trace"]
         block_size = result["block_size"]
@@ -20158,7 +20176,10 @@ def test_mount_reclaims_legacy_indirect_orphan(
         assert isinstance(block_bitmap_home, int)
         assert isinstance(inode_bitmap_home, int)
         assert isinstance(gdt_home, int)
-        assert sum(kind == "write" for kind, _, _ in trace) == 37
+        expected_write_count = 37 if protocol == "modern" else 35
+        assert sum(kind == "write" for kind, _, _ in trace) == (
+            expected_write_count
+        )
         assert sum(kind == "flush" for kind, _, _ in trace) == 24
 
         superblock = dict(patches)[1024]
@@ -20176,13 +20197,15 @@ def test_mount_reclaims_legacy_indirect_orphan(
                 block_size=block_size,
             )
         ) == 3
-        for home in (
+        single_write_homes = [
             gdt_home,
             block_bitmap_home,
             inode_bitmap_home,
             inode_home,
-            orphan_home,
-        ):
+        ]
+        if protocol == "modern":
+            single_write_homes.append(orphan_home)
+        for home in single_write_homes:
             assert len(
                 _write_ordinals_for_ext4_home(
                     trace,
@@ -20190,14 +20213,22 @@ def test_mount_reclaims_legacy_indirect_orphan(
                     block_size=block_size,
                 )
             ) == 1
+        if protocol == "legacy":
+            assert not _write_ordinals_for_ext4_home(
+                trace,
+                orphan_home,
+                block_size=block_size,
+            )
         assert not _write_ordinals_for_ext4_home(
             trace,
             root_home,
             block_size=block_size,
         )
 
-    stable_marker = f"EXT4-LEGACY-{map_shape.upper()}-STABLE"
-    stable_path = tmp_path / f"legacy-{map_shape}-stable.img"
+    stable_marker = (
+        f"EXT4-{protocol.upper()}-LEGACY-{map_shape.upper()}-STABLE"
+    )
+    stable_path = tmp_path / f"{protocol}-{map_shape}-stable.img"
     stable_output, stable_trace, stable_sha256 = run_recovery_forth(
         clean_image,
         stable_path,
