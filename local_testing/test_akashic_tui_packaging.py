@@ -29,6 +29,7 @@ from akashic_tui import (  # noqa: E402
     REQUIRE_RE,
     SOURCE_ROOT,
     _coalesce_audited_forth_lines,
+    _forth_line_tokens,
     _has_forth_error,
     _linked_autoexec,
     _minify_forth,
@@ -78,6 +79,26 @@ def _assert_library_renderer_free_closure(closure: set[str]) -> None:
     }
     assert tui_modules <= LIBRARY_RENDERER_FREE_APPLET_MODULES
     assert tui_modules.isdisjoint(LIBRARY_APPLET_BOUND_MODULES)
+
+
+def test_link_unit_lexer_omits_parser_payload_tokens() -> None:
+    assert _forth_line_tokens(
+        ': audit S" ; target_id_le=" _APPEND ;'
+    ) == (":", "audit", 'S"', "_APPEND", ";")
+    assert _forth_line_tokens(": quoted [CHAR] ; DROP ;") == (
+        ":",
+        "quoted",
+        "[CHAR]",
+        "DROP",
+        ";",
+    )
+    assert _forth_line_tokens(": commented ( ; ) DROP ;") == (
+        ":",
+        "commented",
+        "(",
+        "DROP",
+        ";",
+    )
 
 
 @pytest.mark.parametrize(

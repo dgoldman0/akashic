@@ -155,6 +155,12 @@ terminal failure and pre-dispatch rollback refund the outstanding reservation.
 An unencodable or over-limit handler result is replaced with bounded JSON
 `null` after a successful effect rather than inviting a duplicate retry. The
 entire measurement buffer is erased on success, codec failure, and exception.
+Both `CBUS-S-OK` and `CBUS-S-NO-EFFECT` are result-bearing completions. The
+gateway measures and charges either result, the model context and provider keep
+the actual typed receipt, and the transcript marks the reviewed operation
+complete while retaining the raw bus status. `NO-EFFECT` is therefore visible
+as successful convergence, not rewritten to `OK`; only the owner decides that
+no new revision or component touch occurred.
 
 Gateway state is held only while preparing or transitioning an owned request.
 The resulting request/bus continuation is carried per call, and the state guard
@@ -176,6 +182,17 @@ seal before entering the applet handler; mutation after review is denied and
 the consumed grant cannot be replayed. Canonical encoding and seal operations
 are guarded, while allocated audit bytes remain caller-owned rather than a
 borrowed global buffer.
+
+Review capacity is the existing 65,536-byte canonical-argument contract, not a
+second 4 KiB product limit. The gateway and Agent review JSON capacities derive
+from that one bound; the UI's 262,144-byte visible scratch is the exact 4x
+worst-case escaping allowance. Model context uses a separate 65,536-byte tool
+call arena while retaining the independent 32,768-byte tool-result ceiling.
+Focused exact-full and one-byte-short checks guard canonical encoding, gateway
+review, and both model-context arenas; the Scripted provider separately accepts
+an exact 32 KiB result and atomically rejects a value requiring one byte more.
+The review renderer fills its exact 262,144-byte worst-case visible arena while
+an adjacent digest sentinel proves that expansion stays in bounds.
 
 ## Conversation Store
 

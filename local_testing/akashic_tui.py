@@ -15,7 +15,7 @@ import os
 import re
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
@@ -431,8 +431,16 @@ VARIABLE _cx-context
 VARIABLE _cx-item
 VARIABLE _cx-provider
 VARIABLE _cx-queue
+VARIABLE _cx-request
+VARIABLE _cx-boundary-context
+VARIABLE _cx-members
+VARIABLE _cx-before
+VARIABLE _cx-scripted-context
 CREATE _cx-turn AGENT-TURN-REQUEST-SIZE ALLOT
 CREATE _cx-value CV-SIZE ALLOT
+CREATE _cx-large 65535 ALLOT
+CREATE _cx-json CBR-ARGS-CANONICAL-MAX ALLOT
+CREATE _cx-event AGENT-EVENT-SIZE ALLOT
 
 : _cx-assert  ( flag -- )
     1 _cx-checks +!
@@ -442,6 +450,171 @@ CREATE _cx-value CV-SIZE ALLOT
         ." STACK " _cx-depth @ . ." -> " DUP . CR .S CR
     THEN
     _cx-depth @ = _cx-assert ;
+: _cx-zero?  ( addr len -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+
+: _cx-slot  ( key-a key-u index map -- child )
+    CV-MAP-SLOT! DUP 0= _cx-assert DROP ;
+
+: _cx-library-collection-value  ( -- )
+    _cx-value CV-FREE
+    3 _cx-value CV-MAP! 0= _cx-assert
+    S" expected_logical_generation" 0 _cx-value _cx-slot
+        0x7FFFFFFFFFFFFFFF SWAP CV-INT!
+    S" title" 1 _cx-value _cx-slot
+        _cx-large 64 ROT CV-STRING! 0= _cx-assert
+    S" members" 2 _cx-value _cx-slot DUP _cx-members !
+    64 SWAP CV-LIST! 0= _cx-assert
+    64 0 DO
+        _cx-large 110 I _cx-members @ CV-LIST-NTH CV-RESOURCE!
+        0= _cx-assert
+    LOOP ;
+
+: _cx-canonical-boundaries  ( -- )
+    CBR-ARGS-CANONICAL-MAX 65536 = _cx-assert
+    _cx-large 65524 [CHAR] A FILL
+    _cx-value CV-FREE
+    _cx-large 65523 _cx-value CV-STRING! 0= _cx-assert
+    _cx-value _cx-json CBR-ARGS-CANONICAL-MAX IVJSON-TYPED-ENCODE
+    DUP 0= _cx-assert DROP 65536 = _cx-assert
+    0xA5 _cx-json 65535 + C!
+    _cx-value _cx-json 65535 IVJSON-TYPED-ENCODE
+    DUP IVJSON-E-CAPACITY = _cx-assert DROP 0= _cx-assert
+    _cx-json 65535 + C@ 0xA5 = _cx-assert
+
+    CBR-NEW DUP 0= _cx-assert DROP DUP _cx-request ! DROP
+    _cx-large 65523 _cx-request @ CBR.ARGS CV-STRING! 0= _cx-assert
+    _cx-request @ CBR-ARGS-SEAL! CBUS-S-OK = _cx-assert
+    _cx-request @ CBR.ARGS-LEN @ 65536 = _cx-assert
+    _cx-request @ CBR-ARGS-SEAL-MATCH? _cx-assert
+
+    _cx-large 65524 _cx-request @ CBR.ARGS CV-STRING! 0= _cx-assert
+    _cx-request @ CBR-ARGS-SEAL! CBUS-S-INVALID = _cx-assert
+    _cx-request @ CBR.ARGS-LEN @ 0= _cx-assert
+    _cx-request @ CBR.ARGS-SEAL-FLAGS @ 0= _cx-assert
+    _cx-request @ CBR.ARGS-DIGEST SHA3-256-LEN _cx-zero?
+        _cx-assert
+    _cx-request @ CBR-FREE 0 _cx-request !
+    _cx-stack ;
+
+: _cx-model-context-exact-boundaries  ( -- )
+    ACTX-CALL-JSON-CAPACITY CBR-ARGS-CANONICAL-MAX = _cx-assert
+    ACTX-RESULT-JSON-CAPACITY 32768 = _cx-assert
+    ACTX-NEW DUP ACTX-S-OK = _cx-assert DROP
+        DUP _cx-boundary-context ! DROP
+    _cx-large 65535 [CHAR] A FILL
+
+    _cx-value CV-FREE
+    _cx-large 65534 _cx-value CV-STRING! 0= _cx-assert
+    41 S" org.akashic.boundary" S" boundary.call"
+        S" call-exact" _cx-value _cx-boundary-context @
+        ACTX-APPEND-TOOL-CALL-VALUE
+    DUP ACTX-S-OK = _cx-assert DROP DUP 0<> _cx-assert
+    DUP ACTXI-DATA-TEXT NIP 65536 = _cx-assert DROP
+    _cx-boundary-context @ ACTX.COUNT @ DUP 1 = _cx-assert
+        _cx-before !
+
+    _cx-value CV-FREE
+    _cx-large 65535 _cx-value CV-STRING! 0= _cx-assert
+    41 S" org.akashic.boundary" S" boundary.call"
+        S" call-one-over" _cx-value _cx-boundary-context @
+        ACTX-APPEND-TOOL-CALL-VALUE
+    DUP ACTX-S-CODEC = _cx-assert DROP 0= _cx-assert
+    _cx-boundary-context @ ACTX.COUNT @ _cx-before @ = _cx-assert
+
+    _cx-value CV-FREE
+    _cx-large 32766 _cx-value CV-STRING! 0= _cx-assert
+    41 S" org.akashic.boundary" S" boundary.result"
+        S" result-exact" _cx-value CBUS-S-OK _cx-boundary-context @
+        ACTX-APPEND-TOOL-RESULT-VALUE
+    DUP ACTX-S-OK = _cx-assert DROP DUP 0<> _cx-assert
+    DUP ACTXI-DATA-TEXT NIP 32768 = _cx-assert DROP
+    _cx-boundary-context @ ACTX.COUNT @ DUP 2 = _cx-assert
+        _cx-before !
+
+    _cx-value CV-FREE
+    _cx-large 32767 _cx-value CV-STRING! 0= _cx-assert
+    41 S" org.akashic.boundary" S" boundary.result"
+        S" result-one-over" _cx-value CBUS-S-OK _cx-boundary-context @
+        ACTX-APPEND-TOOL-RESULT-VALUE
+    DUP ACTX-S-CODEC = _cx-assert DROP 0= _cx-assert
+    _cx-boundary-context @ ACTX.COUNT @ _cx-before @ = _cx-assert
+    _cx-boundary-context @ ACTX-FREE 0 _cx-boundary-context !
+    _cx-value CV-FREE
+    _cx-stack ;
+
+: _cx-model-context-schema-boundary  ( -- )
+    _cx-large 110 1 FILL
+    _cx-library-collection-value
+    _cx-value _cx-json CBR-ARGS-CANONICAL-MAX IVJSON-ENCODE
+    DUP 0= _cx-assert DROP 42890 = _cx-assert
+
+    ACTX-NEW DUP ACTX-S-OK = _cx-assert DROP
+        DUP _cx-boundary-context ! DROP
+    41 S" org.akashic.library.applet" S" library.collection.create"
+        S" call-library-max" _cx-value _cx-boundary-context @
+        ACTX-APPEND-TOOL-CALL-VALUE
+    DUP ACTX-S-OK = _cx-assert DROP DUP 0<> _cx-assert
+    DUP ACTXI-DATA-TEXT NIP 42890 = _cx-assert DROP
+    _cx-boundary-context @ ACTX.COUNT @ DUP 1 = _cx-assert
+        _cx-before !
+
+    \ The same value is intentionally too large for provider-visible
+    \ results: broadening review/call input must not broaden output.
+    41 S" org.akashic.library.applet" S" library.collection.create"
+        S" call-library-max" _cx-value CBUS-S-OK _cx-boundary-context @
+        ACTX-APPEND-TOOL-RESULT-VALUE
+    DUP ACTX-S-CODEC = _cx-assert DROP 0= _cx-assert
+    _cx-boundary-context @ ACTX.COUNT @ _cx-before @ = _cx-assert
+    _cx-boundary-context @ ACTX-FREE 0 _cx-boundary-context !
+    _cx-value CV-FREE
+    _cx-stack ;
+
+: _cx-scripted-result-boundaries  ( -- )
+    SCRIPTED-TOOL-OUTPUT-CAPACITY 32768 = _cx-assert
+    SCRIPTED-PROVIDER-NEW DUP 0= _cx-assert DROP
+        DUP _cx-provider ! DROP
+    AEQ-NEW DUP 0= _cx-assert DROP DUP _cx-queue ! DROP
+    _cx-provider @ APROV.CONTEXT @ _cx-scripted-context !
+    73 _cx-scripted-context @ _SPC.RUN-ID !
+    1 _cx-scripted-context @ _SPC.SEQUENCE !
+    _SP-WAITING _cx-scripted-context @ _SPC.STATE !
+    _cx-large 32767 [CHAR] B FILL
+
+    \ One-byte-over fails atomically and releases transient storage.
+    _cx-value CV-FREE
+    _cx-large 32767 _cx-value CV-STRING! 0= _cx-assert
+    73 S" boundary.result" _cx-value CBUS-S-OK
+        _cx-queue @ _cx-provider @ APROV-TOOL-RESULT 1 = _cx-assert
+    _cx-queue @ AEQ.COUNT @ 0= _cx-assert
+    _SPT-BUF @ 0= _cx-assert
+
+    \ Exact 32 KiB is copied before transient storage is erased.
+    _cx-value CV-FREE
+    _cx-large 32766 _cx-value CV-STRING! 0= _cx-assert
+    73 S" boundary.result" _cx-value CBUS-S-NO-EFFECT
+        _cx-queue @ _cx-provider @ APROV-TOOL-RESULT 0= _cx-assert
+    _cx-queue @ AEQ.COUNT @ 3 = _cx-assert
+    _SPT-BUF @ 0= _cx-assert
+    _cx-event AEV-INIT
+    _cx-event _cx-queue @ AEQ-POP _cx-assert
+    _cx-event AEV.KIND @ AEV-TOOL-RESULT = _cx-assert
+    _cx-event AEV.DATA DUP CV-TYPE@ CV-T-STRING = _cx-assert
+    DUP CV-LEN@ 32768 = _cx-assert
+    DUP CV-DATA@ C@ [CHAR] " = _cx-assert
+    DUP CV-DATA@ SWAP CV-LEN@ 1- + C@ [CHAR] " = _cx-assert
+    _cx-event AEV-FREE
+    _cx-provider @ APROV-FREE 0 _cx-provider !
+    _cx-queue @ AEQ-FREE 0 _cx-queue !
+    _cx-value CV-FREE
+    _cx-stack ;
+
+: _cx-model-context-boundaries  ( -- )
+    _cx-model-context-exact-boundaries
+    _cx-model-context-schema-boundary
+    _cx-scripted-result-boundaries ;
 
 : _cx-run  ( -- )
     0 _cx-fails ! 0 _cx-checks ! DEPTH _cx-depth !
@@ -480,6 +653,9 @@ CREATE _cx-value CV-SIZE ALLOT
     _cx-provider @ SCRIPTED-LAST-CONTEXT-N 3 = _cx-assert
     _cx-stack
     _cx-provider @ APROV-FREE _cx-queue @ AEQ-FREE
+
+    _cx-canonical-boundaries
+    _cx-model-context-boundaries
 
     2 _cx-context @ ACTX-DROP-RUN
     _cx-context @ ACTX.COUNT @ 1 = _cx-assert
@@ -4758,7 +4934,9 @@ VARIABLE _op-runtime
 VARIABLE _op-vfs
 VARIABLE _op-store
 VARIABLE _op-handler-hits
+VARIABLE _op-handler-status
 VARIABLE _op-found-text
+VARIABLE _op-tool-result
 VARIABLE _op-refreshes
 VARIABLE _op-auth-polls
 VARIABLE _op-auth-cb
@@ -4995,7 +5173,17 @@ CREATE _op-header-turn AGENT-TURN-REQUEST-SIZE ALLOT
     S" captured" 2 PICK CBR.RESULT CV-STRING! IF
         DROP CBUS-S-FAILED EXIT
     THEN
-    DROP CBUS-S-OK ;
+    DROP _op-handler-status @ ;
+
+: _op-last-tool-result  ( -- item | 0 )
+    0 _op-tool-result !
+    _op-runtime @ ARUNTIME-MODEL-CONTEXT DUP ACTX.COUNT @ 0 ?DO
+        I OVER ACTX-NTH DUP ACTXI.KIND @ ACTX-K-TOOL-RESULT = IF
+            _op-tool-result !
+        ELSE
+            DROP
+        THEN
+    LOOP DROP _op-tool-result @ ;
 
 : _op-setup  ( -- )
     0 _op-opens ! 0 _op-closes ! 0 _op-polls ! 0 _op-handler-hits !
@@ -5004,6 +5192,7 @@ CREATE _op-header-turn AGENT-TURN-REQUEST-SIZE ALLOT
     0 _op-cancels ! 0 _op-cancel-throw !
     0 _op-legacy-opens ! 0 _op-legacy-closes !
     0 _op-response-mode ! 0 _op-retry-request-u !
+    CBUS-S-NO-EFFECT _op-handler-status !
     0 _op-send-fail-once ! 0 _op-send-failures !
     0 _op-refreshes ! 0 _op-auth-polls !
     _op-turn-state 1024 65 FILL
@@ -5208,6 +5397,13 @@ VARIABLE _op-old-cancels
     LOOP
     DROP _op-found-text @ _op-assert
     _op-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 5 = _op-assert
+    _op-last-tool-result DUP 0<> _op-assert
+    DUP ACTXI.STATUS @ CBUS-S-NO-EFFECT = _op-assert
+    DUP ACTXI-DATA-TEXT DUP 10 = _op-assert
+        S" captured" STR-STR-CONTAINS _op-assert
+    DROP
+    _op-request _op-request-u @ S" captured"
+        STR-STR-CONTAINS _op-assert
 
     S" cancel now" _op-runtime @ ARUNTIME-SEND 0= _op-assert
     _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ DUP 0<> _op-assert
@@ -8295,7 +8491,7 @@ CREATE _at-store AGENT-CONVERSATION-STORE-SIZE ALLOT
     _at-runtime @ ARUNTIME.CONVERSATION @ DUP _at-conv !
     ACONV.COUNT @ 0> _at-assert
     _at-conv @ ACONV.COUNT @ 1- _at-conv @ ACONV-NTH AMSG-TEXT
-    S" Daybook task captured." STR-STR-CONTAINS _at-assert
+    S" 1" STR-STR= _at-assert
     _at-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 8 = _at-assert
 
     _at-provider-protocol-rejection
@@ -17928,6 +18124,7 @@ VARIABLE _ahs-mf-parent VARIABLE _ahs-mf-child VARIABLE _ahs-mf-run
 VARIABLE _ahs-mf-status
 VARIABLE _ahs-unsupported-req
 VARIABLE _ahs-result-mode VARIABLE _ahs-disclosure-before
+VARIABLE _ahs-no-effect-context-n VARIABLE _ahs-no-effect-revision
 VARIABLE _ahs-race-g1 VARIABLE _ahs-race-g2 VARIABLE _ahs-race-run
 VARIABLE _ahs-race-entry VARIABLE _ahs-race-outer VARIABLE _ahs-race-old-handler
 VARIABLE _ahs-race-entered VARIABLE _ahs-race-prepared
@@ -17985,19 +18182,21 @@ CREATE _ahs-race-expected RID-SIZE ALLOT
 
 : _ahs-tool-handler  ( request instance -- status )
     DROP DUP CBR.ARGS CV-LEN@ _ahs-tool-value !
-    _ahs-result-mode @ IF
+    _ahs-result-mode @ 1 = IF
         S" oversized" 2 PICK CBR.RESULT CV-STRING! IF
             DROP CBUS-S-FAILED EXIT
         THEN
     ELSE
-        1 OVER CBR.RESULT CV-INT!
+        _ahs-result-mode @ 2 = IF 41 ELSE 1 THEN
+        OVER CBR.RESULT CV-INT!
     THEN
-    DROP CBUS-S-OK ;
+    DROP
+    _ahs-result-mode @ 2 = IF CBUS-S-NO-EFFECT ELSE CBUS-S-OK THEN ;
 
 : _ahs-tool-setup  ( -- )
     0 _ahs-result-mode !
     _ahs-in-schema CS-INIT CV-T-STRING _ahs-in-schema CS-ALLOW!
-    4096 _ahs-in-schema CS-MAX-LEN!
+    CBR-ARGS-CANONICAL-MAX _ahs-in-schema CS-MAX-LEN!
     _ahs-out-schema CS-INIT
     CV-T-INT CS-TYPE-BIT CV-T-STRING CS-TYPE-BIT OR
         _ahs-out-schema CS-ALLOW-MASK!
@@ -18186,6 +18385,49 @@ CREATE _ahs-race-expected RID-SIZE ALLOT
     _ahs-tool-value @ 0> _ahs-assert
     0 _ahs-result-mode ! _ahs-finish ;
 
+: _ahs-no-effect-result  ( -- )
+    2 _ahs-result-mode ! 0 _ahs-tool-value !
+    _ahs-inst @ CINST.REVISION @ _ahs-no-effect-revision !
+    S" task no effect result" _ahs-queued
+    _ahs-runtime @ ARUNTIME.MANDATE-RUN @ DUP _ahs-live-run !
+        AMRUN.DISCLOSURE-USED @ _ahs-disclosure-before !
+    _ahs-gateway @ ATOOLG.RESULT-RESERVED @ 8 = _ahs-assert
+    _ahs-review
+    _ahs-runtime @ ARUNTIME.APPROVAL-MSG @ _ahs-message !
+    _ahs-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @
+        _ahs-no-effect-context-n !
+    _ahs-audit-n _ahs-before !
+    -1 _ahs-runtime @ ARUNTIME-RESOLVE 0= _ahs-assert
+    8 _ahs-bus @ CBUS-PUMP 1 = _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-COMPLETE = _ahs-assert
+    _ahs-gateway @ ATOOLG.REQUEST @ DUP CBR.STATUS @
+        CBUS-S-NO-EFFECT = _ahs-assert
+    CBR.RESULT DUP CV-TYPE@ CV-T-INT = _ahs-assert
+        CV-DATA@ 41 = _ahs-assert
+    _ahs-inst @ CINST.REVISION @
+        _ahs-no-effect-revision @ = _ahs-assert
+    _ahs-gateway @ ATOOLG.RESULT-RESERVED @ 0= _ahs-assert
+    _ahs-live-run @ AMRUN.DISCLOSURE-USED @
+        _ahs-disclosure-before @ 6 - = _ahs-assert
+    _ahs-finish
+    _ahs-message @ AMSG.STATE @ AMSG-S-COMPLETE = _ahs-assert
+    _ahs-audit-n _ahs-before @ 1+ = _ahs-assert
+    _ahs-last-audit DUP 0<> _ahs-assert
+        AMSG.FLAGS @ AMSG-F-APPROVED AND 0<> _ahs-assert
+    _ahs-no-effect-context-n @
+        _ahs-runtime @ ARUNTIME-MODEL-CONTEXT ACTX-NTH
+    DUP 0<> _ahs-assert
+    DUP ACTXI.KIND @ ACTX-K-TOOL-RESULT = _ahs-assert
+    DUP ACTXI.STATUS @ CBUS-S-NO-EFFECT = _ahs-assert
+    ACTXI-DATA-TEXT S" 41" STR-STR= _ahs-assert
+    _ahs-runtime @ ARUNTIME.CONVERSATION @ DUP ACONV.COUNT @ 1-
+        SWAP ACONV-NTH
+    DUP AMSG.ROLE @ AROLE-TOOL = _ahs-assert
+    DUP AMSG.STATE @ AMSG-S-COMPLETE = _ahs-assert
+    AMSG-TEXT S" 41" STR-STR= _ahs-assert
+    _ahs-tool-value @ 21 = _ahs-assert
+    0 _ahs-result-mode ! ;
+
 : _ahs-quiesce  ( -- )
     0 _ahs-tool-value !
     S" task quiesce queued" _ahs-queued
@@ -18320,20 +18562,45 @@ CREATE _ahs-race-expected RID-SIZE ALLOT
     _ahs-unsupported-req @ CBR-FREE 0 _ahs-unsupported-req ! ;
 
 : _ahs-review-ceiling  ( -- )
-    _ahs-large ATOOLG-ARGS-REVIEW-MAX 88 FILL
-    S" task " _ahs-large SWAP CMOVE
-    0 _ahs-tool-value ! _ahs-audit-n _ahs-before !
-    _ahs-large ATOOLG-ARGS-REVIEW-MAX _ahs-queued
-    _ahs-gateway @ ATOOLG.ARGS-LEN @ ATOOLG-ARGS-REVIEW-MAX > _ahs-assert
-    _ahs-gateway @ ATOOLG-ARGS-REVIEWABLE? 0= _ahs-assert
-    _ahs-review
-    -1 _ahs-runtime @ ARUNTIME-RESOLVE CBUS-S-DENIED = _ahs-assert
-    _ahs-tool-value @ 0= _ahs-assert
-    _ahs-audit-n _ahs-before @ 1+ = _ahs-assert
-    _ahs-last-audit DUP AMSG.FLAGS @ AMSG-F-DENIED AND 0<> _ahs-assert
-        AMSG.FLAGS @ AMSG-F-APPROVED AND 0= _ahs-assert
-    S" <omitted: canonical args exceed inline audit limit>"
-        _ahs-audit-has _ahs-assert _ahs-finish ;
+    ATOOLG-ARGS-CANONICAL-MAX CBR-ARGS-CANONICAL-MAX = _ahs-assert
+    ATOOLG-ARGS-REVIEW-MAX ATOOLG-ARGS-CANONICAL-MAX = _ahs-assert
+    _ahs-large 65523 [CHAR] A FILL
+    _ahs-container CV-FREE
+    _ahs-large 65523 _ahs-container CV-STRING! 0= _ahs-assert
+
+    900 _ahs-parent @ _ahs-mandate-factory
+    DUP 0= _ahs-assert DROP DUP 0<> _ahs-assert
+    DUP _ahs-live-run !
+    DUP _ahs-gateway @ ATOOLG-MANDATE! 0= _ahs-assert DROP
+    S" daybook.task.capture" _ahs-container 900 _ahs-gateway @
+        ATOOLG-CALL CBUS-S-OK = _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-QUEUED = _ahs-assert
+    _ahs-gateway @ ATOOLG.REQUEST @ DUP CBR.ARGS-LEN @
+        CBR-ARGS-CANONICAL-MAX = _ahs-assert
+    CBR-ARGS-SEAL-MATCH? _ahs-assert
+    _ahs-gateway @ ATOOLG-ARGS-REVIEWABLE? _ahs-assert
+
+    _ahs-large CBR-ARGS-CANONICAL-MAX _ahs-gateway @
+        ATOOLG-ARGS-CANONICAL
+    DUP 0= _ahs-assert DROP
+        CBR-ARGS-CANONICAL-MAX = _ahs-assert
+    0xA5 _ahs-large CBR-ARGS-CANONICAL-MAX 1- + C!
+    _ahs-large CBR-ARGS-CANONICAL-MAX 1- _ahs-gateway @
+        ATOOLG-ARGS-CANONICAL
+    DUP IVJSON-E-CAPACITY = _ahs-assert DROP 0= _ahs-assert
+    _ahs-large CBR-ARGS-CANONICAL-MAX 1- + C@
+        0xA5 = _ahs-assert
+
+    8 _ahs-bus @ CBUS-PUMP 1 = _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-APPROVAL = _ahs-assert
+    _ahs-gateway @ ATOOLG-ARGS-REVIEWABLE? _ahs-assert
+    0 _ahs-gateway @ ATOOLG-RESOLVE CBUS-S-OK = _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-COMPLETE = _ahs-assert
+    _ahs-gateway @ ATOOLG-CLEAR CBUS-S-OK = _ahs-assert
+    _ahs-gateway @ ATOOLG-MANDATE-CLEAR CBUS-S-OK = _ahs-assert
+    _ahs-live-run @ AMRUN-FREE 0 _ahs-live-run !
+    _ahs-container CV-FREE
+    _ahs-stack ;
 
 : _ahs-capacity  ( -- )
     _ahs-runtime @ ARUNTIME.CONVERSATION @ ACONV.COUNT @
@@ -18621,12 +18888,25 @@ CREATE _ahs-race-expected RID-SIZE ALLOT
     _ahs-reg @ CREG-FREE _ahs-inst @ CINST-FREE
     _ahs-parent @ CTX-FREE ;
 
+: _ahs-control-plane-run  ( -- )
+    0 _ahs-fails ! 0 _ahs-checks ! DEPTH _ahs-depth !
+    _ahs-setup _ahs-stack
+    _ahs-review-ceiling _ahs-stack
+    _ahs-no-effect-result _ahs-stack
+    _ahs-cleanup _ahs-stack
+    _ahs-fails @ 0= IF
+        ." AGENT CONTROL PLANE PASS " _ahs-checks @ .
+    ELSE
+        ." AGENT CONTROL PLANE FAIL " _ahs-fails @ . ." / " _ahs-checks @ .
+    THEN CR ;
+
 : _ahs-run  ( -- )
     0 _ahs-fails ! 0 _ahs-checks ! DEPTH _ahs-depth !
     _ahs-setup _ahs-stack
     _ahs-adversarial-concurrency _ahs-stack
     _ahs-audit-envelope _ahs-stack
     _ahs-result-bound _ahs-stack
+    _ahs-no-effect-result _ahs-stack
     _ahs-quiesce _ahs-stack
     _ahs-cancel-poll-race _ahs-stack
     _ahs-audit-save-failure _ahs-stack
@@ -18651,6 +18931,21 @@ _ahs-run
     stable_markers=("AGENT SECURITY PASS",),
     failure_markers=("AGENT SECURITY FAIL",),
     linked=True,
+)
+
+# These review/result paths have no concurrency contract.  Reuse the security
+# fixture's setup and helpers, but keep the focused profile on the ordinary
+# single-core scheduler; the full two-core profile remains for lock/race cases.
+_AGENT_CONTROL_PLANE_AUTOEXEC = (
+    PROFILES["agent-security"].autoexec.rsplit("\n_ahs-run\n", 1)[0]
+    + "\n_ahs-control-plane-run\n"
+)
+PROFILES["agent-control-plane"] = replace(
+    PROFILES["agent-security"],
+    autoexec=_AGENT_CONTROL_PLANE_AUTOEXEC,
+    ready_markers=("AGENT CONTROL PLANE PASS",),
+    stable_markers=("AGENT CONTROL PLANE PASS",),
+    failure_markers=("AGENT CONTROL PLANE FAIL",),
 )
 
 PROFILES["agent-provider-ui-commands"] = Profile(
@@ -23448,14 +23743,52 @@ def _requires_megapad_networking(modules: tuple[str, ...]) -> bool:
 
 
 def _forth_line_tokens(line: str) -> tuple[str, ...]:
-    """Return executable words using MegaPad's ASCII-space token rules."""
+    """Return executable words using MegaPad's ASCII-space token rules.
+
+    The linked-source packer uses this stream to keep a colon definition in
+    one MP64FS chunk.  Parser-word payloads are data, not executable tokens:
+    in particular, a semicolon inside ``S\" ; detail`` must not look like the
+    end of the surrounding definition.
+    """
     tokens: list[str] = []
-    for token in line.split(" "):
-        if not token:
-            continue
+    quoted_next = False
+    index = 0
+    while index < len(line):
+        while index < len(line) and line[index] == " ":
+            index += 1
+        if index >= len(line):
+            break
+        start = index
+        while index < len(line) and line[index] != " ":
+            index += 1
+        token = line[start:index]
+        upper = token.upper()
         if token.startswith("\\"):
             break
+        if quoted_next:
+            quoted_next = False
+            continue
         tokens.append(token)
+        if upper in {
+            "'",
+            "[']",
+            "CHAR",
+            "[CHAR]",
+            "POSTPONE",
+            "[COMPILE]",
+            "[DEFINED]",
+            "[UNDEFINED]",
+        }:
+            quoted_next = True
+            continue
+        if upper in {'S"', 'C"', '."', 'ABORT"'}:
+            close = line.find('"', index)
+            index = len(line) if close < 0 else close + 1
+            continue
+        if token == "(" or upper == ".(":
+            close = line.find(")", index)
+            index = len(line) if close < 0 else close + 1
+            continue
     return tuple(tokens)
 
 
@@ -23745,7 +24078,7 @@ def _linked_chunks(
                 for index, token in enumerate(tokens)
             ):
                 definition_depth = 0
-            for token in text.split(" "):
+            for token in tokens:
                 upper = token.upper()
                 if upper == "[IF]":
                     conditional_depth += 1
@@ -25258,17 +25591,17 @@ def smoke(
                     if resolved:
                         outcome = wait_screen_any(
                             (
-                                "Daybook task captured.",
                                 "Daybook persistence failed",
                                 "Capability handler threw",
                                 "Capability output schema rejected",
                                 "Capability returned the wrong value type",
+                                "[Agent: ready]",
                             ),
                             "approved capability did not return a tool result",
                             step_budget=2_000_000_000,
                             wall_timeout=60.0,
                         )
-                    if outcome == "Daybook task captured.":
+                    if outcome == "[Agent: ready]":
                         live_fs = MP64FS(
                             bytearray(session.system.storage._image_data)
                         )
@@ -25294,15 +25627,22 @@ def smoke(
                 session.send_text("source smoke")
                 session.send_key("enter")
                 if wait_screen(
-                    "Daybook task captured.",
-                    "the allowed Daybook source observation did not complete",
+                    "daybook.source",
+                    "the allowed Daybook source observation was not dispatched",
                     step_budget=1_000_000_000,
                     wall_timeout=25.0,
                 ):
-                    wait_screen(
-                        "Ready",
-                        "Agent did not finish the allowed source observation",
+                    source_result = wait_screen_any(
+                        ("vfs:/daybook.md", "akashic:resource:"),
+                        "the Daybook source result was not delivered to Agent",
+                        step_budget=1_000_000_000,
+                        wall_timeout=25.0,
                     )
+                    if source_result:
+                        wait_screen(
+                            "[Agent: ready]",
+                            "Agent did not finish the allowed source observation",
+                        )
 
             session.send_key("alt+2")
             session.send_key("ctrl+space")
@@ -25505,7 +25845,7 @@ def smoke(
                     wall_timeout=20.0,
                 ):
                     wait_screen(
-                        "Daybook task captured.",
+                        "[Agent: ready]",
                         "approved scoped write did not return its tool result",
                         step_budget=2_000_000_000,
                         wall_timeout=60.0,

@@ -229,9 +229,13 @@
       ],
       "capability_surface": {"path": "akashic/tui/applets/agent/agent.f", "literal_prefix": "agent.", "ids": []},
       "source_contracts": [
-        {"path": "akashic/tui/applets/agent/agent.f", "required_literals": ["org.akashic.agent", "org.akashic.agent.runtime", "org.akashic.agent.provider-source", "AGENT-INIT-CB", "AGENT-REQUEST-CLOSE-CB", "AGENT-SHUTDOWN-CB", "AGENT-ENTRY", "AGENT-RUN"]},
+        {"path": "akashic/tui/applets/agent/agent.f", "required_literals": ["org.akashic.agent", "org.akashic.agent.runtime", "org.akashic.agent.provider-source", "ATOOLG-ARGS-REVIEW-MAX", "_AG-REVIEW-VISIBLE-CAP", "AGENT-INIT-CB", "AGENT-REQUEST-CLOSE-CB", "AGENT-SHUTDOWN-CB", "AGENT-ENTRY", "AGENT-RUN"]},
+        {"path": "akashic/tui/applets/agent/tool-gateway.f", "required_literals": ["CBR-ARGS-CANONICAL-MAX", "ATOOLG-ARGS-REVIEW-MAX", "CBUS-RESULT-BEARING?"]},
+        {"path": "akashic/tui/applets/agent/model-context.f", "required_literals": ["ACTX-CALL-JSON-CAPACITY", "ACTX-RESULT-JSON-CAPACITY", "CBUS-RESULT-BEARING?"]},
+        {"path": "akashic/tui/applets/agent/runtime.f", "required_literals": ["CBUS-RESULT-BEARING?", "ARUNTIME-RESOLVE"]},
         {"path": "akashic/tui/applets/agent/providers/offline.f", "required_literals": ["org.akashic.agent.offline", "org.akashic.agent.source.offline"]},
-        {"path": "akashic/tui/applets/agent/providers/devtools/scripted.f", "required_literals": ["org.akashic.agent.testing.scripted", "org.akashic.agent.source.testing.scripted"]},
+        {"path": "akashic/tui/applets/agent/providers/devtools/scripted.f", "required_literals": ["org.akashic.agent.testing.scripted", "org.akashic.agent.source.testing.scripted", "SCRIPTED-TOOL-OUTPUT-CAPACITY", "CBUS-RESULT-BEARING?", "IVJSON-ENCODE"]},
+        {"path": "akashic/tui/applets/agent/providers/openai/responses.f", "required_literals": ["CBUS-RESULT-BEARING?", "CAPJSON-ENCODE-OUTPUT"]},
         {"path": "akashic/tui/applets/agent/providers/openai/source.f", "required_literals": ["org.akashic.agent.source.openai"]},
         {"path": "akashic/tui/applets/agent/providers/codex/source.f", "required_literals": ["org.akashic.agent.source.codex"]},
         {"path": "akashic/tui/applets/agent/access-profile.f", "required_literals": ["AAP-PRESET-CHAT-ONLY", "AAP-PRESET-PRACTICE-READ", "AAP-PRESET-PRACTICE-ASSIST", "AAP-PRESET-PRACTICE-LIBRARY-BURROW", "AAP-VALID?"]},
@@ -252,8 +256,8 @@
           "id": "agent.access-and-tool-security",
           "coverage": "covered",
           "facets": ["interfaces", "failures", "journeys"],
-          "preserve": ["Chat-only, Practice read-only, Practice assist and focused Library-Burrow presets with exact targets and budgets", "Tool approval/denial, operand seals, audit, races, quiescence and capacity", "Provider-invisible sandbox compile, verify and test operations, exact-revision invocation, detached copied results and scrubbed result release", "Desk-shared Agent review, cancellation, Daybook write policy and relaunch continuity"],
-          "evidence": ["profile:agent-access", "profile:agent-security", "profile:sandbox-stage3-agent-operations", "profile:sandbox-stage3-agent-test", "profile:sandbox-stage3-agent-invoke", "profile:desktop-agent-hardening", "profile:desktop"]
+          "preserve": ["Chat-only, Practice read-only, Practice assist and focused Library-Burrow presets with exact targets and budgets", "Tool approval/denial, complete canonical operands, audit, races, quiescence and capacity", "Result-bearing OK and NO-EFFECT completions retain their typed receipt and raw status through gateway accounting, transcript, model context and providers without touching owner revision on NO-EFFECT", "Provider-invisible sandbox compile, verify and test operations, exact-revision invocation, detached copied results and scrubbed result release", "Desk-shared Agent review, cancellation, Daybook write policy and relaunch continuity"],
+          "evidence": ["profile:agent-access", "profile:agent-control-plane", "profile:agent-security", "profile:sandbox-stage3-agent-operations", "profile:sandbox-stage3-agent-test", "profile:sandbox-stage3-agent-invoke", "profile:desktop-agent-hardening", "profile:desktop"]
         },
         {
           "id": "agent.providers-and-account",

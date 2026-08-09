@@ -76,6 +76,7 @@ CREATE _LC1-tombstone-request LIBRARY-DOCUMENT-REPLACE-REQUEST-SIZE ALLOT
 
 LIB-CONTENT-WINDOW-MAX 1+ CONSTANT _LC1-large-u
 _LC1-large-u XBUF _LC1-large
+43758 XBUF _LC1-canonical
 \ SHA3-256 of 65,537 "A" bytes with offsets 32767..32769 replaced by "XYZ".
 \ This is the same deterministic retained-content fixture used by lib-rest-l12.
 CREATE _LC1-large-digest
@@ -348,6 +349,73 @@ VARIABLE _LC1-boundary-ior
     _LC1-collection-seal _LC1-bad-seal SHA3-256-HEX-LEN MOVE
     _LC1-bad-seal C@ [CHAR] 0 = IF [CHAR] 1 ELSE [CHAR] 0 THEN
         _LC1-bad-seal C! ;
+
+VARIABLE _LC1-canonical-expected
+
+: _LC1-canonical-boundary  ( expected-length -- )
+    _LC1-canonical-expected !
+    _LC1-request @ CBR.ARGS _LC1-canonical _LC1-canonical-expected @
+        IVJSON-TYPED-ENCODE
+    DUP 0= _LC1-assert DROP
+        _LC1-canonical-expected @ = _LC1-assert
+    0xA5 _LC1-canonical _LC1-canonical-expected @ 1- + C!
+    _LC1-request @ CBR.ARGS _LC1-canonical
+        _LC1-canonical-expected @ 1-
+        IVJSON-TYPED-ENCODE
+    DUP IVJSON-E-CAPACITY = _LC1-assert DROP 0= _LC1-assert
+    _LC1-canonical _LC1-canonical-expected @ 1- + C@
+        0xA5 = _LC1-assert
+    _LC1-request @ CBR-ARGS-SEAL! CBUS-S-OK = _LC1-assert
+    _LC1-request @ CBR.ARGS-LEN @
+        _LC1-canonical-expected @ = _LC1-assert
+    _LC1-request @ CBR-ARGS-SEAL-MATCH? _LC1-assert ;
+
+: _LC1-document-canonical-boundary  ( -- )
+    _LC1-large 4096 1 FILL
+    _LC1-args-free
+    4 _LC1-request @ CBR.ARGS CV-MAP! _LC1-ok
+    S" expected_logical_generation" 0 _LC1-args-slot
+        0x7FFFFFFFFFFFFFFF SWAP CV-INT!
+    S" title" 1 _LC1-args-slot
+        _LC1-large 128 ROT CV-STRING! _LC1-ok
+    S" media_type" 2 _LC1-args-slot
+        _LC1-large 13 ROT CV-STRING! _LC1-ok
+    S" content" 3 _LC1-args-slot
+        _LC1-large 4096 ROT CV-STRING! _LC1-ok
+    _LC1-request @ CBR.ARGS
+        LIBRARY-CAP-DOCUMENT-CREATE CAP.IN-SCHEMA @ CS-VALIDATE-DEEP
+        0= _LC1-assert
+    \ Every payload byte needs a six-byte JSON escape.  The exact typed
+    \ envelope is therefore 25,562 bytes, not merely the 4 KiB content.
+    25562 _LC1-canonical-boundary
+    _LC1-args-free ;
+
+: _LC1-collection-canonical-boundary  ( -- )
+    _LC1-large 110 1 FILL
+    _LC1-args-free
+    3 _LC1-request @ CBR.ARGS CV-MAP! _LC1-ok
+    S" expected_logical_generation" 0 _LC1-args-slot
+        0x7FFFFFFFFFFFFFFF SWAP CV-INT!
+    S" title" 1 _LC1-args-slot
+        _LC1-large 64 ROT CV-STRING! _LC1-ok
+    S" members" 2 _LC1-args-slot DUP _LC1-node !
+    LIBRARY-CAPABILITY-MEMBER-MAX SWAP CV-LIST! _LC1-ok
+    LIBRARY-CAPABILITY-MEMBER-MAX 0 DO
+        _LC1-large 110 I _LC1-node @ CV-LIST-NTH CV-RESOURCE! _LC1-ok
+    LOOP
+    _LC1-request @ CBR.ARGS
+        LIBRARY-CAP-COLLECTION-CREATE CAP.IN-SCHEMA @ CS-VALIDATE-DEEP
+        0= _LC1-assert
+    \ The 64 schema-bounded resource strings yield a 43,758-byte typed
+    \ envelope at their worst legal escaping expansion.
+    43758 _LC1-canonical-boundary
+    _LC1-args-free ;
+
+: _LC1-create-canonical-boundaries  ( -- )
+    CBR-ARGS-CANONICAL-MAX 65536 = _LC1-assert
+    _LC1-document-canonical-boundary
+    _LC1-collection-canonical-boundary
+    _LC1-stack ;
 
 ." LIBRARY CAPABILITY L1 ARGUMENTS READY" CR _LC1-flush
 
@@ -1169,6 +1237,8 @@ VARIABLE _LC1-boundary-ior
     ." LIBRARY CAPABILITY CREATE BOUNDARY L1 PHASE PROVISION" CR _LC1-flush
     _LAPP-CAPABILITY-WORK LIBRARY-CAPABILITY-WORK-VALID? _LC1-assert
     _LAPP-ENSURE-PROVISIONED LIBRARY-SERVICE-S-OK _LC1-status
+    ." LIBRARY CAPABILITY CREATE BOUNDARY L1 PHASE CANONICAL" CR _LC1-flush
+    _LC1-create-canonical-boundaries
     ." LIBRARY CAPABILITY CREATE BOUNDARY L1 PHASE EXACT MAX" CR _LC1-flush
     _LC1-create-content-max
     _LC1-shell-finish ;

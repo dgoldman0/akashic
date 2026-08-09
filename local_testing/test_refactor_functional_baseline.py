@@ -30,7 +30,7 @@ def test_live_functional_ledger_is_complete_and_source_anchored() -> None:
         "partial_groups": 11,
         "prerequisite_only_groups": 2,
         "prerequisites": 13,
-        "evidence_references": 129,
+        "evidence_references": 130,
     }
 
 

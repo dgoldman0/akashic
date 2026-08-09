@@ -9,6 +9,7 @@
 PROVIDED akashic-agent-model-context
 
 REQUIRE message-role.f
+REQUIRE ../../../interop/request-bus.f
 REQUIRE ../../../interop/codecs/json-value.f
 
 0 CONSTANT ACTX-S-OK
@@ -250,10 +251,11 @@ VARIABLE _ACTXP-C
     _ACTXP-SA @ _ACTXP-SU @ _ACTXP-NA @ _ACTXP-NU @
     0 0 _ACTXP-DA @ _ACTXP-DU @ _ACTXP-C @ ACTX-APPEND-RAW ;
 
-\ A bounded 4 KiB capability result can expand substantially under JSON
-\ escaping.  Keep the transient codec arena large enough for that worst-case
-\ envelope instead of advertising result sizes the ledger cannot encode.
-32768 CONSTANT ACTX-JSON-CAPACITY
+\ Calls retain the complete canonical request-bus operand.  Results keep their
+\ independent model-visible ceiling; raising review capacity must not broaden
+\ the amount of owner output that providers can retain.
+CBR-ARGS-CANONICAL-MAX CONSTANT ACTX-CALL-JSON-CAPACITY
+32768 CONSTANT ACTX-RESULT-JSON-CAPACITY
 VARIABLE _ACTXV-KIND
 VARIABLE _ACTXV-ROLE
 VARIABLE _ACTXV-RUN
@@ -267,17 +269,18 @@ VARIABLE _ACTXV-V
 VARIABLE _ACTXV-STATUS
 VARIABLE _ACTXV-C
 VARIABLE _ACTXV-BUF
+VARIABLE _ACTXV-CAP
 VARIABLE _ACTXV-U
 VARIABLE _ACTXV-ERR
 
 : _ACTX-APPEND-TOOL-VALUE  ( kind role -- item status )
     _ACTXV-ROLE ! _ACTXV-KIND ! 0 _ACTXV-BUF !
-    ACTX-JSON-CAPACITY ALLOCATE DUP IF
+    _ACTXV-CAP @ ALLOCATE DUP IF
         2DROP 0 ACTX-S-NOMEM EXIT
     THEN
     DROP DUP _ACTXV-BUF ! DROP
-    _ACTXV-STATUS @ IF
-        JSON-BUILD-RESET _ACTXV-BUF @ ACTX-JSON-CAPACITY JSON-SET-OUTPUT
+    _ACTXV-STATUS @ CBUS-RESULT-BEARING? 0= IF
+        JSON-BUILD-RESET _ACTXV-BUF @ _ACTXV-CAP @ JSON-SET-OUTPUT
         JSON-{ S" ok" 0 JSON-KV-BOOL
         S" status" _ACTXV-STATUS @ JSON-KV-NUM JSON-}
         JSON-OUTPUT-OK? IF
@@ -286,7 +289,7 @@ VARIABLE _ACTXV-ERR
             0 IVJSON-E-CAPACITY
         THEN
     ELSE
-        _ACTXV-V @ _ACTXV-BUF @ ACTX-JSON-CAPACITY IVJSON-ENCODE
+        _ACTXV-V @ _ACTXV-BUF @ _ACTXV-CAP @ IVJSON-ENCODE
     THEN
     _ACTXV-ERR ! _ACTXV-U !
     _ACTXV-ERR @ IF
@@ -301,12 +304,13 @@ VARIABLE _ACTXV-ERR
 : ACTX-APPEND-TOOL-CALL-VALUE  ( run source-a source-u name-a name-u call-a call-u value context -- item status )
     _ACTXV-C ! _ACTXV-V ! _ACTXV-CU ! _ACTXV-CA !
     _ACTXV-NU ! _ACTXV-NA ! _ACTXV-SU ! _ACTXV-SA ! _ACTXV-RUN !
-    0 _ACTXV-STATUS !
+    0 _ACTXV-STATUS ! ACTX-CALL-JSON-CAPACITY _ACTXV-CAP !
     ACTX-K-TOOL-CALL AROLE-ASSISTANT _ACTX-APPEND-TOOL-VALUE ;
 
 : ACTX-APPEND-TOOL-RESULT-VALUE  ( run source-a source-u name-a name-u call-a call-u value status context -- item status )
     _ACTXV-C ! _ACTXV-STATUS ! _ACTXV-V ! _ACTXV-CU ! _ACTXV-CA !
     _ACTXV-NU ! _ACTXV-NA ! _ACTXV-SU ! _ACTXV-SA ! _ACTXV-RUN !
+    ACTX-RESULT-JSON-CAPACITY _ACTXV-CAP !
     ACTX-K-TOOL-RESULT AROLE-TOOL _ACTX-APPEND-TOOL-VALUE ;
 
 : ACTX-DROP-LAST  ( context -- )

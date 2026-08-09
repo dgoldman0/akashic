@@ -154,8 +154,9 @@ retain their displayed action text. A local capability decision additionally
 records the provider, tool and call identity, target ID and generation,
 expected revision, effect bits, canonical-operand encoding and byte length,
 the domain-separated SHA3-256 operand fingerprint, and the exact canonical
-operand. Approval is capped at 4096 canonical operand bytes, so every value
-that can be approved is both displayable and inline in the audit record. An
+operand. Approval is capped at 65,536 canonical operand bytes, matching the
+existing capability-request seal, so every value that can be approved is both
+displayable and inline in the audit record. An
 oversized request cannot be approved; its denial record retains the length and
 fingerprint plus an explicit operand-omission marker.
 
