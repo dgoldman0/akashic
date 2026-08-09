@@ -788,8 +788,11 @@ Before its first cleanup write, mount authenticates and exactly measures every
 record in the complete union. Each record must be either a linked depth-zero
 truncation already at zero size or an unlinked depth-zero deletion with an
 empty root or one through four authenticated inline extent entries and the
-qualified allocation/xattr shape. An unlinked target may own one authenticated
-external xattr block only when its on-media reference count is exactly one;
+qualified allocation/xattr shape. An unlinked target may retain any
+authenticated nonnegative 63-bit size because deletion releases its complete
+map and inode rather than preserving an EOF-selected tail. It may own one
+authenticated external xattr block only when its on-media reference count is
+exactly one;
 shared blocks and xattr value inodes remain unsupported. Each extent entry may
 have an initialized decoded length of 1..32768 blocks or an unwritten decoded
 length of 1..32767 blocks, with
@@ -866,8 +869,12 @@ legacy links and cycles, allocation/checksum failures, and cross-protocol
 duplicate rejection without writes. Per-shape single-record cleanup
 qualification covers modern and legacy empty/one-block cases across 1/2/4 KiB
 geometry, controlled 1 KiB one-block write-prefix and durability-fence cases,
-and pinned e2fsprogs inspection. The 1 KiB profile also qualifies a three-block
-initialized logical-offset extent and a two-block unwritten logical-offset
+and pinned e2fsprogs inspection. Focused modern production coverage also
+reclaims a checksum-valid sparse unlinked orphan with
+`i_size = 2^32 + 777` and one initialized extent under the unchanged
+1,200,000,000-step guard; its collected legacy counterpart remains pending.
+The 1 KiB profile also qualifies a three-block initialized logical-offset
+extent and a two-block unwritten logical-offset
 extent crossing two data groups, including exact coalesced credit, per-group allocation
 accounting, distinct nonzero payload preservation with no overlapping
 data-home write, a byte-identical zero-I/O clean remount, and pinned e2fsprogs

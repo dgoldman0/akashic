@@ -1471,12 +1471,14 @@ def _inline_depth0_unlinked_orphan_patches(
     physical_gap: int = 1,
     seed_payloads: bool = False,
     seed_gap_payloads: bool = False,
+    size_bytes: int = 0,
     base_patches: tuple[tuple[int, bytes], ...] | None = None,
 ) -> tuple[tuple[tuple[int, bytes], ...], tuple[tuple[int, int], ...]]:
     """Give one unlinked inode an exact inline depth-zero extent vector."""
     assert protocol in {"modern", "legacy"}
     assert 1 <= len(extent_specs) <= 4
     assert physical_gap >= 0
+    assert 0 <= size_bytes < (1 << 63)
     previous_logical_end = 0
     for index, (logical_start, block_count, unwritten) in enumerate(extent_specs):
         assert logical_start >= 0
@@ -1699,6 +1701,8 @@ def _inline_depth0_unlinked_orphan_patches(
     _, _, inode_offset = _ext4_inode_record(path, inode_number)
     inode = bytearray(patches[inode_offset])
     assert struct.unpack_from("<HHHH", inode, 0x28) == (0xF30A, 0, 4, 0)
+    struct.pack_into("<I", inode, 0x04, size_bytes & 0xFFFF_FFFF)
+    struct.pack_into("<I", inode, 0x6C, size_bytes >> 32)
     struct.pack_into("<H", inode, 0x2A, len(extent_specs))
     inode[0x34:0x64] = bytes(48)
     for index, (
@@ -1740,6 +1744,7 @@ def _single_extent_unlinked_orphan_patches(
     block_count: int = 1,
     unwritten: bool = False,
     seed_payloads: bool = False,
+    size_bytes: int = 0,
     base_patches: tuple[tuple[int, bytes], ...] | None = None,
 ) -> tuple[tuple[tuple[int, bytes], ...], int]:
     """Give one unlinked inode one contiguous inline depth-zero extent."""
@@ -1752,6 +1757,7 @@ def _single_extent_unlinked_orphan_patches(
         physical_starts=(physical_start,) if physical_start is not None else None,
         physical_gap=0,
         seed_payloads=seed_payloads,
+        size_bytes=size_bytes,
         base_patches=base_patches,
     )
     assert len(ranges) == 1
@@ -18611,6 +18617,39 @@ def test_mount_reclaims_unlinked_singleton_orphan_with_inline_xattr(
     )
     _assert_singleton_unlinked_cleanup_result(result)
 
+    clean_image = result["clean_image"]
+    assert isinstance(clean_image, Path)
+    _, cleared_inode, _ = _ext4_inode_record(clean_image, 18)
+    assert cleared_inode == bytes(256)
+
+
+@pytest.mark.parametrize("protocol", ("modern", "legacy"))
+def test_mount_reclaims_nonzero_64bit_size_unlinked_orphan(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+    protocol: str,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    size_bytes = (1 << 32) + 777
+    patches, data_block = _single_extent_unlinked_orphan_patches(
+        path,
+        protocol=protocol,
+        block_count=1,
+        seed_payloads=True,
+        size_bytes=size_bytes,
+    )
+    _, _, inode_offset = _ext4_inode_record(path, 18)
+    inode = dict(patches)[inode_offset]
+    assert struct.unpack_from("<I", inode, 0x04)[0] == 777
+    assert struct.unpack_from("<I", inode, 0x6C)[0] == 1
+    result = _run_singleton_unlinked_cleanup(
+        path,
+        tmp_path / f"{protocol}-nonzero-size-unlinked-cleanup.img",
+        protocol=protocol,
+        patches=patches,
+        data_block=data_block,
+    )
+    _assert_singleton_unlinked_cleanup_result(result)
     clean_image = result["clean_image"]
     assert isinstance(clean_image, Path)
     _, cleared_inode, _ = _ext4_inode_record(clean_image, 18)

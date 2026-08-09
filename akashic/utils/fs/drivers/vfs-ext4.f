@@ -11939,9 +11939,12 @@ VARIABLE _EXT4-JFI-CP-WRITER
     DUP _EXT4-I.MODE + W@ 0xF000 AND 0x8000 <> IF
         DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
     THEN
-    DUP _EXT4-I.SIZE-LO + L@
-    OVER _EXT4-I.SIZE-HI + L@ OR IF
-        DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    \ Linux recovery deletes an unlinked inode rather than truncating it to
+    \ i_size.  This builder releases the complete authenticated map, so a
+    \ nonzero or sparse size does not narrow its authority.  Still reject the
+    \ signed-host overflow shape on every reauthentication.
+    DUP _EXT4-I.SIZE-HI + L@ 0x80000000 AND IF
+        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
     DUP _EXT4-I.FLAGS + L@ DUP _EXT4-EXTENTS-FL AND 0=
     SWAP _EXT4-JOURNAL-DATA-FL AND 0<> OR IF

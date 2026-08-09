@@ -180,8 +180,11 @@ durable, whose retained data map is an inline depth-0 extent root, and which
 does not use journal-data mode. An authenticated external xattr is retained;
 the root may already be empty or may contain ranges that the bounded
 free-block builder can account for exactly. An unlinked target must be an
-allocated regular file with zero links and zero size and an inline depth-0
-extent root that is either empty or contains one through four extent entries.
+allocated regular file with zero links, an authenticated nonnegative 63-bit
+size, and an inline depth-0 extent root that is either empty or contains one
+through four extent entries. Its size need not be zero because deletion
+releases the complete authenticated map and then removes the inode; EOF does
+not select a retained tail.
 It may additionally own one checksum-valid external xattr block whose on-media
 reference count is exactly one; shared external blocks and xattr value inodes
 remain unsupported. Each extent entry may be initialized or unwritten and
@@ -641,9 +644,11 @@ exactly valid; mount-state reset and active replay clear it.
 
 `_EXT4-JTX-STAGE-FREE-ORPHAN-INODE` is the corresponding first inode-release
 builder. It reauthenticates one canonical selected plan record and accepts
-only an allocated, unlinked regular inode whose size is zero and whose inline
-depth-0 extent root is empty or contains one through four initialized or
-unwritten extents. Every entry must have a zero physical high word.
+only an allocated, unlinked regular inode with a valid nonnegative 63-bit size
+whose inline depth-0 extent root is empty or contains one through four
+initialized or unwritten extents. Unlike linked truncation, unlinked deletion
+does not require zero size: it releases the complete authenticated map and
+zeroes the inode. Every entry must have a zero physical high word.
 Initialized decoded lengths are 1..32768 blocks and unwritten decoded lengths
 are 1..32767 blocks; every `logical_start + decoded_length` must be at most
 `0xffffffff`. A resident inline xattr area is structurally authenticated with
@@ -998,9 +1003,10 @@ image checksums, and hash indices are revalidated before they can drive a
 fill, copy, lookup, or media write. The public binding and capability mask
 remain read-only. Geometry- and arena-bounded transactional completion is
 implemented for unions of the exact linked zero-size inline-depth-0 and
-empty/one-to-four-entry inline-depth-0 unlinked-inode cases under both orphan
-mechanisms. The implementation adds no fixed cleanup record-count
-constant; positive union-drain qualification currently reaches two records.
+nonnegative-size empty/one-to-four-entry inline-depth-0 unlinked-inode cases
+under both orphan mechanisms. The implementation adds no fixed cleanup
+record-count constant; positive union-drain qualification currently reaches
+two records.
 Before a supported linked truncation or unlinked deletion may release storage,
 it publishes every physical range in the inline root together and performs one
 complete allocated-inode scan. Any data, map-metadata, or external-xattr
@@ -1349,8 +1355,9 @@ The remaining boundaries are:
   broad crash/interoperability qualification remain gated.
   Transaction-aware metadata acquisition, checksum-safe typed
   orphan-inode replacement, free-only physical-block accounting, linked
-  zero-size inline depth-0 extent truncation, exact empty/one-to-four-entry
-  inline-depth-0 unlinked data and inode allocation release, target-record
+  zero-size inline depth-0 extent truncation, exact nonnegative-size
+  empty/one-to-four-entry inline-depth-0 unlinked data and inode allocation
+  release, target-record
   scrubbing, exact credit measurement, modern-slot removal, legacy-head
   advancement, and operation/protocol-specific `FINAL`/`MORE` certificates now
   compose one sealed transaction for either orphan mechanism. Production mount
@@ -1371,7 +1378,7 @@ The remaining boundaries are:
   inode/file, a legacy link, allocate writer workspace, or expose a
   user-visible write. Cleanup derives its record count from authenticated
   geometry, checked arithmetic, and caller-arena storage rather than a separate
-  fixed constant, but still does not cover nonzero-size or tail truncation,
+  fixed constant, but still does not cover linked nonzero-size/tail truncation,
   target depth-positive/external extent trees, target legacy direct/indirect
   map mutation, a nonzero physical high word, shared external-xattr reference
   decrement, inline or external xattr value-inode release, or general
@@ -1401,6 +1408,10 @@ The remaining boundaries are:
   xattrs are scrubbed
   with the target record; an inline value-inode reference is refused as
   unsupported, and unexplained nonzero `i_blocks` is rejected as corruption.
+  Focused nonzero-size production coverage now reclaims a checksum-valid
+  modern sparse orphan with `i_size = 2^32 + 777` and one initialized extent
+  under the unchanged 1,200,000,000-step guard. The corresponding legacy case
+  is collected but remains pending.
   Mutation-side orphan-file qualification now uses that inode's complete
   read-profile map rather than an inline-root surrogate. A checksum-valid
   depth-1 orphan-file fixture places all 31 logical blocks behind a preserved
