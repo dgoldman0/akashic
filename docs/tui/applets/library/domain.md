@@ -1,6 +1,7 @@
 # Library applet product boundary
 
-Library is the Desk-owned corpus of material a user deliberately keeps. It owns
+Library is the Library-owned corpus of material a user deliberately keeps,
+hosted and composed by Desk. It owns
 managed documents, immutable captures, metadata, provenance, retained history,
 collections, lifecycle, query policy, and resource projections. Its domain and
 service can run without a renderer in focused tests; that does not make Library
