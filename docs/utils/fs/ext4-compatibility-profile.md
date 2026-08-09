@@ -786,9 +786,10 @@ applicable data map is then authenticated.
 
 Before its first cleanup write, mount authenticates and exactly measures every
 record in the complete union. Each record must be either a linked depth-zero
-truncation already at zero size or an unlinked depth-zero deletion with an
-empty root or one through four authenticated inline extent entries and the
-qualified allocation/xattr shape. An unlinked target may retain any
+truncation already at zero size or an unlinked deletion with an empty or
+one-to-four-entry inline depth-zero extent root, or a legacy direct-only map
+using any of the 12 direct slots with all three indirect roots zero. An
+unlinked target may retain any
 authenticated nonnegative 63-bit size because deletion releases its complete
 map and inode rather than preserving an EOF-selected tail. It may own one
 authenticated external xattr block only when its on-media reference count is
@@ -799,9 +800,12 @@ length of 1..32767 blocks, with
 `logical_start + decoded_length <= 0xffffffff`; these are ext4 `ee_len` and
 logical-domain bounds rather than cleanup caps. Logical and physical ordering,
 aggregate data-plus-xattr `i_blocks`, every exact release range, and the zero
-inactive tail are authenticated and sealed together. The optional xattr block
-is independent of the four format-defined inline extent slots and must not
-overlap them. If any record is outside those per-record shapes, the complete
+inactive tail are authenticated and sealed together. Legacy zero direct slots
+are holes; nonzero slots become ordered singleton ranges, duplicate physical
+pointers are corruption, and any nonzero indirect root is unsupported
+recovery. The optional xattr block is independent of both map families and
+must not overlap their data ranges. If any record is outside those per-record
+shapes, the complete
 union refuses before writer allocation or cleanup mutation. The maximum exact
 coalesced metadata credit across all records sizes one reusable writer. The
 count remains bounded by authenticated filesystem geometry, checked
@@ -823,7 +827,10 @@ order. One exact transaction removes each selected modern slot or advances the
 legacy head to its retained successor, updates and checksums the target inode,
 and for admitted deletions releases every exact data range, the optional
 unique external-xattr block, and the inode allocation plus every touched
-descriptor and super counter. A linked legacy
+descriptor and super counter. The sealed authority retains the map family and
+complete ordered range vector; adjacent physical members may execute as one
+checked allocation-accounting run without replacing those certificate
+entries. A linked legacy
 intermediate record clears its consumed `i_dtime` successor in the same
 transaction; the terminal zero-successor/empty-root case avoids a no-op inode
 rewrite, while linked modern records require `i_dtime` to be zero. Every sealed
@@ -844,12 +851,13 @@ allocation.
 
 Every linked data range and every unlinked release range is admitted through
 one combined filesystem-wide other-inode ownership scan before release. For an
-unlinked target, all four possible inline data ranges and the optional
-external-xattr singleton are published together. An overlap through another
-allocated inode's data, map metadata, or external-xattr pointer is a corrupt
-data-map refusal. The scoped proof is bound to the context, inode, generation,
-exact ordered data tuple, and separate xattr home; it may survive journal-only
-staging and emission but is invalidated before checkpoint can write a home.
+unlinked target, up to four inline extents or 12 direct-slot singletons and the
+optional external-xattr singleton are published together. An overlap through
+another allocated inode's data, map metadata, or external-xattr pointer is a
+corrupt data-map refusal. The scoped proof is bound to the context, inode,
+generation, map family, exact ordered data tuple, and separate xattr home; it
+may survive journal-only staging and emission but is invalidated before checkpoint can
+write a home.
 Whole-union qualification completes this proof for every retained supported
 record before the first record is mutated.
 
@@ -931,7 +939,19 @@ inactive tail. Persistence-traced production measures 1,786,988,013 modern and
 2,196,652,327 legacy guest steps under the scoped 3,000,000,000-step watchdog;
 either clean remount measures 55,772,107. The corresponding direct
 stage/seal/abort workloads measured 615,185,969 and 825,905,086 steps. These
-watchdogs are qualification guards, not implementation capacities. A separate
+watchdogs are qualification guards, not implementation capacities.
+Legacy-direct deletion qualification now fills all 12 direct slots under both
+orphan protocols while retaining 12 ordered singleton certificate/checkpoint
+ranges and an explicit map-family discriminator. Sparse slots 0, 5, and 11
+compact in slot order; duplicate pointers and mismatched `i_blocks` are corrupt,
+and a nonzero indirect root is unsupported. Contiguous singleton execution is
+combined only after exact-vector validation. Full production cleanup with
+`i_size = 2^32 + 777` measures 1,156,337,987 modern and 1,157,813,068 legacy
+guest steps under a scoped 1,300,000,000-step watchdog and leaves released
+payload bytes unchanged. A maximum-union stage/abort regression adds the
+separate unique external-xattr block and exercises all 13 owner ranges in
+577,776,029 steps. Pinned e2fsck acceptance remains a release gate for this
+shape. A separate
 checksum-valid modern orphan-file fixture maps 31 logical blocks through a
 preserved depth-1 external extent node. Linked production cleanup retains its
 exact 34-write/24-flush trace, completes in 1,111,798,161 steps, and reaches a

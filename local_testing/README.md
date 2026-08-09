@@ -206,8 +206,10 @@ idempotence, and both repairable and explicitly fail-closed tears in the
 journal/ext4 landing sequence. The repairable matrix includes exact
 sequential-prefix tears of primary witness removal for both clean landing and
 write-active dirty-empty turnover; damaged locators that cannot prove that
-transition remain refused. Orphan recovery, checksum-torn tail classification,
-ACL enforcement, and every user-visible mutation remain outside this gate.
+transition remain refused. Focused private orphan recovery is qualified later
+in this suite; its complete crash/interoperability matrix, checksum-torn tail
+classification, ACL enforcement, and every user-visible mutation remain
+outside this replay gate.
 This remains an explicit-volume emulator suite rather than a default boot-image
 or automount profile.
 
