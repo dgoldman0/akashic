@@ -3607,7 +3607,6 @@ def _forth_cp_data_vector_checks(
     ranges: tuple[tuple[int, int], ...],
 ) -> list[str]:
     """Return exact checkpoint data-range authority predicates."""
-    assert len(ranges) <= 12
     checks = [
         (
             f"{writer} _EXT4-JWR.CP-DATA-RANGE-COUNT + @ "
@@ -3633,9 +3632,10 @@ def _forth_cp_data_vector_checks(
         )
     checks.append(
         (
-            f"{writer} _EXT4-JWR.CP-DATA-RANGES + "
+            f"{writer} _EXT4-JWR-CP-DATA-RANGES "
             f"{len(ranges) * 2} CELLS + "
-            f"_EXT4-ORPHAN-DELETE-DATA-RANGE-MAX {len(ranges)} - "
+            f"{writer} _EXT4-JWR.CP-DATA-RANGE-CAP + @ "
+            f"{len(ranges)} - "
             "2* CELLS _EXT4-BYTES-ZERO?"
         )
     )
@@ -6510,7 +6510,7 @@ def test_mutation_range_workspace_is_geometry_derived_and_reused(
             "_MR-CTX _EXT4-CTX-SIZE 0 FILL",
             f"{block_size} _MR-CTX _EXT4-C.BSIZE + !",
             (
-                f"{workspace_bytes} A-XMEM ARENA-NEW THROW "
+                f"{workspace_bytes * 2} A-XMEM ARENA-NEW THROW "
                 "CONSTANT _MR-ARENA"
             ),
             "_MR-ARENA _MR-CTX _EXT4-C.ARENA + !",
@@ -6533,14 +6533,40 @@ def test_mutation_range_workspace_is_geometry_derived_and_reused(
                 "CONSTANT _MR-FIRST-ZERO"
             ),
             (
+                "_MR-CTX _EXT4-ENSURE-OWNER-CERT-RANGE-WORKSPACE "
+                "CONSTANT _MR-CERT-FIRST-IOR"
+            ),
+            (
+                "_MR-CTX _EXT4-C.OWNER-CERT-RANGES + @ "
+                "CONSTANT _MR-CERT-PTR"
+            ),
+            (
+                "_MR-CTX _EXT4-C.OWNER-CERT-RANGE-CAP + @ "
+                "CONSTANT _MR-CERT-CAP"
+            ),
+            "_MR-ARENA ARENA-USED CONSTANT _MR-USED-AFTER-CERT",
+            (
+                "_MR-CERT-PTR _MR-CERT-CAP 2* CELLS "
+                "_EXT4-BYTES-ZERO? CONSTANT _MR-CERT-FIRST-ZERO"
+            ),
+            (
                 "_MR-PTR _MR-CAP 2* CELLS 0xA5 FILL "
                 "_MR-CTX _EXT4-ENSURE-MUTATION-RANGE-WORKSPACE "
                 "CONSTANT _MR-REUSE-IOR"
+            ),
+            (
+                "_MR-CERT-PTR _MR-CERT-CAP 2* CELLS 0x5A FILL "
+                "_MR-CTX _EXT4-ENSURE-OWNER-CERT-RANGE-WORKSPACE "
+                "CONSTANT _MR-CERT-REUSE-IOR"
             ),
             "_MR-ARENA ARENA-USED CONSTANT _MR-USED-REUSED",
             (
                 "_MR-PTR _MR-CAP 2* CELLS _EXT4-BYTES-ZERO? "
                 "CONSTANT _MR-REUSED-ZERO"
+            ),
+            (
+                "_MR-CERT-PTR _MR-CERT-CAP 2* CELLS "
+                "_EXT4-BYTES-ZERO? CONSTANT _MR-CERT-REUSED-ZERO"
             ),
             (
                 ": _MR-POPULATE "
@@ -6594,9 +6620,22 @@ def test_mutation_range_workspace_is_geometry_derived_and_reused(
                             f"{workspace_bytes} + ="
                         ),
                         "_MR-FIRST-ZERO",
+                        "_MR-CERT-FIRST-IOR 0=",
+                        f"_MR-CERT-CAP {capacity} =",
+                        (
+                            "_MR-CERT-PTR _MR-PTR "
+                            f"{workspace_bytes} + ="
+                        ),
+                        (
+                            "_MR-USED-AFTER-CERT _MR-USED-AFTER "
+                            f"{workspace_bytes} + ="
+                        ),
+                        "_MR-CERT-FIRST-ZERO",
                         "_MR-REUSE-IOR 0=",
-                        "_MR-USED-REUSED _MR-USED-AFTER =",
+                        "_MR-CERT-REUSE-IOR 0=",
+                        "_MR-USED-REUSED _MR-USED-AFTER-CERT =",
                         "_MR-REUSED-ZERO",
+                        "_MR-CERT-REUSED-ZERO",
                         "_MR-EXACT-IOR 0=",
                         "_MR-EXACT-PUBLISHED",
                         (
@@ -6624,6 +6663,10 @@ def test_mutation_range_workspace_is_geometry_derived_and_reused(
                         "_EXT4-C.MUTATION-RANGES _EXT4-CTX-RESET-SIZE >=",
                         (
                             "_EXT4-C.MUTATION-RANGE-CAP 1 CELLS + "
+                            "_EXT4-C.OWNER-CERT-RANGES <="
+                        ),
+                        (
+                            "_EXT4-C.OWNER-CERT-RANGE-CAP 1 CELLS + "
                             "_EXT4-CTX-SIZE <="
                         ),
                     ]
@@ -6968,11 +7011,38 @@ def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
                 "CONSTANT _JW-SHAPE-IOR CONSTANT _JW-SHAPE"
             ),
             "_JW-META-HASH _JW _EXT4-JWR.META-HASH + !",
+            (
+                "_JW _EXT4-JWR.CP-DATA-RANGES + @ "
+                "CONSTANT _JW-CP-RANGES"
+            ),
+            (
+                "_JW _EXT4-JWR.CP-DATA-RANGE-CAP + @ "
+                "CONSTANT _JW-CP-RANGE-CAP"
+            ),
+            "1 _JW _EXT4-JWR.CP-DATA-RANGES + !",
+            (
+                "3 3 3 _JW-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _JW-BAD-CP-PTR-IOR CONSTANT _JW-BAD-CP-PTR"
+            ),
+            "_JW-CP-RANGES _JW _EXT4-JWR.CP-DATA-RANGES + !",
+            "0 _JW _EXT4-JWR.CP-DATA-RANGE-CAP + !",
+            (
+                "3 3 3 _JW-CTX _EXT4-JWR-ENSURE "
+                "CONSTANT _JW-BAD-CP-CAP-IOR CONSTANT _JW-BAD-CP-CAP"
+            ),
+            (
+                "_JW-CP-RANGE-CAP "
+                "_JW _EXT4-JWR.CP-DATA-RANGE-CAP + !"
+            ),
             "4 _JW _EXT4-JWR.META-USED + !",
             "_JW _EXT4-JTX-ABORT CONSTANT _JW-COUNT-IOR",
             "0 _JW _EXT4-JWR.META-USED + !",
             (
                 "_JW-SHAPE 0= _JW-SHAPE-IOR VFS-E-CORRUPT = AND "
+                "_JW-BAD-CP-PTR 0= AND "
+                "_JW-BAD-CP-PTR-IOR VFS-E-CORRUPT = AND "
+                "_JW-BAD-CP-CAP 0= AND "
+                "_JW-BAD-CP-CAP-IOR VFS-E-CORRUPT = AND "
                 "_JW-COUNT-IOR VFS-E-INVALID = AND "
                 "_JW _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE = AND "
                 "_JW _EXT4-JWR.FREE + @ 6 = AND "
@@ -7155,8 +7225,12 @@ def test_jbd2_writer_arithmetic_and_4k_geometry_are_total(
                 "CONSTANT _JWG-W-IOR CONSTANT _JWG-W"
             ),
             (
-                "_JWG-4K-IOR 0= _JWG-4K-BYTES _EXT4-JWR-SIZE 8192 + = AND "
+                "_JWG-4K-IOR 0= "
+                "_JWG-4K-BYTES _EXT4-JWR-SIZE 8192 + 342 2* CELLS + = AND "
                 "_JWG-W-IOR 0= AND _JWG-W 0<> AND "
+                "_JWG-W _EXT4-JWR.CP-DATA-RANGE-CAP + @ 342 = AND "
+                "_JWG-W _EXT4-JWR-CP-DATA-RANGES "
+                "_JWG-W _EXT4-JWR.SCRATCH-B + @ 4096 + = AND "
                 "_JWG-W _EXT4-JTX-TAGS/BLOCK 254 = AND "
                 "_JWG-W _EXT4-JTX-REVOKES/BLOCK 509 = AND "
                 "254 0 _JWG-W _EXT4-JTX-LOG-BLOCKS 0= SWAP 257 = AND AND "
@@ -17225,7 +17299,7 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
     certificate_checks.append(
         (
             f"_EXT4-JFO-CERT-RANGES {len(data_ranges) * 2} CELLS + "
-            f"_EXT4-ORPHAN-DELETE-DATA-RANGE-MAX {len(data_ranges)} - "
+            f"_EXT4-JFO-CERT-RANGE-CAP {len(data_ranges)} - "
             "2* CELLS _EXT4-BYTES-ZERO?"
         )
     )
@@ -30369,9 +30443,20 @@ def test_failed_mount_retry_reuses_journal_workspace(
                 "CONSTANT _RETRY-RANGE-CAP"
             ),
             (
+                "_RETRY-CTX _EXT4-C.OWNER-CERT-RANGES + @ "
+                "CONSTANT _RETRY-CERT-PTR"
+            ),
+            (
+                "_RETRY-CTX _EXT4-C.OWNER-CERT-RANGE-CAP + @ "
+                "CONSTANT _RETRY-CERT-CAP"
+            ),
+            (
                 ": _RETRY-POISON-RANGES "
                 "_RETRY-RANGE-PTR ?DUP IF "
                 "_RETRY-RANGE-CAP 2* CELLS 0xA5 FILL "
+                "THEN "
+                "_RETRY-CERT-PTR ?DUP IF "
+                "_RETRY-CERT-CAP 2* CELLS 0x5A FILL "
                 "THEN ; _RETRY-POISON-RANGES"
             ),
             "7 _RETRY-CTX _EXT4-C.J.REVOKE-COUNT + !",
@@ -30390,11 +30475,19 @@ def test_failed_mount_retry_reuses_journal_workspace(
                 "_RETRY-MAP 0<> AND "
                 "_RETRY-RANGE-PTR 0<> AND "
                 "_RETRY-RANGE-CAP 0<> AND "
+                "_RETRY-CERT-PTR 0<> AND "
+                "_RETRY-CERT-CAP _RETRY-RANGE-CAP = AND "
                 "_RETRY-CTX _EXT4-C.MUTATION-RANGES + @ "
                 "_RETRY-RANGE-PTR = AND "
                 "_RETRY-CTX _EXT4-C.MUTATION-RANGE-CAP + @ "
                 "_RETRY-RANGE-CAP = AND "
                 "_RETRY-RANGE-PTR _RETRY-RANGE-CAP 2* CELLS "
+                "_EXT4-BYTES-ZERO? AND "
+                "_RETRY-CTX _EXT4-C.OWNER-CERT-RANGES + @ "
+                "_RETRY-CERT-PTR = AND "
+                "_RETRY-CTX _EXT4-C.OWNER-CERT-RANGE-CAP + @ "
+                "_RETRY-CERT-CAP = AND "
+                "_RETRY-CERT-PTR _RETRY-CERT-CAP 2* CELLS "
                 "_EXT4-BYTES-ZERO? AND "
                 "_RETRY-CTX _EXT4-C.J.REVOKE-COUNT + @ 0= AND "
                 "_RETRY-CTX _EXT4-C.J.REVOKE-HITS + @ 0= AND "
