@@ -18972,6 +18972,7 @@ PROFILES["agent-access"] = Profile(
         "tui/applets/agent/access-profile.f",
         "tui/applets/agent/tool-gateway.f",
         "tui/applets/desk/agent-access-policy.f",
+        "tui/applets/desk/agent-cap-catalog.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - access preset and exact target-pin contracts
@@ -18980,12 +18981,14 @@ ENTER-USERLAND
 REQUIRE tui/applets/agent/access-profile.f
 REQUIRE tui/applets/agent/tool-gateway.f
 REQUIRE tui/applets/desk/agent-access-policy.f
+REQUIRE tui/applets/desk/agent-cap-catalog.f
 
 VARIABLE _ac-fails VARIABLE _ac-checks VARIABLE _ac-depth
 VARIABLE _ac-reg VARIABLE _ac-foreign VARIABLE _ac-legit
 VARIABLE _ac-bus VARIABLE _ac-gateway VARIABLE _ac-parent
 VARIABLE _ac-child VARIABLE _ac-run VARIABLE _ac-found-inst
 VARIABLE _ac-found-cap VARIABLE _ac-run-entry
+VARIABLE _ac-fill-byte
 CREATE _ac-profile AGENT-ACCESS-PROFILE-SIZE ALLOT
 CREATE _ac-head PHEAD-SIZE ALLOT
 CREATE _ac-mandate MAND-SIZE ALLOT
@@ -18997,11 +19000,20 @@ CREATE _ac-out-schema CS-SIZE ALLOT
 CREATE _ac-spoof-desc COMP-DESC ALLOT
 CREATE _ac-spoof-cap CAP-DESC ALLOT
 CREATE _ac-policy CPOLICY-SIZE ALLOT
+CREATE _ac-capacity-store 8 CFACET-SIZE + 8 + ALLOT
+CREATE _ac-capacity-copy CFACET-SIZE ALLOT
+
+: _ac-capacity-facet  ( -- facet ) _ac-capacity-store 8 + ;
 
 : _ac-assert  ( flag -- )
     1 _ac-checks +! 0= IF 1 _ac-fails +! ." ASSERT " _ac-checks @ . CR THEN ;
 : _ac-rid!  ( value rid -- ) DUP RID-CLEAR ! ;
 : _ac-handler  ( request instance -- status ) 2DROP CBUS-S-OK ;
+: _ac-filled?  ( a u byte -- flag )
+    _ac-fill-byte ! OVER + SWAP ?DO
+        I C@ _ac-fill-byte @ <> IF 0 UNLOOP EXIT THEN
+    LOOP
+    -1 ;
 : _ac-common-budgets?  ( profile -- flag )
     DUP AAP.HISTORY-ITEMS @ 12 =
     OVER AAP.HISTORY-BYTES @ 4096 = AND
@@ -19051,6 +19063,23 @@ CREATE _ac-policy CPOLICY-SIZE ALLOT
     _ac-profile AAP.TOOL-BUDGET @ 8 = _ac-assert
     _ac-profile AAP.DISCLOSURE-BUDGET @ 49152 = _ac-assert
 
+    AAP-PRESET-PRACTICE-LIBRARY-BURROW
+        _ac-profile DAP-PRESET! AAP-S-OK = _ac-assert
+    _ac-profile AAP-VALID? _ac-assert
+    _ac-profile DAP-PROFILE-VALID? _ac-assert
+    _ac-profile AAP-ID$ S" desk.practice-library-burrow" STR-STR= _ac-assert
+    _ac-profile AAP-LABEL$ S" Practice Library Burrow" STR-STR= _ac-assert
+    _ac-profile AAP.FLAGS @ AAP-F-CHAT-HISTORY
+        AAP-F-CONTEXT-OBSERVE OR AAP-F-REVIEW-CHANGES OR = _ac-assert
+    _ac-profile AAP.EFFECTS @ CAP-E-OBSERVE CAP-E-NAVIGATE OR
+        CAP-E-MUTATE OR CAP-E-PERSIST OR = _ac-assert
+    _ac-profile AAP.EFFECTS @ CAP-E-DESTRUCTIVE CAP-E-EXTERNAL OR AND
+        0= _ac-assert
+    _ac-profile AAP.DISPOSITION @ MAND-D-COMMIT = _ac-assert
+    _ac-profile _ac-common-budgets? _ac-assert
+    _ac-profile AAP.TOOL-BUDGET @ 12 = _ac-assert
+    _ac-profile AAP.DISCLOSURE-BUDGET @ 49152 = _ac-assert
+
     \ A structurally coherent mutation must not smuggle Assist authority
     \ under the trusted Chat-only preset identity.
     AAP-PRESET-CHAT-ONLY _ac-profile DAP-PRESET! AAP-S-OK = _ac-assert
@@ -19070,6 +19099,150 @@ CREATE _ac-policy CPOLICY-SIZE ALLOT
     _ac-profile AAP-VALID? _ac-assert
     _ac-profile DAP-PROFILE-VALID? _ac-assert
     _ac-profile AAP-ID$ S" desk.practice-read" STR-STR= _ac-assert ;
+
+VARIABLE _ac-ca VARIABLE _ac-cu VARIABLE _ac-oa VARIABLE _ac-ou
+VARIABLE _ac-effects VARIABLE _ac-flags VARIABLE _ac-max
+VARIABLE _ac-expected-presets
+VARIABLE _ac-preset
+
+: _ac-candidate-find  ( component-a component-u op-a op-u -- candidate|0 )
+    _ac-ou ! _ac-oa ! _ac-cu ! _ac-ca !
+    DESK-AGENT-CANDIDATE-N 0 ?DO
+        I DESK-AGENT-CANDIDATE-NTH DUP DACAND-COMPONENT$
+        _ac-ca @ _ac-cu @ STR-STR= IF
+            DUP DACAND-OP$ _ac-oa @ _ac-ou @ STR-STR= IF
+                UNLOOP EXIT
+            THEN
+        THEN
+        DROP
+    LOOP
+    0 ;
+
+: _ac-candidate-exact?
+  ( component-a component-u op-a op-u effects flags max presets -- flag )
+    _ac-expected-presets ! _ac-max ! _ac-flags ! _ac-effects !
+    _ac-candidate-find DUP 0= IF EXIT THEN
+    DUP DACAND.EFFECTS @ _ac-effects @ =
+    OVER DACAND.FLAGS @ _ac-flags @ = AND
+    OVER DACAND.MAX-RESULT @ _ac-max @ = AND
+    SWAP DACAND.PRESETS @ _ac-expected-presets @ = AND ;
+
+: _ac-allowed-count  ( preset -- count )
+    _ac-preset ! 0
+    DESK-AGENT-CANDIDATE-N 0 ?DO
+        I DESK-AGENT-CANDIDATE-NTH _ac-preset @ DACAND-ALLOWED? IF 1+ THEN
+    LOOP ;
+
+: _ac-catalog  ( -- )
+    DESK-AGENT-CANDIDATE-N 23 = _ac-assert
+    DESK-AGENT-CANDIDATES-VALID? _ac-assert
+    AAP-PRESET-CHAT-ONLY _ac-allowed-count 0= _ac-assert
+    AAP-PRESET-PRACTICE-READ _ac-allowed-count 13 = _ac-assert
+    AAP-PRESET-PRACTICE-ASSIST _ac-allowed-count 20 = _ac-assert
+    AAP-PRESET-PRACTICE-LIBRARY-BURROW _ac-allowed-count 23 = _ac-assert
+
+    S" org.akashic.library.applet" S" library.status"
+        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 56
+        DACAND-P-READ DACAND-P-ASSIST OR DACAND-P-LIBRARY-BURROW OR
+        _ac-candidate-exact? _ac-assert
+    S" org.akashic.library.applet" S" library.document.create"
+        CAP-E-MUTATE CAP-E-PERSIST OR DACAND-REVIEW-FLAGS 357
+        DACAND-P-ASSIST DACAND-P-LIBRARY-BURROW OR
+        _ac-candidate-exact? _ac-assert
+    S" org.akashic.library.applet" S" library.collection.create"
+        CAP-E-MUTATE CAP-E-PERSIST OR DACAND-REVIEW-FLAGS 270
+        DACAND-P-ASSIST DACAND-P-LIBRARY-BURROW OR
+        _ac-candidate-exact? _ac-assert
+    S" org.akashic.streams" S" streams.burrow.create"
+        CAP-E-MUTATE DACAND-REVIEW-FLAGS 806 DACAND-P-LIBRARY-BURROW
+        _ac-candidate-exact? _ac-assert
+    S" org.akashic.streams" S" streams.burrow.status"
+        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 744
+        DACAND-P-READ DACAND-P-ASSIST OR DACAND-P-LIBRARY-BURROW OR
+        _ac-candidate-exact? _ac-assert
+    S" org.akashic.streams" S" streams.burrow.start"
+        CAP-E-MUTATE DACAND-REVIEW-FLAGS 806 DACAND-P-LIBRARY-BURROW
+        _ac-candidate-exact? _ac-assert
+    S" org.akashic.streams" S" streams.burrow.stop"
+        CAP-E-MUTATE DACAND-REVIEW-FLAGS 806 DACAND-P-LIBRARY-BURROW
+        _ac-candidate-exact? _ac-assert
+    S" org.akashic.library.applet" S" library.document.query"
+        _ac-candidate-find 0= _ac-assert
+    S" org.akashic.library.applet" S" library.document.read"
+        _ac-candidate-find 0= _ac-assert ;
+
+: _ac-capacity  ( -- )
+    CFENTRY-SIZE 112 = _ac-assert
+    CFACET-SIZE 2824 = _ac-assert
+    AGENT-MANDATE-RUN-SIZE 3176 = _ac-assert
+    _ac-capacity-store 8 CFACET-SIZE + 8 + 0xA5 FILL
+    _ac-capacity-facet CFACET-INIT
+    101 _ac-capacity-facet CFACET.ID _ac-rid!
+    102 _ac-capacity-facet CFACET.PRACTICE-ID _ac-rid!
+    103 _ac-capacity-facet CFACET.EPOCH !
+    104 _ac-capacity-facet CFACET.CONTEXT-ID !
+    105 _ac-capacity-facet CFACET.CONTEXT-GEN !
+    106 _ac-capacity-facet CFACET.REVISION !
+    DESK-AGENT-CANDIDATE-N 0 ?DO
+        107 108 CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 8
+        I DESK-AGENT-CANDIDATE-NTH DACAND-OP$
+        _ac-capacity-facet CFACET-ADD CFACET-S-OK = _ac-assert
+    LOOP
+    107 108 CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 8 S" capacity.spare"
+        _ac-capacity-facet CFACET-ADD CFACET-S-OK = _ac-assert
+    _ac-capacity-facet CFACET.COUNT @ CFACET-MAX-ENTRIES = _ac-assert
+    _ac-capacity-facet CFACET-VALID? _ac-assert
+    _ac-capacity-facet _ac-capacity-copy CFACET-SIZE MOVE
+    107 108 CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 8 S" capacity.overflow"
+        _ac-capacity-facet CFACET-ADD CFACET-S-FULL = _ac-assert
+    _ac-capacity-facet CFACET-SIZE _ac-capacity-copy CFACET-SIZE COMPARE
+        0= _ac-assert
+    _ac-capacity-store 8 0xA5 _ac-filled? _ac-assert
+    _ac-capacity-facet CFACET-SIZE + 8 0xA5 _ac-filled? _ac-assert
+    23 _ac-capacity-facet CFACET-NTH CFENTRY-OP@
+        S" capacity.spare" STR-STR= _ac-assert
+    24 _ac-capacity-facet CFACET-NTH 0= _ac-assert
+
+    _ac-head PHEAD-INIT
+    101 _ac-head PHEAD.ID _ac-rid!
+    102 _ac-head PHEAD.CURRENT-ROOT _ac-rid!
+    103 CTX-NEW DUP 0= _ac-assert DROP _ac-parent !
+    _ac-head _ac-parent @ CTX.PRACTICE !
+    _ac-parent @ CTX-CHILD-NEW DUP 0= _ac-assert DROP _ac-child !
+    _ac-head PHEAD.ID _ac-capacity-facet CFACET.PRACTICE-ID RID-COPY
+    103 _ac-capacity-facet CFACET.EPOCH !
+    _ac-child @ CTX.ID @ _ac-capacity-facet CFACET.CONTEXT-ID !
+    _ac-child @ CTX.GENERATION @ _ac-capacity-facet CFACET.CONTEXT-GEN !
+
+    _ac-mandate MAND-INIT
+    109 _ac-mandate MAND.ID _ac-rid!
+    103 _ac-mandate MAND.ACTIVATION-EPOCH !
+    CPRINC-AGENT _ac-mandate MAND.PRINCIPAL !
+    _ac-child @ CTX.ID @ _ac-mandate MAND.CONTEXT-ID !
+    _ac-child @ CTX.GENERATION @
+        _ac-mandate MAND.CONTEXT-GENERATION !
+    CAP-E-OBSERVE _ac-mandate MAND.EFFECTS !
+    MAND-D-READ-ONLY _ac-mandate MAND.DISPOSITION !
+    24 _ac-mandate MAND.TOOL-BUDGET !
+    192 _ac-mandate MAND.DISCLOSURE-BUDGET !
+    _ac-head PHEAD.ID _ac-mandate MAND.PRACTICE-ID RID-COPY
+    _ac-capacity-facet CFACET.ID
+        _ac-mandate MAND.INPUT-FACET-ID RID-COPY
+    _ac-capacity-facet CFACET.ID
+        _ac-mandate MAND.DISCLOSURE-FACET-ID RID-COPY
+
+    _ac-head _ac-child @ _ac-mandate _ac-capacity-facet AMRUN-NEW
+    DUP AMRUN-S-OK = _ac-assert DROP _ac-run !
+    _ac-run @ AMRUN.ABI @ AMRUN-ABI-VERSION = _ac-assert
+    _ac-run @ AMRUN.SIZE @ AGENT-MANDATE-RUN-SIZE = _ac-assert
+    _ac-run @ AMRUN.FACET CFACET.COUNT @
+        CFACET-MAX-ENTRIES = _ac-assert
+    _ac-capacity-facet CFACET-SIZE _ac-run @ AMRUN.FACET CFACET-SIZE
+        COMPARE 0= _ac-assert
+    23 _ac-run @ AMRUN.FACET CFACET-NTH CFENTRY-OP@
+        S" capacity.spare" STR-STR= _ac-assert
+    _ac-run @ AMRUN-FREE 0 _ac-run !
+    _ac-parent @ CTX-FREE 0 _ac-parent ! ;
 
 : _ac-collision  ( -- )
     _ac-in-schema CS-INIT CV-T-NULL _ac-in-schema CS-ALLOW!
@@ -19229,6 +19402,8 @@ CREATE _ac-policy CPOLICY-SIZE ALLOT
 : _ac-run-all  ( -- )
     0 _ac-fails ! 0 _ac-checks ! DEPTH _ac-depth !
     _ac-presets
+    _ac-catalog
+    _ac-capacity
     _ac-collision
     DEPTH DUP _ac-depth @ <> IF
         ." STACK DEPTH " _ac-depth @ . ." -> " DUP . CR
@@ -19345,60 +19520,60 @@ VARIABLE _dah-hrun
 : _dah-observe-set?  ( facet -- flag )
     _dah-eft !
     S" daybook.agenda.markdown" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" daybook.source" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" pad.document.active" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" pad.document.text" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" fexplorer.resource.selected" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" fexplorer.preview.text" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" grid.cell.selected" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 40 _dah-eft @ _dah-entry-exact?
+        DACAND-OBSERVE-FLAGS 40 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" grid.workbook.csv" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" grid.source" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" streams.source.query" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" streams.source.read" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         _dah-eft @ _dah-entry-exact? ;
 
 : _dah-review-set?  ( facet -- flag )
     _dah-eft !
     S" daybook.task.capture" CAP-E-MUTATE CAP-E-PERSIST OR
-        _DESK-AGENT-REVIEW-FLAGS 8 _dah-eft @ _dah-entry-exact?
+        DACAND-REVIEW-FLAGS 8 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" pad.document.open" CAP-E-NAVIGATE
-        _DESK-AGENT-REVIEW-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-REVIEW-FLAGS 516 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" fexplorer.resource.reveal" CAP-E-NAVIGATE
-        _DESK-AGENT-REVIEW-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-REVIEW-FLAGS 516 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" grid.cell.set-selected" CAP-E-MUTATE
-        _DESK-AGENT-REVIEW-FLAGS 40 _dah-eft @ _dah-entry-exact?
+        DACAND-REVIEW-FLAGS 40 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" grid.workbook.save" CAP-E-PERSIST
-        _DESK-AGENT-REVIEW-FLAGS 8 _dah-eft @ _dah-entry-exact? ;
+        DACAND-REVIEW-FLAGS 8 _dah-eft @ _dah-entry-exact? ;
 
 : _dah-safe-effects?  ( facet -- flag )
     DUP CFACET.COUNT @ 0 ?DO

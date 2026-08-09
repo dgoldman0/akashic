@@ -78,6 +78,7 @@ REQUIRE ../../../net/external-io.f
 REQUIRE ../../../interop/capability-facet.f
 REQUIRE ../daybook/shared-document.f
 REQUIRE agent-access-policy.f
+REQUIRE agent-cap-catalog.f
 REQUIRE sandbox-service.f
 
 \ =====================================================================
@@ -1505,94 +1506,26 @@ VARIABLE _DTC-DESC
     _DMA-EFFECTS @ _DMF-EFFECTS @ OR _DMF-EFFECTS !
     CFACET-S-OK ;
 
-CFENTRY-F-VISIBLE CFENTRY-F-INVOKE OR CFENTRY-F-AUTO-OBSERVE OR
-CFENTRY-F-DISCLOSE-RESULT OR CONSTANT _DESK-AGENT-OBSERVE-FLAGS
+VARIABLE _DMC-CANDIDATE
 
-CFENTRY-F-VISIBLE CFENTRY-F-INVOKE OR CFENTRY-F-REVIEW-COMMIT OR
-CFENTRY-F-DISCLOSE-RESULT OR CONSTANT _DESK-AGENT-REVIEW-FLAGS
-
-\ 4 KiB raw can expand roughly 6x in capability JSON and is escaped a second
-\ time on the OpenAI continuation wire; larger results require pagination.
-4096 CONSTANT _DESK-AGENT-TEXT-MAX
-
-: _DESK-MANDATE-OBSERVE-LIST  ( -- status )
-    S" org.akashic.daybook" _DESK-TRUSTED-COMP
-        S" daybook.agenda.markdown" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
-        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
-    S" org.akashic.daybook" _DESK-TRUSTED-COMP
-        S" daybook.source" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 516
-        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
-    S" org.akashic.pad" _DESK-TRUSTED-COMP
-        S" pad.document.active" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 516
-        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
-    S" org.akashic.pad" _DESK-TRUSTED-COMP
-        S" pad.document.text" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
-        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
-    S" org.akashic.fexplorer" _DESK-TRUSTED-COMP
-        S" fexplorer.resource.selected" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 516
-        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
-    S" org.akashic.fexplorer" _DESK-TRUSTED-COMP
-        S" fexplorer.preview.text" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
-        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
-    S" org.akashic.grid" _DESK-TRUSTED-COMP
-        S" grid.cell.selected" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 40
-        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
-    S" org.akashic.grid" _DESK-TRUSTED-COMP
-        S" grid.workbook.csv" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
-        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
-    S" org.akashic.grid" _DESK-TRUSTED-COMP
-        S" grid.source" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 516
-        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
-    \ Streams source discovery is deliberately read-only here.  The facet
-    \ exposes sanitized source metadata, never endpoints/configuration, and
-    \ grants no ambient refresh or registry mutation authority.
-    S" org.akashic.streams" _DESK-TRUSTED-COMP
-        S" streams.source.query" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
-        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
-    S" org.akashic.streams" _DESK-TRUSTED-COMP
-        S" streams.source.read" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
-        _DESK-MANDATE-CAP+ ;
-
-: _DESK-MANDATE-REVIEW-LIST  ( -- status )
-    S" org.akashic.daybook" _DESK-TRUSTED-COMP
-        S" daybook.task.capture"
-        CAP-E-MUTATE CAP-E-PERSIST OR _DESK-AGENT-REVIEW-FLAGS 8
-        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
-    S" org.akashic.pad" _DESK-TRUSTED-COMP
-        S" pad.document.open" CAP-E-NAVIGATE
-        _DESK-AGENT-REVIEW-FLAGS 516
-        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
-    S" org.akashic.fexplorer" _DESK-TRUSTED-COMP
-        S" fexplorer.resource.reveal" CAP-E-NAVIGATE
-        _DESK-AGENT-REVIEW-FLAGS 516
-        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
-    S" org.akashic.grid" _DESK-TRUSTED-COMP
-        S" grid.cell.set-selected" CAP-E-MUTATE
-        _DESK-AGENT-REVIEW-FLAGS 40
-        _DESK-MANDATE-CAP+ ?DUP IF EXIT THEN
-    S" org.akashic.grid" _DESK-TRUSTED-COMP
-        S" grid.workbook.save" CAP-E-PERSIST
-        _DESK-AGENT-REVIEW-FLAGS 8
-        _DESK-MANDATE-CAP+ ;
+: _DESK-MANDATE-CANDIDATE+  ( candidate -- status )
+    DUP _DMC-CANDIDATE !
+    _DMF-PROFILE @ AAP.PRESET @ DACAND-ALLOWED? 0= IF
+        CFACET-S-OK EXIT
+    THEN
+    _DMC-CANDIDATE @ DACAND-COMPONENT$ _DESK-TRUSTED-COMP
+    _DMC-CANDIDATE @ DACAND-OP$
+    _DMC-CANDIDATE @ DACAND.EFFECTS @
+    _DMC-CANDIDATE @ DACAND.FLAGS @
+    _DMC-CANDIDATE @ DACAND.MAX-RESULT @
+    _DESK-MANDATE-CAP+ ;
 
 : _DESK-MANDATE-COMPILE-ACCESS  ( -- status )
-    _DMF-PROFILE @ AAP.FLAGS @ AAP-F-CONTEXT-OBSERVE AND IF
-        _DESK-MANDATE-OBSERVE-LIST ?DUP IF EXIT THEN
-    THEN
-    _DMF-PROFILE @ AAP.FLAGS @ AAP-F-REVIEW-CHANGES AND IF
-        _DESK-MANDATE-REVIEW-LIST ?DUP IF EXIT THEN
-    THEN
+    DESK-AGENT-CANDIDATES-VALID? 0= IF CFACET-S-INVALID EXIT THEN
+    DESK-AGENT-CANDIDATE-N 0 ?DO
+        I DESK-AGENT-CANDIDATE-NTH _DESK-MANDATE-CANDIDATE+
+        ?DUP IF UNLOOP EXIT THEN
+    LOOP
     CFACET-S-OK ;
 
 : _DESK-MANDATE-ID!  ( tag-a tag-u destination -- )

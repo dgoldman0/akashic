@@ -236,8 +236,19 @@ Desk owns the host lifecycle and policy composition, not those records. The
 composition starts with the exact `Chat only` preset. `Practice read only`
 adds bounded observations from trusted built-in applet instances, while
 `Practice assist` also adds fixed local operations that always require review.
+`Practice Library Burrow` extends Assist with reviewed Streams burrow create,
+start, and stop operations and raises the per-run tool budget from 8 to 12.
 Each scoped run receives a freshly compiled Practice Mandate; the selected
 profile is policy input and is not itself authority.
+
+Desk compiles those facets from its closed
+`agent-cap-catalog.f` table, not from component registration or registry
+enumeration. The complete authority matrix is 0 rows for Chat, 13 bounded
+observations for Read, 20 rows for Assist, and 23 rows for Library Burrow.
+Compilation still requires each row's exact trusted built-in descriptor, a live
+instance and matching operation effects, so a smaller Desk composition receives
+only its live subset. Library query/read and all destructive or external effects
+remain outside every Agent profile.
 
 Children can borrow the composition through the Desk interoperability endpoint:
 

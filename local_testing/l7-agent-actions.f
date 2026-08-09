@@ -65,17 +65,23 @@ VARIABLE _L7AA-REFRESH-CALLS
     _L7AA-SETTINGS _L7AA-PROVIDER APROV.RUN-SETTINGS ! ;
 
 : _L7AA-UIDL-INIT  ( -- )
-    S" <uidl><region id=agent-body/><label id=state text=Unset/></uidl>"
+    S" <uidl><region id=agent-body/><label id=access text=Unset/><label id=state text=Unset/></uidl>"
         UIDL-PARSE _L7AA-ASSERT
     S" agent-body" UIDL-BY-ID DUP 0<> _L7AA-ASSERT _AG-E-BODY !
+    S" access" UIDL-BY-ID DUP 0<> _L7AA-ASSERT _AG-E-ACCESS !
     S" state" UIDL-BY-ID DUP 0<> _L7AA-ASSERT _AG-E-STATE ! ;
 
 : _L7AA-STATE=  ( expected-a expected-u -- flag )
     _AG-E-STATE @ S" text" UIDL-ATTR 0= IF 2DROP 2DROP 0 EXIT THEN
     2SWAP STR-STR= ;
 
+: _L7AA-ACCESS=  ( expected-a expected-u -- flag )
+    _AG-E-ACCESS @ S" text" UIDL-ATTR 0= IF 2DROP 2DROP 0 EXIT THEN
+    2SWAP STR-STR= ;
+
 : _L7AA-RENDER-BEGIN  ( -- )
     _AG-E-BODY @ UIDL-CLEAN!
+    _AG-E-ACCESS @ UIDL-CLEAN!
     _AG-E-STATE @ UIDL-CLEAN! ;
 
 : _L7AA-RENDERED?  ( -- flag )
@@ -192,6 +198,16 @@ VARIABLE _L7AA-REVISION
         ARUNTIME-ACCESS-POLICY! AAP-S-OK = _L7AA-ASSERT
 
     0 _L7AA-SELECT-MODE !
+    _L7AA-RENDER-BEGIN
+    0 _AG-DO-ACCESS-LIBRARY-BURROW
+    S" Agent access profile changed" _L7AA-TOAST= _L7AA-ASSERT
+    _L7AA-RUNTIME @ ARUNTIME-ACCESS-PROFILE DUP 0<> _L7AA-ASSERT
+    DUP DAP-PROFILE-VALID? _L7AA-ASSERT
+    AAP.PRESET @ AAP-PRESET-PRACTICE-LIBRARY-BURROW = _L7AA-ASSERT
+    S" Practice Library Burrow" _L7AA-ACCESS= _L7AA-ASSERT
+    _AG-E-BODY @ UIDL-DIRTY?
+        _AG-E-ACCESS @ UIDL-DIRTY? AND _L7AA-ASSERT
+
     AAP-PRESET-CHAT-ONLY _L7AA-RUNTIME @ ARUNTIME-ACCESS-PRESET!
         AAP-S-OK = _L7AA-ASSERT
     _L7AA-LIVE-CHAT? _L7AA-ASSERT

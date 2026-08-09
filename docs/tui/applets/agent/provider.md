@@ -105,15 +105,32 @@ and one live instance, while the capability bus still checks and consumes its
 sealed grant. Changing the visible profile during a run or review is rejected,
 and a scoped run fails closed if Desk's Mandate factory is unavailable.
 
+`tui/applets/desk/agent-cap-catalog.f` is Desk's closed, declarative policy
+input for that compilation. Applets and packages cannot register Agent rows.
+Each catalog row fixes the component identity, operation identity, effects,
+review/disclosure flags, result bound, and allowed presets. Desk still omits a
+row unless the exact trusted built-in descriptor has a live instance whose
+capability effects match the row, so the table neither discovers components nor
+creates authority. The facet ABI holds 24 entries: the current closed catalog
+uses 23 and retains one checked boundary entry rather than truncating a complete
+Desk authority set to the former 16-entry implementation limit.
+
 Desk starts in **Chat only**. The built-in profiles are deliberately exact:
 
-| Profile | Agent-visible authority |
-|---|---|
-| Chat only | Bounded prior user/assistant turns; no applet capabilities |
-| Practice read only | Chat history plus the fixed, bounded observation facet; no mutation |
-| Practice assist | The read facet plus fixed navigation, mutation, and persistence operations, each requiring one visible local review |
+| Profile | Full-Desk rows | Tool calls | Disclosure bytes | Agent-visible authority |
+|---|---:|---:|---:|---|
+| Chat only | 0 | 0 | 8192 | Bounded prior user/assistant turns; no applet capabilities |
+| Practice read only | 13 | 4 | 32768 | Chat history plus bounded Daybook, Pad, Files, Grid, Streams and Library status observations; no mutation |
+| Practice assist | 20 | 8 | 49152 | The read facet plus fixed local navigation, ordinary applet changes, and reviewed Library document/collection creation |
+| Practice Library Burrow | 23 | 12 | 49152 | The assist facet plus reviewed Streams burrow create, start, and stop operations |
 
-Destructive and external effects are not present in any built-in profile.
+The row counts are maxima for a complete Desk composition; a run omits rows for
+trusted applets or operations that are not live. Library document query/read is
+intentionally absent because those potentially large values are staged through
+Desk context rather than exposed as ambient Agent tools. Every non-observation
+row requires one visible local review. Destructive and external effects are not
+present in any built-in profile.
+
 Observation results are capped per facet entry (text results currently at 4096 raw
 bytes), prompts at 512 bytes, and prior history at 12 messages and 4096 bytes.
 Each run also receives a ten-minute wall-time budget, a profile-specific tool

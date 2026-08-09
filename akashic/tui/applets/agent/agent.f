@@ -239,6 +239,7 @@ VARIABLE _AGSE-I
                         AAP-PRESET-CHAT-ONLY OF S" Chat" ENDOF
                         AAP-PRESET-PRACTICE-READ OF S" Read" ENDOF
                         AAP-PRESET-PRACTICE-ASSIST OF S" Assist" ENDOF
+                        AAP-PRESET-PRACTICE-LIBRARY-BURROW OF S" Burrow" ENDOF
                         S" Scoped" ROT
                     ENDCASE
                 ELSE
@@ -1273,6 +1274,8 @@ VARIABLE _AG-REVIEW-APPROVED
 : _AG-DO-ACCESS-CHAT   ( elem -- ) DROP AAP-PRESET-CHAT-ONLY _AG-ACCESS! ;
 : _AG-DO-ACCESS-READ   ( elem -- ) DROP AAP-PRESET-PRACTICE-READ _AG-ACCESS! ;
 : _AG-DO-ACCESS-ASSIST ( elem -- ) DROP AAP-PRESET-PRACTICE-ASSIST _AG-ACCESS! ;
+: _AG-DO-ACCESS-LIBRARY-BURROW  ( elem -- )
+    DROP AAP-PRESET-PRACTICE-LIBRARY-BURROW _AG-ACCESS! ;
 
 : _AG-DO-REFRESH-MODELS ( elem -- )
     DROP _AG-RUNTIME @ ARUNTIME-RUN-SETTINGS-REFRESH DUP
@@ -1363,6 +1366,7 @@ VARIABLE _AG-REVIEW-APPROVED
     S" access-chat" ['] _AG-DO-ACCESS-CHAT UTUI-DO!
     S" access-read" ['] _AG-DO-ACCESS-READ UTUI-DO!
     S" access-assist" ['] _AG-DO-ACCESS-ASSIST UTUI-DO!
+    S" access-library-burrow" ['] _AG-DO-ACCESS-LIBRARY-BURROW UTUI-DO!
     S" quit" ['] _AG-DO-QUIT UTUI-DO!
     S" about" ['] _AG-DO-ABOUT UTUI-DO!
     _AG-E-BODY @ ?DUP IF UTUI-FOCUS! THEN

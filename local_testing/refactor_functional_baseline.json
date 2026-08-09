@@ -209,7 +209,7 @@
       "uidl_surface": {
         "path": "akashic/tui/applets/agent/agent.uidl",
         "menus": ["Agent", "Run", "Connection", "Access", "Review", "Help"],
-        "actions": ["about", "access-assist", "access-chat", "access-read", "account", "approve", "cancel", "clear", "clear-credential", "credential", "deny", "prompt", "quit", "reconnect", "refresh-models", "settings"],
+        "actions": ["about", "access-assist", "access-chat", "access-library-burrow", "access-read", "account", "approve", "cancel", "clear", "clear-credential", "credential", "deny", "prompt", "quit", "reconnect", "refresh-models", "settings"],
         "shortcuts": {"account": "F9", "approve": "F6", "cancel": "Escape", "clear-credential": "Ctrl+Shift+K", "credential": "Ctrl+K", "deny": "F7", "prompt": "Ctrl+L", "quit": "Ctrl+Q", "settings": "F8"},
         "element_ids": ["access", "agent-body", "effort", "mbar", "meta", "model", "provider", "sbar", "source-class", "state"]
       },
@@ -234,9 +234,10 @@
         {"path": "akashic/tui/applets/agent/providers/devtools/scripted.f", "required_literals": ["org.akashic.agent.testing.scripted", "org.akashic.agent.source.testing.scripted"]},
         {"path": "akashic/tui/applets/agent/providers/openai/source.f", "required_literals": ["org.akashic.agent.source.openai"]},
         {"path": "akashic/tui/applets/agent/providers/codex/source.f", "required_literals": ["org.akashic.agent.source.codex"]},
-        {"path": "akashic/tui/applets/agent/access-profile.f", "required_literals": ["AAP-PRESET-CHAT-ONLY", "AAP-PRESET-PRACTICE-READ", "AAP-PRESET-PRACTICE-ASSIST", "AAP-VALID?"]},
+        {"path": "akashic/tui/applets/agent/access-profile.f", "required_literals": ["AAP-PRESET-CHAT-ONLY", "AAP-PRESET-PRACTICE-READ", "AAP-PRESET-PRACTICE-ASSIST", "AAP-PRESET-PRACTICE-LIBRARY-BURROW", "AAP-VALID?"]},
         {"path": "akashic/tui/applets/agent/sandbox-operations.f", "required_literals": ["AGENT-SBOX-COMPILE", "AGENT-SBOX-VERIFY", "AGENT-SBOX-TEST", "AGENT-SBOX-INVOKE", "AGENT-SBOX-RESULT-RELEASE"]},
-        {"path": "akashic/tui/applets/desk/agent-access-policy.f", "required_literals": ["desk.chat-only", "desk.practice-read", "desk.practice-assist", "DAP-PROFILE-VALID?", "DAP-RUNTIME-POLICY", "DAP-RUNTIME-VALID?"]}
+        {"path": "akashic/tui/applets/desk/agent-access-policy.f", "required_literals": ["desk.chat-only", "desk.practice-read", "desk.practice-assist", "desk.practice-library-burrow", "DAP-PROFILE-VALID?", "DAP-RUNTIME-POLICY", "DAP-RUNTIME-VALID?"]},
+        {"path": "akashic/tui/applets/desk/agent-cap-catalog.f", "required_literals": ["DESK-AGENT-CANDIDATES", "DESK-AGENT-CANDIDATES-VALID?", "library.status", "library.document.create", "library.collection.create", "streams.burrow.create", "streams.burrow.status", "streams.burrow.start", "streams.burrow.stop"]}
       ],
       "behaviors": [
         {
@@ -251,7 +252,7 @@
           "id": "agent.access-and-tool-security",
           "coverage": "covered",
           "facets": ["interfaces", "failures", "journeys"],
-          "preserve": ["Chat-only, Practice read-only and Practice assist presets with exact targets and budgets", "Tool approval/denial, operand seals, audit, races, quiescence and capacity", "Provider-invisible sandbox compile, verify and test operations, exact-revision invocation, detached copied results and scrubbed result release", "Desk-shared Agent review, cancellation, Daybook write policy and relaunch continuity"],
+          "preserve": ["Chat-only, Practice read-only, Practice assist and focused Library-Burrow presets with exact targets and budgets", "Tool approval/denial, operand seals, audit, races, quiescence and capacity", "Provider-invisible sandbox compile, verify and test operations, exact-revision invocation, detached copied results and scrubbed result release", "Desk-shared Agent review, cancellation, Daybook write policy and relaunch continuity"],
           "evidence": ["profile:agent-access", "profile:agent-security", "profile:sandbox-stage3-agent-operations", "profile:sandbox-stage3-agent-test", "profile:sandbox-stage3-agent-invoke", "profile:desktop-agent-hardening", "profile:desktop"]
         },
         {

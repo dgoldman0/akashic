@@ -14,7 +14,8 @@ REQUIRE ../agent/service.f
 : DAP-PRESET?  ( preset -- flag )
     DUP AAP-PRESET-CHAT-ONLY =
     OVER AAP-PRESET-PRACTICE-READ = OR
-    SWAP AAP-PRESET-PRACTICE-ASSIST = OR ;
+    OVER AAP-PRESET-PRACTICE-ASSIST = OR
+    SWAP AAP-PRESET-PRACTICE-LIBRARY-BURROW = OR ;
 
 VARIABLE _DAP-P
 
@@ -60,6 +61,17 @@ VARIABLE _DAP-P
                 CAP-E-MUTATE OR CAP-E-PERSIST OR = AND
             _DAP-P @ AAP.DISPOSITION @ MAND-D-COMMIT = AND
             _DAP-P @ AAP.TOOL-BUDGET @ 8 = AND
+            _DAP-P @ AAP.DISCLOSURE-BUDGET @ 49152 = AND
+        ENDOF
+        AAP-PRESET-PRACTICE-LIBRARY-BURROW OF
+            _DAP-P @ AAP-ID$ S" desk.practice-library-burrow" STR-STR=
+            _DAP-P @ AAP-LABEL$ S" Practice Library Burrow" STR-STR= AND
+            _DAP-P @ AAP.FLAGS @ AAP-F-CHAT-HISTORY
+                AAP-F-CONTEXT-OBSERVE OR AAP-F-REVIEW-CHANGES OR = AND
+            _DAP-P @ AAP.EFFECTS @ CAP-E-OBSERVE CAP-E-NAVIGATE OR
+                CAP-E-MUTATE OR CAP-E-PERSIST OR = AND
+            _DAP-P @ AAP.DISPOSITION @ MAND-D-COMMIT = AND
+            _DAP-P @ AAP.TOOL-BUDGET @ 12 = AND
             _DAP-P @ AAP.DISCLOSURE-BUDGET @ 49152 = AND
         ENDOF
         0 SWAP
@@ -123,6 +135,24 @@ VARIABLE _DAPI-P
             0 _DAPI-P @ AAP.MEMORY-BUDGET !
             0 _DAPI-P @ AAP.TOKEN-BUDGET !
             8 _DAPI-P @ AAP.TOOL-BUDGET !
+            49152 _DAPI-P @ AAP.DISCLOSURE-BUDGET !
+        ENDOF
+        AAP-PRESET-PRACTICE-LIBRARY-BURROW OF
+            S" desk.practice-library-burrow"
+                _DAPI-P @ AAP.ID-U ! _DAPI-P @ AAP.ID-A !
+            S" Practice Library Burrow"
+                _DAPI-P @ AAP.LABEL-U ! _DAPI-P @ AAP.LABEL-A !
+            AAP-F-CHAT-HISTORY AAP-F-CONTEXT-OBSERVE OR
+                AAP-F-REVIEW-CHANGES OR _DAPI-P @ AAP.FLAGS !
+            CAP-E-OBSERVE CAP-E-NAVIGATE OR CAP-E-MUTATE OR CAP-E-PERSIST OR
+                _DAPI-P @ AAP.EFFECTS !
+            MAND-D-COMMIT _DAPI-P @ AAP.DISPOSITION !
+            12 _DAPI-P @ AAP.HISTORY-ITEMS !
+            4096 _DAPI-P @ AAP.HISTORY-BYTES !
+            600000 _DAPI-P @ AAP.TIME-BUDGET-MS !
+            0 _DAPI-P @ AAP.MEMORY-BUDGET !
+            0 _DAPI-P @ AAP.TOKEN-BUDGET !
+            12 _DAPI-P @ AAP.TOOL-BUDGET !
             49152 _DAPI-P @ AAP.DISCLOSURE-BUDGET !
         ENDOF
     ENDCASE
