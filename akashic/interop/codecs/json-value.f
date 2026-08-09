@@ -41,46 +41,48 @@ CONSTANT IVJSON-SUPPORTED-TYPE-MASK
 \ that a particular destination buffer is large enough.
 : _IVJSON-SCHEMA-COMPATIBLE-R?  ( schema depth -- flag )
     DUP IVJSON-MAX-DEPTH >= IF 2DROP 0 EXIT THEN
-    >R
+    \ Keep depth below the schema on the data stack.  A map walk is a DO
+    \ loop, so R@ there is the loop counter rather than caller scratch.
+    SWAP
     DUP CS.TYPE-MASK @ IVJSON-SUPPORTED-TYPE-MASK INVERT AND IF
-        DROP R> DROP 0 EXIT
+        2DROP 0 EXIT
     THEN
     DUP CS.TYPE-MASK @ CV-T-LIST CS-TYPE-BIT AND IF
         DUP CS.FLAGS @ CS-F-MAX-LEN AND 0= IF
-            DROP R> DROP 0 EXIT
+            2DROP 0 EXIT
         THEN
         DUP CS.MAX-LEN @ IVJSON-MAX-CHILDREN > IF
-            DROP R> DROP 0 EXIT
+            2DROP 0 EXIT
         THEN
         DUP CS.ITEM @ ?DUP IF
-            R@ 1+ RECURSE 0= IF DROP R> DROP 0 EXIT THEN
+            2 PICK 1+ RECURSE 0= IF 2DROP 0 EXIT THEN
         ELSE
-            DUP CS.MAX-LEN @ IF DROP R> DROP 0 EXIT THEN
+            DUP CS.MAX-LEN @ IF 2DROP 0 EXIT THEN
         THEN
     THEN
     DUP CS.TYPE-MASK @ CV-T-MAP CS-TYPE-BIT AND IF
         DUP CS.FIELD-N @ 0= IF
             DUP CS.FLAGS @ CS-F-MAX-LEN AND 0= IF
-                DROP R> DROP 0 EXIT
+                2DROP 0 EXIT
             THEN
-            DUP CS.MAX-LEN @ IF DROP R> DROP 0 EXIT THEN
+            DUP CS.MAX-LEN @ IF 2DROP 0 EXIT THEN
         THEN
         DUP CS.FIELD-N @ IVJSON-MAX-CHILDREN > IF
             DUP CS.FLAGS @ CS-F-MAX-LEN AND 0= IF
-                DROP R> DROP 0 EXIT
+                2DROP 0 EXIT
             THEN
             DUP CS.MAX-LEN @ IVJSON-MAX-CHILDREN > IF
-                DROP R> DROP 0 EXIT
+                2DROP 0 EXIT
             THEN
         THEN
         DUP CS.FIELD-N @ 0 ?DO
             DUP CS.FIELDS @ I CS-FIELD-SIZE * + CSF.SCHEMA @
-            R@ 1+ RECURSE 0= IF
-                DROP R> DROP 0 UNLOOP EXIT
+            2 PICK 1+ RECURSE 0= IF
+                2DROP 0 UNLOOP EXIT
             THEN
         LOOP
     THEN
-    DROP R> DROP -1 ;
+    2DROP -1 ;
 
 : IVJSON-SCHEMA-COMPATIBLE?  ( schema -- flag )
     DUP 0= IF DROP 0 EXIT THEN

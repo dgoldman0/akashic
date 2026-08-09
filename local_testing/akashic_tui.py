@@ -7477,6 +7477,10 @@ CREATE _ct-bad-list-schema CS-SIZE ALLOT
 CREATE _ct-open-list-schema CS-SIZE ALLOT
 CREATE _ct-open-map-schema CS-SIZE ALLOT
 CREATE _ct-mixed-text-schema CS-SIZE ALLOT
+CREATE _ct-wide-map-schema CS-SIZE ALLOT
+CREATE _ct-wide-map-fields 18 CS-FIELD-SIZE * ALLOT
+CREATE _ct-wide-map-keys 18 ALLOT
+VARIABLE _ct-wide-map-field
 
 : _ct-schema-projection-setup  ( -- )
     _ct-f32-schema CS-INIT
@@ -7498,7 +7502,21 @@ CREATE _ct-mixed-text-schema CS-SIZE ALLOT
     _ct-mixed-text-schema CS-INIT
     CV-T-STRING CS-TYPE-BIT CV-T-RESOURCE CS-TYPE-BIT OR
         _ct-mixed-text-schema CS-ALLOW-MASK!
-    48 _ct-mixed-text-schema CS-MAX-LEN! ;
+    48 _ct-mixed-text-schema CS-MAX-LEN!
+    _ct-wide-map-schema CS-INIT
+    CV-T-MAP _ct-wide-map-schema CS-ALLOW!
+    18 _ct-wide-map-schema CS-MAX-LEN!
+    _ct-wide-map-fields _ct-wide-map-schema CS.FIELDS !
+    18 _ct-wide-map-schema CS.FIELD-N !
+    18 0 ?DO
+        [CHAR] a I + _ct-wide-map-keys I + C!
+        _ct-wide-map-fields I CS-FIELD-SIZE * + DUP
+            _ct-wide-map-field ! CS-FIELD-SIZE 0 FILL
+        _ct-wide-map-keys I + _ct-wide-map-field @ CSF.KEY-A !
+        1 _ct-wide-map-field @ CSF.KEY-U !
+        _ct-resource-schema _ct-wide-map-field @ CSF.SCHEMA !
+        CSF-F-REQUIRED _ct-wide-map-field @ CSF.FLAGS !
+    LOOP ;
 
 : _ct-reset  ( -- ) 0 _ct-json-u ! ;
 : _ct-c  ( c -- ) _ct-json _ct-json-u @ + C! 1 _ct-json-u +! ;
@@ -7735,6 +7753,10 @@ CREATE _ct-mixed-text-schema CS-SIZE ALLOT
     0 CS-SCHEMA-VALIDATE CS-E-SCHEMA = _ct-assert
     _ct-resource-schema CS-SCHEMA-VALIDATE 0= _ct-assert
     _ct-resource-schema IVJSON-SCHEMA-COMPATIBLE? _ct-assert
+    \ A wide flat map is one schema level, regardless of its field ordinal.
+    \ This catches accidentally reading a DO-loop index as recursion depth.
+    _ct-wide-map-schema CS-SCHEMA-VALIDATE 0= _ct-assert
+    _ct-wide-map-schema IVJSON-SCHEMA-COMPATIBLE? _ct-assert
     _ct-bad-schema CS-SCHEMA-VALIDATE CS-E-SCHEMA = _ct-assert
     _ct-bad-list-schema CS-SCHEMA-VALIDATE CS-E-SCHEMA = _ct-assert
     _ct-bad-list-schema IVJSON-SCHEMA-COMPATIBLE? 0= _ct-assert
