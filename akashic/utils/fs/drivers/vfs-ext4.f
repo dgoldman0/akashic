@@ -969,7 +969,12 @@ VARIABLE _EXT4-GD-SPAN
 \ A format checksum proves that a bitmap was not silently altered; it does
 \ not prove that a block referenced by an inode or metadata pointer is marked
 \ allocated.  Keep that ownership check explicit and reusable by every map.
-4 CONSTANT _EXT4-MUTATION-OWNER-RANGE-MAX
+\ An inline extent root has four format-defined leaf slots.  A deletion proof
+\ may additionally own one external-xattr block, so the generic ambient owner
+\ probe admits that exact five-range union without imposing it on extent or
+\ checkpoint arrays.
+4 CONSTANT _EXT4-INLINE-EXTENT-RANGE-MAX
+5 CONSTANT _EXT4-MUTATION-OWNER-RANGE-MAX
 CREATE _EXT4-MUTATION-OWNER-RANGES
 _EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS ALLOT
 VARIABLE _EXT4-MUTATION-OWNER-RANGE-COUNT
@@ -5082,10 +5087,11 @@ VARIABLE _EXT4-JADV-CTX
 504 CONSTANT _EXT4-JWR.CP-DATA-RANGE-COUNT
 512 CONSTANT _EXT4-JWR.CP-DATA-BLOCKS
 520 CONSTANT _EXT4-JWR.CP-DATA-RANGES
-584 CONSTANT _EXT4-JWR.CP-PRE-ACTIVE
-592 CONSTANT _EXT4-JWR.CP-PRE-MODERN
-600 CONSTANT _EXT4-JWR.CP-PRE-LEGACY
-608 CONSTANT _EXT4-JWR-SIZE
+584 CONSTANT _EXT4-JWR.CP-EA-HOME
+592 CONSTANT _EXT4-JWR.CP-PRE-ACTIVE
+600 CONSTANT _EXT4-JWR.CP-PRE-MODERN
+608 CONSTANT _EXT4-JWR.CP-PRE-LEGACY
+616 CONSTANT _EXT4-JWR-SIZE
 
 : _EXT4-JWR-CP-DATA-RANGE  ( index writer -- pair-address )
     _EXT4-JWR.CP-DATA-RANGES + SWAP 2* CELLS + ;
@@ -5438,8 +5444,9 @@ VARIABLE _EXT4-JWS-MOUNT-SIZE
     OVER _EXT4-JWR.CP-DATA-RANGE-COUNT + @ OR
     OVER _EXT4-JWR.CP-DATA-BLOCKS + @ OR
     OVER _EXT4-JWR.CP-DATA-RANGES +
-    _EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS
+    _EXT4-INLINE-EXTENT-RANGE-MAX 2* CELLS
     _EXT4-BYTES-ZERO? 0= OR
+    OVER _EXT4-JWR.CP-EA-HOME + @ OR
     OVER _EXT4-JWR.CP-PRE-ACTIVE + @ OR
     OVER _EXT4-JWR.CP-PRE-MODERN + @ OR
     SWAP _EXT4-JWR.CP-PRE-LEGACY + @ OR 0= ;
@@ -5517,6 +5524,7 @@ VARIABLE _EXT4-JCA-DATA-FIRST
 VARIABLE _EXT4-JCA-DATA-COUNT
 VARIABLE _EXT4-JCA-DATA-BLOCKS
 VARIABLE _EXT4-JCA-DATA-SUM
+VARIABLE _EXT4-JCA-EA-HOME
 VARIABLE _EXT4-JCA-PRE-ACTIVE
 VARIABLE _EXT4-JCA-PRE-MODERN
 VARIABLE _EXT4-JCA-PRE-LEGACY
@@ -5524,11 +5532,19 @@ VARIABLE _EXT4-JCA-PRE-LEGACY
 : _EXT4-JCA-DATA-RANGES?  ( -- flag )
     _EXT4-JCA-WRITER @ _EXT4-JWR.CP-DATA-RANGE-COUNT + @ DUP
     _EXT4-JCA-RANGE-COUNT !
-    DUP 0= SWAP _EXT4-MUTATION-OWNER-RANGE-MAX U> OR IF
+    DUP 0< SWAP _EXT4-INLINE-EXTENT-RANGE-MAX U> OR IF
         FALSE EXIT
     THEN
     _EXT4-JCA-WRITER @ _EXT4-JWR.CP-DATA-BLOCKS + @ DUP
-    _EXT4-JCA-DATA-BLOCKS ! 0= IF FALSE EXIT THEN
+    _EXT4-JCA-DATA-BLOCKS !
+    DUP 0< IF DROP FALSE EXIT THEN
+    _EXT4-JCA-RANGE-COUNT @ 0= IF
+        IF FALSE EXIT THEN
+        _EXT4-JCA-WRITER @ _EXT4-JWR.CP-DATA-RANGES +
+        _EXT4-INLINE-EXTENT-RANGE-MAX 2* CELLS _EXT4-BYTES-ZERO?
+        EXIT
+    THEN
+    0= IF FALSE EXIT THEN
     0 _EXT4-JCA-DATA-SUM !
     0 _EXT4-JCA-RANGE-INDEX !
     BEGIN
@@ -5564,8 +5580,30 @@ VARIABLE _EXT4-JCA-PRE-LEGACY
     THEN
     _EXT4-JCA-WRITER @ _EXT4-JWR.CP-DATA-RANGES +
     _EXT4-JCA-RANGE-COUNT @ 2* CELLS +
-    _EXT4-MUTATION-OWNER-RANGE-MAX _EXT4-JCA-RANGE-COUNT @ -
+    _EXT4-INLINE-EXTENT-RANGE-MAX _EXT4-JCA-RANGE-COUNT @ -
     2* CELLS _EXT4-BYTES-ZERO? ;
+
+\ Validate the independent external-xattr release home without consuming one
+\ of the four format-defined inline extent slots.  Zero means no external
+\ xattr block; a present singleton must be in bounds and disjoint from every
+\ already-validated data range.
+: _EXT4-JCA-EA-HOME?  ( -- flag )
+    _EXT4-JCA-WRITER @ _EXT4-JWR.CP-EA-HOME + @ DUP
+    _EXT4-JCA-EA-HOME ! DUP 0< IF DROP FALSE EXIT THEN
+    DUP 0= IF DROP TRUE EXIT THEN
+    DUP _EXT4-JCA-WRITER @ _EXT4-JWR.CTX + @
+    _EXT4-C.FIRST + @ U< IF DROP FALSE EXIT THEN
+    DUP _EXT4-JCA-WRITER @ _EXT4-JWR.CTX + @
+    _EXT4-C.BLOCKS + @ U< 0= IF DROP FALSE EXIT THEN
+    DROP
+    _EXT4-JCA-RANGE-COUNT @ 0 ?DO
+        _EXT4-JCA-EA-HOME @ 1
+        I _EXT4-JCA-WRITER @ _EXT4-JWR-CP-DATA-RANGE
+        DUP @ SWAP CELL+ @ _EXT4-BLOCK-RANGES-OVERLAP? IF
+            FALSE UNLOOP EXIT
+        THEN
+    LOOP
+    TRUE ;
 
 : _EXT4-JCPM-ORPHAN-MODERN?  ( mode -- flag )
     DUP _EXT4-JCPM-ORPHAN-MODERN-FINAL =
@@ -5693,12 +5731,17 @@ VARIABLE _EXT4-JCA-PRE-LEGACY
     _EXT4-JCA-TARGET-ENTRIES !
     _EXT4-JCA-MODE @ _EXT4-JCPM-ORPHAN-DATA-DELETE? IF
         _EXT4-JCA-DATA-RANGES? 0= IF FALSE EXIT THEN
+        _EXT4-JCA-RANGE-COUNT @ 0= IF FALSE EXIT THEN
+        _EXT4-JCA-EA-HOME? 0= IF FALSE EXIT THEN
         _EXT4-JCA-TARGET-ENTRIES @ _EXT4-JCA-RANGE-COUNT @ <> IF
             FALSE EXIT
         THEN
     ELSE
         _EXT4-JCA-MODE @ _EXT4-JCPM-ORPHAN-DELETE? IF
             _EXT4-JCA-TARGET-ENTRIES @ IF FALSE EXIT THEN
+            _EXT4-JCA-DATA-RANGES? 0= IF FALSE EXIT THEN
+            _EXT4-JCA-RANGE-COUNT @ IF FALSE EXIT THEN
+            _EXT4-JCA-EA-HOME? 0= IF FALSE EXIT THEN
         ELSE
             _EXT4-JCA-TARGET-ENTRIES @ 0=
             _EXT4-JCA-MODE @ _EXT4-JCPM-ORPHAN-MODERN?
@@ -5747,6 +5790,14 @@ VARIABLE _EXT4-JCA-PRE-LEGACY
         _EXT4-JCA-GDT-HOME @
         _EXT4-JCA-WRITER @ _EXT4-JWR.CTX + @
         _EXT4-PRIMARY-SUPER-BLOCK = OR IF FALSE EXIT THEN
+        _EXT4-JCA-EA-HOME @ ?DUP IF
+            DUP _EXT4-JCA-TARGET-HOME @ =
+            OVER _EXT4-JCA-BITMAP-HOME @ = OR
+            OVER _EXT4-JCA-GDT-HOME @ = OR
+            OVER _EXT4-JCA-WRITER @ _EXT4-JWR.CP-O-HOME + @ = OR
+            SWAP _EXT4-JCA-WRITER @ _EXT4-JWR.CTX + @
+            _EXT4-PRIMARY-SUPER-BLOCK = OR IF FALSE EXIT THEN
+        THEN
         _EXT4-JCA-WRITER @ _EXT4-JWR.CP-INODE-GDT-OFF + @ DUP 0< IF
             DROP FALSE EXIT
         THEN
@@ -5761,7 +5812,7 @@ VARIABLE _EXT4-JCA-PRE-LEGACY
         0xFFFFFFFF U> IF FALSE EXIT THEN
         _EXT4-JCA-MODE @ _EXT4-JCPM-ORPHAN-DATA-DELETE? 0= IF
             _EXT4-JCA-WRITER @ _EXT4-JWR.CP-DATA-RANGE-COUNT +
-            _EXT4-JWR.CP-PRE-ACTIVE _EXT4-JWR.CP-DATA-RANGE-COUNT -
+            _EXT4-JWR.CP-EA-HOME _EXT4-JWR.CP-DATA-RANGE-COUNT -
             _EXT4-BYTES-ZERO? 0= IF FALSE EXIT THEN
         THEN
     ELSE
@@ -11000,10 +11051,27 @@ VARIABLE _EXT4-JFI-DATA-ACTUAL
 VARIABLE _EXT4-JFI-DATA-LOGICAL
 VARIABLE _EXT4-JFI-DATA-INDEX
 CREATE _EXT4-JFI-DATA-RANGES
-_EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS ALLOT
+_EXT4-INLINE-EXTENT-RANGE-MAX 2* CELLS ALLOT
+VARIABLE _EXT4-JFI-EA
+CREATE _EXT4-JFI-EA-RANGE
+2 CELLS ALLOT
 
 : _EXT4-JFI-DATA-RANGE  ( index -- pair-address )
     2* CELLS _EXT4-JFI-DATA-RANGES + ;
+
+: _EXT4-JFI-RELEASE-RANGE-COUNT  ( -- count )
+    _EXT4-JFI-DATA-ENTRIES @
+    _EXT4-JFI-EA @ IF 1+ THEN ;
+
+: _EXT4-JFI-RELEASE-RANGE  ( index -- pair-address )
+    DUP _EXT4-JFI-DATA-ENTRIES @ U< IF
+        _EXT4-JFI-DATA-RANGE EXIT
+    THEN
+    DROP _EXT4-JFI-EA-RANGE ;
+
+: _EXT4-JFI-RELEASE-BLOCKS  ( -- blocks )
+    _EXT4-JFI-DATA-BLOCKS @
+    _EXT4-JFI-EA @ IF 1+ THEN ;
 
 VARIABLE _EXT4-JFO-CTX
 VARIABLE _EXT4-JFO-RECORD
@@ -11028,8 +11096,9 @@ VARIABLE _EXT4-JFO-CERT-GEN
 2 CONSTANT _EXT4-JFO-CERT-JOT
 VARIABLE _EXT4-JFO-CERT-KIND
 VARIABLE _EXT4-JFO-CERT-RANGE-COUNT
+VARIABLE _EXT4-JFO-CERT-EA
 CREATE _EXT4-JFO-CERT-RANGES
-_EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS ALLOT
+_EXT4-INLINE-EXTENT-RANGE-MAX 2* CELLS ALLOT
 
 : _EXT4-JFO-CERT-RANGE  ( index -- pair-address )
     2 * CELLS _EXT4-JFO-CERT-RANGES + ;
@@ -11086,6 +11155,7 @@ _EXT4-MUTATION-PROTOCOL-XT !
     _EXT4-JFO-CERT-RANGE-COUNT @ _EXT4-JFI-DATA-ENTRIES @ <> IF
         FALSE EXIT
     THEN
+    _EXT4-JFO-CERT-EA @ _EXT4-JFI-EA @ <> IF FALSE EXIT THEN
     _EXT4-JFI-DATA-ENTRIES @ 0 ?DO
         I _EXT4-JFI-DATA-RANGE @ I _EXT4-JFO-CERT-RANGE @ <> IF
             FALSE UNLOOP EXIT
@@ -11102,12 +11172,14 @@ _EXT4-MUTATION-PROTOCOL-XT !
     0 _EXT4-JFO-CERT-VALID !
     _EXT4-JFO-CERT-JFI _EXT4-JFO-CERT-KIND !
     0 _EXT4-JFO-CERT-RANGE-COUNT !
+    0 _EXT4-JFO-CERT-EA !
     _EXT4-JFI-CTX @ _EXT4-JFO-CERT-CTX !
     _EXT4-JFI-RECORD @ _EXT4-OE.INO + @ _EXT4-JFO-CERT-INO !
     _EXT4-JFI-INODE @ _EXT4-I.GENERATION + L@ _EXT4-JFO-CERT-GEN !
     _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFO-CERT-RANGE-COUNT !
+    _EXT4-JFI-EA @ _EXT4-JFO-CERT-EA !
     _EXT4-JFO-CERT-RANGES
-    _EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS 0 FILL
+    _EXT4-INLINE-EXTENT-RANGE-MAX 2* CELLS 0 FILL
     _EXT4-JFI-DATA-ENTRIES @ 0 ?DO
         I _EXT4-JFI-DATA-RANGE @ I _EXT4-JFO-CERT-RANGE !
         I _EXT4-JFI-DATA-RANGE CELL+ @
@@ -11659,39 +11731,46 @@ VARIABLE _EXT4-JOW-META-IOR
     THEN
     0 ;
 
-\ Prove exclusive filesystem-wide inode ownership of the admitted data range.
-\ The scan is allocation-free and geometry-bounded.  Mount cleanup may retain
-\ one exact proof while it exclusively owns the raw pre-home metadata epoch;
-\ journal-only activation, dry staging, and commit do not alter another inode's
-\ home map.  Recovery convergence explicitly invalidates the proof before
-\ rebuilding authority, and a durable commit consumes it before replay can
-\ begin home writes.  Always clear the ambient probe before propagating an
-\ error, then restore the plan-bound target inode because the scan necessarily
-\ reuses the shared inode cache.
-: _EXT4-JFI-REQUIRE-UNIQUE-DATA-OWNER  ( -- ior )
-    _EXT4-JFI-DATA-ENTRIES @ 0= IF 0 EXIT THEN
-    _EXT4-JFI-DATA-ENTRIES @ _EXT4-MUTATION-OWNER-RANGE-MAX U> IF
+\ Prove exclusive filesystem-wide inode ownership of every block that deletion
+\ will release.  The four exact data ranges and the independent EA singleton
+\ share one bounded ambient probe whose fifth slot is derived from that exact
+\ format union, not from a general cleanup policy limit.  One retained
+\ certificate binds both shapes, and the target record is restored after the
+\ scan because it necessarily reuses the shared inode cache.
+: _EXT4-JFI-REQUIRE-UNIQUE-RELEASE-OWNER  ( -- ior )
+    _EXT4-JFI-RELEASE-RANGE-COUNT 0= IF 0 EXIT THEN
+    _EXT4-JFI-DATA-ENTRIES @ _EXT4-INLINE-EXTENT-RANGE-MAX U> IF
         EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
     THEN
     _EXT4-MUTATION-OWNER-RANGE-COUNT @ IF VFS-E-BUSY EXIT THEN
-    _EXT4-JFO-CERT-MATCH? IF 0 EXIT THEN
+    _EXT4-JFO-CERT-MATCH? IF
+        _EXT4-JFI-RECORD @ _EXT4-JFI-CTX @
+        _EXT4-REAUTH-ORPHAN-PLAN-RECORD EXIT
+    THEN
     _EXT4-JFO-CERT-INVALIDATE
     _EXT4-JFI-CTX @ _EXT4-JFO-CTX !
     _EXT4-JFI-RECORD @ _EXT4-JFO-RECORD !
     _EXT4-JFI-RECORD @ _EXT4-OE.INO + @ _EXT4-JFO-TARGET-INO !
     _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-JFO-MAP-LIMIT !
     0 _EXT4-MAP-VALIDATION-LIMIT !
+    0 _EXT4-JFO-IOR !
     _EXT4-MUTATION-OWNER-RANGES-CLEAR
     _EXT4-JFI-DATA-ENTRIES @ 0 ?DO
         I _EXT4-JFI-DATA-RANGE @ I _EXT4-MUTATION-OWNER-RANGE !
         I _EXT4-JFI-DATA-RANGE CELL+ @
         I _EXT4-MUTATION-OWNER-RANGE CELL+ !
     LOOP
-    _EXT4-JFI-DATA-ENTRIES @ _EXT4-MUTATION-OWNER-RANGES-PUBLISH
-    ?DUP IF
-        _EXT4-JFO-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT ! EXIT
+    _EXT4-JFI-EA @ IF
+        _EXT4-JFI-EA @ _EXT4-JFI-DATA-ENTRIES @
+        _EXT4-MUTATION-OWNER-RANGE !
+        1 _EXT4-JFI-DATA-ENTRIES @
+        _EXT4-MUTATION-OWNER-RANGE CELL+ !
     THEN
-    _EXT4-JFO-SCAN-OTHER-INODES _EXT4-JFO-IOR !
+    _EXT4-JFI-RELEASE-RANGE-COUNT
+    _EXT4-MUTATION-OWNER-RANGES-PUBLISH _EXT4-JFO-IOR !
+    _EXT4-JFO-IOR @ 0= IF
+        _EXT4-JFO-SCAN-OTHER-INODES _EXT4-JFO-IOR !
+    THEN
     _EXT4-MUTATION-OWNER-RANGES-CLEAR
     _EXT4-JFO-IOR @ 0= IF
         _EXT4-JFO-RECORD @ _EXT4-JFO-CTX @
@@ -11701,23 +11780,40 @@ VARIABLE _EXT4-JOW-META-IOR
     _EXT4-JFO-IOR @ 0= IF _EXT4-JFO-CERT-STORE THEN
     _EXT4-JFO-IOR @ ;
 
-: _EXT4-JFI-INLINE-XATTR-PREFLIGHT  ( -- ior )
-    \ Inline values die with the inode allocation bit and need no separate
-    \ metadata after-image.  Reuse the read-side structural walker to prove
-    \ that every admitted value is resident in this inode: e_value_inum must
-    \ be zero, names and values are bounded and nonoverlapping, and the
-    \ packed entry list is ordered and terminated.  No output buffer is live.
+: _EXT4-JFI-XATTR-PREFLIGHT  ( -- ior )
+    \ Inline values die with the inode allocation bit.  A uniquely referenced
+    \ external block is structurally authenticated by the same read-side
+    \ walker, then released as one independent allocation-accounting range.
+    \ Shared blocks require refcount-decrement semantics and remain outside
+    \ this mutation slice.
+    _EXT4-JFI-EA @ IF
+        _EXT4-JFI-DATA-ENTRIES @ 0 ?DO
+            _EXT4-JFI-EA @ 1 I _EXT4-JFI-DATA-RANGE
+            DUP @ SWAP CELL+ @ _EXT4-BLOCK-RANGES-OVERLAP? IF
+                EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT
+            THEN
+        LOOP
+    THEN
     _EXT4-XOP-LIST _EXT4-XA-OP !
     0 _EXT4-XA-TOTAL ! 0 _EXT4-XA-EMIT !
-    0 _EXT4-XA-INLINE-FIRST ! 0 _EXT4-XA-INLINE-LIMIT !
-    0 _EXT4-XA-CROSS !
-    _EXT4-JFI-CTX @ _EXT4-XA-INLINE ;
+    _EXT4-JFI-CTX @ _EXT4-XA-SCAN-BOTH ?DUP IF EXIT THEN
+    _EXT4-JFI-EA @ IF
+        _EXT4-XB-BUF @ 4 + L@ 1 <> IF
+            EXT4-D-XATTR _EXT4-UNSUPPORTED EXIT
+        THEN
+        _EXT4-JFI-EA @ 1 _EXT4-JFI-CTX @
+        _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
+        _EXT4-JFI-EA-RANGE 1
+        _EXT4-JFI-RECORD @ _EXT4-JFI-CTX @
+        _EXT4-ORPHAN-FILE-RANGES-DISJOINT ?DUP IF EXIT THEN
+    THEN
+    0 ;
 
 : _EXT4-JFI-DATA-PREFLIGHT  ( -- ior )
     0 _EXT4-JFI-DATA-ENTRIES !
     0 _EXT4-JFI-DATA-BLOCKS !
     _EXT4-JFI-DATA-RANGES
-    _EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS 0 FILL
+    _EXT4-INLINE-EXTENT-RANGE-MAX 2* CELLS 0 FILL
     _EXT4-JFI-INODE @ _EXT4-I.BLOCK + DUP _EXT4-JFI-DATA-ROOT !
     DUP W@ _EXT4-EXTENT-MAGIC <> IF
         DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
@@ -11726,7 +11822,7 @@ VARIABLE _EXT4-JOW-META-IOR
         DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
     THEN
     DUP 2 + W@ DUP _EXT4-JFI-DATA-ENTRIES !
-    _EXT4-MUTATION-OWNER-RANGE-MAX U> IF
+    _EXT4-INLINE-EXTENT-RANGE-MAX U> IF
         DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
     THEN
     6 + W@ IF EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT THEN
@@ -11761,7 +11857,7 @@ VARIABLE _EXT4-JOW-META-IOR
     REPEAT
     _EXT4-JFI-INODE @ _EXT4-JFI-CTX @ _EXT4-DECODE-I-BLOCKS
     DUP IF NIP EXIT THEN DROP _EXT4-JFI-DATA-ACTUAL !
-    _EXT4-JFI-DATA-BLOCKS @
+    _EXT4-JFI-RELEASE-BLOCKS
     _EXT4-JFI-CTX @ _EXT4-C.SPB + @ _EXT4-UMUL?
     DUP IF NIP EXIT THEN DROP
     _EXT4-JFI-DATA-ACTUAL @ <> IF
@@ -11775,7 +11871,7 @@ VARIABLE _EXT4-JOW-META-IOR
         _EXT4-JFI-RECORD @ _EXT4-JFI-CTX @
         _EXT4-ORPHAN-FILE-RANGES-DISJOINT ?DUP IF EXIT THEN
     THEN
-    _EXT4-JFI-REQUIRE-UNIQUE-DATA-OWNER ;
+    0 ;
 
 VARIABLE _EXT4-JFI-CP-WRITER
 
@@ -11785,6 +11881,8 @@ VARIABLE _EXT4-JFI-CP-WRITER
     _EXT4-JFI-DATA-ENTRIES @ <> IF FALSE EXIT THEN
     _EXT4-JFI-CP-WRITER @ _EXT4-JWR.CP-DATA-BLOCKS + @
     _EXT4-JFI-DATA-BLOCKS @ <> IF FALSE EXIT THEN
+    _EXT4-JFI-CP-WRITER @ _EXT4-JWR.CP-EA-HOME + @
+    _EXT4-JFI-EA @ <> IF FALSE EXIT THEN
     _EXT4-JFI-DATA-ENTRIES @ 0 ?DO
         I _EXT4-JFI-DATA-RANGE @
         I _EXT4-JFI-CP-WRITER @ _EXT4-JWR-CP-DATA-RANGE @ <> IF
@@ -11804,8 +11902,10 @@ VARIABLE _EXT4-JFI-CP-WRITER
     OVER _EXT4-JWR.CP-DATA-RANGE-COUNT + !
     _EXT4-JFI-DATA-BLOCKS @
     SWAP _EXT4-JWR.CP-DATA-BLOCKS + !
+    _EXT4-JFI-EA @
+    _EXT4-JFI-CP-WRITER @ _EXT4-JWR.CP-EA-HOME + !
     _EXT4-JFI-CP-WRITER @ _EXT4-JWR.CP-DATA-RANGES +
-    _EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS 0 FILL
+    _EXT4-INLINE-EXTENT-RANGE-MAX 2* CELLS 0 FILL
     _EXT4-JFI-DATA-ENTRIES @ 0 ?DO
         I _EXT4-JFI-DATA-RANGE @
         I _EXT4-JFI-CP-WRITER @ _EXT4-JWR-CP-DATA-RANGE !
@@ -11816,14 +11916,15 @@ VARIABLE _EXT4-JFI-CP-WRITER
 
 \ Authenticate one complete depth-zero deletion shape.  The format-defined
 \ inline-root capacity is four exact, possibly discontiguous physical extents;
-\ retain each range separately and bind one combined filesystem-wide ownership
-\ proof to the complete set.  External xattr storage remains outside this
-\ slice.  Structurally valid resident inline xattrs die with the inode
-\ allocation bit and require no separate release.
+\ retain each range separately and bind those ranges plus one optional unique
+\ external-xattr singleton into the filesystem-wide ownership certificate.
+\ Structurally valid resident inline xattrs die with the inode allocation bit.
 : _EXT4-JFI-AUTH-PREFLIGHT  ( -- ior )
     _EXT4-JFI-RECORD @ 0= _EXT4-JFI-CTX @ 0= OR IF
         VFS-E-INVALID EXIT
     THEN
+    0 _EXT4-JFI-EA !
+    _EXT4-JFI-EA-RANGE 2 CELLS 0 FILL
     _EXT4-JFI-RECORD @ _EXT4-JFI-CTX @
     _EXT4-REAUTH-ORPHAN-PLAN-RECORD ?DUP IF EXIT THEN
     _EXT4-JFI-RECORD @ _EXT4-OE.INO + @ DUP _EXT4-JFI-INO !
@@ -11846,13 +11947,17 @@ VARIABLE _EXT4-JFI-CP-WRITER
     SWAP _EXT4-JOURNAL-DATA-FL AND 0<> OR IF
         DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
     THEN
-    DUP _EXT4-I.FILE-ACL-HI + W@
-    OVER _EXT4-I.FILE-ACL-LO + L@ OR IF
+    DUP _EXT4-I.FILE-ACL-HI + W@ IF
         DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    DUP _EXT4-I.FILE-ACL-LO + L@ DUP _EXT4-JFI-EA ! ?DUP IF
+        _EXT4-JFI-EA-RANGE !
+        1 _EXT4-JFI-EA-RANGE CELL+ !
     THEN
     DROP
     _EXT4-JFI-DATA-PREFLIGHT ?DUP IF EXIT THEN
-    _EXT4-JFI-INLINE-XATTR-PREFLIGHT ?DUP IF EXIT THEN
+    _EXT4-JFI-XATTR-PREFLIGHT ?DUP IF EXIT THEN
+    _EXT4-JFI-REQUIRE-UNIQUE-RELEASE-OWNER ?DUP IF EXIT THEN
     _EXT4-IR-GROUP @ _EXT4-JFI-GROUP !
     _EXT4-IR-INDEX @ _EXT4-JFI-INDEX !
     _EXT4-IR-BLOCK @ _EXT4-JFI-INODE-HOME !
@@ -12062,7 +12167,8 @@ VARIABLE _EXT4-JFI-CP-WRITER
 \ Release allocation authority for one exact unlinked regular-file orphan.
 \ First replace its authenticated inode record with zeros so ordinary ext4
 \ tools see a clean free record; then release every block in the admitted
-\ physical extent and the inode allocation bit in the same transaction.
+\ physical extent, optional unique external-xattr block, and inode allocation
+\ bit in the same transaction.
 : _EXT4-JTX-STAGE-FREE-ORPHAN-INODE
   ( plan-record transaction -- ior )
     _EXT4-JFI-WRITER ! _EXT4-JFI-RECORD !
@@ -12076,6 +12182,12 @@ VARIABLE _EXT4-JFI-CP-WRITER
     _EXT4-JFI-DATA-ENTRIES @ IF
         _EXT4-JFI-DATA-RANGES _EXT4-JFI-DATA-ENTRIES @
         _EXT4-JFI-WRITER @ _EXT4-JTX-STAGE-FREE-BLOCK-RANGES
+        ?DUP IF _EXT4-JFI-FAIL-AFTER-PUBLISH EXIT THEN
+        -1 _EXT4-JFI-PUBLISHED !
+    THEN
+    _EXT4-JFI-EA @ IF
+        _EXT4-JFI-EA @ 1 _EXT4-JFI-WRITER @
+        _EXT4-JTX-STAGE-FREE-BLOCK-RANGE
         ?DUP IF _EXT4-JFI-FAIL-AFTER-PUBLISH EXIT THEN
         -1 _EXT4-JFI-PUBLISHED !
     THEN
@@ -12130,7 +12242,7 @@ VARIABLE _EXT4-EIB-LIMIT
 \ Four leaf entries are the format-defined capacity of an inline inode
 \ extent root.  Each retained pair is { first physical block, block count }.
 CREATE _EXT4-JOT-RANGES
-_EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS ALLOT
+_EXT4-INLINE-EXTENT-RANGE-MAX 2* CELLS ALLOT
 
 : _EXT4-JOT-RANGE  ( index -- pair-address )
     2 * CELLS _EXT4-JOT-RANGES + ;
@@ -12168,6 +12280,7 @@ CREATE _EXT4-JOT-EA-RANGE 2 CELLS ALLOT
     _EXT4-JFO-CERT-RANGE-COUNT @ _EXT4-JOT-COUNT @ <> IF
         FALSE EXIT
     THEN
+    _EXT4-JFO-CERT-EA @ IF FALSE EXIT THEN
     _EXT4-JOT-COUNT @ 0 ?DO
         I _EXT4-JOT-RANGE @ I _EXT4-JFO-CERT-RANGE @ <> IF
             FALSE UNLOOP EXIT
@@ -12188,8 +12301,9 @@ CREATE _EXT4-JOT-EA-RANGE 2 CELLS ALLOT
     _EXT4-JOT-INODE @ _EXT4-I.GENERATION + L@
     _EXT4-JFO-CERT-GEN !
     _EXT4-JOT-COUNT @ _EXT4-JFO-CERT-RANGE-COUNT !
+    0 _EXT4-JFO-CERT-EA !
     _EXT4-JFO-CERT-RANGES
-    _EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS 0 FILL
+    _EXT4-INLINE-EXTENT-RANGE-MAX 2* CELLS 0 FILL
     _EXT4-JOT-COUNT @ 0 ?DO
         I _EXT4-JOT-RANGE @ I _EXT4-JFO-CERT-RANGE !
         I _EXT4-JOT-RANGE CELL+ @ I _EXT4-JFO-CERT-RANGE CELL+ !
@@ -12204,7 +12318,7 @@ CREATE _EXT4-JOT-EA-RANGE 2 CELLS ALLOT
 \ it before the first home write can begin.
 : _EXT4-JOT-REQUIRE-UNIQUE-DATA-OWNER  ( -- ior )
     _EXT4-JOT-COUNT @ 0= IF 0 EXIT THEN
-    _EXT4-JOT-COUNT @ _EXT4-MUTATION-OWNER-RANGE-MAX U> IF
+    _EXT4-JOT-COUNT @ _EXT4-INLINE-EXTENT-RANGE-MAX U> IF
         EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
     THEN
     _EXT4-MUTATION-OWNER-RANGE-COUNT @ IF VFS-E-BUSY EXIT THEN
@@ -12776,7 +12890,7 @@ VARIABLE _EXT4-JDD-GROUP-TOUCHED
 \ Intersect one retained physical range with the current group.  Publish the
 \ group-local bitmap index and exact overlap count only when nonempty.
 : _EXT4-JDD-SELECT-RANGE-CHUNK  ( range-index -- flag ior )
-    _EXT4-JFI-DATA-RANGE DUP @ _EXT4-JDD-RANGE-FIRST !
+    _EXT4-JFI-RELEASE-RANGE DUP @ _EXT4-JDD-RANGE-FIRST !
     CELL+ @ DUP _EXT4-JDD-RANGE-COUNT !
     _EXT4-JDD-RANGE-FIRST @ SWAP _EXT4-UADD?
     DUP IF NIP FALSE SWAP EXIT THEN DROP _EXT4-JDD-RANGE-END !
@@ -12796,7 +12910,7 @@ VARIABLE _EXT4-JDD-GROUP-TOUCHED
     _EXT4-JDD-SET-GROUP-RANGE ?DUP IF FALSE SWAP EXIT THEN
     0 _EXT4-JDD-RANGE-INDEX !
     BEGIN
-        _EXT4-JDD-RANGE-INDEX @ _EXT4-JFI-DATA-ENTRIES @ U<
+        _EXT4-JDD-RANGE-INDEX @ _EXT4-JFI-RELEASE-RANGE-COUNT U<
     WHILE
         _EXT4-JDD-RANGE-INDEX @ _EXT4-JDD-SELECT-RANGE-CHUNK
         _EXT4-JDD-IOR ! _EXT4-JDD-GROUP-TOUCHED !
@@ -12833,7 +12947,7 @@ VARIABLE _EXT4-JDD-GROUP-TOUCHED
     0 _EXT4-JDD-GROUP-RELEASED !
     0 _EXT4-JDD-RANGE-INDEX !
     BEGIN
-        _EXT4-JDD-RANGE-INDEX @ _EXT4-JFI-DATA-ENTRIES @ U<
+        _EXT4-JDD-RANGE-INDEX @ _EXT4-JFI-RELEASE-RANGE-COUNT U<
     WHILE
         _EXT4-JDD-RANGE-INDEX @ _EXT4-JDD-SELECT-RANGE-CHUNK
         _EXT4-JDD-IOR ! _EXT4-JDD-GROUP-TOUCHED !
@@ -13005,7 +13119,7 @@ VARIABLE _EXT4-JDD-GROUP-TOUCHED
         THEN
         1 _EXT4-JDD-GROUP +!
     REPEAT
-    _EXT4-JDD-RELEASED-TOTAL @ _EXT4-JFI-DATA-BLOCKS @ <> IF
+    _EXT4-JDD-RELEASED-TOTAL @ _EXT4-JFI-RELEASE-BLOCKS <> IF
         VFS-E-CORRUPT EXIT
     THEN
     _EXT4-JDD-FINISH-GDT-PAGE ?DUP IF EXIT THEN
@@ -13034,7 +13148,7 @@ VARIABLE _EXT4-JDD-GROUP-TOUCHED
         EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
     _EXT4-JDD-SUPER @ _EXT4-SB.FREE-BLOCKS-LO + L@
-    _EXT4-JFI-DATA-BLOCKS @
+    _EXT4-JFI-RELEASE-BLOCKS
     _EXT4-UADD? DUP IF NIP EXIT THEN DROP
     DUP _EXT4-JFD-CTX @ _EXT4-C.BLOCKS + @ U> IF
         DROP EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
@@ -13074,9 +13188,9 @@ VARIABLE _EXT4-JDD-GROUP-TOUCHED
 
 
 : _EXT4-JDD-VERIFY-STAGED  ( -- ior )
-    _EXT4-JFI-DATA-ENTRIES @ DUP 0=
-    SWAP _EXT4-MUTATION-OWNER-RANGE-MAX U> OR
-    _EXT4-JFI-DATA-BLOCKS @ 0= OR IF
+    _EXT4-JFI-DATA-ENTRIES @ _EXT4-INLINE-EXTENT-RANGE-MAX U>
+    _EXT4-JFI-RELEASE-RANGE-COUNT 0= OR
+    _EXT4-JFI-RELEASE-BLOCKS 0= OR IF
         VFS-E-CORRUPT EXIT
     THEN
     _EXT4-JFD-RECORD @ _EXT4-OE.KIND + @ _EXT4-OK-MODERN = IF
@@ -13106,7 +13220,7 @@ VARIABLE _EXT4-JDD-GROUP-TOUCHED
     _EXT4-JFD-CTX ! _EXT4-JFI-CTX !
     _EXT4-JFD-RECORD @ _EXT4-JFI-RECORD !
     _EXT4-JFI-AUTH-PREFLIGHT ?DUP IF EXIT THEN
-    _EXT4-JFI-DATA-ENTRIES @ IF _EXT4-JDD-VERIFY-STAGED EXIT THEN
+    _EXT4-JFI-RELEASE-RANGE-COUNT IF _EXT4-JDD-VERIFY-STAGED EXIT THEN
     _EXT4-JFD-RECORD @ _EXT4-JFD-WRITER @
     _EXT4-JFD-VERIFY-EMPTY-STAGED ;
 
@@ -13272,14 +13386,14 @@ VARIABLE _EXT4-JCM-DELETE
 
 : _EXT4-JCM-RANGE-COUNT  ( -- count )
     _EXT4-JCM-DELETE @ IF
-        _EXT4-JFI-DATA-ENTRIES @
+        _EXT4-JFI-RELEASE-RANGE-COUNT
     ELSE
         _EXT4-JOT-COUNT @
     THEN ;
 
 : _EXT4-JCM-RANGE  ( index -- pair-address )
     _EXT4-JCM-DELETE @ IF
-        _EXT4-JFI-DATA-RANGE
+        _EXT4-JFI-RELEASE-RANGE
     ELSE
         _EXT4-JOT-RANGE
     THEN ;
@@ -13346,11 +13460,18 @@ VARIABLE _EXT4-JCM-DELETE
 
 : _EXT4-JCM-VALIDATE-RANGES  ( -- ior )
     _EXT4-JCM-DELETE @ IF
-        _EXT4-JFI-DATA-RANGES
-    ELSE
-        _EXT4-JOT-RANGES
+        _EXT4-JFI-DATA-ENTRIES @ IF
+            _EXT4-JFI-DATA-RANGES _EXT4-JFI-DATA-ENTRIES @
+            _EXT4-JCM-CTX @ _EXT4-VALIDATE-MUTATION-RANGES-TARGETS
+            ?DUP IF EXIT THEN
+        THEN
+        _EXT4-JFI-EA @ IF
+            _EXT4-JFI-EA @ 1 _EXT4-JCM-CTX @
+            _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
+        THEN
+        0 EXIT
     THEN
-    _EXT4-JCM-RANGE-COUNT _EXT4-JCM-CTX @
+    _EXT4-JOT-RANGES _EXT4-JCM-RANGE-COUNT _EXT4-JCM-CTX @
     _EXT4-VALIDATE-MUTATION-RANGES-TARGETS ;
 
 : _EXT4-JCM-COUNT-GROUP-HOMES  ( -- ior )
@@ -13403,8 +13524,9 @@ VARIABLE _EXT4-JCM-DELETE
 \ Derive the exact coalesced metadata-home credit for one authenticated
 \ depth-zero cleanup.  Every delete includes the zeroed inode-table block,
 \ inode bitmap, primary GDT, primary superblock, and (for modern authority)
-\ orphan-file block.  A nonempty root adds one uniquely owned block bitmap per
-\ touched group and one primary GDT block per distinct descriptor page.
+\ orphan-file block.  Any released data or external-xattr allocation adds one
+\ uniquely owned block bitmap per touched group and one primary GDT block per
+\ distinct descriptor page.
 \ The group scan is constant-space and imposes no policy capacity beyond the
 \ authenticated filesystem geometry.
 
@@ -13420,7 +13542,9 @@ VARIABLE _EXT4-JCM-DELETE
     THEN
     _EXT4-JCM-KIND @ _EXT4-OK-MODERN = IF 5 ELSE 4 THEN
     _EXT4-JCM-CREDIT !
-    _EXT4-JFI-DATA-ENTRIES @ 0= IF _EXT4-JCM-CREDIT @ 0 EXIT THEN
+    _EXT4-JFI-RELEASE-RANGE-COUNT 0= IF
+        _EXT4-JCM-CREDIT @ 0 EXIT
+    THEN
     _EXT4-JCM-VALIDATE-RANGES ?DUP IF 0 SWAP EXIT THEN
     _EXT4-JCM-COUNT-GROUP-HOMES ?DUP IF 0 SWAP EXIT THEN
     _EXT4-JCM-CREDIT @ 0 ;
@@ -14226,6 +14350,30 @@ VARIABLE _EXT4-JCE-DATA-BLOCKS
     REPEAT
     0 ;
 
+: _EXT4-JCP-REQUIRE-DELETE-RANGE  ( first count -- ior )
+    _EXT4-JFB-COUNT ! _EXT4-JFB-FIRST !
+    _EXT4-JCE-DATA-BLOCKS @ _EXT4-JFB-COUNT @ _EXT4-UADD?
+    DUP IF NIP EXIT THEN DROP _EXT4-JCE-DATA-BLOCKS !
+    _EXT4-JFB-RESET-WALK
+    BEGIN _EXT4-JFB-REMAIN @ WHILE
+        _EXT4-JFB-NEXT-CHUNK ?DUP IF EXIT THEN
+        _EXT4-JFB-GROUP @ _EXT4-JCP-CTX @ _EXT4-LOAD-BLOCK-BITMAP
+        _EXT4-JCE-IOR ! _EXT4-JCE-DATA-BITMAP-HOME !
+        _EXT4-JCE-IOR @ ?DUP IF EXIT THEN
+        _EXT4-JCP-CTX @ _EXT4-C.BLOCK +
+        _EXT4-JFB-INDEX @ _EXT4-JFB-CHUNK @
+        _EXT4-BIT-RANGE-CLEAR? 0= IF VFS-E-CORRUPT EXIT THEN
+        _EXT4-GD-BLOCK @ _EXT4-JCE-DATA-GDT-HOME !
+        _EXT4-JCE-DATA-BITMAP-HOME @ _EXT4-JCP-WRITER @
+        _EXT4-JFC-FIND-META ?DUP IF EXIT THEN
+        _EXT4-JFC-FOUND @ 0= IF VFS-E-CORRUPT EXIT THEN
+        _EXT4-JCE-DATA-GDT-HOME @ _EXT4-JCP-WRITER @
+        _EXT4-JFC-FIND-META ?DUP IF EXIT THEN
+        _EXT4-JFC-FOUND @ 0= IF VFS-E-CORRUPT EXIT THEN
+        _EXT4-JFB-ADVANCE
+    REPEAT
+    0 ;
+
 : _EXT4-JCP-REQUIRE-DELETE-DATA  ( -- ior )
     _EXT4-JCP-CTX @ _EXT4-JFB-CTX !
     0 _EXT4-JCE-DATA-BLOCKS !
@@ -14235,33 +14383,16 @@ VARIABLE _EXT4-JCE-DATA-BLOCKS
         _EXT4-JCP-WRITER @ _EXT4-JWR.CP-DATA-RANGE-COUNT + @ U<
     WHILE
         _EXT4-JCE-DATA-RANGE-INDEX @ _EXT4-JCP-WRITER @
-        _EXT4-JWR-CP-DATA-RANGE DUP @ _EXT4-JFB-FIRST !
-        CELL+ @ _EXT4-JFB-COUNT !
-        _EXT4-JCE-DATA-BLOCKS @ _EXT4-JFB-COUNT @ _EXT4-UADD?
-        DUP IF NIP EXIT THEN DROP _EXT4-JCE-DATA-BLOCKS !
-        _EXT4-JFB-RESET-WALK
-        BEGIN _EXT4-JFB-REMAIN @ WHILE
-            _EXT4-JFB-NEXT-CHUNK ?DUP IF EXIT THEN
-            _EXT4-JFB-GROUP @ _EXT4-JCP-CTX @ _EXT4-LOAD-BLOCK-BITMAP
-            _EXT4-JCE-IOR ! _EXT4-JCE-DATA-BITMAP-HOME !
-            _EXT4-JCE-IOR @ ?DUP IF EXIT THEN
-            _EXT4-JCP-CTX @ _EXT4-C.BLOCK +
-            _EXT4-JFB-INDEX @ _EXT4-JFB-CHUNK @
-            _EXT4-BIT-RANGE-CLEAR? 0= IF VFS-E-CORRUPT EXIT THEN
-            _EXT4-GD-BLOCK @ _EXT4-JCE-DATA-GDT-HOME !
-            _EXT4-JCE-DATA-BITMAP-HOME @ _EXT4-JCP-WRITER @
-            _EXT4-JFC-FIND-META ?DUP IF EXIT THEN
-            _EXT4-JFC-FOUND @ 0= IF VFS-E-CORRUPT EXIT THEN
-            _EXT4-JCE-DATA-GDT-HOME @ _EXT4-JCP-WRITER @
-            _EXT4-JFC-FIND-META ?DUP IF EXIT THEN
-            _EXT4-JFC-FOUND @ 0= IF VFS-E-CORRUPT EXIT THEN
-            _EXT4-JFB-ADVANCE
-        REPEAT
+        _EXT4-JWR-CP-DATA-RANGE DUP @ SWAP CELL+ @
+        _EXT4-JCP-REQUIRE-DELETE-RANGE ?DUP IF EXIT THEN
         1 _EXT4-JCE-DATA-RANGE-INDEX +!
     REPEAT
     _EXT4-JCE-DATA-BLOCKS @
     _EXT4-JCP-WRITER @ _EXT4-JWR.CP-DATA-BLOCKS + @ <> IF
         VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-JCP-WRITER @ _EXT4-JWR.CP-EA-HOME + @ ?DUP IF
+        1 _EXT4-JCP-REQUIRE-DELETE-RANGE ?DUP IF EXIT THEN
     THEN
     0 ;
 

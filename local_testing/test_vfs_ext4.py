@@ -280,6 +280,30 @@ def _inode_with_checksum(
     return bytes(result)
 
 
+def _external_xattr_block_with_checksum(
+    superblock: bytes,
+    physical_block: int,
+    block: bytes | bytearray,
+) -> bytes:
+    """Validate and restamp one single-block external xattr container."""
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert len(superblock) == 1024
+    assert len(block) == block_size
+    assert physical_block > 0
+    result = bytearray(block)
+    magic, refcount, blocks = struct.unpack_from("<III", result, 0)
+    assert magic == 0xEA020000
+    assert refcount > 0
+    assert blocks == 1
+    assert struct.unpack_from("<III", result, 0x14) == (0, 0, 0)
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    struct.pack_into("<I", result, 0x10, 0)
+    checksum = _crc32c_raw(struct.pack("<Q", physical_block), seed)
+    checksum = _crc32c_raw(result, checksum)
+    struct.pack_into("<I", result, 0x10, checksum)
+    return bytes(result)
+
+
 def _extent_node_with_checksum(
     superblock: bytes,
     inode_number: int,
@@ -1735,6 +1759,135 @@ def _single_extent_unlinked_orphan_patches(
     return patches, ranges[0][0]
 
 
+def _unlinked_orphan_external_xattr_patches(
+    path: Path,
+    *,
+    protocol: str,
+    data_blocks: int,
+    inode_number: int = 18,
+    data_group: int = 0,
+) -> tuple[
+    tuple[tuple[int, bytes], ...],
+    tuple[tuple[int, int], ...],
+    int,
+]:
+    """Give one unlinked orphan data plus one unique external xattr block."""
+    assert data_blocks >= 0
+    patches, first_physical = _single_extent_unlinked_orphan_patches(
+        path,
+        protocol=protocol,
+        inode_number=inode_number,
+        data_group=data_group,
+        block_count=data_blocks + 1,
+    )
+    patch_map = dict(patches)
+    superblock = patch_map[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    sectors_per_block = block_size // 512
+    xattr_block = first_physical + data_blocks
+
+    _, source_inode, _ = _ext4_inode_record(path, 14)
+    source_xattr = struct.unpack_from("<I", source_inode, 0x68)[0]
+    assert source_xattr > 0 and source_xattr != xattr_block
+    assert struct.unpack_from("<H", source_inode, 0x76)[0] == 0
+    with path.open("rb") as source:
+        source.seek(source_xattr * block_size)
+        source_block = source.read(block_size)
+    assert len(source_block) == block_size
+    assert struct.unpack_from("<I", source_block, 0x04)[0] == 1
+    assert _external_xattr_block_with_checksum(
+        superblock,
+        source_xattr,
+        source_block,
+    ) == source_block
+    xattr_offset = xattr_block * block_size
+    assert xattr_offset not in patch_map
+    patch_map[xattr_offset] = _external_xattr_block_with_checksum(
+        superblock,
+        xattr_block,
+        source_block,
+    )
+
+    _, _, inode_offset = _ext4_inode_record(path, inode_number)
+    inode = bytearray(patch_map[inode_offset])
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    assert struct.unpack_from("<H", inode, 0x38)[0] == data_blocks + 1
+    assert struct.unpack_from("<I", inode, 0x3C)[0] == first_physical
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == (
+        (data_blocks + 1) * sectors_per_block
+    )
+    assert struct.unpack_from("<I", inode, 0x68)[0] == 0
+    assert struct.unpack_from("<H", inode, 0x76)[0] == 0
+    if data_blocks:
+        assert data_blocks <= 0x8000
+        struct.pack_into("<H", inode, 0x38, data_blocks)
+        data_ranges = ((first_physical, data_blocks),)
+    else:
+        struct.pack_into("<H", inode, 0x2A, 0)
+        inode[0x34:0x64] = bytes(48)
+        data_ranges = ()
+    struct.pack_into("<I", inode, 0x68, xattr_block)
+    patch_map[inode_offset] = _inode_with_checksum(
+        superblock,
+        inode_number,
+        inode,
+    )
+    return tuple(patch_map.items()), data_ranges, xattr_block
+
+
+def _unlinked_orphan_external_xattr_refusal_patches(
+    path: Path,
+    *,
+    protocol: str,
+    case: str,
+) -> tuple[tuple[int, bytes], ...]:
+    """Build authenticated external-xattr shapes outside release authority."""
+    assert case in {"shared-refcount", "bad-checksum", "value-inode"}
+    patches, data_ranges, xattr_block = (
+        _unlinked_orphan_external_xattr_patches(
+            path,
+            protocol=protocol,
+            data_blocks=0,
+        )
+    )
+    assert data_ranges == ()
+    patch_map = dict(patches)
+    superblock = patch_map[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    xattr_offset = xattr_block * block_size
+    xattr = bytearray(patch_map[xattr_offset])
+    if case == "shared-refcount":
+        struct.pack_into("<I", xattr, 0x04, 2)
+        xattr = bytearray(
+            _external_xattr_block_with_checksum(
+                superblock,
+                xattr_block,
+                xattr,
+            )
+        )
+    elif case == "value-inode":
+        assert struct.unpack_from("<I", xattr, 0x20)[0] != 0
+        assert struct.unpack_from("<I", xattr, 0x24)[0] == 0
+        struct.pack_into("<I", xattr, 0x24, 14)
+        xattr = bytearray(
+            _external_xattr_block_with_checksum(
+                superblock,
+                xattr_block,
+                xattr,
+            )
+        )
+    else:
+        assert case == "bad-checksum"
+        xattr[0x10] ^= 1
+    patch_map[xattr_offset] = bytes(xattr)
+    return tuple(patch_map.items())
+
+
 def _later_linked_live_alias_orphan_patches(
     path: Path,
     *,
@@ -1894,7 +2047,7 @@ def _unlinked_orphan_ownership_patches(
         "inline-xattr",
         "inline-xattr-value-inode",
         "one-block-high-word",
-        "one-block-external-xattr",
+        "one-block-data-xattr-alias",
         "one-block-inline-xattr",
         "one-block-orphan-storage-alias",
         "one-block-free-data",
@@ -2051,7 +2204,7 @@ def _unlinked_orphan_ownership_patches(
     elif case == "one-block-high-word":
         assert data_block is not None
         struct.pack_into("<H", inode, 0x3A, 1)
-    elif case == "one-block-external-xattr":
+    elif case == "one-block-data-xattr-alias":
         assert data_block is not None
         struct.pack_into("<I", inode, 0x68, data_block)
     elif case in exact_alias_cases | range_admission_cases:
@@ -3118,7 +3271,7 @@ def _forth_cp_data_vector_checks(
         (
             f"{writer} _EXT4-JWR.CP-DATA-RANGES + "
             f"{len(ranges) * 2} CELLS + "
-            f"_EXT4-MUTATION-OWNER-RANGE-MAX {len(ranges)} - "
+            f"_EXT4-INLINE-EXTENT-RANGE-MAX {len(ranges)} - "
             "2* CELLS _EXT4-BYTES-ZERO?"
         )
     )
@@ -14220,6 +14373,193 @@ def test_single_extent_unlinked_cleanup_measures_and_seals_exact_certificate(
 
 
 @pytest.mark.parametrize("protocol", ("modern", "legacy"))
+@pytest.mark.parametrize("data_blocks", (0, 1), ids=("ea-only", "data-plus-ea"))
+def test_unlinked_external_xattr_cleanup_seals_exact_release_authority(
+    canonical_images: dict[str, Path],
+    protocol: str,
+    data_blocks: int,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches, data_ranges, xattr_block = (
+        _unlinked_orphan_external_xattr_patches(
+            path,
+            protocol=protocol,
+            data_blocks=data_blocks,
+        )
+    )
+    patch_map = dict(patches)
+    superblock = patch_map[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    assert (xattr_block - first_data) // blocks_per_group == 0
+    descriptor_home = first_data + 1
+    descriptor = patch_map[descriptor_home * block_size][:64]
+    block_bitmap_home = struct.unpack_from("<I", descriptor, 0x00)[0]
+    released_blocks = tuple(
+        physical
+        for first, count in data_ranges
+        for physical in range(first, first + count)
+    ) + (xattr_block,)
+    expected_credit = 6 if protocol == "modern" else 5
+    if data_ranges:
+        expected_mode = (
+            "_EXT4-JCPM-ORPHAN-MODERN-DATA-DELETE-FINAL"
+            if protocol == "modern"
+            else "_EXT4-JCPM-ORPHAN-LEGACY-DATA-DELETE-FINAL"
+        )
+    else:
+        expected_mode = (
+            "_EXT4-JCPM-ORPHAN-MODERN-DELETE-FINAL"
+            if protocol == "modern"
+            else "_EXT4-JCPM-ORPHAN-LEGACY-DELETE-FINAL"
+        )
+    shape = "EA-ONLY" if not data_ranges else "DATA-EA"
+    marker = f"EXT4-{protocol.upper()}-{shape}-UNLINKED-SEALED"
+    clean_marker = f"{marker}-ABORTED"
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _UX-MOUNT-IOR CONSTANT _UX-V"
+            ),
+            "_UX-V _EXT4-CTX CONSTANT _UX-CTX",
+            (
+                "_UX-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _UX-FIND-IOR CONSTANT _UX-RECORD"
+            ),
+            "_UX-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _UX-JOURNAL-IOR",
+            "_EXT4-JFO-CERT-BEGIN CONSTANT _UX-CERT-BEGIN-IOR",
+            (
+                "_UX-RECORD _UX-CTX _EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "CONSTANT _UX-MEASURE-IOR CONSTANT _UX-CREDIT"
+            ),
+            "-1 _UX-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "_UX-CREDIT 0 0 _UX-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _UX-WRITER-IOR CONSTANT _UX-WRITER"
+            ),
+            (
+                "_UX-CREDIT 0 0 _UX-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _UX-BEGIN-IOR CONSTANT _UX-TX"
+            ),
+            "DEPTH CONSTANT _UX-DEPTH-BEFORE",
+            (
+                "_UX-RECORD _UX-TX _EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "CONSTANT _UX-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _UX-DEPTH-AFTER",
+            (
+                f"{block_bitmap_home} _UX-WRITER _EXT4-JFC-FIND-META "
+                "CONSTANT _UX-BITMAP-IOR"
+            ),
+            "_EXT4-JFC-FOUND @ CONSTANT _UX-BITMAP-FOUND",
+            "_EXT4-JFC-IMAGE @ CONSTANT _UX-BITMAP-IMAGE",
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_UX-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        "_UX-FIND-IOR 0=",
+                        "_UX-JOURNAL-IOR 0=",
+                        "_UX-CERT-BEGIN-IOR 0=",
+                        "_UX-MEASURE-IOR 0=",
+                        f"_UX-CREDIT {expected_credit} =",
+                        "_UX-WRITER-IOR 0=",
+                        "_UX-BEGIN-IOR 0=",
+                        "_UX-STAGE-IOR 0=",
+                        "_UX-DEPTH-BEFORE _UX-DEPTH-AFTER =",
+                        (
+                            "_UX-WRITER _EXT4-JWR.META-USED + @ "
+                            f"{expected_credit} ="
+                        ),
+                        (
+                            "_UX-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                            f"{expected_credit} ="
+                        ),
+                        (
+                            "_UX-WRITER _EXT4-JWR.CP-MODE + @ "
+                            f"{expected_mode} ="
+                        ),
+                        (
+                            "_UX-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ "
+                            f"{len(data_ranges)} ="
+                        ),
+                        *_forth_cp_data_vector_checks(
+                            "_UX-WRITER",
+                            data_ranges,
+                        ),
+                        (
+                            "_UX-WRITER _EXT4-JWR.CP-EA-HOME + @ "
+                            f"{xattr_block} ="
+                        ),
+                        f"_EXT4-JFI-EA @ {xattr_block} =",
+                        f"_EXT4-JFI-EA-RANGE @ {xattr_block} =",
+                        "_EXT4-JFI-EA-RANGE CELL+ @ 1 =",
+                        (
+                            "_EXT4-JFI-RELEASE-RANGE-COUNT "
+                            f"{len(data_ranges) + 1} ="
+                        ),
+                        (
+                            "_EXT4-JFI-RELEASE-BLOCKS "
+                            f"{data_blocks + 1} ="
+                        ),
+                        "_EXT4-JFO-CERT-VALID @ 0<>",
+                        f"_EXT4-JFO-CERT-EA @ {xattr_block} =",
+                        (
+                            "_EXT4-JFO-CERT-RANGE-COUNT @ "
+                            f"{len(data_ranges)} ="
+                        ),
+                        "_EXT4-JFO-CERT-MATCH?",
+                        "_UX-WRITER _EXT4-JFI-CP-RANGES-MATCH?",
+                        "_UX-WRITER _EXT4-JWR-CP-AUTHORITY?",
+                        "_UX-BITMAP-IOR 0=",
+                        "_UX-BITMAP-FOUND 0<>",
+                        *[
+                            (
+                                f"_UX-BITMAP-IMAGE {physical - first_data} "
+                                "1 _EXT4-BIT-RANGE-CLEAR?"
+                            )
+                            for physical in released_blocks
+                        ],
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_UX-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+            "_UX-TX _EXT4-JTX-ABORT CONSTANT _UX-ABORT-IOR",
+            "_EXT4-JFO-CERT-END",
+            (
+                _forth_conjunction(
+                    [
+                        "_UX-ABORT-IOR 0=",
+                        (
+                            "_UX-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_UX-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                        "_UX-WRITER _EXT4-JWR-VALID?",
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        "_UX-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + f' IF ." {clean_marker}" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, marker)
+    _assert_emitted(output, clean_marker)
+
+
+@pytest.mark.parametrize("protocol", ("modern", "legacy"))
 @pytest.mark.parametrize(
     ("case", "expected_reason", "expected_flags", "expected_detail"),
     (
@@ -14242,10 +14582,10 @@ def test_single_extent_unlinked_cleanup_measures_and_seals_exact_certificate(
             "EXT4-D-BOUNDS",
         ),
         (
-            "one-block-external-xattr",
-            "VFS-R-UNSUPPORTED",
-            "0",
-            "EXT4-D-RECOVERY",
+            "one-block-data-xattr-alias",
+            "VFS-R-CORRUPT",
+            "VFS-IOR-F-CORRUPT",
+            "EXT4-D-DATA-MAP",
         ),
         (
             "one-block-orphan-storage-alias",
@@ -14383,6 +14723,68 @@ def test_mount_rejects_unlinked_reclaim_with_unreleased_ownership(
                             "_EXT4-RO-ORPHAN-PRESENT AND "
                             f"{expected_present_check}"
                         ),
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, marker)
+
+
+@pytest.mark.parametrize("protocol", ("modern", "legacy"))
+@pytest.mark.parametrize(
+    ("case", "expected_reason", "expected_flags"),
+    (
+        ("shared-refcount", "VFS-R-UNSUPPORTED", "0"),
+        ("value-inode", "VFS-R-UNSUPPORTED", "0"),
+        ("bad-checksum", "VFS-R-CORRUPT", "VFS-IOR-F-CORRUPT"),
+    ),
+)
+def test_mount_refuses_unauthorized_external_xattr_release_shape(
+    canonical_images: dict[str, Path],
+    protocol: str,
+    case: str,
+    expected_reason: str,
+    expected_flags: str,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches = _unlinked_orphan_external_xattr_refusal_patches(
+        path,
+        protocol=protocol,
+        case=case,
+    )
+    marker = (
+        f"EXT4-{protocol.upper()}-EXTERNAL-XATTR-"
+        f"{case.upper()}-REFUSED"
+    )
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _XR-IOR CONSTANT _XR-V"
+            ),
+            "_XR-V _EXT4-CTX CONSTANT _XR-CTX",
+            (
+                _forth_conjunction(
+                    [
+                        f"_XR-IOR VFS-IOR-REASON {expected_reason} =",
+                        "_XR-IOR VFS-IOR-DOMAIN VFS-IOR-D-FORMAT =",
+                        f"_XR-IOR VFS-IOR-FLAGS {expected_flags} =",
+                        "_XR-IOR VFS-IOR-DETAIL EXT4-D-XATTR =",
+                        "_XR-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_XR-V V.LAST-IOR @ _XR-IOR =",
+                        "_XR-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_XR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_XR-CTX _EXT4-C.READY + @ 0=",
+                        "_XR-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_XR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_XR-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                     ]
                 )
                 + f' IF ." {marker}" THEN'
@@ -14571,6 +14973,7 @@ def _run_singleton_unlinked_cleanup(
     patches: tuple[tuple[int, bytes], ...] | None = None,
     data_block: int | None = None,
     data_count: int | None = None,
+    max_steps: int = 1_200_000_000,
 ) -> dict[str, object]:
     assert protocol in {"modern", "legacy"}
     if data_block is None:
@@ -14865,6 +15268,7 @@ def _run_singleton_unlinked_cleanup(
         ],
         patches=patches,
         capture_media=media_path,
+        max_steps=max_steps,
     )
     _, reclaimed_inode, inode_offset = _ext4_inode_record(media_path, 18)
     assert reclaimed_inode == bytes(256)
@@ -15187,6 +15591,7 @@ def _run_stable_unlinked_cleanup_remount(
 
 _MULTI_ORPHAN_RECOVERY_MAX_STEPS = 1_500_000_000
 _MULTI_ORPHAN_DATA_RECOVERY_MAX_STEPS = 3_000_000_000
+_EXTERNAL_XATTR_RECOVERY_MAX_STEPS = 1_500_000_000
 
 
 _MULTI_EMPTY_ORPHAN_CASES = (
@@ -15766,7 +16171,7 @@ def test_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
     certificate_checks.append(
         (
             f"_EXT4-JFO-CERT-RANGES {len(data_ranges) * 2} CELLS + "
-            f"_EXT4-MUTATION-OWNER-RANGE-MAX {len(data_ranges)} - "
+            f"_EXT4-INLINE-EXTENT-RANGE-MAX {len(data_ranges)} - "
             "2* CELLS _EXT4-BYTES-ZERO?"
         )
     )
@@ -18206,6 +18611,40 @@ def test_mount_reclaims_unlinked_singleton_orphan_with_inline_xattr(
     )
     _assert_singleton_unlinked_cleanup_result(result)
 
+    clean_image = result["clean_image"]
+    assert isinstance(clean_image, Path)
+    _, cleared_inode, _ = _ext4_inode_record(clean_image, 18)
+    assert cleared_inode == bytes(256)
+
+
+@pytest.mark.parametrize("protocol", ("modern", "legacy"))
+@pytest.mark.parametrize("data_blocks", (0, 1), ids=("ea-only", "data-plus-ea"))
+def test_mount_reclaims_unlinked_orphan_with_unique_external_xattr(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+    protocol: str,
+    data_blocks: int,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches, data_ranges, xattr_block = (
+        _unlinked_orphan_external_xattr_patches(
+            path,
+            protocol=protocol,
+            data_blocks=data_blocks,
+        )
+    )
+    release_first = data_ranges[0][0] if data_ranges else xattr_block
+    assert xattr_block == release_first + data_blocks
+    result = _run_singleton_unlinked_cleanup(
+        path,
+        tmp_path / f"{protocol}-{data_blocks}-external-xattr-cleanup.img",
+        protocol=protocol,
+        patches=patches,
+        data_block=release_first,
+        data_count=data_blocks + 1,
+        max_steps=_EXTERNAL_XATTR_RECOVERY_MAX_STEPS,
+    )
+    _assert_singleton_unlinked_cleanup_result(result)
     clean_image = result["clean_image"]
     assert isinstance(clean_image, Path)
     _, cleared_inode, _ = _ext4_inode_record(clean_image, 18)

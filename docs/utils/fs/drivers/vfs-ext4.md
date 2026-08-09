@@ -180,24 +180,26 @@ durable, whose retained data map is an inline depth-0 extent root, and which
 does not use journal-data mode. An authenticated external xattr is retained;
 the root may already be empty or may contain ranges that the bounded
 free-block builder can account for exactly. An unlinked target must be an
-allocated regular file with zero links and zero size, no external xattr block,
-and an inline depth-0 extent root that is either empty or contains one through
-four extent entries. Each entry may be initialized or unwritten and must have
-a zero physical high word. An initialized decoded length may be 1..32768
-blocks and an unwritten decoded length 1..32767 blocks, exactly as encoded by
-ext4 `ee_len`; every `logical_start + decoded_length` must be at most
-`0xffffffff`. The entries must retain ext4's exact logical ordering and
-nonoverlap rules; their physical ranges must not overlap, and decoded
-`i_blocks` must exactly equal the aggregate block count of the complete root.
-Every physical range must be allocated, lie outside all static metadata and
-journal ranges, and not alias orphan-file storage. One combined
-filesystem-wide scan of authenticated allocated inodes must prove that no
-other extent or legacy data/map-metadata reference, or external-xattr pointer,
-names any block in any candidate range. A resident
-inline xattr area is admitted only after the structural walker proves bounded,
-ordered, nonoverlapping values with no value-inode reference. If even one
-record is outside these supported per-record shapes, the whole union returns a
-stable `EXT4-D-RECOVERY` refusal before writer allocation or cleanup mutation.
+allocated regular file with zero links and zero size and an inline depth-0
+extent root that is either empty or contains one through four extent entries.
+It may additionally own one checksum-valid external xattr block whose on-media
+reference count is exactly one; shared external blocks and xattr value inodes
+remain unsupported. Each extent entry may be initialized or unwritten and
+must have a zero physical high word. An initialized decoded length may be
+1..32768 blocks and an unwritten decoded length 1..32767 blocks, exactly as
+encoded by ext4 `ee_len`; every `logical_start + decoded_length` must be at
+most `0xffffffff`. The entries must retain ext4's exact logical ordering and
+nonoverlap rules; their physical ranges must not overlap each other or the
+optional xattr block, and decoded `i_blocks` must exactly equal the aggregate
+data-plus-xattr block count in filesystem sectors. Every release range must be
+allocated, lie outside all static metadata and journal ranges, and not alias
+orphan-file storage. One combined filesystem-wide scan of authenticated
+allocated inodes must prove that no other extent or legacy data/map-metadata
+reference, or external-xattr pointer, names any block in the complete release
+set. A resident inline xattr area is admitted only after the structural walker
+proves bounded, ordered, nonoverlapping values with no value-inode reference.
+If even one record is outside these supported per-record shapes, the whole
+union returns a stable refusal before writer allocation or cleanup mutation.
 
 Mount drains a qualified union deterministically: the current legacy head and
 its authenticated successor chain first, then modern records ordered by
@@ -644,17 +646,19 @@ depth-0 extent root is empty or contains one through four initialized or
 unwritten extents. Every entry must have a zero physical high word.
 Initialized decoded lengths are 1..32768 blocks and unwritten decoded lengths
 are 1..32767 blocks; every `logical_start + decoded_length` must be at most
-`0xffffffff`. Decoded `i_blocks` must exactly match the aggregate length of
-all entries. A resident inline
-xattr area is structurally authenticated with the
-shared reader walker and may not refer to a value inode; an external xattr
-block remains outside this slice. The target must be at or above `s_first_ino`.
-Journal-data mode, depth-positive/external extent trees, malformed lengths or
-ranges, and external storage-owning xattr shapes remain refused. Every
-candidate range bit must be set and each distinct touched block-bitmap home
-must have exactly one descriptor owner. Every physical range must lie inside
-mutable data space, be disjoint from the other target ranges, and be disjoint
-from static metadata, the journal, and all modern-orphan-file extents.
+`0xffffffff`. A resident inline xattr area is structurally authenticated with
+the shared reader walker and may not refer to a value inode. The same walker
+admits one external xattr block only when its header, checksum, entries, and
+allocation are valid and `h_refcount` is exactly one. The external block is an
+independent release singleton rather than a fifth inline extent slot. Decoded
+`i_blocks` must exactly match all data blocks plus that optional singleton.
+The target must be at or above `s_first_ino`. Journal-data mode,
+depth-positive/external extent trees, malformed lengths or ranges, shared
+external xattr blocks, and xattr value inodes remain refused. Every candidate
+range bit must be set and each distinct touched block-bitmap home must have
+exactly one descriptor owner. Every release range must lie inside mutable data
+space, be disjoint from every other target range, and be disjoint from static
+metadata, the journal, and all modern-orphan-file extents.
 
 Release admission then walks every initialized, checksum-authenticated inode
 bitmap and every set inode record except the target. Each record's inode
@@ -668,9 +672,11 @@ bad-block-map interpretation; other mode-zero reserved records must be
 storage-empty, while fast-symlink and device payload bytes retain their normal
 non-map interpretation. Any reference to any candidate range is
 `EXT4-D-DATA-MAP` corruption, even when both inode records and their allocation
-bits are individually checksum-valid. All active ranges are published
-together for this scan, so proving one entry cannot conceal an alias in a
-later entry.
+bits are individually checksum-valid. All four possible data ranges and the
+optional external-xattr singleton are published together for this scan, so
+proving one entry cannot conceal an alias in a later entry. The retained
+ownership certificate binds the ordered data tuple and the xattr home as
+separate fields.
 
 The builder derives the inode
 group, bitmap bit, table locator, primary GDT page, and primary-super home from
@@ -680,13 +686,13 @@ requires every transaction home to be pairwise disjoint except the intentional
 legacy protocol/super coalescing.
 
 The builder first stages the complete target inode-table home with exactly the
-target record zeroed and every sibling byte preserved. For a nonempty target
-it then releases every physical extent through the typed block-free builder,
-including exact per-entry chunks crossing group boundaries; it stages no
-data-block overwrite and does not wipe block contents. Multiple ranges that
-touch the same block group compose into one bitmap after-image, and all group
-descriptor changes sharing a primary GDT block compose into one GDT
-after-image. It finally
+target record zeroed and every sibling byte preserved. For a target with data
+or external xattr storage, it then releases each physical extent and the
+optional xattr singleton through the typed block-free builder, including exact
+chunks crossing group boundaries; it stages no released-block overwrite and
+does not wipe block contents. Multiple ranges that touch the same block group
+compose into one bitmap after-image, and all group descriptor changes sharing
+a primary GDT block compose into one GDT after-image. It finally
 clears exactly one retained inode-bitmap bit, increments the split
 group free-inode count, installs the new inode-bitmap CRC32C, restamps the
 complete descriptor, increments the primary-super free-inode count, and
@@ -1367,10 +1373,9 @@ The remaining boundaries are:
   geometry, checked arithmetic, and caller-arena storage rather than a separate
   fixed constant, but still does not cover nonzero-size or tail truncation,
   target depth-positive/external extent trees, target legacy direct/indirect
-  map mutation, a nonzero physical high word, unlinked-target external-xattr
-  release, an inline xattr value inode, external-xattr/value-inode release, or
-  general link-count and
-  malformed-chain repair. General inode
+  map mutation, a nonzero physical high word, shared external-xattr reference
+  decrement, inline or external xattr value-inode release, or general
+  link-count and malformed-chain repair. General inode
   allocation, general inode release outside the admitted shape, and every
   user-visible mutation operation remain unimplemented. Cleanup releases
   allocation authority but does not provide secure deletion or data-block
@@ -1407,9 +1412,10 @@ The remaining boundaries are:
   block also mapped as orphan-file preallocation is rejected as
   `EXT4-D-DATA-MAP` in 121,741,936 steps with all temporary ownership state
   cleared. These are harness measurements, not driver capacities.
-  Mount-level refusal covers a nonzero physical high word, external xattrs,
-  orphan-storage aliasing, a clear one-block data bit, and a two-block extent
-  whose second allocation bit is clear.
+  Mount-level refusal covers a nonzero physical high word, unauthorized or
+  malformed external-xattr release shapes, orphan-storage aliasing, a clear
+  one-block data bit, and a two-block extent whose second allocation bit is
+  clear.
   Checksum-valid allocated live-inode fixtures additionally prove that both a
   data extent and an external-xattr pointer aliasing the candidate are
   rejected as `EXT4-D-DATA-MAP` before writer allocation or media mutation.
@@ -1417,6 +1423,15 @@ The remaining boundaries are:
   proves that reverse-owner admission covers the complete range. Both orphan
   protocols are qualified; the same-binding retry returns the same refusal
   with the scoped ownership proof and ambient probe cleared.
+  Focused unique-external-xattr qualification now passes modern direct
+  stage/seal/abort for both xattr-only and data-plus-xattr deletion, modern
+  refusal for a shared block and a data/xattr self-alias, and one complete
+  modern data-plus-xattr production mount through checkpoint. The production
+  case uses a scoped 1,500,000,000-step watchdog, a moderate increase over the
+  general 1,200,000,000 guard; this is qualification headroom rather than an
+  implementation capacity. The corresponding legacy cases, the rest of the
+  negative matrix, and pinned e2fsck acceptance remain pending before this
+  shape closes its release-qualification gate.
   Multi-range qualification admits a separated two-entry modern root and the
   four-entry inline maximum under legacy cleanup, mixing initialized and
   unwritten entries and logical gaps. Direct exact-shape preflight still

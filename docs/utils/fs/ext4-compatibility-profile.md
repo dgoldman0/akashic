@@ -788,17 +788,22 @@ Before its first cleanup write, mount authenticates and exactly measures every
 record in the complete union. Each record must be either a linked depth-zero
 truncation already at zero size or an unlinked depth-zero deletion with an
 empty root or one through four authenticated inline extent entries and the
-qualified allocation/xattr shape. Each entry may have an initialized decoded
-length of 1..32768 blocks or an unwritten decoded length of 1..32767 blocks,
-with `logical_start + decoded_length <= 0xffffffff`; these are ext4 `ee_len`
-and logical-domain bounds rather than cleanup caps. Logical and physical
-ordering, aggregate `i_blocks`, every exact range, and the zero inactive tail
-are authenticated and sealed together. If any record is outside those
-per-record shapes, the complete union refuses before writer allocation or
-cleanup mutation. The maximum exact coalesced metadata credit across all
-records sizes one reusable writer. The count remains bounded by authenticated
-filesystem geometry, checked arithmetic, and available caller-arena storage;
-cleanup adds no separate fixed record-count constant.
+qualified allocation/xattr shape. An unlinked target may own one authenticated
+external xattr block only when its on-media reference count is exactly one;
+shared blocks and xattr value inodes remain unsupported. Each extent entry may
+have an initialized decoded length of 1..32768 blocks or an unwritten decoded
+length of 1..32767 blocks, with
+`logical_start + decoded_length <= 0xffffffff`; these are ext4 `ee_len` and
+logical-domain bounds rather than cleanup caps. Logical and physical ordering,
+aggregate data-plus-xattr `i_blocks`, every exact release range, and the zero
+inactive tail are authenticated and sealed together. The optional xattr block
+is independent of the four format-defined inline extent slots and must not
+overlap them. If any record is outside those per-record shapes, the complete
+union refuses before writer allocation or cleanup mutation. The maximum exact
+coalesced metadata credit across all records sizes one reusable writer. The
+count remains bounded by authenticated filesystem geometry, checked
+arithmetic, and available caller-arena storage; cleanup adds no separate fixed
+record-count constant.
 
 The modern orphan inode used to locate those records is not restricted to the
 target cleanup shape. Mutation admission validates its complete read-profile
@@ -813,8 +818,9 @@ Cleanup selects the current legacy head until its authenticated successor
 chain is empty, then selects modern entries in unsigned `(logical block, slot)`
 order. One exact transaction removes each selected modern slot or advances the
 legacy head to its retained successor, updates and checksums the target inode,
-and for admitted deletions releases the exact physical range and inode
-allocation plus every touched descriptor and super counter. A linked legacy
+and for admitted deletions releases every exact data range, the optional
+unique external-xattr block, and the inode allocation plus every touched
+descriptor and super counter. A linked legacy
 intermediate record clears its consumed `i_dtime` successor in the same
 transaction; the terminal zero-successor/empty-root case avoids a no-op inode
 rewrite, while linked modern records require `i_dtime` to be zero. Every sealed
@@ -833,14 +839,16 @@ table when it is large enough rather than abandoning monotonic arena storage;
 an insufficient caller arena or retained table fails without a second
 allocation.
 
-Every linked or unlinked inline-root range is admitted through one combined
-filesystem-wide other-inode ownership scan before release. An overlap through
-another allocated inode's data, map metadata, or external-xattr pointer is a
-corrupt data-map refusal. The scoped proof is bound to the context, inode,
-generation, and exact ordered range tuple; it may survive journal-only staging
-and emission but is invalidated before checkpoint can write a home. Whole-union
-qualification completes this proof for every retained supported record before
-the first record is mutated.
+Every linked data range and every unlinked release range is admitted through
+one combined filesystem-wide other-inode ownership scan before release. For an
+unlinked target, all four possible inline data ranges and the optional
+external-xattr singleton are published together. An overlap through another
+allocated inode's data, map metadata, or external-xattr pointer is a corrupt
+data-map refusal. The scoped proof is bound to the context, inode, generation,
+exact ordered data tuple, and separate xattr home; it may survive journal-only
+staging and emission but is invalidated before checkpoint can write a home.
+Whole-union qualification completes this proof for every retained supported
+record before the first record is mutated.
 
 An authenticated empty modern set is completed before mount publication only
 when both protocol counts are zero. Writer-free `AKW1` and `AKE1`-qualified
@@ -923,9 +931,16 @@ exact 34-write/24-flush trace, completes in 1,111,798,161 steps, and reaches a
 zero-I/O byte-stable remount in 67,492,163; unlinked JFI admission completes
 without writes in 240,654,652. A valid external xattr simultaneously named as
 orphan-file preallocation is rejected as a corrupt data map in 121,741,936
-steps with no residual ownership scope. Unified
-discovery and cleanup
-still need broader qualification for chains longer than two,
+steps with no residual ownership scope. Unified discovery and cleanup also has
+focused modern evidence for unique external-xattr deletion: direct
+stage/seal/abort passes for xattr-only and data-plus-xattr targets, shared-block
+and data/xattr self-alias refusals pass, and one data-plus-xattr production
+mount reaches checkpoint with canonical allocation accounting. That production
+case uses a scoped 1,500,000,000-step watchdog, moderately above the general
+1,200,000,000 guard; it is qualification headroom, not a format or driver
+capacity. Legacy variants, the remaining negative cases, and pinned e2fsck
+acceptance for this new shape are still pending. Broader qualification is also
+needed for chains longer than two,
 later modern blocks and large orphan files, additional ownership and deletion
 shapes, distinct-key hash collisions, and arena exhaustion or retained-too-
 small retry behavior. The one-block linked chain now also qualifies crashes
