@@ -5073,6 +5073,7 @@ VARIABLE _EXT4-JADV-CTX
 3 CONSTANT _EXT4-JDM-DEPTH1-LEAVES
 4 CONSTANT _EXT4-JDM-LEGACY-SINGLE-INDIRECT
 5 CONSTANT _EXT4-JDM-LEGACY-SPARSE-DOUBLE
+6 CONSTANT _EXT4-JDM-LEGACY-SPARSE-TRIPLE
 
 0 CONSTANT _EXT4-JEA-NONE
 1 CONSTANT _EXT4-JEA-RELEASE
@@ -5833,6 +5834,14 @@ VARIABLE _EXT4-JCA-PRE-LEGACY
         LOOP
         TRUE EXIT
     THEN
+    _EXT4-JCA-DATA-MAP-KIND @
+    _EXT4-JDM-LEGACY-SPARSE-TRIPLE = IF
+        _EXT4-JCA-TARGET-ENTRIES @ IF FALSE EXIT THEN
+        _EXT4-JCA-RANGE-COUNT @ 1 <> IF FALSE EXIT THEN
+        1 _EXT4-JCA-MAP-ENTRIES !
+        0 _EXT4-JCA-WRITER @ _EXT4-JWR-CP-DELETE-RANGE
+        CELL+ @ 1 = EXIT
+    THEN
     _EXT4-JCA-DATA-MAP-KIND @ _EXT4-JDM-LEGACY-DIRECT <> IF
         FALSE EXIT
     THEN
@@ -5870,6 +5879,9 @@ VARIABLE _EXT4-JCA-PRE-LEGACY
         DROP _EXT4-JCA-MAP-ENTRIES @ DUP 1 U<
         SWAP _EXT4-JCA-WRITER @ _EXT4-JWR.BSIZE + @ 4 / 2 +
         U> OR 0= EXIT
+    THEN
+    DUP _EXT4-JDM-LEGACY-SPARSE-TRIPLE = IF
+        DROP _EXT4-JCA-MAP-ENTRIES @ 1 = EXIT
     THEN
     DUP _EXT4-JDM-INLINE-EXTENTS =
     SWAP _EXT4-JDM-LEGACY-DIRECT = OR IF
@@ -11535,6 +11547,7 @@ VARIABLE _EXT4-JFI-DATA-LOGICAL
 VARIABLE _EXT4-JFI-DATA-INDEX
 VARIABLE _EXT4-JFI-LEGACY-INDIRECT-HOME
 VARIABLE _EXT4-JFI-LEGACY-DOUBLE-HOME
+VARIABLE _EXT4-JFI-LEGACY-TRIPLE-HOME
 VARIABLE _EXT4-JFI-LEGACY-DOUBLE-CHILDREN
 VARIABLE _EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE
 VARIABLE _EXT4-JFI-LEGACY-PTRS
@@ -11619,6 +11632,9 @@ VARIABLE _EXT4-JRV-INDEX
     DUP _EXT4-JDM-LEGACY-SPARSE-DOUBLE = IF
         DROP _EXT4-JFI-MAP-ENTRIES @ DUP 1 U<
         SWAP _EXT4-JFI-LEGACY-PTRS @ 2 + U> OR 0= EXIT
+    THEN
+    DUP _EXT4-JDM-LEGACY-SPARSE-TRIPLE = IF
+        DROP _EXT4-JFI-MAP-ENTRIES @ 1 = EXIT
     THEN
     DUP _EXT4-JDM-INLINE-EXTENTS =
     SWAP _EXT4-JDM-LEGACY-DIRECT = OR IF
@@ -12820,13 +12836,38 @@ VARIABLE _EXT4-JFI-LEGACY-CHECK-INDEX
 
 \ Decode every occupied direct slot, an optional complete single-indirect
 \ block, and every occupied child under an optional double-indirect root whose
-\ exact authority fits the caller workspace.  Holes do not enter release
+\ exact authority fits the caller workspace.  A triple root is admitted only
+\ when slots 0..13 and every pointer in that allocated root block are zero; it
+\ contributes one map singleton and no data.  Holes do not enter release
 \ authority.  Data remains in direct, single, then double outer/inner pointer
 \ order.  Map metadata follows as optional single root, double root, and every
-\ child in outer-slot order; a nonzero triple root remains unsupported.
+\ child in outer-slot order.
 : _EXT4-JFI-LEGACY-DATA-PREFLIGHT  ( -- ior )
     _EXT4-JDM-LEGACY-DIRECT _EXT4-JFI-DATA-MAP-KIND !
     _EXT4-JFI-INODE @ _EXT4-I.BLOCK + _EXT4-JFI-DATA-ROOT !
+    _EXT4-JFI-DATA-ROOT @ _EXT4-NDIRECT 2 + 4 * + L@
+    DUP _EXT4-JFI-LEGACY-TRIPLE-HOME ! IF
+        _EXT4-JFI-DATA-ROOT @ _EXT4-NDIRECT 2 + 4 *
+        _EXT4-BYTES-ZERO? 0= IF
+            EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+        THEN
+        _EXT4-JDM-LEGACY-SPARSE-TRIPLE _EXT4-JFI-DATA-MAP-KIND !
+        _EXT4-JFI-LEGACY-TRIPLE-HOME @ _EXT4-JFI-EA @ = IF
+            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
+        _EXT4-JFI-LEGACY-TRIPLE-HOME @ _EXT4-JFI-CTX @
+        _EXT4-LOAD-LEGACY-POINTER-BLOCK ?DUP IF EXIT THEN
+        _EXT4-JFI-CTX @ _EXT4-C.TREE-BLOCK +
+        _EXT4-JFI-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES-ZERO? 0= IF
+            EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+        THEN
+        1 _EXT4-JFI-MAP-ENTRIES !
+        1 _EXT4-JFI-MAP-BLOCKS !
+        0 _EXT4-JFI-MAP-INDEX !
+        _EXT4-JFI-LEGACY-TRIPLE-HOME @ _EXT4-JFI-PARK-LEGACY-MAP
+        _EXT4-JFI-COMPACT-MAP-RANGES
+        _EXT4-JFI-DATA-COMMON-PREFLIGHT EXIT
+    THEN
     _EXT4-NDIRECT 2 + _EXT4-JFI-CTX @
     _EXT4-I-BLOCK-ZERO-FROM? 0= IF
         EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
@@ -12898,6 +12939,7 @@ VARIABLE _EXT4-JFI-LEGACY-CHECK-INDEX
     0 _EXT4-JFI-MAP-INDEX !
     0 _EXT4-JFI-LEGACY-INDIRECT-HOME !
     0 _EXT4-JFI-LEGACY-DOUBLE-HOME !
+    0 _EXT4-JFI-LEGACY-TRIPLE-HOME !
     0 _EXT4-JFI-LEGACY-DOUBLE-CHILDREN !
     0 _EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE !
     0 _EXT4-JFI-LEGACY-PTRS !
@@ -12981,8 +13023,8 @@ VARIABLE _EXT4-JFI-CP-WRITER
 \ Authenticate one complete deletion shape: an inline extent root, every
 \ format-valid resident depth-one leaf fanout, or all twelve legacy direct
 \ slots plus optional complete single-indirect data and every occupied
-\ double-indirect child whose exact authority fits the caller workspace, with
-\ the triple root zero.
+\ double-indirect child whose exact authority fits the caller workspace, or
+\ one allocated all-zero triple-indirect root with every earlier slot zero.
 \ Retain each represented data and map-metadata range separately
 \ and bind the map family, ordered release vector, and explicit external-xattr
 \ disposition into the owner certificate.

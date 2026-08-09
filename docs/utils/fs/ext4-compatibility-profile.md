@@ -794,7 +794,13 @@ root with one to four checksum-valid external leaves, or a legacy map using any 
 map may additionally use an optional double-indirect root with zero or more
 occupied children when its exact canonical data-plus-map vector, plus any
 present external-xattr owner range, fits the `2P+16` caller workspace; its
-triple-indirect root remains zero. The linked legacy-format alternative
+triple-indirect root remains zero. As a separate unlinked shape, slots 0
+through 13 may all be zero while slot 14 names one allocated triple-indirect
+root whose full block is all zero. It has no children or data, contributes one
+map block to `i_blocks`, is retained as the sole canonical map singleton under
+distinct `LEGACY-SPARSE-TRIPLE` authority, and receives one exact revoke. It
+remains subject to the same caller-workspace bound. The linked legacy-format
+alternative
 requires the `EXTENTS` flag clear and all 12 direct pointers plus the single-,
 double-, and triple-indirect roots zero. It contributes no release ranges or
 revokes, and its decoded `i_blocks` may contain only the contribution from an
@@ -822,8 +828,11 @@ and entries in every double-indirect child become ordered singleton data ranges
 in outer/inner slot order. The optional single root, double root, and all
 children follow as map singletons. Duplicate data pointers and data/map or
 map/map aliases are corruption. An empty double root is admitted as one map
-singleton. Only exact double-indirect authority larger than the caller
-workspace and any nonzero triple root remain unsupported recovery. The
+singleton. The exclusive all-zero triple root is admitted as one trailing map
+singleton after zero data entries. A triple root with any nonzero pointer, or
+a present triple root combined with any direct, single-indirect, or
+double-indirect map, remains unsupported. Exact double-indirect authority
+larger than the caller workspace also remains unsupported recovery. The
 optional xattr block is independent of both map families and must not overlap their data ranges. If any record is outside
 those per-record shapes, the complete
 union refuses before writer allocation or cleanup mutation. The largest exact
@@ -989,8 +998,8 @@ Legacy-direct deletion qualification fills all 12 direct slots under both
 orphan protocols while retaining 12 ordered singleton certificate/checkpoint
 ranges and an explicit map-family discriminator. Sparse slots 0, 5, and 11
 compact in slot order; duplicate pointers and mismatched `i_blocks` are corrupt,
-while over-budget double-indirect maps and nonzero triple-indirect roots are
-unsupported. Contiguous
+while over-budget double-indirect maps and triple roots combined with direct
+maps are unsupported. Contiguous
 singleton execution is combined only after exact-vector validation. Full
 production cleanup with
 `i_size = 2^32 + 777` measures 1,156,337,987 modern and 1,157,813,068 legacy
@@ -1017,15 +1026,29 @@ root, child@2, external EA }`, retaining the three map revokes followed by the
 EA revoke. A boundary check fills the exact 528-pair 1 KiB workspace with 524
 data and four map ranges when no xattr is present, while a present xattr or one
 more data pointer is unsupported. Child/data aliasing and duplicate child
-homes are corrupt; only
-over-budget double-indirect authority and triple roots remain unsupported. The
+homes are corrupt; over-budget double-indirect authority remains unsupported.
+Triple-indirect admission is limited to the separate exclusive empty-root
+shape; a nonzero child or any lower-map composition remains unsupported. The
 authority capacity is 528, 1040, or 2064 pairs at 1, 2, or 4 KiB. Focused
 one-child modern production releases three data and
 three map blocks in 1,431,070,159 guest steps under a scoped
 1,600,000,000-step watchdog, preserves all six homes without a payload write,
 and reaches a byte-identical zero-I/O remount. Multi-child and external-xattr
 production, legacy-protocol qualification, crash qualification, and pinned
-e2fsck acceptance remain pending for this tier. A separate
+e2fsck acceptance remain pending for this tier. Separate focused modern-only
+1 KiB qualification covers one unlinked inode with slots 0 through 13 zero,
+one allocated all-zero triple-indirect root, no data, and root-only `i_blocks`.
+Measurement pins six metadata credits and one revoke. Stage and seal retain
+zero target entries, one singleton map-metadata release range, one map block,
+the root's exact revoke, and distinct `LEGACY-SPARSE-TRIPLE` authority; the
+staged verifier accepts that exact certificate and abort returns the writer and
+ownership scope clean with no home write. Checkpoint-certificate tampering
+with target-entry count, range count, range span, or map kind is refused.
+Focused negative admission covers a nonzero triple child, composition with a
+lower direct map, and aliasing the triple root with the external-xattr home.
+This is not qualification of production union drain, journal emission or
+checkpoint, crash recovery, remount, or e2fsck acceptance;
+legacy-orphan-protocol qualification is also pending for this shape. A separate
 checksum-valid modern orphan-file fixture maps 31 logical blocks through a
 preserved depth-1 external extent node. Linked production cleanup retains its
 exact 34-write/24-flush trace, completes in 1,111,798,161 steps, and reaches a

@@ -2159,6 +2159,7 @@ def _legacy_indirect_unlinked_orphan_patches(
     single_slots: tuple[int, ...] = (),
     double_children: tuple[tuple[int, tuple[int, ...]], ...] = (),
     empty_double_root: bool = False,
+    empty_triple_root: bool = False,
     inode_number: int = 18,
     physical_gap: int = 1,
     seed_payloads: bool = False,
@@ -2178,6 +2179,10 @@ def _legacy_indirect_unlinked_orphan_patches(
     double_outer_slots = tuple(outer for outer, _ in double_children)
     assert tuple(sorted(set(double_outer_slots))) == double_outer_slots
     assert not (empty_double_root and double_children)
+    assert not (
+        empty_triple_root
+        and (direct_slots or single_slots or double_children or empty_double_root)
+    )
     assert physical_gap >= 0
     assert 0 <= size_bytes < (1 << 63)
 
@@ -2205,7 +2210,7 @@ def _legacy_indirect_unlinked_orphan_patches(
     data_count = len(direct_slots) + len(single_slots) + double_data_count
     map_count = (1 if single_slots else 0) + (
         1 + len(double_children) if has_double_root else 0
-    )
+    ) + (1 if empty_triple_root else 0)
     assert data_count + map_count > 0
     allocation_specs = tuple(
         (2 * index, 1, False) for index in range(data_count + map_count)
@@ -2286,6 +2291,12 @@ def _legacy_indirect_unlinked_orphan_patches(
                 struct.pack_into("<I", child_block, inner_slot * 4, physical)
             patch_map[child_home * block_size] = bytes(child_block)
         patch_map[double_home * block_size] = bytes(double_root)
+
+    triple_home = 0
+    if empty_triple_root:
+        triple_home = map_ranges[map_cursor][0]
+        map_cursor += 1
+        patch_map[triple_home * block_size] = bytes(block_size)
     assert map_cursor == len(map_ranges)
 
     _, _, inode_offset = _ext4_inode_record(path, inode_number)
@@ -2305,6 +2316,7 @@ def _legacy_indirect_unlinked_orphan_patches(
         struct.pack_into("<I", inode, 0x28 + slot * 4, physical)
     struct.pack_into("<I", inode, 0x28 + 12 * 4, single_home)
     struct.pack_into("<I", inode, 0x28 + 13 * 4, double_home)
+    struct.pack_into("<I", inode, 0x28 + 14 * 4, triple_home)
     sectors_per_block = block_size // 512
     assert struct.unpack_from("<H", inode, 0x76)[0] == 0
     xattr_blocks = 1 if struct.unpack_from("<I", inode, 0x68)[0] else 0
@@ -18622,7 +18634,7 @@ def test_legacy_direct_unlinked_head_stages_all_twelve_slots(
     (
         ("duplicate", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
         ("i-blocks", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
-        ("triple-indirect", "VFS-R-UNSUPPORTED", "EXT4-D-RECOVERY"),
+        ("triple-with-direct", "VFS-R-UNSUPPORTED", "EXT4-D-RECOVERY"),
     ),
 )
 def test_legacy_direct_unlinked_preflight_rejects_unsafe_shapes(
@@ -18655,7 +18667,7 @@ def test_legacy_direct_unlinked_preflight_rejects_unsafe_shapes(
             raw_blocks + block_size // 512,
         )
     else:
-        assert case == "triple-indirect"
+        assert case == "triple-with-direct"
         struct.pack_into("<I", inode, 0x28 + 4, 0)
         struct.pack_into("<I", inode, 0x28 + 14 * 4, second_physical)
         patch_map[second_physical * block_size] = bytes(block_size)
@@ -18711,6 +18723,152 @@ def test_legacy_direct_unlinked_preflight_rejects_unsafe_shapes(
                         "_LD-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
+                + f' IF ." {marker}" THEN'
+            ),
+        ],
+        patches=tuple(patch_map.items()),
+    )
+    _assert_emitted(output, marker)
+
+
+@pytest.mark.parametrize(
+    ("case", "reason", "detail"),
+    (
+        ("nonzero-child", "VFS-R-UNSUPPORTED", "EXT4-D-RECOVERY"),
+        ("xattr-alias", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
+    ),
+)
+def test_sparse_triple_rejects_unadmitted_roots(
+    canonical_images: dict[str, Path],
+    case: str,
+    reason: str,
+    detail: str,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    if case == "nonzero-child":
+        patches, data_ranges, map_ranges = (
+            _legacy_indirect_unlinked_orphan_patches(
+                path,
+                protocol="modern",
+                direct_slots=(),
+                empty_triple_root=True,
+                physical_gap=0,
+                size_bytes=(1 << 32) + 777,
+            )
+        )
+        assert data_ranges == ()
+        assert len(map_ranges) == 1
+        triple_home, triple_count = map_ranges[0]
+        assert triple_count == 1
+        patch_map = dict(patches)
+        superblock = patch_map[1024]
+        block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+        triple_root = bytearray(patch_map[triple_home * block_size])
+        assert triple_root == bytes(block_size)
+        struct.pack_into("<I", triple_root, 0, triple_home)
+        patch_map[triple_home * block_size] = bytes(triple_root)
+    else:
+        assert case == "xattr-alias"
+        patches, data_ranges, xattr_block = (
+            _unlinked_orphan_external_xattr_patches(
+                path,
+                protocol="modern",
+                data_blocks=0,
+            )
+        )
+        assert data_ranges == ()
+        patch_map = dict(patches)
+        superblock = patch_map[1024]
+        block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+        _, _, inode_offset = _ext4_inode_record(path, 18)
+        inode = bytearray(patch_map[inode_offset])
+        flags = struct.unpack_from("<I", inode, 0x20)[0]
+        assert flags & 0x0008_0000
+        struct.pack_into("<I", inode, 0x20, flags & ~0x0008_0000)
+        inode[0x28:0x64] = bytes(60)
+        struct.pack_into("<I", inode, 0x28 + 14 * 4, xattr_block)
+        sectors_per_block = block_size // 512
+        raw_blocks = struct.unpack_from("<I", inode, 0x1C)[0]
+        assert raw_blocks == sectors_per_block
+        struct.pack_into(
+            "<I",
+            inode,
+            0x1C,
+            raw_blocks + sectors_per_block,
+        )
+        patch_map[inode_offset] = _inode_with_checksum(
+            superblock,
+            18,
+            inode,
+        )
+    marker = f"EXT4-LEGACY-SPARSE-TRIPLE-{case.upper()}-REFUSED"
+    if case == "xattr-alias":
+        preflight_lines = [
+            (
+                "18 _TR-CTX _EXT4-LOAD-ORPHAN-INODE "
+                "CONSTANT _TR-LOAD-IOR"
+            ),
+            "_TR-CTX _EXT4-C.INODE + _EXT4-JFI-INODE !",
+            "_TR-CTX _EXT4-JFI-CTX !",
+            (
+                "_TR-CTX _EXT4-C.INODE + _EXT4-I.FILE-ACL-LO + L@ "
+                "_EXT4-JFI-EA !"
+            ),
+            "DEPTH CONSTANT _TR-DEPTH-BEFORE",
+            "_EXT4-JFI-DATA-PREFLIGHT CONSTANT _TR-PREFLIGHT-IOR",
+            "DEPTH CONSTANT _TR-DEPTH-AFTER",
+        ]
+        case_checks = [
+            "_TR-IOR 0<>",
+            "_TR-LOAD-IOR 0=",
+            f"_EXT4-JFI-LEGACY-TRIPLE-HOME @ {xattr_block} =",
+        ]
+    else:
+        preflight_lines = [
+            (
+                "_TR-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _TR-FIND-IOR CONSTANT _TR-RECORD"
+            ),
+            "_TR-RECORD _EXT4-JFI-RECORD !",
+            "_TR-CTX _EXT4-JFI-CTX !",
+            "DEPTH CONSTANT _TR-DEPTH-BEFORE",
+            "_EXT4-JFI-AUTH-PREFLIGHT CONSTANT _TR-PREFLIGHT-IOR",
+            "DEPTH CONSTANT _TR-DEPTH-AFTER",
+        ]
+        case_checks = [
+            "_TR-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED =",
+            "_TR-IOR VFS-IOR-DETAIL EXT4-D-RECOVERY =",
+            "_TR-FIND-IOR 0=",
+        ]
+    refusal_checks = [
+        "_TR-JOURNAL-IOR 0=",
+        *case_checks,
+        f"_TR-PREFLIGHT-IOR VFS-IOR-REASON {reason} =",
+        f"_TR-PREFLIGHT-IOR VFS-IOR-DETAIL {detail} =",
+        "_TR-DEPTH-BEFORE _TR-DEPTH-AFTER =",
+        (
+            "_EXT4-JFI-DATA-MAP-KIND @ "
+            "_EXT4-JDM-LEGACY-SPARSE-TRIPLE ="
+        ),
+        "_EXT4-JFI-MAP-ENTRIES @ 0=",
+        "_EXT4-JFO-CERT-VALID @ 0=",
+        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+        "_TR-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+    ]
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _TR-IOR CONSTANT _TR-V"
+            ),
+            "_TR-V _EXT4-CTX CONSTANT _TR-CTX",
+            "_TR-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _TR-JOURNAL-IOR",
+            *preflight_lines,
+            (
+                _forth_conjunction(refusal_checks)
                 + f' IF ." {marker}" THEN'
             ),
         ],
@@ -19086,15 +19244,16 @@ def test_unlinked_preflight_accepts_sparse_double_without_single_root(
 
 @pytest.mark.parametrize(
     "shape",
-    ("empty-root", "multi-child", "multi-child-xattr"),
+    ("empty-root", "multi-child", "multi-child-xattr", "empty-triple-root"),
 )
-def test_sparse_double_stages_canonical_map_revokes(
+def test_legacy_indirect_stages_canonical_map_revokes(
     canonical_images: dict[str, Path],
     shape: str,
 ) -> None:
     path = canonical_images["primary-1k-i256"]
     base_patches: tuple[tuple[int, bytes], ...] | None = None
     xattr_block = 0
+    empty_triple_root = False
     if shape == "empty-root":
         direct_slots = (5,)
         single_slots: tuple[int, ...] = ()
@@ -19107,8 +19266,7 @@ def test_sparse_double_stages_canonical_map_revokes(
         double_children = ((2, (4,)), (7, (9,)))
         empty_double_root = False
         expected_counts = (4, 4)
-    else:
-        assert shape == "multi-child-xattr"
+    elif shape == "multi-child-xattr":
         base_patches, base_data_ranges, xattr_block = (
             _unlinked_orphan_external_xattr_patches(
                 path,
@@ -19122,6 +19280,14 @@ def test_sparse_double_stages_canonical_map_revokes(
         double_children = ((2, (4,)),)
         empty_double_root = False
         expected_counts = (3, 3)
+    else:
+        assert shape == "empty-triple-root"
+        direct_slots = ()
+        single_slots = ()
+        double_children = ()
+        empty_double_root = False
+        empty_triple_root = True
+        expected_counts = (0, 1)
     patches, data_ranges, map_ranges = _legacy_indirect_unlinked_orphan_patches(
         path,
         protocol="modern",
@@ -19129,6 +19295,7 @@ def test_sparse_double_stages_canonical_map_revokes(
         single_slots=single_slots,
         double_children=double_children,
         empty_double_root=empty_double_root,
+        empty_triple_root=empty_triple_root,
         physical_gap=0,
         seed_payloads=True,
         size_bytes=(1 << 32) + 777,
@@ -19143,10 +19310,102 @@ def test_sparse_double_stages_canonical_map_revokes(
     expected_ea_action = (
         "_EXT4-JEA-RELEASE" if xattr_block else "_EXT4-JEA-NONE"
     )
-    double_map_index = 1 if single_slots else 0
-    expected_double_home = map_ranges[double_map_index][0]
-    expected_double_child_base = double_map_index + 1
+    if empty_triple_root:
+        expected_map_kind = "_EXT4-JDM-LEGACY-SPARSE-TRIPLE"
+        triple_home = map_ranges[0][0]
+        map_shape_checks = [
+            f"_EXT4-JFI-LEGACY-TRIPLE-HOME @ {triple_home} =",
+            "_EXT4-JFI-LEGACY-INDIRECT-HOME @ 0=",
+            "_EXT4-JFI-LEGACY-DOUBLE-HOME @ 0=",
+            "_SD-S-META 6 =",
+        ]
+    else:
+        expected_map_kind = "_EXT4-JDM-LEGACY-SPARSE-DOUBLE"
+        double_map_index = 1 if single_slots else 0
+        expected_double_home = map_ranges[double_map_index][0]
+        expected_double_child_base = double_map_index + 1
+        map_shape_checks = [
+            (
+                "_EXT4-JFI-LEGACY-DOUBLE-HOME @ "
+                f"{expected_double_home} ="
+            ),
+            (
+                "_EXT4-JFI-LEGACY-DOUBLE-CHILDREN @ "
+                f"{len(double_children)} ="
+            ),
+            (
+                "_EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE @ "
+                f"{expected_double_child_base} ="
+            ),
+            "_EXT4-JFI-LEGACY-TRIPLE-HOME @ 0=",
+        ]
     marker = f"EXT4-LEGACY-SPARSE-{shape.upper()}-STAGED"
+    abort_marker = f"EXT4-LEGACY-SPARSE-{shape.upper()}-ABORT-CLEAN"
+    tamper_marker = ""
+    tamper_probe: list[str] = []
+    if empty_triple_root:
+        tamper_marker = "EXT4-LEGACY-SPARSE-TRIPLE-CP-TAMPER-REFUSED"
+        tamper_probe = [
+            "1 _SD-S-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + !",
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
+                "CONSTANT _SD-S-TRIPLE-ENTRIES-REJECTED"
+            ),
+            "0 _SD-S-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + !",
+            "0 _SD-S-WRITER _EXT4-JWR.CP-DELETE-RANGE-COUNT + !",
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
+                "CONSTANT _SD-S-TRIPLE-RANGE-COUNT-REJECTED"
+            ),
+            "1 _SD-S-WRITER _EXT4-JWR.CP-DELETE-RANGE-COUNT + !",
+            (
+                "2 0 _SD-S-WRITER _EXT4-JWR-CP-DELETE-RANGE "
+                "CELL+ !"
+            ),
+            "2 _SD-S-WRITER _EXT4-JWR.CP-DELETE-BLOCKS + !",
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
+                "CONSTANT _SD-S-TRIPLE-RANGE-SPAN-REJECTED"
+            ),
+            (
+                "1 0 _SD-S-WRITER _EXT4-JWR-CP-DELETE-RANGE "
+                "CELL+ !"
+            ),
+            "1 _SD-S-WRITER _EXT4-JWR.CP-DELETE-BLOCKS + !",
+            (
+                "_EXT4-JDM-LEGACY-DIRECT _SD-S-WRITER "
+                "_EXT4-JWR.CP-DATA-MAP-KIND + !"
+            ),
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
+                "CONSTANT _SD-S-TRIPLE-KIND-REJECTED"
+            ),
+            (
+                "_EXT4-JDM-LEGACY-SPARSE-TRIPLE _SD-S-WRITER "
+                "_EXT4-JWR.CP-DATA-MAP-KIND + !"
+            ),
+            (
+                "_SD-S-WRITER _EXT4-JWR-CP-AUTHORITY? "
+                "CONSTANT _SD-S-TRIPLE-AUTHORITY-RESTORED"
+            ),
+            (
+                "_SD-S-WRITER _EXT4-JTX-TABLES-VALID? "
+                "CONSTANT _SD-S-TRIPLE-TABLES-RESTORED"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_SD-S-TRIPLE-ENTRIES-REJECTED",
+                        "_SD-S-TRIPLE-RANGE-COUNT-REJECTED",
+                        "_SD-S-TRIPLE-RANGE-SPAN-REJECTED",
+                        "_SD-S-TRIPLE-KIND-REJECTED",
+                        "_SD-S-TRIPLE-AUTHORITY-RESTORED",
+                        "_SD-S-TRIPLE-TABLES-RESTORED",
+                    ]
+                )
+                + f' IF ." {tamper_marker}" THEN'
+            ),
+        ]
 
     output = run_forth(
         path,
@@ -19246,6 +19505,10 @@ def test_sparse_double_stages_canonical_map_revokes(
                             for index in range(len(expected_revoke_homes))
                         ],
                         "_SD-S-WRITER _EXT4-JFI-REVOKES-EXACT?",
+                        f"_EXT4-JFI-DATA-ENTRIES @ {len(data_ranges)} =",
+                        f"_EXT4-JFI-DATA-BLOCKS @ {len(data_ranges)} =",
+                        f"_EXT4-JFI-MAP-ENTRIES @ {len(map_ranges)} =",
+                        f"_EXT4-JFI-MAP-BLOCKS @ {len(map_ranges)} =",
                         f"_EXT4-JFI-ACCOUNTED-BLOCKS {expected_owner_count} =",
                         (
                             "_EXT4-JFI-RELEASE-RANGE-COUNT "
@@ -19255,22 +19518,11 @@ def test_sparse_double_stages_canonical_map_revokes(
                         f"_EXT4-JFI-REVOKE-COUNT {len(expected_revoke_homes)} =",
                         f"_EXT4-JFI-EA @ {xattr_block} =",
                         f"_EXT4-JFI-EA-ACTION @ {expected_ea_action} =",
-                        (
-                            "_EXT4-JFI-LEGACY-DOUBLE-HOME @ "
-                            f"{expected_double_home} ="
-                        ),
-                        (
-                            "_EXT4-JFI-LEGACY-DOUBLE-CHILDREN @ "
-                            f"{len(double_children)} ="
-                        ),
-                        (
-                            "_EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE @ "
-                            f"{expected_double_child_base} ="
-                        ),
+                        *map_shape_checks,
                         (
                             "_SD-S-WRITER "
                             "_EXT4-JWR.CP-DATA-MAP-KIND + @ "
-                            "_EXT4-JDM-LEGACY-SPARSE-DOUBLE ="
+                            f"{expected_map_kind} ="
                         ),
                         (
                             "_SD-S-WRITER "
@@ -19300,6 +19552,10 @@ def test_sparse_double_stages_canonical_map_revokes(
                         ),
                         f"_EXT4-JFO-CERT-EA @ {xattr_block} =",
                         (
+                            "_EXT4-JFO-CERT-DATA-MAP-KIND @ "
+                            f"{expected_map_kind} ="
+                        ),
+                        (
                             "_EXT4-JFO-CERT-RANGE-COUNT @ "
                             f"{len(combined_ranges)} ="
                         ),
@@ -19311,6 +19567,7 @@ def test_sparse_double_stages_canonical_map_revokes(
                 )
                 + f' IF ." {marker}" THEN'
             ),
+            *tamper_probe,
             "_SD-S-TX _EXT4-JTX-ABORT CONSTANT _SD-S-ABORT-IOR",
             "_EXT4-JFO-CERT-END",
             (
@@ -19324,14 +19581,16 @@ def test_sparse_double_stages_canonical_map_revokes(
                         "_SD-S-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
-                + ' IF ." EXT4-LEGACY-SPARSE-DOUBLE-ABORT-CLEAN" THEN'
+                + f' IF ." {abort_marker}" THEN'
             ),
         ],
         patches=patches,
         max_steps=900_000_000 if xattr_block else 800_000_000,
     )
     _assert_emitted(output, marker)
-    _assert_emitted(output, "EXT4-LEGACY-SPARSE-DOUBLE-ABORT-CLEAN")
+    if tamper_marker:
+        _assert_emitted(output, tamper_marker)
+    _assert_emitted(output, abort_marker)
 
 
 @pytest.mark.parametrize(
