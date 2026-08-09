@@ -10840,99 +10840,107 @@ VARIABLE _EXT4-JBV-IOR
 
 VARIABLE _EXT4-OFR-RECORD
 VARIABLE _EXT4-OFR-CTX
-VARIABLE _EXT4-OFR-ROOT
-VARIABLE _EXT4-OFR-ENTRIES
 VARIABLE _EXT4-OFR-INDEX
-VARIABLE _EXT4-OFR-ENTRY
-VARIABLE _EXT4-OFR-PHYS
-VARIABLE _EXT4-OFR-LEN
 VARIABLE _EXT4-OFR-RANGES
 VARIABLE _EXT4-OFR-RANGE-COUNT
-VARIABLE _EXT4-OFR-RANGE-INDEX
+VARIABLE _EXT4-OFR-EA
+VARIABLE _EXT4-OFR-IOR
+VARIABLE _EXT4-OFR-MAP-LIMIT
 
-\ Prove that no proposed release range names storage owned by the modern
-\ orphan file.  Parse that file once, checking every exact candidate against
-\ both every complete inline extent (including preallocation beyond EOF) and
-\ every authenticated logical orphan block.  Restore the target plan record
-\ before returning so callers retain its inode locator rather than the orphan
-\ inode left in the shared cache.
+\ Prove that no proposed release range names any storage owned by the modern
+\ orphan file.  Publish the exact candidate vector while the complete reader
+\ validates the orphan inode's extent or legacy map.  The ordinary allocation
+\ checks then reject aliases through leaf data, preallocation beyond EOF,
+\ external extent nodes, and legacy indirect metadata without flattening that
+\ geometry into another fixed table.  Check an external xattr block under the
+\ same scope, authenticate every logical orphan-block tail, withdraw the scope
+\ on every return, and finally restore the target plan record in C.INODE.
 
 : _EXT4-OFR-RANGE  ( index -- pair-address )
     2* CELLS _EXT4-OFR-RANGES @ + ;
+
+: _EXT4-OFR-FAIL  ( ior -- ior )
+    _EXT4-OFR-IOR !
+    _EXT4-MUTATION-OWNER-RANGES-CLEAR
+    _EXT4-OFR-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
+    _EXT4-OFR-IOR @ ;
+
+: _EXT4-OFR-PUBLISH  ( -- ior )
+    _EXT4-MUTATION-OWNER-RANGES-CLEAR
+    _EXT4-OFR-RANGE-COUNT @ 0 ?DO
+        I _EXT4-OFR-RANGE @ I _EXT4-MUTATION-OWNER-RANGE !
+        I _EXT4-OFR-RANGE CELL+ @
+        I _EXT4-MUTATION-OWNER-RANGE CELL+ !
+    LOOP
+    _EXT4-OFR-RANGE-COUNT @ _EXT4-MUTATION-OWNER-RANGES-PUBLISH ;
+
+: _EXT4-OFR-PUBLISH-EA  ( -- ior )
+    _EXT4-MUTATION-OWNER-RANGES-CLEAR
+    _EXT4-OFR-EA @ 0 _EXT4-MUTATION-OWNER-RANGE !
+    1 0 _EXT4-MUTATION-OWNER-RANGE CELL+ !
+    1 _EXT4-MUTATION-OWNER-RANGES-PUBLISH ;
 
 : _EXT4-ORPHAN-FILE-RANGES-DISJOINT
   ( ranges range-count plan-record ctx -- ior )
     _EXT4-OFR-CTX ! _EXT4-OFR-RECORD !
     _EXT4-OFR-RANGE-COUNT ! _EXT4-OFR-RANGES !
     _EXT4-OFR-CTX @ 0= _EXT4-OFR-RECORD @ 0= OR
-    _EXT4-OFR-RANGES @ 0= OR
-    _EXT4-OFR-RANGE-COUNT @ DUP 0=
-    SWAP _EXT4-MUTATION-OWNER-RANGE-MAX U> OR OR IF
+    _EXT4-OFR-RANGE-COUNT @ _EXT4-MUTATION-OWNER-RANGE-MAX U> OR
+    _EXT4-OFR-RANGE-COUNT @ 0<> _EXT4-OFR-RANGES @ 0= AND OR IF
         VFS-E-INVALID EXIT
     THEN
-    _EXT4-OFR-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
-    _EXT4-OFR-CTX @ _EXT4-C.INODE +
-    DUP _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND 0= IF
-        DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    _EXT4-MUTATION-OWNER-RANGE-COUNT @
+    _EXT4-MUTATION-OWNER-BOUND-FIRST @ OR
+    _EXT4-MUTATION-OWNER-BOUND-LIMIT @ OR
+    _EXT4-MUTATION-OWNER-INO @ OR
+    _EXT4-MUTATION-MAP-TARGET @ OR
+    _EXT4-MUTATION-MAP-ACTIVE @ OR
+    _EXT4-MUTATION-MAP-HITS @ OR
+    _EXT4-MUTATION-PROTOCOL-CTX @ OR
+    _EXT4-MUTATION-PROTOCOL-ACTIVE @ OR IF
+        VFS-E-BUSY EXIT
     THEN
-    DUP _EXT4-I.FILE-ACL-HI + W@
-    OVER _EXT4-I.FILE-ACL-LO + L@ OR IF
-        DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-OFR-MAP-LIMIT !
+    0 _EXT4-MAP-VALIDATION-LIMIT !
+    _EXT4-OFR-RANGE-COUNT @ IF
+        _EXT4-OFR-PUBLISH ?DUP IF _EXT4-OFR-FAIL EXIT THEN
     THEN
-    _EXT4-I.BLOCK + DUP _EXT4-OFR-ROOT !
-    DUP W@ _EXT4-EXTENT-MAGIC <> IF
-        DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    _EXT4-OFR-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF
+        _EXT4-OFR-FAIL EXIT
     THEN
-    DUP 4 + W@ 4 <> IF
-        DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    _EXT4-OV-IN @ _EXT4-I.FILE-ACL-HI + W@ IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT _EXT4-OFR-FAIL EXIT
     THEN
-    DUP 2 + W@ DUP _EXT4-OFR-ENTRIES ! 4 U> IF
-        DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    _EXT4-OV-IN @ _EXT4-I.FILE-ACL-LO + L@ DUP _EXT4-OFR-EA ! IF
+        _EXT4-OFR-EA @ EXT4-D-DATA-MAP _EXT4-OFR-CTX @
+        _EXT4-REQUIRE-ALLOCATED-BLOCK ?DUP IF _EXT4-OFR-FAIL EXIT THEN
     THEN
-    6 + W@ IF EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT THEN
-    0 _EXT4-OFR-INDEX !
-    BEGIN _EXT4-OFR-INDEX @ _EXT4-OFR-ENTRIES @ < WHILE
-        _EXT4-OFR-ROOT @ 12 _EXT4-OFR-INDEX @ 12 * + + DUP
-        _EXT4-OFR-ENTRY !
-        DUP _EXT4-EXTENT-LEN@ _EXT4-OFR-LEN !
-        8 + L@ _EXT4-OFR-PHYS !
-        0 _EXT4-OFR-RANGE-INDEX !
-        BEGIN
-            _EXT4-OFR-RANGE-INDEX @ _EXT4-OFR-RANGE-COUNT @ U<
-        WHILE
-            _EXT4-OFR-RANGE-INDEX @ _EXT4-OFR-RANGE DUP @
-            SWAP CELL+ @ DUP 0= IF
-                2DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-            _EXT4-OFR-PHYS @ _EXT4-OFR-LEN @
-            _EXT4-BLOCK-RANGES-OVERLAP? IF
-                EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-            1 _EXT4-OFR-RANGE-INDEX +!
-        REPEAT
-        1 _EXT4-OFR-INDEX +!
-    REPEAT
+    _EXT4-XOP-LIST _EXT4-XA-OP !
+    0 _EXT4-XA-TOTAL ! 0 _EXT4-XA-EMIT !
+    _EXT4-OFR-CTX @ _EXT4-XA-SCAN-BOTH
+    ?DUP IF _EXT4-OFR-FAIL EXIT THEN
     0 _EXT4-OFR-INDEX !
     BEGIN _EXT4-OFR-INDEX @ _EXT4-OV-BLOCKS @ < WHILE
         _EXT4-OFR-INDEX @ _EXT4-OFR-CTX @
-        _EXT4-READ-ORPHAN-BLOCK ?DUP IF EXIT THEN
-        0 _EXT4-OFR-RANGE-INDEX !
-        BEGIN
-            _EXT4-OFR-RANGE-INDEX @ _EXT4-OFR-RANGE-COUNT @ U<
-        WHILE
-            _EXT4-OFR-RANGE-INDEX @ _EXT4-OFR-RANGE DUP @
-            SWAP CELL+ @ DUP 0= IF
-                2DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-            _EXT4-OV-PHYS @ 1 _EXT4-BLOCK-RANGES-OVERLAP? IF
-                EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-            1 _EXT4-OFR-RANGE-INDEX +!
-        REPEAT
+        _EXT4-READ-ORPHAN-BLOCK ?DUP IF _EXT4-OFR-FAIL EXIT THEN
         1 _EXT4-OFR-INDEX +!
     REPEAT
+    _EXT4-MUTATION-OWNER-RANGES-CLEAR
+    \ The xattr walker authenticates the external block, but that block must
+    \ also be disjoint from every data or map-metadata reference owned by the
+    \ orphan inode itself.  Check the singleton EA against the complete map in
+    \ a separate scope so loading the EA does not reject its own valid owner.
+    _EXT4-OFR-EA @ IF
+        _EXT4-OFR-PUBLISH-EA ?DUP IF _EXT4-OFR-FAIL EXIT THEN
+        _EXT4-OFR-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF
+            _EXT4-OFR-FAIL EXIT
+        THEN
+        _EXT4-MUTATION-OWNER-RANGES-CLEAR
+    THEN
     _EXT4-OFR-RECORD @ _EXT4-OFR-CTX @
-    _EXT4-REAUTH-ORPHAN-PLAN-RECORD ;
+    _EXT4-REAUTH-ORPHAN-PLAN-RECORD _EXT4-OFR-IOR !
+    _EXT4-OFR-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
+    _EXT4-OFR-IOR @ ;
 
 \ =====================================================================
 \  Plan-bound unlinked inode allocation release
@@ -12144,15 +12152,9 @@ VARIABLE _EXT4-JOT-AFTERIMAGE
 VARIABLE _EXT4-JOT-IOR
 VARIABLE _EXT4-JOT-PUBLISHED
 VARIABLE _EXT4-JOT-ABORT-IOR
-VARIABLE _EXT4-JOT-OF-ROOT
-VARIABLE _EXT4-JOT-OF-COUNT
-VARIABLE _EXT4-JOT-OF-INDEX
-VARIABLE _EXT4-JOT-OF-TARGET
-VARIABLE _EXT4-JOT-OF-ENTRY
-VARIABLE _EXT4-JOT-OF-PHYS
-VARIABLE _EXT4-JOT-OF-LEN
 VARIABLE _EXT4-JOT-OWNER-IOR
 VARIABLE _EXT4-JOT-OWNER-MAP-LIMIT
+CREATE _EXT4-JOT-EA-RANGE 2 CELLS ALLOT
 
 : _EXT4-JOT-OWNER-CERT-MATCH?  ( -- flag )
     _EXT4-JFO-CERT-SCOPE @ 0= IF FALSE EXIT THEN
@@ -12265,82 +12267,22 @@ VARIABLE _EXT4-JOT-OWNER-MAP-LIMIT
     THEN
     0 ;
 
-\ Writable ownership is stricter than read-side map validity.  Narrow the
-\ orphan-file shape to one whose complete external ownership is enumerable,
-\ then prove that neither a target data range nor its retained external xattr
-\ aliases orphan-file storage.  Its inline root resides in an inode table
-\ already protected by free-range admission; depth zero and no external EA
-\ leave only these leaf ranges.
+\ Prove that neither a linked target's data ranges nor its retained external
+\ xattr aliases any storage in the fully authenticated orphan-file map.  The
+\ target root has at most four data ranges, while its independent xattr block
+\ takes a second scoped pass rather than turning that format boundary into a
+\ larger ambient-table policy limit.
 : _EXT4-JOT-VALIDATE-ORPHAN-FILE-DISJOINT  ( -- ior )
-    _EXT4-JOT-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
-    _EXT4-JOT-CTX @ _EXT4-C.INODE +
-    DUP _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND 0= IF
-        DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
-    DUP _EXT4-I.FILE-ACL-HI + W@
-    OVER _EXT4-I.FILE-ACL-LO + L@ OR IF
-        DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _EXT4-I.BLOCK + DUP _EXT4-JOT-OF-ROOT !
-    DUP W@ _EXT4-EXTENT-MAGIC <> IF
-        DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
-    THEN
-    DUP 4 + W@ 4 <> IF
-        DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
-    THEN
-    DUP 2 + W@ DUP _EXT4-JOT-OF-COUNT ! 4 U> IF
-        DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
-    THEN
-    6 + W@ IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
-    \ Include full preallocated/unwritten ranges beyond EOF in the ownership
-    \ proof; the logical stream below authenticates only blocks inside size.
-    0 _EXT4-JOT-OF-INDEX !
-    BEGIN _EXT4-JOT-OF-INDEX @ _EXT4-JOT-OF-COUNT @ < WHILE
-        _EXT4-JOT-OF-ROOT @ 12
-        _EXT4-JOT-OF-INDEX @ 12 * + + DUP _EXT4-JOT-OF-ENTRY !
-        DUP _EXT4-EXTENT-LEN@ _EXT4-JOT-OF-LEN !
-        8 + L@ _EXT4-JOT-OF-PHYS !
-        _EXT4-JOT-EA @ IF
-            _EXT4-JOT-EA @ 1
-            _EXT4-JOT-OF-PHYS @ _EXT4-JOT-OF-LEN @
-            _EXT4-BLOCK-RANGES-OVERLAP? IF
-                EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-        THEN
-        0 _EXT4-JOT-OF-TARGET !
-        BEGIN _EXT4-JOT-OF-TARGET @ _EXT4-JOT-COUNT @ < WHILE
-            _EXT4-JOT-OF-TARGET @ _EXT4-JOT-RANGE DUP @
-            SWAP CELL+ @
-            _EXT4-JOT-OF-PHYS @ _EXT4-JOT-OF-LEN @
-            _EXT4-BLOCK-RANGES-OVERLAP? IF
-                EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-            1 _EXT4-JOT-OF-TARGET +!
-        REPEAT
-        1 _EXT4-JOT-OF-INDEX +!
-    REPEAT
-    0 _EXT4-JOT-OF-INDEX !
-    BEGIN _EXT4-JOT-OF-INDEX @ _EXT4-OV-BLOCKS @ < WHILE
-        _EXT4-JOT-OF-INDEX @ _EXT4-JOT-CTX @
-        _EXT4-READ-ORPHAN-BLOCK ?DUP IF EXIT THEN
-        0 _EXT4-JOT-OF-TARGET !
-        BEGIN _EXT4-JOT-OF-TARGET @ _EXT4-JOT-COUNT @ < WHILE
-            _EXT4-JOT-OF-TARGET @ _EXT4-JOT-RANGE DUP @
-            SWAP CELL+ @
-            _EXT4-OV-PHYS @ 1
-            _EXT4-BLOCK-RANGES-OVERLAP? IF
-                EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-            1 _EXT4-JOT-OF-TARGET +!
-        REPEAT
-        1 _EXT4-JOT-OF-INDEX +!
-    REPEAT
-    \ PREPARE leaves the orphan inode cached; restore and reauthenticate the
-    \ target before the caller copies its proposed afterimage.
+    _EXT4-JOT-RANGES _EXT4-JOT-COUNT @
     _EXT4-JOT-RECORD @ _EXT4-JOT-CTX @
-    _EXT4-REAUTH-ORPHAN-PLAN-RECORD ;
+    _EXT4-ORPHAN-FILE-RANGES-DISJOINT ?DUP IF EXIT THEN
+    _EXT4-JOT-EA @ IF
+        _EXT4-JOT-EA @ _EXT4-JOT-EA-RANGE !
+        1 _EXT4-JOT-EA-RANGE CELL+ !
+        _EXT4-JOT-EA-RANGE 1 _EXT4-JOT-RECORD @ _EXT4-JOT-CTX @
+        _EXT4-ORPHAN-FILE-RANGES-DISJOINT ?DUP IF EXIT THEN
+    THEN
+    0 ;
 
 : _EXT4-JOT-PREFLIGHT  ( -- ior )
     _EXT4-JOT-INODE @ _EXT4-I.LINKS + W@ 0= IF

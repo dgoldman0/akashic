@@ -483,6 +483,152 @@ def _modern_orphan_patches(
     )
 
 
+def _depth1_orphan_file_map_patches(
+    path: Path,
+    base_patches: tuple[tuple[int, bytes], ...],
+) -> tuple[tuple[tuple[int, bytes], ...], int, bytes]:
+    """Move the orphan file's last data block into a depth-1 leaf node."""
+    patches = dict(base_patches)
+    assert len(patches) == len(base_patches)
+    superblock = patches[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    sectors_per_block = block_size // 512
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, raw_inode, inode_offset = _ext4_inode_record(
+        path,
+        orphan_inode_number,
+    )
+    inode = bytearray(patches.get(inode_offset, raw_inode))
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    assert struct.unpack_from("<I", inode, 0x34)[0] == 0
+    original_blocks = struct.unpack_from("<H", inode, 0x38)[0]
+    assert original_blocks > 1
+    assert struct.unpack_from("<H", inode, 0x3A)[0] == 0
+    first_physical = struct.unpack_from("<I", inode, 0x3C)[0]
+    assert struct.unpack_from("<I", inode, 0x04)[0] == (
+        original_blocks * block_size
+    )
+    assert struct.unpack_from("<I", inode, 0x6C)[0] == 0
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == (
+        original_blocks * sectors_per_block
+    )
+    assert struct.unpack_from("<H", inode, 0x74)[0] == 0
+
+    data_blocks = original_blocks - 1
+    node_physical = first_physical + data_blocks
+    node_offset = node_physical * block_size
+    assert node_offset not in patches
+    node_max = (block_size - 12) // 12
+    node = bytearray(block_size)
+    struct.pack_into("<HHHHI", node, 0, 0xF30A, 1, node_max, 0, 0)
+    struct.pack_into(
+        "<IHHI",
+        node,
+        12,
+        0,
+        data_blocks,
+        0,
+        first_physical,
+    )
+    node = bytearray(
+        _extent_node_with_checksum(
+            superblock,
+            orphan_inode_number,
+            generation,
+            node,
+        )
+    )
+
+    inode[0x28:0x64] = bytes(60)
+    struct.pack_into("<HHHHI", inode, 0x28, 0xF30A, 1, 4, 1, 0)
+    struct.pack_into("<IIHH", inode, 0x34, 0, node_physical, 0, 0)
+    struct.pack_into("<I", inode, 0x04, data_blocks * block_size)
+    struct.pack_into("<I", inode, 0x6C, 0)
+    inode = bytearray(
+        _inode_with_checksum(
+            superblock,
+            orphan_inode_number,
+            inode,
+        )
+    )
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == (
+        (data_blocks + 1) * sectors_per_block
+    )
+    patches[inode_offset] = bytes(inode)
+    patches[node_offset] = bytes(node)
+    return tuple(patches.items()), node_physical, bytes(node)
+
+
+def _orphan_xattr_map_alias_patches(
+    path: Path,
+) -> tuple[tuple[tuple[int, bytes], ...], int, int]:
+    """Alias one valid orphan-file xattr block as preallocation."""
+    base_patches, data_block = _one_block_unlinked_orphan_patches(
+        path,
+        protocol="modern",
+    )
+    patches = dict(base_patches)
+    superblock = patches[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    sectors_per_block = block_size // 512
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, raw_orphan_inode, orphan_inode_offset = _ext4_inode_record(
+        path,
+        orphan_inode_number,
+    )
+    orphan_inode = bytearray(
+        patches.get(orphan_inode_offset, raw_orphan_inode)
+    )
+    _, xattr_owner, _ = _ext4_inode_record(path, 14)
+    xattr_block = struct.unpack_from("<I", xattr_owner, 0x68)[0]
+    assert xattr_block > 0
+    assert struct.unpack_from("<H", xattr_owner, 0x76)[0] == 0
+    assert struct.unpack_from("<HHHH", orphan_inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    orphan_blocks = struct.unpack_from("<I", orphan_inode, 0x04)[0] // block_size
+    assert struct.unpack_from("<H", orphan_inode, 0x38)[0] == orphan_blocks
+    first_physical = struct.unpack_from("<I", orphan_inode, 0x3C)[0]
+    assert not first_physical <= xattr_block < first_physical + orphan_blocks
+    assert xattr_block != data_block
+    assert struct.unpack_from("<I", orphan_inode, 0x68)[0] == 0
+    assert struct.unpack_from("<H", orphan_inode, 0x76)[0] == 0
+
+    struct.pack_into("<H", orphan_inode, 0x2A, 2)
+    struct.pack_into(
+        "<IHHI",
+        orphan_inode,
+        0x40,
+        orphan_blocks,
+        0x8001,
+        0,
+        xattr_block,
+    )
+    struct.pack_into("<I", orphan_inode, 0x68, xattr_block)
+    struct.pack_into(
+        "<I",
+        orphan_inode,
+        0x1C,
+        struct.unpack_from("<I", orphan_inode, 0x1C)[0]
+        + 2 * sectors_per_block,
+    )
+    patches[orphan_inode_offset] = _inode_with_checksum(
+        superblock,
+        orphan_inode_number,
+        orphan_inode,
+    )
+    return tuple(patches.items()), data_block, xattr_block
+
+
 def _zero_size_depth0_orphan_patches(
     path: Path,
 ) -> tuple[tuple[int, bytes], ...]:
@@ -20514,6 +20660,295 @@ def test_mount_completes_singleton_modern_depth0_orphan_transaction(
     _assert_emitted(output, "EXT4-MODERN-ORPHAN-AUTO-CLEANED")
     assert sum(kind == "write" for kind, _, _ in trace) == 34
     assert sum(kind == "flush" for kind, _, _ in trace) == 24
+
+
+def test_mount_cleans_linked_orphan_with_depth1_orphan_file_map(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    base_patches = _zero_size_depth0_orphan_patches(path)
+    patches, node_physical, node_image = _depth1_orphan_file_map_patches(
+        path,
+        base_patches,
+    )
+    superblock = dict(patches)[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    media_path = tmp_path / "depth1-orphan-file-cleanup.img"
+    stable_path = tmp_path / "depth1-orphan-file-stable.img"
+    marker = "EXT4-DEPTH1-ORPHAN-FILE-CLEANUP"
+
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        media_path,
+        [
+            "T-ARENA CONSTANT _OF1-ARENA",
+            (
+                "_OF1-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _OF1-IOR CONSTANT _OF1-V"
+            ),
+            "_OF1-V _EXT4-CTX CONSTANT _OF1-CTX",
+            (
+                f"{orphan_inode_number} _OF1-CTX _EXT4-LOAD-INODE "
+                "CONSTANT _OF1-LOAD-IOR"
+            ),
+            (
+                "_OF1-CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 6 + W@ "
+                "CONSTANT _OF1-DEPTH"
+            ),
+            (
+                "_OF1-CTX _EXT4-VALIDATE-EXTENT-TREE "
+                "CONSTANT _OF1-TREE-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_OF1-IOR 0=",
+                        "_OF1-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_OF1-V _EXT4-READY?",
+                        "_OF1-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_OF1-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_OF1-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_OF1-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_OF1-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_OF1-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_OF1-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_OF1-LOAD-IOR 0=",
+                        "_OF1-DEPTH 1 =",
+                        "_OF1-TREE-IOR 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+        ],
+        patches=patches,
+        capture_media=media_path,
+    )
+    _assert_emitted(output, marker)
+    assert sum(kind == "write" for kind, _, _ in trace) == 34
+    assert sum(kind == "flush" for kind, _, _ in trace) == 24
+    assert _sha256(media_path) == media_sha256
+
+    _, orphan_inode, _ = _ext4_inode_record(
+        media_path,
+        orphan_inode_number,
+    )
+    assert struct.unpack_from("<HHHH", orphan_inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        1,
+    )
+    assert struct.unpack_from("<I", orphan_inode, 0x38)[0] == node_physical
+    with media_path.open("rb") as recovered:
+        recovered.seek(node_physical * block_size)
+        assert recovered.read(block_size) == node_image
+    _, target_inode, _ = _ext4_inode_record(media_path, 14)
+    assert struct.unpack_from("<I", target_inode, 0x04)[0] == 0
+    assert struct.unpack_from("<H", target_inode, 0x1A)[0] == 2
+    assert struct.unpack_from("<HHHH", target_inode, 0x28) == (
+        0xF30A,
+        0,
+        4,
+        0,
+    )
+    assert struct.unpack_from("<I", target_inode, 0x68)[0] != 0
+
+    stable_output, stable_trace, stable_sha256 = run_recovery_forth(
+        media_path,
+        stable_path,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW "
+            "CONSTANT _OF2-IOR CONSTANT _OF2-V",
+            (
+                _forth_conjunction(
+                    [
+                        "_OF2-IOR 0=",
+                        "_OF2-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_OF2-V _EXT4-READY?",
+                    ]
+                )
+                + ' IF ." EXT4-DEPTH1-ORPHAN-FILE-STABLE" THEN'
+            ),
+        ],
+        capture_media=stable_path,
+    )
+    _assert_emitted(stable_output, "EXT4-DEPTH1-ORPHAN-FILE-STABLE")
+    assert stable_trace == ()
+    assert stable_sha256 == media_sha256
+    assert _sha256(stable_path) == media_sha256
+
+
+def test_unlinked_preflight_accepts_depth1_orphan_file_map(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    base_patches, data_block = _one_block_unlinked_orphan_patches(
+        path,
+        protocol="modern",
+    )
+    patches, _, _ = _depth1_orphan_file_map_patches(
+        path,
+        base_patches,
+    )
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _OU-IOR CONSTANT _OU-V"
+            ),
+            "_OU-V _EXT4-CTX CONSTANT _OU-CTX",
+            (
+                "_OU-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _OU-FIND-IOR CONSTANT _OU-RECORD"
+            ),
+            "_OU-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OU-JOURNAL-IOR",
+            "_EXT4-JFO-CERT-BEGIN CONSTANT _OU-CERT-BEGIN-IOR",
+            "_OU-RECORD _EXT4-JFI-RECORD !",
+            "_OU-CTX _EXT4-JFI-CTX !",
+            "DEPTH CONSTANT _OU-DEPTH-BEFORE",
+            "_EXT4-JFI-AUTH-PREFLIGHT CONSTANT _OU-PREFLIGHT-IOR",
+            "DEPTH CONSTANT _OU-DEPTH-AFTER",
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_OU-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_OU-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_OU-FIND-IOR 0=",
+                        "_OU-JOURNAL-IOR 0=",
+                        "_OU-CERT-BEGIN-IOR 0=",
+                        "_OU-RECORD _EXT4-OE.INO + @ 18 =",
+                        (
+                            "_OU-RECORD _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-MODERN ="
+                        ),
+                        "_OU-PREFLIGHT-IOR 0=",
+                        "_OU-DEPTH-BEFORE _OU-DEPTH-AFTER =",
+                        "_EXT4-JFI-DATA-ENTRIES @ 1 =",
+                        f"0 _EXT4-JFI-DATA-RANGE @ {data_block} =",
+                        "0 _EXT4-JFI-DATA-RANGE CELL+ @ 1 =",
+                        "_EXT4-JFI-DATA-BLOCKS @ 1 =",
+                        "_EXT4-OV-BLOCKS @ 31 =",
+                        "_EXT4-OFR-EA @ 0=",
+                        "_EXT4-OFR-IOR @ 0=",
+                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
+                        "_EXT4-JFO-CERT-VALID @ 0<>",
+                        (
+                            "_EXT4-JFO-CERT-KIND @ "
+                            "_EXT4-JFO-CERT-JFI ="
+                        ),
+                        "_EXT4-JFO-CERT-RANGE-COUNT @ 1 =",
+                        f"0 _EXT4-JFO-CERT-RANGE @ {data_block} =",
+                        "0 _EXT4-JFO-CERT-RANGE CELL+ @ 1 =",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                        "_OU-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-DEPTH1-ORPHAN-FILE-JFI-PREFLIGHT" THEN'
+            ),
+            "_EXT4-JFO-CERT-END",
+            (
+                _forth_conjunction(
+                    [
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                        "_OU-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-DEPTH1-ORPHAN-FILE-JFI-CLEAN" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-DEPTH1-ORPHAN-FILE-JFI-PREFLIGHT")
+    _assert_emitted(output, "EXT4-DEPTH1-ORPHAN-FILE-JFI-CLEAN")
+
+
+def test_unlinked_preflight_rejects_orphan_xattr_map_alias(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches, data_block, xattr_block = _orphan_xattr_map_alias_patches(path)
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _OX-IOR CONSTANT _OX-V"
+            ),
+            "_OX-V _EXT4-CTX CONSTANT _OX-CTX",
+            (
+                "_OX-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _OX-FIND-IOR CONSTANT _OX-RECORD"
+            ),
+            "_OX-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OX-JOURNAL-IOR",
+            "_OX-RECORD _EXT4-JFI-RECORD !",
+            "_OX-CTX _EXT4-JFI-CTX !",
+            "DEPTH CONSTANT _OX-DEPTH-BEFORE",
+            "_EXT4-JFI-AUTH-PREFLIGHT CONSTANT _OX-PREFLIGHT-IOR",
+            "DEPTH CONSTANT _OX-DEPTH-AFTER",
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_OX-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_OX-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_OX-FIND-IOR 0=",
+                        "_OX-JOURNAL-IOR 0=",
+                        "_OX-RECORD _EXT4-OE.INO + @ 18 =",
+                        (
+                            "_OX-RECORD _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-MODERN ="
+                        ),
+                        (
+                            "_OX-PREFLIGHT-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_OX-PREFLIGHT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        "_OX-DEPTH-BEFORE _OX-DEPTH-AFTER =",
+                        "_EXT4-JFI-DATA-ENTRIES @ 1 =",
+                        f"0 _EXT4-JFI-DATA-RANGE @ {data_block} =",
+                        "0 _EXT4-JFI-DATA-RANGE CELL+ @ 1 =",
+                        f"_EXT4-OFR-EA @ {xattr_block} =",
+                        "_EXT4-OFR-IOR @ _OX-PREFLIGHT-IOR =",
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                        "_OX-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-ORPHAN-XATTR-MAP-ALIAS-REJECTED" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-ORPHAN-XATTR-MAP-ALIAS-REJECTED")
 
 
 def _assert_singleton_cleanup_media_converges(

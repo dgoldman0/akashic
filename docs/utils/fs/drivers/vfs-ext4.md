@@ -726,14 +726,21 @@ is allocation- and checksum-authenticated, retained, and proved disjoint from
 the target data ranges. The decoded `i_blocks` value must exactly equal all
 captured extent blocks plus that retained xattr block in 512-byte sectors.
 
-Writable ownership admission also reauthenticates the modern orphan file. For
-this first slice, that file must itself use inline depth-0 extents and no
-external xattr. Every complete orphan-file extent, including unwritten or
-preallocated blocks beyond EOF, must be disjoint from every target range and
-from the target's retained external xattr block, and every logical orphan
-block is reread through its physical-location-bound tail checksum. This
-deliberate mutation-side narrowing avoids freeing a checksum-valid cross-inode
-alias without narrowing read-side orphan discovery.
+Writable ownership admission also reauthenticates the modern orphan file
+through the complete read-profile mapper; cleanup no longer narrows that
+inode to an inline depth-0 extent root. While the exact target ranges are
+published, the full extent tree or legacy direct/indirect map is validated so
+leaf data, unwritten or preallocated storage beyond EOF, external extent
+nodes, and indirect metadata all participate in the disjointness proof. An
+external orphan-file xattr block is allocation- and checksum-authenticated
+under the same target scope. A separate singleton pass proves that this xattr
+block does not itself alias any data or map-metadata reference in the orphan
+inode, without making the xattr loader reject its own valid owner. Every
+logical orphan block is then reread through its physical-location-bound tail
+checksum, the ambient ownership scope is withdrawn on every return, and the
+selected target record is reauthenticated before staging continues. The
+target cleanup shapes remain the deliberately bounded inline-depth-0 cases
+described above.
 
 For a nonempty captured root, the builder stages an inode with zero extent
 entries, clears all four inline entry slots, retains the extent header and
@@ -1359,9 +1366,10 @@ The remaining boundaries are:
   user-visible write. Cleanup derives its record count from authenticated
   geometry, checked arithmetic, and caller-arena storage rather than a separate
   fixed constant, but still does not cover nonzero-size or tail truncation,
-  depth-positive/external extent trees, legacy direct/indirect map mutation,
-  a nonzero physical high word, an external xattr block, an inline xattr value
-  inode, external-xattr/value-inode release, or general link-count and
+  target depth-positive/external extent trees, target legacy direct/indirect
+  map mutation, a nonzero physical high word, unlinked-target external-xattr
+  release, an inline xattr value inode, external-xattr/value-inode release, or
+  general link-count and
   malformed-chain repair. General inode
   allocation, general inode release outside the admitted shape, and every
   user-visible mutation operation remain unimplemented. Cleanup releases
@@ -1388,6 +1396,17 @@ The remaining boundaries are:
   xattrs are scrubbed
   with the target record; an inline value-inode reference is refused as
   unsupported, and unexplained nonzero `i_blocks` is rejected as corruption.
+  Mutation-side orphan-file qualification now uses that inode's complete
+  read-profile map rather than an inline-root surrogate. A checksum-valid
+  depth-1 orphan-file fixture places all 31 logical blocks behind a preserved
+  external extent node. Linked production cleanup completes with its existing
+  exact 34-write/24-flush trace in 1,111,798,161 guest steps, and the resulting
+  image remounts byte-identically with zero I/O in 67,492,163 steps. The
+  corresponding unlinked JFI admission and complete owner proof take
+  240,654,652 steps without a media write. A hostile valid external-xattr
+  block also mapped as orphan-file preallocation is rejected as
+  `EXT4-D-DATA-MAP` in 121,741,936 steps with all temporary ownership state
+  cleared. These are harness measurements, not driver capacities.
   Mount-level refusal covers a nonzero physical high word, external xattrs,
   orphan-storage aliasing, a clear one-block data bit, and a two-block extent
   whose second allocation bit is clear.

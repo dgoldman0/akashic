@@ -787,18 +787,27 @@ applicable data map is then authenticated.
 Before its first cleanup write, mount authenticates and exactly measures every
 record in the complete union. Each record must be either a linked depth-zero
 truncation already at zero size or an unlinked depth-zero deletion with an
-empty root or one authenticated contiguous inline extent and the qualified
-allocation/xattr shape. That extent may have an initialized decoded length of
-1..32768 blocks or an unwritten decoded length of 1..32767 blocks, with
-`logical_start + decoded_length <= 0xffffffff`; these are ext4 `ee_len` and
-logical-domain bounds rather than cleanup caps. Although an ext4 inline
-depth-zero root can encode as many as four extent entries, this unlinked-delete
-slice currently admits at most one; a multi-entry root is refused. If any
-record is outside those per-record shapes, the complete union refuses before
-writer allocation or cleanup mutation. The maximum exact coalesced metadata
-credit across all records sizes one reusable writer. The count remains bounded
-by authenticated filesystem geometry, checked arithmetic, and available
-caller-arena storage; cleanup adds no separate fixed record-count constant.
+empty root or one through four authenticated inline extent entries and the
+qualified allocation/xattr shape. Each entry may have an initialized decoded
+length of 1..32768 blocks or an unwritten decoded length of 1..32767 blocks,
+with `logical_start + decoded_length <= 0xffffffff`; these are ext4 `ee_len`
+and logical-domain bounds rather than cleanup caps. Logical and physical
+ordering, aggregate `i_blocks`, every exact range, and the zero inactive tail
+are authenticated and sealed together. If any record is outside those
+per-record shapes, the complete union refuses before writer allocation or
+cleanup mutation. The maximum exact coalesced metadata credit across all
+records sizes one reusable writer. The count remains bounded by authenticated
+filesystem geometry, checked arithmetic, and available caller-arena storage;
+cleanup adds no separate fixed record-count constant.
+
+The modern orphan inode used to locate those records is not restricted to the
+target cleanup shape. Mutation admission validates its complete read-profile
+extent tree or legacy direct/indirect map while the exact target ranges are
+published, covering leaf storage, preallocation beyond EOF, external extent
+nodes, and indirect metadata. It authenticates an external orphan-file xattr,
+proves that block separately disjoint from the orphan inode's own complete map,
+and rereads every logical orphan block through its location-bound checksum
+tail before restoring the selected target record.
 
 Cleanup selects the current legacy head until its authenticated successor
 chain is empty, then selects modern entries in unsigned `(logical block, slot)`
@@ -824,14 +833,14 @@ table when it is large enough rather than abandoning monotonic arena storage;
 an insufficient caller arena or retained table fails without a second
 allocation.
 
-Every linked inline-root range is admitted through one combined
+Every linked or unlinked inline-root range is admitted through one combined
 filesystem-wide other-inode ownership scan before release. An overlap through
 another allocated inode's data, map metadata, or external-xattr pointer is a
 corrupt data-map refusal. The scoped proof is bound to the context, inode,
 generation, and exact ordered range tuple; it may survive journal-only staging
 and emission but is invalidated before checkpoint can write a home. Whole-union
-qualification completes this proof for every retained linked record before the
-first record is mutated.
+qualification completes this proof for every retained supported record before
+the first record is mutated.
 
 An authenticated empty modern set is completed before mount publication only
 when both protocol counts are zero. Writer-free `AKW1` and `AKE1`-qualified
@@ -899,7 +908,23 @@ inodes through `MORE` then `FINAL`, preserve the seeded payload, and remount
 without I/O. The modern path measured 1,573,133,619 guest steps and the legacy
 path 1,563,424,804 under their scoped 2,000,000,000-step watchdog; each stable
 remount measured 55,738,449. Pinned e2fsck 1.47.4 acceptance remains a pending
-release qualification gate. Unified discovery and cleanup
+release qualification gate. Full-inline-root qualification extends the modern
+head to two separated initialized/unwritten ranges and the legacy head to all
+four format-defined entries. Its exact stage/abort certificates bind the
+complete ordered range vector, aggregate block count, entry count, and zero
+inactive tail. Persistence-traced production measures 1,786,988,013 modern and
+2,196,652,327 legacy guest steps under the scoped 3,000,000,000-step watchdog;
+either clean remount measures 55,772,107. The corresponding direct
+stage/seal/abort workloads measured 615,185,969 and 825,905,086 steps. These
+watchdogs are qualification guards, not implementation capacities. A separate
+checksum-valid modern orphan-file fixture maps 31 logical blocks through a
+preserved depth-1 external extent node. Linked production cleanup retains its
+exact 34-write/24-flush trace, completes in 1,111,798,161 steps, and reaches a
+zero-I/O byte-stable remount in 67,492,163; unlinked JFI admission completes
+without writes in 240,654,652. A valid external xattr simultaneously named as
+orphan-file preallocation is rejected as a corrupt data map in 121,741,936
+steps with no residual ownership scope. Unified
+discovery and cleanup
 still need broader qualification for chains longer than two,
 later modern blocks and large orphan files, additional ownership and deletion
 shapes, distinct-key hash collisions, and arena exhaustion or retained-too-
