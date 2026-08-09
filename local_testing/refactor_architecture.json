@@ -1,12 +1,12 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "desk-library-burrow-capability-catalog-20260809",
-    "commit": "eaeed294ddd4bd3948e73bb7d09c527373c72972",
+    "name": "desk-library-burrow-control-plane-20260809",
+    "commit": "ebc57364d2b799f8ea63b42725df272f413e8002",
     "expected": {
       "module_count": 545,
-      "resolved_require_occurrence_count": 1925,
-      "unique_resolved_edge_count": 1925,
+      "resolved_require_occurrence_count": 1929,
+      "unique_resolved_edge_count": 1929,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 0,
@@ -14,8 +14,8 @@
       "provided_issue_count": 2,
       "addressability_issue_count": 1,
       "marker_issue_count": 0,
-      "graph_sha256": "516133ce2e3273947b074a3b8fd868186177d667f5370b2f53c85dd85aa7216c",
-      "state_sha256": "4396caadfeaddd125144bbf3e50263410c93fb4760bdb3d9cb935f0e2f21a802",
+      "graph_sha256": "4a8ceaa8a5db5500da396ea5586f69d8f08a1374da31730284bbe608a2b33eef",
+      "state_sha256": "9c63eba9058325d28e61a27cd57035ffb9113604fc03a773e2cb5cd8f4d99713",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
