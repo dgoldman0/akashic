@@ -22651,21 +22651,35 @@ def direct_empty_triple_root_unlinked_cleanup_fixture(
     )
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(
+    scope="session",
+    params=(
+        pytest.param("modern", id="modern"),
+        pytest.param("legacy", id="legacy"),
+    ),
+)
 def one_child_triple_root_unlinked_cleanup_fixture(
+    request: pytest.FixtureRequest,
     canonical_images: dict[str, Path],
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, object]:
+    protocol = str(request.param)
+    source = canonical_images["primary-1k-i256"]
+    triple_child_slot = (
+        _ext4_recovery_layout(source)["block_size"] // 4 - 1
+        if protocol == "legacy"
+        else 7
+    )
     directory = tmp_path_factory.mktemp(
-        "ext4-modern-one-child-triple-root-unlinked-cleanup"
+        f"ext4-{protocol}-one-child-triple-root-unlinked-cleanup"
     )
     return _build_sparse_triple_root_unlinked_cleanup_fixture(
-        canonical_images["primary-1k-i256"],
+        source,
         directory,
-        protocol="modern",
+        protocol=protocol,
         direct_slots=(),
         extent_case="legacy-one-child-triple-root",
-        triple_child_slot=7,
+        triple_child_slot=triple_child_slot,
     )
 
 
@@ -23282,10 +23296,15 @@ def test_mount_reclaims_direct_empty_triple_root_unlinked_orphan(
 def test_mount_reclaims_one_child_triple_root_unlinked_orphan(
     one_child_triple_root_unlinked_cleanup_fixture: dict[str, object],
 ) -> None:
+    protocol = one_child_triple_root_unlinked_cleanup_fixture["protocol"]
+    block_size = one_child_triple_root_unlinked_cleanup_fixture["block_size"]
+    assert protocol in {"modern", "legacy"}
+    assert isinstance(block_size, int)
+    expected_child_slot = 7 if protocol == "modern" else block_size // 4 - 1
     _assert_sparse_triple_root_unlinked_cleanup_result(
         one_child_triple_root_unlinked_cleanup_fixture,
         expected_direct_slots=(),
-        expected_child_slot=7,
+        expected_child_slot=expected_child_slot,
     )
 
 

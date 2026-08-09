@@ -1097,10 +1097,16 @@ once. Both map allocation bits and the target inode bit clear, free counters
 return to their canonical values, and neither the pointer-bearing root nor its
 all-zero child is written. A byte-identical zero-I/O stable remount completes
 in 56,369,050 guest steps under the standard 1,200,000,000-step watchdog.
-The resulting image also passes the pinned e2fsprogs 1.47.4
-`e2fsck -f -n` check. Legacy production/stable parity, crash,
-broader-geometry, and additional-fanout qualification remain pending for this
-child-bearing tier.
+Legacy final-slot production parity completes in 1,379,226,136 guest steps
+under the same production watchdog. Its exact 35-write/24-flush trace has five
+cleanup homes: the primary super is written three times and the GDT, block
+bitmap, inode bitmap, and inode table are each written once, with no
+orphan-file-home write. It restores the same two map bits, inode bit, and
+canonical accounting without writing either released map home, and its
+byte-identical zero-I/O stable remount also completes in 56,369,050 guest
+steps. Both resulting images pass the pinned e2fsprogs 1.47.4
+`e2fsck -f -n` check. Crash, broader-geometry, and additional-fanout
+qualification remain pending for this child-bearing tier.
 The one-direct modern certificate refuses
 missing or extra target counts, a missing range, widened data or root
 singletons, swapped data/root order, and a downgraded map kind before its
