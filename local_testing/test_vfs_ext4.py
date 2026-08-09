@@ -2010,6 +2010,46 @@ def _unlinked_orphan_shared_external_xattr_patches(
     return tuple(patch_map.items()), data_ranges, xattr_block
 
 
+def _unlinked_orphan_refcount_one_two_owner_xattr_patches(
+    path: Path,
+    *,
+    protocol: str,
+) -> tuple[tuple[int, bytes], ...]:
+    """Give one valid refcount-one xattr block two semantic owners."""
+    patches, data_ranges, xattr_block = (
+        _unlinked_orphan_shared_external_xattr_patches(
+            path,
+            protocol=protocol,
+            data_blocks=0,
+        )
+    )
+    assert data_ranges == ()
+    patch_map = dict(patches)
+    superblock = patch_map[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    xattr_offset = xattr_block * block_size
+    xattr = bytearray(patch_map[xattr_offset])
+    assert struct.unpack_from("<I", xattr, 0x04)[0] == 2
+    struct.pack_into("<I", xattr, 0x04, 1)
+    refcount_one_xattr = _external_xattr_block_with_checksum(
+        superblock,
+        xattr_block,
+        xattr,
+    )
+    assert struct.unpack_from("<I", refcount_one_xattr, 0x04)[0] == 1
+    with path.open("rb") as source:
+        source.seek(xattr_offset)
+        assert source.read(block_size) == refcount_one_xattr
+
+    _, live_inode, _ = _ext4_inode_record(path, 14)
+    _, _, target_offset = _ext4_inode_record(path, 18)
+    target_inode = patch_map[target_offset]
+    assert struct.unpack_from("<I", live_inode, 0x68)[0] == xattr_block
+    assert struct.unpack_from("<I", target_inode, 0x68)[0] == xattr_block
+    patch_map[xattr_offset] = refcount_one_xattr
+    return tuple(patch_map.items())
+
+
 def _multi_unlinked_orphan_shared_external_xattr_patches(
     path: Path,
 ) -> tuple[tuple[tuple[int, bytes], ...], int]:
@@ -15156,6 +15196,144 @@ def test_shared_external_xattr_cleanup_seals_refcount_decrement(
     _assert_emitted(output, clean_marker)
 
 
+def test_shared_external_xattr_semantic_verifier_rejects_coherent_hash_tamper(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches, data_ranges, xattr_block = (
+        _unlinked_orphan_shared_external_xattr_patches(
+            path,
+            protocol="modern",
+            data_blocks=0,
+        )
+    )
+    assert data_ranges == ()
+    marker = "EXT4-SHARED-XATTR-COHERENT-HASH-TAMPER-REJECTED"
+    clean_marker = f"{marker}-ABORTED"
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _XT-MOUNT-IOR CONSTANT _XT-V"
+            ),
+            "_XT-V _EXT4-CTX CONSTANT _XT-CTX",
+            (
+                "_XT-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _XT-FIND-IOR CONSTANT _XT-RECORD"
+            ),
+            "_XT-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _XT-JOURNAL-IOR",
+            "_EXT4-JFO-CERT-BEGIN CONSTANT _XT-CERT-BEGIN-IOR",
+            (
+                "_XT-RECORD _XT-CTX _EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "CONSTANT _XT-MEASURE-IOR CONSTANT _XT-CREDIT"
+            ),
+            "-1 _XT-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "_XT-CREDIT 0 0 _XT-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _XT-WRITER-IOR CONSTANT _XT-WRITER"
+            ),
+            (
+                "_XT-CREDIT 0 0 _XT-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _XT-BEGIN-IOR CONSTANT _XT-TX"
+            ),
+            (
+                "_XT-RECORD _XT-TX _EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "CONSTANT _XT-STAGE-IOR"
+            ),
+            (
+                f"{xattr_block} _XT-WRITER _EXT4-JFC-FIND-META "
+                "CONSTANT _XT-EA-FIND-IOR"
+            ),
+            "_EXT4-JFC-FOUND @ CONSTANT _XT-EA-FOUND",
+            "_EXT4-JFC-ENTRY @ CONSTANT _XT-EA-ENTRY",
+            "_EXT4-JFC-IMAGE @ CONSTANT _XT-EA-IMAGE",
+            "_XT-EA-IMAGE 0x0C + C@ CONSTANT _XT-HASH-BEFORE",
+            (
+                "_XT-EA-IMAGE 0x0C + DUP C@ 1 XOR SWAP C! "
+                f"_XT-EA-IMAGE {xattr_block} _XT-CTX "
+                "_EXT4-STAMP-XATTR-BLOCK"
+            ),
+            (
+                "_XT-EA-IMAGE _XT-WRITER _EXT4-JTX-IMAGE-CRC "
+                "CONSTANT _XT-FORGED-CRC"
+            ),
+            "_XT-FORGED-CRC _XT-EA-ENTRY 2 CELLS + !",
+            (
+                "_XT-FORGED-CRC _XT-WRITER "
+                "_EXT4-JWR.CP-EA-CRC + !"
+            ),
+            (
+                "_XT-WRITER _EXT4-JTX-TABLES-VALID? "
+                "CONSTANT _XT-TABLES-VALID"
+            ),
+            (
+                "_XT-WRITER _EXT4-JWR-CP-AUTHORITY? "
+                "CONSTANT _XT-CP-AUTHORITY"
+            ),
+            "_XT-WRITER _EXT4-JWR-VALID? CONSTANT _XT-WRITER-VALID",
+            (
+                "_XT-RECORD _XT-WRITER _EXT4-JFD-VERIFY-STAGED "
+                "CONSTANT _XT-VERIFY-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_XT-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        "_XT-FIND-IOR 0=",
+                        "_XT-JOURNAL-IOR 0=",
+                        "_XT-CERT-BEGIN-IOR 0=",
+                        "_XT-MEASURE-IOR 0=",
+                        "_XT-CREDIT 6 =",
+                        "_XT-WRITER-IOR 0=",
+                        "_XT-BEGIN-IOR 0=",
+                        "_XT-STAGE-IOR 0=",
+                        "_XT-EA-FIND-IOR 0=",
+                        "_XT-EA-FOUND 0<>",
+                        "_XT-EA-IMAGE 4 + L@ 1 =",
+                        (
+                            "_XT-EA-IMAGE 0x0C + C@ "
+                            "_XT-HASH-BEFORE 1 XOR ="
+                        ),
+                        "_XT-TABLES-VALID",
+                        "_XT-CP-AUTHORITY",
+                        "_XT-WRITER-VALID",
+                        "_XT-VERIFY-IOR VFS-E-CORRUPT =",
+                        "_XT-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+            "_XT-TX _EXT4-JTX-ABORT CONSTANT _XT-ABORT-IOR",
+            "_EXT4-JFO-CERT-END",
+            (
+                _forth_conjunction(
+                    [
+                        "_XT-ABORT-IOR 0=",
+                        "_XT-WRITER _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE =",
+                        "_XT-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                        "_XT-WRITER _EXT4-JWR-VALID?",
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        "_XT-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + f' IF ." {clean_marker}" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, marker)
+    _assert_emitted(output, clean_marker)
+
+
 @pytest.mark.parametrize("protocol", ("modern", "legacy"))
 @pytest.mark.parametrize(
     ("case", "expected_reason", "expected_flags", "expected_detail"),
@@ -15320,6 +15498,64 @@ def test_mount_rejects_unlinked_reclaim_with_unreleased_ownership(
                             "_EXT4-RO-ORPHAN-PRESENT AND "
                             f"{expected_present_check}"
                         ),
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, marker)
+
+
+@pytest.mark.parametrize("protocol", ("modern", "legacy"))
+def test_mount_refuses_refcount_one_external_xattr_with_two_semantic_owners(
+    canonical_images: dict[str, Path],
+    protocol: str,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches = _unlinked_orphan_refcount_one_two_owner_xattr_patches(
+        path,
+        protocol=protocol,
+    )
+    marker = (
+        f"EXT4-{protocol.upper()}-EXTERNAL-XATTR-REFCOUNT-ONE-"
+        "TWO-OWNERS-REFUSED"
+    )
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _XO-IOR CONSTANT _XO-V"
+            ),
+            "_XO-V _EXT4-CTX CONSTANT _XO-CTX",
+            (
+                _forth_conjunction(
+                    [
+                        "_XO-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+                        "_XO-IOR VFS-IOR-DOMAIN VFS-IOR-D-FORMAT =",
+                        (
+                            "_XO-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-CORRUPT ="
+                        ),
+                        "_XO-IOR VFS-IOR-DETAIL EXT4-D-XATTR =",
+                        "_XO-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_XO-V V.LAST-IOR @ _XO-IOR =",
+                        "_XO-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_XO-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_XO-CTX _EXT4-C.READY + @ 0=",
+                        "_XO-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_XO-CTX _EXT4-C.J.WRITER-CURRENT + @ 0=",
+                        "_XO-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_XO-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        "_XO-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_XO-CTX _EXT4-C.J.START + @ 0=",
+                        "_XO-CTX _EXT4-C.J.WITNESS + @ 0=",
+                        "_XO-CTX _EXT4-C.J.CLEANUP + @ 0=",
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                     ]
                 )
                 + f' IF ." {marker}" THEN'
