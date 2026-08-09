@@ -35,19 +35,24 @@ and measurement guide, not an ext4 implementation capacity or a reason to
 weaken functionality. If correct source legitimately outgrows it, the budget
 must be revisited from measured system resources. The harness still performs a
 real cold source build and requires the `EXT4-SOURCE-READY` marker with no
-Forth diagnostic. Runtime recovery journeys use a separate 1,200,000,000-step
-default watchdog. Geometry-bounded multi-record production and selected
+Forth diagnostic; the current cold snapshot measures 131,992,675 steps under
+that unchanged watchdog. Runtime recovery journeys use a separate
+1,200,000,000-step default watchdog. Geometry-bounded multi-record production and selected
 multi-record fault journeys use a scoped 1,500,000,000-step watchdog because
 the real cold-source path plus repeated whole-plan authentication legitimately
 crossed the default. The mixed successful cleanup measured 1,209,747,492
 steps; linked one-block `LEGACY_MORE` measured 1,102,821,323, linked one-block
 `MODERN_MORE` measured 1,134,032,080, and repair from the durable image
 immediately before the legacy commit fence measured 1,366,762,951. The
-data-bearing two-record unlinked journeys have a separate
-2,000,000,000-step watchdog: modern `DATA_DELETE_MORE` measured 1,573,133,619
-steps and legacy `DATA_DELETE_MORE` measured 1,563,424,804, followed in each
-case by a 55,738,449-step write-free stable remount. Neither watchdog is an
-implementation capacity. The default was
+multi-range data-bearing two-record unlinked journeys have a separate
+3,000,000,000-step watchdog because the persistence harness traces every
+write and flush around dry staging and real emission. The modern two-range
+production journey measures 1,786,988,013 steps and the legacy four-range
+journey measures 2,196,652,327; each clean remount measures 55,772,107. The
+direct COW stage/seal/abort workloads without persistence tracing measure
+615,185,969 and 825,905,086 steps respectively. These are workload-specific
+harness measurements, not physical-runtime projections. Neither watchdog is
+an implementation capacity. The default was
 established after the fresh-proof W18 crash-repair
 journey exceeded the old ceiling; the measured journey completed in
 811,281,646 steps, on one core, below 1 GiB peak RSS with no swapping. It is
@@ -176,19 +181,19 @@ does not use journal-data mode. An authenticated external xattr is retained;
 the root may already be empty or may contain ranges that the bounded
 free-block builder can account for exactly. An unlinked target must be an
 allocated regular file with zero links and zero size, no external xattr block,
-and an inline depth-0 extent root that is either empty or contains exactly one
-extent with a zero physical high word. Its initialized decoded length may be
-1..32768 blocks or its unwritten decoded length 1..32767 blocks, exactly as
-encoded by ext4 `ee_len`; `logical_start + decoded_length` must be at most
-`0xffffffff`. Its decoded `i_blocks` must exactly equal that empty or
-single-extent ownership. An ext4 inline depth-0 root can encode as many as four
-extent entries, but the current unlinked-delete slice admits at most one;
-multi-entry roots are refused before cleanup mutation. The complete physical
-range must still be allocated, lie outside all static metadata and journal
-ranges, and not alias orphan-file
-storage. A filesystem-wide scan of authenticated allocated inodes must also
-prove that no other extent or legacy data/map-metadata reference, or
-external-xattr pointer, names any block in the candidate range. A resident
+and an inline depth-0 extent root that is either empty or contains one through
+four extent entries. Each entry may be initialized or unwritten and must have
+a zero physical high word. An initialized decoded length may be 1..32768
+blocks and an unwritten decoded length 1..32767 blocks, exactly as encoded by
+ext4 `ee_len`; every `logical_start + decoded_length` must be at most
+`0xffffffff`. The entries must retain ext4's exact logical ordering and
+nonoverlap rules; their physical ranges must not overlap, and decoded
+`i_blocks` must exactly equal the aggregate block count of the complete root.
+Every physical range must be allocated, lie outside all static metadata and
+journal ranges, and not alias orphan-file storage. One combined
+filesystem-wide scan of authenticated allocated inodes must prove that no
+other extent or legacy data/map-metadata reference, or external-xattr pointer,
+names any block in any candidate range. A resident
 inline xattr area is admitted only after the structural walker proves bounded,
 ordered, nonoverlapping values with no value-inode reference. If even one
 record is outside these supported per-record shapes, the whole union returns a
@@ -210,9 +215,10 @@ already zero. An unlinked delete zeroes the complete target inode record,
 including `i_dtime`, without synthesizing a deletion timestamp; the same
 transaction clears its inode-bitmap bit and increments the owning descriptor
 and primary-super free-inode counters.
-For a nonempty extent it also clears every physical-range allocation bit,
-increments each touched group by its exact range chunk, and increments the
-primary-super free-block counter by the complete extent length. Released data
+For a nonempty root it also clears every certified physical-range allocation
+bit, increments each touched group by the sum of its exact range chunks, and
+increments the primary-super free-block counter by the aggregate decoded
+extent length. Released data
 blocks are not overwritten: their bytes remain unchanged after allocation
 authority is removed. `itable_unused` remains at its conservative allocation
 high-water value; the zeroed record is a normal free-inode representation
@@ -249,8 +255,8 @@ before publication: a `RECOVER`-clear input first enters a tear-safe recovery
 epoch through writer-free `AKW1` activation while preserving
 `ORPHAN_PRESENT`; `AKR1` then lands an empty checksum-v3 journal and a
 checksummed primary superblock with both transient bits clear. Any union whose
-records all fit the exact linked-truncate or empty/single-contiguous-inline-
-depth-0-extent unlinked-delete slices is transactionally drained before mount
+records all fit the exact linked-truncate or empty/one-to-four-entry inline-
+depth-0 unlinked-delete slices is transactionally drained before mount
 publication; a union containing any other record returns stable
 `EXT4-D-RECOVERY` without a cleanup write. Malformed authority still fails
 closed, and no public mutation capability is exposed. Malformed links,
@@ -634,20 +640,21 @@ exactly valid; mount-state reset and active replay clear it.
 `_EXT4-JTX-STAGE-FREE-ORPHAN-INODE` is the corresponding first inode-release
 builder. It reauthenticates one canonical selected plan record and accepts
 only an allocated, unlinked regular inode whose size is zero and whose inline
-depth-0 extent root is either empty or contains exactly one initialized or
-unwritten extent with a zero physical high word. Initialized decoded lengths
-are 1..32768 blocks and unwritten decoded lengths are 1..32767 blocks;
-`logical_start + decoded_length` must be at most `0xffffffff`. Decoded
-`i_blocks` must exactly match the complete extent length. A resident inline
+depth-0 extent root is empty or contains one through four initialized or
+unwritten extents. Every entry must have a zero physical high word.
+Initialized decoded lengths are 1..32768 blocks and unwritten decoded lengths
+are 1..32767 blocks; every `logical_start + decoded_length` must be at most
+`0xffffffff`. Decoded `i_blocks` must exactly match the aggregate length of
+all entries. A resident inline
 xattr area is structurally authenticated with the
 shared reader walker and may not refer to a value inode; an external xattr
 block remains outside this slice. The target must be at or above `s_first_ino`.
-Journal-data mode, multiple extents, depth-positive roots, malformed lengths
-or ranges, and external storage-owning shapes remain refused. Every candidate
-range bit must be set and each touched block-bitmap home must have exactly one
-descriptor owner. The physical range must lie inside mutable data space and
-be disjoint from static metadata, the journal, and all modern-orphan-file
-extents.
+Journal-data mode, depth-positive/external extent trees, malformed lengths or
+ranges, and external storage-owning xattr shapes remain refused. Every
+candidate range bit must be set and each distinct touched block-bitmap home
+must have exactly one descriptor owner. Every physical range must lie inside
+mutable data space, be disjoint from the other target ranges, and be disjoint
+from static metadata, the journal, and all modern-orphan-file extents.
 
 Release admission then walks every initialized, checksum-authenticated inode
 bitmap and every set inode record except the target. Each record's inode
@@ -659,9 +666,11 @@ all participate in the reverse-owner proof. `INODE_UNINIT` groups contain no
 allocated owners and are skipped. Inode 1 retains its format-defined legacy
 bad-block-map interpretation; other mode-zero reserved records must be
 storage-empty, while fast-symlink and device payload bytes retain their normal
-non-map interpretation. Any reference to the candidate range is
+non-map interpretation. Any reference to any candidate range is
 `EXT4-D-DATA-MAP` corruption, even when both inode records and their allocation
-bits are individually checksum-valid.
+bits are individually checksum-valid. All active ranges are published
+together for this scan, so proving one entry cannot conceal an alias in a
+later entry.
 
 The builder derives the inode
 group, bitmap bit, table locator, primary GDT page, and primary-super home from
@@ -672,9 +681,12 @@ legacy protocol/super coalescing.
 
 The builder first stages the complete target inode-table home with exactly the
 target record zeroed and every sibling byte preserved. For a nonempty target
-it then releases the complete physical extent through the typed block-free
-builder, including exact range chunks crossing group boundaries; it stages no
-data-block overwrite and does not wipe block contents. It finally
+it then releases every physical extent through the typed block-free builder,
+including exact per-entry chunks crossing group boundaries; it stages no
+data-block overwrite and does not wipe block contents. Multiple ranges that
+touch the same block group compose into one bitmap after-image, and all group
+descriptor changes sharing a primary GDT block compose into one GDT
+after-image. It finally
 clears exactly one retained inode-bitmap bit, increments the split
 group free-inode count, installs the new inode-bitmap CRC32C, restamps the
 complete descriptor, increments the primary-super free-inode count, and
@@ -692,9 +704,10 @@ paths abort and scrub the complete transaction.
 The production mount cleanup retains a successful reverse-owner proof only
 inside one serialized cleanup invocation, under the driver's exclusive
 raw-media-mutation contract. It is keyed to the context, target inode and
-generation, and exact physical range; it is not backed by a per-write content
-generation counter. Every reuse still repeats local plan, inode, map-shape,
-static/journal, and orphan-file authentication. Dry staging and abort,
+generation, range count, and every ordered physical `{ first, count }` pair;
+it is not backed by a per-write content generation counter. Every reuse still
+repeats local plan, inode, map-shape, static/journal, and orphan-file
+authentication. Dry staging and abort,
 journal-only activation, real staging, and commit cannot change another inode's
 home map while that exclusive contract holds. The proof is invalidated before
 retained-journal convergence, consumed immediately after a durable commit and
@@ -737,7 +750,7 @@ write.
 `_EXT4-JTX-STAGE-ORPHAN-DEPTH0` owns an initially empty metadata-only
 transaction for one deterministically selected record of either protocol. It
 dispatches by the authenticated link count, and composes either depth-zero
-linked truncation or empty/single-extent unlinked inode release with modern
+linked truncation or empty/one-to-four-entry unlinked inode release with modern
 slot removal or legacy-head advancement. It requires used and active metadata
 homes to equal the exact credit, then seals protocol- and operation-specific
 raw authority plus retained after-image CRC32Cs into the arena-owned writer.
@@ -748,13 +761,15 @@ generation, table location, original inline-entry count, transaction epoch,
 and applicable retained-image checksums. Delete modes additionally bind the
 inode-bitmap home, GDT home and descriptor offset, and complete retained CRCs
 for the zeroed target inode-table block, inode bitmap, GDT, and primary-super
-after-images. Data-delete modes additionally bind the exact physical range;
-the retained transaction entries and semantic verifier bind every touched
-block-bitmap after-image and coalesced data-group GDT page. The explicit entry
-count binds the raw extent-entry count, not the number of physical blocks: an
-already-truncated linked target has zero, a linked target being truncated is
-nonzero, and a delete has the admitted zero or single raw-extent count plus a
-mandatory zero target after-image. No valid CRC32C value is
+after-images. Data-delete modes additionally bind the exact range count,
+aggregate decoded block count, and every ordered physical `{ first, count }`
+pair; unused pair slots must be zero. The retained transaction entries and
+semantic verifier bind every distinct touched block-bitmap after-image and
+coalesced data-group GDT page. The explicit target-entry count binds the raw
+extent-entry count, not the number of physical blocks: an already-truncated
+linked target has zero, a linked target being truncated is nonzero, and a
+delete has the admitted zero-to-four raw-entry count plus a mandatory zero
+target after-image. No valid CRC32C value is
 reserved as a sentinel. Mode is published last; once published, every generic
 and typed staging entry point returns busy, while abort and emit remain legal.
 The certificate also binds the exact pre-transaction total, modern, and legacy
@@ -781,8 +796,10 @@ count to equal the measured credit, so media or plan drift remains fail-closed.
 An admitted unlinked target instead measures its inode table, inode bitmap,
 inode-group GDT page, and primary super for exact credit four under legacy
 cleanup; the distinct modern orphan-file home makes that five. A nonempty
-extent adds one block-bitmap home per touched data group and each distinct
-data-group GDT page not already represented by the inode-group GDT page. The
+root adds one block-bitmap home per distinct data group touched by any entry
+and each distinct data-group GDT page not already represented by the
+inode-group GDT page. Several entries in one group therefore do not duplicate
+either home. The
 canonical one-block fixtures therefore measure five legacy or six modern
 homes. The qualified two-block group-boundary fixture measures six legacy or
 seven modern homes: it touches two bitmap homes while both data descriptors
@@ -855,9 +872,10 @@ identity, the commit, the exact zero sentinel, and the retained entry/image
 CRCs must describe the same single committed transaction. A mismatch fails
 before home mutation. Delete-specific modes also rebuild the raw unlinked
 inode/allocation authority and rerun the complete target-inode, bitmap, GDT,
-and super after-image proof. For a data delete that proof streams over the
-entire certified physical range, reconstructs every touched block-bitmap
-after-image, and aggregates all descriptor edits on each coalesced GDT page.
+and super after-image proof. For a data delete that proof streams over every
+certified physical range, reconstructs one combined after-image for each
+distinct touched block bitmap, and aggregates all descriptor edits on each
+coalesced GDT page.
 After home writes, checkpoint rereads every retained metadata home, requires
 its complete image and CRC, proves the target inode record and allocation bit
 are clear, and proves every certified range bit is clear with every derived
@@ -967,20 +985,22 @@ image checksums, and hash indices are revalidated before they can drive a
 fill, copy, lookup, or media write. The public binding and capability mask
 remain read-only. Geometry- and arena-bounded transactional completion is
 implemented for unions of the exact linked zero-size inline-depth-0 and
-empty/single-contiguous-inline-depth-0-extent unlinked-inode cases under both
-orphan mechanisms. The implementation adds no fixed cleanup record-count
+empty/one-to-four-entry inline-depth-0 unlinked-inode cases under both orphan
+mechanisms. The implementation adds no fixed cleanup record-count
 constant; positive union-drain qualification currently reaches two records.
-Before a linked cleanup may release storage, it publishes every physical
-range in the inline root together and performs one complete allocated-inode
-scan. Any data, map-metadata, or external-xattr reference from another inode
-to any of those ranges is a corrupt cross-link refusal. The operation-scoped
+Before a supported linked truncation or unlinked deletion may release storage,
+it publishes every physical range in the inline root together and performs one
+complete allocated-inode scan. Any data, map-metadata, or external-xattr
+reference from another inode to any of those ranges is a corrupt cross-link
+refusal. The operation-scoped
 certificate binds the context, inode, generation, range count, and all ordered
 range pairs; it may bridge measurement, dry staging, activation, restaging,
 and journal emission, but checkpoint invalidates it before its first home
-write. Whole-union qualification performs this proof for every retained
-linked record before the first cleanup transaction may mutate media.
+write. Whole-union qualification performs this proof for every retained linked
+or unlinked record before the first cleanup transaction may mutate media.
 Per-shape single-record qualification includes initialized and unwritten
-extents, nonzero logical starts, and a physical range crossing two data groups.
+extents, nonzero logical starts, multiple separated logical/physical ranges,
+the four-entry inline maximum, and a physical range crossing two data groups.
 Pinned e2fsprogs accepts final
 empty-delete media at 1 KiB, ordinary one-block-delete media at 1/2/4 KiB, and
 the new multi-block 1 KiB results for both orphan protocols. Broader per-record
@@ -1316,8 +1336,8 @@ The remaining boundaries are:
   broad crash/interoperability qualification remain gated.
   Transaction-aware metadata acquisition, checksum-safe typed
   orphan-inode replacement, free-only physical-block accounting, linked
-  zero-size inline depth-0 extent truncation, exact empty/single-inline-
-  depth-0-extent unlinked data and inode allocation release, target-record
+  zero-size inline depth-0 extent truncation, exact empty/one-to-four-entry
+  inline-depth-0 unlinked data and inode allocation release, target-record
   scrubbing, exact credit measurement, modern-slot removal, legacy-head
   advancement, and operation/protocol-specific `FINAL`/`MORE` certificates now
   compose one sealed transaction for either orphan mechanism. Production mount
@@ -1339,18 +1359,17 @@ The remaining boundaries are:
   user-visible write. Cleanup derives its record count from authenticated
   geometry, checked arithmetic, and caller-arena storage rather than a separate
   fixed constant, but still does not cover nonzero-size or tail truncation,
-  depth-positive extent trees,
-  legacy direct/indirect map mutation, an unlinked inode with more than one
-  extent, a nonzero physical high word, a depth-positive root, an external
-  xattr block, an inline xattr value inode, external-xattr/value-inode release,
-  or general link-count and malformed-chain repair. General inode
+  depth-positive/external extent trees, legacy direct/indirect map mutation,
+  a nonzero physical high word, an external xattr block, an inline xattr value
+  inode, external-xattr/value-inode release, or general link-count and
+  malformed-chain repair. General inode
   allocation, general inode release outside the admitted shape, and every
   user-visible mutation operation remain unimplemented. Cleanup releases
   allocation authority but does not provide secure deletion or data-block
   erasure;
-- focused single-record, per-shape empty/single-extent unlinked qualification
-  covers modern and legacy mount completion. Empty and one-block baselines span
-  the canonical 1/2/4 KiB, 256-byte-inode geometries; 1 KiB qualification additionally
+- focused per-shape empty and inline depth-0 unlinked qualification covers
+  modern and legacy mount completion. Empty and one-block baselines span the
+  canonical 1/2/4 KiB, 256-byte-inode geometries; 1 KiB qualification additionally
   covers a three-block initialized extent at logical block 7 and a two-block
   unwritten extent at logical block 11 whose physical range crosses data
   groups 3 and 4. The fixture construction and post-mount allocation-accounting
@@ -1379,14 +1398,22 @@ The remaining boundaries are:
   proves that reverse-owner admission covers the complete range. Both orphan
   protocols are qualified; the same-binding retry returns the same refusal
   with the scoped ownership proof and ambient probe cleared.
-  Direct exact-shape preflight coverage additionally rejects multiple inline
-  extent entries and depth-positive roots before writer allocation or media
-  I/O. Every
-  refusal fails before writer allocation or any write/flush. The established
+  Multi-range qualification admits a separated two-entry modern root and the
+  four-entry inline maximum under legacy cleanup, mixing initialized and
+  unwritten entries and logical gaps. Direct exact-shape preflight still
+  rejects depth-positive/external trees and malformed or out-of-slice entries
+  before writer allocation or media I/O. Every refusal fails before writer
+  allocation or any write/flush. The established
   1 KiB cross-group fixture qualifies separate data- and inode-group
   descriptors coalesced into one primary GDT home; the new boundary fixture
   proves that one certified data range may itself cross two groups while both
-  data descriptors and the inode descriptor coalesce into that home. Pinned
+  data descriptors and the inode descriptor coalesce into that home. The
+  separated multi-range fixtures place every active range in one data group
+  and prove cumulative bitmap and descriptor changes still retain exactly one
+  data-bitmap home and one shared GDT home. Their sealed authority binds the
+  raw entry count, exact range count, aggregate block count, every ordered
+  pair, and a zero inactive tail; changing a later active pair is rejected by
+  exact staged verification. Pinned
   e2fsprogs 1.47.4 accepts both protocols for the empty 1 KiB result, ordinary
   one-block 1/2/4 KiB results, the initialized-offset and cross-group unwritten
   multi-block results, and the 1 KiB same-GDT-page cross-group and one-block
@@ -1424,8 +1451,9 @@ The remaining boundaries are:
   I/O. These synthetic protocol-state fixtures intentionally have no
   namespace dirents for inodes 18 or 21; they are not e2fsck oracles and are
   not claimed as e2fsck-clean namespace images. A
-  later-valid two-extent record proves whole-union refusal after an earlier
-  supported record qualifies but before any write or flush. Structurally valid
+  later four-extent unlinked record whose fourth range is also owned by a live
+  inode proves combined all-range ownership refusal after an earlier supported
+  record qualifies but before any write or flush. Structurally valid
   post-seal total-count, protocol-split, and `MORE`/`FINAL` substitutions all
   fault at checkpoint preflight with zero home writes. A linked-owner matrix
   places a live-inode alias in the later selected record: a two-entry modern
@@ -1433,15 +1461,16 @@ The remaining boundaries are:
   `EXT4-D-DATA-MAP`, leave the earlier safe record untouched, perform no write
   or flush, preserve the caller arena on retry, and clear the ambient range
   table and operation certificate. Modern-only and legacy-only two-record
-  deletion fixtures give unlinked head 18 one uniquely owned block before
-  empty successor 21. Exact stage/abort qualification pins the six-credit
-  `MODERN_DATA_DELETE_MORE` and five-credit `LEGACY_DATA_DELETE_MORE`
-  certificates, including protocol locators, pre-union counts, target
-  generation/home/offset/entry count, and the released physical range. Full
-  production mounts restore the canonical block bitmap and free-block
-  counters, reclaim both inodes through `MORE` then `FINAL`, preserve the
-  seeded payload without a data-home write, and produce a byte-stable zero-I/O
-  remount. Their pinned e2fsprogs 1.47.4 acceptance test remains a pending
+  deletion fixtures give unlinked head 18 respectively two and four separated
+  initialized/unwritten extents before empty successor 21. Exact stage/abort
+  qualification pins the six-credit `MODERN_DATA_DELETE_MORE` and five-credit
+  `LEGACY_DATA_DELETE_MORE` certificates, including protocol locators,
+  pre-union counts, target generation/home/offset/entry count, and the complete
+  physical range vector. Full production mounts restore the canonical block
+  bitmap and aggregate free-block counters, reclaim both inodes through `MORE`
+  then `FINAL`, preserve every seeded extent and gap payload without a
+  data-home write, and produce a byte-stable zero-I/O remount. Their pinned
+  e2fsprogs 1.47.4 acceptance test remains a pending
   release qualification gate. The per-shape
   single-record empty-case controlled matrix covers
   eight modern and seven legacy write prefixes: both sides of final commit,

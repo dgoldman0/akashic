@@ -1212,22 +1212,28 @@ def _linked_head_nlink2_extent_patches(
     return tuple(patch_map.items()), data_blocks
 
 
-def _mixed_union_with_later_multi_extent_orphan_patches(
+def _mixed_union_with_later_unlinked_live_alias_patches(
     path: Path,
-) -> tuple[tuple[int, bytes], ...]:
-    """Place one supported legacy record before a valid unsupported shape."""
+) -> tuple[tuple[tuple[int, bytes], ...], tuple[int, ...]]:
+    """Place a later unlinked modern record whose fourth range is live-owned."""
     base = _multi_empty_unlinked_orphan_patches(
         path,
         legacy_chain=(21,),
         modern_entries=(18,),
     )
-    patches, first_physical = _single_extent_unlinked_orphan_patches(
+    patches, physical_ranges = _inline_depth0_unlinked_orphan_patches(
         path,
         protocol="modern",
         inode_number=18,
-        block_count=2,
+        extent_specs=(
+            (0, 1, False),
+            (2, 1, True),
+            (4, 1, False),
+        ),
         base_patches=base,
     )
+    assert all(block_count == 1 for _, block_count in physical_ranges)
+    physical_blocks = tuple(first for first, _ in physical_ranges)
     patch_map = dict(patches)
     assert len(patch_map) == 7
     superblock = patch_map[1024]
@@ -1236,63 +1242,84 @@ def _mixed_union_with_later_multi_extent_orphan_patches(
     inode = bytearray(patch_map[inode_offset])
     assert struct.unpack_from("<HHHH", inode, 0x28) == (
         0xF30A,
-        1,
+        3,
         4,
         0,
     )
-    assert struct.unpack_from("<IHHI", inode, 0x34) == (
-        0,
-        2,
-        first_physical >> 32,
-        first_physical & 0xFFFF_FFFF,
-    )
+    for index, physical in enumerate(physical_blocks):
+        assert struct.unpack_from(
+            "<IHHI",
+            inode,
+            0x34 + index * 12,
+        ) == (
+            index * 2,
+            0x8001 if index == 1 else 1,
+            physical >> 32,
+            physical & 0xFFFF_FFFF,
+        )
     assert struct.unpack_from("<I", inode, 0x04)[0] == 0
     assert struct.unpack_from("<H", inode, 0x1A)[0] == 0
-    assert struct.unpack_from("<I", inode, 0x1C)[0] == 2 * (
-        block_size // 512
-    )
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 3 * (block_size // 512)
 
-    struct.pack_into("<H", inode, 0x2A, 2)
-    struct.pack_into("<H", inode, 0x38, 1)
-    second_physical = first_physical + 1
+    _, live_inode, _ = _ext4_inode_record(path, 14)
+    assert struct.unpack_from("<H", live_inode, 0x1A)[0] > 0
+    alias_physical = _extent_root_physical(live_inode, 0)
+    assert alias_physical not in physical_blocks
+
+    struct.pack_into("<H", inode, 0x2A, 4)
     struct.pack_into(
         "<IHHI",
         inode,
-        0x40,
-        1,
+        0x58,
+        6,
         0x8001,
-        second_physical >> 32,
-        second_physical & 0xFFFF_FFFF,
+        alias_physical >> 32,
+        alias_physical & 0xFFFF_FFFF,
     )
+    struct.pack_into("<I", inode, 0x1C, 4 * (block_size // 512))
     patch_map[inode_offset] = _inode_with_checksum(
         superblock,
         18,
         inode,
     )
-    assert _extent_root_physical(patch_map[inode_offset], 0) == first_physical
-    assert _extent_root_physical(patch_map[inode_offset], 1) == second_physical
-    return tuple(patch_map.items())
+    for index, physical in enumerate((*physical_blocks, alias_physical)):
+        assert _extent_root_physical(
+            patch_map[inode_offset],
+            index * 2,
+        ) == physical
+    return tuple(patch_map.items()), (*physical_blocks, alias_physical)
 
 
-def _single_extent_unlinked_orphan_patches(
+def _inline_depth0_unlinked_orphan_patches(
     path: Path,
     *,
     protocol: str,
+    extent_specs: tuple[tuple[int, int, bool], ...],
     inode_number: int = 18,
     data_group: int = 0,
-    physical_start: int | None = None,
-    logical_start: int = 0,
-    block_count: int = 1,
-    unwritten: bool = False,
+    physical_starts: tuple[int, ...] | None = None,
+    physical_gap: int = 1,
     seed_payloads: bool = False,
+    seed_gap_payloads: bool = False,
     base_patches: tuple[tuple[int, bytes], ...] | None = None,
-) -> tuple[tuple[tuple[int, bytes], ...], int]:
-    """Give one unlinked inode a contiguous inline depth-zero extent."""
+) -> tuple[tuple[tuple[int, bytes], ...], tuple[tuple[int, int], ...]]:
+    """Give one unlinked inode an exact inline depth-zero extent vector."""
     assert protocol in {"modern", "legacy"}
-    assert logical_start >= 0
-    assert block_count > 0
-    assert block_count <= (0x7FFF if unwritten else 0x8000)
-    assert logical_start + block_count <= 0xFFFF_FFFF
+    assert 1 <= len(extent_specs) <= 4
+    assert physical_gap >= 0
+    previous_logical_end = 0
+    for index, (logical_start, block_count, unwritten) in enumerate(extent_specs):
+        assert logical_start >= 0
+        assert block_count > 0
+        assert block_count <= (0x7FFF if unwritten else 0x8000)
+        assert logical_start + block_count <= 0xFFFF_FFFF
+        if index:
+            assert logical_start >= previous_logical_end
+        previous_logical_end = logical_start + block_count
+    total_blocks = sum(block_count for _, block_count, _ in extent_specs)
+    assert total_blocks > 0
+    if physical_starts is not None:
+        assert len(physical_starts) == len(extent_specs)
     if base_patches is None:
         patches = dict(
             _already_empty_unlinked_orphan_patches(
@@ -1350,7 +1377,8 @@ def _single_extent_unlinked_orphan_patches(
         assert len(descriptor) == descriptor_size
         return gdt_home, descriptor_offset, descriptor
 
-    if physical_start is None:
+    auto_physical = physical_starts is None
+    if auto_physical:
         _, _, descriptor = descriptor_for(data_group)
         block_bitmap_home = struct.unpack_from(
             "<I", descriptor, 0x00
@@ -1358,24 +1386,47 @@ def _single_extent_unlinked_orphan_patches(
         block_bitmap = read_block(block_bitmap_home)
         group_first = first_data + data_group * blocks_per_group
         group_blocks = min(blocks_per_group, blocks_count - group_first)
-        assert block_count <= group_blocks
+        physical_span = total_blocks + physical_gap * (len(extent_specs) - 1)
+        assert physical_span <= group_blocks
         data_index = next(
             index
-            for index in range(group_blocks - block_count + 1)
+            for index in range(group_blocks - physical_span + 1)
             if all(
                 not block_bitmap[bit // 8] & (1 << (bit % 8))
-                for bit in range(index, index + block_count)
+                for bit in range(index, index + physical_span)
             )
         )
-        physical_start = group_first + data_index
-    assert physical_start >= first_data
-    assert physical_start + block_count <= blocks_count
-    assert physical_start <= 0xFFFF_FFFF
+        next_physical = group_first + data_index
+        derived_starts: list[int] = []
+        for _, block_count, _ in extent_specs:
+            derived_starts.append(next_physical)
+            next_physical += block_count + physical_gap
+        physical_starts = tuple(derived_starts)
+    assert physical_starts is not None
+    physical_ranges = tuple(
+        (physical_start, block_count)
+        for physical_start, (_, block_count, _) in zip(
+            physical_starts,
+            extent_specs,
+            strict=True,
+        )
+    )
+    for index, (physical_start, block_count) in enumerate(physical_ranges):
+        assert physical_start >= first_data
+        assert physical_start + block_count <= blocks_count
+        assert physical_start <= 0xFFFF_FFFF
+        for other_start, other_count in physical_ranges[:index]:
+            assert physical_start + block_count <= other_start or (
+                other_start + other_count <= physical_start
+            )
 
     if seed_payloads:
-        for ordinal, physical in enumerate(
-            range(physical_start, physical_start + block_count)
-        ):
+        selected_blocks = tuple(
+            physical
+            for physical_start, block_count in physical_ranges
+            for physical in range(physical_start, physical_start + block_count)
+        )
+        for ordinal, physical in enumerate(selected_blocks):
             token = (ordinal + 1).to_bytes(8, "little")
             payload = (token * ((block_size + len(token) - 1) // len(token)))[
                 :block_size
@@ -1385,71 +1436,90 @@ def _single_extent_unlinked_orphan_patches(
             assert offset not in patches
             patches[offset] = payload
 
-    cursor = physical_start
-    remaining = block_count
-    while remaining:
-        group, data_index = divmod(
-            cursor - first_data,
-            blocks_per_group,
-        )
-        assert 0 <= group < group_count
-        group_first = first_data + group * blocks_per_group
-        group_blocks = min(blocks_per_group, blocks_count - group_first)
-        assert data_index < group_blocks
-        chunk = min(remaining, group_blocks - data_index)
-        gdt_home, descriptor_offset, descriptor = descriptor_for(group)
-        gdt = read_block(gdt_home)
-        block_bitmap_home = struct.unpack_from(
-            "<I", descriptor, 0x00
-        )[0]
-        block_bitmap = read_block(block_bitmap_home)
-        for bit in range(data_index, data_index + chunk):
-            byte_index, bit_in_byte = divmod(bit, 8)
-            mask = 1 << bit_in_byte
-            assert block_bitmap[byte_index] & mask == 0
-            block_bitmap[byte_index] |= mask
-        block_bitmap_checksum = _crc32c_raw(block_bitmap, seed)
+    if seed_gap_payloads:
+        assert auto_physical
+        for index in range(len(physical_ranges) - 1):
+            gap_first = sum(physical_ranges[index])
+            gap_end = physical_ranges[index + 1][0]
+            assert gap_end - gap_first == physical_gap
+            for ordinal, physical in enumerate(range(gap_first, gap_end)):
+                token = (0x8000_0000 + index * physical_gap + ordinal).to_bytes(
+                    8,
+                    "little",
+                )
+                payload = (
+                    token * ((block_size + len(token) - 1) // len(token))
+                )[:block_size]
+                offset = physical * block_size
+                assert offset not in patches
+                patches[offset] = payload
 
-        flags = struct.unpack_from("<H", descriptor, 0x12)[0]
-        if flags & 0x02:
-            struct.pack_into("<H", descriptor, 0x12, flags & ~0x02)
-        group_free_blocks = struct.unpack_from(
-            "<H", descriptor, 0x0C
-        )[0] | (struct.unpack_from("<H", descriptor, 0x2C)[0] << 16)
-        assert group_free_blocks >= chunk
-        group_free_blocks -= chunk
-        struct.pack_into(
-            "<H", descriptor, 0x0C, group_free_blocks & 0xFFFF
-        )
-        struct.pack_into(
-            "<H", descriptor, 0x2C, group_free_blocks >> 16
-        )
-        struct.pack_into(
-            "<H", descriptor, 0x18, block_bitmap_checksum & 0xFFFF
-        )
-        struct.pack_into(
-            "<H", descriptor, 0x38, block_bitmap_checksum >> 16
-        )
-        descriptor = bytearray(
-            _group_descriptor_with_checksum(
-                superblock,
-                descriptor,
-                group,
+    for physical_start, range_blocks in physical_ranges:
+        cursor = physical_start
+        remaining = range_blocks
+        while remaining:
+            group, data_index = divmod(
+                cursor - first_data,
+                blocks_per_group,
             )
-        )
-        gdt[
-            descriptor_offset : descriptor_offset + descriptor_size
-        ] = descriptor
-        patches[block_bitmap_home * block_size] = bytes(block_bitmap)
-        patches[gdt_home * block_size] = bytes(gdt)
-        cursor += chunk
-        remaining -= chunk
+            assert 0 <= group < group_count
+            group_first = first_data + group * blocks_per_group
+            group_blocks = min(blocks_per_group, blocks_count - group_first)
+            assert data_index < group_blocks
+            chunk = min(remaining, group_blocks - data_index)
+            gdt_home, descriptor_offset, descriptor = descriptor_for(group)
+            gdt = read_block(gdt_home)
+            block_bitmap_home = struct.unpack_from(
+                "<I", descriptor, 0x00
+            )[0]
+            block_bitmap = read_block(block_bitmap_home)
+            for bit in range(data_index, data_index + chunk):
+                byte_index, bit_in_byte = divmod(bit, 8)
+                mask = 1 << bit_in_byte
+                assert block_bitmap[byte_index] & mask == 0
+                block_bitmap[byte_index] |= mask
+            block_bitmap_checksum = _crc32c_raw(block_bitmap, seed)
+
+            flags = struct.unpack_from("<H", descriptor, 0x12)[0]
+            if flags & 0x02:
+                struct.pack_into("<H", descriptor, 0x12, flags & ~0x02)
+            group_free_blocks = struct.unpack_from(
+                "<H", descriptor, 0x0C
+            )[0] | (struct.unpack_from("<H", descriptor, 0x2C)[0] << 16)
+            assert group_free_blocks >= chunk
+            group_free_blocks -= chunk
+            struct.pack_into(
+                "<H", descriptor, 0x0C, group_free_blocks & 0xFFFF
+            )
+            struct.pack_into(
+                "<H", descriptor, 0x2C, group_free_blocks >> 16
+            )
+            struct.pack_into(
+                "<H", descriptor, 0x18, block_bitmap_checksum & 0xFFFF
+            )
+            struct.pack_into(
+                "<H", descriptor, 0x38, block_bitmap_checksum >> 16
+            )
+            descriptor = bytearray(
+                _group_descriptor_with_checksum(
+                    superblock,
+                    descriptor,
+                    group,
+                )
+            )
+            gdt[
+                descriptor_offset : descriptor_offset + descriptor_size
+            ] = descriptor
+            patches[block_bitmap_home * block_size] = bytes(block_bitmap)
+            patches[gdt_home * block_size] = bytes(gdt)
+            cursor += chunk
+            remaining -= chunk
 
     super_free_blocks = struct.unpack_from("<I", superblock, 0x0C)[0] | (
         struct.unpack_from("<I", superblock, 0x158)[0] << 32
     )
-    assert super_free_blocks >= block_count
-    super_free_blocks -= block_count
+    assert super_free_blocks >= total_blocks
+    super_free_blocks -= total_blocks
     struct.pack_into(
         "<I", superblock, 0x0C, super_free_blocks & 0xFFFF_FFFF
     )
@@ -1459,18 +1529,24 @@ def _single_extent_unlinked_orphan_patches(
     _, _, inode_offset = _ext4_inode_record(path, inode_number)
     inode = bytearray(patches[inode_offset])
     assert struct.unpack_from("<HHHH", inode, 0x28) == (0xF30A, 0, 4, 0)
-    raw_length = block_count | (0x8000 if unwritten else 0)
-    struct.pack_into("<H", inode, 0x2A, 1)
-    struct.pack_into(
-        "<IHHI",
-        inode,
-        0x34,
-        logical_start,
-        raw_length,
-        physical_start >> 32,
-        physical_start & 0xFFFF_FFFF,
-    )
-    sectors = block_count * sectors_per_block
+    struct.pack_into("<H", inode, 0x2A, len(extent_specs))
+    inode[0x34:0x64] = bytes(48)
+    for index, (
+        (logical_start, block_count, unwritten),
+        (physical_start, observed_count),
+    ) in enumerate(zip(extent_specs, physical_ranges, strict=True)):
+        assert observed_count == block_count
+        raw_length = block_count | (0x8000 if unwritten else 0)
+        struct.pack_into(
+            "<IHHI",
+            inode,
+            0x34 + index * 12,
+            logical_start,
+            raw_length,
+            physical_start >> 32,
+            physical_start & 0xFFFF_FFFF,
+        )
+    sectors = total_blocks * sectors_per_block
     assert sectors <= 0xFFFF_FFFF
     struct.pack_into("<I", inode, 0x1C, sectors)
     struct.pack_into("<H", inode, 0x74, 0)
@@ -1480,7 +1556,37 @@ def _single_extent_unlinked_orphan_patches(
 
     patches[1024] = bytes(superblock)
     patches[inode_offset] = bytes(inode)
-    return tuple(patches.items()), physical_start
+    return tuple(patches.items()), physical_ranges
+
+
+def _single_extent_unlinked_orphan_patches(
+    path: Path,
+    *,
+    protocol: str,
+    inode_number: int = 18,
+    data_group: int = 0,
+    physical_start: int | None = None,
+    logical_start: int = 0,
+    block_count: int = 1,
+    unwritten: bool = False,
+    seed_payloads: bool = False,
+    base_patches: tuple[tuple[int, bytes], ...] | None = None,
+) -> tuple[tuple[tuple[int, bytes], ...], int]:
+    """Give one unlinked inode one contiguous inline depth-zero extent."""
+    patches, ranges = _inline_depth0_unlinked_orphan_patches(
+        path,
+        protocol=protocol,
+        extent_specs=((logical_start, block_count, unwritten),),
+        inode_number=inode_number,
+        data_group=data_group,
+        physical_starts=(physical_start,) if physical_start is not None else None,
+        physical_gap=0,
+        seed_payloads=seed_payloads,
+        base_patches=base_patches,
+    )
+    assert len(ranges) == 1
+    assert ranges[0][1] == block_count
+    return patches, ranges[0][0]
 
 
 def _later_linked_live_alias_orphan_patches(
@@ -2642,12 +2748,18 @@ def run_forth(
             'ELSE ." EXT4-STACK-LEAK " . THEN'
         )
         payload = ("\n".join((*lines, stack_check, "BYE")) + "\n").encode()
-        _feed_until_idle(system, payload, max_steps)
+        journey_steps = _feed_until_idle(system, payload, max_steps)
+        if os.environ.get("EXT4_REPORT_STEPS"):
+            print(
+                "[*] ext4 Forth journey: "
+                f"{journey_steps:,}/{max_steps:,} steps ({image.name})"
+            )
         output = fat_harness.uart_text(uart)
         _assert_no_forth_diagnostics(output)
         if not system.cpu.halted or not output.endswith("Bye!\r\n"):
             raise AssertionError(
-                "ext4 Forth journey did not consume BYE and halt:\n"
+                "ext4 Forth journey did not consume BYE and halt "
+                f"after {journey_steps:,}/{max_steps:,} steps:\n"
                 + output[-2000:]
             )
         assert write_requests == 0
@@ -2827,8 +2939,50 @@ def _forth_conjunction(checks: list[str]) -> str:
     return " ".join((checks[0], *(f"{check} AND" for check in checks[1:])))
 
 
+def _forth_cp_data_vector_checks(
+    writer: str,
+    ranges: tuple[tuple[int, int], ...],
+) -> list[str]:
+    """Return exact checkpoint data-range authority predicates."""
+    assert len(ranges) <= 4
+    checks = [
+        (
+            f"{writer} _EXT4-JWR.CP-DATA-RANGE-COUNT + @ "
+            f"{len(ranges)} ="
+        ),
+        (
+            f"{writer} _EXT4-JWR.CP-DATA-BLOCKS + @ "
+            f"{sum(count for _, count in ranges)} ="
+        ),
+    ]
+    for index, (first, count) in enumerate(ranges):
+        checks.extend(
+            (
+                (
+                    f"{index} {writer} _EXT4-JWR-CP-DATA-RANGE @ "
+                    f"{first} ="
+                ),
+                (
+                    f"{index} {writer} _EXT4-JWR-CP-DATA-RANGE "
+                    f"CELL+ @ {count} ="
+                ),
+            )
+        )
+    checks.append(
+        (
+            f"{writer} _EXT4-JWR.CP-DATA-RANGES + "
+            f"{len(ranges) * 2} CELLS + "
+            f"_EXT4-MUTATION-OWNER-RANGE-MAX {len(ranges)} - "
+            "2* CELLS _EXT4-BYTES-ZERO?"
+        )
+    )
+    return checks
+
+
 _EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH = (
     "_EXT4-MUTATION-OWNER-RANGE-COUNT @ 0=",
+    "_EXT4-MUTATION-OWNER-BOUND-FIRST @ 0=",
+    "_EXT4-MUTATION-OWNER-BOUND-LIMIT @ 0=",
     (
         "_EXT4-MUTATION-OWNER-RANGES "
         "_EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS "
@@ -13874,13 +14028,9 @@ def test_single_extent_unlinked_cleanup_measures_and_seals_exact_certificate(
                             "_UD-WRITER _EXT4-JWR.CP-TARGET-CRC + @ "
                             f"{expected_target_crc} ="
                         ),
-                        (
-                            "_UD-WRITER _EXT4-JWR.CP-DATA-FIRST + @ "
-                            f"{data_block} ="
-                        ),
-                        (
-                            "_UD-WRITER _EXT4-JWR.CP-DATA-COUNT + @ "
-                            f"{data_count} ="
+                        *_forth_cp_data_vector_checks(
+                            "_UD-WRITER",
+                            ((data_block, data_count),),
                         ),
                         (
                             "_UD-WRITER _EXT4-JWR.CP-INODE-BITMAP-HOME + @ "
@@ -14101,14 +14251,6 @@ def test_mount_rejects_unlinked_reclaim_with_unreleased_ownership(
     ("case", "mutation", "expected_reason", "expected_flags", "detail"),
     (
         pytest.param(
-            "two-extents",
-            "2 _XS-INODE _EXT4-I.BLOCK + 2 + W!",
-            "VFS-R-UNSUPPORTED",
-            "0",
-            "EXT4-D-RECOVERY",
-            id="two-extents",
-        ),
-        pytest.param(
             "high-word",
             "1 _XS-INODE _EXT4-I.BLOCK + 18 + W!",
             "VFS-R-CORRUPT",
@@ -14126,7 +14268,7 @@ def test_mount_rejects_unlinked_reclaim_with_unreleased_ownership(
         ),
     ),
 )
-def test_unlinked_data_preflight_refuses_outside_single_depth0_extent(
+def test_unlinked_data_preflight_refuses_outside_inline_depth0_authority(
     canonical_images: dict[str, Path],
     case: str,
     mutation: str,
@@ -14898,7 +15040,7 @@ def _run_stable_unlinked_cleanup_remount(
 
 
 _MULTI_ORPHAN_RECOVERY_MAX_STEPS = 1_500_000_000
-_MULTI_ORPHAN_DATA_RECOVERY_MAX_STEPS = 2_000_000_000
+_MULTI_ORPHAN_DATA_RECOVERY_MAX_STEPS = 3_000_000_000
 
 
 _MULTI_EMPTY_ORPHAN_CASES = (
@@ -15099,11 +15241,7 @@ def test_linked_legacy_head_with_successor_stages_exact_more_transaction(
                             "_LM-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + "
                             f"@ {extent_count} ="
                         ),
-                        (
-                            "_LM-WRITER _EXT4-JWR.CP-DATA-FIRST + @ "
-                            "0="
-                        ),
-                        "_LM-WRITER _EXT4-JWR.CP-DATA-COUNT + @ 0=",
+                        *_forth_cp_data_vector_checks("_LM-WRITER", ()),
                         "_LM-WRITER _EXT4-JWR.CP-PRE-ACTIVE + @ 2 =",
                         "_LM-WRITER _EXT4-JWR.CP-PRE-MODERN + @ 0=",
                         "_LM-WRITER _EXT4-JWR.CP-PRE-LEGACY + @ 2 =",
@@ -15354,8 +15492,7 @@ def test_linked_modern_head_with_successor_stages_exact_more_transaction(
                             f"{expected_target_crc} ="
                         ),
                         "_MM-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ 1 =",
-                        "_MM-WRITER _EXT4-JWR.CP-DATA-FIRST + @ 0=",
-                        "_MM-WRITER _EXT4-JWR.CP-DATA-COUNT + @ 0=",
+                        *_forth_cp_data_vector_checks("_MM-WRITER", ()),
                         "_MM-WRITER _EXT4-JWR.CP-PRE-ACTIVE + @ 2 =",
                         "_MM-WRITER _EXT4-JWR.CP-PRE-MODERN + @ 2 =",
                         "_MM-WRITER _EXT4-JWR.CP-PRE-LEGACY + @ 0=",
@@ -15418,12 +15555,36 @@ def test_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
         legacy_chain=() if modern else (18, 21),
         modern_entries=(18, 21) if modern else (),
     )
-    patches, data_block = _single_extent_unlinked_orphan_patches(
+    extent_specs = (
+        ((0, 2, False), (4, 1, True))
+        if modern
+        else (
+            (0, 1, False),
+            (2, 1, True),
+            (4, 2, False),
+            (7, 1, True),
+        )
+    )
+    patches, data_ranges = _inline_depth0_unlinked_orphan_patches(
         path,
         protocol=protocol,
+        extent_specs=extent_specs,
         inode_number=18,
-        block_count=1,
+        seed_payloads=True,
+        seed_gap_payloads=True,
         base_patches=base_patches,
+    )
+    data_blocks = tuple(
+        physical
+        for first, count in data_ranges
+        for physical in range(first, first + count)
+    )
+    assert len(data_ranges) == (2 if modern else 4)
+    assert len(data_blocks) == (3 if modern else 5)
+    assert all(
+        data_ranges[index][0] + data_ranges[index][1]
+        < data_ranges[index + 1][0]
+        for index in range(len(data_ranges) - 1)
     )
     _, _, inode_offset = _ext4_inode_record(path, 18)
     target_home, target_offset = divmod(inode_offset, 1024)
@@ -15446,6 +15607,102 @@ def test_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
     expected_legacy = 0 if modern else 2
     marker = f"EXT4-{protocol.upper()}-DATA-DELETE-MORE-SEALED"
     aborted_marker = f"{marker}-ABORTED"
+    certificate_checks = [
+        f"_EXT4-JFO-CERT-RANGE-COUNT @ {len(data_ranges)} =",
+    ]
+    for index, (first, count) in enumerate(data_ranges):
+        certificate_checks.extend(
+            (
+                f"{index} _EXT4-JFO-CERT-RANGE @ {first} =",
+                f"{index} _EXT4-JFO-CERT-RANGE CELL+ @ {count} =",
+            )
+        )
+    certificate_checks.append(
+        (
+            f"_EXT4-JFO-CERT-RANGES {len(data_ranges) * 2} CELLS + "
+            f"_EXT4-MUTATION-OWNER-RANGE-MAX {len(data_ranges)} - "
+            "2* CELLS _EXT4-BYTES-ZERO?"
+        )
+    )
+    structural_mutation_lines: list[str] = []
+    structural_checks: list[str] = []
+    if modern:
+        structural_mutation_lines = [
+            (
+                "_DM-WRITER _EXT4-JWR.CP-DATA-BLOCKS + "
+                "DUP @ 1+ SWAP !"
+            ),
+            (
+                "_DM-WRITER _EXT4-JWR-CP-AUTHORITY? "
+                "CONSTANT _DM-BLOCKS-AUTHORITY"
+            ),
+            (
+                "_DM-WRITER _EXT4-JWR-VALID? "
+                "CONSTANT _DM-BLOCKS-VALID"
+            ),
+            (
+                f"{len(data_blocks)} _DM-WRITER "
+                "_EXT4-JWR.CP-DATA-BLOCKS + !"
+            ),
+            "0 _DM-WRITER _EXT4-JWR-CP-DATA-RANGE @ 1+ _DM-LAST-RANGE @ !",
+            (
+                "_DM-WRITER _EXT4-JWR-CP-AUTHORITY? "
+                "CONSTANT _DM-OVERLAP-AUTHORITY"
+            ),
+            (
+                "_DM-WRITER _EXT4-JWR-VALID? "
+                "CONSTANT _DM-OVERLAP-VALID"
+            ),
+            "_DM-LAST-FIRST _DM-LAST-RANGE @ !",
+            "2 _DM-WRITER _EXT4-JWR-CP-DATA-RANGE CONSTANT _DM-TAIL-RANGE",
+            "1 _DM-TAIL-RANGE !",
+            (
+                "_DM-WRITER _EXT4-JWR-CP-AUTHORITY? "
+                "CONSTANT _DM-TAIL-AUTHORITY"
+            ),
+            (
+                "_DM-WRITER _EXT4-JWR-VALID? "
+                "CONSTANT _DM-TAIL-VALID"
+            ),
+            "0 _DM-TAIL-RANGE !",
+            "5 _DM-WRITER _EXT4-JWR.CP-DATA-RANGE-COUNT + !",
+            (
+                "_DM-WRITER _EXT4-JWR-CP-AUTHORITY? "
+                "CONSTANT _DM-COUNT-AUTHORITY"
+            ),
+            (
+                "_DM-WRITER _EXT4-JWR-VALID? "
+                "CONSTANT _DM-COUNT-VALID"
+            ),
+            "2 _DM-WRITER _EXT4-JWR.CP-DATA-RANGE-COUNT + !",
+            "3 _DM-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + !",
+            (
+                "_DM-WRITER _EXT4-JWR-CP-AUTHORITY? "
+                "CONSTANT _DM-ENTRIES-AUTHORITY"
+            ),
+            (
+                "_DM-WRITER _EXT4-JWR-VALID? "
+                "CONSTANT _DM-ENTRIES-VALID"
+            ),
+            "2 _DM-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + !",
+            (
+                "_DM-WRITER _EXT4-JWR-VALID? "
+                "CONSTANT _DM-STRUCTURAL-RESTORED"
+            ),
+        ]
+        structural_checks = [
+            "_DM-BLOCKS-AUTHORITY 0=",
+            "_DM-BLOCKS-VALID 0=",
+            "_DM-OVERLAP-AUTHORITY 0=",
+            "_DM-OVERLAP-VALID 0=",
+            "_DM-TAIL-AUTHORITY 0=",
+            "_DM-TAIL-VALID 0=",
+            "_DM-COUNT-AUTHORITY 0=",
+            "_DM-COUNT-VALID 0=",
+            "_DM-ENTRIES-AUTHORITY 0=",
+            "_DM-ENTRIES-VALID 0=",
+            "_DM-STRUCTURAL-RESTORED",
+        ]
 
     output = run_forth(
         path,
@@ -15457,11 +15714,13 @@ def test_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                 "CONSTANT _DM-MOUNT-IOR CONSTANT _DM-V"
             ),
             "_DM-V _EXT4-CTX CONSTANT _DM-CTX",
+            "VARIABLE _DM-LAST-RANGE",
             (
                 "_DM-CTX _EXT4-FIND-SELECTED-ORPHAN "
                 "CONSTANT _DM-FIND-IOR CONSTANT _DM-RECORD"
             ),
             "_DM-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _DM-JOURNAL-IOR",
+            "_EXT4-JFO-CERT-BEGIN CONSTANT _DM-CERT-BEGIN-IOR",
             (
                 "_DM-RECORD _DM-CTX _EXT4-MEASURE-ORPHAN-DEPTH0 "
                 "CONSTANT _DM-MEASURE-IOR CONSTANT _DM-CREDIT"
@@ -15494,6 +15753,27 @@ def test_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                 "CONSTANT _DM-STAGED-IOR"
             ),
             (
+                f"{len(data_ranges) - 1} _DM-WRITER "
+                "_EXT4-JWR-CP-DATA-RANGE DUP _DM-LAST-RANGE ! @ "
+                "CONSTANT _DM-LAST-FIRST"
+            ),
+            *structural_mutation_lines,
+            "_DM-LAST-FIRST 1+ _DM-LAST-RANGE @ !",
+            "_DM-WRITER _EXT4-JWR-VALID? CONSTANT _DM-TAMPER-VALID",
+            (
+                "_DM-WRITER _EXT4-JWR-CP-AUTHORITY? "
+                "CONSTANT _DM-TAMPER-AUTHORITY"
+            ),
+            (
+                "_DM-WRITER _EXT4-JWR-ORPHAN-STAGED? "
+                "CONSTANT _DM-TAMPER-STAGED-IOR"
+            ),
+            "_DM-LAST-FIRST _DM-LAST-RANGE @ !",
+            (
+                "_DM-WRITER _EXT4-JWR-ORPHAN-STAGED? "
+                "CONSTANT _DM-RESTORED-STAGED-IOR"
+            ),
+            (
                 _forth_conjunction(
                     [
                         (
@@ -15506,6 +15786,7 @@ def test_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                         ),
                         "_DM-FIND-IOR 0=",
                         "_DM-JOURNAL-IOR 0=",
+                        "_DM-CERT-BEGIN-IOR 0=",
                         "_DM-RECORD _EXT4-OE.INO + @ 18 =",
                         (
                             "_DM-RECORD _EXT4-OE.KIND + @ "
@@ -15534,6 +15815,18 @@ def test_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                         "_DM-DEPTH-BEFORE-STAGE _DM-DEPTH-AFTER-STAGE =",
                         "_DM-PREPLAN-IOR 0=",
                         "_DM-STAGED-IOR 0=",
+                        *structural_checks,
+                        "_DM-TAMPER-VALID",
+                        "_DM-TAMPER-AUTHORITY",
+                        (
+                            "_DM-TAMPER-STAGED-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_DM-TAMPER-STAGED-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        "_DM-RESTORED-STAGED-IOR 0=",
                         (
                             "_DM-WRITER _EXT4-JWR.STATE + @ "
                             "_EXT4-JWR-STAGING ="
@@ -15582,12 +15875,14 @@ def test_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                             "_DM-WRITER _EXT4-JWR.CP-TARGET-CRC + @ "
                             f"{expected_target_crc} ="
                         ),
-                        "_DM-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ 1 =",
                         (
-                            "_DM-WRITER _EXT4-JWR.CP-DATA-FIRST + @ "
-                            f"{data_block} ="
+                            "_DM-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ "
+                            f"{len(data_ranges)} ="
                         ),
-                        "_DM-WRITER _EXT4-JWR.CP-DATA-COUNT + @ 1 =",
+                        *_forth_cp_data_vector_checks(
+                            "_DM-WRITER",
+                            data_ranges,
+                        ),
                         (
                             "_DM-WRITER "
                             "_EXT4-JWR.CP-INODE-BITMAP-HOME + @ 267 ="
@@ -15611,12 +15906,20 @@ def test_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                         ),
                         "_DM-WRITER _EXT4-JWR-CP-AUTHORITY?",
                         "_DM-WRITER _EXT4-JTX-TABLES-VALID?",
+                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
+                        "_EXT4-JFO-CERT-VALID @ 0<>",
+                        (
+                            "_EXT4-JFO-CERT-KIND @ "
+                            "_EXT4-JFO-CERT-JFI ="
+                        ),
+                        *certificate_checks,
                         "_DM-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
                 + f' IF ." {marker}" THEN'
             ),
             "_DM-TX _EXT4-JTX-ABORT CONSTANT _DM-ABORT-IOR",
+            "_EXT4-JFO-CERT-END",
             (
                 _forth_conjunction(
                     [
@@ -15631,6 +15934,10 @@ def test_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                         "_DM-WRITER _EXT4-JWR.META-USED + @ 0=",
                         "_DM-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
                         "_DM-WRITER _EXT4-JWR.CP-MODE + @ 0=",
+                        *_forth_cp_data_vector_checks("_DM-WRITER", ()),
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                         "_DM-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
@@ -15638,6 +15945,7 @@ def test_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
             ),
         ],
         patches=patches,
+        max_steps=_MULTI_ORPHAN_DATA_RECOVERY_MAX_STEPS,
     )
     _assert_emitted(output, marker)
     _assert_emitted(output, aborted_marker)
@@ -15806,14 +16114,20 @@ def test_modern_selection_and_staged_proof_are_cache_independent(
     _assert_emitted(output, "EXT4-MODERN-SELECTION-PROVED")
 
 
-def test_whole_orphan_union_refuses_later_unsupported_shape_before_io(
+def test_whole_orphan_union_refuses_later_unlinked_live_alias_before_io(
     canonical_images: dict[str, Path],
     tmp_path: Path,
 ) -> None:
     path = canonical_images["primary-1k-i256"]
-    patches = _mixed_union_with_later_multi_extent_orphan_patches(path)
-    media_path = tmp_path / "mixed-union-later-unsupported.img"
-    marker = "EXT4-ORPHAN-UNION-LATER-UNSUPPORTED-NO-IO"
+    patches, physical_blocks = (
+        _mixed_union_with_later_unlinked_live_alias_patches(path)
+    )
+    assert len(physical_blocks) == 4
+    assert len(set(physical_blocks)) == 4
+    _, live_inode, _ = _ext4_inode_record(path, 14)
+    assert physical_blocks[-1] == _extent_root_physical(live_inode, 0)
+    media_path = tmp_path / "mixed-union-later-unlinked-live-alias.img"
+    marker = "EXT4-ORPHAN-UNION-LATER-UNLINKED-LIVE-ALIAS-NO-IO"
     output, trace, media_sha256 = run_recovery_forth(
         path,
         media_path,
@@ -15846,9 +16160,12 @@ def test_whole_orphan_union_refuses_later_unsupported_shape_before_io(
                 _forth_conjunction(
                     [
                         "_UQ-IOR VFS-IOR-DOMAIN VFS-IOR-D-FORMAT =",
-                        "_UQ-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED =",
-                        "_UQ-IOR VFS-IOR-FLAGS 0=",
-                        "_UQ-IOR VFS-IOR-DETAIL EXT4-D-RECOVERY =",
+                        "_UQ-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+                        (
+                            "_UQ-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-CORRUPT ="
+                        ),
+                        "_UQ-IOR VFS-IOR-DETAIL EXT4-D-DATA-MAP =",
                         "_UQ-RETRY-IOR _UQ-IOR =",
                         "_UQ-V V.LAST-IOR @ _UQ-IOR =",
                         "_UQ-V V.LIFECYCLE @ VFS-L-NEW =",
@@ -15891,7 +16208,7 @@ def test_whole_orphan_union_refuses_later_unsupported_shape_before_io(
                         "_UQ-SELECTED _UQ-LEGACY =",
                         "_UQ-INODE-IOR 0=",
                         "_UQ-EXTENT-IOR 0=",
-                        "_UQ-EXTENT-ENTRIES 2 =",
+                        "_UQ-EXTENT-ENTRIES 4 =",
                         "_EXT4-MQ-INDEX @ 2 =",
                         "_EXT4-MQ-COUNT @ 1 =",
                         "_EXT4-MQ-MAX @ 4 =",
@@ -16092,33 +16409,47 @@ def _run_multi_empty_unlinked_cleanup(
     modern_entries: tuple[int, ...],
     max_credit: int,
     final_credit: int,
-    head_block_count: int = 0,
+    head_extent_specs: tuple[tuple[int, int, bool], ...] = (),
 ) -> dict[str, object]:
     assert case in {"modern", "legacy", "mixed"}
     assert set(legacy_chain + modern_entries) == {18, 21}
-    assert 0 <= head_block_count <= 4
-    assert not head_block_count or case in {"modern", "legacy"}
+    assert len(head_extent_specs) <= 4
+    assert not head_extent_specs or case in {"modern", "legacy"}
     base_patches = _multi_empty_unlinked_orphan_patches(
         path,
         legacy_chain=legacy_chain,
         modern_entries=modern_entries,
     )
-    if head_block_count:
-        patches, data_block = _single_extent_unlinked_orphan_patches(
+    if head_extent_specs:
+        patches, data_ranges = _inline_depth0_unlinked_orphan_patches(
             path,
             protocol=case,
+            extent_specs=head_extent_specs,
             inode_number=18,
-            block_count=head_block_count,
             seed_payloads=True,
+            seed_gap_payloads=True,
             base_patches=base_patches,
         )
         data_blocks = tuple(
-            range(data_block, data_block + head_block_count)
+            physical
+            for first, count in data_ranges
+            for physical in range(first, first + count)
         )
+        gap_blocks = tuple(
+            physical
+            for index in range(len(data_ranges) - 1)
+            for physical in range(
+                data_ranges[index][0] + data_ranges[index][1],
+                data_ranges[index + 1][0],
+            )
+        )
+        data_block = data_ranges[0][0]
     else:
         patches = base_patches
+        data_ranges = ()
         data_block = None
         data_blocks = ()
+        gap_blocks = ()
     patch_map = dict(patches)
     with path.open("rb") as source:
         source.seek(1024)
@@ -16207,7 +16538,7 @@ def _run_multi_empty_unlinked_cleanup(
         blocks_per_group = struct.unpack_from(
             "<I", canonical_super, 0x20
         )[0]
-        for ordinal, physical in enumerate(data_blocks):
+        for ordinal, physical in enumerate((*data_blocks, *gap_blocks)):
             data_group, data_index = divmod(
                 physical - first_data,
                 blocks_per_group,
@@ -16392,7 +16723,7 @@ def _run_multi_empty_unlinked_cleanup(
             < block_bitmap_ordinals[0]
             < inode21_ordinals[0]
         )
-    for physical in data_blocks:
+    for physical in (*data_blocks, *gap_blocks):
         assert not _write_ordinals_for_ext4_home(trace, physical)
 
     for inode_number in (18, 21):
@@ -16440,7 +16771,7 @@ def _run_multi_empty_unlinked_cleanup(
         with media_path.open("rb") as recovered:
             recovered.seek(block_bitmap_home * block_size)
             assert recovered.read(block_size) == canonical_block_bitmap
-            for physical in data_blocks:
+            for physical in (*data_blocks, *gap_blocks):
                 recovered.seek(physical * block_size)
                 assert recovered.read(block_size) == patch_map[
                     physical * block_size
@@ -16517,7 +16848,9 @@ def _run_multi_empty_unlinked_cleanup(
         "max_credit": max_credit,
         "modern_count": len(modern_entries),
         "data_block": data_block,
+        "data_ranges": data_ranges,
         "data_blocks": data_blocks,
+        "gap_blocks": gap_blocks,
     }
 
 
@@ -17021,7 +17354,7 @@ def _build_multi_empty_unlinked_cleanup_fixture(
     modern_entries: tuple[int, ...],
     max_credit: int,
     final_credit: int,
-    head_block_count: int = 0,
+    head_extent_specs: tuple[tuple[int, int, bool], ...] = (),
 ) -> dict[str, object]:
     directory = tmp_path_factory.mktemp(f"ext4-{case}-multi-orphan-cleanup")
     return _run_multi_empty_unlinked_cleanup(
@@ -17033,7 +17366,7 @@ def _build_multi_empty_unlinked_cleanup_fixture(
         modern_entries=modern_entries,
         max_credit=max_credit,
         final_credit=final_credit,
-        head_block_count=head_block_count,
+        head_extent_specs=head_extent_specs,
     )
 
 
@@ -17098,7 +17431,7 @@ def modern_multi_data_unlinked_cleanup_fixture(
         modern_entries=(18, 21),
         max_credit=6,
         final_credit=5,
-        head_block_count=1,
+        head_extent_specs=((0, 2, False), (4, 1, True)),
     )
 
 
@@ -17115,7 +17448,12 @@ def legacy_multi_data_unlinked_cleanup_fixture(
         modern_entries=(),
         max_credit=5,
         final_credit=4,
-        head_block_count=1,
+        head_extent_specs=(
+            (0, 1, False),
+            (2, 1, True),
+            (4, 2, False),
+            (7, 1, True),
+        ),
     )
 
 
@@ -17439,7 +17777,18 @@ def test_mount_reclaims_data_bearing_head_before_unlinked_successor(
     assert isinstance(result["data_block"], int)
     data_blocks = result["data_blocks"]
     assert isinstance(data_blocks, tuple)
-    assert len(data_blocks) == 1
+    data_ranges = result["data_ranges"]
+    gap_blocks = result["gap_blocks"]
+    assert isinstance(data_ranges, tuple)
+    assert isinstance(gap_blocks, tuple)
+    if result["case"] == "modern":
+        assert tuple(count for _, count in data_ranges) == (2, 1)
+        assert len(data_blocks) == 3
+        assert len(gap_blocks) == 1
+    else:
+        assert tuple(count for _, count in data_ranges) == (1, 1, 2, 1)
+        assert len(data_blocks) == 5
+        assert len(gap_blocks) == 3
     assert isinstance(result["clean_image"], Path)
     assert isinstance(result["stable_image"], Path)
     assert result["clean_image"].is_file()
