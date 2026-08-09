@@ -794,12 +794,13 @@ root with one to four checksum-valid external leaves, or a legacy map using any 
 map may additionally use an optional double-indirect root with zero or more
 occupied children when its exact canonical data-plus-map vector, plus any
 present external-xattr owner range, fits the `2P+16` caller workspace; its
-triple-indirect root remains zero. As a separate unlinked shape, slots 0
-through 13 may all be zero while slot 14 names one allocated triple-indirect
-root whose full block is all zero. It has no children or data, contributes one
-map block to `i_blocks`, is retained as the sole canonical map singleton under
-distinct `LEGACY-SPARSE-TRIPLE` authority, and receives one exact revoke. It
-remains subject to the same caller-workspace bound. The linked legacy-format
+triple-indirect root remains zero. As a separate unlinked map family, slot 14
+may name one allocated triple-indirect root whose full block is all zero while
+the single- and double-indirect slots remain zero. Direct slots may be
+occupied; their ordered data singletons precede the root's one map singleton
+under distinct `LEGACY-SPARSE-TRIPLE` authority. The root contributes one block
+to `i_blocks` and receives one exact revoke. This shape remains subject to the
+same caller-workspace bound. The linked legacy-format
 alternative
 requires the `EXTENTS` flag clear and all 12 direct pointers plus the single-,
 double-, and triple-indirect roots zero. It contributes no release ranges or
@@ -828,10 +829,10 @@ and entries in every double-indirect child become ordered singleton data ranges
 in outer/inner slot order. The optional single root, double root, and all
 children follow as map singletons. Duplicate data pointers and data/map or
 map/map aliases are corruption. An empty double root is admitted as one map
-singleton. The exclusive all-zero triple root is admitted as one trailing map
-singleton after zero data entries. A triple root with any nonzero pointer, or
-a present triple root combined with any direct, single-indirect, or
-double-indirect map, remains unsupported. Exact double-indirect authority
+singleton. The all-zero triple root is admitted as one trailing map singleton
+after zero or more direct data entries. A triple root with any nonzero pointer,
+or a present triple root combined with a single- or double-indirect map,
+remains unsupported. Exact double-indirect authority
 larger than the caller workspace also remains unsupported recovery. The
 optional xattr block is independent of both map families and must not overlap their data ranges. If any record is outside
 those per-record shapes, the complete
@@ -998,8 +999,10 @@ Legacy-direct deletion qualification fills all 12 direct slots under both
 orphan protocols while retaining 12 ordered singleton certificate/checkpoint
 ranges and an explicit map-family discriminator. Sparse slots 0, 5, and 11
 compact in slot order; duplicate pointers and mismatched `i_blocks` are corrupt,
-while over-budget double-indirect maps and triple roots combined with direct
-maps are unsupported. Contiguous
+while over-budget double-indirect maps and triple roots combined with single-
+or double-indirect maps are unsupported. Direct data plus an empty triple root
+is admitted under the separate sparse-triple authority described below.
+Contiguous
 singleton execution is combined only after exact-vector validation. Full
 production cleanup with
 `i_size = 2^32 + 777` measures 1,156,337,987 modern and 1,157,813,068 legacy
@@ -1027,9 +1030,10 @@ EA revoke. A boundary check fills the exact 528-pair 1 KiB workspace with 524
 data and four map ranges when no xattr is present, while a present xattr or one
 more data pointer is unsupported. Child/data aliasing and duplicate child
 homes are corrupt; over-budget double-indirect authority remains unsupported.
-Triple-indirect admission is limited to the separate exclusive empty-root
-shape; a nonzero child or any lower-map composition remains unsupported. The
-authority capacity is 528, 1040, or 2064 pairs at 1, 2, or 4 KiB. Focused
+Triple-indirect admission is limited to an all-zero root with optional direct
+data; a nonzero child or any single-/double-indirect composition remains
+unsupported. The authority capacity is 528, 1040, or 2064 pairs at 1, 2, or
+4 KiB. Focused
 one-child modern production releases three data and
 three map blocks in 1,431,070,159 guest steps under a scoped
 1,600,000,000-step watchdog, preserves all six homes without a payload write,
@@ -1038,19 +1042,29 @@ production, legacy-protocol qualification, crash qualification, and pinned
 e2fsck acceptance remain pending for this tier. Separate focused 1 KiB staging
 qualification covers one unlinked inode with slots 0 through 13 zero, one
 allocated all-zero triple-indirect root, no data, and root-only `i_blocks`
-under both orphan protocols. The modern case completes in 534,963,472 guest
+under both orphan protocols. The modern case completes in 534,968,795 guest
 steps under its 800,000,000-step watchdog and pins six metadata credits, one
 revoke, and `MODERN_DATA_DELETE_FINAL`. The legacy case completes in
-529,113,934 steps under the same watchdog and pins five metadata credits, one
+529,117,618 steps under the same watchdog and pins five metadata credits, one
 revoke, `LEGACY_DATA_DELETE_FINAL`, and the exact legacy head and locator
 authority. Both stage and seal retain zero target entries, one singleton
 map-metadata release range, one map block, the root's exact revoke, and distinct
 `LEGACY-SPARSE-TRIPLE` authority; preplan and staged verification pass, and
 abort returns the writer and ownership scope clean with zero home writes. The
 modern case additionally refuses checkpoint-certificate tampering with
-target-entry count, range count, range span, or map kind. Focused negative
-admission covers a nonzero triple child, composition with a lower direct map,
-and aliasing the triple root with the external-xattr home. The
+target-entry count, range count, range span, or map kind. A second staging pair
+adds one seeded direct singleton in slot 5 ahead of the same empty triple root.
+Modern completes in 538,439,735 guest steps and legacy in 530,481,498 under the
+unchanged 800,000,000-step watchdog. Both bind one target data entry, the exact
+ordered `{ direct, triple-root }` release vector, one root revoke, and the same
+protocol-specific credit and locator authority. The modern certificate refuses
+missing or extra target counts, a missing range, widened data or root
+singletons, swapped data/root order, and a downgraded map kind before its
+restored authority and transaction tables pass. Focused negative admission
+covers a nonzero triple child, single- or double-indirect composition,
+direct/root aliasing, and aliasing the triple root with the external-xattr
+home. Production, stable-remount, pinned-e2fsck, and crash qualification for
+the new direct composition remain pending. The
 single-record modern production journey emits and checkpoints the cleanup in
 1,301,139,781 guest steps under its 1,500,000,000-step watchdog. Its exact
 37-write/24-flush trace has six distinct ext4 cleanup homes: the primary super
