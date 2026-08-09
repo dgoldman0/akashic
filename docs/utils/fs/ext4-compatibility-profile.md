@@ -1088,9 +1088,18 @@ valid in isolation but is rejected by staged-source reauthentication. Focused
 refusal coverage treats repeated or root/direct/xattr-aliased children, an
 unallocated child, and incorrect root-plus-child `i_blocks` as corruption; a
 second distinct child, a nonzero grandchild, and direct-data or external-xattr
-composition remain unsupported. Production, stable-remount, pinned-e2fsck,
-crash, broader-geometry, and additional-fanout qualification remain pending
-for this child-bearing tier. The one-direct modern certificate refuses
+composition remain unsupported. Focused modern production checkpoints the
+cleanup in 1,359,573,029 guest steps under the existing 1,500,000,000-step
+watchdog. Its exact 37-write/24-flush trace has the same six cleanup homes as
+the root-only modern shape: the primary super is written three times and the
+GDT, block bitmap, inode bitmap, inode table, and orphan file are each written
+once. Both map allocation bits and the target inode bit clear, free counters
+return to their canonical values, and neither the pointer-bearing root nor its
+all-zero child is written. A byte-identical zero-I/O stable remount completes
+in 56,369,050 guest steps under the standard 1,200,000,000-step watchdog.
+Legacy production/stable parity, pinned e2fsck, crash, broader-geometry, and
+additional-fanout qualification remain pending for this child-bearing tier.
+The one-direct modern certificate refuses
 missing or extra target counts, a missing range, widened data or root
 singletons, swapped data/root order, and a downgraded map kind before its
 restored authority and transaction tables pass. Root-only negative admission
