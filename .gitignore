@@ -78,6 +78,7 @@ local_testing/*
 !local_testing/rabbit-landing3-test.f
 !local_testing/rabbit-l3-mux-test.f
 !local_testing/test_streams_rabbit_landing3.py
+!local_testing/test_streams_burrow_manager.py
 # Refactor architecture inventory and ratchet
 !local_testing/forth_dependencies.py
 !local_testing/refactor_inventory.py
