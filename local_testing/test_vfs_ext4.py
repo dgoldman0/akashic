@@ -3643,14 +3643,11 @@ def _forth_cp_data_vector_checks(
 
 
 _EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH = (
+    "_EXT4-MUTATION-OWNER-RANGES @ 0=",
+    "_EXT4-MUTATION-OWNER-RANGE-CAP @ 0=",
     "_EXT4-MUTATION-OWNER-RANGE-COUNT @ 0=",
     "_EXT4-MUTATION-OWNER-BOUND-FIRST @ 0=",
     "_EXT4-MUTATION-OWNER-BOUND-LIMIT @ 0=",
-    (
-        "_EXT4-MUTATION-OWNER-RANGES "
-        "_EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS "
-        "_EXT4-BYTES-ZERO?"
-    ),
     "_EXT4-MUTATION-EA-REF-ACTIVE @ 0=",
     "_EXT4-MUTATION-EA-REF-HOME @ 0=",
     "_EXT4-MUTATION-EA-REF-HITS @ 0=",
@@ -6495,6 +6492,147 @@ def test_jbd2_revoke_workspace_is_arena_derived_and_wrap_aware(
     _assert_emitted(output, "EXT4-REVOKE-WORKSPACE-GROWTH-REFUSED")
     _assert_emitted(output, "EXT4-REVOKE-WORKSPACE-NOMEM")
     _assert_emitted(output, "EXT4-REVOKE-WORKSPACE-GEOMETRY")
+
+
+@pytest.mark.parametrize("block_size", (1024, 2048, 4096))
+def test_mutation_range_workspace_is_geometry_derived_and_reused(
+    tmp_path: Path,
+    block_size: int,
+) -> None:
+    blank = tmp_path / f"mutation-ranges-{block_size}.img"
+    blank.write_bytes(bytes(4 * 512))
+    capacity = (block_size - 12) // 12 + 2
+    workspace_bytes = capacity * 2 * 8
+    output = run_forth(
+        blank,
+        [
+            "CREATE _MR-CTX _EXT4-CTX-SIZE ALLOT",
+            "_MR-CTX _EXT4-CTX-SIZE 0 FILL",
+            f"{block_size} _MR-CTX _EXT4-C.BSIZE + !",
+            (
+                f"{workspace_bytes} A-XMEM ARENA-NEW THROW "
+                "CONSTANT _MR-ARENA"
+            ),
+            "_MR-ARENA _MR-CTX _EXT4-C.ARENA + !",
+            "_MR-ARENA ARENA-USED CONSTANT _MR-USED-BEFORE",
+            (
+                "_MR-CTX _EXT4-ENSURE-MUTATION-RANGE-WORKSPACE "
+                "CONSTANT _MR-FIRST-IOR"
+            ),
+            (
+                "_MR-CTX _EXT4-C.MUTATION-RANGES + @ "
+                "CONSTANT _MR-PTR"
+            ),
+            (
+                "_MR-CTX _EXT4-C.MUTATION-RANGE-CAP + @ "
+                "CONSTANT _MR-CAP"
+            ),
+            "_MR-ARENA ARENA-USED CONSTANT _MR-USED-AFTER",
+            (
+                "_MR-PTR _MR-CAP 2* CELLS _EXT4-BYTES-ZERO? "
+                "CONSTANT _MR-FIRST-ZERO"
+            ),
+            (
+                "_MR-PTR _MR-CAP 2* CELLS 0xA5 FILL "
+                "_MR-CTX _EXT4-ENSURE-MUTATION-RANGE-WORKSPACE "
+                "CONSTANT _MR-REUSE-IOR"
+            ),
+            "_MR-ARENA ARENA-USED CONSTANT _MR-USED-REUSED",
+            (
+                "_MR-PTR _MR-CAP 2* CELLS _EXT4-BYTES-ZERO? "
+                "CONSTANT _MR-REUSED-ZERO"
+            ),
+            (
+                ": _MR-POPULATE "
+                "_MR-CAP 0 ?DO "
+                "100 I 2* + I 2* CELLS _MR-PTR + ! "
+                "1 I 2* CELLS _MR-PTR + CELL+ ! "
+                "LOOP ;"
+            ),
+            "_MR-POPULATE",
+            (
+                "_MR-PTR _MR-CAP _MR-CAP "
+                "_EXT4-MUTATION-OWNER-RANGES-PUBLISH "
+                "CONSTANT _MR-EXACT-IOR"
+            ),
+            (
+                "_EXT4-MUTATION-OWNER-RANGE-COUNT @ _MR-CAP = "
+                "CONSTANT _MR-EXACT-PUBLISHED"
+            ),
+            "_EXT4-MUTATION-OWNER-RANGES-CLEAR",
+            (
+                "_MR-PTR _MR-CAP 1+ _MR-CAP "
+                "_EXT4-MUTATION-OWNER-RANGES-PUBLISH "
+                "CONSTANT _MR-OVER-IOR"
+            ),
+            (
+                "CREATE _MR-NOMEM-CTX _EXT4-CTX-SIZE ALLOT "
+                "_MR-NOMEM-CTX _EXT4-CTX-SIZE 0 FILL"
+            ),
+            f"{block_size} _MR-NOMEM-CTX _EXT4-C.BSIZE + !",
+            (
+                f"{workspace_bytes - 1} A-XMEM ARENA-NEW THROW "
+                "CONSTANT _MR-NOMEM-ARENA"
+            ),
+            (
+                "_MR-NOMEM-ARENA _MR-NOMEM-CTX _EXT4-C.ARENA + ! "
+                "_MR-NOMEM-ARENA ARENA-USED CONSTANT _MR-NOMEM-BEFORE"
+            ),
+            (
+                "_MR-NOMEM-CTX "
+                "_EXT4-ENSURE-MUTATION-RANGE-WORKSPACE "
+                "CONSTANT _MR-NOMEM-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_MR-FIRST-IOR 0=",
+                        f"_MR-CAP {capacity} =",
+                        "_MR-PTR _MR-ARENA A.BASE @ =",
+                        (
+                            "_MR-USED-AFTER _MR-USED-BEFORE "
+                            f"{workspace_bytes} + ="
+                        ),
+                        "_MR-FIRST-ZERO",
+                        "_MR-REUSE-IOR 0=",
+                        "_MR-USED-REUSED _MR-USED-AFTER =",
+                        "_MR-REUSED-ZERO",
+                        "_MR-EXACT-IOR 0=",
+                        "_MR-EXACT-PUBLISHED",
+                        (
+                            "_MR-OVER-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_MR-OVER-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        "_EXT4-MUTATION-OWNER-RANGES-BUSY? 0=",
+                        "_MR-NOMEM-IOR VFS-E-NOMEM =",
+                        (
+                            "_MR-NOMEM-ARENA ARENA-USED "
+                            "_MR-NOMEM-BEFORE ="
+                        ),
+                        (
+                            "_MR-NOMEM-CTX _EXT4-C.MUTATION-RANGES + "
+                            "@ 0="
+                        ),
+                        (
+                            "_MR-NOMEM-CTX "
+                            "_EXT4-C.MUTATION-RANGE-CAP + @ 0="
+                        ),
+                        "_EXT4-C.MUTATION-RANGES _EXT4-CTX-RESET-SIZE >=",
+                        (
+                            "_EXT4-C.MUTATION-RANGE-CAP 1 CELLS + "
+                            "_EXT4-CTX-SIZE <="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-MUTATION-RANGE-WORKSPACE-OK" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-MUTATION-RANGE-WORKSPACE-OK")
 
 
 def test_public_writer_profile_binds_dedicated_arena_atomically(
@@ -25809,10 +25947,22 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                 "_EXT4-VALIDATE-INODE-TABLE-HOME "
                 "CONSTANT _MA-BAD-TABLE-IOR"
             ),
+            (
+                "_MA-CTX _EXT4-C.MUTATION-RANGES + @ "
+                "CONSTANT _MA-RANGE-WORKSPACE"
+            ),
+            (
+                "_MA-CTX _EXT4-C.MUTATION-RANGE-CAP + @ "
+                "CONSTANT _MA-RANGE-CAP"
+            ),
             "_EXT4-MUTATION-OWNER-RANGES-CLEAR",
-            "0 0 _EXT4-MUTATION-OWNER-RANGE !",
-            "1 0 _EXT4-MUTATION-OWNER-RANGE CELL+ !",
-            "1 _EXT4-MUTATION-OWNER-RANGE-COUNT !",
+            "0 _MA-RANGE-WORKSPACE !",
+            "1 _MA-RANGE-WORKSPACE CELL+ !",
+            (
+                "_MA-RANGE-WORKSPACE 1 _MA-RANGE-CAP "
+                "_EXT4-MUTATION-OWNER-RANGES-PUBLISH "
+                "CONSTANT _MA-PUBLISH-IOR"
+            ),
             (
                 "0 1 _EXT4-MUTATION-OWNER-ALIASES? "
                 "CONSTANT _MA-ZERO-FIRST-ALIASES"
@@ -25831,9 +25981,8 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                 "CONSTANT _MA-LEADING-RANGE-COUNT"
             ),
             (
-                "_EXT4-MUTATION-OWNER-RANGES "
-                "_EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS "
-                "_EXT4-BYTES-ZERO? CONSTANT _MA-LEADING-RANGES-ZERO"
+                "_EXT4-MUTATION-OWNER-RANGES-BUSY? 0= "
+                "CONSTANT _MA-LEADING-SCOPE-CLEAN"
             ),
             (
                 "_EXT4-MAP-VALIDATION-LIMIT @ "
@@ -25849,9 +25998,8 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                 "CONSTANT _MA-TRAILING-RANGE-COUNT"
             ),
             (
-                "_EXT4-MUTATION-OWNER-RANGES "
-                "_EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS "
-                "_EXT4-BYTES-ZERO? CONSTANT _MA-TRAILING-RANGES-ZERO"
+                "_EXT4-MUTATION-OWNER-RANGES-BUSY? 0= "
+                "CONSTANT _MA-TRAILING-SCOPE-CLEAN"
             ),
             (
                 "_EXT4-MAP-VALIDATION-LIMIT @ "
@@ -25873,9 +26021,8 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                 "CONSTANT _MA-PAIR-ALIAS-RANGE-COUNT"
             ),
             (
-                "_EXT4-MUTATION-OWNER-RANGES "
-                "_EXT4-MUTATION-OWNER-RANGE-MAX 2* CELLS "
-                "_EXT4-BYTES-ZERO? CONSTANT _MA-PAIR-ALIAS-RANGES-ZERO"
+                "_EXT4-MUTATION-OWNER-RANGES-BUSY? 0= "
+                "CONSTANT _MA-PAIR-ALIAS-SCOPE-CLEAN"
             ),
             (
                 "_EXT4-MAP-VALIDATION-LIMIT @ "
@@ -25934,6 +26081,12 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                             "_MA-BAD-TABLE-IOR VFS-IOR-DETAIL "
                             "EXT4-D-DATA-MAP ="
                         ),
+                        "_MA-RANGE-WORKSPACE 0<>",
+                        (
+                            "_MA-RANGE-CAP "
+                            "_MA-CTX _EXT4-C.BSIZE + @ 12 - 12 / 2 + ="
+                        ),
+                        "_MA-PUBLISH-IOR 0=",
                         "_MA-ZERO-FIRST-ALIASES",
                         (
                             "_MA-LEADING-ALIAS-IOR VFS-IOR-REASON "
@@ -25988,14 +26141,22 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
                         "_EXT4-IR-INO @ 14 =",
                         "_EXT4-IR-BLOCK @ _MA-INODE-HOME =",
                         "_MA-LEADING-RANGE-COUNT 0=",
-                        "_MA-LEADING-RANGES-ZERO",
+                        "_MA-LEADING-SCOPE-CLEAN",
                         "_MA-LEADING-LIMIT 17 =",
                         "_MA-TRAILING-RANGE-COUNT 0=",
-                        "_MA-TRAILING-RANGES-ZERO",
+                        "_MA-TRAILING-SCOPE-CLEAN",
                         "_MA-TRAILING-LIMIT 17 =",
                         "_MA-PAIR-ALIAS-RANGE-COUNT 0=",
-                        "_MA-PAIR-ALIAS-RANGES-ZERO",
+                        "_MA-PAIR-ALIAS-SCOPE-CLEAN",
                         "_MA-PAIR-ALIAS-LIMIT 17 =",
+                        (
+                            "_MA-CTX _EXT4-C.MUTATION-RANGES + @ "
+                            "_MA-RANGE-WORKSPACE ="
+                        ),
+                        (
+                            "_MA-CTX _EXT4-C.MUTATION-RANGE-CAP + @ "
+                            "_MA-RANGE-CAP ="
+                        ),
                         *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                         "_EXT4-JFO-CERT-VALID @ 0=",
                         "_MA-MAP-LIMIT-AFTER 17 =",
@@ -30199,6 +30360,20 @@ def test_failed_mount_retry_reuses_journal_workspace(
             "_RETRY-ARENA ARENA-USED CONSTANT _RETRY-USED-1",
             "_RETRY-CTX _EXT4-C.J.MAP + @ CONSTANT _RETRY-MAP",
             "_RETRY-CTX _EXT4-C.J.MAP-HASH + @ CONSTANT _RETRY-HASH",
+            (
+                "_RETRY-CTX _EXT4-C.MUTATION-RANGES + @ "
+                "CONSTANT _RETRY-RANGE-PTR"
+            ),
+            (
+                "_RETRY-CTX _EXT4-C.MUTATION-RANGE-CAP + @ "
+                "CONSTANT _RETRY-RANGE-CAP"
+            ),
+            (
+                ": _RETRY-POISON-RANGES "
+                "_RETRY-RANGE-PTR ?DUP IF "
+                "_RETRY-RANGE-CAP 2* CELLS 0xA5 FILL "
+                "THEN ; _RETRY-POISON-RANGES"
+            ),
             "7 _RETRY-CTX _EXT4-C.J.REVOKE-COUNT + !",
             "8 _RETRY-CTX _EXT4-C.J.REVOKE-HITS + !",
             "-1 _RETRY-CTX _EXT4-C.J.REVOKE-READY + !",
@@ -30213,6 +30388,14 @@ def test_failed_mount_retry_reuses_journal_workspace(
                 "_RETRY-CTX _EXT4-C.J.MAP + @ _RETRY-MAP = AND "
                 "_RETRY-CTX _EXT4-C.J.MAP-HASH + @ _RETRY-HASH = AND "
                 "_RETRY-MAP 0<> AND "
+                "_RETRY-RANGE-PTR 0<> AND "
+                "_RETRY-RANGE-CAP 0<> AND "
+                "_RETRY-CTX _EXT4-C.MUTATION-RANGES + @ "
+                "_RETRY-RANGE-PTR = AND "
+                "_RETRY-CTX _EXT4-C.MUTATION-RANGE-CAP + @ "
+                "_RETRY-RANGE-CAP = AND "
+                "_RETRY-RANGE-PTR _RETRY-RANGE-CAP 2* CELLS "
+                "_EXT4-BYTES-ZERO? AND "
                 "_RETRY-CTX _EXT4-C.J.REVOKE-COUNT + @ 0= AND "
                 "_RETRY-CTX _EXT4-C.J.REVOKE-HITS + @ 0= AND "
                 "_RETRY-CTX _EXT4-C.J.REVOKE-READY + @ 0= AND "
