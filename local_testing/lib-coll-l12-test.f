@@ -208,8 +208,8 @@ CREATE _L12C-many-collection LIB-COLLECTION-SIZE ALLOT
     S" Alpha" _L12C-collection LIBC.TITLE
         _L12C-collection LIBC.TITLE-U _L12C-text!
     _L12C-collection _L12C-members 2
-        LIBPA-COLLECTION-REQUEST-SEAL!
-        LIBPA-S-OK _L12C-status
+        LIBRARY-COLLECTION-REQUEST-SEAL!
+        _LIBCV-S-OK _L12C-status
     _L12C-collection LIBPA-COLLECTION-VALID? _L12C-assert ;
 
 : _L12C-range-two?  ( -- )
@@ -343,8 +343,8 @@ CREATE _L12C-many-collection LIB-COLLECTION-SIZE ALLOT
     S" Unbounded" _L12C-many-collection LIBC.TITLE
         _L12C-many-collection LIBC.TITLE-U _L12C-text!
     _L12C-many-collection _L12C-many-rids 129
-        LIBPA-COLLECTION-REQUEST-SEAL!
-        LIBPA-S-OK _L12C-status
+        LIBRARY-COLLECTION-REQUEST-SEAL!
+        _LIBCV-S-OK _L12C-status
     _L12C-many-collection LIBPA-COLLECTION-VALID? _L12C-assert ;
 
 : _L12C-cold-contracts  ( -- )

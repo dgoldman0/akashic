@@ -37,17 +37,21 @@ VARIABLE _LAPP-DRAW-ROW
 VARIABLE _LAPP-DRAW-ITEM
 VARIABLE _LAPP-DRAW-MAX
 
+: _LAPP-CORPUS-VIEW?  ( -- flag )
+    _LAPP-VIEW @ _LAPP-V-ACTIVE >=
+    _LAPP-VIEW @ _LAPP-V-ALL <= AND ;
+
 : _LAPP-DRAW-HEADER  ( -- )
     255 24 1 DRW-STYLE!
     S" LIBRARY" 0 1 DRW-TEXT
     250 24 0 DRW-STYLE!
     _LAPP-VIEW$ 0 11 DRW-TEXT
-    _LAPP-TERM-U @ IF
+    _LAPP-CORPUS-VIEW? _LAPP-TERM-U @ 0<> AND IF
         S" Search: " 1 1 DRW-TEXT
         _LAPP-TERM _LAPP-TERM-U @
             _LAPP-DW @ 10 - 1 MAX _LAPP-UTF8-PREFIX
             1 9 DRW-TEXT-UNTRUSTED
-    ELSE _LAPP-FILTER-ACTIVE @ IF
+    ELSE _LAPP-CORPUS-VIEW? _LAPP-FILTER-ACTIVE @ 0<> AND IF
         S" Filtered by selected collection" 1 1 DRW-TEXT
     ELSE
         S" / search   n new   c collections   h history" 1 1 DRW-TEXT
@@ -108,11 +112,13 @@ VARIABLE _LAPP-DRAW-MAX
     32 3 0 _LAPP-DH @ 3 - _LAPP-LIST-W @ DRW-FILL-RECT
     _LAPP-ROW-COUNT @ 0= IF
         244 234 CELL-A-DIM DRW-STYLE!
-        _LAPP-LAST-STATUS @ LIBRARY-SERVICE-S-ABSENT = IF
+        _LAPP-VIEW @ _LAPP-V-COLLECTIONS = IF
+            S" No collections yet"
+        ELSE _LAPP-LAST-STATUS @ LIBRARY-SERVICE-S-ABSENT = IF
             S" Library is not initialized; create starts it"
         ELSE
             S" No matching Library records"
-        THEN
+        THEN THEN
         4 2 DRW-TEXT EXIT
     THEN
     _LAPP-DH @ 4 - 1 MAX _LAPP-DRAW-MAX !

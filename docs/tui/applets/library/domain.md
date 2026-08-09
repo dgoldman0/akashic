@@ -185,6 +185,23 @@ Caller-owned outputs are published only after complete validation, durable
 reconciliation, and cleanup. Service APIs expose no VFS path, tree key, page
 identifier, or storage cursor.
 
+The Desk-hosted applet component also owns a five-operation typed capability
+facade over this service: readiness status, managed-document create,
+collection create, exact collection-scoped document query, and exact
+collection-scoped document read. Capability handlers borrow the one live
+activation owner and publish only sealed caller-owned value graphs. They do not
+provision during status, discover filesystem paths, copy domain state into a
+parallel catalog, or expose raw service pointers.
+
+The scoped query/read service operations atomically verify the collection RID,
+positive domain revision, and existing collection request seal before query or
+membership work. Exact read additionally verifies member identity, requested
+document revision, active managed-text state, descriptor size/digest, and UTF-8
+content before publishing any bytes. Its 65,536-byte materialization window is
+the existing interaction bound; larger values retain the range/stream service
+path. The capability's 64-member create request is likewise an IVJSON child
+bound, not a fixed durable collection size.
+
 ## Failure and maintenance policy
 
 Repository inspection classifies `OK`, `ABSENT`, recognized root `FALLBACK`,

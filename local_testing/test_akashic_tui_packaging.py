@@ -53,6 +53,7 @@ LIBRARY_RENDERER_FREE_APPLET_MODULES = frozenset(
         "tui/applets/library/model.f",
         "tui/applets/library/index-keys.f",
         "tui/applets/library/document-values.f",
+        "tui/applets/library/collection-values.f",
         "tui/applets/library/persistence-adapter.f",
         "tui/applets/library/repository.f",
         "tui/applets/library/query.f",
@@ -60,8 +61,10 @@ LIBRARY_RENDERER_FREE_APPLET_MODULES = frozenset(
         "tui/applets/library/projection-adapter.f",
     }
 )
-LIBRARY_UI_APPLET_MODULES = frozenset(
+LIBRARY_APPLET_BOUND_MODULES = frozenset(
     {
+        "tui/applets/library/capability-work.f",
+        "tui/applets/library/capabilities.f",
         "tui/applets/library/controller.f",
         "tui/applets/library/view.f",
         "tui/applets/library/library.f",
@@ -74,7 +77,7 @@ def _assert_library_renderer_free_closure(closure: set[str]) -> None:
         module for module in closure if module.startswith("tui/")
     }
     assert tui_modules <= LIBRARY_RENDERER_FREE_APPLET_MODULES
-    assert tui_modules.isdisjoint(LIBRARY_UI_APPLET_MODULES)
+    assert tui_modules.isdisjoint(LIBRARY_APPLET_BOUND_MODULES)
 
 
 @pytest.mark.parametrize(
@@ -258,6 +261,7 @@ def test_library_projection_owner_profile_packages_renderer_free_contract() -> N
         "tui/applets/library/model.f",
         "tui/applets/library/index-keys.f",
         "tui/applets/library/document-values.f",
+        "tui/applets/library/collection-values.f",
         "tui/applets/library/persistence-adapter.f",
         "tui/applets/library/repository.f",
         "tui/applets/library/query.f",
@@ -278,7 +282,7 @@ def test_library_projection_owner_profile_packages_renderer_free_contract() -> N
     _assert_library_renderer_free_closure(closure)
 
 
-def test_library_applet_profiles_package_the_desk_owned_applet() -> None:
+def test_library_applet_profiles_package_the_library_owned_applet() -> None:
     root = "tui/applets/library/library.f"
     resource = "tui/applets/library/library.uidl"
     interactive = PROFILES["library"]
@@ -332,10 +336,13 @@ def test_library_applet_profiles_package_the_desk_owned_applet() -> None:
         "tui/applets/library/model.f",
         "tui/applets/library/index-keys.f",
         "tui/applets/library/document-values.f",
+        "tui/applets/library/collection-values.f",
         "tui/applets/library/persistence-adapter.f",
         "tui/applets/library/repository.f",
         "tui/applets/library/query.f",
         "tui/applets/library/service.f",
+        "tui/applets/library/capability-work.f",
+        "tui/applets/library/capabilities.f",
         "tui/applets/library/controller.f",
         "tui/applets/library/view.f",
         root,
@@ -353,8 +360,8 @@ def test_library_applet_profiles_package_the_desk_owned_applet() -> None:
     assert all(not module.startswith("practice/") for module in closure)
     assert all(not module.startswith("streams/") for module in closure)
 
-    # This direct test assembly exercises the Desk-owned applet; it is not a
-    # standalone product.  Desktop composition remains an explicit milestone.
+    # This direct test assembly exercises the Library-owned, Desk-hosted applet;
+    # it is not a standalone product. Desktop composition remains explicit.
     assert root not in PROFILES["desktop"].roots
     assert resource not in PROFILES["desktop"].resources
 
@@ -467,6 +474,9 @@ def test_library_dependency_chain_and_ui_storage_boundary() -> None:
             "persistence-adapter.f",
             "index-keys.f",
             "document-values.f",
+            "collection-values.f",
+            "capability-work.f",
+            "capabilities.f",
         )
     }
     direct_requires = {
@@ -474,14 +484,31 @@ def test_library_dependency_chain_and_ui_storage_boundary() -> None:
         for name, source in sources.items()
     }
 
-    assert direct_requires["library.f"] == {"view.f"}
+    assert direct_requires["library.f"] == {"view.f", "capabilities.f"}
     assert direct_requires["view.f"] == {"controller.f"}
-    assert "service.f" in direct_requires["controller.f"]
-    assert not ({"query.f", "repository.f"} & direct_requires["controller.f"])
+    assert {"service.f", "capability-work.f"} <= direct_requires[
+        "controller.f"
+    ]
+    assert not (
+        {"query.f", "repository.f", "capabilities.f"}
+        & direct_requires["controller.f"]
+    )
+    assert direct_requires["capabilities.f"] == {
+        "capability-work.f",
+        "controller.f",
+        "../../../interop/request-bus.f",
+        "../../../interop/schema-common.f",
+    }
+    assert direct_requires["capability-work.f"] == {
+        "service.f",
+        "collection-values.f",
+        "../../../interop/construction.f",
+    }
     assert direct_requires["service.f"] == {
         "repository.f",
         "query.f",
         "document-values.f",
+        "collection-values.f",
     }
     assert direct_requires["query.f"] == {"persistence-adapter.f"}
     assert direct_requires["repository.f"] == {
@@ -496,7 +523,9 @@ def test_library_dependency_chain_and_ui_storage_boundary() -> None:
         "../../../persistence/reclaim.f",
         "index-keys.f",
         "document-values.f",
+        "collection-values.f",
     }
+    assert direct_requires["collection-values.f"] == {"model.f"}
     for name in (
         "library.f",
         "view.f",
@@ -505,6 +534,9 @@ def test_library_dependency_chain_and_ui_storage_boundary() -> None:
         "query.f",
         "index-keys.f",
         "document-values.f",
+        "collection-values.f",
+        "capability-work.f",
+        "capabilities.f",
     ):
         assert not any(
             requirement.startswith("../../../utils/fs/")
@@ -532,6 +564,22 @@ def test_library_dependency_chain_and_ui_storage_boundary() -> None:
     assert "DRW-TEXT-UNTRUSTED" not in sources["library.f"]
     assert "DRW-TEXT-UNTRUSTED" not in sources["controller.f"]
     assert "DRW-TEXT-UNTRUSTED" in sources["view.f"]
+
+    capability_providers = {
+        name: PROVIDED_RE.findall(sources[name])
+        for name in ("capability-work.f", "capabilities.f")
+    }
+    assert capability_providers == {
+        "capability-work.f": ["akashic-lib-cap-work"],
+        "capabilities.f": ["akashic-lib-caps"],
+    }
+    capability_keys = {
+        provider
+        for providers in capability_providers.values()
+        for provider in providers
+    }
+    assert len(capability_keys) == 2
+    assert all(len(key.encode("ascii")) <= 23 for key in capability_keys)
 
 
 def test_library_applet_uidl_actions_have_exact_controller_bindings() -> None:

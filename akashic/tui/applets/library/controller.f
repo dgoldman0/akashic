@@ -10,6 +10,7 @@
 PROVIDED akashic-tui-library-controller
 
 REQUIRE service.f
+REQUIRE capability-work.f
 REQUIRE ../../widgets/prompt.f
 REQUIRE ../../app-desc.f
 REQUIRE ../../app-shell.f
@@ -92,7 +93,10 @@ _LRT-BUILDER-AUDIT-MAP _LAPP-AUDIT-MAP-CAPACITY +
 _LRT-PAGE LIBRARY-QUERY-PAGE-SIZE + CONSTANT _LRT-ROWS
 _LRT-ROWS LIBRARY-QUERY-PAGE-MAX LIBRARY-QUERY-SUMMARY-SIZE * +
     CONSTANT _LRT-PREVIEW
-_LRT-PREVIEW _LAPP-PREVIEW-CAP + CONSTANT _LAPP-RUNTIME-SIZE
+_LRT-PREVIEW _LAPP-PREVIEW-CAP + CONSTANT _LAPP-OWNER-RUNTIME-SIZE
+_LAPP-OWNER-RUNTIME-SIZE CONSTANT _LRT-CAPABILITY-WORK
+_LRT-CAPABILITY-WORK LIBRARY-CAPABILITY-WORK-SIZE +
+    CONSTANT _LAPP-RUNTIME-SIZE
 
 VARIABLE _LAPP-CURRENT-STATE
 VARIABLE _LAPP-CURRENT-INSTANCE
@@ -225,6 +229,8 @@ CMP-LAYOUT-SIZE CONSTANT _LAPP-STATE-SIZE
 : _LAPP-PAGE  ( -- page ) _LAPP-RUNTIME@ _LRT-PAGE + ;
 : _LAPP-ROWS  ( -- rows ) _LAPP-RUNTIME@ _LRT-ROWS + ;
 : _LAPP-PREVIEW-BYTES  ( -- a ) _LAPP-RUNTIME@ _LRT-PREVIEW + ;
+: _LAPP-CAPABILITY-WORK  ( -- work|0 )
+    _LAPP-RUNTIME@ ?DUP IF _LRT-CAPABILITY-WORK + THEN ;
 
 : _LAPP-CORPUS-ROW  ( index -- summary )
     _LAPP-PAGE LIBRARY-CORPUS-PAGE-ROW ;
@@ -334,6 +340,7 @@ VARIABLE _LAPP-ST-N
 : _LAPP-INVALIDATE  ( -- )
     _LAPP-PANEL WDG-DIRTY
     _LAPP-E-BODY @ ?DUP IF UIDL-DIRTY! THEN
+    _LAPP-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     _LAPP-UPDATE-STATUS
     ASHELL-DIRTY! ;
 
@@ -346,6 +353,22 @@ VARIABLE _LAPP-ST-N
 : _LAPP-READY?  ( -- flag )
     _LAPP-READY @ _LAPP-OWNER-INITIALIZED @ AND
     _LAPP-RUNTIME@ 0<> AND ;
+
+\ Capability dispatch is allowed to use only the one applet instance that
+\ owns the live repository graph.  Validate that authority before rebinding
+\ the controller's activation-relative accessors.
+: _LAPP-CAPABILITY-ACTIVATE  ( instance -- service-status )
+    DUP 0= IF DROP LIBRARY-SERVICE-S-INVALID EXIT THEN
+    DUP _LAPP-LIVE-INSTANCE @ <> IF
+        DROP LIBRARY-SERVICE-S-BUSY EXIT
+    THEN
+    _LAPP-ACTIVATE
+    _LAPP-OWNS-LIVE @ 0= IF LIBRARY-SERVICE-S-BUSY EXIT THEN
+    _LAPP-RUNTIME@ 0= IF LIBRARY-SERVICE-S-CAPACITY EXIT THEN
+    _LAPP-CAPABILITY-WORK LIBRARY-CAPABILITY-WORK-VALID? 0= IF
+        LIBRARY-SERVICE-S-CORRUPT EXIT
+    THEN
+    LIBRARY-SERVICE-S-OK ;
 
 \ The applet probe has no production bootstrap owner yet.  This stable,
 \ documented development identity makes first-use behavior reproducible; it
@@ -380,7 +403,10 @@ VARIABLE _LAPP-ST-N
     THEN
     \ This also closes any partially initialized graph left by a failed open.
     _LAPP-OWNER-CLOSE
-    _LAPP-RUNTIME@ _LAPP-RUNTIME-SIZE 0 FILL
+    \ Reopening the durable owner must not erase a capability handler's
+    \ decoded request or transactional result builder.  That separately
+    \ initialized workspace occupies the tail of the activation allocation.
+    _LAPP-RUNTIME@ _LAPP-OWNER-RUNTIME-SIZE 0 FILL
     VFS-CUR DUP 0= IF
         DROP LIBRARY-SERVICE-S-IO _LAPP-SET-STATUS EXIT
     THEN
@@ -460,6 +486,34 @@ VARIABLE _LAPP-ST-N
     _LAPP-BOOTSTRAP-ID _LAPP-REPOSITORY _LAPP-REPOSITORY-WORK
         LIBRARY-REPOSITORY-BOOTSTRAP _LAPP-SET-STATUS
     DUP LIBRARY-SERVICE-S-OK = IF -1 _LAPP-READY ! THEN ;
+
+: _LAPP-CAPABILITY-STATUS  ( -- ready? logical-generation service-status )
+    _LAPP-RUNTIME@ 0= IF
+        0 0 LIBRARY-SERVICE-S-CAPACITY EXIT
+    THEN
+    _LAPP-OWNER-INITIALIZED @ 0= IF
+        _LAPP-OWNER-OPEN
+        DUP LIBRARY-SERVICE-S-OK = IF DROP ELSE
+            DUP LIBRARY-SERVICE-S-ABSENT = IF
+                DROP 0 0 LIBRARY-SERVICE-S-OK EXIT
+            THEN
+            >R 0 0 R> EXIT
+        THEN
+    THEN
+    _LAPP-READY? 0= IF
+        _LAPP-REPOSITORY _LAPP-REPOSITORY-WORK
+            LIBRARY-REPOSITORY-LOAD _LAPP-SET-STATUS
+        DUP LIBRARY-SERVICE-S-ABSENT = IF
+            DROP 0 0 LIBRARY-SERVICE-S-OK EXIT
+        THEN
+        DUP IF >R 0 0 R> EXIT THEN DROP
+        -1 _LAPP-READY !
+    THEN
+    _LAPP-SERVICE-WORK LIBRARY-SERVICE-LOGICAL-GENERATION@
+    DUP 0< IF
+        DROP 0 0 LIBRARY-SERVICE-S-CORRUPT EXIT
+    THEN
+    -1 SWAP LIBRARY-SERVICE-S-OK ;
 
 : _LAPP-QUERY-SCOPE!  ( -- )
     _LAPP-VIEW @ CASE

@@ -132,6 +132,14 @@ local_testing/*
 !local_testing/lib-rpath-l12-test.f
 !local_testing/library-model-l12.f
 !local_testing/lib-document-values-l12-test.f
+!local_testing/lib-collval-l1.f
+!local_testing/test_library_collection_values_l1.py
+!local_testing/lib-ui-l1.f
+!local_testing/test_library_ui_l1.py
+!local_testing/lib-cap-l1.f
+!local_testing/test_library_capability_l1.py
+!local_testing/test_library_capability_boundaries_l1.py
+!local_testing/test_library_capability_create_boundary_l1.py
 !local_testing/lib-metadata-l12-test.f
 !local_testing/lib-persist-l12-test.f
 !local_testing/lib-coll-l12-test.f

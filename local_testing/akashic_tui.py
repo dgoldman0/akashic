@@ -12435,7 +12435,8 @@ CREATE _lac-desc APP-DESC ALLOT
     _lac-uidl-file? _lac-assert
     _lac-comp COMP.STATE-SIZE @ _LAPP-STATE-SIZE = _lac-assert
     _LAPP-RUNTIME-SIZE LIBRARY-REPOSITORY-SIZE > _lac-assert
-    _lac-comp COMP.CAPS-N @ 0= _lac-assert
+    _lac-comp COMP.CAPS-A @ LIBRARY-APPLET-CAPABILITIES = _lac-assert
+    _lac-comp COMP.CAPS-N @ LIBRARY-APPLET-CAPABILITY-COUNT = _lac-assert
     _lac-comp COMP.INTENTS-N @ 0= _lac-assert
     _lac-desc APP.INIT-XT @ 0<> _lac-assert
     _lac-desc APP.EVENT-XT @ 0<> _lac-assert
