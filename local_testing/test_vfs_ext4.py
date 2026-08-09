@@ -20421,11 +20421,36 @@ def _run_multi_linked_cleanup(
     orphan_home = _extent_root_physical(orphan_inode, 0)
     orphan_before = patch_map[orphan_home * block_size]
     if protocol == "modern":
+        assert struct.unpack_from("<II", orphan_before, 0) == (18, 21)
+        orphan_after_more = bytearray(orphan_before)
+        struct.pack_into("<I", orphan_after_more, 0, 0)
+        seed = struct.unpack_from("<I", superblock, 0x270)[0]
+        orphan_generation = struct.unpack_from("<I", orphan_inode, 0x64)[0]
+        orphan_checksum = _crc32c_raw(
+            struct.pack(
+                "<IIQ",
+                orphan_inode_number,
+                orphan_generation,
+                orphan_home,
+            ),
+            seed,
+        )
+        orphan_checksum = _crc32c_raw(
+            orphan_after_more[: block_size - 8],
+            orphan_checksum,
+        )
+        struct.pack_into(
+            "<I",
+            orphan_after_more,
+            block_size - 4,
+            orphan_checksum,
+        )
         with path.open("rb") as source:
             source.seek(orphan_home * block_size)
             expected_orphan_after = source.read(block_size)
         assert len(expected_orphan_after) == block_size
     else:
+        orphan_after_more = bytearray(orphan_before)
         expected_orphan_after = orphan_before
     activation_trace = _jbd2_writer_activation_trace(path)
 
@@ -20769,6 +20794,7 @@ def _run_multi_linked_cleanup(
         "inode_bitmap_home": inode_bitmap_home,
         "gdt_home": gdt_home,
         "orphan_home": orphan_home,
+        "orphan_after_more": bytes(orphan_after_more),
         "data_block": data_block,
         "data_blocks": data_blocks,
         "data_bitmap_byte": data_bitmap_byte,
@@ -22127,19 +22153,22 @@ def _trace_ordinal_at_event(
     return sum(event[0] == kind for event in trace[: event_index + 1])
 
 
-def _linked_legacy_first_more_trace_points(
+def _linked_first_more_trace_points(
     expectation: dict[str, object],
 ) -> dict[str, dict[str, int]]:
-    assert expectation["protocol"] == "legacy"
+    protocol = expectation["protocol"]
+    assert protocol in {"modern", "legacy"}
     trace = expectation["success_trace"]
     inode18_home = expectation["inode18_home"]
     gdt_home = expectation["gdt_home"]
     block_bitmap_home = expectation["block_bitmap_home"]
+    orphan_home = expectation["orphan_home"]
     data_block = expectation["data_block"]
     assert isinstance(trace, tuple)
     assert isinstance(inode18_home, int)
     assert isinstance(gdt_home, int)
     assert isinstance(block_bitmap_home, int)
+    assert isinstance(orphan_home, int)
     assert isinstance(data_block, int)
 
     inode18_writes = _write_ordinals_for_ext4_home(trace, inode18_home)
@@ -22149,17 +22178,31 @@ def _linked_legacy_first_more_trace_points(
         block_bitmap_home,
     )
     super_writes = _write_ordinals_for_ext4_home(trace, 1)
+    orphan_writes = _write_ordinals_for_ext4_home(trace, orphan_home)
     assert len(inode18_writes) == len(gdt_writes) == len(bitmap_writes) == 1
-    assert len(super_writes) == 4
+    assert len(super_writes) == (3 if protocol == "modern" else 4)
+    assert len(orphan_writes) == (2 if protocol == "modern" else 0)
     inode18_write = inode18_writes[0]
     gdt_write = gdt_writes[0]
     bitmap_write = bitmap_writes[0]
     more_super_write = super_writes[1]
-    assert (inode18_write, gdt_write, bitmap_write, more_super_write) == tuple(
-        range(inode18_write, inode18_write + 4)
+    first_home_writes = (
+        inode18_write,
+        gdt_write,
+        bitmap_write,
+        more_super_write,
+    )
+    if protocol == "modern":
+        first_home_writes += (orphan_writes[0],)
+    assert first_home_writes == tuple(
+        range(inode18_write, inode18_write + len(first_home_writes))
     )
     assert super_writes[0] < inode18_write
-    assert more_super_write < super_writes[2] < super_writes[3]
+    if protocol == "modern":
+        assert more_super_write < orphan_writes[0] < orphan_writes[1]
+        assert orphan_writes[1] < super_writes[2]
+    else:
+        assert more_super_write < super_writes[2] < super_writes[3]
     assert not _write_ordinals_for_ext4_home(trace, data_block)
 
     commit_write = inode18_write - 1
@@ -22173,16 +22216,17 @@ def _linked_legacy_first_more_trace_points(
         "write",
         inode18_write,
     )
-    more_super_event = _trace_event_index_for_ordinal(
+    last_more_home_write = first_home_writes[-1]
+    last_more_home_event = _trace_event_index_for_ordinal(
         trace,
         "write",
-        more_super_write,
+        last_more_home_write,
     )
     assert inode18_event == commit_event + 2
     assert trace[commit_event + 1] == ("flush", 0, 0)
-    assert trace[more_super_event + 1] == ("flush", 0, 0)
+    assert trace[last_more_home_event + 1] == ("flush", 0, 0)
 
-    suffix_start = more_super_event + 2
+    suffix_start = last_more_home_event + 2
     suffix = trace[suffix_start : suffix_start + 10]
     assert len(suffix) == 10
     assert tuple(event[0] for event in suffix) == (
@@ -22207,36 +22251,39 @@ def _linked_legacy_first_more_trace_points(
 
     flush_events = {
         "commit": commit_event + 1,
-        "homes": more_super_event + 1,
+        "homes": last_more_home_event + 1,
         "reset-preseed": suffix_start + 1,
         "reset-anchor": suffix_start + 3,
         "reset-primary": suffix_start + 5,
         "witness-clear": suffix_start + 7,
         "guard-retire": suffix_start + 9,
     }
+    writes = {
+        "commit": commit_write,
+        "inode": inode18_write,
+        "gdt": gdt_write,
+        "bitmap": bitmap_write,
+        "super": more_super_write,
+        "reset-primary": _trace_ordinal_at_event(
+            trace,
+            "write",
+            suffix_start + 4,
+        ),
+        "witness-clear": _trace_ordinal_at_event(
+            trace,
+            "write",
+            suffix_start + 6,
+        ),
+        "guard-retire": _trace_ordinal_at_event(
+            trace,
+            "write",
+            suffix_start + 8,
+        ),
+    }
+    if protocol == "modern":
+        writes["orphan"] = orphan_writes[0]
     return {
-        "writes": {
-            "commit": commit_write,
-            "inode": inode18_write,
-            "gdt": gdt_write,
-            "bitmap": bitmap_write,
-            "super": more_super_write,
-            "reset-primary": _trace_ordinal_at_event(
-                trace,
-                "write",
-                suffix_start + 4,
-            ),
-            "witness-clear": _trace_ordinal_at_event(
-                trace,
-                "write",
-                suffix_start + 6,
-            ),
-            "guard-retire": _trace_ordinal_at_event(
-                trace,
-                "write",
-                suffix_start + 8,
-            ),
-        },
+        "writes": writes,
         "flushes": {
             name: _trace_ordinal_at_event(trace, "flush", event_index)
             for name, event_index in flush_events.items()
@@ -22411,7 +22458,9 @@ def _assert_multi_linked_cleanup_media_converges(
     *,
     expectation: dict[str, object],
 ) -> None:
-    assert expectation["protocol"] == "legacy"
+    protocol = expectation["protocol"]
+    assert protocol in {"modern", "legacy"}
+    protocol_tag = str(protocol).upper()
     clean_image = expectation["clean_image"]
     block_size = expectation["block_size"]
     inode18_home = expectation["inode18_home"]
@@ -22437,7 +22486,7 @@ def _assert_multi_linked_cleanup_media_converges(
     assert isinstance(data_bitmap_byte, int)
     assert isinstance(data_bitmap_mask, int)
 
-    marker = "EXT4-LINKED-FIRST-MORE-CRASH-REPAIRED"
+    marker = f"EXT4-LINKED-{protocol_tag}-FIRST-MORE-CRASH-REPAIRED"
     output, repair_trace, repaired_sha256 = run_recovery_forth(
         interrupted,
         repaired,
@@ -22613,10 +22662,17 @@ def _assert_multi_linked_cleanup_media_converges(
         assert observed == expected
     assert not _write_ordinals_for_ext4_home(repair_trace, inode21_home)
     assert not _write_ordinals_for_ext4_home(repair_trace, inode_bitmap_home)
-    assert not _write_ordinals_for_ext4_home(repair_trace, orphan_home)
+    orphan_repair_writes = _write_ordinals_for_ext4_home(
+        repair_trace,
+        orphan_home,
+    )
+    if protocol == "modern":
+        assert orphan_repair_writes
+    else:
+        assert not orphan_repair_writes
     assert not _write_ordinals_for_ext4_home(repair_trace, data_block)
 
-    stable_marker = "EXT4-LINKED-FIRST-MORE-CRASH-STABLE"
+    stable_marker = f"EXT4-LINKED-{protocol_tag}-FIRST-MORE-CRASH-STABLE"
     stable_output, stable_trace, stable_sha256 = run_recovery_forth(
         repaired,
         stable,
@@ -22730,7 +22786,7 @@ def _read_ext4_home(path: Path, home: int, *, block_size: int) -> bytes:
     return result
 
 
-_LINKED_FIRST_MORE_WRITE_PREFIX_CASES = (
+_LINKED_FIRST_MORE_LEGACY_WRITE_PREFIX_CASES = (
     "commit",
     "inode",
     "gdt",
@@ -22740,15 +22796,49 @@ _LINKED_FIRST_MORE_WRITE_PREFIX_CASES = (
     "witness-clear",
     "guard-retire",
 )
+_LINKED_FIRST_MORE_MODERN_WRITE_PREFIX_CASES = (
+    "commit",
+    "inode",
+    "gdt",
+    "bitmap",
+    "super",
+    "orphan",
+    "reset-primary",
+    "witness-clear",
+    "guard-retire",
+)
+_LINKED_FIRST_MORE_WRITE_PREFIX_CASES = tuple(
+    pytest.param(
+        "linked_legacy_head_data_cleanup_fixture",
+        case,
+        id=f"legacy-{case}",
+    )
+    for case in _LINKED_FIRST_MORE_LEGACY_WRITE_PREFIX_CASES
+) + tuple(
+    pytest.param(
+        "linked_modern_head_data_cleanup_fixture",
+        case,
+        id=f"modern-{case}",
+    )
+    for case in _LINKED_FIRST_MORE_MODERN_WRITE_PREFIX_CASES
+)
 
 
-@pytest.mark.parametrize("case", _LINKED_FIRST_MORE_WRITE_PREFIX_CASES)
-def test_linked_legacy_first_more_write_prefixes_converge(
-    linked_legacy_head_data_cleanup_fixture: dict[str, object],
+@pytest.mark.parametrize(
+    ("fixture_name", "case"),
+    _LINKED_FIRST_MORE_WRITE_PREFIX_CASES,
+)
+def test_linked_first_more_write_prefixes_converge(
+    request: pytest.FixtureRequest,
     tmp_path: Path,
+    fixture_name: str,
     case: str,
 ) -> None:
-    expectation = linked_legacy_head_data_cleanup_fixture
+    expectation = request.getfixturevalue(fixture_name)
+    assert isinstance(expectation, dict)
+    protocol = expectation["protocol"]
+    assert protocol in {"modern", "legacy"}
+    protocol_tag = str(protocol).upper()
     source = expectation["source"]
     patches = expectation["patches"]
     success_trace = expectation["success_trace"]
@@ -22757,6 +22847,8 @@ def test_linked_legacy_first_more_write_prefixes_converge(
     inode18_home = expectation["inode18_home"]
     gdt_home = expectation["gdt_home"]
     block_bitmap_home = expectation["block_bitmap_home"]
+    orphan_home = expectation["orphan_home"]
+    orphan_after_more = expectation["orphan_after_more"]
     data_bitmap_byte = expectation["data_bitmap_byte"]
     assert isinstance(source, Path)
     assert isinstance(patches, tuple)
@@ -22766,15 +22858,18 @@ def test_linked_legacy_first_more_write_prefixes_converge(
     assert isinstance(inode18_home, int)
     assert isinstance(gdt_home, int)
     assert isinstance(block_bitmap_home, int)
+    assert isinstance(orphan_home, int)
+    assert isinstance(orphan_after_more, bytes)
     assert isinstance(data_bitmap_byte, int)
 
-    points = _linked_legacy_first_more_trace_points(expectation)
+    points = _linked_first_more_trace_points(expectation)
     write_ordinal = points["writes"][case]
     home_by_case = {
         "inode": inode18_home,
         "gdt": gdt_home,
         "bitmap": block_bitmap_home,
         "super": 1,
+        "orphan": orphan_home,
     }
     byte_index_by_case = {
         "commit": 1,
@@ -22782,13 +22877,17 @@ def test_linked_legacy_first_more_write_prefixes_converge(
         "gdt": 13,
         "bitmap": data_bitmap_byte + 1,
         "super": 200,
+        "orphan": 1,
         "reset-primary": 50,
         "witness-clear": 200,
         "guard-retire": 200,
     }
     byte_index = byte_index_by_case[case]
-    caught_marker = f"EXT4-LINKED-FIRST-MORE-{case.upper()}-PREFIX-CAUGHT"
-    torn = tmp_path / f"linked-first-more-{case}-torn.img"
+    caught_marker = (
+        f"EXT4-LINKED-{protocol_tag}-FIRST-MORE-"
+        f"{case.upper()}-PREFIX-CAUGHT"
+    )
+    torn = tmp_path / f"linked-{protocol}-first-more-{case}-torn.img"
     output, failed_trace, failed_sha256 = run_recovery_forth(
         source,
         torn,
@@ -22816,7 +22915,7 @@ def test_linked_legacy_first_more_write_prefixes_converge(
     )
     assert failed_trace == success_trace[: event_index + 1]
 
-    if case in {"inode", "gdt", "bitmap"}:
+    if case in {"inode", "gdt", "bitmap", "orphan"}:
         home = home_by_case[case]
         old_home = _patched_ext4_home(
             source,
@@ -22824,41 +22923,63 @@ def test_linked_legacy_first_more_write_prefixes_converge(
             home,
             block_size=block_size,
         )
-        new_home = _read_ext4_home(
-            clean_image,
-            home,
-            block_size=block_size,
-        )
+        if case == "orphan":
+            new_home = orphan_after_more
+        else:
+            new_home = _read_ext4_home(
+                clean_image,
+                home,
+                block_size=block_size,
+            )
         torn_home = _read_ext4_home(torn, home, block_size=block_size)
         assert old_home != new_home
         assert torn_home == new_home[:byte_index] + old_home[byte_index:]
 
     _assert_multi_linked_cleanup_media_converges(
         torn,
-        tmp_path / f"linked-first-more-{case}-repaired.img",
-        tmp_path / f"linked-first-more-{case}-stable.img",
+        tmp_path / f"linked-{protocol}-first-more-{case}-repaired.img",
+        tmp_path / f"linked-{protocol}-first-more-{case}-stable.img",
         expectation=expectation,
     )
 
 
-_LINKED_FIRST_MORE_FLUSH_CASES = (
-    "commit",
-    "homes",
-    "reset-preseed",
-    "reset-anchor",
-    "reset-primary",
-    "witness-clear",
-    "guard-retire",
+_LINKED_FIRST_MORE_FLUSH_CASES = tuple(
+    pytest.param(
+        fixture_name,
+        case,
+        id=f"{protocol}-{case}",
+    )
+    for protocol, fixture_name in (
+        ("legacy", "linked_legacy_head_data_cleanup_fixture"),
+        ("modern", "linked_modern_head_data_cleanup_fixture"),
+    )
+    for case in (
+        "commit",
+        "homes",
+        "reset-preseed",
+        "reset-anchor",
+        "reset-primary",
+        "witness-clear",
+        "guard-retire",
+    )
 )
 
 
-@pytest.mark.parametrize("case", _LINKED_FIRST_MORE_FLUSH_CASES)
-def test_linked_legacy_first_more_flush_fences_converge(
-    linked_legacy_head_data_cleanup_fixture: dict[str, object],
+@pytest.mark.parametrize(
+    ("fixture_name", "case"),
+    _LINKED_FIRST_MORE_FLUSH_CASES,
+)
+def test_linked_first_more_flush_fences_converge(
+    request: pytest.FixtureRequest,
     tmp_path: Path,
+    fixture_name: str,
     case: str,
 ) -> None:
-    expectation = linked_legacy_head_data_cleanup_fixture
+    expectation = request.getfixturevalue(fixture_name)
+    assert isinstance(expectation, dict)
+    protocol = expectation["protocol"]
+    assert protocol in {"modern", "legacy"}
+    protocol_tag = str(protocol).upper()
     source = expectation["source"]
     patches = expectation["patches"]
     success_trace = expectation["success_trace"]
@@ -22867,6 +22988,8 @@ def test_linked_legacy_first_more_flush_fences_converge(
     inode18_home = expectation["inode18_home"]
     gdt_home = expectation["gdt_home"]
     block_bitmap_home = expectation["block_bitmap_home"]
+    orphan_home = expectation["orphan_home"]
+    orphan_after_more = expectation["orphan_after_more"]
     data_block = expectation["data_block"]
     assert isinstance(source, Path)
     assert isinstance(patches, tuple)
@@ -22876,15 +22999,20 @@ def test_linked_legacy_first_more_flush_fences_converge(
     assert isinstance(inode18_home, int)
     assert isinstance(gdt_home, int)
     assert isinstance(block_bitmap_home, int)
+    assert isinstance(orphan_home, int)
+    assert isinstance(orphan_after_more, bytes)
     assert isinstance(data_block, int)
 
-    points = _linked_legacy_first_more_trace_points(expectation)
+    points = _linked_first_more_trace_points(expectation)
     flush_ordinal = points["flushes"][case]
     flush_event = points["flush_events"][case]
-    caught_marker = f"EXT4-LINKED-FIRST-MORE-{case.upper()}-FLUSH-CAUGHT"
-    working = tmp_path / f"linked-first-more-{case}-working.img"
-    survived = tmp_path / f"linked-first-more-{case}-survived.img"
-    prior_fence = tmp_path / f"linked-first-more-{case}-prior.img"
+    caught_marker = (
+        f"EXT4-LINKED-{protocol_tag}-FIRST-MORE-"
+        f"{case.upper()}-FLUSH-CAUGHT"
+    )
+    working = tmp_path / f"linked-{protocol}-first-more-{case}-working.img"
+    survived = tmp_path / f"linked-{protocol}-first-more-{case}-survived.img"
+    prior_fence = tmp_path / f"linked-{protocol}-first-more-{case}-prior.img"
     output, failed_trace, survived_sha256 = run_recovery_forth(
         source,
         working,
@@ -22924,18 +23052,28 @@ def test_linked_legacy_first_more_flush_fences_converge(
         home: _read_ext4_home(clean_image, home, block_size=block_size)
         for home in homes
     }
+    old_orphan = _patched_ext4_home(
+        source,
+        patches,
+        orphan_home,
+        block_size=block_size,
+    )
     if case == "commit":
         expected_sides = ((survived, old_homes), (prior_fence, old_homes))
-        expected_heads = (18, 18)
+        expected_heads = (18, 18) if protocol == "legacy" else (0, 0)
+        expected_orphans = (old_orphan, old_orphan)
     elif case == "homes":
         expected_sides = ((survived, new_homes), (prior_fence, old_homes))
-        expected_heads = (21, 18)
+        expected_heads = (21, 18) if protocol == "legacy" else (0, 0)
+        expected_orphans = (orphan_after_more, old_orphan)
     else:
         expected_sides = ((survived, new_homes), (prior_fence, new_homes))
-        expected_heads = (21, 21)
-    for (interrupted, expected_homes), expected_head in zip(
+        expected_heads = (21, 21) if protocol == "legacy" else (0, 0)
+        expected_orphans = (orphan_after_more, orphan_after_more)
+    for (interrupted, expected_homes), expected_head, expected_orphan in zip(
         expected_sides,
         expected_heads,
+        expected_orphans,
         strict=True,
     ):
         for home, expected_home in expected_homes.items():
@@ -22948,6 +23086,11 @@ def test_linked_legacy_first_more_flush_fences_converge(
         assert superblock == _ext4_super_with_checksum(superblock)
         assert struct.unpack_from("<I", superblock, 0x60)[0] & 0x04
         assert struct.unpack_from("<I", superblock, 0xE8)[0] == expected_head
+        assert _read_ext4_home(
+            interrupted,
+            orphan_home,
+            block_size=block_size,
+        ) == expected_orphan
         assert _read_ext4_home(
             interrupted,
             data_block,
@@ -22964,8 +23107,16 @@ def test_linked_legacy_first_more_flush_fences_converge(
     ):
         _assert_multi_linked_cleanup_media_converges(
             interrupted,
-            tmp_path / f"linked-first-more-{case}-{durability}-repaired.img",
-            tmp_path / f"linked-first-more-{case}-{durability}-stable.img",
+            tmp_path
+            / (
+                f"linked-{protocol}-first-more-{case}-{durability}-"
+                "repaired.img"
+            ),
+            tmp_path
+            / (
+                f"linked-{protocol}-first-more-{case}-{durability}-"
+                "stable.img"
+            ),
             expectation=expectation,
         )
 

@@ -935,9 +935,9 @@ namespace image. A parallel modern linked fixture qualifies exact five-credit
 `MODERN_MORE` over one extent followed by one-credit `MODERN_FINAL`. It pins a
 48-write/35-flush trace, exact first-home order, three primary-super writes,
 two orphan-home writes, unchanged inode 21 and payload media, restored
-allocation accounting, zero final slots, and a zero-I/O stable remount. It
-measured 1,134,032,080 guest steps under the existing 1,500,000,000-step
-watchdog; the remount measured 55,180,517. It is likewise synthetic and not an
+allocation accounting, zero final slots, and a zero-I/O stable remount. It now
+measures 1,185,669,720 guest steps under the existing 1,500,000,000-step
+watchdog; the remount measures 55,255,628. It is likewise synthetic and not an
 e2fsck namespace oracle. Whole-union refusal is qualified with an earlier
 supported record followed by a valid two-extent record, and post-seal
 count/mode substitution is rejected before home writes. A later selected
@@ -1054,9 +1054,14 @@ snapshot independently converge on the successful final values for every
 affected ext4 home and a write/flush-free remount. The payload is never a
 home-write target, and inode 21 remains byte-exact through its terminal
 `FINAL`; the synthetic fixture's no-e2fsck qualification remains unchanged.
-Successor-aware crash cuts for `MODERN_MORE`, modern/legacy
-`DATA_DELETE_MORE`, and multi-range `LEGACY_MORE` also remain. Activation,
-descriptor, and active-primary writes are
+The parallel modern fixture now qualifies two focused successor-aware cuts:
+the uniquely modern orphan-file home is torn against its checksum-valid
+`(0, 21)` intermediate after-image, and the complete-home failed flush repairs
+both its surviving and prior-durable media. Each path reaches the successful
+final homes and a write/flush-free stable remount; repair measures 771,167,177
+guest steps. The remaining eight modern write prefixes and six durability
+fences, modern/legacy `DATA_DELETE_MORE`, and multi-range `LEGACY_MORE` remain.
+Activation, descriptor, and active-primary writes are
 qualified by singleton matrices but are not duplicated here with an active
 successor.
 

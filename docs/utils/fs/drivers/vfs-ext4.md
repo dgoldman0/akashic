@@ -35,15 +35,17 @@ and measurement guide, not an ext4 implementation capacity or a reason to
 weaken functionality. If correct source legitimately outgrows it, the budget
 must be revisited from measured system resources. The harness still performs a
 real cold source build and requires the `EXT4-SOURCE-READY` marker with no
-Forth diagnostic; the current cold snapshot measures 131,992,675 steps under
+Forth diagnostic; the current cold snapshot measures 132,053,583 steps under
 that unchanged watchdog. Runtime recovery journeys use a separate
 1,200,000,000-step default watchdog. Geometry-bounded multi-record production and selected
 multi-record fault journeys use a scoped 1,500,000,000-step watchdog because
 the real cold-source path plus repeated whole-plan authentication legitimately
 crossed the default. The mixed successful cleanup measured 1,209,747,492
 steps; linked one-block `LEGACY_MORE` measured 1,102,821,323, linked one-block
-`MODERN_MORE` measured 1,134,032,080, and repair from the durable image
-immediately before the legacy commit fence measured 1,366,762,951. The
+`MODERN_MORE` now measures 1,185,669,720, and repair from the durable image
+immediately before the legacy commit fence measured 1,366,762,951. Focused
+modern orphan-home and complete-home-fence repair measures 771,167,177 steps,
+with a 55,254,562-step write-free remount. The
 multi-range data-bearing two-record unlinked journeys have a separate
 3,000,000,000-step watchdog because the persistence harness traces every
 write and flush around dry staging and real emission. The modern two-range
@@ -1731,9 +1733,14 @@ The remaining boundaries are:
   affected ext4 home exactly, preserve the payload without a data-home write,
   and remount without another write or flush. The branch in which the data- and
   inode-group descriptors occupy distinct primary GDT pages, adding one
-  metadata home, is implemented but not yet qualified. Successor-aware crash
-  cuts for `MODERN_MORE`, modern/legacy `DATA_DELETE_MORE`, and multi-range
-  `LEGACY_MORE` also remain to be qualified.
+  metadata home, is implemented but not yet qualified. The parallel modern
+  fixture now has two focused successor-aware cuts. A torn first-`MORE`
+  orphan-file home is checked against the exact checksum-valid `(0, 21)`
+  intermediate image, and the complete-home failed flush repairs both the
+  surviving writes and the preceding durable snapshot. Each converges on the
+  successful final homes and a write-free stable remount. The remaining eight
+  modern write prefixes and six modern durability fences, modern/legacy
+  `DATA_DELETE_MORE`, and multi-range `LEGACY_MORE` remain to be qualified.
   Activation, descriptor, and active-primary writes are qualified by singleton
   matrices but are not duplicated here with an active successor. The
   one-block-specific commit and final-super flush fences, shared
