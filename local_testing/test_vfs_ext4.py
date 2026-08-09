@@ -23309,6 +23309,15 @@ def test_direct_empty_triple_root_unlinked_cleanup_is_e2fsck_clean(
     _assert_e2fsck_clean(clean_image, jbd2_toolchain)
 
 
+def test_one_child_triple_root_unlinked_cleanup_is_e2fsck_clean(
+    one_child_triple_root_unlinked_cleanup_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    clean_image = one_child_triple_root_unlinked_cleanup_fixture["clean_image"]
+    assert isinstance(clean_image, Path)
+    _assert_e2fsck_clean(clean_image, jbd2_toolchain)
+
+
 def test_mount_reclaims_one_block_unlinked_singleton_orphan(
     one_block_unlinked_cleanup_fixture: dict[str, object],
 ) -> None:

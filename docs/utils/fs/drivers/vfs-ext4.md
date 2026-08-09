@@ -1756,8 +1756,10 @@ The remaining boundaries are:
   to their canonical values, and neither the pointer-bearing root nor its
   all-zero child is written. A byte-identical zero-I/O stable remount completes
   in 56,369,050 guest steps under the standard 1,200,000,000-step watchdog.
-  Legacy production/stable parity, pinned e2fsck, crash, broader-geometry, and
-  additional-fanout qualification remain pending for this child-bearing tier.
+  The resulting image also passes the pinned e2fsprogs 1.47.4
+  `e2fsck -f -n` check. Legacy production/stable parity, crash,
+  broader-geometry, and additional-fanout qualification remain pending for
+  this child-bearing tier.
   The one-direct modern certificate
   refuses missing or extra target counts, a missing range, widened data or root
   singletons, swapped data/root order, and a downgraded map kind before its
