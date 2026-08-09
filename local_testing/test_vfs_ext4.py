@@ -19294,6 +19294,16 @@ def test_unlinked_preflight_accepts_sparse_double_without_single_root(
             "legacy",
             id="legacy-direct-empty-triple",
         ),
+        pytest.param(
+            "full-direct-empty-triple",
+            "modern",
+            id="full-direct-empty-triple",
+        ),
+        pytest.param(
+            "full-direct-empty-triple",
+            "legacy",
+            id="legacy-full-direct-empty-triple",
+        ),
     ),
 )
 def test_legacy_indirect_stages_canonical_map_revokes(
@@ -19344,8 +19354,17 @@ def test_legacy_indirect_stages_canonical_map_revokes(
         empty_double_root = False
         expected_counts = (3, 3)
     else:
-        assert shape in {"empty-triple-root", "direct-empty-triple"}
-        direct_slots = (5,) if shape == "direct-empty-triple" else ()
+        assert shape in {
+            "empty-triple-root",
+            "direct-empty-triple",
+            "full-direct-empty-triple",
+        }
+        if shape == "direct-empty-triple":
+            direct_slots = (5,)
+        elif shape == "full-direct-empty-triple":
+            direct_slots = tuple(range(12))
+        else:
+            direct_slots = ()
         single_slots = ()
         double_children = ()
         empty_double_root = False

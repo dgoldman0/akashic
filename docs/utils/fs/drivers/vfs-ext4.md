@@ -1704,7 +1704,13 @@ The remaining boundaries are:
   guest steps and legacy in 530,481,498 under the unchanged 800,000,000-step
   watchdog. Both bind one target data entry, the exact ordered
   `{ direct, triple-root }` release vector, one root revoke, and the same
-  protocol-specific credit and locator authority. The modern certificate
+  protocol-specific credit and locator authority. A maximum-bound pair fills
+  direct slots 0 through 11 ahead of the root. Modern completes in 538,411,505
+  guest steps and legacy in 546,064,724 under the unchanged 800,000,000-step
+  watchdog. Both pin 12 target data entries and blocks, the exact 13-singleton
+  release vector with the root last, one map entry and block, the sole trailing
+  root revoke, six modern or five legacy metadata credits, zero home
+  writes, and clean abort. The one-direct modern certificate
   refuses missing or extra target counts, a missing range, widened data or root
   singletons, swapped data/root order, and a downgraded map kind before its
   restored authority and transaction tables pass. Focused negative admission
