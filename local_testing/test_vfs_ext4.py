@@ -438,6 +438,44 @@ def _ext4_inode_record(path: Path, inode_number: int) -> tuple[bytes, bytes, int
     return superblock, inode, inode_offset
 
 
+def _ext4_block_allocation_state(
+    path: Path,
+    blocks: tuple[int, ...],
+) -> dict[int, bool]:
+    """Read primary block-bitmap allocation state for exact block homes."""
+    with path.open("rb") as source:
+        source.seek(1024)
+        superblock = source.read(1024)
+    assert len(superblock) == 1024
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    blocks_count = struct.unpack_from("<I", superblock, 0x04)[0] | (
+        struct.unpack_from("<I", superblock, 0x150)[0] << 32
+    )
+    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    descriptor_size = struct.unpack_from("<H", superblock, 0xFE)[0]
+    assert descriptor_size >= 64
+    descriptor_table = 2 if block_size == 1024 else 1
+    result: dict[int, bool] = {}
+    with path.open("rb") as source:
+        for block in sorted(set(blocks)):
+            assert first_data <= block < blocks_count
+            group, index = divmod(block - first_data, blocks_per_group)
+            source.seek(
+                descriptor_table * block_size + group * descriptor_size
+            )
+            descriptor = source.read(descriptor_size)
+            assert len(descriptor) == descriptor_size
+            bitmap_home = struct.unpack_from("<I", descriptor, 0x00)[0] | (
+                struct.unpack_from("<I", descriptor, 0x20)[0] << 32
+            )
+            source.seek(bitmap_home * block_size + index // 8)
+            bitmap_byte = source.read(1)
+            assert len(bitmap_byte) == 1
+            result[block] = bool(bitmap_byte[0] & (1 << (index % 8)))
+    return result
+
+
 def _extent_root_physical(inode: bytes, logical_block: int) -> int:
     """Map one logical block through the fixture's inline depth-zero root."""
     root = inode[0x28 : 0x28 + 60]
@@ -1460,7 +1498,7 @@ def _mixed_union_with_later_unlinked_live_alias_patches(
     return tuple(patch_map.items()), (*physical_blocks, alias_physical)
 
 
-def _inline_depth0_unlinked_orphan_patches(
+def _allocate_unlinked_extent_ranges(
     path: Path,
     *,
     protocol: str,
@@ -1471,14 +1509,12 @@ def _inline_depth0_unlinked_orphan_patches(
     physical_gap: int = 1,
     seed_payloads: bool = False,
     seed_gap_payloads: bool = False,
-    size_bytes: int = 0,
     base_patches: tuple[tuple[int, bytes], ...] | None = None,
 ) -> tuple[tuple[tuple[int, bytes], ...], tuple[tuple[int, int], ...]]:
-    """Give one unlinked inode an exact inline depth-zero extent vector."""
+    """Allocate exact physical ranges without choosing an inode map shape."""
     assert protocol in {"modern", "legacy"}
-    assert 1 <= len(extent_specs) <= 4
+    assert extent_specs
     assert physical_gap >= 0
-    assert 0 <= size_bytes < (1 << 63)
     previous_logical_end = 0
     for index, (logical_start, block_count, unwritten) in enumerate(extent_specs):
         assert logical_start >= 0
@@ -1508,7 +1544,6 @@ def _inline_depth0_unlinked_orphan_patches(
         assert existing_inode_offset in patches
     superblock = bytearray(patches[1024])
     block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
-    sectors_per_block = block_size // 512
     first_data = struct.unpack_from("<I", superblock, 0x14)[0]
     blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
     blocks_count = struct.unpack_from("<I", superblock, 0x04)[0] | (
@@ -1698,6 +1733,45 @@ def _inline_depth0_unlinked_orphan_patches(
     struct.pack_into("<I", superblock, 0x158, super_free_blocks >> 32)
     superblock = bytearray(_ext4_super_with_checksum(superblock))
 
+    patches[1024] = bytes(superblock)
+    return tuple(patches.items()), physical_ranges
+
+
+def _inline_depth0_unlinked_orphan_patches(
+    path: Path,
+    *,
+    protocol: str,
+    extent_specs: tuple[tuple[int, int, bool], ...],
+    inode_number: int = 18,
+    data_group: int = 0,
+    physical_starts: tuple[int, ...] | None = None,
+    physical_gap: int = 1,
+    seed_payloads: bool = False,
+    seed_gap_payloads: bool = False,
+    size_bytes: int = 0,
+    base_patches: tuple[tuple[int, bytes], ...] | None = None,
+) -> tuple[tuple[tuple[int, bytes], ...], tuple[tuple[int, int], ...]]:
+    """Give one unlinked inode an exact inline depth-zero extent vector."""
+    assert 1 <= len(extent_specs) <= 4
+    assert 0 <= size_bytes < (1 << 63)
+    allocated_patches, physical_ranges = _allocate_unlinked_extent_ranges(
+        path,
+        protocol=protocol,
+        extent_specs=extent_specs,
+        inode_number=inode_number,
+        data_group=data_group,
+        physical_starts=physical_starts,
+        physical_gap=physical_gap,
+        seed_payloads=seed_payloads,
+        seed_gap_payloads=seed_gap_payloads,
+        base_patches=base_patches,
+    )
+    patches = dict(allocated_patches)
+    superblock = patches[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    sectors_per_block = block_size // 512
+    total_blocks = sum(block_count for _, block_count, _ in extent_specs)
+
     _, _, inode_offset = _ext4_inode_record(path, inode_number)
     inode = bytearray(patches[inode_offset])
     assert struct.unpack_from("<HHHH", inode, 0x28) == (0xF30A, 0, 4, 0)
@@ -1731,6 +1805,245 @@ def _inline_depth0_unlinked_orphan_patches(
     patches[1024] = bytes(superblock)
     patches[inode_offset] = bytes(inode)
     return tuple(patches.items()), physical_ranges
+
+
+def _depth1_one_leaf_unlinked_orphan_patches(
+    path: Path,
+    *,
+    protocol: str,
+    inode_number: int = 18,
+    extent_specs: tuple[tuple[int, int, bool], ...] = (
+        (0, 1, False),
+        (3, 2, True),
+    ),
+    size_bytes: int = (1 << 32) + 777,
+) -> tuple[
+    tuple[tuple[int, bytes], ...],
+    tuple[tuple[int, int], ...],
+    int,
+]:
+    """Give one unlinked inode a depth-one root and one external leaf."""
+    assert protocol in {"modern", "legacy"}
+    assert extent_specs
+    assert 0 <= size_bytes < (1 << 63)
+    with path.open("rb") as source:
+        source.seek(1024)
+        source_superblock = source.read(1024)
+    assert len(source_superblock) == 1024
+    source_block_size = 1024 << struct.unpack_from(
+        "<I", source_superblock, 0x18
+    )[0]
+    source_leaf_max = (source_block_size - 12) // 12
+    assert len(extent_specs) <= source_leaf_max
+    final_logical = max(
+        logical_start + block_count
+        for logical_start, block_count, _ in extent_specs
+    )
+    dummy_spec = (final_logical + 1, 1, False)
+    allocation_specs = (*extent_specs, dummy_spec)
+    _, _, inode_offset = _ext4_inode_record(path, inode_number)
+    patches, allocated_ranges = _allocate_unlinked_extent_ranges(
+        path,
+        protocol=protocol,
+        inode_number=inode_number,
+        extent_specs=allocation_specs,
+        physical_gap=1,
+        seed_payloads=True,
+        seed_gap_payloads=True,
+    )
+    patch_map = dict(patches)
+    assert len(allocated_ranges) == len(extent_specs) + 1
+    data_ranges = allocated_ranges[:-1]
+    leaf_block, leaf_count = allocated_ranges[-1]
+    assert leaf_count == 1
+    for expected, observed in zip(extent_specs, data_ranges, strict=True):
+        assert expected[1] == observed[1]
+
+    superblock = patch_map[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    leaf_max = (block_size - 12) // 12
+    assert len(extent_specs) <= leaf_max
+    leaf = bytearray(block_size)
+    struct.pack_into(
+        "<HHHHI",
+        leaf,
+        0,
+        0xF30A,
+        len(extent_specs),
+        leaf_max,
+        0,
+        0,
+    )
+    for index, (
+        (logical_start, block_count, unwritten),
+        (physical_start, observed_count),
+    ) in enumerate(zip(extent_specs, data_ranges, strict=True)):
+        assert observed_count == block_count
+        raw_length = block_count | (0x8000 if unwritten else 0)
+        struct.pack_into(
+            "<IHHI",
+            leaf,
+            12 + index * 12,
+            logical_start,
+            raw_length,
+            physical_start >> 32,
+            physical_start & 0xFFFF_FFFF,
+        )
+
+    inode = bytearray(patch_map[inode_offset])
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    patch_map[leaf_block * block_size] = _extent_node_with_checksum(
+        superblock,
+        inode_number,
+        generation,
+        leaf,
+    )
+    sectors_per_block = block_size // 512
+    total_blocks = sum(count for _, count in data_ranges) + 1
+    sectors = total_blocks * sectors_per_block
+    assert sectors <= 0xFFFF_FFFF
+    struct.pack_into("<I", inode, 0x04, size_bytes & 0xFFFF_FFFF)
+    struct.pack_into("<I", inode, 0x6C, size_bytes >> 32)
+    struct.pack_into("<I", inode, 0x1C, sectors)
+    struct.pack_into("<H", inode, 0x74, 0)
+    struct.pack_into("<HHHHI", inode, 0x28, 0xF30A, 1, 4, 1, 0)
+    inode[0x34:0x64] = bytes(48)
+    struct.pack_into(
+        "<IIHH",
+        inode,
+        0x34,
+        extent_specs[0][0],
+        leaf_block & 0xFFFF_FFFF,
+        leaf_block >> 32,
+        0,
+    )
+    patch_map[inode_offset] = _inode_with_checksum(
+        superblock,
+        inode_number,
+        inode,
+    )
+    return tuple(patch_map.items()), data_ranges, leaf_block
+
+
+def _malformed_depth1_one_leaf_unlinked_orphan_patches(
+    path: Path,
+    case: str,
+) -> tuple[
+    tuple[tuple[int, bytes], ...],
+    tuple[tuple[int, int], ...],
+    int,
+]:
+    """Derive one checksum-coherent malformed depth-one deletion map."""
+    patches, data_ranges, leaf_block = (
+        _depth1_one_leaf_unlinked_orphan_patches(
+            path,
+            protocol="modern",
+        )
+    )
+    patch_map = dict(patches)
+    superblock = patch_map[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    _, _, inode_offset = _ext4_inode_record(path, 18)
+    inode = bytearray(patch_map[inode_offset])
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+
+    if case == "two-root-indexes":
+        extra_patches, extra_ranges = _allocate_unlinked_extent_ranges(
+            path,
+            protocol="modern",
+            inode_number=18,
+            extent_specs=((6, 1, False), (8, 1, False)),
+            physical_gap=1,
+            seed_payloads=True,
+            seed_gap_payloads=True,
+            base_patches=tuple(patch_map.items()),
+        )
+        patch_map = dict(extra_patches)
+        superblock = patch_map[1024]
+        inode = bytearray(patch_map[inode_offset])
+        second_data, second_leaf = (first for first, count in extra_ranges)
+        assert all(count == 1 for _, count in extra_ranges)
+        leaf_max = (block_size - 12) // 12
+        second_leaf_image = bytearray(block_size)
+        struct.pack_into(
+            "<HHHHI",
+            second_leaf_image,
+            0,
+            0xF30A,
+            1,
+            leaf_max,
+            0,
+            0,
+        )
+        struct.pack_into(
+            "<IHHI",
+            second_leaf_image,
+            12,
+            6,
+            1,
+            second_data >> 32,
+            second_data & 0xFFFF_FFFF,
+        )
+        patch_map[second_leaf * block_size] = _extent_node_with_checksum(
+            superblock,
+            18,
+            generation,
+            second_leaf_image,
+        )
+        assert struct.unpack_from("<HHHH", inode, 0x28) == (
+            0xF30A,
+            1,
+            4,
+            1,
+        )
+        struct.pack_into("<H", inode, 0x2A, 2)
+        struct.pack_into(
+            "<IIHH",
+            inode,
+            0x40,
+            6,
+            second_leaf & 0xFFFF_FFFF,
+            second_leaf >> 32,
+            0,
+        )
+        sectors = struct.unpack_from("<I", inode, 0x1C)[0]
+        sectors += 2 * (block_size // 512)
+        struct.pack_into("<I", inode, 0x1C, sectors)
+        patch_map[inode_offset] = _inode_with_checksum(
+            superblock,
+            18,
+            inode,
+        )
+    elif case == "leaf-data-alias":
+        leaf_offset = leaf_block * block_size
+        leaf = bytearray(patch_map[leaf_offset])
+        struct.pack_into("<H", leaf, 18, leaf_block >> 32)
+        struct.pack_into("<I", leaf, 20, leaf_block & 0xFFFF_FFFF)
+        patch_map[leaf_offset] = _extent_node_with_checksum(
+            superblock,
+            18,
+            generation,
+            leaf,
+        )
+    else:
+        assert case == "other-inode-owns-leaf"
+        _, raw_owner, owner_offset = _ext4_inode_record(path, 14)
+        owner = bytearray(raw_owner)
+        assert struct.unpack_from("<HHHH", owner, 0x28) == (
+            0xF30A,
+            1,
+            4,
+            0,
+        )
+        assert struct.unpack_from("<H", owner, 0x38)[0] == 1
+        struct.pack_into("<H", owner, 0x3A, leaf_block >> 32)
+        struct.pack_into("<I", owner, 0x3C, leaf_block & 0xFFFF_FFFF)
+        patch_map[owner_offset] = _inode_with_checksum(
+            superblock,
+            14,
+            owner,
+        )
+    return tuple(patch_map.items()), data_ranges, leaf_block
 
 
 def _legacy_direct_unlinked_orphan_patches(
@@ -3311,7 +3624,7 @@ def build_snapshot():
             "IMMEDIATE",
         ]
     ).encode() + b"\n"
-    max_source_steps = 800_000_000
+    max_source_steps = 900_000_000
     source_steps = _feed_until_idle(system, bootstrap, max_source_steps)
     uart_offset = len(uart)
     for line in lines:
@@ -3602,18 +3915,18 @@ def _forth_conjunction(checks: list[str]) -> str:
     return " ".join((checks[0], *(f"{check} AND" for check in checks[1:])))
 
 
-def _forth_cp_data_vector_checks(
+def _forth_cp_delete_vector_checks(
     writer: str,
     ranges: tuple[tuple[int, int], ...],
 ) -> list[str]:
     """Return exact checkpoint data-range authority predicates."""
     checks = [
         (
-            f"{writer} _EXT4-JWR.CP-DATA-RANGE-COUNT + @ "
+            f"{writer} _EXT4-JWR.CP-DELETE-RANGE-COUNT + @ "
             f"{len(ranges)} ="
         ),
         (
-            f"{writer} _EXT4-JWR.CP-DATA-BLOCKS + @ "
+            f"{writer} _EXT4-JWR.CP-DELETE-BLOCKS + @ "
             f"{sum(count for _, count in ranges)} ="
         ),
     ]
@@ -3621,20 +3934,20 @@ def _forth_cp_data_vector_checks(
         checks.extend(
             (
                 (
-                    f"{index} {writer} _EXT4-JWR-CP-DATA-RANGE @ "
+                    f"{index} {writer} _EXT4-JWR-CP-DELETE-RANGE @ "
                     f"{first} ="
                 ),
                 (
-                    f"{index} {writer} _EXT4-JWR-CP-DATA-RANGE "
+                    f"{index} {writer} _EXT4-JWR-CP-DELETE-RANGE "
                     f"CELL+ @ {count} ="
                 ),
             )
         )
     checks.append(
         (
-            f"{writer} _EXT4-JWR-CP-DATA-RANGES "
+            f"{writer} _EXT4-JWR-CP-DELETE-RANGES "
             f"{len(ranges) * 2} CELLS + "
-            f"{writer} _EXT4-JWR.CP-DATA-RANGE-CAP + @ "
+            f"{writer} _EXT4-JWR.CP-DELETE-RANGE-CAP + @ "
             f"{len(ranges)} - "
             "2* CELLS _EXT4-BYTES-ZERO?"
         )
@@ -7012,27 +7325,27 @@ def test_jbd2_writer_workspace_is_exact_reusable_and_geometry_bounded(
             ),
             "_JW-META-HASH _JW _EXT4-JWR.META-HASH + !",
             (
-                "_JW _EXT4-JWR.CP-DATA-RANGES + @ "
+                "_JW _EXT4-JWR.CP-DELETE-RANGES + @ "
                 "CONSTANT _JW-CP-RANGES"
             ),
             (
-                "_JW _EXT4-JWR.CP-DATA-RANGE-CAP + @ "
+                "_JW _EXT4-JWR.CP-DELETE-RANGE-CAP + @ "
                 "CONSTANT _JW-CP-RANGE-CAP"
             ),
-            "1 _JW _EXT4-JWR.CP-DATA-RANGES + !",
+            "1 _JW _EXT4-JWR.CP-DELETE-RANGES + !",
             (
                 "3 3 3 _JW-CTX _EXT4-JWR-ENSURE "
                 "CONSTANT _JW-BAD-CP-PTR-IOR CONSTANT _JW-BAD-CP-PTR"
             ),
-            "_JW-CP-RANGES _JW _EXT4-JWR.CP-DATA-RANGES + !",
-            "0 _JW _EXT4-JWR.CP-DATA-RANGE-CAP + !",
+            "_JW-CP-RANGES _JW _EXT4-JWR.CP-DELETE-RANGES + !",
+            "0 _JW _EXT4-JWR.CP-DELETE-RANGE-CAP + !",
             (
                 "3 3 3 _JW-CTX _EXT4-JWR-ENSURE "
                 "CONSTANT _JW-BAD-CP-CAP-IOR CONSTANT _JW-BAD-CP-CAP"
             ),
             (
                 "_JW-CP-RANGE-CAP "
-                "_JW _EXT4-JWR.CP-DATA-RANGE-CAP + !"
+                "_JW _EXT4-JWR.CP-DELETE-RANGE-CAP + !"
             ),
             "4 _JW _EXT4-JWR.META-USED + !",
             "_JW _EXT4-JTX-ABORT CONSTANT _JW-COUNT-IOR",
@@ -7228,8 +7541,8 @@ def test_jbd2_writer_arithmetic_and_4k_geometry_are_total(
                 "_JWG-4K-IOR 0= "
                 "_JWG-4K-BYTES _EXT4-JWR-SIZE 8192 + 342 2* CELLS + = AND "
                 "_JWG-W-IOR 0= AND _JWG-W 0<> AND "
-                "_JWG-W _EXT4-JWR.CP-DATA-RANGE-CAP + @ 342 = AND "
-                "_JWG-W _EXT4-JWR-CP-DATA-RANGES "
+                "_JWG-W _EXT4-JWR.CP-DELETE-RANGE-CAP + @ 342 = AND "
+                "_JWG-W _EXT4-JWR-CP-DELETE-RANGES "
                 "_JWG-W _EXT4-JWR.SCRATCH-B + @ 4096 + = AND "
                 "_JWG-W _EXT4-JTX-TAGS/BLOCK 254 = AND "
                 "_JWG-W _EXT4-JTX-REVOKES/BLOCK 509 = AND "
@@ -14382,11 +14695,6 @@ def test_typed_unlinked_orphan_inode_release_stages_exact_accounting(
             ),
             "DEPTH CONSTANT _UI-DEPTH-AFTER-STAGE",
             (
-                "_UI-RECORD _UI-TX _EXT4-JFD-VERIFY-STAGED "
-                "CONSTANT _UI-VERIFY-IOR"
-            ),
-            "DEPTH CONSTANT _UI-DEPTH-AFTER-VERIFY",
-            (
                 _forth_conjunction(
                     [
                         (
@@ -14414,22 +14722,17 @@ def test_typed_unlinked_orphan_inode_release_stages_exact_accounting(
                         "_UI-WRITER-IOR 0=",
                         "_UI-BEGIN-IOR 0=",
                         "_UI-STAGE-IOR 0=",
-                        "_UI-VERIFY-IOR 0=",
                         (
                             "_UI-DEPTH-BEFORE-STAGE "
                             "_UI-DEPTH-AFTER-STAGE ="
-                        ),
-                        (
-                            "_UI-DEPTH-BEFORE-STAGE "
-                            "_UI-DEPTH-AFTER-VERIFY ="
                         ),
                         "_UI-WRITER _EXT4-JWR.META-USED + @ 4 =",
                         "_UI-WRITER _EXT4-JWR.META-ACTIVE + @ 4 =",
                         "_UI-WRITER _EXT4-JWR.CP-MODE + @ 0=",
                         "_UI-WRITER _EXT4-JTX-TABLES-VALID?",
-                        "_EXT4-JFC-INODE-BITMAP-HOME @ 267 =",
-                        "_EXT4-JFC-INODE-GDT-HOME @ 2 =",
-                        "_EXT4-JFC-INODE-GDT-OFF @ 0=",
+                        "_EXT4-JFI-BITMAP-HOME @ 267 =",
+                        "_EXT4-JFI-GDT-HOME @ 2 =",
+                        "_EXT4-JFI-GDT-OFF @ 0=",
                         "_UI-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                         "_UI-CTX _EXT4-C.FREE-INODES + @ 4078 =",
                     ]
@@ -14490,7 +14793,7 @@ def test_unlinked_cleanup_rejects_target_crc_substitution_prehome(
             "_DC-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _DC-JOURNAL-IOR",
             (
                 "_DC-RECORD _DC-CTX "
-                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _DC-MEASURE-IOR CONSTANT _DC-CREDIT"
             ),
             "-1 _DC-CTX _EXT4-C.J.WRITER-CURRENT + !",
@@ -14508,7 +14811,7 @@ def test_unlinked_cleanup_rejects_target_crc_substitution_prehome(
             ),
             (
                 "_DC-RECORD _DC-TX "
-                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "_EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                 "CONSTANT _DC-STAGE-IOR"
             ),
             "_DC-TX _EXT4-JTX-EMIT CONSTANT _DC-EMIT-IOR",
@@ -14608,7 +14911,7 @@ def test_unlinked_singleton_cleanup_measures_and_seals_exact_certificate(
             "_US-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _US-JOURNAL-IOR",
             (
                 "_US-RECORD _US-CTX "
-                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _US-MEASURE-IOR CONSTANT _US-CREDIT"
             ),
             (
@@ -14627,7 +14930,7 @@ def test_unlinked_singleton_cleanup_measures_and_seals_exact_certificate(
             "DEPTH CONSTANT _US-DEPTH-BEFORE-STAGE",
             (
                 "_US-RECORD _US-TX "
-                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "_EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                 "CONSTANT _US-STAGE-IOR"
             ),
             "DEPTH CONSTANT _US-DEPTH-AFTER-STAGE",
@@ -14821,7 +15124,7 @@ def test_single_extent_unlinked_cleanup_measures_and_seals_exact_certificate(
             "_UD-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _UD-JOURNAL-IOR",
             (
                 "_UD-RECORD _UD-CTX "
-                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _UD-MEASURE-IOR CONSTANT _UD-CREDIT"
             ),
             (
@@ -14840,7 +15143,7 @@ def test_single_extent_unlinked_cleanup_measures_and_seals_exact_certificate(
             "DEPTH CONSTANT _UD-DEPTH-BEFORE-STAGE",
             (
                 "_UD-RECORD _UD-TX "
-                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "_EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                 "CONSTANT _UD-STAGE-IOR"
             ),
             "DEPTH CONSTANT _UD-DEPTH-AFTER-STAGE",
@@ -14906,7 +15209,7 @@ def test_single_extent_unlinked_cleanup_measures_and_seals_exact_certificate(
                             "_UD-WRITER _EXT4-JWR.CP-TARGET-CRC + @ "
                             f"{expected_target_crc} ="
                         ),
-                        *_forth_cp_data_vector_checks(
+                        *_forth_cp_delete_vector_checks(
                             "_UD-WRITER",
                             ((data_block, data_count),),
                         ),
@@ -15027,21 +15330,23 @@ def _assert_unlinked_external_xattr_cleanup_seals_exact_release_authority(
             "_UX-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _UX-JOURNAL-IOR",
             "_EXT4-JFO-CERT-BEGIN CONSTANT _UX-CERT-BEGIN-IOR",
             (
-                "_UX-RECORD _UX-CTX _EXT4-MEASURE-ORPHAN-DEPTH0 "
-                "CONSTANT _UX-MEASURE-IOR CONSTANT _UX-CREDIT"
+                "_UX-RECORD _UX-CTX _EXT4-MEASURE-ORPHAN-CLEANUP "
+                "CONSTANT _UX-MEASURE-IOR CONSTANT _UX-REVOKE "
+                "CONSTANT _UX-CREDIT"
             ),
             "-1 _UX-CTX _EXT4-C.J.WRITER-CURRENT + !",
             (
-                "_UX-CREDIT 0 0 _UX-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "_UX-CREDIT 0 _UX-REVOKE _UX-CTX "
+                "_EXT4-JWR-ALLOCATE-MOUNT "
                 "CONSTANT _UX-WRITER-IOR CONSTANT _UX-WRITER"
             ),
             (
-                "_UX-CREDIT 0 0 _UX-WRITER _EXT4-JTX-BEGIN "
+                "_UX-CREDIT 0 _UX-REVOKE _UX-WRITER _EXT4-JTX-BEGIN "
                 "CONSTANT _UX-BEGIN-IOR CONSTANT _UX-TX"
             ),
             "DEPTH CONSTANT _UX-DEPTH-BEFORE",
             (
-                "_UX-RECORD _UX-TX _EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "_UX-RECORD _UX-TX _EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                 "CONSTANT _UX-STAGE-IOR"
             ),
             "DEPTH CONSTANT _UX-DEPTH-AFTER",
@@ -15063,6 +15368,7 @@ def _assert_unlinked_external_xattr_cleanup_seals_exact_release_authority(
                         "_UX-CERT-BEGIN-IOR 0=",
                         "_UX-MEASURE-IOR 0=",
                         f"_UX-CREDIT {expected_credit} =",
+                        "_UX-REVOKE 1 =",
                         "_UX-WRITER-IOR 0=",
                         "_UX-BEGIN-IOR 0=",
                         "_UX-STAGE-IOR 0=",
@@ -15076,6 +15382,27 @@ def _assert_unlinked_external_xattr_cleanup_seals_exact_release_authority(
                             f"{expected_credit} ="
                         ),
                         (
+                            "_UX-WRITER _EXT4-JWR.REVOKE-CREDIT + @ "
+                            "_UX-REVOKE ="
+                        ),
+                        (
+                            "_UX-WRITER _EXT4-JWR.REVOKE-USED + @ "
+                            "_UX-REVOKE ="
+                        ),
+                        (
+                            "_UX-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ "
+                            "_UX-REVOKE ="
+                        ),
+                        (
+                            "0 _UX-WRITER _EXT4-JWR-REVOKE-ENTRY @ "
+                            f"{xattr_block} ="
+                        ),
+                        (
+                            "0 _UX-WRITER _EXT4-JWR-REVOKE-ENTRY "
+                            "CELL+ @ _EXT4-JE-ACTIVE ="
+                        ),
+                        "_UX-WRITER _EXT4-JFI-REVOKES-EXACT?",
+                        (
                             "_UX-WRITER _EXT4-JWR.CP-MODE + @ "
                             f"{expected_mode} ="
                         ),
@@ -15087,7 +15414,7 @@ def _assert_unlinked_external_xattr_cleanup_seals_exact_release_authority(
                             "_UX-WRITER _EXT4-JWR.CP-DATA-MAP-KIND + @ "
                             f"{expected_data_map_kind} ="
                         ),
-                        *_forth_cp_data_vector_checks(
+                        *_forth_cp_delete_vector_checks(
                             "_UX-WRITER",
                             data_ranges,
                         ),
@@ -15241,7 +15568,7 @@ def test_shared_external_xattr_cleanup_seals_refcount_decrement(
             "_SX-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _SX-JOURNAL-IOR",
             "_EXT4-JFO-CERT-BEGIN CONSTANT _SX-CERT-BEGIN-IOR",
             (
-                "_SX-RECORD _SX-CTX _EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "_SX-RECORD _SX-CTX _EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _SX-MEASURE-IOR CONSTANT _SX-CREDIT"
             ),
             (
@@ -15258,7 +15585,7 @@ def test_shared_external_xattr_cleanup_seals_refcount_decrement(
                 "CONSTANT _SX-BEGIN-IOR CONSTANT _SX-TX"
             ),
             (
-                "_SX-RECORD _SX-TX _EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "_SX-RECORD _SX-TX _EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                 "CONSTANT _SX-STAGE-IOR"
             ),
             (
@@ -15322,7 +15649,7 @@ def test_shared_external_xattr_cleanup_seals_refcount_decrement(
                             "_SX-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ "
                             f"{len(data_ranges)} ="
                         ),
-                        *_forth_cp_data_vector_checks(
+                        *_forth_cp_delete_vector_checks(
                             "_SX-WRITER",
                             data_ranges,
                         ),
@@ -15439,7 +15766,7 @@ def test_shared_external_xattr_semantic_verifier_rejects_coherent_hash_tamper(
             "_XT-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _XT-JOURNAL-IOR",
             "_EXT4-JFO-CERT-BEGIN CONSTANT _XT-CERT-BEGIN-IOR",
             (
-                "_XT-RECORD _XT-CTX _EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "_XT-RECORD _XT-CTX _EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _XT-MEASURE-IOR CONSTANT _XT-CREDIT"
             ),
             "-1 _XT-CTX _EXT4-C.J.WRITER-CURRENT + !",
@@ -15452,7 +15779,7 @@ def test_shared_external_xattr_semantic_verifier_rejects_coherent_hash_tamper(
                 "CONSTANT _XT-BEGIN-IOR CONSTANT _XT-TX"
             ),
             (
-                "_XT-RECORD _XT-TX _EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "_XT-RECORD _XT-TX _EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                 "CONSTANT _XT-STAGE-IOR"
             ),
             (
@@ -16697,6 +17024,7 @@ _MULTI_ORPHAN_RECOVERY_MAX_STEPS = 1_500_000_000
 _MULTI_ORPHAN_DATA_RECOVERY_MAX_STEPS = 3_000_000_000
 _EXTERNAL_XATTR_RECOVERY_MAX_STEPS = 1_500_000_000
 _LEGACY_DIRECT_RECOVERY_MAX_STEPS = 1_300_000_000
+_ONE_EXTENT_LEAF_RECOVERY_MAX_STEPS = 1_800_000_000
 
 
 _MULTI_EMPTY_ORPHAN_CASES = (
@@ -16760,7 +17088,7 @@ def test_linked_legacy_head_with_successor_stages_exact_more_transaction(
             ),
             "_LM-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _LM-JOURNAL-IOR",
             (
-                "_LM-RECORD _LM-CTX _EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "_LM-RECORD _LM-CTX _EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _LM-MEASURE-IOR CONSTANT _LM-CREDIT"
             ),
             (
@@ -16778,7 +17106,7 @@ def test_linked_legacy_head_with_successor_stages_exact_more_transaction(
             ),
             "DEPTH CONSTANT _LM-DEPTH-BEFORE-STAGE",
             (
-                "_LM-RECORD _LM-TX _EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "_LM-RECORD _LM-TX _EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                 "CONSTANT _LM-STAGE-IOR"
             ),
             "DEPTH CONSTANT _LM-DEPTH-AFTER-STAGE",
@@ -16897,7 +17225,7 @@ def test_linked_legacy_head_with_successor_stages_exact_more_transaction(
                             "_LM-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + "
                             f"@ {extent_count} ="
                         ),
-                        *_forth_cp_data_vector_checks("_LM-WRITER", ()),
+                        *_forth_cp_delete_vector_checks("_LM-WRITER", ()),
                         "_LM-WRITER _EXT4-JWR.CP-PRE-ACTIVE + @ 2 =",
                         "_LM-WRITER _EXT4-JWR.CP-PRE-MODERN + @ 0=",
                         "_LM-WRITER _EXT4-JWR.CP-PRE-LEGACY + @ 2 =",
@@ -17005,7 +17333,7 @@ def test_linked_modern_head_with_successor_stages_exact_more_transaction(
             ),
             "_MM-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _MM-JOURNAL-IOR",
             (
-                "_MM-RECORD _MM-CTX _EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "_MM-RECORD _MM-CTX _EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _MM-MEASURE-IOR CONSTANT _MM-CREDIT"
             ),
             (
@@ -17023,7 +17351,7 @@ def test_linked_modern_head_with_successor_stages_exact_more_transaction(
             ),
             "DEPTH CONSTANT _MM-DEPTH-BEFORE-STAGE",
             (
-                "_MM-RECORD _MM-TX _EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "_MM-RECORD _MM-TX _EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                 "CONSTANT _MM-STAGE-IOR"
             ),
             "DEPTH CONSTANT _MM-DEPTH-AFTER-STAGE",
@@ -17148,7 +17476,7 @@ def test_linked_modern_head_with_successor_stages_exact_more_transaction(
                             f"{expected_target_crc} ="
                         ),
                         "_MM-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ 1 =",
-                        *_forth_cp_data_vector_checks("_MM-WRITER", ()),
+                        *_forth_cp_delete_vector_checks("_MM-WRITER", ()),
                         "_MM-WRITER _EXT4-JWR.CP-PRE-ACTIVE + @ 2 =",
                         "_MM-WRITER _EXT4-JWR.CP-PRE-MODERN + @ 2 =",
                         "_MM-WRITER _EXT4-JWR.CP-PRE-LEGACY + @ 0=",
@@ -17308,7 +17636,7 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
     if modern and map_format == "extents":
         structural_mutation_lines = [
             (
-                "_DM-WRITER _EXT4-JWR.CP-DATA-BLOCKS + "
+                "_DM-WRITER _EXT4-JWR.CP-DELETE-BLOCKS + "
                 "DUP @ 1+ SWAP !"
             ),
             (
@@ -17321,9 +17649,9 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
             ),
             (
                 f"{len(data_blocks)} _DM-WRITER "
-                "_EXT4-JWR.CP-DATA-BLOCKS + !"
+                "_EXT4-JWR.CP-DELETE-BLOCKS + !"
             ),
-            "0 _DM-WRITER _EXT4-JWR-CP-DATA-RANGE @ 1+ _DM-LAST-RANGE @ !",
+            "0 _DM-WRITER _EXT4-JWR-CP-DELETE-RANGE @ 1+ _DM-LAST-RANGE @ !",
             (
                 "_DM-WRITER _EXT4-JWR-CP-AUTHORITY? "
                 "CONSTANT _DM-OVERLAP-AUTHORITY"
@@ -17333,7 +17661,7 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                 "CONSTANT _DM-OVERLAP-VALID"
             ),
             "_DM-LAST-FIRST _DM-LAST-RANGE @ !",
-            "2 _DM-WRITER _EXT4-JWR-CP-DATA-RANGE CONSTANT _DM-TAIL-RANGE",
+            "2 _DM-WRITER _EXT4-JWR-CP-DELETE-RANGE CONSTANT _DM-TAIL-RANGE",
             "1 _DM-TAIL-RANGE !",
             (
                 "_DM-WRITER _EXT4-JWR-CP-AUTHORITY? "
@@ -17344,7 +17672,7 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                 "CONSTANT _DM-TAIL-VALID"
             ),
             "0 _DM-TAIL-RANGE !",
-            "5 _DM-WRITER _EXT4-JWR.CP-DATA-RANGE-COUNT + !",
+            "5 _DM-WRITER _EXT4-JWR.CP-DELETE-RANGE-COUNT + !",
             (
                 "_DM-WRITER _EXT4-JWR-CP-AUTHORITY? "
                 "CONSTANT _DM-COUNT-AUTHORITY"
@@ -17353,7 +17681,7 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                 "_DM-WRITER _EXT4-JWR-VALID? "
                 "CONSTANT _DM-COUNT-VALID"
             ),
-            "2 _DM-WRITER _EXT4-JWR.CP-DATA-RANGE-COUNT + !",
+            "2 _DM-WRITER _EXT4-JWR.CP-DELETE-RANGE-COUNT + !",
             "3 _DM-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + !",
             (
                 "_DM-WRITER _EXT4-JWR-CP-AUTHORITY? "
@@ -17401,14 +17729,14 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                 "_EXT4-JWR.CP-DATA-MAP-KIND + !"
             ),
             (
-                "0 _DM-WRITER _EXT4-JWR-CP-DATA-RANGE CELL+ "
+                "0 _DM-WRITER _EXT4-JWR-CP-DELETE-RANGE CELL+ "
                 "DUP @ 1+ SWAP !"
             ),
             (
                 "_DM-WRITER _EXT4-JWR-CP-AUTHORITY? "
                 "CONSTANT _DM-SINGLETON-AUTHORITY"
             ),
-            "1 0 _DM-WRITER _EXT4-JWR-CP-DATA-RANGE CELL+ !",
+            "1 0 _DM-WRITER _EXT4-JWR-CP-DELETE-RANGE CELL+ !",
             (
                 "_DM-WRITER _EXT4-JWR-VALID? "
                 "CONSTANT _DM-STRUCTURAL-RESTORED"
@@ -17439,7 +17767,7 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
             "_DM-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _DM-JOURNAL-IOR",
             "_EXT4-JFO-CERT-BEGIN CONSTANT _DM-CERT-BEGIN-IOR",
             (
-                "_DM-RECORD _DM-CTX _EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "_DM-RECORD _DM-CTX _EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _DM-MEASURE-IOR CONSTANT _DM-CREDIT"
             ),
             (
@@ -17457,7 +17785,7 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
             ),
             "DEPTH CONSTANT _DM-DEPTH-BEFORE-STAGE",
             (
-                "_DM-RECORD _DM-TX _EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "_DM-RECORD _DM-TX _EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                 "CONSTANT _DM-STAGE-IOR"
             ),
             "DEPTH CONSTANT _DM-DEPTH-AFTER-STAGE",
@@ -17471,7 +17799,7 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
             ),
             (
                 f"{len(data_ranges) - 1} _DM-WRITER "
-                "_EXT4-JWR-CP-DATA-RANGE DUP _DM-LAST-RANGE ! @ "
+                "_EXT4-JWR-CP-DELETE-RANGE DUP _DM-LAST-RANGE ! @ "
                 "CONSTANT _DM-LAST-FIRST"
             ),
             *structural_mutation_lines,
@@ -17600,7 +17928,7 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                             "_DM-WRITER _EXT4-JWR.CP-DATA-MAP-KIND + @ "
                             f"{expected_data_map_kind} ="
                         ),
-                        *_forth_cp_data_vector_checks(
+                        *_forth_cp_delete_vector_checks(
                             "_DM-WRITER",
                             data_ranges,
                         ),
@@ -17659,7 +17987,7 @@ def _assert_data_bearing_unlinked_head_stages_exact_delete_more_transaction(
                         "_DM-WRITER _EXT4-JWR.META-USED + @ 0=",
                         "_DM-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
                         "_DM-WRITER _EXT4-JWR.CP-MODE + @ 0=",
-                        *_forth_cp_data_vector_checks("_DM-WRITER", ()),
+                        *_forth_cp_delete_vector_checks("_DM-WRITER", ()),
                         "_EXT4-JFO-CERT-SCOPE @ 0=",
                         "_EXT4-JFO-CERT-VALID @ 0=",
                         *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
@@ -17817,8 +18145,8 @@ def test_legacy_direct_decoder_compacts_sparse_slots_in_order(
     for index, (physical, count) in enumerate(direct_ranges):
         range_checks.extend(
             (
-                f"{index} _EXT4-JFI-DATA-RANGE @ {physical} =",
-                f"{index} _EXT4-JFI-DATA-RANGE CELL+ @ {count} =",
+                f"{index} _EXT4-JFI-RANGE @ {physical} =",
+                f"{index} _EXT4-JFI-RANGE CELL+ @ {count} =",
             )
         )
 
@@ -17913,7 +18241,7 @@ def test_modern_selection_and_staged_proof_are_cache_independent(
             ),
             "_HM-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _HM-JOURNAL-IOR",
             (
-                "_HM-HIGHER _HM-CTX _EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "_HM-HIGHER _HM-CTX _EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _HM-MEASURE-IOR CONSTANT _HM-CREDIT"
             ),
             (
@@ -17931,7 +18259,7 @@ def test_modern_selection_and_staged_proof_are_cache_independent(
             ),
             "DEPTH CONSTANT _HM-DEPTH-BEFORE-STAGE",
             (
-                "_HM-HIGHER _HM-TX _EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "_HM-HIGHER _HM-TX _EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                 "CONSTANT _HM-STAGE-IOR"
             ),
             "DEPTH CONSTANT _HM-DEPTH-AFTER-STAGE",
@@ -17945,7 +18273,7 @@ def test_modern_selection_and_staged_proof_are_cache_independent(
             ),
             (
                 "_HM-SELECTED _HM-SELECT-TX "
-                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "_EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                 "CONSTANT _HM-SELECT-STAGE-IOR"
             ),
             (
@@ -22522,12 +22850,12 @@ def test_singleton_legacy_depth0_credit_and_final_seal(
             "_LF-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _LF-JOURNAL-IOR",
             (
                 "_LF-RECORD _LF-CTX "
-                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _LF-MEASURE1-IOR CONSTANT _LF-CREDIT1"
             ),
             (
                 "_LF-RECORD _LF-CTX "
-                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _LF-MEASURE2-IOR CONSTANT _LF-CREDIT2"
             ),
             (
@@ -22546,7 +22874,7 @@ def test_singleton_legacy_depth0_credit_and_final_seal(
             ),
             (
                 "_LF-RECORD _LF-TX "
-                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "_EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                 "CONSTANT _LF-STAGE-IOR"
             ),
             (
@@ -22915,8 +23243,8 @@ def test_unlinked_preflight_accepts_depth1_orphan_file_map(
                         "_OU-PREFLIGHT-IOR 0=",
                         "_OU-DEPTH-BEFORE _OU-DEPTH-AFTER =",
                         "_EXT4-JFI-DATA-ENTRIES @ 1 =",
-                        f"0 _EXT4-JFI-DATA-RANGE @ {data_block} =",
-                        "0 _EXT4-JFI-DATA-RANGE CELL+ @ 1 =",
+                        f"0 _EXT4-JFI-RANGE @ {data_block} =",
+                        "0 _EXT4-JFI-RANGE CELL+ @ 1 =",
                         "_EXT4-JFI-DATA-BLOCKS @ 1 =",
                         "_EXT4-OV-BLOCKS @ 31 =",
                         "_EXT4-OFR-EA @ 0=",
@@ -22955,6 +23283,674 @@ def test_unlinked_preflight_accepts_depth1_orphan_file_map(
     )
     _assert_emitted(output, "EXT4-DEPTH1-ORPHAN-FILE-JFI-PREFLIGHT")
     _assert_emitted(output, "EXT4-DEPTH1-ORPHAN-FILE-JFI-CLEAN")
+
+
+def test_unlinked_preflight_accepts_one_external_extent_leaf(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches, data_ranges, leaf_block = (
+        _depth1_one_leaf_unlinked_orphan_patches(
+            path,
+            protocol="modern",
+        )
+    )
+    range_checks: list[str] = []
+    for index, (physical, count) in enumerate(
+        (*data_ranges, (leaf_block, 1))
+    ):
+        range_checks.extend(
+            (
+                f"{index} _EXT4-JFI-RANGE @ {physical} =",
+                f"{index} _EXT4-JFI-RANGE CELL+ @ {count} =",
+                f"{index} _EXT4-JFO-CERT-RANGE @ {physical} =",
+                f"{index} _EXT4-JFO-CERT-RANGE CELL+ @ {count} =",
+            )
+        )
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _DL-IOR CONSTANT _DL-V"
+            ),
+            "_DL-V _EXT4-CTX CONSTANT _DL-CTX",
+            (
+                "_DL-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _DL-FIND-IOR CONSTANT _DL-RECORD"
+            ),
+            "_DL-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _DL-JOURNAL-IOR",
+            "_EXT4-JFO-CERT-BEGIN CONSTANT _DL-CERT-BEGIN-IOR",
+            "_DL-RECORD _EXT4-JFI-RECORD !",
+            "_DL-CTX _EXT4-JFI-CTX !",
+            "DEPTH CONSTANT _DL-DEPTH-BEFORE",
+            "_EXT4-JFI-AUTH-PREFLIGHT CONSTANT _DL-PREFLIGHT-IOR",
+            "DEPTH CONSTANT _DL-DEPTH-AFTER",
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_DL-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_DL-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_DL-FIND-IOR 0=",
+                        "_DL-JOURNAL-IOR 0=",
+                        "_DL-CERT-BEGIN-IOR 0=",
+                        "_DL-RECORD _EXT4-OE.INO + @ 18 =",
+                        "_DL-PREFLIGHT-IOR 0=",
+                        "_DL-DEPTH-BEFORE _DL-DEPTH-AFTER =",
+                        (
+                            "_EXT4-JFI-DATA-MAP-KIND @ "
+                            "_EXT4-JDM-DEPTH1-ONELEAF ="
+                        ),
+                        f"_EXT4-JFI-DATA-ENTRIES @ {len(data_ranges)} =",
+                        "_EXT4-JFI-DATA-BLOCKS @ 3 =",
+                        "_EXT4-JFI-MAP-ENTRIES @ 1 =",
+                        "_EXT4-JFI-MAP-BLOCKS @ 1 =",
+                        f"_EXT4-JFI-MAP-HOME @ {leaf_block} =",
+                        f"_EXT4-JFI-RANGE-COUNT {len(data_ranges) + 1} =",
+                        "_EXT4-JFI-RANGE-BLOCKS 4 =",
+                        "_EXT4-JFI-ACCOUNTED-BLOCKS 4 =",
+                        "_EXT4-JFI-RELEASE-BLOCKS 4 =",
+                        *range_checks,
+                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
+                        "_EXT4-JFO-CERT-VALID @ 0<>",
+                        (
+                            "_EXT4-JFO-CERT-KIND @ "
+                            "_EXT4-JFO-CERT-JFI ="
+                        ),
+                        (
+                            "_EXT4-JFO-CERT-DATA-MAP-KIND @ "
+                            "_EXT4-JDM-DEPTH1-ONELEAF ="
+                        ),
+                        (
+                            "_EXT4-JFO-CERT-RANGE-COUNT @ "
+                            f"{len(data_ranges) + 1} ="
+                        ),
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                        "_DL-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-DEPTH1-ONELEAF-JFI-PREFLIGHT" THEN'
+            ),
+            "_EXT4-JFO-CERT-END",
+            (
+                _forth_conjunction(
+                    [
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                        "_DL-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-DEPTH1-ONELEAF-JFI-CLEAN" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-DEPTH1-ONELEAF-JFI-PREFLIGHT")
+    _assert_emitted(output, "EXT4-DEPTH1-ONELEAF-JFI-CLEAN")
+
+
+def test_one_external_extent_leaf_has_no_legacy_twelve_range_cap(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    extent_specs = tuple(
+        (index * 2, 1, bool(index & 1)) for index in range(13)
+    )
+    patches, data_ranges, leaf_block = (
+        _depth1_one_leaf_unlinked_orphan_patches(
+            path,
+            protocol="modern",
+            extent_specs=extent_specs,
+            size_bytes=(1 << 32) + 777,
+        )
+    )
+    assert len(data_ranges) == 13
+    assert all(count == 1 for _, count in data_ranges)
+    patch_map = dict(patches)
+    superblock = patch_map[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    _, _, inode_offset = _ext4_inode_record(path, 18)
+    inode = patch_map[inode_offset]
+    leaf = patch_map[leaf_block * block_size]
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (0xF30A, 1, 4, 1)
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 28
+    assert struct.unpack_from("<HHHH", leaf, 0) == (0xF30A, 13, 84, 0)
+
+    range_checks: list[str] = []
+    for index, (physical, count) in enumerate(
+        (*data_ranges, (leaf_block, 1))
+    ):
+        range_checks.extend(
+            (
+                f"{index} _EXT4-JFI-RANGE @ {physical} =",
+                f"{index} _EXT4-JFI-RANGE CELL+ @ {count} =",
+                f"{index} _EXT4-JFO-CERT-RANGE @ {physical} =",
+                f"{index} _EXT4-JFO-CERT-RANGE CELL+ @ {count} =",
+            )
+        )
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _D13-IOR CONSTANT _D13-V"
+            ),
+            "_D13-V _EXT4-CTX CONSTANT _D13-CTX",
+            (
+                "_D13-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _D13-FIND-IOR CONSTANT _D13-RECORD"
+            ),
+            "_EXT4-JFO-CERT-BEGIN CONSTANT _D13-CERT-BEGIN-IOR",
+            "_D13-RECORD _EXT4-JFI-RECORD !",
+            "_D13-CTX _EXT4-JFI-CTX !",
+            "DEPTH CONSTANT _D13-DEPTH-BEFORE",
+            "_EXT4-JFI-AUTH-PREFLIGHT CONSTANT _D13-PREFLIGHT-IOR",
+            "DEPTH CONSTANT _D13-DEPTH-AFTER",
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_D13-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        "_D13-FIND-IOR 0=",
+                        "_D13-CERT-BEGIN-IOR 0=",
+                        "_D13-PREFLIGHT-IOR 0=",
+                        "_D13-DEPTH-BEFORE _D13-DEPTH-AFTER =",
+                        (
+                            "_EXT4-JFI-DATA-MAP-KIND @ "
+                            "_EXT4-JDM-DEPTH1-ONELEAF ="
+                        ),
+                        "_EXT4-JFI-DATA-ENTRIES @ 13 =",
+                        "_EXT4-JFI-DATA-BLOCKS @ 13 =",
+                        "_EXT4-JFI-MAP-ENTRIES @ 1 =",
+                        f"_EXT4-JFI-MAP-HOME @ {leaf_block} =",
+                        "_EXT4-JFI-RANGE-COUNT 14 =",
+                        "_EXT4-JFI-RANGE-BLOCKS 14 =",
+                        "_EXT4-JFI-RELEASE-RANGE-COUNT 14 =",
+                        "_EXT4-JFI-RELEASE-BLOCKS 14 =",
+                        "_D13-CTX _EXT4-C.MUTATION-RANGE-CAP + @ 86 =",
+                        "_EXT4-JFO-CERT-RANGE-COUNT @ 14 =",
+                        *range_checks,
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_D13-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-DEPTH1-ONELEAF-THIRTEEN-RANGES" THEN'
+            ),
+            "_EXT4-JFO-CERT-END",
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-DEPTH1-ONELEAF-THIRTEEN-RANGES")
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_reason", "expected_detail"),
+    (
+        pytest.param(
+            "two-root-indexes",
+            "VFS-R-UNSUPPORTED",
+            "EXT4-D-RECOVERY",
+            id="two-root-indexes",
+        ),
+        pytest.param(
+            "leaf-data-alias",
+            "VFS-R-CORRUPT",
+            "EXT4-D-DATA-MAP",
+            id="leaf-data-alias",
+        ),
+        pytest.param(
+            "other-inode-owns-leaf",
+            "VFS-R-CORRUPT",
+            "EXT4-D-DATA-MAP",
+            id="other-inode-owns-leaf",
+        ),
+    ),
+)
+def test_unlinked_preflight_rejects_malformed_one_external_extent_leaf(
+    canonical_images: dict[str, Path],
+    case: str,
+    expected_reason: str,
+    expected_detail: str,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches, _, _ = _malformed_depth1_one_leaf_unlinked_orphan_patches(
+        path,
+        case,
+    )
+    marker = f"EXT4-DEPTH1-ONELEAF-{case.upper()}-REJECTED"
+    clean_marker = f"EXT4-DEPTH1-ONELEAF-{case.upper()}-CLEAN"
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _D1R-MOUNT-IOR CONSTANT _D1R-V"
+            ),
+            "_D1R-V _EXT4-CTX CONSTANT _D1R-CTX",
+            (
+                "_D1R-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _D1R-FIND-IOR CONSTANT _D1R-RECORD"
+            ),
+            "_D1R-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _D1R-JOURNAL-IOR",
+            "_EXT4-JFO-CERT-BEGIN CONSTANT _D1R-CERT-BEGIN-IOR",
+            "_D1R-RECORD _EXT4-JFI-RECORD !",
+            "_D1R-CTX _EXT4-JFI-CTX !",
+            "DEPTH CONSTANT _D1R-DEPTH-BEFORE",
+            "_EXT4-JFI-AUTH-PREFLIGHT CONSTANT _D1R-PREFLIGHT-IOR",
+            "DEPTH CONSTANT _D1R-DEPTH-AFTER",
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_D1R-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_D1R-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_D1R-FIND-IOR 0=",
+                        "_D1R-JOURNAL-IOR 0=",
+                        "_D1R-CERT-BEGIN-IOR 0=",
+                        "_D1R-RECORD _EXT4-OE.INO + @ 18 =",
+                        (
+                            "_D1R-PREFLIGHT-IOR VFS-IOR-REASON "
+                            f"{expected_reason} ="
+                        ),
+                        (
+                            "_D1R-PREFLIGHT-IOR VFS-IOR-DETAIL "
+                            f"{expected_detail} ="
+                        ),
+                        "_D1R-DEPTH-BEFORE _D1R-DEPTH-AFTER =",
+                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                        "_D1R-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+            "_EXT4-JFO-CERT-END",
+            (
+                _forth_conjunction(
+                    [
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                        "_D1R-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + f' IF ." {clean_marker}" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, marker)
+    _assert_emitted(output, clean_marker)
+
+
+@pytest.mark.parametrize("protocol", ("modern", "legacy"))
+def test_one_external_extent_leaf_stages_exact_revoke(
+    canonical_images: dict[str, Path],
+    protocol: str,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches, data_ranges, leaf_block = (
+        _depth1_one_leaf_unlinked_orphan_patches(
+            path,
+            protocol=protocol,
+        )
+    )
+    marker = f"EXT4-DEPTH1-ONELEAF-{protocol.upper()}-STAGED"
+    clean_marker = f"EXT4-DEPTH1-ONELEAF-{protocol.upper()}-ABORT-CLEAN"
+    cp_range_checks: list[str] = []
+    for index, (physical, count) in enumerate(
+        (*data_ranges, (leaf_block, 1))
+    ):
+        cp_range_checks.extend(
+            (
+                (
+                    f"{index} _DS-WRITER _EXT4-JWR-CP-DELETE-RANGE @ "
+                    f"{physical} ="
+                ),
+                (
+                    f"{index} _DS-WRITER _EXT4-JWR-CP-DELETE-RANGE "
+                    f"CELL+ @ {count} ="
+                ),
+            )
+        )
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            "T-ARENA CONSTANT _DS-ARENA",
+            (
+                "_DS-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _DS-MOUNT-IOR CONSTANT _DS-V"
+            ),
+            "_DS-V _EXT4-CTX CONSTANT _DS-CTX",
+            (
+                "_DS-CTX _EXT4-FIND-SELECTED-ORPHAN "
+                "CONSTANT _DS-FIND-IOR CONSTANT _DS-RECORD"
+            ),
+            "_DS-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _DS-JOURNAL-IOR",
+            "_EXT4-JFO-CERT-BEGIN CONSTANT _DS-CERT-BEGIN-IOR",
+            (
+                "_DS-RECORD _DS-CTX _EXT4-MEASURE-ORPHAN-CLEANUP "
+                "CONSTANT _DS-MEASURE-IOR CONSTANT _DS-REVOKE "
+                "CONSTANT _DS-META"
+            ),
+            (
+                "_DS-META 0 _DS-REVOKE _DS-CTX "
+                "_EXT4-JTX-PREFLIGHT-CAPACITY CONSTANT _DS-CAPACITY-IOR"
+            ),
+            "-1 _DS-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "_DS-META 0 _DS-REVOKE _DS-CTX "
+                "_EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _DS-WRITER-IOR CONSTANT _DS-WRITER"
+            ),
+            (
+                "_DS-META 0 _DS-REVOKE _DS-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _DS-BEGIN-IOR CONSTANT _DS-TX"
+            ),
+            "DEPTH CONSTANT _DS-DEPTH-BEFORE-STAGE",
+            (
+                "_DS-RECORD _DS-TX _EXT4-JTX-STAGE-ORPHAN-CLEANUP "
+                "CONSTANT _DS-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _DS-DEPTH-AFTER-STAGE",
+            (
+                "_DS-WRITER _DS-CTX _EXT4-JWR-ORPHAN-PREPLAN "
+                "CONSTANT _DS-PREPLAN-IOR"
+            ),
+            (
+                "_DS-WRITER _EXT4-JWR-ORPHAN-STAGED? "
+                "CONSTANT _DS-STAGED-IOR"
+            ),
+            (
+                "_DS-WRITER _EXT4-JWR.REVOKE-CAP + @ "
+                "CONSTANT _DS-REVOKE-CAP-SAVED"
+            ),
+            "0 _DS-WRITER _EXT4-JWR.REVOKE-CAP + !",
+            (
+                "_DS-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
+                "CONSTANT _DS-UNDERCAP-REJECTED"
+            ),
+            (
+                "_DS-REVOKE-CAP-SAVED "
+                "_DS-WRITER _EXT4-JWR.REVOKE-CAP + !"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_DS-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_DS-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_DS-FIND-IOR 0=",
+                        "_DS-JOURNAL-IOR 0=",
+                        "_DS-CERT-BEGIN-IOR 0=",
+                        "_DS-MEASURE-IOR 0=",
+                        "_DS-META 0>",
+                        "_DS-REVOKE 1 =",
+                        "_DS-CAPACITY-IOR 0=",
+                        "_DS-WRITER-IOR 0=",
+                        "_DS-BEGIN-IOR 0=",
+                        "_DS-STAGE-IOR 0=",
+                        "_DS-DEPTH-BEFORE-STAGE _DS-DEPTH-AFTER-STAGE =",
+                        "_DS-PREPLAN-IOR 0=",
+                        "_DS-STAGED-IOR 0=",
+                        "_DS-UNDERCAP-REJECTED",
+                        (
+                            "_DS-WRITER _EXT4-JWR.REVOKE-CAP + @ "
+                            "_DS-REVOKE ="
+                        ),
+                        (
+                            "_DS-WRITER _EXT4-JWR.REVOKE-CREDIT + @ "
+                            "_DS-REVOKE ="
+                        ),
+                        (
+                            "_DS-WRITER _EXT4-JWR.REVOKE-USED + @ "
+                            "_DS-REVOKE ="
+                        ),
+                        (
+                            "_DS-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ "
+                            "_DS-REVOKE ="
+                        ),
+                        (
+                            "0 _DS-WRITER _EXT4-JWR-REVOKE-ENTRY @ "
+                            f"{leaf_block} ="
+                        ),
+                        (
+                            "0 _DS-WRITER _EXT4-JWR-REVOKE-ENTRY "
+                            "CELL+ @ _EXT4-JE-ACTIVE ="
+                        ),
+                        "_DS-WRITER _EXT4-JFI-REVOKES-EXACT?",
+                        (
+                            "_DS-WRITER _EXT4-JWR.CP-DATA-MAP-KIND + @ "
+                            "_EXT4-JDM-DEPTH1-ONELEAF ="
+                        ),
+                        (
+                            "_DS-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ "
+                            f"{len(data_ranges)} ="
+                        ),
+                        (
+                            "_DS-WRITER _EXT4-JWR.CP-DELETE-RANGE-COUNT + @ "
+                            f"{len(data_ranges) + 1} ="
+                        ),
+                        "_DS-WRITER _EXT4-JWR.CP-DELETE-BLOCKS + @ 4 =",
+                        *cp_range_checks,
+                        "_DS-WRITER _EXT4-JTX-TABLES-VALID?",
+                        "_DS-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+            "_DS-TX _EXT4-JTX-ABORT CONSTANT _DS-ABORT-IOR",
+            "_EXT4-JFO-CERT-END",
+            (
+                _forth_conjunction(
+                    [
+                        "_DS-ABORT-IOR 0=",
+                        (
+                            "_DS-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_DS-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                        "_DS-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + f' IF ." {clean_marker}" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, marker)
+    _assert_emitted(output, clean_marker)
+
+
+def test_one_external_extent_leaf_qualification_sizes_revoke_capacity(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches, _, _ = _depth1_one_leaf_unlinked_orphan_patches(
+        path,
+        protocol="modern",
+    )
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _DQ-MOUNT-IOR CONSTANT _DQ-V"
+            ),
+            "_DQ-V _EXT4-CTX CONSTANT _DQ-CTX",
+            "_EXT4-JFO-CERT-BEGIN CONSTANT _DQ-CERT-BEGIN-IOR",
+            "DEPTH CONSTANT _DQ-DEPTH-BEFORE",
+            (
+                "_DQ-CTX _EXT4-QUALIFY-ORPHAN-PLAN "
+                "CONSTANT _DQ-IOR CONSTANT _DQ-REVOKE CONSTANT _DQ-META"
+            ),
+            "DEPTH CONSTANT _DQ-DEPTH-AFTER",
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_DQ-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_DQ-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_DQ-CERT-BEGIN-IOR 0=",
+                        "_DQ-IOR 0=",
+                        "_DQ-META 0>",
+                        "_DQ-REVOKE 1 =",
+                        "_DQ-DEPTH-BEFORE _DQ-DEPTH-AFTER =",
+                        "_EXT4-JFO-CERT-SCOPE @ 0<>",
+                        "_EXT4-JFO-CERT-VALID @ 0<>",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_DQ-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-DEPTH1-ONELEAF-QUALIFIED" THEN'
+            ),
+            "_EXT4-JFO-CERT-END",
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-DEPTH1-ONELEAF-QUALIFIED")
+
+
+def test_mount_reclaims_one_external_extent_leaf(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+) -> None:
+    source = canonical_images["primary-1k-i256"]
+    patches, data_ranges, leaf_block = (
+        _depth1_one_leaf_unlinked_orphan_patches(
+            source,
+            protocol="modern",
+        )
+    )
+    released_blocks = tuple(
+        block
+        for first, count in (*data_ranges, (leaf_block, 1))
+        for block in range(first, first + count)
+    )
+    released_set = set(released_blocks)
+    hull = range(min(released_blocks), max(released_blocks) + 1)
+    gap_blocks = tuple(block for block in hull if block not in released_set)
+    observed_blocks = released_blocks + gap_blocks
+    assert observed_blocks
+    assert not any(
+        _ext4_block_allocation_state(source, observed_blocks).values()
+    )
+    patch_map = dict(patches)
+    with source.open("rb") as source_media:
+        source_media.seek(1024)
+        canonical_super = source_media.read(1024)
+    block_size = 1024 << struct.unpack_from("<I", canonical_super, 0x18)[0]
+    for block in observed_blocks:
+        assert block * block_size in patch_map
+
+    recovered = tmp_path / "depth1-oneleaf-clean.img"
+    marker = "EXT4-DEPTH1-ONELEAF-MODERN-RECLAIMED"
+    output, trace, _ = run_recovery_forth(
+        source,
+        recovered,
+        [
+            "T-ARENA T-VOLUME EXT4-NEW "
+            "CONSTANT _DR-IOR CONSTANT _DR-V",
+            "_DR-V _EXT4-CTX CONSTANT _DR-CTX",
+            (
+                _forth_conjunction(
+                    [
+                        "_DR-IOR 0=",
+                        "_DR-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_DR-V _EXT4-READY?",
+                        "_DR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_DR-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_DR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_DR-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
+                        "_DR-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_DR-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_DR-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_DR-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+        ],
+        patches=patches,
+        capture_media=recovered,
+        max_steps=_ONE_EXTENT_LEAF_RECOVERY_MAX_STEPS,
+    )
+    _assert_emitted(output, marker)
+    _, reclaimed_inode, _ = _ext4_inode_record(recovered, 18)
+    assert reclaimed_inode == bytes(256)
+    assert not any(
+        _ext4_block_allocation_state(recovered, observed_blocks).values()
+    )
+    for block in observed_blocks:
+        offset = block * block_size
+        expected = patch_map[offset]
+        with recovered.open("rb") as recovered_media:
+            recovered_media.seek(offset)
+            assert recovered_media.read(block_size) == expected
+        assert not _write_ordinals_for_ext4_home(
+            trace,
+            block,
+            block_size=block_size,
+        )
+
+    with recovered.open("rb") as recovered_media:
+        recovered_media.seek(1024)
+        recovered_super = recovered_media.read(1024)
+    assert (
+        struct.unpack_from("<I", recovered_super, 0x0C)[0]
+        | (struct.unpack_from("<I", recovered_super, 0x158)[0] << 32)
+    ) == (
+        struct.unpack_from("<I", canonical_super, 0x0C)[0]
+        | (struct.unpack_from("<I", canonical_super, 0x158)[0] << 32)
+    )
+    assert struct.unpack_from("<I", recovered_super, 0x10)[0] == (
+        struct.unpack_from("<I", canonical_super, 0x10)[0]
+    )
 
 
 def test_unlinked_preflight_rejects_orphan_xattr_map_alias(
@@ -23010,8 +24006,8 @@ def test_unlinked_preflight_rejects_orphan_xattr_map_alias(
                         ),
                         "_OX-DEPTH-BEFORE _OX-DEPTH-AFTER =",
                         "_EXT4-JFI-DATA-ENTRIES @ 1 =",
-                        f"0 _EXT4-JFI-DATA-RANGE @ {data_block} =",
-                        "0 _EXT4-JFI-DATA-RANGE CELL+ @ 1 =",
+                        f"0 _EXT4-JFI-RANGE @ {data_block} =",
+                        "0 _EXT4-JFI-RANGE CELL+ @ 1 =",
                         f"_EXT4-OFR-EA @ {xattr_block} =",
                         "_EXT4-OFR-IOR @ _OX-PREFLIGHT-IOR =",
                         "_EXT4-JFO-CERT-SCOPE @ 0=",
@@ -23705,12 +24701,12 @@ def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
             "_OF-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OF-JOURNAL-IOR",
             (
                 "_OF-COPY _OF-CTX "
-                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _OF-COPY-IOR CONSTANT _OF-COPY-CREDIT"
             ),
             (
                 "_OF-RECORD _OF-CTX "
-                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _OF-MEASURE-IOR CONSTANT _OF-CREDIT"
             ),
             (
@@ -23729,7 +24725,7 @@ def test_singleton_modern_depth0_cleanup_seals_and_freezes_transaction(
             ),
             (
                 "_OF-RECORD _OF-TX "
-                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "_EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                 "CONSTANT _OF-STAGE-IOR"
             ),
             (
@@ -23831,12 +24827,12 @@ def test_singleton_modern_depth0_credit_counts_cross_group_homes_exactly(
             "_OM-CTX _EXT4-VALIDATE-JOURNAL CONSTANT _OM-JOURNAL-IOR",
             (
                 "_OM-RECORD _OM-CTX "
-                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _OM-MEASURE1-IOR CONSTANT _OM-CREDIT1"
             ),
             (
                 "_OM-RECORD _OM-CTX "
-                "_EXT4-MEASURE-ORPHAN-DEPTH0 "
+                "_EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                 "CONSTANT _OM-MEASURE2-IOR CONSTANT _OM-CREDIT2"
             ),
             "-1 _OM-CTX _EXT4-C.J.WRITER-CURRENT + !",
@@ -23850,7 +24846,7 @@ def test_singleton_modern_depth0_credit_counts_cross_group_homes_exactly(
             ),
             (
                 "_OM-RECORD _OM-TX "
-                "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                "_EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                 "CONSTANT _OM-STAGE-IOR"
             ),
             (
@@ -23948,7 +24944,7 @@ def test_singleton_modern_depth0_cleanup_checkpoints_and_deactivates(
                 ),
                 (
                     "_OC-RECORD _OC-TX "
-                    "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                    "_EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                     "CONSTANT _OC-STAGE-IOR"
                 ),
                 "_OC-TX _EXT4-JTX-EMIT CONSTANT _OC-EMIT-IOR",
@@ -24048,7 +25044,7 @@ def test_already_truncated_modern_orphan_uses_slot_only_final_transaction(
                 ),
                 (
                     "_OE-RECORD _OE-CTX "
-                    "_EXT4-MEASURE-ORPHAN-DEPTH0 "
+                    "_EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                     "CONSTANT _OE-MEASURE-IOR CONSTANT _OE-CREDIT"
                 ),
                 "-1 _OE-CTX _EXT4-C.J.WRITER-CURRENT + !",
@@ -24066,7 +25062,7 @@ def test_already_truncated_modern_orphan_uses_slot_only_final_transaction(
                 ),
                 (
                     "_OE-RECORD _OE-TX "
-                    "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                    "_EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                     "CONSTANT _OE-STAGE-IOR"
                 ),
                 (
@@ -24186,7 +25182,7 @@ def test_singleton_modern_cleanup_rejects_certificate_substitution_prehome(
                 ),
                 (
                     "_OS-RECORD _OS-TX "
-                    "_EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                    "_EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                     "CONSTANT _OS-STAGE-IOR"
                 ),
                 "_OS-TX _EXT4-JTX-EMIT CONSTANT _OS-EMIT-IOR",
@@ -24308,7 +25304,7 @@ def test_linked_legacy_more_rejects_postseal_certificate_tamper_prehome(
                     "CONSTANT _LC-JOURNAL-IOR"
                 ),
                 (
-                    "_LC-RECORD _LC-CTX _EXT4-MEASURE-ORPHAN-DEPTH0 "
+                    "_LC-RECORD _LC-CTX _EXT4-MEASURE-ORPHAN-CLEANUP NIP "
                     "CONSTANT _LC-MEASURE-IOR CONSTANT _LC-CREDIT"
                 ),
                 "-1 _LC-CTX _EXT4-C.J.WRITER-CURRENT + !",
@@ -24325,7 +25321,7 @@ def test_linked_legacy_more_rejects_postseal_certificate_tamper_prehome(
                     "CONSTANT _LC-BEGIN-IOR CONSTANT _LC-TX"
                 ),
                 (
-                    "_LC-RECORD _LC-TX _EXT4-JTX-STAGE-ORPHAN-DEPTH0 "
+                    "_LC-RECORD _LC-TX _EXT4-JTX-STAGE-ORPHAN-CLEANUP "
                     "CONSTANT _LC-STAGE-IOR"
                 ),
                 "_LC-TX _EXT4-JTX-EMIT CONSTANT _LC-EMIT-IOR",

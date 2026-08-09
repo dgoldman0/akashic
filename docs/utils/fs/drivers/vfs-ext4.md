@@ -186,11 +186,15 @@ does not use journal-data mode. An authenticated external xattr is retained;
 the root may already be empty or may contain ranges that the bounded
 free-block builder can account for exactly. An unlinked target must be an
 allocated regular file with zero links and an authenticated nonnegative
-63-bit size. Its complete data map may be either an empty or one-to-four-entry
-inline depth-0 extent root, or a legacy direct-only map using any of the 12
-direct slots with all three indirect roots zero. Its size need not be zero
-because deletion releases the complete authenticated map and then removes the
-inode; EOF does not select a retained tail.
+63-bit size. Its complete data map may be an empty or one-to-four-entry inline
+depth-0 extent root, a resident depth-1 root with exactly one checksum-valid
+external leaf, or a legacy direct-only map using any of the 12 direct slots
+with all three indirect roots zero. The one-leaf shape may use every entry that
+fits the mounted block size; its root key must equal the leaf's first logical
+block. The external leaf joins the exact release and reverse-owner authority
+and receives a journal revoke. The inode size need not be zero because
+deletion releases the complete authenticated map and then removes the inode;
+EOF does not select a retained tail.
 It may additionally reference one checksum-valid external xattr block. A raw
 `h_refcount` of one gives exact allocation-release authority. A count from 2
 through ext4's 1024-reference limit instead retains the allocation and permits
@@ -328,7 +332,8 @@ reuse a sufficient retained allocation rather than consume another monotonic
 arena allocation. The authenticated-empty modern branch completes recovery
 metadata only when both protocols are empty, without changing an orphan inode,
 orphan-file block, or legacy link. A union whose records all fit the supported
-modern/legacy depth-zero shapes is processed as a sequence of sealed one-record
+linked-depth-zero or admitted unlinked deletion shapes is processed as a
+sequence of sealed one-record
 transactions; its count is constrained by authenticated geometry, checked
 arithmetic, and caller-arena capacity rather than a cleanup-specific constant.
 Broader truncate/delete shapes remain refused. Pinned qualification covers
@@ -670,11 +675,13 @@ exactly valid; mount-state reset and active replay clear it.
 `_EXT4-JTX-STAGE-FREE-ORPHAN-INODE` is the corresponding first inode-release
 builder. It reauthenticates one canonical selected plan record and accepts
 only an allocated, unlinked regular inode with a valid nonnegative 63-bit size
-whose data map is either an empty or one-to-four-entry inline depth-0 extent
-root, or a legacy direct-only map with all three indirect roots zero. Unlike
-linked truncation, unlinked deletion does not require zero size: it releases
-the complete authenticated map and zeroes the inode. Every extent entry must
-have a zero physical high word.
+whose data map is an empty or one-to-four-entry inline depth-0 extent root, a
+resident depth-1 root with exactly one external leaf, or a legacy direct-only
+map with all three indirect roots zero. Unlike linked truncation, unlinked
+deletion does not require zero size: it releases the complete authenticated
+map and zeroes the inode. Every extent entry must have a zero physical high
+word. The depth-1 root and external leaf are checksum- and allocation-checked;
+the root key must equal the first leaf key, and the leaf may not alias data.
 Initialized decoded lengths are 1..32768 blocks and unwritten decoded lengths
 are 1..32767 blocks; every `logical_start + decoded_length` must be at most
 `0xffffffff`. A resident inline xattr area is structurally authenticated with
@@ -688,8 +695,9 @@ slots are holes; each nonzero slot is retained as an
 ordered singleton, duplicate physical pointers are corrupt, and any nonzero
 indirect root is unsupported. Decoded `i_blocks` must exactly match all data
 blocks plus that optional singleton. The target must be at or above
-`s_first_ino`. Journal-data mode, depth-positive/external extent trees,
-legacy indirect maps, malformed lengths or ranges, inconsistent shared-xattr
+`s_first_ino`. Journal-data mode, extent trees beyond the exact admitted
+one-leaf depth-1 shape, legacy indirect maps, malformed lengths or ranges,
+inconsistent shared-xattr
 owner counts or aliases, and xattr value inodes remain refused. Every candidate
 range bit must be set and each distinct touched block-bitmap home must have
 exactly one descriptor owner. Every release range must lie inside mutable data
@@ -711,10 +719,10 @@ is `EXT4-D-DATA-MAP` corruption, even when both inode records and their
 allocation bits are individually checksum-valid. A shared candidate xattr has
 one exception at the semantic `i_file_acl` boundary: exact references to that
 same block are counted, and their total including the target must equal the
-authenticated header refcount. All admitted data ranges—up to four inline
-extents or 12 direct singletons—and the optional external-xattr singleton are
-published together for this scan, so proving one entry cannot conceal an alias
-in a later entry. The retained ownership certificate binds the map family,
+authenticated header refcount. All admitted data ranges, the external extent
+leaf when present, and the optional external-xattr singleton are published
+together for this scan, so proving one entry cannot conceal an alias in a
+later entry. The retained ownership certificate binds the map family,
 ordered data tuple, xattr home, disposition, and raw pre-transaction refcount
 as separate fields.
 
@@ -792,8 +800,9 @@ inode, without making the xattr loader reject its own valid owner. Every
 logical orphan block is then reread through its physical-location-bound tail
 checksum, the ambient ownership scope is withdrawn on every return, and the
 selected target record is reauthenticated before staging continues. The
-target cleanup shapes remain the deliberately bounded inline-depth-0 and
-legacy direct-only deletion cases described above.
+target cleanup shapes remain the deliberately bounded inline-depth-0,
+one-external-leaf depth-1, and legacy direct-only deletion cases described
+above.
 
 For a nonempty captured root, the builder stages an inode with zero extent
 entries, clears all four inline entry slots, retains the extent header and
@@ -804,14 +813,16 @@ no-op. Once the inode afterimage is published, any later semantic, conflict, or
 credit failure aborts and scrubs the entire transaction; it recognizes a lower
 block-free auto-abort and does not abort twice. The operation intentionally
 leaves the orphan slot/list record active for a later durable
-protocol-completion step. It stages no data or revoke and performs no media
-write.
+protocol-completion step. It stages no data images and performs no media write.
+Reusable external metadata freed by the transaction—the admitted extent leaf
+and a uniquely released external xattr—is retained in deterministic
+leaf-then-xattr revoke order.
 
-`_EXT4-JTX-STAGE-ORPHAN-DEPTH0` owns an initially empty metadata-only
+`_EXT4-JTX-STAGE-ORPHAN-CLEANUP` owns an initially empty metadata-only
 transaction for one deterministically selected record of either protocol. It
 dispatches by the authenticated link count, and composes either depth-zero
-linked truncation or inline-depth-0/legacy-direct unlinked inode release with
-modern slot removal or legacy-head advancement. It requires used and active
+linked truncation or an admitted unlinked inode release with modern slot
+removal or legacy-head advancement. It requires used and active
 metadata homes to equal the exact credit, then seals protocol- and operation-specific
 raw authority plus retained after-image CRC32Cs into the arena-owned writer.
 Modern modes bind the logical block, slot, physical orphan-file home, and
@@ -822,20 +833,24 @@ applicable retained-image checksums. Delete modes additionally bind the
 inode-bitmap home, GDT home and descriptor offset, and complete retained CRCs
 for the zeroed target inode-table block, inode bitmap, GDT, and primary-super
 after-images. Data-delete modes additionally bind the map family, exact range
-count, aggregate data-block count, and every ordered physical
-`{ first, count }` pair; unused pair slots must be zero. Delete modes also bind
+count, aggregate released-block count, and every ordered physical
+`{ first, count }` pair; the one-leaf shape retains its data ranges followed by
+the external-leaf singleton, and unused pair slots must be zero. Delete modes
+also bind
 the external-xattr home, `NONE`/`RELEASE`/`REFDEC` disposition, post-decrement
-refcount, and retained-image CRC. An explicit verifier-complete state keeps a
+refcount, and retained-image CRC. The exact revoke count and identities are
+derived from those typed fields and must fit the allocated revoke vector before
+any entry is read. An explicit verifier-complete state keeps a
 valid zero CRC distinct from “not reconstructed yet,” so the strict pre-home
 comparison cannot skip a zero-valued checksum. The retained
 transaction entries and
 semantic verifier bind every distinct touched block-bitmap after-image and
 coalesced data-group GDT page. The explicit target-entry count binds the raw
-extent-entry count for linked truncation and the authenticated release-entry
+extent-entry count for linked truncation and the authenticated semantic entry
 count for deletion: an already-truncated linked target has zero, a linked
-target being truncated is nonzero, and a delete has the admitted zero-to-four
-extent or zero-to-12 direct count plus a mandatory zero target after-image. No
-valid CRC32C value is
+target being truncated is nonzero, and a delete has the admitted inline,
+external-leaf, or zero-to-12 direct count plus a mandatory zero target
+after-image. No valid CRC32C value is
 reserved as a sentinel. Mode is published last; once published, every generic
 and typed staging entry point returns busy, while abort and emit remain legal.
 The certificate also binds the exact pre-transaction total, modern, and legacy
@@ -844,8 +859,10 @@ one-record prestate or `MORE` mode for a larger prestate. Abort and every
 successful writer rebase scrub the complete sealed transaction certificate;
 this is distinct from the operation-scoped reverse-owner proof.
 
-`_EXT4-MEASURE-ORPHAN-DEPTH0` applies the same per-record authentication without
-allocating a writer or publishing an after-image. An already-truncated record
+`_EXT4-MEASURE-ORPHAN-CLEANUP` applies the same per-record authentication
+without allocating a writer or publishing an after-image. It returns exact
+metadata and revoke credits as explicit values; no caller depends on ambient
+post-measurement state. An already-truncated record
 costs one protocol home for a modern slot or a terminal legacy head; a
 nonterminal legacy head also needs the target inode-table home to clear its
 consumed `i_dtime` successor. A nonempty modern root starts with the target
@@ -854,7 +871,9 @@ starts with the target inode table and primary super. Both add one uniquely owne
 bitmap per touched group and one copy of each distinct primary GDT page. Thus
 the canonical one-block linked-truncate legacy fixture has exact credit four, while its
 already-truncated form has credit one. The geometry-bounded, constant-space
-group scan imposes no candidate array or cleanup-specific capacity. Checked
+group scan imposes no candidate array or cleanup-specific capacity. A deletion
+adds one revoke for the admitted external leaf and one for a uniquely released
+external xattr; ordinary data and shared-xattr decrements add none. Checked
 arithmetic, complete range/static/journal anti-alias validation, and unique
 bitmap-owner proofs make the result the coalesced home count rather than an
 upper bound. The sealing builder independently requires its staged active-home
@@ -1058,8 +1077,9 @@ image checksums, and hash indices are revalidated before they can drive a
 fill, copy, lookup, or media write. The public binding and capability mask
 remain read-only. Geometry- and arena-bounded transactional completion is
 implemented for unions of the exact linked zero-size inline-depth-0 and
-nonnegative-size inline-depth-0 or legacy direct-only unlinked-inode cases
-under both orphan mechanisms. The implementation adds no fixed cleanup
+nonnegative-size inline-depth-0, one-external-leaf depth-1, or legacy
+direct-only unlinked-inode cases under both orphan mechanisms. The
+implementation adds no fixed cleanup
 record-count constant; positive union-drain qualification currently reaches
 two records.
 Before a supported linked truncation or unlinked deletion may release storage,
@@ -1436,7 +1456,8 @@ The remaining boundaries are:
   user-visible write. Cleanup derives its record count from authenticated
   geometry, checked arithmetic, and caller-arena storage rather than a separate
   fixed constant, but still does not cover linked nonzero-size/tail truncation,
-  target depth-positive/external extent trees, target legacy indirect map
+  target extent trees beyond the exact one-external-leaf depth-1 shape, target
+  legacy indirect map
   mutation, a nonzero physical high word, inconsistent or out-of-range shared
   external-xattr ownership, inline or external xattr value-inode release, or general
   link-count and malformed-chain repair. General inode
@@ -1444,8 +1465,9 @@ The remaining boundaries are:
   user-visible mutation operation remain unimplemented. Cleanup releases
   allocation authority but does not provide secure deletion or data-block
   erasure;
-- focused per-shape empty and inline depth-0 unlinked qualification covers
-  modern and legacy mount completion. Empty and one-block baselines span the
+- focused per-shape empty, inline depth-0, and one-external-leaf depth-1
+  unlinked qualification covers modern and legacy cleanup. Empty and one-block
+  baselines span the
   canonical 1/2/4 KiB, 256-byte-inode geometries; 1 KiB qualification additionally
   covers a three-block initialized extent at logical block 7 and a two-block
   unwritten extent at logical block 11 whose physical range crosses data
@@ -1520,10 +1542,17 @@ The remaining boundaries are:
   shape closes its release-qualification gate.
   Multi-range qualification admits a separated two-entry modern root and the
   four-entry inline maximum under legacy cleanup, mixing initialized and
-  unwritten entries and logical gaps. Inline-extent exact-shape preflight still
-  rejects depth-positive/external trees and malformed or out-of-slice entries
-  before writer allocation or media I/O. Every refusal fails before writer
-  allocation or any write/flush. The established
+  unwritten entries and logical gaps. Deletion qualification also admits one
+  external leaf beneath a resident depth-1 root. A 13-entry leaf proves that
+  authorization is bounded by mounted block geometry rather than the legacy
+  12-slot direct-map count; the retained release vector contains those 13 data
+  ranges followed by the leaf singleton. Modern and legacy dry staging retain
+  the leaf's exact revoke, while the modern production path completed in
+  1,686,717,231 guest steps under the feature-specific 1,800,000,000-step
+  watchdog. Two checksum-valid root leaves remain policy-unsupported, and
+  leaf/data aliasing or another inode owning the leaf is corrupt data-map
+  input. Every refusal is stack-balanced and fails before writer allocation or
+  media I/O. The established
   1 KiB cross-group fixture qualifies separate data- and inode-group
   descriptors coalesced into one primary GDT home; the new boundary fixture
   proves that one certified data range may itself cross two groups while both
