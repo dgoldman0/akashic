@@ -18490,6 +18490,83 @@ def test_unlinked_preflight_accepts_legacy_single_indirect(
     _assert_emitted(output, "EXT4-LEGACY-SINGLE-INDIRECT-PREFLIGHT")
 
 
+def test_sparse_double_range_budget_reserves_only_present_xattr(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _SD-B-IOR CONSTANT _SD-B-V"
+            ),
+            "_SD-B-V _EXT4-CTX CONSTANT _SD-B-CTX",
+            "_SD-B-CTX _EXT4-JFI-CTX !",
+            "4 _EXT4-JFI-MAP-ENTRIES !",
+            "0 _EXT4-JFI-EA !",
+            "523 _EXT4-JFI-DATA-ENTRIES !",
+            "DEPTH CONSTANT _SD-B-DEPTH-BEFORE",
+            (
+                "2000 _EXT4-JFI-CAPTURE-LEGACY-DATA "
+                "CONSTANT _SD-B-FIT-IOR"
+            ),
+            "DEPTH CONSTANT _SD-B-DEPTH-AFTER-FIT",
+            "_EXT4-JFI-DATA-ENTRIES @ CONSTANT _SD-B-FIT-ENTRIES",
+            "523 _EXT4-JFI-DATA-ENTRIES !",
+            "1 _EXT4-JFI-EA !",
+            (
+                "2001 _EXT4-JFI-CAPTURE-LEGACY-DATA "
+                "CONSTANT _SD-B-EA-OVER-IOR"
+            ),
+            "524 _EXT4-JFI-DATA-ENTRIES !",
+            "0 _EXT4-JFI-EA !",
+            (
+                "2002 _EXT4-JFI-CAPTURE-LEGACY-DATA "
+                "CONSTANT _SD-B-DATA-OVER-IOR"
+            ),
+            "DEPTH CONSTANT _SD-B-DEPTH-AFTER",
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_SD-B-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        "_SD-B-CTX _EXT4-C.MUTATION-RANGE-CAP + @ 528 =",
+                        "_SD-B-FIT-IOR 0=",
+                        "_SD-B-FIT-ENTRIES 524 =",
+                        "523 _EXT4-JFI-RANGE @ 2000 =",
+                        "523 _EXT4-JFI-RANGE CELL+ @ 1 =",
+                        (
+                            "_SD-B-EA-OVER-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_SD-B-EA-OVER-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        (
+                            "_SD-B-DATA-OVER-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_SD-B-DATA-OVER-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_SD-B-DEPTH-BEFORE _SD-B-DEPTH-AFTER-FIT =",
+                        "_SD-B-DEPTH-BEFORE _SD-B-DEPTH-AFTER =",
+                        "_SD-B-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-SPARSE-DOUBLE-EXACT-RANGE-BUDGET" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-SPARSE-DOUBLE-EXACT-RANGE-BUDGET")
+
+
 def test_unlinked_preflight_accepts_sparse_double_without_single_root(
     canonical_images: dict[str, Path],
 ) -> None:
@@ -18498,14 +18575,14 @@ def test_unlinked_preflight_accepts_sparse_double_without_single_root(
         path,
         protocol="modern",
         direct_slots=(5,),
-        double_children=((2, (4, 255)),),
+        double_children=((2, (4, 255)), (7, (9,))),
         seed_payloads=True,
         seed_gap_payloads=True,
         size_bytes=(1 << 32) + 777,
     )
     combined_ranges = (*data_ranges, *map_ranges)
-    assert len(data_ranges) == 3
-    assert len(map_ranges) == 2
+    assert len(data_ranges) == 4
+    assert len(map_ranges) == 3
     range_checks: list[str] = []
     for index, (physical, count) in enumerate(combined_ranges):
         range_checks.extend(
@@ -18570,10 +18647,8 @@ def test_unlinked_preflight_accepts_sparse_double_without_single_root(
                             "_EXT4-JFI-LEGACY-DOUBLE-HOME @ "
                             f"{map_ranges[0][0]} ="
                         ),
-                        (
-                            "_EXT4-JFI-LEGACY-DOUBLE-CHILD @ "
-                            f"{map_ranges[1][0]} ="
-                        ),
+                        "_EXT4-JFI-LEGACY-DOUBLE-CHILDREN @ 2 =",
+                        "_EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE @ 1 =",
                         *range_checks,
                         "_EXT4-JFO-CERT-SCOPE @ 0<>",
                         "_EXT4-JFO-CERT-VALID @ 0<>",
@@ -18600,7 +18675,7 @@ def test_unlinked_preflight_accepts_sparse_double_without_single_root(
     _assert_emitted(output, "EXT4-LEGACY-SPARSE-DOUBLE-PREFLIGHT")
 
 
-def test_sparse_double_stages_canonical_three_map_revokes(
+def test_sparse_double_stages_canonical_multi_child_revokes(
     canonical_images: dict[str, Path],
 ) -> None:
     path = canonical_images["primary-1k-i256"]
@@ -18609,14 +18684,14 @@ def test_sparse_double_stages_canonical_three_map_revokes(
         protocol="modern",
         direct_slots=(5,),
         single_slots=(3,),
-        double_children=((2, (4,)),),
+        double_children=((2, (4,)), (7, (9,))),
         physical_gap=0,
         seed_payloads=True,
         size_bytes=(1 << 32) + 777,
     )
     combined_ranges = (*data_ranges, *map_ranges)
-    assert len(data_ranges) == 3
-    assert len(map_ranges) == 3
+    assert len(data_ranges) == 4
+    assert len(map_ranges) == 4
 
     output = run_forth(
         path,
@@ -18742,7 +18817,7 @@ def test_sparse_double_stages_canonical_three_map_revokes(
                         "_SD-S-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                     ]
                 )
-                + ' IF ." EXT4-LEGACY-SPARSE-DOUBLE-STAGED" THEN'
+                + ' IF ." EXT4-LEGACY-SPARSE-MULTI-CHILD-STAGED" THEN'
             ),
             "_SD-S-TX _EXT4-JTX-ABORT CONSTANT _SD-S-ABORT-IOR",
             "_EXT4-JFO-CERT-END",
@@ -18762,7 +18837,7 @@ def test_sparse_double_stages_canonical_three_map_revokes(
         ],
         patches=patches,
     )
-    _assert_emitted(output, "EXT4-LEGACY-SPARSE-DOUBLE-STAGED")
+    _assert_emitted(output, "EXT4-LEGACY-SPARSE-MULTI-CHILD-STAGED")
     _assert_emitted(output, "EXT4-LEGACY-SPARSE-DOUBLE-ABORT-CLEAN")
 
 
@@ -18772,7 +18847,6 @@ def test_sparse_double_stages_canonical_three_map_revokes(
         ("child-data-alias", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
         ("root-data-alias", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
         ("duplicate-child", "VFS-R-CORRUPT", "EXT4-D-DATA-MAP"),
-        ("multiple-children", "VFS-R-UNSUPPORTED", "EXT4-D-RECOVERY"),
     ),
 )
 def test_sparse_double_preflight_rejects_unadmitted_or_aliased_maps(
@@ -18784,7 +18858,7 @@ def test_sparse_double_preflight_rejects_unadmitted_or_aliased_maps(
     path = canonical_images["primary-1k-i256"]
     double_children = (
         ((2, (4,)), (7, (9,)))
-        if case in {"duplicate-child", "multiple-children"}
+        if case == "duplicate-child"
         else ((2, (4,)),)
     )
     patches, data_ranges, map_ranges = _legacy_indirect_unlinked_orphan_patches(
@@ -18820,9 +18894,6 @@ def test_sparse_double_preflight_rejects_unadmitted_or_aliased_maps(
         double_root = bytearray(patch_map[double_offset])
         struct.pack_into("<I", double_root, 7 * 4, map_ranges[1][0])
         patch_map[double_offset] = bytes(double_root)
-    else:
-        assert case == "multiple-children"
-        assert len(map_ranges) == 3
     marker = f"EXT4-LEGACY-SPARSE-DOUBLE-{case.upper()}-REFUSED"
 
     output = run_forth(

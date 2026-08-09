@@ -5190,13 +5190,12 @@ VARIABLE _EXT4-UB
     THEN
     _EXT4-UA @ _EXT4-UB @ * 0 ;
 
-\ The admitted sparse-double legacy shape may fill all direct and
-\ single-indirect data slots plus one complete child under the double-indirect
-\ root.  Its maximum authority is twelve direct data blocks, two full pointer
-\ blocks of data, three map homes, and one optional xattr: 2P+16 ranges for
-\ P=block-size/4.  This also bounds the smaller resident depth-one extent
-\ fanout.  The shared maximum is format-derived arena geometry, not an
-\ admitted-record policy limit.
+\ One full sparse-double child plus all direct and single-indirect data fixes a
+\ useful bounded authority budget: twelve direct data blocks, two full pointer
+\ blocks of data, three map homes, and one optional xattr, or 2P+16 ranges for
+\ P=block-size/4.  The same budget admits additional sparse children whenever
+\ their exact data-plus-map vector fits.  It also bounds resident depth-one
+\ extent fanout.  This is caller-workspace geometry, not a child-count limit.
 : _EXT4-DELETE-RANGE-CAPACITY  ( block-size -- capacity ior )
     DUP
     DUP 1024 = OVER 2048 = OR SWAP 4096 = OR 0= IF
@@ -5817,7 +5816,10 @@ VARIABLE _EXT4-JCA-PRE-LEGACY
         THEN
         _EXT4-JCA-RANGE-COUNT @ _EXT4-JCA-TARGET-ENTRIES @ -
         DUP _EXT4-JCA-MAP-ENTRIES !
-        DUP 2 U< SWAP 3 U> OR IF FALSE EXIT THEN
+        DUP 2 U< SWAP
+        _EXT4-JCA-WRITER @ _EXT4-JWR.BSIZE + @ 4 / 2 + U> OR IF
+            FALSE EXIT
+        THEN
         _EXT4-JCA-WRITER @ _EXT4-JWR.BSIZE + @ 4 /
         _EXT4-JCA-MAP-ENTRIES @ 1- _EXT4-UMUL?
         DUP IF 2DROP FALSE EXIT THEN DROP
@@ -5866,7 +5868,8 @@ VARIABLE _EXT4-JCA-PRE-LEGACY
     THEN
     DUP _EXT4-JDM-LEGACY-SPARSE-DOUBLE = IF
         DROP _EXT4-JCA-MAP-ENTRIES @ DUP 2 U<
-        SWAP 3 U> OR 0= EXIT
+        SWAP _EXT4-JCA-WRITER @ _EXT4-JWR.BSIZE + @ 4 / 2 +
+        U> OR 0= EXIT
     THEN
     DUP _EXT4-JDM-INLINE-EXTENTS =
     SWAP _EXT4-JDM-LEGACY-DIRECT = OR IF
@@ -9419,10 +9422,10 @@ _EXT4-ORPHAN-RECORD-CELLS CELLS CONSTANT _EXT4-ORPHAN-RECORD-SIZE
 _EXT4-NONNEG-MAX _EXT4-ORPHAN-RECORD-SIZE /
 CONSTANT _EXT4-ORPHAN-SLOTS-MAX
 
-\ Retain the largest admitted format tier: all direct and single-indirect data
-\ plus one complete child under a double-indirect root, its three possible map
-\ homes, and one optional external xattr.  Resident depth-one extent fanout is
-\ smaller at every mounted block size and shares this geometry-sized workspace.
+\ Retain the shared 2P+16 authority budget: all direct and single-indirect data
+\ plus one complete double-indirect child, its three map homes, and one xattr.
+\ Additional sparse children are admitted by actual occupancy within the same
+\ workspace.  Resident depth-one fanout is smaller at every mounted block size.
 : _EXT4-MUTATION-RANGE-WORKSPACE-CAPACITY  ( ctx -- capacity ior )
     DUP 0= IF DROP 0 VFS-E-INVALID EXIT THEN
     _EXT4-C.BSIZE + @ _EXT4-DELETE-RANGE-CAPACITY ;
@@ -11532,7 +11535,8 @@ VARIABLE _EXT4-JFI-DATA-LOGICAL
 VARIABLE _EXT4-JFI-DATA-INDEX
 VARIABLE _EXT4-JFI-LEGACY-INDIRECT-HOME
 VARIABLE _EXT4-JFI-LEGACY-DOUBLE-HOME
-VARIABLE _EXT4-JFI-LEGACY-DOUBLE-CHILD
+VARIABLE _EXT4-JFI-LEGACY-DOUBLE-CHILDREN
+VARIABLE _EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE
 VARIABLE _EXT4-JFI-LEGACY-PTRS
 VARIABLE _EXT4-JFI-EA
 VARIABLE _EXT4-JFI-EA-ACTION
@@ -11614,7 +11618,7 @@ VARIABLE _EXT4-JRV-INDEX
     THEN
     DUP _EXT4-JDM-LEGACY-SPARSE-DOUBLE = IF
         DROP _EXT4-JFI-MAP-ENTRIES @ DUP 2 U<
-        SWAP 3 U> OR 0= EXIT
+        SWAP _EXT4-JFI-LEGACY-PTRS @ 2 + U> OR 0= EXIT
     THEN
     DUP _EXT4-JDM-INLINE-EXTENTS =
     SWAP _EXT4-JDM-LEGACY-DIRECT = OR IF
@@ -12653,13 +12657,14 @@ VARIABLE _EXT4-JFI-OVERLAP-OTHER
     _EXT4-JFI-DATA-COMMON-PREFLIGHT ;
 
 \ Append one occupied legacy data pointer as a singleton while reserving all
-\ trailing map homes and the optional xattr slot.
+\ trailing map homes and a range slot only for an actually present xattr.
 : _EXT4-JFI-CAPTURE-LEGACY-DATA  ( physical -- ior )
     DUP 0= IF DROP 0 EXIT THEN
     _EXT4-JFI-DATA-PHYSICAL !
     _EXT4-JFI-DATA-ENTRIES @
-    _EXT4-JFI-RANGE-CAP _EXT4-JFI-MAP-ENTRIES @ - 1- U< 0= IF
-        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    _EXT4-JFI-RANGE-CAP _EXT4-JFI-MAP-ENTRIES @ -
+    _EXT4-JFI-EA @ IF 1- THEN U< 0= IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
     THEN
     _EXT4-JFI-DATA-PHYSICAL @
     _EXT4-JFI-DATA-ENTRIES @ _EXT4-JFI-RANGE !
@@ -12695,17 +12700,30 @@ VARIABLE _EXT4-JFI-LEGACY-CHECK-INDEX
     FALSE ;
 
 \ Check a candidate child before its contents can affect shape admission.
-\ The retained child scalar is deliberately excluded so a repeated child can
-\ be diagnosed separately from a distinct, valid-but-unadmitted second child.
+\ Direct and single-indirect data has already been retained, while the scalar
+\ map and xattr homes survive every TREE-BLOCK reload.
 : _EXT4-JFI-LEGACY-CHILD-ALIASES-KNOWN?  ( home -- flag )
     DUP _EXT4-JFI-LEGACY-HOME-IN-DATA? IF DROP TRUE EXIT THEN
     DUP _EXT4-JFI-LEGACY-INDIRECT-HOME @ =
     OVER _EXT4-JFI-LEGACY-DOUBLE-HOME @ = OR
     SWAP _EXT4-JFI-EA @ = OR ;
 
-\ Park map homes at the workspace tail while data pointers are still being
-\ streamed into the canonical prefix.  MAP-ENTRIES is fixed from the admitted
-\ shape before any capture, so every append retains map and xattr reserve.
+: _EXT4-JFI-LEGACY-CHILD-ALIASES-PARKED?  ( home -- flag )
+    _EXT4-JFI-LEGACY-CHECK-HOME !
+    _EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE @
+    _EXT4-JFI-LEGACY-CHECK-INDEX !
+    BEGIN
+        _EXT4-JFI-LEGACY-CHECK-INDEX @ _EXT4-JFI-MAP-INDEX @ U<
+    WHILE
+        _EXT4-JFI-LEGACY-CHECK-INDEX @
+        _EXT4-JFI-MAP-SCRATCH-RANGE @
+        _EXT4-JFI-LEGACY-CHECK-HOME @ = IF TRUE EXIT THEN
+        1 _EXT4-JFI-LEGACY-CHECK-INDEX +!
+    REPEAT
+    FALSE ;
+
+\ Park map homes at the workspace tail after the exact occupied-child count is
+\ known.  Data appends retain this map tail and the optional xattr reserve.
 : _EXT4-JFI-PARK-LEGACY-MAP  ( home -- )
     _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-SCRATCH-RANGE !
     1 _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-SCRATCH-RANGE CELL+ !
@@ -12724,11 +12742,12 @@ VARIABLE _EXT4-JFI-LEGACY-CHECK-INDEX
     REPEAT
     0 ;
 
-\ A populated double root is admitted only when exactly one root slot names a
-\ child pointer block.  Multiple occupied children are valid read structure
-\ but outside this bounded mutation tier, so refuse them as unsupported.
-: _EXT4-JFI-FIND-LEGACY-DOUBLE-CHILD  ( -- ior )
-    0 _EXT4-JFI-LEGACY-DOUBLE-CHILD !
+\ Count every occupied double-root slot while the provisional P+2 map reserve
+\ protects already captured direct and single-indirect data.  The root remains
+\ resident for the ordered parking pass; duplicate children are diagnosed
+\ there against the growing parked prefix.
+: _EXT4-JFI-COUNT-LEGACY-DOUBLE-CHILDREN  ( -- ior )
+    0 _EXT4-JFI-LEGACY-DOUBLE-CHILDREN !
     _EXT4-JFI-LEGACY-DOUBLE-HOME @ _EXT4-JFI-CTX @
     _EXT4-LOAD-LEGACY-POINTER-BLOCK ?DUP IF EXIT THEN
     0 _EXT4-JFI-DATA-INDEX !
@@ -12740,26 +12759,74 @@ VARIABLE _EXT4-JFI-LEGACY-CHECK-INDEX
             DUP _EXT4-JFI-LEGACY-CHILD-ALIASES-KNOWN? IF
                 DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
             THEN
-            _EXT4-JFI-LEGACY-DOUBLE-CHILD @ IF
-                DUP _EXT4-JFI-LEGACY-DOUBLE-CHILD @ = IF
-                    DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-                THEN
-                DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-            THEN
-            _EXT4-JFI-LEGACY-DOUBLE-CHILD !
+            DROP
+            _EXT4-JFI-LEGACY-DOUBLE-CHILDREN @ 1 _EXT4-UADD?
+            DUP IF NIP EXIT THEN DROP
+            _EXT4-JFI-LEGACY-DOUBLE-CHILDREN !
         THEN
         1 _EXT4-JFI-DATA-INDEX +!
     REPEAT
-    _EXT4-JFI-LEGACY-DOUBLE-CHILD @ 0= IF
+    _EXT4-JFI-LEGACY-DOUBLE-CHILDREN @ 0= IF
         EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
     THEN
     0 ;
 
+: _EXT4-JFI-FIX-LEGACY-DOUBLE-MAPS  ( -- ior )
+    _EXT4-JFI-LEGACY-DOUBLE-CHILDREN @ 1 _EXT4-UADD?
+    DUP IF NIP EXIT THEN DROP
+    _EXT4-JFI-LEGACY-INDIRECT-HOME @ IF
+        1 _EXT4-UADD? DUP IF NIP EXIT THEN DROP
+    THEN
+    DUP _EXT4-JFI-RANGE-CAP 1- U> IF
+        DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    DUP _EXT4-JFI-MAP-ENTRIES ! _EXT4-JFI-MAP-BLOCKS !
+    0 ;
+
+\ Retain every child map home in double-root slot order before loading any
+\ child can overwrite TREE-BLOCK.  Known aliases and duplicate child homes are
+\ corrupt rather than alternate representations of the same authority.
+: _EXT4-JFI-PARK-LEGACY-DOUBLE-CHILDREN  ( -- ior )
+    _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE !
+    0 _EXT4-JFI-DATA-INDEX !
+    BEGIN
+        _EXT4-JFI-DATA-INDEX @ _EXT4-JFI-LEGACY-PTRS @ U<
+    WHILE
+        _EXT4-JFI-CTX @ _EXT4-C.TREE-BLOCK +
+        _EXT4-JFI-DATA-INDEX @ 4 * + L@ ?DUP IF
+            DUP _EXT4-JFI-LEGACY-CHILD-ALIASES-KNOWN? IF
+                DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+            THEN
+            DUP _EXT4-JFI-LEGACY-CHILD-ALIASES-PARKED? IF
+                DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+            THEN
+            _EXT4-JFI-PARK-LEGACY-MAP
+        THEN
+        1 _EXT4-JFI-DATA-INDEX +!
+    REPEAT
+    _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE @ -
+    _EXT4-JFI-LEGACY-DOUBLE-CHILDREN @ <> IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
+: _EXT4-JFI-CAPTURE-LEGACY-DOUBLE-CHILDREN  ( -- ior )
+    _EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE @ _EXT4-JFI-MAP-INDEX !
+    BEGIN
+        _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-ENTRIES @ U<
+    WHILE
+        _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-SCRATCH-RANGE @
+        _EXT4-JFI-CAPTURE-LEGACY-POINTER-BLOCK ?DUP IF EXIT THEN
+        1 _EXT4-JFI-MAP-INDEX +!
+    REPEAT
+    0 ;
+
 \ Decode every occupied direct slot, an optional complete single-indirect
-\ block, and an optional double-indirect root with exactly one complete child.
-\ Holes do not enter release authority.  Data remains in direct, single, then
-\ double-child pointer order.  Map metadata follows as optional single root,
-\ double root, and double child; a nonzero triple root remains unsupported.
+\ block, and every occupied child under an optional double-indirect root whose
+\ exact authority fits the caller workspace.  Holes do not enter release
+\ authority.  Data remains in direct, single, then double outer/inner pointer
+\ order.  Map metadata follows as optional single root, double root, and every
+\ child in outer-slot order; a nonzero triple root remains unsupported.
 : _EXT4-JFI-LEGACY-DATA-PREFLIGHT  ( -- ior )
     _EXT4-JDM-LEGACY-DIRECT _EXT4-JFI-DATA-MAP-KIND !
     _EXT4-JFI-INODE @ _EXT4-I.BLOCK + _EXT4-JFI-DATA-ROOT !
@@ -12775,25 +12842,22 @@ VARIABLE _EXT4-JFI-LEGACY-CHECK-INDEX
     _EXT4-JFI-LEGACY-PTRS !
     _EXT4-JFI-LEGACY-DOUBLE-HOME @ IF
         _EXT4-JDM-LEGACY-SPARSE-DOUBLE _EXT4-JFI-DATA-MAP-KIND !
-        2 _EXT4-JFI-LEGACY-INDIRECT-HOME @ IF 1+ THEN
-        DUP _EXT4-JFI-MAP-ENTRIES ! _EXT4-JFI-MAP-BLOCKS !
+        \ Reserve the maximum possible map tail while direct and optional
+        \ single data is captured.  The root scan then replaces this with the
+        \ exact occupied map count before any child data is appended.
+        _EXT4-JFI-LEGACY-PTRS @ 2 _EXT4-UADD?
+        DUP IF NIP EXIT THEN DROP _EXT4-JFI-MAP-ENTRIES !
     ELSE _EXT4-JFI-LEGACY-INDIRECT-HOME @ IF
         _EXT4-JDM-LEGACY-SINGLE-INDIRECT _EXT4-JFI-DATA-MAP-KIND !
         1 _EXT4-JFI-MAP-ENTRIES !
         1 _EXT4-JFI-MAP-BLOCKS !
     THEN THEN
-    0 _EXT4-JFI-MAP-INDEX !
-    _EXT4-JFI-LEGACY-INDIRECT-HOME @ ?DUP IF
-        _EXT4-JFI-PARK-LEGACY-MAP
-    THEN
-    _EXT4-JFI-LEGACY-DOUBLE-HOME @ ?DUP IF
-        _EXT4-JFI-PARK-LEGACY-MAP
-    THEN
     _EXT4-JFI-CAPTURE-LEGACY-DIRECTS ?DUP IF EXIT THEN
     _EXT4-JFI-LEGACY-INDIRECT-HOME @ IF
         _EXT4-JFI-LEGACY-INDIRECT-HOME @
         _EXT4-JFI-CAPTURE-LEGACY-POINTER-BLOCK ?DUP IF EXIT THEN
     THEN
+    0 _EXT4-JFI-MAP-INDEX !
     _EXT4-JFI-LEGACY-DOUBLE-HOME @ IF
         _EXT4-JFI-LEGACY-DOUBLE-HOME @
         DUP _EXT4-JFI-LEGACY-HOME-IN-DATA?
@@ -12801,10 +12865,18 @@ VARIABLE _EXT4-JFI-LEGACY-CHECK-INDEX
         SWAP _EXT4-JFI-EA @ = OR IF
             EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
         THEN
-        _EXT4-JFI-FIND-LEGACY-DOUBLE-CHILD ?DUP IF EXIT THEN
-        _EXT4-JFI-LEGACY-DOUBLE-CHILD @ _EXT4-JFI-PARK-LEGACY-MAP
-        _EXT4-JFI-LEGACY-DOUBLE-CHILD @
-        _EXT4-JFI-CAPTURE-LEGACY-POINTER-BLOCK ?DUP IF EXIT THEN
+        _EXT4-JFI-COUNT-LEGACY-DOUBLE-CHILDREN ?DUP IF EXIT THEN
+        _EXT4-JFI-FIX-LEGACY-DOUBLE-MAPS ?DUP IF EXIT THEN
+        _EXT4-JFI-LEGACY-INDIRECT-HOME @ ?DUP IF
+            _EXT4-JFI-PARK-LEGACY-MAP
+        THEN
+        _EXT4-JFI-LEGACY-DOUBLE-HOME @ _EXT4-JFI-PARK-LEGACY-MAP
+        _EXT4-JFI-PARK-LEGACY-DOUBLE-CHILDREN ?DUP IF EXIT THEN
+        _EXT4-JFI-CAPTURE-LEGACY-DOUBLE-CHILDREN ?DUP IF EXIT THEN
+    ELSE
+        _EXT4-JFI-LEGACY-INDIRECT-HOME @ ?DUP IF
+            _EXT4-JFI-PARK-LEGACY-MAP
+        THEN
     THEN
     _EXT4-JFI-MAP-INDEX @ _EXT4-JFI-MAP-ENTRIES @ <> IF
         EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
@@ -12829,7 +12901,8 @@ VARIABLE _EXT4-JFI-LEGACY-CHECK-INDEX
     0 _EXT4-JFI-MAP-INDEX !
     0 _EXT4-JFI-LEGACY-INDIRECT-HOME !
     0 _EXT4-JFI-LEGACY-DOUBLE-HOME !
-    0 _EXT4-JFI-LEGACY-DOUBLE-CHILD !
+    0 _EXT4-JFI-LEGACY-DOUBLE-CHILDREN !
+    0 _EXT4-JFI-LEGACY-DOUBLE-CHILD-BASE !
     0 _EXT4-JFI-LEGACY-PTRS !
     _EXT4-JDM-NONE _EXT4-JFI-DATA-MAP-KIND !
     _EXT4-JFI-RANGES
@@ -12910,8 +12983,9 @@ VARIABLE _EXT4-JFI-CP-WRITER
 
 \ Authenticate one complete deletion shape: an inline extent root, every
 \ format-valid resident depth-one leaf fanout, or all twelve legacy direct
-\ slots plus optional complete single-indirect data and exactly one complete
-\ child under an optional double-indirect root, with the triple root zero.
+\ slots plus optional complete single-indirect data and every occupied
+\ double-indirect child whose exact authority fits the caller workspace, with
+\ the triple root zero.
 \ Retain each represented data and map-metadata range separately
 \ and bind the map family, ordered release vector, and explicit external-xattr
 \ disposition into the owner certificate.

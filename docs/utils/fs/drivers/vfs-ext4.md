@@ -190,8 +190,10 @@ allocated regular file with zero links and an authenticated nonnegative
 depth-0 extent root, a resident depth-1 root with one to four checksum-valid
 external leaves, or a legacy map using any of the 12 direct slots and one
 optional complete single-indirect block. The legacy map may additionally use a
-double-indirect root with exactly one occupied child pointer block; the triple
-root remains zero. Each depth-1 leaf may use every entry that
+double-indirect root with one or more occupied child pointer blocks when its
+exact data-plus-map vector, plus any external-xattr owner range, fits the
+`2P+16` caller workspace for `P = block_size / 4`; the triple root remains
+zero. Each depth-1 leaf may use every entry that
 fits the mounted block size. Every resident root key must equal its leaf's
 first logical block, and each nonfinal leaf must end no later than the next
 root key. The external leaves join the exact release and reverse-owner
@@ -213,11 +215,13 @@ encoded by ext4 `ee_len`; every `logical_start + decoded_length` must be at
 most `0xffffffff`. The entries must retain ext4's exact logical ordering and
 nonoverlap rules. In a legacy map, zero direct and pointer-block slots are
 holes and every nonzero data pointer becomes an ordered singleton release
-range. Direct data precedes single-indirect data and then data from the sole
-double-indirect child. Map singletons follow as the optional single root,
-double root, and double child. Duplicate physical pointers or data/map and
-map/map aliases are corrupt; a double root with zero or multiple children and
-any nonzero triple root remain valid but unsupported recovery shapes. Physical ranges must not overlap each other or the
+range. Direct data precedes single-indirect data and then data from every
+double-indirect child in outer/inner slot order. Map singletons follow as the
+optional single root, double root, and every child in outer-slot order.
+Duplicate physical pointers or data/map and map/map aliases are corrupt. A
+double root with no occupied child, a valid exact vector larger than the
+caller workspace, and any nonzero triple root remain unsupported recovery
+shapes. Physical ranges must not overlap each other or the
 optional xattr block, and decoded `i_blocks` must exactly equal the aggregate
 data, map-metadata, and xattr block count in filesystem sectors.
 Every release range must be
@@ -685,8 +689,8 @@ builder. It reauthenticates one canonical selected plan record and accepts
 only an allocated, unlinked regular inode with a valid nonnegative 63-bit size
 whose data map is an empty or one-to-four-entry inline depth-0 extent root, a
 resident depth-1 root with one to four external leaves, or a legacy map with
-direct slots, at most one complete single-indirect block, and at most one
-complete child under its double-indirect root. Unlike linked truncation, unlinked
+direct slots, at most one complete single-indirect block, and every occupied
+double-indirect child whose exact authority fits the caller workspace. Unlike linked truncation, unlinked
 deletion does not require zero size: it releases the complete authenticated
 map and zeroes the inode. Every extent entry must have a zero physical high
 word. The depth-1 root and every external leaf are checksum- and
@@ -702,14 +706,15 @@ release singleton rather than an inline extent or direct-data slot. At a valid
 larger refcount it remains allocated and contributes one exact metadata
 after-image; only its refcount and checksum may change. Legacy zero data-pointer
 slots are holes. Occupied direct slots, single-indirect entries, and entries in
-the sole double-indirect child remain ordered data singletons. The optional
-single root, double root, and double child follow as map singletons with exact
-journal revokes. Duplicate data pointers and data/map or map/map aliases are
-corrupt. A double root with zero or multiple children and any nonzero triple
-root are unsupported. Decoded `i_blocks` must exactly match all data and map blocks plus that
+every double-indirect child remain ordered data singletons in outer/inner slot
+order. The optional single root, double root, and all children follow as map
+singletons with exact journal revokes. Duplicate data pointers and data/map or
+map/map aliases are corrupt. An empty double root, an exact authority larger
+than the caller workspace, and any nonzero triple root are unsupported.
+Decoded `i_blocks` must exactly match all data and map blocks plus that
 optional xattr singleton. The target must be at or above `s_first_ino`.
 Journal-data mode, extent trees deeper than the admitted resident depth-1
-fanout, broader double-indirect maps, triple-indirect maps, malformed lengths or ranges,
+fanout, over-budget double-indirect maps, triple-indirect maps, malformed lengths or ranges,
 inconsistent shared-xattr
 owner counts or aliases, and xattr value inodes remain refused. Every candidate
 range bit must be set and each distinct touched block-bitmap home must have
@@ -852,8 +857,9 @@ count, aggregate released-block count, and every ordered physical
 `{ first, count }` pair. A depth-1 shape retains its data ranges flattened in
 root/leaf order followed by every external-leaf singleton in root order. A
 legacy indirect shape retains direct data, single-indirect data, and sparse
-double-child data followed by the optional single root, double root, and
-double child. Unused pair slots must be zero. Delete modes
+double-child data in outer/inner slot order, followed by the optional single
+root, double root, and every child in outer-slot order. Unused pair slots must
+be zero. Delete modes
 also bind
 the external-xattr home, `NONE`/`RELEASE`/`REFDEC` disposition, post-decrement
 refcount, and retained-image CRC. The exact revoke count and identities are
@@ -1114,7 +1120,7 @@ or unlinked record before the first cleanup transaction may mutate media.
 Per-shape single-record qualification includes initialized and unwritten
 extents, nonzero logical starts, multiple separated logical/physical ranges,
 the four-entry inline maximum, the 12-slot legacy-direct maximum, sparse
-single-indirect pointers, one-child double-indirect pointers, and a
+single-indirect pointers, one- and two-child double-indirect pointers, and a
 physical range crossing two data groups.
 Pinned e2fsprogs accepts final
 empty-delete media at 1 KiB, ordinary one-block-delete media at 1/2/4 KiB, and
@@ -1477,7 +1483,8 @@ The remaining boundaries are:
   geometry, checked arithmetic, and caller-arena storage rather than a separate
   fixed constant, but still does not cover linked nonzero-size/tail truncation,
   target extent trees deeper than the resident depth-1 fanout, target legacy
-  double-indirect maps with zero or multiple children, triple-indirect map
+  double-indirect maps with zero children or authority larger than the caller
+  workspace, triple-indirect map
   mutation, a nonzero physical high word, inconsistent or out-of-range shared
   external-xattr ownership, inline or external xattr value-inode release, or general
   link-count and malformed-chain repair. General inode
@@ -1573,7 +1580,7 @@ The remaining boundaries are:
   blocks under the unchanged 1,800,000,000-step watchdog, preserves every
   released payload without a data or leaf home write, restores allocation
   accounting, and publishes a clean mounted VFS. The shared mutation range
-  capacity is now derived from the larger admitted sparse-double legacy shape:
+  capacity is now the shared sparse-double legacy authority budget:
   528, 1040, or 2064 pairs at 1, 2, or 4 KiB. The existing one-leaf modern production path
   completed in
   1,686,717,231 guest steps under the feature-specific 1,800,000,000-step
@@ -1618,17 +1625,21 @@ The remaining boundaries are:
   Legacy-protocol, maximum-fanout,
   external-xattr composition, crash, and pinned e2fsck qualification remain
   pending for this tier.
-  Sparse-double admission adds one complete child at any occupied slot of the
-  double-indirect root, with the single-indirect root independently optional.
-  Focused preflight covers the two-map form `{ double root, child }`; exact
-  staging covers the three-map form `{ single root, double root, child }` and
-  retains all three revokes in that order. Child/data aliasing is corrupt, a
-  structurally valid root with multiple children is unsupported, and the
-  triple-indirect root remains unsupported. Focused modern production cleanup
+  Sparse-double admission accepts every occupied child in root-slot order when
+  the exact data, map, and present-xattr owner vector fits the shared `2P+16`
+  workspace; the single-indirect root remains independently optional. Focused
+  preflight covers `{ double root, child@2, child@7 }`; exact staging covers
+  `{ single root, double root, child@2, child@7 }` and retains all four revokes
+  in that order. A boundary check admits 524 data plus four map ranges into the
+  exact 528-pair 1 KiB workspace when no xattr is present, while a present
+  xattr or one additional data pointer returns unsupported recovery. Child/data
+  aliasing and duplicate child homes are corrupt; an empty double root,
+  over-budget authority, and the triple-indirect root remain unsupported.
+  Focused one-child modern production cleanup
   releases three data blocks and all three map blocks in 1,431,070,159 guest
   steps under a scoped 1,600,000,000-step watchdog. It preserves all six homes
   without a payload write, restores allocation accounting, and remounts
-  byte-identically with zero I/O. Legacy-protocol, maximum-child,
+  byte-identically with zero I/O. Multi-child production, legacy-protocol,
   external-xattr, crash, and pinned e2fsck qualification remain pending for
   this tier. Pinned
   e2fsprogs 1.47.4 accepts both protocols for the empty 1 KiB result, ordinary
