@@ -18,13 +18,34 @@ or callback-streamed reads should use the policy-neutral
 envelopes, and domain stores remain separate higher-level concerns.
 
 The ext4 implementation provides an ordinary checksummed read-only binding and
-an explicit staged-write binding for three production-closed request envelopes:
+an explicit staged-write binding for four production-closed request envelopes:
 initialized overwrite, strict append inside an initialized partial EOF block,
-and allocation-backed fill of complete in-size holes. Both descriptors are described by the
+allocation-backed fill of complete in-size holes, and allocation-backed growth
+from exact aligned EOF. Both descriptors are described by the
 [`akashic-vfs-ext4` contract](drivers/vfs-ext4.md) and remain constrained by the
-ratified [`akashic-ext4-rw-v1` profile](ext4-compatibility-profile.md). The
-staged operations are real ABI-1 capabilities, but they are not a claim that the
-complete writable profile is implemented.
+ratified [`akashic-ext4-rw-v1` profile](ext4-compatibility-profile.md). These are
+real ABI-1 production capabilities inside their documented envelope, not toy or
+provisional models; they do not claim that the complete writable profile is
+implemented.
+
+Aligned-EOF growth currently requires authenticated 1 KiB filesystem geometry,
+256-byte inodes, a linked regular file with an unmapped target in a depth-zero
+resident extent root, exact no-gap block-aligned EOF, and one nonempty request
+of at most one block. Its `4/1/0` transaction orders a fully initialized
+zero-backed new block before journal authority and journals the allocation
+bitmap, primary GDT, primary superblock, and inode after-images. Signed credit
+`-4` makes progress commit-granular; committed publication updates shared-vnode
+size, blocks, and times plus the filesystem free-block count. Gaps, mixed
+overwrite/growth, and wider requests refuse before clock sampling or media I/O.
+Mapped or unwritten targets, depth-positive mutation, unmergeable full roots,
+and insufficient writer capacity refuse during write-free preflight or dry
+staging before activation. Linked growth creates no orphan state. Broader write
+and recovery cases advance from reachable evidence while full
+`akashic-ext4-rw-v1` production capability remains the release goal.
+The operation-specific crash cuts preserve that VFS contract: W7 candidate
+tears return zero and leave old vnode/statfs state, while committed W22 inode-
+home tears return full progress, publish size/blocks/free/time before read-only
+quarantine, and replay the four metadata homes without rewriting ordered data.
 
 ## Quick start
 

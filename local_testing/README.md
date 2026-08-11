@@ -350,11 +350,40 @@ covers production-path cleanup for a substantial bounded subset of legacy and
 modern orphan shapes, with staged or refusal coverage for additional shapes.
 The separate public journeys now qualify the explicitly staged ext4 binding for
 initialized overwrite, strict append inside an initialized partial EOF block,
-and allocation-backed fill of complete in-size holes. The ordinary ext4
-binding remains read-only. Each later operation ratchets in under its own
-reachable-state, external-tool, crash, and ABI gate; complete profile
-conformance remains withheld until the full recovery and release closure
-passes.
+allocation-backed fill of complete in-size holes, and allocation-backed growth
+from exact aligned EOF. The last operation is current production capability
+inside its authenticated 1 KiB/256-byte-inode envelope: a linked regular file,
+no gap, exact block-aligned EOF, a nonempty request of at most one block, an
+unmapped target in a depth-zero resident extent root, and a spare-slot insertion
+or exact initialized coalescing edit. It is not a fixture-specific or
+provisional model of growth.
+
+The aligned-growth journey binds a `4/1/0` profile and verifies one ordered
+zero-backed candidate plus the block-bitmap, primary-GDT, primary-super, and
+inode-table transaction. It pins the extent map, `i_size`, `i_blocks`, inode
+checksum and times, shared-vnode size/block/time publication, filesystem
+free-block publication, zero suffix, hard-link readback, clean write-free
+remount, and external `debugfs`/read-only `e2fsck` acceptance. Signed credit
+`-4` withholds progress until journal commit. W7 tears the ordered candidate and
+must leave it free, unmapped, unreachable, and report zero with no replayed
+metadata; W22 tears the committed inode checkpoint home and must report full
+progress, publish size/blocks/free/time before quarantine, replay all four
+metadata homes without rewriting the candidate, and converge to a byte-stable
+write-free remount. Gap, mixed-growth, over-block, mapped-target, depth-positive,
+unmergeable-full-root, and insufficient-profile cases retain their documented
+pre-I/O or dry-stage refusal boundaries.
+
+The ordinary ext4 binding remains read-only. Linked aligned growth creates no
+orphan state, so recovery breadth grows when enabled writes, external fixtures,
+crashes, checkers, or field evidence make a case reachable rather than through
+speculative orphan enumeration. Each later operation ratchets in under its own
+reachable-state, external-tool, crash, and ABI gate; the full production goal
+and complete-profile recovery and release closure remain unchanged.
+
+The aligned-growth internal capstone passes success, policy refusal, W7, and
+W22 together in 265.57 seconds with shared session fixtures. The explicitly
+configured pinned e2fsprogs `debugfs`/`e2fsck` case passes separately in 105.60
+seconds.
 
 When a resolved profile closure binds directly to MegaPad networking, the
 harness injects the one canonical packed `networking.f` and loads it with

@@ -10,11 +10,13 @@ linked regular files on authenticated 1 KiB/256-byte-inode geometry. It
 supports block-bounded overwrite of initialized extents, strict no-gap append
 inside an already allocated partial EOF block, and allocation-backed fill of
 complete logical holes inside the existing file size under the extent-root
-conditions described below. Each callback is independently durable and
-targets at most one logical block. `VFS-WRITE-EXACT` can compose the qualified
-size-preserving callbacks across adjacent blocks. The broader 1/2/4 KiB and
-128/256-byte-inode forms remain available to read and recovery paths; 2/4 KiB
-and 128-byte-inode mutation await equivalent qualification. The driver also
+conditions described below. It also performs allocation-backed no-gap growth
+of at most one initialized block from exact aligned EOF under those resident-
+root conditions. Each callback is independently durable and targets at most
+one logical block. `VFS-WRITE-EXACT` can compose the qualified size-preserving
+callbacks across adjacent blocks. The broader 1/2/4 KiB and 128/256-byte-inode
+forms remain available to read and recovery paths; 2/4 KiB and 128-byte-inode
+mutation await equivalent qualification. The driver also
 implements bounded mount-time recovery and durable transaction emission for an
 internal checksum-v3 JBD2 journal. It never uses the ambient filesystem volume:
 reads and all recovery, activation, emission, checkpoint, and clean-deactivation
@@ -45,7 +47,7 @@ weaken functionality. If correct source legitimately outgrows it, the budget
 must be revisited from measured system resources. The harness still performs a
 real cold source build and requires the `EXT4-SOURCE-READY` marker with no
 Forth diagnostic. The current base snapshot measures 131,992,675 steps, and
-the production ext4 source load measures 911,120,340 steps across 2,356 packed
+the production ext4 source load measures 913,614,872 steps across 2,363 packed
 lines under that watchdog. Runtime recovery journeys use a separate
 1,200,000,000-step default watchdog. Geometry-bounded multi-record production and selected
 multi-record fault journeys use a scoped 1,500,000,000-step watchdog because
@@ -109,13 +111,13 @@ The staged mount admits nonempty mutation only on authenticated 1 KiB
 filesystem geometry with 256-byte inodes and a journal capable of at least the
 `1 metadata / 1 ordered data / 0 revoke` initialized-RMW transaction. These checks
 occur during staged mount before it can publish a writable VFS or mutate media.
-The allocation-backed hole operation additionally requires the journal and
-bound writer profile to admit `4/1/0`. The ordinary constructor retains the
-broader read/recovery geometry, including 2/4 KiB filesystems and 128-byte
-inodes.
+The allocation-backed hole and aligned-EOF growth operations additionally
+require the journal and bound writer profile to admit `4/1/0`. The ordinary
+constructor retains the broader read/recovery geometry, including 2/4 KiB
+filesystems and 128-byte inodes.
 
 A mounted instance can reserve an initialized-RMW profile as follows (use
-`4 1 0` in both calls to admit hole fill as well):
+`4 1 0` in both calls to admit hole fill and aligned-EOF growth as well):
 
 ```forth
 1 1 0 fs EXT4-WRITER-WORKSPACE-BYTES? THROW
@@ -127,12 +129,13 @@ writer-arena 1 1 0 fs EXT4-BIND-WRITER-ARENA? THROW
 The three capacities are maximum metadata, ordered-data, and revoke credits;
 there is no driver-chosen split or operation-count ceiling. Initialized-block
 overwrite and initialized partial-tail append consume `1/1/0`;
-allocation-backed hole fill consumes `4/1/0`. A `1/1/0` profile therefore
-serves both initialized-RMW operations, while `4/1/0` (or a larger accepted
-tuple) serves all three currently qualified operations. The sizing query
-proves that the complete tuple fits the journal ring, `s_max_transaction`, and
-`s_max_trans_data`. Binding requires a fresh dedicated arena whose backing is
-disjoint from the VFS arena. Its descriptor, backing, and bump pointer remain
+allocation-backed hole fill and aligned-EOF growth consume `4/1/0`. A `1/1/0`
+profile therefore serves both initialized-RMW operations, while `4/1/0` (or a
+larger accepted tuple) serves all four currently qualified operations. The
+sizing query proves that the complete tuple fits the journal ring,
+`s_max_transaction`, and `s_max_trans_data`. Binding requires a fresh dedicated
+arena whose backing is disjoint from the VFS arena. Its descriptor, backing,
+and bump pointer remain
 exclusively owned by ext4 until clean unmount, which scrubs the complete writer
 and rolls the arena back to fresh. Busy or faulted unmount retains it for retry
 or diagnosis. The caller may destroy the arena only after successful unmount.
@@ -1273,18 +1276,22 @@ for a linked regular file whose inode flags are exactly `EXTENTS`. An
 initialized-block overwrite or partial-tail append may use an authenticated
 depth-0 or depth-1 extent tree. Append additionally requires an exact partial
 EOF inside an initialized mapped block, with the complete no-gap request
-fitting the remaining bytes of that block. Allocation-backed hole fill requires
-an authenticated inline depth-0
-extent root whose target can be represented either by a sorted insertion into
-a spare resident slot or, after free-block selection, by an exact logical-and-
-physical initialized coalescing edit. It also requires an exact `i_blocks`
-account and a complete logical hole before the final partial logical block and
-inside the existing file size for each callback. An exact request may continue
-across adjacent complete holes while each next callback still satisfies that
-structural admission. The mounted instance must also have a trusted clock and
-a caller-owned writer arena. Overwrite and partial-tail append require a profile
-containing `1 metadata / 1 ordered data / 0 revoke`; hole fill requires one
-containing `4/1/0`.
+fitting the remaining bytes of that block. Allocation-backed hole fill and
+aligned-EOF growth require an authenticated inline depth-0 extent root whose
+target can be represented either by a sorted insertion into a spare resident
+slot or, after free-block selection, by an exact logical-and-physical
+initialized coalescing edit. Both require an exact `i_blocks` account and an
+unmapped target logical block. Hole fill keeps that block inside the existing
+file size and before its final partial logical block. Aligned growth instead
+requires the request offset to equal an exactly block-aligned authenticated
+EOF, admits a nonempty request of at most one filesystem block, and advances
+EOF by exactly that request without a gap. An exact request may continue across
+adjacent complete in-size holes while each next callback still satisfies that
+structural admission; one aligned-growth request never chains into a second new
+block. The mounted instance must also have a trusted clock and a caller-owned
+writer arena. Overwrite and partial-tail append require a profile containing
+`1 metadata / 1 ordered data / 0 revoke`; both allocation-backed operations
+require one containing `4/1/0`.
 
 `Staged` distinguishes the currently implemented operation set from complete
 `akashic-ext4-rw-v1` conformance. It describes capability breadth, not a
@@ -1295,14 +1302,16 @@ Each size-preserving callback invocation is bounded at the next filesystem-
 block boundary and may return short success; `VFS-WRITE-EXACT` can issue
 another independently durable request for the remaining span. Strict append
 instead admits only a complete request that fits the allocated partial tail;
-it does not turn a cross-block growth request into a partially admitted append.
-The public route sends append directly to initialized RMW and cannot fall
-through to allocation. An in-size request first attempts initialized overwrite;
-only its exact clean unmapped result is eligible for allocation-backed hole
-fill. Corruption, an unwritten extent, stale authority, or another refusal is
-returned without reinterpretation. The qualified surface does not allocate at
-or beyond EOF, convert unwritten extents, grow an extent root, or provide a
-multi-block atomic-write contract.
+aligned-EOF growth likewise admits the complete request only when it fits one
+new block. Neither growth mode turns a wider request into partial growth. The
+public route sends partial-tail append directly to initialized RMW and
+aligned-EOF growth directly to allocation; neither can fall through to another
+operation. An in-size request first attempts initialized overwrite; only its
+exact clean unmapped result is eligible for allocation-backed hole fill.
+Corruption, an unwritten extent, stale authority, or another refusal is returned
+without reinterpretation. The qualified surface does not create a sparse gap,
+convert unwritten extents, grow an extent root, allocate a second EOF block in
+one request, or provide a multi-block atomic-write contract.
 
 The initialized-RMW typed stage builds exactly one ordered data-block
 after-image, one inode-table metadata-block after-image, and no revokes. Its
@@ -1310,7 +1319,7 @@ ordered image is a full-block read-modify-write copy. Overwrite preserves
 `i_size`; append writes the authenticated new EOF into the same inode
 after-image. The allocation-backed stage described below instead constructs a
 zero-backed ordered block and four metadata after-images for the inode and
-allocation accounting, also with no revokes. All three operations update
+allocation accounting, also with no revokes. All four operations update
 `mtime` and `ctime` from the trusted clock and restamp the ext4 inode checksum.
 Dry staging itself neither emits nor checkpoints; the
 staged callback composes it with activation, emission, synchronous checkpoint,
@@ -1370,9 +1379,11 @@ VFS cursor model, and the entire nonempty request must fit the unused remainder
 of that same block. The complete depth-0 or depth-1 extent tree, target mapping,
 inode locator/generation, link count, flags, xattr pointer, and both transaction
 homes are authenticated exactly as for overwrite. Gaps, mixed overwrite plus
-growth, aligned EOF, and cross-block growth refuse before clock sampling or
-writer work. Sparse or unwritten tails refuse during dry staging before
-journal activation or mutation I/O.
+growth, and cross-block growth from a partial tail refuse before clock sampling
+or writer work. Exact aligned EOF is classified separately and routes to the
+allocation-backed growth operation below rather than this initialized-RMW
+mode. Sparse or unwritten tails refuse during dry staging before journal
+activation or mutation I/O.
 
 Append uses the existing `1 metadata / 1 ordered data / 0 revoke` full-block
 RMW transaction. It changes only the bytes in the allocated tail, `i_size`, the
@@ -1405,6 +1416,60 @@ shared vnode to 60 with committed times, and quarantines the volume
 rewrites block 1346, and reaches the exact successful inode followed by a
 byte-stable write-free remount. Neither path creates orphan state.
 
+### Allocation-backed aligned-EOF growth
+
+The staged binding also admits linked-file growth from an exactly block-aligned
+authenticated EOF. The request is one nonempty span of at most one filesystem
+block, its offset must equal EOF, and its target logical block must be unmapped
+in an authenticated inline depth-zero resident extent root. The root edit must
+fit a spare resident slot or be an exact logical-and-physical initialized
+coalescing edit. A gap, a request larger than one block, mixed overwrite plus
+growth, a mapped or unwritten target, a depth-positive root, and an unmergeable
+full resident root refuse without being reinterpreted as another write mode.
+Public gap, mixed-growth, and over-block requests refuse before clock sampling,
+writer work, or media I/O; capacity and structural-map refusals complete during
+write-free preflight or dry staging before journal activation.
+
+This is current production capability inside the documented 1 KiB/256-byte-
+inode envelope. It is not a fixture-specific approximation of general growth.
+The containing `4 metadata / 1 ordered data / 0 revoke` profile reserves one
+transaction that writes a fully initialized zero-backed candidate block with
+the caller span overlaid, sets its allocation-bitmap bit, decrements the primary
+GDT and superblock free-block counters, and publishes one checksummed inode
+after-image containing the extent edit, incremented `i_blocks`, exact new
+`i_size`, and clock-derived `mtime`/`ctime`. The ordered candidate precedes
+journal authority, and signed metadata credit `-4` makes progress
+commit-granular: no caller byte is reported until the complete allocation,
+mapping, and EOF transaction commits. Success, and a later checkpoint failure
+after commit, publish the shared vnode size, block count, filesystem free-block
+count, and timestamps before returning confirmed progress.
+
+The public hard-link qualification grows an exactly 1,024-byte file by one
+24-byte request, attaches a new initialized logical block, advances `i_size` to
+1,048 and `i_blocks` from 4 to 6, decrements free space once, and leaves the
+unused 1,000 bytes of the new block zero. Both names expose the same committed
+bytes and metadata; a clean ordinary remount is write-free, and pinned
+e2fsprogs `debugfs` read/map/stat plus read-only `e2fsck` accept the result.
+
+W7 and W22 close the operation-specific crash boundary. A tear of the ordered
+candidate at W7 reports `actual = 0`, retains the old EOF, `i_blocks`, free
+count, and timestamps in memory, and leaves the raw candidate free, unmapped,
+and unreachable; recovery replays no metadata home and the next remount is
+write-free. At W22 the journal commit is already durable and the final
+inode-table checkpoint home tears. The callback reports the complete request,
+publishes the new size, block count, free count, and timestamps, and quarantines
+the mount `PARTIAL|READONLY`. Fresh recovery replays the four allocation/inode
+metadata homes, never rewrites the ordered candidate, and reaches the exact
+successful image followed by a byte-stable write-free remount. Growing a linked
+inode in this transaction creates no orphan state; broader allocation and
+orphan recovery are admitted when write or interoperability evidence makes them
+reachable, not by speculative orphan expansion.
+
+The focused W7 and W22 journeys pass in 190.29 and 190.46 host seconds. A
+shared-fixture capstone passes success, policy refusal, W7, and W22 together in
+265.57 seconds; pinned e2fsprogs `debugfs`/`e2fsck` qualification passes in a
+separate explicitly configured run in 105.60 seconds.
+
 ### Allocation-backed in-size hole fill
 
 The staged binding publicly routes an exact clean unmapped target to the typed
@@ -1430,23 +1495,24 @@ primary superblock. The target's complete existing map is separately checked
 against static metadata and journal roles before that inode is excluded from
 the scan.
 
-The allocation stage refuses an existing initialized mapping, unwritten
+The in-size hole-fill mode refuses an existing initialized mapping, unwritten
 conversion, a depth-positive root or a full inline root for which no count-
 preserving initialized coalescing edit is valid, a cross-block request, the
-final partial logical block, and EOF growth. Those are boundaries of this
-mutation operation, not claims that such files are invalid or unreadable. The
-public router reaches this stage only after the initialized overwrite builder
-has authenticated the target as exactly unmapped.
+final partial logical block, and EOF growth. Those are boundaries of this mode,
+not claims that such files are invalid or unreadable. The public router reaches
+it only after the initialized overwrite builder has authenticated the target as
+exactly unmapped.
 
-Both transaction shapes and all three public operations use the real durability
+Both transaction shapes and all four public operations use the real durability
 lifecycle. A write-free dry stage is
 aborted before clean-to-`RECOVER` activation; the live stage emits ordered data
 before its descriptor and final commit and then synchronously checkpoints the
 active metadata homes. Initialized overwrite and append each have one
-inode-table metadata home. Hole fill has four metadata homes: the inode table,
-block bitmap, primary GDT, and primary superblock. The allocation transaction attaches one initialized
-data block through the authenticated insert-or-coalesce edit, updates the
-authenticated free-block accounting and `i_blocks`, and preserves `i_size`.
+inode-table metadata home. Hole fill and aligned-EOF growth each have four
+metadata homes: the inode table, block bitmap, primary GDT, and primary
+superblock. Their allocation transaction attaches one initialized data block
+through the authenticated insert-or-coalesce edit and updates authenticated
+free-block accounting and `i_blocks`; aligned growth also advances `i_size`.
 Public unmount cleanly deactivates the retained writer, and a fresh ordinary
 read-only mount reads the resulting file without requiring a new mutation
 capability.
@@ -1464,10 +1530,11 @@ allocation home is written. Fresh recovery enters the empty active journal but
 replays zero homes, so the torn raw candidate remains free and unreachable and
 the original sparse file is preserved. GDT and primary-super checkpoint-home
 tears occur after the allocation transaction is committed: both report the
-complete confirmed caller count while leaving vnode accounting and timestamps
-unpublished. Fresh recovery writes all four metadata homes, never rewrites the
-ordered candidate, publishes the allocated extent and exact free-block/
-`i_blocks` state on reload, and reaches a byte-stable write/flush-free remount. The
+complete confirmed caller count and publish committed vnode block accounting,
+filesystem free space, and timestamps before returning the quarantine error.
+Fresh recovery writes all four metadata homes, never rewrites the ordered
+candidate, publishes the allocated extent and exact free-block/`i_blocks` state
+on reload, and reaches a byte-stable write/flush-free remount. The
 combined public success, external-tool, ordered-data, GDT, and primary-super
 capstone passes five tests sequentially in 310.47 host seconds.
 
@@ -1497,11 +1564,15 @@ expected generation, explicit seconds/nanoseconds, the mounted VFS, a signed
 metadata credit, and a typed stage XT, and returns `actual ior`. Positive credit
 selects ordered-sector prefix progress for bytes already reachable through the
 old inode size. Negative credit selects commit-granular progress for operations
-whose caller bytes are not yet reachable—allocation-backed hole fill and
-initialized append—while its absolute value is the real metadata credit. A
-zero-length request returns `0 0` without allocating a writer. Every
+whose caller bytes are not yet reachable—allocation-backed hole fill,
+initialized partial-tail append, and aligned-EOF growth—while its absolute value
+is the real metadata credit. A zero-length request returns `0 0` without
+allocating a writer. Every
 nonempty request preflights and ensures `abs(metadata-credit)/1/0`, which is
-`1/1/0` for overwrite or append and `4/1/0` for hole fill. Before any operation it
+`1/1/0` for overwrite or partial-tail append and `4/1/0` for either
+allocation-backed operation. Aligned growth passes signed credit `-4`; its
+absolute value reserves four metadata homes while its sign withholds progress
+until journal commit. Before any operation it
 copies the admitted source into one private `_EXT4-MAX-BLOCK` snapshot,
 preserving caller bytes even when the source aliases a shared ext4 cache or
 writer storage that dry staging, activation, or writer rebase will overwrite.
@@ -1752,9 +1823,9 @@ preserving the still-mounted instance's ready/current authority.
 `VFS-BF-STABLE-IDS`. The VFS rejects all mutation before binding dispatch.
 `EXT4-STAGED-WRITE-BINDING` instead omits `READ_ONLY`, adds `VFS-CAP-WRITE`,
 and dispatches the qualified initialized overwrite, initialized partial-tail
-append, and in-size hole-fill operations described above. Both bindings retain
-`VFS-CAP-SPARSE` for existing
-sparse mappings and zero-filled hole reads. The bounded allocation operation is
+append, in-size hole-fill, and aligned-EOF growth operations described above.
+Both bindings retain `VFS-CAP-SPARSE` for existing sparse mappings and
+zero-filled hole reads. The bounded allocation operation is
 part of the staged `WRITE` contract; it is not implied for arbitrary holes by
 the `SPARSE` capability bit. `VOL-WRITE` and `VOL-FLUSH` remain confined to
 authenticated recovery and the staged transaction lifecycle.
@@ -1813,11 +1884,12 @@ The ratchet order is:
 1. freeze or clamp the qualified recovery baseline;
 2. expose initialized-block overwrite and the structurally bounded one-block
    in-size hole allocation, then strict append inside an initialized partial
-   EOF block, through the explicitly named staged binding while leaving the
-   ordinary binding read-only;
-3. broaden mutation geometry and extent shapes, then add allocation-backed EOF
-   growth from aligned EOF and across the current initialized-tail boundary,
-   with the additional allocation/edit forms it requires;
+   EOF block and one-block allocation-backed growth from aligned EOF, through
+   the explicitly named staged binding while leaving the ordinary binding
+   read-only;
+3. broaden mutation geometry and extent shapes, then compose additional EOF
+   blocks and growth across the current one-block boundaries with the required
+   allocation and extent-root edit forms;
 4. add inode/directory creation and then truncation, unlink, and removal with
    the exact new orphan states those operations make reachable;
 5. add rename, links, remaining metadata operations, and xattr mutation; and
@@ -1833,9 +1905,10 @@ conformance.
 ## Deliberate remaining limits
 
 The current explicitly staged write surface is not completion of the writable
-profile. Its initialized-overwrite, initialized partial-tail append, and
-in-size hole-fill operations are production-closed for their documented
-request envelopes, but no broader geometry or operation inherits that status.
+profile. Its initialized-overwrite, initialized partial-tail append, in-size
+hole-fill, and aligned-EOF growth operations are production-closed for their
+documented request envelopes, but no broader geometry or operation inherits
+that status.
 `EXT4-STAGED-WRITE-OPS` adds only `MOUNT` admission and `WRITE` dispatch to the
 ordinary table. Neither binding advertises `CREATE`, `MKDIR`, `UNLINK`,
 `RMDIR`, `RENAME`, `TRUNCATE`, `SETATTR`, `LINK`, `SYMLINK`, `SETXATTR`, or
@@ -1847,7 +1920,7 @@ and inode allocation, extent and legacy-map growth and shrink, directory-entry
 mutation, inode/link/time/accounting updates, xattr mutation, broader per-record
 orphan closure, and the final compositional release matrix.
 
-The staged binding publishes three concrete durable operations. Initialized
+The staged binding publishes four concrete durable operations. Initialized
 overwrite uses a full-block ordered-data RMW plus one checksummed inode-table
 after-image and consumes `1/1/0`. Strict append uses the same transaction shape
 to extend exact partial EOF inside the initialized block, updating `i_size`
@@ -1855,8 +1928,10 @@ without allocation. In-size hole fill allocates one geometry-
 selected block, attaches it to the resident depth-zero root by sorted singleton
 insertion or checked adjacent initialized coalescing, updates block bitmap,
 group and super free-block accounting plus `i_blocks`, and consumes `4/1/0`.
-All three update clock-derived `mtime`/`ctime`; only hole fill changes
-`VN.BLOCKS`, and only append changes file size. Exact writes can compose the
+Aligned-EOF growth uses that same allocation-backed `4/1/0` transaction and
+also advances `i_size`. All four update clock-derived `mtime`/`ctime`; both
+allocation-backed operations change `VN.BLOCKS` and free-space accounting, and
+both append modes change file size. Exact writes can compose the
 size-preserving callbacks across
 the evidenced adjacent initialized or complete-hole blocks. Each callback
 invocation is independently durable and does not promise atomic batching with
@@ -1865,11 +1940,12 @@ hole-fill lifecycle includes dry-stage, activation, ordered emission,
 synchronous checkpoint, clean deactivation, and a byte-stable write-free
 ordinary remount. Its pinned external-tool journey and representative ordered
 candidate, GDT-home, and primary-super-home crash recovery are also qualified.
-The next write ratchet is allocation-backed EOF growth from aligned EOF and
-across the current initialized-tail boundary, not speculative orphan expansion.
-General multi-block and sparse/gap growth, unwritten conversion, extent-root
-growth, broader mutation geometry, multi-block atomicity, truncation, and
-namespace mutation remain later capabilities.
+Aligned growth adds its own pinned external-tool journey and W7 ordered-
+candidate/W22 inode-home crash closure. The next write ratchets broaden from
+evidence produced by these real writes rather than speculative orphan
+expansion. General multi-block and sparse/gap growth, unwritten conversion,
+extent-root growth, broader mutation geometry, multi-block atomicity,
+truncation, and namespace mutation remain later capabilities.
 
 The remaining boundaries are the final-profile closure inventory, not an
 ordered list of prerequisites for retaining the qualified write surface:
@@ -1879,8 +1955,9 @@ ordered list of prerequisites for retaining the qualified write surface:
 - read and recovery retain the authenticated 1/2/4 KiB and 128/256-byte-inode
   forms, while staged mutation is currently qualified on 1 KiB/256-byte-inode
   geometry. The initialized-overwrite extent corpus reaches depth 1; each hole
-  fill currently edits only a depth-0 resident root, using either a spare-slot
-  insertion or an exact initialized coalescing edit. The consecutive-hole
+  fill or aligned-EOF allocation currently edits only a depth-0 resident root,
+  using either a spare-slot insertion or an exact initialized coalescing edit.
+  The consecutive-hole
   journey proves coalescing by extending the first allocated singleton to
   length two while leaving the root at three entries. The planner also admits
   a full resident root when coalescing preserves its entry count; unmergeable
@@ -1907,7 +1984,9 @@ ordered list of prerequisites for retaining the qualified write surface:
   foundations. The staged binding composes them with a full ordered-data RMW
   and timed checksummed inode after-image for initialized overwrite or strict
   partial-tail append, or with a newly allocated zero-backed ordered block plus
-  the four authenticated allocation/inode metadata homes for hole fill. All
+  the four authenticated allocation/inode metadata homes for hole fill or
+  aligned-EOF growth. Aligned growth carries map, `i_blocks`, `i_size`, times,
+  and checksum in the one inode after-image. All
   operations run only after
   mutation-range and filesystem-wide ownership proof. Broader mutation remains
   gated operation by operation.
