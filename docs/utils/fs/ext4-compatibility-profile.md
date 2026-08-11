@@ -18,8 +18,9 @@ legacy per-record orphan shapes is now implemented as one exact transaction
 per record. Its count is bounded by authenticated geometry, checked arithmetic,
 and caller-arena capacity rather than a cleanup-specific constant; positive
 union-drain qualification currently reaches two records. Broader record
-shapes, mutation beyond the staged overwrite, and the complete bidirectional
-gates remain open. MP64FS remains the working native storage binding. FAT and
+shapes, mutation beyond the staged write operations, and the complete
+bidirectional gates remain open. MP64FS remains the working native storage
+binding. FAT and
 the ordinary ext4 binding remain read-only interoperability surfaces; ext4
 additionally exposes the explicitly named staged capability described below.
 
@@ -36,7 +37,10 @@ be implemented before any narrower operation can be developed and qualified.
 Internal or explicitly staged operation slices may land under this profile
 without inventing a weaker format profile, provided the public capability mask
 continues to describe only behavior that has actually passed its promotion
-gate. A staged slice is not a claim of complete profile conformance.
+gate. `Staged` names incremental conformance status only. A slice that passes
+its per-operation promotion gate is the real production-directed
+implementation and is production-closed inside its documented envelope; it is
+not yet a claim of complete profile conformance.
 
 This document uses three distinct admission terms:
 
@@ -838,9 +842,10 @@ journal without clearing `RECOVER`, and rebases the same allocation for an
 immediate sequential transaction without reactivation or arena growth. It
 now also checkpoints `COMMITTED` state during public unmount and performs the
 six-write clean deactivation with terminal fault quarantine. The explicitly
-named staged binding publishes only the qualified existing-block overwrite;
-the ordinary ext4 binding remains read-only and every other mutation
-capability remains disabled. Modern `ORPHAN_PRESENT` and a nonzero legacy
+named staged binding publishes the qualified existing-block overwrite and
+allocation-backed fill of complete in-size holes; the ordinary ext4 binding
+remains read-only and every other mutation capability remains disabled. Modern
+`ORPHAN_PRESENT` and a nonzero legacy
 `s_last_orphan` are now admitted, after any required journal replay and strict
 reload, into a unified, non-mutating two-pass preflight. Legacy discovery
 follows checksum-valid allocated inodes through `i_dtime` under a
@@ -1313,9 +1318,11 @@ closure for every state the operation admits or can create, truthful ABI and
 capability publication, operation-specific external-tool inspection, and the
 representative crash and durability evidence for its distinct state-machine
 topology. The existing-block size-preserving overwrite does not depend on
-broader orphan cleanup shapes that it cannot create; those shapes remain a
-final-profile backlog unless external evidence or a next operation makes them
-reachable.
+broader orphan cleanup shapes that it cannot create. Neither does the linked,
+size-preserving in-size hole fill: its committed transaction binds the
+allocation accounting and extent attachment, and it creates no orphan state.
+Broader orphan shapes remain a final-profile backlog unless external evidence
+or a next operation makes them reachable.
 
 The final-completion gate additionally includes general profile-admitted
 orphan/truncate/delete algorithms, qualified compositionally across structure
@@ -1324,15 +1331,17 @@ complete namespace/data/metadata/xattr mutation surface; Akashic-authored
 active, dirty-empty, and clean image interoperability; and the remaining
 controlled power-cut/release matrices. The detailed pending cases below are
 that closure inventory, not an assertion that every item is the next
-prerequisite for the narrow overwrite slice.
+prerequisite for the current linked-file write operations.
 
-The staged regular-file callback provides one narrow chunking primitive: a
-larger size-preserving caller range completes only its first filesystem-block
-chunk and returns legal short progress, consuming `1 metadata / 1 data / 0
-revoke` credits from any containing caller profile. This removes both a
+The staged regular-file callback provides one block-bounded chunking primitive:
+a larger size-preserving caller range completes only its first target logical
+block and returns legal short progress. Initialized overwrite consumes `1
+metadata / 1 data / 0 revoke`; allocation-backed fill of a complete in-size
+hole consumes `4/1/0` from any containing caller profile. This removes both a
 caller-size limit and first-operation workspace selection from the qualified
-slice, but it does not supply the general chunk planners for growth, allocation,
-multi-home metadata, or namespace operations. Its short-progress and
+surface and supplies bounded allocation for the admitted hole shape. It does
+not supply the general planners for EOF growth, extent-root growth, arbitrary
+allocation geometry, or namespace operations. Its short-progress and
 later-error behavior is qualified through `VFS-WRITE?` and
 `VFS-WRITE-EXACT` on `EXT4-STAGED-WRITE-BINDING`. That descriptor alone adds
 `WRITE` and omits `READ_ONLY`; the ordinary `EXT4-BINDING`, `EXT4-CAPS`, and
@@ -1349,8 +1358,20 @@ The exact data and inode homes, two clock samples, final timestamp, unchanged
 external extent node and map, write-free remount, pinned `debugfs` read/map,
 and clean `e2fsck` result are all qualified. This is a multi-block transfer
 made from independently durable block transactions. It is not an atomic
-multi-block transaction, does not widen the per-chunk `1/1/0` profile, and
-does not admit a hole, unwritten extent, allocation, growth, or append.
+multi-block transaction and does not widen the per-chunk `1/1/0` profile. This
+initialized-pair journey does not itself admit a hole, unwritten extent,
+allocation, growth, or append.
+
+A separate composition gate constructs a valid four-block sparse inode with
+initialized logical blocks 0 and 3 and complete holes at 1 and 2. One public
+`VFS-WRITE-EXACT` fills both holes as independently durable `4/1/0`
+transactions through the same writer. Exact allocation, extent mapping,
+`i_blocks`, free-space, cursor, time, ordered-home, full-file readback, clean
+unmount, write/flush-free remount, pinned `debugfs`, and read-only `e2fsck`
+checks all pass. This qualifies consecutive in-size hole composition without
+claiming an atomic two-block transaction. The second insertion fills the
+current inline root; a further distinct unmerged extent still requires merge
+or extent-root growth support.
 
 The staged-operation crash evidence includes the final commit flush of a
 second write through the reused public writer. The successful trace derives
