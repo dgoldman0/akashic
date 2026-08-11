@@ -5,7 +5,7 @@ IMPORTANT: STEP CEILINGS ARE NOT CRITICAL COMPARED TO CRITICAL PROPER FUNCTIONIN
 This VFS ABI 1 driver reads filesystems in the pinned
 `akashic-ext4-rw-v1` profile from one explicit KDOS volume. It publishes two
 different descriptors. `EXT4-BINDING` is the ordinary read-only surface.
-`EXT4-STAGED-WRITE-BINDING` is the qualified production write surface for
+`EXT4-STAGED-WRITE-BINDING` is the current explicitly staged write surface for
 linked regular files on authenticated 1 KiB/256-byte-inode geometry. It
 supports block-bounded overwrite of initialized extents and allocation-backed
 fill of one complete logical hole inside the existing file size under the
@@ -88,7 +88,7 @@ instance and invokes its mount callback. Constructor failure returns an
 inspectable VFS in `VFS-L-NEW`, with the structured failure copied to
 `V.LAST-IOR`; it never publishes `VFS-L-MOUNTED`.
 
-Use the explicit staged constructor for the qualified write surface:
+Use the explicit staged constructor for the current write surface:
 
 ```forth
 fs-arena vol EXT4-STAGED-WRITE-NEW THROW CONSTANT fs
@@ -1256,12 +1256,13 @@ orphan shapes and the complete user-visible mutation layer remain required for
 final writable-profile conformance. They are not prerequisites for an
 unrelated operation that cannot create those orphan states. Each operation
 still requires its own external-tool, semantic, and representative crash
-evidence before its capability can be enabled.
+evidence before it is counted as production-closed or promoted beyond an
+explicitly staged boundary.
 
-## Qualified staged writes
+## Current staged writes
 
-`EXT4-STAGED-WRITE-BINDING` is the explicit ABI-1 production surface for the
-currently qualified ordinary-data mutations. A nonempty request is admitted
+`EXT4-STAGED-WRITE-BINDING` is the explicit ABI-1 surface for the currently
+implemented ordinary-data mutations. A nonempty request is admitted
 only on authenticated 1 KiB filesystem geometry with 256-byte inodes and only
 for a linked regular file whose inode flags are exactly `EXTENTS`. An
 initialized-block overwrite may use an authenticated depth-0 or depth-1 extent
@@ -1472,15 +1473,14 @@ generation, and vnode-dirty state remain unchanged. Any failure publishes no
 vnode fields.
 
 Block-bounded qualification supplies 1,040 caller bytes at offset 1,016 of the
-3 KiB sparse-file shape. The allocated first block checkpoints exactly eight
-bytes and returns short success. With a `4/1/0` profile, the next independently
-bounded request at offset 1,024 routes the unmapped logical block through hole
-fill, allocates one initialized block, and publishes the new block count after
-checkpoint; a remaining suffix is handled by another independent invocation.
-This is block-bounded composition across existing and newly allocated mappings,
-not a multi-block atomic transaction. With only a `1/1/0` profile, the first
-overwrite remains durable and the allocation request fails cleanly for
-insufficient profile capacity.
+3 KiB sparse-file shape with a `1/1/0` profile. The allocated first block
+checkpoints exactly eight bytes and returns short success; the next independently
+bounded request reaches the hole and fails cleanly with `NOSPC`, leaving the
+first overwrite durable and its timestamp published. A separate public
+`VFS-WRITE?` journey binds `4/1/0`, writes inside that complete logical hole,
+allocates one initialized block, and publishes the exact new block count after
+its four-home checkpoint. These tests establish both sides of the capacity
+boundary without claiming mixed-route multi-block atomicity.
 
 Positive multi-block qualification uses one public `VFS-WRITE-EXACT` request
 across the only adjacent initialized pair in the real depth-1 extent fixture.
@@ -1501,13 +1501,14 @@ Generic cursor qualification uses the real staged binding. Its operation table
 uses the staged mount gate and installs `_EXT4-WRITE`; its capability mask adds
 `WRITE`, and its flags omit `READ_ONLY`. The ordinary `EXT4-BINDING`,
 `EXT4-CAPS`, and `EXT4-OPS` remain unchanged. Through the staged binding,
-`VFS-WRITE-EXACT` advances an FD only by each callback's confirmed prefix and
-can compose initialized overwrite, allocation-backed hole fill, and a later
-initialized overwrite as separate transactions. Each completed chunk publishes
-its own timestamp; hole-fill completion also publishes its exact block-count
-change. A later error leaves earlier chunks checkpointed and the cursor at their
-cumulative confirmed boundary. This is ABI-1 composition of the qualified
-operations and does not widen the ordinary binding.
+`VFS-WRITE-EXACT` advances an FD only by each callback's confirmed prefix. The
+current generic-cursor regression uses a `1/1/0` profile: it checkpoints the
+initialized eight-byte prefix, then stops at the allocation step with `NOSPC`
+and the cursor at 1,024. The single-hole `4/1/0` journey separately establishes
+successful allocation publication. Positive overwrite-to-hole-to-overwrite
+exact composition remains a focused qualification item; the callback contract
+already treats each chunk as a separate transaction and makes no mixed-route
+atomicity claim.
 
 The same staged binding qualifies generic fault propagation. An ordered-data
 tear during a 24-byte `VFS-WRITE?` at offset 500 changes 18 raw caller bytes
@@ -1686,7 +1687,8 @@ conformance.
 
 ## Deliberate remaining limits
 
-The qualified staged write surface is not completion of the writable profile.
+The current explicitly staged write surface is not completion of the writable
+profile and is not yet production-closed for every operation it exposes.
 `EXT4-STAGED-WRITE-OPS` adds only `MOUNT` admission and `WRITE` dispatch to the
 ordinary table. Neither binding advertises `CREATE`, `MKDIR`, `UNLINK`,
 `RMDIR`, `RENAME`, `TRUNCATE`, `SETATTR`, `LINK`, `SYMLINK`, `SETXATTR`, or
@@ -1704,13 +1706,15 @@ after-image and consumes `1/1/0`. In-size hole fill allocates one geometry-
 selected block, inserts one resident initialized extent, updates block bitmap,
 group and super free-block accounting plus `i_blocks`, and consumes `4/1/0`.
 Both update clock-derived `mtime`/`ctime`; only hole fill changes `VN.BLOCKS`,
-and neither changes file size. `VFS-WRITE-EXACT` may compose independently
-durable chunks across initialized and qualifying unmapped blocks, but it does
-not promise atomic batching. The qualified lifecycle includes dry-stage,
-activation, ordered emission, synchronous checkpoint, writer reuse, clean
-deactivation, and remount recovery. EOF growth, unwritten conversion, extent-
-root growth, broader mutation geometry, multi-block atomicity, truncation, and
-namespace mutation remain later capabilities.
+and neither changes file size. Each callback invocation is independently
+durable and does not promise atomic batching with a later chunk. The landed
+hole-fill lifecycle includes dry-stage, activation, ordered emission,
+synchronous checkpoint, clean deactivation, and a byte-stable write-free
+ordinary remount. Pinned external-tool and representative allocation-home
+crash qualification are its next production-closure work. EOF growth,
+unwritten conversion, extent-root growth, broader mutation geometry,
+multi-block atomicity, truncation, and namespace mutation remain later
+capabilities.
 
 The remaining boundaries are the final-profile closure inventory, not an
 ordered list of prerequisites for retaining the qualified write surface:
@@ -2200,10 +2204,12 @@ ordered list of prerequisites for retaining the qualified write surface:
   controlled power-cut matrix still require external-tool and emulator
   qualification.
 
-One write capability may be advertised at a time after its request boundary,
-reachable replay/orphan closure, external-tool checks, and representative
-power-cut qualification land. Full `akashic-ext4-rw-v1` conformance remains
-withheld until the complete mutation surface, profile-admitted recovery
+An operation may be exposed through the explicitly named staged binding once
+its implemented request, durability, progress, and refusal boundary is honest.
+Counting it as production-closed or promoting it beyond that boundary still
+requires reachable replay/orphan closure, external-tool checks, and
+representative power-cut qualification. Full `akashic-ext4-rw-v1` conformance
+remains withheld until the complete mutation surface, profile-admitted recovery
 closure, and final compositional release matrix land.
 
 ## Public reference
