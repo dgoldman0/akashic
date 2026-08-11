@@ -37421,6 +37421,304 @@ def test_staged_public_aligned_eof_growth_passes_external_oracles(
     _assert_e2fsck_clean(image, jbd2_toolchain)
 
 
+def test_staged_public_aligned_eof_refusals_leave_writer_idle(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+
+    inode_number = 14
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    data_block = _extent_root_physical(inode, 0)
+    assert block_size == 1024
+    assert inode_size == 256
+    assert inode_home == 278
+    assert inode_block_offset == 256
+    assert data_block == 1346
+    assert struct.unpack_from("<I", inode, 0x04)[0] == 54
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 4
+
+    patched_inode = bytearray(inode)
+    struct.pack_into("<I", patched_inode, 0x04, block_size)
+    struct.pack_into("<I", patched_inode, 0x6C, 0)
+    patched_inode[:] = _inode_with_checksum(
+        superblock, inode_number, patched_inode
+    )
+    input_patches = source_patches + ((inode_offset, bytes(patched_inode)),)
+    original_data = _patched_ext4_home(
+        path, input_patches, data_block, block_size=block_size
+    )
+    original_inode_home = _patched_ext4_home(
+        path, input_patches, inode_home, block_size=block_size
+    )
+    assert (
+        original_inode_home[
+            inode_block_offset : inode_block_offset + inode_size
+        ]
+        == bytes(patched_inode)
+    )
+
+    backing = tmp_path / "staged-public-aligned-eof-refusals.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            backing,
+            [
+                f"CREATE _AF-LARGE {block_size + 1} ALLOT",
+                f"_AF-LARGE {block_size + 1} 0x4C FILL",
+                "CREATE _AF-STAT0 VFS-STATFS-SIZE ALLOT",
+                "CREATE _AF-STATP VFS-STATFS-SIZE ALLOT",
+                "CREATE _AF-STAT1 VFS-STATFS-SIZE ALLOT",
+                "CREATE _AF-VNODE0 VFS-VNODE-SIZE ALLOT",
+                "VARIABLE _AF-CLOCK-CALLS",
+                (
+                    ": _AF-NOW ( context -- epoch-ms ior ) "
+                    "DROP 1 _AF-CLOCK-CALLS +! "
+                    f"{_STAGED_APPEND_EPOCH_MS} 0 ;"
+                ),
+                "T-ARENA CONSTANT _AF-ARENA",
+                (
+                    "_AF-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _AF-MOUNT-IOR CONSTANT _AF-V"
+                ),
+                "_AF-V _EXT4-CTX CONSTANT _AF-CTX",
+                (
+                    "' _AF-NOW 0 _AF-V EXT4-BIND-WRITE-CLOCK? "
+                    "CONSTANT _AF-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_AF-PROFILE", "_AF-V"
+                ),
+                (
+                    'S" /fixture/payload.txt" '
+                    "VFS-FF-READ VFS-FF-WRITE OR _AF-V VFS-OPEN? "
+                    "CONSTANT _AF-OPEN-IOR CONSTANT _AF-FD"
+                ),
+                "_AF-FD FD.INODE @ D.VNODE @ CONSTANT _AF-VN",
+                "_AF-VN _AF-VNODE0 VFS-VNODE-SIZE CMOVE",
+                "_AF-VN VN.ATIME @ CONSTANT _AF-OLD-ATIME",
+                "_AF-VN VN.ATIME-NS @ CONSTANT _AF-OLD-ATIME-NS",
+                "_AF-VN VN.MTIME @ CONSTANT _AF-OLD-MTIME",
+                "_AF-VN VN.MTIME-NS @ CONSTANT _AF-OLD-MTIME-NS",
+                "_AF-VN VN.CTIME @ CONSTANT _AF-OLD-CTIME",
+                "_AF-VN VN.CTIME-NS @ CONSTANT _AF-OLD-CTIME-NS",
+                "_AF-CTX _EXT4-C.J.WRITER + @ CONSTANT _AF-WRITER",
+                "_AF-ARENA ARENA-USED CONSTANT _AF-MAIN-CLEAN",
+                (
+                    "_AF-STAT0 VFS-STATFS-SIZE _AF-V VFS-STATFS "
+                    "CONSTANT _AF-STAT0-IOR"
+                ),
+                (
+                    f"{block_size + 1} _AF-FD VFS-SEEK? "
+                    "CONSTANT _AF-GAP-SEEK-IOR"
+                ),
+                (
+                    'S" G" _AF-FD VFS-WRITE? '
+                    "CONSTANT _AF-GAP-IOR CONSTANT _AF-GAP-ACTUAL"
+                ),
+                "_AF-FD FD.CUR-LO @ CONSTANT _AF-GAP-CURSOR",
+                "_AF-FD FD.CUR-HI @ CONSTANT _AF-GAP-CURSOR-HI",
+                (
+                    f"{block_size - 1} _AF-FD VFS-SEEK? "
+                    "CONSTANT _AF-MIX-SEEK-IOR"
+                ),
+                (
+                    'S" MX" _AF-FD VFS-WRITE? '
+                    "CONSTANT _AF-MIX-IOR CONSTANT _AF-MIX-ACTUAL"
+                ),
+                "_AF-FD FD.CUR-LO @ CONSTANT _AF-MIX-CURSOR",
+                "_AF-FD FD.CUR-HI @ CONSTANT _AF-MIX-CURSOR-HI",
+                (
+                    f"{block_size} _AF-FD VFS-SEEK? "
+                    "CONSTANT _AF-LARGE-SEEK-IOR"
+                ),
+                (
+                    f"_AF-LARGE {block_size + 1} _AF-FD VFS-WRITE? "
+                    "CONSTANT _AF-LARGE-IOR CONSTANT _AF-LARGE-ACTUAL"
+                ),
+                "_AF-FD FD.CUR-LO @ CONSTANT _AF-LARGE-CURSOR",
+                "_AF-FD FD.CUR-HI @ CONSTANT _AF-LARGE-CURSOR-HI",
+                "_AF-CLOCK-CALLS @ CONSTANT _AF-POLICY-CLOCKS",
+                (
+                    "_AF-STATP VFS-STATFS-SIZE _AF-V VFS-STATFS "
+                    "CONSTANT _AF-STATP-IOR"
+                ),
+                (
+                    "_AF-VNODE0 _AF-VN VFS-VNODE-SIZE "
+                    "_EXT4-BYTES=? CONSTANT _AF-POLICY-VNODE-SAME"
+                ),
+                (
+                    "_AF-STAT0 _AF-STATP VFS-STATFS-SIZE "
+                    "_EXT4-BYTES=? CONSTANT _AF-POLICY-STAT-SAME"
+                ),
+                (
+                    f"{block_size} _AF-FD VFS-SEEK? "
+                    "CONSTANT _AF-CAP-SEEK-IOR"
+                ),
+                (
+                    'S" C" _AF-FD VFS-WRITE? '
+                    "CONSTANT _AF-CAP-IOR CONSTANT _AF-CAP-ACTUAL"
+                ),
+                "_AF-FD FD.CUR-LO @ CONSTANT _AF-CAP-CURSOR",
+                "_AF-FD FD.CUR-HI @ CONSTANT _AF-CAP-CURSOR-HI",
+                "_AF-V V.LAST-IOR @ CONSTANT _AF-LAST-IOR",
+                (
+                    "_AF-STAT1 VFS-STATFS-SIZE _AF-V VFS-STATFS "
+                    "CONSTANT _AF-STAT1-IOR"
+                ),
+                "_AF-ARENA ARENA-USED CONSTANT _AF-MAIN-AFTER",
+                (
+                    _forth_conjunction(
+                        [
+                            "_AF-MOUNT-IOR 0=",
+                            "_AF-CLOCK-IOR 0=",
+                            "_AF-PROFILE-SIZE-IOR 0=",
+                            "_AF-PROFILE-BIND-IOR 0=",
+                            "_AF-PROFILE-USED _AF-PROFILE-SIZE =",
+                            "_AF-OPEN-IOR 0=",
+                            f"_AF-VN VN.SIZE-LO @ {block_size} =",
+                            "_AF-VN VN.SIZE-HI @ 0=",
+                            "_AF-VN VN.BLOCKS @ 4 =",
+                            "_AF-STAT0-IOR 0=",
+                            "_AF-GAP-SEEK-IOR 0=",
+                            "_AF-GAP-ACTUAL 0=",
+                            (
+                                "_AF-GAP-IOR VFS-IOR-REASON "
+                                "VFS-R-UNSUPPORTED ="
+                            ),
+                            (
+                                "_AF-GAP-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-WRITE-POLICY ="
+                            ),
+                            f"_AF-GAP-CURSOR {block_size + 1} =",
+                            "_AF-GAP-CURSOR-HI 0=",
+                            "_AF-MIX-SEEK-IOR 0=",
+                            "_AF-MIX-ACTUAL 0=",
+                            (
+                                "_AF-MIX-IOR VFS-IOR-REASON "
+                                "VFS-R-UNSUPPORTED ="
+                            ),
+                            (
+                                "_AF-MIX-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-WRITE-POLICY ="
+                            ),
+                            f"_AF-MIX-CURSOR {block_size - 1} =",
+                            "_AF-MIX-CURSOR-HI 0=",
+                            "_AF-LARGE-SEEK-IOR 0=",
+                            "_AF-LARGE-ACTUAL 0=",
+                            (
+                                "_AF-LARGE-IOR VFS-IOR-REASON "
+                                "VFS-R-UNSUPPORTED ="
+                            ),
+                            (
+                                "_AF-LARGE-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-WRITE-POLICY ="
+                            ),
+                            f"_AF-LARGE-CURSOR {block_size} =",
+                            "_AF-LARGE-CURSOR-HI 0=",
+                            "_AF-POLICY-CLOCKS 0=",
+                            "_AF-STATP-IOR 0=",
+                            "_AF-POLICY-VNODE-SAME",
+                            "_AF-POLICY-STAT-SAME",
+                            "_AF-CAP-SEEK-IOR 0=",
+                            "_AF-CAP-ACTUAL 0=",
+                            "_AF-CAP-IOR VFS-E-NOSPC =",
+                            "_AF-LAST-IOR _AF-CAP-IOR =",
+                            f"_AF-CAP-CURSOR {block_size} =",
+                            "_AF-CAP-CURSOR-HI 0=",
+                            "_AF-CLOCK-CALLS @ 1 =",
+                            "_AF-STAT1-IOR 0=",
+                            (
+                                "_AF-VNODE0 _AF-VN VFS-VNODE-SIZE "
+                                "_EXT4-BYTES=?"
+                            ),
+                            (
+                                "_AF-STAT0 _AF-STAT1 VFS-STATFS-SIZE "
+                                "_EXT4-BYTES=?"
+                            ),
+                            "_AF-VN VN.ATIME @ _AF-OLD-ATIME =",
+                            (
+                                "_AF-VN VN.ATIME-NS @ "
+                                "_AF-OLD-ATIME-NS ="
+                            ),
+                            "_AF-VN VN.MTIME @ _AF-OLD-MTIME =",
+                            (
+                                "_AF-VN VN.MTIME-NS @ "
+                                "_AF-OLD-MTIME-NS ="
+                            ),
+                            "_AF-VN VN.CTIME @ _AF-OLD-CTIME =",
+                            (
+                                "_AF-VN VN.CTIME-NS @ "
+                                "_AF-OLD-CTIME-NS ="
+                            ),
+                            "_EXT4-WR-ACTUAL @ 0=",
+                            "_EXT4-MOW-ACTUAL @ 0=",
+                            (
+                                "_EXT4-WR-KIND @ "
+                                "_EXT4-WRK-ALIGNED-APPEND ="
+                            ),
+                            "_EXT4-WR-COUNT @ 1 =",
+                            f"_EXT4-WR-OFFSET @ {block_size} =",
+                            f"_EXT4-WR-REQUEST-END @ {block_size + 1} =",
+                            f"_EXT4-WR-NEW-SIZE @ {block_size + 1} =",
+                            "_EXT4-WR-NEW-BLOCKS @ 4 =",
+                            "_EXT4-WR-CHUNK @ 1 =",
+                            "_EXT4-MOW-CREDIT @ -4 =",
+                            "_EXT4-MOW-WRITER @ 0=",
+                            "_AF-WRITER _AF-PROFILE-BASE =",
+                            "_AF-WRITER _EXT4-JWR-VALID?",
+                            "_AF-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_AF-WRITER _EXT4-JWR.FAULT + @ 0=",
+                            "_AF-MAIN-AFTER _AF-MAIN-CLEAN =",
+                            (
+                                "_AF-PROFILE-ARENA ARENA-USED "
+                                "_AF-PROFILE-USED ="
+                            ),
+                            "_AF-CTX _EXT4-C.RECOVERY + @ 0=",
+                            "_AF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                            "_AF-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                            "_AF-V V.FLAGS @ VFS-F-RO AND 0=",
+                            "_AF-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-ALIGNED-REFUSALS-IDLE" THEN'
+                ),
+                "_AF-FD VFS-CLOSE? CONSTANT _AF-CLOSE-IOR",
+                "0 _AF-V VFS-UNMOUNT CONSTANT _AF-UNMOUNT-IOR",
+                (
+                    "_AF-CLOSE-IOR 0= _AF-UNMOUNT-IOR 0= AND "
+                    "_AF-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_AF-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_AF-PROFILE-ARENA A.PTR @ _AF-PROFILE-BASE = AND "
+                    'IF ." EXT4-PUBLIC-ALIGNED-REFUSALS-UNMOUNT" THEN'
+                ),
+            ],
+            patches=input_patches,
+            capture_media=backing,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-ALIGNED-REFUSALS-IDLE")
+        _assert_emitted(output, "EXT4-PUBLIC-ALIGNED-REFUSALS-UNMOUNT")
+        assert trace == ()
+        assert _read_ext4_home(
+            backing, data_block, block_size=block_size
+        ) == original_data
+        assert _read_ext4_home(
+            backing, inode_home, block_size=block_size
+        ) == original_inode_home
+    finally:
+        backing.unlink(missing_ok=True)
+
+
 def test_staged_public_tail_append_refuses_gap_and_mixed_growth_without_io(
     writer_activation_fixture: dict[str, object], tmp_path: Path
 ) -> None:
