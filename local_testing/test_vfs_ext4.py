@@ -3994,7 +3994,10 @@ def build_snapshot():
             "IMMEDIATE",
         ]
     ).encode() + b"\n"
-    max_source_steps = 900_000_000
+    # Coalescing adds the checked depth-zero extent edit without changing the
+    # loader's geometry.  Keep a small measured source-build margin rather
+    # than turning implementation size into an accidental capability limit.
+    max_source_steps = 925_000_000
     source_steps = _feed_until_idle(system, bootstrap, max_source_steps)
     source_lines_loaded = 0
     uart_offset = len(uart)
@@ -4029,6 +4032,12 @@ def build_snapshot():
         f"{source_steps}/{max_source_steps} steps:\n"
         + transcript[-4000:]
     )
+    if os.environ.get("EXT4_REPORT_STEPS"):
+        print(
+            "[*] ext4 cold source load: "
+            f"{source_steps:,}/{max_source_steps:,} steps "
+            f"across {source_lines_loaded:,} packed lines"
+        )
 
     _snapshot = (
         bios,
@@ -34935,6 +34944,30 @@ def staged_two_hole_exact_fixture(
         _, final_inode, _ = _ext4_inode_record(media_path, inode_number)
         assert struct.unpack_from("<I", final_inode, 0x04)[0] == 4096
         assert struct.unpack_from("<I", final_inode, 0x1C)[0] == 8
+        assert struct.unpack_from("<HHH", final_inode, 0x28) == (
+            0xF30A,
+            3,
+            4,
+        )
+        assert struct.unpack_from("<H", final_inode, 0x2E)[0] == 0
+        assert struct.unpack_from("<IHHI", final_inode, 0x34) == (
+            0,
+            1,
+            0,
+            first_data_block,
+        )
+        assert struct.unpack_from("<IHHI", final_inode, 0x40) == (
+            1,
+            2,
+            0,
+            first_candidate,
+        )
+        assert struct.unpack_from("<IHHI", final_inode, 0x4C) == (
+            3,
+            1,
+            0,
+            last_data_block,
+        )
         assert _extent_root_physical(final_inode, 0) == first_data_block
         assert _extent_root_physical(final_inode, 1) == first_candidate
         assert _extent_root_physical(final_inode, 2) == second_candidate

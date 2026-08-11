@@ -18316,10 +18316,20 @@ VARIABLE _XH-CANDIDATE
 VARIABLE _XH-IMAGE
 VARIABLE _XH-RECORD
 VARIABLE _XH-SHIFT
+VARIABLE _XH-EDIT
+VARIABLE _XH-LEFT-LEN
+VARIABLE _XH-RIGHT-LEN
+VARIABLE _XH-LEFT-OK
+VARIABLE _XH-RIGHT-OK
 VARIABLE _XH-IOR
 VARIABLE _XH-PUBLISHED
 VARIABLE _XH-ABORT-IOR
 CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
+
+0 CONSTANT _XH-EDIT-INSERT
+1 CONSTANT _XH-EDIT-MERGE-LEFT
+2 CONSTANT _XH-EDIT-MERGE-RIGHT
+3 CONSTANT _XH-EDIT-MERGE-BOTH
 
 : _XH-ENTRY-AT  ( index -- extent-entry )
     12 * 12 + _XH-ROOT @ + ;
@@ -18401,9 +18411,10 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _XH-IOR @ ;
 
 \ The ordinary extent validator has already authenticated every entry and
-\ allocation bit.  This second pass derives the exact gap insertion index,
-\ refuses unwritten conversion, and binds current i_blocks to the complete
-\ resident data map plus an optional external-xattr allocation.
+\ allocation bit.  This second pass derives the exact gap edit index, refuses
+\ unwritten conversion, and binds current i_blocks to the complete resident
+\ data map plus an optional external-xattr allocation.  Physical-candidate
+\ planning later decides whether that edit inserts or coalesces an extent.
 : _XH-CAPTURE-ROOT  ( -- ior )
     _XH-CTX @ _EXT4-C.INODE + _EXT4-I.BLOCK + DUP
     _XH-ROOT !
@@ -18419,9 +18430,6 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     DUP 2 + W@ DUP _XH-ENTRIES !
     _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> IF
         DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _XH-ENTRIES @ _EXT4-RESIDENT-EXTENT-ENTRY-MAX = IF
-        DROP EXT4-D-DATA-MAP _EXT4-UNSUPPORTED EXIT
     THEN
     DROP
     _XH-ENTRIES @ _XH-INSERT !
@@ -18625,6 +18633,67 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _XH-INODE-HOME @ _XH-GROUP @ _XH-CTX @
     _EXT4-VALIDATE-INODE-TABLE-HOME ;
 
+: _XH-PLAN-LEFT?  ( -- flag )
+    _XH-INSERT @ 0= IF FALSE EXIT THEN
+    _XH-INSERT @ 1- _XH-ENTRY-AT _XH-ENTRY !
+    _XH-ENTRY @ 4 + W@ DUP _XH-LEFT-LEN !
+    DUP 0= SWAP 32768 U> OR IF FALSE EXIT THEN
+    _XH-ENTRY @ L@ _XH-LEFT-LEN @ _EXT4-UADD?
+    _XH-IOR ! _XH-END !
+    _XH-IOR @ IF FALSE EXIT THEN
+    _XH-END @ _XH-LOGICAL @ <> IF FALSE EXIT THEN
+    _XH-ENTRY @ 8 + L@ _XH-LEFT-LEN @ _EXT4-UADD?
+    _XH-IOR ! _XH-END !
+    _XH-IOR @ IF FALSE EXIT THEN
+    _XH-END @ _XH-CANDIDATE @ <> IF FALSE EXIT THEN
+    _XH-LEFT-LEN @ 1 _EXT4-UADD? _XH-IOR ! _XH-END !
+    _XH-IOR @ 0= _XH-END @ 32768 U> 0= AND ;
+
+: _XH-PLAN-RIGHT?  ( -- flag )
+    _XH-INSERT @ _XH-ENTRIES @ U< 0= IF FALSE EXIT THEN
+    _XH-INSERT @ _XH-ENTRY-AT _XH-ENTRY !
+    _XH-ENTRY @ 4 + W@ DUP _XH-RIGHT-LEN !
+    DUP 0= SWAP 32768 U> OR IF FALSE EXIT THEN
+    _XH-LOGICAL @ 1 _EXT4-UADD? _XH-IOR ! _XH-END !
+    _XH-IOR @ IF FALSE EXIT THEN
+    _XH-END @ _XH-ENTRY @ L@ <> IF FALSE EXIT THEN
+    _XH-CANDIDATE @ 1 _EXT4-UADD? _XH-IOR ! _XH-END !
+    _XH-IOR @ IF FALSE EXIT THEN
+    _XH-END @ _XH-ENTRY @ 8 + L@ <> IF FALSE EXIT THEN
+    _XH-RIGHT-LEN @ 1 _EXT4-UADD? _XH-IOR ! _XH-END !
+    _XH-IOR @ 0= _XH-END @ 32768 U> 0= AND ;
+
+: _XH-BRIDGE-LENGTH?  ( -- flag )
+    _XH-LEFT-LEN @ 1 _EXT4-UADD? _XH-IOR ! _XH-END !
+    _XH-IOR @ IF FALSE EXIT THEN
+    _XH-END @ _XH-RIGHT-LEN @ _EXT4-UADD?
+    _XH-IOR ! _XH-END !
+    _XH-IOR @ 0= _XH-END @ 32768 U> 0= AND ;
+
+\ Choose the inode-root edit only after the geometry-selected physical block
+\ is known.  A full resident root remains writable when exact initialized
+\ adjacency permits a length-preserving coalesce; otherwise it refuses before
+\ the ordered candidate or any metadata after-image is retained.
+: _XH-PLAN-ROOT-EDIT  ( -- ior )
+    _XH-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
+    _XH-PLAN-LEFT? _XH-LEFT-OK !
+    _XH-PLAN-RIGHT? _XH-RIGHT-OK !
+    _XH-LEFT-OK @ _XH-RIGHT-OK @ AND IF
+        _XH-BRIDGE-LENGTH? IF
+            _XH-EDIT-MERGE-BOTH _XH-EDIT ! 0 EXIT
+        THEN
+    THEN
+    _XH-LEFT-OK @ IF
+        _XH-EDIT-MERGE-LEFT _XH-EDIT ! 0 EXIT
+    THEN
+    _XH-RIGHT-OK @ IF
+        _XH-EDIT-MERGE-RIGHT _XH-EDIT ! 0 EXIT
+    THEN
+    _XH-ENTRIES @ _EXT4-RESIDENT-EXTENT-ENTRY-MAX U< IF
+        _XH-EDIT-INSERT _XH-EDIT ! 0 EXIT
+    THEN
+    EXT4-D-DATA-MAP _EXT4-UNSUPPORTED ;
+
 : _XH-STAGE-DATA  ( -- ior )
     _XH-WRITER @ _EXT4-JWR.SCRATCH-A + @ DUP
     _XH-BSIZE @ 0 FILL
@@ -18636,8 +18705,15 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     -1 _XH-PUBLISHED !
     0 ;
 
-: _XH-INSERT-EXTENT  ( -- )
-    _XH-RECORD @ _EXT4-I.BLOCK + _XH-ROOT !
+: _XH-ENTRY-PHYSICAL!  ( physical-block extent-entry -- )
+    _XH-ENTRY !
+    DUP 32 RSHIFT _XH-ENTRY @ 6 + W!
+    0xFFFFFFFF AND _XH-ENTRY @ 8 + L! ;
+
+: _XH-APPLY-INSERT  ( -- ior )
+    _XH-ENTRIES @ _EXT4-RESIDENT-EXTENT-ENTRY-MAX U< 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
     _XH-ENTRIES @ _XH-SHIFT !
     BEGIN
         _XH-SHIFT @ _XH-INSERT @ U>
@@ -18646,13 +18722,61 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
         _XH-SHIFT @ _XH-ENTRY-AT 12 MOVE
         -1 _XH-SHIFT +!
     REPEAT
-    _XH-INSERT @ _XH-ENTRY-AT DUP
-    _XH-LOGICAL @ OVER L!
-    1 OVER 4 + W!
-    _XH-CANDIDATE @ DUP 32 RSHIFT 2 PICK 6 + W!
-    0xFFFFFFFF AND SWAP 8 + L!
-    DROP
-    _XH-ENTRIES @ 1+ _XH-ROOT @ 2 + W! ;
+    _XH-INSERT @ _XH-ENTRY-AT _XH-ENTRY !
+    _XH-LOGICAL @ _XH-ENTRY @ L!
+    1 _XH-ENTRY @ 4 + W!
+    _XH-CANDIDATE @ _XH-ENTRY @ _XH-ENTRY-PHYSICAL!
+    _XH-ENTRIES @ 1+ DUP _XH-ENTRIES ! _XH-ROOT @ 2 + W!
+    0 ;
+
+: _XH-APPLY-MERGE-LEFT  ( -- ior )
+    _XH-INSERT @ 0= IF VFS-E-CORRUPT EXIT THEN
+    _XH-INSERT @ 1- _XH-ENTRY-AT
+    _XH-LEFT-LEN @ 1+ SWAP 4 + W!
+    0 ;
+
+: _XH-APPLY-MERGE-RIGHT  ( -- ior )
+    _XH-INSERT @ _XH-ENTRIES @ U< 0= IF VFS-E-CORRUPT EXIT THEN
+    _XH-INSERT @ _XH-ENTRY-AT _XH-ENTRY !
+    _XH-LOGICAL @ _XH-ENTRY @ L!
+    _XH-RIGHT-LEN @ 1+ _XH-ENTRY @ 4 + W!
+    _XH-CANDIDATE @ _XH-ENTRY @ _XH-ENTRY-PHYSICAL!
+    0 ;
+
+: _XH-REMOVE-RIGHT-ENTRY  ( -- )
+    _XH-INSERT @ _XH-SHIFT !
+    BEGIN
+        _XH-SHIFT @ 1+ _XH-ENTRIES @ U<
+    WHILE
+        _XH-SHIFT @ 1+ _XH-ENTRY-AT
+        _XH-SHIFT @ _XH-ENTRY-AT 12 MOVE
+        1 _XH-SHIFT +!
+    REPEAT
+    _XH-ENTRIES @ 1- _XH-ENTRY-AT 12 0 FILL
+    _XH-ENTRIES @ 1- DUP _XH-ENTRIES ! _XH-ROOT @ 2 + W! ;
+
+: _XH-APPLY-MERGE-BOTH  ( -- ior )
+    _XH-INSERT @ 0= _XH-INSERT @ _XH-ENTRIES @ U< 0= OR IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _XH-INSERT @ 1- _XH-ENTRY-AT
+    _XH-LEFT-LEN @ 1+ _XH-RIGHT-LEN @ + SWAP 4 + W!
+    _XH-REMOVE-RIGHT-ENTRY
+    0 ;
+
+: _XH-APPLY-EXTENT-EDIT  ( -- ior )
+    _XH-RECORD @ _EXT4-I.BLOCK + _XH-ROOT !
+    _XH-EDIT @ _XH-EDIT-INSERT = IF _XH-APPLY-INSERT EXIT THEN
+    _XH-EDIT @ _XH-EDIT-MERGE-LEFT = IF
+        _XH-APPLY-MERGE-LEFT EXIT
+    THEN
+    _XH-EDIT @ _XH-EDIT-MERGE-RIGHT = IF
+        _XH-APPLY-MERGE-RIGHT EXIT
+    THEN
+    _XH-EDIT @ _XH-EDIT-MERGE-BOTH = IF
+        _XH-APPLY-MERGE-BOTH EXIT
+    THEN
+    VFS-E-CORRUPT ;
 
 : _XH-STAGE-INODE  ( -- ior )
     _XH-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
@@ -18671,7 +18795,7 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _XH-IOR @ ?DUP IF EXIT THEN
     _XH-NEW-BLOCKS @ _XH-RECORD @ _XH-CTX @
     _EXT4-ENCODE-I-BLOCKS ?DUP IF EXIT THEN
-    _XH-INSERT-EXTENT
+    _XH-APPLY-EXTENT-EDIT ?DUP IF EXIT THEN
     _XH-SECONDS @ _XH-NSEC @ _XH-RECORD @
     _XH-CTX @ _EXT4-SET-INODE-MTIME-CTIME ?DUP IF EXIT THEN
     _XH-RECORD @ _XH-INO @ _XH-CTX @
@@ -18680,11 +18804,12 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _EXT4-JTX-META-REPLACE ;
 
 \ Fill one complete logical hole inside current EOF.  The operation admits a
-\ linked regular file with an authenticated inline depth-zero extent root and
-\ one spare resident entry.  It allocates one geometry-selected block, stages
-\ a full zero image with caller bytes overlaid, inserts one initialized extent,
-\ and increments i_blocks without changing i_size.  Extent merging, root
-\ growth, unwritten conversion, and EOF growth remain later capabilities.
+\ linked regular file with an authenticated inline depth-zero extent root when
+\ the new initialized block either fits a resident slot or coalesces with an
+\ exactly adjacent initialized extent.  It allocates one geometry-selected
+\ block, stages a full zero image with caller bytes overlaid, applies the
+\ checked insert/merge edit, and increments i_blocks without changing i_size.
+\ Root growth, unwritten conversion, and EOF growth remain later capabilities.
 : _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL
   ( source count file-offset inode-number expected-generation seconds nsec transaction -- ior )
     _XH-WRITER ! _XH-NSEC ! _XH-SECONDS !
@@ -18711,6 +18836,7 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _XH-COUNT @ MOVE
     _XH-AUTH-TARGET ?DUP IF EXIT THEN
     _XH-SELECT-CANDIDATE ?DUP IF EXIT THEN
+    _XH-PLAN-ROOT-EDIT ?DUP IF EXIT THEN
     _XH-STAGE-DATA ?DUP IF
         _XH-FAIL-AFTER-PUBLISH EXIT
     THEN
