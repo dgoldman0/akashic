@@ -34600,6 +34600,7 @@ def staged_public_hole_fill_fixture(
             "expected_file": expected_file,
             "inode": inode_number,
             "candidate": candidate,
+            "trace": trace,
         }
     finally:
         media_path.unlink(missing_ok=True)
@@ -37038,6 +37039,491 @@ def test_public_hole_fill_ordered_candidate_tear_preserves_sparse_state(
         assert stable_sha256 == recovery_sha256
         assert _sha256(stable) == stable_sha256
         assert not _ext4_block_allocation_state(
+            stable, (candidate,)
+        )[candidate]
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
+def _public_hole_recovery_readback(
+    source: Path,
+    destination: Path,
+    *,
+    expected_file_crc: int,
+    expected_epoch_ms: int,
+    expected_home_writes: int,
+    expected_replayed: bool,
+    prefix: str,
+    marker: str,
+) -> tuple[str, tuple[tuple[str, int, int], ...], str]:
+    """Read the allocated sparse-file view after one crash boundary."""
+    seconds, milliseconds = divmod(expected_epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    replay_check = (
+        f"{prefix}-CTX _EXT4-C.J.REPLAYED + @ 0<>"
+        if expected_replayed
+        else f"{prefix}-CTX _EXT4-C.J.REPLAYED + @ 0="
+    )
+    output, trace, media_sha256 = run_recovery_forth(
+        source,
+        destination,
+        [
+            f"CREATE {prefix}-BUF 3072 ALLOT",
+            (
+                f"T-ARENA T-VOLUME EXT4-NEW CONSTANT {prefix}-MOUNT-IOR "
+                f"CONSTANT {prefix}-V"
+            ),
+            f"{prefix}-V _EXT4-CTX CONSTANT {prefix}-CTX",
+            (
+                f'S" /fixture/sparse.bin" VFS-FF-READ {prefix}-V '
+                f"VFS-OPEN? CONSTANT {prefix}-OPEN-IOR "
+                f"CONSTANT {prefix}-FD"
+            ),
+            f"{prefix}-FD FD.INODE @ D.VNODE @ CONSTANT {prefix}-VN",
+            (
+                f"{prefix}-BUF 3072 {prefix}-FD VFS-READ? "
+                f"CONSTANT {prefix}-READ-IOR CONSTANT {prefix}-ACTUAL"
+            ),
+            "0xFFFFFFFF _EXT4-CRC-START",
+            f"{prefix}-BUF 3072 _EXT4-CRC-ADD",
+            f"_EXT4-CRC@ CONSTANT {prefix}-CRC",
+            (
+                _forth_conjunction(
+                    [
+                        f"{prefix}-MOUNT-IOR 0=",
+                        f"{prefix}-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        f"{prefix}-V _EXT4-READY?",
+                        f"{prefix}-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        f"{prefix}-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        f"{prefix}-CTX _EXT4-C.RECOVERY + @ 0=",
+                        f"{prefix}-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        f"{prefix}-CTX _EXT4-C.J.START + @ 0=",
+                        (
+                            f"{prefix}-CTX _EXT4-C.J.WITNESS + @ "
+                            "_EXT4-JW-NONE ="
+                        ),
+                        f"{prefix}-CTX _EXT4-C.J.ANCHOR + @ 0=",
+                        (
+                            f"{prefix}-CTX _EXT4-C.J.CLEANUP + @ "
+                            "_EXT4-JC-NONE ="
+                        ),
+                        f"{prefix}-CTX _EXT4-C.J.PRIMARY-TORN + @ 0=",
+                        f"{prefix}-CTX _EXT4-C.SUPER-TORN + @ 0=",
+                        f"{prefix}-CTX _EXT4-C.J.WRITER + @ 0=",
+                        (
+                            f"{prefix}-CTX _EXT4-C.J.WRITER-CURRENT + @ "
+                            "-1 ="
+                        ),
+                        replay_check,
+                        (
+                            f"{prefix}-CTX _EXT4-C.J.HOME-WRITES + @ "
+                            f"{expected_home_writes} ="
+                        ),
+                        (
+                            f"{prefix}-CTX _EXT4-C.SB + "
+                            "_EXT4-SUPER-CHECKSUM?"
+                        ),
+                        (
+                            f"{prefix}-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0="
+                        ),
+                        f"{prefix}-OPEN-IOR 0=",
+                        f"{prefix}-READ-IOR 0=",
+                        f"{prefix}-ACTUAL 3072 =",
+                        f"{prefix}-CRC {expected_file_crc} =",
+                        f"{prefix}-VN VN.SIZE-LO @ 3072 =",
+                        f"{prefix}-VN VN.SIZE-HI @ 0=",
+                        f"{prefix}-VN VN.BLOCKS @ 6 =",
+                        f"{prefix}-VN VN.MTIME @ {seconds} =",
+                        f"{prefix}-VN VN.MTIME-NS @ {nanoseconds} =",
+                        f"{prefix}-VN VN.CTIME @ {seconds} =",
+                        f"{prefix}-VN VN.CTIME-NS @ {nanoseconds} =",
+                        (
+                            f"{prefix}-VN VN.FLAGS @ "
+                            "VFS-IF-DIRTY AND 0="
+                        ),
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+            f"{prefix}-FD VFS-CLOSE? CONSTANT {prefix}-CLOSE-IOR",
+            (
+                f"0 {prefix}-V VFS-UNMOUNT "
+                f"CONSTANT {prefix}-UNMOUNT-IOR"
+            ),
+            (
+                f"{prefix}-CLOSE-IOR 0= "
+                f"{prefix}-UNMOUNT-IOR 0= AND "
+                f"{prefix}-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                f'IF ." {marker}-UNMOUNTED" THEN'
+            ),
+        ],
+        capture_media=destination,
+    )
+    _assert_emitted(output, marker)
+    _assert_emitted(output, f"{marker}-UNMOUNTED")
+    return output, trace, media_sha256
+
+
+@pytest.mark.parametrize(
+    (
+        "case",
+        "write_ordinal",
+        "sector_index",
+        "byte_index",
+        "expected_checkpoint_homes",
+        "fault_home",
+    ),
+    (
+        pytest.param(
+            "gdt",
+            20,
+            0,
+            30,
+            1,
+            2,
+            id="gdt-home-w20",
+        ),
+        pytest.param(
+            "primary-super",
+            21,
+            1,
+            0,
+            2,
+            1,
+            id="primary-super-home-w21",
+        ),
+    ),
+)
+def test_public_hole_fill_checkpoint_home_tears_replay_allocation(
+    writer_activation_fixture: dict[str, object],
+    staged_public_hole_fill_fixture: dict[str, object],
+    tmp_path: Path,
+    case: str,
+    write_ordinal: int,
+    sector_index: int,
+    byte_index: int,
+    expected_checkpoint_homes: int,
+    fault_home: int,
+) -> None:
+    """Replay the committed allocation after two representative home tears."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    dirty_super = writer_activation_fixture["dirty_super"]
+    success_image = staged_public_hole_fill_fixture["image"]
+    success_file = staged_public_hole_fill_fixture["expected_file"]
+    success_trace = staged_public_hole_fill_fixture["trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(dirty_super, bytes)
+    assert isinstance(success_image, Path)
+    assert isinstance(success_file, bytes)
+    assert isinstance(success_trace, tuple)
+
+    inode_number = 17
+    candidate = 1351
+    bitmap_home = 259
+    gdt_home = 2
+    super_home = 1
+    epoch_ms = 3_000_000_123_456
+    replacement = b"ABCDEFGHIJKLMNOPQRSTUVWX"
+    block_offset = 500
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_home = inode_offset // block_size
+    write_offset = block_size + block_offset
+    expected_cursor = write_offset + len(replacement)
+    expected_candidate = bytearray(block_size)
+    expected_candidate[
+        block_offset : block_offset + len(replacement)
+    ] = replacement
+    expected_candidate = bytes(expected_candidate)
+    expected_file = (
+        success_file[:block_size]
+        + expected_candidate
+        + success_file[2 * block_size :]
+    )
+    expected_file_crc = _crc32c_raw(expected_file)
+    assert block_size == 1024
+    assert len(expected_file) == 3072
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 4
+    assert not _ext4_block_allocation_state(path, (candidate,))[candidate]
+
+    original_gdt = _patched_ext4_home(
+        path, source_patches, gdt_home, block_size=block_size
+    )
+    original_inode_home = _patched_ext4_home(
+        path, source_patches, inode_home, block_size=block_size
+    )
+    expected_bitmap = _read_ext4_home(
+        success_image, bitmap_home, block_size=block_size
+    )
+    expected_gdt = _read_ext4_home(
+        success_image, gdt_home, block_size=block_size
+    )
+    expected_super = _read_ext4_home(
+        success_image, super_home, block_size=block_size
+    )
+    expected_inode_home = _read_ext4_home(
+        success_image, inode_home, block_size=block_size
+    )
+    assert dirty_super == _ext4_super_with_checksum(dirty_super)
+    assert expected_gdt != original_gdt
+    assert expected_inode_home != original_inode_home
+    assert expected_candidate[block_offset : block_offset + len(replacement)] == (
+        replacement
+    )
+
+    fault_event = _trace_event_index_for_ordinal(
+        success_trace, "write", write_ordinal
+    )
+    assert success_trace[fault_event] == (
+        "write",
+        fault_home * (block_size // 512),
+        block_size // 512,
+    )
+
+    faulted = tmp_path / f"public-hole-{case}-faulted.img"
+    recovered = tmp_path / f"public-hole-{case}-recovered.img"
+    stable = tmp_path / f"public-hole-{case}-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                f"CREATE _HC-CLOCK {epoch_ms} , 0 ,",
+                (
+                    ": _HC-NOW ( clock -- epoch-ms ior ) "
+                    "DUP CELL+ DUP @ 1+ SWAP ! @ 0 ;"
+                ),
+                "CREATE _HC-STAT VFS-STATFS-SIZE ALLOT",
+                "T-ARENA CONSTANT _HC-ARENA",
+                (
+                    "_HC-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _HC-MOUNT-IOR CONSTANT _HC-V"
+                ),
+                "_HC-V _EXT4-CTX CONSTANT _HC-CTX",
+                (
+                    "' _HC-NOW _HC-CLOCK _HC-V "
+                    "EXT4-BIND-WRITE-CLOCK? CONSTANT _HC-BIND-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_HC-PROFILE", "_HC-V", 4, 1, 0
+                ),
+                (
+                    'S" /fixture/sparse.bin" VFS-FF-WRITE _HC-V '
+                    "VFS-OPEN? CONSTANT _HC-OPEN-IOR CONSTANT _HC-FD"
+                ),
+                "_HC-FD FD.INODE @ D.VNODE @ CONSTANT _HC-VN",
+                "_HC-VN VN.MTIME @ CONSTANT _HC-OLD-MTIME",
+                "_HC-VN VN.MTIME-NS @ CONSTANT _HC-OLD-MTIME-NS",
+                "_HC-VN VN.CTIME @ CONSTANT _HC-OLD-CTIME",
+                "_HC-VN VN.CTIME-NS @ CONSTANT _HC-OLD-CTIME-NS",
+                "_HC-VN VN.BLOCKS @ CONSTANT _HC-OLD-BLOCKS",
+                (
+                    "_HC-STAT VFS-STATFS-SIZE _HC-V VFS-STATFS "
+                    "CONSTANT _HC-STAT-BEFORE-IOR"
+                ),
+                "_HC-STAT VSF.BFREE @ CONSTANT _HC-FREE-BEFORE",
+                (
+                    f"{write_offset} _HC-FD VFS-SEEK? "
+                    "CONSTANT _HC-SEEK-IOR"
+                ),
+                (
+                    f'S" {replacement.decode("ascii")}" _HC-FD '
+                    "VFS-WRITE? CONSTANT _HC-WRITE-IOR "
+                    "CONSTANT _HC-ACTUAL"
+                ),
+                "_HC-FD FD.CUR-LO @ CONSTANT _HC-CURSOR",
+                "_HC-V V.LAST-IOR @ CONSTANT _HC-LAST-IOR",
+                "_HC-CTX _EXT4-C.J.WRITER + @ CONSTANT _HC-WRITER",
+                (
+                    "_HC-STAT VFS-STATFS-SIZE _HC-V VFS-STATFS "
+                    "CONSTANT _HC-STAT-AFTER-IOR"
+                ),
+                "_HC-STAT VSF.BFREE @ CONSTANT _HC-FREE-AFTER",
+                "_HC-FD VFS-CLOSE? CONSTANT _HC-CLOSE-IOR",
+                (
+                    _forth_conjunction(
+                        [
+                            "_HC-MOUNT-IOR 0=",
+                            "_HC-BIND-IOR 0=",
+                            "_HC-PROFILE-SIZE-IOR 0=",
+                            "_HC-PROFILE-BIND-IOR 0=",
+                            "_HC-PROFILE-USED _HC-PROFILE-SIZE =",
+                            "_HC-OPEN-IOR 0=",
+                            "_HC-SEEK-IOR 0=",
+                            f"_HC-ACTUAL {len(replacement)} =",
+                            (
+                                "_HC-WRITE-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-VOLUME ="
+                            ),
+                            "_HC-WRITE-IOR VFS-IOR-REASON VFS-R-IO =",
+                            (
+                                "_HC-WRITE-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-PARTIAL "
+                                "VFS-IOR-F-READONLY OR ="
+                            ),
+                            f"_HC-CURSOR {expected_cursor} =",
+                            "_HC-LAST-IOR _HC-WRITE-IOR =",
+                            "_HC-CLOCK CELL+ @ 1 =",
+                            "_HC-OLD-BLOCKS 4 =",
+                            "_HC-VN VN.BLOCKS @ _HC-OLD-BLOCKS =",
+                            "_HC-VN VN.SIZE-LO @ 3072 =",
+                            "_HC-VN VN.SIZE-HI @ 0=",
+                            "_HC-VN VN.MTIME @ _HC-OLD-MTIME =",
+                            "_HC-VN VN.MTIME-NS @ _HC-OLD-MTIME-NS =",
+                            "_HC-VN VN.CTIME @ _HC-OLD-CTIME =",
+                            "_HC-VN VN.CTIME-NS @ _HC-OLD-CTIME-NS =",
+                            "_HC-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                            "_HC-STAT-BEFORE-IOR 0=",
+                            "_HC-STAT-AFTER-IOR 0=",
+                            "_HC-FREE-AFTER _HC-FREE-BEFORE =",
+                            "_HC-WRITER _HC-PROFILE-BASE =",
+                            (
+                                "_HC-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-FAULTED ="
+                            ),
+                            (
+                                "_HC-WRITER _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-CHECKPOINT-HOME ="
+                            ),
+                            "_HC-WRITER _EXT4-JWR-VALID?",
+                            (
+                                "_HC-WRITER _EXT4-JWR.FAULT + @ "
+                                "VFS-IOR-FLAGS VFS-IOR-F-PARTIAL ="
+                            ),
+                            (
+                                "_HC-CTX _EXT4-C.J.HOME-WRITES + @ "
+                                f"{expected_checkpoint_homes} ="
+                            ),
+                            "_HC-CTX _EXT4-C.RECOVERY + @ 0<>",
+                            "_HC-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                            "_HC-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "_HC-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            f"_EXT4-MOW-ACTUAL @ {len(replacement)} =",
+                            "_EXT4-MOW-SOURCE @ 0<",
+                            f"_XH-CANDIDATE @ {candidate} =",
+                            "_HC-CLOSE-IOR 0=",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-HOLE-CHECKPOINT-FAULT" THEN'
+                ),
+            ],
+            patches=source_patches
+            + ((candidate * block_size, bytes((0xA5,)) * block_size),),
+            write_faults_by_ordinal={
+                write_ordinal: {
+                    "stage": "media",
+                    "sector_index": sector_index,
+                    "byte_index": byte_index,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-HOLE-CHECKPOINT-FAULT")
+        assert failed_trace == success_trace[: fault_event + 1]
+        assert _ext4_block_allocation_state(
+            faulted, (candidate,)
+        )[candidate]
+        faulted_bitmap = _read_ext4_home(
+            faulted, bitmap_home, block_size=block_size
+        )
+        faulted_gdt = _read_ext4_home(
+            faulted, gdt_home, block_size=block_size
+        )
+        faulted_super = _read_ext4_home(
+            faulted, super_home, block_size=block_size
+        )
+        faulted_inode_home = _read_ext4_home(
+            faulted, inode_home, block_size=block_size
+        )
+        assert faulted_bitmap == expected_bitmap
+        assert _read_ext4_home(
+            faulted, candidate, block_size=block_size
+        ) == expected_candidate
+        assert faulted_inode_home == original_inode_home
+        if case == "gdt":
+            assert faulted_gdt == (
+                expected_gdt[:byte_index] + original_gdt[byte_index:]
+            )
+            assert _sequential_prefix_merge(
+                expected_gdt, original_gdt, faulted_gdt
+            )
+            assert faulted_super == dirty_super
+        else:
+            assert case == "primary-super"
+            assert faulted_gdt == expected_gdt
+            expected_prefix = bytearray(dirty_super[:512])
+            expected_prefix[0x0C:0x10] = expected_super[0x0C:0x10]
+            expected_prefix[0x158:0x15C] = expected_super[0x158:0x15C]
+            assert faulted_super[:512] == bytes(expected_prefix)
+            assert faulted_super[512:] == dirty_super[512:]
+            assert faulted_super != dirty_super
+            assert faulted_super != expected_super
+            assert faulted_super != _ext4_super_with_checksum(faulted_super)
+
+        marker = f"EXT4-PUBLIC-HOLE-{case.upper()}-RECOVERED"
+        _, recovery_trace, recovery_sha256 = _public_hole_recovery_readback(
+            faulted,
+            recovered,
+            expected_file_crc=expected_file_crc,
+            expected_epoch_ms=epoch_ms,
+            expected_home_writes=4,
+            expected_replayed=True,
+            prefix=f"_HC-{case.upper()}-R",
+            marker=marker,
+        )
+        assert not _write_ordinals_for_ext4_home(
+            recovery_trace, candidate, block_size=block_size
+        )
+        for home in (bitmap_home, gdt_home, inode_home):
+            assert len(
+                _write_ordinals_for_ext4_home(
+                    recovery_trace, home, block_size=block_size
+                )
+            ) == 1
+        assert _ext4_block_allocation_state(
+            recovered, (candidate,)
+        )[candidate]
+        _, recovered_inode, _ = _ext4_inode_record(recovered, inode_number)
+        assert _extent_root_physical(recovered_inode, 1) == candidate
+        assert struct.unpack_from("<I", recovered_inode, 0x1C)[0] == 6
+        for home, expected in (
+            (candidate, expected_candidate),
+            (bitmap_home, expected_bitmap),
+            (gdt_home, expected_gdt),
+            (super_home, expected_super),
+            (inode_home, expected_inode_home),
+        ):
+            assert _read_ext4_home(
+                recovered, home, block_size=block_size
+            ) == expected
+
+        _, stable_trace, stable_sha256 = _public_hole_recovery_readback(
+            recovered,
+            stable,
+            expected_file_crc=expected_file_crc,
+            expected_epoch_ms=epoch_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            prefix=f"_HC-{case.upper()}-S",
+            marker=f"EXT4-PUBLIC-HOLE-{case.upper()}-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+        assert _ext4_block_allocation_state(
             stable, (candidate,)
         )[candidate]
     finally:
