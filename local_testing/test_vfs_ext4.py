@@ -36329,6 +36329,7 @@ def _staged_write_recovery_readback(
     expected_epoch_ms: int,
     expected_home_writes: int,
     expected_replayed: bool,
+    expected_blocks: int | None = None,
     prefix: str,
     marker: str,
 ) -> tuple[str, tuple[tuple[str, int, int], ...], str]:
@@ -36338,8 +36339,10 @@ def _staged_write_recovery_readback(
     expected_name = f"{prefix}-EXPECTED"
     buffer_name = f"{prefix}-BUF"
     alias_buffer_name = f"{prefix}-ALIAS-BUF"
-    expected_forth = f"CREATE {expected_name} " + " ".join(
-        f"{byte} C," for byte in expected_file
+    expected_forth = [f"CREATE {expected_name}"]
+    expected_forth.extend(
+        " ".join(f"{byte} C," for byte in expected_file[offset : offset + 32])
+        for offset in range(0, len(expected_file), 32)
     )
     replay_check = (
         f"{prefix}-CTX _EXT4-C.J.REPLAYED + @ 0<>"
@@ -36350,9 +36353,9 @@ def _staged_write_recovery_readback(
         source,
         destination,
         [
-            f"CREATE {buffer_name} 64 ALLOT",
-            f"CREATE {alias_buffer_name} 64 ALLOT",
-            expected_forth,
+            f"CREATE {buffer_name} {len(expected_file)} ALLOT",
+            f"CREATE {alias_buffer_name} {len(expected_file)} ALLOT",
+            *expected_forth,
             (
                 f"T-ARENA T-VOLUME EXT4-NEW CONSTANT {prefix}-MOUNT-IOR "
                 f"CONSTANT {prefix}-V"
@@ -36370,11 +36373,13 @@ def _staged_write_recovery_readback(
             ),
             f"{prefix}-FD FD.INODE @ D.VNODE @ CONSTANT {prefix}-VN",
             (
-                f"{buffer_name} 64 {prefix}-FD VFS-READ? "
+                f"{buffer_name} {len(expected_file)} "
+                f"{prefix}-FD VFS-READ? "
                 f"CONSTANT {prefix}-READ-IOR CONSTANT {prefix}-ACTUAL"
             ),
             (
-                f"{alias_buffer_name} 64 {prefix}-ALIAS-FD VFS-READ? "
+                f"{alias_buffer_name} {len(expected_file)} "
+                f"{prefix}-ALIAS-FD VFS-READ? "
                 f"CONSTANT {prefix}-ALIAS-READ-IOR "
                 f"CONSTANT {prefix}-ALIAS-ACTUAL"
             ),
@@ -36459,6 +36464,14 @@ def _staged_write_recovery_readback(
                         ),
                         f"{prefix}-VN VN.SIZE-LO @ {len(expected_file)} =",
                         f"{prefix}-VN VN.SIZE-HI @ 0=",
+                        *(
+                            [
+                                f"{prefix}-VN VN.BLOCKS @ "
+                                f"{expected_blocks} ="
+                            ]
+                            if expected_blocks is not None
+                            else []
+                        ),
                         (
                             f"{prefix}-VN VN.FLAGS @ "
                             "VFS-IF-DIRTY AND 0="
@@ -36884,6 +36897,527 @@ def test_staged_public_tail_append_passes_external_oracles(
     assert "Flags: 0x80000" in stat.stdout
     assert re.search(r"Links:\s+2\s+Blockcount:\s+4", stat.stdout)
     assert f"(0):{data_block}" in stat.stdout
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+
+
+_STAGED_ALIGNED_APPEND_REPLACEMENT = b"ALIGNED-EOF-APPEND-DATA!"
+
+
+@pytest.fixture(scope="session")
+def staged_public_aligned_eof_growth_fixture(
+    writer_activation_fixture: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Allocate one initialized block while appending at an aligned EOF."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    clean_super = writer_activation_fixture["clean_super"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(clean_super, bytes)
+
+    inode_number = 14
+    candidate = 1351
+    bitmap_home = 259
+    gdt_home = 2
+    super_home = 1
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    data_block = _extent_root_physical(inode, 0)
+    xattr_block = struct.unpack_from("<I", inode, 0x68)[0]
+    old_size = struct.unpack_from("<I", inode, 0x04)[0]
+    old_blocks = struct.unpack_from("<I", inode, 0x1C)[0]
+    old_links = struct.unpack_from("<H", inode, 0x1A)[0]
+    old_generation = struct.unpack_from("<I", inode, 0x64)[0]
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0]
+    assert clean_super == superblock
+    assert block_size == 1024
+    assert inode_size == 256
+    assert inode_home == 278
+    assert inode_block_offset == 256
+    assert data_block == 1346
+    assert xattr_block == 1349
+    assert old_size == 54
+    assert old_blocks == 4
+    assert old_links == 2
+    assert old_generation == 0
+    assert struct.unpack_from("<I", inode, 0x20)[0] == 0x0008_0000
+    assert struct.unpack_from("<H", inode, 0x76)[0] == 0
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    assert struct.unpack_from("<IHHI", inode, 0x34) == (
+        0,
+        1,
+        0,
+        data_block,
+    )
+    assert inode[0x40:0x64] == bytes(0x24)
+    assert not _ext4_block_allocation_state(path, (candidate,))[candidate]
+
+    patched_inode = bytearray(inode)
+    struct.pack_into("<I", patched_inode, 0x04, block_size)
+    struct.pack_into("<I", patched_inode, 0x6C, 0)
+    patched_inode[:] = _inode_with_checksum(
+        superblock, inode_number, patched_inode
+    )
+    input_patches = source_patches + (
+        (inode_offset, bytes(patched_inode)),
+    )
+    original_data = _patched_ext4_home(
+        path, input_patches, data_block, block_size=block_size
+    )
+    original_xattr = _patched_ext4_home(
+        path, input_patches, xattr_block, block_size=block_size
+    )
+    original_inode_home = _patched_ext4_home(
+        path, input_patches, inode_home, block_size=block_size
+    )
+    assert original_data[old_size:] == bytes(block_size - old_size)
+    assert (
+        original_inode_home[
+            inode_block_offset : inode_block_offset + inode_size
+        ]
+        == bytes(patched_inode)
+    )
+
+    replacement = _STAGED_ALIGNED_APPEND_REPLACEMENT
+    new_size = block_size + len(replacement)
+    expected_candidate = replacement + bytes(block_size - len(replacement))
+    expected_file = original_data + replacement
+    expected_file_crc = _crc32c_raw(expected_file)
+    epoch_ms = _STAGED_APPEND_EPOCH_MS
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+
+    expected_inode = bytearray(patched_inode)
+    struct.pack_into("<I", expected_inode, 0x1C, old_blocks + 2)
+    struct.pack_into("<H", expected_inode, 0x2A, 2)
+    struct.pack_into(
+        "<IHHI", expected_inode, 0x40, 1, 1, 0, candidate
+    )
+    assert _extent_root_physical(expected_inode, 0) == data_block
+    assert _extent_root_physical(expected_inode, 1) == candidate
+    expected_inode_home = _staged_write_timestamped_inode_home(
+        superblock,
+        expected_inode,
+        original_inode_home,
+        inode_number=inode_number,
+        inode_block_offset=inode_block_offset,
+        epoch_ms=epoch_ms,
+        expected_size=new_size,
+    )
+
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    group, block_index = divmod(candidate - first_data, blocks_per_group)
+    assert group == 0
+    byte_index, bit_index = divmod(block_index, 8)
+    expected_bitmap = bytearray(
+        _patched_ext4_home(
+            path, input_patches, bitmap_home, block_size=block_size
+        )
+    )
+    assert not expected_bitmap[byte_index] & (1 << bit_index)
+    expected_bitmap[byte_index] |= 1 << bit_index
+    bitmap_checksum = _crc32c_raw(expected_bitmap, seed)
+
+    expected_gdt = bytearray(
+        _patched_ext4_home(
+            path, input_patches, gdt_home, block_size=block_size
+        )
+    )
+    descriptor = bytearray(expected_gdt[:64])
+    group_free_before = struct.unpack_from("<H", descriptor, 0x0C)[0] | (
+        struct.unpack_from("<H", descriptor, 0x2C)[0] << 16
+    )
+    assert group_free_before > 0
+    group_free_after = group_free_before - 1
+    struct.pack_into("<H", descriptor, 0x0C, group_free_after & 0xFFFF)
+    struct.pack_into("<H", descriptor, 0x2C, group_free_after >> 16)
+    struct.pack_into("<H", descriptor, 0x18, bitmap_checksum & 0xFFFF)
+    struct.pack_into("<H", descriptor, 0x38, bitmap_checksum >> 16)
+    descriptor[:] = _group_descriptor_with_checksum(
+        superblock, descriptor, group
+    )
+    expected_gdt[:64] = descriptor
+
+    expected_super = bytearray(clean_super)
+    assert struct.unpack_from("<I", expected_super, 0x158)[0] == 0
+    struct.pack_into("<I", expected_super, 0x0C, free_blocks_before - 1)
+    expected_super[:] = _ext4_super_with_checksum(expected_super)
+
+    directory = tmp_path_factory.mktemp("ext4-public-aligned-eof-growth")
+    media_path = directory / "staged-public-aligned-eof-growth.img"
+    stable_path = directory / "staged-public-aligned-eof-growth-stable.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            path,
+            media_path,
+            [
+                f"CREATE _AG-A {new_size} ALLOT",
+                f"CREATE _AG-B {new_size} ALLOT",
+                "CREATE _AG-STAT VFS-STATFS-SIZE ALLOT",
+                "VARIABLE _AG-CLOCK-CALLS",
+                (
+                    ": _AG-NOW ( context -- epoch-ms ior ) "
+                    "DROP 1 _AG-CLOCK-CALLS +! "
+                    f"{epoch_ms} 0 ;"
+                ),
+                "T-ARENA CONSTANT _AG-ARENA",
+                (
+                    "_AG-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _AG-MOUNT-IOR CONSTANT _AG-V"
+                ),
+                "_AG-V _EXT4-CTX CONSTANT _AG-CTX",
+                (
+                    "' _AG-NOW 0 _AG-V EXT4-BIND-WRITE-CLOCK? "
+                    "CONSTANT _AG-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_AG-PROFILE", "_AG-V", 4, 1, 0
+                ),
+                (
+                    'S" /fixture/payload.txt" _AG-V VFS-RESOLVE? '
+                    "CONSTANT _AG-P-IOR CONSTANT _AG-P"
+                ),
+                (
+                    'S" /fixture/hardlink.txt" _AG-V VFS-RESOLVE? '
+                    "CONSTANT _AG-H-IOR CONSTANT _AG-H"
+                ),
+                (
+                    'S" /fixture/hardlink.txt" '
+                    "VFS-FF-READ VFS-FF-WRITE OR VFS-FF-APPEND OR "
+                    "_AG-V VFS-OPEN? "
+                    "CONSTANT _AG-OPEN-IOR CONSTANT _AG-FD"
+                ),
+                (
+                    'S" /fixture/payload.txt" VFS-FF-READ _AG-V '
+                    "VFS-OPEN? CONSTANT _AG-POPEN-IOR CONSTANT _AG-PFD"
+                ),
+                "_AG-H D.VNODE @ CONSTANT _AG-VN",
+                "_AG-FD FD.CUR-LO @ CONSTANT _AG-INITIAL-CURSOR",
+                "_AG-FD FD.CUR-HI @ CONSTANT _AG-INITIAL-CURSOR-HI",
+                "_AG-VN VN.ATIME @ CONSTANT _AG-OLD-ATIME",
+                "_AG-VN VN.ATIME-NS @ CONSTANT _AG-OLD-ATIME-NS",
+                "_AG-VN VN.SIZE-LO @ CONSTANT _AG-OLD-SIZE",
+                "_AG-VN VN.SIZE-HI @ CONSTANT _AG-OLD-SIZE-HI",
+                "_AG-VN VN.BLOCKS @ CONSTANT _AG-OLD-BLOCKS",
+                "_AG-VN VN.GEN @ CONSTANT _AG-OLD-GEN",
+                "_AG-VN VN.NLINK @ CONSTANT _AG-OLD-NLINK",
+                (
+                    "_AG-STAT VFS-STATFS-SIZE _AG-V VFS-STATFS "
+                    "CONSTANT _AG-STAT-BEFORE-IOR"
+                ),
+                "_AG-STAT VSF.BFREE @ CONSTANT _AG-FREE-BEFORE",
+                "0 _AG-FD VFS-SEEK? CONSTANT _AG-SEEK-IOR",
+                (
+                    f'S" {replacement.decode()}" _AG-FD '
+                    "VFS-WRITE-EXACT CONSTANT _AG-EXACT-IOR"
+                ),
+                "_AG-FD FD.CUR-LO @ CONSTANT _AG-CURSOR",
+                "_AG-FD FD.CUR-HI @ CONSTANT _AG-CURSOR-HI",
+                "_EXT4-WR-ACTUAL @ CONSTANT _AG-ACTUAL",
+                "_EXT4-MOW-ACTUAL @ CONSTANT _AG-MOW-ACTUAL",
+                "_AG-CTX _EXT4-C.J.WRITER + @ CONSTANT _AG-WRITER",
+                "_AG-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _AG-HOMES",
+                (
+                    "_AG-STAT VFS-STATFS-SIZE _AG-V VFS-STATFS "
+                    "CONSTANT _AG-STAT-AFTER-IOR"
+                ),
+                "_AG-STAT VSF.BFREE @ CONSTANT _AG-FREE-AFTER",
+                (
+                    f"_AG-A {new_size} _AG-PFD VFS-READ? "
+                    "CONSTANT _AG-PREAD-IOR CONSTANT _AG-PREAD-ACTUAL"
+                ),
+                "0 _AG-FD VFS-SEEK? CONSTANT _AG-READ-SEEK-IOR",
+                (
+                    f"_AG-B {new_size} _AG-FD VFS-READ? "
+                    "CONSTANT _AG-HREAD-IOR CONSTANT _AG-HREAD-ACTUAL"
+                ),
+                "0xFFFFFFFF _EXT4-CRC-START",
+                f"_AG-A {new_size} _EXT4-CRC-ADD",
+                "_EXT4-CRC@ CONSTANT _AG-PCRC",
+                "0xFFFFFFFF _EXT4-CRC-START",
+                f"_AG-B {new_size} _EXT4-CRC-ADD",
+                "_EXT4-CRC@ CONSTANT _AG-HCRC",
+                (
+                    _forth_conjunction(
+                        [
+                            "_AG-MOUNT-IOR 0=",
+                            "_AG-CLOCK-IOR 0=",
+                            "_AG-PROFILE-SIZE-IOR 0=",
+                            "_AG-PROFILE-BIND-IOR 0=",
+                            "_AG-PROFILE-USED _AG-PROFILE-SIZE =",
+                            "_AG-P-IOR 0=",
+                            "_AG-H-IOR 0=",
+                            "_AG-OPEN-IOR 0=",
+                            "_AG-POPEN-IOR 0=",
+                            "_AG-P D.VNODE @ _AG-H D.VNODE @ =",
+                            "_AG-FD FD.INODE @ D.VNODE @ _AG-VN =",
+                            "_AG-PFD FD.INODE @ D.VNODE @ _AG-VN =",
+                            f"_AG-INITIAL-CURSOR {block_size} =",
+                            "_AG-INITIAL-CURSOR-HI 0=",
+                            "_AG-SEEK-IOR 0=",
+                            "_AG-EXACT-IOR 0=",
+                            "_AG-V V.LAST-IOR @ 0=",
+                            f"_AG-ACTUAL {len(replacement)} =",
+                            f"_AG-MOW-ACTUAL {len(replacement)} =",
+                            f"_AG-CURSOR {new_size} =",
+                            "_AG-CURSOR-HI 0=",
+                            "_AG-CLOCK-CALLS @ 1 =",
+                            f"_AG-VN VN.SIZE-LO @ {new_size} =",
+                            "_AG-VN VN.SIZE-HI @ 0=",
+                            "_AG-VN VN.BLOCKS @ 6 =",
+                            "_AG-VN VN.GEN @ _AG-OLD-GEN =",
+                            "_AG-VN VN.NLINK @ _AG-OLD-NLINK =",
+                            f"_AG-VN VN.MTIME @ {seconds} =",
+                            f"_AG-VN VN.MTIME-NS @ {nanoseconds} =",
+                            f"_AG-VN VN.CTIME @ {seconds} =",
+                            f"_AG-VN VN.CTIME-NS @ {nanoseconds} =",
+                            "_AG-VN VN.ATIME @ _AG-OLD-ATIME =",
+                            "_AG-VN VN.ATIME-NS @ _AG-OLD-ATIME-NS =",
+                            "_AG-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                            f"_AG-OLD-SIZE {block_size} =",
+                            "_AG-OLD-SIZE-HI 0=",
+                            "_AG-OLD-BLOCKS 4 =",
+                            "_AG-OLD-GEN 0=",
+                            "_AG-OLD-NLINK 2 =",
+                            (
+                                "_EXT4-WR-KIND @ "
+                                "_EXT4-WRK-ALIGNED-APPEND ="
+                            ),
+                            f"_EXT4-WR-COUNT @ {len(replacement)} =",
+                            f"_EXT4-WR-OFFSET @ {block_size} =",
+                            f"_EXT4-WR-REQUEST-END @ {new_size} =",
+                            f"_EXT4-WR-NEW-SIZE @ {new_size} =",
+                            "_EXT4-WR-NEW-BLOCKS @ 6 =",
+                            f"_EXT4-WR-CHUNK @ {len(replacement)} =",
+                            "_EXT4-MOW-CREDIT @ -4 =",
+                            "_XH-GROW @ 0<",
+                            f"_XH-SIZE @ {block_size} =",
+                            f"_XH-NEW-SIZE @ {new_size} =",
+                            "_XH-NEW-BLOCKS @ 6 =",
+                            "_XH-LOGICAL @ 1 =",
+                            "_XH-BLOCK-OFF @ 0=",
+                            f"_XH-CANDIDATE @ {candidate} =",
+                            "_XH-ENTRIES @ 2 =",
+                            "_XH-PUBLISHED @ 0<",
+                            "_AG-STAT-BEFORE-IOR 0=",
+                            "_AG-STAT-AFTER-IOR 0=",
+                            f"_AG-FREE-BEFORE {free_blocks_before} =",
+                            "_AG-FREE-AFTER _AG-FREE-BEFORE 1- =",
+                            "_AG-HOMES 4 =",
+                            "_AG-WRITER _AG-PROFILE-BASE =",
+                            "_AG-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_AG-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            "_AG-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                            "_AG-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                            "_AG-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                            "_AG-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                            "_AG-PREAD-IOR 0=",
+                            f"_AG-PREAD-ACTUAL {new_size} =",
+                            f"_AG-PCRC {expected_file_crc} =",
+                            "_AG-READ-SEEK-IOR 0=",
+                            "_AG-HREAD-IOR 0=",
+                            f"_AG-HREAD-ACTUAL {new_size} =",
+                            f"_AG-HCRC {expected_file_crc} =",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-ALIGNED-GROWTH-PUBLISHED" THEN'
+                ),
+                "_AG-FD VFS-CLOSE? CONSTANT _AG-CLOSE-IOR",
+                "_AG-PFD VFS-CLOSE? CONSTANT _AG-PCLOSE-IOR",
+                "0 _AG-V VFS-UNMOUNT CONSTANT _AG-UNMOUNT-IOR",
+                (
+                    "_AG-CLOSE-IOR 0= _AG-PCLOSE-IOR 0= AND "
+                    "_AG-UNMOUNT-IOR 0= AND "
+                    "_AG-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_AG-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_AG-PROFILE-ARENA A.PTR @ _AG-PROFILE-BASE = AND "
+                    'IF ." EXT4-PUBLIC-ALIGNED-GROWTH-UNMOUNTED" THEN'
+                ),
+            ],
+            patches=input_patches
+            + (
+                (
+                    candidate * block_size,
+                    bytes((0xA5,)) * block_size,
+                ),
+            ),
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-ALIGNED-GROWTH-PUBLISHED")
+        _assert_emitted(output, "EXT4-PUBLIC-ALIGNED-GROWTH-UNMOUNTED")
+        assert trace[: len(activation_trace)] == activation_trace
+        assert trace.count(("write", candidate * 2, 2)) == 1
+        assert trace.count(("write", bitmap_home * 2, 2)) == 1
+        assert trace.count(("write", gdt_home * 2, 2)) == 1
+        assert trace.count(("write", inode_home * 2, 2)) == 1
+        assert trace.count(("write", data_block * 2, 2)) == 0
+        assert trace.count(("write", xattr_block * 2, 2)) == 0
+
+        final_superblock, final_inode, _ = _ext4_inode_record(
+            media_path, inode_number
+        )
+        assert _ext4_block_allocation_state(
+            media_path, (candidate,)
+        )[candidate]
+        assert struct.unpack_from("<I", final_inode, 0x04)[0] == new_size
+        assert struct.unpack_from("<I", final_inode, 0x6C)[0] == 0
+        assert struct.unpack_from("<I", final_inode, 0x1C)[0] == 6
+        assert struct.unpack_from("<H", final_inode, 0x1A)[0] == old_links
+        assert struct.unpack_from("<I", final_inode, 0x64)[0] == old_generation
+        assert struct.unpack_from("<HHHH", final_inode, 0x28) == (
+            0xF30A,
+            2,
+            4,
+            0,
+        )
+        assert _extent_root_physical(final_inode, 0) == data_block
+        assert _extent_root_physical(final_inode, 1) == candidate
+        assert struct.unpack_from("<I", final_inode, 0x68)[0] == xattr_block
+        assert final_superblock == bytes(expected_super)
+        assert _read_ext4_home(
+            media_path, candidate, block_size=block_size
+        ) == expected_candidate
+        assert _read_ext4_home(
+            media_path, data_block, block_size=block_size
+        ) == original_data
+        assert _read_ext4_home(
+            media_path, xattr_block, block_size=block_size
+        ) == original_xattr
+        assert _read_ext4_home(
+            media_path, bitmap_home, block_size=block_size
+        ) == bytes(expected_bitmap)
+        assert _read_ext4_home(
+            media_path, gdt_home, block_size=block_size
+        ) == bytes(expected_gdt)
+        assert _read_ext4_home(
+            media_path, inode_home, block_size=block_size
+        ) == expected_inode_home
+
+        _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+            media_path,
+            stable_path,
+            expected_file=expected_file,
+            expected_epoch_ms=epoch_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            expected_blocks=6,
+            prefix="_AG-S",
+            marker="EXT4-PUBLIC-ALIGNED-GROWTH-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == media_sha256
+        return {
+            "image": stable_path,
+            "expected_file": expected_file,
+            "inode_number": inode_number,
+            "candidate": candidate,
+            "data_block": data_block,
+            "xattr_block": xattr_block,
+            "free_blocks": free_blocks_before - 1,
+            "trace": trace,
+        }
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
+def test_staged_public_aligned_eof_growth_allocates_initialized_block(
+    staged_public_aligned_eof_growth_fixture: dict[str, object],
+) -> None:
+    image = staged_public_aligned_eof_growth_fixture["image"]
+    expected_file = staged_public_aligned_eof_growth_fixture["expected_file"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert image.is_file()
+    assert len(expected_file) == 1048
+    assert expected_file.endswith(_STAGED_ALIGNED_APPEND_REPLACEMENT)
+    assert staged_public_aligned_eof_growth_fixture["inode_number"] == 14
+    assert staged_public_aligned_eof_growth_fixture["candidate"] == 1351
+
+
+def test_staged_public_aligned_eof_growth_passes_external_oracles(
+    staged_public_aligned_eof_growth_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    image = staged_public_aligned_eof_growth_fixture["image"]
+    expected_file = staged_public_aligned_eof_growth_fixture["expected_file"]
+    inode_number = staged_public_aligned_eof_growth_fixture["inode_number"]
+    candidate = staged_public_aligned_eof_growth_fixture["candidate"]
+    data_block = staged_public_aligned_eof_growth_fixture["data_block"]
+    xattr_block = staged_public_aligned_eof_growth_fixture["xattr_block"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(candidate, int)
+    assert isinstance(data_block, int)
+    assert isinstance(xattr_block, int)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    for target in ("/fixture/payload.txt", "/fixture/hardlink.txt"):
+        readback = subprocess.run(
+            [str(debugfs), "-R", f"cat {target}", str(image)],
+            env=env,
+            capture_output=True,
+            check=False,
+        )
+        assert readback.returncode == 0, readback.stdout + readback.stderr
+        assert readback.stdout == expected_file
+
+    for logical, physical in ((0, data_block), (1, candidate)):
+        mapped = subprocess.run(
+            [
+                str(debugfs),
+                "-R",
+                f"bmap /fixture/payload.txt {logical}",
+                str(image),
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert mapped.returncode == 0, mapped.stdout + mapped.stderr
+        assert int(mapped.stdout.strip().splitlines()[-1]) == physical
+
+    stat = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "stat /fixture/payload.txt",
+            str(image),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stat.returncode == 0, stat.stdout + stat.stderr
+    assert f"Inode: {inode_number}" in stat.stdout
+    assert f"Size: {len(expected_file)}" in stat.stdout
+    assert "Flags: 0x80000" in stat.stdout
+    assert re.search(r"Links:\s+2\s+Blockcount:\s+6", stat.stdout)
+    assert f"File ACL: {xattr_block}" in stat.stdout
+    assert f"(0):{data_block}" in stat.stdout
+    assert f"(1):{candidate}" in stat.stdout
     _assert_e2fsck_clean(image, jbd2_toolchain)
 
 
@@ -39461,6 +39995,8 @@ def test_public_hole_fill_checkpoint_home_tears_replay_allocation(
     gdt_home = 2
     super_home = 1
     epoch_ms = 3_000_000_123_456
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
     replacement = b"ABCDEFGHIJKLMNOPQRSTUVWX"
     block_offset = 500
     superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
@@ -39603,17 +40139,17 @@ def test_public_hole_fill_checkpoint_home_tears_replay_allocation(
                             "_HC-LAST-IOR _HC-WRITE-IOR =",
                             "_HC-CLOCK CELL+ @ 1 =",
                             "_HC-OLD-BLOCKS 4 =",
-                            "_HC-VN VN.BLOCKS @ _HC-OLD-BLOCKS =",
+                            "_HC-VN VN.BLOCKS @ 6 =",
                             "_HC-VN VN.SIZE-LO @ 3072 =",
                             "_HC-VN VN.SIZE-HI @ 0=",
-                            "_HC-VN VN.MTIME @ _HC-OLD-MTIME =",
-                            "_HC-VN VN.MTIME-NS @ _HC-OLD-MTIME-NS =",
-                            "_HC-VN VN.CTIME @ _HC-OLD-CTIME =",
-                            "_HC-VN VN.CTIME-NS @ _HC-OLD-CTIME-NS =",
+                            f"_HC-VN VN.MTIME @ {seconds} =",
+                            f"_HC-VN VN.MTIME-NS @ {nanoseconds} =",
+                            f"_HC-VN VN.CTIME @ {seconds} =",
+                            f"_HC-VN VN.CTIME-NS @ {nanoseconds} =",
                             "_HC-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
                             "_HC-STAT-BEFORE-IOR 0=",
                             "_HC-STAT-AFTER-IOR 0=",
-                            "_HC-FREE-AFTER _HC-FREE-BEFORE =",
+                            "_HC-FREE-AFTER _HC-FREE-BEFORE 1- =",
                             "_HC-WRITER _HC-PROFILE-BASE =",
                             (
                                 "_HC-WRITER _EXT4-JWR.STATE + @ "

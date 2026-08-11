@@ -16926,6 +16926,7 @@ VARIABLE _EXT4-WR-GEN
 VARIABLE _EXT4-WR-REQUEST-END
 VARIABLE _EXT4-WR-NEW-SIZE
 VARIABLE _EXT4-WR-NEW-BLOCKS
+VARIABLE _EXT4-WR-NEW-FREE
 VARIABLE _EXT4-WR-CHUNK
 VARIABLE _EXT4-WR-MS
 VARIABLE _EXT4-WR-SECONDS
@@ -16938,6 +16939,15 @@ VARIABLE _EXT4-WR-KIND
 0 CONSTANT _EXT4-WRK-IN-SIZE
 1 CONSTANT _EXT4-WRK-HOLE-FILL
 2 CONSTANT _EXT4-WRK-TAIL-APPEND
+3 CONSTANT _EXT4-WRK-ALIGNED-APPEND
+
+: _EXT4-WR-GROW?  ( -- flag )
+    _EXT4-WR-KIND @ DUP _EXT4-WRK-TAIL-APPEND =
+    SWAP _EXT4-WRK-ALIGNED-APPEND = OR ;
+
+: _EXT4-WR-COMMIT-GRANULAR?  ( -- flag )
+    _EXT4-WR-KIND @ _EXT4-WRK-HOLE-FILL =
+    _EXT4-WR-GROW? OR ;
 
 : _EXT4-WRITE-VALIDATE  ( -- ior )
     _EXT4-WR-D @ 0= _EXT4-WR-V @ 0= OR IF VFS-E-INVALID EXIT THEN
@@ -16978,8 +16988,8 @@ VARIABLE _EXT4-WR-KIND
     _EXT4-WR-IOR @ ?DUP IF EXIT THEN
     \ Nonempty staged writes currently require authenticated 1 KiB filesystem
     \ geometry with 256-byte inodes.  This is the published operation boundary
-    \ for initialized overwrite, in-size hole fill, and partial-tail append.
-    \ Other
+    \ for initialized overwrite, in-size hole fill, partial-tail append, and
+    \ one-block allocation-backed growth from aligned EOF.  Other
     \ akashic-ext4-rw-v1 geometries remain available to the read/recovery path
     \ until their mutation paths pass equivalent qualification.
     _EXT4-WR-CTX @ _EXT4-STAGED-WRITE-FS-QUALIFY ?DUP IF EXIT THEN
@@ -16989,14 +16999,20 @@ VARIABLE _EXT4-WR-KIND
         THEN
         _EXT4-WR-VN @ VN.SIZE-LO @
         _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ MOD 0= IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+            _EXT4-WR-COUNT @
+            _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ U> IF
+                EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+            THEN
+            _EXT4-WRK-ALIGNED-APPEND _EXT4-WR-KIND !
+        ELSE
+            _EXT4-WR-COUNT @
+            _EXT4-WR-CTX @ _EXT4-C.BSIZE + @
+            _EXT4-WR-OFFSET @
+            _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ MOD - U> IF
+                EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+            THEN
+            _EXT4-WRK-TAIL-APPEND _EXT4-WR-KIND !
         THEN
-        _EXT4-WR-COUNT @
-        _EXT4-WR-CTX @ _EXT4-C.BSIZE + @
-        _EXT4-WR-OFFSET @ _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ MOD - U> IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
-        _EXT4-WRK-TAIL-APPEND _EXT4-WR-KIND !
     ELSE
         _EXT4-WRK-IN-SIZE _EXT4-WR-KIND !
     THEN
@@ -17004,7 +17020,7 @@ VARIABLE _EXT4-WR-KIND
     _EXT4-WR-CTX @ _EXT4-C.BSIZE + @
     _EXT4-WR-OFFSET @ _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ MOD - MIN
     _EXT4-WR-CHUNK !
-    _EXT4-WR-KIND @ _EXT4-WRK-TAIL-APPEND = IF
+    _EXT4-WR-GROW? IF
         _EXT4-WR-OFFSET @ _EXT4-WR-CHUNK @ _EXT4-UADD?
         _EXT4-WR-IOR ! _EXT4-WR-NEW-SIZE !
         _EXT4-WR-IOR @ ?DUP IF EXIT THEN
@@ -17040,19 +17056,22 @@ VARIABLE _EXT4-WR-KIND
 \ staged binding below publishes only this qualified operation while broader
 \ public-write gates remain.
 \ Confirmed progress and quarantine flags are safe for VFS cursor semantics.
-\ Successful checkpointed writes publish mtime/ctime.  Hole fill additionally
-\ publishes authenticated i_blocks; strict append publishes its committed EOF.
-\ A checkpoint error after an append commit also publishes that exact EOF and
-\ time because mounted progress is commit-granular for newly reachable bytes.
+\ Successful checkpointed writes publish mtime/ctime.  Allocation-backed
+\ operations additionally publish authenticated i_blocks; growth publishes
+\ its committed EOF.  A checkpoint error after a growth commit publishes that
+\ exact EOF, i_blocks, and time because progress is commit-granular for newly
+\ reachable bytes.
 : _EXT4-WR-PUBLISH-COMMITTED  ( -- )
     _EXT4-WR-SECONDS @ _EXT4-WR-VN @ VN.MTIME !
     _EXT4-WR-NSEC @ _EXT4-WR-VN @ VN.MTIME-NS !
     _EXT4-WR-SECONDS @ _EXT4-WR-VN @ VN.CTIME !
     _EXT4-WR-NSEC @ _EXT4-WR-VN @ VN.CTIME-NS !
-    _EXT4-WR-KIND @ _EXT4-WRK-HOLE-FILL = IF
+    _EXT4-WR-KIND @ DUP _EXT4-WRK-HOLE-FILL =
+    SWAP _EXT4-WRK-ALIGNED-APPEND = OR IF
         _EXT4-WR-NEW-BLOCKS @ _EXT4-WR-VN @ VN.BLOCKS !
+        _EXT4-WR-NEW-FREE @ _EXT4-WR-CTX @ _EXT4-C.FREE-BLOCKS + !
     THEN
-    _EXT4-WR-KIND @ _EXT4-WRK-TAIL-APPEND = IF
+    _EXT4-WR-GROW? IF
         _EXT4-WR-NEW-SIZE @ _EXT4-WR-VN @ VN.SIZE-LO !
         0 _EXT4-WR-VN @ VN.SIZE-HI !
     THEN
@@ -17078,7 +17097,7 @@ VARIABLE _EXT4-WR-KIND
         0 VFS-E-CORRUPT EXIT
     THEN
     _EXT4-WR-IOR @ IF
-        _EXT4-WR-KIND @ _EXT4-WRK-TAIL-APPEND =
+        _EXT4-WR-COMMIT-GRANULAR?
         _EXT4-WR-ACTUAL @ _EXT4-WR-CHUNK @ = AND IF
             _EXT4-WR-PUBLISH-COMMITTED
         THEN
@@ -18329,13 +18348,14 @@ EXT4-OPS ,
 : EXT4-NEW  ( arena volume -- vfs ior )
     EXT4-BINDING SWAP VFS-NEW ;
 
-\ Explicit ABI-1 ratchet for the currently qualified write operations.
-\ The ordinary binding above stays read-only.  SPARSE continues to describe
-\ sparse-file read/mapping semantics; WRITE can overwrite initialized blocks
-\ and allocate one complete logical hole inside existing EOF.  It does not yet
-\ grow a file.  A dedicated 1/1/0 profile serves overwrites; 4/1/0 also admits
-\ the allocation-backed operation.  Bind the profile and a trusted clock
-\ before the first nonempty write.
+\ Explicit ABI-1 binding for the currently qualified write operations.  The
+\ ordinary binding above stays read-only.  SPARSE continues to describe
+\ sparse-file read/mapping semantics; WRITE can overwrite initialized blocks,
+\ allocate one complete logical hole inside existing EOF, append inside an
+\ initialized partial tail, and allocate one initialized block at aligned EOF.
+\ A dedicated 1/1/0 profile serves initialized RMW; 4/1/0 serves either
+\ allocation-backed operation.  Bind the profile and a trusted clock before
+\ the first nonempty write.
 EXT4-CAPS VFS-CAP-WRITE OR CONSTANT EXT4-STAGED-WRITE-CAPS
 
 CREATE EXT4-STAGED-WRITE-OPS VFS-OPS-SIZE ALLOT
@@ -18379,6 +18399,8 @@ VARIABLE _XH-WRITER
 VARIABLE _XH-CTX
 VARIABLE _XH-BSIZE
 VARIABLE _XH-SIZE
+VARIABLE _XH-NEW-SIZE
+VARIABLE _XH-GROW
 VARIABLE _XH-LOGICAL
 VARIABLE _XH-BLOCK-OFF
 VARIABLE _XH-TYPE
@@ -18391,6 +18413,7 @@ VARIABLE _XH-GDT-HOME
 VARIABLE _XH-SUPER-HOME
 VARIABLE _XH-BLOCKS
 VARIABLE _XH-NEW-BLOCKS
+VARIABLE _XH-NEW-FREE
 VARIABLE _XH-ROOT
 VARIABLE _XH-ENTRIES
 VARIABLE _XH-INSERT
@@ -18594,12 +18617,25 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _EXT4-I.FILE-ACL-LO + L@ _XH-EA !
     _XH-CTX @ _EXT4-C.R.SIZE + @ _XH-SIZE !
     _XH-CTX @ _EXT4-C.R.BLOCKS + @ _XH-BLOCKS !
-    _XH-OFFSET @ _XH-SIZE @ U< 0= IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _XH-COUNT @
-    _XH-SIZE @ _XH-OFFSET @ - U> IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    _XH-GROW @ IF
+        _XH-OFFSET @ _XH-SIZE @ <> IF
+            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+        THEN
+        _XH-SIZE @ _XH-BSIZE @ MOD IF
+            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+        THEN
+        _XH-OFFSET @ _XH-COUNT @ _EXT4-UADD?
+        _XH-IOR ! _XH-NEW-SIZE !
+        _XH-IOR @ ?DUP IF EXIT THEN
+    ELSE
+        _XH-OFFSET @ _XH-SIZE @ U< 0= IF
+            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+        THEN
+        _XH-COUNT @
+        _XH-SIZE @ _XH-OFFSET @ - U> IF
+            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+        THEN
+        _XH-SIZE @ _XH-NEW-SIZE !
     THEN
     _XH-OFFSET @ _XH-BSIZE @ /MOD
     _XH-LOGICAL ! _XH-BLOCK-OFF !
@@ -18613,9 +18649,16 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _XH-BSIZE @ _XH-BLOCK-OFF @ - U> IF
         EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
-    _XH-LOGICAL @
-    _XH-SIZE @ _XH-BSIZE @ / U< 0= IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    _XH-GROW @ IF
+        _XH-LOGICAL @
+        _XH-SIZE @ _XH-BSIZE @ / <> IF
+            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+        THEN
+    ELSE
+        _XH-LOGICAL @
+        _XH-SIZE @ _XH-BSIZE @ / U< 0= IF
+            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+        THEN
     THEN
     _XH-CAPTURE-ROOT ?DUP IF EXIT THEN
     _XH-REQUIRE-MAP-AUDIT ?DUP IF EXIT THEN
@@ -18886,6 +18929,12 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _XH-NEW-BLOCKS @ _XH-RECORD @ _XH-CTX @
     _EXT4-ENCODE-I-BLOCKS ?DUP IF EXIT THEN
     _XH-APPLY-EXTENT-EDIT ?DUP IF EXIT THEN
+    _XH-GROW @ IF
+        _XH-NEW-SIZE @ 0xFFFFFFFF AND
+        _XH-RECORD @ _EXT4-I.SIZE-LO + L!
+        _XH-NEW-SIZE @ 32 RSHIFT 0xFFFFFFFF AND
+        _XH-RECORD @ _EXT4-I.SIZE-HI + L!
+    THEN
     _XH-SECONDS @ _XH-NSEC @ _XH-RECORD @
     _XH-CTX @ _EXT4-SET-INODE-MTIME-CTIME ?DUP IF EXIT THEN
     _XH-RECORD @ _XH-INO @ _XH-CTX @
@@ -18893,14 +18942,17 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _XH-IMAGE @ _XH-INODE-HOME @ _XH-WRITER @
     _EXT4-JTX-META-REPLACE ;
 
-\ Fill one complete logical hole inside current EOF.  The operation admits a
-\ linked regular file with an authenticated inline depth-zero extent root when
-\ the new initialized block either fits a resident slot or coalesces with an
-\ exactly adjacent initialized extent.  It allocates one geometry-selected
-\ block, stages a full zero image with caller bytes overlaid, applies the
-\ checked insert/merge edit, and increments i_blocks without changing i_size.
-\ Hole fill does not grow EOF; partial-tail RMW is separate, while allocation-backed/block-boundary growth, root growth, and unwritten conversion remain later.
-: _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL
+\ Stage the common allocation-backed one-block edit.  The selected typed mode
+\ is either a complete logical hole inside current EOF or strict no-gap growth
+\ from an exactly block-aligned EOF.  Both modes require an authenticated
+\ inline depth-zero extent root whose initialized insertion can use a resident
+\ slot or exact physical/logical coalescing.  The transaction allocates one
+\ geometry-selected block, stages a fully initialized zero image with caller
+\ bytes overlaid, applies the checked extent edit, and increments i_blocks.
+\ Aligned growth additionally stages its exact new i_size.  Partial-tail RMW
+\ remains a separate typed operation; root growth, unwritten conversion, and
+\ sparse growth remain outside this operation.
+: _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-ALLOCATING-WRITE
   ( source count file-offset inode-number expected-generation seconds nsec transaction -- ior )
     _XH-WRITER ! _XH-NSEC ! _XH-SECONDS !
     _XH-EXPECTED-GEN ! _XH-INO ! _XH-OFFSET !
@@ -18934,6 +18986,7 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _EXT4-JTX-STAGE-ALLOCATE-BLOCK ?DUP IF
         _XH-FAIL-AFTER-PUBLISH EXIT
     THEN
+    _EXT4-JAB-NEW-SUPER-FREE @ _XH-NEW-FREE !
     _XH-STAGE-INODE ?DUP IF
         _XH-FAIL-AFTER-PUBLISH EXIT
     THEN
@@ -18948,6 +19001,16 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     THEN
     0 ;
 
+: _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL
+  ( source count file-offset inode-number expected-generation seconds nsec transaction -- ior )
+    0 _XH-GROW !
+    _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-ALLOCATING-WRITE ;
+
+: _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-ALIGNED-APPEND
+  ( source count file-offset inode-number expected-generation seconds nsec transaction -- ior )
+    -1 _XH-GROW !
+    _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-ALLOCATING-WRITE ;
+
 CREATE _XB _EXT4-MAX-BLOCK ALLOT
 
 : _XP
@@ -18956,10 +19019,11 @@ CREATE _XB _EXT4-MAX-BLOCK ALLOT
     _EXT4-WR-BID @ _EXT4-WR-GEN @
     _EXT4-WR-SECONDS @ _EXT4-WR-NSEC @ _EXT4-WR-V @ ;
 
-\ Preserve the public caller chunk.  Strict partial-tail append routes directly
-\ to the initialized RMW builder and cannot fall through to allocation.  An
-\ in-size target first tries overwrite, then ratchets only its exact clean
-\ unmapped refusal into hole fill.
+\ Preserve the public caller chunk.  Each growth kind routes directly to its
+\ typed builder: partial-tail append uses initialized RMW, while aligned EOF
+\ uses allocation.  Neither can fall through to another operation.  An in-size
+\ target first tries overwrite, then promotes only its exact clean unmapped
+\ refusal to hole fill.
 :NONAME  ( -- actual ior )
     _EXT4-WR-SOURCE @ _EXT4-WR-COUNT @
     _XB _EXT4-MAX-BLOCK MSPAN-OVERLAP?
@@ -18972,6 +19036,12 @@ CREATE _XB _EXT4-MAX-BLOCK ALLOT
         _XB _XP
         -1 ['] _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-TAIL-APPEND
         _EXT4-MOUNTED-ONEBLOCK-WRITE
+    ELSE _EXT4-WR-KIND @ _EXT4-WRK-ALIGNED-APPEND = IF
+        _XB _XP
+        -4 ['] _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-ALIGNED-APPEND
+        _EXT4-MOUNTED-ONEBLOCK-WRITE
+        _XH-NEW-BLOCKS @ _EXT4-WR-NEW-BLOCKS !
+        _XH-NEW-FREE @ _EXT4-WR-NEW-FREE !
     ELSE
         -1 _EXT4-JOW-IOR !
         -1 _EXT4-JOW-PRESENT !
@@ -18986,7 +19056,8 @@ CREATE _XB _EXT4-MAX-BLOCK ALLOT
             -4 ['] _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL
             _EXT4-MOUNTED-ONEBLOCK-WRITE
             _XH-NEW-BLOCKS @ _EXT4-WR-NEW-BLOCKS !
+            _XH-NEW-FREE @ _EXT4-WR-NEW-FREE !
         THEN
-    THEN
+    THEN THEN
     _XB _EXT4-MAX-BLOCK 0 FILL
 ; _EXT4-WR-HOOK !
