@@ -1505,10 +1505,14 @@ uses the staged mount gate and installs `_EXT4-WRITE`; its capability mask adds
 current generic-cursor regression uses a `1/1/0` profile: it checkpoints the
 initialized eight-byte prefix, then stops at the allocation step with `NOSPC`
 and the cursor at 1,024. The single-hole `4/1/0` journey separately establishes
-successful allocation publication. Positive overwrite-to-hole-to-overwrite
-exact composition remains a focused qualification item; the callback contract
-already treats each chunk as a separate transaction and makes no mixed-route
-atomicity claim.
+successful allocation publication. A positive `4/1/0` exact journey now
+composes the initialized eight-byte suffix and the following complete logical
+hole as two transactions through one writer, advances the cursor to 2,048,
+publishes the second timestamp and new block count, and leaves the later
+initialized block untouched. The subsequent hole-to-initialized 4-to-1 credit
+transition remains a separate focused qualification item; it is not required
+for the two landed operations to function independently. The callback contract
+makes no mixed-route atomicity claim.
 
 The same staged binding qualifies generic fault propagation. An ordered-data
 tear during a 24-byte `VFS-WRITE?` at offset 500 changes 18 raw caller bytes

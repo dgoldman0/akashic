@@ -36199,6 +36199,183 @@ def test_staged_write_callback_composes_with_generic_vfs_cursor(
         backing.unlink(missing_ok=True)
 
 
+def test_staged_write_exact_composes_overwrite_then_hole(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    superblock, inode, inode_offset = _ext4_inode_record(path, 17)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_home = inode_offset // block_size
+    first_data_block = _extent_root_physical(inode, 0)
+    third_data_block = _extent_root_physical(inode, 2)
+    candidate = 1351
+    bitmap_home = 259
+    gdt_home = 2
+    assert block_size == 1024
+    assert not _ext4_block_allocation_state(path, (candidate,))[candidate]
+
+    write_offset = block_size - 8
+    source_bytes = block_size + 8
+    exact_byte = 0x59
+    epoch_ms = 3_000_000_123_456
+    published_ms = epoch_ms + 2
+    seconds, milliseconds = divmod(published_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    with path.open("rb") as source:
+        source.seek(first_data_block * block_size)
+        original_first = source.read(block_size)
+        source.seek(third_data_block * block_size)
+        original_third = source.read(block_size)
+    assert len(original_first) == len(original_third) == block_size
+    expected_first = bytearray(original_first)
+    expected_first[write_offset:] = bytes((exact_byte,)) * 8
+    expected_hole = bytes((exact_byte,)) * block_size
+    expected_third = original_third
+
+    backing = tmp_path / "vfs-generic-positive-hole-exact.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            backing,
+            [
+                "CREATE _GX-STAT VFS-STATFS-SIZE ALLOT",
+                f"CREATE _GX-SOURCE {source_bytes} ALLOT",
+                f"_GX-SOURCE {source_bytes} {exact_byte} FILL",
+                f"CREATE _GX-CLOCK {epoch_ms} , 0 , 0 ,",
+                (
+                    ": _GX-NOW ( clock -- epoch-ms ior ) "
+                    "DUP 2 CELLS + DUP @ 1+ SWAP ! "
+                    "DUP @ SWAP 2 CELLS + @ + 0 ;"
+                ),
+                "T-ARENA CONSTANT _GX-ARENA",
+                (
+                    "_GX-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _GX-MOUNT-IOR CONSTANT _GX-V"
+                ),
+                "_GX-V _EXT4-CTX CONSTANT _GX-CTX",
+                (
+                    "' _GX-NOW _GX-CLOCK _GX-V "
+                    "EXT4-BIND-WRITE-CLOCK? CONSTANT _GX-BIND-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_GX-PROFILE", "_GX-V", 4, 1, 0
+                ),
+                (
+                    'S" /fixture/sparse.bin" VFS-FF-WRITE _GX-V '
+                    "VFS-OPEN? CONSTANT _GX-OPEN-IOR CONSTANT _GX-FD"
+                ),
+                "_GX-FD FD.INODE @ D.VNODE @ CONSTANT _GX-VN",
+                "_GX-ARENA ARENA-USED CONSTANT _GX-MAIN-CLEAN",
+                "_GX-VN VN.BLOCKS @ CONSTANT _GX-OLD-BLOCKS",
+                (
+                    "_GX-STAT VFS-STATFS-SIZE _GX-V VFS-STATFS "
+                    "CONSTANT _GX-STAT-BEFORE-IOR"
+                ),
+                "_GX-STAT VSF.BFREE @ CONSTANT _GX-FREE-BEFORE",
+                (
+                    f"{write_offset} _GX-FD VFS-SEEK? "
+                    "CONSTANT _GX-SEEK-IOR"
+                ),
+                (
+                    f"_GX-SOURCE {source_bytes} _GX-FD VFS-WRITE-EXACT "
+                    "CONSTANT _GX-EXACT-IOR"
+                ),
+                "_GX-FD FD.CUR-LO @ CONSTANT _GX-CURSOR",
+                "_GX-CTX _EXT4-C.J.WRITER + @ CONSTANT _GX-WRITER",
+                "_GX-ARENA ARENA-USED CONSTANT _GX-MAIN-AFTER",
+                "_GX-PROFILE-ARENA ARENA-USED CONSTANT _GX-PROFILE-AFTER",
+                (
+                    "_GX-STAT VFS-STATFS-SIZE _GX-V VFS-STATFS "
+                    "CONSTANT _GX-STAT-AFTER-IOR"
+                ),
+                "_GX-STAT VSF.BFREE @ CONSTANT _GX-FREE-AFTER",
+                (
+                    _forth_conjunction(
+                        [
+                            "_GX-MOUNT-IOR 0=",
+                            "_GX-BIND-IOR 0=",
+                            "_GX-PROFILE-SIZE-IOR 0=",
+                            "_GX-PROFILE-BIND-IOR 0=",
+                            "_GX-PROFILE-USED _GX-PROFILE-SIZE =",
+                            "_GX-OPEN-IOR 0=",
+                            "_GX-SEEK-IOR 0=",
+                            "_GX-EXACT-IOR 0=",
+                            "_GX-V V.LAST-IOR @ 0=",
+                            f"_GX-CURSOR {write_offset + source_bytes} =",
+                            "_GX-CLOCK 2 CELLS + @ 2 =",
+                            f"_GX-VN VN.MTIME @ {seconds} =",
+                            f"_GX-VN VN.MTIME-NS @ {nanoseconds} =",
+                            f"_GX-VN VN.CTIME @ {seconds} =",
+                            f"_GX-VN VN.CTIME-NS @ {nanoseconds} =",
+                            "_GX-OLD-BLOCKS 4 =",
+                            "_GX-VN VN.BLOCKS @ 6 =",
+                            "_GX-VN VN.SIZE-LO @ 3072 =",
+                            "_GX-VN VN.SIZE-HI @ 0=",
+                            "_GX-STAT-BEFORE-IOR 0=",
+                            "_GX-STAT-AFTER-IOR 0=",
+                            "_GX-FREE-AFTER _GX-FREE-BEFORE 1- =",
+                            "_GX-WRITER _GX-PROFILE-BASE =",
+                            "_GX-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_GX-MAIN-AFTER _GX-MAIN-CLEAN =",
+                            "_GX-PROFILE-AFTER _GX-PROFILE-USED =",
+                            f"_EXT4-WR-COUNT @ {block_size} =",
+                            f"_EXT4-WR-OFFSET @ {block_size} =",
+                            f"_EXT4-WR-CHUNK @ {block_size} =",
+                            "_EXT4-MOW-SOURCE @ 0<",
+                            f"_XH-CANDIDATE @ {candidate} =",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                        ]
+                    )
+                    + ' IF ." EXT4-GENERIC-VFS-OVERWRITE-HOLE" THEN'
+                ),
+                "_GX-FD VFS-CLOSE? CONSTANT _GX-CLOSE-IOR",
+                "0 _GX-V VFS-UNMOUNT CONSTANT _GX-UNMOUNT-IOR",
+                (
+                    "_GX-CLOSE-IOR 0= _GX-UNMOUNT-IOR 0= AND "
+                    "_GX-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_GX-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_GX-PROFILE-ARENA A.PTR @ _GX-PROFILE-BASE = AND "
+                    'IF ." EXT4-GENERIC-VFS-OVERWRITE-HOLE-UNMOUNT" THEN'
+                ),
+            ],
+            patches=source_patches
+            + ((candidate * block_size, bytes((0xA5,)) * block_size),),
+            capture_media=backing,
+        )
+        _assert_emitted(output, "EXT4-GENERIC-VFS-OVERWRITE-HOLE")
+        _assert_emitted(output, "EXT4-GENERIC-VFS-OVERWRITE-HOLE-UNMOUNT")
+        assert trace[: len(activation_trace)] == activation_trace
+        assert trace.count(("write", first_data_block * 2, 2)) == 1
+        assert trace.count(("write", candidate * 2, 2)) == 1
+        assert trace.count(("write", third_data_block * 2, 2)) == 0
+        assert trace.count(("write", bitmap_home * 2, 2)) == 1
+        assert trace.count(("write", gdt_home * 2, 2)) == 1
+        assert trace.count(("write", inode_home * 2, 2)) == 2
+        assert _ext4_block_allocation_state(backing, (candidate,))[candidate]
+        _, final_inode, _ = _ext4_inode_record(backing, 17)
+        assert _extent_root_physical(final_inode, 1) == candidate
+        assert struct.unpack_from("<I", final_inode, 0x1C)[0] == 6
+        with backing.open("rb") as source:
+            source.seek(first_data_block * block_size)
+            assert source.read(block_size) == bytes(expected_first)
+            source.seek(candidate * block_size)
+            assert source.read(block_size) == expected_hole
+            source.seek(third_data_block * block_size)
+            assert source.read(block_size) == expected_third
+    finally:
+        backing.unlink(missing_ok=True)
+
+
 def test_staged_write_fault_advances_generic_vfs_confirmed_prefix(
     writer_activation_fixture: dict[str, object], tmp_path: Path
 ) -> None:
