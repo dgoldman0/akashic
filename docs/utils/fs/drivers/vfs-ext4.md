@@ -1391,6 +1391,21 @@ unmount emits the ordinary deactivation trace. This pins both removal of the
 old `count <= block_size` limit and safe cross-block short progress without
 claiming hole allocation or a multi-block atomic transaction.
 
+Positive multi-block qualification uses one public `VFS-WRITE-EXACT` request
+across the only adjacent initialized pair in the real depth-1 extent fixture.
+The request writes eight bytes at the end of logical block 10 and sixteen at
+the start of logical block 11. It completes as two independent `1/1/0`
+transactions through one allocation-stable writer, samples the clock once per
+chunk, and leaves the final vnode/inode time at the second sample. The trace
+contains the ordered homes for physical blocks 1362 then 1363 and two
+inode-table checkpoints; external extent node 1353 is never written. A clean
+ordinary remount performs no I/O, pinned `debugfs` observes the exact 12 KiB
+file and unchanged six-range extent map, and pinned `e2fsck` accepts the image.
+This promotes a size-preserving multi-block transfer over existing initialized
+allocation. It does not promote an atomic multi-block transaction: every
+completed chunk is independently durable, a later error leaves earlier chunks
+checkpointed, and the FD cursor is the cumulative progress witness.
+
 Generic cursor qualification uses the real staged binding. Its operation table
 uses the staged mount gate and installs `_EXT4-WRITE`; its capability mask adds
 `WRITE`, and its flags omit `READ_ONLY`. The ordinary `EXT4-BINDING`,
@@ -1591,12 +1606,14 @@ mutation, inode/link/time/accounting updates, xattr mutation, broader per-record
 orphan closure, and the final compositional release matrix.
 
 The staged binding now publishes that narrow durable checkpoint honestly: one
-size-preserving regular-file overwrite contained in one already allocated
-initialized block, represented by a full-block ordered-data RMW and one
-checksummed inode-table after-image for clock-derived `mtime`/`ctime`. It needs
-no allocator or extent edit and fits the exact `1 metadata / 1 data / 0 revoke`
-transaction shape. The qualified path includes end-to-end emit, checkpoint,
-clean unmount, write-free remount, sequential writer reuse, external
+block-bounded size-preserving regular-file overwrite over existing initialized
+allocation, represented by a full-block ordered-data RMW and one checksummed
+inode-table after-image for clock-derived `mtime`/`ctime`. `VFS-WRITE-EXACT`
+may compose multiple independently durable chunks across initialized blocks;
+it does not promise atomic batching. Each chunk needs no allocator or extent
+edit and fits the exact `1 metadata / 1 data / 0 revoke` transaction shape. The
+qualified path includes end-to-end emit, checkpoint, clean unmount, write-free
+remount, sequential writer reuse, cross-block exact progress, external
 `debugfs`/`e2fsck` inspection, both outcomes of a second-transaction
 commit-flush failure, and a checkpoint-home tear/replay case. Growth, holes,
 unwritten extents, multi-block atomicity, truncation, and namespace mutation

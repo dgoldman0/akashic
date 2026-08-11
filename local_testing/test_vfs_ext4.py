@@ -35393,6 +35393,515 @@ def test_staged_write_updates_initialized_depth_positive_extent(
         backing.unlink(missing_ok=True)
 
 
+@pytest.fixture(scope="session")
+def staged_multiblock_exact_fixture(
+    extent_writer_activation_fixture: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Qualify exact-write composition across two initialized blocks."""
+    path = extent_writer_activation_fixture["image"]
+    source_patches = extent_writer_activation_fixture["source_patches"]
+    activation_trace = extent_writer_activation_fixture["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    inode_number = 26
+    extent_node_block = 1353
+    first_logical = 10
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    assert block_size == 1024
+    assert inode_size == 256
+    assert generation == 0
+    assert struct.unpack_from("<H", inode, 0x2E)[0] == 1
+    assert struct.unpack_from("<I", inode, 0x38)[0] == extent_node_block
+    assert struct.unpack_from("<I", inode, 0x04)[0] == 12 * block_size
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    assert inode_home == 281
+    assert inode_block_offset == 256
+
+    original_extent_node = _patched_ext4_home(
+        path,
+        source_patches,
+        extent_node_block,
+        block_size=block_size,
+    )
+    assert _extent_node_with_checksum(
+        superblock, inode_number, generation, original_extent_node
+    ) == original_extent_node
+    assert struct.unpack_from("<HHH", original_extent_node, 0) == (
+        0xF30A,
+        6,
+        84,
+    )
+    target_entry = 12 + 5 * 12
+    assert struct.unpack_from(
+        "<I", original_extent_node, target_entry
+    )[0] == first_logical
+    assert struct.unpack_from(
+        "<H", original_extent_node, target_entry + 4
+    )[0] == 2
+    first_data_block = struct.unpack_from(
+        "<I", original_extent_node, target_entry + 8
+    )[0]
+    second_data_block = first_data_block + 1
+    assert (first_data_block, second_data_block) == (1362, 1363)
+
+    original_first_data = _patched_ext4_home(
+        path, source_patches, first_data_block, block_size=block_size
+    )
+    original_second_data = _patched_ext4_home(
+        path, source_patches, second_data_block, block_size=block_size
+    )
+    original_inode_home = _patched_ext4_home(
+        path, source_patches, inode_home, block_size=block_size
+    )
+    assert original_first_data == bytes((75,)) * block_size
+    assert original_second_data == bytes((76,)) * block_size
+    assert (
+        original_inode_home[
+            inode_block_offset : inode_block_offset + inode_size
+        ]
+        == inode
+    )
+
+    replacement = b"01234567abcdefghijklmnop"
+    first_count = 8
+    second_count = len(replacement) - first_count
+    assert second_count == 16
+    write_offset = first_logical * block_size + block_size - first_count
+    assert write_offset == 11256
+    first_epoch_ms = 3_000_000_010_111
+    second_epoch_ms = 3_000_000_015_222
+    second_seconds, second_milliseconds = divmod(second_epoch_ms, 1000)
+    second_nanoseconds = second_milliseconds * 1_000_000
+
+    expected_first_data = bytearray(original_first_data)
+    expected_first_data[-first_count:] = replacement[:first_count]
+    expected_second_data = bytearray(original_second_data)
+    expected_second_data[:second_count] = replacement[first_count:]
+    expected_inode_home = _staged_write_timestamped_inode_home(
+        superblock,
+        inode,
+        original_inode_home,
+        inode_number=inode_number,
+        inode_block_offset=inode_block_offset,
+        epoch_ms=second_epoch_ms,
+    )
+
+    patterns = PROFILE["generator"]["read_side_population"][
+        "extent_tree_patterns"
+    ]
+    assert patterns == list(range(65, 77))
+    expected_file = bytearray()
+    holes = {1, 3, 5, 7, 9}
+    for logical, pattern in enumerate(patterns):
+        expected_file.extend(
+            bytes(block_size)
+            if logical in holes
+            else bytes((pattern,)) * block_size
+        )
+    expected_file[
+        write_offset : write_offset + len(replacement)
+    ] = replacement
+    assert len(expected_file) == 12 * block_size
+
+    directory = tmp_path_factory.mktemp("ext4-staged-multiblock-exact")
+    media_path = directory / "staged-multiblock-exact.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        media_path,
+        [
+            "CREATE _MB-BUF 32 ALLOT",
+            (
+                f"CREATE _MB-CLOCK {first_epoch_ms} , "
+                f"{second_epoch_ms} ,"
+            ),
+            "VARIABLE _MB-CLOCK-CALLS",
+            (
+                ": _MB-NOW ( clock -- epoch-ms ior ) "
+                "_MB-CLOCK-CALLS @ CELLS + @ "
+                "1 _MB-CLOCK-CALLS +! 0 ;"
+            ),
+            "T-ARENA CONSTANT _MB-ARENA",
+            (
+                "_MB-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _MB-MOUNT-IOR CONSTANT _MB-V"
+            ),
+            "_MB-V _EXT4-CTX CONSTANT _MB-CTX",
+            (
+                "' _MB-NOW _MB-CLOCK _MB-V "
+                "EXT4-BIND-WRITE-CLOCK? CONSTANT _MB-CLOCK-IOR"
+            ),
+            "_MB-ARENA ARENA-USED CONSTANT _MB-MAIN-PREBIND",
+            *_ext4_dedicated_writer_profile_forth(
+                "_MB-PROFILE", "_MB-V"
+            ),
+            "_MB-ARENA ARENA-USED CONSTANT _MB-MAIN-POSTBIND",
+            (
+                'S" /fixture/extent-tree.bin" '
+                "VFS-FF-READ VFS-FF-WRITE OR _MB-V VFS-OPEN? "
+                "CONSTANT _MB-OPEN-IOR CONSTANT _MB-FD"
+            ),
+            "_MB-FD FD.INODE @ D.VNODE @ CONSTANT _MB-VN",
+            "_MB-ARENA ARENA-USED CONSTANT _MB-MAIN-CLEAN",
+            (
+                f"{write_offset} _MB-FD VFS-SEEK? "
+                "CONSTANT _MB-SEEK-IOR"
+            ),
+            (
+                f'S" {replacement.decode("ascii")}" _MB-FD '
+                "VFS-WRITE-EXACT CONSTANT _MB-EXACT-IOR"
+            ),
+            "_MB-FD FD.CUR-LO @ CONSTANT _MB-EXACT-CURSOR",
+            "_MB-V V.LAST-IOR @ CONSTANT _MB-EXACT-LAST-IOR",
+            "_MB-CTX _EXT4-C.J.WRITER + @ CONSTANT _MB-WRITER",
+            "_MB-ARENA ARENA-USED CONSTANT _MB-MAIN-AFTER",
+            (
+                "_MB-PROFILE-ARENA ARENA-USED "
+                "CONSTANT _MB-PROFILE-AFTER"
+            ),
+            (
+                f"{write_offset} _MB-FD VFS-SEEK? "
+                "CONSTANT _MB-READ-SEEK-IOR"
+            ),
+            (
+                f"_MB-BUF {len(replacement)} _MB-FD VFS-READ? "
+                "CONSTANT _MB-READ-IOR CONSTANT _MB-READ-ACTUAL"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_MB-MOUNT-IOR 0=",
+                        (
+                            "_MB-V V.BINDING @ "
+                            "EXT4-STAGED-WRITE-BINDING ="
+                        ),
+                        "_MB-CLOCK-IOR 0=",
+                        "_MB-PROFILE-SIZE-IOR 0=",
+                        "_MB-PROFILE-SIZE 0>",
+                        "_MB-PROFILE-BIND-IOR 0=",
+                        "_MB-PROFILE-USED _MB-PROFILE-SIZE =",
+                        "_MB-MAIN-POSTBIND _MB-MAIN-PREBIND =",
+                        "_MB-OPEN-IOR 0=",
+                        "_MB-SEEK-IOR 0=",
+                        "_MB-EXACT-IOR 0=",
+                        "_MB-EXACT-LAST-IOR 0=",
+                        (
+                            f"_MB-EXACT-CURSOR "
+                            f"{write_offset + len(replacement)} ="
+                        ),
+                        "_MB-CLOCK-CALLS @ 2 =",
+                        f"_MB-VN VN.MTIME @ {second_seconds} =",
+                        (
+                            "_MB-VN VN.MTIME-NS @ "
+                            f"{second_nanoseconds} ="
+                        ),
+                        f"_MB-VN VN.CTIME @ {second_seconds} =",
+                        (
+                            "_MB-VN VN.CTIME-NS @ "
+                            f"{second_nanoseconds} ="
+                        ),
+                        f"_MB-VN VN.SIZE-LO @ {len(expected_file)} =",
+                        "_MB-VN VN.SIZE-HI @ 0=",
+                        (
+                            "_MB-VN VN.FLAGS @ "
+                            "VFS-IF-DIRTY AND 0="
+                        ),
+                        "_MB-V V.FLAGS @ VFS-F-RO AND 0=",
+                        "_MB-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_MB-WRITER _MB-PROFILE-BASE =",
+                        "_MB-WRITER _EXT4-JWR-VALID?",
+                        "_MB-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_MB-WRITER _EXT4-JWR.FAULT + @ 0=",
+                        "_MB-MAIN-AFTER _MB-MAIN-CLEAN =",
+                        "_MB-PROFILE-AFTER _MB-PROFILE-USED =",
+                        (
+                            "_MB-CTX _EXT4-C.J.HOME-WRITES + @ 1 ="
+                        ),
+                        f"_EXT4-WR-COUNT @ {second_count} =",
+                        (
+                            f"_EXT4-WR-OFFSET @ "
+                            f"{(first_logical + 1) * block_size} ="
+                        ),
+                        f"_EXT4-WR-CHUNK @ {second_count} =",
+                        f"_EXT4-WR-ACTUAL @ {second_count} =",
+                        f"_EXT4-JOW-PHYS @ {second_data_block} =",
+                        "_MB-READ-SEEK-IOR 0=",
+                        "_MB-READ-IOR 0=",
+                        f"_MB-READ-ACTUAL {len(replacement)} =",
+                        (
+                            f'S" {replacement.decode("ascii")}" DROP '
+                            f"_MB-BUF {len(replacement)} "
+                            "_EXT4-BYTES=?"
+                        ),
+                        "_EXT4-MUTATION-MAP-TARGET @ 0=",
+                        "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
+                        "_EXT4-MUTATION-MAP-HITS @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        (
+                            "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-STAGED-MULTIBLOCK-EXACT" THEN'
+            ),
+            "_MB-FD VFS-CLOSE? CONSTANT _MB-CLOSE-IOR",
+            "0 _MB-V VFS-UNMOUNT CONSTANT _MB-UNMOUNT-IOR",
+            (
+                "_MB-CLOSE-IOR 0= _MB-UNMOUNT-IOR 0= AND "
+                "_MB-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_MB-PROFILE-ARENA ARENA-USED 0= AND "
+                "_MB-PROFILE-ARENA A.PTR @ _MB-PROFILE-BASE = AND "
+                'IF ." EXT4-STAGED-MULTIBLOCK-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=source_patches,
+        capture_media=media_path,
+    )
+    _assert_emitted(output, "EXT4-STAGED-MULTIBLOCK-EXACT")
+    _assert_emitted(output, "EXT4-STAGED-MULTIBLOCK-UNMOUNTED")
+    assert trace[: len(activation_trace)] == activation_trace
+    assert len(trace) == 77
+    assert sum(kind == "write" for kind, _, _ in trace) == 42
+    assert sum(kind == "flush" for kind, _, _ in trace) == 35
+    first_data_event = ("write", first_data_block * 2, 2)
+    second_data_event = ("write", second_data_block * 2, 2)
+    inode_event = ("write", inode_home * 2, 2)
+    assert tuple(
+        event
+        for event in trace
+        if event in {first_data_event, second_data_event, inode_event}
+    ) == (
+        first_data_event,
+        inode_event,
+        second_data_event,
+        inode_event,
+    )
+    assert trace.count(("write", extent_node_block * 2, 2)) == 0
+    assert _read_ext4_home(
+        media_path, first_data_block, block_size=block_size
+    ) == bytes(expected_first_data)
+    assert _read_ext4_home(
+        media_path, second_data_block, block_size=block_size
+    ) == bytes(expected_second_data)
+    assert _read_ext4_home(
+        media_path, extent_node_block, block_size=block_size
+    ) == original_extent_node
+    assert _read_ext4_home(
+        media_path, inode_home, block_size=block_size
+    ) == expected_inode_home
+
+    stable_path = directory / "staged-multiblock-stable.img"
+    stable_output, stable_trace, stable_sha256 = run_recovery_forth(
+        media_path,
+        stable_path,
+        [
+            "CREATE _MBR-BUF 32 ALLOT",
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _MBR-MOUNT-IOR CONSTANT _MBR-V"
+            ),
+            "_MBR-V _EXT4-CTX CONSTANT _MBR-CTX",
+            (
+                'S" /fixture/extent-tree.bin" VFS-FF-READ _MBR-V '
+                "VFS-OPEN? CONSTANT _MBR-OPEN-IOR CONSTANT _MBR-FD"
+            ),
+            "_MBR-FD FD.INODE @ D.VNODE @ CONSTANT _MBR-VN",
+            (
+                f"{write_offset} _MBR-FD VFS-SEEK? "
+                "CONSTANT _MBR-SEEK-IOR"
+            ),
+            (
+                f"_MBR-BUF {len(replacement)} _MBR-FD VFS-READ? "
+                "CONSTANT _MBR-READ-IOR CONSTANT _MBR-ACTUAL"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_MBR-MOUNT-IOR 0=",
+                        "_MBR-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_MBR-V _EXT4-READY?",
+                        "_MBR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_MBR-CTX _EXT4-C.RECOVERY + @ 0=",
+                        (
+                            "_MBR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0="
+                        ),
+                        "_MBR-CTX _EXT4-C.J.START + @ 0=",
+                        (
+                            "_MBR-CTX _EXT4-C.J.HOME-WRITES + @ 0="
+                        ),
+                        (
+                            "_MBR-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0="
+                        ),
+                        "_MBR-OPEN-IOR 0=",
+                        "_MBR-SEEK-IOR 0=",
+                        "_MBR-READ-IOR 0=",
+                        f"_MBR-ACTUAL {len(replacement)} =",
+                        (
+                            f'S" {replacement.decode("ascii")}" DROP '
+                            f"_MBR-BUF {len(replacement)} "
+                            "_EXT4-BYTES=?"
+                        ),
+                        f"_MBR-VN VN.MTIME @ {second_seconds} =",
+                        (
+                            "_MBR-VN VN.MTIME-NS @ "
+                            f"{second_nanoseconds} ="
+                        ),
+                        f"_MBR-VN VN.CTIME @ {second_seconds} =",
+                        (
+                            "_MBR-VN VN.CTIME-NS @ "
+                            f"{second_nanoseconds} ="
+                        ),
+                        f"_MBR-VN VN.SIZE-LO @ {len(expected_file)} =",
+                        "_MBR-VN VN.SIZE-HI @ 0=",
+                        (
+                            "_MBR-VN VN.FLAGS @ "
+                            "VFS-IF-DIRTY AND 0="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-STAGED-MULTIBLOCK-STABLE" THEN'
+            ),
+            "_MBR-FD VFS-CLOSE? CONSTANT _MBR-CLOSE-IOR",
+            "0 _MBR-V VFS-UNMOUNT CONSTANT _MBR-UNMOUNT-IOR",
+            (
+                "_MBR-CLOSE-IOR 0= _MBR-UNMOUNT-IOR 0= AND "
+                'IF ." EXT4-STAGED-MULTIBLOCK-STABLE-UNMOUNT" THEN'
+            ),
+        ],
+        capture_media=stable_path,
+    )
+    _assert_emitted(stable_output, "EXT4-STAGED-MULTIBLOCK-STABLE")
+    _assert_emitted(
+        stable_output, "EXT4-STAGED-MULTIBLOCK-STABLE-UNMOUNT"
+    )
+    assert stable_trace == ()
+    assert stable_sha256 == media_sha256
+    assert _sha256(stable_path) == stable_sha256
+    assert _read_ext4_home(
+        stable_path, first_data_block, block_size=block_size
+    ) == bytes(expected_first_data)
+    assert _read_ext4_home(
+        stable_path, second_data_block, block_size=block_size
+    ) == bytes(expected_second_data)
+    assert _read_ext4_home(
+        stable_path, extent_node_block, block_size=block_size
+    ) == original_extent_node
+    assert _read_ext4_home(
+        stable_path, inode_home, block_size=block_size
+    ) == expected_inode_home
+    return {
+        "image": stable_path,
+        "expected_file": bytes(expected_file),
+        "trace": trace,
+        "inode": inode_number,
+        "extent_node": extent_node_block,
+        "first_data": first_data_block,
+        "second_data": second_data_block,
+        "write_offset": write_offset,
+        "replacement": replacement,
+    }
+
+
+def test_staged_exact_write_crosses_initialized_extent_blocks(
+    staged_multiblock_exact_fixture: dict[str, object],
+) -> None:
+    image = staged_multiblock_exact_fixture["image"]
+    replacement = staged_multiblock_exact_fixture["replacement"]
+    write_offset = staged_multiblock_exact_fixture["write_offset"]
+    assert isinstance(image, Path)
+    assert isinstance(replacement, bytes)
+    assert write_offset == 11256
+    assert replacement == b"01234567abcdefghijklmnop"
+    assert image.is_file()
+
+
+def test_staged_multiblock_output_passes_external_oracles(
+    staged_multiblock_exact_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    image = staged_multiblock_exact_fixture["image"]
+    expected_file = staged_multiblock_exact_fixture["expected_file"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    readback = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "cat /fixture/extent-tree.bin",
+            str(image),
+        ],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert readback.returncode == 0, readback.stdout + readback.stderr
+    assert readback.stdout == expected_file
+
+    stat = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "stat /fixture/extent-tree.bin",
+            str(image),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stat.returncode == 0, stat.stdout + stat.stderr
+    assert "Inode: 26" in stat.stdout
+    assert "Size: 12288" in stat.stdout
+    assert "Flags: 0x80000" in stat.stdout
+    assert "(ETB0):1353" in stat.stdout
+    assert "(10-11):1362-1363" in stat.stdout
+
+    extents = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "dump_extents /fixture/extent-tree.bin",
+            str(image),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert extents.returncode == 0, extents.stdout + extents.stderr
+    extent_ranges = [
+        (int(start), int(end), int(physical_start), int(physical_end))
+        for start, end, physical_start, physical_end in re.findall(
+            r"(?m)^\s*1/\s*1\s+\d+/\s*6\s+"
+            r"(\d+)\s*-\s*(\d+)\s+"
+            r"(\d+)\s*-\s*(\d+)\s+\d+",
+            extents.stdout,
+        )
+    ]
+    assert extent_ranges == [
+        (0, 0, 1352, 1352),
+        (2, 2, 1354, 1354),
+        (4, 4, 1356, 1356),
+        (6, 6, 1358, 1358),
+        (8, 8, 1360, 1360),
+        (10, 11, 1362, 1363),
+    ]
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+
+
 def test_mutation_map_audit_rejects_duplicate_selected_leaf_block(
     read_side_image: Path,
 ) -> None:

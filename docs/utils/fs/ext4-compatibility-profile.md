@@ -1341,6 +1341,17 @@ also proves that generic VFS advances only by the confirmed prefix, preserves
 the partial read-only result, and blocks retry before redispatch after writer
 quarantine.
 
+The positive composition gate now crosses two distinct initialized blocks in
+the real depth-1 extent file with one `VFS-WRITE-EXACT` request. The first
+callback checkpoints the eight-byte tail of logical block 10; the second
+checkpoints the sixteen-byte head of logical block 11 through the same writer.
+The exact data and inode homes, two clock samples, final timestamp, unchanged
+external extent node and map, write-free remount, pinned `debugfs` read/map,
+and clean `e2fsck` result are all qualified. This is a multi-block transfer
+made from independently durable block transactions. It is not an atomic
+multi-block transaction, does not widen the per-chunk `1/1/0` profile, and
+does not admit a hole, unwritten extent, allocation, growth, or append.
+
 The staged-operation crash evidence includes the final commit flush of a
 second write through the reused public writer. The successful trace derives
 that boundary as F22 after the second ordered-data body fence and before its
