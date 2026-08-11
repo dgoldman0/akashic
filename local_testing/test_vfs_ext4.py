@@ -37719,6 +37719,414 @@ def test_staged_public_aligned_eof_refusals_leave_writer_idle(
         backing.unlink(missing_ok=True)
 
 
+def test_staged_public_aligned_eof_growth_ordered_tear_keeps_old_eof(
+    writer_activation_fixture: dict[str, object],
+    staged_public_aligned_eof_growth_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Do not publish an aligned append before its new block is durable."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    success_trace = staged_public_aligned_eof_growth_fixture["trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(journal0_physical, int)
+    assert isinstance(guard_physical, int)
+    assert isinstance(success_trace, tuple)
+
+    inode_number = 14
+    candidate = 1351
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    data_block = _extent_root_physical(inode, 0)
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0]
+    assert block_size == 1024
+    assert inode_size == 256
+    assert inode_home == 278
+    assert inode_block_offset == 256
+    assert data_block == 1346
+    assert struct.unpack_from("<I", inode, 0x04)[0] == 54
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 4
+    assert struct.unpack_from("<H", inode, 0x1A)[0] == 2
+    assert struct.unpack_from("<I", inode, 0x64)[0] == 0
+
+    patched_inode = bytearray(inode)
+    struct.pack_into("<I", patched_inode, 0x04, block_size)
+    struct.pack_into("<I", patched_inode, 0x6C, 0)
+    patched_inode[:] = _inode_with_checksum(
+        superblock, inode_number, patched_inode
+    )
+    input_patches = source_patches + (
+        (inode_offset, bytes(patched_inode)),
+    )
+    original_data = _patched_ext4_home(
+        path, input_patches, data_block, block_size=block_size
+    )
+    original_inode_home = _patched_ext4_home(
+        path, input_patches, inode_home, block_size=block_size
+    )
+    assert original_data[54:] == bytes(block_size - 54)
+    assert (
+        original_inode_home[
+            inode_block_offset : inode_block_offset + inode_size
+        ]
+        == bytes(patched_inode)
+    )
+    assert not _ext4_block_allocation_state(path, (candidate,))[candidate]
+
+    old_low_seconds = struct.unpack_from("<I", patched_inode, 0x10)[0]
+    old_extra_time = struct.unpack_from("<I", patched_inode, 0x88)[0]
+    old_signed_seconds = (
+        old_low_seconds
+        if old_low_seconds < 0x8000_0000
+        else old_low_seconds - 0x1_0000_0000
+    )
+    old_seconds = old_signed_seconds + ((old_extra_time & 3) << 32)
+    old_nanoseconds = old_extra_time >> 2
+    old_epoch_ms = old_seconds * 1000 + old_nanoseconds // 1_000_000
+    assert old_nanoseconds % 1_000_000 == 0
+    assert old_epoch_ms == 1_704_067_200_000
+
+    replacement = _STAGED_ALIGNED_APPEND_REPLACEMENT
+    new_size = block_size + len(replacement)
+    poisoned_candidate = bytes((0xA5,)) * block_size
+    staged_candidate = replacement + bytes(block_size - len(replacement))
+    torn_prefix = 512 + 6
+    torn_candidate = bytearray(poisoned_candidate)
+    torn_candidate[:torn_prefix] = staged_candidate[:torn_prefix]
+
+    candidate_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, candidate, block_size=block_size
+    )
+    assert candidate_ordinals == (7,)
+    candidate_event_index = _trace_event_index_for_ordinal(
+        success_trace, "write", candidate_ordinals[0]
+    )
+    assert success_trace[candidate_event_index] == (
+        "write",
+        candidate * 2,
+        2,
+    )
+
+    faulted = tmp_path / "staged-aligned-growth-w7-faulted.img"
+    recovered = tmp_path / "staged-aligned-growth-w7-recovered.img"
+    stable = tmp_path / "staged-aligned-growth-w7-stable.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                "VARIABLE _GW-CLOCK-CALLS",
+                (
+                    ": _GW-NOW ( context -- epoch-ms ior ) "
+                    "DROP 1 _GW-CLOCK-CALLS +! "
+                    f"{_STAGED_APPEND_EPOCH_MS} 0 ;"
+                ),
+                "CREATE _GW-STAT VFS-STATFS-SIZE ALLOT",
+                "T-ARENA CONSTANT _GW-ARENA",
+                (
+                    "_GW-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _GW-MOUNT-IOR CONSTANT _GW-V"
+                ),
+                "_GW-V _EXT4-CTX CONSTANT _GW-CTX",
+                (
+                    "' _GW-NOW 0 _GW-V EXT4-BIND-WRITE-CLOCK? "
+                    "CONSTANT _GW-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_GW-PROFILE", "_GW-V", 4, 1, 0
+                ),
+                (
+                    'S" /fixture/payload.txt" _GW-V VFS-RESOLVE? '
+                    "CONSTANT _GW-P-IOR CONSTANT _GW-P"
+                ),
+                (
+                    'S" /fixture/hardlink.txt" _GW-V VFS-RESOLVE? '
+                    "CONSTANT _GW-H-IOR CONSTANT _GW-H"
+                ),
+                (
+                    'S" /fixture/hardlink.txt" '
+                    "VFS-FF-READ VFS-FF-WRITE OR VFS-FF-APPEND OR "
+                    "_GW-V VFS-OPEN? "
+                    "CONSTANT _GW-OPEN-IOR CONSTANT _GW-FD"
+                ),
+                "_GW-H D.VNODE @ CONSTANT _GW-VN",
+                "_GW-FD FD.CUR-LO @ CONSTANT _GW-INITIAL-CURSOR",
+                "_GW-FD FD.CUR-HI @ CONSTANT _GW-INITIAL-CURSOR-HI",
+                "_GW-VN VN.ATIME @ CONSTANT _GW-OLD-ATIME",
+                "_GW-VN VN.ATIME-NS @ CONSTANT _GW-OLD-ATIME-NS",
+                "_GW-VN VN.MTIME @ CONSTANT _GW-OLD-MTIME",
+                "_GW-VN VN.MTIME-NS @ CONSTANT _GW-OLD-MTIME-NS",
+                "_GW-VN VN.CTIME @ CONSTANT _GW-OLD-CTIME",
+                "_GW-VN VN.CTIME-NS @ CONSTANT _GW-OLD-CTIME-NS",
+                "_GW-VN VN.SIZE-LO @ CONSTANT _GW-OLD-SIZE",
+                "_GW-VN VN.SIZE-HI @ CONSTANT _GW-OLD-SIZE-HI",
+                "_GW-VN VN.BLOCKS @ CONSTANT _GW-OLD-BLOCKS",
+                "_GW-VN VN.GEN @ CONSTANT _GW-OLD-GEN",
+                "_GW-VN VN.NLINK @ CONSTANT _GW-OLD-NLINK",
+                (
+                    "_GW-STAT VFS-STATFS-SIZE _GW-V VFS-STATFS "
+                    "CONSTANT _GW-STAT-BEFORE-IOR"
+                ),
+                "_GW-STAT VSF.BFREE @ CONSTANT _GW-FREE-BEFORE",
+                "0 _GW-FD VFS-SEEK? CONSTANT _GW-SEEK-IOR",
+                (
+                    f'S" {replacement.decode()}" _GW-FD VFS-WRITE? '
+                    "CONSTANT _GW-WRITE-IOR CONSTANT _GW-ACTUAL"
+                ),
+                "_GW-FD FD.CUR-LO @ CONSTANT _GW-CURSOR",
+                "_GW-FD FD.CUR-HI @ CONSTANT _GW-CURSOR-HI",
+                "_GW-V V.LAST-IOR @ CONSTANT _GW-LAST-IOR",
+                "_GW-CTX _EXT4-C.J.WRITER + @ CONSTANT _GW-WRITER",
+                "_GW-ARENA ARENA-USED CONSTANT _GW-MAIN-AFTER",
+                (
+                    "_GW-STAT VFS-STATFS-SIZE _GW-V VFS-STATFS "
+                    "CONSTANT _GW-STAT-AFTER-IOR"
+                ),
+                "_GW-STAT VSF.BFREE @ CONSTANT _GW-FREE-AFTER",
+                "_GW-FD VFS-CLOSE? CONSTANT _GW-CLOSE-IOR",
+                (
+                    _forth_conjunction(
+                        [
+                            "_GW-MOUNT-IOR 0=",
+                            "_GW-CLOCK-IOR 0=",
+                            "_GW-PROFILE-SIZE-IOR 0=",
+                            "_GW-PROFILE-BIND-IOR 0=",
+                            "_GW-PROFILE-USED _GW-PROFILE-SIZE =",
+                            "_GW-P-IOR 0=",
+                            "_GW-H-IOR 0=",
+                            "_GW-P D.VNODE @ _GW-H D.VNODE @ =",
+                            "_GW-OPEN-IOR 0=",
+                            f"_GW-INITIAL-CURSOR {block_size} =",
+                            "_GW-INITIAL-CURSOR-HI 0=",
+                            "_GW-SEEK-IOR 0=",
+                            "_GW-ACTUAL 0=",
+                            (
+                                "_GW-WRITE-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-VOLUME ="
+                            ),
+                            (
+                                "_GW-WRITE-IOR VFS-IOR-REASON "
+                                "VFS-R-IO ="
+                            ),
+                            (
+                                "_GW-WRITE-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-PARTIAL "
+                                "VFS-IOR-F-READONLY OR ="
+                            ),
+                            f"_GW-CURSOR {block_size} =",
+                            "_GW-CURSOR-HI 0=",
+                            "_GW-LAST-IOR _GW-WRITE-IOR =",
+                            "_GW-CLOCK-CALLS @ 1 =",
+                            "_GW-VN VN.SIZE-LO @ _GW-OLD-SIZE =",
+                            "_GW-VN VN.SIZE-HI @ _GW-OLD-SIZE-HI =",
+                            "_GW-VN VN.BLOCKS @ _GW-OLD-BLOCKS =",
+                            "_GW-VN VN.GEN @ _GW-OLD-GEN =",
+                            "_GW-VN VN.NLINK @ _GW-OLD-NLINK =",
+                            "_GW-VN VN.ATIME @ _GW-OLD-ATIME =",
+                            (
+                                "_GW-VN VN.ATIME-NS @ "
+                                "_GW-OLD-ATIME-NS ="
+                            ),
+                            "_GW-VN VN.MTIME @ _GW-OLD-MTIME =",
+                            (
+                                "_GW-VN VN.MTIME-NS @ "
+                                "_GW-OLD-MTIME-NS ="
+                            ),
+                            "_GW-VN VN.CTIME @ _GW-OLD-CTIME =",
+                            (
+                                "_GW-VN VN.CTIME-NS @ "
+                                "_GW-OLD-CTIME-NS ="
+                            ),
+                            f"_GW-OLD-SIZE {block_size} =",
+                            "_GW-OLD-SIZE-HI 0=",
+                            "_GW-OLD-BLOCKS 4 =",
+                            "_GW-OLD-GEN 0=",
+                            "_GW-OLD-NLINK 2 =",
+                            "_GW-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                            "_GW-STAT-BEFORE-IOR 0=",
+                            "_GW-STAT-AFTER-IOR 0=",
+                            f"_GW-FREE-BEFORE {free_blocks_before} =",
+                            "_GW-FREE-AFTER _GW-FREE-BEFORE =",
+                            "_GW-WRITER _GW-PROFILE-BASE =",
+                            (
+                                "_GW-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-FAULTED ="
+                            ),
+                            (
+                                "_GW-WRITER _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-ORDERED-DATA ="
+                            ),
+                            "_GW-WRITER _EXT4-JWR-VALID?",
+                            (
+                                "_GW-WRITER _EXT4-JWR.FAULT + @ "
+                                "VFS-IOR-FLAGS VFS-IOR-F-PARTIAL ="
+                            ),
+                            "_GW-MAIN-AFTER _GW-ARENA ARENA-USED =",
+                            (
+                                "_GW-PROFILE-ARENA ARENA-USED "
+                                "_GW-PROFILE-USED ="
+                            ),
+                            "_GW-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                            "_GW-CTX _EXT4-C.RECOVERY + @ 0<>",
+                            "_GW-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                            "_GW-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                            "_GW-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                            "_GW-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                            "_GW-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                            "_GW-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "_GW-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            (
+                                "_EXT4-WR-KIND @ "
+                                "_EXT4-WRK-ALIGNED-APPEND ="
+                            ),
+                            f"_EXT4-WR-COUNT @ {len(replacement)} =",
+                            f"_EXT4-WR-OFFSET @ {block_size} =",
+                            f"_EXT4-WR-REQUEST-END @ {new_size} =",
+                            f"_EXT4-WR-NEW-SIZE @ {new_size} =",
+                            "_EXT4-WR-NEW-BLOCKS @ 4 =",
+                            f"_EXT4-WR-CHUNK @ {len(replacement)} =",
+                            "_EXT4-WR-ACTUAL @ 0=",
+                            "_EXT4-MOW-ACTUAL @ 0=",
+                            "_EXT4-MOW-CREDIT @ -4 =",
+                            "_XH-GROW @ 0<",
+                            f"_XH-CANDIDATE @ {candidate} =",
+                            "_XH-PUBLISHED @ 0<",
+                            "_EXT4-IO-COMPLETED @ 1 =",
+                            "_EXT4-IO-EXPECTED @ 2 =",
+                            "_GW-CLOSE-IOR 0=",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-ALIGNED-GROWTH-W7-FAULT" THEN'
+                ),
+            ],
+            patches=input_patches
+            + ((candidate * block_size, poisoned_candidate),),
+            write_faults_by_ordinal={
+                candidate_ordinals[0]: {
+                    "stage": "media",
+                    "sector_index": 1,
+                    "byte_index": 6,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-ALIGNED-GROWTH-W7-FAULT")
+        assert trace == success_trace[: candidate_event_index + 1]
+        assert _write_ordinals_for_ext4_home(
+            trace, inode_home, block_size=block_size
+        ) == ()
+        assert not _ext4_block_allocation_state(
+            faulted, (candidate,)
+        )[candidate]
+        faulted_super, faulted_inode, _ = _ext4_inode_record(
+            faulted, inode_number
+        )
+        assert struct.unpack_from("<I", faulted_super, 0x0C)[0] == (
+            free_blocks_before
+        )
+        assert struct.unpack_from("<I", faulted_inode, 0x04)[0] == block_size
+        assert struct.unpack_from("<I", faulted_inode, 0x6C)[0] == 0
+        assert struct.unpack_from("<I", faulted_inode, 0x1C)[0] == 4
+        with pytest.raises(AssertionError, match="logical block 1 is unmapped"):
+            _extent_root_physical(faulted_inode, 1)
+        assert _read_ext4_home(
+            faulted, candidate, block_size=block_size
+        ) == bytes(torn_candidate)
+        assert _read_ext4_home(
+            faulted, data_block, block_size=block_size
+        ) == original_data
+        assert _read_ext4_home(
+            faulted, inode_home, block_size=block_size
+        ) == original_inode_home
+
+        _, recovery_trace, recovery_sha256 = (
+            _staged_write_recovery_readback(
+                faulted,
+                recovered,
+                expected_file=original_data,
+                expected_epoch_ms=old_epoch_ms,
+                expected_home_writes=0,
+                expected_replayed=True,
+                expected_blocks=4,
+                prefix="_GW-R",
+                marker="EXT4-PUBLIC-ALIGNED-GROWTH-W7-RECOVERED",
+            )
+        )
+        _assert_activation_cleanup_trace(
+            recovery_trace,
+            journal0_physical=journal0_physical,
+            guard_physical=guard_physical,
+        )
+        _assert_activation_landed_media(
+            recovered, writer_activation_fixture, expected_features=0x13
+        )
+        assert not _ext4_block_allocation_state(
+            recovered, (candidate,)
+        )[candidate]
+        recovered_super, recovered_inode, _ = _ext4_inode_record(
+            recovered, inode_number
+        )
+        assert struct.unpack_from("<I", recovered_super, 0x0C)[0] == (
+            free_blocks_before
+        )
+        assert struct.unpack_from("<I", recovered_inode, 0x04)[0] == block_size
+        assert struct.unpack_from("<I", recovered_inode, 0x6C)[0] == 0
+        assert struct.unpack_from("<I", recovered_inode, 0x1C)[0] == 4
+        with pytest.raises(AssertionError, match="logical block 1 is unmapped"):
+            _extent_root_physical(recovered_inode, 1)
+        assert _read_ext4_home(
+            recovered, candidate, block_size=block_size
+        ) == bytes(torn_candidate)
+        assert _read_ext4_home(
+            recovered, data_block, block_size=block_size
+        ) == original_data
+        assert _read_ext4_home(
+            recovered, inode_home, block_size=block_size
+        ) == original_inode_home
+
+        _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+            recovered,
+            stable,
+            expected_file=original_data,
+            expected_epoch_ms=old_epoch_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            expected_blocks=4,
+            prefix="_GW-S",
+            marker="EXT4-PUBLIC-ALIGNED-GROWTH-W7-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert not _ext4_block_allocation_state(stable, (candidate,))[candidate]
+        _, stable_inode, _ = _ext4_inode_record(stable, inode_number)
+        assert struct.unpack_from("<I", stable_inode, 0x04)[0] == block_size
+        assert struct.unpack_from("<I", stable_inode, 0x1C)[0] == 4
+        with pytest.raises(AssertionError, match="logical block 1 is unmapped"):
+            _extent_root_physical(stable_inode, 1)
+        assert _read_ext4_home(
+            stable, candidate, block_size=block_size
+        ) == bytes(torn_candidate)
+        assert _read_ext4_home(
+            stable, inode_home, block_size=block_size
+        ) == original_inode_home
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
 def test_staged_public_tail_append_refuses_gap_and_mixed_growth_without_io(
     writer_activation_fixture: dict[str, object], tmp_path: Path
 ) -> None:
