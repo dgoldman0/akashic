@@ -345,10 +345,15 @@ ownership with the block context detached.
 These are private durability qualifications, not writable-VFS claims. The
 suite now covers activation, emission, same-session metadata checkpoint,
 journal-space reuse, `COMMITTED` public-unmount checkpointing, and clean
-write-active deactivation. It still has no legacy or modern orphan mutation or
-user-visible ext4 mutation operation. External-tool inspection and the
-complete release/power-cut matrix also remain open. The public ext4 capability
-mask stays read-only until those full writer and release gates pass.
+write-active deactivation. It also covers production-path cleanup for a
+substantial bounded subset of legacy and modern orphan shapes, with staged or
+refusal coverage for additional shapes, plus a private size-preserving
+existing-block overwrite. It still exposes no user-visible ext4 mutation
+operation. The public ext4 capability mask remains read-only
+until the first operation's reachable recovery closure, external-tool checks,
+representative crash matrix, and ABI publication gate pass. Later operations
+ratchet in under their own gates; complete profile conformance remains withheld
+until the full recovery and release closure passes.
 
 When a resolved profile closure binds directly to MegaPad networking, the
 harness injects the one canonical packed `networking.f` and loads it with

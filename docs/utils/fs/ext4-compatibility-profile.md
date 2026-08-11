@@ -12,12 +12,13 @@ descriptor/payload/revoke/commit transaction, checkpoint its retained metadata
 after-images, and release the journal for an immediate sequential transaction
 without leaving write-active state. Public unmount can now checkpoint a
 `COMMITTED` transaction and cleanly deactivate the write-active journal.
-Cleanup for a union whose records all fit the admitted modern and legacy
-per-record orphan shapes is now implemented as one exact transaction per
-record. Its count is bounded by authenticated geometry, checked arithmetic,
+Cleanup for a union whose records all fit the currently supported modern and
+legacy per-record orphan shapes is now implemented as one exact transaction
+per record. Its count is bounded by authenticated geometry, checked arithmetic,
 and caller-arena capacity rather than a cleanup-specific constant; positive
-union-drain qualification currently reaches two records. Broader record shapes,
-user-visible mutation, and the complete bidirectional gates remain open.
+union-drain qualification currently reaches two records. Broader record
+shapes, user-visible mutation, and the complete bidirectional gates remain
+open.
 MP64FS remains the working native storage binding and FAT/ext4 remain
 read-only interoperability bindings; ext4's mount path may perform the
 strictly ordered recovery writes described below.
@@ -26,6 +27,57 @@ The profile ID is `akashic-ext4-rw-v1`.  Its feature decisions are durable:
 the driver must not silently admit a refused bit because a host tool happens
 to understand it.  A broader format becomes a separately documented profile
 revision with new real-image qualification.
+
+## Production contract and delivery ratchet
+
+`akashic-ext4-rw-v1` remains the complete production contract. It is not a
+rule that every final operation, recovery shape, geometry, and fault fence must
+be implemented before any narrower operation can be developed and qualified.
+Private or explicitly staged operation slices may land under this profile
+without inventing a weaker format profile, provided the public capability mask
+continues to describe only behavior that has actually passed its promotion
+gate. A staged slice is not a claim of complete profile conformance.
+
+This document uses three distinct admission terms:
+
+- **profile-admitted** means required by the final
+  `akashic-ext4-rw-v1` production contract;
+- **currently recovery-supported** means the valid on-disk recovery states
+  the present recovery implementation can complete; and
+- **operation-admitted** means the requests and durable states exposed by one
+  promoted mutation operation.
+
+Every staged or public mutation slice is crash-closed: before it is exposed,
+the driver must recover every recovery state it elects to accept and every
+durable state that slice can create. After replay and strict reload, any valid
+but currently unsupported orphan union refuses before the first orphan-cleanup
+write, mount publication, or writer enablement. Corrupt state and insufficient
+bounded workspace remain distinct failures. Recovery authenticates and
+preflights the complete discovered union before mutating any member; it never
+cleans a supported prefix and then discovers an unsupported remainder.
+
+The implementation therefore advances from a qualified recovery baseline,
+not from every shape that a parser happens to recognize. A shape belongs in
+that baseline only after it has production cleanup, exact allocation and
+accounting proofs, a zero-write stable clean remount, pinned e2fsprogs
+acceptance, and representative crash recovery for each materially distinct
+home/authority topology. Otherwise admission must clamp it to a stable
+write-free refusal. Recovery coverage is expanded when an enabled or next
+operation can create a new state, pinned Linux/e2fsprogs or a representative
+external corpus produces a state the driver chooses to accept, or concrete
+crash, fuzz, checker, or field evidence exposes a gap. Dense recovery that no
+longer fits one transaction requires a bounded resumable multi-transaction
+protocol that retains recovery authority; it does not justify an open-ended
+ladder of speculative special cases.
+
+Qualification is compositional. The complete journal lifecycle matrix remains
+required once for each materially distinct transaction/recovery state-machine
+topology, while each operation supplies its own semantic, durability,
+interoperability, and checker evidence. Adding a cleanup shape does not by
+itself multiply every protocol, geometry, and fault fence unless it changes
+write ordering, metadata-home roles, witness authority, batching, ring wrap,
+or resolver behavior. Complete profile release still requires the full
+profile-admitted operation and recovery closure.
 
 ## Immutable authorities
 
@@ -429,13 +481,20 @@ Recovery is ordered as follows:
    state, before changing recovery authority. A current full protocol-home
    ownership proof is required before any cleanup/reset write; retained-orphan
    completion obtains that proof before its own transaction.
-5. Authenticate and measure the entire supported legacy/modern union before
-   its first cleanup write, then recover it transactionally and idempotently.
-   Drain the legacy head and successor chain first, then modern records in
-   `(logical block, slot)` order, using one exact transaction per record and one
-   reusable writer sized to the maximum exact record credit. Intermediate
-   transactions retain recovery authority. An authenticated empty modern set
-   requires no orphan inode or orphan-file-block mutation.
+5. Authenticate and measure the entire discovered legacy/modern union before
+   its first cleanup write. A valid union containing any shape outside the
+   currently recovery-supported closure is a stable unsupported refusal;
+   corruption and insufficient bounded workspace remain distinct errors.
+   Replay may be needed before this authoritative union is knowable, but after
+   replay and strict reload such a refusal retains journal/recovery authority
+   (`RECOVER`, `ORPHAN_PRESENT`, and `s_last_orphan` as applicable), publishes
+   no mount, enables no writer, and performs no partial cleanup. If the whole
+   union is supported, recover it transactionally and idempotently: drain the
+   legacy head and successor chain first, then modern records in `(logical
+   block, slot)` order, using one exact transaction per record and one reusable
+   writer sized to the maximum exact record credit. Intermediate transactions
+   retain recovery authority. An authenticated empty modern set requires no
+   orphan inode or orphan-file-block mutation.
 6. Checkpoint/reset and flush the journal. After final empty proof, use the
    witnessed clean landing to clear `RECOVER` and `ORPHAN_PRESENT` together,
    then retire its witnesses. A clean input carrying `ORPHAN_PRESENT` without
@@ -445,9 +504,10 @@ The current implementation covers steps 1 through 4 for
 `64bit | checksum_v3` (`0x12`) with the optional standard `revoke` bit
 (`0x13`). It also covers complete union discovery, authentication, and exact
 measurement for step 5, then sequential recovery when every record fits the
-admitted linked-truncate or unlinked-delete slice. The count is bounded by
-authenticated geometry, checked arithmetic, and caller-arena capacity rather
-than a cleanup-specific constant. It also covers the step 6 empty landing. An
+currently supported linked-truncate or unlinked-delete slice. The count is
+bounded by authenticated geometry, checked arithmetic, and caller-arena
+capacity rather than a cleanup-specific constant. It also covers the step 6
+empty landing. An
 already empty modern set follows the writer-free branch for those
 journals and for a clean feature-zero journal, which `AKW1` upgrades before
 the clean landing. Replay first authenticates the
@@ -583,6 +643,13 @@ home-write flush, and dirty-empty journal release before permitting the next
 sequential transaction.
 
 ## Required data and metadata behavior
+
+The requirements in this section define final profile conformance. Their
+shared safety invariants apply to every staged slice, but an operation that is
+not yet exposed does not block promotion of an unrelated crash-closed
+operation whose complete request and recovery closure is qualified. Such an
+intermediate promotion remains an operation claim, not a claim that the whole
+profile is complete.
 
 ### Checksums
 
@@ -917,7 +984,9 @@ refuses any unqualified per-record cleanup shape plus every user-visible
 mutation. ACLs are exposed but not enforced, the real extent
 fixture reaches depth 1 rather than the implemented profile limit of 5, and
 the special-inode fixture does not yet contain a socket. Those qualification
-and semantic limits remain explicit before any write path can be advertised.
+and semantic limits remain explicit in the final profile release claim. They
+block an operation that depends on them, but do not block an unrelated
+crash-closed operation that cannot create or admit those states.
 Focused discovery coverage exercises one- and two-inode legacy chains, a mixed
 legacy/modern union, stable refusal with same-binding plan reuse, corrupt
 legacy links and cycles, allocation/checksum failures, and cross-protocol
@@ -939,11 +1008,13 @@ middle block aliased by a live inode. New two-record 1 KiB qualification drains
 modern-only, legacy-only, and mixed unions through two sequential exact
 transactions, reuses the maximum-credit writer, verifies final accounting, and
 proves a byte-stable zero-I/O remount. Its separate pinned e2fsprogs 1.47.4
-acceptance test remains a pending release qualification gate. The
+acceptance test remains pending; the baseline audit must either land it or
+clamp this union shape to stable refusal. The
 mixed case also crosses the second-transaction commit/home durability fence;
 both the surviving prefix and the preceding durable snapshot converge on a
 fresh mount and remount without another write. Pinned e2fsck 1.47.4 acceptance
-of those repaired outputs remains a pending release qualification gate. A
+of those repaired outputs is likewise required before this union shape enters
+the frozen baseline. A
 linked two-record legacy-orphan-protocol chain additionally qualifies real `MORE`, successor
 rebuild, terminal `FINAL`, clean deactivation, exact media changes, and a
 zero-I/O remount. Companion success cases give the linked head one or two
@@ -1018,7 +1089,8 @@ guest steps under a scoped 1,300,000,000-step watchdog and leaves released
 payload bytes unchanged. A maximum-union stage/abort regression adds the
 separate unique external-xattr block and exercises all 13 owner ranges in
 577,776,029 steps. Pinned e2fsck acceptance remains a release gate for this
-shape. A separate single-indirect tier fills all 12 direct slots plus the final
+shape; the baseline audit must close it or clamp the shape to stable refusal. A
+separate single-indirect tier fills all 12 direct slots plus the final
 1 KiB pointer entry, retains data then pointer-node authority, stages the exact
 node revoke, and rejects a node/data self-alias. With the larger shared
 mutation workspace, focused modern production releases three data blocks plus
@@ -1222,12 +1294,24 @@ Activation, descriptor, and active-primary writes are
 qualified by singleton matrices but are not duplicated here with an active
 successor.
 
-The remaining writer gate explicitly includes bounded, filesystem-consistent
-per-operation chunk planning for requests larger than the selected profile,
-broader per-record orphan shapes, the complete
-namespace/data/metadata/xattr mutation surface, public-write integration,
-external-tool inspection of Akashic-authored active, dirty-empty, and clean
-images, and the controlled power-cut/release matrix.
+Writer promotion now has two gates. The staged-operation gate requires a
+bounded, filesystem-consistent request/chunk contract, complete recovery
+closure for every state the operation admits or can create, truthful ABI and
+capability publication, operation-specific external-tool inspection, and the
+representative crash and durability evidence for its distinct state-machine
+topology. The existing-block size-preserving overwrite does not depend on
+broader orphan cleanup shapes that it cannot create; those shapes remain a
+final-profile backlog unless external evidence or a next operation makes them
+reachable.
+
+The final-completion gate additionally includes general profile-admitted
+orphan/truncate/delete algorithms, qualified compositionally across structure
+families and resource boundaries with interim topology clamps removed; the
+complete namespace/data/metadata/xattr mutation surface; Akashic-authored
+active, dirty-empty, and clean image interoperability; and the remaining
+controlled power-cut/release matrices. The detailed pending cases below are
+that closure inventory, not an assertion that every item is the next
+prerequisite for the narrow overwrite slice.
 
 The exact private regular-file callback now provides one narrow chunking
 primitive: a larger size-preserving caller range completes only its first

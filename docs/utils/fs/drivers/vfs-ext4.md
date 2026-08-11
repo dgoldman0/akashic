@@ -30,13 +30,13 @@ geometry boundary: the validator requires each scheduled backup group number
 to equal the 16-bit on-disk `s_block_group_nr`, so a required sparse-super
 backup above group 65535 is refused.
 
-The checked-in 800,000,000-step cold-source value is a qualification watchdog
+The checked-in 900,000,000-step cold-source value is a qualification watchdog
 and measurement guide, not an ext4 implementation capacity or a reason to
 weaken functionality. If correct source legitimately outgrows it, the budget
 must be revisited from measured system resources. The harness still performs a
 real cold source build and requires the `EXT4-SOURCE-READY` marker with no
 Forth diagnostic; the current cold snapshot measures 132,053,583 steps under
-that unchanged watchdog. Runtime recovery journeys use a separate
+that watchdog. Runtime recovery journeys use a separate
 1,200,000,000-step default watchdog. Geometry-bounded multi-record production and selected
 multi-record fault journeys use a scoped 1,500,000,000-step watchdog because
 the real cold-source path plus repeated whole-plan authentication legitimately
@@ -1178,10 +1178,11 @@ physical range crossing two data groups.
 Pinned e2fsprogs accepts final
 empty-delete media at 1 KiB, ordinary one-block-delete media at 1/2/4 KiB, and
 the new multi-block 1 KiB results for both orphan protocols. Broader per-record
-orphan shapes, the complete user-visible mutation layer, external-tool
-inspection of active Akashic-created journal
-endpoints, and the remaining release gates must still land before public write
-capabilities can be enabled.
+orphan shapes and the complete user-visible mutation layer remain required for
+final writable-profile conformance. They are not prerequisites for an
+unrelated operation that cannot create those orphan states. Each operation
+still requires its own external-tool, semantic, and representative crash
+evidence before its capability can be enabled.
 
 The first ordinary-data mutation is also implemented as a private staging
 primitive. It admits a linked regular file with an authenticated extent map,
@@ -1376,9 +1377,10 @@ unchanged callback-side FD cursors, alias readback, clean unmount, the exact
 slice now has an honest VFS progress/error contract. Generic `VFS-WRITE?` may
 advance only the calling FD by the returned confirmed prefix; the callback
 itself still owns no FD. Public exposure remains a separate gate because the
-binding is still globally read-only and lacks operation-specific chunk
-planners, general data shapes, and the complete release qualification required
-by the writable profile.
+binding is still globally read-only and this operation has not yet completed
+its operation-specific interoperability, crash, and capability-publication
+gate. General data shapes remain later profile work rather than a hidden
+prerequisite for this exact overwrite.
 
 Controlled sequential-write qualification tears the first inode-table home
 write at byte 269, one byte into the target inode's new `i_ctime`. The ordered
@@ -1441,6 +1443,73 @@ preserving the still-mounted instance's ready/current authority.
 activation and emission, same-session checkpoint, and clean deactivation;
 they are not exposed as writable VFS capabilities.
 
+## Recovery baseline and writable ratchet
+
+The final target remains full `akashic-ext4-rw-v1` production capability. The
+delivery plan is now an operation-scoped ratchet rather than a requirement to
+finish a speculative Cartesian product of orphan topology, protocol, geometry,
+and fault position before performing ordinary write work.
+
+The governing rule is reachability closure: the driver must recover every
+recovery state it elects to accept and every durable state an enabled
+operation can create. After replay and strict reload, a valid orphan union
+outside the currently qualified recovery closure refuses before its first
+cleanup write, mount publication, or writer enablement. Corruption and bounded
+workspace exhaustion remain distinct failures. The complete union is
+authenticated and preflighted before any member is mutated, so recovery never
+cleans a supported prefix and then encounters an unsupported remainder.
+Journal and filesystem recovery authority remains present on refusal.
+
+That paragraph is the promotion requirement, not a claim that the qualified
+subset has already been frozen. The implementation already preflights the
+complete discovered union against its implemented cleanup shapes. The first
+ratchet task is to define and enforce the evidence-qualified subset before
+treating recovery as production-ready or promoting mutation.
+
+Before the first write capability is promoted, audit the currently accepted
+modern and legacy shapes against a qualified baseline. A baseline shape must
+have production cleanup, exact allocation/accounting proof, a clean zero-write
+stable remount, pinned e2fsprogs acceptance, and representative crash recovery
+for every materially distinct metadata-home and authority topology. Any valid
+shape lacking that closure is clamped to a stable write-free unsupported
+result until its evidence lands. Parser recognition alone is not admission.
+
+Maintain a per-operation reachability ledger containing its request boundary,
+transaction homes and credits, possible durable crash states, recovery entry
+points, external/checker evidence, and public ABI/capability effect. Expand
+recovery ahead of schedule only when the enabled or next operation can create
+the state, pinned Linux/e2fsprogs or a representative corpus produces a state
+the driver chooses to accept, or concrete crash, fuzz, checker, or field
+evidence exposes a gap. If recovery density exceeds one transaction, build a
+bounded resumable cleanup protocol that retains recovery authority rather than
+adding isolated topology-specific exceptions.
+
+Qualification is compositional. Run the exhaustive journal lifecycle matrix
+once per materially distinct state-machine topology, then add the semantic,
+durability, interoperability, and checker evidence belonging to each
+operation. A new recovery shape does not multiply every protocol, geometry,
+and fence unless it changes write ordering, metadata-home roles, witness
+authority, batching, ring wrap, or resolver behavior.
+
+The ratchet order is:
+
+1. freeze or clamp the qualified recovery baseline;
+2. complete the existing initialized-block, size-preserving overwrite and
+   promote it only if the ABI can express its bounded semantics honestly;
+   otherwise retain it privately or behind an explicitly staged binding;
+3. extend through multi-block existing-allocation writes, then allocation and
+   file growth;
+4. add inode/directory creation and then truncation, unlink, and removal with
+   the exact new orphan states those operations make reachable;
+5. add rename, links, remaining metadata operations, and xattr mutation; and
+6. perform the final profile closure audit across every profile-admitted
+   operation and recovery state.
+
+Each landing may move only forward: it must keep all prior qualified behavior,
+remain crash-closed, and advertise exactly the capabilities it has earned. A
+private slice is useful implementation evidence but is not public capability
+or complete profile conformance.
+
 ## Deliberate remaining limits
 
 This is completion of the bounded clean read side, not completion of the
@@ -1449,13 +1518,13 @@ public write support is not a capability-bit flip. `EXT4-OPS` still has no
 `WRITE`, `CREATE`, `MKDIR`, `UNLINK`, `RMDIR`, `RENAME`, `TRUNCATE`, `SETATTR`,
 `LINK`, `SYMLINK`, `SETXATTR`, or `REMOVEXATTR` callback;
 `EXT4-BINDING` remains `VFS-BF-READ-ONLY`; the real `SYNCFS`/`FSYNC` callbacks
-do not themselves expose mutation. Writable publication still needs a
-bounded per-operation credit/chunking contract, general block and inode
-allocation,
-extent and legacy-map growth and shrink, directory-entry mutation,
-inode/link/time/accounting updates, xattr mutation, namespace/cache coherence,
-broader per-record orphan shapes, and interoperability plus power-cut
-qualification.
+do not themselves expose mutation. Each capability promotion still needs its
+own bounded credit/chunking contract, reachable-state recovery closure,
+namespace/cache behavior where applicable, and interoperability plus crash
+qualification. Full profile completion additionally needs general block and
+inode allocation, extent and legacy-map growth and shrink, directory-entry
+mutation, inode/link/time/accounting updates, xattr mutation, broader
+per-record orphan closure, and the final compositional release matrix.
 For the existing one-block shape, trusted time injection, shared-vnode
 publication, and live sync semantics are implemented. The durable engine and
 private callback still do not constitute the general public mutation layer.
@@ -1467,17 +1536,19 @@ checksummed inode-table after-image for explicit `mtime`/`ctime`. It needs no
 allocator or extent edit and fits the exact `1 metadata / 1 data / 0 revoke`
 transaction shape. End-to-end emit, checkpoint, clean unmount, write-free
 remount, and one checkpoint-home sequential tear/replay case pass. Pinned
-external-tool inspection and the broader controlled power-cut matrix remain
-qualification gates. The mounted private client adds zero-length behavior,
-stable pre-activation refusal, synchronous success, sequential writer reuse,
-and dirty/empty crash-remount cleanup without widening the supported data
-shape. Its post-publication progress/error policy is now represented honestly;
+external-tool inspection and representative remaining cuts for this
+state-machine topology remain its qualification gates. The mounted private
+client adds zero-length behavior, stable pre-activation refusal, synchronous
+success, sequential writer reuse, and dirty/empty crash-remount cleanup without
+widening the supported data shape. Its post-publication progress/error policy
+is now represented honestly;
 the operation remains private while general operation planning, public
-admission, and broader crash/interoperability policy are unsettled.
+admission, and its remaining crash/interoperability evidence are unsettled.
 Growth, holes, unwritten extents, multi-block atomicity, truncation, and
 namespace mutation remain later phases.
 
-The remaining boundaries are:
+The remaining boundaries are the final-profile closure inventory, not an
+ordered list of prerequisites for the next narrow write slice:
 
 - POSIX ACL xattrs are returned as raw bytes, but generic permission
   enforcement is not claimed;
@@ -1507,7 +1578,8 @@ The remaining boundaries are:
   after-image after mutation-range and filesystem-wide ownership proof. Its
   exact dry-stage/activation/emission/checkpoint/deactivation journey, clean
   remount, and one partial inode-home replay case pass; public mutation and
-  broad crash/interoperability qualification remain gated.
+  its remaining operation-specific crash/interoperability qualification remain
+  gated.
   Transaction-aware metadata acquisition, checksum-safe typed
   orphan-inode replacement, free-only physical-block accounting, linked
   zero-size inline depth-0 extent or exact empty legacy-format-map truncation,
@@ -1960,9 +2032,11 @@ The remaining boundaries are:
   controlled power-cut matrix still require external-tool and emulator
   qualification.
 
-No write capability will be advertised until complete replay/orphan recovery,
-the full ordered-data mutation surface, external-tool mutation checks, and
-power-cut qualification land.
+One write capability may be advertised at a time after its request boundary,
+reachable replay/orphan closure, external-tool checks, and representative
+power-cut qualification land. Full `akashic-ext4-rw-v1` conformance remains
+withheld until the complete mutation surface, profile-admitted recovery
+closure, and final compositional release matrix land.
 
 ## Public reference
 
