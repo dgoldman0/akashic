@@ -17,10 +17,13 @@ or callback-streamed reads should use the policy-neutral
 [`vfs-access.f` layer](vfs-access.md). Replacement protocols, fixed record
 envelopes, and domain stores remain separate higher-level concerns.
 
-The first ext4 implementation slice is the checksummed, read-only
-[`akashic-vfs-ext4` binding](drivers/vfs-ext4.md). It is constrained by the
-ratified [`akashic-ext4-rw-v1` profile](ext4-compatibility-profile.md) and does
-not yet claim completion of that writable profile.
+The ext4 implementation provides an ordinary checksummed read-only binding and
+an explicit staged-write binding for one bounded existing-allocation overwrite
+operation. Both are described by the
+[`akashic-vfs-ext4` contract](drivers/vfs-ext4.md) and remain constrained by the
+ratified [`akashic-ext4-rw-v1` profile](ext4-compatibility-profile.md). The
+staged operation is a real ABI-1 capability, but it is not a claim that the
+complete writable profile is implemented.
 
 ## Quick start
 
@@ -540,6 +543,14 @@ Semantic caps are `VFS-CAP-ATOMIC-RENAME`,
 `VFS-CAP-STABLE-HANDLES`. For an ext4 binding, `VN.BID` should be the inode
 number and `VN.GEN` the inode generation so cache reload and hard-link aliases
 retain one shared vnode identity.
+
+`VFS-CAP-SPARSE` describes read and logical-mapping semantics: the binding can
+represent existing holes and return zeroes for unmapped ranges without treating
+them as allocated data. It does not advertise hole creation, sparse-write
+allocation, file growth, or truncate behavior. Those mutations require their
+own operation capability and binding-specific admission contract. In
+particular, a binding may truthfully advertise `SPARSE` while its `WRITE`
+operation accepts only already allocated initialized blocks.
 
 ## RAM binding
 

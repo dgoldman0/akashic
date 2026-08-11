@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real-image tests for the read-only ext4 ABI-1 VFS binding."""
+"""Real-image tests for the ext4 ABI-1 VFS bindings."""
 
 from __future__ import annotations
 
@@ -4359,7 +4359,7 @@ def _ext4_dedicated_writer_profile_forth(
 _EXT4_AUTH_ONLY_BINDING_FORTH = (
     (
         ": _EXT4-TEST-AUTH-MOUNT "
-        "_EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN "
+        "0 _EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN "
         "EXT4-D-RECOVERY _EXT4-UNSUPPORTED ;"
     ),
     "CREATE _EXT4-TEST-AUTH-OPS VFS-OPS-SIZE ALLOT",
@@ -4377,34 +4377,6 @@ _EXT4_AUTH_ONLY_BINDING_FORTH = (
     (
         ": EXT4-TEST-AUTH-NEW "
         "_EXT4-TEST-AUTH-BINDING SWAP VFS-NEW ;"
-    ),
-)
-
-
-_EXT4_PRIVATE_WRITE_BINDING_FORTH = (
-    "CREATE _EXT4-TEST-WRITE-OPS VFS-OPS-SIZE ALLOT",
-    "EXT4-OPS _EXT4-TEST-WRITE-OPS VFS-OPS-SIZE CMOVE",
-    (
-        "' _EXT4-WRITE _EXT4-TEST-WRITE-OPS "
-        "VFS-OP-WRITE CELLS + !"
-    ),
-    "CREATE _EXT4-TEST-WRITE-BINDING VFS-BINDING-DESC-SIZE ALLOT",
-    (
-        "EXT4-BINDING _EXT4-TEST-WRITE-BINDING "
-        "VFS-BINDING-DESC-SIZE CMOVE"
-    ),
-    "_EXT4-TEST-WRITE-OPS _EXT4-TEST-WRITE-BINDING VB.OPS !",
-    (
-        "_EXT4-TEST-WRITE-BINDING VB.CAPS DUP @ "
-        "VFS-CAP-WRITE OR SWAP !"
-    ),
-    (
-        "_EXT4-TEST-WRITE-BINDING VB.FLAGS DUP @ "
-        "VFS-BF-READ-ONLY INVERT AND SWAP !"
-    ),
-    (
-        ": EXT4-TEST-WRITE-NEW "
-        "_EXT4-TEST-WRITE-BINDING SWAP VFS-NEW ;"
     ),
 )
 
@@ -7025,7 +6997,7 @@ def test_jbd2_recovery_refuses_physical_read_only_media(
     assert media_sha256 == _sha256(image)
 
 
-def test_binding_descriptor_is_valid_and_truthfully_read_only(
+def test_binding_descriptors_are_valid_and_truthful(
     tmp_path: Path,
 ) -> None:
     blank = tmp_path / "descriptor-storage.img"
@@ -7047,14 +7019,143 @@ def test_binding_descriptor_is_valid_and_truthfully_read_only(
                 "VFS-BF-STABLE-IDS OR CONSTANT _EXPECTED-E4-FLAGS"
             ),
             (
+                "EXT4-CAPS VFS-CAP-WRITE OR "
+                "CONSTANT _EXPECTED-E4-STAGED-CAPS"
+            ),
+            (
+                "VFS-BF-NEEDS-VOLUME VFS-BF-STABLE-IDS OR "
+                "CONSTANT _EXPECTED-E4-STAGED-FLAGS"
+            ),
+            (
+                ": _E4-STAGED-OPS-DELTA? "
+                "VFS-OP-COUNT 0 DO "
+                "I VFS-OP-MOUNT = IF "
+                "EXT4-STAGED-WRITE-OPS I CELLS + @ "
+                "['] _EXT4-STAGED-WRITE-MOUNT <> "
+                "ELSE I VFS-OP-WRITE = IF "
+                "EXT4-STAGED-WRITE-OPS I CELLS + @ ['] _EXT4-WRITE <> "
+                "ELSE "
+                "EXT4-STAGED-WRITE-OPS I CELLS + @ "
+                "EXT4-OPS I CELLS + @ <> "
+                "THEN THEN IF FALSE UNLOOP EXIT THEN "
+                "LOOP TRUE ;"
+            ),
+            (
                 "EXT4-BINDING VFS-BINDING-VALID? "
                 "EXT4-CAPS _EXPECTED-E4-CAPS = AND "
                 "EXT4-BINDING VB.FLAGS @ _EXPECTED-E4-FLAGS = AND "
                 'IF ." EXT4-DESCRIPTOR-OK" THEN'
             ),
+            (
+                "EXT4-STAGED-WRITE-BINDING VFS-BINDING-VALID? "
+                "EXT4-STAGED-WRITE-CAPS _EXPECTED-E4-STAGED-CAPS = AND "
+                "EXT4-STAGED-WRITE-BINDING VB.CAPS @ "
+                "_EXPECTED-E4-STAGED-CAPS = AND "
+                "EXT4-STAGED-WRITE-BINDING VB.FLAGS @ "
+                "_EXPECTED-E4-STAGED-FLAGS = AND "
+                "EXT4-STAGED-WRITE-BINDING VB.OPS @ "
+                "EXT4-STAGED-WRITE-OPS = AND "
+                "_E4-STAGED-OPS-DELTA? AND "
+                'IF ." EXT4-STAGED-WRITE-DESCRIPTOR-OK" THEN'
+            ),
         ],
     )
     _assert_emitted(output, "EXT4-DESCRIPTOR-OK")
+    _assert_emitted(output, "EXT4-STAGED-WRITE-DESCRIPTOR-OK")
+
+
+@pytest.mark.parametrize(
+    "image_id",
+    ("primary-2k-i256", "primary-4k-i256", "legacy-1k-i128"),
+)
+def test_staged_write_binding_refuses_unqualified_geometry_without_mutation(
+    canonical_images: dict[str, Path], tmp_path: Path, image_id: str
+) -> None:
+    path = canonical_images[image_id]
+    backing = tmp_path / f"{image_id}-staged-write-geometry.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            path,
+            backing,
+            [
+                (
+                    "T-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _SG-IOR CONSTANT _SG-V"
+                ),
+                "_SG-V V.BCTX @ CONSTANT _SG-CTX",
+                (
+                    "_SG-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED = "
+                    "_SG-IOR VFS-IOR-DOMAIN VFS-IOR-D-FORMAT = AND "
+                    "_SG-IOR VFS-IOR-DETAIL EXT4-D-GEOMETRY = AND "
+                    "_SG-IOR VFS-IOR-FLAGS 0= AND "
+                    "_SG-V V.LIFECYCLE @ VFS-L-NEW = AND "
+                    "_SG-V V.BINDING @ EXT4-STAGED-WRITE-BINDING = AND "
+                    "_SG-V V.FLAGS @ VFS-F-RO AND 0= AND "
+                    "_SG-CTX 0<> AND "
+                    "_SG-CTX _EXT4-C.READY + @ 0= AND "
+                    "_SG-CTX _EXT4-C.J.WRITER-CURRENT + @ 0= AND "
+                    "_SG-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                    'IF ." EXT4-STAGED-WRITE-GEOMETRY-REFUSED" THEN'
+                ),
+            ],
+            capture_media=backing,
+        )
+        _assert_emitted(output, "EXT4-STAGED-WRITE-GEOMETRY-REFUSED")
+        assert trace == ()
+        assert media_sha256 == _sha256(path)
+    finally:
+        backing.unlink(missing_ok=True)
+
+
+def test_staged_write_binding_refuses_too_small_journal_without_mutation(
+    canonical_images: dict[str, Path], tmp_path: Path
+) -> None:
+    source = canonical_images["primary-1k-i256"]
+    image = tmp_path / "primary-1k-i256-small-journal-profile.img"
+    backing = tmp_path / "primary-1k-i256-small-journal-profile-run.img"
+    _copy_sparse_file(source, image)
+    journal0 = _ext4_journal_physical_map(source, (0,))[0]
+    with image.open("r+b") as media:
+        media.seek(journal0 * 1024 + 0x48)
+        original_max_transaction = struct.unpack(">I", media.read(4))[0]
+        assert original_max_transaction == 0 or original_max_transaction >= 3
+        media.seek(journal0 * 1024 + 0x48)
+        media.write(struct.pack(">I", 2))
+    expected_sha256 = _sha256(image)
+
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            image,
+            backing,
+            [
+                (
+                    "T-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _SJP-IOR CONSTANT _SJP-V"
+                ),
+                "_SJP-V V.BCTX @ CONSTANT _SJP-CTX",
+                (
+                    "_SJP-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED = "
+                    "_SJP-IOR VFS-IOR-DOMAIN VFS-IOR-D-FORMAT = AND "
+                    "_SJP-IOR VFS-IOR-DETAIL EXT4-D-JOURNAL = AND "
+                    "_SJP-IOR VFS-IOR-FLAGS 0= AND "
+                    "_SJP-V V.LIFECYCLE @ VFS-L-NEW = AND "
+                    "_SJP-V V.BINDING @ EXT4-STAGED-WRITE-BINDING = AND "
+                    "_SJP-CTX 0<> AND "
+                    "_SJP-CTX _EXT4-C.READY + @ 0= AND "
+                    "_SJP-CTX _EXT4-C.J.WRITER-CURRENT + @ 0= AND "
+                    "_SJP-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                    'IF ." EXT4-STAGED-WRITE-JOURNAL-PROFILE-REFUSED" THEN'
+                ),
+            ],
+            capture_media=backing,
+        )
+        _assert_emitted(
+            output, "EXT4-STAGED-WRITE-JOURNAL-PROFILE-REFUSED"
+        )
+        assert trace == ()
+        assert media_sha256 == expected_sha256
+    finally:
+        backing.unlink(missing_ok=True)
 
 
 def test_jbd2_revoke_workspace_is_arena_derived_and_wrap_aware(
@@ -31072,7 +31173,7 @@ def test_typed_one_block_write_stages_ordered_rmw_and_inode_times(
                         ),
                         (
                             "_TW-CROSS-IOR VFS-IOR-DETAIL "
-                            "EXT4-D-RECOVERY ="
+                            "EXT4-D-WRITE-POLICY ="
                         ),
                         "_TW-CROSS-ABORT-IOR 0=",
                         "_TW-TIME-LOAD-IOR 0=",
@@ -32695,7 +32796,7 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
         media_path.unlink(missing_ok=True)
 
 
-def test_private_vfs_shaped_write_publishes_shared_vnode_and_syncs_clean(
+def test_staged_vfs_write_publishes_shared_vnode_and_syncs_clean(
     writer_activation_fixture: dict[str, object], tmp_path: Path
 ) -> None:
     path = writer_activation_fixture["image"]
@@ -32903,11 +33004,11 @@ def test_private_vfs_shaped_write_publishes_shared_vnode_and_syncs_clean(
                 "_VA-CTX _EXT4-C.J.WRITER + @ CONSTANT _VA-PRE-WRITER",
                 "_VA-ARENA ARENA-USED CONSTANT _VA-USED-PRECLOCK",
                 (
-                    "' _VA-NOW _VA-CLOCK _VA-V _EXT4-BIND-WRITE-CLOCK "
+                    "' _VA-NOW _VA-CLOCK _VA-V EXT4-BIND-WRITE-CLOCK? "
                     "CONSTANT _VA-BIND-IOR"
                 ),
                 (
-                    "' _VA-NOW _VA-CLOCK _VA-V _EXT4-BIND-WRITE-CLOCK "
+                    "' _VA-NOW _VA-CLOCK _VA-V EXT4-BIND-WRITE-CLOCK? "
                     "CONSTANT _VA-REBIND-IOR"
                 ),
                 (
@@ -32950,7 +33051,7 @@ def test_private_vfs_shaped_write_publishes_shared_vnode_and_syncs_clean(
                             ),
                             (
                                 "_VA-HOLE-IOR VFS-IOR-DETAIL "
-                                "EXT4-D-RECOVERY ="
+                                "EXT4-D-DATA-MAP ="
                             ),
                             "_VA-CLOCK 2 CELLS + @ 1 =",
                             "_VA-VN VN.MTIME @ _VA-OLD-MTIME =",
@@ -33236,7 +33337,7 @@ def test_private_vfs_shaped_write_publishes_shared_vnode_and_syncs_clean(
         media_path.unlink(missing_ok=True)
 
 
-def test_private_vfs_write_faults_report_confirmed_caller_prefix(
+def test_staged_vfs_write_faults_report_confirmed_caller_prefix(
     writer_activation_fixture: dict[str, object], tmp_path: Path
 ) -> None:
     path = writer_activation_fixture["image"]
@@ -33357,7 +33458,7 @@ def test_private_vfs_write_faults_report_confirmed_caller_prefix(
                     "_VP-VN VN.CTIME @ CONSTANT _VP-OLD-CTIME",
                     "_VP-VN VN.CTIME-NS @ CONSTANT _VP-OLD-CTIME-NS",
                     (
-                        "' _VP-NOW 0 _VP-V _EXT4-BIND-WRITE-CLOCK "
+                        "' _VP-NOW 0 _VP-V EXT4-BIND-WRITE-CLOCK? "
                         "CONSTANT _VP-BIND-IOR"
                     ),
                     "_VP-ARENA ARENA-USED CONSTANT _VP-MAIN-PREBIND",
@@ -33494,7 +33595,7 @@ def test_private_vfs_write_faults_report_confirmed_caller_prefix(
             backing.unlink(missing_ok=True)
 
 
-def test_private_vfs_write_returns_block_bounded_short_success(
+def test_staged_vfs_write_returns_block_bounded_short_success(
     writer_activation_fixture: dict[str, object], tmp_path: Path
 ) -> None:
     path = writer_activation_fixture["image"]
@@ -33546,7 +33647,7 @@ def test_private_vfs_write_returns_block_bounded_short_success(
                 "_SC-D D.VNODE @ CONSTANT _SC-VN",
                 (
                     "' _SC-NOW _SC-CLOCK _SC-V "
-                    "_EXT4-BIND-WRITE-CLOCK CONSTANT _SC-BIND-IOR"
+                    "EXT4-BIND-WRITE-CLOCK? CONSTANT _SC-BIND-IOR"
                 ),
                 "_SC-ARENA ARENA-USED CONSTANT _SC-MAIN-PREBIND",
                 *_ext4_dedicated_writer_profile_forth(
@@ -33607,7 +33708,7 @@ def test_private_vfs_write_returns_block_bounded_short_success(
                             ),
                             (
                                 "_SC-GROW-IOR VFS-IOR-DETAIL "
-                                "EXT4-D-RECOVERY ="
+                                "EXT4-D-WRITE-POLICY ="
                             ),
                             "_SC-GROW-WRITER _SC-PROFILE-WRITER =",
                             "_SC-USED-AFTER-GROW _SC-USED-CLEAN =",
@@ -33627,7 +33728,7 @@ def test_private_vfs_write_returns_block_bounded_short_success(
                             ),
                             (
                                 "_SC-SECOND-IOR VFS-IOR-DETAIL "
-                                "EXT4-D-RECOVERY ="
+                                "EXT4-D-DATA-MAP ="
                             ),
                             f"_SC-SECOND-COUNT {source_bytes - 8} =",
                             f"_SC-SECOND-CHUNK {block_size} =",
@@ -33704,7 +33805,286 @@ def test_private_vfs_write_returns_block_bounded_short_success(
         backing.unlink(missing_ok=True)
 
 
-def test_private_write_callback_composes_with_generic_vfs_cursor(
+@pytest.fixture(scope="session")
+def staged_write_two_success_fixture(
+    writer_activation_fixture: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Run two successful writes through the real staged ABI-1 binding."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    superblock, inode, inode_offset = _ext4_inode_record(path, 14)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    assert block_size == 1024
+    assert inode_size == 256
+    data_block = _extent_root_physical(inode, 0)
+    inode_home = inode_offset // block_size
+    file_size = struct.unpack_from("<I", inode, 0x04)[0]
+    assert file_size == 54
+
+    first_replacement = b"WRITE-RMW"
+    first_offset = 11
+    first_epoch_ms = 3_000_000_000_123
+    second_replacement = b"SECOND"
+    second_offset = 38
+    second_epoch_ms = 3_000_000_005_987
+    second_seconds, second_milliseconds = divmod(second_epoch_ms, 1000)
+    second_nanoseconds = second_milliseconds * 1_000_000
+
+    with path.open("rb") as source:
+        source.seek(data_block * block_size)
+        original_data = source.read(block_size)
+    assert len(original_data) == block_size
+    expected_data = bytearray(original_data)
+    expected_data[
+        first_offset : first_offset + len(first_replacement)
+    ] = first_replacement
+    expected_data[
+        second_offset : second_offset + len(second_replacement)
+    ] = second_replacement
+    expected_file = bytes(expected_data[:file_size])
+    expected_forth = "CREATE _SWR-EXPECTED " + " ".join(
+        f"{byte} C," for byte in expected_file
+    )
+
+    directory = tmp_path_factory.mktemp("ext4-staged-write-two-success")
+    media_path = directory / "staged-write-two-success.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        media_path,
+        [
+            f"CREATE _SW-CLOCK {first_epoch_ms} , {second_epoch_ms} ,",
+            "VARIABLE _SW-CLOCK-CALLS",
+            (
+                ": _SW-NOW ( clock -- epoch-ms ior ) "
+                "_SW-CLOCK-CALLS @ CELLS + @ "
+                "1 _SW-CLOCK-CALLS +! 0 ;"
+            ),
+            "T-ARENA CONSTANT _SW-ARENA",
+            (
+                "_SW-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _SW-MOUNT-IOR CONSTANT _SW-V"
+            ),
+            "_SW-V _EXT4-CTX CONSTANT _SW-CTX",
+            (
+                "' _SW-NOW _SW-CLOCK _SW-V "
+                "EXT4-BIND-WRITE-CLOCK? CONSTANT _SW-CLOCK-IOR"
+            ),
+            "_SW-ARENA ARENA-USED CONSTANT _SW-MAIN-PREBIND",
+            *_ext4_dedicated_writer_profile_forth("_SW-PROFILE", "_SW-V"),
+            "_SW-ARENA ARENA-USED CONSTANT _SW-MAIN-POSTBIND",
+            (
+                'S" /fixture/payload.txt" '
+                "VFS-FF-READ VFS-FF-WRITE OR _SW-V VFS-OPEN? "
+                "CONSTANT _SW-OPEN-IOR CONSTANT _SW-FD"
+            ),
+            "_SW-ARENA ARENA-USED CONSTANT _SW-MAIN-CLEAN",
+            (
+                f"{first_offset} _SW-FD VFS-SEEK? "
+                "CONSTANT _SW-FIRST-SEEK-IOR"
+            ),
+            (
+                f'S" {first_replacement.decode()}" _SW-FD VFS-WRITE? '
+                "CONSTANT _SW-FIRST-IOR CONSTANT _SW-FIRST-ACTUAL"
+            ),
+            "_SW-FD FD.CUR-LO @ CONSTANT _SW-FIRST-CURSOR",
+            "_SW-CTX _EXT4-C.J.WRITER + @ CONSTANT _SW-FIRST-WRITER",
+            "_SW-ARENA ARENA-USED CONSTANT _SW-MAIN-AFTER-FIRST",
+            "_SW-PROFILE-ARENA ARENA-USED CONSTANT _SW-PROFILE-AFTER-FIRST",
+            (
+                f"{second_offset} _SW-FD VFS-SEEK? "
+                "CONSTANT _SW-SECOND-SEEK-IOR"
+            ),
+            (
+                f'S" {second_replacement.decode()}" _SW-FD VFS-WRITE? '
+                "CONSTANT _SW-SECOND-IOR CONSTANT _SW-SECOND-ACTUAL"
+            ),
+            "_SW-FD FD.CUR-LO @ CONSTANT _SW-SECOND-CURSOR",
+            "_SW-CTX _EXT4-C.J.WRITER + @ CONSTANT _SW-SECOND-WRITER",
+            "_SW-ARENA ARENA-USED CONSTANT _SW-MAIN-AFTER-SECOND",
+            "_SW-PROFILE-ARENA ARENA-USED CONSTANT _SW-PROFILE-AFTER-SECOND",
+            "_SW-FD FD.INODE @ D.VNODE @ CONSTANT _SW-VN",
+            (
+                _forth_conjunction(
+                    [
+                        "_SW-MOUNT-IOR 0=",
+                        "_SW-V V.BINDING @ EXT4-STAGED-WRITE-BINDING =",
+                        "_SW-V V.FLAGS @ VFS-F-RO AND 0=",
+                        "VFS-CAP-WRITE _SW-V VFS-HAS?",
+                        "_SW-CLOCK-IOR 0=",
+                        "_SW-PROFILE-SIZE-IOR 0=",
+                        "_SW-PROFILE-SIZE 0>",
+                        "_SW-PROFILE-BIND-IOR 0=",
+                        "_SW-PROFILE-USED _SW-PROFILE-SIZE =",
+                        "_SW-MAIN-POSTBIND _SW-MAIN-PREBIND =",
+                        "_SW-OPEN-IOR 0=",
+                    ]
+                )
+                + ' IF ." EXT4-STAGED-WRITE-TWO-SETUP" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_SW-FIRST-SEEK-IOR 0=",
+                        "_SW-FIRST-IOR 0=",
+                        f"_SW-FIRST-ACTUAL {len(first_replacement)} =",
+                        (
+                            f"_SW-FIRST-CURSOR "
+                            f"{first_offset + len(first_replacement)} ="
+                        ),
+                        "_SW-FIRST-WRITER 0<>",
+                        "_SW-FIRST-WRITER _SW-PROFILE-BASE =",
+                        "_SW-MAIN-AFTER-FIRST _SW-MAIN-CLEAN =",
+                        "_SW-PROFILE-AFTER-FIRST _SW-PROFILE-USED =",
+                    ]
+                )
+                + ' IF ." EXT4-STAGED-WRITE-TWO-FIRST" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_SW-SECOND-SEEK-IOR 0=",
+                        "_SW-SECOND-IOR 0=",
+                        f"_SW-SECOND-ACTUAL {len(second_replacement)} =",
+                        (
+                            f"_SW-SECOND-CURSOR "
+                            f"{second_offset + len(second_replacement)} ="
+                        ),
+                        "_SW-SECOND-WRITER _SW-FIRST-WRITER =",
+                        "_SW-MAIN-AFTER-SECOND _SW-MAIN-CLEAN =",
+                        "_SW-PROFILE-AFTER-SECOND _SW-PROFILE-USED =",
+                    ]
+                )
+                + ' IF ." EXT4-STAGED-WRITE-TWO-SECOND" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_SW-CLOCK-CALLS @ 2 =",
+                        f"_SW-VN VN.MTIME @ {second_seconds} =",
+                        f"_SW-VN VN.MTIME-NS @ {second_nanoseconds} =",
+                        f"_SW-VN VN.CTIME @ {second_seconds} =",
+                        f"_SW-VN VN.CTIME-NS @ {second_nanoseconds} =",
+                        "_SW-VN VN.SIZE-LO @ 54 =",
+                        "_SW-VN VN.SIZE-HI @ 0=",
+                        "_SW-FIRST-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_SW-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    ]
+                )
+                + ' IF ." EXT4-STAGED-WRITE-TWO-STATE" THEN'
+            ),
+            "_SW-FD VFS-CLOSE? CONSTANT _SW-CLOSE-IOR",
+            "0 _SW-V VFS-UNMOUNT CONSTANT _SW-UNMOUNT-IOR",
+            (
+                "_SW-CLOSE-IOR 0= _SW-UNMOUNT-IOR 0= AND "
+                "_SW-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_SW-PROFILE-ARENA ARENA-USED 0= AND "
+                "_SW-PROFILE-ARENA A.PTR @ _SW-PROFILE-BASE = AND "
+                'IF ." EXT4-STAGED-WRITE-TWO-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=source_patches,
+        capture_media=media_path,
+    )
+    _assert_emitted(output, "EXT4-STAGED-WRITE-TWO-SETUP")
+    _assert_emitted(output, "EXT4-STAGED-WRITE-TWO-FIRST")
+    _assert_emitted(output, "EXT4-STAGED-WRITE-TWO-SECOND")
+    _assert_emitted(output, "EXT4-STAGED-WRITE-TWO-STATE")
+    _assert_emitted(output, "EXT4-STAGED-WRITE-TWO-UNMOUNTED")
+    assert trace[: len(activation_trace)] == activation_trace
+    assert sum(kind == "write" for kind, _, _ in trace) == 42
+    assert sum(kind == "flush" for kind, _, _ in trace) == 35
+    assert trace.count(("write", data_block * 2, 2)) == 2
+    assert trace.count(("write", inode_home * 2, 2)) == 2
+    with media_path.open("rb") as source:
+        source.seek(data_block * block_size)
+        assert source.read(block_size) == bytes(expected_data)
+
+    stable_path = directory / "staged-write-two-success-stable.img"
+    stable_output, stable_trace, stable_sha256 = run_recovery_forth(
+        media_path,
+        stable_path,
+        [
+            "CREATE _SWR-BUF 64 ALLOT",
+            expected_forth,
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _SWR-MOUNT-IOR CONSTANT _SWR-V"
+            ),
+            (
+                'S" /fixture/payload.txt" VFS-FF-READ _SWR-V '
+                "VFS-OPEN? CONSTANT _SWR-OPEN-IOR CONSTANT _SWR-FD"
+            ),
+            (
+                "_SWR-BUF 64 _SWR-FD VFS-READ? "
+                "CONSTANT _SWR-READ-IOR CONSTANT _SWR-ACTUAL"
+            ),
+            "_SWR-FD VFS-CLOSE? CONSTANT _SWR-CLOSE-IOR",
+            "0 _SWR-V VFS-UNMOUNT CONSTANT _SWR-UNMOUNT-IOR",
+            (
+                "_SWR-MOUNT-IOR 0= _SWR-OPEN-IOR 0= AND "
+                "_SWR-READ-IOR 0= AND "
+                f"_SWR-ACTUAL {file_size} = AND "
+                f"_SWR-BUF _SWR-EXPECTED {file_size} _EXT4-BYTES=? AND "
+                "_SWR-CLOSE-IOR 0= AND _SWR-UNMOUNT-IOR 0= AND "
+                'IF ." EXT4-STAGED-WRITE-TWO-STABLE" THEN'
+            ),
+        ],
+        capture_media=stable_path,
+    )
+    _assert_emitted(stable_output, "EXT4-STAGED-WRITE-TWO-STABLE")
+    assert stable_trace == ()
+    assert stable_sha256 == media_sha256
+    return {
+        "image": stable_path,
+        "expected_file": expected_file,
+        "trace": trace,
+        "data_block": data_block,
+        "inode_home": inode_home,
+    }
+
+
+def test_staged_write_binding_reuses_writer_across_two_successes(
+    staged_write_two_success_fixture: dict[str, object],
+) -> None:
+    image = staged_write_two_success_fixture["image"]
+    expected_file = staged_write_two_success_fixture["expected_file"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert image.is_file()
+    assert len(expected_file) == 54
+
+
+def test_staged_write_output_is_debugfs_readable_and_e2fsck_clean(
+    staged_write_two_success_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    image = staged_write_two_success_fixture["image"]
+    expected_file = staged_write_two_success_fixture["expected_file"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+    readback = subprocess.run(
+        [str(debugfs), "-R", "cat /fixture/payload.txt", str(image)],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert readback.returncode == 0, readback.stdout + readback.stderr
+    assert readback.stdout == expected_file
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+
+
+def test_staged_write_callback_composes_with_generic_vfs_cursor(
     writer_activation_fixture: dict[str, object], tmp_path: Path
 ) -> None:
     path = writer_activation_fixture["image"]
@@ -33737,7 +34117,6 @@ def test_private_write_callback_composes_with_generic_vfs_cursor(
             path,
             backing,
             [
-                *_EXT4_PRIVATE_WRITE_BINDING_FORTH,
                 f"CREATE _GV-CLOCK {epoch_ms} , 0 , 0 ,",
                 f"CREATE _GV-SOURCE {source_bytes} ALLOT",
                 f"_GV-SOURCE {source_bytes} {exact_byte} FILL",
@@ -33748,13 +34127,13 @@ def test_private_write_callback_composes_with_generic_vfs_cursor(
                 ),
                 "T-ARENA CONSTANT _GV-ARENA",
                 (
-                    "_GV-ARENA T-VOLUME EXT4-TEST-WRITE-NEW "
+                    "_GV-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
                     "CONSTANT _GV-MOUNT-IOR CONSTANT _GV-V"
                 ),
                 "_GV-V _EXT4-CTX CONSTANT _GV-CTX",
                 (
                     "' _GV-NOW _GV-CLOCK _GV-V "
-                    "_EXT4-BIND-WRITE-CLOCK CONSTANT _GV-BIND-IOR"
+                    "EXT4-BIND-WRITE-CLOCK? CONSTANT _GV-BIND-IOR"
                 ),
                 "_GV-ARENA ARENA-USED CONSTANT _GV-MAIN-PREBIND",
                 *_ext4_dedicated_writer_profile_forth(
@@ -33782,10 +34161,10 @@ def test_private_write_callback_composes_with_generic_vfs_cursor(
                     _forth_conjunction(
                         [
                             "_GV-MOUNT-IOR 0=",
-                            "_EXT4-TEST-WRITE-BINDING VFS-BINDING-VALID?",
+                            "EXT4-STAGED-WRITE-BINDING VFS-BINDING-VALID?",
                             (
                                 "_GV-V V.BINDING @ "
-                                "_EXT4-TEST-WRITE-BINDING ="
+                                "EXT4-STAGED-WRITE-BINDING ="
                             ),
                             "_GV-V V.FLAGS @ VFS-F-RO AND 0=",
                             "VFS-CAP-WRITE _GV-V VFS-HAS?",
@@ -33822,7 +34201,7 @@ def test_private_write_callback_composes_with_generic_vfs_cursor(
                             ),
                             (
                                 "_GV-EXACT-IOR VFS-IOR-DETAIL "
-                                "EXT4-D-RECOVERY ="
+                                "EXT4-D-DATA-MAP ="
                             ),
                             "_GV-EXACT-IOR VFS-IOR-FLAGS 0=",
                             "_GV-V V.LAST-IOR @ _GV-EXACT-IOR =",
@@ -33894,7 +34273,7 @@ def test_private_write_callback_composes_with_generic_vfs_cursor(
         backing.unlink(missing_ok=True)
 
 
-def test_private_write_fault_advances_generic_vfs_confirmed_prefix(
+def test_staged_write_fault_advances_generic_vfs_confirmed_prefix(
     writer_activation_fixture: dict[str, object], tmp_path: Path
 ) -> None:
     path = writer_activation_fixture["image"]
@@ -33931,7 +34310,6 @@ def test_private_write_fault_advances_generic_vfs_confirmed_prefix(
             path,
             backing,
             [
-                *_EXT4_PRIVATE_WRITE_BINDING_FORTH,
                 f"CREATE _GF-CLOCK {epoch_ms} , 0 ,",
                 (
                     ": _GF-NOW ( clock -- epoch-ms ior ) "
@@ -33939,13 +34317,13 @@ def test_private_write_fault_advances_generic_vfs_confirmed_prefix(
                 ),
                 "T-ARENA CONSTANT _GF-ARENA",
                 (
-                    "_GF-ARENA T-VOLUME EXT4-TEST-WRITE-NEW "
+                    "_GF-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
                     "CONSTANT _GF-MOUNT-IOR CONSTANT _GF-V"
                 ),
                 "_GF-V _EXT4-CTX CONSTANT _GF-CTX",
                 (
                     "' _GF-NOW _GF-CLOCK _GF-V "
-                    "_EXT4-BIND-WRITE-CLOCK CONSTANT _GF-BIND-IOR"
+                    "EXT4-BIND-WRITE-CLOCK? CONSTANT _GF-BIND-IOR"
                 ),
                 "_GF-ARENA ARENA-USED CONSTANT _GF-MAIN-PREBIND",
                 *_ext4_dedicated_writer_profile_forth(
@@ -34125,7 +34503,7 @@ def test_private_write_fault_advances_generic_vfs_confirmed_prefix(
         backing.unlink(missing_ok=True)
 
 
-def test_private_write_updates_initialized_depth_positive_extent(
+def test_staged_write_updates_initialized_depth_positive_extent(
     extent_writer_activation_fixture: dict[str, object], tmp_path: Path
 ) -> None:
     path = extent_writer_activation_fixture["image"]
@@ -34185,7 +34563,6 @@ def test_private_write_updates_initialized_depth_positive_extent(
             path,
             backing,
             [
-                *_EXT4_PRIVATE_WRITE_BINDING_FORTH,
                 "CREATE _DP-BUF 10 ALLOT",
                 "CREATE _DP-CLOCK 0 ,",
                 (
@@ -34194,13 +34571,13 @@ def test_private_write_updates_initialized_depth_positive_extent(
                 ),
                 "T-ARENA CONSTANT _DP-ARENA",
                 (
-                    "_DP-ARENA T-VOLUME EXT4-TEST-WRITE-NEW "
+                    "_DP-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
                     "CONSTANT _DP-MOUNT-IOR CONSTANT _DP-V"
                 ),
                 "_DP-V _EXT4-CTX CONSTANT _DP-CTX",
                 (
                     "' _DP-NOW _DP-CLOCK _DP-V "
-                    "_EXT4-BIND-WRITE-CLOCK CONSTANT _DP-BIND-IOR"
+                    "EXT4-BIND-WRITE-CLOCK? CONSTANT _DP-BIND-IOR"
                 ),
                 "_DP-ARENA ARENA-USED CONSTANT _DP-MAIN-PREBIND",
                 *_ext4_dedicated_writer_profile_forth(
@@ -34458,7 +34835,6 @@ def test_depth_positive_write_rejects_own_extent_node_as_data(
             path,
             backing,
             [
-                *_EXT4_PRIVATE_WRITE_BINDING_FORTH,
                 "CREATE _DA-CLOCK 0 ,",
                 (
                     ": _DA-NOW ( clock -- epoch-ms ior ) "
@@ -34466,13 +34842,13 @@ def test_depth_positive_write_rejects_own_extent_node_as_data(
                 ),
                 "T-ARENA CONSTANT _DA-ARENA",
                 (
-                    "_DA-ARENA T-VOLUME EXT4-TEST-WRITE-NEW "
+                    "_DA-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
                     "CONSTANT _DA-MOUNT-IOR CONSTANT _DA-V"
                 ),
                 "_DA-V _EXT4-CTX CONSTANT _DA-CTX",
                 (
                     "' _DA-NOW _DA-CLOCK _DA-V "
-                    "_EXT4-BIND-WRITE-CLOCK CONSTANT _DA-BIND-IOR"
+                    "EXT4-BIND-WRITE-CLOCK? CONSTANT _DA-BIND-IOR"
                 ),
                 "_DA-ARENA ARENA-USED CONSTANT _DA-MAIN-PREBIND",
                 *_ext4_dedicated_writer_profile_forth(
@@ -34636,7 +35012,6 @@ def test_depth_positive_write_rejects_extent_node_in_journal_ring(
             path,
             backing,
             [
-                *_EXT4_PRIVATE_WRITE_BINDING_FORTH,
                 "CREATE _DJ-CLOCK 0 ,",
                 (
                     ": _DJ-NOW ( clock -- epoch-ms ior ) "
@@ -34644,13 +35019,13 @@ def test_depth_positive_write_rejects_extent_node_in_journal_ring(
                 ),
                 "T-ARENA CONSTANT _DJ-ARENA",
                 (
-                    "_DJ-ARENA T-VOLUME EXT4-TEST-WRITE-NEW "
+                    "_DJ-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
                     "CONSTANT _DJ-MOUNT-IOR CONSTANT _DJ-V"
                 ),
                 "_DJ-V _EXT4-CTX CONSTANT _DJ-CTX",
                 (
                     "' _DJ-NOW _DJ-CLOCK _DJ-V "
-                    "_EXT4-BIND-WRITE-CLOCK CONSTANT _DJ-BIND-IOR"
+                    "EXT4-BIND-WRITE-CLOCK? CONSTANT _DJ-BIND-IOR"
                 ),
                 "_DJ-ARENA ARENA-USED CONSTANT _DJ-MAIN-PREBIND",
                 *_ext4_dedicated_writer_profile_forth(

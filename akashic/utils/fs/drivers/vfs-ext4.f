@@ -216,8 +216,8 @@ REQUIRE ../vfs.f
 0x88 CONSTANT _EXT4-I.MTIME-EXTRA
 0x8C CONSTANT _EXT4-I.ATIME-EXTRA
 
-\ Mount rejection detail values.  The public reason/domain/flags remain the
-\ stable interface; detail identifies the validation stage.
+\ Ext4 result-detail values.  The public reason/domain/flags remain the stable
+\ interface; detail identifies the validation or operation-policy stage.
 1  CONSTANT EXT4-D-MAGIC
 2  CONSTANT EXT4-D-SUPER-CHECKSUM
 3  CONSTANT EXT4-D-GEOMETRY
@@ -235,6 +235,7 @@ REQUIRE ../vfs.f
 15 CONSTANT EXT4-D-DIRECTORY
 16 CONSTANT EXT4-D-DATA-MAP
 17 CONSTANT EXT4-D-XATTR
+18 CONSTANT EXT4-D-WRITE-POLICY
 
 \ =====================================================================
 \  Binding context
@@ -12158,9 +12159,6 @@ VARIABLE _EXT4-UOW-IOR
     THEN
     _EXT4-UOW-IOR @ ;
 
-_EXT4-EXTENTS-FL _EXT4-HUGE-FILE-FL OR
-CONSTANT _EXT4-JOW-ALLOWED-FLAGS
-
 VARIABLE _EXT4-JOW-SOURCE
 VARIABLE _EXT4-JOW-COUNT
 VARIABLE _EXT4-JOW-OFFSET
@@ -12181,6 +12179,7 @@ VARIABLE _EXT4-JOW-FLAGS
 VARIABLE _EXT4-JOW-EA
 VARIABLE _EXT4-JOW-GEN
 VARIABLE _EXT4-JOW-NLINK
+VARIABLE _EXT4-JOW-DEPTH
 VARIABLE _EXT4-JOW-GROUP
 VARIABLE _EXT4-JOW-INODE-HOME
 VARIABLE _EXT4-JOW-INODE-OFF
@@ -12190,6 +12189,24 @@ VARIABLE _EXT4-JOW-IOR
 VARIABLE _EXT4-JOW-PUBLISHED
 VARIABLE _EXT4-JOW-ABORT-IOR
 VARIABLE _EXT4-JOW-META-IOR
+
+\ _EXT4-STAGE-CURRENT-INODE has already authenticated the complete current
+\ extent or legacy map.  Apply the narrower write-profile policy afterward so
+\ malformed wider trees remain corrupt while valid out-of-profile maps are a
+\ stable unsupported result.  Return the admitted root depth for later
+\ reauthentication across cache-clobbering scans.
+: _EXT4-JOW-QUALIFY-CURRENT-MAP  ( -- depth ior )
+    _EXT4-JOW-CTX @ _EXT4-C.INODE + DUP _EXT4-I.FLAGS + L@
+    DUP _EXT4-EXTENTS-FL AND 0= IF
+        2DROP 0 EXT4-D-DATA-MAP _EXT4-UNSUPPORTED EXIT
+    THEN
+    DUP _EXT4-EXTENTS-FL INVERT AND IF
+        2DROP 0 EXT4-D-FEATURE _EXT4-UNSUPPORTED EXIT
+    THEN
+    DROP _EXT4-I.BLOCK + 6 + W@ DUP 1 U> IF
+        DROP 0 EXT4-D-DATA-MAP _EXT4-UNSUPPORTED EXIT
+    THEN
+    0 ;
 
 : _EXT4-JOW-REQUIRE-FRESH-EXACT  ( -- ior )
     _EXT4-JOW-WRITER @ _EXT4-JWR.META-CREDIT + @ 1 <>
@@ -12251,7 +12268,7 @@ VARIABLE _EXT4-JOW-META-IOR
     THEN
     _EXT4-JOW-INO @ 8 =
     _EXT4-JOW-INO @ _EXT4-JOW-CTX @ _EXT4-C.ORPHAN-INO + @ = OR IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
     _EXT4-JOW-EXPECTED-GEN @ 0xFFFFFFFF U> IF
         VFS-E-INVALID EXIT
@@ -12261,20 +12278,13 @@ VARIABLE _EXT4-JOW-META-IOR
     _EXT4-JOW-IOR ! _EXT4-JOW-TYPE !
     _EXT4-JOW-IOR @ ?DUP IF EXIT THEN
     _EXT4-JOW-TYPE @ VFS-T-FILE <> IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+        EXT4-D-FEATURE _EXT4-UNSUPPORTED EXIT
     THEN
+    _EXT4-JOW-QUALIFY-CURRENT-MAP
+    _EXT4-JOW-IOR ! _EXT4-JOW-DEPTH !
+    _EXT4-JOW-IOR @ ?DUP IF EXIT THEN
     _EXT4-JOW-CTX @ _EXT4-C.INODE + DUP
-    _EXT4-I.FLAGS + L@ DUP _EXT4-JOW-FLAGS !
-    DUP _EXT4-IMMUTABLE-FL _EXT4-APPEND-FL OR
-    _EXT4-JOURNAL-DATA-FL OR AND IF
-        2DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
-    DUP _EXT4-EXTENTS-FL AND 0= IF
-        2DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
-    _EXT4-JOW-ALLOWED-FLAGS INVERT AND IF
-        DROP EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
+    _EXT4-I.FLAGS + L@ _EXT4-JOW-FLAGS !
     DUP _EXT4-I.GENERATION + L@ DUP _EXT4-JOW-GEN !
     _EXT4-JOW-EXPECTED-GEN @ <> IF
         DROP VFS-E-STALE EXIT
@@ -12283,23 +12293,23 @@ VARIABLE _EXT4-JOW-META-IOR
     _EXT4-I.FILE-ACL-LO + L@ _EXT4-JOW-EA !
     _EXT4-JOW-CTX @ _EXT4-C.R.SIZE + @ _EXT4-JOW-SIZE !
     _EXT4-JOW-OFFSET @ _EXT4-JOW-SIZE @ U< 0= IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
     _EXT4-JOW-COUNT @
     _EXT4-JOW-SIZE @ _EXT4-JOW-OFFSET @ - U> IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
     _EXT4-JOW-OFFSET @ _EXT4-JOW-BSIZE @ /MOD
     _EXT4-JOW-LOGICAL ! _EXT4-JOW-BLOCK-OFF !
     _EXT4-JOW-COUNT @
     _EXT4-JOW-BSIZE @ _EXT4-JOW-BLOCK-OFF @ - U> IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
     _EXT4-JOW-LOGICAL @ _EXT4-JOW-CTX @ _EXT4-MAP-BLOCK
     _EXT4-JOW-IOR ! _EXT4-JOW-PRESENT ! _EXT4-JOW-PHYS !
     _EXT4-JOW-IOR @ ?DUP IF EXIT THEN
     _EXT4-JOW-PRESENT @ 0= IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+        EXT4-D-DATA-MAP _EXT4-UNSUPPORTED EXIT
     THEN
     _EXT4-JOW-REQUIRE-MAP-AUDIT ?DUP IF EXIT THEN
     _EXT4-JOW-EA @ IF
@@ -12331,6 +12341,9 @@ VARIABLE _EXT4-JOW-META-IOR
     _EXT4-JOW-IOR ! _EXT4-JOW-TYPE !
     _EXT4-JOW-IOR @ ?DUP IF EXIT THEN
     _EXT4-JOW-TYPE @ VFS-T-FILE <> IF VFS-E-STALE EXIT THEN
+    _EXT4-JOW-QUALIFY-CURRENT-MAP _EXT4-JOW-IOR !
+    _EXT4-JOW-IOR @ ?DUP IF NIP EXIT THEN
+    _EXT4-JOW-DEPTH @ <> IF VFS-E-STALE EXIT THEN
     _EXT4-JOW-CTX @ _EXT4-C.INODE + DUP
     _EXT4-I.GENERATION + L@ _EXT4-JOW-GEN @ <>
     OVER _EXT4-I.FLAGS + L@ _EXT4-JOW-FLAGS @ <> OR
@@ -16383,7 +16396,8 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
 \ first clean call dry-stages before it can activate the journal.  Successful
 \ calls checkpoint synchronously and retain one scrubbed write-active writer
 \ for sequential reuse; ordinary unmount performs final clean deactivation.
-\ This is deliberately absent from EXT4-OPS and does not update VFS vnodes.
+\ This is deliberately absent from the ordinary EXT4-OPS and does not update
+\ VFS vnodes directly.
 \ ACTUAL is the confirmed caller-byte prefix accepted by ordered-data media;
 \ bytes after ACTUAL remain indeterminate after a fault.
 : _EXT4-MOUNTED-ONEBLOCK-WRITE
@@ -16410,7 +16424,7 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
     THEN
     _EXT4-MOW-OFFSET @ 0< IF 0 VFS-E-INVALID EXIT THEN
     _EXT4-MOW-COUNT @ _EXT4-MOW-CTX @ _EXT4-C.BSIZE + @ U> IF
-        0 EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+        0 EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
     \ Preserve caller bytes across dry-stage abort, activation cache reuse,
     \ and live-stage writer rebase, then scrub them on every later return.
@@ -16479,7 +16493,7 @@ VARIABLE _EXT4-BWC-CLOCK-CTX
 VARIABLE _EXT4-BWC-V
 VARIABLE _EXT4-BWC-CTX
 
-: _EXT4-BIND-WRITE-CLOCK  ( now-ms-xt clock-context vfs -- ior )
+: EXT4-BIND-WRITE-CLOCK?  ( now-ms-xt clock-context vfs -- ior )
     _EXT4-BWC-V ! _EXT4-BWC-CLOCK-CTX ! _EXT4-BWC-XT !
     _EXT4-BWC-XT @ 0= _EXT4-BWC-V @ 0= OR IF
         VFS-E-INVALID EXIT
@@ -16518,6 +16532,26 @@ VARIABLE _EXT4-BWC-CTX
     0 ;
 
 15032385535 1000 * 999 + CONSTANT _EXT4-WRITE-EPOCH-MS-MAX
+1024 CONSTANT _EXT4-STAGED-WRITE-BLOCK-SIZE
+256  CONSTANT _EXT4-STAGED-WRITE-INODE-SIZE
+
+: _EXT4-STAGED-WRITE-FS-QUALIFY  ( ctx -- ior )
+    DUP _EXT4-C.BSIZE + @ _EXT4-STAGED-WRITE-BLOCK-SIZE <>
+    SWAP _EXT4-C.ISIZE + @ _EXT4-STAGED-WRITE-INODE-SIZE <> OR IF
+        EXT4-D-GEOMETRY _EXT4-UNSUPPORTED EXIT
+    THEN
+    0 ;
+
+\ A mounted WRITE capability must admit at least the exact one-metadata-home,
+\ one-data-home overwrite transaction implemented below.  The journal has
+\ already been authenticated when this check runs; translate a valid but
+\ smaller journal/profile envelope into the staged binding's fail-closed
+\ unsupported result.
+: _EXT4-STAGED-WRITE-JOURNAL-QUALIFY  ( ctx -- ior )
+    >R 1 1 0 R> _EXT4-JTX-PREFLIGHT-JOURNAL ?DUP IF
+        DROP EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT
+    THEN
+    0 ;
 
 VARIABLE _EXT4-WR-SOURCE
 VARIABLE _EXT4-WR-COUNT
@@ -16549,7 +16583,7 @@ VARIABLE _EXT4-WR-IOR
     _EXT4-WR-D @ D.VNODE @ DUP _EXT4-WR-VN ! 0= IF VFS-E-STALE EXIT THEN
     _EXT4-WR-VN @ VN.TYPE @ VFS-T-DIR = IF VFS-E-ISDIR EXIT THEN
     _EXT4-WR-VN @ VN.TYPE @ VFS-T-FILE <> IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+        EXT4-D-FEATURE _EXT4-UNSUPPORTED EXIT
     THEN
     _EXT4-WR-VN @ VN.FLAGS @ VFS-IF-DIRTY AND IF VFS-E-BUSY EXIT THEN
     _EXT4-WR-VN @ VN.BID @ DUP _EXT4-WR-BID ! 0= IF
@@ -16574,8 +16608,12 @@ VARIABLE _EXT4-WR-IOR
     _EXT4-WR-IOR ! _EXT4-WR-END !
     _EXT4-WR-IOR @ ?DUP IF EXIT THEN
     _EXT4-WR-END @ _EXT4-WR-VN @ VN.SIZE-LO @ U> IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
+    \ The staged write profile currently supports nonempty mutation on 1 KiB
+    \ filesystems with 256-byte inodes.  Other profile geometries remain
+    \ fail-closed until their write paths are qualified.
+    _EXT4-WR-CTX @ _EXT4-STAGED-WRITE-FS-QUALIFY ?DUP IF EXIT THEN
     _EXT4-WR-COUNT @
     _EXT4-WR-CTX @ _EXT4-C.BSIZE + @
     _EXT4-WR-OFFSET @ _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ MOD - MIN
@@ -16601,8 +16639,9 @@ VARIABLE _EXT4-WR-IOR
 \ Exact binding-callback shape for the qualified slice.  A larger admitted
 \ caller range completes at most the first filesystem-block chunk and returns
 \ short success; VFS-WRITE-EXACT or the caller may advance and invoke it again.
-\ It remains absent from EXT4-OPS and EXT4-CAPS while the broader public-write
-\ gates remain.
+\ It remains absent from the ordinary EXT4-OPS and EXT4-CAPS.  The explicit
+\ staged binding below publishes only this qualified operation while broader
+\ public-write gates remain.
 \ Confirmed progress and quarantine flags are safe for VFS cursor semantics;
 \ successful checkpointed writes publish only mtime/ctime into the shared
 \ vnode, while every error leaves all vnode fields unpublished.
@@ -17474,15 +17513,17 @@ VARIABLE _EXT4-MOC-TRANSIENT
     _EXT4-JFO-CERT-END ;
 
 \ =====================================================================
-\  Mount, metadata callbacks, and read-only binding descriptor
+\  Mount, metadata callbacks, and binding descriptors
 \ =====================================================================
 
 VARIABLE _EXT4-M-V
 VARIABLE _EXT4-M-CTX
 VARIABLE _EXT4-M-IOR
 VARIABLE _EXT4-M-FRESH
+VARIABLE _EXT4-M-STAGED-WRITE
 
-: _EXT4-MOUNT-AUTHENTICATE  ( vfs -- ior )
+: _EXT4-MOUNT-AUTHENTICATE  ( vfs staged-write? -- ior )
+    _EXT4-M-STAGED-WRITE !
     DUP _EXT4-M-V !
     \ Invalidate retained transaction and protocol-write authority before any
     \ remount check or media-derived context reset can fail.
@@ -17531,17 +17572,33 @@ VARIABLE _EXT4-M-FRESH
     DUP IF EXIT THEN DROP
     _EXT4-M-CTX @ _EXT4-M-V @ _EXT4-VALIDATE-SUPER
     DUP IF EXIT THEN DROP
+    \ Reject unsupported staged geometry immediately after its authenticated
+    \ superblock is available, before journal recovery or landing can mutate
+    \ media.  The ordinary binding retains its broader read/recovery geometry.
+    _EXT4-M-STAGED-WRITE @ IF
+        _EXT4-M-CTX @ _EXT4-STAGED-WRITE-FS-QUALIFY ?DUP IF EXIT THEN
+    THEN
     _EXT4-M-CTX @ _EXT4-C.RECOVERY + @ IF
         \ Bootstrap from inode 8 without trusting mutable aggregate counters;
         \ strict whole-filesystem validation follows replay while the journal
         \ is still intact and replayable.
         _EXT4-M-CTX @ _EXT4-VALIDATE-JOURNAL ?DUP IF EXIT THEN
+        _EXT4-M-STAGED-WRITE @ IF
+            _EXT4-M-CTX @ _EXT4-STAGED-WRITE-JOURNAL-QUALIFY
+            ?DUP IF EXIT THEN
+        THEN
         _EXT4-M-CTX @ _EXT4-M-V @
         _EXT4-RECOVER-JOURNAL ?DUP IF EXIT THEN
         _EXT4-M-CTX @ _EXT4-M-V @
         _EXT4-RELOAD-AUTHENTICATED ?DUP IF EXIT THEN
     ELSE
         _EXT4-M-CTX @ _EXT4-AUTHENTICATE-REST ?DUP IF EXIT THEN
+        \ Clean/torn paths now have authenticated journal geometry but have
+        \ not yet entered either mutation-capable recovery landing below.
+        _EXT4-M-STAGED-WRITE @ IF
+            _EXT4-M-CTX @ _EXT4-STAGED-WRITE-JOURNAL-QUALIFY
+            ?DUP IF EXIT THEN
+        THEN
         _EXT4-M-CTX @ _EXT4-C.O.ACTIVE + @ IF
             _EXT4-M-CTX @ _EXT4-C.SUPER-TORN + @
             _EXT4-M-CTX @ _EXT4-C.J.PRIMARY-TORN + @ OR
@@ -17565,14 +17622,18 @@ VARIABLE _EXT4-M-FRESH
             THEN
         THEN
     THEN
+    \ Recovery reloads the authenticated journal state.  Reassert the same
+    \ minimum profile at the final mount endpoint before root publication.
+    _EXT4-M-STAGED-WRITE @ IF
+        _EXT4-M-CTX @ _EXT4-STAGED-WRITE-JOURNAL-QUALIFY ?DUP IF EXIT THEN
+    THEN
     _EXT4-M-CTX @ _EXT4-VALIDATE-ROOT ?DUP IF EXIT THEN
     _EXT4-M-V @ _EXT4-ATTACHED? 0= IF
         EXT4-D-ATTACHMENT _EXT4-CORRUPT EXIT
     THEN
     0 ;
 
-: _EXT4-MOUNT  ( vfs -- ior )
-    _EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN
+: _EXT4-MOUNT-FINISH  ( -- ior )
     _EXT4-M-CTX @ _EXT4-C.O.ACTIVE + @ IF
         _EXT4-M-CTX @ _EXT4-M-V @
         _EXT4-COMPLETE-ORPHAN-PLAN ?DUP IF EXIT THEN
@@ -17593,6 +17654,20 @@ VARIABLE _EXT4-M-FRESH
     -1 _EXT4-M-CTX @ _EXT4-C.J.WRITER-CURRENT + !
     -1 _EXT4-M-CTX @ _EXT4-C.READY + !
     0 ;
+
+: _EXT4-MOUNT  ( vfs -- ior )
+    0 _EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN
+    _EXT4-MOUNT-FINISH ;
+
+\ A descriptor capability is instance-wide.  Staged authentication rejects an
+\ unsupported filesystem geometry immediately after superblock validation and
+\ rejects an insufficient authenticated journal before recovery mutation.
+\ Thus every successfully mounted staged instance can configure the minimum
+\ nonempty WRITE profile.  The ordinary binding remains available for the
+\ complete read/recovery geometry.
+: _EXT4-STAGED-WRITE-MOUNT  ( vfs -- ior )
+    -1 _EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN
+    _EXT4-MOUNT-FINISH ;
 
 VARIABLE _EXT4-GA-D
 VARIABLE _EXT4-GA-V
@@ -17836,6 +17911,34 @@ EXT4-OPS ,
 
 : EXT4-NEW  ( arena volume -- vfs ior )
     EXT4-BINDING SWAP VFS-NEW ;
+
+\ Explicit ABI-1 ratchet for the qualified existing-allocation overwrite.
+\ The ordinary binding above stays read-only.  SPARSE continues to describe
+\ sparse-file read/mapping semantics; WRITE neither allocates holes nor grows
+\ a file.  Callers must bind one dedicated 1/1/0-or-larger writer arena and a
+\ trusted clock before the first nonempty write.
+EXT4-CAPS VFS-CAP-WRITE OR CONSTANT EXT4-STAGED-WRITE-CAPS
+
+CREATE EXT4-STAGED-WRITE-OPS VFS-OPS-SIZE ALLOT
+EXT4-OPS EXT4-STAGED-WRITE-OPS VFS-OPS-SIZE CMOVE
+' _EXT4-STAGED-WRITE-MOUNT
+EXT4-STAGED-WRITE-OPS VFS-OP-MOUNT CELLS + !
+' _EXT4-WRITE
+EXT4-STAGED-WRITE-OPS VFS-OP-WRITE CELLS + !
+
+CREATE EXT4-STAGED-WRITE-BINDING
+VFS-BINDING-MAGIC ,
+VFS-BINDING-ABI-MAJOR ,
+VFS-BINDING-ABI-MINOR ,
+VFS-BINDING-DESC-SIZE ,
+VFS-OPS-SIZE ,
+EXT4-STAGED-WRITE-CAPS ,
+VFS-BF-NEEDS-VOLUME VFS-BF-STABLE-IDS OR ,
+EXT4-STAGED-WRITE-OPS ,
+0 , 0 ,
+
+: EXT4-STAGED-WRITE-NEW  ( arena volume -- vfs ior )
+    EXT4-STAGED-WRITE-BINDING SWAP VFS-NEW ;
 
 : EXT4-BLOCK-SIZE@  ( vfs -- bytes )  _EXT4-CTX _EXT4-C.BSIZE + @ ;
 : EXT4-BLOCK-COUNT@ ( vfs -- blocks ) _EXT4-CTX _EXT4-C.BLOCKS + @ ;

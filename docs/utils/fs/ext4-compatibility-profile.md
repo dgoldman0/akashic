@@ -2,11 +2,12 @@
 
 This document ratifies the exact ext4 format that the Akashic ext4 binding
 must implement. It closes the format-selection milestone independently of
-implementation status. The checksummed clean read-only reader now lives in
-`utils/fs/drivers/vfs-ext4.f`; its implemented structures and remaining
-limits are tracked in [the binding documentation](drivers/vfs-ext4.md).
+implementation status. The checksummed reader, ordinary read-only binding, and
+explicit staged-write binding live in `utils/fs/drivers/vfs-ext4.f`; their
+implemented structures and remaining limits are tracked in
+[the binding documentation](drivers/vfs-ext4.md).
 The bounded checksum-v3 JBD2 replay slice now includes committed revoke
-records, and the private writer can establish a crash-resolvable empty
+records, and the journal writer can establish a crash-resolvable empty
 checksum-v3 journal plus ext4 `RECOVER` state, emit one durable ordered
 descriptor/payload/revoke/commit transaction, checkpoint its retained metadata
 after-images, and release the journal for an immediate sequential transaction
@@ -17,11 +18,10 @@ legacy per-record orphan shapes is now implemented as one exact transaction
 per record. Its count is bounded by authenticated geometry, checked arithmetic,
 and caller-arena capacity rather than a cleanup-specific constant; positive
 union-drain qualification currently reaches two records. Broader record
-shapes, user-visible mutation, and the complete bidirectional gates remain
-open.
-MP64FS remains the working native storage binding and FAT/ext4 remain
-read-only interoperability bindings; ext4's mount path may perform the
-strictly ordered recovery writes described below.
+shapes, mutation beyond the staged overwrite, and the complete bidirectional
+gates remain open. MP64FS remains the working native storage binding. FAT and
+the ordinary ext4 binding remain read-only interoperability surfaces; ext4
+additionally exposes the explicitly named staged capability described below.
 
 The profile ID is `akashic-ext4-rw-v1`.  Its feature decisions are durable:
 the driver must not silently admit a refused bit because a host tool happens
@@ -33,7 +33,7 @@ revision with new real-image qualification.
 `akashic-ext4-rw-v1` remains the complete production contract. It is not a
 rule that every final operation, recovery shape, geometry, and fault fence must
 be implemented before any narrower operation can be developed and qualified.
-Private or explicitly staged operation slices may land under this profile
+Internal or explicitly staged operation slices may land under this profile
 without inventing a weaker format profile, provided the public capability mask
 continues to describe only behavior that has actually passed its promotion
 gate. A staged slice is not a claim of complete profile conformance.
@@ -1324,21 +1324,22 @@ controlled power-cut/release matrices. The detailed pending cases below are
 that closure inventory, not an assertion that every item is the next
 prerequisite for the narrow overwrite slice.
 
-The exact private regular-file callback now provides one narrow chunking
-primitive: a larger size-preserving caller range completes only its first
-filesystem-block chunk and returns legal short progress, consuming
-`1 metadata / 1 data / 0 revoke` credits from any containing caller profile.
-This removes both a caller-size limit and first-operation workspace selection
-from the qualified slice, but it does not supply the general chunk planners for
-growth, allocation, multi-home metadata, or namespace operations.
-The callback's short-progress and later-error behavior is also qualified
-through `VFS-WRITE?` and `VFS-WRITE-EXACT` using a cloned test-only binding;
-the production capability mask, operation table, and read-only flag remain
-unchanged. Ordered-data fault qualification also proves that generic VFS
-advances only by the confirmed prefix, preserves the partial read-only result,
-and blocks retry before redispatch after writer quarantine.
+The staged regular-file callback provides one narrow chunking primitive: a
+larger size-preserving caller range completes only its first filesystem-block
+chunk and returns legal short progress, consuming `1 metadata / 1 data / 0
+revoke` credits from any containing caller profile. This removes both a
+caller-size limit and first-operation workspace selection from the qualified
+slice, but it does not supply the general chunk planners for growth, allocation,
+multi-home metadata, or namespace operations. Its short-progress and
+later-error behavior is qualified through `VFS-WRITE?` and
+`VFS-WRITE-EXACT` on `EXT4-STAGED-WRITE-BINDING`. That descriptor alone adds
+`WRITE` and omits `READ_ONLY`; the ordinary `EXT4-BINDING`, `EXT4-CAPS`, and
+`EXT4-OPS` remain unchanged and read-only. Ordered-data fault qualification
+also proves that generic VFS advances only by the confirmed prefix, preserves
+the partial read-only result, and blocks retry before redispatch after writer
+quarantine.
 
-The same private one-block overwrite now accepts an existing initialized block
+The same staged one-block overwrite accepts an existing initialized block
 through an authenticated external extent tree rather than requiring an inline
 depth-0 root. The real supplemental depth-1 fixture qualifies data/inode
 checkpoint and readback while leaving its extent node byte-exact. A
@@ -1350,8 +1351,8 @@ physical block, and rejects that block as node metadata. A valid node relocated
 into the journal ring and a selected block duplicated across distinct leaves
 are both qualified refusals. One paired reverse-owner scan covers both the data
 and inode-table destinations, including other inodes' external xattrs and map
-metadata. The implementation uses the reader's bounded depth-5 validator, but
-mutation media qualification is currently depth 1.
+metadata. The reader retains its bounded depth-5 validator, while staged
+mutation admits only authenticated depth-0 and depth-1 trees.
 
 The per-operation proof is now complemented by a mount-scoped protocol-home
 certificate. Before activation or any private protocol write, every allocated

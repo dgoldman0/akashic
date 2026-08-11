@@ -1,16 +1,18 @@
-# akashic-vfs-ext4 — checksummed read-only ext4 binding
+# akashic-vfs-ext4 — checksummed ext4 bindings
 
 IMPORTANT: STEP CEILINGS ARE NOT CRITICAL COMPARED TO CRITICAL PROPER FUNCTIONING. DO NOT SCRUB PROPER FUNCTIONALITY FOR ARBITRARILY SET STEP LIMITS. STEP AND OTHER LIMITS DETERMINED BY IDENTIFIED SYSTEM RESOURCES AND MONITORING.
 
-This VFS ABI 1 binding reads filesystems in the pinned
-`akashic-ext4-rw-v1` profile from one explicit KDOS volume. It also implements
-a bounded mount-time recovery slice for an internal checksum-v3 JBD2 journal
-and a private one-transaction durable-emission slice. It never uses the
-ambient filesystem volume: reads and the narrowly scoped recovery, activation,
-private-emission, checkpoint, and clean-deactivation writes go through checked
-volume operations relative to the supplied `VOL-RAW` or `VOL-SLICE` object.
-The published binding remains read-only and has no user-visible mutation
-fallback.
+This VFS ABI 1 driver reads filesystems in the pinned
+`akashic-ext4-rw-v1` profile from one explicit KDOS volume. It publishes two
+deliberately different descriptors. `EXT4-BINDING` is the ordinary read-only
+surface. `EXT4-STAGED-WRITE-BINDING` adds one bounded, size-preserving overwrite
+operation for linked regular files on admitted existing allocations; it is the
+first production-facing write ratchet, not the complete writable profile. The
+driver also implements bounded mount-time recovery and durable transaction
+emission for an internal checksum-v3 JBD2 journal. It never uses the ambient
+filesystem volume: reads and all recovery, activation, emission, checkpoint,
+and clean-deactivation writes go through checked volume operations relative to
+the supplied `VOL-RAW` or `VOL-SLICE` object.
 
 ```forth
 REQUIRE utils/fs/drivers/vfs-ext4.f
@@ -77,13 +79,31 @@ bd vol VOL-RAW THROW
 fs-arena vol EXT4-NEW THROW CONSTANT fs
 ```
 
-`EXT4-NEW ( arena volume -- vfs ior )` constructs the core object and invokes
-the binding mount callback. Constructor failure returns an inspectable VFS in
-`VFS-L-NEW`, with the structured failure copied to `V.LAST-IOR`; it never
-publishes `VFS-L-MOUNTED`.
+`EXT4-NEW ( arena volume -- vfs ior )` constructs the ordinary read-only
+instance and invokes its mount callback. Constructor failure returns an
+inspectable VFS in `VFS-L-NEW`, with the structured failure copied to
+`V.LAST-IOR`; it never publishes `VFS-L-MOUNTED`.
 
-The mounted instance can reserve a caller-selected private writer profile
-without enabling public mutation:
+Use the explicit staged constructor when the bounded overwrite is required:
+
+```forth
+fs-arena vol EXT4-STAGED-WRITE-NEW THROW CONSTANT fs
+
+1 1 0 fs EXT4-WRITER-WORKSPACE-BYTES? THROW
+A-XMEM ARENA-NEW THROW CONSTANT writer-arena
+writer-arena 1 1 0 fs EXT4-BIND-WRITER-ARENA? THROW
+
+\ APP-NOW-MS ( clock-context -- epoch-ms ior )
+' APP-NOW-MS app-clock fs EXT4-BIND-WRITE-CLOCK? THROW
+```
+
+The staged mount admits nonempty mutation only on a 1 KiB filesystem with
+256-byte inodes and a journal capable of the minimum `1 metadata / 1 ordered
+data / 0 revoke` transaction. These checks occur during staged mount before it
+can publish a writable VFS or mutate media. The ordinary constructor retains
+the broader read/recovery geometry.
+
+A mounted instance can reserve a caller-selected writer profile as follows:
 
 ```forth
 1 1 0 fs EXT4-WRITER-WORKSPACE-BYTES? THROW
@@ -93,16 +113,24 @@ writer-arena 1 1 0 fs EXT4-BIND-WRITER-ARENA? THROW
 ```
 
 The three capacities are maximum metadata, ordered-data, and revoke credits;
-there is no driver-chosen split or operation-count ceiling. The sizing query
-also proves that the complete tuple fits the authenticated journal ring,
-`s_max_transaction`, and `s_max_trans_data`. The binding requires a fresh
-dedicated arena whose backing is disjoint from the VFS arena. Its descriptor,
-backing, and bump pointer remain exclusively owned by ext4 until clean
-unmount, which scrubs the complete writer and rolls the arena back to fresh.
-Busy or faulted unmount retains it for retry or diagnosis. The caller may
-destroy the arena only after successful unmount. These words configure the
-private substrate; `EXT4-BINDING` remains read-only and still publishes no
-`WRITE` callback.
+there is no driver-chosen split or operation-count ceiling. The staged
+overwrite consumes `1/1/0`, so the bound caller-owned arena may use exactly
+that tuple or any larger tuple accepted by the authenticated journal limits.
+The sizing query proves that the complete tuple fits the journal ring,
+`s_max_transaction`, and `s_max_trans_data`. Binding requires a fresh dedicated
+arena whose backing is disjoint from the VFS arena. Its descriptor, backing,
+and bump pointer remain exclusively owned by ext4 until clean unmount, which
+scrubs the complete writer and rolls the arena back to fresh. Busy or faulted
+unmount retains it for retry or diagnosis. The caller may destroy the arena
+only after successful unmount.
+
+`EXT4-BIND-WRITE-CLOCK?` installs exactly one trusted per-instance time
+provider with stack effect `( clock-context -- epoch-ms ior )`. Clock and
+writer-arena binding may occur in either order at the authenticated clean
+mounted endpoint, before the first nonempty mutation. A nonempty staged write
+requires both; zero-length writes require neither and do not sample the clock.
+`EXT4-BINDING`, `EXT4-OPS`, `EXT4-CAPS`, and `EXT4-NEW` remain read-only and
+unchanged by this setup.
 
 Probe reads the 1024-byte primary superblock at volume-relative byte offset
 1024 and returns `EXT4-PROBE-SCORE` (90) for the ext4 magic. A clean nonmatch
@@ -1189,16 +1217,30 @@ unrelated operation that cannot create those orphan states. Each operation
 still requires its own external-tool, semantic, and representative crash
 evidence before its capability can be enabled.
 
-The first ordinary-data mutation is also implemented as a private staging
-primitive. It admits a linked regular file with an authenticated extent map,
-including maps with external extent-tree nodes, and overwrites a nonempty byte
-range wholly contained in one existing initialized block. The transaction
-shape is exactly one ordered data block, one inode-table metadata block, and
-no revokes. The ordered image is a full-block read-modify-write copy; the
-metadata image preserves every other inode-table byte, updates `mtime` and
-`ctime` from explicit seconds and nanoseconds, and restamps the ext4 inode
-checksum. Staging neither emits nor checkpoints the transaction and grants no
-public write capability.
+## Staged existing-block writes
+
+`EXT4-STAGED-WRITE-BINDING` is the explicit ABI-1 surface for the first
+ordinary-data mutation. A nonempty request is admitted only on a 1 KiB
+filesystem with 256-byte inodes, and only for a linked regular file whose inode
+flags are exactly `EXTENTS`. The complete extent tree must have depth 0 or 1,
+and the size-preserving nonempty range must fit wholly inside one existing
+initialized filesystem block. The mounted instance must also have a trusted
+clock and a caller-owned writer arena whose accepted capacity contains the
+`1 metadata / 1 ordered data / 0 revoke` transaction.
+
+The operation does not allocate a hole, convert an unwritten extent, grow the
+file, alter the extent tree, or provide a multi-block atomic-write contract. A
+larger request is bounded at the next filesystem-block boundary and may return
+short success; `VFS-WRITE-EXACT` can then issue another independent bounded
+request.
+
+The underlying typed stage builds exactly one ordered data-block after-image,
+one inode-table metadata-block after-image, and no revokes. The ordered image is
+a full-block read-modify-write copy. The metadata image preserves every other
+inode-table byte, updates `mtime` and `ctime` from the trusted clock, and
+restamps the ext4 inode checksum. Dry staging itself neither emits nor
+checkpoints; the staged callback composes it with activation, emission,
+synchronous checkpoint, vnode publication, and clean unmount behavior.
 
 Before retaining either after-image, the primitive authenticates the complete
 target tree under a scoped mutation audit. Every target leaf range and external
@@ -1220,8 +1262,8 @@ write, growth, duplicate selected-block mapping, or ambiguous ownership fails
 before publication. Once ordered data has been retained, any later staging
 failure aborts and scrubs the transaction.
 
-Depth-positive qualification writes logical block 10 of the supplemental
-12-block extent-tree fixture through its real depth-1 root and external node.
+Depth-positive qualification writes logical block 10 of a 12-block file through
+its real depth-1 root and external node.
 The generic VFS path checkpoints the selected data block and inode-table home,
 reads the replacement back through the unchanged tree, never writes the
 external extent node, and cleanly unmounts. A checksum-valid adversarial leaf
@@ -1233,17 +1275,18 @@ The paired other-owner qualification separately exercises refusal through its
 second range and success for the actual data/inode-home pair. The write-path
 refusals return with scoped authority cleared and perform no write or flush;
 the standalone two-leaf parser qualification explicitly closes its test scope.
-Deeper trees use the same bounded parser and mutation audit, but the real
-mutation fixture currently qualifies depth 1.
+Deeper trees use the same bounded reader/parser, but staged mutation policy
+stops at depth 1 after authenticating a structurally valid wider tree. A valid
+deeper tree is unsupported for write; malformed trees remain corruption.
 
-The exact private write now also completes the real durability lifecycle. A
+The exact staged write completes the real durability lifecycle. A
 write-free dry stage is aborted before clean-to-`RECOVER` activation; the live
 stage then emits ordered data before its descriptor and final commit,
 checkpoints only the inode-table home, and cleanly deactivates through public
 unmount. Independent media checks pin the full data block, full inode-table
 block, descriptor tag and payload checksums, commit, clean superblock, and
-empty guard. A fresh read-only mount performs no recovery I/O and returns the
-complete modified file plus the exact nanosecond timestamps.
+empty guard. A fresh ordinary read-only mount performs no recovery I/O and
+returns the complete modified file plus the exact nanosecond timestamps.
 
 `_EXT4-MOUNTED-ONEBLOCK-WRITE` now composes that exact slice as a reusable
 private mounted client. It accepts source/count, file offset, inode number,
@@ -1293,8 +1336,10 @@ the cross-phase snapshot rule. It then drops the volatile mount at the
 authenticated dirty/empty write-active endpoint. A fresh mount performs
 the clean landing, returns both edits and the second exact timestamp through
 the path and its hard-link alias, and leaves a subsequent unmount clean. The
-client remains absent from `EXT4-OPS`: it deliberately does not publish vnode
-timestamps or dirty state for continued public access.
+client remains absent from the ordinary `EXT4-OPS`: it deliberately does not
+publish vnode timestamps or dirty state itself. `_EXT4-WRITE`, installed in
+`EXT4-STAGED-WRITE-OPS`, supplies the ABI callback boundary and publishes the
+successful timestamp and VFS dirty state.
 
 Fault qualification now crosses a 512-byte boundary inside one initialized
 block. A 24-byte request beginning at byte 500 tears six bytes into the second
@@ -1332,19 +1377,19 @@ unmount emits the ordinary deactivation trace. This pins both removal of the
 old `count <= block_size` limit and safe cross-block short progress without
 claiming hole allocation or a multi-block atomic transaction.
 
-Generic cursor qualification uses a cloned test-only binding: its private
-copy of the operation table installs `_EXT4-WRITE`, its copied capability mask
-adds `WRITE`, and only its copied flags clear `READ_ONLY`. The production
-`EXT4-BINDING`, `EXT4-CAPS`, and `EXT4-OPS` are asserted unchanged. Through
-that clone, `VFS-WRITE-EXACT` starts an FD at 1,016 and drives `VFS-WRITE?`
-twice. The first call checkpoints eight bytes and advances the FD, source, and
-remaining count; the second preserves the later `EXT4-D-RECOVERY` refusal at
-the logical-block hole with the cursor at 1,024. The clock sample consumed by
-the failing attempt is not published, the writer remains idle-clean, the FD
-closes, and ordinary clean unmount succeeds. This qualifies ABI-1 composition;
-it does not change public ext4 write admission.
+Generic cursor qualification uses the real staged binding. Its operation table
+uses the staged mount gate and installs `_EXT4-WRITE`; its capability mask adds
+`WRITE`, and its flags omit `READ_ONLY`. The ordinary `EXT4-BINDING`,
+`EXT4-CAPS`, and `EXT4-OPS` remain unchanged. Through the staged binding,
+`VFS-WRITE-EXACT` starts an FD at 1,016 and drives `VFS-WRITE?` twice. The first
+call checkpoints eight bytes and advances the FD, source, and remaining count;
+the second reaches the logical-block hole and returns the stable data-map
+unsupported result with the cursor at 1,024. The clock sample consumed by the
+failing attempt is not published, the writer remains idle-clean, the FD closes,
+and clean unmount succeeds. This qualifies ABI-1 composition without claiming
+hole allocation or widening the ordinary binding.
 
-The same cloned binding qualifies generic fault propagation. An ordered-data
+The same staged binding qualifies generic fault propagation. An ordered-data
 tear during a 24-byte `VFS-WRITE?` at offset 500 changes 18 raw caller bytes
 but certifies only the 12-byte prefix ending at the first complete sector.
 The call returns `actual = 12` with `PARTIAL | READONLY`, advances the FD to
@@ -1357,7 +1402,7 @@ unpublished. This distinguishes certified cursor progress from raw torn-sector
 effects and pins the retry boundary after quarantine.
 
 The callback obtains time from a caller-installed per-context provider rather
-than ambient `EPOCH@`. `_EXT4-BIND-WRITE-CLOCK` binds it once at an
+than ambient `EPOCH@`. `EXT4-BIND-WRITE-CLOCK?` binds it once at an
 authenticated clean mounted endpoint before the first mutation. Clock and
 dedicated-profile binding may occur in either order while the profile remains
 untouched, idle, and clean. The provider contract is
@@ -1378,14 +1423,12 @@ reactivation through the same writer, exact hard-link cache publication,
 unchanged callback-side FD cursors, alias readback, clean unmount, the exact
 76-event media trace, and independent raw data/inode/journal checks.
 
-`_EXT4-WRITE` remains absent from `EXT4-OPS` and `EXT4-CAPS`, but the exact
-slice now has an honest VFS progress/error contract. Generic `VFS-WRITE?` may
-advance only the calling FD by the returned confirmed prefix; the callback
-itself still owns no FD. Public exposure remains a separate gate because the
-binding is still globally read-only and this operation has not yet completed
-its operation-specific interoperability, crash, and capability-publication
-gate. General data shapes remain later profile work rather than a hidden
-prerequisite for this exact overwrite.
+`_EXT4-WRITE` remains absent from the ordinary `EXT4-OPS` and `EXT4-CAPS` and
+is present only in `EXT4-STAGED-WRITE-OPS`. Generic `VFS-WRITE?` advances only
+the calling FD by the returned confirmed prefix; the callback itself owns no
+FD. This is a real, deliberately named staged capability. It does not make the
+ordinary ext4 binding writable and does not imply support for general data
+shapes, allocation, growth, or namespace mutation.
 
 Controlled sequential-write qualification tears the first inode-table home
 write at byte 269, one byte into the target inode's new `i_ctime`. The ordered
@@ -1395,7 +1438,7 @@ retained inode-table after-image exactly, cleans the journal, and is stable on
 another write-free remount. This is one pinned checkpoint tear, not yet the
 complete power-cut matrix for ordinary writes.
 
-## Read-only inspection
+## Read and inspection behavior
 
 The current binding advertises directory enumeration, open/release, reads,
 getattr, readlink, list/get xattr, statfs, syncfs, and fsync. Stable ext4 inode
@@ -1444,9 +1487,12 @@ preserving the still-mounted instance's ready/current authority.
 
 `EXT4-BINDING` has `VFS-BF-NEEDS-VOLUME`, `VFS-BF-READ-ONLY`, and
 `VFS-BF-STABLE-IDS`. The VFS rejects all mutation before binding dispatch.
-`VOL-WRITE` and `VOL-FLUSH` are used only by mount-time recovery, private
-activation and emission, same-session checkpoint, and clean deactivation;
-they are not exposed as writable VFS capabilities.
+`EXT4-STAGED-WRITE-BINDING` instead omits `READ_ONLY`, adds `VFS-CAP-WRITE`,
+and dispatches only the bounded overwrite described above. Both bindings retain
+`VFS-CAP-SPARSE` for existing sparse mappings and zero-filled hole reads; that
+semantic cap does not advertise sparse-write allocation. `VOL-WRITE` and
+`VOL-FLUSH` remain confined to authenticated recovery and the staged
+transaction lifecycle.
 
 ## Recovery baseline and writable ratchet
 
@@ -1465,19 +1511,20 @@ authenticated and preflighted before any member is mutated, so recovery never
 cleans a supported prefix and then encounters an unsupported remainder.
 Journal and filesystem recovery authority remains present on refusal.
 
-That paragraph is the promotion requirement, not a claim that the qualified
-subset has already been frozen. The implementation already preflights the
-complete discovered union against its implemented cleanup shapes. The first
-ratchet task is to define and enforce the evidence-qualified subset before
-treating recovery as production-ready or promoting mutation.
+The recovery baseline now clamps recognized-but-unqualified orphan-file maps to
+a stable write-free unsupported result after complete structural validation;
+malformed authority remains corruption. Future recovery expansion is driven by
+states reachable from the next enabled operation, external interoperability
+evidence, or a concrete crash/corruption finding. Parser recognition alone is
+not admission, but speculative recovery breadth is not a prerequisite for the
+next unrelated write ratchet.
 
-Before the first write capability is promoted, audit the currently accepted
-modern and legacy shapes against a qualified baseline. A baseline shape must
-have production cleanup, exact allocation/accounting proof, a clean zero-write
-stable remount, pinned e2fsprogs acceptance, and representative crash recovery
-for every materially distinct metadata-home and authority topology. Any valid
-shape lacking that closure is clamped to a stable write-free unsupported
-result until its evidence lands. Parser recognition alone is not admission.
+Before each additional write capability is promoted, audit the recovery states
+that operation can actually create against the same standard: production
+cleanup, exact allocation/accounting proof, clean stable remount, pinned
+e2fsprogs acceptance, and representative crash recovery for each materially
+distinct home/authority topology. Valid reachable shapes lacking that closure
+remain fail-closed until their evidence lands.
 
 Maintain a per-operation reachability ledger containing its request boundary,
 transaction homes and credits, possible durable crash states, recovery entry
@@ -1499,9 +1546,8 @@ authority, batching, ring wrap, or resolver behavior.
 The ratchet order is:
 
 1. freeze or clamp the qualified recovery baseline;
-2. complete the existing initialized-block, size-preserving overwrite and
-   promote it only if the ABI can express its bounded semantics honestly;
-   otherwise retain it privately or behind an explicitly staged binding;
+2. expose the existing initialized-block, size-preserving overwrite through the
+   explicitly named staged binding while leaving the ordinary binding read-only;
 3. extend through multi-block existing-allocation writes, then allocation and
    file growth;
 4. add inode/directory creation and then truncation, unlink, and removal with
@@ -1511,55 +1557,44 @@ The ratchet order is:
    operation and recovery state.
 
 Each landing may move only forward: it must keep all prior qualified behavior,
-remain crash-closed, and advertise exactly the capabilities it has earned. A
-private slice is useful implementation evidence but is not public capability
-or complete profile conformance.
+remain crash-closed, and advertise exactly the capabilities it has earned. An
+internal slice is useful implementation evidence but is not public capability;
+an explicitly staged capability is public ABI but is still not complete profile
+conformance.
 
 ## Deliberate remaining limits
 
-This is completion of the bounded clean read side, not completion of the
-writable profile. The journaling and crash-recovery substrate is advanced, but
-public write support is not a capability-bit flip. `EXT4-OPS` still has no
-`WRITE`, `CREATE`, `MKDIR`, `UNLINK`, `RMDIR`, `RENAME`, `TRUNCATE`, `SETATTR`,
-`LINK`, `SYMLINK`, `SETXATTR`, or `REMOVEXATTR` callback;
-`EXT4-BINDING` remains `VFS-BF-READ-ONLY`; the real `SYNCFS`/`FSYNC` callbacks
-do not themselves expose mutation. Each capability promotion still needs its
-own bounded credit/chunking contract, reachable-state recovery closure,
-namespace/cache behavior where applicable, and interoperability plus crash
-qualification. Full profile completion additionally needs general block and
-inode allocation, extent and legacy-map growth and shrink, directory-entry
-mutation, inode/link/time/accounting updates, xattr mutation, broader
-per-record orphan closure, and the final compositional release matrix.
-For the existing one-block shape, trusted time injection, shared-vnode
-publication, and live sync semantics are implemented. The durable engine and
-private callback still do not constitute the general public mutation layer.
+The staged overwrite is not completion of the writable profile.
+`EXT4-STAGED-WRITE-OPS` adds only `MOUNT` admission and `WRITE` dispatch to the
+ordinary table. Neither binding advertises `CREATE`, `MKDIR`, `UNLINK`,
+`RMDIR`, `RENAME`, `TRUNCATE`, `SETATTR`, `LINK`, `SYMLINK`, `SETXATTR`, or
+`REMOVEXATTR`; `EXT4-BINDING` remains `VFS-BF-READ-ONLY`. Each later capability
+still needs its own bounded credit/chunking contract, reachable-state recovery
+closure, namespace/cache behavior where applicable, and interoperability plus
+crash qualification. Full profile completion additionally needs general block
+and inode allocation, extent and legacy-map growth and shrink, directory-entry
+mutation, inode/link/time/accounting updates, xattr mutation, broader per-record
+orphan closure, and the final compositional release matrix.
 
-That narrow private write checkpoint has now reached private durability:
-one size-preserving regular-file overwrite contained in one already allocated
+The staged binding now publishes that narrow durable checkpoint honestly: one
+size-preserving regular-file overwrite contained in one already allocated
 initialized block, represented by a full-block ordered-data RMW and one
-checksummed inode-table after-image for explicit `mtime`/`ctime`. It needs no
-allocator or extent edit and fits the exact `1 metadata / 1 data / 0 revoke`
-transaction shape. End-to-end emit, checkpoint, clean unmount, write-free
-remount, and one checkpoint-home sequential tear/replay case pass. Pinned
-external-tool inspection and representative remaining cuts for this
-state-machine topology remain its qualification gates. The mounted private
-client adds zero-length behavior, stable pre-activation refusal, synchronous
-success, sequential writer reuse, and dirty/empty crash-remount cleanup without
-widening the supported data shape. Its post-publication progress/error policy
-is now represented honestly;
-the operation remains private while general operation planning, public
-admission, and its remaining crash/interoperability evidence are unsettled.
-Growth, holes, unwritten extents, multi-block atomicity, truncation, and
-namespace mutation remain later phases.
+checksummed inode-table after-image for clock-derived `mtime`/`ctime`. It needs
+no allocator or extent edit and fits the exact `1 metadata / 1 data / 0 revoke`
+transaction shape. The qualified path includes end-to-end emit, checkpoint,
+clean unmount, write-free remount, sequential writer reuse, external
+`debugfs`/`e2fsck` inspection, and a checkpoint-home tear/replay case. Growth,
+holes, unwritten extents, multi-block atomicity, truncation, and namespace
+mutation remain later ratchets.
 
 The remaining boundaries are the final-profile closure inventory, not an
 ordered list of prerequisites for the next narrow write slice:
 
 - POSIX ACL xattrs are returned as raw bytes, but generic permission
   enforcement is not claimed;
-- the real external-tool extent fixture has depth 1 and now qualifies both
-  reading and the private one-block overwrite, while deeper trees have only
-  bounded structural traversal through the profile limit of 5;
+- the external-tool extent corpus has depth 1 and qualifies both reading and
+  the staged one-block overwrite, while deeper trees remain read-only through
+  the bounded profile depth limit of 5;
 - the real special-inode fixture covers FIFO, character, and block devices,
   but not a socket inode;
 - replay currently requires checksum-v3/64-bit journal records, supports
@@ -1578,13 +1613,13 @@ ordered list of prerequisites for the next narrow write slice:
   preflight, retained-image home writes, dirty-empty journal release,
   immediate sequential workspace reuse, clean write-active deactivation, and
   public clean-unmount integration are implemented as private durability
-  foundations. Exact private one-block regular-file overwrite staging now
+  foundations. Exact staged one-block regular-file overwrite now
   composes a full ordered-data RMW with an explicitly timed, checksummed inode
   after-image after mutation-range and filesystem-wide ownership proof. Its
   exact dry-stage/activation/emission/checkpoint/deactivation journey, clean
-  remount, and one partial inode-home replay case pass; public mutation and
-  its remaining operation-specific crash/interoperability qualification remain
-  gated.
+  remount, one partial inode-home replay case, two sequential writes through
+  the staged ABI, and pinned external inspection pass. Broader mutation remains
+  gated operation by operation.
   Transaction-aware metadata acquisition, checksum-safe typed
   orphan-inode replacement, free-only physical-block accounting, linked
   zero-size inline depth-0 extent or exact empty legacy-format-map truncation,
@@ -2048,16 +2083,28 @@ closure, and final compositional release matrix land.
 ## Public reference
 
 ```forth
-EXT4-BINDING       ( -- binding )
-EXT4-OPS           ( -- ops )
-EXT4-CAPS          ( -- capabilities )
-EXT4-PROBE-SCORE   ( -- 90 )
-EXT4-NEW           ( arena volume -- vfs ior )
+EXT4-BINDING              ( -- binding )
+EXT4-OPS                  ( -- ops )
+EXT4-CAPS                 ( -- capabilities )
+EXT4-PROBE-SCORE          ( -- 90 )
+EXT4-NEW                  ( arena volume -- vfs ior )
 
-EXT4-BLOCK-SIZE@   ( vfs -- bytes )
-EXT4-BLOCK-COUNT@  ( vfs -- blocks )
-EXT4-GROUP-COUNT@  ( vfs -- groups )
-EXT4-INODE-SIZE@   ( vfs -- bytes )
+EXT4-STAGED-WRITE-BINDING ( -- binding )
+EXT4-STAGED-WRITE-OPS     ( -- ops )
+EXT4-STAGED-WRITE-CAPS    ( -- capabilities )
+EXT4-STAGED-WRITE-NEW     ( arena volume -- vfs ior )
+
+EXT4-WRITER-WORKSPACE-BYTES?
+  ( meta-cap data-cap revoke-cap vfs -- bytes ior )
+EXT4-BIND-WRITER-ARENA?
+  ( arena meta-cap data-cap revoke-cap vfs -- ior )
+EXT4-BIND-WRITE-CLOCK?
+  ( now-ms-xt clock-context vfs -- ior )
+
+EXT4-BLOCK-SIZE@          ( vfs -- bytes )
+EXT4-BLOCK-COUNT@         ( vfs -- blocks )
+EXT4-GROUP-COUNT@         ( vfs -- groups )
+EXT4-INODE-SIZE@          ( vfs -- bytes )
 ```
 
 The authoritative format decisions, source pins, and qualification matrix
