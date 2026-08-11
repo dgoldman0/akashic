@@ -1350,6 +1350,11 @@ also proves that generic VFS advances only by the confirmed prefix, preserves
 the partial read-only result, and blocks retry before redispatch after writer
 quarantine.
 
+For a depth-zero target, the current edit attaches the selected block by
+sorted singleton insertion or exact logical-and-physical initialized
+coalescing. A full resident root is admitted when coalescing preserves its
+entry count.
+
 The positive composition gate now crosses two distinct initialized blocks in
 the real depth-1 extent file with one `VFS-WRITE-EXACT` request. The first
 callback checkpoints the eight-byte tail of logical block 10; the second
@@ -1369,9 +1374,11 @@ transactions through the same writer. Exact allocation, extent mapping,
 `i_blocks`, free-space, cursor, time, ordered-home, full-file readback, clean
 unmount, write/flush-free remount, pinned `debugfs`, and read-only `e2fsck`
 checks all pass. This qualifies consecutive in-size hole composition without
-claiming an atomic two-block transaction. The second insertion fills the
-current inline root; a further distinct unmerged extent still requires merge
-or extent-root growth support.
+claiming an atomic two-block transaction. The first allocation inserts a
+singleton and the second coalesces into it, forming a length-two initialized
+extent while the inline root remains at three entries. This qualifies adjacent
+initialized coalescing as part of the current hole-fill operation; only an
+unmergeable full root still requires extent-root growth.
 
 The staged-operation crash evidence includes the final commit flush of a
 second write through the reused public writer. The successful trace derives

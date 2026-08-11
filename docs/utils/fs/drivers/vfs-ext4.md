@@ -757,11 +757,11 @@ result rather than claiming disk-full or interpreting nonexistent bitmap
 authority.
 
 The enclosing file operation must still perform complete reverse-owner proof,
-ordered full-block initialization, extent insertion, `i_blocks` accounting,
-and inode checksum work in the same transaction. Keeping those authorities
-separate lets selection and accounting be tested exactly while preventing
-either private piece from being mistaken for a complete user-visible write
-operation.
+ordered full-block initialization, an authenticated insert-or-coalesce
+extent-root edit, `i_blocks` accounting, and inode checksum work in the same
+transaction. Keeping those authorities separate lets selection and accounting
+be tested exactly while preventing either private piece from being mistaken
+for a complete user-visible write operation.
 
 Mutation-side admission also has reusable authorities beyond that free-only
 builder. `_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER` scans every authenticated allocated
@@ -1269,10 +1269,12 @@ only on authenticated 1 KiB filesystem geometry with 256-byte inodes and only
 for a linked regular file whose inode flags are exactly `EXTENTS`. An
 initialized-block overwrite may use an authenticated depth-0 or depth-1 extent
 tree. Allocation-backed hole fill requires an authenticated inline depth-0
-extent root with one spare resident entry, an exact `i_blocks` account, and a
-complete logical hole before the final partial logical block and inside the
-existing file size for each callback. An exact request may continue across
-adjacent complete holes while each next callback still satisfies that
+extent root whose target can be represented either by a sorted insertion into
+a spare resident slot or, after free-block selection, by an exact logical-and-
+physical initialized coalescing edit. It also requires an exact `i_blocks`
+account and a complete logical hole before the final partial logical block and
+inside the existing file size for each callback. An exact request may continue
+across adjacent complete holes while each next callback still satisfies that
 structural admission. The mounted instance must also have a trusted clock and
 a caller-owned writer arena. Overwrite requires a profile containing `1
 metadata / 1 ordered data / 0 revoke`; hole fill requires one containing
@@ -1348,24 +1350,29 @@ deeper tree is unsupported for write; malformed trees remain corruption.
 The staged binding publicly routes an exact clean unmapped target to the typed
 allocation operation for one complete logical hole inside the current file
 size. Its admission contract is structural: a linked regular file with flags
-exactly `EXTENTS`, an authenticated inline depth-0 root with one spare resident
-entry, an exact `i_blocks` account, and a hole before the final partial logical
-block qualifies. Admission is derived from authenticated on-disk geometry and
-inode state, not a named image or path.
+exactly `EXTENTS`, an authenticated inline depth-0 root whose target can be
+represented by a spare-slot insertion or an exact logical-and-physical
+initialized coalescing edit, an exact `i_blocks` account, and a hole before the
+final partial logical block qualifies. Admission is derived from authenticated
+on-disk geometry and inode state, not a named image or path.
 
 The `4 metadata / 1 ordered data / 0 revoke` transaction selects an
 authenticated free block from runtime group geometry, retains a full zeroed
-data image with the caller span overlaid, and inserts one sorted initialized
-singleton extent without changing `i_size`. Its metadata after-images set the
-exact bitmap bit, decrement the group and primary-super free-block counters,
-restamp their checksums, increment `i_blocks`, update `mtime`/`ctime`, and
-restamp the inode. One other-inode scan covers all five replacement homes: the
-new data block, inode-table block, block bitmap, primary GDT block, and primary
-superblock. The target's complete existing map is separately checked against
-static metadata and journal roles before that inode is excluded from the scan.
+data image with the caller span overlaid, and attaches the selected block by
+either inserting a sorted initialized singleton or applying a checked left,
+right, or bridge coalesce across exactly logical-and-physical-adjacent
+initialized extents, without changing `i_size`. Its metadata after-images set
+the exact bitmap bit, decrement the group and primary-super free-block
+counters, restamp their checksums, increment `i_blocks`, update `mtime`/`ctime`,
+and restamp the inode. One other-inode scan covers all five replacement homes:
+the new data block, inode-table block, block bitmap, primary GDT block, and
+primary superblock. The target's complete existing map is separately checked
+against static metadata and journal roles before that inode is excluded from
+the scan.
 
 The allocation stage refuses an existing initialized mapping, unwritten
-conversion, a depth-positive or full inline root, a cross-block request, the
+conversion, a depth-positive root or a full inline root for which no count-
+preserving initialized coalescing edit is valid, a cross-block request, the
 final partial logical block, and EOF growth. Those are boundaries of this
 mutation operation, not claims that such files are invalid or unreadable. The
 public router reaches this stage only after the initialized overwrite builder
@@ -1376,11 +1383,12 @@ aborted before clean-to-`RECOVER` activation; the live stage emits ordered data
 before its descriptor and final commit and then synchronously checkpoints the
 active metadata homes. Initialized overwrite has one inode-table metadata home.
 Hole fill has four metadata homes: the inode table, block bitmap, primary GDT,
-and primary superblock. The allocation transaction inserts one initialized
-extent, updates the authenticated free-block accounting and `i_blocks`, and
-preserves `i_size`. Public unmount cleanly deactivates the retained writer, and
-a fresh ordinary read-only mount reads the resulting file without requiring a
-new mutation capability.
+and primary superblock. The allocation transaction attaches one initialized
+data block through the authenticated insert-or-coalesce edit, updates the
+authenticated free-block accounting and `i_blocks`, and preserves `i_size`.
+Public unmount cleanly deactivates the retained writer, and a fresh ordinary
+read-only mount reads the resulting file without requiring a new mutation
+capability.
 
 Pinned e2fsprogs 1.47.4 independently accepts that public result. `debugfs`
 reads the exact three-block file, maps logical block 1 to the geometry-selected
@@ -1414,9 +1422,13 @@ under the established scoped 1.5-billion multi-record ceiling; the ordinary
 remount completes in 62,181,924 steps with no writes or flushes, and pinned
 `debugfs` plus read-only `e2fsck` accept the result. The request has
 independently durable block semantics, not an atomic two-block transaction. Its
-second insertion fills the current inline root; another distinct unmerged
-extent requires merge or extent-root-growth support before that next callback
-can qualify.
+first allocation inserts a singleton; its second coalesces with that singleton
+into a real length-two initialized extent, leaving the inline root at three
+entries with one resident slot still available. This directly qualifies
+adjacent initialized coalescing on the current public hole-fill path. Focused
+typed stages also qualify bridge coalescing, right coalescing in a full resident
+root, and refusal of an unmergeable full root before any data or metadata is
+retained. Only that last shape requires extent-root growth.
 
 `_EXT4-MOUNTED-ONEBLOCK-WRITE` now composes that exact slice as a reusable
 private mounted client. It accepts source/count, file offset, inode number,
@@ -1763,7 +1775,8 @@ orphan closure, and the final compositional release matrix.
 The staged binding publishes two concrete durable operations. Initialized
 overwrite uses a full-block ordered-data RMW plus one checksummed inode-table
 after-image and consumes `1/1/0`. In-size hole fill allocates one geometry-
-selected block, inserts one resident initialized extent, updates block bitmap,
+selected block, attaches it to the resident depth-zero root by sorted singleton
+insertion or checked adjacent initialized coalescing, updates block bitmap,
 group and super free-block accounting plus `i_blocks`, and consumes `4/1/0`.
 Both update clock-derived `mtime`/`ctime`; only hole fill changes `VN.BLOCKS`,
 and neither changes file size. Exact writes can compose those callbacks across
@@ -1787,10 +1800,13 @@ ordered list of prerequisites for retaining the qualified write surface:
 - read and recovery retain the authenticated 1/2/4 KiB and 128/256-byte-inode
   forms, while staged mutation is currently qualified on 1 KiB/256-byte-inode
   geometry. The initialized-overwrite extent corpus reaches depth 1; each hole
-  fill currently edits only a depth-0 resident root with spare capacity, and
-  the consecutive-hole journey demonstrates composition through the insertion
-  that fills that root. Deeper trees remain readable through the bounded
-  profile depth limit of 5;
+  fill currently edits only a depth-0 resident root, using either a spare-slot
+  insertion or an exact initialized coalescing edit. The consecutive-hole
+  journey proves coalescing by extending the first allocated singleton to
+  length two while leaving the root at three entries. The planner also admits
+  a full resident root when coalescing preserves its entry count; unmergeable
+  full roots and depth-positive mutation still await extent-root growth. Deeper
+  trees remain readable through the bounded profile depth limit of 5;
 - the real special-inode fixture covers FIFO, character, and block devices,
   but not a socket inode;
 - replay currently requires checksum-v3/64-bit journal records, supports
