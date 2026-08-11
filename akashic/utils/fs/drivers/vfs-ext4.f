@@ -17141,6 +17141,7 @@ VARIABLE _EXT4-WR-NEW-SIZE
 VARIABLE _EXT4-WR-NEW-BLOCKS
 VARIABLE _EXT4-WR-NEW-FREE
 VARIABLE _EXT4-WR-CHUNK
+VARIABLE _EXT4-WR-TAIL-ROOM
 VARIABLE _EXT4-WR-MS
 VARIABLE _EXT4-WR-SECONDS
 VARIABLE _EXT4-WR-NSEC
@@ -17201,8 +17202,9 @@ VARIABLE _EXT4-WR-KIND
     _EXT4-WR-IOR @ ?DUP IF EXIT THEN
     \ Nonempty staged writes currently require authenticated 1 KiB filesystem
     \ geometry with 256-byte inodes.  This is the published operation boundary
-    \ for initialized overwrite, in-size hole fill, partial-tail append, and
-    \ one-block allocation-backed growth from aligned EOF.  Other
+    \ for initialized overwrite, in-size hole fill, partial-tail append,
+    \ one-block allocation-backed growth from aligned EOF, and exact-write
+    \ composition from a partial tail into one next logical block.  Other
     \ akashic-ext4-rw-v1 geometries remain available to the read/recovery path
     \ until their mutation paths pass equivalent qualification.
     _EXT4-WR-CTX @ _EXT4-STAGED-WRITE-FS-QUALIFY ?DUP IF EXIT THEN
@@ -17218,11 +17220,25 @@ VARIABLE _EXT4-WR-KIND
             THEN
             _EXT4-WRK-ALIGNED-APPEND _EXT4-WR-KIND !
         ELSE
-            _EXT4-WR-COUNT @
             _EXT4-WR-CTX @ _EXT4-C.BSIZE + @
             _EXT4-WR-OFFSET @
-            _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ MOD - U> IF
-                EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+            _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ MOD -
+            _EXT4-WR-TAIL-ROOM !
+            _EXT4-WR-COUNT @ _EXT4-WR-TAIL-ROOM @ U> IF
+                \ Admit one independently checkpointed tail chunk followed by
+                \ at most one next-logical-block allocation chunk.  Subtracting
+                \ the already-initialized tail avoids an end-bound addition that
+                \ could overflow.  Refuse a known-insufficient journal/writer
+                \ profile before sampling the clock or publishing tail bytes.
+                _EXT4-WR-COUNT @ _EXT4-WR-TAIL-ROOM @ -
+                _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ U> IF
+                    EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+                THEN
+                _EXT4-WR-REQUEST-END @ 0xFFFFFFFF U> IF
+                    VFS-E-OVERFLOW EXIT
+                THEN
+                4 1 0 _EXT4-WR-CTX @ _EXT4-JTX-PREFLIGHT-CAPACITY
+                ?DUP IF EXIT THEN
             THEN
             _EXT4-WRK-TAIL-APPEND _EXT4-WR-KIND !
         THEN
@@ -17293,7 +17309,8 @@ VARIABLE _EXT4-WR-KIND
 : _EXT4-WRITE  ( source count file-offset dentry vfs -- actual ior )
     _EXT4-WR-V ! _EXT4-WR-D ! _EXT4-WR-OFFSET !
     _EXT4-WR-COUNT ! _EXT4-WR-SOURCE !
-    0 _EXT4-WR-CHUNK ! 0 _EXT4-WR-ACTUAL !
+    0 _EXT4-WR-CHUNK ! 0 _EXT4-WR-TAIL-ROOM !
+    0 _EXT4-WR-ACTUAL !
     _EXT4-WRK-IN-SIZE _EXT4-WR-KIND !
     _EXT4-WRITE-VALIDATE ?DUP IF 0 SWAP EXIT THEN
     _EXT4-WR-COUNT @ 0= IF
@@ -18581,9 +18598,11 @@ EXT4-OPS ,
 \ sparse-file read/mapping semantics; WRITE can overwrite initialized blocks,
 \ allocate one complete logical hole inside existing EOF, append inside an
 \ initialized partial tail, and allocate one initialized block at aligned EOF.
-\ A dedicated 1/1/0 profile serves initialized RMW; 4/1/0 serves either
-\ allocation-backed operation.  Bind the profile and a trusted clock before
-\ the first nonempty write.
+\ VFS-WRITE-EXACT can also compose a tail append and next-logical-block growth
+\ as two independently checkpointed callbacks.  A dedicated 1/1/0 profile
+\ serves initialized RMW; 4/1/0 serves either allocation-backed operation and
+\ the cross-tail composition.  Bind the profile and a trusted clock before the
+\ first nonempty write.
 EXT4-CAPS VFS-CAP-WRITE OR CONSTANT EXT4-STAGED-WRITE-CAPS
 
 CREATE EXT4-STAGED-WRITE-OPS VFS-OPS-SIZE ALLOT
@@ -19247,11 +19266,12 @@ CREATE _XB _EXT4-MAX-BLOCK ALLOT
     _EXT4-WR-BID @ _EXT4-WR-GEN @
     _EXT4-WR-SECONDS @ _EXT4-WR-NSEC @ _EXT4-WR-V @ ;
 
-\ Preserve the public caller chunk.  Each growth kind routes directly to its
-\ typed builder: partial-tail append uses initialized RMW, while aligned EOF
-\ uses allocation.  Neither can fall through to another operation.  An in-size
-\ target first tries overwrite, then promotes only its exact clean unmapped
-\ refusal to hole fill.
+\ Preserve the public caller chunk.  Each callback's growth kind routes
+\ directly to its typed builder: partial-tail append uses initialized RMW,
+\ while aligned EOF uses allocation.  Neither callback can fall through to
+\ another operation; VFS-WRITE-EXACT may advance after a short committed tail
+\ chunk and re-enter as aligned growth.  An in-size target first tries
+\ overwrite, then promotes only its exact clean unmapped refusal to hole fill.
 :NONAME  ( -- actual ior )
     _EXT4-WR-SOURCE @ _EXT4-WR-COUNT @
     _XB _EXT4-MAX-BLOCK MSPAN-OVERLAP?
