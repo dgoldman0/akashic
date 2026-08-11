@@ -36856,6 +36856,184 @@ def test_staged_public_tail_append_passes_external_oracles(
     _assert_e2fsck_clean(image, jbd2_toolchain)
 
 
+def test_staged_public_tail_append_refuses_gap_and_mixed_growth_without_io(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+
+    superblock, inode, inode_offset = _ext4_inode_record(path, 14)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    data_block = _extent_root_physical(inode, 0)
+    inode_home = inode_offset // block_size
+    assert block_size == 1024
+    assert struct.unpack_from("<I", inode, 0x04)[0] == 54
+    original_data = _patched_ext4_home(
+        path, source_patches, data_block, block_size=block_size
+    )
+    original_inode_home = _patched_ext4_home(
+        path, source_patches, inode_home, block_size=block_size
+    )
+
+    backing = tmp_path / "staged-public-tail-append-refusals.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            backing,
+            [
+                "VARIABLE _AR-CLOCK-CALLS",
+                (
+                    ": _AR-NOW ( context -- epoch-ms ior ) "
+                    "DROP 1 _AR-CLOCK-CALLS +! "
+                    f"{_STAGED_APPEND_EPOCH_MS} 0 ;"
+                ),
+                "T-ARENA CONSTANT _AR-ARENA",
+                (
+                    "_AR-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _AR-MOUNT-IOR CONSTANT _AR-V"
+                ),
+                "_AR-V _EXT4-CTX CONSTANT _AR-CTX",
+                (
+                    "' _AR-NOW 0 _AR-V EXT4-BIND-WRITE-CLOCK? "
+                    "CONSTANT _AR-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_AR-PROFILE", "_AR-V"
+                ),
+                (
+                    'S" /fixture/payload.txt" '
+                    "VFS-FF-READ VFS-FF-WRITE OR _AR-V VFS-OPEN? "
+                    "CONSTANT _AR-OPEN-IOR CONSTANT _AR-FD"
+                ),
+                "_AR-FD FD.INODE @ D.VNODE @ CONSTANT _AR-VN",
+                "_AR-VN VN.ATIME @ CONSTANT _AR-OLD-ATIME",
+                "_AR-VN VN.ATIME-NS @ CONSTANT _AR-OLD-ATIME-NS",
+                "_AR-VN VN.MTIME @ CONSTANT _AR-OLD-MTIME",
+                "_AR-VN VN.MTIME-NS @ CONSTANT _AR-OLD-MTIME-NS",
+                "_AR-VN VN.CTIME @ CONSTANT _AR-OLD-CTIME",
+                "_AR-VN VN.CTIME-NS @ CONSTANT _AR-OLD-CTIME-NS",
+                "_AR-VN VN.SIZE-LO @ CONSTANT _AR-OLD-SIZE",
+                "_AR-VN VN.BLOCKS @ CONSTANT _AR-OLD-BLOCKS",
+                "_AR-VN VN.FLAGS @ CONSTANT _AR-OLD-VN-FLAGS",
+                "_AR-CTX _EXT4-C.J.WRITER + @ CONSTANT _AR-WRITER",
+                "_AR-ARENA ARENA-USED CONSTANT _AR-MAIN-CLEAN",
+                "55 _AR-FD VFS-SEEK? CONSTANT _AR-GAP-SEEK-IOR",
+                (
+                    'S" G" _AR-FD VFS-WRITE? '
+                    "CONSTANT _AR-GAP-IOR CONSTANT _AR-GAP-ACTUAL"
+                ),
+                "_AR-FD FD.CUR-LO @ CONSTANT _AR-GAP-CURSOR",
+                "53 _AR-FD VFS-SEEK? CONSTANT _AR-MIX-SEEK-IOR",
+                (
+                    'S" MX" _AR-FD VFS-WRITE? '
+                    "CONSTANT _AR-MIX-IOR CONSTANT _AR-MIX-ACTUAL"
+                ),
+                "_AR-FD FD.CUR-LO @ CONSTANT _AR-MIX-CURSOR",
+                "_AR-ARENA ARENA-USED CONSTANT _AR-MAIN-AFTER",
+                (
+                    _forth_conjunction(
+                        [
+                            "_AR-MOUNT-IOR 0=",
+                            "_AR-CLOCK-IOR 0=",
+                            "_AR-PROFILE-SIZE-IOR 0=",
+                            "_AR-PROFILE-BIND-IOR 0=",
+                            "_AR-PROFILE-USED _AR-PROFILE-SIZE =",
+                            "_AR-OPEN-IOR 0=",
+                            "_AR-GAP-SEEK-IOR 0=",
+                            "_AR-GAP-ACTUAL 0=",
+                            (
+                                "_AR-GAP-IOR VFS-IOR-REASON "
+                                "VFS-R-UNSUPPORTED ="
+                            ),
+                            (
+                                "_AR-GAP-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-WRITE-POLICY ="
+                            ),
+                            "_AR-GAP-CURSOR 55 =",
+                            "_AR-MIX-SEEK-IOR 0=",
+                            "_AR-MIX-ACTUAL 0=",
+                            (
+                                "_AR-MIX-IOR VFS-IOR-REASON "
+                                "VFS-R-UNSUPPORTED ="
+                            ),
+                            (
+                                "_AR-MIX-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-WRITE-POLICY ="
+                            ),
+                            "_AR-MIX-CURSOR 53 =",
+                            "_AR-V V.LAST-IOR @ _AR-MIX-IOR =",
+                            "_AR-CLOCK-CALLS @ 0=",
+                            "_EXT4-WR-CHUNK @ 0=",
+                            "_EXT4-WR-ACTUAL @ 0=",
+                            "_EXT4-MOW-ACTUAL @ 0=",
+                            "_AR-VN VN.ATIME @ _AR-OLD-ATIME =",
+                            (
+                                "_AR-VN VN.ATIME-NS @ "
+                                "_AR-OLD-ATIME-NS ="
+                            ),
+                            "_AR-VN VN.MTIME @ _AR-OLD-MTIME =",
+                            (
+                                "_AR-VN VN.MTIME-NS @ "
+                                "_AR-OLD-MTIME-NS ="
+                            ),
+                            "_AR-VN VN.CTIME @ _AR-OLD-CTIME =",
+                            (
+                                "_AR-VN VN.CTIME-NS @ "
+                                "_AR-OLD-CTIME-NS ="
+                            ),
+                            "_AR-VN VN.SIZE-LO @ _AR-OLD-SIZE =",
+                            "_AR-VN VN.BLOCKS @ _AR-OLD-BLOCKS =",
+                            "_AR-VN VN.FLAGS @ _AR-OLD-VN-FLAGS =",
+                            "_AR-WRITER _AR-PROFILE-BASE =",
+                            "_AR-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_AR-WRITER _EXT4-JWR.FAULT + @ 0=",
+                            "_AR-MAIN-AFTER _AR-MAIN-CLEAN =",
+                            (
+                                "_AR-PROFILE-ARENA ARENA-USED "
+                                "_AR-PROFILE-USED ="
+                            ),
+                            "_AR-CTX _EXT4-C.RECOVERY + @ 0=",
+                            "_AR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                            "_AR-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                            "_AR-V V.FLAGS @ VFS-F-RO AND 0=",
+                            "_AR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-TAIL-APPEND-REFUSED" THEN'
+                ),
+                "_AR-FD VFS-CLOSE? CONSTANT _AR-CLOSE-IOR",
+                "0 _AR-V VFS-UNMOUNT CONSTANT _AR-UNMOUNT-IOR",
+                (
+                    "_AR-CLOSE-IOR 0= _AR-UNMOUNT-IOR 0= AND "
+                    "_AR-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_AR-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_AR-PROFILE-ARENA A.PTR @ _AR-PROFILE-BASE = AND "
+                    'IF ." EXT4-PUBLIC-TAIL-APPEND-REFUSAL-UNMOUNT" THEN'
+                ),
+            ],
+            patches=source_patches,
+            capture_media=backing,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-TAIL-APPEND-REFUSED")
+        _assert_emitted(output, "EXT4-PUBLIC-TAIL-APPEND-REFUSAL-UNMOUNT")
+        assert trace == ()
+        assert _read_ext4_home(
+            backing, data_block, block_size=block_size
+        ) == original_data
+        assert _read_ext4_home(
+            backing, inode_home, block_size=block_size
+        ) == original_inode_home
+    finally:
+        backing.unlink(missing_ok=True)
+
+
 def test_staged_public_write_second_commit_flush_converges_across_views(
     staged_write_two_success_fixture: dict[str, object],
     writer_activation_fixture: dict[str, object],
