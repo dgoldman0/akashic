@@ -627,6 +627,114 @@ def _depth1_orphan_file_map_patches(
     return tuple(patches.items()), node_physical, bytes(node)
 
 
+def _depth2_orphan_file_map_patches(
+    path: Path,
+    base_patches: tuple[tuple[int, bytes], ...],
+) -> tuple[tuple[tuple[int, bytes], ...], int, int]:
+    """Place the orphan file behind valid depth-2 and depth-1 index nodes."""
+    depth1_patches, leaf_physical, _ = _depth1_orphan_file_map_patches(
+        path,
+        base_patches,
+    )
+    patches = dict(depth1_patches)
+    superblock = patches[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    sectors_per_block = block_size // 512
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, _, inode_offset = _ext4_inode_record(path, orphan_inode_number)
+    inode = bytearray(patches[inode_offset])
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        1,
+    )
+
+    leaf_offset = leaf_physical * block_size
+    leaf = bytearray(patches[leaf_offset])
+    assert struct.unpack_from("<HHHH", leaf, 0)[:2] == (0xF30A, 1)
+    assert struct.unpack_from("<H", leaf, 6)[0] == 0
+    data_blocks = struct.unpack_from("<H", leaf, 16)[0]
+    assert data_blocks > 1
+    data_blocks -= 1
+    struct.pack_into("<H", leaf, 16, data_blocks)
+    leaf = bytearray(
+        _extent_node_with_checksum(
+            superblock,
+            orphan_inode_number,
+            generation,
+            leaf,
+        )
+    )
+
+    index_physical = leaf_physical - 1
+    index_offset = index_physical * block_size
+    assert index_offset not in patches
+    node_max = (block_size - 12) // 12
+    index = bytearray(block_size)
+    struct.pack_into("<HHHHI", index, 0, 0xF30A, 1, node_max, 1, 0)
+    struct.pack_into("<IIHH", index, 12, 0, leaf_physical, 0, 0)
+    index = bytearray(
+        _extent_node_with_checksum(
+            superblock,
+            orphan_inode_number,
+            generation,
+            index,
+        )
+    )
+
+    inode[0x28:0x64] = bytes(60)
+    struct.pack_into("<HHHHI", inode, 0x28, 0xF30A, 1, 4, 2, 0)
+    struct.pack_into("<IIHH", inode, 0x34, 0, index_physical, 0, 0)
+    struct.pack_into("<I", inode, 0x04, data_blocks * block_size)
+    struct.pack_into("<I", inode, 0x6C, 0)
+    inode = bytearray(
+        _inode_with_checksum(
+            superblock,
+            orphan_inode_number,
+            inode,
+        )
+    )
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == (
+        (data_blocks + 2) * sectors_per_block
+    )
+    patches[inode_offset] = bytes(inode)
+    patches[index_offset] = bytes(index)
+    patches[leaf_offset] = bytes(leaf)
+    return tuple(patches.items()), index_physical, leaf_physical
+
+
+def _legacy_orphan_file_map_patches(
+    path: Path,
+    base_patches: tuple[tuple[int, bytes], ...],
+) -> tuple[tuple[int, bytes], ...]:
+    """Replace the orphan inode's extent root with one valid direct block."""
+    patches = dict(base_patches)
+    superblock = patches[1024]
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    sectors_per_block = block_size // 512
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, raw_inode, inode_offset = _ext4_inode_record(path, orphan_inode_number)
+    inode = bytearray(patches.get(inode_offset, raw_inode))
+    first_physical = _extent_root_physical(inode, 0)
+    flags = struct.unpack_from("<I", inode, 0x20)[0]
+    assert flags & 0x0008_0000
+    struct.pack_into("<I", inode, 0x20, flags & ~0x0008_0000)
+    inode[0x28:0x64] = bytes(60)
+    struct.pack_into("<I", inode, 0x28, first_physical)
+    struct.pack_into("<I", inode, 0x04, block_size)
+    struct.pack_into("<I", inode, 0x6C, 0)
+    struct.pack_into("<I", inode, 0x1C, sectors_per_block)
+    struct.pack_into("<H", inode, 0x74, 0)
+    patches[inode_offset] = _inode_with_checksum(
+        superblock,
+        orphan_inode_number,
+        inode,
+    )
+    return tuple(patches.items())
+
+
 def _orphan_xattr_map_alias_patches(
     path: Path,
 ) -> tuple[tuple[tuple[int, bytes], ...], int, int]:
@@ -26386,6 +26494,92 @@ def test_mount_completes_singleton_modern_depth0_orphan_transaction(
     _assert_emitted(output, "EXT4-MODERN-ORPHAN-AUTO-CLEANED")
     assert sum(kind == "write" for kind, _, _ in trace) == 34
     assert sum(kind == "flush" for kind, _, _ in trace) == 24
+
+
+@pytest.mark.parametrize(
+    "map_kind",
+    ("extent-depth2", "legacy-direct"),
+)
+def test_orphan_file_recovery_clamps_unqualified_valid_maps_without_io(
+    canonical_images: dict[str, Path],
+    map_kind: str,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    base_patches = _modern_orphan_patches(path, ())
+    if map_kind == "extent-depth2":
+        patches, _, _ = _depth2_orphan_file_map_patches(path, base_patches)
+    else:
+        assert map_kind == "legacy-direct"
+        patches = _legacy_orphan_file_map_patches(path, base_patches)
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _OFC-IOR CONSTANT _OFC-V"
+            ),
+            "_OFC-V _EXT4-CTX CONSTANT _OFC-CTX",
+            (
+                _forth_conjunction(
+                    [
+                        "_OFC-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED =",
+                        "_OFC-IOR VFS-IOR-DETAIL EXT4-D-RECOVERY =",
+                        "_OFC-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        "_OFC-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_OFC-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-ORPHAN-FILE-MAP-CLAMPED" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-ORPHAN-FILE-MAP-CLAMPED")
+
+
+def test_orphan_file_map_clamp_preserves_corruption_precedence(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    base_patches = _modern_orphan_patches(path, ())
+    patches, index_physical, _ = _depth2_orphan_file_map_patches(
+        path,
+        base_patches,
+    )
+    patch_map = dict(patches)
+    block_size = 1024
+    index_offset = index_physical * block_size
+    damaged_index = bytearray(patch_map[index_offset])
+    damaged_index[100] ^= 0x01
+    patch_map[index_offset] = bytes(damaged_index)
+
+    output = run_forth(
+        path,
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _OFC-IOR CONSTANT _OFC-V"
+            ),
+            "_OFC-V _EXT4-CTX CONSTANT _OFC-CTX",
+            (
+                _forth_conjunction(
+                    [
+                        "_OFC-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+                        "_OFC-IOR VFS-IOR-DETAIL EXT4-D-DATA-MAP =",
+                        "_OFC-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        "_OFC-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_OFC-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-ORPHAN-FILE-MAP-CORRUPT" THEN'
+            ),
+        ],
+        patches=tuple(patch_map.items()),
+    )
+    _assert_emitted(output, "EXT4-ORPHAN-FILE-MAP-CORRUPT")
 
 
 def test_mount_cleans_linked_orphan_with_depth1_orphan_file_map(

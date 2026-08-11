@@ -368,8 +368,13 @@ union count drives one arena-backed location plan, and failed-mount retries
 reuse a sufficient retained allocation rather than consume another monotonic
 arena allocation. The authenticated-empty modern branch completes recovery
 metadata only when both protocols are empty, without changing an orphan inode,
-orphan-file block, or legacy link. A union whose records all fit the supported
-linked map or admitted unlinked deletion shapes is processed as a sequence of sealed one-record
+orphan-file block, or legacy link. Recovery mutation admits the orphan-file
+inode itself only with an extent map of depth zero or one. The generic parser
+first validates a recognized depth-two-through-five extent tree or legacy map
+completely, preserving corruption diagnostics, then a structurally valid wider
+map returns stable `EXT4-D-RECOVERY` unsupported without cleanup or mount
+publication. A union whose records all fit the supported linked map or admitted
+unlinked deletion shapes is processed as a sequence of sealed one-record
 transactions; its count is constrained by authenticated geometry, checked
 arithmetic, and caller-arena capacity rather than a cleanup-specific constant.
 Broader truncate/delete shapes remain refused. Pinned qualification covers
@@ -1648,8 +1653,9 @@ ordered list of prerequisites for the next narrow write slice:
   modern sparse orphan with `i_size = 2^32 + 777` and one initialized extent
   under the unchanged 1,200,000,000-step guard. The corresponding legacy case
   is collected but remains pending.
-  Mutation-side orphan-file qualification now uses that inode's complete
-  read-profile map rather than an inline-root surrogate. A checksum-valid
+  Mutation-side orphan-file qualification fully validates that inode's
+  complete read-profile map rather than trusting an inline-root surrogate,
+  then admits only the qualified depth-0/1 extent subset. A checksum-valid
   depth-1 orphan-file fixture places all 31 logical blocks behind a preserved
   external extent node. Linked production cleanup completes with its existing
   exact 34-write/24-flush trace in 1,111,798,161 guest steps, and the resulting
@@ -1740,8 +1746,9 @@ ordered list of prerequisites for the next narrow write slice:
   with `i_size = 2^32 + 777` completes in
   1,156,337,987 modern and 1,157,813,068 legacy guest steps under a scoped
   1,300,000,000-step watchdog, preserving all seeded data-block payloads while
-  restoring exact allocation accounting. Pinned e2fsck acceptance remains a
-  release-qualification gate for this shape.
+  restoring exact allocation accounting. The focused modern/legacy pair now
+  passes pinned e2fsprogs 1.47.4 `e2fsck -f -n` after rebuilding both
+  production fixtures, completing in 200.43 host seconds.
   Single-indirect qualification separately fills all 12 direct slots and the
   final entry of the 1 KiB pointer block, crossing the old direct-only
   12-block boundary. Its canonical

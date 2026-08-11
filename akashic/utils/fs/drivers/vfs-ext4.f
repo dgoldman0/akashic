@@ -3340,6 +3340,7 @@ VARIABLE _EXT4-OV-TAIL
 VARIABLE _EXT4-OV-STORED
 VARIABLE _EXT4-OV-HI
 VARIABLE _EXT4-OV-SIZE
+VARIABLE _EXT4-OV-DEPTH
 
 : _EXT4-PREPARE-ORPHAN-FILE  ( ctx -- ior )
     DUP _EXT4-OV-CTX ! _EXT4-C.ORPHAN-INO + @ DUP _EXT4-OV-INO !
@@ -3364,10 +3365,20 @@ VARIABLE _EXT4-OV-SIZE
     THEN
     _EXT4-OV-BLOCKS !
     _EXT4-OV-IN @ _EXT4-I.GENERATION + L@ _EXT4-OV-GEN !
+    \ Recovery mutation is qualified only for extent depth zero/one.  Validate
+    \ the complete wider read-profile map before the policy clamp so malformed
+    \ depth-two-through-five or legacy authority remains corrupt rather than
+    \ being mislabeled unsupported.
     _EXT4-OV-IN @ _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL AND IF
-        _EXT4-OV-CTX @ _EXT4-VALIDATE-EXTENT-TREE
+        _EXT4-OV-IN @ _EXT4-I.BLOCK + 6 + W@ _EXT4-OV-DEPTH !
+        _EXT4-OV-CTX @ _EXT4-VALIDATE-EXTENT-TREE ?DUP IF EXIT THEN
+        _EXT4-OV-DEPTH @ 1 U> IF
+            EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+        THEN
+        0
     ELSE
-        _EXT4-OV-CTX @ _EXT4-VALIDATE-LEGACY-MAP
+        _EXT4-OV-CTX @ _EXT4-VALIDATE-LEGACY-MAP ?DUP IF EXIT THEN
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED
     THEN ;
 
 \ Read one mapped orphan-file block and authenticate its physical-location-

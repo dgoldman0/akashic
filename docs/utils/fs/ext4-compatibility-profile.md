@@ -851,6 +851,13 @@ uniqueness, including modern duplicates and cross-protocol reuse, while the
 bounded legacy walk independently rejects cycles. Every referenced inode and
 applicable data map is then authenticated.
 
+The recovery baseline admits the orphan-file inode itself only with an extent
+map of depth zero or one. A recognized depth-two-through-five extent tree or
+legacy map is still validated completely so malformed authority remains
+corruption; a structurally valid wider map then returns stable
+`EXT4-D-RECOVERY` unsupported before cleanup or mount publication. This clamp
+applies to recovery mutation authority, not to the generic read mapper.
+
 Before its first cleanup write, mount authenticates and exactly measures every
 record in the complete union. Each record must be either a linked truncation
 already at zero size whose data map is an inline depth-zero extent root or an
@@ -1088,9 +1095,10 @@ production cleanup with
 guest steps under a scoped 1,300,000,000-step watchdog and leaves released
 payload bytes unchanged. A maximum-union stage/abort regression adds the
 separate unique external-xattr block and exercises all 13 owner ranges in
-577,776,029 steps. Pinned e2fsck acceptance remains a release gate for this
-shape; the baseline audit must close it or clamp the shape to stable refusal. A
-separate single-indirect tier fills all 12 direct slots plus the final
+577,776,029 steps. The focused modern/legacy pair now passes pinned
+e2fsprogs 1.47.4 `e2fsck -f -n` after rebuilding both production cleanup
+fixtures, completing in 200.43 host seconds. A separate single-indirect tier
+fills all 12 direct slots plus the final
 1 KiB pointer entry, retains data then pointer-node authority, stages the exact
 node revoke, and rejects a node/data self-alias. With the larger shared
 mutation workspace, focused modern production releases three data blocks plus
@@ -1247,8 +1255,11 @@ exact 34-write/24-flush trace, completes in 1,111,798,161 steps, and reaches a
 zero-I/O byte-stable remount in 67,492,163; unlinked JFI admission completes
 without writes in 240,654,652. A valid external xattr simultaneously named as
 orphan-file preallocation is rejected as a corrupt data map in 121,741,936
-steps with no residual ownership scope. Unified discovery and cleanup also has
-focused evidence for unique external-xattr deletion: direct stage/seal/abort
+steps with no residual ownership scope. Valid depth-2 extent and legacy
+orphan-file maps are now fully validated and then refused without I/O; a
+checksum-damaged depth-2 index remains corrupt. Unified discovery and cleanup
+also has focused evidence for unique external-xattr deletion: direct
+stage/seal/abort
 passes for xattr-only and data-plus-xattr targets, and one modern
 data-plus-xattr production mount reaches checkpoint with canonical allocation
 accounting. Shared-xattr evidence now covers exact EA-only and data-plus-EA
