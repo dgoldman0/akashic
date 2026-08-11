@@ -36282,8 +36282,17 @@ def test_staged_write_callback_composes_with_generic_vfs_cursor(
         backing.unlink(missing_ok=True)
 
 
-def test_staged_write_exact_composes_overwrite_then_hole(
-    writer_activation_fixture: dict[str, object], tmp_path: Path
+@pytest.mark.parametrize(
+    "direction",
+    (
+        pytest.param("overwrite-then-hole", id="overwrite-to-hole"),
+        pytest.param("hole-then-overwrite", id="hole-to-overwrite"),
+    ),
+)
+def test_staged_write_exact_composes_hole_and_overwrite_transitions(
+    writer_activation_fixture: dict[str, object],
+    tmp_path: Path,
+    direction: str,
 ) -> None:
     path = writer_activation_fixture["image"]
     source_patches = writer_activation_fixture["source_patches"]
@@ -36303,7 +36312,6 @@ def test_staged_write_exact_composes_overwrite_then_hole(
     assert block_size == 1024
     assert not _ext4_block_allocation_state(path, (candidate,))[candidate]
 
-    write_offset = block_size - 8
     source_bytes = block_size + 8
     exact_byte = 0x59
     epoch_ms = 3_000_000_123_456
@@ -36316,12 +36324,31 @@ def test_staged_write_exact_composes_overwrite_then_hole(
         source.seek(third_data_block * block_size)
         original_third = source.read(block_size)
     assert len(original_first) == len(original_third) == block_size
-    expected_first = bytearray(original_first)
-    expected_first[write_offset:] = bytes((exact_byte,)) * 8
     expected_hole = bytes((exact_byte,)) * block_size
-    expected_third = original_third
+    expected_first = bytearray(original_first)
+    expected_third = bytearray(original_third)
+    if direction == "overwrite-then-hole":
+        write_offset = block_size - 8
+        expected_first[write_offset:] = bytes((exact_byte,)) * 8
+        expected_final_count = block_size
+        expected_final_offset = block_size
+        expected_final_chunk = block_size
+        expected_final_allocation = "_EXT4-MOW-SOURCE @ 0<"
+        expected_first_writes = 1
+        expected_third_writes = 0
+    else:
+        assert direction == "hole-then-overwrite"
+        write_offset = block_size
+        expected_third[:8] = bytes((exact_byte,)) * 8
+        expected_final_count = 8
+        expected_final_offset = 2 * block_size
+        expected_final_chunk = 8
+        expected_final_allocation = "_EXT4-MOW-SOURCE @ 0>"
+        expected_first_writes = 0
+        expected_third_writes = 1
 
-    backing = tmp_path / "vfs-generic-positive-hole-exact.img"
+    marker = f"EXT4-GENERIC-VFS-{direction.upper()}"
+    backing = tmp_path / f"vfs-generic-{direction}-exact.img"
     try:
         output, trace, _ = run_recovery_forth(
             path,
@@ -36407,10 +36434,10 @@ def test_staged_write_exact_composes_overwrite_then_hole(
                             "_GX-WRITER _EXT4-JWR-IDLE-CLEAN?",
                             "_GX-MAIN-AFTER _GX-MAIN-CLEAN =",
                             "_GX-PROFILE-AFTER _GX-PROFILE-USED =",
-                            f"_EXT4-WR-COUNT @ {block_size} =",
-                            f"_EXT4-WR-OFFSET @ {block_size} =",
-                            f"_EXT4-WR-CHUNK @ {block_size} =",
-                            "_EXT4-MOW-SOURCE @ 0<",
+                            f"_EXT4-WR-COUNT @ {expected_final_count} =",
+                            f"_EXT4-WR-OFFSET @ {expected_final_offset} =",
+                            f"_EXT4-WR-CHUNK @ {expected_final_chunk} =",
+                            expected_final_allocation,
                             f"_XH-CANDIDATE @ {candidate} =",
                             (
                                 "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
@@ -36419,7 +36446,7 @@ def test_staged_write_exact_composes_overwrite_then_hole(
                             "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
                         ]
                     )
-                    + ' IF ." EXT4-GENERIC-VFS-OVERWRITE-HOLE" THEN'
+                    + f' IF ." {marker}" THEN'
                 ),
                 "_GX-FD VFS-CLOSE? CONSTANT _GX-CLOSE-IOR",
                 "0 _GX-V VFS-UNMOUNT CONSTANT _GX-UNMOUNT-IOR",
@@ -36428,19 +36455,23 @@ def test_staged_write_exact_composes_overwrite_then_hole(
                     "_GX-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
                     "_GX-PROFILE-ARENA ARENA-USED 0= AND "
                     "_GX-PROFILE-ARENA A.PTR @ _GX-PROFILE-BASE = AND "
-                    'IF ." EXT4-GENERIC-VFS-OVERWRITE-HOLE-UNMOUNT" THEN'
+                    f'IF ." {marker}-UNMOUNT" THEN'
                 ),
             ],
             patches=source_patches
             + ((candidate * block_size, bytes((0xA5,)) * block_size),),
             capture_media=backing,
         )
-        _assert_emitted(output, "EXT4-GENERIC-VFS-OVERWRITE-HOLE")
-        _assert_emitted(output, "EXT4-GENERIC-VFS-OVERWRITE-HOLE-UNMOUNT")
+        _assert_emitted(output, marker)
+        _assert_emitted(output, f"{marker}-UNMOUNT")
         assert trace[: len(activation_trace)] == activation_trace
-        assert trace.count(("write", first_data_block * 2, 2)) == 1
+        assert trace.count(("write", first_data_block * 2, 2)) == (
+            expected_first_writes
+        )
         assert trace.count(("write", candidate * 2, 2)) == 1
-        assert trace.count(("write", third_data_block * 2, 2)) == 0
+        assert trace.count(("write", third_data_block * 2, 2)) == (
+            expected_third_writes
+        )
         assert trace.count(("write", bitmap_home * 2, 2)) == 1
         assert trace.count(("write", gdt_home * 2, 2)) == 1
         assert trace.count(("write", inode_home * 2, 2)) == 2
@@ -36454,7 +36485,7 @@ def test_staged_write_exact_composes_overwrite_then_hole(
             source.seek(candidate * block_size)
             assert source.read(block_size) == expected_hole
             source.seek(third_data_block * block_size)
-            assert source.read(block_size) == expected_third
+            assert source.read(block_size) == bytes(expected_third)
     finally:
         backing.unlink(missing_ok=True)
 
