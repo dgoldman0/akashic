@@ -1529,10 +1529,13 @@ successful allocation publication. A positive `4/1/0` exact journey now
 composes the initialized eight-byte suffix and the following complete logical
 hole as two transactions through one writer, advances the cursor to 2,048,
 publishes the second timestamp and new block count, and leaves the later
-initialized block untouched. The subsequent hole-to-initialized 4-to-1 credit
-transition remains a separate focused qualification item; it is not required
-for the two landed operations to function independently. The callback contract
-makes no mixed-route atomicity claim.
+initialized block untouched. Its paired reverse journey fills the complete
+hole first, then overwrites eight bytes at the start of the following
+initialized block through the same writer. It advances the cursor to 2,056,
+writes only the candidate and following data homes, publishes the second clock
+sample, and finishes with the initialized-overwrite callback geometry. Together
+the tests qualify both `1/1/0 -> 4/1/0` and `4/1/0 -> 1/1/0` transitions. The
+callback contract makes no mixed-route atomicity claim.
 
 The same staged binding qualifies generic fault propagation. An ordered-data
 tear during a 24-byte `VFS-WRITE?` at offset 500 changes 18 raw caller bytes
