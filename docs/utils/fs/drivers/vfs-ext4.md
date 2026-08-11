@@ -379,6 +379,26 @@ journeys were respectively 166,679,303 + 39,640,092; 898,232,073;
 24,516,008 steps. These representative gates qualify the shared checksum
 cutover without reopening the full orphan or power-cut matrix.
 
+A controlled paired benchmark compared the pre-cutover `d44323f` with current
+`d08537d` (the executable cutover is `3efc593`) on the same MegaPad accelerator,
+host, canonical image, pinned e2fsprogs prefix, and two-test pytest process. The
+base snapshot was identical at 135,845,261 steps in both runs.
+
+| Measured phase | `d44323f` software CRC | Hardware CRC | Change |
+| --- | ---: | ---: | ---: |
+| Checksum + ext4 cold source | 922,146,018 | 837,006,377 | -9.23% |
+| Superblock-corruption refusal | 39,184,937 | 24,516,008 | -37.44% |
+| Checksum-v3 recovery | 228,448,399 | 166,679,303 | -27.04% |
+| Recovered-image mount/read | 54,971,663 | 39,640,092 | -27.89% |
+| Runtime journey subtotal | 322,604,999 | 230,835,403 | -28.45% |
+
+The complete pytest process fell from 56.74 to 52.44 seconds (-7.58%). Guest
+steps are the primary deterministic comparison; host scheduling, fixed snapshot
+construction, Python setup, and external-tool work dilute the wall-time change.
+Across source loading and the three measured guest journeys, total guest work
+fell 14.21%. This paired result demonstrates a real speedup on the sampled
+checksum-heavy ext4 paths, not merely absence of a regression.
+
 Known refused feature bits return format-domain `VFS-R-UNSUPPORTED` with
 `EXT4-D-FEATURE`. `ORPHAN_PRESENT` and a nonzero `s_last_orphan` are admitted
 through any required committed-journal replay and strict reload for
