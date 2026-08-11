@@ -720,6 +720,27 @@ members remain separate, and a merged run still chunks exactly at group
 boundaries. This changes neither the ordered authority vector nor its sealed
 checkpoint representation.
 
+`_EXT4-JTX-STAGE-ALLOCATE-BLOCK` is the inverse accounting primitive for one
+exact ordinary data block. It requires the selected physical block to be in
+bounds, outside every journal/static metadata role, and clear in both the
+checksum-authenticated raw bitmap and the transaction's effective bitmap.
+The initialized group must retain a positive bounded free count, its effective
+descriptor must authenticate the same bitmap home and checksum, and the
+primary super must retain a positive bounded global count. Only after all of
+those checks succeed does the builder set the bit, decrement both counters,
+replace the bitmap checksum, and restamp the descriptor and super checksums.
+The retained homes are the exact bitmap, primary GDT block, and primary-super
+home; context caches remain media-derived until reload. Any failure after the
+first replacement aborts and scrubs the transaction.
+
+This primitive deliberately does not choose storage or make a file map point
+at it. Its caller must perform geometry-derived free-block selection, complete
+reverse-owner proof, ordered full-block initialization, extent insertion,
+`i_blocks` accounting, and inode checksum work in one enclosing transaction.
+Keeping those authorities separate lets the allocator be tested exactly while
+preventing allocation accounting alone from being mistaken for a complete
+user-visible write operation.
+
 Mutation-side admission also has reusable authorities beyond that free-only
 builder. `_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER` scans every authenticated allocated
 inode and proves that an arbitrary nonempty physical range is mapped only by

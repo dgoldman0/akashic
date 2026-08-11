@@ -30019,6 +30019,351 @@ def test_typed_free_block_range_afterimages_compose_and_abort_without_io(
     _assert_emitted(output, "EXT4-TYPED-FREE-ABORTED")
 
 
+def test_typed_allocate_block_afterimages_are_exact_and_abort_without_io(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    block_size = 1024
+    physical_block = 1351
+    bitmap_home = 259
+    gdt_home = 2
+    super_home = 1
+    with path.open("rb") as source:
+        source.seek(1024)
+        superblock = source.read(1024)
+    assert len(superblock) == 1024
+    assert 1024 << struct.unpack_from("<I", superblock, 0x18)[0] == block_size
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    group, block_index = divmod(
+        physical_block - first_data, blocks_per_group
+    )
+    assert group == 0
+
+    def read_block(block: int) -> bytearray:
+        with path.open("rb") as source:
+            source.seek(block * block_size)
+            result = bytearray(source.read(block_size))
+        assert len(result) == block_size
+        return result
+
+    expected_bitmap = read_block(bitmap_home)
+    byte_index, bit_index = divmod(block_index, 8)
+    assert not expected_bitmap[byte_index] & (1 << bit_index)
+    expected_bitmap[byte_index] |= 1 << bit_index
+    bitmap_checksum = _crc32c_raw(expected_bitmap, seed)
+
+    expected_gdt = read_block(gdt_home)
+    descriptor_offset = group * 64 % block_size
+    descriptor = bytearray(
+        expected_gdt[descriptor_offset : descriptor_offset + 64]
+    )
+    group_free_before = struct.unpack_from("<H", descriptor, 0x0C)[0] | (
+        struct.unpack_from("<H", descriptor, 0x2C)[0] << 16
+    )
+    assert group_free_before > 0
+    group_free_after = group_free_before - 1
+    struct.pack_into("<H", descriptor, 0x0C, group_free_after & 0xFFFF)
+    struct.pack_into("<H", descriptor, 0x2C, group_free_after >> 16)
+    struct.pack_into("<H", descriptor, 0x18, bitmap_checksum & 0xFFFF)
+    struct.pack_into("<H", descriptor, 0x38, bitmap_checksum >> 16)
+    descriptor = bytearray(
+        _group_descriptor_with_checksum(superblock, descriptor, group)
+    )
+    descriptor_checksum = struct.unpack_from("<H", descriptor, 0x1E)[0]
+    expected_gdt[descriptor_offset : descriptor_offset + 64] = descriptor
+
+    expected_super_home = read_block(super_home)
+    staged_super = bytearray(expected_super_home)
+    super_free_before = struct.unpack_from("<I", staged_super, 0x0C)[0]
+    assert super_free_before > 0
+    super_free_after = super_free_before - 1
+    struct.pack_into("<I", staged_super, 0x0C, super_free_after)
+    struct.pack_into("<I", staged_super, 0x158, 0)
+    staged_super = bytearray(_ext4_super_with_checksum(staged_super))
+    super_checksum = struct.unpack_from("<I", staged_super, 0x3FC)[0]
+    expected_super_home[:] = staged_super
+
+    expected_bitmap_crc = _crc32c_raw(expected_bitmap)
+    expected_gdt_crc = _crc32c_raw(expected_gdt)
+    expected_super_crc = _crc32c_raw(expected_super_home)
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _AB-MOUNT-IOR CONSTANT _AB-V"
+            ),
+            "_AB-V _EXT4-CTX CONSTANT _AB-CTX",
+            (
+                "_AB-CTX _EXT4-C.FREE-BLOCKS + @ "
+                "CONSTANT _AB-CONTEXT-FREE"
+            ),
+            (
+                "3 0 0 _AB-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _AB-WRITER-IOR CONSTANT _AB-WRITER"
+            ),
+            "_AB-WRITER _EXT4-JWR.FREE + @ CONSTANT _AB-FREE-BEFORE",
+            (
+                "3 0 0 _AB-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _AB-TX-IOR CONSTANT _AB-TX"
+            ),
+            (
+                f"{physical_block} _AB-TX "
+                "_EXT4-JTX-STAGE-ALLOCATE-BLOCK CONSTANT _AB-STAGE-IOR"
+            ),
+            "0 _AB-WRITER _EXT4-JWR-META-IMAGE CONSTANT _AB-BITMAP",
+            "1 _AB-WRITER _EXT4-JWR-META-IMAGE CONSTANT _AB-GDT",
+            "2 _AB-WRITER _EXT4-JWR-META-IMAGE CONSTANT _AB-SUPER",
+            (
+                _forth_conjunction(
+                    [
+                        "_AB-MOUNT-IOR 0=",
+                        "_AB-WRITER-IOR 0=",
+                        "_AB-TX-IOR 0=",
+                        "_AB-STAGE-IOR 0=",
+                        "_AB-WRITER _EXT4-JWR.META-USED + @ 3 =",
+                        "_AB-WRITER _EXT4-JWR.META-ACTIVE + @ 3 =",
+                        "_AB-WRITER _EXT4-JTX-TABLES-VALID?",
+                        (
+                            "0 _AB-WRITER _EXT4-JWR-META-ENTRY @ "
+                            f"{bitmap_home} ="
+                        ),
+                        (
+                            "1 _AB-WRITER _EXT4-JWR-META-ENTRY @ "
+                            f"{gdt_home} ="
+                        ),
+                        (
+                            "2 _AB-WRITER _EXT4-JWR-META-ENTRY @ "
+                            f"{super_home} ="
+                        ),
+                        (
+                            f"_AB-BITMAP {block_index} 1 "
+                            "_EXT4-BIT-RANGE-SET?"
+                        ),
+                        (
+                            f"_AB-GDT {descriptor_offset} + "
+                            "_EXT4-GD.FREE-BLOCKS-LO + W@ "
+                            f"{group_free_after & 0xFFFF} ="
+                        ),
+                        (
+                            f"_AB-GDT {descriptor_offset} + "
+                            "_EXT4-GD.FREE-BLOCKS-HI + W@ "
+                            f"{group_free_after >> 16} ="
+                        ),
+                        (
+                            f"_AB-GDT {descriptor_offset} + "
+                            "_EXT4-GD.BLOCK-CSUM-LO + W@ "
+                            f"{bitmap_checksum & 0xFFFF} ="
+                        ),
+                        (
+                            f"_AB-GDT {descriptor_offset} + "
+                            "_EXT4-GD.BLOCK-CSUM-HI + W@ "
+                            f"{bitmap_checksum >> 16} ="
+                        ),
+                        (
+                            f"_AB-GDT {descriptor_offset} + "
+                            "_EXT4-GD.CHECKSUM + W@ "
+                            f"{descriptor_checksum} ="
+                        ),
+                        (
+                            "_AB-SUPER _EXT4-SB.FREE-BLOCKS-LO + L@ "
+                            f"{super_free_after} ="
+                        ),
+                        "_AB-SUPER _EXT4-SB.FREE-BLOCKS-HI + L@ 0=",
+                        (
+                            "_AB-SUPER _EXT4-SB.CHECKSUM + L@ "
+                            f"{super_checksum} ="
+                        ),
+                        (
+                            "_AB-BITMAP _AB-WRITER _EXT4-JTX-IMAGE-CRC "
+                            f"{expected_bitmap_crc} ="
+                        ),
+                        (
+                            "_AB-GDT _AB-WRITER _EXT4-JTX-IMAGE-CRC "
+                            f"{expected_gdt_crc} ="
+                        ),
+                        (
+                            "_AB-SUPER _AB-WRITER _EXT4-JTX-IMAGE-CRC "
+                            f"{expected_super_crc} ="
+                        ),
+                        (
+                            "_AB-CTX _EXT4-C.FREE-BLOCKS + @ "
+                            "_AB-CONTEXT-FREE ="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-ALLOCATE-AFTERIMAGES" THEN'
+            ),
+            "_AB-TX _EXT4-JTX-ABORT CONSTANT _AB-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_AB-ABORT-IOR 0=",
+                        (
+                            "_AB-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        (
+                            "_AB-WRITER _EXT4-JWR.FREE + @ "
+                            "_AB-FREE-BEFORE ="
+                        ),
+                        "_AB-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_AB-WRITER _EXT4-JWR.META-IMAGES + @ C@ 0=",
+                        "_AB-WRITER _EXT4-JWR.SCRATCH-A + @ C@ 0=",
+                        "_AB-WRITER _EXT4-JWR.SCRATCH-B + @ C@ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-ALLOCATE-ABORTED" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-TYPED-ALLOCATE-AFTERIMAGES")
+    _assert_emitted(output, "EXT4-TYPED-ALLOCATE-ABORTED")
+
+
+def test_typed_allocate_block_refuses_invalid_claims_and_aborts_late_nospc(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    with path.open("rb") as source:
+        source.seek(1024)
+        superblock = source.read(1024)
+    block_count = struct.unpack_from("<I", superblock, 0x04)[0]
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _AR-MOUNT-IOR CONSTANT _AR-V"
+            ),
+            "_AR-V _EXT4-CTX CONSTANT _AR-CTX",
+            (
+                "3 0 0 _AR-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _AR-WRITER-IOR CONSTANT _AR-WRITER"
+            ),
+            "_AR-WRITER _EXT4-JWR.FREE + @ CONSTANT _AR-FREE-BEFORE",
+            (
+                "3 0 0 _AR-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _AR-TX-IOR CONSTANT _AR-TX"
+            ),
+            (
+                f"{block_count} _AR-TX _EXT4-JTX-STAGE-ALLOCATE-BLOCK "
+                "CONSTANT _AR-BOUND-IOR"
+            ),
+            (
+                "1346 _AR-TX _EXT4-JTX-STAGE-ALLOCATE-BLOCK "
+                "CONSTANT _AR-USED-IOR"
+            ),
+            (
+                "259 _AR-TX _EXT4-JTX-STAGE-ALLOCATE-BLOCK "
+                "CONSTANT _AR-STATIC-IOR"
+            ),
+            (
+                "16385 _AR-TX _EXT4-JTX-STAGE-ALLOCATE-BLOCK "
+                "CONSTANT _AR-JOURNAL-IOR"
+            ),
+            (
+                "1351 _AR-TX _EXT4-JTX-STAGE-ALLOCATE-BLOCK "
+                "CONSTANT _AR-FIRST-IOR"
+            ),
+            (
+                "0 _AR-WRITER _EXT4-JWR-META-ENTRY 2 CELLS + @ "
+                "CONSTANT _AR-CRC0"
+            ),
+            (
+                "1 _AR-WRITER _EXT4-JWR-META-ENTRY 2 CELLS + @ "
+                "CONSTANT _AR-CRC1"
+            ),
+            (
+                "2 _AR-WRITER _EXT4-JWR-META-ENTRY 2 CELLS + @ "
+                "CONSTANT _AR-CRC2"
+            ),
+            (
+                "1351 _AR-TX _EXT4-JTX-STAGE-ALLOCATE-BLOCK "
+                "CONSTANT _AR-DUP-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_AR-MOUNT-IOR 0=",
+                        "_AR-WRITER-IOR 0=",
+                        "_AR-TX-IOR 0=",
+                        (
+                            "_AR-BOUND-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-BOUNDS ="
+                        ),
+                        (
+                            "_AR-USED-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        (
+                            "_AR-STATIC-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        (
+                            "_AR-JOURNAL-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-JOURNAL ="
+                        ),
+                        "_AR-FIRST-IOR 0=",
+                        "_AR-DUP-IOR VFS-E-CONFLICT =",
+                        "_AR-WRITER _EXT4-JWR.META-USED + @ 3 =",
+                        "_AR-WRITER _EXT4-JWR.META-ACTIVE + @ 3 =",
+                        "_AR-WRITER _EXT4-JTX-TABLES-VALID?",
+                        (
+                            "0 _AR-WRITER _EXT4-JWR-META-ENTRY "
+                            "2 CELLS + @ _AR-CRC0 ="
+                        ),
+                        (
+                            "1 _AR-WRITER _EXT4-JWR-META-ENTRY "
+                            "2 CELLS + @ _AR-CRC1 ="
+                        ),
+                        (
+                            "2 _AR-WRITER _EXT4-JWR-META-ENTRY "
+                            "2 CELLS + @ _AR-CRC2 ="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-ALLOCATE-REFUSALS" THEN'
+            ),
+            "_AR-TX _EXT4-JTX-ABORT CONSTANT _AR-ABORT-IOR",
+            (
+                "2 0 0 _AR-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _AR-SMALL-TX-IOR CONSTANT _AR-SMALL-TX"
+            ),
+            (
+                "1351 _AR-SMALL-TX _EXT4-JTX-STAGE-ALLOCATE-BLOCK "
+                "CONSTANT _AR-SMALL-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_AR-ABORT-IOR 0=",
+                        "_AR-SMALL-TX-IOR 0=",
+                        "_AR-SMALL-IOR VFS-E-NOSPC =",
+                        (
+                            "_AR-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_AR-WRITER _EXT4-JWR.FAULT + @ 0=",
+                        "_AR-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        (
+                            "_AR-WRITER _EXT4-JWR.FREE + @ "
+                            "_AR-FREE-BEFORE ="
+                        ),
+                        "_AR-WRITER _EXT4-JWR.SCRATCH-A + @ C@ 0=",
+                        "_AR-WRITER _EXT4-JWR.SCRATCH-B + @ C@ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-ALLOCATE-LATE-NOSPC" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-TYPED-ALLOCATE-REFUSALS")
+    _assert_emitted(output, "EXT4-TYPED-ALLOCATE-LATE-NOSPC")
+
+
 @pytest.mark.parametrize(
     ("image_id", "valid_block", "free_block", "bitmap_home", "journal_home"),
     (
