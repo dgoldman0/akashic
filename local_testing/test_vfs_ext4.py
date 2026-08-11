@@ -35,6 +35,7 @@ from devices import (  # noqa: E402
 )
 
 
+CRC_F = ROOT / "akashic" / "math" / "crc.f"
 EXT4_F = ROOT / "akashic" / "utils" / "fs" / "drivers" / "vfs-ext4.f"
 MANIFEST = ROOT / "local_testing" / "fixtures" / "ext4-profile" / "manifest.json"
 IMAGE_DIR = ROOT / "local_testing" / "out" / "ext4-profile"
@@ -3594,7 +3595,7 @@ def _activation_resolved_mount_lines(
             "_AR-CTX _EXT4-C.SUPER-TORN + @ 0= AND "
             "_AR-CTX _EXT4-C.J.PRIMARY-TORN + @ 0= AND "
             "_AR-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
-            "_AR-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+            "_AR-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? 0= AND AND "
             "_AR-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
             "_EXT4-INCOMPAT-RECOVER AND 0= AND "
             f'IF ." {marker}" THEN'
@@ -3946,10 +3947,14 @@ def build_snapshot():
     # physical line there, then execute an IMMEDIATE checked-evaluator shim so
     # multi-line definitions retain their compiler state without transmitting
     # the source itself through the UART.
-    source_ready = "EXT4-SOURCE-READY"
-    lines = [*_compact_source_load_lines(
+    crc_source_ready = "CRC-SOURCE-READY"
+    ext4_source_ready = "EXT4-SOURCE-READY"
+    crc_lines = _compact_source_load_lines(
+        fat_harness._load_forth_lines(str(CRC_F))
+    )
+    ext4_lines = _compact_source_load_lines(
         fat_harness._load_forth_lines(str(EXT4_F))
-    ), f'." {source_ready}"']
+    )
 
     system = fat_harness.MegapadSystem(
         ram_size=1024 * 1024,
@@ -3994,49 +3999,77 @@ def build_snapshot():
             "IMMEDIATE",
         ]
     ).encode() + b"\n"
-    # Coalescing adds the checked depth-zero extent edit without changing the
-    # loader's geometry.  Keep a small measured source-build margin rather
-    # than turning implementation size into an accidental capability limit.
-    max_source_steps = 925_000_000
-    source_steps = _feed_until_idle(system, bootstrap, max_source_steps)
-    source_lines_loaded = 0
-    uart_offset = len(uart)
-    for line in lines:
-        encoded = line.encode()
-        assert len(encoded) <= 255
-        if source_steps >= max_source_steps:
-            break
-        system.load_binary(source_addr, encoded)
-        system.load_binary(source_size_addr, bytes([len(encoded)]))
-        source_steps += _feed_until_idle(
-            system,
-            b"_EXT4-SOURCE-LINE\n",
-            max_source_steps - source_steps,
-        )
-        source_lines_loaded += 1
-        new_output = fat_harness.uart_text(uart[uart_offset:])
+    # Qualify the newly required hardware CRC module and the ext4 driver as
+    # distinct cold source stages.  This preserves the existing measured ext4
+    # watchdog instead of hiding dependency compilation inside a larger cap.
+    max_crc_source_steps = 150_000_000
+    max_ext4_source_steps = 925_000_000
+    bootstrap_steps = _feed_until_idle(system, bootstrap, max_crc_source_steps)
+
+    def load_source_stage(
+        stage: str,
+        stage_lines: list[str],
+        ready_marker: str,
+        max_steps: int,
+        initial_steps: int = 0,
+    ) -> int:
+        lines = [*stage_lines, f'." {ready_marker}"']
+        source_steps = initial_steps
+        source_lines_loaded = 0
         uart_offset = len(uart)
-        if "[EXT4-SOURCE-STATUS" in new_output:
-            break
-    if source_steps < max_source_steps:
-        source_steps += _feed_until_idle(
-            system,
-            b"_EXT4-SOURCE-FINISH\n",
-            max_source_steps - source_steps,
+        for line in lines:
+            encoded = line.encode()
+            assert len(encoded) <= 255
+            if source_steps >= max_steps:
+                break
+            system.load_binary(source_addr, encoded)
+            system.load_binary(source_size_addr, bytes([len(encoded)]))
+            source_steps += _feed_until_idle(
+                system,
+                b"_EXT4-SOURCE-LINE\n",
+                max_steps - source_steps,
+            )
+            source_lines_loaded += 1
+            new_output = fat_harness.uart_text(uart[uart_offset:])
+            uart_offset = len(uart)
+            if "[EXT4-SOURCE-STATUS" in new_output:
+                break
+        if source_steps < max_steps:
+            source_steps += _feed_until_idle(
+                system,
+                b"_EXT4-SOURCE-FINISH\n",
+                max_steps - source_steps,
+            )
+        transcript = fat_harness.uart_text(uart)
+        _assert_no_forth_diagnostics(transcript)
+        assert f"\r\n{ready_marker} ok\r\n" in transcript, (
+            f"{stage} source load exceeded its checked-in step budget "
+            f"after {source_lines_loaded}/{len(lines)} packed lines and "
+            f"{source_steps}/{max_steps} steps:\n"
+            + transcript[-4000:]
         )
-    transcript = fat_harness.uart_text(uart)
-    _assert_no_forth_diagnostics(transcript)
-    assert f"\r\n{source_ready} ok\r\n" in transcript, (
-        "ext4 source load exceeded its checked-in step budget "
-        f"after {source_lines_loaded}/{len(lines)} packed lines and "
-        f"{source_steps}/{max_source_steps} steps:\n"
-        + transcript[-4000:]
+        return source_steps
+
+    crc_source_steps = load_source_stage(
+        "CRC",
+        crc_lines,
+        crc_source_ready,
+        max_crc_source_steps,
+        bootstrap_steps,
+    )
+    ext4_source_steps = load_source_stage(
+        "ext4",
+        ext4_lines,
+        ext4_source_ready,
+        max_ext4_source_steps,
     )
     if os.environ.get("EXT4_REPORT_STEPS"):
         print(
-            "[*] ext4 cold source load: "
-            f"{source_steps:,}/{max_source_steps:,} steps "
-            f"across {source_lines_loaded:,} packed lines"
+            "[*] CRC/ext4 cold source load: "
+            f"CRC={crc_source_steps:,}/{max_crc_source_steps:,} steps "
+            f"across {len(crc_lines):,} packed lines; "
+            f"ext4={ext4_source_steps:,}/{max_ext4_source_steps:,} steps "
+            f"across {len(ext4_lines):,} packed lines"
         )
 
     _snapshot = (
@@ -4055,6 +4088,8 @@ def run_forth(
     patches: tuple[tuple[int, bytes], ...] = (),
     storage_faults: tuple[dict, ...] = (),
     max_steps: int = 800_000_000,
+    configure=None,
+    expected_read_requests: int | None = None,
 ) -> str:
     """Run against a COW mapping so even the 512 MiB fixture stays bounded."""
     bios, memory, cpu_state, ext_memory = build_snapshot()
@@ -4073,6 +4108,8 @@ def run_forth(
     system.cpu.mem[: len(memory)] = memory
     system._ext_mem[: len(ext_memory)] = ext_memory
     fat_harness.restore_cpu_state(system.cpu, cpu_state)
+    if configure is not None:
+        configure(system)
 
     with image.open("rb") as source, mmap.mmap(
         source.fileno(), 0, access=mmap.ACCESS_COPY
@@ -4081,15 +4118,18 @@ def run_forth(
             mapped[offset : offset + len(data)] = data
         system.storage._replace_media(mapped, str(image))
         system.storage.write_protected = False
+        read_requests = 0
         write_requests = 0
         flush_requests = 0
         start_dma = system.storage._start_dma
         run_flush = system.storage._run_flush
 
         def track_dma(request, phase):
-            nonlocal write_requests
+            nonlocal read_requests, write_requests
             if phase == "write":
                 write_requests += 1
+            elif phase == "read":
+                read_requests += 1
             return start_dma(request, phase)
 
         def track_flush(request):
@@ -4123,6 +4163,8 @@ def run_forth(
             )
         assert write_requests == 0
         assert flush_requests == 0
+        if expected_read_requests is not None:
+            assert read_requests == expected_read_requests
         _assert_emitted(output, "EXT4-STACK-CLEAN")
         return output
 
@@ -8106,6 +8148,45 @@ def test_jbd2_writer_staging_coalesces_and_cancels_without_io(
                 "CONSTANT _JST-T-IOR CONSTANT _JST-T"
             ),
             "_JST-W _EXT4-JWR.LOG-RESERVED + @ CONSTANT _JST-LOG",
+            (
+                ": _JST-CRC-BUSY? DUP VFS-IOR-REASON VFS-R-BUSY = "
+                "OVER VFS-IOR-DOMAIN VFS-IOR-D-BINDING = AND "
+                "OVER VFS-IOR-DETAIL 2 = AND SWAP VFS-IOR-FLAGS "
+                "VFS-IOR-F-RETRYABLE AND 0<> AND ;"
+            ),
+            "CREATE _JST-BUSY-BEFORE _JST-BYTES ALLOT",
+            "_JST-W _JST-BUSY-BEFORE _JST-BYTES CMOVE",
+            "CRC-MODE-CRC32 CRC-MODE! THROW CRC-RESET THROW",
+            "_JST-M1 @ CRC-FEED THROW",
+            "CRC@ DROP CONSTANT _JST-BUSY-OWNER-RAW",
+            (
+                "_JST-M1 40 _JST-T _EXT4-JTX-META-PUT "
+                "CONSTANT _JST-BUSY-META-IOR"
+            ),
+            (
+                "_JST-W _JST-BUSY-BEFORE _JST-BYTES _EXT4-BYTES=? "
+                "CONSTANT _JST-BUSY-META-SAME"
+            ),
+            (
+                "_JST-D1 41 _JST-T _EXT4-JTX-DATA-PUT "
+                "CONSTANT _JST-BUSY-DATA-IOR"
+            ),
+            (
+                "_JST-W _JST-BUSY-BEFORE _JST-BYTES _EXT4-BYTES=? "
+                "CONSTANT _JST-BUSY-DATA-SAME"
+            ),
+            (
+                "CRC@ 0= SWAP _JST-BUSY-OWNER-RAW = AND "
+                "CONSTANT _JST-BUSY-OWNER-SAME"
+            ),
+            "CRC-FINAL@ DROP",
+            (
+                "_JST-BUSY-META-IOR _JST-CRC-BUSY? "
+                "_JST-BUSY-DATA-IOR _JST-CRC-BUSY? AND "
+                "_JST-BUSY-META-SAME AND _JST-BUSY-DATA-SAME AND "
+                "_JST-BUSY-OWNER-SAME AND "
+                'IF ." EXT4-JTX-CRC-BUSY-ATOMIC" THEN'
+            ),
             "_JST-LOG 1+ _JST-W _EXT4-JWR.LOG-RESERVED + !",
             (
                 "_JST-M1 41 _JST-T _EXT4-JTX-META-PUT "
@@ -8148,7 +8229,8 @@ def test_jbd2_writer_staging_coalesces_and_cancels_without_io(
             "0 _JST-W _EXT4-JWR-META-ENTRY 2 CELLS + @ CONSTANT _JST-META-CRC",
             (
                 "_JST-W _EXT4-JWR.META-IMAGES + @ _JST-W "
-                "_EXT4-JTX-IMAGE-CRC CONSTANT _JST-META-CALC"
+                "_EXT4-JTX-IMAGE-CRC CONSTANT _JST-META-CALC-IOR "
+                "CONSTANT _JST-META-CALC"
             ),
             (
                 "_JST-W-IOR 0= _JST-T-IOR 0= AND _JST-MP1 0= AND "
@@ -8157,6 +8239,7 @@ def test_jbd2_writer_staging_coalesces_and_cancels_without_io(
                 "_JST-MP2 0= AND _JST-W _EXT4-JWR.META-USED + @ 1 = AND "
                 "_JST-W _EXT4-JWR.META-ACTIVE + @ 1 = AND "
                 "_JST-META-LAST 0x22 = AND "
+                "_JST-META-CALC-IOR 0= AND "
                 "_JST-META-CRC _JST-META-CALC = AND "
                 'IF ." EXT4-JTX-META-COALESCED" THEN'
             ),
@@ -8244,6 +8327,7 @@ def test_jbd2_writer_staging_coalesces_and_cancels_without_io(
             ),
         ],
     )
+    _assert_emitted(output, "EXT4-JTX-CRC-BUSY-ATOMIC")
     _assert_emitted(output, "EXT4-JTX-META-COALESCED")
     _assert_emitted(output, "EXT4-JTX-RUNTIME-GUARDS")
     _assert_emitted(output, "EXT4-JTX-REVOKE-CANCELLED-META")
@@ -8334,7 +8418,8 @@ def test_jbd2_writer_activation_is_ordered_and_publishes_after_cleanup(
                     "_EXT4-MUTATION-MAP-TARGET @ 0= AND "
                     "_EXT4-MUTATION-MAP-ACTIVE @ 0= AND "
                     "_EXT4-MUTATION-MAP-HITS @ 0= AND "
-                    "_AW-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                    "_AW-CTX _EXT4-C.SB + "
+                    "_EXT4-SUPER-CHECKSUM? 0= AND AND "
                     "_AW-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
                     "_EXT4-INCOMPAT-RECOVER AND 0<> AND "
                     'IF ." EXT4-JWR-ACTIVATION-OK" THEN'
@@ -9248,7 +9333,8 @@ def test_jbd2_writer_batches_descriptors_and_revokes_across_ring_wrap(
                     "_GB-CTX _EXT4-C.J.REVOKE-READY + @ 0= AND"
                 ),
                 (
-                    "_GB-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                    "_GB-CTX _EXT4-C.SB + "
+                    "_EXT4-SUPER-CHECKSUM? 0= AND AND "
                     "_GB-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
                     "_EXT4-INCOMPAT-RECOVER AND 0= AND _GB-HOMES? AND"
                 ),
@@ -9698,7 +9784,8 @@ def test_jbd2_checkpoint_reuses_ring_and_cleanly_unmounts_across_wrap(
                     "_PC-CTX _EXT4-C.J.PRIMARY-TORN + @ 0= AND "
                     "_PC-CTX _EXT4-C.SUPER-TORN + @ 0= AND "
                     "_PC-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<> AND "
-                    "_PC-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                    "_PC-CTX _EXT4-C.SB + "
+                    "_EXT4-SUPER-CHECKSUM? 0= AND AND "
                     "_PC-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
                     "_EXT4-INCOMPAT-RECOVER AND 0<> AND"
                 ),
@@ -9746,7 +9833,8 @@ def test_jbd2_checkpoint_reuses_ring_and_cleanly_unmounts_across_wrap(
                     "_PC-CTX _EXT4-C.J.START + @ 0<> AND "
                     "_PC-CTX _EXT4-C.J.COMMITTED + @ 1 = AND "
                     "_PC-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<> AND "
-                    "_PC-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                    "_PC-CTX _EXT4-C.SB + "
+                    "_EXT4-SUPER-CHECKSUM? 0= AND AND "
                     "_PC-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
                     "_EXT4-INCOMPAT-RECOVER AND 0<> AND"
                 ),
@@ -9933,7 +10021,8 @@ def test_jbd2_checkpoint_reuses_ring_and_cleanly_unmounts_across_wrap(
                     "_CU-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0= AND "
                     "_CU-CTX _EXT4-C.J.START + @ 0= AND "
                     "_CU-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
-                    "_CU-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                    "_CU-CTX _EXT4-C.SB + "
+                    "_EXT4-SUPER-CHECKSUM? 0= AND AND "
                     "_CU-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
                     "_EXT4-INCOMPAT-RECOVER AND 0= AND "
                     'IF ." EXT4-JTX-CLEAN-REMOUNTED" THEN'
@@ -10646,7 +10735,7 @@ def test_jbd2_checkpoint_rejects_coherent_log_mismatch_without_io(
             f"{alternate_home} _CB-CTX _EXT4-C.BLOCK + 12 + _EXT4-BE32!",
             (
                 "_CB-CTX _EXT4-C.BLOCK + _CB-CTX "
-                "_EXT4-JBD2-STAMP-BLOCK-CHECKSUM"
+                "_EXT4-JBD2-STAMP-BLOCK-CHECKSUM _CB-KEEP-IOR"
             ),
             write_block("descriptor"),
         ),
@@ -10664,12 +10753,12 @@ def test_jbd2_checkpoint_rejects_coherent_log_mismatch_without_io(
             read_block("descriptor"),
             (
                 "_CB-MUT _CB-W _EXT4-JWR.TX-TID + @ _CB-CTX "
-                "_EXT4-JBD2-EMIT-TAG-CHECKSUM "
+                "_EXT4-JBD2-EMIT-TAG-CHECKSUM _CB-KEEP-IOR "
                 "_CB-CTX _EXT4-C.BLOCK + 24 + _EXT4-BE32!"
             ),
             (
                 "_CB-CTX _EXT4-C.BLOCK + _CB-CTX "
-                "_EXT4-JBD2-STAMP-BLOCK-CHECKSUM"
+                "_EXT4-JBD2-STAMP-BLOCK-CHECKSUM _CB-KEEP-IOR"
             ),
             write_block("descriptor"),
         ),
@@ -10679,7 +10768,7 @@ def test_jbd2_checkpoint_rejects_coherent_log_mismatch_without_io(
             f"{metadata_home} _CB-CTX _EXT4-C.BLOCK + 20 + _EXT4-BE32!",
             (
                 "_CB-CTX _EXT4-C.BLOCK + _CB-CTX "
-                "_EXT4-JBD2-STAMP-BLOCK-CHECKSUM"
+                "_EXT4-JBD2-STAMP-BLOCK-CHECKSUM _CB-KEEP-IOR"
             ),
             write_block("revoke"),
         ),
@@ -10688,7 +10777,7 @@ def test_jbd2_checkpoint_rejects_coherent_log_mismatch_without_io(
             "1 _CB-CTX _EXT4-C.BLOCK + 16 + _EXT4-BE32!",
             (
                 "_CB-CTX _EXT4-C.BLOCK + _CB-CTX "
-                "_EXT4-JBD2-STAMP-BLOCK-CHECKSUM"
+                "_EXT4-JBD2-STAMP-BLOCK-CHECKSUM _CB-KEEP-IOR"
             ),
             write_block("revoke"),
         ),
@@ -11528,7 +11617,8 @@ def test_jbd2_checkpoint_prefix_faults_remount_and_release(
                     "_CF-CTX _EXT4-C.J.REPLAYED + @ 0<> AND"
                 ),
                 (
-                    "_CF-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                    "_CF-CTX _EXT4-C.SB + "
+                    "_EXT4-SUPER-CHECKSUM? 0= AND AND "
                     "_CF-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
                     "_EXT4-INCOMPAT-RECOVER AND 0= AND "
                     "_CF-META-HOME-IOR 0= AND _CF-META-HOME AND "
@@ -11892,7 +11982,8 @@ def test_jbd2_active_reset_publication_retries_from_emitted_commit(
                             "_RRR-CTX _EXT4-C.J.REPLAYED + @ 0<> AND "
                             "_RRR-CTX _EXT4-C.J.HOME-WRITES + @ "
                             f"{expected_home_writes} = AND "
-                            "_RRR-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                            "_RRR-CTX _EXT4-C.SB + "
+                            "_EXT4-SUPER-CHECKSUM? 0= AND AND "
                             "_RRR-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
                             "_EXT4-INCOMPAT-RECOVER AND 0= AND "
                             'IF ." EXT4-JBD2-ACTIVE-RESET-RETRIED" THEN'
@@ -12140,7 +12231,10 @@ def test_jbd2_writer_publication_faults_remount_and_rebase_in_place(
                     "1024 _EXT4-BYTES=? AND "
                     'IF ." EXT4-JTX-EMIT-FAULT-AFTERIMAGES" THEN'
                 ),
-                "_EF-COMMIT _EF-W _EXT4-JTX-BUILD-COMMIT",
+                (
+                    "_EF-COMMIT _EF-W _EXT4-JTX-BUILD-COMMIT "
+                    "CONSTANT _EF-BUILD-IOR"
+                ),
                 *invalidate_expected_commit,
                 (
                     "30000 _EF-CTX _EXT4-READ-BLOCK "
@@ -12167,7 +12261,8 @@ def test_jbd2_writer_publication_faults_remount_and_rebase_in_place(
                     "1024 _EXT4-BYTES=? CONSTANT _EF-COMMIT-ENDPOINT"
                 ),
                 (
-                    "_EF-META-READ-IOR 0= _EF-DATA-READ-IOR 0= AND "
+                    "_EF-BUILD-IOR 0= _EF-META-READ-IOR 0= AND "
+                    "_EF-DATA-READ-IOR 0= AND "
                     "_EF-COMMIT-READ-IOR 0= AND "
                     "_EF-META-UNCHANGED AND _EF-DATA-DURABLE AND "
                     "_EF-COMMIT-ENDPOINT AND "
@@ -12285,7 +12380,8 @@ def test_jbd2_writer_publication_faults_remount_and_rebase_in_place(
                     f"_EF-CTX _EXT4-C.J.REVOKE-COUNT + @ "
                     f"{expected_transactions} = AND "
                     "_EF-CTX _EXT4-C.J.REVOKE-HITS + @ 0= AND "
-                    "_EF-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                    "_EF-CTX _EXT4-C.SB + "
+                    "_EXT4-SUPER-CHECKSUM? 0= AND AND "
                     "_EF-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
                     "_EXT4-INCOMPAT-RECOVER AND 0= AND "
                     "_EF-FINAL-META-IOR 0= AND _EF-FINAL-META AND "
@@ -12850,7 +12946,7 @@ def test_jbd2_writer_activation_primary_binding_rejects_stale_copies_without_io(
                 ),
                 (
                     "_SP-BUF _SP-W _EXT4-JWR-ACTIVATION-PRIMARY? "
-                    "CONSTANT _SP-EXACT"
+                    "CONSTANT _SP-EXACT-IOR CONSTANT _SP-EXACT"
                 ),
                 (
                     "_SP-CTX _EXT4-C.BLOCK + _SP-BUF "
@@ -12859,7 +12955,7 @@ def test_jbd2_writer_activation_primary_binding_rejects_stale_copies_without_io(
                 (
                     "_SP-BUF _EXT4-JS.UUID + DUP C@ 1 XOR SWAP C! "
                     "_SP-BUF _SP-W _EXT4-JWR-ACTIVATION-PRIMARY? "
-                    "CONSTANT _SP-UUID"
+                    "CONSTANT _SP-UUID-IOR CONSTANT _SP-UUID"
                 ),
                 (
                     "_SP-CTX _EXT4-C.BLOCK + _SP-BUF "
@@ -12869,10 +12965,12 @@ def test_jbd2_writer_activation_primary_binding_rejects_stale_copies_without_io(
                     "_SP-BUF _EXT4-JS.SEQUENCE + DUP _EXT4-BE32@ "
                     "1+ 0xFFFFFFFF AND SWAP _EXT4-BE32! "
                     "_SP-BUF _SP-W _EXT4-JWR-ACTIVATION-PRIMARY? "
-                    "CONSTANT _SP-SEQUENCE"
+                    "CONSTANT _SP-SEQUENCE-IOR CONSTANT _SP-SEQUENCE"
                 ),
                 (
                     "_M-IOR 0= _SP-E-IOR 0= AND _SP-R-IOR 0= AND "
+                    "_SP-EXACT-IOR 0= AND _SP-UUID-IOR 0= AND "
+                    "_SP-SEQUENCE-IOR 0= AND "
                     "_SP-EXACT AND _SP-UUID 0= AND _SP-SEQUENCE 0= AND "
                     'IF ." EXT4-JWR-ACTIVATION-STALE-PRIMARY-REFUSED" THEN'
                 ),
@@ -14155,7 +14253,8 @@ def test_empty_modern_orphan_mount_prefix_tears_remount_clean(
                 "_R-CTX _EXT4-C.J.START + @ 0= AND "
                 "_R-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
                 "_R-CTX _EXT4-C.J.WRITER + @ 0= AND "
-                "_R-CTX _EXT4-C.SB + _EXT4-SUPER-CHECKSUM? AND "
+                "_R-CTX _EXT4-C.SB + "
+                "_EXT4-SUPER-CHECKSUM? 0= AND AND "
                 "_R-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
                 "_EXT4-INCOMPAT-RECOVER AND 0= AND "
                 "_R-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
@@ -14873,13 +14972,15 @@ def test_typed_orphan_afterimages_coalesce_and_abort_without_io(
                         ),
                         (
                             "_TO-INODE-IMAGE _TO-WRITER "
-                            "_EXT4-JTX-IMAGE-CRC 0 _TO-WRITER "
-                            "_EXT4-JWR-META-ENTRY 2 CELLS + @ ="
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            "0 _TO-WRITER _EXT4-JWR-META-ENTRY "
+                            "2 CELLS + @ = AND"
                         ),
                         (
                             "_TO-ORPHAN-IMAGE _TO-WRITER "
-                            "_EXT4-JTX-IMAGE-CRC 1 _TO-WRITER "
-                            "_EXT4-JWR-META-ENTRY 2 CELLS + @ ="
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            "1 _TO-WRITER _EXT4-JWR-META-ENTRY "
+                            "2 CELLS + @ = AND"
                         ),
                     ]
                 )
@@ -16284,10 +16385,11 @@ def test_shared_external_xattr_semantic_verifier_rejects_coherent_hash_tamper(
             (
                 "_XT-EA-IMAGE 0x0C + DUP C@ 1 XOR SWAP C! "
                 f"_XT-EA-IMAGE {xattr_block} _XT-CTX "
-                "_EXT4-STAMP-XATTR-BLOCK"
+                "_EXT4-STAMP-XATTR-BLOCK CONSTANT _XT-STAMP-IOR"
             ),
             (
                 "_XT-EA-IMAGE _XT-WRITER _EXT4-JTX-IMAGE-CRC "
+                "CONSTANT _XT-FORGED-CRC-IOR "
                 "CONSTANT _XT-FORGED-CRC"
             ),
             "_XT-FORGED-CRC _XT-EA-ENTRY 2 CELLS + !",
@@ -16324,6 +16426,8 @@ def test_shared_external_xattr_semantic_verifier_rejects_coherent_hash_tamper(
                         "_XT-BEGIN-IOR 0=",
                         "_XT-STAGE-IOR 0=",
                         "_XT-EA-FIND-IOR 0=",
+                        "_XT-STAMP-IOR 0=",
+                        "_XT-FORGED-CRC-IOR 0=",
                         "_XT-EA-FOUND 0<>",
                         "_XT-EA-IMAGE 4 + L@ 1 =",
                         (
@@ -17633,6 +17737,7 @@ def test_linked_empty_legacy_map_head_with_successor_stages_exact_more_transacti
             ),
             (
                 "_EL-SUPER-AFTER _EXT4-SUPER-CHECKSUM? "
+                "CONSTANT _EL-AFTER-SUPER-CRC-IOR "
                 "CONSTANT _EL-AFTER-SUPER-CRC"
             ),
         ]
@@ -17645,6 +17750,7 @@ def test_linked_empty_legacy_map_head_with_successor_stages_exact_more_transacti
             "_EL-PROTOCOL-FIND-IOR 0=",
             "_EL-PROTOCOL-FOUND",
             "_EL-AFTER-HEAD 21 =",
+            "_EL-AFTER-SUPER-CRC-IOR 0=",
             "_EL-AFTER-SUPER-CRC",
         ]
 
@@ -18010,6 +18116,7 @@ def test_linked_legacy_head_with_successor_stages_exact_more_transaction(
             ),
             (
                 "_LM-SUPER-AFTER _EXT4-SUPER-CHECKSUM? "
+                "CONSTANT _LM-AFTER-SUPER-CRC-IOR "
                 "CONSTANT _LM-AFTER-SUPER-CRC"
             ),
             (
@@ -18095,6 +18202,7 @@ def test_linked_legacy_head_with_successor_stages_exact_more_transaction(
                         "_LM-SUPER-FIND-IOR 0=",
                         "_LM-SUPER-FOUND",
                         "_LM-AFTER-HEAD 21 =",
+                        "_LM-AFTER-SUPER-CRC-IOR 0=",
                         "_LM-AFTER-SUPER-CRC",
                         "_LM-RAW-INODE-IOR 0=",
                         "_LM-RAW-DTIME 21 =",
@@ -29428,19 +29536,23 @@ def test_typed_depth0_orphan_truncation_stages_exact_afterimages_without_io(
                         ),
                         (
                             "_OT-INODE-IMAGE _OT-WRITER "
-                            f"_EXT4-JTX-IMAGE-CRC {expected_inode_crc} ="
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            f"{expected_inode_crc} = AND"
                         ),
                         (
                             "_OT-GDT-IMAGE _OT-WRITER "
-                            f"_EXT4-JTX-IMAGE-CRC {expected_gdt_crc} ="
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            f"{expected_gdt_crc} = AND"
                         ),
                         (
                             "_OT-BITMAP-IMAGE _OT-WRITER "
-                            f"_EXT4-JTX-IMAGE-CRC {expected_bitmap_crc} ="
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            f"{expected_bitmap_crc} = AND"
                         ),
                         (
                             "_OT-SUPER-IMAGE _OT-WRITER "
-                            f"_EXT4-JTX-IMAGE-CRC {expected_super_crc} ="
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            f"{expected_super_crc} = AND"
                         ),
                         "_OT-WRITER _EXT4-JWR.DATA-USED + @ 0=",
                         "_OT-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
@@ -29988,15 +30100,18 @@ def test_typed_free_block_range_afterimages_compose_and_abort_without_io(
                         ),
                         (
                             f"_FB-GDT-IMAGE _FB-WRITER "
-                            f"_EXT4-JTX-IMAGE-CRC {expected_gdt_crc} ="
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            f"{expected_gdt_crc} = AND"
                         ),
                         (
                             f"_FB-BITMAP-IMAGE _FB-WRITER "
-                            f"_EXT4-JTX-IMAGE-CRC {expected_bitmap_crc} ="
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            f"{expected_bitmap_crc} = AND"
                         ),
                         (
                             f"_FB-SUPER-IMAGE _FB-WRITER "
-                            f"_EXT4-JTX-IMAGE-CRC {expected_super_home_crc} ="
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            f"{expected_super_home_crc} = AND"
                         ),
                         (
                             "_FB-CTX _EXT4-C.FREE-BLOCKS + @ "
@@ -30197,15 +30312,15 @@ def test_typed_allocate_block_afterimages_are_exact_and_abort_without_io(
                         ),
                         (
                             "_AB-BITMAP _AB-WRITER _EXT4-JTX-IMAGE-CRC "
-                            f"{expected_bitmap_crc} ="
+                            f"0= SWAP {expected_bitmap_crc} = AND"
                         ),
                         (
                             "_AB-GDT _AB-WRITER _EXT4-JTX-IMAGE-CRC "
-                            f"{expected_gdt_crc} ="
+                            f"0= SWAP {expected_gdt_crc} = AND"
                         ),
                         (
                             "_AB-SUPER _AB-WRITER _EXT4-JTX-IMAGE-CRC "
-                            f"{expected_super_crc} ="
+                            f"0= SWAP {expected_super_crc} = AND"
                         ),
                         (
                             "_AB-CTX _EXT4-C.FREE-BLOCKS + @ "
@@ -30767,21 +30882,23 @@ def test_typed_free_block_range_crosses_group_boundary_atomically_without_io(
                         ),
                         (
                             "_FC-GDT-IMAGE _FC-WRITER "
-                            f"_EXT4-JTX-IMAGE-CRC {expected_gdt_crc} ="
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            f"{expected_gdt_crc} = AND"
                         ),
                         (
                             "_FC-BITMAP3-IMAGE _FC-WRITER "
-                            "_EXT4-JTX-IMAGE-CRC "
-                            f"{canonical_bitmap_crcs[0]} ="
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            f"{canonical_bitmap_crcs[0]} = AND"
                         ),
                         (
                             "_FC-BITMAP4-IMAGE _FC-WRITER "
-                            "_EXT4-JTX-IMAGE-CRC "
-                            f"{canonical_bitmap_crcs[1]} ="
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            f"{canonical_bitmap_crcs[1]} = AND"
                         ),
                         (
                             "_FC-SUPER-IMAGE _FC-WRITER "
-                            f"_EXT4-JTX-IMAGE-CRC {canonical_super_crc} ="
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            f"{canonical_super_crc} = AND"
                         ),
                         (
                             "_FC-CTX _EXT4-C.FREE-BLOCKS + @ "
@@ -31533,25 +31650,25 @@ def test_typed_one_block_hole_fill_stages_exact_allocation_and_inode(
                         ),
                         (
                             "_HF-BITMAP _HF-WRITER _EXT4-JTX-IMAGE-CRC "
-                            f"{expected_bitmap_crc} ="
+                            f"0= SWAP {expected_bitmap_crc} = AND"
                         ),
                         (
                             "_HF-GDT _HF-WRITER _EXT4-JTX-IMAGE-CRC "
-                            f"{expected_gdt_crc} ="
+                            f"0= SWAP {expected_gdt_crc} = AND"
                         ),
                         (
                             "_HF-SUPER _HF-WRITER _EXT4-JTX-IMAGE-CRC "
-                            f"{expected_super_crc} ="
+                            f"0= SWAP {expected_super_crc} = AND"
                         ),
                         (
                             "_HF-INODE-IMAGE _HF-WRITER "
-                            "_EXT4-JTX-IMAGE-CRC "
-                            f"{expected_inode_home_crc} ="
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            f"{expected_inode_home_crc} = AND"
                         ),
                         (
                             "_HF-DATA-IMAGE _HF-WRITER "
-                            "_EXT4-JTX-IMAGE-CRC "
-                            f"{expected_data_crc} ="
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            f"{expected_data_crc} = AND"
                         ),
                         f"_HF-BITMAP {block_index} 1 _EXT4-BIT-RANGE-SET?",
                         (
@@ -31905,8 +32022,8 @@ def test_typed_one_block_hole_fill_coalesces_adjacent_extents(
                             ),
                             (
                                 "_HC-INODE-IMAGE _HC-WRITER "
-                                "_EXT4-JTX-IMAGE-CRC "
-                                f"{expected_inode_home_crc} ="
+                                "_EXT4-JTX-IMAGE-CRC 0= SWAP "
+                                f"{expected_inode_home_crc} = AND"
                             ),
                             (
                                 "_HC-RECORD _EXT4-I.BLOCKS-LO + L@ "
@@ -32506,15 +32623,15 @@ def test_typed_one_block_write_stages_ordered_rmw_and_inode_times(
                         ),
                         (
                             "_TW-META-IMAGE _TW-WRITER "
-                            "_EXT4-JTX-IMAGE-CRC "
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
                             "_TW-WRITER _EXT4-JWR.META-ENTRIES + @ "
-                            "2 CELLS + @ ="
+                            "2 CELLS + @ = AND"
                         ),
                         (
                             "_TW-DATA-IMAGE _TW-WRITER "
-                            "_EXT4-JTX-IMAGE-CRC "
+                            "_EXT4-JTX-IMAGE-CRC 0= SWAP "
                             "_TW-WRITER _EXT4-JWR.DATA-ENTRIES + @ "
-                            "2 CELLS + @ ="
+                            "2 CELLS + @ = AND"
                         ),
                         "_TW-DATA-READ-IOR 0=",
                         "_TW-DATA-PREFIX",
@@ -33079,7 +33196,7 @@ def test_typed_one_block_write_emits_checkpoints_and_cleanly_remounts(
                             "_WR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
                             (
                                 "_WR-CTX _EXT4-C.SB + "
-                                "_EXT4-SUPER-CHECKSUM?"
+                                "_EXT4-SUPER-CHECKSUM? 0= AND"
                             ),
                             (
                                 "_WR-CTX _EXT4-C.SB + "
@@ -33466,7 +33583,7 @@ def test_typed_one_block_write_checkpoint_tear_replays_exact_inode(
                             "_WTR-CTX _EXT4-C.J.HOME-WRITES + @ 1 =",
                             (
                                 "_WTR-CTX _EXT4-C.SB + "
-                                "_EXT4-SUPER-CHECKSUM?"
+                                "_EXT4-SUPER-CHECKSUM? 0= AND"
                             ),
                             (
                                 "_WTR-CTX _EXT4-C.SB + "
@@ -35005,7 +35122,10 @@ def staged_public_hole_fill_fixture(
                     "CONSTANT _PHR-READ-IOR CONSTANT _PHR-ACTUAL"
                 ),
                 "0xFFFFFFFF _EXT4-CRC-START",
-                f"_PHR-BUF {len(expected_file)} _EXT4-CRC-ADD",
+                (
+                    f"_PHR-BUF {len(expected_file)} _EXT4-CRC-ADD "
+                    "CONSTANT _PHR-CRC-IOR"
+                ),
                 "_EXT4-CRC@ CONSTANT _PHR-CRC",
                 "_PHR-FD VFS-CLOSE? CONSTANT _PHR-CLOSE-IOR",
                 "0 _PHR-V VFS-UNMOUNT CONSTANT _PHR-UNMOUNT-IOR",
@@ -35013,6 +35133,7 @@ def staged_public_hole_fill_fixture(
                     "_PHR-MOUNT-IOR 0= _PHR-OPEN-IOR 0= AND "
                     "_PHR-READ-IOR 0= AND "
                     f"_PHR-ACTUAL {len(expected_file)} = AND "
+                    "_PHR-CRC-IOR 0= AND "
                     f"_PHR-CRC {expected_file_crc} = AND "
                     "_PHR-VN VN.SIZE-LO @ 3072 = AND "
                     "_PHR-VN VN.BLOCKS @ 6 = AND "
@@ -35250,7 +35371,10 @@ def staged_two_hole_exact_fixture(
                     "CONSTANT _TH-READ-IOR CONSTANT _TH-READ-ACTUAL"
                 ),
                 "0xFFFFFFFF _EXT4-CRC-START",
-                f"_TH-READ {len(expected_file)} _EXT4-CRC-ADD",
+                (
+                    f"_TH-READ {len(expected_file)} _EXT4-CRC-ADD "
+                    "CONSTANT _TH-CRC-IOR"
+                ),
                 "_EXT4-CRC@ CONSTANT _TH-CRC",
                 (
                     _forth_conjunction(
@@ -35293,6 +35417,7 @@ def staged_two_hole_exact_fixture(
                             "_TH-READ-SEEK-IOR 0=",
                             "_TH-READ-IOR 0=",
                             f"_TH-READ-ACTUAL {len(expected_file)} =",
+                            "_TH-CRC-IOR 0=",
                             f"_TH-CRC {expected_file_crc} =",
                             (
                                 "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
@@ -35425,7 +35550,10 @@ def staged_two_hole_exact_fixture(
                     "CONSTANT _THS-READ-IOR CONSTANT _THS-ACTUAL"
                 ),
                 "0xFFFFFFFF _EXT4-CRC-START",
-                f"_THS-BUF {len(expected_file)} _EXT4-CRC-ADD",
+                (
+                    f"_THS-BUF {len(expected_file)} _EXT4-CRC-ADD "
+                    "CONSTANT _THS-CRC-IOR"
+                ),
                 "_EXT4-CRC@ CONSTANT _THS-CRC",
                 "_THS-FD VFS-CLOSE? CONSTANT _THS-CLOSE-IOR",
                 "0 _THS-V VFS-UNMOUNT CONSTANT _THS-UNMOUNT-IOR",
@@ -35433,6 +35561,7 @@ def staged_two_hole_exact_fixture(
                     "_THS-MOUNT-IOR 0= _THS-OPEN-IOR 0= AND "
                     "_THS-READ-IOR 0= AND "
                     f"_THS-ACTUAL {len(expected_file)} = AND "
+                    "_THS-CRC-IOR 0= AND "
                     f"_THS-CRC {expected_file_crc} = AND "
                     "_THS-VN VN.SIZE-LO @ 4096 = AND "
                     "_THS-VN VN.BLOCKS @ 8 = AND "
@@ -36424,7 +36553,7 @@ def _staged_write_recovery_readback(
                         ),
                         (
                             f"{prefix}-CTX _EXT4-C.SB + "
-                            "_EXT4-SUPER-CHECKSUM?"
+                            "_EXT4-SUPER-CHECKSUM? 0= AND"
                         ),
                         (
                             f"{prefix}-CTX _EXT4-C.SB + "
@@ -37144,10 +37273,16 @@ def staged_public_aligned_eof_growth_fixture(
                     "CONSTANT _AG-HREAD-IOR CONSTANT _AG-HREAD-ACTUAL"
                 ),
                 "0xFFFFFFFF _EXT4-CRC-START",
-                f"_AG-A {new_size} _EXT4-CRC-ADD",
+                (
+                    f"_AG-A {new_size} _EXT4-CRC-ADD "
+                    "CONSTANT _AG-PCRC-IOR"
+                ),
                 "_EXT4-CRC@ CONSTANT _AG-PCRC",
                 "0xFFFFFFFF _EXT4-CRC-START",
-                f"_AG-B {new_size} _EXT4-CRC-ADD",
+                (
+                    f"_AG-B {new_size} _EXT4-CRC-ADD "
+                    "CONSTANT _AG-HCRC-IOR"
+                ),
                 "_EXT4-CRC@ CONSTANT _AG-HCRC",
                 (
                     _forth_conjunction(
@@ -37225,10 +37360,12 @@ def staged_public_aligned_eof_growth_fixture(
                             "_AG-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
                             "_AG-PREAD-IOR 0=",
                             f"_AG-PREAD-ACTUAL {new_size} =",
+                            "_AG-PCRC-IOR 0=",
                             f"_AG-PCRC {expected_file_crc} =",
                             "_AG-READ-SEEK-IOR 0=",
                             "_AG-HREAD-IOR 0=",
                             f"_AG-HREAD-ACTUAL {new_size} =",
+                            "_AG-HCRC-IOR 0=",
                             f"_AG-HCRC {expected_file_crc} =",
                             (
                                 "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
@@ -40845,7 +40982,10 @@ def test_public_hole_fill_ordered_candidate_tear_preserves_sparse_state(
                     "CONSTANT _HWR-READ-IOR CONSTANT _HWR-ACTUAL"
                 ),
                 "0xFFFFFFFF _EXT4-CRC-START",
-                f"_HWR-BUF {len(expected_file)} _EXT4-CRC-ADD",
+                (
+                    f"_HWR-BUF {len(expected_file)} _EXT4-CRC-ADD "
+                    "CONSTANT _HWR-CRC-IOR"
+                ),
                 "_EXT4-CRC@ CONSTANT _HWR-CRC",
                 (
                     "_HWR-RECOVERED "
@@ -40859,6 +40999,7 @@ def test_public_hole_fill_ordered_candidate_tear_preserves_sparse_state(
                 ),
                 (
                     f"_HWR-CRC {expected_file_crc} = "
+                    "_HWR-CRC-IOR 0= AND "
                     'IF ." EXT4-PUBLIC-HOLE-W7-CRC" THEN'
                 ),
                 (
@@ -40876,6 +41017,7 @@ def test_public_hole_fill_ordered_candidate_tear_preserves_sparse_state(
                     "_HWR-RECOVERED _HWR-OPEN-IOR 0= AND "
                     "_HWR-READ-IOR 0= AND "
                     f"_HWR-ACTUAL {len(expected_file)} = AND "
+                    "_HWR-CRC-IOR 0= AND "
                     f"_HWR-CRC {expected_file_crc} = AND "
                     "_HWR-VN VN.SIZE-LO @ 3072 = AND "
                     "_HWR-VN VN.BLOCKS @ 4 = AND "
@@ -40933,7 +41075,10 @@ def test_public_hole_fill_ordered_candidate_tear_preserves_sparse_state(
                     "CONSTANT _HWS-READ-IOR CONSTANT _HWS-ACTUAL"
                 ),
                 "0xFFFFFFFF _EXT4-CRC-START",
-                f"_HWS-BUF {len(expected_file)} _EXT4-CRC-ADD",
+                (
+                    f"_HWS-BUF {len(expected_file)} _EXT4-CRC-ADD "
+                    "CONSTANT _HWS-CRC-IOR"
+                ),
                 "_EXT4-CRC@ CONSTANT _HWS-CRC",
                 "_HWS-FD VFS-CLOSE? CONSTANT _HWS-CLOSE-IOR",
                 "0 _HWS-V VFS-UNMOUNT CONSTANT _HWS-UNMOUNT-IOR",
@@ -40941,6 +41086,7 @@ def test_public_hole_fill_ordered_candidate_tear_preserves_sparse_state(
                     "_HWS-MOUNT-IOR 0= _HWS-OPEN-IOR 0= AND "
                     "_HWS-READ-IOR 0= AND "
                     f"_HWS-ACTUAL {len(expected_file)} = AND "
+                    "_HWS-CRC-IOR 0= AND "
                     f"_HWS-CRC {expected_file_crc} = AND "
                     "_HWS-VN VN.SIZE-LO @ 3072 = AND "
                     "_HWS-VN VN.BLOCKS @ 4 = AND "
@@ -41005,7 +41151,10 @@ def _public_hole_recovery_readback(
                 f"CONSTANT {prefix}-READ-IOR CONSTANT {prefix}-ACTUAL"
             ),
             "0xFFFFFFFF _EXT4-CRC-START",
-            f"{prefix}-BUF 3072 _EXT4-CRC-ADD",
+            (
+                f"{prefix}-BUF 3072 _EXT4-CRC-ADD "
+                f"CONSTANT {prefix}-CRC-IOR"
+            ),
             f"_EXT4-CRC@ CONSTANT {prefix}-CRC",
             (
                 _forth_conjunction(
@@ -41041,7 +41190,7 @@ def _public_hole_recovery_readback(
                         ),
                         (
                             f"{prefix}-CTX _EXT4-C.SB + "
-                            "_EXT4-SUPER-CHECKSUM?"
+                            "_EXT4-SUPER-CHECKSUM? 0= AND"
                         ),
                         (
                             f"{prefix}-CTX _EXT4-C.SB + "
@@ -41051,6 +41200,7 @@ def _public_hole_recovery_readback(
                         f"{prefix}-OPEN-IOR 0=",
                         f"{prefix}-READ-IOR 0=",
                         f"{prefix}-ACTUAL 3072 =",
+                        f"{prefix}-CRC-IOR 0=",
                         f"{prefix}-CRC {expected_file_crc} =",
                         f"{prefix}-VN VN.SIZE-LO @ 3072 =",
                         f"{prefix}-VN VN.SIZE-HI @ 0=",
@@ -43173,18 +43323,139 @@ def test_probe_nonmatch_and_checked_io_error(
     _assert_emitted(output, "EXT4-PROBE-IO")
 
 
-def test_private_crc32c_matches_ext4_raw_vector(tmp_path: Path) -> None:
+def test_ext4_crc_source_uses_checked_hardware_without_fallback() -> None:
+    source = EXT4_F.read_text(encoding="utf-8")
+    executable = "\n".join(
+        line.split("\\", 1)[0] for line in source.splitlines()
+    )
+    adapter = re.search(r": _EXT4-CRC-ADD\b(.*?);", executable, re.DOTALL)
+    assert "REQUIRE ../../../math/crc.f" in source
+    assert adapter is not None
+    assert "CRC32C-RAW?" in adapter.group(1)
+    assert "_EXT4-CRC-TABLE" not in source
+    assert "_EXT4-CRC-WORK" not in source
+    assert "0x82F63B78" not in source
+    assert "platform CRC32C word is intentionally MSB-first" not in source
+
+
+def test_hardware_crc32c_matches_fragmented_ext4_raw_vector(tmp_path: Path) -> None:
     blank = tmp_path / "crc-storage.img"
+    blank.write_bytes(bytes(4 * 512))
+    observed = {}
+
+    def capture_system(system):
+        observed["system"] = system
+
+    output = run_forth(
+        blank,
+        [
+            "0xFFFFFFFF _EXT4-CRC-START",
+            'S" 1234" _EXT4-CRC-ADD 0= CRC@ NIP 2 = AND',
+            'S" 56789" _EXT4-CRC-ADD 0= AND',
+            "_EXT4-CRC@ 0x1CF96D7C = AND",
+            "CRC@ NIP 2 = AND",
+            'IF ." EXT4-CRC32C-OK" THEN',
+        ],
+        configure=capture_system,
+    )
+    _assert_emitted(output, "EXT4-CRC32C-OK")
+    assert observed["system"].cpu.crc_mode == 5
+    assert observed["system"].cpu.crc_acc == 0x1CF96D7C
+
+
+def test_raw_crc_status_unwinds_post_acquisition_failure(tmp_path: Path) -> None:
+    blank = tmp_path / "crc-unwind-storage.img"
     blank.write_bytes(bytes(4 * 512))
     output = run_forth(
         blank,
         [
-            'S" 123456789" 0xFFFFFFFF _EXT4-CRC-START ',
-            "_EXT4-CRC-ADD _EXT4-CRC@ 0x1CF96D7C = ",
-            'IF ." EXT4-CRC32C-OK" THEN',
+            "0x123456789ABCDEF0 0 -1 CRC32C-RAW?",
+            '-24 = IF ." EXT4-CRC-UNWIND-STATUS" THEN',
+            (
+                "0x123456789ABCDEF0 = "
+                'IF ." EXT4-CRC-UNWIND-SEED" THEN'
+            ),
+            (
+                "CRC-MODE-CRC32C CRC-MODE! 0= "
+                'IF ." EXT4-CRC-UNWIND-REACQUIRE" THEN'
+            ),
+            'CRC-RESET 0= IF ." EXT4-CRC-UNWIND-RESET" THEN',
+            "CRC-FINAL@ DROP",
         ],
     )
-    _assert_emitted(output, "EXT4-CRC32C-OK")
+    for marker in (
+        "EXT4-CRC-UNWIND-STATUS",
+        "EXT4-CRC-UNWIND-SEED",
+        "EXT4-CRC-UNWIND-REACQUIRE",
+        "EXT4-CRC-UNWIND-RESET",
+    ):
+        _assert_emitted(output, marker)
+
+
+def test_missing_crc_capability_refuses_probe_and_mount_without_media_io(
+    canonical_images: dict[str, Path],
+) -> None:
+    observed = {}
+
+    def disable_reflected_crc(system):
+        system.sysinfo.crypto_caps &= ~0x01
+        system.sysinfo._regs[0x60] = system.sysinfo.crypto_caps
+        observed["system"] = system
+        observed["before"] = (system.cpu.crc_mode, system.cpu.crc_acc)
+
+    output = run_forth(
+        canonical_images["primary-1k-i256"],
+        [
+            "EXT4-BINDING T-VOLUME VFS-PROBE CONSTANT _PIOR CONSTANT _SCORE",
+            (
+                "_SCORE 0= _PIOR VFS-IOR-REASON VFS-R-UNSUPPORTED = AND "
+                "_PIOR VFS-IOR-DOMAIN VFS-IOR-D-BINDING = AND "
+                "_PIOR VFS-IOR-DETAIL 1 = AND "
+                'IF ." EXT4-NOCRC-PROBE-OK" THEN'
+            ),
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _MIOR CONSTANT _V",
+            (
+                "_V V.LIFECYCLE @ VFS-L-NEW = "
+                "_MIOR VFS-IOR-REASON VFS-R-UNSUPPORTED = AND "
+                "_MIOR VFS-IOR-DOMAIN VFS-IOR-D-BINDING = AND "
+                "_MIOR VFS-IOR-DETAIL 1 = AND "
+                'IF ." EXT4-NOCRC-MOUNT-OK" THEN'
+            ),
+        ],
+        configure=disable_reflected_crc,
+        expected_read_requests=0,
+    )
+    _assert_emitted(output, "EXT4-NOCRC-PROBE-OK")
+    _assert_emitted(output, "EXT4-NOCRC-MOUNT-OK")
+    assert (observed["system"].cpu.crc_mode, observed["system"].cpu.crc_acc) == (
+        observed["before"]
+    )
+
+
+def test_busy_crc_engine_returns_typed_mount_error_and_preserves_owner(
+    canonical_images: dict[str, Path],
+) -> None:
+    output = run_forth(
+        canonical_images["primary-1k-i256"],
+        [
+            "VARIABLE _CRC-BEFORE",
+            "0 CRC-MODE! THROW CRC-RESET THROW",
+            "0x4847464544434241 CRC-FEED THROW",
+            "CRC@ DROP _CRC-BEFORE !",
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _IOR CONSTANT _V",
+            (
+                "_V V.LIFECYCLE @ VFS-L-NEW = "
+                "_IOR VFS-IOR-REASON VFS-R-BUSY = AND "
+                "_IOR VFS-IOR-DOMAIN VFS-IOR-D-BINDING = AND "
+                "_IOR VFS-IOR-FLAGS VFS-IOR-F-RETRYABLE AND 0<> AND "
+                "_IOR VFS-IOR-DETAIL 2 = AND "
+                "CRC@ 0= SWAP _CRC-BEFORE @ = AND AND "
+                'IF ." EXT4-CRC-BUSY-OK" THEN'
+            ),
+            "CRC-FINAL@ DROP",
+        ],
+    )
+    _assert_emitted(output, "EXT4-CRC-BUSY-OK")
 
 
 def test_sparse_image_helpers_preserve_bytes_and_holes(tmp_path: Path) -> None:

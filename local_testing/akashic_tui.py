@@ -12555,6 +12555,9 @@ CREATE _crc64-vectors
     CRC-MODE-CRC32 CRC-MODE! _crc-status-ok
     CRC-RESET _crc-status-ok
     _crc-data @ CRC-FEED _crc-status-ok
+    0x123456789ABCDEF0 _crc-data 1 CRC32C-RAW?
+    2 = _crc-assert
+    0x123456789ABCDEF0 = _crc-assert
     ['] _crc-call-one-shot-during-direct CATCH 2 = _crc-assert
     CRC@ DUP 0= _crc-assert DROP DROP
     _crc-data 8 + DUP @ CRC-FEED _crc-status-ok
@@ -12564,11 +12567,19 @@ CREATE _crc64-vectors
 : _crc-test-raw-crc32c  ( -- )
     CRC32-INIT-VAL S" 123456789" CRC32C-RAW
         0x1CF96D7C = _crc-assert
+    CRC32-INIT-VAL S" 123456789" CRC32C-RAW?
+        DUP 0= _crc-assert DROP 0x1CF96D7C = _crc-assert
     0x12345678 0 0 CRC32C-RAW
         0x12345678 = _crc-assert
     CRC32-INIT-VAL _crc-data 8 CRC32C-RAW
     _crc-data 8 + 9 CRC32C-RAW
-    CRC32-INIT-VAL XOR 0xD9E334F9 = _crc-assert ;
+    CRC32-INIT-VAL XOR 0xD9E334F9 = _crc-assert
+    0x123456789ABCDEF0 _crc-data -1 CRC32C-RAW?
+    -24 = _crc-assert
+    0x123456789ABCDEF0 = _crc-assert
+    CRC-MODE-CRC32C CRC-MODE! _crc-status-ok
+    CRC-RESET _crc-status-ok
+    CRC-FINAL@ DROP ;
 
 : _crc-test-standard-vectors  ( -- )
     S" 123456789" CRC32 0xCBF43926 = _crc-assert

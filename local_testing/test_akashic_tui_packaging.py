@@ -147,6 +147,7 @@ def test_crc_contract_profile_uses_reflected_checked_megapad_surface() -> None:
         "5 CONSTANT CRC-MODE-CRC32C",
         "2 CONSTANT CRC-MODE-CRC64",
         ": CRC32C-RAW  ( seed data len -- raw )",
+        ": CRC32C-RAW?  ( seed data len -- raw status )",
     ):
         assert declaration in source
     for primitive in (
@@ -172,6 +173,7 @@ def test_crc_contract_profile_uses_reflected_checked_megapad_surface() -> None:
     assert "S\" 123456789\" CRC32 0xCBF43926" in fixture
     assert "S\" 123456789\" CRC32C 0xE3069283" in fixture
     assert "CRC32C-RAW" in fixture
+    assert "CRC32C-RAW?" in fixture
     assert "0x1CF96D7C = _crc-assert" in fixture
     assert "['] _crc-call-one-shot-during-direct CATCH 2 =" in fixture
 

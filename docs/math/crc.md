@@ -47,8 +47,10 @@ CRC-FINAL@  ( -- crc )
 ```
 
 Akashic checks every status returned by `CRC-MODE!`, `CRC-RESET`, `CRC-INIT!`,
-`CRC-FEED`, `CRC-FEED-BYTE`, and `CRC-RAW-FINAL@`, throwing a nonzero status
-unchanged. `CRC-FINAL@` is the one result-only operation. `CRC-INIT!` accepts
+`CRC-FEED`, `CRC-FEED-BYTE`, and `CRC-RAW-FINAL@`. Ordinary Akashic
+result-returning APIs throw checked-operation failures unchanged;
+`CRC32C-RAW?` catches and returns that exact code instead. `CRC-FINAL@` is the
+one result-only BIOS operation. `CRC-INIT!` accepts
 an arbitrary accumulator; the incremental and raw APIs use it to restore or
 install caller state. MegaPad arbitrates the transaction from mode selection
 through finalization, so another core cannot change its mode or accumulator
@@ -62,16 +64,17 @@ call made while that task owns a stream, and a mismatched-family `ADD` or `END`
 throw the stream-state error `-258`. Rejected nested or cross-family calls leave
 the original stream active and unchanged.
 
-If a guarded hardware computation throws after Akashic successfully acquires
-the CRC engine, Akashic attempts to finalize and discard the partial
-accumulator as the same hardware owner, releases the module guard, and rethrows
-the original error. Acquisition is tracked explicitly: when `CRC-MODE!`
-returns `STATE/OWNER`, Akashic does not finalize a transaction that the task
-already owned through a direct BIOS sequence. This gives ordinary buffer and
-argument faults a bounded unwind path without disturbing unrelated ownership.
-Raw BIOS CRC sequences still follow MegaPad's lower-level rule: the machine
-does not automatically release a micro-cluster transaction on an exception,
-and a failed cleanup itself requires same-owner recovery.
+`CRC32C-RAW` has an ownership-aware unwind boundary even when guarded wrappers
+are disabled. If that call throws after successfully acquiring the CRC engine,
+Akashic attempts to finalize and discard the partial accumulator as the same
+hardware owner before rethrowing the original error. Acquisition is reset
+immediately before mode selection and marked only after `CRC-MODE!` succeeds:
+when mode selection returns `STATE/OWNER`, Akashic therefore does not finalize
+a direct BIOS transaction that the task already owned. A guarded build retains
+the same hardware cleanup and additionally releases the module guard before
+the error escapes. Raw BIOS CRC sequences still follow MegaPad's lower-level
+rule: the machine does not automatically release a micro-cluster transaction
+on an exception, and a failed cleanup itself requires same-owner recovery.
 
 ## Constants
 
@@ -111,6 +114,7 @@ S" 123456789" CRC32  \ 0xCBF43926
 
 ```forth
 CRC32C-RAW  ( seed data len -- raw )
+CRC32C-RAW? ( seed data len -- raw status )
 ```
 
 `CRC32C-RAW` selects reflected Castagnoli mode, installs the caller-supplied
@@ -118,6 +122,21 @@ raw accumulator with `CRC-INIT!`, feeds exactly `len` bytes, and publishes the
 raw accumulator through `CRC-RAW-FINAL@`. It does not apply xorout. The low 32
 bits of `seed` are the initial accumulator; hardware zero-extends the returned
 raw result to one cell.
+
+`CRC32C-RAW?` invokes the final effective `CRC32C-RAW`, including its task
+guard when `GUARDED` is enabled. On success it returns the zero-extended raw
+accumulator followed by status zero. On failure it returns the caller's
+original `seed` cell unchanged followed by the exact caught status or Forth
+throw code; `data` and `len` are consumed. In particular, the failure seed is
+not truncated to 32 bits and is not a partially advanced accumulator.
+
+Successful raw publication and transaction release are one
+`CRC-RAW-FINAL@` operation. If a call acquired the engine and then failed,
+Akashic attempts to finalize and discard that partial transaction before
+`CRC32C-RAW?` returns the original error. If mode selection itself failed,
+including `STATE/OWNER` status 2, no finalization is issued. A cleanup fault
+does not replace the original caught code and retains MegaPad's documented
+same-owner recovery requirement.
 
 Because raw finalization also releases the shared CRC transaction, its result
 can seed the next fragment without holding the engine across an intervening
@@ -199,6 +218,7 @@ the caller's buffer and return its length. They do not add a terminator.
 | `CRC32` | `( data len -- crc )` | One-shot reflected CRC-32/ISO-HDLC |
 | `CRC32C` | `( data len -- crc )` | One-shot reflected CRC-32C |
 | `CRC32C-RAW` | `( seed data len -- raw )` | Caller-seeded reflected CRC-32C without xorout |
+| `CRC32C-RAW?` | `( seed data len -- raw status )` | Raw CRC-32C with exact returned failure status and original-seed failure value |
 | `CRC64` | `( data len -- crc )` | One-shot CRC-64/WE |
 | `CRC32-BEGIN` / `ADD` / `END` | see above | Streaming CRC-32 |
 | `CRC32C-BEGIN` / `ADD` / `END` | see above | Streaming CRC-32C |

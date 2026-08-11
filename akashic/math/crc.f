@@ -8,6 +8,7 @@
 \   CRC32       ( data len -- crc )    reflected CRC-32/ISO-HDLC
 \   CRC32C      ( data len -- crc )    reflected CRC-32C
 \   CRC32C-RAW  ( seed data len -- raw )  seeded CRC-32C, no xorout
+\   CRC32C-RAW? ( seed data len -- raw status )  exact-status raw form
 \   CRC64       ( data len -- crc )    CRC-64/WE parameters
 \
 \  Public API — streaming:
@@ -95,6 +96,18 @@ CREATE _CRC-PRIVATE-END 0 ALLOT
     CRC-RAW-FINAL@ _CRC-CHECK-STATUS
     0 _CRC-HARDWARE-OWNED ! ;
 
+\ A hardware call that throws after acquiring the shared micro-core CRC
+\ transaction must unwind as the same owner.  Keep this below the optional
+\ task guard so CRC32C-RAW has the same cleanup in guarded and unguarded builds.
+\ If FIN itself faults, preserve and rethrow the original error; the raw
+\ hardware contract then requires same-owner recovery.
+: _CRC-FINAL-DISCARD  ( -- ) CRC-FINAL@ DROP ;
+: _CRC-HARDWARE-RELEASE  ( -- )
+    _CRC-HARDWARE-OWNED @ IF
+        ['] _CRC-FINAL-DISCARD CATCH DROP
+        0 _CRC-HARDWARE-OWNED !
+    THEN ;
+
 \ =====================================================================
 \  Internal: nibble-to-hex lookup
 \ =====================================================================
@@ -145,13 +158,28 @@ CREATE _CRC-HEX
 \   Run reflected CRC-32C from the caller's raw accumulator and publish the
 \   raw accumulator without xorout.  A returned raw value can seed the next
 \   call, allowing callers to release the shared engine between fragments.
-: CRC32C-RAW  ( seed data len -- raw )
+: _CRC32C-RAW-CORE  ( seed data len -- raw )
     >R >R
     CRC-MODE-CRC32C _CRC-SELECT
     CRC-INIT! _CRC-CHECK-STATUS
     R> R>
     _CRC-FEED-BUFFER
     _CRC-RAW-FINALIZE ;
+
+\ Install an unconditional unwind boundary around the raw transaction.
+\ Resetting the acquisition marker immediately before execution means a
+\ rejected CRC-MODE! cannot make us finalize a direct BIOS transaction that
+\ the same task already owned.  _CRC-SELECT marks only this call's successful
+\ acquisition; every later THROW then finalizes and discards it.
+
+: CRC32C-RAW  ( seed data len -- raw )
+    0 _CRC-HARDWARE-OWNED !
+    ['] _CRC32C-RAW-CORE CATCH
+    DUP IF
+        >R _CRC-HARDWARE-RELEASE R>
+    THEN
+    DUP IF THROW THEN
+    DROP ;
 
 \ CRC64 ( data len -- crc )  CRC-64/WE parameters (ECMA polynomial).
 : CRC64  ( data len -- crc )
@@ -317,18 +345,6 @@ _CRC-STREAM-NONE _CRC-STREAM-MODE !
 ' CRC32-.         CONSTANT _crc32-dot-xt
 ' CRC64-.         CONSTANT _crc64-dot-xt
 
-\ A guarded hardware call that throws may already own the shared micro-core
-\ CRC transaction.  The same owner can always execute FIN, so unwind by
-\ finalizing and discarding the partial accumulator before releasing the
-\ task guard.  If FIN itself faults, preserve and rethrow the original error;
-\ the raw hardware contract then requires same-owner recovery.
-: _CRC-FINAL-DISCARD  ( -- ) CRC-FINAL@ DROP ;
-: _CRC-HARDWARE-RELEASE  ( -- )
-    _CRC-HARDWARE-OWNED @ IF
-        ['] _CRC-FINAL-DISCARD CATCH DROP
-        0 _CRC-HARDWARE-OWNED !
-    THEN ;
-
 : _CRC-WITH-HARDWARE-GUARD  ( ... xt -- ... )
     _crc-guard GUARD-ACQUIRE
     _CRC-STREAM-MODE @ _CRC-STREAM-NONE <> IF
@@ -405,3 +421,18 @@ _CRC-STREAM-NONE _CRC-STREAM-MODE !
 : CRC32C-END    _CRC-STREAM-CRC32C _crc32c-end-xt _CRC-STREAM-END ;
 : CRC64-END     _CRC-STREAM-CRC64 _crc64-end-xt _CRC-STREAM-END ;
 [THEN] [THEN]
+
+\ CRC32C-RAW? ( seed data len -- raw status )
+\   Execute the final effective CRC32C-RAW definition, including its optional
+\   task guard.  Keep one seed copy below the three call arguments: CATCH
+\   restores stack depth, but consumed cells are not an immutable snapshot.
+\   The protected copy therefore supplies the exact original seed on failure,
+\   while the restored arguments are discarded.  Success drops that copy.
+: CRC32C-RAW?  ( seed data len -- raw status )
+    2 PICK -ROT
+    ['] CRC32C-RAW CATCH
+    DUP IF
+        >R 2DROP DROP R>
+    ELSE
+        ROT DROP
+    THEN ;

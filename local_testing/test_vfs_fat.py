@@ -16,7 +16,12 @@ import os, sys, struct, tempfile, time, math
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-MEGAPAD_ROOT = os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
+MEGAPAD_ROOT = os.path.abspath(
+    os.environ.get(
+        "MEGAPAD_ROOT",
+        os.path.join(ROOT_DIR, "..", "megapad"),
+    )
+)
 
 # Forth source paths
 EVENT_F   = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
