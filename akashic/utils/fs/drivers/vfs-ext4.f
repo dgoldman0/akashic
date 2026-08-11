@@ -18899,7 +18899,7 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
 \ exactly adjacent initialized extent.  It allocates one geometry-selected
 \ block, stages a full zero image with caller bytes overlaid, applies the
 \ checked insert/merge edit, and increments i_blocks without changing i_size.
-\ Root growth, unwritten conversion, and EOF growth remain later capabilities.
+\ Hole fill does not grow EOF; partial-tail RMW is separate, while allocation-backed/block-boundary growth, root growth, and unwritten conversion remain later.
 : _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL
   ( source count file-offset inode-number expected-generation seconds nsec transaction -- ior )
     _XH-WRITER ! _XH-NSEC ! _XH-SECONDS !

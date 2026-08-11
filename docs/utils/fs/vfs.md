@@ -18,11 +18,12 @@ or callback-streamed reads should use the policy-neutral
 envelopes, and domain stores remain separate higher-level concerns.
 
 The ext4 implementation provides an ordinary checksummed read-only binding and
-an explicit staged-write binding for one bounded existing-allocation overwrite
-operation. Both are described by the
+an explicit staged-write binding for three production-closed request envelopes:
+initialized overwrite, strict append inside an initialized partial EOF block,
+and allocation-backed fill of complete in-size holes. Both descriptors are described by the
 [`akashic-vfs-ext4` contract](drivers/vfs-ext4.md) and remain constrained by the
 ratified [`akashic-ext4-rw-v1` profile](ext4-compatibility-profile.md). The
-staged operation is a real ABI-1 capability, but it is not a claim that the
+staged operations are real ABI-1 capabilities, but they are not a claim that the
 complete writable profile is implemented.
 
 ## Quick start

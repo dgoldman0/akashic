@@ -342,18 +342,19 @@ preserved workspace is structurally inspectable but unusable, and verifies
 that successful clean unmount clears both binding readiness and current-writer
 ownership with the block context detached.
 
-These are private durability qualifications, not writable-VFS claims. The
-suite now covers activation, emission, same-session metadata checkpoint,
-journal-space reuse, `COMMITTED` public-unmount checkpointing, and clean
-write-active deactivation. It also covers production-path cleanup for a
-substantial bounded subset of legacy and modern orphan shapes, with staged or
-refusal coverage for additional shapes, plus a private size-preserving
-existing-block overwrite. It still exposes no user-visible ext4 mutation
-operation. The public ext4 capability mask remains read-only
-until the first operation's reachable recovery closure, external-tool checks,
-representative crash matrix, and ABI publication gate pass. Later operations
-ratchet in under their own gates; complete profile conformance remains withheld
-until the full recovery and release closure passes.
+The lifecycle rows described above are private durability qualifications, not
+standalone writable-VFS claims. The suite covers activation, emission,
+same-session metadata checkpoint, journal-space reuse, `COMMITTED`
+public-unmount checkpointing, and clean write-active deactivation. It also
+covers production-path cleanup for a substantial bounded subset of legacy and
+modern orphan shapes, with staged or refusal coverage for additional shapes.
+The separate public journeys now qualify the explicitly staged ext4 binding for
+initialized overwrite, strict append inside an initialized partial EOF block,
+and allocation-backed fill of complete in-size holes. The ordinary ext4
+binding remains read-only. Each later operation ratchets in under its own
+reachable-state, external-tool, crash, and ABI gate; complete profile
+conformance remains withheld until the full recovery and release closure
+passes.
 
 When a resolved profile closure binds directly to MegaPad networking, the
 harness injects the one canonical packed `networking.f` and loads it with

@@ -38,9 +38,9 @@ Internal or explicitly staged operation slices may land under this profile
 without inventing a weaker format profile, provided the public capability mask
 continues to describe only behavior that has actually passed its promotion
 gate. `Staged` names incremental conformance status only. A slice that passes
-its per-operation promotion gate is the real production-directed
-implementation and is production-closed inside its documented envelope; it is
-not yet a claim of complete profile conformance.
+its per-operation promotion gate is the real production implementation and is
+production-closed inside its documented envelope; it is not yet a claim of
+complete profile conformance.
 
 This document uses three distinct admission terms:
 
@@ -842,9 +842,10 @@ journal without clearing `RECOVER`, and rebases the same allocation for an
 immediate sequential transaction without reactivation or arena growth. It
 now also checkpoints `COMMITTED` state during public unmount and performs the
 six-write clean deactivation with terminal fault quarantine. The explicitly
-named staged binding publishes the qualified existing-block overwrite and
-allocation-backed fill of complete in-size holes; the ordinary ext4 binding
-remains read-only and every other mutation capability remains disabled. Modern
+named staged binding publishes qualified existing-block overwrite, strict
+no-gap append inside an initialized partial EOF block, and allocation-backed
+fill of complete in-size holes; the ordinary ext4 binding remains read-only and
+every other mutation capability remains disabled. Modern
 `ORPHAN_PRESENT` and a nonzero legacy
 `s_last_orphan` are now admitted, after any required journal replay and strict
 reload, into a unified, non-mutating two-pass preflight. Legacy discovery
@@ -1321,6 +1322,9 @@ topology. The existing-block size-preserving overwrite does not depend on
 broader orphan cleanup shapes that it cannot create. Neither does the linked,
 size-preserving in-size hole fill: its committed transaction binds the
 allocation accounting and extent attachment, and it creates no orphan state.
+Strict growth from the exact partial-block EOF inside an already initialized
+block likewise changes only ordered data, `i_size`, and inode timestamps; it
+does not allocate storage or create an orphan state.
 Broader orphan shapes remain a final-profile backlog unless external evidence
 or a next operation makes them reachable.
 
@@ -1333,22 +1337,60 @@ controlled power-cut/release matrices. The detailed pending cases below are
 that closure inventory, not an assertion that every item is the next
 prerequisite for the current linked-file write operations.
 
-The staged regular-file callback provides one block-bounded chunking primitive:
-a larger size-preserving caller range completes only its first target logical
-block and returns legal short progress. Initialized overwrite consumes `1
-metadata / 1 data / 0 revoke`; allocation-backed fill of a complete in-size
-hole consumes `4/1/0` from any containing caller profile. This removes both a
-caller-size limit and first-operation workspace selection from the qualified
-surface and supplies bounded allocation for the admitted hole shape. It does
-not supply the general planners for EOF growth, extent-root growth, arbitrary
-allocation geometry, or namespace operations. Its short-progress and
-later-error behavior is qualified through `VFS-WRITE?` and
-`VFS-WRITE-EXACT` on `EXT4-STAGED-WRITE-BINDING`. That descriptor alone adds
-`WRITE` and omits `READ_ONLY`; the ordinary `EXT4-BINDING`, `EXT4-CAPS`, and
-`EXT4-OPS` remain unchanged and read-only. Ordered-data fault qualification
-also proves that generic VFS advances only by the confirmed prefix, preserves
-the partial read-only result, and blocks retry before redispatch after writer
-quarantine.
+The staged regular-file callback provides one block-bounded transaction
+primitive. A larger size-preserving caller range completes only its first
+target logical block and returns legal short progress. A strict EOF append must
+fit wholly between the current partial-block EOF and that same initialized
+block's boundary; a request that would need another logical block refuses
+rather than silently widening the admitted growth operation. Initialized
+overwrite and strict initialized-tail append each consume `1/1/0`;
+allocation-backed fill of a complete in-size hole consumes `4/1/0` from any
+containing caller profile. This removes both a caller-size
+limit and first-operation workspace selection from the qualified
+size-preserving surface, supplies bounded allocation for the admitted hole
+shape, and supplies strict growth inside an existing initialized tail. It does
+not supply the general planners for allocation-backed or block-boundary EOF
+growth, extent-root growth, arbitrary allocation geometry, or namespace
+operations. Its progress and later-error behavior is qualified through
+`VFS-WRITE?` and `VFS-WRITE-EXACT` on `EXT4-STAGED-WRITE-BINDING`. That
+descriptor alone adds `WRITE` and omits `READ_ONLY`; the ordinary
+`EXT4-BINDING`, `EXT4-CAPS`, and `EXT4-OPS` remain unchanged and read-only.
+Positive-credit initialized overwrite retains conservative ordered-sector
+prefix progress because its bytes were already reachable. Hole fill and strict
+append use negative-credit, commit-granular progress: newly reachable caller
+bytes remain unconfirmed until successful journal emission. Generic VFS
+advances only by that operation's confirmed progress and blocks retry after
+writer quarantine.
+
+Strict initialized-tail append is current operation-admitted capability, not a
+fixture-specific approximation of general append. It requires a linked regular
+file with exact `EXTENTS` flags, an authenticated depth-0 or depth-1 map of the
+existing final block, a non-block-aligned current EOF, no gap, and a complete
+request contained in that block. The ordered full-block RMW preserves the
+pre-EOF prefix and extent map, while the single inode after-image advances
+`i_size`, updates `mtime`/`ctime`, and leaves `i_blocks` and free-space
+accounting unchanged. The public hard-link journey grows inode 14 from 54 to 60
+bytes with `APPEND`, publishes the shared vnode EOF and timestamps, reaches a
+write-free stable ordinary remount, and passes pinned `debugfs` read/map/stat
+and read-only `e2fsck` inspection. Gap growth and a request mixing in-size
+overwrite with EOF growth refuse as `EXT4-D-WRITE-POLICY` before clock
+sampling, journal activation, media I/O, progress, or vnode mutation.
+
+The append-specific W7 and W16 cuts close both sides of its reachability fence.
+At ordered-data home write W7, no journal commit has made the new tail
+reachable: the public call reports zero progress, retains the old 54-byte EOF
+and timestamps in the shared vnode, and faults the mounted writer. Fresh
+recovery replays no append metadata, both hard-link names expose the original
+file, and any raw appended tail prefix remains hidden beyond EOF. At inode-home
+checkpoint write W16, the transaction is already committed: the call reports
+the complete six-byte progress and cursor 60, immediately publishes EOF 60 and
+the committed timestamps through the shared vnode, and returns the exact
+partial/read-only quarantine error. The torn inode home is checksum-invalid;
+fresh recovery replays exactly that one inode-table home without rewriting the
+ordered data block, both names expose the committed 60-byte file, and the next
+remount is byte-stable and write-free. These cuts add no allocation or orphan
+topology; they qualify the distinct commit-granular publication rule of the
+current append envelope.
 
 For a depth-zero target, the current edit attaches the selected block by
 sorted singleton insertion or exact logical-and-physical initialized
