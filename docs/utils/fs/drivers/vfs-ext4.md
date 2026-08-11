@@ -1351,6 +1351,20 @@ block completed and reports the full nine-byte request with
 quarantine the mounted instance, scrub the private source snapshot, preserve
 the old inode-table home, and publish no vnode timestamps.
 
+The public staged path also qualifies one second-transaction durability
+boundary derived from its successful two-write trace. At flush ordinal 22,
+the second ordered-data block is already behind its body fence but the final
+commit block has not been confirmed durable. The faulted call reports all six
+caller bytes with `PARTIAL|READONLY`, keeps the first write's published vnode
+time, and quarantines the reused writer at `COMMIT-FLUSH`. Both modeled
+durability views contain both data edits and only the first inode-table home.
+If the final commit reached media, a fresh mount replays exactly the second
+inode after-image; if only the prior fence survived, it applies no inode home
+and retains the first timestamp. Both results clean the active journal and are
+byte-stable on another write-free remount. This is a representative reachable
+commit fence for the promoted operation, not a claim that every power-cut
+ordinal has already been enumerated.
+
 A second private word, `_EXT4-WRITE`, now has the exact ABI-1 callback shape
 `( source count offset dentry vfs -- actual ior )`. It validates an owned,
 linked regular-file dentry, its shared vnode identity/generation and clean
@@ -1583,9 +1597,10 @@ checksummed inode-table after-image for clock-derived `mtime`/`ctime`. It needs
 no allocator or extent edit and fits the exact `1 metadata / 1 data / 0 revoke`
 transaction shape. The qualified path includes end-to-end emit, checkpoint,
 clean unmount, write-free remount, sequential writer reuse, external
-`debugfs`/`e2fsck` inspection, and a checkpoint-home tear/replay case. Growth,
-holes, unwritten extents, multi-block atomicity, truncation, and namespace
-mutation remain later ratchets.
+`debugfs`/`e2fsck` inspection, both outcomes of a second-transaction
+commit-flush failure, and a checkpoint-home tear/replay case. Growth, holes,
+unwritten extents, multi-block atomicity, truncation, and namespace mutation
+remain later ratchets.
 
 The remaining boundaries are the final-profile closure inventory, not an
 ordered list of prerequisites for the next narrow write slice:

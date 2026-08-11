@@ -33805,6 +33805,14 @@ def test_staged_vfs_write_returns_block_bounded_short_success(
         backing.unlink(missing_ok=True)
 
 
+_STAGED_TWO_FIRST_REPLACEMENT = b"WRITE-RMW"
+_STAGED_TWO_FIRST_OFFSET = 11
+_STAGED_TWO_FIRST_EPOCH_MS = 3_000_000_000_123
+_STAGED_TWO_SECOND_REPLACEMENT = b"SECOND"
+_STAGED_TWO_SECOND_OFFSET = 38
+_STAGED_TWO_SECOND_EPOCH_MS = 3_000_000_005_987
+
+
 @pytest.fixture(scope="session")
 def staged_write_two_success_fixture(
     writer_activation_fixture: dict[str, object],
@@ -33828,12 +33836,12 @@ def staged_write_two_success_fixture(
     file_size = struct.unpack_from("<I", inode, 0x04)[0]
     assert file_size == 54
 
-    first_replacement = b"WRITE-RMW"
-    first_offset = 11
-    first_epoch_ms = 3_000_000_000_123
-    second_replacement = b"SECOND"
-    second_offset = 38
-    second_epoch_ms = 3_000_000_005_987
+    first_replacement = _STAGED_TWO_FIRST_REPLACEMENT
+    first_offset = _STAGED_TWO_FIRST_OFFSET
+    first_epoch_ms = _STAGED_TWO_FIRST_EPOCH_MS
+    second_replacement = _STAGED_TWO_SECOND_REPLACEMENT
+    second_offset = _STAGED_TWO_SECOND_OFFSET
+    second_epoch_ms = _STAGED_TWO_SECOND_EPOCH_MS
     second_seconds, second_milliseconds = divmod(second_epoch_ms, 1000)
     second_nanoseconds = second_milliseconds * 1_000_000
 
@@ -34082,6 +34090,679 @@ def test_staged_write_output_is_debugfs_readable_and_e2fsck_clean(
     assert readback.returncode == 0, readback.stdout + readback.stderr
     assert readback.stdout == expected_file
     _assert_e2fsck_clean(image, jbd2_toolchain)
+
+
+def _staged_write_timestamped_inode_home(
+    superblock: bytes,
+    inode: bytes,
+    original_inode_home: bytes,
+    *,
+    inode_number: int,
+    inode_block_offset: int,
+    epoch_ms: int,
+) -> bytes:
+    """Return one checksummed inode-table home with exact write times."""
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = (
+        low_seconds
+        if low_seconds < 0x8000_0000
+        else low_seconds - 0x1_0000_0000
+    )
+    epoch = (seconds - signed_low) >> 32
+    assert 0 <= epoch <= 3
+    extra_time = (nanoseconds << 2) | epoch
+
+    stamped_inode = bytearray(inode)
+    struct.pack_into("<I", stamped_inode, 0x0C, low_seconds)
+    struct.pack_into("<I", stamped_inode, 0x10, low_seconds)
+    struct.pack_into("<I", stamped_inode, 0x84, extra_time)
+    struct.pack_into("<I", stamped_inode, 0x88, extra_time)
+    stamped_inode = bytearray(
+        _inode_with_checksum(superblock, inode_number, stamped_inode)
+    )
+    inode_home = bytearray(original_inode_home)
+    inode_limit = inode_block_offset + len(stamped_inode)
+    assert inode_limit <= len(inode_home)
+    inode_home[inode_block_offset:inode_limit] = stamped_inode
+    return bytes(inode_home)
+
+
+def _staged_write_recovery_readback(
+    source: Path,
+    destination: Path,
+    *,
+    expected_file: bytes,
+    expected_epoch_ms: int,
+    expected_home_writes: int,
+    expected_replayed: bool,
+    prefix: str,
+    marker: str,
+) -> tuple[str, tuple[tuple[str, int, int], ...], str]:
+    """Mount, verify, and cleanly unmount one staged-write crash view."""
+    seconds, milliseconds = divmod(expected_epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    expected_name = f"{prefix}-EXPECTED"
+    buffer_name = f"{prefix}-BUF"
+    expected_forth = f"CREATE {expected_name} " + " ".join(
+        f"{byte} C," for byte in expected_file
+    )
+    replay_check = (
+        f"{prefix}-CTX _EXT4-C.J.REPLAYED + @ 0<>"
+        if expected_replayed
+        else f"{prefix}-CTX _EXT4-C.J.REPLAYED + @ 0="
+    )
+    output, trace, media_sha256 = run_recovery_forth(
+        source,
+        destination,
+        [
+            f"CREATE {buffer_name} 64 ALLOT",
+            expected_forth,
+            (
+                f"T-ARENA T-VOLUME EXT4-NEW CONSTANT {prefix}-MOUNT-IOR "
+                f"CONSTANT {prefix}-V"
+            ),
+            f"{prefix}-V _EXT4-CTX CONSTANT {prefix}-CTX",
+            (
+                f'S" /fixture/payload.txt" VFS-FF-READ {prefix}-V '
+                f"VFS-OPEN? CONSTANT {prefix}-OPEN-IOR "
+                f"CONSTANT {prefix}-FD"
+            ),
+            f"{prefix}-FD FD.INODE @ D.VNODE @ CONSTANT {prefix}-VN",
+            (
+                f"{buffer_name} 64 {prefix}-FD VFS-READ? "
+                f"CONSTANT {prefix}-READ-IOR CONSTANT {prefix}-ACTUAL"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        f"{prefix}-MOUNT-IOR 0=",
+                        (
+                            f"{prefix}-V V.LIFECYCLE @ "
+                            "VFS-L-MOUNTED ="
+                        ),
+                        f"{prefix}-V _EXT4-READY?",
+                        f"{prefix}-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        f"{prefix}-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        f"{prefix}-CTX _EXT4-C.RECOVERY + @ 0=",
+                        (
+                            f"{prefix}-CTX _EXT4-C.J.WRITE-ACTIVE + @ "
+                            "0="
+                        ),
+                        f"{prefix}-CTX _EXT4-C.J.START + @ 0=",
+                        (
+                            f"{prefix}-CTX _EXT4-C.J.WITNESS + @ "
+                            "_EXT4-JW-NONE ="
+                        ),
+                        f"{prefix}-CTX _EXT4-C.J.ANCHOR + @ 0=",
+                        (
+                            f"{prefix}-CTX _EXT4-C.J.PRIMARY-TORN + @ "
+                            "0="
+                        ),
+                        (
+                            f"{prefix}-CTX _EXT4-C.SUPER-TORN + @ 0="
+                        ),
+                        f"{prefix}-CTX _EXT4-C.J.WRITER + @ 0=",
+                        (
+                            f"{prefix}-CTX _EXT4-C.J.WRITER-CURRENT + @ "
+                            "-1 ="
+                        ),
+                        replay_check,
+                        (
+                            f"{prefix}-CTX _EXT4-C.J.HOME-WRITES + @ "
+                            f"{expected_home_writes} ="
+                        ),
+                        (
+                            f"{prefix}-CTX _EXT4-C.SB + "
+                            "_EXT4-SUPER-CHECKSUM?"
+                        ),
+                        (
+                            f"{prefix}-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0="
+                        ),
+                        f"{prefix}-OPEN-IOR 0=",
+                        f"{prefix}-READ-IOR 0=",
+                        f"{prefix}-ACTUAL {len(expected_file)} =",
+                        (
+                            f"{buffer_name} {expected_name} "
+                            f"{len(expected_file)} _EXT4-BYTES=?"
+                        ),
+                        f"{prefix}-VN VN.MTIME @ {seconds} =",
+                        (
+                            f"{prefix}-VN VN.MTIME-NS @ "
+                            f"{nanoseconds} ="
+                        ),
+                        f"{prefix}-VN VN.CTIME @ {seconds} =",
+                        (
+                            f"{prefix}-VN VN.CTIME-NS @ "
+                            f"{nanoseconds} ="
+                        ),
+                        f"{prefix}-VN VN.SIZE-LO @ {len(expected_file)} =",
+                        f"{prefix}-VN VN.SIZE-HI @ 0=",
+                        (
+                            f"{prefix}-VN VN.FLAGS @ "
+                            "VFS-IF-DIRTY AND 0="
+                        ),
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+            f"{prefix}-FD VFS-CLOSE? CONSTANT {prefix}-CLOSE-IOR",
+            (
+                f"0 {prefix}-V VFS-UNMOUNT "
+                f"CONSTANT {prefix}-UNMOUNT-IOR"
+            ),
+            (
+                f"{prefix}-CLOSE-IOR 0= "
+                f"{prefix}-UNMOUNT-IOR 0= AND "
+                f"{prefix}-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                f'IF ." {marker}-UNMOUNTED" THEN'
+            ),
+        ],
+        capture_media=destination,
+    )
+    _assert_emitted(output, marker)
+    _assert_emitted(output, f"{marker}-UNMOUNTED")
+    return output, trace, media_sha256
+
+
+def test_staged_public_write_second_commit_flush_converges_across_views(
+    staged_write_two_success_fixture: dict[str, object],
+    writer_activation_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Prove F22 converges with or without the second commit block."""
+    success_trace = staged_write_two_success_fixture["trace"]
+    expected_file = staged_write_two_success_fixture["expected_file"]
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    standard = writer_activation_fixture["standard"]
+    guard_logical = writer_activation_fixture["guard_logical"]
+    assert isinstance(success_trace, tuple)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(standard, bytes)
+    assert isinstance(guard_logical, int)
+
+    inode_number = 14
+    superblock, inode, inode_offset = _ext4_inode_record(
+        path, inode_number
+    )
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    assert block_size == 1024
+    assert inode_size == 256
+    data_block = _extent_root_physical(inode, 0)
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    file_size = struct.unpack_from("<I", inode, 0x04)[0]
+    assert file_size == len(expected_file) == 54
+
+    original_data = _patched_ext4_home(
+        path, source_patches, data_block, block_size=block_size
+    )
+    original_inode_home = _patched_ext4_home(
+        path, source_patches, inode_home, block_size=block_size
+    )
+    assert (
+        original_inode_home[
+            inode_block_offset : inode_block_offset + inode_size
+        ]
+        == inode
+    )
+    expected_data = bytearray(original_data)
+    expected_data[
+        _STAGED_TWO_FIRST_OFFSET : (
+            _STAGED_TWO_FIRST_OFFSET
+            + len(_STAGED_TWO_FIRST_REPLACEMENT)
+        )
+    ] = _STAGED_TWO_FIRST_REPLACEMENT
+    expected_data[
+        _STAGED_TWO_SECOND_OFFSET : (
+            _STAGED_TWO_SECOND_OFFSET
+            + len(_STAGED_TWO_SECOND_REPLACEMENT)
+        )
+    ] = _STAGED_TWO_SECOND_REPLACEMENT
+    assert bytes(expected_data[:file_size]) == expected_file
+    first_inode_home = _staged_write_timestamped_inode_home(
+        superblock,
+        inode,
+        original_inode_home,
+        inode_number=inode_number,
+        inode_block_offset=inode_block_offset,
+        epoch_ms=_STAGED_TWO_FIRST_EPOCH_MS,
+    )
+    second_inode_home = _staged_write_timestamped_inode_home(
+        superblock,
+        inode,
+        original_inode_home,
+        inode_number=inode_number,
+        inode_block_offset=inode_block_offset,
+        epoch_ms=_STAGED_TWO_SECOND_EPOCH_MS,
+    )
+    assert first_inode_home != second_inode_home
+
+    inode_event = ("write", inode_home * 2, 2)
+    data_event = ("write", data_block * 2, 2)
+    inode_events = tuple(
+        index
+        for index, event in enumerate(success_trace)
+        if event == inode_event
+    )
+    data_events = tuple(
+        index
+        for index, event in enumerate(success_trace)
+        if event == data_event
+    )
+    assert len(inode_events) == len(data_events) == 2
+    first_inode_event, second_inode_event = inode_events
+    _, second_data_event = data_events
+    commit_flush_event = second_inode_event - 1
+    assert success_trace[commit_flush_event] == ("flush", 0, 0)
+    assert _trace_ordinal_at_event(
+        success_trace, "flush", commit_flush_event
+    ) == 22
+    assert commit_flush_event == _trace_event_index_for_ordinal(
+        success_trace, "flush", 22
+    )
+    body_flush_event = next(
+        index
+        for index in range(second_data_event + 1, commit_flush_event)
+        if success_trace[index][0] == "flush"
+    )
+    assert _trace_ordinal_at_event(
+        success_trace, "flush", body_flush_event
+    ) == 18
+    assert first_inode_event < second_data_event < body_flush_event
+
+    first = struct.unpack_from(">I", standard, 0x14)[0]
+    maxlen = struct.unpack_from(">I", standard, 0x10)[0]
+    commit_logical = _jbd2_ring_advance(
+        guard_logical, 3, first=first, maxlen=maxlen
+    )
+    commit_physical = _ext4_journal_physical_map(
+        path, (commit_logical,)
+    )[commit_logical]
+    assert success_trace[commit_flush_event - 1] == (
+        "write",
+        commit_physical * 2,
+        2,
+    )
+    second_tid = (
+        struct.unpack_from(">I", standard, 0x18)[0] + 4
+    ) & 0xFFFF_FFFF
+    expected_commit = bytearray(block_size)
+    struct.pack_into(
+        ">III", expected_commit, 0, 0xC03B3998, 2, second_tid
+    )
+    expected_commit = _jbd2_commit_with_checksum(
+        expected_commit, standard[0x30:0x40], second_tid
+    )
+    expected_preseed = bytearray(expected_commit)
+    expected_preseed[0] = 0
+
+    first_seconds, first_milliseconds = divmod(
+        _STAGED_TWO_FIRST_EPOCH_MS, 1000
+    )
+    first_nanoseconds = first_milliseconds * 1_000_000
+    working = tmp_path / "staged-f22-working.img"
+    survived = tmp_path / "staged-f22-survived.img"
+    prior_fence = tmp_path / "staged-f22-prior-fence.img"
+    output, failed_trace, survived_sha256 = run_recovery_forth(
+        path,
+        working,
+        [
+            (
+                f"CREATE _F22-CLOCK {_STAGED_TWO_FIRST_EPOCH_MS} , "
+                f"{_STAGED_TWO_SECOND_EPOCH_MS} ,"
+            ),
+            "VARIABLE _F22-CLOCK-CALLS",
+            (
+                ": _F22-NOW ( clock -- epoch-ms ior ) "
+                "_F22-CLOCK-CALLS @ CELLS + @ "
+                "1 _F22-CLOCK-CALLS +! 0 ;"
+            ),
+            "T-ARENA CONSTANT _F22-ARENA",
+            (
+                "_F22-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _F22-MOUNT-IOR CONSTANT _F22-V"
+            ),
+            "_F22-V _EXT4-CTX CONSTANT _F22-CTX",
+            (
+                "' _F22-NOW _F22-CLOCK _F22-V "
+                "EXT4-BIND-WRITE-CLOCK? CONSTANT _F22-CLOCK-IOR"
+            ),
+            "_F22-ARENA ARENA-USED CONSTANT _F22-MAIN-PREBIND",
+            *_ext4_dedicated_writer_profile_forth(
+                "_F22-PROFILE", "_F22-V"
+            ),
+            "_F22-ARENA ARENA-USED CONSTANT _F22-MAIN-POSTBIND",
+            (
+                'S" /fixture/payload.txt" '
+                "VFS-FF-READ VFS-FF-WRITE OR _F22-V VFS-OPEN? "
+                "CONSTANT _F22-OPEN-IOR CONSTANT _F22-FD"
+            ),
+            "_F22-FD FD.INODE @ D.VNODE @ CONSTANT _F22-VN",
+            "_F22-ARENA ARENA-USED CONSTANT _F22-MAIN-CLEAN",
+            (
+                f"{_STAGED_TWO_FIRST_OFFSET} _F22-FD VFS-SEEK? "
+                "CONSTANT _F22-FIRST-SEEK-IOR"
+            ),
+            (
+                f'S" {_STAGED_TWO_FIRST_REPLACEMENT.decode()}" '
+                "_F22-FD VFS-WRITE? CONSTANT _F22-FIRST-IOR "
+                "CONSTANT _F22-FIRST-ACTUAL"
+            ),
+            "_F22-FD FD.CUR-LO @ CONSTANT _F22-FIRST-CURSOR",
+            (
+                "_F22-CTX _EXT4-C.J.WRITER + @ "
+                "CONSTANT _F22-FIRST-WRITER"
+            ),
+            "_F22-ARENA ARENA-USED CONSTANT _F22-MAIN-AFTER-FIRST",
+            (
+                "_F22-PROFILE-ARENA ARENA-USED "
+                "CONSTANT _F22-PROFILE-AFTER-FIRST"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_F22-MOUNT-IOR 0=",
+                        (
+                            "_F22-V V.BINDING @ "
+                            "EXT4-STAGED-WRITE-BINDING ="
+                        ),
+                        "_F22-CLOCK-IOR 0=",
+                        "_F22-PROFILE-SIZE-IOR 0=",
+                        "_F22-PROFILE-SIZE 0>",
+                        "_F22-PROFILE-BIND-IOR 0=",
+                        "_F22-PROFILE-USED _F22-PROFILE-SIZE =",
+                        "_F22-MAIN-POSTBIND _F22-MAIN-PREBIND =",
+                        "_F22-OPEN-IOR 0=",
+                        "_F22-FIRST-SEEK-IOR 0=",
+                        "_F22-FIRST-IOR 0=",
+                        (
+                            f"_F22-FIRST-ACTUAL "
+                            f"{len(_STAGED_TWO_FIRST_REPLACEMENT)} ="
+                        ),
+                        (
+                            f"_F22-FIRST-CURSOR "
+                            f"{_STAGED_TWO_FIRST_OFFSET + len(_STAGED_TWO_FIRST_REPLACEMENT)} ="
+                        ),
+                        "_F22-FIRST-WRITER _F22-PROFILE-BASE =",
+                        "_F22-FIRST-WRITER _EXT4-JWR-VALID?",
+                        "_F22-FIRST-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        (
+                            "_F22-CTX _EXT4-C.J.HOME-WRITES + @ 1 ="
+                        ),
+                        (
+                            "_F22-MAIN-AFTER-FIRST "
+                            "_F22-MAIN-CLEAN ="
+                        ),
+                        (
+                            "_F22-PROFILE-AFTER-FIRST "
+                            "_F22-PROFILE-USED ="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-STAGED-F22-FIRST" THEN'
+            ),
+            (
+                f"{_STAGED_TWO_SECOND_OFFSET} _F22-FD VFS-SEEK? "
+                "CONSTANT _F22-SECOND-SEEK-IOR"
+            ),
+            (
+                f'S" {_STAGED_TWO_SECOND_REPLACEMENT.decode()}" '
+                "_F22-FD VFS-WRITE? CONSTANT _F22-SECOND-IOR "
+                "CONSTANT _F22-SECOND-ACTUAL"
+            ),
+            "_F22-FD FD.CUR-LO @ CONSTANT _F22-SECOND-CURSOR",
+            (
+                "_F22-CTX _EXT4-C.J.WRITER + @ "
+                "CONSTANT _F22-SECOND-WRITER"
+            ),
+            "_F22-ARENA ARENA-USED CONSTANT _F22-MAIN-AFTER-SECOND",
+            (
+                "_F22-PROFILE-ARENA ARENA-USED "
+                "CONSTANT _F22-PROFILE-AFTER-SECOND"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_F22-SECOND-SEEK-IOR 0=",
+                        (
+                            f"_F22-SECOND-ACTUAL "
+                            f"{len(_STAGED_TWO_SECOND_REPLACEMENT)} ="
+                        ),
+                        (
+                            f"_F22-SECOND-CURSOR "
+                            f"{_STAGED_TWO_SECOND_OFFSET + len(_STAGED_TWO_SECOND_REPLACEMENT)} ="
+                        ),
+                        (
+                            "_F22-SECOND-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-VOLUME ="
+                        ),
+                        (
+                            "_F22-SECOND-IOR VFS-IOR-REASON "
+                            "VFS-R-IO ="
+                        ),
+                        (
+                            "_F22-SECOND-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-PARTIAL "
+                            "VFS-IOR-F-READONLY OR ="
+                        ),
+                        "_F22-V V.LAST-IOR @ _F22-SECOND-IOR =",
+                        "_F22-SECOND-WRITER _F22-FIRST-WRITER =",
+                        "_F22-SECOND-WRITER _F22-PROFILE-BASE =",
+                        "_F22-SECOND-WRITER _EXT4-JWR-VALID?",
+                        (
+                            "_F22-SECOND-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-FAULTED ="
+                        ),
+                        (
+                            "_F22-SECOND-WRITER _EXT4-JWR.PHASE + @ "
+                            "_EXT4-JWP-COMMIT-FLUSH ="
+                        ),
+                        (
+                            "_F22-SECOND-WRITER _EXT4-JWR.FAULT + @ "
+                            "VFS-IOR-DOMAIN VFS-IOR-D-VOLUME ="
+                        ),
+                        (
+                            "_F22-SECOND-WRITER _EXT4-JWR.FAULT + @ "
+                            "VFS-IOR-REASON VFS-R-IO ="
+                        ),
+                        (
+                            "_F22-SECOND-WRITER _EXT4-JWR.FAULT + @ "
+                            "VFS-IOR-FLAGS 0="
+                        ),
+                        (
+                            "_F22-CTX "
+                            "_EXT4-C.J.WRITER-STORE-KIND + @ "
+                            "_EXT4-JWR-STORE-DEDICATED ="
+                        ),
+                        (
+                            "_F22-CTX _EXT4-C.J.WRITER-ARENA + @ "
+                            "_F22-PROFILE-ARENA ="
+                        ),
+                        (
+                            "_F22-CTX _EXT4-C.J.WRITER-CURRENT + @ "
+                            "0<>"
+                        ),
+                        "_F22-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_F22-V _EXT4-READY?",
+                        "_F22-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_F22-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_F22-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        (
+                            "_F22-CTX _EXT4-C.J.WRITE-ACTIVE + @ "
+                            "0<>"
+                        ),
+                        (
+                            "_F22-CTX _EXT4-C.J.HOME-WRITES + @ 1 ="
+                        ),
+                        "_F22-CLOCK-CALLS @ 2 =",
+                        f"_F22-VN VN.MTIME @ {first_seconds} =",
+                        (
+                            "_F22-VN VN.MTIME-NS @ "
+                            f"{first_nanoseconds} ="
+                        ),
+                        f"_F22-VN VN.CTIME @ {first_seconds} =",
+                        (
+                            "_F22-VN VN.CTIME-NS @ "
+                            f"{first_nanoseconds} ="
+                        ),
+                        f"_F22-VN VN.SIZE-LO @ {file_size} =",
+                        "_F22-VN VN.SIZE-HI @ 0=",
+                        (
+                            "_F22-VN VN.FLAGS @ "
+                            "VFS-IF-DIRTY AND 0="
+                        ),
+                        (
+                            "_F22-MAIN-AFTER-SECOND "
+                            "_F22-MAIN-CLEAN ="
+                        ),
+                        (
+                            "_F22-PROFILE-AFTER-SECOND "
+                            "_F22-PROFILE-USED ="
+                        ),
+                        "_EXT4-IO-COMPLETED @ 0=",
+                        "_EXT4-IO-EXPECTED @ 0=",
+                        (
+                            f"_EXT4-MOW-ACTUAL @ "
+                            f"{len(_STAGED_TWO_SECOND_REPLACEMENT)} ="
+                        ),
+                        (
+                            "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-STAGED-F22-FAULTED" THEN'
+            ),
+            "_F22-FD VFS-CLOSE? CONSTANT _F22-CLOSE-IOR",
+            (
+                "_F22-CLOSE-IOR 0= _F22-V V.OPEN-COUNT @ 0= AND "
+                "_F22-V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_F22-V V.FLAGS @ VFS-F-RO AND 0<> AND "
+                "_F22-V V.FLAGS @ VFS-F-DIRTY AND 0<> AND "
+                'IF ." EXT4-STAGED-F22-CLOSED" THEN'
+            ),
+        ],
+        patches=source_patches,
+        flush_faults_by_ordinal={
+            22: {
+                "stage": "flush",
+                "result": STORAGE_RESULT_FLUSH_FAILURE,
+                "command": STORAGE_CMD_FLUSH,
+            }
+        },
+        capture_media=survived,
+        capture_prior_flush_media=prior_fence,
+    )
+    _assert_emitted(output, "EXT4-STAGED-F22-FIRST")
+    _assert_emitted(output, "EXT4-STAGED-F22-FAULTED")
+    _assert_emitted(output, "EXT4-STAGED-F22-CLOSED")
+    assert failed_trace == success_trace[: commit_flush_event + 1]
+    assert failed_trace.count(data_event) == 2
+    assert failed_trace.count(inode_event) == 1
+    assert working.is_file()
+    assert survived.is_file()
+    assert prior_fence.is_file()
+    assert _sha256(working) == _sha256(prior_fence)
+    assert _sha256(survived) == survived_sha256
+    assert _sha256(survived) != _sha256(prior_fence)
+
+    for interrupted in (survived, prior_fence):
+        assert _read_ext4_home(
+            interrupted, data_block, block_size=block_size
+        ) == bytes(expected_data)
+        assert _read_ext4_home(
+            interrupted, inode_home, block_size=block_size
+        ) == first_inode_home
+    assert _read_ext4_home(
+        survived, commit_physical, block_size=block_size
+    ) == expected_commit
+    assert _read_ext4_home(
+        prior_fence, commit_physical, block_size=block_size
+    ) == bytes(expected_preseed)
+
+    recovery_cases = (
+        (
+            "survived",
+            survived,
+            _STAGED_TWO_SECOND_EPOCH_MS,
+            second_inode_home,
+            1,
+            True,
+        ),
+        (
+            "prior",
+            prior_fence,
+            _STAGED_TWO_FIRST_EPOCH_MS,
+            first_inode_home,
+            0,
+            True,
+        ),
+    )
+    for (
+        durability,
+        interrupted,
+        expected_epoch_ms,
+        expected_inode_home,
+        expected_home_writes,
+        expected_replayed,
+    ) in recovery_cases:
+        repaired = tmp_path / f"staged-f22-{durability}-repaired.img"
+        stable = tmp_path / f"staged-f22-{durability}-stable.img"
+        marker = f"EXT4-STAGED-F22-{durability.upper()}-RECOVERED"
+        _, recovery_trace, repaired_sha256 = (
+            _staged_write_recovery_readback(
+                interrupted,
+                repaired,
+                expected_file=expected_file,
+                expected_epoch_ms=expected_epoch_ms,
+                expected_home_writes=expected_home_writes,
+                expected_replayed=expected_replayed,
+                prefix=f"_F22-{durability.upper()}-R",
+                marker=marker,
+            )
+        )
+        assert len(
+            _write_ordinals_for_ext4_home(
+                recovery_trace, inode_home, block_size=block_size
+            )
+        ) == expected_home_writes
+        assert not _write_ordinals_for_ext4_home(
+            recovery_trace, data_block, block_size=block_size
+        )
+        assert _sha256(repaired) == repaired_sha256
+        assert _read_ext4_home(
+            repaired, data_block, block_size=block_size
+        ) == bytes(expected_data)
+        assert _read_ext4_home(
+            repaired, inode_home, block_size=block_size
+        ) == expected_inode_home
+
+        _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+            repaired,
+            stable,
+            expected_file=expected_file,
+            expected_epoch_ms=expected_epoch_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            prefix=f"_F22-{durability.upper()}-S",
+            marker=f"EXT4-STAGED-F22-{durability.upper()}-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == repaired_sha256
+        assert _sha256(stable) == stable_sha256
+        assert _read_ext4_home(
+            stable, data_block, block_size=block_size
+        ) == bytes(expected_data)
+        assert _read_ext4_home(
+            stable, inode_home, block_size=block_size
+        ) == expected_inode_home
 
 
 def test_staged_write_callback_composes_with_generic_vfs_cursor(

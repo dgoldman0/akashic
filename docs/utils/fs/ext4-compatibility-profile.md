@@ -837,8 +837,10 @@ flushes metadata after-images, turns the active journal into a standard empty
 journal without clearing `RECOVER`, and rebases the same allocation for an
 immediate sequential transaction without reactivation or arena growth. It
 now also checkpoints `COMMITTED` state during public unmount and performs the
-six-write clean deactivation with terminal fault quarantine. Public write
-capabilities remain disabled. Modern `ORPHAN_PRESENT` and a nonzero legacy
+six-write clean deactivation with terminal fault quarantine. The explicitly
+named staged binding publishes only the qualified existing-block overwrite;
+the ordinary ext4 binding remains read-only and every other mutation
+capability remains disabled. Modern `ORPHAN_PRESENT` and a nonzero legacy
 `s_last_orphan` are now admitted, after any required journal replay and strict
 reload, into a unified, non-mutating two-pass preflight. Legacy discovery
 follows checksum-valid allocated inodes through `i_dtime` under a
@@ -1338,6 +1340,18 @@ later-error behavior is qualified through `VFS-WRITE?` and
 also proves that generic VFS advances only by the confirmed prefix, preserves
 the partial read-only result, and blocks retry before redispatch after writer
 quarantine.
+
+The staged-operation crash evidence includes the final commit flush of a
+second write through the reused public writer. The successful trace derives
+that boundary as F22 after the second ordered-data body fence and before its
+inode checkpoint. A flush failure leaves both durability views with both data
+edits and the first inode home. Recovery replays exactly one inode home when
+the final commit survived, and zero when only the prior fence survived; the
+latter still completes active-journal recovery. Both paths clear recovery
+authority, preserve the appropriate exact timestamp, and remain unchanged on
+a second clean remount. This representative reachable-state proof complements
+the existing torn inode-home checkpoint recovery without turning promotion
+into an exhaustive ordinal matrix.
 
 The same staged one-block overwrite accepts an existing initialized block
 through an authenticated external extent tree rather than requiring an inline
