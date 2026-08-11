@@ -4342,18 +4342,24 @@ _EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH = (
 
 
 def _ext4_dedicated_writer_profile_forth(
-    prefix: str, vfs: str
+    prefix: str,
+    vfs: str,
+    metadata_capacity: int = 1,
+    data_capacity: int = 1,
+    revoke_capacity: int = 0,
 ) -> tuple[str, ...]:
-    """Build and bind one exact 1/1/0 caller-owned writer profile."""
+    """Build and bind one exact caller-owned writer profile."""
     return (
         (
-            f"1 1 0 {vfs} EXT4-WRITER-WORKSPACE-BYTES? "
+            f"{metadata_capacity} {data_capacity} {revoke_capacity} "
+            f"{vfs} EXT4-WRITER-WORKSPACE-BYTES? "
             f"CONSTANT {prefix}-SIZE-IOR CONSTANT {prefix}-SIZE"
         ),
         f"{prefix}-SIZE A-XMEM ARENA-NEW THROW CONSTANT {prefix}-ARENA",
         f"{prefix}-ARENA A.BASE @ CONSTANT {prefix}-BASE",
         (
-            f"{prefix}-ARENA 1 1 0 {vfs} "
+            f"{prefix}-ARENA {metadata_capacity} {data_capacity} "
+            f"{revoke_capacity} {vfs} "
             f"EXT4-BIND-WRITER-ARENA? CONSTANT {prefix}-BIND-IOR"
         ),
         f"{prefix}-ARENA ARENA-USED CONSTANT {prefix}-USED",
@@ -12888,7 +12894,7 @@ def test_zero_count_loops_and_invalid_dirent_type_are_total(tmp_path: Path) -> N
             "1 _E4CTX _EXT4-C.GROUPS + !",
             (
                 "_E4CTX _EXT4-VALIDATE-INLINE-EXTENTS 0= "
-                "0 _E4CTX _EXT4-MAP-INLINE "
+                "0 _E4CTX _EXT4-MAP-EXTENT "
                 "0= SWAP 0= AND SWAP 0= AND AND "
                 "_E4CTX _EXT4-VALIDATE-BACKUPS 0= AND "
                 "9 _EXT4-DIRENT>TYPE 0= SWAP 0= AND AND "
@@ -33325,6 +33331,7 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
                 (
                     f"0 0 0 14 {generation} {first_seconds} "
                     f"{first_nanoseconds} _MWP-V "
+                    "1 ' _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE "
                     "_EXT4-MOUNTED-ONEBLOCK-WRITE "
                     "CONSTANT _MWP-ZERO-IOR CONSTANT _MWP-ZERO-ACTUAL"
                 ),
@@ -33336,6 +33343,7 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
                 (
                     f'S" X" 0 14 {generation} {first_seconds} '
                     f"{first_nanoseconds} _MWP-V "
+                    "1 ' _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE "
                     "_EXT4-MOUNTED-ONEBLOCK-WRITE "
                     "CONSTANT _MWP-NOPROFILE-IOR "
                     "CONSTANT _MWP-NOPROFILE-ACTUAL"
@@ -33352,6 +33360,7 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
                 (
                     f"_EXT4-MOW-SNAPSHOT 1 0 14 {generation} "
                     f"{first_seconds} {first_nanoseconds} _MWP-V "
+                    "1 ' _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE "
                     "_EXT4-MOUNTED-ONEBLOCK-WRITE "
                     "CONSTANT _MWP-ALIAS-IOR CONSTANT _MWP-ALIAS-ACTUAL"
                 ),
@@ -33359,6 +33368,7 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
                 (
                     f'S" X" 0 14 {generation + 1} {first_seconds} '
                     f"{first_nanoseconds} _MWP-V "
+                    "1 ' _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE "
                     "_EXT4-MOUNTED-ONEBLOCK-WRITE "
                     "CONSTANT _MWP-STALE-IOR CONSTANT _MWP-STALE-ACTUAL"
                 ),
@@ -33465,7 +33475,9 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
                     "_MW-CTX _EXT4-C.BLOCK + "
                     f"{len(first_replacement)} {first_offset} 14 "
                     f"{generation} {first_seconds} {first_nanoseconds} "
-                    "_MW-V _EXT4-MOUNTED-ONEBLOCK-WRITE "
+                    "_MW-V "
+                    "1 ' _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE "
+                    "_EXT4-MOUNTED-ONEBLOCK-WRITE "
                     "CONSTANT _MW-FIRST-IOR CONSTANT _MW-FIRST-ACTUAL"
                 ),
                 "_MW-CTX _EXT4-C.J.WRITER + @ CONSTANT _MW-WRITER",
@@ -33512,6 +33524,7 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
                 (
                     f"0 0 0 14 {generation} {second_seconds} "
                     f"{second_nanoseconds} _MW-V "
+                    "1 ' _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE "
                     "_EXT4-MOUNTED-ONEBLOCK-WRITE "
                     "CONSTANT _MW-ACTIVE-ZERO-IOR "
                     "CONSTANT _MW-ACTIVE-ZERO-ACTUAL"
@@ -33533,7 +33546,9 @@ def test_mounted_one_block_write_refuses_then_reuses_one_writer(
                     "_MW-WRITER _EXT4-JWR.SCRATCH-A + @ "
                     f"{len(second_replacement)} {second_offset} 14 "
                     f"{generation} {second_seconds} {second_nanoseconds} "
-                    "_MW-V _EXT4-MOUNTED-ONEBLOCK-WRITE "
+                    "_MW-V "
+                    "1 ' _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE "
+                    "_EXT4-MOUNTED-ONEBLOCK-WRITE "
                     "CONSTANT _MW-SECOND-IOR CONSTANT _MW-SECOND-ACTUAL"
                 ),
                 "_MW-CTX _EXT4-C.J.WRITER + @ CONSTANT _MW-SECOND-WRITER",
@@ -34043,14 +34058,7 @@ def test_staged_vfs_write_publishes_shared_vnode_and_syncs_clean(
                             "_VA-BIND-IOR 0=",
                             "_VA-REBIND-IOR VFS-E-CONFLICT =",
                             "_VA-HOLE-ACTUAL 0=",
-                            (
-                                "_VA-HOLE-IOR VFS-IOR-REASON "
-                                "VFS-R-UNSUPPORTED ="
-                            ),
-                            (
-                                "_VA-HOLE-IOR VFS-IOR-DETAIL "
-                                "EXT4-D-DATA-MAP ="
-                            ),
+                            "_VA-HOLE-IOR VFS-E-NOSPC =",
                             "_VA-CLOCK 2 CELLS + @ 1 =",
                             "_VA-VN VN.MTIME @ _VA-OLD-MTIME =",
                             "_VA-VN VN.MTIME-NS @ _VA-OLD-MTIME-NS =",
@@ -34331,6 +34339,206 @@ def test_staged_vfs_write_publishes_shared_vnode_and_syncs_clean(
         assert final_guard == bytes(block_size)
         assert final_data == bytes(expected_data)
         assert final_inode_home == bytes(expected_inode_home)
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
+def test_staged_vfs_write_fills_one_complete_in_size_hole(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    inode_number = 17
+    candidate = 1351
+    bitmap_home = 259
+    gdt_home = 2
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    inode_home = inode_offset // block_size
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0]
+    assert block_size == 1024
+    assert inode_size == 256
+    assert inode_home == 279
+    assert generation == 0
+    assert struct.unpack_from("<I", inode, 0x04)[0] == 3072
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 4
+    with pytest.raises(AssertionError, match="logical block 1 is unmapped"):
+        _extent_root_physical(inode, 1)
+    assert not _ext4_block_allocation_state(path, (candidate,))[candidate]
+
+    replacement = b"HOLE-FILL"
+    block_offset = 500
+    write_offset = block_size + block_offset
+    epoch_ms = 3_000_000_123_456
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    expected_block = bytearray(block_size)
+    expected_block[block_offset : block_offset + len(replacement)] = replacement
+
+    media_path = tmp_path / "staged-vfs-hole-fill.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            media_path,
+            [
+                "CREATE _PH-STAT VFS-STATFS-SIZE ALLOT",
+                f"CREATE _PH-BUF {block_size} ALLOT",
+                "VARIABLE _PH-CLOCK-CALLS",
+                (
+                    ": _PH-NOW ( context -- epoch-ms ior ) "
+                    "DROP 1 _PH-CLOCK-CALLS +! "
+                    f"{epoch_ms} 0 ;"
+                ),
+                "T-ARENA CONSTANT _PH-ARENA",
+                (
+                    "_PH-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _PH-MOUNT-IOR CONSTANT _PH-V"
+                ),
+                "_PH-V _EXT4-CTX CONSTANT _PH-CTX",
+                (
+                    "' _PH-NOW 0 _PH-V EXT4-BIND-WRITE-CLOCK? "
+                    "CONSTANT _PH-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_PH-PROFILE", "_PH-V", 4, 1, 0
+                ),
+                (
+                    'S" /fixture/sparse.bin" '
+                    "VFS-FF-READ VFS-FF-WRITE OR _PH-V VFS-OPEN? "
+                    "CONSTANT _PH-OPEN-IOR CONSTANT _PH-FD"
+                ),
+                "_PH-FD FD.INODE @ D.VNODE @ CONSTANT _PH-VN",
+                "_PH-VN VN.ATIME @ CONSTANT _PH-OLD-ATIME",
+                "_PH-VN VN.ATIME-NS @ CONSTANT _PH-OLD-ATIME-NS",
+                "_PH-VN VN.SIZE-LO @ CONSTANT _PH-OLD-SIZE",
+                "_PH-VN VN.GEN @ CONSTANT _PH-OLD-GEN",
+                "_PH-VN VN.NLINK @ CONSTANT _PH-OLD-NLINK",
+                "_PH-VN VN.BLOCKS @ CONSTANT _PH-OLD-BLOCKS",
+                (
+                    "_PH-STAT VFS-STATFS-SIZE _PH-V VFS-STATFS "
+                    "CONSTANT _PH-STAT-BEFORE-IOR"
+                ),
+                "_PH-STAT VSF.BFREE @ CONSTANT _PH-FREE-BEFORE",
+                (
+                    f"{write_offset} _PH-FD VFS-SEEK? "
+                    "CONSTANT _PH-SEEK-IOR"
+                ),
+                (
+                    f'S" {replacement.decode()}" _PH-FD VFS-WRITE? '
+                    "CONSTANT _PH-WRITE-IOR CONSTANT _PH-ACTUAL"
+                ),
+                "_PH-FD FD.CUR-LO @ CONSTANT _PH-CURSOR",
+                "_PH-CTX _EXT4-C.J.WRITER + @ CONSTANT _PH-WRITER",
+                "_PH-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _PH-HOMES",
+                (
+                    "_PH-STAT VFS-STATFS-SIZE _PH-V VFS-STATFS "
+                    "CONSTANT _PH-STAT-AFTER-IOR"
+                ),
+                "_PH-STAT VSF.BFREE @ CONSTANT _PH-FREE-AFTER",
+                "1024 _PH-FD VFS-SEEK? CONSTANT _PH-READ-SEEK-IOR",
+                (
+                    f"_PH-BUF {block_size} _PH-FD VFS-READ? "
+                    "CONSTANT _PH-READ-IOR CONSTANT _PH-READ-ACTUAL"
+                ),
+                (
+                    _forth_conjunction(
+                        [
+                            "_PH-MOUNT-IOR 0=",
+                            "_PH-CLOCK-IOR 0=",
+                            "_PH-PROFILE-SIZE-IOR 0=",
+                            "_PH-PROFILE-BIND-IOR 0=",
+                            "_PH-PROFILE-USED _PH-PROFILE-SIZE =",
+                            "_PH-OPEN-IOR 0=",
+                            "_PH-SEEK-IOR 0=",
+                            "_PH-WRITE-IOR 0=",
+                            f"_PH-ACTUAL {len(replacement)} =",
+                            f"_PH-CURSOR {write_offset + len(replacement)} =",
+                            "_PH-CLOCK-CALLS @ 1 =",
+                            f"_PH-VN VN.MTIME @ {seconds} =",
+                            f"_PH-VN VN.MTIME-NS @ {nanoseconds} =",
+                            f"_PH-VN VN.CTIME @ {seconds} =",
+                            f"_PH-VN VN.CTIME-NS @ {nanoseconds} =",
+                            "_PH-VN VN.ATIME @ _PH-OLD-ATIME =",
+                            "_PH-VN VN.ATIME-NS @ _PH-OLD-ATIME-NS =",
+                            "_PH-VN VN.SIZE-LO @ _PH-OLD-SIZE =",
+                            "_PH-VN VN.GEN @ _PH-OLD-GEN =",
+                            "_PH-VN VN.NLINK @ _PH-OLD-NLINK =",
+                            "_PH-OLD-BLOCKS 4 =",
+                            "_PH-VN VN.BLOCKS @ 6 =",
+                            "_PH-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                            "_PH-STAT-BEFORE-IOR 0=",
+                            "_PH-STAT-AFTER-IOR 0=",
+                            "_PH-FREE-AFTER _PH-FREE-BEFORE 1- =",
+                            "_PH-HOMES 4 =",
+                            "_PH-WRITER _PH-PROFILE-BASE =",
+                            "_PH-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_PH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            "_PH-READ-SEEK-IOR 0=",
+                            "_PH-READ-IOR 0=",
+                            f"_PH-READ-ACTUAL {block_size} =",
+                            f"_PH-BUF {block_offset} _EXT4-BYTES-ZERO?",
+                            (
+                                f'_PH-BUF {block_offset} + S" '
+                                f'{replacement.decode()}" _EXT4-BYTES=?'
+                            ),
+                            (
+                                f"_PH-BUF {block_offset + len(replacement)} + "
+                                f"{block_size - block_offset - len(replacement)} "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-HOLE-FILL-PUBLISHED" THEN'
+                ),
+                "_PH-FD VFS-CLOSE? CONSTANT _PH-CLOSE-IOR",
+                "0 _PH-V VFS-UNMOUNT CONSTANT _PH-UNMOUNT-IOR",
+                (
+                    "_PH-CLOSE-IOR 0= _PH-UNMOUNT-IOR 0= AND "
+                    "_PH-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_PH-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_PH-PROFILE-ARENA A.PTR @ _PH-PROFILE-BASE = AND "
+                    'IF ." EXT4-PUBLIC-HOLE-FILL-UNMOUNTED" THEN'
+                ),
+            ],
+            patches=source_patches
+            + ((candidate * block_size, bytes((0xA5,)) * block_size),),
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-HOLE-FILL-PUBLISHED")
+        _assert_emitted(output, "EXT4-PUBLIC-HOLE-FILL-UNMOUNTED")
+        assert trace[: len(activation_trace)] == activation_trace
+        assert trace.count(("write", candidate * 2, 2)) == 1
+        assert trace.count(("write", bitmap_home * 2, 2)) == 1
+        assert trace.count(("write", gdt_home * 2, 2)) == 1
+        assert trace.count(("write", inode_home * 2, 2)) == 1
+
+        final_superblock, final_inode, _ = _ext4_inode_record(
+            media_path, inode_number
+        )
+        assert _ext4_block_allocation_state(
+            media_path, (candidate,)
+        )[candidate]
+        assert _extent_root_physical(final_inode, 1) == candidate
+        assert struct.unpack_from("<I", final_inode, 0x04)[0] == 3072
+        assert struct.unpack_from("<I", final_inode, 0x1C)[0] == 6
+        assert struct.unpack_from("<I", final_superblock, 0x0C)[0] == (
+            free_blocks_before - 1
+        )
+        with media_path.open("rb") as source:
+            source.seek(candidate * block_size)
+            assert source.read(block_size) == bytes(expected_block)
     finally:
         media_path.unlink(missing_ok=True)
 
@@ -34720,14 +34928,7 @@ def test_staged_vfs_write_returns_block_bounded_short_success(
                             f"_SC-FIRST-COUNT {source_bytes} =",
                             "_SC-FIRST-CHUNK 8 =",
                             "_SC-SECOND-ACTUAL 0=",
-                            (
-                                "_SC-SECOND-IOR VFS-IOR-REASON "
-                                "VFS-R-UNSUPPORTED ="
-                            ),
-                            (
-                                "_SC-SECOND-IOR VFS-IOR-DETAIL "
-                                "EXT4-D-DATA-MAP ="
-                            ),
+                            "_SC-SECOND-IOR VFS-E-NOSPC =",
                             f"_SC-SECOND-COUNT {source_bytes - 8} =",
                             f"_SC-SECOND-CHUNK {block_size} =",
                             "_SC-CLOCK 2 CELLS + @ 2 =",
@@ -35874,14 +36075,7 @@ def test_staged_write_callback_composes_with_generic_vfs_cursor(
                                 "AND 0<>"
                             ),
                             "_GV-SEEK-IOR 0=",
-                            (
-                                "_GV-EXACT-IOR VFS-IOR-REASON "
-                                "VFS-R-UNSUPPORTED ="
-                            ),
-                            (
-                                "_GV-EXACT-IOR VFS-IOR-DETAIL "
-                                "EXT4-D-DATA-MAP ="
-                            ),
+                            "_GV-EXACT-IOR VFS-E-NOSPC =",
                             "_GV-EXACT-IOR VFS-IOR-FLAGS 0=",
                             "_GV-V V.LAST-IOR @ _GV-EXACT-IOR =",
                             f"_GV-EXACT-CURSOR {block_size} =",
@@ -35889,7 +36083,6 @@ def test_staged_write_callback_composes_with_generic_vfs_cursor(
                             f"_EXT4-WR-COUNT @ {source_bytes - 8} =",
                             f"_EXT4-WR-OFFSET @ {block_size} =",
                             f"_EXT4-WR-CHUNK @ {block_size} =",
-                            "_EXT4-WR-ACTUAL @ 0=",
                             "_GV-CLOCK 2 CELLS + @ 2 =",
                             f"_GV-VN VN.MTIME @ {seconds} =",
                             f"_GV-VN VN.MTIME-NS @ {nanoseconds} =",
@@ -36135,7 +36328,6 @@ def test_staged_write_fault_advances_generic_vfs_confirmed_prefix(
                             f"_EXT4-WR-COUNT @ {len(replacement)} =",
                             f"_EXT4-WR-OFFSET @ {write_offset} =",
                             f"_EXT4-WR-CHUNK @ {len(replacement)} =",
-                            f"_EXT4-WR-ACTUAL @ {expected_actual} =",
                             "_EXT4-IO-COMPLETED @ 1 =",
                             "_EXT4-IO-EXPECTED @ 2 =",
                             "_GF-CLOSE-IOR 0=",
@@ -36626,7 +36818,6 @@ def staged_multiblock_exact_fixture(
                             f"{(first_logical + 1) * block_size} ="
                         ),
                         f"_EXT4-WR-CHUNK @ {second_count} =",
-                        f"_EXT4-WR-ACTUAL @ {second_count} =",
                         f"_EXT4-JOW-PHYS @ {second_data_block} =",
                         "_MB-READ-SEEK-IOR 0=",
                         "_MB-READ-IOR 0=",

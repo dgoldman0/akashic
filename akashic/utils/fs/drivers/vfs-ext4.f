@@ -35,13 +35,10 @@ REQUIRE ../vfs.f
 
 0x01 CONSTANT _EXT4-JBD2-F-ESCAPE
 0x02 CONSTANT _EXT4-JBD2-F-SAME-UUID
-0x04 CONSTANT _EXT4-JBD2-F-DELETED
 0x08 CONSTANT _EXT4-JBD2-F-LAST
 0x0F CONSTANT _EXT4-JBD2-F-ALL
 
 0x01 CONSTANT _EXT4-JBD2-I-REVOKE
-0x02 CONSTANT _EXT4-JBD2-I-64BIT
-0x10 CONSTANT _EXT4-JBD2-I-CSUM-V3
 0x12 CONSTANT _EXT4-JBD2-I-RECOVERY
 0x13 CONSTANT _EXT4-JBD2-I-RECOVERY-REVOKE
 4    CONSTANT _EXT4-JBD2-CRC32C
@@ -66,14 +63,11 @@ REQUIRE ../vfs.f
 0x00001000 CONSTANT _EXT4-INDEX-FL
 0x00040000 CONSTANT _EXT4-HUGE-FILE-FL
 0x00004000 CONSTANT _EXT4-JOURNAL-DATA-FL
-0x00000010 CONSTANT _EXT4-IMMUTABLE-FL
-0x00000020 CONSTANT _EXT4-APPEND-FL
 5          CONSTANT _EXT4-MAX-EXTENT-DEPTH
 12         CONSTANT _EXT4-NDIRECT
 15         CONSTANT _EXT4-N-BLOCK-PTRS
 1 CONSTANT _EXT4-BG-INODE-UNINIT
 2 CONSTANT _EXT4-BG-BLOCK-UNINIT
-4 CONSTANT _EXT4-BG-INODE-ZEROED
 
 \ Superblock offsets (all ext4 fields are little-endian).
 0x000 CONSTANT _EXT4-SB.INODES
@@ -1526,7 +1520,6 @@ VARIABLE _EXT4-IR-LO
 VARIABLE _EXT4-IR-HI
 VARIABLE _EXT4-IR-HAS-HI
 VARIABLE _EXT4-IR-CALC
-VARIABLE _EXT4-IR-BIT
 VARIABLE _EXT4-IR-TABLE
 
 : _EXT4-PREPARE-INODE-LOOKUP  ( inode-number ctx -- ior )
@@ -2110,10 +2103,6 @@ VARIABLE _EXT4-LM-DIV
     ELSE
         _EXT4-MAP-LEGACY
     THEN ;
-
-\ Retain the old internal spelling for parser-level compatibility.
-: _EXT4-MAP-INLINE  ( logical-block ctx -- physical present? ior )
-    _EXT4-MAP-EXTENT ;
 
 VARIABLE _EXT4-IB-IN
 VARIABLE _EXT4-IB-CTX
@@ -5061,7 +5050,6 @@ VARIABLE _EXT4-JADV-CTX
 39 CONSTANT _EXT4-JWP-DEACTIVATE-GUARD-FLUSH
 40 CONSTANT _EXT4-JWP-DEACTIVATE-FINAL-PROOF
 
-0 CONSTANT _EXT4-JE-UNUSED
 1 CONSTANT _EXT4-JE-ACTIVE
 2 CONSTANT _EXT4-JE-CANCELLED
 
@@ -9121,7 +9109,6 @@ VARIABLE _EXT4-JEM-COUNT
 VARIABLE _EXT4-JEM-OFF
 VARIABLE _EXT4-JEM-LAST-TAG
 VARIABLE _EXT4-JEM-ENTRY
-VARIABLE _EXT4-JEM-IMAGE
 VARIABLE _EXT4-JEM-TAG
 VARIABLE _EXT4-JEM-FLAGS
 VARIABLE _EXT4-JEM-OLD-RESERVED
@@ -10002,13 +9989,6 @@ VARIABLE _EXT4-ORA-KIND
         _EXT4-RO-ORPHAN-PRESENT AND IF
             -1 _EXT4-OP-CTX @ _EXT4-C.O.CLEAR-PENDING + !
         THEN
-    THEN
-    0 ;
-
-: _EXT4-VALIDATE-ORPHAN-FILE  ( ctx -- ior )
-    DUP _EXT4-AUTHENTICATE-ORPHAN-PLAN ?DUP IF NIP EXIT THEN
-    _EXT4-C.O.ACTIVE + @ IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
     THEN
     0 ;
 
@@ -11780,9 +11760,6 @@ CREATE _EXT4-OFR-EA-RANGE 2 CELLS ALLOT
 \ geometry into another fixed table.  Check an external xattr block under the
 \ same scope, authenticate every logical orphan-block tail, withdraw the scope
 \ on every return, and finally restore the target plan record in C.INODE.
-
-: _EXT4-OFR-RANGE  ( index -- pair-address )
-    2* CELLS _EXT4-OFR-RANGES @ + ;
 
 : _EXT4-OFR-FAIL  ( ior -- ior )
     _EXT4-OFR-IOR !
@@ -15681,13 +15658,6 @@ VARIABLE _EXT4-RS-V
     DUP _EXT4-AUTHENTICATE-ORPHAN-PLAN ?DUP IF NIP EXIT THEN
     _EXT4-VALIDATE-JOURNAL ;
 
-: _EXT4-VALIDATE-REST  ( ctx -- ior )
-    DUP _EXT4-AUTHENTICATE-REST ?DUP IF NIP EXIT THEN
-    _EXT4-C.O.ACTIVE + @ IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
-    0 ;
-
 : _EXT4-RELOAD-AUTHENTICATED  ( ctx vfs -- ior )
     _EXT4-RS-V ! _EXT4-RS-CTX !
     _EXT4-RS-CTX @ _EXT4-C.SB + 2 2 _EXT4-READ-SECTORS ?DUP IF EXIT THEN
@@ -16716,7 +16686,8 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
 \ abort is latched because the persistent workspace can no longer be reused.
 \ A post-commit checkpoint-entry refusal is also terminal: give the latch a
 \ valid checkpoint phase rather than leaving replayable authority retryable in
-\ the same session.
+\ the same session.  After the caller snapshot is secure, MOW-SOURCE carries
+\ the signed metadata credit rather than the original address.
 : _EXT4-MOW-FAIL  ( ior -- actual ior )
     _EXT4-MOW-IOR !
     _EXT4-MOW-WRITER @ ?DUP IF
@@ -16740,24 +16711,25 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
             THEN THEN
         THEN
     THEN
-    _EXT4-MOW-FAULT-ACTUAL _EXT4-MOW-ACTUAL !
+    _EXT4-MOW-SOURCE @ 0> IF
+        _EXT4-MOW-FAULT-ACTUAL _EXT4-MOW-ACTUAL !
+    THEN
     _EXT4-MOW-SCRUB
     _EXT4-MOW-ACTUAL @ _EXT4-MOW-IOR @ _EXT4-MOW-RESULT ;
 
-\ Production-shaped private client for the exact qualified overwrite.  The
-\ first clean call dry-stages before it can activate the journal.  Successful
-\ calls checkpoint synchronously and retain one scrubbed write-active writer
-\ for sequential reuse; ordinary unmount performs final clean deactivation.
-\ This is deliberately absent from the ordinary EXT4-OPS and does not update
-\ VFS vnodes directly.
-\ ACTUAL is the confirmed caller-byte prefix accepted by ordered-data media;
-\ bytes after ACTUAL remain indeterminate after a fault.
+\ Common mounted engine for one typed, size-preserving transaction.  The first
+\ clean call dry-stages before journal activation; successful calls checkpoint
+\ synchronously and retain one scrubbed writer for reuse.  The stage XT has the
+\ standard typed one-block builder shape.  A negative metadata credit selects
+\ allocation reachability (only a successful emit confirms COUNT); its absolute
+\ value is the real credit.  Positive credit retains overwrite progress.
 : _EXT4-MOUNTED-ONEBLOCK-WRITE
-  ( source count file-offset inode-number expected-generation seconds nsec vfs -- actual ior )
+  ( source count file-offset inode-number expected-generation seconds nsec vfs signed-meta-credit stage-xt -- actual ior )
+    _EXT4-MOW-IOR ! _EXT4-MOW-TX !
     _EXT4-MOW-V ! _EXT4-MOW-NSEC ! _EXT4-MOW-SECONDS !
     _EXT4-MOW-GEN ! _EXT4-MOW-INO ! _EXT4-MOW-OFFSET !
     _EXT4-MOW-COUNT ! _EXT4-MOW-SOURCE !
-    0 _EXT4-MOW-WRITER ! 0 _EXT4-MOW-TX ! 0 _EXT4-MOW-ACTUAL !
+    0 _EXT4-MOW-WRITER ! 0 _EXT4-MOW-ACTUAL !
     _EXT4-MOW-ENTRY ?DUP IF 0 SWAP EXIT THEN
     _EXT4-MOW-COUNT @ 0< IF 0 VFS-E-INVALID EXIT THEN
     _EXT4-MOW-COUNT @ 0= IF 0 0 EXIT THEN
@@ -16781,32 +16753,32 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
     \ Preserve caller bytes across dry-stage abort, activation cache reuse,
     \ and live-stage writer rebase, then scrub them on every later return.
     _EXT4-MOW-SOURCE @ _EXT4-MOW-SNAPSHOT _EXT4-MOW-COUNT @ MOVE
-    1 1 0 _EXT4-MOW-CTX @ _EXT4-JTX-PREFLIGHT-CAPACITY
+    _EXT4-MOW-TX @ _EXT4-MOW-SOURCE !
+    _EXT4-MOW-SOURCE @ ABS 1 0 _EXT4-MOW-CTX @
+    _EXT4-JTX-PREFLIGHT-CAPACITY
     ?DUP IF _EXT4-MOW-FAIL EXIT THEN
-    1 1 0 _EXT4-MOW-CTX @ _EXT4-JWR-ENSURE
-    _EXT4-MOW-IOR ! _EXT4-MOW-WRITER !
-    _EXT4-MOW-IOR @ ?DUP IF _EXT4-MOW-FAIL EXIT THEN
+    _EXT4-MOW-SOURCE @ ABS 1 0 _EXT4-MOW-CTX @ _EXT4-JWR-ENSURE
+    DUP IF NIP _EXT4-MOW-FAIL EXIT THEN
+    DROP _EXT4-MOW-WRITER !
     _EXT4-MOW-ACTIVE @ 0= IF
-        1 1 0 _EXT4-MOW-WRITER @ _EXT4-JTX-BEGIN
-        _EXT4-MOW-IOR ! _EXT4-MOW-TX !
-        _EXT4-MOW-IOR @ ?DUP IF _EXT4-MOW-FAIL EXIT THEN
+        _EXT4-MOW-SOURCE @ ABS 1 0 _EXT4-MOW-WRITER @ _EXT4-JTX-BEGIN
+        DUP IF NIP _EXT4-MOW-FAIL EXIT THEN
+        DROP _EXT4-MOW-TX !
         _EXT4-MOW-SNAPSHOT _EXT4-MOW-COUNT @ _EXT4-MOW-OFFSET @
         _EXT4-MOW-INO @ _EXT4-MOW-GEN @ _EXT4-MOW-SECONDS @
-        _EXT4-MOW-NSEC @ _EXT4-MOW-TX @
-        _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE
+        _EXT4-MOW-NSEC @ _EXT4-MOW-TX @ _EXT4-MOW-IOR @ EXECUTE
         ?DUP IF _EXT4-MOW-FAIL EXIT THEN
         _EXT4-MOW-TX @ _EXT4-JTX-ABORT
         ?DUP IF _EXT4-MOW-FAIL EXIT THEN
         _EXT4-MOW-WRITER @ _EXT4-JWR-ACTIVATE
         ?DUP IF _EXT4-MOW-FAIL EXIT THEN
     THEN
-    1 1 0 _EXT4-MOW-WRITER @ _EXT4-JTX-BEGIN
-    _EXT4-MOW-IOR ! _EXT4-MOW-TX !
-    _EXT4-MOW-IOR @ ?DUP IF _EXT4-MOW-FAIL EXIT THEN
+    _EXT4-MOW-SOURCE @ ABS 1 0 _EXT4-MOW-WRITER @ _EXT4-JTX-BEGIN
+    DUP IF NIP _EXT4-MOW-FAIL EXIT THEN
+    DROP _EXT4-MOW-TX !
     _EXT4-MOW-SNAPSHOT _EXT4-MOW-COUNT @ _EXT4-MOW-OFFSET @
     _EXT4-MOW-INO @ _EXT4-MOW-GEN @ _EXT4-MOW-SECONDS @
-    _EXT4-MOW-NSEC @ _EXT4-MOW-TX @
-    _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE
+    _EXT4-MOW-NSEC @ _EXT4-MOW-TX @ _EXT4-MOW-IOR @ EXECUTE
     ?DUP IF _EXT4-MOW-FAIL EXIT THEN
     _EXT4-MOW-TX @ _EXT4-JTX-EMIT
     ?DUP IF _EXT4-MOW-FAIL EXIT THEN
@@ -16920,7 +16892,7 @@ VARIABLE _EXT4-WR-CHUNK
 VARIABLE _EXT4-WR-MS
 VARIABLE _EXT4-WR-SECONDS
 VARIABLE _EXT4-WR-NSEC
-VARIABLE _EXT4-WR-ACTUAL
+VARIABLE _EXT4-WR-HOOK
 VARIABLE _EXT4-WR-IOR
 
 : _EXT4-WRITE-VALIDATE  ( -- ior )
@@ -16963,9 +16935,11 @@ VARIABLE _EXT4-WR-IOR
     _EXT4-WR-END @ _EXT4-WR-VN @ VN.SIZE-LO @ U> IF
         EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
-    \ The staged write profile currently supports nonempty mutation on 1 KiB
-    \ filesystems with 256-byte inodes.  Other profile geometries remain
-    \ fail-closed until their write paths are qualified.
+    \ Nonempty staged writes currently require authenticated 1 KiB filesystem
+    \ geometry with 256-byte inodes.  This is the published operation boundary
+    \ for initialized-block overwrite and in-size hole fill.  Other
+    \ akashic-ext4-rw-v1 geometries remain available to the read/recovery path
+    \ until their mutation paths pass equivalent qualification.
     _EXT4-WR-CTX @ _EXT4-STAGED-WRITE-FS-QUALIFY ?DUP IF EXIT THEN
     _EXT4-WR-COUNT @
     _EXT4-WR-CTX @ _EXT4-C.BSIZE + @
@@ -16995,9 +16969,10 @@ VARIABLE _EXT4-WR-IOR
 \ It remains absent from the ordinary EXT4-OPS and EXT4-CAPS.  The explicit
 \ staged binding below publishes only this qualified operation while broader
 \ public-write gates remain.
-\ Confirmed progress and quarantine flags are safe for VFS cursor semantics;
-\ successful checkpointed writes publish only mtime/ctime into the shared
-\ vnode, while every error leaves all vnode fields unpublished.
+\ Confirmed progress and quarantine flags are safe for VFS cursor semantics.
+\ Successful checkpointed writes publish mtime/ctime; allocation-backed hole
+\ fill additionally publishes its authenticated i_blocks value.  Every error
+\ leaves all vnode fields unpublished.
 : _EXT4-WRITE  ( source count file-offset dentry vfs -- actual ior )
     _EXT4-WR-V ! _EXT4-WR-D ! _EXT4-WR-OFFSET !
     _EXT4-WR-COUNT ! _EXT4-WR-SOURCE !
@@ -17006,24 +16981,24 @@ VARIABLE _EXT4-WR-IOR
     _EXT4-WR-COUNT @ 0= IF
         _EXT4-WR-SOURCE @ 0 _EXT4-WR-OFFSET @
         _EXT4-WR-BID @ _EXT4-WR-GEN @ 0 0 _EXT4-WR-V @
+        1 ['] _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE
         _EXT4-MOUNTED-ONEBLOCK-WRITE EXIT
     THEN
     _EXT4-WRITE-NOW ?DUP IF 0 SWAP EXIT THEN
-    _EXT4-WR-SOURCE @ _EXT4-WR-CHUNK @ _EXT4-WR-OFFSET @
-    _EXT4-WR-BID @ _EXT4-WR-GEN @
-    _EXT4-WR-SECONDS @ _EXT4-WR-NSEC @ _EXT4-WR-V @
-    _EXT4-MOUNTED-ONEBLOCK-WRITE
-    _EXT4-WR-IOR ! _EXT4-WR-ACTUAL !
-    _EXT4-WR-IOR @ ?DUP IF _EXT4-WR-ACTUAL @ SWAP EXIT THEN
-    _EXT4-WR-ACTUAL @ _EXT4-WR-CHUNK @ <> IF
-        0 VFS-E-CORRUPT EXIT
+    _EXT4-WR-HOOK @ EXECUTE
+    DUP IF EXIT THEN DROP
+    DUP _EXT4-WR-CHUNK @ <> IF
+        DROP 0 VFS-E-CORRUPT EXIT
     THEN
     _EXT4-WR-SECONDS @ _EXT4-WR-VN @ VN.MTIME !
     _EXT4-WR-NSEC @ _EXT4-WR-VN @ VN.MTIME-NS !
     _EXT4-WR-SECONDS @ _EXT4-WR-VN @ VN.CTIME !
     _EXT4-WR-NSEC @ _EXT4-WR-VN @ VN.CTIME-NS !
+    _EXT4-MOW-SOURCE @ 0< IF
+        _EXT4-WR-END @ _EXT4-WR-VN @ VN.BLOCKS !
+    THEN
     VFS-F-DIRTY _EXT4-WR-V @ V.FLAGS DUP @ ROT OR SWAP !
-    _EXT4-WR-ACTUAL @ 0 ;
+    0 ;
 
 VARIABLE _EXT4-EL-CTX
 VARIABLE _EXT4-EL-V
@@ -17871,7 +17846,6 @@ VARIABLE _EXT4-MOC-TRANSIENT
 
 VARIABLE _EXT4-M-V
 VARIABLE _EXT4-M-CTX
-VARIABLE _EXT4-M-IOR
 VARIABLE _EXT4-M-FRESH
 VARIABLE _EXT4-M-STAGED-WRITE
 
@@ -18265,11 +18239,13 @@ EXT4-OPS ,
 : EXT4-NEW  ( arena volume -- vfs ior )
     EXT4-BINDING SWAP VFS-NEW ;
 
-\ Explicit ABI-1 ratchet for the qualified existing-allocation overwrite.
+\ Explicit ABI-1 ratchet for the currently qualified write operations.
 \ The ordinary binding above stays read-only.  SPARSE continues to describe
-\ sparse-file read/mapping semantics; WRITE neither allocates holes nor grows
-\ a file.  Callers must bind one dedicated 1/1/0-or-larger writer arena and a
-\ trusted clock before the first nonempty write.
+\ sparse-file read/mapping semantics; WRITE can overwrite initialized blocks
+\ and allocate one complete logical hole inside existing EOF.  It does not yet
+\ grow a file.  A dedicated 1/1/0 profile serves overwrites; 4/1/0 also admits
+\ the allocation-backed operation.  Bind the profile and a trusted clock
+\ before the first nonempty write.
 EXT4-CAPS VFS-CAP-WRITE OR CONSTANT EXT4-STAGED-WRITE-CAPS
 
 CREATE EXT4-STAGED-WRITE-OPS VFS-OPS-SIZE ALLOT
@@ -18673,7 +18649,7 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _XH-INSERT @ _XH-ENTRY-AT DUP
     _XH-LOGICAL @ OVER L!
     1 OVER 4 + W!
-    _XH-CANDIDATE @ DUP 32 RSHIFT OVER 6 + W!
+    _XH-CANDIDATE @ DUP 32 RSHIFT 2 PICK 6 + W!
     0xFFFFFFFF AND SWAP 8 + L!
     DROP
     _XH-ENTRIES @ 1+ _XH-ROOT @ 2 + W! ;
@@ -18755,3 +18731,36 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
         VFS-E-CORRUPT _XH-FAIL-AFTER-PUBLISH EXIT
     THEN
     0 ;
+
+CREATE _XB _EXT4-MAX-BLOCK ALLOT
+
+: _XP
+  ( source -- source count file-offset inode-number expected-generation seconds nsec vfs )
+    _EXT4-WR-CHUNK @ _EXT4-WR-OFFSET @
+    _EXT4-WR-BID @ _EXT4-WR-GEN @
+    _EXT4-WR-SECONDS @ _EXT4-WR-NSEC @ _EXT4-WR-V @ ;
+
+\ Preserve the public caller chunk, try the established initialized-block
+\ operation, and ratchet only its exact clean unmapped refusal into hole fill.
+:NONAME  ( -- actual ior )
+    _EXT4-WR-SOURCE @ _EXT4-WR-COUNT @
+    _XB _EXT4-MAX-BLOCK MSPAN-OVERLAP?
+    _EXT4-WR-SOURCE @ _EXT4-WR-COUNT @
+    _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK MSPAN-OVERLAP? OR IF
+        0 VFS-E-INVALID EXIT
+    THEN
+    _EXT4-WR-SOURCE @ _XB _EXT4-WR-CHUNK @ MOVE
+    -1 _EXT4-JOW-IOR !
+    -1 _EXT4-JOW-PRESENT !
+    _XB _XP
+    1 ['] _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-WRITE
+    _EXT4-MOUNTED-ONEBLOCK-WRITE
+    DUP EXT4-D-DATA-MAP _EXT4-UNSUPPORTED =
+    _EXT4-JOW-IOR @ 0= AND _EXT4-JOW-PRESENT @ 0= AND IF
+        2DROP _XB _XP
+        -4 ['] _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL
+        _EXT4-MOUNTED-ONEBLOCK-WRITE
+        _XH-NEW-BLOCKS @ _EXT4-WR-END !
+    THEN
+    _XB _EXT4-MAX-BLOCK 0 FILL
+; _EXT4-WR-HOOK !
