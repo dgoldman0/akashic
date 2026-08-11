@@ -34381,10 +34381,19 @@ def test_staged_vfs_write_fills_one_complete_in_size_hole(
     nanoseconds = milliseconds * 1_000_000
     expected_block = bytearray(block_size)
     expected_block[block_offset : block_offset + len(replacement)] = replacement
+    with path.open("rb") as source:
+        source.seek(_extent_root_physical(inode, 0) * block_size)
+        first_block = source.read(block_size)
+        source.seek(_extent_root_physical(inode, 2) * block_size)
+        third_block = source.read(block_size)
+    assert len(first_block) == len(third_block) == block_size
+    expected_file = first_block + bytes(expected_block) + third_block
+    expected_file_crc = _crc32c_raw(expected_file)
 
     media_path = tmp_path / "staged-vfs-hole-fill.img"
+    stable_path = tmp_path / "staged-vfs-hole-fill-stable.img"
     try:
-        output, trace, _ = run_recovery_forth(
+        output, trace, media_sha256 = run_recovery_forth(
             path,
             media_path,
             [
@@ -34539,8 +34548,53 @@ def test_staged_vfs_write_fills_one_complete_in_size_hole(
         with media_path.open("rb") as source:
             source.seek(candidate * block_size)
             assert source.read(block_size) == bytes(expected_block)
+
+        stable_output, stable_trace, stable_sha256 = run_recovery_forth(
+            media_path,
+            stable_path,
+            [
+                f"CREATE _PHR-BUF {len(expected_file)} ALLOT",
+                (
+                    "T-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _PHR-MOUNT-IOR CONSTANT _PHR-V"
+                ),
+                (
+                    'S" /fixture/sparse.bin" VFS-FF-READ _PHR-V '
+                    "VFS-OPEN? CONSTANT _PHR-OPEN-IOR CONSTANT _PHR-FD"
+                ),
+                "_PHR-FD FD.INODE @ D.VNODE @ CONSTANT _PHR-VN",
+                (
+                    f"_PHR-BUF {len(expected_file)} _PHR-FD VFS-READ? "
+                    "CONSTANT _PHR-READ-IOR CONSTANT _PHR-ACTUAL"
+                ),
+                "0xFFFFFFFF _EXT4-CRC-START",
+                f"_PHR-BUF {len(expected_file)} _EXT4-CRC-ADD",
+                "_EXT4-CRC@ CONSTANT _PHR-CRC",
+                "_PHR-FD VFS-CLOSE? CONSTANT _PHR-CLOSE-IOR",
+                "0 _PHR-V VFS-UNMOUNT CONSTANT _PHR-UNMOUNT-IOR",
+                (
+                    "_PHR-MOUNT-IOR 0= _PHR-OPEN-IOR 0= AND "
+                    "_PHR-READ-IOR 0= AND "
+                    f"_PHR-ACTUAL {len(expected_file)} = AND "
+                    f"_PHR-CRC {expected_file_crc} = AND "
+                    "_PHR-VN VN.SIZE-LO @ 3072 = AND "
+                    "_PHR-VN VN.BLOCKS @ 6 = AND "
+                    f"_PHR-VN VN.MTIME @ {seconds} = AND "
+                    f"_PHR-VN VN.MTIME-NS @ {nanoseconds} = AND "
+                    f"_PHR-VN VN.CTIME @ {seconds} = AND "
+                    f"_PHR-VN VN.CTIME-NS @ {nanoseconds} = AND "
+                    "_PHR-CLOSE-IOR 0= AND _PHR-UNMOUNT-IOR 0= AND "
+                    'IF ." EXT4-PUBLIC-HOLE-FILL-STABLE" THEN'
+                ),
+            ],
+            capture_media=stable_path,
+        )
+        _assert_emitted(stable_output, "EXT4-PUBLIC-HOLE-FILL-STABLE")
+        assert stable_trace == ()
+        assert stable_sha256 == media_sha256
     finally:
         media_path.unlink(missing_ok=True)
+        stable_path.unlink(missing_ok=True)
 
 
 def test_staged_vfs_write_faults_report_confirmed_caller_prefix(
