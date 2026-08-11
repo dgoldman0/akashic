@@ -31652,6 +31652,241 @@ def test_typed_one_block_hole_fill_stages_exact_allocation_and_inode(
     _assert_emitted(output, "EXT4-TYPED-ONEBLOCK-HOLE-FILL-ABORTED")
 
 
+def test_typed_one_block_hole_fill_refuses_unimplemented_shapes_without_io(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    block_size = 1024
+    superblock, sparse_inode, sparse_inode_offset = _ext4_inode_record(path, 17)
+    _, partial_inode, _ = _ext4_inode_record(path, 14)
+    sparse_generation = struct.unpack_from("<I", sparse_inode, 0x64)[0]
+    partial_generation = struct.unpack_from("<I", partial_inode, 0x64)[0]
+    assert sparse_generation == 0
+    assert struct.unpack_from("<I", sparse_inode, 0x04)[0] == 3 * block_size
+    assert 0 < struct.unpack_from("<I", partial_inode, 0x04)[0] < block_size
+
+    output = run_forth(
+        path,
+        [
+            "CREATE _HR-LATE-DATA 1024 ALLOT",
+            "_HR-LATE-DATA 1024 0 FILL",
+            "T-ARENA CONSTANT _HR-ARENA",
+            (
+                "_HR-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _HR-MOUNT-IOR CONSTANT _HR-V"
+            ),
+            "_HR-V _EXT4-CTX CONSTANT _HR-CTX",
+            (
+                "4 1 0 _HR-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _HR-WRITER-IOR CONSTANT _HR-WRITER"
+            ),
+            "_HR-WRITER _EXT4-JWR.FREE + @ CONSTANT _HR-FREE-BEFORE",
+            "_HR-ARENA ARENA-USED CONSTANT _HR-USED-BEFORE",
+            "DEPTH CONSTANT _HR-DEPTH-BEFORE",
+            (
+                "4 1 0 _HR-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _HR-STALE-BEGIN-IOR CONSTANT _HR-STALE-TX"
+            ),
+            (
+                f'S" X" {block_size + 100} 17 {sparse_generation + 1} '
+                "1 2 _HR-STALE-TX "
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _HR-STALE-IOR"
+            ),
+            "_HR-STALE-TX _EXT4-JTX-ABORT CONSTANT _HR-STALE-ABORT",
+            (
+                "4 1 0 _HR-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _HR-MAPPED-BEGIN-IOR CONSTANT _HR-MAPPED-TX"
+            ),
+            (
+                f'S" X" 100 17 {sparse_generation} 1 2 _HR-MAPPED-TX '
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _HR-MAPPED-IOR"
+            ),
+            "_HR-MAPPED-TX _EXT4-JTX-ABORT CONSTANT _HR-MAPPED-ABORT",
+            (
+                "4 1 0 _HR-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _HR-CROSS-BEGIN-IOR CONSTANT _HR-CROSS-TX"
+            ),
+            (
+                f'S" CROSSING" {2 * block_size - 4} 17 '
+                f"{sparse_generation} 1 2 _HR-CROSS-TX "
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _HR-CROSS-IOR"
+            ),
+            "_HR-CROSS-TX _EXT4-JTX-ABORT CONSTANT _HR-CROSS-ABORT",
+            (
+                "4 1 0 _HR-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _HR-PARTIAL-BEGIN-IOR CONSTANT _HR-PARTIAL-TX"
+            ),
+            (
+                f'S" X" 0 14 {partial_generation} 1 2 _HR-PARTIAL-TX '
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _HR-PARTIAL-IOR"
+            ),
+            "_HR-PARTIAL-TX _EXT4-JTX-ABORT CONSTANT _HR-PARTIAL-ABORT",
+            (
+                "3 1 0 _HR-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _HR-CREDIT-BEGIN-IOR CONSTANT _HR-CREDIT-TX"
+            ),
+            (
+                f'S" X" {block_size + 100} 17 {sparse_generation} 1 2 '
+                "_HR-CREDIT-TX "
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _HR-CREDIT-IOR"
+            ),
+            "_HR-CREDIT-TX _EXT4-JTX-ABORT CONSTANT _HR-CREDIT-ABORT",
+            (
+                "4 1 0 _HR-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _HR-ZERO-BEGIN-IOR CONSTANT _HR-ZERO-TX"
+            ),
+            (
+                f"0 0 {block_size + 100} 17 {sparse_generation} 1 2 "
+                "_HR-ZERO-TX "
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _HR-ZERO-IOR"
+            ),
+            "_HR-ZERO-TX _EXT4-JTX-ABORT CONSTANT _HR-ZERO-ABORT",
+            (
+                "4 1 0 _HR-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _HR-LATE-BEGIN-IOR CONSTANT _HR-LATE-TX"
+            ),
+            (
+                "_HR-LATE-DATA 1351 _HR-LATE-TX _EXT4-JTX-DATA-PUT "
+                "CONSTANT _HR-LATE-PUT-IOR"
+            ),
+            "_HR-LATE-TX _XH-WRITER ! -1 _XH-PUBLISHED !",
+            (
+                "VFS-E-CONFLICT _XH-FAIL-AFTER-PUBLISH "
+                "CONSTANT _HR-LATE-IOR"
+            ),
+            "DEPTH CONSTANT _HR-DEPTH-AFTER",
+            (
+                _forth_conjunction(
+                    [
+                        "_HR-MOUNT-IOR 0=",
+                        "_HR-WRITER-IOR 0=",
+                        "_HR-STALE-BEGIN-IOR 0=",
+                        "_HR-STALE-IOR VFS-E-STALE =",
+                        "_HR-STALE-ABORT 0=",
+                        "_HR-MAPPED-BEGIN-IOR 0=",
+                        (
+                            "_HR-MAPPED-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_HR-MAPPED-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        "_HR-MAPPED-ABORT 0=",
+                        "_HR-CROSS-BEGIN-IOR 0=",
+                        (
+                            "_HR-CROSS-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_HR-CROSS-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-WRITE-POLICY ="
+                        ),
+                        "_HR-CROSS-ABORT 0=",
+                        "_HR-PARTIAL-BEGIN-IOR 0=",
+                        (
+                            "_HR-PARTIAL-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-WRITE-POLICY ="
+                        ),
+                        "_HR-PARTIAL-ABORT 0=",
+                        "_HR-CREDIT-BEGIN-IOR 0=",
+                        "_HR-CREDIT-IOR VFS-E-INVALID =",
+                        "_HR-CREDIT-ABORT 0=",
+                        "_HR-ZERO-BEGIN-IOR 0=",
+                        "_HR-ZERO-IOR VFS-E-INVALID =",
+                        "_HR-ZERO-ABORT 0=",
+                        "_HR-LATE-BEGIN-IOR 0=",
+                        "_HR-LATE-PUT-IOR 0=",
+                        "_HR-LATE-IOR VFS-E-CONFLICT =",
+                        "_HR-DEPTH-BEFORE _HR-DEPTH-AFTER =",
+                        (
+                            "_HR-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_HR-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                        "_HR-WRITER _EXT4-JWR-VALID?",
+                        (
+                            "_HR-WRITER _EXT4-JWR.FREE + @ "
+                            "_HR-FREE-BEFORE ="
+                        ),
+                        "_HR-ARENA ARENA-USED _HR-USED-BEFORE =",
+                        "_HR-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-ONEBLOCK-HOLE-FILL-REFUSALS" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-TYPED-ONEBLOCK-HOLE-FILL-REFUSALS")
+
+    unwritten_inode = bytearray(sparse_inode)
+    assert struct.unpack_from("<H", unwritten_inode, 0x44)[0] == 1
+    struct.pack_into("<H", unwritten_inode, 0x44, 0x8001)
+    unwritten_inode[:] = _inode_with_checksum(
+        superblock, 17, unwritten_inode
+    )
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _HU-MOUNT-IOR CONSTANT _HU-V"
+            ),
+            "_HU-V _EXT4-CTX CONSTANT _HU-CTX",
+            (
+                "4 1 0 _HU-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _HU-WRITER-IOR CONSTANT _HU-WRITER"
+            ),
+            (
+                "4 1 0 _HU-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _HU-BEGIN-IOR CONSTANT _HU-TX"
+            ),
+            (
+                f'S" X" {2 * block_size + 100} 17 {sparse_generation} '
+                "1 2 _HU-TX "
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _HU-STAGE-IOR"
+            ),
+            "_HU-TX _EXT4-JTX-ABORT CONSTANT _HU-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_HU-MOUNT-IOR 0=",
+                        "_HU-WRITER-IOR 0=",
+                        "_HU-BEGIN-IOR 0=",
+                        (
+                            "_HU-STAGE-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_HU-STAGE-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        "_HU-ABORT-IOR 0=",
+                        "_HU-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        (
+                            "_HU-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_HU-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-ONEBLOCK-HOLE-FILL-UNWRITTEN" THEN'
+            ),
+        ],
+        patches=((sparse_inode_offset, bytes(unwritten_inode)),),
+    )
+    _assert_emitted(output, "EXT4-TYPED-ONEBLOCK-HOLE-FILL-UNWRITTEN")
+
+
 def test_typed_one_block_write_stages_ordered_rmw_and_inode_times(
     canonical_images: dict[str, Path],
 ) -> None:
