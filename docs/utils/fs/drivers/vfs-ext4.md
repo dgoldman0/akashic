@@ -41,14 +41,15 @@ geometry boundary: the validator requires each scheduled backup group number
 to equal the 16-bit on-disk `s_block_group_nr`, so a required sparse-super
 backup above group 65535 is refused.
 
-The checked-in 925,000,000-step cold-source value is a qualification watchdog
+The checked-in 925,000,000-step ext4 cold-source value is a qualification watchdog
 and measurement guide, not an ext4 implementation capacity or a reason to
 weaken functionality. If correct source legitimately outgrows it, the budget
 must be revisited from measured system resources. The harness still performs a
 real cold source build and requires the `EXT4-SOURCE-READY` marker with no
-Forth diagnostic. The current base snapshot measures 131,992,675 steps, and
-the production ext4 source load measures 913,614,872 steps across 2,363 packed
-lines under that watchdog. Runtime recovery journeys use a separate
+Forth diagnostic. The current base snapshot measures 135,845,261 steps. The
+hardware CRC module cold-loads in 4,992,533 steps across 26 packed lines, and
+the production ext4 source then cold-loads in 832,013,844 steps across 2,389
+packed lines under its watchdog. Runtime recovery journeys use a separate
 1,200,000,000-step default watchdog. Geometry-bounded multi-record production and selected
 multi-record fault journeys use a scoped 1,500,000,000-step watchdog because
 the real cold-source path plus repeated whole-plan authentication legitimately
@@ -348,9 +349,35 @@ An authenticated empty modern set is completed before mount publication only
 when the legacy/modern union is empty, without changing an orphan inode,
 orphan-file block, or legacy link.
 
-The driver contains its own reflected CRC32C implementation. Akashic's public
-`CRC32C` word is deliberately MSB-first and is not interchangeable with the
-ext4 checksum contract.
+Every ext4 and JBD2 checksum is computed by MegaPad's shared reflected CRC32C
+engine through Akashic's checked `CRC32C-RAW?` interface. The driver has no
+software checksum table or fallback. Probe and mount require the hardware
+capability before issuing media I/O. Engine status 1 becomes a binding-domain
+unsupported error, status 2 becomes a retryable binding-domain busy error, and
+other nonzero hardware or Forth failures become binding-domain I/O errors with
+their original status retained as detail. A fragmented checksum releases the
+engine after each fragment and carries the returned raw accumulator forward;
+a post-acquisition fault unwinds the transaction as the same owner, while a
+rejected acquisition leaves the existing owner untouched.
+
+The checked status is threaded through validation, replay, orphan cleanup,
+journal activation/emission/checkpoint/deactivation, and public write staging.
+Transaction staging computes each checked image CRC before publishing a table
+entry, hash slot, count, or after-image, so a busy or failed engine leaves the
+complete writer-owned span unchanged. This is current production behavior for
+the documented capability envelope, not a fixture-only checksum model.
+
+The 2026-08-11 hardware-CRC qualification used cold source mode throughout.
+Focused capability, ownership, fragmented-seed, negative-length-unwind, and
+fail-atomic staging proofs passed. Representative ext4 gates then passed a
+checksum-v3 replay with durable idempotent remount, modern one-block orphan
+cleanup, two staged writes followed by stable remount plus pinned `debugfs`
+readback and `e2fsck`, committed inode-home checkpoint-tear recovery, and
+superblock-corruption refusal before mount publication. The measured guest
+journeys were respectively 166,679,303 + 39,640,092; 898,232,073;
+689,723,144 + 45,222,390; 310,969,314 + 177,572,396 + 40,229,230; and
+24,516,008 steps. These representative gates qualify the shared checksum
+cutover without reopening the full orphan or power-cut matrix.
 
 Known refused feature bits return format-domain `VFS-R-UNSUPPORTED` with
 `EXT4-D-FEATURE`. `ORPHAN_PRESENT` and a nonzero `s_last_orphan` are admitted

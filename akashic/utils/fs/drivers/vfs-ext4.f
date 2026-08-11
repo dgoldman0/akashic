@@ -1,10 +1,12 @@
 \ vfs-ext4.f — bounded ext4 recovery and read-only ABI-1 VFS access
 \
-\ This is the first implementation slice of akashic-ext4-rw-v1.  It owns
-\ one explicit KDOS volume, validates the clean on-disk format before mount
-\ publication, and exposes checksummed canonical namespace/data/xattr reads
-\ plus metadata and STATFS through ABI 1.  Recovery remains a pre-publication
-\ mount operation; the binding does not advertise mutation operations.
+\ This is the current bounded implementation of akashic-ext4-rw-v1.  It owns
+\ one explicit KDOS volume, validates the on-disk format before publication,
+\ exposes checksummed namespace/data/xattr reads plus metadata and STATFS, and
+\ completes admitted recovery before either binding can mount.  The ordinary
+\ descriptor remains read-only; the staged descriptor advertises the durable
+\ linked-file mutation envelopes that have reached production closure on the
+\ authenticated 1 KiB / 256-byte-inode geometry.
 \
 \ Prefix: EXT4-  (public API)
 \         _EXT4- (internal helpers)
