@@ -1,337 +1,226 @@
-# akashic-sha3 — SHA-3 / SHAKE Cryptographic Hash
+# akashic-sha3 — SHA-3 and SHAKE
 
-Hardware-accelerated SHA-3 (FIPS 202) wrapper.  Delegates all
-computation to the BIOS SHA-3 / Keccak coprocessor at MMIO
-`0xFFFF_FF00_0000_0780`.
+`akashic-sha3` is the result-only Akashic wrapper around MegaPad/KDOS's
+checked SHA-3 service. It supports SHA3-256, SHA3-512, SHAKE-128, SHAKE-256,
+and HMAC-SHA3-256 without exposing the accelerator's transaction registers.
 
 ```forth
 REQUIRE sha3.f
 ```
 
-`PROVIDED akashic-sha3` — depends on `akashic-guard` (from
-`../concurrency/guard.f`).
+The module publishes `PROVIDED akashic-sha3`. Guarded builds also load
+`../concurrency/guard.f` and serialize the module's private scratch and
+stream-family state.
 
----
+## Checked failure contract
 
-## Table of Contents
+The public hashing words retain their established result-only stack effects.
+The checked BIOS/KDOS status is consumed internally; every nonzero status is
+thrown unchanged:
 
-- [Design Principles](#design-principles)
-- [Constants](#constants)
-- [One-Shot Hashing](#one-shot-hashing)
-- [SHAKE Extendable-Output Functions](#shake-extendable-output-functions)
-- [Streaming API](#streaming-api)
-- [HMAC-SHA3-256](#hmac-sha3-256)
-- [Hex Conversion & Display](#hex-conversion--display)
-- [Comparison](#comparison)
-- [Concurrency](#concurrency)
-- [Quick Reference](#quick-reference)
+| Status | Meaning |
+|---:|---|
+| `1` | unsupported capability |
+| `2` | state or owner conflict |
+| `3` | invalid or non-addressable range |
+| `4` | protected span |
+| `5` | timeout |
+| `6` | hardware or protocol failure |
 
----
+Callers that need to recover use `CATCH`. A timeout or protocol failure can
+retain the lower BIOS guard fail-closed when hardware could not be proven
+quiescent. The exact owner must retry `SHA3-CLEAR` or reset before subsequent
+hardware use.
 
-## Design Principles
-
-| Principle | Detail |
-|---|---|
-| **Hardware-accelerated** | All Keccak permutation and padding is performed by the C++ SHA-3 coprocessor — zero software round logic. |
-| **Four modes** | SHA3-256, SHA3-512, SHAKE-128, SHAKE-256 — same hardware, selectable via `SHA3-MODE!`. |
-| **Multi-squeeze SHAKE** | For output lengths > 32 bytes, SHAKE words iterate `SHA3-SQUEEZE-NEXT` + `SHA3-DOUT@` in 32-byte blocks. |
-| **Streaming** | `SHA3-256-BEGIN` / `SHA3-256-ADD` / `SHA3-256-END` (and SHA3-512 equivalents) allow incremental hashing. |
-| **HMAC** | `SHA3-256-HMAC` implements HMAC-SHA3-256 (RFC 2104, block size = 136). |
-| **Constant-time comparison** | `SHA3-256-COMPARE` / `SHA3-512-COMPARE` use OR-accumulation with no early exit. |
-| **Mode safety** | SHA3-512, SHAKE-128, and SHAKE-256 words restore SHA3-256-MODE before returning. |
-| **Concurrency-safe** | Public words are wrapped with a concurrency guard (see [Concurrency](#concurrency)).  Module-scoped VARIABLEs are still single-instance, but serialised access makes multi-task use safe. |
-
----
+The removed prototype words `SHA3-MODE!`, `SHA3-INIT`,
+`SHA3-SQUEEZE-NEXT`, and `SHA3-DOUT@` are not compatibility APIs. Akashic
+uses `SHA3-BEGIN`, `SHA3-UPDATE`, `SHA3-FINAL`, `SHAKE-FINAL`, bounded
+`SHAKE-READ`, and `SHA3-CLEAR`.
 
 ## Constants
 
-### SHA3-256-LEN
+| Word | Value | Meaning |
+|---|---:|---|
+| `SHA3-256-LEN` | 32 | SHA3-256 digest bytes |
+| `SHA3-256-HEX-LEN` | 64 | SHA3-256 lowercase hexadecimal characters |
+| `SHA3-512-LEN` | 64 | SHA3-512 digest bytes |
+| `SHA3-512-HEX-LEN` | 128 | SHA3-512 lowercase hexadecimal characters |
 
-```forth
-SHA3-256-LEN  ( -- 32 )
-```
-
-SHA3-256 hash length in bytes.
-
-### SHA3-256-HEX-LEN
-
-```forth
-SHA3-256-HEX-LEN  ( -- 64 )
-```
-
-SHA3-256 hex-encoded length in characters.
-
-### SHA3-512-LEN
-
-```forth
-SHA3-512-LEN  ( -- 64 )
-```
-
-SHA3-512 hash length in bytes.
-
-### SHA3-512-HEX-LEN
-
-```forth
-SHA3-512-HEX-LEN  ( -- 128 )
-```
-
-SHA3-512 hex-encoded length in characters.
-
----
-
-## One-Shot Hashing
-
-### SHA3-256-HASH
+## One-shot hashing
 
 ```forth
 SHA3-256-HASH  ( src len dst -- )
+SHA3-512-HASH  ( src len dst -- )
+SHAKE-128      ( src len dst dlen -- )
+SHAKE-256      ( src len dst dlen -- )
+SHA3-256-HMAC  ( key klen data dlen dst -- )
 ```
 
-Hash *len* bytes starting at *src* and write the 32-byte SHA3-256
-digest to *dst*.
+`SHA3-256-HASH` and `SHA3-512-HASH` publish exactly 32 and 64 digest bytes.
+`SHA3-256-HMAC` uses the checked KDOS HMAC-SHA3-256 composite. Its block size
+is 136 bytes, and keys longer than one block are normalized by hashing rather
+than rejected or truncated.
 
 ```forth
 CREATE msg 3 ALLOT  97 msg C!  98 msg 1+ C!  99 msg 2 + C!
 CREATE out 32 ALLOT
 msg 3 out SHA3-256-HASH
-\ out now contains SHA3-256("abc") = 3a985da7...
+\ out contains SHA3-256("abc") = 3a985da7...
 ```
 
-### SHA3-512-HASH
+For SHAKE, Akashic qualifies the complete destination before finalization,
+then calls `SHAKE-FINAL`, reads sequential chunks of at most 32 bytes, and
+calls `SHA3-CLEAR`. A bad later address therefore cannot publish only a prefix
+of a requested multi-window result. Zero output length is valid and still
+finalizes and clears the accepted transaction.
+
+Cleanup is attempted on every handled SHAKE terminal path. The first operation
+failure is preserved when cleanup succeeds; a cleanup failure takes precedence
+because the lower guard remains held fail-closed.
 
 ```forth
-SHA3-512-HASH  ( src len dst -- )
-```
-
-Hash *len* bytes and write the 64-byte SHA3-512 digest to *dst*.
-Restores SHA3-256 mode after completion.
-
----
-
-## SHAKE Extendable-Output Functions
-
-### SHAKE-128
-
-```forth
-SHAKE-128  ( src len dst dlen -- )
-```
-
-Compute SHAKE-128 XOF of *len* bytes at *src*, writing *dlen*
-output bytes to *dst*.  For *dlen* ≤ 32, uses the initial squeeze.
-For *dlen* > 32, iterates `SHA3-SQUEEZE-NEXT` in 32-byte blocks.
-Restores SHA3-256 mode.
-
-### SHAKE-256
-
-```forth
-SHAKE-256  ( src len dst dlen -- )
-```
-
-Compute SHAKE-256 XOF of *len* bytes at *src*, writing *dlen*
-output bytes to *dst*.  Same multi-squeeze logic as SHAKE-128.
-Restores SHA3-256 mode.
-
-```forth
-CREATE msg 3 ALLOT  97 msg C!  98 msg 1+ C!  99 msg 2 + C!
 CREATE xof 64 ALLOT
 msg 3 xof 64 SHAKE-128
-\ xof contains 64 bytes of SHAKE-128("abc") = 5881092d...
+\ xof contains the first 64 bytes of SHAKE-128("abc")
 ```
 
----
+## Streaming
 
-## Streaming API
+Streaming families allow a message to arrive in independently owned segments.
+All `ADD` words accept a zero length and otherwise require a complete readable
+source span.
 
-For messages that arrive in fragments or are too large to buffer.
-
-### SHA3-256-BEGIN / SHA3-256-ADD / SHA3-256-END
+### Fixed-output SHA-3
 
 ```forth
-SHA3-256-BEGIN  ( -- )           \ reset state, select SHA3-256 mode
-SHA3-256-ADD    ( addr len -- )  \ feed data
-SHA3-256-END    ( dst -- )       \ finalize, 32 bytes to dst
+SHA3-256-BEGIN  ( -- )
+SHA3-256-ADD    ( addr len -- )
+SHA3-256-END    ( dst -- )
+
+SHA3-512-BEGIN  ( -- )
+SHA3-512-ADD    ( addr len -- )
+SHA3-512-END    ( dst -- )
 ```
-
-### SHA3-512-BEGIN / SHA3-512-ADD / SHA3-512-END
-
-```forth
-SHA3-512-BEGIN  ( -- )           \ reset state, select SHA3-512 mode
-SHA3-512-ADD    ( addr len -- )  \ feed data
-SHA3-512-END    ( dst -- )       \ finalize, 64 bytes to dst
-```
-
-Restores SHA3-256 mode after `SHA3-512-END`.
 
 ```forth
 SHA3-256-BEGIN
 part1 n1 SHA3-256-ADD
 part2 n2 SHA3-256-ADD
 my-hash SHA3-256-END
-\ my-hash = SHA3-256( part1 || part2 )
+\ my-hash = SHA3-256(part1 || part2)
 ```
 
----
-
-## HMAC-SHA3-256
-
-### SHA3-256-HMAC
+### Extendable-output SHAKE
 
 ```forth
-SHA3-256-HMAC  ( key klen data dlen dst -- )
+SHAKE-128-BEGIN  ( -- )
+SHAKE-128-ADD    ( addr len -- )
+SHAKE-128-END    ( dst dlen -- )
+
+SHAKE-256-BEGIN  ( -- )
+SHAKE-256-ADD    ( addr len -- )
+SHAKE-256-END    ( dst dlen -- )
 ```
 
-Compute HMAC-SHA3-256 per RFC 2104.  Block size is the SHA3-256
-rate (136 bytes).  Keys longer than 136 bytes should be pre-hashed
-by the caller.
+`END` applies the same whole-destination preflight, bounded-read, and cleanup
+rules as one-shot SHAKE. This interface is suitable for variable-length
+messages without staging their concatenation in a private fixed-capacity
+buffer.
 
 ```forth
-\ HMAC-SHA3-256(key="key", msg="abc")
-CREATE k 3 ALLOT  107 k C!  101 k 1+ C!  121 k 2 + C!
-CREATE m 3 ALLOT   97 m C!   98 m 1+ C!   99 m 2 + C!
-CREATE tag 32 ALLOT
-k 3 m 3 tag SHA3-256-HMAC
-\ tag = 09b6dbab...
+SHAKE-256-BEGIN
+domain domain-u SHAKE-256-ADD
+payload payload-u SHAKE-256-ADD
+xof 96 SHAKE-256-END
 ```
 
----
+Streaming calls must stay within one family. A SHA3-256 stream cannot be
+continued or ended with SHA3-512 or SHAKE words, and the two SHAKE families
+are distinct.
 
-## Hex Conversion & Display
-
-### SHA3-256-.
+## Hexadecimal conversion and display
 
 ```forth
-SHA3-256-.  ( addr -- )
+SHA3-256->HEX  ( src dst -- 64 )
+SHA3-512->HEX  ( src dst -- 128 )
+SHA3-256-.     ( addr -- )
+SHA3-512-.     ( addr -- )
 ```
 
-Print the 32-byte hash at *addr* as 64 lowercase hex characters.
-
-### SHA3-512-.
-
-```forth
-SHA3-512-.  ( addr -- )
-```
-
-Print the 64-byte hash at *addr* as 128 lowercase hex characters.
-
-### SHA3-256->HEX
-
-```forth
-SHA3-256->HEX  ( src dst -- n )
-```
-
-Convert 32-byte hash to 64 lowercase hex characters at *dst*.
-Returns 64.
-
-### SHA3-512->HEX
-
-```forth
-SHA3-512->HEX  ( src dst -- n )
-```
-
-Convert 64-byte hash to 128 lowercase hex characters at *dst*.
-Returns 128.
-
----
+Conversion writes lowercase hexadecimal without an added terminator. Display
+emits the same lowercase representation.
 
 ## Comparison
 
-### SHA3-256-COMPARE
-
 ```forth
-SHA3-256-COMPARE  ( a b -- flag )
+SHA3-256-COMPARE       ( a b -- flag )
+SHA3-512-COMPARE       ( a b -- flag )
+SHA3-256-HASH-COMPARE  ( src len expected -- flag )
+SHA3-256-END-COMPARE   ( expected -- flag )
 ```
 
-Constant-time comparison of two 32-byte hashes.
-Returns `TRUE` (-1) if equal, `FALSE` (0) otherwise.
+The compare words accumulate byte differences across the complete digest and
+return true (`-1`) only when all bytes match. `SHA3-256-END-COMPARE` is the
+terminal operation for an active SHA3-256 stream.
 
-### SHA3-512-COMPARE
+## Caller-owned SHA3-256 contexts
 
-```forth
-SHA3-512-COMPARE  ( a b -- flag )
-```
+The companion `sha3-context.f` API remains separate from the global streaming
+transaction. Each 648-byte context owns its state and can be interleaved with
+other contexts. Only each discrete permutation uses checked
+`KECCAK-F1600`; the module does not retain global SHA3 ownership between
+updates.
 
-Constant-time comparison of two 64-byte hashes.
-
-Both use OR-accumulation over all bytes — timing does not depend
-on the position of the first differing byte.
-
----
-
-## Hardware Detail
-
-The BIOS SHA-3 / Keccak coprocessor lives at MMIO base
-`0xFFFF_FF00_0000_0780`:
-
-| Offset | Register | Description |
-|--------|----------|-------------|
-| `+0x00` | CMD | 1 = INIT, 3 = FINAL, 4 = SQUEEZE, 5 = SQUEEZE_NEXT |
-| `+0x08` | STATUS | Busy / done flags |
-| `+0x10` | MODE | 0 = SHA3-256, 1 = SHA3-512, 2 = SHAKE128, 3 = SHAKE256 |
-| `+0x18` | DIN | Byte input |
-| `+0x20` | DLEN | Input byte count (for UPDATE) |
-| `+0x28` | DOUT_PTR | Read pointer for output |
-| `+0x30..+0x6F` | DOUT | 64-byte output buffer (big-endian) |
-
-BIOS words used: `SHA3-INIT`, `SHA3-UPDATE`, `SHA3-FINAL`,
-`SHA3-MODE!`, `SHA3-MODE@`, `SHA3-DOUT@`, `SHA3-SQUEEZE-NEXT`.
-
----
+The context status vocabulary is `0` OK, `1` invalid, `2` state, `3`
+capacity, `4` alias, and `5` hardware service failure. Any raw-permutation
+failure wipes the complete context, making it structurally invalid, and no
+digest is published. Callers must initialize that context again before reuse.
 
 ## Concurrency
 
-`sha3.f` creates a guard (`GUARD _sha3-guard`) and wraps every
-public word that touches shared state.
+When `GUARDED` is enabled, `sha3.f` creates `_sha3-guard`:
 
-### One-shot words (WITH-GUARD)
+- One-shot hardware words acquire the guard, reject entry from an active
+  Akashic stream, and release on success or throw.
+- Each `BEGIN` acquires the guard and records its exact family.
+- Each `ADD` requires the same owner and family.
+- Each `END` requires the same owner and family, then clears the family and
+  releases the guard on both success and throw.
+- A missing, nested, or mismatched stream operation throws `-258` without
+  silently converting the active family.
+- Hex conversion uses the same guard for its module-scoped destination
+  pointer. Pure compare and display words remain unguarded.
 
-Each call acquires the guard, runs the original implementation inside
-`CATCH` (releasing on any throw), then releases:
+The Akashic guard coordinates module scratch and family semantics. The BIOS
+crypto guard independently protects the shared Keccak service across SHA3,
+raw permutation, and WOTS operations.
 
-`SHA3-256-HASH`, `SHA3-512-HASH`, `SHAKE-128`, `SHAKE-256`,
-`SHA3-256-HMAC`, `SHA3-256-HASH-COMPARE`, `SHA3-256->HEX`,
-`SHA3-512->HEX`.
-
-### Streaming words
-
-| Word | Guard action |
-|---|---|
-| `SHA3-256-BEGIN` / `SHA3-512-BEGIN` | **Acquire** the guard (blocking). |
-| `SHA3-256-ADD` / `SHA3-512-ADD` | **Assert** ownership (`GUARD-MINE?`). Throws **-258** if the caller does not hold the guard. |
-| `SHA3-256-END` / `SHA3-512-END` | Assert ownership, run original via `CATCH`, then **release** (always, even on error). |
-| `SHA3-256-END-COMPARE` | Assert ownership, finalize into neutral scratch, compare, then **release** (always, even on error). |
-
-### Unguarded words
-
-Pure reads and display helpers that do not touch shared buffers are
-left unguarded: `SHA3-256-COMPARE`, `SHA3-512-COMPARE`,
-`SHA3-256-.`, `SHA3-512-.`, and all `*-LEN` / `*-HEX-LEN` constants.
-
----
-
-## Quick Reference
+## Quick reference
 
 | Word | Stack | Description |
-|------|-------|-------------|
-| `SHA3-256-LEN` | `( -- 32 )` | Hash length in bytes |
-| `SHA3-256-HEX-LEN` | `( -- 64 )` | Hex string length |
-| `SHA3-512-LEN` | `( -- 64 )` | Hash length in bytes |
-| `SHA3-512-HEX-LEN` | `( -- 128 )` | Hex string length |
+|---|---|---|
 | `SHA3-256-HASH` | `( src len dst -- )` | One-shot SHA3-256 |
-| `SHA3-256-HASH-COMPARE` | `( src len expected -- flag )` | Hash and constant-time compare without a caller digest buffer |
 | `SHA3-512-HASH` | `( src len dst -- )` | One-shot SHA3-512 |
-| `SHAKE-128` | `( src len dst dlen -- )` | SHAKE-128 XOF |
-| `SHAKE-256` | `( src len dst dlen -- )` | SHAKE-256 XOF |
-| `SHA3-256-BEGIN` | `( -- )` | Start streaming SHA3-256 |
-| `SHA3-256-ADD` | `( addr len -- )` | Feed data |
-| `SHA3-256-END` | `( dst -- )` | Finalize to dst |
-| `SHA3-256-END-COMPARE` | `( expected -- flag )` | Finalize and constant-time compare, releasing the streaming guard |
-| `SHA3-512-BEGIN` | `( -- )` | Start streaming SHA3-512 |
-| `SHA3-512-ADD` | `( addr len -- )` | Feed data |
-| `SHA3-512-END` | `( dst -- )` | Finalize to dst |
-| `SHA3-256-HMAC` | `( key klen data dlen dst -- )` | HMAC-SHA3-256 |
-| `SHA3-256-.` | `( addr -- )` | Print hash as hex |
-| `SHA3-512-.` | `( addr -- )` | Print hash as hex |
-| `SHA3-256->HEX` | `( src dst -- n )` | Convert to hex string |
-| `SHA3-512->HEX` | `( src dst -- n )` | Convert to hex string |
-| `SHA3-256-COMPARE` | `( a b -- flag )` | Constant-time equality |
-| `SHA3-512-COMPARE` | `( a b -- flag )` | Constant-time equality |
+| `SHAKE-128` | `( src len dst dlen -- )` | One-shot SHAKE-128 |
+| `SHAKE-256` | `( src len dst dlen -- )` | One-shot SHAKE-256 |
+| `SHA3-256-BEGIN` | `( -- )` | Start SHA3-256 streaming |
+| `SHA3-256-ADD` | `( addr len -- )` | Add a SHA3-256 segment |
+| `SHA3-256-END` | `( dst -- )` | Finish SHA3-256 |
+| `SHA3-512-BEGIN` | `( -- )` | Start SHA3-512 streaming |
+| `SHA3-512-ADD` | `( addr len -- )` | Add a SHA3-512 segment |
+| `SHA3-512-END` | `( dst -- )` | Finish SHA3-512 |
+| `SHAKE-128-BEGIN` | `( -- )` | Start SHAKE-128 streaming |
+| `SHAKE-128-ADD` | `( addr len -- )` | Add a SHAKE-128 segment |
+| `SHAKE-128-END` | `( dst dlen -- )` | Finish and read SHAKE-128 |
+| `SHAKE-256-BEGIN` | `( -- )` | Start SHAKE-256 streaming |
+| `SHAKE-256-ADD` | `( addr len -- )` | Add a SHAKE-256 segment |
+| `SHAKE-256-END` | `( dst dlen -- )` | Finish and read SHAKE-256 |
+| `SHA3-256-HMAC` | `( key klen data dlen dst -- )` | Checked HMAC-SHA3-256 |
+| `SHA3-256-HASH-COMPARE` | `( src len expected -- flag )` | Hash and compare |
+| `SHA3-256-END-COMPARE` | `( expected -- flag )` | Finish SHA3-256 and compare |
+| `SHA3-256-COMPARE` | `( a b -- flag )` | Compare 32-byte digests |
+| `SHA3-512-COMPARE` | `( a b -- flag )` | Compare 64-byte digests |
+| `SHA3-256->HEX` | `( src dst -- 64 )` | Encode a SHA3-256 digest |
+| `SHA3-512->HEX` | `( src dst -- 128 )` | Encode a SHA3-512 digest |
+| `SHA3-256-.` | `( addr -- )` | Display a SHA3-256 digest |
+| `SHA3-512-.` | `( addr -- )` | Display a SHA3-512 digest |

@@ -2,7 +2,7 @@
 \  sphincs-plus.f  —  SLH-DSA-SHAKE-128s  (FIPS 205)
 \ =================================================================
 \  Megapad-64 / KDOS Forth      Prefix: SPX-
-\  Depends on: sha3.f random.f
+\  Depends on: sha3.f random.f and checked BIOS WOTS-CHAIN
 \
 \  Post-quantum digital signatures using only hash functions.
 \  Instantiation: SPHINCS+-SHAKE-128s (NIST security level 1).
@@ -22,10 +22,11 @@
 \   SPX-SIGN-MODE     variable      0=random (default) 1=deterministic
 \   SPX-MODE-RANDOM        ( -- 0 )
 \   SPX-MODE-DETERMINISTIC ( -- 1 )
+\  Nonzero checked accelerator statuses are thrown unchanged.
 \
-\  BIOS primitives used:
-\   SHA3-MODE! SHA3-INIT SHA3-UPDATE SHA3-FINAL
-\   SHAKE256-MODE SHA3-256-MODE
+\  Checked accelerator interfaces used:
+\   SHAKE-256-BEGIN SHAKE-256-ADD SHAKE-256-END (from sha3.f)
+\   WOTS-CHAIN (BIOS; context-64 start steps dst-16 -- status)
 \   RANDOM8
 \
 \  IMPORTANT: In standard Forth, DO..LOOP pushes to the return stack.
@@ -53,8 +54,8 @@ PROVIDED akashic-sphincs-plus
 16  CONSTANT _SPX-W
 32  CONSTANT _SPX-LEN1
 3   CONSTANT _SPX-LEN2
-35  CONSTANT _SPX-LEN
-560 CONSTANT _SPX-WLEN
+_SPX-LEN1 _SPX-LEN2 + CONSTANT _SPX-LEN
+_SPX-LEN SPX-N * CONSTANT _SPX-WLEN
 7856 CONSTANT SPX-SIG-LEN
 32   CONSTANT SPX-PK-LEN
 64   CONSTANT SPX-SK-LEN
@@ -89,8 +90,11 @@ SPX-MODE-RANDOM SPX-SIGN-MODE !
 \ =====================================================================
 
 CREATE _SPX-ADRS     32 ALLOT   _SPX-ADRS  32 0 FILL
-CREATE _SPX-HASH-BUF 32 ALLOT
 CREATE _SPX-DIGEST   32 ALLOT
+
+\ Caller-owned WOTS transaction context.  The checked BIOS word reads this
+\ exact Bank-0 layout: PK.seed[16] | ADRS[32] | node[16].
+CREATE _SPX-WOTS-CONTEXT 64 ALLOT
 
 CREATE _SPX-WOTS-MSG 40 ALLOT
 CREATE _SPX-NODE     16 ALLOT
@@ -131,7 +135,12 @@ VARIABLE _SPX-HT-LEAF
 VARIABLE _SPX-CUR-MSG
 VARIABLE _SPX-CUR-FIDX
 
-\ Variables replacing >R/R@ inside DO..LOOP
+\ Variables replacing >R/R@ inside DO..LOOP and checked hash transactions
+VARIABLE _SPX-HASH-DST
+VARIABLE _SPX-HASH-RIGHT
+VARIABLE _SPX-V-CHAIN-SRC
+VARIABLE _SPX-V-CHAIN-START
+VARIABLE _SPX-V-CHAIN-STEPS
 VARIABLE _SPX-V-CHAIN-DST
 VARIABLE _SPX-V-WSIG-OUT
 VARIABLE _SPX-V-XNODE-HT
@@ -197,90 +206,88 @@ VARIABLE _SPX-KG-SEC
 : _SPX-ADRS-HEIGHT!  ( u -- ) _SPX-ADRS 24 + _SPX-BE32! ;
 : _SPX-ADRS-INDEX!   ( u -- ) _SPX-ADRS 28 + _SPX-BE32! ;
 
+\ WOTS_PK retains layer/tree/keypair and requires its trailing padding words
+\ to be zero; never inherit chain/hash state from the preceding WOTS_HASH.
+: _SPX-ADRS-WOTS-PK!  ( -- )
+    _SPX-T-WOTS-PK _SPX-ADRS-TYPE!
+    0 _SPX-ADRS-CHAIN!
+    0 _SPX-ADRS-HASH! ;
+
 \ =====================================================================
 \  7. Core SHAKE-256 hash functions
 \ =====================================================================
-\  SHA3-FINAL always writes 32 bytes.  We need n=16.
-\  _SPX-SQUEEZE-N squeezes into 32-byte temp, copies n to dst.
+\  The checked public SHAKE stream owns the accelerator from BEGIN through
+\  END and throws any nonzero BIOS status unchanged.  SPHINCS keeps its
+\  segmented preimages without depending on the removed low-level mode,
+\  init, output-window, or clear words.
 
 : _SPX-SQUEEZE-N  ( dst -- )
-    _SPX-HASH-BUF SHA3-FINAL
-    SHA3-256-MODE SHA3-MODE!
-    _SPX-HASH-BUF SWAP SPX-N CMOVE ;
+    SPX-N SHAKE-256-END ;
 
 \ T_1(PK.seed, ADRS, in) -> dst.  in is n bytes.
 : _SPX-T1  ( in dst -- )
-    >R
-    SHAKE256-MODE SHA3-MODE! SHA3-INIT
-    _SPX-PK-SEED @ SPX-N SHA3-UPDATE
-    _SPX-ADRS 32 SHA3-UPDATE
-    SPX-N SHA3-UPDATE
-    R> _SPX-SQUEEZE-N ;
-
-\ T_1 in-place: hash buf, result back into buf.
-: _SPX-T1!  ( buf -- )
-    SHAKE256-MODE SHA3-MODE! SHA3-INIT
-    _SPX-PK-SEED @ SPX-N SHA3-UPDATE
-    _SPX-ADRS 32 SHA3-UPDATE
-    DUP SPX-N SHA3-UPDATE
-    _SPX-SQUEEZE-N ;
+    _SPX-HASH-DST !
+    SHAKE-256-BEGIN
+    _SPX-PK-SEED @ SPX-N SHAKE-256-ADD
+    _SPX-ADRS 32 SHAKE-256-ADD
+    SPX-N SHAKE-256-ADD
+    _SPX-HASH-DST @ _SPX-SQUEEZE-N ;
 
 \ T_2(PK.seed, ADRS, left||right) -> dst.  Each is n bytes.
 : _SPX-T2  ( left right dst -- )
-    >R >R
-    SHAKE256-MODE SHA3-MODE! SHA3-INIT
-    _SPX-PK-SEED @ SPX-N SHA3-UPDATE
-    _SPX-ADRS 32 SHA3-UPDATE
-    SPX-N SHA3-UPDATE
-    R> SPX-N SHA3-UPDATE
-    R> _SPX-SQUEEZE-N ;
+    _SPX-HASH-DST !
+    _SPX-HASH-RIGHT !
+    SHAKE-256-BEGIN
+    _SPX-PK-SEED @ SPX-N SHAKE-256-ADD
+    _SPX-ADRS 32 SHAKE-256-ADD
+    SPX-N SHAKE-256-ADD
+    _SPX-HASH-RIGHT @ SPX-N SHAKE-256-ADD
+    _SPX-HASH-DST @ _SPX-SQUEEZE-N ;
 
 \ T_len(PK.seed, ADRS, buf) -> dst.  buf has len*n bytes.
 : _SPX-T-LEN  ( buf dst -- )
-    >R
-    SHAKE256-MODE SHA3-MODE! SHA3-INIT
-    _SPX-PK-SEED @ SPX-N SHA3-UPDATE
-    _SPX-ADRS 32 SHA3-UPDATE
-    _SPX-LEN SPX-N * SHA3-UPDATE
-    R> _SPX-SQUEEZE-N ;
+    _SPX-HASH-DST !
+    SHAKE-256-BEGIN
+    _SPX-PK-SEED @ SPX-N SHAKE-256-ADD
+    _SPX-ADRS 32 SHAKE-256-ADD
+    _SPX-LEN SPX-N * SHAKE-256-ADD
+    _SPX-HASH-DST @ _SPX-SQUEEZE-N ;
 
 \ T_k(PK.seed, ADRS, buf) -> dst.  buf has k*n bytes.
 : _SPX-T-K  ( buf dst -- )
-    >R
-    SHAKE256-MODE SHA3-MODE! SHA3-INIT
-    _SPX-PK-SEED @ SPX-N SHA3-UPDATE
-    _SPX-ADRS 32 SHA3-UPDATE
-    _SPX-K SPX-N * SHA3-UPDATE
-    R> _SPX-SQUEEZE-N ;
+    _SPX-HASH-DST !
+    SHAKE-256-BEGIN
+    _SPX-PK-SEED @ SPX-N SHAKE-256-ADD
+    _SPX-ADRS 32 SHAKE-256-ADD
+    _SPX-K SPX-N * SHAKE-256-ADD
+    _SPX-HASH-DST @ _SPX-SQUEEZE-N ;
 
 \ PRF(PK.seed, ADRS, SK.seed) -> dst
 : _SPX-PRF  ( dst -- )
-    >R
-    SHAKE256-MODE SHA3-MODE! SHA3-INIT
-    _SPX-PK-SEED @ SPX-N SHA3-UPDATE
-    _SPX-ADRS 32 SHA3-UPDATE
-    _SPX-SK-SEED @ SPX-N SHA3-UPDATE
-    R> _SPX-SQUEEZE-N ;
+    _SPX-HASH-DST !
+    SHAKE-256-BEGIN
+    _SPX-PK-SEED @ SPX-N SHAKE-256-ADD
+    _SPX-ADRS 32 SHAKE-256-ADD
+    _SPX-SK-SEED @ SPX-N SHAKE-256-ADD
+    _SPX-HASH-DST @ _SPX-SQUEEZE-N ;
 
 \ PRF_msg(SK.prf, opt_rand, M) -> dst
 : _SPX-PRF-MSG  ( dst -- )
-    >R
-    SHAKE256-MODE SHA3-MODE! SHA3-INIT
-    _SPX-SK-PRF @ SPX-N SHA3-UPDATE
-    _SPX-OPT-RAND SPX-N SHA3-UPDATE
-    _SPX-MSG-PTR @ _SPX-MSG-LEN @ SHA3-UPDATE
-    R> _SPX-SQUEEZE-N ;
+    _SPX-HASH-DST !
+    SHAKE-256-BEGIN
+    _SPX-SK-PRF @ SPX-N SHAKE-256-ADD
+    _SPX-OPT-RAND SPX-N SHAKE-256-ADD
+    _SPX-MSG-PTR @ _SPX-MSG-LEN @ SHAKE-256-ADD
+    _SPX-HASH-DST @ _SPX-SQUEEZE-N ;
 
 \ H_msg(R, PK.seed, PK.root, M) -> _SPX-DIGEST (30 bytes needed)
-\ SHA3-FINAL gives 32 bytes -- first 30 are the message digest.
 : _SPX-H-MSG  ( R-addr -- )
-    SHAKE256-MODE SHA3-MODE! SHA3-INIT
-    SPX-N SHA3-UPDATE
-    _SPX-PK-SEED @ SPX-N SHA3-UPDATE
-    _SPX-PK-ROOT @ SPX-N SHA3-UPDATE
-    _SPX-MSG-PTR @ _SPX-MSG-LEN @ SHA3-UPDATE
-    _SPX-DIGEST SHA3-FINAL
-    SHA3-256-MODE SHA3-MODE! ;
+    SHAKE-256-BEGIN
+    SPX-N SHAKE-256-ADD
+    _SPX-PK-SEED @ SPX-N SHAKE-256-ADD
+    _SPX-PK-ROOT @ SPX-N SHAKE-256-ADD
+    _SPX-MSG-PTR @ _SPX-MSG-LEN @ SHAKE-256-ADD
+    _SPX-DIGEST _SPX-MD-LEN SHAKE-256-END ;
 
 \ =====================================================================
 \  8. Digest index extraction
@@ -342,17 +349,35 @@ VARIABLE _SPX-KG-SEC
 \  10. WOTS+ operations
 \ =====================================================================
 
-\ Chain: copy src -> dst, iterate T_1! from step s for c steps.
-\ ADRS must have type=WOTS_HASH, chain# already set.
-\ Uses _SPX-V-CHAIN-DST variable (safe inside DO..LOOP).
+\ Build the production accelerator's exact caller-owned context.
+: _SPX-WOTS-CONTEXT!  ( src -- )
+    _SPX-WOTS-CONTEXT 48 + SPX-N CMOVE
+    _SPX-PK-SEED @ _SPX-WOTS-CONTEXT SPX-N CMOVE
+    _SPX-ADRS _SPX-WOTS-CONTEXT SPX-N + 32 CMOVE ;
+
+: _SPX-CHECK-STATUS  ( status -- )
+    ?DUP IF THROW THEN ;
+
+\ Chain through the checked WOTS sequencer.  ADRS must have type=WOTS_HASH
+\ and its chain number set.  Zero steps deliberately traverse the same
+\ checked path and publish the staged input node as the identity result.
+\ BIOS leaves dst untouched on failure and permits src=dst because the source
+\ has already been copied into the caller-owned context before publication.
+\ Step-index mutation is confined to that copied context; _SPX-ADRS remains
+\ the caller-selected address rather than inheriting a hardware-private step.
 : _SPX-CHAIN  ( src start steps dst -- )
     _SPX-V-CHAIN-DST !
-    OVER + SWAP                       ( src end start )
-    ROT _SPX-V-CHAIN-DST @ SPX-N CMOVE  ( end start )
-    ?DO
-        I _SPX-ADRS-HASH!
-        _SPX-V-CHAIN-DST @ _SPX-T1!
-    LOOP ;
+    _SPX-V-CHAIN-STEPS !
+    _SPX-V-CHAIN-START !
+    _SPX-V-CHAIN-SRC !
+    _SPX-V-CHAIN-SRC @ _SPX-WOTS-CONTEXT!
+    _SPX-WOTS-CONTEXT
+    _SPX-V-CHAIN-START @
+    _SPX-V-CHAIN-STEPS @
+    _SPX-V-CHAIN-DST @
+    WOTS-CHAIN
+    _SPX-WOTS-CONTEXT 64 0 FILL
+    _SPX-CHECK-STATUS ;
 
 \ Generate WOTS+ secret for chain i -> dst.
 \ Briefly switches ADRS to WOTS_PRF, then back to WOTS_HASH.
@@ -391,7 +416,7 @@ VARIABLE _SPX-KG-SEC
         _SPX-CHAIN
     LOOP
     DROP
-    _SPX-T-WOTS-PK _SPX-ADRS-TYPE!
+    _SPX-ADRS-WOTS-PK!
     _SPX-WOTS-BUF R> _SPX-T-LEN ;
 
 \ =====================================================================
@@ -433,7 +458,7 @@ VARIABLE _SPX-KG-SEC
         _SPX-CHAIN
     LOOP
     DROP
-    _SPX-T-WOTS-PK _SPX-ADRS-TYPE!
+    _SPX-ADRS-WOTS-PK!
     _SPX-WOTS-BUF R> _SPX-T-LEN ;
 
 \ Compute XMSS subtree root: treehash(start, height) -> dst.
@@ -781,12 +806,20 @@ VARIABLE _SPX-KG-SEC
     _SPX-PK-ROOT @
     _SPX-HT-VERIFY ;
 
-\ SPX-KEYGEN-RANDOM ( pub sec -- )
-\ ── P07: zeroize seed buffer after random keygen ──
-: SPX-KEYGEN-RANDOM  ( pub sec -- )
+\ Keep CATCH's saved data stack empty so an exception cannot restore output
+\ addresses above its status result.  The public entry point is guarded below,
+\ so reusing the keygen address slots here does not weaken serialization.
+: _SPX-KEYGEN-RANDOM-RUN  ( -- )
     _SPX-RNG-SEED 48 RNG-BYTES
-    >R >R _SPX-RNG-SEED R> R> SPX-KEYGEN
-    _SPX-RNG-SEED 48 0 FILL ;
+    _SPX-RNG-SEED _SPX-KG-PUB @ _SPX-KG-SEC @ SPX-KEYGEN ;
+
+\ SPX-KEYGEN-RANDOM ( pub sec -- )
+\ Zeroize the private seed after success or any RNG/checked-crypto failure.
+: SPX-KEYGEN-RANDOM  ( pub sec -- )
+    _SPX-KG-SEC ! _SPX-KG-PUB !
+    ['] _SPX-KEYGEN-RANDOM-RUN CATCH
+    >R _SPX-RNG-SEED 48 0 FILL R>
+    ?DUP IF THROW THEN ;
 
 \ ── Concurrency Guard ─────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]

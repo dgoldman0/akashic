@@ -12491,24 +12491,25 @@ VARIABLE _crc-depth
     0= IF 1 _crc-fails +! ." CRC ASSERT " _crc-checks @ . CR THEN ;
 
 : _crc-stack  ( -- ) DEPTH _crc-depth @ = _crc-assert ;
+: _crc-status-ok  ( status -- ) DUP 0= _crc-assert DROP ;
 
 CREATE _crc-data
     48 C, 49 C, 50 C, 51 C, 52 C, 53 C, 54 C, 55 C,
     56 C, 57 C, 97 C, 98 C, 99 C, 100 C, 101 C, 102 C, 103 C,
 
 CREATE _crc32-vectors
-    0x00000000 , 0x65C52DDB , 0x1F494690 , 0x515FE078 ,
-    0x4B30C5B2 , 0x59C95211 , 0xE10C0CB8 , 0xB227E3A7 ,
-    0xE8DD6CCE , 0x7D00C5A2 , 0x96B0E4E0 , 0x96EC0D47 ,
-    0xC7468C9E , 0x1550FE99 , 0x057CD91B , 0x618B9DDC ,
-    0x242DCC4E , 0xA5FE58E5 ,
+    0x00000000 , 0xF4DBDF21 , 0xCF412436 , 0xD5A06AB0 ,
+    0xA6669D7D , 0xDDA47024 , 0xB86F6B0F , 0x8DBF08EE ,
+    0x2D803AF5 , 0x37FAD1BA , 0xA684C7C6 , 0x9A165D01 ,
+    0x0623C932 , 0xCE68AD26 , 0x4A1EA79C , 0x1629BB92 ,
+    0x68C4F033 , 0xBE6CBE90 ,
 
 CREATE _crc32c-vectors
-    0x00000000 , 0x81397CF8 , 0x788452B7 , 0x2ACD7147 ,
-    0x5C9E7752 , 0xF5B91326 , 0x1C169282 , 0xAFEAC123 ,
-    0xA533AA5C , 0x19F50719 , 0x8724FEA9 , 0x3FDB27E7 ,
-    0xDEB7B6D1 , 0x6500D3FA , 0x94C52B0B , 0x75011271 ,
-    0x5BA6E5D8 , 0xAA4E63F4 ,
+    0x00000000 , 0x629E1AE0 , 0x73A7AFE3 , 0x73B69656 ,
+    0x063962B9 , 0x6FA51D98 , 0x4F710F39 , 0x0C211E7A ,
+    0xAC222320 , 0xC856EED2 , 0x280C069E , 0xFF280C06 ,
+    0xF4DE7F20 , 0x00A26366 , 0xB34681C5 , 0xF085A076 ,
+    0x42D3119E , 0xD9E334F9 ,
 
 CREATE _crc64-vectors
     0x0000000000000000 , 0x30BB6F267FA73BC9 ,
@@ -12522,22 +12523,57 @@ CREATE _crc64-vectors
     0xD9B4DE01EAD22B8F , 0x2C2BE21491AD9843 ,
 
 : _crc-direct-feed17  ( -- )
-    _crc-data DUP @ CRC-FEED
-    8 + DUP @ CRC-FEED
-    8 + C@ CRC-FEED-BYTE ;
+    _crc-data DUP @ CRC-FEED _crc-status-ok
+    8 + DUP @ CRC-FEED _crc-status-ok
+    8 + C@ CRC-FEED-BYTE _crc-status-ok ;
+
+: _crc-call-one-shot-during-direct  ( -- )
+    _crc-data 1 CRC32 DROP ;
 
 : _crc-test-hardware  ( -- )
-    CRC-POLY-CRC32 CRC-POLY!
-    CRC32-INIT-VAL CRC-INIT!
-    _crc-direct-feed17
-    CRC-FINAL@ DUP 0xA5FE58E5 = _crc-assert
-    CRC@ = _crc-assert
+    3 CRC-MODE! 3 = _crc-assert
+    7 CRC-MODE! 3 = _crc-assert
 
-    CRC-POLY-CRC32 CRC-POLY!
-    0x12345678 CRC32-INIT-VAL XOR
-    DUP CRC-INIT! CRC@ = _crc-assert
+    CRC-MODE-CRC32 CRC-MODE! _crc-status-ok
+    CRC-RESET _crc-status-ok
+    CRC@ DUP 0= _crc-assert DROP
+        CRC32-INIT-VAL = _crc-assert
     _crc-direct-feed17
-    CRC-FINAL@ 0xC6359224 = _crc-assert ;
+    CRC@ DUP 0= _crc-assert DROP
+        0x4193416F = _crc-assert
+    CRC-FINAL@ 0xBE6CBE90 = _crc-assert
+    CRC@ 2 = _crc-assert 0= _crc-assert
+
+    CRC-MODE-CRC32 CRC-MODE! _crc-status-ok
+    0x12345678 CRC32-INIT-VAL XOR
+    DUP CRC-INIT! _crc-status-ok
+    CRC@ DUP 0= _crc-assert DROP = _crc-assert
+    _crc-direct-feed17
+    CRC-FINAL@ 0x6607A28E = _crc-assert
+
+    \ A rejected guarded call must not finalize a direct same-task owner.
+    CRC-MODE-CRC32 CRC-MODE! _crc-status-ok
+    CRC-RESET _crc-status-ok
+    _crc-data @ CRC-FEED _crc-status-ok
+    ['] _crc-call-one-shot-during-direct CATCH 2 = _crc-assert
+    CRC@ DUP 0= _crc-assert DROP DROP
+    _crc-data 8 + DUP @ CRC-FEED _crc-status-ok
+    8 + C@ CRC-FEED-BYTE _crc-status-ok
+    CRC-FINAL@ 0xBE6CBE90 = _crc-assert ;
+
+: _crc-test-raw-crc32c  ( -- )
+    CRC32-INIT-VAL S" 123456789" CRC32C-RAW
+        0x1CF96D7C = _crc-assert
+    0x12345678 0 0 CRC32C-RAW
+        0x12345678 = _crc-assert
+    CRC32-INIT-VAL _crc-data 8 CRC32C-RAW
+    _crc-data 8 + 9 CRC32C-RAW
+    CRC32-INIT-VAL XOR 0xD9E334F9 = _crc-assert ;
+
+: _crc-test-standard-vectors  ( -- )
+    S" 123456789" CRC32 0xCBF43926 = _crc-assert
+    S" 123456789" CRC32C 0xE3069283 = _crc-assert
+    S" 123456789" CRC64 0x62EC59E3F1A4F00A = _crc-assert ;
 
 : _crc-test-vectors  ( -- )
     18 0 DO
@@ -12593,9 +12629,9 @@ CREATE _crc64-vectors
 
 : _crc-test-arbitrary-updates  ( -- )
     0x12345678 _crc-data 17 CRC32-UPDATE
-        0xC6359224 = _crc-assert
+        0x6607A28E = _crc-assert
     0x89ABCDEF _crc-data 17 CRC32C-UPDATE
-        0xEA529F91 = _crc-assert
+        0xE5108F33 = _crc-assert
     0x0123456789ABCDEF _crc-data 17 CRC64-UPDATE
         0xCB329C618DA15A8F = _crc-assert ;
 
@@ -12630,7 +12666,7 @@ CREATE _crc64-vectors
     ['] _crc-call-negative-one-shot CATCH -24 = _crc-assert
     ['] _crc-call-negative-stream CATCH -24 = _crc-assert
     \ Rejected and fault-unwound calls must not poison either owner lock.
-    _crc-data 17 CRC32 0xA5FE58E5 = _crc-assert
+    _crc-data 17 CRC32 0xBE6CBE90 = _crc-assert
 
     CRC32-BEGIN
     ['] _crc-call-nested-begin CATCH -258 = _crc-assert
@@ -12639,11 +12675,13 @@ CREATE _crc64-vectors
     ['] _crc-call-cross-family-end CATCH -258 = _crc-assert
     \ Every rejection above leaves the original stream active and unchanged.
     _crc-data 17 CRC32-ADD
-    CRC32-END 0xA5FE58E5 = _crc-assert ;
+    CRC32-END 0xBE6CBE90 = _crc-assert ;
 
 : _crc-run  ( -- )
     0 _crc-fails ! 0 _crc-checks ! DEPTH _crc-depth !
     _crc-test-hardware
+    _crc-test-raw-crc32c
+    _crc-test-standard-vectors
     _crc-test-vectors
     _crc-test-crc32-splits
     _crc-test-crc32c-splits
@@ -12662,6 +12700,36 @@ _crc-run
     ready_markers=("CRC CONTRACTS PASS",),
     stable_markers=("CRC CONTRACTS PASS",),
     failure_markers=("CRC CONTRACTS FAIL",),
+    include_large_sample=False,
+)
+
+
+PROFILES["sha3-checked-contracts"] = Profile(
+    roots=("math/sha3.f",),
+    resources=(),
+    autoexec=r"""\ autoexec.f - checked MegaPad SHA3/SHAKE contracts
+ENTER-USERLAND
+-1 CONSTANT GUARDED
+REQUIRE math/sha3.f
+REQUIRE local_testing/sha3-checked-test.f
+_S3C-RUN
+""",
+    ready_markers=("SHA3 CHECKED CONTRACTS PASS",),
+    stable_markers=("SHA3 CHECKED CONTRACTS PASS",),
+    failure_markers=(
+        "SHA3 CHECKED CONTRACTS FAIL",
+        "SHA3 ASSERT",
+        "EVALUATE depth limit exceeded",
+        " ? (not found)",
+        "dictionary full",
+        "exception",
+    ),
+    initial_files=(
+        (
+            "local_testing/sha3-checked-test.f",
+            (AKASHIC_ROOT / "local_testing" / "sha3-checked-test.f").read_bytes(),
+        ),
+    ),
     include_large_sample=False,
 )
 
@@ -12713,11 +12781,11 @@ CREATE _sdc-bad 1 ALLOT
 CREATE _sdc-ops VFS-OPS-SIZE ALLOT
 CREATE _sdc-binding VFS-BINDING-DESC-SIZE ALLOT
 CREATE _sdc-crc32-tails
-    0x6104306C , 0xC013A195 , 0x26AD0E9B , 0x596A3B55 ,
-    0x426548B8 , 0x270F9370 , 0xF275EB3B ,
+    0x83DCEFB7 , 0x4F5344CD , 0x884863D2 , 0x9BE3E0A3 ,
+    0xCBF53A1C , 0x0972D361 , 0x5003699F ,
 CREATE _sdc-crc32c-tails
-    0x9FE513B9 , 0xC4BF20AB , 0x49C3D1F7 , 0x3EA8FF32 ,
-    0xF7B24781 , 0x099E5AC3 , 0xAF49A676 ,
+    0x90F599E3 , 0x7355C460 , 0x107B2FB2 , 0xF63AF4EE ,
+    0x18D12335 , 0x41357186 , 0x124297EA ,
 CREATE _sdc-crc64-tails
     0x724B8ECDD64D0D5A , 0x0B7729E569E4CED7 ,
     0xD5F446C587EC3577 , 0xCCCFD4603DC7AA57 ,
@@ -12732,8 +12800,8 @@ CREATE _sdc-crc64-tails
 : _sdc-stack  ( -- ) DEPTH _sdc-depth @ = _sdc-assert ;
 
 : _sdc-crc-known-and-tails  ( -- )
-    S" 123456789" CRC32 0xFC891918 = _sdc-assert
-    S" 123456789" CRC32C 0x05440F15 = _sdc-assert
+    S" 123456789" CRC32 0xCBF43926 = _sdc-assert
+    S" 123456789" CRC32C 0xE3069283 = _sdc-assert
     S" 123456789" CRC64 0x62EC59E3F1A4F00A = _sdc-assert
     S" 123456789" DROP 0 CRC32 0= _sdc-assert
     S" 123456789" DROP 0 CRC32C 0= _sdc-assert
@@ -12755,7 +12823,7 @@ CREATE _sdc-crc64-tails
 
 : _sdc-crc32-splits  ( -- )
     _sdc-crc-a @ _sdc-crc-u @ CRC32 DUP _sdc-crc-whole !
-        0xA5FE58E5 = _sdc-assert
+        0xBE6CBE90 = _sdc-assert
     _sdc-crc-u @ 1+ 0 DO
         0 _sdc-crc-a @ I CRC32-UPDATE
         _sdc-crc-a @ I + _sdc-crc-u @ I - CRC32-UPDATE
@@ -12764,7 +12832,7 @@ CREATE _sdc-crc64-tails
 
 : _sdc-crc32c-splits  ( -- )
     _sdc-crc-a @ _sdc-crc-u @ CRC32C DUP _sdc-crc-whole !
-        0xAA4E63F4 = _sdc-assert
+        0xD9E334F9 = _sdc-assert
     _sdc-crc-u @ 1+ 0 DO
         0 _sdc-crc-a @ I CRC32C-UPDATE
         _sdc-crc-a @ I + _sdc-crc-u @ I - CRC32C-UPDATE
@@ -21886,6 +21954,7 @@ PROFILES["vfs-fixed-snapshot-contracts"] = Profile(
     autoexec=r"""\ autoexec.f - fixed snapshot core contracts
 ENTER-USERLAND
 ." [akashic] loading fixed snapshot core contracts" CR
+REQUIRE utils/fs/vfs-fixed-snapshot.f
 REQUIRE local_testing/vfs-fixed-snapshot.f
 _vfsnc-run
 """,
@@ -23159,8 +23228,11 @@ CREATE _ssoc-rid RID-SIZE ALLOT
     _UV-A STREAMS-SOURCE-REGISTRY-SIZE
         _ssoc-span-unchanged? _ssoc-assert
     SSSTORE-S-INVALID = _ssoc-assert
-    _CRC-HDST 8 _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
-    _SHA3-IPAD 1 _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
+    _CRC-PRIVATE-BEGIN 1 _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
+    _CRC-HARDWARE-OWNED 8 _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
+    _SHA3-PRIVATE-BEGIN 1 _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
+    _SHA3-COMPARE-DIGEST SHA3-256-LEN
+        _SSSTORE-PRIVATE-ALIASES? _ssoc-assert
 
     \ VFS context and operation scratch are part of the nested mutation
     \ boundary too.  A valid store must reject that complete destination

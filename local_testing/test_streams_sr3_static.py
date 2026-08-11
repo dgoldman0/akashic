@@ -356,10 +356,11 @@ def test_streams_sr3_geometry_guards_abort_during_interpretation() -> None:
     }
 
 
-def test_streams_sr3_incremental_hash_is_caller_owned_and_software_only() -> None:
+def test_streams_sr3_incremental_hash_uses_checked_raw_permutation() -> None:
     closure = set(dependency_closure(SOURCE_ROOT, (SHA3_CONTEXT,)))
     words = _defined_words(SHA3_CONTEXT)
-    definitions = _lexical_definitions(_source(SHA3_CONTEXT))
+    source = _source(SHA3_CONTEXT)
+    definitions = _lexical_definitions(source)
     owned_mutable = {
         kind: definitions[kind]
         for kind in MUTABLE_DEFINITION_KINDS
@@ -379,6 +380,15 @@ def test_streams_sr3_incremental_hash_is_caller_owned_and_software_only() -> Non
     }
     assert public_api <= words
     assert owned_mutable == {}
+    assert "KECCAK-F1600" in source
+    assert not {
+        "_SHA3C-ROL",
+        "_SHA3C-RHO-PI",
+        "_SHA3C-RC",
+        "_SHA3C-THETA",
+        "_SHA3C-RHO-PI-STEP",
+        "_SHA3C-CHI",
+    } & words
 
 
 def test_streams_sr3_operational_shape_has_no_prerelease_legacy_surface() -> None:

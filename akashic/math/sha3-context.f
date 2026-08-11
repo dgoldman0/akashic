@@ -8,10 +8,10 @@
 \  without holding global hashing state.
 \
 \  The context contains only scalar counters, Keccak lanes, a rate buffer,
-\  and permutation scratch.  It contains no addresses or callbacks and this
-\  module owns no mutable storage.  Public mutations validate all geometry,
-\  state, capacity, and alias rules before changing either the context or a
-\  digest destination.
+\  and reserved zeroed workspace fixed by its stable 648-byte geometry.  It
+\  contains no addresses or callbacks and this module owns no mutable storage.
+\  Public mutations validate all geometry, state, capacity, and alias rules
+\  before changing either the context or a digest destination.
 \
 \  Public API:
 \    SHA3-256-CONTEXT-SIZE          ( -- 648 )
@@ -21,11 +21,14 @@
 \    SHA3-256-CONTEXT-UPDATE        ( source source-u context -- status )
 \    SHA3-256-CONTEXT-FINAL         ( digest context -- status )
 \    SHA3-256-CONTEXT-FINAL-COMPARE ( expected context -- match? status )
+\    SHA3-CONTEXT-S-HARDWARE        ( -- 5 )
 \
 \  FINAL and FINAL-COMPARE are terminal operations.  A structurally valid
 \  finalized context remains inspectable, but no update or second final is
 \  admitted.  A false match accompanied by S-OK is an ordinary digest
-\  mismatch, not an operation failure.
+\  mismatch, not an operation failure.  A checked KECCAK-F1600 failure returns
+\  SHA3-CONTEXT-S-HARDWARE, wipes the complete context so it is no longer
+\  structurally valid, and never publishes a digest.
 \ =====================================================================
 
 PROVIDED akashic-sha3-context
@@ -41,6 +44,7 @@ REQUIRE ../utils/memory-span.f
 2 CONSTANT SHA3-CONTEXT-S-STATE
 3 CONSTANT SHA3-CONTEXT-S-CAPACITY
 4 CONSTANT SHA3-CONTEXT-S-ALIAS
+5 CONSTANT SHA3-CONTEXT-S-HARDWARE
 
 32  CONSTANT SHA3-256-CONTEXT-DIGEST-SIZE
 136 CONSTANT _SHA3C-RATE
@@ -65,7 +69,7 @@ REQUIRE ../utils/memory-span.f
 
 : SHA3-CONTEXT-STATUS-VALID?  ( status -- flag )
     DUP SHA3-CONTEXT-S-OK >=
-    SWAP SHA3-CONTEXT-S-ALIAS <= AND ;
+    SWAP SHA3-CONTEXT-S-HARDWARE <= AND ;
 
 \ =====================================================================
 \  Context fields and bounded byte predicates
@@ -130,153 +134,31 @@ REQUIRE ../utils/memory-span.f
         _SHA3C-ZERO? ;
 
 \ =====================================================================
-\  Keccak-f[1600] lane and scratch access
+\  Checked Keccak-f[1600] service
 \ =====================================================================
-
-: _SHA3C-S  ( context index -- address )
-    8 * SWAP _SHA3C.STATE + ;
-
-: _SHA3C-BL  ( context index -- address )
-    8 * SWAP _SHA3C.B + ;
-
-: _SHA3C-CL  ( context index -- address )
-    8 * SWAP _SHA3C.C + ;
-
-: _SHA3C-DL  ( context index -- address )
-    8 * SWAP _SHA3C.D + ;
-
-: _SHA3C-XOR!  ( value address -- )
-    DUP @ ROT XOR SWAP ! ;
 
 : _SHA3C-XOR-C!  ( value address -- )
     DUP C@ ROT XOR SWAP C! ;
 
-: _SHA3C-ROL  ( value count -- rotated )
-    DUP 0= IF DROP EXIT THEN
-    >R DUP R@ LSHIFT SWAP 64 R> - RSHIFT OR ;
-
-\ Return the Rho rotation and Pi destination for a lane in x+5*y order.
-\ CASE words avoid a writable table while keeping the FIPS mapping exact.
-: _SHA3C-RHO-PI  ( index -- rotation destination )
-    CASE
-         0 OF  0  0 ENDOF
-         1 OF  1 10 ENDOF
-         2 OF 62 20 ENDOF
-         3 OF 28  5 ENDOF
-         4 OF 27 15 ENDOF
-         5 OF 36 16 ENDOF
-         6 OF 44  1 ENDOF
-         7 OF  6 11 ENDOF
-         8 OF 55 21 ENDOF
-         9 OF 20  6 ENDOF
-        10 OF  3  7 ENDOF
-        11 OF 10 17 ENDOF
-        12 OF 43  2 ENDOF
-        13 OF 25 12 ENDOF
-        14 OF 39 22 ENDOF
-        15 OF 41 23 ENDOF
-        16 OF 45  8 ENDOF
-        17 OF 15 18 ENDOF
-        18 OF 21  3 ENDOF
-        19 OF  8 13 ENDOF
-        20 OF 18 14 ENDOF
-        21 OF  2 24 ENDOF
-        22 OF 61  9 ENDOF
-        23 OF 56 19 ENDOF
-        24 OF 14  4 ENDOF
-        0 0 ROT
-    ENDCASE ;
-
-: _SHA3C-RC  ( round -- constant )
-    CASE
-         0 OF 0x0000000000000001 ENDOF
-         1 OF 0x0000000000008082 ENDOF
-         2 OF 0x800000000000808A ENDOF
-         3 OF 0x8000000080008000 ENDOF
-         4 OF 0x000000000000808B ENDOF
-         5 OF 0x0000000080000001 ENDOF
-         6 OF 0x8000000080008081 ENDOF
-         7 OF 0x8000000000008009 ENDOF
-         8 OF 0x000000000000008A ENDOF
-         9 OF 0x0000000000000088 ENDOF
-        10 OF 0x0000000080008009 ENDOF
-        11 OF 0x000000008000000A ENDOF
-        12 OF 0x000000008000808B ENDOF
-        13 OF 0x800000000000008B ENDOF
-        14 OF 0x8000000000008089 ENDOF
-        15 OF 0x8000000000008003 ENDOF
-        16 OF 0x8000000000008002 ENDOF
-        17 OF 0x8000000000000080 ENDOF
-        18 OF 0x000000000000800A ENDOF
-        19 OF 0x800000008000000A ENDOF
-        20 OF 0x8000000080008081 ENDOF
-        21 OF 0x8000000000008080 ENDOF
-        22 OF 0x0000000080000001 ENDOF
-        23 OF 0x8000000080008008 ENDOF
-        0 SWAP
-    ENDCASE ;
-
-: _SHA3C-CHI-NEXT1  ( index -- next-index )
-    DUP 5 MOD 4 = IF 4 - ELSE 1+ THEN ;
-
-: _SHA3C-CHI-NEXT2  ( index -- next-index )
-    DUP 5 MOD 3 >= IF 3 - ELSE 2 + THEN ;
-
-\ Theta computes five column parities, their five diffusion lanes, and
-\ applies those lanes to all 25 state words.
-: _SHA3C-THETA  ( context -- )
-    5 0 DO
-        DUP I      _SHA3C-S @
-        OVER I  5 + _SHA3C-S @ XOR
-        OVER I 10 + _SHA3C-S @ XOR
-        OVER I 15 + _SHA3C-S @ XOR
-        OVER I 20 + _SHA3C-S @ XOR
-        OVER I _SHA3C-CL !
-    LOOP
-    5 0 DO
-        DUP I 4 + 5 MOD _SHA3C-CL @
-        OVER I 1+ 5 MOD _SHA3C-CL @ 1 _SHA3C-ROL XOR
-        OVER I _SHA3C-DL !
-    LOOP
-    25 0 DO
-        DUP I 5 MOD _SHA3C-DL @
-        OVER I _SHA3C-S _SHA3C-XOR!
-    LOOP
-    DROP ;
-
-: _SHA3C-RHO-PI-STEP  ( context -- )
-    25 0 DO
-        DUP I _SHA3C-S @
-        I _SHA3C-RHO-PI
-        >R _SHA3C-ROL
-        OVER R> _SHA3C-BL !
-    LOOP
-    DROP ;
-
-: _SHA3C-CHI  ( context -- )
-    25 0 DO
-        DUP I _SHA3C-BL @
-        OVER I _SHA3C-CHI-NEXT1 _SHA3C-BL @ INVERT
-        2 PICK I _SHA3C-CHI-NEXT2 _SHA3C-BL @
-        AND XOR
-        OVER I _SHA3C-S !
-    LOOP
-    DROP ;
-
-: _SHA3C-PERMUTE  ( context -- )
-    24 0 DO
-        DUP _SHA3C-THETA
-        DUP _SHA3C-RHO-PI-STEP
-        DUP _SHA3C-CHI
-        I _SHA3C-RC OVER 0 _SHA3C-S _SHA3C-XOR!
-    LOOP
-    DROP ;
+\ A checked raw-permutation failure leaves the 200-byte state unchanged, but
+\ an UPDATE may already have committed earlier blocks.  Wipe the complete
+\ context so it cannot remain structurally valid or later publish a digest.
+\ The context API reports one distinct hardware-service status; the detailed
+\ checked-crypto status remains available at the lower KECCAK-F1600 boundary.
+: _SHA3C-PERMUTE  ( context -- status )
+    DUP _SHA3C.STATE KECCAK-F1600
+    DUP IF
+        SWAP DUP SHA3-256-CONTEXT-SIZE 0 FILL DROP
+        DROP SHA3-CONTEXT-S-HARDWARE
+    ELSE
+        NIP
+    THEN ;
 
 \ SHA3 maps each rate byte to the little-endian byte view of the first
 \ seventeen Keccak lanes.  Megapad-64 cells use that byte order, so exact
 \ byte absorption followed by cell permutation implements the mapping
 \ without alignment or partial-cell reads.
-: _SHA3C-ABSORB-BLOCK  ( context -- )
+: _SHA3C-ABSORB-BLOCK  ( context -- status )
     _SHA3C-RATE 0 DO
         DUP _SHA3C.BUFFER I + C@
         OVER _SHA3C.STATE I + _SHA3C-XOR-C!
@@ -296,7 +178,7 @@ REQUIRE ../utils/memory-span.f
     _SHA3C-PHASE-ABSORBING SWAP _SHA3C.PHASE !
     SHA3-CONTEXT-S-OK ;
 
-: _SHA3C-UPDATE-RUN  ( source source-u context -- )
+: _SHA3C-UPDATE-RUN  ( source source-u context -- status )
     OVER OVER _SHA3C.TOTAL +!
     SWAP 0 ?DO
         OVER I + C@
@@ -306,11 +188,12 @@ REQUIRE ../utils/memory-span.f
         1 OVER _SHA3C.BUFFERED +!
         DUP _SHA3C.BUFFERED @ _SHA3C-RATE = IF
             DUP _SHA3C-ABSORB-BLOCK
+            DUP IF NIP NIP UNLOOP EXIT THEN DROP
             DUP _SHA3C.BUFFER _SHA3C-RATE 0 FILL
             0 OVER _SHA3C.BUFFERED !
         THEN
     LOOP
-    2DROP ;
+    2DROP SHA3-CONTEXT-S-OK ;
 
 : SHA3-256-CONTEXT-UPDATE  ( source source-u context -- status )
     DUP SHA3-256-CONTEXT-VALID? 0= IF
@@ -331,14 +214,13 @@ REQUIRE ../utils/memory-span.f
     U> IF
         _SHA3C-DROP3 SHA3-CONTEXT-S-CAPACITY EXIT
     THEN
-    _SHA3C-UPDATE-RUN
-    SHA3-CONTEXT-S-OK ;
+    _SHA3C-UPDATE-RUN ;
 
 \ =====================================================================
 \  Terminal padding, publication, and comparison
 \ =====================================================================
 
-: _SHA3C-FINALIZE  ( context -- )
+: _SHA3C-FINALIZE  ( context -- status )
     DUP _SHA3C.BUFFERED @
     OVER _SHA3C.BUFFER
     OVER +
@@ -351,11 +233,13 @@ REQUIRE ../utils/memory-span.f
     DUP C@ 0x80 OR SWAP C!
 
     DUP _SHA3C-ABSORB-BLOCK
+    DUP IF NIP EXIT THEN DROP
     DUP _SHA3C.BUFFER _SHA3C-RATE 0 FILL
     DUP _SHA3C.B
         SHA3-256-CONTEXT-SIZE _SHA3C-B-OFF - 0 FILL
     0 OVER _SHA3C.BUFFERED !
-    _SHA3C-PHASE-FINAL SWAP _SHA3C.PHASE ! ;
+    _SHA3C-PHASE-FINAL SWAP _SHA3C.PHASE !
+    SHA3-CONTEXT-S-OK ;
 
 : _SHA3C-FINAL-GEOMETRY
   ( digest-or-expected context -- status )
@@ -377,10 +261,11 @@ REQUIRE ../utils/memory-span.f
 
 : SHA3-256-CONTEXT-FINAL  ( digest context -- status )
     2DUP _SHA3C-FINAL-GEOMETRY DUP IF
-        >R 2DROP R> EXIT
+        NIP NIP EXIT
     THEN
     DROP
     DUP _SHA3C-FINALIZE
+    DUP IF NIP NIP EXIT THEN DROP
     DUP _SHA3C.STATE
     2 PICK SHA3-256-CONTEXT-DIGEST-SIZE MOVE
     2DROP SHA3-CONTEXT-S-OK ;
@@ -392,21 +277,24 @@ REQUIRE ../utils/memory-span.f
         2 PICK _SHA3C.STATE I + C@
         XOR OR
     LOOP
-    0= >R 2DROP R> ;
+    0= NIP NIP ;
 
 : SHA3-256-CONTEXT-FINAL-COMPARE
   ( expected context -- match? status )
     2DUP _SHA3C-FINAL-GEOMETRY DUP IF
-        >R 2DROP 0 R> EXIT
+        NIP NIP 0 SWAP EXIT
     THEN
     DROP
     DUP _SHA3C-FINALIZE
+    DUP IF NIP NIP 0 SWAP EXIT THEN DROP
     _SHA3C-DIGEST=
     SHA3-CONTEXT-S-OK ;
 
 \ The permutation and context layout are deliberately exact: one lane is
 \ one 64-bit cell, the state is 25 lanes, the SHA3-256 rate is 136 bytes,
-\ and all remaining bytes are caller-owned scratch.
+\ and all remaining bytes are caller-owned reserved workspace.  Keeping this
+\ geometry preserves validation and storage contracts while the software
+\ round implementation itself has been removed.
 : _SHA3C-GEOMETRY-ABORT  ( -- )
     ." SHA3 context geometry mismatch" CR ABORT ;
 
