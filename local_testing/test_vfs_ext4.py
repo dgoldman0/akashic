@@ -30364,6 +30364,60 @@ def test_typed_allocate_block_refuses_invalid_claims_and_aborts_late_nospc(
     _assert_emitted(output, "EXT4-TYPED-ALLOCATE-LATE-NOSPC")
 
 
+def test_free_block_finder_is_geometry_bounded_and_skips_lazy_groups(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _FF-MOUNT-IOR CONSTANT _FF-V"
+            ),
+            "_FF-V _EXT4-CTX CONSTANT _FF-CTX",
+            (
+                "0 _FF-CTX _EXT4-FIND-FREE-BLOCK "
+                "CONSTANT _FF-FIRST-IOR CONSTANT _FF-FIRST"
+            ),
+            (
+                "4 _FF-CTX _EXT4-FIND-FREE-BLOCK "
+                "CONSTANT _FF-LAZY-IOR CONSTANT _FF-LAZY"
+            ),
+            (
+                "_FF-LAZY _FF-CTX _EXT4-BLOCK-ALLOCATED? "
+                "CONSTANT _FF-ALLOC-IOR CONSTANT _FF-ALLOCATED"
+            ),
+            (
+                "_FF-CTX _EXT4-C.GROUPS + @ _FF-CTX "
+                "_EXT4-FIND-FREE-BLOCK "
+                "CONSTANT _FF-BOUND-IOR CONSTANT _FF-BOUND"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_FF-MOUNT-IOR 0=",
+                        "_FF-FIRST-IOR 0=",
+                        "_FF-FIRST 1351 =",
+                        "_FF-LAZY-IOR 0=",
+                        "_FF-LAZY 0< 0=",
+                        (
+                            "_FF-LAZY _FF-CTX _EXT4-C.FIRST + @ - "
+                            "_FF-CTX _EXT4-C.BPG + @ / 5 ="
+                        ),
+                        "_FF-ALLOC-IOR 0=",
+                        "_FF-ALLOCATED 0=",
+                        "_FF-BOUND 0=",
+                        "_FF-BOUND-IOR VFS-E-INVALID =",
+                    ]
+                )
+                + ' IF ." EXT4-FREE-BLOCK-FINDER" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-FREE-BLOCK-FINDER")
+
+
 @pytest.mark.parametrize(
     ("image_id", "valid_block", "free_block", "bitmap_home", "journal_home"),
     (

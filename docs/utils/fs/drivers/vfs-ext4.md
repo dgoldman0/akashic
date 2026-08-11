@@ -734,12 +734,24 @@ home; context caches remain media-derived until reload. Any failure after the
 first replacement aborts and scrubs the transaction.
 
 This primitive deliberately does not choose storage or make a file map point
-at it. Its caller must perform geometry-derived free-block selection, complete
-reverse-owner proof, ordered full-block initialization, extent insertion,
-`i_blocks` accounting, and inode checksum work in one enclosing transaction.
-Keeping those authorities separate lets the allocator be tested exactly while
-preventing allocation accounting alone from being mistaken for a complete
-user-visible write operation.
+at it. `_EXT4-FIND-FREE-BLOCK` supplies the separate read-only selection step.
+Starting from a caller-provided locality group, it visits each runtime group at
+most once with explicit wraparound, uses the actual final-group length, and
+requires every initialized bitmap's observed clear-bit count to equal its
+authenticated descriptor counter. Candidate arithmetic is checked and the
+result must pass the complete journal/static-role validator; the exact bitmap
+home and clear bit are then reauthenticated after that cache-clobbering scan.
+Groups with `BLOCK_UNINIT` are skipped rather than initialized implicitly. If
+only such groups advertise free space, selection returns a stable unsupported
+result rather than claiming disk-full or interpreting nonexistent bitmap
+authority.
+
+The enclosing file operation must still perform complete reverse-owner proof,
+ordered full-block initialization, extent insertion, `i_blocks` accounting,
+and inode checksum work in the same transaction. Keeping those authorities
+separate lets selection and accounting be tested exactly while preventing
+either private piece from being mistaken for a complete user-visible write
+operation.
 
 Mutation-side admission also has reusable authorities beyond that free-only
 builder. `_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER` scans every authenticated allocated
