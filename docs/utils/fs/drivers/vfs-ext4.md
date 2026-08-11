@@ -1367,6 +1367,26 @@ preserves `i_size`. Public unmount cleanly deactivates the retained writer, and
 a fresh ordinary read-only mount reads the resulting file without requiring a
 new mutation capability.
 
+Pinned e2fsprogs 1.47.4 independently accepts that public result. `debugfs`
+reads the exact three-block file, maps logical block 1 to the geometry-selected
+candidate, and reports size 3,072 with `i_blocks = 6`; read-only
+`e2fsck -f -n` reports a clean filesystem.
+
+Three operation-specific cuts close the materially distinct new allocation
+boundaries without claiming that every shared journal ordinal has been
+re-enumerated. A tear in the ordered candidate block reports `actual = 0`,
+leaves the cursor and vnode unchanged, and quarantines the writer before any
+allocation home is written. Fresh recovery enters the empty active journal but
+replays zero homes, so the torn raw candidate remains free and unreachable and
+the original sparse file is preserved. GDT and primary-super checkpoint-home
+tears occur after the allocation transaction is committed: both report the
+complete confirmed caller count while leaving vnode accounting and timestamps
+unpublished. Fresh recovery writes all four metadata homes, never rewrites the
+ordered candidate, publishes the allocated extent and exact free-block/
+`i_blocks` state on reload, and reaches a byte-stable zero-I/O remount. The
+combined public success, external-tool, ordered-data, GDT, and primary-super
+capstone passes five tests sequentially in 310.47 host seconds.
+
 `_EXT4-MOUNTED-ONEBLOCK-WRITE` now composes that exact slice as a reusable
 private mounted client. It accepts source/count, file offset, inode number,
 expected generation, explicit seconds/nanoseconds, the mounted VFS, a signed
@@ -1692,7 +1712,9 @@ conformance.
 ## Deliberate remaining limits
 
 The current explicitly staged write surface is not completion of the writable
-profile and is not yet production-closed for every operation it exposes.
+profile. Its initialized-overwrite and in-size hole-fill operations are
+production-closed for their documented request envelopes, but no broader
+geometry or operation inherits that status.
 `EXT4-STAGED-WRITE-OPS` adds only `MOUNT` admission and `WRITE` dispatch to the
 ordinary table. Neither binding advertises `CREATE`, `MKDIR`, `UNLINK`,
 `RMDIR`, `RENAME`, `TRUNCATE`, `SETATTR`, `LINK`, `SYMLINK`, `SETXATTR`, or
@@ -1714,11 +1736,12 @@ and neither changes file size. Each callback invocation is independently
 durable and does not promise atomic batching with a later chunk. The landed
 hole-fill lifecycle includes dry-stage, activation, ordered emission,
 synchronous checkpoint, clean deactivation, and a byte-stable write-free
-ordinary remount. Pinned external-tool and representative allocation-home
-crash qualification are its next production-closure work. EOF growth,
-unwritten conversion, extent-root growth, broader mutation geometry,
-multi-block atomicity, truncation, and namespace mutation remain later
-capabilities.
+ordinary remount. Its pinned external-tool journey and representative ordered
+candidate, GDT-home, and primary-super-home crash recovery are also qualified.
+The next write ratchet is broader existing-file allocation and growth geometry,
+not speculative orphan expansion. EOF growth, unwritten conversion,
+extent-root growth, broader mutation geometry, multi-block atomicity,
+truncation, and namespace mutation remain later capabilities.
 
 The remaining boundaries are the final-profile closure inventory, not an
 ordered list of prerequisites for retaining the qualified write surface:
