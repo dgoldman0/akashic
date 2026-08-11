@@ -1038,22 +1038,22 @@ EA revoke. A boundary check fills the exact 528-pair 1 KiB workspace with 524
 data and four map ranges when no xattr is present, while a present xattr or one
 more data pointer is unsupported. Child/data aliasing and duplicate child
 homes are corrupt; over-budget double-indirect authority remains unsupported.
-Triple-indirect admission covers either an all-zero root with optional direct
-data, or exactly one allocated all-zero level-2 child when direct data and the
-external-xattr pointer are absent. Additional root children, nonzero
-grandchildren, child composition, and any single-/double-indirect composition
-remain unsupported. The authority capacity is 528, 1040, or 2064 pairs at 1, 2, or
-4 KiB. Focused
-one-child modern production releases three data and
-three map blocks in 1,431,070,159 guest steps under a scoped
+The sparse-double authority capacity is 528, 1040, or 2064 pairs at 1, 2, or
+4 KiB. Focused sparse-double one-child modern production releases three data
+and three map blocks in 1,431,070,159 guest steps under a scoped
 1,600,000,000-step watchdog, preserves all six homes without a payload write,
 and reaches a byte-identical zero-I/O remount. Multi-child and external-xattr
 production, legacy-protocol qualification, crash qualification, and pinned
-e2fsck acceptance remain pending for this tier. Separate focused 1 KiB staging
-qualification covers one unlinked inode with slots 0 through 13 zero, one
-allocated all-zero triple-indirect root, no data, and root-only `i_blocks`
-under both orphan protocols. The modern case completes in 534,968,795 guest
-steps under its 800,000,000-step watchdog and pins six metadata credits, one
+e2fsck acceptance remain pending for this sparse-double tier. Triple-indirect
+admission covers either an all-zero root with optional direct
+data, or exactly one allocated all-zero level-2 child when direct data and the
+external-xattr pointer are absent. Additional root children, nonzero
+grandchildren, child composition, and any single-/double-indirect composition
+remain unsupported. Separate focused 1 KiB staging qualification covers one
+unlinked inode with slots 0 through 13 zero, one allocated all-zero
+triple-indirect root, no data, and root-only `i_blocks` under both orphan
+protocols. The modern case completes in 534,968,795 guest steps under its
+800,000,000-step watchdog and pins six metadata credits, one
 revoke, and `MODERN_DATA_DELETE_FINAL`. The legacy case completes in
 529,173,143 steps under the same watchdog and pins five metadata credits, one
 revoke, `LEGACY_DATA_DELETE_FINAL`, and the exact legacy head and locator
@@ -1081,14 +1081,15 @@ under the unchanged 800,000,000-step watchdog. Each binds zero target entries,
 the ordered `{ triple-root, level-2-child }` release vector, two map blocks and
 exact revokes, exact root-plus-child `i_blocks`, distinct
 `LEGACY-SPARSE-TRIPLE-CHILD` authority, six modern or five legacy metadata
-credits, zero home writes, and clean abort. The modern authority refuses
-partial and coordinated count/revoke downgrades while the child type remains
-sealed. A fully coherent rewrite into the root-only type remains structurally
-valid in isolation but is rejected by staged-source reauthentication. Focused
-refusal coverage treats repeated or root/direct/xattr-aliased children, an
-unallocated child, and incorrect root-plus-child `i_blocks` as corruption; a
-second distinct child, a nonzero grandchild, and direct-data or external-xattr
-composition remain unsupported. Focused modern production checkpoints the
+credits, zero home writes, and clean abort. Focused modern
+checkpoint-certificate tests refuse partial and coordinated count/revoke
+downgrades while the child type remains sealed. A fully coherent rewrite into
+the root-only type remains structurally valid in isolation but is rejected by
+staged-source reauthentication. Focused refusal coverage treats repeated or
+root/direct/xattr-aliased children, an unallocated child, and incorrect
+root-plus-child `i_blocks` as corruption; a second distinct child, a nonzero
+grandchild, and direct-data or external-xattr composition remain unsupported.
+Focused modern production checkpoints the
 cleanup in 1,359,573,029 guest steps under the existing 1,500,000,000-step
 watchdog. Its exact 37-write/24-flush trace has the same six cleanup homes as
 the root-only modern shape: the primary super is written three times and the
@@ -1105,8 +1106,20 @@ orphan-file-home write. It restores the same two map bits, inode bit, and
 canonical accounting without writing either released map home, and its
 byte-identical zero-I/O stable remount also completes in 56,369,050 guest
 steps. Both resulting images pass the pinned e2fsprogs 1.47.4
-`e2fsck -f -n` check. Crash, broader-geometry, and additional-fanout
-qualification remain pending for this child-bearing tier.
+`e2fsck -f -n` check. A representative modern F12 replay-home flush failure
+reaches the injected fence in 1,088,178,921 guest steps under the standard
+1,200,000,000-step watchdog. The F11-to-F12 interval contains exactly the six
+expected cleanup-home writes and excludes both the triple root and its child.
+Fresh mounts converge both permitted failed-flush durability views: the F12
+writes surviving and only the prior F11 fence surviving. Each repair completes
+in 271,891,434 guest steps, matches every cleanup home and both preserved map
+homes to the known clean image, and never writes either map home. Each repaired
+image then reaches a byte-identical zero-I/O stable remount in 55,920,483 guest
+steps. Legacy F12 parity; representative F11 commit and F16 final-super fences,
+followed by the full controlled write-prefix and durability matrix, under both
+orphan protocols; broader 2/4 KiB geometry; and implementation, admission, and
+qualification of additional triple-root child fanout remain pending for this
+child-bearing tier.
 The one-direct modern certificate refuses
 missing or extra target counts, a missing range, widened data or root
 singletons, swapped data/root order, and a downgraded map kind before its

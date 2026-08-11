@@ -1697,18 +1697,18 @@ The remaining boundaries are:
   when no xattr is present, while a present xattr or one additional data
   pointer returns unsupported recovery. Child/data aliasing and duplicate
   child homes are corrupt; over-budget double-indirect authority remains
-  unsupported. Triple-indirect admission covers either an all-zero root with
-  optional direct data, or exactly one allocated all-zero level-2 child when
-  direct data and the external-xattr pointer are absent. Additional root
-  children, nonzero grandchildren, child composition, and any
-  single-/double-indirect composition remain unsupported.
-  Focused one-child modern production cleanup
+  unsupported. Focused sparse-double one-child modern production cleanup
   releases three data blocks and all three map blocks in 1,431,070,159 guest
   steps under a scoped 1,600,000,000-step watchdog. It preserves all six homes
   without a payload write, restores allocation accounting, and remounts
   byte-identically with zero I/O. Multi-child and external-xattr production,
   legacy-protocol qualification, crash qualification, and pinned e2fsck
-  acceptance remain pending for this tier.
+  acceptance remain pending for this sparse-double tier.
+  Triple-indirect admission covers either an all-zero root with optional
+  direct data, or exactly one allocated all-zero level-2 child when direct data
+  and the external-xattr pointer are absent. Additional root children, nonzero
+  grandchildren, child composition, and any single-/double-indirect
+  composition remain unsupported.
   Separate focused 1 KiB staging qualification covers one unlinked inode with
   slots 0 through 13 zero, one allocated all-zero triple-indirect root, no
   data, and root-only `i_blocks` under both orphan protocols. The modern case
@@ -1739,11 +1739,12 @@ The remaining boundaries are:
   target entries, the ordered `{ triple-root, level-2-child }` release vector,
   two map blocks and exact revokes, exact root-plus-child `i_blocks`, distinct
   `LEGACY-SPARSE-TRIPLE-CHILD` authority, six modern or five legacy metadata
-  credits, zero home writes, and clean abort. The modern authority refuses
-  partial and coordinated count/revoke downgrades while the child type remains
-  sealed. A fully coherent rewrite into the older root-only type is still a
-  structurally valid checkpoint certificate, but staged-source reauthentication
-  rejects it as a data-map mismatch. Focused refusal coverage treats a repeated
+  credits, zero home writes, and clean abort. Focused modern
+  checkpoint-certificate tests refuse partial and coordinated count/revoke
+  downgrades while the child type remains sealed. A fully coherent rewrite
+  into the older root-only type is still a structurally valid checkpoint
+  certificate, but staged-source reauthentication rejects it as a data-map
+  mismatch. Focused refusal coverage treats a repeated
   child, root/direct/xattr aliases, an unallocated child, and incorrect
   root-plus-child `i_blocks` as corruption; a second distinct child, a nonzero
   grandchild, and direct-data or external-xattr composition remain unsupported.
@@ -1764,8 +1765,21 @@ The remaining boundaries are:
   canonical accounting without writing either released map home, and its
   byte-identical zero-I/O stable remount also completes in 56,369,050 guest
   steps. Both resulting images pass the pinned e2fsprogs 1.47.4
-  `e2fsck -f -n` check. Crash, broader-geometry, and additional-fanout
-  qualification remain pending for this child-bearing tier.
+  `e2fsck -f -n` check. A representative modern F12 replay-home flush failure
+  reaches the injected fence in 1,088,178,921 guest steps under the standard
+  1,200,000,000-step watchdog. The F11-to-F12 interval contains exactly the
+  six expected cleanup-home writes and excludes both the triple root and its
+  child. Fresh mounts converge both permitted failed-flush durability views:
+  the F12 writes surviving and only the prior F11 fence surviving. Each repair
+  completes in 271,891,434 guest steps, matches every cleanup home and both
+  preserved map homes to the known clean image, and never writes either map
+  home. Each repaired image then reaches a byte-identical zero-I/O stable
+  remount in 55,920,483 guest steps. Legacy F12 parity; representative F11
+  commit and F16 final-super fences, followed by the full controlled
+  write-prefix and durability matrix, under both orphan protocols; broader
+  2/4 KiB geometry; and implementation, admission, and qualification of
+  additional triple-root child fanout remain pending for this child-bearing
+  tier.
   The one-direct modern certificate
   refuses missing or extra target counts, a missing range, widened data or root
   singletons, swapped data/root order, and a downgraded map kind before its

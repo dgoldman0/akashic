@@ -25642,6 +25642,7 @@ def _exercise_unlinked_cleanup_flush_fence(
 
     root_home = cleanup_fixture.get("triple_root_home")
     checkpoint_homes: tuple[int, ...] = ()
+    released_map_homes: tuple[int, ...] = ()
     if root_home is not None:
         block_size = cleanup_fixture["block_size"]
         inode_home = cleanup_fixture["inode_home"]
@@ -25649,6 +25650,7 @@ def _exercise_unlinked_cleanup_flush_fence(
         inode_bitmap_home = cleanup_fixture["inode_bitmap_home"]
         gdt_home = cleanup_fixture["gdt_home"]
         orphan_home = cleanup_fixture["orphan_home"]
+        map_ranges = cleanup_fixture["map_ranges"]
         assert case == "replay-homes"
         assert flush_ordinal == 12
         assert isinstance(root_home, int)
@@ -25658,6 +25660,15 @@ def _exercise_unlinked_cleanup_flush_fence(
         assert isinstance(inode_bitmap_home, int)
         assert isinstance(gdt_home, int)
         assert isinstance(orphan_home, int)
+        assert isinstance(map_ranges, tuple)
+        assert map_ranges
+        assert all(
+            isinstance(home, int) and count == 1
+            for home, count in map_ranges
+        )
+        released_map_homes = tuple(home for home, _ in map_ranges)
+        assert released_map_homes[0] == root_home
+        assert len(set(released_map_homes)) == len(released_map_homes)
         checkpoint_homes = (
             inode_home,
             block_bitmap_home,
@@ -25697,11 +25708,12 @@ def _exercise_unlinked_cleanup_flush_fence(
             observed_checkpoint_homes
         )
         assert set(observed_checkpoint_homes) == set(checkpoint_homes)
-        assert not _write_ordinals_for_ext4_home(
-            checkpoint_batch,
-            root_home,
-            block_size=block_size,
-        )
+        for map_home in released_map_homes:
+            assert not _write_ordinals_for_ext4_home(
+                checkpoint_batch,
+                map_home,
+                block_size=block_size,
+            )
 
     variant_marker = f"{variant.upper()}-" if variant else ""
     path_stem = f"{protocol}-{variant}-unlinked" if variant else (
@@ -25779,10 +25791,10 @@ def _exercise_unlinked_cleanup_flush_fence(
                 break
     assert trace_cut
     assert failed_trace == success_trace[:trace_cut]
-    if root_home is not None:
+    for map_home in released_map_homes:
         assert not _write_ordinals_for_ext4_home(
             failed_trace,
-            root_home,
+            map_home,
             block_size=block_size,
         )
 
@@ -25807,15 +25819,16 @@ def _exercise_unlinked_cleanup_flush_fence(
             orphan_home = cleanup_fixture["orphan_home"]
             assert isinstance(clean_image, Path)
             assert isinstance(orphan_home, int)
-            assert not _write_ordinals_for_ext4_home(
-                repair_trace,
-                root_home,
-                block_size=block_size,
-            )
+            for map_home in released_map_homes:
+                assert not _write_ordinals_for_ext4_home(
+                    repair_trace,
+                    map_home,
+                    block_size=block_size,
+                )
             comparison_homes = {
                 *checkpoint_homes,
                 orphan_home,
-                root_home,
+                *released_map_homes,
             }
             for home in comparison_homes:
                 with clean_image.open("rb") as clean_media:
@@ -25891,6 +25904,32 @@ def test_empty_triple_root_unlinked_cleanup_replay_home_flush_fence_converges(
         case="replay-homes",
         flush_ordinal=12,
         variant="empty-triple-root",
+    )
+
+
+def test_one_child_triple_root_unlinked_cleanup_replay_home_flush_fence_converges(
+    one_child_triple_root_unlinked_cleanup_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    root_home = one_child_triple_root_unlinked_cleanup_fixture[
+        "triple_root_home"
+    ]
+    child_home = one_child_triple_root_unlinked_cleanup_fixture[
+        "triple_child_home"
+    ]
+    assert isinstance(root_home, int)
+    assert isinstance(child_home, int)
+    assert one_child_triple_root_unlinked_cleanup_fixture["data_ranges"] == ()
+    assert one_child_triple_root_unlinked_cleanup_fixture["map_ranges"] == (
+        (root_home, 1),
+        (child_home, 1),
+    )
+    _exercise_unlinked_cleanup_flush_fence(
+        one_child_triple_root_unlinked_cleanup_fixture,
+        tmp_path,
+        case="replay-homes",
+        flush_ordinal=12,
+        variant="one-child-triple-root",
     )
 
 
