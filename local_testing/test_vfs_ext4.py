@@ -34343,9 +34343,11 @@ def test_staged_vfs_write_publishes_shared_vnode_and_syncs_clean(
         media_path.unlink(missing_ok=True)
 
 
-def test_staged_vfs_write_fills_one_complete_in_size_hole(
-    writer_activation_fixture: dict[str, object], tmp_path: Path
-) -> None:
+@pytest.fixture(scope="session")
+def staged_public_hole_fill_fixture(
+    writer_activation_fixture: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
     path = writer_activation_fixture["image"]
     source_patches = writer_activation_fixture["source_patches"]
     activation_trace = writer_activation_fixture["success_trace"]
@@ -34390,8 +34392,9 @@ def test_staged_vfs_write_fills_one_complete_in_size_hole(
     expected_file = first_block + bytes(expected_block) + third_block
     expected_file_crc = _crc32c_raw(expected_file)
 
-    media_path = tmp_path / "staged-vfs-hole-fill.img"
-    stable_path = tmp_path / "staged-vfs-hole-fill-stable.img"
+    directory = tmp_path_factory.mktemp("ext4-public-hole-fill")
+    media_path = directory / "staged-vfs-hole-fill.img"
+    stable_path = directory / "staged-vfs-hole-fill-stable.img"
     try:
         output, trace, media_sha256 = run_recovery_forth(
             path,
@@ -34592,9 +34595,88 @@ def test_staged_vfs_write_fills_one_complete_in_size_hole(
         _assert_emitted(stable_output, "EXT4-PUBLIC-HOLE-FILL-STABLE")
         assert stable_trace == ()
         assert stable_sha256 == media_sha256
+        return {
+            "image": stable_path,
+            "expected_file": expected_file,
+            "inode": inode_number,
+            "candidate": candidate,
+        }
     finally:
         media_path.unlink(missing_ok=True)
-        stable_path.unlink(missing_ok=True)
+
+
+def test_staged_vfs_write_fills_one_complete_in_size_hole(
+    staged_public_hole_fill_fixture: dict[str, object],
+) -> None:
+    image = staged_public_hole_fill_fixture["image"]
+    expected_file = staged_public_hole_fill_fixture["expected_file"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert image.is_file()
+    assert len(expected_file) == 3072
+    assert staged_public_hole_fill_fixture["inode"] == 17
+    assert staged_public_hole_fill_fixture["candidate"] == 1351
+
+
+def test_staged_public_hole_fill_output_passes_external_oracles(
+    staged_public_hole_fill_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    image = staged_public_hole_fill_fixture["image"]
+    expected_file = staged_public_hole_fill_fixture["expected_file"]
+    inode_number = staged_public_hole_fill_fixture["inode"]
+    candidate = staged_public_hole_fill_fixture["candidate"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(candidate, int)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    readback = subprocess.run(
+        [str(debugfs), "-R", "cat /fixture/sparse.bin", str(image)],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert readback.returncode == 0, readback.stdout + readback.stderr
+    assert readback.stdout == expected_file
+
+    mapped = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "bmap /fixture/sparse.bin 1",
+            str(image),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert mapped.returncode == 0, mapped.stdout + mapped.stderr
+    assert int(mapped.stdout.strip().splitlines()[-1]) == candidate
+
+    stat = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "stat /fixture/sparse.bin",
+            str(image),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stat.returncode == 0, stat.stdout + stat.stderr
+    assert f"Inode: {inode_number}" in stat.stdout
+    assert f"Size: {len(expected_file)}" in stat.stdout
+    assert "Blockcount: 6" in stat.stdout
+    assert "Flags: 0x80000" in stat.stdout
+    _assert_e2fsck_clean(image, jbd2_toolchain)
 
 
 def test_staged_vfs_write_faults_report_confirmed_caller_prefix(
