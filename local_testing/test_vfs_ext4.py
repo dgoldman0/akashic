@@ -36687,6 +36687,365 @@ def test_staged_write_fault_advances_generic_vfs_confirmed_prefix(
         backing.unlink(missing_ok=True)
 
 
+def test_public_hole_fill_ordered_candidate_tear_preserves_sparse_state(
+    writer_activation_fixture: dict[str, object], tmp_path: Path
+) -> None:
+    """Do not credit or publish an allocation before ordered data is durable."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(journal0_physical, int)
+    assert isinstance(guard_physical, int)
+    activation_writes = sum(
+        kind == "write" for kind, _, _ in activation_trace
+    )
+
+    inode_number = 17
+    candidate = 1351
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_home = inode_offset // block_size
+    first_data_block = _extent_root_physical(inode, 0)
+    third_data_block = _extent_root_physical(inode, 2)
+    assert block_size == 1024
+    assert struct.unpack_from("<I", inode, 0x04)[0] == 3072
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 4
+    with pytest.raises(AssertionError, match="logical block 1 is unmapped"):
+        _extent_root_physical(inode, 1)
+    assert not _ext4_block_allocation_state(path, (candidate,))[candidate]
+
+    with path.open("rb") as source:
+        source.seek(first_data_block * block_size)
+        first_block = source.read(block_size)
+        source.seek(third_data_block * block_size)
+        third_block = source.read(block_size)
+        source.seek(inode_home * block_size)
+        original_inode_home = source.read(block_size)
+    assert len(first_block) == len(third_block) == block_size
+    assert len(original_inode_home) == block_size
+    expected_file = first_block + bytes(block_size) + third_block
+    expected_file_crc = _crc32c_raw(expected_file)
+
+    replacement = b"ABCDEFGHIJKLMNOPQRSTUVWX"
+    block_offset = 500
+    write_offset = block_size + block_offset
+    effect_bytes = 18
+    epoch_ms = 3_000_000_123_456
+    original_candidate = bytes((0xA5,)) * block_size
+    torn_candidate = bytearray(original_candidate)
+    torn_candidate[:block_offset] = bytes(block_offset)
+    torn_candidate[
+        block_offset : block_offset + effect_bytes
+    ] = replacement[:effect_bytes]
+
+    faulted = tmp_path / "public-hole-w7-faulted.img"
+    recovered = tmp_path / "public-hole-w7-recovered.img"
+    stable = tmp_path / "public-hole-w7-stable.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                f"CREATE _HW-CLOCK {epoch_ms} , 0 ,",
+                (
+                    ": _HW-NOW ( clock -- epoch-ms ior ) "
+                    "DUP CELL+ DUP @ 1+ SWAP ! @ 0 ;"
+                ),
+                "CREATE _HW-STAT VFS-STATFS-SIZE ALLOT",
+                "T-ARENA CONSTANT _HW-ARENA",
+                (
+                    "_HW-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _HW-MOUNT-IOR CONSTANT _HW-V"
+                ),
+                "_HW-V _EXT4-CTX CONSTANT _HW-CTX",
+                (
+                    "' _HW-NOW _HW-CLOCK _HW-V "
+                    "EXT4-BIND-WRITE-CLOCK? CONSTANT _HW-BIND-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_HW-PROFILE", "_HW-V", 4, 1, 0
+                ),
+                (
+                    'S" /fixture/sparse.bin" VFS-FF-WRITE _HW-V '
+                    "VFS-OPEN? CONSTANT _HW-OPEN-IOR CONSTANT _HW-FD"
+                ),
+                "_HW-FD FD.INODE @ D.VNODE @ CONSTANT _HW-VN",
+                "_HW-VN VN.MTIME @ CONSTANT _HW-OLD-MTIME",
+                "_HW-VN VN.MTIME-NS @ CONSTANT _HW-OLD-MTIME-NS",
+                "_HW-VN VN.CTIME @ CONSTANT _HW-OLD-CTIME",
+                "_HW-VN VN.CTIME-NS @ CONSTANT _HW-OLD-CTIME-NS",
+                "_HW-VN VN.BLOCKS @ CONSTANT _HW-OLD-BLOCKS",
+                (
+                    "_HW-STAT VFS-STATFS-SIZE _HW-V VFS-STATFS "
+                    "CONSTANT _HW-STAT-BEFORE-IOR"
+                ),
+                "_HW-STAT VSF.BFREE @ CONSTANT _HW-FREE-BEFORE",
+                (
+                    f"{write_offset} _HW-FD VFS-SEEK? "
+                    "CONSTANT _HW-SEEK-IOR"
+                ),
+                (
+                    f'S" {replacement.decode("ascii")}" _HW-FD '
+                    "VFS-WRITE? CONSTANT _HW-WRITE-IOR "
+                    "CONSTANT _HW-ACTUAL"
+                ),
+                "_HW-FD FD.CUR-LO @ CONSTANT _HW-CURSOR",
+                "_HW-V V.LAST-IOR @ CONSTANT _HW-LAST-IOR",
+                "_HW-CTX _EXT4-C.J.WRITER + @ CONSTANT _HW-WRITER",
+                (
+                    "_HW-STAT VFS-STATFS-SIZE _HW-V VFS-STATFS "
+                    "CONSTANT _HW-STAT-AFTER-IOR"
+                ),
+                "_HW-STAT VSF.BFREE @ CONSTANT _HW-FREE-AFTER",
+                "_HW-FD VFS-CLOSE? CONSTANT _HW-CLOSE-IOR",
+                (
+                    _forth_conjunction(
+                        [
+                            "_HW-MOUNT-IOR 0=",
+                            "_HW-BIND-IOR 0=",
+                            "_HW-PROFILE-SIZE-IOR 0=",
+                            "_HW-PROFILE-BIND-IOR 0=",
+                            "_HW-PROFILE-USED _HW-PROFILE-SIZE =",
+                            "_HW-OPEN-IOR 0=",
+                            "_HW-SEEK-IOR 0=",
+                            "_HW-ACTUAL 0=",
+                            (
+                                "_HW-WRITE-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-VOLUME ="
+                            ),
+                            "_HW-WRITE-IOR VFS-IOR-REASON VFS-R-IO =",
+                            (
+                                "_HW-WRITE-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-PARTIAL "
+                                "VFS-IOR-F-READONLY OR ="
+                            ),
+                            f"_HW-CURSOR {write_offset} =",
+                            "_HW-LAST-IOR _HW-WRITE-IOR =",
+                            "_HW-CLOCK CELL+ @ 1 =",
+                            "_HW-OLD-BLOCKS 4 =",
+                            "_HW-VN VN.BLOCKS @ _HW-OLD-BLOCKS =",
+                            "_HW-VN VN.SIZE-LO @ 3072 =",
+                            "_HW-VN VN.SIZE-HI @ 0=",
+                            "_HW-VN VN.MTIME @ _HW-OLD-MTIME =",
+                            "_HW-VN VN.MTIME-NS @ _HW-OLD-MTIME-NS =",
+                            "_HW-VN VN.CTIME @ _HW-OLD-CTIME =",
+                            "_HW-VN VN.CTIME-NS @ _HW-OLD-CTIME-NS =",
+                            "_HW-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                            "_HW-STAT-BEFORE-IOR 0=",
+                            "_HW-STAT-AFTER-IOR 0=",
+                            "_HW-FREE-AFTER _HW-FREE-BEFORE =",
+                            "_HW-WRITER _HW-PROFILE-BASE =",
+                            (
+                                "_HW-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-FAULTED ="
+                            ),
+                            (
+                                "_HW-WRITER _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-ORDERED-DATA ="
+                            ),
+                            "_HW-WRITER _EXT4-JWR-VALID?",
+                            (
+                                "_HW-WRITER _EXT4-JWR.FAULT + @ "
+                                "VFS-IOR-FLAGS VFS-IOR-F-PARTIAL ="
+                            ),
+                            "_HW-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                            "_HW-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "_HW-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            f"_EXT4-WR-COUNT @ {len(replacement)} =",
+                            f"_EXT4-WR-OFFSET @ {write_offset} =",
+                            f"_EXT4-WR-CHUNK @ {len(replacement)} =",
+                            "_EXT4-MOW-SOURCE @ 0<",
+                            f"_XH-CANDIDATE @ {candidate} =",
+                            "_EXT4-IO-COMPLETED @ 1 =",
+                            "_EXT4-IO-EXPECTED @ 2 =",
+                            "_HW-CLOSE-IOR 0=",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-HOLE-W7-FAULT" THEN'
+                ),
+            ],
+            patches=source_patches
+            + ((candidate * block_size, original_candidate),),
+            write_faults_by_ordinal={
+                activation_writes + 1: {
+                    "stage": "media",
+                    "sector_index": 1,
+                    "byte_index": 6,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-HOLE-W7-FAULT")
+        assert trace == activation_trace + (
+            ("write", candidate * 2, 2),
+        )
+        assert not _ext4_block_allocation_state(
+            faulted, (candidate,)
+        )[candidate]
+        _, faulted_inode, _ = _ext4_inode_record(faulted, inode_number)
+        assert struct.unpack_from("<I", faulted_inode, 0x1C)[0] == 4
+        with pytest.raises(AssertionError, match="logical block 1 is unmapped"):
+            _extent_root_physical(faulted_inode, 1)
+        with faulted.open("rb") as source:
+            source.seek(candidate * block_size)
+            assert source.read(block_size) == bytes(torn_candidate)
+            source.seek(inode_home * block_size)
+            assert source.read(block_size) == original_inode_home
+
+        recovery_output, recovery_trace, recovery_sha256 = run_recovery_forth(
+            faulted,
+            recovered,
+            [
+                f"CREATE _HWR-BUF {len(expected_file)} ALLOT",
+                *_activation_resolved_mount_lines(
+                    "EXT4-PUBLIC-HOLE-W7-RECOVERY", 0x13
+                ),
+                (
+                    "_AR-CTX _EXT4-C.J.REPLAYED + @ 0<> "
+                    "CONSTANT _HWR-RECOVERED"
+                ),
+                (
+                    'S" /fixture/sparse.bin" VFS-FF-READ _V '
+                    "VFS-OPEN? CONSTANT _HWR-OPEN-IOR CONSTANT _HWR-FD"
+                ),
+                "_HWR-FD FD.INODE @ D.VNODE @ CONSTANT _HWR-VN",
+                (
+                    f"_HWR-BUF {len(expected_file)} _HWR-FD VFS-READ? "
+                    "CONSTANT _HWR-READ-IOR CONSTANT _HWR-ACTUAL"
+                ),
+                "0xFFFFFFFF _EXT4-CRC-START",
+                f"_HWR-BUF {len(expected_file)} _EXT4-CRC-ADD",
+                "_EXT4-CRC@ CONSTANT _HWR-CRC",
+                (
+                    "_HWR-RECOVERED "
+                    'IF ." EXT4-PUBLIC-HOLE-W7-REPLAY-PASS" THEN'
+                ),
+                (
+                    "_HWR-OPEN-IOR 0= "
+                    "_HWR-READ-IOR 0= AND "
+                    f"_HWR-ACTUAL {len(expected_file)} = AND "
+                    'IF ." EXT4-PUBLIC-HOLE-W7-READ" THEN'
+                ),
+                (
+                    f"_HWR-CRC {expected_file_crc} = "
+                    'IF ." EXT4-PUBLIC-HOLE-W7-CRC" THEN'
+                ),
+                (
+                    "_HWR-VN VN.SIZE-LO @ 3072 = "
+                    "_HWR-VN VN.BLOCKS @ 4 = AND "
+                    'IF ." EXT4-PUBLIC-HOLE-W7-INODE" THEN'
+                ),
+                "_HWR-FD VFS-CLOSE? CONSTANT _HWR-CLOSE-IOR",
+                "0 _V VFS-UNMOUNT CONSTANT _HWR-UNMOUNT-IOR",
+                (
+                    "_HWR-CLOSE-IOR 0= _HWR-UNMOUNT-IOR 0= AND "
+                    'IF ." EXT4-PUBLIC-HOLE-W7-UNMOUNT" THEN'
+                ),
+                (
+                    "_HWR-RECOVERED _HWR-OPEN-IOR 0= AND "
+                    "_HWR-READ-IOR 0= AND "
+                    f"_HWR-ACTUAL {len(expected_file)} = AND "
+                    f"_HWR-CRC {expected_file_crc} = AND "
+                    "_HWR-VN VN.SIZE-LO @ 3072 = AND "
+                    "_HWR-VN VN.BLOCKS @ 4 = AND "
+                    "_HWR-CLOSE-IOR 0= AND _HWR-UNMOUNT-IOR 0= AND "
+                    'IF ." EXT4-PUBLIC-HOLE-W7-SPARSE" THEN'
+                ),
+            ],
+            capture_media=recovered,
+        )
+        _assert_emitted(recovery_output, "EXT4-PUBLIC-HOLE-W7-RECOVERY")
+        _assert_emitted(recovery_output, "EXT4-PUBLIC-HOLE-W7-REPLAY-PASS")
+        _assert_emitted(recovery_output, "EXT4-PUBLIC-HOLE-W7-READ")
+        _assert_emitted(recovery_output, "EXT4-PUBLIC-HOLE-W7-CRC")
+        _assert_emitted(recovery_output, "EXT4-PUBLIC-HOLE-W7-INODE")
+        _assert_emitted(recovery_output, "EXT4-PUBLIC-HOLE-W7-UNMOUNT")
+        _assert_emitted(recovery_output, "EXT4-PUBLIC-HOLE-W7-SPARSE")
+        _assert_activation_cleanup_trace(
+            recovery_trace,
+            journal0_physical=journal0_physical,
+            guard_physical=guard_physical,
+        )
+        _assert_activation_landed_media(
+            recovered, writer_activation_fixture, expected_features=0x13
+        )
+        assert not _ext4_block_allocation_state(
+            recovered, (candidate,)
+        )[candidate]
+        _, recovered_inode, _ = _ext4_inode_record(recovered, inode_number)
+        assert struct.unpack_from("<I", recovered_inode, 0x1C)[0] == 4
+        with pytest.raises(AssertionError, match="logical block 1 is unmapped"):
+            _extent_root_physical(recovered_inode, 1)
+        with recovered.open("rb") as source:
+            source.seek(candidate * block_size)
+            assert source.read(block_size) == bytes(torn_candidate)
+            source.seek(inode_home * block_size)
+            assert source.read(block_size) == original_inode_home
+
+        stable_output, stable_trace, stable_sha256 = run_recovery_forth(
+            recovered,
+            stable,
+            [
+                f"CREATE _HWS-BUF {len(expected_file)} ALLOT",
+                (
+                    "T-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _HWS-MOUNT-IOR CONSTANT _HWS-V"
+                ),
+                "_HWS-V _EXT4-CTX CONSTANT _HWS-CTX",
+                (
+                    'S" /fixture/sparse.bin" VFS-FF-READ _HWS-V '
+                    "VFS-OPEN? CONSTANT _HWS-OPEN-IOR CONSTANT _HWS-FD"
+                ),
+                "_HWS-FD FD.INODE @ D.VNODE @ CONSTANT _HWS-VN",
+                (
+                    f"_HWS-BUF {len(expected_file)} _HWS-FD VFS-READ? "
+                    "CONSTANT _HWS-READ-IOR CONSTANT _HWS-ACTUAL"
+                ),
+                "0xFFFFFFFF _EXT4-CRC-START",
+                f"_HWS-BUF {len(expected_file)} _EXT4-CRC-ADD",
+                "_EXT4-CRC@ CONSTANT _HWS-CRC",
+                "_HWS-FD VFS-CLOSE? CONSTANT _HWS-CLOSE-IOR",
+                "0 _HWS-V VFS-UNMOUNT CONSTANT _HWS-UNMOUNT-IOR",
+                (
+                    "_HWS-MOUNT-IOR 0= _HWS-OPEN-IOR 0= AND "
+                    "_HWS-READ-IOR 0= AND "
+                    f"_HWS-ACTUAL {len(expected_file)} = AND "
+                    f"_HWS-CRC {expected_file_crc} = AND "
+                    "_HWS-VN VN.SIZE-LO @ 3072 = AND "
+                    "_HWS-VN VN.BLOCKS @ 4 = AND "
+                    "_HWS-CTX _EXT4-C.J.REPLAYED + @ 0= AND "
+                    "_HWS-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
+                    "_HWS-CLOSE-IOR 0= AND _HWS-UNMOUNT-IOR 0= AND "
+                    'IF ." EXT4-PUBLIC-HOLE-W7-STABLE" THEN'
+                ),
+            ],
+            capture_media=stable,
+        )
+        _assert_emitted(stable_output, "EXT4-PUBLIC-HOLE-W7-STABLE")
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+        assert not _ext4_block_allocation_state(
+            stable, (candidate,)
+        )[candidate]
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
 def test_staged_write_updates_initialized_depth_positive_extent(
     extent_writer_activation_fixture: dict[str, object], tmp_path: Path
 ) -> None:
