@@ -31667,6 +31667,431 @@ def test_typed_one_block_hole_fill_stages_exact_allocation_and_inode(
     _assert_emitted(output, "EXT4-TYPED-ONEBLOCK-HOLE-FILL-ABORTED")
 
 
+def test_typed_one_block_hole_fill_coalesces_adjacent_extents(
+    canonical_images: dict[str, Path],
+) -> None:
+    """Exercise the count-changing and full-root coalescing edits directly."""
+    path = canonical_images["primary-1k-i256"]
+    inode_number = 17
+    candidate = 1351
+    superblock, canonical_inode, inode_offset = _ext4_inode_record(
+        path, inode_number
+    )
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    generation = struct.unpack_from("<I", canonical_inode, 0x64)[0]
+    assert block_size == 1024
+    assert inode_size == 256
+    assert inode_home == 279
+    assert inode_block_offset == 0
+    assert generation == 0
+    assert not _ext4_block_allocation_state(path, (candidate,))[candidate]
+
+    seconds = 3_000_000_000
+    nanoseconds = 123_456_789
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = (
+        low_seconds
+        if low_seconds < 0x8000_0000
+        else low_seconds - 0x1_0000_0000
+    )
+    epoch = (seconds - signed_low) >> 32
+    assert epoch == 1
+    extra_time = (nanoseconds << 2) | epoch
+
+    cases = (
+        {
+            "name": "merge-both",
+            "allocations": ((1352, 1),),
+            "input": ((0, 1, 1350), (2, 1, 1352), (4, 1, 1348)),
+            "expected": ((0, 3, 1350), (4, 1, 1348)),
+            "size": 5 * block_size,
+            "edit": 3,
+        },
+        {
+            "name": "full-root-merge-right",
+            "allocations": ((1352, 2),),
+            "input": (
+                (0, 1, 1348),
+                (2, 1, 1352),
+                (4, 1, 1350),
+                (6, 1, 1353),
+            ),
+            "expected": (
+                (0, 1, 1348),
+                (1, 2, 1351),
+                (4, 1, 1350),
+                (6, 1, 1353),
+            ),
+            "size": 7 * block_size,
+            "edit": 2,
+        },
+    )
+
+    def inode_with_extents(
+        entries: tuple[tuple[int, int, int], ...],
+        size_bytes: int,
+    ) -> bytearray:
+        result = bytearray(canonical_inode)
+        result[0x34:0x64] = bytes(4 * 12)
+        struct.pack_into("<I", result, 0x04, size_bytes)
+        struct.pack_into("<I", result, 0x6C, 0)
+        struct.pack_into("<I", result, 0x1C, len(entries) * 2)
+        struct.pack_into("<H", result, 0x74, 0)
+        struct.pack_into("<H", result, 0x2A, len(entries))
+        for index, (logical, length, physical) in enumerate(entries):
+            struct.pack_into(
+                "<IHHI",
+                result,
+                0x34 + index * 12,
+                logical,
+                length,
+                physical >> 32,
+                physical & 0xFFFF_FFFF,
+            )
+        return result
+
+    def read_block(block: int) -> bytearray:
+        with path.open("rb") as source:
+            source.seek(block * block_size)
+            result = bytearray(source.read(block_size))
+        assert len(result) == block_size
+        return result
+
+    for case in cases:
+        name = case["name"]
+        allocations = case["allocations"]
+        input_entries = case["input"]
+        expected_entries = case["expected"]
+        size_bytes = case["size"]
+        expected_edit = case["edit"]
+        assert isinstance(name, str)
+        assert isinstance(allocations, tuple)
+        assert isinstance(input_entries, tuple)
+        assert isinstance(expected_entries, tuple)
+        assert isinstance(size_bytes, int)
+        assert isinstance(expected_edit, int)
+
+        allocation_specs = tuple(
+            (index * 2, count, False)
+            for index, (_, count) in enumerate(allocations)
+        )
+        patches, physical_ranges = _allocate_unlinked_extent_ranges(
+            path,
+            protocol="modern",
+            extent_specs=allocation_specs,
+            inode_number=inode_number,
+            physical_starts=tuple(start for start, _ in allocations),
+            base_patches=(
+                (1024, superblock),
+                (inode_offset, canonical_inode),
+            ),
+        )
+        assert physical_ranges == allocations
+        patch_map = dict(patches)
+        input_inode = inode_with_extents(input_entries, size_bytes)
+        input_inode[:] = _inode_with_checksum(
+            patch_map[1024], inode_number, input_inode
+        )
+        patch_map[inode_offset] = bytes(input_inode)
+        candidate_offset = candidate * block_size
+        assert candidate_offset not in patch_map
+        patch_map[candidate_offset] = bytes((0xA5,)) * block_size
+
+        expected_inode = inode_with_extents(expected_entries, size_bytes)
+        struct.pack_into(
+            "<I", expected_inode, 0x1C, len(input_entries) * 2 + 2
+        )
+        struct.pack_into("<I", expected_inode, 0x0C, low_seconds)
+        struct.pack_into("<I", expected_inode, 0x10, low_seconds)
+        struct.pack_into("<I", expected_inode, 0x84, extra_time)
+        struct.pack_into("<I", expected_inode, 0x88, extra_time)
+        expected_inode[:] = _inode_with_checksum(
+            patch_map[1024], inode_number, expected_inode
+        )
+        expected_inode_home = read_block(inode_home)
+        expected_inode_home[
+            inode_block_offset : inode_block_offset + inode_size
+        ] = expected_inode
+        expected_inode_home_crc = _crc32c_raw(expected_inode_home)
+
+        entry_checks: list[str] = []
+        for index in range(4):
+            entry_offset = 12 + index * 12
+            if index < len(expected_entries):
+                logical, length, physical = expected_entries[index]
+                entry_checks.extend(
+                    (
+                        f"_HC-ROOT {entry_offset} + L@ {logical} =",
+                        f"_HC-ROOT {entry_offset + 4} + W@ {length} =",
+                        f"_HC-ROOT {entry_offset + 6} + W@ "
+                        f"{physical >> 32} =",
+                        f"_HC-ROOT {entry_offset + 8} + L@ "
+                        f"{physical & 0xFFFF_FFFF} =",
+                    )
+                )
+            else:
+                entry_checks.append(
+                    f"_HC-ROOT {entry_offset} + 12 _EXT4-BYTES-ZERO?"
+                )
+
+        marker = f"EXT4-TYPED-HOLE-{name.upper()}"
+        output = run_forth(
+            path,
+            [
+                "T-ARENA CONSTANT _HC-ARENA",
+                (
+                    "_HC-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _HC-MOUNT-IOR CONSTANT _HC-V"
+                ),
+                "_HC-V _EXT4-CTX CONSTANT _HC-CTX",
+                (
+                    "4 1 0 _HC-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                    "CONSTANT _HC-WRITER-IOR CONSTANT _HC-WRITER"
+                ),
+                "_HC-ARENA ARENA-USED CONSTANT _HC-USED-BEFORE",
+                (
+                    "4 1 0 _HC-WRITER _EXT4-JTX-BEGIN "
+                    "CONSTANT _HC-BEGIN-IOR CONSTANT _HC-TX"
+                ),
+                "DEPTH CONSTANT _HC-DEPTH-BEFORE",
+                (
+                    f'S" COALESCE" {block_size + 100} '
+                    f"{inode_number} {generation} {seconds} {nanoseconds} "
+                    "_HC-TX "
+                    "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                    "CONSTANT _HC-STAGE-IOR"
+                ),
+                "DEPTH CONSTANT _HC-DEPTH-AFTER",
+                (
+                    "3 _HC-WRITER _EXT4-JWR-META-IMAGE "
+                    "CONSTANT _HC-INODE-IMAGE"
+                ),
+                (
+                    f"_HC-INODE-IMAGE {inode_block_offset} + "
+                    "CONSTANT _HC-RECORD"
+                ),
+                "_HC-RECORD _EXT4-I.BLOCK + CONSTANT _HC-ROOT",
+                (
+                    _forth_conjunction(
+                        [
+                            "_HC-MOUNT-IOR 0=",
+                            "_HC-WRITER-IOR 0=",
+                            "_HC-BEGIN-IOR 0=",
+                            "_HC-STAGE-IOR 0=",
+                            "_HC-DEPTH-BEFORE _HC-DEPTH-AFTER =",
+                            f"_XH-CANDIDATE @ {candidate} =",
+                            f"_XH-EDIT @ {expected_edit} =",
+                            "_XH-PUBLISHED @ 0<",
+                            (
+                                "_HC-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-STAGING ="
+                            ),
+                            "_HC-WRITER _EXT4-JWR.META-USED + @ 4 =",
+                            "_HC-WRITER _EXT4-JWR.META-ACTIVE + @ 4 =",
+                            "_HC-WRITER _EXT4-JWR.DATA-USED + @ 1 =",
+                            "_HC-WRITER _EXT4-JWR.DATA-ACTIVE + @ 1 =",
+                            "_HC-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
+                            "_HC-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                            "_HC-WRITER _EXT4-JTX-TABLES-VALID?",
+                            (
+                                "3 _HC-WRITER _EXT4-JWR-META-ENTRY @ "
+                                f"{inode_home} ="
+                            ),
+                            (
+                                "0 _HC-WRITER _EXT4-JWR-DATA-ENTRY @ "
+                                f"{candidate} ="
+                            ),
+                            (
+                                "_HC-INODE-IMAGE _HC-WRITER "
+                                "_EXT4-JTX-IMAGE-CRC "
+                                f"{expected_inode_home_crc} ="
+                            ),
+                            (
+                                "_HC-RECORD _EXT4-I.BLOCKS-LO + L@ "
+                                f"{len(input_entries) * 2 + 2} ="
+                            ),
+                            "_HC-RECORD _EXT4-I.BLOCKS-HI + W@ 0=",
+                            (
+                                "_HC-RECORD _EXT4-I.SIZE-LO + L@ "
+                                f"{size_bytes} ="
+                            ),
+                            "_HC-RECORD _EXT4-I.SIZE-HI + L@ 0=",
+                            "_HC-ROOT W@ _EXT4-EXTENT-MAGIC =",
+                            f"_HC-ROOT 2 + W@ {len(expected_entries)} =",
+                            "_HC-ROOT 4 + W@ 4 =",
+                            "_HC-ROOT 6 + W@ 0=",
+                            *entry_checks,
+                            "_HC-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        ]
+                    )
+                    + f' IF ." {marker}" THEN'
+                ),
+                "_HC-TX _EXT4-JTX-ABORT CONSTANT _HC-ABORT-IOR",
+                (
+                    _forth_conjunction(
+                        [
+                            "_HC-ABORT-IOR 0=",
+                            (
+                                "_HC-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-IDLE ="
+                            ),
+                            "_HC-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                            "_HC-WRITER _EXT4-JWR-VALID?",
+                            (
+                                "_HC-ARENA ARENA-USED "
+                                "_HC-USED-BEFORE ="
+                            ),
+                        ]
+                    )
+                    + f' IF ." {marker}-ABORTED" THEN'
+                ),
+            ],
+            patches=tuple(patch_map.items()),
+        )
+        _assert_emitted(output, marker)
+        _assert_emitted(output, f"{marker}-ABORTED")
+
+
+def test_typed_one_block_hole_fill_refuses_unmergeable_full_root(
+    canonical_images: dict[str, Path],
+) -> None:
+    """A saturated root still refuses before retaining ordered data."""
+    path = canonical_images["primary-1k-i256"]
+    inode_number = 17
+    candidate = 1351
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    assert block_size == 1024
+    assert generation == 0
+
+    allocations = ((1352, 2),)
+    patches, physical_ranges = _allocate_unlinked_extent_ranges(
+        path,
+        protocol="modern",
+        extent_specs=((0, 2, False),),
+        inode_number=inode_number,
+        physical_starts=(1352,),
+        base_patches=((1024, superblock), (inode_offset, inode)),
+    )
+    assert physical_ranges == allocations
+    patch_map = dict(patches)
+    full_inode = bytearray(inode)
+    full_inode[0x34:0x64] = bytes(4 * 12)
+    struct.pack_into("<I", full_inode, 0x04, 7 * block_size)
+    struct.pack_into("<I", full_inode, 0x6C, 0)
+    struct.pack_into("<I", full_inode, 0x1C, 8)
+    struct.pack_into("<H", full_inode, 0x74, 0)
+    struct.pack_into("<H", full_inode, 0x2A, 4)
+    entries = (
+        (0, 1, 1348),
+        (2, 1, 1350),
+        (4, 1, 1352),
+        (6, 1, 1353),
+    )
+    for index, (logical, length, physical) in enumerate(entries):
+        struct.pack_into(
+            "<IHHI",
+            full_inode,
+            0x34 + index * 12,
+            logical,
+            length,
+            physical >> 32,
+            physical & 0xFFFF_FFFF,
+        )
+    full_inode[:] = _inode_with_checksum(
+        patch_map[1024], inode_number, full_inode
+    )
+    patch_map[inode_offset] = bytes(full_inode)
+    candidate_offset = candidate * block_size
+    assert candidate_offset not in patch_map
+    patch_map[candidate_offset] = bytes((0xA5,)) * block_size
+
+    output = run_forth(
+        path,
+        [
+            "T-ARENA CONSTANT _FR-ARENA",
+            (
+                "_FR-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _FR-MOUNT-IOR CONSTANT _FR-V"
+            ),
+            "_FR-V _EXT4-CTX CONSTANT _FR-CTX",
+            (
+                "4 1 0 _FR-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _FR-WRITER-IOR CONSTANT _FR-WRITER"
+            ),
+            "_FR-ARENA ARENA-USED CONSTANT _FR-USED-BEFORE",
+            (
+                "4 1 0 _FR-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _FR-BEGIN-IOR CONSTANT _FR-TX"
+            ),
+            "DEPTH CONSTANT _FR-DEPTH-BEFORE",
+            (
+                f'S" REFUSE" {block_size + 100} {inode_number} '
+                f"{generation} 1 2 _FR-TX "
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _FR-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _FR-DEPTH-AFTER",
+            (
+                _forth_conjunction(
+                    [
+                        "_FR-MOUNT-IOR 0=",
+                        "_FR-WRITER-IOR 0=",
+                        "_FR-BEGIN-IOR 0=",
+                        "_FR-DEPTH-BEFORE _FR-DEPTH-AFTER =",
+                        (
+                            "_FR-STAGE-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_FR-STAGE-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        f"_XH-CANDIDATE @ {candidate} =",
+                        "_XH-PUBLISHED @ 0=",
+                        (
+                            "_FR-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-STAGING ="
+                        ),
+                        "_FR-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_FR-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_FR-WRITER _EXT4-JWR.DATA-USED + @ 0=",
+                        "_FR-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                        "_FR-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
+                        "_FR-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                        "_FR-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-HOLE-FULL-ROOT-REFUSED" THEN'
+            ),
+            "_FR-TX _EXT4-JTX-ABORT CONSTANT _FR-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_FR-ABORT-IOR 0=",
+                        (
+                            "_FR-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_FR-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                        "_FR-WRITER _EXT4-JWR-VALID?",
+                        "_FR-ARENA ARENA-USED _FR-USED-BEFORE =",
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-HOLE-FULL-ROOT-ABORTED" THEN'
+            ),
+        ],
+        patches=tuple(patch_map.items()),
+    )
+    _assert_emitted(output, "EXT4-TYPED-HOLE-FULL-ROOT-REFUSED")
+    _assert_emitted(output, "EXT4-TYPED-HOLE-FULL-ROOT-ABORTED")
+
+
 def test_typed_one_block_hole_fill_refuses_unimplemented_shapes_without_io(
     canonical_images: dict[str, Path],
 ) -> None:
