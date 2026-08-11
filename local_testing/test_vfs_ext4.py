@@ -34680,6 +34680,396 @@ def test_staged_public_hole_fill_output_passes_external_oracles(
     _assert_e2fsck_clean(image, jbd2_toolchain)
 
 
+@pytest.fixture(scope="session")
+def staged_two_hole_exact_fixture(
+    writer_activation_fixture: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Fill two adjacent in-size holes through one exact public request."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    inode_number = 17
+    first_candidate = 1351
+    second_candidate = 1352
+    bitmap_home = 259
+    gdt_home = 2
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_home = inode_offset // block_size
+    first_data_block = _extent_root_physical(inode, 0)
+    last_data_block = _extent_root_physical(inode, 2)
+    assert block_size == 1024
+    assert struct.unpack_from("<I", inode, 0x04)[0] == 3072
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 4
+    assert struct.unpack_from("<HHH", inode, 0x28) == (0xF30A, 2, 4)
+    assert struct.unpack_from("<H", inode, 0x2E)[0] == 0
+    assert struct.unpack_from("<I", inode, 0x40)[0] == 2
+    assert not any(
+        _ext4_block_allocation_state(
+            path, (first_candidate, second_candidate)
+        ).values()
+    )
+
+    patched_inode = bytearray(inode)
+    struct.pack_into("<I", patched_inode, 0x04, 4 * block_size)
+    struct.pack_into("<I", patched_inode, 0x6C, 0)
+    struct.pack_into("<I", patched_inode, 0x40, 3)
+    patched_inode[:] = _inode_with_checksum(
+        superblock, inode_number, patched_inode
+    )
+    assert patched_inode == _inode_with_checksum(
+        superblock, inode_number, patched_inode
+    )
+
+    first_byte = 0x51
+    second_byte = 0x52
+    first_hole = bytes((first_byte,)) * block_size
+    second_hole = bytes((second_byte,)) * block_size
+    with path.open("rb") as source:
+        source.seek(first_data_block * block_size)
+        first_block = source.read(block_size)
+        source.seek(last_data_block * block_size)
+        last_block = source.read(block_size)
+    assert len(first_block) == len(last_block) == block_size
+    expected_file = first_block + first_hole + second_hole + last_block
+    expected_file_crc = _crc32c_raw(expected_file)
+
+    write_offset = block_size
+    source_bytes = 2 * block_size
+    epoch_ms = 3_000_000_123_456
+    published_ms = epoch_ms + 2
+    seconds, milliseconds = divmod(published_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    directory = tmp_path_factory.mktemp("ext4-two-hole-exact")
+    media_path = directory / "two-hole-exact.img"
+    stable_path = directory / "two-hole-exact-stable.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            path,
+            media_path,
+            [
+                "CREATE _TH-STAT VFS-STATFS-SIZE ALLOT",
+                f"CREATE _TH-SOURCE {source_bytes} ALLOT",
+                f"_TH-SOURCE {block_size} {first_byte} FILL",
+                (
+                    f"_TH-SOURCE {block_size} + {block_size} "
+                    f"{second_byte} FILL"
+                ),
+                f"CREATE _TH-READ {len(expected_file)} ALLOT",
+                f"CREATE _TH-CLOCK {epoch_ms} , 0 , 0 ,",
+                (
+                    ": _TH-NOW ( clock -- epoch-ms ior ) "
+                    "DUP 2 CELLS + DUP @ 1+ SWAP ! "
+                    "DUP @ SWAP 2 CELLS + @ + 0 ;"
+                ),
+                "T-ARENA CONSTANT _TH-ARENA",
+                (
+                    "_TH-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _TH-MOUNT-IOR CONSTANT _TH-V"
+                ),
+                "_TH-V _EXT4-CTX CONSTANT _TH-CTX",
+                (
+                    "' _TH-NOW _TH-CLOCK _TH-V "
+                    "EXT4-BIND-WRITE-CLOCK? CONSTANT _TH-BIND-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_TH-PROFILE", "_TH-V", 4, 1, 0
+                ),
+                (
+                    'S" /fixture/sparse.bin" '
+                    "VFS-FF-READ VFS-FF-WRITE OR _TH-V VFS-OPEN? "
+                    "CONSTANT _TH-OPEN-IOR CONSTANT _TH-FD"
+                ),
+                "_TH-FD FD.INODE @ D.VNODE @ CONSTANT _TH-VN",
+                "_TH-ARENA ARENA-USED CONSTANT _TH-MAIN-CLEAN",
+                "_TH-VN VN.BLOCKS @ CONSTANT _TH-OLD-BLOCKS",
+                (
+                    "_TH-STAT VFS-STATFS-SIZE _TH-V VFS-STATFS "
+                    "CONSTANT _TH-STAT-BEFORE-IOR"
+                ),
+                "_TH-STAT VSF.BFREE @ CONSTANT _TH-FREE-BEFORE",
+                (
+                    f"{write_offset} _TH-FD VFS-SEEK? "
+                    "CONSTANT _TH-SEEK-IOR"
+                ),
+                (
+                    f"_TH-SOURCE {source_bytes} _TH-FD VFS-WRITE-EXACT "
+                    "CONSTANT _TH-EXACT-IOR"
+                ),
+                "_TH-FD FD.CUR-LO @ CONSTANT _TH-CURSOR",
+                "_TH-CTX _EXT4-C.J.WRITER + @ CONSTANT _TH-WRITER",
+                "_TH-ARENA ARENA-USED CONSTANT _TH-MAIN-AFTER",
+                "_TH-PROFILE-ARENA ARENA-USED CONSTANT _TH-PROFILE-AFTER",
+                (
+                    "_TH-STAT VFS-STATFS-SIZE _TH-V VFS-STATFS "
+                    "CONSTANT _TH-STAT-AFTER-IOR"
+                ),
+                "_TH-STAT VSF.BFREE @ CONSTANT _TH-FREE-AFTER",
+                "0 _TH-FD VFS-SEEK? CONSTANT _TH-READ-SEEK-IOR",
+                (
+                    f"_TH-READ {len(expected_file)} _TH-FD VFS-READ? "
+                    "CONSTANT _TH-READ-IOR CONSTANT _TH-READ-ACTUAL"
+                ),
+                "0xFFFFFFFF _EXT4-CRC-START",
+                f"_TH-READ {len(expected_file)} _EXT4-CRC-ADD",
+                "_EXT4-CRC@ CONSTANT _TH-CRC",
+                (
+                    _forth_conjunction(
+                        [
+                            "_TH-MOUNT-IOR 0=",
+                            "_TH-BIND-IOR 0=",
+                            "_TH-PROFILE-SIZE-IOR 0=",
+                            "_TH-PROFILE-BIND-IOR 0=",
+                            "_TH-PROFILE-USED _TH-PROFILE-SIZE =",
+                            "_TH-OPEN-IOR 0=",
+                            "_TH-SEEK-IOR 0=",
+                            "_TH-EXACT-IOR 0=",
+                            "_TH-V V.LAST-IOR @ 0=",
+                            f"_TH-CURSOR {write_offset + source_bytes} =",
+                            "_TH-CLOCK 2 CELLS + @ 2 =",
+                            f"_TH-VN VN.MTIME @ {seconds} =",
+                            f"_TH-VN VN.MTIME-NS @ {nanoseconds} =",
+                            f"_TH-VN VN.CTIME @ {seconds} =",
+                            f"_TH-VN VN.CTIME-NS @ {nanoseconds} =",
+                            "_TH-OLD-BLOCKS 4 =",
+                            "_TH-VN VN.BLOCKS @ 8 =",
+                            "_TH-VN VN.SIZE-LO @ 4096 =",
+                            "_TH-VN VN.SIZE-HI @ 0=",
+                            "_TH-STAT-BEFORE-IOR 0=",
+                            "_TH-STAT-AFTER-IOR 0=",
+                            "_TH-FREE-AFTER _TH-FREE-BEFORE 2 - =",
+                            "_TH-WRITER _TH-PROFILE-BASE =",
+                            "_TH-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_TH-CTX _EXT4-C.J.HOME-WRITES + @ 4 =",
+                            "_TH-MAIN-AFTER _TH-MAIN-CLEAN =",
+                            "_TH-PROFILE-AFTER _TH-PROFILE-USED =",
+                            f"_EXT4-WR-COUNT @ {block_size} =",
+                            f"_EXT4-WR-OFFSET @ {2 * block_size} =",
+                            f"_EXT4-WR-CHUNK @ {block_size} =",
+                            "_EXT4-MOW-SOURCE @ 0<",
+                            f"_XH-CANDIDATE @ {second_candidate} =",
+                            "_TH-READ-SEEK-IOR 0=",
+                            "_TH-READ-IOR 0=",
+                            f"_TH-READ-ACTUAL {len(expected_file)} =",
+                            f"_TH-CRC {expected_file_crc} =",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-TWO-HOLE-EXACT" THEN'
+                ),
+                "_TH-FD VFS-CLOSE? CONSTANT _TH-CLOSE-IOR",
+                "0 _TH-V VFS-UNMOUNT CONSTANT _TH-UNMOUNT-IOR",
+                (
+                    "_TH-CLOSE-IOR 0= _TH-UNMOUNT-IOR 0= AND "
+                    "_TH-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_TH-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_TH-PROFILE-ARENA A.PTR @ _TH-PROFILE-BASE = AND "
+                    'IF ." EXT4-PUBLIC-TWO-HOLE-UNMOUNT" THEN'
+                ),
+            ],
+            patches=source_patches
+            + (
+                (inode_offset, bytes(patched_inode)),
+                (
+                    first_candidate * block_size,
+                    bytes((0xA5,)) * block_size,
+                ),
+                (
+                    second_candidate * block_size,
+                    bytes((0x5A,)) * block_size,
+                ),
+            ),
+            capture_media=media_path,
+            # Measured at 1,285,188,318 steps; use the established
+            # multi-record qualification ceiling without changing the path.
+            max_steps=1_500_000_000,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-TWO-HOLE-EXACT")
+        _assert_emitted(output, "EXT4-PUBLIC-TWO-HOLE-UNMOUNT")
+        assert trace[: len(activation_trace)] == activation_trace
+        assert len(trace) == 89
+        assert sum(kind == "write" for kind, _, _ in trace) == 54
+        assert sum(kind == "flush" for kind, _, _ in trace) == 35
+        first_candidate_event = ("write", first_candidate * 2, 2)
+        second_candidate_event = ("write", second_candidate * 2, 2)
+        bitmap_event = ("write", bitmap_home * 2, 2)
+        gdt_event = ("write", gdt_home * 2, 2)
+        inode_event = ("write", inode_home * 2, 2)
+        assert tuple(
+            event
+            for event in trace
+            if event
+            in {
+                first_candidate_event,
+                second_candidate_event,
+                bitmap_event,
+                gdt_event,
+                inode_event,
+            }
+        ) == (
+            first_candidate_event,
+            bitmap_event,
+            gdt_event,
+            inode_event,
+            second_candidate_event,
+            bitmap_event,
+            gdt_event,
+            inode_event,
+        )
+        assert trace.count(("write", first_data_block * 2, 2)) == 0
+        assert trace.count(("write", last_data_block * 2, 2)) == 0
+        assert all(
+            _ext4_block_allocation_state(
+                media_path, (first_candidate, second_candidate)
+            ).values()
+        )
+        _, final_inode, _ = _ext4_inode_record(media_path, inode_number)
+        assert struct.unpack_from("<I", final_inode, 0x04)[0] == 4096
+        assert struct.unpack_from("<I", final_inode, 0x1C)[0] == 8
+        assert _extent_root_physical(final_inode, 0) == first_data_block
+        assert _extent_root_physical(final_inode, 1) == first_candidate
+        assert _extent_root_physical(final_inode, 2) == second_candidate
+        assert _extent_root_physical(final_inode, 3) == last_data_block
+        with media_path.open("rb") as source:
+            source.seek(first_candidate * block_size)
+            assert source.read(block_size) == first_hole
+            source.seek(second_candidate * block_size)
+            assert source.read(block_size) == second_hole
+
+        stable_output, stable_trace, stable_sha256 = run_recovery_forth(
+            media_path,
+            stable_path,
+            [
+                f"CREATE _THS-BUF {len(expected_file)} ALLOT",
+                (
+                    "T-ARENA T-VOLUME EXT4-NEW "
+                    "CONSTANT _THS-MOUNT-IOR CONSTANT _THS-V"
+                ),
+                (
+                    'S" /fixture/sparse.bin" VFS-FF-READ _THS-V '
+                    "VFS-OPEN? CONSTANT _THS-OPEN-IOR CONSTANT _THS-FD"
+                ),
+                "_THS-FD FD.INODE @ D.VNODE @ CONSTANT _THS-VN",
+                (
+                    f"_THS-BUF {len(expected_file)} _THS-FD VFS-READ? "
+                    "CONSTANT _THS-READ-IOR CONSTANT _THS-ACTUAL"
+                ),
+                "0xFFFFFFFF _EXT4-CRC-START",
+                f"_THS-BUF {len(expected_file)} _EXT4-CRC-ADD",
+                "_EXT4-CRC@ CONSTANT _THS-CRC",
+                "_THS-FD VFS-CLOSE? CONSTANT _THS-CLOSE-IOR",
+                "0 _THS-V VFS-UNMOUNT CONSTANT _THS-UNMOUNT-IOR",
+                (
+                    "_THS-MOUNT-IOR 0= _THS-OPEN-IOR 0= AND "
+                    "_THS-READ-IOR 0= AND "
+                    f"_THS-ACTUAL {len(expected_file)} = AND "
+                    f"_THS-CRC {expected_file_crc} = AND "
+                    "_THS-VN VN.SIZE-LO @ 4096 = AND "
+                    "_THS-VN VN.BLOCKS @ 8 = AND "
+                    f"_THS-VN VN.MTIME @ {seconds} = AND "
+                    f"_THS-VN VN.MTIME-NS @ {nanoseconds} = AND "
+                    f"_THS-VN VN.CTIME @ {seconds} = AND "
+                    f"_THS-VN VN.CTIME-NS @ {nanoseconds} = AND "
+                    "_THS-CLOSE-IOR 0= AND _THS-UNMOUNT-IOR 0= AND "
+                    'IF ." EXT4-PUBLIC-TWO-HOLE-STABLE" THEN'
+                ),
+            ],
+            capture_media=stable_path,
+        )
+        _assert_emitted(stable_output, "EXT4-PUBLIC-TWO-HOLE-STABLE")
+        assert stable_trace == ()
+        assert stable_sha256 == media_sha256
+        return {
+            "image": stable_path,
+            "expected_file": expected_file,
+            "candidates": (first_candidate, second_candidate),
+            "trace": trace,
+        }
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
+def test_staged_vfs_write_exact_fills_two_consecutive_in_size_holes(
+    staged_two_hole_exact_fixture: dict[str, object],
+) -> None:
+    image = staged_two_hole_exact_fixture["image"]
+    expected_file = staged_two_hole_exact_fixture["expected_file"]
+    candidates = staged_two_hole_exact_fixture["candidates"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(candidates, tuple)
+    assert image.is_file()
+    assert len(expected_file) == 4096
+    assert candidates == (1351, 1352)
+
+
+def test_staged_two_hole_exact_output_passes_external_oracles(
+    staged_two_hole_exact_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    image = staged_two_hole_exact_fixture["image"]
+    expected_file = staged_two_hole_exact_fixture["expected_file"]
+    candidates = staged_two_hole_exact_fixture["candidates"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(candidates, tuple)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    readback = subprocess.run(
+        [str(debugfs), "-R", "cat /fixture/sparse.bin", str(image)],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert readback.returncode == 0, readback.stdout + readback.stderr
+    assert readback.stdout == expected_file
+    for logical, candidate in enumerate(candidates, start=1):
+        mapped = subprocess.run(
+            [
+                str(debugfs),
+                "-R",
+                f"bmap /fixture/sparse.bin {logical}",
+                str(image),
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert mapped.returncode == 0, mapped.stdout + mapped.stderr
+        assert int(mapped.stdout.strip().splitlines()[-1]) == candidate
+    stat = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "stat /fixture/sparse.bin",
+            str(image),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stat.returncode == 0, stat.stdout + stat.stderr
+    assert "Inode: 17" in stat.stdout
+    assert "Size: 4096" in stat.stdout
+    assert "Blockcount: 8" in stat.stdout
+    assert "Flags: 0x80000" in stat.stdout
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+
+
 def test_staged_vfs_write_faults_report_confirmed_caller_prefix(
     writer_activation_fixture: dict[str, object], tmp_path: Path
 ) -> None:
