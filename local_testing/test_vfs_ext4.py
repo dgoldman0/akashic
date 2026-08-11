@@ -36337,6 +36337,7 @@ def _staged_write_recovery_readback(
     nanoseconds = milliseconds * 1_000_000
     expected_name = f"{prefix}-EXPECTED"
     buffer_name = f"{prefix}-BUF"
+    alias_buffer_name = f"{prefix}-ALIAS-BUF"
     expected_forth = f"CREATE {expected_name} " + " ".join(
         f"{byte} C," for byte in expected_file
     )
@@ -36350,6 +36351,7 @@ def _staged_write_recovery_readback(
         destination,
         [
             f"CREATE {buffer_name} 64 ALLOT",
+            f"CREATE {alias_buffer_name} 64 ALLOT",
             expected_forth,
             (
                 f"T-ARENA T-VOLUME EXT4-NEW CONSTANT {prefix}-MOUNT-IOR "
@@ -36361,10 +36363,20 @@ def _staged_write_recovery_readback(
                 f"VFS-OPEN? CONSTANT {prefix}-OPEN-IOR "
                 f"CONSTANT {prefix}-FD"
             ),
+            (
+                f'S" /fixture/hardlink.txt" VFS-FF-READ {prefix}-V '
+                f"VFS-OPEN? CONSTANT {prefix}-ALIAS-OPEN-IOR "
+                f"CONSTANT {prefix}-ALIAS-FD"
+            ),
             f"{prefix}-FD FD.INODE @ D.VNODE @ CONSTANT {prefix}-VN",
             (
                 f"{buffer_name} 64 {prefix}-FD VFS-READ? "
                 f"CONSTANT {prefix}-READ-IOR CONSTANT {prefix}-ACTUAL"
+            ),
+            (
+                f"{alias_buffer_name} 64 {prefix}-ALIAS-FD VFS-READ? "
+                f"CONSTANT {prefix}-ALIAS-READ-IOR "
+                f"CONSTANT {prefix}-ALIAS-ACTUAL"
             ),
             (
                 _forth_conjunction(
@@ -36415,10 +36427,24 @@ def _staged_write_recovery_readback(
                             "_EXT4-INCOMPAT-RECOVER AND 0="
                         ),
                         f"{prefix}-OPEN-IOR 0=",
+                        f"{prefix}-ALIAS-OPEN-IOR 0=",
+                        (
+                            f"{prefix}-FD FD.INODE @ D.VNODE @ "
+                            f"{prefix}-ALIAS-FD FD.INODE @ D.VNODE @ ="
+                        ),
                         f"{prefix}-READ-IOR 0=",
                         f"{prefix}-ACTUAL {len(expected_file)} =",
                         (
                             f"{buffer_name} {expected_name} "
+                            f"{len(expected_file)} _EXT4-BYTES=?"
+                        ),
+                        f"{prefix}-ALIAS-READ-IOR 0=",
+                        (
+                            f"{prefix}-ALIAS-ACTUAL "
+                            f"{len(expected_file)} ="
+                        ),
+                        (
+                            f"{alias_buffer_name} {expected_name} "
                             f"{len(expected_file)} _EXT4-BYTES=?"
                         ),
                         f"{prefix}-VN VN.MTIME @ {seconds} =",
@@ -36443,11 +36469,16 @@ def _staged_write_recovery_readback(
             ),
             f"{prefix}-FD VFS-CLOSE? CONSTANT {prefix}-CLOSE-IOR",
             (
+                f"{prefix}-ALIAS-FD VFS-CLOSE? "
+                f"CONSTANT {prefix}-ALIAS-CLOSE-IOR"
+            ),
+            (
                 f"0 {prefix}-V VFS-UNMOUNT "
                 f"CONSTANT {prefix}-UNMOUNT-IOR"
             ),
             (
                 f"{prefix}-CLOSE-IOR 0= "
+                f"{prefix}-ALIAS-CLOSE-IOR 0= AND "
                 f"{prefix}-UNMOUNT-IOR 0= AND "
                 f"{prefix}-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
                 f'IF ." {marker}-UNMOUNTED" THEN'
@@ -37032,6 +37063,363 @@ def test_staged_public_tail_append_refuses_gap_and_mixed_growth_without_io(
         ) == original_inode_home
     finally:
         backing.unlink(missing_ok=True)
+
+
+def test_staged_public_tail_append_ordered_tear_keeps_old_eof(
+    writer_activation_fixture: dict[str, object],
+    staged_public_tail_append_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Do not expose or credit appended bytes before their inode commits."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    success_trace = staged_public_tail_append_fixture["trace"]
+    success_image = staged_public_tail_append_fixture["image"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(journal0_physical, int)
+    assert isinstance(guard_physical, int)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(success_image, Path)
+
+    inode_number = 14
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    data_block = _extent_root_physical(inode, 0)
+    old_size = struct.unpack_from("<I", inode, 0x04)[0]
+    old_blocks = struct.unpack_from("<I", inode, 0x1C)[0]
+    old_links = struct.unpack_from("<H", inode, 0x1A)[0]
+    old_generation = struct.unpack_from("<I", inode, 0x64)[0]
+    extent_root = inode[0x28:0x64]
+    assert block_size == 1024
+    assert inode_size == 256
+    assert inode_home == 278
+    assert inode_block_offset == 256
+    assert data_block == 1346
+    assert old_size == 54
+    assert old_blocks == 4
+    assert old_links == 2
+    assert old_generation == 0
+
+    original_data = _patched_ext4_home(
+        path, source_patches, data_block, block_size=block_size
+    )
+    original_inode_home = _patched_ext4_home(
+        path, source_patches, inode_home, block_size=block_size
+    )
+    expected_torn_data = bytearray(original_data)
+    expected_torn_data[
+        old_size : old_size + len(_STAGED_APPEND_REPLACEMENT)
+    ] = _STAGED_APPEND_REPLACEMENT
+    assert _read_ext4_home(
+        success_image, data_block, block_size=block_size
+    ) == bytes(expected_torn_data)
+    original_file = original_data[:old_size]
+
+    old_low_seconds = struct.unpack_from("<I", inode, 0x10)[0]
+    old_extra_time = struct.unpack_from("<I", inode, 0x88)[0]
+    old_signed_seconds = (
+        old_low_seconds
+        if old_low_seconds < 0x8000_0000
+        else old_low_seconds - 0x1_0000_0000
+    )
+    old_seconds = old_signed_seconds + ((old_extra_time & 3) << 32)
+    old_nanoseconds = old_extra_time >> 2
+    old_epoch_ms = old_seconds * 1000 + old_nanoseconds // 1_000_000
+    assert old_nanoseconds % 1_000_000 == 0
+    assert old_epoch_ms == 1_704_067_200_000
+    assert struct.unpack_from("<I", inode, 0x0C)[0] == old_low_seconds
+    assert struct.unpack_from("<I", inode, 0x84)[0] == old_extra_time
+
+    data_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, data_block, block_size=block_size
+    )
+    assert data_ordinals == (7,)
+    data_event_index = _trace_event_index_for_ordinal(
+        success_trace, "write", data_ordinals[0]
+    )
+    assert success_trace[data_event_index] == (
+        "write",
+        data_block * 2,
+        2,
+    )
+
+    faulted = tmp_path / "staged-tail-append-w7-faulted.img"
+    recovered = tmp_path / "staged-tail-append-w7-recovered.img"
+    stable = tmp_path / "staged-tail-append-w7-stable.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                "VARIABLE _AW-CLOCK-CALLS",
+                (
+                    ": _AW-NOW ( context -- epoch-ms ior ) "
+                    "DROP 1 _AW-CLOCK-CALLS +! "
+                    f"{_STAGED_APPEND_EPOCH_MS} 0 ;"
+                ),
+                "CREATE _AW-STAT VFS-STATFS-SIZE ALLOT",
+                "T-ARENA CONSTANT _AW-ARENA",
+                (
+                    "_AW-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _AW-MOUNT-IOR CONSTANT _AW-V"
+                ),
+                "_AW-V _EXT4-CTX CONSTANT _AW-CTX",
+                (
+                    "' _AW-NOW 0 _AW-V EXT4-BIND-WRITE-CLOCK? "
+                    "CONSTANT _AW-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_AW-PROFILE", "_AW-V"
+                ),
+                (
+                    'S" /fixture/payload.txt" _AW-V VFS-RESOLVE? '
+                    "CONSTANT _AW-P-IOR CONSTANT _AW-P"
+                ),
+                (
+                    'S" /fixture/hardlink.txt" _AW-V VFS-RESOLVE? '
+                    "CONSTANT _AW-H-IOR CONSTANT _AW-H"
+                ),
+                (
+                    'S" /fixture/payload.txt" '
+                    "VFS-FF-READ VFS-FF-WRITE OR VFS-FF-APPEND OR "
+                    "_AW-V VFS-OPEN? "
+                    "CONSTANT _AW-OPEN-IOR CONSTANT _AW-FD"
+                ),
+                "_AW-P D.VNODE @ CONSTANT _AW-VN",
+                "_AW-FD FD.CUR-LO @ CONSTANT _AW-INITIAL-CURSOR",
+                "_AW-VN VN.ATIME @ CONSTANT _AW-OLD-ATIME",
+                "_AW-VN VN.ATIME-NS @ CONSTANT _AW-OLD-ATIME-NS",
+                "_AW-VN VN.MTIME @ CONSTANT _AW-OLD-MTIME",
+                "_AW-VN VN.MTIME-NS @ CONSTANT _AW-OLD-MTIME-NS",
+                "_AW-VN VN.CTIME @ CONSTANT _AW-OLD-CTIME",
+                "_AW-VN VN.CTIME-NS @ CONSTANT _AW-OLD-CTIME-NS",
+                "_AW-VN VN.SIZE-LO @ CONSTANT _AW-OLD-SIZE",
+                "_AW-VN VN.BLOCKS @ CONSTANT _AW-OLD-BLOCKS",
+                "_AW-VN VN.GEN @ CONSTANT _AW-OLD-GEN",
+                "_AW-VN VN.NLINK @ CONSTANT _AW-OLD-NLINK",
+                (
+                    "_AW-STAT VFS-STATFS-SIZE _AW-V VFS-STATFS "
+                    "CONSTANT _AW-STAT-BEFORE-IOR"
+                ),
+                "_AW-STAT VSF.BFREE @ CONSTANT _AW-FREE-BEFORE",
+                "0 _AW-FD VFS-SEEK? CONSTANT _AW-SEEK-IOR",
+                (
+                    f'S" {_STAGED_APPEND_REPLACEMENT.decode()}" '
+                    "_AW-FD VFS-WRITE? CONSTANT _AW-IOR "
+                    "CONSTANT _AW-ACTUAL"
+                ),
+                "_AW-FD FD.CUR-LO @ CONSTANT _AW-CURSOR",
+                "_AW-V V.LAST-IOR @ CONSTANT _AW-LAST-IOR",
+                "_AW-CTX _EXT4-C.J.WRITER + @ CONSTANT _AW-WRITER",
+                "_AW-ARENA ARENA-USED CONSTANT _AW-MAIN-AFTER",
+                (
+                    "_AW-STAT VFS-STATFS-SIZE _AW-V VFS-STATFS "
+                    "CONSTANT _AW-STAT-AFTER-IOR"
+                ),
+                "_AW-STAT VSF.BFREE @ CONSTANT _AW-FREE-AFTER",
+                "_AW-FD VFS-CLOSE? CONSTANT _AW-CLOSE-IOR",
+                (
+                    _forth_conjunction(
+                        [
+                            "_AW-MOUNT-IOR 0=",
+                            "_AW-CLOCK-IOR 0=",
+                            "_AW-PROFILE-SIZE-IOR 0=",
+                            "_AW-PROFILE-BIND-IOR 0=",
+                            "_AW-PROFILE-USED _AW-PROFILE-SIZE =",
+                            "_AW-P-IOR 0=",
+                            "_AW-H-IOR 0=",
+                            "_AW-P D.VNODE @ _AW-H D.VNODE @ =",
+                            "_AW-OPEN-IOR 0=",
+                            f"_AW-INITIAL-CURSOR {old_size} =",
+                            "_AW-SEEK-IOR 0=",
+                            "_AW-ACTUAL 0=",
+                            (
+                                "_AW-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-VOLUME ="
+                            ),
+                            "_AW-IOR VFS-IOR-REASON VFS-R-IO =",
+                            (
+                                "_AW-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-PARTIAL "
+                                "VFS-IOR-F-READONLY OR ="
+                            ),
+                            f"_AW-CURSOR {old_size} =",
+                            "_AW-LAST-IOR _AW-IOR =",
+                            "_AW-CLOCK-CALLS @ 1 =",
+                            "_AW-VN VN.SIZE-LO @ _AW-OLD-SIZE =",
+                            "_AW-VN VN.SIZE-HI @ 0=",
+                            "_AW-VN VN.BLOCKS @ _AW-OLD-BLOCKS =",
+                            "_AW-VN VN.GEN @ _AW-OLD-GEN =",
+                            "_AW-VN VN.NLINK @ _AW-OLD-NLINK =",
+                            "_AW-VN VN.ATIME @ _AW-OLD-ATIME =",
+                            (
+                                "_AW-VN VN.ATIME-NS @ "
+                                "_AW-OLD-ATIME-NS ="
+                            ),
+                            "_AW-VN VN.MTIME @ _AW-OLD-MTIME =",
+                            (
+                                "_AW-VN VN.MTIME-NS @ "
+                                "_AW-OLD-MTIME-NS ="
+                            ),
+                            "_AW-VN VN.CTIME @ _AW-OLD-CTIME =",
+                            (
+                                "_AW-VN VN.CTIME-NS @ "
+                                "_AW-OLD-CTIME-NS ="
+                            ),
+                            "_AW-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                            "_AW-WRITER _AW-PROFILE-BASE =",
+                            (
+                                "_AW-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-FAULTED ="
+                            ),
+                            (
+                                "_AW-WRITER _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-ORDERED-DATA ="
+                            ),
+                            "_AW-WRITER _EXT4-JWR-VALID?",
+                            (
+                                "_AW-WRITER _EXT4-JWR.FAULT + @ "
+                                "VFS-IOR-FLAGS VFS-IOR-F-PARTIAL ="
+                            ),
+                            "_AW-MAIN-AFTER _AW-ARENA ARENA-USED =",
+                            (
+                                "_AW-PROFILE-ARENA ARENA-USED "
+                                "_AW-PROFILE-USED ="
+                            ),
+                            "_AW-STAT-BEFORE-IOR 0=",
+                            "_AW-STAT-AFTER-IOR 0=",
+                            "_AW-FREE-AFTER _AW-FREE-BEFORE =",
+                            "_AW-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                            "_AW-CTX _EXT4-C.RECOVERY + @ 0<>",
+                            "_AW-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                            "_AW-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                            "_AW-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                            "_AW-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                            "_AW-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                            "_AW-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "_AW-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            (
+                                "_EXT4-WR-KIND @ "
+                                "_EXT4-WRK-TAIL-APPEND ="
+                            ),
+                            f"_EXT4-WR-COUNT @ {len(_STAGED_APPEND_REPLACEMENT)} =",
+                            f"_EXT4-WR-OFFSET @ {old_size} =",
+                            (
+                                f"_EXT4-WR-REQUEST-END @ "
+                                f"{old_size + len(_STAGED_APPEND_REPLACEMENT)} ="
+                            ),
+                            (
+                                f"_EXT4-WR-NEW-SIZE @ "
+                                f"{old_size + len(_STAGED_APPEND_REPLACEMENT)} ="
+                            ),
+                            "_EXT4-WR-NEW-BLOCKS @ 4 =",
+                            f"_EXT4-WR-CHUNK @ {len(_STAGED_APPEND_REPLACEMENT)} =",
+                            "_EXT4-WR-ACTUAL @ 0=",
+                            "_EXT4-MOW-ACTUAL @ 0=",
+                            "_EXT4-MOW-CREDIT @ -1 =",
+                            "_EXT4-JOW-GROW @ 0<",
+                            "_EXT4-IO-COMPLETED @ 1 =",
+                            "_EXT4-IO-EXPECTED @ 2 =",
+                            "_AW-CLOSE-IOR 0=",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-TAIL-APPEND-W7-FAULT" THEN'
+                ),
+            ],
+            patches=source_patches,
+            write_faults_by_ordinal={
+                data_ordinals[0]: {
+                    "stage": "media",
+                    "sector_index": 1,
+                    "byte_index": 6,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-TAIL-APPEND-W7-FAULT")
+        assert trace == success_trace[: data_event_index + 1]
+        assert _write_ordinals_for_ext4_home(
+            trace, inode_home, block_size=block_size
+        ) == ()
+        assert _read_ext4_home(
+            faulted, data_block, block_size=block_size
+        ) == bytes(expected_torn_data)
+        assert _read_ext4_home(
+            faulted, inode_home, block_size=block_size
+        ) == original_inode_home
+        _, faulted_inode, _ = _ext4_inode_record(faulted, inode_number)
+        assert struct.unpack_from("<I", faulted_inode, 0x04)[0] == old_size
+        assert struct.unpack_from("<I", faulted_inode, 0x6C)[0] == 0
+        assert struct.unpack_from("<I", faulted_inode, 0x1C)[0] == old_blocks
+        assert faulted_inode[0x28:0x64] == extent_root
+
+        _, recovery_trace, recovery_sha256 = (
+            _staged_write_recovery_readback(
+                faulted,
+                recovered,
+                expected_file=original_file,
+                expected_epoch_ms=old_epoch_ms,
+                expected_home_writes=0,
+                expected_replayed=True,
+                prefix="_AW-R",
+                marker="EXT4-PUBLIC-TAIL-APPEND-W7-RECOVERED",
+            )
+        )
+        _assert_activation_cleanup_trace(
+            recovery_trace,
+            journal0_physical=journal0_physical,
+            guard_physical=guard_physical,
+        )
+        _assert_activation_landed_media(
+            recovered, writer_activation_fixture, expected_features=0x13
+        )
+        assert _write_ordinals_for_ext4_home(
+            recovery_trace, data_block, block_size=block_size
+        ) == ()
+        assert _write_ordinals_for_ext4_home(
+            recovery_trace, inode_home, block_size=block_size
+        ) == ()
+        assert _read_ext4_home(
+            recovered, data_block, block_size=block_size
+        ) == bytes(expected_torn_data)
+        assert _read_ext4_home(
+            recovered, inode_home, block_size=block_size
+        ) == original_inode_home
+
+        _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+            recovered,
+            stable,
+            expected_file=original_file,
+            expected_epoch_ms=old_epoch_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            prefix="_AW-S",
+            marker="EXT4-PUBLIC-TAIL-APPEND-W7-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _read_ext4_home(
+            stable, data_block, block_size=block_size
+        ) == bytes(expected_torn_data)
+        assert _read_ext4_home(
+            stable, inode_home, block_size=block_size
+        ) == original_inode_home
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
 
 
 def test_staged_public_write_second_commit_flush_converges_across_views(
