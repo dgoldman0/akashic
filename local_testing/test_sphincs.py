@@ -1,21 +1,4 @@
 #!/usr/bin/env python3
-# ┌──────────────────────────────────────────────────────────────┐
-# │ HARNESS UPDATE REQUIRED (March 2026)                         │
-# │                                                              │
-# │ 1. BOOT-TO-IDLE: run_forth() must call boot() on a fresh    │
-# │    MegapadSystem before overwriting RAM/CPU state from the   │
-# │    snapshot.  Without boot(), the C++ accelerator's MMIO     │
-# │    routing (UART writes) is never wired → empty output.      │
-# │    Fix: save bios_code in the snapshot tuple, then in        │
-# │    run_forth(): load_binary(0, bios_code), boot(), run to    │
-# │    idle, THEN overwrite mem/cpu/ext from snapshot.           │
-# │                                                              │
-# │ 2. NO [: ;] CLOSURES: This BIOS/KDOS does not define the    │
-# │    [: ... ;] anonymous quotation words.  Replace all uses    │
-# │    with named helper words and ['] ticks.                    │
-# │                                                              │
-# │ See test_coroutine.py for the corrected pattern.             │
-# └──────────────────────────────────────────────────────────────┘
 """Test suite for SPHINCS+-SHAKE-128s (akashic/math/sphincs-plus.f).
 
 Tests individual components first (fast), then integration sign/verify.
@@ -26,7 +9,18 @@ import os, sys, time, hashlib
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
+configured_megapad_root = os.environ.get("MEGAPAD_ROOT")
+if not configured_megapad_root:
+    raise RuntimeError(
+        "MEGAPAD_ROOT must name the explicitly selected qualified MegaPad worktree"
+    )
+MEGAPAD_ROOT = os.path.abspath(os.path.expanduser(configured_megapad_root))
+for required in ("asm.py", "system.py", "bios.asm", "kdos.f"):
+    if not os.path.isfile(os.path.join(MEGAPAD_ROOT, required)):
+        raise RuntimeError(
+            f"MegaPad checkout not found at {MEGAPAD_ROOT}; "
+            "set MEGAPAD_ROOT to the qualified emulator worktree"
+        )
 
 LIB_PATHS = [
     os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f"),
@@ -38,12 +32,12 @@ LIB_PATHS = [
     os.path.join(ROOT_DIR, "akashic", "math", "sphincs-plus.f"),
 ]
 
-sys.path.insert(0, EMU_DIR)
+sys.path.insert(0, MEGAPAD_ROOT)
 from asm import assemble
 from system import MegapadSystem
 
-BIOS_PATH = os.path.join(EMU_DIR, "bios.asm")
-KDOS_PATH = os.path.join(EMU_DIR, "kdos.f")
+BIOS_PATH = os.path.join(MEGAPAD_ROOT, "bios.asm")
+KDOS_PATH = os.path.join(MEGAPAD_ROOT, "kdos.f")
 
 # ── Emulator helpers ─────────────────────────────────────────────────
 
@@ -97,6 +91,7 @@ def restore_cpu_state(cpu, state):
 def build_snapshot():
     global _snapshot
     if _snapshot: return _snapshot
+    print(f"[*] Qualified MegaPad source: {MEGAPAD_ROOT}")
     print("[*] Building snapshot: BIOS + KDOS + sha3 + random + sphincs-plus ...")
     t0 = time.time()
     bios_code  = _load_bios()
@@ -333,6 +328,27 @@ def test_adrs():
            '_SPX-ADRS 23 + C@ . _SPX-ADRS 27 + C@ . CR'],
           "42 7")
 
+    expected_wots_pk = (
+        "00000007"
+        "0102030405060708"
+        "00000000"
+        "00000001"
+        "0000002a"
+        "00000000"
+        "00000000"
+    )
+    check_fn("T14a WOTS-PK-address-canonicalization",
+        ['_SPX-ADRS-ZERO',
+         '7 _SPX-ADRS-LAYER!',
+         '0x0102030405060708 _SPX-ADRS-TREE!',
+         '42 _SPX-ADRS-KP!',
+         '7 _SPX-ADRS-CHAIN!',
+         '9 _SPX-ADRS-HASH!',
+         '_SPX-ADRS-WOTS-PK!',
+         '_SPX-ADRS 32 .HEX CR'],
+        lambda out: expected_wots_pk in out.lower().replace(' ', ''),
+        f"expected {expected_wots_pk}")
+
 
 # ── Tests: base_w encoding ───────────────────────────────────────────
 
@@ -402,22 +418,25 @@ def test_t1_hash():
         f"expected {expected}")
 
 
-# ── Tests: T_1! in-place ────────────────────────────────────────────
+# ── Tests: production WOTS context layout ───────────────────────────
 
-def test_t1_inplace():
-    print("\n=== T_1! In-Place ===")
-    pk_seed = b'\x01' * 16
-    adrs    = b'\x00' * 32
-    inp     = b'\x03' * 16
-    expected = shake256(pk_seed + adrs + inp, 16).hex()
+def test_wots_context_layout():
+    print("\n=== WOTS Context Layout ===")
+    pk_seed = bytes(range(0x00, 0x10))
+    adrs    = bytes(range(0x20, 0x40))
+    inp     = bytes(range(0x80, 0x90))
+    expected = (pk_seed + adrs + inp).hex()
 
-    check_fn("T21 T_1!-inplace",
-        ['_TBUF 16 0x01 FILL',
+    check_fn("T21 WOTS-context-layout",
+        [': _T21-INIT',
+         '  16 0 DO I _TBUF I + C! LOOP',
+         '  32 0 DO I 0x20 + _SPX-ADRS I + C! LOOP',
+         '  16 0 DO I 0x80 + _TBUF 16 + I + C! LOOP ;',
+         '_T21-INIT',
          '_TBUF _SPX-PK-SEED !',
-         '_SPX-ADRS-ZERO',
-         '_TBUF 16 + 16 0x03 FILL',      # input in buf
-         '_TBUF 16 + _SPX-T1!',          # in-place hash
-         '_TBUF 16 + 16 .HEX CR'],
+         '_TBUF 16 + _SPX-WOTS-CONTEXT!',
+         '_SPX-WOTS-CONTEXT 64 .HEX CR',
+         '_SPX-WOTS-CONTEXT 64 0 FILL'],
         lambda out: expected in out.strip().lower().replace(' ', ''),
         f"expected {expected}")
 
@@ -472,10 +491,11 @@ def test_chain():
     print("\n=== WOTS+ Chain ===")
     # Test chain with 1 step: should be T_1 of input.
     # Chain(src, start=0, steps=1, dst) = T_1(input)
-    # ADRS: type=WOTS_HASH(0), chain=0, hash set by chain to 0
+    # ADRS: type=WOTS_HASH(0), chain=0; the sequencer writes hash index 0
+    # into its copied context without mutating the module ADRS.
     pk_seed = b'\x01' * 16
     adrs = bytearray(32)
-    # After chain sets hash=0: ADRS is all zeros
+    # The first copied step address is therefore all zeros.
     inp = b'\x07' * 16
     expected = shake256(pk_seed + bytes(adrs) + inp, 16).hex()
 
@@ -525,6 +545,63 @@ def test_chain():
          '_TBUF 32 + 16 .HEX CR'],
         lambda out: expected2 in out.strip().lower().replace(' ', ''),
         f"expected {expected2}")
+
+    # Nonzero start proves the adapter forwards the scalar independently of
+    # ADRS.hash, and src=dst proves BIOS stages the exact context first.
+    inp_start3 = b'\x09' * 16
+    adrs_start3 = bytearray(32)
+    adrs_start3[27] = 5  # chain address = 5, big-endian u32
+    node = inp_start3
+    for index in (3, 4):
+        step_adrs = bytearray(adrs_start3)
+        step_adrs[28:32] = index.to_bytes(4, "big")
+        node = shake256(pk_seed + bytes(step_adrs) + node, 16)
+    expected_start3 = node.hex()
+
+    check_fn("T26a chain-start3-steps2",
+        ['_TBUF 16 0x01 FILL',
+         '_TBUF _SPX-PK-SEED !',
+         '_SPX-ADRS-ZERO',
+         '5 _SPX-ADRS-CHAIN!',
+         '_TBUF 16 + 16 0x09 FILL',
+         '_TBUF 16 + 3 2 _TBUF 32 + _SPX-CHAIN',
+         ': _T26A-CTX-ZERO? 0 64 0 DO _SPX-WOTS-CONTEXT I + C@ OR LOOP 0= ;',
+         '_TBUF 32 + 16 .HEX CR',
+         '." CTX=" _T26A-CTX-ZERO? . CR'],
+        lambda out: (
+            expected_start3 in out.strip().lower().replace(' ', '')
+            and "CTX=-1" in out.replace(" ", "")
+        ),
+        f"expected {expected_start3}")
+
+    check_fn("T26b chain-src-equals-dst",
+        ['_TBUF 16 0x01 FILL',
+         '_TBUF _SPX-PK-SEED !',
+         '_SPX-ADRS-ZERO',
+         '5 _SPX-ADRS-CHAIN!',
+         '_TBUF 16 + 16 0x09 FILL',
+         '_TBUF 16 + 3 2 _TBUF 16 + _SPX-CHAIN',
+         '_TBUF 16 + 16 .HEX CR'],
+        lambda out: expected_start3 in out.strip().lower().replace(' ', ''),
+        f"expected {expected_start3}")
+
+    check_fn("T26c chain-error-nonpublication-and-wipe",
+        ['_TBUF 16 0x01 FILL',
+         '_TBUF _SPX-PK-SEED !',
+         '_SPX-ADRS-ZERO',
+         '_TBUF 16 + 16 0x09 FILL',
+         '_TBUF 32 + 16 0xA5 FILL',
+         ': _T26C-BAD _TBUF 16 + 15 1 _TBUF 32 + _SPX-CHAIN ;',
+         ': _T26C-CTX-ZERO? 0 64 0 DO _SPX-WOTS-CONTEXT I + C@ OR LOOP 0= ;',
+         '." IOR=" \' _T26C-BAD CATCH . CR',
+         '." DST=" _TBUF 32 + 16 .HEX CR',
+         '." CTX=" _T26C-CTX-ZERO? . CR'],
+        lambda out: (
+            "IOR=3" in out.replace(" ", "")
+            and ("a5" * 16) in out.lower().replace(" ", "")
+            and "CTX=-1" in out.replace(" ", "")
+        ),
+        "expected status 3, unchanged destination, and wiped context")
 
 
 # ── Tests: Digest extraction ────────────────────────────────────────
@@ -713,7 +790,7 @@ def test_p06_checksum_correctness():
 
 
 def test_p07_keygen_zeroization():
-    """P07: _SPX-RNG-SEED is zeroed after SPX-KEYGEN-RANDOM."""
+    """P07: _SPX-RNG-SEED is zeroed after success and checked failure."""
     print("\n=== P07: Keygen Seed Zeroization ===")
     check_fn("P07 _SPX-RNG-SEED zeroed",
         [
@@ -724,6 +801,16 @@ def test_p07_keygen_zeroization():
         lambda out: any(line.strip() == "ZEROED" for line in out.split('\n')),
         "_SPX-RNG-SEED should be all zeros after keygen",
         max_steps=50_000_000_000)
+    check("P07 failure zeroizes seed and preserves direct owner",
+        [
+            ': _T07-KEYGEN  _TPK _TSK SPX-KEYGEN-RANDOM ;',
+            ': _T07-ZERO?  0 48 0 DO _SPX-RNG-SEED I + C@ OR LOOP 0= ;',
+            ": _T07-FAIL  SHA3-256-MODE SHA3-BEGIN . [CHAR] / EMIT "
+            "['] _T07-KEYGEN CATCH . [CHAR] / EMIT "
+            "SHA3-CLEAR . [CHAR] / EMIT _T07-ZERO? . CR ;",
+            '_T07-FAIL',
+        ],
+        "0 /2 /0 /-1")
 
 
 def test_p08_siglen_validation():
@@ -758,7 +845,7 @@ if __name__ == '__main__':
     test_base_w()
     test_wots_checksum()
     test_t1_hash()
-    test_t1_inplace()
+    test_wots_context_layout()
     test_t2_hash()
     test_prf()
     test_chain()

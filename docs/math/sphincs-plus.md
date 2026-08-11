@@ -2,13 +2,15 @@
 
 Post-quantum digital signatures using only hash functions.
 Instantiation: SPHINCS+-SHAKE-128s (NIST security level 1).
-All hashing via hardware-accelerated SHAKE-256.
+General hashing uses the checked SHAKE-256 stream, and WOTS+ chain iteration
+uses the checked production WOTS sequencer.
 
 ```forth
 REQUIRE sphincs-plus.f
 ```
 
-`PROVIDED akashic-sphincs-plus` — depends on `akashic-sha3`, `akashic-random`.
+`PROVIDED akashic-sphincs-plus` — depends on `akashic-sha3`,
+`akashic-random`, and the checked BIOS `WOTS-CHAIN` word.
 
 ---
 
@@ -32,8 +34,9 @@ REQUIRE sphincs-plus.f
 | Principle | Realisation |
 |---|---|
 | **FIPS 205 compliant** | Full SLH-DSA-SHAKE-128s implementation matching the specification |
-| **Hardware-accelerated** | All hashing via MMIO SHA3/SHAKE-256 engine |
-| **Pure Forth** | No assembly; only MMIO through `sha3.f` |
+| **Hardware-accelerated** | Segmented hashes use checked SHAKE-256; complete WOTS chains use the shared-Keccak production sequencer |
+| **Checked interfaces** | No raw MMIO transaction words; nonzero SHAKE or WOTS status is thrown unchanged through the result-only SPHINCS API |
+| **Pure Forth** | No assembly; checked accelerator access is through `sha3.f` and the BIOS `WOTS-CHAIN` word |
 | **Stateless** | "s" variant — small signatures (7856 bytes), no state to manage |
 | **Concurrency-safe** | Public API words wrapped with `WITH-GUARD` (not reentrant internally) |
 | **Variable-free loops** | All `DO..LOOP` parameter passing uses VARIABLEs (not `>R`/`R@`) to avoid return-stack conflicts |
@@ -179,38 +182,16 @@ Rejects immediately if `sig-len ≠ SPX-SIG-LEN` (7856).
 
 ## Performance
 
-Measured on the Megapad-64 emulator (Phase 3 STC, SHA3 MMIO accelerated):
+The earlier software-chain measurements no longer describe this
+implementation. Each `_SPX-CHAIN` request now performs one checked 64-byte
+context transaction and lets the production sequencer execute all zero to
+fifteen steps. New key-generation, signing, and verification measurements
+must come from the qualified checked-interface build; no speedup or wall-time
+claim is inferred from the interface cutover alone.
 
-| Operation | Cycles | Notes |
-|---|---|---|
-| SHA3-256-HASH (per hash in loop) | ~7,800 | Keccak in hardware |
-| WOTS-PK-GEN (single key) | 1.53M | 35 chains × 15 hashes |
-| XMSS-NODE(0,3) — 8 leaves | 9.61M | |
-| XMSS-NODE(0,6) — 64 leaves | 74.2M | |
-| **SPX-KEYGEN** | **591M** | 512 leaves (h'=9) |
-| **SPX-SIGN** (estimated) | **~4.73G** | ~8× keygen |
-| **SPX-VERIFY** (estimated) | **~45M** | ~100× faster than sign |
-
-**At various clock speeds:**
-
-| Clock | KEYGEN | SIGN | VERIFY |
-|---|---|---|---|
-| 200 MHz | 3.0 s | 23.7 s | 0.22 s |
-| 500 MHz | 1.2 s | 9.5 s | 0.09 s |
-| 1 GHz | 0.6 s | 4.7 s | 0.05 s |
-
-The "s" (small) variant intentionally trades signing speed for compact
-signatures (7856 bytes vs 49856 for the "f" variant).  Signing is a
-one-time user action; verification is the hot path and runs very fast.
-
-Compared to the reference C implementation (~7–8G cycles), our
-Forth+HW-accelerated implementation achieves ~63% of the reference
-cycle count thanks to the SHA3 MMIO engine.
-
-**Bottleneck analysis:** 82% of per-hash cycle cost is Forth dispatch
-overhead (stack shuffling, 6 MMIO transactions, ADRS byte writes).
-A proposed WOTS+ chain MMIO accelerator would reduce signing to ~1.47G
-cycles (~3.2× speedup).  See `local_testing/wots-chain-accelerator-request.md`.
+The "s" (small) variant intentionally trades signing speed for its 7,856-byte
+signature. The WOTS sequencer changes chain execution cost, not the FIPS 205
+parameter set or signature format.
 
 ---
 
@@ -257,7 +238,9 @@ my-msg 5 my-pub my-sig SPX-SIG-LEN SPX-VERIFY   \ -> TRUE (-1)
 
 | Word | Stack | Description |
 |---|---|---|
-| `_SPX-CHAIN` | `( src start steps dst -- )` | WOTS+ chain: iterate T₁ hash |
+| `_SPX-ADRS-WOTS-PK!` | `( -- )` | Select WOTS_PK while retaining keypair and zeroing its chain/hash padding words |
+| `_SPX-WOTS-CONTEXT!` | `( src -- )` | Build `PK.seed[16] || ADRS[32] || node[16]` in the caller-owned 64-byte workspace |
+| `_SPX-CHAIN` | `( src start steps dst -- )` | Checked WOTS+ adapter; zero steps are the identity result and nonzero status is thrown unchanged |
 | `_SPX-WOTS-PK-GEN` | `( idx dst -- )` | Generate WOTS+ public key for leaf |
 | `_SPX-XMSS-NODE` | `( start height dst -- )` | Compute XMSS subtree root via treehash |
 | `_SPX-FORS-SIGN` | `( sig-out -- )` | FORS signing (k trees) |
@@ -267,13 +250,21 @@ my-msg 5 my-pub my-sig SPX-SIG-LEN SPX-VERIFY   \ -> TRUE (-1)
 
 ### Hash Functions
 
-All hash operations use SHAKE-256 via the SHA3 MMIO engine:
+All non-chain hash operations use the checked segmented SHAKE-256 surface:
 
 - **T₁** — `PRF(PK.seed, ADRS, input)` → n bytes
 - **T₂** — `Hash(PK.seed, ADRS, left ∥ right)` → n bytes (Merkle node)
 - **T_len** — `Hash(PK.seed, ADRS, len×n bytes)` → n bytes (WOTS+ pk compress)
 - **PRF** — `PRF(PK.seed, ADRS, SK.seed)` → n bytes (secret derivation)
 - **H_msg** — `Hash(R, PK.seed, PK.root, M)` → message digest (30 bytes)
+
+WOTS chain iteration instead passes the exact 64-byte
+`PK.seed || ADRS || node` context to `WOTS-CHAIN`. The sequencer replaces
+ADRS bytes 28 through 31 with each big-endian hash-step index and returns the
+final 16-byte node. Those mutations apply to the copied context, not the
+module's source ADRS. Focused tests compare `_SPX-CHAIN` directly with
+externally generated SHAKE-256 known answers, including zero-step identity and
+in-place source/destination cases. No private software-chain fallback remains.
 
 ### Important Implementation Notes
 
@@ -283,6 +274,18 @@ All hash operations use SHAKE-256 via the SHA3 MMIO engine:
 - Nested `DO..LOOP` uses `I` (inner) and `J` (outer) for loop indices.
 - All parameter passing to internal words uses module-level VARIABLEs
   (e.g., `_SPX-PK-SEED`, `_SPX-SK-SEED`), not stack parameters.
+- `_SPX-CHAIN` stores its four arguments before constructing the context; it
+  does not place saved parameters on the return stack of a caller's loop.
+- Both WOTS public-key compression paths use `_SPX-ADRS-WOTS-PK!`; they retain
+  the layer, tree, and keypair address fields but explicitly zero bytes 24
+  through 31 instead of inheriting the preceding chain/hash state.
+- The checked BIOS word stages its result and clears the device before
+  publication. Source/destination identity is therefore supported, and a
+  failed request leaves all 16 destination bytes unchanged. The caller-owned
+  context is wiped before a returned status is propagated.
+- Accelerator status values use the common checked vocabulary: `0` succeeds;
+  `1` unsupported, `2` state/owner, `3` range, `4` protected, `5` timeout,
+  and `6` hardware/protocol are thrown unchanged by this result-only API.
 
 ### Bug Fixes (Phase 6.6 Hardening)
 
@@ -301,6 +304,9 @@ All hash operations use SHAKE-256 via the SHA3 MMIO engine:
    to `_SPX-V-FPKSIG` variable at entry, use `_SPX-V-FPKSIG @`.
 5. **WOTS-SK-I spurious DUP** — Stack leak in secret key derivation.
    Fix: removed the extra `DUP`.
+6. **WOTS_PK residual address words** — Public-key compression inherited the
+   preceding WOTS_HASH chain/hash words. Fix: both compression paths now
+   select WOTS_PK and explicitly zero its trailing padding words.
 
 ---
 

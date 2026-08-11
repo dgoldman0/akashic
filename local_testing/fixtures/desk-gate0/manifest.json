@@ -1,7 +1,14 @@
 {
   "schema": "akashic.desk.gate0-baseline.v1",
   "frozen_on": "2026-07-17",
-  "scope": "Gate 0 retained baseline only; no runtime format or behavior change",
+  "scope": "Gate 0 logical baseline with prerelease reflected-CRC artifacts; old CRC encodings are intentionally unsupported",
+  "artifact_refresh": {
+    "date": "2026-08-11",
+    "kind": "prerelease-reflected-crc-cutover",
+    "generator": "local_testing/generate_desk_gate0_fixtures.py",
+    "megapad_crypto_interface": "f4b8144786001e423291b9458f24e0efa7ab70ce",
+    "old_crc_compatibility": false
+  },
   "ratification": {
     "status": "ratified",
     "basis": "The user stated that the final refinement landed and directed implementation with the contract as guardrail.",
@@ -479,7 +486,7 @@
     {
       "path": "source-v1-valid.bin",
       "bytes": 36712,
-      "sha256": "4f3aefa851d53e9fae2e9835bcf7d6db8591a7b2ff4b0656e0759dea5fa63e6a",
+      "sha256": "064bbe3d16489a6ca1c920cb97aea14a7c14c0ef61674feba246173b7edd90b5",
       "classification": "valid-v1",
       "magic_ascii": "AKSSS001",
       "format": 1,
@@ -495,7 +502,7 @@
     {
       "path": "source-v1-corrupt.bin",
       "bytes": 36712,
-      "sha256": "6ca041c59a26a20fa0d845e7287aa9f7bdf74ea2f20618bca91411895ad5614f",
+      "sha256": "8345f227e01342d613de207452c48442a3ea94a4e67f696c4932bbd7622c909d",
       "classification": "corrupt-payload-crc",
       "magic_ascii": "AKSSS001",
       "format": 1,
@@ -504,7 +511,7 @@
     {
       "path": "source-v2-future.bin",
       "bytes": 36712,
-      "sha256": "898a70c9fc36c0ee66c5fbbbe8f981b692a8201e7fe1f01e221c93949dbad10e",
+      "sha256": "93612ab309e715e883d98bbda58a1880f0675aa6f0e670306bc81498940a026f",
       "classification": "unsupported-future-with-valid-header-crc",
       "magic_ascii": "AKSSS001",
       "format": 2,
@@ -513,7 +520,7 @@
     {
       "path": "observation-v1-valid.bin",
       "bytes": 131136,
-      "sha256": "2c1f20a5b5a2e98979785db79d6dc38e44a39c113d4472ea062ba279ef9adf45",
+      "sha256": "5a4bfb195415d591262db847db54e8f52166b218c8f60ba93b49cb6f83859b27",
       "classification": "valid-v1",
       "magic_ascii": "AKSOC001",
       "format": 1,
@@ -533,7 +540,7 @@
     {
       "path": "observation-v1-corrupt.bin",
       "bytes": 131136,
-      "sha256": "9246b9d6785b8696acbfadd8a984805bf299210da251c53cf0f1e517e294c418",
+      "sha256": "67f8ac9fdca68b894428004aeae1e3a741c33e6dac6891e3f5fbcbd1a0232112",
       "classification": "corrupt-payload-crc",
       "magic_ascii": "AKSOC001",
       "format": 1,
@@ -542,7 +549,7 @@
     {
       "path": "observation-v2-future.bin",
       "bytes": 131136,
-      "sha256": "e1c6663ea0fb1c1faa5d255363df3c6e32a60b4580e6b3734212bc811705e5de",
+      "sha256": "45d8111a7d650ad81a678bb6a4fb6af46ba3723cc76dd05348eac81197fc4b01",
       "classification": "unsupported-future-with-valid-header-crc",
       "magic_ascii": "AKSOC001",
       "format": 2,
@@ -551,7 +558,7 @@
     {
       "path": "draft-v1-legacy-r7.bin",
       "bytes": 79,
-      "sha256": "d0bd86396a4c6068cbcfc3868197a4a1a7f838883a2d6bf8c6500507e21f213e",
+      "sha256": "c16a71c42ee17a21c96df6f1813a44857d2b3e3734be9f815c977c879864860b",
       "classification": "valid-v1-legacy-draft",
       "magic_ascii": "AKSDR001",
       "format": 1,

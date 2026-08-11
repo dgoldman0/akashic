@@ -1,10 +1,11 @@
 # Desk Gate 0 retained baseline
 
-These files freeze the durable Streams records that existed when the final
-Desk ecosystem contract was ratified. The 2026-07-20 scope amendment adds only
-a pinned supersession banner directing refactor placement, scale, and landing
-order to the root refactor plan; the retained decisions and runtime fixtures are
-unchanged. They are compatibility evidence, not a new format and not seed data
+These files freeze the logical durable Streams cases ratified with the Desk
+ecosystem contract. Their physical record bytes were regenerated on 2026-08-11
+for the prerelease reflected-CRC cutover. The former non-reflected CRC encodings
+are intentionally unsupported; there is no old-CRC reader or fallback. The
+payload facts, corrupt-record mutations, and future-format classifications are
+unchanged, and these records remain regression evidence rather than seed data
 for ordinary users.
 
 The valid records are produced through the production Forth encoders and
@@ -25,8 +26,10 @@ python3 local_testing/generate_desk_gate0_fixtures.py
 ```
 
 The command is deterministic. Any byte change must be reviewed against
-`manifest.json`; do not update hashes merely to make a test pass. Verify the
-host-side ledger and the production readers with:
+`manifest.json`; do not update hashes merely to make a test pass. A deliberate
+CRC algorithm cutover requires fresh complete artifacts, updated hashes, and
+the production-reader regression below—not compatibility handling for the old
+bytes. Verify the host-side ledger and the production readers with:
 
 ```sh
 python3 -m pytest -q local_testing/test_desk_gate0_baseline.py

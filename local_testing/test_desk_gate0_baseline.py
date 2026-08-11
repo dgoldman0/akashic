@@ -39,6 +39,15 @@ def _sha256(data: bytes) -> str:
 def test_contract_pin_and_ratified_decisions() -> None:
     manifest = _manifest()
     assert manifest["schema"] == "akashic.desk.gate0-baseline.v1"
+    assert manifest["artifact_refresh"] == {
+        "date": "2026-08-11",
+        "kind": "prerelease-reflected-crc-cutover",
+        "generator": "local_testing/generate_desk_gate0_fixtures.py",
+        "megapad_crypto_interface": (
+            "f4b8144786001e423291b9458f24e0efa7ab70ce"
+        ),
+        "old_crc_compatibility": False,
+    }
     assert manifest["ratification"]["status"] == "ratified"
     contract = manifest["ratification"]["contract"]
     assert contract["sha256"] == PINNED_CONTRACT_SHA256

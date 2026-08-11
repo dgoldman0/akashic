@@ -5,8 +5,9 @@
 \  Depends on: (none — uses the MegaPad BIOS CRC accelerator)
 \
 \  Public API — one-shot:
-\   CRC32       ( data len -- crc )    CRC-32/BZIP2 parameters
-\   CRC32C      ( data len -- crc )    non-reflected Castagnoli
+\   CRC32       ( data len -- crc )    reflected CRC-32/ISO-HDLC
+\   CRC32C      ( data len -- crc )    reflected CRC-32C
+\   CRC32C-RAW  ( seed data len -- raw )  seeded CRC-32C, no xorout
 \   CRC64       ( data len -- crc )    CRC-64/WE parameters
 \
 \  Public API — streaming:
@@ -32,18 +33,21 @@
 \   CRC64->HEX  ( crc dst -- n )      CRC-64 to 16-char hex string
 \
 \  Constants:
-\   CRC-POLY-CRC32   ( -- 0 )         polynomial selector ID
-\   CRC-POLY-CRC32C  ( -- 1 )         polynomial selector ID
-\   CRC-POLY-CRC64   ( -- 2 )         polynomial selector ID
+\   CRC-MODE-CRC32   ( -- 4 )         reflected IEEE CRC-32 mode
+\   CRC-MODE-CRC32C  ( -- 5 )         reflected Castagnoli mode
+\   CRC-MODE-CRC64   ( -- 2 )         non-reflected CRC-64/WE mode
 \   CRC32-INIT-VAL   ( -- 0xFFFFFFFF )
 \   CRC64-INIT-VAL   ( -- 0xFFFFFFFFFFFFFFFF )
 \
 \  BIOS primitives used:
-\   CRC-POLY!  CRC-INIT!  CRC-FEED  CRC-FEED-BYTE  CRC-FINAL@
+\   CRC-MODE!  CRC-RESET  CRC-INIT!  CRC-FEED  CRC-FEED-BYTE
+\   CRC-RAW-FINAL@  CRC-FINAL@
 \
-\  Full 8-byte cells use CRC-FEED.  Every remaining byte uses the native
-\  CRC-FEED-BYTE instruction, so no padding or software state transition
-\  is needed.  CRC-FINAL@ returns the finalized result atomically.
+\  CRC-MODE!, CRC-RESET, CRC-INIT!, both feed words, and CRC-RAW-FINAL@
+\  are checked BIOS operations; Akashic consumes every status and throws it
+\  unchanged on failure.  Full 8-byte cells use CRC-FEED.  Every remaining
+\  byte uses the native CRC-FEED-BYTE instruction, so no padding or software
+\  state transition is needed.  Final publication and release are atomic.
 \
 \  Not reentrant.  One CRC computation at a time.
 \ =================================================================
@@ -54,12 +58,42 @@ PROVIDED akashic-crc
 \  Constants
 \ =====================================================================
 
-0 CONSTANT CRC-POLY-CRC32
-1 CONSTANT CRC-POLY-CRC32C
-2 CONSTANT CRC-POLY-CRC64
+4 CONSTANT CRC-MODE-CRC32
+5 CONSTANT CRC-MODE-CRC32C
+2 CONSTANT CRC-MODE-CRC64
 
 0xFFFFFFFF             CONSTANT CRC32-INIT-VAL
 0xFFFFFFFFFFFFFFFF     CONSTANT CRC64-INIT-VAL
+
+\ KDOS has its own private status helper.  Keep Akashic's helper distinct so
+\ this module does not depend on or redefine a platform-internal word.
+: _CRC-CHECK-STATUS  ( status -- )
+    ?DUP IF THROW THEN ;
+
+\ Track only hardware ownership acquired by the current Akashic call.  The
+\ guarded unwind path must not finalize a direct BIOS transaction that was
+\ already owned by the same task when CRC-MODE! returned STATE/OWNER.
+CREATE _CRC-PRIVATE-BEGIN 0 ALLOT
+VARIABLE _CRC-HDST
+VARIABLE _CRC-HARDWARE-OWNED
+CREATE _CRC-PRIVATE-END 0 ALLOT
+0 _CRC-HARDWARE-OWNED !
+
+: _CRC-SELECT  ( mode -- )
+    CRC-MODE! _CRC-CHECK-STATUS
+    -1 _CRC-HARDWARE-OWNED ! ;
+
+: _CRC-START  ( mode -- )
+    _CRC-SELECT
+    CRC-RESET _CRC-CHECK-STATUS ;
+
+: _CRC-FINALIZE  ( -- crc )
+    CRC-FINAL@
+    0 _CRC-HARDWARE-OWNED ! ;
+
+: _CRC-RAW-FINALIZE  ( -- raw )
+    CRC-RAW-FINAL@ _CRC-CHECK-STATUS
+    0 _CRC-HARDWARE-OWNED ! ;
 
 \ =====================================================================
 \  Internal: nibble-to-hex lookup
@@ -82,11 +116,11 @@ CREATE _CRC-HEX
 : _CRC-FEED-BUFFER  ( addr len -- )
     DUP 0< IF 2DROP -24 THROW THEN
     BEGIN DUP 8 >= WHILE
-        OVER @ CRC-FEED
+        OVER @ CRC-FEED _CRC-CHECK-STATUS
         SWAP 8 + SWAP 8 -
     REPEAT
     0 ?DO
-        DUP C@ CRC-FEED-BYTE
+        DUP C@ CRC-FEED-BYTE _CRC-CHECK-STATUS
         1+
     LOOP
     DROP ;
@@ -95,26 +129,35 @@ CREATE _CRC-HEX
 \  One-shot API
 \ =====================================================================
 
-\ CRC32 ( data len -- crc )  MSB-first CRC-32/BZIP2 parameters.
+\ CRC32 ( data len -- crc )  Reflected CRC-32/ISO-HDLC (IEEE) parameters.
 : CRC32  ( data len -- crc )
-    CRC-POLY-CRC32 CRC-POLY!
-    CRC32-INIT-VAL CRC-INIT!
+    CRC-MODE-CRC32 _CRC-START
     _CRC-FEED-BUFFER
-    CRC-FINAL@ ;
+    _CRC-FINALIZE ;
 
-\ CRC32C ( data len -- crc )  MSB-first, non-reflected Castagnoli.
+\ CRC32C ( data len -- crc )  Reflected CRC-32C (Castagnoli) parameters.
 : CRC32C  ( data len -- crc )
-    CRC-POLY-CRC32C CRC-POLY!
-    CRC32-INIT-VAL CRC-INIT!
+    CRC-MODE-CRC32C _CRC-START
     _CRC-FEED-BUFFER
-    CRC-FINAL@ ;
+    _CRC-FINALIZE ;
+
+\ CRC32C-RAW ( seed data len -- raw )
+\   Run reflected CRC-32C from the caller's raw accumulator and publish the
+\   raw accumulator without xorout.  A returned raw value can seed the next
+\   call, allowing callers to release the shared engine between fragments.
+: CRC32C-RAW  ( seed data len -- raw )
+    >R >R
+    CRC-MODE-CRC32C _CRC-SELECT
+    CRC-INIT! _CRC-CHECK-STATUS
+    R> R>
+    _CRC-FEED-BUFFER
+    _CRC-RAW-FINALIZE ;
 
 \ CRC64 ( data len -- crc )  CRC-64/WE parameters (ECMA polynomial).
 : CRC64  ( data len -- crc )
-    CRC-POLY-CRC64 CRC-POLY!
-    CRC64-INIT-VAL CRC-INIT!
+    CRC-MODE-CRC64 _CRC-START
     _CRC-FEED-BUFFER
-    CRC-FINAL@ ;
+    _CRC-FINALIZE ;
 
 \ =====================================================================
 \  Streaming API  —  BEGIN / ADD / END
@@ -123,34 +166,31 @@ CREATE _CRC-HEX
 \  the accelerator.  Fragment boundaries therefore do not affect results.
 
 : CRC32-BEGIN  ( -- )
-    CRC-POLY-CRC32 CRC-POLY!
-    CRC32-INIT-VAL CRC-INIT! ;
+    CRC-MODE-CRC32 _CRC-START ;
 
 : CRC32-ADD  ( addr len -- )
     _CRC-FEED-BUFFER ;
 
 : CRC32-END  ( -- crc )
-    CRC-FINAL@ ;
+    _CRC-FINALIZE ;
 
 : CRC32C-BEGIN  ( -- )
-    CRC-POLY-CRC32C CRC-POLY!
-    CRC32-INIT-VAL CRC-INIT! ;
+    CRC-MODE-CRC32C _CRC-START ;
 
 : CRC32C-ADD  ( addr len -- )
     _CRC-FEED-BUFFER ;
 
 : CRC32C-END  ( -- crc )
-    CRC-FINAL@ ;
+    _CRC-FINALIZE ;
 
 : CRC64-BEGIN  ( -- )
-    CRC-POLY-CRC64 CRC-POLY!
-    CRC64-INIT-VAL CRC-INIT! ;
+    CRC-MODE-CRC64 _CRC-START ;
 
 : CRC64-ADD  ( addr len -- )
     _CRC-FEED-BUFFER ;
 
 : CRC64-END  ( -- crc )
-    CRC-FINAL@ ;
+    _CRC-FINALIZE ;
 
 \ =====================================================================
 \  Incremental update API
@@ -166,35 +206,33 @@ CREATE _CRC-HEX
 : CRC32-UPDATE  ( crc data len -- crc' )
     >R >R
     CRC32-INIT-VAL XOR
-    CRC-POLY-CRC32 CRC-POLY!
-    CRC-INIT!
+    CRC-MODE-CRC32 _CRC-SELECT
+    CRC-INIT! _CRC-CHECK-STATUS
     R> R>
     _CRC-FEED-BUFFER
-    CRC-FINAL@ ;
+    _CRC-FINALIZE ;
 
 : CRC32C-UPDATE  ( crc data len -- crc' )
     >R >R
     CRC32-INIT-VAL XOR
-    CRC-POLY-CRC32C CRC-POLY!
-    CRC-INIT!
+    CRC-MODE-CRC32C _CRC-SELECT
+    CRC-INIT! _CRC-CHECK-STATUS
     R> R>
     _CRC-FEED-BUFFER
-    CRC-FINAL@ ;
+    _CRC-FINALIZE ;
 
 : CRC64-UPDATE  ( crc data len -- crc' )
     >R >R
     CRC64-INIT-VAL XOR
-    CRC-POLY-CRC64 CRC-POLY!
-    CRC-INIT!
+    CRC-MODE-CRC64 _CRC-SELECT
+    CRC-INIT! _CRC-CHECK-STATUS
     R> R>
     _CRC-FEED-BUFFER
-    CRC-FINAL@ ;
+    _CRC-FINALIZE ;
 
 \ =====================================================================
 \  Hex conversion
 \ =====================================================================
-
-VARIABLE _CRC-HDST
 
 \ CRC32->HEX ( crc dst -- n )
 \   Convert 32-bit CRC to 8 lowercase hex chars at dst.  Returns 8.
@@ -260,6 +298,7 @@ _CRC-STREAM-NONE _CRC-STREAM-MODE !
 
 ' CRC32           CONSTANT _crc32-xt
 ' CRC32C          CONSTANT _crc32c-xt
+' CRC32C-RAW      CONSTANT _crc32c-raw-xt
 ' CRC64           CONSTANT _crc64-xt
 ' CRC32-BEGIN     CONSTANT _crc32-begin-xt
 ' CRC32-ADD       CONSTANT _crc32-add-xt
@@ -285,7 +324,10 @@ _CRC-STREAM-NONE _CRC-STREAM-MODE !
 \ the raw hardware contract then requires same-owner recovery.
 : _CRC-FINAL-DISCARD  ( -- ) CRC-FINAL@ DROP ;
 : _CRC-HARDWARE-RELEASE  ( -- )
-    ['] _CRC-FINAL-DISCARD CATCH DROP ;
+    _CRC-HARDWARE-OWNED @ IF
+        ['] _CRC-FINAL-DISCARD CATCH DROP
+        0 _CRC-HARDWARE-OWNED !
+    THEN ;
 
 : _CRC-WITH-HARDWARE-GUARD  ( ... xt -- ... )
     _crc-guard GUARD-ACQUIRE
@@ -293,6 +335,7 @@ _CRC-STREAM-NONE _CRC-STREAM-MODE !
         _crc-guard GUARD-RELEASE
         -258 THROW
     THEN
+    0 _CRC-HARDWARE-OWNED !
     CATCH
     DUP IF
         >R _CRC-HARDWARE-RELEASE R>
@@ -308,6 +351,7 @@ _CRC-STREAM-NONE _CRC-STREAM-MODE !
         2DROP -258 THROW
     THEN
     SWAP _CRC-BEGIN-MODE !
+    0 _CRC-HARDWARE-OWNED !
     CATCH ?DUP IF
         >R _CRC-HARDWARE-RELEASE
         _CRC-STREAM-NONE _CRC-STREAM-MODE !
@@ -342,6 +386,7 @@ _CRC-STREAM-NONE _CRC-STREAM-MODE !
 
 : CRC32           _crc32-xt _CRC-WITH-HARDWARE-GUARD ;
 : CRC32C          _crc32c-xt _CRC-WITH-HARDWARE-GUARD ;
+: CRC32C-RAW      _crc32c-raw-xt _CRC-WITH-HARDWARE-GUARD ;
 : CRC64           _crc64-xt _CRC-WITH-HARDWARE-GUARD ;
 : CRC32-UPDATE    _crc32-update-xt _CRC-WITH-HARDWARE-GUARD ;
 : CRC32C-UPDATE   _crc32c-update-xt _CRC-WITH-HARDWARE-GUARD ;

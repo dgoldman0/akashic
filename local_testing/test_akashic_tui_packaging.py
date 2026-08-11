@@ -147,6 +147,141 @@ def test_mp64fs_platform_boot_load_is_early_and_idempotent() -> None:
     ) < integrated.index("REQUIRE tui/applets/desk/desk.f")
 
 
+def test_crc_contract_profile_uses_reflected_checked_megapad_surface() -> None:
+    source = (SOURCE_ROOT / "math/crc.f").read_text(encoding="utf-8")
+    profile = PROFILES["crc-contracts"]
+    fixture = profile.autoexec
+    executable = "\n".join(
+        line.split("\\", 1)[0] for line in source.splitlines()
+    )
+
+    assert profile.roots == ("math/crc.f",)
+    assert profile.ready_markers == ("CRC CONTRACTS PASS",)
+    assert profile.stable_markers == profile.ready_markers
+    for removed in (
+        "CRC-POLY!",
+        "CRC-POLY-CRC32",
+        "CRC-POLY-CRC32C",
+        "CRC-POLY-CRC64",
+    ):
+        assert removed not in source
+        assert removed not in fixture
+    for declaration in (
+        "4 CONSTANT CRC-MODE-CRC32",
+        "5 CONSTANT CRC-MODE-CRC32C",
+        "2 CONSTANT CRC-MODE-CRC64",
+        ": CRC32C-RAW  ( seed data len -- raw )",
+    ):
+        assert declaration in source
+    for primitive in (
+        "CRC-MODE!",
+        "CRC-RESET",
+        "CRC-INIT!",
+        "CRC-FEED",
+        "CRC-FEED-BYTE",
+        "CRC-RAW-FINAL@",
+    ):
+        calls = [
+            line
+            for line in executable.splitlines()
+            if re.search(
+                rf"(?<![A-Z0-9_-]){re.escape(primitive)}"
+                r"(?![A-Z0-9_-])",
+                line,
+            )
+        ]
+        assert calls
+        assert all("_CRC-CHECK-STATUS" in line for line in calls)
+
+    assert "S\" 123456789\" CRC32 0xCBF43926" in fixture
+    assert "S\" 123456789\" CRC32C 0xE3069283" in fixture
+    assert "CRC32C-RAW" in fixture
+    assert "0x1CF96D7C = _crc-assert" in fixture
+    assert "['] _crc-call-one-shot-during-direct CATCH 2 =" in fixture
+
+
+def test_sha3_contract_profile_uses_checked_megapad_surface() -> None:
+    source = (SOURCE_ROOT / "math/sha3.f").read_text(encoding="utf-8")
+    context = (SOURCE_ROOT / "math/sha3-context.f").read_text(encoding="utf-8")
+    vfs_snapshot = (
+        SOURCE_ROOT / "utils/fs/vfs-fixed-snapshot.f"
+    ).read_text(encoding="utf-8")
+    spool = (
+        SOURCE_ROOT / "tui/applets/streams/operational-spool.f"
+    ).read_text(encoding="utf-8")
+    profile = PROFILES["sha3-checked-contracts"]
+    fixture = profile.initial_files[0][1].decode("utf-8")
+
+    assert profile.roots == ("math/sha3.f",)
+    assert profile.ready_markers == ("SHA3 CHECKED CONTRACTS PASS",)
+    assert profile.stable_markers == profile.ready_markers
+    assert tuple(path for path, _ in profile.initial_files) == (
+        "local_testing/sha3-checked-test.f",
+    )
+    for removed in (
+        "SHA3-MODE!",
+        "SHA3-INIT",
+        "SHA3-SQUEEZE",
+        "SHA3-DOUT@",
+        "_SHA3-IPAD",
+        "_SHA3-OPAD",
+        "_SHA3-INNER",
+    ):
+        assert removed not in source
+
+    for checked_call in (
+        "SHA3 _SHA3-CHECK-STATUS",
+        "SHA3-512 _SHA3-CHECK-STATUS",
+        "HMAC _SHA3-CHECK-STATUS",
+        "SHA3-256-MODE SHA3-BEGIN _SHA3-CHECK-STATUS",
+        "SHA3-512-MODE SHA3-BEGIN _SHA3-CHECK-STATUS",
+        "SHAKE128-MODE SHA3-BEGIN _SHA3-CHECK-STATUS",
+        "SHAKE256-MODE SHA3-BEGIN _SHA3-CHECK-STATUS",
+        "SHA3-UPDATE _SHA3-CHECK-STATUS",
+        "SHA3-FINAL _SHA3-CHECK-STATUS",
+        "32 MIN SHAKE-READ",
+        "SHA3-CLEAR",
+    ):
+        assert checked_call in source
+    for family in ("SHAKE-128", "SHAKE-256"):
+        for suffix in ("BEGIN", "ADD", "END"):
+            assert f": {family}-{suffix}" in source
+
+    compare_256 = source.split(": SHA3-256-COMPARE", 1)[1].split(
+        ": SHA3-512-COMPARE", 1
+    )[0]
+    compare_512 = source.split(": SHA3-512-COMPARE", 1)[1].split(
+        "CREATE _SHA3-COMPARE-DIGEST", 1
+    )[0]
+    assert all(word not in compare_256 for word in (">R", "R>"))
+    assert all(word not in compare_512 for word in (">R", "R>"))
+    assert "CREATE _SHA3-PRIVATE-BEGIN 0 ALLOT" in source
+    assert "CREATE _SHA3-PRIVATE-END 0 ALLOT" in source
+    assert "2DUP _SHA3-PRIVATE-BEGIN" in vfs_snapshot
+    assert "_SHA3-PRIVATE-END" in vfs_snapshot
+
+    for software_round_word in (
+        "_SHA3C-THETA",
+        "_SHA3C-RHO-PI-STEP",
+        "_SHA3C-CHI",
+        "_SHA3C-RC",
+    ):
+        assert software_round_word not in context
+    assert "DUP _SHA3C.STATE KECCAK-F1600" in context
+    assert "5 CONSTANT SHA3-CONTEXT-S-HARDWARE" in context
+    assert "SHA3-256-CONTEXT-SIZE 0 FILL" in context
+    assert "SHA3-CONTEXT-S-HARDWARE OF STREAMS-SPOOL-S-FAULT" in spool
+    assert "SHA3-CONTEXT-S-HARDWARE OF PERSIST-S-FAULT" in spool
+
+    for length in ("0", "1", "31", "32", "33", "63", "64", "65"):
+        assert f"{length} _s3-check-shake128" in fixture
+        assert f"{length} _s3-check-shake256" in fixture
+    assert "_s3-data 7 + 162 SHAKE-128-ADD" in fixture
+    assert "_s3-data 5 + 132 SHAKE-256-ADD" in fixture
+    assert "['] _s3-call-one-shot-during-direct CATCH 2 =" in fixture
+    assert "['] _s3-call-cross-shake-end CATCH -258 =" in fixture
+
+
 def test_every_app_shell_profile_composes_the_platform_provider() -> None:
     app_shell_profiles = 0
     linked_profiles = 0

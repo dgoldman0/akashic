@@ -90,8 +90,8 @@ CREATE _s3ct-digest-copy SHA3-256-CONTEXT-DIGEST-SIZE ALLOT
 : _s3ct-test-vectors  ( -- )
     SHA3-256-CONTEXT-SIZE 648 = _s3ct-assert
     SHA3-256-CONTEXT-DIGEST-SIZE 32 = _s3ct-assert
-    SHA3-CONTEXT-S-ALIAS SHA3-CONTEXT-STATUS-VALID? _s3ct-assert
-    SHA3-CONTEXT-S-ALIAS 1+
+    SHA3-CONTEXT-S-HARDWARE SHA3-CONTEXT-STATUS-VALID? _s3ct-assert
+    SHA3-CONTEXT-S-HARDWARE 1+
         SHA3-CONTEXT-STATUS-VALID? 0= _s3ct-assert
 
     _s3ct-context-a SHA3-256-CONTEXT-INIT
@@ -254,6 +254,20 @@ CREATE _s3ct-digest-copy SHA3-256-CONTEXT-DIGEST-SIZE ALLOT
         _s3ct-assert
     _s3ct-stack ;
 
+: _s3ct-test-hardware-conflict  ( -- )
+    \ A raw permutation rejected by an independently owned SHA3 transaction
+    \ invalidates and wipes the complete caller context without disturbing
+    \ that direct owner.
+    _s3ct-context-a SHA3-256-CONTEXT-INIT
+        SHA3-CONTEXT-S-OK = _s3ct-assert
+    SHA3-256-MODE SHA3-BEGIN 0= _s3ct-assert
+    _s3ct-input 136 _s3ct-context-a SHA3-256-CONTEXT-UPDATE
+        SHA3-CONTEXT-S-HARDWARE = _s3ct-assert
+    _s3ct-context-a SHA3-256-CONTEXT-VALID? 0= _s3ct-assert
+    _s3ct-context-a SHA3-256-CONTEXT-SIZE _SHA3C-ZERO? _s3ct-assert
+    SHA3-CLEAR 0= _s3ct-assert
+    _s3ct-stack ;
+
 : _S3CT-RUN  ( -- )
     0 _s3ct-fails !
     0 _s3ct-checks !
@@ -263,6 +277,7 @@ CREATE _s3ct-digest-copy SHA3-256-CONTEXT-DIGEST-SIZE ALLOT
     _s3ct-test-boundaries
     _s3ct-test-rejections
     _s3ct-test-final-state
+    _s3ct-test-hardware-conflict
     _s3ct-stack
     _s3ct-fails @ 0= IF
         ." SHA3 CONTEXT PASS " _s3ct-checks @ . CR

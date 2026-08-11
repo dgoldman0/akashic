@@ -91,6 +91,7 @@ local_testing/*
 !local_testing/test_refactor_functional_baseline.py
 !local_testing/gate2a-contracts.f
 !local_testing/gate3a-resource-contracts.f
+!local_testing/sha3-checked-test.f
 !local_testing/library_managed_two_boot.py
 !local_testing/vfs-ram-capacity.f
 !local_testing/vfs-fixed-snapshot.f
