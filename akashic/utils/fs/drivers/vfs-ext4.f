@@ -13880,6 +13880,7 @@ VARIABLE _EXT4-EIB-LIMIT
     32 RSHIFT _EXT4-EIB-INODE @ _EXT4-I.BLOCKS-HI + W!
     0 ;
 
+
 \ Four leaf entries are the format-defined capacity of an inline inode
 \ extent root.  Each retained pair is { first physical block, block count }.
 CREATE _EXT4-JOT-RANGES
@@ -16904,6 +16905,7 @@ VARIABLE _EXT4-BWC-CTX
     THEN
     0 ;
 
+
 VARIABLE _EXT4-WR-SOURCE
 VARIABLE _EXT4-WR-COUNT
 VARIABLE _EXT4-WR-OFFSET
@@ -18295,3 +18297,461 @@ EXT4-STAGED-WRITE-OPS ,
 : EXT4-BLOCK-COUNT@ ( vfs -- blocks ) _EXT4-CTX _EXT4-C.BLOCKS + @ ;
 : EXT4-GROUP-COUNT@ ( vfs -- groups ) _EXT4-CTX _EXT4-C.GROUPS + @ ;
 : EXT4-INODE-SIZE@  ( vfs -- bytes )  _EXT4-CTX _EXT4-C.ISIZE + @ ;
+
+\ =====================================================================
+\  Allocation-backed one-block hole fill
+\ =====================================================================
+
+VARIABLE _XH-SOURCE
+VARIABLE _XH-COUNT
+VARIABLE _XH-OFFSET
+VARIABLE _XH-INO
+VARIABLE _XH-EXPECTED-GEN
+VARIABLE _XH-SECONDS
+VARIABLE _XH-NSEC
+VARIABLE _XH-WRITER
+VARIABLE _XH-CTX
+VARIABLE _XH-BSIZE
+VARIABLE _XH-SIZE
+VARIABLE _XH-LOGICAL
+VARIABLE _XH-BLOCK-OFF
+VARIABLE _XH-TYPE
+VARIABLE _XH-EA
+VARIABLE _XH-GROUP
+VARIABLE _XH-INODE-HOME
+VARIABLE _XH-INODE-OFF
+VARIABLE _XH-BITMAP-HOME
+VARIABLE _XH-GDT-HOME
+VARIABLE _XH-SUPER-HOME
+VARIABLE _XH-BLOCKS
+VARIABLE _XH-NEW-BLOCKS
+VARIABLE _XH-ROOT
+VARIABLE _XH-ENTRIES
+VARIABLE _XH-INSERT
+VARIABLE _XH-INDEX
+VARIABLE _XH-ENTRY
+VARIABLE _XH-START
+VARIABLE _XH-RAW-LEN
+VARIABLE _XH-LEN
+VARIABLE _XH-END
+VARIABLE _XH-DATA-BLOCKS
+VARIABLE _XH-ACCOUNTED-BLOCKS
+VARIABLE _XH-CANDIDATE
+VARIABLE _XH-IMAGE
+VARIABLE _XH-RECORD
+VARIABLE _XH-SHIFT
+VARIABLE _XH-IOR
+VARIABLE _XH-PUBLISHED
+VARIABLE _XH-ABORT-IOR
+CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
+
+: _XH-ENTRY-AT  ( index -- extent-entry )
+    12 * 12 + _XH-ROOT @ + ;
+
+: _XH-REQUIRE-FRESH-EXACT  ( -- ior )
+    _XH-WRITER @ _EXT4-JWR.META-CREDIT + @ 4 <>
+    _XH-WRITER @ _EXT4-JWR.DATA-CREDIT + @ 1 <> OR
+    _XH-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ 0<> OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _XH-WRITER @ _EXT4-JWR.META-USED + @
+    _XH-WRITER @ _EXT4-JWR.DATA-USED + @ OR
+    _XH-WRITER @ _EXT4-JWR.REVOKE-USED + @ OR
+    _XH-WRITER @ _EXT4-JWR.META-ACTIVE + @ OR
+    _XH-WRITER @ _EXT4-JWR.DATA-ACTIVE + @ OR
+    _XH-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ OR IF
+        VFS-E-BUSY EXIT
+    THEN
+    _XH-WRITER @ _EXT4-JWR.CP-MODE + @
+    _EXT4-JCPM-NONE <> IF VFS-E-BUSY EXIT THEN
+    _XH-WRITER @ _EXT4-JTX-TABLES-VALID? 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _XH-CTX @ _EXT4-C.O.ACTIVE + @
+    _XH-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ OR
+    _XH-CTX @ _EXT4-C.O.LEGACY-ACTIVE + @ OR
+    _XH-CTX @ _EXT4-C.O.CLEAR-PENDING + @ OR IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    0 ;
+
+: _XH-FAIL-AFTER-PUBLISH  ( ior -- ior )
+    _XH-IOR !
+    _XH-PUBLISHED @ IF
+        _XH-WRITER @ _EXT4-JWR.STATE + @ DUP
+        _EXT4-JWR-STAGING = IF
+            DROP
+            _XH-WRITER @ _EXT4-JTX-ABORT
+            DUP _XH-ABORT-IOR ! IF
+                _XH-ABORT-IOR @
+                _XH-WRITER @ _EXT4-JWR.FAULT + !
+                _EXT4-JWR-FAULTED
+                _XH-WRITER @ _EXT4-JWR.STATE + !
+            THEN
+        ELSE
+            DUP _EXT4-JWR-IDLE = SWAP _EXT4-JWR-FAULTED = OR 0= IF
+                _XH-IOR @
+                _XH-WRITER @ _EXT4-JWR.FAULT + !
+                _EXT4-JWR-FAULTED
+                _XH-WRITER @ _EXT4-JWR.STATE + !
+            THEN
+        THEN
+    THEN
+    _XH-IOR @ ;
+
+: _XH-ADD-DATA-BLOCKS  ( blocks -- ior )
+    _XH-DATA-BLOCKS @ _EXT4-UADD?
+    DUP IF NIP EXIT THEN DROP _XH-DATA-BLOCKS !
+    0 ;
+
+\ Validate every existing extent as an ordinary mutable data role before the
+\ target inode is excluded from the filesystem-wide other-owner scan.  A zero
+\ probe target cannot alias any admitted ext4 block, so this scoped walk uses
+\ the existing mutation-map hook only for its complete role validation.
+: _XH-REQUIRE-MAP-AUDIT  ( -- ior )
+    _EXT4-MUTATION-MAP-TARGET @
+    _EXT4-MUTATION-MAP-ACTIVE @ OR
+    _EXT4-MUTATION-MAP-HITS @ OR IF VFS-E-BUSY EXIT THEN
+    0 _EXT4-MUTATION-MAP-TARGET !
+    0 _EXT4-MUTATION-MAP-HITS !
+    -1 _EXT4-MUTATION-MAP-ACTIVE !
+    _XH-CTX @ _EXT4-VALIDATE-EXTENT-TREE _XH-IOR !
+    0 _EXT4-MUTATION-MAP-ACTIVE !
+    0 _EXT4-MUTATION-MAP-TARGET !
+    _XH-IOR @ 0= _EXT4-MUTATION-MAP-HITS @ 0<> AND IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT _XH-IOR !
+    THEN
+    0 _EXT4-MUTATION-MAP-HITS !
+    _XH-IOR @ ;
+
+\ The ordinary extent validator has already authenticated every entry and
+\ allocation bit.  This second pass derives the exact gap insertion index,
+\ refuses unwritten conversion, and binds current i_blocks to the complete
+\ resident data map plus an optional external-xattr allocation.
+: _XH-CAPTURE-ROOT  ( -- ior )
+    _XH-CTX @ _EXT4-C.INODE + _EXT4-I.BLOCK + DUP
+    _XH-ROOT !
+    DUP W@ _EXT4-EXTENT-MAGIC <> IF
+        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    DUP 4 + W@ _EXT4-RESIDENT-EXTENT-ENTRY-MAX <> IF
+        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    DUP 6 + W@ IF
+        DROP EXT4-D-DATA-MAP _EXT4-UNSUPPORTED EXIT
+    THEN
+    DUP 2 + W@ DUP _XH-ENTRIES !
+    _EXT4-RESIDENT-EXTENT-ENTRY-MAX U> IF
+        DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    _XH-ENTRIES @ _EXT4-RESIDENT-EXTENT-ENTRY-MAX = IF
+        DROP EXT4-D-DATA-MAP _EXT4-UNSUPPORTED EXIT
+    THEN
+    DROP
+    _XH-ENTRIES @ _XH-INSERT !
+    0 _XH-DATA-BLOCKS !
+    0 _XH-INDEX !
+    BEGIN
+        _XH-INDEX @ _XH-ENTRIES @ U<
+    WHILE
+        _XH-INDEX @ _XH-ENTRY-AT _XH-ENTRY !
+        _XH-ENTRY @ L@ _XH-START !
+        _XH-ENTRY @ 4 + W@ _XH-RAW-LEN !
+        _XH-ENTRY @ _EXT4-EXTENT-LEN@ DUP _XH-LEN !
+        _XH-ADD-DATA-BLOCKS ?DUP IF EXIT THEN
+        _XH-START @ _XH-LEN @ _EXT4-UADD?
+        _XH-IOR ! _XH-END !
+        _XH-IOR @ ?DUP IF EXIT THEN
+        _XH-END @ 0xFFFFFFFF U> IF
+            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
+        _XH-LOGICAL @ _XH-START @ >=
+        _XH-LOGICAL @ _XH-END @ U< AND IF
+            _XH-RAW-LEN @ 32768 > IF
+                EXT4-D-DATA-MAP _EXT4-UNSUPPORTED EXIT
+            THEN
+            EXT4-D-DATA-MAP _EXT4-UNSUPPORTED EXIT
+        THEN
+        _XH-INSERT @ _XH-ENTRIES @ =
+        _XH-START @ _XH-LOGICAL @ U> AND IF
+            _XH-INDEX @ _XH-INSERT !
+        THEN
+        1 _XH-INDEX +!
+    REPEAT
+    _XH-DATA-BLOCKS @ _XH-EA @ IF 1+ THEN
+    _XH-CTX @ _EXT4-C.SPB + @ _EXT4-UMUL?
+    _XH-IOR ! _XH-ACCOUNTED-BLOCKS !
+    _XH-IOR @ ?DUP IF EXIT THEN
+    _XH-ACCOUNTED-BLOCKS @ _XH-BLOCKS @ <> IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
+: _XH-AUTH-TARGET  ( -- ior )
+    _XH-INO @
+    _XH-CTX @ _EXT4-C.SB + _EXT4-SB.FIRST-INO + L@ U< IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _XH-INO @ 8 =
+    _XH-INO @ _XH-CTX @ _EXT4-C.ORPHAN-INO + @ = OR IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XH-EXPECTED-GEN @ 0xFFFFFFFF U> IF
+        VFS-E-INVALID EXIT
+    THEN
+    _XH-INO @ _XH-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
+    _XH-CTX @ _EXT4-STAGE-CURRENT-INODE
+    _XH-IOR ! _XH-TYPE !
+    _XH-IOR @ ?DUP IF EXIT THEN
+    _XH-TYPE @ VFS-T-FILE <> IF
+        EXT4-D-FEATURE _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XH-CTX @ _EXT4-C.INODE + DUP
+    _EXT4-I.FLAGS + L@ _EXT4-EXTENTS-FL <> IF
+        DROP EXT4-D-FEATURE _EXT4-UNSUPPORTED EXIT
+    THEN
+    DUP _EXT4-I.GENERATION + L@
+    _XH-EXPECTED-GEN @ <> IF
+        DROP VFS-E-STALE EXIT
+    THEN
+    DUP _EXT4-I.FILE-ACL-HI + W@ IF
+        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-I.FILE-ACL-LO + L@ _XH-EA !
+    _XH-CTX @ _EXT4-C.R.SIZE + @ _XH-SIZE !
+    _XH-CTX @ _EXT4-C.R.BLOCKS + @ _XH-BLOCKS !
+    _XH-OFFSET @ _XH-SIZE @ U< 0= IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XH-COUNT @
+    _XH-SIZE @ _XH-OFFSET @ - U> IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XH-OFFSET @ _XH-BSIZE @ /MOD
+    _XH-LOGICAL ! _XH-BLOCK-OFF !
+    _XH-LOGICAL @ 1 _EXT4-UADD?
+    _XH-IOR ! _XH-END !
+    _XH-IOR @ ?DUP IF EXIT THEN
+    _XH-END @ 0xFFFFFFFF U> IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XH-COUNT @
+    _XH-BSIZE @ _XH-BLOCK-OFF @ - U> IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XH-LOGICAL @
+    _XH-SIZE @ _XH-BSIZE @ / U< 0= IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XH-CAPTURE-ROOT ?DUP IF EXIT THEN
+    _XH-REQUIRE-MAP-AUDIT ?DUP IF EXIT THEN
+    _XH-EA @ IF
+        _XH-EA @ 1 _XH-CTX @
+        _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
+        _XH-EA @ EXT4-D-XATTR _XH-CTX @
+        _EXT4-REQUIRE-ALLOCATED-BLOCK ?DUP IF EXIT THEN
+        _XH-EA @ _XH-CTX @ _EXT4-LOAD-XATTR-BLOCK
+        ?DUP IF EXIT THEN
+    THEN
+    _XH-CTX @ _EXT4-C.INODE + _XH-INODE-SNAPSHOT
+    _XH-CTX @ _EXT4-C.ISIZE + @ MOVE
+    _EXT4-IR-GROUP @ _XH-GROUP !
+    _EXT4-IR-BLOCK @ _XH-INODE-HOME !
+    _EXT4-IR-OFF @ _XH-INODE-OFF !
+    0 ;
+
+: _XH-REQUIRE-SAME-TARGET  ( -- ior )
+    _XH-INO @ _XH-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
+    _EXT4-IR-GROUP @ _XH-GROUP @ <>
+    _EXT4-IR-BLOCK @ _XH-INODE-HOME @ <> OR
+    _EXT4-IR-OFF @ _XH-INODE-OFF @ <> OR IF
+        VFS-E-STALE EXIT
+    THEN
+    _XH-CTX @ _EXT4-STAGE-CURRENT-INODE
+    _XH-IOR ! _XH-TYPE !
+    _XH-IOR @ ?DUP IF EXIT THEN
+    _XH-TYPE @ VFS-T-FILE <> IF VFS-E-STALE EXIT THEN
+    _XH-CTX @ _EXT4-C.INODE + _XH-INODE-SNAPSHOT
+    _XH-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF
+        VFS-E-STALE EXIT
+    THEN
+    _XH-EA @ IF
+        _XH-EA @ _XH-CANDIDATE @ = IF
+            EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+        THEN
+        _XH-EA @ _XH-CTX @ _EXT4-LOAD-XATTR-BLOCK
+        ?DUP IF EXIT THEN
+    THEN
+    0 ;
+
+: _XH-LOCATE-ACCOUNTING-HOMES  ( -- ior )
+    _XH-GROUP @ _XH-CTX @ _EXT4-LOAD-BLOCK-BITMAP
+    _XH-IOR ! _XH-BITMAP-HOME !
+    _XH-IOR @ ?DUP IF EXIT THEN
+    _XH-GROUP @ _XH-CTX @ _EXT4-LOAD-DESC
+    ?DUP IF EXIT THEN
+    _EXT4-GD-BLOCK @ _XH-GDT-HOME !
+    _XH-CTX @ _EXT4-PRIMARY-SUPER-BLOCK
+    _XH-SUPER-HOME !
+    0 ;
+
+: _XH-OWNER-RANGE!  ( block index -- )
+    2* CELLS _XH-CTX @ _EXT4-C.MUTATION-RANGES + @ +
+    DUP _XH-ENTRY ! !
+    1 _XH-ENTRY @ CELL+ ! ;
+
+\ Prove all five replacement homes in one global inode walk.  The target's
+\ complete existing map was role-audited above, so excluding it cannot hide
+\ an alias to the candidate, inode table, or allocation-accounting metadata.
+: _XH-REQUIRE-UNIQUE-HOMES  ( -- ior )
+    _EXT4-MUTATION-OWNER-RANGES-BUSY?
+    _EXT4-MUTATION-EA-REF-ACTIVE @ OR IF VFS-E-BUSY EXIT THEN
+    _XH-CTX @ _EXT4-MUTATION-RANGE-WORKSPACE? 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _XH-CTX @ _EXT4-C.MUTATION-RANGES + @ 0=
+    _XH-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @ 5 U< OR IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-JFO-CERT-INVALIDATE
+    _XH-CTX @ _EXT4-JFO-CTX !
+    _XH-INO @ _EXT4-JFO-TARGET-INO !
+    _EXT4-MAP-VALIDATION-LIMIT @ _EXT4-UOW-MAP-LIMIT !
+    0 _EXT4-MAP-VALIDATION-LIMIT !
+    _EXT4-MUTATION-OWNER-RANGES-CLEAR
+    _XH-CANDIDATE @ 0 _XH-OWNER-RANGE!
+    _XH-INODE-HOME @ 1 _XH-OWNER-RANGE!
+    _XH-BITMAP-HOME @ 2 _XH-OWNER-RANGE!
+    _XH-GDT-HOME @ 3 _XH-OWNER-RANGE!
+    _XH-SUPER-HOME @ 4 _XH-OWNER-RANGE!
+    _XH-CTX @ _EXT4-C.MUTATION-RANGES + @ 5
+    _XH-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @
+    _EXT4-MUTATION-OWNER-RANGES-PUBLISH _EXT4-UOW-IOR !
+    _EXT4-UOW-IOR @ 0= IF
+        _EXT4-JFO-SCAN-OTHER-INODES _EXT4-UOW-IOR !
+    THEN
+    _EXT4-MUTATION-OWNER-RANGES-CLEAR
+    _EXT4-UOW-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
+    _EXT4-UOW-IOR @ ;
+
+: _XH-SELECT-CANDIDATE  ( -- ior )
+    _XH-GROUP @ _XH-CTX @ _EXT4-FIND-FREE-BLOCK
+    _XH-IOR ! _XH-CANDIDATE !
+    _XH-IOR @ ?DUP IF EXIT THEN
+    _XH-EA @ _XH-CANDIDATE @ = IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    _XH-INODE-HOME @ _XH-GROUP @ _XH-CTX @
+    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
+    _XH-LOCATE-ACCOUNTING-HOMES ?DUP IF EXIT THEN
+    _XH-REQUIRE-UNIQUE-HOMES ?DUP IF EXIT THEN
+    _XH-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
+    _XH-INODE-HOME @ _XH-GROUP @ _XH-CTX @
+    _EXT4-VALIDATE-INODE-TABLE-HOME ;
+
+: _XH-STAGE-DATA  ( -- ior )
+    _XH-WRITER @ _EXT4-JWR.SCRATCH-A + @ DUP
+    _XH-BSIZE @ 0 FILL
+    _XH-WRITER @ _EXT4-JWR.SCRATCH-B + @
+    SWAP _XH-BLOCK-OFF @ + _XH-COUNT @ MOVE
+    _XH-WRITER @ _EXT4-JWR.SCRATCH-A + @
+    _XH-CANDIDATE @ _XH-WRITER @
+    _EXT4-JTX-DATA-PUT ?DUP IF EXIT THEN
+    -1 _XH-PUBLISHED !
+    0 ;
+
+: _XH-INSERT-EXTENT  ( -- )
+    _XH-RECORD @ _EXT4-I.BLOCK + _XH-ROOT !
+    _XH-ENTRIES @ _XH-SHIFT !
+    BEGIN
+        _XH-SHIFT @ _XH-INSERT @ U>
+    WHILE
+        _XH-SHIFT @ 1- _XH-ENTRY-AT
+        _XH-SHIFT @ _XH-ENTRY-AT 12 MOVE
+        -1 _XH-SHIFT +!
+    REPEAT
+    _XH-INSERT @ _XH-ENTRY-AT DUP
+    _XH-LOGICAL @ OVER L!
+    1 OVER 4 + W!
+    _XH-CANDIDATE @ DUP 32 RSHIFT OVER 6 + W!
+    0xFFFFFFFF AND SWAP 8 + L!
+    DROP
+    _XH-ENTRIES @ 1+ _XH-ROOT @ 2 + W! ;
+
+: _XH-STAGE-INODE  ( -- ior )
+    _XH-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
+    _XH-INODE-HOME @ _XH-CTX @ _EXT4-READ-BLOCK
+    ?DUP IF EXIT THEN
+    _XH-CTX @ _EXT4-C.BLOCK + _XH-INODE-HOME @
+    _XH-WRITER @ _EXT4-JTX-META-ACQUIRE
+    DUP IF NIP EXIT THEN DROP DUP _XH-IMAGE !
+    _XH-INODE-OFF @ + DUP _XH-RECORD !
+    _XH-CTX @ _EXT4-C.INODE +
+    _XH-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    _XH-BLOCKS @ _XH-CTX @ _EXT4-C.SPB + @ _EXT4-UADD?
+    _XH-IOR ! _XH-NEW-BLOCKS !
+    _XH-IOR @ ?DUP IF EXIT THEN
+    _XH-NEW-BLOCKS @ _XH-RECORD @ _XH-CTX @
+    _EXT4-ENCODE-I-BLOCKS ?DUP IF EXIT THEN
+    _XH-INSERT-EXTENT
+    _XH-SECONDS @ _XH-NSEC @ _XH-RECORD @
+    _XH-CTX @ _EXT4-SET-INODE-MTIME-CTIME ?DUP IF EXIT THEN
+    _XH-RECORD @ _XH-INO @ _XH-CTX @
+    _EXT4-RESTAMP-INODE ?DUP IF EXIT THEN
+    _XH-IMAGE @ _XH-INODE-HOME @ _XH-WRITER @
+    _EXT4-JTX-META-REPLACE ;
+
+\ Fill one complete logical hole inside current EOF.  The operation admits a
+\ linked regular file with an authenticated inline depth-zero extent root and
+\ one spare resident entry.  It allocates one geometry-selected block, stages
+\ a full zero image with caller bytes overlaid, inserts one initialized extent,
+\ and increments i_blocks without changing i_size.  Extent merging, root
+\ growth, unwritten conversion, and EOF growth remain later capabilities.
+: _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL
+  ( source count file-offset inode-number expected-generation seconds nsec transaction -- ior )
+    _XH-WRITER ! _XH-NSEC ! _XH-SECONDS !
+    _XH-EXPECTED-GEN ! _XH-INO ! _XH-OFFSET !
+    _XH-COUNT ! _XH-SOURCE !
+    0 _XH-PUBLISHED !
+    _XH-WRITER @ _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
+    _XH-WRITER @ _EXT4-JWR.CTX + @ _XH-CTX !
+    _XH-WRITER @ _EXT4-JWR.BSIZE + @ _XH-BSIZE !
+    _XH-COUNT @ 0> 0= _XH-OFFSET @ 0< OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _XH-SOURCE @ _XH-COUNT @ _VFS-BUFFER? 0= IF
+        VFS-E-INVALID EXIT
+    THEN
+    _XH-COUNT @ _XH-BSIZE @ U> IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XH-SOURCE @ _XH-COUNT @
+    _XH-WRITER @ _EXT4-JWR.SCRATCH-B + @ _XH-BSIZE @
+    MSPAN-OVERLAP? IF VFS-E-INVALID EXIT THEN
+    _XH-REQUIRE-FRESH-EXACT ?DUP IF EXIT THEN
+    _XH-SOURCE @ _XH-WRITER @ _EXT4-JWR.SCRATCH-B + @
+    _XH-COUNT @ MOVE
+    _XH-AUTH-TARGET ?DUP IF EXIT THEN
+    _XH-SELECT-CANDIDATE ?DUP IF EXIT THEN
+    _XH-STAGE-DATA ?DUP IF
+        _XH-FAIL-AFTER-PUBLISH EXIT
+    THEN
+    _XH-CANDIDATE @ _XH-WRITER @
+    _EXT4-JTX-STAGE-ALLOCATE-BLOCK ?DUP IF
+        _XH-FAIL-AFTER-PUBLISH EXIT
+    THEN
+    _XH-STAGE-INODE ?DUP IF
+        _XH-FAIL-AFTER-PUBLISH EXIT
+    THEN
+    _XH-WRITER @ _EXT4-JWR.META-USED + @ 4 <>
+    _XH-WRITER @ _EXT4-JWR.META-ACTIVE + @ 4 <> OR
+    _XH-WRITER @ _EXT4-JWR.DATA-USED + @ 1 <> OR
+    _XH-WRITER @ _EXT4-JWR.DATA-ACTIVE + @ 1 <> OR
+    _XH-WRITER @ _EXT4-JWR.REVOKE-USED + @ 0<> OR
+    _XH-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ 0<> OR
+    _XH-WRITER @ _EXT4-JTX-TABLES-VALID? 0= OR IF
+        VFS-E-CORRUPT _XH-FAIL-AFTER-PUBLISH EXIT
+    THEN
+    0 ;

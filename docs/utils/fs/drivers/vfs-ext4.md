@@ -1312,6 +1312,35 @@ Deeper trees use the same bounded reader/parser, but staged mutation policy
 stops at depth 1 after authenticating a structurally valid wider tree. A valid
 deeper tree is unsupported for write; malformed trees remain corruption.
 
+### Private allocation-backed hole fill
+
+The next write ratchet now has a typed dry-stage implementation for one
+complete logical hole inside the current file size. Its admission contract is
+structural: any linked regular file with flags exactly `EXTENTS`, an
+authenticated inline depth-0 root with one spare resident entry, an exact
+`i_blocks` account, and a full in-size logical hole can be staged. The
+canonical sparse file is qualification evidence for that capability, not a
+fixture identity embedded in the implementation.
+
+The `4 metadata / 1 ordered data / 0 revoke` transaction selects an
+authenticated free block from runtime group geometry, retains a full zeroed
+data image with the caller span overlaid, and inserts one sorted initialized
+singleton extent without changing `i_size`. Its metadata after-images set the
+exact bitmap bit, decrement the group and primary-super free-block counters,
+restamp their checksums, increment `i_blocks`, update `mtime`/`ctime`, and
+restamp the inode. One other-inode scan covers all five replacement homes: the
+new data block, inode-table block, block bitmap, primary GDT block, and primary
+superblock. The target's complete existing map is separately checked against
+static metadata and journal roles before that inode is excluded from the scan.
+
+This private stage currently refuses an existing initialized mapping,
+unwritten conversion, a depth-positive or full inline root, a cross-block
+request, a partial final logical block, and EOF growth. Those are unimplemented
+write shapes, not claims that such files are invalid. Public mounted routing,
+durable emission/checkpoint qualification, external-tool readback, and the
+representative allocation crash matrix remain gates before this operation is
+advertised by the staged binding.
+
 The exact staged write completes the real durability lifecycle. A
 write-free dry stage is aborted before clean-to-`RECOVER` activation; the live
 stage then emits ordered data before its descriptor and final commit,

@@ -3996,6 +3996,7 @@ def build_snapshot():
     ).encode() + b"\n"
     max_source_steps = 900_000_000
     source_steps = _feed_until_idle(system, bootstrap, max_source_steps)
+    source_lines_loaded = 0
     uart_offset = len(uart)
     for line in lines:
         encoded = line.encode()
@@ -4009,6 +4010,7 @@ def build_snapshot():
             b"_EXT4-SOURCE-LINE\n",
             max_source_steps - source_steps,
         )
+        source_lines_loaded += 1
         new_output = fat_harness.uart_text(uart[uart_offset:])
         uart_offset = len(uart)
         if "[EXT4-SOURCE-STATUS" in new_output:
@@ -4022,7 +4024,9 @@ def build_snapshot():
     transcript = fat_harness.uart_text(uart)
     _assert_no_forth_diagnostics(transcript)
     assert f"\r\n{source_ready} ok\r\n" in transcript, (
-        "ext4 source load exceeded its checked-in step budget:\n"
+        "ext4 source load exceeded its checked-in step budget "
+        f"after {source_lines_loaded}/{len(lines)} packed lines and "
+        f"{source_steps}/{max_source_steps} steps:\n"
         + transcript[-4000:]
     )
 
@@ -31286,6 +31290,366 @@ def test_mutation_authority_validates_inode_table_home_and_range_owner(
         ],
     )
     _assert_emitted(output, "EXT4-MUTATION-AUTHORITY-RANGE-SAFE")
+
+
+def test_typed_one_block_hole_fill_stages_exact_allocation_and_inode(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    inode_number = 17
+    candidate = 1351
+    bitmap_home = 259
+    gdt_home = 2
+    super_home = 1
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    group, block_index = divmod(candidate - first_data, blocks_per_group)
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    assert block_size == 1024
+    assert inode_size == 256
+    assert inode_home == 279
+    assert inode_block_offset == 0
+    assert group == 0
+    assert generation == 0
+    assert struct.unpack_from("<I", inode, 0x04)[0] == 3 * block_size
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 4
+    assert struct.unpack_from("<H", inode, 0x74)[0] == 0
+    assert struct.unpack_from("<I", inode, 0x20)[0] == 0x0008_0000
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        2,
+        4,
+        0,
+    )
+    assert _extent_root_physical(inode, 0) == 1348
+    with pytest.raises(AssertionError, match="logical block 1 is unmapped"):
+        _extent_root_physical(inode, 1)
+    assert _extent_root_physical(inode, 2) == 1350
+    assert not _ext4_block_allocation_state(path, (candidate,))[candidate]
+
+    replacement = b"HOLE-FILL"
+    block_offset = 500
+    write_offset = block_size + block_offset
+    seconds = 3_000_000_000
+    nanoseconds = 123_456_789
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = (
+        low_seconds
+        if low_seconds < 0x8000_0000
+        else low_seconds - 0x1_0000_0000
+    )
+    epoch = (seconds - signed_low) >> 32
+    assert epoch == 1
+    extra_time = (nanoseconds << 2) | epoch
+
+    def read_block(block: int) -> bytearray:
+        with path.open("rb") as source:
+            source.seek(block * block_size)
+            result = bytearray(source.read(block_size))
+        assert len(result) == block_size
+        return result
+
+    expected_data = bytearray(block_size)
+    expected_data[block_offset : block_offset + len(replacement)] = replacement
+
+    expected_bitmap = read_block(bitmap_home)
+    byte_index, bit_index = divmod(block_index, 8)
+    assert not expected_bitmap[byte_index] & (1 << bit_index)
+    expected_bitmap[byte_index] |= 1 << bit_index
+    bitmap_checksum = _crc32c_raw(expected_bitmap, seed)
+
+    expected_gdt = read_block(gdt_home)
+    descriptor_offset = group * 64 % block_size
+    descriptor = bytearray(
+        expected_gdt[descriptor_offset : descriptor_offset + 64]
+    )
+    group_free_before = struct.unpack_from("<H", descriptor, 0x0C)[0] | (
+        struct.unpack_from("<H", descriptor, 0x2C)[0] << 16
+    )
+    assert group_free_before > 0
+    group_free_after = group_free_before - 1
+    struct.pack_into("<H", descriptor, 0x0C, group_free_after & 0xFFFF)
+    struct.pack_into("<H", descriptor, 0x2C, group_free_after >> 16)
+    struct.pack_into("<H", descriptor, 0x18, bitmap_checksum & 0xFFFF)
+    struct.pack_into("<H", descriptor, 0x38, bitmap_checksum >> 16)
+    descriptor = bytearray(
+        _group_descriptor_with_checksum(superblock, descriptor, group)
+    )
+    expected_gdt[descriptor_offset : descriptor_offset + 64] = descriptor
+
+    expected_super = read_block(super_home)
+    super_free_before = struct.unpack_from("<I", expected_super, 0x0C)[0]
+    assert super_free_before > 0
+    super_free_after = super_free_before - 1
+    struct.pack_into("<I", expected_super, 0x0C, super_free_after)
+    struct.pack_into("<I", expected_super, 0x158, 0)
+    expected_super[:] = _ext4_super_with_checksum(expected_super)
+
+    expected_inode = bytearray(inode)
+    struct.pack_into("<I", expected_inode, 0x1C, 6)
+    struct.pack_into("<H", expected_inode, 0x74, 0)
+    struct.pack_into("<H", expected_inode, 0x2A, 3)
+    expected_inode[0x4C : 0x58] = expected_inode[0x40 : 0x4C]
+    struct.pack_into(
+        "<IHHI",
+        expected_inode,
+        0x40,
+        1,
+        1,
+        candidate >> 32,
+        candidate & 0xFFFF_FFFF,
+    )
+    struct.pack_into("<I", expected_inode, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_inode, 0x10, low_seconds)
+    struct.pack_into("<I", expected_inode, 0x84, extra_time)
+    struct.pack_into("<I", expected_inode, 0x88, extra_time)
+    expected_inode[:] = _inode_with_checksum(
+        superblock, inode_number, expected_inode
+    )
+    expected_inode_home = read_block(inode_home)
+    expected_inode_home[
+        inode_block_offset : inode_block_offset + inode_size
+    ] = expected_inode
+
+    expected_bitmap_crc = _crc32c_raw(expected_bitmap)
+    expected_gdt_crc = _crc32c_raw(expected_gdt)
+    expected_super_crc = _crc32c_raw(expected_super)
+    expected_inode_home_crc = _crc32c_raw(expected_inode_home)
+    expected_data_crc = _crc32c_raw(expected_data)
+    expected_checksum_low = struct.unpack_from("<H", expected_inode, 0x7C)[0]
+    expected_checksum_high = struct.unpack_from("<H", expected_inode, 0x82)[0]
+
+    output = run_forth(
+        path,
+        [
+            "T-ARENA CONSTANT _HF-ARENA",
+            (
+                "_HF-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _HF-MOUNT-IOR CONSTANT _HF-V"
+            ),
+            "_HF-V _EXT4-CTX CONSTANT _HF-CTX",
+            (
+                "_HF-CTX _EXT4-C.FREE-BLOCKS + @ "
+                "CONSTANT _HF-CONTEXT-FREE"
+            ),
+            (
+                "_HF-CTX _EXT4-C.SB + _EXT4-SB.FREE-BLOCKS-LO + L@ "
+                "CONSTANT _HF-CACHED-SUPER-FREE"
+            ),
+            (
+                "4 1 0 _HF-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _HF-WRITER-IOR CONSTANT _HF-WRITER"
+            ),
+            "_HF-ARENA ARENA-USED CONSTANT _HF-USED-BEFORE",
+            (
+                "4 1 0 _HF-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _HF-BEGIN-IOR CONSTANT _HF-TX"
+            ),
+            "DEPTH CONSTANT _HF-DEPTH-BEFORE",
+            (
+                f'S" {replacement.decode()}" {write_offset} '
+                f"{inode_number} {generation} {seconds} {nanoseconds} "
+                "_HF-TX _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _HF-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _HF-DEPTH-AFTER",
+            (
+                "0 _HF-WRITER _EXT4-JWR-META-IMAGE "
+                "CONSTANT _HF-BITMAP"
+            ),
+            "1 _HF-WRITER _EXT4-JWR-META-IMAGE CONSTANT _HF-GDT",
+            "2 _HF-WRITER _EXT4-JWR-META-IMAGE CONSTANT _HF-SUPER",
+            (
+                "3 _HF-WRITER _EXT4-JWR-META-IMAGE "
+                "CONSTANT _HF-INODE-IMAGE"
+            ),
+            (
+                "0 _HF-WRITER _EXT4-JWR-DATA-IMAGE "
+                "CONSTANT _HF-DATA-IMAGE"
+            ),
+            (
+                f"_HF-INODE-IMAGE {inode_block_offset} + "
+                "CONSTANT _HF-RECORD"
+            ),
+            "_HF-RECORD _EXT4-I.BLOCK + CONSTANT _HF-ROOT",
+            (
+                _forth_conjunction(
+                    [
+                        "_HF-MOUNT-IOR 0=",
+                        "_HF-WRITER-IOR 0=",
+                        "_HF-BEGIN-IOR 0=",
+                        "_HF-STAGE-IOR 0=",
+                        "_HF-DEPTH-BEFORE _HF-DEPTH-AFTER =",
+                        (
+                            "_HF-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-STAGING ="
+                        ),
+                        "_HF-WRITER _EXT4-JWR.META-USED + @ 4 =",
+                        "_HF-WRITER _EXT4-JWR.META-ACTIVE + @ 4 =",
+                        "_HF-WRITER _EXT4-JWR.DATA-USED + @ 1 =",
+                        "_HF-WRITER _EXT4-JWR.DATA-ACTIVE + @ 1 =",
+                        "_HF-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
+                        "_HF-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                        "_HF-WRITER _EXT4-JTX-TABLES-VALID?",
+                        (
+                            "0 _HF-WRITER _EXT4-JWR-META-ENTRY @ "
+                            f"{bitmap_home} ="
+                        ),
+                        (
+                            "1 _HF-WRITER _EXT4-JWR-META-ENTRY @ "
+                            f"{gdt_home} ="
+                        ),
+                        (
+                            "2 _HF-WRITER _EXT4-JWR-META-ENTRY @ "
+                            f"{super_home} ="
+                        ),
+                        (
+                            "3 _HF-WRITER _EXT4-JWR-META-ENTRY @ "
+                            f"{inode_home} ="
+                        ),
+                        (
+                            "0 _HF-WRITER _EXT4-JWR-DATA-ENTRY @ "
+                            f"{candidate} ="
+                        ),
+                        (
+                            "_HF-BITMAP _HF-WRITER _EXT4-JTX-IMAGE-CRC "
+                            f"{expected_bitmap_crc} ="
+                        ),
+                        (
+                            "_HF-GDT _HF-WRITER _EXT4-JTX-IMAGE-CRC "
+                            f"{expected_gdt_crc} ="
+                        ),
+                        (
+                            "_HF-SUPER _HF-WRITER _EXT4-JTX-IMAGE-CRC "
+                            f"{expected_super_crc} ="
+                        ),
+                        (
+                            "_HF-INODE-IMAGE _HF-WRITER "
+                            "_EXT4-JTX-IMAGE-CRC "
+                            f"{expected_inode_home_crc} ="
+                        ),
+                        (
+                            "_HF-DATA-IMAGE _HF-WRITER "
+                            "_EXT4-JTX-IMAGE-CRC "
+                            f"{expected_data_crc} ="
+                        ),
+                        f"_HF-BITMAP {block_index} 1 _EXT4-BIT-RANGE-SET?",
+                        (
+                            "_HF-GDT _EXT4-GD.FREE-BLOCKS-LO + W@ "
+                            f"{group_free_after & 0xFFFF} ="
+                        ),
+                        (
+                            "_HF-GDT _EXT4-GD.FREE-BLOCKS-HI + W@ "
+                            f"{group_free_after >> 16} ="
+                        ),
+                        (
+                            "_HF-SUPER _EXT4-SB.FREE-BLOCKS-LO + L@ "
+                            f"{super_free_after} ="
+                        ),
+                        "_HF-SUPER _EXT4-SB.FREE-BLOCKS-HI + L@ 0=",
+                        "_HF-RECORD _EXT4-I.BLOCKS-LO + L@ 6 =",
+                        "_HF-RECORD _EXT4-I.BLOCKS-HI + W@ 0=",
+                        "_HF-RECORD _EXT4-I.SIZE-LO + L@ 3072 =",
+                        "_HF-RECORD _EXT4-I.SIZE-HI + L@ 0=",
+                        "_HF-ROOT W@ _EXT4-EXTENT-MAGIC =",
+                        "_HF-ROOT 2 + W@ 3 =",
+                        "_HF-ROOT 4 + W@ 4 =",
+                        "_HF-ROOT 6 + W@ 0=",
+                        "_HF-ROOT 12 + L@ 0=",
+                        "_HF-ROOT 16 + W@ 1 =",
+                        "_HF-ROOT 18 + W@ 0=",
+                        "_HF-ROOT 20 + L@ 1348 =",
+                        "_HF-ROOT 24 + L@ 1 =",
+                        "_HF-ROOT 28 + W@ 1 =",
+                        "_HF-ROOT 30 + W@ 0=",
+                        f"_HF-ROOT 32 + L@ {candidate} =",
+                        "_HF-ROOT 36 + L@ 2 =",
+                        "_HF-ROOT 40 + W@ 1 =",
+                        "_HF-ROOT 42 + W@ 0=",
+                        "_HF-ROOT 44 + L@ 1350 =",
+                        (
+                            "_HF-RECORD _EXT4-I.CTIME + L@ "
+                            f"{low_seconds} ="
+                        ),
+                        (
+                            "_HF-RECORD _EXT4-I.MTIME + L@ "
+                            f"{low_seconds} ="
+                        ),
+                        (
+                            "_HF-RECORD _EXT4-I.CTIME-EXTRA + L@ "
+                            f"{extra_time} ="
+                        ),
+                        (
+                            "_HF-RECORD _EXT4-I.MTIME-EXTRA + L@ "
+                            f"{extra_time} ="
+                        ),
+                        (
+                            "_HF-RECORD _EXT4-I.CSUM-LO + W@ "
+                            f"{expected_checksum_low} ="
+                        ),
+                        (
+                            "_HF-RECORD _EXT4-I.CSUM-HI + W@ "
+                            f"{expected_checksum_high} ="
+                        ),
+                        f"_HF-DATA-IMAGE {block_offset} _EXT4-BYTES-ZERO?",
+                        (
+                            f'_HF-DATA-IMAGE {block_offset} + S" '
+                            f'{replacement.decode()}" _EXT4-BYTES=?'
+                        ),
+                        (
+                            f"_HF-DATA-IMAGE {block_offset + len(replacement)} + "
+                            f"{block_size - block_offset - len(replacement)} "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_HF-CTX _EXT4-C.FREE-BLOCKS + @ "
+                            "_HF-CONTEXT-FREE ="
+                        ),
+                        (
+                            "_HF-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.FREE-BLOCKS-LO + L@ "
+                            "_HF-CACHED-SUPER-FREE ="
+                        ),
+                        "_HF-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-ONEBLOCK-HOLE-FILL-STAGED" THEN'
+            ),
+            "_HF-TX _EXT4-JTX-ABORT CONSTANT _HF-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_HF-ABORT-IOR 0=",
+                        (
+                            "_HF-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_HF-WRITER _EXT4-JWR-TRANSACTION-CLEAN?",
+                        "_HF-WRITER _EXT4-JWR-VALID?",
+                        "_HF-ARENA ARENA-USED _HF-USED-BEFORE =",
+                        (
+                            "_HF-WRITER _EXT4-JWR.SCRATCH-A + @ "
+                            f"{block_size} _EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_HF-WRITER _EXT4-JWR.SCRATCH-B + @ "
+                            f"{block_size} _EXT4-BYTES-ZERO?"
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-ONEBLOCK-HOLE-FILL-ABORTED" THEN'
+            ),
+        ],
+        patches=((candidate * block_size, bytes((0xA5,)) * block_size),),
+    )
+    _assert_emitted(output, "EXT4-TYPED-ONEBLOCK-HOLE-FILL-STAGED")
+    _assert_emitted(output, "EXT4-TYPED-ONEBLOCK-HOLE-FILL-ABORTED")
 
 
 def test_typed_one_block_write_stages_ordered_rmw_and_inode_times(
