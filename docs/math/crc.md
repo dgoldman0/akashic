@@ -12,17 +12,21 @@ REQUIRE crc.f
 
 ## Algorithms
 
-All three algorithms are MSB-first and non-reflected.
+`CRC32` and `CRC32C` use the standard reflected tuples. `CRC64` is the distinct
+non-reflected CRC-64/WE algorithm; it is not a compatibility alias for either
+32-bit mode.
 
 | Word | Polynomial | Init | Xorout | `"123456789"` |
 |---|---:|---:|---:|---:|
-| `CRC32` | `0x04C11DB7` | `0xFFFFFFFF` | `0xFFFFFFFF` | `0xFC891918` |
-| `CRC32C` | `0x1EDC6F41` | `0xFFFFFFFF` | `0xFFFFFFFF` | `0x05440F15` |
+| `CRC32` | `0xEDB88320` (reciprocal) | `0xFFFFFFFF` | `0xFFFFFFFF` | `0xCBF43926` |
+| `CRC32C` | `0x82F63B78` (reciprocal) | `0xFFFFFFFF` | `0xFFFFFFFF` | `0xE3069283` |
 | `CRC64` | `0x42F0E1EBA9EA3693` | `0xFFFFFFFFFFFFFFFF` | `0xFFFFFFFFFFFFFFFF` | `0x62EC59E3F1A4F00A` |
 
-These parameter sets correspond to CRC-32/BZIP2, non-reflected Castagnoli,
-and CRC-64/WE. In particular, `CRC32C` does not produce the reflected
-CRC-32C/iSCSI check value.
+These parameter sets correspond to CRC-32/ISO-HDLC (IEEE), CRC-32C/iSCSI
+(Castagnoli), and CRC-64/WE. Akashic does not retain public aliases for the old
+non-reflected CRC-32/BZIP2 or non-reflected Castagnoli words: this project is
+unreleased, and carrying the former meanings under compatibility names would
+make new storage-format code needlessly ambiguous.
 
 ## Hardware path
 
@@ -33,19 +37,22 @@ to `CRC-FEED-BYTE`, which issues `CRC.B`; no zero padding or software CRC
 transition is used. `CRC-FINAL@` finalizes and returns the result as one
 accelerator operation.
 
-The low-level transaction is:
+The ordinary finalized transaction is:
 
 ```forth
-polynomial CRC-POLY!
-initial-value CRC-INIT!
-data ... CRC-FEED / CRC-FEED-BYTE
+mode CRC-MODE!       ( -- status )
+CRC-RESET            ( -- status )
+data ... CRC-FEED / CRC-FEED-BYTE  ( -- status )
 CRC-FINAL@  ( -- crc )
 ```
 
-`CRC-INIT!` accepts an arbitrary accumulator. This is what allows the
-incremental API to restore a finalized CRC and continue it. MegaPad arbitrates
-the transaction from polynomial selection through finalization, so another
-core cannot change its mode or accumulator midway through the operation.
+Akashic checks every status returned by `CRC-MODE!`, `CRC-RESET`, `CRC-INIT!`,
+`CRC-FEED`, `CRC-FEED-BYTE`, and `CRC-RAW-FINAL@`, throwing a nonzero status
+unchanged. `CRC-FINAL@` is the one result-only operation. `CRC-INIT!` accepts
+an arbitrary accumulator; the incremental and raw APIs use it to restore or
+install caller state. MegaPad arbitrates the transaction from mode selection
+through finalization, so another core cannot change its mode or accumulator
+midway through the operation.
 
 When Akashic is built with guarded wrappers enabled, one-shot and incremental
 calls are scoped by the module guard. A streaming `BEGIN` acquires that guard
@@ -55,28 +62,33 @@ call made while that task owns a stream, and a mismatched-family `ADD` or `END`
 throw the stream-state error `-258`. Rejected nested or cross-family calls leave
 the original stream active and unchanged.
 
-If a guarded hardware computation throws after acquisition, Akashic attempts
-to finalize and discard the partial accumulator as the same hardware owner,
-releases the module guard, and rethrows the original error. This gives ordinary
-buffer and argument faults a bounded unwind path. Raw BIOS CRC sequences still
-follow MegaPad's lower-level rule: the machine does not automatically release a
-micro-cluster transaction on an exception, and a failed cleanup itself requires
-same-owner recovery.
+If a guarded hardware computation throws after Akashic successfully acquires
+the CRC engine, Akashic attempts to finalize and discard the partial
+accumulator as the same hardware owner, releases the module guard, and rethrows
+the original error. Acquisition is tracked explicitly: when `CRC-MODE!`
+returns `STATE/OWNER`, Akashic does not finalize a transaction that the task
+already owned through a direct BIOS sequence. This gives ordinary buffer and
+argument faults a bounded unwind path without disturbing unrelated ownership.
+Raw BIOS CRC sequences still follow MegaPad's lower-level rule: the machine
+does not automatically release a micro-cluster transaction on an exception,
+and a failed cleanup itself requires same-owner recovery.
 
 ## Constants
 
 ```forth
-CRC-POLY-CRC32   ( -- 0 )
-CRC-POLY-CRC32C  ( -- 1 )
-CRC-POLY-CRC64   ( -- 2 )
+CRC-MODE-CRC32   ( -- 4 )
+CRC-MODE-CRC32C  ( -- 5 )
+CRC-MODE-CRC64   ( -- 2 )
 
 CRC32-INIT-VAL   ( -- 0xFFFFFFFF )
 CRC64-INIT-VAL   ( -- 0xFFFFFFFFFFFFFFFF )
 ```
 
-The polynomial constants are the selector values accepted by
-`CRC-POLY!`. The init constants are also the xorout masks for their respective
-widths.
+The mode constants are the exact selector values accepted by `CRC-MODE!`:
+modes 4 and 5 are reflected IEEE and Castagnoli, while mode 2 remains
+non-reflected CRC-64/WE. The init constants are also the xorout masks for their
+respective widths. These names intentionally expose the current hardware
+vocabulary; there are no aliases for the removed `CRC-POLY!` interface.
 
 ## One-shot API
 
@@ -92,8 +104,32 @@ error `-24`. Length zero is valid and returns zero for all three parameter
 sets.
 
 ```forth
-S" 123456789" CRC32  \ 0xFC891918
+S" 123456789" CRC32  \ 0xCBF43926
 ```
+
+## Raw seeded CRC-32C
+
+```forth
+CRC32C-RAW  ( seed data len -- raw )
+```
+
+`CRC32C-RAW` selects reflected Castagnoli mode, installs the caller-supplied
+raw accumulator with `CRC-INIT!`, feeds exactly `len` bytes, and publishes the
+raw accumulator through `CRC-RAW-FINAL@`. It does not apply xorout. The low 32
+bits of `seed` are the initial accumulator; hardware zero-extends the returned
+raw result to one cell.
+
+Because raw finalization also releases the shared CRC transaction, its result
+can seed the next fragment without holding the engine across an intervening
+disk read:
+
+```forth
+CRC32-INIT-VAL first first-len CRC32C-RAW
+               second second-len CRC32C-RAW  ( -- raw )
+```
+
+With the all-ones seed, `"123456789"` produces raw `0x1CF96D7C`. Applying
+`CRC32-INIT-VAL XOR` to that value gives finalized CRC-32C `0xE3069283`.
 
 ## Streaming API
 
@@ -160,8 +196,9 @@ the caller's buffer and return its length. They do not add a terminator.
 
 | Word | Stack | Purpose |
 |---|---|---|
-| `CRC32` | `( data len -- crc )` | One-shot CRC-32/BZIP2 |
-| `CRC32C` | `( data len -- crc )` | One-shot non-reflected CRC-32C |
+| `CRC32` | `( data len -- crc )` | One-shot reflected CRC-32/ISO-HDLC |
+| `CRC32C` | `( data len -- crc )` | One-shot reflected CRC-32C |
+| `CRC32C-RAW` | `( seed data len -- raw )` | Caller-seeded reflected CRC-32C without xorout |
 | `CRC64` | `( data len -- crc )` | One-shot CRC-64/WE |
 | `CRC32-BEGIN` / `ADD` / `END` | see above | Streaming CRC-32 |
 | `CRC32C-BEGIN` / `ADD` / `END` | see above | Streaming CRC-32C |

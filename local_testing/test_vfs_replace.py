@@ -15,9 +15,19 @@ import sys
 import time
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 AKASHIC_ROOT = Path(__file__).resolve().parents[1]
-MEGAPAD_ROOT = Path(os.environ.get("MEGAPAD_ROOT", PROJECT_ROOT / "megapad"))
+configured_megapad_root = os.environ.get("MEGAPAD_ROOT")
+if not configured_megapad_root:
+    raise RuntimeError(
+        "MEGAPAD_ROOT must name the explicitly selected qualified MegaPad worktree"
+    )
+MEGAPAD_ROOT = Path(configured_megapad_root).expanduser().resolve()
+for required in ("asm.py", "system.py", "bios.asm", "kdos.f"):
+    if not (MEGAPAD_ROOT / required).is_file():
+        raise RuntimeError(
+            f"MegaPad checkout not found at {MEGAPAD_ROOT}; "
+            "set MEGAPAD_ROOT to the qualified emulator worktree"
+        )
 sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from asm import assemble  # noqa: E402
@@ -35,6 +45,7 @@ CRC_F = AKASHIC_ROOT / "akashic" / "math" / "crc.f"
 SHA3_F = AKASHIC_ROOT / "akashic" / "math" / "sha3.f"
 VFS_F = AKASHIC_ROOT / "akashic" / "utils" / "fs" / "vfs.f"
 REPLACE_F = AKASHIC_ROOT / "akashic" / "utils" / "fs" / "vfs-replace.f"
+EXT_MEM_SIZE = 128 * 1024 * 1024
 
 
 def _forth_lines(path: Path) -> list[str]:
@@ -112,7 +123,7 @@ def build_snapshot() -> None:
     bios = assemble(BIOS_PATH.read_text())
     system = MegapadSystem(
         ram_size=4 * 1024 * 1024,
-        ext_mem_size=16 * 1024 * 1024,
+        ext_mem_size=EXT_MEM_SIZE,
         num_cores=2,
     )
     output = _capture_uart(system)
@@ -225,6 +236,9 @@ def build_snapshot() -> None:
         line for line in transcript.splitlines()
         if "? (not found)" in line.lower()
         or line.strip().lower() == "stack underflow"
+        or line.strip().lower() == "stack overflow"
+        or line.strip().lower() == "dictionary full"
+        or line.strip().lower() == "insufficient ext mem for userland dictionary"
         or "branch offset overflow" in line.lower()
     ]
     if pos < len(data) or not system.cpu.idle or errors:
@@ -252,7 +266,7 @@ def run_forth(lines: list[str], max_steps: int = 120_000_000) -> str:
     bios, memory, cpu_states, ext_memory = _snapshot
     system = MegapadSystem(
         ram_size=4 * 1024 * 1024,
-        ext_mem_size=16 * 1024 * 1024,
+        ext_mem_size=EXT_MEM_SIZE,
         num_cores=2,
     )
     output = _capture_uart(system)

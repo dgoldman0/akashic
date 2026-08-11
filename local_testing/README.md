@@ -444,6 +444,10 @@ empty/null policy separation, half-open overlap and adjacency, borrowed span
 geometry, independent bounded sets and writers, sticky all-or-nothing capacity
 failure, decimal cell extrema, exact schema bytes, UTF-8/type/length rejection,
 and the distinct 110-byte semantic RREF and 516-byte VFS-locator text bounds.
+It also qualifies complete owned-value graph geometry across nested maps,
+lists, blobs, and resource identifiers: root/allocation overlap, independent
+graphs, malformed shared and partial ownership, fail-closed re-entry, and
+dynamic scratch growth beyond the inline work and span areas.
 
 ### Library L12 qualification
 

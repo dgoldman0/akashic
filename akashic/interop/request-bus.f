@@ -28,6 +28,7 @@ REQUIRE ../concurrency/guard.f
 13 CONSTANT CBUS-S-EXPIRED-AUTHORITY
 14 CONSTANT CBUS-S-CONSUMED-AUTHORITY
 15 CONSTANT CBUS-S-AMBIGUOUS-HANDLER
+16 CONSTANT CBUS-S-NO-EFFECT
 
 -258 CONSTANT CBUS-E-DISPATCH-ACTIVE
 
@@ -564,8 +565,27 @@ VARIABLE _CBC-DESC
     DUP >R PTURN-S-INDETERMINATE SWAP PTURN-TRANSITION DROP
     MS@ R> PTURN.COMPLETED-MS ! ;
 
+\ A handler may successfully return a typed receipt while reporting that it
+\ did not publish a new owner revision.  An Agent turn has already entered
+\ RUNNING before the handler, so close that attempt explicitly as rejected;
+\ leaving it RUNNING would falsely describe an effect that can still commit.
+: _CBUS-TURN-REJECT-NO-EFFECT  ( -- )
+    _CBD-REQ @ CBR.PRINCIPAL @ CPRINC-AGENT <> IF EXIT THEN
+    _CBUS-TURN-REQUIRED? 0= IF EXIT THEN
+    _CBD-REQ @ CBR.TURN @ DUP 0= IF DROP EXIT THEN
+    DUP PTURN.STATE @ PTURN-S-RUNNING <> IF DROP EXIT THEN
+    DUP >R
+    PTURN-S-REJECTED SWAP PTURN-TRANSITION 0= IF R> DROP EXIT THEN
+    CBUS-S-NO-EFFECT R@ PTURN.STATUS !
+    MS@ R> PTURN.COMPLETED-MS ! ;
+
+: CBUS-RESULT-BEARING?  ( status -- flag )
+    DUP CBUS-S-OK = SWAP CBUS-S-NO-EFFECT = OR ;
+
 : _CBUS-COMPLETE  ( status -- )
-    DUP CBUS-S-OK <> IF _CBD-REQ @ CBR.RESULT CV-FREE THEN
+    DUP CBUS-RESULT-BEARING? 0= IF
+        _CBD-REQ @ CBR.RESULT CV-FREE
+    THEN
     _CBD-REQ @ CBR.STATUS !
     MS@ _CBD-REQ @ CBR.END-MS !
     _CBD-REQ @ CBR-LIFECYCLE-COMPLETE ;
@@ -668,7 +688,7 @@ VARIABLE _CBC-DESC
         _CBUS-TURN-FAIL
         CBUS-S-FAILED DUP _CBUS-COMPLETE EXIT
     THEN
-    _CBD-STATUS @ DUP CBUS-S-OK = IF
+    _CBD-STATUS @ DUP CBUS-RESULT-BEARING? IF
         _CBD-REQ @ CBR.RESULT _CBD-CAP @ CAP.OUT-SCHEMA @ ?DUP IF
             CS-VALIDATE-DEEP ?DUP IF
                 _CBD-REQ @ CBR.RESULT CV-TYPE@ CV-T-INT = IF
@@ -681,18 +701,23 @@ VARIABLE _CBC-DESC
                 DROP CBUS-S-FAILED DUP _CBUS-COMPLETE EXIT
             THEN
         ELSE DROP THEN
-        _CBD-CAP @ CAP.EFFECTS @
-        CAP-E-NAVIGATE CAP-E-MUTATE OR CAP-E-PERSIST OR
-        CAP-E-DESTRUCTIVE OR AND IF
-            _CBD-INST @ CINST-TOUCH
-        THEN
-        _CBD-INST @ CINST.REVISION @ _CBD-REQ @ CBR.ACTUAL-REV !
-        _CBD-REQ @ CBR.TURN @ IF
-            _CBD-INST @ CINST.REVISION @ MS@
-            _CBD-REQ @ CBR.TURN @ PTURN-OWNER-COMMIT 0= IF
-                _CBUS-TURN-FAIL
-                DROP CBUS-S-FAILED DUP _CBUS-COMPLETE EXIT
+        DUP CBUS-S-OK = IF
+            _CBD-CAP @ CAP.EFFECTS @
+            CAP-E-NAVIGATE CAP-E-MUTATE OR CAP-E-PERSIST OR
+            CAP-E-DESTRUCTIVE OR AND IF
+                _CBD-INST @ CINST-TOUCH
             THEN
+            _CBD-INST @ CINST.REVISION @ _CBD-REQ @ CBR.ACTUAL-REV !
+            _CBD-REQ @ CBR.TURN @ IF
+                _CBD-INST @ CINST.REVISION @ MS@
+                _CBD-REQ @ CBR.TURN @ PTURN-OWNER-COMMIT 0= IF
+                    _CBUS-TURN-FAIL
+                    DROP CBUS-S-FAILED DUP _CBUS-COMPLETE EXIT
+                THEN
+            THEN
+        ELSE
+            _CBD-INST @ CINST.REVISION @ _CBD-REQ @ CBR.ACTUAL-REV !
+            _CBUS-TURN-REJECT-NO-EFFECT
         THEN
     ELSE
         _CBUS-TURN-FAIL

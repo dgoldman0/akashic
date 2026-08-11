@@ -55,6 +55,29 @@ local_testing/*
 !local_testing/test_phase6_suite.py
 !local_testing/README.md
 !local_testing/akashic_tui.py
+!local_testing/test_observatory_worlds_slice.py
+!local_testing/test_rabbit_streams_worlds_slice.py
+!local_testing/rabbit-core-test.f
+!local_testing/rabbit-servsub-test.f
+!local_testing/rabbit-cap-test.f
+!local_testing/rabbit-connector-test.f
+!local_testing/rabbit-burrow-test.f
+!local_testing/test_streams_rabbit_burrow.py
+!local_testing/rabbit-facet-mount-test.f
+!local_testing/test_streams_rabbit_facet_mount.py
+!local_testing/rabbit-remote-test.f
+!local_testing/test_streams_rabbit_remote_resource.py
+!local_testing/rabbit-remote-sub-test.f
+!local_testing/test_streams_rabbit_remote_subscription.py
+!local_testing/rabbit-remote-action-test.f
+!local_testing/test_streams_rabbit_remote_action.py
+!local_testing/rabbit-action-mount-test.f
+!local_testing/test_streams_rabbit_action_mount.py
+!local_testing/rabbit-mounted-test.f
+!local_testing/test_streams_rabbit_mounted_read.py
+!local_testing/rabbit-landing3-test.f
+!local_testing/rabbit-l3-mux-test.f
+!local_testing/test_streams_rabbit_landing3.py
 # Refactor architecture inventory and ratchet
 !local_testing/forth_dependencies.py
 !local_testing/refactor_inventory.py
@@ -65,6 +88,7 @@ local_testing/*
 !local_testing/test_refactor_functional_baseline.py
 !local_testing/gate2a-contracts.f
 !local_testing/gate3a-resource-contracts.f
+!local_testing/sha3-checked-test.f
 !local_testing/library_managed_two_boot.py
 !local_testing/vfs-ram-capacity.f
 !local_testing/vfs-fixed-snapshot.f

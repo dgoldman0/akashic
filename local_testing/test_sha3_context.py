@@ -38,6 +38,7 @@ def _assert_source_contracts() -> None:
     assert "REQUIRE sha3.f" not in source
     for word in (
         "SHA3-256-CONTEXT-SIZE",
+        "SHA3-CONTEXT-S-HARDWARE",
         "SHA3-256-CONTEXT-VALID?",
         "SHA3-256-CONTEXT-INIT",
         "SHA3-256-CONTEXT-UPDATE",
@@ -47,6 +48,15 @@ def _assert_source_contracts() -> None:
         assert word in source
     for forbidden in ("_SHA3C.SELF", "_SHA3C.XT", "_SHA3C.CALLBACK"):
         assert forbidden not in source
+    for removed_round_word in (
+        "_SHA3C-THETA",
+        "_SHA3C-RHO-PI-STEP",
+        "_SHA3C-CHI",
+        "_SHA3C-RC",
+    ):
+        assert removed_round_word not in source
+    assert "DUP _SHA3C.STATE KECCAK-F1600" in source
+    assert "DUP SHA3-256-CONTEXT-SIZE 0 FILL" in source
 
 
 def main() -> int:

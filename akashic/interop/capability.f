@@ -8,6 +8,8 @@ REQUIRE schema.f
 REQUIRE ../runtime/instance.f
 REQUIRE ../runtime/concurrency-class.f
 REQUIRE ../text/utf8.f
+REQUIRE ../utils/memory-span.f
+REQUIRE ../concurrency/guard.f
 
 1 CONSTANT CAP-K-COMMAND
 2 CONSTANT CAP-K-RESOURCE
@@ -147,3 +149,86 @@ VARIABLE _CCF-D
         DROP
     LOOP
     0 ;
+
+\ Capability descriptors borrow identifier, presentation-text, and schema
+\ storage.  These predicates let an owner prove that the complete borrowed
+\ read graph is disjoint from storage another subsystem may mutate or wipe.
+\ Invalid query geometry or invalid metadata reports overlap conservatively.
+VARIABLE _CAPGO-A
+VARIABLE _CAPGO-U
+VARIABLE _CAPGO-CAP
+VARIABLE _CAPGO-DESC
+
+: _CAPGO-SPAN?  ( address bytes -- flag )
+    _CAPGO-A @ _CAPGO-U @ 2SWAP MSPAN-OVERLAP? ;
+
+: _CAPGO-TEXT-SPAN?  ( address bytes -- flag )
+    DUP 0< IF 2DROP -1 EXIT THEN
+    DUP 0= IF 2DROP 0 EXIT THEN
+    OVER 0= IF 2DROP -1 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP -1 EXIT THEN
+    _CAPGO-SPAN? ;
+
+: _CAPGO-QUERY?  ( -- flag )
+    _CAPGO-U @ 0< IF 0 EXIT THEN
+    _CAPGO-U @ IF _CAPGO-A @ 0= IF 0 EXIT THEN THEN
+    _CAPGO-A @ _CAPGO-U @ MSPAN-NONWRAPPING? ;
+
+: _CAPGO-CAP?  ( cap -- flag )
+    DUP CAP-DESC-VALID? 0= IF DROP -1 EXIT THEN
+    DUP _CAPGO-CAP ! CAP-DESC _CAPGO-SPAN? IF -1 EXIT THEN
+    _CAPGO-CAP @ DUP CAP.ID-A @ SWAP CAP.ID-U @
+        _CAPGO-TEXT-SPAN? IF -1 EXIT THEN
+    _CAPGO-CAP @ DUP CAP.TITLE-A @ SWAP CAP.TITLE-U @
+        _CAPGO-TEXT-SPAN? IF -1 EXIT THEN
+    _CAPGO-CAP @ DUP CAP.DESC-A @ SWAP CAP.DESC-U @
+        _CAPGO-TEXT-SPAN? IF -1 EXIT THEN
+    _CAPGO-CAP @ CAP.IN-SCHEMA @ ?DUP IF
+        _CAPGO-A @ _CAPGO-U @ ROT
+            CS-SCHEMA-GRAPH-SPAN-OVERLAP? IF -1 EXIT THEN
+    THEN
+    _CAPGO-CAP @ CAP.OUT-SCHEMA @ ?DUP IF
+        _CAPGO-A @ _CAPGO-U @ ROT
+            CS-SCHEMA-GRAPH-SPAN-OVERLAP? IF -1 EXIT THEN
+    THEN
+    0 ;
+
+: _CAP-GRAPH-SPAN-OVERLAP?  ( address bytes cap -- flag )
+    _CAPGO-CAP ! _CAPGO-U ! _CAPGO-A !
+    _CAPGO-QUERY? 0= IF -1 EXIT THEN
+    _CAPGO-CAP @ _CAPGO-CAP? ;
+
+: _COMP-CAPS-GRAPH-SPAN-OVERLAP?
+  ( address bytes comp-desc -- flag )
+    _CAPGO-DESC ! _CAPGO-U ! _CAPGO-A !
+    _CAPGO-QUERY? 0= IF -1 EXIT THEN
+    _CAPGO-DESC @ COMP-CAPS-VALID? 0= IF -1 EXIT THEN
+    _CAPGO-DESC @ COMP-DESC _CAPGO-SPAN? IF -1 EXIT THEN
+    _CAPGO-DESC @ DUP COMP.ID-A @ SWAP COMP.ID-U @
+        _CAPGO-TEXT-SPAN? IF -1 EXIT THEN
+    _CAPGO-DESC @ DUP COMP.VERSION-A @ SWAP COMP.VERSION-U @
+        _CAPGO-TEXT-SPAN? IF -1 EXIT THEN
+    _CAPGO-DESC @ COMP.CAPS-N @ DUP IF
+        CAP-DESC * _CAPGO-DESC @ COMP.CAPS-A @ SWAP
+        _CAPGO-SPAN? IF -1 EXIT THEN
+    ELSE
+        DROP
+    THEN
+    _CAPGO-DESC @ COMP.CAPS-N @ 0 ?DO
+        I _CAPGO-DESC @ COMP-CAP-NTH _CAPGO-CAP? IF
+            -1 UNLOOP EXIT
+        THEN
+    LOOP
+    0 ;
+
+GUARD _capgo-guard
+
+' _CAP-GRAPH-SPAN-OVERLAP? CONSTANT _cap-graph-overlap-xt
+' _COMP-CAPS-GRAPH-SPAN-OVERLAP? CONSTANT _comp-caps-graph-overlap-xt
+
+: CAP-GRAPH-SPAN-OVERLAP?  ( address bytes cap -- flag )
+    _cap-graph-overlap-xt _capgo-guard WITH-GUARD ;
+
+: COMP-CAPS-GRAPH-SPAN-OVERLAP?
+  ( address bytes comp-desc -- flag )
+    _comp-caps-graph-overlap-xt _capgo-guard WITH-GUARD ;

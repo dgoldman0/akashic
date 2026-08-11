@@ -17,6 +17,12 @@
 \   SHA3-512-BEGIN  ( -- )            start streaming SHA3-512
 \   SHA3-512-ADD    ( addr len -- )   feed data
 \   SHA3-512-END    ( dst -- )        finalize, 64 bytes to dst
+\   SHAKE-128-BEGIN ( -- )            start streaming SHAKE-128
+\   SHAKE-128-ADD   ( addr len -- )   feed data
+\   SHAKE-128-END   ( dst dlen -- )   finalize and read dlen bytes
+\   SHAKE-256-BEGIN ( -- )            start streaming SHAKE-256
+\   SHAKE-256-ADD   ( addr len -- )   feed data
+\   SHAKE-256-END   ( dst dlen -- )   finalize and read dlen bytes
 \
 \  Public API — HMAC:
 \   SHA3-256-HMAC   ( key klen data dlen dst -- ) HMAC-SHA3-256
@@ -39,13 +45,15 @@
 \   SHA3-512-LEN    ( -- 64 )
 \   SHA3-512-HEX-LEN ( -- 128 )
 \
-\  BIOS primitives used:
-\   SHA3-INIT  SHA3-UPDATE  SHA3-FINAL  SHA3-MODE!  SHA3-MODE@
-\   SHA3-DOUT@  SHA3-SQUEEZE-NEXT
+\  Checked BIOS primitives used:
+\   SHA3-BEGIN  SHA3-UPDATE  SHA3-FINAL  SHAKE-FINAL
+\   SHAKE-READ  SHA3-CLEAR
+\  Checked KDOS composites used:
+\   SHA3  SHA3-512  HMAC
 \
-\  The BIOS provides the low-level MMIO words.  KDOS adds SHA3,
-\  SHA3-512, SHAKE128, SHAKE256.  This module wraps them with a
-\  clean Akashic-style API and adds hex, compare, and HMAC helpers.
+\  Every nonzero checked status is thrown unchanged so the established
+\  result-only Akashic API remains intact.  SHAKE output is read in bounded
+\  chunks and every accepted SHAKE transaction ends in SHA3-CLEAR.
 \
 \  Not reentrant.  One hash computation at a time.
 \ =================================================================
@@ -60,6 +68,24 @@ PROVIDED akashic-sha3
 64  CONSTANT SHA3-256-HEX-LEN
 64  CONSTANT SHA3-512-LEN
 128 CONSTANT SHA3-512-HEX-LEN
+
+: _SHA3-CHECK-STATUS  ( status -- )
+    ?DUP IF THROW THEN ;
+
+\ Preserve the first operation failure when cleanup succeeds.  A cleanup
+\ failure takes precedence because the BIOS guard then remains fail-closed.
+: _SHA3-CLEAR-ERROR  ( status -- status )
+    >R
+    SHA3-CLEAR
+    DUP IF R> DROP EXIT THEN
+    DROP R> ;
+
+\ CALLER-SPAN-STATUS uses its protocol-neutral 0/2/3 namespace.  Translate
+\ it to the checked-crypto 0/3/4 namespace used by this module's throws.
+: _SHA3-OUTPUT-STATUS  ( address length -- status )
+    CALLER-SPAN-STATUS
+    DUP 2 = IF DROP CRYPTO-RANGE EXIT THEN
+    DUP 3 = IF DROP CRYPTO-PROTECTED THEN ;
 
 \ =====================================================================
 \  Internal: nibble-to-hex lookup
@@ -78,148 +104,105 @@ CREATE _SHA3-HEX
 
 \ SHA3-256-HASH ( src len dst -- )  SHA3-256 hash, 32 bytes to dst.
 : SHA3-256-HASH  ( src len dst -- )
-    >R
-    SHA3-256-MODE SHA3-MODE!
-    SHA3-INIT  SHA3-UPDATE
-    R> SHA3-FINAL ;
+    SHA3 _SHA3-CHECK-STATUS ;
 
 \ SHA3-512-HASH ( src len dst -- )  SHA3-512 hash, 64 bytes to dst.
 : SHA3-512-HASH  ( src len dst -- )
-    >R
-    SHA3-512-MODE SHA3-MODE!
-    SHA3-INIT  SHA3-UPDATE
-    R> SHA3-FINAL
-    SHA3-256-MODE SHA3-MODE! ;
+    SHA3-512 _SHA3-CHECK-STATUS ;
+
+\ Finish an accepted SHAKE transaction.  The complete destination is
+\ qualified before finalization so a later page/range failure cannot publish
+\ a prefix.  BIOS reads are deliberately capped at 32 bytes.
+: _SHA3-SHAKE-END-STATUS  ( dst dlen -- status )
+    2DUP _SHA3-OUTPUT-STATUS
+    DUP IF >R 2DROP R> _SHA3-CLEAR-ERROR EXIT THEN DROP
+    SHAKE-FINAL
+    DUP IF >R 2DROP R> _SHA3-CLEAR-ERROR EXIT THEN DROP
+    BEGIN DUP 0> WHILE
+        OVER OVER 32 MIN SHAKE-READ
+        DUP IF >R 2DROP R> _SHA3-CLEAR-ERROR EXIT THEN DROP
+        DUP 32 MIN >R
+        R@ -
+        SWAP R> + SWAP
+    REPEAT
+    2DROP
+    SHA3-CLEAR ;
+
+\ Absorb one SHAKE segment.  A checked UPDATE failure normally performs BIOS
+\ cleanup itself; the explicit CLEAR also covers every handled error path and
+\ is idempotent after successful cleanup.
+: _SHA3-SHAKE-UPDATE-STATUS  ( src len -- status )
+    SHA3-UPDATE
+    DUP IF _SHA3-CLEAR-ERROR THEN ;
+
+: _SHA3-SHAKE-STATUS  ( src len dst dlen mode -- status )
+    DUP SHA3-BEGIN
+    DUP IF >R 2DROP 2DROP DROP R> EXIT THEN DROP DROP
+    2DUP _SHA3-OUTPUT-STATUS
+    DUP IF >R 2DROP 2DROP R> _SHA3-CLEAR-ERROR EXIT THEN DROP
+    2SWAP SHA3-UPDATE
+    DUP IF >R 2DROP R> _SHA3-CLEAR-ERROR EXIT THEN DROP
+    _SHA3-SHAKE-END-STATUS ;
 
 \ SHAKE-128 ( src len dst dlen -- )  SHAKE-128 XOF, dlen bytes to dst.
-\   For dlen <= 32, uses the initial finalize output.
-\   For dlen > 32, reads 32-byte blocks via DOUT + SQUEEZE-NEXT.
 : SHAKE-128  ( src len dst dlen -- )
-    >R >R
-    SHAKE128-MODE SHA3-MODE!
-    SHA3-INIT  SHA3-UPDATE
-    R> R>                        ( dst dlen )
-    OVER SHA3-FINAL              ( dst dlen )
-    \ Now DOUT has first 32 bytes written to dst.
-    \ If dlen > 32, we need to stream additional blocks.
-    DUP 32 <= IF
-        2DROP
-    ELSE
-        \ Stream remaining bytes in 32-byte chunks
-        32 -  SWAP 32 +  SWAP   ( dst+32 remaining )
-        BEGIN DUP 0> WHILE
-            SHA3-SQUEEZE-NEXT
-            OVER SHA3-DOUT@
-            DUP 32 >= IF
-                SWAP 32 + SWAP  32 -
-            ELSE
-                \ Last partial block — already written full 32 bytes
-                \ by DOUT@, but we only needed 'remaining' bytes.
-                \ Since DOUT@ always writes 32 bytes and we allocated
-                \ enough space via dlen, this is fine.
-                DROP 0
-            THEN
-        REPEAT
-        2DROP
-    THEN
-    SHA3-256-MODE SHA3-MODE! ;
+    SHAKE128-MODE _SHA3-SHAKE-STATUS _SHA3-CHECK-STATUS ;
 
 \ SHAKE-256 ( src len dst dlen -- )  SHAKE-256 XOF, dlen bytes to dst.
 : SHAKE-256  ( src len dst dlen -- )
-    >R >R
-    SHAKE256-MODE SHA3-MODE!
-    SHA3-INIT  SHA3-UPDATE
-    R> R>                        ( dst dlen )
-    OVER SHA3-FINAL              ( dst dlen )
-    DUP 32 <= IF
-        2DROP
-    ELSE
-        32 -  SWAP 32 +  SWAP
-        BEGIN DUP 0> WHILE
-            SHA3-SQUEEZE-NEXT
-            OVER SHA3-DOUT@
-            DUP 32 >= IF
-                SWAP 32 + SWAP  32 -
-            ELSE
-                DROP 0
-            THEN
-        REPEAT
-        2DROP
-    THEN
-    SHA3-256-MODE SHA3-MODE! ;
+    SHAKE256-MODE _SHA3-SHAKE-STATUS _SHA3-CHECK-STATUS ;
 
 \ =====================================================================
 \  Streaming API
 \ =====================================================================
 
 : SHA3-256-BEGIN  ( -- )
-    SHA3-256-MODE SHA3-MODE!  SHA3-INIT ;
+    SHA3-256-MODE SHA3-BEGIN _SHA3-CHECK-STATUS ;
 
 : SHA3-256-ADD  ( addr len -- )
-    SHA3-UPDATE ;
+    SHA3-UPDATE _SHA3-CHECK-STATUS ;
 
 : SHA3-256-END  ( dst -- )
-    SHA3-FINAL ;
+    SHA3-FINAL _SHA3-CHECK-STATUS ;
 
 : SHA3-512-BEGIN  ( -- )
-    SHA3-512-MODE SHA3-MODE!  SHA3-INIT ;
+    SHA3-512-MODE SHA3-BEGIN _SHA3-CHECK-STATUS ;
 
 : SHA3-512-ADD  ( addr len -- )
-    SHA3-UPDATE ;
+    SHA3-UPDATE _SHA3-CHECK-STATUS ;
 
 : SHA3-512-END  ( dst -- )
-    SHA3-FINAL
-    SHA3-256-MODE SHA3-MODE! ;
+    SHA3-FINAL _SHA3-CHECK-STATUS ;
 
-\ =====================================================================
-\  HMAC-SHA3-256
-\ =====================================================================
-\  HMAC(K, m) = SHA3-256( (K ^ opad) || SHA3-256( (K ^ ipad) || m ) )
-\  Block size = SHA3-256 rate = 136 bytes.
+: SHAKE-128-BEGIN  ( -- )
+    SHAKE128-MODE SHA3-BEGIN _SHA3-CHECK-STATUS ;
 
-136 CONSTANT _SHA3-HMAC-BLKSZ
+: SHAKE-128-ADD  ( addr len -- )
+    _SHA3-SHAKE-UPDATE-STATUS _SHA3-CHECK-STATUS ;
 
-CREATE _SHA3-IPAD 136 ALLOT
-CREATE _SHA3-OPAD 136 ALLOT
-CREATE _SHA3-INNER 32 ALLOT
-VARIABLE _SHA3-PAD-PTR
-VARIABLE _SHA3-XBYTE
-VARIABLE _SHA3-HMAC-OUT
+: SHAKE-128-END  ( dst dlen -- )
+    _SHA3-SHAKE-END-STATUS _SHA3-CHECK-STATUS ;
 
-\ _SHA3-HMAC-PAD ( key-addr key-len pad-addr xor-byte -- )
-: _SHA3-HMAC-PAD
-    _SHA3-XBYTE !  _SHA3-PAD-PTR !
-    _SHA3-PAD-PTR @ _SHA3-HMAC-BLKSZ 0 FILL
-    0 DO
-        DUP I + C@
-        _SHA3-PAD-PTR @ I + C!
-    LOOP DROP
-    _SHA3-HMAC-BLKSZ 0 DO
-        _SHA3-PAD-PTR @ I + C@
-        _SHA3-XBYTE @ XOR
-        _SHA3-PAD-PTR @ I + C!
-    LOOP ;
+: SHAKE-256-BEGIN  ( -- )
+    SHAKE256-MODE SHA3-BEGIN _SHA3-CHECK-STATUS ;
+
+: SHAKE-256-ADD  ( addr len -- )
+    _SHA3-SHAKE-UPDATE-STATUS _SHA3-CHECK-STATUS ;
+
+: SHAKE-256-END  ( dst dlen -- )
+    _SHA3-SHAKE-END-STATUS _SHA3-CHECK-STATUS ;
 
 \ SHA3-256-HMAC ( key klen data dlen dst -- )
 : SHA3-256-HMAC  ( key klen data dlen dst -- )
-    _SHA3-HMAC-OUT !
-    >R >R                               ( key klen  R: dlen data )
-    2DUP _SHA3-IPAD 0x36 _SHA3-HMAC-PAD
-    _SHA3-OPAD 0x5C _SHA3-HMAC-PAD
-    SHA3-256-MODE SHA3-MODE!
-    SHA3-INIT
-    _SHA3-IPAD _SHA3-HMAC-BLKSZ SHA3-UPDATE
-    R> R> SHA3-UPDATE                    ( )
-    _SHA3-INNER SHA3-FINAL
-    SHA3-INIT
-    _SHA3-OPAD _SHA3-HMAC-BLKSZ SHA3-UPDATE
-    _SHA3-INNER 32 SHA3-UPDATE
-    _SHA3-HMAC-OUT @ SHA3-FINAL ;
+    HMAC _SHA3-CHECK-STATUS ;
 
 \ =====================================================================
 \  Hex conversion
 \ =====================================================================
 
+\ Stable bounds for callers that reject aliasing with dependency scratch.
+\ Guarded builds extend this private span through the guard defined below.
+CREATE _SHA3-PRIVATE-BEGIN 0 ALLOT
 VARIABLE _SHA3-HDST
 
 \ SHA3-256->HEX ( src dst -- n )
@@ -280,51 +263,56 @@ VARIABLE _SHA3-HDST
 : SHA3-256-COMPARE  ( a b -- flag )
     0
     32 0 DO
-        >R
-        OVER I + C@
-        OVER I + C@
-        XOR R> OR
+        2 PICK I + C@
+        2 PICK I + C@
+        XOR OR
     LOOP
-    >R 2DROP R>
-    0= IF TRUE ELSE FALSE THEN ;
+    NIP NIP 0= ;
 
 \ SHA3-512-COMPARE ( a b -- flag )
 \   Constant-time comparison of two 64-byte hashes.
 : SHA3-512-COMPARE  ( a b -- flag )
     0
     64 0 DO
-        >R
-        OVER I + C@
-        OVER I + C@
-        XOR R> OR
+        2 PICK I + C@
+        2 PICK I + C@
+        XOR OR
     LOOP
-    >R 2DROP R>
-    0= IF TRUE ELSE FALSE THEN ;
+    NIP NIP 0= ;
 
 \ Neutral scratch for compare-only hashing.  Guarded builds serialize this
 \ buffer with the accelerator, so domains do not need private digest globals.
 CREATE _SHA3-COMPARE-DIGEST SHA3-256-LEN ALLOT
+CREATE _SHA3-PRIVATE-END 0 ALLOT
 
 : SHA3-256-HASH-COMPARE  ( src len expected -- flag )
-    >R
-    _SHA3-COMPARE-DIGEST SHA3-256-HASH
-    _SHA3-COMPARE-DIGEST R> SHA3-256-COMPARE ;
+    2 PICK 2 PICK _SHA3-COMPARE-DIGEST SHA3-256-HASH
+    NIP NIP
+    _SHA3-COMPARE-DIGEST SHA3-256-COMPARE ;
 
 : SHA3-256-END-COMPARE  ( expected -- flag )
-    >R
     _SHA3-COMPARE-DIGEST SHA3-256-END
-    _SHA3-COMPARE-DIGEST R> SHA3-256-COMPARE ;
+    _SHA3-COMPARE-DIGEST SHA3-256-COMPARE ;
 
 \ ── Concurrency Guard ─────────────────────────────────────
-\ Spinning GUARD serialises all access to the shared Keccak
-\ state and hex-conversion buffer (_SHA3-HDST).
-\ One-shot words: WITH-GUARD (acquire-CATCH-release).
-\ Streaming: BEGIN acquires, END releases, ADD asserts ownership.
+\ Spinning GUARD serialises module scratch and enforces coherent Akashic
+\ stream families above the checked BIOS transaction owner.
+\ One-shot hardware words reject entry during an active Akashic stream.
+\ Streaming: BEGIN acquires, END releases, ADD asserts owner and family.
 \ Pure read / compare / print words are left unguarded.
-\ Error -258 = operation called without holding the guard.
+\ Error -258 = missing, nested, or mismatched stream ownership.
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
+
+0 CONSTANT _SHA3-STREAM-NONE
+1 CONSTANT _SHA3-STREAM-256
+2 CONSTANT _SHA3-STREAM-512
+3 CONSTANT _SHA3-STREAM-SHAKE128
+4 CONSTANT _SHA3-STREAM-SHAKE256
+VARIABLE _SHA3-STREAM-MODE
+VARIABLE _SHA3-BEGIN-MODE
+_SHA3-STREAM-NONE _SHA3-STREAM-MODE !
 GUARD _sha3-guard
 
 \ Save original XTs before shadowing
@@ -341,57 +329,103 @@ GUARD _sha3-guard
 ' SHA3-512-ADD     CONSTANT _s3-512-add-xt
 ' SHA3-256-END     CONSTANT _s3-256-end-xt
 ' SHA3-512-END     CONSTANT _s3-512-end-xt
+' SHAKE-128-BEGIN  CONSTANT _shake128-begin-xt
+' SHAKE-128-ADD    CONSTANT _shake128-add-xt
+' SHAKE-128-END    CONSTANT _shake128-end-xt
+' SHAKE-256-BEGIN  CONSTANT _shake256-begin-xt
+' SHAKE-256-ADD    CONSTANT _shake256-add-xt
+' SHAKE-256-END    CONSTANT _shake256-end-xt
 ' SHA3-256-HASH-COMPARE CONSTANT _s3-256-hash-compare-xt
 ' SHA3-256-END-COMPARE CONSTANT _s3-256-end-compare-xt
 
+\ Checked BIOS continuations clean accepted transactions on ordinary failure.
+\ Status 5 or 6 may instead retain BIOS ownership fail-closed; the exact
+\ owner must retry SHA3-CLEAR (or reset) before later hardware use.
+: _SHA3-WITH-HARDWARE-GUARD  ( ... xt -- ... )
+    _sha3-guard GUARD-ACQUIRE
+    _SHA3-STREAM-MODE @ _SHA3-STREAM-NONE <> IF
+        _sha3-guard GUARD-RELEASE
+        -258 THROW
+    THEN
+    CATCH
+    _sha3-guard GUARD-RELEASE
+    DUP IF THROW THEN
+    DROP ;
+
+: _SHA3-STREAM-BEGIN  ( mode xt -- )
+    _sha3-guard GUARD-ACQUIRE
+    _SHA3-STREAM-MODE @ _SHA3-STREAM-NONE <> IF
+        _sha3-guard GUARD-RELEASE
+        2DROP -258 THROW
+    THEN
+    SWAP _SHA3-BEGIN-MODE !
+    CATCH ?DUP IF
+        _SHA3-STREAM-NONE _SHA3-STREAM-MODE !
+        _sha3-guard GUARD-RELEASE
+        THROW
+    THEN
+    _SHA3-BEGIN-MODE @ _SHA3-STREAM-MODE ! ;
+
+: _SHA3-STREAM-ADD  ( addr len mode xt -- )
+    _sha3-guard GUARD-MINE? 0= IF -258 THROW THEN
+    OVER _SHA3-STREAM-MODE @ <> IF 2DROP 2DROP -258 THROW THEN
+    SWAP DROP
+    CATCH ?DUP IF
+        _SHA3-STREAM-NONE _SHA3-STREAM-MODE !
+        _sha3-guard GUARD-RELEASE
+        THROW
+    THEN ;
+
+: _SHA3-STREAM-END  ( ... mode xt -- ... )
+    _sha3-guard GUARD-MINE? 0= IF -258 THROW THEN
+    OVER _SHA3-STREAM-MODE @ <> IF -258 THROW THEN
+    SWAP DROP
+    CATCH
+    _SHA3-STREAM-NONE _SHA3-STREAM-MODE !
+    _sha3-guard GUARD-RELEASE
+    DUP IF THROW THEN
+    DROP ;
+
 \ ── one-shot entry points ──
-: SHA3-256-HASH   _s3-256-hash-xt   _sha3-guard WITH-GUARD ;
-: SHA3-512-HASH   _s3-512-hash-xt   _sha3-guard WITH-GUARD ;
-: SHAKE-128       _shake128-xt      _sha3-guard WITH-GUARD ;
-: SHAKE-256       _shake256-xt      _sha3-guard WITH-GUARD ;
-: SHA3-256-HMAC   _s3-256-hmac-xt   _sha3-guard WITH-GUARD ;
+: SHA3-256-HASH   _s3-256-hash-xt   _SHA3-WITH-HARDWARE-GUARD ;
+: SHA3-512-HASH   _s3-512-hash-xt   _SHA3-WITH-HARDWARE-GUARD ;
+: SHAKE-128       _shake128-xt      _SHA3-WITH-HARDWARE-GUARD ;
+: SHAKE-256       _shake256-xt      _SHA3-WITH-HARDWARE-GUARD ;
+: SHA3-256-HMAC   _s3-256-hmac-xt   _SHA3-WITH-HARDWARE-GUARD ;
 : SHA3-256->HEX   _s3-256-hex-xt    _sha3-guard WITH-GUARD ;
 : SHA3-512->HEX   _s3-512-hex-xt    _sha3-guard WITH-GUARD ;
 : SHA3-256-HASH-COMPARE
-    _s3-256-hash-compare-xt _sha3-guard WITH-GUARD ;
+    _s3-256-hash-compare-xt _SHA3-WITH-HARDWARE-GUARD ;
 
-\ ── streaming BEGIN (acquire guard) ──
-: SHA3-256-BEGIN  ( -- )
-    _sha3-guard GUARD-ACQUIRE
-    _s3-256-begin-xt CATCH
-    ?DUP IF _sha3-guard GUARD-RELEASE THROW THEN ;
+\ ── streaming entry points ──
+: SHA3-256-BEGIN
+    _SHA3-STREAM-256 _s3-256-begin-xt _SHA3-STREAM-BEGIN ;
+: SHA3-512-BEGIN
+    _SHA3-STREAM-512 _s3-512-begin-xt _SHA3-STREAM-BEGIN ;
+: SHAKE-128-BEGIN
+    _SHA3-STREAM-SHAKE128 _shake128-begin-xt _SHA3-STREAM-BEGIN ;
+: SHAKE-256-BEGIN
+    _SHA3-STREAM-SHAKE256 _shake256-begin-xt _SHA3-STREAM-BEGIN ;
 
-: SHA3-512-BEGIN  ( -- )
-    _sha3-guard GUARD-ACQUIRE
-    _s3-512-begin-xt CATCH
-    ?DUP IF _sha3-guard GUARD-RELEASE THROW THEN ;
+: SHA3-256-ADD
+    _SHA3-STREAM-256 _s3-256-add-xt _SHA3-STREAM-ADD ;
+: SHA3-512-ADD
+    _SHA3-STREAM-512 _s3-512-add-xt _SHA3-STREAM-ADD ;
+: SHAKE-128-ADD
+    _SHA3-STREAM-SHAKE128 _shake128-add-xt _SHA3-STREAM-ADD ;
+: SHAKE-256-ADD
+    _SHA3-STREAM-SHAKE256 _shake256-add-xt _SHA3-STREAM-ADD ;
 
-\ ── streaming ADD (assert ownership) ──
-: SHA3-256-ADD  ( addr len -- )
-    _sha3-guard GUARD-MINE? 0= IF -258 THROW THEN
-    _s3-256-add-xt EXECUTE ;
-
-: SHA3-512-ADD  ( addr len -- )
-    _sha3-guard GUARD-MINE? 0= IF -258 THROW THEN
-    _s3-512-add-xt EXECUTE ;
-
-\ ── streaming END (release guard, always) ──
-: SHA3-256-END  ( dst -- )
-    _sha3-guard GUARD-MINE? 0= IF -258 THROW THEN
-    _s3-256-end-xt CATCH
-    _sha3-guard GUARD-RELEASE
-    ?DUP IF THROW THEN ;
-
-: SHA3-512-END  ( dst -- )
-    _sha3-guard GUARD-MINE? 0= IF -258 THROW THEN
-    _s3-512-end-xt CATCH
-    _sha3-guard GUARD-RELEASE
-    ?DUP IF THROW THEN ;
+: SHA3-256-END
+    _SHA3-STREAM-256 _s3-256-end-xt _SHA3-STREAM-END ;
+: SHA3-512-END
+    _SHA3-STREAM-512 _s3-512-end-xt _SHA3-STREAM-END ;
+: SHAKE-128-END
+    _SHA3-STREAM-SHAKE128 _shake128-end-xt _SHA3-STREAM-END ;
+: SHAKE-256-END
+    _SHA3-STREAM-SHAKE256 _shake256-end-xt _SHA3-STREAM-END ;
 
 : SHA3-256-END-COMPARE  ( expected -- flag )
-    _sha3-guard GUARD-MINE? 0= IF -258 THROW THEN
-    _s3-256-end-compare-xt CATCH
-    _sha3-guard GUARD-RELEASE
-    ?DUP IF THROW THEN ;
+    _SHA3-STREAM-256 _s3-256-end-compare-xt _SHA3-STREAM-END ;
 
 [THEN] [THEN]

@@ -1,0 +1,17 @@
+<uidl arrange=stack>
+<menubar id=mbar>
+<menu label=Instrument>
+<item text=Rerun_Profile do=rerun/>
+</menu>
+<menu label=File>
+<item text=Quit do=quit key=Ctrl+Q/>
+</menu>
+</menubar>
+<region id=observatory-body style=color:#eeeeee;background-color:#121212/>
+<status id=sbar style=color:white;background-color:#005f5f>
+<label id=sbar-instrument text=series.profile.v1/>
+<label id=sbar-state text=Owner-serialized_FP16_result/>
+</status>
+<action do=rerun key=F5/>
+<action do=quit key=Ctrl+Q/>
+</uidl>
