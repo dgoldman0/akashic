@@ -18594,12 +18594,12 @@ EXT4-OPS ,
 \ ordinary binding above stays read-only.  SPARSE continues to describe
 \ sparse-file read/mapping semantics; WRITE can overwrite initialized blocks,
 \ allocate one complete logical hole inside existing EOF, append inside an
-\ initialized partial tail, and allocate one initialized block at aligned EOF.
-\ VFS-WRITE-EXACT can also compose a tail append and next-logical-block growth
-\ as two independently checkpointed callbacks.  A dedicated 1/1/0 profile
-\ serves initialized RMW; 4/1/0 serves either allocation-backed operation and
-\ the cross-tail composition.  Bind the profile and a trusted clock before the
-\ first nonempty write.
+\ initialized partial tail, and allocate one initialized block per callback at
+\ aligned EOF.  VFS-WRITE-EXACT can compose a tail append and additional aligned
+\ allocation callbacks, each independently checkpointed.  A dedicated 1/1/0
+\ profile serves initialized RMW; 4/1/0 serves either allocation-backed
+\ operation and their evidenced composition.  Bind the profile and a trusted
+\ clock before the first nonempty write.
 EXT4-CAPS VFS-CAP-WRITE OR CONSTANT EXT4-STAGED-WRITE-CAPS
 
 CREATE EXT4-STAGED-WRITE-OPS VFS-OPS-SIZE ALLOT
@@ -19267,8 +19267,9 @@ CREATE _XB _EXT4-MAX-BLOCK ALLOT
 \ directly to its typed builder: partial-tail append uses initialized RMW,
 \ while aligned EOF uses allocation.  Neither callback can fall through to
 \ another operation; VFS-WRITE-EXACT may advance after a short committed tail
-\ chunk and re-enter as aligned growth.  An in-size target first tries
-\ overwrite, then promotes only its exact clean unmapped refusal to hole fill.
+\ or allocation chunk and re-enter as aligned growth.  An in-size target first
+\ tries overwrite, then promotes only its exact clean unmapped refusal to hole
+\ fill.
 :NONAME  ( -- actual ior )
     _EXT4-WR-SOURCE @ _EXT4-WR-COUNT @
     _XB _EXT4-MAX-BLOCK MSPAN-OVERLAP?

@@ -844,7 +844,8 @@ now also checkpoints `COMMITTED` state during public unmount and performs the
 six-write clean deactivation with terminal fault quarantine. The explicitly
 named staged binding publishes qualified existing-block overwrite, strict
 no-gap append inside an initialized partial EOF block, and allocation-backed
-fill of complete in-size holes plus one-block growth from exact aligned EOF;
+fill of complete in-size holes plus block-bounded growth from exact aligned EOF,
+including exact-write composition through additional allocated EOF blocks;
 the ordinary ext4 binding remains read-only and every other mutation capability
 remains disabled. Modern
 `ORPHAN_PRESENT` and a nonzero legacy
@@ -1347,20 +1348,20 @@ The staged regular-file callback provides one block-bounded transaction
 primitive. A larger size-preserving caller range completes only its first
 target logical block and returns legal short progress. A strict EOF append must
 fit wholly between the current partial-block EOF and that same initialized
-block's boundary; a request that would need another logical block refuses
-rather than silently widening the admitted growth operation. At exact aligned
-EOF, one complete nonempty request of at most one filesystem block may allocate
-the next unmapped logical block; a larger request refuses rather than being
-silently split into multiple growth transactions. Initialized overwrite and
+block's boundary per callback. If caller data remains, `VFS-WRITE-EXACT`
+advances to aligned EOF and invokes independently durable allocation callbacks.
+At exact aligned EOF, one callback may allocate at most one unmapped logical
+block; a larger exact request is deliberately split into independently
+checkpointed growth transactions. Initialized overwrite and
 strict initialized-tail append each consume `1/1/0`; allocation-backed fill of
 a complete in-size hole and aligned-EOF growth each consume `4/1/0` from any
 containing caller profile. This removes both a caller-size
 limit and first-operation workspace selection from the qualified
 size-preserving surface, supplies bounded allocation for the admitted hole
 shape, and supplies strict growth inside an existing initialized tail or
-through one exact aligned boundary. It does not supply the general planners for
-multi-block or sparse/gap EOF growth, extent-root growth, arbitrary allocation
-geometry, or namespace operations. Its progress and later-error behavior is
+through additional exact aligned boundaries. It does not supply a batched or
+atomic multi-block transaction, sparse/gap EOF growth, extent-root growth,
+arbitrary allocation geometry, or namespace operations. Its progress and later-error behavior is
 qualified through `VFS-WRITE?` and `VFS-WRITE-EXACT` on
 `EXT4-STAGED-WRITE-BINDING`. That
 descriptor alone adds `WRITE` and omits `READ_ONLY`; the ordinary
@@ -1406,12 +1407,12 @@ current append envelope.
 Allocation-backed aligned-EOF growth is also current operation-admitted
 production capability, not a toy or provisional geometry model. Its documented
 mutation envelope is the authenticated 1 KiB/256-byte-inode form, a linked
-regular file with exact `EXTENTS` flags, exact block-aligned EOF and no gap, one
-nonempty request of at most one block, an unmapped target, and an authenticated
-depth-zero resident extent root that can accept a sorted singleton or exact
-initialized coalescing edit. Mapped or unwritten conversion, depth-positive
-mutation, an unmergeable full root, mixed overwrite plus growth, a request over
-one block, and sparse/gap growth are stable refusals. Request-shape refusals
+regular file with exact `EXTENTS` flags, exact block-aligned EOF and no gap, an
+unmapped target per block-bounded callback, and an authenticated depth-zero
+resident extent root that can accept a sorted singleton or exact initialized
+coalescing edit. Mapped or unwritten conversion, depth-positive mutation, an
+unmergeable full root, mixed overwrite plus growth, and sparse/gap growth are
+stable refusals. Request-shape refusals
 occur before clock sampling or I/O; structural map and writer-capacity refusals
 complete in write-free preflight or dry staging before activation.
 
@@ -1427,6 +1428,25 @@ The public hard-link journey grows 1,024 bytes to 1,048, maps the new logical
 block, moves `i_blocks` from 4 to 6, decrements free space once, verifies the
 zero-backed suffix, reaches a write/flush-free ordinary remount, and passes
 pinned `debugfs` and read-only `e2fsck` inspection.
+
+Additional allocated EOF composition is qualified by commit `57961e0`. One
+exact request from 1,024-byte EOF commits a full logical block and then a
+24-byte prefix in a second newly allocated block as two reusable `4/1/0`
+transactions. Candidates 1351 and 1352 produce a singleton insertion followed
+by exact left coalescing into a length-two initialized extent. The final file is
+2,072 bytes, `i_blocks` advances from 4 to 8, free space falls by two, the second
+timestamp wins, and the unrequested 1,000-byte suffix of a poisoned second
+candidate is zero. Both hard links, ordinary write-free remount, pinned
+`debugfs`, and read-only `e2fsck` agree on the result.
+
+A saturated-root follow-up proves the request is not atomic. Its first
+allocation commits and fills the final resident slot; its second callback
+selects another free candidate but refuses the now-unmergeable full root before
+retaining data or metadata. Cursor, vnode, inode, block/free accounting, first
+timestamp, and allocation state retain exactly the first 1,024-byte durable
+prefix. The second candidate remains free, poisoned, unmapped, and unwritten;
+ordinary remount is write-free and pinned `e2fsck` accepts the prefix image.
+Neither endpoint creates orphan state.
 
 The aligned-growth W7 and W22 cuts close both sides of allocation reachability.
 At W7 the ordered candidate tears before journal authority: the callback reports
