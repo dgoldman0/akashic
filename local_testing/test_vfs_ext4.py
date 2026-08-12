@@ -38159,6 +38159,7 @@ def staged_public_cross_group_eof_growth_fixture(
         return {
             "image": stable_path,
             "expected_file": expected_file,
+            "epoch_ms": epoch_ms,
             "inode_number": inode_number,
             "candidate": candidate,
             "candidate_group": candidate_group,
@@ -38280,6 +38281,127 @@ def test_staged_public_cross_group_eof_passes_external_oracles(
     _assert_e2fsck_clean(image, jbd2_toolchain)
 
 
+def _staged_cross_group_fault_write_lines(
+    *,
+    prefix: str,
+    marker: str,
+    epoch_ms: int,
+    block_size: int,
+    candidate: int,
+    candidate_group: int,
+    bitmap_home: int,
+    expected_actual: int,
+    expected_size: int,
+    expected_blocks: int,
+    expected_phase: str,
+    expected_home_writes: int,
+) -> list[str]:
+    """Build the shared public journey for one cross-group write fault."""
+    replacement = _STAGED_ALIGNED_APPEND_REPLACEMENT.decode("ascii")
+    return [
+        f"VARIABLE {prefix}-CLOCK-CALLS",
+        (
+            f": {prefix}-NOW ( context -- epoch-ms ior ) "
+            f"DROP 1 {prefix}-CLOCK-CALLS +! {epoch_ms} 0 ;"
+        ),
+        f"T-ARENA CONSTANT {prefix}-ARENA",
+        (
+            f"{prefix}-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+            f"CONSTANT {prefix}-MOUNT-IOR CONSTANT {prefix}-V"
+        ),
+        f"{prefix}-V _EXT4-CTX CONSTANT {prefix}-CTX",
+        (
+            f"' {prefix}-NOW 0 {prefix}-V EXT4-BIND-WRITE-CLOCK? "
+            f"CONSTANT {prefix}-CLOCK-IOR"
+        ),
+        *_ext4_dedicated_writer_profile_forth(
+            f"{prefix}-PROFILE", f"{prefix}-V", 4, 1, 0
+        ),
+        (
+            'S" /fixture/hardlink.txt" '
+            "VFS-FF-READ VFS-FF-WRITE OR VFS-FF-APPEND OR "
+            f"{prefix}-V VFS-OPEN? "
+            f"CONSTANT {prefix}-OPEN-IOR CONSTANT {prefix}-FD"
+        ),
+        f"{prefix}-FD FD.INODE @ D.VNODE @ CONSTANT {prefix}-VN",
+        f"{prefix}-FD FD.CUR-LO @ CONSTANT {prefix}-INITIAL-CURSOR",
+        (
+            f'S" {replacement}" {prefix}-FD VFS-WRITE? '
+            f"CONSTANT {prefix}-WRITE-IOR CONSTANT {prefix}-ACTUAL"
+        ),
+        f"{prefix}-FD FD.CUR-LO @ CONSTANT {prefix}-CURSOR",
+        f"{prefix}-V V.LAST-IOR @ CONSTANT {prefix}-LAST-IOR",
+        f"{prefix}-CTX _EXT4-C.J.WRITER + @ CONSTANT {prefix}-WRITER",
+        (
+            f"{prefix}-CTX _EXT4-C.J.HOME-WRITES + @ "
+            f"CONSTANT {prefix}-HOMES"
+        ),
+        f"{prefix}-FD VFS-CLOSE? CONSTANT {prefix}-CLOSE-IOR",
+        (
+            _forth_conjunction(
+                [
+                    f"{prefix}-MOUNT-IOR 0=",
+                    f"{prefix}-CLOCK-IOR 0=",
+                    f"{prefix}-PROFILE-SIZE-IOR 0=",
+                    f"{prefix}-PROFILE-BIND-IOR 0=",
+                    f"{prefix}-OPEN-IOR 0=",
+                    f"{prefix}-INITIAL-CURSOR {block_size} =",
+                    f"{prefix}-ACTUAL {expected_actual} =",
+                    (
+                        f"{prefix}-WRITE-IOR VFS-IOR-DOMAIN "
+                        "VFS-IOR-D-VOLUME ="
+                    ),
+                    (
+                        f"{prefix}-WRITE-IOR VFS-IOR-REASON "
+                        "VFS-R-IO ="
+                    ),
+                    (
+                        f"{prefix}-WRITE-IOR VFS-IOR-FLAGS "
+                        "VFS-IOR-F-PARTIAL VFS-IOR-F-READONLY OR ="
+                    ),
+                    f"{prefix}-LAST-IOR {prefix}-WRITE-IOR =",
+                    f"{prefix}-CURSOR {block_size + expected_actual} =",
+                    f"{prefix}-CLOCK-CALLS @ 1 =",
+                    f"{prefix}-VN VN.SIZE-LO @ {expected_size} =",
+                    f"{prefix}-VN VN.SIZE-HI @ 0=",
+                    f"{prefix}-VN VN.BLOCKS @ {expected_blocks} =",
+                    f"{prefix}-WRITER {prefix}-PROFILE-BASE =",
+                    (
+                        f"{prefix}-WRITER _EXT4-JWR.STATE + @ "
+                        "_EXT4-JWR-FAULTED ="
+                    ),
+                    (
+                        f"{prefix}-WRITER _EXT4-JWR.PHASE + @ "
+                        f"{expected_phase} ="
+                    ),
+                    f"{prefix}-HOMES {expected_home_writes} =",
+                    f"{prefix}-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                    f"{prefix}-WRITER _EXT4-JWR.META-ACTIVE + @ 4 =",
+                    f"{prefix}-WRITER _EXT4-JWR.DATA-ACTIVE + @ 1 =",
+                    f"{prefix}-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                    f"{prefix}-CTX _EXT4-C.RECOVERY + @ 0<>",
+                    f"{prefix}-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                    f"{prefix}-V V.FLAGS @ VFS-F-RO AND 0<>",
+                    f"{prefix}-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    f"_XH-CANDIDATE @ {candidate} =",
+                    f"_XH-CANDIDATE-GROUP @ {candidate_group} =",
+                    f"_XH-BITMAP-HOME @ {bitmap_home} =",
+                    "_XH-PUBLISHED @ 0<",
+                    f"_EXT4-WR-ACTUAL @ {expected_actual} =",
+                    f"_EXT4-MOW-ACTUAL @ {expected_actual} =",
+                    f"{prefix}-CLOSE-IOR 0=",
+                    (
+                        "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                ]
+            )
+            + f' IF ." {marker}" THEN'
+        ),
+    ]
+
+
 def test_staged_public_cross_group_allocation_refuses_actual_bitmap_alias(
     staged_cross_group_allocation_geometry: dict[str, object],
     tmp_path: Path,
@@ -38348,6 +38470,10 @@ def test_staged_public_cross_group_allocation_refuses_actual_bitmap_alias(
     alias_inode[:] = _inode_with_checksum(
         superblock, ballast_inode_number, alias_inode
     )
+    assert struct.unpack_from("<H", alias_inode, 0x2A)[0] == 4
+    assert _extent_root_physical(
+        alias_inode, alias_logical
+    ) == bitmap_home
     patch_map[ballast_inode_offset] = bytes(alias_inode)
     alias_patches = tuple(patch_map.items())
 
@@ -38460,12 +38586,6 @@ def test_staged_public_cross_group_allocation_refuses_actual_bitmap_alias(
     _assert_emitted(output, "EXT4-CROSS-GROUP-BITMAP-ALIAS-REFUSED")
     _assert_emitted(output, "EXT4-CROSS-GROUP-BITMAP-ALIAS-UNMOUNT")
     assert trace == ()
-    assert trace.count(("write", candidate * 2, 2)) == 0
-    assert trace.count(("write", bitmap_home * 2, 2)) == 0
-    assert trace.count(("write", group0_bitmap_home * 2, 2)) == 0
-    assert trace.count(("write", gdt_home * 2, 2)) == 0
-    assert trace.count(("write", inode_home * 2, 2)) == 0
-    assert trace.count(("write", ballast_inode_home * 2, 2)) == 0
     assert not _ext4_block_allocation_state(
         media_path, (candidate,)
     )[candidate]
@@ -38492,6 +38612,260 @@ def test_staged_public_cross_group_allocation_refuses_actual_bitmap_alias(
     )
     assert final_superblock == superblock
     assert final_inode == inode
+
+
+def test_staged_public_cross_group_bitmap_tear_replays_actual_group_homes(
+    staged_cross_group_allocation_geometry: dict[str, object],
+    staged_public_cross_group_eof_growth_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Replay a committed tear at the selected group's bitmap checkpoint."""
+    geometry = staged_cross_group_allocation_geometry
+    success = staged_public_cross_group_eof_growth_fixture
+    path = geometry["path"]
+    input_patches = geometry["input_patches"]
+    superblock = geometry["superblock"]
+    inode = geometry["inode"]
+    inode_number = geometry["inode_number"]
+    inode_home = geometry["inode_home"]
+    ballast_inode_home = geometry["ballast_inode_home"]
+    block_size = geometry["block_size"]
+    candidate = geometry["candidate"]
+    candidate_group = geometry["candidate_group"]
+    candidate_index = geometry["candidate_index"]
+    bitmap_home = geometry["bitmap_home"]
+    group0_bitmap_home = geometry["group0_bitmap_home"]
+    gdt_home = geometry["gdt_home"]
+    super_home = geometry["super_home"]
+    data_block = geometry["data_block"]
+    success_trace = success["trace"]
+    success_image = success["image"]
+    expected_file = success["expected_file"]
+    epoch_ms = success["epoch_ms"]
+    assert isinstance(path, Path)
+    assert isinstance(input_patches, tuple)
+    assert isinstance(superblock, bytes)
+    assert isinstance(inode, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(ballast_inode_home, int)
+    assert isinstance(block_size, int)
+    assert isinstance(candidate, int)
+    assert isinstance(candidate_group, int)
+    assert isinstance(candidate_index, int)
+    assert isinstance(bitmap_home, int)
+    assert isinstance(group0_bitmap_home, int)
+    assert isinstance(gdt_home, int)
+    assert isinstance(super_home, int)
+    assert isinstance(data_block, int)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(success_image, Path)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(epoch_ms, int)
+
+    original_inode_home = _patched_ext4_home(
+        path, input_patches, inode_home, block_size=block_size
+    )
+    original_ballast_inode_home = _patched_ext4_home(
+        path, input_patches, ballast_inode_home, block_size=block_size
+    )
+    original_bitmap = _patched_ext4_home(
+        path, input_patches, bitmap_home, block_size=block_size
+    )
+    original_group0_bitmap = _patched_ext4_home(
+        path, input_patches, group0_bitmap_home, block_size=block_size
+    )
+    original_gdt = _patched_ext4_home(
+        path, input_patches, gdt_home, block_size=block_size
+    )
+    expected_candidate = _read_ext4_home(
+        success_image, candidate, block_size=block_size
+    )
+    expected_bitmap = _read_ext4_home(
+        success_image, bitmap_home, block_size=block_size
+    )
+    expected_gdt = _read_ext4_home(
+        success_image, gdt_home, block_size=block_size
+    )
+    expected_super = _read_ext4_home(
+        success_image, super_home, block_size=block_size
+    )
+    expected_inode_home = _read_ext4_home(
+        success_image, inode_home, block_size=block_size
+    )
+    assert expected_candidate == _STAGED_ALIGNED_APPEND_REPLACEMENT + bytes(
+        block_size - len(_STAGED_ALIGNED_APPEND_REPLACEMENT)
+    )
+    candidate_byte = candidate_index // 8
+    assert candidate_byte == 32
+    assert expected_bitmap[: candidate_byte + 1] != (
+        original_bitmap[: candidate_byte + 1]
+    )
+    assert expected_bitmap[candidate_byte + 1 :] == (
+        original_bitmap[candidate_byte + 1 :]
+    )
+    expected_torn_bitmap = (
+        expected_bitmap[: candidate_byte + 1]
+        + original_bitmap[candidate_byte + 1 :]
+    )
+    assert expected_torn_bitmap == expected_bitmap
+
+    bitmap_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, bitmap_home, block_size=block_size
+    )
+    assert bitmap_ordinals == (19,)
+    bitmap_event_index = _trace_event_index_for_ordinal(
+        success_trace, "write", bitmap_ordinals[0]
+    )
+    assert success_trace[bitmap_event_index] == (
+        "write",
+        bitmap_home * 2,
+        2,
+    )
+
+    faulted = tmp_path / "staged-cross-group-w19-faulted.img"
+    recovered = tmp_path / "staged-cross-group-w19-recovered.img"
+    stable = tmp_path / "staged-cross-group-w19-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            _staged_cross_group_fault_write_lines(
+                prefix="_CGW19",
+                marker="EXT4-CROSS-GROUP-W19-FAULT",
+                epoch_ms=epoch_ms,
+                block_size=block_size,
+                candidate=candidate,
+                candidate_group=candidate_group,
+                bitmap_home=bitmap_home,
+                expected_actual=len(_STAGED_ALIGNED_APPEND_REPLACEMENT),
+                expected_size=len(expected_file),
+                expected_blocks=6,
+                expected_phase="_EXT4-JWP-CHECKPOINT-HOME",
+                expected_home_writes=0,
+            ),
+            patches=input_patches
+            + ((candidate * block_size, bytes((0xA5,)) * block_size),),
+            write_faults_by_ordinal={
+                bitmap_ordinals[0]: {
+                    "stage": "media",
+                    "sector_index": 0,
+                    "byte_index": candidate_byte + 1,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-CROSS-GROUP-W19-FAULT")
+        assert failed_trace == success_trace[: bitmap_event_index + 1]
+        assert _read_ext4_home(
+            faulted, candidate, block_size=block_size
+        ) == expected_candidate
+        assert _read_ext4_home(
+            faulted, bitmap_home, block_size=block_size
+        ) == expected_torn_bitmap
+        assert _read_ext4_home(
+            faulted, group0_bitmap_home, block_size=block_size
+        ) == original_group0_bitmap
+        assert _read_ext4_home(
+            faulted, gdt_home, block_size=block_size
+        ) == original_gdt
+        assert _read_ext4_home(
+            faulted, inode_home, block_size=block_size
+        ) == original_inode_home
+        assert _read_ext4_home(
+            faulted, ballast_inode_home, block_size=block_size
+        ) == original_ballast_inode_home
+        faulted_superblock, faulted_inode, _ = _ext4_inode_record(
+            faulted, inode_number
+        )
+        assert struct.unpack_from("<I", faulted_superblock, 0x0C)[0] == (
+            struct.unpack_from("<I", superblock, 0x0C)[0]
+        )
+        assert faulted_inode == inode
+        assert _ext4_block_allocation_state(
+            faulted, (candidate,)
+        )[candidate]
+
+        _, recovery_trace, recovery_sha256 = (
+            _staged_write_recovery_readback(
+                faulted,
+                recovered,
+                expected_file=expected_file,
+                expected_epoch_ms=epoch_ms,
+                expected_home_writes=4,
+                expected_replayed=True,
+                expected_blocks=6,
+                prefix="_CGW19-R",
+                marker="EXT4-CROSS-GROUP-W19-RECOVERED",
+            )
+        )
+        assert not _write_ordinals_for_ext4_home(
+            recovery_trace, candidate, block_size=block_size
+        )
+        assert not _write_ordinals_for_ext4_home(
+            recovery_trace, group0_bitmap_home, block_size=block_size
+        )
+        assert not _write_ordinals_for_ext4_home(
+            recovery_trace, ballast_inode_home, block_size=block_size
+        )
+        for home in (bitmap_home, gdt_home, inode_home):
+            assert len(
+                _write_ordinals_for_ext4_home(
+                    recovery_trace, home, block_size=block_size
+                )
+            ) == 1
+        recovered_superblock, recovered_inode, _ = _ext4_inode_record(
+            recovered, inode_number
+        )
+        assert recovered_superblock == expected_super
+        assert _ext4_block_allocation_state(
+            recovered, (candidate,)
+        )[candidate]
+        assert _read_ext4_home(
+            recovered, candidate, block_size=block_size
+        ) == expected_candidate
+        assert _read_ext4_home(
+            recovered, bitmap_home, block_size=block_size
+        ) == expected_bitmap
+        assert _read_ext4_home(
+            recovered, group0_bitmap_home, block_size=block_size
+        ) == original_group0_bitmap
+        assert _read_ext4_home(
+            recovered, gdt_home, block_size=block_size
+        ) == expected_gdt
+        assert _read_ext4_home(
+            recovered, inode_home, block_size=block_size
+        ) == expected_inode_home
+        assert _read_ext4_home(
+            recovered, ballast_inode_home, block_size=block_size
+        ) == original_ballast_inode_home
+        assert recovered_inode == expected_inode_home[
+            geometry["inode_block_offset"] :
+            geometry["inode_block_offset"] + len(inode)
+        ]
+        assert _extent_root_physical(recovered_inode, 0) == data_block
+        assert _extent_root_physical(recovered_inode, 1) == candidate
+
+        _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+            recovered,
+            stable,
+            expected_file=expected_file,
+            expected_epoch_ms=epoch_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            expected_blocks=6,
+            prefix="_CGW19-S",
+            marker="EXT4-CROSS-GROUP-W19-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
 
 
 @pytest.fixture(scope="session")
