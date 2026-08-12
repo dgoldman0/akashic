@@ -32152,10 +32152,10 @@ def test_typed_one_block_hole_fill_coalesces_adjacent_extents(
         _assert_emitted(output, f"{marker}-ABORTED")
 
 
-def test_typed_one_block_hole_fill_refuses_unmergeable_full_root(
+def test_typed_one_block_hole_fill_requires_measured_credit_for_full_root(
     canonical_images: dict[str, Path],
 ) -> None:
-    """A saturated root still refuses before retaining ordered data."""
+    """A four-home transaction cannot publish a five-home root growth."""
     path = canonical_images["primary-1k-i256"]
     inode_number = 17
     candidate = 1351
@@ -32240,15 +32240,11 @@ def test_typed_one_block_hole_fill_refuses_unmergeable_full_root(
                         "_FR-WRITER-IOR 0=",
                         "_FR-BEGIN-IOR 0=",
                         "_FR-DEPTH-BEFORE _FR-DEPTH-AFTER =",
-                        (
-                            "_FR-STAGE-IOR VFS-IOR-REASON "
-                            "VFS-R-UNSUPPORTED ="
-                        ),
-                        (
-                            "_FR-STAGE-IOR VFS-IOR-DETAIL "
-                            "EXT4-D-DATA-MAP ="
-                        ),
+                        "_FR-STAGE-IOR VFS-E-INVALID =",
                         f"_XH-CANDIDATE @ {candidate} =",
+                        "_XH-LEAF-CANDIDATE @ 1354 =",
+                        "_XH-ROOT-GROW @ -1 =",
+                        "_XH-META-CREDIT @ 5 =",
                         "_XH-PUBLISHED @ 0=",
                         (
                             "_FR-WRITER _EXT4-JWR.STATE + @ "
@@ -40539,6 +40535,3557 @@ def test_staged_public_multi_allocated_eof_preserves_prefix_on_late_root_refusal
         _assert_e2fsck_clean(stable, jbd2_toolchain)
     finally:
         backing.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
+@pytest.fixture(scope="session")
+def staged_public_extent_root_growth_prestate(
+    writer_activation_fixture: dict[str, object],
+) -> dict[str, object]:
+    """Build one linked, full, unmergeable resident extent root."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    inode_number = 14
+    data_candidate = 1354
+    leaf_candidate = 1355
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    data_block = _extent_root_physical(inode, 0)
+    xattr_block = struct.unpack_from("<I", inode, 0x68)[0]
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    links = struct.unpack_from("<H", inode, 0x1A)[0]
+    assert block_size == 1024
+    assert inode_size == 256
+    assert inode_home == 278
+    assert inode_block_offset == 256
+    assert data_block == 1346
+    assert xattr_block == 1349
+    assert generation == 0
+    assert links == 2
+    assert struct.unpack_from("<I", inode, 0x04)[0] == 54
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 4
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    assert not any(
+        _ext4_block_allocation_state(
+            path,
+            (1351, 1352, 1353, data_candidate, leaf_candidate),
+        ).values()
+    )
+
+    allocated_patches, physical_ranges = _allocate_unlinked_extent_ranges(
+        path,
+        protocol="modern",
+        extent_specs=((0, 3, False),),
+        inode_number=inode_number,
+        physical_starts=(1351,),
+        seed_payloads=True,
+        base_patches=((1024, superblock), (inode_offset, inode)),
+    )
+    assert physical_ranges == ((1351, 3),)
+    patch_map = dict(allocated_patches)
+    prepared_super = patch_map[1024]
+    old_size = 6 * block_size
+    old_blocks = 10
+    generation = 0x1357_9BDF
+    root_generation = 0x2468_ACE0
+    extent_entries = (
+        (0, 1, data_block),
+        (2, 1, 1352),
+        (4, 1, 1353),
+        (5, 1, 1351),
+    )
+    prepared_inode = bytearray(inode)
+    struct.pack_into("<I", prepared_inode, 0x04, old_size)
+    struct.pack_into("<I", prepared_inode, 0x6C, 0)
+    struct.pack_into("<I", prepared_inode, 0x1C, old_blocks)
+    struct.pack_into("<I", prepared_inode, 0x30, root_generation)
+    struct.pack_into("<I", prepared_inode, 0x64, generation)
+    struct.pack_into("<H", prepared_inode, 0x74, 0)
+    prepared_inode[0x34:0x64] = bytes(48)
+    struct.pack_into("<H", prepared_inode, 0x2A, len(extent_entries))
+    for index, (logical, length, physical) in enumerate(extent_entries):
+        struct.pack_into(
+            "<IHHI",
+            prepared_inode,
+            0x34 + index * 12,
+            logical,
+            length,
+            physical >> 32,
+            physical & 0xFFFF_FFFF,
+        )
+    prepared_inode[:] = _inode_with_checksum(
+        prepared_super,
+        inode_number,
+        prepared_inode,
+    )
+    patch_map[inode_offset] = bytes(prepared_inode)
+    original_data_candidate = bytes((0xA5,)) * block_size
+    original_leaf_candidate = bytes((0x5A,)) * block_size
+    patch_map[data_candidate * block_size] = original_data_candidate
+    patch_map[leaf_candidate * block_size] = original_leaf_candidate
+    input_patches = source_patches + tuple(patch_map.items())
+
+    original_blocks = {
+        physical: _patched_ext4_home(
+            path,
+            input_patches,
+            physical,
+            block_size=block_size,
+        )
+        for physical in (data_block, 1351, 1352, 1353, xattr_block)
+    }
+    expected_file_prefix = b"".join(
+        (
+            original_blocks[data_block],
+            bytes(block_size),
+            original_blocks[1352],
+            bytes(block_size),
+            original_blocks[1353],
+            original_blocks[1351],
+        )
+    )
+    assert len(expected_file_prefix) == old_size
+    assert struct.unpack_from("<HHHH", prepared_inode, 0x28) == (
+        0xF30A,
+        4,
+        4,
+        0,
+    )
+    assert struct.unpack_from("<I", prepared_inode, 0x04)[0] == old_size
+    assert struct.unpack_from("<I", prepared_inode, 0x1C)[0] == old_blocks
+    assert struct.unpack_from("<I", prepared_inode, 0x30)[0] == root_generation
+    assert struct.unpack_from("<I", prepared_inode, 0x64)[0] == generation
+    assert root_generation != generation
+    assert not any(
+        _ext4_block_allocation_state(
+            path,
+            (data_candidate, leaf_candidate),
+        ).values()
+    )
+    return {
+        "path": path,
+        "input_patches": input_patches,
+        "activation_trace": activation_trace,
+        "superblock": prepared_super,
+        "inode": bytes(prepared_inode),
+        "inode_offset": inode_offset,
+        "inode_home": inode_home,
+        "inode_block_offset": inode_block_offset,
+        "inode_size": inode_size,
+        "inode_number": inode_number,
+        "block_size": block_size,
+        "old_size": old_size,
+        "old_blocks": old_blocks,
+        "generation": generation,
+        "root_generation": root_generation,
+        "links": links,
+        "extent_entries": extent_entries,
+        "data_block": data_block,
+        "xattr_block": xattr_block,
+        "data_candidate": data_candidate,
+        "leaf_candidate": leaf_candidate,
+        "original_blocks": original_blocks,
+        "original_data_candidate": original_data_candidate,
+        "original_leaf_candidate": original_leaf_candidate,
+        "expected_file_prefix": expected_file_prefix,
+    }
+
+
+@pytest.fixture(scope="session")
+def staged_public_extent_root_growth_seven_home_prestate(
+    staged_cross_gdt_page_allocation_geometry: dict[str, object],
+) -> dict[str, object]:
+    """Build a full root whose data and leaf land on different GDT pages."""
+    geometry = staged_cross_gdt_page_allocation_geometry
+    path = geometry["path"]
+    base_patches = geometry["input_patches"]
+    activation_trace = geometry["activation_trace"]
+    superblock = geometry["superblock"]
+    inode = geometry["inode"]
+    inode_offset = geometry["inode_offset"]
+    inode_number = geometry["inode_number"]
+    inode_home = geometry["inode_home"]
+    inode_block_offset = geometry["inode_block_offset"]
+    ballast_inode = geometry["ballast_inode"]
+    ballast_inode_offset = geometry["ballast_inode_offset"]
+    ballast_inode_number = geometry["ballast_inode_number"]
+    ballast_inode_home = geometry["ballast_inode_home"]
+    ballast_leaf_home = geometry["ballast_leaf_home"]
+    ballast_i_blocks = geometry["ballast_i_blocks"]
+    block_size = geometry["block_size"]
+    data_block = geometry["data_block"]
+    xattr_block = geometry["xattr_block"]
+    leaf_candidate = geometry["candidate"]
+    assert isinstance(path, Path)
+    assert isinstance(base_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(superblock, bytes)
+    assert isinstance(inode, bytes)
+    assert isinstance(inode_offset, int)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(inode_block_offset, int)
+    assert isinstance(ballast_inode, bytes)
+    assert isinstance(ballast_inode_offset, int)
+    assert isinstance(ballast_inode_number, int)
+    assert isinstance(ballast_inode_home, int)
+    assert isinstance(ballast_leaf_home, int)
+    assert isinstance(ballast_i_blocks, int)
+    assert isinstance(block_size, int)
+    assert isinstance(data_block, int)
+    assert isinstance(xattr_block, int)
+    assert isinstance(leaf_candidate, int)
+    assert block_size == 1024
+    assert inode_number == 14
+    assert inode_home == 295
+    assert inode_block_offset == 256
+    assert ballast_inode_number == 17
+    assert ballast_inode_home == 296
+    assert ballast_leaf_home == 2504
+    assert ballast_i_blocks == 98904
+    assert leaf_candidate == 131333
+
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    descriptor_size = struct.unpack_from("<H", superblock, 0xFE)[0]
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    links = struct.unpack_from("<H", inode, 0x1A)[0]
+    root_generation = struct.unpack_from("<I", inode, 0x30)[0]
+    assert first_data == 1
+    assert blocks_per_group == 8192
+    assert descriptor_size == 64
+    assert inode_size == 256
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    assert _extent_root_physical(inode, 0) == data_block
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 4
+
+    transferred_blocks = (2505, 2506, 2507)
+    transferred_payloads = {
+        transferred_blocks[0]: bytes((0x51,)) * block_size,
+        transferred_blocks[1]: bytes((0x62,)) * block_size,
+        transferred_blocks[2]: bytes((0x73,)) * block_size,
+    }
+    data_candidate = 73988
+    data_group, data_index = divmod(
+        data_candidate - first_data,
+        blocks_per_group,
+    )
+    leaf_group, leaf_index = divmod(
+        leaf_candidate - first_data,
+        blocks_per_group,
+    )
+    assert (data_group, data_index) == (9, 259)
+    assert (leaf_group, leaf_index) == (16, 260)
+    bitmap_home = 269
+    gdt_home = 2
+    descriptor_offset = data_group * descriptor_size
+    leaf_bitmap_home = geometry["bitmap_home"]
+    leaf_gdt_home = geometry["gdt_home"]
+    leaf_descriptor_offset = geometry["descriptor_offset"]
+    super_home = geometry["super_home"]
+    assert bitmap_home != leaf_bitmap_home
+    assert gdt_home != leaf_gdt_home
+    assert descriptor_offset == 576
+    assert leaf_bitmap_home == 131073
+    assert leaf_gdt_home == 3
+    assert leaf_descriptor_offset == 0
+    assert super_home == 1
+
+    original_bitmap = bytearray(
+        _patched_ext4_home(
+            path,
+            base_patches,
+            bitmap_home,
+            block_size=block_size,
+        )
+    )
+    data_byte, data_bit = divmod(data_index, 8)
+    assert original_bitmap[data_byte] & (1 << data_bit)
+    prepared_bitmap = bytearray(original_bitmap)
+    prepared_bitmap[data_byte] &= ~(1 << data_bit)
+    prepared_bitmap_checksum = _crc32c_raw(prepared_bitmap, seed)
+
+    original_gdt = _patched_ext4_home(
+        path,
+        base_patches,
+        gdt_home,
+        block_size=block_size,
+    )
+    prepared_gdt = bytearray(original_gdt)
+    data_descriptor = bytearray(
+        prepared_gdt[
+            descriptor_offset : descriptor_offset + descriptor_size
+        ]
+    )
+    assert data_descriptor == _group_descriptor_with_checksum(
+        superblock,
+        data_descriptor,
+        data_group,
+    )
+    assert not struct.unpack_from("<H", data_descriptor, 0x12)[0] & 0x02
+    assert struct.unpack_from("<H", data_descriptor, 0x0C)[0] == 0
+    assert struct.unpack_from("<H", data_descriptor, 0x2C)[0] == 0
+    struct.pack_into("<H", data_descriptor, 0x0C, 1)
+    struct.pack_into(
+        "<H", data_descriptor, 0x18, prepared_bitmap_checksum & 0xFFFF
+    )
+    struct.pack_into(
+        "<H", data_descriptor, 0x38, prepared_bitmap_checksum >> 16
+    )
+    data_descriptor[:] = _group_descriptor_with_checksum(
+        superblock,
+        data_descriptor,
+        data_group,
+    )
+    prepared_gdt[
+        descriptor_offset : descriptor_offset + descriptor_size
+    ] = data_descriptor
+
+    prepared_super = bytearray(superblock)
+    free_blocks_before = struct.unpack_from("<I", prepared_super, 0x0C)[0]
+    assert struct.unpack_from("<I", prepared_super, 0x158)[0] == 0
+    struct.pack_into("<I", prepared_super, 0x0C, free_blocks_before + 1)
+    prepared_super[:] = _ext4_super_with_checksum(prepared_super)
+
+    original_ballast_leaf = _patched_ext4_home(
+        path,
+        base_patches,
+        ballast_leaf_home,
+        block_size=block_size,
+    )
+    prepared_ballast_leaf = bytearray(original_ballast_leaf)
+    leaf_magic, leaf_entries, leaf_max, leaf_depth, _ = struct.unpack_from(
+        "<HHHHI",
+        prepared_ballast_leaf,
+        0,
+    )
+    assert (leaf_magic, leaf_entries, leaf_max, leaf_depth) == (
+        0xF30A,
+        9,
+        84,
+        0,
+    )
+
+    def trim_unwritten_extent(physical_start: int, count: int) -> None:
+        matches: list[tuple[int, int, int, int]] = []
+        for entry_index in range(leaf_entries):
+            logical, raw_length, physical_hi, physical_lo = (
+                struct.unpack_from(
+                    "<IHHI",
+                    prepared_ballast_leaf,
+                    12 + entry_index * 12,
+                )
+            )
+            physical = (physical_hi << 32) | physical_lo
+            if physical == physical_start:
+                matches.append(
+                    (entry_index, logical, raw_length, physical)
+                )
+        assert len(matches) == 1
+        entry_index, logical, raw_length, physical = matches[0]
+        assert raw_length > 0x8000
+        extent_length = raw_length - 0x8000
+        assert extent_length > count
+        if physical_start == transferred_blocks[0]:
+            assert logical == 3
+            assert count == len(transferred_blocks)
+        new_physical = physical + count
+        struct.pack_into(
+            "<IHHI",
+            prepared_ballast_leaf,
+            12 + entry_index * 12,
+            logical + count,
+            0x8000 + extent_length - count,
+            new_physical >> 32,
+            new_physical & 0xFFFF_FFFF,
+        )
+
+    trim_unwritten_extent(transferred_blocks[0], len(transferred_blocks))
+    trim_unwritten_extent(data_candidate, 1)
+    ballast_generation = struct.unpack_from("<I", ballast_inode, 0x64)[0]
+    prepared_ballast_leaf[:] = _extent_node_with_checksum(
+        prepared_super,
+        ballast_inode_number,
+        ballast_generation,
+        prepared_ballast_leaf,
+    )
+
+    prepared_ballast_inode = bytearray(ballast_inode)
+    prepared_ballast_i_blocks = ballast_i_blocks - (
+        len(transferred_blocks) + 1
+    ) * (block_size // 512)
+    assert prepared_ballast_i_blocks == 98896
+    struct.pack_into(
+        "<I", prepared_ballast_inode, 0x1C, prepared_ballast_i_blocks
+    )
+    prepared_ballast_inode[:] = _inode_with_checksum(
+        prepared_super,
+        ballast_inode_number,
+        prepared_ballast_inode,
+    )
+
+    old_size = 6 * block_size
+    old_blocks = 10
+    extent_entries = (
+        (0, 1, data_block),
+        (2, 1, transferred_blocks[1]),
+        (4, 1, transferred_blocks[2]),
+        (5, 1, transferred_blocks[0]),
+    )
+    prepared_inode = bytearray(inode)
+    struct.pack_into("<I", prepared_inode, 0x04, old_size)
+    struct.pack_into("<I", prepared_inode, 0x6C, 0)
+    struct.pack_into("<I", prepared_inode, 0x1C, old_blocks)
+    struct.pack_into("<H", prepared_inode, 0x74, 0)
+    prepared_inode[0x28:0x64] = bytes(60)
+    struct.pack_into(
+        "<HHHHI",
+        prepared_inode,
+        0x28,
+        0xF30A,
+        len(extent_entries),
+        4,
+        0,
+        root_generation,
+    )
+    for entry_index, (logical, length, physical) in enumerate(
+        extent_entries
+    ):
+        struct.pack_into(
+            "<IHHI",
+            prepared_inode,
+            0x34 + entry_index * 12,
+            logical,
+            length,
+            physical >> 32,
+            physical & 0xFFFF_FFFF,
+        )
+    prepared_inode[:] = _inode_with_checksum(
+        prepared_super,
+        inode_number,
+        prepared_inode,
+    )
+
+    original_data = _patched_ext4_home(
+        path,
+        base_patches,
+        data_block,
+        block_size=block_size,
+    )
+    original_xattr = _patched_ext4_home(
+        path,
+        base_patches,
+        xattr_block,
+        block_size=block_size,
+    )
+    original_inode_home = _patched_ext4_home(
+        path,
+        base_patches,
+        inode_home,
+        block_size=block_size,
+    )
+    original_ballast_inode_home = _patched_ext4_home(
+        path,
+        base_patches,
+        ballast_inode_home,
+        block_size=block_size,
+    )
+    original_leaf_bitmap = _patched_ext4_home(
+        path,
+        base_patches,
+        leaf_bitmap_home,
+        block_size=block_size,
+    )
+    original_leaf_gdt = _patched_ext4_home(
+        path,
+        base_patches,
+        leaf_gdt_home,
+        block_size=block_size,
+    )
+    leaf_byte, leaf_bit = divmod(leaf_index, 8)
+    assert not original_leaf_bitmap[leaf_byte] & (1 << leaf_bit)
+
+    original_data_candidate = bytes((0xA5,)) * block_size
+    original_leaf_candidate = bytes((0x5A,)) * block_size
+    preparation_patches = (
+        (1024, bytes(prepared_super)),
+        (bitmap_home * block_size, bytes(prepared_bitmap)),
+        (gdt_home * block_size, bytes(prepared_gdt)),
+        (ballast_leaf_home * block_size, bytes(prepared_ballast_leaf)),
+        (ballast_inode_offset, bytes(prepared_ballast_inode)),
+        (inode_offset, bytes(prepared_inode)),
+        *tuple(
+            (physical * block_size, payload)
+            for physical, payload in transferred_payloads.items()
+        ),
+        (data_candidate * block_size, original_data_candidate),
+        (leaf_candidate * block_size, original_leaf_candidate),
+    )
+    input_patches = base_patches + preparation_patches
+    prepared_inode_home = _patched_ext4_home(
+        path,
+        input_patches,
+        inode_home,
+        block_size=block_size,
+    )
+    prepared_ballast_inode_home = _patched_ext4_home(
+        path,
+        input_patches,
+        ballast_inode_home,
+        block_size=block_size,
+    )
+    assert prepared_inode_home != original_inode_home
+    assert prepared_ballast_inode_home != original_ballast_inode_home
+    expected_file_prefix = b"".join(
+        (
+            original_data,
+            bytes(block_size),
+            transferred_payloads[transferred_blocks[1]],
+            bytes(block_size),
+            transferred_payloads[transferred_blocks[2]],
+            transferred_payloads[transferred_blocks[0]],
+        )
+    )
+    assert len(expected_file_prefix) == old_size
+    assert not prepared_bitmap[data_byte] & (1 << data_bit)
+
+    return {
+        "path": path,
+        "input_patches": input_patches,
+        "activation_trace": activation_trace,
+        "superblock": bytes(prepared_super),
+        "inode": bytes(prepared_inode),
+        "inode_offset": inode_offset,
+        "inode_number": inode_number,
+        "inode_home": inode_home,
+        "inode_block_offset": inode_block_offset,
+        "inode_size": inode_size,
+        "generation": generation,
+        "links": links,
+        "root_generation": root_generation,
+        "old_size": old_size,
+        "old_blocks": old_blocks,
+        "extent_entries": extent_entries,
+        "expected_file_prefix": expected_file_prefix,
+        "data_block": data_block,
+        "xattr_block": xattr_block,
+        "data_candidate": data_candidate,
+        "data_group": data_group,
+        "data_index": data_index,
+        "bitmap_home": bitmap_home,
+        "gdt_home": gdt_home,
+        "descriptor_offset": descriptor_offset,
+        "leaf_candidate": leaf_candidate,
+        "leaf_group": leaf_group,
+        "leaf_index": leaf_index,
+        "leaf_bitmap_home": leaf_bitmap_home,
+        "leaf_gdt_home": leaf_gdt_home,
+        "leaf_descriptor_offset": leaf_descriptor_offset,
+        "super_home": super_home,
+        "transferred_blocks": transferred_blocks,
+        "transferred_payloads": transferred_payloads,
+        "ballast_inode_number": ballast_inode_number,
+        "ballast_inode_home": ballast_inode_home,
+        "ballast_leaf_home": ballast_leaf_home,
+        "prepared_ballast_i_blocks": prepared_ballast_i_blocks,
+        "original_bitmap": bytes(original_bitmap),
+        "original_gdt": original_gdt,
+        "original_leaf_bitmap": original_leaf_bitmap,
+        "original_leaf_gdt": original_leaf_gdt,
+        "original_data": original_data,
+        "original_xattr": original_xattr,
+        "original_inode_home": original_inode_home,
+        "original_ballast_inode_home": original_ballast_inode_home,
+        "prepared_inode_home": prepared_inode_home,
+        "prepared_ballast_inode_home": prepared_ballast_inode_home,
+        "prepared_ballast_leaf": bytes(prepared_ballast_leaf),
+        "original_data_candidate": original_data_candidate,
+        "original_leaf_candidate": original_leaf_candidate,
+    }
+
+
+@pytest.fixture(scope="session")
+def staged_public_extent_root_growth_fixture(
+    staged_public_extent_root_growth_prestate: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Grow a saturated resident root into one checksummed leaf."""
+    geometry = staged_public_extent_root_growth_prestate
+    path = geometry["path"]
+    input_patches = geometry["input_patches"]
+    activation_trace = geometry["activation_trace"]
+    superblock = geometry["superblock"]
+    inode = geometry["inode"]
+    inode_number = geometry["inode_number"]
+    inode_home = geometry["inode_home"]
+    inode_block_offset = geometry["inode_block_offset"]
+    inode_size = geometry["inode_size"]
+    block_size = geometry["block_size"]
+    old_size = geometry["old_size"]
+    old_blocks = geometry["old_blocks"]
+    generation = geometry["generation"]
+    root_generation = geometry["root_generation"]
+    links = geometry["links"]
+    extent_entries = geometry["extent_entries"]
+    data_block = geometry["data_block"]
+    xattr_block = geometry["xattr_block"]
+    data_candidate = geometry["data_candidate"]
+    leaf_candidate = geometry["leaf_candidate"]
+    original_blocks = geometry["original_blocks"]
+    original_data_candidate = geometry["original_data_candidate"]
+    original_leaf_candidate = geometry["original_leaf_candidate"]
+    expected_file_prefix = geometry["expected_file_prefix"]
+    assert isinstance(path, Path)
+    assert isinstance(input_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(superblock, bytes)
+    assert isinstance(inode, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(inode_block_offset, int)
+    assert isinstance(inode_size, int)
+    assert isinstance(block_size, int)
+    assert isinstance(old_size, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(generation, int)
+    assert isinstance(root_generation, int)
+    assert generation != root_generation
+    assert isinstance(links, int)
+    assert isinstance(extent_entries, tuple)
+    assert isinstance(data_block, int)
+    assert isinstance(xattr_block, int)
+    assert isinstance(data_candidate, int)
+    assert isinstance(leaf_candidate, int)
+    assert isinstance(original_blocks, dict)
+    assert isinstance(original_data_candidate, bytes)
+    assert isinstance(original_leaf_candidate, bytes)
+    assert isinstance(expected_file_prefix, bytes)
+
+    replacement = _STAGED_ALIGNED_APPEND_REPLACEMENT
+    expected_data_candidate = replacement + bytes(
+        block_size - len(replacement)
+    )
+    expected_file = expected_file_prefix + replacement
+    new_size = len(expected_file)
+    new_blocks = old_blocks + 2 * (block_size // 512)
+    epoch_ms = 3_000_000_423_456
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0]
+    assert struct.unpack_from("<I", superblock, 0x158)[0] == 0
+    assert new_size == old_size + len(replacement)
+    assert new_blocks == 14
+
+    leaf_max = (block_size - 12) // 12
+    leaf_entries = (*extent_entries, (old_size // block_size, 1, data_candidate))
+    expected_leaf = bytearray(block_size)
+    struct.pack_into(
+        "<HHHHI",
+        expected_leaf,
+        0,
+        0xF30A,
+        len(leaf_entries),
+        leaf_max,
+        0,
+        root_generation,
+    )
+    for index, (logical, length, physical) in enumerate(leaf_entries):
+        struct.pack_into(
+            "<IHHI",
+            expected_leaf,
+            12 + index * 12,
+            logical,
+            length,
+            physical >> 32,
+            physical & 0xFFFF_FFFF,
+        )
+    expected_leaf = bytearray(
+        _extent_node_with_checksum(
+            superblock,
+            inode_number,
+            generation,
+            expected_leaf,
+        )
+    )
+
+    expected_inode = bytearray(inode)
+    struct.pack_into("<I", expected_inode, 0x1C, new_blocks)
+    expected_inode[0x28:0x64] = bytes(60)
+    struct.pack_into(
+        "<HHHHI",
+        expected_inode,
+        0x28,
+        0xF30A,
+        1,
+        4,
+        1,
+        root_generation,
+    )
+    struct.pack_into(
+        "<IIHH",
+        expected_inode,
+        0x34,
+        leaf_entries[0][0],
+        leaf_candidate,
+        leaf_candidate >> 32,
+        0,
+    )
+    original_inode_home = _patched_ext4_home(
+        path,
+        input_patches,
+        inode_home,
+        block_size=block_size,
+    )
+    expected_inode_home = _staged_write_timestamped_inode_home(
+        superblock,
+        expected_inode,
+        original_inode_home,
+        inode_number=inode_number,
+        inode_block_offset=inode_block_offset,
+        epoch_ms=epoch_ms,
+        expected_size=new_size,
+    )
+
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    bitmap_home = 259
+    gdt_home = 2
+    super_home = 1
+    candidate_group, candidate_index = divmod(
+        data_candidate - first_data,
+        blocks_per_group,
+    )
+    leaf_group, leaf_index = divmod(
+        leaf_candidate - first_data,
+        blocks_per_group,
+    )
+    assert candidate_group == leaf_group == 0
+    expected_bitmap = bytearray(
+        _patched_ext4_home(
+            path,
+            input_patches,
+            bitmap_home,
+            block_size=block_size,
+        )
+    )
+    for block_index in (candidate_index, leaf_index):
+        byte_index, bit_index = divmod(block_index, 8)
+        assert not expected_bitmap[byte_index] & (1 << bit_index)
+        expected_bitmap[byte_index] |= 1 << bit_index
+    bitmap_checksum = _crc32c_raw(expected_bitmap, seed)
+
+    expected_gdt = bytearray(
+        _patched_ext4_home(
+            path,
+            input_patches,
+            gdt_home,
+            block_size=block_size,
+        )
+    )
+    descriptor = bytearray(expected_gdt[:64])
+    group_free_before = struct.unpack_from("<H", descriptor, 0x0C)[0] | (
+        struct.unpack_from("<H", descriptor, 0x2C)[0] << 16
+    )
+    assert group_free_before >= 2
+    group_free_after = group_free_before - 2
+    struct.pack_into("<H", descriptor, 0x0C, group_free_after & 0xFFFF)
+    struct.pack_into("<H", descriptor, 0x2C, group_free_after >> 16)
+    struct.pack_into("<H", descriptor, 0x18, bitmap_checksum & 0xFFFF)
+    struct.pack_into("<H", descriptor, 0x38, bitmap_checksum >> 16)
+    descriptor[:] = _group_descriptor_with_checksum(
+        superblock,
+        descriptor,
+        candidate_group,
+    )
+    expected_gdt[:64] = descriptor
+
+    expected_super = bytearray(superblock)
+    struct.pack_into("<I", expected_super, 0x0C, free_blocks_before - 2)
+    expected_super[:] = _ext4_super_with_checksum(expected_super)
+
+    directory = tmp_path_factory.mktemp("ext4-public-extent-root-growth")
+    media_path = directory / "staged-public-extent-root-growth.img"
+    stable_path = directory / "staged-public-extent-root-growth-stable.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            path,
+            media_path,
+            [
+                "CREATE _RG-STAT VFS-STATFS-SIZE ALLOT",
+                "VARIABLE _RG-CLOCK-CALLS",
+                (
+                    ": _RG-NOW ( context -- epoch-ms ior ) "
+                    "DROP 1 _RG-CLOCK-CALLS +! "
+                    f"{epoch_ms} 0 ;"
+                ),
+                "T-ARENA CONSTANT _RG-ARENA",
+                (
+                    "_RG-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _RG-MOUNT-IOR CONSTANT _RG-V"
+                ),
+                "_RG-V _EXT4-CTX CONSTANT _RG-CTX",
+                (
+                    "' _RG-NOW 0 _RG-V EXT4-BIND-WRITE-CLOCK? "
+                    "CONSTANT _RG-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_RG-PROFILE", "_RG-V", 5, 1, 0
+                ),
+                (
+                    'S" /fixture/hardlink.txt" '
+                    "VFS-FF-READ VFS-FF-WRITE OR VFS-FF-APPEND OR "
+                    "_RG-V VFS-OPEN? CONSTANT _RG-OPEN-IOR CONSTANT _RG-FD"
+                ),
+                "_RG-FD FD.INODE @ D.VNODE @ CONSTANT _RG-VN",
+                "_RG-FD FD.CUR-LO @ CONSTANT _RG-INITIAL-CURSOR",
+                "_RG-VN VN.ATIME @ CONSTANT _RG-OLD-ATIME",
+                "_RG-VN VN.ATIME-NS @ CONSTANT _RG-OLD-ATIME-NS",
+                "_RG-VN VN.GEN @ CONSTANT _RG-OLD-GEN",
+                "_RG-VN VN.NLINK @ CONSTANT _RG-OLD-NLINK",
+                (
+                    "_RG-STAT VFS-STATFS-SIZE _RG-V VFS-STATFS "
+                    "CONSTANT _RG-STAT-BEFORE-IOR"
+                ),
+                "_RG-STAT VSF.BFREE @ CONSTANT _RG-FREE-BEFORE",
+                (
+                    f'S" {replacement.decode("ascii")}" _RG-FD '
+                    "VFS-WRITE? CONSTANT _RG-WRITE-IOR "
+                    "CONSTANT _RG-WRITE-ACTUAL"
+                ),
+                "_RG-FD FD.CUR-LO @ CONSTANT _RG-CURSOR",
+                "_RG-CTX _EXT4-C.J.WRITER + @ CONSTANT _RG-WRITER",
+                "_RG-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _RG-HOMES",
+                (
+                    "_RG-STAT VFS-STATFS-SIZE _RG-V VFS-STATFS "
+                    "CONSTANT _RG-STAT-AFTER-IOR"
+                ),
+                "_RG-STAT VSF.BFREE @ CONSTANT _RG-FREE-AFTER",
+                (
+                    _forth_conjunction(
+                        [
+                            "_RG-MOUNT-IOR 0=",
+                            "_RG-CLOCK-IOR 0=",
+                            "_RG-PROFILE-SIZE-IOR 0=",
+                            "_RG-PROFILE-BIND-IOR 0=",
+                            "_RG-PROFILE-USED _RG-PROFILE-SIZE =",
+                            "_RG-OPEN-IOR 0=",
+                            f"_RG-INITIAL-CURSOR {old_size} =",
+                            "_RG-WRITE-IOR 0=",
+                            f"_RG-WRITE-ACTUAL {len(replacement)} =",
+                            "_RG-V V.LAST-IOR @ 0=",
+                            f"_RG-CURSOR {new_size} =",
+                            "_RG-CLOCK-CALLS @ 1 =",
+                            f"_RG-VN VN.SIZE-LO @ {new_size} =",
+                            "_RG-VN VN.SIZE-HI @ 0=",
+                            f"_RG-VN VN.BLOCKS @ {new_blocks} =",
+                            "_RG-VN VN.GEN @ _RG-OLD-GEN =",
+                            "_RG-VN VN.NLINK @ _RG-OLD-NLINK =",
+                            f"_RG-VN VN.MTIME @ {seconds} =",
+                            f"_RG-VN VN.MTIME-NS @ {nanoseconds} =",
+                            f"_RG-VN VN.CTIME @ {seconds} =",
+                            f"_RG-VN VN.CTIME-NS @ {nanoseconds} =",
+                            "_RG-VN VN.ATIME @ _RG-OLD-ATIME =",
+                            "_RG-VN VN.ATIME-NS @ _RG-OLD-ATIME-NS =",
+                            "_RG-STAT-BEFORE-IOR 0=",
+                            "_RG-STAT-AFTER-IOR 0=",
+                            "_RG-FREE-AFTER _RG-FREE-BEFORE 2 - =",
+                            "_RG-WRITER _RG-PROFILE-BASE =",
+                            "_RG-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_RG-HOMES 5 =",
+                            "_EXT4-MOW-CREDIT @ -5 =",
+                            "_XH-ROOT-GROW @ 0<",
+                            "_XH-META-CREDIT @ 5 =",
+                            f"_XH-CANDIDATE @ {data_candidate} =",
+                            f"_XH-LEAF-CANDIDATE @ {leaf_candidate} =",
+                            "_XH-EDIT @ _XH-EDIT-GROW-ROOT =",
+                            "_XH-ENTRIES @ 1 =",
+                            f"_XH-LEAF-MAX @ {leaf_max} =",
+                            "_XH-LEAF-FIRST @ 0=",
+                            "_XH-PUBLISHED @ 0<",
+                            f"_EXT4-WR-NEW-BLOCKS @ {new_blocks} =",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-EXTENT-ROOT-GROWTH" THEN'
+                ),
+                "_RG-FD VFS-CLOSE? CONSTANT _RG-CLOSE-IOR",
+                "0 _RG-V VFS-UNMOUNT CONSTANT _RG-UNMOUNT-IOR",
+                (
+                    "_RG-CLOSE-IOR 0= _RG-UNMOUNT-IOR 0= AND "
+                    "_RG-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_RG-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_RG-PROFILE-ARENA A.PTR @ _RG-PROFILE-BASE = AND "
+                    'IF ." EXT4-PUBLIC-EXTENT-ROOT-GROWTH-UNMOUNT" THEN'
+                ),
+            ],
+            patches=input_patches,
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-EXTENT-ROOT-GROWTH")
+        _assert_emitted(output, "EXT4-PUBLIC-EXTENT-ROOT-GROWTH-UNMOUNT")
+        assert trace[: len(activation_trace)] == activation_trace
+        transaction_trace = trace[len(activation_trace) :]
+        data_event = ("write", data_candidate * 2, 2)
+        bitmap_event = ("write", bitmap_home * 2, 2)
+        gdt_event = ("write", gdt_home * 2, 2)
+        super_event = ("write", super_home * 2, 2)
+        leaf_event = ("write", leaf_candidate * 2, 2)
+        inode_event = ("write", inode_home * 2, 2)
+        role_events = tuple(
+            event
+            for event in transaction_trace
+            if event
+            in {
+                data_event,
+                bitmap_event,
+                gdt_event,
+                super_event,
+                leaf_event,
+                inode_event,
+            }
+        )
+        assert role_events[:6] == (
+            data_event,
+            bitmap_event,
+            gdt_event,
+            super_event,
+            leaf_event,
+            inode_event,
+        )
+        # The first super event is the allocation transaction's retained home;
+        # the second lands the activated journal's final clean super endpoint.
+        assert role_events[6:] == (super_event,)
+        for untouched in (*original_blocks, xattr_block):
+            assert transaction_trace.count(("write", untouched * 2, 2)) == 0
+
+        final_superblock, final_inode, _ = _ext4_inode_record(
+            media_path,
+            inode_number,
+        )
+        assert final_superblock == bytes(expected_super)
+        assert struct.unpack_from("<I", final_inode, 0x04)[0] == new_size
+        assert struct.unpack_from("<I", final_inode, 0x6C)[0] == 0
+        assert struct.unpack_from("<I", final_inode, 0x1C)[0] == new_blocks
+        assert struct.unpack_from("<H", final_inode, 0x1A)[0] == links
+        assert struct.unpack_from("<I", final_inode, 0x64)[0] == generation
+        assert struct.unpack_from("<HHHHI", final_inode, 0x28) == (
+            0xF30A,
+            1,
+            4,
+            1,
+            root_generation,
+        )
+        assert struct.unpack_from("<IIHH", final_inode, 0x34) == (
+            0,
+            leaf_candidate,
+            0,
+            0,
+        )
+        assert final_inode[0x40:0x64] == bytes(36)
+        assert _read_ext4_home(
+            media_path,
+            inode_home,
+            block_size=block_size,
+        ) == expected_inode_home
+        assert _read_ext4_home(
+            media_path,
+            leaf_candidate,
+            block_size=block_size,
+        ) == bytes(expected_leaf)
+        assert struct.unpack_from("<HHHHI", expected_leaf, 0) == (
+            0xF30A,
+            5,
+            84,
+            0,
+            root_generation,
+        )
+        for index, entry in enumerate(leaf_entries):
+            logical, length, physical = entry
+            assert struct.unpack_from(
+                "<IHHI",
+                expected_leaf,
+                12 + index * 12,
+            ) == (logical, length, physical >> 32, physical & 0xFFFF_FFFF)
+        assert expected_leaf[72:1020] == bytes(948)
+        assert _ext4_block_allocation_state(
+            media_path,
+            (data_candidate, leaf_candidate),
+        ) == {data_candidate: True, leaf_candidate: True}
+        assert _read_ext4_home(
+            media_path,
+            data_candidate,
+            block_size=block_size,
+        ) == expected_data_candidate
+        assert _read_ext4_home(
+            media_path,
+            bitmap_home,
+            block_size=block_size,
+        ) == bytes(expected_bitmap)
+        assert _read_ext4_home(
+            media_path,
+            gdt_home,
+            block_size=block_size,
+        ) == bytes(expected_gdt)
+        assert original_data_candidate != expected_data_candidate
+        assert original_leaf_candidate != bytes(expected_leaf)
+        for physical, original in original_blocks.items():
+            assert _read_ext4_home(
+                media_path,
+                physical,
+                block_size=block_size,
+            ) == original
+
+        _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+            media_path,
+            stable_path,
+            expected_file=expected_file,
+            expected_epoch_ms=epoch_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            expected_blocks=new_blocks,
+            prefix="_RG-S",
+            marker="EXT4-PUBLIC-EXTENT-ROOT-GROWTH-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == media_sha256
+        return {
+            "image": stable_path,
+            "trace": trace,
+            "epoch_ms": epoch_ms,
+            "expected_file": expected_file,
+            "inode_number": inode_number,
+            "data_candidate": data_candidate,
+            "leaf_candidate": leaf_candidate,
+            "extent_entries": leaf_entries,
+            "xattr_block": xattr_block,
+        }
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
+@pytest.fixture(scope="session")
+def staged_public_extent_root_growth_seven_home_fixture(
+    staged_public_extent_root_growth_seven_home_prestate: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Commit root growth through two bitmap homes and two GDT pages."""
+    geometry = staged_public_extent_root_growth_seven_home_prestate
+    path = geometry["path"]
+    input_patches = geometry["input_patches"]
+    activation_trace = geometry["activation_trace"]
+    superblock = geometry["superblock"]
+    inode = geometry["inode"]
+    inode_number = geometry["inode_number"]
+    inode_home = geometry["inode_home"]
+    inode_block_offset = geometry["inode_block_offset"]
+    inode_size = geometry["inode_size"]
+    generation = geometry["generation"]
+    links = geometry["links"]
+    root_generation = geometry["root_generation"]
+    block_size = 1024
+    old_size = geometry["old_size"]
+    old_blocks = geometry["old_blocks"]
+    extent_entries = geometry["extent_entries"]
+    expected_file_prefix = geometry["expected_file_prefix"]
+    data_block = geometry["data_block"]
+    xattr_block = geometry["xattr_block"]
+    data_candidate = geometry["data_candidate"]
+    data_group = geometry["data_group"]
+    data_index = geometry["data_index"]
+    bitmap_home = geometry["bitmap_home"]
+    gdt_home = geometry["gdt_home"]
+    descriptor_offset = geometry["descriptor_offset"]
+    leaf_candidate = geometry["leaf_candidate"]
+    leaf_group = geometry["leaf_group"]
+    leaf_index = geometry["leaf_index"]
+    leaf_bitmap_home = geometry["leaf_bitmap_home"]
+    leaf_gdt_home = geometry["leaf_gdt_home"]
+    leaf_descriptor_offset = geometry["leaf_descriptor_offset"]
+    super_home = geometry["super_home"]
+    transferred_blocks = geometry["transferred_blocks"]
+    transferred_payloads = geometry["transferred_payloads"]
+    ballast_inode_number = geometry["ballast_inode_number"]
+    ballast_inode_home = geometry["ballast_inode_home"]
+    ballast_leaf_home = geometry["ballast_leaf_home"]
+    prepared_ballast_i_blocks = geometry["prepared_ballast_i_blocks"]
+    original_bitmap = geometry["original_bitmap"]
+    original_gdt = geometry["original_gdt"]
+    original_leaf_bitmap = geometry["original_leaf_bitmap"]
+    original_leaf_gdt = geometry["original_leaf_gdt"]
+    original_data = geometry["original_data"]
+    original_xattr = geometry["original_xattr"]
+    prepared_inode_home = geometry["prepared_inode_home"]
+    prepared_ballast_inode_home = geometry["prepared_ballast_inode_home"]
+    prepared_ballast_leaf = geometry["prepared_ballast_leaf"]
+    original_data_candidate = geometry["original_data_candidate"]
+    original_leaf_candidate = geometry["original_leaf_candidate"]
+    assert isinstance(path, Path)
+    assert isinstance(input_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(superblock, bytes)
+    assert isinstance(inode, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(inode_block_offset, int)
+    assert isinstance(inode_size, int)
+    assert isinstance(generation, int)
+    assert isinstance(links, int)
+    assert isinstance(root_generation, int)
+    assert isinstance(old_size, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(extent_entries, tuple)
+    assert isinstance(expected_file_prefix, bytes)
+    assert isinstance(data_block, int)
+    assert isinstance(xattr_block, int)
+    assert isinstance(data_candidate, int)
+    assert isinstance(data_group, int)
+    assert isinstance(data_index, int)
+    assert isinstance(bitmap_home, int)
+    assert isinstance(gdt_home, int)
+    assert isinstance(descriptor_offset, int)
+    assert isinstance(leaf_candidate, int)
+    assert isinstance(leaf_group, int)
+    assert isinstance(leaf_index, int)
+    assert isinstance(leaf_bitmap_home, int)
+    assert isinstance(leaf_gdt_home, int)
+    assert isinstance(leaf_descriptor_offset, int)
+    assert isinstance(super_home, int)
+    assert isinstance(transferred_blocks, tuple)
+    assert isinstance(transferred_payloads, dict)
+    assert isinstance(ballast_inode_number, int)
+    assert isinstance(ballast_inode_home, int)
+    assert isinstance(ballast_leaf_home, int)
+    assert isinstance(prepared_ballast_i_blocks, int)
+    assert isinstance(original_bitmap, bytes)
+    assert isinstance(original_gdt, bytes)
+    assert isinstance(original_leaf_bitmap, bytes)
+    assert isinstance(original_leaf_gdt, bytes)
+    assert isinstance(original_data, bytes)
+    assert isinstance(original_xattr, bytes)
+    assert isinstance(prepared_inode_home, bytes)
+    assert isinstance(prepared_ballast_inode_home, bytes)
+    assert isinstance(prepared_ballast_leaf, bytes)
+    assert isinstance(original_data_candidate, bytes)
+    assert isinstance(original_leaf_candidate, bytes)
+
+    replacement = _STAGED_ALIGNED_APPEND_REPLACEMENT
+    expected_data_candidate = replacement + bytes(
+        block_size - len(replacement)
+    )
+    expected_file = expected_file_prefix + replacement
+    new_size = len(expected_file)
+    new_blocks = old_blocks + 2 * (block_size // 512)
+    epoch_ms = 3_000_000_623_456
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0]
+    assert new_size == old_size + len(replacement)
+    assert new_blocks == 14
+
+    leaf_max = (block_size - 12) // 12
+    leaf_entries = (
+        *extent_entries,
+        (old_size // block_size, 1, data_candidate),
+    )
+    expected_leaf = bytearray(block_size)
+    struct.pack_into(
+        "<HHHHI",
+        expected_leaf,
+        0,
+        0xF30A,
+        len(leaf_entries),
+        leaf_max,
+        0,
+        root_generation,
+    )
+    for entry_index, (logical, length, physical) in enumerate(leaf_entries):
+        struct.pack_into(
+            "<IHHI",
+            expected_leaf,
+            12 + entry_index * 12,
+            logical,
+            length,
+            physical >> 32,
+            physical & 0xFFFF_FFFF,
+        )
+    expected_leaf[:] = _extent_node_with_checksum(
+        superblock,
+        inode_number,
+        generation,
+        expected_leaf,
+    )
+
+    expected_inode = bytearray(inode)
+    struct.pack_into("<I", expected_inode, 0x1C, new_blocks)
+    expected_inode[0x28:0x64] = bytes(60)
+    struct.pack_into(
+        "<HHHHI",
+        expected_inode,
+        0x28,
+        0xF30A,
+        1,
+        4,
+        1,
+        root_generation,
+    )
+    struct.pack_into(
+        "<IIHH",
+        expected_inode,
+        0x34,
+        leaf_entries[0][0],
+        leaf_candidate & 0xFFFF_FFFF,
+        leaf_candidate >> 32,
+        0,
+    )
+    expected_inode_home = _staged_write_timestamped_inode_home(
+        superblock,
+        expected_inode,
+        prepared_inode_home,
+        inode_number=inode_number,
+        inode_block_offset=inode_block_offset,
+        epoch_ms=epoch_ms,
+        expected_size=new_size,
+    )
+
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    expected_bitmap = bytearray(
+        _patched_ext4_home(
+            path,
+            input_patches,
+            bitmap_home,
+            block_size=block_size,
+        )
+    )
+    data_byte, data_bit = divmod(data_index, 8)
+    assert not expected_bitmap[data_byte] & (1 << data_bit)
+    expected_bitmap[data_byte] |= 1 << data_bit
+    assert bytes(expected_bitmap) == original_bitmap
+    data_bitmap_checksum = _crc32c_raw(expected_bitmap, seed)
+
+    expected_gdt = bytearray(
+        _patched_ext4_home(
+            path,
+            input_patches,
+            gdt_home,
+            block_size=block_size,
+        )
+    )
+    data_descriptor = bytearray(
+        expected_gdt[
+            descriptor_offset : descriptor_offset + 64
+        ]
+    )
+    data_free_before = struct.unpack_from(
+        "<H", data_descriptor, 0x0C
+    )[0] | (struct.unpack_from("<H", data_descriptor, 0x2C)[0] << 16)
+    assert data_free_before == 1
+    struct.pack_into("<H", data_descriptor, 0x0C, 0)
+    struct.pack_into("<H", data_descriptor, 0x2C, 0)
+    struct.pack_into(
+        "<H", data_descriptor, 0x18, data_bitmap_checksum & 0xFFFF
+    )
+    struct.pack_into(
+        "<H", data_descriptor, 0x38, data_bitmap_checksum >> 16
+    )
+    data_descriptor[:] = _group_descriptor_with_checksum(
+        superblock,
+        data_descriptor,
+        data_group,
+    )
+    expected_gdt[
+        descriptor_offset : descriptor_offset + 64
+    ] = data_descriptor
+    assert bytes(expected_gdt) == original_gdt
+
+    expected_leaf_bitmap = bytearray(original_leaf_bitmap)
+    leaf_byte, leaf_bit = divmod(leaf_index, 8)
+    assert not expected_leaf_bitmap[leaf_byte] & (1 << leaf_bit)
+    expected_leaf_bitmap[leaf_byte] |= 1 << leaf_bit
+    leaf_bitmap_checksum = _crc32c_raw(expected_leaf_bitmap, seed)
+
+    expected_leaf_gdt = bytearray(original_leaf_gdt)
+    leaf_descriptor = bytearray(
+        expected_leaf_gdt[
+            leaf_descriptor_offset : leaf_descriptor_offset + 64
+        ]
+    )
+    leaf_free_before = struct.unpack_from(
+        "<H", leaf_descriptor, 0x0C
+    )[0] | (struct.unpack_from("<H", leaf_descriptor, 0x2C)[0] << 16)
+    assert leaf_free_before > 0
+    leaf_free_after = leaf_free_before - 1
+    struct.pack_into(
+        "<H", leaf_descriptor, 0x0C, leaf_free_after & 0xFFFF
+    )
+    struct.pack_into("<H", leaf_descriptor, 0x2C, leaf_free_after >> 16)
+    struct.pack_into(
+        "<H", leaf_descriptor, 0x18, leaf_bitmap_checksum & 0xFFFF
+    )
+    struct.pack_into(
+        "<H", leaf_descriptor, 0x38, leaf_bitmap_checksum >> 16
+    )
+    leaf_descriptor[:] = _group_descriptor_with_checksum(
+        superblock,
+        leaf_descriptor,
+        leaf_group,
+    )
+    expected_leaf_gdt[
+        leaf_descriptor_offset : leaf_descriptor_offset + 64
+    ] = leaf_descriptor
+
+    expected_super = bytearray(superblock)
+    struct.pack_into("<I", expected_super, 0x0C, free_blocks_before - 2)
+    expected_super[:] = _ext4_super_with_checksum(expected_super)
+
+    directory = tmp_path_factory.mktemp(
+        "ext4-public-extent-root-growth-seven-home"
+    )
+    media_path = directory / "staged-public-root-growth-seven-home.img"
+    stable_path = (
+        directory / "staged-public-root-growth-seven-home-stable.img"
+    )
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            path,
+            media_path,
+            [
+                "CREATE _R7-STAT VFS-STATFS-SIZE ALLOT",
+                "VARIABLE _R7-CLOCK-CALLS",
+                (
+                    ": _R7-NOW ( context -- epoch-ms ior ) "
+                    "DROP 1 _R7-CLOCK-CALLS +! "
+                    f"{epoch_ms} 0 ;"
+                ),
+                "T-ARENA CONSTANT _R7-ARENA",
+                (
+                    "_R7-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _R7-MOUNT-IOR CONSTANT _R7-V"
+                ),
+                "_R7-V _EXT4-CTX CONSTANT _R7-CTX",
+                (
+                    "' _R7-NOW 0 _R7-V EXT4-BIND-WRITE-CLOCK? "
+                    "CONSTANT _R7-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_R7-PROFILE", "_R7-V", 7, 1, 0
+                ),
+                (
+                    'S" /fixture/hardlink.txt" '
+                    "VFS-FF-READ VFS-FF-WRITE OR VFS-FF-APPEND OR "
+                    "_R7-V VFS-OPEN? "
+                    "CONSTANT _R7-OPEN-IOR CONSTANT _R7-FD"
+                ),
+                "_R7-FD FD.INODE @ D.VNODE @ CONSTANT _R7-VN",
+                "_R7-FD FD.CUR-LO @ CONSTANT _R7-INITIAL-CURSOR",
+                "_R7-VN VN.ATIME @ CONSTANT _R7-OLD-ATIME",
+                "_R7-VN VN.ATIME-NS @ CONSTANT _R7-OLD-ATIME-NS",
+                "_R7-VN VN.GEN @ CONSTANT _R7-OLD-GEN",
+                "_R7-VN VN.NLINK @ CONSTANT _R7-OLD-NLINK",
+                (
+                    "_R7-STAT VFS-STATFS-SIZE _R7-V VFS-STATFS "
+                    "CONSTANT _R7-STAT-BEFORE-IOR"
+                ),
+                "_R7-STAT VSF.BFREE @ CONSTANT _R7-FREE-BEFORE",
+                (
+                    f'S" {replacement.decode("ascii")}" _R7-FD '
+                    "VFS-WRITE? CONSTANT _R7-WRITE-IOR "
+                    "CONSTANT _R7-WRITE-ACTUAL"
+                ),
+                "_R7-FD FD.CUR-LO @ CONSTANT _R7-CURSOR",
+                "_R7-CTX _EXT4-C.J.WRITER + @ CONSTANT _R7-WRITER",
+                "_R7-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _R7-HOMES",
+                (
+                    "_R7-STAT VFS-STATFS-SIZE _R7-V VFS-STATFS "
+                    "CONSTANT _R7-STAT-AFTER-IOR"
+                ),
+                "_R7-STAT VSF.BFREE @ CONSTANT _R7-FREE-AFTER",
+                (
+                    _forth_conjunction(
+                        [
+                            "_R7-MOUNT-IOR 0=",
+                            "_R7-CLOCK-IOR 0=",
+                            "_R7-PROFILE-SIZE-IOR 0=",
+                            "_R7-PROFILE-BIND-IOR 0=",
+                            "_R7-PROFILE-USED _R7-PROFILE-SIZE =",
+                            "_R7-OPEN-IOR 0=",
+                            f"_R7-INITIAL-CURSOR {old_size} =",
+                            "_R7-WRITE-IOR 0=",
+                            f"_R7-WRITE-ACTUAL {len(replacement)} =",
+                            "_R7-V V.LAST-IOR @ 0=",
+                            f"_R7-CURSOR {new_size} =",
+                            "_R7-CLOCK-CALLS @ 1 =",
+                            f"_R7-VN VN.SIZE-LO @ {new_size} =",
+                            "_R7-VN VN.SIZE-HI @ 0=",
+                            f"_R7-VN VN.BLOCKS @ {new_blocks} =",
+                            "_R7-VN VN.GEN @ _R7-OLD-GEN =",
+                            "_R7-VN VN.NLINK @ _R7-OLD-NLINK =",
+                            f"_R7-VN VN.MTIME @ {seconds} =",
+                            f"_R7-VN VN.MTIME-NS @ {nanoseconds} =",
+                            f"_R7-VN VN.CTIME @ {seconds} =",
+                            f"_R7-VN VN.CTIME-NS @ {nanoseconds} =",
+                            "_R7-VN VN.ATIME @ _R7-OLD-ATIME =",
+                            "_R7-VN VN.ATIME-NS @ _R7-OLD-ATIME-NS =",
+                            "_R7-STAT-BEFORE-IOR 0=",
+                            "_R7-STAT-AFTER-IOR 0=",
+                            "_R7-FREE-AFTER _R7-FREE-BEFORE 2 - =",
+                            "_R7-WRITER _R7-PROFILE-BASE =",
+                            "_R7-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_R7-HOMES 7 =",
+                            "_EXT4-MOW-CREDIT @ -7 =",
+                            "_XH-ROOT-GROW @ 0<",
+                            "_XH-META-CREDIT @ 7 =",
+                            "_XH-EDIT @ _XH-EDIT-GROW-ROOT =",
+                            "_XH-INSERT @ 4 =",
+                            f"_XH-CANDIDATE @ {data_candidate} =",
+                            f"_XH-CANDIDATE-GROUP @ {data_group} =",
+                            f"_XH-BITMAP-HOME @ {bitmap_home} =",
+                            f"_XH-GDT-HOME @ {gdt_home} =",
+                            f"_XH-LEAF-CANDIDATE @ {leaf_candidate} =",
+                            f"_XH-LEAF-GROUP @ {leaf_group} =",
+                            (
+                                f"_XH-LEAF-BITMAP-HOME @ "
+                                f"{leaf_bitmap_home} ="
+                            ),
+                            f"_XH-LEAF-GDT-HOME @ {leaf_gdt_home} =",
+                            f"_XH-INODE-HOME @ {inode_home} =",
+                            "_XH-ENTRIES @ 1 =",
+                            f"_XH-LEAF-MAX @ {leaf_max} =",
+                            "_XH-LEAF-FIRST @ 0=",
+                            "_XH-PUBLISHED @ 0<",
+                            *(
+                                (
+                                    f"{home_index} CELLS "
+                                    f"_XH-META-HOMES + @ {home} ="
+                                )
+                                for home_index, home in enumerate(
+                                    (
+                                        bitmap_home,
+                                        gdt_home,
+                                        super_home,
+                                        inode_home,
+                                        leaf_candidate,
+                                        leaf_bitmap_home,
+                                        leaf_gdt_home,
+                                    )
+                                )
+                            ),
+                            f"_EXT4-WR-NEW-BLOCKS @ {new_blocks} =",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-ROOT-GROWTH-SEVEN-HOMES" THEN'
+                ),
+                "_R7-FD VFS-CLOSE? CONSTANT _R7-CLOSE-IOR",
+                "0 _R7-V VFS-UNMOUNT CONSTANT _R7-UNMOUNT-IOR",
+                (
+                    "_R7-CLOSE-IOR 0= _R7-UNMOUNT-IOR 0= AND "
+                    "_R7-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_R7-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_R7-PROFILE-ARENA A.PTR @ _R7-PROFILE-BASE = AND "
+                    'IF ." EXT4-PUBLIC-ROOT-GROWTH-SEVEN-UNMOUNT" THEN'
+                ),
+            ],
+            patches=input_patches,
+            capture_media=media_path,
+            # Measured at 1,637,876,612 steps: the seven-role certificate
+            # compares eight proposed ranges during dry and live staging.
+            max_steps=1_800_000_000,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-ROOT-GROWTH-SEVEN-HOMES")
+        _assert_emitted(output, "EXT4-PUBLIC-ROOT-GROWTH-SEVEN-UNMOUNT")
+        assert trace[: len(activation_trace)] == activation_trace
+        transaction_trace = trace[len(activation_trace) :]
+        data_event = ("write", data_candidate * 2, 2)
+        bitmap_event = ("write", bitmap_home * 2, 2)
+        gdt_event = ("write", gdt_home * 2, 2)
+        super_event = ("write", super_home * 2, 2)
+        leaf_event = ("write", leaf_candidate * 2, 2)
+        leaf_bitmap_event = ("write", leaf_bitmap_home * 2, 2)
+        leaf_gdt_event = ("write", leaf_gdt_home * 2, 2)
+        inode_event = ("write", inode_home * 2, 2)
+        role_events = tuple(
+            event
+            for event in transaction_trace
+            if event
+            in {
+                data_event,
+                bitmap_event,
+                gdt_event,
+                super_event,
+                leaf_event,
+                leaf_bitmap_event,
+                leaf_gdt_event,
+                inode_event,
+            }
+        )
+        assert role_events == (
+            data_event,
+            bitmap_event,
+            gdt_event,
+            super_event,
+            leaf_event,
+            leaf_bitmap_event,
+            leaf_gdt_event,
+            inode_event,
+            super_event,
+        )
+        for untouched_home in (
+            data_block,
+            xattr_block,
+            ballast_inode_home,
+            ballast_leaf_home,
+            *transferred_blocks,
+        ):
+            assert transaction_trace.count(
+                ("write", untouched_home * 2, 2)
+            ) == 0
+
+        final_superblock, final_inode, _ = _ext4_inode_record(
+            media_path,
+            inode_number,
+        )
+        assert final_superblock == bytes(expected_super)
+        assert struct.unpack_from("<I", final_inode, 0x04)[0] == new_size
+        assert struct.unpack_from("<I", final_inode, 0x6C)[0] == 0
+        assert struct.unpack_from("<I", final_inode, 0x1C)[0] == new_blocks
+        assert struct.unpack_from("<H", final_inode, 0x1A)[0] == links
+        assert struct.unpack_from("<I", final_inode, 0x64)[0] == generation
+        assert struct.unpack_from("<HHHHI", final_inode, 0x28) == (
+            0xF30A,
+            1,
+            4,
+            1,
+            root_generation,
+        )
+        assert struct.unpack_from("<IIHH", final_inode, 0x34) == (
+            0,
+            leaf_candidate,
+            0,
+            0,
+        )
+        assert final_inode[0x40:0x64] == bytes(36)
+        assert _read_ext4_home(
+            media_path,
+            inode_home,
+            block_size=block_size,
+        ) == expected_inode_home
+        assert _read_ext4_home(
+            media_path,
+            leaf_candidate,
+            block_size=block_size,
+        ) == bytes(expected_leaf)
+        assert _ext4_block_allocation_state(
+            media_path,
+            (data_candidate, leaf_candidate),
+        ) == {data_candidate: True, leaf_candidate: True}
+        assert _read_ext4_home(
+            media_path,
+            data_candidate,
+            block_size=block_size,
+        ) == expected_data_candidate
+        assert _read_ext4_home(
+            media_path,
+            bitmap_home,
+            block_size=block_size,
+        ) == bytes(expected_bitmap)
+        assert _read_ext4_home(
+            media_path,
+            gdt_home,
+            block_size=block_size,
+        ) == bytes(expected_gdt)
+        assert _read_ext4_home(
+            media_path,
+            leaf_bitmap_home,
+            block_size=block_size,
+        ) == bytes(expected_leaf_bitmap)
+        assert _read_ext4_home(
+            media_path,
+            leaf_gdt_home,
+            block_size=block_size,
+        ) == bytes(expected_leaf_gdt)
+        assert _read_ext4_home(
+            media_path,
+            data_block,
+            block_size=block_size,
+        ) == original_data
+        assert _read_ext4_home(
+            media_path,
+            xattr_block,
+            block_size=block_size,
+        ) == original_xattr
+        assert _read_ext4_home(
+            media_path,
+            ballast_inode_home,
+            block_size=block_size,
+        ) == prepared_ballast_inode_home
+        assert _read_ext4_home(
+            media_path,
+            ballast_leaf_home,
+            block_size=block_size,
+        ) == prepared_ballast_leaf
+        for physical, payload in transferred_payloads.items():
+            assert _read_ext4_home(
+                media_path,
+                physical,
+                block_size=block_size,
+            ) == payload
+        assert original_data_candidate != expected_data_candidate
+        assert original_leaf_candidate != bytes(expected_leaf)
+
+        _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+            media_path,
+            stable_path,
+            expected_file=expected_file,
+            expected_epoch_ms=epoch_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            expected_blocks=new_blocks,
+            prefix="_R7-S",
+            marker="EXT4-PUBLIC-ROOT-GROWTH-SEVEN-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == media_sha256
+        return {
+            "image": stable_path,
+            "trace": trace,
+            "expected_file": expected_file,
+            "epoch_ms": epoch_ms,
+            "inode_number": inode_number,
+            "data_block": data_block,
+            "xattr_block": xattr_block,
+            "data_candidate": data_candidate,
+            "leaf_candidate": leaf_candidate,
+            "extent_entries": leaf_entries,
+            "bitmap_home": bitmap_home,
+            "gdt_home": gdt_home,
+            "leaf_bitmap_home": leaf_bitmap_home,
+            "leaf_gdt_home": leaf_gdt_home,
+            "ballast_inode_number": ballast_inode_number,
+            "ballast_inode_home": ballast_inode_home,
+            "ballast_leaf_home": ballast_leaf_home,
+            "prepared_ballast_i_blocks": prepared_ballast_i_blocks,
+            "transferred_blocks": transferred_blocks,
+        }
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
+def _staged_extent_root_growth_leaf_fault_lines(
+    *,
+    epoch_ms: int,
+    old_size: int,
+    new_size: int,
+    new_blocks: int,
+    data_candidate: int,
+    leaf_candidate: int,
+    leaf_max: int,
+) -> list[str]:
+    """Build the public journey for a root-growth leaf-home fault."""
+    replacement = _STAGED_ALIGNED_APPEND_REPLACEMENT.decode("ascii")
+    expected_actual = len(_STAGED_ALIGNED_APPEND_REPLACEMENT)
+    return [
+        "VARIABLE _RGL-CLOCK-CALLS",
+        (
+            ": _RGL-NOW ( context -- epoch-ms ior ) "
+            f"DROP 1 _RGL-CLOCK-CALLS +! {epoch_ms} 0 ;"
+        ),
+        "T-ARENA CONSTANT _RGL-ARENA",
+        (
+            "_RGL-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+            "CONSTANT _RGL-MOUNT-IOR CONSTANT _RGL-V"
+        ),
+        "_RGL-V _EXT4-CTX CONSTANT _RGL-CTX",
+        (
+            "' _RGL-NOW 0 _RGL-V EXT4-BIND-WRITE-CLOCK? "
+            "CONSTANT _RGL-CLOCK-IOR"
+        ),
+        *_ext4_dedicated_writer_profile_forth(
+            "_RGL-PROFILE", "_RGL-V", 5, 1, 0
+        ),
+        (
+            'S" /fixture/hardlink.txt" '
+            "VFS-FF-READ VFS-FF-WRITE OR VFS-FF-APPEND OR "
+            "_RGL-V VFS-OPEN? "
+            "CONSTANT _RGL-OPEN-IOR CONSTANT _RGL-FD"
+        ),
+        "_RGL-FD FD.INODE @ D.VNODE @ CONSTANT _RGL-VN",
+        "_RGL-FD FD.CUR-LO @ CONSTANT _RGL-INITIAL-CURSOR",
+        (
+            f'S" {replacement}" _RGL-FD VFS-WRITE? '
+            "CONSTANT _RGL-WRITE-IOR CONSTANT _RGL-ACTUAL"
+        ),
+        "_RGL-FD FD.CUR-LO @ CONSTANT _RGL-CURSOR",
+        "_RGL-V V.LAST-IOR @ CONSTANT _RGL-LAST-IOR",
+        "_RGL-CTX _EXT4-C.J.WRITER + @ CONSTANT _RGL-WRITER",
+        "_RGL-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _RGL-HOMES",
+        "_RGL-FD VFS-CLOSE? CONSTANT _RGL-CLOSE-IOR",
+        (
+            _forth_conjunction(
+                [
+                    "_RGL-MOUNT-IOR 0=",
+                    "_RGL-CLOCK-IOR 0=",
+                    "_RGL-PROFILE-SIZE-IOR 0=",
+                    "_RGL-PROFILE-BIND-IOR 0=",
+                    "_RGL-PROFILE-USED _RGL-PROFILE-SIZE =",
+                    "_RGL-OPEN-IOR 0=",
+                    f"_RGL-INITIAL-CURSOR {old_size} =",
+                    f"_RGL-ACTUAL {expected_actual} =",
+                    (
+                        "_RGL-WRITE-IOR VFS-IOR-DOMAIN "
+                        "VFS-IOR-D-VOLUME ="
+                    ),
+                    (
+                        "_RGL-WRITE-IOR VFS-IOR-REASON "
+                        "VFS-R-IO ="
+                    ),
+                    (
+                        "_RGL-WRITE-IOR VFS-IOR-FLAGS "
+                        "VFS-IOR-F-PARTIAL VFS-IOR-F-READONLY OR ="
+                    ),
+                    "_RGL-LAST-IOR _RGL-WRITE-IOR =",
+                    f"_RGL-CURSOR {new_size} =",
+                    "_RGL-CLOCK-CALLS @ 1 =",
+                    f"_RGL-VN VN.SIZE-LO @ {new_size} =",
+                    "_RGL-VN VN.SIZE-HI @ 0=",
+                    f"_RGL-VN VN.BLOCKS @ {new_blocks} =",
+                    "_RGL-WRITER _RGL-PROFILE-BASE =",
+                    (
+                        "_RGL-WRITER _EXT4-JWR.STATE + @ "
+                        "_EXT4-JWR-FAULTED ="
+                    ),
+                    (
+                        "_RGL-WRITER _EXT4-JWR.PHASE + @ "
+                        "_EXT4-JWP-CHECKPOINT-HOME ="
+                    ),
+                    "_RGL-WRITER _EXT4-JWR-VALID?",
+                    (
+                        "_RGL-WRITER _EXT4-JWR.FAULT + @ "
+                        "VFS-IOR-FLAGS VFS-IOR-F-PARTIAL ="
+                    ),
+                    "_RGL-WRITER _EXT4-JWR.META-ACTIVE + @ 5 =",
+                    "_RGL-WRITER _EXT4-JWR.DATA-ACTIVE + @ 1 =",
+                    "_RGL-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                    "_RGL-HOMES 3 =",
+                    "_RGL-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                    "_RGL-CTX _EXT4-C.RECOVERY + @ 0<>",
+                    "_RGL-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                    "_RGL-V V.FLAGS @ VFS-F-RO AND 0<>",
+                    "_RGL-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_EXT4-MOW-CREDIT @ -5 =",
+                    "_XH-ROOT-GROW @ 0<",
+                    "_XH-META-CREDIT @ 5 =",
+                    f"_XH-CANDIDATE @ {data_candidate} =",
+                    f"_XH-LEAF-CANDIDATE @ {leaf_candidate} =",
+                    "_XH-EDIT @ _XH-EDIT-GROW-ROOT =",
+                    "_XH-ENTRIES @ 1 =",
+                    f"_XH-LEAF-MAX @ {leaf_max} =",
+                    "_XH-LEAF-FIRST @ 0=",
+                    "_XH-PUBLISHED @ 0<",
+                    f"_EXT4-WR-NEW-BLOCKS @ {new_blocks} =",
+                    f"_EXT4-WR-ACTUAL @ {expected_actual} =",
+                    f"_EXT4-MOW-ACTUAL @ {expected_actual} =",
+                    "_RGL-CLOSE-IOR 0=",
+                    (
+                        "_RGL-PROFILE-ARENA ARENA-USED "
+                        "_RGL-PROFILE-USED ="
+                    ),
+                    (
+                        "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ]
+            )
+            + ' IF ." EXT4-PUBLIC-EXTENT-ROOT-LEAF-FAULT" THEN'
+        ),
+    ]
+
+
+def test_staged_public_extent_root_growth_composes_depth_one_tree(
+    staged_public_extent_root_growth_fixture: dict[str, object],
+) -> None:
+    image = staged_public_extent_root_growth_fixture["image"]
+    expected_file = staged_public_extent_root_growth_fixture["expected_file"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert image.is_file()
+    assert len(expected_file) == 6 * 1024 + len(
+        _STAGED_ALIGNED_APPEND_REPLACEMENT
+    )
+    assert expected_file.endswith(_STAGED_ALIGNED_APPEND_REPLACEMENT)
+    assert staged_public_extent_root_growth_fixture["data_candidate"] == 1354
+    assert staged_public_extent_root_growth_fixture["leaf_candidate"] == 1355
+
+
+def test_staged_public_extent_root_growth_spans_seven_metadata_homes(
+    staged_public_extent_root_growth_seven_home_fixture: dict[str, object],
+) -> None:
+    """Exercise the maximum deduplicated one-leaf allocation topology."""
+    fixture = staged_public_extent_root_growth_seven_home_fixture
+    image = fixture["image"]
+    expected_file = fixture["expected_file"]
+    trace = fixture["trace"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(trace, tuple)
+    assert image.is_file()
+    assert len(expected_file) == 6 * 1024 + len(
+        _STAGED_ALIGNED_APPEND_REPLACEMENT
+    )
+    assert fixture["data_candidate"] == 73988
+    assert fixture["leaf_candidate"] == 131333
+    assert fixture["bitmap_home"] == 269
+    assert fixture["gdt_home"] == 2
+    assert fixture["leaf_bitmap_home"] == 131073
+    assert fixture["leaf_gdt_home"] == 3
+    assert trace.count(("write", 269 * 2, 2)) == 1
+    assert trace.count(("write", 2 * 2, 2)) == 1
+    assert trace.count(("write", 131073 * 2, 2)) == 1
+    assert trace.count(("write", 3 * 2, 2)) == 1
+
+
+def test_staged_public_extent_root_growth_fills_in_size_hole(
+    staged_public_extent_root_growth_prestate: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Drive overwrite refusal into a five-home public root transition."""
+    geometry = staged_public_extent_root_growth_prestate
+    path = geometry["path"]
+    input_patches = geometry["input_patches"]
+    activation_trace = geometry["activation_trace"]
+    superblock = geometry["superblock"]
+    inode = geometry["inode"]
+    inode_number = geometry["inode_number"]
+    inode_home = geometry["inode_home"]
+    block_size = geometry["block_size"]
+    old_size = geometry["old_size"]
+    old_blocks = geometry["old_blocks"]
+    generation = geometry["generation"]
+    root_generation = geometry["root_generation"]
+    links = geometry["links"]
+    extent_entries = geometry["extent_entries"]
+    data_candidate = geometry["data_candidate"]
+    leaf_candidate = geometry["leaf_candidate"]
+    expected_file_prefix = geometry["expected_file_prefix"]
+    original_blocks = geometry["original_blocks"]
+    assert isinstance(path, Path)
+    assert isinstance(input_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(superblock, bytes)
+    assert isinstance(inode, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(block_size, int)
+    assert isinstance(old_size, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(generation, int)
+    assert isinstance(root_generation, int)
+    assert isinstance(links, int)
+    assert isinstance(extent_entries, tuple)
+    assert isinstance(data_candidate, int)
+    assert isinstance(leaf_candidate, int)
+    assert isinstance(expected_file_prefix, bytes)
+    assert isinstance(original_blocks, dict)
+    assert generation != root_generation
+
+    replacement = b"ROOT-HOLE"
+    block_offset = 321
+    write_offset = block_size + block_offset
+    expected_data = bytearray(block_size)
+    expected_data[
+        block_offset : block_offset + len(replacement)
+    ] = replacement
+    expected_file = (
+        expected_file_prefix[:block_size]
+        + bytes(expected_data)
+        + expected_file_prefix[2 * block_size :]
+    )
+    expected_file_crc = _crc32c_raw(expected_file)
+    new_blocks = old_blocks + 2 * (block_size // 512)
+    epoch_ms = 3_000_000_823_456
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    leaf_max = (block_size - 12) // 12
+    leaf_entries = (
+        extent_entries[0],
+        (1, 1, data_candidate),
+        *extent_entries[1:],
+    )
+    expected_leaf = bytearray(block_size)
+    struct.pack_into(
+        "<HHHHI",
+        expected_leaf,
+        0,
+        0xF30A,
+        len(leaf_entries),
+        leaf_max,
+        0,
+        root_generation,
+    )
+    for entry_index, (logical, length, physical) in enumerate(leaf_entries):
+        struct.pack_into(
+            "<IHHI",
+            expected_leaf,
+            12 + entry_index * 12,
+            logical,
+            length,
+            physical >> 32,
+            physical & 0xFFFF_FFFF,
+        )
+    expected_leaf[:] = _extent_node_with_checksum(
+        superblock,
+        inode_number,
+        generation,
+        expected_leaf,
+    )
+
+    media_path = tmp_path / "staged-public-root-growth-hole-fill.img"
+    stable_path = tmp_path / "staged-public-root-growth-hole-fill-stable.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            path,
+            media_path,
+            [
+                f"CREATE _RH-READ {old_size} ALLOT",
+                "CREATE _RH-STAT VFS-STATFS-SIZE ALLOT",
+                "VARIABLE _RH-CLOCK-CALLS",
+                (
+                    ": _RH-NOW ( context -- epoch-ms ior ) "
+                    f"DROP 1 _RH-CLOCK-CALLS +! {epoch_ms} 0 ;"
+                ),
+                "T-ARENA CONSTANT _RH-ARENA",
+                (
+                    "_RH-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _RH-MOUNT-IOR CONSTANT _RH-V"
+                ),
+                "_RH-V _EXT4-CTX CONSTANT _RH-CTX",
+                (
+                    "' _RH-NOW 0 _RH-V EXT4-BIND-WRITE-CLOCK? "
+                    "CONSTANT _RH-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_RH-PROFILE", "_RH-V", 5, 1, 0
+                ),
+                (
+                    'S" /fixture/hardlink.txt" '
+                    "VFS-FF-READ VFS-FF-WRITE OR _RH-V VFS-OPEN? "
+                    "CONSTANT _RH-OPEN-IOR CONSTANT _RH-FD"
+                ),
+                "_RH-FD FD.INODE @ D.VNODE @ CONSTANT _RH-VN",
+                "_RH-VN VN.ATIME @ CONSTANT _RH-OLD-ATIME",
+                "_RH-VN VN.ATIME-NS @ CONSTANT _RH-OLD-ATIME-NS",
+                "_RH-VN VN.GEN @ CONSTANT _RH-OLD-GEN",
+                "_RH-VN VN.NLINK @ CONSTANT _RH-OLD-NLINK",
+                (
+                    "_RH-STAT VFS-STATFS-SIZE _RH-V VFS-STATFS "
+                    "CONSTANT _RH-STAT-BEFORE-IOR"
+                ),
+                "_RH-STAT VSF.BFREE @ CONSTANT _RH-FREE-BEFORE",
+                (
+                    f"{write_offset} _RH-FD VFS-SEEK? "
+                    "CONSTANT _RH-SEEK-IOR"
+                ),
+                (
+                    f'S" {replacement.decode("ascii")}" _RH-FD '
+                    "VFS-WRITE? CONSTANT _RH-WRITE-IOR "
+                    "CONSTANT _RH-ACTUAL"
+                ),
+                "_RH-FD FD.CUR-LO @ CONSTANT _RH-CURSOR",
+                "_RH-CTX _EXT4-C.J.WRITER + @ CONSTANT _RH-WRITER",
+                "_RH-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _RH-HOMES",
+                (
+                    "_RH-STAT VFS-STATFS-SIZE _RH-V VFS-STATFS "
+                    "CONSTANT _RH-STAT-AFTER-IOR"
+                ),
+                "_RH-STAT VSF.BFREE @ CONSTANT _RH-FREE-AFTER",
+                "0 _RH-FD VFS-SEEK? CONSTANT _RH-READ-SEEK-IOR",
+                (
+                    f"_RH-READ {old_size} _RH-FD VFS-READ? "
+                    "CONSTANT _RH-READ-IOR CONSTANT _RH-READ-ACTUAL"
+                ),
+                "0xFFFFFFFF _EXT4-CRC-START",
+                (
+                    f"_RH-READ {old_size} _EXT4-CRC-ADD "
+                    "CONSTANT _RH-CRC-IOR"
+                ),
+                "_EXT4-CRC@ CONSTANT _RH-CRC",
+                (
+                    _forth_conjunction(
+                        [
+                            "_RH-MOUNT-IOR 0=",
+                            "_RH-CLOCK-IOR 0=",
+                            "_RH-PROFILE-SIZE-IOR 0=",
+                            "_RH-PROFILE-BIND-IOR 0=",
+                            "_RH-PROFILE-USED _RH-PROFILE-SIZE =",
+                            "_RH-OPEN-IOR 0=",
+                            "_RH-SEEK-IOR 0=",
+                            "_RH-WRITE-IOR 0=",
+                            f"_RH-ACTUAL {len(replacement)} =",
+                            (
+                                f"_RH-CURSOR "
+                                f"{write_offset + len(replacement)} ="
+                            ),
+                            "_RH-CLOCK-CALLS @ 1 =",
+                            f"_RH-VN VN.SIZE-LO @ {old_size} =",
+                            "_RH-VN VN.SIZE-HI @ 0=",
+                            f"_RH-VN VN.BLOCKS @ {new_blocks} =",
+                            "_RH-VN VN.GEN @ _RH-OLD-GEN =",
+                            "_RH-VN VN.NLINK @ _RH-OLD-NLINK =",
+                            f"_RH-VN VN.MTIME @ {seconds} =",
+                            f"_RH-VN VN.MTIME-NS @ {nanoseconds} =",
+                            f"_RH-VN VN.CTIME @ {seconds} =",
+                            f"_RH-VN VN.CTIME-NS @ {nanoseconds} =",
+                            "_RH-VN VN.ATIME @ _RH-OLD-ATIME =",
+                            "_RH-VN VN.ATIME-NS @ _RH-OLD-ATIME-NS =",
+                            "_RH-STAT-BEFORE-IOR 0=",
+                            "_RH-STAT-AFTER-IOR 0=",
+                            "_RH-FREE-AFTER _RH-FREE-BEFORE 2 - =",
+                            "_RH-HOMES 5 =",
+                            "_RH-WRITER _RH-PROFILE-BASE =",
+                            "_RH-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_EXT4-WR-KIND @ _EXT4-WRK-HOLE-FILL =",
+                            "_EXT4-MOW-CREDIT @ -5 =",
+                            "_XH-META-CREDIT @ 5 =",
+                            "_XH-ROOT-GROW @ 0<",
+                            "_XH-EDIT @ _XH-EDIT-GROW-ROOT =",
+                            "_XH-INSERT @ 1 =",
+                            f"_XH-CANDIDATE @ {data_candidate} =",
+                            f"_XH-LEAF-CANDIDATE @ {leaf_candidate} =",
+                            "_XH-ENTRIES @ 1 =",
+                            f"_XH-LEAF-MAX @ {leaf_max} =",
+                            "_XH-LEAF-FIRST @ 0=",
+                            "_XH-PUBLISHED @ 0<",
+                            "_RH-READ-SEEK-IOR 0=",
+                            "_RH-READ-IOR 0=",
+                            f"_RH-READ-ACTUAL {old_size} =",
+                            "_RH-CRC-IOR 0=",
+                            f"_RH-CRC {expected_file_crc} =",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-ROOT-GROWTH-HOLE" THEN'
+                ),
+                "_RH-FD VFS-CLOSE? CONSTANT _RH-CLOSE-IOR",
+                "0 _RH-V VFS-UNMOUNT CONSTANT _RH-UNMOUNT-IOR",
+                (
+                    "_RH-CLOSE-IOR 0= _RH-UNMOUNT-IOR 0= AND "
+                    "_RH-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_RH-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_RH-PROFILE-ARENA A.PTR @ _RH-PROFILE-BASE = AND "
+                    'IF ." EXT4-PUBLIC-ROOT-GROWTH-HOLE-UNMOUNT" THEN'
+                ),
+            ],
+            patches=input_patches,
+            capture_media=media_path,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-ROOT-GROWTH-HOLE")
+        _assert_emitted(output, "EXT4-PUBLIC-ROOT-GROWTH-HOLE-UNMOUNT")
+        assert trace[: len(activation_trace)] == activation_trace
+        transaction_trace = trace[len(activation_trace) :]
+        role_events = tuple(
+            event
+            for event in transaction_trace
+            if event
+            in {
+                ("write", data_candidate * 2, 2),
+                ("write", 259 * 2, 2),
+                ("write", 2 * 2, 2),
+                ("write", 1 * 2, 2),
+                ("write", leaf_candidate * 2, 2),
+                ("write", inode_home * 2, 2),
+            }
+        )
+        assert role_events == (
+            ("write", data_candidate * 2, 2),
+            ("write", 259 * 2, 2),
+            ("write", 2 * 2, 2),
+            ("write", 1 * 2, 2),
+            ("write", leaf_candidate * 2, 2),
+            ("write", inode_home * 2, 2),
+            ("write", 1 * 2, 2),
+        )
+        for untouched in original_blocks:
+            assert transaction_trace.count(("write", untouched * 2, 2)) == 0
+
+        final_superblock, final_inode, _ = _ext4_inode_record(
+            media_path,
+            inode_number,
+        )
+        assert struct.unpack_from("<I", final_superblock, 0x0C)[0] == (
+            struct.unpack_from("<I", superblock, 0x0C)[0] - 2
+        )
+        assert struct.unpack_from("<I", final_inode, 0x04)[0] == old_size
+        assert struct.unpack_from("<I", final_inode, 0x1C)[0] == new_blocks
+        assert struct.unpack_from("<H", final_inode, 0x1A)[0] == links
+        assert struct.unpack_from("<I", final_inode, 0x64)[0] == generation
+        assert struct.unpack_from("<HHHHI", final_inode, 0x28) == (
+            0xF30A,
+            1,
+            4,
+            1,
+            root_generation,
+        )
+        assert _read_ext4_home(
+            media_path,
+            leaf_candidate,
+            block_size=block_size,
+        ) == bytes(expected_leaf)
+        assert _read_ext4_home(
+            media_path,
+            data_candidate,
+            block_size=block_size,
+        ) == bytes(expected_data)
+        assert _ext4_block_allocation_state(
+            media_path,
+            (data_candidate, leaf_candidate),
+        ) == {data_candidate: True, leaf_candidate: True}
+
+        _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+            media_path,
+            stable_path,
+            expected_file=expected_file,
+            expected_epoch_ms=epoch_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            expected_blocks=new_blocks,
+            prefix="_RH-S",
+            marker="EXT4-PUBLIC-ROOT-GROWTH-HOLE-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == media_sha256
+    finally:
+        media_path.unlink(missing_ok=True)
+        stable_path.unlink(missing_ok=True)
+
+
+def test_staged_public_extent_root_growth_passes_external_oracles(
+    staged_public_extent_root_growth_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    image = staged_public_extent_root_growth_fixture["image"]
+    expected_file = staged_public_extent_root_growth_fixture["expected_file"]
+    inode_number = staged_public_extent_root_growth_fixture["inode_number"]
+    leaf_candidate = staged_public_extent_root_growth_fixture["leaf_candidate"]
+    extent_entries = staged_public_extent_root_growth_fixture["extent_entries"]
+    xattr_block = staged_public_extent_root_growth_fixture["xattr_block"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(leaf_candidate, int)
+    assert isinstance(extent_entries, tuple)
+    assert isinstance(xattr_block, int)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    for target in ("/fixture/payload.txt", "/fixture/hardlink.txt"):
+        readback = subprocess.run(
+            [str(debugfs), "-R", f"cat {target}", str(image)],
+            env=env,
+            capture_output=True,
+            check=False,
+        )
+        assert readback.returncode == 0, readback.stdout + readback.stderr
+        assert readback.stdout == expected_file
+
+    expected_map = {logical: physical for logical, _, physical in extent_entries}
+    for logical in range(7):
+        mapped = subprocess.run(
+            [
+                str(debugfs),
+                "-R",
+                f"bmap /fixture/payload.txt {logical}",
+                str(image),
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert mapped.returncode == 0, mapped.stdout + mapped.stderr
+        assert int(mapped.stdout.strip().splitlines()[-1]) == expected_map.get(
+            logical,
+            0,
+        )
+
+    stat = subprocess.run(
+        [str(debugfs), "-R", "stat /fixture/payload.txt", str(image)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stat.returncode == 0, stat.stdout + stat.stderr
+    assert f"Inode: {inode_number}" in stat.stdout
+    assert f"Size: {len(expected_file)}" in stat.stdout
+    assert "Flags: 0x80000" in stat.stdout
+    assert re.search(r"Links:\s+2\s+Blockcount:\s+14", stat.stdout)
+    assert f"File ACL: {xattr_block}" in stat.stdout
+    assert f"(ETB0):{leaf_candidate}" in stat.stdout
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+
+
+def test_staged_public_extent_root_growth_seven_home_external_oracles(
+    staged_public_extent_root_growth_seven_home_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    """Check the maximum topology with independent ext4 tooling."""
+    fixture = staged_public_extent_root_growth_seven_home_fixture
+    image = fixture["image"]
+    expected_file = fixture["expected_file"]
+    inode_number = fixture["inode_number"]
+    leaf_candidate = fixture["leaf_candidate"]
+    extent_entries = fixture["extent_entries"]
+    xattr_block = fixture["xattr_block"]
+    ballast_inode_number = fixture["ballast_inode_number"]
+    ballast_leaf_home = fixture["ballast_leaf_home"]
+    prepared_ballast_i_blocks = fixture["prepared_ballast_i_blocks"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(leaf_candidate, int)
+    assert isinstance(extent_entries, tuple)
+    assert isinstance(xattr_block, int)
+    assert isinstance(ballast_inode_number, int)
+    assert isinstance(ballast_leaf_home, int)
+    assert isinstance(prepared_ballast_i_blocks, int)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    for target in ("/fixture/payload.txt", "/fixture/hardlink.txt"):
+        readback = subprocess.run(
+            [str(debugfs), "-R", f"cat {target}", str(image)],
+            env=env,
+            capture_output=True,
+            check=False,
+        )
+        assert readback.returncode == 0, readback.stdout + readback.stderr
+        assert readback.stdout == expected_file
+
+    expected_map = {
+        logical: physical for logical, _, physical in extent_entries
+    }
+    for logical in range(7):
+        mapped = subprocess.run(
+            [
+                str(debugfs),
+                "-R",
+                f"bmap /fixture/payload.txt {logical}",
+                str(image),
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert mapped.returncode == 0, mapped.stdout + mapped.stderr
+        assert int(mapped.stdout.strip().splitlines()[-1]) == expected_map.get(
+            logical,
+            0,
+        )
+
+    stat = subprocess.run(
+        [str(debugfs), "-R", "stat /fixture/payload.txt", str(image)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stat.returncode == 0, stat.stdout + stat.stderr
+    assert f"Inode: {inode_number}" in stat.stdout
+    assert f"Size: {len(expected_file)}" in stat.stdout
+    assert re.search(r"Links:\s+2\s+Blockcount:\s+14", stat.stdout)
+    assert f"File ACL: {xattr_block}" in stat.stdout
+    assert f"(ETB0):{leaf_candidate}" in stat.stdout
+
+    ballast_stat = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            f"stat <{ballast_inode_number}>",
+            str(image),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert ballast_stat.returncode == 0, (
+        ballast_stat.stdout + ballast_stat.stderr
+    )
+    assert "Size: 3072" in ballast_stat.stdout
+    assert f"Blockcount: {prepared_ballast_i_blocks}" in ballast_stat.stdout
+    assert f"(ETB0):{ballast_leaf_home}" in ballast_stat.stdout
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+
+
+def test_staged_public_extent_root_growth_refuses_profile_four_without_io(
+    staged_public_extent_root_growth_prestate: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A four-home profile cannot partially publish five-home root growth."""
+    geometry = staged_public_extent_root_growth_prestate
+    path = geometry["path"]
+    input_patches = geometry["input_patches"]
+    superblock = geometry["superblock"]
+    inode = geometry["inode"]
+    inode_number = geometry["inode_number"]
+    inode_home = geometry["inode_home"]
+    block_size = geometry["block_size"]
+    old_size = geometry["old_size"]
+    old_blocks = geometry["old_blocks"]
+    data_candidate = geometry["data_candidate"]
+    leaf_candidate = geometry["leaf_candidate"]
+    original_blocks = geometry["original_blocks"]
+    original_data_candidate = geometry["original_data_candidate"]
+    original_leaf_candidate = geometry["original_leaf_candidate"]
+    assert isinstance(path, Path)
+    assert isinstance(input_patches, tuple)
+    assert isinstance(superblock, bytes)
+    assert isinstance(inode, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(block_size, int)
+    assert isinstance(old_size, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(data_candidate, int)
+    assert isinstance(leaf_candidate, int)
+    assert isinstance(original_blocks, dict)
+    assert isinstance(original_data_candidate, bytes)
+    assert isinstance(original_leaf_candidate, bytes)
+
+    replacement = _STAGED_ALIGNED_APPEND_REPLACEMENT.decode("ascii")
+    backing = tmp_path / "staged-public-extent-root-profile4.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            backing,
+            [
+                "CREATE _RG4-STAT VFS-STATFS-SIZE ALLOT",
+                "VARIABLE _RG4-CLOCK-CALLS",
+                (
+                    ": _RG4-NOW ( context -- epoch-ms ior ) "
+                    "DROP 1 _RG4-CLOCK-CALLS +! 3000000523456 0 ;"
+                ),
+                "T-ARENA CONSTANT _RG4-ARENA",
+                (
+                    "_RG4-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _RG4-MOUNT-IOR CONSTANT _RG4-V"
+                ),
+                "_RG4-V _EXT4-CTX CONSTANT _RG4-CTX",
+                (
+                    "' _RG4-NOW 0 _RG4-V EXT4-BIND-WRITE-CLOCK? "
+                    "CONSTANT _RG4-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_RG4-PROFILE", "_RG4-V", 4, 1, 0
+                ),
+                (
+                    'S" /fixture/hardlink.txt" '
+                    "VFS-FF-READ VFS-FF-WRITE OR VFS-FF-APPEND OR "
+                    "_RG4-V VFS-OPEN? "
+                    "CONSTANT _RG4-OPEN-IOR CONSTANT _RG4-FD"
+                ),
+                "_RG4-FD FD.INODE @ D.VNODE @ CONSTANT _RG4-VN",
+                "_RG4-FD FD.CUR-LO @ CONSTANT _RG4-INITIAL-CURSOR",
+                "_RG4-VN VN.ATIME @ CONSTANT _RG4-OLD-ATIME",
+                "_RG4-VN VN.ATIME-NS @ CONSTANT _RG4-OLD-ATIME-NS",
+                "_RG4-VN VN.MTIME @ CONSTANT _RG4-OLD-MTIME",
+                "_RG4-VN VN.MTIME-NS @ CONSTANT _RG4-OLD-MTIME-NS",
+                "_RG4-VN VN.CTIME @ CONSTANT _RG4-OLD-CTIME",
+                "_RG4-VN VN.CTIME-NS @ CONSTANT _RG4-OLD-CTIME-NS",
+                "_RG4-VN VN.GEN @ CONSTANT _RG4-OLD-GEN",
+                "_RG4-VN VN.NLINK @ CONSTANT _RG4-OLD-NLINK",
+                (
+                    "_RG4-STAT VFS-STATFS-SIZE _RG4-V VFS-STATFS "
+                    "CONSTANT _RG4-STAT-BEFORE-IOR"
+                ),
+                "_RG4-STAT VSF.BFREE @ CONSTANT _RG4-FREE-BEFORE",
+                (
+                    f'S" {replacement}" _RG4-FD '
+                    "VFS-WRITE? CONSTANT _RG4-WRITE-IOR "
+                    "CONSTANT _RG4-WRITE-ACTUAL"
+                ),
+                "_RG4-FD FD.CUR-LO @ CONSTANT _RG4-CURSOR",
+                "_RG4-CTX _EXT4-C.J.WRITER + @ CONSTANT _RG4-WRITER",
+                "_RG4-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _RG4-HOMES",
+                (
+                    "_RG4-STAT VFS-STATFS-SIZE _RG4-V VFS-STATFS "
+                    "CONSTANT _RG4-STAT-AFTER-IOR"
+                ),
+                "_RG4-STAT VSF.BFREE @ CONSTANT _RG4-FREE-AFTER",
+                (
+                    _forth_conjunction(
+                        [
+                            "_RG4-MOUNT-IOR 0=",
+                            "_RG4-CLOCK-IOR 0=",
+                            "_RG4-PROFILE-SIZE-IOR 0=",
+                            "_RG4-PROFILE-BIND-IOR 0=",
+                            "_RG4-PROFILE-USED _RG4-PROFILE-SIZE =",
+                            "_RG4-OPEN-IOR 0=",
+                            f"_RG4-INITIAL-CURSOR {old_size} =",
+                            "_RG4-WRITE-IOR VFS-E-NOSPC =",
+                            "_RG4-WRITE-ACTUAL 0=",
+                            "_RG4-V V.LAST-IOR @ 0=",
+                            f"_RG4-CURSOR {old_size} =",
+                            "_RG4-CLOCK-CALLS @ 1 =",
+                            f"_RG4-VN VN.SIZE-LO @ {old_size} =",
+                            "_RG4-VN VN.SIZE-HI @ 0=",
+                            f"_RG4-VN VN.BLOCKS @ {old_blocks} =",
+                            "_RG4-VN VN.GEN @ _RG4-OLD-GEN =",
+                            "_RG4-VN VN.NLINK @ _RG4-OLD-NLINK =",
+                            "_RG4-VN VN.ATIME @ _RG4-OLD-ATIME =",
+                            "_RG4-VN VN.ATIME-NS @ _RG4-OLD-ATIME-NS =",
+                            "_RG4-VN VN.MTIME @ _RG4-OLD-MTIME =",
+                            "_RG4-VN VN.MTIME-NS @ _RG4-OLD-MTIME-NS =",
+                            "_RG4-VN VN.CTIME @ _RG4-OLD-CTIME =",
+                            "_RG4-VN VN.CTIME-NS @ _RG4-OLD-CTIME-NS =",
+                            "_RG4-STAT-BEFORE-IOR 0=",
+                            "_RG4-STAT-AFTER-IOR 0=",
+                            "_RG4-FREE-AFTER _RG4-FREE-BEFORE =",
+                            "_RG4-WRITER _RG4-PROFILE-BASE =",
+                            "_RG4-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_RG4-HOMES 0=",
+                            "_EXT4-MOW-CREDIT @ -5 =",
+                            "_XH-ROOT-GROW @ 0<",
+                            "_XH-META-CREDIT @ 5 =",
+                            f"_XH-CANDIDATE @ {data_candidate} =",
+                            f"_XH-LEAF-CANDIDATE @ {leaf_candidate} =",
+                            "_EXT4-WR-ACTUAL @ 0=",
+                            "_EXT4-MOW-ACTUAL @ 0=",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-EXTENT-ROOT-PROFILE4" THEN'
+                ),
+                "_RG4-FD VFS-CLOSE? CONSTANT _RG4-CLOSE-IOR",
+                "0 _RG4-V VFS-UNMOUNT CONSTANT _RG4-UNMOUNT-IOR",
+                (
+                    "_RG4-CLOSE-IOR 0= _RG4-UNMOUNT-IOR 0= AND "
+                    "_RG4-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_RG4-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_RG4-PROFILE-ARENA A.PTR @ _RG4-PROFILE-BASE = AND "
+                    'IF ." EXT4-PUBLIC-EXTENT-ROOT-PROFILE4-UNMOUNT" THEN'
+                ),
+            ],
+            patches=input_patches,
+            capture_media=backing,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-EXTENT-ROOT-PROFILE4")
+        _assert_emitted(output, "EXT4-PUBLIC-EXTENT-ROOT-PROFILE4-UNMOUNT")
+        assert trace == ()
+        final_superblock, final_inode, _ = _ext4_inode_record(
+            backing,
+            inode_number,
+        )
+        assert final_superblock == superblock
+        assert final_inode == inode
+        assert _ext4_block_allocation_state(
+            backing,
+            (data_candidate, leaf_candidate),
+        ) == {data_candidate: False, leaf_candidate: False}
+        assert _read_ext4_home(
+            backing,
+            data_candidate,
+            block_size=block_size,
+        ) == original_data_candidate
+        assert _read_ext4_home(
+            backing,
+            leaf_candidate,
+            block_size=block_size,
+        ) == original_leaf_candidate
+        for physical, original in original_blocks.items():
+            assert _read_ext4_home(
+                backing,
+                physical,
+                block_size=block_size,
+            ) == original
+        assert _read_ext4_home(
+            backing,
+            inode_home,
+            block_size=block_size,
+        )[0x100:0x200] == inode
+    finally:
+        backing.unlink(missing_ok=True)
+
+
+def test_staged_public_extent_root_growth_refuses_single_free_block_without_io(
+    staged_public_extent_root_growth_prestate: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Require a distinct leaf block after selecting the sole free block."""
+    geometry = staged_public_extent_root_growth_prestate
+    path = geometry["path"]
+    input_patches = geometry["input_patches"]
+    superblock = geometry["superblock"]
+    inode = geometry["inode"]
+    inode_number = geometry["inode_number"]
+    inode_home = geometry["inode_home"]
+    block_size = geometry["block_size"]
+    old_size = geometry["old_size"]
+    old_blocks = geometry["old_blocks"]
+    data_candidate = geometry["data_candidate"]
+    original_blocks = geometry["original_blocks"]
+    original_data_candidate = geometry["original_data_candidate"]
+    assert isinstance(path, Path)
+    assert isinstance(input_patches, tuple)
+    assert isinstance(superblock, bytes)
+    assert isinstance(inode, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(block_size, int)
+    assert isinstance(old_size, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(data_candidate, int)
+    assert isinstance(original_blocks, dict)
+    assert isinstance(original_data_candidate, bytes)
+
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    blocks_count = struct.unpack_from("<I", superblock, 0x04)[0] | (
+        struct.unpack_from("<I", superblock, 0x150)[0] << 32
+    )
+    blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    descriptor_size = struct.unpack_from("<H", superblock, 0xFE)[0]
+    descriptors_per_block = block_size // descriptor_size
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    group_count = (
+        blocks_count - first_data + blocks_per_group - 1
+    ) // blocks_per_group
+    candidate_group, candidate_index = divmod(
+        data_candidate - first_data,
+        blocks_per_group,
+    )
+    assert block_size == 1024
+    assert group_count == 8
+    assert descriptor_size == 64
+    assert descriptors_per_block == 16
+    assert (candidate_group, candidate_index) == (0, 1353)
+
+    prepared_gdt = bytearray(
+        _patched_ext4_home(
+            path,
+            input_patches,
+            2,
+            block_size=block_size,
+        )
+    )
+    bitmap_patches: list[tuple[int, bytes]] = []
+    expected_bitmaps: dict[int, bytes] = {}
+    for group in range(group_count):
+        descriptor_offset = group * descriptor_size
+        descriptor = bytearray(
+            prepared_gdt[
+                descriptor_offset : descriptor_offset + descriptor_size
+            ]
+        )
+        bitmap_home = struct.unpack_from("<I", descriptor, 0x00)[0] | (
+            struct.unpack_from("<I", descriptor, 0x20)[0] << 32
+        )
+        assert bitmap_home > 0
+        bitmap = bytearray(bytes((0xFF,)) * block_size)
+        expected_free = 0
+        if group == candidate_group:
+            bitmap[candidate_index // 8] &= ~(
+                1 << (candidate_index % 8)
+            )
+            expected_free = 1
+        bitmap_checksum = _crc32c_raw(bitmap, seed)
+        flags = struct.unpack_from("<H", descriptor, 0x12)[0]
+        struct.pack_into("<H", descriptor, 0x12, flags & ~0x02)
+        struct.pack_into("<H", descriptor, 0x0C, expected_free)
+        struct.pack_into("<H", descriptor, 0x2C, 0)
+        struct.pack_into(
+            "<H", descriptor, 0x18, bitmap_checksum & 0xFFFF
+        )
+        struct.pack_into(
+            "<H", descriptor, 0x38, bitmap_checksum >> 16
+        )
+        descriptor[:] = _group_descriptor_with_checksum(
+            superblock,
+            descriptor,
+            group,
+        )
+        prepared_gdt[
+            descriptor_offset : descriptor_offset + descriptor_size
+        ] = descriptor
+        bitmap_patches.append((bitmap_home * block_size, bytes(bitmap)))
+        expected_bitmaps[bitmap_home] = bytes(bitmap)
+
+    prepared_super = bytearray(superblock)
+    struct.pack_into("<I", prepared_super, 0x0C, 1)
+    struct.pack_into("<I", prepared_super, 0x158, 0)
+    prepared_super[:] = _ext4_super_with_checksum(prepared_super)
+    prepared_patches = input_patches + (
+        (1024, bytes(prepared_super)),
+        (2 * block_size, bytes(prepared_gdt)),
+        *bitmap_patches,
+    )
+
+    backing = tmp_path / "staged-public-root-growth-single-free.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            backing,
+            [
+                "CREATE _R1-STAT VFS-STATFS-SIZE ALLOT",
+                "VARIABLE _R1-CLOCK-CALLS",
+                (
+                    ": _R1-NOW ( context -- epoch-ms ior ) "
+                    "DROP 1 _R1-CLOCK-CALLS +! 3000000923456 0 ;"
+                ),
+                "T-ARENA CONSTANT _R1-ARENA",
+                (
+                    "_R1-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _R1-MOUNT-IOR CONSTANT _R1-V"
+                ),
+                "_R1-V _EXT4-CTX CONSTANT _R1-CTX",
+                (
+                    "' _R1-NOW 0 _R1-V EXT4-BIND-WRITE-CLOCK? "
+                    "CONSTANT _R1-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_R1-PROFILE", "_R1-V", 5, 1, 0
+                ),
+                (
+                    'S" /fixture/hardlink.txt" '
+                    "VFS-FF-READ VFS-FF-WRITE OR VFS-FF-APPEND OR "
+                    "_R1-V VFS-OPEN? "
+                    "CONSTANT _R1-OPEN-IOR CONSTANT _R1-FD"
+                ),
+                "_R1-FD FD.INODE @ D.VNODE @ CONSTANT _R1-VN",
+                "_R1-FD FD.CUR-LO @ CONSTANT _R1-INITIAL-CURSOR",
+                "_R1-VN VN.MTIME @ CONSTANT _R1-OLD-MTIME",
+                "_R1-VN VN.MTIME-NS @ CONSTANT _R1-OLD-MTIME-NS",
+                "_R1-VN VN.CTIME @ CONSTANT _R1-OLD-CTIME",
+                "_R1-VN VN.CTIME-NS @ CONSTANT _R1-OLD-CTIME-NS",
+                (
+                    "_R1-STAT VFS-STATFS-SIZE _R1-V VFS-STATFS "
+                    "CONSTANT _R1-STAT-BEFORE-IOR"
+                ),
+                "_R1-STAT VSF.BFREE @ CONSTANT _R1-FREE-BEFORE",
+                (
+                    f'S" {_STAGED_ALIGNED_APPEND_REPLACEMENT.decode("ascii")}" '
+                    "_R1-FD VFS-WRITE? CONSTANT _R1-WRITE-IOR "
+                    "CONSTANT _R1-ACTUAL"
+                ),
+                "_R1-FD FD.CUR-LO @ CONSTANT _R1-CURSOR",
+                "_R1-CTX _EXT4-C.J.WRITER + @ CONSTANT _R1-WRITER",
+                "_R1-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _R1-HOMES",
+                (
+                    "_R1-STAT VFS-STATFS-SIZE _R1-V VFS-STATFS "
+                    "CONSTANT _R1-STAT-AFTER-IOR"
+                ),
+                "_R1-STAT VSF.BFREE @ CONSTANT _R1-FREE-AFTER",
+                (
+                    _forth_conjunction(
+                        [
+                            "_R1-MOUNT-IOR 0=",
+                            "_R1-CLOCK-IOR 0=",
+                            "_R1-PROFILE-SIZE-IOR 0=",
+                            "_R1-PROFILE-BIND-IOR 0=",
+                            "_R1-PROFILE-USED _R1-PROFILE-SIZE =",
+                            "_R1-OPEN-IOR 0=",
+                            f"_R1-INITIAL-CURSOR {old_size} =",
+                            "_R1-WRITE-IOR VFS-E-NOSPC =",
+                            "_R1-ACTUAL 0=",
+                            "_R1-V V.LAST-IOR @ 0=",
+                            f"_R1-CURSOR {old_size} =",
+                            "_R1-CLOCK-CALLS @ 1 =",
+                            f"_R1-VN VN.SIZE-LO @ {old_size} =",
+                            "_R1-VN VN.SIZE-HI @ 0=",
+                            f"_R1-VN VN.BLOCKS @ {old_blocks} =",
+                            "_R1-VN VN.MTIME @ _R1-OLD-MTIME =",
+                            "_R1-VN VN.MTIME-NS @ _R1-OLD-MTIME-NS =",
+                            "_R1-VN VN.CTIME @ _R1-OLD-CTIME =",
+                            "_R1-VN VN.CTIME-NS @ _R1-OLD-CTIME-NS =",
+                            "_R1-STAT-BEFORE-IOR 0=",
+                            "_R1-STAT-AFTER-IOR 0=",
+                            "_R1-FREE-BEFORE 1 =",
+                            "_R1-FREE-AFTER _R1-FREE-BEFORE =",
+                            "_R1-WRITER _R1-PROFILE-BASE =",
+                            "_R1-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_R1-HOMES 0=",
+                            "_EXT4-MOW-CREDIT @ 0=",
+                            "_XH-META-CREDIT @ 0=",
+                            "_XH-ROOT-GROW @ 0<",
+                            "_XH-EDIT @ _XH-EDIT-GROW-ROOT =",
+                            f"_XH-CANDIDATE @ {data_candidate} =",
+                            "_XH-LEAF-CANDIDATE @ 0=",
+                            "_EXT4-FFB-EXCLUDE-ACTIVE @ 0<",
+                            "_EXT4-WR-ACTUAL @ 0=",
+                            "_EXT4-MOW-ACTUAL @ 0=",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-ROOT-GROWTH-SINGLE-FREE" THEN'
+                ),
+                "_R1-FD VFS-CLOSE? CONSTANT _R1-CLOSE-IOR",
+                "0 _R1-V VFS-UNMOUNT CONSTANT _R1-UNMOUNT-IOR",
+                (
+                    "_R1-CLOSE-IOR 0= _R1-UNMOUNT-IOR 0= AND "
+                    "_R1-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_R1-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_R1-PROFILE-ARENA A.PTR @ _R1-PROFILE-BASE = AND "
+                    'IF ." EXT4-PUBLIC-ROOT-GROWTH-SINGLE-UNMOUNT" THEN'
+                ),
+            ],
+            patches=prepared_patches,
+            capture_media=backing,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-ROOT-GROWTH-SINGLE-FREE")
+        _assert_emitted(output, "EXT4-PUBLIC-ROOT-GROWTH-SINGLE-UNMOUNT")
+        assert trace == ()
+        final_superblock, final_inode, _ = _ext4_inode_record(
+            backing,
+            inode_number,
+        )
+        assert final_superblock == bytes(prepared_super)
+        assert final_inode == inode
+        assert _read_ext4_home(
+            backing,
+            2,
+            block_size=block_size,
+        ) == bytes(prepared_gdt)
+        for bitmap_home, expected_bitmap in expected_bitmaps.items():
+            assert _read_ext4_home(
+                backing,
+                bitmap_home,
+                block_size=block_size,
+            ) == expected_bitmap
+        assert _read_ext4_home(
+            backing,
+            data_candidate,
+            block_size=block_size,
+        ) == original_data_candidate
+        for physical, original in original_blocks.items():
+            assert _read_ext4_home(
+                backing,
+                physical,
+                block_size=block_size,
+            ) == original
+        assert _read_ext4_home(
+            backing,
+            inode_home,
+            block_size=block_size,
+        )[0x100:0x200] == inode
+    finally:
+        backing.unlink(missing_ok=True)
+
+
+def test_typed_extent_root_growth_measures_six_shared_gdt_homes(
+    staged_public_extent_root_growth_prestate: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Compose two bitmap edits through one retained primary-GDT image."""
+    geometry = staged_public_extent_root_growth_prestate
+    path = geometry["path"]
+    input_patches = geometry["input_patches"]
+    superblock = geometry["superblock"]
+    inode = geometry["inode"]
+    inode_number = geometry["inode_number"]
+    inode_home = geometry["inode_home"]
+    inode_block_offset = geometry["inode_block_offset"]
+    inode_size = geometry["inode_size"]
+    block_size = geometry["block_size"]
+    old_size = geometry["old_size"]
+    old_blocks = geometry["old_blocks"]
+    generation = geometry["generation"]
+    assert isinstance(path, Path)
+    assert isinstance(input_patches, tuple)
+    assert isinstance(superblock, bytes)
+    assert isinstance(inode, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(inode_block_offset, int)
+    assert isinstance(inode_size, int)
+    assert isinstance(block_size, int)
+    assert isinstance(old_size, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(generation, int)
+
+    ballast_inode_number = 17
+    _, ballast_inode, ballast_inode_offset = _ext4_inode_record(
+        path,
+        ballast_inode_number,
+    )
+    ballast_inode_home, ballast_inode_block_offset = divmod(
+        ballast_inode_offset,
+        block_size,
+    )
+    assert ballast_inode_home == 279
+    assert ballast_inode_block_offset == 0
+    assert struct.unpack_from("<I", ballast_inode, 0x04)[0] == 3 * block_size
+    assert struct.unpack_from("<I", ballast_inode, 0x1C)[0] == 4
+    assert struct.unpack_from("<HHHH", ballast_inode, 0x28) == (
+        0xF30A,
+        2,
+        4,
+        0,
+    )
+    assert struct.unpack_from("<IHHI", ballast_inode, 0x34) == (
+        0,
+        1,
+        0,
+        1348,
+    )
+    assert struct.unpack_from("<IHHI", ballast_inode, 0x40) == (
+        2,
+        1,
+        0,
+        1350,
+    )
+
+    data_candidate = 1354
+    leaf_candidate = 8451
+    ballast_start = 1355
+    ballast_blocks = 8192 - ballast_start + 1
+    assert ballast_blocks == 6838
+    base_patch_map = dict(input_patches)
+    base_patch_map[ballast_inode_offset] = ballast_inode
+    ballast_patches, ballast_ranges = _allocate_unlinked_extent_ranges(
+        path,
+        protocol="modern",
+        extent_specs=((3, ballast_blocks, True),),
+        inode_number=ballast_inode_number,
+        physical_starts=(ballast_start,),
+        base_patches=tuple(base_patch_map.items()),
+    )
+    assert ballast_ranges == ((ballast_start, ballast_blocks),)
+    patch_map = dict(ballast_patches)
+    staged_superblock = patch_map[1024]
+
+    patched_ballast_inode = bytearray(ballast_inode)
+    struct.pack_into("<H", patched_ballast_inode, 0x2A, 3)
+    struct.pack_into(
+        "<IHHI",
+        patched_ballast_inode,
+        0x4C,
+        3,
+        0x8000 + ballast_blocks,
+        0,
+        ballast_start,
+    )
+    ballast_i_blocks = 4 + ballast_blocks * (block_size // 512)
+    assert ballast_i_blocks == 13680
+    struct.pack_into("<I", patched_ballast_inode, 0x1C, ballast_i_blocks)
+    patched_ballast_inode[:] = _inode_with_checksum(
+        staged_superblock,
+        ballast_inode_number,
+        patched_ballast_inode,
+    )
+    patch_map[ballast_inode_offset] = bytes(patched_ballast_inode)
+    original_data_candidate = bytes((0xA5,)) * block_size
+    original_leaf_candidate = bytes((0x3C,)) * block_size
+    patch_map[data_candidate * block_size] = original_data_candidate
+    patch_map[leaf_candidate * block_size] = original_leaf_candidate
+    staged_patches = tuple(patch_map.items())
+
+    first_data = struct.unpack_from("<I", staged_superblock, 0x14)[0]
+    blocks_per_group = struct.unpack_from("<I", staged_superblock, 0x20)[0]
+    descriptor_size = struct.unpack_from("<H", staged_superblock, 0xFE)[0]
+    seed = struct.unpack_from("<I", staged_superblock, 0x270)[0]
+    assert first_data == 1
+    assert blocks_per_group == 8192
+    assert descriptor_size == 64
+    data_group, data_index = divmod(
+        data_candidate - first_data,
+        blocks_per_group,
+    )
+    leaf_group, leaf_index = divmod(
+        leaf_candidate - first_data,
+        blocks_per_group,
+    )
+    assert (data_group, data_index) == (0, 1353)
+    assert (leaf_group, leaf_index) == (1, 258)
+    bitmap_homes = (259, 260)
+    gdt_home = 2
+    super_home = 1
+
+    initial_bitmaps = tuple(
+        bytearray(
+            _patched_ext4_home(
+                path,
+                staged_patches,
+                home,
+                block_size=block_size,
+            )
+        )
+        for home in bitmap_homes
+    )
+    for bitmap, index in zip(
+        initial_bitmaps,
+        (data_index, leaf_index),
+        strict=True,
+    ):
+        assert not bitmap[index // 8] & (1 << (index % 8))
+    assert sum(
+        not initial_bitmaps[0][index // 8] & (1 << (index % 8))
+        for index in range(blocks_per_group)
+    ) == 1
+    expected_bitmaps = tuple(bytearray(bitmap) for bitmap in initial_bitmaps)
+    for bitmap, index in zip(
+        expected_bitmaps,
+        (data_index, leaf_index),
+        strict=True,
+    ):
+        bitmap[index // 8] |= 1 << (index % 8)
+
+    initial_gdt = _patched_ext4_home(
+        path,
+        staged_patches,
+        gdt_home,
+        block_size=block_size,
+    )
+    expected_gdt = bytearray(initial_gdt)
+    group_free_before: list[int] = []
+    for group, bitmap in zip(
+        (data_group, leaf_group),
+        expected_bitmaps,
+        strict=True,
+    ):
+        descriptor_offset = group * descriptor_size
+        descriptor = bytearray(
+            expected_gdt[
+                descriptor_offset : descriptor_offset + descriptor_size
+            ]
+        )
+        free_before = struct.unpack_from("<H", descriptor, 0x0C)[0] | (
+            struct.unpack_from("<H", descriptor, 0x2C)[0] << 16
+        )
+        group_free_before.append(free_before)
+        assert free_before > 0
+        free_after = free_before - 1
+        struct.pack_into("<H", descriptor, 0x0C, free_after & 0xFFFF)
+        struct.pack_into("<H", descriptor, 0x2C, free_after >> 16)
+        bitmap_checksum = _crc32c_raw(bitmap, seed)
+        struct.pack_into("<H", descriptor, 0x18, bitmap_checksum & 0xFFFF)
+        struct.pack_into("<H", descriptor, 0x38, bitmap_checksum >> 16)
+        descriptor[:] = _group_descriptor_with_checksum(
+            staged_superblock,
+            descriptor,
+            group,
+        )
+        expected_gdt[
+            descriptor_offset : descriptor_offset + descriptor_size
+        ] = descriptor
+    assert group_free_before[0] == 1
+
+    expected_super = bytearray(staged_superblock)
+    free_blocks_before = struct.unpack_from("<I", expected_super, 0x0C)[0]
+    struct.pack_into("<I", expected_super, 0x0C, free_blocks_before - 2)
+    expected_super[:] = _ext4_super_with_checksum(expected_super)
+
+    leaf_entries = (
+        (0, 1, 1346),
+        (2, 1, 1352),
+        (3, 1, data_candidate),
+        (4, 1, 1353),
+        (5, 1, 1351),
+    )
+    leaf_max = (block_size - 12) // 12
+    root_generation = struct.unpack_from("<I", inode, 0x30)[0]
+    expected_leaf = bytearray(block_size)
+    struct.pack_into(
+        "<HHHHI",
+        expected_leaf,
+        0,
+        0xF30A,
+        len(leaf_entries),
+        leaf_max,
+        0,
+        root_generation,
+    )
+    for index, (logical, length, physical) in enumerate(leaf_entries):
+        struct.pack_into(
+            "<IHHI",
+            expected_leaf,
+            12 + index * 12,
+            logical,
+            length,
+            physical >> 32,
+            physical & 0xFFFF_FFFF,
+        )
+    expected_leaf[:] = _extent_node_with_checksum(
+        staged_superblock,
+        inode_number,
+        generation,
+        expected_leaf,
+    )
+
+    seconds = 3_000_000_777
+    nanoseconds = 456_000_000
+    expected_inode = bytearray(inode)
+    struct.pack_into("<I", expected_inode, 0x1C, old_blocks + 4)
+    expected_inode[0x28:0x64] = bytes(60)
+    struct.pack_into(
+        "<HHHHI",
+        expected_inode,
+        0x28,
+        0xF30A,
+        1,
+        4,
+        1,
+        root_generation,
+    )
+    struct.pack_into(
+        "<IIHH",
+        expected_inode,
+        0x34,
+        0,
+        leaf_candidate,
+        0,
+        0,
+    )
+    original_inode_home = _patched_ext4_home(
+        path,
+        staged_patches,
+        inode_home,
+        block_size=block_size,
+    )
+    expected_inode_home = _staged_write_timestamped_inode_home(
+        staged_superblock,
+        expected_inode,
+        original_inode_home,
+        inode_number=inode_number,
+        inode_block_offset=inode_block_offset,
+        epoch_ms=seconds * 1000 + nanoseconds // 1_000_000,
+        expected_size=old_size,
+    )
+    expected_data = b"MIDDLE" + bytes(block_size - len(b"MIDDLE"))
+    expected_meta_crcs = tuple(
+        _crc32c_raw(image)
+        for image in (
+            expected_bitmaps[0],
+            expected_gdt,
+            expected_super,
+            expected_leaf,
+            expected_bitmaps[1],
+            expected_inode_home,
+        )
+    )
+    expected_data_crc = _crc32c_raw(expected_data)
+
+    media_path = tmp_path / "typed-extent-root-growth-six-homes.img"
+    output, trace, _ = run_recovery_forth(
+        path,
+        media_path,
+        [
+            "T-ARENA CONSTANT _S6-ARENA",
+            (
+                "_S6-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _S6-MOUNT-IOR CONSTANT _S6-V"
+            ),
+            "_S6-V _EXT4-CTX CONSTANT _S6-CTX",
+            (
+                "6 1 0 _S6-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _S6-WRITER-IOR CONSTANT _S6-WRITER"
+            ),
+            "_S6-ARENA ARENA-USED CONSTANT _S6-USED-BEFORE",
+            (
+                "6 1 0 _S6-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _S6-BEGIN-IOR CONSTANT _S6-TX"
+            ),
+            "DEPTH CONSTANT _S6-DEPTH-BEFORE",
+            (
+                f'S" MIDDLE" {3 * block_size} {inode_number} '
+                f"{generation} {seconds} {nanoseconds} _S6-TX "
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _S6-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _S6-DEPTH-AFTER",
+            "3 _S6-WRITER _EXT4-JWR-META-IMAGE CONSTANT _S6-LEAF",
+            "5 _S6-WRITER _EXT4-JWR-META-IMAGE CONSTANT _S6-INODE-HOME",
+            (
+                f"_S6-INODE-HOME {inode_block_offset} + "
+                "CONSTANT _S6-INODE"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_S6-MOUNT-IOR 0=",
+                        "_S6-WRITER-IOR 0=",
+                        "_S6-BEGIN-IOR 0=",
+                        "_S6-STAGE-IOR 0=",
+                        "_S6-DEPTH-BEFORE _S6-DEPTH-AFTER =",
+                        "_XH-META-CREDIT @ 6 =",
+                        "_XH-ROOT-GROW @ 0<",
+                        "_XH-EDIT @ _XH-EDIT-GROW-ROOT =",
+                        "_XH-INSERT @ 2 =",
+                        f"_XH-CANDIDATE @ {data_candidate} =",
+                        "_XH-CANDIDATE-GROUP @ 0=",
+                        f"_XH-LEAF-CANDIDATE @ {leaf_candidate} =",
+                        "_XH-LEAF-GROUP @ 1 =",
+                        "_XH-BITMAP-HOME @ 259 =",
+                        "_XH-LEAF-BITMAP-HOME @ 260 =",
+                        "_XH-GDT-HOME @ 2 =",
+                        "_XH-LEAF-GDT-HOME @ 2 =",
+                        "_XH-ENTRIES @ 1 =",
+                        f"_XH-LEAF-MAX @ {leaf_max} =",
+                        "_XH-LEAF-FIRST @ 0=",
+                        "_XH-PUBLISHED @ 0<",
+                        "_S6-WRITER _EXT4-JWR.META-USED + @ 6 =",
+                        "_S6-WRITER _EXT4-JWR.META-ACTIVE + @ 6 =",
+                        "_S6-WRITER _EXT4-JWR.DATA-USED + @ 1 =",
+                        "_S6-WRITER _EXT4-JWR.DATA-ACTIVE + @ 1 =",
+                        "_S6-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
+                        "_S6-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                        "_S6-WRITER _EXT4-JTX-TABLES-VALID?",
+                        *(
+                            f"{index} _S6-WRITER "
+                            f"_EXT4-JWR-META-ENTRY @ {home} ="
+                            for index, home in enumerate(
+                                (259, 2, 1, leaf_candidate, 260, inode_home)
+                            )
+                        ),
+                        (
+                            "0 _S6-WRITER _EXT4-JWR-DATA-ENTRY @ "
+                            f"{data_candidate} ="
+                        ),
+                        *(
+                            f"{index} _S6-WRITER _EXT4-JWR-META-IMAGE "
+                            "_S6-WRITER _EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            f"{crc} = AND"
+                            for index, crc in enumerate(expected_meta_crcs)
+                        ),
+                        (
+                            "0 _S6-WRITER _EXT4-JWR-DATA-IMAGE "
+                            "_S6-WRITER _EXT4-JTX-IMAGE-CRC 0= SWAP "
+                            f"{expected_data_crc} = AND"
+                        ),
+                        "_S6-LEAF W@ _EXT4-EXTENT-MAGIC =",
+                        f"_S6-LEAF 2 + W@ {len(leaf_entries)} =",
+                        f"_S6-LEAF 4 + W@ {leaf_max} =",
+                        "_S6-LEAF 6 + W@ 0=",
+                        "_S6-INODE _EXT4-I.BLOCKS-LO + L@ 14 =",
+                        "_S6-INODE _EXT4-I.BLOCKS-HI + W@ 0=",
+                        f"_S6-INODE _EXT4-I.SIZE-LO + L@ {old_size} =",
+                        "_S6-INODE _EXT4-I.SIZE-HI + L@ 0=",
+                        (
+                            "_S6-INODE _EXT4-I.BLOCK + 6 + W@ 1 ="
+                        ),
+                        "_S6-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-ROOT-GROWTH-SIX-HOMES" THEN'
+            ),
+            "_S6-TX _EXT4-JTX-ABORT CONSTANT _S6-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_S6-ABORT-IOR 0=",
+                        "_S6-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_S6-WRITER _EXT4-JWR-VALID?",
+                        "_S6-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_S6-WRITER _EXT4-JWR.DATA-USED + @ 0=",
+                        "_S6-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
+                        "_S6-ARENA ARENA-USED _S6-USED-BEFORE =",
+                        (
+                            "_S6-WRITER _EXT4-JWR.META-IMAGES + @ "
+                            f"{6 * block_size} _EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_S6-WRITER _EXT4-JWR.DATA-IMAGES + @ "
+                            f"{block_size} _EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_S6-WRITER _EXT4-JWR.SCRATCH-A + @ "
+                            f"{block_size} _EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_S6-WRITER _EXT4-JWR.SCRATCH-B + @ "
+                            f"{block_size} _EXT4-BYTES-ZERO?"
+                        ),
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-TYPED-ROOT-GROWTH-SIX-ABORTED" THEN'
+            ),
+            "0 _S6-V VFS-UNMOUNT CONSTANT _S6-UNMOUNT-IOR",
+            (
+                "_S6-UNMOUNT-IOR 0= _S6-V V.LIFECYCLE @ "
+                "VFS-L-UNMOUNTED = AND "
+                'IF ." EXT4-TYPED-ROOT-GROWTH-SIX-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=staged_patches,
+        capture_media=media_path,
+    )
+    _assert_emitted(output, "EXT4-TYPED-ROOT-GROWTH-SIX-HOMES")
+    _assert_emitted(output, "EXT4-TYPED-ROOT-GROWTH-SIX-ABORTED")
+    _assert_emitted(output, "EXT4-TYPED-ROOT-GROWTH-SIX-UNMOUNTED")
+    assert trace == ()
+    assert _ext4_block_allocation_state(
+        media_path,
+        (data_candidate, leaf_candidate),
+    ) == {data_candidate: False, leaf_candidate: False}
+    assert _read_ext4_home(
+        media_path,
+        data_candidate,
+        block_size=block_size,
+    ) == original_data_candidate
+    assert _read_ext4_home(
+        media_path,
+        leaf_candidate,
+        block_size=block_size,
+    ) == original_leaf_candidate
+    assert _read_ext4_home(
+        media_path,
+        gdt_home,
+        block_size=block_size,
+    ) == initial_gdt
+    assert _read_ext4_home(
+        media_path,
+        inode_home,
+        block_size=block_size,
+    ) == original_inode_home
+
+
+def test_staged_public_extent_root_growth_leaf_tear_replays_tree(
+    staged_public_extent_root_growth_prestate: dict[str, object],
+    staged_public_extent_root_growth_fixture: dict[str, object],
+    writer_activation_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Replay all five metadata homes after the new leaf home tears."""
+    geometry = staged_public_extent_root_growth_prestate
+    success = staged_public_extent_root_growth_fixture
+    path = geometry["path"]
+    input_patches = geometry["input_patches"]
+    activation_trace = geometry["activation_trace"]
+    superblock = geometry["superblock"]
+    inode = geometry["inode"]
+    inode_number = geometry["inode_number"]
+    inode_home = geometry["inode_home"]
+    inode_block_offset = geometry["inode_block_offset"]
+    inode_size = geometry["inode_size"]
+    block_size = geometry["block_size"]
+    old_size = geometry["old_size"]
+    old_blocks = geometry["old_blocks"]
+    data_candidate = geometry["data_candidate"]
+    leaf_candidate = geometry["leaf_candidate"]
+    original_leaf = geometry["original_leaf_candidate"]
+    success_image = success["image"]
+    success_trace = success["trace"]
+    epoch_ms = success["epoch_ms"]
+    expected_file = success["expected_file"]
+    dirty_super = writer_activation_fixture["dirty_super"]
+    assert isinstance(path, Path)
+    assert isinstance(input_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(superblock, bytes)
+    assert isinstance(inode, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(inode_block_offset, int)
+    assert isinstance(inode_size, int)
+    assert isinstance(block_size, int)
+    assert isinstance(old_size, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(data_candidate, int)
+    assert isinstance(leaf_candidate, int)
+    assert isinstance(original_leaf, bytes)
+    assert isinstance(success_image, Path)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(epoch_ms, int)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(dirty_super, bytes)
+
+    bitmap_home = 259
+    gdt_home = 2
+    super_home = 1
+    new_blocks = old_blocks + 2 * (block_size // 512)
+    new_size = len(expected_file)
+    leaf_max = (block_size - 12) // 12
+    assert inode_home == 278
+    assert data_candidate == 1354
+    assert leaf_candidate == 1355
+    assert new_blocks == 14
+    assert new_size == old_size + len(_STAGED_ALIGNED_APPEND_REPLACEMENT)
+    assert success_trace[: len(activation_trace)] == activation_trace
+
+    expected_homes = {
+        home: _read_ext4_home(success_image, home, block_size=block_size)
+        for home in (
+            data_candidate,
+            bitmap_home,
+            gdt_home,
+            super_home,
+            leaf_candidate,
+            inode_home,
+        )
+    }
+    original_inode_home = _patched_ext4_home(
+        path,
+        input_patches,
+        inode_home,
+        block_size=block_size,
+    )
+    assert original_inode_home[
+        inode_block_offset : inode_block_offset + inode_size
+    ] == inode
+    assert expected_homes[data_candidate] == (
+        _STAGED_ALIGNED_APPEND_REPLACEMENT
+        + bytes(block_size - len(_STAGED_ALIGNED_APPEND_REPLACEMENT))
+    )
+
+    data_ordinals = _write_ordinals_for_ext4_home(
+        success_trace,
+        data_candidate,
+        block_size=block_size,
+    )
+    bitmap_ordinals = _write_ordinals_for_ext4_home(
+        success_trace,
+        bitmap_home,
+        block_size=block_size,
+    )
+    gdt_ordinals = _write_ordinals_for_ext4_home(
+        success_trace,
+        gdt_home,
+        block_size=block_size,
+    )
+    super_ordinals = _write_ordinals_for_ext4_home(
+        success_trace,
+        super_home,
+        block_size=block_size,
+    )
+    leaf_ordinals = _write_ordinals_for_ext4_home(
+        success_trace,
+        leaf_candidate,
+        block_size=block_size,
+    )
+    inode_ordinals = _write_ordinals_for_ext4_home(
+        success_trace,
+        inode_home,
+        block_size=block_size,
+    )
+    assert data_ordinals == (7,)
+    assert bitmap_ordinals == (20,)
+    assert gdt_ordinals == (21,)
+    assert super_ordinals[1] == 22
+    assert leaf_ordinals == (23,)
+    assert inode_ordinals == (24,)
+    leaf_event_index = _trace_event_index_for_ordinal(
+        success_trace,
+        "write",
+        leaf_ordinals[0],
+    )
+    assert success_trace[leaf_event_index] == (
+        "write",
+        leaf_candidate * (block_size // 512),
+        block_size // 512,
+    )
+
+    tear_offset = 13
+    expected_leaf = expected_homes[leaf_candidate]
+    expected_torn_leaf = (
+        expected_leaf[:tear_offset] + original_leaf[tear_offset:]
+    )
+    assert expected_torn_leaf not in {expected_leaf, original_leaf}
+
+    expected_faulted_super = bytearray(dirty_super)
+    expected_super = expected_homes[super_home]
+    expected_faulted_super[0x0C:0x10] = expected_super[0x0C:0x10]
+    expected_faulted_super[0x158:0x15C] = expected_super[0x158:0x15C]
+    expected_faulted_super[:] = _ext4_super_with_checksum(
+        expected_faulted_super
+    )
+    assert bytes(expected_faulted_super) != expected_super
+
+    faulted = tmp_path / "staged-extent-root-leaf-w23-faulted.img"
+    recovered = tmp_path / "staged-extent-root-leaf-w23-recovered.img"
+    stable = tmp_path / "staged-extent-root-leaf-w23-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            _staged_extent_root_growth_leaf_fault_lines(
+                epoch_ms=epoch_ms,
+                old_size=old_size,
+                new_size=new_size,
+                new_blocks=new_blocks,
+                data_candidate=data_candidate,
+                leaf_candidate=leaf_candidate,
+                leaf_max=leaf_max,
+            ),
+            patches=input_patches,
+            write_faults_by_ordinal={
+                leaf_ordinals[0]: {
+                    "stage": "media",
+                    "sector_index": 0,
+                    "byte_index": tear_offset,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-EXTENT-ROOT-LEAF-FAULT")
+        assert failed_trace == success_trace[: leaf_event_index + 1]
+        assert _ext4_block_allocation_state(
+            faulted,
+            (data_candidate, leaf_candidate),
+        ) == {data_candidate: True, leaf_candidate: True}
+        assert _read_ext4_home(
+            faulted,
+            data_candidate,
+            block_size=block_size,
+        ) == expected_homes[data_candidate]
+        assert _read_ext4_home(
+            faulted,
+            bitmap_home,
+            block_size=block_size,
+        ) == expected_homes[bitmap_home]
+        assert _read_ext4_home(
+            faulted,
+            gdt_home,
+            block_size=block_size,
+        ) == expected_homes[gdt_home]
+        assert _read_ext4_home(
+            faulted,
+            super_home,
+            block_size=block_size,
+        ) == bytes(expected_faulted_super)
+        assert _read_ext4_home(
+            faulted,
+            leaf_candidate,
+            block_size=block_size,
+        ) == expected_torn_leaf
+        assert _read_ext4_home(
+            faulted,
+            inode_home,
+            block_size=block_size,
+        ) == original_inode_home
+        faulted_superblock, faulted_inode, _ = _ext4_inode_record(
+            faulted,
+            inode_number,
+        )
+        assert faulted_superblock == bytes(expected_faulted_super)
+        assert faulted_inode == inode
+
+        _, recovery_trace, recovery_sha256 = (
+            _staged_write_recovery_readback(
+                faulted,
+                recovered,
+                expected_file=expected_file,
+                expected_epoch_ms=epoch_ms,
+                expected_home_writes=5,
+                expected_replayed=True,
+                expected_blocks=new_blocks,
+                prefix="_RGL-R",
+                marker="EXT4-PUBLIC-EXTENT-ROOT-LEAF-RECOVERED",
+            )
+        )
+        assert not _write_ordinals_for_ext4_home(
+            recovery_trace,
+            data_candidate,
+            block_size=block_size,
+        )
+        replay_role_events = tuple(
+            event
+            for event in recovery_trace
+            if event
+            in {
+                ("write", bitmap_home * 2, 2),
+                ("write", gdt_home * 2, 2),
+                ("write", super_home * 2, 2),
+                ("write", leaf_candidate * 2, 2),
+                ("write", inode_home * 2, 2),
+            }
+        )
+        assert replay_role_events == (
+            ("write", bitmap_home * 2, 2),
+            ("write", gdt_home * 2, 2),
+            ("write", super_home * 2, 2),
+            ("write", leaf_candidate * 2, 2),
+            ("write", inode_home * 2, 2),
+            # Recovery replays five transaction homes, then lands its clean
+            # primary-super endpoint as a separate non-replay write.
+            ("write", super_home * 2, 2),
+        )
+        for home, expected in expected_homes.items():
+            assert _read_ext4_home(
+                recovered,
+                home,
+                block_size=block_size,
+            ) == expected
+        assert _ext4_block_allocation_state(
+            recovered,
+            (data_candidate, leaf_candidate),
+        ) == {data_candidate: True, leaf_candidate: True}
+        assert recovery_sha256 == _sha256(recovered)
+
+        _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+            recovered,
+            stable,
+            expected_file=expected_file,
+            expected_epoch_ms=epoch_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            expected_blocks=new_blocks,
+            prefix="_RGL-S",
+            marker="EXT4-PUBLIC-EXTENT-ROOT-LEAF-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        for home, expected in expected_homes.items():
+            assert _read_ext4_home(
+                stable,
+                home,
+                block_size=block_size,
+            ) == expected
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
         stable.unlink(missing_ok=True)
 
 
