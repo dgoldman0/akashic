@@ -37558,6 +37558,716 @@ def test_staged_public_aligned_eof_growth_passes_external_oracles(
     _assert_e2fsck_clean(image, jbd2_toolchain)
 
 
+@pytest.fixture(scope="session")
+def staged_public_multi_allocated_eof_fixture(
+    writer_activation_fixture: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Grow aligned EOF through two independently committed allocations."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    inode_number = 14
+    candidates = (1351, 1352)
+    bitmap_home = 259
+    gdt_home = 2
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_home = inode_offset // block_size
+    data_block = _extent_root_physical(inode, 0)
+    xattr_block = struct.unpack_from("<I", inode, 0x68)[0]
+    old_blocks = struct.unpack_from("<I", inode, 0x1C)[0]
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0]
+    assert block_size == 1024
+    assert inode_home == 278
+    assert data_block == 1346
+    assert xattr_block == 1349
+    assert old_blocks == 4
+    assert not any(_ext4_block_allocation_state(path, candidates).values())
+
+    patched_inode = bytearray(inode)
+    struct.pack_into("<I", patched_inode, 0x04, block_size)
+    struct.pack_into("<I", patched_inode, 0x6C, 0)
+    patched_inode[:] = _inode_with_checksum(
+        superblock, inode_number, patched_inode
+    )
+    input_patches = source_patches + ((inode_offset, bytes(patched_inode)),)
+    original_data = _patched_ext4_home(
+        path, input_patches, data_block, block_size=block_size
+    )
+
+    first_byte = 0x51
+    first_append = bytes((first_byte,)) * block_size
+    second_append = _STAGED_ALIGNED_APPEND_REPLACEMENT
+    replacement = first_append + second_append
+    expected_second_candidate = second_append + bytes(
+        block_size - len(second_append)
+    )
+    expected_file = original_data + replacement
+    expected_file_crc = _crc32c_raw(expected_file)
+    new_size = len(expected_file)
+    epoch_ms = 3_000_000_223_456
+    published_epoch_ms = epoch_ms + 2
+    seconds, milliseconds = divmod(published_epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+
+    directory = tmp_path_factory.mktemp("ext4-public-multi-allocated-eof")
+    media_path = directory / "staged-public-multi-allocated-eof.img"
+    stable_path = directory / "staged-public-multi-allocated-eof-stable.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            path,
+            media_path,
+            [
+                f"CREATE _MG-SOURCE {len(replacement)} ALLOT",
+                f"_MG-SOURCE {block_size} {first_byte} FILL",
+                (
+                    f'S" {second_append.decode("ascii")}" '
+                    f"_MG-SOURCE {block_size} + SWAP MOVE"
+                ),
+                f"CREATE _MG-READ {new_size} ALLOT",
+                "CREATE _MG-STAT VFS-STATFS-SIZE ALLOT",
+                f"CREATE _MG-CLOCK {epoch_ms} , 0 , 0 ,",
+                (
+                    ": _MG-NOW ( clock -- epoch-ms ior ) "
+                    "DUP 2 CELLS + DUP @ 1+ SWAP ! "
+                    "DUP @ SWAP 2 CELLS + @ + 0 ;"
+                ),
+                "T-ARENA CONSTANT _MG-ARENA",
+                (
+                    "_MG-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _MG-MOUNT-IOR CONSTANT _MG-V"
+                ),
+                "_MG-V _EXT4-CTX CONSTANT _MG-CTX",
+                (
+                    "' _MG-NOW _MG-CLOCK _MG-V "
+                    "EXT4-BIND-WRITE-CLOCK? CONSTANT _MG-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_MG-PROFILE", "_MG-V", 4, 1, 0
+                ),
+                (
+                    'S" /fixture/payload.txt" _MG-V VFS-RESOLVE? '
+                    "CONSTANT _MG-P-IOR CONSTANT _MG-P"
+                ),
+                (
+                    'S" /fixture/hardlink.txt" _MG-V VFS-RESOLVE? '
+                    "CONSTANT _MG-H-IOR CONSTANT _MG-H"
+                ),
+                (
+                    'S" /fixture/hardlink.txt" '
+                    "VFS-FF-READ VFS-FF-WRITE OR VFS-FF-APPEND OR "
+                    "_MG-V VFS-OPEN? CONSTANT _MG-OPEN-IOR CONSTANT _MG-FD"
+                ),
+                "_MG-FD FD.INODE @ D.VNODE @ CONSTANT _MG-VN",
+                "_MG-FD FD.CUR-LO @ CONSTANT _MG-INITIAL-CURSOR",
+                "_MG-VN VN.BLOCKS @ CONSTANT _MG-OLD-BLOCKS",
+                (
+                    "_MG-STAT VFS-STATFS-SIZE _MG-V VFS-STATFS "
+                    "CONSTANT _MG-STAT-BEFORE-IOR"
+                ),
+                "_MG-STAT VSF.BFREE @ CONSTANT _MG-FREE-BEFORE",
+                (
+                    f"_MG-SOURCE {len(replacement)} _MG-FD "
+                    "VFS-WRITE-EXACT CONSTANT _MG-EXACT-IOR"
+                ),
+                "_MG-FD FD.CUR-LO @ CONSTANT _MG-CURSOR",
+                "_MG-CTX _EXT4-C.J.WRITER + @ CONSTANT _MG-WRITER",
+                "_MG-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _MG-HOMES",
+                (
+                    "_MG-STAT VFS-STATFS-SIZE _MG-V VFS-STATFS "
+                    "CONSTANT _MG-STAT-AFTER-IOR"
+                ),
+                "_MG-STAT VSF.BFREE @ CONSTANT _MG-FREE-AFTER",
+                "0 _MG-FD VFS-SEEK? CONSTANT _MG-READ-SEEK-IOR",
+                (
+                    f"_MG-READ {new_size} _MG-FD VFS-READ? "
+                    "CONSTANT _MG-READ-IOR CONSTANT _MG-READ-ACTUAL"
+                ),
+                "0xFFFFFFFF _EXT4-CRC-START",
+                (
+                    f"_MG-READ {new_size} _EXT4-CRC-ADD "
+                    "CONSTANT _MG-CRC-IOR"
+                ),
+                "_EXT4-CRC@ CONSTANT _MG-CRC",
+                (
+                    _forth_conjunction(
+                        [
+                            "_MG-MOUNT-IOR 0=",
+                            "_MG-CLOCK-IOR 0=",
+                            "_MG-PROFILE-SIZE-IOR 0=",
+                            "_MG-PROFILE-BIND-IOR 0=",
+                            "_MG-PROFILE-USED _MG-PROFILE-SIZE =",
+                            "_MG-P-IOR 0=",
+                            "_MG-H-IOR 0=",
+                            "_MG-P D.VNODE @ _MG-H D.VNODE @ =",
+                            "_MG-OPEN-IOR 0=",
+                            f"_MG-INITIAL-CURSOR {block_size} =",
+                            "_MG-EXACT-IOR 0=",
+                            "_MG-V V.LAST-IOR @ 0=",
+                            f"_MG-CURSOR {new_size} =",
+                            "_MG-CLOCK 2 CELLS + @ 2 =",
+                            f"_MG-VN VN.SIZE-LO @ {new_size} =",
+                            "_MG-VN VN.SIZE-HI @ 0=",
+                            "_MG-OLD-BLOCKS 4 =",
+                            "_MG-VN VN.BLOCKS @ 8 =",
+                            f"_MG-VN VN.MTIME @ {seconds} =",
+                            f"_MG-VN VN.MTIME-NS @ {nanoseconds} =",
+                            f"_MG-VN VN.CTIME @ {seconds} =",
+                            f"_MG-VN VN.CTIME-NS @ {nanoseconds} =",
+                            "_MG-STAT-BEFORE-IOR 0=",
+                            "_MG-STAT-AFTER-IOR 0=",
+                            "_MG-FREE-AFTER _MG-FREE-BEFORE 2 - =",
+                            "_MG-WRITER _MG-PROFILE-BASE =",
+                            "_MG-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_MG-HOMES 4 =",
+                            (
+                                "_EXT4-WR-KIND @ "
+                                "_EXT4-WRK-ALIGNED-APPEND ="
+                            ),
+                            f"_EXT4-WR-COUNT @ {len(second_append)} =",
+                            f"_EXT4-WR-OFFSET @ {2 * block_size} =",
+                            f"_EXT4-WR-REQUEST-END @ {new_size} =",
+                            f"_EXT4-WR-CHUNK @ {len(second_append)} =",
+                            f"_EXT4-WR-ACTUAL @ {len(second_append)} =",
+                            f"_EXT4-MOW-ACTUAL @ {len(second_append)} =",
+                            f"_XH-CANDIDATE @ {candidates[1]} =",
+                            "_XH-EDIT @ _XH-EDIT-MERGE-LEFT =",
+                            "_XH-ENTRIES @ 2 =",
+                            "_MG-READ-SEEK-IOR 0=",
+                            "_MG-READ-IOR 0=",
+                            f"_MG-READ-ACTUAL {new_size} =",
+                            "_MG-CRC-IOR 0=",
+                            f"_MG-CRC {expected_file_crc} =",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-MULTI-ALLOCATED-EOF" THEN'
+                ),
+                "_MG-FD VFS-CLOSE? CONSTANT _MG-CLOSE-IOR",
+                "0 _MG-V VFS-UNMOUNT CONSTANT _MG-UNMOUNT-IOR",
+                (
+                    "_MG-CLOSE-IOR 0= _MG-UNMOUNT-IOR 0= AND "
+                    "_MG-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_MG-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_MG-PROFILE-ARENA A.PTR @ _MG-PROFILE-BASE = AND "
+                    'IF ." EXT4-PUBLIC-MULTI-ALLOCATED-EOF-UNMOUNT" THEN'
+                ),
+            ],
+            patches=input_patches
+            + tuple(
+                (
+                    candidate * block_size,
+                    bytes((0xA5 if index == 0 else 0x5A,)) * block_size,
+                )
+                for index, candidate in enumerate(candidates)
+            ),
+            capture_media=media_path,
+            max_steps=1_500_000_000,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-MULTI-ALLOCATED-EOF")
+        _assert_emitted(output, "EXT4-PUBLIC-MULTI-ALLOCATED-EOF-UNMOUNT")
+        assert trace[: len(activation_trace)] == activation_trace
+        first_candidate_event = ("write", candidates[0] * 2, 2)
+        second_candidate_event = ("write", candidates[1] * 2, 2)
+        bitmap_event = ("write", bitmap_home * 2, 2)
+        gdt_event = ("write", gdt_home * 2, 2)
+        inode_event = ("write", inode_home * 2, 2)
+        assert tuple(
+            event
+            for event in trace
+            if event
+            in {
+                first_candidate_event,
+                second_candidate_event,
+                bitmap_event,
+                gdt_event,
+                inode_event,
+            }
+        ) == (
+            first_candidate_event,
+            bitmap_event,
+            gdt_event,
+            inode_event,
+            second_candidate_event,
+            bitmap_event,
+            gdt_event,
+            inode_event,
+        )
+        assert trace.count(("write", data_block * 2, 2)) == 0
+        assert trace.count(("write", xattr_block * 2, 2)) == 0
+        assert all(
+            _ext4_block_allocation_state(media_path, candidates).values()
+        )
+
+        final_superblock, final_inode, _ = _ext4_inode_record(
+            media_path, inode_number
+        )
+        assert struct.unpack_from("<I", final_superblock, 0x0C)[0] == (
+            free_blocks_before - 2
+        )
+        assert struct.unpack_from("<I", final_inode, 0x04)[0] == new_size
+        assert struct.unpack_from("<I", final_inode, 0x6C)[0] == 0
+        assert struct.unpack_from("<I", final_inode, 0x1C)[0] == 8
+        assert struct.unpack_from("<HHHH", final_inode, 0x28) == (
+            0xF30A,
+            2,
+            4,
+            0,
+        )
+        assert struct.unpack_from("<IHHI", final_inode, 0x34) == (
+            0,
+            1,
+            0,
+            data_block,
+        )
+        assert struct.unpack_from("<IHHI", final_inode, 0x40) == (
+            1,
+            2,
+            0,
+            candidates[0],
+        )
+        assert _extent_root_physical(final_inode, 1) == candidates[0]
+        assert _extent_root_physical(final_inode, 2) == candidates[1]
+        assert _read_ext4_home(
+            media_path, candidates[0], block_size=block_size
+        ) == first_append
+        assert _read_ext4_home(
+            media_path, candidates[1], block_size=block_size
+        ) == expected_second_candidate
+
+        _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+            media_path,
+            stable_path,
+            expected_file=expected_file,
+            expected_epoch_ms=published_epoch_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            expected_blocks=8,
+            prefix="_MG-S",
+            marker="EXT4-PUBLIC-MULTI-ALLOCATED-EOF-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == media_sha256
+        return {
+            "image": stable_path,
+            "expected_file": expected_file,
+            "inode_number": inode_number,
+            "data_block": data_block,
+            "candidates": candidates,
+            "xattr_block": xattr_block,
+            "trace": trace,
+        }
+    finally:
+        media_path.unlink(missing_ok=True)
+
+
+def test_staged_public_exact_growth_allocates_additional_eof_blocks(
+    staged_public_multi_allocated_eof_fixture: dict[str, object],
+) -> None:
+    image = staged_public_multi_allocated_eof_fixture["image"]
+    expected_file = staged_public_multi_allocated_eof_fixture["expected_file"]
+    candidates = staged_public_multi_allocated_eof_fixture["candidates"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(candidates, tuple)
+    assert image.is_file()
+    assert len(expected_file) == 2048 + len(_STAGED_ALIGNED_APPEND_REPLACEMENT)
+    assert candidates == (1351, 1352)
+
+
+def test_staged_public_multi_allocated_eof_passes_external_oracles(
+    staged_public_multi_allocated_eof_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    image = staged_public_multi_allocated_eof_fixture["image"]
+    expected_file = staged_public_multi_allocated_eof_fixture["expected_file"]
+    inode_number = staged_public_multi_allocated_eof_fixture["inode_number"]
+    data_block = staged_public_multi_allocated_eof_fixture["data_block"]
+    candidates = staged_public_multi_allocated_eof_fixture["candidates"]
+    xattr_block = staged_public_multi_allocated_eof_fixture["xattr_block"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(data_block, int)
+    assert isinstance(candidates, tuple)
+    assert isinstance(xattr_block, int)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    for target in ("/fixture/payload.txt", "/fixture/hardlink.txt"):
+        readback = subprocess.run(
+            [str(debugfs), "-R", f"cat {target}", str(image)],
+            env=env,
+            capture_output=True,
+            check=False,
+        )
+        assert readback.returncode == 0, readback.stdout + readback.stderr
+        assert readback.stdout == expected_file
+
+    for logical, physical in (
+        (0, data_block),
+        (1, candidates[0]),
+        (2, candidates[1]),
+    ):
+        mapped = subprocess.run(
+            [
+                str(debugfs),
+                "-R",
+                f"bmap /fixture/payload.txt {logical}",
+                str(image),
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert mapped.returncode == 0, mapped.stdout + mapped.stderr
+        assert int(mapped.stdout.strip().splitlines()[-1]) == physical
+
+    stat = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "stat /fixture/payload.txt",
+            str(image),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stat.returncode == 0, stat.stdout + stat.stderr
+    assert f"Inode: {inode_number}" in stat.stdout
+    assert f"Size: {len(expected_file)}" in stat.stdout
+    assert "Flags: 0x80000" in stat.stdout
+    assert re.search(r"Links:\s+2\s+Blockcount:\s+8", stat.stdout)
+    assert f"File ACL: {xattr_block}" in stat.stdout
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+
+
+def test_staged_public_multi_allocated_eof_preserves_prefix_on_late_root_refusal(
+    writer_activation_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A full root on the second allocation preserves the first EOF block."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    inode_number = 14
+    first_candidate = 1351
+    second_candidate = 1354
+    bitmap_home = 259
+    gdt_home = 2
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_home = inode_offset // block_size
+    data_block = _extent_root_physical(inode, 0)
+    xattr_block = struct.unpack_from("<I", inode, 0x68)[0]
+    assert block_size == 1024
+    assert inode_home == 278
+    assert data_block == 1346
+    assert xattr_block == 1349
+
+    allocated_patches, physical_ranges = _allocate_unlinked_extent_ranges(
+        path,
+        protocol="modern",
+        extent_specs=((0, 2, False),),
+        inode_number=inode_number,
+        physical_starts=(1352,),
+        seed_payloads=True,
+        base_patches=((1024, superblock), (inode_offset, inode)),
+    )
+    assert physical_ranges == ((1352, 2),)
+    patch_map = dict(allocated_patches)
+    old_size = 5 * block_size
+    committed_size = 6 * block_size
+    requested_size = 7 * block_size
+    old_blocks = 8
+    committed_blocks = 10
+    full_inode = bytearray(inode)
+    full_inode[0x34:0x64] = bytes(4 * 12)
+    struct.pack_into("<I", full_inode, 0x04, old_size)
+    struct.pack_into("<I", full_inode, 0x6C, 0)
+    struct.pack_into("<I", full_inode, 0x1C, old_blocks)
+    struct.pack_into("<H", full_inode, 0x74, 0)
+    struct.pack_into("<H", full_inode, 0x2A, 3)
+    entries = (
+        (0, 1, data_block),
+        (2, 1, 1352),
+        (4, 1, 1353),
+    )
+    for index, (logical, length, physical) in enumerate(entries):
+        struct.pack_into(
+            "<IHHI",
+            full_inode,
+            0x34 + index * 12,
+            logical,
+            length,
+            physical >> 32,
+            physical & 0xFFFF_FFFF,
+        )
+    full_inode[:] = _inode_with_checksum(
+        patch_map[1024], inode_number, full_inode
+    )
+    patch_map[inode_offset] = bytes(full_inode)
+    patch_map[second_candidate * block_size] = bytes((0x5A,)) * block_size
+    input_patches = source_patches + tuple(patch_map.items())
+
+    allocation_state = _ext4_block_allocation_state(
+        path, (first_candidate, second_candidate)
+    )
+    assert not allocation_state[first_candidate]
+    assert not allocation_state[second_candidate]
+    original_data = _patched_ext4_home(
+        path, input_patches, data_block, block_size=block_size
+    )
+    second_extent_data = _patched_ext4_home(
+        path, input_patches, 1352, block_size=block_size
+    )
+    fourth_extent_data = _patched_ext4_home(
+        path, input_patches, 1353, block_size=block_size
+    )
+    original_second_candidate = _patched_ext4_home(
+        path, input_patches, second_candidate, block_size=block_size
+    )
+    first_append = bytes((0x61,)) * block_size
+    expected_file = (
+        original_data
+        + bytes(block_size)
+        + second_extent_data
+        + bytes(block_size)
+        + fourth_extent_data
+        + first_append
+    )
+    assert len(expected_file) == committed_size
+    free_blocks_before = struct.unpack_from("<I", patch_map[1024], 0x0C)[0]
+    epoch_ms = 3_000_000_323_456
+    committed_epoch_ms = epoch_ms + 1
+    committed_seconds, committed_milliseconds = divmod(
+        committed_epoch_ms, 1000
+    )
+    committed_nanoseconds = committed_milliseconds * 1_000_000
+
+    backing = tmp_path / "staged-multi-allocated-eof-late-refusal.img"
+    stable = tmp_path / "staged-multi-allocated-eof-late-refusal-stable.img"
+    try:
+        output, trace, media_sha256 = run_recovery_forth(
+            path,
+            backing,
+            [
+                f"CREATE _MR-SOURCE {2 * block_size} ALLOT",
+                f"_MR-SOURCE {block_size} 0x61 FILL",
+                f"_MR-SOURCE {block_size} + {block_size} 0x62 FILL",
+                "CREATE _MR-STAT VFS-STATFS-SIZE ALLOT",
+                f"CREATE _MR-CLOCK {epoch_ms} , 0 , 0 ,",
+                (
+                    ": _MR-NOW ( clock -- epoch-ms ior ) "
+                    "DUP 2 CELLS + DUP @ 1+ SWAP ! "
+                    "DUP @ SWAP 2 CELLS + @ + 0 ;"
+                ),
+                "T-ARENA CONSTANT _MR-ARENA",
+                (
+                    "_MR-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _MR-MOUNT-IOR CONSTANT _MR-V"
+                ),
+                "_MR-V _EXT4-CTX CONSTANT _MR-CTX",
+                (
+                    "' _MR-NOW _MR-CLOCK _MR-V "
+                    "EXT4-BIND-WRITE-CLOCK? CONSTANT _MR-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_MR-PROFILE", "_MR-V", 4, 1, 0
+                ),
+                (
+                    'S" /fixture/hardlink.txt" '
+                    "VFS-FF-READ VFS-FF-WRITE OR VFS-FF-APPEND OR "
+                    "_MR-V VFS-OPEN? CONSTANT _MR-OPEN-IOR CONSTANT _MR-FD"
+                ),
+                "_MR-FD FD.INODE @ D.VNODE @ CONSTANT _MR-VN",
+                "_MR-FD FD.CUR-LO @ CONSTANT _MR-INITIAL-CURSOR",
+                "_MR-VN VN.ATIME @ CONSTANT _MR-OLD-ATIME",
+                "_MR-VN VN.ATIME-NS @ CONSTANT _MR-OLD-ATIME-NS",
+                "_MR-VN VN.GEN @ CONSTANT _MR-OLD-GEN",
+                "_MR-VN VN.NLINK @ CONSTANT _MR-OLD-NLINK",
+                (
+                    "_MR-STAT VFS-STATFS-SIZE _MR-V VFS-STATFS "
+                    "CONSTANT _MR-STAT-BEFORE-IOR"
+                ),
+                "_MR-STAT VSF.BFREE @ CONSTANT _MR-FREE-BEFORE",
+                (
+                    f"_MR-SOURCE {2 * block_size} _MR-FD "
+                    "VFS-WRITE-EXACT CONSTANT _MR-EXACT-IOR"
+                ),
+                "_MR-V V.LAST-IOR @ CONSTANT _MR-LAST-IOR",
+                "_MR-FD FD.CUR-LO @ CONSTANT _MR-CURSOR",
+                "_MR-CTX _EXT4-C.J.WRITER + @ CONSTANT _MR-WRITER",
+                "_MR-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _MR-HOMES",
+                (
+                    "_MR-STAT VFS-STATFS-SIZE _MR-V VFS-STATFS "
+                    "CONSTANT _MR-STAT-AFTER-IOR"
+                ),
+                "_MR-STAT VSF.BFREE @ CONSTANT _MR-FREE-AFTER",
+                (
+                    _forth_conjunction(
+                        [
+                            "_MR-MOUNT-IOR 0=",
+                            "_MR-CLOCK-IOR 0=",
+                            "_MR-PROFILE-SIZE-IOR 0=",
+                            "_MR-PROFILE-BIND-IOR 0=",
+                            "_MR-OPEN-IOR 0=",
+                            f"_MR-INITIAL-CURSOR {old_size} =",
+                            (
+                                "_MR-EXACT-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-FORMAT ="
+                            ),
+                            (
+                                "_MR-EXACT-IOR VFS-IOR-REASON "
+                                "VFS-R-UNSUPPORTED ="
+                            ),
+                            (
+                                "_MR-EXACT-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-DATA-MAP ="
+                            ),
+                            "_MR-EXACT-IOR VFS-IOR-FLAGS 0=",
+                            "_MR-LAST-IOR _MR-EXACT-IOR =",
+                            f"_MR-CURSOR {committed_size} =",
+                            "_MR-CLOCK 2 CELLS + @ 2 =",
+                            f"_MR-VN VN.SIZE-LO @ {committed_size} =",
+                            "_MR-VN VN.SIZE-HI @ 0=",
+                            f"_MR-VN VN.BLOCKS @ {committed_blocks} =",
+                            "_MR-VN VN.GEN @ _MR-OLD-GEN =",
+                            "_MR-VN VN.NLINK @ _MR-OLD-NLINK =",
+                            f"_MR-VN VN.MTIME @ {committed_seconds} =",
+                            (
+                                f"_MR-VN VN.MTIME-NS @ "
+                                f"{committed_nanoseconds} ="
+                            ),
+                            f"_MR-VN VN.CTIME @ {committed_seconds} =",
+                            (
+                                f"_MR-VN VN.CTIME-NS @ "
+                                f"{committed_nanoseconds} ="
+                            ),
+                            "_MR-VN VN.ATIME @ _MR-OLD-ATIME =",
+                            "_MR-VN VN.ATIME-NS @ _MR-OLD-ATIME-NS =",
+                            "_MR-STAT-BEFORE-IOR 0=",
+                            "_MR-STAT-AFTER-IOR 0=",
+                            "_MR-FREE-AFTER _MR-FREE-BEFORE 1- =",
+                            "_MR-WRITER _MR-PROFILE-BASE =",
+                            "_MR-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            "_MR-WRITER _EXT4-JWR.FAULT + @ 0=",
+                            "_MR-HOMES 4 =",
+                            f"_EXT4-WR-COUNT @ {block_size} =",
+                            f"_EXT4-WR-OFFSET @ {committed_size} =",
+                            f"_EXT4-WR-REQUEST-END @ {requested_size} =",
+                            f"_EXT4-WR-CHUNK @ {block_size} =",
+                            "_EXT4-WR-ACTUAL @ 0=",
+                            "_EXT4-MOW-ACTUAL @ 0=",
+                            "_EXT4-WR-NEW-BLOCKS @ 10 =",
+                            f"_XH-SIZE @ {committed_size} =",
+                            "_XH-LOGICAL @ 6 =",
+                            f"_XH-CANDIDATE @ {second_candidate} =",
+                            "_XH-ENTRIES @ 4 =",
+                            "_XH-PUBLISHED @ 0=",
+                            "_MR-V V.FLAGS @ VFS-F-RO AND 0=",
+                            "_MR-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        ]
+                    )
+                    + ' IF ." EXT4-MULTI-ALLOCATED-EOF-LATE-REFUSAL" THEN'
+                ),
+                "_MR-FD VFS-CLOSE? CONSTANT _MR-CLOSE-IOR",
+                "0 _MR-V VFS-UNMOUNT CONSTANT _MR-UNMOUNT-IOR",
+                (
+                    "_MR-CLOSE-IOR 0= _MR-UNMOUNT-IOR 0= AND "
+                    "_MR-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                    "_MR-PROFILE-ARENA ARENA-USED 0= AND "
+                    "_MR-PROFILE-ARENA A.PTR @ _MR-PROFILE-BASE = AND "
+                    'IF ." EXT4-MULTI-ALLOCATED-EOF-LATE-UNMOUNT" THEN'
+                ),
+            ],
+            patches=input_patches,
+            capture_media=backing,
+        )
+        _assert_emitted(output, "EXT4-MULTI-ALLOCATED-EOF-LATE-REFUSAL")
+        _assert_emitted(output, "EXT4-MULTI-ALLOCATED-EOF-LATE-UNMOUNT")
+        assert trace[: len(activation_trace)] == activation_trace
+        assert trace.count(("write", first_candidate * 2, 2)) == 1
+        assert trace.count(("write", second_candidate * 2, 2)) == 0
+        assert trace.count(("write", bitmap_home * 2, 2)) == 1
+        assert trace.count(("write", gdt_home * 2, 2)) == 1
+        assert trace.count(("write", inode_home * 2, 2)) == 1
+        assert trace.count(("write", data_block * 2, 2)) == 0
+        assert trace.count(("write", xattr_block * 2, 2)) == 0
+
+        final_superblock, final_inode, _ = _ext4_inode_record(
+            backing, inode_number
+        )
+        assert struct.unpack_from("<I", final_superblock, 0x0C)[0] == (
+            free_blocks_before - 1
+        )
+        assert struct.unpack_from("<I", final_inode, 0x04)[0] == committed_size
+        assert struct.unpack_from("<I", final_inode, 0x1C)[0] == committed_blocks
+        assert struct.unpack_from("<HHHH", final_inode, 0x28) == (
+            0xF30A,
+            4,
+            4,
+            0,
+        )
+        assert _extent_root_physical(final_inode, 5) == first_candidate
+        with pytest.raises(AssertionError, match="logical block 6 is unmapped"):
+            _extent_root_physical(final_inode, 6)
+        final_allocation = _ext4_block_allocation_state(
+            backing, (first_candidate, second_candidate)
+        )
+        assert final_allocation[first_candidate]
+        assert not final_allocation[second_candidate]
+        assert _read_ext4_home(
+            backing, first_candidate, block_size=block_size
+        ) == first_append
+        assert _read_ext4_home(
+            backing, second_candidate, block_size=block_size
+        ) == original_second_candidate
+
+        _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+            backing,
+            stable,
+            expected_file=expected_file,
+            expected_epoch_ms=committed_epoch_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            expected_blocks=committed_blocks,
+            prefix="_MR-S",
+            marker="EXT4-MULTI-ALLOCATED-EOF-LATE-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == media_sha256
+        _assert_e2fsck_clean(stable, jbd2_toolchain)
+    finally:
+        backing.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
 _STAGED_CROSS_TAIL_REPLACEMENT = b"TAILPART" + _STAGED_ALIGNED_APPEND_REPLACEMENT
 _STAGED_CROSS_TAIL_FIRST_EPOCH_MS = 3_000_000_123_456
 _STAGED_CROSS_TAIL_SECOND_EPOCH_MS = 3_000_000_128_888
@@ -39325,10 +40035,7 @@ def test_staged_public_aligned_eof_refusals_leave_writer_idle(
             path,
             backing,
             [
-                f"CREATE _AF-LARGE {block_size + 1} ALLOT",
-                f"_AF-LARGE {block_size + 1} 0x4C FILL",
                 "CREATE _AF-STAT0 VFS-STATFS-SIZE ALLOT",
-                "CREATE _AF-STATP VFS-STATFS-SIZE ALLOT",
                 "CREATE _AF-STAT1 VFS-STATFS-SIZE ALLOT",
                 "CREATE _AF-VNODE0 VFS-VNODE-SIZE ALLOT",
                 "VARIABLE _AF-CLOCK-CALLS",
@@ -39391,29 +40098,6 @@ def test_staged_public_aligned_eof_refusals_leave_writer_idle(
                 "_AF-FD FD.CUR-HI @ CONSTANT _AF-MIX-CURSOR-HI",
                 (
                     f"{block_size} _AF-FD VFS-SEEK? "
-                    "CONSTANT _AF-LARGE-SEEK-IOR"
-                ),
-                (
-                    f"_AF-LARGE {block_size + 1} _AF-FD VFS-WRITE? "
-                    "CONSTANT _AF-LARGE-IOR CONSTANT _AF-LARGE-ACTUAL"
-                ),
-                "_AF-FD FD.CUR-LO @ CONSTANT _AF-LARGE-CURSOR",
-                "_AF-FD FD.CUR-HI @ CONSTANT _AF-LARGE-CURSOR-HI",
-                "_AF-CLOCK-CALLS @ CONSTANT _AF-POLICY-CLOCKS",
-                (
-                    "_AF-STATP VFS-STATFS-SIZE _AF-V VFS-STATFS "
-                    "CONSTANT _AF-STATP-IOR"
-                ),
-                (
-                    "_AF-VNODE0 _AF-VN VFS-VNODE-SIZE "
-                    "_EXT4-BYTES=? CONSTANT _AF-POLICY-VNODE-SAME"
-                ),
-                (
-                    "_AF-STAT0 _AF-STATP VFS-STATFS-SIZE "
-                    "_EXT4-BYTES=? CONSTANT _AF-POLICY-STAT-SAME"
-                ),
-                (
-                    f"{block_size} _AF-FD VFS-SEEK? "
                     "CONSTANT _AF-CAP-SEEK-IOR"
                 ),
                 (
@@ -39465,22 +40149,6 @@ def test_staged_public_aligned_eof_refusals_leave_writer_idle(
                             ),
                             f"_AF-MIX-CURSOR {block_size - 1} =",
                             "_AF-MIX-CURSOR-HI 0=",
-                            "_AF-LARGE-SEEK-IOR 0=",
-                            "_AF-LARGE-ACTUAL 0=",
-                            (
-                                "_AF-LARGE-IOR VFS-IOR-REASON "
-                                "VFS-R-UNSUPPORTED ="
-                            ),
-                            (
-                                "_AF-LARGE-IOR VFS-IOR-DETAIL "
-                                "EXT4-D-WRITE-POLICY ="
-                            ),
-                            f"_AF-LARGE-CURSOR {block_size} =",
-                            "_AF-LARGE-CURSOR-HI 0=",
-                            "_AF-POLICY-CLOCKS 0=",
-                            "_AF-STATP-IOR 0=",
-                            "_AF-POLICY-VNODE-SAME",
-                            "_AF-POLICY-STAT-SAME",
                             "_AF-CAP-SEEK-IOR 0=",
                             "_AF-CAP-ACTUAL 0=",
                             "_AF-CAP-IOR VFS-E-NOSPC =",
@@ -40445,12 +41113,10 @@ def test_staged_public_tail_append_refuses_gap_and_mixed_growth_without_io(
     old_size = struct.unpack_from("<I", inode, 0x04)[0]
     tail_room = block_size - old_size
     capacity_cross_count = tail_room + 1
-    overwide_cross_count = tail_room + block_size + 1
     assert block_size == 1024
     assert old_size == 54
     assert 0 < tail_room < block_size
     assert capacity_cross_count == block_size - old_size + 1
-    assert overwide_cross_count == block_size - old_size + block_size + 1
     assert not _ext4_block_allocation_state(path, (candidate,))[candidate]
     original_data = _patched_ext4_home(
         path, source_patches, data_block, block_size=block_size
@@ -40468,8 +41134,8 @@ def test_staged_public_tail_append_refuses_gap_and_mixed_growth_without_io(
             path,
             backing,
             [
-                f"CREATE _AR-CROSS {overwide_cross_count} ALLOT",
-                f"_AR-CROSS {overwide_cross_count} 0x58 FILL",
+                f"CREATE _AR-CROSS {capacity_cross_count} ALLOT",
+                f"_AR-CROSS {capacity_cross_count} 0x58 FILL",
                 "VARIABLE _AR-CLOCK-CALLS",
                 (
                     ": _AR-NOW ( context -- epoch-ms ior ) "
@@ -40534,15 +41200,6 @@ def test_staged_public_tail_append_refuses_gap_and_mixed_growth_without_io(
                 "_AR-FD FD.CUR-LO @ CONSTANT _AR-MIX-CURSOR",
                 (
                     f"{old_size} _AR-FD VFS-SEEK? "
-                    "CONSTANT _AR-WIDE-SEEK-IOR"
-                ),
-                (
-                    f"_AR-CROSS {overwide_cross_count} _AR-FD "
-                    "VFS-WRITE-EXACT CONSTANT _AR-WIDE-IOR"
-                ),
-                "_AR-FD FD.CUR-LO @ CONSTANT _AR-WIDE-CURSOR",
-                (
-                    f"{old_size} _AR-FD VFS-SEEK? "
                     "CONSTANT _AR-CAP-SEEK-IOR"
                 ),
                 (
@@ -40586,16 +41243,6 @@ def test_staged_public_tail_append_refuses_gap_and_mixed_growth_without_io(
                                 "EXT4-D-WRITE-POLICY ="
                             ),
                             "_AR-MIX-CURSOR 53 =",
-                            "_AR-WIDE-SEEK-IOR 0=",
-                            (
-                                "_AR-WIDE-IOR VFS-IOR-REASON "
-                                "VFS-R-UNSUPPORTED ="
-                            ),
-                            (
-                                "_AR-WIDE-IOR VFS-IOR-DETAIL "
-                                "EXT4-D-WRITE-POLICY ="
-                            ),
-                            f"_AR-WIDE-CURSOR {old_size} =",
                             "_AR-CAP-SEEK-IOR 0=",
                             "_AR-CAP-IOR VFS-E-NOSPC =",
                             "_AR-CAP-IOR VFS-IOR-FLAGS 0=",

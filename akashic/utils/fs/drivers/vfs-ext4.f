@@ -17203,8 +17203,9 @@ VARIABLE _EXT4-WR-KIND
     \ Nonempty staged writes currently require authenticated 1 KiB filesystem
     \ geometry with 256-byte inodes.  This is the published operation boundary
     \ for initialized overwrite, in-size hole fill, partial-tail append,
-    \ one-block allocation-backed growth from aligned EOF, and exact-write
-    \ composition from a partial tail into one next logical block.  Other
+    \ allocation-backed growth from aligned EOF, and exact-write composition
+    \ from a partial tail through additional allocated logical blocks.  Each
+    \ callback remains block-bounded and independently checkpointed.  Other
     \ akashic-ext4-rw-v1 geometries remain available to the read/recovery path
     \ until their mutation paths pass equivalent qualification.
     _EXT4-WR-CTX @ _EXT4-STAGED-WRITE-FS-QUALIFY ?DUP IF EXIT THEN
@@ -17212,12 +17213,14 @@ VARIABLE _EXT4-WR-KIND
         _EXT4-WR-OFFSET @ _EXT4-WR-VN @ VN.SIZE-LO @ <> IF
             EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
         THEN
+        \ Reject an unsupported final size before publishing any durable
+        \ prefix.  Later exact-write callbacks see the same request endpoint,
+        \ but the first callback owns this whole-request overflow decision.
+        _EXT4-WR-REQUEST-END @ 0xFFFFFFFF U> IF
+            VFS-E-OVERFLOW EXIT
+        THEN
         _EXT4-WR-VN @ VN.SIZE-LO @
         _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ MOD 0= IF
-            _EXT4-WR-COUNT @
-            _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ U> IF
-                EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-            THEN
             _EXT4-WRK-ALIGNED-APPEND _EXT4-WR-KIND !
         ELSE
             _EXT4-WR-CTX @ _EXT4-C.BSIZE + @
@@ -17226,17 +17229,10 @@ VARIABLE _EXT4-WR-KIND
             _EXT4-WR-TAIL-ROOM !
             _EXT4-WR-COUNT @ _EXT4-WR-TAIL-ROOM @ U> IF
                 \ Admit one independently checkpointed tail chunk followed by
-                \ at most one next-logical-block allocation chunk.  Subtracting
-                \ the already-initialized tail avoids an end-bound addition that
-                \ could overflow.  Refuse a known-insufficient journal/writer
-                \ profile before sampling the clock or publishing tail bytes.
-                _EXT4-WR-COUNT @ _EXT4-WR-TAIL-ROOM @ -
-                _EXT4-WR-CTX @ _EXT4-C.BSIZE + @ U> IF
-                    EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-                THEN
-                _EXT4-WR-REQUEST-END @ 0xFFFFFFFF U> IF
-                    VFS-E-OVERFLOW EXIT
-                THEN
+                \ as many block-bounded allocation callbacks as the exact
+                \ caller can complete.  Refuse a known-insufficient journal or
+                \ writer profile before sampling the clock or publishing the
+                \ initialized tail prefix.
                 4 1 0 _EXT4-WR-CTX @ _EXT4-JTX-PREFLIGHT-CAPACITY
                 ?DUP IF EXIT THEN
             THEN
@@ -17280,7 +17276,8 @@ VARIABLE _EXT4-WR-KIND
 
 \ Exact binding-callback shape for the qualified slice.  A larger admitted
 \ caller range completes at most the first filesystem-block chunk and returns
-\ short success; VFS-WRITE-EXACT or the caller may advance and invoke it again.
+\ short success; VFS-WRITE-EXACT or the caller may advance and invoke it again,
+\ including through additional independently allocated EOF blocks.
 \ It remains absent from the ordinary EXT4-OPS and EXT4-CAPS.  The explicit
 \ staged binding below publishes only this qualified operation while broader
 \ public-write gates remain.
