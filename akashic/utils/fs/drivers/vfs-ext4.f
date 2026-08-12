@@ -18653,7 +18653,9 @@ EXT4-OPS ,
 \ profile serves initialized RMW; ordinary allocation begins exact 4/1/0.
 \ When a full unmergeable resident root must become depth one, the callback
 \ measures and begins exactly 5/1/0 through 7/1/0 according to distinct bitmap
-\ and primary-GDT homes, within a caller profile large enough to contain it.
+\ and primary-GDT homes.  A full unmergeable singleton external leaf similarly
+\ splits under the resident root with exact 6/1/0 through 8/1/0 credit.  Both
+\ run within a caller profile large enough to contain the measured topology.
 \ Bind that profile and a trusted clock before the first nonempty write.
 EXT4-CAPS VFS-CAP-WRITE OR CONSTANT EXT4-STAGED-WRITE-CAPS
 
@@ -18739,7 +18741,9 @@ VARIABLE _XH-EXISTING-LEAF
 VARIABLE _XH-LEAF-CANDIDATE
 VARIABLE _XH-LEAF-MAX
 VARIABLE _XH-LEAF-FIRST
+VARIABLE _XH-LEAF-SECOND-FIRST
 VARIABLE _XH-ROOT-GROW
+VARIABLE _XH-LEAF-SPLIT
 VARIABLE _XH-META-CREDIT
 VARIABLE _XH-META-HOME-COUNT
 VARIABLE _XH-OWNER-RANGE-COUNT
@@ -18751,24 +18755,34 @@ VARIABLE _XH-LEFT-LEN
 VARIABLE _XH-RIGHT-LEN
 VARIABLE _XH-LEFT-OK
 VARIABLE _XH-RIGHT-OK
+VARIABLE _XH-SPLIT-FIRST
+VARIABLE _XH-SPLIT-COUNT
+VARIABLE _XH-SPLIT-LEFT
+VARIABLE _XH-SPLIT-RIGHT
 VARIABLE _XH-IOR
 VARIABLE _XH-PUBLISHED
 VARIABLE _XH-ABORT-IOR
 CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
 CREATE _XH-LEAF-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
-CREATE _XH-META-HOMES 7 CELLS ALLOT
+8 CONSTANT _XH-META-HOME-CAP
+CREATE _XH-META-HOMES _XH-META-HOME-CAP CELLS ALLOT
 
 0 CONSTANT _XH-EDIT-INSERT
 1 CONSTANT _XH-EDIT-MERGE-LEFT
 2 CONSTANT _XH-EDIT-MERGE-RIGHT
 3 CONSTANT _XH-EDIT-MERGE-BOTH
 4 CONSTANT _XH-EDIT-GROW-ROOT
+5 CONSTANT _XH-EDIT-SPLIT-LEAF
 
 : _XH-ENTRY-AT  ( index -- extent-entry )
     12 * 12 + _XH-EDIT-NODE @ + ;
 
+: _XH-NEW-LEAF?  ( -- flag )
+    _XH-ROOT-GROW @ _XH-LEAF-SPLIT @ OR ;
+
 : _XH-REQUIRE-FRESH  ( -- ior )
-    _XH-WRITER @ _EXT4-JWR.META-CREDIT + @ DUP 4 U< SWAP 7 U> OR
+    _XH-WRITER @ _EXT4-JWR.META-CREDIT + @
+    DUP 4 U< SWAP _XH-META-HOME-CAP U> OR
     _XH-WRITER @ _EXT4-JWR.DATA-CREDIT + @ 1 <> OR
     _XH-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ 0<> OR IF
         VFS-E-INVALID EXIT
@@ -18850,8 +18864,9 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
 \ index, refuses unwritten conversion, and binds current i_blocks to every
 \ data block, the optional external-xattr block, and the existing tree leaf.
 \ Physical-candidate planning later decides whether the edit inserts or
-\ coalesces an extent.  Multi-leaf and deeper trees remain structurally valid
-\ read input but are outside this allocating mutation slice.
+\ coalesces an extent.  A saturated singleton leaf may split into two leaves
+\ under the resident root; already-multiple-leaf and deeper trees remain
+\ structurally valid read input but are outside this allocating mutation slice.
 : _XH-CAPTURE-ROOT  ( -- ior )
     _XH-CTX @ _EXT4-C.INODE + _EXT4-I.BLOCK + DUP
     _XH-ROOT !
@@ -18953,11 +18968,15 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
 
 : _XH-AUTH-TARGET  ( -- ior )
     0 _XH-ROOT-GROW !
+    0 _XH-LEAF-SPLIT !
     0 _XH-TREE-DEPTH !
     0 _XH-EDIT-NODE !
     0 _XH-EXISTING-LEAF !
     0 _XH-LEAF-CANDIDATE !
     0 _XH-LEAF-FIRST !
+    0 _XH-LEAF-SECOND-FIRST !
+    0 _XH-SPLIT-LEFT !
+    0 _XH-SPLIT-RIGHT !
     0 _XH-META-CREDIT !
     _XH-INO @
     _XH-CTX @ _EXT4-C.SB + _EXT4-SB.FIRST-INO + L@ U< IF
@@ -19081,7 +19100,7 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
         _XH-EA @ _XH-EXISTING-LEAF @ = AND IF
             EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
         THEN
-        _XH-ROOT-GROW @
+        _XH-NEW-LEAF?
         _XH-EA @ _XH-LEAF-CANDIDATE @ = AND IF
             EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
         THEN
@@ -19126,7 +19145,7 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
             DROP 0 UNLOOP EXIT
         THEN
     LOOP
-    _XH-META-HOME-COUNT @ 7 U< 0= IF
+    _XH-META-HOME-COUNT @ _XH-META-HOME-CAP U< 0= IF
         DROP VFS-E-CORRUPT EXIT
     THEN
     _XH-META-HOME-COUNT @ CELLS _XH-META-HOMES + !
@@ -19137,15 +19156,25 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
 \ Ordinary inline-root allocation is the established bitmap/GDT/super/inode
 \ quartet.  Editing an existing singleton depth-one leaf adds that leaf as
 \ exactly one fifth home.  Root growth instead owns the new leaf and may add a
-\ second bitmap and a second primary-GDT page, yielding five through seven.
+\ second bitmap and primary-GDT page, yielding five through seven.  Splitting
+\ also replaces the old leaf, yielding six through eight distinct homes.
 : _XH-MEASURE-META-CREDIT  ( -- ior )
-    _XH-META-HOMES 7 CELLS 0 FILL
+    _XH-META-HOMES _XH-META-HOME-CAP CELLS 0 FILL
     0 _XH-META-HOME-COUNT !
     _XH-BITMAP-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
     _XH-GDT-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
     _XH-SUPER-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
     _XH-INODE-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
-    _XH-ROOT-GROW @ IF
+    _XH-LEAF-SPLIT @ IF
+        _XH-EXISTING-LEAF @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
+        _XH-LEAF-CANDIDATE @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
+        _XH-LEAF-BITMAP-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
+        _XH-LEAF-GDT-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
+        _XH-META-HOME-COUNT @
+        DUP 6 U< SWAP _XH-META-HOME-CAP U> OR IF
+            VFS-E-CORRUPT EXIT
+        THEN
+    ELSE _XH-ROOT-GROW @ IF
         _XH-LEAF-CANDIDATE @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
         _XH-LEAF-BITMAP-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
         _XH-LEAF-GDT-HOME @ _XH-META-HOME-ADD ?DUP IF EXIT THEN
@@ -19157,7 +19186,7 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
         _XH-META-HOME-COUNT @ 5 <> IF VFS-E-CORRUPT EXIT THEN
     ELSE
         _XH-META-HOME-COUNT @ 4 <> IF VFS-E-CORRUPT EXIT THEN
-    THEN THEN
+    THEN THEN THEN
     _XH-META-HOME-COUNT @ 0 ?DO
         I CELLS _XH-META-HOMES + @ _XH-CANDIDATE @ = IF
             VFS-E-CORRUPT UNLOOP EXIT
@@ -19219,7 +19248,7 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
     _XH-LOCATE-ACCOUNTING-HOMES ;
 
 : _XH-SELECT-LEAF-CANDIDATE  ( -- ior )
-    _XH-ROOT-GROW @ 0= IF 0 EXIT THEN
+    _XH-NEW-LEAF? 0= IF 0 EXIT THEN
     _XH-CANDIDATE @ _XH-CANDIDATE-GROUP @ _XH-CTX @
     _EXT4-FIND-FREE-BLOCK-EXCLUDING
     _XH-IOR ! _XH-LEAF-CANDIDATE !
@@ -19253,7 +19282,7 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
     _XH-ENTRY @ _XH-BITMAP-HOME @ <> IF VFS-E-CONFLICT EXIT THEN
     _XH-CANDIDATE-GROUP @ _XH-CTX @ _EXT4-LOAD-DESC ?DUP IF EXIT THEN
     _EXT4-GD-BLOCK @ _XH-GDT-HOME @ <> IF VFS-E-CONFLICT EXIT THEN
-    _XH-ROOT-GROW @ IF
+    _XH-NEW-LEAF? IF
         _XH-CANDIDATE @ _XH-CANDIDATE-GROUP @ _XH-CTX @
         _EXT4-FIND-FREE-BLOCK-EXCLUDING
         DUP IF NIP EXIT THEN DROP
@@ -19332,8 +19361,9 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
 
 \ Choose the editable-node operation only after the geometry-selected physical
 \ block is known.  Coalescing remains valid even when the node is full.  A
-\ depth-zero root with no free slot takes the qualified one-leaf transition;
-\ a full existing leaf stops here so splitting remains a separate ratchet.
+\ depth-zero root with no free slot takes the qualified one-leaf transition.
+\ A full singleton external leaf takes the exact two-leaf split transition;
+\ already-multiple-leaf trees remain outside this mutation slice.
 : _XH-PLAN-ROOT-EDIT  ( -- ior )
     _XH-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
     _XH-PLAN-LEFT? _XH-LEFT-OK !
@@ -19353,7 +19383,16 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
         _XH-EDIT-INSERT _XH-EDIT ! 0 EXIT
     THEN
     _XH-TREE-DEPTH @ IF
-        EXT4-D-DATA-MAP _EXT4-UNSUPPORTED EXIT
+        _XH-ENTRY-MAX @ 1+ DUP 2/ DUP 0= IF
+            2DROP VFS-E-CORRUPT EXIT
+        THEN
+        DUP _XH-SPLIT-LEFT ! - DUP 0= IF
+            DROP VFS-E-CORRUPT EXIT
+        THEN
+        _XH-SPLIT-RIGHT !
+        _XH-EDIT-SPLIT-LEAF _XH-EDIT !
+        -1 _XH-LEAF-SPLIT !
+        0 EXIT
     THEN
     _XH-EDIT-GROW-ROOT _XH-EDIT !
     -1 _XH-ROOT-GROW !
@@ -19382,33 +19421,83 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
     _XH-IMAGE @ _XH-LEAF-MAX @ 12 * 12 + + L!
     0 ;
 
+\ Copy one ordinal from the conceptual sorted sequence formed by inserting
+\ the new singleton extent into the authenticated full-leaf snapshot.  This
+\ avoids a second block-sized temporary and never edits the source snapshot.
+: _XH-SPLIT-ENTRY>  ( ordinal destination -- )
+    _XH-ENTRY !
+    DUP _XH-INSERT @ = IF
+        DROP
+        _XH-LOGICAL @ _XH-ENTRY @ L!
+        1 _XH-ENTRY @ 4 + W!
+        _XH-CANDIDATE @ DUP 32 RSHIFT _XH-ENTRY @ 6 + W!
+        0xFFFFFFFF AND _XH-ENTRY @ 8 + L!
+    ELSE
+        DUP _XH-INSERT @ U> IF 1- THEN
+        12 * _XH-LEAF-SNAPSHOT 12 + +
+        _XH-ENTRY @ 12 MOVE
+    THEN ;
+
+: _XH-COMPOSE-SPLIT-LEAF  ( first-ordinal count leaf -- ior )
+    _XH-IMAGE ! _XH-SPLIT-COUNT ! _XH-SPLIT-FIRST !
+    _XH-SPLIT-COUNT @ 0= IF VFS-E-CORRUPT EXIT THEN
+    _XH-SPLIT-FIRST @ _XH-SPLIT-COUNT @ _EXT4-UADD?
+    _XH-IOR ! _XH-END !
+    _XH-IOR @ ?DUP IF EXIT THEN
+    _XH-END @ _XH-ENTRY-MAX @ 1+ U> IF VFS-E-CORRUPT EXIT THEN
+    _XH-IMAGE @ _XH-BSIZE @ 0 FILL
+    _EXT4-EXTENT-MAGIC _XH-IMAGE @ W!
+    _XH-SPLIT-COUNT @ _XH-IMAGE @ 2 + W!
+    _XH-LEAF-MAX @ _XH-IMAGE @ 4 + W!
+    0 _XH-IMAGE @ 6 + W!
+    _XH-ROOT-GENERATION @ _XH-IMAGE @ 8 + L!
+    0 _XH-INDEX !
+    BEGIN
+        _XH-INDEX @ _XH-SPLIT-COUNT @ U<
+    WHILE
+        _XH-SPLIT-FIRST @ _XH-INDEX @ +
+        _XH-IMAGE @ 12 + _XH-INDEX @ 12 * +
+        _XH-SPLIT-ENTRY>
+        1 _XH-INDEX +!
+    REPEAT
+    0 ;
+
 \ Publish the new external node before allocation accounting reuses both
 \ writer scratch blocks.  META-PUT is correct for a newly allocated home:
 \ there is no authenticated old metadata image to acquire.
 : _XH-STAGE-LEAF  ( -- ior )
-    _XH-ROOT-GROW @ 0= IF 0 EXIT THEN
+    _XH-NEW-LEAF? 0= IF 0 EXIT THEN
     _XH-WRITER @ _EXT4-JWR.SCRATCH-A + @ DUP _XH-IMAGE !
     _XH-BSIZE @ 0 FILL
-    _XH-BSIZE @ 12 - 12 / _XH-LEAF-MAX !
-    _EXT4-RESIDENT-EXTENT-ENTRY-MAX 1+
-    _XH-LEAF-MAX @ U> IF VFS-E-CORRUPT EXIT THEN
-    _EXT4-EXTENT-MAGIC _XH-IMAGE @ W!
-    _EXT4-RESIDENT-EXTENT-ENTRY-MAX 1+ _XH-IMAGE @ 2 + W!
-    _XH-LEAF-MAX @ _XH-IMAGE @ 4 + W!
-    0 _XH-IMAGE @ 6 + W!
-    _XH-ROOT-GENERATION @ _XH-IMAGE @ 8 + L!
-    _XH-INODE-SNAPSHOT _EXT4-I.BLOCK + 12 + _XH-IMAGE @ 12 +
-    _XH-INSERT @ 12 * MOVE
-    _XH-IMAGE @ 12 + _XH-INSERT @ 12 * + _XH-ENTRY !
-    _XH-LOGICAL @ _XH-ENTRY @ L!
-    1 _XH-ENTRY @ 4 + W!
-    _XH-CANDIDATE @ DUP 32 RSHIFT _XH-ENTRY @ 6 + W!
-    0xFFFFFFFF AND _XH-ENTRY @ 8 + L!
-    _XH-INODE-SNAPSHOT _EXT4-I.BLOCK + 12 +
-    _XH-INSERT @ 12 * +
-    _XH-ENTRY @ 12 +
-    _EXT4-RESIDENT-EXTENT-ENTRY-MAX _XH-INSERT @ - 12 * MOVE
-    _XH-IMAGE @ 12 + L@ _XH-LEAF-FIRST !
+    _XH-LEAF-SPLIT @ IF
+        _XH-BSIZE @ 12 - 12 / _XH-LEAF-MAX @ <> IF
+            VFS-E-CORRUPT EXIT
+        THEN
+        _XH-SPLIT-LEFT @ _XH-SPLIT-RIGHT @ _XH-IMAGE @
+        _XH-COMPOSE-SPLIT-LEAF ?DUP IF EXIT THEN
+        _XH-IMAGE @ 12 + L@ _XH-LEAF-SECOND-FIRST !
+    ELSE
+        _XH-BSIZE @ 12 - 12 / _XH-LEAF-MAX !
+        _EXT4-RESIDENT-EXTENT-ENTRY-MAX 1+
+        _XH-LEAF-MAX @ U> IF VFS-E-CORRUPT EXIT THEN
+        _EXT4-EXTENT-MAGIC _XH-IMAGE @ W!
+        _EXT4-RESIDENT-EXTENT-ENTRY-MAX 1+ _XH-IMAGE @ 2 + W!
+        _XH-LEAF-MAX @ _XH-IMAGE @ 4 + W!
+        0 _XH-IMAGE @ 6 + W!
+        _XH-ROOT-GENERATION @ _XH-IMAGE @ 8 + L!
+        _XH-INODE-SNAPSHOT _EXT4-I.BLOCK + 12 + _XH-IMAGE @ 12 +
+        _XH-INSERT @ 12 * MOVE
+        _XH-IMAGE @ 12 + _XH-INSERT @ 12 * + _XH-ENTRY !
+        _XH-LOGICAL @ _XH-ENTRY @ L!
+        1 _XH-ENTRY @ 4 + W!
+        _XH-CANDIDATE @ DUP 32 RSHIFT _XH-ENTRY @ 6 + W!
+        0xFFFFFFFF AND _XH-ENTRY @ 8 + L!
+        _XH-INODE-SNAPSHOT _EXT4-I.BLOCK + 12 +
+        _XH-INSERT @ 12 * +
+        _XH-ENTRY @ 12 +
+        _EXT4-RESIDENT-EXTENT-ENTRY-MAX _XH-INSERT @ - 12 * MOVE
+        _XH-IMAGE @ 12 + L@ _XH-LEAF-FIRST !
+    THEN
     _XH-IMAGE @ _XH-STAMP-LEAF ?DUP IF EXIT THEN
     _XH-IMAGE @ _XH-LEAF-CANDIDATE @ _XH-WRITER @
     _EXT4-JTX-META-PUT ?DUP IF EXIT THEN
@@ -19535,16 +19624,22 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
     _XH-APPLY-NODE-EDIT ;
 
 \ Replace the already allocated external leaf from its authenticated snapshot.
-\ No tree block is allocated or freed in this form.  The inode transaction
-\ later republishes the leaf's first key together with i_blocks, size, times,
-\ and checksum, keeping the resident index and leaf mutually authoritative.
+\ An ordinary edit changes it in place.  A split composes the lower half here
+\ and the upper half in the separately staged new leaf.  The inode transaction
+\ later republishes the authoritative first key or both split indexes together
+\ with i_blocks, size, times, and checksum.
 : _XH-STAGE-EXISTING-LEAF  ( -- ior )
     _XH-TREE-DEPTH @ 0= IF 0 EXIT THEN
     _XH-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
     _XH-LEAF-SNAPSHOT _XH-EXISTING-LEAF @ _XH-WRITER @
     _EXT4-JTX-META-ACQUIRE
     DUP IF NIP EXIT THEN DROP DUP _XH-IMAGE ! _XH-EDIT-NODE !
-    _XH-APPLY-NODE-EDIT ?DUP IF EXIT THEN
+    _XH-LEAF-SPLIT @ IF
+        0 _XH-SPLIT-LEFT @ _XH-IMAGE @
+        _XH-COMPOSE-SPLIT-LEAF
+    ELSE
+        _XH-APPLY-NODE-EDIT
+    THEN ?DUP IF EXIT THEN
     _XH-IMAGE @ 12 + L@ _XH-LEAF-FIRST !
     _XH-IMAGE @ _XH-STAMP-LEAF ?DUP IF EXIT THEN
     _XH-IMAGE @ _XH-EXISTING-LEAF @ _XH-WRITER @
@@ -19567,6 +19662,39 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
     _XH-LEAF-FIRST @ SWAP 12 + L!
     0 ;
 
+: _XH-APPLY-SPLIT-ROOT  ( -- ior )
+    _XH-ROOT @ DUP W@ _EXT4-EXTENT-MAGIC <>
+    OVER 2 + W@ 1 <> OR
+    OVER 4 + W@ _EXT4-RESIDENT-EXTENT-ENTRY-MAX <> OR
+    OVER 6 + W@ 1 <> OR IF
+        DROP VFS-E-CORRUPT EXIT
+    THEN
+    DUP 12 + 4 + L@ _XH-EXISTING-LEAF @ <>
+    OVER 12 + 8 + W@ 0<> OR
+    OVER 12 + 10 + W@ 0<> OR IF
+        DROP VFS-E-CORRUPT EXIT
+    THEN
+    DROP
+    _XH-LEAF-FIRST @ _XH-LEAF-SECOND-FIRST @ U< 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _XH-ROOT @ 12 + 48 0 FILL
+    _EXT4-EXTENT-MAGIC _XH-ROOT @ W!
+    2 _XH-ROOT @ 2 + W!
+    _EXT4-RESIDENT-EXTENT-ENTRY-MAX _XH-ROOT @ 4 + W!
+    1 _XH-ROOT @ 6 + W!
+    _XH-ROOT-GENERATION @ _XH-ROOT @ 8 + L!
+    _XH-LEAF-FIRST @ _XH-ROOT @ 12 + L!
+    _XH-EXISTING-LEAF @ DUP 0xFFFFFFFF AND _XH-ROOT @ 16 + L!
+    32 RSHIFT _XH-ROOT @ 20 + W!
+    0 _XH-ROOT @ 22 + W!
+    _XH-LEAF-SECOND-FIRST @ _XH-ROOT @ 24 + L!
+    _XH-LEAF-CANDIDATE @ DUP 0xFFFFFFFF AND _XH-ROOT @ 28 + L!
+    32 RSHIFT _XH-ROOT @ 32 + W!
+    0 _XH-ROOT @ 34 + W!
+    2 _XH-ENTRIES !
+    0 ;
+
 : _XH-STAGE-INODE  ( -- ior )
     _XH-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
     _XH-INODE-HOME @ _XH-CTX @ _EXT4-READ-BLOCK
@@ -19580,7 +19708,7 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
         VFS-E-CONFLICT EXIT
     THEN
     _XH-CTX @ _EXT4-C.SPB + @
-    _XH-ROOT-GROW @ IF 2* THEN
+    _XH-NEW-LEAF? IF 2* THEN
     _XH-BLOCKS @ SWAP _EXT4-UADD?
     _XH-IOR ! _XH-NEW-BLOCKS !
     _XH-IOR @ ?DUP IF EXIT THEN
@@ -19588,7 +19716,11 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
     _EXT4-ENCODE-I-BLOCKS ?DUP IF EXIT THEN
     _XH-TREE-DEPTH @ IF
         _XH-RECORD @ _EXT4-I.BLOCK + _XH-ROOT !
-        _XH-APPLY-EXISTING-ROOT-KEY
+        _XH-LEAF-SPLIT @ IF
+            _XH-APPLY-SPLIT-ROOT
+        ELSE
+            _XH-APPLY-EXISTING-ROOT-KEY
+        THEN
     ELSE
         _XH-APPLY-EXTENT-EDIT
     THEN ?DUP IF EXIT THEN
@@ -19613,8 +19745,9 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
 \ possible.  A saturated unmergeable resident root allocates a second block,
 \ composes all five extents in one checksummed external leaf, and installs a
 \ one-index depth-one resident root.  An existing leaf is replaced in place;
-\ a full unmergeable leaf still refuses without attempting a split.  The
-\ transaction increments i_blocks for every newly allocated data/tree block.
+\ a full unmergeable singleton leaf is split into two checksummed leaves and
+\ the resident root expands to two indexes.  The transaction increments
+\ i_blocks for every newly allocated data/tree block.
 \ Aligned growth additionally stages its exact new i_size.  Partial-tail RMW,
 \ unwritten conversion, and sparse growth remain separate boundaries.
 : _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-ALLOCATING-WRITE
@@ -19660,7 +19793,7 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
     _XH-STAGE-EXISTING-LEAF ?DUP IF
         _XH-FAIL-AFTER-PUBLISH EXIT
     THEN
-    _XH-ROOT-GROW @ IF
+    _XH-NEW-LEAF? IF
         _XH-STAGE-LEAF ?DUP IF
             _XH-FAIL-AFTER-PUBLISH EXIT
         THEN
@@ -19704,8 +19837,8 @@ CREATE _XH-META-HOMES 7 CELLS ALLOT
 \ capacity measurement would establish no additional safety property.  The
 \ reusable caller profile is only a containing capacity, so a resident
 \ depth-zero edit begins 4/1/0, an existing singleton depth-one leaf edit
-\ begins 5/1/0, and root growth begins its exact 5/1/0, 6/1/0, or 7/1/0
-\ topology.
+\ begins 5/1/0, root growth begins its exact 5/1/0 through 7/1/0 topology,
+\ and a singleton-leaf split begins its exact 6/1/0 through 8/1/0 topology.
 : _XH-MEASURE-ALLOCATION-CREDIT  ( -- signed-meta-credit ior )
     0 _XH-WRITER !
     _EXT4-MOW-SNAPSHOT _XH-SOURCE !

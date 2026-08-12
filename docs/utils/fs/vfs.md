@@ -40,12 +40,21 @@ journal authority and journals the allocation bitmap, primary GDT, primary
 superblock, and inode after-images.
 
 The singleton depth-one form inserts into an existing leaf with spare capacity
-or coalesces in place without splitting it. It uses exact `5/1/0`: the data
+or coalesces in place. That in-place edit uses exact `5/1/0`: the data
 allocation bitmap, primary GDT, primary superblock, existing leaf, and inode
 are the five metadata homes. The leaf is checksummed again, and an edit that
 changes its first logical key repairs the resident index key in the inode. It
 allocates only the new data block, so on 1 KiB geometry `i_blocks` rises by two
 512-byte sectors and free space falls by one.
+
+When the exact singleton leaf is saturated and the new mapping cannot
+coalesce, the operation allocates a second leaf and splits the sorted 85-entry
+result into checksummed 42- and 43-entry leaves. The resident depth-one root is
+rewritten with two authoritative indexes. Its exact deduplicated transaction is
+`6/1/0` through `8/1/0`: the ordinary accounting and inode homes, the replaced
+existing leaf, the new leaf, and any distinct bitmap/GDT homes needed by the
+new leaf allocation. The data and new leaf consume two filesystem blocks, so
+1 KiB `i_blocks` rises by four 512-byte sectors and free space falls by two.
 
 A saturated four-entry root whose new mapping cannot coalesce instead grows to
 one checksummed external leaf. The operation allocates a second block for that
@@ -63,11 +72,12 @@ all allocation forms commit-granular.
 Gaps and mixed overwrite/growth refuse before clock sampling or media I/O. Each
 callback is block-bounded; a larger qualified request returns short progress,
 and `VFS-WRITE-EXACT` chains independently durable callbacks. Mapped or
-unwritten targets, a full unmergeable existing leaf, a resident depth-one root
-with more than one index, and deeper trees remain structural refusals; the
-current mutation path does not split leaves or grow the singleton depth-one
-tree. Insufficient root-topology profile capacity is measured after that
-allocation callback's clock sample but before activation or media I/O; the
+unwritten targets, mutation starting from a resident depth-one root with more
+than one index, and deeper trees remain structural refusals. The split result
+is readable, but a following allocation callback cannot yet select or mutate
+either of its two leaves. Insufficient root-topology profile capacity is
+measured after that allocation callback's clock sample but before activation
+or media I/O; the
 ordinary `4/1/0` floor for a partial-tail crossing request is preflighted before
 its first callback. Linked hole fill and growth create no orphan state.
 Broader write and recovery cases advance from reachable evidence while full
@@ -76,8 +86,11 @@ ordinary operation-specific cuts retain their earlier contract: W7 candidate
 tears return zero, while committed W22 inode-home tears publish progress and
 replay four metadata homes without rewriting ordered data. In the distinct
 root-growth topology, a W23 tear of the newly allocated leaf home is recovered
-by replaying all five metadata homes, again without rewriting ordered data; the
-following ordinary remount is write-free and byte-stable.
+by replaying all five metadata homes, again without rewriting ordered data. A
+committed tear of the new leaf in the exact-six split topology replays the data
+accounting, primary superblock, both leaves, and inode in their six-home order,
+also without rewriting ordered data. The following ordinary remount is
+write-free and byte-stable.
 
 ## Quick start
 
