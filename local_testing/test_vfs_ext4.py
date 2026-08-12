@@ -38056,6 +38056,409 @@ def test_staged_public_cross_tail_exact_passes_external_oracles(
     _assert_e2fsck_clean(image, jbd2_toolchain)
 
 
+def test_staged_public_cross_tail_exact_ordered_candidate_tear_preserves_committed_prefix(
+    writer_activation_fixture: dict[str, object],
+    staged_public_cross_tail_exact_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A torn second-leg candidate cannot erase the committed tail prefix."""
+    fixture = staged_public_cross_tail_exact_fixture
+    path = fixture["source"]
+    input_patches = fixture["input_patches"]
+    success_trace = fixture["trace"]
+    replacement = fixture["replacement"]
+    inode_number = fixture["inode_number"]
+    inode_home = fixture["inode_home"]
+    data_block = fixture["data_block"]
+    candidate = fixture["candidate"]
+    bitmap_home = fixture["bitmap_home"]
+    gdt_home = fixture["gdt_home"]
+    xattr_block = fixture["xattr_block"]
+    old_size = fixture["old_size"]
+    new_size = fixture["new_size"]
+    first_inode_home = fixture["first_inode_home"]
+    expected_data = fixture["expected_data"]
+    expected_candidate = fixture["expected_candidate"]
+    free_blocks_before = fixture["free_blocks_before"]
+    first_epoch_ms = fixture["first_epoch_ms"]
+    first_seconds = fixture["first_seconds"]
+    first_nanoseconds = fixture["first_nanoseconds"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    assert isinstance(path, Path)
+    assert isinstance(input_patches, tuple)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(replacement, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(data_block, int)
+    assert isinstance(candidate, int)
+    assert isinstance(bitmap_home, int)
+    assert isinstance(gdt_home, int)
+    assert isinstance(xattr_block, int)
+    assert isinstance(old_size, int)
+    assert isinstance(new_size, int)
+    assert isinstance(first_inode_home, bytes)
+    assert isinstance(expected_data, bytes)
+    assert isinstance(expected_candidate, bytes)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(first_epoch_ms, int)
+    assert isinstance(first_seconds, int)
+    assert isinstance(first_nanoseconds, int)
+    assert isinstance(journal0_physical, int)
+    assert isinstance(guard_physical, int)
+
+    superblock, inode, _ = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    tail_count = block_size - old_size
+    remaining_count = len(replacement) - tail_count
+    assert block_size == 1024
+    assert tail_count == 8
+    assert remaining_count == 24
+    assert len(expected_data) == block_size
+    assert expected_data.endswith(replacement[:tail_count])
+    assert _extent_root_physical(inode, 0) == data_block
+
+    original_bitmap = _patched_ext4_home(
+        path, input_patches, bitmap_home, block_size=block_size
+    )
+    original_gdt = _patched_ext4_home(
+        path, input_patches, gdt_home, block_size=block_size
+    )
+    original_xattr = _patched_ext4_home(
+        path, input_patches, xattr_block, block_size=block_size
+    )
+    poisoned_candidate = bytes((0xA5,)) * block_size
+    torn_prefix = 512 + 6
+    torn_candidate = bytearray(poisoned_candidate)
+    torn_candidate[:torn_prefix] = expected_candidate[:torn_prefix]
+
+    candidate_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, candidate, block_size=block_size
+    )
+    assert candidate_ordinals == (22,)
+    candidate_event_index = _trace_event_index_for_ordinal(
+        success_trace, "write", candidate_ordinals[0]
+    )
+    assert success_trace[candidate_event_index] == (
+        "write",
+        candidate * 2,
+        2,
+    )
+
+    faulted = tmp_path / "staged-cross-tail-w22-faulted.img"
+    recovered = tmp_path / "staged-cross-tail-w22-recovered.img"
+    stable = tmp_path / "staged-cross-tail-w22-stable.img"
+    try:
+        output, trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                "CREATE _CTW-STAT VFS-STATFS-SIZE ALLOT",
+                (
+                    f"CREATE _CTW-CLOCK {first_epoch_ms} , "
+                    f"{fixture['second_epoch_ms']} ,"
+                ),
+                "VARIABLE _CTW-CLOCK-CALLS",
+                (
+                    ": _CTW-NOW ( clock -- epoch-ms ior ) "
+                    "_CTW-CLOCK-CALLS @ CELLS + @ "
+                    "1 _CTW-CLOCK-CALLS +! 0 ;"
+                ),
+                "T-ARENA CONSTANT _CTW-ARENA",
+                (
+                    "_CTW-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _CTW-MOUNT-IOR CONSTANT _CTW-V"
+                ),
+                "_CTW-V _EXT4-CTX CONSTANT _CTW-CTX",
+                (
+                    "' _CTW-NOW _CTW-CLOCK _CTW-V "
+                    "EXT4-BIND-WRITE-CLOCK? CONSTANT _CTW-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_CTW-PROFILE", "_CTW-V", 4, 1, 0
+                ),
+                (
+                    'S" /fixture/payload.txt" _CTW-V VFS-RESOLVE? '
+                    "CONSTANT _CTW-P-IOR CONSTANT _CTW-P"
+                ),
+                (
+                    'S" /fixture/hardlink.txt" _CTW-V VFS-RESOLVE? '
+                    "CONSTANT _CTW-H-IOR CONSTANT _CTW-H"
+                ),
+                (
+                    'S" /fixture/hardlink.txt" '
+                    "VFS-FF-READ VFS-FF-WRITE OR VFS-FF-APPEND OR "
+                    "_CTW-V VFS-OPEN? "
+                    "CONSTANT _CTW-OPEN-IOR CONSTANT _CTW-FD"
+                ),
+                "_CTW-H D.VNODE @ CONSTANT _CTW-VN",
+                "_CTW-FD FD.CUR-LO @ CONSTANT _CTW-INITIAL-CURSOR",
+                "_CTW-VN VN.ATIME @ CONSTANT _CTW-OLD-ATIME",
+                "_CTW-VN VN.ATIME-NS @ CONSTANT _CTW-OLD-ATIME-NS",
+                "_CTW-VN VN.GEN @ CONSTANT _CTW-OLD-GEN",
+                "_CTW-VN VN.NLINK @ CONSTANT _CTW-OLD-NLINK",
+                (
+                    "_CTW-STAT VFS-STATFS-SIZE _CTW-V VFS-STATFS "
+                    "CONSTANT _CTW-STAT-BEFORE-IOR"
+                ),
+                "_CTW-STAT VSF.BFREE @ CONSTANT _CTW-FREE-BEFORE",
+                (
+                    f'S" {replacement.decode("ascii")}" _CTW-FD '
+                    "VFS-WRITE-EXACT CONSTANT _CTW-EXACT-IOR"
+                ),
+                "_CTW-FD FD.CUR-LO @ CONSTANT _CTW-CURSOR",
+                "_CTW-V V.LAST-IOR @ CONSTANT _CTW-LAST-IOR",
+                "_CTW-CTX _EXT4-C.J.WRITER + @ CONSTANT _CTW-WRITER",
+                "_CTW-ARENA ARENA-USED CONSTANT _CTW-MAIN-AFTER",
+                (
+                    "_CTW-STAT VFS-STATFS-SIZE _CTW-V VFS-STATFS "
+                    "CONSTANT _CTW-STAT-AFTER-IOR"
+                ),
+                "_CTW-STAT VSF.BFREE @ CONSTANT _CTW-FREE-AFTER",
+                "_CTW-FD VFS-CLOSE? CONSTANT _CTW-CLOSE-IOR",
+                (
+                    _forth_conjunction(
+                        [
+                            "_CTW-MOUNT-IOR 0=",
+                            "_CTW-CLOCK-IOR 0=",
+                            "_CTW-PROFILE-SIZE-IOR 0=",
+                            "_CTW-PROFILE-BIND-IOR 0=",
+                            "_CTW-PROFILE-USED _CTW-PROFILE-SIZE =",
+                            "_CTW-P-IOR 0=",
+                            "_CTW-H-IOR 0=",
+                            "_CTW-P D.VNODE @ _CTW-H D.VNODE @ =",
+                            "_CTW-OPEN-IOR 0=",
+                            f"_CTW-INITIAL-CURSOR {old_size} =",
+                            (
+                                "_CTW-EXACT-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-VOLUME ="
+                            ),
+                            (
+                                "_CTW-EXACT-IOR VFS-IOR-REASON "
+                                "VFS-R-IO ="
+                            ),
+                            (
+                                "_CTW-EXACT-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-PARTIAL "
+                                "VFS-IOR-F-READONLY OR ="
+                            ),
+                            "_CTW-LAST-IOR _CTW-EXACT-IOR =",
+                            f"_CTW-CURSOR {block_size} =",
+                            "_CTW-CLOCK-CALLS @ 2 =",
+                            f"_CTW-VN VN.SIZE-LO @ {block_size} =",
+                            "_CTW-VN VN.SIZE-HI @ 0=",
+                            "_CTW-VN VN.BLOCKS @ 4 =",
+                            "_CTW-VN VN.GEN @ _CTW-OLD-GEN =",
+                            "_CTW-VN VN.NLINK @ _CTW-OLD-NLINK =",
+                            "_CTW-VN VN.ATIME @ _CTW-OLD-ATIME =",
+                            (
+                                "_CTW-VN VN.ATIME-NS @ "
+                                "_CTW-OLD-ATIME-NS ="
+                            ),
+                            f"_CTW-VN VN.MTIME @ {first_seconds} =",
+                            (
+                                f"_CTW-VN VN.MTIME-NS @ "
+                                f"{first_nanoseconds} ="
+                            ),
+                            f"_CTW-VN VN.CTIME @ {first_seconds} =",
+                            (
+                                f"_CTW-VN VN.CTIME-NS @ "
+                                f"{first_nanoseconds} ="
+                            ),
+                            "_CTW-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                            "_CTW-STAT-BEFORE-IOR 0=",
+                            "_CTW-STAT-AFTER-IOR 0=",
+                            f"_CTW-FREE-BEFORE {free_blocks_before} =",
+                            "_CTW-FREE-AFTER _CTW-FREE-BEFORE =",
+                            "_CTW-WRITER _CTW-PROFILE-BASE =",
+                            (
+                                "_CTW-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-FAULTED ="
+                            ),
+                            (
+                                "_CTW-WRITER _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-ORDERED-DATA ="
+                            ),
+                            "_CTW-WRITER _EXT4-JWR-VALID?",
+                            (
+                                "_CTW-WRITER _EXT4-JWR.FAULT + @ "
+                                "VFS-IOR-FLAGS VFS-IOR-F-PARTIAL ="
+                            ),
+                            (
+                                "_CTW-PROFILE-ARENA ARENA-USED "
+                                "_CTW-PROFILE-USED ="
+                            ),
+                            "_CTW-CTX _EXT4-C.J.HOME-WRITES + @ 1 =",
+                            "_CTW-CTX _EXT4-C.RECOVERY + @ 0<>",
+                            "_CTW-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                            "_CTW-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "_CTW-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            (
+                                "_EXT4-WR-KIND @ "
+                                "_EXT4-WRK-ALIGNED-APPEND ="
+                            ),
+                            f"_EXT4-WR-COUNT @ {remaining_count} =",
+                            f"_EXT4-WR-OFFSET @ {block_size} =",
+                            f"_EXT4-WR-REQUEST-END @ {new_size} =",
+                            f"_EXT4-WR-NEW-SIZE @ {new_size} =",
+                            "_EXT4-WR-NEW-BLOCKS @ 4 =",
+                            f"_EXT4-WR-CHUNK @ {remaining_count} =",
+                            "_EXT4-WR-ACTUAL @ 0=",
+                            "_EXT4-MOW-ACTUAL @ 0=",
+                            "_EXT4-MOW-CREDIT @ -4 =",
+                            f"_XH-CANDIDATE @ {candidate} =",
+                            "_XH-PUBLISHED @ 0<",
+                            "_EXT4-IO-COMPLETED @ 1 =",
+                            "_EXT4-IO-EXPECTED @ 2 =",
+                            "_CTW-CLOSE-IOR 0=",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-CROSS-TAIL-W22-FAULT" THEN'
+                ),
+            ],
+            patches=input_patches
+            + ((candidate * block_size, poisoned_candidate),),
+            write_faults_by_ordinal={
+                candidate_ordinals[0]: {
+                    "stage": "media",
+                    "sector_index": 1,
+                    "byte_index": 6,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-CROSS-TAIL-W22-FAULT")
+        assert trace == success_trace[: candidate_event_index + 1]
+        assert _write_ordinals_for_ext4_home(
+            trace, data_block, block_size=block_size
+        ) == (7,)
+        assert _write_ordinals_for_ext4_home(
+            trace, inode_home, block_size=block_size
+        ) == (16,)
+        assert _write_ordinals_for_ext4_home(
+            trace, candidate, block_size=block_size
+        ) == (22,)
+        for untouched_home in (bitmap_home, gdt_home):
+            assert not _write_ordinals_for_ext4_home(
+                trace, untouched_home, block_size=block_size
+            )
+
+        faulted_super, faulted_inode, _ = _ext4_inode_record(
+            faulted, inode_number
+        )
+        assert struct.unpack_from("<I", faulted_super, 0x0C)[0] == (
+            free_blocks_before
+        )
+        assert struct.unpack_from("<I", faulted_inode, 0x04)[0] == block_size
+        assert struct.unpack_from("<I", faulted_inode, 0x1C)[0] == 4
+        assert _extent_root_physical(faulted_inode, 0) == data_block
+        with pytest.raises(AssertionError, match="logical block 1 is unmapped"):
+            _extent_root_physical(faulted_inode, 1)
+        assert not _ext4_block_allocation_state(
+            faulted, (candidate,)
+        )[candidate]
+        assert _read_ext4_home(
+            faulted, data_block, block_size=block_size
+        ) == expected_data
+        assert _read_ext4_home(
+            faulted, inode_home, block_size=block_size
+        ) == first_inode_home
+        assert _read_ext4_home(
+            faulted, candidate, block_size=block_size
+        ) == bytes(torn_candidate)
+        assert _read_ext4_home(
+            faulted, bitmap_home, block_size=block_size
+        ) == original_bitmap
+        assert _read_ext4_home(
+            faulted, gdt_home, block_size=block_size
+        ) == original_gdt
+        assert _read_ext4_home(
+            faulted, xattr_block, block_size=block_size
+        ) == original_xattr
+
+        _, recovery_trace, recovery_sha256 = (
+            _staged_write_recovery_readback(
+                faulted,
+                recovered,
+                expected_file=expected_data,
+                expected_epoch_ms=first_epoch_ms,
+                expected_home_writes=0,
+                expected_replayed=True,
+                expected_blocks=4,
+                prefix="_CTW-R",
+                marker="EXT4-PUBLIC-CROSS-TAIL-W22-RECOVERED",
+            )
+        )
+        _assert_activation_cleanup_trace(
+            recovery_trace,
+            journal0_physical=journal0_physical,
+            guard_physical=guard_physical,
+        )
+        _assert_activation_landed_media(
+            recovered, writer_activation_fixture, expected_features=0x13
+        )
+        assert not _ext4_block_allocation_state(
+            recovered, (candidate,)
+        )[candidate]
+        recovered_super, recovered_inode, _ = _ext4_inode_record(
+            recovered, inode_number
+        )
+        assert struct.unpack_from("<I", recovered_super, 0x0C)[0] == (
+            free_blocks_before
+        )
+        assert struct.unpack_from("<I", recovered_inode, 0x04)[0] == block_size
+        assert struct.unpack_from("<I", recovered_inode, 0x1C)[0] == 4
+        with pytest.raises(AssertionError, match="logical block 1 is unmapped"):
+            _extent_root_physical(recovered_inode, 1)
+        for home, expected in (
+            (data_block, expected_data),
+            (inode_home, first_inode_home),
+            (candidate, bytes(torn_candidate)),
+            (bitmap_home, original_bitmap),
+            (gdt_home, original_gdt),
+            (xattr_block, original_xattr),
+        ):
+            assert _read_ext4_home(
+                recovered, home, block_size=block_size
+            ) == expected
+
+        _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+            recovered,
+            stable,
+            expected_file=expected_data,
+            expected_epoch_ms=first_epoch_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            expected_blocks=4,
+            prefix="_CTW-S",
+            marker="EXT4-PUBLIC-CROSS-TAIL-W22-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert not _ext4_block_allocation_state(stable, (candidate,))[candidate]
+        _, stable_inode, _ = _ext4_inode_record(stable, inode_number)
+        assert struct.unpack_from("<I", stable_inode, 0x04)[0] == block_size
+        assert struct.unpack_from("<I", stable_inode, 0x1C)[0] == 4
+        assert _read_ext4_home(
+            stable, inode_home, block_size=block_size
+        ) == first_inode_home
+        assert _read_ext4_home(
+            stable, candidate, block_size=block_size
+        ) == bytes(torn_candidate)
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
 def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_late_map_refusal(
     writer_activation_fixture: dict[str, object], tmp_path: Path
 ) -> None:
