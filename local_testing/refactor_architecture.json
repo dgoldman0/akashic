@@ -1,12 +1,13 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "desk-library-burrow-control-plane-20260809",
-    "commit": "ebc57364d2b799f8ea63b42725df272f413e8002",
+    "name": "desk-library-burrow-checkpoint4-qualified-20260812",
+    "commit": "5800bd5542175700a4e356ba67482c2038c49f05",
+    "measurement": "base commit plus the qualified Checkpoint-4 change set",
     "expected": {
-      "module_count": 545,
-      "resolved_require_occurrence_count": 1929,
-      "unique_resolved_edge_count": 1929,
+      "module_count": 548,
+      "resolved_require_occurrence_count": 1937,
+      "unique_resolved_edge_count": 1937,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 0,
@@ -14,8 +15,8 @@
       "provided_issue_count": 2,
       "addressability_issue_count": 1,
       "marker_issue_count": 0,
-      "graph_sha256": "4a8ceaa8a5db5500da396ea5586f69d8f08a1374da31730284bbe608a2b33eef",
-      "state_sha256": "9c63eba9058325d28e61a27cd57035ffb9113604fc03a773e2cb5cd8f4d99713",
+      "graph_sha256": "7e6b8c1e3e7a1e3a6cc71eb6d21350b6a383be120e579368b775ebbdd19ec34c",
+      "state_sha256": "98263260d0e61b4edaddcfe205334add2ae4944ad4d6ad72816ebdcb3909d133",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
@@ -1034,22 +1035,6 @@
       "value": 512,
       "scope": "aggregate-document",
       "scale_axis": "model-complexity"
-    },
-    {
-      "id": "tui.contexts-per-arena",
-      "module": "tui/uidl-tui.f",
-      "symbol": "_UCTX-PER-ARENA",
-      "value": 4,
-      "scope": "instance-pool",
-      "scale_axis": "simultaneous-instances"
-    },
-    {
-      "id": "tui.context-arenas",
-      "module": "tui/uidl-tui.f",
-      "symbol": "_UCTX-MAX-ARENAS",
-      "value": 4,
-      "scope": "instance-pool",
-      "scale_axis": "simultaneous-instances"
     },
     {
       "id": "tui.deferred-actions",

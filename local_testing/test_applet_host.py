@@ -39,6 +39,8 @@ CREATE _ah-context 8 ALLOT
 CREATE _ah-endpoint 8 ALLOT
 VARIABLE _ah-reg
 VARIABLE _ah-screen
+VARIABLE _ah-temp-screen
+CREATE _ah-context-ptrs 17 CELLS ALLOT
 VARIABLE _ah-relayouts
 VARIABLE _ah-layout-index
 VARIABLE _ah-heap-before
@@ -269,11 +271,23 @@ VARIABLE _ah-ew
     CREG-NEW DUP 0= _ah-assert DROP _ah-reg !
     _ah-fill-descriptor
     _ah-comp _ah-reg @ CREG-TYPE+ 0= _ah-assert
-    \ UCTX arenas are process-lifetime shared pools.  Prime that documented
-    \ one-time allocation so the host accounting below measures only the
-    \ allocations it must recycle on failure and close.
-    UCTX-ALLOC DUP 0<> _ah-assert UCTX-FREE
+
+    \ Context ownership has no fixed pool ceiling.  Exceed the former
+    \ sixteen-context arena cap, then prove exact allocator recovery.
     _ah-memory-snapshot
+    17 0 DO
+        UCTX-ALLOC DUP 0<> _ah-assert
+        I CELLS _ah-context-ptrs + !
+    LOOP
+    17 0 DO I CELLS _ah-context-ptrs + @ UCTX-FREE LOOP
+    _ah-memory-clean
+
+    \ Screen destruction and resizing both return their front/back storage.
+    20 10 SCR-NEW DUP _ah-temp-screen ! SCR-USE
+    30 12 SCR-RESIZE
+    _ah-temp-screen @ SCR-FREE
+    _ah-screen @ SCR-USE
+    _ah-memory-clean
 
     \ Relayout is a required preflight: its absence consumes no host ID and
     \ allocates no observable instance, slot, or component state.
@@ -352,6 +366,18 @@ VARIABLE _ah-ew
     15 27 _ah-host AHOST-TILE-AT _ah-slot-b @ = _ah-assert
     9 9 _ah-host AHOST-TILE-AT 0= _ah-assert
     99 99 _ah-host AHOST-TILE-AT 0= _ah-assert
+
+    \ Overlapping presentation regions route the pointer to focus rather
+    \ than whichever live slot happens to occur first in the host list.
+    _ah-slot-a @ AHS.RGN @ RGN-FREE
+    _ah-slot-b @ AHS.RGN @ RGN-FREE
+    0 0 20 30 RGN-NEW _ah-slot-a @ AHS.RGN !
+    0 0 20 30 RGN-NEW _ah-slot-b @ AHS.RGN !
+    5 5 _ah-host AHOST-TILE-AT _ah-slot-a @ = _ah-assert
+    _ah-id-b @ _ah-host AHOST-FOCUS-ID
+    5 5 _ah-host AHOST-TILE-AT _ah-slot-b @ = _ah-assert
+    _ah-context _ah-relayout
+    _ah-id-a @ _ah-host AHOST-FOCUS-ID
     _ah-stack
     ." AH-M5-LAUNCHED" CR
 

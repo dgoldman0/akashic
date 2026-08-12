@@ -57,6 +57,7 @@ VARIABLE _SCR-CUR   0 _SCR-CUR !
 VARIABLE _SCR-TMP
 VARIABLE _SCR-TMP2
 VARIABLE _SCR-TMP3
+VARIABLE _SCR-BUF-BYTES
 VARIABLE _SCR-LAST-ROW    \ last physical cursor row during flush
 VARIABLE _SCR-LAST-COL    \ last physical cursor col during flush
 VARIABLE _SCR-LAST-FG     \ last emitted fg color
@@ -111,18 +112,24 @@ VARIABLE _SCR-FILL-VAL
     _SCR-TMP3 !                        \ scr → TMP3
 
     \ Compute buffer size: w × h × 8
-    _SCR-TMP @ _SCR-TMP2 @ * 8 *      ( buf-bytes )
+    _SCR-TMP @ _SCR-TMP2 @ * 8 * _SCR-BUF-BYTES !
 
     \ Allocate front buffer
-    DUP XMEM? IF XMEM-ALLOT ELSE
-        ALLOCATE 0<> ABORT" SCR-NEW: front buf alloc failed"
+    _SCR-BUF-BYTES @ ALLOCATE DUP IF
+        2DROP _SCR-TMP3 @ FREE
+        -1 ABORT" SCR-NEW: front buf alloc failed"
     THEN
+    DROP
     _SCR-TMP3 @ _SCR-O-FRONT + !
 
     \ Allocate back buffer
-    XMEM? IF XMEM-ALLOT ELSE
-        ALLOCATE 0<> ABORT" SCR-NEW: back buf alloc failed"
+    _SCR-BUF-BYTES @ ALLOCATE DUP IF
+        2DROP
+        _SCR-TMP3 @ _SCR-O-FRONT + @ FREE
+        _SCR-TMP3 @ FREE
+        -1 ABORT" SCR-NEW: back buf alloc failed"
     THEN
+    DROP
     _SCR-TMP3 @ _SCR-O-BACK + !
 
     \ Fill both buffers with CELL-BLANK
@@ -145,10 +152,13 @@ VARIABLE _SCR-FILL-VAL
     _SCR-TMP3 @ ;
 
 \ SCR-FREE ( scr -- )
-\   Deallocate screen descriptor.
-\   Note: if buffers were XMEM-ALLOT'd, they can't be individually
-\   freed (bump allocator).  We FREE the descriptor.
+\   Deallocate both cell buffers and the screen descriptor through the
+\   platform allocator that created them.
 : SCR-FREE  ( scr -- )
+    DUP 0= IF DROP EXIT THEN
+    DUP _SCR-CUR @ = IF 0 _SCR-CUR ! THEN
+    DUP _SCR-O-FRONT + @ FREE
+    DUP _SCR-O-BACK + @ FREE
     FREE ;
 
 \ =====================================================================
@@ -366,10 +376,11 @@ VARIABLE _SCR-ROW-BYTES
 \
 \   Resize the screen.  This creates new buffers, copies the
 \   overlapping region from old back buffer, then replaces the
-\   descriptor fields.  Old buffers are abandoned (XMEM bump).
+\   descriptor fields, returning the old buffers to their allocator.
 
 VARIABLE _SCR-OLD-W
 VARIABLE _SCR-OLD-H
+VARIABLE _SCR-OLD-FRONT
 VARIABLE _SCR-OLD-BACK
 VARIABLE _SCR-NEW-FRONT
 VARIABLE _SCR-NEW-BACK
@@ -379,6 +390,7 @@ VARIABLE _SCR-COPY-H
 : SCR-RESIZE  ( w h -- )
     _SCR-CUR @ _SCR-O-W + @ _SCR-OLD-W !
     _SCR-CUR @ _SCR-O-H + @ _SCR-OLD-H !
+    _SCR-CUR @ _SCR-O-FRONT + @ _SCR-OLD-FRONT !
     _SCR-CUR @ _SCR-O-BACK + @ _SCR-OLD-BACK !
 
     OVER _SCR-TMP  !                   \ new w
@@ -386,14 +398,17 @@ VARIABLE _SCR-COPY-H
     2DROP                              \ consume w h from caller
 
     \ Allocate new buffers
-    _SCR-TMP @ _SCR-TMP2 @ * 8 *      ( bytes )
-    DUP XMEM? IF XMEM-ALLOT ELSE
-        ALLOCATE 0<> ABORT" SCR-RESIZE: front alloc failed"
-    THEN _SCR-NEW-FRONT !
+    _SCR-TMP @ _SCR-TMP2 @ * 8 * _SCR-BUF-BYTES !
+    _SCR-BUF-BYTES @ ALLOCATE DUP IF
+        2DROP -1 ABORT" SCR-RESIZE: front alloc failed"
+    THEN
+    DROP _SCR-NEW-FRONT !
 
-    XMEM? IF XMEM-ALLOT ELSE
-        ALLOCATE 0<> ABORT" SCR-RESIZE: back alloc failed"
-    THEN _SCR-NEW-BACK !
+    _SCR-BUF-BYTES @ ALLOCATE DUP IF
+        2DROP _SCR-NEW-FRONT @ FREE
+        -1 ABORT" SCR-RESIZE: back alloc failed"
+    THEN
+    DROP _SCR-NEW-BACK !
 
     \ Fill new buffers with CELL-BLANK
     _SCR-NEW-FRONT @
@@ -418,14 +433,19 @@ VARIABLE _SCR-COPY-H
         CMOVE
     LOOP
 
-    \ Update descriptor
+    \ Publish the complete replacement before releasing old ownership.  If
+    \ an allocator guard ever rejects an old pointer, the current descriptor
+    \ still names a coherent new screen rather than already-freed storage.
     _SCR-TMP @       _SCR-CUR @ _SCR-O-W     + !
     _SCR-TMP2 @      _SCR-CUR @ _SCR-O-H     + !
     _SCR-NEW-FRONT @ _SCR-CUR @ _SCR-O-FRONT + !
     _SCR-NEW-BACK  @ _SCR-CUR @ _SCR-O-BACK  + !
 
     \ Force full redraw
-    SCR-FORCE ;
+    SCR-FORCE
+
+    _SCR-OLD-FRONT @ FREE
+    _SCR-OLD-BACK @ FREE ;
 
 \ =====================================================================
 \ 13. Guard

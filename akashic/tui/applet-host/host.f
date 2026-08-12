@@ -585,20 +585,27 @@ VARIABLE _AHT-RC
 VARIABLE _AHT-RH
 VARIABLE _AHT-RW
 
+: _AHT-SLOT-CONTAINS?  ( slot -- flag )
+    DUP AHS-VISIBLE? 0= IF DROP 0 EXIT THEN
+    AHS.RGN @ ?DUP 0= IF 0 EXIT THEN
+    DUP RGN-ROW _AHT-RR ! DUP RGN-COL _AHT-RC !
+    DUP RGN-H _AHT-RH ! RGN-W _AHT-RW !
+    _AHT-RR @ _AHT-ROW @ <=
+    _AHT-RC @ _AHT-COL @ <= AND
+    _AHT-RR @ _AHT-RH @ + _AHT-ROW @ > AND
+    _AHT-RC @ _AHT-RW @ + _AHT-COL @ > AND ;
+
 : AHOST-TILE-AT  ( row col host -- slot | 0 )
     _AHT-HOST ! _AHT-COL ! _AHT-ROW !
+    \ A caller may deliberately overlap the focused slot with ordinary
+    \ child regions for a full-frame presentation.  The focused child owns
+    \ pointer routing in that overlap just as it owns key routing.
+    _AHT-HOST @ AHOST.FOCUS @ ?DUP IF
+        DUP _AHT-SLOT-CONTAINS? IF EXIT THEN DROP
+    THEN
     _AHT-HOST @ AHOST.HEAD @
     BEGIN ?DUP WHILE
-        DUP AHS-VISIBLE? IF
-            DUP AHS.RGN @ ?DUP IF
-                DUP RGN-ROW _AHT-RR ! DUP RGN-COL _AHT-RC !
-                DUP RGN-H _AHT-RH ! RGN-W _AHT-RW !
-                _AHT-RR @ _AHT-ROW @ <=
-                _AHT-RC @ _AHT-COL @ <= AND
-                _AHT-RR @ _AHT-RH @ + _AHT-ROW @ > AND
-                _AHT-RC @ _AHT-RW @ + _AHT-COL @ > AND IF EXIT THEN
-            THEN
-        THEN
+        DUP _AHT-SLOT-CONTAINS? IF EXIT THEN
         AHS.NEXT @
     REPEAT
     0 ;

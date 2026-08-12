@@ -1151,6 +1151,51 @@ def test_focused_desktop_streams_uses_online_composition() -> None:
     assert "_boot-streams-desc STREAMS-ENTRY\n" not in profile.autoexec
 
 
+def test_desk_library_burrow_profile_is_product_composed() -> None:
+    profile = PROFILES["desktop-library-burrow"]
+    rabbit = "tui/applets/streams/rabbit-capabilities.f"
+    streams = "tui/applets/streams/streams.f"
+
+    assert profile.roots == (
+        "tui/applets/desk/desk.f",
+        "tui/applets/library/library.f",
+        rabbit,
+        streams,
+        "tui/applets/agent/agent.f",
+        "tui/applets/agent/providers/devtools/scripted.f",
+    )
+    assert profile.resources == (
+        "tui/applets/desk/desk.toml",
+        "tui/applets/library/library.uidl",
+        "tui/applets/streams/streams.uidl",
+        "tui/applets/agent/agent.uidl",
+    )
+    assert profile.linked is True
+    assert profile.include_large_sample is False
+    assert profile.total_sectors == PROFILES["desktop"].total_sectors == 8192
+    assert tuple(path for path, _ in profile.initial_files) == (
+        "local_testing/streams-burrow-prov.f",
+        "local_testing/desk-library-burrow.f",
+    )
+    assert profile.autoexec.index(f"REQUIRE {rabbit}") < (
+        profile.autoexec.index(f"REQUIRE {streams}")
+    )
+    assert profile.autoexec.index("_boot-practice-provision") < (
+        profile.autoexec.index("DESK-LIBRARY-BURROW-CONFIGURE")
+    ) < profile.autoexec.index("DESK-LIBRARY-BURROW-RUN")
+    assert "DESK-QUEUE-LAUNCH" not in profile.autoexec
+    assert "Rabbit" not in PROFILES["desktop"].autoexec
+
+    closure = set(dependency_closure(profile.roots))
+    assert {
+        "tui/applets/desk/desk.f",
+        "tui/applets/library/library.f",
+        rabbit,
+        streams,
+        "tui/applets/agent/agent.f",
+    } <= closure
+
+
 def test_streams_vertical_binds_both_reviewed_live_providers() -> None:
     profile = PROFILES["desktop-streams-vertical"]
     reviewed_url = (

@@ -81,6 +81,8 @@ local_testing/*
 !local_testing/test_streams_burrow_manager.py
 !local_testing/test_streams_burrow_caps.py
 !local_testing/test_streams_burrow_lifecycle.py
+!local_testing/desk-library-burrow.f
+!local_testing/test_desk_library_burrow.py
 # Refactor architecture inventory and ratchet
 !local_testing/forth_dependencies.py
 !local_testing/refactor_inventory.py

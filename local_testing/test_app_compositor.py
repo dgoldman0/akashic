@@ -319,10 +319,10 @@ def nums(s):
 # ═══════════════════════════════════════════════════════════════════
 
 def test_uctx_total():
-    """UCTX-TOTAL should be 99448."""
+    """UCTX-TOTAL should cover every current scalar and pool byte."""
     check("uctx-total", [
         'UCTX-TOTAL .',
-    ], expected='99448')
+    ], expected='103544')
 
 def test_slot_sz():
     """_SLOT-SZ should be 56."""

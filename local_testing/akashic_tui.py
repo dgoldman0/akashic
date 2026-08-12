@@ -20203,6 +20203,93 @@ THEN
     total_sectors=PROFILES["desktop"].total_sectors,
 )
 
+PROFILES["desktop-library-burrow"] = Profile(
+    roots=(
+        "tui/applets/desk/desk.f",
+        "tui/applets/library/library.f",
+        # This root and its boot REQUIRE must precede streams.f.  Streams
+        # deliberately selects the 19-capability extension build only when
+        # the Rabbit capability count is already present at load time.
+        "tui/applets/streams/rabbit-capabilities.f",
+        "tui/applets/streams/streams.f",
+        "tui/applets/agent/agent.f",
+        "tui/applets/agent/providers/devtools/scripted.f",
+    ),
+    resources=(
+        "tui/applets/desk/desk.toml",
+        "tui/applets/library/library.uidl",
+        "tui/applets/streams/streams.uidl",
+        "tui/applets/agent/agent.uidl",
+    ),
+    autoexec=r"""\ autoexec.f - focused Desk/Library/Rabbit Burrow product
+ENTER-USERLAND
+." [akashic] loading Desk Library Burrow product" CR
+REQUIRE tui/applets/desk/desk.f
+REQUIRE tui/applets/library/library.f
+REQUIRE tui/applets/streams/rabbit-capabilities.f
+REQUIRE tui/applets/streams/streams.f
+REQUIRE tui/applets/agent/agent.f
+REQUIRE tui/applets/agent/providers/devtools/scripted.f
+REQUIRE local_testing/streams-burrow-prov.f
+REQUIRE local_testing/desk-library-burrow.f
+
+\ Provision a normal Practice head only on genuinely blank qualification
+\ media.  Invalid existing slots remain Desk recovery work, as in the
+\ canonical Desktop profile.
+CREATE _boot-practice-head PHEAD-SIZE ALLOT
+CREATE _boot-practice-out PHEAD-SIZE ALLOT
+CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
+: _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
+: _boot-practice-slot?  ( path-a path-u -- flag )
+    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+: _boot-practice-present?  ( -- flag )
+    S" /practice-head-a.bin" _boot-practice-slot?
+    S" /practice-head-b.bin" _boot-practice-slot? OR ;
+: _boot-practice-provision  ( -- )
+    _boot-practice-present? IF EXIT THEN
+    VFS-CUR _boot-practice-store PHEADVFS-INIT
+        PHEADVFS-S-OK <> ABORT" Practice store init failed"
+    _boot-practice-out _boot-practice-store PHEADVFS-LOAD
+        PHEADVFS-S-RECOVERY <> ABORT" blank Practice did not enter recovery"
+    _boot-practice-head PHEAD-INIT
+    1 _boot-practice-head PHEAD.ID _boot-practice-id!
+    2 _boot-practice-head PHEAD.CURRENT-ROOT _boot-practice-id!
+    _boot-practice-head _boot-practice-store PHEADVFS-REINITIALIZE
+        PHEADVFS-S-OK <> ABORT" Practice provision failed" ;
+_boot-practice-provision
+
+DESK-LIBRARY-BURROW-CONFIGURE
+." [akashic] starting Desk Library Burrow product" CR
+DESK-LIBRARY-BURROW-RUN
+." [akashic] Desk Library Burrow product exited" CR
+""",
+    ready_markers=("Library", "Streams", "Agent"),
+    stable_markers=("LIBRARY", "STREAMS", "Agent"),
+    failure_markers=(
+        "DESK LIBRARY BURROW FAIL",
+        "DESK LIBRARY BURROW ASSERT",
+        "DESK LIBRARY BURROW STACK",
+        "desktop exception",
+    ),
+    initial_files=(
+        (
+            "local_testing/streams-burrow-prov.f",
+            (
+                AKASHIC_ROOT / "local_testing" / "streams-burrow-prov.f"
+            ).read_bytes(),
+        ),
+        (
+            "local_testing/desk-library-burrow.f",
+            (
+                AKASHIC_ROOT / "local_testing" / "desk-library-burrow.f"
+            ).read_bytes(),
+        ),
+    ),
+    linked=True,
+    include_large_sample=False,
+    total_sectors=PROFILES["desktop"].total_sectors,
+)
+
 _STREAMS_VERTICAL_FEED_URL = (
     "https://foo-dogsquared.github.io/"
     "hugo-theme-more-contentful/feed.rss"
@@ -29781,6 +29868,23 @@ REQUIRE local_testing/library-app-func.f
                 "library-applet-functional.f"
             ).read_text(encoding="utf-8")).encode("utf-8"),
         ),
+    ),
+)
+
+# The product profile is declared beside the other focused Desktop
+# compositions, before the shared linker compactor is defined.  Hydrate its
+# two test-only guest leaves here so deployed qualification media carries the
+# same conservative source minification used by the newer focused profiles.
+PROFILES["desktop-library-burrow"] = replace(
+    PROFILES["desktop-library-burrow"],
+    initial_files=tuple(
+        (
+            path,
+            _minify_forth(
+                (AKASHIC_ROOT / path).read_text(encoding="utf-8")
+            ).encode("utf-8"),
+        )
+        for path, _ in PROFILES["desktop-library-burrow"].initial_files
     ),
 )
 
