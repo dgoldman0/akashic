@@ -38459,6 +38459,430 @@ def test_staged_public_cross_tail_exact_ordered_candidate_tear_preserves_committ
         stable.unlink(missing_ok=True)
 
 
+def test_staged_public_cross_tail_exact_committed_inode_tear_replays_final_state(
+    writer_activation_fixture: dict[str, object],
+    staged_public_cross_tail_exact_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Replay the committed allocation over a first-leg inode suffix."""
+    fixture = staged_public_cross_tail_exact_fixture
+    path = fixture["source"]
+    input_patches = fixture["input_patches"]
+    success_trace = fixture["trace"]
+    expected_file = fixture["expected_file"]
+    replacement = fixture["replacement"]
+    inode_number = fixture["inode_number"]
+    inode_home = fixture["inode_home"]
+    inode_block_offset = fixture["inode_block_offset"]
+    data_block = fixture["data_block"]
+    candidate = fixture["candidate"]
+    bitmap_home = fixture["bitmap_home"]
+    gdt_home = fixture["gdt_home"]
+    super_home = fixture["super_home"]
+    xattr_block = fixture["xattr_block"]
+    old_size = fixture["old_size"]
+    new_size = fixture["new_size"]
+    first_inode_home = fixture["first_inode_home"]
+    expected_inode_home = fixture["expected_inode_home"]
+    expected_data = fixture["expected_data"]
+    expected_candidate = fixture["expected_candidate"]
+    expected_bitmap = fixture["expected_bitmap"]
+    expected_gdt = fixture["expected_gdt"]
+    expected_super = fixture["expected_super"]
+    free_blocks_before = fixture["free_blocks_before"]
+    first_epoch_ms = fixture["first_epoch_ms"]
+    second_epoch_ms = fixture["second_epoch_ms"]
+    dirty_super = writer_activation_fixture["dirty_super"]
+    assert isinstance(path, Path)
+    assert isinstance(input_patches, tuple)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(replacement, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(inode_block_offset, int)
+    assert isinstance(data_block, int)
+    assert isinstance(candidate, int)
+    assert isinstance(bitmap_home, int)
+    assert isinstance(gdt_home, int)
+    assert isinstance(super_home, int)
+    assert isinstance(xattr_block, int)
+    assert isinstance(old_size, int)
+    assert isinstance(new_size, int)
+    assert isinstance(first_inode_home, bytes)
+    assert isinstance(expected_inode_home, bytes)
+    assert isinstance(expected_data, bytes)
+    assert isinstance(expected_candidate, bytes)
+    assert isinstance(expected_bitmap, bytes)
+    assert isinstance(expected_gdt, bytes)
+    assert isinstance(expected_super, bytes)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(first_epoch_ms, int)
+    assert isinstance(second_epoch_ms, int)
+    assert isinstance(dirty_super, bytes)
+
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    tail_count = block_size - old_size
+    remaining_count = len(replacement) - tail_count
+    assert block_size == 1024
+    assert inode_offset // block_size == inode_home
+    assert inode_offset % block_size == inode_block_offset
+    assert tail_count == 8
+    assert remaining_count == 24
+    assert len(expected_file) == new_size == 1048
+    assert len(expected_data) == block_size
+    assert struct.unpack_from("<I", expected_super, 0x0C)[0] == (
+        free_blocks_before - 1
+    )
+
+    original_inode_home = _patched_ext4_home(
+        path, input_patches, inode_home, block_size=block_size
+    )
+    original_xattr = _patched_ext4_home(
+        path, input_patches, xattr_block, block_size=block_size
+    )
+    expected_faulted_super = bytearray(dirty_super)
+    expected_faulted_super[0x0C:0x10] = expected_super[0x0C:0x10]
+    expected_faulted_super[0x158:0x15C] = expected_super[0x158:0x15C]
+    expected_faulted_super[:] = _ext4_super_with_checksum(
+        expected_faulted_super
+    )
+
+    inode_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, inode_home, block_size=block_size
+    )
+    assert inode_ordinals == (16, 37)
+    inode_event_index = _trace_event_index_for_ordinal(
+        success_trace, "write", inode_ordinals[1]
+    )
+    assert success_trace[inode_event_index] == (
+        "write",
+        inode_home * 2,
+        2,
+    )
+    tear_offset = inode_block_offset + 13
+    assert tear_offset == 269
+    expected_torn_inode_home = (
+        expected_inode_home[:tear_offset]
+        + first_inode_home[tear_offset:]
+    )
+    assert expected_torn_inode_home != original_inode_home
+    assert expected_torn_inode_home != first_inode_home
+    assert expected_torn_inode_home != expected_inode_home
+    second_seconds, second_milliseconds = divmod(second_epoch_ms, 1000)
+    second_nanoseconds = second_milliseconds * 1_000_000
+
+    faulted = tmp_path / "staged-cross-tail-w37-faulted.img"
+    recovered = tmp_path / "staged-cross-tail-w37-recovered.img"
+    stable = tmp_path / "staged-cross-tail-w37-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                "CREATE _CTH-STAT VFS-STATFS-SIZE ALLOT",
+                (
+                    f"CREATE _CTH-CLOCK {first_epoch_ms} , "
+                    f"{second_epoch_ms} ,"
+                ),
+                "VARIABLE _CTH-CLOCK-CALLS",
+                (
+                    ": _CTH-NOW ( clock -- epoch-ms ior ) "
+                    "_CTH-CLOCK-CALLS @ CELLS + @ "
+                    "1 _CTH-CLOCK-CALLS +! 0 ;"
+                ),
+                "T-ARENA CONSTANT _CTH-ARENA",
+                (
+                    "_CTH-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _CTH-MOUNT-IOR CONSTANT _CTH-V"
+                ),
+                "_CTH-V _EXT4-CTX CONSTANT _CTH-CTX",
+                (
+                    "' _CTH-NOW _CTH-CLOCK _CTH-V "
+                    "EXT4-BIND-WRITE-CLOCK? CONSTANT _CTH-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_CTH-PROFILE", "_CTH-V", 4, 1, 0
+                ),
+                (
+                    'S" /fixture/payload.txt" _CTH-V VFS-RESOLVE? '
+                    "CONSTANT _CTH-P-IOR CONSTANT _CTH-P"
+                ),
+                (
+                    'S" /fixture/hardlink.txt" _CTH-V VFS-RESOLVE? '
+                    "CONSTANT _CTH-H-IOR CONSTANT _CTH-H"
+                ),
+                (
+                    'S" /fixture/hardlink.txt" '
+                    "VFS-FF-READ VFS-FF-WRITE OR VFS-FF-APPEND OR "
+                    "_CTH-V VFS-OPEN? "
+                    "CONSTANT _CTH-OPEN-IOR CONSTANT _CTH-FD"
+                ),
+                "_CTH-H D.VNODE @ CONSTANT _CTH-VN",
+                "_CTH-FD FD.CUR-LO @ CONSTANT _CTH-INITIAL-CURSOR",
+                "_CTH-VN VN.ATIME @ CONSTANT _CTH-OLD-ATIME",
+                "_CTH-VN VN.ATIME-NS @ CONSTANT _CTH-OLD-ATIME-NS",
+                "_CTH-VN VN.GEN @ CONSTANT _CTH-OLD-GEN",
+                "_CTH-VN VN.NLINK @ CONSTANT _CTH-OLD-NLINK",
+                (
+                    "_CTH-STAT VFS-STATFS-SIZE _CTH-V VFS-STATFS "
+                    "CONSTANT _CTH-STAT-BEFORE-IOR"
+                ),
+                "_CTH-STAT VSF.BFREE @ CONSTANT _CTH-FREE-BEFORE",
+                (
+                    f'S" {replacement.decode("ascii")}" _CTH-FD '
+                    "VFS-WRITE-EXACT CONSTANT _CTH-EXACT-IOR"
+                ),
+                "_CTH-FD FD.CUR-LO @ CONSTANT _CTH-CURSOR",
+                "_CTH-V V.LAST-IOR @ CONSTANT _CTH-LAST-IOR",
+                "_CTH-CTX _EXT4-C.J.WRITER + @ CONSTANT _CTH-WRITER",
+                "_CTH-ARENA ARENA-USED CONSTANT _CTH-MAIN-AFTER",
+                (
+                    "_CTH-STAT VFS-STATFS-SIZE _CTH-V VFS-STATFS "
+                    "CONSTANT _CTH-STAT-AFTER-IOR"
+                ),
+                "_CTH-STAT VSF.BFREE @ CONSTANT _CTH-FREE-AFTER",
+                "_CTH-FD VFS-CLOSE? CONSTANT _CTH-CLOSE-IOR",
+                (
+                    _forth_conjunction(
+                        [
+                            "_CTH-MOUNT-IOR 0=",
+                            "_CTH-CLOCK-IOR 0=",
+                            "_CTH-PROFILE-SIZE-IOR 0=",
+                            "_CTH-PROFILE-BIND-IOR 0=",
+                            "_CTH-PROFILE-USED _CTH-PROFILE-SIZE =",
+                            "_CTH-P-IOR 0=",
+                            "_CTH-H-IOR 0=",
+                            "_CTH-P D.VNODE @ _CTH-H D.VNODE @ =",
+                            "_CTH-OPEN-IOR 0=",
+                            f"_CTH-INITIAL-CURSOR {old_size} =",
+                            (
+                                "_CTH-EXACT-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-VOLUME ="
+                            ),
+                            (
+                                "_CTH-EXACT-IOR VFS-IOR-REASON "
+                                "VFS-R-IO ="
+                            ),
+                            (
+                                "_CTH-EXACT-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-PARTIAL "
+                                "VFS-IOR-F-READONLY OR ="
+                            ),
+                            "_CTH-LAST-IOR _CTH-EXACT-IOR =",
+                            f"_CTH-CURSOR {new_size} =",
+                            "_CTH-CLOCK-CALLS @ 2 =",
+                            f"_CTH-VN VN.SIZE-LO @ {new_size} =",
+                            "_CTH-VN VN.SIZE-HI @ 0=",
+                            "_CTH-VN VN.BLOCKS @ 6 =",
+                            "_CTH-VN VN.GEN @ _CTH-OLD-GEN =",
+                            "_CTH-VN VN.NLINK @ _CTH-OLD-NLINK =",
+                            "_CTH-VN VN.ATIME @ _CTH-OLD-ATIME =",
+                            (
+                                "_CTH-VN VN.ATIME-NS @ "
+                                "_CTH-OLD-ATIME-NS ="
+                            ),
+                            f"_CTH-VN VN.MTIME @ {second_seconds} =",
+                            (
+                                f"_CTH-VN VN.MTIME-NS @ "
+                                f"{second_nanoseconds} ="
+                            ),
+                            f"_CTH-VN VN.CTIME @ {second_seconds} =",
+                            (
+                                f"_CTH-VN VN.CTIME-NS @ "
+                                f"{second_nanoseconds} ="
+                            ),
+                            "_CTH-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                            "_CTH-STAT-BEFORE-IOR 0=",
+                            "_CTH-STAT-AFTER-IOR 0=",
+                            f"_CTH-FREE-BEFORE {free_blocks_before} =",
+                            "_CTH-FREE-AFTER _CTH-FREE-BEFORE 1- =",
+                            "_CTH-WRITER _CTH-PROFILE-BASE =",
+                            (
+                                "_CTH-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-FAULTED ="
+                            ),
+                            (
+                                "_CTH-WRITER _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-CHECKPOINT-HOME ="
+                            ),
+                            "_CTH-WRITER _EXT4-JWR-VALID?",
+                            (
+                                "_CTH-WRITER _EXT4-JWR.FAULT + @ "
+                                "VFS-IOR-FLAGS VFS-IOR-F-PARTIAL ="
+                            ),
+                            "_CTH-WRITER _EXT4-JWR.META-ACTIVE + @ 4 =",
+                            "_CTH-WRITER _EXT4-JWR.DATA-ACTIVE + @ 1 =",
+                            "_CTH-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                            (
+                                "_CTH-PROFILE-ARENA ARENA-USED "
+                                "_CTH-PROFILE-USED ="
+                            ),
+                            "_CTH-CTX _EXT4-C.J.HOME-WRITES + @ 3 =",
+                            "_CTH-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                            "_CTH-CTX _EXT4-C.RECOVERY + @ 0<>",
+                            "_CTH-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                            "_CTH-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "_CTH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            (
+                                "_EXT4-WR-KIND @ "
+                                "_EXT4-WRK-ALIGNED-APPEND ="
+                            ),
+                            f"_EXT4-WR-COUNT @ {remaining_count} =",
+                            f"_EXT4-WR-OFFSET @ {block_size} =",
+                            f"_EXT4-WR-REQUEST-END @ {new_size} =",
+                            f"_EXT4-WR-NEW-SIZE @ {new_size} =",
+                            "_EXT4-WR-NEW-BLOCKS @ 6 =",
+                            f"_EXT4-WR-CHUNK @ {remaining_count} =",
+                            f"_EXT4-WR-ACTUAL @ {remaining_count} =",
+                            f"_EXT4-MOW-ACTUAL @ {remaining_count} =",
+                            "_EXT4-MOW-CREDIT @ -4 =",
+                            f"_XH-CANDIDATE @ {candidate} =",
+                            "_XH-PUBLISHED @ 0<",
+                            "_CTH-CLOSE-IOR 0=",
+                            (
+                                "_EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XB _EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?",
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-CROSS-TAIL-W37-FAULT" THEN'
+                ),
+            ],
+            patches=input_patches
+            + ((candidate * block_size, bytes((0xA5,)) * block_size),),
+            write_faults_by_ordinal={
+                inode_ordinals[1]: {
+                    "stage": "media",
+                    "sector_index": 0,
+                    "byte_index": tear_offset,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-CROSS-TAIL-W37-FAULT")
+        assert failed_trace == success_trace[: inode_event_index + 1]
+        assert _ext4_block_allocation_state(
+            faulted, (candidate,)
+        )[candidate]
+        assert _read_ext4_home(
+            faulted, data_block, block_size=block_size
+        ) == expected_data
+        assert _read_ext4_home(
+            faulted, candidate, block_size=block_size
+        ) == expected_candidate
+        assert _read_ext4_home(
+            faulted, bitmap_home, block_size=block_size
+        ) == expected_bitmap
+        assert _read_ext4_home(
+            faulted, gdt_home, block_size=block_size
+        ) == expected_gdt
+        assert _read_ext4_home(
+            faulted, super_home, block_size=block_size
+        ) == bytes(expected_faulted_super)
+        assert _read_ext4_home(
+            faulted, xattr_block, block_size=block_size
+        ) == original_xattr
+        torn_inode_home = _read_ext4_home(
+            faulted, inode_home, block_size=block_size
+        )
+        assert torn_inode_home == expected_torn_inode_home
+        torn_inode = torn_inode_home[
+            inode_block_offset : inode_block_offset + inode_size
+        ]
+        assert struct.unpack_from("<I", torn_inode, 0x04)[0] == new_size
+        assert struct.unpack_from("<I", torn_inode, 0x1C)[0] == 4
+        with pytest.raises(AssertionError, match="logical block 1 is unmapped"):
+            _extent_root_physical(torn_inode, 1)
+        assert _inode_with_checksum(
+            superblock, inode_number, torn_inode
+        ) != torn_inode
+
+        _, recovery_trace, recovery_sha256 = (
+            _staged_write_recovery_readback(
+                faulted,
+                recovered,
+                expected_file=expected_file,
+                expected_epoch_ms=second_epoch_ms,
+                expected_home_writes=4,
+                expected_replayed=True,
+                expected_blocks=6,
+                prefix="_CTH-R",
+                marker="EXT4-PUBLIC-CROSS-TAIL-W37-RECOVERED",
+            )
+        )
+        assert not _write_ordinals_for_ext4_home(
+            recovery_trace, candidate, block_size=block_size
+        )
+        assert not _write_ordinals_for_ext4_home(
+            recovery_trace, data_block, block_size=block_size
+        )
+        for home in (bitmap_home, gdt_home, inode_home):
+            assert len(
+                _write_ordinals_for_ext4_home(
+                    recovery_trace, home, block_size=block_size
+                )
+            ) == 1
+        assert _ext4_block_allocation_state(
+            recovered, (candidate,)
+        )[candidate]
+        recovered_super, recovered_inode, _ = _ext4_inode_record(
+            recovered, inode_number
+        )
+        assert recovered_super == expected_super
+        assert struct.unpack_from("<I", recovered_inode, 0x04)[0] == new_size
+        assert struct.unpack_from("<I", recovered_inode, 0x1C)[0] == 6
+        assert _extent_root_physical(recovered_inode, 0) == data_block
+        assert _extent_root_physical(recovered_inode, 1) == candidate
+        for home, expected in (
+            (data_block, expected_data),
+            (candidate, expected_candidate),
+            (bitmap_home, expected_bitmap),
+            (gdt_home, expected_gdt),
+            (super_home, expected_super),
+            (inode_home, expected_inode_home),
+            (xattr_block, original_xattr),
+        ):
+            assert _read_ext4_home(
+                recovered, home, block_size=block_size
+            ) == expected
+
+        _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+            recovered,
+            stable,
+            expected_file=expected_file,
+            expected_epoch_ms=second_epoch_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            expected_blocks=6,
+            prefix="_CTH-S",
+            marker="EXT4-PUBLIC-CROSS-TAIL-W37-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        for home, expected in (
+            (data_block, expected_data),
+            (candidate, expected_candidate),
+            (bitmap_home, expected_bitmap),
+            (gdt_home, expected_gdt),
+            (super_home, expected_super),
+            (inode_home, expected_inode_home),
+            (xattr_block, original_xattr),
+        ):
+            assert _read_ext4_home(
+                stable, home, block_size=block_size
+            ) == expected
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
 def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_late_map_refusal(
     writer_activation_fixture: dict[str, object], tmp_path: Path
 ) -> None:
