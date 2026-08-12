@@ -18650,6 +18650,7 @@ VARIABLE _XH-BLOCK-OFF
 VARIABLE _XH-TYPE
 VARIABLE _XH-EA
 VARIABLE _XH-GROUP
+VARIABLE _XH-CANDIDATE-GROUP
 VARIABLE _XH-INODE-HOME
 VARIABLE _XH-INODE-OFF
 VARIABLE _XH-BITMAP-HOME
@@ -18946,10 +18947,20 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     0 ;
 
 : _XH-LOCATE-ACCOUNTING-HOMES  ( -- ior )
-    _XH-GROUP @ _XH-CTX @ _EXT4-LOAD-BLOCK-BITMAP
+    \ Candidate search begins at the inode group but may return from any
+    \ initialized group.  Derive the accounting owner from the selected
+    \ physical block; using the locality goal here would omit the real bitmap
+    \ (and possibly GDT page) from the reverse-owner certificate.
+    _XH-CANDIDATE @ _XH-CTX @ _EXT4-C.FIRST + @ -
+    _XH-CTX @ _EXT4-C.BPG + @ /MOD
+    _XH-CANDIDATE-GROUP ! DROP
+    _XH-CANDIDATE-GROUP @ _XH-CTX @ _EXT4-C.GROUPS + @ U< 0= IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _XH-CANDIDATE-GROUP @ _XH-CTX @ _EXT4-LOAD-BLOCK-BITMAP
     _XH-IOR ! _XH-BITMAP-HOME !
     _XH-IOR @ ?DUP IF EXIT THEN
-    _XH-GROUP @ _XH-CTX @ _EXT4-LOAD-DESC
+    _XH-CANDIDATE-GROUP @ _XH-CTX @ _EXT4-LOAD-DESC
     ?DUP IF EXIT THEN
     _EXT4-GD-BLOCK @ _XH-GDT-HOME !
     _XH-CTX @ _EXT4-PRIMARY-SUPER-BLOCK
@@ -19080,6 +19091,19 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _XH-CANDIDATE @ _XH-WRITER @
     _EXT4-JTX-DATA-PUT ?DUP IF EXIT THEN
     -1 _XH-PUBLISHED !
+    0 ;
+
+\ Bind the allocation builder's independently derived geometry back to the
+\ homes covered by the pre-mutation reverse-owner certificate.  This turns a
+\ future drift between candidate planning and accounting staging into an
+\ aborted transaction rather than an unproved metadata replacement.
+: _XH-REQUIRE-STAGED-ACCOUNTING-HOMES  ( -- ior )
+    _EXT4-JAB-GROUP @ _XH-CANDIDATE-GROUP @ <>
+    _EXT4-JAB-BITMAP-HOME @ _XH-BITMAP-HOME @ <> OR
+    _EXT4-JAB-GDT-HOME @ _XH-GDT-HOME @ <> OR
+    _EXT4-JAB-SUPER-HOME @ _XH-SUPER-HOME @ <> OR IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
     0 ;
 
 : _XH-ENTRY-PHYSICAL!  ( physical-block extent-entry -- )
@@ -19228,6 +19252,9 @@ CREATE _XH-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
     THEN
     _XH-CANDIDATE @ _XH-WRITER @
     _EXT4-JTX-STAGE-ALLOCATE-BLOCK ?DUP IF
+        _XH-FAIL-AFTER-PUBLISH EXIT
+    THEN
+    _XH-REQUIRE-STAGED-ACCOUNTING-HOMES ?DUP IF
         _XH-FAIL-AFTER-PUBLISH EXIT
     THEN
     _EXT4-JAB-NEW-SUPER-FREE @ _XH-NEW-FREE !
