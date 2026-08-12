@@ -846,10 +846,12 @@ named staged binding publishes qualified existing-block overwrite, strict
 no-gap append inside an initialized partial EOF block, and allocation-backed
 fill of complete in-size holes plus block-bounded growth from exact aligned EOF,
 including exact-write composition through additional allocated EOF blocks and
-the depth-zero saturated-root transition to one checksummed external leaf.
-Ordinary allocation retains exact `4/1/0` credit; the leaf form measures its
+the depth-zero saturated-root transition to one checksummed external leaf, then
+in-place allocation mutation of that exact singleton depth-one leaf. Ordinary
+depth-zero allocation retains exact `4/1/0` credit; root growth measures its
 deduplicated bitmap/GDT/super/leaf/inode topology as exact `5/1/0` through
-`7/1/0` from a containing caller profile.
+`7/1/0`, while an existing-leaf edit uses exact `5/1/0`, from a containing
+caller profile.
 Initialized allocation may cross the qualified group-0-to-group-1 boundary
 when both descriptors reside in the same primary GDT block, with the selected
 candidate's own bitmap and descriptor homes certified, and may cross from
@@ -1348,8 +1350,12 @@ and journals one checksummed external leaf, composes both blocks' allocation
 accounting, and rewrites the resident root to one depth-one index. Exact credit
 is derived from the deduplicated home set rather than forced to a fixed maximum:
 ordinary allocation uses `4/1/0`, while this one-leaf form uses `5/1/0`
-through `7/1/0`.
-Because the inode remains linked throughout, neither form creates orphan state.
+through `7/1/0`. Allocation may continue from that exact singleton depth-one
+shape when its one resident index names one checksum-valid external leaf. An
+in-place leaf insertion or exact initialized coalesce uses `5/1/0` for the data
+bitmap, primary GDT, primary superblock, existing leaf, and inode homes.
+Because the inode remains linked throughout, none of these forms creates orphan
+state.
 Broader orphan shapes remain a final-profile backlog unless external evidence
 or a next operation makes them reachable.
 
@@ -1373,24 +1379,26 @@ block; a larger exact request is deliberately split into independently
 checkpointed growth transactions. Initialized overwrite and
 strict initialized-tail append each consume `1/1/0`; allocation-backed fill of
 a complete in-size hole and aligned-EOF growth consume exact `4/1/0` when the
-mapping inserts or coalesces in the resident root. A saturated unmergeable
-four-entry root instead consumes exact deduplicated `5/1/0`, `6/1/0`, or
-`7/1/0`, depending on whether the data and leaf allocations share bitmap and
-primary-GDT homes. The bound writer profile is a containing capacity, while
-each admitted public transaction begins only its measured exact tuple; the
-exact-six tuple is additionally verified by typed stage/abort. This removes both a
+mapping inserts or coalesces in the resident depth-zero root. Editing the
+existing leaf of the exact singleton depth-one form consumes `5/1/0`. A
+saturated unmergeable four-entry depth-zero root instead consumes exact
+deduplicated `5/1/0`, `6/1/0`, or `7/1/0`, depending on whether the data and
+leaf allocations share bitmap and primary-GDT homes. The bound writer profile
+is a containing capacity, while each admitted public transaction begins only
+its measured exact tuple; the exact-six tuple is additionally verified by
+typed stage/abort. This removes both a
 caller-size limit and first-operation workspace selection from the qualified
 size-preserving surface, supplies bounded allocation for the admitted hole
 shape, and supplies strict growth inside an existing initialized tail or
 through additional exact aligned boundaries. It also supplies the first
 extent-root composition form, from an inline depth-zero root to one external
 depth-zero leaf under a singleton depth-one root. It does not supply a batched
-or atomic multi-block transaction, sparse/gap EOF growth, mutation of an
-already depth-positive tree, growth beyond that one-leaf form, allocation
-geometry beyond the qualified group-0-to-group-1 and group-0-to-group-16
-ordinary transitions plus the typed-stage group-0/group-1 and public
-group-9/group-16 root-growth pairs across the first two primary GDT blocks, or
-namespace operations.
+or atomic multi-block transaction, sparse/gap EOF growth, splitting a full
+unmergeable leaf, mutation of a multi-leaf or deeper tree, allocation geometry
+beyond the qualified group-0-to-group-1 and group-0-to-group-16 ordinary
+transitions plus the typed-stage group-0/group-1 and public group-9/group-16
+root-growth pairs across the first two primary GDT blocks, or namespace
+operations.
 Its progress and later-error behavior is
 qualified through `VFS-WRITE?` and `VFS-WRITE-EXACT` on
 `EXT4-STAGED-WRITE-BINDING`. That
@@ -1400,8 +1408,9 @@ Positive-credit initialized overwrite retains conservative ordered-sector
 prefix progress because its bytes were already reachable. Hole fill and strict
 append use negative-credit, commit-granular progress, as does aligned growth
 with signed metadata credit `-4` for an ordinary edit or exact `-5` through
-`-7` for root growth: newly reachable caller bytes remain unconfirmed until
-successful journal emission. Generic VFS
+`-7` for root growth, and exact `-5` for an existing singleton depth-one leaf
+edit: newly reachable caller bytes remain unconfirmed until successful journal
+emission. Generic VFS
 advances only by that operation's confirmed progress and blocks retry after
 writer quarantine.
 
@@ -1439,15 +1448,18 @@ Allocation-backed aligned-EOF growth is also current operation-admitted
 production capability, not a toy or provisional geometry model. Its documented
 mutation envelope is the authenticated 1 KiB/256-byte-inode form, a linked
 regular file with exact `EXTENTS` flags, exact block-aligned EOF and no gap, an
-unmapped target per block-bounded callback, and an authenticated depth-zero
-resident extent root. The mapping may use a sorted spare-slot insertion, exact
-initialized coalescing, or the saturated-root transition described below.
-Mapped or unwritten conversion, mutation of an already depth-positive tree,
-growth beyond one new external leaf, mixed overwrite plus growth, and
-sparse/gap growth are stable refusals. Request-shape refusals occur before
-clock sampling or I/O. Structural-map and writer-capacity refusals complete
-after that callback's clock sample, but during write-free measurement or dry
-staging before activation.
+unmapped target per block-bounded callback, and either an authenticated
+depth-zero resident extent root or exactly one resident depth-one index naming
+one checksum-valid external leaf. The depth-zero mapping may use a sorted
+spare-slot insertion, exact initialized coalescing, or the saturated-root
+transition described below. The singleton depth-one mapping inserts into the
+existing leaf when it has spare capacity or coalesces in place without a split.
+Mapped or unwritten conversion, a full unmergeable leaf, more than one resident
+index/leaf, deeper-tree mutation, mixed overwrite plus growth, and sparse/gap
+growth are stable refusals. Request-shape refusals occur before clock sampling
+or I/O. Structural-map and writer-capacity refusals complete after that
+callback's clock sample, but during write-free measurement or dry staging
+before activation.
 
 The ordinary exact `4/1/0` transaction writes one ordered full-block image
 initialized to zero outside the caller span, then journals the allocation
@@ -1599,12 +1611,45 @@ allocations; recovery replays exactly bitmap 259, GDT 2, primary superblock 1,
 leaf 1355, and inode home 278. It never rewrites ordered data block 1354, and the
 next ordinary remount is write-free and byte-stable.
 
+The allocation ratchet now continues from the resulting exact singleton
+depth-one topology. Its resident root must contain one index naming one
+checksum-valid external depth-zero leaf. The edit snapshots and reauthenticates
+both inode and leaf, inserts when the leaf has spare capacity or performs an
+exact in-place initialized coalesce, and restamps the leaf checksum. If the
+leaf's first logical key changes, the inode after-image repairs the sole
+resident index key while preserving the leaf pointer and authenticated header
+generations. The exact `5/1/0` transaction retains the data bitmap, primary
+GDT, primary superblock, existing leaf, and inode; ordered data precedes those
+homes. It allocates only one new data block, so at 1 KiB `i_blocks` advances by
+two 512-byte sectors and free space falls by one. A full leaf may still
+coalesce without adding an entry, but a full unmergeable leaf, more than one
+resident index/leaf, and deeper trees remain unsupported.
+
+Focused qualification measures 862,136,179 cold-source guest steps. The public
+journey checkpoints a partial-tail `1/1/0` leg and then inserts the next logical
+block into the existing leaf under exact `5/1/0` credit in 866,699,891 steps;
+its ordinary byte-stable, write-free remount measures 511,313,266. The gate
+checks exact leaf bytes and checksum, preserved singleton root topology,
+allocation and `i_blocks` accounting, poisoned-candidate zeroing, hard-link
+readback, `debugfs`, and read-only `e2fsck`.
+
+The closure set additionally inserts a new first extent before a resident key
+of two and verifies that the inode key repairs to zero without changing the
+leaf pointer or tree shape. Full-byte revalidation returns `STALE` for a
+different checksum-valid leaf image. Typed gates reject own-data, own-xattr,
+and other-linked-inode aliases of the leaf, and reject a saturated unmergeable
+84-entry leaf without publishing transaction entries or home writes. A
+committed W23 existing-leaf cut replays exactly bitmap, GDT, primary super,
+leaf, and inode before a write-free stable remount, without rewriting ordered
+data.
+
 For a depth-zero target, the current edit attaches the selected block by sorted
 singleton insertion, exact logical-and-physical initialized coalescing, or the
 single-leaf root transition. A full resident root therefore succeeds when
 coalescing preserves its entry count or when a containing profile and two free
-blocks admit the measured `5/1/0` through `7/1/0` transition. Allocation mutation beginning
-from an already depth-positive root remains unsupported.
+blocks admit the measured `5/1/0` through `7/1/0` transition. The exact
+singleton depth-one target continues through the in-place edit above; further
+leaf or tree growth remains unsupported.
 
 The positive composition gate now crosses two distinct initialized blocks in
 the real depth-1 extent file with one `VFS-WRITE-EXACT` request. The first
@@ -1631,8 +1676,9 @@ extent while the inline root remains at three entries. This qualifies adjacent
 initialized coalescing as part of the current hole-fill operation. If a later
 hole-fill callback instead reaches a saturated unmergeable root, the current
 public path measures and composes the one-leaf `5/1/0` through `7/1/0` transition described
-above; only mutation beginning from that resulting depth-positive tree or
-further tree growth remains unsupported.
+above. A later callback may now edit that resulting leaf under exact `5/1/0`
+when the root remains a singleton and the leaf can insert or coalesce without a
+split; multi-leaf or deeper growth remains unsupported.
 
 The staged-operation crash evidence includes the final commit flush of a
 second write through the reused public writer. The successful trace derives

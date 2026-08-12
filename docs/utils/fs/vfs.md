@@ -30,12 +30,22 @@ implemented.
 
 Allocation-backed hole fill and aligned-EOF growth currently require
 authenticated 1 KiB filesystem geometry, 256-byte inodes, a linked regular file
-with an unmapped target in an authenticated inline depth-zero extent root, and
-one nonempty target per block-bounded callback. Aligned growth additionally requires exact
-no-gap block-aligned EOF. A spare-slot insertion or exact initialized
-coalescing edit uses an exact `4/1/0` transaction: it orders one fully
-initialized zero-backed data block before journal authority and journals the
-allocation bitmap, primary GDT, primary superblock, and inode after-images.
+with an unmapped target and either an authenticated inline depth-zero extent
+root or exactly one resident depth-one index naming one checksum-valid external
+leaf, and one nonempty target per block-bounded callback. Aligned growth
+additionally requires exact no-gap block-aligned EOF. A depth-zero spare-slot
+insertion or exact initialized coalescing edit uses an exact `4/1/0`
+transaction: it orders one fully initialized zero-backed data block before
+journal authority and journals the allocation bitmap, primary GDT, primary
+superblock, and inode after-images.
+
+The singleton depth-one form inserts into an existing leaf with spare capacity
+or coalesces in place without splitting it. It uses exact `5/1/0`: the data
+allocation bitmap, primary GDT, primary superblock, existing leaf, and inode
+are the five metadata homes. The leaf is checksummed again, and an edit that
+changes its first logical key repairs the resident index key in the inode. It
+allocates only the new data block, so on 1 KiB geometry `i_blocks` rises by two
+512-byte sectors and free space falls by one.
 
 A saturated four-entry root whose new mapping cannot coalesce instead grows to
 one checksummed external leaf. The operation allocates a second block for that
@@ -48,17 +58,18 @@ credit; a four-metadata profile refuses this five-or-more-home form with
 `NOSPC` after one callback clock sample but before transaction activation or
 media I/O. Root growth consumes two filesystem blocks, so 1 KiB `i_blocks`
 rises by four 512-byte sectors and free space falls by two. Signed credit keeps
-both allocation forms commit-granular.
+all allocation forms commit-granular.
 
 Gaps and mixed overwrite/growth refuse before clock sampling or media I/O. Each
 callback is block-bounded; a larger qualified request returns short progress,
-and `VFS-WRITE-EXACT` chains independently durable callbacks. Mapped or unwritten targets, mutation
-of an already depth-positive tree, and growth beyond the single external-leaf
-form remain structural refusals. Insufficient root-topology profile capacity is
-measured after that allocation callback's clock sample but before activation or
-media I/O; the ordinary `4/1/0` floor for a partial-tail crossing request is
-preflighted before its first callback. Linked hole fill and growth create no
-orphan state.
+and `VFS-WRITE-EXACT` chains independently durable callbacks. Mapped or
+unwritten targets, a full unmergeable existing leaf, a resident depth-one root
+with more than one index, and deeper trees remain structural refusals; the
+current mutation path does not split leaves or grow the singleton depth-one
+tree. Insufficient root-topology profile capacity is measured after that
+allocation callback's clock sample but before activation or media I/O; the
+ordinary `4/1/0` floor for a partial-tail crossing request is preflighted before
+its first callback. Linked hole fill and growth create no orphan state.
 Broader write and recovery cases advance from reachable evidence while full
 `akashic-ext4-rw-v1` production capability remains the release goal. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate
