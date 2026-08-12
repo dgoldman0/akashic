@@ -848,7 +848,9 @@ fill of complete in-size holes plus block-bounded growth from exact aligned EOF,
 including exact-write composition through additional allocated EOF blocks;
 initialized allocation may cross the qualified group-0-to-group-1 boundary
 when both descriptors reside in the same primary GDT block, with the selected
-candidate's own bitmap and descriptor homes certified;
+candidate's own bitmap and descriptor homes certified, and may cross from
+group 0 to initialized group 16 on the next primary GDT block in the exact
+18-group supplemental geometry;
 the ordinary ext4 binding remains read-only and every other mutation capability
 remains disabled. Modern
 `ORPHAN_PRESENT` and a nonzero legacy
@@ -1364,8 +1366,9 @@ size-preserving surface, supplies bounded allocation for the admitted hole
 shape, and supplies strict growth inside an existing initialized tail or
 through additional exact aligned boundaries. It does not supply a batched or
 atomic multi-block transaction, sparse/gap EOF growth, extent-root growth,
-allocation geometry beyond the qualified initialized same-GDT-page group
-transition, or namespace operations. Its progress and later-error behavior is
+allocation geometry beyond the qualified initialized group-1 and group-16
+transitions across the first two primary GDT blocks, or namespace operations.
+Its progress and later-error behavior is
 qualified through `VFS-WRITE?` and `VFS-WRITE-EXACT` on
 `EXT4-STAGED-WRITE-BINDING`. That
 descriptor alone adds `WRITE` and omits `READ_ONLY`; the ordinary
@@ -1469,9 +1472,29 @@ group-1 allocation bit is durable while GDT, superblock, and inode checkpoint
 homes remain old. Recovery replays exactly homes 260, 2, 1, and 278 without
 rewriting candidate 8451, group-0 bitmap 259, or ballast inode 279, then reaches
 the exact successful image and a hash-identical zero-I/O remount. The focused
-four-check qualification passes in 199.19 host seconds. This evidence does not
-yet admit cross-GDT-page descriptors, allocation into `BLOCK_UNINIT` groups,
-other block sizes, partial-last-group mutation, or arbitrary layout profiles.
+four-check qualification passes in 199.19 host seconds.
+
+Cross-primary-GDT-page allocation is qualified by commit `5c19364` on a pinned
+144 MiB, 18-group, 1 KiB/256-byte-inode supplemental image. Groups 0--15 use
+primary GDT block 2 and group 16 begins block 3 at descriptor offset 0. A valid
+checksummed depth-one ballast inode consumes all free runs in initialized
+groups 0, 1, 3, 5, 7, 8, and 9 while leaving groups 2, 4, 6, and 10--15
+`BLOCK_UNINIT`. The group-0 target's next aligned-EOF allocation therefore
+selects physical block 131333 at group-16 index 260 and replaces bitmap home
+131073, GDT home 3, primary-super home 1, and inode home 295. Local GDT block 2,
+ballast inode 296, and ballast leaf 2504 remain byte-exact. Exact public success,
+hard-link readback, zero-backed suffix, stable remount, pinned `debugfs`, and
+read-only `e2fsck` all pass.
+
+At W20, bitmap 131073 is already checkpointed when descriptor 16 tears in GDT
+home 3, while the primary superblock and inode remain old. Recovery writes
+exactly homes 131073, 3, 1, and 295 and never rewrites candidate 131333, group-0
+bitmap 260, local GDT 2, ballast inode 296, or leaf 2504. It reaches the exact
+success image and a checker-clean hash-identical zero-I/O remount. The focused
+four-check set passes sequentially in 249.82 seconds. This evidence still does
+not admit allocation into `BLOCK_UNINIT` groups, wraparound, nonzero descriptor
+offsets on the second GDT page, more primary GDT pages, other block sizes,
+partial-last-group mutation, or arbitrary layout profiles.
 
 The aligned-growth W7 and W22 cuts close both sides of allocation reachability.
 At W7 the ordered candidate tears before journal authority: the callback reports
