@@ -18,7 +18,10 @@ through additional newly allocated logical blocks. That route uses an optional
 `1/1/0` tail RMW followed by independently checkpointed `4/1/0` aligned
 allocations through one reusable writer. Each callback is independently
 committed and synchronously checkpointed, targets at most one logical block,
-and makes no cross-callback atomicity promise. The
+and makes no cross-callback atomicity promise. Free-block selection may cross
+from the target inode's initialized group into a later initialized group; the
+current public evidence covers a group-0-to-group-1 transition whose
+descriptors share one primary GDT block. The
 broader 1/2/4 KiB and 128/256-byte-inode forms remain available to read and
 recovery paths; 2/4 KiB and 128-byte-inode mutation await equivalent
 qualification. The driver also
@@ -821,6 +824,17 @@ only such groups advertise free space, selection returns a stable unsupported
 result rather than claiming disk-full or interpreting nonexistent bitmap
 authority.
 
+The allocation-backed file operation derives the candidate group again from
+the selected physical block before its reverse-owner proof. It certifies that
+group's exact block-bitmap and primary-GDT homes rather than reusing the inode's
+locality group. After `_EXT4-JTX-STAGE-ALLOCATE-BLOCK` independently derives
+and stages the accounting replacements, the operation requires its staged
+group, bitmap, GDT, and primary-super homes to equal those certified homes. A
+mismatch aborts and scrubs the transaction before the inode after-image is
+retained. This binding is required even when two group descriptors happen to
+share one GDT block, because their block-bitmap homes and descriptor offsets
+remain distinct.
+
 The enclosing file operation must still perform complete reverse-owner proof,
 ordered full-block initialization, an authenticated insert-or-coalesce
 extent-root edit, `i_blocks` accounting, and inode checksum work in the same
@@ -1564,6 +1578,34 @@ multi-block atomicity, and it creates no orphan state. A combined aligned-EOF,
 cross-tail, and additional-EOF capstone passes all 13 selected success,
 external-tool, refusal, and recovery checks sequentially in 805.56 host seconds.
 
+Commits `d367584` and `38a6d03` qualify one broader initialized allocation
+boundary without claiming arbitrary geometry. A checksum-valid unwritten
+ballast extent consumes the canonical group-0 free run while leaving the
+hard-linked target at its 1,024-byte aligned EOF. Its next 24-byte append starts
+selection in the inode's group 0 but obtains physical block 8451 from initialized
+group 1. The exact replacement homes are group-1 block bitmap 260, primary GDT
+block 2 at descriptor offset 64, primary superblock home 1, and target inode
+home 278. The operation maps logical block 1, advances `i_size` to 1,048 and
+`i_blocks` to 6, decrements group 1 and global free space once, leaves the
+group-0 bitmap and descriptor unchanged, and zeroes the unused candidate
+suffix. Both hard links, a write-free stable remount, pinned `debugfs`, and
+read-only `e2fsck` agree on the result.
+
+The paired refusal maps a live non-target extent to the actual selected
+group-1 bitmap home 260. Reverse-owner proof rejects the operation with the
+data-map corruption class before any media I/O; candidate 8451 remains free,
+poisoned, and unmapped, and every target, ballast, and accounting home remains
+unchanged. The distinct committed checkpoint cut is W19 at bitmap home 260,
+after its allocation bit becomes durable but before the GDT, superblock, or
+inode home is checkpointed. Fresh recovery replays exactly bitmap 260, GDT 2,
+super 1, and inode 278; it never rewrites ordered candidate 8451, group-0 bitmap
+259, or ballast inode home 279. The repaired image equals the exact success
+image and reaches a hash-identical zero-I/O remount. These four focused
+success, external-tool, alias-refusal, and W19 checks pass sequentially in
+199.19 host seconds. Existing W7 and W22 evidence continues to close the
+unchanged `4/1/0` transaction's precommit reachability and final-inode
+checkpoint endpoints.
+
 ### Allocation-backed in-size hole fill
 
 The staged binding publicly routes an exact clean unmapped target to the typed
@@ -1903,9 +1945,9 @@ is present only in `EXT4-STAGED-WRITE-OPS`. Generic `VFS-WRITE?` advances only
 the calling FD by the returned confirmed prefix; the callback itself owns no
 FD. This is a real, deliberately named staged capability. It does not make the
 ordinary ext4 binding writable and does not imply support for general data
-shapes, arbitrary allocation geometry beyond the qualified block transactions
-and their evidenced composition, sparse/gap growth, depth-positive extent
-mutation, or namespace mutation.
+shapes, allocation geometry beyond the qualified block transactions and their
+evidenced same-primary-GDT-page initialized group transition, sparse/gap
+growth, depth-positive extent mutation, or namespace mutation.
 
 Controlled sequential-write qualification tears the first inode-table home
 write at byte 269, one byte into the target inode's new `i_ctime`. The ordered
@@ -2092,10 +2134,12 @@ candidate/W22 inode-home crash closure. Cross-tail composition adds success,
 pinned external-tool, deterministic-refusal, late clean-refusal, W22 ordered-
 candidate, and W37 committed-inode closure. Additional allocated EOF composition
 adds insert-then-coalesce success and late full-root durable-prefix refusal. The
-next write ratchets broaden
+same-primary-GDT-page initialized cross-group slice adds candidate-derived
+accounting-home certification, actual-bitmap alias refusal, and W19 replay of
+the exact later-group homes. The next write ratchets broaden
 from evidence produced by these real writes rather than speculative orphan
 expansion. General sparse/gap growth, unwritten conversion, extent-root growth,
-broader allocation and mutation geometry, multi-
+cross-GDT-page and other broader allocation and mutation geometry, multi-
 block atomicity, truncation, and namespace mutation remain later capabilities.
 
 The remaining boundaries are the final-profile closure inventory, not an
@@ -2108,6 +2152,10 @@ ordered list of prerequisites for retaining the qualified write surface:
   geometry. The initialized-overwrite extent corpus reaches depth 1; each hole
   fill or aligned-EOF allocation currently edits only a depth-0 resident root,
   using either a spare-slot insertion or an exact initialized coalescing edit.
+  Allocation selection is qualified across one initialized group-0-to-group-1
+  boundary whose 64-byte descriptors share the same 1 KiB primary GDT block;
+  cross-GDT-page, `BLOCK_UNINIT`, partial-last-group mutation, and 2/4 KiB
+  allocation remain unqualified.
   The consecutive-hole
   journey proves coalescing by extending the first allocated singleton to
   length two while leaving the root at three entries. The planner also admits

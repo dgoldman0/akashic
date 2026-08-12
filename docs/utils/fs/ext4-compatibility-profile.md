@@ -846,6 +846,9 @@ named staged binding publishes qualified existing-block overwrite, strict
 no-gap append inside an initialized partial EOF block, and allocation-backed
 fill of complete in-size holes plus block-bounded growth from exact aligned EOF,
 including exact-write composition through additional allocated EOF blocks;
+initialized allocation may cross the qualified group-0-to-group-1 boundary
+when both descriptors reside in the same primary GDT block, with the selected
+candidate's own bitmap and descriptor homes certified;
 the ordinary ext4 binding remains read-only and every other mutation capability
 remains disabled. Modern
 `ORPHAN_PRESENT` and a nonzero legacy
@@ -1361,7 +1364,8 @@ size-preserving surface, supplies bounded allocation for the admitted hole
 shape, and supplies strict growth inside an existing initialized tail or
 through additional exact aligned boundaries. It does not supply a batched or
 atomic multi-block transaction, sparse/gap EOF growth, extent-root growth,
-arbitrary allocation geometry, or namespace operations. Its progress and later-error behavior is
+allocation geometry beyond the qualified initialized same-GDT-page group
+transition, or namespace operations. Its progress and later-error behavior is
 qualified through `VFS-WRITE?` and `VFS-WRITE-EXACT` on
 `EXT4-STAGED-WRITE-BINDING`. That
 descriptor alone adds `WRITE` and omits `READ_ONLY`; the ordinary
@@ -1447,6 +1451,27 @@ timestamp, and allocation state retain exactly the first 1,024-byte durable
 prefix. The second candidate remains free, poisoned, unmapped, and unwritten;
 ordinary remount is write-free and pinned `e2fsck` accepts the prefix image.
 Neither endpoint creates orphan state.
+
+Initialized cross-group allocation is qualified by commits `d367584` and
+`38a6d03` for one exact 1 KiB/256-byte-inode topology. A valid unwritten ballast
+extent consumes group 0's free run, so a 24-byte aligned-EOF append to the
+group-0 target inode selects physical block 8451 in initialized group 1. The
+operation certifies and replaces group-1 bitmap home 260, primary GDT home 2 at
+descriptor offset 64, primary-super home 1, and target-inode home 278. It leaves
+group-0 bitmap 259, its descriptor, and ballast inode home 279 unchanged. Exact
+data, mapping, size/block/free accounting, both hard-link views, poisoned-suffix
+zeroing, stable remount, pinned `debugfs`, and read-only `e2fsck` checks pass.
+
+A live non-target extent aliasing actual bitmap home 260 is rejected before
+media I/O, proving that reverse-owner certification follows the selected group
+rather than the inode's locality group. At the distinct W19 committed cut, the
+group-1 allocation bit is durable while GDT, superblock, and inode checkpoint
+homes remain old. Recovery replays exactly homes 260, 2, 1, and 278 without
+rewriting candidate 8451, group-0 bitmap 259, or ballast inode 279, then reaches
+the exact successful image and a hash-identical zero-I/O remount. The focused
+four-check qualification passes in 199.19 host seconds. This evidence does not
+yet admit cross-GDT-page descriptors, allocation into `BLOCK_UNINIT` groups,
+other block sizes, partial-last-group mutation, or arbitrary layout profiles.
 
 The aligned-growth W7 and W22 cuts close both sides of allocation reachability.
 At W7 the ordered candidate tears before journal authority: the callback reports
