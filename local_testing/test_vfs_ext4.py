@@ -38289,6 +38289,7 @@ def _staged_public_selected_group_eof_growth(
     *,
     directory_name: str,
     epoch_ms: int,
+    max_steps: int = 1_200_000_000,
 ) -> dict[str, object]:
     """Allocate aligned EOF in a selected initialized nonlocal group."""
     path = geometry["path"]
@@ -38616,6 +38617,7 @@ def _staged_public_selected_group_eof_growth(
             patches=input_patches
             + ((candidate * block_size, bytes((0xA5,)) * block_size),),
             capture_media=media_path,
+            max_steps=max_steps,
         )
         _assert_emitted(output, "EXT4-PUBLIC-CROSS-GROUP-EOF")
         _assert_emitted(output, "EXT4-PUBLIC-CROSS-GROUP-UNMOUNT")
@@ -38757,6 +38759,7 @@ def staged_public_cross_gdt_page_eof_growth_fixture(
         tmp_path_factory,
         directory_name="ext4-public-cross-gdt-page-eof",
         epoch_ms=3_000_000_523_456,
+        max_steps=1_300_000_000,
     )
 
 
@@ -39589,6 +39592,7 @@ def test_staged_public_cross_gdt_page_tear_replays_second_descriptor_page(
     candidate = geometry["candidate"]
     candidate_group = geometry["candidate_group"]
     bitmap_home = geometry["bitmap_home"]
+    group0_bitmap_home = geometry["group0_bitmap_home"]
     local_gdt_home = geometry["local_gdt_home"]
     gdt_home = geometry["gdt_home"]
     super_home = geometry["super_home"]
@@ -39610,6 +39614,7 @@ def test_staged_public_cross_gdt_page_tear_replays_second_descriptor_page(
     assert isinstance(candidate, int)
     assert isinstance(candidate_group, int)
     assert isinstance(bitmap_home, int)
+    assert isinstance(group0_bitmap_home, int)
     assert isinstance(local_gdt_home, int)
     assert isinstance(gdt_home, int)
     assert isinstance(super_home, int)
@@ -39771,17 +39776,26 @@ def test_staged_public_cross_gdt_page_tear_replays_second_descriptor_page(
             assert not _write_ordinals_for_ext4_home(
                 recovery_trace, untouched_home, block_size=block_size
             )
-        for replayed_home in (
+        assert _write_ordinals_for_ext4_home(
+            recovery_trace,
             bitmap_home,
+            block_size=block_size,
+        ) == (1,)
+        assert _write_ordinals_for_ext4_home(
+            recovery_trace,
             gdt_home,
+            block_size=block_size,
+        ) == (2,)
+        assert _write_ordinals_for_ext4_home(
+            recovery_trace,
             super_home,
+            block_size=block_size,
+        ) == (3, 8)
+        assert _write_ordinals_for_ext4_home(
+            recovery_trace,
             inode_home,
-        ):
-            assert len(
-                _write_ordinals_for_ext4_home(
-                    recovery_trace, replayed_home, block_size=block_size
-                )
-            ) == 1
+            block_size=block_size,
+        ) == (4,)
         recovered_superblock, recovered_inode, _ = _ext4_inode_record(
             recovered, inode_number
         )
@@ -40226,12 +40240,12 @@ def test_staged_public_multi_allocated_eof_passes_external_oracles(
     _assert_e2fsck_clean(image, jbd2_toolchain)
 
 
-def test_staged_public_multi_allocated_eof_preserves_prefix_on_late_root_refusal(
+def test_staged_public_multi_allocated_eof_preserves_prefix_on_profile_capacity_refusal(
     writer_activation_fixture: dict[str, object],
     jbd2_toolchain: dict[str, object],
     tmp_path: Path,
 ) -> None:
-    """A full root on the second allocation preserves the first EOF block."""
+    """A five-home second leg preserves the first block under profile four."""
     path = writer_activation_fixture["image"]
     source_patches = writer_activation_fixture["source_patches"]
     activation_trace = writer_activation_fixture["success_trace"]
@@ -40334,8 +40348,8 @@ def test_staged_public_multi_allocated_eof_preserves_prefix_on_late_root_refusal
     )
     committed_nanoseconds = committed_milliseconds * 1_000_000
 
-    backing = tmp_path / "staged-multi-allocated-eof-late-refusal.img"
-    stable = tmp_path / "staged-multi-allocated-eof-late-refusal-stable.img"
+    backing = tmp_path / "staged-multi-allocated-eof-profile-capacity.img"
+    stable = tmp_path / "staged-multi-allocated-eof-profile-capacity-stable.img"
     try:
         output, trace, media_sha256 = run_recovery_forth(
             path,
@@ -40402,18 +40416,7 @@ def test_staged_public_multi_allocated_eof_preserves_prefix_on_late_root_refusal
                             "_MR-PROFILE-BIND-IOR 0=",
                             "_MR-OPEN-IOR 0=",
                             f"_MR-INITIAL-CURSOR {old_size} =",
-                            (
-                                "_MR-EXACT-IOR VFS-IOR-DOMAIN "
-                                "VFS-IOR-D-FORMAT ="
-                            ),
-                            (
-                                "_MR-EXACT-IOR VFS-IOR-REASON "
-                                "VFS-R-UNSUPPORTED ="
-                            ),
-                            (
-                                "_MR-EXACT-IOR VFS-IOR-DETAIL "
-                                "EXT4-D-DATA-MAP ="
-                            ),
+                            "_MR-EXACT-IOR VFS-E-NOSPC =",
                             "_MR-EXACT-IOR VFS-IOR-FLAGS 0=",
                             "_MR-LAST-IOR _MR-EXACT-IOR =",
                             f"_MR-CURSOR {committed_size} =",
@@ -40452,8 +40455,11 @@ def test_staged_public_multi_allocated_eof_preserves_prefix_on_late_root_refusal
                             f"_XH-SIZE @ {committed_size} =",
                             "_XH-LOGICAL @ 6 =",
                             f"_XH-CANDIDATE @ {second_candidate} =",
+                            "_XH-LEAF-CANDIDATE @ 1355 =",
+                            "_XH-ROOT-GROW @ 0<",
+                            "_XH-META-CREDIT @ 5 =",
+                            "_EXT4-MOW-CREDIT @ -5 =",
                             "_XH-ENTRIES @ 4 =",
-                            "_XH-PUBLISHED @ 0=",
                             "_MR-V V.FLAGS @ VFS-F-RO AND 0=",
                             "_MR-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                             (
@@ -40464,7 +40470,7 @@ def test_staged_public_multi_allocated_eof_preserves_prefix_on_late_root_refusal
                             *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                         ]
                     )
-                    + ' IF ." EXT4-MULTI-ALLOCATED-EOF-LATE-REFUSAL" THEN'
+                    + ' IF ." EXT4-MULTI-ALLOCATED-EOF-PROFILE-CAPACITY" THEN'
                 ),
                 "_MR-FD VFS-CLOSE? CONSTANT _MR-CLOSE-IOR",
                 "0 _MR-V VFS-UNMOUNT CONSTANT _MR-UNMOUNT-IOR",
@@ -40473,14 +40479,14 @@ def test_staged_public_multi_allocated_eof_preserves_prefix_on_late_root_refusal
                     "_MR-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
                     "_MR-PROFILE-ARENA ARENA-USED 0= AND "
                     "_MR-PROFILE-ARENA A.PTR @ _MR-PROFILE-BASE = AND "
-                    'IF ." EXT4-MULTI-ALLOCATED-EOF-LATE-UNMOUNT" THEN'
+                    'IF ." EXT4-MULTI-ALLOCATED-EOF-PROFILE-UNMOUNT" THEN'
                 ),
             ],
             patches=input_patches,
             capture_media=backing,
         )
-        _assert_emitted(output, "EXT4-MULTI-ALLOCATED-EOF-LATE-REFUSAL")
-        _assert_emitted(output, "EXT4-MULTI-ALLOCATED-EOF-LATE-UNMOUNT")
+        _assert_emitted(output, "EXT4-MULTI-ALLOCATED-EOF-PROFILE-CAPACITY")
+        _assert_emitted(output, "EXT4-MULTI-ALLOCATED-EOF-PROFILE-UNMOUNT")
         assert trace[: len(activation_trace)] == activation_trace
         assert trace.count(("write", first_candidate * 2, 2)) == 1
         assert trace.count(("write", second_candidate * 2, 2)) == 0
@@ -40528,7 +40534,7 @@ def test_staged_public_multi_allocated_eof_preserves_prefix_on_late_root_refusal
             expected_replayed=False,
             expected_blocks=committed_blocks,
             prefix="_MR-S",
-            marker="EXT4-MULTI-ALLOCATED-EOF-LATE-STABLE",
+            marker="EXT4-MULTI-ALLOCATED-EOF-PROFILE-STABLE",
         )
         assert stable_trace == ()
         assert stable_sha256 == media_sha256
@@ -45414,10 +45420,10 @@ def test_staged_public_cross_tail_exact_committed_inode_tear_replays_final_state
         stable.unlink(missing_ok=True)
 
 
-def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_late_map_refusal(
+def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_profile_capacity_refusal(
     writer_activation_fixture: dict[str, object], tmp_path: Path
 ) -> None:
-    """A clean second-leg refusal preserves the checkpointed tail prefix."""
+    """A five-home second leg preserves the tail under profile four."""
     path = writer_activation_fixture["image"]
     source_patches = writer_activation_fixture["source_patches"]
     activation_trace = writer_activation_fixture["success_trace"]
@@ -45427,6 +45433,7 @@ def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_late_map_r
 
     inode_number = 17
     candidate = 1351
+    leaf_candidate = 1354
     bitmap_home = 259
     gdt_home = 2
     superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
@@ -45445,7 +45452,12 @@ def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_late_map_r
     assert generation == 0
     assert tail_count == 8
     assert remaining_count == len(_STAGED_ALIGNED_APPEND_REPLACEMENT)
-    assert not _ext4_block_allocation_state(path, (candidate,))[candidate]
+    assert not any(
+        _ext4_block_allocation_state(
+            path,
+            (candidate, leaf_candidate),
+        ).values()
+    )
 
     allocated_patches, physical_ranges = _allocate_unlinked_extent_ranges(
         path,
@@ -45506,6 +45518,9 @@ def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_late_map_r
     original_candidate = _patched_ext4_home(
         path, input_patches, candidate, block_size=block_size
     )
+    original_leaf_candidate = _patched_ext4_home(
+        path, input_patches, leaf_candidate, block_size=block_size
+    )
     free_blocks_before = struct.unpack_from("<I", original_super, 0x0C)[0]
     expected_data = bytearray(original_data)
     expected_data[-tail_count:] = replacement[:tail_count]
@@ -45523,8 +45538,8 @@ def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_late_map_r
     )
     first_nanoseconds = first_milliseconds * 1_000_000
 
-    backing = tmp_path / "staged-cross-tail-late-map-refusal.img"
-    stable = tmp_path / "staged-cross-tail-late-map-refusal-stable.img"
+    backing = tmp_path / "staged-cross-tail-profile-capacity.img"
+    stable = tmp_path / "staged-cross-tail-profile-capacity-stable.img"
     try:
         output, trace, media_sha256 = run_recovery_forth(
             path,
@@ -45600,18 +45615,7 @@ def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_late_map_r
                             "_LR-PROFILE-USED _LR-PROFILE-SIZE =",
                             "_LR-OPEN-IOR 0=",
                             f"_LR-INITIAL-CURSOR {old_size} =",
-                            (
-                                "_LR-EXACT-IOR VFS-IOR-DOMAIN "
-                                "VFS-IOR-D-FORMAT ="
-                            ),
-                            (
-                                "_LR-EXACT-IOR VFS-IOR-REASON "
-                                "VFS-R-UNSUPPORTED ="
-                            ),
-                            (
-                                "_LR-EXACT-IOR VFS-IOR-DETAIL "
-                                "EXT4-D-DATA-MAP ="
-                            ),
+                            "_LR-EXACT-IOR VFS-E-NOSPC =",
                             "_LR-EXACT-IOR VFS-IOR-FLAGS 0=",
                             "_LR-LAST-IOR _LR-EXACT-IOR =",
                             f"_LR-CURSOR {committed_size} =",
@@ -45651,10 +45655,13 @@ def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_late_map_r
                             f"_EXT4-WR-CHUNK @ {remaining_count} =",
                             "_LR-ACTUAL 0=",
                             "_LR-MOW-ACTUAL 0=",
-                            "_EXT4-MOW-CREDIT @ -4 =",
+                            "_EXT4-MOW-CREDIT @ -5 =",
                             f"_XH-SIZE @ {committed_size} =",
                             "_XH-LOGICAL @ 7 =",
                             f"_XH-CANDIDATE @ {candidate} =",
+                            f"_XH-LEAF-CANDIDATE @ {leaf_candidate} =",
+                            "_XH-ROOT-GROW @ 0<",
+                            "_XH-META-CREDIT @ 5 =",
                             "_XH-ENTRIES @ 4 =",
                             "_XH-PUBLISHED @ 0=",
                             "_LR-STAT-BEFORE-IOR 0=",
@@ -45683,7 +45690,7 @@ def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_late_map_r
                             *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                         ]
                     )
-                    + ' IF ." EXT4-CROSS-TAIL-LATE-MAP-REFUSED" THEN'
+                    + ' IF ." EXT4-CROSS-TAIL-PROFILE-CAPACITY" THEN'
                 ),
                 "_LR-FD VFS-CLOSE? CONSTANT _LR-CLOSE-IOR",
                 "0 _LR-V VFS-UNMOUNT CONSTANT _LR-UNMOUNT-IOR",
@@ -45692,14 +45699,14 @@ def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_late_map_r
                     "_LR-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
                     "_LR-PROFILE-ARENA ARENA-USED 0= AND "
                     "_LR-PROFILE-ARENA A.PTR @ _LR-PROFILE-BASE = AND "
-                    'IF ." EXT4-CROSS-TAIL-LATE-MAP-UNMOUNTED" THEN'
+                    'IF ." EXT4-CROSS-TAIL-PROFILE-UNMOUNTED" THEN'
                 ),
             ],
             patches=input_patches,
             capture_media=backing,
         )
-        _assert_emitted(output, "EXT4-CROSS-TAIL-LATE-MAP-REFUSED")
-        _assert_emitted(output, "EXT4-CROSS-TAIL-LATE-MAP-UNMOUNTED")
+        _assert_emitted(output, "EXT4-CROSS-TAIL-PROFILE-CAPACITY")
+        _assert_emitted(output, "EXT4-CROSS-TAIL-PROFILE-UNMOUNTED")
         assert trace[: len(activation_trace)] == activation_trace
         assert _write_ordinals_for_ext4_home(
             trace, tail_data_block, block_size=block_size
@@ -45707,7 +45714,12 @@ def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_late_map_r
         assert _write_ordinals_for_ext4_home(
             trace, inode_home, block_size=block_size
         ) == (16,)
-        for untouched_home in (candidate, bitmap_home, gdt_home):
+        for untouched_home in (
+            candidate,
+            leaf_candidate,
+            bitmap_home,
+            gdt_home,
+        ):
             assert not _write_ordinals_for_ext4_home(
                 trace, untouched_home, block_size=block_size
             )
@@ -45738,9 +45750,15 @@ def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_late_map_r
         assert _read_ext4_home(
             backing, candidate, block_size=block_size
         ) == original_candidate
-        assert not _ext4_block_allocation_state(
-            backing, (candidate,)
-        )[candidate]
+        assert _read_ext4_home(
+            backing, leaf_candidate, block_size=block_size
+        ) == original_leaf_candidate
+        assert not any(
+            _ext4_block_allocation_state(
+                backing,
+                (candidate, leaf_candidate),
+            ).values()
+        )
 
         stable_output, stable_trace, stable_sha256 = run_recovery_forth(
             backing,
@@ -45795,12 +45813,12 @@ def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_late_map_r
                             "_LRS-UNMOUNT-IOR 0=",
                         ]
                     )
-                    + ' IF ." EXT4-CROSS-TAIL-LATE-MAP-STABLE" THEN'
+                    + ' IF ." EXT4-CROSS-TAIL-PROFILE-STABLE" THEN'
                 ),
             ],
             capture_media=stable,
         )
-        _assert_emitted(stable_output, "EXT4-CROSS-TAIL-LATE-MAP-STABLE")
+        _assert_emitted(stable_output, "EXT4-CROSS-TAIL-PROFILE-STABLE")
         assert stable_trace == ()
         assert stable_sha256 == media_sha256
     finally:

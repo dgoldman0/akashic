@@ -28,24 +28,45 @@ real ABI-1 production capabilities inside their documented envelope, not toy or
 provisional models; they do not claim that the complete writable profile is
 implemented.
 
-Aligned-EOF growth currently requires authenticated 1 KiB filesystem geometry,
-256-byte inodes, a linked regular file with an unmapped target in a depth-zero
-resident extent root, exact no-gap block-aligned EOF, and one nonempty request
-of at most one block. Its `4/1/0` transaction orders a fully initialized
-zero-backed new block before journal authority and journals the allocation
-bitmap, primary GDT, primary superblock, and inode after-images. Signed credit
-`-4` makes progress commit-granular; committed publication updates shared-vnode
-size, blocks, and times plus the filesystem free-block count. Gaps, mixed
-overwrite/growth, and wider requests refuse before clock sampling or media I/O.
-Mapped or unwritten targets, depth-positive mutation, unmergeable full roots,
-and insufficient writer capacity refuse during write-free preflight or dry
-staging before activation. Linked growth creates no orphan state. Broader write
-and recovery cases advance from reachable evidence while full
-`akashic-ext4-rw-v1` production capability remains the release goal.
-The operation-specific crash cuts preserve that VFS contract: W7 candidate
-tears return zero and leave old vnode/statfs state, while committed W22 inode-
-home tears return full progress, publish size/blocks/free/time before read-only
-quarantine, and replay the four metadata homes without rewriting ordered data.
+Allocation-backed hole fill and aligned-EOF growth currently require
+authenticated 1 KiB filesystem geometry, 256-byte inodes, a linked regular file
+with an unmapped target in an authenticated inline depth-zero extent root, and
+one nonempty target per block-bounded callback. Aligned growth additionally requires exact
+no-gap block-aligned EOF. A spare-slot insertion or exact initialized
+coalescing edit uses an exact `4/1/0` transaction: it orders one fully
+initialized zero-backed data block before journal authority and journals the
+allocation bitmap, primary GDT, primary superblock, and inode after-images.
+
+A saturated four-entry root whose new mapping cannot coalesce instead grows to
+one checksummed external leaf. The operation allocates a second block for that
+leaf, moves the four old extents plus the new extent into it, and rewrites the
+inline root as one depth-one index. Its exact transaction is the deduplicated
+`5/1/0`, `6/1/0`, or `7/1/0` topology formed by the data and leaf allocation
+bitmaps/GDT blocks, the primary superblock, leaf, and inode homes. A containing
+caller profile may be larger, but the callback begins only the measured exact
+credit; a four-metadata profile refuses this five-or-more-home form with
+`NOSPC` after one callback clock sample but before transaction activation or
+media I/O. Root growth consumes two filesystem blocks, so 1 KiB `i_blocks`
+rises by four 512-byte sectors and free space falls by two. Signed credit keeps
+both allocation forms commit-granular.
+
+Gaps and mixed overwrite/growth refuse before clock sampling or media I/O. Each
+callback is block-bounded; a larger qualified request returns short progress,
+and `VFS-WRITE-EXACT` chains independently durable callbacks. Mapped or unwritten targets, mutation
+of an already depth-positive tree, and growth beyond the single external-leaf
+form remain structural refusals. Insufficient root-topology profile capacity is
+measured after that allocation callback's clock sample but before activation or
+media I/O; the ordinary `4/1/0` floor for a partial-tail crossing request is
+preflighted before its first callback. Linked hole fill and growth create no
+orphan state.
+Broader write and recovery cases advance from reachable evidence while full
+`akashic-ext4-rw-v1` production capability remains the release goal. The
+ordinary operation-specific cuts retain their earlier contract: W7 candidate
+tears return zero, while committed W22 inode-home tears publish progress and
+replay four metadata homes without rewriting ordered data. In the distinct
+root-growth topology, a W23 tear of the newly allocated leaf home is recovered
+by replaying all five metadata homes, again without rewriting ordered data; the
+following ordinary remount is write-free and byte-stable.
 
 ## Quick start
 
