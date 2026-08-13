@@ -91,10 +91,17 @@ Broader write and recovery cases advance from reachable evidence while full
 `akashic-ext4-rw-v1` production capability remains the release goal. The
 existing multi-leaf depth-one ratchet is closed through target-leaf selection,
 selected-key repair, in-place editing under a full root, and selected-leaf
-splitting while the root retains index capacity. The immediate write ratchet is
-now shared inode allocation plus directory insertion exposed as `CREATE`, then shrink
-`TRUNCATE`/the distinct `UNLINK` lifetimes, `MKDIR`/`RMDIR`, hard `LINK`, and
-finally `RENAME`, with directory HTree depth expanded independently when those
+splitting while the root retains index capacity. The staged binding now also
+publishes the first atomic `CREATE` slice: it allocates one inode from an
+initialized inode group and inserts an empty root-owned mode-0666 regular file
+into authenticated slack in an existing one-block linear directory. The inode
+bitmap, group descriptor, primary superblock, new and parent inode records, and
+directory block form one deduplicated transaction of at most six metadata
+homes. Indexed or growing directories, directory xattrs/default ACLs, lazy
+inode-group initialization, and non-root credential policy still refuse before
+publication. The immediate write ratchet is now shrink `TRUNCATE` and the
+distinct `UNLINK` lifetimes, then `MKDIR`/`RMDIR`, hard `LINK`, and finally
+`RENAME`, with directory HTree depth expanded independently when those
 operations or a pinned corpus require it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate
 tears return zero, while committed W22 inode-home tears publish progress and

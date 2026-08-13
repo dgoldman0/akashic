@@ -4054,7 +4054,7 @@ def build_snapshot():
     # distinct cold source stages.  This preserves the existing measured ext4
     # watchdog instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
-    max_ext4_source_steps = 925_000_000
+    max_ext4_source_steps = 1_000_000_000
     bootstrap_steps = _feed_until_idle(system, bootstrap, max_crc_source_steps)
 
     def load_source_stage(
@@ -7211,7 +7211,7 @@ def test_binding_descriptors_are_valid_and_truthful(
                 "VFS-BF-STABLE-IDS OR CONSTANT _EXPECTED-E4-FLAGS"
             ),
             (
-                "EXT4-CAPS VFS-CAP-WRITE OR "
+                "EXT4-CAPS VFS-CAP-WRITE OR VFS-CAP-CREATE OR "
                 "CONSTANT _EXPECTED-E4-STAGED-CAPS"
             ),
             (
@@ -7226,10 +7226,12 @@ def test_binding_descriptors_are_valid_and_truthful(
                 "['] _EXT4-STAGED-WRITE-MOUNT <> "
                 "ELSE I VFS-OP-WRITE = IF "
                 "EXT4-STAGED-WRITE-OPS I CELLS + @ ['] _EXT4-WRITE <> "
+                "ELSE I VFS-OP-CREATE = IF "
+                "EXT4-STAGED-WRITE-OPS I CELLS + @ ['] _EXT4-CREATE <> "
                 "ELSE "
                 "EXT4-STAGED-WRITE-OPS I CELLS + @ "
                 "EXT4-OPS I CELLS + @ <> "
-                "THEN THEN IF FALSE UNLOOP EXIT THEN "
+                "THEN THEN THEN IF FALSE UNLOOP EXIT THEN "
                 "LOOP TRUE ;"
             ),
             (
@@ -57104,6 +57106,209 @@ def test_probe_nonmatch_and_checked_io_error(
         ),
     )
     _assert_emitted(output, "EXT4-PROBE-IO")
+
+
+def test_staged_vfs_create_without_clock_rolls_back_before_io(
+    read_side_image: Path,
+) -> None:
+    output = run_forth(
+        read_side_image,
+        [
+            "T-ARENA CONSTANT _CNC-ARENA",
+            (
+                "_CNC-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _CNC-MOUNT-IOR CONSTANT _CNC-V"
+            ),
+            (
+                "_CNC-V V.ROOT @ _CNC-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _CNC-READDIR-IOR"
+            ),
+            "_CNC-V V.ICOUNT @ CONSTANT _CNC-ICOUNT-BEFORE",
+            "_CNC-V V.VCOUNT @ CONSTANT _CNC-VCOUNT-BEFORE",
+            (
+                'S" denied.txt" _CNC-V VFS-MKFILE? '
+                "CONSTANT _CNC-CREATE-IOR CONSTANT _CNC-D"
+            ),
+            (
+                'S" denied.txt" _CNC-V V.ROOT @ _VFS-FIND-CHILD '
+                "CONSTANT _CNC-CHILD"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_CNC-MOUNT-IOR 0=",
+                        "_CNC-READDIR-IOR 0=",
+                        "_CNC-CREATE-IOR VFS-E-UNSUPPORTED =",
+                        "_CNC-D 0=",
+                        "_CNC-CHILD 0=",
+                        "_CNC-V V.ICOUNT @ _CNC-ICOUNT-BEFORE =",
+                        "_CNC-V V.VCOUNT @ _CNC-VCOUNT-BEFORE =",
+                        "_CNC-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_CNC-V V.FLAGS @ VFS-F-RO AND 0=",
+                        "_CNC-V V.BCTX @ _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_CNC-V V.BCTX @ _EXT4-C.J.WRITER + @ 0=",
+                        "_CNC-V V.BCTX @ _EXT4-C.WCLOCK-XT + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-CREATE-NO-CLOCK" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-CREATE-NO-CLOCK")
+
+
+def test_staged_vfs_create_commits_empty_regular_file_and_external_oracles(
+    extent_writer_activation_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    path = extent_writer_activation_fixture["image"]
+    source_patches = extent_writer_activation_fixture["source_patches"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    seconds, milliseconds = divmod(_STAGED_APPEND_EPOCH_MS, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    backing = tmp_path / "staged-create.img"
+    output, trace, _ = run_recovery_forth(
+        path,
+        backing,
+        [
+            "VARIABLE _CR-CLOCK-CALLS",
+            (
+                ": _CR-NOW ( context -- epoch-ms ior ) "
+                "DROP 1 _CR-CLOCK-CALLS +! "
+                f"{_STAGED_APPEND_EPOCH_MS} 0 ;"
+            ),
+            "CREATE _CR-STAT VFS-STATFS-SIZE ALLOT",
+            "T-ARENA CONSTANT _CR-ARENA",
+            (
+                "_CR-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _CR-MOUNT-IOR CONSTANT _CR-V"
+            ),
+            "_CR-V _EXT4-CTX CONSTANT _CR-CTX",
+            (
+                "' _CR-NOW 0 _CR-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _CR-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_CR-PROFILE",
+                "_CR-V",
+                metadata_capacity=6,
+                data_capacity=0,
+            ),
+            (
+                "_CR-STAT VFS-STATFS-SIZE _CR-V VFS-STATFS "
+                "CONSTANT _CR-STAT-BEFORE-IOR"
+            ),
+            "_CR-STAT VSF.FFREE @ CONSTANT _CR-FREE-BEFORE",
+            (
+                'S" created.txt" _CR-V VFS-MKFILE? '
+                "CONSTANT _CR-CREATE-IOR CONSTANT _CR-D"
+            ),
+            "_CR-D D.VNODE @ CONSTANT _CR-VN",
+            "_CR-V V.ROOT @ D.VNODE @ CONSTANT _CR-ROOT-VN",
+            (
+                'S" /created.txt" _CR-V VFS-RESOLVE? '
+                "CONSTANT _CR-RESOLVE-IOR CONSTANT _CR-RESOLVED"
+            ),
+            (
+                "_CR-STAT VFS-STATFS-SIZE _CR-V VFS-STATFS "
+                "CONSTANT _CR-STAT-AFTER-IOR"
+            ),
+            "_CR-STAT VSF.FFREE @ CONSTANT _CR-FREE-AFTER",
+            "_XC-META-COUNT @ CONSTANT _CR-META-COUNT",
+            "_XC-INODE @ CONSTANT _CR-INODE",
+            "_XC-NEW-GEN @ CONSTANT _CR-GEN",
+            "_CR-CTX _EXT4-C.J.WRITER + @ CONSTANT _CR-WRITER",
+            (
+                "_CR-WRITER _EXT4-JWR.STATE + @ "
+                "CONSTANT _CR-WRITER-STATE"
+            ),
+            "0 _CR-V VFS-UNMOUNT CONSTANT _CR-UNMOUNT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_CR-MOUNT-IOR 0=",
+                        "_CR-CLOCK-IOR 0=",
+                        "_CR-PROFILE-SIZE-IOR 0=",
+                        "_CR-PROFILE-BIND-IOR 0=",
+                        "_CR-STAT-BEFORE-IOR 0=",
+                        "_CR-CREATE-IOR 0=",
+                        "_CR-D 0<>",
+                        "_CR-RESOLVE-IOR 0=",
+                        "_CR-RESOLVED _CR-D =",
+                        "_CR-VN VN.TYPE @ VFS-T-FILE =",
+                        "_CR-VN VN.BID @ 33 =",
+                        "_CR-VN VN.BDATA @ 33 =",
+                        "_CR-VN VN.GEN @ 1 =",
+                        "_CR-VN VN.MODE @ 0x81B6 =",
+                        "_CR-VN VN.SIZE-LO @ 0=",
+                        "_CR-VN VN.SIZE-HI @ 0=",
+                        "_CR-VN VN.UID @ 0=",
+                        "_CR-VN VN.GID @ 0=",
+                        "_CR-VN VN.NLINK @ 1 =",
+                        "_CR-VN VN.BLOCKS @ 0=",
+                        f"_CR-VN VN.ATIME @ {seconds} =",
+                        f"_CR-VN VN.ATIME-NS @ {nanoseconds} =",
+                        f"_CR-VN VN.MTIME @ {seconds} =",
+                        f"_CR-VN VN.MTIME-NS @ {nanoseconds} =",
+                        f"_CR-VN VN.CTIME @ {seconds} =",
+                        f"_CR-VN VN.CTIME-NS @ {nanoseconds} =",
+                        f"_CR-ROOT-VN VN.MTIME @ {seconds} =",
+                        f"_CR-ROOT-VN VN.MTIME-NS @ {nanoseconds} =",
+                        f"_CR-ROOT-VN VN.CTIME @ {seconds} =",
+                        f"_CR-ROOT-VN VN.CTIME-NS @ {nanoseconds} =",
+                        "_CR-CLOCK-CALLS @ 1 =",
+                        "_CR-STAT-AFTER-IOR 0=",
+                        "_CR-FREE-AFTER _CR-FREE-BEFORE 1- =",
+                        "_CR-META-COUNT 6 =",
+                        "_CR-INODE 33 =",
+                        "_CR-GEN 1 =",
+                        "_CR-WRITER-STATE _EXT4-JWR-IDLE =",
+                        "_CR-UNMOUNT-IOR 0=",
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-CREATE-OK" THEN'
+            ),
+        ],
+        patches=source_patches,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-CREATE-OK")
+    assert trace
+    assert backing.is_file()
+
+    stat = subprocess.run(
+        [str(debugfs), "-R", "stat /created.txt", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stat.returncode == 0, stat.stdout + stat.stderr
+    assert "Inode: 33" in stat.stdout
+    assert "Type: regular" in stat.stdout
+    assert "Mode:  0666" in stat.stdout
+    assert "Size: 0" in stat.stdout
+    assert "Blockcount: 0" in stat.stdout
+    assert "Flags: 0x80000" in stat.stdout
+    assert "Generation: 1" in stat.stdout
+    assert "Size of extra inode fields: 32" in stat.stdout
+
+    listing = subprocess.run(
+        [str(debugfs), "-R", "ls -l /", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert listing.returncode == 0, listing.stdout + listing.stderr
+    assert "created.txt" in listing.stdout
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
 
 
 def test_ext4_crc_source_uses_checked_hardware_without_fallback() -> None:

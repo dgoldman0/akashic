@@ -1938,6 +1938,56 @@ key repair, cross-leaf alias refusal, typed and public fanout splitting, both
 external-oracle paths, and both four-index boundaries: 14 tests pass in one
 sequential process. Deeper-tree mutation is still outside this envelope.
 
+### Initial atomic CREATE slice
+
+The staged binding now advertises `VFS-CAP-CREATE` and installs `_EXT4-CREATE`
+in operation slot 9. The ordinary binding remains read-only and retains a null
+CREATE slot. `VFS-MKFILE?` first loads the parent directory and creates a
+provisional cache dentry/vnode; the ext4 callback either commits the on-disk
+namespace operation and publishes its stable inode identity or returns an
+error, allowing the VFS to remove that provisional object.
+
+The admitted parent is an authenticated one-block linear directory with flags
+exactly `EXTENTS`, one initialized mapped block, a valid directory checksum
+tail, root UID/GID, no setgid bit, and no inline or external xattrs. Its entire
+dirent sequence is revalidated, including `.`/`..`, name syntax, record
+alignment and bounds, target inode bounds, duplicate-name refusal, and usable
+record slack. HTree/indexed directories, multi-block directories, directory
+growth, default-ACL inheritance, and non-root credential policy return typed
+unsupported or `NOSPC`; none is silently approximated. The existing directory
+data block is proved disjoint from static metadata and the journal and uniquely
+owned by the parent before it becomes a metadata replacement home.
+
+Inode selection starts in the parent group and wraps across runtime geometry.
+It accepts only initialized inode groups, verifies the bitmap checksum and its
+free count, skips reserved inode numbers, proves the bitmap and inode-table
+homes have their unique descriptor roles, and rechecks the selected clear bit.
+Allocation advances the free inode's prior generation modulo 32 bits with zero
+mapped to one, updates `bg_free_inodes_count`, `bg_itable_unused`, and
+`s_free_inodes_count`, and restamps the bitmap, descriptor, and superblock
+checksums. Groups requiring `INODE_UNINIT`/inode-table initialization remain an
+explicit later slice.
+
+The new 256-byte inode is an empty root-owned mode-0666 regular file with one
+link, an initialized empty depth-zero extent header, `extra_isize=32`, trusted-
+clock atime/mtime/ctime/crtime, and a full metadata checksum. The parent keeps
+its topology and link count but receives the same trusted mtime/ctime. Dirent
+insertion either splits authenticated slack from a live record or consumes a
+free record while preserving a valid trailing free record, then restamps the
+directory checksum.
+
+All edits are one no-data/no-revoke transaction over the deduplicated set of
+primary superblock, primary GDT page, inode bitmap, new inode-table page,
+parent inode-table page, and directory block: at most exact `6/0/0` credit and
+fewer homes when pages coincide. A clean mount dry-stages the complete edit
+before journal activation; live staging reauthenticates every locator, emits,
+checkpoints synchronously, and only then publishes inode number, generation,
+metadata, parent times, and free-inode accounting into the VFS cache. The
+focused public qualification creates `/created.txt` as inode 33, resolves the
+same dentry, unmounts cleanly, and passes pinned e2fsprogs 1.47.4 `debugfs`
+stat/list plus read-only `e2fsck`. A missing trusted clock rolls the provisional
+VFS object back before writer creation or media I/O.
+
 ### Allocation-backed in-size hole fill
 
 The staged binding publicly routes an exact clean unmapped target to the typed
@@ -2431,8 +2481,8 @@ The ratchet order is:
    resident index key, and split that leaf while the root retains index
    capacity, preserving untouched leaves byte-exact and preexisting
    unselected index pairs value-exact (completed at `1f4e0ea`);
-4. build shared inode allocation and directory insertion, then expose
-   `CREATE` (current);
+4. build shared inode allocation and directory insertion, then expose the
+   first bounded `CREATE` slice (completed in the current worktree);
 5. add shrink `TRUNCATE` and `UNLINK`, including nonfinal-link removal,
    unlink-while-open, and final release, with only the orphan states those
    paths make reachable;
@@ -2465,10 +2515,11 @@ hole-fill, and aligned-EOF growth operations are production-closed for their
 documented request envelopes. Their qualified tail-to-allocation and additional
 allocated-EOF exact compositions preserve independently durable prefixes, but
 no broader geometry or operation inherits that status.
-`EXT4-STAGED-WRITE-OPS` adds only `MOUNT` admission and `WRITE` dispatch to the
-ordinary table. Neither binding advertises `CREATE`, `MKDIR`, `UNLINK`,
-`RMDIR`, `RENAME`, `TRUNCATE`, `SETATTR`, `LINK`, `SYMLINK`, `SETXATTR`, or
-`REMOVEXATTR`; `EXT4-BINDING` remains `VFS-BF-READ-ONLY`. Each later capability
+`EXT4-STAGED-WRITE-OPS` adds `MOUNT` admission plus `WRITE` and the bounded
+linear-directory `CREATE` dispatches to the ordinary table. The ordinary
+binding remains `VFS-BF-READ-ONLY` and advertises neither. Neither binding yet
+advertises `MKDIR`, `UNLINK`, `RMDIR`, `RENAME`, `TRUNCATE`, `SETATTR`, `LINK`,
+`SYMLINK`, `SETXATTR`, or `REMOVEXATTR`. Each later capability
 still needs its own bounded credit/chunking contract, reachable-state recovery
 closure, namespace/cache behavior where applicable, and interoperability plus
 crash qualification. Full profile completion additionally needs general block
@@ -2526,13 +2577,17 @@ multi-leaf depth-one mutation adds interval-based target selection, full-fanout
 capture, selected-leaf reauthentication and key repair, byte-exact preservation
 of unselected leaves, exact in-place editing under a full root, two-to-three
 index splitting, target-local cross-leaf alias rejection, stable remount, and
-pinned `debugfs`/`e2fsck` acceptance. The next write ratchet is shared inode
-allocation plus directory insertion exposed as `CREATE`, followed by the
-operation-shaped namespace/lifetime work above rather than speculative orphan
-expansion. General sparse/gap growth, unwritten conversion, growth beyond a
+pinned `debugfs`/`e2fsck` acceptance. The initial CREATE slice adds initialized-
+group inode selection and allocation, checksum/accounting updates, one-block
+linear-directory slack insertion, parent/new inode construction, cache
+publication, clean unmount, rollback without a trusted clock, and pinned
+`debugfs`/`e2fsck` acceptance in one at-most-six-home transaction. The next
+write ratchet is shrink `TRUNCATE` plus the operation-shaped `UNLINK` lifetimes
+rather than speculative orphan expansion. General sparse/gap growth, unwritten conversion, growth beyond a
 full resident root plus full unmergeable selected leaf, mutation starting from
 a deeper extent tree, other broader allocation and mutation geometry, multi-
-block atomicity, truncation, and namespace mutation remain later capabilities.
+block atomicity, truncation, and other namespace mutation remain later
+capabilities.
 
 The remaining boundaries are the final-profile closure inventory, not an
 ordered list of prerequisites for retaining the qualified write surface:

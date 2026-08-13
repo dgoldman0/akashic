@@ -86,12 +86,19 @@ profile-admitted operation and recovery closure.
 The existing multi-leaf depth-one allocation ratchet is closed: the driver
 selects and reauthenticates the governing leaf, edits and repairs only its
 resident key, and splits it while the resident root has index capacity. The
-current critical path is shared inode allocation and directory insertion into
-`CREATE`; then shrink `TRUNCATE` and the distinct nonfinal, final, and
-open `UNLINK` lifetimes; `MKDIR`/`RMDIR`; hard `LINK`; and finally staged
-`RENAME` cases. Extent-tree depth and indexed-directory HTree depth are
-independent ratchets. Broaden either only when the next operation or a pinned
-realistic corpus demands it; a directory-leaf split needed by `CREATE` does
+first `CREATE` slice is also public in the staged binding. It allocates from an
+already initialized inode bitmap and inserts one empty regular file into
+authenticated slack in an existing one-block linear directory, committing its
+directory block, parent/new inode records, inode bitmap, descriptor, and
+primary-super accounting atomically. Its current credential and inheritance
+envelope is deliberately explicit: root-owned, non-setgid parents without
+inline or external xattrs/default ACLs create root-owned mode-0666 files;
+indexed/multi-block directory insertion and lazy inode-table initialization
+remain unsupported. The current critical path is shrink `TRUNCATE` and the
+distinct nonfinal, final, and open `UNLINK` lifetimes; `MKDIR`/`RMDIR`; hard
+`LINK`; and finally staged `RENAME` cases. Extent-tree depth and indexed-
+directory HTree depth are independent ratchets. Broaden either only when the
+next operation or a pinned realistic corpus demands it; directory growth does
 not imply speculative regular-file extent depth growth.
 
 ## Immutable authorities
