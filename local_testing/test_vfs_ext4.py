@@ -327,6 +327,57 @@ def _extent_node_with_checksum(
     return bytes(result)
 
 
+def _extent_leaf_entries(
+    node: bytes,
+) -> tuple[tuple[int, int, int, int], ...]:
+    """Return the live entries from one checked external extent leaf."""
+    magic, entries, entry_max, depth = struct.unpack_from("<HHHH", node, 0)
+    assert magic == 0xF30A
+    assert depth == 0
+    assert 0 < entries <= entry_max
+    assert 12 + entry_max * 12 + 4 <= len(node)
+    return tuple(
+        struct.unpack_from("<IHHI", node, 12 + index * 12)
+        for index in range(entries)
+    )
+
+
+def _extent_leaf_with_entries(
+    superblock: bytes,
+    inode_number: int,
+    generation: int,
+    root_generation: int,
+    entries: tuple[tuple[int, int, int, int], ...],
+) -> bytes:
+    """Build and checksum one external extent leaf from exact entries."""
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    entry_max = (block_size - 12) // 12
+    assert 0 < len(entries) <= entry_max
+    assert all(
+        entries[index - 1][0] < entries[index][0]
+        for index in range(1, len(entries))
+    )
+    result = bytearray(block_size)
+    struct.pack_into(
+        "<HHHHI",
+        result,
+        0,
+        0xF30A,
+        len(entries),
+        entry_max,
+        0,
+        root_generation,
+    )
+    for index, entry in enumerate(entries):
+        struct.pack_into("<IHHI", result, 12 + index * 12, *entry)
+    return _extent_node_with_checksum(
+        superblock,
+        inode_number,
+        generation,
+        result,
+    )
+
+
 def _ext4_sparse_group(group: int) -> bool:
     if group in (0, 1):
         return True
@@ -44211,7 +44262,9 @@ def test_existing_extent_leaf_full_unmergeable_stages_split_without_io(
                         ),
                         "_XH-TREE-DEPTH @ 1 =",
                         f"_XH-EXISTING-LEAF @ {leaf_home} =",
-                        "_XH-ENTRIES @ 2 =",
+                        f"_XH-ENTRIES @ {leaf_max} =",
+                        "_XH-ROOT-ENTRIES @ 2 =",
+                        "_XH-ROOT-INDEX @ 0=",
                         f"_XH-ENTRY-MAX @ {leaf_max} =",
                         "_XH-INSERT @ 83 =",
                         "_XH-LEFT-OK @ 0=",
@@ -44829,7 +44882,9 @@ def staged_public_extent_leaf_split_fixture(
                             "_XH-INSERT @ 1 =",
                             "_XH-SPLIT-LEFT @ 42 =",
                             "_XH-SPLIT-RIGHT @ 43 =",
-                            "_XH-ENTRIES @ 2 =",
+                            f"_XH-ENTRIES @ {leaf_max} =",
+                            "_XH-ROOT-ENTRIES @ 2 =",
+                            "_XH-ROOT-INDEX @ 0=",
                             f"_XH-ENTRY-MAX @ {leaf_max} =",
                             f"_XH-LEAF-MAX @ {leaf_max} =",
                             "_XH-LEAF-FIRST @ 0=",
@@ -45030,6 +45085,2165 @@ def test_staged_public_extent_leaf_split_allocates_second_leaf(
     assert fixture["data_candidate"] == 1364
     assert fixture["leaf_candidate"] == 1454
     assert fixture["new_blocks"] == 174
+
+
+def test_existing_multi_leaf_depth_one_selects_second_leaf_without_io(
+    staged_public_extent_leaf_split_fixture: dict[str, object],
+) -> None:
+    """A clean two-leaf root stages an edit only in its governing leaf."""
+    fixture = staged_public_extent_leaf_split_fixture
+    path = fixture["image"]
+    inode_number = fixture["inode_number"]
+    selected_leaf = fixture["leaf_candidate"]
+    untouched_leaf = fixture["existing_leaf"]
+    block_size = fixture["block_size"]
+    generation = fixture["generation"]
+    inode_home = fixture["inode_home"]
+    bitmap_home = fixture["bitmap_home"]
+    gdt_home = fixture["gdt_home"]
+    super_home = fixture["super_home"]
+    assert isinstance(path, Path)
+    assert all(
+        isinstance(value, int)
+        for value in (
+            inode_number,
+            selected_leaf,
+            untouched_leaf,
+            block_size,
+            generation,
+            inode_home,
+            bitmap_home,
+            gdt_home,
+            super_home,
+        )
+    )
+    assert block_size == 1024
+    assert selected_leaf == 1454
+    assert untouched_leaf == 1353
+    untouched_before = _read_ext4_home(
+        path, untouched_leaf, block_size=block_size
+    )
+    selected_before = _read_ext4_home(
+        path, selected_leaf, block_size=block_size
+    )
+    assert struct.unpack_from("<HHHHI", selected_before, 0)[1] == 43
+
+    target_logical = 83
+    write_offset = target_logical * block_size + 100
+    output = run_forth(
+        path,
+        [
+            "T-ARENA CONSTANT _ML-ARENA",
+            (
+                "_ML-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _ML-MOUNT-IOR CONSTANT _ML-V"
+            ),
+            "_ML-V _EXT4-CTX CONSTANT _ML-CTX",
+            (
+                "5 1 0 _ML-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _ML-WRITER-IOR CONSTANT _ML-WRITER"
+            ),
+            "_ML-ARENA ARENA-USED CONSTANT _ML-USED-BEFORE",
+            (
+                "5 1 0 _ML-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _ML-BEGIN-IOR CONSTANT _ML-TX"
+            ),
+            "DEPTH CONSTANT _ML-DEPTH-BEFORE",
+            (
+                f'S" M" {write_offset} {inode_number} '
+                f"{generation} 1 2 _ML-TX "
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _ML-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _ML-DEPTH-AFTER",
+            (
+                "_ML-WRITER _EXT4-JWR.META-USED + @ "
+                "CONSTANT _ML-META-USED"
+            ),
+            (
+                "_ML-WRITER _EXT4-JWR.DATA-USED + @ "
+                "CONSTANT _ML-DATA-USED"
+            ),
+            "_ML-TX _EXT4-JTX-ABORT CONSTANT _ML-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_ML-MOUNT-IOR 0=",
+                        "_ML-WRITER-IOR 0=",
+                        "_ML-BEGIN-IOR 0=",
+                        "_ML-DEPTH-BEFORE _ML-DEPTH-AFTER =",
+                        "_ML-STAGE-IOR 0=",
+                        "_XH-TREE-DEPTH @ 1 =",
+                        "_XH-ROOT-ENTRIES @ 2 =",
+                        "_XH-ROOT-INDEX @ 1 =",
+                        f"_XH-EXISTING-LEAF @ {selected_leaf} =",
+                        "_XH-ENTRIES @ 44 =",
+                        "_XH-INSERT @ 1 =",
+                        "_XH-LEAF-FIRST @ 82 =",
+                        "_XH-ROOT-GROW @ 0=",
+                        "_XH-LEAF-SPLIT @ 0=",
+                        "_XH-LEAF-CANDIDATE @ 0=",
+                        "_XH-META-CREDIT @ 5 =",
+                        "_XH-NEW-BLOCKS @ 176 =",
+                        "_XH-PUBLISHED @ 0<",
+                        "_ML-META-USED 5 =",
+                        "_ML-DATA-USED 1 =",
+                        (
+                            "0 CELLS _XH-META-HOMES + @ "
+                            f"{bitmap_home} ="
+                        ),
+                        (
+                            "1 CELLS _XH-META-HOMES + @ "
+                            f"{gdt_home} ="
+                        ),
+                        (
+                            "2 CELLS _XH-META-HOMES + @ "
+                            f"{super_home} ="
+                        ),
+                        (
+                            "3 CELLS _XH-META-HOMES + @ "
+                            f"{inode_home} ="
+                        ),
+                        (
+                            "4 CELLS _XH-META-HOMES + @ "
+                            f"{selected_leaf} ="
+                        ),
+                        "_ML-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_ML-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_ML-WRITER _EXT4-JWR.DATA-USED + @ 0=",
+                        "_ML-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                        "_ML-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
+                        "_ML-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                        "_ML-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_ML-ABORT-IOR 0=",
+                        "_ML-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_ML-WRITER _EXT4-JWR-VALID?",
+                        "_ML-ARENA ARENA-USED _ML-USED-BEFORE =",
+                    ]
+                )
+                + ' IF ." EXT4-MULTI-LEAF-SECOND-STAGED" THEN'
+            ),
+            "0 _ML-V VFS-UNMOUNT CONSTANT _ML-UNMOUNT-IOR",
+            (
+                "_ML-UNMOUNT-IOR 0= _ML-V V.LIFECYCLE @ "
+                "VFS-L-UNMOUNTED = AND "
+                'IF ." EXT4-MULTI-LEAF-SECOND-UNMOUNT" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-MULTI-LEAF-SECOND-STAGED")
+    _assert_emitted(output, "EXT4-MULTI-LEAF-SECOND-UNMOUNT")
+    assert _read_ext4_home(
+        path, untouched_leaf, block_size=block_size
+    ) == untouched_before
+    assert _read_ext4_home(
+        path, selected_leaf, block_size=block_size
+    ) == selected_before
+
+
+def test_existing_multi_leaf_first_key_repairs_only_selected_root_index(
+    staged_public_extent_leaf_split_fixture: dict[str, object],
+) -> None:
+    """A leading-hole insert repairs only its selected depth-one index key."""
+    fixture = staged_public_extent_leaf_split_fixture
+    path = fixture["image"]
+    inode_number = fixture["inode_number"]
+    selected_leaf = fixture["existing_leaf"]
+    sibling_leaf = fixture["leaf_candidate"]
+    block_size = fixture["block_size"]
+    generation = fixture["generation"]
+    root_generation = fixture["root_generation"]
+    assert isinstance(path, Path)
+    assert all(
+        isinstance(value, int)
+        for value in (
+            inode_number,
+            selected_leaf,
+            sibling_leaf,
+            block_size,
+            generation,
+            root_generation,
+        )
+    )
+    assert block_size == 1024
+    assert selected_leaf == 1353
+    assert sibling_leaf == 1454
+
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    assert inode_home == fixture["inode_home"]
+    assert inode_block_offset == 256
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 174
+    assert struct.unpack_from("<HHHHI", inode, 0x28) == (
+        0xF30A,
+        2,
+        4,
+        1,
+        root_generation,
+    )
+    assert struct.unpack_from("<IIHH", inode, 0x34) == (
+        0,
+        selected_leaf,
+        0,
+        0,
+    )
+    assert struct.unpack_from("<IIHH", inode, 0x40) == (
+        82,
+        sibling_leaf,
+        0,
+        0,
+    )
+
+    selected_before = _read_ext4_home(
+        path, selected_leaf, block_size=block_size
+    )
+    sibling_before = _read_ext4_home(
+        path, sibling_leaf, block_size=block_size
+    )
+    selected_entries = _extent_leaf_entries(selected_before)
+    assert [entry[0] for entry in selected_entries] == [
+        0,
+        1,
+        *range(2, 82, 2),
+    ]
+    shifted_entries = tuple(
+        (logical + 1, raw_length, physical_hi, physical_lo)
+        for logical, raw_length, physical_hi, physical_lo in selected_entries
+    )
+    assert shifted_entries[-1][0] == 81
+    prepared_leaf = _extent_leaf_with_entries(
+        superblock,
+        inode_number,
+        generation,
+        root_generation,
+        shifted_entries,
+    )
+    prepared_inode = bytearray(inode)
+    struct.pack_into("<I", prepared_inode, 0x34, 1)
+    prepared_inode[:] = _inode_with_checksum(
+        superblock,
+        inode_number,
+        prepared_inode,
+    )
+    patches = (
+        (selected_leaf * block_size, prepared_leaf),
+        (inode_offset, bytes(prepared_inode)),
+    )
+    candidate = 1455
+    assert _ext4_block_allocation_state(path, (candidate,)) == {
+        candidate: False
+    }
+
+    output = run_forth(
+        path,
+        [
+            "T-ARENA CONSTANT _MLK-ARENA",
+            (
+                "_MLK-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _MLK-MOUNT-IOR CONSTANT _MLK-V"
+            ),
+            "_MLK-V _EXT4-CTX CONSTANT _MLK-CTX",
+            (
+                "5 1 0 _MLK-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _MLK-WRITER-IOR CONSTANT _MLK-WRITER"
+            ),
+            "_MLK-ARENA ARENA-USED CONSTANT _MLK-USED-BEFORE",
+            (
+                "5 1 0 _MLK-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _MLK-BEGIN-IOR CONSTANT _MLK-TX"
+            ),
+            "DEPTH CONSTANT _MLK-DEPTH-BEFORE",
+            (
+                f'S" K" 100 {inode_number} {generation} 1 2 _MLK-TX '
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _MLK-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _MLK-DEPTH-AFTER",
+            "_XH-ROOT @ 12 + L@ CONSTANT _MLK-ROOT-FIRST",
+            "_XH-ROOT @ 24 + L@ CONSTANT _MLK-ROOT-SECOND",
+            (
+                "_MLK-WRITER _EXT4-JWR.META-USED + @ "
+                "CONSTANT _MLK-META-USED"
+            ),
+            (
+                "_MLK-WRITER _EXT4-JWR.DATA-USED + @ "
+                "CONSTANT _MLK-DATA-USED"
+            ),
+            "_MLK-TX _EXT4-JTX-ABORT CONSTANT _MLK-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_MLK-MOUNT-IOR 0=",
+                        "_MLK-WRITER-IOR 0=",
+                        "_MLK-BEGIN-IOR 0=",
+                        "_MLK-DEPTH-BEFORE _MLK-DEPTH-AFTER =",
+                        "_MLK-STAGE-IOR 0=",
+                        "_XH-TREE-DEPTH @ 1 =",
+                        "_XH-ROOT-ENTRIES @ 2 =",
+                        "_XH-ROOT-INDEX @ 0=",
+                        f"_XH-EXISTING-LEAF @ {selected_leaf} =",
+                        "_XH-ENTRIES @ 43 =",
+                        "_XH-INSERT @ 0=",
+                        "_XH-EDIT @ _XH-EDIT-INSERT =",
+                        "_XH-LEAF-FIRST @ 0=",
+                        "_MLK-ROOT-FIRST 0=",
+                        "_MLK-ROOT-SECOND 82 =",
+                        f"_XH-CANDIDATE @ {candidate} =",
+                        "_XH-LEAF-CANDIDATE @ 0=",
+                        "_XH-ROOT-GROW @ 0=",
+                        "_XH-LEAF-SPLIT @ 0=",
+                        "_XH-META-CREDIT @ 5 =",
+                        "_XH-NEW-BLOCKS @ 176 =",
+                        "_XH-PUBLISHED @ 0<",
+                        "_MLK-META-USED 5 =",
+                        "_MLK-DATA-USED 1 =",
+                        "_MLK-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_MLK-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_MLK-WRITER _EXT4-JWR.DATA-USED + @ 0=",
+                        "_MLK-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                        "_MLK-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_MLK-ABORT-IOR 0=",
+                        "_MLK-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_MLK-WRITER _EXT4-JWR-VALID?",
+                        "_MLK-ARENA ARENA-USED _MLK-USED-BEFORE =",
+                    ]
+                )
+                + ' IF ." EXT4-MULTI-LEAF-FIRST-KEY-STAGED" THEN'
+            ),
+            "0 _MLK-V VFS-UNMOUNT CONSTANT _MLK-UNMOUNT-IOR",
+            (
+                "_MLK-UNMOUNT-IOR 0= _MLK-V V.LIFECYCLE @ "
+                "VFS-L-UNMOUNTED = AND "
+                'IF ." EXT4-MULTI-LEAF-FIRST-KEY-UNMOUNT" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-MULTI-LEAF-FIRST-KEY-STAGED")
+    _assert_emitted(output, "EXT4-MULTI-LEAF-FIRST-KEY-UNMOUNT")
+    assert _read_ext4_home(
+        path, selected_leaf, block_size=block_size
+    ) == selected_before
+    assert _read_ext4_home(
+        path, sibling_leaf, block_size=block_size
+    ) == sibling_before
+
+
+def test_multi_leaf_capture_rejects_unselected_data_alias_to_selected_leaf(
+    staged_public_extent_leaf_split_fixture: dict[str, object],
+) -> None:
+    """Canonical fanout admission rejects a cross-leaf data/node alias."""
+    fixture = staged_public_extent_leaf_split_fixture
+    path = fixture["image"]
+    inode_number = fixture["inode_number"]
+    untouched_leaf = fixture["existing_leaf"]
+    selected_leaf = fixture["leaf_candidate"]
+    block_size = fixture["block_size"]
+    generation = fixture["generation"]
+    root_generation = fixture["root_generation"]
+    assert isinstance(path, Path)
+    assert all(
+        isinstance(value, int)
+        for value in (
+            inode_number,
+            untouched_leaf,
+            selected_leaf,
+            block_size,
+            generation,
+            root_generation,
+        )
+    )
+    assert block_size == 1024
+    superblock, _, _ = _ext4_inode_record(path, inode_number)
+    bad_leaf = bytearray(
+        _read_ext4_home(path, untouched_leaf, block_size=block_size)
+    )
+    assert struct.unpack_from("<HHHHI", bad_leaf, 0) == (
+        0xF30A,
+        42,
+        84,
+        0,
+        root_generation,
+    )
+    assert struct.unpack_from("<IHHI", bad_leaf, 12) == (0, 1, 0, 1352)
+    struct.pack_into("<H", bad_leaf, 18, selected_leaf >> 32)
+    struct.pack_into("<I", bad_leaf, 20, selected_leaf & 0xFFFF_FFFF)
+    bad_leaf[:] = _extent_node_with_checksum(
+        superblock, inode_number, generation, bad_leaf
+    )
+
+    write_offset = 83 * block_size + 100
+    output = run_forth(
+        path,
+        [
+            "T-ARENA CONSTANT _MLA-ARENA",
+            (
+                "_MLA-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _MLA-MOUNT-IOR CONSTANT _MLA-V"
+            ),
+            "_MLA-V _EXT4-CTX CONSTANT _MLA-CTX",
+            (
+                "5 1 0 _MLA-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _MLA-WRITER-IOR CONSTANT _MLA-WRITER"
+            ),
+            (
+                "5 1 0 _MLA-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _MLA-BEGIN-IOR CONSTANT _MLA-TX"
+            ),
+            "DEPTH CONSTANT _MLA-DEPTH-BEFORE",
+            (
+                f'S" X" {write_offset} {inode_number} '
+                f"{generation} 1 2 _MLA-TX "
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _MLA-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _MLA-DEPTH-AFTER",
+            "_MLA-TX _EXT4-JTX-ABORT CONSTANT _MLA-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_MLA-MOUNT-IOR 0=",
+                        "_MLA-WRITER-IOR 0=",
+                        "_MLA-BEGIN-IOR 0=",
+                        "_MLA-DEPTH-BEFORE _MLA-DEPTH-AFTER =",
+                        (
+                            "_MLA-STAGE-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_MLA-STAGE-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-FORMAT ="
+                        ),
+                        (
+                            "_MLA-STAGE-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-CORRUPT ="
+                        ),
+                        (
+                            "_MLA-STAGE-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        "_XH-PUBLISHED @ 0=",
+                        "_XH-META-CREDIT @ 0=",
+                        "_MLA-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_MLA-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_MLA-WRITER _EXT4-JWR.DATA-USED + @ 0=",
+                        "_MLA-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                        "_MLA-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
+                        "_MLA-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                        "_MLA-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_MLA-ABORT-IOR 0=",
+                        "_MLA-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_MLA-WRITER _EXT4-JWR-VALID?",
+                    ]
+                )
+                + ' IF ." EXT4-MULTI-LEAF-CROSS-ALIAS-REFUSED" THEN'
+            ),
+            "0 _MLA-V VFS-UNMOUNT CONSTANT _MLA-UNMOUNT-IOR",
+            (
+                "_MLA-UNMOUNT-IOR 0= _MLA-V V.LIFECYCLE @ "
+                "VFS-L-UNMOUNTED = AND "
+                'IF ." EXT4-MULTI-LEAF-CROSS-ALIAS-UNMOUNT" THEN'
+            ),
+        ],
+        patches=((untouched_leaf * block_size, bytes(bad_leaf)),),
+    )
+    _assert_emitted(output, "EXT4-MULTI-LEAF-CROSS-ALIAS-REFUSED")
+    _assert_emitted(output, "EXT4-MULTI-LEAF-CROSS-ALIAS-UNMOUNT")
+
+
+@pytest.fixture(scope="session")
+def staged_public_multi_leaf_second_edit_fixture(
+    staged_public_extent_leaf_split_fixture: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Commit an in-place edit through the second leaf of a two-leaf root."""
+    prior = staged_public_extent_leaf_split_fixture
+    path = prior["image"]
+    original_file = prior["expected_file"]
+    inode_number = prior["inode_number"]
+    untouched_leaf = prior["existing_leaf"]
+    selected_leaf = prior["leaf_candidate"]
+    block_size = prior["block_size"]
+    generation = prior["generation"]
+    root_generation = prior["root_generation"]
+    leaf_max = prior["leaf_max"]
+    assert isinstance(path, Path)
+    assert isinstance(original_file, bytes)
+    assert all(
+        isinstance(value, int)
+        for value in (
+            inode_number,
+            untouched_leaf,
+            selected_leaf,
+            block_size,
+            generation,
+            root_generation,
+            leaf_max,
+        )
+    )
+    assert block_size == 1024
+    assert untouched_leaf == 1353
+    assert selected_leaf == 1454
+
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    old_size = struct.unpack_from("<I", inode, 0x04)[0]
+    old_blocks = struct.unpack_from("<I", inode, 0x1C)[0]
+    root_before = inode[0x28:0x64]
+    assert inode_block_offset == 256
+    assert old_size == len(original_file) == 167 * block_size
+    assert old_blocks == 174
+    assert struct.unpack_from("<HHHHI", root_before, 0) == (
+        0xF30A,
+        2,
+        4,
+        1,
+        root_generation,
+    )
+    assert struct.unpack_from("<IIHH", root_before, 12) == (
+        0,
+        untouched_leaf,
+        0,
+        0,
+    )
+    assert struct.unpack_from("<IIHH", root_before, 24) == (
+        82,
+        selected_leaf,
+        0,
+        0,
+    )
+
+    untouched_before = _read_ext4_home(
+        path, untouched_leaf, block_size=block_size
+    )
+    selected_before = _read_ext4_home(
+        path, selected_leaf, block_size=block_size
+    )
+    assert struct.unpack_from("<HHHHI", selected_before, 0) == (
+        0xF30A,
+        43,
+        leaf_max,
+        0,
+        root_generation,
+    )
+    selected_entries = [
+        struct.unpack_from("<IHHI", selected_before, 12 + index * 12)
+        for index in range(43)
+    ]
+    assert selected_entries[0][0] == 82
+    assert selected_entries[1][0] == 84
+
+    data_candidate = 1455
+    bitmap_home = 259
+    gdt_home = 2
+    super_home = 1
+    assert not _ext4_block_allocation_state(path, (data_candidate,))[
+        data_candidate
+    ]
+    replacement = b"MULTI-LEAF"
+    target_logical = 83
+    write_offset = target_logical * block_size + 100
+    expected_candidate = bytearray(block_size)
+    expected_candidate[100 : 100 + len(replacement)] = replacement
+    expected_file = bytearray(original_file)
+    expected_file[
+        write_offset : write_offset + len(replacement)
+    ] = replacement
+    selected_entries.insert(
+        1,
+        (
+            target_logical,
+            1,
+            data_candidate >> 32,
+            data_candidate & 0xFFFF_FFFF,
+        ),
+    )
+    expected_selected = bytearray(selected_before)
+    struct.pack_into("<H", expected_selected, 2, len(selected_entries))
+    for index, entry in enumerate(selected_entries):
+        struct.pack_into(
+            "<IHHI", expected_selected, 12 + index * 12, *entry
+        )
+    expected_selected[:] = _extent_node_with_checksum(
+        superblock, inode_number, generation, expected_selected
+    )
+    new_blocks = old_blocks + block_size // 512
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0]
+    epoch_ms = 3_000_005_000_123
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    directory = tmp_path_factory.mktemp("ext4-multi-leaf-second-edit")
+    media_path = directory / "staged-multi-leaf-second-edit.img"
+    stable_path = directory / "staged-multi-leaf-second-edit-stable.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        media_path,
+        [
+            f"CREATE _MLE-BUF {len(replacement)} ALLOT",
+            "CREATE _MLE-STAT VFS-STATFS-SIZE ALLOT",
+            "VARIABLE _MLE-CLOCK-CALLS",
+            (
+                ": _MLE-NOW ( context -- epoch-ms ior ) "
+                f"DROP 1 _MLE-CLOCK-CALLS +! {epoch_ms} 0 ;"
+            ),
+            "T-ARENA CONSTANT _MLE-ARENA",
+            (
+                "_MLE-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _MLE-MOUNT-IOR CONSTANT _MLE-V"
+            ),
+            "_MLE-V _EXT4-CTX CONSTANT _MLE-CTX",
+            (
+                "' _MLE-NOW 0 _MLE-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _MLE-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_MLE-PROFILE", "_MLE-V", 5, 1, 0
+            ),
+            (
+                'S" /fixture/payload.txt" '
+                "VFS-FF-READ VFS-FF-WRITE OR _MLE-V VFS-OPEN? "
+                "CONSTANT _MLE-ACT-OPEN-IOR CONSTANT _MLE-ACT-FD"
+            ),
+            (
+                'S" A" _MLE-ACT-FD VFS-WRITE? '
+                "CONSTANT _MLE-ACT-WRITE-IOR CONSTANT _MLE-ACT-ACTUAL"
+            ),
+            (
+                'S" /fixture/extent-tree.bin" '
+                "VFS-FF-READ VFS-FF-WRITE OR _MLE-V VFS-OPEN? "
+                "CONSTANT _MLE-OPEN-IOR CONSTANT _MLE-FD"
+            ),
+            "_MLE-FD FD.INODE @ D.VNODE @ CONSTANT _MLE-VN",
+            "_MLE-VN VN.ATIME @ CONSTANT _MLE-OLD-ATIME",
+            "_MLE-VN VN.ATIME-NS @ CONSTANT _MLE-OLD-ATIME-NS",
+            "_MLE-VN VN.GEN @ CONSTANT _MLE-OLD-GEN",
+            "_MLE-VN VN.NLINK @ CONSTANT _MLE-OLD-NLINK",
+            (
+                "_MLE-STAT VFS-STATFS-SIZE _MLE-V VFS-STATFS "
+                "CONSTANT _MLE-STAT-BEFORE-IOR"
+            ),
+            "_MLE-STAT VSF.BFREE @ CONSTANT _MLE-FREE-BEFORE",
+            (
+                f"{write_offset} _MLE-FD VFS-SEEK? "
+                "CONSTANT _MLE-SEEK-IOR"
+            ),
+            (
+                f'S" {replacement.decode("ascii")}" _MLE-FD '
+                "VFS-WRITE? CONSTANT _MLE-WRITE-IOR "
+                "CONSTANT _MLE-ACTUAL"
+            ),
+            "_MLE-V V.LAST-IOR @ CONSTANT _MLE-LAST-IOR",
+            "_MLE-FD FD.CUR-LO @ CONSTANT _MLE-CURSOR",
+            "_MLE-CTX _EXT4-C.J.WRITER + @ CONSTANT _MLE-WRITER",
+            "_MLE-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _MLE-HOMES",
+            (
+                "_MLE-STAT VFS-STATFS-SIZE _MLE-V VFS-STATFS "
+                "CONSTANT _MLE-STAT-AFTER-IOR"
+            ),
+            "_MLE-STAT VSF.BFREE @ CONSTANT _MLE-FREE-AFTER",
+            (
+                f"{write_offset} _MLE-FD VFS-SEEK? "
+                "CONSTANT _MLE-READ-SEEK-IOR"
+            ),
+            (
+                f"_MLE-BUF {len(replacement)} _MLE-FD VFS-READ? "
+                "CONSTANT _MLE-READ-IOR CONSTANT _MLE-READ-ACTUAL"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_MLE-MOUNT-IOR 0=",
+                        "_MLE-CLOCK-IOR 0=",
+                        "_MLE-PROFILE-SIZE-IOR 0=",
+                        "_MLE-PROFILE-BIND-IOR 0=",
+                        "_MLE-ACT-OPEN-IOR 0=",
+                        "_MLE-ACT-WRITE-IOR 0=",
+                        "_MLE-ACT-ACTUAL 1 =",
+                        "_MLE-OPEN-IOR 0=",
+                        "_MLE-SEEK-IOR 0=",
+                        "_MLE-WRITE-IOR 0=",
+                        f"_MLE-ACTUAL {len(replacement)} =",
+                        "_MLE-LAST-IOR 0=",
+                        f"_MLE-CURSOR {write_offset + len(replacement)} =",
+                        "_MLE-READ-SEEK-IOR 0=",
+                        "_MLE-READ-IOR 0=",
+                        f"_MLE-READ-ACTUAL {len(replacement)} =",
+                        (
+                            f'S" {replacement.decode("ascii")}" DROP '
+                            f"_MLE-BUF {len(replacement)} _EXT4-BYTES=?"
+                        ),
+                        "_MLE-CLOCK-CALLS @ 2 =",
+                        f"_MLE-VN VN.SIZE-LO @ {old_size} =",
+                        "_MLE-VN VN.SIZE-HI @ 0=",
+                        f"_MLE-VN VN.BLOCKS @ {new_blocks} =",
+                        "_MLE-VN VN.GEN @ _MLE-OLD-GEN =",
+                        "_MLE-VN VN.NLINK @ _MLE-OLD-NLINK =",
+                        f"_MLE-VN VN.MTIME @ {seconds} =",
+                        f"_MLE-VN VN.MTIME-NS @ {nanoseconds} =",
+                        f"_MLE-VN VN.CTIME @ {seconds} =",
+                        f"_MLE-VN VN.CTIME-NS @ {nanoseconds} =",
+                        "_MLE-VN VN.ATIME @ _MLE-OLD-ATIME =",
+                        "_MLE-VN VN.ATIME-NS @ _MLE-OLD-ATIME-NS =",
+                        "_MLE-STAT-BEFORE-IOR 0=",
+                        "_MLE-STAT-AFTER-IOR 0=",
+                        "_MLE-FREE-AFTER _MLE-FREE-BEFORE 1- =",
+                        "_MLE-WRITER _MLE-PROFILE-BASE =",
+                        "_MLE-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_MLE-WRITER _EXT4-JWR.FAULT + @ 0=",
+                        "_MLE-HOMES 5 =",
+                        "_EXT4-MOW-CREDIT @ -5 =",
+                        "_XH-TREE-DEPTH @ 1 =",
+                        "_XH-ROOT-ENTRIES @ 2 =",
+                        "_XH-ROOT-INDEX @ 1 =",
+                        f"_XH-EXISTING-LEAF @ {selected_leaf} =",
+                        "_XH-LEAF-CANDIDATE @ 0=",
+                        "_XH-ROOT-GROW @ 0=",
+                        "_XH-LEAF-SPLIT @ 0=",
+                        "_XH-META-CREDIT @ 5 =",
+                        "_XH-EDIT @ _XH-EDIT-INSERT =",
+                        "_XH-INSERT @ 1 =",
+                        "_XH-ENTRIES @ 44 =",
+                        "_XH-LEAF-FIRST @ 82 =",
+                        f"_XH-CANDIDATE @ {data_candidate} =",
+                        f"_EXT4-WR-NEW-BLOCKS @ {new_blocks} =",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-MULTI-LEAF-SECOND" THEN'
+            ),
+            "_MLE-FD VFS-CLOSE? CONSTANT _MLE-CLOSE-IOR",
+            "_MLE-ACT-FD VFS-CLOSE? CONSTANT _MLE-ACT-CLOSE-IOR",
+            "0 _MLE-V VFS-UNMOUNT CONSTANT _MLE-UNMOUNT-IOR",
+            (
+                "_MLE-CLOSE-IOR 0= _MLE-ACT-CLOSE-IOR 0= AND "
+                "_MLE-UNMOUNT-IOR 0= AND "
+                "_MLE-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                'IF ." EXT4-PUBLIC-MULTI-LEAF-SECOND-UNMOUNT" THEN'
+            ),
+        ],
+        capture_media=media_path,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-MULTI-LEAF-SECOND")
+    _assert_emitted(output, "EXT4-PUBLIC-MULTI-LEAF-SECOND-UNMOUNT")
+    assert trace.count(("write", untouched_leaf * 2, 2)) == 0
+    assert trace.count(("write", selected_leaf * 2, 2)) == 1
+    assert trace.count(("write", data_candidate * 2, 2)) == 1
+
+    final_superblock, final_inode, _ = _ext4_inode_record(
+        media_path, inode_number
+    )
+    assert struct.unpack_from("<I", final_superblock, 0x0C)[0] == (
+        free_blocks_before - 1
+    )
+    assert struct.unpack_from("<I", final_inode, 0x04)[0] == old_size
+    assert struct.unpack_from("<I", final_inode, 0x1C)[0] == new_blocks
+    assert final_inode[0x28:0x64] == root_before
+    assert _read_ext4_home(
+        media_path, untouched_leaf, block_size=block_size
+    ) == untouched_before
+    assert _read_ext4_home(
+        media_path, selected_leaf, block_size=block_size
+    ) == bytes(expected_selected)
+    assert _read_ext4_home(
+        media_path, data_candidate, block_size=block_size
+    ) == bytes(expected_candidate)
+    assert _ext4_block_allocation_state(
+        media_path, (data_candidate,)
+    ) == {data_candidate: True}
+
+    _, stable_trace, stable_sha256 = _extent_tree_crc_readback(
+        media_path,
+        stable_path,
+        expected_size=old_size,
+        expected_read_offset=write_offset,
+        expected_read_crc=_crc32c_raw(
+            bytes(expected_file)[write_offset : write_offset + block_size]
+        ),
+        expected_epoch_ms=epoch_ms,
+        expected_blocks=new_blocks,
+        expected_home_writes=0,
+        expected_replayed=False,
+        prefix="_MLE-S",
+        marker="EXT4-PUBLIC-MULTI-LEAF-SECOND-STABLE",
+    )
+    assert stable_trace == ()
+    assert stable_sha256 == media_sha256
+    return {
+        **prior,
+        "image": stable_path,
+        "expected_file": bytes(expected_file),
+        "selected_leaf": selected_leaf,
+        "untouched_leaf": untouched_leaf,
+        "data_candidate": data_candidate,
+        "new_blocks": new_blocks,
+        "epoch_ms": epoch_ms,
+        "trace": trace,
+    }
+
+
+def test_staged_public_multi_leaf_edits_second_leaf(
+    staged_public_multi_leaf_second_edit_fixture: dict[str, object],
+) -> None:
+    fixture = staged_public_multi_leaf_second_edit_fixture
+    image = fixture["image"]
+    expected_file = fixture["expected_file"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert image.is_file()
+    assert len(expected_file) == 167 * 1024
+    assert fixture["selected_leaf"] == 1454
+    assert fixture["untouched_leaf"] == 1353
+    assert fixture["data_candidate"] == 1455
+    assert fixture["new_blocks"] == 176
+
+
+def test_staged_public_multi_leaf_edit_passes_external_oracles(
+    staged_public_multi_leaf_second_edit_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    fixture = staged_public_multi_leaf_second_edit_fixture
+    image = fixture["image"]
+    expected_file = fixture["expected_file"]
+    inode_number = fixture["inode_number"]
+    selected_leaf = fixture["selected_leaf"]
+    untouched_leaf = fixture["untouched_leaf"]
+    data_candidate = fixture["data_candidate"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert all(
+        isinstance(value, int)
+        for value in (
+            inode_number,
+            selected_leaf,
+            untouched_leaf,
+            data_candidate,
+        )
+    )
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    readback = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "cat /fixture/extent-tree.bin",
+            str(image),
+        ],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert readback.returncode == 0, readback.stdout + readback.stderr
+    assert readback.stdout == expected_file
+    mapped = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "bmap /fixture/extent-tree.bin 83",
+            str(image),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert mapped.returncode == 0, mapped.stdout + mapped.stderr
+    assert int(mapped.stdout.strip().splitlines()[-1]) == data_candidate
+    stat = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "stat /fixture/extent-tree.bin",
+            str(image),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stat.returncode == 0, stat.stdout + stat.stderr
+    assert f"Inode: {inode_number}" in stat.stdout
+    assert re.search(r"Links:\s+1\s+Blockcount:\s+176", stat.stdout)
+    assert f"(ETB0):{untouched_leaf}" in stat.stdout
+    assert f"(ETB0):{selected_leaf}" in stat.stdout
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+
+
+@pytest.fixture(scope="session")
+def staged_public_multi_leaf_split_prestate(
+    staged_public_extent_leaf_split_fixture: dict[str, object],
+) -> dict[str, object]:
+    """Repartition 85 extents so the selected second leaf is full."""
+    prior = staged_public_extent_leaf_split_fixture
+    path = prior["image"]
+    original_file = prior["expected_file"]
+    inode_number = prior["inode_number"]
+    untouched_leaf = prior["existing_leaf"]
+    selected_leaf = prior["leaf_candidate"]
+    block_size = prior["block_size"]
+    generation = prior["generation"]
+    root_generation = prior["root_generation"]
+    leaf_max = prior["leaf_max"]
+    assert isinstance(path, Path)
+    assert isinstance(original_file, bytes)
+    assert all(
+        isinstance(value, int)
+        for value in (
+            inode_number,
+            untouched_leaf,
+            selected_leaf,
+            block_size,
+            generation,
+            root_generation,
+            leaf_max,
+        )
+    )
+    assert block_size == 1024
+    assert leaf_max == 84
+
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    old_blocks = struct.unpack_from("<I", inode, 0x1C)[0]
+    assert inode_block_offset == 256
+    assert old_blocks == 174
+    first_before = _read_ext4_home(
+        path, untouched_leaf, block_size=block_size
+    )
+    second_before = _read_ext4_home(
+        path, selected_leaf, block_size=block_size
+    )
+    entries = [
+        *(
+            struct.unpack_from("<IHHI", first_before, 12 + index * 12)
+            for index in range(42)
+        ),
+        *(
+            struct.unpack_from("<IHHI", second_before, 12 + index * 12)
+            for index in range(43)
+        ),
+    ]
+    assert [entry[0] for entry in entries] == [
+        0,
+        1,
+        *range(2, 168, 2),
+    ]
+    first_entries = entries[:1]
+    selected_entries = entries[1:]
+    assert len(first_entries) == 1
+    assert len(selected_entries) == leaf_max
+    assert [entry[0] for entry in selected_entries] == [
+        1,
+        *range(2, 168, 2),
+    ]
+
+    prepared_first = bytearray(block_size)
+    struct.pack_into(
+        "<HHHHI",
+        prepared_first,
+        0,
+        0xF30A,
+        len(first_entries),
+        leaf_max,
+        0,
+        root_generation,
+    )
+    for index, entry in enumerate(first_entries):
+        struct.pack_into("<IHHI", prepared_first, 12 + index * 12, *entry)
+    prepared_first[:] = _extent_node_with_checksum(
+        superblock, inode_number, generation, prepared_first
+    )
+
+    full_selected = bytearray(block_size)
+    struct.pack_into(
+        "<HHHHI",
+        full_selected,
+        0,
+        0xF30A,
+        leaf_max,
+        leaf_max,
+        0,
+        root_generation,
+    )
+    for index, entry in enumerate(selected_entries):
+        struct.pack_into("<IHHI", full_selected, 12 + index * 12, *entry)
+    full_selected[:] = _extent_node_with_checksum(
+        superblock, inode_number, generation, full_selected
+    )
+
+    prepared_inode = bytearray(inode)
+    assert struct.unpack_from("<IIHH", prepared_inode, 0x34) == (
+        0,
+        untouched_leaf,
+        0,
+        0,
+    )
+    assert struct.unpack_from("<IIHH", prepared_inode, 0x40) == (
+        82,
+        selected_leaf,
+        0,
+        0,
+    )
+    struct.pack_into("<I", prepared_inode, 0x40, 1)
+    prepared_inode[:] = _inode_with_checksum(
+        superblock, inode_number, prepared_inode
+    )
+    prepared_patches = (
+        (untouched_leaf * block_size, bytes(prepared_first)),
+        (selected_leaf * block_size, bytes(full_selected)),
+        (inode_offset, bytes(prepared_inode)),
+    )
+
+    data_candidate = 1455
+    leaf_candidate = 1456
+    assert _ext4_block_allocation_state(
+        path, (data_candidate, leaf_candidate)
+    ) == {data_candidate: False, leaf_candidate: False}
+    prepared_bitmap = _read_ext4_home(path, 259, block_size=block_size)
+    first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    for candidate in (data_candidate, leaf_candidate):
+        bit = candidate - first_data
+        assert not prepared_bitmap[bit // 8] & (1 << (bit % 8))
+
+    target_logical = 85
+    replacement = b"MULTI-SPLIT"
+    write_offset = target_logical * block_size + 100
+    expected_candidate = bytearray(block_size)
+    expected_candidate[100 : 100 + len(replacement)] = replacement
+    expected_file = bytearray(original_file)
+    expected_file[
+        write_offset : write_offset + len(replacement)
+    ] = replacement
+    split_entries = list(selected_entries)
+    split_entries.insert(
+        43,
+        (
+            target_logical,
+            1,
+            data_candidate >> 32,
+            data_candidate & 0xFFFF_FFFF,
+        ),
+    )
+    assert len(split_entries) == leaf_max + 1
+    left_entries = tuple(split_entries[:42])
+    right_entries = tuple(split_entries[42:])
+    assert left_entries[0][0] == 1
+    assert left_entries[-1][0] == 82
+    assert right_entries[0][0] == 84
+    assert right_entries[1][0] == 85
+
+    return {
+        **prior,
+        "image": path,
+        "patches": prepared_patches,
+        "expected_file": bytes(expected_file),
+        "prestate_file": original_file,
+        "untouched_leaf": untouched_leaf,
+        "selected_leaf": selected_leaf,
+        "data_candidate": data_candidate,
+        "leaf_candidate": leaf_candidate,
+        "inode_home": inode_home,
+        "inode_offset": inode_offset,
+        "bitmap_home": 259,
+        "gdt_home": 2,
+        "super_home": 1,
+        "pre_split_blocks": old_blocks,
+        "new_blocks": old_blocks + 2 * (block_size // 512),
+        "full_size": len(original_file),
+        "free_blocks_before": struct.unpack_from(
+            "<I", superblock, 0x0C
+        )[0],
+        "target_logical": target_logical,
+        "write_offset": write_offset,
+        "replacement": replacement,
+        "expected_candidate": bytes(expected_candidate),
+        "untouched_before": bytes(prepared_first),
+        "left_entries": left_entries,
+        "right_entries": right_entries,
+    }
+
+
+def test_existing_multi_leaf_full_selected_leaf_stages_split_without_io(
+    staged_public_multi_leaf_split_prestate: dict[str, object],
+) -> None:
+    """A saturated selected leaf splits while the resident root has room."""
+    geometry = staged_public_multi_leaf_split_prestate
+    path = geometry["image"]
+    patches = geometry["patches"]
+    inode_number = geometry["inode_number"]
+    generation = geometry["generation"]
+    write_offset = geometry["write_offset"]
+    selected_leaf = geometry["selected_leaf"]
+    data_candidate = geometry["data_candidate"]
+    leaf_candidate = geometry["leaf_candidate"]
+    new_blocks = geometry["new_blocks"]
+    leaf_max = geometry["leaf_max"]
+    assert isinstance(path, Path)
+    assert isinstance(patches, tuple)
+    assert all(
+        isinstance(value, int)
+        for value in (
+            inode_number,
+            generation,
+            write_offset,
+            selected_leaf,
+            data_candidate,
+            leaf_candidate,
+            new_blocks,
+            leaf_max,
+        )
+    )
+    output = run_forth(
+        path,
+        [
+            "T-ARENA CONSTANT _MLS-ARENA",
+            (
+                "_MLS-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _MLS-MOUNT-IOR CONSTANT _MLS-V"
+            ),
+            "_MLS-V _EXT4-CTX CONSTANT _MLS-CTX",
+            (
+                "6 1 0 _MLS-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _MLS-WRITER-IOR CONSTANT _MLS-WRITER"
+            ),
+            "_MLS-ARENA ARENA-USED CONSTANT _MLS-USED-BEFORE",
+            (
+                "6 1 0 _MLS-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _MLS-BEGIN-IOR CONSTANT _MLS-TX"
+            ),
+            "DEPTH CONSTANT _MLS-DEPTH-BEFORE",
+            (
+                f'S" S" {write_offset} {inode_number} '
+                f"{generation} 1 2 _MLS-TX "
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _MLS-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _MLS-DEPTH-AFTER",
+            (
+                "_MLS-WRITER _EXT4-JWR.META-USED + @ "
+                "CONSTANT _MLS-META-USED"
+            ),
+            (
+                "_MLS-WRITER _EXT4-JWR.DATA-USED + @ "
+                "CONSTANT _MLS-DATA-USED"
+            ),
+            "_MLS-TX _EXT4-JTX-ABORT CONSTANT _MLS-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_MLS-MOUNT-IOR 0=",
+                        "_MLS-WRITER-IOR 0=",
+                        "_MLS-BEGIN-IOR 0=",
+                        "_MLS-DEPTH-BEFORE _MLS-DEPTH-AFTER =",
+                        "_MLS-STAGE-IOR 0=",
+                        "_XH-TREE-DEPTH @ 1 =",
+                        "_XH-ROOT-ENTRIES @ 3 =",
+                        "_XH-ROOT-INDEX @ 1 =",
+                        f"_XH-EXISTING-LEAF @ {selected_leaf} =",
+                        f"_XH-ENTRY-MAX @ {leaf_max} =",
+                        "_XH-INSERT @ 43 =",
+                        "_XH-LEFT-OK @ 0=",
+                        "_XH-RIGHT-OK @ 0=",
+                        f"_XH-CANDIDATE @ {data_candidate} =",
+                        f"_XH-LEAF-CANDIDATE @ {leaf_candidate} =",
+                        "_XH-ROOT-GROW @ 0=",
+                        "_XH-LEAF-SPLIT @ 0<",
+                        "_XH-SPLIT-LEFT @ 42 =",
+                        "_XH-SPLIT-RIGHT @ 43 =",
+                        "_XH-LEAF-FIRST @ 1 =",
+                        "_XH-LEAF-SECOND-FIRST @ 84 =",
+                        "_XH-META-CREDIT @ 6 =",
+                        f"_XH-NEW-BLOCKS @ {new_blocks} =",
+                        "_XH-PUBLISHED @ 0<",
+                        "_MLS-META-USED 6 =",
+                        "_MLS-DATA-USED 1 =",
+                        "_MLS-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_MLS-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_MLS-WRITER _EXT4-JWR.DATA-USED + @ 0=",
+                        "_MLS-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                        "_MLS-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_MLS-ABORT-IOR 0=",
+                        "_MLS-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_MLS-WRITER _EXT4-JWR-VALID?",
+                        "_MLS-ARENA ARENA-USED _MLS-USED-BEFORE =",
+                    ]
+                )
+                + ' IF ." EXT4-MULTI-LEAF-SPLIT-STAGED" THEN'
+            ),
+            "0 _MLS-V VFS-UNMOUNT CONSTANT _MLS-UNMOUNT-IOR",
+            (
+                "_MLS-UNMOUNT-IOR 0= _MLS-V V.LIFECYCLE @ "
+                "VFS-L-UNMOUNTED = AND "
+                'IF ." EXT4-MULTI-LEAF-SPLIT-UNMOUNT" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-MULTI-LEAF-SPLIT-STAGED")
+    _assert_emitted(output, "EXT4-MULTI-LEAF-SPLIT-UNMOUNT")
+
+
+@pytest.fixture(scope="session")
+def staged_public_multi_leaf_split_fixture(
+    staged_public_multi_leaf_split_prestate: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Commit a selected second-leaf split under a three-index root."""
+    geometry = staged_public_multi_leaf_split_prestate
+    path = geometry["image"]
+    patches = geometry["patches"]
+    expected_file = geometry["expected_file"]
+    replacement = geometry["replacement"]
+    untouched_before = geometry["untouched_before"]
+    left_entries = geometry["left_entries"]
+    right_entries = geometry["right_entries"]
+    activation_trace = geometry["activation_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(patches, tuple)
+    assert isinstance(expected_file, bytes)
+    assert isinstance(replacement, bytes)
+    assert isinstance(untouched_before, bytes)
+    assert isinstance(left_entries, tuple)
+    assert isinstance(right_entries, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    inode_number = geometry["inode_number"]
+    inode_home = geometry["inode_home"]
+    untouched_leaf = geometry["untouched_leaf"]
+    selected_leaf = geometry["selected_leaf"]
+    data_candidate = geometry["data_candidate"]
+    leaf_candidate = geometry["leaf_candidate"]
+    bitmap_home = geometry["bitmap_home"]
+    gdt_home = geometry["gdt_home"]
+    super_home = geometry["super_home"]
+    block_size = geometry["block_size"]
+    generation = geometry["generation"]
+    root_generation = geometry["root_generation"]
+    leaf_max = geometry["leaf_max"]
+    new_blocks = geometry["new_blocks"]
+    full_size = geometry["full_size"]
+    free_blocks_before = geometry["free_blocks_before"]
+    write_offset = geometry["write_offset"]
+    expected_candidate = geometry["expected_candidate"]
+    journal0_physical = geometry["journal0_physical"]
+    guard_physical = geometry["guard_physical"]
+    assert all(
+        isinstance(value, int)
+        for value in (
+            inode_number,
+            inode_home,
+            untouched_leaf,
+            selected_leaf,
+            data_candidate,
+            leaf_candidate,
+            bitmap_home,
+            gdt_home,
+            super_home,
+            block_size,
+            generation,
+            root_generation,
+            leaf_max,
+            new_blocks,
+            full_size,
+                free_blocks_before,
+                write_offset,
+                journal0_physical,
+                guard_physical,
+        )
+    )
+    assert isinstance(expected_candidate, bytes)
+    epoch_ms = 3_000_006_000_123
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    directory = tmp_path_factory.mktemp("ext4-multi-leaf-split")
+    media_path = directory / "staged-multi-leaf-split.img"
+    stable_path = directory / "staged-multi-leaf-split-stable.img"
+
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        media_path,
+        [
+            "VARIABLE _MLP-CLOCK-CALLS",
+            (
+                ": _MLP-NOW ( context -- epoch-ms ior ) "
+                f"DROP 1 _MLP-CLOCK-CALLS +! {epoch_ms} 0 ;"
+            ),
+            "T-ARENA CONSTANT _MLP-ARENA",
+            (
+                "_MLP-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _MLP-MOUNT-IOR CONSTANT _MLP-V"
+            ),
+            "_MLP-V _EXT4-CTX CONSTANT _MLP-CTX",
+            (
+                "' _MLP-NOW 0 _MLP-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _MLP-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_MLP-PROFILE", "_MLP-V", 6, 1, 0
+            ),
+            (
+                'S" /fixture/payload.txt" '
+                "VFS-FF-READ VFS-FF-WRITE OR _MLP-V VFS-OPEN? "
+                "CONSTANT _MLP-ACT-OPEN-IOR CONSTANT _MLP-ACT-FD"
+            ),
+            (
+                'S" A" _MLP-ACT-FD VFS-WRITE? '
+                "CONSTANT _MLP-ACT-WRITE-IOR CONSTANT _MLP-ACT-ACTUAL"
+            ),
+            (
+                'S" /fixture/extent-tree.bin" '
+                "VFS-FF-READ VFS-FF-WRITE OR _MLP-V VFS-OPEN? "
+                "CONSTANT _MLP-OPEN-IOR CONSTANT _MLP-FD"
+            ),
+            "_MLP-FD FD.INODE @ D.VNODE @ CONSTANT _MLP-VN",
+            "_MLP-VN VN.ATIME @ CONSTANT _MLP-OLD-ATIME",
+            "_MLP-VN VN.ATIME-NS @ CONSTANT _MLP-OLD-ATIME-NS",
+            "_MLP-VN VN.GEN @ CONSTANT _MLP-OLD-GEN",
+            "_MLP-VN VN.NLINK @ CONSTANT _MLP-OLD-NLINK",
+            (
+                f"{write_offset} _MLP-FD VFS-SEEK? "
+                "CONSTANT _MLP-SEEK-IOR"
+            ),
+            (
+                f'S" {replacement.decode("ascii")}" _MLP-FD '
+                "VFS-WRITE? CONSTANT _MLP-WRITE-IOR "
+                "CONSTANT _MLP-ACTUAL"
+            ),
+            "_MLP-V V.LAST-IOR @ CONSTANT _MLP-LAST-IOR",
+            "_MLP-FD FD.CUR-LO @ CONSTANT _MLP-CURSOR",
+            "_MLP-CTX _EXT4-C.J.WRITER + @ CONSTANT _MLP-WRITER",
+            "_MLP-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _MLP-HOMES",
+            (
+                _forth_conjunction(
+                    [
+                        "_MLP-MOUNT-IOR 0=",
+                        "_MLP-CLOCK-IOR 0=",
+                        "_MLP-PROFILE-SIZE-IOR 0=",
+                        "_MLP-PROFILE-BIND-IOR 0=",
+                        "_MLP-ACT-OPEN-IOR 0=",
+                        "_MLP-ACT-WRITE-IOR 0=",
+                        "_MLP-ACT-ACTUAL 1 =",
+                        "_MLP-OPEN-IOR 0=",
+                        "_MLP-SEEK-IOR 0=",
+                        "_MLP-WRITE-IOR 0=",
+                        f"_MLP-ACTUAL {len(replacement)} =",
+                        "_MLP-LAST-IOR 0=",
+                        f"_MLP-CURSOR {write_offset + len(replacement)} =",
+                        "_MLP-CLOCK-CALLS @ 2 =",
+                        f"_MLP-VN VN.SIZE-LO @ {full_size} =",
+                        "_MLP-VN VN.SIZE-HI @ 0=",
+                        f"_MLP-VN VN.BLOCKS @ {new_blocks} =",
+                        "_MLP-VN VN.GEN @ _MLP-OLD-GEN =",
+                        "_MLP-VN VN.NLINK @ _MLP-OLD-NLINK =",
+                        f"_MLP-VN VN.MTIME @ {seconds} =",
+                        f"_MLP-VN VN.MTIME-NS @ {nanoseconds} =",
+                        f"_MLP-VN VN.CTIME @ {seconds} =",
+                        f"_MLP-VN VN.CTIME-NS @ {nanoseconds} =",
+                        "_MLP-VN VN.ATIME @ _MLP-OLD-ATIME =",
+                        "_MLP-VN VN.ATIME-NS @ _MLP-OLD-ATIME-NS =",
+                        "_MLP-WRITER _MLP-PROFILE-BASE =",
+                        "_MLP-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_MLP-WRITER _EXT4-JWR.FAULT + @ 0=",
+                        "_MLP-HOMES 6 =",
+                        "_EXT4-MOW-CREDIT @ -6 =",
+                        "_XH-TREE-DEPTH @ 1 =",
+                        "_XH-ROOT-ENTRIES @ 3 =",
+                        "_XH-ROOT-INDEX @ 1 =",
+                        f"_XH-EXISTING-LEAF @ {selected_leaf} =",
+                        f"_XH-CANDIDATE @ {data_candidate} =",
+                        f"_XH-LEAF-CANDIDATE @ {leaf_candidate} =",
+                        "_XH-ROOT-GROW @ 0=",
+                        "_XH-LEAF-SPLIT @ 0<",
+                        "_XH-EDIT @ _XH-EDIT-SPLIT-LEAF =",
+                        "_XH-INSERT @ 43 =",
+                        "_XH-SPLIT-LEFT @ 42 =",
+                        "_XH-SPLIT-RIGHT @ 43 =",
+                        "_XH-LEAF-FIRST @ 1 =",
+                        "_XH-LEAF-SECOND-FIRST @ 84 =",
+                        "_XH-META-CREDIT @ 6 =",
+                        f"_XH-NEW-BLOCKS @ {new_blocks} =",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-MULTI-LEAF-SPLIT" THEN'
+            ),
+            "_MLP-FD VFS-CLOSE? CONSTANT _MLP-CLOSE-IOR",
+            "_MLP-ACT-FD VFS-CLOSE? CONSTANT _MLP-ACT-CLOSE-IOR",
+            (
+                "_MLP-CLOSE-IOR 0= _MLP-ACT-CLOSE-IOR 0= AND "
+                "_MLP-V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_MLP-V V.FLAGS @ VFS-F-DIRTY AND 0<> AND "
+                "_MLP-CTX _EXT4-C.RECOVERY + @ 0<> AND "
+                "_MLP-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<> AND "
+                'IF ." EXT4-PUBLIC-MULTI-LEAF-SPLIT-CHECKPOINT" THEN'
+            ),
+        ],
+        patches=patches,
+        capture_media=media_path,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-MULTI-LEAF-SPLIT")
+    _assert_emitted(output, "EXT4-PUBLIC-MULTI-LEAF-SPLIT-CHECKPOINT")
+    assert trace[: len(activation_trace)] == activation_trace
+    assert trace.count(("write", untouched_leaf * 2, 2)) == 0
+    assert trace.count(("write", selected_leaf * 2, 2)) == 1
+    assert trace.count(("write", leaf_candidate * 2, 2)) == 1
+    assert trace.count(("write", data_candidate * 2, 2)) == 1
+
+    final_superblock, final_inode, _ = _ext4_inode_record(
+        media_path, inode_number
+    )
+    assert struct.unpack_from("<I", final_superblock, 0x0C)[0] == (
+        free_blocks_before - 2
+    )
+    assert struct.unpack_from("<I", final_inode, 0x04)[0] == full_size
+    assert struct.unpack_from("<I", final_inode, 0x1C)[0] == new_blocks
+    assert struct.unpack_from("<HHHHI", final_inode, 0x28) == (
+        0xF30A,
+        3,
+        4,
+        1,
+        root_generation,
+    )
+    assert struct.unpack_from("<IIHH", final_inode, 0x34) == (
+        0,
+        untouched_leaf,
+        0,
+        0,
+    )
+    assert struct.unpack_from("<IIHH", final_inode, 0x40) == (
+        1,
+        selected_leaf,
+        0,
+        0,
+    )
+    assert struct.unpack_from("<IIHH", final_inode, 0x4C) == (
+        84,
+        leaf_candidate,
+        0,
+        0,
+    )
+    assert _inode_with_checksum(
+        final_superblock, inode_number, final_inode
+    ) == final_inode
+    assert _read_ext4_home(
+        media_path, untouched_leaf, block_size=block_size
+    ) == untouched_before
+
+    left_leaf = _read_ext4_home(
+        media_path, selected_leaf, block_size=block_size
+    )
+    right_leaf = _read_ext4_home(
+        media_path, leaf_candidate, block_size=block_size
+    )
+    assert struct.unpack_from("<HHHHI", left_leaf, 0) == (
+        0xF30A,
+        42,
+        leaf_max,
+        0,
+        root_generation,
+    )
+    assert struct.unpack_from("<HHHHI", right_leaf, 0) == (
+        0xF30A,
+        43,
+        leaf_max,
+        0,
+        root_generation,
+    )
+    assert _extent_node_with_checksum(
+        final_superblock, inode_number, generation, left_leaf
+    ) == left_leaf
+    assert _extent_node_with_checksum(
+        final_superblock, inode_number, generation, right_leaf
+    ) == right_leaf
+    assert tuple(
+        struct.unpack_from("<IHHI", left_leaf, 12 + index * 12)
+        for index in range(42)
+    ) == left_entries
+    assert tuple(
+        struct.unpack_from("<IHHI", right_leaf, 12 + index * 12)
+        for index in range(43)
+    ) == right_entries
+    assert _read_ext4_home(
+        media_path, data_candidate, block_size=block_size
+    ) == expected_candidate
+    assert _ext4_block_allocation_state(
+        media_path, (data_candidate, leaf_candidate)
+    ) == {data_candidate: True, leaf_candidate: True}
+
+    _, stable_trace, stable_sha256 = _extent_tree_crc_readback(
+        media_path,
+        stable_path,
+        expected_size=full_size,
+        expected_read_offset=write_offset,
+        expected_read_crc=_crc32c_raw(
+            expected_file[write_offset : write_offset + block_size]
+        ),
+        expected_epoch_ms=epoch_ms,
+        expected_blocks=new_blocks,
+        expected_home_writes=0,
+        expected_replayed=True,
+        prefix="_MLP-S",
+        marker="EXT4-PUBLIC-MULTI-LEAF-SPLIT-STABLE",
+    )
+    _assert_activation_cleanup_trace(
+        stable_trace,
+        journal0_physical=journal0_physical,
+        guard_physical=guard_physical,
+    )
+    assert stable_trace.count(("write", super_home * 2, 2)) == 1
+    for untouched_home in (
+        data_candidate,
+        bitmap_home,
+        gdt_home,
+        selected_leaf,
+        leaf_candidate,
+        inode_home,
+    ):
+        assert ("write", untouched_home * 2, 2) not in stable_trace
+    assert stable_sha256 != media_sha256
+    return {
+        **geometry,
+        "image": stable_path,
+        "expected_file": expected_file,
+        "epoch_ms": epoch_ms,
+        "trace": trace,
+    }
+
+
+def test_staged_public_multi_leaf_split_adds_third_index(
+    staged_public_multi_leaf_split_fixture: dict[str, object],
+) -> None:
+    fixture = staged_public_multi_leaf_split_fixture
+    image = fixture["image"]
+    expected_file = fixture["expected_file"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert image.is_file()
+    assert len(expected_file) == 167 * 1024
+    assert fixture["untouched_leaf"] == 1353
+    assert fixture["selected_leaf"] == 1454
+    assert fixture["data_candidate"] == 1455
+    assert fixture["leaf_candidate"] == 1456
+    assert fixture["new_blocks"] == 178
+
+
+def test_staged_public_multi_leaf_split_passes_external_oracles(
+    staged_public_multi_leaf_split_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    fixture = staged_public_multi_leaf_split_fixture
+    image = fixture["image"]
+    expected_file = fixture["expected_file"]
+    inode_number = fixture["inode_number"]
+    untouched_leaf = fixture["untouched_leaf"]
+    selected_leaf = fixture["selected_leaf"]
+    leaf_candidate = fixture["leaf_candidate"]
+    data_candidate = fixture["data_candidate"]
+    target_logical = fixture["target_logical"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(image, Path)
+    assert isinstance(expected_file, bytes)
+    assert all(
+        isinstance(value, int)
+        for value in (
+            inode_number,
+            untouched_leaf,
+            selected_leaf,
+            leaf_candidate,
+            data_candidate,
+            target_logical,
+        )
+    )
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+    right_entries = fixture["right_entries"]
+    assert isinstance(right_entries, tuple)
+    right_first_physical = right_entries[0][3]
+    assert isinstance(right_first_physical, int)
+    readback = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "cat /fixture/extent-tree.bin",
+            str(image),
+        ],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert readback.returncode == 0, readback.stdout + readback.stderr
+    assert readback.stdout == expected_file
+    for logical, expected in (
+        (target_logical, data_candidate),
+        (84, right_first_physical),
+    ):
+        mapped = subprocess.run(
+            [
+                str(debugfs),
+                "-R",
+                f"bmap /fixture/extent-tree.bin {logical}",
+                str(image),
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert mapped.returncode == 0, mapped.stdout + mapped.stderr
+        assert int(mapped.stdout.strip().splitlines()[-1]) == expected
+    stat = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "stat /fixture/extent-tree.bin",
+            str(image),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stat.returncode == 0, stat.stdout + stat.stderr
+    assert f"Inode: {inode_number}" in stat.stdout
+    assert re.search(r"Links:\s+1\s+Blockcount:\s+178", stat.stdout)
+    for leaf in (untouched_leaf, selected_leaf, leaf_candidate):
+        assert f"(ETB0):{leaf}" in stat.stdout
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+
+
+@pytest.fixture(scope="session")
+def staged_full_depth1_root_prestate(
+    staged_public_multi_leaf_split_fixture: dict[str, object],
+) -> dict[str, object]:
+    """Prepare a clean four-index depth-one root without another public write."""
+    prior = staged_public_multi_leaf_split_fixture
+    path = prior["image"]
+    inode_number = prior["inode_number"]
+    block_size = prior["block_size"]
+    generation = prior["generation"]
+    root_generation = prior["root_generation"]
+    first_leaf = prior["untouched_leaf"]
+    second_leaf = prior["selected_leaf"]
+    third_leaf = prior["leaf_candidate"]
+    assert isinstance(path, Path)
+    assert all(
+        isinstance(value, int)
+        for value in (
+            inode_number,
+            block_size,
+            generation,
+            root_generation,
+            first_leaf,
+            second_leaf,
+            third_leaf,
+        )
+    )
+    assert block_size == 1024
+    assert (first_leaf, second_leaf, third_leaf) == (1353, 1454, 1456)
+
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    assert inode_home == prior["inode_home"]
+    assert inode_block_offset == 256
+    assert struct.unpack_from("<I", inode, 0x04)[0] == 167 * block_size
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 178
+    assert struct.unpack_from("<HHHHI", inode, 0x28) == (
+        0xF30A,
+        3,
+        4,
+        1,
+        root_generation,
+    )
+    assert tuple(
+        struct.unpack_from("<IIHH", inode, 0x34 + index * 12)
+        for index in range(3)
+    ) == (
+        (0, first_leaf, 0, 0),
+        (1, second_leaf, 0, 0),
+        (84, third_leaf, 0, 0),
+    )
+
+    leaf_homes_before = (first_leaf, second_leaf, third_leaf)
+    leaf_images_before = tuple(
+        _read_ext4_home(path, home, block_size=block_size)
+        for home in leaf_homes_before
+    )
+    leaf_entries_before = tuple(
+        _extent_leaf_entries(image) for image in leaf_images_before
+    )
+    assert tuple(len(entries) for entries in leaf_entries_before) == (
+        1,
+        42,
+        43,
+    )
+    all_entries = tuple(
+        entry for entries in leaf_entries_before for entry in entries
+    )
+    assert len(all_entries) == 86
+    assert [entry[0] for entry in all_entries] == [
+        0,
+        1,
+        *range(2, 84, 2),
+        84,
+        85,
+        *range(86, 168, 2),
+    ]
+
+    fourth_leaf = 1457
+    allocated_patches, physical_ranges = _allocate_unlinked_extent_ranges(
+        path,
+        protocol="modern",
+        extent_specs=((0, 1, False),),
+        inode_number=inode_number,
+        physical_starts=(fourth_leaf,),
+        base_patches=((1024, superblock), (inode_offset, inode)),
+    )
+    assert physical_ranges == ((fourth_leaf, 1),)
+    patch_map = dict(allocated_patches)
+    prepared_superblock = patch_map[1024]
+
+    third_entries = leaf_entries_before[2]
+    retained_third_entries = third_entries[:21]
+    fourth_entries = third_entries[21:]
+    assert len(retained_third_entries) == 21
+    assert len(fourth_entries) == 22
+    assert retained_third_entries[0][0] == 84
+    assert retained_third_entries[-1][0] == 122
+    assert fourth_entries[0][0] == 124
+    assert fourth_entries[-1][0] == 166
+    patch_map[third_leaf * block_size] = _extent_leaf_with_entries(
+        prepared_superblock,
+        inode_number,
+        generation,
+        root_generation,
+        retained_third_entries,
+    )
+    patch_map[fourth_leaf * block_size] = _extent_leaf_with_entries(
+        prepared_superblock,
+        inode_number,
+        generation,
+        root_generation,
+        fourth_entries,
+    )
+
+    prepared_inode = bytearray(inode)
+    struct.pack_into("<H", prepared_inode, 0x2A, 4)
+    struct.pack_into(
+        "<IIHH",
+        prepared_inode,
+        0x58,
+        fourth_entries[0][0],
+        fourth_leaf,
+        0,
+        0,
+    )
+    struct.pack_into("<I", prepared_inode, 0x1C, 180)
+    prepared_inode[:] = _inode_with_checksum(
+        prepared_superblock,
+        inode_number,
+        prepared_inode,
+    )
+    patch_map[inode_offset] = bytes(prepared_inode)
+    prepared_patches = tuple(patch_map.items())
+
+    bitmap = _patched_ext4_home(
+        path,
+        prepared_patches,
+        259,
+        block_size=block_size,
+    )
+    first_data = struct.unpack_from("<I", prepared_superblock, 0x14)[0]
+    fourth_bit = fourth_leaf - first_data
+    candidate = fourth_leaf + 1
+    candidate_bit = candidate - first_data
+    assert bitmap[fourth_bit // 8] & (1 << (fourth_bit % 8))
+    assert not bitmap[candidate_bit // 8] & (1 << (candidate_bit % 8))
+
+    leaf_homes = (*leaf_homes_before, fourth_leaf)
+    leaf_entries = (
+        leaf_entries_before[0],
+        leaf_entries_before[1],
+        retained_third_entries,
+        fourth_entries,
+    )
+    assert tuple(len(entries) for entries in leaf_entries) == (1, 42, 21, 22)
+    return {
+        **prior,
+        "image": path,
+        "patches": prepared_patches,
+        "inode_offset": inode_offset,
+        "leaf_homes": leaf_homes,
+        "leaf_entries": leaf_entries,
+        "all_entries": all_entries,
+        "root_keys": (0, 1, 84, 124),
+        "fourth_leaf": fourth_leaf,
+        "candidate": candidate,
+        "new_blocks": 180,
+    }
+
+
+def test_full_depth1_root_edits_selected_leaf_with_room_without_io(
+    staged_full_depth1_root_prestate: dict[str, object],
+) -> None:
+    """A saturated resident root still permits a selected-leaf insertion."""
+    geometry = staged_full_depth1_root_prestate
+    path = geometry["image"]
+    patches = geometry["patches"]
+    inode_number = geometry["inode_number"]
+    generation = geometry["generation"]
+    block_size = geometry["block_size"]
+    selected_leaf = geometry["fourth_leaf"]
+    candidate = geometry["candidate"]
+    root_keys = geometry["root_keys"]
+    assert isinstance(path, Path)
+    assert isinstance(patches, tuple)
+    assert isinstance(root_keys, tuple)
+    assert all(
+        isinstance(value, int)
+        for value in (
+            inode_number,
+            generation,
+            block_size,
+            selected_leaf,
+            candidate,
+        )
+    )
+    assert block_size == 1024
+    assert root_keys == (0, 1, 84, 124)
+    assert selected_leaf == 1457
+    assert candidate == 1458
+
+    write_offset = 125 * block_size + 100
+    output = run_forth(
+        path,
+        [
+            "T-ARENA CONSTANT _FRE-ARENA",
+            (
+                "_FRE-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _FRE-MOUNT-IOR CONSTANT _FRE-V"
+            ),
+            "_FRE-V _EXT4-CTX CONSTANT _FRE-CTX",
+            (
+                "5 1 0 _FRE-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _FRE-WRITER-IOR CONSTANT _FRE-WRITER"
+            ),
+            "_FRE-ARENA ARENA-USED CONSTANT _FRE-USED-BEFORE",
+            (
+                "5 1 0 _FRE-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _FRE-BEGIN-IOR CONSTANT _FRE-TX"
+            ),
+            "DEPTH CONSTANT _FRE-DEPTH-BEFORE",
+            (
+                f'S" E" {write_offset} {inode_number} '
+                f"{generation} 1 2 _FRE-TX "
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _FRE-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _FRE-DEPTH-AFTER",
+            "_XH-ROOT @ 2 + W@ CONSTANT _FRE-ROOT-COUNT",
+            "_XH-ROOT @ 12 + L@ CONSTANT _FRE-ROOT-KEY0",
+            "_XH-ROOT @ 24 + L@ CONSTANT _FRE-ROOT-KEY1",
+            "_XH-ROOT @ 36 + L@ CONSTANT _FRE-ROOT-KEY2",
+            "_XH-ROOT @ 48 + L@ CONSTANT _FRE-ROOT-KEY3",
+            (
+                "_FRE-WRITER _EXT4-JWR.META-USED + @ "
+                "CONSTANT _FRE-META-USED"
+            ),
+            (
+                "_FRE-WRITER _EXT4-JWR.DATA-USED + @ "
+                "CONSTANT _FRE-DATA-USED"
+            ),
+            "_FRE-TX _EXT4-JTX-ABORT CONSTANT _FRE-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_FRE-MOUNT-IOR 0=",
+                        "_FRE-WRITER-IOR 0=",
+                        "_FRE-BEGIN-IOR 0=",
+                        "_FRE-DEPTH-BEFORE _FRE-DEPTH-AFTER =",
+                        "_FRE-STAGE-IOR 0=",
+                        "_XH-TREE-DEPTH @ 1 =",
+                        "_XH-ROOT-ENTRIES @ 4 =",
+                        "_XH-ROOT-INDEX @ 3 =",
+                        f"_XH-EXISTING-LEAF @ {selected_leaf} =",
+                        "_XH-ENTRIES @ 23 =",
+                        "_XH-INSERT @ 1 =",
+                        "_XH-EDIT @ _XH-EDIT-INSERT =",
+                        "_XH-LEAF-FIRST @ 124 =",
+                        "_FRE-ROOT-COUNT 4 =",
+                        "_FRE-ROOT-KEY0 0=",
+                        "_FRE-ROOT-KEY1 1 =",
+                        "_FRE-ROOT-KEY2 84 =",
+                        "_FRE-ROOT-KEY3 124 =",
+                        f"_XH-CANDIDATE @ {candidate} =",
+                        "_XH-LEAF-CANDIDATE @ 0=",
+                        "_XH-ROOT-GROW @ 0=",
+                        "_XH-LEAF-SPLIT @ 0=",
+                        "_XH-META-CREDIT @ 5 =",
+                        "_XH-NEW-BLOCKS @ 182 =",
+                        "_XH-PUBLISHED @ 0<",
+                        "_FRE-META-USED 5 =",
+                        "_FRE-DATA-USED 1 =",
+                        "_FRE-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_FRE-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_FRE-WRITER _EXT4-JWR.DATA-USED + @ 0=",
+                        "_FRE-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                        "_FRE-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_FRE-ABORT-IOR 0=",
+                        "_FRE-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_FRE-WRITER _EXT4-JWR-VALID?",
+                        "_FRE-ARENA ARENA-USED _FRE-USED-BEFORE =",
+                    ]
+                )
+                + ' IF ." EXT4-FULL-ROOT-LEAF-EDIT-STAGED" THEN'
+            ),
+            "0 _FRE-V VFS-UNMOUNT CONSTANT _FRE-UNMOUNT-IOR",
+            (
+                "_FRE-UNMOUNT-IOR 0= _FRE-V V.LIFECYCLE @ "
+                "VFS-L-UNMOUNTED = AND "
+                'IF ." EXT4-FULL-ROOT-LEAF-EDIT-UNMOUNT" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-FULL-ROOT-LEAF-EDIT-STAGED")
+    _assert_emitted(output, "EXT4-FULL-ROOT-LEAF-EDIT-UNMOUNT")
+
+
+def test_full_depth1_root_full_leaf_refuses_growth_without_io(
+    staged_full_depth1_root_prestate: dict[str, object],
+) -> None:
+    """A full selected leaf under a full root refuses structural growth."""
+    geometry = staged_full_depth1_root_prestate
+    path = geometry["image"]
+    base_patches = geometry["patches"]
+    inode_number = geometry["inode_number"]
+    inode_offset = geometry["inode_offset"]
+    block_size = geometry["block_size"]
+    generation = geometry["generation"]
+    root_generation = geometry["root_generation"]
+    leaf_homes = geometry["leaf_homes"]
+    all_entries = geometry["all_entries"]
+    assert isinstance(path, Path)
+    assert isinstance(base_patches, tuple)
+    assert isinstance(leaf_homes, tuple)
+    assert isinstance(all_entries, tuple)
+    assert all(
+        isinstance(value, int)
+        for value in (
+            inode_number,
+            inode_offset,
+            block_size,
+            generation,
+            root_generation,
+        )
+    )
+    assert leaf_homes == (1353, 1454, 1456, 1457)
+    assert len(all_entries) == 86
+
+    allocated_data = 1458
+    allocated_patches, physical_ranges = _allocate_unlinked_extent_ranges(
+        path,
+        protocol="modern",
+        extent_specs=((0, 1, False),),
+        inode_number=inode_number,
+        physical_starts=(allocated_data,),
+        base_patches=base_patches,
+    )
+    assert physical_ranges == ((allocated_data, 1),)
+    patch_map = dict(allocated_patches)
+    prepared_superblock = patch_map[1024]
+    prepared_entries = (
+        *all_entries,
+        (
+            168,
+            1,
+            allocated_data >> 32,
+            allocated_data & 0xFFFF_FFFF,
+        ),
+    )
+    assert len(prepared_entries) == 87
+    assert all(
+        prepared_entries[index - 1][0] < prepared_entries[index][0]
+        for index in range(1, len(prepared_entries))
+    )
+    leaf_entries = (
+        prepared_entries[:1],
+        prepared_entries[1:2],
+        prepared_entries[2:3],
+        prepared_entries[3:],
+    )
+    assert tuple(len(entries) for entries in leaf_entries) == (1, 1, 1, 84)
+    assert tuple(entries[0][0] for entries in leaf_entries) == (0, 1, 2, 4)
+    for home, entries in zip(leaf_homes, leaf_entries, strict=True):
+        patch_map[home * block_size] = _extent_leaf_with_entries(
+            prepared_superblock,
+            inode_number,
+            generation,
+            root_generation,
+            entries,
+        )
+
+    prepared_inode = bytearray(patch_map[inode_offset])
+    assert struct.unpack_from("<HHHHI", prepared_inode, 0x28) == (
+        0xF30A,
+        4,
+        4,
+        1,
+        root_generation,
+    )
+    for index, (home, entries) in enumerate(
+        zip(leaf_homes, leaf_entries, strict=True)
+    ):
+        struct.pack_into(
+            "<IIHH",
+            prepared_inode,
+            0x34 + index * 12,
+            entries[0][0],
+            home,
+            0,
+            0,
+        )
+    full_size = 169 * block_size
+    struct.pack_into("<I", prepared_inode, 0x04, full_size)
+    struct.pack_into("<I", prepared_inode, 0x6C, 0)
+    struct.pack_into("<I", prepared_inode, 0x1C, 182)
+    struct.pack_into("<H", prepared_inode, 0x74, 0)
+    prepared_inode[:] = _inode_with_checksum(
+        prepared_superblock,
+        inode_number,
+        prepared_inode,
+    )
+    patch_map[inode_offset] = bytes(prepared_inode)
+    prepared_patches = tuple(patch_map.items())
+
+    candidate = 1459
+    bitmap = _patched_ext4_home(
+        path,
+        prepared_patches,
+        259,
+        block_size=block_size,
+    )
+    first_data = struct.unpack_from("<I", prepared_superblock, 0x14)[0]
+    allocated_bit = allocated_data - first_data
+    candidate_bit = candidate - first_data
+    assert bitmap[allocated_bit // 8] & (1 << (allocated_bit % 8))
+    assert not bitmap[candidate_bit // 8] & (1 << (candidate_bit % 8))
+
+    write_offset = 5 * block_size + 100
+    output = run_forth(
+        path,
+        [
+            "T-ARENA CONSTANT _FRF-ARENA",
+            (
+                "_FRF-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _FRF-MOUNT-IOR CONSTANT _FRF-V"
+            ),
+            "_FRF-V _EXT4-CTX CONSTANT _FRF-CTX",
+            (
+                "6 1 0 _FRF-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _FRF-WRITER-IOR CONSTANT _FRF-WRITER"
+            ),
+            "_FRF-ARENA ARENA-USED CONSTANT _FRF-USED-BEFORE",
+            (
+                "6 1 0 _FRF-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _FRF-BEGIN-IOR CONSTANT _FRF-TX"
+            ),
+            "DEPTH CONSTANT _FRF-DEPTH-BEFORE",
+            (
+                f'S" R" {write_offset} {inode_number} '
+                f"{generation} 1 2 _FRF-TX "
+                "_EXT4-JTX-STAGE-REGULAR-ONEBLOCK-HOLE-FILL "
+                "CONSTANT _FRF-STAGE-IOR"
+            ),
+            "DEPTH CONSTANT _FRF-DEPTH-AFTER",
+            (
+                "_FRF-WRITER _EXT4-JWR.STATE + @ "
+                "CONSTANT _FRF-STATE-BEFORE-ABORT"
+            ),
+            (
+                "_FRF-WRITER _EXT4-JWR.META-USED + @ "
+                "CONSTANT _FRF-META-USED"
+            ),
+            (
+                "_FRF-WRITER _EXT4-JWR.DATA-USED + @ "
+                "CONSTANT _FRF-DATA-USED"
+            ),
+            "_FRF-TX _EXT4-JTX-ABORT CONSTANT _FRF-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_FRF-MOUNT-IOR 0=",
+                        "_FRF-WRITER-IOR 0=",
+                        "_FRF-BEGIN-IOR 0=",
+                        "_FRF-DEPTH-BEFORE _FRF-DEPTH-AFTER =",
+                        (
+                            "_FRF-STAGE-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_FRF-STAGE-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        (
+                            "_FRF-STAGE-IOR VFS-IOR-REASON "
+                            "VFS-R-NOSPC <>"
+                        ),
+                        "_XH-TREE-DEPTH @ 1 =",
+                        "_XH-ROOT-ENTRIES @ 4 =",
+                        "_XH-ROOT-INDEX @ 3 =",
+                        "_XH-EXISTING-LEAF @ 1457 =",
+                        "_XH-ENTRIES @ 84 =",
+                        "_XH-ENTRY-MAX @ 84 =",
+                        "_XH-INSERT @ 1 =",
+                        "_XH-LEFT-OK @ 0=",
+                        "_XH-RIGHT-OK @ 0=",
+                        f"_XH-CANDIDATE @ {candidate} =",
+                        "_XH-LEAF-CANDIDATE @ 0=",
+                        "_XH-ROOT-GROW @ 0=",
+                        "_XH-LEAF-SPLIT @ 0=",
+                        "_XH-META-CREDIT @ 0=",
+                        "_XH-PUBLISHED @ 0=",
+                        (
+                            "_FRF-STATE-BEFORE-ABORT "
+                            "_EXT4-JWR-STAGING ="
+                        ),
+                        "_FRF-META-USED 0=",
+                        "_FRF-DATA-USED 0=",
+                        "_FRF-WRITER _EXT4-JWR.META-USED + @ 0=",
+                        "_FRF-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_FRF-WRITER _EXT4-JWR.DATA-USED + @ 0=",
+                        "_FRF-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                        "_FRF-WRITER _EXT4-JWR.REVOKE-USED + @ 0=",
+                        "_FRF-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                        "_FRF-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_FRF-ABORT-IOR 0=",
+                        "_FRF-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_FRF-WRITER _EXT4-JWR-VALID?",
+                        "_FRF-ARENA ARENA-USED _FRF-USED-BEFORE =",
+                    ]
+                )
+                + ' IF ." EXT4-FULL-ROOT-FULL-LEAF-REFUSED" THEN'
+            ),
+            "0 _FRF-V VFS-UNMOUNT CONSTANT _FRF-UNMOUNT-IOR",
+            (
+                "_FRF-UNMOUNT-IOR 0= _FRF-V V.LIFECYCLE @ "
+                "VFS-L-UNMOUNTED = AND "
+                'IF ." EXT4-FULL-ROOT-FULL-LEAF-UNMOUNT" THEN'
+            ),
+        ],
+        patches=prepared_patches,
+    )
+    _assert_emitted(output, "EXT4-FULL-ROOT-FULL-LEAF-REFUSED")
+    _assert_emitted(output, "EXT4-FULL-ROOT-FULL-LEAF-UNMOUNT")
 
 
 def test_staged_public_extent_leaf_split_passes_external_oracles(
@@ -45256,7 +47470,9 @@ def _staged_extent_leaf_split_fault_lines(
                     "_XH-INSERT @ 1 =",
                     "_XH-SPLIT-LEFT @ 42 =",
                     "_XH-SPLIT-RIGHT @ 43 =",
-                    "_XH-ENTRIES @ 2 =",
+                    f"_XH-ENTRIES @ {leaf_max} =",
+                    "_XH-ROOT-ENTRIES @ 2 =",
+                    "_XH-ROOT-INDEX @ 0=",
                     f"_XH-ENTRY-MAX @ {leaf_max} =",
                     f"_XH-LEAF-MAX @ {leaf_max} =",
                     "_XH-LEAF-FIRST @ 0=",
