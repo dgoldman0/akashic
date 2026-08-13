@@ -44018,6 +44018,11 @@ def test_existing_extent_leaf_rejects_alias_roles_without_io(
         if leaf_alias_case == "other-owner"
         else ["_XH-META-CREDIT @ 0="]
     )
+    captured_leaf_check = (
+        "_XH-EXISTING-LEAF @ 0="
+        if leaf_alias_case == "own-xattr"
+        else f"_XH-EXISTING-LEAF @ {leaf_home} ="
+    )
     marker = "EXT4-EXISTING-LEAF-ALIAS-" + leaf_alias_case.upper()
     output = run_forth(
         path,
@@ -44068,9 +44073,9 @@ def test_existing_extent_leaf_rejects_alias_roles_without_io(
                         (
                             "_LA-STAGE-IOR VFS-IOR-DETAIL "
                             "EXT4-D-DATA-MAP ="
-                        ),
-                        "_XH-TREE-DEPTH @ 1 =",
-                        f"_XH-EXISTING-LEAF @ {leaf_home} =",
+                            ),
+                            "_XH-TREE-DEPTH @ 1 =",
+                            captured_leaf_check,
                         "_XH-ROOT-GROW @ 0=",
                         "_XH-PUBLISHED @ 0=",
                         *late_checks,

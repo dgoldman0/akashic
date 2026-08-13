@@ -31,30 +31,39 @@ implemented.
 Allocation-backed hole fill and aligned-EOF growth currently require
 authenticated 1 KiB filesystem geometry, 256-byte inodes, a linked regular file
 with an unmapped target and either an authenticated inline depth-zero extent
-root or exactly one resident depth-one index naming one checksum-valid external
-leaf, and one nonempty target per block-bounded callback. Aligned growth
+root or a resident depth-one root whose authenticated indexes each name one
+checksum-valid external leaf, and one nonempty target per block-bounded
+callback. Aligned growth
 additionally requires exact no-gap block-aligned EOF. A depth-zero spare-slot
 insertion or exact initialized coalescing edit uses an exact `4/1/0`
 transaction: it orders one fully initialized zero-backed data block before
 journal authority and journals the allocation bitmap, primary GDT, primary
 superblock, and inode after-images.
 
-The singleton depth-one form inserts into an existing leaf with spare capacity
-or coalesces in place. That in-place edit uses exact `5/1/0`: the data
+The depth-one form chooses the governing leaf from the root's logical
+intervals, reauthenticates that leaf and the inode authority, and inserts into
+the selected leaf with spare capacity or coalesces in place. That edit uses
+exact `5/1/0`: the data
 allocation bitmap, primary GDT, primary superblock, existing leaf, and inode
 are the five metadata homes. The leaf is checksummed again, and an edit that
-changes its first logical key repairs the resident index key in the inode. It
-allocates only the new data block, so on 1 KiB geometry `i_blocks` rises by two
-512-byte sectors and free space falls by one.
+changes its first logical key repairs only the corresponding resident index key
+in the inode. Unselected leaves remain byte-exact and their preexisting index
+pairs remain value-exact. The edit allocates only the new data block, so on
+1 KiB geometry `i_blocks` rises by two 512-byte sectors and free space falls by
+one. A root at its four-index resident capacity remains writable while the
+selected leaf can insert or coalesce.
 
-When the exact singleton leaf is saturated and the new mapping cannot
-coalesce, the operation allocates a second leaf and splits the sorted 85-entry
-result into checksummed 42- and 43-entry leaves. The resident depth-one root is
-rewritten with two authoritative indexes. Its exact deduplicated transaction is
+When the selected leaf is saturated, the new mapping cannot coalesce, and the
+resident root has an unused index slot, the operation allocates another leaf
+and splits the sorted 85-entry result into checksummed 42- and 43-entry leaves.
+The resident depth-one root inserts the new adjacent index without changing its
+depth. Its exact deduplicated transaction is
 `6/1/0` through `8/1/0`: the ordinary accounting and inode homes, the replaced
 existing leaf, the new leaf, and any distinct bitmap/GDT homes needed by the
 new leaf allocation. The data and new leaf consume two filesystem blocks, so
 1 KiB `i_blocks` rises by four 512-byte sectors and free space falls by two.
+A saturated unmergeable selected leaf under an already full resident root is a
+typed unsupported depth-growth boundary, not physical `NOSPC`.
 
 A saturated four-entry root whose new mapping cannot coalesce instead grows to
 one checksummed external leaf. The operation allocates a second block for that
@@ -72,20 +81,18 @@ all allocation forms commit-granular.
 Gaps and mixed overwrite/growth refuse before clock sampling or media I/O. Each
 callback is block-bounded; a larger qualified request returns short progress,
 and `VFS-WRITE-EXACT` chains independently durable callbacks. Mapped or
-unwritten targets, mutation starting from a resident depth-one root with more
-than one index, and deeper trees remain structural refusals. The split result
-is readable, but a following allocation callback cannot yet select or mutate
-either of its two leaves. Insufficient root-topology profile capacity is
+unwritten targets and trees deeper than one external-leaf level remain
+structural refusals. Insufficient root-topology profile capacity is
 measured after that allocation callback's clock sample but before activation
 or media I/O; the
 ordinary `4/1/0` floor for a partial-tail crossing request is preflighted before
 its first callback. Linked hole fill and growth create no orphan state.
 Broader write and recovery cases advance from reachable evidence while full
 `akashic-ext4-rw-v1` production capability remains the release goal. The
-immediate write ratchet is mutation of this existing multi-leaf depth-one
-result, including correct leaf selection, selected-key repair, and leaf split
-while the resident root retains index capacity; deeper extent growth remains
-demand-driven. Namespace delivery then proceeds through `CREATE`, shrink
+existing multi-leaf depth-one ratchet is closed through target-leaf selection,
+selected-key repair, in-place editing under a full root, and selected-leaf
+splitting while the root retains index capacity. The immediate write ratchet is
+now shared inode allocation plus directory insertion exposed as `CREATE`, then shrink
 `TRUNCATE`/the distinct `UNLINK` lifetimes, `MKDIR`/`RMDIR`, hard `LINK`, and
 finally `RENAME`, with directory HTree depth expanded independently when those
 operations or a pinned corpus require it. The
