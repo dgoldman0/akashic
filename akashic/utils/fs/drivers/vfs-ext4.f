@@ -13040,6 +13040,129 @@ VARIABLE _EXT4-JOW-META-IOR
     -1 _EXT4-JOW-GROW !
     _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-RMW ;
 
+VARIABLE _EXT4-JTS-END
+VARIABLE _EXT4-JTS-DATA-IMAGE
+VARIABLE _EXT4-JTS-INODE-IMAGE
+VARIABLE _EXT4-JTS-RECORD
+
+: _EXT4-JTS-REQUIRE-FRESH-EXACT  ( -- ior )
+    _EXT4-JOW-WRITER @ _EXT4-JWR.META-CREDIT + @ 2 <>
+    _EXT4-JOW-WRITER @ _EXT4-JWR.DATA-CREDIT + @ 0<> OR
+    _EXT4-JOW-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ 0<> OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-JOW-WRITER @ _EXT4-JWR.META-USED + @
+    _EXT4-JOW-WRITER @ _EXT4-JWR.DATA-USED + @ OR
+    _EXT4-JOW-WRITER @ _EXT4-JWR.REVOKE-USED + @ OR
+    _EXT4-JOW-WRITER @ _EXT4-JWR.META-ACTIVE + @ OR
+    _EXT4-JOW-WRITER @ _EXT4-JWR.DATA-ACTIVE + @ OR
+    _EXT4-JOW-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ OR IF
+        VFS-E-BUSY EXIT
+    THEN
+    _EXT4-JOW-WRITER @ _EXT4-JWR.CP-MODE + @
+    _EXT4-JCPM-NONE <> IF VFS-E-BUSY EXIT THEN
+    _EXT4-JOW-WRITER @ _EXT4-JTX-TABLES-VALID? 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-JOW-CTX @ _EXT4-C.O.ACTIVE + @
+    _EXT4-JOW-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ OR
+    _EXT4-JOW-CTX @ _EXT4-C.O.LEGACY-ACTIVE + @ OR
+    _EXT4-JOW-CTX @ _EXT4-C.O.CLEAR-PENDING + @ OR IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    0 ;
+
+\ Stage a strict same-retained-block shrink.  COUNT is the complete removed
+\ visible suffix, so OFFSET+COUNT must reauthenticate the old EOF exactly.
+\ The selected block is journaled as a metadata payload rather than emitted
+\ as ordered data: zeroing bytes that remain visible at the old EOF before
+\ the inode-size commit would make a precommit tear destructive.  One atomic
+\ 2/0/0 transaction therefore carries the zeroed retained block and the
+\ checksummed inode record.  Block release and orphan protocol are outside
+\ this deliberately bounded slice.
+: _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-TAIL-SHRINK
+  ( ignored-source count new-eof inode-number expected-generation seconds nsec transaction -- ior )
+    _EXT4-JOW-WRITER ! _EXT4-JOW-NSEC ! _EXT4-JOW-SECONDS !
+    _EXT4-JOW-EXPECTED-GEN ! _EXT4-JOW-INO ! _EXT4-JOW-OFFSET !
+    _EXT4-JOW-COUNT ! _EXT4-JOW-SOURCE !
+    0 _EXT4-JOW-GROW ! 0 _EXT4-JOW-PUBLISHED !
+    _EXT4-JOW-WRITER @ _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
+    _EXT4-JOW-WRITER @ _EXT4-JWR.CTX + @ _EXT4-JOW-CTX !
+    _EXT4-JOW-WRITER @ _EXT4-JWR.BSIZE + @ _EXT4-JOW-BSIZE !
+    _EXT4-JOW-COUNT @ 0> 0= _EXT4-JOW-OFFSET @ 0< OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-JOW-SOURCE @ _EXT4-JOW-COUNT @ _VFS-BUFFER? 0= IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-JOW-COUNT @ _EXT4-JOW-BSIZE @ U> IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-JTS-REQUIRE-FRESH-EXACT ?DUP IF EXIT THEN
+    _EXT4-JOW-OFFSET @ _EXT4-JOW-COUNT @ _EXT4-UADD?
+    _EXT4-JOW-IOR ! _EXT4-JTS-END !
+    _EXT4-JOW-IOR @ ?DUP IF EXIT THEN
+    _EXT4-JOW-AUTH-TARGET ?DUP IF EXIT THEN
+    _EXT4-JOW-SIZE @ _EXT4-JTS-END @ <> IF VFS-E-STALE EXIT THEN
+    _EXT4-JOW-NLINK @ 0= IF VFS-E-STALE EXIT THEN
+    _EXT4-JOW-OFFSET @ _EXT4-JOW-BSIZE @ MOD 0= IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-JOW-SIZE @ 0= IF EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN
+    _EXT4-JOW-SIZE @ 1- _EXT4-JOW-BSIZE @ /
+    _EXT4-JOW-LOGICAL @ <> IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-JOW-PHYS @ 1 _EXT4-JOW-CTX @
+    _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
+    _EXT4-JOW-INODE-HOME @ _EXT4-JOW-GROUP @ _EXT4-JOW-CTX @
+    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
+    _EXT4-JOW-INO @ _EXT4-JOW-PHYS @ 1
+    _EXT4-JOW-INODE-HOME @ 1 _EXT4-JOW-CTX @
+    _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR ?DUP IF EXIT THEN
+    _EXT4-JOW-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
+    _EXT4-JOW-PHYS @ _EXT4-JOW-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
+    _EXT4-JOW-CTX @ _EXT4-C.BLOCK + _EXT4-JOW-PHYS @
+    _EXT4-JOW-WRITER @ _EXT4-JTX-META-ACQUIRE
+    DUP IF NIP EXIT THEN DROP DUP _EXT4-JTS-DATA-IMAGE !
+    _EXT4-JOW-BLOCK-OFF @ +
+    _EXT4-JOW-BSIZE @ _EXT4-JOW-BLOCK-OFF @ - 0 FILL
+    _EXT4-JTS-DATA-IMAGE @ _EXT4-JOW-PHYS @ _EXT4-JOW-WRITER @
+    _EXT4-JTX-META-REPLACE ?DUP IF EXIT THEN
+    _EXT4-JOW-REQUIRE-SAME-TARGET ?DUP IF EXIT THEN
+    _EXT4-JOW-INODE-HOME @ _EXT4-JOW-GROUP @ _EXT4-JOW-CTX @
+    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
+    _EXT4-JOW-INODE-HOME @ _EXT4-JOW-CTX @ _EXT4-READ-BLOCK
+    ?DUP IF EXIT THEN
+    _EXT4-JOW-CTX @ _EXT4-C.BLOCK + _EXT4-JOW-INODE-HOME @
+    _EXT4-JOW-WRITER @ _EXT4-JTX-META-ACQUIRE
+    DUP IF NIP EXIT THEN DROP DUP _EXT4-JTS-INODE-IMAGE !
+    _EXT4-JOW-INODE-OFF @ + DUP _EXT4-JTS-RECORD !
+    _EXT4-JOW-CTX @ _EXT4-C.INODE +
+    _EXT4-JOW-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    _EXT4-JOW-OFFSET @ 0xFFFFFFFF AND
+    _EXT4-JTS-RECORD @ _EXT4-I.SIZE-LO + L!
+    _EXT4-JOW-OFFSET @ 32 RSHIFT 0xFFFFFFFF AND
+    _EXT4-JTS-RECORD @ _EXT4-I.SIZE-HI + L!
+    _EXT4-JOW-SECONDS @ _EXT4-JOW-NSEC @ _EXT4-JTS-RECORD @
+    _EXT4-JOW-CTX @ _EXT4-SET-INODE-MTIME-CTIME ?DUP IF EXIT THEN
+    _EXT4-JTS-RECORD @ _EXT4-JOW-INO @ _EXT4-JOW-CTX @
+    _EXT4-RESTAMP-INODE ?DUP IF EXIT THEN
+    _EXT4-JTS-INODE-IMAGE @ _EXT4-JOW-INODE-HOME @ _EXT4-JOW-WRITER @
+    _EXT4-JTX-META-REPLACE ?DUP IF EXIT THEN
+    _EXT4-JOW-WRITER @ _EXT4-JWR.META-USED + @ 2 <>
+    _EXT4-JOW-WRITER @ _EXT4-JWR.META-ACTIVE + @ 2 <> OR
+    _EXT4-JOW-WRITER @ _EXT4-JWR.DATA-USED + @ 0<> OR
+    _EXT4-JOW-WRITER @ _EXT4-JWR.DATA-ACTIVE + @ 0<> OR
+    _EXT4-JOW-WRITER @ _EXT4-JWR.REVOKE-USED + @ 0<> OR
+    _EXT4-JOW-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ 0<> OR
+    _EXT4-JOW-WRITER @ _EXT4-JTX-TABLES-VALID? 0= OR IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    0 ;
+
 \ Prove filesystem-wide ownership of every target block in one inode walk.
 \ Data ranges remain exclusive.  The external-xattr singleton is also kept in
 \ the forbidden vector so it cannot appear as data or map metadata, while the
@@ -18661,9 +18784,13 @@ EXT4-OPS ,
 \ credit.  Both run within a caller profile large enough to contain the
 \ measured topology.  CREATE additionally allocates one initialized-group
 \ inode and inserts it into authenticated slack in a one-block linear
-\ directory through an at-most-six-metadata-home transaction.
+\ directory through an at-most-six-metadata-home transaction.  TRUNCATE first
+\ admits strict shrink inside the current retained initialized block.  Its
+\ zeroed tail and inode record are committed together as exact 2/0/0 metadata
+\ payloads; any shrink that must release a block remains gated on the orphan
+\ protocol.
 \ Bind a containing profile and trusted clock before the first mutation.
-EXT4-CAPS VFS-CAP-WRITE OR VFS-CAP-CREATE OR
+EXT4-CAPS VFS-CAP-WRITE OR VFS-CAP-CREATE OR VFS-CAP-TRUNCATE OR
 CONSTANT EXT4-STAGED-WRITE-CAPS
 
 CREATE EXT4-STAGED-WRITE-OPS VFS-OPS-SIZE ALLOT
@@ -21042,3 +21169,184 @@ VARIABLE _XC-VN
     0 ;
 
 ' _EXT4-CREATE EXT4-STAGED-WRITE-OPS VFS-OP-CREATE CELLS + !
+
+\ =====================================================================
+\  Atomic same-retained-block regular-file shrink
+\ =====================================================================
+\
+\ The generic VFS has already published the requested size when this callback
+\ runs and retains the old size in its guarded operation state.  This first
+\ TRUNCATE slice accepts only a strict shrink whose new EOF lies inside the
+\ old final logical block, so neither the extent map nor i_blocks changes.
+\ The typed builder journals both the zeroed retained block and inode-table
+\ after-image.  Larger shrinks, zero, aligned EOFs, and growth remain explicit
+\ unsupported results until block release is coupled to durable orphan state.
+
+VARIABLE _XT-D
+VARIABLE _XT-V
+VARIABLE _XT-CTX
+VARIABLE _XT-VN
+VARIABLE _XT-BID
+VARIABLE _XT-GEN
+VARIABLE _XT-NEW
+VARIABLE _XT-OLD
+VARIABLE _XT-COUNT
+VARIABLE _XT-MS
+VARIABLE _XT-SECONDS
+VARIABLE _XT-NSEC
+VARIABLE _XT-WRITER
+VARIABLE _XT-TX
+VARIABLE _XT-IOR
+VARIABLE _XT-ACTIVE
+CREATE _XT-ZERO _EXT4-MAX-BLOCK ALLOT
+
+: _XT-SCRUB  ( -- )
+    _XT-ZERO _EXT4-MAX-BLOCK 0 FILL ;
+
+: _XT-ENTRY  ( -- ior )
+    _XT-D @ 0= _XT-V @ 0= OR IF VFS-E-INVALID EXIT THEN
+    _XT-V @ _EXT4-MOW-V !
+    _EXT4-MOW-ENTRY ?DUP IF EXIT THEN
+    _EXT4-MOW-CTX @ _XT-CTX !
+    _EXT4-MOW-ACTIVE @ _XT-ACTIVE !
+    _XT-D @ _XT-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
+    _XT-D @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
+    _XT-D @ D.VNODE @ DUP _XT-VN ! 0= IF VFS-E-STALE EXIT THEN
+    _XT-VN @ VN.TYPE @ VFS-T-DIR = IF VFS-E-ISDIR EXIT THEN
+    _XT-VN @ VN.TYPE @ VFS-T-FILE <> IF
+        EXT4-D-FEATURE _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XT-VN @ VN.FLAGS @ VFS-IF-DIRTY AND IF VFS-E-BUSY EXIT THEN
+    _XT-VN @ VN.BID @ DUP _XT-BID ! 0= IF VFS-E-STALE EXIT THEN
+    _XT-BID @ _XT-CTX @ _EXT4-C.INODES + @ U> IF VFS-E-STALE EXIT THEN
+    _XT-VN @ VN.GEN @ DUP _XT-GEN ! 0xFFFFFFFF U> IF
+        VFS-E-STALE EXIT
+    THEN
+    _XT-VN @ VN.SIZE-HI @ IF VFS-E-OVERFLOW EXIT THEN
+    _XT-VN @ VN.SIZE-LO @ DUP _XT-NEW ! 0< IF VFS-E-OVERFLOW EXIT THEN
+    _VTR-SIZE @ _XT-NEW @ <> IF VFS-E-CONFLICT EXIT THEN
+    _VTR-OLD-SIZE-HI @ IF VFS-E-OVERFLOW EXIT THEN
+    _VTR-OLD-SIZE @ DUP _XT-OLD ! 0< IF VFS-E-OVERFLOW EXIT THEN
+    _XT-VN @ VN.NLINK @ 0= IF VFS-E-STALE EXIT THEN
+    _XT-CTX @ _EXT4-STAGED-WRITE-FS-QUALIFY ?DUP IF EXIT THEN
+    _XT-NEW @ _XT-OLD @ U< 0= IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XT-OLD @ _XT-NEW @ - DUP _XT-COUNT !
+    _XT-CTX @ _EXT4-C.BSIZE + @ U> IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XT-NEW @ _XT-CTX @ _EXT4-C.BSIZE + @ MOD 0= IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XT-OLD @ 1- _XT-CTX @ _EXT4-C.BSIZE + @ /
+    _XT-NEW @ _XT-CTX @ _EXT4-C.BSIZE + @ / <> IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XT-CTX @ _EXT4-C.WCLOCK-XT + @ 0= IF VFS-E-UNSUPPORTED EXIT THEN
+    _XT-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @
+    _EXT4-JWR-STORE-DEDICATED <> IF VFS-E-NOSPC EXIT THEN
+    _XT-CTX @ _EXT4-C.J.WRITER-ARENA + @ 0=
+    _XT-CTX @ _EXT4-C.J.WRITER + @ 0= OR IF VFS-E-CORRUPT EXIT THEN
+    0 ;
+
+: _XT-NOW  ( -- ior )
+    _XT-CTX @ _EXT4-C.WCLOCK-CTX + @
+    _XT-CTX @ _EXT4-C.WCLOCK-XT + @ EXECUTE
+    _XT-IOR ! _XT-MS !
+    _XT-IOR @ ?DUP IF EXIT THEN
+    _XT-MS @ 0< IF VFS-E-INVALID EXIT THEN
+    _XT-MS @ _EXT4-WRITE-EPOCH-MS-MAX U> IF VFS-E-OVERFLOW EXIT THEN
+    _XT-MS @ 1000 /MOD
+    _XT-SECONDS ! 1000000 * _XT-NSEC !
+    0 ;
+
+: _XT-FAIL  ( ior -- ior )
+    _XT-IOR !
+    _XT-WRITER @ ?DUP IF
+        DUP _EXT4-JWR.STATE + @ _EXT4-JWR-STAGING = IF
+            _EXT4-JTX-ABORT ?DUP IF
+                _XT-WRITER @ _EXT4-JWR-LATCH-FAULT _XT-IOR !
+            THEN
+        ELSE
+            DUP _EXT4-JWR.STATE + @ _EXT4-JWR-COMMITTED = IF
+                DROP
+                _EXT4-JWP-CHECKPOINT-PREFLIGHT
+                _XT-WRITER @ _EXT4-JWR.PHASE + !
+                _XT-IOR @ _XT-WRITER @ _EXT4-JWR-LATCH-FAULT
+                _XT-IOR !
+            ELSE
+                DUP _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = IF
+                    _EXT4-JWR.FAULT + @ ?DUP IF _XT-IOR ! THEN
+                ELSE
+                    DROP
+                THEN
+            THEN
+        THEN
+    THEN
+    _XT-SCRUB
+    _XT-IOR @ ;
+
+: _XT-PUBLISH-COMMITTED  ( -- )
+    _XT-NEW @ _XT-VN @ VN.SIZE-LO !
+    0 _XT-VN @ VN.SIZE-HI !
+    _XT-SECONDS @ _XT-VN @ VN.MTIME !
+    _XT-NSEC @ _XT-VN @ VN.MTIME-NS !
+    _XT-SECONDS @ _XT-VN @ VN.CTIME !
+    _XT-NSEC @ _XT-VN @ VN.CTIME-NS !
+    VFS-F-DIRTY _XT-V @ V.FLAGS DUP @ ROT OR SWAP ! ;
+
+: _XT-POSTCOMMIT-FAIL  ( ior -- ior )
+    DUP _XT-V @ V.LAST-IOR !
+    _XT-FAIL DROP
+    \ Checkpoint preflight or a torn home may reload the old inode before
+    \ quarantine.  The committed journal remains authoritative, so restore
+    \ the complete committed vnode projection after the failure path.
+    _XT-PUBLISH-COMMITTED
+    0 ;
+
+: _EXT4-TRUNCATE  ( dentry vfs -- ior )
+    _XT-V ! _XT-D !
+    0 _XT-WRITER ! 0 _XT-TX !
+    _XT-SCRUB
+    _XT-ENTRY ?DUP IF _XT-SCRUB EXIT THEN
+    _XT-NOW ?DUP IF _XT-SCRUB EXIT THEN
+    2 0 0 _XT-CTX @ _EXT4-JTX-PREFLIGHT-CAPACITY
+    ?DUP IF _XT-SCRUB EXIT THEN
+    2 0 0 _XT-CTX @ _EXT4-JWR-ENSURE
+    DUP IF NIP _XT-FAIL EXIT THEN
+    DROP _XT-WRITER !
+    _XT-ACTIVE @ 0= IF
+        2 0 0 _XT-WRITER @ _EXT4-JTX-BEGIN
+        DUP IF NIP _XT-FAIL EXIT THEN
+        DROP _XT-TX !
+        _XT-ZERO _XT-COUNT @ _XT-NEW @ _XT-BID @ _XT-GEN @
+        _XT-SECONDS @ _XT-NSEC @ _XT-TX @
+        _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-TAIL-SHRINK
+        ?DUP IF _XT-FAIL EXIT THEN
+        _XT-TX @ _EXT4-JTX-ABORT ?DUP IF _XT-FAIL EXIT THEN
+        _XT-WRITER @ _EXT4-JWR-ACTIVATE ?DUP IF _XT-FAIL EXIT THEN
+    THEN
+    2 0 0 _XT-WRITER @ _EXT4-JTX-BEGIN
+    DUP IF NIP _XT-FAIL EXIT THEN
+    DROP _XT-TX !
+    _XT-ZERO _XT-COUNT @ _XT-NEW @ _XT-BID @ _XT-GEN @
+    _XT-SECONDS @ _XT-NSEC @ _XT-TX @
+    _EXT4-JTX-STAGE-REGULAR-ONEBLOCK-TAIL-SHRINK
+    ?DUP IF _XT-FAIL EXIT THEN
+    _XT-TX @ _EXT4-JTX-EMIT ?DUP IF _XT-FAIL EXIT THEN
+    _XT-PUBLISH-COMMITTED
+    _XT-TX @ _EXT4-JTX-CHECKPOINT
+    ?DUP IF _XT-POSTCOMMIT-FAIL EXIT THEN
+    _XT-WRITER @ _EXT4-JWR-VALID? 0= IF
+        VFS-E-CORRUPT _XT-POSTCOMMIT-FAIL EXIT
+    THEN
+    _XT-WRITER @ _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <>
+    _XT-WRITER @ _EXT4-JWR-IDLE-CLEAN? 0= OR IF
+        VFS-E-CORRUPT _XT-POSTCOMMIT-FAIL EXIT
+    THEN
+    0 _XT-V @ V.LAST-IOR !
+    _XT-SCRUB
+    0 ;
+
+' _EXT4-TRUNCATE EXT4-STAGED-WRITE-OPS VFS-OP-TRUNCATE CELLS + !

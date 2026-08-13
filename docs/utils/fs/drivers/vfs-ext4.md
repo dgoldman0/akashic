@@ -39,7 +39,10 @@ whose data and leaf accounting span distinct bitmaps and distinct primary GDT
 pages, plus a same-group singleton-leaf split. The broader 1/2/4 KiB and
 128/256-byte-inode forms remain available to
 read and recovery paths; 2/4 KiB and 128-byte-inode mutation await equivalent
-qualification. The driver also implements bounded mount-time recovery and
+qualification. The staged surface additionally provides atomic empty-file
+`CREATE` in authenticated one-block linear-directory slack and strict
+same-retained-block shrink `TRUNCATE` under exact `2/0/0` credit. The driver
+also implements bounded mount-time recovery and
 durable transaction emission for an internal checksum-v3 JBD2 journal. It never
 uses the ambient filesystem volume: reads and all recovery, activation,
 emission, checkpoint, and clean-deactivation writes go through checked volume
@@ -1998,6 +2001,50 @@ The next ordinary read-only mount replays all six metadata homes, resolves the
 file with its exact timestamps and identity, and passes `e2fsck`; the following
 mount is byte-stable and performs zero writes.
 
+### Same-retained-block shrink TRUNCATE
+
+The staged binding advertises `VFS-CAP-TRUNCATE` only for a strict shrink whose
+new EOF is nonaligned and lies inside the old final initialized logical block.
+The generic VFS prepublishes the requested shared-vnode size and retains the
+old size while the guarded callback runs. The ext4 callback reauthenticates
+that exact old EOF, positive link count, inode identity, complete depth-zero or
+depth-one extent map, selected block, xattr pointer, inode-table home, and
+unique ownership of the data/inode-home pair. A same-size or growing request,
+zero, an aligned new EOF, or a shrink selecting an earlier logical block returns
+typed unsupported and the VFS restores its old cache projection. Those refused
+shapes can require block release and are not approximated by retaining blocks
+beyond the qualified boundary.
+
+An admitted call zeroes the entire retained block suffix beginning at the new
+EOF, writes the exact 64-bit inode size, updates trusted-clock `mtime`/`ctime`,
+and restamps the inode checksum. It preserves the extent map, physical block,
+`i_blocks`, link count, generation, atime, xattrs, block bitmaps, descriptors,
+superblock free count, and orphan state. The zeroed file block and inode-table
+block are both JBD2 metadata payloads in an exact `2 metadata / 0 ordered data /
+0 revoke` transaction. The file block deliberately is not ordinary ordered
+data: a precommit ordered write could zero bytes still visible under the old
+EOF. Journaling both full-block after-images makes the old pair or the
+committed new pair the only recovery authorities.
+
+Clean qualification shrinks inode 14 and both hard-link aliases from 54 to 24
+bytes, clamps the calling descriptor cursor, leaves `i_blocks=4` and free-space
+accounting fixed, and proves bytes 24 through 1023 zero. A cold ordinary mount
+reads both aliases with the exact prefix and performs no writes; pinned
+e2fsprogs 1.47.4 `debugfs` observes the unchanged mapping/link/block counts and
+read-only `e2fsck` accepts the image. A missing trusted clock refuses before
+writer creation or media I/O and restores the prepublished cached size.
+
+The W7 descriptor tear returns the volume I/O error, restores the old cached
+EOF, leaves the descriptor cursor and both filesystem homes unchanged, and
+requires no transaction-home replay. At W17 the committed transaction's data
+home has landed and its inode home tears. The callback returns TRUNCATE success,
+reapplies the new vnode size and timestamps after checkpoint quarantine, and
+retains the partial/read-only error in `V.LAST-IOR`. Recovery replays both
+homes; the following mount is byte-stable and write-free. The next TRUNCATE
+slice is block-releasing shrink: it must first create durable orphan authority,
+then compose the existing linked-orphan cleanup machinery before `UNLINK` adds
+its nonfinal, final, and open-file lifetimes.
+
 ### Allocation-backed in-size hole fill
 
 The staged binding publicly routes an exact clean unmapped target to the typed
@@ -2493,7 +2540,8 @@ The ratchet order is:
    unselected index pairs value-exact (completed at `1f4e0ea`);
 4. build shared inode allocation and directory insertion, then expose the
    first bounded `CREATE` slice (completed in the current worktree);
-5. add shrink `TRUNCATE` and `UNLINK`, including nonfinal-link removal,
+5. extend the completed same-retained-block shrink `TRUNCATE` slice through
+   block-releasing shrink, then add `UNLINK`, including nonfinal-link removal,
    unlink-while-open, and final release, with only the orphan states those
    paths make reachable;
 6. add `MKDIR` and `RMDIR`, including `.`/`..`, parent/child link counts, and
@@ -2525,11 +2573,11 @@ hole-fill, and aligned-EOF growth operations are production-closed for their
 documented request envelopes. Their qualified tail-to-allocation and additional
 allocated-EOF exact compositions preserve independently durable prefixes, but
 no broader geometry or operation inherits that status.
-`EXT4-STAGED-WRITE-OPS` adds `MOUNT` admission plus `WRITE` and the bounded
-linear-directory `CREATE` dispatches to the ordinary table. The ordinary
-binding remains `VFS-BF-READ-ONLY` and advertises neither. Neither binding yet
-advertises `MKDIR`, `UNLINK`, `RMDIR`, `RENAME`, `TRUNCATE`, `SETATTR`, `LINK`,
-`SYMLINK`, `SETXATTR`, or `REMOVEXATTR`. Each later capability
+`EXT4-STAGED-WRITE-OPS` adds staged `MOUNT`, `WRITE`, bounded linear-directory
+`CREATE`, and same-retained-block shrink `TRUNCATE` dispatch slots to its copy
+of the ordinary table. The ordinary binding remains `VFS-BF-READ-ONLY` and advertises
+none of them. Neither binding yet advertises `MKDIR`, `UNLINK`, `RMDIR`,
+`RENAME`, `SETATTR`, `LINK`, `SYMLINK`, `SETXATTR`, or `REMOVEXATTR`. Each later capability
 still needs its own bounded credit/chunking contract, reachable-state recovery
 closure, namespace/cache behavior where applicable, and interoperability plus
 crash qualification. Full profile completion additionally needs general block
@@ -2537,7 +2585,7 @@ and inode allocation, extent and legacy-map growth and shrink, directory-entry
 mutation, inode/link/time/accounting updates, xattr mutation, broader per-record
 orphan closure, and the final compositional release matrix.
 
-The staged binding publishes four concrete durable operations. Initialized
+The staged binding publishes five concrete durable operations. Initialized
 overwrite uses a full-block ordered-data RMW plus one checksummed inode-table
 after-image and consumes `1/1/0`. Strict append uses the same transaction shape
 to extend exact partial EOF inside the initialized block, updating `i_size`
@@ -2549,7 +2597,9 @@ updates every required bitmap,
 group, and super free-block account plus `i_blocks`, and consumes exact
 `4/1/0` through `8/1/0` credit.
 Aligned-EOF growth uses the same topology-derived allocation transaction and
-also advances `i_size`. All four update clock-derived `mtime`/`ctime`; both
+also advances `i_size`. Same-retained-block TRUNCATE journals its zeroed data
+block and checksummed size/timestamp inode as exact `2/0/0`, without allocation
+or orphan state. All five update clock-derived `mtime`/`ctime`; both
 allocation-backed operations change `VN.BLOCKS` and free-space accounting, and
 both append modes change file size. Exact writes compose the qualified
 initialized and hole callbacks across evidenced adjacent blocks and compose the
@@ -2592,12 +2642,15 @@ group inode selection and allocation, checksum/accounting updates, one-block
 linear-directory slack insertion, parent/new inode construction, cache
 publication, clean unmount, precommit rollback, six-home committed replay,
 write-free stable remount, and pinned `debugfs`/`e2fsck` acceptance in one
-at-most-six-home transaction. The next
-write ratchet is shrink `TRUNCATE` plus the operation-shaped `UNLINK` lifetimes
+at-most-six-home transaction. The initial TRUNCATE slice adds shared-vnode
+shrink publication, complete retained-tail zeroing, exact two-home commit,
+W7 old-EOF rollback, W17 committed two-home replay, stable remount, and pinned
+`debugfs`/`e2fsck` acceptance. The next
+write ratchet is block-releasing `TRUNCATE` plus the operation-shaped `UNLINK` lifetimes
 rather than speculative orphan expansion. General sparse/gap growth, unwritten conversion, growth beyond a
 full resident root plus full unmergeable selected leaf, mutation starting from
 a deeper extent tree, other broader allocation and mutation geometry, multi-
-block atomicity, truncation, and other namespace mutation remain later
+block atomicity, block-releasing truncation, and other namespace mutation remain later
 capabilities.
 
 The remaining boundaries are the final-profile closure inventory, not an

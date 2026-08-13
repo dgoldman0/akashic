@@ -99,8 +99,11 @@ bitmap, group descriptor, primary superblock, new and parent inode records, and
 directory block form one deduplicated transaction of at most six metadata
 homes. Indexed or growing directories, directory xattrs/default ACLs, lazy
 inode-group initialization, and non-root credential policy still refuse before
-publication. The immediate write ratchet is now shrink `TRUNCATE` and the
-distinct `UNLINK` lifetimes, then `MKDIR`/`RMDIR`, hard `LINK`, and finally
+publication. The staged binding now also publishes strict shrink `TRUNCATE`
+inside the old final initialized block. It commits the zeroed retained tail and
+checksummed inode as exact `2/0/0`, while zero, aligned, cross-block, and growth
+requests remain unsupported. The immediate write ratchet is now block-
+releasing `TRUNCATE` and the distinct `UNLINK` lifetimes, then `MKDIR`/`RMDIR`, hard `LINK`, and finally
 `RENAME`, with directory HTree depth expanded independently when those
 operations or a pinned corpus require it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate
@@ -622,8 +625,11 @@ retryable. Mutation callbacks must either complete their backend transaction
 or return an error before the core publishes the cache change.
 
 `TRUNCATE` sees the requested logical size already staged in the vnode; the
-core restores the prior size if the callback fails. SETATTR instead receives a
-separate request and is published only after success.
+core restores the prior size if the callback fails. Before dispatch the core
+clears `V.LAST-IOR`. A binding that has durably committed the new size may
+return callback success while storing a later checkpoint failure there; the
+success path preserves that diagnostic instead of overwriting it. SETATTR
+instead receives a separate request and is published only after success.
 
 Semantic caps are `VFS-CAP-ATOMIC-RENAME`,
 `VFS-CAP-CROSSDIR-RENAME`, `VFS-CAP-RENAME-REPLACE`,

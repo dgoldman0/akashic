@@ -827,6 +827,38 @@ def test_successful_truncate_preserves_stack():
         'T-TRUNC-STACK CR _FD VFS-CLOSE',
     ], "OK STACK SIZE")
 
+
+def test_successful_truncate_preserves_new_binding_diagnostic_only():
+    """A committed callback may retain a checkpoint diagnostic on success."""
+    check("successful truncate diagnostic", [
+        "VARIABLE _TR-DIAG",
+        (
+            ": T-TRUNC-DIAG-CB ( inode vfs -- ior ) "
+            "_TR-DIAG @ IF VFS-E-IO OVER V.LAST-IOR ! THEN 2DROP 0 ;"
+        ),
+        "T-BINDING-CLONE CONSTANT _BIND",
+        (
+            "' T-TRUNC-DIAG-CB _BIND VB.OPS @ "
+            "VFS-OP-TRUNCATE CELLS + !"
+        ),
+        (
+            '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1 S" t.bin" '
+            "_V1 VFS-MKFILE DROP _V1 VFS-USE"
+        ),
+        'S" t.bin" VFS-OPEN CONSTANT _FD S" data" _FD VFS-WRITE DROP',
+        "-1 _TR-DIAG ! 2 _FD VFS-TRUNCATE CONSTANT _FIRST-IOR",
+        (
+            '_FIRST-IOR 0= _V1 V.LAST-IOR @ VFS-E-IO = AND '
+            '_FD VFS-SIZE 2 = AND IF ." RETAINED " THEN'
+        ),
+        "0 _TR-DIAG ! 1 _FD VFS-TRUNCATE CONSTANT _SECOND-IOR",
+        (
+            '_SECOND-IOR 0= _V1 V.LAST-IOR @ 0= AND '
+            '_FD VFS-SIZE 1 = AND IF ." CLEARED" THEN'
+        ),
+        "_FD VFS-CLOSE",
+    ], "RETAINED CLEARED")
+
 # ── VFS-RESOLVE ──
 
 def test_resolve_root():

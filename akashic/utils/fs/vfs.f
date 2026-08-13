@@ -1914,13 +1914,18 @@ VARIABLE _VTR-V
     _VTR-FD @ FD.INODE @ IN.SIZE-HI @ _VTR-OLD-SIZE-HI !
     _VTR-SIZE @ _VTR-FD @ FD.INODE @ IN.SIZE-LO !
     0 _VTR-FD @ FD.INODE @ IN.SIZE-HI !
+    \ Clear the prior diagnostic before dispatch.  A binding that has already
+    \ committed the requested size may return callback success while retaining
+    \ a later checkpoint error here; do not erase that durable-progress
+    \ diagnostic on the generic success path.
+    0 _VTR-V @ V.LAST-IOR !
     _VTR-FD @ FD.INODE @
     _VTR-V @
     VFS-OP-TRUNCATE _VTR-V @ _VFS-XT EXECUTE
     DUP IF
         _VTR-OLD-SIZE @ _VTR-FD @ FD.INODE @ IN.SIZE-LO !
         _VTR-OLD-SIZE-HI @ _VTR-FD @ FD.INODE @ IN.SIZE-HI !
-        EXIT
+        _VTR-V @ _VFS-RESULT EXIT
     THEN DROP
     VFS-IF-DIRTY
     _VTR-FD @ FD.INODE @ IN.FLAGS DUP @ ROT OR SWAP !
@@ -1928,7 +1933,7 @@ VARIABLE _VTR-V
     _VTR-FD @ FD.CUR-LO @ _VTR-SIZE @ > IF
         _VTR-SIZE @ _VTR-FD @ FD.CUR-LO !
     THEN
-    0 _VTR-V @ _VFS-RESULT ;
+    0 ;
 
 \ =====================================================================
 \  Inode Tree Mutation Helpers

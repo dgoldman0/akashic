@@ -97,9 +97,17 @@ stable remount. Its current credential and inheritance
 envelope is deliberately explicit: root-owned, non-setgid parents without
 inline or external xattrs/default ACLs create root-owned mode-0666 files;
 indexed/multi-block directory insertion and lazy inode-table initialization
-remain unsupported. The current critical path is shrink `TRUNCATE` and the
-distinct nonfinal, final, and open `UNLINK` lifetimes; `MKDIR`/`RMDIR`; hard
-`LINK`; and finally staged `RENAME` cases. Extent-tree depth and indexed-
+remain unsupported. The first shrink `TRUNCATE` slice is now public as well:
+it accepts a strict new EOF inside the old final initialized block, journals
+the zeroed retained-block tail and checksummed inode together as exact `2/0/0`
+metadata payloads, and preserves mapping, `i_blocks`, links, xattrs, and free-
+space accounting. A W7 descriptor tear retains the old EOF and both old homes;
+a committed W17 inode-home tear retains the new public EOF and replays both
+homes on recovery. Zero, aligned, cross-block, and growing requests remain
+unsupported because the first three may require block release and durable
+orphan authority. The current critical path is block-releasing `TRUNCATE` and
+the distinct nonfinal, final, and open `UNLINK` lifetimes; `MKDIR`/`RMDIR`;
+hard `LINK`; and finally staged `RENAME` cases. Extent-tree depth and indexed-
 directory HTree depth are independent ratchets. Broaden either only when the
 next operation or a pinned realistic corpus demands it; directory growth does
 not imply speculative regular-file extent depth growth.
@@ -1822,6 +1830,40 @@ clear. Hostile checksum-valid aliases through another inode are qualified for
 both a journal-ring block and the primary-super home. This closes that
 reverse-ownership release gate without changing the remaining operation
 planning, mutation-surface, and interoperability gates.
+
+The first public `TRUNCATE` slice closes strict shrink inside the retained old
+final initialized block. Its typed builder reauthenticates the exact old EOF,
+complete depth-zero or depth-one extent map, selected block, inode locator and
+generation, positive link count, external xattr, and unique ownership of the
+data/inode-home pair. The new EOF must be nonaligned and select the same final
+logical block as `old_size - 1`; the extent map, allocation state, `i_blocks`,
+link count, generation, atime, and free-space counters do not change. The full
+retained-block suffix from the new EOF is zeroed so later growth cannot reveal
+stale bytes.
+
+Unlike ordinary initialized overwrite, that zeroed block is carried as a JBD2
+metadata payload together with the inode-table after-image under exact `2/0/0`
+credit. Emitting it as ordered data would permit a precommit tear to zero bytes
+that remain visible under the old EOF. The metadata-payload transaction makes
+the old pair or committed new pair the only recovery authorities. Clean public
+qualification shrinks both hard-link aliases of inode 14 from 54 to 24 bytes,
+clamps the calling descriptor cursor, checkpoints both homes, leaves the four-
+sector `i_blocks` and free count unchanged, zeroes bytes 24 through 1023, and
+survives a write-free cold remount. Pinned e2fsprogs 1.47.4 `debugfs` observes
+both names, the unchanged mapping and link/block counts, and read-only
+`e2fsck` accepts the result.
+
+At W7, a torn descriptor returns the volume error through `VFS-TRUNCATE`,
+restores the 54-byte cached EOF and cursor contract, and leaves the data and
+inode homes byte-exact. Recovery replays no transaction home before a stable
+remount. At W17, the data home is already checkpointed and the committed inode
+home tears. The callback retains public success, the 24-byte vnode/timestamps,
+and the checkpoint failure in `V.LAST-IOR` while quarantining the mount.
+Recovery replays both transaction homes, then the next mount is write-free and
+byte-stable. This slice does not create orphan state. Shrink to zero or an
+aligned/cross-block EOF, block freeing, and growth remain gated until the
+block-release half can first publish durable orphan authority and then compose
+the already qualified cleanup machinery.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
