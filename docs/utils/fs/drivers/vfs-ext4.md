@@ -2385,21 +2385,35 @@ authority, batching, ring wrap, or resolver behavior.
 
 The ratchet order is:
 
-1. freeze or clamp the qualified recovery baseline;
-2. expose initialized-block overwrite and the structurally bounded one-block
-   in-size hole allocation, then strict append inside an initialized partial
-   EOF block, one-block allocation-backed growth from aligned EOF, and exact
-   composition from that partial tail into one allocated next block, through
-   the explicitly named staged binding while leaving the ordinary binding read-
-   only;
-3. compose additional allocated EOF blocks, broaden allocation geometry, and
-   add the single-leaf depth-zero-to-depth-one extent-root form (completed
-   through `851d2c6`);
-4. add inode/directory creation and then truncation, unlink, and removal with
-   the exact new orphan states those operations make reachable;
-5. add rename, links, remaining metadata operations, and xattr mutation; and
-6. perform the final profile closure audit across every profile-admitted
+1. freeze or clamp the qualified recovery baseline (completed);
+2. close initialized overwrite, bounded allocation-backed hole fill and
+   aligned growth, exact-write composition, allocation geometry, depth-zero
+   root composition, singleton depth-one mutation, and singleton-leaf
+   splitting (completed through `3091fca`);
+3. make an existing authenticated multi-leaf depth-one root writable: select
+   and reauthenticate the governing leaf, insert or coalesce, repair its
+   resident index key, and split that leaf while the root retains index
+   capacity, preserving untouched leaves byte-exact and preexisting
+   unselected index pairs value-exact;
+4. build shared inode allocation and directory insertion, then expose
+   `CREATE`;
+5. add shrink `TRUNCATE` and `UNLINK`, including nonfinal-link removal,
+   unlink-while-open, and final release, with only the orphan states those
+   paths make reachable;
+6. add `MKDIR` and `RMDIR`, including `.`/`..`, parent/child link counts, and
+   empty-directory enforcement;
+7. add hard `LINK`, then ratchet `RENAME` from same-directory no-replacement
+   through cross-directory, directory-move, replacement, and open-victim
+   cases;
+8. add remaining metadata and xattr mutation; and
+9. perform the final profile closure audit across every profile-admitted
    operation and recovery state.
+
+Extent-tree depth and indexed-directory HTree depth are independent ratchets.
+Broaden either only when the next operation or a realistic pinned corpus
+demands it. `CREATE` may require a directory-leaf split before any regular-file
+workload requires extent depth two; neither tree's speculative generalization
+gates the other.
 
 Each landing may move only forward: it must keep all prior qualified behavior,
 remain crash-closed, and advertise exactly the capabilities it has earned. An
@@ -2470,10 +2484,11 @@ first-key repair, data/accounting checks, stable remount, and external-tool
 acceptance. Singleton-leaf splitting adds exact six-home public publication and
 typed staging, two checksummed 42/43-entry leaves, two-index root publication,
 whole-file external-tool acceptance, active-empty remount cleanup, and exact
-six-home committed new-leaf replay without ordered-data rewrite. The next write
-ratchets broaden
-from evidence produced by these real writes rather than speculative orphan
-expansion. General sparse/gap growth, unwritten conversion, mutation starting
+six-home committed new-leaf replay without ordered-data rewrite. The next
+write ratchet is the exact existing multi-leaf depth-one slice in the ordered
+delivery list above, followed by operation-shaped namespace work rather than
+speculative orphan expansion. General sparse/gap growth, unwritten conversion,
+mutation starting
 from a multi-leaf or deeper extent tree, other broader allocation and mutation
 geometry, multi-
 block atomicity, truncation, and namespace mutation remain later capabilities.

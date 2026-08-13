@@ -83,6 +83,17 @@ write ordering, metadata-home roles, witness authority, batching, ring wrap,
 or resolver behavior. Complete profile release still requires the full
 profile-admitted operation and recovery closure.
 
+The current critical path first closes allocation mutation from an existing
+multi-leaf depth-one extent root: select and reauthenticate the governing leaf,
+edit and repair its resident key, and split it only while the resident root has
+index capacity. It then proceeds through shared inode allocation and directory
+insertion into `CREATE`; shrink `TRUNCATE` and the distinct nonfinal, final, and
+open `UNLINK` lifetimes; `MKDIR`/`RMDIR`; hard `LINK`; and finally staged
+`RENAME` cases. Extent-tree depth and indexed-directory HTree depth are
+independent ratchets. Broaden either only when the next operation or a pinned
+realistic corpus demands it; a directory-leaf split needed by `CREATE` does
+not imply speculative regular-file extent depth growth.
+
 ## Immutable authorities
 
 The on-disk and behavioral authority is the Linux v6.18 ext4/JBD2

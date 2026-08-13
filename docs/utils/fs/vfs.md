@@ -82,6 +82,13 @@ ordinary `4/1/0` floor for a partial-tail crossing request is preflighted before
 its first callback. Linked hole fill and growth create no orphan state.
 Broader write and recovery cases advance from reachable evidence while full
 `akashic-ext4-rw-v1` production capability remains the release goal. The
+immediate write ratchet is mutation of this existing multi-leaf depth-one
+result, including correct leaf selection, selected-key repair, and leaf split
+while the resident root retains index capacity; deeper extent growth remains
+demand-driven. Namespace delivery then proceeds through `CREATE`, shrink
+`TRUNCATE`/the distinct `UNLINK` lifetimes, `MKDIR`/`RMDIR`, hard `LINK`, and
+finally `RENAME`, with directory HTree depth expanded independently when those
+operations or a pinned corpus require it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate
 tears return zero, while committed W22 inode-home tears publish progress and
 replay four metadata homes without rewriting ordered data. In the distinct
