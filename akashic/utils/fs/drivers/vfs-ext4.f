@@ -20993,6 +20993,12 @@ VARIABLE _XC-VN
 : _XC-POSTCOMMIT-FAIL  ( ior -- ior )
     DUP _XC-V @ V.LAST-IOR !
     _XC-FAIL DROP
+    \ Checkpoint preflight reloads the on-disk superblock before writing any
+    \ home.  A home tear may therefore leave the cached free-inode count at
+    \ the pretransaction value even though the committed journal is now the
+    \ namespace authority.  Reapply the complete committed cache projection
+    \ after quarantine; recovery will converge the media on the next mount.
+    _XC-PUBLISH-COMMITTED
     0 ;
 
 : _EXT4-CREATE  ( dentry vfs -- ior )

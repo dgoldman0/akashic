@@ -92,7 +92,7 @@ Broader write and recovery cases advance from reachable evidence while full
 existing multi-leaf depth-one ratchet is closed through target-leaf selection,
 selected-key repair, in-place editing under a full root, and selected-leaf
 splitting while the root retains index capacity. The staged binding now also
-publishes the first atomic `CREATE` slice: it allocates one inode from an
+publishes the first crash-closed `CREATE` slice: it allocates one inode from an
 initialized inode group and inserts an empty root-owned mode-0666 regular file
 into authenticated slack in an existing one-block linear directory. The inode
 bitmap, group descriptor, primary superblock, new and parent inode records, and

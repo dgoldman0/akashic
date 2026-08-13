@@ -90,7 +90,10 @@ first `CREATE` slice is also public in the staged binding. It allocates from an
 already initialized inode bitmap and inserts one empty regular file into
 authenticated slack in an existing one-block linear directory, committing its
 directory block, parent/new inode records, inode bitmap, descriptor, and
-primary-super accounting atomically. Its current credential and inheritance
+primary-super accounting atomically. A precommit descriptor tear publishes no
+namespace or allocation state; a committed directory-home tear retains the
+public object and replays all six homes on the next mount before a write-free
+stable remount. Its current credential and inheritance
 envelope is deliberately explicit: root-owned, non-setgid parents without
 inline or external xattrs/default ACLs create root-owned mode-0666 files;
 indexed/multi-block directory insertion and lazy inode-table initialization

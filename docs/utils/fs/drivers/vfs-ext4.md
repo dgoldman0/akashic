@@ -1988,6 +1988,16 @@ same dentry, unmounts cleanly, and passes pinned e2fsprogs 1.47.4 `debugfs`
 stat/list plus read-only `e2fsck`. A missing trusted clock rolls the provisional
 VFS object back before writer creation or media I/O.
 
+Operation-specific crash qualification covers both sides of commit authority.
+A W7 torn journal descriptor returns an I/O error, removes the provisional VFS
+object, leaves all six ext4 homes and free-inode accounting unchanged, and
+requires no transaction-home replay. A committed W22 directory-home tear
+returns CREATE success, retains inode 33 and the complete cache projection,
+records the checkpoint error in `V.LAST-IOR`, and quarantines the live mount.
+The next ordinary read-only mount replays all six metadata homes, resolves the
+file with its exact timestamps and identity, and passes `e2fsck`; the following
+mount is byte-stable and performs zero writes.
+
 ### Allocation-backed in-size hole fill
 
 The staged binding publicly routes an exact clean unmapped target to the typed
@@ -2580,8 +2590,9 @@ index splitting, target-local cross-leaf alias rejection, stable remount, and
 pinned `debugfs`/`e2fsck` acceptance. The initial CREATE slice adds initialized-
 group inode selection and allocation, checksum/accounting updates, one-block
 linear-directory slack insertion, parent/new inode construction, cache
-publication, clean unmount, rollback without a trusted clock, and pinned
-`debugfs`/`e2fsck` acceptance in one at-most-six-home transaction. The next
+publication, clean unmount, precommit rollback, six-home committed replay,
+write-free stable remount, and pinned `debugfs`/`e2fsck` acceptance in one
+at-most-six-home transaction. The next
 write ratchet is shrink `TRUNCATE` plus the operation-shaped `UNLINK` lifetimes
 rather than speculative orphan expansion. General sparse/gap growth, unwritten conversion, growth beyond a
 full resident root plus full unmergeable selected leaf, mutation starting from
