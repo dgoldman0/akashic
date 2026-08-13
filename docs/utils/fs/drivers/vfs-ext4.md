@@ -45,7 +45,12 @@ surface includes strict same-retained-block shrink under exact `2/0/0` credit
 and one block-releasing shrink-to-zero shape. The latter accepts one initialized
 depth-zero extent, first commits a modern orphan with the zero-size inode, then
 uses the existing linked-orphan cleanup to release the data block, and finally
-clears transient `ORPHAN_PRESENT` while leaving the mounted writer active. The driver
+clears transient `ORPHAN_PRESENT` while leaving the mounted writer active. The
+staged surface also provides the first `UNLINK` lifetime: a closed regular inode
+with more than one link may lose one name from an authenticated one-block
+linear directory when another name for that inode remains in the same parent.
+The target link count/ctime, parent mtime/ctime, and directory record removal
+commit atomically without allocation or orphan state. The driver
 also implements bounded mount-time recovery and
 durable transaction emission for an internal checksum-v3 JBD2 journal. It never
 uses the ambient filesystem volume: reads and all recovery, activation,
@@ -70,7 +75,7 @@ geometry boundary: the validator requires each scheduled backup group number
 to equal the 16-bit on-disk `s_block_group_nr`, so a required sparse-super
 backup above group 65535 is refused.
 
-The checked-in 1,050,000,000-step ext4 cold-source value is a qualification watchdog
+The checked-in 1,100,000,000-step ext4 cold-source value is a qualification watchdog
 and measurement guide, not an ext4 implementation capacity or a reason to
 weaken functionality. If correct source legitimately outgrows it, the budget
 must be revisited from measured system resources. The harness still performs a
@@ -114,10 +119,10 @@ budget failures include used and allowed steps. The current source passes cold
 builds and focused recovery qualification under their checked-in watchdogs,
 without a compiled cache or certificate-preservation shortcut.
 
-After the block-releasing truncate slice, the production source measured
-1,021,148,317 steps across 2,758 packed lines in source mode. The 1.05-billion
-watchdog leaves a small measured growth margin; it is not a filesystem or
-implementation capacity.
+After the first nonfinal `UNLINK` slice, the production source measures
+1,070,910,346 steps across 2,845 packed lines in source mode. The 1.10-billion
+watchdog leaves about 2.6 percent measured growth margin; it is not a
+filesystem or implementation capacity.
 
 ## Mounting
 
@@ -2099,6 +2104,61 @@ publish the shrink. The consolidated zero-release, retained-shrink, policy,
 orphan-cleanup, and CREATE adjacency capstone passes all eight selected tests
 sequentially in 573.98 host seconds.
 
+### Nonfinal closed-file UNLINK
+
+The staged binding now advertises `VFS-CAP-UNLINK` and installs `_EXT4-UNLINK`
+in operation slot 11. The ordinary binding remains read-only with a null
+UNLINK slot. This first lifetime removes one closed regular-file name only when
+the authenticated target has at least two links and the same authenticated
+parent directory contains another live name for that inode. Last-link removal,
+unlink while any descriptor references the shared vnode, directory removal,
+and links whose remaining name is outside this first same-parent proof remain
+explicit later boundaries.
+
+The target and parent must be root-owned objects on the qualified 1 KiB/
+256-byte-inode staged geometry. The target inode, its complete current extent
+map, external xattrs, inode-table locator, generation, link count, and cache
+projection are reauthenticated. Immutable/append targets are refused. The
+parent uses the same one-block checksummed linear-directory envelope as the
+initial CREATE slice: one initialized extent block, no HTree indexing or
+inline/external xattrs, a valid checksum tail, complete `.`/`..` and dirent
+validation, unique ownership of the directory block, and no directory growth.
+The selected name must match exactly one live regular-file dirent with a live
+predecessor; the implementation merges its `rec_len` into that predecessor,
+zeroes the removed record bytes, and restamps the directory checksum.
+
+One transaction decrements on-disk `i_links_count`, updates only the target
+ctime, updates parent mtime/ctime, and replaces the directory block. Its exact
+metadata credit is derived from the deduplicated inode-table and directory
+homes: two homes when target and parent records share a table block, otherwise
+three. It carries no ordered data and no revokes. File size, mtime, map,
+`i_blocks`, generation, xattrs, allocation bitmaps, free-block/free-inode
+counts, and orphan state do not change. A one-home caller profile returns
+`NOSPC` after one trusted-clock sample but before activation or media writes on
+the canonical two-home case.
+
+After commit authority, the callback publishes target ctime and parent times;
+generic `VFS-RM` then removes the dentry, decrements the shared vnode link
+count, and updates cache counts. A later checkpoint failure therefore returns
+public unlink success, retains its structured error in `V.LAST-IOR`, and
+quarantines the mount. Before commit, the callback returns the operation error
+and generic VFS leaves both names and the old shared-vnode projection intact.
+Open-file, last-link, and missing-clock refusals scrub operation snapshots and
+perform no media writes.
+
+Clean qualification removes `/fixture/hardlink.txt` while preserving the
+54-byte `/fixture/payload.txt` inode, its data block and external xattr, and
+passes a write-free ordinary remount plus pinned e2fsprogs 1.47.4 `debugfs`
+and read-only `e2fsck`. W7 descriptor failure leaves both names and both old
+metadata homes byte-exact; recovery discards the incomplete transaction. At
+W17, the shared inode-table home is complete and the committed directory home
+tears. The cache retains the removed name's absence and link count one while
+the live mount is quarantined; recovery replays both homes exactly once and
+the following remount is byte-stable and write-free. The final sequential
+adjacency capstone combines all four UNLINK cases with initial CREATE,
+same-retained-block TRUNCATE, one-block-release TRUNCATE, and TRUNCATE policy
+refusal: all eight pass in 534.05 host seconds.
+
 ### Allocation-backed in-size hole fill
 
 The staged binding publicly routes an exact clean unmapped target to the typed
@@ -2595,9 +2655,10 @@ The ratchet order is:
 4. build shared inode allocation and directory insertion, then expose the
    first bounded `CREATE` slice (completed in the current worktree);
 5. retain completed same-retained-block shrink and one-block
-   `TRUNCATE`-to-zero release, then add `UNLINK`, including nonfinal-link
-   removal, unlink-while-open, and final release, with only the orphan states
-   those paths make reachable;
+   `TRUNCATE`-to-zero release, and close the first nonfinal closed-file
+   `UNLINK` slice (completed in the current worktree); next close final-link
+   removal and unlink-while-open with only the orphan states those paths make
+   reachable;
 6. add `MKDIR` and `RMDIR`, including `.`/`..`, parent/child link counts, and
    empty-directory enforcement;
 7. add hard `LINK`, then ratchet `RENAME` from same-directory no-replacement
@@ -2628,9 +2689,10 @@ documented request envelopes. Their qualified tail-to-allocation and additional
 allocated-EOF exact compositions preserve independently durable prefixes, but
 no broader geometry or operation inherits that status.
 `EXT4-STAGED-WRITE-OPS` adds staged `MOUNT`, `WRITE`, bounded linear-directory
-`CREATE`, and the qualified shrink `TRUNCATE` dispatch slot to its copy
+`CREATE`, qualified shrink `TRUNCATE`, and bounded nonfinal closed-file
+`UNLINK` dispatch slots to its copy
 of the ordinary table. The ordinary binding remains `VFS-BF-READ-ONLY` and advertises
-none of them. Neither binding yet advertises `MKDIR`, `UNLINK`, `RMDIR`,
+none of them. Neither binding yet advertises `MKDIR`, `RMDIR`,
 `RENAME`, `SETATTR`, `LINK`, `SYMLINK`, `SETXATTR`, or `REMOVEXATTR`. Each later capability
 still needs its own bounded credit/chunking contract, reachable-state recovery
 closure, namespace/cache behavior where applicable, and interoperability plus
@@ -2639,7 +2701,7 @@ and inode allocation, extent and legacy-map growth and shrink, directory-entry
 mutation, inode/link/time/accounting updates, xattr mutation, broader per-record
 orphan closure, and the final compositional release matrix.
 
-The staged binding publishes six concrete durable paths. Initialized
+The staged binding publishes seven concrete durable paths. Initialized
 overwrite uses a full-block ordered-data RMW plus one checksummed inode-table
 after-image and consumes `1/1/0`. Strict append uses the same transaction shape
 to extend exact partial EOF inside the initialized block, updating `i_size`
@@ -2656,7 +2718,10 @@ block and checksummed size/timestamp inode as exact `2/0/0`, without allocation
 or orphan state. One-block TRUNCATE-to-zero uses `3/0/0` orphan publication,
 an exactly measured linked-orphan cleanup of at most `5/0/0`, and `1/0/0`
 transient-bit retirement; it frees one initialized data block while preserving
-links and a qualified external xattr. All six update clock-derived
+links and a qualified external xattr. Nonfinal closed-file UNLINK uses exact
+deduplicated `2/0/0` or `3/0/0` metadata credit to decrement one link, update
+target/parent times, and remove one checksummed linear-directory record without
+allocation or orphan state. All seven update clock-derived
 `mtime`/`ctime`; both
 allocation-backed operations change `VN.BLOCKS` and free-space accounting, and
 both append modes change file size. Exact writes compose the qualified
@@ -2708,8 +2773,8 @@ authenticated empty-to-singleton modern-orphan publication, exact linked
 cleanup and data release, transient-bit retirement without deactivating the
 writer, clean/stable external-tool acceptance, precommit descriptor rollback,
 and committed inode-home recovery through the orphan path. The next write
-ratchet is the operation-shaped `UNLINK` lifetimes rather than speculative
-orphan expansion. General sparse/gap growth, unwritten conversion, growth beyond a
+ratchet is final-link and open-file `UNLINK`, then `MKDIR`/`RMDIR`, rather than
+speculative orphan expansion. General sparse/gap growth, unwritten conversion, growth beyond a
 full resident root plus full unmergeable selected leaf, mutation starting from
 a deeper extent tree, other broader allocation and mutation geometry, multi-
 block atomicity, partial or wider block-releasing truncation, and other namespace mutation remain later

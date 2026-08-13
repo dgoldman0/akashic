@@ -111,8 +111,12 @@ linked-orphan cleanup to release the data block, and retires transient
 failure preserves the old file; a committed torn inode home converges through
 replay and orphan cleanup to a stable checker-clean empty file. Partial release,
 wider maps, aligned nonzero EOFs, cross-block nonzero EOFs, and growth remain
-unsupported. The current critical path is the distinct nonfinal, final, and
-open `UNLINK` lifetimes; `MKDIR`/`RMDIR`; hard `LINK`; and finally staged
+unsupported. The first nonfinal closed-file `UNLINK` lifetime is public too:
+one same-parent hard-link name, target/parent inode times and link count, and
+the checksummed linear-directory block commit together without allocation or
+orphan state. W7 preserves both old names; committed W17 recovery replays its
+two deduplicated homes. The current critical path is final-link and open-file
+`UNLINK`; `MKDIR`/`RMDIR`; hard `LINK`; and finally staged
 `RENAME` cases. Extent-tree depth and indexed-
 directory HTree depth are independent ratchets. Broaden either only when the
 next operation or a pinned realistic corpus demands it; directory growth does
@@ -1910,6 +1914,44 @@ cleanup path, clears the transient bit, and reaches a checker-clean stable
 remount. The focused clean/precommit/committed set passes all three cases, and
 the adjacent no-clock, policy, retained-block truncate, existing modern cleanup,
 and CREATE regression set passes all five.
+
+The first public `UNLINK` lifetime is a closed, nonfinal regular-file removal
+from an authenticated one-block linear directory. The staged binding alone
+advertises the capability. The target and parent are root-owned on the
+qualified 1 KiB/256-byte-inode geometry; the target must have more than one
+link, no open references, and another live same-inode name in the same parent.
+Final-link removal, unlink-while-open, cross-parent remaining-link proof,
+directories, HTree/indexed or multi-block parents, and directory growth remain
+gated rather than approximated.
+
+Admission reauthenticates the target's complete current map, inode locator and
+generation, cache projection, external xattrs, link count, and mutable flags.
+It reauthenticates the parent inode and single extent block, proves that block
+has one owner and no forbidden alias, validates its checksum and complete
+dirent chain including `.`/`..`, and finds exactly one matching name with a
+live predecessor. The edit expands that predecessor over the removed record,
+zeroes the removed bytes, and restamps the directory checksum.
+
+The target link decrement and ctime, parent mtime/ctime, and directory block
+are one no-data/no-revoke transaction. Credit is the exact deduplicated home
+count: `2/0/0` when the two inode records share a table block, otherwise
+`3/0/0`. Size, mtime, map, `i_blocks`, generation, xattrs, allocation state,
+free counters, and orphan state remain fixed. On the canonical inode-13/14
+fixture, inode-table block 278 and directory block 1345 are W16 and W17.
+
+Clean qualification removes `/fixture/hardlink.txt`, preserves the 54-byte
+`/fixture/payload.txt`, its data and external-xattr blocks, reaches a write-free
+stable remount, and passes pinned e2fsprogs 1.47.4 `debugfs` and read-only
+`e2fsck`. Open-file and last-link refusals precede the trusted clock; a missing
+clock and an undersized one-home profile likewise cause no activation or media
+mutation. A torn W7 descriptor returns the precommit error and leaves both
+names and both homes byte-exact. A committed W17 directory-home tear publishes
+the removed name and link count one, retains the checkpoint error in
+`V.LAST-IOR`, and quarantines the mount; recovery rewrites both homes exactly
+once before a byte-stable second mount. The final sequential adjacency
+capstone combines these four UNLINK cases with initial CREATE, both qualified
+TRUNCATE forms, and TRUNCATE policy refusal; all eight pass in 534.05 host
+seconds.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

@@ -305,6 +305,34 @@ def _external_xattr_block_with_checksum(
     return bytes(result)
 
 
+def _linear_directory_block_with_checksum(
+    superblock: bytes,
+    inode_number: int,
+    generation: int,
+    block: bytes | bytearray,
+) -> bytes:
+    """Restamp one metadata-checksummed linear directory block."""
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert len(superblock) == 1024
+    assert len(block) == block_size
+    assert inode_number > 0
+    assert 0 <= generation <= 0xFFFF_FFFF
+    tail_offset = block_size - 12
+    result = bytearray(block)
+    assert struct.unpack_from("<IHBB", result, tail_offset) == (
+        0,
+        12,
+        0,
+        0xDE,
+    )
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    checksum = _crc32c_raw(struct.pack("<I", inode_number), seed)
+    checksum = _crc32c_raw(struct.pack("<I", generation), checksum)
+    checksum = _crc32c_raw(result[:tail_offset], checksum)
+    struct.pack_into("<I", result, tail_offset + 8, checksum)
+    return bytes(result)
+
+
 def _extent_node_with_checksum(
     superblock: bytes,
     inode_number: int,
@@ -4054,7 +4082,7 @@ def build_snapshot():
     # distinct cold source stages.  This preserves the existing measured ext4
     # watchdog instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
-    max_ext4_source_steps = 1_050_000_000
+    max_ext4_source_steps = 1_100_000_000
     bootstrap_steps = _feed_until_idle(system, bootstrap, max_crc_source_steps)
 
     def load_source_stage(
@@ -59643,6 +59671,1382 @@ def test_staged_vfs_truncate_policy_boundaries_refuse_before_clock(
         ],
     )
     _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-POLICY")
+
+
+def _staged_unlink_recovery_view(
+    source: Path,
+    destination: Path,
+    *,
+    expected_file: bytes,
+    old_mtime_ms: int,
+    epoch_ms: int,
+    expected_home_writes: int,
+    expected_replayed: bool,
+    prefix: str,
+    marker: str,
+) -> tuple[str, tuple[tuple[str, int, int], ...], str]:
+    old_seconds, old_milliseconds = divmod(old_mtime_ms, 1000)
+    old_nanoseconds = old_milliseconds * 1_000_000
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    expected_name = f"{prefix}-EXPECTED"
+    buffer_name = f"{prefix}-BUF"
+    expected_forth = [f"CREATE {expected_name}"]
+    expected_forth.extend(
+        " ".join(f"{byte} C," for byte in expected_file[offset : offset + 32])
+        for offset in range(0, len(expected_file), 32)
+    )
+    replay_check = (
+        f"{prefix}-CTX _EXT4-C.J.REPLAYED + @ 0<>"
+        if expected_replayed
+        else f"{prefix}-CTX _EXT4-C.J.REPLAYED + @ 0="
+    )
+    output, trace, media_sha256 = run_recovery_forth(
+        source,
+        destination,
+        [
+            f"CREATE {buffer_name} {len(expected_file)} ALLOT",
+            *expected_forth,
+            (
+                f"T-ARENA T-VOLUME EXT4-NEW CONSTANT {prefix}-MOUNT-IOR "
+                f"CONSTANT {prefix}-V"
+            ),
+            f"{prefix}-V _EXT4-CTX CONSTANT {prefix}-CTX",
+            (
+                f'S" /fixture/payload.txt" {prefix}-V VFS-RESOLVE? '
+                f"CONSTANT {prefix}-P-IOR CONSTANT {prefix}-P"
+            ),
+            (
+                f'S" /fixture/hardlink.txt" {prefix}-V VFS-RESOLVE? '
+                f"CONSTANT {prefix}-H-IOR CONSTANT {prefix}-H"
+            ),
+            (
+                f'S" /fixture" {prefix}-V VFS-RESOLVE? '
+                f"CONSTANT {prefix}-D-IOR CONSTANT {prefix}-D"
+            ),
+            f"{prefix}-P D.VNODE @ CONSTANT {prefix}-VN",
+            f"{prefix}-D D.VNODE @ CONSTANT {prefix}-D-VN",
+            (
+                f'S" /fixture/payload.txt" VFS-FF-READ {prefix}-V '
+                f"VFS-OPEN? CONSTANT {prefix}-OPEN-IOR "
+                f"CONSTANT {prefix}-FD"
+            ),
+            (
+                f"{buffer_name} {len(expected_file)} {prefix}-FD VFS-READ? "
+                f"CONSTANT {prefix}-READ-IOR CONSTANT {prefix}-ACTUAL"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        f"{prefix}-MOUNT-IOR 0=",
+                        f"{prefix}-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        f"{prefix}-V _EXT4-READY?",
+                        f"{prefix}-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        f"{prefix}-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        f"{prefix}-CTX _EXT4-C.RECOVERY + @ 0=",
+                        f"{prefix}-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        f"{prefix}-CTX _EXT4-C.J.WRITER + @ 0=",
+                        replay_check,
+                        (
+                            f"{prefix}-CTX _EXT4-C.J.HOME-WRITES + @ "
+                            f"{expected_home_writes} ="
+                        ),
+                        f"{prefix}-P-IOR 0=",
+                        f"{prefix}-H 0=",
+                        (
+                            f"{prefix}-H-IOR VFS-IOR-REASON "
+                            "VFS-R-NOENT ="
+                        ),
+                        f"{prefix}-D-IOR 0=",
+                        f"{prefix}-OPEN-IOR 0=",
+                        f"{prefix}-READ-IOR 0=",
+                        f"{prefix}-ACTUAL {len(expected_file)} =",
+                        (
+                            f"{buffer_name} {expected_name} "
+                            f"{len(expected_file)} _EXT4-BYTES=?"
+                        ),
+                        f"{prefix}-VN VN.NLINK @ 1 =",
+                        f"{prefix}-VN VN.BLOCKS @ 4 =",
+                        f"{prefix}-VN VN.MTIME @ {old_seconds} =",
+                        (
+                            f"{prefix}-VN VN.MTIME-NS @ "
+                            f"{old_nanoseconds} ="
+                        ),
+                        f"{prefix}-VN VN.CTIME @ {seconds} =",
+                        f"{prefix}-VN VN.CTIME-NS @ {nanoseconds} =",
+                        f"{prefix}-D-VN VN.MTIME @ {seconds} =",
+                        f"{prefix}-D-VN VN.MTIME-NS @ {nanoseconds} =",
+                        f"{prefix}-D-VN VN.CTIME @ {seconds} =",
+                        f"{prefix}-D-VN VN.CTIME-NS @ {nanoseconds} =",
+                        (
+                            f"{prefix}-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+            f"{prefix}-FD VFS-CLOSE? CONSTANT {prefix}-CLOSE-IOR",
+            (
+                f"0 {prefix}-V VFS-UNMOUNT "
+                f"CONSTANT {prefix}-UNMOUNT-IOR"
+            ),
+            (
+                f"{prefix}-CLOSE-IOR 0= "
+                f"{prefix}-UNMOUNT-IOR 0= AND "
+                f"{prefix}-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                f'IF ." {marker}-UNMOUNTED" THEN'
+            ),
+        ],
+        capture_media=destination,
+    )
+    _assert_emitted(output, marker)
+    _assert_emitted(output, f"{marker}-UNMOUNTED")
+    return output, trace, media_sha256
+
+
+def _staged_unlink_attempt_forth(
+    prefix: str,
+    *,
+    epoch_ms: int,
+) -> tuple[str, ...]:
+    """Build one public nonfinal-UNLINK attempt with captured authority."""
+    return (
+        f"VARIABLE {prefix}-CLOCK-CALLS",
+        (
+            f": {prefix}-NOW ( context -- epoch-ms ior ) "
+            f"DROP 1 {prefix}-CLOCK-CALLS +! {epoch_ms} 0 ;"
+        ),
+        f"T-ARENA CONSTANT {prefix}-ARENA",
+        (
+            f"{prefix}-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+            f"CONSTANT {prefix}-MOUNT-IOR CONSTANT {prefix}-V"
+        ),
+        f"{prefix}-V _EXT4-CTX CONSTANT {prefix}-CTX",
+        (
+            f"' {prefix}-NOW 0 {prefix}-V EXT4-BIND-WRITE-CLOCK? "
+            f"CONSTANT {prefix}-CLOCK-IOR"
+        ),
+        *_ext4_dedicated_writer_profile_forth(
+            f"{prefix}-PROFILE", f"{prefix}-V", 2, 0, 0
+        ),
+        (
+            f'S" /fixture/payload.txt" {prefix}-V VFS-RESOLVE? '
+            f"CONSTANT {prefix}-P-IOR CONSTANT {prefix}-P"
+        ),
+        (
+            f'S" /fixture/hardlink.txt" {prefix}-V VFS-RESOLVE? '
+            f"CONSTANT {prefix}-H-IOR CONSTANT {prefix}-H"
+        ),
+        (
+            f'S" /fixture" {prefix}-V VFS-RESOLVE? '
+            f"CONSTANT {prefix}-D-IOR CONSTANT {prefix}-D"
+        ),
+        f"{prefix}-P D.VNODE @ CONSTANT {prefix}-VN",
+        f"{prefix}-D D.VNODE @ CONSTANT {prefix}-D-VN",
+        (
+            f"{prefix}-P D.VNODE @ {prefix}-H D.VNODE @ = "
+            f"CONSTANT {prefix}-SHARED"
+        ),
+        f"{prefix}-VN VN.MTIME @ CONSTANT {prefix}-OLD-MTIME",
+        f"{prefix}-VN VN.MTIME-NS @ CONSTANT {prefix}-OLD-MTIME-NS",
+        f"{prefix}-VN VN.CTIME @ CONSTANT {prefix}-OLD-CTIME",
+        f"{prefix}-VN VN.CTIME-NS @ CONSTANT {prefix}-OLD-CTIME-NS",
+        f"{prefix}-D-VN VN.MTIME @ CONSTANT {prefix}-OLD-D-MTIME",
+        (
+            f"{prefix}-D-VN VN.MTIME-NS @ "
+            f"CONSTANT {prefix}-OLD-D-MTIME-NS"
+        ),
+        f"{prefix}-D-VN VN.CTIME @ CONSTANT {prefix}-OLD-D-CTIME",
+        (
+            f"{prefix}-D-VN VN.CTIME-NS @ "
+            f"CONSTANT {prefix}-OLD-D-CTIME-NS"
+        ),
+        f"{prefix}-V V.ICOUNT @ CONSTANT {prefix}-OLD-ICOUNT",
+        f"{prefix}-V V.VCOUNT @ CONSTANT {prefix}-OLD-VCOUNT",
+        (
+            f'S" /fixture/hardlink.txt" {prefix}-V VFS-RM '
+            f"CONSTANT {prefix}-IOR"
+        ),
+        f"{prefix}-V V.LAST-IOR @ CONSTANT {prefix}-LAST-IOR",
+        (
+            f'S" /fixture/payload.txt" {prefix}-V VFS-RESOLVE? '
+            f"CONSTANT {prefix}-AFTER-P-IOR CONSTANT {prefix}-AFTER-P"
+        ),
+        (
+            f'S" /fixture/hardlink.txt" {prefix}-V VFS-RESOLVE? '
+            f"CONSTANT {prefix}-AFTER-H-IOR CONSTANT {prefix}-AFTER-H"
+        ),
+        f"{prefix}-CTX _EXT4-C.J.WRITER + @ CONSTANT {prefix}-WRITER",
+        (
+            f"{prefix}-CTX _EXT4-C.J.HOME-WRITES + @ "
+            f"CONSTANT {prefix}-HOMES"
+        ),
+    )
+
+
+@pytest.fixture(scope="session")
+def staged_public_unlink_fixture(
+    writer_activation_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Remove one closed hard-link name without allocation or orphan state."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    parent_number = 13
+    inode_number = 14
+    superblock, parent_inode, parent_offset = _ext4_inode_record(
+        path, parent_number
+    )
+    _, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    parent_home, parent_block_offset = divmod(parent_offset, block_size)
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    directory_home = _extent_root_physical(parent_inode, 0)
+    data_block = _extent_root_physical(inode, 0)
+    xattr_block = struct.unpack_from("<I", inode, 0x68)[0]
+    old_size = struct.unpack_from("<I", inode, 0x04)[0]
+    old_blocks = struct.unpack_from("<I", inode, 0x1C)[0]
+    old_links = struct.unpack_from("<H", inode, 0x1A)[0]
+    old_low_seconds = struct.unpack_from("<I", inode, 0x10)[0]
+    old_extra_time = struct.unpack_from("<I", inode, 0x88)[0]
+    old_signed_seconds = (
+        old_low_seconds
+        if old_low_seconds < 0x8000_0000
+        else old_low_seconds - 0x1_0000_0000
+    )
+    old_seconds = old_signed_seconds + ((old_extra_time & 3) << 32)
+    old_nanoseconds = old_extra_time >> 2
+    assert old_nanoseconds % 1_000_000 == 0
+    old_mtime_ms = old_seconds * 1000 + old_nanoseconds // 1_000_000
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", superblock, 0x158)[0] << 32
+    )
+    free_inodes_before = struct.unpack_from("<I", superblock, 0x10)[0] | (
+        struct.unpack_from("<I", superblock, 0x15C)[0] << 32
+    )
+    original_inode_home = _patched_ext4_home(
+        path, source_patches, inode_home, block_size=block_size
+    )
+    original_directory = _patched_ext4_home(
+        path, source_patches, directory_home, block_size=block_size
+    )
+    original_data = _patched_ext4_home(
+        path, source_patches, data_block, block_size=block_size
+    )
+    original_xattr = _patched_ext4_home(
+        path, source_patches, xattr_block, block_size=block_size
+    )
+
+    epoch_ms = 3_000_001_234_567
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = (
+        low_seconds
+        if low_seconds < 0x8000_0000
+        else low_seconds - 0x1_0000_0000
+    )
+    epoch = (seconds - signed_low) >> 32
+    assert 0 <= epoch <= 3
+    extra_time = (nanoseconds << 2) | epoch
+
+    assert block_size == 1024
+    assert inode_size == 256
+    assert parent_home == inode_home == 278
+    assert parent_block_offset == 0
+    assert inode_block_offset == 256
+    assert directory_home == 1345
+    assert data_block == 1346
+    assert xattr_block > 0
+    assert xattr_block not in {directory_home, data_block, inode_home}
+    assert old_size == 54
+    assert old_blocks == 4
+    assert old_links == 2
+    assert struct.unpack_from("<HHHH", parent_inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    assert (
+        original_inode_home[
+            parent_block_offset : parent_block_offset + inode_size
+        ]
+        == parent_inode
+    )
+    assert (
+        original_inode_home[
+            inode_block_offset : inode_block_offset + inode_size
+        ]
+        == inode
+    )
+    assert _linear_directory_block_with_checksum(
+        superblock,
+        parent_number,
+        struct.unpack_from("<I", parent_inode, 0x64)[0],
+        original_directory,
+    ) == original_directory
+    assert struct.unpack_from("<IHBB", original_directory, 24) == (
+        inode_number,
+        20,
+        11,
+        1,
+    )
+    assert original_directory[32:43] == b"payload.txt"
+    assert struct.unpack_from("<IHBB", original_directory, 44) == (
+        inode_number,
+        20,
+        12,
+        1,
+    )
+    assert original_directory[52:64] == b"hardlink.txt"
+
+    expected_inode_home = bytearray(original_inode_home)
+    expected_inode = bytearray(inode)
+    struct.pack_into("<H", expected_inode, 0x1A, old_links - 1)
+    struct.pack_into("<I", expected_inode, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_inode, 0x84, extra_time)
+    expected_inode = bytearray(
+        _inode_with_checksum(superblock, inode_number, expected_inode)
+    )
+    expected_parent = bytearray(parent_inode)
+    struct.pack_into("<I", expected_parent, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x10, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x84, extra_time)
+    struct.pack_into("<I", expected_parent, 0x88, extra_time)
+    expected_parent = bytearray(
+        _inode_with_checksum(superblock, parent_number, expected_parent)
+    )
+    expected_inode_home[
+        parent_block_offset : parent_block_offset + inode_size
+    ] = expected_parent
+    expected_inode_home[
+        inode_block_offset : inode_block_offset + inode_size
+    ] = expected_inode
+    expected_inode_home = bytes(expected_inode_home)
+
+    expected_directory_buffer = bytearray(original_directory)
+    struct.pack_into("<H", expected_directory_buffer, 24 + 4, 40)
+    expected_directory_buffer[44:64] = bytes(20)
+    expected_directory = _linear_directory_block_with_checksum(
+        superblock,
+        parent_number,
+        struct.unpack_from("<I", parent_inode, 0x64)[0],
+        expected_directory_buffer,
+    )
+    old_file = original_data[:old_size]
+
+    directory = tmp_path_factory.mktemp("ext4-public-unlink")
+    backing = directory / "staged-public-unlink.img"
+    stable = directory / "staged-public-unlink-stable.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        backing,
+        [
+            "VARIABLE _UL-CLOCK-CALLS",
+            (
+                ": _UL-NOW ( context -- epoch-ms ior ) "
+                "DROP 1 _UL-CLOCK-CALLS +! "
+                f"{epoch_ms} 0 ;"
+            ),
+            "T-ARENA CONSTANT _UL-ARENA",
+            (
+                "_UL-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _UL-MOUNT-IOR CONSTANT _UL-V"
+            ),
+            "_UL-V _EXT4-CTX CONSTANT _UL-CTX",
+            (
+                "' _UL-NOW 0 _UL-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _UL-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_UL-PROFILE", "_UL-V", 2, 0, 0
+            ),
+            (
+                'S" /fixture/payload.txt" _UL-V VFS-RESOLVE? '
+                "CONSTANT _UL-P-IOR CONSTANT _UL-P"
+            ),
+            (
+                'S" /fixture/hardlink.txt" _UL-V VFS-RESOLVE? '
+                "CONSTANT _UL-H-IOR CONSTANT _UL-H"
+            ),
+            (
+                'S" /fixture" _UL-V VFS-RESOLVE? '
+                "CONSTANT _UL-DIR-IOR CONSTANT _UL-DIR"
+            ),
+            "_UL-P D.VNODE @ CONSTANT _UL-VN",
+            "_UL-P D.VNODE @ _UL-H D.VNODE @ = CONSTANT _UL-SHARED",
+            "_UL-DIR D.VNODE @ CONSTANT _UL-DIR-VN",
+            "_UL-VN VN.MTIME @ CONSTANT _UL-OLD-MTIME",
+            "_UL-VN VN.MTIME-NS @ CONSTANT _UL-OLD-MTIME-NS",
+            "_UL-VN VN.BLOCKS @ CONSTANT _UL-OLD-BLOCKS",
+            "_UL-V V.ICOUNT @ CONSTANT _UL-OLD-ICOUNT",
+            "_UL-V V.VCOUNT @ CONSTANT _UL-OLD-VCOUNT",
+            'S" /fixture/hardlink.txt" _UL-V VFS-RM CONSTANT _UL-IOR',
+            (
+                'S" /fixture/payload.txt" _UL-V VFS-RESOLVE? '
+                "CONSTANT _UL-AFTER-P-IOR CONSTANT _UL-AFTER-P"
+            ),
+            (
+                'S" /fixture/hardlink.txt" _UL-V VFS-RESOLVE? '
+                "CONSTANT _UL-AFTER-H-IOR CONSTANT _UL-AFTER-H"
+            ),
+            "_UL-CTX _EXT4-C.J.WRITER + @ CONSTANT _UL-WRITER",
+            "_UL-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _UL-HOMES",
+            (
+                _forth_conjunction(
+                    [
+                        "_UL-IOR 0=",
+                        "_UL-V V.LAST-IOR @ 0=",
+                        "_UL-AFTER-P-IOR 0=",
+                        "_UL-AFTER-P D.VNODE @ _UL-VN =",
+                        "_UL-AFTER-H 0=",
+                        (
+                            "_UL-AFTER-H-IOR VFS-IOR-REASON "
+                            "VFS-R-NOENT ="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-UNLINK-DURABLE" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_UL-VN VN.NLINK @ 1 =",
+                        "_UL-VN VN.BLOCKS @ _UL-OLD-BLOCKS =",
+                        "_UL-VN VN.MTIME @ _UL-OLD-MTIME =",
+                        "_UL-VN VN.MTIME-NS @ _UL-OLD-MTIME-NS =",
+                        f"_UL-VN VN.CTIME @ {seconds} =",
+                        f"_UL-VN VN.CTIME-NS @ {nanoseconds} =",
+                        f"_UL-DIR-VN VN.MTIME @ {seconds} =",
+                        f"_UL-DIR-VN VN.MTIME-NS @ {nanoseconds} =",
+                        f"_UL-DIR-VN VN.CTIME @ {seconds} =",
+                        f"_UL-DIR-VN VN.CTIME-NS @ {nanoseconds} =",
+                        "_UL-V V.ICOUNT @ _UL-OLD-ICOUNT 1- =",
+                        "_UL-V V.VCOUNT @ _UL-OLD-VCOUNT =",
+                        "_UL-VN VN.DREFS @ 1 =",
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-UNLINK-CACHE" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_UL-HOMES 2 =",
+                        "_UL-WRITER _UL-PROFILE-BASE =",
+                        "_UL-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_UL-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        "_UL-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                        "_UL-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_UL-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        (
+                            "_UL-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-UNLINK-WRITER" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_XU-NAME-SNAPSHOT 256 "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-UNLINK-SCRUBBED" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_UL-MOUNT-IOR 0=",
+                        "_UL-CLOCK-IOR 0=",
+                        "_UL-PROFILE-SIZE-IOR 0=",
+                        "_UL-PROFILE-BIND-IOR 0=",
+                        "_UL-P-IOR 0=",
+                        "_UL-H-IOR 0=",
+                        "_UL-DIR-IOR 0=",
+                        "_UL-SHARED",
+                        "_UL-VN VN.OPEN-REFS @ 0=",
+                        "_UL-IOR 0=",
+                        "_UL-V V.LAST-IOR @ 0=",
+                        "_UL-CLOCK-CALLS @ 1 =",
+                        "_UL-AFTER-P-IOR 0=",
+                        "_UL-AFTER-P D.VNODE @ _UL-VN =",
+                        "_UL-AFTER-H 0=",
+                        (
+                            "_UL-AFTER-H-IOR VFS-IOR-REASON "
+                            "VFS-R-NOENT ="
+                        ),
+                        "_UL-VN VN.NLINK @ 1 =",
+                        "_UL-VN VN.BLOCKS @ _UL-OLD-BLOCKS =",
+                        "_UL-VN VN.MTIME @ _UL-OLD-MTIME =",
+                        "_UL-VN VN.MTIME-NS @ _UL-OLD-MTIME-NS =",
+                        f"_UL-VN VN.CTIME @ {seconds} =",
+                        f"_UL-VN VN.CTIME-NS @ {nanoseconds} =",
+                        f"_UL-DIR-VN VN.MTIME @ {seconds} =",
+                        f"_UL-DIR-VN VN.MTIME-NS @ {nanoseconds} =",
+                        f"_UL-DIR-VN VN.CTIME @ {seconds} =",
+                        f"_UL-DIR-VN VN.CTIME-NS @ {nanoseconds} =",
+                        "_UL-V V.ICOUNT @ _UL-OLD-ICOUNT 1- =",
+                        "_UL-V V.VCOUNT @ _UL-OLD-VCOUNT =",
+                        "_UL-VN VN.DREFS @ 1 =",
+                        "_UL-HOMES 2 =",
+                        "_UL-WRITER _UL-PROFILE-BASE =",
+                        "_UL-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_UL-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        "_UL-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                        "_UL-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_UL-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        (
+                            "_UL-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                        "_UL-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_UL-V V.FLAGS @ VFS-F-RO AND 0=",
+                        (
+                            "_XU-NAME-SNAPSHOT 256 "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-UNLINK-OK" THEN'
+            ),
+            "0 _UL-V VFS-UNMOUNT CONSTANT _UL-UNMOUNT-IOR",
+            (
+                "_UL-UNMOUNT-IOR 0= "
+                "_UL-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_UL-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-PUBLIC-UNLINK-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=source_patches,
+        capture_media=backing,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-UNLINK-DURABLE")
+    _assert_emitted(output, "EXT4-PUBLIC-UNLINK-CACHE")
+    _assert_emitted(output, "EXT4-PUBLIC-UNLINK-WRITER")
+    _assert_emitted(output, "EXT4-PUBLIC-UNLINK-SCRUBBED")
+    _assert_emitted(output, "EXT4-PUBLIC-UNLINK-OK")
+    _assert_emitted(output, "EXT4-PUBLIC-UNLINK-UNMOUNTED")
+    assert trace[: len(activation_trace)] == activation_trace
+    inode_home_writes = _write_ordinals_for_ext4_home(
+        trace, inode_home, block_size=block_size
+    )
+    directory_home_writes = _write_ordinals_for_ext4_home(
+        trace, directory_home, block_size=block_size
+    )
+    assert inode_home_writes == (16,)
+    assert directory_home_writes == (17,)
+    assert backing.is_file()
+
+    final_superblock, final_parent, _ = _ext4_inode_record(
+        backing, parent_number
+    )
+    _, final_inode, _ = _ext4_inode_record(backing, inode_number)
+    final_free_blocks = struct.unpack_from(
+        "<I", final_superblock, 0x0C
+    )[0] | (struct.unpack_from("<I", final_superblock, 0x158)[0] << 32)
+    final_free_inodes = struct.unpack_from(
+        "<I", final_superblock, 0x10
+    )[0] | (struct.unpack_from("<I", final_superblock, 0x15C)[0] << 32)
+    assert final_free_blocks == free_blocks_before
+    assert final_free_inodes == free_inodes_before
+    assert struct.unpack_from("<I", final_superblock, 0x60)[0] & 0x04 == 0
+    assert struct.unpack_from("<I", final_superblock, 0x64)[0] & 0x0001_0000 == 0
+    assert struct.unpack_from("<H", final_inode, 0x1A)[0] == old_links - 1
+    assert struct.unpack_from("<I", final_inode, 0x04)[0] == old_size
+    assert struct.unpack_from("<I", final_inode, 0x1C)[0] == old_blocks
+    assert struct.unpack_from("<I", final_inode, 0x68)[0] == xattr_block
+    assert final_inode[0x10:0x14] == inode[0x10:0x14]
+    assert final_inode[0x88:0x8C] == inode[0x88:0x8C]
+    assert final_parent == bytes(expected_parent)
+    assert final_inode == bytes(expected_inode)
+    assert _read_ext4_home(
+        backing, inode_home, block_size=block_size
+    ) == expected_inode_home
+    assert _read_ext4_home(
+        backing, directory_home, block_size=block_size
+    ) == expected_directory
+    assert _read_ext4_home(
+        backing, data_block, block_size=block_size
+    ) == original_data
+    assert _read_ext4_home(
+        backing, xattr_block, block_size=block_size
+    ) == original_xattr
+
+    listing = subprocess.run(
+        [str(debugfs), "-R", "ls -l /fixture", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert listing.returncode == 0, listing.stdout + listing.stderr
+    assert "payload.txt" in listing.stdout
+    assert "hardlink.txt" not in listing.stdout
+    stat = subprocess.run(
+        [str(debugfs), "-R", "stat /fixture/payload.txt", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stat.returncode == 0, stat.stdout + stat.stderr
+    assert f"Inode: {inode_number}" in stat.stdout
+    assert f"Size: {old_size}" in stat.stdout
+    assert re.search(r"Links:\s+1\s+Blockcount:\s+4", stat.stdout)
+    assert f"(0):{data_block}" in stat.stdout
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+    _, stable_trace, stable_sha256 = _staged_unlink_recovery_view(
+        backing,
+        stable,
+        expected_file=old_file,
+        old_mtime_ms=old_mtime_ms,
+        epoch_ms=epoch_ms,
+        expected_home_writes=0,
+        expected_replayed=False,
+        prefix="_UL-S",
+        marker="EXT4-PUBLIC-UNLINK-STABLE",
+    )
+    assert stable_trace == ()
+    assert stable_sha256 == media_sha256
+    assert _sha256(stable) == stable_sha256
+    return {
+        "source": path,
+        "source_patches": source_patches,
+        "image": stable,
+        "trace": trace,
+        "activation_trace": activation_trace,
+        "block_size": block_size,
+        "parent_number": parent_number,
+        "inode_number": inode_number,
+        "inode_home": inode_home,
+        "directory_home": directory_home,
+        "data_block": data_block,
+        "xattr_block": xattr_block,
+        "old_size": old_size,
+        "old_blocks": old_blocks,
+        "old_links": old_links,
+        "old_mtime_ms": old_mtime_ms,
+        "epoch_ms": epoch_ms,
+        "old_file": old_file,
+        "free_blocks_before": free_blocks_before,
+        "free_inodes_before": free_inodes_before,
+        "original_inode_home": original_inode_home,
+        "expected_inode_home": expected_inode_home,
+        "original_directory": original_directory,
+        "expected_directory": expected_directory,
+        "original_data": original_data,
+        "original_xattr": original_xattr,
+    }
+
+
+def test_staged_vfs_unlink_nonfinal_closed_file(
+    staged_public_unlink_fixture: dict[str, object],
+) -> None:
+    image = staged_public_unlink_fixture["image"]
+    trace = staged_public_unlink_fixture["trace"]
+    assert isinstance(image, Path)
+    assert isinstance(trace, tuple)
+    assert image.is_file()
+    assert trace
+
+
+def test_staged_vfs_unlink_refuses_open_last_link_and_missing_clock(
+    writer_activation_fixture: dict[str, object],
+) -> None:
+    """Unsupported UNLINK boundaries must leave cache and media untouched."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    output = run_forth(
+        path,
+        [
+            "T-ARENA CONSTANT _UR-ARENA",
+            (
+                "_UR-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _UR-MOUNT-IOR CONSTANT _UR-V"
+            ),
+            "_UR-V _EXT4-CTX CONSTANT _UR-CTX",
+            (
+                'S" /fixture/hardlink.txt" _UR-V VFS-RESOLVE? '
+                "CONSTANT _UR-H-IOR CONSTANT _UR-H"
+            ),
+            (
+                'S" /fixture/payload.txt" _UR-V VFS-RESOLVE? '
+                "CONSTANT _UR-P-IOR CONSTANT _UR-P"
+            ),
+            (
+                'S" /fixture/sparse.bin" _UR-V VFS-RESOLVE? '
+                "CONSTANT _UR-S-IOR CONSTANT _UR-S"
+            ),
+            "_UR-H D.VNODE @ CONSTANT _UR-VN",
+            "_UR-S D.VNODE @ CONSTANT _UR-S-VN",
+            "_UR-V V.ICOUNT @ CONSTANT _UR-OLD-ICOUNT",
+            "_UR-V V.VCOUNT @ CONSTANT _UR-OLD-VCOUNT",
+            (
+                'S" /fixture/hardlink.txt" VFS-FF-READ _UR-V '
+                "VFS-OPEN? CONSTANT _UR-OPEN-IOR CONSTANT _UR-FD"
+            ),
+            (
+                'S" /fixture/hardlink.txt" _UR-V VFS-RM '
+                "CONSTANT _UR-BUSY-IOR"
+            ),
+            "_UR-VN VN.OPEN-REFS @ CONSTANT _UR-BUSY-OPEN-REFS",
+            "_UR-V V.LAST-IOR @ CONSTANT _UR-BUSY-LAST-IOR",
+            (
+                'S" /fixture/hardlink.txt" _UR-V VFS-RESOLVE? '
+                "CONSTANT _UR-BUSY-RESOLVE-IOR "
+                "CONSTANT _UR-BUSY-D"
+            ),
+            "_UR-FD VFS-CLOSE? CONSTANT _UR-CLOSE-IOR",
+            (
+                'S" /fixture/sparse.bin" _UR-V VFS-RM '
+                "CONSTANT _UR-LAST-IOR"
+            ),
+            "_UR-V V.LAST-IOR @ CONSTANT _UR-LAST-LAST-IOR",
+            (
+                'S" /fixture/sparse.bin" _UR-V VFS-RESOLVE? '
+                "CONSTANT _UR-LAST-RESOLVE-IOR "
+                "CONSTANT _UR-LAST-D"
+            ),
+            (
+                'S" /fixture/hardlink.txt" _UR-V VFS-RM '
+                "CONSTANT _UR-NOCLOCK-IOR"
+            ),
+            "_UR-V V.LAST-IOR @ CONSTANT _UR-NOCLOCK-LAST-IOR",
+            (
+                'S" /fixture/hardlink.txt" _UR-V VFS-RESOLVE? '
+                "CONSTANT _UR-NOCLOCK-RESOLVE-IOR "
+                "CONSTANT _UR-NOCLOCK-D"
+            ),
+            "VARIABLE _UR-CLOCK-CALLS",
+            (
+                ": _UR-NOW ( context -- epoch-ms ior ) "
+                "DROP 1 _UR-CLOCK-CALLS +! 3000001234567 0 ;"
+            ),
+            (
+                "' _UR-NOW 0 _UR-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _UR-BIND-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_UR-PROFILE", "_UR-V", 1, 0, 0
+            ),
+            (
+                'S" /fixture/hardlink.txt" _UR-V VFS-RM '
+                "CONSTANT _UR-CAPACITY-IOR"
+            ),
+            "_UR-V V.LAST-IOR @ CONSTANT _UR-CAPACITY-LAST-IOR",
+            (
+                'S" /fixture/hardlink.txt" _UR-V VFS-RESOLVE? '
+                "CONSTANT _UR-CAPACITY-RESOLVE-IOR "
+                "CONSTANT _UR-CAPACITY-D"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_UR-MOUNT-IOR 0=",
+                        "_UR-H-IOR 0=",
+                        "_UR-P-IOR 0=",
+                        "_UR-S-IOR 0=",
+                        "_UR-H D.VNODE @ _UR-P D.VNODE @ =",
+                        "_UR-VN VN.NLINK @ 2 =",
+                        "_UR-S-VN VN.NLINK @ 1 =",
+                        "_UR-OPEN-IOR 0=",
+                        "_UR-BUSY-OPEN-REFS 1 =",
+                        "_UR-BUSY-IOR VFS-E-BUSY =",
+                        "_UR-BUSY-LAST-IOR _UR-BUSY-IOR =",
+                        "_UR-BUSY-RESOLVE-IOR 0=",
+                        "_UR-BUSY-D _UR-H =",
+                        "_UR-CLOSE-IOR 0=",
+                        "_UR-VN VN.OPEN-REFS @ 0=",
+                        (
+                            "_UR-LAST-IOR EXT4-D-WRITE-POLICY "
+                            "_EXT4-UNSUPPORTED ="
+                        ),
+                        "_UR-LAST-LAST-IOR _UR-LAST-IOR =",
+                        "_UR-LAST-RESOLVE-IOR 0=",
+                        "_UR-LAST-D _UR-S =",
+                        "_UR-NOCLOCK-IOR VFS-E-UNSUPPORTED =",
+                        "_UR-NOCLOCK-LAST-IOR _UR-NOCLOCK-IOR =",
+                        "_UR-NOCLOCK-RESOLVE-IOR 0=",
+                        "_UR-NOCLOCK-D _UR-H =",
+                        "_UR-BIND-IOR 0=",
+                        "_UR-PROFILE-SIZE-IOR 0=",
+                        "_UR-PROFILE-BIND-IOR 0=",
+                        "_UR-PROFILE-USED _UR-PROFILE-SIZE =",
+                        "_UR-CAPACITY-IOR VFS-E-NOSPC =",
+                        (
+                            "_UR-CAPACITY-LAST-IOR "
+                            "_UR-CAPACITY-IOR ="
+                        ),
+                        "_UR-CAPACITY-RESOLVE-IOR 0=",
+                        "_UR-CAPACITY-D _UR-H =",
+                        "_UR-CLOCK-CALLS @ 1 =",
+                        "_UR-VN VN.NLINK @ 2 =",
+                        "_UR-S-VN VN.NLINK @ 1 =",
+                        "_UR-V V.ICOUNT @ _UR-OLD-ICOUNT =",
+                        "_UR-V V.VCOUNT @ _UR-OLD-VCOUNT =",
+                        "_UR-CTX _EXT4-C.WCLOCK-XT + @ ' _UR-NOW =",
+                        (
+                            "_UR-CTX _EXT4-C.J.WRITER + @ "
+                            "_UR-PROFILE-BASE ="
+                        ),
+                        "_UR-PROFILE-BASE _EXT4-JWR-IDLE-CLEAN?",
+                        "_UR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_UR-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_UR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_UR-V V.FLAGS @ VFS-F-RO AND 0=",
+                        (
+                            "_XU-NAME-SNAPSHOT 256 "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-UNLINK-REFUSALS" THEN'
+            ),
+        ],
+        patches=source_patches,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-UNLINK-REFUSALS")
+
+
+def test_staged_vfs_unlink_descriptor_tear_retains_both_names(
+    staged_public_unlink_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A precommit descriptor tear must expose no UNLINK after-image."""
+    case = staged_public_unlink_fixture
+    path = case["source"]
+    source_patches = case["source_patches"]
+    success_trace = case["trace"]
+    activation_trace = case["activation_trace"]
+    block_size = case["block_size"]
+    inode_home = case["inode_home"]
+    directory_home = case["directory_home"]
+    data_block = case["data_block"]
+    xattr_block = case["xattr_block"]
+    old_blocks = case["old_blocks"]
+    old_mtime_ms = case["old_mtime_ms"]
+    epoch_ms = case["epoch_ms"]
+    old_file = case["old_file"]
+    original_inode_home = case["original_inode_home"]
+    original_directory = case["original_directory"]
+    original_data = case["original_data"]
+    original_xattr = case["original_xattr"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(directory_home, int)
+    assert isinstance(data_block, int)
+    assert isinstance(xattr_block, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(old_mtime_ms, int)
+    assert isinstance(epoch_ms, int)
+    assert isinstance(old_file, bytes)
+    assert isinstance(original_inode_home, bytes)
+    assert isinstance(original_directory, bytes)
+    assert isinstance(original_data, bytes)
+    assert isinstance(original_xattr, bytes)
+
+    descriptor_ordinal = sum(
+        kind == "write" for kind, _, _ in activation_trace
+    ) + 1
+    assert descriptor_ordinal == 7
+    descriptor_event = _trace_event_index_for_ordinal(
+        success_trace, "write", descriptor_ordinal
+    )
+    faulted = tmp_path / "staged-unlink-w7-faulted.img"
+    recovered = tmp_path / "staged-unlink-w7-recovered.img"
+    stable = tmp_path / "staged-unlink-w7-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                *_staged_unlink_attempt_forth("_UD", epoch_ms=epoch_ms),
+                (
+                    _forth_conjunction(
+                        [
+                            "_UD-MOUNT-IOR 0=",
+                            "_UD-CLOCK-IOR 0=",
+                            "_UD-PROFILE-SIZE-IOR 0=",
+                            "_UD-PROFILE-BIND-IOR 0=",
+                            "_UD-PROFILE-USED _UD-PROFILE-SIZE =",
+                            "_UD-P-IOR 0=",
+                            "_UD-H-IOR 0=",
+                            "_UD-D-IOR 0=",
+                            "_UD-SHARED",
+                            (
+                                "_UD-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-VOLUME ="
+                            ),
+                            "_UD-IOR VFS-IOR-REASON VFS-R-IO =",
+                            (
+                                "_UD-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-PARTIAL AND 0<>"
+                            ),
+                            "_UD-LAST-IOR _UD-IOR =",
+                            "_UD-AFTER-P-IOR 0=",
+                            "_UD-AFTER-P D.VNODE @ _UD-VN =",
+                            "_UD-AFTER-H-IOR 0=",
+                            "_UD-AFTER-H _UD-H =",
+                            "_UD-VN VN.NLINK @ 2 =",
+                            "_UD-VN VN.BLOCKS @ 4 =",
+                            "_UD-VN VN.MTIME @ _UD-OLD-MTIME =",
+                            (
+                                "_UD-VN VN.MTIME-NS @ "
+                                "_UD-OLD-MTIME-NS ="
+                            ),
+                            "_UD-VN VN.CTIME @ _UD-OLD-CTIME =",
+                            (
+                                "_UD-VN VN.CTIME-NS @ "
+                                "_UD-OLD-CTIME-NS ="
+                            ),
+                            "_UD-D-VN VN.MTIME @ _UD-OLD-D-MTIME =",
+                            (
+                                "_UD-D-VN VN.MTIME-NS @ "
+                                "_UD-OLD-D-MTIME-NS ="
+                            ),
+                            "_UD-D-VN VN.CTIME @ _UD-OLD-D-CTIME =",
+                            (
+                                "_UD-D-VN VN.CTIME-NS @ "
+                                "_UD-OLD-D-CTIME-NS ="
+                            ),
+                            "_UD-V V.ICOUNT @ _UD-OLD-ICOUNT =",
+                            "_UD-V V.VCOUNT @ _UD-OLD-VCOUNT =",
+                            "_UD-CLOCK-CALLS @ 1 =",
+                            "_UD-WRITER _UD-PROFILE-BASE =",
+                            (
+                                "_UD-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-FAULTED ="
+                            ),
+                            (
+                                "_UD-WRITER _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-DESCRIPTOR ="
+                            ),
+                            "_UD-WRITER _EXT4-JWR-VALID?",
+                            (
+                                "_UD-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                                "2 ="
+                            ),
+                            "_UD-HOMES 0=",
+                            "_UD-CTX _EXT4-C.J.COMMITTED + @ 0=",
+                            "_UD-CTX _EXT4-C.RECOVERY + @ 0<>",
+                            "_UD-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                            "_UD-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "_UD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            (
+                                "_XU-NAME-SNAPSHOT 256 "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-UNLINK-W7-ROLLBACK" THEN'
+                ),
+            ],
+            patches=source_patches,
+            write_faults_by_ordinal={
+                descriptor_ordinal: {
+                    "stage": "media",
+                    "sector_index": 0,
+                    "byte_index": 200,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-UNLINK-W7-ROLLBACK")
+        assert failed_trace == success_trace[: descriptor_event + 1]
+        assert _read_ext4_home(
+            faulted, inode_home, block_size=block_size
+        ) == original_inode_home
+        assert _read_ext4_home(
+            faulted, directory_home, block_size=block_size
+        ) == original_directory
+        assert _read_ext4_home(
+            faulted, data_block, block_size=block_size
+        ) == original_data
+        assert _read_ext4_home(
+            faulted, xattr_block, block_size=block_size
+        ) == original_xattr
+
+        _, recovery_trace, recovery_sha256 = _staged_write_recovery_readback(
+            faulted,
+            recovered,
+            expected_file=old_file,
+            expected_epoch_ms=old_mtime_ms,
+            expected_home_writes=0,
+            expected_replayed=True,
+            expected_blocks=old_blocks,
+            prefix="_UD-R",
+            marker="EXT4-PUBLIC-UNLINK-W7-RECOVERED",
+        )
+        assert recovery_trace
+        _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+            recovered,
+            stable,
+            expected_file=old_file,
+            expected_epoch_ms=old_mtime_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            expected_blocks=old_blocks,
+            prefix="_UD-S",
+            marker="EXT4-PUBLIC-UNLINK-W7-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+        _assert_e2fsck_clean(recovered, jbd2_toolchain)
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
+def test_staged_vfs_unlink_directory_home_tear_replays_both_homes(
+    staged_public_unlink_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A committed torn dirent must replay the complete UNLINK after-image."""
+    case = staged_public_unlink_fixture
+    path = case["source"]
+    source_patches = case["source_patches"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    inode_home = case["inode_home"]
+    directory_home = case["directory_home"]
+    data_block = case["data_block"]
+    xattr_block = case["xattr_block"]
+    old_mtime_ms = case["old_mtime_ms"]
+    epoch_ms = case["epoch_ms"]
+    old_file = case["old_file"]
+    free_blocks_before = case["free_blocks_before"]
+    free_inodes_before = case["free_inodes_before"]
+    original_inode_home = case["original_inode_home"]
+    expected_inode_home = case["expected_inode_home"]
+    original_directory = case["original_directory"]
+    expected_directory = case["expected_directory"]
+    original_data = case["original_data"]
+    original_xattr = case["original_xattr"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(directory_home, int)
+    assert isinstance(data_block, int)
+    assert isinstance(xattr_block, int)
+    assert isinstance(old_mtime_ms, int)
+    assert isinstance(epoch_ms, int)
+    assert isinstance(old_file, bytes)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(original_inode_home, bytes)
+    assert isinstance(expected_inode_home, bytes)
+    assert isinstance(original_directory, bytes)
+    assert isinstance(expected_directory, bytes)
+    assert isinstance(original_data, bytes)
+    assert isinstance(original_xattr, bytes)
+    assert original_inode_home != expected_inode_home
+    assert original_directory != expected_directory
+
+    inode_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, inode_home, block_size=block_size
+    )
+    directory_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, directory_home, block_size=block_size
+    )
+    assert inode_ordinals == (16,)
+    assert directory_ordinals == (17,)
+    directory_ordinal = directory_ordinals[0]
+    directory_event = _trace_event_index_for_ordinal(
+        success_trace, "write", directory_ordinal
+    )
+    tear_offset = 90
+    expected_torn_directory = (
+        expected_directory[:tear_offset] + original_directory[tear_offset:]
+    )
+    assert expected_torn_directory not in {
+        original_directory,
+        expected_directory,
+    }
+
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    faulted = tmp_path / "staged-unlink-directory-faulted.img"
+    recovered = tmp_path / "staged-unlink-directory-recovered.img"
+    stable = tmp_path / "staged-unlink-directory-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                *_staged_unlink_attempt_forth("_UH", epoch_ms=epoch_ms),
+                (
+                    _forth_conjunction(
+                        [
+                            "_UH-MOUNT-IOR 0=",
+                            "_UH-CLOCK-IOR 0=",
+                            "_UH-PROFILE-SIZE-IOR 0=",
+                            "_UH-PROFILE-BIND-IOR 0=",
+                            "_UH-PROFILE-USED _UH-PROFILE-SIZE =",
+                            "_UH-P-IOR 0=",
+                            "_UH-H-IOR 0=",
+                            "_UH-D-IOR 0=",
+                            "_UH-SHARED",
+                            "_UH-IOR 0=",
+                            (
+                                "_UH-LAST-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-VOLUME ="
+                            ),
+                            (
+                                "_UH-LAST-IOR VFS-IOR-REASON "
+                                "VFS-R-IO ="
+                            ),
+                            (
+                                "_UH-LAST-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-PARTIAL AND 0<>"
+                            ),
+                            "_UH-AFTER-P-IOR 0=",
+                            "_UH-AFTER-P D.VNODE @ _UH-VN =",
+                            "_UH-AFTER-H 0=",
+                            (
+                                "_UH-AFTER-H-IOR VFS-IOR-REASON "
+                                "VFS-R-NOENT ="
+                            ),
+                            "_UH-VN VN.NLINK @ 1 =",
+                            "_UH-VN VN.BLOCKS @ 4 =",
+                            "_UH-VN VN.MTIME @ _UH-OLD-MTIME =",
+                            (
+                                "_UH-VN VN.MTIME-NS @ "
+                                "_UH-OLD-MTIME-NS ="
+                            ),
+                            f"_UH-VN VN.CTIME @ {seconds} =",
+                            f"_UH-VN VN.CTIME-NS @ {nanoseconds} =",
+                            f"_UH-D-VN VN.MTIME @ {seconds} =",
+                            f"_UH-D-VN VN.MTIME-NS @ {nanoseconds} =",
+                            f"_UH-D-VN VN.CTIME @ {seconds} =",
+                            f"_UH-D-VN VN.CTIME-NS @ {nanoseconds} =",
+                            "_UH-V V.ICOUNT @ _UH-OLD-ICOUNT 1- =",
+                            "_UH-V V.VCOUNT @ _UH-OLD-VCOUNT =",
+                            "_UH-CLOCK-CALLS @ 1 =",
+                            "_UH-WRITER _UH-PROFILE-BASE =",
+                            (
+                                "_UH-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-FAULTED ="
+                            ),
+                            (
+                                "_UH-WRITER _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-CHECKPOINT-HOME ="
+                            ),
+                            "_UH-WRITER _EXT4-JWR-VALID?",
+                            (
+                                "_UH-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                                "2 ="
+                            ),
+                            (
+                                "_UH-WRITER _EXT4-JWR.DATA-ACTIVE + @ "
+                                "0="
+                            ),
+                            (
+                                "_UH-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ "
+                                "0="
+                            ),
+                            "_UH-HOMES 1 =",
+                            "_UH-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                            "_UH-CTX _EXT4-C.RECOVERY + @ 0<>",
+                            "_UH-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                            "_UH-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "_UH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            (
+                                "_XU-NAME-SNAPSHOT 256 "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-UNLINK-DIR-TEAR" THEN'
+                ),
+            ],
+            patches=source_patches,
+            write_faults_by_ordinal={
+                directory_ordinal: {
+                    "stage": "media",
+                    "sector_index": 0,
+                    "byte_index": tear_offset,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-UNLINK-DIR-TEAR")
+        assert failed_trace == success_trace[: directory_event + 1]
+        assert _read_ext4_home(
+            faulted, inode_home, block_size=block_size
+        ) == expected_inode_home
+        assert _read_ext4_home(
+            faulted, directory_home, block_size=block_size
+        ) == expected_torn_directory
+        assert _read_ext4_home(
+            faulted, data_block, block_size=block_size
+        ) == original_data
+        assert _read_ext4_home(
+            faulted, xattr_block, block_size=block_size
+        ) == original_xattr
+
+        _, recovery_trace, recovery_sha256 = _staged_unlink_recovery_view(
+            faulted,
+            recovered,
+            expected_file=old_file,
+            old_mtime_ms=old_mtime_ms,
+            epoch_ms=epoch_ms,
+            expected_home_writes=2,
+            expected_replayed=True,
+            prefix="_UH-R",
+            marker="EXT4-PUBLIC-UNLINK-DIR-RECOVERED",
+        )
+        assert len(
+            _write_ordinals_for_ext4_home(
+                recovery_trace, inode_home, block_size=block_size
+            )
+        ) == 1
+        assert len(
+            _write_ordinals_for_ext4_home(
+                recovery_trace, directory_home, block_size=block_size
+            )
+        ) == 1
+        assert _read_ext4_home(
+            recovered, inode_home, block_size=block_size
+        ) == expected_inode_home
+        assert _read_ext4_home(
+            recovered, directory_home, block_size=block_size
+        ) == expected_directory
+        recovered_superblock, _, _ = _ext4_inode_record(recovered, 14)
+        recovered_free_blocks = struct.unpack_from(
+            "<I", recovered_superblock, 0x0C
+        )[0] | (
+            struct.unpack_from("<I", recovered_superblock, 0x158)[0] << 32
+        )
+        recovered_free_inodes = struct.unpack_from(
+            "<I", recovered_superblock, 0x10
+        )[0] | (
+            struct.unpack_from("<I", recovered_superblock, 0x15C)[0] << 32
+        )
+        assert recovered_free_blocks == free_blocks_before
+        assert recovered_free_inodes == free_inodes_before
+        _assert_e2fsck_clean(recovered, jbd2_toolchain)
+
+        _, stable_trace, stable_sha256 = _staged_unlink_recovery_view(
+            recovered,
+            stable,
+            expected_file=old_file,
+            old_mtime_ms=old_mtime_ms,
+            epoch_ms=epoch_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            prefix="_UH-S",
+            marker="EXT4-PUBLIC-UNLINK-DIR-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
 
 
 def test_ext4_crc_source_uses_checked_hardware_without_fallback() -> None:
