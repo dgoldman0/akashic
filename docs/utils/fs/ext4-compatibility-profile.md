@@ -103,11 +103,17 @@ the zeroed retained-block tail and checksummed inode together as exact `2/0/0`
 metadata payloads, and preserves mapping, `i_blocks`, links, xattrs, and free-
 space accounting. A W7 descriptor tear retains the old EOF and both old homes;
 a committed W17 inode-home tear retains the new public EOF and replays both
-homes on recovery. Zero, aligned, cross-block, and growing requests remain
-unsupported because the first three may require block release and durable
-orphan authority. The current critical path is block-releasing `TRUNCATE` and
-the distinct nonfinal, final, and open `UNLINK` lifetimes; `MKDIR`/`RMDIR`;
-hard `LINK`; and finally staged `RENAME` cases. Extent-tree depth and indexed-
+homes on recovery. One block-releasing shape is now public too: shrink-to-zero
+of a linked file backed by one initialized depth-zero extent. It atomically
+publishes a modern orphan with the zero-size inode, composes the existing
+linked-orphan cleanup to release the data block, and retires transient
+`ORPHAN_PRESENT` while retaining the mounted writer. Precommit descriptor
+failure preserves the old file; a committed torn inode home converges through
+replay and orphan cleanup to a stable checker-clean empty file. Partial release,
+wider maps, aligned nonzero EOFs, cross-block nonzero EOFs, and growth remain
+unsupported. The current critical path is the distinct nonfinal, final, and
+open `UNLINK` lifetimes; `MKDIR`/`RMDIR`; hard `LINK`; and finally staged
+`RENAME` cases. Extent-tree depth and indexed-
 directory HTree depth are independent ratchets. Broaden either only when the
 next operation or a pinned realistic corpus demands it; directory growth does
 not imply speculative regular-file extent depth growth.
@@ -1860,10 +1866,50 @@ remount. At W17, the data home is already checkpointed and the committed inode
 home tears. The callback retains public success, the 24-byte vnode/timestamps,
 and the checkpoint failure in `V.LAST-IOR` while quarantining the mount.
 Recovery replays both transaction homes, then the next mount is write-free and
-byte-stable. This slice does not create orphan state. Shrink to zero or an
-aligned/cross-block EOF, block freeing, and growth remain gated until the
-block-release half can first publish durable orphan authority and then compose
-the already qualified cleanup machinery.
+byte-stable. This retained-block slice does not create orphan state. Aligned or
+cross-block nonzero EOFs and growth remain gated; the first zero-release
+closure follows.
+
+The first such block-release half is now closed for shrink-to-zero of a linked
+regular file with one initialized logical-zero extent in a depth-zero root.
+The file may retain one qualified external xattr block; the positive old size
+must fit within one filesystem block. Partial block release, multiple extents,
+unwritten extents, and depth-positive release remain outside this slice.
+
+The operation uses three independently committed and synchronously
+checkpointed transactions through one caller-owned writer. An exact `3/0/0`
+transaction updates the inode to zero size and trusted timestamps while
+retaining its old map and `i_blocks`, writes its inode number into the first
+authenticated empty modern orphan-file slot, and sets `ORPHAN_PRESENT`. Its
+mode-specific checkpoint certificate freezes the exact inode, slot, orphan
+home/generation, timestamp, and superblock after-images, reconstructs them from
+current media before the first home write, and requires the post-home union to
+contain exactly the linked zero-size target.
+
+The existing linked-orphan cleanup then measures and commits its exact homes.
+For the qualified inode-14 fixture it uses `5/0/0`: target inode, orphan-file
+block, data bitmap, primary GDT page, and primary superblock. It empties the
+extent root, reduces `i_blocks` from four to the external xattr's two sectors,
+frees data block 1346, advances group/global free-block accounting, and clears
+the orphan slot. A final exact `1/0/0` superblock transaction clears transient
+`ORPHAN_PRESENT` only from an authenticated empty-clear-pending endpoint.
+`RECOVER` remains active so the same mounted writer can serve later operations;
+ordinary clean unmount performs the existing witnessed deactivation.
+
+Clean public qualification observes EOF zero and zero-byte reads through both
+hard links, preserves link count, generation, atime, and xattr, gains exactly
+one free block, restores the modern orphan block byte-for-byte, unmounts
+cleanly, and reaches a zero-I/O ordinary remount accepted by pinned e2fsprogs
+1.47.4 `debugfs` and read-only `e2fsck`. A W7 add-descriptor tear returns the
+precommit volume error, restores the old 54-byte vnode/cursor projection, and
+leaves the inode, payload, and allocation bit unchanged. A committed tear of
+the first inode checkpoint home returns public success with EOF zero and
+quarantines the live writer. Fresh mount replays the three-home add, recognizes
+the linked modern orphan, frees its retained data block through the qualified
+cleanup path, clears the transient bit, and reaches a checker-clean stable
+remount. The focused clean/precommit/committed set passes all three cases, and
+the adjacent no-clock, policy, retained-block truncate, existing modern cleanup,
+and CREATE regression set passes all five.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

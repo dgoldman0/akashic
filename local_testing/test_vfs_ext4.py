@@ -4054,7 +4054,7 @@ def build_snapshot():
     # distinct cold source stages.  This preserves the existing measured ext4
     # watchdog instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
-    max_ext4_source_steps = 1_000_000_000
+    max_ext4_source_steps = 1_050_000_000
     bootstrap_steps = _feed_until_idle(system, bootstrap, max_crc_source_steps)
 
     def load_source_stage(
@@ -58010,6 +58010,742 @@ def test_staged_vfs_create_directory_tear_replays_all_six_homes(
 
 
 @pytest.fixture(scope="session")
+def staged_public_truncate_zero_fixture(
+    writer_activation_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Release one regular-file data block through the modern orphan protocol."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    inode_number = 14
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    data_block = _extent_root_physical(inode, 0)
+    old_size = struct.unpack_from("<I", inode, 0x04)[0]
+    old_blocks = struct.unpack_from("<I", inode, 0x1C)[0]
+    old_links = struct.unpack_from("<H", inode, 0x1A)[0]
+    old_generation = struct.unpack_from("<I", inode, 0x64)[0]
+    old_low_seconds = struct.unpack_from("<I", inode, 0x0C)[0]
+    old_extra_time = struct.unpack_from("<I", inode, 0x88)[0]
+    old_signed_seconds = (
+        old_low_seconds
+        if old_low_seconds < 0x8000_0000
+        else old_low_seconds - 0x1_0000_0000
+    )
+    old_seconds = old_signed_seconds + ((old_extra_time & 3) << 32)
+    old_nanoseconds = old_extra_time >> 2
+    assert old_nanoseconds % 1_000_000 == 0
+    old_epoch_ms = old_seconds * 1000 + old_nanoseconds // 1_000_000
+    xattr_block = struct.unpack_from("<I", inode, 0x68)[0]
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", superblock, 0x158)[0] << 32
+    )
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, orphan_inode, _ = _ext4_inode_record(path, orphan_inode_number)
+    orphan_block = _extent_root_physical(orphan_inode, 0)
+    original_orphan_block = _patched_ext4_home(
+        path,
+        source_patches,
+        orphan_block,
+        block_size=block_size,
+    )
+    original_data = _patched_ext4_home(
+        path,
+        source_patches,
+        data_block,
+        block_size=block_size,
+    )
+    original_inode_home = _patched_ext4_home(
+        path,
+        source_patches,
+        inode_home,
+        block_size=block_size,
+    )
+    epoch_ms = 3_000_000_987_654
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+
+    assert block_size == 1024
+    assert inode_size == 256
+    assert inode_home == 278
+    assert inode_block_offset == 256
+    assert data_block == 1346
+    assert old_size == 54
+    assert old_blocks == 4
+    assert old_links == 2
+    assert old_generation == 0
+    assert xattr_block > 0
+    assert xattr_block != data_block
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    assert struct.unpack_from("<I", original_orphan_block, block_size - 8)[0] == (
+        0x0B10CA04
+    )
+    assert not any(original_orphan_block[: block_size - 8])
+
+    directory = tmp_path_factory.mktemp("ext4-public-truncate-zero")
+    backing = directory / "staged-public-truncate-zero.img"
+    stable = directory / "staged-public-truncate-zero-stable.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        backing,
+        [
+            "CREATE _TZ-A 64 ALLOT",
+            "CREATE _TZ-B 64 ALLOT",
+            "CREATE _TZ-STAT VFS-STATFS-SIZE ALLOT",
+            "VARIABLE _TZ-CLOCK-CALLS",
+            (
+                ": _TZ-NOW ( context -- epoch-ms ior ) "
+                "DROP 1 _TZ-CLOCK-CALLS +! "
+                f"{epoch_ms} 0 ;"
+            ),
+            "T-ARENA CONSTANT _TZ-ARENA",
+            (
+                "_TZ-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _TZ-MOUNT-IOR CONSTANT _TZ-V"
+            ),
+            "_TZ-V _EXT4-CTX CONSTANT _TZ-CTX",
+            (
+                "' _TZ-NOW 0 _TZ-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _TZ-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_TZ-PROFILE", "_TZ-V", 5, 0, 0
+            ),
+            (
+                'S" /fixture/payload.txt" _TZ-V VFS-RESOLVE? '
+                "CONSTANT _TZ-P-IOR CONSTANT _TZ-P"
+            ),
+            (
+                'S" /fixture/hardlink.txt" _TZ-V VFS-RESOLVE? '
+                "CONSTANT _TZ-H-IOR CONSTANT _TZ-H"
+            ),
+            (
+                'S" /fixture/payload.txt" '
+                "VFS-FF-READ VFS-FF-WRITE OR _TZ-V VFS-OPEN? "
+                "CONSTANT _TZ-OPEN-IOR CONSTANT _TZ-FD"
+            ),
+            (
+                'S" /fixture/hardlink.txt" VFS-FF-READ _TZ-V '
+                "VFS-OPEN? CONSTANT _TZ-HOPEN-IOR CONSTANT _TZ-HFD"
+            ),
+            "_TZ-P D.VNODE @ CONSTANT _TZ-VN",
+            "_TZ-VN VN.ATIME @ CONSTANT _TZ-OLD-ATIME",
+            "_TZ-VN VN.ATIME-NS @ CONSTANT _TZ-OLD-ATIME-NS",
+            "_TZ-VN VN.BLOCKS @ CONSTANT _TZ-OLD-BLOCKS",
+            "_TZ-VN VN.GEN @ CONSTANT _TZ-OLD-GEN",
+            "_TZ-VN VN.NLINK @ CONSTANT _TZ-OLD-NLINK",
+            (
+                "_TZ-STAT VFS-STATFS-SIZE _TZ-V VFS-STATFS "
+                "CONSTANT _TZ-STAT-BEFORE-IOR"
+            ),
+            "_TZ-STAT VSF.BFREE @ CONSTANT _TZ-FREE-BEFORE",
+            "50 _TZ-FD VFS-SEEK? CONSTANT _TZ-SEEK-IOR",
+            "0 _TZ-FD VFS-TRUNCATE CONSTANT _TZ-IOR",
+            "_TZ-FD FD.CUR-LO @ CONSTANT _TZ-CLAMPED",
+            "_TZ-CTX _EXT4-C.J.WRITER + @ CONSTANT _TZ-WRITER",
+            "_TZ-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _TZ-HOMES",
+            (
+                "_TZ-STAT VFS-STATFS-SIZE _TZ-V VFS-STATFS "
+                "CONSTANT _TZ-STAT-AFTER-IOR"
+            ),
+            "_TZ-STAT VSF.BFREE @ CONSTANT _TZ-FREE-AFTER",
+            (
+                "_TZ-A 64 _TZ-HFD VFS-READ? "
+                "CONSTANT _TZ-HREAD-IOR CONSTANT _TZ-HREAD-ACTUAL"
+            ),
+            "0 _TZ-FD VFS-SEEK? CONSTANT _TZ-READ-SEEK-IOR",
+            (
+                "_TZ-B 64 _TZ-FD VFS-READ? "
+                "CONSTANT _TZ-PREAD-IOR CONSTANT _TZ-PREAD-ACTUAL"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_TZ-MOUNT-IOR 0=",
+                        "_TZ-CLOCK-IOR 0=",
+                        "_TZ-PROFILE-SIZE-IOR 0=",
+                        "_TZ-PROFILE-BIND-IOR 0=",
+                        "_TZ-PROFILE-USED _TZ-PROFILE-SIZE =",
+                        "_TZ-P-IOR 0=",
+                        "_TZ-H-IOR 0=",
+                        "_TZ-OPEN-IOR 0=",
+                        "_TZ-HOPEN-IOR 0=",
+                        "_TZ-P D.VNODE @ _TZ-H D.VNODE @ =",
+                        "_TZ-FD FD.INODE @ D.VNODE @ _TZ-VN =",
+                        "_TZ-HFD FD.INODE @ D.VNODE @ _TZ-VN =",
+                        "_TZ-SEEK-IOR 0=",
+                        "_TZ-IOR 0=",
+                        "_TZ-V V.LAST-IOR @ 0=",
+                        "_TZ-CLAMPED 0=",
+                        "_TZ-CLOCK-CALLS @ 1 =",
+                        "_TZ-VN VN.SIZE-LO @ 0=",
+                        "_TZ-VN VN.SIZE-HI @ 0=",
+                        "_TZ-VN VN.BLOCKS @ 2 =",
+                        "_TZ-VN VN.GEN @ _TZ-OLD-GEN =",
+                        "_TZ-VN VN.NLINK @ _TZ-OLD-NLINK =",
+                        f"_TZ-VN VN.MTIME @ {seconds} =",
+                        f"_TZ-VN VN.MTIME-NS @ {nanoseconds} =",
+                        f"_TZ-VN VN.CTIME @ {seconds} =",
+                        f"_TZ-VN VN.CTIME-NS @ {nanoseconds} =",
+                        "_TZ-VN VN.ATIME @ _TZ-OLD-ATIME =",
+                        "_TZ-VN VN.ATIME-NS @ _TZ-OLD-ATIME-NS =",
+                        "_TZ-VN VN.FLAGS @ VFS-IF-DIRTY AND 0<>",
+                        "_TZ-OLD-BLOCKS 4 =",
+                        "_TZ-OLD-GEN 0=",
+                        "_TZ-OLD-NLINK 2 =",
+                        "_TZ-STAT-BEFORE-IOR 0=",
+                        "_TZ-STAT-AFTER-IOR 0=",
+                        "_TZ-FREE-AFTER _TZ-FREE-BEFORE 1+ =",
+                        "_TZ-HOMES 1 =",
+                        "_TZ-WRITER _TZ-PROFILE-BASE =",
+                        "_TZ-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_TZ-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_TZ-V V.FLAGS @ VFS-F-RO AND 0=",
+                        "_TZ-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        "_TZ-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                        "_TZ-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_TZ-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_TZ-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_TZ-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        (
+                            "_TZ-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0<>"
+                        ),
+                        (
+                            "_TZ-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                        "_TZ-HREAD-IOR 0=",
+                        "_TZ-HREAD-ACTUAL 0=",
+                        "_TZ-READ-SEEK-IOR 0=",
+                        "_TZ-PREAD-IOR 0=",
+                        "_TZ-PREAD-ACTUAL 0=",
+                        (
+                            "_XT-ZERO _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_EXT4-JTA-EXPECTED-INODE _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_EXT4-JTA-EXPECTED-SUPER _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-TRUNCATE-ZERO-PUBLISHED" THEN'
+            ),
+            "_TZ-FD VFS-CLOSE? CONSTANT _TZ-CLOSE-IOR",
+            "_TZ-HFD VFS-CLOSE? CONSTANT _TZ-HCLOSE-IOR",
+            "0 _TZ-V VFS-UNMOUNT CONSTANT _TZ-UNMOUNT-IOR",
+            (
+                "_TZ-CLOSE-IOR 0= _TZ-HCLOSE-IOR 0= AND "
+                "_TZ-UNMOUNT-IOR 0= AND "
+                "_TZ-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_TZ-PROFILE-ARENA ARENA-USED 0= AND "
+                "_TZ-PROFILE-ARENA A.PTR @ _TZ-PROFILE-BASE = AND "
+                'IF ." EXT4-PUBLIC-TRUNCATE-ZERO-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=source_patches,
+        capture_media=backing,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-ZERO-PUBLISHED")
+    _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-ZERO-UNMOUNTED")
+    assert trace[: len(activation_trace)] == activation_trace
+
+    final_superblock, final_inode, _ = _ext4_inode_record(
+        backing, inode_number
+    )
+    final_free_blocks = struct.unpack_from(
+        "<I", final_superblock, 0x0C
+    )[0] | (struct.unpack_from("<I", final_superblock, 0x158)[0] << 32)
+    assert final_free_blocks == free_blocks_before + 1
+    assert struct.unpack_from("<I", final_superblock, 0x60)[0] & 0x04 == 0
+    assert struct.unpack_from("<I", final_superblock, 0x64)[0] & 0x0001_0000 == 0
+    assert struct.unpack_from("<I", final_inode, 0x04)[0] == 0
+    assert struct.unpack_from("<I", final_inode, 0x6C)[0] == 0
+    assert struct.unpack_from("<I", final_inode, 0x1C)[0] == 2
+    assert struct.unpack_from("<H", final_inode, 0x1A)[0] == old_links
+    assert struct.unpack_from("<I", final_inode, 0x64)[0] == old_generation
+    assert struct.unpack_from("<I", final_inode, 0x68)[0] == xattr_block
+    assert struct.unpack_from("<HHHH", final_inode, 0x28) == (
+        0xF30A,
+        0,
+        4,
+        0,
+    )
+    assert final_inode[0x34:0x64] == bytes(48)
+    assert _ext4_block_allocation_state(backing, (data_block,)) == {
+        data_block: False
+    }
+    assert _read_ext4_home(
+        backing, orphan_block, block_size=block_size
+    ) == original_orphan_block
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+    _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+        backing,
+        stable,
+        expected_file=b"",
+        expected_epoch_ms=epoch_ms,
+        expected_home_writes=0,
+        expected_replayed=False,
+        expected_blocks=2,
+        prefix="_TZ-S",
+        marker="EXT4-PUBLIC-TRUNCATE-ZERO-STABLE",
+    )
+    assert stable_trace == ()
+    assert stable_sha256 == media_sha256
+    return {
+        "source": path,
+        "source_patches": source_patches,
+        "image": stable,
+        "trace": trace,
+        "activation_trace": activation_trace,
+        "block_size": block_size,
+        "inode_number": inode_number,
+        "inode_home": inode_home,
+        "data_block": data_block,
+        "orphan_inode_number": orphan_inode_number,
+        "orphan_block": orphan_block,
+        "old_size": old_size,
+        "old_blocks": old_blocks,
+        "old_links": old_links,
+        "old_generation": old_generation,
+        "old_epoch_ms": old_epoch_ms,
+        "epoch_ms": epoch_ms,
+        "old_file": original_data[:old_size],
+        "original_data": original_data,
+        "original_inode_home": original_inode_home,
+    }
+
+
+def test_staged_vfs_truncate_zero_releases_one_block(
+    staged_public_truncate_zero_fixture: dict[str, object],
+) -> None:
+    image = staged_public_truncate_zero_fixture["image"]
+    data_block = staged_public_truncate_zero_fixture["data_block"]
+    assert isinstance(image, Path)
+    assert isinstance(data_block, int)
+    assert image.is_file()
+    assert _ext4_block_allocation_state(image, (data_block,)) == {
+        data_block: False
+    }
+
+
+def test_staged_vfs_truncate_zero_descriptor_tear_retains_old_file(
+    staged_public_truncate_zero_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A torn add-orphan descriptor must leave EOF and allocation unchanged."""
+    case = staged_public_truncate_zero_fixture
+    path = case["source"]
+    source_patches = case["source_patches"]
+    success_trace = case["trace"]
+    activation_trace = case["activation_trace"]
+    block_size = case["block_size"]
+    inode_home = case["inode_home"]
+    data_block = case["data_block"]
+    old_size = case["old_size"]
+    old_blocks = case["old_blocks"]
+    old_links = case["old_links"]
+    old_epoch_ms = case["old_epoch_ms"]
+    epoch_ms = case["epoch_ms"]
+    old_file = case["old_file"]
+    original_data = case["original_data"]
+    original_inode_home = case["original_inode_home"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(data_block, int)
+    assert isinstance(old_size, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(old_links, int)
+    assert isinstance(old_epoch_ms, int)
+    assert isinstance(epoch_ms, int)
+    assert isinstance(old_file, bytes)
+    assert isinstance(original_data, bytes)
+    assert isinstance(original_inode_home, bytes)
+
+    descriptor_ordinal = sum(
+        kind == "write" for kind, _, _ in activation_trace
+    ) + 1
+    assert descriptor_ordinal == 7
+    descriptor_event = _trace_event_index_for_ordinal(
+        success_trace, "write", descriptor_ordinal
+    )
+    faulted = tmp_path / "staged-truncate-zero-descriptor-faulted.img"
+    recovered = tmp_path / "staged-truncate-zero-descriptor-recovered.img"
+    stable = tmp_path / "staged-truncate-zero-descriptor-stable.img"
+    output, failed_trace, _ = run_recovery_forth(
+        path,
+        faulted,
+        [
+            "VARIABLE _TZD-CLOCK-CALLS",
+            (
+                ": _TZD-NOW ( context -- epoch-ms ior ) "
+                "DROP 1 _TZD-CLOCK-CALLS +! "
+                f"{epoch_ms} 0 ;"
+            ),
+            "T-ARENA CONSTANT _TZD-ARENA",
+            (
+                "_TZD-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _TZD-MOUNT-IOR CONSTANT _TZD-V"
+            ),
+            "_TZD-V _EXT4-CTX CONSTANT _TZD-CTX",
+            (
+                "' _TZD-NOW 0 _TZD-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _TZD-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_TZD-PROFILE", "_TZD-V", 5, 0, 0
+            ),
+            (
+                'S" /fixture/payload.txt" '
+                "VFS-FF-READ VFS-FF-WRITE OR _TZD-V VFS-OPEN? "
+                "CONSTANT _TZD-OPEN-IOR CONSTANT _TZD-FD"
+            ),
+            "_TZD-FD FD.INODE @ D.VNODE @ CONSTANT _TZD-VN",
+            "50 _TZD-FD VFS-SEEK? CONSTANT _TZD-SEEK-IOR",
+            "0 _TZD-FD VFS-TRUNCATE CONSTANT _TZD-IOR",
+            "_TZD-CTX _EXT4-C.J.WRITER + @ CONSTANT _TZD-WRITER",
+            (
+                _forth_conjunction(
+                    [
+                        "_TZD-MOUNT-IOR 0=",
+                        "_TZD-CLOCK-IOR 0=",
+                        "_TZD-PROFILE-SIZE-IOR 0=",
+                        "_TZD-PROFILE-BIND-IOR 0=",
+                        "_TZD-OPEN-IOR 0=",
+                        "_TZD-SEEK-IOR 0=",
+                        "_TZD-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME =",
+                        "_TZD-IOR VFS-IOR-REASON VFS-R-IO =",
+                        (
+                            "_TZD-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-PARTIAL AND 0<>"
+                        ),
+                        "_TZD-V V.LAST-IOR @ _TZD-IOR =",
+                        f"_TZD-VN VN.SIZE-LO @ {old_size} =",
+                        "_TZD-VN VN.SIZE-HI @ 0=",
+                        f"_TZD-VN VN.BLOCKS @ {old_blocks} =",
+                        f"_TZD-VN VN.NLINK @ {old_links} =",
+                        "_TZD-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                        "_TZD-FD FD.CUR-LO @ 50 =",
+                        "_TZD-CLOCK-CALLS @ 1 =",
+                        "_TZD-WRITER _TZD-PROFILE-BASE =",
+                        (
+                            "_TZD-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-FAULTED ="
+                        ),
+                        (
+                            "_TZD-WRITER _EXT4-JWR.PHASE + @ "
+                            "_EXT4-JWP-DESCRIPTOR ="
+                        ),
+                        "_TZD-WRITER _EXT4-JWR-VALID?",
+                        "_TZD-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        "_TZD-CTX _EXT4-C.J.COMMITTED + @ 0=",
+                        "_TZD-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        "_TZD-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                        "_TZD-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_TZD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        (
+                            "_XT-ZERO _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_EXT4-JTA-EXPECTED-INODE _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_EXT4-JTA-EXPECTED-SUPER _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-TRUNCATE-ZERO-DESCRIPTOR" THEN'
+            ),
+        ],
+        patches=source_patches,
+        write_faults_by_ordinal={
+            descriptor_ordinal: {
+                "stage": "media",
+                "sector_index": 0,
+                "byte_index": 200,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=faulted,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-ZERO-DESCRIPTOR")
+    assert failed_trace == success_trace[: descriptor_event + 1]
+    assert _read_ext4_home(
+        faulted, data_block, block_size=block_size
+    ) == original_data
+    assert _read_ext4_home(
+        faulted, inode_home, block_size=block_size
+    ) == original_inode_home
+    assert _ext4_block_allocation_state(faulted, (data_block,)) == {
+        data_block: True
+    }
+
+    _, recovery_trace, recovery_sha256 = _staged_write_recovery_readback(
+        faulted,
+        recovered,
+        expected_file=old_file,
+        expected_epoch_ms=old_epoch_ms,
+        expected_home_writes=0,
+        expected_replayed=True,
+        expected_blocks=old_blocks,
+        prefix="_TZD-R",
+        marker="EXT4-PUBLIC-TRUNCATE-ZERO-DESCRIPTOR-RECOVERED",
+    )
+    assert recovery_trace
+    _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+        recovered,
+        stable,
+        expected_file=old_file,
+        expected_epoch_ms=old_epoch_ms,
+        expected_home_writes=0,
+        expected_replayed=False,
+        expected_blocks=old_blocks,
+        prefix="_TZD-S",
+        marker="EXT4-PUBLIC-TRUNCATE-ZERO-DESCRIPTOR-STABLE",
+    )
+    assert stable_trace == ()
+    assert stable_sha256 == recovery_sha256
+    assert _ext4_block_allocation_state(stable, (data_block,)) == {
+        data_block: True
+    }
+    _assert_e2fsck_clean(stable, jbd2_toolchain)
+
+
+def test_staged_vfs_truncate_zero_add_home_tear_converges_via_orphan(
+    staged_public_truncate_zero_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A committed torn zero-size home must replay, free, and clear."""
+    case = staged_public_truncate_zero_fixture
+    path = case["source"]
+    source_patches = case["source_patches"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    inode_number = case["inode_number"]
+    inode_home = case["inode_home"]
+    data_block = case["data_block"]
+    old_blocks = case["old_blocks"]
+    old_links = case["old_links"]
+    old_generation = case["old_generation"]
+    epoch_ms = case["epoch_ms"]
+    original_data = case["original_data"]
+    original_inode_home = case["original_inode_home"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(data_block, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(old_links, int)
+    assert isinstance(old_generation, int)
+    assert isinstance(epoch_ms, int)
+    assert isinstance(original_data, bytes)
+    assert isinstance(original_inode_home, bytes)
+
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    _, inode_block_offset = divmod(inode_offset, block_size)
+    expected_add_inode_home = _staged_write_timestamped_inode_home(
+        superblock,
+        inode,
+        original_inode_home,
+        inode_number=inode_number,
+        inode_block_offset=inode_block_offset,
+        epoch_ms=epoch_ms,
+        expected_size=0,
+    )
+    inode_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, inode_home, block_size=block_size
+    )
+    assert len(inode_ordinals) == 2
+    add_inode_ordinal = inode_ordinals[0]
+    add_inode_event = _trace_event_index_for_ordinal(
+        success_trace, "write", add_inode_ordinal
+    )
+    tear_offset = 300
+    expected_torn_inode = (
+        expected_add_inode_home[:tear_offset]
+        + original_inode_home[tear_offset:]
+    )
+    assert expected_torn_inode not in {
+        original_inode_home,
+        expected_add_inode_home,
+    }
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+
+    faulted = tmp_path / "staged-truncate-zero-add-home-faulted.img"
+    repaired = tmp_path / "staged-truncate-zero-add-home-repaired.img"
+    stable = tmp_path / "staged-truncate-zero-add-home-stable.img"
+    output, failed_trace, _ = run_recovery_forth(
+        path,
+        faulted,
+        [
+            "VARIABLE _TZH-CLOCK-CALLS",
+            (
+                ": _TZH-NOW ( context -- epoch-ms ior ) "
+                "DROP 1 _TZH-CLOCK-CALLS +! "
+                f"{epoch_ms} 0 ;"
+            ),
+            "T-ARENA CONSTANT _TZH-ARENA",
+            (
+                "_TZH-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _TZH-MOUNT-IOR CONSTANT _TZH-V"
+            ),
+            "_TZH-V _EXT4-CTX CONSTANT _TZH-CTX",
+            (
+                "' _TZH-NOW 0 _TZH-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _TZH-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_TZH-PROFILE", "_TZH-V", 5, 0, 0
+            ),
+            (
+                'S" /fixture/payload.txt" '
+                "VFS-FF-READ VFS-FF-WRITE OR _TZH-V VFS-OPEN? "
+                "CONSTANT _TZH-OPEN-IOR CONSTANT _TZH-FD"
+            ),
+            "_TZH-FD FD.INODE @ D.VNODE @ CONSTANT _TZH-VN",
+            "50 _TZH-FD VFS-SEEK? CONSTANT _TZH-SEEK-IOR",
+            "0 _TZH-FD VFS-TRUNCATE CONSTANT _TZH-IOR",
+            "_TZH-V V.LAST-IOR @ CONSTANT _TZH-LAST-IOR",
+            "_TZH-CTX _EXT4-C.J.WRITER + @ CONSTANT _TZH-WRITER",
+            (
+                _forth_conjunction(
+                    [
+                        "_TZH-MOUNT-IOR 0=",
+                        "_TZH-CLOCK-IOR 0=",
+                        "_TZH-PROFILE-SIZE-IOR 0=",
+                        "_TZH-PROFILE-BIND-IOR 0=",
+                        "_TZH-OPEN-IOR 0=",
+                        "_TZH-SEEK-IOR 0=",
+                        "_TZH-IOR 0=",
+                        (
+                            "_TZH-LAST-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-VOLUME ="
+                        ),
+                        "_TZH-LAST-IOR VFS-IOR-REASON VFS-R-IO =",
+                        (
+                            "_TZH-LAST-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-PARTIAL AND 0<>"
+                        ),
+                        "_TZH-VN VN.SIZE-LO @ 0=",
+                        "_TZH-VN VN.SIZE-HI @ 0=",
+                        f"_TZH-VN VN.BLOCKS @ {old_blocks} =",
+                        f"_TZH-VN VN.NLINK @ {old_links} =",
+                        f"_TZH-VN VN.GEN @ {old_generation} =",
+                        f"_TZH-VN VN.MTIME @ {seconds} =",
+                        f"_TZH-VN VN.MTIME-NS @ {nanoseconds} =",
+                        f"_TZH-VN VN.CTIME @ {seconds} =",
+                        f"_TZH-VN VN.CTIME-NS @ {nanoseconds} =",
+                        "_TZH-VN VN.FLAGS @ VFS-IF-DIRTY AND 0<>",
+                        "_TZH-FD FD.CUR-LO @ 0=",
+                        "_TZH-CLOCK-CALLS @ 1 =",
+                        "_TZH-WRITER _TZH-PROFILE-BASE =",
+                        (
+                            "_TZH-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-FAULTED ="
+                        ),
+                        (
+                            "_TZH-WRITER _EXT4-JWR.PHASE + @ "
+                            "_EXT4-JWP-CHECKPOINT-HOME ="
+                        ),
+                        "_TZH-WRITER _EXT4-JWR-VALID?",
+                        "_TZH-WRITER _EXT4-JWR.META-ACTIVE + @ 3 =",
+                        "_TZH-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                        "_TZH-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                        "_TZH-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                        "_TZH-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        "_TZH-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                        "_TZH-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_TZH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        (
+                            "_XT-ZERO _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_EXT4-JTA-EXPECTED-INODE _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_EXT4-JTA-EXPECTED-SUPER _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-TRUNCATE-ZERO-ADD-HOME" THEN'
+            ),
+        ],
+        patches=source_patches,
+        write_faults_by_ordinal={
+            add_inode_ordinal: {
+                "stage": "media",
+                "sector_index": 0,
+                "byte_index": tear_offset,
+                "result": STORAGE_RESULT_MEDIA_FAILURE,
+                "command": STORAGE_CMD_WRITE,
+            }
+        },
+        capture_media=faulted,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-ZERO-ADD-HOME")
+    assert failed_trace == success_trace[: add_inode_event + 1]
+    assert _read_ext4_home(
+        faulted, inode_home, block_size=block_size
+    ) == expected_torn_inode
+    assert _read_ext4_home(
+        faulted, data_block, block_size=block_size
+    ) == original_data
+    assert _ext4_block_allocation_state(faulted, (data_block,)) == {
+        data_block: True
+    }
+
+    recovery_trace, _ = _assert_singleton_cleanup_media_converges(
+        faulted,
+        repaired,
+        stable,
+        protocol="modern",
+    )
+    assert recovery_trace
+    assert _ext4_block_allocation_state(stable, (data_block,)) == {
+        data_block: False
+    }
+    _assert_e2fsck_clean(stable, jbd2_toolchain)
+
+
+@pytest.fixture(scope="session")
 def staged_public_truncate_fixture(
     writer_activation_fixture: dict[str, object],
     jbd2_toolchain: dict[str, object],
@@ -58877,8 +59613,8 @@ def test_staged_vfs_truncate_policy_boundaries_refuse_before_clock(
                             "_EXT4-UNSUPPORTED ="
                         ),
                         (
-                            "_TPR-ZERO-IOR EXT4-D-WRITE-POLICY "
-                            "_EXT4-UNSUPPORTED ="
+                            "_TPR-ZERO-IOR VFS-IOR-REASON "
+                            "VFS-R-NOSPC ="
                         ),
                         (
                             "_TPR-CROSS-IOR EXT4-D-WRITE-POLICY "
