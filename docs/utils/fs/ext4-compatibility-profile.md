@@ -115,9 +115,12 @@ unsupported. The first nonfinal closed-file `UNLINK` lifetime is public too:
 one same-parent hard-link name, target/parent inode times and link count, and
 the checksummed linear-directory block commit together without allocation or
 orphan state. W7 preserves both old names; committed W17 recovery replays its
-two deduplicated homes. The current critical path is final-link and open-file
-`UNLINK`; `MKDIR`/`RMDIR`; hard `LINK`; and finally staged
-`RENAME` cases. Extent-tree depth and indexed-
+two deduplicated homes. Closed last-link removal is now public for an
+already-empty, allocation-free regular inode: its name, complete inode record,
+inode bitmap bit, and group/global free-inode accounts commit atomically in at
+most six homes without an orphan interval. The current critical path is
+`MKDIR`/`RMDIR`, then hard `LINK` and staged `RENAME`; nonempty final-link and
+unlink-while-open remain explicit later lifetime boundaries. Extent-tree depth and indexed-
 directory HTree depth are independent ratchets. Broaden either only when the
 next operation or a pinned realistic corpus demands it; directory growth does
 not imply speculative regular-file extent depth growth.
@@ -1915,14 +1918,16 @@ remount. The focused clean/precommit/committed set passes all three cases, and
 the adjacent no-clock, policy, retained-block truncate, existing modern cleanup,
 and CREATE regression set passes all five.
 
-The first public `UNLINK` lifetime is a closed, nonfinal regular-file removal
-from an authenticated one-block linear directory. The staged binding alone
-advertises the capability. The target and parent are root-owned on the
-qualified 1 KiB/256-byte-inode geometry; the target must have more than one
-link, no open references, and another live same-inode name in the same parent.
-Final-link removal, unlink-while-open, cross-parent remaining-link proof,
-directories, HTree/indexed or multi-block parents, and directory growth remain
-gated rather than approximated.
+The first public `UNLINK` lifetimes are closed regular-file removals from an
+authenticated one-block linear directory. The staged binding alone advertises
+the capability. The target and parent are root-owned on the qualified 1
+KiB/256-byte-inode geometry. Nonfinal removal requires another live same-inode
+name in the same parent. Final removal requires link count one, no open
+references, zero size and `i_blocks`, a canonical empty extent or legacy map,
+no external xattr or project ID, and exactly one authenticated directory
+reference. Nonempty final-link removal, unlink-while-open, cross-parent
+remaining-link proof, directories, HTree/indexed or multi-block parents, and
+directory growth remain gated rather than approximated.
 
 Admission reauthenticates the target's complete current map, inode locator and
 generation, cache projection, external xattrs, link count, and mutable flags.
@@ -1942,16 +1947,41 @@ fixture, inode-table block 278 and directory block 1345 are W16 and W17.
 Clean qualification removes `/fixture/hardlink.txt`, preserves the 54-byte
 `/fixture/payload.txt`, its data and external-xattr blocks, reaches a write-free
 stable remount, and passes pinned e2fsprogs 1.47.4 `debugfs` and read-only
-`e2fsck`. Open-file and last-link refusals precede the trusted clock; a missing
-clock and an undersized one-home profile likewise cause no activation or media
-mutation. A torn W7 descriptor returns the precommit error and leaves both
+`e2fsck`. Open-file refusal precedes clock sampling. A missing clock is refused
+before map-policy inspection; after a clock is bound, nonempty final-link and
+undersized-profile refusals still cause no activation or media mutation. A
+torn W7 descriptor returns the precommit error and leaves both
 names and both homes byte-exact. A committed W17 directory-home tear publishes
 the removed name and link count one, retains the checkpoint error in
 `V.LAST-IOR`, and quarantines the mount; recovery rewrites both homes exactly
 once before a byte-stable second mount. The final sequential adjacency
-capstone combines these four UNLINK cases with initial CREATE, both qualified
-TRUNCATE forms, and TRUNCATE policy refusal; all eight pass in 534.05 host
-seconds.
+capstone combines these four nonfinal-UNLINK cases with initial CREATE, both
+qualified TRUNCATE forms, and TRUNCATE policy refusal; all eight pass in 534.05
+host seconds.
+
+Closed final-link removal of an empty inode uses the same authenticated name,
+target, parent, and directory proof, then adds exact inode-allocation
+authority. It validates the target's inode-bitmap index and ownership, primary
+descriptor locator, inode-table locator, allocation bit, and primary superblock
+before beginning an at-most-`6/0/0` transaction. The after-image zeroes the
+complete target inode, removes and checksums the directory record, updates the
+parent times, clears the inode bit, and increments the descriptor and
+superblock free-inode counts. No orphan state is created because the admitted
+inode has no data, map-node, or external-xattr allocation to outlive its final
+name.
+
+Clean CREATE followed by final UNLINK restores the original free-inode and VFS
+cache counts, leaves inode 33 completely zero, and passes pinned `debugfs` and
+read-only `e2fsck`. A torn UNLINK descriptor retains the created name, inode,
+and allocation; recovery performs zero ext4-home replay before a stable mount.
+A committed torn directory home has already published absence and capacity
+recovery, so the live mount retains the checkpoint diagnostic while the next
+mount replays all six homes. The following mount is write-free and byte-stable,
+and neither path sets `ORPHAN_PRESENT`. The expanded sequential capstone runs
+the prior eight CREATE/TRUNCATE/nonfinal-UNLINK cases plus clean final-link
+removal and both final-link crash boundaries: all 11 pass in 949.80 host
+seconds. Fresh source mode measures 1,078,694,775 ext4-load steps across 2,859
+packed lines under the checked-in 1.10-billion-step watchdog.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
