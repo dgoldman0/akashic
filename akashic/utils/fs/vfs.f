@@ -907,6 +907,8 @@ VARIABLE _VTR-FD
 VARIABLE _VTR-SIZE
 VARIABLE _VTR-OLD-SIZE
 VARIABLE _VTR-OLD-SIZE-HI
+VARIABLE _VTR-VN
+VARIABLE _VTR-SCAN-FD
 
 \ RAM binding-data is an allocation pair, never a logical-length pair.
 \   IN.BDATA @       backing buffer (0 only when capacity is 0)
@@ -1943,9 +1945,28 @@ VARIABLE _VSK-V
 : VFS-SIZE    ( fd -- size )     FD.INODE @ IN.SIZE-LO @ ;
 
 \ VFS-TRUNCATE ( size fd -- ior )
-\   Set a file's logical size and notify its backing store.  The file
-\   cursor is clamped to the new end on success.
+\   Set a file's logical size and notify its backing store.  Every live
+\   descriptor for the same vnode in this VFS is clamped on success.
 VARIABLE _VTR-V
+
+: _VTR-CLAMP-VNODE-CURSORS  ( -- )
+    _VTR-V @ V.FDPOOL @
+    _VTR-V @ V.FDMAX @ 0 DO
+        DUP I VFS-FD-SIZE * + DUP _VTR-SCAN-FD !
+        FD.VFS @ _VTR-V @ = IF
+            _VTR-SCAN-FD @ FD.INODE @ ?DUP IF
+                D.VNODE @ _VTR-VN @ = IF
+                    _VTR-SCAN-FD @ FD.CUR-HI @
+                    _VTR-SCAN-FD @ FD.CUR-LO @ _VTR-SIZE @ U> OR IF
+                        _VTR-SIZE @ _VTR-SCAN-FD @ FD.CUR-LO !
+                    THEN
+                    0 _VTR-SCAN-FD @ FD.CUR-HI !
+                THEN
+            THEN
+        THEN
+    LOOP
+    DROP ;
+
 : VFS-TRUNCATE  ( size fd -- ior )
     _VTR-FD ! _VTR-SIZE !
     _VTR-FD @ 0= IF VFS-E-BADF EXIT THEN
@@ -1954,6 +1975,7 @@ VARIABLE _VTR-V
     _VTR-V @ _VFS-READY ?DUP IF EXIT THEN
     _VTR-FD @ FD.FLAGS @ VFS-FF-WRITE AND 0= IF VFS-E-BADF EXIT THEN
     _VTR-FD @ FD.INODE @ IN.TYPE @ VFS-T-DIR = IF VFS-E-ISDIR EXIT THEN
+    _VTR-FD @ FD.INODE @ D.VNODE @ _VTR-VN !
     _VTR-V @ V.FLAGS @ VFS-F-RO AND IF VFS-E-READONLY EXIT THEN
     _VTR-FD @ FD.GEN @ _VTR-V @ V.MEDIA-GEN @ <> IF VFS-E-STALE EXIT THEN
     VFS-OP-TRUNCATE _VTR-V @ _VFS-HAS-OP? 0= IF VFS-E-UNSUPPORTED EXIT THEN
@@ -1977,9 +1999,7 @@ VARIABLE _VTR-V
     VFS-IF-DIRTY
     _VTR-FD @ FD.INODE @ IN.FLAGS DUP @ ROT OR SWAP !
     VFS-F-DIRTY _VTR-V @ V.FLAGS DUP @ ROT OR SWAP !
-    _VTR-FD @ FD.CUR-LO @ _VTR-SIZE @ > IF
-        _VTR-SIZE @ _VTR-FD @ FD.CUR-LO !
-    THEN
+    _VTR-CLAMP-VNODE-CURSORS
     0 ;
 
 \ =====================================================================

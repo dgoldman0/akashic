@@ -828,6 +828,53 @@ def test_successful_truncate_preserves_stack():
     ], "OK STACK SIZE")
 
 
+def test_truncate_clamps_every_open_alias_only_after_success():
+    """Successful truncate clamps all same-vnode FDs; failure changes none."""
+    check("truncate clamps shared-vnode descriptors", [
+        'VARIABLE _TR-FAIL VARIABLE _TR-DEPTH',
+        ': T-ALIAS-TRUNCATE  2DROP _TR-FAIL @ IF VFS-E-IO ELSE 0 THEN ;',
+        'T-BINDING-CLONE CONSTANT _BIND',
+        "' T-ALIAS-TRUNCATE _BIND VB.OPS @ VFS-OP-TRUNCATE CELLS + !",
+        '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
+        'S" original" _V1 VFS-MKFILE CONSTANT _A',
+        'S" alias" _A _V1 V.ROOT @ _V1 VFS-LINK ?DUP IF THROW THEN CONSTANT _B',
+        'S" unrelated" _V1 VFS-MKFILE CONSTANT _U',
+        'T-VFS-NEW CONSTANT _V2 S" foreign" _V2 VFS-MKFILE DROP',
+        'S" original" VFS-FF-READ VFS-FF-WRITE OR _V1 VFS-OPEN? ?DUP IF THROW THEN CONSTANT _TFD',
+        'S" original" VFS-FF-READ _V1 VFS-OPEN? ?DUP IF THROW THEN CONSTANT _SFD',
+        'S" alias" VFS-FF-READ _V1 VFS-OPEN? ?DUP IF THROW THEN CONSTANT _AFD',
+        'S" unrelated" VFS-FF-READ _V1 VFS-OPEN? ?DUP IF THROW THEN CONSTANT _UFD',
+        'S" foreign" VFS-FF-READ _V2 VFS-OPEN? ?DUP IF THROW THEN CONSTANT _FFD',
+        'S" abcdefghijkl" _TFD VFS-WRITE DROP',
+        '10 _TFD VFS-SEEK 2 _SFD VFS-SEEK',
+        '3 _AFD FD.CUR-LO ! 1 _AFD FD.CUR-HI !',
+        '8 _UFD FD.CUR-LO ! 7 _UFD FD.CUR-HI !',
+        '6 _FFD FD.CUR-LO ! 5 _FFD FD.CUR-HI !',
+        ': T-TRUNCATE-ALIASES  DEPTH _TR-DEPTH !',
+        '  0 _TR-FAIL ! 4 _TFD VFS-TRUNCATE 0= IF ." SUCCESS " THEN',
+        '  _TFD FD.CUR-LO @ 4 = _TFD FD.CUR-HI @ 0= AND IF ." CALLER " THEN',
+        '  _SFD FD.CUR-LO @ 2 = _SFD FD.CUR-HI @ 0= AND IF ." SAME " THEN',
+        '  _AFD FD.CUR-LO @ 4 = _AFD FD.CUR-HI @ 0= AND IF ." LINK " THEN',
+        '  _UFD FD.CUR-LO @ 8 = _UFD FD.CUR-HI @ 7 = AND',
+        '  _FFD FD.CUR-LO @ 6 = _FFD FD.CUR-HI @ 5 = AND AND IF ." UNRELATED " THEN',
+        '  _A D.VNODE @ _B D.VNODE @ = _TFD VFS-SIZE 4 = AND IF ." SHARED " THEN',
+        '  3 _TFD VFS-SEEK 8 _SFD VFS-SEEK',
+        '  1 _AFD FD.CUR-LO ! 1 _AFD FD.CUR-HI ! -1 _TR-FAIL !',
+        '  2 _TFD VFS-TRUNCATE VFS-E-IO = IF ." FAILURE " THEN',
+        '  _TFD FD.CUR-LO @ 3 = _TFD FD.CUR-HI @ 0= AND',
+        '  _SFD FD.CUR-LO @ 8 = _SFD FD.CUR-HI @ 0= AND AND',
+        '  _AFD FD.CUR-LO @ 1 = _AFD FD.CUR-HI @ 1 = AND AND',
+        '  _TFD VFS-SIZE 4 = AND',
+        '  _UFD FD.CUR-LO @ 8 = _UFD FD.CUR-HI @ 7 = AND AND',
+        '  _FFD FD.CUR-LO @ 6 = _FFD FD.CUR-HI @ 5 = AND AND',
+        '  IF ." ROLLBACK " THEN',
+        '  DEPTH _TR-DEPTH @ = IF ." STACK" THEN ;',
+        'T-TRUNCATE-ALIASES CR',
+        '_TFD VFS-CLOSE _SFD VFS-CLOSE _AFD VFS-CLOSE',
+        '_UFD VFS-CLOSE _FFD VFS-CLOSE',
+    ], "SUCCESS CALLER SAME LINK UNRELATED SHARED FAILURE ROLLBACK STACK")
+
+
 def test_successful_truncate_preserves_new_binding_diagnostic_only():
     """A committed callback may retain a checkpoint diagnostic on success."""
     check("successful truncate diagnostic", [
@@ -1862,6 +1909,7 @@ def main():
         test_rewind,
         test_invalid_offsets_never_reach_binding,
         test_successful_truncate_preserves_stack,
+        test_truncate_clamps_every_open_alias_only_after_success,
         # RESOLVE
         test_resolve_root,
         test_resolve_absolute,
