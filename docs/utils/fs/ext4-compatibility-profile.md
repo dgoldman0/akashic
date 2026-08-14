@@ -126,8 +126,12 @@ authenticated linear parent, increments the parent link count and group
 exact `7/0/0` through `9/0/0` transaction. A precommit descriptor tear rolls
 the provisional directory back without allocation, while a committed child-
 directory-home tear retains the public directory and replays all eight
-canonical homes. The current critical path is `RMDIR`, then hard `LINK` and
-staged `RENAME`; nonempty final-link and
+canonical homes. Bounded empty-directory `RMDIR` is now public for that exact
+canonical child shape. It proves the parent and child blocks have only their
+two legitimate owners, atomically removes the typed name, releases the inode
+and block, decrements parent links and `used_dirs`, and revokes the unchanged
+freed directory block under exact `6/0/1` through `8/0/1` credit. The current
+critical path is hard `LINK`, then staged `RENAME`; nonempty final-link and
 unlink-while-open remain explicit later lifetime boundaries. Extent-tree depth and indexed-
 directory HTree depth are independent ratchets. Broaden either only when the
 next operation or a pinned realistic corpus demands it; directory growth does
@@ -915,8 +919,10 @@ pinned geometries. Leaf splitting additionally has same-group public and typed
 evidence. Existing multi-leaf input has clean public selection/edit and
 two-to-three-index split evidence, stable remounts, and pinned external-tool
 acceptance.
-The ordinary ext4 binding remains read-only and every other mutation capability
-remains disabled. Modern
+The ordinary ext4 binding remains read-only. The explicitly staged descriptor
+additionally exposes only the qualified `CREATE`, `MKDIR`, `TRUNCATE`,
+`UNLINK`, and `RMDIR` namespace/metadata slices documented below; other
+mutation capabilities remain disabled. Modern
 `ORPHAN_PRESENT` and a nonzero legacy
 `s_last_orphan` are now admitted, after any required journal replay and strict
 reload, into a unified, non-mutating two-pass preflight. Legacy discovery
@@ -1934,8 +1940,10 @@ name in the same parent. Final removal requires link count one, no open
 references, zero size and `i_blocks`, a canonical empty extent or legacy map,
 no external xattr or project ID, and exactly one authenticated directory
 reference. Nonempty final-link removal, unlink-while-open, cross-parent
-remaining-link proof, directories, HTree/indexed or multi-block parents, and
-directory growth remain gated rather than approximated.
+remaining-link proof, directories through `UNLINK`, HTree/indexed or
+multi-block parents, and directory growth remain gated rather than
+approximated. Canonical empty directories use the separate bounded `RMDIR`
+contract below.
 
 Admission reauthenticates the target's complete current map, inode locator and
 generation, cache projection, external xattrs, link count, and mutable flags.
@@ -1989,8 +1997,8 @@ and neither path sets `ORPHAN_PRESENT`. The expanded sequential capstone runs
 the prior eight CREATE/TRUNCATE/nonfinal-UNLINK cases plus clean final-link
 removal and both final-link crash boundaries: all 11 pass in 949.80 host
 seconds. At that pre-MKDIR milestone, fresh source mode measured
-1,078,694,775 ext4-load steps across 2,859 packed lines under the checked-in
-1.10-billion-step watchdog.
+1,078,694,775 ext4-load steps across 2,859 packed lines under the
+then-checked-in 1.10-billion-step watchdog.
 
 The first public `MKDIR` slice uses the same provisional-object VFS contract as
 CREATE, but admits only a root-owned, non-setgid parent in the authenticated
@@ -2035,8 +2043,38 @@ directory and cache/accounting projection; it records the checkpoint failure,
 quarantines the live writer, and recovery replays all eight metadata homes.
 Both recovery branches pass read-only `e2fsck` and converge on a subsequent
 write-free byte-stable mount. Fresh source mode with this slice measures
-1,091,816,729 ext4-load steps across 2,883 packed lines under the checked-in
-1.10-billion-step watchdog.
+1,091,816,729 ext4-load steps across 2,883 packed lines under the
+then-checked-in 1.10-billion-step watchdog.
+
+The first public `RMDIR` slice removes only the exact one-block empty directory
+produced by that MKDIR path. The child must remain root-owned mode 0755 with
+link count two, one depth-zero initialized extent, exact size and sector
+accounting, canonical checksummed `.`/`..` contents, loaded-empty cache state,
+no open references, exactly one dentry reference, and no active-CWD role. The
+parent must remain the authenticated root-owned one-block linear directory,
+with a link count of at least three and one exact type-2 target entry.
+
+Dry and live staging independently authenticate both inode maps, publish the
+parent and child directory ranges together, and scan every other allocated
+inode once while excluding only those two legitimate owners. Hostile inode-14
+patches that claim either range are qualified corruption refusals with zero
+writes. The admitted transaction zeroes and frees the child inode, splices and
+restamps the parent directory, decrements and restamps the parent link count,
+frees the child block, decrements `bg_used_dirs_count`, composes group/global
+free inode and block accounting, and revokes the unchanged freed child block.
+It does not restore `bg_itable_unused`.
+
+Deduplicated credit is exact `6/0/1` through `8/0/1`; the canonical same-group
+fixture uses `7/0/1`. Its checkpoint order is child inode W22, parent inode
+W23, parent directory W24, GDT W25, block bitmap W26, primary superblock W27,
+and inode bitmap W28. The child block is revoke-only and is never written as a
+home. Clean removal passes pinned e2fsprogs 1.47.4 `debugfs` and read-only
+`e2fsck`, then reaches a byte-stable write-free remount. W7 proves precommit
+rollback; a committed W25 GDT tear recovers by replaying all seven after-images
+while honoring the revoke. Missing clock, missing revoke space, six metadata
+slots, zero `used_dirs`, noncanonical child layout, and an open reference all
+refuse without media mutation. Fresh source mode now measures 1,121,477,446
+steps across 2,932 packed lines under the approved 1.15-billion-step watchdog.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

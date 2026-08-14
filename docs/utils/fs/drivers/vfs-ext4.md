@@ -56,8 +56,13 @@ bounded atomic `MKDIR`: it allocates one inode and one globally unowned block,
 builds a canonical checksummed one-block `.`/`..` directory, inserts its typed
 name into the authenticated one-block linear parent, and updates parent links,
 free-space, and `used_dirs` accounting in one exact `7/0/0` through `9/0/0`
-transaction. Directory growth, HTree parents, inheritance beyond the explicit
-root-owned non-setgid envelope, and `RMDIR` remain gated. The driver
+transaction. It also provides bounded empty-directory `RMDIR` for that exact
+canonical child shape. Removal atomically splices the typed parent entry,
+decrements the parent link and group `used_dirs` count, frees the child inode
+and data block, and revokes the freed directory-block home under exact
+`6/0/1` through `8/0/1` credit; the canonical fixture uses `7/0/1`.
+Directory growth, HTree parents, inheritance beyond the explicit root-owned
+non-setgid envelope, and broader directory shapes remain gated. The driver
 also implements bounded mount-time recovery and
 durable transaction emission for an internal checksum-v3 JBD2 journal. It never
 uses the ambient filesystem volume: reads and all recovery, activation,
@@ -82,7 +87,7 @@ geometry boundary: the validator requires each scheduled backup group number
 to equal the 16-bit on-disk `s_block_group_nr`, so a required sparse-super
 backup above group 65535 is refused.
 
-The checked-in 1,100,000,000-step ext4 cold-source value is a qualification watchdog
+The checked-in 1,150,000,000-step ext4 cold-source value is a qualification watchdog
 and measurement guide, not an ext4 implementation capacity or a reason to
 weaken functionality. If correct source legitimately outgrows it, the budget
 must be revisited from measured system resources. The harness still performs a
@@ -126,10 +131,10 @@ budget failures include used and allowed steps. The current source passes cold
 builds and focused recovery qualification under their checked-in watchdogs,
 without a compiled cache or certificate-preservation shortcut.
 
-After the bounded `MKDIR` slice, the production source measures 1,091,816,729
-steps across 2,883 packed lines in source mode. The 1.10-billion watchdog
-leaves about 0.7 percent measured growth margin; it is
-not a filesystem or implementation capacity.
+After the bounded `RMDIR` slice, the production source measures 1,121,477,446
+steps across 2,932 packed lines in source mode. The approved 1.15-billion
+watchdog leaves 28,522,554 steps, about 2.5 percent measured growth margin; it
+is not a filesystem or implementation capacity.
 
 ## Mounting
 
@@ -2088,6 +2093,57 @@ writer is quarantined. Recovery replays all eight canonical homes; pinned
 stable and write-free. The focused success journey consumes 1,054,460,044
 runtime steps under its existing 1.20-billion-step watchdog.
 
+### Bounded empty-directory RMDIR
+
+The staged binding advertises `VFS-CAP-RMDIR` and installs `_EXT4-RMDIR` in
+operation slot 12; the ordinary binding retains a null slot. Admission is the
+exact root-owned mode-0755 directory produced by the bounded MKDIR slice:
+link count two, one initialized depth-zero logical-zero extent, size one
+filesystem block, exact sector accounting, `extra_isize=32`, no external ACL,
+project ID, index flag, or post-160 inode state, and canonical checksummed
+`.`/`..` contents. The cache must have loaded the directory as empty, with no
+open references, exactly one dentry reference, and the target outside the
+active CWD. Other valid empty encodings remain typed write-policy refusals;
+loaded children return `NOTEMPTY`.
+
+The parent remains inside the authenticated one-block linear-directory
+envelope and must contain one exact file-type-2 target entry. Its link count
+must be at least three. The parent and child inode maps are independently
+authenticated, then one two-owner reverse-map walk publishes both distinct
+directory ranges and excludes only their two legitimate inode owners. Every
+other allocated inode is checked against both ranges in that single walk.
+Dry and live staging each repeat the proof and recapture the target, child
+block, parent inode, and parent directory before retaining an after-image.
+
+Removal zeroes the complete child inode, decrements and restamps the parent
+inode, splices and restamps the parent directory, clears the child block bit,
+and revokes the unchanged freed directory block. It then clears the child
+inode bit, increments group/global free inode and block counts, decrements
+`bg_used_dirs_count`, and restamps the retained descriptor and primary
+superblock after-images. `bg_itable_unused` is deliberately not restored. The
+deduplicated transaction admits exact `6/0/1` through `8/0/1` credit; the
+canonical same-group fixture uses seven metadata homes and one revoke. The
+freed child block is revoke-only and is never written as a checkpoint home.
+
+Clean qualification removes inode 33, restores both allocation counts, the
+parent link count, and `used_dirs`, preserves every other parent-directory
+byte under an independently reconstructed exact splice, and preserves the
+freed child-block bytes. Pinned e2fsprogs 1.47.4 `debugfs` and read-only
+`e2fsck` accept the result, and the following ordinary remount is byte-stable
+and write-free. The canonical checkpoint homes are target inode W22, parent
+inode W23, parent directory W24, GDT W25, block bitmap W26, superblock W27,
+and inode bitmap W28.
+
+A W7 descriptor tear retains the directory and both allocations with zero
+home replay. A committed W25 GDT tear leaves the first three complete homes
+plus a torn descriptor; recovery replays all seven after-images while honoring
+the child-block revoke, then reaches a write-free stable remount. Zero-write
+refusal evidence covers a missing clock, missing revoke capacity, six rather
+than seven metadata slots, `used_dirs == 0`, a noncanonical empty child, an
+open reference, and hostile third-inode aliases of either the parent or child
+directory home. The clean RMDIR journey measures 1,016,967,358 steps and its
+stable remount 42,878,737 under the unchanged 1.20-billion runtime watchdog.
+
 ### Same-retained-block shrink TRUNCATE
 
 The retained-block subpath accepts a strict shrink whose new EOF is nonaligned
@@ -2186,9 +2242,10 @@ the target has at least two links and the same authenticated parent contains
 another live name for that inode. The closed final lifetime accepts only an
 already-empty, allocation-free inode with link count one and exactly one
 authenticated directory reference. Nonempty final-link removal, unlink while
-any descriptor references the vnode, directory removal, and nonfinal links
-whose remaining name is outside the same-parent proof remain explicit later
-boundaries.
+any descriptor references the vnode, directory removal through `UNLINK`, and
+nonfinal links whose remaining name is outside the same-parent proof remain
+explicit later boundaries. The bounded empty-directory `RMDIR` path is a
+separate operation with its own admission and revoke contract.
 
 The target and parent must be root-owned objects on the qualified 1 KiB/
 256-byte-inode staged geometry. The target inode, its complete current extent
@@ -2682,9 +2739,11 @@ preserving the still-mounted instance's ready/current authority.
 
 `EXT4-BINDING` has `VFS-BF-NEEDS-VOLUME`, `VFS-BF-READ-ONLY`, and
 `VFS-BF-STABLE-IDS`. The VFS rejects all mutation before binding dispatch.
-`EXT4-STAGED-WRITE-BINDING` instead omits `READ_ONLY`, adds `VFS-CAP-WRITE`,
-and dispatches the qualified initialized overwrite, initialized partial-tail
-append, in-size hole-fill, and aligned-EOF growth operations described above.
+`EXT4-STAGED-WRITE-BINDING` instead omits `READ_ONLY` and adds the qualified
+`WRITE`, `CREATE`, `MKDIR`, `TRUNCATE`, `UNLINK`, and `RMDIR` capability bits
+and dispatch slots. Its write slot covers the initialized overwrite,
+initialized partial-tail append, in-size hole-fill, and aligned-EOF growth
+operations described above.
 `VFS-WRITE-EXACT` composes those same primitives for the qualified tail-to-one-
 new-block route; it does not introduce a fifth transaction primitive.
 Both bindings retain `VFS-CAP-SPARSE` for existing sparse mappings and
@@ -2762,9 +2821,9 @@ The ratchet order is:
    allocation-free regular inode (completed in the current worktree); retain
    nonempty final-link and unlink-while-open as explicit later lifetime
    boundaries rather than opening speculative orphan work;
-6. retain bounded `MKDIR`, including `.`/`..`, parent/child link counts,
-   inode/block allocation and directory accounting (completed in the current
-   worktree), then add `RMDIR` with empty-directory enforcement;
+6. retain bounded `MKDIR` and `RMDIR`, including `.`/`..`, parent/child link
+   counts, inode/block allocation and release, directory accounting, and
+   child-block revoke authority (completed in the current worktree);
 7. add hard `LINK`, then ratchet `RENAME` from same-directory no-replacement
    through cross-directory, directory-move, replacement, and open-victim
    cases;
@@ -2793,11 +2852,12 @@ documented request envelopes. Their qualified tail-to-allocation and additional
 allocated-EOF exact compositions preserve independently durable prefixes, but
 no broader geometry or operation inherits that status.
 `EXT4-STAGED-WRITE-OPS` adds staged `MOUNT`, `WRITE`, bounded linear-directory
-`CREATE` and `MKDIR`, qualified shrink `TRUNCATE`, and bounded closed-file `UNLINK`
-dispatch slots—including nonfinal removal and empty final-link removal—to its
-copy of the ordinary table. The ordinary binding remains `VFS-BF-READ-ONLY` and advertises
-none of them. Neither binding yet advertises `RMDIR`,
-`RENAME`, `SETATTR`, `LINK`, `SYMLINK`, `SETXATTR`, or `REMOVEXATTR`. Each later capability
+`CREATE` and `MKDIR`, qualified shrink `TRUNCATE`, bounded closed-file
+`UNLINK`—including nonfinal and empty final-link removal—and bounded canonical
+empty-directory `RMDIR` dispatch slots to its copy of the ordinary table. The
+ordinary binding remains `VFS-BF-READ-ONLY` and advertises none of them.
+Neither binding yet advertises `RENAME`, `SETATTR`, `LINK`, `SYMLINK`,
+`SETXATTR`, or `REMOVEXATTR`. Each later capability
 still needs its own bounded credit/chunking contract, reachable-state recovery
 closure, namespace/cache behavior where applicable, and interoperability plus
 crash qualification. Full profile completion additionally needs general block
@@ -2805,7 +2865,7 @@ and inode allocation, extent and legacy-map growth and shrink, directory-entry
 mutation, inode/link/time/accounting updates, xattr mutation, broader per-record
 orphan closure, and the final compositional release matrix.
 
-The staged binding publishes ten concrete durable paths. Initialized
+The staged binding publishes eleven concrete durable paths. Initialized
 overwrite uses a full-block ordered-data RMW plus one checksummed inode-table
 after-image and consumes `1/1/0`. Strict append uses the same transaction shape
 to extend exact partial EOF inside the initialized block, updating `i_size`
@@ -2832,8 +2892,12 @@ reference. Its at-most-six-home transaction removes that record, updates the
 parent times, zeroes the complete inode record, clears the inode bitmap bit,
 and increments the descriptor and primary-super free-inode counts. No orphan
 interval is needed because no data, extent node, legacy map block, or external
-xattr allocation can survive the atomic namespace commit. All eight update
-clock-derived
+xattr allocation can survive the atomic namespace commit. Bounded `RMDIR`
+accepts only the canonical one-block empty directory produced by MKDIR. It
+uses exact `6/0/1` through `8/0/1` credit to remove the typed parent entry,
+decrement parent links and `used_dirs`, free the inode and directory block,
+and revoke the unchanged freed block; the canonical path is `7/0/1`. The
+timestamped mutation paths update clock-derived
 `mtime`/`ctime`; both
 allocation-backed operations change `VN.BLOCKS` and free-space accounting, and
 both append modes change file size. Exact writes compose the qualified
@@ -2901,10 +2965,14 @@ CREATE/TRUNCATE/UNLINK capstone passes all 11 selected tests sequentially in
 canonical `.`/`..` construction, parent-link and `used_dirs` accounting,
 four zero-write refusal gates, W7 precommit rollback, and W25 committed
 eight-home replay, with pinned external-tool and stable-remount acceptance.
-Fresh source mode measures 1,091,816,729 ext4-load steps across 2,883 packed
-lines under the checked-in 1.10-billion-step watchdog. The next write ratchet
-is `RMDIR`, followed by hard `LINK` and staged
-`RENAME`.
+Bounded RMDIR adds a single-walk two-owner proof, exact parent namespace and
+inode after-image oracles, inode/block release with parent-link and
+`used_dirs` decrement, a revoke-only freed child block, six zero-write refusal
+gates plus hostile aliases of each protected owner range, W7 rollback, and W25
+committed seven-home replay. Pinned external tools and the write-free stable
+remount accept the result. Fresh source mode measures 1,121,477,446 ext4-load
+steps across 2,932 packed lines under the approved 1.15-billion-step watchdog.
+The next write ratchet is hard `LINK`, followed by staged `RENAME`.
 Nonempty final-link and unlink-while-open remain later lifetime closure, rather
 than a reason to expand orphan recovery speculatively. General sparse/gap growth, unwritten conversion, growth beyond a
 full resident root plus full unmergeable selected leaf, mutation starting from

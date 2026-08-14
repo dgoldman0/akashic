@@ -4208,7 +4208,7 @@ def build_snapshot():
     # distinct cold source stages.  This preserves the existing measured ext4
     # watchdog instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
-    max_ext4_source_steps = 1_100_000_000
+    max_ext4_source_steps = 1_150_000_000
     bootstrap_steps = _feed_until_idle(system, bootstrap, max_crc_source_steps)
 
     def load_source_stage(
@@ -7367,6 +7367,7 @@ def test_binding_descriptors_are_valid_and_truthful(
             (
                 "EXT4-CAPS VFS-CAP-WRITE OR VFS-CAP-CREATE OR "
                 "VFS-CAP-MKDIR OR VFS-CAP-TRUNCATE OR VFS-CAP-UNLINK OR "
+                "VFS-CAP-RMDIR OR "
                 "CONSTANT _EXPECTED-E4-STAGED-CAPS"
             ),
             (
@@ -7389,10 +7390,13 @@ def test_binding_descriptors_are_valid_and_truthful(
                 "EXT4-STAGED-WRITE-OPS I CELLS + @ ['] _EXT4-TRUNCATE <> "
                 "ELSE I VFS-OP-UNLINK = IF "
                 "EXT4-STAGED-WRITE-OPS I CELLS + @ ['] _EXT4-UNLINK <> "
+                "ELSE I VFS-OP-RMDIR = IF "
+                "EXT4-STAGED-WRITE-OPS I CELLS + @ ['] _EXT4-RMDIR <> "
                 "ELSE "
                 "EXT4-STAGED-WRITE-OPS I CELLS + @ "
                 "EXT4-OPS I CELLS + @ <> "
-                "THEN THEN THEN THEN THEN THEN IF FALSE UNLOOP EXIT THEN "
+                "THEN THEN THEN THEN THEN THEN THEN "
+                "IF FALSE UNLOOP EXIT THEN "
                 "LOOP TRUE ;"
             ),
             (
@@ -59097,6 +59101,1638 @@ def test_staged_vfs_mkdir_refusal_gates_leave_media_unchanged(
     assert trace == ()
     assert media_sha256 == expected_accounting_sha256
     assert _sha256(bad_accounting) == expected_accounting_sha256
+
+
+@pytest.fixture(scope="session")
+def staged_public_rmdir_fixture(
+    staged_public_mkdir_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Remove the exact bounded directory produced by public MKDIR."""
+    case = staged_public_mkdir_fixture
+    path = case["stable_image"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    block_size = case["block_size"]
+    child_inode_home = case["child_inode_home"]
+    parent_inode_home = case["parent_inode_home"]
+    parent_directory_home = case["parent_directory_home"]
+    child_directory_home = case["child_directory_home"]
+    block_bitmap_home = case["block_bitmap_home"]
+    inode_bitmap_home = case["inode_bitmap_home"]
+    gdt_home = case["gdt_home"]
+    super_home = case["super_home"]
+    free_blocks_before_mkdir = case["free_blocks_before"]
+    free_inodes_before_mkdir = case["free_inodes_before"]
+    root_links_before_mkdir = case["root_links_before"]
+    group_counts_before_mkdir = case["group_counts_before"]
+    assert isinstance(path, Path)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+    assert isinstance(block_size, int)
+    assert isinstance(child_inode_home, int)
+    assert isinstance(parent_inode_home, int)
+    assert isinstance(parent_directory_home, int)
+    assert isinstance(child_directory_home, int)
+    assert isinstance(block_bitmap_home, int)
+    assert isinstance(inode_bitmap_home, int)
+    assert isinstance(gdt_home, int)
+    assert isinstance(super_home, int)
+    assert isinstance(free_blocks_before_mkdir, int)
+    assert isinstance(free_inodes_before_mkdir, int)
+    assert isinstance(root_links_before_mkdir, int)
+    assert isinstance(group_counts_before_mkdir, dict)
+
+    before_super, before_child_inode, child_inode_offset = (
+        _ext4_inode_record(path, 33)
+    )
+    _, before_root_inode, root_inode_offset = _ext4_inode_record(path, 2)
+    before_parent_inode_home = _read_ext4_home(
+        path, parent_inode_home, block_size=block_size
+    )
+    before_group_counts = _ext4_group_counts(path, 0)
+    with path.open("rb") as source:
+        source.seek(parent_directory_home * block_size)
+        before_parent_directory = source.read(block_size)
+        source.seek(child_directory_home * block_size)
+        before_child_directory = source.read(block_size)
+    assert len(before_parent_directory) == block_size
+    assert len(before_child_directory) == block_size
+    assert child_inode_offset // block_size == child_inode_home
+    assert root_inode_offset // block_size == parent_inode_home
+    assert struct.unpack_from("<I", before_super, 0x0C)[0] == (
+        free_blocks_before_mkdir - 1
+    )
+    assert struct.unpack_from("<I", before_super, 0x10)[0] == (
+        free_inodes_before_mkdir - 1
+    )
+    assert struct.unpack_from("<H", before_root_inode, 0x1A)[0] == (
+        root_links_before_mkdir + 1
+    )
+    assert _ext4_block_allocation_state(
+        path, (child_directory_home,)
+    )[child_directory_home]
+    assert _ext4_inode_allocation_state(path, (33,))[33]
+
+    rmdir_ms = _STAGED_APPEND_EPOCH_MS + 12_345
+    rmdir_seconds, rmdir_milliseconds = divmod(rmdir_ms, 1000)
+    rmdir_nanoseconds = rmdir_milliseconds * 1_000_000
+    expected_root_inode_input = bytearray(before_root_inode)
+    struct.pack_into(
+        "<H", expected_root_inode_input, 0x1A, root_links_before_mkdir
+    )
+    root_inode_block_offset = root_inode_offset % block_size
+    expected_parent_inode_home = _staged_write_timestamped_inode_home(
+        before_super,
+        expected_root_inode_input,
+        before_parent_inode_home,
+        inode_number=2,
+        inode_block_offset=root_inode_block_offset,
+        epoch_ms=rmdir_ms,
+    )
+    expected_root_inode = expected_parent_inode_home[
+        root_inode_block_offset : root_inode_block_offset
+        + len(before_root_inode)
+    ]
+
+    before_parent_entries = _checked_linear_directory_entries(
+        before_super,
+        2,
+        struct.unpack_from("<I", before_root_inode, 0x64)[0],
+        before_parent_directory,
+    )
+    target_indexes = [
+        index
+        for index, entry in enumerate(before_parent_entries)
+        if entry[4] == b"created-dir"
+    ]
+    assert target_indexes == [len(before_parent_entries) - 1]
+    target_index = target_indexes[0]
+    assert target_index > 0
+    predecessor = before_parent_entries[target_index - 1]
+    target_entry = before_parent_entries[target_index]
+    assert predecessor[1] != 0
+    assert target_entry[1:] == (33, target_entry[2], 2, b"created-dir")
+    assert predecessor[0] + predecessor[2] == target_entry[0]
+    expected_parent_directory_buffer = bytearray(before_parent_directory)
+    struct.pack_into(
+        "<H",
+        expected_parent_directory_buffer,
+        predecessor[0] + 4,
+        predecessor[2] + target_entry[2],
+    )
+    expected_parent_directory_buffer[
+        target_entry[0] : target_entry[0] + target_entry[2]
+    ] = bytes(target_entry[2])
+    expected_parent_directory = _linear_directory_block_with_checksum(
+        before_super,
+        2,
+        struct.unpack_from("<I", before_root_inode, 0x64)[0],
+        expected_parent_directory_buffer,
+    )
+    directory = tmp_path_factory.mktemp("ext4-public-rmdir")
+    backing = directory / "staged-rmdir.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        backing,
+        [
+            "VARIABLE _RD-CLOCK-CALLS",
+            (
+                ": _RD-NOW ( context -- epoch-ms ior ) DROP "
+                f"1 _RD-CLOCK-CALLS +! {rmdir_ms} 0 ;"
+            ),
+            "CREATE _RD-STAT VFS-STATFS-SIZE ALLOT",
+            "T-ARENA CONSTANT _RD-ARENA",
+            (
+                "_RD-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _RD-MOUNT-IOR CONSTANT _RD-V"
+            ),
+            "_RD-V _EXT4-CTX CONSTANT _RD-CTX",
+            (
+                "' _RD-NOW 0 _RD-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _RD-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_RD-PROFILE", "_RD-V", 7, 0, 1
+            ),
+            (
+                "_RD-V V.ROOT @ _RD-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _RD-LOAD-IOR"
+            ),
+            (
+                'S" /created-dir" _RD-V VFS-RESOLVE? '
+                "CONSTANT _RD-BEFORE-RESOLVE-IOR CONSTANT _RD-D"
+            ),
+            "_RD-D D.VNODE @ CONSTANT _RD-VN",
+            "_RD-VN VN.TYPE @ CONSTANT _RD-TYPE-BEFORE",
+            "_RD-VN VN.BID @ CONSTANT _RD-BID-BEFORE",
+            "_RD-VN VN.GEN @ CONSTANT _RD-GEN-BEFORE",
+            "_RD-VN VN.NLINK @ CONSTANT _RD-NLINK-BEFORE",
+            "_RD-VN VN.OPEN-REFS @ CONSTANT _RD-OPEN-BEFORE",
+            "_RD-VN VN.DREFS @ CONSTANT _RD-DREFS-BEFORE",
+            "_RD-V V.ROOT @ D.VNODE @ CONSTANT _RD-ROOT-VN",
+            "_RD-ROOT-VN VN.NLINK @ CONSTANT _RD-ROOT-LINKS-BEFORE",
+            "_RD-V V.ICOUNT @ CONSTANT _RD-ICOUNT-BEFORE",
+            "_RD-V V.VCOUNT @ CONSTANT _RD-VCOUNT-BEFORE",
+            (
+                "_RD-STAT VFS-STATFS-SIZE _RD-V VFS-STATFS "
+                "CONSTANT _RD-STAT-BEFORE-IOR"
+            ),
+            "_RD-STAT VSF.BFREE @ CONSTANT _RD-BFREE-BEFORE",
+            "_RD-STAT VSF.FFREE @ CONSTANT _RD-FFREE-BEFORE",
+            'S" /created-dir" _RD-V VFS-RM CONSTANT _RD-RMDIR-IOR',
+            "_RD-V V.ICOUNT @ CONSTANT _RD-ICOUNT-AFTER",
+            "_RD-V V.VCOUNT @ CONSTANT _RD-VCOUNT-AFTER",
+            (
+                'S" /created-dir" _RD-V VFS-RESOLVE? '
+                "CONSTANT _RD-AFTER-RESOLVE-IOR CONSTANT _RD-AFTER-D"
+            ),
+            (
+                "_RD-STAT VFS-STATFS-SIZE _RD-V VFS-STATFS "
+                "CONSTANT _RD-STAT-AFTER-IOR"
+            ),
+            "_RD-STAT VSF.BFREE @ CONSTANT _RD-BFREE-AFTER",
+            "_RD-STAT VSF.FFREE @ CONSTANT _RD-FFREE-AFTER",
+            "_RD-CTX _EXT4-C.J.WRITER + @ CONSTANT _RD-WRITER",
+            (
+                "_RD-CTX _EXT4-C.J.HOME-WRITES + @ "
+                "CONSTANT _RD-HOME-WRITES"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_RD-MOUNT-IOR 0=",
+                        "_RD-CLOCK-IOR 0=",
+                        "_RD-PROFILE-SIZE-IOR 0=",
+                        "_RD-PROFILE-BIND-IOR 0=",
+                        "_RD-LOAD-IOR 0=",
+                        "_RD-BEFORE-RESOLVE-IOR 0=",
+                        "_RD-D 0<>",
+                        "_RD-TYPE-BEFORE VFS-T-DIR =",
+                        "_RD-BID-BEFORE 33 =",
+                        "_RD-GEN-BEFORE 1 =",
+                        "_RD-NLINK-BEFORE 2 =",
+                        "_RD-OPEN-BEFORE 0=",
+                        "_RD-DREFS-BEFORE 1 =",
+                        "_RD-STAT-BEFORE-IOR 0=",
+                        "_RD-RMDIR-IOR 0=",
+                        "_RD-V V.LAST-IOR @ 0=",
+                        "_RD-AFTER-D 0=",
+                        (
+                            "_RD-AFTER-RESOLVE-IOR VFS-IOR-REASON "
+                            "VFS-R-NOENT ="
+                        ),
+                        "_RD-STAT-AFTER-IOR 0=",
+                        "_RD-BFREE-AFTER _RD-BFREE-BEFORE 1+ =",
+                        "_RD-FFREE-AFTER _RD-FFREE-BEFORE 1+ =",
+                        "_RD-ICOUNT-AFTER _RD-ICOUNT-BEFORE 1- =",
+                        "_RD-VCOUNT-AFTER _RD-VCOUNT-BEFORE 1- =",
+                        (
+                            "_RD-ROOT-VN VN.NLINK @ "
+                            "_RD-ROOT-LINKS-BEFORE 1- ="
+                        ),
+                        f"_RD-ROOT-VN VN.MTIME @ {rmdir_seconds} =",
+                        f"_RD-ROOT-VN VN.MTIME-NS @ {rmdir_nanoseconds} =",
+                        f"_RD-ROOT-VN VN.CTIME @ {rmdir_seconds} =",
+                        f"_RD-ROOT-VN VN.CTIME-NS @ {rmdir_nanoseconds} =",
+                        "_RD-CLOCK-CALLS @ 1 =",
+                        "_RD-WRITER _RD-PROFILE-BASE =",
+                        "_RD-PROFILE-USED _RD-PROFILE-SIZE =",
+                        (
+                            "_RD-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_RD-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_RD-HOME-WRITES 7 =",
+                        f"_XU-DATA-BLOCK @ {child_directory_home} =",
+                        f"_XU-TARGET-HOME @ {child_inode_home} =",
+                        f"_XU-PARENT-HOME @ {parent_inode_home} =",
+                        f"_XU-DIR-HOME @ {parent_directory_home} =",
+                        (
+                            f"_XU-DATA-BITMAP-HOME @ "
+                            f"{block_bitmap_home} ="
+                        ),
+                        (
+                            f"_XU-BITMAP-HOME @ "
+                            f"{inode_bitmap_home} ="
+                        ),
+                        f"_XU-GDT-HOME @ {gdt_home} =",
+                        f"_XU-DATA-GDT-HOME @ {gdt_home} =",
+                        f"_XU-SUPER-HOME @ {super_home} =",
+                        f"_XU-DATA-SUPER-HOME @ {super_home} =",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        "_RD-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_RD-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_RD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_RD-V V.FLAGS @ VFS-F-RO AND 0=",
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-RMDIR-OK" THEN'
+            ),
+            "0 _RD-V VFS-UNMOUNT CONSTANT _RD-UNMOUNT-IOR",
+            (
+                "_RD-UNMOUNT-IOR 0= "
+                "_RD-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_RD-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-PUBLIC-RMDIR-UNMOUNTED" THEN'
+            ),
+        ],
+        capture_media=backing,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-RMDIR-OK")
+    _assert_emitted(output, "EXT4-PUBLIC-RMDIR-UNMOUNTED")
+    assert backing.is_file()
+
+    after_super, after_child_inode, observed_child_offset = (
+        _ext4_inode_record(backing, 33)
+    )
+    _, after_root_inode, observed_root_offset = _ext4_inode_record(backing, 2)
+    assert observed_child_offset == child_inode_offset
+    assert observed_root_offset == root_inode_offset
+    assert _read_ext4_home(
+        backing, parent_inode_home, block_size=block_size
+    ) == expected_parent_inode_home
+    assert after_super == _ext4_super_with_checksum(after_super)
+    assert after_child_inode == bytes(len(after_child_inode))
+    assert after_root_inode == expected_root_inode
+    assert struct.unpack_from("<I", after_super, 0x0C)[0] == (
+        free_blocks_before_mkdir
+    )
+    assert struct.unpack_from("<I", after_super, 0x10)[0] == (
+        free_inodes_before_mkdir
+    )
+    assert struct.unpack_from("<H", after_root_inode, 0x1A)[0] == (
+        root_links_before_mkdir
+    )
+    assert not _ext4_block_allocation_state(
+        backing, (child_directory_home,)
+    )[child_directory_home]
+    assert not _ext4_inode_allocation_state(backing, (33,))[33]
+    after_group_counts = _ext4_group_counts(backing, 0)
+    assert after_group_counts["free_blocks"] == (
+        group_counts_before_mkdir["free_blocks"]
+    )
+    assert after_group_counts["free_inodes"] == (
+        group_counts_before_mkdir["free_inodes"]
+    )
+    assert after_group_counts["used_dirs"] == (
+        group_counts_before_mkdir["used_dirs"]
+    )
+    assert after_group_counts["itable_unused"] == (
+        group_counts_before_mkdir["itable_unused"] - 1
+    )
+
+    with backing.open("rb") as source:
+        source.seek(gdt_home * block_size)
+        group_descriptor = source.read(64)
+        source.seek(parent_directory_home * block_size)
+        parent_directory = source.read(block_size)
+        source.seek(child_directory_home * block_size)
+        after_child_directory = source.read(block_size)
+    assert group_descriptor == _group_descriptor_with_checksum(
+        after_super, group_descriptor, 0
+    )
+    assert after_child_directory == before_child_directory
+    assert parent_directory == expected_parent_directory
+    parent_entries = _checked_linear_directory_entries(
+        after_super,
+        2,
+        struct.unpack_from("<I", after_root_inode, 0x64)[0],
+        parent_directory,
+    )
+    assert parent_entries == _checked_linear_directory_entries(
+        before_super,
+        2,
+        struct.unpack_from("<I", before_root_inode, 0x64)[0],
+        expected_parent_directory,
+    )
+    assert all(entry[4] != b"created-dir" for entry in parent_entries)
+
+    assert _write_ordinals_for_ext4_home(
+        trace, child_inode_home, block_size=block_size
+    ) == (22,)
+    assert _write_ordinals_for_ext4_home(
+        trace, parent_inode_home, block_size=block_size
+    ) == (23,)
+    assert _write_ordinals_for_ext4_home(
+        trace, parent_directory_home, block_size=block_size
+    ) == (24,)
+    assert _write_ordinals_for_ext4_home(
+        trace, block_bitmap_home, block_size=block_size
+    ) == (26,)
+    assert _write_ordinals_for_ext4_home(
+        trace, gdt_home, block_size=block_size
+    ) == (25,)
+    assert _write_ordinals_for_ext4_home(
+        trace, super_home, block_size=block_size
+    ) == (4, 27, 37)
+    assert _write_ordinals_for_ext4_home(
+        trace, inode_bitmap_home, block_size=block_size
+    ) == (28,)
+    assert _write_ordinals_for_ext4_home(
+        trace, child_directory_home, block_size=block_size
+    ) == ()
+
+    listing = subprocess.run(
+        [str(debugfs), "-R", "ls -l /", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert listing.returncode == 0, listing.stdout + listing.stderr
+    assert "created-dir" not in listing.stdout
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+    stable = directory / "staged-rmdir-stable.img"
+    stable_output, stable_trace, stable_sha256 = _staged_mkdir_recovery_view(
+        backing,
+        stable,
+        expected_present=False,
+        expected_free_blocks=free_blocks_before_mkdir,
+        expected_free_inodes=free_inodes_before_mkdir,
+        expected_parent_links=root_links_before_mkdir,
+        expected_home_writes=0,
+        expected_replayed=False,
+        prefix="_RD-S",
+        marker="EXT4-PUBLIC-RMDIR-STABLE",
+    )
+    assert "EXT4-PUBLIC-RMDIR-STABLE" in stable_output
+    assert stable_trace == ()
+    assert stable_sha256 == media_sha256
+    assert _sha256(stable) == media_sha256
+    return {
+        "source": path,
+        "image": backing,
+        "stable_image": stable,
+        "trace": trace,
+        "media_sha256": media_sha256,
+        "block_size": block_size,
+        "child_inode_home": child_inode_home,
+        "parent_inode_home": parent_inode_home,
+        "parent_directory_home": parent_directory_home,
+        "child_directory_home": child_directory_home,
+        "block_bitmap_home": block_bitmap_home,
+        "inode_bitmap_home": inode_bitmap_home,
+        "gdt_home": gdt_home,
+        "super_home": super_home,
+        "free_blocks_before": free_blocks_before_mkdir,
+        "free_inodes_before": free_inodes_before_mkdir,
+        "root_links_before": root_links_before_mkdir,
+        "before_group_counts": before_group_counts,
+        "after_group_counts": after_group_counts,
+        "before_child_inode": before_child_inode,
+        "before_child_directory": before_child_directory,
+    }
+
+
+def test_staged_vfs_rmdir_commits_exact_empty_directory_and_external_oracles(
+    staged_public_rmdir_fixture: dict[str, object],
+) -> None:
+    image = staged_public_rmdir_fixture["stable_image"]
+    trace = staged_public_rmdir_fixture["trace"]
+    assert isinstance(image, Path)
+    assert isinstance(trace, tuple)
+    assert image.is_file()
+    assert trace
+
+
+def _staged_rmdir_attempt_forth(
+    prefix: str,
+    *,
+    metadata_capacity: int = 7,
+    revoke_capacity: int = 1,
+) -> tuple[str, ...]:
+    """Build one public RMDIR attempt with cache/accounting observations."""
+    rmdir_ms = _STAGED_APPEND_EPOCH_MS + 12_345
+    return (
+        f"VARIABLE {prefix}-CLOCK-CALLS",
+        (
+            f": {prefix}-NOW ( context -- epoch-ms ior ) DROP "
+            f"1 {prefix}-CLOCK-CALLS +! {rmdir_ms} 0 ;"
+        ),
+        f"CREATE {prefix}-STAT VFS-STATFS-SIZE ALLOT",
+        f"T-ARENA CONSTANT {prefix}-ARENA",
+        (
+            f"{prefix}-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+            f"CONSTANT {prefix}-MOUNT-IOR CONSTANT {prefix}-V"
+        ),
+        f"{prefix}-V _EXT4-CTX CONSTANT {prefix}-CTX",
+        (
+            f"' {prefix}-NOW 0 {prefix}-V EXT4-BIND-WRITE-CLOCK? "
+            f"CONSTANT {prefix}-CLOCK-IOR"
+        ),
+        *_ext4_dedicated_writer_profile_forth(
+            f"{prefix}-PROFILE",
+            f"{prefix}-V",
+            metadata_capacity,
+            0,
+            revoke_capacity,
+        ),
+        (
+            f"{prefix}-V V.ROOT @ {prefix}-V _VFS-ENSURE-CHILDREN? "
+            f"CONSTANT {prefix}-LOAD-IOR"
+        ),
+        (
+            f'S" /created-dir" {prefix}-V VFS-RESOLVE? '
+            f"CONSTANT {prefix}-BEFORE-RESOLVE-IOR "
+            f"CONSTANT {prefix}-D"
+        ),
+        f"{prefix}-D D.VNODE @ CONSTANT {prefix}-VN",
+        f"{prefix}-VN VN.TYPE @ CONSTANT {prefix}-TYPE-BEFORE",
+        f"{prefix}-VN VN.BID @ CONSTANT {prefix}-BID-BEFORE",
+        f"{prefix}-VN VN.GEN @ CONSTANT {prefix}-GEN-BEFORE",
+        f"{prefix}-VN VN.NLINK @ CONSTANT {prefix}-NLINK-BEFORE",
+        f"{prefix}-VN VN.OPEN-REFS @ CONSTANT {prefix}-OPEN-BEFORE",
+        f"{prefix}-VN VN.DREFS @ CONSTANT {prefix}-DREFS-BEFORE",
+        f"{prefix}-V V.ROOT @ D.VNODE @ CONSTANT {prefix}-ROOT-VN",
+        (
+            f"{prefix}-ROOT-VN VN.NLINK @ "
+            f"CONSTANT {prefix}-ROOT-LINKS-BEFORE"
+        ),
+        f"{prefix}-V V.ICOUNT @ CONSTANT {prefix}-ICOUNT-BEFORE",
+        f"{prefix}-V V.VCOUNT @ CONSTANT {prefix}-VCOUNT-BEFORE",
+        (
+            f"{prefix}-STAT VFS-STATFS-SIZE {prefix}-V VFS-STATFS "
+            f"CONSTANT {prefix}-STAT-BEFORE-IOR"
+        ),
+        f"{prefix}-STAT VSF.BFREE @ CONSTANT {prefix}-BFREE-BEFORE",
+        f"{prefix}-STAT VSF.FFREE @ CONSTANT {prefix}-FFREE-BEFORE",
+        (
+            f'S" /created-dir" {prefix}-V VFS-RM '
+            f"CONSTANT {prefix}-RMDIR-IOR"
+        ),
+        f"{prefix}-V V.LAST-IOR @ CONSTANT {prefix}-LAST-IOR",
+        f"{prefix}-V V.ICOUNT @ CONSTANT {prefix}-ICOUNT-AFTER",
+        f"{prefix}-V V.VCOUNT @ CONSTANT {prefix}-VCOUNT-AFTER",
+        (
+            f'S" created-dir" {prefix}-V V.ROOT @ _VFS-FIND-CHILD '
+            f"CONSTANT {prefix}-CHILD"
+        ),
+        (
+            f'S" /created-dir" {prefix}-V VFS-RESOLVE? '
+            f"CONSTANT {prefix}-AFTER-RESOLVE-IOR "
+            f"CONSTANT {prefix}-AFTER-D"
+        ),
+        (
+            f"{prefix}-STAT VFS-STATFS-SIZE {prefix}-V VFS-STATFS "
+            f"CONSTANT {prefix}-STAT-AFTER-IOR"
+        ),
+        f"{prefix}-STAT VSF.BFREE @ CONSTANT {prefix}-BFREE-AFTER",
+        f"{prefix}-STAT VSF.FFREE @ CONSTANT {prefix}-FFREE-AFTER",
+        f"{prefix}-CTX _EXT4-C.J.WRITER + @ CONSTANT {prefix}-WRITER",
+        (
+            f"{prefix}-CTX _EXT4-C.J.HOME-WRITES + @ "
+            f"CONSTANT {prefix}-HOME-WRITES"
+        ),
+    )
+
+
+def test_staged_vfs_rmdir_descriptor_tear_retains_directory(
+    staged_public_rmdir_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A torn precommit descriptor retains every MKDIR afterimage."""
+    case = staged_public_rmdir_fixture
+    path = case["source"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    child_directory_home = case["child_directory_home"]
+    free_blocks_before = case["free_blocks_before"]
+    free_inodes_before = case["free_inodes_before"]
+    root_links_before = case["root_links_before"]
+    before_group_counts = case["before_group_counts"]
+    assert isinstance(path, Path)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(child_directory_home, int)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(root_links_before, int)
+    assert isinstance(before_group_counts, dict)
+
+    descriptor_ordinal = 7
+    descriptor_event = _trace_event_index_for_ordinal(
+        success_trace, "write", descriptor_ordinal
+    )
+    faulted = tmp_path / "staged-rmdir-w7-faulted.img"
+    recovered = tmp_path / "staged-rmdir-w7-recovered.img"
+    stable = tmp_path / "staged-rmdir-w7-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                *_staged_rmdir_attempt_forth("_RDF"),
+                (
+                    _forth_conjunction(
+                        [
+                            "_RDF-MOUNT-IOR 0=",
+                            "_RDF-CLOCK-IOR 0=",
+                            "_RDF-PROFILE-SIZE-IOR 0=",
+                            "_RDF-PROFILE-BIND-IOR 0=",
+                            "_RDF-LOAD-IOR 0=",
+                            "_RDF-BEFORE-RESOLVE-IOR 0=",
+                            "_RDF-TYPE-BEFORE VFS-T-DIR =",
+                            "_RDF-BID-BEFORE 33 =",
+                            "_RDF-GEN-BEFORE 1 =",
+                            "_RDF-NLINK-BEFORE 2 =",
+                            (
+                                "_RDF-RMDIR-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-VOLUME ="
+                            ),
+                            (
+                                "_RDF-RMDIR-IOR VFS-IOR-REASON "
+                                "VFS-R-IO ="
+                            ),
+                            (
+                                "_RDF-RMDIR-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-PARTIAL AND 0<>"
+                            ),
+                            "_RDF-LAST-IOR _RDF-RMDIR-IOR =",
+                            "_RDF-CHILD _RDF-D =",
+                            "_RDF-AFTER-D _RDF-D =",
+                            "_RDF-AFTER-RESOLVE-IOR 0=",
+                            "_RDF-VN VN.TYPE @ VFS-T-DIR =",
+                            "_RDF-VN VN.BID @ 33 =",
+                            "_RDF-VN VN.GEN @ 1 =",
+                            "_RDF-VN VN.NLINK @ 2 =",
+                            "_RDF-STAT-AFTER-IOR 0=",
+                            "_RDF-BFREE-AFTER _RDF-BFREE-BEFORE =",
+                            "_RDF-FFREE-AFTER _RDF-FFREE-BEFORE =",
+                            "_RDF-ICOUNT-AFTER _RDF-ICOUNT-BEFORE =",
+                            "_RDF-VCOUNT-AFTER _RDF-VCOUNT-BEFORE =",
+                            (
+                                "_RDF-ROOT-VN VN.NLINK @ "
+                                "_RDF-ROOT-LINKS-BEFORE ="
+                            ),
+                            "_RDF-CLOCK-CALLS @ 1 =",
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-RMDIR-W7-RETAINED" THEN'
+                ),
+                (
+                    _forth_conjunction(
+                        [
+                            "_RDF-WRITER _RDF-PROFILE-BASE =",
+                            (
+                                "_RDF-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-FAULTED ="
+                            ),
+                            (
+                                "_RDF-WRITER _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-DESCRIPTOR ="
+                            ),
+                            "_RDF-WRITER _EXT4-JWR-VALID?",
+                            (
+                                "_RDF-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                                "7 ="
+                            ),
+                            (
+                                "_RDF-WRITER _EXT4-JWR.DATA-ACTIVE + @ "
+                                "0="
+                            ),
+                            (
+                                "_RDF-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ "
+                                "1 ="
+                            ),
+                            (
+                                "0 _RDF-WRITER _EXT4-JWR-REVOKE-ENTRY "
+                                f"DUP @ {child_directory_home} = "
+                                "SWAP CELL+ @ _EXT4-JE-ACTIVE = AND"
+                            ),
+                            "_RDF-HOME-WRITES 0=",
+                            "_RDF-CTX _EXT4-C.J.COMMITTED + @ 0=",
+                            "_RDF-CTX _EXT4-C.RECOVERY + @ 0<>",
+                            "_RDF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                            "_RDF-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "_RDF-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            "_EXT4-JFO-TARGET-INO-B @ 0=",
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-RMDIR-W7-WRITER" THEN'
+                ),
+                (
+                    _forth_conjunction(
+                        [
+                            "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                            (
+                                "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_XU-CHILD-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-RMDIR-W7-SCRUBBED" THEN'
+                ),
+            ],
+            write_faults_by_ordinal={
+                descriptor_ordinal: {
+                    "stage": "media",
+                    "sector_index": 0,
+                    "byte_index": 200,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-RMDIR-W7-RETAINED")
+        _assert_emitted(output, "EXT4-PUBLIC-RMDIR-W7-WRITER")
+        _assert_emitted(output, "EXT4-PUBLIC-RMDIR-W7-SCRUBBED")
+        assert failed_trace == success_trace[: descriptor_event + 1]
+        for key in (
+            "child_inode_home",
+            "parent_inode_home",
+            "parent_directory_home",
+            "block_bitmap_home",
+            "gdt_home",
+            "inode_bitmap_home",
+        ):
+            home = case[key]
+            assert isinstance(home, int)
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == _read_ext4_home(path, home, block_size=block_size)
+        assert _ext4_block_allocation_state(
+            faulted, (child_directory_home,)
+        )[child_directory_home]
+        assert _ext4_inode_allocation_state(faulted, (33,))[33]
+        assert _ext4_group_counts(faulted, 0) == before_group_counts
+
+        _, recovery_trace, recovery_sha256 = _staged_mkdir_recovery_view(
+            faulted,
+            recovered,
+            expected_present=True,
+            expected_free_blocks=free_blocks_before - 1,
+            expected_free_inodes=free_inodes_before - 1,
+            expected_parent_links=root_links_before + 1,
+            expected_home_writes=0,
+            expected_replayed=True,
+            prefix="_RDF-R",
+            marker="EXT4-PUBLIC-RMDIR-W7-RECOVERED",
+        )
+        assert recovery_trace
+        assert _ext4_block_allocation_state(
+            recovered, (child_directory_home,)
+        )[child_directory_home]
+        assert _ext4_inode_allocation_state(recovered, (33,))[33]
+        assert _ext4_group_counts(recovered, 0) == before_group_counts
+        _assert_e2fsck_clean(recovered, jbd2_toolchain)
+
+        _, stable_trace, stable_sha256 = _staged_mkdir_recovery_view(
+            recovered,
+            stable,
+            expected_present=True,
+            expected_free_blocks=free_blocks_before - 1,
+            expected_free_inodes=free_inodes_before - 1,
+            expected_parent_links=root_links_before + 1,
+            expected_home_writes=0,
+            expected_replayed=False,
+            prefix="_RDF-S",
+            marker="EXT4-PUBLIC-RMDIR-W7-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
+def test_staged_vfs_rmdir_gdt_tear_replays_seven_homes_and_revoke(
+    staged_public_rmdir_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A committed GDT tear replays all afterimages and honors the revoke."""
+    case = staged_public_rmdir_fixture
+    path = case["source"]
+    success_image = case["image"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    child_directory_home = case["child_directory_home"]
+    free_blocks_before = case["free_blocks_before"]
+    free_inodes_before = case["free_inodes_before"]
+    root_links_before = case["root_links_before"]
+    after_group_counts = case["after_group_counts"]
+    before_child_directory = case["before_child_directory"]
+    assert isinstance(path, Path)
+    assert isinstance(success_image, Path)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(child_directory_home, int)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(root_links_before, int)
+    assert isinstance(after_group_counts, dict)
+    assert isinstance(before_child_directory, bytes)
+
+    expected_homes: dict[str, tuple[int, bytes, bytes]] = {}
+    for key in (
+        "child_inode_home",
+        "parent_inode_home",
+        "parent_directory_home",
+        "block_bitmap_home",
+        "gdt_home",
+        "super_home",
+        "inode_bitmap_home",
+    ):
+        home = case[key]
+        assert isinstance(home, int)
+        expected_homes[key] = (
+            home,
+            _read_ext4_home(path, home, block_size=block_size),
+            _read_ext4_home(success_image, home, block_size=block_size),
+        )
+    assert all(old != new for _, old, new in expected_homes.values())
+
+    gdt_home, old_gdt, expected_gdt = expected_homes["gdt_home"]
+    gdt_ordinal = _write_ordinals_for_ext4_home(
+        success_trace, gdt_home, block_size=block_size
+    )[0]
+    assert gdt_ordinal == 25
+    gdt_event = _trace_event_index_for_ordinal(
+        success_trace, "write", gdt_ordinal
+    )
+    differences = [
+        index
+        for index, (old, new) in enumerate(
+            zip(old_gdt[:512], expected_gdt[:512])
+        )
+        if old != new
+    ]
+    assert len(differences) >= 2
+    tear_offset = (differences[0] + differences[-1]) // 2
+    assert 0 < tear_offset < 512
+    expected_torn_gdt = expected_gdt[:tear_offset] + old_gdt[tear_offset:]
+    assert expected_torn_gdt not in {old_gdt, expected_gdt}
+
+    faulted = tmp_path / "staged-rmdir-w25-faulted.img"
+    recovered = tmp_path / "staged-rmdir-w25-recovered.img"
+    stable = tmp_path / "staged-rmdir-w25-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                *_staged_rmdir_attempt_forth("_RDH"),
+                (
+                    _forth_conjunction(
+                        [
+                            "_RDH-MOUNT-IOR 0=",
+                            "_RDH-CLOCK-IOR 0=",
+                            "_RDH-PROFILE-SIZE-IOR 0=",
+                            "_RDH-PROFILE-BIND-IOR 0=",
+                            "_RDH-LOAD-IOR 0=",
+                            "_RDH-BEFORE-RESOLVE-IOR 0=",
+                            "_RDH-RMDIR-IOR 0=",
+                            (
+                                "_RDH-LAST-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-VOLUME ="
+                            ),
+                            (
+                                "_RDH-LAST-IOR VFS-IOR-REASON "
+                                "VFS-R-IO ="
+                            ),
+                            (
+                                "_RDH-LAST-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-PARTIAL AND 0<>"
+                            ),
+                            "_RDH-CHILD 0=",
+                            "_RDH-AFTER-D 0=",
+                            (
+                                "_RDH-AFTER-RESOLVE-IOR VFS-IOR-REASON "
+                                "VFS-R-NOENT ="
+                            ),
+                            "_RDH-STAT-AFTER-IOR 0=",
+                            "_RDH-BFREE-AFTER _RDH-BFREE-BEFORE 1+ =",
+                            "_RDH-FFREE-AFTER _RDH-FFREE-BEFORE 1+ =",
+                            "_RDH-ICOUNT-AFTER _RDH-ICOUNT-BEFORE 1- =",
+                            "_RDH-VCOUNT-AFTER _RDH-VCOUNT-BEFORE 1- =",
+                            (
+                                "_RDH-ROOT-VN VN.NLINK @ "
+                                "_RDH-ROOT-LINKS-BEFORE 1- ="
+                            ),
+                            "_RDH-CLOCK-CALLS @ 1 =",
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-RMDIR-W25-PUBLISHED" THEN'
+                ),
+                (
+                    _forth_conjunction(
+                        [
+                            "_RDH-WRITER _RDH-PROFILE-BASE =",
+                            (
+                                "_RDH-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-FAULTED ="
+                            ),
+                            (
+                                "_RDH-WRITER _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-CHECKPOINT-HOME ="
+                            ),
+                            "_RDH-WRITER _EXT4-JWR-VALID?",
+                            (
+                                "_RDH-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                                "7 ="
+                            ),
+                            (
+                                "_RDH-WRITER _EXT4-JWR.DATA-ACTIVE + @ "
+                                "0="
+                            ),
+                            (
+                                "_RDH-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ "
+                                "1 ="
+                            ),
+                            (
+                                "0 _RDH-WRITER _EXT4-JWR-REVOKE-ENTRY "
+                                f"DUP @ {child_directory_home} = "
+                                "SWAP CELL+ @ _EXT4-JE-ACTIVE = AND"
+                            ),
+                            "_RDH-HOME-WRITES 3 =",
+                            "_RDH-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                            "_RDH-CTX _EXT4-C.RECOVERY + @ 0<>",
+                            "_RDH-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                            "_RDH-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "_RDH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            "_EXT4-JFO-TARGET-INO-B @ 0=",
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        ]
+                    )
+                    + ' IF ." EXT4-PUBLIC-RMDIR-W25-WRITER" THEN'
+                ),
+            ],
+            write_faults_by_ordinal={
+                gdt_ordinal: {
+                    "stage": "media",
+                    "sector_index": 0,
+                    "byte_index": tear_offset,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-PUBLIC-RMDIR-W25-PUBLISHED")
+        _assert_emitted(output, "EXT4-PUBLIC-RMDIR-W25-WRITER")
+        assert failed_trace == success_trace[: gdt_event + 1]
+
+        for key in (
+            "child_inode_home",
+            "parent_inode_home",
+            "parent_directory_home",
+        ):
+            home, _, expected = expected_homes[key]
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == expected
+        assert _read_ext4_home(
+            faulted, gdt_home, block_size=block_size
+        ) == expected_torn_gdt
+        block_bitmap_home, old_block_bitmap, _ = expected_homes[
+            "block_bitmap_home"
+        ]
+        assert _read_ext4_home(
+            faulted, block_bitmap_home, block_size=block_size
+        ) == old_block_bitmap
+        inode_bitmap_home, old_inode_bitmap, _ = expected_homes[
+            "inode_bitmap_home"
+        ]
+        assert _read_ext4_home(
+            faulted, inode_bitmap_home, block_size=block_size
+        ) == old_inode_bitmap
+        faulted_super, _, _ = _ext4_inode_record(faulted, 2)
+        assert struct.unpack_from("<I", faulted_super, 0x0C)[0] == (
+            free_blocks_before - 1
+        )
+        assert struct.unpack_from("<I", faulted_super, 0x10)[0] == (
+            free_inodes_before - 1
+        )
+        with faulted.open("rb") as source:
+            source.seek(child_directory_home * block_size)
+            faulted_child_directory = source.read(block_size)
+        assert faulted_child_directory == before_child_directory
+
+        journal0_home = _ext4_journal_physical_map(path, (0,))[0]
+        with path.open("rb") as source:
+            source.seek(journal0_home * block_size)
+            journal_super = source.read(block_size)
+        journal_uuid = journal_super[0x30:0x40]
+        assert len(journal_uuid) == 16
+        revoke_event = success_trace[
+            _trace_event_index_for_ordinal(success_trace, "write", 15)
+        ]
+        commit_event = success_trace[
+            _trace_event_index_for_ordinal(success_trace, "write", 21)
+        ]
+        with faulted.open("rb") as source:
+            source.seek(revoke_event[1] * 512)
+            revoke = source.read(revoke_event[2] * 512)
+            source.seek(commit_event[1] * 512)
+            commit = source.read(commit_event[2] * 512)
+        magic, block_type, transaction_id, count, revoked_home = (
+            struct.unpack_from(">IIIIQ", revoke, 0)
+        )
+        assert (
+            magic,
+            block_type,
+            count,
+            revoked_home,
+        ) == (0xC03B3998, 5, 24, child_directory_home)
+        assert revoke[24:-4] == bytes(len(revoke) - 28)
+        assert revoke == _jbd2_metadata_with_checksum(revoke, journal_uuid)
+        assert struct.unpack_from(">III", commit, 0) == (
+            0xC03B3998,
+            2,
+            transaction_id,
+        )
+        assert commit == _jbd2_commit_with_checksum(
+            commit, journal_uuid, transaction_id
+        )
+
+        _, recovery_trace, recovery_sha256 = _staged_mkdir_recovery_view(
+            faulted,
+            recovered,
+            expected_present=False,
+            expected_free_blocks=free_blocks_before,
+            expected_free_inodes=free_inodes_before,
+            expected_parent_links=root_links_before,
+            expected_home_writes=7,
+            expected_replayed=True,
+            prefix="_RDH-R",
+            marker="EXT4-PUBLIC-RMDIR-W25-RECOVERED",
+        )
+        assert _write_ordinals_for_ext4_home(
+            recovery_trace, child_directory_home, block_size=block_size
+        ) == ()
+        for home, _, expected in expected_homes.values():
+            assert _read_ext4_home(
+                recovered, home, block_size=block_size
+            ) == expected
+        with recovered.open("rb") as source:
+            source.seek(child_directory_home * block_size)
+            recovered_child_directory = source.read(block_size)
+        assert recovered_child_directory == before_child_directory
+        assert not _ext4_block_allocation_state(
+            recovered, (child_directory_home,)
+        )[child_directory_home]
+        assert not _ext4_inode_allocation_state(recovered, (33,))[33]
+        assert _ext4_group_counts(recovered, 0) == after_group_counts
+        _assert_e2fsck_clean(recovered, jbd2_toolchain)
+
+        _, stable_trace, stable_sha256 = _staged_mkdir_recovery_view(
+            recovered,
+            stable,
+            expected_present=False,
+            expected_free_blocks=free_blocks_before,
+            expected_free_inodes=free_inodes_before,
+            expected_parent_links=root_links_before,
+            expected_home_writes=0,
+            expected_replayed=False,
+            prefix="_RDH-S",
+            marker="EXT4-PUBLIC-RMDIR-W25-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
+def _rmdir_third_owner_alias_patches(
+    path: Path, physical_block: int
+) -> tuple[tuple[int, bytes], ...]:
+    """Make allocated inode 14 claim one RMDIR directory home."""
+    superblock, inode, inode_offset = _ext4_inode_record(path, 14)
+    assert struct.unpack_from("<H", inode, 0x00)[0] & 0xF000 == 0x8000
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    logical, raw_length, _, original_physical = struct.unpack_from(
+        "<IHHI", inode, 0x34
+    )
+    assert logical == 0
+    assert raw_length & 0x7FFF
+    assert original_physical != physical_block
+    assert 0 < physical_block <= 0xFFFF_FFFF
+
+    alias_inode = bytearray(inode)
+    struct.pack_into("<H", alias_inode, 0x3A, 0)
+    struct.pack_into("<I", alias_inode, 0x3C, physical_block)
+    alias_inode[:] = _inode_with_checksum(superblock, 14, alias_inode)
+    assert _extent_root_physical(alias_inode, 0) == physical_block
+    return ((inode_offset, bytes(alias_inode)),)
+
+
+def test_staged_vfs_rmdir_two_owner_proof_refuses_third_inode_aliases(
+    staged_public_mkdir_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Neither legitimate directory owner may hide a third owner."""
+    path = staged_public_mkdir_fixture["stable_image"]
+    parent_directory_home = staged_public_mkdir_fixture[
+        "parent_directory_home"
+    ]
+    child_directory_home = staged_public_mkdir_fixture[
+        "child_directory_home"
+    ]
+    assert isinstance(path, Path)
+    assert isinstance(parent_directory_home, int)
+    assert isinstance(child_directory_home, int)
+
+    for label, alias_home in (
+        ("PARENT", parent_directory_home),
+        ("CHILD", child_directory_home),
+    ):
+        prefix = f"_RDA{label[0]}"
+        marker = f"EXT4-PUBLIC-RMDIR-{label}-THIRD-OWNER"
+        patches = _rmdir_third_owner_alias_patches(path, alias_home)
+        expected_image = bytearray(path.read_bytes())
+        for offset, payload in patches:
+            expected_image[offset : offset + len(payload)] = payload
+        expected_sha256 = hashlib.sha256(expected_image).hexdigest()
+        backing = tmp_path / f"staged-rmdir-{label.lower()}-alias.img"
+
+        output, trace, media_sha256 = run_recovery_forth(
+            path,
+            backing,
+            [
+                *_staged_rmdir_attempt_forth(prefix),
+                (
+                    _forth_conjunction(
+                        [
+                            f"{prefix}-MOUNT-IOR 0=",
+                            f"{prefix}-CLOCK-IOR 0=",
+                            f"{prefix}-PROFILE-SIZE-IOR 0=",
+                            f"{prefix}-PROFILE-BIND-IOR 0=",
+                            f"{prefix}-LOAD-IOR 0=",
+                            f"{prefix}-BEFORE-RESOLVE-IOR 0=",
+                            (
+                                f"{prefix}-RMDIR-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-FORMAT ="
+                            ),
+                            (
+                                f"{prefix}-RMDIR-IOR VFS-IOR-REASON "
+                                "VFS-R-CORRUPT ="
+                            ),
+                            (
+                                f"{prefix}-RMDIR-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-CORRUPT ="
+                            ),
+                            (
+                                f"{prefix}-RMDIR-IOR VFS-IOR-DETAIL "
+                                "EXT4-D-DATA-MAP ="
+                            ),
+                            f"{prefix}-LAST-IOR {prefix}-RMDIR-IOR =",
+                            f"{prefix}-CHILD {prefix}-D =",
+                            f"{prefix}-AFTER-D {prefix}-D =",
+                            f"{prefix}-AFTER-RESOLVE-IOR 0=",
+                            f"{prefix}-VN VN.NLINK @ 2 =",
+                            (
+                                f"{prefix}-ROOT-VN VN.NLINK @ "
+                                f"{prefix}-ROOT-LINKS-BEFORE ="
+                            ),
+                            (
+                                f"{prefix}-ICOUNT-AFTER "
+                                f"{prefix}-ICOUNT-BEFORE ="
+                            ),
+                            (
+                                f"{prefix}-VCOUNT-AFTER "
+                                f"{prefix}-VCOUNT-BEFORE ="
+                            ),
+                            (
+                                f"{prefix}-BFREE-AFTER "
+                                f"{prefix}-BFREE-BEFORE ="
+                            ),
+                            (
+                                f"{prefix}-FFREE-AFTER "
+                                f"{prefix}-FFREE-BEFORE ="
+                            ),
+                            f"{prefix}-CLOCK-CALLS @ 1 =",
+                            f"{prefix}-WRITER {prefix}-PROFILE-BASE =",
+                            f"{prefix}-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                            f"{prefix}-HOME-WRITES 0=",
+                            (
+                                f"{prefix}-CTX "
+                                "_EXT4-C.J.WRITE-ACTIVE + @ 0="
+                            ),
+                            f"{prefix}-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                            f"{prefix}-V V.FLAGS @ VFS-F-RO AND 0=",
+                            "_EXT4-JFO-TARGET-INO-B @ 0=",
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        ]
+                    )
+                    + f' IF ." {marker}" THEN'
+                ),
+            ],
+            patches=patches,
+            capture_media=backing,
+        )
+        _assert_emitted(output, marker)
+        assert trace == ()
+        assert media_sha256 == expected_sha256
+        assert _sha256(backing) == expected_sha256
+
+
+def test_staged_vfs_rmdir_refusal_gates_leave_media_unchanged(
+    staged_public_mkdir_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Clock, revoke, shape, and lifetime refusals publish no write."""
+    path = staged_public_mkdir_fixture["stable_image"]
+    block_size = staged_public_mkdir_fixture["block_size"]
+    child_directory_home = staged_public_mkdir_fixture[
+        "child_directory_home"
+    ]
+    assert isinstance(path, Path)
+    assert isinstance(block_size, int)
+    assert isinstance(child_directory_home, int)
+    source_sha256 = _sha256(path)
+
+    no_clock = tmp_path / "staged-rmdir-no-clock.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        no_clock,
+        [
+            "CREATE _RNC-STAT VFS-STATFS-SIZE ALLOT",
+            (
+                "T-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _RNC-MOUNT-IOR CONSTANT _RNC-V"
+            ),
+            "_RNC-V _EXT4-CTX CONSTANT _RNC-CTX",
+            (
+                "_RNC-V V.ROOT @ _RNC-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _RNC-LOAD-IOR"
+            ),
+            (
+                'S" /created-dir" _RNC-V VFS-RESOLVE? '
+                "CONSTANT _RNC-RESOLVE-IOR CONSTANT _RNC-D"
+            ),
+            "_RNC-D D.VNODE @ CONSTANT _RNC-VN",
+            "_RNC-V V.ROOT @ D.VNODE @ CONSTANT _RNC-ROOT-VN",
+            "_RNC-ROOT-VN VN.NLINK @ CONSTANT _RNC-ROOT-LINKS",
+            "_RNC-V V.ICOUNT @ CONSTANT _RNC-ICOUNT",
+            "_RNC-V V.VCOUNT @ CONSTANT _RNC-VCOUNT",
+            (
+                "_RNC-STAT VFS-STATFS-SIZE _RNC-V VFS-STATFS "
+                "CONSTANT _RNC-STAT-BEFORE-IOR"
+            ),
+            "_RNC-STAT VSF.BFREE @ CONSTANT _RNC-BFREE",
+            "_RNC-STAT VSF.FFREE @ CONSTANT _RNC-FFREE",
+            'S" /created-dir" _RNC-V VFS-RM CONSTANT _RNC-IOR',
+            (
+                'S" created-dir" _RNC-V V.ROOT @ _VFS-FIND-CHILD '
+                "CONSTANT _RNC-CHILD"
+            ),
+            (
+                "_RNC-STAT VFS-STATFS-SIZE _RNC-V VFS-STATFS "
+                "CONSTANT _RNC-STAT-AFTER-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_RNC-MOUNT-IOR 0=",
+                        "_RNC-LOAD-IOR 0=",
+                        "_RNC-RESOLVE-IOR 0=",
+                        "_RNC-IOR VFS-E-UNSUPPORTED =",
+                        "_RNC-CHILD _RNC-D =",
+                        "_RNC-VN VN.NLINK @ 2 =",
+                        "_RNC-ROOT-VN VN.NLINK @ _RNC-ROOT-LINKS =",
+                        "_RNC-V V.ICOUNT @ _RNC-ICOUNT =",
+                        "_RNC-V V.VCOUNT @ _RNC-VCOUNT =",
+                        "_RNC-STAT-BEFORE-IOR 0=",
+                        "_RNC-STAT-AFTER-IOR 0=",
+                        "_RNC-STAT VSF.BFREE @ _RNC-BFREE =",
+                        "_RNC-STAT VSF.FFREE @ _RNC-FFREE =",
+                        "_RNC-CTX _EXT4-C.WCLOCK-XT + @ 0=",
+                        "_RNC-CTX _EXT4-C.J.WRITER + @ 0=",
+                        "_RNC-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_RNC-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_RNC-V V.FLAGS @ VFS-F-RO AND 0=",
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-RMDIR-NO-CLOCK" THEN'
+            ),
+        ],
+        capture_media=no_clock,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-RMDIR-NO-CLOCK")
+    assert trace == ()
+    assert media_sha256 == source_sha256
+    assert _sha256(no_clock) == source_sha256
+
+    no_revoke = tmp_path / "staged-rmdir-no-revoke.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        no_revoke,
+        [
+            *_staged_rmdir_attempt_forth("_RNR", revoke_capacity=0),
+            (
+                _forth_conjunction(
+                    [
+                        "_RNR-MOUNT-IOR 0=",
+                        "_RNR-CLOCK-IOR 0=",
+                        "_RNR-PROFILE-SIZE-IOR 0=",
+                        "_RNR-PROFILE-BIND-IOR 0=",
+                        "_RNR-LOAD-IOR 0=",
+                        "_RNR-BEFORE-RESOLVE-IOR 0=",
+                        "_RNR-RMDIR-IOR VFS-E-NOSPC =",
+                        "_RNR-LAST-IOR _RNR-RMDIR-IOR =",
+                        "_RNR-CHILD _RNR-D =",
+                        "_RNR-AFTER-D _RNR-D =",
+                        "_RNR-AFTER-RESOLVE-IOR 0=",
+                        "_RNR-VN VN.NLINK @ 2 =",
+                        "_RNR-ROOT-VN VN.NLINK @ _RNR-ROOT-LINKS-BEFORE =",
+                        "_RNR-ICOUNT-AFTER _RNR-ICOUNT-BEFORE =",
+                        "_RNR-VCOUNT-AFTER _RNR-VCOUNT-BEFORE =",
+                        "_RNR-BFREE-AFTER _RNR-BFREE-BEFORE =",
+                        "_RNR-FFREE-AFTER _RNR-FFREE-BEFORE =",
+                        "_RNR-CLOCK-CALLS @ 1 =",
+                        "_RNR-WRITER _RNR-PROFILE-BASE =",
+                        "_RNR-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_RNR-HOME-WRITES 0=",
+                        "_RNR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_RNR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_RNR-V V.FLAGS @ VFS-F-RO AND 0=",
+                        "_EXT4-JFO-TARGET-INO-B @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-RMDIR-NO-REVOKE" THEN'
+            ),
+        ],
+        capture_media=no_revoke,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-RMDIR-NO-REVOKE")
+    assert trace == ()
+    assert media_sha256 == source_sha256
+    assert _sha256(no_revoke) == source_sha256
+
+    no_metadata = tmp_path / "staged-rmdir-six-metadata.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        no_metadata,
+        [
+            *_staged_rmdir_attempt_forth(
+                "_RNM", metadata_capacity=6
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_RNM-MOUNT-IOR 0=",
+                        "_RNM-CLOCK-IOR 0=",
+                        "_RNM-PROFILE-SIZE-IOR 0=",
+                        "_RNM-PROFILE-BIND-IOR 0=",
+                        "_RNM-LOAD-IOR 0=",
+                        "_RNM-BEFORE-RESOLVE-IOR 0=",
+                        "_RNM-RMDIR-IOR VFS-E-NOSPC =",
+                        "_RNM-LAST-IOR _RNM-RMDIR-IOR =",
+                        "_RNM-CHILD _RNM-D =",
+                        "_RNM-AFTER-D _RNM-D =",
+                        "_RNM-AFTER-RESOLVE-IOR 0=",
+                        "_RNM-VN VN.NLINK @ 2 =",
+                        (
+                            "_RNM-ROOT-VN VN.NLINK @ "
+                            "_RNM-ROOT-LINKS-BEFORE ="
+                        ),
+                        "_RNM-ICOUNT-AFTER _RNM-ICOUNT-BEFORE =",
+                        "_RNM-VCOUNT-AFTER _RNM-VCOUNT-BEFORE =",
+                        "_RNM-BFREE-AFTER _RNM-BFREE-BEFORE =",
+                        "_RNM-FFREE-AFTER _RNM-FFREE-BEFORE =",
+                        "_RNM-CLOCK-CALLS @ 1 =",
+                        "_RNM-WRITER _RNM-PROFILE-BASE =",
+                        "_RNM-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_RNM-HOME-WRITES 0=",
+                        "_RNM-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_RNM-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_RNM-V V.FLAGS @ VFS-F-RO AND 0=",
+                        "_EXT4-JFO-TARGET-INO-B @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-RMDIR-SIX-METADATA" THEN'
+            ),
+        ],
+        capture_media=no_metadata,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-RMDIR-SIX-METADATA")
+    assert trace == ()
+    assert media_sha256 == source_sha256
+    assert _sha256(no_metadata) == source_sha256
+
+    superblock, _, _ = _ext4_inode_record(path, 33)
+    layout = _ext4_recovery_layout(path)
+    gdt_home = layout["primary_gdt"]
+    descriptor_size = layout["descriptor_size"]
+    assert isinstance(gdt_home, int)
+    assert isinstance(descriptor_size, int)
+    with path.open("rb") as source:
+        source.seek(gdt_home * block_size)
+        zero_used_dirs_gdt = bytearray(source.read(block_size))
+    assert len(zero_used_dirs_gdt) == block_size
+    zero_used_dirs_descriptor = bytearray(
+        zero_used_dirs_gdt[:descriptor_size]
+    )
+    assert struct.unpack_from("<H", zero_used_dirs_descriptor, 0x10)[0] > 0
+    struct.pack_into("<H", zero_used_dirs_descriptor, 0x10, 0)
+    struct.pack_into("<H", zero_used_dirs_descriptor, 0x30, 0)
+    zero_used_dirs_descriptor[:] = _group_descriptor_with_checksum(
+        superblock, zero_used_dirs_descriptor, 0
+    )
+    zero_used_dirs_gdt[:descriptor_size] = zero_used_dirs_descriptor
+    zero_used_dirs_offset = gdt_home * block_size
+    zero_used_dirs_patches = (
+        (zero_used_dirs_offset, bytes(zero_used_dirs_gdt)),
+    )
+    expected_zero_used_dirs_image = bytearray(path.read_bytes())
+    expected_zero_used_dirs_image[
+        zero_used_dirs_offset : zero_used_dirs_offset + block_size
+    ] = zero_used_dirs_gdt
+    expected_zero_used_dirs_sha256 = hashlib.sha256(
+        expected_zero_used_dirs_image
+    ).hexdigest()
+
+    zero_used_dirs = tmp_path / "staged-rmdir-zero-used-dirs.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        zero_used_dirs,
+        [
+            *_staged_rmdir_attempt_forth("_RZU"),
+            (
+                _forth_conjunction(
+                    [
+                        "_RZU-MOUNT-IOR 0=",
+                        "_RZU-CLOCK-IOR 0=",
+                        "_RZU-PROFILE-SIZE-IOR 0=",
+                        "_RZU-PROFILE-BIND-IOR 0=",
+                        "_RZU-LOAD-IOR 0=",
+                        "_RZU-BEFORE-RESOLVE-IOR 0=",
+                        (
+                            "_RZU-RMDIR-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-FORMAT ="
+                        ),
+                        (
+                            "_RZU-RMDIR-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_RZU-RMDIR-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-CORRUPT ="
+                        ),
+                        (
+                            "_RZU-RMDIR-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-GEOMETRY ="
+                        ),
+                        "_RZU-LAST-IOR _RZU-RMDIR-IOR =",
+                        "_RZU-CHILD _RZU-D =",
+                        "_RZU-AFTER-D _RZU-D =",
+                        "_RZU-AFTER-RESOLVE-IOR 0=",
+                        "_RZU-VN VN.NLINK @ 2 =",
+                        (
+                            "_RZU-ROOT-VN VN.NLINK @ "
+                            "_RZU-ROOT-LINKS-BEFORE ="
+                        ),
+                        "_RZU-ICOUNT-AFTER _RZU-ICOUNT-BEFORE =",
+                        "_RZU-VCOUNT-AFTER _RZU-VCOUNT-BEFORE =",
+                        "_RZU-BFREE-AFTER _RZU-BFREE-BEFORE =",
+                        "_RZU-FFREE-AFTER _RZU-FFREE-BEFORE =",
+                        "_RZU-CLOCK-CALLS @ 1 =",
+                        "_RZU-WRITER _RZU-PROFILE-BASE =",
+                        "_RZU-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_RZU-HOME-WRITES 0=",
+                        "_RZU-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_RZU-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_RZU-V V.FLAGS @ VFS-F-RO AND 0=",
+                        "_EXT4-JFO-TARGET-INO-B @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-RMDIR-ZERO-USED-DIRS" THEN'
+            ),
+        ],
+        patches=zero_used_dirs_patches,
+        capture_media=zero_used_dirs,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-RMDIR-ZERO-USED-DIRS")
+    assert trace == ()
+    assert media_sha256 == expected_zero_used_dirs_sha256
+    assert _sha256(zero_used_dirs) == expected_zero_used_dirs_sha256
+
+    noncanonical = bytearray(block_size)
+    struct.pack_into("<IHBB", noncanonical, 0, 33, 16, 1, 2)
+    noncanonical[8:9] = b"."
+    struct.pack_into(
+        "<IHBB", noncanonical, 16, 2, block_size - 28, 2, 2
+    )
+    noncanonical[24:26] = b".."
+    struct.pack_into(
+        "<IHBB", noncanonical, block_size - 12, 0, 12, 0, 0xDE
+    )
+    noncanonical = bytearray(
+        _linear_directory_block_with_checksum(
+            superblock, 33, 1, noncanonical
+        )
+    )
+    assert _checked_linear_directory_entries(
+        superblock, 33, 1, noncanonical
+    ) == (
+        (0, 33, 16, 2, b"."),
+        (16, 2, block_size - 28, 2, b".."),
+    )
+    child_offset = child_directory_home * block_size
+    shape_patches = ((child_offset, bytes(noncanonical)),)
+    expected_shape_image = bytearray(path.read_bytes())
+    expected_shape_image[
+        child_offset : child_offset + block_size
+    ] = noncanonical
+    expected_shape_sha256 = hashlib.sha256(expected_shape_image).hexdigest()
+
+    bad_shape = tmp_path / "staged-rmdir-noncanonical-empty.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        bad_shape,
+        [
+            *_staged_rmdir_attempt_forth("_RNS"),
+            (
+                _forth_conjunction(
+                    [
+                        "_RNS-MOUNT-IOR 0=",
+                        "_RNS-CLOCK-IOR 0=",
+                        "_RNS-PROFILE-SIZE-IOR 0=",
+                        "_RNS-PROFILE-BIND-IOR 0=",
+                        "_RNS-LOAD-IOR 0=",
+                        "_RNS-BEFORE-RESOLVE-IOR 0=",
+                        (
+                            "_RNS-RMDIR-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_RNS-RMDIR-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-WRITE-POLICY ="
+                        ),
+                        "_RNS-LAST-IOR _RNS-RMDIR-IOR =",
+                        "_RNS-CHILD _RNS-D =",
+                        "_RNS-AFTER-D _RNS-D =",
+                        "_RNS-AFTER-RESOLVE-IOR 0=",
+                        "_RNS-VN VN.NLINK @ 2 =",
+                        "_RNS-ROOT-VN VN.NLINK @ _RNS-ROOT-LINKS-BEFORE =",
+                        "_RNS-ICOUNT-AFTER _RNS-ICOUNT-BEFORE =",
+                        "_RNS-VCOUNT-AFTER _RNS-VCOUNT-BEFORE =",
+                        "_RNS-BFREE-AFTER _RNS-BFREE-BEFORE =",
+                        "_RNS-FFREE-AFTER _RNS-FFREE-BEFORE =",
+                        "_RNS-CLOCK-CALLS @ 1 =",
+                        "_RNS-WRITER _RNS-PROFILE-BASE =",
+                        "_RNS-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_RNS-HOME-WRITES 0=",
+                        "_RNS-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_RNS-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_RNS-V V.FLAGS @ VFS-F-RO AND 0=",
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-RMDIR-NONCANONICAL" THEN'
+            ),
+        ],
+        patches=shape_patches,
+        capture_media=bad_shape,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-RMDIR-NONCANONICAL")
+    assert trace == ()
+    assert media_sha256 == expected_shape_sha256
+    assert _sha256(bad_shape) == expected_shape_sha256
+
+    open_ref = tmp_path / "staged-rmdir-open-ref.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        open_ref,
+        [
+            "VARIABLE _ROR-CLOCK-CALLS",
+            (
+                ": _ROR-NOW ( context -- epoch-ms ior ) DROP "
+                "1 _ROR-CLOCK-CALLS +! 3000000135801 0 ;"
+            ),
+            (
+                "T-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _ROR-MOUNT-IOR CONSTANT _ROR-V"
+            ),
+            "_ROR-V _EXT4-CTX CONSTANT _ROR-CTX",
+            (
+                "' _ROR-NOW 0 _ROR-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _ROR-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_ROR-PROFILE", "_ROR-V", 7, 0, 1
+            ),
+            (
+                "_ROR-V V.ROOT @ _ROR-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _ROR-LOAD-IOR"
+            ),
+            (
+                'S" /created-dir" _ROR-V VFS-RESOLVE? '
+                "CONSTANT _ROR-RESOLVE-IOR CONSTANT _ROR-D"
+            ),
+            "_ROR-D D.VNODE @ CONSTANT _ROR-VN",
+            "1 _ROR-VN VN.OPEN-REFS !",
+            "_ROR-V V.ICOUNT @ CONSTANT _ROR-ICOUNT",
+            "_ROR-V V.VCOUNT @ CONSTANT _ROR-VCOUNT",
+            "_ROR-V V.ROOT @ D.VNODE @ CONSTANT _ROR-ROOT-VN",
+            "_ROR-ROOT-VN VN.NLINK @ CONSTANT _ROR-ROOT-LINKS",
+            'S" /created-dir" _ROR-V VFS-RM CONSTANT _ROR-IOR',
+            (
+                'S" created-dir" _ROR-V V.ROOT @ _VFS-FIND-CHILD '
+                "CONSTANT _ROR-CHILD"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_ROR-MOUNT-IOR 0=",
+                        "_ROR-CLOCK-IOR 0=",
+                        "_ROR-PROFILE-SIZE-IOR 0=",
+                        "_ROR-PROFILE-BIND-IOR 0=",
+                        "_ROR-LOAD-IOR 0=",
+                        "_ROR-RESOLVE-IOR 0=",
+                        "_ROR-IOR VFS-E-BUSY =",
+                        "_ROR-CHILD _ROR-D =",
+                        "_ROR-VN VN.NLINK @ 2 =",
+                        "_ROR-VN VN.OPEN-REFS @ 1 =",
+                        "_ROR-ROOT-VN VN.NLINK @ _ROR-ROOT-LINKS =",
+                        "_ROR-V V.ICOUNT @ _ROR-ICOUNT =",
+                        "_ROR-V V.VCOUNT @ _ROR-VCOUNT =",
+                        "_ROR-CLOCK-CALLS @ 0=",
+                        "_ROR-PROFILE-BASE _EXT4-JWR-IDLE-CLEAN?",
+                        "_ROR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_ROR-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_ROR-V V.FLAGS @ VFS-F-RO AND 0=",
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-RMDIR-OPEN-REF" THEN'
+            ),
+        ],
+        capture_media=open_ref,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-RMDIR-OPEN-REF")
+    assert trace == ()
+    assert media_sha256 == source_sha256
+    assert _sha256(open_ref) == source_sha256
 
 
 @pytest.fixture(scope="session")
