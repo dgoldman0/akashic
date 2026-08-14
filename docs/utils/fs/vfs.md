@@ -421,7 +421,7 @@ Cursor helpers are `VFS-REWIND`, `VFS-TELL`, and `VFS-SIZE`.
 VFS-MKFILE?    ( name-a name-u vfs -- inode ior )
 VFS-MKDIR      ( name-a name-u vfs -- ior )
 VFS-CREATE     ( path-a path-u vfs -- inode|0 )
-VFS-LINK       ( name-a name-u target parent vfs -- inode ior )
+VFS-LINK       ( name-a name-u target parent vfs -- dentry ior )
 VFS-SYMLINK    ( target-a target-u name-a name-u parent vfs -- inode ior )
 VFS-RENAME-AT  ( new-a new-u inode new-parent flags vfs -- ior )
 VFS-RENAME     ( new-a new-u inode vfs -- ior )
@@ -433,10 +433,15 @@ be exactly `.` or `..`. Their memory span must be non-null and non-wrapping.
 Leading or trailing dots in other names are legal.
 
 `VFS-LINK` creates a second dentry for the target vnode. Directories cannot be
-hard-linked. Removing one name decrements `VN.NLINK` without invalidating other
-names or open FDs. Every dentry carries an owner tag; link, rename, metadata,
-and cache helpers reject a dentry from another VFS with `VFS-E-XDEV` before
-binding dispatch.
+hard-linked, and a namespace-detached target or parent returns `VFS-E-NOENT`
+without binding dispatch. Before the binding callback, the provisional dentry
+shares the target vnode and the core has provisionally incremented `VN.NLINK`
+and `VN.DREFS`; callback refusal releases the dentry, restores both counts, and
+reclaims its name when it remains the string-pool tail. The dentry is attached
+and `V.ICOUNT` increments only after callback success. Removing one name
+decrements `VN.NLINK` without invalidating other names or open FDs. Every
+dentry carries an owner tag; link, rename, metadata, and cache helpers reject a
+dentry from another VFS with `VFS-E-XDEV` before binding dispatch.
 
 `VFS-RENAME-AT` supports cross-directory moves, replacement, and
 `VFS-RN-NOREPLACE`. The binding operation completes before the cached tree is

@@ -1238,6 +1238,86 @@ def test_rm_nonexistent():
 
 # ── Vnode / dentry semantics ──
 
+def test_hard_link_callback_failure_restores_provisional_state():
+    """A failed LINK callback observes, then fully rolls back, its proposal."""
+    check("hard link callback rollback", [
+        'VARIABLE _LINK-CALLS VARIABLE _LINK-OBSERVED',
+        'VARIABLE _LINK-D VARIABLE _LINK-T VARIABLE _LINK-V',
+        ': T-LINK-FAIL  _LINK-V ! _LINK-T ! _LINK-D !  1 _LINK-CALLS +!',
+        '  _LINK-D @ D.OWNER @ _LINK-V @ =',
+        '  _LINK-D @ D.VNODE @ _LINK-T @ D.VNODE @ = AND',
+        '  _LINK-D @ IN.PARENT @ _LINK-V @ V.ROOT @ = AND',
+        '  S" rejected" _LINK-D @ D.NAME @ _VFS-STR-MATCH? AND',
+        '  _LINK-T @ D.VNODE @ VN.NLINK @ 2 = AND',
+        '  _LINK-T @ D.VNODE @ VN.DREFS @ 2 = AND',
+        '  _LINK-V @ V.ROOT @ IN.CHILD @ _LINK-T @ = AND',
+        '  _LINK-V @ V.ICOUNT @ 2 = AND _LINK-OBSERVED !',
+        '  VFS-E-IO ;',
+        'T-BINDING-CLONE CONSTANT _BIND',
+        "' T-LINK-FAIL _BIND VB.OPS @ VFS-OP-LINK CELLS + !",
+        '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
+        'S" source" _V1 VFS-MKFILE CONSTANT _A',
+        '_A D.VNODE @ CONSTANT _VN',
+        '_V1 V.STR-PTR @ CONSTANT _OLD-STR',
+        '_V1 V.ICOUNT @ CONSTANT _OLD-ICOUNT',
+        '_V1 V.VCOUNT @ CONSTANT _OLD-VCOUNT',
+        '_V1 V.FLAGS @ CONSTANT _OLD-FLAGS',
+        'S" rejected" _A _V1 V.ROOT @ _V1 VFS-LINK',
+        'CONSTANT _IOR CONSTANT _RESULT',
+        ': T-LINK-ROLLBACK',
+        '  _IOR VFS-E-IO = IF ." IOR " THEN',
+        '  _RESULT 0= IF ." ZERO " THEN',
+        '  _LINK-CALLS @ 1 = _LINK-OBSERVED @ AND IF ." OBSERVED " THEN',
+        '  S" rejected" _V1 VFS-RESOLVE 0= IF ." ABSENT " THEN',
+        '  _VN VN.NLINK @ 1 = _VN VN.DREFS @ 1 = AND IF ." REFS " THEN',
+        '  _V1 V.ICOUNT @ _OLD-ICOUNT =',
+        '  _V1 V.VCOUNT @ _OLD-VCOUNT = AND IF ." COUNTS " THEN',
+        '  _V1 V.STR-PTR @ _OLD-STR = IF ." STRING " THEN',
+        '  _V1 V.FLAGS @ _OLD-FLAGS = IF ." FLAGS" THEN ;',
+        'T-LINK-ROLLBACK CR',
+    ], "IOR ZERO OBSERVED ABSENT REFS COUNTS STRING FLAGS")
+
+def test_hard_link_rejects_detached_target_and_parent():
+    """LINK never dispatches against open-retained detached dentries."""
+    check("hard link rejects detached dentries", [
+        'VARIABLE _LINK-CALLS',
+        ': T-LINK-CALL  2DROP DROP 1 _LINK-CALLS +! 0 ;',
+        'T-BINDING-CLONE CONSTANT _BIND',
+        "' T-LINK-CALL _BIND VB.OPS @ VFS-OP-LINK CELLS + !",
+        '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
+        'S" live" _V1 VFS-MKFILE CONSTANT _TARGET',
+        'S" parent" _V1 VFS-MKDIR DROP',
+        'S" parent" _V1 VFS-RESOLVE CONSTANT _PARENT',
+        'S" live" VFS-FF-READ _V1 VFS-OPEN? ?DUP IF THROW THEN CONSTANT _TFD',
+        'S" parent" VFS-FF-READ _V1 VFS-OPEN? ?DUP IF THROW THEN CONSTANT _PFD',
+        'S" live" _V1 VFS-RM ?DUP IF THROW THEN',
+        'S" parent" _V1 VFS-RM ?DUP IF THROW THEN',
+        '_V1 V.STR-PTR @ CONSTANT _OLD-STR',
+        '_V1 V.ICOUNT @ CONSTANT _OLD-ICOUNT',
+        '_V1 V.VCOUNT @ CONSTANT _OLD-VCOUNT',
+        '_TARGET D.VNODE @ VN.NLINK @ CONSTANT _TARGET-NLINK',
+        '_TARGET D.VNODE @ VN.DREFS @ CONSTANT _TARGET-DREFS',
+        'S" target-relink" _TARGET _V1 V.ROOT @ _V1 VFS-LINK',
+        'CONSTANT _TARGET-IOR CONSTANT _TARGET-RESULT',
+        'S" parent-relink" _V1 V.ROOT @ _PARENT _V1 VFS-LINK',
+        'CONSTANT _PARENT-IOR CONSTANT _PARENT-RESULT',
+        ': T-DETACHED-LINK',
+        '  _TARGET-IOR VFS-E-NOENT = _TARGET-RESULT 0= AND',
+        '  IF ." TARGET " THEN',
+        '  _PARENT-IOR VFS-E-NOENT = _PARENT-RESULT 0= AND',
+        '  IF ." PARENT " THEN',
+        '  _LINK-CALLS @ 0= IF ." NO-CALL " THEN',
+        '  _TARGET D.FLAGS @ VFS-DF-UNLINKED AND',
+        '  _PARENT D.FLAGS @ VFS-DF-UNLINKED AND AND IF ." DETACHED " THEN',
+        '  _TARGET D.VNODE @ VN.NLINK @ _TARGET-NLINK =',
+        '  _TARGET D.VNODE @ VN.DREFS @ _TARGET-DREFS = AND IF ." REFS " THEN',
+        '  _V1 V.ICOUNT @ _OLD-ICOUNT =',
+        '  _V1 V.VCOUNT @ _OLD-VCOUNT = AND IF ." COUNTS " THEN',
+        '  _V1 V.STR-PTR @ _OLD-STR = IF ." STRING" THEN ;',
+        'T-DETACHED-LINK CR',
+        '_TFD VFS-CLOSE _PFD VFS-CLOSE',
+    ], "TARGET PARENT NO-CALL DETACHED REFS COUNTS STRING")
+
 def test_hard_link_shares_vnode_and_data():
     """Two dentries for a hard link share identity, metadata, and bytes."""
     check("hard link shares vnode and data", [
@@ -1676,6 +1756,8 @@ def main():
         test_rm_current_directory_is_busy_and_remains_attached,
         test_rm_nonexistent,
         # Vnode / dentry semantics
+        test_hard_link_callback_failure_restores_provisional_state,
+        test_hard_link_rejects_detached_target_and_parent,
         test_hard_link_shares_vnode_and_data,
         test_cached_hard_links_share_vnode_identity,
         test_unlink_one_hard_link_keeps_other_name,
