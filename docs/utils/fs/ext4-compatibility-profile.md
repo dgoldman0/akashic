@@ -130,12 +130,17 @@ canonical homes. Bounded empty-directory `RMDIR` is now public for that exact
 canonical child shape. It proves the parent and child blocks have only their
 two legitimate owners, atomically removes the typed name, releases the inode
 and block, decrements parent links and `used_dirs`, and revokes the unchanged
-freed directory block under exact `6/0/1` through `8/0/1` credit. The current
-critical path is hard `LINK`, then staged `RENAME`; nonempty final-link and
-unlink-while-open remain explicit later lifetime boundaries. Extent-tree depth and indexed-
-directory HTree depth are independent ratchets. Broaden either only when the
-next operation or a pinned realistic corpus demands it; directory growth does
-not imply speculative regular-file extent depth growth.
+freed directory block under exact `6/0/1` through `8/0/1` credit. Bounded hard
+`LINK` is now public as well. It inserts one regular-file name into an
+authenticated one-block linear parent, increments and restamps the target
+inode, and restamps the parent inode and checksummed directory in exact
+deduplicated `2/0/0` or `3/0/0` credit without allocation, ordered data,
+revoke, or orphan state. The current critical path is staged `RENAME`;
+nonempty final-link removal and unlink-while-open remain explicit later
+lifetime boundaries. Extent-tree depth and indexed-directory HTree depth are
+independent ratchets. Broaden either only when the next operation or a pinned
+realistic corpus demands it; directory growth does not imply speculative
+regular-file extent depth growth.
 
 ## Immutable authorities
 
@@ -921,8 +926,8 @@ two-to-three-index split evidence, stable remounts, and pinned external-tool
 acceptance.
 The ordinary ext4 binding remains read-only. The explicitly staged descriptor
 additionally exposes only the qualified `CREATE`, `MKDIR`, `TRUNCATE`,
-`UNLINK`, and `RMDIR` namespace/metadata slices documented below; other
-mutation capabilities remain disabled. Modern
+`UNLINK`, `RMDIR`, and `LINK` namespace/metadata slices documented below;
+other mutation capabilities remain disabled. Modern
 `ORPHAN_PRESENT` and a nonzero legacy
 `s_last_orphan` are now admitted, after any required journal replay and strict
 reload, into a unified, non-mutating two-pass preflight. Legacy discovery
@@ -2075,6 +2080,63 @@ while honoring the revoke. Missing clock, missing revoke space, six metadata
 slots, zero `used_dirs`, noncanonical child layout, and an open reference all
 refuse without media mutation. Fresh source mode now measures 1,121,477,446
 steps across 2,932 packed lines under the approved 1.15-billion-step watchdog.
+
+The first public hard-`LINK` slice builds on the generic VFS hard-link contract,
+hardened by prerequisite commit `1f688d1`. The staged descriptor advertises
+`VFS-CAP-LINK` and installs `_EXT4-LINK` in ABI slot 17; the ordinary ext4
+binding remains read-only and does not advertise the operation. Generic VFS
+entry provisionally increments the shared vnode's link and dentry-reference
+counts before dispatch. The driver therefore authenticates an old on-disk link
+count from 1 through 64999 against a provisional cache count from 2 through
+65000, and precommit refusal lets generic release restore the complete old
+cache and namespace projection.
+
+The target must be a root-owned mutable regular inode. Admission
+reauthenticates its inode locator and generation, complete current map, cache
+projection, inline and external xattrs, ownership, flags, and link count. The
+target may be nonempty and open. The destination parent may be the target's
+current directory or a different directory, but it must remain a root-owned,
+checksummed one-block linear directory with authenticated insertion slack and
+unique ownership of its data block. Indexed or multi-block insertion,
+directory growth, nonregular targets, immutable or append-only targets,
+non-root ownership, and an exhausted link count remain gated rather than
+approximated.
+
+Dry and live staging repeat the same authority checks. The no-data/no-revoke
+transaction contains only the target inode-table block, parent inode-table
+block, and parent directory block. Deduplication gives exact `2/0/0` credit
+when the two inode records share one table block and exact `3/0/0` when they do
+not. The after-image increments the target link count and updates only its
+ctime, updates parent mtime/ctime without changing the parent link count, and
+inserts one type-1 regular-file dirent before restamping all affected
+checksums. File data, map, size, `i_blocks`, generation, atime, mtime, xattrs,
+allocation bitmaps, group and superblock free-space counts, and orphan state do
+not change.
+
+Five focused LINK tests qualify both metadata-home topologies and the public
+VFS lifetime. The canonical same-parent inode-13/14 case composes both inode
+edits in table block 278 and checkpoints that home at W16 before directory
+block 1345 at W17. The cross-directory root-parent case uses three distinct
+homes: target table block 278, root table block 275, and root directory block
+1299. Both cases retain one shared vnode; the same-parent case additionally
+retains an open descriptor and the target's data and xattrs. Pinned e2fsprogs
+1.47.4 `debugfs` readback and read-only `e2fsck` accept the results, and the
+following ordinary remount is write-free and byte-stable.
+
+The refusal matrix covers a missing clock, a caller profile one metadata
+credit short, a nonregular target, and a saturated link count, with no media
+writes and complete rollback of provisional VFS state. A torn W7 descriptor
+returns the precommit volume error and publishes no new name or metadata home.
+A committed W17 directory-home tear returns public LINK success, retains the
+new dentry and shared-vnode counts, records the checkpoint error in
+`V.LAST-IOR`, and quarantines the mount; recovery replays both committed homes
+before a byte-stable second mount. This focused qualification does not claim a
+LINK-specific W16 tear or a hostile ownership-alias refusal.
+
+Fresh source mode with bounded hard LINK measures 1,140,381,589 ext4-load
+steps across 2,962 packed lines under the approved 1.15-billion-step watchdog,
+leaving 9,618,411 steps of headroom, approximately 0.84 percent. The next
+staged namespace operation is `RENAME`.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

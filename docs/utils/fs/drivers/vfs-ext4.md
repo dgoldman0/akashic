@@ -61,6 +61,11 @@ canonical child shape. Removal atomically splices the typed parent entry,
 decrements the parent link and group `used_dirs` count, frees the child inode
 and data block, and revokes the freed directory-block home under exact
 `6/0/1` through `8/0/1` credit; the canonical fixture uses `7/0/1`.
+The staged binding also provides bounded hard `LINK` for an authenticated
+root-owned regular inode and one-block linear destination parent. It adds the
+typed directory record, increments the target link count, and updates target
+and parent timestamps under exact deduplicated `2/0/0` or `3/0/0` credit,
+without allocation, ordered data, revoke, or orphan state.
 Directory growth, HTree parents, inheritance beyond the explicit root-owned
 non-setgid envelope, and broader directory shapes remain gated. The driver
 also implements bounded mount-time recovery and
@@ -131,10 +136,11 @@ budget failures include used and allowed steps. The current source passes cold
 builds and focused recovery qualification under their checked-in watchdogs,
 without a compiled cache or certificate-preservation shortcut.
 
-After the bounded `RMDIR` slice, the production source measures 1,121,477,446
-steps across 2,932 packed lines in source mode. The approved 1.15-billion
-watchdog leaves 28,522,554 steps, about 2.5 percent measured growth margin; it
-is not a filesystem or implementation capacity.
+With bounded hard `LINK`, the production source measures 1,140,381,589 steps
+across 2,962 packed lines in source mode. The approved 1.15-billion watchdog
+leaves 9,618,411 steps, about 0.84 percent measured growth margin; it is not a
+filesystem or implementation capacity. The corresponding descriptor journey
+completes in 4,230,599 steps.
 
 ## Mounting
 
@@ -2144,6 +2150,67 @@ open reference, and hostile third-inode aliases of either the parent or child
 directory home. The clean RMDIR journey measures 1,016,967,358 steps and its
 stable remount 42,878,737 under the unchanged 1.20-billion runtime watchdog.
 
+### Bounded hard LINK
+
+The staged binding advertises `VFS-CAP-LINK` and installs `_EXT4-LINK` in
+operation slot 17; the ordinary binding remains read-only with a null LINK
+slot. Generic `VFS-LINK` constructs a provisional dentry that shares the target
+vnode and increments `VN.NLINK` and `VN.DREFS` before callback dispatch. It
+attaches that dentry and increments `V.ICOUNT` only after callback success.
+Generic prerequisite commit `1f688d1` also rejects a namespace-detached target
+or parent before dispatch and makes callback refusal restore both provisional
+counts, the dentry, and reclaimable tail name-pool capacity.
+
+The admitted target is a root-owned regular inode on authenticated 1 KiB/
+256-byte-inode geometry. Its stable identity, generation, complete current map,
+inode-table home, inline and external xattr forms, cache projection, timestamps,
+mutable flags, and zero deletion time are revalidated during both dry and live
+staging. Its old on-disk link count must be from 1 through 64999, while the
+callback-visible provisional cache count must be the exact incremented value
+from 2 through ext4's 65000 bound. Reserved or orphan inodes and nonregular,
+immutable, append-only, deleted, or saturated targets refuse. An open regular
+target remains admissible because every dentry and descriptor shares the same
+vnode.
+
+The destination parent is independently reauthenticated through the existing
+root-owned, non-setgid, checksummed one-block linear-directory insertion
+envelope. It must have a loaded cache, one initialized extent, a unique owner,
+a complete valid dirent chain and checksum tail, no HTree or xattr state, an
+absent destination name, and enough existing record slack. The target and
+parent inode identities must differ. The parent need not be the current
+directory, so the qualified surface includes both same-parent and distinct
+root-parent links without approximating directory growth or indexed insertion.
+
+Dry and live staging each authenticate the target inode, parent inode, and
+parent directory before retaining after-images. The transaction increments and
+restamps only the target inode, restamps the parent inode, and inserts and
+restamps one file-type-1 directory entry. Target size, mtime, atime, generation,
+map, `i_blocks`, xattrs, allocation state, and all free-space and orphan
+accounts remain unchanged. The exact deduplicated homes are acquired in target
+inode-table, parent inode-table, and parent-directory order, giving `2/0/0`
+when both inode records share a table block and `3/0/0` otherwise. On the
+canonical same-parent fixture, the shared target/parent inode-table home is W16
+and the directory home is W17. The distinct-root fixture writes each of the
+three homes once in target, parent, directory order.
+
+Complete success publishes the target ctime, parent mtime/ctime, one additional
+dentry reference and link, and one additional VFS inode count while leaving
+`V.VCOUNT`, allocation counts, and every open descriptor unchanged. A
+precommit callback error lets the generic VFS discard the complete provisional
+object. Once commit authority exists, a later checkpoint error instead returns
+public LINK success, keeps the new dentry attached, retains the structured
+diagnostic in `V.LAST-IOR`, and quarantines the writer for recovery.
+
+Five focused LINK tests close the current envelope. Clean same-parent linking
+qualifies the shared vnode, open-FD continuity, exact cache counts, pinned
+e2fsprogs 1.47.4 `debugfs` and read-only `e2fsck`, and a byte-stable write-free
+ordinary remount. A W7 descriptor tear proves complete provisional rollback and
+zero home replay. A committed W17 directory-home tear keeps the public link and
+diagnostic, then replays both homes before a stable remount. A distinct-root
+link qualifies exact three-home ordering, external inspection, and stable
+remount. The fifth test proves zero-write refusal for a missing clock, a
+one-metadata-credit profile, a nonregular target, and link-count saturation.
+
 ### Same-retained-block shrink TRUNCATE
 
 The retained-block subpath accepts a strict shrink whose new EOF is nonaligned
@@ -2740,8 +2807,8 @@ preserving the still-mounted instance's ready/current authority.
 `EXT4-BINDING` has `VFS-BF-NEEDS-VOLUME`, `VFS-BF-READ-ONLY`, and
 `VFS-BF-STABLE-IDS`. The VFS rejects all mutation before binding dispatch.
 `EXT4-STAGED-WRITE-BINDING` instead omits `READ_ONLY` and adds the qualified
-`WRITE`, `CREATE`, `MKDIR`, `TRUNCATE`, `UNLINK`, and `RMDIR` capability bits
-and dispatch slots. Its write slot covers the initialized overwrite,
+`WRITE`, `CREATE`, `MKDIR`, `TRUNCATE`, `UNLINK`, `RMDIR`, and `LINK`
+capability bits and dispatch slots. Its write slot covers the initialized overwrite,
 initialized partial-tail append, in-size hole-fill, and aligned-EOF growth
 operations described above.
 `VFS-WRITE-EXACT` composes those same primitives for the qualified tail-to-one-
@@ -2824,9 +2891,9 @@ The ratchet order is:
 6. retain bounded `MKDIR` and `RMDIR`, including `.`/`..`, parent/child link
    counts, inode/block allocation and release, directory accounting, and
    child-block revoke authority (completed in the current worktree);
-7. add hard `LINK`, then ratchet `RENAME` from same-directory no-replacement
-   through cross-directory, directory-move, replacement, and open-victim
-   cases;
+7. retain bounded hard `LINK` (completed in the current worktree), then ratchet
+   `RENAME` from same-directory no-replacement through cross-directory,
+   directory-move, replacement, and open-victim cases;
 8. add remaining metadata and xattr mutation; and
 9. perform the final profile closure audit across every profile-admitted
    operation and recovery state.
@@ -2854,9 +2921,10 @@ no broader geometry or operation inherits that status.
 `EXT4-STAGED-WRITE-OPS` adds staged `MOUNT`, `WRITE`, bounded linear-directory
 `CREATE` and `MKDIR`, qualified shrink `TRUNCATE`, bounded closed-file
 `UNLINK`—including nonfinal and empty final-link removal—and bounded canonical
-empty-directory `RMDIR` dispatch slots to its copy of the ordinary table. The
-ordinary binding remains `VFS-BF-READ-ONLY` and advertises none of them.
-Neither binding yet advertises `RENAME`, `SETATTR`, `LINK`, `SYMLINK`,
+empty-directory `RMDIR` plus bounded regular-file `LINK` dispatch slots to its
+copy of the ordinary table. The ordinary binding remains `VFS-BF-READ-ONLY`
+and advertises none of them.
+Neither binding yet advertises `RENAME`, `SETATTR`, `SYMLINK`,
 `SETXATTR`, or `REMOVEXATTR`. Each later capability
 still needs its own bounded credit/chunking contract, reachable-state recovery
 closure, namespace/cache behavior where applicable, and interoperability plus
@@ -2865,7 +2933,7 @@ and inode allocation, extent and legacy-map growth and shrink, directory-entry
 mutation, inode/link/time/accounting updates, xattr mutation, broader per-record
 orphan closure, and the final compositional release matrix.
 
-The staged binding publishes eleven concrete durable paths. Initialized
+The staged binding publishes twelve concrete durable paths. Initialized
 overwrite uses a full-block ordered-data RMW plus one checksummed inode-table
 after-image and consumes `1/1/0`. Strict append uses the same transaction shape
 to extend exact partial EOF inside the initialized block, updating `i_size`
@@ -2896,7 +2964,11 @@ xattr allocation can survive the atomic namespace commit. Bounded `RMDIR`
 accepts only the canonical one-block empty directory produced by MKDIR. It
 uses exact `6/0/1` through `8/0/1` credit to remove the typed parent entry,
 decrement parent links and `used_dirs`, free the inode and directory block,
-and revoke the unchanged freed block; the canonical path is `7/0/1`. The
+and revoke the unchanged freed block; the canonical path is `7/0/1`. Bounded
+hard LINK uses exact deduplicated `2/0/0` or `3/0/0` credit to add one
+checksummed linear-directory record, increment and restamp the target inode,
+and restamp the parent inode without allocation, ordered data, revoke, or
+orphan state. The
 timestamped mutation paths update clock-derived
 `mtime`/`ctime`; both
 allocation-backed operations change `VN.BLOCKS` and free-space accounting, and
@@ -2970,9 +3042,14 @@ inode after-image oracles, inode/block release with parent-link and
 `used_dirs` decrement, a revoke-only freed child block, six zero-write refusal
 gates plus hostile aliases of each protected owner range, W7 rollback, and W25
 committed seven-home replay. Pinned external tools and the write-free stable
-remount accept the result. Fresh source mode measures 1,121,477,446 ext4-load
-steps across 2,932 packed lines under the approved 1.15-billion-step watchdog.
-The next write ratchet is hard `LINK`, followed by staged `RENAME`.
+remount accept the result. Bounded hard LINK adds exact shared-home and
+distinct-parent transaction topologies, shared-vnode and open-FD publication,
+four zero-write refusal cases, W7 provisional rollback, W17 committed
+two-home replay, pinned external-tool acceptance, and stable remounts across
+both clean namespace topologies. Fresh source mode measures 1,140,381,589
+ext4-load steps across 2,962 packed lines under the approved 1.15-billion-step
+watchdog, leaving 9,618,411 steps of headroom; the descriptor journey measures
+4,230,599 steps. The next write ratchet is staged `RENAME`.
 Nonempty final-link and unlink-while-open remain later lifetime closure, rather
 than a reason to expand orphan recovery speculatively. General sparse/gap growth, unwritten conversion, growth beyond a
 full resident root plus full unmergeable selected leaf, mutation starting from

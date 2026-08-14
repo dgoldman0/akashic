@@ -18,13 +18,16 @@ or callback-streamed reads should use the policy-neutral
 envelopes, and domain stores remain separate higher-level concerns.
 
 The ext4 implementation provides an ordinary checksummed read-only binding and
-an explicit staged-write binding with eleven production-closed durable paths:
+an explicit staged-write binding with twelve production-closed durable paths:
 initialized overwrite, strict append inside an initialized partial EOF block,
 allocation-backed fill of complete in-size holes, allocation-backed growth
 from exact aligned EOF, bounded `CREATE` and `MKDIR`, retained-block and
 one-block-release `TRUNCATE`, nonfinal and empty-final closed-file `UNLINK`,
-and canonical empty-directory `RMDIR`. Both descriptors are described by the
-[`akashic-vfs-ext4` contract](drivers/vfs-ext4.md) and remain constrained by the
+canonical empty-directory `RMDIR`, and bounded hard `LINK`. The staged binding
+advertises `VFS-CAP-LINK` and installs its callback in ABI slot 17; the ordinary
+binding remains read-only and leaves that slot null. Both descriptors are
+described by the [`akashic-vfs-ext4` contract](drivers/vfs-ext4.md) and remain
+constrained by the
 ratified [`akashic-ext4-rw-v1` profile](ext4-compatibility-profile.md). These are
 real ABI-1 production capabilities inside their documented envelope, not toy or
 provisional models; they do not claim that the complete writable profile is
@@ -109,9 +112,13 @@ MKDIR. RMDIR releases the inode and directory block, decrements parent links
 and `used_dirs`, and revokes the unchanged freed child block in an exact
 `6/0/1` through `8/0/1` transaction. Wider truncation, nonempty or open final-
 link unlink, directory growth, and HTree parents remain outside those
-envelopes. The immediate write ratchet is hard `LINK`, then staged `RENAME`,
-with directory HTree depth expanded independently when those operations or a
-pinned corpus require it. The
+envelopes. Bounded hard `LINK` adds one typed dirent, increments target `nlink`
+and ctime, and updates parent mtime/ctime in an exact deduplicated `2/0/0` or
+`3/0/0` transaction. Five focused LINK qualifications cover same- and
+cross-parent success, W7 precommit rollback, W17 committed replay, zero-write
+refusals, external filesystem checks, and a write-free byte-stable remount. The
+next write ratchet is bounded staged `RENAME`, with directory HTree depth
+expanded independently when that operation or a pinned corpus requires it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate
 tears return zero, while committed W22 inode-home tears publish progress and
 replay four metadata homes without rewriting ordered data. In the distinct
