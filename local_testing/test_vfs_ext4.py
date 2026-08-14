@@ -65359,10 +65359,12 @@ def _linear_directory_compact_append_afterimage(
     original: bytes,
     target_inode: int,
     name: bytes,
+    file_type: int = 1,
 ) -> tuple[bytes, int]:
-    """Independently compact live dirents and append one regular source."""
+    """Independently compact live dirents and append one typed source."""
     assert name and len(name) <= 255
     assert b"/" not in name and b"\x00" not in name
+    assert file_type in {1, 2}
     entries = _checked_linear_directory_entries(
         superblock,
         parent_inode,
@@ -65378,7 +65380,7 @@ def _linear_directory_compact_append_afterimage(
     result = bytearray(len(original))
     result[tail_offset:] = original[tail_offset:]
     offset = 0
-    for _, inode_number, _, file_type, entry_name in entries:
+    for _, inode_number, _, entry_type, entry_name in entries:
         record_length = (8 + len(entry_name) + 3) & ~3
         struct.pack_into(
             "<IHBB",
@@ -65387,7 +65389,7 @@ def _linear_directory_compact_append_afterimage(
             inode_number,
             record_length,
             len(entry_name),
-            file_type,
+            entry_type,
         )
         result[offset + 8 : offset + 8 + len(entry_name)] = entry_name
         offset += record_length
@@ -65400,7 +65402,7 @@ def _linear_directory_compact_append_afterimage(
         target_inode,
         insert_record,
         len(name),
-        1,
+        file_type,
     )
     result[insert_offset + 8 : insert_offset + 8 + len(name)] = name
     expected = _linear_directory_block_with_checksum(
@@ -65422,10 +65424,51 @@ def _linear_directory_compact_append_afterimage(
         insert_offset,
         target_inode,
         insert_record,
-        1,
+        file_type,
         name,
     )
     return expected, insert_offset
+
+
+def _empty_directory_parent_afterimage(
+    superblock: bytes,
+    *,
+    inode_number: int,
+    inode_generation: int,
+    original: bytes,
+    old_parent: int,
+    new_parent: int,
+) -> bytes:
+    """Rewrite only canonical ``..`` and independently restamp its checksum."""
+    assert old_parent != new_parent
+    entries = _checked_linear_directory_entries(
+        superblock,
+        inode_number,
+        inode_generation,
+        original,
+    )
+    assert entries == (
+        (0, inode_number, 12, 2, b"."),
+        (12, old_parent, len(original) - 24, 2, b".."),
+    )
+    result = bytearray(original)
+    struct.pack_into("<I", result, 12, new_parent)
+    expected = _linear_directory_block_with_checksum(
+        superblock,
+        inode_number,
+        inode_generation,
+        result,
+    )
+    assert _checked_linear_directory_entries(
+        superblock,
+        inode_number,
+        inode_generation,
+        expected,
+    ) == (
+        (0, inode_number, 12, 2, b"."),
+        (12, new_parent, len(original) - 24, 2, b".."),
+    )
+    return expected
 
 
 def _staged_link_recovery_view(
@@ -65647,6 +65690,7 @@ def _staged_link_attempt_forth(
         f"{prefix}-D D.VNODE @ CONSTANT {prefix}-D-VN",
         f"{prefix}-VN VN.NLINK @ CONSTANT {prefix}-OLD-NLINK",
         f"{prefix}-VN VN.DREFS @ CONSTANT {prefix}-OLD-DREFS",
+        f"{prefix}-VN VN.OPEN-REFS @ CONSTANT {prefix}-OLD-OPEN-REFS",
         f"{prefix}-VN VN.MTIME @ CONSTANT {prefix}-OLD-MTIME",
         f"{prefix}-VN VN.MTIME-NS @ CONSTANT {prefix}-OLD-MTIME-NS",
         f"{prefix}-VN VN.CTIME @ CONSTANT {prefix}-OLD-CTIME",
@@ -71044,6 +71088,2340 @@ def test_staged_vfs_rename_cross_parent_final_home_tear_replays_four_homes(
         faulted.unlink(missing_ok=True)
         recovered.unlink(missing_ok=True)
         stable.unlink(missing_ok=True)
+
+
+@pytest.fixture(scope="session")
+def staged_directory_rename_preimage_fixture(
+    staged_public_mkdir_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Add a stable inode-34 landing directory beside created-dir."""
+    path = staged_public_mkdir_fixture["stable_image"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(path, Path)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    source_number = 33
+    landing_number = 34
+    root_number = 2
+    superblock, source_inode, source_offset = _ext4_inode_record(
+        path, source_number
+    )
+    _, root_inode, root_offset = _ext4_inode_record(path, root_number)
+    _, empty_landing_inode, landing_offset = _ext4_inode_record(
+        path, landing_number
+    )
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    source_home, source_block_offset = divmod(source_offset, block_size)
+    landing_home, landing_block_offset = divmod(landing_offset, block_size)
+    root_home, root_block_offset = divmod(root_offset, block_size)
+    root_directory_home = _extent_root_physical(root_inode, 0)
+    source_directory_home = _extent_root_physical(source_inode, 0)
+    landing_directory_home = 1377
+    layout = _ext4_recovery_layout(path)
+    block_bitmap_home = layout["block_bitmap"]
+    inode_bitmap_home = layout["inode_bitmap"]
+    gdt_home = layout["primary_gdt"]
+    super_home = layout["primary_super"]
+    root_links_before = struct.unpack_from("<H", root_inode, 0x1A)[0]
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", superblock, 0x158)[0] << 32
+    )
+    free_inodes_before = struct.unpack_from("<I", superblock, 0x10)[0] | (
+        struct.unpack_from("<I", superblock, 0x15C)[0] << 32
+    )
+    group_counts_before = _ext4_group_counts(path, 0)
+    landing_epoch_ms = _STAGED_APPEND_EPOCH_MS + 1_000
+    landing_seconds, landing_milliseconds = divmod(landing_epoch_ms, 1000)
+    landing_nanoseconds = landing_milliseconds * 1_000_000
+
+    assert block_size == 1024
+    assert inode_size == 256
+    assert (
+        source_home,
+        source_block_offset,
+        landing_home,
+        landing_block_offset,
+        root_home,
+        root_block_offset,
+        root_directory_home,
+        source_directory_home,
+        landing_directory_home,
+    ) == (283, 0, 283, 256, 275, 256, 1299, 1364, 1377)
+    assert empty_landing_inode == bytes(inode_size)
+    assert root_links_before == 5
+    assert not _ext4_inode_allocation_state(path, (landing_number,))[
+        landing_number
+    ]
+    assert not _ext4_block_allocation_state(
+        path, (landing_directory_home,)
+    )[landing_directory_home]
+
+    directory = tmp_path_factory.mktemp("ext4-directory-rename-preimage")
+    backing = directory / "directory-rename-preimage.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        backing,
+        [
+            "VARIABLE _DMP-CLOCK-CALLS",
+            (
+                ": _DMP-NOW ( context -- epoch-ms ior ) DROP "
+                "1 _DMP-CLOCK-CALLS +! "
+                f"{landing_epoch_ms} 0 ;"
+            ),
+            "CREATE _DMP-STAT VFS-STATFS-SIZE ALLOT",
+            "T-ARENA CONSTANT _DMP-ARENA",
+            (
+                "_DMP-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _DMP-MOUNT-IOR CONSTANT _DMP-V"
+            ),
+            "_DMP-V _EXT4-CTX CONSTANT _DMP-CTX",
+            (
+                "' _DMP-NOW 0 _DMP-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _DMP-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_DMP-PROFILE", "_DMP-V", 8, 0, 0
+            ),
+            (
+                "_DMP-V V.ROOT @ _DMP-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _DMP-LOAD-IOR"
+            ),
+            (
+                'S" /created-dir" _DMP-V VFS-RESOLVE? '
+                "CONSTANT _DMP-S-IOR CONSTANT _DMP-S"
+            ),
+            (
+                "_DMP-S _DMP-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _DMP-S-LOAD-IOR"
+            ),
+            "_DMP-V V.ROOT @ D.VNODE @ CONSTANT _DMP-ROOT-VN",
+            "_DMP-S D.VNODE @ CONSTANT _DMP-S-VN",
+            (
+                "_DMP-ROOT-VN VN.NLINK @ "
+                "CONSTANT _DMP-ROOT-LINKS-BEFORE"
+            ),
+            "_DMP-V V.ICOUNT @ CONSTANT _DMP-ICOUNT-BEFORE",
+            "_DMP-V V.VCOUNT @ CONSTANT _DMP-VCOUNT-BEFORE",
+            (
+                "_DMP-STAT VFS-STATFS-SIZE _DMP-V VFS-STATFS "
+                "CONSTANT _DMP-STAT-BEFORE-IOR"
+            ),
+            "_DMP-STAT VSF.BFREE @ CONSTANT _DMP-BFREE-BEFORE",
+            "_DMP-STAT VSF.FFREE @ CONSTANT _DMP-FFREE-BEFORE",
+            (
+                'S" landing-dir" _DMP-V VFS-MKDIR '
+                "CONSTANT _DMP-MKDIR-IOR"
+            ),
+            "_XC-META-COUNT @ CONSTANT _DMP-META-COUNT",
+            "_XC-INODE @ CONSTANT _DMP-INODE",
+            "_XC-DATA-BLOCK @ CONSTANT _DMP-DATA-BLOCK",
+            (
+                'S" /landing-dir" _DMP-V VFS-RESOLVE? '
+                "CONSTANT _DMP-D-IOR CONSTANT _DMP-D"
+            ),
+            "_DMP-D D.VNODE @ CONSTANT _DMP-D-VN",
+            (
+                "_DMP-STAT VFS-STATFS-SIZE _DMP-V VFS-STATFS "
+                "CONSTANT _DMP-STAT-AFTER-IOR"
+            ),
+            "_DMP-STAT VSF.BFREE @ CONSTANT _DMP-BFREE-AFTER",
+            "_DMP-STAT VSF.FFREE @ CONSTANT _DMP-FFREE-AFTER",
+            "_DMP-CTX _EXT4-C.J.WRITER + @ CONSTANT _DMP-WRITER",
+            (
+                "_DMP-CTX _EXT4-C.J.HOME-WRITES + @ "
+                "CONSTANT _DMP-HOMES"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_DMP-MOUNT-IOR 0=",
+                        "_DMP-CLOCK-IOR 0=",
+                        "_DMP-PROFILE-SIZE-IOR 0=",
+                        "_DMP-PROFILE-BIND-IOR 0=",
+                        "_DMP-LOAD-IOR 0=",
+                        "_DMP-S-IOR 0=",
+                        "_DMP-S-LOAD-IOR 0=",
+                        "_DMP-S IN.CHILD @ 0=",
+                        "_DMP-MKDIR-IOR 0=",
+                        "_DMP-V V.LAST-IOR @ 0=",
+                        "_DMP-D-IOR 0=",
+                        "_DMP-D 0<>",
+                        "_DMP-D IN.CHILD @ 0=",
+                        "_DMP-D IN.PARENT @ _DMP-V V.ROOT @ =",
+                        "_DMP-D-VN VN.TYPE @ VFS-T-DIR =",
+                        f"_DMP-D-VN VN.BID @ {landing_number} =",
+                        f"_DMP-D-VN VN.SIZE-LO @ {block_size} =",
+                        "_DMP-D-VN VN.NLINK @ 2 =",
+                        "_DMP-D-VN VN.BLOCKS @ 2 =",
+                        f"_DMP-D-VN VN.ATIME @ {landing_seconds} =",
+                        (
+                            "_DMP-D-VN VN.ATIME-NS @ "
+                            f"{landing_nanoseconds} ="
+                        ),
+                        f"_DMP-D-VN VN.MTIME @ {landing_seconds} =",
+                        f"_DMP-D-VN VN.CTIME @ {landing_seconds} =",
+                        "_DMP-S-VN VN.BID @ 33 =",
+                        "_DMP-S-VN VN.NLINK @ 2 =",
+                        "_DMP-ROOT-LINKS-BEFORE 5 =",
+                        "_DMP-ROOT-VN VN.NLINK @ 6 =",
+                        f"_DMP-ROOT-VN VN.MTIME @ {landing_seconds} =",
+                        f"_DMP-ROOT-VN VN.CTIME @ {landing_seconds} =",
+                        "_DMP-CLOCK-CALLS @ 1 =",
+                        "_DMP-STAT-BEFORE-IOR 0=",
+                        "_DMP-STAT-AFTER-IOR 0=",
+                        "_DMP-BFREE-AFTER _DMP-BFREE-BEFORE 1- =",
+                        "_DMP-FFREE-AFTER _DMP-FFREE-BEFORE 1- =",
+                        "_DMP-V V.ICOUNT @ _DMP-ICOUNT-BEFORE 1+ =",
+                        "_DMP-V V.VCOUNT @ _DMP-VCOUNT-BEFORE 1+ =",
+                        "_DMP-META-COUNT 8 =",
+                        f"_DMP-INODE {landing_number} =",
+                        f"_DMP-DATA-BLOCK {landing_directory_home} =",
+                        "_DMP-HOMES 8 =",
+                        "_DMP-WRITER _DMP-PROFILE-BASE =",
+                        "_DMP-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_DMP-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_DMP-V V.FLAGS @ VFS-F-RO AND 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-DIRECTORY-RENAME-PREIMAGE" THEN'
+            ),
+            "0 _DMP-V VFS-UNMOUNT CONSTANT _DMP-UNMOUNT-IOR",
+            (
+                "_DMP-UNMOUNT-IOR 0= "
+                "_DMP-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_DMP-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-DIRECTORY-RENAME-PREIMAGE-UNMOUNTED" THEN'
+            ),
+        ],
+        capture_media=backing,
+    )
+    _assert_emitted(output, "EXT4-DIRECTORY-RENAME-PREIMAGE")
+    _assert_emitted(output, "EXT4-DIRECTORY-RENAME-PREIMAGE-UNMOUNTED")
+    assert backing.is_file()
+
+    final_superblock, final_source_inode, _ = _ext4_inode_record(
+        backing, source_number
+    )
+    _, final_landing_inode, _ = _ext4_inode_record(backing, landing_number)
+    _, final_root_inode, _ = _ext4_inode_record(backing, root_number)
+    assert final_superblock == _ext4_super_with_checksum(final_superblock)
+    assert final_source_inode == source_inode
+    assert final_landing_inode == _inode_with_checksum(
+        final_superblock, landing_number, final_landing_inode
+    )
+    assert final_root_inode == _inode_with_checksum(
+        final_superblock, root_number, final_root_inode
+    )
+    assert struct.unpack_from("<H", final_landing_inode, 0x00)[0] == 0x41ED
+    assert struct.unpack_from("<H", final_landing_inode, 0x1A)[0] == 2
+    assert struct.unpack_from("<I", final_landing_inode, 0x04)[0] == block_size
+    assert struct.unpack_from("<I", final_landing_inode, 0x1C)[0] == 2
+    assert struct.unpack_from("<I", final_landing_inode, 0x68)[0] == 0
+    assert _extent_root_physical(final_landing_inode, 0) == (
+        landing_directory_home
+    )
+    assert struct.unpack_from("<H", final_root_inode, 0x1A)[0] == 6
+    assert _ext4_inode_allocation_state(
+        backing, (source_number, landing_number)
+    ) == {source_number: True, landing_number: True}
+    assert _ext4_block_allocation_state(
+        backing, (source_directory_home, landing_directory_home)
+    ) == {source_directory_home: True, landing_directory_home: True}
+    final_free_blocks = struct.unpack_from("<I", final_superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", final_superblock, 0x158)[0] << 32
+    )
+    final_free_inodes = struct.unpack_from("<I", final_superblock, 0x10)[0] | (
+        struct.unpack_from("<I", final_superblock, 0x15C)[0] << 32
+    )
+    assert final_free_blocks == free_blocks_before - 1
+    assert final_free_inodes == free_inodes_before - 1
+    final_group_counts = _ext4_group_counts(backing, 0)
+    assert final_group_counts == {
+        "free_blocks": group_counts_before["free_blocks"] - 1,
+        "free_inodes": group_counts_before["free_inodes"] - 1,
+        "used_dirs": group_counts_before["used_dirs"] + 1,
+        "itable_unused": group_counts_before["itable_unused"] - 1,
+    }
+    original_inode_home = _read_ext4_home(
+        backing, source_home, block_size=block_size
+    )
+    original_root_home = _read_ext4_home(
+        backing, root_home, block_size=block_size
+    )
+    original_root_directory = _read_ext4_home(
+        backing, root_directory_home, block_size=block_size
+    )
+    original_source_directory = _read_ext4_home(
+        backing, source_directory_home, block_size=block_size
+    )
+    original_landing_directory = _read_ext4_home(
+        backing, landing_directory_home, block_size=block_size
+    )
+    assert original_inode_home[
+        source_block_offset : source_block_offset + inode_size
+    ] == final_source_inode
+    assert original_inode_home[
+        landing_block_offset : landing_block_offset + inode_size
+    ] == final_landing_inode
+    assert original_root_home[
+        root_block_offset : root_block_offset + inode_size
+    ] == final_root_inode
+    assert _checked_linear_directory_entries(
+        final_superblock,
+        source_number,
+        struct.unpack_from("<I", final_source_inode, 0x64)[0],
+        original_source_directory,
+    ) == (
+        (0, source_number, 12, 2, b"."),
+        (12, root_number, block_size - 24, 2, b".."),
+    )
+    assert _checked_linear_directory_entries(
+        final_superblock,
+        landing_number,
+        struct.unpack_from("<I", final_landing_inode, 0x64)[0],
+        original_landing_directory,
+    ) == (
+        (0, landing_number, 12, 2, b"."),
+        (12, root_number, block_size - 24, 2, b".."),
+    )
+    root_entries = _checked_linear_directory_entries(
+        final_superblock,
+        root_number,
+        struct.unpack_from("<I", final_root_inode, 0x64)[0],
+        original_root_directory,
+    )
+    assert [entry[1:5] for entry in root_entries if entry[4] == b"created-dir"] == [
+        (source_number, 20, 2, b"created-dir")
+    ]
+    assert [entry[1:5] for entry in root_entries if entry[4] == b"landing-dir"] == [
+        (landing_number, root_entries[-1][2], 2, b"landing-dir")
+    ]
+
+    for home, ordinal in zip(
+        (
+            source_home,
+            root_home,
+            root_directory_home,
+            landing_directory_home,
+            block_bitmap_home,
+            gdt_home,
+        ),
+        range(22, 28),
+        strict=True,
+    ):
+        assert _write_ordinals_for_ext4_home(
+            trace, home, block_size=block_size
+        ) == (ordinal,)
+    assert _write_ordinals_for_ext4_home(
+        trace, super_home, block_size=block_size
+    ) == (4, 28, 38)
+    assert _write_ordinals_for_ext4_home(
+        trace, inode_bitmap_home, block_size=block_size
+    ) == (29,)
+
+    root_listing = subprocess.run(
+        [str(debugfs), "-R", "ls -l /", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    landing_stat = subprocess.run(
+        [str(debugfs), "-R", "stat /landing-dir", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert root_listing.returncode == 0, (
+        root_listing.stdout + root_listing.stderr
+    )
+    assert landing_stat.returncode == 0, (
+        landing_stat.stdout + landing_stat.stderr
+    )
+    assert "created-dir" in root_listing.stdout
+    assert "landing-dir" in root_listing.stdout
+    assert "Inode: 34" in landing_stat.stdout
+    assert "Type: directory" in landing_stat.stdout
+    assert "Links: 2" in landing_stat.stdout
+    assert f"(0):{landing_directory_home}" in landing_stat.stdout
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+    stable = directory / "directory-rename-preimage-stable.img"
+    stable_output, stable_trace, stable_sha256 = run_recovery_forth(
+        backing,
+        stable,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _DMS-MOUNT-IOR CONSTANT _DMS-V"
+            ),
+            (
+                'S" /created-dir" _DMS-V VFS-RESOLVE? '
+                "CONSTANT _DMS-S-IOR CONSTANT _DMS-S"
+            ),
+            (
+                'S" /landing-dir" _DMS-V VFS-RESOLVE? '
+                "CONSTANT _DMS-D-IOR CONSTANT _DMS-D"
+            ),
+            (
+                "_DMS-S _DMS-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _DMS-S-LOAD-IOR"
+            ),
+            (
+                "_DMS-D _DMS-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _DMS-D-LOAD-IOR"
+            ),
+            "_DMS-S D.VNODE @ CONSTANT _DMS-S-VN",
+            "_DMS-D D.VNODE @ CONSTANT _DMS-D-VN",
+            "_DMS-V V.ROOT @ D.VNODE @ CONSTANT _DMS-ROOT-VN",
+            (
+                _forth_conjunction(
+                    [
+                        "_DMS-MOUNT-IOR 0=",
+                        "_DMS-S-IOR 0=",
+                        "_DMS-D-IOR 0=",
+                        "_DMS-S-LOAD-IOR 0=",
+                        "_DMS-D-LOAD-IOR 0=",
+                        "_DMS-S IN.CHILD @ 0=",
+                        "_DMS-D IN.CHILD @ 0=",
+                        "_DMS-S IN.PARENT @ _DMS-V V.ROOT @ =",
+                        "_DMS-D IN.PARENT @ _DMS-V V.ROOT @ =",
+                        "_DMS-S-VN VN.BID @ 33 =",
+                        "_DMS-D-VN VN.BID @ 34 =",
+                        "_DMS-S-VN VN.NLINK @ 2 =",
+                        "_DMS-D-VN VN.NLINK @ 2 =",
+                        "_DMS-ROOT-VN VN.NLINK @ 6 =",
+                        "_DMS-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_DMS-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                    ]
+                )
+                + ' IF ." EXT4-DIRECTORY-RENAME-PREIMAGE-STABLE" THEN'
+            ),
+            "0 _DMS-V VFS-UNMOUNT CONSTANT _DMS-UNMOUNT-IOR",
+            (
+                "_DMS-UNMOUNT-IOR 0= "
+                "_DMS-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                'IF ." EXT4-DIRECTORY-RENAME-PREIMAGE-STABLE-UNMOUNTED" THEN'
+            ),
+        ],
+        capture_media=stable,
+    )
+    _assert_emitted(stable_output, "EXT4-DIRECTORY-RENAME-PREIMAGE-STABLE")
+    _assert_emitted(
+        stable_output, "EXT4-DIRECTORY-RENAME-PREIMAGE-STABLE-UNMOUNTED"
+    )
+    assert stable_trace == ()
+    assert stable_sha256 == media_sha256
+    assert _sha256(stable) == stable_sha256
+    return {
+        "source": stable,
+        "trace": trace,
+        "media_sha256": media_sha256,
+        "block_size": block_size,
+        "inode_size": inode_size,
+        "source_number": source_number,
+        "landing_number": landing_number,
+        "root_number": root_number,
+        "source_home": source_home,
+        "source_block_offset": source_block_offset,
+        "landing_block_offset": landing_block_offset,
+        "root_home": root_home,
+        "root_block_offset": root_block_offset,
+        "root_directory_home": root_directory_home,
+        "source_directory_home": source_directory_home,
+        "landing_directory_home": landing_directory_home,
+        "landing_epoch_ms": landing_epoch_ms,
+        "free_blocks": final_free_blocks,
+        "free_inodes": final_free_inodes,
+        "group_counts": final_group_counts,
+        "superblock": final_superblock,
+        "source_inode": final_source_inode,
+        "landing_inode": final_landing_inode,
+        "root_inode": final_root_inode,
+        "original_inode_home": original_inode_home,
+        "original_root_home": original_root_home,
+        "original_root_directory": original_root_directory,
+        "original_source_directory": original_source_directory,
+        "original_landing_directory": original_landing_directory,
+    }
+
+
+def test_staged_directory_rename_preimage_is_stable(
+    staged_directory_rename_preimage_fixture: dict[str, object],
+) -> None:
+    image = staged_directory_rename_preimage_fixture["source"]
+    trace = staged_directory_rename_preimage_fixture["trace"]
+    assert isinstance(image, Path)
+    assert isinstance(trace, tuple)
+    assert image.is_file()
+    assert trace
+
+
+def _staged_directory_rename_attempt_forth(
+    prefix: str,
+    *,
+    epoch_ms: int,
+    metadata_capacity: int = 5,
+) -> tuple[str, ...]:
+    """Build one qualified empty-directory cross-parent RENAME attempt."""
+    return (
+        f"VARIABLE {prefix}-CLOCK-CALLS",
+        (
+            f": {prefix}-NOW ( context -- epoch-ms ior ) DROP "
+            f"1 {prefix}-CLOCK-CALLS +! {epoch_ms} 0 ;"
+        ),
+        f"T-ARENA CONSTANT {prefix}-ARENA",
+        (
+            f"{prefix}-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+            f"CONSTANT {prefix}-MOUNT-IOR CONSTANT {prefix}-V"
+        ),
+        f"{prefix}-V _EXT4-CTX CONSTANT {prefix}-CTX",
+        (
+            f"' {prefix}-NOW 0 {prefix}-V EXT4-BIND-WRITE-CLOCK? "
+            f"CONSTANT {prefix}-CLOCK-IOR"
+        ),
+        *_ext4_dedicated_writer_profile_forth(
+            f"{prefix}-PROFILE",
+            f"{prefix}-V",
+            metadata_capacity,
+            0,
+            0,
+        ),
+        (
+            f'S" /created-dir" {prefix}-V VFS-RESOLVE? '
+            f"CONSTANT {prefix}-S-IOR CONSTANT {prefix}-S"
+        ),
+        (
+            f'S" /" {prefix}-V VFS-RESOLVE? '
+            f"CONSTANT {prefix}-OP-IOR CONSTANT {prefix}-OP"
+        ),
+        (
+            f'S" /landing-dir" {prefix}-V VFS-RESOLVE? '
+            f"CONSTANT {prefix}-NP-IOR CONSTANT {prefix}-NP"
+        ),
+        f"{prefix}-S D.VNODE @ CONSTANT {prefix}-VN",
+        f"{prefix}-OP D.VNODE @ CONSTANT {prefix}-OP-VN",
+        f"{prefix}-NP D.VNODE @ CONSTANT {prefix}-NP-VN",
+        (
+            f"{prefix}-VN VN.FLAGS @ VFS-IF-CHILDREN AND "
+            f"CONSTANT {prefix}-OLD-CHILDREN"
+        ),
+        f"{prefix}-VN VN.NLINK @ CONSTANT {prefix}-OLD-NLINK",
+        f"{prefix}-VN VN.DREFS @ CONSTANT {prefix}-OLD-DREFS",
+        f"{prefix}-VN VN.OPEN-REFS @ CONSTANT {prefix}-OLD-OPEN-REFS",
+        f"{prefix}-VN VN.ATIME @ CONSTANT {prefix}-OLD-ATIME",
+        f"{prefix}-VN VN.ATIME-NS @ CONSTANT {prefix}-OLD-ATIME-NS",
+        f"{prefix}-VN VN.MTIME @ CONSTANT {prefix}-OLD-MTIME",
+        f"{prefix}-VN VN.MTIME-NS @ CONSTANT {prefix}-OLD-MTIME-NS",
+        f"{prefix}-VN VN.CTIME @ CONSTANT {prefix}-OLD-CTIME",
+        f"{prefix}-VN VN.CTIME-NS @ CONSTANT {prefix}-OLD-CTIME-NS",
+        f"{prefix}-OP-VN VN.NLINK @ CONSTANT {prefix}-OLD-OP-NLINK",
+        f"{prefix}-OP-VN VN.ATIME @ CONSTANT {prefix}-OLD-OP-ATIME",
+        (
+            f"{prefix}-OP-VN VN.ATIME-NS @ "
+            f"CONSTANT {prefix}-OLD-OP-ATIME-NS"
+        ),
+        f"{prefix}-OP-VN VN.MTIME @ CONSTANT {prefix}-OLD-OP-MTIME",
+        (
+            f"{prefix}-OP-VN VN.MTIME-NS @ "
+            f"CONSTANT {prefix}-OLD-OP-MTIME-NS"
+        ),
+        f"{prefix}-OP-VN VN.CTIME @ CONSTANT {prefix}-OLD-OP-CTIME",
+        (
+            f"{prefix}-OP-VN VN.CTIME-NS @ "
+            f"CONSTANT {prefix}-OLD-OP-CTIME-NS"
+        ),
+        f"{prefix}-NP-VN VN.NLINK @ CONSTANT {prefix}-OLD-NP-NLINK",
+        f"{prefix}-NP-VN VN.ATIME @ CONSTANT {prefix}-OLD-NP-ATIME",
+        (
+            f"{prefix}-NP-VN VN.ATIME-NS @ "
+            f"CONSTANT {prefix}-OLD-NP-ATIME-NS"
+        ),
+        f"{prefix}-NP-VN VN.MTIME @ CONSTANT {prefix}-OLD-NP-MTIME",
+        (
+            f"{prefix}-NP-VN VN.MTIME-NS @ "
+            f"CONSTANT {prefix}-OLD-NP-MTIME-NS"
+        ),
+        f"{prefix}-NP-VN VN.CTIME @ CONSTANT {prefix}-OLD-NP-CTIME",
+        (
+            f"{prefix}-NP-VN VN.CTIME-NS @ "
+            f"CONSTANT {prefix}-OLD-NP-CTIME-NS"
+        ),
+        f"{prefix}-V V.ICOUNT @ CONSTANT {prefix}-OLD-ICOUNT",
+        f"{prefix}-V V.VCOUNT @ CONSTANT {prefix}-OLD-VCOUNT",
+        f"{prefix}-V V.STR-PTR @ CONSTANT {prefix}-OLD-STR-PTR",
+        f"{prefix}-V V.IFREE @ CONSTANT {prefix}-OLD-IFREE",
+        (
+            f'S" /created-dir" {prefix}-V VFS-CD? '
+            f"CONSTANT {prefix}-CD-IOR"
+        ),
+        (
+            f'S" /created-dir" VFS-FF-READ {prefix}-V VFS-OPEN? '
+            f"CONSTANT {prefix}-OPEN-IOR CONSTANT {prefix}-FD"
+        ),
+        (
+            f'S" moved-dir" {prefix}-S {prefix}-NP '
+            f"VFS-RN-NOREPLACE {prefix}-V VFS-RENAME-AT "
+            f"CONSTANT {prefix}-IOR"
+        ),
+        f"{prefix}-V V.LAST-IOR @ CONSTANT {prefix}-LAST-IOR",
+        (
+            f'S" /created-dir" {prefix}-V VFS-RESOLVE? '
+            f"CONSTANT {prefix}-OLD-IOR CONSTANT {prefix}-OLD"
+        ),
+        (
+            f'S" /landing-dir/moved-dir" {prefix}-V VFS-RESOLVE? '
+            f"CONSTANT {prefix}-NEW-IOR CONSTANT {prefix}-NEW"
+        ),
+        f"{prefix}-CTX _EXT4-C.J.WRITER + @ CONSTANT {prefix}-WRITER",
+        (
+            f"{prefix}-CTX _EXT4-C.J.HOME-WRITES + @ "
+            f"CONSTANT {prefix}-HOMES"
+        ),
+    )
+
+
+def _staged_directory_rename_recovery_view(
+    source: Path,
+    destination: Path,
+    *,
+    expected_renamed: bool,
+    source_atime_ms: int,
+    source_mtime_ms: int,
+    source_ctime_ms: int,
+    root_atime_ms: int,
+    root_mtime_ms: int,
+    root_ctime_ms: int,
+    root_nlink: int,
+    landing_atime_ms: int,
+    landing_mtime_ms: int,
+    landing_ctime_ms: int,
+    landing_nlink: int,
+    expected_home_writes: int,
+    expected_replayed: bool,
+    prefix: str,
+    marker: str,
+) -> tuple[str, tuple[tuple[str, int, int], ...], str]:
+    """Recover and inspect either namespace of the directory move."""
+
+    def timestamp_parts(epoch_ms: int) -> tuple[int, int]:
+        seconds, milliseconds = divmod(epoch_ms, 1000)
+        return seconds, milliseconds * 1_000_000
+
+    source_atime = timestamp_parts(source_atime_ms)
+    source_mtime = timestamp_parts(source_mtime_ms)
+    source_ctime = timestamp_parts(source_ctime_ms)
+    root_atime = timestamp_parts(root_atime_ms)
+    root_mtime = timestamp_parts(root_mtime_ms)
+    root_ctime = timestamp_parts(root_ctime_ms)
+    landing_atime = timestamp_parts(landing_atime_ms)
+    landing_mtime = timestamp_parts(landing_mtime_ms)
+    landing_ctime = timestamp_parts(landing_ctime_ms)
+    replay_check = (
+        f"{prefix}-CTX _EXT4-C.J.REPLAYED + @ 0<>"
+        if expected_replayed
+        else f"{prefix}-CTX _EXT4-C.J.REPLAYED + @ 0="
+    )
+    if expected_renamed:
+        active_dentry = f"{prefix}-NEW"
+        active_parent = f"{prefix}-NP"
+        active_name = "moved-dir"
+        namespace_checks = [
+            f"{prefix}-OLD 0=",
+            f"{prefix}-OLD-IOR VFS-IOR-REASON VFS-R-NOENT =",
+            f"{prefix}-NEW-IOR 0=",
+            f"{prefix}-NEW 0<>",
+        ]
+    else:
+        active_dentry = f"{prefix}-OLD"
+        active_parent = f"{prefix}-ROOT"
+        active_name = "created-dir"
+        namespace_checks = [
+            f"{prefix}-OLD-IOR 0=",
+            f"{prefix}-OLD 0<>",
+            f"{prefix}-NEW 0=",
+            f"{prefix}-NEW-IOR VFS-IOR-REASON VFS-R-NOENT =",
+        ]
+
+    output, trace, media_sha256 = run_recovery_forth(
+        source,
+        destination,
+        [
+            (
+                f"T-ARENA T-VOLUME EXT4-NEW CONSTANT {prefix}-MOUNT-IOR "
+                f"CONSTANT {prefix}-V"
+            ),
+            f"{prefix}-V _EXT4-CTX CONSTANT {prefix}-CTX",
+            f"{prefix}-V V.ROOT @ CONSTANT {prefix}-ROOT",
+            f"{prefix}-ROOT D.VNODE @ CONSTANT {prefix}-ROOT-VN",
+            (
+                f'S" /landing-dir" {prefix}-V VFS-RESOLVE? '
+                f"CONSTANT {prefix}-NP-IOR CONSTANT {prefix}-NP"
+            ),
+            f"{prefix}-NP D.VNODE @ CONSTANT {prefix}-NP-VN",
+            (
+                f'S" /created-dir" {prefix}-V VFS-RESOLVE? '
+                f"CONSTANT {prefix}-OLD-IOR CONSTANT {prefix}-OLD"
+            ),
+            (
+                f'S" /landing-dir/moved-dir" {prefix}-V VFS-RESOLVE? '
+                f"CONSTANT {prefix}-NEW-IOR CONSTANT {prefix}-NEW"
+            ),
+            f"{active_dentry} CONSTANT {prefix}-D",
+            f"{prefix}-D D.VNODE @ CONSTANT {prefix}-VN",
+            (
+                f"{prefix}-D {prefix}-V _VFS-ENSURE-CHILDREN? "
+                f"CONSTANT {prefix}-LOAD-IOR"
+            ),
+            (
+                f"{prefix}-D D.NAME @ _VFS-STR-GET "
+                f"CONSTANT {prefix}-NLEN CONSTANT {prefix}-NAME"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        f"{prefix}-MOUNT-IOR 0=",
+                        f"{prefix}-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        f"{prefix}-V _EXT4-READY?",
+                        f"{prefix}-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        f"{prefix}-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        f"{prefix}-CTX _EXT4-C.RECOVERY + @ 0=",
+                        f"{prefix}-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        f"{prefix}-CTX _EXT4-C.J.WRITER + @ 0=",
+                        replay_check,
+                        (
+                            f"{prefix}-CTX _EXT4-C.J.HOME-WRITES + @ "
+                            f"{expected_home_writes} ="
+                        ),
+                        f"{prefix}-NP-IOR 0=",
+                        *namespace_checks,
+                        f"{prefix}-LOAD-IOR 0=",
+                        f"{prefix}-D IN.CHILD @ 0=",
+                        f"{prefix}-D IN.PARENT @ {active_parent} =",
+                        f"{prefix}-NLEN {len(active_name)} =",
+                        (
+                            f'{prefix}-NAME S" {active_name}" DROP '
+                            f"{len(active_name)} _EXT4-BYTES=?"
+                        ),
+                        f"{prefix}-VN VN.TYPE @ VFS-T-DIR =",
+                        f"{prefix}-VN VN.BID @ 33 =",
+                        f"{prefix}-VN VN.BDATA @ 33 =",
+                        f"{prefix}-VN VN.GEN @ 1 =",
+                        f"{prefix}-VN VN.MODE @ 0x41ED =",
+                        f"{prefix}-VN VN.SIZE-LO @ 1024 =",
+                        f"{prefix}-VN VN.SIZE-HI @ 0=",
+                        f"{prefix}-VN VN.NLINK @ 2 =",
+                        f"{prefix}-VN VN.DREFS @ 1 =",
+                        f"{prefix}-VN VN.OPEN-REFS @ 0=",
+                        f"{prefix}-VN VN.BLOCKS @ 2 =",
+                        (
+                            f"{prefix}-VN VN.FLAGS @ "
+                            "VFS-IF-CHILDREN AND 0<>"
+                        ),
+                        f"{prefix}-VN VN.ATIME @ {source_atime[0]} =",
+                        f"{prefix}-VN VN.ATIME-NS @ {source_atime[1]} =",
+                        f"{prefix}-VN VN.MTIME @ {source_mtime[0]} =",
+                        f"{prefix}-VN VN.MTIME-NS @ {source_mtime[1]} =",
+                        f"{prefix}-VN VN.CTIME @ {source_ctime[0]} =",
+                        f"{prefix}-VN VN.CTIME-NS @ {source_ctime[1]} =",
+                        f"{prefix}-ROOT-VN VN.NLINK @ {root_nlink} =",
+                        f"{prefix}-ROOT-VN VN.ATIME @ {root_atime[0]} =",
+                        f"{prefix}-ROOT-VN VN.ATIME-NS @ {root_atime[1]} =",
+                        f"{prefix}-ROOT-VN VN.MTIME @ {root_mtime[0]} =",
+                        f"{prefix}-ROOT-VN VN.MTIME-NS @ {root_mtime[1]} =",
+                        f"{prefix}-ROOT-VN VN.CTIME @ {root_ctime[0]} =",
+                        f"{prefix}-ROOT-VN VN.CTIME-NS @ {root_ctime[1]} =",
+                        f"{prefix}-NP-VN VN.NLINK @ {landing_nlink} =",
+                        f"{prefix}-NP-VN VN.ATIME @ {landing_atime[0]} =",
+                        f"{prefix}-NP-VN VN.ATIME-NS @ {landing_atime[1]} =",
+                        f"{prefix}-NP-VN VN.MTIME @ {landing_mtime[0]} =",
+                        f"{prefix}-NP-VN VN.MTIME-NS @ {landing_mtime[1]} =",
+                        f"{prefix}-NP-VN VN.CTIME @ {landing_ctime[0]} =",
+                        f"{prefix}-NP-VN VN.CTIME-NS @ {landing_ctime[1]} =",
+                        (
+                            f"{prefix}-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0="
+                        ),
+                        (
+                            f"{prefix}-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+            f"0 {prefix}-V VFS-UNMOUNT CONSTANT {prefix}-UNMOUNT-IOR",
+            (
+                f"{prefix}-UNMOUNT-IOR 0= "
+                f"{prefix}-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                f'IF ." {marker}-UNMOUNTED" THEN'
+            ),
+        ],
+        capture_media=destination,
+    )
+    _assert_emitted(output, marker)
+    _assert_emitted(output, f"{marker}-UNMOUNTED")
+    return output, trace, media_sha256
+
+
+@pytest.fixture(scope="session")
+def staged_cross_parent_directory_rename_fixture(
+    staged_directory_rename_preimage_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Move inode 33 beneath inode 34 with five metadata credits."""
+    preimage = staged_directory_rename_preimage_fixture
+    path = preimage["source"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(path, Path)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    source_number = preimage["source_number"]
+    landing_number = preimage["landing_number"]
+    root_number = preimage["root_number"]
+    block_size = preimage["block_size"]
+    inode_size = preimage["inode_size"]
+    source_home = preimage["source_home"]
+    source_block_offset = preimage["source_block_offset"]
+    landing_block_offset = preimage["landing_block_offset"]
+    root_home = preimage["root_home"]
+    root_block_offset = preimage["root_block_offset"]
+    root_directory_home = preimage["root_directory_home"]
+    source_directory_home = preimage["source_directory_home"]
+    landing_directory_home = preimage["landing_directory_home"]
+    superblock = preimage["superblock"]
+    source_inode = preimage["source_inode"]
+    landing_inode = preimage["landing_inode"]
+    root_inode = preimage["root_inode"]
+    original_inode_home = preimage["original_inode_home"]
+    original_root_home = preimage["original_root_home"]
+    original_root_directory = preimage["original_root_directory"]
+    original_source_directory = preimage["original_source_directory"]
+    original_landing_directory = preimage["original_landing_directory"]
+    free_blocks_before = preimage["free_blocks"]
+    free_inodes_before = preimage["free_inodes"]
+    group_counts_before = preimage["group_counts"]
+    assert isinstance(block_size, int)
+    assert isinstance(inode_size, int)
+    assert isinstance(source_number, int)
+    assert isinstance(landing_number, int)
+    assert isinstance(root_number, int)
+    assert isinstance(source_home, int)
+    assert isinstance(source_block_offset, int)
+    assert isinstance(landing_block_offset, int)
+    assert isinstance(root_home, int)
+    assert isinstance(root_block_offset, int)
+    assert isinstance(root_directory_home, int)
+    assert isinstance(source_directory_home, int)
+    assert isinstance(landing_directory_home, int)
+    assert isinstance(superblock, bytes)
+    assert isinstance(source_inode, bytes)
+    assert isinstance(landing_inode, bytes)
+    assert isinstance(root_inode, bytes)
+    assert isinstance(original_inode_home, bytes)
+    assert isinstance(original_root_home, bytes)
+    assert isinstance(original_root_directory, bytes)
+    assert isinstance(original_source_directory, bytes)
+    assert isinstance(original_landing_directory, bytes)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(group_counts_before, dict)
+
+    assert (
+        source_home,
+        root_home,
+        root_directory_home,
+        landing_directory_home,
+        source_directory_home,
+    ) == (283, 275, 1299, 1377, 1364)
+    assert (source_block_offset, landing_block_offset, root_block_offset) == (
+        0,
+        256,
+        256,
+    )
+    source_generation = struct.unpack_from("<I", source_inode, 0x64)[0]
+    landing_generation = struct.unpack_from("<I", landing_inode, 0x64)[0]
+    root_generation = struct.unpack_from("<I", root_inode, 0x64)[0]
+    source_links = struct.unpack_from("<H", source_inode, 0x1A)[0]
+    landing_links = struct.unpack_from("<H", landing_inode, 0x1A)[0]
+    root_links = struct.unpack_from("<H", root_inode, 0x1A)[0]
+    source_atime_ms = _ext4_inode_timestamp_ms(source_inode, 0x08, 0x8C)
+    source_mtime_ms = _ext4_inode_timestamp_ms(source_inode, 0x10, 0x88)
+    source_ctime_ms = _ext4_inode_timestamp_ms(source_inode, 0x0C, 0x84)
+    landing_atime_ms = _ext4_inode_timestamp_ms(landing_inode, 0x08, 0x8C)
+    landing_mtime_ms = _ext4_inode_timestamp_ms(landing_inode, 0x10, 0x88)
+    landing_ctime_ms = _ext4_inode_timestamp_ms(landing_inode, 0x0C, 0x84)
+    root_atime_ms = _ext4_inode_timestamp_ms(root_inode, 0x08, 0x8C)
+    root_mtime_ms = _ext4_inode_timestamp_ms(root_inode, 0x10, 0x88)
+    root_ctime_ms = _ext4_inode_timestamp_ms(root_inode, 0x0C, 0x84)
+    rename_epoch_ms = preimage["landing_epoch_ms"] + 1_000
+    assert isinstance(rename_epoch_ms, int)
+    assert source_generation == landing_generation == 1
+    assert (source_links, root_links, landing_links) == (2, 6, 2)
+    assert struct.unpack_from("<I", source_inode, 0x68)[0] == 0
+    assert struct.unpack_from("<I", landing_inode, 0x68)[0] == 0
+    assert struct.unpack_from("<I", root_inode, 0x68)[0] == 0
+
+    expected_root_directory, remove_offset = (
+        _linear_directory_compact_remove_afterimage(
+            superblock,
+            parent_inode=root_number,
+            parent_generation=root_generation,
+            original=original_root_directory,
+            target_inode=source_number,
+            name=b"created-dir",
+        )
+    )
+    expected_landing_directory, insert_offset = (
+        _linear_directory_compact_append_afterimage(
+            superblock,
+            parent_inode=landing_number,
+            parent_generation=landing_generation,
+            original=original_landing_directory,
+            target_inode=source_number,
+            name=b"moved-dir",
+            file_type=2,
+        )
+    )
+    expected_source_directory = _empty_directory_parent_afterimage(
+        superblock,
+        inode_number=source_number,
+        inode_generation=source_generation,
+        original=original_source_directory,
+        old_parent=root_number,
+        new_parent=landing_number,
+    )
+    assert remove_offset >= 0
+    assert insert_offset == 24
+    assert struct.unpack_from("<IHBB", expected_landing_directory, 24) == (
+        source_number,
+        block_size - 36,
+        len(b"moved-dir"),
+        2,
+    )
+
+    seconds, milliseconds = divmod(rename_epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = (
+        low_seconds
+        if low_seconds < 0x8000_0000
+        else low_seconds - 0x1_0000_0000
+    )
+    epoch = (seconds - signed_low) >> 32
+    assert 0 <= epoch <= 3
+    extra_time = (nanoseconds << 2) | epoch
+
+    expected_source_inode = bytearray(source_inode)
+    struct.pack_into("<I", expected_source_inode, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_source_inode, 0x84, extra_time)
+    expected_source_inode[:] = _inode_with_checksum(
+        superblock, source_number, expected_source_inode
+    )
+    expected_landing_inode = bytearray(landing_inode)
+    struct.pack_into("<H", expected_landing_inode, 0x1A, landing_links + 1)
+    struct.pack_into("<I", expected_landing_inode, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_landing_inode, 0x10, low_seconds)
+    struct.pack_into("<I", expected_landing_inode, 0x84, extra_time)
+    struct.pack_into("<I", expected_landing_inode, 0x88, extra_time)
+    expected_landing_inode[:] = _inode_with_checksum(
+        superblock, landing_number, expected_landing_inode
+    )
+    expected_inode_home_buffer = bytearray(original_inode_home)
+    expected_inode_home_buffer[
+        source_block_offset : source_block_offset + inode_size
+    ] = expected_source_inode
+    expected_inode_home_buffer[
+        landing_block_offset : landing_block_offset + inode_size
+    ] = expected_landing_inode
+    expected_inode_home = bytes(expected_inode_home_buffer)
+
+    expected_root_inode = bytearray(root_inode)
+    struct.pack_into("<H", expected_root_inode, 0x1A, root_links - 1)
+    struct.pack_into("<I", expected_root_inode, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_root_inode, 0x10, low_seconds)
+    struct.pack_into("<I", expected_root_inode, 0x84, extra_time)
+    struct.pack_into("<I", expected_root_inode, 0x88, extra_time)
+    expected_root_inode[:] = _inode_with_checksum(
+        superblock, root_number, expected_root_inode
+    )
+    expected_root_home_buffer = bytearray(original_root_home)
+    expected_root_home_buffer[
+        root_block_offset : root_block_offset + inode_size
+    ] = expected_root_inode
+    expected_root_home = bytes(expected_root_home_buffer)
+
+    directory = tmp_path_factory.mktemp("ext4-cross-parent-directory-rename")
+    backing = directory / "cross-parent-directory-rename.img"
+    stable = directory / "cross-parent-directory-rename-stable.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        backing,
+        [
+            *_staged_directory_rename_attempt_forth(
+                "_DR", epoch_ms=rename_epoch_ms
+            ),
+            (
+                "_DR-S D.NAME @ _VFS-STR-GET "
+                "CONSTANT _DR-NLEN CONSTANT _DR-NAME"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_DR-MOUNT-IOR 0=",
+                        "_DR-CLOCK-IOR 0=",
+                        "_DR-PROFILE-SIZE-IOR 0=",
+                        "_DR-PROFILE-BIND-IOR 0=",
+                        "_DR-PROFILE-USED _DR-PROFILE-SIZE =",
+                        "_DR-S-IOR 0=",
+                        "_DR-OP-IOR 0=",
+                        "_DR-NP-IOR 0=",
+                        "_DR-CD-IOR 0=",
+                        "_DR-OPEN-IOR 0=",
+                        "_DR-FD FD.INODE @ _DR-S =",
+                        "_DR-S IN.CHILD @ 0=",
+                        "_DR-NP IN.CHILD @ _DR-S =",
+                        "_DR-OP _DR-NP <>",
+                        "_DR-IOR 0=",
+                        "_DR-LAST-IOR 0=",
+                        "_DR-OLD 0=",
+                        "_DR-OLD-IOR VFS-IOR-REASON VFS-R-NOENT =",
+                        "_DR-NEW-IOR 0=",
+                        "_DR-NEW _DR-S =",
+                        "_DR-NEW D.VNODE @ _DR-VN =",
+                        "_DR-S IN.PARENT @ _DR-NP =",
+                        "_DR-V V.CWD @ _DR-S =",
+                        "_DR-NLEN 9 =",
+                        '_DR-NAME S" moved-dir" DROP 9 _EXT4-BYTES=?',
+                        "_DR-VN VN.TYPE @ VFS-T-DIR =",
+                        "_DR-VN VN.BID @ 33 =",
+                        "_DR-OLD-CHILDREN 0=",
+                        "_DR-VN VN.NLINK @ 2 =",
+                        "_DR-VN VN.DREFS @ _DR-OLD-DREFS =",
+                        "_DR-OLD-OPEN-REFS 0=",
+                        "_DR-VN VN.OPEN-REFS @ 1 =",
+                        "_DR-VN VN.SIZE-LO @ 1024 =",
+                        "_DR-VN VN.BLOCKS @ 2 =",
+                    ]
+                )
+                + ' IF ." EXT4-DIRECTORY-RENAME-NAMESPACE" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_DR-OLD-NLINK 2 =",
+                        "_DR-OLD-DREFS 1 =",
+                        "_DR-VN VN.NLINK @ _DR-OLD-NLINK =",
+                        "_DR-VN VN.ATIME @ _DR-OLD-ATIME =",
+                        "_DR-VN VN.ATIME-NS @ _DR-OLD-ATIME-NS =",
+                        "_DR-VN VN.MTIME @ _DR-OLD-MTIME =",
+                        "_DR-VN VN.MTIME-NS @ _DR-OLD-MTIME-NS =",
+                        f"_DR-VN VN.CTIME @ {seconds} =",
+                        f"_DR-VN VN.CTIME-NS @ {nanoseconds} =",
+                        "_DR-OLD-OP-NLINK 6 =",
+                        "_DR-OP-VN VN.NLINK @ 5 =",
+                        "_DR-OP-VN VN.ATIME @ _DR-OLD-OP-ATIME =",
+                        "_DR-OP-VN VN.ATIME-NS @ _DR-OLD-OP-ATIME-NS =",
+                        f"_DR-OP-VN VN.MTIME @ {seconds} =",
+                        f"_DR-OP-VN VN.MTIME-NS @ {nanoseconds} =",
+                        f"_DR-OP-VN VN.CTIME @ {seconds} =",
+                        f"_DR-OP-VN VN.CTIME-NS @ {nanoseconds} =",
+                        "_DR-OLD-NP-NLINK 2 =",
+                        "_DR-NP-VN VN.NLINK @ 3 =",
+                        "_DR-NP-VN VN.ATIME @ _DR-OLD-NP-ATIME =",
+                        "_DR-NP-VN VN.ATIME-NS @ _DR-OLD-NP-ATIME-NS =",
+                        f"_DR-NP-VN VN.MTIME @ {seconds} =",
+                        f"_DR-NP-VN VN.MTIME-NS @ {nanoseconds} =",
+                        f"_DR-NP-VN VN.CTIME @ {seconds} =",
+                        f"_DR-NP-VN VN.CTIME-NS @ {nanoseconds} =",
+                        "_DR-V V.ICOUNT @ _DR-OLD-ICOUNT =",
+                        "_DR-V V.VCOUNT @ _DR-OLD-VCOUNT =",
+                        "_DR-V V.IFREE @ _DR-OLD-IFREE =",
+                    ]
+                )
+                + ' IF ." EXT4-DIRECTORY-RENAME-CACHE" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_DR-CLOCK-CALLS @ 1 =",
+                        "_XU-META-COUNT @ 0=",
+                        "_DR-HOMES 5 =",
+                        "_DR-WRITER _DR-PROFILE-BASE =",
+                        "_DR-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_DR-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_DR-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                        "_DR-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                        "_DR-CTX _EXT4-C.J.COMMITTED + @ 0=",
+                        "_DR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                        "_DR-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_DR-V V.FLAGS @ VFS-F-RO AND 0=",
+                    ]
+                )
+                + ' IF ." EXT4-DIRECTORY-RENAME-TXN" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        (
+                            "_XR-OLD-DIR-AFTERIMAGE _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XR-NP-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XR-NP-DIR-AFTERIMAGE _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XR-CHILD-DIR-AFTERIMAGE _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-CHILD-DIR-SNAPSHOT "
+                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        "_XU-RENAME-SCAN @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-DIRECTORY-RENAME-SCRUB" THEN'
+            ),
+            "_DR-FD VFS-CLOSE? CONSTANT _DR-CLOSE-IOR",
+            "0 _DR-V VFS-UNMOUNT CONSTANT _DR-UNMOUNT-IOR",
+            (
+                "_DR-CLOSE-IOR 0= _DR-UNMOUNT-IOR 0= AND "
+                "_DR-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_DR-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-DIRECTORY-RENAME-UNMOUNTED" THEN'
+            ),
+        ],
+        capture_media=backing,
+    )
+    for marker in (
+        "EXT4-DIRECTORY-RENAME-NAMESPACE",
+        "EXT4-DIRECTORY-RENAME-CACHE",
+        "EXT4-DIRECTORY-RENAME-TXN",
+        "EXT4-DIRECTORY-RENAME-SCRUB",
+        "EXT4-DIRECTORY-RENAME-UNMOUNTED",
+    ):
+        _assert_emitted(output, marker)
+
+    for home, ordinal in zip(
+        (
+            source_home,
+            root_home,
+            root_directory_home,
+            landing_directory_home,
+            source_directory_home,
+        ),
+        range(19, 24),
+        strict=True,
+    ):
+        assert _write_ordinals_for_ext4_home(
+            trace, home, block_size=block_size
+        ) == (ordinal,)
+
+    final_superblock, final_source_inode, _ = _ext4_inode_record(
+        backing, source_number
+    )
+    _, final_landing_inode, _ = _ext4_inode_record(backing, landing_number)
+    _, final_root_inode, _ = _ext4_inode_record(backing, root_number)
+    assert final_superblock == _ext4_super_with_checksum(final_superblock)
+    assert final_source_inode == bytes(expected_source_inode)
+    assert final_landing_inode == bytes(expected_landing_inode)
+    assert final_root_inode == bytes(expected_root_inode)
+    for home, expected in (
+        (source_home, expected_inode_home),
+        (root_home, expected_root_home),
+        (root_directory_home, expected_root_directory),
+        (landing_directory_home, expected_landing_directory),
+        (source_directory_home, expected_source_directory),
+    ):
+        assert _read_ext4_home(
+            backing, home, block_size=block_size
+        ) == expected
+    assert struct.unpack_from("<H", final_source_inode, 0x1A)[0] == 2
+    assert struct.unpack_from("<H", final_root_inode, 0x1A)[0] == 5
+    assert struct.unpack_from("<H", final_landing_inode, 0x1A)[0] == 3
+    assert struct.unpack_from("<I", final_source_inode, 0x04)[0] == block_size
+    assert struct.unpack_from("<I", final_source_inode, 0x1C)[0] == 2
+    assert final_source_inode[0x28:0x64] == source_inode[0x28:0x64]
+    assert struct.unpack_from("<I", final_source_inode, 0x68)[0] == 0
+    assert struct.unpack_from("<I", final_landing_inode, 0x68)[0] == 0
+    assert struct.unpack_from("<I", final_root_inode, 0x68)[0] == 0
+    assert _ext4_block_allocation_state(
+        backing,
+        (
+            root_directory_home,
+            landing_directory_home,
+            source_directory_home,
+        ),
+    ) == {
+        root_directory_home: True,
+        landing_directory_home: True,
+        source_directory_home: True,
+    }
+    assert _ext4_inode_allocation_state(
+        backing, (source_number, landing_number)
+    ) == {source_number: True, landing_number: True}
+    final_free_blocks = struct.unpack_from("<I", final_superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", final_superblock, 0x158)[0] << 32
+    )
+    final_free_inodes = struct.unpack_from("<I", final_superblock, 0x10)[0] | (
+        struct.unpack_from("<I", final_superblock, 0x15C)[0] << 32
+    )
+    assert final_free_blocks == free_blocks_before
+    assert final_free_inodes == free_inodes_before
+    assert _ext4_group_counts(backing, 0) == group_counts_before
+    assert struct.unpack_from("<I", final_superblock, 0x60)[0] & 0x04 == 0
+    assert (
+        struct.unpack_from("<I", final_superblock, 0x64)[0] & 0x0001_0000
+        == 0
+    )
+    final_root_entries = _checked_linear_directory_entries(
+        final_superblock,
+        root_number,
+        root_generation,
+        expected_root_directory,
+    )
+    final_landing_entries = _checked_linear_directory_entries(
+        final_superblock,
+        landing_number,
+        landing_generation,
+        expected_landing_directory,
+    )
+    final_source_entries = _checked_linear_directory_entries(
+        final_superblock,
+        source_number,
+        source_generation,
+        expected_source_directory,
+    )
+    assert all(entry[4] != b"created-dir" for entry in final_root_entries)
+    assert [
+        entry for entry in final_landing_entries if entry[4] == b"moved-dir"
+    ] == [
+        (
+            insert_offset,
+            source_number,
+            block_size - 36,
+            2,
+            b"moved-dir",
+        )
+    ]
+    assert final_source_entries == (
+        (0, source_number, 12, 2, b"."),
+        (12, landing_number, block_size - 24, 2, b".."),
+    )
+
+    root_listing = subprocess.run(
+        [str(debugfs), "-R", "ls -l /", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    landing_listing = subprocess.run(
+        [str(debugfs), "-R", "ls -l /landing-dir", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    moved_stat = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "stat /landing-dir/moved-dir",
+            str(backing),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert root_listing.returncode == 0, (
+        root_listing.stdout + root_listing.stderr
+    )
+    assert landing_listing.returncode == 0, (
+        landing_listing.stdout + landing_listing.stderr
+    )
+    assert moved_stat.returncode == 0, moved_stat.stdout + moved_stat.stderr
+    assert "created-dir" not in root_listing.stdout
+    assert "landing-dir" in root_listing.stdout
+    assert "moved-dir" in landing_listing.stdout
+    assert "Inode: 33" in moved_stat.stdout
+    assert "Type: directory" in moved_stat.stdout
+    assert re.search(r"Links:\s+2\s+Blockcount:\s+2", moved_stat.stdout)
+    assert f"(0):{source_directory_home}" in moved_stat.stdout
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+    _, stable_trace, stable_sha256 = _staged_directory_rename_recovery_view(
+        backing,
+        stable,
+        expected_renamed=True,
+        source_atime_ms=source_atime_ms,
+        source_mtime_ms=source_mtime_ms,
+        source_ctime_ms=rename_epoch_ms,
+        root_atime_ms=root_atime_ms,
+        root_mtime_ms=rename_epoch_ms,
+        root_ctime_ms=rename_epoch_ms,
+        root_nlink=root_links - 1,
+        landing_atime_ms=landing_atime_ms,
+        landing_mtime_ms=rename_epoch_ms,
+        landing_ctime_ms=rename_epoch_ms,
+        landing_nlink=landing_links + 1,
+        expected_home_writes=0,
+        expected_replayed=False,
+        prefix="_DRS",
+        marker="EXT4-DIRECTORY-RENAME-STABLE",
+    )
+    assert stable_trace == ()
+    assert stable_sha256 == media_sha256
+    assert _sha256(stable) == stable_sha256
+    return {
+        "source": path,
+        "image": stable,
+        "trace": trace,
+        "media_sha256": media_sha256,
+        "block_size": block_size,
+        "source_number": source_number,
+        "landing_number": landing_number,
+        "root_number": root_number,
+        "source_home": source_home,
+        "root_home": root_home,
+        "root_directory_home": root_directory_home,
+        "landing_directory_home": landing_directory_home,
+        "source_directory_home": source_directory_home,
+        "source_atime_ms": source_atime_ms,
+        "source_mtime_ms": source_mtime_ms,
+        "source_ctime_ms": source_ctime_ms,
+        "root_atime_ms": root_atime_ms,
+        "root_mtime_ms": root_mtime_ms,
+        "root_ctime_ms": root_ctime_ms,
+        "landing_atime_ms": landing_atime_ms,
+        "landing_mtime_ms": landing_mtime_ms,
+        "landing_ctime_ms": landing_ctime_ms,
+        "root_links": root_links,
+        "landing_links": landing_links,
+        "rename_epoch_ms": rename_epoch_ms,
+        "free_blocks_before": free_blocks_before,
+        "free_inodes_before": free_inodes_before,
+        "group_counts_before": group_counts_before,
+        "original_inode_home": original_inode_home,
+        "original_root_home": original_root_home,
+        "original_root_directory": original_root_directory,
+        "original_landing_directory": original_landing_directory,
+        "original_source_directory": original_source_directory,
+        "expected_inode_home": expected_inode_home,
+        "expected_root_home": expected_root_home,
+        "expected_root_directory": expected_root_directory,
+        "expected_landing_directory": expected_landing_directory,
+        "expected_source_directory": expected_source_directory,
+    }
+
+
+def test_staged_vfs_rename_cross_parent_empty_directory_and_external_oracles(
+    staged_cross_parent_directory_rename_fixture: dict[str, object],
+) -> None:
+    image = staged_cross_parent_directory_rename_fixture["image"]
+    trace = staged_cross_parent_directory_rename_fixture["trace"]
+    assert isinstance(image, Path)
+    assert isinstance(trace, tuple)
+    assert image.is_file()
+    assert trace
+
+
+def test_staged_vfs_rename_cross_parent_empty_directory_refusals(
+    staged_directory_rename_preimage_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Short credit and directory-specific gates leave the image unchanged."""
+    case = staged_directory_rename_preimage_fixture
+    path = case["source"]
+    block_size = case["block_size"]
+    rename_epoch_ms = case["landing_epoch_ms"] + 1_000
+    homes = (
+        case["source_home"],
+        case["root_home"],
+        case["root_directory_home"],
+        case["landing_directory_home"],
+        case["source_directory_home"],
+    )
+    originals = (
+        case["original_inode_home"],
+        case["original_root_home"],
+        case["original_root_directory"],
+        case["original_landing_directory"],
+        case["original_source_directory"],
+    )
+    assert isinstance(path, Path)
+    assert isinstance(block_size, int)
+    assert isinstance(rename_epoch_ms, int)
+    assert all(isinstance(home, int) for home in homes)
+    assert all(isinstance(image, bytes) for image in originals)
+
+    short = tmp_path / "directory-rename-short-credit.img"
+    short_output, short_trace, _ = run_recovery_forth(
+        path,
+        short,
+        [
+            *_staged_directory_rename_attempt_forth(
+                "_DRG",
+                epoch_ms=rename_epoch_ms,
+                metadata_capacity=4,
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_DRG-MOUNT-IOR 0=",
+                        "_DRG-CLOCK-IOR 0=",
+                        "_DRG-PROFILE-SIZE-IOR 0=",
+                        "_DRG-PROFILE-BIND-IOR 0=",
+                        "_DRG-S-IOR 0=",
+                        "_DRG-OP-IOR 0=",
+                        "_DRG-NP-IOR 0=",
+                        "_DRG-OPEN-IOR 0=",
+                        "_DRG-FD FD.INODE @ _DRG-S =",
+                        "_DRG-IOR VFS-E-NOSPC =",
+                        "_DRG-LAST-IOR _DRG-IOR =",
+                        "_DRG-OLD-IOR 0=",
+                        "_DRG-OLD _DRG-S =",
+                        "_DRG-NEW 0=",
+                        "_DRG-NEW-IOR VFS-IOR-REASON VFS-R-NOENT =",
+                        "_DRG-S IN.PARENT @ _DRG-OP =",
+                        "_DRG-S IN.CHILD @ 0=",
+                        "_DRG-VN VN.NLINK @ _DRG-OLD-NLINK =",
+                        "_DRG-VN VN.DREFS @ _DRG-OLD-DREFS =",
+                        "_DRG-VN VN.OPEN-REFS @ 1 =",
+                        "_DRG-VN VN.ATIME @ _DRG-OLD-ATIME =",
+                        "_DRG-VN VN.MTIME @ _DRG-OLD-MTIME =",
+                        "_DRG-VN VN.CTIME @ _DRG-OLD-CTIME =",
+                        "_DRG-OP-VN VN.NLINK @ _DRG-OLD-OP-NLINK =",
+                        "_DRG-OP-VN VN.MTIME @ _DRG-OLD-OP-MTIME =",
+                        "_DRG-OP-VN VN.CTIME @ _DRG-OLD-OP-CTIME =",
+                        "_DRG-NP-VN VN.NLINK @ _DRG-OLD-NP-NLINK =",
+                        "_DRG-NP-VN VN.MTIME @ _DRG-OLD-NP-MTIME =",
+                        "_DRG-NP-VN VN.CTIME @ _DRG-OLD-NP-CTIME =",
+                        "_DRG-V V.ICOUNT @ _DRG-OLD-ICOUNT =",
+                        "_DRG-V V.VCOUNT @ _DRG-OLD-VCOUNT =",
+                        "_DRG-V V.STR-PTR @ _DRG-OLD-STR-PTR =",
+                        "_DRG-V V.IFREE @ _DRG-OLD-IFREE =",
+                        "_DRG-CLOCK-CALLS @ 1 =",
+                        "_DRG-HOMES 0=",
+                        "_DRG-WRITER _DRG-PROFILE-BASE =",
+                        "_DRG-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        (
+                            "_XR-CHILD-DIR-AFTERIMAGE _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-DIRECTORY-RENAME-SHORT-CREDIT" THEN'
+            ),
+            "_DRG-FD VFS-CLOSE? CONSTANT _DRG-CLOSE-IOR",
+            "0 _DRG-V VFS-UNMOUNT CONSTANT _DRG-UNMOUNT-IOR",
+            (
+                "_DRG-CLOSE-IOR 0= _DRG-UNMOUNT-IOR 0= AND "
+                "_DRG-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_DRG-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-DIRECTORY-RENAME-SHORT-CREDIT-UNMOUNTED" THEN'
+            ),
+        ],
+        capture_media=short,
+    )
+    _assert_emitted(short_output, "EXT4-DIRECTORY-RENAME-SHORT-CREDIT")
+    _assert_emitted(
+        short_output, "EXT4-DIRECTORY-RENAME-SHORT-CREDIT-UNMOUNTED"
+    )
+    assert short_trace == ()
+    for home, expected in zip(homes, originals, strict=True):
+        assert _read_ext4_home(
+            short, home, block_size=block_size
+        ) == expected
+
+    edges = tmp_path / "directory-rename-edge-refusals.img"
+    edge_output, edge_trace, _ = run_recovery_forth(
+        path,
+        edges,
+        [
+            "VARIABLE _DRE-CLOCK-CALLS",
+            (
+                ": _DRE-NOW ( context -- epoch-ms ior ) DROP "
+                f"1 _DRE-CLOCK-CALLS +! {rename_epoch_ms} 0 ;"
+            ),
+            "T-ARENA CONSTANT _DRE-ARENA",
+            (
+                "_DRE-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _DRE-MOUNT-IOR CONSTANT _DRE-V"
+            ),
+            "_DRE-V _EXT4-CTX CONSTANT _DRE-CTX",
+            (
+                "' _DRE-NOW 0 _DRE-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _DRE-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_DRE-PROFILE", "_DRE-V", 5, 0, 0
+            ),
+            (
+                'S" /created-dir" _DRE-V VFS-RESOLVE? '
+                "CONSTANT _DRE-S-IOR CONSTANT _DRE-S"
+            ),
+            (
+                'S" /" _DRE-V VFS-RESOLVE? '
+                "CONSTANT _DRE-OP-IOR CONSTANT _DRE-OP"
+            ),
+            (
+                'S" /landing-dir" _DRE-V VFS-RESOLVE? '
+                "CONSTANT _DRE-NP-IOR CONSTANT _DRE-NP"
+            ),
+            "_DRE-S D.VNODE @ CONSTANT _DRE-VN",
+            "_DRE-OP D.VNODE @ CONSTANT _DRE-OP-VN",
+            "_DRE-NP D.VNODE @ CONSTANT _DRE-NP-VN",
+            "_DRE-V V.ICOUNT @ CONSTANT _DRE-ICOUNT",
+            "_DRE-V V.VCOUNT @ CONSTANT _DRE-VCOUNT",
+            "_DRE-V V.IFREE @ CONSTANT _DRE-IFREE",
+            "0 _DRE-VN VN.DREFS !",
+            (
+                'S" zero-dref" _DRE-S _DRE-NP '
+                "VFS-RN-NOREPLACE _DRE-V VFS-RENAME-AT "
+                "CONSTANT _DRE-ZERO-DREF-IOR"
+            ),
+            "_DRE-V V.LAST-IOR @ CONSTANT _DRE-ZERO-DREF-LAST",
+            "2 _DRE-VN VN.DREFS !",
+            (
+                'S" aliased-dir" _DRE-S _DRE-NP '
+                "VFS-RN-NOREPLACE _DRE-V VFS-RENAME-AT "
+                "CONSTANT _DRE-TWO-DREF-IOR"
+            ),
+            "_DRE-V V.LAST-IOR @ CONSTANT _DRE-TWO-DREF-LAST",
+            "1 _DRE-VN VN.DREFS !",
+            (
+                'S" local-dir" _DRE-S _DRE-OP '
+                "VFS-RN-NOREPLACE _DRE-V VFS-RENAME-AT "
+                "CONSTANT _DRE-SAME-IOR"
+            ),
+            "_DRE-V V.LAST-IOR @ CONSTANT _DRE-SAME-LAST",
+            (
+                'S" landing-dir" _DRE-S _DRE-OP '
+                "VFS-RN-NOREPLACE _DRE-V VFS-RENAME-AT "
+                "CONSTANT _DRE-EXISTS-IOR"
+            ),
+            "_DRE-V V.LAST-IOR @ CONSTANT _DRE-EXISTS-LAST",
+            (
+                'S" loop" _DRE-S _DRE-S '
+                "VFS-RN-NOREPLACE _DRE-V VFS-RENAME-AT "
+                "CONSTANT _DRE-CYCLE-IOR"
+            ),
+            "_DRE-V V.LAST-IOR @ CONSTANT _DRE-CYCLE-LAST",
+            "_DRE-CTX _EXT4-C.J.WRITER + @ CONSTANT _DRE-WRITER",
+            (
+                "_DRE-CTX _EXT4-C.J.HOME-WRITES + @ "
+                "CONSTANT _DRE-HOMES"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_DRE-MOUNT-IOR 0=",
+                        "_DRE-CLOCK-IOR 0=",
+                        "_DRE-PROFILE-SIZE-IOR 0=",
+                        "_DRE-PROFILE-BIND-IOR 0=",
+                        "_DRE-S-IOR 0=",
+                        "_DRE-OP-IOR 0=",
+                        "_DRE-NP-IOR 0=",
+                        "_DRE-ZERO-DREF-IOR VFS-E-CONFLICT =",
+                        "_DRE-ZERO-DREF-LAST _DRE-ZERO-DREF-IOR =",
+                        "_DRE-TWO-DREF-IOR VFS-E-CONFLICT =",
+                        "_DRE-TWO-DREF-LAST _DRE-TWO-DREF-IOR =",
+                        (
+                            "_DRE-SAME-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        "_DRE-SAME-LAST _DRE-SAME-IOR =",
+                        "_DRE-EXISTS-IOR VFS-E-EXISTS =",
+                        "_DRE-EXISTS-LAST _DRE-SAME-IOR =",
+                        "_DRE-CYCLE-IOR VFS-E-INVALID =",
+                        "_DRE-CYCLE-LAST _DRE-SAME-IOR =",
+                        "_DRE-CLOCK-CALLS @ 0=",
+                        "_DRE-S IN.PARENT @ _DRE-OP =",
+                        "_DRE-S IN.CHILD @ 0=",
+                        "_DRE-NP IN.CHILD @ 0=",
+                        "_DRE-VN VN.NLINK @ 2 =",
+                        "_DRE-VN VN.DREFS @ 1 =",
+                        "_DRE-VN VN.OPEN-REFS @ 0=",
+                        "_DRE-OP-VN VN.NLINK @ 6 =",
+                        "_DRE-NP-VN VN.NLINK @ 2 =",
+                        "_DRE-V V.ICOUNT @ _DRE-ICOUNT =",
+                        "_DRE-V V.VCOUNT @ _DRE-VCOUNT =",
+                        "_DRE-V V.IFREE @ _DRE-IFREE =",
+                        "_DRE-HOMES 0=",
+                        "_DRE-WRITER _DRE-PROFILE-BASE =",
+                        "_DRE-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-DIRECTORY-RENAME-EDGE-REFUSALS" THEN'
+            ),
+            "0 _DRE-V VFS-UNMOUNT CONSTANT _DRE-UNMOUNT-IOR",
+            (
+                "_DRE-UNMOUNT-IOR 0= "
+                "_DRE-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_DRE-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-DIRECTORY-RENAME-EDGE-UNMOUNTED" THEN'
+            ),
+        ],
+        capture_media=edges,
+    )
+    _assert_emitted(edge_output, "EXT4-DIRECTORY-RENAME-EDGE-REFUSALS")
+    _assert_emitted(edge_output, "EXT4-DIRECTORY-RENAME-EDGE-UNMOUNTED")
+    assert edge_trace == ()
+    for home, expected in zip(homes, originals, strict=True):
+        assert _read_ext4_home(
+            edges, home, block_size=block_size
+        ) == expected
+
+
+def test_staged_vfs_rename_cross_parent_empty_directory_w7_rolls_back(
+    staged_cross_parent_directory_rename_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A torn W7 descriptor retains the old directory topology."""
+    case = staged_cross_parent_directory_rename_fixture
+    path = case["source"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    rename_epoch_ms = case["rename_epoch_ms"]
+    source_atime_ms = case["source_atime_ms"]
+    source_mtime_ms = case["source_mtime_ms"]
+    source_ctime_ms = case["source_ctime_ms"]
+    root_atime_ms = case["root_atime_ms"]
+    root_mtime_ms = case["root_mtime_ms"]
+    root_ctime_ms = case["root_ctime_ms"]
+    landing_atime_ms = case["landing_atime_ms"]
+    landing_mtime_ms = case["landing_mtime_ms"]
+    landing_ctime_ms = case["landing_ctime_ms"]
+    root_links = case["root_links"]
+    landing_links = case["landing_links"]
+    homes = (
+        case["source_home"],
+        case["root_home"],
+        case["root_directory_home"],
+        case["landing_directory_home"],
+        case["source_directory_home"],
+    )
+    originals = (
+        case["original_inode_home"],
+        case["original_root_home"],
+        case["original_root_directory"],
+        case["original_landing_directory"],
+        case["original_source_directory"],
+    )
+    assert isinstance(path, Path)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(rename_epoch_ms, int)
+    assert all(isinstance(value, int) for value in homes)
+    assert all(isinstance(value, bytes) for value in originals)
+    descriptor_ordinal = 7
+    descriptor_event = _trace_event_index_for_ordinal(
+        success_trace, "write", descriptor_ordinal
+    )
+    faulted = tmp_path / "directory-rename-w7-faulted.img"
+    recovered = tmp_path / "directory-rename-w7-recovered.img"
+    stable = tmp_path / "directory-rename-w7-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                *_staged_directory_rename_attempt_forth(
+                    "_DRY", epoch_ms=rename_epoch_ms
+                ),
+                (
+                    _forth_conjunction(
+                        [
+                            "_DRY-MOUNT-IOR 0=",
+                            "_DRY-CLOCK-IOR 0=",
+                            "_DRY-PROFILE-BIND-IOR 0=",
+                            "_DRY-S-IOR 0=",
+                            "_DRY-OP-IOR 0=",
+                            "_DRY-NP-IOR 0=",
+                            "_DRY-OPEN-IOR 0=",
+                            "_DRY-FD FD.INODE @ _DRY-S =",
+                            "_DRY-IOR VFS-IOR-DOMAIN VFS-IOR-D-VOLUME =",
+                            "_DRY-IOR VFS-IOR-REASON VFS-R-IO =",
+                            (
+                                "_DRY-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-PARTIAL AND 0<>"
+                            ),
+                            "_DRY-LAST-IOR _DRY-IOR =",
+                            "_DRY-OLD-IOR 0=",
+                            "_DRY-OLD _DRY-S =",
+                            "_DRY-NEW 0=",
+                            (
+                                "_DRY-NEW-IOR VFS-IOR-REASON "
+                                "VFS-R-NOENT ="
+                            ),
+                            "_DRY-S IN.PARENT @ _DRY-OP =",
+                            "_DRY-S IN.CHILD @ 0=",
+                            "_DRY-NP IN.CHILD @ 0=",
+                            "_DRY-VN VN.NLINK @ _DRY-OLD-NLINK =",
+                            "_DRY-VN VN.DREFS @ _DRY-OLD-DREFS =",
+                            "_DRY-VN VN.OPEN-REFS @ 1 =",
+                            "_DRY-VN VN.ATIME @ _DRY-OLD-ATIME =",
+                            "_DRY-VN VN.MTIME @ _DRY-OLD-MTIME =",
+                            "_DRY-VN VN.CTIME @ _DRY-OLD-CTIME =",
+                            (
+                                "_DRY-OP-VN VN.NLINK @ "
+                                "_DRY-OLD-OP-NLINK ="
+                            ),
+                            (
+                                "_DRY-OP-VN VN.MTIME @ "
+                                "_DRY-OLD-OP-MTIME ="
+                            ),
+                            (
+                                "_DRY-OP-VN VN.CTIME @ "
+                                "_DRY-OLD-OP-CTIME ="
+                            ),
+                            (
+                                "_DRY-NP-VN VN.NLINK @ "
+                                "_DRY-OLD-NP-NLINK ="
+                            ),
+                            (
+                                "_DRY-NP-VN VN.MTIME @ "
+                                "_DRY-OLD-NP-MTIME ="
+                            ),
+                            (
+                                "_DRY-NP-VN VN.CTIME @ "
+                                "_DRY-OLD-NP-CTIME ="
+                            ),
+                            "_DRY-V V.ICOUNT @ _DRY-OLD-ICOUNT =",
+                            "_DRY-V V.VCOUNT @ _DRY-OLD-VCOUNT =",
+                            "_DRY-V V.STR-PTR @ _DRY-OLD-STR-PTR =",
+                            "_DRY-V V.IFREE @ _DRY-OLD-IFREE =",
+                            "_DRY-CLOCK-CALLS @ 1 =",
+                            "_DRY-HOMES 0=",
+                            (
+                                "_DRY-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-FAULTED ="
+                            ),
+                            (
+                                "_DRY-WRITER _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-DESCRIPTOR ="
+                            ),
+                            (
+                                "_DRY-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                                "5 ="
+                            ),
+                            "_DRY-CTX _EXT4-C.J.COMMITTED + @ 0=",
+                            "_DRY-CTX _EXT4-C.RECOVERY + @ 0<>",
+                            "_DRY-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "_DRY-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            (
+                                "_XR-CHILD-DIR-AFTERIMAGE "
+                                "_EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?"
+                            ),
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        ]
+                    )
+                    + ' IF ." EXT4-DIRECTORY-RENAME-W7-ROLLBACK" THEN'
+                ),
+            ],
+            write_faults_by_ordinal={
+                descriptor_ordinal: {
+                    "stage": "media",
+                    "sector_index": 0,
+                    "byte_index": 200,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-DIRECTORY-RENAME-W7-ROLLBACK")
+        assert failed_trace == success_trace[: descriptor_event + 1]
+        for home, expected in zip(homes, originals, strict=True):
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == expected
+
+        _, recovery_trace, recovery_sha256 = (
+            _staged_directory_rename_recovery_view(
+                faulted,
+                recovered,
+                expected_renamed=False,
+                source_atime_ms=source_atime_ms,
+                source_mtime_ms=source_mtime_ms,
+                source_ctime_ms=source_ctime_ms,
+                root_atime_ms=root_atime_ms,
+                root_mtime_ms=root_mtime_ms,
+                root_ctime_ms=root_ctime_ms,
+                root_nlink=root_links,
+                landing_atime_ms=landing_atime_ms,
+                landing_mtime_ms=landing_mtime_ms,
+                landing_ctime_ms=landing_ctime_ms,
+                landing_nlink=landing_links,
+                expected_home_writes=0,
+                expected_replayed=True,
+                prefix="_DRYR",
+                marker="EXT4-DIRECTORY-RENAME-W7-RECOVERED",
+            )
+        )
+        assert recovery_trace
+        for home, expected in zip(homes, originals, strict=True):
+            assert _read_ext4_home(
+                recovered, home, block_size=block_size
+            ) == expected
+        _assert_e2fsck_clean(recovered, jbd2_toolchain)
+
+        _, stable_trace, stable_sha256 = (
+            _staged_directory_rename_recovery_view(
+                recovered,
+                stable,
+                expected_renamed=False,
+                source_atime_ms=source_atime_ms,
+                source_mtime_ms=source_mtime_ms,
+                source_ctime_ms=source_ctime_ms,
+                root_atime_ms=root_atime_ms,
+                root_mtime_ms=root_mtime_ms,
+                root_ctime_ms=root_ctime_ms,
+                root_nlink=root_links,
+                landing_atime_ms=landing_atime_ms,
+                landing_mtime_ms=landing_mtime_ms,
+                landing_ctime_ms=landing_ctime_ms,
+                landing_nlink=landing_links,
+                expected_home_writes=0,
+                expected_replayed=False,
+                prefix="_DRYS",
+                marker="EXT4-DIRECTORY-RENAME-W7-STABLE",
+            )
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
+def test_staged_vfs_rename_cross_parent_empty_directory_w23_replays_child(
+    staged_cross_parent_directory_rename_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A committed W23 child-dir tear replays all five metadata homes."""
+    case = staged_cross_parent_directory_rename_fixture
+    path = case["source"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    rename_epoch_ms = case["rename_epoch_ms"]
+    source_atime_ms = case["source_atime_ms"]
+    source_mtime_ms = case["source_mtime_ms"]
+    root_atime_ms = case["root_atime_ms"]
+    landing_atime_ms = case["landing_atime_ms"]
+    root_links = case["root_links"]
+    landing_links = case["landing_links"]
+    homes = (
+        case["source_home"],
+        case["root_home"],
+        case["root_directory_home"],
+        case["landing_directory_home"],
+        case["source_directory_home"],
+    )
+    originals = (
+        case["original_inode_home"],
+        case["original_root_home"],
+        case["original_root_directory"],
+        case["original_landing_directory"],
+        case["original_source_directory"],
+    )
+    expected = (
+        case["expected_inode_home"],
+        case["expected_root_home"],
+        case["expected_root_directory"],
+        case["expected_landing_directory"],
+        case["expected_source_directory"],
+    )
+    free_blocks_before = case["free_blocks_before"]
+    free_inodes_before = case["free_inodes_before"]
+    group_counts_before = case["group_counts_before"]
+    assert isinstance(path, Path)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(rename_epoch_ms, int)
+    assert all(isinstance(value, int) for value in homes)
+    assert all(isinstance(value, bytes) for value in originals)
+    assert all(isinstance(value, bytes) for value in expected)
+    final_home_ordinal = 23
+    final_home_event = _trace_event_index_for_ordinal(
+        success_trace, "write", final_home_ordinal
+    )
+    tear_absolute = 13
+    tear_sector, tear_offset = divmod(tear_absolute, 512)
+    expected_torn_source_directory = (
+        expected[-1][:tear_absolute] + originals[-1][tear_absolute:]
+    )
+    assert expected_torn_source_directory not in {originals[-1], expected[-1]}
+    seconds, milliseconds = divmod(rename_epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    faulted = tmp_path / "directory-rename-w23-faulted.img"
+    recovered = tmp_path / "directory-rename-w23-recovered.img"
+    stable = tmp_path / "directory-rename-w23-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                *_staged_directory_rename_attempt_forth(
+                    "_DRZ", epoch_ms=rename_epoch_ms
+                ),
+                (
+                    _forth_conjunction(
+                        [
+                            "_DRZ-MOUNT-IOR 0=",
+                            "_DRZ-CLOCK-IOR 0=",
+                            "_DRZ-PROFILE-BIND-IOR 0=",
+                            "_DRZ-OPEN-IOR 0=",
+                            "_DRZ-FD FD.INODE @ _DRZ-S =",
+                            "_DRZ-IOR 0=",
+                            (
+                                "_DRZ-LAST-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-VOLUME ="
+                            ),
+                            (
+                                "_DRZ-LAST-IOR VFS-IOR-REASON "
+                                "VFS-R-IO ="
+                            ),
+                            (
+                                "_DRZ-LAST-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-PARTIAL AND 0<>"
+                            ),
+                            "_DRZ-OLD 0=",
+                            (
+                                "_DRZ-OLD-IOR VFS-IOR-REASON "
+                                "VFS-R-NOENT ="
+                            ),
+                            "_DRZ-NEW-IOR 0=",
+                            "_DRZ-NEW _DRZ-S =",
+                            "_DRZ-S IN.PARENT @ _DRZ-NP =",
+                            "_DRZ-S IN.CHILD @ 0=",
+                            "_DRZ-NP IN.CHILD @ _DRZ-S =",
+                            "_DRZ-VN VN.NLINK @ 2 =",
+                            "_DRZ-VN VN.DREFS @ _DRZ-OLD-DREFS =",
+                            "_DRZ-VN VN.OPEN-REFS @ 1 =",
+                            "_DRZ-VN VN.ATIME @ _DRZ-OLD-ATIME =",
+                            "_DRZ-VN VN.MTIME @ _DRZ-OLD-MTIME =",
+                            f"_DRZ-VN VN.CTIME @ {seconds} =",
+                            f"_DRZ-VN VN.CTIME-NS @ {nanoseconds} =",
+                            "_DRZ-OP-VN VN.NLINK @ 5 =",
+                            f"_DRZ-OP-VN VN.MTIME @ {seconds} =",
+                            f"_DRZ-OP-VN VN.CTIME @ {seconds} =",
+                            "_DRZ-NP-VN VN.NLINK @ 3 =",
+                            f"_DRZ-NP-VN VN.MTIME @ {seconds} =",
+                            f"_DRZ-NP-VN VN.CTIME @ {seconds} =",
+                            "_DRZ-V V.ICOUNT @ _DRZ-OLD-ICOUNT =",
+                            "_DRZ-V V.VCOUNT @ _DRZ-OLD-VCOUNT =",
+                            "_DRZ-V V.IFREE @ _DRZ-OLD-IFREE =",
+                            "_DRZ-CLOCK-CALLS @ 1 =",
+                            "_DRZ-HOMES 4 =",
+                            (
+                                "_DRZ-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-FAULTED ="
+                            ),
+                            (
+                                "_DRZ-WRITER _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-CHECKPOINT-HOME ="
+                            ),
+                            (
+                                "_DRZ-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                                "5 ="
+                            ),
+                            "_DRZ-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                            "_DRZ-CTX _EXT4-C.RECOVERY + @ 0<>",
+                            "_DRZ-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "_DRZ-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                            (
+                                "_XR-CHILD-DIR-AFTERIMAGE "
+                                "_EXT4-MAX-BLOCK _EXT4-BYTES-ZERO?"
+                            ),
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                        ]
+                    )
+                    + ' IF ." EXT4-DIRECTORY-RENAME-W23-PUBLISHED" THEN'
+                ),
+            ],
+            write_faults_by_ordinal={
+                final_home_ordinal: {
+                    "stage": "media",
+                    "sector_index": tear_sector,
+                    "byte_index": tear_offset,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+        )
+        _assert_emitted(output, "EXT4-DIRECTORY-RENAME-W23-PUBLISHED")
+        assert failed_trace == success_trace[: final_home_event + 1]
+        for home, image in zip(homes[:-1], expected[:-1], strict=True):
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == image
+        assert _read_ext4_home(
+            faulted, homes[-1], block_size=block_size
+        ) == expected_torn_source_directory
+
+        _, recovery_trace, recovery_sha256 = (
+            _staged_directory_rename_recovery_view(
+                faulted,
+                recovered,
+                expected_renamed=True,
+                source_atime_ms=source_atime_ms,
+                source_mtime_ms=source_mtime_ms,
+                source_ctime_ms=rename_epoch_ms,
+                root_atime_ms=root_atime_ms,
+                root_mtime_ms=rename_epoch_ms,
+                root_ctime_ms=rename_epoch_ms,
+                root_nlink=root_links - 1,
+                landing_atime_ms=landing_atime_ms,
+                landing_mtime_ms=rename_epoch_ms,
+                landing_ctime_ms=rename_epoch_ms,
+                landing_nlink=landing_links + 1,
+                expected_home_writes=5,
+                expected_replayed=True,
+                prefix="_DRZR",
+                marker="EXT4-DIRECTORY-RENAME-W23-RECOVERED",
+            )
+        )
+        for home, image in zip(homes, expected, strict=True):
+            assert len(
+                _write_ordinals_for_ext4_home(
+                    recovery_trace, home, block_size=block_size
+                )
+            ) == 1
+            assert _read_ext4_home(
+                recovered, home, block_size=block_size
+            ) == image
+        recovered_superblock, _, _ = _ext4_inode_record(recovered, 33)
+        recovered_free_blocks = struct.unpack_from(
+            "<I", recovered_superblock, 0x0C
+        )[0] | (
+            struct.unpack_from("<I", recovered_superblock, 0x158)[0] << 32
+        )
+        recovered_free_inodes = struct.unpack_from(
+            "<I", recovered_superblock, 0x10
+        )[0] | (
+            struct.unpack_from("<I", recovered_superblock, 0x15C)[0] << 32
+        )
+        assert recovered_free_blocks == free_blocks_before
+        assert recovered_free_inodes == free_inodes_before
+        assert _ext4_group_counts(recovered, 0) == group_counts_before
+        _assert_e2fsck_clean(recovered, jbd2_toolchain)
+
+        _, stable_trace, stable_sha256 = (
+            _staged_directory_rename_recovery_view(
+                recovered,
+                stable,
+                expected_renamed=True,
+                source_atime_ms=source_atime_ms,
+                source_mtime_ms=source_mtime_ms,
+                source_ctime_ms=rename_epoch_ms,
+                root_atime_ms=root_atime_ms,
+                root_mtime_ms=rename_epoch_ms,
+                root_ctime_ms=rename_epoch_ms,
+                root_nlink=root_links - 1,
+                landing_atime_ms=landing_atime_ms,
+                landing_mtime_ms=rename_epoch_ms,
+                landing_ctime_ms=rename_epoch_ms,
+                landing_nlink=landing_links + 1,
+                expected_home_writes=0,
+                expected_replayed=False,
+                prefix="_DRZS",
+                marker="EXT4-DIRECTORY-RENAME-W23-STABLE",
+            )
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
+def test_staged_vfs_mkdir_then_directory_rename_in_one_write_session(
+    staged_public_mkdir_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """MKDIR then RENAME composes without a remount or cache rebuild."""
+    path = staged_public_mkdir_fixture["stable_image"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(path, Path)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+    superblock, source_inode, _ = _ext4_inode_record(path, 33)
+    _, root_inode, _ = _ext4_inode_record(path, 2)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    source_directory_home = _extent_root_physical(source_inode, 0)
+    landing_directory_home = 1377
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", superblock, 0x158)[0] << 32
+    )
+    free_inodes_before = struct.unpack_from("<I", superblock, 0x10)[0] | (
+        struct.unpack_from("<I", superblock, 0x15C)[0] << 32
+    )
+    group_counts_before = _ext4_group_counts(path, 0)
+    root_links_before = struct.unpack_from("<H", root_inode, 0x1A)[0]
+    landing_epoch_ms = _STAGED_APPEND_EPOCH_MS + 1_000
+    rename_epoch_ms = landing_epoch_ms + 1_000
+    rename_seconds, rename_milliseconds = divmod(rename_epoch_ms, 1000)
+    rename_nanoseconds = rename_milliseconds * 1_000_000
+    assert block_size == 1024
+    assert source_directory_home == 1364
+    assert root_links_before == 5
+
+    backing = tmp_path / "mkdir-then-directory-rename.img"
+    output, trace, _ = run_recovery_forth(
+        path,
+        backing,
+        [
+            "VARIABLE _DRC-CLOCK-CALLS",
+            (
+                ": _DRC-NOW ( context -- epoch-ms ior ) DROP "
+                "1 _DRC-CLOCK-CALLS +! _DRC-CLOCK-CALLS @ 1 = IF "
+                f"{landing_epoch_ms} ELSE {rename_epoch_ms} THEN 0 ;"
+            ),
+            "CREATE _DRC-STAT VFS-STATFS-SIZE ALLOT",
+            "T-ARENA CONSTANT _DRC-ARENA",
+            (
+                "_DRC-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _DRC-MOUNT-IOR CONSTANT _DRC-V"
+            ),
+            "_DRC-V _EXT4-CTX CONSTANT _DRC-CTX",
+            (
+                "' _DRC-NOW 0 _DRC-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _DRC-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_DRC-PROFILE", "_DRC-V", 8, 0, 0
+            ),
+            (
+                "_DRC-V V.ROOT @ _DRC-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _DRC-ROOT-LOAD-IOR"
+            ),
+            (
+                'S" /created-dir" _DRC-V VFS-RESOLVE? '
+                "CONSTANT _DRC-S-IOR CONSTANT _DRC-S"
+            ),
+            "_DRC-V V.ROOT @ CONSTANT _DRC-ROOT",
+            "_DRC-ROOT D.VNODE @ CONSTANT _DRC-ROOT-VN",
+            "_DRC-S D.VNODE @ CONSTANT _DRC-VN",
+            (
+                "_DRC-VN VN.FLAGS @ VFS-IF-CHILDREN AND "
+                "CONSTANT _DRC-S-CHILDREN-BEFORE"
+            ),
+            "_DRC-V V.ICOUNT @ CONSTANT _DRC-ICOUNT-BEFORE",
+            "_DRC-V V.VCOUNT @ CONSTANT _DRC-VCOUNT-BEFORE",
+            (
+                "_DRC-STAT VFS-STATFS-SIZE _DRC-V VFS-STATFS "
+                "CONSTANT _DRC-STAT-BEFORE-IOR"
+            ),
+            "_DRC-STAT VSF.BFREE @ CONSTANT _DRC-BFREE-BEFORE",
+            "_DRC-STAT VSF.FFREE @ CONSTANT _DRC-FFREE-BEFORE",
+            (
+                'S" landing-dir" _DRC-V VFS-MKDIR '
+                "CONSTANT _DRC-MKDIR-IOR"
+            ),
+            "_XC-DATA-BLOCK @ CONSTANT _DRC-LANDING-BLOCK",
+            (
+                'S" /landing-dir" _DRC-V VFS-RESOLVE? '
+                "CONSTANT _DRC-NP-IOR CONSTANT _DRC-NP"
+            ),
+            "_DRC-NP D.VNODE @ CONSTANT _DRC-NP-VN",
+            (
+                'S" /created-dir" VFS-FF-READ _DRC-V VFS-OPEN? '
+                "CONSTANT _DRC-OPEN-IOR CONSTANT _DRC-FD"
+            ),
+            (
+                'S" moved-dir" _DRC-S _DRC-NP '
+                "VFS-RN-NOREPLACE _DRC-V VFS-RENAME-AT "
+                "CONSTANT _DRC-RENAME-IOR"
+            ),
+            "_DRC-V V.LAST-IOR @ CONSTANT _DRC-LAST-IOR",
+            (
+                'S" /created-dir" _DRC-V VFS-RESOLVE? '
+                "CONSTANT _DRC-OLD-IOR CONSTANT _DRC-OLD"
+            ),
+            (
+                'S" /landing-dir/moved-dir" _DRC-V VFS-RESOLVE? '
+                "CONSTANT _DRC-NEW-IOR CONSTANT _DRC-NEW"
+            ),
+            (
+                "_DRC-STAT VFS-STATFS-SIZE _DRC-V VFS-STATFS "
+                "CONSTANT _DRC-STAT-AFTER-IOR"
+            ),
+            "_DRC-STAT VSF.BFREE @ CONSTANT _DRC-BFREE-AFTER",
+            "_DRC-STAT VSF.FFREE @ CONSTANT _DRC-FFREE-AFTER",
+            "_DRC-CTX _EXT4-C.J.WRITER + @ CONSTANT _DRC-WRITER",
+            (
+                "_DRC-CTX _EXT4-C.J.HOME-WRITES + @ "
+                "CONSTANT _DRC-HOMES"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_DRC-MOUNT-IOR 0=",
+                        "_DRC-CLOCK-IOR 0=",
+                        "_DRC-PROFILE-SIZE-IOR 0=",
+                        "_DRC-PROFILE-BIND-IOR 0=",
+                        "_DRC-ROOT-LOAD-IOR 0=",
+                        "_DRC-S-IOR 0=",
+                        "_DRC-S-CHILDREN-BEFORE 0=",
+                        "_DRC-S IN.CHILD @ 0=",
+                        "_DRC-MKDIR-IOR 0=",
+                        "_DRC-LANDING-BLOCK 1377 =",
+                        "_DRC-NP-IOR 0=",
+                        "_DRC-OPEN-IOR 0=",
+                        "_DRC-FD FD.INODE @ _DRC-S =",
+                        "_DRC-RENAME-IOR 0=",
+                        "_DRC-LAST-IOR 0=",
+                        "_DRC-OLD 0=",
+                        "_DRC-OLD-IOR VFS-IOR-REASON VFS-R-NOENT =",
+                        "_DRC-NEW-IOR 0=",
+                        "_DRC-NEW _DRC-S =",
+                        "_DRC-S IN.PARENT @ _DRC-NP =",
+                        "_DRC-NP IN.CHILD @ _DRC-S =",
+                        "_DRC-VN VN.NLINK @ 2 =",
+                        "_DRC-VN VN.OPEN-REFS @ 1 =",
+                        f"_DRC-VN VN.CTIME @ {rename_seconds} =",
+                        (
+                            "_DRC-VN VN.CTIME-NS @ "
+                            f"{rename_nanoseconds} ="
+                        ),
+                        "_DRC-ROOT-VN VN.NLINK @ 5 =",
+                        f"_DRC-ROOT-VN VN.MTIME @ {rename_seconds} =",
+                        f"_DRC-ROOT-VN VN.CTIME @ {rename_seconds} =",
+                        "_DRC-NP-VN VN.NLINK @ 3 =",
+                        f"_DRC-NP-VN VN.MTIME @ {rename_seconds} =",
+                        f"_DRC-NP-VN VN.CTIME @ {rename_seconds} =",
+                        "_DRC-CLOCK-CALLS @ 2 =",
+                        "_DRC-STAT-BEFORE-IOR 0=",
+                        "_DRC-STAT-AFTER-IOR 0=",
+                        "_DRC-BFREE-AFTER _DRC-BFREE-BEFORE 1- =",
+                        "_DRC-FFREE-AFTER _DRC-FFREE-BEFORE 1- =",
+                        "_DRC-V V.ICOUNT @ _DRC-ICOUNT-BEFORE 1+ =",
+                        "_DRC-V V.VCOUNT @ _DRC-VCOUNT-BEFORE 1+ =",
+                        "_DRC-HOMES 5 =",
+                        "_DRC-WRITER _DRC-PROFILE-BASE =",
+                        "_DRC-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_DRC-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_DRC-V V.FLAGS @ VFS-F-RO AND 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-MKDIR-THEN-DIRECTORY-RENAME" THEN'
+            ),
+            "_DRC-FD VFS-CLOSE? CONSTANT _DRC-CLOSE-IOR",
+            "0 _DRC-V VFS-UNMOUNT CONSTANT _DRC-UNMOUNT-IOR",
+            (
+                "_DRC-CLOSE-IOR 0= _DRC-UNMOUNT-IOR 0= AND "
+                "_DRC-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_DRC-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-MKDIR-THEN-DIRECTORY-RENAME-UNMOUNTED" THEN'
+            ),
+        ],
+        capture_media=backing,
+        max_steps=2_000_000_000,
+    )
+    _assert_emitted(output, "EXT4-MKDIR-THEN-DIRECTORY-RENAME")
+    _assert_emitted(output, "EXT4-MKDIR-THEN-DIRECTORY-RENAME-UNMOUNTED")
+    assert trace
+
+    final_superblock, final_source_inode, _ = _ext4_inode_record(backing, 33)
+    _, final_landing_inode, _ = _ext4_inode_record(backing, 34)
+    _, final_root_inode, _ = _ext4_inode_record(backing, 2)
+    assert struct.unpack_from("<H", final_source_inode, 0x1A)[0] == 2
+    assert struct.unpack_from("<H", final_landing_inode, 0x1A)[0] == 3
+    assert struct.unpack_from("<H", final_root_inode, 0x1A)[0] == 5
+    assert _extent_root_physical(final_source_inode, 0) == (
+        source_directory_home
+    )
+    assert _extent_root_physical(final_landing_inode, 0) == (
+        landing_directory_home
+    )
+    source_directory = _read_ext4_home(
+        backing, source_directory_home, block_size=block_size
+    )
+    assert _checked_linear_directory_entries(
+        final_superblock,
+        33,
+        struct.unpack_from("<I", final_source_inode, 0x64)[0],
+        source_directory,
+    ) == (
+        (0, 33, 12, 2, b"."),
+        (12, 34, block_size - 24, 2, b".."),
+    )
+    final_free_blocks = struct.unpack_from("<I", final_superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", final_superblock, 0x158)[0] << 32
+    )
+    final_free_inodes = struct.unpack_from("<I", final_superblock, 0x10)[0] | (
+        struct.unpack_from("<I", final_superblock, 0x15C)[0] << 32
+    )
+    assert final_free_blocks == free_blocks_before - 1
+    assert final_free_inodes == free_inodes_before - 1
+    assert _ext4_group_counts(backing, 0) == {
+        "free_blocks": group_counts_before["free_blocks"] - 1,
+        "free_inodes": group_counts_before["free_inodes"] - 1,
+        "used_dirs": group_counts_before["used_dirs"] + 1,
+        "itable_unused": group_counts_before["itable_unused"] - 1,
+    }
+    root_listing = subprocess.run(
+        [str(debugfs), "-R", "ls -l /", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    landing_listing = subprocess.run(
+        [str(debugfs), "-R", "ls -l /landing-dir", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert root_listing.returncode == 0, (
+        root_listing.stdout + root_listing.stderr
+    )
+    assert landing_listing.returncode == 0, (
+        landing_listing.stdout + landing_listing.stderr
+    )
+    assert "created-dir" not in root_listing.stdout
+    assert "landing-dir" in root_listing.stdout
+    assert "moved-dir" in landing_listing.stdout
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
 
 
 def test_ext4_crc_source_uses_checked_hardware_without_fallback() -> None:

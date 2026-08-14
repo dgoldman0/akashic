@@ -135,17 +135,22 @@ freed directory block under exact `6/0/1` through `8/0/1` credit. Bounded hard
 authenticated one-block linear parent, increments and restamps the target
 inode, and restamps the parent inode and checksummed directory in exact
 deduplicated `2/0/0` or `3/0/0` credit without allocation, ordered data,
-revoke, or orphan state. The staged binding now qualifies atomic regular-file
-no-replacement `RENAME` both within one checksummed linear directory block and
-across two such parents. Same-parent mutation retains the in-place fast path
-and uses deterministic bounded same-block compaction when the new encoded name
-exceeds the source record's current `rec_len`. Cross-parent mutation
-canonically compacts the old block while removing the source and the new block
-while appending it. The forms use exact deduplicated `2/0/0` through `5/0/0`
-metadata credit without changing links, allocation, data, xattrs, or orphan
-state. The next rename ratchet is directory move;
-nonempty final-link removal and unlink-while-open remain explicit later
-lifetime boundaries. Extent-tree depth and indexed-directory HTree depth are
+revoke, or orphan state. The staged binding now qualifies atomic no-replacement
+`RENAME` for regular files and a canonical cross-parent empty directory.
+Same-parent regular-file mutation retains the in-place fast path and uses
+deterministic bounded same-block compaction when the new encoded name exceeds
+the source record's current `rec_len`. Cross-parent mutation canonically
+compacts the old block while removing the source and the new block while
+appending it. Regular-file forms use exact deduplicated `2/0/0` through
+`5/0/0` metadata credit without changing links, allocation, data, xattrs, or
+orphan state. The directory form adds its canonical child block, transfers one
+parent link, and rewrites the child's `..` entry and checksum under exact
+`4/0/0` through `6/0/0` credit. It retains the same dentry/vnode, open
+descriptors, and current-working-directory object. Same-parent directories,
+victims, and replacement remain unsupported. Nonempty final-link removal and
+unlink-while-open remain explicit later lifetime boundaries, and full deletion
+and truncation lifetime semantics are the next delivery phase. Extent-tree
+depth and indexed-directory HTree depth are
 independent ratchets. Broaden either only when the next operation or a pinned
 realistic corpus demands it; directory growth does not imply speculative
 regular-file extent depth growth.
@@ -935,8 +940,9 @@ acceptance.
 The ordinary ext4 binding remains read-only. The explicitly staged descriptor
 additionally exposes only the qualified `CREATE`, `MKDIR`, `TRUNCATE`,
 `UNLINK`, `RMDIR`, and `LINK` namespace/metadata slices documented below;
-the current worktree also installs the qualified regular-file no-replacement
-RENAME callback and adds `VFS-CAP-RENAME`, `VFS-CAP-ATOMIC-RENAME`, and
+the current worktree also installs the qualified regular-file and cross-parent
+empty-directory no-replacement RENAME callback and adds `VFS-CAP-RENAME`,
+`VFS-CAP-ATOMIC-RENAME`, and
 `VFS-CAP-CROSSDIR-RENAME`. It does not add `VFS-CAP-RENAME-REPLACE`. Other
 mutation capabilities remain disabled. Modern
 `ORPHAN_PRESENT` and a nonzero legacy
@@ -2154,7 +2160,10 @@ journey measured 4,445,902 steps. With qualified cross-parent regular-file
 RENAME, exact cold source mode now measures 1,219,522,351 of 1,250,000,000
 steps across 3,085 packed lines, leaving 30,477,649 steps of measured
 headroom; the descriptor journey measures 4,543,322 steps. The guard is not a
-format or implementation capacity.
+format or implementation capacity. With qualified cross-parent empty-directory
+RENAME, exact cold source mode measures 1,224,225,598 of 1,250,000,000 steps
+across 3,095 packed lines, leaving 25,774,402 steps of measured headroom; the
+descriptor journey measures 4,549,770 steps.
 
 The first staged RENAME implementation installs `_EXT4-RENAME` in ABI slot 13
 and advertises `VFS-CAP-RENAME` with the `VFS-CAP-ATOMIC-RENAME` and
@@ -2232,10 +2241,41 @@ and preservation of the old namespace. A committed W21 final-home tear
 publishes the new namespace after three completed home checkpoints; recovery
 replays all four committed homes before the stable remount.
 
-`VFS-CAP-RENAME-REPLACE` remains absent. The next rename ratchet is directory
-move, including parent-link and `..` mutation, followed by replacement and
-open-victim lifetime cases. Multi-block and indexed parents and directory
-growth remain gated until their own slices qualify.
+The cross-parent empty-directory slice admits a source with exact
+`VN.DREFS = 1`, canonical media link count two, two distinct admitted one-block
+linear parents, an absent destination, and no victim. The public path may
+present an unloaded source-child cache; the callback requires no cached child
+and proves the exact empty media shape itself, so callers need no private
+preload. Open directory descriptors and a
+source used as `V.CWD` retain the same dentry/vnode identity across the move.
+Same-parent directory moves remain unsupported.
+
+The transaction compact-removes the typed source from the old parent,
+compact-appends it to the new parent, changes source ctime and both parents'
+mtime/ctime, decreases the old-parent link count by one, increases the new-
+parent link count by one, and preserves source link count two. It also rewrites
+the canonical child's `..` inode from old parent to new parent and restamps
+that directory block's checksum. Allocation, size, map, `i_blocks`, xattrs,
+free-space/directory accounting, and orphan state do not change. The three
+inode roles and three directory blocks deduplicate to exact `4/0/0` through
+`6/0/0`. Canonical source inode 33 and new-parent inode 34 share table home
+283; old-parent inode 2 uses 275; old-parent, new-parent, and child directory
+homes are 1299, 1377, and 1364. Thus exact `5/0/0` checkpoints vector
+`[283, 275, 1299, 1377, 1364]` at W19 through W23.
+
+The stable preimage completed in 193.06 seconds and canonical success in
+304.10 seconds. Short-credit/refusal, W7 precommit rollback, and W23 committed
+five-home replay all pass in their combined run; the same-parent plus regular
+cross-parent regression completed in 193.01 seconds. Same-session `MKDIR`
+followed by directory `RENAME` completed in 1,524,547,503 guest steps under its
+measured 2,000,000,000-step composition watchdog, in 260.07 seconds. Cold source mode measures
+1,224,225,598 of 1,250,000,000 steps across 3,095 packed lines, and the
+descriptor journey measures 4,549,770 steps.
+
+`VFS-CAP-RENAME-REPLACE` remains absent. Victims, replacement, same-parent
+directory moves, multi-block or indexed parents, and directory growth remain
+gated. The next delivery phase is full deletion and truncation lifetime
+semantics.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
