@@ -135,13 +135,14 @@ freed directory block under exact `6/0/1` through `8/0/1` credit. Bounded hard
 authenticated one-block linear parent, increments and restamps the target
 inode, and restamps the parent inode and checksummed directory in exact
 deduplicated `2/0/0` or `3/0/0` credit without allocation, ordered data,
-revoke, or orphan state. The staged binding now qualifies the first `RENAME` slice:
-an atomic same-parent regular-file rename to an absent name when the encoded
-replacement name fits the source record's existing `rec_len`. It rewrites that
-record in place and restamps the source and parent in exact deduplicated
-`2/0/0` or `3/0/0` metadata credit without changing links, allocation, data,
-xattrs, or orphan state. The next ratchets are bounded same-block record
-compaction and then cross-parent regular-file no-replacement rename;
+revoke, or orphan state. The staged binding now qualifies atomic same-parent
+regular-file `RENAME` to an absent name in one checksummed linear directory
+block. It retains the in-place fast path and uses deterministic bounded
+same-block compaction when the new encoded name exceeds the source record's
+current `rec_len`. Both paths restamp the source and parent in exact
+deduplicated `2/0/0` or `3/0/0` metadata credit without changing links,
+allocation, data, xattrs, or orphan state. The next ratchet is cross-parent
+regular-file no-replacement rename;
 nonempty final-link removal and unlink-while-open remain explicit later
 lifetime boundaries. Extent-tree depth and indexed-directory HTree depth are
 independent ratchets. Broaden either only when the next operation or a pinned
@@ -2145,11 +2146,11 @@ LINK-specific W16 tear or a hostile ownership-alias refusal.
 At bounded hard-LINK closure, fresh source mode measured 1,140,381,589
 ext4-load steps across 2,962 packed lines under the then-approved
 1.15-billion-step watchdog, leaving 9,618,411 steps of headroom, approximately
-0.84 percent. That is the historical pre-RENAME baseline. Qualified RENAME
-measures 1,168,101,972 ext4-load steps across 3,003 packed lines under the
-1.20-billion-step watchdog, leaving 31,898,028 steps of measured headroom; the
-descriptor journey measures 4,435,677 steps. The guard is not a format or
-implementation capacity.
+0.84 percent. That is the historical pre-RENAME baseline. With qualified
+same-block RENAME compaction, exact cold source mode measures 1,176,731,432 of
+1,200,000,000 ext4-load steps across 3,017 packed lines, leaving 23,268,568
+steps of measured headroom; the descriptor journey measures 4,445,902 steps.
+The guard is not a format or implementation capacity.
 
 The first staged RENAME implementation installs `_EXT4-RENAME` in ABI slot 13
 and advertises `VFS-CAP-RENAME` with the `VFS-CAP-ATOMIC-RENAME` semantic bit.
@@ -2157,31 +2158,48 @@ It deliberately omits `VFS-CAP-CROSSDIR-RENAME` and
 `VFS-CAP-RENAME-REPLACE`; the ordinary binding remains read-only. The admitted
 request has one root-owned mutable regular source and the same authenticated,
 root-owned, non-setgid, checksummed one-block linear directory as old and new
-parent. The destination name is absent, no victim is admitted, and
-`ALIGN4(8 + new-name-length)` must fit the source dirent's existing `rec_len`.
+parent. The destination name is absent and no victim is admitted. If
+`ALIGN4(8 + new-name-length)` fits the source dirent's existing `rec_len`, the
+fast path rewrites that record in place. Otherwise a bounded pass reconstructs
+the authenticated block in distinct scratch storage: every live non-source
+record is emitted deterministically in original order at its minimum aligned
+length, unused records are discarded, and the renamed source is appended
+exactly once as the final live record consuming the remainder before the
+checksum tail. The pass proves exact source identity, destination absence,
+complete record bounds, and aggregate same-block capacity before activation;
+an aggregate-full block returns zero-write `VFS-E-NOSPC`.
 
-One exact transaction restamps source ctime and parent mtime/ctime, replaces
-only the source record's name length and bytes in place, and repairs inode and
-directory checksums. Its deduplicated homes are source inode table, parent
+One exact transaction restamps source ctime and parent mtime/ctime, installs
+the selected in-place or compacted directory after-image, and repairs inode
+and directory checksums. Its deduplicated homes are source inode table, parent
 inode table, and parent directory, giving exact `2/0/0` credit when the inode
 records share a table block and `3/0/0` otherwise. Link counts, source size,
 atime/mtime, map, data, `i_blocks`, generation, xattrs, allocation and
 directory accounting, and orphan state remain unchanged; the transaction has
 no ordered data or revoke.
 
-Five focused cases pass across sequential invocations in 656.98 seconds. The
+The established in-place cases pass across sequential invocations in 656.98
+seconds. The
 canonical open-file case proves exact shared-home `2/0/0`, preserves data and
 external xattrs, passes pinned e2fsprogs 1.47.4, and reaches a write-free stable
 remount. A distinct `3/0/0` success renames the data-bearing one-link sparse
 inode after a valid unused predecessor. W7 proves precommit rollback; W17
 proves public success plus two-home replay after a committed directory tear.
-The zero-write matrix covers missing clock, short credit, directory source,
-and a non-fitting name while preserving cache and pool state.
+The established zero-write matrix covers missing clock, short credit, and a
+directory source while preserving cache and pool state.
 
-The next ratchets are same-parent record reshaping through bounded linear-block
-compaction and then cross-parent regular-file no-replacement rename. Directory
-sources and moves, replacement and open victims, multi-block and indexed
-parents, and directory growth remain deferred.
+The compactor's canonical success passes in 108.40 seconds with open-FD
+continuity, independent after-image and external-tool checks, and a stable
+write-free remount. Aggregate-full zero-write refusal passes in 46.93 seconds,
+and the in-place regression passes in 105.09 seconds. These results do not
+change capability advertisement: the staged binding still exposes only
+`VFS-CAP-RENAME` plus `VFS-CAP-ATOMIC-RENAME`, without cross-directory or
+replacement bits.
+
+The next ratchet is cross-parent regular-file no-replacement rename, followed
+by directory moves, replacement, and open-victim lifetime cases. Directory
+sources and moves, replacement, multi-block and indexed parents, and directory
+growth remain gated until their own slices qualify.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

@@ -19677,9 +19677,10 @@ EXT4-OPS ,
 \ one-block directory created by MKDIR, releasing both allocation units and
 \ revoking the freed directory-metadata home.  LINK inserts a second name for
 \ an authenticated regular inode and raises its link count atomically with the
-\ parent timestamps and checksummed directory block.  RENAME first admits an
-\ atomic same-parent regular-file name rewrite inside the source dirent's
-\ existing record, preserving link, allocation, data, and xattr state.
+\ parent timestamps and checksummed directory block.  RENAME admits an atomic
+\ same-parent regular-file name rewrite, using the source record in place when
+\ possible and otherwise compacting the authenticated linear block without
+\ changing allocation, link, data, or xattr state.
 \ Bind a containing profile and trusted clock before the first mutation.
 EXT4-CAPS VFS-CAP-WRITE OR VFS-CAP-CREATE OR VFS-CAP-MKDIR OR
 VFS-CAP-TRUNCATE OR VFS-CAP-UNLINK OR VFS-CAP-RMDIR OR VFS-CAP-LINK OR
@@ -23904,11 +23905,14 @@ CREATE _XU-TARGET-SNAPSHOT _EXT4-MAX-INODE ALLOT
 \  Atomic bounded rename
 \ =====================================================================
 \
-\ The first RENAME slice rewrites one authenticated regular-file dirent in
-\ place inside its existing record.  Source ctime, parent mtime/ctime, and the
-\ checksummed one-block linear directory are one exact deduplicated 2/0/0 or
-\ 3/0/0 transaction.  Cross-directory movement, record-boundary changes,
-\ directory sources, and replacement remain capability-gated later slices.
+\ Same-parent regular-file RENAME rewrites the authenticated source record in
+\ place when it already contains the new encoded name.  Otherwise a bounded
+\ compactor emits every live non-source record at its minimal aligned length,
+\ discards unused records, and appends the renamed source across the remaining
+\ space before the checksum tail.  Source ctime, parent mtime/ctime, and the
+\ checksummed one-block linear directory remain one exact deduplicated 2/0/0
+\ or 3/0/0 transaction.  Cross-directory movement, directory sources, and
+\ replacement remain capability-gated later slices.
 
 VARIABLE _XR-A
 VARIABLE _XR-U
@@ -23922,17 +23926,23 @@ VARIABLE _XR-DIR-OFF
 VARIABLE _XR-DIR-LIMIT
 VARIABLE _XR-DIR-DE
 VARIABLE _XR-DIR-REC
+VARIABLE _XR-DIR-NLEN
+VARIABLE _XR-DIR-INO
+VARIABLE _XR-DIR-DTYPE
+VARIABLE _XR-COMPACT
+VARIABLE _XR-COMPACT-SOURCE-COUNT
+VARIABLE _XR-COMPACT-EMIT
+VARIABLE _XR-COMPACT-NEXT
+VARIABLE _XR-COMPACT-MIN
 
 CREATE _XR-NEW-NAME-SNAPSHOT 256 ALLOT
+CREATE _XR-DIR-AFTERIMAGE _EXT4-MAX-BLOCK ALLOT
 
 : _XR-NEW-NAME=?  ( dirent -- flag )
     DUP 6 + C@ _XR-U @ <> IF DROP FALSE EXIT THEN
     8 + _XR-NEW-NAME-SNAPSHOT _XR-U @ _EXT4-BYTES=? ;
 
 : _XR-SCAN-NEW-NAME  ( -- ior )
-    _XU-TARGET-DIR-REC @ _XR-NEEDED @ U< IF
-        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
     _XU-TARGET-DIR-DTYPE @ DUP IF
         1 <> IF EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT THEN
     ELSE DROP THEN
@@ -23956,6 +23966,114 @@ CREATE _XR-NEW-NAME-SNAPSHOT 256 ALLOT
         EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
     THEN
     0 ;
+
+\ Construct the only admitted record-boundary-changing afterimage from the
+\ authenticated directory snapshot.  This pass independently rechecks every
+\ record bound and live header before it can address the scratch buffer.  The
+\ exact source record is withheld, all other live records retain their order,
+\ and the renamed source is emitted once at the end.  Thus the remaining span
+\ is both the aggregate-fit proof and the final source rec_len.
+: _XR-BUILD-COMPACT-AFTERIMAGE  ( -- ior )
+    _XR-DIR-AFTERIMAGE _XU-CTX @ _EXT4-C.BSIZE + @ 0 FILL
+    0 _XR-COMPACT-SOURCE-COUNT ! 0 _XR-COMPACT-EMIT !
+    0 _XR-DIR-OFF !
+    _XU-CTX @ _EXT4-C.BSIZE + @ 12 - _XR-DIR-LIMIT !
+    BEGIN _XR-DIR-OFF @ _XR-DIR-LIMIT @ U< WHILE
+        _XU-DIR-SNAPSHOT _XR-DIR-OFF @ + DUP _XR-DIR-DE !
+        4 + W@ DUP _XR-DIR-REC !
+        DUP 12 U< SWAP 3 AND 0<> OR IF
+            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+        THEN
+        _XR-DIR-OFF @ _XR-DIR-REC @ + _XR-DIR-LIMIT @ U> IF
+            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+        THEN
+        _XR-DIR-DE @ 6 + C@ DUP _XR-DIR-NLEN !
+        _XR-DIR-REC @ 8 - U> IF
+            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+        THEN
+        _XR-DIR-DE @ 7 + C@ _XR-DIR-DTYPE !
+        _XR-DIR-DE @ L@ DUP _XR-DIR-INO ! IF
+            _XR-DIR-INO @ _XU-CTX @ _EXT4-C.INODES + @ U> IF
+                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+            THEN
+            _XR-DIR-NLEN @ 0= IF
+                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+            THEN
+            _XR-DIR-DE @ 8 + _XR-DIR-NLEN @
+            _EXT4-DIRENT-NAME-VALID? 0= IF
+                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+            THEN
+            _XR-DIR-DTYPE @ _EXT4-DIRENT>TYPE 0= IF
+                DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+            THEN DROP
+            _XR-DIR-DE @ _XR-NEW-NAME=? IF
+                VFS-E-CONFLICT EXIT
+            THEN
+            _XR-DIR-DE @ _XU-DIRENT-NAME=? IF
+                _XR-COMPACT-SOURCE-COUNT @ IF
+                    VFS-E-CONFLICT EXIT
+                THEN
+                _XR-DIR-OFF @ _XU-TARGET-DIR-OFF @ <>
+                _XR-DIR-REC @ _XU-TARGET-DIR-REC @ <> OR
+                _XR-DIR-INO @ _XU-INO @ <> OR
+                _XR-DIR-DTYPE @ _XU-TARGET-DIR-DTYPE @ <> OR IF
+                    VFS-E-CONFLICT EXIT
+                THEN
+                1 _XR-COMPACT-SOURCE-COUNT +!
+            ELSE
+                _XR-DIR-OFF @ _XU-TARGET-DIR-OFF @ = IF
+                    VFS-E-CONFLICT EXIT
+                THEN
+                _XR-DIR-NLEN @ 8 + 3 + -4 AND
+                DUP _XR-COMPACT-MIN !
+                _XR-COMPACT-EMIT @ SWAP _EXT4-UADD?
+                DUP IF NIP EXIT THEN DROP
+                DUP _XR-DIR-LIMIT @ U> IF
+                    DROP VFS-E-NOSPC EXIT
+                THEN
+                _XR-COMPACT-NEXT !
+                _XR-DIR-AFTERIMAGE _XR-COMPACT-EMIT @ + DUP
+                _XR-COMPACT-MIN @ 0 FILL
+                _XR-DIR-INO @ OVER L!
+                _XR-COMPACT-MIN @ OVER 4 + W!
+                _XR-DIR-NLEN @ OVER 6 + C!
+                _XR-DIR-DTYPE @ OVER 7 + C!
+                _XR-DIR-DE @ 8 + OVER 8 + _XR-DIR-NLEN @ CMOVE
+                DROP
+                _XR-COMPACT-NEXT @ _XR-COMPACT-EMIT !
+            THEN
+        ELSE
+            _XR-DIR-OFF @ _XU-TARGET-DIR-OFF @ = IF
+                VFS-E-CONFLICT EXIT
+            THEN
+            _XR-DIR-NLEN @ _XR-DIR-DTYPE @ OR IF
+                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+            THEN
+        THEN
+        _XR-DIR-REC @ _XR-DIR-OFF +!
+    REPEAT
+    _XR-DIR-OFF @ _XR-DIR-LIMIT @ <> IF
+        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+    THEN
+    _XR-COMPACT-SOURCE-COUNT @ 1 <> IF VFS-E-CONFLICT EXIT THEN
+    _XR-DIR-LIMIT @ _XR-COMPACT-EMIT @ -
+    DUP _XR-NEEDED @ U< IF DROP VFS-E-NOSPC EXIT THEN
+    _XR-COMPACT-MIN !
+    _XR-DIR-AFTERIMAGE _XR-COMPACT-EMIT @ + DUP
+    _XR-COMPACT-MIN @ 0 FILL
+    _XU-INO @ OVER L!
+    _XR-COMPACT-MIN @ OVER 4 + W!
+    _XR-U @ OVER 6 + C!
+    _XU-TARGET-DIR-DTYPE @ OVER 7 + C!
+    _XR-NEW-NAME-SNAPSHOT OVER 8 + _XR-U @ CMOVE
+    DROP
+    _XR-DIR-AFTERIMAGE _XR-DIR-LIMIT @ + DUP
+    12 0 FILL
+    12 OVER 4 + W!
+    0 OVER 6 + C!
+    0xDE SWAP 7 + C!
+    _XR-DIR-AFTERIMAGE _XU-PARENT-INO @ _XU-PARENT-GEN @ _XU-CTX @
+    _EXT4-RESTAMP-DIR-BLOCK ;
 
 : _XR-ENTRY  ( -- ior )
     _XR-A @ 0= _XR-SOURCE @ 0= OR _XR-PARENT @ 0= OR
@@ -24036,7 +24154,12 @@ CREATE _XR-NEW-NAME-SNAPSHOT 256 ALLOT
     _XU-AUTH-PARENT-DIRECTORY ?DUP IF EXIT THEN
     _XU-REQUIRE-TARGET ?DUP IF EXIT THEN
     _XU-REQUIRE-PARENT ?DUP IF EXIT THEN
+    0 _XR-COMPACT !
     _XR-SCAN-NEW-NAME ?DUP IF EXIT THEN
+    _XU-TARGET-DIR-REC @ _XR-NEEDED @ U< IF
+        _XR-BUILD-COMPACT-AFTERIMAGE ?DUP IF EXIT THEN
+        -1 _XR-COMPACT !
+    THEN
     _XU-DIR-HOME @ _XU-TARGET-HOME @ =
     _XU-DIR-HOME @ _XU-PARENT-HOME @ = OR IF
         EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
@@ -24082,17 +24205,25 @@ CREATE _XR-NEW-NAME-SNAPSHOT 256 ALLOT
     DUP IF NIP EXIT THEN DROP DUP _XU-IMAGE !
     DUP _XU-DIR-SNAPSHOT _XU-CTX @ _EXT4-C.BSIZE + @
     _EXT4-BYTES=? 0= IF DROP VFS-E-CONFLICT EXIT THEN
-    _XU-TARGET-DIR-OFF @ + DUP
+    DROP
+    _XU-IMAGE @ _XU-TARGET-DIR-OFF @ + DUP
     L@ _XU-INO @ <>
     OVER 4 + W@ _XU-TARGET-DIR-REC @ <> OR
     OVER 7 + C@ _XU-TARGET-DIR-DTYPE @ <> OR
     OVER _XU-DIRENT-NAME=? 0= OR IF
         DROP VFS-E-CONFLICT EXIT
     THEN
-    DUP 8 + _XU-TARGET-DIR-REC @ 8 - 0 FILL
-    _XR-U @ OVER 6 + C!
-    _XR-NEW-NAME-SNAPSHOT OVER 8 + _XR-U @ CMOVE
     DROP
+    _XR-COMPACT @ IF
+        _XR-DIR-AFTERIMAGE _XU-IMAGE @
+        _XU-CTX @ _EXT4-C.BSIZE + @ CMOVE
+    ELSE
+        _XU-IMAGE @ _XU-TARGET-DIR-OFF @ + DUP
+        8 + _XU-TARGET-DIR-REC @ 8 - 0 FILL
+        _XR-U @ OVER 6 + C!
+        _XR-NEW-NAME-SNAPSHOT OVER 8 + _XR-U @ CMOVE
+        DROP
+    THEN
     _XU-IMAGE @ _XU-PARENT-INO @ _XU-PARENT-GEN @ _XU-CTX @
     _EXT4-RESTAMP-DIR-BLOCK ?DUP IF EXIT THEN
     _XU-IMAGE @ _XU-DIR-HOME @ _XU-WRITER @
@@ -24125,6 +24256,8 @@ CREATE _XR-NEW-NAME-SNAPSHOT 256 ALLOT
 
 : _XR-SCRUB  ( -- )
     _XR-NEW-NAME-SNAPSHOT 256 0 FILL
+    _XR-DIR-AFTERIMAGE _EXT4-MAX-BLOCK 0 FILL
+    0 _XR-COMPACT !
     0 _XU-RENAME-SCAN !
     _XU-SCRUB ;
 
@@ -24135,6 +24268,8 @@ CREATE _XR-NEW-NAME-SNAPSHOT 256 ALLOT
 : _XR-FAIL  ( ior -- ior )
     _XU-FAIL
     _XR-NEW-NAME-SNAPSHOT 256 0 FILL
+    _XR-DIR-AFTERIMAGE _EXT4-MAX-BLOCK 0 FILL
+    0 _XR-COMPACT !
     0 _XU-RENAME-SCAN ! ;
 
 : _XR-PUBLISH-COMMITTED  ( -- )

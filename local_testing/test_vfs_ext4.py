@@ -67033,6 +67033,250 @@ def _linear_directory_rename_afterimage(
     return expected, offset
 
 
+def _linear_directory_with_fragmented_free_records(
+    superblock: bytes,
+    *,
+    parent_inode: int,
+    parent_generation: int,
+    original: bytes,
+    maximum_free_record: int,
+) -> tuple[bytes, tuple[tuple[int, int], ...]]:
+    """Pack live dirents minimally and split all slack into small holes."""
+    assert maximum_free_record >= 12
+    assert maximum_free_record % 4 == 0
+    entries = _checked_linear_directory_entries(
+        superblock,
+        parent_inode,
+        parent_generation,
+        original,
+    )
+    tail_offset = len(original) - 12
+    live_bytes = sum((8 + len(entry[4]) + 3) & ~3 for entry in entries)
+    free_bytes = tail_offset - live_bytes
+    assert free_bytes >= 12
+    free_units = free_bytes // 4
+    maximum_units = maximum_free_record // 4
+    free_count = (free_units + maximum_units - 1) // maximum_units
+    quotient, remainder = divmod(free_units, free_count)
+    free_sizes = tuple(
+        4 * (quotient + (index < remainder))
+        for index in range(free_count)
+    )
+    assert sum(free_sizes) == free_bytes
+    assert all(12 <= size <= maximum_free_record for size in free_sizes)
+
+    result = bytearray(len(original))
+    result[tail_offset:] = original[tail_offset:]
+    offset = 0
+    for _, inode_number, _, file_type, name in entries:
+        record_length = (8 + len(name) + 3) & ~3
+        struct.pack_into(
+            "<IHBB",
+            result,
+            offset,
+            inode_number,
+            record_length,
+            len(name),
+            file_type,
+        )
+        result[offset + 8 : offset + 8 + len(name)] = name
+        offset += record_length
+    free_records = []
+    for record_length in free_sizes:
+        struct.pack_into("<IHBB", result, offset, 0, record_length, 0, 0)
+        free_records.append((offset, record_length))
+        offset += record_length
+    assert offset == tail_offset
+    prepared = _linear_directory_block_with_checksum(
+        superblock,
+        parent_inode,
+        parent_generation,
+        result,
+    )
+    assert _checked_linear_directory_entries(
+        superblock,
+        parent_inode,
+        parent_generation,
+        prepared,
+    ) == tuple(
+        (
+            entry[0],
+            entry[1],
+            (8 + len(entry[4]) + 3) & ~3,
+            entry[3],
+            entry[4],
+        )
+        for entry in _checked_linear_directory_entries(
+            superblock,
+            parent_inode,
+            parent_generation,
+            prepared,
+        )
+    )
+    return prepared, tuple(free_records)
+
+
+def _linear_directory_compacting_rename_afterimage(
+    superblock: bytes,
+    *,
+    parent_inode: int,
+    parent_generation: int,
+    original: bytes,
+    target_inode: int,
+    old_name: bytes,
+    new_name: bytes,
+) -> tuple[bytes, int]:
+    """Independently compact live dirents and append the renamed source."""
+    assert old_name and new_name and old_name != new_name
+    assert len(new_name) <= 255
+    assert b"/" not in new_name and b"\x00" not in new_name
+    entries = _checked_linear_directory_entries(
+        superblock,
+        parent_inode,
+        parent_generation,
+        original,
+    )
+    source_entries = [
+        entry
+        for entry in entries
+        if entry[1] == target_inode and entry[4] == old_name
+    ]
+    assert len(source_entries) == 1
+    assert all(entry[4] != new_name for entry in entries)
+    source_type = source_entries[0][3]
+    assert source_type == 1
+    kept = tuple(entry for entry in entries if entry != source_entries[0])
+    tail_offset = len(original) - 12
+    needed = (8 + len(new_name) + 3) & ~3
+    kept_bytes = sum((8 + len(entry[4]) + 3) & ~3 for entry in kept)
+    assert kept_bytes + needed <= tail_offset
+
+    result = bytearray(len(original))
+    result[tail_offset:] = original[tail_offset:]
+    offset = 0
+    for _, inode_number, _, file_type, name in kept:
+        record_length = (8 + len(name) + 3) & ~3
+        struct.pack_into(
+            "<IHBB",
+            result,
+            offset,
+            inode_number,
+            record_length,
+            len(name),
+            file_type,
+        )
+        result[offset + 8 : offset + 8 + len(name)] = name
+        offset += record_length
+    rename_offset = offset
+    rename_record = tail_offset - rename_offset
+    struct.pack_into(
+        "<IHBB",
+        result,
+        rename_offset,
+        target_inode,
+        rename_record,
+        len(new_name),
+        source_type,
+    )
+    result[
+        rename_offset + 8 : rename_offset + 8 + len(new_name)
+    ] = new_name
+    expected = _linear_directory_block_with_checksum(
+        superblock,
+        parent_inode,
+        parent_generation,
+        result,
+    )
+    final_entries = _checked_linear_directory_entries(
+        superblock,
+        parent_inode,
+        parent_generation,
+        expected,
+    )
+    assert tuple(entry[4] for entry in final_entries[:-1]) == tuple(
+        entry[4] for entry in kept
+    )
+    assert final_entries[-1] == (
+        rename_offset,
+        target_inode,
+        rename_record,
+        source_type,
+        new_name,
+    )
+    return expected, rename_offset
+
+
+def _linear_directory_with_appended_aliases(
+    superblock: bytes,
+    *,
+    parent_inode: int,
+    parent_generation: int,
+    original: bytes,
+    target_inode: int,
+    aliases: tuple[bytes, ...],
+) -> bytes:
+    """Append unique regular-file aliases to a minimally packed directory."""
+    assert aliases
+    assert len(set(aliases)) == len(aliases)
+    assert all(
+        name
+        and len(name) <= 255
+        and b"/" not in name
+        and b"\x00" not in name
+        for name in aliases
+    )
+    entries = _checked_linear_directory_entries(
+        superblock,
+        parent_inode,
+        parent_generation,
+        original,
+    )
+    existing_names = {entry[4] for entry in entries}
+    assert existing_names.isdisjoint(aliases)
+    records = tuple(
+        (entry[1], entry[3], entry[4]) for entry in entries
+    ) + tuple((target_inode, 1, name) for name in aliases)
+    tail_offset = len(original) - 12
+    minimum_sizes = tuple((8 + len(record[2]) + 3) & ~3 for record in records)
+    assert sum(minimum_sizes) <= tail_offset
+
+    result = bytearray(len(original))
+    result[tail_offset:] = original[tail_offset:]
+    offset = 0
+    for index, (inode_number, file_type, name) in enumerate(records):
+        record_length = minimum_sizes[index]
+        if index == len(records) - 1:
+            record_length = tail_offset - offset
+        struct.pack_into(
+            "<IHBB",
+            result,
+            offset,
+            inode_number,
+            record_length,
+            len(name),
+            file_type,
+        )
+        result[offset + 8 : offset + 8 + len(name)] = name
+        offset += record_length
+    assert offset == tail_offset
+    prepared = _linear_directory_block_with_checksum(
+        superblock,
+        parent_inode,
+        parent_generation,
+        result,
+    )
+    prepared_entries = _checked_linear_directory_entries(
+        superblock,
+        parent_inode,
+        parent_generation,
+        prepared,
+    )
+    assert tuple(entry[4] for entry in prepared_entries) == tuple(
+        record[2] for record in records
+    )
+    return prepared
+
+
 def _staged_rename_recovery_view(
     source: Path,
     destination: Path,
@@ -67047,6 +67291,8 @@ def _staged_rename_recovery_view(
     expected_replayed: bool,
     prefix: str,
     marker: str,
+    old_path: str = "/fixture/hardlink.txt",
+    new_path: str = "/fixture/renamed.txt",
 ) -> tuple[str, tuple[tuple[str, int, int], ...], str]:
     """Recover and inspect both namespace outcomes of the bounded RENAME."""
     target_mtime_seconds, target_mtime_milliseconds = divmod(
@@ -67080,7 +67326,7 @@ def _staged_rename_recovery_view(
             f"{prefix}-R-IOR 0=",
             f"{prefix}-R D.VNODE @ {prefix}-VN =",
         ]
-        active_path = "/fixture/renamed.txt"
+        active_path = new_path
     else:
         namespace_checks = [
             f"{prefix}-H-IOR 0=",
@@ -67088,7 +67334,7 @@ def _staged_rename_recovery_view(
             f"{prefix}-R 0=",
             f"{prefix}-R-IOR VFS-IOR-REASON VFS-R-NOENT =",
         ]
-        active_path = "/fixture/hardlink.txt"
+        active_path = old_path
 
     output, trace, media_sha256 = run_recovery_forth(
         source,
@@ -67106,11 +67352,11 @@ def _staged_rename_recovery_view(
                 f"CONSTANT {prefix}-P-IOR CONSTANT {prefix}-P"
             ),
             (
-                f'S" /fixture/hardlink.txt" {prefix}-V VFS-RESOLVE? '
+                f'S" {old_path}" {prefix}-V VFS-RESOLVE? '
                 f"CONSTANT {prefix}-H-IOR CONSTANT {prefix}-H"
             ),
             (
-                f'S" /fixture/renamed.txt" {prefix}-V VFS-RESOLVE? '
+                f'S" {new_path}" {prefix}-V VFS-RESOLVE? '
                 f"CONSTANT {prefix}-R-IOR CONSTANT {prefix}-R"
             ),
             (
@@ -67725,6 +67971,445 @@ def test_staged_vfs_rename_same_parent_open_file_and_external_oracles(
     assert isinstance(trace, tuple)
     assert image.is_file()
     assert trace
+
+
+def test_staged_vfs_rename_compacts_fragmented_one_block_directory(
+    writer_activation_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A longer name compacts live dirents and fragmented aggregate slack."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    parent_number = 13
+    inode_number = 14
+    superblock, parent_inode, parent_offset = _ext4_inode_record(
+        path, parent_number
+    )
+    _, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    parent_home, parent_block_offset = divmod(parent_offset, block_size)
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    directory_home = _extent_root_physical(parent_inode, 0)
+    data_block = _extent_root_physical(inode, 0)
+    xattr_block = struct.unpack_from("<I", inode, 0x68)[0]
+    parent_generation = struct.unpack_from("<I", parent_inode, 0x64)[0]
+    old_size = struct.unpack_from("<I", inode, 0x04)[0]
+    old_blocks = struct.unpack_from("<I", inode, 0x1C)[0]
+    old_links = struct.unpack_from("<H", inode, 0x1A)[0]
+    old_mtime_ms = _ext4_inode_timestamp_ms(inode, 0x10, 0x88)
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", superblock, 0x158)[0] << 32
+    )
+    free_inodes_before = struct.unpack_from("<I", superblock, 0x10)[0] | (
+        struct.unpack_from("<I", superblock, 0x15C)[0] << 32
+    )
+    group_counts_before = _ext4_group_counts(path, 0)
+
+    assert block_size == 1024
+    assert inode_size == 256
+    assert parent_home == inode_home == 278
+    assert (parent_block_offset, inode_block_offset) == (0, 256)
+    assert directory_home == 1345
+    assert data_block == 1346
+    assert xattr_block > 0
+    assert xattr_block not in {inode_home, directory_home, data_block}
+    assert (old_size, old_blocks, old_links) == (54, 4, 2)
+
+    original_inode_home = _patched_ext4_home(
+        path, source_patches, inode_home, block_size=block_size
+    )
+    canonical_directory = _patched_ext4_home(
+        path, source_patches, directory_home, block_size=block_size
+    )
+    original_data = _patched_ext4_home(
+        path, source_patches, data_block, block_size=block_size
+    )
+    original_xattr = _patched_ext4_home(
+        path, source_patches, xattr_block, block_size=block_size
+    )
+    assert original_inode_home[
+        parent_block_offset : parent_block_offset + inode_size
+    ] == parent_inode
+    assert original_inode_home[
+        inode_block_offset : inode_block_offset + inode_size
+    ] == inode
+
+    new_name = "compacted-" + ("r" * 112) + ".txt"
+    new_name_bytes = new_name.encode("ascii")
+    new_path = f"/fixture/{new_name}"
+    needed = (8 + len(new_name_bytes) + 3) & ~3
+    assert len(new_name_bytes) == 126
+    assert needed == 136
+    prepared_directory, free_records = (
+        _linear_directory_with_fragmented_free_records(
+            superblock,
+            parent_inode=parent_number,
+            parent_generation=parent_generation,
+            original=canonical_directory,
+            maximum_free_record=120,
+        )
+    )
+    prepared_entries = _checked_linear_directory_entries(
+        superblock,
+        parent_number,
+        parent_generation,
+        prepared_directory,
+    )
+    assert [
+        entry for entry in prepared_entries if entry[4] == b"hardlink.txt"
+    ] == [(44, inode_number, 20, 1, b"hardlink.txt")]
+    assert all(entry[4] != new_name_bytes for entry in prepared_entries)
+    assert len(free_records) > 1
+    assert sum(record_length for _, record_length in free_records) == 888
+    assert max(record_length for _, record_length in free_records) < needed
+    assert all(
+        struct.unpack_from("<IHBB", prepared_directory, offset)
+        == (0, record_length, 0, 0)
+        for offset, record_length in free_records
+    )
+    expected_directory, rename_offset = (
+        _linear_directory_compacting_rename_afterimage(
+            superblock,
+            parent_inode=parent_number,
+            parent_generation=parent_generation,
+            original=prepared_directory,
+            target_inode=inode_number,
+            old_name=b"hardlink.txt",
+            new_name=new_name_bytes,
+        )
+    )
+    assert rename_offset == 104
+    assert struct.unpack_from("<IHBB", expected_directory, rename_offset) == (
+        inode_number,
+        908,
+        len(new_name_bytes),
+        1,
+    )
+    input_patches = source_patches + (
+        (directory_home * block_size, prepared_directory),
+    )
+
+    epoch_ms = 3_000_008_901_234
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = (
+        low_seconds
+        if low_seconds < 0x8000_0000
+        else low_seconds - 0x1_0000_0000
+    )
+    epoch = (seconds - signed_low) >> 32
+    assert 0 <= epoch <= 3
+    extra_time = (nanoseconds << 2) | epoch
+
+    expected_source = bytearray(inode)
+    struct.pack_into("<I", expected_source, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_source, 0x84, extra_time)
+    expected_source[:] = _inode_with_checksum(
+        superblock, inode_number, expected_source
+    )
+    expected_parent = bytearray(parent_inode)
+    struct.pack_into("<I", expected_parent, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x10, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x84, extra_time)
+    struct.pack_into("<I", expected_parent, 0x88, extra_time)
+    expected_parent[:] = _inode_with_checksum(
+        superblock, parent_number, expected_parent
+    )
+    expected_inode_home_buffer = bytearray(original_inode_home)
+    expected_inode_home_buffer[
+        parent_block_offset : parent_block_offset + inode_size
+    ] = expected_parent
+    expected_inode_home_buffer[
+        inode_block_offset : inode_block_offset + inode_size
+    ] = expected_source
+    expected_inode_home = bytes(expected_inode_home_buffer)
+    old_file = original_data[:old_size]
+    expected_file_crc = _crc32c_raw(old_file)
+
+    backing = tmp_path / "staged-rename-compacted.img"
+    stable = tmp_path / "staged-rename-compacted-stable.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        backing,
+        [
+            f"CREATE _RC-BUF {old_size} ALLOT",
+            *_staged_rename_attempt_forth(
+                "_RC",
+                epoch_ms=epoch_ms,
+                metadata_capacity=2,
+                new_name=new_name,
+            ),
+            (
+                f"_RC-BUF {old_size} _RC-FD VFS-READ? "
+                "CONSTANT _RC-READ-IOR CONSTANT _RC-ACTUAL"
+            ),
+            "0xFFFFFFFF _EXT4-CRC-START",
+            (
+                f"_RC-BUF {old_size} _EXT4-CRC-ADD "
+                "CONSTANT _RC-CRC-IOR"
+            ),
+            "_EXT4-CRC@ CONSTANT _RC-CRC",
+            (
+                _forth_conjunction(
+                    [
+                        "_RC-MOUNT-IOR 0=",
+                        "_RC-CLOCK-IOR 0=",
+                        "_RC-PROFILE-SIZE-IOR 0=",
+                        "_RC-PROFILE-BIND-IOR 0=",
+                        "_RC-PROFILE-USED _RC-PROFILE-SIZE =",
+                        "_RC-P-IOR 0=",
+                        "_RC-S-IOR 0=",
+                        "_RC-D-IOR 0=",
+                        "_RC-P D.VNODE @ _RC-VN =",
+                        "_RC-OLD-NLINK 2 =",
+                        "_RC-OLD-DREFS 2 =",
+                        "_RC-OPEN-IOR 0=",
+                        "_RC-IOR 0=",
+                        "_RC-LAST-IOR 0=",
+                        "_RC-OLD 0=",
+                        "_RC-OLD-IOR VFS-IOR-REASON VFS-R-NOENT =",
+                        "_RC-NEW-IOR 0=",
+                        "_RC-NEW _RC-S =",
+                        "_RC-NEW D.VNODE @ _RC-VN =",
+                        "_RC-S IN.PARENT @ _RC-D =",
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-RENAME-COMPACT-NAMESPACE" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_RC-VN VN.NLINK @ _RC-OLD-NLINK =",
+                        "_RC-VN VN.DREFS @ _RC-OLD-DREFS =",
+                        "_RC-VN VN.OPEN-REFS @ 1 =",
+                        f"_RC-VN VN.SIZE-LO @ {old_size} =",
+                        "_RC-VN VN.SIZE-HI @ 0=",
+                        f"_RC-VN VN.BLOCKS @ {old_blocks} =",
+                        "_RC-VN VN.MTIME @ _RC-OLD-MTIME =",
+                        "_RC-VN VN.MTIME-NS @ _RC-OLD-MTIME-NS =",
+                        f"_RC-VN VN.CTIME @ {seconds} =",
+                        f"_RC-VN VN.CTIME-NS @ {nanoseconds} =",
+                        f"_RC-D-VN VN.MTIME @ {seconds} =",
+                        f"_RC-D-VN VN.MTIME-NS @ {nanoseconds} =",
+                        f"_RC-D-VN VN.CTIME @ {seconds} =",
+                        f"_RC-D-VN VN.CTIME-NS @ {nanoseconds} =",
+                        "_RC-V V.ICOUNT @ _RC-OLD-ICOUNT =",
+                        "_RC-V V.VCOUNT @ _RC-OLD-VCOUNT =",
+                        "_RC-READ-IOR 0=",
+                        f"_RC-ACTUAL {old_size} =",
+                        "_RC-CRC-IOR 0=",
+                        f"_RC-CRC {expected_file_crc} =",
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-RENAME-COMPACT-CACHE" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_RC-CLOCK-CALLS @ 1 =",
+                        f"_XU-TARGET-HOME @ {inode_home} =",
+                        f"_XU-PARENT-HOME @ {parent_home} =",
+                        f"_XU-DIR-HOME @ {directory_home} =",
+                        "_XU-META-COUNT @ 0=",
+                        "_RC-HOMES 2 =",
+                        "_RC-WRITER _RC-PROFILE-BASE =",
+                        "_RC-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_RC-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                        "_RC-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                        "_RC-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                        "_RC-CTX _EXT4-C.J.COMMITTED + @ 0=",
+                        "_RC-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                        "_RC-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_RC-V V.FLAGS @ VFS-F-RO AND 0=",
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-RENAME-COMPACT-TXN" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        (
+                            "_XU-DIR-SNAPSHOT "
+                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        "_XU-RENAME-SCAN @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-RENAME-COMPACT-SCRUB" THEN'
+            ),
+            "_RC-FD VFS-CLOSE? CONSTANT _RC-CLOSE-IOR",
+            "0 _RC-V VFS-UNMOUNT CONSTANT _RC-UNMOUNT-IOR",
+            (
+                "_RC-CLOSE-IOR 0= _RC-UNMOUNT-IOR 0= AND "
+                "_RC-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_RC-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-PUBLIC-RENAME-COMPACT-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=input_patches,
+        capture_media=backing,
+    )
+    for marker in (
+        "EXT4-PUBLIC-RENAME-COMPACT-NAMESPACE",
+        "EXT4-PUBLIC-RENAME-COMPACT-CACHE",
+        "EXT4-PUBLIC-RENAME-COMPACT-TXN",
+        "EXT4-PUBLIC-RENAME-COMPACT-SCRUB",
+        "EXT4-PUBLIC-RENAME-COMPACT-UNMOUNTED",
+    ):
+        _assert_emitted(output, marker)
+    assert trace[: len(activation_trace)] == activation_trace
+    assert _write_ordinals_for_ext4_home(
+        trace, inode_home, block_size=block_size
+    ) == (16,)
+    assert _write_ordinals_for_ext4_home(
+        trace, directory_home, block_size=block_size
+    ) == (17,)
+    assert not _write_ordinals_for_ext4_home(
+        trace, data_block, block_size=block_size
+    )
+    assert not _write_ordinals_for_ext4_home(
+        trace, xattr_block, block_size=block_size
+    )
+
+    final_superblock, final_parent, _ = _ext4_inode_record(
+        backing, parent_number
+    )
+    _, final_inode, _ = _ext4_inode_record(backing, inode_number)
+    assert final_superblock == _ext4_super_with_checksum(final_superblock)
+    assert final_parent == bytes(expected_parent)
+    assert final_inode == bytes(expected_source)
+    assert _read_ext4_home(
+        backing, inode_home, block_size=block_size
+    ) == expected_inode_home
+    assert _read_ext4_home(
+        backing, directory_home, block_size=block_size
+    ) == expected_directory
+    assert _read_ext4_home(
+        backing, data_block, block_size=block_size
+    ) == original_data
+    assert _read_ext4_home(
+        backing, xattr_block, block_size=block_size
+    ) == original_xattr
+    assert struct.unpack_from("<H", final_inode, 0x1A)[0] == old_links
+    assert struct.unpack_from("<I", final_inode, 0x04)[0] == old_size
+    assert struct.unpack_from("<I", final_inode, 0x1C)[0] == old_blocks
+    assert final_inode[0x28:0x64] == inode[0x28:0x64]
+    assert struct.unpack_from("<I", final_inode, 0x68)[0] == xattr_block
+    assert _extent_root_physical(final_inode, 0) == data_block
+    assert _ext4_block_allocation_state(
+        backing, (data_block, xattr_block)
+    ) == {data_block: True, xattr_block: True}
+    assert _ext4_inode_allocation_state(backing, (inode_number,)) == {
+        inode_number: True
+    }
+    final_free_blocks = struct.unpack_from(
+        "<I", final_superblock, 0x0C
+    )[0] | (struct.unpack_from("<I", final_superblock, 0x158)[0] << 32)
+    final_free_inodes = struct.unpack_from(
+        "<I", final_superblock, 0x10
+    )[0] | (struct.unpack_from("<I", final_superblock, 0x15C)[0] << 32)
+    assert final_free_blocks == free_blocks_before
+    assert final_free_inodes == free_inodes_before
+    assert _ext4_group_counts(backing, 0) == group_counts_before
+
+    final_entries = _checked_linear_directory_entries(
+        final_superblock,
+        parent_number,
+        struct.unpack_from("<I", final_parent, 0x64)[0],
+        expected_directory,
+    )
+    assert all(entry[4] != b"hardlink.txt" for entry in final_entries)
+    assert final_entries[-1] == (
+        rename_offset,
+        inode_number,
+        908,
+        1,
+        new_name_bytes,
+    )
+    listing = subprocess.run(
+        [str(debugfs), "-R", "ls -l /fixture", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert listing.returncode == 0, listing.stdout + listing.stderr
+    assert "hardlink.txt" not in listing.stdout
+    assert new_name in listing.stdout
+    stat = subprocess.run(
+        [str(debugfs), "-R", f"stat {new_path}", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stat.returncode == 0, stat.stdout + stat.stderr
+    assert f"Inode: {inode_number}" in stat.stdout
+    assert f"Size: {old_size}" in stat.stdout
+    assert re.search(r"Links:\s+2\s+Blockcount:\s+4", stat.stdout)
+    assert f"(0):{data_block}" in stat.stdout
+    readback = subprocess.run(
+        [str(debugfs), "-R", f"cat {new_path}", str(backing)],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert readback.returncode == 0, readback.stdout + readback.stderr
+    assert readback.stdout == old_file
+    xattrs = subprocess.run(
+        [str(debugfs), "-R", f"ea_list {new_path}", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert xattrs.returncode == 0, xattrs.stdout + xattrs.stderr
+    assert "user.akashic" in xattrs.stdout
+    assert "user.akashic.large" in xattrs.stdout
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+    _, stable_trace, stable_sha256 = _staged_rename_recovery_view(
+        backing,
+        stable,
+        expected_file=old_file,
+        expected_renamed=True,
+        target_mtime_ms=old_mtime_ms,
+        target_ctime_ms=epoch_ms,
+        parent_mtime_ms=epoch_ms,
+        parent_ctime_ms=epoch_ms,
+        expected_home_writes=0,
+        expected_replayed=False,
+        prefix="_RC-S",
+        marker="EXT4-PUBLIC-RENAME-COMPACT-STABLE",
+        new_path=new_path,
+    )
+    assert stable_trace == ()
+    assert stable_sha256 == media_sha256
+    assert _sha256(stable) == media_sha256
 
 
 def test_staged_vfs_rename_nlink_one_sparse_file_after_unused_dirent(
@@ -68526,7 +69211,7 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
     writer_activation_fixture: dict[str, object],
     tmp_path: Path,
 ) -> None:
-    """Clock, credit, type, and in-place-fit refusals are zero-write."""
+    """Missing-clock, short-credit, and directory-source gates are zero-write."""
     path = writer_activation_fixture["image"]
     source_patches = writer_activation_fixture["source_patches"]
     parent_number = 13
@@ -68621,23 +69306,12 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
             ),
             "_RR-V V.LAST-IOR @ CONSTANT _RR-DIR-LAST",
             (
-                'S" renamed-name-too-long.txt" _RR-S _RR-D '
-                "VFS-RN-NOREPLACE _RR-V VFS-RENAME-AT "
-                "CONSTANT _RR-LONG-IOR"
-            ),
-            "_RR-V V.LAST-IOR @ CONSTANT _RR-LONG-LAST",
-            (
                 'S" /fixture/hardlink.txt" _RR-V VFS-RESOLVE? '
                 "CONSTANT _RR-AFTER-S-IOR CONSTANT _RR-AFTER-S"
             ),
             (
                 'S" /fixture/renamed.txt" _RR-V VFS-RESOLVE? '
                 "CONSTANT _RR-AFTER-R-IOR CONSTANT _RR-AFTER-R"
-            ),
-            (
-                'S" /fixture/renamed-name-too-long.txt" '
-                "_RR-V VFS-RESOLVE? CONSTANT _RR-AFTER-L-IOR "
-                "CONSTANT _RR-AFTER-L"
             ),
             (
                 'S" /fixture-new" _RR-V VFS-RESOLVE? '
@@ -68662,12 +69336,7 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
                             "_EXT4-UNSUPPORTED ="
                         ),
                         "_RR-DIR-LAST _RR-DIR-IOR =",
-                        (
-                            "_RR-LONG-IOR EXT4-D-WRITE-POLICY "
-                            "_EXT4-UNSUPPORTED ="
-                        ),
-                        "_RR-LONG-LAST _RR-LONG-IOR =",
-                        "_RR-CLOCK-CALLS @ 2 =",
+                        "_RR-CLOCK-CALLS @ 1 =",
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-RENAME-REFUSAL-IORS" THEN'
@@ -68680,11 +69349,6 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
                         "_RR-AFTER-R 0=",
                         (
                             "_RR-AFTER-R-IOR VFS-IOR-REASON "
-                            "VFS-R-NOENT ="
-                        ),
-                        "_RR-AFTER-L 0=",
-                        (
-                            "_RR-AFTER-L-IOR VFS-IOR-REASON "
                             "VFS-R-NOENT ="
                         ),
                         "_RR-AFTER-D 0=",
@@ -68751,6 +69415,216 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
         "EXT4-PUBLIC-RENAME-REFUSAL-CACHE",
         "EXT4-PUBLIC-RENAME-REFUSAL-ZEROWRITE",
         "EXT4-PUBLIC-RENAME-REFUSAL-UNMOUNT",
+    ):
+        _assert_emitted(output, marker)
+    assert trace == ()
+    assert _read_ext4_home(
+        backing, inode_home, block_size=block_size
+    ) == original_inode_home
+    assert _read_ext4_home(
+        backing, directory_home, block_size=block_size
+    ) == original_directory
+    assert _read_ext4_home(
+        backing, data_block, block_size=block_size
+    ) == original_data
+    assert _read_ext4_home(
+        backing, xattr_block, block_size=block_size
+    ) == original_xattr
+
+
+def test_staged_vfs_rename_refuses_aggregate_compaction_nospace_without_writes(
+    writer_activation_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A full canonical live layout rejects a longer name before staging."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    parent_number = 13
+    inode_number = 14
+    superblock, parent_inode, parent_offset = _ext4_inode_record(
+        path, parent_number
+    )
+    _, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    parent_home, parent_block_offset = divmod(parent_offset, block_size)
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    directory_home = _extent_root_physical(parent_inode, 0)
+    data_block = _extent_root_physical(inode, 0)
+    xattr_block = struct.unpack_from("<I", inode, 0x68)[0]
+    parent_generation = struct.unpack_from("<I", parent_inode, 0x64)[0]
+    canonical_inode_home = _patched_ext4_home(
+        path, source_patches, inode_home, block_size=block_size
+    )
+    canonical_directory = _patched_ext4_home(
+        path, source_patches, directory_home, block_size=block_size
+    )
+    original_data = _patched_ext4_home(
+        path, source_patches, data_block, block_size=block_size
+    )
+    original_xattr = _patched_ext4_home(
+        path, source_patches, xattr_block, block_size=block_size
+    )
+    assert block_size == 1024
+    assert inode_size == 256
+    assert parent_home == inode_home == 278
+    assert (parent_block_offset, inode_block_offset) == (0, 256)
+    assert directory_home == 1345
+
+    aliases = tuple(
+        f"dense-rename-alias-{index:02d}".encode("ascii")
+        for index in range(25)
+    )
+    new_name = "compacted-" + ("n" * 112) + ".txt"
+    new_name_bytes = new_name.encode("ascii")
+    needed = (8 + len(new_name_bytes) + 3) & ~3
+    assert len(new_name_bytes) == 126
+    assert needed == 136
+    original_directory = _linear_directory_with_appended_aliases(
+        superblock,
+        parent_inode=parent_number,
+        parent_generation=parent_generation,
+        original=canonical_directory,
+        target_inode=inode_number,
+        aliases=aliases,
+    )
+    dense_entries = _checked_linear_directory_entries(
+        superblock,
+        parent_number,
+        parent_generation,
+        original_directory,
+    )
+    dense_target_refs = sum(
+        entry[1] == inode_number for entry in dense_entries
+    )
+    assert dense_target_refs == 2 + len(aliases) == 27
+    assert [entry for entry in dense_entries if entry[4] == b"hardlink.txt"] == [
+        (44, inode_number, 20, 1, b"hardlink.txt")
+    ]
+    compacted_non_source_bytes = sum(
+        (8 + len(entry[4]) + 3) & ~3
+        for entry in dense_entries
+        if entry[4] != b"hardlink.txt"
+    )
+    assert compacted_non_source_bytes == 904
+    assert compacted_non_source_bytes + needed > block_size - 12
+
+    dense_inode = bytearray(inode)
+    struct.pack_into("<H", dense_inode, 0x1A, dense_target_refs)
+    dense_inode[:] = _inode_with_checksum(
+        superblock, inode_number, dense_inode
+    )
+    original_inode_home_buffer = bytearray(canonical_inode_home)
+    original_inode_home_buffer[
+        inode_block_offset : inode_block_offset + inode_size
+    ] = dense_inode
+    original_inode_home = bytes(original_inode_home_buffer)
+    input_patches = source_patches + (
+        (inode_home * block_size, original_inode_home),
+        (directory_home * block_size, original_directory),
+    )
+
+    epoch_ms = 3_000_008_901_345
+    backing = tmp_path / "staged-rename-aggregate-nospace.img"
+    output, trace, _ = run_recovery_forth(
+        path,
+        backing,
+        [
+            *_staged_rename_attempt_forth(
+                "_RF",
+                epoch_ms=epoch_ms,
+                metadata_capacity=2,
+                new_name=new_name,
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_RF-MOUNT-IOR 0=",
+                        "_RF-CLOCK-IOR 0=",
+                        "_RF-PROFILE-SIZE-IOR 0=",
+                        "_RF-PROFILE-BIND-IOR 0=",
+                        "_RF-PROFILE-USED _RF-PROFILE-SIZE =",
+                        "_RF-P-IOR 0=",
+                        "_RF-S-IOR 0=",
+                        "_RF-D-IOR 0=",
+                        "_RF-P D.VNODE @ _RF-VN =",
+                        f"_RF-OLD-NLINK {dense_target_refs} =",
+                        f"_RF-OLD-DREFS {dense_target_refs} =",
+                        "_RF-OPEN-IOR 0=",
+                        "_RF-IOR VFS-E-NOSPC =",
+                        "_RF-LAST-IOR _RF-IOR =",
+                        "_RF-OLD-IOR 0=",
+                        "_RF-OLD _RF-S =",
+                        "_RF-NEW 0=",
+                        "_RF-NEW-IOR VFS-IOR-REASON VFS-R-NOENT =",
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-RENAME-AGGREGATE-NOSPC-IOR" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_RF-CLOCK-CALLS @ 1 =",
+                        "_RF-VN VN.NLINK @ _RF-OLD-NLINK =",
+                        "_RF-VN VN.DREFS @ _RF-OLD-DREFS =",
+                        "_RF-VN VN.OPEN-REFS @ 1 =",
+                        "_RF-VN VN.MTIME @ _RF-OLD-MTIME =",
+                        "_RF-VN VN.MTIME-NS @ _RF-OLD-MTIME-NS =",
+                        "_RF-VN VN.CTIME @ _RF-OLD-CTIME =",
+                        "_RF-VN VN.CTIME-NS @ _RF-OLD-CTIME-NS =",
+                        "_RF-D-VN VN.MTIME @ _RF-OLD-D-MTIME =",
+                        "_RF-D-VN VN.MTIME-NS @ _RF-OLD-D-MTIME-NS =",
+                        "_RF-D-VN VN.CTIME @ _RF-OLD-D-CTIME =",
+                        "_RF-D-VN VN.CTIME-NS @ _RF-OLD-D-CTIME-NS =",
+                        "_RF-V V.ICOUNT @ _RF-OLD-ICOUNT =",
+                        "_RF-V V.VCOUNT @ _RF-OLD-VCOUNT =",
+                        "_RF-V V.STR-PTR @ _RF-OLD-STR-PTR =",
+                        "_RF-V V.IFREE @ _RF-OLD-IFREE =",
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-RENAME-AGGREGATE-NOSPC-CACHE" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_RF-HOMES 0=",
+                        "_RF-WRITER _RF-PROFILE-BASE =",
+                        "_RF-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_RF-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        "_RF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        "_RF-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        "_RF-V V.FLAGS @ VFS-F-RO AND 0=",
+                        "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        (
+                            "_XU-DIR-SNAPSHOT "
+                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-RENAME-AGGREGATE-NOSPC-ZEROWRITE" THEN'
+            ),
+            "_RF-FD VFS-CLOSE? CONSTANT _RF-CLOSE-IOR",
+            "0 _RF-V VFS-UNMOUNT CONSTANT _RF-UNMOUNT-IOR",
+            (
+                "_RF-CLOSE-IOR 0= _RF-UNMOUNT-IOR 0= AND "
+                "_RF-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_RF-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-PUBLIC-RENAME-AGGREGATE-NOSPC-UNMOUNT" THEN'
+            ),
+        ],
+        patches=input_patches,
+        capture_media=backing,
+    )
+    for marker in (
+        "EXT4-PUBLIC-RENAME-AGGREGATE-NOSPC-IOR",
+        "EXT4-PUBLIC-RENAME-AGGREGATE-NOSPC-CACHE",
+        "EXT4-PUBLIC-RENAME-AGGREGATE-NOSPC-ZEROWRITE",
+        "EXT4-PUBLIC-RENAME-AGGREGATE-NOSPC-UNMOUNT",
     ):
         _assert_emitted(output, marker)
     assert trace == ()
