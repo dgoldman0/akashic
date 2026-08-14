@@ -14988,6 +14988,442 @@ def test_unified_orphan_plan_authenticates_stably_and_reuses_workspace(
     assert trace == ()
 
 
+def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pairs(
+    tmp_path: Path,
+) -> None:
+    block_size = 1024
+    range_capacity = 2 * (block_size // 4) + 16
+    range_workspace_bytes = range_capacity * 2 * 8
+    plan_slots = 4
+    plan_workspace_bytes = plan_slots * 4 * 8
+    arena_bytes = 2 * range_workspace_bytes + plan_workspace_bytes
+    blank = tmp_path / "runtime-orphan-workspaces.img"
+    blank.write_bytes(bytes(4 * 512))
+
+    output = run_forth(
+        blank,
+        [
+            "CREATE _ROW-CTX _EXT4-CTX-SIZE ALLOT",
+            "_ROW-CTX _EXT4-CTX-SIZE 0 FILL",
+            f"{block_size} _ROW-CTX _EXT4-C.BSIZE + !",
+            f"{arena_bytes} A-XMEM ARENA-NEW THROW CONSTANT _ROW-ARENA",
+            "_ROW-ARENA _ROW-CTX _EXT4-C.ARENA + !",
+            (
+                "_ROW-CTX _EXT4-ENSURE-ORPHAN-AUTH-WORKSPACE "
+                "CONSTANT _ROW-AUTH-FIRST-IOR"
+            ),
+            (
+                "_ROW-CTX _EXT4-C.MUTATION-RANGES + @ "
+                "CONSTANT _ROW-MUTATION"
+            ),
+            (
+                "_ROW-CTX _EXT4-C.MUTATION-RANGE-CAP + @ "
+                "CONSTANT _ROW-MUTATION-CAP"
+            ),
+            (
+                "_ROW-CTX _EXT4-C.OWNER-CERT-RANGES + @ "
+                "CONSTANT _ROW-CERT"
+            ),
+            (
+                "_ROW-CTX _EXT4-C.OWNER-CERT-RANGE-CAP + @ "
+                "CONSTANT _ROW-CERT-CAP"
+            ),
+            "_ROW-ARENA ARENA-USED CONSTANT _ROW-AUTH-USED",
+            (
+                "_ROW-MUTATION _ROW-MUTATION-CAP 2* CELLS "
+                "_EXT4-BYTES-ZERO? CONSTANT _ROW-MUTATION-FIRST-ZERO"
+            ),
+            (
+                "_ROW-CERT _ROW-CERT-CAP 2* CELLS "
+                "_EXT4-BYTES-ZERO? CONSTANT _ROW-CERT-FIRST-ZERO"
+            ),
+            (
+                "_ROW-MUTATION _ROW-MUTATION-CAP 2* CELLS 0xA5 FILL "
+                "_ROW-CERT _ROW-CERT-CAP 2* CELLS 0x5A FILL"
+            ),
+            (
+                "_ROW-CTX _EXT4-ENSURE-ORPHAN-AUTH-WORKSPACE "
+                "CONSTANT _ROW-AUTH-REUSE-IOR"
+            ),
+            "_ROW-ARENA ARENA-USED CONSTANT _ROW-AUTH-REUSED",
+            (
+                "_ROW-MUTATION _ROW-MUTATION-CAP 2* CELLS "
+                "_EXT4-BYTES-ZERO? CONSTANT _ROW-MUTATION-REUSED-ZERO"
+            ),
+            (
+                "_ROW-CERT _ROW-CERT-CAP 2* CELLS "
+                "_EXT4-BYTES-ZERO? CONSTANT _ROW-CERT-REUSED-ZERO"
+            ),
+            (
+                "2 _ROW-CTX _EXT4-ENSURE-ORPHAN-PLAN-WORKSPACE "
+                "CONSTANT _ROW-PLAN-FIRST-IOR"
+            ),
+            "_ROW-CTX _EXT4-C.O.TABLE + @ CONSTANT _ROW-PLAN",
+            "_ROW-CTX _EXT4-C.O.SLOTS + @ CONSTANT _ROW-PLAN-SLOTS",
+            "_ROW-ARENA ARENA-USED CONSTANT _ROW-PLAN-USED",
+            (
+                "_ROW-PLAN _ROW-PLAN-SLOTS _EXT4-ORPHAN-RECORD-SIZE * "
+                "_EXT4-BYTES-ZERO? CONSTANT _ROW-PLAN-FIRST-ZERO"
+            ),
+            (
+                "_ROW-PLAN _ROW-PLAN-SLOTS _EXT4-ORPHAN-RECORD-SIZE * "
+                "0x3C FILL 2 _ROW-CTX "
+                "_EXT4-ENSURE-ORPHAN-PLAN-WORKSPACE "
+                "CONSTANT _ROW-PLAN-REUSE-IOR"
+            ),
+            "_ROW-ARENA ARENA-USED CONSTANT _ROW-PLAN-REUSED",
+            (
+                "_ROW-PLAN _ROW-PLAN-SLOTS _EXT4-ORPHAN-RECORD-SIZE * "
+                "_EXT4-BYTES-ZERO? CONSTANT _ROW-PLAN-REUSED-ZERO"
+            ),
+            "CREATE _ROW-BAD-AUTH _EXT4-CTX-SIZE ALLOT",
+            "_ROW-BAD-AUTH _EXT4-CTX-SIZE 0 FILL",
+            f"{block_size} _ROW-BAD-AUTH _EXT4-C.BSIZE + !",
+            "64 A-XMEM ARENA-NEW THROW CONSTANT _ROW-BAD-AUTH-ARENA",
+            "_ROW-BAD-AUTH-ARENA _ROW-BAD-AUTH _EXT4-C.ARENA + !",
+            "1 _ROW-BAD-AUTH _EXT4-C.MUTATION-RANGES + !",
+            (
+                "_ROW-BAD-AUTH-ARENA ARENA-USED "
+                "CONSTANT _ROW-BAD-AUTH-BEFORE"
+            ),
+            (
+                "_ROW-BAD-AUTH _EXT4-ENSURE-ORPHAN-AUTH-WORKSPACE "
+                "CONSTANT _ROW-BAD-AUTH-IOR"
+            ),
+            "CREATE _ROW-BAD-PLAN _EXT4-CTX-SIZE ALLOT",
+            "_ROW-BAD-PLAN _EXT4-CTX-SIZE 0 FILL",
+            "64 A-XMEM ARENA-NEW THROW CONSTANT _ROW-BAD-PLAN-ARENA",
+            "_ROW-BAD-PLAN-ARENA _ROW-BAD-PLAN _EXT4-C.ARENA + !",
+            "1 _ROW-BAD-PLAN _EXT4-C.O.TABLE + !",
+            (
+                "_ROW-BAD-PLAN-ARENA ARENA-USED "
+                "CONSTANT _ROW-BAD-PLAN-BEFORE"
+            ),
+            (
+                "1 _ROW-BAD-PLAN _EXT4-ENSURE-ORPHAN-PLAN-WORKSPACE "
+                "CONSTANT _ROW-BAD-PLAN-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_ROW-AUTH-FIRST-IOR 0=",
+                        f"_ROW-MUTATION-CAP {range_capacity} =",
+                        f"_ROW-CERT-CAP {range_capacity} =",
+                        "_ROW-MUTATION _ROW-ARENA A.BASE @ =",
+                        (
+                            "_ROW-CERT _ROW-MUTATION "
+                            f"{range_workspace_bytes} + ="
+                        ),
+                        f"_ROW-AUTH-USED {2 * range_workspace_bytes} =",
+                        "_ROW-MUTATION-FIRST-ZERO",
+                        "_ROW-CERT-FIRST-ZERO",
+                        "_ROW-AUTH-REUSE-IOR 0=",
+                        "_ROW-AUTH-REUSED _ROW-AUTH-USED =",
+                        (
+                            "_ROW-CTX _EXT4-C.MUTATION-RANGES + @ "
+                            "_ROW-MUTATION ="
+                        ),
+                        (
+                            "_ROW-CTX _EXT4-C.OWNER-CERT-RANGES + @ "
+                            "_ROW-CERT ="
+                        ),
+                        "_ROW-MUTATION-REUSED-ZERO",
+                        "_ROW-CERT-REUSED-ZERO",
+                        "_ROW-PLAN-FIRST-IOR 0=",
+                        f"_ROW-PLAN-SLOTS {plan_slots} =",
+                        (
+                            "_ROW-PLAN _ROW-CERT "
+                            f"{range_workspace_bytes} + ="
+                        ),
+                        f"_ROW-PLAN-USED {arena_bytes} =",
+                        "_ROW-PLAN-FIRST-ZERO",
+                        "_ROW-PLAN-REUSE-IOR 0=",
+                        "_ROW-PLAN-REUSED _ROW-PLAN-USED =",
+                        "_ROW-CTX _EXT4-C.O.TABLE + @ _ROW-PLAN =",
+                        "_ROW-PLAN-REUSED-ZERO",
+                        (
+                            "_ROW-BAD-AUTH-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_ROW-BAD-AUTH-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-DATA-MAP ="
+                        ),
+                        (
+                            "_ROW-BAD-AUTH-ARENA ARENA-USED "
+                            "_ROW-BAD-AUTH-BEFORE ="
+                        ),
+                        (
+                            "_ROW-BAD-AUTH _EXT4-C.OWNER-CERT-RANGES + "
+                            "@ 0="
+                        ),
+                        (
+                            "_ROW-BAD-PLAN-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_ROW-BAD-PLAN-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-ORPHAN-FILE ="
+                        ),
+                        (
+                            "_ROW-BAD-PLAN-ARENA ARENA-USED "
+                            "_ROW-BAD-PLAN-BEFORE ="
+                        ),
+                        "_ROW-BAD-PLAN _EXT4-C.O.SLOTS + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-RUNTIME-ORPHAN-WORKSPACES" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-RUNTIME-ORPHAN-WORKSPACES")
+
+
+def test_runtime_orphan_plan_lookup_wraps_and_preserves_pointer_authority(
+    tmp_path: Path,
+) -> None:
+    blank = tmp_path / "runtime-orphan-plan-lookup.img"
+    blank.write_bytes(bytes(4 * 512))
+    output = run_forth(
+        blank,
+        [
+            "CREATE _ROF-CTX _EXT4-CTX-SIZE ALLOT",
+            "_ROF-CTX _EXT4-CTX-SIZE 0 FILL",
+            "11 _ROF-CTX _EXT4-C.SB + _EXT4-SB.FIRST-INO + L!",
+            "64 _ROF-CTX _EXT4-C.INODES + !",
+            (
+                "4 _EXT4-ORPHAN-RECORD-SIZE * A-XMEM ARENA-NEW "
+                "THROW CONSTANT _ROF-ARENA"
+            ),
+            "_ROF-ARENA _ROF-CTX _EXT4-C.ARENA + !",
+            (
+                "2 _ROF-CTX _EXT4-ENSURE-ORPHAN-PLAN-WORKSPACE "
+                "CONSTANT _ROF-ENSURE-IOR"
+            ),
+            (
+                "15 _EXT4-OK-MODERN 7 8 _ROF-CTX "
+                "_EXT4-ORPHAN-TABLE-PUT CONSTANT _ROF-PUT-15-IOR"
+            ),
+            (
+                "19 _EXT4-OK-LEGACY 23 0 _ROF-CTX "
+                "_EXT4-ORPHAN-TABLE-PUT CONSTANT _ROF-PUT-19-IOR"
+            ),
+            "2 _ROF-CTX _EXT4-C.O.ACTIVE + !",
+            "1 _ROF-CTX _EXT4-C.O.MODERN-ACTIVE + !",
+            "1 _ROF-CTX _EXT4-C.O.LEGACY-ACTIVE + !",
+            "3 _ROF-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _ROF-DIRECT",
+            "0 _ROF-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _ROF-WRAPPED",
+            "1 _ROF-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _ROF-INJECTED",
+            "CREATE _ROF-COPY _EXT4-ORPHAN-RECORD-SIZE ALLOT",
+            (
+                "_ROF-DIRECT _ROF-COPY _EXT4-ORPHAN-RECORD-SIZE "
+                "CMOVE"
+            ),
+            (
+                "15 _ROF-CTX _EXT4-ORPHAN-PLAN-FIND "
+                "CONSTANT _ROF-FIND-15-IOR CONSTANT _ROF-FIND-15"
+            ),
+            (
+                "19 _ROF-CTX _EXT4-ORPHAN-PLAN-FIND "
+                "CONSTANT _ROF-FIND-19-IOR CONSTANT _ROF-FIND-19"
+            ),
+            (
+                "23 _ROF-CTX _EXT4-ORPHAN-PLAN-FIND "
+                "CONSTANT _ROF-MISS-IOR CONSTANT _ROF-MISS"
+            ),
+            (
+                "_ROF-DIRECT _ROF-INJECTED _EXT4-ORPHAN-RECORD-SIZE "
+                "CMOVE _ROF-INJECTED _ROF-CTX "
+                "_EXT4-ORPHAN-PLAN-MEMBER? "
+                "CONSTANT _ROF-INJECTED-MEMBER"
+            ),
+            "_ROF-INJECTED _EXT4-ORPHAN-RECORD-SIZE 0 FILL",
+            (
+                "16 _EXT4-OK-MODERN 9 10 _ROF-CTX "
+                "_EXT4-ORPHAN-TABLE-PUT CONSTANT _ROF-FILL-16-IOR"
+            ),
+            (
+                "17 _EXT4-OK-MODERN 11 12 _ROF-CTX "
+                "_EXT4-ORPHAN-TABLE-PUT CONSTANT _ROF-FILL-17-IOR"
+            ),
+            (
+                "23 _ROF-CTX _EXT4-ORPHAN-PLAN-FIND "
+                "CONSTANT _ROF-FULL-IOR CONSTANT _ROF-FULL-RECORD"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_ROF-ENSURE-IOR 0=",
+                        "_ROF-CTX _EXT4-C.O.SLOTS + @ 4 =",
+                        "_ROF-PUT-15-IOR 0=",
+                        "_ROF-PUT-19-IOR 0=",
+                        "_ROF-DIRECT _EXT4-OE.INO + @ 15 =",
+                        "_ROF-WRAPPED _EXT4-OE.INO + @ 19 =",
+                        "_ROF-FIND-15-IOR 0=",
+                        "_ROF-FIND-15 _ROF-DIRECT =",
+                        "_ROF-FIND-19-IOR 0=",
+                        "_ROF-FIND-19 _ROF-WRAPPED =",
+                        "_ROF-MISS 0=",
+                        "_ROF-MISS-IOR 0=",
+                        "_ROF-DIRECT _ROF-CTX _EXT4-ORPHAN-PLAN-MEMBER?",
+                        "_ROF-WRAPPED _ROF-CTX _EXT4-ORPHAN-PLAN-MEMBER?",
+                        (
+                            "_ROF-COPY _ROF-CTX "
+                            "_EXT4-ORPHAN-PLAN-MEMBER? 0="
+                        ),
+                        "_ROF-INJECTED-MEMBER 0=",
+                        "_ROF-FILL-16-IOR 0=",
+                        "_ROF-FILL-17-IOR 0=",
+                        "_ROF-FULL-RECORD 0=",
+                        (
+                            "_ROF-FULL-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_ROF-FULL-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-ORPHAN-FILE ="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-RUNTIME-ORPHAN-PLAN-FIND" THEN'
+            ),
+        ],
+    )
+    _assert_emitted(output, "EXT4-RUNTIME-ORPHAN-PLAN-FIND")
+
+
+def test_runtime_modern_orphan_lookup_reauthenticates_exact_inode_and_locator(
+    canonical_images: dict[str, Path],
+    tmp_path: Path,
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    _, modern_inode, _ = _ext4_inode_record(path, 17)
+    inode_size = len(modern_inode)
+    patches = _legacy_orphan_patches(
+        path,
+        14,
+        ((14, 0),),
+        modern_entries=(17,),
+    )
+    output, trace, _media_sha256 = run_recovery_forth(
+        path,
+        tmp_path / "runtime-modern-orphan-reauth.img",
+        [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
+            (
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
+                "CONSTANT _RMO-MOUNT-IOR CONSTANT _RMO-V"
+            ),
+            "_RMO-V _EXT4-CTX CONSTANT _RMO-CTX",
+            (
+                "17 _RMO-CTX _EXT4-ORPHAN-PLAN-FIND "
+                "CONSTANT _RMO-FIND-IOR CONSTANT _RMO-EXPECTED-RECORD"
+            ),
+            f"CREATE _RMO-EXPECTED-INODE {inode_size} ALLOT",
+            (
+                "17 _RMO-CTX _EXT4-LOAD-ORPHAN-INODE "
+                "CONSTANT _RMO-EXPECTED-LOAD-IOR"
+            ),
+            (
+                "_RMO-CTX _EXT4-C.INODE + _RMO-EXPECTED-INODE "
+                f"{inode_size} CMOVE"
+            ),
+            (
+                "14 _RMO-CTX _EXT4-LOAD-ORPHAN-INODE "
+                "CONSTANT _RMO-DISTRACTOR-LOAD-IOR"
+            ),
+            (
+                "_RMO-CTX _EXT4-C.INODE + _RMO-EXPECTED-INODE "
+                f"{inode_size} _EXT4-BYTES=? 0= "
+                "CONSTANT _RMO-DISTRACTOR-DIFFERS"
+            ),
+            (
+                "17 _RMO-CTX _EXT4-REAUTH-MODERN-ORPHAN-BY-INODE "
+                "CONSTANT _RMO-SUCCESS-IOR CONSTANT _RMO-RECORD"
+            ),
+            (
+                "_RMO-CTX _EXT4-C.INODE + _RMO-EXPECTED-INODE "
+                f"{inode_size} _EXT4-BYTES=? "
+                "CONSTANT _RMO-INODE-MATCHES"
+            ),
+            (
+                "15 _RMO-CTX _EXT4-REAUTH-MODERN-ORPHAN-BY-INODE "
+                "CONSTANT _RMO-ABSENT-IOR CONSTANT _RMO-ABSENT-RECORD"
+            ),
+            (
+                "14 _RMO-CTX _EXT4-REAUTH-MODERN-ORPHAN-BY-INODE "
+                "CONSTANT _RMO-LEGACY-IOR CONSTANT _RMO-LEGACY-RECORD"
+            ),
+            (
+                "_RMO-RECORD _EXT4-OE.LOCATOR-B + @ "
+                "CONSTANT _RMO-ORIGINAL-SLOT"
+            ),
+            "1 _RMO-RECORD _EXT4-OE.LOCATOR-B + !",
+            (
+                "17 _RMO-CTX _EXT4-REAUTH-MODERN-ORPHAN-BY-INODE "
+                "CONSTANT _RMO-TAMPER-IOR CONSTANT _RMO-TAMPER-RECORD"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_RMO-MOUNT-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_RMO-MOUNT-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_RMO-CTX _EXT4-C.O.ACTIVE + @ 2 =",
+                        "_RMO-FIND-IOR 0=",
+                        "_RMO-EXPECTED-RECORD 0<>",
+                        "_RMO-EXPECTED-LOAD-IOR 0=",
+                        "_RMO-DISTRACTOR-LOAD-IOR 0=",
+                        "_RMO-DISTRACTOR-DIFFERS",
+                        "_RMO-SUCCESS-IOR 0=",
+                        "_RMO-RECORD _RMO-EXPECTED-RECORD =",
+                        (
+                            "_RMO-RECORD _RMO-CTX "
+                            "_EXT4-ORPHAN-PLAN-MEMBER?"
+                        ),
+                        (
+                            "_RMO-RECORD _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-MODERN ="
+                        ),
+                        "_RMO-INODE-MATCHES",
+                        "_RMO-ABSENT-RECORD 0=",
+                        "_RMO-ABSENT-IOR VFS-E-NOENT =",
+                        "_RMO-LEGACY-RECORD 0=",
+                        "_RMO-LEGACY-IOR VFS-E-NOENT =",
+                        "_RMO-ORIGINAL-SLOT 0=",
+                        "_RMO-TAMPER-RECORD 0=",
+                        (
+                            "_RMO-TAMPER-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_RMO-TAMPER-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-FORMAT ="
+                        ),
+                        (
+                            "_RMO-TAMPER-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-CORRUPT ="
+                        ),
+                        (
+                            "_RMO-TAMPER-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-ORPHAN-FILE ="
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-RUNTIME-MODERN-ORPHAN-REAUTH" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-RUNTIME-MODERN-ORPHAN-REAUTH")
+    assert trace == ()
+
+
 @pytest.mark.parametrize(
     (
         "case",

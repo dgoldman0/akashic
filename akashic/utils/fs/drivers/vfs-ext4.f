@@ -9825,15 +9825,21 @@ CONSTANT _EXT4-ORPHAN-SLOTS-MAX
     DUP _EXT4-ORPHAN-SLOTS-MAX U> IF 2DROP FALSE EXIT THEN
     DUP 1- AND 0= NIP ;
 
-\ Allocate a half-full power-of-two uniqueness table from the caller's arena.
-\ Failed-mount retries reuse and clear the original allocation.  A retry that
-\ needs a larger table fails without consuming a second monotonic allocation.
-: _EXT4-ENSURE-ORPHAN-WORKSPACE  ( active-count ctx -- ior )
+\ Reserve the geometry-derived authentication workspaces before examining any
+\ orphan inode or orphan-file block.  Failed-mount retries reuse and clear the
+\ retained allocations rather than consuming the monotonic arena again.
+: _EXT4-ENSURE-ORPHAN-AUTH-WORKSPACE  ( ctx -- ior )
+    DUP 0= IF DROP VFS-E-INVALID EXIT THEN
+    DUP _EXT4-ENSURE-MUTATION-RANGE-WORKSPACE
+    ?DUP IF NIP EXIT THEN
+    _EXT4-ENSURE-OWNER-CERT-RANGE-WORKSPACE ;
+
+\ Allocate the half-full power-of-two uniqueness plan only after its exact
+\ authenticated union count is known.  A retry that needs a larger table fails
+\ without consuming a second monotonic allocation.
+: _EXT4-ENSURE-ORPHAN-PLAN-WORKSPACE  ( active-count ctx -- ior )
     _EXT4-OW-CTX ! DUP _EXT4-OW-COUNT ! DROP
-    _EXT4-OW-CTX @ _EXT4-ENSURE-MUTATION-RANGE-WORKSPACE
-    ?DUP IF EXIT THEN
-    _EXT4-OW-CTX @ _EXT4-ENSURE-OWNER-CERT-RANGE-WORKSPACE
-    ?DUP IF EXIT THEN
+    _EXT4-OW-CTX @ 0= IF VFS-E-INVALID EXIT THEN
     _EXT4-OW-CTX @ _EXT4-ORPHAN-WORKSPACE? 0= IF
         EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
@@ -9925,6 +9931,73 @@ VARIABLE _EXT4-ON-INO
     _EXT4-ON-INO @
     _EXT4-ON-CTX @ _EXT4-C.SB + _EXT4-SB.FIRST-INO + L@ U< 0=
     _EXT4-ON-INO @ _EXT4-ON-CTX @ _EXT4-C.INODES + @ U> 0= AND ;
+
+VARIABLE _EXT4-OPF-CTX
+VARIABLE _EXT4-OPF-INO
+VARIABLE _EXT4-OPF-ACTIVE
+VARIABLE _EXT4-OPF-SLOTS
+VARIABLE _EXT4-OPF-SLOT
+VARIABLE _EXT4-OPF-ENTRY
+
+\ Return the exact retained plan record for one inode.  Absence is not an
+\ error: insertion preflight also uses this lookup to prove that a candidate
+\ is not already in the authenticated union.  Every probe is bounded by the
+\ retained power-of-two table size.
+: _EXT4-ORPHAN-PLAN-FIND  ( inode-number ctx -- plan-record|0 ior )
+    _EXT4-OPF-CTX ! _EXT4-OPF-INO !
+    _EXT4-OPF-CTX @ 0= _EXT4-OPF-INO @ 0= OR IF
+        0 VFS-E-INVALID EXIT
+    THEN
+    _EXT4-OPF-INO @ _EXT4-OPF-CTX @
+    _EXT4-ORPHAN-INODE-NUMBER? 0= IF 0 VFS-E-INVALID EXIT THEN
+    _EXT4-OPF-CTX @ _EXT4-ORPHAN-WORKSPACE? 0= IF
+        0 EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-OPF-CTX @ _EXT4-C.O.ACTIVE + @ DUP 0< IF
+        DROP 0 EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    DUP _EXT4-OPF-ACTIVE !
+    _EXT4-OPF-CTX @ _EXT4-C.INODES + @ U> IF
+        0 EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-OPF-CTX @ _EXT4-C.O.MODERN-ACTIVE + @
+    _EXT4-OPF-CTX @ _EXT4-C.O.LEGACY-ACTIVE + @ _EXT4-UADD?
+    DUP IF
+        2DROP 0 EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    DROP _EXT4-OPF-ACTIVE @ <> IF
+        0 EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-OPF-CTX @ _EXT4-C.O.SLOTS + @ _EXT4-OPF-SLOTS !
+    _EXT4-OPF-ACTIVE @ 0= IF 0 0 EXIT THEN
+    _EXT4-OPF-SLOTS @ 0= IF
+        0 EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-OPF-ACTIVE @ _EXT4-HASH-SLOTS
+    DUP IF
+        2DROP 0 EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    DROP _EXT4-OPF-SLOTS @ U> IF
+        0 EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-OPF-CTX @ _EXT4-C.O.TABLE + @
+    _EXT4-OPF-SLOTS @ _EXT4-ORPHAN-RECORD-SIZE *
+    MSPAN-NONWRAPPING? 0= IF
+        0 EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-OPF-INO @ _EXT4-OPF-SLOTS @ 1- AND _EXT4-OPF-SLOT !
+    _EXT4-OPF-SLOTS @ 0 ?DO
+        _EXT4-OPF-SLOT @ _EXT4-OPF-CTX @ _EXT4-ORPHAN-TABLE-ENTRY
+        DUP _EXT4-OPF-ENTRY ! @ DUP 0= IF
+            DROP 0 0 UNLOOP EXIT
+        THEN
+        _EXT4-OPF-INO @ = IF
+            _EXT4-OPF-ENTRY @ 0 UNLOOP EXIT
+        THEN
+        _EXT4-OPF-SLOT @ 1+ _EXT4-OPF-SLOTS @ 1- AND
+        _EXT4-OPF-SLOT !
+    LOOP
+    0 EXT4-D-ORPHAN-FILE _EXT4-CORRUPT ;
 
 : _EXT4-LEGACY-ORPHAN-NEXT  ( inode-number ctx -- next ior )
     _EXT4-OS-CTX ! DUP _EXT4-OS-INO !
@@ -10119,8 +10192,6 @@ VARIABLE _EXT4-OM-CTX
 VARIABLE _EXT4-OM-BASE
 VARIABLE _EXT4-OM-OFF
 VARIABLE _EXT4-OM-INO
-VARIABLE _EXT4-OM-SLOT
-VARIABLE _EXT4-OM-ENTRY
 
 \ Cleanup authority belongs to the exact retained discovery plan, not to a
 \ caller-authored record that merely copies its four cells.
@@ -10129,6 +10200,7 @@ VARIABLE _EXT4-OM-ENTRY
     _EXT4-OM-RECORD @ 0= _EXT4-OM-CTX @ 0= OR IF FALSE EXIT THEN
     _EXT4-OM-CTX @ _EXT4-ORPHAN-WORKSPACE? 0= IF FALSE EXIT THEN
     _EXT4-OM-CTX @ _EXT4-C.O.TABLE + @ DUP _EXT4-OM-BASE !
+    _EXT4-OM-BASE @ 0= IF DROP FALSE EXIT THEN
     _EXT4-OM-RECORD @ U> IF FALSE EXIT THEN
     _EXT4-OM-RECORD @ _EXT4-OM-BASE @ - DUP _EXT4-OM-OFF !
     _EXT4-ORPHAN-RECORD-SIZE MOD IF FALSE EXIT THEN
@@ -10137,21 +10209,9 @@ VARIABLE _EXT4-OM-ENTRY
     _EXT4-ORPHAN-RECORD-SIZE * U< 0= IF FALSE EXIT THEN
     _EXT4-OM-RECORD @ @ DUP 0= IF DROP FALSE EXIT THEN
     _EXT4-OM-INO !
-    _EXT4-OM-INO @
-    _EXT4-OM-CTX @ _EXT4-C.O.SLOTS + @ 1- AND _EXT4-OM-SLOT !
-    _EXT4-OM-CTX @ _EXT4-C.O.SLOTS + @ 0 ?DO
-        _EXT4-OM-SLOT @ _EXT4-OM-CTX @ _EXT4-ORPHAN-TABLE-ENTRY
-        DUP _EXT4-OM-ENTRY ! @ DUP 0= IF
-            DROP FALSE UNLOOP EXIT
-        THEN
-        _EXT4-OM-INO @ = IF
-            _EXT4-OM-ENTRY @ _EXT4-OM-RECORD @ = UNLOOP EXIT
-        THEN
-        _EXT4-OM-SLOT @ 1+
-        _EXT4-OM-CTX @ _EXT4-C.O.SLOTS + @ 1- AND
-        _EXT4-OM-SLOT !
-    LOOP
-    FALSE ;
+    _EXT4-OM-INO @ _EXT4-OM-CTX @ _EXT4-ORPHAN-PLAN-FIND
+    DUP IF 2DROP FALSE EXIT THEN
+    DROP _EXT4-OM-RECORD @ = ;
 
 VARIABLE _EXT4-ORA-RECORD
 VARIABLE _EXT4-ORA-CTX
@@ -10201,6 +10261,28 @@ VARIABLE _EXT4-ORA-KIND
     THEN
     0 ;
 
+VARIABLE _EXT4-RMO-CTX
+VARIABLE _EXT4-RMO-INO
+VARIABLE _EXT4-RMO-RECORD
+
+\ Resolve one modern orphan through the authenticated retained plan, then
+\ reauthenticate its exact current media locator.  A missing inode or a valid
+\ union member of another protocol is a non-corrupt lookup refusal.
+: _EXT4-REAUTH-MODERN-ORPHAN-BY-INODE
+  ( inode-number ctx -- plan-record ior )
+    _EXT4-RMO-CTX ! _EXT4-RMO-INO !
+    _EXT4-RMO-INO @ _EXT4-RMO-CTX @ _EXT4-ORPHAN-PLAN-FIND
+    DUP IF NIP 0 SWAP EXIT THEN
+    DROP DUP 0= IF DROP 0 VFS-E-NOENT EXIT THEN
+    DUP _EXT4-RMO-RECORD !
+    _EXT4-OE.KIND + @ _EXT4-OK-MODERN <> IF
+        0 VFS-E-NOENT EXIT
+    THEN
+    _EXT4-RMO-RECORD @ _EXT4-RMO-CTX @
+    _EXT4-REAUTH-ORPHAN-PLAN-RECORD
+    ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-RMO-RECORD @ 0 ;
+
 : _EXT4-VALIDATE-INDEXED-ORPHANS  ( ctx -- ior )
     DUP _EXT4-OP-CTX !
     _EXT4-C.O.SLOTS + @ 0 ?DO
@@ -10233,6 +10315,8 @@ VARIABLE _EXT4-ORA-KIND
     0 _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + !
     0 _EXT4-OP-CTX @ _EXT4-C.O.LEGACY-ACTIVE + !
     0 _EXT4-OP-CTX @ _EXT4-C.O.CLEAR-PENDING + !
+    _EXT4-OP-CTX @ _EXT4-ENSURE-ORPHAN-AUTH-WORKSPACE
+    ?DUP IF EXIT THEN
     _EXT4-OP-CTX @ _EXT4-COUNT-LEGACY-ORPHANS ?DUP IF EXIT THEN
     _EXT4-OP-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
     _EXT4-OP-CTX @ _EXT4-COUNT-ACTIVE-ORPHANS ?DUP IF EXIT THEN
@@ -10252,7 +10336,7 @@ VARIABLE _EXT4-ORA-KIND
     THEN
     DUP _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + !
     _EXT4-OP-CTX @
-    _EXT4-ENSURE-ORPHAN-WORKSPACE ?DUP IF EXIT THEN
+    _EXT4-ENSURE-ORPHAN-PLAN-WORKSPACE ?DUP IF EXIT THEN
     _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ IF
         _EXT4-OP-CTX @ _EXT4-INDEX-ACTIVE-ORPHANS ?DUP IF EXIT THEN
     THEN
