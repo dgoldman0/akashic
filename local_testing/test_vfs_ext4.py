@@ -4208,7 +4208,7 @@ def build_snapshot():
     # distinct cold source stages.  This preserves the existing measured ext4
     # watchdog instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
-    max_ext4_source_steps = 1_250_000_000
+    max_ext4_source_steps = 1_350_000_000
     bootstrap_steps = _feed_until_idle(system, bootstrap, max_crc_source_steps)
 
     def load_source_stage(
@@ -7426,6 +7426,235 @@ def test_binding_descriptors_are_valid_and_truthful(
     )
     _assert_emitted(output, "EXT4-DESCRIPTOR-OK")
     _assert_emitted(output, "EXT4-STAGED-WRITE-DESCRIPTOR-OK")
+
+
+def test_staged_mount_retains_exact_runtime_orphan_workspace(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    output = run_forth(
+        path,
+        [
+            "T-ARENA CONSTANT _SR-ARENA",
+            (
+                "_SR-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _SR-IOR CONSTANT _SR-V"
+            ),
+            "_SR-V _EXT4-CTX CONSTANT _SR-CTX",
+            (
+                "_SR-CTX _EXT4-C.O.RUNTIME-TABLE + @ "
+                "CONSTANT _SR-TABLE"
+            ),
+            (
+                "_SR-CTX _EXT4-C.O.RUNTIME-SLOTS + @ "
+                "CONSTANT _SR-SLOTS"
+            ),
+            (
+                "_SR-CTX _EXT4-C.O.RUNTIME-CAPACITY + @ "
+                "CONSTANT _SR-CAPACITY"
+            ),
+            "_SR-CTX _SR-V _EXT4-VALIDATE-RUNTIME-ORPHAN-WORKSPACE "
+            "CONSTANT _SR-VALID-IOR",
+            "_SR-CTX _SR-V _EXT4-REQUIRE-RUNTIME-ORPHAN-BINDING "
+            "CONSTANT _SR-REQUIRE-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_SR-IOR 0=",
+                        "_SR-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_SR-V _EXT4-READY?",
+                        "_SR-V _EXT4-ATTACHED?",
+                        "_SR-V V.BINDING @ EXT4-STAGED-WRITE-BINDING =",
+                        "_SR-VALID-IOR 0=",
+                        "_SR-REQUIRE-IOR 0=",
+                        "_SR-CAPACITY 257 =",
+                        "_SR-SLOTS 1024 =",
+                        "_SR-TABLE 0<>",
+                        (
+                            "_SR-CTX _EXT4-C.O.TABLE + @ "
+                            "_SR-TABLE ="
+                        ),
+                        "_SR-CTX _EXT4-C.O.SLOTS + @ _SR-SLOTS =",
+                        "_SR-TABLE 32768 _EXT4-BYTES-ZERO?",
+                        "_SR-TABLE 32768 + _SR-ARENA A.PTR @ =",
+                        "_SR-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ 0=",
+                        "_SR-CTX _EXT4-C.J.REVOKE-TABLE + @ 0=",
+                        "_SR-CTX _EXT4-C.J.REVOKE-SLOTS + @ 0=",
+                        "_SR-CTX _EXT4-C.J.REVOKE-COUNT + @ 0=",
+                        "_SR-CTX _EXT4-C.J.REVOKE-HITS + @ 0=",
+                        "_SR-CTX _EXT4-C.J.REVOKE-READY + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-STAGED-RUNTIME-ORPHAN-EXACT" THEN'
+            ),
+            (
+                "258 _SR-CTX _EXT4-C.O.RUNTIME-CAPACITY + ! "
+                "_SR-CTX _SR-V "
+                "_EXT4-VALIDATE-RUNTIME-ORPHAN-WORKSPACE "
+                "CONSTANT _SR-BAD-CAPACITY-IOR"
+            ),
+            "257 _SR-CTX _EXT4-C.O.RUNTIME-CAPACITY + !",
+            (
+                "512 _SR-CTX _EXT4-C.O.RUNTIME-SLOTS + ! "
+                "_SR-CTX _SR-V "
+                "_EXT4-VALIDATE-RUNTIME-ORPHAN-WORKSPACE "
+                "CONSTANT _SR-BAD-SLOTS-IOR"
+            ),
+            "1024 _SR-CTX _EXT4-C.O.RUNTIME-SLOTS + !",
+            (
+                "_SR-TABLE 1+ _SR-CTX _EXT4-C.O.RUNTIME-TABLE + ! "
+                "_SR-CTX _SR-V "
+                "_EXT4-VALIDATE-RUNTIME-ORPHAN-WORKSPACE "
+                "CONSTANT _SR-BAD-TABLE-IOR"
+            ),
+            "_SR-TABLE _SR-CTX _EXT4-C.O.RUNTIME-TABLE + !",
+            (
+                "_SR-TABLE 8 - _SR-CTX "
+                "_EXT4-C.O.RUNTIME-TABLE + ! "
+                "_SR-CTX _SR-V "
+                "_EXT4-VALIDATE-RUNTIME-ORPHAN-WORKSPACE "
+                "CONSTANT _SR-BAD-SUFFIX-IOR"
+            ),
+            "_SR-TABLE _SR-CTX _EXT4-C.O.RUNTIME-TABLE + !",
+            (
+                "512 _SR-CTX _EXT4-C.O.SLOTS + ! "
+                "_SR-CTX _SR-V "
+                "_EXT4-REQUIRE-RUNTIME-ORPHAN-BINDING "
+                "CONSTANT _SR-BAD-ALIAS-IOR"
+            ),
+            "1024 _SR-CTX _EXT4-C.O.SLOTS + !",
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_SR-BAD-CAPACITY-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_SR-BAD-CAPACITY-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-ORPHAN-FILE ="
+                        ),
+                        (
+                            "_SR-BAD-SLOTS-IOR VFS-IOR-REASON "
+                            "VFS-R-CORRUPT ="
+                        ),
+                        (
+                            "_SR-BAD-SLOTS-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-ORPHAN-FILE ="
+                        ),
+                        "_SR-BAD-TABLE-IOR VFS-E-CORRUPT =",
+                        "_SR-BAD-SUFFIX-IOR VFS-E-CORRUPT =",
+                        "_SR-BAD-ALIAS-IOR VFS-E-CORRUPT =",
+                        "_SR-ARENA A.PTR @ _SR-TABLE 32768 + =",
+                    ]
+                )
+                + ' IF ." EXT4-STAGED-RUNTIME-TAMPER-REFUSED" THEN'
+            ),
+            (
+                "_SR-CTX _EXT4-UNBIND-RUNTIME-ORPHAN-WORKSPACE "
+                "CONSTANT _SR-UNBIND-IOR"
+            ),
+            "_SR-TABLE 32768 0xA5 FILL",
+            "_SR-ARENA A.PTR @ CONSTANT _SR-REUSE-PTR",
+            (
+                "_SR-CTX _SR-V _EXT4-ENSURE-RUNTIME-ORPHAN-WORKSPACE "
+                "CONSTANT _SR-REUSE-IOR"
+            ),
+            (
+                "_SR-CTX _SR-V _EXT4-BIND-RUNTIME-ORPHAN-WORKSPACE "
+                "CONSTANT _SR-REBIND-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_SR-UNBIND-IOR 0=",
+                        "_SR-REUSE-IOR 0=",
+                        "_SR-REBIND-IOR 0=",
+                        "_SR-ARENA A.PTR @ _SR-REUSE-PTR =",
+                        (
+                            "_SR-CTX _EXT4-C.O.RUNTIME-TABLE + @ "
+                            "_SR-TABLE ="
+                        ),
+                        "_SR-CTX _EXT4-C.O.TABLE + @ _SR-TABLE =",
+                        "_SR-TABLE 32768 _EXT4-BYTES-ZERO?",
+                    ]
+                )
+                + ' IF ." EXT4-STAGED-RUNTIME-REUSED" THEN'
+            ),
+            (
+                "_SR-CTX _EXT4-UNBIND-RUNTIME-ORPHAN-WORKSPACE "
+                "CONSTANT _SR-SHORT-UNBIND-IOR"
+            ),
+            "_SR-ARENA A.SIZE @ CONSTANT _SR-ARENA-SIZE",
+            (
+                "_SR-TABLE _SR-ARENA A.BASE @ - 32767 + "
+                "_SR-ARENA A.SIZE !"
+            ),
+            "0 _SR-CTX _EXT4-C.O.RUNTIME-TABLE + !",
+            "0 _SR-CTX _EXT4-C.O.RUNTIME-SLOTS + !",
+            "0 _SR-CTX _EXT4-C.O.RUNTIME-CAPACITY + !",
+            "_SR-ARENA _SR-TABLE ARENA-ROLLBACK",
+            "_SR-ARENA A.PTR @ CONSTANT _SR-SHORT-PTR",
+            (
+                "_SR-CTX _SR-V _EXT4-ENSURE-RUNTIME-ORPHAN-WORKSPACE "
+                "CONSTANT _SR-SHORT-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_SR-SHORT-UNBIND-IOR 0=",
+                        "_SR-SHORT-IOR VFS-E-NOMEM =",
+                        "_SR-ARENA A.PTR @ _SR-SHORT-PTR =",
+                        "_SR-CTX _EXT4-C.O.RUNTIME-TABLE + @ 0=",
+                        "_SR-CTX _EXT4-C.O.RUNTIME-SLOTS + @ 0=",
+                        "_SR-CTX _EXT4-C.O.RUNTIME-CAPACITY + @ 0=",
+                        "_SR-CTX _EXT4-C.O.TABLE + @ 0=",
+                        "_SR-CTX _EXT4-C.O.SLOTS + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-STAGED-RUNTIME-SHORT-REFUSED" THEN'
+            ),
+            "_SR-ARENA-SIZE _SR-ARENA A.SIZE !",
+            (
+                "_SR-CTX _SR-V _EXT4-ENSURE-RUNTIME-ORPHAN-WORKSPACE "
+                "CONSTANT _SR-RETRY-IOR"
+            ),
+            (
+                "_SR-CTX _SR-V _EXT4-BIND-RUNTIME-ORPHAN-WORKSPACE "
+                "CONSTANT _SR-RETRY-BIND-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_SR-RETRY-IOR 0=",
+                        "_SR-RETRY-BIND-IOR 0=",
+                        (
+                            "_SR-CTX _EXT4-C.O.RUNTIME-TABLE + @ "
+                            "_SR-TABLE ="
+                        ),
+                        "_SR-CTX _EXT4-C.O.RUNTIME-SLOTS + @ 1024 =",
+                        (
+                            "_SR-CTX _EXT4-C.O.RUNTIME-CAPACITY + "
+                            "@ 257 ="
+                        ),
+                        "_SR-CTX _EXT4-C.O.TABLE + @ _SR-TABLE =",
+                        "_SR-CTX _EXT4-C.O.SLOTS + @ 1024 =",
+                        "_SR-TABLE 32768 _EXT4-BYTES-ZERO?",
+                        "_SR-TABLE 32768 + _SR-ARENA A.PTR @ =",
+                    ]
+                )
+                + ' IF ." EXT4-STAGED-RUNTIME-RETRY-STABLE" THEN'
+            ),
+        ],
+    )
+    for marker in (
+        "EXT4-STAGED-RUNTIME-ORPHAN-EXACT",
+        "EXT4-STAGED-RUNTIME-TAMPER-REFUSED",
+        "EXT4-STAGED-RUNTIME-REUSED",
+        "EXT4-STAGED-RUNTIME-SHORT-REFUSED",
+        "EXT4-STAGED-RUNTIME-RETRY-STABLE",
+    ):
+        _assert_emitted(output, marker)
 
 
 @pytest.mark.parametrize(
@@ -13587,6 +13816,22 @@ def _canonical_lines(row: dict) -> list[str]:
     block_size = row["block_size"]
     inode_size = row["inode_size"]
     groups = row["expected_groups"]
+    runtime_capacity_lines = []
+    if row["profile"] == "primary":
+        runtime_capacity = 257
+        runtime_capacity_lines = [
+            "T-ARENA ARENA-USED CONSTANT _E4-ROC-USED-BEFORE",
+            (
+                "_V _EXT4-CTX _V _EXT4-RUNTIME-ORPHAN-CAPACITY "
+                "CONSTANT _E4-ROC-IOR CONSTANT _E4-ROC-CAP"
+            ),
+            "T-ARENA ARENA-USED CONSTANT _E4-ROC-USED-AFTER",
+            (
+                f"_E4-ROC-IOR 0= _E4-ROC-CAP {runtime_capacity} = AND "
+                "_E4-ROC-USED-BEFORE _E4-ROC-USED-AFTER = AND "
+                'IF ." EXT4-RUNTIME-ORPHAN-CAPACITY-OK" THEN'
+            ),
+        ]
     return [
         "CREATE _E4BUF 16384 ALLOT",
         "CREATE _E4STAT VFS-STATFS-SIZE ALLOT",
@@ -13599,6 +13844,16 @@ def _canonical_lines(row: dict) -> list[str]:
             f"_V EXT4-GROUP-COUNT@ {groups} = AND "
             'IF ." EXT4-MOUNT-OK" THEN'
         ),
+        "_V _EXT4-CTX CONSTANT _E4-ROC-CTX",
+        (
+            "_E4-ROC-CTX _EXT4-C.O.RUNTIME-TABLE + @ 0= "
+            "_E4-ROC-CTX _EXT4-C.O.RUNTIME-SLOTS + @ 0= AND "
+            "_E4-ROC-CTX _EXT4-C.O.RUNTIME-CAPACITY + @ 0= AND "
+            "_E4-ROC-CTX _EXT4-C.O.TABLE + @ 0= AND "
+            "_E4-ROC-CTX _EXT4-C.O.SLOTS + @ 0= AND "
+            'IF ." EXT4-ORDINARY-ORPHAN-WORKSPACE-ZERO" THEN'
+        ),
+        *runtime_capacity_lines,
         'S" /fixture/payload.txt" _V VFS-RESOLVE? CONSTANT _P-IOR CONSTANT _P',
         'S" /fixture/hardlink.txt" _V VFS-RESOLVE? CONSTANT _H-IOR CONSTANT _H',
         (
@@ -13715,8 +13970,11 @@ def test_canonical_images_are_fully_inspectable(
         "EXT4-XATTR-LARGE-OK",
         "EXT4-STATFS-OK",
         "EXT4-READONLY-OK",
+        "EXT4-ORDINARY-ORPHAN-WORKSPACE-ZERO",
     ):
         _assert_emitted(output, marker)
+    if row["profile"] == "primary":
+        _assert_emitted(output, "EXT4-RUNTIME-ORPHAN-CAPACITY-OK")
     assert _sha256(path) == before
 
 
@@ -14781,23 +15039,68 @@ def test_active_modern_orphan_is_authenticated_before_recovery_refusal(
     output = run_forth(
         path,
         [
-            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _IOR CONSTANT _V",
+            "T-ARENA CONSTANT _AM-ARENA",
             (
-                "_IOR VFS-IOR-REASON . _IOR VFS-IOR-DETAIL . "
-                "_V V.LIFECYCLE @ . _V V.BCTX @ DUP "
-                "_EXT4-C.O.ACTIVE + @ . "
-                "_EXT4-C.O.SLOTS + @ ."
+                "_AM-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _AM-FIRST-IOR CONSTANT _AM-V"
+            ),
+            "_AM-V _EXT4-CTX CONSTANT _AM-CTX",
+            "_AM-ARENA A.PTR @ CONSTANT _AM-FIRST-PTR",
+            "_AM-V _EXT4-MOUNT CONSTANT _AM-RETRY-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_AM-FIRST-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_AM-FIRST-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        (
+                            "_AM-RETRY-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_AM-RETRY-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_AM-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_AM-V _EXT4-READY? 0=",
+                        "_AM-V _EXT4-ATTACHED?",
+                        "_AM-CTX _EXT4-C.O.ACTIVE + @ 1 =",
+                        "_AM-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
+                        "_AM-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        "_AM-CTX _EXT4-C.O.TABLE + @ 0=",
+                        "_AM-CTX _EXT4-C.O.SLOTS + @ 0=",
+                        (
+                            "_AM-CTX _EXT4-C.O.MOUNT-TAIL-MARK + "
+                            "@ 0="
+                        ),
+                        "_AM-CTX _EXT4-C.J.REVOKE-TABLE + @ 0=",
+                        "_AM-CTX _EXT4-C.J.REVOKE-SLOTS + @ 0=",
+                        "_AM-CTX _EXT4-C.O.RUNTIME-TABLE + @ 0=",
+                        "_AM-CTX _EXT4-C.O.RUNTIME-SLOTS + @ 0=",
+                        (
+                            "_AM-CTX _EXT4-C.O.RUNTIME-CAPACITY + "
+                            "@ 0="
+                        ),
+                        "_AM-ARENA A.PTR @ _AM-FIRST-PTR =",
+                    ]
+                )
+                + ' IF ." EXT4-ACTIVE-ORPHAN-REFUSAL-RETRY-CLEAN" THEN'
             ),
         ],
         patches=_modern_orphan_patches(path, (11,)),
     )
-    assert "11 5 0 1 2" in output, output[-1500:]
+    _assert_emitted(output, "EXT4-ACTIVE-ORPHAN-REFUSAL-RETRY-CLEAN")
 
 
 @pytest.mark.parametrize(
     ("entries", "orphan_present", "expected_state"),
     (
-        ((11, 11), True, "2 4"),
+        ((11, 11), True, "2 0"),
         ((2,), True, "0 0"),
         ((11,), False, "0 0"),
     ),
@@ -14986,6 +15289,357 @@ def test_unified_orphan_plan_authenticates_stably_and_reuses_workspace(
     )
     _assert_emitted(output, "EXT4-UNIFIED-ORPHAN-STABLE")
     assert trace == ()
+
+
+def test_low_fd_staged_auth_releases_and_reuses_transient_union_tail(
+    canonical_images: dict[str, Path],
+) -> None:
+    path = canonical_images["primary-1k-i256"]
+    patches = _legacy_orphan_patches(
+        path,
+        14,
+        ((14, 0),),
+        modern_entries=(16, 17),
+    )
+    output = run_forth(
+        path,
+        [
+            (
+                ": _LF-MOUNT "
+                "1 OVER V.FDMAX ! "
+                "-1 _EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN "
+                "EXT4-D-RECOVERY _EXT4-UNSUPPORTED ;"
+            ),
+            "CREATE _LF-OPS VFS-OPS-SIZE ALLOT",
+            (
+                "EXT4-STAGED-WRITE-OPS _LF-OPS "
+                "VFS-OPS-SIZE CMOVE"
+            ),
+            "' _LF-MOUNT _LF-OPS VFS-OP-MOUNT CELLS + !",
+            "CREATE _LF-BINDING VFS-BINDING-DESC-SIZE ALLOT",
+            (
+                "EXT4-STAGED-WRITE-BINDING _LF-BINDING "
+                "VFS-BINDING-DESC-SIZE CMOVE"
+            ),
+            "_LF-OPS _LF-BINDING VB.OPS !",
+            ": _LF-NEW _LF-BINDING SWAP VFS-NEW ;",
+            "T-ARENA CONSTANT _LF-ARENA",
+            (
+                "_LF-ARENA T-VOLUME _LF-NEW "
+                "CONSTANT _LF-FIRST-IOR CONSTANT _LF-V"
+            ),
+            "_LF-V _EXT4-CTX CONSTANT _LF-CTX",
+            (
+                "_LF-CTX _EXT4-C.O.RUNTIME-TABLE + @ "
+                "CONSTANT _LF-RUNTIME"
+            ),
+            (
+                "_LF-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ "
+                "CONSTANT _LF-FIRST-MARK"
+            ),
+            (
+                "_LF-CTX _EXT4-C.O.TABLE + @ "
+                "CONSTANT _LF-FIRST-PLAN"
+            ),
+            "_LF-ARENA A.PTR @ CONSTANT _LF-FIRST-PEAK",
+            "0 _LF-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _LF-FIRST-16",
+            "1 _LF-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _LF-FIRST-17",
+            "6 _LF-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _LF-FIRST-14",
+            (
+                _forth_conjunction(
+                    [
+                        "_LF-FIRST-16 @ 16 =",
+                        (
+                            "_LF-FIRST-16 _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-MODERN ="
+                        ),
+                        (
+                            "_LF-FIRST-16 _EXT4-OE.LOCATOR-A + @ "
+                            "0="
+                        ),
+                        (
+                            "_LF-FIRST-16 _EXT4-OE.LOCATOR-B + @ "
+                            "0="
+                        ),
+                        "_LF-FIRST-17 @ 17 =",
+                        (
+                            "_LF-FIRST-17 _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-MODERN ="
+                        ),
+                        (
+                            "_LF-FIRST-17 _EXT4-OE.LOCATOR-A + @ "
+                            "0="
+                        ),
+                        (
+                            "_LF-FIRST-17 _EXT4-OE.LOCATOR-B + @ "
+                            "1 ="
+                        ),
+                        "_LF-FIRST-14 @ 14 =",
+                        (
+                            "_LF-FIRST-14 _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-LEGACY ="
+                        ),
+                        (
+                            "_LF-FIRST-14 _EXT4-OE.LOCATOR-A + @ "
+                            "0="
+                        ),
+                        (
+                            "_LF-FIRST-14 _EXT4-OE.LOCATOR-B + @ "
+                            "0="
+                        ),
+                    ]
+                )
+                + " CONSTANT _LF-FIRST-PLAN-OK"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_LF-FIRST-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_LF-FIRST-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-FORMAT ="
+                        ),
+                        "_LF-FIRST-IOR VFS-IOR-FLAGS 0=",
+                        (
+                            "_LF-FIRST-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        "_LF-V V.LIFECYCLE @ VFS-L-NEW =",
+                        "_LF-V V.BINDING @ _LF-BINDING =",
+                        "_LF-V V.FDMAX @ 1 =",
+                        "_LF-V _EXT4-READY? 0=",
+                        "_LF-V _EXT4-ATTACHED?",
+                        "_LF-RUNTIME 0<>",
+                        (
+                            "_LF-CTX _EXT4-C.O.RUNTIME-CAPACITY + "
+                            "@ 2 ="
+                        ),
+                        "_LF-CTX _EXT4-C.O.RUNTIME-SLOTS + @ 4 =",
+                        "_LF-RUNTIME 128 _EXT4-BYTES-ZERO?",
+                        "_LF-FIRST-MARK _LF-RUNTIME 128 + =",
+                        "_LF-FIRST-PLAN _LF-FIRST-MARK =",
+                        "_LF-FIRST-PLAN _LF-RUNTIME <>",
+                        "_LF-CTX _EXT4-C.O.SLOTS + @ 8 =",
+                        "_LF-CTX _EXT4-C.O.ACTIVE + @ 3 =",
+                        "_LF-CTX _EXT4-C.O.MODERN-ACTIVE + @ 2 =",
+                        "_LF-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 1 =",
+                        "_LF-FIRST-PEAK _LF-FIRST-MARK U>",
+                        (
+                            "_LF-FIRST-PLAN 256 + "
+                            "_LF-FIRST-PEAK U> 0="
+                        ),
+                        "_LF-CTX _EXT4-C.J.REVOKE-TABLE + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-SLOTS + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-COUNT + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-HITS + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-READY + @ 0=",
+                        "_LF-FIRST-PLAN-OK",
+                    ]
+                )
+                + ' IF ." EXT4-LOW-FD-UNION-RETAINED" THEN'
+            ),
+            (
+                "_LF-FIRST-MARK 8 - _LF-CTX "
+                "_EXT4-C.O.MOUNT-TAIL-MARK + !"
+            ),
+            (
+                "_LF-CTX _EXT4-MOUNT-TAIL-RELEASE "
+                "CONSTANT _LF-BAD-MARK-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_LF-BAD-MARK-IOR VFS-E-CORRUPT =",
+                        (
+                            "_LF-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ "
+                            "_LF-FIRST-MARK 8 - ="
+                        ),
+                        "_LF-ARENA A.PTR @ _LF-FIRST-PEAK =",
+                        (
+                            "_LF-CTX _EXT4-C.O.TABLE + @ "
+                            "_LF-FIRST-PLAN ="
+                        ),
+                        "_LF-CTX _EXT4-C.O.SLOTS + @ 8 =",
+                        "_LF-CTX _EXT4-C.J.REVOKE-TABLE + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-SLOTS + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-COUNT + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-HITS + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-READY + @ 0=",
+                        (
+                            "_LF-CTX _EXT4-C.O.RUNTIME-TABLE + @ "
+                            "_LF-RUNTIME ="
+                        ),
+                        "_LF-CTX _EXT4-C.O.RUNTIME-SLOTS + @ 4 =",
+                        (
+                            "_LF-CTX _EXT4-C.O.RUNTIME-CAPACITY + "
+                            "@ 2 ="
+                        ),
+                        "_LF-FIRST-16 @ 16 =",
+                        "_LF-FIRST-17 @ 17 =",
+                        "_LF-FIRST-14 @ 14 =",
+                    ]
+                )
+                + ' IF ." EXT4-LOW-FD-TAIL-START-REFUSED" THEN'
+            ),
+            (
+                "_LF-FIRST-MARK _LF-CTX "
+                "_EXT4-C.O.MOUNT-TAIL-MARK + !"
+            ),
+            (
+                "_LF-CTX _EXT4-MOUNT-TAIL-RELEASE "
+                "CONSTANT _LF-FIRST-RELEASE-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_LF-FIRST-RELEASE-IOR 0=",
+                        "_LF-CTX _EXT4-C.O.TABLE + @ 0=",
+                        "_LF-CTX _EXT4-C.O.SLOTS + @ 0=",
+                        "_LF-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-TABLE + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-SLOTS + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-COUNT + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-HITS + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-READY + @ 0=",
+                        "_LF-ARENA A.PTR @ _LF-FIRST-MARK =",
+                        (
+                            "_LF-FIRST-MARK _LF-FIRST-PEAK "
+                            "_LF-FIRST-MARK - _EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_LF-CTX _EXT4-C.O.RUNTIME-TABLE + @ "
+                            "_LF-RUNTIME ="
+                        ),
+                        "_LF-CTX _EXT4-C.O.RUNTIME-SLOTS + @ 4 =",
+                        (
+                            "_LF-CTX _EXT4-C.O.RUNTIME-CAPACITY + "
+                            "@ 2 ="
+                        ),
+                        "_LF-RUNTIME 128 _EXT4-BYTES-ZERO?",
+                    ]
+                )
+                + ' IF ." EXT4-LOW-FD-UNION-RELEASED" THEN'
+            ),
+            "_LF-V _LF-MOUNT CONSTANT _LF-RETRY-IOR",
+            (
+                "_LF-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ "
+                "CONSTANT _LF-RETRY-MARK"
+            ),
+            (
+                "_LF-CTX _EXT4-C.O.TABLE + @ "
+                "CONSTANT _LF-RETRY-PLAN"
+            ),
+            "_LF-ARENA A.PTR @ CONSTANT _LF-RETRY-PEAK",
+            "0 _LF-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _LF-RETRY-16",
+            "1 _LF-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _LF-RETRY-17",
+            "6 _LF-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _LF-RETRY-14",
+            (
+                _forth_conjunction(
+                    [
+                        "_LF-RETRY-16 @ 16 =",
+                        (
+                            "_LF-RETRY-16 _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-MODERN ="
+                        ),
+                        "_LF-RETRY-17 @ 17 =",
+                        (
+                            "_LF-RETRY-17 _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-MODERN ="
+                        ),
+                        "_LF-RETRY-14 @ 14 =",
+                        (
+                            "_LF-RETRY-14 _EXT4-OE.KIND + @ "
+                            "_EXT4-OK-LEGACY ="
+                        ),
+                    ]
+                )
+                + " CONSTANT _LF-RETRY-PLAN-OK"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        (
+                            "_LF-RETRY-IOR VFS-IOR-REASON "
+                            "VFS-R-UNSUPPORTED ="
+                        ),
+                        (
+                            "_LF-RETRY-IOR VFS-IOR-DETAIL "
+                            "EXT4-D-RECOVERY ="
+                        ),
+                        (
+                            "_LF-CTX _EXT4-C.O.RUNTIME-TABLE + @ "
+                            "_LF-RUNTIME ="
+                        ),
+                        "_LF-CTX _EXT4-C.O.RUNTIME-SLOTS + @ 4 =",
+                        (
+                            "_LF-CTX _EXT4-C.O.RUNTIME-CAPACITY + "
+                            "@ 2 ="
+                        ),
+                        "_LF-RUNTIME 128 _EXT4-BYTES-ZERO?",
+                        "_LF-RETRY-MARK _LF-FIRST-MARK =",
+                        "_LF-RETRY-PLAN _LF-FIRST-PLAN =",
+                        "_LF-RETRY-PEAK _LF-FIRST-PEAK =",
+                        "_LF-CTX _EXT4-C.O.SLOTS + @ 8 =",
+                        "_LF-CTX _EXT4-C.O.ACTIVE + @ 3 =",
+                        "_LF-CTX _EXT4-C.O.MODERN-ACTIVE + @ 2 =",
+                        "_LF-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 1 =",
+                        "_LF-CTX _EXT4-C.J.REVOKE-TABLE + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-SLOTS + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-READY + @ 0=",
+                        "_LF-RETRY-PLAN-OK",
+                    ]
+                )
+                + ' IF ." EXT4-LOW-FD-UNION-RETRY-STABLE" THEN'
+            ),
+            (
+                "_LF-CTX _EXT4-MOUNT-TAIL-RELEASE "
+                "CONSTANT _LF-RETRY-RELEASE-IOR"
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_LF-RETRY-RELEASE-IOR 0=",
+                        "_LF-CTX _EXT4-C.O.TABLE + @ 0=",
+                        "_LF-CTX _EXT4-C.O.SLOTS + @ 0=",
+                        "_LF-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ 0=",
+                        "_LF-ARENA A.PTR @ _LF-FIRST-MARK =",
+                        (
+                            "_LF-FIRST-MARK _LF-FIRST-PEAK "
+                            "_LF-FIRST-MARK - _EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_LF-CTX _EXT4-C.O.RUNTIME-TABLE + @ "
+                            "_LF-RUNTIME ="
+                        ),
+                        "_LF-CTX _EXT4-C.O.RUNTIME-SLOTS + @ 4 =",
+                        (
+                            "_LF-CTX _EXT4-C.O.RUNTIME-CAPACITY + "
+                            "@ 2 ="
+                        ),
+                        "_LF-RUNTIME 128 _EXT4-BYTES-ZERO?",
+                        "_LF-CTX _EXT4-C.J.REVOKE-TABLE + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-SLOTS + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-COUNT + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-HITS + @ 0=",
+                        "_LF-CTX _EXT4-C.J.REVOKE-READY + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-LOW-FD-UNION-RETRY-RELEASED" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    for marker in (
+        "EXT4-LOW-FD-UNION-RETAINED",
+        "EXT4-LOW-FD-TAIL-START-REFUSED",
+        "EXT4-LOW-FD-UNION-RELEASED",
+        "EXT4-LOW-FD-UNION-RETRY-STABLE",
+        "EXT4-LOW-FD-UNION-RETRY-RELEASED",
+    ):
+        _assert_emitted(output, marker)
 
 
 def test_runtime_orphan_workspaces_reuse_zeroed_storage_and_refuse_malformed_pairs(
@@ -22539,14 +23193,8 @@ def _run_multi_empty_unlinked_cleanup(
                         "_MU-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
                         "_MU-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
                         "_MU-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
-                        "_MU-CTX _EXT4-C.O.TABLE + @ 0<>",
-                        "_MU-CTX _EXT4-C.O.SLOTS + @ 4 =",
-                        (
-                            "_MU-CTX _EXT4-C.O.TABLE + @ "
-                            "_MU-CTX _EXT4-C.O.SLOTS + @ "
-                            "_EXT4-ORPHAN-RECORD-SIZE * "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
+                        "_MU-CTX _EXT4-C.O.TABLE + @ 0=",
+                        "_MU-CTX _EXT4-C.O.SLOTS + @ 0=",
                         (
                             "_MU-CTX _EXT4-C.SB + "
                             "_EXT4-SB.LAST-ORPHAN + L@ 0="
@@ -22607,7 +23255,7 @@ def _run_multi_empty_unlinked_cleanup(
                         ),
                         "_MU-MEASURE-IOR 0=",
                         "_EXT4-MOC-MARK-VALID @ 0=",
-                        "_EXT4-MOC-MARK @ _MU-ARENA A.PTR @ =",
+                        "_EXT4-MOC-MARK @ _MU-ARENA A.PTR @ U>",
                         "_EXT4-MOC-SPAN @ _MU-WRITER-BYTES =",
                         (
                             "_EXT4-MOC-MARK @ _EXT4-MOC-SPAN @ "
@@ -23058,13 +23706,8 @@ def _run_multi_linked_cleanup(
                         "_ML-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
                         "_ML-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
                         "_ML-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
-                        "_ML-CTX _EXT4-C.O.SLOTS + @ 4 =",
-                        (
-                            "_ML-CTX _EXT4-C.O.TABLE + @ "
-                            "_ML-CTX _EXT4-C.O.SLOTS + @ "
-                            "_EXT4-ORPHAN-RECORD-SIZE * "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
+                        "_ML-CTX _EXT4-C.O.TABLE + @ 0=",
+                        "_ML-CTX _EXT4-C.O.SLOTS + @ 0=",
                         (
                             "_ML-CTX _EXT4-C.SB + "
                             "_EXT4-SB.LAST-ORPHAN + L@ 0="
@@ -25535,7 +26178,7 @@ def _assert_multi_linked_cleanup_media_converges(
                         "_LR-INODE-BITS 0x12 =",
                         "_LR-DESC-IOR 0=",
                         "_EXT4-MOC-MARK-VALID @ 0=",
-                        "_EXT4-MOC-MARK @ _LR-ARENA A.PTR @ =",
+                        "_EXT4-MOC-MARK @ _LR-ARENA A.PTR @ U>",
                         "_EXT4-MOC-WRITER @ 0=",
                         "_EXT4-MOC-TX @ 0=",
                         "_EXT4-JFO-CERT-SCOPE @ 0=",
@@ -25646,7 +26289,7 @@ def _linked_first_more_fault_probe(
                     "_LFC-CTX _EXT4-C.J.PROTOCOL-OWNERS + @ 0=",
                     "_LFC-CTX _EXT4-C.ARENA + @ _LFC-ARENA =",
                     "_EXT4-MOC-MARK-VALID @ 0=",
-                    "_EXT4-MOC-MARK @ _LFC-ARENA A.PTR @ =",
+                    "_EXT4-MOC-MARK @ _LFC-ARENA A.PTR @ U>",
                     "_EXT4-MOC-SPAN @ _EXT4-JWR-SIZE U< 0=",
                     (
                         "_EXT4-MOC-MARK @ _EXT4-MOC-SPAN @ "
@@ -26149,7 +26792,7 @@ def mixed_multi_record_second_commit_fence_fixture(
                         ),
                         "_MC-MEASURE-IOR 0=",
                         "_EXT4-MOC-MARK-VALID @ 0=",
-                        "_EXT4-MOC-MARK @ _MC-ARENA A.PTR @ =",
+                        "_EXT4-MOC-MARK @ _MC-ARENA A.PTR @ U>",
                         "_EXT4-MOC-SPAN @ _MC-WRITER-BYTES =",
                         (
                             "_EXT4-MOC-MARK @ _EXT4-MOC-SPAN @ "
@@ -27414,7 +28057,7 @@ def singleton_modern_cleanup_fixture(
                         "_MA-CTX _EXT4-C.J.WRITER + @ 0=",
                         "_MA-CTX _EXT4-C.ARENA + @ _MA-ARENA =",
                         "_EXT4-MOC-MARK-VALID @ 0=",
-                        "_EXT4-MOC-MARK @ _MA-ARENA A.PTR @ =",
+                        "_EXT4-MOC-MARK @ _MA-ARENA A.PTR @ U>",
                         "_MA-CTX _EXT4-C.J.START + @ 0=",
                         "_MA-CTX _EXT4-C.J.WITNESS + @ 0=",
                         "_MA-CTX _EXT4-C.J.CLEANUP + @ 0=",
@@ -28833,7 +29476,7 @@ def _exercise_singleton_cleanup_write_prefix(
                         "_MF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                         "_MF-CTX _EXT4-C.ARENA + @ _MF-ARENA =",
                         "_EXT4-MOC-MARK-VALID @ 0=",
-                        "_EXT4-MOC-MARK @ _MF-ARENA A.PTR @ =",
+                        "_EXT4-MOC-MARK @ _MF-ARENA A.PTR @ U>",
                         "_EXT4-MOC-SPAN @ _EXT4-JWR-SIZE U< 0=",
                         (
                             "_EXT4-MOC-MARK @ _EXT4-MOC-SPAN @ "
@@ -29047,7 +29690,7 @@ def _exercise_singleton_cleanup_flush_fence(
                         "_FF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
                         "_FF-CTX _EXT4-C.ARENA + @ _FF-ARENA =",
                         "_EXT4-MOC-MARK-VALID @ 0=",
-                        "_EXT4-MOC-MARK @ _FF-ARENA A.PTR @ =",
+                        "_EXT4-MOC-MARK @ _FF-ARENA A.PTR @ U>",
                         "_EXT4-MOC-SPAN @ _EXT4-JWR-SIZE U< 0=",
                         (
                             "_EXT4-MOC-MARK @ _EXT4-MOC-SPAN @ "

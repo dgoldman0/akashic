@@ -372,7 +372,20 @@ REQUIRE ../../../math/crc.f
 15488 CONSTANT _EXT4-C.MUTATION-RANGE-CAP
 15496 CONSTANT _EXT4-C.OWNER-CERT-RANGES
 15504 CONSTANT _EXT4-C.OWNER-CERT-RANGE-CAP
-15512 CONSTANT _EXT4-CTX-SIZE
+15512 CONSTANT _EXT4-C.O.RUNTIME-TABLE
+15520 CONSTANT _EXT4-C.O.RUNTIME-SLOTS
+15528 CONSTANT _EXT4-C.O.RUNTIME-CAPACITY
+15536 CONSTANT _EXT4-C.O.MOUNT-TAIL-MARK
+15544 CONSTANT _EXT4-CTX-SIZE
+
+4 CONSTANT _EXT4-ORPHAN-RECORD-CELLS
+_EXT4-ORPHAN-RECORD-CELLS CELLS CONSTANT _EXT4-ORPHAN-RECORD-SIZE
+0 CONSTANT _EXT4-OE.INO
+1 CELLS CONSTANT _EXT4-OE.KIND
+2 CELLS CONSTANT _EXT4-OE.LOCATOR-A
+3 CELLS CONSTANT _EXT4-OE.LOCATOR-B
+1 CONSTANT _EXT4-OK-LEGACY
+2 CONSTANT _EXT4-OK-MODERN
 
 : _EXT4-CTX  ( vfs -- ctx )  V.BCTX @ ;
 : _EXT4-READY?  ( vfs -- flag )
@@ -5325,6 +5338,212 @@ VARIABLE _EXT4-HG-SLOTS
     REPEAT
     _EXT4-HG-SLOTS @ 0 ;
 
+VARIABLE _EXT4-ROE-CTX VARIABLE _EXT4-ROE-V
+VARIABLE _EXT4-ROE-CAP VARIABLE _EXT4-ROE-SLOTS
+VARIABLE _EXT4-ROE-BYTES VARIABLE _EXT4-ROE-ARENA
+VARIABLE _EXT4-ROE-MARK VARIABLE _EXT4-ROE-TABLE
+VARIABLE _EXT4-ROE-SIZE VARIABLE _EXT4-ROE-BASE
+VARIABLE _EXT4-ROE-END
+
+: _EXT4-LOAD-MOUNT-ARENA  ( ctx -- ior )
+    DUP _EXT4-ROE-CTX ! 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-ROE-CTX @ _EXT4-C.ARENA + @ DUP _EXT4-ROE-ARENA !
+    0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-ROE-ARENA @ A.BASE @ DUP _EXT4-ROE-BASE !
+    0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-ROE-BASE @ 7 AND IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-ROE-ARENA @ A.SIZE @ DUP _EXT4-ROE-SIZE !
+    DUP 0< SWAP 0= OR IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-ROE-BASE @ _EXT4-ROE-SIZE @
+    MSPAN-NONWRAPPING? 0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-ROE-ARENA @ A.PTR @ DUP _EXT4-ROE-END !
+    DUP 7 AND IF DROP VFS-E-CORRUPT EXIT THEN
+    DUP _EXT4-ROE-BASE @ U< IF DROP VFS-E-CORRUPT EXIT THEN
+    _EXT4-ROE-BASE @ _EXT4-ROE-SIZE @ + U> IF VFS-E-CORRUPT EXIT THEN
+    0 ;
+
+\ Bound mounted orphan publication by all three authenticated resources: the
+\ physical orphan-file slots, filesystem inode geometry, and descriptors plus
+\ one synchronous closed final-unlink candidate.
+: _EXT4-RUNTIME-ORPHAN-CAPACITY  ( ctx vfs -- capacity ior )
+    _EXT4-ROE-V ! _EXT4-ROE-CTX !
+    _EXT4-ROE-CTX @ 0= _EXT4-ROE-V @ 0= OR IF
+        0 VFS-E-INVALID EXIT
+    THEN
+    _EXT4-ROE-V @ V.BCTX @ _EXT4-ROE-CTX @ <>
+    _EXT4-ROE-V @ V.ARENA @
+    _EXT4-ROE-CTX @ _EXT4-C.ARENA + @ <> OR IF
+        0 VFS-E-INVALID EXIT
+    THEN
+    _EXT4-ROE-V @ _EXT4-ATTACHED? 0= IF 0 VFS-E-STALE EXIT THEN
+    _EXT4-ROE-V @ V.VOLUME @ _EXT4-IO-VOL !
+    _EXT4-ROE-V @ _EXT4-IO-VFS !
+    _EXT4-ROE-CTX @ _EXT4-PREPARE-ORPHAN-FILE
+    ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-ROE-CTX @ _EXT4-C.BSIZE + @ DUP 8 U< IF
+        DROP 0 EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    8 - DUP 4 MOD IF
+        DROP 0 EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    4 / DUP 0= IF
+        DROP 0 EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-OV-BLOCKS @ SWAP _EXT4-UMUL?
+    DUP IF NIP 0 SWAP EXIT THEN DROP
+    _EXT4-ROE-V @ V.FDMAX @ 1 _EXT4-UADD?
+    DUP IF >R 2DROP 0 R> EXIT THEN DROP
+    _EXT4-ROE-CTX @ _EXT4-C.INODES + @ DUP
+    0< OVER 0= OR IF
+        2DROP DROP 0 EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    MIN MIN 0 ;
+
+\ Validate the exact retained runtime allocation against current authenticated
+\ geometry and the used portion of the owning mount arena.
+: _EXT4-VALIDATE-RUNTIME-ORPHAN-WORKSPACE  ( ctx vfs -- ior )
+    _EXT4-ROE-V ! _EXT4-ROE-CTX !
+    _EXT4-ROE-CTX @ _EXT4-ROE-V @ _EXT4-RUNTIME-ORPHAN-CAPACITY
+    DUP IF NIP EXIT THEN DROP _EXT4-ROE-CAP !
+    _EXT4-ROE-CTX @ _EXT4-C.O.RUNTIME-TABLE + @ _EXT4-ROE-TABLE !
+    _EXT4-ROE-CTX @ _EXT4-C.O.RUNTIME-SLOTS + @ _EXT4-ROE-SLOTS !
+    _EXT4-ROE-TABLE @ 0= _EXT4-ROE-SLOTS @ 0= OR
+    _EXT4-ROE-CTX @ _EXT4-C.O.RUNTIME-CAPACITY + @ 0= OR IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-ROE-CTX @ _EXT4-C.O.RUNTIME-CAPACITY + @
+    _EXT4-ROE-CAP @ <> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-ROE-CAP @ _EXT4-HASH-SLOTS
+    DUP IF 2DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT THEN
+    DROP _EXT4-ROE-SLOTS @ <> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-ROE-SLOTS @ _EXT4-ORPHAN-RECORD-SIZE _EXT4-UMUL?
+    DUP IF 2DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT THEN
+    DROP _EXT4-ROE-BYTES !
+    _EXT4-ROE-TABLE @ 7 AND IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-ROE-TABLE @ _EXT4-ROE-BYTES @
+    MSPAN-NONWRAPPING? 0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-ROE-CTX @ _EXT4-LOAD-MOUNT-ARENA ?DUP IF EXIT THEN
+    _EXT4-ROE-TABLE @ _EXT4-ROE-BASE @ U< IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-ROE-TABLE @ _EXT4-ROE-BYTES @ +
+    _EXT4-ROE-END @ U> IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-ROE-CTX @ _EXT4-C.O.MOUNT-TAIL-MARK + @ DUP
+    _EXT4-ROE-MARK ! IF
+        _EXT4-ROE-MARK @ _EXT4-ROE-BASE @ U<
+        _EXT4-ROE-MARK @ _EXT4-ROE-END @ U> OR IF
+            VFS-E-CORRUPT EXIT
+        THEN
+        _EXT4-ROE-TABLE @ _EXT4-ROE-BYTES @ +
+        _EXT4-ROE-MARK @ <> IF VFS-E-CORRUPT EXIT THEN
+    ELSE
+        _EXT4-ROE-TABLE @ _EXT4-ROE-BYTES @ +
+        _EXT4-ROE-END @ <> IF VFS-E-CORRUPT EXIT THEN
+    THEN
+    0 ;
+
+\ Allocate the runtime table once below any mount-transient tail.  Retried
+\ mounts may only validate, reuse, and clear that exact retained allocation.
+: _EXT4-ENSURE-RUNTIME-ORPHAN-WORKSPACE  ( ctx vfs -- ior )
+    _EXT4-ROE-V ! _EXT4-ROE-CTX !
+    _EXT4-ROE-CTX @ 0= _EXT4-ROE-V @ 0= OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _EXT4-ROE-V @ VFS-CAPS@ VFS-CAP-WRITE AND 0= IF
+        VFS-E-UNSUPPORTED EXIT
+    THEN
+    _EXT4-ROE-CTX @ _EXT4-C.O.MOUNT-TAIL-MARK + @ IF
+        VFS-E-BUSY EXIT
+    THEN
+    _EXT4-ROE-CTX @ _EXT4-C.O.TABLE + @
+    _EXT4-ROE-CTX @ _EXT4-C.O.SLOTS + @ OR IF VFS-E-BUSY EXIT THEN
+    _EXT4-ROE-CTX @ _EXT4-ROE-V @ _EXT4-RUNTIME-ORPHAN-CAPACITY
+    DUP IF NIP EXIT THEN DROP DUP _EXT4-ROE-CAP !
+    _EXT4-HASH-SLOTS DUP IF NIP EXIT THEN
+    DROP DUP _EXT4-ROE-SLOTS !
+    _EXT4-ORPHAN-RECORD-SIZE _EXT4-UMUL?
+    DUP IF NIP EXIT THEN DROP _EXT4-ROE-BYTES !
+    _EXT4-ROE-CTX @ _EXT4-C.O.RUNTIME-TABLE + @ IF
+        _EXT4-ROE-CTX @ _EXT4-C.O.RUNTIME-SLOTS + @ 0=
+        _EXT4-ROE-CTX @ _EXT4-C.O.RUNTIME-CAPACITY + @ 0= OR IF
+            EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+        THEN
+        _EXT4-ROE-CTX @ _EXT4-ROE-V @
+        _EXT4-VALIDATE-RUNTIME-ORPHAN-WORKSPACE ?DUP IF EXIT THEN
+        _EXT4-ROE-CTX @ _EXT4-C.O.RUNTIME-TABLE + @
+        _EXT4-ROE-BYTES @ 0 FILL 0 EXIT
+    THEN
+    _EXT4-ROE-CTX @ _EXT4-C.O.RUNTIME-SLOTS + @
+    _EXT4-ROE-CTX @ _EXT4-C.O.RUNTIME-CAPACITY + @ OR IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-ROE-CTX @ _EXT4-LOAD-MOUNT-ARENA ?DUP IF EXIT THEN
+    _EXT4-ROE-ARENA @ ARENA-SNAP DUP _EXT4-ROE-MARK !
+    _EXT4-ROE-END @ <> IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-ROE-MARK @ _EXT4-ROE-BYTES @
+    MSPAN-NONWRAPPING? 0= IF VFS-E-NOMEM EXIT THEN
+    _EXT4-ROE-BASE @ _EXT4-ROE-SIZE @ +
+    _EXT4-ROE-MARK @ _EXT4-ROE-BYTES @ + U< IF VFS-E-NOMEM EXIT THEN
+    _EXT4-ROE-ARENA @ _EXT4-ROE-BYTES @ ARENA-ALLOT? IF
+        DROP VFS-E-NOMEM EXIT
+    THEN
+    DUP _EXT4-ROE-TABLE ! _EXT4-ROE-MARK @ <> IF
+        _EXT4-ROE-ARENA @ _EXT4-ROE-MARK @ ARENA-ROLLBACK
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-ROE-ARENA @ A.PTR @
+    _EXT4-ROE-TABLE @ _EXT4-ROE-BYTES @ + <> IF
+        _EXT4-ROE-ARENA @ _EXT4-ROE-MARK @ ARENA-ROLLBACK
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-ROE-TABLE @ _EXT4-ROE-BYTES @ 0 FILL
+    _EXT4-ROE-CAP @ _EXT4-ROE-CTX @
+    _EXT4-C.O.RUNTIME-CAPACITY + !
+    _EXT4-ROE-SLOTS @ _EXT4-ROE-CTX @ _EXT4-C.O.RUNTIME-SLOTS + !
+    _EXT4-ROE-TABLE @ _EXT4-ROE-CTX @ _EXT4-C.O.RUNTIME-TABLE + !
+    0 ;
+
+: _EXT4-REQUIRE-RUNTIME-ORPHAN-BINDING  ( ctx vfs -- ior )
+    2DUP _EXT4-VALIDATE-RUNTIME-ORPHAN-WORKSPACE ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    DROP
+    DUP _EXT4-C.O.MOUNT-TAIL-MARK + @ IF DROP VFS-E-BUSY EXIT THEN
+    DUP _EXT4-C.O.TABLE + @ OVER _EXT4-C.O.RUNTIME-TABLE + @ <>
+    OVER _EXT4-C.O.SLOTS + @
+    ROT _EXT4-C.O.RUNTIME-SLOTS + @ <> OR IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    0 ;
+
+: _EXT4-BIND-RUNTIME-ORPHAN-WORKSPACE  ( ctx vfs -- ior )
+    2DUP _EXT4-VALIDATE-RUNTIME-ORPHAN-WORKSPACE ?DUP IF
+        >R 2DROP R> EXIT
+    THEN
+    DROP
+    DUP _EXT4-C.O.MOUNT-TAIL-MARK + @ IF DROP VFS-E-BUSY EXIT THEN
+    DUP _EXT4-C.O.TABLE + @ OVER _EXT4-C.O.SLOTS + @ OR IF
+        DROP VFS-E-CONFLICT EXIT
+    THEN
+    DUP _EXT4-C.O.RUNTIME-SLOTS + @ OVER _EXT4-C.O.SLOTS + !
+    DUP _EXT4-C.O.RUNTIME-TABLE + @ SWAP _EXT4-C.O.TABLE + !
+    0 ;
+
+: _EXT4-UNBIND-RUNTIME-ORPHAN-WORKSPACE  ( ctx -- ior )
+    DUP 0= IF DROP VFS-E-INVALID EXIT THEN
+    DUP _EXT4-C.O.TABLE + @ OVER _EXT4-C.O.SLOTS + @ OR 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _EXT4-C.O.TABLE + @ OVER _EXT4-C.O.RUNTIME-TABLE + @ =
+    OVER _EXT4-C.O.SLOTS + @
+    2 PICK _EXT4-C.O.RUNTIME-SLOTS + @ = AND IF
+        0 OVER _EXT4-C.O.TABLE + !
+        0 SWAP _EXT4-C.O.SLOTS + ! 0 EXIT
+    THEN
+    _EXT4-C.O.MOUNT-TAIL-MARK + @ IF 0 ELSE VFS-E-CORRUPT THEN ;
+
 VARIABLE _EXT4-JWM-META
 VARIABLE _EXT4-JWM-DATA
 VARIABLE _EXT4-JWM-REVOKE
@@ -7316,6 +7535,10 @@ VARIABLE _EXT4-BWA-MOUNT-PTR
         _EXT4-BWA-ARENA @ 4 CELLS + _EXT4-BWA-MOUNT-PTR @ U> IF
             VFS-E-INVALID EXIT
         THEN
+    THEN
+    _EXT4-BWA-V @ VFS-CAPS@ VFS-CAP-WRITE AND IF
+        _EXT4-BWA-CTX @ _EXT4-BWA-V @
+        _EXT4-REQUIRE-RUNTIME-ORPHAN-BINDING ?DUP IF EXIT THEN
     THEN
     _EXT4-BWA-META @ _EXT4-BWA-DATA @ _EXT4-BWA-REVOKE @
     _EXT4-JWR-STORE-DEDICATED _EXT4-BWA-ARENA @ _EXT4-BWA-CTX @
@@ -9724,15 +9947,6 @@ VARIABLE _EXT4-OCW-CTX
 VARIABLE _EXT4-OCW-REQUIRED
 VARIABLE _EXT4-OCW-BYTES
 
-4 CONSTANT _EXT4-ORPHAN-RECORD-CELLS
-_EXT4-ORPHAN-RECORD-CELLS CELLS CONSTANT _EXT4-ORPHAN-RECORD-SIZE
-0 CONSTANT _EXT4-OE.INO
-1 CELLS CONSTANT _EXT4-OE.KIND
-2 CELLS CONSTANT _EXT4-OE.LOCATOR-A
-3 CELLS CONSTANT _EXT4-OE.LOCATOR-B
-1 CONSTANT _EXT4-OK-LEGACY
-2 CONSTANT _EXT4-OK-MODERN
-
 _EXT4-NONNEG-MAX _EXT4-ORPHAN-RECORD-SIZE /
 CONSTANT _EXT4-ORPHAN-SLOTS-MAX
 
@@ -9833,6 +10047,116 @@ CONSTANT _EXT4-ORPHAN-SLOTS-MAX
     DUP _EXT4-ENSURE-MUTATION-RANGE-WORKSPACE
     ?DUP IF NIP EXIT THEN
     _EXT4-ENSURE-OWNER-CERT-RANGE-WORKSPACE ;
+
+\ Authenticate the retained runtime triple structurally before using any of
+\ its fields in rollback geometry.  Current media capacity is authenticated
+\ separately when the staged binding validates or binds this workspace.
+: _EXT4-MOUNT-RUNTIME-BELOW-MARK?  ( -- flag )
+    _EXT4-ROE-CTX @ _EXT4-C.O.RUNTIME-TABLE + @ _EXT4-ROE-TABLE !
+    _EXT4-ROE-CTX @ _EXT4-C.O.RUNTIME-SLOTS + @ _EXT4-ROE-SLOTS !
+    _EXT4-ROE-CTX @ _EXT4-C.O.RUNTIME-CAPACITY + @ _EXT4-ROE-CAP !
+    _EXT4-ROE-TABLE @ _EXT4-ROE-SLOTS @ OR
+    _EXT4-ROE-CAP @ OR 0= IF TRUE EXIT THEN
+    _EXT4-ROE-TABLE @ 0= _EXT4-ROE-SLOTS @ 0= OR
+    _EXT4-ROE-CAP @ 0= OR IF FALSE EXIT THEN
+    _EXT4-ROE-SLOTS @ 2 U<
+    _EXT4-ROE-SLOTS @ _EXT4-ORPHAN-SLOTS-MAX U> OR
+    _EXT4-ROE-SLOTS @ 1- _EXT4-ROE-SLOTS @ AND OR IF
+        FALSE EXIT
+    THEN
+    _EXT4-ROE-CAP @ _EXT4-HASH-SLOTS
+    DUP IF 2DROP FALSE EXIT THEN
+    DROP _EXT4-ROE-SLOTS @ <> IF FALSE EXIT THEN
+    _EXT4-ROE-SLOTS @ _EXT4-ORPHAN-RECORD-SIZE _EXT4-UMUL?
+    DUP IF 2DROP FALSE EXIT THEN
+    DROP _EXT4-ROE-BYTES !
+    _EXT4-ROE-TABLE @ 7 AND IF FALSE EXIT THEN
+    _EXT4-ROE-TABLE @ _EXT4-ROE-BYTES @
+    MSPAN-NONWRAPPING? 0= IF FALSE EXIT THEN
+    _EXT4-ROE-TABLE @ _EXT4-ROE-BASE @ U< IF FALSE EXIT THEN
+    _EXT4-ROE-TABLE @ _EXT4-ROE-BYTES @ +
+    _EXT4-ROE-MARK @ <> IF FALSE EXIT THEN
+    TRUE ;
+
+\ Begin the context-owned rollback tail after every persistent mount
+\ allocation.  Current plan and replay-revoke publications must be empty.
+: _EXT4-MOUNT-TAIL-BEGIN  ( ctx -- ior )
+    DUP _EXT4-ROE-CTX ! 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-ROE-CTX @ _EXT4-C.O.MOUNT-TAIL-MARK + @ IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    _EXT4-ROE-CTX @ _EXT4-C.O.TABLE + @
+    _EXT4-ROE-CTX @ _EXT4-C.O.SLOTS + @ OR
+    _EXT4-ROE-CTX @ _EXT4-C.J.REVOKE-TABLE + @ OR
+    _EXT4-ROE-CTX @ _EXT4-C.J.REVOKE-SLOTS + @ OR IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER + @
+    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @ OR
+    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER-ARENA + @ OR
+    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER-CURRENT + @ OR IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    _EXT4-ROE-CTX @ _EXT4-LOAD-MOUNT-ARENA ?DUP IF EXIT THEN
+    _EXT4-ROE-ARENA @ ARENA-SNAP DUP _EXT4-ROE-MARK !
+    _EXT4-ROE-END @ <> IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-MOUNT-RUNTIME-BELOW-MARK? 0= IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-ROE-MARK @ _EXT4-ROE-CTX @
+    _EXT4-C.O.MOUNT-TAIL-MARK + !
+    0 ;
+
+\ Validate and withdraw every transient publication before scrubbing and
+\ rolling the complete outer tail back to its retained context mark.
+: _EXT4-MOUNT-TAIL-RELEASE  ( ctx -- ior )
+    DUP _EXT4-ROE-CTX ! 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-ROE-CTX @ _EXT4-C.O.MOUNT-TAIL-MARK + @ DUP
+    _EXT4-ROE-MARK ! 0= IF 0 EXIT THEN
+    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER + @
+    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @ OR
+    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER-ARENA + @ OR
+    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER-CURRENT + @ OR IF
+        VFS-E-BUSY EXIT
+    THEN
+    _EXT4-ROE-CTX @ _EXT4-LOAD-MOUNT-ARENA ?DUP IF EXIT THEN
+    _EXT4-ROE-MARK @ _EXT4-ROE-BASE @ U<
+    _EXT4-ROE-END @ _EXT4-ROE-MARK @ U< OR IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-ROE-CTX @ _EXT4-ORPHAN-WORKSPACE? 0= IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-ROE-CTX @ _EXT4-REVOKE-GEOMETRY? 0= IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    \ Plan then revoke are the only outer-tail allocations.  Walk their exact
+    \ checked extents from MARK to A.PTR so neither gaps nor reordered aliases
+    \ can widen the scrubbed region into retained storage.
+    _EXT4-ROE-MARK @ _EXT4-ROE-TABLE !
+    _EXT4-ROE-CTX @ _EXT4-C.O.TABLE + @ ?DUP IF
+        _EXT4-ROE-TABLE @ <> IF VFS-E-CORRUPT EXIT THEN
+        _EXT4-ROE-TABLE @ _EXT4-ROE-CTX @ _EXT4-C.O.SLOTS + @
+        _EXT4-ORPHAN-RECORD-SIZE *
+        2DUP MSPAN-NONWRAPPING? 0= IF 2DROP VFS-E-CORRUPT EXIT THEN
+        + _EXT4-ROE-TABLE !
+    THEN
+    _EXT4-ROE-CTX @ _EXT4-C.J.REVOKE-TABLE + @ ?DUP IF
+        _EXT4-ROE-TABLE @ <> IF VFS-E-CORRUPT EXIT THEN
+        _EXT4-ROE-TABLE @ _EXT4-ROE-CTX @
+        _EXT4-C.J.REVOKE-SLOTS + @ 2* CELLS
+        2DUP MSPAN-NONWRAPPING? 0= IF 2DROP VFS-E-CORRUPT EXIT THEN
+        + _EXT4-ROE-TABLE !
+    THEN
+    _EXT4-ROE-TABLE @ _EXT4-ROE-END @ <> IF VFS-E-CORRUPT EXIT THEN
+    _EXT4-MOUNT-RUNTIME-BELOW-MARK? 0= IF VFS-E-CORRUPT EXIT THEN
+    0 _EXT4-ROE-CTX @ _EXT4-C.O.TABLE + !
+    0 _EXT4-ROE-CTX @ _EXT4-C.O.SLOTS + !
+    0 _EXT4-ROE-CTX @ _EXT4-C.J.REVOKE-TABLE + !
+    0 _EXT4-ROE-CTX @ _EXT4-C.J.REVOKE-SLOTS + !
+    0 _EXT4-ROE-CTX @ _EXT4-C.J.REVOKE-COUNT + !
+    0 _EXT4-ROE-CTX @ _EXT4-C.J.REVOKE-HITS + !
+    0 _EXT4-ROE-CTX @ _EXT4-C.J.REVOKE-READY + !
+    0 _EXT4-ROE-CTX @ _EXT4-C.O.MOUNT-TAIL-MARK + !
+    _EXT4-ROE-MARK @ _EXT4-ROE-END @ _EXT4-ROE-MARK @ - 0 FILL
+    _EXT4-ROE-ARENA @ _EXT4-ROE-MARK @ ARENA-ROLLBACK
+    0 ;
 
 \ Allocate the half-full power-of-two uniqueness plan only after its exact
 \ authenticated union count is known.  A retry that needs a larger table fails
@@ -10305,11 +10629,10 @@ VARIABLE _EXT4-RMO-RECORD
     LOOP
     0 ;
 
-\ Build and authenticate the complete legacy/modern union without deciding
-\ whether a caller is allowed to continue past a nonempty recovery plan.
-\ Public mount validation retains the policy boundary below; sealed cleanup
-\ checkpointing uses this core and proves one exact writer-owned selection.
-: _EXT4-AUTHENTICATE-ORPHAN-PLAN  ( ctx -- ior )
+\ Authenticate and publish exact union counts without allocating the transient
+\ discovery plan.  Mount can therefore finish all persistent allocations
+\ before beginning its rollback-owned tail.
+: _EXT4-AUTHENTICATE-ORPHAN-COUNTS  ( ctx -- ior )
     _EXT4-OP-CTX !
     0 _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + !
     0 _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + !
@@ -10334,7 +10657,23 @@ VARIABLE _EXT4-RMO-RECORD
     DUP _EXT4-OP-CTX @ _EXT4-C.INODES + @ U> IF
         DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
     THEN
-    DUP _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + !
+    _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + !
+    0 ;
+
+\ Build the exact retained plan from authenticated counts.  Reprepare and
+\ recount the modern file because intervening journal validation may replace
+\ the shared inode cache; a changed slot count cannot reuse preplan sizing.
+: _EXT4-BUILD-AUTHENTICATED-ORPHAN-PLAN  ( ctx -- ior )
+    DUP _EXT4-OP-CTX ! 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + @
+    _EXT4-OW-COUNT !
+    _EXT4-OP-CTX @ _EXT4-PREPARE-ORPHAN-FILE ?DUP IF EXIT THEN
+    _EXT4-OP-CTX @ _EXT4-COUNT-ACTIVE-ORPHANS ?DUP IF EXIT THEN
+    _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + @
+    _EXT4-OW-COUNT @ <> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-OP-CTX @ _EXT4-C.O.ACTIVE + @
     _EXT4-OP-CTX @
     _EXT4-ENSURE-ORPHAN-PLAN-WORKSPACE ?DUP IF EXIT THEN
     _EXT4-OP-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ IF
@@ -10352,6 +10691,12 @@ VARIABLE _EXT4-RMO-RECORD
         THEN
     THEN
     0 ;
+
+\ Build and authenticate the complete legacy/modern union without deciding
+\ whether a caller is allowed to continue past a nonempty recovery plan.
+: _EXT4-AUTHENTICATE-ORPHAN-PLAN  ( ctx -- ior )
+    DUP _EXT4-AUTHENTICATE-ORPHAN-COUNTS ?DUP IF NIP EXIT THEN
+    _EXT4-BUILD-AUTHENTICATED-ORPHAN-PLAN ;
 
 \ =====================================================================
 \  Typed, non-emitting orphan-recovery metadata after-images
@@ -16927,12 +17272,18 @@ VARIABLE _EXT4-JOC-CTX
 VARIABLE _EXT4-RS-CTX
 VARIABLE _EXT4-RS-V
 
-: _EXT4-AUTHENTICATE-REST  ( ctx -- ior )
+\ Complete every persistent validation/allocation before a mount creates its
+\ transient recovery tail.  Checkpoint reloads reuse the same preplan.
+: _EXT4-AUTHENTICATE-REST-PREPLAN  ( ctx -- ior )
     DUP _EXT4-C.J.STRICT + -1 SWAP !
     DUP _EXT4-VALIDATE-GROUPS ?DUP IF NIP EXIT THEN
     DUP _EXT4-VALIDATE-BACKUPS ?DUP IF NIP EXIT THEN
-    DUP _EXT4-AUTHENTICATE-ORPHAN-PLAN ?DUP IF NIP EXIT THEN
+    DUP _EXT4-AUTHENTICATE-ORPHAN-COUNTS ?DUP IF NIP EXIT THEN
     _EXT4-VALIDATE-JOURNAL ;
+
+: _EXT4-AUTHENTICATE-REST  ( ctx -- ior )
+    DUP _EXT4-AUTHENTICATE-REST-PREPLAN ?DUP IF NIP EXIT THEN
+    _EXT4-BUILD-AUTHENTICATED-ORPHAN-PLAN ;
 
 : _EXT4-RELOAD-AUTHENTICATED  ( ctx vfs -- ior )
     _EXT4-RS-V ! _EXT4-RS-CTX !
@@ -18898,6 +19249,11 @@ VARIABLE _EXT4-RT-V
         _EXT4-RJ-CTX @ _EXT4-C.J.CURSOR + !
     THEN
     _EXT4-FLUSH ?DUP IF EXIT THEN
+    \ Replay has landed every authenticated home.  Revoke state and every
+    \ pre-replay plan are now stale, so recycle the complete transient tail
+    \ immediately before authenticating the post-replay filesystem image.
+    _EXT4-RJ-CTX @ _EXT4-MOUNT-TAIL-RELEASE ?DUP IF EXIT THEN
+    _EXT4-RJ-CTX @ _EXT4-MOUNT-TAIL-BEGIN ?DUP IF EXIT THEN
     \ Replay may intentionally leave a durable orphan record when no cleanup
     \ commit existed.  Authenticate that plan before deciding whether the
     \ ordinary clear is authorized; policy refusal belongs after this branch.
@@ -19366,7 +19722,11 @@ VARIABLE _EXT4-M-STAGED-WRITE
         _EXT4-M-V @ V.ARENA @ _EXT4-M-CTX @ _EXT4-C.ARENA + !
     ELSE
         \ Preserve arena workspace allocations owned by this binding across a
-        \ failed-mount retry while resetting all media-derived state.
+        \ failed-mount retry while resetting all media-derived state.  Runtime
+        \ aliases and the complete transient tail must be withdrawn first.
+        _EXT4-M-CTX @ _EXT4-UNBIND-RUNTIME-ORPHAN-WORKSPACE
+        ?DUP IF EXIT THEN
+        _EXT4-M-CTX @ _EXT4-MOUNT-TAIL-RELEASE ?DUP IF EXIT THEN
         _EXT4-M-CTX @ _EXT4-CTX-RESET-SIZE 0 FILL
     THEN
     0 _EXT4-M-CTX @ _EXT4-C.J.REVOKE-COUNT + !
@@ -19397,23 +19757,30 @@ VARIABLE _EXT4-M-STAGED-WRITE
         \ Bootstrap from inode 8 without trusting mutable aggregate counters;
         \ strict whole-filesystem validation follows replay while the journal
         \ is still intact and replayable.
+        _EXT4-M-CTX @ _EXT4-ENSURE-ORPHAN-AUTH-WORKSPACE
+        ?DUP IF EXIT THEN
         _EXT4-M-CTX @ _EXT4-VALIDATE-JOURNAL ?DUP IF EXIT THEN
         _EXT4-M-STAGED-WRITE @ IF
             _EXT4-M-CTX @ _EXT4-STAGED-WRITE-JOURNAL-QUALIFY
             ?DUP IF EXIT THEN
         THEN
+        _EXT4-M-CTX @ _EXT4-MOUNT-TAIL-BEGIN ?DUP IF EXIT THEN
         _EXT4-M-CTX @ _EXT4-M-V @
         _EXT4-RECOVER-JOURNAL ?DUP IF EXIT THEN
         _EXT4-M-CTX @ _EXT4-M-V @
         _EXT4-RELOAD-AUTHENTICATED ?DUP IF EXIT THEN
     ELSE
-        _EXT4-M-CTX @ _EXT4-AUTHENTICATE-REST ?DUP IF EXIT THEN
+        _EXT4-M-CTX @ _EXT4-AUTHENTICATE-REST-PREPLAN
+        ?DUP IF EXIT THEN
         \ Clean/torn paths now have authenticated journal geometry but have
         \ not yet entered either mutation-capable recovery landing below.
         _EXT4-M-STAGED-WRITE @ IF
             _EXT4-M-CTX @ _EXT4-STAGED-WRITE-JOURNAL-QUALIFY
             ?DUP IF EXIT THEN
         THEN
+        _EXT4-M-CTX @ _EXT4-MOUNT-TAIL-BEGIN ?DUP IF EXIT THEN
+        _EXT4-M-CTX @ _EXT4-BUILD-AUTHENTICATED-ORPHAN-PLAN
+        ?DUP IF EXIT THEN
         _EXT4-M-CTX @ _EXT4-C.O.ACTIVE + @ IF
             _EXT4-M-CTX @ _EXT4-C.SUPER-TORN + @
             _EXT4-M-CTX @ _EXT4-C.J.PRIMARY-TORN + @ OR
@@ -19441,6 +19808,12 @@ VARIABLE _EXT4-M-STAGED-WRITE
     \ minimum profile at the final mount endpoint before root publication.
     _EXT4-M-STAGED-WRITE @ IF
         _EXT4-M-CTX @ _EXT4-STAGED-WRITE-JOURNAL-QUALIFY ?DUP IF EXIT THEN
+        _EXT4-M-CTX @ _EXT4-MOUNT-TAIL-RELEASE ?DUP IF EXIT THEN
+        _EXT4-M-CTX @ _EXT4-M-V @
+        _EXT4-ENSURE-RUNTIME-ORPHAN-WORKSPACE ?DUP IF EXIT THEN
+        _EXT4-M-CTX @ _EXT4-MOUNT-TAIL-BEGIN ?DUP IF EXIT THEN
+        _EXT4-M-CTX @ _EXT4-AUTHENTICATE-ORPHAN-PLAN
+        ?DUP IF EXIT THEN
     THEN
     _EXT4-M-CTX @ _EXT4-VALIDATE-ROOT ?DUP IF EXIT THEN
     _EXT4-M-V @ _EXT4-ATTACHED? 0= IF
@@ -19448,30 +19821,61 @@ VARIABLE _EXT4-M-STAGED-WRITE
     THEN
     0 ;
 
+VARIABLE _EXT4-MF-IOR
+
+: _EXT4-MOUNT-FAIL  ( ior -- ior )
+    _EXT4-MF-IOR !
+    _EXT4-M-V @ 0= IF _EXT4-MF-IOR @ EXIT THEN
+    _EXT4-M-V @ V.BCTX @ DUP 0= IF DROP _EXT4-MF-IOR @ EXIT THEN
+    0 OVER _EXT4-C.J.WRITER-CURRENT + !
+    0 OVER _EXT4-C.J.PROTOCOL-OWNERS + !
+    DUP _EXT4-UNBIND-RUNTIME-ORPHAN-WORKSPACE
+    DUP IF NIP EXIT THEN DROP
+    _EXT4-MOUNT-TAIL-RELEASE
+    DUP IF EXIT THEN DROP _EXT4-MF-IOR @ ;
+
 : _EXT4-MOUNT-FINISH  ( -- ior )
     _EXT4-M-CTX @ _EXT4-C.O.ACTIVE + @ IF
         _EXT4-M-CTX @ _EXT4-M-V @
-        _EXT4-COMPLETE-ORPHAN-PLAN ?DUP IF EXIT THEN
+        _EXT4-COMPLETE-ORPHAN-PLAN ?DUP IF
+            _EXT4-MOUNT-FAIL EXIT
+        THEN
         _EXT4-M-V @ _EXT4-ATTACHED? 0= IF
-            EXT4-D-ATTACHMENT _EXT4-CORRUPT EXIT
+            EXT4-D-ATTACHMENT _EXT4-CORRUPT
+            _EXT4-MOUNT-FAIL EXIT
         THEN
     THEN
     _EXT4-M-CTX @ _EXT4-EMPTY-ORPHAN-RECOVERY? IF
         _EXT4-M-CTX @ _EXT4-M-V @
-        _EXT4-COMPLETE-EMPTY-ORPHAN ?DUP IF EXIT THEN
+        _EXT4-COMPLETE-EMPTY-ORPHAN ?DUP IF
+            _EXT4-MOUNT-FAIL EXIT
+        THEN
         _EXT4-M-V @ _EXT4-ATTACHED? 0= IF
-            EXT4-D-ATTACHMENT _EXT4-CORRUPT EXIT
+            EXT4-D-ATTACHMENT _EXT4-CORRUPT
+            _EXT4-MOUNT-FAIL EXIT
         THEN
     THEN
-    _EXT4-M-CTX @ _EXT4-JWR-REBASE-MOUNTED ?DUP IF EXIT THEN
+    _EXT4-M-CTX @ _EXT4-MOUNT-TAIL-RELEASE ?DUP IF EXIT THEN
+    _EXT4-M-STAGED-WRITE @ IF
+        _EXT4-M-CTX @ _EXT4-M-V @
+        _EXT4-BIND-RUNTIME-ORPHAN-WORKSPACE ?DUP IF EXIT THEN
+    THEN
+    _EXT4-M-CTX @ _EXT4-JWR-REBASE-MOUNTED ?DUP IF
+        _EXT4-MOUNT-FAIL EXIT
+    THEN
     _EXT4-M-V @ V.FLAGS DUP @ VFS-F-DIRTY INVERT AND SWAP !
     _EXT4-M-CTX @ _EXT4-M-V @ _EXT4-PUBLISH-ROOT
     -1 _EXT4-M-CTX @ _EXT4-C.J.WRITER-CURRENT + !
     -1 _EXT4-M-CTX @ _EXT4-C.READY + !
     0 ;
 
+\ Public mount failure does not retain private retry scratch.  Direct callers
+\ of MOUNT-AUTHENTICATE deliberately keep it so auth-only retry tests and the
+\ split finish path can inspect the authenticated plan.
 : _EXT4-MOUNT  ( vfs -- ior )
-    0 _EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN
+    0 _EXT4-MOUNT-AUTHENTICATE ?DUP IF
+        _EXT4-MOUNT-FAIL EXIT
+    THEN
     _EXT4-MOUNT-FINISH ;
 
 \ A descriptor capability is instance-wide.  Staged authentication rejects an
@@ -19481,7 +19885,9 @@ VARIABLE _EXT4-M-STAGED-WRITE
 \ nonempty WRITE profile.  The ordinary binding remains available for the
 \ complete read/recovery geometry.
 : _EXT4-STAGED-WRITE-MOUNT  ( vfs -- ior )
-    -1 _EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN
+    -1 _EXT4-MOUNT-AUTHENTICATE ?DUP IF
+        _EXT4-MOUNT-FAIL EXIT
+    THEN
     _EXT4-MOUNT-FINISH ;
 
 VARIABLE _EXT4-GA-D
