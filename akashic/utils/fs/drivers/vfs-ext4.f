@@ -67,6 +67,7 @@ REQUIRE ../../../math/crc.f
 0x00040000 CONSTANT _EXT4-HUGE-FILE-FL
 0x00004000 CONSTANT _EXT4-JOURNAL-DATA-FL
 5          CONSTANT _EXT4-MAX-EXTENT-DEPTH
+65000      CONSTANT _EXT4-LINK-MAX
 12         CONSTANT _EXT4-NDIRECT
 15         CONSTANT _EXT4-N-BLOCK-PTRS
 1 CONSTANT _EXT4-BG-INODE-UNINIT
@@ -12751,10 +12752,11 @@ VARIABLE _EXT4-UOW-IOR
     THEN
     _EXT4-UOW-IOR @ ;
 
-\ The exact one-block write replaces two disjoint homes.  Scan all other
-\ allocated inodes once while both ranges are published, rather than paying
-\ for two filesystem-wide walks or conservatively merging the gap between
-\ unrelated blocks.
+\ Publish two disjoint ranges and scan every inode other than one completely
+\ authenticated target.  The caller must prove the target's own relationship
+\ to both ranges from its complete map; a range may therefore be target-owned
+\ or known unowned by the target.  This avoids separate filesystem walks or a
+\ conservative merge across unrelated blocks.
 : _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR
   ( target-ino first-a count-a first-b count-b ctx -- ior )
     _EXT4-UOW-CTX ! _EXT4-UOW-COUNT-B ! _EXT4-UOW-FIRST-B !
@@ -19548,7 +19550,9 @@ EXT4-OPS ,
 \ credit.  Both run within a caller profile large enough to contain the
 \ measured topology.  CREATE additionally allocates one initialized-group
 \ inode and inserts it into authenticated slack in a one-block linear
-\ directory through an at-most-six-metadata-home transaction.  TRUNCATE first
+\ directory through an at-most-six-metadata-home transaction.  MKDIR extends
+\ that authority with one initialized checksummed directory block, exact link
+\ accounting, and an at-most-nine-metadata-home transaction.  TRUNCATE first
 \ admits strict shrink inside the current retained initialized block.  Its
 \ zeroed tail and inode record are committed together as exact 2/0/0 metadata
 \ payloads.  One initialized logical-zero singleton may additionally release
@@ -19557,8 +19561,8 @@ EXT4-OPS ,
 \ namespace slice in one checksummed linear directory block; it changes no
 \ allocation and creates no orphan state.
 \ Bind a containing profile and trusted clock before the first mutation.
-EXT4-CAPS VFS-CAP-WRITE OR VFS-CAP-CREATE OR VFS-CAP-TRUNCATE OR
-VFS-CAP-UNLINK OR
+EXT4-CAPS VFS-CAP-WRITE OR VFS-CAP-CREATE OR VFS-CAP-MKDIR OR
+VFS-CAP-TRUNCATE OR VFS-CAP-UNLINK OR
 CONSTANT EXT4-STAGED-WRITE-CAPS
 
 CREATE EXT4-STAGED-WRITE-OPS VFS-OPS-SIZE ALLOT
@@ -21025,31 +21029,33 @@ CREATE _XB _EXT4-MAX-BLOCK ALLOT
 ; _EXT4-WR-HOOK !
 
 \ =====================================================================
-\  Atomic regular-file creation in one linear directory block
+\  Atomic inode creation in one linear parent directory block
 \ =====================================================================
 \
-\ CREATE is intentionally the next narrow namespace slice.  It allocates an
-\ inode from an already initialized inode bitmap and inserts one regular-file
-\ dirent into authenticated slack in an existing one-block linear directory.
-\ Directory-block allocation, HTree insertion, ACL inheritance, non-root
-\ credential policy, and directory growth remain explicit unsupported edges.
-\ The admitted edit is nevertheless one complete journal transaction: new and
-\ parent inode records, the directory block, inode bitmap, primary descriptor,
-\ and primary superblock accounting are committed together.
+\ CREATE allocates an empty regular inode.  MKDIR extends the same authority
+\ with one geometry-selected block containing checksummed `.` and `..` entries,
+\ exact parent/child link counts, and block plus inode allocation accounting.
+\ Both insert into authenticated slack in an existing one-block linear parent.
+\ HTree insertion, ACL inheritance, non-root credential policy, and parent
+\ directory growth remain explicit unsupported edges.  Each admitted edit is
+\ one complete metadata-only journal transaction.
 
-6 CONSTANT _XC-META-HOME-MAX
+9 CONSTANT _XC-META-HOME-MAX
 CREATE _XC-META-HOMES _XC-META-HOME-MAX CELLS ALLOT
 VARIABLE _XC-META-COUNT
 VARIABLE _XC-META-HOME
 
 VARIABLE _XC-D
 VARIABLE _XC-V
+VARIABLE _XC-DIRECTORY
 VARIABLE _XC-CTX
 VARIABLE _XC-PARENT
 VARIABLE _XC-PARENT-VN
 VARIABLE _XC-PARENT-INO
 VARIABLE _XC-PARENT-PARENT-INO
 VARIABLE _XC-PARENT-GEN
+VARIABLE _XC-PARENT-NLINK
+VARIABLE _XC-PARENT-NEW-NLINK
 VARIABLE _XC-PARENT-GROUP
 VARIABLE _XC-PARENT-INDEX
 VARIABLE _XC-PARENT-HOME
@@ -21268,7 +21274,7 @@ VARIABLE _EXT4-RDB-TAIL
     _XC-INODE @ OVER L!
     _XC-INSERT-ALLOC-REC @ OVER 4 + W!
     _XC-NLEN @ OVER 6 + C!
-    1 OVER 7 + C!
+    _XC-DIRECTORY @ IF 2 ELSE 1 THEN OVER 7 + C!
     _XC-NAME-SNAPSHOT OVER 8 + _XC-NLEN @ CMOVE
     DROP
     _XC-DIR-IMAGE @ _XC-PARENT-INO @ _XC-PARENT-GEN @ _XC-CTX @
@@ -21297,8 +21303,17 @@ VARIABLE _XC-CLEAR-COUNT
 VARIABLE _XC-FIRST-CLEAR
 VARIABLE _XC-SUPER-HOME
 VARIABLE _XC-SUPER-NEW-FREE
+VARIABLE _XC-DATA-BLOCK
+VARIABLE _XC-DATA-GROUP
+VARIABLE _XC-DATA-BITMAP-HOME
+VARIABLE _XC-DATA-GDT-HOME
+VARIABLE _XC-DATA-SUPER-HOME
+VARIABLE _XC-DATA-NEW-FREE
+VARIABLE _XC-GROUP-USED-DIRS
+VARIABLE _XC-GROUP-NEW-USED-DIRS
 VARIABLE _XC-DESC
 VARIABLE _XC-IMAGE
+VARIABLE _XC-NEW-DIR-IMAGE
 
 : _XC-DESC-ITABLE-UNUSED@  ( descriptor -- inodes )
     DUP _EXT4-GD.ITABLE-UNUSED-LO + W@
@@ -21307,6 +21322,14 @@ VARIABLE _XC-IMAGE
 : _XC-DESC-ITABLE-UNUSED!  ( inodes descriptor -- )
     OVER 0xFFFF AND OVER _EXT4-GD.ITABLE-UNUSED-LO + W!
     SWAP 16 RSHIFT SWAP _EXT4-GD.ITABLE-UNUSED-HI + W! ;
+
+: _XC-DESC-USED-DIRS@  ( descriptor -- directories )
+    DUP _EXT4-GD.USED-DIRS-LO + W@
+    SWAP _EXT4-GD.USED-DIRS-HI + W@ 16 LSHIFT OR ;
+
+: _XC-DESC-USED-DIRS!  ( directories descriptor -- )
+    OVER 0xFFFF AND OVER _EXT4-GD.USED-DIRS-LO + W!
+    SWAP 16 RSHIFT SWAP _EXT4-GD.USED-DIRS-HI + W! ;
 
 : _XC-FI-ADVANCE  ( -- )
     1 _XC-FI-GROUP +!
@@ -21357,6 +21380,14 @@ VARIABLE _XC-IMAGE
     THEN
     DUP _XC-DESC-ITABLE-UNUSED@ DUP _XC-GROUP-UNUSED !
     _XC-GROUP-INODES @ U> IF
+        DROP FALSE EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+    THEN
+    DUP _XC-DESC-USED-DIRS@ DUP _XC-GROUP-USED-DIRS !
+    _XC-GROUP-INODES @ U> IF
+        DROP FALSE EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+    THEN
+    _XC-GROUP-USED-DIRS @
+    _XC-GROUP-INODES @ _XC-GROUP-FREE @ - U> IF
         DROP FALSE EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
     THEN
     DROP
@@ -21416,6 +21447,14 @@ VARIABLE _XC-IMAGE
     ELSE
         _XC-GROUP-INODES @ _XC-FIRST-CLEAR @ 1+ -
     THEN _XC-GROUP-NEW-UNUSED !
+    _XC-DIRECTORY @ IF
+        _XC-GROUP-USED-DIRS @ _XC-GROUP-INODES @ U< 0= IF
+            FALSE EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+        THEN
+        _XC-GROUP-USED-DIRS @ 1+ _XC-GROUP-NEW-USED-DIRS !
+    ELSE
+        _XC-GROUP-USED-DIRS @ _XC-GROUP-NEW-USED-DIRS !
+    THEN
     _XC-GROUP-BASE @ _XC-FIRST-CLEAR @ + 1+ DUP _XC-INODE !
     _XC-CTX @ _EXT4-C.INODES + @ U> IF
         FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
@@ -21469,6 +21508,15 @@ VARIABLE _XC-IMAGE
     THEN DROP
     _XC-IOR @ ?DUP IF EXIT THEN
     _XC-PARENT-CACHE-MATCH? 0= IF VFS-E-CONFLICT EXIT THEN
+    _XC-CTX @ _EXT4-C.R.NLINK + @ DUP _XC-PARENT-NLINK !
+    _XC-DIRECTORY @ IF
+        DUP 2 U< OVER _EXT4-LINK-MAX U< 0= OR IF
+            DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+        THEN
+        1+ _XC-PARENT-NEW-NLINK !
+    ELSE
+        _XC-PARENT-NEW-NLINK !
+    THEN
     _XC-CTX @ _EXT4-C.R.UID + @
     _XC-CTX @ _EXT4-C.R.GID + @ OR IF
         EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
@@ -21519,13 +21567,13 @@ VARIABLE _XC-IMAGE
     _XC-CTX @ _EXT4-C.ISIZE + @ CMOVE
     0 ;
 
-: _XC-AUTH-PARENT-DIRECTORY  ( -- ior )
+: _XC-PREFLIGHT-PARENT-DIRECTORY  ( -- ior )
     0 _XC-DIR-HOME !
     _XC-LOAD-PARENT ?DUP IF EXIT THEN
     _XC-DIR-HOME @ 1 _XC-CTX @
-    _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
-    _XC-PARENT-INO @ _XC-DIR-HOME @ 1 _XC-CTX @
-    _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER ?DUP IF EXIT THEN
+    _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ;
+
+: _XC-CAPTURE-PARENT-DIRECTORY  ( -- ior )
     _XC-LOAD-PARENT ?DUP IF EXIT THEN
     _XC-DIR-HOME @ _XC-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
     _XC-CTX @ _EXT4-C.BLOCK +
@@ -21538,14 +21586,84 @@ VARIABLE _XC-IMAGE
     _XC-CTX @ _EXT4-C.BSIZE + @ CMOVE
     0 ;
 
+: _XC-AUTH-PARENT-DIRECTORY  ( -- ior )
+    _XC-PREFLIGHT-PARENT-DIRECTORY ?DUP IF EXIT THEN
+    _XC-PARENT-INO @ _XC-DIR-HOME @ 1 _XC-CTX @
+    _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER ?DUP IF EXIT THEN
+    _XC-CAPTURE-PARENT-DIRECTORY ;
+
+: _XC-PREPARE-PARENT-DIRECTORY  ( -- ior )
+    _XC-DIRECTORY @ IF
+        \ The cold measurement and each staged pass authenticate structure,
+        \ but MKDIR folds parent ownership and candidate nonownership into one
+        \ paired proof after selecting both exact ranges.
+        _XC-PREFLIGHT-PARENT-DIRECTORY ?DUP IF EXIT THEN
+        _XC-CAPTURE-PARENT-DIRECTORY EXIT
+    THEN
+    _XC-AUTH-PARENT-DIRECTORY ;
+
+: _XC-LOCATE-DIRECTORY-BLOCK-HOMES  ( -- ior )
+    _XC-DATA-BLOCK @ _XC-CTX @ _EXT4-C.FIRST + @ -
+    _XC-CTX @ _EXT4-C.BPG + @ /MOD
+    _XC-DATA-GROUP ! DROP
+    _XC-DATA-GROUP @ _XC-CTX @ _EXT4-C.GROUPS + @ U< 0= IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _XC-DATA-GROUP @ _XC-CTX @ _EXT4-LOAD-BLOCK-BITMAP
+    _XC-IOR ! _XC-DATA-BITMAP-HOME !
+    _XC-IOR @ ?DUP IF EXIT THEN
+    _XC-DATA-GROUP @ _XC-CTX @ _EXT4-LOAD-DESC ?DUP IF EXIT THEN
+    _EXT4-GD-BLOCK @ _XC-DATA-GDT-HOME !
+    _XC-CTX @ _EXT4-PRIMARY-SUPER-BLOCK _XC-DATA-SUPER-HOME !
+    0 ;
+
+: _XC-REQUIRE-SAME-DIRECTORY-BLOCK  ( -- ior )
+    _XC-FI-GROUP @ _XC-CTX @ _EXT4-FIND-FREE-BLOCK
+    DUP IF NIP EXIT THEN DROP
+    _XC-DATA-BLOCK @ <> IF VFS-E-CONFLICT EXIT THEN
+    _XC-DATA-GROUP @ _XC-CTX @ _EXT4-LOAD-BLOCK-BITMAP
+    _XC-IOR ! _XC-IMAGE !
+    _XC-IOR @ ?DUP IF EXIT THEN
+    _XC-IMAGE @ _XC-DATA-BITMAP-HOME @ <> IF VFS-E-CONFLICT EXIT THEN
+    _XC-DATA-GROUP @ _XC-CTX @ _EXT4-LOAD-DESC ?DUP IF EXIT THEN
+    _EXT4-GD-BLOCK @ _XC-DATA-GDT-HOME @ <> IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    _XC-CTX @ _EXT4-PRIMARY-SUPER-BLOCK
+    _XC-DATA-SUPER-HOME @ <> IF VFS-E-CONFLICT EXIT THEN
+    0 ;
+
+: _XC-SELECT-DIRECTORY-BLOCK  ( -- ior )
+    _XC-FI-GROUP @ _XC-CTX @ _EXT4-FIND-FREE-BLOCK
+    _XC-IOR ! _XC-DATA-BLOCK !
+    _XC-IOR @ ?DUP IF EXIT THEN
+    _XC-LOCATE-DIRECTORY-BLOCK-HOMES ?DUP IF EXIT THEN
+    _XC-DATA-BLOCK @ 1 _XC-CTX @
+    _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
+    _XC-REQUIRE-SAME-DIRECTORY-BLOCK ?DUP IF EXIT THEN
+    _XC-WRITER @ IF
+        _XC-PARENT-INO @ _XC-DIR-HOME @ 1
+        _XC-DATA-BLOCK @ 1 _XC-CTX @
+        _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR ?DUP IF EXIT THEN
+        \ The parent's complete one-block map proves that its exclusion from
+        \ the scan cannot hide ownership of the distinct free candidate.
+        \ Restore both namespace and allocation authority after each dry/live
+        \ proof before any afterimage is retained.
+        _XC-CAPTURE-PARENT-DIRECTORY ?DUP IF EXIT THEN
+    THEN
+    _XC-REQUIRE-SAME-DIRECTORY-BLOCK ;
+
 : _XC-PLAN  ( -- ior )
     _XC-CTX @ _EXT4-STAGED-WRITE-FS-QUALIFY ?DUP IF EXIT THEN
     _XC-CTX @ _EXT4-C.SB + DUP _EXT4-SB.MIN-EXTRA + W@ 32 <>
     SWAP _EXT4-SB.WANT-EXTRA + W@ 32 <> OR IF
         EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
-    _XC-AUTH-PARENT-DIRECTORY ?DUP IF EXIT THEN
+    _XC-PREPARE-PARENT-DIRECTORY ?DUP IF EXIT THEN
     _XC-FIND-FREE-INODE ?DUP IF EXIT THEN
+    _XC-DIRECTORY @ IF
+        _XC-SELECT-DIRECTORY-BLOCK ?DUP IF EXIT THEN
+    THEN
     _XC-CTX @ _EXT4-VALIDATE-PRIMARY-MUTATION-HOMES ?DUP IF EXIT THEN
     _XC-META-RESET
     _XC-CTX @ _EXT4-PRIMARY-SUPER-BLOCK DUP _XC-SUPER-HOME !
@@ -21555,10 +21673,19 @@ VARIABLE _XC-IMAGE
     _XC-INODE-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
     _XC-PARENT-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
     _XC-DIR-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
+    _XC-DIRECTORY @ IF
+        _XC-DATA-BITMAP-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
+        _XC-DATA-GDT-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
+        _XC-DATA-BLOCK @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
+        _XC-DATA-SUPER-HOME @ _XC-SUPER-HOME @ <> IF
+            VFS-E-CONFLICT EXIT
+        THEN
+    THEN
     _XC-META-COUNT @ 0= IF VFS-E-CORRUPT EXIT THEN
     0 ;
 
 VARIABLE _XC-NEW-INODE-PTR
+VARIABLE _XC-NEW-ROOT
 
 : _XC-SET-NEW-INODE-TIMES  ( inode -- ior )
     DUP _XC-NEW-INODE-PTR !
@@ -21575,16 +21702,35 @@ VARIABLE _XC-NEW-INODE-PTR
 : _XC-BUILD-NEW-INODE  ( inode -- ior )
     DUP _XC-NEW-INODE-PTR !
     _XC-CTX @ _EXT4-C.ISIZE + @ 0 FILL
-    0x81B6 _XC-NEW-INODE-PTR @ _EXT4-I.MODE + W!
-    1 _XC-NEW-INODE-PTR @ _EXT4-I.LINKS + W!
+    _XC-DIRECTORY @ IF
+        0x41ED _XC-NEW-INODE-PTR @ _EXT4-I.MODE + W!
+        _XC-CTX @ _EXT4-C.BSIZE + @
+        _XC-NEW-INODE-PTR @ _EXT4-I.SIZE-LO + L!
+        2 _XC-NEW-INODE-PTR @ _EXT4-I.LINKS + W!
+    ELSE
+        0x81B6 _XC-NEW-INODE-PTR @ _EXT4-I.MODE + W!
+        1 _XC-NEW-INODE-PTR @ _EXT4-I.LINKS + W!
+    THEN
     _EXT4-EXTENTS-FL _XC-NEW-INODE-PTR @ _EXT4-I.FLAGS + L!
     _XC-NEW-GEN @ _XC-NEW-INODE-PTR @ _EXT4-I.GENERATION + L!
     32 _XC-NEW-INODE-PTR @ _EXT4-I.EXTRA-SIZE + W!
-    0xF30A _XC-NEW-INODE-PTR @ _EXT4-I.BLOCK + W!
-    0 _XC-NEW-INODE-PTR @ _EXT4-I.BLOCK 2 + + W!
-    4 _XC-NEW-INODE-PTR @ _EXT4-I.BLOCK 4 + + W!
-    0 _XC-NEW-INODE-PTR @ _EXT4-I.BLOCK 6 + + W!
-    0 _XC-NEW-INODE-PTR @ _EXT4-I.BLOCK 8 + + L!
+    _XC-NEW-INODE-PTR @ _EXT4-I.BLOCK + DUP _XC-NEW-ROOT !
+    _EXT4-EXTENT-MAGIC OVER W!
+    0 OVER 2 + W!
+    4 OVER 4 + W!
+    0 OVER 6 + W!
+    0 SWAP 8 + L!
+    _XC-DIRECTORY @ IF
+        1 _XC-NEW-ROOT @ 2 + W!
+        0 _XC-NEW-ROOT @ 12 + L!
+        1 _XC-NEW-ROOT @ 16 + W!
+        _XC-DATA-BLOCK @ 32 RSHIFT 0xFFFF AND
+        _XC-NEW-ROOT @ 18 + W!
+        _XC-DATA-BLOCK @ 0xFFFFFFFF AND
+        _XC-NEW-ROOT @ 20 + L!
+        _XC-CTX @ _EXT4-C.SPB + @ _XC-NEW-INODE-PTR @ _XC-CTX @
+        _EXT4-ENCODE-I-BLOCKS ?DUP IF EXIT THEN
+    THEN
     _XC-NEW-INODE-PTR @ _XC-SET-NEW-INODE-TIMES ?DUP IF EXIT THEN
     _XC-NEW-INODE-PTR @ _XC-INODE @ _XC-CTX @ _EXT4-RESTAMP-INODE ;
 
@@ -21615,6 +21761,11 @@ VARIABLE _XC-NEW-INODE-PTR
     _XC-PARENT-SNAPSHOT _XC-CTX @ _EXT4-C.ISIZE + @
     _EXT4-BYTES=? 0= IF DROP VFS-E-CONFLICT EXIT THEN
     DUP _XC-NEW-INODE-PTR !
+    DUP _EXT4-I.LINKS + W@ _XC-PARENT-NLINK @ <> IF
+        DROP VFS-E-CONFLICT EXIT
+    THEN
+    _XC-PARENT-NEW-NLINK @
+    _XC-NEW-INODE-PTR @ _EXT4-I.LINKS + W!
     _XC-SECONDS @ _XC-NSEC @ ROT _XC-CTX @
     _EXT4-SET-INODE-MTIME-CTIME ?DUP IF EXIT THEN
     _XC-NEW-INODE-PTR @ _XC-PARENT-INO @ _XC-CTX @
@@ -21636,6 +21787,34 @@ VARIABLE _XC-NEW-INODE-PTR
     _XC-DIR-APPLY ?DUP IF EXIT THEN
     _XC-IMAGE @ _XC-DIR-HOME @ _XC-WRITER @
     _EXT4-JTX-META-REPLACE ;
+
+: _XC-BUILD-NEW-DIRECTORY-BLOCK  ( image -- ior )
+    DUP _XC-NEW-DIR-IMAGE !
+    _XC-CTX @ _EXT4-C.BSIZE + @ 0 FILL
+    _XC-INODE @ _XC-NEW-DIR-IMAGE @ L!
+    12 _XC-NEW-DIR-IMAGE @ 4 + W!
+    1 _XC-NEW-DIR-IMAGE @ 6 + C!
+    2 _XC-NEW-DIR-IMAGE @ 7 + C!
+    [CHAR] . _XC-NEW-DIR-IMAGE @ 8 + C!
+    _XC-PARENT-INO @ _XC-NEW-DIR-IMAGE @ 12 + L!
+    _XC-CTX @ _EXT4-C.BSIZE + @ 24 -
+    _XC-NEW-DIR-IMAGE @ 16 + W!
+    2 _XC-NEW-DIR-IMAGE @ 18 + C!
+    2 _XC-NEW-DIR-IMAGE @ 19 + C!
+    [CHAR] . _XC-NEW-DIR-IMAGE @ 20 + C!
+    [CHAR] . _XC-NEW-DIR-IMAGE @ 21 + C!
+    _XC-NEW-DIR-IMAGE @ _XC-CTX @ _EXT4-C.BSIZE + @ 12 - + DUP
+    12 0 FILL
+    12 OVER 4 + W!
+    0 OVER 6 + C!
+    0xDE SWAP 7 + C!
+    _XC-NEW-DIR-IMAGE @ _XC-INODE @ _XC-NEW-GEN @ _XC-CTX @
+    _EXT4-RESTAMP-DIR-BLOCK ;
+
+: _XC-STAGE-NEW-DIRECTORY-BLOCK  ( -- ior )
+    _XC-WRITER @ _EXT4-JWR.SCRATCH-B + @
+    DUP _XC-BUILD-NEW-DIRECTORY-BLOCK ?DUP IF NIP EXIT THEN
+    _XC-DATA-BLOCK @ _XC-WRITER @ _EXT4-JTX-META-PUT ;
 
 : _XC-VALIDATE-EFFECTIVE-DESC  ( -- ior )
     _XC-DESC @ _XC-FI-GROUP @ _XC-CTX @
@@ -21667,6 +21846,8 @@ VARIABLE _XC-NEW-INODE-PTR
     THEN
     _XC-DESC @ _XC-DESC-ITABLE-UNUSED@
     _XC-GROUP-UNUSED @ <> IF VFS-E-CONFLICT EXIT THEN
+    _XC-DESC @ _XC-DESC-USED-DIRS@
+    _XC-GROUP-USED-DIRS @ <> IF VFS-E-CONFLICT EXIT THEN
     0 ;
 
 : _XC-STAGE-INODE-ALLOCATION  ( -- ior )
@@ -21713,6 +21894,7 @@ VARIABLE _XC-NEW-INODE-PTR
     _XC-VALIDATE-EFFECTIVE-DESC ?DUP IF EXIT THEN
     _XC-GROUP-NEW-FREE @ _XC-DESC @ _EXT4-JFI-DESC-FREE!
     _XC-GROUP-NEW-UNUSED @ _XC-DESC @ _XC-DESC-ITABLE-UNUSED!
+    _XC-GROUP-NEW-USED-DIRS @ _XC-DESC @ _XC-DESC-USED-DIRS!
     _XC-BITMAP-NEW-CRC @ _XC-DESC @ _EXT4-JFI-DESC-BITMAP-CRC!
     _XC-DESC @ _XC-FI-GROUP @ _XC-CTX @
     _EXT4-RESTAMP-GROUP-DESC ?DUP IF EXIT THEN
@@ -21737,7 +21919,7 @@ VARIABLE _XC-NEW-INODE-PTR
     _EXT4-JPS-IMAGE @ _XC-SUPER-HOME @ _XC-WRITER @
     _EXT4-JTX-META-REPLACE ;
 
-: _EXT4-JTX-STAGE-CREATE-REGULAR  ( transaction -- ior )
+: _EXT4-JTX-STAGE-CREATE  ( transaction -- ior )
     DUP _XC-WRITER ! _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
     _XC-WRITER @ _EXT4-JWR.CTX + @ DUP _XC-CTX @ <> IF
         DROP VFS-E-INVALID EXIT
@@ -21751,6 +21933,12 @@ VARIABLE _XC-NEW-INODE-PTR
     _XC-STAGE-NEW-INODE ?DUP IF EXIT THEN
     _XC-STAGE-PARENT-INODE ?DUP IF EXIT THEN
     _XC-STAGE-DIRECTORY ?DUP IF EXIT THEN
+    _XC-DIRECTORY @ IF
+        _XC-STAGE-NEW-DIRECTORY-BLOCK ?DUP IF EXIT THEN
+        _XC-DATA-BLOCK @ _XC-WRITER @
+        _EXT4-JTX-STAGE-ALLOCATE-BLOCK ?DUP IF EXIT THEN
+        _EXT4-JAB-NEW-SUPER-FREE @ _XC-DATA-NEW-FREE !
+    THEN
     _XC-STAGE-INODE-ALLOCATION ?DUP IF EXIT THEN
     _XC-STAGE-SUPER ?DUP IF EXIT THEN
     _XC-WRITER @ _EXT4-JWR.META-USED + @ _XC-META-COUNT @ <>
@@ -21781,7 +21969,15 @@ VARIABLE _XC-VN
     _XC-D @ _XC-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
     _XC-D @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
     _XC-D @ D.VNODE @ DUP _XC-VN ! 0= IF VFS-E-STALE EXIT THEN
-    _XC-VN @ VN.TYPE @ VFS-T-FILE <> IF VFS-E-INVALID EXIT THEN
+    _XC-DIRECTORY @ IF
+        _XC-VN @ VN.TYPE @ VFS-T-DIR <> IF VFS-E-INVALID EXIT THEN
+        _XC-D @ IN.CHILD @ IF VFS-E-CONFLICT EXIT THEN
+        _XC-VN @ VN.FLAGS @ VFS-IF-CHILDREN AND 0= IF
+            VFS-E-CONFLICT EXIT
+        THEN
+    ELSE
+        _XC-VN @ VN.TYPE @ VFS-T-FILE <> IF VFS-E-INVALID EXIT THEN
+    THEN
     _XC-VN @ VN.BID @ _XC-VN @ VN.GEN @ OR
     _XC-VN @ VN.BLOCKS @ OR
     _XC-VN @ VN.SIZE-LO @ OR _XC-VN @ VN.SIZE-HI @ OR IF
@@ -21862,16 +22058,25 @@ VARIABLE _XC-VN
     _XC-IOR @ ;
 
 : _XC-PUBLISH-COMMITTED  ( -- )
-    VFS-T-FILE _XC-VN @ VN.TYPE !
-    0x81B6 _XC-VN @ VN.MODE !
-    0 _XC-VN @ VN.SIZE-LO ! 0 _XC-VN @ VN.SIZE-HI !
+    _XC-DIRECTORY @ IF
+        VFS-T-DIR _XC-VN @ VN.TYPE !
+        0x41ED _XC-VN @ VN.MODE !
+        _XC-CTX @ _EXT4-C.BSIZE + @ _XC-VN @ VN.SIZE-LO !
+        2 _XC-VN @ VN.NLINK !
+        _XC-CTX @ _EXT4-C.SPB + @ _XC-VN @ VN.BLOCKS !
+    ELSE
+        VFS-T-FILE _XC-VN @ VN.TYPE !
+        0x81B6 _XC-VN @ VN.MODE !
+        0 _XC-VN @ VN.SIZE-LO !
+        1 _XC-VN @ VN.NLINK !
+        0 _XC-VN @ VN.BLOCKS !
+    THEN
+    0 _XC-VN @ VN.SIZE-HI !
     0 _XC-VN @ VN.UID ! 0 _XC-VN @ VN.GID !
-    1 _XC-VN @ VN.NLINK !
     _XC-INODE @ DUP _XC-VN @ VN.BID !
     _XC-VN @ VN.BDATA !
     0 _XC-VN @ VN.BDATA 8 + !
     _XC-NEW-GEN @ _XC-VN @ VN.GEN !
-    0 _XC-VN @ VN.BLOCKS !
     _XC-SECONDS @ _XC-VN @ VN.ATIME !
     _XC-NSEC @ _XC-VN @ VN.ATIME-NS !
     _XC-SECONDS @ _XC-VN @ VN.MTIME !
@@ -21882,7 +22087,11 @@ VARIABLE _XC-VN
     _XC-NSEC @ _XC-PARENT-VN @ VN.MTIME-NS !
     _XC-SECONDS @ _XC-PARENT-VN @ VN.CTIME !
     _XC-NSEC @ _XC-PARENT-VN @ VN.CTIME-NS !
+    _XC-PARENT-NEW-NLINK @ _XC-PARENT-VN @ VN.NLINK !
     _XC-SUPER-NEW-FREE @ _XC-CTX @ _EXT4-C.FREE-INODES + !
+    _XC-DIRECTORY @ IF
+        _XC-DATA-NEW-FREE @ _XC-CTX @ _EXT4-C.FREE-BLOCKS + !
+    THEN
     VFS-F-DIRTY _XC-V @ V.FLAGS DUP @ ROT OR SWAP ! ;
 
 : _XC-POSTCOMMIT-FAIL  ( ior -- ior )
@@ -21896,8 +22105,7 @@ VARIABLE _XC-VN
     _XC-PUBLISH-COMMITTED
     0 ;
 
-: _EXT4-CREATE  ( dentry vfs -- ior )
-    _XC-V ! _XC-D !
+: _XC-CREATE-COMMON  ( -- ior )
     0 _XC-WRITER ! 0 _XC-TX !
     _XC-ENTRY ?DUP IF _XC-SCRUB EXIT THEN
     _XC-NOW ?DUP IF _XC-SCRUB EXIT THEN
@@ -21911,7 +22119,7 @@ VARIABLE _XC-VN
         _XC-META-COUNT @ 0 0 _XC-WRITER @ _EXT4-JTX-BEGIN
         DUP IF NIP _XC-FAIL EXIT THEN
         DROP _XC-TX !
-        _XC-TX @ _EXT4-JTX-STAGE-CREATE-REGULAR
+        _XC-TX @ _EXT4-JTX-STAGE-CREATE
         ?DUP IF _XC-FAIL EXIT THEN
         _XC-TX @ _EXT4-JTX-ABORT ?DUP IF _XC-FAIL EXIT THEN
         _XC-WRITER @ _EXT4-JWR-ACTIVATE ?DUP IF _XC-FAIL EXIT THEN
@@ -21919,7 +22127,7 @@ VARIABLE _XC-VN
     _XC-META-COUNT @ 0 0 _XC-WRITER @ _EXT4-JTX-BEGIN
     DUP IF NIP _XC-FAIL EXIT THEN
     DROP _XC-TX !
-    _XC-TX @ _EXT4-JTX-STAGE-CREATE-REGULAR
+    _XC-TX @ _EXT4-JTX-STAGE-CREATE
     ?DUP IF _XC-FAIL EXIT THEN
     _XC-TX @ _EXT4-JTX-EMIT ?DUP IF _XC-FAIL EXIT THEN
     _XC-PUBLISH-COMMITTED
@@ -21936,7 +22144,18 @@ VARIABLE _XC-VN
     _XC-SCRUB
     0 ;
 
+: _EXT4-CREATE  ( dentry vfs -- ior )
+    _XC-V ! _XC-D !
+    0 _XC-DIRECTORY !
+    _XC-CREATE-COMMON ;
+
+: _EXT4-MKDIR  ( dentry vfs -- ior )
+    _XC-V ! _XC-D !
+    -1 _XC-DIRECTORY !
+    _XC-CREATE-COMMON ;
+
 ' _EXT4-CREATE EXT4-STAGED-WRITE-OPS VFS-OP-CREATE CELLS + !
+' _EXT4-MKDIR EXT4-STAGED-WRITE-OPS VFS-OP-MKDIR CELLS + !
 
 \ =====================================================================
 \  Atomic regular-file shrink

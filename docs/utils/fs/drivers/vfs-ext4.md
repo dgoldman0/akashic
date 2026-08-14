@@ -6,7 +6,7 @@ This VFS ABI 1 driver reads filesystems in the pinned
 `akashic-ext4-rw-v1` profile from one explicit KDOS volume. It publishes two
 different descriptors. `EXT4-BINDING` is the ordinary read-only surface.
 `EXT4-STAGED-WRITE-BINDING` is the current explicitly staged write surface for
-linked regular files on authenticated 1 KiB/256-byte-inode geometry. It
+authenticated 1 KiB/256-byte-inode geometry. It
 supports block-bounded overwrite of initialized extents, strict no-gap append
 inside an already allocated partial EOF block, and allocation-backed fill of
 complete logical holes inside the existing file size under the extent-root
@@ -51,7 +51,13 @@ inode with more than one link may lose one same-parent name without changing
 allocation. An already-empty inode with one link and no external allocation may
 lose its final name and inode allocation in one at-most-six-home transaction.
 Neither shape creates orphan state; nonempty final-link removal and
-unlink-while-open remain later boundaries. The driver
+unlink-while-open remain later boundaries. The same surface now provides a
+bounded atomic `MKDIR`: it allocates one inode and one globally unowned block,
+builds a canonical checksummed one-block `.`/`..` directory, inserts its typed
+name into the authenticated one-block linear parent, and updates parent links,
+free-space, and `used_dirs` accounting in one exact `7/0/0` through `9/0/0`
+transaction. Directory growth, HTree parents, inheritance beyond the explicit
+root-owned non-setgid envelope, and `RMDIR` remain gated. The driver
 also implements bounded mount-time recovery and
 durable transaction emission for an internal checksum-v3 JBD2 journal. It never
 uses the ambient filesystem volume: reads and all recovery, activation,
@@ -120,9 +126,9 @@ budget failures include used and allowed steps. The current source passes cold
 builds and focused recovery qualification under their checked-in watchdogs,
 without a compiled cache or certificate-preservation shortcut.
 
-After the empty closed final-link `UNLINK` slice, the production source
-measures 1,078,694,775 steps across 2,859 packed lines in source mode. The
-1.10-billion watchdog leaves about 1.9 percent measured growth margin; it is
+After the bounded `MKDIR` slice, the production source measures 1,091,816,729
+steps across 2,883 packed lines in source mode. The 1.10-billion watchdog
+leaves about 0.7 percent measured growth margin; it is
 not a filesystem or implementation capacity.
 
 ## Mounting
@@ -1405,7 +1411,7 @@ explicitly staged boundary.
 ## Current staged writes
 
 `EXT4-STAGED-WRITE-BINDING` is the explicit ABI-1 surface for the currently
-implemented ordinary-data mutations. A nonempty request is admitted
+implemented mutations. A nonempty write request is admitted
 only on authenticated 1 KiB filesystem geometry with 256-byte inodes and only
 for a linked regular file whose inode flags are exactly `EXTENTS`. An
 initialized-block overwrite or tail-only partial-tail append may use an
@@ -2015,6 +2021,72 @@ records the checkpoint error in `V.LAST-IOR`, and quarantines the live mount.
 The next ordinary read-only mount replays all six metadata homes, resolves the
 file with its exact timestamps and identity, and passes `e2fsck`; the following
 mount is byte-stable and performs zero writes.
+
+### Initial atomic MKDIR slice
+
+The staged binding now advertises `VFS-CAP-MKDIR` and installs `_EXT4-MKDIR`
+in operation slot 10. The ordinary binding remains read-only with a null MKDIR
+slot. Generic `VFS-MKDIR` attaches an empty provisional directory before the
+callback. An ext4 refusal leaves generic VFS to remove that object; commit
+authority publishes the stable inode, one-block directory projection, parent
+link and timestamps, and free-space accounting before generic VFS increments
+its inode count.
+
+The parent uses the CREATE slice's authenticated one-block checksummed linear-
+directory envelope: root UID/GID, no setgid bit, flags exactly `EXTENTS`, one
+initialized mapped block, no inline or external xattr, a complete valid
+dirent chain and checksum tail, and enough existing slack for the typed
+directory entry. Its on-disk link count must be from 2 through 64999 so the
+new subdirectory cannot overflow ext4's 65000-link bound. Indexed or multi-
+block parents, directory growth, default-ACL or setgid inheritance, non-root
+credential policy, and groups requiring inode-table initialization remain
+typed refusal boundaries.
+
+Inode selection retains CREATE's initialized-group bitmap, inode-table,
+generation, descriptor, and primary-superblock authentication. MKDIR also
+selects a clear data-block bit from runtime initialized geometry. A paired
+whole-filesystem owner proof establishes that the parent owns its complete
+one-block map exactly once and that the distinct candidate has no inode owner;
+static-metadata, journal, bitmap, descriptor, superblock, and inode-table
+aliases are rejected separately. Dry staging performs that proof before
+journal activation, and live staging repeats it and recaptures both blocks
+from current media.
+
+The new inode is a root-owned mode-0755 directory with link count two, size one
+filesystem block, one depth-zero initialized extent at logical block zero,
+exact `i_blocks` sector accounting, `extra_isize=32`, an advanced nonzero
+generation, trusted atime/mtime/ctime/crtime, and a full inode checksum. Its
+new checksummed directory block contains `.` with a 12-byte record, `..`
+covering the remaining usable space, and the metadata-checksum tail. The
+parent receives a file-type-2 dirent, one additional link, and the same
+trusted mtime/ctime. Allocation sets the inode and block bitmap bits,
+decrements group/global free-inode and free-block counts, increments
+`bg_used_dirs_count`, updates `bg_itable_unused`, and repairs every affected
+checksum.
+
+All state changes are one no-data/no-revoke transaction. Deduplication derives
+exact `7/0/0` through `9/0/0` credit from inode-table and primary-GDT page
+sharing. The canonical root fixture consumes `8/0/0`: child inode-table block
+283, parent inode-table block 275, parent directory block 1299, child directory
+block 1364, inode bitmap 267, block bitmap 259, primary GDT block 2, and
+primary superblock 1. The successful path validates the cache projection, raw
+inode and extent, canonical dirents, allocation bits, group/global counters,
+link counts, checksums, and exact checkpoint order, then passes pinned
+e2fsprogs 1.47.4 `debugfs` and read-only `e2fsck` plus a zero-write byte-stable
+ordinary remount.
+
+A missing trusted clock, a caller profile containing only seven metadata
+homes, an indexed parent, and a checksum-valid `used_dirs` count exceeding the
+group's allocated inode count each refuse without activation, media mutation,
+or cache drift. A W7 descriptor tear returns the precommit I/O error, removes
+the provisional directory, leaves both allocation bits and every ext4 home
+old, and requires no home replay. At W25, the committed child-directory home
+tears after public success: the complete directory/cache projection remains
+published, the checkpoint error is retained in `V.LAST-IOR`, and the live
+writer is quarantined. Recovery replays all eight canonical homes; pinned
+`e2fsck` accepts both recovery branches, and each following mount is byte-
+stable and write-free. The focused success journey consumes 1,054,460,044
+runtime steps under its existing 1.20-billion-step watchdog.
 
 ### Same-retained-block shrink TRUNCATE
 
@@ -2690,8 +2762,9 @@ The ratchet order is:
    allocation-free regular inode (completed in the current worktree); retain
    nonempty final-link and unlink-while-open as explicit later lifetime
    boundaries rather than opening speculative orphan work;
-6. add `MKDIR` and `RMDIR`, including `.`/`..`, parent/child link counts, and
-   empty-directory enforcement;
+6. retain bounded `MKDIR`, including `.`/`..`, parent/child link counts,
+   inode/block allocation and directory accounting (completed in the current
+   worktree), then add `RMDIR` with empty-directory enforcement;
 7. add hard `LINK`, then ratchet `RENAME` from same-directory no-replacement
    through cross-directory, directory-move, replacement, and open-victim
    cases;
@@ -2720,10 +2793,10 @@ documented request envelopes. Their qualified tail-to-allocation and additional
 allocated-EOF exact compositions preserve independently durable prefixes, but
 no broader geometry or operation inherits that status.
 `EXT4-STAGED-WRITE-OPS` adds staged `MOUNT`, `WRITE`, bounded linear-directory
-`CREATE`, qualified shrink `TRUNCATE`, and bounded closed-file `UNLINK`
+`CREATE` and `MKDIR`, qualified shrink `TRUNCATE`, and bounded closed-file `UNLINK`
 dispatch slots—including nonfinal removal and empty final-link removal—to its
 copy of the ordinary table. The ordinary binding remains `VFS-BF-READ-ONLY` and advertises
-none of them. Neither binding yet advertises `MKDIR`, `RMDIR`,
+none of them. Neither binding yet advertises `RMDIR`,
 `RENAME`, `SETATTR`, `LINK`, `SYMLINK`, `SETXATTR`, or `REMOVEXATTR`. Each later capability
 still needs its own bounded credit/chunking contract, reachable-state recovery
 closure, namespace/cache behavior where applicable, and interoperability plus
@@ -2732,7 +2805,7 @@ and inode allocation, extent and legacy-map growth and shrink, directory-entry
 mutation, inode/link/time/accounting updates, xattr mutation, broader per-record
 orphan closure, and the final compositional release matrix.
 
-The staged binding publishes eight concrete durable paths. Initialized
+The staged binding publishes ten concrete durable paths. Initialized
 overwrite uses a full-block ordered-data RMW plus one checksummed inode-table
 after-image and consumes `1/1/0`. Strict append uses the same transaction shape
 to extend exact partial EOF inside the initialized block, updating `i_size`
@@ -2804,7 +2877,12 @@ group inode selection and allocation, checksum/accounting updates, one-block
 linear-directory slack insertion, parent/new inode construction, cache
 publication, clean unmount, precommit rollback, six-home committed replay,
 write-free stable remount, and pinned `debugfs`/`e2fsck` acceptance in one
-at-most-six-home transaction. The initial TRUNCATE slice adds shared-vnode
+at-most-six-home transaction. The initial MKDIR slice adds one authenticated
+globally unowned data-block allocation, a canonical checksummed `.`/`..`
+directory, typed parent insertion, parent/child link accounting,
+`bg_used_dirs_count`, exact seven-to-nine-home credit, clean and external-tool
+acceptance, four zero-write refusals, precommit rollback, and committed
+eight-home replay on the canonical fixture. The initial TRUNCATE slice adds shared-vnode
 shrink publication, complete retained-tail zeroing, exact two-home commit,
 W7 old-EOF rollback, W17 committed two-home replay, stable remount, and pinned
 `debugfs`/`e2fsck` acceptance. The block-releasing TRUNCATE slice adds
@@ -2819,9 +2897,13 @@ directory home publishes absence and free-inode accounting before recovery
 replays all six after-images. Both recovery views reach byte-stable remounts
 accepted by pinned `e2fsck`, and no path sets `ORPHAN_PRESENT`. The expanded
 CREATE/TRUNCATE/UNLINK capstone passes all 11 selected tests sequentially in
-949.80 host seconds. Fresh source mode measures 1,078,694,775 ext4-load steps
-across 2,859 packed lines under the checked-in 1.10-billion-step watchdog. The
-next write ratchet is `MKDIR`/`RMDIR`, followed by hard `LINK` and staged
+949.80 host seconds. Bounded MKDIR then adds exact inode/block allocation,
+canonical `.`/`..` construction, parent-link and `used_dirs` accounting,
+four zero-write refusal gates, W7 precommit rollback, and W25 committed
+eight-home replay, with pinned external-tool and stable-remount acceptance.
+Fresh source mode measures 1,091,816,729 ext4-load steps across 2,883 packed
+lines under the checked-in 1.10-billion-step watchdog. The next write ratchet
+is `RMDIR`, followed by hard `LINK` and staged
 `RENAME`.
 Nonempty final-link and unlink-while-open remain later lifetime closure, rather
 than a reason to expand orphan recovery speculatively. General sparse/gap growth, unwritten conversion, growth beyond a

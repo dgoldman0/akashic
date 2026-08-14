@@ -118,8 +118,16 @@ orphan state. W7 preserves both old names; committed W17 recovery replays its
 two deduplicated homes. Closed last-link removal is now public for an
 already-empty, allocation-free regular inode: its name, complete inode record,
 inode bitmap bit, and group/global free-inode accounts commit atomically in at
-most six homes without an orphan interval. The current critical path is
-`MKDIR`/`RMDIR`, then hard `LINK` and staged `RENAME`; nonempty final-link and
+most six homes without an orphan interval. The first bounded `MKDIR` slice is
+now public too. It allocates one inode and one data block, constructs a
+checksummed one-block `.`/`..` directory, inserts its typed name in the
+authenticated linear parent, increments the parent link count and group
+`used_dirs`, and commits all namespace, allocation, and accounting state in one
+exact `7/0/0` through `9/0/0` transaction. A precommit descriptor tear rolls
+the provisional directory back without allocation, while a committed child-
+directory-home tear retains the public directory and replays all eight
+canonical homes. The current critical path is `RMDIR`, then hard `LINK` and
+staged `RENAME`; nonempty final-link and
 unlink-while-open remain explicit later lifetime boundaries. Extent-tree depth and indexed-
 directory HTree depth are independent ratchets. Broaden either only when the
 next operation or a pinned realistic corpus demands it; directory growth does
@@ -1980,8 +1988,55 @@ mount replays all six homes. The following mount is write-free and byte-stable,
 and neither path sets `ORPHAN_PRESENT`. The expanded sequential capstone runs
 the prior eight CREATE/TRUNCATE/nonfinal-UNLINK cases plus clean final-link
 removal and both final-link crash boundaries: all 11 pass in 949.80 host
-seconds. Fresh source mode measures 1,078,694,775 ext4-load steps across 2,859
-packed lines under the checked-in 1.10-billion-step watchdog.
+seconds. At that pre-MKDIR milestone, fresh source mode measured
+1,078,694,775 ext4-load steps across 2,859 packed lines under the checked-in
+1.10-billion-step watchdog.
+
+The first public `MKDIR` slice uses the same provisional-object VFS contract as
+CREATE, but admits only a root-owned, non-setgid parent in the authenticated
+one-block linear-directory envelope. The parent must have no inline or external
+xattrs, no HTree index, exactly one initialized extent, a complete valid dirent
+chain and checksum tail, insertion slack, and an on-disk link count from 2
+through 64999. Indexed or multi-block parents, directory growth, inherited ACL
+or setgid policy, non-root ownership, lazy inode-table initialization, and an
+exhausted parent link count refuse without approximation.
+
+Selection authenticates one initialized inode-bitmap slot and one clear data-
+bitmap bit. The complete parent map and the candidate block are checked in a
+paired owner proof: the parent owns its sole directory block exactly once and
+the distinct candidate has no filesystem owner. Dry staging occurs before
+journal activation, and live staging repeats the ownership proof and all
+locators from current media. The child is a root-owned mode-0755 directory with
+link count two, size one filesystem block, one depth-zero initialized extent,
+and exact sector accounting. Its checksummed data block contains canonical
+`.` and `..` entries followed by the checksum tail. The parent receives the
+typed directory entry, one additional link, and trusted mtime/ctime. Allocation
+sets both bitmap bits, decrements group/global free inode and block counts,
+increments `bg_used_dirs_count`, advances the inode generation, and repairs all
+affected metadata checksums.
+
+The transaction contains no ordered data and no revoke. Its deduplicated
+metadata credit is exactly `7/0/0` through `9/0/0`, depending on inode-table
+and primary-GDT page sharing. The canonical fixture consumes `8/0/0` across
+the child and parent inode-table blocks, parent and child directory blocks,
+inode and block bitmaps, primary GDT block, and primary superblock. Clean
+qualification creates `/newdir`, validates the raw inode, extent, bitmaps,
+dirent chains, link/free/used-directory accounts and cache projection, then
+passes pinned e2fsprogs 1.47.4 `debugfs` and read-only `e2fsck` plus a zero-write
+byte-stable ordinary remount. Missing-clock, seven-home-profile, indexed-parent,
+and checksum-valid `used_dirs`-over-allocated-inodes refusals leave both media
+and cache unchanged.
+
+Crash qualification covers both sides of commit authority. A W7 descriptor
+tear returns the precommit volume error, removes the provisional VFS object,
+retains both allocation bits and every ext4 home, and requires zero home replay.
+A committed W25 child-directory checkpoint tear has already published the
+directory and cache/accounting projection; it records the checkpoint failure,
+quarantines the live writer, and recovery replays all eight metadata homes.
+Both recovery branches pass read-only `e2fsck` and converge on a subsequent
+write-free byte-stable mount. Fresh source mode with this slice measures
+1,091,816,729 ext4-load steps across 2,883 packed lines under the checked-in
+1.10-billion-step watchdog.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
