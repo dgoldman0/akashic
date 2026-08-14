@@ -1202,6 +1202,32 @@ def test_rm_root_fails():
         'VFS-IOR-REASON . CR',
     ], "1")
 
+def test_rm_current_directory_is_busy_and_remains_attached():
+    """VFS-RM must not detach the dentry currently held in V.CWD."""
+    check("VFS-RM cwd is busy", [
+        'VARIABLE _RM-CALLS',
+        ': T-RMDIR-CALLBACK  2DROP 1 _RM-CALLS +! 0 ;',
+        'T-BINDING-CLONE CONSTANT _BIND',
+        "' T-RMDIR-CALLBACK _BIND VB.OPS @ VFS-OP-RMDIR CELLS + !",
+        '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1',
+        'S" active" _V1 VFS-MKDIR DROP',
+        'S" active" _V1 VFS-CD DROP',
+        '_V1 V.CWD @ CONSTANT _CWD',
+        '_V1 V.ICOUNT @ CONSTANT _ICOUNT',
+        '_V1 V.VCOUNT @ CONSTANT _VCOUNT',
+        'S" /active" _V1 VFS-RM CONSTANT _IOR',
+        (
+            ': T-RM-CWD  _IOR VFS-E-BUSY = IF ." BUSY " THEN '
+            '_V1 V.CWD @ _CWD = IF ." CWD " THEN '
+            '_CWD IN.PARENT @ _V1 V.ROOT @ = IF ." PARENT " THEN '
+            '_V1 V.ICOUNT @ _ICOUNT = IF ." ICOUNT " THEN '
+            '_V1 V.VCOUNT @ _VCOUNT = IF ." VCOUNT " THEN '
+            '_RM-CALLS @ 0= IF ." NO-CALL " THEN '
+            'S" /active" _V1 VFS-RESOLVE _CWD = IF ." ATTACHED" THEN ;'
+        ),
+        'T-RM-CWD CR',
+    ], "BUSY CWD PARENT ICOUNT VCOUNT NO-CALL ATTACHED")
+
 def test_rm_nonexistent():
     """VFS-RM reports NOENT for a missing path."""
     check("VFS-RM non-existent", [
@@ -1647,6 +1673,7 @@ def main():
         test_rm_then_resolve,
         test_rm_nonempty_dir,
         test_rm_root_fails,
+        test_rm_current_directory_is_busy_and_remains_attached,
         test_rm_nonexistent,
         # Vnode / dentry semantics
         test_hard_link_shares_vnode_and_data,

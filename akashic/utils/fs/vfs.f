@@ -2696,6 +2696,8 @@ VARIABLE _VRM-IOR
     DUP IF NIP EXIT THEN DROP _VRM-IN !
     \ Don't delete root
     _VRM-IN @ _VRM-V @ V.ROOT @ = IF VFS-E-INVALID EXIT THEN
+    \ Removing cwd would leave V.CWD naming a detached dentry.
+    _VRM-IN @ _VRM-V @ V.CWD @ = IF VFS-E-BUSY EXIT THEN
     \ Don't delete non-empty directories
     _VRM-IN @ IN.TYPE @ VFS-T-DIR = IF
         VFS-OP-RMDIR _VRM-V @ _VFS-HAS-OP? 0= IF VFS-E-UNSUPPORTED EXIT THEN

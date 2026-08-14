@@ -440,6 +440,12 @@ vnode is a no-op that retains both names and the link count. Directory cycles,
 nonempty directory replacement, and file/directory type conflicts are
 rejected.
 
+`VFS-RM` rejects the root with `VFS-E-INVALID` and the dentry currently held
+in `V.CWD` with `VFS-E-BUSY` before binding dispatch. This prevents a
+successful `RMDIR` callback from leaving the VFS current-directory pointer
+attached to a released cache object. Nonempty directories are rejected before
+their `RMDIR` callback as well.
+
 `VFS-SYMLINK` is capability-gated. ABI 1 exposes the operation for ext4-class
 bindings, but the RAM binding intentionally does not advertise it. Bindings
 that publish symlink dentries must advertise `VFS-CAP-READLINK` for traversal;
