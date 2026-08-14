@@ -444,19 +444,30 @@ hard-linked, and a namespace-detached target or parent returns `VFS-E-NOENT`
 without binding dispatch. Before the binding callback, the provisional dentry
 shares the target vnode and the core has provisionally incremented `VN.NLINK`
 and `VN.DREFS`; callback refusal releases the dentry, restores both counts, and
-reclaims its name when it remains the string-pool tail. The dentry is attached
+returns its name entry to the reusable string pool. The dentry is attached
 and `V.ICOUNT` increments only after callback success. Removing one name
 decrements `VN.NLINK` without invalidating other names or open FDs. Every
 dentry carries an owner tag; link, rename, metadata, and cache helpers reject a
 dentry from another VFS with `VFS-E-XDEV` before binding dispatch.
 
 `VFS-RENAME-AT` supports cross-directory moves, replacement, and
-`VFS-RN-NOREPLACE`. The binding operation completes before the cached tree is
-published. Replacing an open destination unlinks its dentry but retains the
-old vnode until close. Renaming onto a distinct hard-link dentry for the same
-vnode is a no-op that retains both names and the link count. Directory cycles,
-nonempty directory replacement, and file/directory type conflicts are
-rejected.
+`VFS-RN-NOREPLACE`. Cross-directory requests require
+`VFS-CAP-CROSSDIR-RENAME`, and replacement requires
+`VFS-CAP-RENAME-REPLACE`; unknown flag bits are rejected before binding
+dispatch. Namespace-detached source, old-parent, and new-parent dentries are
+also rejected. The binding operation completes before the cached tree is
+published, and callback failure restores the exact old tree while returning
+the reserved new-name entry to the reusable pool. Before dispatch the core
+clears `V.LAST-IOR`; callback failure records its ior there, while callback
+success preserves any postcommit diagnostic retained by the binding.
+Replacing an open destination unlinks its dentry but retains the old vnode
+until close. Replacing `V.CWD` is rejected with `VFS-E-BUSY`. Renaming onto a
+distinct hard-link dentry for the same vnode is a no-op, including under
+`VFS-RN-NOREPLACE`, that retains both names and the link count. Directory
+cycles, nonempty directory replacement, and file/directory type conflicts are
+rejected. Repeated successful renames reuse released variable-capacity name
+entries instead of consuming the bounded caller-provided string pool
+monotonically.
 
 `VFS-RM` rejects the root with `VFS-E-INVALID` and the dentry currently held
 in `V.CWD` with `VFS-E-BUSY` before binding dispatch. This prevents a

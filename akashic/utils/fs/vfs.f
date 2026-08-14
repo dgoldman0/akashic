@@ -607,41 +607,57 @@ VARIABLE _VPR-IOR
 \ =====================================================================
 \
 \  String entry layout:
-\    +0   len       (1 cell)
+\    +0   capacity in high 32 bits, len in low 32 bits (1 cell)
 \    +8   refcount  (1 cell)
 \   +16   bytes     (ALIGN8(len) payload)
 \
 \  Handle = address of entry.  Handle 0 = null sentinel.
+\  Released interior entries retain their capacity and are reusable.  This
+\  keeps repeated rename and cache churn from consuming a monotonic name pool.
 
 VARIABLE _VSA-SRC
 VARIABLE _VSA-LEN
-VARIABLE _VSA-ESZ
+VARIABLE _VSA-REQ
+VARIABLE _VSA-CAP
+VARIABLE _VSA-SCAN
+VARIABLE _VSA-END
+VARIABLE _VSA-V
+
+: _VFS-STR-INIT  ( handle -- handle )
+    DUP _VSA-LEN @ _VSA-CAP @ 32 LSHIFT OR SWAP !
+    1 OVER 8 + !
+    DUP 16 + _VSA-CAP @ 0 FILL
+    _VSA-LEN @ IF
+        _VSA-SRC @ OVER 16 + _VSA-LEN @ CMOVE
+    THEN ;
 
 : _VFS-STR-ALLOC  ( src-a src-u vfs -- handle )
-    >R  _VSA-LEN !  _VSA-SRC !
-    \ Entry size = 16 + ALIGN8(len)
-    _VSA-LEN @ 7 + -8 AND 16 +  _VSA-ESZ !
-    \ Check space
-    R@ V.STR-PTR @  _VSA-ESZ @ +
-    R@ V.STR-END @  > IF
-        R> DROP  0 EXIT         \ out of string space
-    THEN
-    \ Handle = current str-ptr
-    R@ V.STR-PTR @
-    \ Write header
-    _VSA-LEN @ OVER !           \ len at +0
-    1 OVER 8 + !                \ refcount = 1 at +8
-    \ Copy string bytes
-    _VSA-LEN @ 0> IF
-        _VSA-SRC @  OVER 16 +  _VSA-LEN @  CMOVE
-    THEN
-    \ Advance str-ptr
-    R@ V.STR-PTR @  _VSA-ESZ @ +
-    R> V.STR-PTR ! ;
+    _VSA-V ! _VSA-LEN ! _VSA-SRC !
+    _VSA-LEN @ 0<
+    _VSA-LEN @ 0xFFFFFFFF U> OR IF 0 EXIT THEN
+    _VSA-LEN @ 7 + -8 AND _VSA-REQ !
+    _VSA-V @ V.STR-BASE @ _VSA-SCAN !
+    BEGIN _VSA-SCAN @ _VSA-V @ V.STR-PTR @ U< WHILE
+        _VSA-SCAN @ @ 32 RSHIFT DUP _VSA-CAP !
+        7 AND IF 0 EXIT THEN
+        _VSA-SCAN @ _VSA-CAP @ 16 + + DUP _VSA-END !
+        _VSA-V @ V.STR-PTR @ U> IF 0 EXIT THEN
+        _VSA-SCAN @ 8 + @ 0=
+        _VSA-CAP @ _VSA-REQ @ U< 0= AND IF
+            _VSA-SCAN @ _VFS-STR-INIT EXIT
+        THEN
+        _VSA-END @ _VSA-SCAN !
+    REPEAT
+    _VSA-V @ V.STR-PTR @ DUP _VSA-SCAN !
+    _VSA-REQ @ 16 + + DUP _VSA-END !
+    _VSA-V @ V.STR-END @ U> IF 0 EXIT THEN
+    _VSA-REQ @ _VSA-CAP !
+    _VSA-SCAN @ _VFS-STR-INIT
+    _VSA-END @ _VSA-V @ V.STR-PTR ! ;
 
 : _VFS-STR-GET  ( handle -- addr len )
     DUP 0= IF  0 EXIT  THEN
-    DUP 16 + SWAP @ ;
+    DUP 16 + SWAP @ 0xFFFFFFFF AND ;
 
 : _VFS-STR-REF  ( handle -- )
     DUP 0= IF  DROP EXIT  THEN
@@ -649,18 +665,38 @@ VARIABLE _VSA-ESZ
 
 VARIABLE _VSR-H
 VARIABLE _VSR-V
-VARIABLE _VSR-ESZ
+
+VARIABLE _VST-V
+VARIABLE _VST-SCAN
+VARIABLE _VST-OLD
+VARIABLE _VST-NEW
+VARIABLE _VST-CAP
+VARIABLE _VST-END
+
+: _VFS-STR-TRIM  ( vfs -- )
+    DUP _VST-V !
+    DUP V.STR-BASE @ DUP _VST-SCAN ! _VST-NEW !
+    V.STR-PTR @ _VST-OLD !
+    BEGIN _VST-SCAN @ _VST-OLD @ U< WHILE
+        _VST-SCAN @ @ 32 RSHIFT DUP _VST-CAP !
+        7 AND IF EXIT THEN
+        _VST-SCAN @ _VST-CAP @ 16 + + DUP _VST-END !
+        _VST-OLD @ U> IF EXIT THEN
+        _VST-SCAN @ 8 + @ IF _VST-END @ _VST-NEW ! THEN
+        _VST-END @ _VST-SCAN !
+    REPEAT
+    _VST-SCAN @ _VST-OLD @ <> IF EXIT THEN
+    _VST-NEW @ _VST-OLD @ U< IF
+        _VST-NEW @ _VST-OLD @ _VST-NEW @ - 0 FILL
+        _VST-NEW @ _VST-V @ V.STR-PTR !
+    THEN ;
 
 : _VFS-STR-RELEASE  ( handle vfs -- )
     _VSR-V ! _VSR-H !
     _VSR-H @ 0= IF EXIT THEN
     _VSR-H @ 8 + DUP @ 1- DUP ROT !
     DUP 0<> IF DROP EXIT THEN DROP
-    _VSR-H @ @ 7 + -8 AND 16 + _VSR-ESZ !
-    _VSR-H @ _VSR-ESZ @ + _VSR-V @ V.STR-PTR @ = IF
-        _VSR-H @ _VSR-ESZ @ 0 FILL
-        _VSR-H @ _VSR-V @ V.STR-PTR !
-    THEN ;
+    _VSR-V @ _VFS-STR-TRIM ;
 
 : _VFS-STR-MATCH?  ( c-addr u handle -- flag )
     DUP 0= IF  DROP 2DROP FALSE EXIT  THEN
@@ -2108,24 +2144,45 @@ VARIABLE _VRN-HANDLE
 VARIABLE _VRN-VICTIM
 VARIABLE _VRN-FLAGS
 VARIABLE _VRN-WALK
+VARIABLE _VRN-DEPTH
 
 : VFS-RENAME-AT  ( new-a new-u inode new-parent flags vfs -- ior )
     _VRN-V ! _VRN-FLAGS ! _VRN-PARENT ! _VRN-IN ! _VRN-U ! _VRN-A !
     _VRN-V @ _VFS-READY ?DUP IF EXIT THEN
     _VRN-V @ V.FLAGS @ VFS-F-RO AND IF VFS-E-READONLY EXIT THEN
     VFS-OP-RENAME _VRN-V @ _VFS-HAS-OP? 0= IF VFS-E-UNSUPPORTED EXIT THEN
+    _VRN-FLAGS @ VFS-RN-NOREPLACE INVERT AND IF VFS-E-INVALID EXIT THEN
     _VRN-IN @ _VRN-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-XDEV EXIT THEN
     _VRN-PARENT @ _VRN-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-XDEV EXIT THEN
+    _VRN-IN @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-NOENT EXIT THEN
+    _VRN-PARENT @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-NOENT EXIT THEN
     _VRN-A @ _VRN-U @ _VFS-VALID-NAME? 0= IF VFS-E-INVALID EXIT THEN
     _VRN-IN @ IN.PARENT @ DUP 0= IF DROP VFS-E-INVALID EXIT THEN
     _VRN-OLD-PARENT !
+    _VRN-OLD-PARENT @ _VRN-V @ _VFS-DENTRY-OWNED? 0= IF
+        VFS-E-XDEV EXIT
+    THEN
+    _VRN-OLD-PARENT @ D.FLAGS @ VFS-DF-UNLINKED AND IF
+        VFS-E-NOENT EXIT
+    THEN
+    _VRN-IN @ D.NAME @ _VFS-STR-GET _VRN-OLD-PARENT @
+    _VFS-FIND-CHILD _VRN-IN @ <> IF VFS-E-STALE EXIT THEN
     _VRN-PARENT @ IN.TYPE @ VFS-T-DIR <> IF VFS-E-NOTDIR EXIT THEN
+    _VRN-OLD-PARENT @ _VRN-PARENT @ <> IF
+        _VRN-V @ VFS-CAPS@ VFS-CAP-CROSSDIR-RENAME AND 0= IF
+            VFS-E-UNSUPPORTED EXIT
+        THEN
+    THEN
     _VRN-PARENT @ _VRN-V @ _VFS-ENSURE-CHILDREN? ?DUP IF EXIT THEN
     _VRN-A @ _VRN-U @ _VRN-PARENT @ _VFS-FIND-CHILD
     DUP _VRN-IN @ = IF DROP 0 EXIT THEN _VRN-VICTIM !
     _VRN-VICTIM @ IF
         _VRN-VICTIM @ D.VNODE @ _VRN-IN @ D.VNODE @ = IF 0 EXIT THEN
         _VRN-FLAGS @ VFS-RN-NOREPLACE AND IF VFS-E-EXISTS EXIT THEN
+        _VRN-V @ VFS-CAPS@ VFS-CAP-RENAME-REPLACE AND 0= IF
+            VFS-E-UNSUPPORTED EXIT
+        THEN
+        _VRN-VICTIM @ _VRN-V @ V.CWD @ = IF VFS-E-BUSY EXIT THEN
         _VRN-VICTIM @ IN.TYPE @ VFS-T-DIR = IF
             _VRN-VICTIM @ _VRN-V @ _VFS-ENSURE-CHILDREN? ?DUP IF EXIT THEN
             _VRN-VICTIM @ IN.CHILD @ IF VFS-E-NOTEMPTY EXIT THEN
@@ -2136,17 +2193,32 @@ VARIABLE _VRN-WALK
     \ A directory cannot be moved beneath itself.
     _VRN-IN @ IN.TYPE @ VFS-T-DIR = IF
         _VRN-PARENT @ _VRN-WALK !
+        0 _VRN-DEPTH !
         BEGIN _VRN-WALK @ WHILE
+            _VRN-DEPTH @ _VRN-V @ V.ICOUNT @ U< 0= IF
+                VFS-E-CORRUPT EXIT
+            THEN
+            _VRN-WALK @ _VRN-V @ _VFS-DENTRY-OWNED? 0= IF
+                VFS-E-XDEV EXIT
+            THEN
+            _VRN-WALK @ D.FLAGS @ VFS-DF-UNLINKED AND IF
+                VFS-E-NOENT EXIT
+            THEN
             _VRN-WALK @ _VRN-IN @ = IF VFS-E-INVALID EXIT THEN
             _VRN-WALK @ IN.PARENT @ _VRN-WALK !
+            1 _VRN-DEPTH +!
         REPEAT
     THEN
     _VRN-A @ _VRN-U @ _VRN-V @ _VFS-STR-ALLOC _VRN-HANDLE !
     _VRN-HANDLE @ 0= IF VFS-E-NOMEM EXIT THEN
+    0 _VRN-V @ V.LAST-IOR !
     _VRN-A @ _VRN-U @ _VRN-IN @ _VRN-PARENT @ _VRN-VICTIM @
     _VRN-FLAGS @ _VRN-V @
     VFS-OP-RENAME _VRN-V @ _VFS-XT EXECUTE
-    DUP IF _VRN-HANDLE @ _VRN-V @ _VFS-STR-RELEASE EXIT THEN
+    DUP IF
+        _VRN-HANDLE @ _VRN-V @ _VFS-STR-RELEASE
+        _VRN-V @ _VFS-RESULT EXIT
+    THEN
     DROP
     _VRN-VICTIM @ IF
         _VRN-VICTIM @ _VRN-PARENT @ _VFS-REMOVE-CHILD
@@ -2169,7 +2241,8 @@ VARIABLE _VRN-WALK
     0 ;
 
 : VFS-RENAME  ( new-a new-u inode vfs -- ior )
-    >R DUP IN.PARENT @ VFS-RN-NOREPLACE R> VFS-RENAME-AT ;
+    >R DUP 0= IF DROP R> DROP VFS-E-INVALID EXIT THEN
+    DUP IN.PARENT @ VFS-RN-NOREPLACE R> VFS-RENAME-AT ;
 
 VARIABLE _VLN-A
 VARIABLE _VLN-U
