@@ -43,9 +43,11 @@ qualification. The staged surface additionally provides atomic empty-file
 `CREATE` in authenticated one-block linear-directory slack. Its `TRUNCATE`
 surface includes strict same-retained-block shrink under exact `2/0/0` credit
 and one block-releasing shrink-to-zero shape. The latter accepts one initialized
-depth-zero extent, first commits a modern orphan with the zero-size inode, then
-uses the existing linked-orphan cleanup to release the data block, and finally
-clears transient `ORPHAN_PRESENT` while leaving the mounted writer active. The
+depth-zero extent, first commits the zero-size inode into either an empty modern
+orphan union or the first free slot of an existing authenticated modern-only
+union, then uses the existing linked-orphan cleanup to release the data block,
+and finally clears transient `ORPHAN_PRESENT` after the complete union drains
+while leaving the mounted writer active. The
 staged surface also provides two closed-file `UNLINK` lifetimes. A regular
 inode with more than one link may lose one same-parent name without changing
 allocation. An already-empty inode with one link and no external allocation may
@@ -141,6 +143,11 @@ multi-range data-bearing two-record unlinked journeys have a separate
 write and flush around dry staging and real emission. The modern two-range
 production journey measures 1,786,988,013 steps and the legacy four-range
 journey measures 2,196,652,327; each clean remount measures 55,772,107. The
+modern `ADD_MORE` orphan-home tear journey, which first replays the insertion
+and then drains two independently data-bearing linked records, measures
+1,679,279,160 steps under that same watchdog; its write-free stable remount
+measures 44,133,436. The clean insertion and injected-fault setup journeys
+measure 519,567,371 and 421,722,917 steps respectively. The
 direct COW stage/seal/abort workloads without persistence tracing measure
 615,185,969 and 825,905,086 steps respectively. These are workload-specific
 harness measurements, not physical-runtime projections. Neither watchdog is
@@ -2454,13 +2461,21 @@ may retain one qualified external xattr block. Other maps, partial block
 release, nonzero block-releasing EOFs, unwritten extents, and depth-positive
 release remain typed unsupported boundaries.
 
-The callback composes three synchronously checkpointed transactions through a
-caller-owned writer with at least five metadata slots. First, an exact `3/0/0`
-transaction atomically sets the target size and trusted-clock `mtime`/`ctime`,
-inserts the target inode number into the first authenticated empty modern
-orphan-file slot, and sets `ORPHAN_PRESENT` in the primary superblock. Its
-checkpoint certificate rebuilds all three after-images from current media and
-proves that the formerly empty orphan union becomes exactly that one linked
+The callback composes an insertion, one cleanup transaction per retained
+record, and a final clear through a caller-owned writer with at least five
+metadata slots. Thus the empty-union path has three synchronously checkpointed
+transactions, while `ADD_MORE` drains the complete enlarged union. First, an
+exact `3/0/0`
+`ADD_FIRST` transaction atomically sets the target size and trusted-clock
+`mtime`/`ctime`, inserts the target inode number into the first authenticated
+empty modern orphan-file slot, and sets `ORPHAN_PRESENT` in the primary
+superblock. If an authenticated modern-only union is already active, exact
+`2/0/0` `ADD_MORE` instead changes only the target inode and deterministic
+first free orphan-file slot, preserving the already-set feature bit and primary
+superblock byte-exact. Both certificates bind the complete pre-union counts,
+require spare geometry-derived runtime-plan capacity, reject a duplicate
+target, and rebuild their exact after-images from current media before the
+first home write. Their poststate is exactly the old union plus the new linked
 zero-size inode while the old extent and `i_blocks` remain recoverable.
 
 Second, the existing linked-orphan cleanup measures its exact homes, replaces
@@ -2486,9 +2501,16 @@ allocated data block. A committed tear of the first inode checkpoint home
 returns public truncate success with EOF zero and quarantines the live writer;
 fresh mount replay installs the orphan, existing mount recovery releases its
 data block, clears the slot and transient bit, and reaches a checker-clean,
-write-free stable remount. These boundaries prove that durable EOF zero cannot
-strand the old allocation and that a failed precommit orphan insertion cannot
-publish the shrink. The consolidated zero-release, retained-shrink, policy,
+write-free stable remount. Separate `ADD_MORE` qualification begins with one
+linked zero-size orphan retaining two sparse data ranges, checkpoints a second
+linked truncation, tears the orphan-file home after its new slot bytes but
+before its checksum, then proves that fresh-mount replay reconstructs and
+drains the full two-record union. The final image frees all three data blocks,
+preserves both positive link counts and the target xattr, passes pinned
+`e2fsck`, and remounts without I/O. These boundaries prove that durable EOF
+zero cannot strand the old allocation and that a failed precommit orphan
+insertion cannot publish the shrink. The consolidated zero-release,
+retained-shrink, policy,
 orphan-cleanup, and CREATE adjacency capstone passes all eight selected tests
 sequentially in 573.98 host seconds.
 

@@ -105,9 +105,11 @@ space accounting. A W7 descriptor tear retains the old EOF and both old homes;
 a committed W17 inode-home tear retains the new public EOF and replays both
 homes on recovery. One block-releasing shape is now public too: shrink-to-zero
 of a linked file backed by one initialized depth-zero extent. It atomically
-publishes a modern orphan with the zero-size inode, composes the existing
-linked-orphan cleanup to release the data block, and retires transient
-`ORPHAN_PRESENT` while retaining the mounted writer. Precommit descriptor
+publishes the zero-size inode into either an empty modern orphan union or the
+first free slot of an authenticated modern-only union, composes the existing
+linked-orphan cleanup over the complete resulting union to release storage,
+and retires transient `ORPHAN_PRESENT` while retaining the mounted writer.
+Precommit descriptor
 failure preserves the old file; a committed torn inode home converges through
 replay and orphan cleanup to a stable checker-clean empty file. Partial release,
 wider maps, aligned nonzero EOFs, cross-block nonzero EOFs, and growth remain
@@ -1919,15 +1921,21 @@ The file may retain one qualified external xattr block; the positive old size
 must fit within one filesystem block. Partial block release, multiple extents,
 unwritten extents, and depth-positive release remain outside this slice.
 
-The operation uses three independently committed and synchronously
-checkpointed transactions through one caller-owned writer. An exact `3/0/0`
-transaction updates the inode to zero size and trusted timestamps while
-retaining its old map and `i_blocks`, writes its inode number into the first
-authenticated empty modern orphan-file slot, and sets `ORPHAN_PRESENT`. Its
-mode-specific checkpoint certificate freezes the exact inode, slot, orphan
-home/generation, timestamp, and superblock after-images, reconstructs them from
-current media before the first home write, and requires the post-home union to
-contain exactly the linked zero-size target.
+The operation uses one insertion, one independently committed and synchronously
+checkpointed cleanup transaction per retained record, and a final clear through
+one caller-owned writer. An exact `3/0/0` `ADD_FIRST` transaction updates the
+inode to zero size and trusted timestamps while retaining its old map and
+`i_blocks`, writes its inode number into the first authenticated empty modern
+orphan-file slot, and sets `ORPHAN_PRESENT`. With an existing authenticated
+modern-only union, exact `2/0/0` `ADD_MORE` instead changes only the target
+inode and deterministic first free orphan-file slot, retaining the already-set
+feature bit without a primary-super after-image. Both mode-specific checkpoint
+certificates freeze the exact pre-union counts, inode, slot, orphan
+home/generation, and timestamps; `ADD_FIRST` additionally freezes the superblock
+after-image. They reconstruct every owned after-image from current media before
+the first home write and require the post-home union to equal the pre-union plus
+the linked zero-size target. Admission requires geometry-derived runtime-plan
+capacity for that additional record and rejects duplicates without media I/O.
 
 The existing linked-orphan cleanup then measures and commits its exact homes.
 For the qualified inode-14 fixture it uses `5/0/0`: target inode, orphan-file
@@ -1952,7 +1960,12 @@ the linked modern orphan, frees its retained data block through the qualified
 cleanup path, clears the transient bit, and reaches a checker-clean stable
 remount. The focused clean/precommit/committed set passes all three cases, and
 the adjacent no-clock, policy, retained-block truncate, existing modern cleanup,
-and CREATE regression set passes all five.
+and CREATE regression set passes all five. Separate `ADD_MORE` orphan-home tear
+qualification replays the inserted record and drains two independently
+data-bearing linked records in 1,679,279,160 guest steps under the established
+3-billion-step data-recovery watchdog. It frees all three retained data blocks,
+preserves both positive link counts and the target xattr, passes pinned
+`e2fsck`, and reaches a write-free stable remount in 44,133,436 steps.
 
 The first public `UNLINK` lifetimes are closed regular-file removals from an
 authenticated one-block linear directory. The staged binding alone advertises
