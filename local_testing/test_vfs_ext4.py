@@ -13950,6 +13950,18 @@ def test_htree_and_internal_extent_parser_semantics_are_total(
                 "_DXENTRIES 4 8 _TREECTX _EXT4-VALIDATE-DX-ENTRIES "
                 "CONSTANT _DX-OOB-BLOCK"
             ),
+            "CREATE _DX28 16 ALLOT",
+            "_DX28 16 0 FILL 2 _DX28 W! 1 _DX28 2 + W!",
+            "0x01000002 _DX28 4 + L!",
+            (
+                "_DX28 2 0x01000004 _TREECTX "
+                "_EXT4-VALIDATE-DX-ENTRIES CONSTANT _DX-28-VALID"
+            ),
+            "0x10000002 _DX28 4 + L!",
+            (
+                "_DX28 2 0x10000004 _TREECTX "
+                "_EXT4-VALIDATE-DX-ENTRIES CONSTANT _DX-RESERVED-HIGH"
+            ),
             "1024 _TREECTX _EXT4-C.BSIZE + !",
             "11 _EXT4-DX-DIRINO ! 2 _EXT4-DX-PARINO !",
             "11 _TREECTX _EXT4-C.DIR-BLOCK + L!",
@@ -13985,6 +13997,8 @@ def test_htree_and_internal_extent_parser_semantics_are_total(
                 "_DX-UNORDERED VFS-IOR-REASON VFS-R-CORRUPT = AND "
                 "_DX-DUP-BLOCK VFS-IOR-REASON VFS-R-CORRUPT = AND "
                 "_DX-OOB-BLOCK VFS-IOR-REASON VFS-R-CORRUPT = AND "
+                "_DX-28-VALID 0= AND "
+                "_DX-RESERVED-HIGH VFS-IOR-REASON VFS-R-CORRUPT = AND "
                 "_DX-DEEP-ROOT VFS-IOR-REASON VFS-R-CORRUPT = AND "
                 "_EMPTY-INDEX-IOR VFS-IOR-REASON VFS-R-CORRUPT = AND "
                 'IF ." EXT4-TREE-PARSER-SEMANTICS-OK" THEN'
@@ -13992,6 +14006,141 @@ def test_htree_and_internal_extent_parser_semantics_are_total(
         ],
     )
     _assert_emitted(output, "EXT4-TREE-PARSER-SEMANTICS-OK")
+
+
+def test_shared_directory_descriptor_authenticates_depth_one_mapped_htree(
+    read_side_image: Path,
+) -> None:
+    output = run_forth(
+        read_side_image,
+        [
+            "CREATE _DD _EXT4-DD-SIZE ALLOT",
+            "CREATE _DDROOT _EXT4-MAX-BLOCK ALLOT",
+            "T-ARENA T-VOLUME EXT4-NEW CONSTANT _DD-M-IOR CONSTANT _DD-V",
+            (
+                'S" /fixture/indexed" _DD-V VFS-RESOLVE? '
+                "CONSTANT _DD-R-IOR CONSTANT _DD-D"
+            ),
+            "_DDROOT _DD _EXT4-DD-INIT",
+            (
+                "_DD-D _DD-V _DD-V _EXT4-CTX _DD "
+                "_EXT4-DD-AUTH-INODE CONSTANT _DD-I-IOR"
+            ),
+            "_DD _EXT4-DD-AUTH-HTREE-ROOT CONSTANT _DD-X-IOR",
+            "_DD _EXT4-DD-REQUIRE-DEPTH0 CONSTANT _DD-D0-IOR",
+            (
+                "0x40B1F580 _DD _EXT4-DD-SELECT-ROUTE "
+                "CONSTANT _DD-C-IOR"
+            ),
+            "_DD _EXT4-DD.ROUTE-ENTRY + @ CONSTANT _DD-C-ENTRY",
+            "_DD _EXT4-DD.LEAF-LOGICAL + @ CONSTANT _DD-C-LOGICAL",
+            (
+                "_DD _EXT4-DD.INTERVAL-UPPER-INCLUSIVE + @ "
+                "CONSTANT _DD-C-INCLUSIVE"
+            ),
+            (
+                "0x40B1F582 _DD _EXT4-DD-SELECT-ROUTE "
+                "CONSTANT _DD-MID-IOR"
+            ),
+            "_DD _EXT4-DD.ROUTE-ENTRY + @ CONSTANT _DD-MID-ENTRY",
+            "_DD _EXT4-DD.LEAF-LOGICAL + @ CONSTANT _DD-MID-LOGICAL",
+            (
+                "0xB8901A84 _DD _EXT4-DD-SELECT-ROUTE "
+                "CONSTANT _DD-H-IOR"
+            ),
+            "_DD _EXT4-DD.ROUTE-ENTRY + @ CONSTANT _DD-H-ENTRY",
+            "_DD _EXT4-DD.LEAF-LOGICAL + @ CONSTANT _DD-H-LOGICAL",
+            (
+                "_DD _EXT4-DD.INTERVAL-HAS-UPPER + @ "
+                "CONSTANT _DD-H-HAS-UPPER"
+            ),
+            "1 _DD _EXT4-DD.DX-LEVEL + !",
+            (
+                "_DD _EXT4-DD-REQUIRE-DEPTH0 "
+                "CONSTANT _DD-DEEP-IOR"
+            ),
+            "0 _DD _EXT4-DD.DX-LEVEL + ! 2 _DD _EXT4-DD.DX-COUNT + !",
+            (
+                "_DD _EXT4-DD-REQUIRE-DEPTH0 "
+                "CONSTANT _DD-COUNT-IOR"
+            ),
+            "3 _DD _EXT4-DD.DX-COUNT + !",
+            (
+                "3 _DD _EXT4-DD-LOAD-LOGICAL "
+                "CONSTANT _DD-L-IOR CONSTANT _DD-LEAF-HOME"
+            ),
+            (
+                "27 0 _DD-V _EXT4-CTX _EXT4-VALIDATE-DIR-BLOCK "
+                "CONSTANT _DD-LEAF-IOR"
+            ),
+            *_forth_accumulated_conjunction(
+                "_DD-OK",
+                [
+                    "_DD-M-IOR 0=",
+                    "_DD-R-IOR 0=",
+                    "_DD-I-IOR 0=",
+                    "_DD-X-IOR 0=",
+                    "_DD-D0-IOR 0=",
+                    "_DD-C-IOR 0=",
+                    "_DD-C-ENTRY 0=",
+                    "_DD-C-LOGICAL 1 =",
+                    "_DD-C-INCLUSIVE 0<>",
+                    "_DD-MID-IOR 0=",
+                    "_DD-MID-ENTRY 1 =",
+                    "_DD-MID-LOGICAL 2 =",
+                    "_DD-H-IOR 0=",
+                    "_DD-H-ENTRY 2 =",
+                    "_DD-H-LOGICAL 3 =",
+                    "_DD-H-HAS-UPPER 0=",
+                    (
+                        "_DD-DEEP-IOR VFS-IOR-REASON "
+                        "VFS-R-UNSUPPORTED ="
+                    ),
+                    (
+                        "_DD-DEEP-IOR VFS-IOR-DETAIL "
+                        "EXT4-D-WRITE-POLICY ="
+                    ),
+                    (
+                        "_DD-COUNT-IOR VFS-IOR-REASON "
+                        "VFS-R-CORRUPT ="
+                    ),
+                    (
+                        "_DD-COUNT-IOR VFS-IOR-DETAIL "
+                        "EXT4-D-DIRECTORY ="
+                    ),
+                    "_DD-L-IOR 0=",
+                    "_DD-LEAF-IOR 0=",
+                    "_DD _EXT4-DD.INO + @ 27 =",
+                    "_DD _EXT4-DD.PARINO + @ 13 =",
+                    "_DD _EXT4-DD.GEN + @ 0=",
+                    "_DD _EXT4-DD.SIZE + @ 4096 =",
+                    "_DD _EXT4-DD.LOGICAL-BLOCKS + @ 4 =",
+                    "_DD _EXT4-DD.SECTORS + @ 10 =",
+                    "_DD _EXT4-DD.FLAGS + @ 0x81000 =",
+                    "_DD _EXT4-DD.GROUP + @ 0=",
+                    "_DD _EXT4-DD.INODE-HOME + @ 281 =",
+                    "_DD _EXT4-DD.INODE-OFF + @ 512 =",
+                    "_DD _EXT4-DD.INDEXED + @ 0<>",
+                    "_DD _EXT4-DD.ROOT-HOME + @ 1355 =",
+                    "_DD _EXT4-DD.DX-LEVEL + @ 0=",
+                    "_DD _EXT4-DD.DX-VERSION + @ 1 =",
+                    "_DD _EXT4-DD.DX-LIMIT + @ 123 =",
+                    "_DD _EXT4-DD.DX-COUNT + @ 3 =",
+                    "_DDROOT W@ 27 =",
+                    "_DDROOT 32 + W@ 123 =",
+                    "_DDROOT 34 + W@ 3 =",
+                    "_DDROOT 36 + L@ 1 =",
+                    "_DDROOT 40 + L@ 0x40B1F581 =",
+                    "_DDROOT 44 + L@ 2 =",
+                    "_DDROOT 48 + L@ 0xB8901A84 =",
+                    "_DDROOT 52 + L@ 3 =",
+                    "_DD-LEAF-HOME 1361 =",
+                ],
+            ),
+            '_DD-OK @ IF ." EXT4-DIRECTORY-DESCRIPTOR-OK" THEN',
+        ],
+    )
+    _assert_emitted(output, "EXT4-DIRECTORY-DESCRIPTOR-OK")
 
 
 def test_half_md4_directory_hash_matches_pinned_e2fsprogs_vectors(
