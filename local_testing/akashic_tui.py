@@ -1869,6 +1869,8 @@ VARIABLE _xi-starts
 VARIABLE _xi-polls
 VARIABLE _xi-cancels
 VARIABLE _xi-wipes
+VARIABLE _xi-cleanup-mode
+VARIABLE _xi-cleanup-polls
 VARIABLE _xi-cb-op
 VARIABLE _xi-config-deadline
 VARIABLE _xi-config-op
@@ -1886,6 +1888,10 @@ VARIABLE _xi-config-op
     _xi-mode @ 4 = IF 99 EXIT THEN
     _xi-mode @ 5 = IF
         -1 _xi-cb-op @ XIOO.CANCEL-REQUESTED !
+    THEN
+    _xi-mode @ 8 = IF
+        -1 _xi-cb-op @ XIOO.CANCEL-REQUESTED !
+        MS@ _xi-cb-op @ XIOO.DEADLINE-MS !
     THEN
     XIO-STEP-PENDING ;
 
@@ -1905,14 +1911,48 @@ VARIABLE _xi-config-op
     2DROP 1 _xi-wipes +!
     _xi-mode @ 7 = IF -779 THROW THEN ;
 
+: _xi-cleanup-poll  ( operation context -- step-status )
+    DROP _xi-cb-op ! 1 _xi-cleanup-polls +!
+    _xi-cleanup-mode @ 1 = IF
+        _xi-cleanup-polls @ 1 = IF
+            XIO-STEP-PENDING
+        ELSE
+            XIO-STEP-SUCCEEDED
+        THEN
+        EXIT
+    THEN
+    _xi-cleanup-mode @ 2 = IF
+        _xi-cleanup-polls @ 1 = IF -780 THROW THEN
+        XIO-STEP-SUCCEEDED EXIT
+    THEN
+    _xi-cleanup-mode @ 3 = IF
+        _xi-cleanup-polls @ 1 = IF
+            -92 _xi-cb-op @ XIOO.CLEANUP-ERROR !
+            XIO-STEP-FAILED
+        ELSE
+            XIO-STEP-SUCCEEDED
+        THEN
+        EXIT
+    THEN
+    _xi-cleanup-mode @ 4 = IF
+        _xi-cleanup-polls @ 1 = IF 99 ELSE XIO-STEP-SUCCEEDED THEN
+        EXIT
+    THEN
+    XIO-STEP-SUCCEEDED ;
+
 : _xi-counts-clear  ( -- )
-    0 _xi-starts ! 0 _xi-polls ! 0 _xi-cancels ! 0 _xi-wipes ! ;
+    0 _xi-starts ! 0 _xi-polls ! 0 _xi-cancels ! 0 _xi-wipes !
+    0 _xi-cleanup-mode ! 0 _xi-cleanup-polls ! ;
 
 : _xi-config  ( deadline operation -- status )
     _xi-config-op ! _xi-config-deadline !
     _xi-service 101 7 1 _xi-config-deadline @ 0
     ['] _xi-start ['] _xi-poll ['] _xi-cancel ['] _xi-wipe
     _xi-config-op @ XIO-OP-CONFIGURE ;
+
+: _xi-config-cleanup  ( operation -- status )
+    >R _xi-service 101 7 1 ['] _xi-cleanup-poll R>
+    XIO-OP-CONFIGURE-CLEANUP ;
 
 : _xi-fresh  ( -- )
     _xi-service XIO-SERVICE-INIT XIO-S-OK = _xi-assert
@@ -1956,8 +1996,10 @@ VARIABLE _xi-config-op
     _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
     _xi-service _xi-op-b XIO-SUBMIT XIO-S-BUSY = _xi-assert
     _xi-op-b XIOO.STATE @ XIO-STATE-RESET = _xi-assert
+    _xi-op-a XIOO.CLEANUP-POLL-XT @ 0= _xi-assert
     _xi-service _xi-op-a XIO-CANCEL XIO-S-OK = _xi-assert
     _xi-op-a XIOO.STATE @ XIO-STATE-CANCELLED = _xi-assert
+    _xi-op-a XIO-CLEANUP-PENDING? 0= _xi-assert
     _xi-service XIO-ACTIVE? 0= _xi-assert
     _xi-cancels @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
     _xi-service _xi-op-a XIO-CANCEL XIO-S-OK = _xi-assert
@@ -1966,6 +2008,245 @@ VARIABLE _xi-config-op
     _xi-wipes @ 1 = _xi-assert
     _xi-service _xi-op-b XIO-SUBMIT XIO-S-OK = _xi-assert
     _xi-service _xi-op-b XIO-CANCEL XIO-S-OK = _xi-assert ;
+
+: _xi-test-cooperative-cleanup  ( -- )
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-service 101 7 2 ['] _xi-cleanup-poll _xi-op-a
+        XIO-OP-CONFIGURE-CLEANUP XIO-S-INVALID = _xi-assert
+    _xi-op-a XIOO.CLEANUP-POLL-XT @ 0= _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    1 _xi-cleanup-mode !
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK
+    _xi-starts @ 1 = _xi-assert _xi-polls @ 0= _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-PENDING = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-STATE-CANCELLED = _xi-assert
+    _xi-service XIO-ACTIVE-OP _xi-op-a = _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-wipes @ 0= _xi-assert
+    _xi-cleanup-polls @ 0= _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-PENDING = _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-cleanup-polls @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-cleanup-polls @ 1 = _xi-assert
+    _xi-op-a XIO-CLEANUP-PENDING? _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-wipes @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-cleanup-polls @ 2 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-CANCELLED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ 0= _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+    _xi-wipes @ 1 = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-OK = _xi-assert
+    _xi-cancels @ 1 = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert
+    _xi-op-a XIOO.CLEANUP-POLL-XT @ 0= _xi-assert ;
+
+: _xi-test-cooperative-success-reset  ( -- )
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    0 _xi-op-b _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK _xi-service XIO-TICK _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-SUCCEEDED = _xi-assert
+    _xi-op-a XIOO.RESULT @ 42 = _xi-assert
+    _xi-service XIOS.RETAINED @ _xi-op-a = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-PENDING = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-SUCCEEDED = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-PENDING-RESET = _xi-assert
+    _xi-service XIO-ACTIVE-OP _xi-op-a = _xi-assert
+    _xi-service XIOS.RETAINED @ _xi-op-a = _xi-assert
+    _xi-op-a XIOO.RESULT @ 42 = _xi-assert
+    _xi-cleanup-polls @ 0= _xi-assert _xi-wipes @ 0= _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-PENDING = _xi-assert
+    _xi-service _xi-op-b XIO-SUBMIT XIO-S-BUSY = _xi-assert
+    _xi-service XIO-TICK
+    _xi-cleanup-polls @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-RESET = _xi-assert
+    _xi-op-a XIOO.RESULT @ 0= _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+    _xi-service XIOS.RETAINED @ 0= _xi-assert
+
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    2 _xi-cleanup-mode !
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK _xi-service XIO-TICK _xi-service XIO-TICK
+    _xi-service _xi-op-a XIO-RESET XIO-S-PENDING = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-SUCCEEDED = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-PENDING-RESET = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -780 = _xi-assert
+    _xi-op-a XIOO.RESULT @ 42 = _xi-assert
+    _xi-service XIO-ACTIVE? _xi-assert
+    _xi-service XIOS.RETAINED @ _xi-op-a = _xi-assert
+    _xi-wipes @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ 0= _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -780 = _xi-assert
+    _xi-op-a XIOO.RESULT @ 42 = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+    _xi-service XIOS.RETAINED @ _xi-op-a = _xi-assert
+    _xi-wipes @ 0= _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-RESET = _xi-assert
+    _xi-op-a XIOO.RESULT @ 0= _xi-assert
+    _xi-service XIOS.RETAINED @ 0= _xi-assert
+    _xi-wipes @ 1 = _xi-assert ;
+
+: _xi-test-cleanup-recovery  ( -- )
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    2 _xi-cleanup-mode !
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-PENDING = _xi-assert
+    _xi-service XIO-TICK
+    _xi-cleanup-polls @ 1 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -780 = _xi-assert
+    _xi-service XIO-ACTIVE? _xi-assert _xi-wipes @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-cleanup-polls @ 2 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -780 = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert _xi-wipes @ 1 = _xi-assert
+
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    3 _xi-cleanup-mode !
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-PENDING = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -92 = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -92 = _xi-assert
+    _xi-cleanup-polls @ 2 = _xi-assert _xi-wipes @ 1 = _xi-assert ;
+
+: _xi-test-cooperative-callback-faults  ( -- )
+    \ A throwing cancel callback records cleanup failure but does not bypass
+    \ the cooperative proof that lower authority has settled.
+    _xi-fresh 6 _xi-mode !
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-PENDING = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -778 = _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-wipes @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -778 = _xi-assert
+    _xi-cleanup-polls @ 1 = _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+
+    \ Once the cleanup poll proves authority settled, a terminal wipe fault
+    \ is local: it publishes FAILED and releases the active service exactly once.
+    _xi-fresh 7 _xi-mode !
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-PENDING = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -779 = _xi-assert
+    _xi-cleanup-polls @ 1 = _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert
+    _xi-wipes @ 1 = _xi-assert
+
+    \ A retained-success wipe fault keeps the result and first fault observable
+    \ until a second reset clears them without invoking wipe again.
+    _xi-fresh 7 _xi-mode !
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK _xi-service XIO-TICK _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-SUCCEEDED = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-PENDING = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ -779 = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -779 = _xi-assert
+    _xi-op-a XIOO.RESULT @ 42 = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+    _xi-service XIOS.RETAINED @ _xi-op-a = _xi-assert
+    _xi-cleanup-polls @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-RESET = _xi-assert
+    _xi-op-a XIOO.RESULT @ 0= _xi-assert
+    _xi-service XIOS.RETAINED @ 0= _xi-assert
+    _xi-wipes @ 1 = _xi-assert ;
+
+: _xi-test-invalid-cleanup-step  ( -- )
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    4 _xi-cleanup-mode !
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-PENDING = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ XIO-E-STEP = _xi-assert
+    _xi-service XIO-ACTIVE? _xi-assert
+    _xi-cleanup-polls @ 1 = _xi-assert _xi-wipes @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ XIO-E-STEP = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+    _xi-cleanup-polls @ 2 = _xi-assert _xi-wipes @ 1 = _xi-assert ;
+
+: _xi-test-cleanup-precedence  ( -- )
+    _xi-fresh
+    MS@ _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK
+    _xi-starts @ 0= _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-STATE-TIMED-OUT = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-DEADLINE = _xi-assert
+    _xi-cleanup-polls @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-TIMED-OUT = _xi-assert
+    _xi-cleanup-polls @ 1 = _xi-assert
+
+    _xi-fresh 8 _xi-mode !
+    MS@ 100000 + _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK
+    _xi-starts @ 1 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-STATE-CANCELLED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-cleanup-polls @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-CANCELLED = _xi-assert
+    _xi-cleanup-polls @ 1 = _xi-assert ;
 
 : _xi-test-deadlines  ( -- )
     _xi-fresh
@@ -2092,6 +2373,12 @@ VARIABLE _xi-config-op
     0 _xi-fails ! 0 _xi-checks ! DEPTH _xi-depth !
     _xi-test-progress
     _xi-test-busy-cancel
+    _xi-test-cooperative-cleanup
+    _xi-test-cooperative-success-reset
+    _xi-test-cleanup-recovery
+    _xi-test-cooperative-callback-faults
+    _xi-test-invalid-cleanup-step
+    _xi-test-cleanup-precedence
     _xi-test-deadlines
     _xi-test-failures
     _xi-test-cleanup-faults
