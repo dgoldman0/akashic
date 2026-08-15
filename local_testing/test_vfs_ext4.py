@@ -4278,7 +4278,7 @@ def build_snapshot():
     # distinct cold source stages.  This preserves the existing measured ext4
     # watchdog instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
-    max_ext4_source_steps = 1_420_000_000
+    max_ext4_source_steps = 1_450_000_000
     bootstrap_steps = _feed_until_idle(system, bootstrap, max_crc_source_steps)
 
     def load_source_stage(
@@ -13992,6 +13992,166 @@ def test_htree_and_internal_extent_parser_semantics_are_total(
         ],
     )
     _assert_emitted(output, "EXT4-TREE-PARSER-SEMANTICS-OK")
+
+
+def test_half_md4_directory_hash_matches_pinned_e2fsprogs_vectors(
+    tmp_path: Path,
+) -> None:
+    blank = tmp_path / "half-md4-storage.img"
+    blank.write_bytes(bytes(4 * 512))
+    boundary_names = tuple("a" * length for length in (31, 32, 33))
+    output = run_forth(
+        blank,
+        [
+            "CREATE _DHCTX _EXT4-CTX-SIZE ALLOT",
+            "_DHCTX _EXT4-CTX-SIZE 0 FILL",
+            (
+                "0x11111121 _DHCTX _EXT4-C.SB + "
+                "_EXT4-SB.HASH-SEED + L!"
+            ),
+            (
+                "0x11411111 _DHCTX _EXT4-C.SB + "
+                "_EXT4-SB.HASH-SEED + 4 + L!"
+            ),
+            (
+                "0x11111181 _DHCTX _EXT4-C.SB + "
+                "_EXT4-SB.HASH-SEED + 8 + L!"
+            ),
+            (
+                "0x11111111 _DHCTX _EXT4-C.SB + "
+                "_EXT4-SB.HASH-SEED + 12 + L!"
+            ),
+            (
+                "_EXT4-SB-FL-SIGNED-HASH _DHCTX _EXT4-C.SB + "
+                "_EXT4-SB.FLAGS + L!"
+            ),
+            (
+                'S" collision-068446" _EXT4-DX-HASH-HALF-MD4 '
+                "_DHCTX _EXT4-HALF-MD4-DIRHASH? "
+                "CONSTANT _DH-COLL-IOR CONSTANT _DH-COLL-MINOR "
+                "CONSTANT _DH-COLL-HASH"
+            ),
+            (
+                'S" abcdefghijklmnopqrstuvwxyz0123456789ABCD" '
+                "_EXT4-DX-HASH-HALF-MD4 _DHCTX "
+                "_EXT4-HALF-MD4-DIRHASH? "
+                "CONSTANT _DH-LONG-IOR CONSTANT _DH-LONG-MINOR "
+                "CONSTANT _DH-LONG-HASH"
+            ),
+            (
+                f'S" {boundary_names[0]}" _EXT4-DX-HASH-HALF-MD4 '
+                "_DHCTX _EXT4-HALF-MD4-DIRHASH? "
+                "CONSTANT _DH-31-IOR CONSTANT _DH-31-MINOR "
+                "CONSTANT _DH-31-HASH"
+            ),
+            (
+                f'S" {boundary_names[1]}" _EXT4-DX-HASH-HALF-MD4 '
+                "_DHCTX _EXT4-HALF-MD4-DIRHASH? "
+                "CONSTANT _DH-32-IOR CONSTANT _DH-32-MINOR "
+                "CONSTANT _DH-32-HASH"
+            ),
+            (
+                f'S" {boundary_names[2]}" _EXT4-DX-HASH-HALF-MD4 '
+                "_DHCTX _EXT4-HALF-MD4-DIRHASH? "
+                "CONSTANT _DH-33-IOR CONSTANT _DH-33-MINOR "
+                "CONSTANT _DH-33-HASH"
+            ),
+            "CREATE _DH-HIGH 11 ALLOT",
+            'S" high-" _DH-HIGH SWAP CMOVE',
+            "0x80 _DH-HIGH 5 + C!",
+            'S" -byte" _DH-HIGH 6 + SWAP CMOVE',
+            (
+                "_DH-HIGH 11 _EXT4-DX-HASH-HALF-MD4 _DHCTX "
+                "_EXT4-HALF-MD4-DIRHASH? "
+                "CONSTANT _DH-SIGNED-IOR CONSTANT _DH-SIGNED-MINOR "
+                "CONSTANT _DH-SIGNED-HASH"
+            ),
+            (
+                "_EXT4-SB-FL-UNSIGNED-HASH _DHCTX _EXT4-C.SB + "
+                "_EXT4-SB.FLAGS + L!"
+            ),
+            (
+                "_DH-HIGH 11 _EXT4-DX-HASH-HALF-MD4 _DHCTX "
+                "_EXT4-HALF-MD4-DIRHASH? "
+                "CONSTANT _DH-UNSIGNED-IOR CONSTANT _DH-UNSIGNED-MINOR "
+                "CONSTANT _DH-UNSIGNED-HASH"
+            ),
+            (
+                "_DHCTX _EXT4-C.SB + _EXT4-SB.HASH-SEED + 16 0 FILL "
+                "_EXT4-SB-FL-SIGNED-HASH _DHCTX _EXT4-C.SB + "
+                "_EXT4-SB.FLAGS + L!"
+            ),
+            (
+                'S" a" _EXT4-DX-HASH-HALF-MD4 _DHCTX '
+                "_EXT4-HALF-MD4-DIRHASH? "
+                "CONSTANT _DH-ZERO-IOR CONSTANT _DH-ZERO-MINOR "
+                "CONSTANT _DH-ZERO-HASH"
+            ),
+            "0 _DHCTX _EXT4-C.SB + _EXT4-SB.FLAGS + L!",
+            (
+                'S" x" _EXT4-DX-HASH-HALF-MD4 _DHCTX '
+                "_EXT4-HALF-MD4-DIRHASH? "
+                "CONSTANT _DH-FLAGS-IOR 2DROP"
+            ),
+            (
+                "_EXT4-SB-FL-SIGNED-HASH _DHCTX _EXT4-C.SB + "
+                "_EXT4-SB.FLAGS + L!"
+            ),
+            (
+                'S" x" 0 _DHCTX _EXT4-HALF-MD4-DIRHASH? '
+                "CONSTANT _DH-VERSION-IOR 2DROP"
+            ),
+            (
+                'S" a/b" _EXT4-DX-HASH-HALF-MD4 _DHCTX '
+                "_EXT4-HALF-MD4-DIRHASH? "
+                "CONSTANT _DH-NAME-IOR 2DROP"
+            ),
+            *_forth_accumulated_conjunction(
+                "_DH-OK",
+                [
+                    "_DH-COLL-IOR 0=",
+                    "_DH-COLL-HASH 0x40B1F580 =",
+                    "_DH-COLL-MINOR 0xDBB5C544 =",
+                    "_DH-LONG-IOR 0=",
+                    "_DH-LONG-HASH 0x221D862A =",
+                    "_DH-LONG-MINOR 0x3B444421 =",
+                    "_DH-31-IOR 0=",
+                    "_DH-31-HASH 0x193D24FA =",
+                    "_DH-31-MINOR 0x8B824CAD =",
+                    "_DH-32-IOR 0=",
+                    "_DH-32-HASH 0x7181FA42 =",
+                    "_DH-32-MINOR 0x6E0E4583 =",
+                    "_DH-33-IOR 0=",
+                    "_DH-33-HASH 0xEEB9B702 =",
+                    "_DH-33-MINOR 0xE5548069 =",
+                    "_DH-SIGNED-IOR 0=",
+                    "_DH-SIGNED-HASH 0xEE95919C =",
+                    "_DH-SIGNED-MINOR 0x2F97761C =",
+                    "_DH-UNSIGNED-IOR 0=",
+                    "_DH-UNSIGNED-HASH 0x9F8144A0 =",
+                    "_DH-UNSIGNED-MINOR 0x2D3B8CFC =",
+                    "_DH-ZERO-IOR 0=",
+                    "_DH-ZERO-HASH 0xD5FA7D7A =",
+                    "_DH-ZERO-MINOR 0xACB48187 =",
+                    (
+                        "_DH-FLAGS-IOR VFS-IOR-REASON "
+                        "VFS-R-UNSUPPORTED ="
+                    ),
+                    (
+                        "_DH-FLAGS-IOR VFS-IOR-DETAIL "
+                        "EXT4-D-WRITE-POLICY ="
+                    ),
+                    (
+                        "_DH-VERSION-IOR VFS-IOR-REASON "
+                        "VFS-R-UNSUPPORTED ="
+                    ),
+                    "_DH-NAME-IOR VFS-E-INVALID =",
+                ],
+            ),
+            '_DH-OK @ IF ." EXT4-HALF-MD4-VECTORS-OK" THEN',
+        ],
+    )
+    _assert_emitted(output, "EXT4-HALF-MD4-VECTORS-OK")
 
 
 def test_indexed_flag_is_admitted_only_on_directories(
