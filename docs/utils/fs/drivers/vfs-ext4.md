@@ -48,12 +48,13 @@ orphan union or the first free slot of an existing authenticated modern-only
 union, then uses the existing linked-orphan cleanup to release the data block,
 and finally clears transient `ORPHAN_PRESENT` after the complete union drains
 while leaving the mounted writer active. The
-staged surface also provides two closed-file `UNLINK` lifetimes. A regular
-inode with more than one link may lose one same-parent name without changing
-allocation. An already-empty inode with one link and no external allocation may
+staged surface also provides two `UNLINK` lifetimes. A regular inode with more
+than one link may lose one same-parent name without changing allocation, even
+when an open descriptor retains the removed dentry. An already-empty inode
+with one link and no external allocation may
 lose its final name and inode allocation in one at-most-six-home transaction.
-Neither shape creates orphan state; nonempty final-link removal and
-unlink-while-open remain later boundaries. The same surface now provides a
+Neither shape creates orphan state; nonempty final-link removal and open
+final-link removal remain later boundaries. The same surface now provides a
 bounded atomic `MKDIR`: it allocates one inode and one globally unowned block,
 builds a canonical checksummed one-block `.`/`..` directory, inserts its typed
 name into the authenticated one-block linear parent, and updates parent links,
@@ -2514,16 +2515,19 @@ retained-shrink, policy,
 orphan-cleanup, and CREATE adjacency capstone passes all eight selected tests
 sequentially in 573.98 host seconds.
 
-### Closed-file UNLINK
+### Regular-file UNLINK lifetimes
 
 The staged binding now advertises `VFS-CAP-UNLINK` and installs `_EXT4-UNLINK`
 in operation slot 11. The ordinary binding remains read-only with a null
-UNLINK slot. The nonfinal lifetime removes one closed regular-file name when
-the target has at least two links and the same authenticated parent contains
-another live name for that inode. The closed final lifetime accepts only an
+UNLINK slot. The nonfinal lifetime removes one regular-file name when the
+target has at least two links and the same authenticated parent contains
+another live name for that inode. Descriptors may retain the selected dentry:
+generic VFS lifetime rules detach it from the namespace after commit, keep the
+shared vnode and exact dentry readable through those descriptors, and reclaim
+that dentry on its last close. The closed final lifetime accepts only an
 already-empty, allocation-free inode with link count one and exactly one
 authenticated directory reference. Nonempty final-link removal, unlink while
-any descriptor references the vnode, directory removal through `UNLINK`, and
+any descriptor references the final link, directory removal through `UNLINK`, and
 nonfinal links whose remaining name is outside the same-parent proof remain
 explicit later boundaries. The bounded empty-directory `RMDIR` path is a
 separate operation with its own admission and revoke contract.
@@ -2567,11 +2571,15 @@ dentry, decrements the vnode link count, and updates cache counts. A later
 checkpoint failure therefore returns public unlink success, retains its
 structured error in `V.LAST-IOR`, and quarantines the mount. Before commit,
 the callback returns the operation error and generic VFS leaves the old
-namespace and vnode projection intact. Open-file and missing-clock refusals
-occur before clock sampling or media writes. Once a clock is bound, a nonempty
-last link is refused by the ext4 write policy before activation; an undersized
-workspace likewise leaves cache and media untouched. Every refusal scrubs the
-operation snapshots.
+namespace and vnode projection intact. Open final-link and missing-clock
+refusals occur before clock sampling or media writes. Once a clock is bound, a
+nonempty last link is refused by the ext4 write policy before activation; an
+undersized workspace likewise leaves cache and media untouched. Every refusal
+scrubs the operation snapshots. Clean open-nonfinal qualification retains the
+removed dentry with `OPEN_REFS=1` and `DREFS=2`, reads the complete 54-byte file
+through the detached descriptor, then proves close returns those counts to
+`0/1`. Its mutation journey measures 602,649,678 guest steps; pinned `e2fsck`
+passes and a 52,426,213-step stable remount performs no writes.
 
 Clean qualification removes `/fixture/hardlink.txt` while preserving the
 54-byte `/fixture/payload.txt` inode, its data block and external xattr, and
@@ -3101,11 +3109,11 @@ The ratchet order is:
 4. build shared inode allocation and directory insertion, then expose the
    first bounded `CREATE` slice (completed in the current worktree);
 5. retain completed same-retained-block shrink and one-block
-   `TRUNCATE`-to-zero release, and close the first nonfinal closed-file
+   `TRUNCATE`-to-zero release, and close the first nonfinal regular-file
    `UNLINK` slice plus atomic closed last-link removal of an already-empty,
-   allocation-free regular inode (completed in the current worktree); retain
-   nonempty final-link and unlink-while-open as explicit later lifetime
-   boundaries rather than opening speculative orphan work;
+   allocation-free regular inode, including descriptor-retained nonfinal
+   unlink (completed in the current worktree); retain nonempty and open
+   final-link deletion as explicit later lifetime boundaries;
 6. retain bounded `MKDIR` and `RMDIR`, including `.`/`..`, parent/child link
    counts, inode/block allocation and release, directory accounting, and
    child-block revoke authority (completed in the current worktree);
@@ -3139,7 +3147,7 @@ documented request envelopes. Their qualified tail-to-allocation and additional
 allocated-EOF exact compositions preserve independently durable prefixes, but
 no broader geometry or operation inherits that status.
 `EXT4-STAGED-WRITE-OPS` adds staged `MOUNT`, `WRITE`, bounded linear-directory
-`CREATE` and `MKDIR`, qualified shrink `TRUNCATE`, bounded closed-file
+`CREATE` and `MKDIR`, qualified shrink `TRUNCATE`, bounded regular-file
 `UNLINK`—including nonfinal and empty final-link removal—and bounded canonical
 empty-directory `RMDIR` plus bounded regular-file `LINK` dispatch slots to its
 copy of the ordinary table. The current worktree also installs the qualified
@@ -3175,10 +3183,12 @@ block and checksummed size/timestamp inode as exact `2/0/0`, without allocation
 or orphan state. One-block TRUNCATE-to-zero uses `3/0/0` orphan publication,
 an exactly measured linked-orphan cleanup of at most `5/0/0`, and `1/0/0`
 transient-bit retirement; it frees one initialized data block while preserving
-links and a qualified external xattr. Nonfinal closed-file UNLINK uses exact
+links and a qualified external xattr. Nonfinal regular-file UNLINK uses exact
 deduplicated `2/0/0` or `3/0/0` metadata credit to decrement one link, update
 target/parent times, and remove one checksummed linear-directory record without
-allocation or orphan state. Closed final-link UNLINK admits only a canonical
+allocation or orphan state. Open descriptors may retain the removed dentry;
+the final close reclaims that cache object without an ext4 transaction because
+another persistent link keeps the inode live. Closed final-link UNLINK admits only a canonical
 empty regular inode with zero size, zero `i_blocks`, no external xattr or
 project ID, no open references, and exactly one authenticated directory
 reference. Its at-most-six-home transaction removes that record, updates the
@@ -3319,7 +3329,7 @@ across 3,095 packed lines under the 1.25-billion-step watchdog; the descriptor
 journey measures 4,549,770 steps. Replacement, victims, and same-parent
 directory moves remain outside this envelope. The next phase is full deletion
 and truncation lifetime semantics.
-Nonempty final-link and unlink-while-open remain later lifetime closure, rather
+Nonempty and open final-link deletion remain later lifetime closure, rather
 than a reason to expand orphan recovery speculatively. General sparse/gap growth, unwritten conversion, growth beyond a
 full resident root plus full unmergeable selected leaf, mutation starting from
 a deeper extent tree, other broader allocation and mutation geometry, multi-

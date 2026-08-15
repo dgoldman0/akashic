@@ -113,11 +113,13 @@ Precommit descriptor
 failure preserves the old file; a committed torn inode home converges through
 replay and orphan cleanup to a stable checker-clean empty file. Partial release,
 wider maps, aligned nonzero EOFs, cross-block nonzero EOFs, and growth remain
-unsupported. The first nonfinal closed-file `UNLINK` lifetime is public too:
+unsupported. The first nonfinal regular-file `UNLINK` lifetime is public too:
 one same-parent hard-link name, target/parent inode times and link count, and
 the checksummed linear-directory block commit together without allocation or
-orphan state. W7 preserves both old names; committed W17 recovery replays its
-two deduplicated homes. Closed last-link removal is now public for an
+orphan state. An open descriptor may retain and read the removed dentry until
+close because another persistent link keeps the inode live. W7 preserves both
+old names; committed W17 recovery replays its two deduplicated homes. Closed
+last-link removal is now public for an
 already-empty, allocation-free regular inode: its name, complete inode record,
 inode bitmap bit, and group/global free-inode accounts commit atomically in at
 most six homes without an orphan interval. The first bounded `MKDIR` slice is
@@ -149,8 +151,8 @@ orphan state. The directory form adds its canonical child block, transfers one
 parent link, and rewrites the child's `..` entry and checksum under exact
 `4/0/0` through `6/0/0` credit. It retains the same dentry/vnode, open
 descriptors, and current-working-directory object. Same-parent directories,
-victims, and replacement remain unsupported. Nonempty final-link removal and
-unlink-while-open remain explicit later lifetime boundaries, and full deletion
+victims, and replacement remain unsupported. Nonempty and open final-link
+removal remain explicit later lifetime boundaries, and full deletion
 and truncation lifetime semantics are the next delivery phase. Extent-tree
 depth and indexed-directory HTree depth are
 independent ratchets. Broaden either only when the next operation or a pinned
@@ -1967,14 +1969,15 @@ data-bearing linked records in 1,679,279,160 guest steps under the established
 preserves both positive link counts and the target xattr, passes pinned
 `e2fsck`, and reaches a write-free stable remount in 44,133,436 steps.
 
-The first public `UNLINK` lifetimes are closed regular-file removals from an
+The first public `UNLINK` lifetimes are regular-file removals from an
 authenticated one-block linear directory. The staged binding alone advertises
 the capability. The target and parent are root-owned on the qualified 1
 KiB/256-byte-inode geometry. Nonfinal removal requires another live same-inode
-name in the same parent. Final removal requires link count one, no open
+name in the same parent and permits descriptors to retain the selected dentry.
+Final removal requires link count one, no open
 references, zero size and `i_blocks`, a canonical empty extent or legacy map,
 no external xattr or project ID, and exactly one authenticated directory
-reference. Nonempty final-link removal, unlink-while-open, cross-parent
+reference. Nonempty final-link removal, open final-link removal, cross-parent
 remaining-link proof, directories through `UNLINK`, HTree/indexed or
 multi-block parents, and directory growth remain gated rather than
 approximated. Canonical empty directories use the separate bounded `RMDIR`
@@ -1995,11 +1998,14 @@ count: `2/0/0` when the two inode records share a table block, otherwise
 free counters, and orphan state remain fixed. On the canonical inode-13/14
 fixture, inode-table block 278 and directory block 1345 are W16 and W17.
 
-Clean qualification removes `/fixture/hardlink.txt`, preserves the 54-byte
-`/fixture/payload.txt`, its data and external-xattr blocks, reaches a write-free
-stable remount, and passes pinned e2fsprogs 1.47.4 `debugfs` and read-only
-`e2fsck`. Open-file refusal precedes clock sampling. A missing clock is refused
-before map-policy inspection; after a clock is bound, nonempty final-link and
+Clean qualification opens and removes `/fixture/hardlink.txt`, preserves the
+54-byte `/fixture/payload.txt` plus its data and external-xattr blocks, and
+reads all 54 bytes through the detached descriptor before close reclaims that
+dentry. The mutation journey measures 602,649,678 guest steps, reaches a
+52,426,213-step write-free stable remount, and passes pinned e2fsprogs 1.47.4
+`debugfs` and read-only `e2fsck`. Open final-link refusal precedes clock
+sampling. A missing clock is refused before map-policy inspection; after a
+clock is bound, nonempty final-link and
 undersized-profile refusals still cause no activation or media mutation. A
 torn W7 descriptor returns the precommit error and leaves both
 names and both homes byte-exact. A committed W17 directory-home tear publishes

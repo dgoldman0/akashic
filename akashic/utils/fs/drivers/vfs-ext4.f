@@ -23580,12 +23580,14 @@ CREATE _XT-ZERO _EXT4-MAX-BLOCK ALLOT
 ' _EXT4-TRUNCATE EXT4-STAGED-WRITE-OPS VFS-OP-TRUNCATE CELLS + !
 
 \ =====================================================================
-\  Atomic closed unlink and bounded empty-directory removal
+\  Atomic unlink and bounded empty-directory removal
 \ =====================================================================
 \
 \ A multiply linked regular inode loses one authenticated name without
-\ changing allocation.  Its link count/ctime, parent mtime/ctime, and the
-\ directory splice are one deduplicated metadata transaction.
+\ changing allocation, including when descriptors retain that exact dentry.
+\ Its link count/ctime, parent mtime/ctime, and the directory splice are one
+\ deduplicated metadata transaction; generic VFS lifetime rules retain the
+\ detached dentry until its last descriptor closes.
 \
 \ The first closed last-link slice additionally admits an already empty inode
 \ with no external allocation.  Because no data, map block, or external xattr
@@ -24535,7 +24537,6 @@ CREATE _XU-TARGET-SNAPSHOT _EXT4-MAX-INODE ALLOT
     _XU-DIRECTORY @ IF VFS-T-DIR ELSE VFS-T-FILE THEN <> IF
         VFS-E-INVALID EXIT
     THEN
-    _XU-VN @ VN.OPEN-REFS @ IF VFS-E-BUSY EXIT THEN
     _XU-DIRECTORY @ IF
         _XU-VN @ VN.DREFS @ 1 <> IF VFS-E-BUSY EXIT THEN
         _XU-D @ _XU-V @ V.CWD @ = IF VFS-E-BUSY EXIT THEN
@@ -24557,6 +24558,11 @@ CREATE _XU-TARGET-SNAPSHOT _EXT4-MAX-INODE ALLOT
         DUP 1 U< IF DROP VFS-E-STALE EXIT THEN
         1 = _XU-FINAL !
     THEN
+    \ An open descriptor prevents final-link deletion until orphan-backed
+    \ lifetime support is installed.  A nonfinal unlink leaves the shared
+    \ vnode allocated and the generic VFS retains the exact detached dentry,
+    \ so open aliases need no filesystem-side deferral.
+    _XU-VN @ VN.OPEN-REFS @ _XU-FINAL @ AND IF VFS-E-BUSY EXIT THEN
     _XU-D @ IN.PARENT @ DUP _XU-PARENT ! 0= IF VFS-E-INVALID EXIT THEN
     _XU-PARENT @ _XU-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
     _XU-PARENT @ D.VNODE @ DUP _XU-PARENT-VN ! 0= IF

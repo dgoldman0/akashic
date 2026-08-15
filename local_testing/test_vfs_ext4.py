@@ -66275,7 +66275,7 @@ def staged_public_unlink_fixture(
     jbd2_toolchain: dict[str, object],
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, object]:
-    """Remove one closed hard-link name without allocation or orphan state."""
+    """Remove one open nonfinal hard-link name and retain its descriptor."""
     path = writer_activation_fixture["image"]
     source_patches = writer_activation_fixture["source_patches"]
     activation_trace = writer_activation_fixture["success_trace"]
@@ -66437,6 +66437,11 @@ def staged_public_unlink_fixture(
         expected_directory_buffer,
     )
     old_file = original_data[:old_size]
+    expected_forth = ["CREATE _UL-EXPECTED"]
+    expected_forth.extend(
+        " ".join(f"{byte} C," for byte in old_file[offset : offset + 32])
+        for offset in range(0, len(old_file), 32)
+    )
 
     directory = tmp_path_factory.mktemp("ext4-public-unlink")
     backing = directory / "staged-public-unlink.img"
@@ -66445,6 +66450,8 @@ def staged_public_unlink_fixture(
         path,
         backing,
         [
+            f"CREATE _UL-BUF {old_size} ALLOT",
+            *expected_forth,
             "VARIABLE _UL-CLOCK-CALLS",
             (
                 ": _UL-NOW ( context -- epoch-ms ior ) "
@@ -66484,6 +66491,11 @@ def staged_public_unlink_fixture(
             "_UL-VN VN.BLOCKS @ CONSTANT _UL-OLD-BLOCKS",
             "_UL-V V.ICOUNT @ CONSTANT _UL-OLD-ICOUNT",
             "_UL-V V.VCOUNT @ CONSTANT _UL-OLD-VCOUNT",
+            (
+                'S" /fixture/hardlink.txt" VFS-FF-READ _UL-V '
+                "VFS-OPEN? CONSTANT _UL-OPEN-IOR CONSTANT _UL-FD"
+            ),
+            "_UL-FD FD.INODE @ _UL-H = CONSTANT _UL-FD-DENTRY",
             'S" /fixture/hardlink.txt" _UL-V VFS-RM CONSTANT _UL-IOR',
             (
                 'S" /fixture/payload.txt" _UL-V VFS-RESOLVE? '
@@ -66495,6 +66507,50 @@ def staged_public_unlink_fixture(
             ),
             "_UL-CTX _EXT4-C.J.WRITER + @ CONSTANT _UL-WRITER",
             "_UL-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _UL-HOMES",
+            "_UL-H D.FLAGS @ CONSTANT _UL-DETACHED-FLAGS",
+            "_UL-H D.VNODE @ CONSTANT _UL-DETACHED-VN",
+            "_UL-VN VN.OPEN-REFS @ CONSTANT _UL-DETACHED-OPEN-REFS",
+            "_UL-VN VN.DREFS @ CONSTANT _UL-DETACHED-DREFS",
+            (
+                f"_UL-BUF {old_size} _UL-FD VFS-READ? "
+                "CONSTANT _UL-READ-IOR CONSTANT _UL-ACTUAL"
+            ),
+            "_UL-FD VFS-CLOSE? CONSTANT _UL-CLOSE-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_UL-OPEN-IOR 0=",
+                        "_UL-FD-DENTRY",
+                        (
+                            "_UL-DETACHED-FLAGS "
+                            "VFS-DF-UNLINKED AND 0<>"
+                        ),
+                        "_UL-DETACHED-VN _UL-VN =",
+                        "_UL-DETACHED-OPEN-REFS 1 =",
+                        "_UL-DETACHED-DREFS 2 =",
+                        "_UL-READ-IOR 0=",
+                        f"_UL-ACTUAL {old_size} =",
+                        (
+                            f"_UL-BUF _UL-EXPECTED {old_size} "
+                            "_EXT4-BYTES=?"
+                        ),
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-UNLINK-OPEN-RETAINED" THEN'
+            ),
+            (
+                _forth_conjunction(
+                    [
+                        "_UL-CLOSE-IOR 0=",
+                        "_UL-VN VN.OPEN-REFS @ 0=",
+                        "_UL-VN VN.DREFS @ 1 =",
+                        "_UL-H D.VNODE @ 0=",
+                        "_UL-H D.FLAGS @ 0=",
+                        "_UL-H D.OWNER @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-PUBLIC-UNLINK-OPEN-CLOSED" THEN'
+            ),
             (
                 _forth_conjunction(
                     [
@@ -66584,6 +66640,9 @@ def staged_public_unlink_fixture(
                         "_UL-H-IOR 0=",
                         "_UL-DIR-IOR 0=",
                         "_UL-SHARED",
+                        "_UL-OPEN-IOR 0=",
+                        "_UL-FD-DENTRY",
+                        "_UL-CLOSE-IOR 0=",
                         "_UL-VN VN.OPEN-REFS @ 0=",
                         "_UL-IOR 0=",
                         "_UL-V V.LAST-IOR @ 0=",
@@ -66654,6 +66713,8 @@ def staged_public_unlink_fixture(
         capture_media=backing,
     )
     _assert_emitted(output, "EXT4-PUBLIC-UNLINK-DURABLE")
+    _assert_emitted(output, "EXT4-PUBLIC-UNLINK-OPEN-RETAINED")
+    _assert_emitted(output, "EXT4-PUBLIC-UNLINK-OPEN-CLOSED")
     _assert_emitted(output, "EXT4-PUBLIC-UNLINK-CACHE")
     _assert_emitted(output, "EXT4-PUBLIC-UNLINK-WRITER")
     _assert_emitted(output, "EXT4-PUBLIC-UNLINK-SCRUBBED")
@@ -66773,7 +66834,7 @@ def staged_public_unlink_fixture(
     }
 
 
-def test_staged_vfs_unlink_nonfinal_closed_file(
+def test_staged_vfs_unlink_nonfinal_open_file(
     staged_public_unlink_fixture: dict[str, object],
 ) -> None:
     image = staged_public_unlink_fixture["image"]
@@ -66818,17 +66879,17 @@ def test_staged_vfs_unlink_refuses_open_last_link_and_missing_clock(
             "_UR-V V.ICOUNT @ CONSTANT _UR-OLD-ICOUNT",
             "_UR-V V.VCOUNT @ CONSTANT _UR-OLD-VCOUNT",
             (
-                'S" /fixture/hardlink.txt" VFS-FF-READ _UR-V '
+                'S" /fixture/sparse.bin" VFS-FF-READ _UR-V '
                 "VFS-OPEN? CONSTANT _UR-OPEN-IOR CONSTANT _UR-FD"
             ),
             (
-                'S" /fixture/hardlink.txt" _UR-V VFS-RM '
+                'S" /fixture/sparse.bin" _UR-V VFS-RM '
                 "CONSTANT _UR-BUSY-IOR"
             ),
-            "_UR-VN VN.OPEN-REFS @ CONSTANT _UR-BUSY-OPEN-REFS",
+            "_UR-S-VN VN.OPEN-REFS @ CONSTANT _UR-BUSY-OPEN-REFS",
             "_UR-V V.LAST-IOR @ CONSTANT _UR-BUSY-LAST-IOR",
             (
-                'S" /fixture/hardlink.txt" _UR-V VFS-RESOLVE? '
+                'S" /fixture/sparse.bin" _UR-V VFS-RESOLVE? '
                 "CONSTANT _UR-BUSY-RESOLVE-IOR "
                 "CONSTANT _UR-BUSY-D"
             ),
@@ -66890,9 +66951,9 @@ def test_staged_vfs_unlink_refuses_open_last_link_and_missing_clock(
                         "_UR-BUSY-IOR VFS-E-BUSY =",
                         "_UR-BUSY-LAST-IOR _UR-BUSY-IOR =",
                         "_UR-BUSY-RESOLVE-IOR 0=",
-                        "_UR-BUSY-D _UR-H =",
+                        "_UR-BUSY-D _UR-S =",
                         "_UR-CLOSE-IOR 0=",
-                        "_UR-VN VN.OPEN-REFS @ 0=",
+                        "_UR-S-VN VN.OPEN-REFS @ 0=",
                     ]
                 )
                 + ' IF ." EXT4-PUBLIC-UNLINK-REFUSAL-BUSY" THEN'
