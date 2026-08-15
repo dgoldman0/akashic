@@ -18,7 +18,7 @@ or callback-streamed reads should use the policy-neutral
 envelopes, and domain stores remain separate higher-level concerns.
 
 The ext4 implementation provides an ordinary checksummed read-only binding and
-an explicit staged-write binding with twelve production-closed durable paths:
+an explicit staged-write binding with production-closed durable paths for:
 initialized overwrite, strict append inside an initialized partial EOF block,
 allocation-backed fill of complete in-size holes, allocation-backed growth
 from exact aligned EOF, bounded `CREATE` and `MKDIR`, retained-block and
@@ -96,29 +96,34 @@ Broader write and recovery cases advance from reachable evidence while full
 `akashic-ext4-rw-v1` production capability remains the release goal. The
 existing multi-leaf depth-one ratchet is closed through target-leaf selection,
 selected-key repair, in-place editing under a full root, and selected-leaf
-splitting while the root retains index capacity. The staged binding now also
-publishes the first crash-closed `CREATE` slice: it allocates one inode from an
-initialized inode group and inserts an empty root-owned mode-0666 regular file
-into authenticated slack in an existing one-block linear directory. The inode
-bitmap, group descriptor, primary superblock, new and parent inode records, and
-directory block form one deduplicated transaction of at most six metadata
-homes. Indexed or growing directories, directory xattrs/default ACLs, lazy
-inode-group initialization, and non-root credential policy still refuse before
-publication. The staged binding also publishes strict same-block shrink
+splitting while the root retains index capacity. The staged binding also
+publishes crash-closed regular-file `CREATE`. It allocates one inode from an
+initialized inode group and inserts an empty root-owned mode-0666 file into
+authenticated slack in either a one-block linear directory or an existing
+depth-zero HTree leaf. A full, otherwise admitted one-block linear parent is
+converted atomically into a canonical depth-zero HTree root and two packed
+leaves. Conversion allocates exactly two blocks, builds a one-to-three-entry
+inline parent extent root according to physical adjacency, and derives exact
+`8/0/0` through `12/0/0` credit from the distinct inode, directory, bitmap,
+descriptor, and primary-superblock homes. Full-leaf splitting in an already
+indexed parent, directory xattrs/default ACLs, lazy inode-group initialization,
+and non-root credential policy still refuse before publication. The staged
+binding also publishes strict same-block shrink
 `TRUNCATE` as exact `2/0/0`, one-block release to zero through the modern-
 orphan cleanup path, both closed-file `UNLINK` lifetimes, bounded one-block
 `MKDIR`, and bounded `RMDIR` of the exact canonical empty child produced by
 MKDIR. RMDIR releases the inode and directory block, decrements parent links
 and `used_dirs`, and revokes the unchanged freed child block in an exact
-`6/0/1` through `8/0/1` transaction. Wider truncation, nonempty or open final-
-link unlink, directory growth, and HTree parents remain outside those
-envelopes. Bounded hard `LINK` adds one typed dirent, increments target `nlink`
+`6/0/1` through `8/0/1` transaction. Depth-positive truncation, indexed
+full-leaf growth, and indexed `LINK`/`MKDIR` remain outside those envelopes.
+Bounded hard `LINK` adds one typed dirent, increments target `nlink`
 and ctime, and updates parent mtime/ctime in an exact deduplicated `2/0/0` or
 `3/0/0` transaction. Five focused LINK qualifications cover same- and
 cross-parent success, W7 precommit rollback, W17 committed replay, zero-write
 refusals, external filesystem checks, and a write-free byte-stable remount. The
-next write ratchet is bounded staged `RENAME`, with directory HTree depth
-expanded independently when that operation or a pinned corpus requires it. The
+next directory ratchet is indexed full-leaf splitting while the depth-zero root
+still has entry capacity; HTree depth grows independently when that operation
+or a pinned corpus requires it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate
 tears return zero, while committed W22 inode-home tears publish progress and
 replay four metadata homes without rewriting ordered data. In the distinct

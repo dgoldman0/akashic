@@ -4278,7 +4278,7 @@ def build_snapshot():
     # distinct cold source stages.  This preserves the existing measured ext4
     # watchdog instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
-    max_ext4_source_steps = 1_480_000_000
+    max_ext4_source_steps = 1_550_000_000
     bootstrap_steps = _feed_until_idle(system, bootstrap, max_crc_source_steps)
 
     def load_source_stage(
@@ -60956,6 +60956,2261 @@ def test_staged_vfs_create_without_clock_rolls_back_before_io(
 
 
 @pytest.fixture(scope="session")
+def staged_public_linear_htree_create_fixture(
+    writer_activation_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Grow the canonical full linear /fixture into a two-leaf HTree."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    parent_number = 13
+    child_number = 18
+    root_home = 1345
+    leaf_homes = (1351, 1352)
+    separator = 0x95D3_B562
+    layout = _ext4_recovery_layout(path)
+    superblock, parent_inode, parent_offset = _ext4_inode_record(
+        path, parent_number
+    )
+    _, old_child_inode, child_offset = _ext4_inode_record(
+        path, child_number
+    )
+    _, payload_inode, _ = _ext4_inode_record(path, 14)
+    _, slow_link_inode, _ = _ext4_inode_record(path, 16)
+    _, sparse_inode, _ = _ext4_inode_record(path, 17)
+    block_size = layout["block_size"]
+    inode_size = layout["inode_size"]
+    parent_home, parent_block_offset = divmod(parent_offset, block_size)
+    child_home, child_block_offset = divmod(child_offset, block_size)
+    parent_generation = struct.unpack_from("<I", parent_inode, 0x64)[0]
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", superblock, 0x158)[0] << 32
+    )
+    free_inodes_before = struct.unpack_from("<I", superblock, 0x10)[0]
+    group_counts_before = _ext4_group_counts(path, 0)
+    block_bitmap_home = layout["block_bitmap"]
+    inode_bitmap_home = layout["inode_bitmap"]
+    gdt_home = layout["primary_gdt"]
+    super_home = layout["primary_super"]
+
+    assert block_size == 1024
+    assert inode_size == 256
+    assert old_child_inode == bytes(inode_size)
+    assert (parent_home, parent_block_offset) == (278, 0)
+    assert (child_home, child_block_offset) == (279, 256)
+    assert _extent_root_physical(parent_inode, 0) == root_home
+    assert struct.unpack_from("<I", parent_inode, 0x04)[0] == block_size
+    assert struct.unpack_from("<I", parent_inode, 0x1C)[0] == 2
+    assert struct.unpack_from("<I", parent_inode, 0x20)[0] == 0x80000
+    assert struct.unpack_from("<4I", superblock, 0xEC) == (
+        0x1111_1121,
+        0x1141_1111,
+        0x1111_1181,
+        0x1111_1111,
+    )
+    assert superblock[0xFC] == 1
+    assert struct.unpack_from("<I", superblock, 0x160)[0] & 3 == 1
+    assert leaf_homes == (1351, 1352)
+    assert _ext4_block_allocation_state(path, leaf_homes + (1353,)) == {
+        1351: False,
+        1352: False,
+        1353: False,
+    }
+    assert _ext4_inode_allocation_state(path, (18, 19)) == {
+        18: False,
+        19: False,
+    }
+
+    canonical_directory = _patched_ext4_home(
+        path, source_patches, root_home, block_size=block_size
+    )
+    prepared_directory, free_records = (
+        _linear_directory_with_fragmented_free_records(
+            superblock,
+            parent_inode=parent_number,
+            parent_generation=parent_generation,
+            original=canonical_directory,
+            maximum_free_record=12,
+        )
+    )
+    prepared_entries = _checked_linear_directory_entries(
+        superblock,
+        parent_number,
+        parent_generation,
+        prepared_directory,
+    )
+    assert prepared_entries == (
+        (0, 13, 12, 2, b"."),
+        (12, 2, 12, 2, b".."),
+        (24, 14, 20, 1, b"payload.txt"),
+        (44, 14, 20, 1, b"hardlink.txt"),
+        (64, 15, 20, 7, b"fast-link"),
+        (84, 16, 20, 7, b"slow-link"),
+        (104, 17, 20, 1, b"sparse.bin"),
+    )
+    assert len(free_records) == 74
+    assert free_records[0] == (124, 12)
+    assert free_records[-1] == (1000, 12)
+    assert all(record_length == 12 for _, record_length in free_records)
+    assert sum(record_length for _, record_length in free_records) == 888
+
+    def half_md4_hash(name: bytes) -> tuple[int, int]:
+        """Independent signed, seeded ext4 half-MD4 directory hash."""
+        mask = 0xFFFF_FFFF
+
+        def rotate(value: int, shift: int) -> int:
+            value &= mask
+            return ((value << shift) | (value >> (32 - shift))) & mask
+
+        def choose(x: int, y: int, z: int) -> int:
+            return z ^ (x & (y ^ z))
+
+        def majority(x: int, y: int, z: int) -> int:
+            return (x & y) | (x & z) | (y & z)
+
+        def parity(x: int, y: int, z: int) -> int:
+            return x ^ y ^ z
+
+        def words(message: bytes, remaining: int) -> list[int]:
+            pad = remaining & 0xFF
+            pad |= pad << 8
+            pad |= pad << 16
+            result = [pad & mask] * 8
+            value = pad
+            for index, byte in enumerate(message[:32]):
+                if index % 4 == 0:
+                    value = pad
+                signed = byte if byte < 0x80 else byte - 0x100
+                value = (signed + (value << 8)) & mask
+                result[index // 4] = value
+            return result
+
+        def transform(state: list[int], block: list[int]) -> list[int]:
+            a, b, c, d = state
+
+            def round1(
+                target: int, x: int, y: int, z: int, word: int, shift: int
+            ) -> int:
+                return rotate(target + choose(x, y, z) + word, shift)
+
+            def round2(
+                target: int, x: int, y: int, z: int, word: int, shift: int
+            ) -> int:
+                return rotate(
+                    target + majority(x, y, z) + word + 0x5A82_7999,
+                    shift,
+                )
+
+            def round3(
+                target: int, x: int, y: int, z: int, word: int, shift: int
+            ) -> int:
+                return rotate(
+                    target + parity(x, y, z) + word + 0x6ED9_EBA1,
+                    shift,
+                )
+
+            a = round1(a, b, c, d, block[0], 3)
+            d = round1(d, a, b, c, block[1], 7)
+            c = round1(c, d, a, b, block[2], 11)
+            b = round1(b, c, d, a, block[3], 19)
+            a = round1(a, b, c, d, block[4], 3)
+            d = round1(d, a, b, c, block[5], 7)
+            c = round1(c, d, a, b, block[6], 11)
+            b = round1(b, c, d, a, block[7], 19)
+
+            a = round2(a, b, c, d, block[1], 3)
+            d = round2(d, a, b, c, block[3], 5)
+            c = round2(c, d, a, b, block[5], 9)
+            b = round2(b, c, d, a, block[7], 13)
+            a = round2(a, b, c, d, block[0], 3)
+            d = round2(d, a, b, c, block[2], 5)
+            c = round2(c, d, a, b, block[4], 9)
+            b = round2(b, c, d, a, block[6], 13)
+
+            a = round3(a, b, c, d, block[3], 3)
+            d = round3(d, a, b, c, block[7], 9)
+            c = round3(c, d, a, b, block[2], 11)
+            b = round3(b, c, d, a, block[6], 15)
+            a = round3(a, b, c, d, block[1], 3)
+            d = round3(d, a, b, c, block[5], 9)
+            c = round3(c, d, a, b, block[0], 11)
+            b = round3(b, c, d, a, block[4], 15)
+            return [
+                (state[0] + a) & mask,
+                (state[1] + b) & mask,
+                (state[2] + c) & mask,
+                (state[3] + d) & mask,
+            ]
+
+        state = list(struct.unpack_from("<4I", superblock, 0xEC))
+        assert any(state)
+        remaining = len(name)
+        offset = 0
+        while remaining > 0:
+            state = transform(
+                state,
+                words(name[offset : offset + 32], remaining),
+            )
+            remaining -= 32
+            offset += 32
+        major = state[1] & 0xFFFF_FFFE
+        if major == 0xFFFF_FFFE:
+            major = 0xFFFF_FFFC
+        return major, state[2]
+
+    live_records = tuple(
+        (entry[4], entry[1], entry[3])
+        for entry in prepared_entries
+        if entry[4] not in {b".", b".."}
+    ) + ((b"new.txt", child_number, 1),)
+    hashed_records = sorted(
+        [
+            (
+                *half_md4_hash(name),
+                (8 + len(name) + 3) & ~3,
+                inode_number,
+                file_type,
+                name,
+            )
+            for name, inode_number, file_type in live_records
+        ],
+        key=lambda record: (record[0], record[1]),
+    )
+    assert tuple(
+        (major, minor, used, name)
+        for major, minor, used, _, _, name in hashed_records
+    ) == (
+        (0x1248_5C58, 0x772B_2796, 16, b"new.txt"),
+        (0x3CDB_1B62, 0x779B_4377, 20, b"fast-link"),
+        (0x5AB2_E636, 0xF947_1DDF, 20, b"payload.txt"),
+        (0x95D3_B562, 0xC8D3_2FEA, 20, b"slow-link"),
+        (0xE9BA_C8E6, 0xA3B0_CEC1, 20, b"sparse.bin"),
+        (0xED4B_E73C, 0x40C6_18A0, 20, b"hardlink.txt"),
+    )
+    total_used = sum(record[2] for record in hashed_records)
+    split_candidates = tuple(
+        (
+            abs(
+                sum(record[2] for record in hashed_records[:index]) * 2
+                - total_used
+            ),
+            index,
+        )
+        for index in range(1, len(hashed_records))
+    )
+    split_index = min(split_candidates)[1]
+    assert split_index == 3
+    assert sum(record[2] for record in hashed_records[:split_index]) == 56
+    assert sum(record[2] for record in hashed_records[split_index:]) == 60
+    assert hashed_records[split_index][0] == separator
+
+    def checked_leaf(
+        records: list[tuple[int, int, int, int, int, bytes]],
+    ) -> bytes:
+        result = bytearray(block_size)
+        offset = 0
+        for index, (_, _, used, inode_number, file_type, name) in enumerate(
+            records
+        ):
+            record_length = used
+            if index == len(records) - 1:
+                record_length = block_size - 12 - offset
+            struct.pack_into(
+                "<IHBB",
+                result,
+                offset,
+                inode_number,
+                record_length,
+                len(name),
+                file_type,
+            )
+            result[offset + 8 : offset + 8 + len(name)] = name
+            offset += record_length
+        assert offset == block_size - 12
+        struct.pack_into("<IHBB", result, block_size - 12, 0, 12, 0, 0xDE)
+        return _linear_directory_block_with_checksum(
+            superblock,
+            parent_number,
+            parent_generation,
+            result,
+        )
+
+    expected_leaves = (
+        checked_leaf(hashed_records[:split_index]),
+        checked_leaf(hashed_records[split_index:]),
+    )
+    assert _checked_linear_directory_entries(
+        superblock, parent_number, parent_generation, expected_leaves[0]
+    ) == (
+        (0, 18, 16, 1, b"new.txt"),
+        (16, 15, 20, 7, b"fast-link"),
+        (36, 14, 976, 1, b"payload.txt"),
+    )
+    assert _checked_linear_directory_entries(
+        superblock, parent_number, parent_generation, expected_leaves[1]
+    ) == (
+        (0, 16, 20, 7, b"slow-link"),
+        (20, 17, 20, 1, b"sparse.bin"),
+        (40, 14, 972, 1, b"hardlink.txt"),
+    )
+
+    expected_root = bytearray(block_size)
+    struct.pack_into("<IHBB", expected_root, 0, parent_number, 12, 1, 2)
+    expected_root[8:9] = b"."
+    struct.pack_into("<IHBB", expected_root, 12, 2, 1012, 2, 2)
+    expected_root[20:22] = b".."
+    struct.pack_into("<IBBBB", expected_root, 24, 0, 1, 8, 0, 0)
+    struct.pack_into("<HHI", expected_root, 32, 123, 2, 1)
+    struct.pack_into("<II", expected_root, 40, separator, 2)
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    root_checksum = _crc32c_raw(
+        struct.pack("<II", parent_number, parent_generation), seed
+    )
+    root_checksum = _crc32c_raw(expected_root[:48], root_checksum)
+    root_checksum = _crc32c_raw(bytes(8), root_checksum)
+    struct.pack_into("<II", expected_root, block_size - 8, 0, root_checksum)
+    expected_root = bytes(expected_root)
+
+    input_patches = source_patches + (
+        (root_home * block_size, prepared_directory),
+    )
+    epoch_ms = _STAGED_APPEND_EPOCH_MS
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = (
+        low_seconds
+        if low_seconds < 0x8000_0000
+        else low_seconds - 0x1_0000_0000
+    )
+    epoch = (seconds - signed_low) >> 32
+    assert 0 <= epoch <= 3
+    extra_time = (nanoseconds << 2) | epoch
+
+    directory = tmp_path_factory.mktemp("ext4-public-linear-htree-create")
+    backing = directory / "staged-create-linear-to-htree.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        backing,
+        [
+            "VARIABLE _CG-CLOCK-CALLS",
+            (
+                ": _CG-NOW ( context -- epoch-ms ior ) "
+                "DROP 1 _CG-CLOCK-CALLS +! "
+                f"{epoch_ms} 0 ;"
+            ),
+            "CREATE _CG-STAT VFS-STATFS-SIZE ALLOT",
+            "T-ARENA CONSTANT _CG-ARENA",
+            (
+                "_CG-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _CG-MOUNT-IOR CONSTANT _CG-V"
+            ),
+            "_CG-V _EXT4-CTX CONSTANT _CG-CTX",
+            (
+                "' _CG-NOW 0 _CG-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _CG-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_CG-PROFILE", "_CG-V", 9, 0, 0
+            ),
+            'S" /fixture" _CG-V VFS-CD? CONSTANT _CG-CD-IOR',
+            (
+                "_CG-V V.CWD @ _CG-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _CG-LOAD-IOR"
+            ),
+            "_CG-V V.CWD @ D.VNODE @ CONSTANT _CG-PARENT-VN",
+            "_CG-V V.ICOUNT @ CONSTANT _CG-ICOUNT-BEFORE",
+            "_CG-V V.VCOUNT @ CONSTANT _CG-VCOUNT-BEFORE",
+            (
+                "_CG-STAT VFS-STATFS-SIZE _CG-V VFS-STATFS "
+                "CONSTANT _CG-BEFORE-IOR"
+            ),
+            "_CG-STAT VSF.BFREE @ CONSTANT _CG-BFREE-BEFORE",
+            "_CG-STAT VSF.FFREE @ CONSTANT _CG-FFREE-BEFORE",
+            "DEPTH CONSTANT _CG-DEPTH-BEFORE",
+            (
+                'S" new.txt" _CG-V VFS-MKFILE? '
+                "CONSTANT _CG-CREATE-IOR CONSTANT _CG-D"
+            ),
+            "DEPTH CONSTANT _CG-DEPTH-AFTER",
+            "_CG-D D.VNODE @ CONSTANT _CG-VN",
+            (
+                'S" /fixture/new.txt" _CG-V VFS-RESOLVE? '
+                "CONSTANT _CG-RESOLVE-IOR CONSTANT _CG-R"
+            ),
+            (
+                "_CG-STAT VFS-STATFS-SIZE _CG-V VFS-STATFS "
+                "CONSTANT _CG-AFTER-IOR"
+            ),
+            "_CG-STAT VSF.BFREE @ CONSTANT _CG-BFREE-AFTER",
+            "_CG-STAT VSF.FFREE @ CONSTANT _CG-FFREE-AFTER",
+            "_CG-CTX _EXT4-C.J.WRITER + @ CONSTANT _CG-WRITER",
+            *_forth_accumulated_conjunction(
+                "_CG-OK",
+                [
+                    "_CG-MOUNT-IOR 0=",
+                    "_CG-CLOCK-IOR 0=",
+                    "_CG-PROFILE-SIZE-IOR 0=",
+                    "_CG-PROFILE-BIND-IOR 0=",
+                    "_CG-PROFILE-USED _CG-PROFILE-SIZE =",
+                    "_CG-CD-IOR 0=",
+                    "_CG-LOAD-IOR 0=",
+                    "_CG-BEFORE-IOR 0=",
+                    "_CG-CREATE-IOR 0=",
+                    "_CG-DEPTH-AFTER _CG-DEPTH-BEFORE =",
+                    "_CG-V V.LAST-IOR @ 0=",
+                    "_CG-D 0<>",
+                    "_CG-RESOLVE-IOR 0=",
+                    "_CG-R _CG-D =",
+                    "_CG-VN VN.TYPE @ VFS-T-FILE =",
+                    "_CG-VN VN.BID @ 18 =",
+                    "_CG-VN VN.BDATA @ 18 =",
+                    "_CG-VN VN.GEN @ 1 =",
+                    "_CG-VN VN.MODE @ 0x81B6 =",
+                    "_CG-VN VN.SIZE-LO @ 0=",
+                    "_CG-VN VN.SIZE-HI @ 0=",
+                    "_CG-VN VN.NLINK @ 1 =",
+                    "_CG-VN VN.BLOCKS @ 0=",
+                    f"_CG-VN VN.ATIME @ {seconds} =",
+                    f"_CG-VN VN.ATIME-NS @ {nanoseconds} =",
+                    f"_CG-PARENT-VN VN.SIZE-LO @ {3 * block_size} =",
+                    "_CG-PARENT-VN VN.SIZE-HI @ 0=",
+                    "_CG-PARENT-VN VN.BLOCKS @ 6 =",
+                    "_CG-PARENT-VN VN.NLINK @ 2 =",
+                    f"_CG-PARENT-VN VN.MTIME @ {seconds} =",
+                    f"_CG-PARENT-VN VN.MTIME-NS @ {nanoseconds} =",
+                    f"_CG-PARENT-VN VN.CTIME @ {seconds} =",
+                    f"_CG-PARENT-VN VN.CTIME-NS @ {nanoseconds} =",
+                    "_CG-V V.ICOUNT @ _CG-ICOUNT-BEFORE 1+ =",
+                    "_CG-V V.VCOUNT @ _CG-VCOUNT-BEFORE 1+ =",
+                    "_CG-AFTER-IOR 0=",
+                    "_CG-BFREE-AFTER _CG-BFREE-BEFORE 2 - =",
+                    "_CG-FFREE-AFTER _CG-FFREE-BEFORE 1- =",
+                    "_CG-CLOCK-CALLS @ 1 =",
+                    "_CG-WRITER _CG-PROFILE-BASE =",
+                    "_CG-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                    "_CG-CTX _EXT4-C.J.HOME-WRITES + @ 9 =",
+                    "_CG-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                    "_CG-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_CG-V V.FLAGS @ VFS-F-RO AND 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            (
+                '_CG-OK @ 0= IF ." EXT4-LINEAR-HTREE-FIRST-FAIL " '
+                "_CG-OK-FIRST-FAILURE @ . THEN"
+            ),
+            '_CG-OK @ IF ." EXT4-PUBLIC-CREATE-LINEAR-HTREE" THEN',
+            "0 _CG-V VFS-UNMOUNT CONSTANT _CG-UNMOUNT-IOR",
+            (
+                "_CG-UNMOUNT-IOR 0= "
+                "_CG-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_CG-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-PUBLIC-CREATE-LINEAR-HTREE-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=input_patches,
+        capture_media=backing,
+        max_steps=1_600_000_000,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-CREATE-LINEAR-HTREE")
+    _assert_emitted(output, "EXT4-PUBLIC-CREATE-LINEAR-HTREE-UNMOUNTED")
+    assert trace[: len(activation_trace)] == activation_trace
+    assert backing.is_file()
+
+    after_super, child_inode, observed_child_offset = _ext4_inode_record(
+        backing, child_number
+    )
+    _, parent_inode_after, observed_parent_offset = _ext4_inode_record(
+        backing, parent_number
+    )
+    assert observed_child_offset == child_offset
+    assert observed_parent_offset == parent_offset
+
+    expected_super = bytearray(
+        _patched_ext4_home(
+            path, input_patches, super_home, block_size=block_size
+        )
+    )
+    expected_free_blocks = free_blocks_before - 2
+    struct.pack_into(
+        "<I", expected_super, 0x0C, expected_free_blocks & 0xFFFF_FFFF
+    )
+    struct.pack_into("<I", expected_super, 0x158, expected_free_blocks >> 32)
+    struct.pack_into("<I", expected_super, 0x10, free_inodes_before - 1)
+    expected_super = _ext4_super_with_checksum(expected_super)
+    assert after_super == expected_super
+
+    expected_child = bytearray(inode_size)
+    struct.pack_into("<H", expected_child, 0x00, 0x81B6)
+    for offset in (0x08, 0x0C, 0x10, 0x90):
+        struct.pack_into("<I", expected_child, offset, low_seconds)
+    struct.pack_into("<H", expected_child, 0x1A, 1)
+    struct.pack_into("<I", expected_child, 0x20, 0x80000)
+    struct.pack_into("<HHHHI", expected_child, 0x28, 0xF30A, 0, 4, 0, 0)
+    struct.pack_into("<I", expected_child, 0x64, 1)
+    struct.pack_into("<H", expected_child, 0x80, 32)
+    for offset in (0x84, 0x88, 0x8C, 0x94):
+        struct.pack_into("<I", expected_child, offset, extra_time)
+    expected_child = _inode_with_checksum(
+        after_super, child_number, expected_child
+    )
+    assert child_inode == expected_child
+
+    expected_parent = bytearray(parent_inode)
+    struct.pack_into("<I", expected_parent, 0x04, 3 * block_size)
+    struct.pack_into("<I", expected_parent, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x10, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x1C, 6)
+    struct.pack_into("<I", expected_parent, 0x20, 0x81000)
+    expected_parent[0x28:0x64] = bytes(60)
+    struct.pack_into("<HHHHI", expected_parent, 0x28, 0xF30A, 2, 4, 0, 0)
+    struct.pack_into("<IHHI", expected_parent, 0x34, 0, 1, 0, root_home)
+    struct.pack_into("<IHHI", expected_parent, 0x40, 1, 2, 0, leaf_homes[0])
+    struct.pack_into("<I", expected_parent, 0x84, extra_time)
+    struct.pack_into("<I", expected_parent, 0x88, extra_time)
+    expected_parent = _inode_with_checksum(
+        after_super, parent_number, expected_parent
+    )
+    assert parent_inode_after == expected_parent
+
+    original_child_home = bytearray(
+        _patched_ext4_home(
+            path, input_patches, child_home, block_size=block_size
+        )
+    )
+    original_child_home[
+        child_block_offset : child_block_offset + inode_size
+    ] = expected_child
+    assert _read_ext4_home(
+        backing, child_home, block_size=block_size
+    ) == bytes(original_child_home)
+    original_parent_home = bytearray(
+        _patched_ext4_home(
+            path, input_patches, parent_home, block_size=block_size
+        )
+    )
+    original_parent_home[
+        parent_block_offset : parent_block_offset + inode_size
+    ] = expected_parent
+    assert _read_ext4_home(
+        backing, parent_home, block_size=block_size
+    ) == bytes(original_parent_home)
+
+    assert _read_ext4_home(
+        backing, root_home, block_size=block_size
+    ) == expected_root
+    for home, expected_leaf in zip(leaf_homes, expected_leaves, strict=True):
+        assert _read_ext4_home(
+            backing, home, block_size=block_size
+        ) == expected_leaf
+
+    original_block_bitmap = _patched_ext4_home(
+        path, input_patches, block_bitmap_home, block_size=block_size
+    )
+    expected_block_bitmap = bytearray(original_block_bitmap)
+    for block in leaf_homes:
+        bit = block - layout["first"]
+        expected_block_bitmap[bit // 8] |= 1 << (bit % 8)
+    assert _read_ext4_home(
+        backing, block_bitmap_home, block_size=block_size
+    ) == bytes(expected_block_bitmap)
+
+    original_inode_bitmap = _patched_ext4_home(
+        path, input_patches, inode_bitmap_home, block_size=block_size
+    )
+    expected_inode_bitmap = bytearray(original_inode_bitmap)
+    inode_bit = child_number - 1
+    expected_inode_bitmap[inode_bit // 8] |= 1 << (inode_bit % 8)
+    assert _read_ext4_home(
+        backing, inode_bitmap_home, block_size=block_size
+    ) == bytes(expected_inode_bitmap)
+    assert _ext4_block_allocation_state(backing, leaf_homes + (1353,)) == {
+        1351: True,
+        1352: True,
+        1353: False,
+    }
+    assert _ext4_inode_allocation_state(backing, (18, 19)) == {
+        18: True,
+        19: False,
+    }
+
+    expected_group_counts = {
+        "free_blocks": group_counts_before["free_blocks"] - 2,
+        "free_inodes": group_counts_before["free_inodes"] - 1,
+        "used_dirs": group_counts_before["used_dirs"],
+        "itable_unused": group_counts_before["itable_unused"] - 1,
+    }
+    assert _ext4_group_counts(backing, 0) == expected_group_counts
+    original_gdt = _patched_ext4_home(
+        path, input_patches, gdt_home, block_size=block_size
+    )
+    expected_descriptor = bytearray(original_gdt[:64])
+
+    def store_split_counter(low: int, high: int, value: int) -> None:
+        struct.pack_into("<H", expected_descriptor, low, value & 0xFFFF)
+        struct.pack_into("<H", expected_descriptor, high, value >> 16)
+
+    store_split_counter(0x0C, 0x2C, expected_group_counts["free_blocks"])
+    store_split_counter(0x0E, 0x2E, expected_group_counts["free_inodes"])
+    store_split_counter(0x10, 0x30, expected_group_counts["used_dirs"])
+    store_split_counter(0x1C, 0x32, expected_group_counts["itable_unused"])
+    bitmap_checksum = _crc32c_raw(expected_block_bitmap, seed)
+    inode_bitmap_bytes = struct.unpack_from("<I", superblock, 0x28)[0] // 8
+    inode_bitmap_checksum = _crc32c_raw(
+        expected_inode_bitmap[:inode_bitmap_bytes], seed
+    )
+    struct.pack_into("<H", expected_descriptor, 0x18, bitmap_checksum & 0xFFFF)
+    struct.pack_into("<H", expected_descriptor, 0x38, bitmap_checksum >> 16)
+    struct.pack_into(
+        "<H", expected_descriptor, 0x1A, inode_bitmap_checksum & 0xFFFF
+    )
+    struct.pack_into(
+        "<H", expected_descriptor, 0x3A, inode_bitmap_checksum >> 16
+    )
+    expected_descriptor = _group_descriptor_with_checksum(
+        after_super, expected_descriptor, 0
+    )
+    expected_gdt = bytearray(original_gdt)
+    expected_gdt[:64] = expected_descriptor
+    assert _read_ext4_home(
+        backing, gdt_home, block_size=block_size
+    ) == bytes(expected_gdt)
+
+    assert _extent_root_physical(payload_inode, 0) == 1346
+    assert struct.unpack_from("<I", payload_inode, 0x68)[0] == 1349
+    assert _extent_root_physical(slow_link_inode, 0) == 1347
+    assert _extent_root_physical(sparse_inode, 0) == 1348
+    assert _extent_root_physical(sparse_inode, 2) == 1350
+    untouched_homes = (
+        277,
+        280,
+        1346,
+        1347,
+        1348,
+        1349,
+        1350,
+        1353,
+        layout["witness_super"],
+        layout["witness_gdt"],
+    )
+    for home in untouched_homes:
+        assert _read_ext4_home(
+            backing, home, block_size=block_size
+        ) == _patched_ext4_home(
+            path, input_patches, home, block_size=block_size
+        )
+
+    expected_home_writes = {
+        child_home,
+        parent_home,
+        root_home,
+        *leaf_homes,
+        block_bitmap_home,
+        gdt_home,
+        super_home,
+        inode_bitmap_home,
+    }
+    assert len(expected_home_writes) == 9
+    super_ordinals = _write_ordinals_for_ext4_home(
+        trace, super_home, block_size=block_size
+    )
+    assert super_ordinals == (4, 30, 40)
+    single_home_ordinals = {
+        home: _write_ordinals_for_ext4_home(
+            trace, home, block_size=block_size
+        )
+        for home in expected_home_writes - {super_home}
+    }
+    assert all(len(ordinals) == 1 for ordinals in single_home_ordinals.values())
+    checkpoint_ordinals = tuple(
+        sorted(
+            (super_ordinals[1],)
+            + tuple(
+                ordinals[0] for ordinals in single_home_ordinals.values()
+            )
+        )
+    )
+    assert checkpoint_ordinals == tuple(range(23, 32))
+    assert single_home_ordinals == {
+        child_home: (23,),
+        parent_home: (24,),
+        root_home: (25,),
+        leaf_homes[0]: (26,),
+        leaf_homes[1]: (27,),
+        block_bitmap_home: (28,),
+        gdt_home: (29,),
+        inode_bitmap_home: (31,),
+    }
+
+    parent_stat = subprocess.run(
+        [str(debugfs), "-R", "stat /fixture", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert parent_stat.returncode == 0, parent_stat.stdout + parent_stat.stderr
+    assert "Inode: 13" in parent_stat.stdout
+    assert "Size: 3072" in parent_stat.stdout
+    assert "Blockcount: 6" in parent_stat.stdout
+    assert "Flags: 0x81000" in parent_stat.stdout
+    child_stat = subprocess.run(
+        [str(debugfs), "-R", "stat /fixture/new.txt", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert child_stat.returncode == 0, child_stat.stdout + child_stat.stderr
+    assert "Inode: 18" in child_stat.stdout
+    assert "Type: regular" in child_stat.stdout
+    assert "Size: 0" in child_stat.stdout
+    tree = subprocess.run(
+        [str(debugfs), "-R", "htree_dump /fixture", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert tree.returncode == 0, tree.stdout + tree.stderr
+    for fragment in (
+        "Hash Version: 1",
+        "Number of entries (count): 2",
+        "Number of entries (limit): 123",
+        "Entry #0: Hash 0x00000000, block 1",
+        "Entry #1: Hash 0x95d3b562, block 2",
+        "Reading directory block 1, phys 1351",
+        "Reading directory block 2, phys 1352",
+        "new.txt",
+    ):
+        assert fragment in tree.stdout
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+    return {
+        "source": path,
+        "source_patches": input_patches,
+        "image": backing,
+        "trace": trace,
+        "activation_trace": activation_trace,
+        "media_sha256": media_sha256,
+        "block_size": block_size,
+        "parent_number": parent_number,
+        "child_number": child_number,
+        "new_inode_home": child_home,
+        "parent_inode_home": parent_home,
+        "root_home": root_home,
+        "leaf_homes": leaf_homes,
+        "block_bitmap_home": block_bitmap_home,
+        "gdt_home": gdt_home,
+        "super_home": super_home,
+        "inode_bitmap_home": inode_bitmap_home,
+        "untouched_homes": untouched_homes,
+        "free_blocks_before": free_blocks_before,
+        "free_blocks_after": expected_free_blocks,
+        "free_inodes_before": free_inodes_before,
+        "free_inodes_after": free_inodes_before - 1,
+    }
+
+
+def test_staged_vfs_create_converts_full_linear_directory_to_depth_zero_htree(
+    staged_public_linear_htree_create_fixture: dict[str, object],
+) -> None:
+    image = staged_public_linear_htree_create_fixture["image"]
+    trace = staged_public_linear_htree_create_fixture["trace"]
+    assert isinstance(image, Path)
+    assert isinstance(trace, tuple)
+    assert image.is_file()
+    assert trace
+
+
+def test_staged_vfs_linear_htree_conversion_uses_nonadjacent_cross_group_leaves(
+    staged_public_linear_htree_create_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A group-0 singleton forces the second leaf into initialized group 1."""
+    case = staged_public_linear_htree_create_fixture
+    path = case["source"]
+    prepared_patches = case["source_patches"]
+    canonical_result = case["image"]
+    activation_trace = case["activation_trace"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(path, Path)
+    assert isinstance(prepared_patches, tuple)
+    assert isinstance(canonical_result, Path)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    layout = _ext4_recovery_layout(path)
+    block_size = layout["block_size"]
+    inode_size = layout["inode_size"]
+    first_data = layout["first"]
+    blocks_per_group = layout["blocks_per_group"]
+    parent_number = 13
+    sparse_number = 17
+    child_number = 18
+    root_home = 1345
+    leaf_a = 1351
+    ballast_start = 1352
+    ballast_blocks = 6841
+    leaf_b_group = 1
+    leaf_b_index = 258
+    leaf_b = first_data + leaf_b_group * blocks_per_group + leaf_b_index
+    group0_bitmap_home = 259
+    group1_bitmap_home = 260
+    inode_bitmap_home = 267
+    gdt_home = 2
+    super_home = 1
+    parent_home = 278
+    child_home = 279
+    assert block_size == 1024
+    assert inode_size == 256
+    assert first_data == 1
+    assert blocks_per_group == 8192
+    assert leaf_b == 8451
+    assert case["root_home"] == root_home
+    assert case["leaf_homes"] == (leaf_a, 1352)
+    assert case["block_bitmap_home"] == group0_bitmap_home
+    assert case["inode_bitmap_home"] == inode_bitmap_home
+    assert case["gdt_home"] == gdt_home
+    assert case["super_home"] == super_home
+    assert case["parent_inode_home"] == parent_home
+    assert case["new_inode_home"] == child_home
+
+    superblock, parent_inode, parent_offset = _ext4_inode_record(
+        path, parent_number
+    )
+    _, sparse_inode, sparse_offset = _ext4_inode_record(path, sparse_number)
+    _, old_child_inode, child_offset = _ext4_inode_record(path, child_number)
+    assert parent_offset == parent_home * block_size
+    assert sparse_offset == child_home * block_size
+    assert child_offset == child_home * block_size + inode_size
+    assert old_child_inode == bytes(inode_size)
+    assert struct.unpack_from("<I", sparse_inode, 0x04)[0] == 3 * block_size
+    assert struct.unpack_from("<I", sparse_inode, 0x1C)[0] == 4
+    assert struct.unpack_from("<HHHH", sparse_inode, 0x28) == (
+        0xF30A,
+        2,
+        4,
+        0,
+    )
+    assert struct.unpack_from("<IHHI", sparse_inode, 0x34) == (
+        0,
+        1,
+        0,
+        1348,
+    )
+    assert struct.unpack_from("<IHHI", sparse_inode, 0x40) == (
+        2,
+        1,
+        0,
+        1350,
+    )
+
+    original_group0_bitmap = _patched_ext4_home(
+        path,
+        prepared_patches,
+        group0_bitmap_home,
+        block_size=block_size,
+    )
+    group0_clear = tuple(
+        index
+        for index in range(blocks_per_group)
+        if not original_group0_bitmap[index // 8] & (1 << (index % 8))
+    )
+    assert group0_clear == tuple(range(1350, blocks_per_group))
+    assert len(group0_clear) == ballast_blocks + 1
+
+    base_patch_map = dict(prepared_patches)
+    assert len(base_patch_map) == len(prepared_patches)
+    assert super_home * block_size not in base_patch_map
+    assert sparse_offset not in base_patch_map
+    base_patch_map[super_home * block_size] = superblock
+    base_patch_map[sparse_offset] = sparse_inode
+    ballast_patches, ballast_ranges = _allocate_unlinked_extent_ranges(
+        path,
+        protocol="modern",
+        extent_specs=((3, ballast_blocks, True),),
+        inode_number=sparse_number,
+        physical_starts=(ballast_start,),
+        base_patches=tuple(base_patch_map.items()),
+    )
+    assert ballast_ranges == ((ballast_start, ballast_blocks),)
+    assert ballast_start + ballast_blocks == first_data + blocks_per_group
+    patch_map = dict(ballast_patches)
+    ballast_super = patch_map[super_home * block_size]
+    patched_sparse_inode = bytearray(patch_map[sparse_offset])
+    struct.pack_into("<H", patched_sparse_inode, 0x2A, 3)
+    struct.pack_into(
+        "<IHHI",
+        patched_sparse_inode,
+        0x4C,
+        3,
+        0x8000 | ballast_blocks,
+        0,
+        ballast_start,
+    )
+    ballast_i_blocks = 4 + ballast_blocks * (block_size // 512)
+    assert ballast_i_blocks == 13686
+    struct.pack_into("<I", patched_sparse_inode, 0x1C, ballast_i_blocks)
+    patched_sparse_inode = _inode_with_checksum(
+        ballast_super,
+        sparse_number,
+        patched_sparse_inode,
+    )
+    patch_map[sparse_offset] = patched_sparse_inode
+    input_patches = tuple(patch_map.items())
+
+    ballast_group0_bitmap = _patched_ext4_home(
+        path,
+        input_patches,
+        group0_bitmap_home,
+        block_size=block_size,
+    )
+    ballast_group0_clear = tuple(
+        index
+        for index in range(blocks_per_group)
+        if not ballast_group0_bitmap[index // 8]
+        & (1 << (index % 8))
+    )
+    assert ballast_group0_clear == (leaf_a - first_data,)
+    ballast_group1_bitmap = _patched_ext4_home(
+        path,
+        input_patches,
+        group1_bitmap_home,
+        block_size=block_size,
+    )
+    assert next(
+        index
+        for index in range(blocks_per_group)
+        if not ballast_group1_bitmap[index // 8] & (1 << (index % 8))
+    ) == leaf_b_index
+    assert not ballast_group1_bitmap[(leaf_b_index + 1) // 8] & (
+        1 << ((leaf_b_index + 1) % 8)
+    )
+    assert _extent_root_physical(patched_sparse_inode, 3) == ballast_start
+    assert _extent_root_physical(
+        patched_sparse_inode, 3 + ballast_blocks - 1
+    ) == first_data + blocks_per_group - 1
+
+    def descriptor_counts(gdt: bytes, group: int) -> dict[str, int]:
+        descriptor_size = 64
+        offset = group * descriptor_size
+        descriptor = gdt[offset : offset + descriptor_size]
+        assert len(descriptor) == descriptor_size
+
+        def split(low: int, high: int) -> int:
+            return struct.unpack_from("<H", descriptor, low)[0] | (
+                struct.unpack_from("<H", descriptor, high)[0] << 16
+            )
+
+        return {
+            "free_blocks": split(0x0C, 0x2C),
+            "free_inodes": split(0x0E, 0x2E),
+            "used_dirs": split(0x10, 0x30),
+            "itable_unused": split(0x1C, 0x32),
+        }
+
+    ballast_gdt = _patched_ext4_home(
+        path, input_patches, gdt_home, block_size=block_size
+    )
+    assert descriptor_counts(ballast_gdt, 0) == {
+        "free_blocks": 1,
+        "free_inodes": 495,
+        "used_dirs": 3,
+        "itable_unused": 495,
+    }
+    assert descriptor_counts(ballast_gdt, 1) == {
+        "free_blocks": 7934,
+        "free_inodes": 512,
+        "used_dirs": 0,
+        "itable_unused": 512,
+    }
+    free_blocks_before = struct.unpack_from("<I", ballast_super, 0x0C)[0] | (
+        struct.unpack_from("<I", ballast_super, 0x158)[0] << 32
+    )
+    free_inodes_before = struct.unpack_from("<I", ballast_super, 0x10)[0]
+    assert free_blocks_before == 52216
+    assert free_inodes_before == 4079
+
+    expected_root = _read_ext4_home(
+        canonical_result, root_home, block_size=block_size
+    )
+    expected_leaf_a = _read_ext4_home(
+        canonical_result, leaf_a, block_size=block_size
+    )
+    expected_leaf_b = _read_ext4_home(
+        canonical_result, 1352, block_size=block_size
+    )
+    backing = tmp_path / "staged-linear-htree-cross-group.img"
+    output, trace, _ = run_recovery_forth(
+        path,
+        backing,
+        [
+            "VARIABLE _XCG-CLOCK-CALLS",
+            (
+                ": _XCG-NOW ( context -- epoch-ms ior ) DROP "
+                "1 _XCG-CLOCK-CALLS +! "
+                f"{_STAGED_APPEND_EPOCH_MS} 0 ;"
+            ),
+            "CREATE _XCG-STAT VFS-STATFS-SIZE ALLOT",
+            "T-ARENA CONSTANT _XCG-ARENA",
+            (
+                "_XCG-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _XCG-MOUNT-IOR CONSTANT _XCG-V"
+            ),
+            "_XCG-V _EXT4-CTX CONSTANT _XCG-CTX",
+            (
+                "' _XCG-NOW 0 _XCG-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _XCG-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_XCG-PROFILE", "_XCG-V", 10, 0, 0
+            ),
+            'S" /fixture" _XCG-V VFS-CD? CONSTANT _XCG-CD-IOR',
+            (
+                "_XCG-V V.CWD @ _XCG-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _XCG-LOAD-IOR"
+            ),
+            "_XCG-V V.CWD @ D.VNODE @ CONSTANT _XCG-PARENT-VN",
+            (
+                "_XCG-STAT VFS-STATFS-SIZE _XCG-V VFS-STATFS "
+                "CONSTANT _XCG-BEFORE-IOR"
+            ),
+            "_XCG-STAT VSF.BFREE @ CONSTANT _XCG-BFREE-BEFORE",
+            "_XCG-STAT VSF.FFREE @ CONSTANT _XCG-FFREE-BEFORE",
+            "DEPTH CONSTANT _XCG-DEPTH-BEFORE",
+            (
+                'S" new.txt" _XCG-V VFS-MKFILE? '
+                "CONSTANT _XCG-CREATE-IOR CONSTANT _XCG-D"
+            ),
+            "DEPTH CONSTANT _XCG-DEPTH-AFTER",
+            "_XCG-D D.VNODE @ CONSTANT _XCG-VN",
+            (
+                'S" /fixture/new.txt" _XCG-V VFS-RESOLVE? '
+                "CONSTANT _XCG-RESOLVE-IOR CONSTANT _XCG-R"
+            ),
+            (
+                "_XCG-STAT VFS-STATFS-SIZE _XCG-V VFS-STATFS "
+                "CONSTANT _XCG-AFTER-IOR"
+            ),
+            "_XCG-STAT VSF.BFREE @ CONSTANT _XCG-BFREE-AFTER",
+            "_XCG-STAT VSF.FFREE @ CONSTANT _XCG-FFREE-AFTER",
+            "_XC-META-COUNT @ CONSTANT _XCG-META-COUNT",
+            "_XCG-CTX _EXT4-C.J.WRITER + @ CONSTANT _XCG-WRITER",
+            *_forth_accumulated_conjunction(
+                "_XCG-OK",
+                [
+                    "_XCG-MOUNT-IOR 0=",
+                    "_XCG-CLOCK-IOR 0=",
+                    "_XCG-PROFILE-SIZE-IOR 0=",
+                    "_XCG-PROFILE-BIND-IOR 0=",
+                    "_XCG-PROFILE-USED _XCG-PROFILE-SIZE =",
+                    "_XCG-CD-IOR 0=",
+                    "_XCG-LOAD-IOR 0=",
+                    "_XCG-BEFORE-IOR 0=",
+                    "_XCG-CREATE-IOR 0=",
+                    "_XCG-DEPTH-AFTER _XCG-DEPTH-BEFORE =",
+                    "_XCG-D 0<>",
+                    "_XCG-RESOLVE-IOR 0=",
+                    "_XCG-R _XCG-D =",
+                    "_XCG-VN VN.TYPE @ VFS-T-FILE =",
+                    "_XCG-VN VN.BID @ 18 =",
+                    "_XCG-VN VN.BDATA @ 18 =",
+                    "_XCG-VN VN.GEN @ 1 =",
+                    "_XCG-VN VN.MODE @ 0x81B6 =",
+                    "_XCG-VN VN.SIZE-LO @ 0=",
+                    "_XCG-VN VN.SIZE-HI @ 0=",
+                    "_XCG-VN VN.NLINK @ 1 =",
+                    "_XCG-VN VN.BLOCKS @ 0=",
+                    "_XCG-PARENT-VN VN.SIZE-LO @ 3072 =",
+                    "_XCG-PARENT-VN VN.SIZE-HI @ 0=",
+                    "_XCG-PARENT-VN VN.BLOCKS @ 6 =",
+                    "_XCG-PARENT-VN VN.NLINK @ 2 =",
+                    "_XCG-AFTER-IOR 0=",
+                    "_XCG-BFREE-AFTER _XCG-BFREE-BEFORE 2 - =",
+                    "_XCG-FFREE-AFTER _XCG-FFREE-BEFORE 1- =",
+                    "_XCG-CLOCK-CALLS @ 1 =",
+                    "_XCG-META-COUNT 10 =",
+                    "_XCG-WRITER _XCG-PROFILE-BASE =",
+                    "_XCG-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                    "_XCG-CTX _EXT4-C.J.HOME-WRITES + @ 10 =",
+                    "_XCG-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                    "_XCG-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_XCG-V V.FLAGS @ VFS-F-RO AND 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            (
+                '_XCG-OK @ 0= IF ." EXT4-LINEAR-HTREE-XGROUP-FIRST-FAIL " '
+                "_XCG-OK-FIRST-FAILURE @ . THEN"
+            ),
+            (
+                '_XCG-OK @ IF ." EXT4-PUBLIC-CREATE-LINEAR-HTREE-XGROUP" '
+                "THEN"
+            ),
+            "0 _XCG-V VFS-UNMOUNT CONSTANT _XCG-UNMOUNT-IOR",
+            (
+                "_XCG-UNMOUNT-IOR 0= "
+                "_XCG-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_XCG-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-PUBLIC-CREATE-LINEAR-HTREE-XGROUP-UNMOUNTED" '
+                "THEN"
+            ),
+        ],
+        patches=input_patches,
+        capture_media=backing,
+        max_steps=1_700_000_000,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-CREATE-LINEAR-HTREE-XGROUP")
+    _assert_emitted(
+        output, "EXT4-PUBLIC-CREATE-LINEAR-HTREE-XGROUP-UNMOUNTED"
+    )
+    assert trace[: len(activation_trace)] == activation_trace
+
+    after_super, child_inode, observed_child_offset = _ext4_inode_record(
+        backing, child_number
+    )
+    _, parent_inode_after, observed_parent_offset = _ext4_inode_record(
+        backing, parent_number
+    )
+    _, sparse_inode_after, observed_sparse_offset = _ext4_inode_record(
+        backing, sparse_number
+    )
+    assert observed_child_offset == child_offset
+    assert observed_parent_offset == parent_offset
+    assert observed_sparse_offset == sparse_offset
+    assert struct.unpack_from("<I", after_super, 0x0C)[0] == 52214
+    assert struct.unpack_from("<I", after_super, 0x158)[0] == 0
+    assert struct.unpack_from("<I", after_super, 0x10)[0] == 4078
+    assert after_super == _ext4_super_with_checksum(after_super)
+
+    assert struct.unpack_from("<I", parent_inode_after, 0x04)[0] == 3072
+    assert struct.unpack_from("<I", parent_inode_after, 0x1C)[0] == 6
+    assert struct.unpack_from("<I", parent_inode_after, 0x20)[0] == 0x81000
+    assert struct.unpack_from("<HHHHI", parent_inode_after, 0x28) == (
+        0xF30A,
+        3,
+        4,
+        0,
+        0,
+    )
+    assert tuple(
+        struct.unpack_from("<IHHI", parent_inode_after, 0x34 + index * 12)
+        for index in range(3)
+    ) == (
+        (0, 1, 0, root_home),
+        (1, 1, 0, leaf_a),
+        (2, 1, 0, leaf_b),
+    )
+    assert parent_inode_after[0x58:0x64] == bytes(12)
+    assert parent_inode_after == _inode_with_checksum(
+        after_super, parent_number, parent_inode_after
+    )
+    assert struct.unpack_from("<H", child_inode, 0x00)[0] == 0x81B6
+    assert struct.unpack_from("<I", child_inode, 0x04)[0] == 0
+    assert struct.unpack_from("<H", child_inode, 0x1A)[0] == 1
+    assert struct.unpack_from("<I", child_inode, 0x20)[0] == 0x80000
+    assert struct.unpack_from("<I", child_inode, 0x64)[0] == 1
+    assert child_inode == _inode_with_checksum(
+        after_super, child_number, child_inode
+    )
+    assert sparse_inode_after == patched_sparse_inode
+    assert sparse_inode_after == _inode_with_checksum(
+        after_super, sparse_number, sparse_inode_after
+    )
+
+    assert _read_ext4_home(
+        backing, root_home, block_size=block_size
+    ) == expected_root
+    assert _read_ext4_home(
+        backing, leaf_a, block_size=block_size
+    ) == expected_leaf_a
+    assert _read_ext4_home(
+        backing, leaf_b, block_size=block_size
+    ) == expected_leaf_b
+    final_group0_bitmap = _read_ext4_home(
+        backing, group0_bitmap_home, block_size=block_size
+    )
+    assert final_group0_bitmap == bytes((0xFF,)) * block_size
+    expected_group1_bitmap = bytearray(ballast_group1_bitmap)
+    expected_group1_bitmap[leaf_b_index // 8] |= 1 << (leaf_b_index % 8)
+    assert _read_ext4_home(
+        backing, group1_bitmap_home, block_size=block_size
+    ) == bytes(expected_group1_bitmap)
+    assert _ext4_block_allocation_state(
+        backing,
+        (
+            leaf_a,
+            ballast_start,
+            first_data + blocks_per_group - 1,
+            leaf_b,
+            leaf_b + 1,
+        ),
+    ) == {
+        leaf_a: True,
+        ballast_start: True,
+        first_data + blocks_per_group - 1: True,
+        leaf_b: True,
+        leaf_b + 1: False,
+    }
+    assert _ext4_inode_allocation_state(backing, (18, 19)) == {
+        18: True,
+        19: False,
+    }
+    assert _ext4_group_counts(backing, 0) == {
+        "free_blocks": 0,
+        "free_inodes": 494,
+        "used_dirs": 3,
+        "itable_unused": 494,
+    }
+    assert _ext4_group_counts(backing, 1) == {
+        "free_blocks": 7933,
+        "free_inodes": 512,
+        "used_dirs": 0,
+        "itable_unused": 512,
+    }
+    final_gdt = _read_ext4_home(backing, gdt_home, block_size=block_size)
+    assert descriptor_counts(final_gdt, 0) == _ext4_group_counts(backing, 0)
+    assert descriptor_counts(final_gdt, 1) == _ext4_group_counts(backing, 1)
+    assert final_gdt[2 * 64 :] == ballast_gdt[2 * 64 :]
+
+    untouched_homes = (
+        277,
+        280,
+        1346,
+        1347,
+        1348,
+        1349,
+        1350,
+        1352,
+        1353,
+        first_data + blocks_per_group - 1,
+        leaf_b + 1,
+        layout["witness_super"],
+        layout["witness_gdt"],
+    )
+    for home in untouched_homes:
+        assert _read_ext4_home(
+            backing, home, block_size=block_size
+        ) == _patched_ext4_home(
+            path, input_patches, home, block_size=block_size
+        )
+
+    expected_home_writes = {
+        child_home,
+        parent_home,
+        root_home,
+        leaf_a,
+        leaf_b,
+        group0_bitmap_home,
+        group1_bitmap_home,
+        gdt_home,
+        super_home,
+        inode_bitmap_home,
+    }
+    assert len(expected_home_writes) == 10
+    super_ordinals = _write_ordinals_for_ext4_home(
+        trace, super_home, block_size=block_size
+    )
+    assert super_ordinals == (4, 31, 42)
+    single_home_ordinals = {
+        home: _write_ordinals_for_ext4_home(
+            trace, home, block_size=block_size
+        )
+        for home in expected_home_writes - {super_home}
+    }
+    assert single_home_ordinals == {
+        child_home: (24,),
+        parent_home: (25,),
+        root_home: (26,),
+        leaf_a: (27,),
+        leaf_b: (28,),
+        group0_bitmap_home: (29,),
+        gdt_home: (30,),
+        group1_bitmap_home: (32,),
+        inode_bitmap_home: (33,),
+    }
+    checkpoint_ordinals = tuple(
+        sorted(
+            (super_ordinals[1],)
+            + tuple(
+                ordinals[0] for ordinals in single_home_ordinals.values()
+            )
+        )
+    )
+    assert checkpoint_ordinals == tuple(range(24, 34))
+
+    parent_stat = subprocess.run(
+        [str(debugfs), "-R", "stat /fixture", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert parent_stat.returncode == 0, parent_stat.stdout + parent_stat.stderr
+    for fragment in (
+        "Inode: 13",
+        "Size: 3072",
+        "Blockcount: 6",
+        "Flags: 0x81000",
+        "(0):1345",
+        "(1):1351",
+        "(2):8451",
+    ):
+        assert fragment in parent_stat.stdout
+    child_stat = subprocess.run(
+        [str(debugfs), "-R", "stat /fixture/new.txt", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert child_stat.returncode == 0, child_stat.stdout + child_stat.stderr
+    assert "Inode: 18" in child_stat.stdout
+    assert "Type: regular" in child_stat.stdout
+    assert "Size: 0" in child_stat.stdout
+    sparse_stat = subprocess.run(
+        [str(debugfs), "-R", "stat /fixture/sparse.bin", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert sparse_stat.returncode == 0, sparse_stat.stdout + sparse_stat.stderr
+    assert "Inode: 17" in sparse_stat.stdout
+    assert "Size: 3072" in sparse_stat.stdout
+    assert "Blockcount: 13686" in sparse_stat.stdout
+    tree = subprocess.run(
+        [str(debugfs), "-R", "htree_dump /fixture", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert tree.returncode == 0, tree.stdout + tree.stderr
+    for fragment in (
+        "Hash Version: 1",
+        "Number of entries (count): 2",
+        "Entry #0: Hash 0x00000000, block 1",
+        "Entry #1: Hash 0x95d3b562, block 2",
+        "Reading directory block 1, phys 1351",
+        "Reading directory block 2, phys 8451",
+        "new.txt",
+    ):
+        assert fragment in tree.stdout
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+
+def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_without_writes(
+    staged_public_linear_htree_create_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Preserve ambient proof state, then refuse an eight-home profile."""
+    case = staged_public_linear_htree_create_fixture
+    path = case["source"]
+    source_patches = case["source_patches"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+
+    expected_media = bytearray(path.read_bytes())
+    for offset, payload in source_patches:
+        expected_media[offset : offset + len(payload)] = payload
+    expected_sha256 = hashlib.sha256(expected_media).hexdigest()
+    del expected_media
+
+    backing = tmp_path / "staged-linear-htree-create-profile-eight.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        backing,
+        [
+            "VARIABLE _CHR-CLOCK-CALLS",
+            (
+                ": _CHR-NOW ( context -- epoch-ms ior ) DROP "
+                "1 _CHR-CLOCK-CALLS +! "
+                f"{_STAGED_APPEND_EPOCH_MS} 0 ;"
+            ),
+            "CREATE _CHR-STAT VFS-STATFS-SIZE ALLOT",
+            "T-ARENA CONSTANT _CHR-ARENA",
+            (
+                "_CHR-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _CHR-MOUNT-IOR CONSTANT _CHR-V"
+            ),
+            "_CHR-V _EXT4-CTX CONSTANT _CHR-CTX",
+            (
+                "' _CHR-NOW 0 _CHR-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _CHR-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_CHR-PROFILE", "_CHR-V", 8, 0, 0
+            ),
+            'S" /fixture" _CHR-V VFS-CD? CONSTANT _CHR-CD-IOR',
+            (
+                "_CHR-V V.CWD @ _CHR-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _CHR-LOAD-IOR"
+            ),
+            "_CHR-V V.CWD @ D.VNODE @ CONSTANT _CHR-PARENT-VN",
+            "_CHR-V V.ICOUNT @ CONSTANT _CHR-ICOUNT-BEFORE",
+            "_CHR-V V.VCOUNT @ CONSTANT _CHR-VCOUNT-BEFORE",
+            "_CHR-V V.STR-PTR @ CONSTANT _CHR-STR-BEFORE",
+            "_CHR-V V.IFREE @ CONSTANT _CHR-IFREE-BEFORE",
+            "_CHR-PARENT-VN VN.FLAGS @ CONSTANT _CHR-PFLAGS-BEFORE",
+            "_CHR-PARENT-VN VN.NLINK @ CONSTANT _CHR-NLINK-BEFORE",
+            "_CHR-PARENT-VN VN.SIZE-LO @ CONSTANT _CHR-SIZE-BEFORE",
+            "_CHR-PARENT-VN VN.SIZE-HI @ CONSTANT _CHR-SIZE-HI-BEFORE",
+            "_CHR-PARENT-VN VN.BLOCKS @ CONSTANT _CHR-BLOCKS-BEFORE",
+            "_CHR-PARENT-VN VN.MTIME @ CONSTANT _CHR-MTIME-BEFORE",
+            (
+                "_CHR-PARENT-VN VN.MTIME-NS @ "
+                "CONSTANT _CHR-MTIME-NS-BEFORE"
+            ),
+            "_CHR-PARENT-VN VN.CTIME @ CONSTANT _CHR-CTIME-BEFORE",
+            (
+                "_CHR-PARENT-VN VN.CTIME-NS @ "
+                "CONSTANT _CHR-CTIME-NS-BEFORE"
+            ),
+            (
+                "_CHR-STAT VFS-STATFS-SIZE _CHR-V VFS-STATFS "
+                "CONSTANT _CHR-STAT-BEFORE-IOR"
+            ),
+            "_CHR-STAT VSF.BFREE @ CONSTANT _CHR-BFREE-BEFORE",
+            "_CHR-STAT VSF.FFREE @ CONSTANT _CHR-FFREE-BEFORE",
+            (
+                "_CHR-CTX _EXT4-C.MUTATION-RANGES + @ "
+                "CONSTANT _CHR-AMBIENT-RANGES"
+            ),
+            (
+                "_CHR-CTX _EXT4-C.MUTATION-RANGE-CAP + @ "
+                "CONSTANT _CHR-AMBIENT-CAP"
+            ),
+            "1351 _CHR-AMBIENT-RANGES !",
+            "1 _CHR-AMBIENT-RANGES CELL+ !",
+            (
+                "_CHR-AMBIENT-RANGES 1 _CHR-AMBIENT-CAP "
+                "_EXT4-MUTATION-OWNER-RANGES-PUBLISH "
+                "CONSTANT _CHR-AMBIENT-PUBLISH-IOR"
+            ),
+            (
+                "_XC-REQUIRE-CONVERSION-PROOF-IDLE "
+                "CONSTANT _CHR-AMBIENT-GUARD-IOR"
+            ),
+            "DEPTH CONSTANT _CHR-AMBIENT-DEPTH-BEFORE",
+            (
+                'S" new.txt" _CHR-V VFS-MKFILE? '
+                "CONSTANT _CHR-AMBIENT-IOR CONSTANT _CHR-AMBIENT-D"
+            ),
+            "DEPTH CONSTANT _CHR-AMBIENT-DEPTH-AFTER",
+            (
+                'S" new.txt" _CHR-V V.CWD @ _VFS-FIND-CHILD '
+                "CONSTANT _CHR-AMBIENT-CHILD"
+            ),
+            "_CHR-V V.LAST-IOR @ CONSTANT _CHR-AMBIENT-LAST-IOR",
+            "_CHR-V V.ICOUNT @ CONSTANT _CHR-AMBIENT-ICOUNT",
+            "_CHR-V V.VCOUNT @ CONSTANT _CHR-AMBIENT-VCOUNT",
+            "_CHR-V V.STR-PTR @ CONSTANT _CHR-AMBIENT-STR",
+            *_forth_accumulated_conjunction(
+                "_CHR-AMBIENT-PRESERVED",
+                [
+                    (
+                        "_EXT4-MUTATION-OWNER-RANGES @ "
+                        "_CHR-AMBIENT-RANGES ="
+                    ),
+                    "_EXT4-MUTATION-OWNER-RANGE-CAP @ _CHR-AMBIENT-CAP =",
+                    "_EXT4-MUTATION-OWNER-RANGE-COUNT @ 1 =",
+                    "_EXT4-MUTATION-OWNER-BOUND-FIRST @ 1351 =",
+                    "_EXT4-MUTATION-OWNER-BOUND-LIMIT @ 1352 =",
+                    "_CHR-AMBIENT-RANGES @ 1351 =",
+                    "_CHR-AMBIENT-RANGES CELL+ @ 1 =",
+                ],
+            ),
+            "_EXT4-MUTATION-OWNER-RANGES-CLEAR",
+            "DEPTH CONSTANT _CHR-DEPTH-BEFORE",
+            (
+                'S" new.txt" _CHR-V VFS-MKFILE? '
+                "CONSTANT _CHR-CREATE-IOR CONSTANT _CHR-D"
+            ),
+            "DEPTH CONSTANT _CHR-DEPTH-AFTER",
+            (
+                'S" new.txt" _CHR-V V.CWD @ _VFS-FIND-CHILD '
+                "CONSTANT _CHR-CHILD"
+            ),
+            "_CHR-V V.LAST-IOR @ CONSTANT _CHR-LAST-IOR",
+            "_CHR-V V.ICOUNT @ CONSTANT _CHR-ICOUNT-AFTER",
+            "_CHR-V V.VCOUNT @ CONSTANT _CHR-VCOUNT-AFTER",
+            "_CHR-V V.STR-PTR @ CONSTANT _CHR-STR-AFTER",
+            "_CHR-V V.IFREE @ CONSTANT _CHR-IFREE-AFTER",
+            "_CHR-PARENT-VN VN.FLAGS @ CONSTANT _CHR-PFLAGS-AFTER",
+            "_CHR-PARENT-VN VN.NLINK @ CONSTANT _CHR-NLINK-AFTER",
+            "_CHR-PARENT-VN VN.SIZE-LO @ CONSTANT _CHR-SIZE-AFTER",
+            "_CHR-PARENT-VN VN.SIZE-HI @ CONSTANT _CHR-SIZE-HI-AFTER",
+            "_CHR-PARENT-VN VN.BLOCKS @ CONSTANT _CHR-BLOCKS-AFTER",
+            "_CHR-PARENT-VN VN.MTIME @ CONSTANT _CHR-MTIME-AFTER",
+            (
+                "_CHR-PARENT-VN VN.MTIME-NS @ "
+                "CONSTANT _CHR-MTIME-NS-AFTER"
+            ),
+            "_CHR-PARENT-VN VN.CTIME @ CONSTANT _CHR-CTIME-AFTER",
+            (
+                "_CHR-PARENT-VN VN.CTIME-NS @ "
+                "CONSTANT _CHR-CTIME-NS-AFTER"
+            ),
+            (
+                "_CHR-STAT VFS-STATFS-SIZE _CHR-V VFS-STATFS "
+                "CONSTANT _CHR-STAT-AFTER-IOR"
+            ),
+            "_CHR-STAT VSF.BFREE @ CONSTANT _CHR-BFREE-AFTER",
+            "_CHR-STAT VSF.FFREE @ CONSTANT _CHR-FFREE-AFTER",
+            "_CHR-CTX _EXT4-C.J.WRITER + @ CONSTANT _CHR-WRITER",
+            (
+                "_CHR-WRITER _EXT4-JWR-IDLE-CLEAN? "
+                "CONSTANT _CHR-WRITER-CLEAN"
+            ),
+            (
+                "_CHR-CTX _EXT4-C.J.HOME-WRITES + @ "
+                "CONSTANT _CHR-HOME-WRITES"
+            ),
+            (
+                "_CHR-CTX _EXT4-C.J.WRITE-ACTIVE + @ "
+                "CONSTANT _CHR-WRITE-ACTIVE"
+            ),
+            (
+                "_CHR-V V.FLAGS @ VFS-F-DIRTY AND "
+                "CONSTANT _CHR-DIRTY"
+            ),
+            "_CHR-V V.FLAGS @ VFS-F-RO AND CONSTANT _CHR-RO",
+            "0 _CHR-V VFS-UNMOUNT CONSTANT _CHR-UNMOUNT-IOR",
+            *_forth_accumulated_conjunction(
+                "_CHR-OK",
+                [
+                    "_CHR-MOUNT-IOR 0=",
+                    "_CHR-CLOCK-IOR 0=",
+                    "_CHR-PROFILE-SIZE-IOR 0=",
+                    "_CHR-PROFILE-BIND-IOR 0=",
+                    "_CHR-PROFILE-USED _CHR-PROFILE-SIZE =",
+                    "_CHR-CD-IOR 0=",
+                    "_CHR-LOAD-IOR 0=",
+                    "_CHR-STAT-BEFORE-IOR 0=",
+                    "_CHR-AMBIENT-PUBLISH-IOR 0=",
+                    "_CHR-AMBIENT-GUARD-IOR VFS-E-BUSY =",
+                    "_CHR-AMBIENT-IOR VFS-E-BUSY =",
+                    "_CHR-AMBIENT-LAST-IOR _CHR-AMBIENT-IOR =",
+                    "_CHR-AMBIENT-D 0=",
+                    "_CHR-AMBIENT-CHILD 0=",
+                    (
+                        "_CHR-AMBIENT-DEPTH-AFTER "
+                        "_CHR-AMBIENT-DEPTH-BEFORE ="
+                    ),
+                    "_CHR-AMBIENT-ICOUNT _CHR-ICOUNT-BEFORE =",
+                    "_CHR-AMBIENT-VCOUNT _CHR-VCOUNT-BEFORE =",
+                    "_CHR-AMBIENT-STR _CHR-STR-BEFORE =",
+                    "_CHR-AMBIENT-PRESERVED @ 0<>",
+                    "_CHR-CREATE-IOR VFS-E-NOSPC =",
+                    "_CHR-LAST-IOR _CHR-CREATE-IOR =",
+                    "_CHR-D 0=",
+                    "_CHR-CHILD 0=",
+                    "_CHR-DEPTH-AFTER _CHR-DEPTH-BEFORE =",
+                    "_CHR-CLOCK-CALLS @ 2 =",
+                    "_CHR-ICOUNT-AFTER _CHR-ICOUNT-BEFORE =",
+                    "_CHR-VCOUNT-AFTER _CHR-VCOUNT-BEFORE =",
+                    "_CHR-STR-AFTER _CHR-STR-BEFORE =",
+                    "_CHR-IFREE-AFTER _CHR-IFREE-BEFORE =",
+                    "_CHR-PFLAGS-AFTER _CHR-PFLAGS-BEFORE =",
+                    "_CHR-NLINK-AFTER _CHR-NLINK-BEFORE =",
+                    "_CHR-SIZE-AFTER _CHR-SIZE-BEFORE =",
+                    "_CHR-SIZE-HI-AFTER _CHR-SIZE-HI-BEFORE =",
+                    "_CHR-BLOCKS-AFTER _CHR-BLOCKS-BEFORE =",
+                    "_CHR-MTIME-AFTER _CHR-MTIME-BEFORE =",
+                    "_CHR-MTIME-NS-AFTER _CHR-MTIME-NS-BEFORE =",
+                    "_CHR-CTIME-AFTER _CHR-CTIME-BEFORE =",
+                    "_CHR-CTIME-NS-AFTER _CHR-CTIME-NS-BEFORE =",
+                    "_CHR-STAT-AFTER-IOR 0=",
+                    "_CHR-BFREE-AFTER _CHR-BFREE-BEFORE =",
+                    "_CHR-FFREE-AFTER _CHR-FFREE-BEFORE =",
+                    "_CHR-WRITER _CHR-PROFILE-BASE =",
+                    "_CHR-WRITER-CLEAN 0<>",
+                    "_CHR-HOME-WRITES 0=",
+                    "_CHR-WRITE-ACTIVE 0=",
+                    "_CHR-DIRTY 0=",
+                    "_CHR-RO 0=",
+                    "_XC-META-COUNT @ 9 =",
+                    "_XC-WRITER @ 0=",
+                    "_XC-TX @ 0=",
+                    "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                    (
+                        "_XC-DIR-SNAPSHOT "
+                        "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    (
+                        "_XC-ROOT-SNAPSHOT "
+                        "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    (
+                        "_XC-ROOT-CURRENT "
+                        "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    "_XC-DIRECTORY-DESC _EXT4-DD-SIZE _EXT4-BYTES-ZERO?",
+                    (
+                        "_XC-PARENT-SNAPSHOT "
+                        "_EXT4-STAGED-WRITE-INODE-SIZE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    (
+                        "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    (
+                        "_XC-CONVERT-PLAN _XC-CONVERT-PLAN-MAX "
+                        "_XC-CONVERT-PLAN-CELLS * CELLS "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    "_XC-CONVERT-HASH-BASE 24 _EXT4-BYTES-ZERO?",
+                    "_XC-INDEXED @ _XC-SHAPE-SET @ OR 0=",
+                    "_XC-INDEX-BASELINE @ 0=",
+                    (
+                        "_XC-CONVERTING @ _XC-CONVERT-BASELINE @ OR "
+                        "_XC-CONVERT-CANDIDATE-BASELINE @ OR 0="
+                    ),
+                    (
+                        "_XC-CONVERT-HASH-VERSION @ _XC-CONVERT-COUNT @ OR "
+                        "_XC-CONVERT-TOTAL @ OR _XC-CONVERT-SPLIT @ OR 0="
+                    ),
+                    (
+                        "_XC-CONVERT-A @ _XC-CONVERT-B @ OR "
+                        "_XC-CONVERT-NEW-FREE @ OR 0="
+                    ),
+                    (
+                        "_XC-CONVERT-LEFT @ _XC-CONVERT-RIGHT @ OR "
+                        "_XC-CONVERT-SEPARATOR @ OR 0="
+                    ),
+                    (
+                        "_XC-CONVERT-BASE-PARENT-GROUP @ "
+                        "_XC-CONVERT-BASE-PARENT-HOME @ OR "
+                        "_XC-CONVERT-BASE-PARENT-OFF @ OR 0="
+                    ),
+                    (
+                        "_XC-CONVERT-BASE-DIR-HOME @ "
+                        "_XC-CONVERT-A-GROUP @ OR "
+                        "_XC-CONVERT-A-BITMAP-HOME @ OR 0="
+                    ),
+                    (
+                        "_XC-CONVERT-A-GDT-HOME @ _XC-CONVERT-B-GROUP @ OR "
+                        "_XC-CONVERT-B-BITMAP-HOME @ OR 0="
+                    ),
+                    (
+                        "_XC-CONVERT-B-GDT-HOME @ _XC-CONVERT-BASE-A @ OR "
+                        "_XC-CONVERT-BASE-A-GROUP @ OR 0="
+                    ),
+                    (
+                        "_XC-CONVERT-BASE-A-BITMAP-HOME @ "
+                        "_XC-CONVERT-BASE-A-GDT-HOME @ OR "
+                        "_XC-CONVERT-BASE-B @ OR 0="
+                    ),
+                    (
+                        "_XC-CONVERT-BASE-B-GROUP @ "
+                        "_XC-CONVERT-BASE-B-BITMAP-HOME @ OR "
+                        "_XC-CONVERT-BASE-B-GDT-HOME @ OR 0="
+                    ),
+                    (
+                        "_XC-CONVERT-LEAF-IMAGE @ _XC-CONVERT-ROOT-GEN @ OR "
+                        "_XC-CONVERT-EXTENT-ROOT @ OR "
+                        "_XC-CONVERT-EXTENT-ENTRY @ OR 0="
+                    ),
+                    (
+                        "_XC-POST-CONVERTING @ "
+                        "_XC-POST-CONVERT-NEW-FREE @ OR 0="
+                    ),
+                    "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                    "_EXT4-MUTATION-OWNER-INO @ 0=",
+                    "_EXT4-MUTATION-MAP-TARGET @ 0=",
+                    "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
+                    "_EXT4-MUTATION-MAP-HITS @ 0=",
+                    "_EXT4-MUTATION-PROTOCOL-CTX @ 0=",
+                    "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0=",
+                    "_EXT4-JFO-CERT-SCOPE @ 0=",
+                    "_EXT4-JFO-CERT-VALID @ 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    "_CHR-UNMOUNT-IOR 0=",
+                    "_CHR-PROFILE-ARENA ARENA-USED 0=",
+                ],
+            ),
+            (
+                '_CHR-AMBIENT-GUARD-IOR VFS-E-BUSY <> IF ." '
+                'EXT4-LINEAR-HTREE-AMBIENT-GUARD-IOR " '
+                "_CHR-AMBIENT-GUARD-IOR . THEN"
+            ),
+            (
+                '_CHR-AMBIENT-IOR VFS-E-BUSY <> IF ." '
+                'EXT4-LINEAR-HTREE-AMBIENT-CREATE-IOR " '
+                "_CHR-AMBIENT-IOR . THEN"
+            ),
+            (
+                '_CHR-OK @ 0= IF ." EXT4-LINEAR-HTREE-REFUSAL-FIRST-FAIL " '
+                "_CHR-OK-FIRST-FAILURE @ . THEN"
+            ),
+            (
+                '_CHR-OK @ IF ." EXT4-LINEAR-HTREE-PROFILE-REFUSAL" '
+                "THEN"
+            ),
+        ],
+        patches=source_patches,
+        capture_media=backing,
+        max_steps=1_600_000_000,
+    )
+    _assert_emitted(output, "EXT4-LINEAR-HTREE-PROFILE-REFUSAL")
+    assert trace == ()
+    assert media_sha256 == expected_sha256
+    assert _sha256(backing) == expected_sha256
+
+
+def test_staged_vfs_linear_htree_second_leaf_tear_replays_all_nine_homes(
+    staged_public_linear_htree_create_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A committed sector-one leaf tear must replay the whole conversion."""
+    case = staged_public_linear_htree_create_fixture
+    path = case["source"]
+    source_patches = case["source_patches"]
+    success_image = case["image"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    leaf_homes = case["leaf_homes"]
+    untouched_homes = case["untouched_homes"]
+    free_blocks_before = case["free_blocks_before"]
+    free_blocks_after = case["free_blocks_after"]
+    free_inodes_before = case["free_inodes_before"]
+    free_inodes_after = case["free_inodes_after"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(success_image, Path)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(leaf_homes, tuple)
+    assert isinstance(untouched_homes, tuple)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_blocks_after, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(free_inodes_after, int)
+    assert leaf_homes == (1351, 1352)
+
+    expected_homes: dict[str, tuple[int, bytes, bytes]] = {}
+    for key in (
+        "new_inode_home",
+        "parent_inode_home",
+        "root_home",
+        "block_bitmap_home",
+        "gdt_home",
+        "super_home",
+        "inode_bitmap_home",
+    ):
+        home = case[key]
+        assert isinstance(home, int)
+        expected_homes[key] = (
+            home,
+            _patched_ext4_home(
+                path, source_patches, home, block_size=block_size
+            ),
+            _read_ext4_home(success_image, home, block_size=block_size),
+        )
+    for index, home in enumerate(leaf_homes):
+        expected_homes[f"leaf_{index}"] = (
+            home,
+            _patched_ext4_home(
+                path, source_patches, home, block_size=block_size
+            ),
+            _read_ext4_home(success_image, home, block_size=block_size),
+        )
+    assert len(expected_homes) == 9
+    assert all(old != new for _, old, new in expected_homes.values())
+    untouched = {
+        home: _patched_ext4_home(
+            path, source_patches, home, block_size=block_size
+        )
+        for home in untouched_homes
+    }
+    assert all(
+        _read_ext4_home(success_image, home, block_size=block_size)
+        == original
+        for home, original in untouched.items()
+    )
+
+    second_leaf_home = leaf_homes[1]
+    second_leaf_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, second_leaf_home, block_size=block_size
+    )
+    assert second_leaf_ordinals == (27,)
+    second_leaf_ordinal = second_leaf_ordinals[0]
+    second_leaf_event = _trace_event_index_for_ordinal(
+        success_trace, "write", second_leaf_ordinal
+    )
+    assert success_trace[second_leaf_event] == (
+        "write",
+        second_leaf_home * (block_size // 512),
+        block_size // 512,
+    )
+    _, old_second_leaf, expected_second_leaf = expected_homes["leaf_1"]
+    sector_one_differences = tuple(
+        index
+        for index, (old, new) in enumerate(
+            zip(old_second_leaf, expected_second_leaf, strict=True)
+        )
+        if old != new and 512 <= index < block_size
+    )
+    assert sector_one_differences == (1016, 1019, 1020, 1021, 1022, 1023)
+    tear_absolute = (
+        sector_one_differences[0] + sector_one_differences[-1]
+    ) // 2
+    assert any(index < tear_absolute for index in sector_one_differences)
+    assert any(index >= tear_absolute for index in sector_one_differences)
+    tear_sector, tear_offset = divmod(tear_absolute, 512)
+    assert (tear_absolute, tear_sector, tear_offset) == (1019, 1, 507)
+    expected_torn_second_leaf = (
+        expected_second_leaf[:tear_absolute]
+        + old_second_leaf[tear_absolute:]
+    )
+    assert expected_torn_second_leaf not in {
+        old_second_leaf,
+        expected_second_leaf,
+    }
+
+    seconds, milliseconds = divmod(_STAGED_APPEND_EPOCH_MS, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    faulted = tmp_path / "staged-linear-htree-create-w27-faulted.img"
+    recovered = tmp_path / "staged-linear-htree-create-w27-recovered.img"
+    stable = tmp_path / "staged-linear-htree-create-w27-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                "VARIABLE _CHT-CLOCK-CALLS",
+                (
+                    ": _CHT-NOW ( context -- epoch-ms ior ) DROP "
+                    "1 _CHT-CLOCK-CALLS +! "
+                    f"{_STAGED_APPEND_EPOCH_MS} 0 ;"
+                ),
+                "CREATE _CHT-STAT VFS-STATFS-SIZE ALLOT",
+                "T-ARENA CONSTANT _CHT-ARENA",
+                (
+                    "_CHT-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _CHT-MOUNT-IOR CONSTANT _CHT-V"
+                ),
+                "_CHT-V _EXT4-CTX CONSTANT _CHT-CTX",
+                (
+                    "' _CHT-NOW 0 _CHT-V EXT4-BIND-WRITE-CLOCK? "
+                    "CONSTANT _CHT-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_CHT-PROFILE", "_CHT-V", 9, 0, 0
+                ),
+                'S" /fixture" _CHT-V VFS-CD? CONSTANT _CHT-CD-IOR',
+                (
+                    "_CHT-V V.CWD @ _CHT-V _VFS-ENSURE-CHILDREN? "
+                    "CONSTANT _CHT-LOAD-IOR"
+                ),
+                "_CHT-V V.CWD @ D.VNODE @ CONSTANT _CHT-PARENT-VN",
+                "_CHT-V V.ICOUNT @ CONSTANT _CHT-ICOUNT-BEFORE",
+                "_CHT-V V.VCOUNT @ CONSTANT _CHT-VCOUNT-BEFORE",
+                (
+                    "_CHT-STAT VFS-STATFS-SIZE _CHT-V VFS-STATFS "
+                    "CONSTANT _CHT-STAT-BEFORE-IOR"
+                ),
+                "_CHT-STAT VSF.BFREE @ CONSTANT _CHT-BFREE-BEFORE",
+                "_CHT-STAT VSF.FFREE @ CONSTANT _CHT-FFREE-BEFORE",
+                "DEPTH CONSTANT _CHT-DEPTH-BEFORE",
+                (
+                    'S" new.txt" _CHT-V VFS-MKFILE? '
+                    "CONSTANT _CHT-CREATE-IOR CONSTANT _CHT-D"
+                ),
+                "DEPTH CONSTANT _CHT-DEPTH-AFTER",
+                "_CHT-V V.LAST-IOR @ CONSTANT _CHT-LAST-IOR",
+                "_CHT-D D.VNODE @ CONSTANT _CHT-VN",
+                (
+                    'S" /fixture/new.txt" _CHT-V VFS-RESOLVE? '
+                    "CONSTANT _CHT-RESOLVE-IOR CONSTANT _CHT-R"
+                ),
+                (
+                    "_CHT-STAT VFS-STATFS-SIZE _CHT-V VFS-STATFS "
+                    "CONSTANT _CHT-STAT-AFTER-IOR"
+                ),
+                "_CHT-STAT VSF.BFREE @ CONSTANT _CHT-BFREE-AFTER",
+                "_CHT-STAT VSF.FFREE @ CONSTANT _CHT-FFREE-AFTER",
+                "_CHT-CTX _EXT4-C.J.WRITER + @ CONSTANT _CHT-WRITER",
+                *_forth_accumulated_conjunction(
+                    "_CHT-PUBLISHED-OK",
+                    [
+                            "_CHT-MOUNT-IOR 0=",
+                            "_CHT-CLOCK-IOR 0=",
+                            "_CHT-PROFILE-SIZE-IOR 0=",
+                            "_CHT-PROFILE-BIND-IOR 0=",
+                            "_CHT-CD-IOR 0=",
+                            "_CHT-LOAD-IOR 0=",
+                            "_CHT-CREATE-IOR 0=",
+                            "_CHT-DEPTH-AFTER _CHT-DEPTH-BEFORE =",
+                            "_CHT-D 0<>",
+                            "_CHT-RESOLVE-IOR 0=",
+                            "_CHT-R _CHT-D =",
+                            "_CHT-VN VN.TYPE @ VFS-T-FILE =",
+                            "_CHT-VN VN.BID @ 18 =",
+                            "_CHT-VN VN.BDATA @ 18 =",
+                            "_CHT-VN VN.GEN @ 1 =",
+                            "_CHT-VN VN.MODE @ 0x81B6 =",
+                            "_CHT-VN VN.SIZE-LO @ 0=",
+                            "_CHT-VN VN.SIZE-HI @ 0=",
+                            "_CHT-VN VN.NLINK @ 1 =",
+                            "_CHT-VN VN.BLOCKS @ 0=",
+                            f"_CHT-VN VN.ATIME @ {seconds} =",
+                            f"_CHT-VN VN.ATIME-NS @ {nanoseconds} =",
+                            "_CHT-PARENT-VN VN.SIZE-LO @ 3072 =",
+                            "_CHT-PARENT-VN VN.SIZE-HI @ 0=",
+                            "_CHT-PARENT-VN VN.BLOCKS @ 6 =",
+                            "_CHT-PARENT-VN VN.NLINK @ 2 =",
+                            f"_CHT-PARENT-VN VN.MTIME @ {seconds} =",
+                            (
+                                f"_CHT-PARENT-VN VN.MTIME-NS @ "
+                                f"{nanoseconds} ="
+                            ),
+                            f"_CHT-PARENT-VN VN.CTIME @ {seconds} =",
+                            (
+                                f"_CHT-PARENT-VN VN.CTIME-NS @ "
+                                f"{nanoseconds} ="
+                            ),
+                            "_CHT-V V.ICOUNT @ _CHT-ICOUNT-BEFORE 1+ =",
+                            "_CHT-V V.VCOUNT @ _CHT-VCOUNT-BEFORE 1+ =",
+                    ],
+                ),
+                (
+                    '_CHT-PUBLISHED-OK @ IF ." '
+                    'EXT4-LINEAR-HTREE-W27-PUBLISHED" THEN'
+                ),
+                *_forth_accumulated_conjunction(
+                    "_CHT-AUTHORITY-OK",
+                    [
+                            (
+                                "_CHT-LAST-IOR VFS-IOR-DOMAIN "
+                                "VFS-IOR-D-VOLUME ="
+                            ),
+                            (
+                                "_CHT-LAST-IOR VFS-IOR-REASON "
+                                "VFS-R-IO ="
+                            ),
+                            (
+                                "_CHT-LAST-IOR VFS-IOR-FLAGS "
+                                "VFS-IOR-F-PARTIAL AND 0<>"
+                            ),
+                            "_CHT-CLOCK-CALLS @ 1 =",
+                            "_CHT-STAT-BEFORE-IOR 0=",
+                            "_CHT-STAT-AFTER-IOR 0=",
+                            "_CHT-BFREE-AFTER _CHT-BFREE-BEFORE 2 - =",
+                            "_CHT-FFREE-AFTER _CHT-FFREE-BEFORE 1- =",
+                    ],
+                ),
+                (
+                    '_CHT-AUTHORITY-OK @ IF ." '
+                    'EXT4-LINEAR-HTREE-W27-AUTHORITY" THEN'
+                ),
+                *_forth_accumulated_conjunction(
+                    "_CHT-WRITER-OK",
+                    [
+                            "_CHT-WRITER _CHT-PROFILE-BASE =",
+                            (
+                                "_CHT-WRITER _EXT4-JWR.STATE + @ "
+                                "_EXT4-JWR-FAULTED ="
+                            ),
+                            (
+                                "_CHT-WRITER _EXT4-JWR.PHASE + @ "
+                                "_EXT4-JWP-CHECKPOINT-HOME ="
+                            ),
+                            "_CHT-WRITER _EXT4-JWR-VALID?",
+                            "_CHT-WRITER _EXT4-JWR.META-ACTIVE + @ 9 =",
+                            "_CHT-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                            "_CHT-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                            "_CHT-CTX _EXT4-C.J.HOME-WRITES + @ 4 =",
+                            "_CHT-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                            "_CHT-CTX _EXT4-C.RECOVERY + @ 0<>",
+                            "_CHT-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                            "_CHT-V V.FLAGS @ VFS-F-RO AND 0<>",
+                            "_CHT-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    ],
+                ),
+                (
+                    '_CHT-WRITER-OK @ IF ." '
+                    'EXT4-LINEAR-HTREE-W27-WRITER" THEN'
+                ),
+                *_forth_accumulated_conjunction(
+                    "_CHT-SCRUBBED-OK",
+                    [
+                            "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                            (
+                                "_XC-DIR-SNAPSHOT "
+                                "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_XC-ROOT-SNAPSHOT "
+                                "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_XC-ROOT-CURRENT "
+                                "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_XC-DIRECTORY-DESC _EXT4-DD-SIZE "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_XC-PARENT-SNAPSHOT "
+                                "_EXT4-STAGED-WRITE-INODE-SIZE "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_XC-OLD-INODE "
+                                "_EXT4-STAGED-WRITE-INODE-SIZE "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            (
+                                "_XC-CONVERT-PLAN _XC-CONVERT-PLAN-MAX "
+                                "_XC-CONVERT-PLAN-CELLS * CELLS "
+                                "_EXT4-BYTES-ZERO?"
+                            ),
+                            "_XC-CONVERT-HASH-BASE 24 _EXT4-BYTES-ZERO?",
+                            "_XC-INDEXED @ _XC-SHAPE-SET @ OR 0=",
+                            "_XC-INDEX-BASELINE @ 0=",
+                            (
+                                "_XC-CONVERTING @ "
+                                "_XC-CONVERT-BASELINE @ OR "
+                                "_XC-CONVERT-CANDIDATE-BASELINE @ OR 0="
+                            ),
+                            (
+                                "_XC-CONVERT-HASH-VERSION @ "
+                                "_XC-CONVERT-COUNT @ OR "
+                                "_XC-CONVERT-TOTAL @ OR "
+                                "_XC-CONVERT-SPLIT @ OR 0="
+                            ),
+                            (
+                                "_XC-CONVERT-A @ _XC-CONVERT-B @ OR "
+                                "_XC-CONVERT-NEW-FREE @ OR 0="
+                            ),
+                            (
+                                "_XC-CONVERT-LEFT @ "
+                                "_XC-CONVERT-RIGHT @ OR "
+                                "_XC-CONVERT-SEPARATOR @ OR 0="
+                            ),
+                            (
+                                "_XC-CONVERT-BASE-PARENT-GROUP @ "
+                                "_XC-CONVERT-BASE-PARENT-HOME @ OR "
+                                "_XC-CONVERT-BASE-PARENT-OFF @ OR 0="
+                            ),
+                            (
+                                "_XC-CONVERT-BASE-DIR-HOME @ "
+                                "_XC-CONVERT-A-GROUP @ OR "
+                                "_XC-CONVERT-A-BITMAP-HOME @ OR 0="
+                            ),
+                            (
+                                "_XC-CONVERT-A-GDT-HOME @ "
+                                "_XC-CONVERT-B-GROUP @ OR "
+                                "_XC-CONVERT-B-BITMAP-HOME @ OR 0="
+                            ),
+                            (
+                                "_XC-CONVERT-B-GDT-HOME @ "
+                                "_XC-CONVERT-BASE-A @ OR "
+                                "_XC-CONVERT-BASE-A-GROUP @ OR 0="
+                            ),
+                            (
+                                "_XC-CONVERT-BASE-A-BITMAP-HOME @ "
+                                "_XC-CONVERT-BASE-A-GDT-HOME @ OR "
+                                "_XC-CONVERT-BASE-B @ OR 0="
+                            ),
+                            (
+                                "_XC-CONVERT-BASE-B-GROUP @ "
+                                "_XC-CONVERT-BASE-B-BITMAP-HOME @ OR "
+                                "_XC-CONVERT-BASE-B-GDT-HOME @ OR 0="
+                            ),
+                            (
+                                "_XC-CONVERT-LEAF-IMAGE @ "
+                                "_XC-CONVERT-ROOT-GEN @ OR "
+                                "_XC-CONVERT-EXTENT-ROOT @ OR "
+                                "_XC-CONVERT-EXTENT-ENTRY @ OR 0="
+                            ),
+                            (
+                                "_XC-POST-CONVERTING @ "
+                                "_XC-POST-CONVERT-NEW-FREE @ OR 0="
+                            ),
+                            "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                            "_EXT4-MUTATION-OWNER-INO @ 0=",
+                            "_EXT4-MUTATION-MAP-TARGET @ 0=",
+                            "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
+                            "_EXT4-MUTATION-MAP-HITS @ 0=",
+                            "_EXT4-MUTATION-PROTOCOL-CTX @ 0=",
+                            "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0=",
+                            "_EXT4-JFO-CERT-SCOPE @ 0=",
+                            "_EXT4-JFO-CERT-VALID @ 0=",
+                            *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ],
+                ),
+                (
+                    '_CHT-PUBLISHED-OK @ 0= IF ." '
+                    'EXT4-LINEAR-HTREE-W27-PUBLISHED-FIRST-FAIL " '
+                    "_CHT-PUBLISHED-OK-FIRST-FAILURE @ . THEN"
+                ),
+                (
+                    '_CHT-AUTHORITY-OK @ 0= IF ." '
+                    'EXT4-LINEAR-HTREE-W27-AUTHORITY-FIRST-FAIL " '
+                    "_CHT-AUTHORITY-OK-FIRST-FAILURE @ . THEN"
+                ),
+                (
+                    '_CHT-WRITER-OK @ 0= IF ." '
+                    'EXT4-LINEAR-HTREE-W27-WRITER-FIRST-FAIL " '
+                    "_CHT-WRITER-OK-FIRST-FAILURE @ . THEN"
+                ),
+                (
+                    '_CHT-SCRUBBED-OK @ 0= IF ." '
+                    'EXT4-LINEAR-HTREE-W27-SCRUBBED-FIRST-FAIL " '
+                    "_CHT-SCRUBBED-OK-FIRST-FAILURE @ . THEN"
+                ),
+                (
+                    '_CHT-SCRUBBED-OK @ IF ." '
+                    'EXT4-LINEAR-HTREE-W27-SCRUBBED" THEN'
+                ),
+            ],
+            patches=source_patches,
+            write_faults_by_ordinal={
+                second_leaf_ordinal: {
+                    "stage": "media",
+                    "sector_index": tear_sector,
+                    "byte_index": tear_offset,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+            max_steps=1_600_000_000,
+        )
+        for marker in (
+            "EXT4-LINEAR-HTREE-W27-PUBLISHED",
+            "EXT4-LINEAR-HTREE-W27-AUTHORITY",
+            "EXT4-LINEAR-HTREE-W27-WRITER",
+            "EXT4-LINEAR-HTREE-W27-SCRUBBED",
+        ):
+            _assert_emitted(output, marker)
+        assert failed_trace == success_trace[: second_leaf_event + 1]
+        assert _read_ext4_home(
+            faulted, second_leaf_home, block_size=block_size
+        ) == expected_torn_second_leaf
+        for key in (
+            "new_inode_home",
+            "parent_inode_home",
+            "root_home",
+            "leaf_0",
+        ):
+            home, _, expected = expected_homes[key]
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == expected
+        for key in ("block_bitmap_home", "gdt_home", "inode_bitmap_home"):
+            home, original, _ = expected_homes[key]
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == original
+        faulted_super, _, _ = _ext4_inode_record(faulted, 2)
+        observed_free_blocks = struct.unpack_from("<I", faulted_super, 0x0C)[
+            0
+        ] | (struct.unpack_from("<I", faulted_super, 0x158)[0] << 32)
+        assert observed_free_blocks == free_blocks_before
+        assert struct.unpack_from("<I", faulted_super, 0x10)[0] == (
+            free_inodes_before
+        )
+        for home, original in untouched.items():
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == original
+
+        _, recovery_trace, recovery_sha256 = _staged_create_recovery_view(
+            faulted,
+            recovered,
+            expected_present=True,
+            expected_free_inodes=free_inodes_after,
+            expected_home_writes=9,
+            expected_replayed=True,
+            prefix="_CHT-R",
+            marker="EXT4-LINEAR-HTREE-W27-RECOVERED",
+            object_path="/fixture/new.txt",
+            parent_path="/fixture",
+            expected_parent_size=3072,
+            expected_parent_blocks=6,
+            expected_free_blocks=free_blocks_after,
+            expected_inode_number=18,
+            expected_generation=1,
+        )
+        for key, (home, _, expected) in expected_homes.items():
+            if key != "super_home":
+                assert len(
+                    _write_ordinals_for_ext4_home(
+                        recovery_trace, home, block_size=block_size
+                    )
+                ) == 1
+            assert _read_ext4_home(
+                recovered, home, block_size=block_size
+            ) == expected
+        for home, original in untouched.items():
+            assert _read_ext4_home(
+                recovered, home, block_size=block_size
+            ) == original
+        _assert_e2fsck_clean(recovered, jbd2_toolchain)
+
+        _, stable_trace, stable_sha256 = _staged_create_recovery_view(
+            recovered,
+            stable,
+            expected_present=True,
+            expected_free_inodes=free_inodes_after,
+            expected_home_writes=0,
+            expected_replayed=False,
+            prefix="_CHT-S",
+            marker="EXT4-LINEAR-HTREE-W27-STABLE",
+            object_path="/fixture/new.txt",
+            parent_path="/fixture",
+            expected_parent_size=3072,
+            expected_parent_blocks=6,
+            expected_free_blocks=free_blocks_after,
+            expected_inode_number=18,
+            expected_generation=1,
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+        for home, _, expected in expected_homes.values():
+            assert _read_ext4_home(
+                stable, home, block_size=block_size
+            ) == expected
+        for home, original in untouched.items():
+            assert _read_ext4_home(
+                stable, home, block_size=block_size
+            ) == original
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
+@pytest.fixture(scope="session")
 def staged_public_indexed_create_fixture(
     extent_writer_activation_fixture: dict[str, object],
     jbd2_toolchain: dict[str, object],
@@ -66023,6 +68278,9 @@ def _staged_create_recovery_view(
     parent_path: str | None = None,
     expected_parent_size: int | None = None,
     expected_parent_blocks: int | None = None,
+    expected_free_blocks: int | None = None,
+    expected_inode_number: int = 33,
+    expected_generation: int = 1,
 ) -> tuple[str, tuple[tuple[str, int, int], ...], str]:
     """Recover, inspect, and cleanly unmount one CREATE crash view."""
     seconds, milliseconds = divmod(_STAGED_APPEND_EPOCH_MS, 1000)
@@ -66070,9 +68328,9 @@ def _staged_create_recovery_view(
             f"{prefix}-RESOLVE-IOR 0=",
             f"{prefix}-D 0<>",
             f"{prefix}-VN VN.TYPE @ VFS-T-FILE =",
-            f"{prefix}-VN VN.BID @ 33 =",
-            f"{prefix}-VN VN.BDATA @ 33 =",
-            f"{prefix}-VN VN.GEN @ 1 =",
+            f"{prefix}-VN VN.BID @ {expected_inode_number} =",
+            f"{prefix}-VN VN.BDATA @ {expected_inode_number} =",
+            f"{prefix}-VN VN.GEN @ {expected_generation} =",
             f"{prefix}-VN VN.MODE @ 0x81B6 =",
             f"{prefix}-VN VN.SIZE-LO @ 0=",
             f"{prefix}-VN VN.SIZE-HI @ 0=",
@@ -66122,6 +68380,7 @@ def _staged_create_recovery_view(
                 f"CONSTANT {prefix}-STAT-IOR"
             ),
             f"{prefix}-STAT VSF.FFREE @ CONSTANT {prefix}-FREE",
+            f"{prefix}-STAT VSF.BFREE @ CONSTANT {prefix}-BFREE",
             (
                 _forth_conjunction(
                     [
@@ -66161,6 +68420,14 @@ def _staged_create_recovery_view(
                         ),
                         f"{prefix}-STAT-IOR 0=",
                         f"{prefix}-FREE {expected_free_inodes} =",
+                        *(
+                            [
+                                f"{prefix}-BFREE "
+                                f"{expected_free_blocks} ="
+                            ]
+                            if expected_free_blocks is not None
+                            else []
+                        ),
                         *parent_checks,
                         *object_checks,
                     ]

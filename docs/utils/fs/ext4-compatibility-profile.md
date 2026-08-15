@@ -88,18 +88,26 @@ selects and reauthenticates the governing leaf, edits and repairs only its
 resident key, and splits it while the resident root has index capacity. The
 staged `CREATE` capability now inserts one empty regular file into
 authenticated slack in either an existing one-block linear directory or an
-existing depth-zero HTree leaf. It allocates from an initialized inode bitmap
-and commits the selected directory block, parent/new inode records, inode
-bitmap, descriptor, and primary-super accounting atomically. Indexed admission
+existing depth-zero HTree leaf. A full admitted one-block linear parent instead
+converts atomically to a checksummed depth-zero HTree root and two hash-sorted
+leaves, allocating exactly two blocks and publishing exact three-block parent
+size, sector, and extent state. It allocates from an initialized inode bitmap
+and commits the selected namespace blocks, parent/new inode records,
+allocation bitmaps, descriptors, and primary-super accounting atomically.
+Indexed admission
 binds live hash policy, validates every leaf and exact interval, rejects
 duplicates globally, proves the selected leaf through a complete map audit,
 and reauthenticates the parent inode location plus exact root/leaf/insertion
 snapshots across cold, dry, and live passes. A committed selected-leaf tear
 retains the public object and replays all six homes before a write-free stable
 remount, without rewriting the root, other leaves, external extent node, or
-block bitmap. The credential and inheritance envelope remains explicit:
+block bitmap. Linear conversion binds identical hash and source authority
+across all three planning passes, derives `8/0/0` through `12/0/0` metadata
+credit from actual home deduplication, and proves the old root plus both
+allocation candidates in one filesystem-wide range scope. The credential and
+inheritance envelope remains explicit:
 root-owned, non-setgid parents without inline or external xattrs/default ACLs
-create root-owned mode-0666 files. Directory growth/splitting, indexed LINK or
+create root-owned mode-0666 files. Indexed full-leaf splitting, indexed LINK or
 MKDIR, wider indexed-map policy, and lazy inode-table initialization remain
 unsupported. The first shrink `TRUNCATE` slice is now public as well:
 it accepts a strict new EOF inside the old final initialized block, journals
@@ -168,8 +176,8 @@ parent link, and rewrites the child's `..` entry and checksum under exact
 descriptors, and current-working-directory object. Same-parent directories,
 victims, and replacement remain unsupported. Singleton-modern-orphan final-
 link removal is operation-admitted for both closed and descriptor-retained
-targets. Existing depth-zero HTree CREATE is operation-admitted; atomic
-linear-to-HTree growth and indexed full-leaf mutation are the next delivery
+targets. Existing depth-zero HTree CREATE and atomic one-block linear-to-HTree
+growth are operation-admitted; indexed full-leaf mutation is the next delivery
 phase. Extent-tree
 depth and indexed-directory HTree depth are
 independent ratchets. Broaden either only when the next operation or a pinned
@@ -2070,7 +2078,21 @@ lines. Existing HTree CREATE now measures 1,476,019,687 of the narrowly raised
 1.48-billion guard across 3,535 packed lines; the preceding authenticated
 directory-descriptor build had already used 1,447,937,156 of 1.45 billion, so
 the increase reflects completed cold-source work rather than a journey or
-harness failure.
+harness failure. Atomic linear-to-HTree conversion measures 1,544,762,450 of
+the current 1.55-billion cold-source guard across 3,646 packed lines. Its
+canonical nine-home journey completes in 1,552,268,603 of 1.6 billion steps;
+the nonadjacent cross-group ten-home form completes in 1,673,299,481 of the
+narrow 1.70-billion guard. The latter requires two distinct block bitmaps and
+three singleton parent extents, plus a complete owner proof of the 6,841-block
+unwritten ballast extent used to force group-one selection. The additional
+budget therefore measures real topology rather than a fixture or harness
+failure. In the canonical nine-home case, a one-short exact profile refuses
+without media writes. A preexisting owner-range scope around the first
+candidate returns `BUSY` before preparation and remains byte-for-byte intact.
+A committed W27 second-leaf tear reaches its fault in 1,376,638,284 steps,
+replays all nine homes in 209,835,075, and reaches a byte-stable, write-free
+remount in 51,001,379. Both clean results pass pinned `debugfs` and read-only
+e2fsprogs 1.47.4 `e2fsck`.
 
 The public `UNLINK` lifetimes are regular-file removals from an
 authenticated one-block linear directory. The staged binding alone advertises
@@ -2422,8 +2444,8 @@ descriptor journey measures 4,549,770 steps.
 
 `VFS-CAP-RENAME-REPLACE` remains absent. Victims, replacement, and same-parent
 directory moves remain gated. Qualified singleton-modern-orphan final-link
-lifetime closure is complete. The next delivery phase is directory growth and
-indexed-directory mutation.
+lifetime closure is complete. One-block linear-to-HTree growth is complete;
+the next delivery phase is full-leaf mutation in an existing indexed parent.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
