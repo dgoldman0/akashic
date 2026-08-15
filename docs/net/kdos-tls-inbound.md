@@ -234,8 +234,17 @@ MEGAPAD_ROOT=/path/to/megapad-secure-server-transport \
   python3 -m unittest local_testing.test_kdos_tls_inbound_failures
 ```
 
-The checked source runs on the matching migration worktrees completed in
-1,169,609,877 guest steps (29.41 s) for the two-client HCONN path and
-951,435,597 guest steps (24.67 s) for failure/recovery. Both used one core,
-128 MiB external memory, and the unchanged 1.5-billion-step/180-second
-capstone ceiling.
+The initial checked source runs at Akashic `af1fc81`, before retirement of the
+temporary lower coordinator, completed in 1,169,609,877 guest steps (29.41 s)
+for the two-client HCONN path and 951,435,597 guest steps (24.67 s) for
+failure/recovery.
+
+Final closure reran that unchanged Akashic code against MegaPad `c1d4f32`,
+where the coordinator, listener lease cell, lock/scratch state, compatibility
+alias, and redundant tests are absent. The two-client HCONN path passed in
+1,119,547,893 guest steps (27.92 s), and failure/recovery passed in 905,769,707
+steps (23.14 s). The shared established-port, outbound, inbound, and HCONN
+source profiles also passed in 724,722,756, 780,124,067, 780,424,304, and
+1,043,866,636 steps respectively. All final runs used one core, 128 MiB
+external memory, and the unchanged 1.5-billion-step/180-second capstone
+ceiling. This is the qualified cross-repository handback pair.
