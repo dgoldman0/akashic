@@ -100,30 +100,42 @@ splitting while the root retains index capacity. The staged binding also
 publishes crash-closed regular-file `CREATE`. It allocates one inode from an
 initialized inode group and inserts an empty root-owned mode-0666 file into
 authenticated slack in either a one-block linear directory or an existing
-depth-zero HTree leaf. A full, otherwise admitted one-block linear parent is
-converted atomically into a canonical depth-zero HTree root and two packed
-leaves. Conversion allocates exactly two blocks, builds a one-to-three-entry
+depth-zero HTree leaf. If the hash-selected leaf is full, the same operation
+may split it under the bound seeded half-MD4 policy while the depth-zero HTree
+root retains an entry slot. It hashes and stably sorts the old live records
+with the pending name, rewrites the old
+leaf and one newly allocated checksummed leaf, inserts their separator into
+the checksummed root, and grows the parent by exactly one filesystem block.
+The admitted parent maps are either an inline depth-zero extent root or a
+singleton resident depth-one root naming one checksummed external extent leaf;
+the EOF extent must either coalesce with the new block or leave an extent slot
+for it. Exact credit follows the deduplicated homes. The canonical depth-one
+qualification uses ten metadata homes, while the same topology in a
+nine-metadata profile refuses without activation or media writes. A full,
+otherwise admitted one-block linear parent is converted atomically into a
+canonical depth-zero HTree root and two packed leaves. Conversion allocates
+exactly two blocks, builds a one-to-three-entry
 inline parent extent root according to physical adjacency, and derives exact
 `8/0/0` through `12/0/0` credit from the distinct inode, directory, bitmap,
-descriptor, and primary-superblock homes. Full-leaf splitting in an already
-indexed parent, directory xattrs/default ACLs, lazy inode-group initialization,
-and non-root credential policy still refuse before publication. The staged
-binding also publishes strict same-block shrink
+descriptor, and primary-superblock homes. Directory xattrs/default ACLs, lazy
+inode-group initialization, and non-root credential policy still refuse before
+publication. The staged binding also publishes strict same-block shrink
 `TRUNCATE` as exact `2/0/0`, one-block release to zero through the modern-
 orphan cleanup path, both closed-file `UNLINK` lifetimes, bounded one-block
 `MKDIR`, and bounded `RMDIR` of the exact canonical empty child produced by
 MKDIR. RMDIR releases the inode and directory block, decrements parent links
 and `used_dirs`, and revokes the unchanged freed child block in an exact
-`6/0/1` through `8/0/1` transaction. Depth-positive truncation, indexed
-full-leaf growth, and indexed `LINK`/`MKDIR` remain outside those envelopes.
+`6/0/1` through `8/0/1` transaction. Depth-positive truncation, indexed HTree
+root-depth growth, and indexed `LINK`/`MKDIR` remain outside those envelopes.
 Bounded hard `LINK` adds one typed dirent, increments target `nlink`
 and ctime, and updates parent mtime/ctime in an exact deduplicated `2/0/0` or
 `3/0/0` transaction. Five focused LINK qualifications cover same- and
 cross-parent success, W7 precommit rollback, W17 committed replay, zero-write
 refusals, external filesystem checks, and a write-free byte-stable remount. The
-next directory ratchet is indexed full-leaf splitting while the depth-zero root
-still has entry capacity; HTree depth grows independently when that operation
-or a pinned corpus requires it. The
+next directory ratchet is HTree root-depth growth and broader indexed
+namespace mutation; indexed `LINK` and `MKDIR` remain separate gated slices.
+HTree depth grows independently when an operation or a pinned corpus requires
+it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate
 tears return zero, while committed W22 inode-home tears publish progress and
 replay four metadata homes without rewriting ordered data. In the distinct

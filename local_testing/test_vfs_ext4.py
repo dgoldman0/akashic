@@ -4278,7 +4278,10 @@ def build_snapshot():
     # distinct cold source stages.  This preserves the existing measured ext4
     # watchdog instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
-    max_ext4_source_steps = 1_550_000_000
+    # Indexed full-leaf splitting measures 1,592,943,041 cold source steps.
+    # Retain a narrow deterministic watchdog margin without conflating source
+    # compilation with the independently bounded recovery journey.
+    max_ext4_source_steps = 1_600_000_000
     bootstrap_steps = _feed_until_idle(system, bootstrap, max_crc_source_steps)
 
     def load_source_stage(
@@ -47605,6 +47608,92 @@ def test_staged_public_existing_extent_leaf_first_key_tear_replays_tree(
         stable.unlink(missing_ok=True)
 
 
+def test_extent_leaf_restamp_uses_2k_geometry_tail_offset(
+    canonical_images: dict[str, Path],
+) -> None:
+    """The 2 KiB extent checksum precedes, rather than ends, its tail."""
+    path = canonical_images["primary-2k-i256"]
+    inode_number = 13
+    generation = 0x1234_5678
+    root_generation = 0x89AB_CDEF
+    physical = 1204
+    sentinel = 0xA55A_5AA5
+    superblock, _, _ = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    entry_max = (block_size - 12) // 12
+    tail_offset = 12 + entry_max * 12
+    assert block_size == 2048
+    assert entry_max == 169
+    assert tail_offset == 2040
+    assert tail_offset + 8 == block_size
+
+    unstamped = bytearray(block_size)
+    struct.pack_into(
+        "<HHHHI", unstamped, 0, 0xF30A, 1, entry_max, 0, root_generation
+    )
+    struct.pack_into("<IHHI", unstamped, 12, 0, 1, 0, physical)
+    struct.pack_into("<I", unstamped, tail_offset + 4, sentinel)
+    expected = _extent_node_with_checksum(
+        superblock, inode_number, generation, unstamped
+    )
+    expected_checksum = struct.unpack_from("<I", expected, tail_offset)[0]
+    assert expected_checksum != 0
+    assert struct.unpack_from("<I", expected, tail_offset + 4)[0] == sentinel
+
+    output = run_forth(
+        path,
+        [
+            f"CREATE _R2-NODE {block_size} ALLOT",
+            f"_R2-NODE {block_size} 0 FILL",
+            "0xF30A _R2-NODE W!",
+            "1 _R2-NODE 2 + W!",
+            f"{entry_max} _R2-NODE 4 + W!",
+            "0 _R2-NODE 6 + W!",
+            f"0x{root_generation:08X} _R2-NODE 8 + L!",
+            "0 _R2-NODE 12 + L!",
+            "1 _R2-NODE 16 + W!",
+            "0 _R2-NODE 18 + W!",
+            f"{physical} _R2-NODE 20 + L!",
+            f"0x{sentinel:08X} _R2-NODE {tail_offset + 4} + L!",
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _R2-MOUNT-IOR CONSTANT _R2-V"
+            ),
+            "_R2-V _EXT4-CTX CONSTANT _R2-CTX",
+            "DEPTH CONSTANT _R2-DEPTH-BEFORE",
+            (
+                f"_R2-NODE {inode_number} 0x{generation:08X} _R2-CTX "
+                "_EXT4-RESTAMP-EXTENT-LEAF CONSTANT _R2-STAMP-IOR"
+            ),
+            "DEPTH CONSTANT _R2-DEPTH-AFTER",
+            "0 _R2-V VFS-UNMOUNT CONSTANT _R2-UNMOUNT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_R2-MOUNT-IOR 0=",
+                        "_R2-CTX _EXT4-C.BSIZE + @ 2048 =",
+                        "_R2-STAMP-IOR 0=",
+                        "_R2-DEPTH-AFTER _R2-DEPTH-BEFORE =",
+                        (
+                            f"_R2-NODE {tail_offset} + L@ "
+                            f"0x{expected_checksum:08X} ="
+                        ),
+                        (
+                            f"_R2-NODE {tail_offset + 4} + L@ "
+                            f"0x{sentinel:08X} ="
+                        ),
+                        "_R2-UNMOUNT-IOR 0=",
+                        "_R2-V V.LIFECYCLE @ VFS-L-UNMOUNTED =",
+                    ]
+                )
+                + ' IF ." EXT4-EXTENT-RESTAMP-2K-TAIL" THEN'
+            ),
+        ],
+        max_steps=100_000_000,
+    )
+    _assert_emitted(output, "EXT4-EXTENT-RESTAMP-2K-TAIL")
+
+
 def test_existing_extent_leaf_authority_detects_checksum_valid_change(
     read_side_image: Path,
     tmp_path: Path,
@@ -63210,6 +63299,1593 @@ def test_staged_vfs_linear_htree_second_leaf_tear_replays_all_nine_homes(
         stable.unlink(missing_ok=True)
 
 
+def test_indexed_split_inline_depth_zero_map_extend_and_append(
+    canonical_images: dict[str, Path],
+) -> None:
+    """Plan and apply both resident depth-zero extent-map edit shapes."""
+    path = canonical_images["primary-1k-i256"]
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _IM-MOUNT-IOR CONSTANT _IM-V"
+            ),
+            "_IM-V _EXT4-CTX CONSTANT _IM-CTX",
+            "_IM-CTX _XC-CTX !",
+            "_XC-PARENT-SNAPSHOT _EXT4-I.BLOCK + CONSTANT _IM-NODE",
+            ": _IM-RESET ( -- )",
+            (
+                "_XC-PARENT-SNAPSHOT _EXT4-STAGED-WRITE-INODE-SIZE "
+                "0 FILL"
+            ),
+            "_XC-DIRECTORY-DESC _EXT4-DD-SIZE 0 FILL",
+            "0xF30A _IM-NODE W!",
+            "2 _IM-NODE 2 + W!",
+            "4 _IM-NODE 4 + W!",
+            "0 _IM-NODE 6 + W!",
+            "0x11223344 _IM-NODE 8 + L!",
+            "0 _IM-NODE 12 + L!",
+            "1 _IM-NODE 16 + W!",
+            "0 _IM-NODE 18 + W!",
+            "100 _IM-NODE 20 + L!",
+            "1 _IM-NODE 24 + L!",
+            "2 _IM-NODE 28 + W!",
+            "0 _IM-NODE 30 + W!",
+            "200 _IM-NODE 32 + L!",
+            "3072 _XC-DIRECTORY-DESC _EXT4-DD.SIZE + !",
+            "3 _XC-DIRECTORY-DESC _EXT4-DD.LOGICAL-BLOCKS + !",
+            "6 _XC-DIRECTORY-DESC _EXT4-DD.SECTORS + !",
+            "0 _XC-INDEX-BASELINE !",
+            ";",
+            "_IM-RESET",
+            "DEPTH CONSTANT _IM-E-DEPTH-BEFORE",
+            (
+                "_XC-INDEX-CAPTURE-MAP "
+                "CONSTANT _IM-E-CAPTURE-IOR"
+            ),
+            "202 _XC-INDEX-NEW-HOME !",
+            (
+                "_XC-INDEX-PLAN-MAP-EDIT "
+                "CONSTANT _IM-E-PLAN-IOR"
+            ),
+            (
+                "_XC-PARENT-SNAPSHOT _XC-APPLY-INDEX-SPLIT-PARENT "
+                "CONSTANT _IM-E-APPLY-IOR"
+            ),
+            "DEPTH CONSTANT _IM-E-DEPTH-AFTER",
+            *_forth_accumulated_conjunction(
+                "_IM-EXTEND-OK",
+                [
+                    "_IM-MOUNT-IOR 0=",
+                    "_IM-CTX _EXT4-C.BSIZE + @ 1024 =",
+                    "_IM-E-CAPTURE-IOR 0=",
+                    "_IM-E-PLAN-IOR 0=",
+                    "_IM-E-APPLY-IOR 0=",
+                    "_IM-E-DEPTH-AFTER _IM-E-DEPTH-BEFORE =",
+                    "_XC-INDEX-MAP-DEPTH @ 0=",
+                    "_XC-INDEX-MAP-HOME @ 0=",
+                    "_XC-INDEX-MAP-NODE @ _IM-NODE =",
+                    "_XC-INDEX-MAP-COUNT @ 2 =",
+                    "_XC-INDEX-MAP-MAX @ 4 =",
+                    "_XC-INDEX-MAP-LAST-LOGICAL @ 1 =",
+                    "_XC-INDEX-MAP-LAST-LEN @ 2 =",
+                    "_XC-INDEX-MAP-LAST-PHYSICAL @ 200 =",
+                    "_XC-INDEX-MAP-EDIT @ _XC-INDEX-MAP-EXTEND =",
+                    "_XC-INDEX-NEW-LOGICAL @ 3 =",
+                    "_XC-INDEX-NEW-SIZE @ 4096 =",
+                    "_XC-INDEX-NEW-SECTORS @ 8 =",
+                    "_XC-NEW-INODE-PTR @ _XC-PARENT-SNAPSHOT =",
+                    "_XC-PARENT-SNAPSHOT _EXT4-I.SIZE-LO + L@ 4096 =",
+                    "_XC-PARENT-SNAPSHOT _EXT4-I.SIZE-HI + L@ 0=",
+                    "_XC-PARENT-SNAPSHOT _EXT4-I.BLOCKS-LO + L@ 8 =",
+                    "_XC-PARENT-SNAPSHOT _EXT4-I.BLOCKS-HI + W@ 0=",
+                    "_IM-NODE W@ 0xF30A =",
+                    "_IM-NODE 2 + W@ 2 =",
+                    "_IM-NODE 4 + W@ 4 =",
+                    "_IM-NODE 6 + W@ 0=",
+                    "_IM-NODE 8 + L@ 0x11223344 =",
+                    "_IM-NODE 24 + L@ 1 =",
+                    "_IM-NODE 28 + W@ 3 =",
+                    "_IM-NODE 30 + W@ 0=",
+                    "_IM-NODE 32 + L@ 200 =",
+                    "_IM-NODE 36 + 12 _EXT4-BYTES-ZERO?",
+                ],
+            ),
+            "_IM-RESET",
+            "DEPTH CONSTANT _IM-A-DEPTH-BEFORE",
+            (
+                "_XC-INDEX-CAPTURE-MAP "
+                "CONSTANT _IM-A-CAPTURE-IOR"
+            ),
+            "300 _XC-INDEX-NEW-HOME !",
+            (
+                "_XC-INDEX-PLAN-MAP-EDIT "
+                "CONSTANT _IM-A-PLAN-IOR"
+            ),
+            (
+                "_XC-PARENT-SNAPSHOT _XC-APPLY-INDEX-SPLIT-PARENT "
+                "CONSTANT _IM-A-APPLY-IOR"
+            ),
+            "DEPTH CONSTANT _IM-A-DEPTH-AFTER",
+            *_forth_accumulated_conjunction(
+                "_IM-APPEND-OK",
+                [
+                    "_IM-A-CAPTURE-IOR 0=",
+                    "_IM-A-PLAN-IOR 0=",
+                    "_IM-A-APPLY-IOR 0=",
+                    "_IM-A-DEPTH-AFTER _IM-A-DEPTH-BEFORE =",
+                    "_XC-INDEX-MAP-DEPTH @ 0=",
+                    "_XC-INDEX-MAP-HOME @ 0=",
+                    "_XC-INDEX-MAP-NODE @ _IM-NODE =",
+                    "_XC-INDEX-MAP-COUNT @ 2 =",
+                    "_XC-INDEX-MAP-MAX @ 4 =",
+                    "_XC-INDEX-MAP-LAST-LOGICAL @ 1 =",
+                    "_XC-INDEX-MAP-LAST-LEN @ 2 =",
+                    "_XC-INDEX-MAP-LAST-PHYSICAL @ 200 =",
+                    "_XC-INDEX-MAP-EDIT @ _XC-INDEX-MAP-APPEND =",
+                    "_XC-INDEX-NEW-LOGICAL @ 3 =",
+                    "_XC-INDEX-NEW-SIZE @ 4096 =",
+                    "_XC-INDEX-NEW-SECTORS @ 8 =",
+                    "_XC-NEW-INODE-PTR @ _XC-PARENT-SNAPSHOT =",
+                    "_XC-PARENT-SNAPSHOT _EXT4-I.SIZE-LO + L@ 4096 =",
+                    "_XC-PARENT-SNAPSHOT _EXT4-I.SIZE-HI + L@ 0=",
+                    "_XC-PARENT-SNAPSHOT _EXT4-I.BLOCKS-LO + L@ 8 =",
+                    "_XC-PARENT-SNAPSHOT _EXT4-I.BLOCKS-HI + W@ 0=",
+                    "_IM-NODE W@ 0xF30A =",
+                    "_IM-NODE 2 + W@ 3 =",
+                    "_IM-NODE 4 + W@ 4 =",
+                    "_IM-NODE 6 + W@ 0=",
+                    "_IM-NODE 8 + L@ 0x11223344 =",
+                    "_IM-NODE 24 + L@ 1 =",
+                    "_IM-NODE 28 + W@ 2 =",
+                    "_IM-NODE 30 + W@ 0=",
+                    "_IM-NODE 32 + L@ 200 =",
+                    "_IM-NODE 36 + L@ 3 =",
+                    "_IM-NODE 40 + W@ 1 =",
+                    "_IM-NODE 42 + W@ 0=",
+                    "_IM-NODE 44 + L@ 300 =",
+                    "_IM-NODE 48 + 12 _EXT4-BYTES-ZERO?",
+                ],
+            ),
+            "0 _IM-V VFS-UNMOUNT CONSTANT _IM-UNMOUNT-IOR",
+            (
+                "_IM-EXTEND-OK @ _IM-APPEND-OK @ AND "
+                "_IM-UNMOUNT-IOR 0= AND "
+                "_IM-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                'IF ." EXT4-INDEX-SPLIT-INLINE-MAP-EDITS" THEN'
+            ),
+        ],
+        max_steps=100_000_000,
+    )
+    _assert_emitted(output, "EXT4-INDEX-SPLIT-INLINE-MAP-EDITS")
+
+
+def _indexed_split_half_md4_hash(
+    superblock: bytes, name: bytes
+) -> tuple[int, int]:
+    """Independently compute the signed seeded ext4 half-MD4 hash."""
+    mask = 0xFFFF_FFFF
+
+    def rotate(value: int, shift: int) -> int:
+        value &= mask
+        return ((value << shift) | (value >> (32 - shift))) & mask
+
+    def choose(x: int, y: int, z: int) -> int:
+        return z ^ (x & (y ^ z))
+
+    def majority(x: int, y: int, z: int) -> int:
+        return (x & y) | (x & z) | (y & z)
+
+    def parity(x: int, y: int, z: int) -> int:
+        return x ^ y ^ z
+
+    def words(message: bytes, remaining: int) -> list[int]:
+        pad = remaining & 0xFF
+        pad |= pad << 8
+        pad |= pad << 16
+        result = [pad & mask] * 8
+        value = pad
+        for index, byte in enumerate(message[:32]):
+            if index % 4 == 0:
+                value = pad
+            signed = byte if byte < 0x80 else byte - 0x100
+            value = (signed + (value << 8)) & mask
+            result[index // 4] = value
+        return result
+
+    def transform(state: list[int], block: list[int]) -> list[int]:
+        a, b, c, d = state
+
+        def round1(
+            target: int, x: int, y: int, z: int, word: int, shift: int
+        ) -> int:
+            return rotate(target + choose(x, y, z) + word, shift)
+
+        def round2(
+            target: int, x: int, y: int, z: int, word: int, shift: int
+        ) -> int:
+            return rotate(
+                target + majority(x, y, z) + word + 0x5A82_7999,
+                shift,
+            )
+
+        def round3(
+            target: int, x: int, y: int, z: int, word: int, shift: int
+        ) -> int:
+            return rotate(
+                target + parity(x, y, z) + word + 0x6ED9_EBA1,
+                shift,
+            )
+
+        a = round1(a, b, c, d, block[0], 3)
+        d = round1(d, a, b, c, block[1], 7)
+        c = round1(c, d, a, b, block[2], 11)
+        b = round1(b, c, d, a, block[3], 19)
+        a = round1(a, b, c, d, block[4], 3)
+        d = round1(d, a, b, c, block[5], 7)
+        c = round1(c, d, a, b, block[6], 11)
+        b = round1(b, c, d, a, block[7], 19)
+
+        a = round2(a, b, c, d, block[1], 3)
+        d = round2(d, a, b, c, block[3], 5)
+        c = round2(c, d, a, b, block[5], 9)
+        b = round2(b, c, d, a, block[7], 13)
+        a = round2(a, b, c, d, block[0], 3)
+        d = round2(d, a, b, c, block[2], 5)
+        c = round2(c, d, a, b, block[4], 9)
+        b = round2(b, c, d, a, block[6], 13)
+
+        a = round3(a, b, c, d, block[3], 3)
+        d = round3(d, a, b, c, block[7], 9)
+        c = round3(c, d, a, b, block[2], 11)
+        b = round3(b, c, d, a, block[6], 15)
+        a = round3(a, b, c, d, block[1], 3)
+        d = round3(d, a, b, c, block[5], 9)
+        c = round3(c, d, a, b, block[0], 11)
+        b = round3(b, c, d, a, block[4], 15)
+        return [
+            (state[0] + a) & mask,
+            (state[1] + b) & mask,
+            (state[2] + c) & mask,
+            (state[3] + d) & mask,
+        ]
+
+    assert len(superblock) == 1024
+    assert name
+    state = list(struct.unpack_from("<4I", superblock, 0xEC))
+    assert any(state)
+    remaining = len(name)
+    offset = 0
+    while remaining > 0:
+        state = transform(
+            state,
+            words(name[offset : offset + 32], remaining),
+        )
+        remaining -= 32
+        offset += 32
+    major = state[1] & 0xFFFF_FFFE
+    if major == 0xFFFF_FFFE:
+        major = 0xFFFF_FFFC
+    return major, state[2]
+
+
+def _indexed_split_packed_leaf(
+    superblock: bytes,
+    *,
+    inode_number: int,
+    generation: int,
+    records: tuple[tuple[int, int, bytes], ...],
+) -> bytes:
+    """Build one packed checksummed HTree leaf from exact live records."""
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert records
+    result = bytearray(block_size)
+    offset = 0
+    for index, (entry_inode, file_type, name) in enumerate(records):
+        used = (8 + len(name) + 3) & ~3
+        record_length = used
+        if index == len(records) - 1:
+            record_length = block_size - 12 - offset
+        assert record_length >= used
+        struct.pack_into(
+            "<IHBB",
+            result,
+            offset,
+            entry_inode,
+            record_length,
+            len(name),
+            file_type,
+        )
+        result[offset + 8 : offset + 8 + len(name)] = name
+        offset += record_length
+    assert offset == block_size - 12
+    struct.pack_into("<IHBB", result, block_size - 12, 0, 12, 0, 0xDE)
+    return _linear_directory_block_with_checksum(
+        superblock,
+        inode_number,
+        generation,
+        result,
+    )
+
+
+@pytest.fixture(scope="session")
+def staged_public_indexed_leaf_split_prestate(
+    extent_writer_activation_fixture: dict[str, object],
+) -> dict[str, object]:
+    """Author a full selected leaf and its independent split after-images."""
+    path = extent_writer_activation_fixture["image"]
+    source_patches = extent_writer_activation_fixture["source_patches"]
+    activation_trace = extent_writer_activation_fixture["success_trace"]
+    dirty_super = extent_writer_activation_fixture["dirty_super"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(dirty_super, bytes)
+
+    parent_number = 27
+    child_number = 33
+    root_home = 1355
+    selected_leaf_home = 1357
+    map_node_home = 1365
+    new_logical = 4
+    layout = _ext4_recovery_layout(path)
+    superblock, parent_inode, parent_offset = _ext4_inode_record(
+        path, parent_number
+    )
+    _, old_child_inode, child_offset = _ext4_inode_record(path, child_number)
+    block_size = layout["block_size"]
+    inode_size = layout["inode_size"]
+    parent_home, parent_block_offset = divmod(parent_offset, block_size)
+    child_home, child_block_offset = divmod(child_offset, block_size)
+    parent_generation = struct.unpack_from("<I", parent_inode, 0x64)[0]
+    block_bitmap_home = layout["block_bitmap"]
+    inode_bitmap_home = layout["inode_bitmap"]
+    gdt_home = layout["primary_gdt"]
+    super_home = layout["primary_super"]
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", superblock, 0x158)[0] << 32
+    )
+    free_inodes_before = struct.unpack_from("<I", superblock, 0x10)[0]
+    group_counts_before = _ext4_group_counts(path, 0)
+
+    assert dirty_super == _ext4_super_with_checksum(dirty_super)
+    assert struct.unpack_from("<I", dirty_super, 0x60)[0] & 0x04
+    assert (
+        struct.unpack_from("<I", dirty_super, 0x0C)[0]
+        | (struct.unpack_from("<I", dirty_super, 0x158)[0] << 32)
+    ) == free_blocks_before
+    assert struct.unpack_from("<I", dirty_super, 0x10)[0] == (
+        free_inodes_before
+    )
+
+    assert block_size == 1024
+    assert inode_size == 256
+    assert parent_generation == 0
+    assert old_child_inode == bytes(inode_size)
+    assert (child_home, child_block_offset) == (283, 0)
+    assert (parent_home, parent_block_offset) == (281, 512)
+    assert struct.unpack_from("<I", parent_inode, 0x04)[0] == 4096
+    assert struct.unpack_from("<I", parent_inode, 0x1C)[0] == 10
+    assert struct.unpack_from("<I", parent_inode, 0x20)[0] == 0x81000
+    assert struct.unpack_from("<HHHHI", parent_inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        1,
+        0,
+    )
+    assert struct.unpack_from("<IIHH", parent_inode, 0x34) == (
+        0,
+        map_node_home,
+        0,
+        0,
+    )
+
+    original_bitmap = _patched_ext4_home(
+        path, source_patches, block_bitmap_home, block_size=block_size
+    )
+    group_first = layout["first"]
+    group_limit = min(
+        layout["blocks"], group_first + layout["blocks_per_group"]
+    )
+    candidate = next(
+        block
+        for block in range(group_first, group_limit)
+        if not original_bitmap[(block - group_first) // 8]
+        & (1 << ((block - group_first) % 8))
+    )
+    assert candidate == 1364
+    assert _ext4_block_allocation_state(path, (candidate,)) == {
+        candidate: False
+    }
+
+    original_selected = _patched_ext4_home(
+        path, source_patches, selected_leaf_home, block_size=block_size
+    )
+    selected_entries = _checked_linear_directory_entries(
+        superblock,
+        parent_number,
+        parent_generation,
+        original_selected,
+    )
+    assert len(selected_entries) == 34
+    assert selected_entries[0][4] == b"candidate-000069"
+    assert selected_entries[-1][4] == b"collision-068446"
+    assert all(len(entry[4]) == 16 for entry in selected_entries)
+
+    full_leaf = bytearray(block_size)
+    offset = 0
+    for index, (_, entry_inode, _, file_type, name) in enumerate(
+        selected_entries
+    ):
+        record_length = 24
+        if index == len(selected_entries) - 1:
+            record_length = 28
+        struct.pack_into(
+            "<IHBB",
+            full_leaf,
+            offset,
+            entry_inode,
+            record_length,
+            len(name),
+            file_type,
+        )
+        full_leaf[offset + 8 : offset + 8 + len(name)] = name
+        offset += record_length
+    assert offset == 820
+    while offset < block_size - 12:
+        struct.pack_into("<IHBB", full_leaf, offset, 0, 12, 0, 0)
+        offset += 12
+    assert offset == block_size - 12
+    struct.pack_into("<IHBB", full_leaf, block_size - 12, 0, 12, 0, 0xDE)
+    full_leaf = bytearray(
+        _linear_directory_block_with_checksum(
+            superblock,
+            parent_number,
+            parent_generation,
+            full_leaf,
+        )
+    )
+    full_entries = _checked_linear_directory_entries(
+        superblock,
+        parent_number,
+        parent_generation,
+        bytes(full_leaf),
+    )
+    assert len(full_entries) == 34
+    assert full_entries[-1][2] == 28
+
+    hashed_records = [
+        (
+            *_indexed_split_half_md4_hash(superblock, entry[4]),
+            (8 + len(entry[4]) + 3) & ~3,
+            entry[1],
+            entry[3],
+            entry[4],
+        )
+        for entry in full_entries
+    ]
+    hashed_records.append(
+        (
+            *_indexed_split_half_md4_hash(superblock, b"new.txt"),
+            16,
+            child_number,
+            1,
+            b"new.txt",
+        )
+    )
+    hashed_records.sort(key=lambda record: (record[0], record[1]))
+    assert hashed_records[9] == (
+        0x1248_5C58,
+        0x772B_2796,
+        16,
+        child_number,
+        1,
+        b"new.txt",
+    )
+    total_used = sum(record[2] for record in hashed_records)
+    split_candidates = tuple(
+        (
+            abs(
+                sum(record[2] for record in hashed_records[:index]) * 2
+                - total_used
+            ),
+            index,
+        )
+        for index in range(1, len(hashed_records))
+        if sum(record[2] for record in hashed_records[:index]) <= 1012
+        and sum(record[2] for record in hashed_records[index:]) <= 1012
+    )
+    split_index = min(split_candidates)[1]
+    left_records = hashed_records[:split_index]
+    right_records = hashed_records[split_index:]
+    separator = right_records[0][0]
+    if left_records[-1][0] == separator:
+        separator |= 1
+    assert total_used == 832
+    assert split_index == 18
+    assert sum(record[2] for record in left_records) == 424
+    assert sum(record[2] for record in right_records) == 408
+    assert separator == 0x1A48_8646
+    assert right_records[0][5] == b"candidate-000079"
+
+    expected_selected = _indexed_split_packed_leaf(
+        superblock,
+        inode_number=parent_number,
+        generation=parent_generation,
+        records=tuple(
+            (record[3], record[4], record[5]) for record in left_records
+        ),
+    )
+    expected_candidate = _indexed_split_packed_leaf(
+        superblock,
+        inode_number=parent_number,
+        generation=parent_generation,
+        records=tuple(
+            (record[3], record[4], record[5]) for record in right_records
+        ),
+    )
+    assert any(
+        entry[4] == b"new.txt"
+        for entry in _checked_linear_directory_entries(
+            superblock,
+            parent_number,
+            parent_generation,
+            expected_selected,
+        )
+    )
+    assert all(
+        entry[4] != b"new.txt"
+        for entry in _checked_linear_directory_entries(
+            superblock,
+            parent_number,
+            parent_generation,
+            expected_candidate,
+        )
+    )
+
+    original_root = _patched_ext4_home(
+        path, source_patches, root_home, block_size=block_size
+    )
+    assert struct.unpack_from("<IBBBB", original_root, 24) == (0, 1, 8, 0, 0)
+    assert struct.unpack_from("<HHI", original_root, 32) == (123, 3, 1)
+    assert struct.unpack_from("<II", original_root, 40) == (
+        0x40B1_F581,
+        2,
+    )
+    assert struct.unpack_from("<II", original_root, 48) == (
+        0xB890_1A84,
+        3,
+    )
+    seed = struct.unpack_from("<I", superblock, 0x270)[0]
+    original_root_crc = _crc32c_raw(
+        struct.pack("<II", parent_number, parent_generation), seed
+    )
+    original_root_crc = _crc32c_raw(original_root[:56], original_root_crc)
+    original_root_crc = _crc32c_raw(bytes(8), original_root_crc)
+    assert struct.unpack_from("<II", original_root, block_size - 8) == (
+        0,
+        original_root_crc,
+    )
+    expected_root = bytearray(original_root)
+    expected_root[48:64] = original_root[40:56]
+    struct.pack_into("<H", expected_root, 34, 4)
+    struct.pack_into("<II", expected_root, 40, separator, new_logical)
+    struct.pack_into("<II", expected_root, block_size - 8, 0, 0)
+    expected_root_crc = _crc32c_raw(
+        struct.pack("<II", parent_number, parent_generation), seed
+    )
+    expected_root_crc = _crc32c_raw(expected_root[:64], expected_root_crc)
+    expected_root_crc = _crc32c_raw(bytes(8), expected_root_crc)
+    struct.pack_into(
+        "<II", expected_root, block_size - 8, 0, expected_root_crc
+    )
+    expected_root = bytes(expected_root)
+
+    original_node = _patched_ext4_home(
+        path, source_patches, map_node_home, block_size=block_size
+    )
+    assert original_node == _extent_node_with_checksum(
+        superblock,
+        parent_number,
+        parent_generation,
+        original_node,
+    )
+    node_generation = struct.unpack_from("<I", original_node, 8)[0]
+    node_entries = _extent_leaf_entries(original_node)
+    assert node_entries == (
+        (0, 1, 0, 1355),
+        (1, 1, 0, 1357),
+        (2, 1, 0, 1359),
+        (3, 1, 0, 1361),
+    )
+    expected_node = _extent_leaf_with_entries(
+        superblock,
+        parent_number,
+        parent_generation,
+        node_generation,
+        node_entries + ((new_logical, 1, 0, candidate),),
+    )
+
+    input_patches = source_patches + (
+        (selected_leaf_home * block_size, bytes(full_leaf)),
+    )
+    assert len(dict(input_patches)) == len(input_patches)
+    seconds, milliseconds = divmod(_STAGED_APPEND_EPOCH_MS, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = (
+        low_seconds
+        if low_seconds < 0x8000_0000
+        else low_seconds - 0x1_0000_0000
+    )
+    epoch = (seconds - signed_low) >> 32
+    assert 0 <= epoch <= 3
+    extra_time = (nanoseconds << 2) | epoch
+
+    original_super = _patched_ext4_home(
+        path, input_patches, super_home, block_size=block_size
+    )
+    expected_super = bytearray(original_super)
+    expected_free_blocks = free_blocks_before - 1
+    struct.pack_into(
+        "<I", expected_super, 0x0C, expected_free_blocks & 0xFFFF_FFFF
+    )
+    struct.pack_into("<I", expected_super, 0x158, expected_free_blocks >> 32)
+    struct.pack_into("<I", expected_super, 0x10, free_inodes_before - 1)
+    expected_super = _ext4_super_with_checksum(expected_super)
+
+    expected_child = bytearray(inode_size)
+    struct.pack_into("<H", expected_child, 0x00, 0x81B6)
+    for field_offset in (0x08, 0x0C, 0x10, 0x90):
+        struct.pack_into("<I", expected_child, field_offset, low_seconds)
+    struct.pack_into("<H", expected_child, 0x1A, 1)
+    struct.pack_into("<I", expected_child, 0x20, 0x80000)
+    struct.pack_into("<HHHHI", expected_child, 0x28, 0xF30A, 0, 4, 0, 0)
+    struct.pack_into("<I", expected_child, 0x64, 1)
+    struct.pack_into("<H", expected_child, 0x80, 32)
+    for field_offset in (0x84, 0x88, 0x8C, 0x94):
+        struct.pack_into("<I", expected_child, field_offset, extra_time)
+    expected_child = _inode_with_checksum(
+        expected_super, child_number, expected_child
+    )
+
+    expected_parent = bytearray(parent_inode)
+    struct.pack_into("<I", expected_parent, 0x04, 5 * block_size)
+    struct.pack_into("<I", expected_parent, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x10, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x1C, 12)
+    struct.pack_into("<I", expected_parent, 0x84, extra_time)
+    struct.pack_into("<I", expected_parent, 0x88, extra_time)
+    expected_parent = _inode_with_checksum(
+        expected_super, parent_number, expected_parent
+    )
+
+    original_child_home = bytearray(
+        _patched_ext4_home(
+            path, input_patches, child_home, block_size=block_size
+        )
+    )
+    original_child_home[
+        child_block_offset : child_block_offset + inode_size
+    ] = expected_child
+    original_parent_home = bytearray(
+        _patched_ext4_home(
+            path, input_patches, parent_home, block_size=block_size
+        )
+    )
+    original_parent_home[
+        parent_block_offset : parent_block_offset + inode_size
+    ] = expected_parent
+
+    expected_block_bitmap = bytearray(original_bitmap)
+    candidate_bit = candidate - group_first
+    expected_block_bitmap[candidate_bit // 8] |= 1 << (candidate_bit % 8)
+    original_inode_bitmap = _patched_ext4_home(
+        path, input_patches, inode_bitmap_home, block_size=block_size
+    )
+    expected_inode_bitmap = bytearray(original_inode_bitmap)
+    inode_bit = child_number - 1
+    expected_inode_bitmap[inode_bit // 8] |= 1 << (inode_bit % 8)
+
+    expected_group_counts = {
+        "free_blocks": group_counts_before["free_blocks"] - 1,
+        "free_inodes": group_counts_before["free_inodes"] - 1,
+        "used_dirs": group_counts_before["used_dirs"],
+        "itable_unused": group_counts_before["itable_unused"] - 1,
+    }
+    original_gdt = _patched_ext4_home(
+        path, input_patches, gdt_home, block_size=block_size
+    )
+    expected_descriptor = bytearray(original_gdt[:64])
+
+    def store_split_counter(low: int, high: int, value: int) -> None:
+        struct.pack_into("<H", expected_descriptor, low, value & 0xFFFF)
+        struct.pack_into("<H", expected_descriptor, high, value >> 16)
+
+    store_split_counter(0x0C, 0x2C, expected_group_counts["free_blocks"])
+    store_split_counter(0x0E, 0x2E, expected_group_counts["free_inodes"])
+    store_split_counter(0x10, 0x30, expected_group_counts["used_dirs"])
+    store_split_counter(0x1C, 0x32, expected_group_counts["itable_unused"])
+    block_bitmap_checksum = _crc32c_raw(expected_block_bitmap, seed)
+    inode_bitmap_bytes = struct.unpack_from("<I", superblock, 0x28)[0] // 8
+    inode_bitmap_checksum = _crc32c_raw(
+        expected_inode_bitmap[:inode_bitmap_bytes], seed
+    )
+    struct.pack_into(
+        "<H", expected_descriptor, 0x18, block_bitmap_checksum & 0xFFFF
+    )
+    struct.pack_into(
+        "<H", expected_descriptor, 0x38, block_bitmap_checksum >> 16
+    )
+    struct.pack_into(
+        "<H", expected_descriptor, 0x1A, inode_bitmap_checksum & 0xFFFF
+    )
+    struct.pack_into(
+        "<H", expected_descriptor, 0x3A, inode_bitmap_checksum >> 16
+    )
+    expected_descriptor = _group_descriptor_with_checksum(
+        expected_super, expected_descriptor, 0
+    )
+    expected_gdt = bytearray(original_gdt)
+    expected_gdt[:64] = expected_descriptor
+
+    expected_homes = {
+        "new_inode_home": (
+            child_home,
+            _patched_ext4_home(
+                path, input_patches, child_home, block_size=block_size
+            ),
+            bytes(original_child_home),
+        ),
+        "parent_inode_home": (
+            parent_home,
+            _patched_ext4_home(
+                path, input_patches, parent_home, block_size=block_size
+            ),
+            bytes(original_parent_home),
+        ),
+        "old_leaf_home": (
+            selected_leaf_home,
+            bytes(full_leaf),
+            expected_selected,
+        ),
+        "new_leaf_home": (
+            candidate,
+            _patched_ext4_home(
+                path, input_patches, candidate, block_size=block_size
+            ),
+            expected_candidate,
+        ),
+        "root_home": (root_home, original_root, expected_root),
+        "map_node_home": (map_node_home, original_node, expected_node),
+        "block_bitmap_home": (
+            block_bitmap_home,
+            original_bitmap,
+            bytes(expected_block_bitmap),
+        ),
+        "gdt_home": (gdt_home, original_gdt, bytes(expected_gdt)),
+        "super_home": (super_home, original_super, expected_super),
+        "inode_bitmap_home": (
+            inode_bitmap_home,
+            original_inode_bitmap,
+            bytes(expected_inode_bitmap),
+        ),
+    }
+    assert len(expected_homes) == 10
+    assert len({home for home, _, _ in expected_homes.values()}) == 10
+    assert all(old != new for _, old, new in expected_homes.values())
+    untouched_homes = (
+        1359,
+        1361,
+        1363,
+        1366,
+        layout["witness_super"],
+        layout["witness_gdt"],
+    )
+
+    return {
+        "source": path,
+        "source_patches": input_patches,
+        "activation_trace": activation_trace,
+        "block_size": block_size,
+        "parent_number": parent_number,
+        "child_number": child_number,
+        "candidate": candidate,
+        "new_logical": new_logical,
+        "separator": separator,
+        "expected_homes": expected_homes,
+        "untouched_homes": untouched_homes,
+        "free_blocks_before": free_blocks_before,
+        "free_blocks_after": expected_free_blocks,
+        "free_inodes_before": free_inodes_before,
+        "free_inodes_after": free_inodes_before - 1,
+        "expected_group_counts": expected_group_counts,
+        "expected_faulted_super": dirty_super,
+    }
+
+
+@pytest.fixture(scope="session")
+def staged_public_indexed_leaf_split_fixture(
+    staged_public_indexed_leaf_split_prestate: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Split a full indexed leaf and qualify all ten exact after-images."""
+    case = staged_public_indexed_leaf_split_prestate
+    path = case["source"]
+    source_patches = case["source_patches"]
+    activation_trace = case["activation_trace"]
+    block_size = case["block_size"]
+    candidate = case["candidate"]
+    new_logical = case["new_logical"]
+    separator = case["separator"]
+    expected_homes = case["expected_homes"]
+    untouched_homes = case["untouched_homes"]
+    free_blocks_before = case["free_blocks_before"]
+    free_blocks_after = case["free_blocks_after"]
+    free_inodes_before = case["free_inodes_before"]
+    free_inodes_after = case["free_inodes_after"]
+    expected_group_counts = case["expected_group_counts"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(candidate, int)
+    assert isinstance(new_logical, int)
+    assert isinstance(separator, int)
+    assert isinstance(expected_homes, dict)
+    assert isinstance(untouched_homes, tuple)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_blocks_after, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(free_inodes_after, int)
+    assert isinstance(expected_group_counts, dict)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    seconds, milliseconds = divmod(_STAGED_APPEND_EPOCH_MS, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    directory = tmp_path_factory.mktemp("ext4-public-indexed-leaf-split")
+    backing = directory / "staged-create-indexed-leaf-split.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        backing,
+        [
+            "VARIABLE _ILS-CLOCK-CALLS",
+            (
+                ": _ILS-NOW ( context -- epoch-ms ior ) DROP "
+                "1 _ILS-CLOCK-CALLS +! "
+                f"{_STAGED_APPEND_EPOCH_MS} 0 ;"
+            ),
+            "CREATE _ILS-STAT VFS-STATFS-SIZE ALLOT",
+            "T-ARENA CONSTANT _ILS-ARENA",
+            (
+                "_ILS-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _ILS-MOUNT-IOR CONSTANT _ILS-V"
+            ),
+            "_ILS-V _EXT4-CTX CONSTANT _ILS-CTX",
+            (
+                "' _ILS-NOW 0 _ILS-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _ILS-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_ILS-PROFILE", "_ILS-V", 10, 0, 0
+            ),
+            'S" /fixture/indexed" _ILS-V VFS-CD? CONSTANT _ILS-CD-IOR',
+            (
+                "_ILS-V V.CWD @ _ILS-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _ILS-LOAD-IOR"
+            ),
+            "_ILS-V V.CWD @ D.VNODE @ CONSTANT _ILS-PARENT-VN",
+            "_ILS-V V.ICOUNT @ CONSTANT _ILS-ICOUNT-BEFORE",
+            "_ILS-V V.VCOUNT @ CONSTANT _ILS-VCOUNT-BEFORE",
+            (
+                "_ILS-STAT VFS-STATFS-SIZE _ILS-V VFS-STATFS "
+                "CONSTANT _ILS-BEFORE-IOR"
+            ),
+            "_ILS-STAT VSF.BFREE @ CONSTANT _ILS-BFREE-BEFORE",
+            "_ILS-STAT VSF.FFREE @ CONSTANT _ILS-FFREE-BEFORE",
+            "DEPTH CONSTANT _ILS-DEPTH-BEFORE",
+            (
+                'S" new.txt" _ILS-V VFS-MKFILE? '
+                "CONSTANT _ILS-CREATE-IOR CONSTANT _ILS-D"
+            ),
+            "DEPTH CONSTANT _ILS-DEPTH-AFTER",
+            "_ILS-D D.VNODE @ CONSTANT _ILS-VN",
+            (
+                'S" /fixture/indexed/new.txt" _ILS-V VFS-RESOLVE? '
+                "CONSTANT _ILS-RESOLVE-IOR CONSTANT _ILS-R"
+            ),
+            (
+                "_ILS-STAT VFS-STATFS-SIZE _ILS-V VFS-STATFS "
+                "CONSTANT _ILS-AFTER-IOR"
+            ),
+            "_ILS-STAT VSF.BFREE @ CONSTANT _ILS-BFREE-AFTER",
+            "_ILS-STAT VSF.FFREE @ CONSTANT _ILS-FFREE-AFTER",
+            "_XC-META-COUNT @ CONSTANT _ILS-META-COUNT",
+            "_ILS-CTX _EXT4-C.J.WRITER + @ CONSTANT _ILS-WRITER",
+            *_forth_accumulated_conjunction(
+                "_ILS-OK",
+                [
+                    "_ILS-MOUNT-IOR 0=",
+                    "_ILS-CLOCK-IOR 0=",
+                    "_ILS-PROFILE-SIZE-IOR 0=",
+                    "_ILS-PROFILE-BIND-IOR 0=",
+                    "_ILS-PROFILE-USED _ILS-PROFILE-SIZE =",
+                    "_ILS-CD-IOR 0=",
+                    "_ILS-LOAD-IOR 0=",
+                    "_ILS-BEFORE-IOR 0=",
+                    "_ILS-CREATE-IOR 0=",
+                    "_ILS-DEPTH-AFTER _ILS-DEPTH-BEFORE =",
+                    "_ILS-V V.LAST-IOR @ 0=",
+                    "_ILS-D 0<>",
+                    "_ILS-RESOLVE-IOR 0=",
+                    "_ILS-R _ILS-D =",
+                    "_ILS-VN VN.TYPE @ VFS-T-FILE =",
+                    "_ILS-VN VN.BID @ 33 =",
+                    "_ILS-VN VN.BDATA @ 33 =",
+                    "_ILS-VN VN.GEN @ 1 =",
+                    "_ILS-VN VN.MODE @ 0x81B6 =",
+                    "_ILS-VN VN.SIZE-LO @ 0=",
+                    "_ILS-VN VN.SIZE-HI @ 0=",
+                    "_ILS-VN VN.NLINK @ 1 =",
+                    "_ILS-VN VN.BLOCKS @ 0=",
+                    f"_ILS-VN VN.ATIME @ {seconds} =",
+                    f"_ILS-VN VN.ATIME-NS @ {nanoseconds} =",
+                    "_ILS-PARENT-VN VN.SIZE-LO @ 5120 =",
+                    "_ILS-PARENT-VN VN.SIZE-HI @ 0=",
+                    "_ILS-PARENT-VN VN.BLOCKS @ 12 =",
+                    "_ILS-PARENT-VN VN.NLINK @ 2 =",
+                    f"_ILS-PARENT-VN VN.MTIME @ {seconds} =",
+                    f"_ILS-PARENT-VN VN.MTIME-NS @ {nanoseconds} =",
+                    f"_ILS-PARENT-VN VN.CTIME @ {seconds} =",
+                    f"_ILS-PARENT-VN VN.CTIME-NS @ {nanoseconds} =",
+                    "_ILS-V V.ICOUNT @ _ILS-ICOUNT-BEFORE 1+ =",
+                    "_ILS-V V.VCOUNT @ _ILS-VCOUNT-BEFORE 1+ =",
+                    "_ILS-AFTER-IOR 0=",
+                    "_ILS-BFREE-AFTER _ILS-BFREE-BEFORE 1- =",
+                    "_ILS-FFREE-AFTER _ILS-FFREE-BEFORE 1- =",
+                    "_ILS-CLOCK-CALLS @ 1 =",
+                    "_ILS-META-COUNT 10 =",
+                    "_ILS-WRITER _ILS-PROFILE-BASE =",
+                    "_ILS-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                    "_ILS-CTX _EXT4-C.J.HOME-WRITES + @ 10 =",
+                    "_ILS-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                    "_ILS-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_ILS-V V.FLAGS @ VFS-F-RO AND 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            (
+                '_ILS-OK @ 0= IF ." EXT4-INDEXED-LEAF-SPLIT-FIRST-FAIL " '
+                "_ILS-OK-FIRST-FAILURE @ . THEN"
+            ),
+            '_ILS-OK @ IF ." EXT4-PUBLIC-CREATE-INDEXED-LEAF-SPLIT" THEN',
+            "0 _ILS-V VFS-UNMOUNT CONSTANT _ILS-UNMOUNT-IOR",
+            (
+                "_ILS-UNMOUNT-IOR 0= "
+                "_ILS-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_ILS-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-PUBLIC-CREATE-INDEXED-LEAF-SPLIT-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=source_patches,
+        capture_media=backing,
+        max_steps=1_450_000_000,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-CREATE-INDEXED-LEAF-SPLIT")
+    _assert_emitted(
+        output, "EXT4-PUBLIC-CREATE-INDEXED-LEAF-SPLIT-UNMOUNTED"
+    )
+    assert trace[: len(activation_trace)] == activation_trace
+    assert backing.is_file()
+    assert _sha256(backing) == media_sha256
+
+    for home, _, expected in expected_homes.values():
+        assert _read_ext4_home(
+            backing, home, block_size=block_size
+        ) == expected
+    for home in untouched_homes:
+        assert _read_ext4_home(
+            backing, home, block_size=block_size
+        ) == _patched_ext4_home(
+            path, source_patches, home, block_size=block_size
+        )
+    assert _ext4_block_allocation_state(backing, (candidate, 1377)) == {
+        candidate: True,
+        1377: False,
+    }
+    assert _ext4_inode_allocation_state(backing, (33, 34)) == {
+        33: True,
+        34: False,
+    }
+    assert _ext4_group_counts(backing, 0) == expected_group_counts
+    final_super, child_inode, _ = _ext4_inode_record(backing, 33)
+    assert struct.unpack_from("<I", final_super, 0x0C)[0] == free_blocks_after
+    assert struct.unpack_from("<I", final_super, 0x10)[0] == free_inodes_after
+    assert struct.unpack_from("<H", child_inode, 0x00)[0] == 0x81B6
+    assert struct.unpack_from("<I", child_inode, 0x04)[0] == 0
+    assert struct.unpack_from("<H", child_inode, 0x1A)[0] == 1
+    assert struct.unpack_from("<I", child_inode, 0x20)[0] == 0x80000
+
+    expected_ordinal_map = {
+        "new_inode_home": (24,),
+        "parent_inode_home": (25,),
+        "old_leaf_home": (26,),
+        "new_leaf_home": (27,),
+        "root_home": (28,),
+        "map_node_home": (29,),
+        "block_bitmap_home": (30,),
+        "gdt_home": (31,),
+        "inode_bitmap_home": (33,),
+    }
+    for key, ordinals in expected_ordinal_map.items():
+        home = expected_homes[key][0]
+        assert _write_ordinals_for_ext4_home(
+            trace, home, block_size=block_size
+        ) == ordinals
+    super_home = expected_homes["super_home"][0]
+    assert _write_ordinals_for_ext4_home(
+        trace, super_home, block_size=block_size
+    ) == (4, 32, 42)
+    checkpoint_ordinals = tuple(
+        sorted(
+            (32,)
+            + tuple(
+                ordinals[0] for ordinals in expected_ordinal_map.values()
+            )
+        )
+    )
+    assert checkpoint_ordinals == tuple(range(24, 34))
+
+    parent_stat = subprocess.run(
+        [str(debugfs), "-R", "stat /fixture/indexed", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert parent_stat.returncode == 0, parent_stat.stdout + parent_stat.stderr
+    for fragment in (
+        "Inode: 27",
+        "Size: 5120",
+        "Blockcount: 12",
+        "Flags: 0x81000",
+        "(ETB0):1365",
+        f"(4):{candidate}",
+    ):
+        assert fragment in parent_stat.stdout
+    child_stat = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "stat /fixture/indexed/new.txt",
+            str(backing),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert child_stat.returncode == 0, child_stat.stdout + child_stat.stderr
+    assert "Inode: 33" in child_stat.stdout
+    assert "Type: regular" in child_stat.stdout
+    assert "Size: 0" in child_stat.stdout
+    tree = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "htree_dump /fixture/indexed",
+            str(backing),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert tree.returncode == 0, tree.stdout + tree.stderr
+    for fragment in (
+        "Hash Version: 1",
+        "Number of entries (count): 4",
+        "Number of entries (limit): 123",
+        "Entry #0: Hash 0x00000000, block 1",
+        f"Entry #1: Hash 0x{separator:08x}, block {new_logical}",
+        "Entry #2: Hash 0x40b1f581, block 2",
+        "Entry #3: Hash 0xb8901a84, block 3",
+        "Reading directory block 1, phys 1357",
+        f"Reading directory block {new_logical}, phys {candidate}",
+        "new.txt",
+    ):
+        assert fragment in tree.stdout
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+    result = dict(case)
+    result.update(
+        {
+            "image": backing,
+            "trace": trace,
+            "media_sha256": media_sha256,
+        }
+    )
+    return result
+
+
+def test_staged_vfs_create_splits_full_depth_zero_htree_leaf(
+    staged_public_indexed_leaf_split_fixture: dict[str, object],
+) -> None:
+    image = staged_public_indexed_leaf_split_fixture["image"]
+    trace = staged_public_indexed_leaf_split_fixture["trace"]
+    assert isinstance(image, Path)
+    assert isinstance(trace, tuple)
+    assert image.is_file()
+    assert trace
+
+
+def test_staged_vfs_indexed_leaf_split_new_leaf_tear_replays_ten_homes(
+    staged_public_indexed_leaf_split_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A committed new-leaf tear replays the complete ten-home split."""
+    case = staged_public_indexed_leaf_split_fixture
+    path = case["source"]
+    source_patches = case["source_patches"]
+    success_image = case["image"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    expected_homes = case["expected_homes"]
+    untouched_homes = case["untouched_homes"]
+    candidate = case["candidate"]
+    free_blocks_before = case["free_blocks_before"]
+    free_blocks_after = case["free_blocks_after"]
+    free_inodes_before = case["free_inodes_before"]
+    free_inodes_after = case["free_inodes_after"]
+    expected_faulted_super = case["expected_faulted_super"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(success_image, Path)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(expected_homes, dict)
+    assert isinstance(untouched_homes, tuple)
+    assert isinstance(candidate, int)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_blocks_after, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(free_inodes_after, int)
+    assert isinstance(expected_faulted_super, bytes)
+
+    for home, _, expected in expected_homes.values():
+        assert _read_ext4_home(
+            success_image, home, block_size=block_size
+        ) == expected
+    untouched = {
+        home: _patched_ext4_home(
+            path, source_patches, home, block_size=block_size
+        )
+        for home in untouched_homes
+    }
+    assert all(
+        _read_ext4_home(success_image, home, block_size=block_size)
+        == original
+        for home, original in untouched.items()
+    )
+
+    candidate_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, candidate, block_size=block_size
+    )
+    assert candidate_ordinals == (27,)
+    candidate_ordinal = candidate_ordinals[0]
+    candidate_event = _trace_event_index_for_ordinal(
+        success_trace, "write", candidate_ordinal
+    )
+    assert success_trace[candidate_event] == (
+        "write",
+        candidate * (block_size // 512),
+        block_size // 512,
+    )
+    _, old_candidate, expected_candidate = expected_homes["new_leaf_home"]
+    sector_zero_differences = tuple(
+        index
+        for index, (old, new) in enumerate(
+            zip(old_candidate, expected_candidate, strict=True)
+        )
+        if old != new and 0 <= index < 512
+    )
+    assert len(sector_zero_differences) >= 2
+    tear_absolute = (
+        sector_zero_differences[0] + sector_zero_differences[-1]
+    ) // 2
+    assert any(index < tear_absolute for index in sector_zero_differences)
+    assert any(index >= tear_absolute for index in sector_zero_differences)
+    tear_sector, tear_offset = divmod(tear_absolute, 512)
+    assert tear_sector == 0
+    assert 0 < tear_offset < 512
+    expected_torn_candidate = (
+        expected_candidate[:tear_absolute] + old_candidate[tear_absolute:]
+    )
+    assert expected_torn_candidate not in {old_candidate, expected_candidate}
+
+    seconds, milliseconds = divmod(_STAGED_APPEND_EPOCH_MS, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    faulted = tmp_path / "staged-indexed-leaf-split-w27-faulted.img"
+    recovered = tmp_path / "staged-indexed-leaf-split-w27-recovered.img"
+    stable = tmp_path / "staged-indexed-leaf-split-w27-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                "VARIABLE _ISF-CLOCK-CALLS",
+                (
+                    ": _ISF-NOW ( context -- epoch-ms ior ) DROP "
+                    "1 _ISF-CLOCK-CALLS +! "
+                    f"{_STAGED_APPEND_EPOCH_MS} 0 ;"
+                ),
+                "CREATE _ISF-STAT VFS-STATFS-SIZE ALLOT",
+                "T-ARENA CONSTANT _ISF-ARENA",
+                (
+                    "_ISF-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _ISF-MOUNT-IOR CONSTANT _ISF-V"
+                ),
+                "_ISF-V _EXT4-CTX CONSTANT _ISF-CTX",
+                (
+                    "' _ISF-NOW 0 _ISF-V EXT4-BIND-WRITE-CLOCK? "
+                    "CONSTANT _ISF-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_ISF-PROFILE", "_ISF-V", 10, 0, 0
+                ),
+                (
+                    'S" /fixture/indexed" _ISF-V VFS-CD? '
+                    "CONSTANT _ISF-CD-IOR"
+                ),
+                (
+                    "_ISF-V V.CWD @ _ISF-V _VFS-ENSURE-CHILDREN? "
+                    "CONSTANT _ISF-LOAD-IOR"
+                ),
+                "_ISF-V V.CWD @ D.VNODE @ CONSTANT _ISF-PARENT-VN",
+                "_ISF-V V.ICOUNT @ CONSTANT _ISF-ICOUNT-BEFORE",
+                "_ISF-V V.VCOUNT @ CONSTANT _ISF-VCOUNT-BEFORE",
+                (
+                    "_ISF-STAT VFS-STATFS-SIZE _ISF-V VFS-STATFS "
+                    "CONSTANT _ISF-STAT-BEFORE-IOR"
+                ),
+                "_ISF-STAT VSF.BFREE @ CONSTANT _ISF-BFREE-BEFORE",
+                "_ISF-STAT VSF.FFREE @ CONSTANT _ISF-FFREE-BEFORE",
+                "DEPTH CONSTANT _ISF-DEPTH-BEFORE",
+                (
+                    'S" new.txt" _ISF-V VFS-MKFILE? '
+                    "CONSTANT _ISF-CREATE-IOR CONSTANT _ISF-D"
+                ),
+                "DEPTH CONSTANT _ISF-DEPTH-AFTER",
+                "_ISF-V V.LAST-IOR @ CONSTANT _ISF-LAST-IOR",
+                "_ISF-D D.VNODE @ CONSTANT _ISF-VN",
+                (
+                    'S" /fixture/indexed/new.txt" _ISF-V VFS-RESOLVE? '
+                    "CONSTANT _ISF-RESOLVE-IOR CONSTANT _ISF-R"
+                ),
+                (
+                    "_ISF-STAT VFS-STATFS-SIZE _ISF-V VFS-STATFS "
+                    "CONSTANT _ISF-STAT-AFTER-IOR"
+                ),
+                "_ISF-STAT VSF.BFREE @ CONSTANT _ISF-BFREE-AFTER",
+                "_ISF-STAT VSF.FFREE @ CONSTANT _ISF-FFREE-AFTER",
+                "_ISF-CTX _EXT4-C.J.WRITER + @ CONSTANT _ISF-WRITER",
+                *_forth_accumulated_conjunction(
+                    "_ISF-PUBLISHED-OK",
+                    [
+                        "_ISF-MOUNT-IOR 0=",
+                        "_ISF-CLOCK-IOR 0=",
+                        "_ISF-PROFILE-SIZE-IOR 0=",
+                        "_ISF-PROFILE-BIND-IOR 0=",
+                        "_ISF-PROFILE-USED _ISF-PROFILE-SIZE =",
+                        "_ISF-CD-IOR 0=",
+                        "_ISF-LOAD-IOR 0=",
+                        "_ISF-CREATE-IOR 0=",
+                        "_ISF-DEPTH-AFTER _ISF-DEPTH-BEFORE =",
+                        "_ISF-D 0<>",
+                        "_ISF-RESOLVE-IOR 0=",
+                        "_ISF-R _ISF-D =",
+                        "_ISF-VN VN.TYPE @ VFS-T-FILE =",
+                        "_ISF-VN VN.BID @ 33 =",
+                        "_ISF-VN VN.BDATA @ 33 =",
+                        "_ISF-VN VN.GEN @ 1 =",
+                        "_ISF-VN VN.MODE @ 0x81B6 =",
+                        "_ISF-VN VN.SIZE-LO @ 0=",
+                        "_ISF-VN VN.SIZE-HI @ 0=",
+                        "_ISF-VN VN.NLINK @ 1 =",
+                        "_ISF-VN VN.BLOCKS @ 0=",
+                        f"_ISF-VN VN.ATIME @ {seconds} =",
+                        f"_ISF-VN VN.ATIME-NS @ {nanoseconds} =",
+                        "_ISF-PARENT-VN VN.SIZE-LO @ 5120 =",
+                        "_ISF-PARENT-VN VN.SIZE-HI @ 0=",
+                        "_ISF-PARENT-VN VN.BLOCKS @ 12 =",
+                        "_ISF-PARENT-VN VN.NLINK @ 2 =",
+                        f"_ISF-PARENT-VN VN.MTIME @ {seconds} =",
+                        f"_ISF-PARENT-VN VN.MTIME-NS @ {nanoseconds} =",
+                        f"_ISF-PARENT-VN VN.CTIME @ {seconds} =",
+                        f"_ISF-PARENT-VN VN.CTIME-NS @ {nanoseconds} =",
+                        "_ISF-V V.ICOUNT @ _ISF-ICOUNT-BEFORE 1+ =",
+                        "_ISF-V V.VCOUNT @ _ISF-VCOUNT-BEFORE 1+ =",
+                    ],
+                ),
+                (
+                    '_ISF-PUBLISHED-OK @ IF ." '
+                    'EXT4-INDEXED-LEAF-SPLIT-W27-PUBLISHED" THEN'
+                ),
+                *_forth_accumulated_conjunction(
+                    "_ISF-AUTHORITY-OK",
+                    [
+                        (
+                            "_ISF-LAST-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-VOLUME ="
+                        ),
+                        (
+                            "_ISF-LAST-IOR VFS-IOR-REASON "
+                            "VFS-R-IO ="
+                        ),
+                        (
+                            "_ISF-LAST-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-PARTIAL AND 0<>"
+                        ),
+                        "_ISF-CLOCK-CALLS @ 1 =",
+                        "_ISF-STAT-BEFORE-IOR 0=",
+                        "_ISF-STAT-AFTER-IOR 0=",
+                        "_ISF-BFREE-AFTER _ISF-BFREE-BEFORE 1- =",
+                        "_ISF-FFREE-AFTER _ISF-FFREE-BEFORE 1- =",
+                    ],
+                ),
+                (
+                    '_ISF-AUTHORITY-OK @ IF ." '
+                    'EXT4-INDEXED-LEAF-SPLIT-W27-AUTHORITY" THEN'
+                ),
+                *_forth_accumulated_conjunction(
+                    "_ISF-WRITER-OK",
+                    [
+                        "_ISF-WRITER _ISF-PROFILE-BASE =",
+                        (
+                            "_ISF-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-FAULTED ="
+                        ),
+                        (
+                            "_ISF-WRITER _EXT4-JWR.PHASE + @ "
+                            "_EXT4-JWP-CHECKPOINT-HOME ="
+                        ),
+                        "_ISF-WRITER _EXT4-JWR-VALID?",
+                        "_ISF-WRITER _EXT4-JWR.META-ACTIVE + @ 10 =",
+                        "_ISF-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                        "_ISF-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                        "_ISF-CTX _EXT4-C.J.HOME-WRITES + @ 3 =",
+                        "_ISF-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                        "_ISF-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        "_ISF-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                        "_ISF-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_ISF-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    ],
+                ),
+                (
+                    '_ISF-WRITER-OK @ IF ." '
+                    'EXT4-INDEXED-LEAF-SPLIT-W27-WRITER" THEN'
+                ),
+                *_forth_accumulated_conjunction(
+                    "_ISF-SCRUBBED-OK",
+                    [
+                        "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        (
+                            "_XC-DIR-SNAPSHOT "
+                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XC-ROOT-SNAPSHOT "
+                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XC-ROOT-CURRENT "
+                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XC-INDEX-MAP-SNAPSHOT "
+                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XC-DIRECTORY-DESC _EXT4-DD-SIZE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XC-PARENT-SNAPSHOT "
+                            "_EXT4-STAGED-WRITE-INODE-SIZE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XC-OLD-INODE "
+                            "_EXT4-STAGED-WRITE-INODE-SIZE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XC-CONVERT-PLAN _XC-CONVERT-PLAN-MAX "
+                            "_XC-CONVERT-PLAN-CELLS * CELLS "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        "_XC-CONVERT-HASH-BASE 24 _EXT4-BYTES-ZERO?",
+                        "_XC-INDEXED @ _XC-SHAPE-SET @ OR 0=",
+                        "_XC-INDEX-BASELINE @ 0=",
+                        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                        "_EXT4-MUTATION-OWNER-INO @ 0=",
+                        "_EXT4-MUTATION-MAP-TARGET @ 0=",
+                        "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
+                        "_EXT4-MUTATION-MAP-HITS @ 0=",
+                        "_EXT4-MUTATION-PROTOCOL-CTX @ 0=",
+                        "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0=",
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ],
+                ),
+                (
+                    '_ISF-PUBLISHED-OK @ 0= IF ." '
+                    'EXT4-INDEXED-LEAF-SPLIT-W27-PUBLISHED-FIRST-FAIL " '
+                    "_ISF-PUBLISHED-OK-FIRST-FAILURE @ . THEN"
+                ),
+                (
+                    '_ISF-AUTHORITY-OK @ 0= IF ." '
+                    'EXT4-INDEXED-LEAF-SPLIT-W27-AUTHORITY-FIRST-FAIL " '
+                    "_ISF-AUTHORITY-OK-FIRST-FAILURE @ . THEN"
+                ),
+                (
+                    '_ISF-WRITER-OK @ 0= IF ." '
+                    'EXT4-INDEXED-LEAF-SPLIT-W27-WRITER-FIRST-FAIL " '
+                    "_ISF-WRITER-OK-FIRST-FAILURE @ . THEN"
+                ),
+                (
+                    '_ISF-SCRUBBED-OK @ 0= IF ." '
+                    'EXT4-INDEXED-LEAF-SPLIT-W27-SCRUBBED-FIRST-FAIL " '
+                    "_ISF-SCRUBBED-OK-FIRST-FAILURE @ . THEN"
+                ),
+                (
+                    '_ISF-SCRUBBED-OK @ IF ." '
+                    'EXT4-INDEXED-LEAF-SPLIT-W27-SCRUBBED" THEN'
+                ),
+            ],
+            patches=source_patches,
+            write_faults_by_ordinal={
+                candidate_ordinal: {
+                    "stage": "media",
+                    "sector_index": tear_sector,
+                    "byte_index": tear_offset,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+            max_steps=1_450_000_000,
+        )
+        for marker in (
+            "EXT4-INDEXED-LEAF-SPLIT-W27-PUBLISHED",
+            "EXT4-INDEXED-LEAF-SPLIT-W27-AUTHORITY",
+            "EXT4-INDEXED-LEAF-SPLIT-W27-WRITER",
+            "EXT4-INDEXED-LEAF-SPLIT-W27-SCRUBBED",
+        ):
+            _assert_emitted(output, marker)
+        assert failed_trace == success_trace[: candidate_event + 1]
+        assert _read_ext4_home(
+            faulted, candidate, block_size=block_size
+        ) == expected_torn_candidate
+        for key in (
+            "new_inode_home",
+            "parent_inode_home",
+            "old_leaf_home",
+        ):
+            home, _, expected = expected_homes[key]
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == expected
+        for key in (
+            "root_home",
+            "map_node_home",
+            "block_bitmap_home",
+            "gdt_home",
+            "inode_bitmap_home",
+        ):
+            home, original, _ = expected_homes[key]
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == original
+        faulted_super, _, _ = _ext4_inode_record(faulted, 2)
+        assert faulted_super == expected_faulted_super
+        observed_free_blocks = struct.unpack_from(
+            "<I", faulted_super, 0x0C
+        )[0] | (struct.unpack_from("<I", faulted_super, 0x158)[0] << 32)
+        assert observed_free_blocks == free_blocks_before
+        assert struct.unpack_from("<I", faulted_super, 0x10)[0] == (
+            free_inodes_before
+        )
+        assert _ext4_block_allocation_state(faulted, (candidate,)) == {
+            candidate: False
+        }
+        for home, original in untouched.items():
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == original
+
+        _, recovery_trace, recovery_sha256 = _staged_create_recovery_view(
+            faulted,
+            recovered,
+            expected_present=True,
+            expected_free_inodes=free_inodes_after,
+            expected_home_writes=10,
+            expected_replayed=True,
+            prefix="_ISF-R",
+            marker="EXT4-INDEXED-LEAF-SPLIT-W27-RECOVERED",
+            object_path="/fixture/indexed/new.txt",
+            parent_path="/fixture/indexed",
+            expected_parent_size=5120,
+            expected_parent_blocks=12,
+            expected_free_blocks=free_blocks_after,
+            expected_inode_number=33,
+            expected_generation=1,
+        )
+        for key, (home, _, expected) in expected_homes.items():
+            if key != "super_home":
+                assert len(
+                    _write_ordinals_for_ext4_home(
+                        recovery_trace, home, block_size=block_size
+                    )
+                ) == 1
+            assert _read_ext4_home(
+                recovered, home, block_size=block_size
+            ) == expected
+        assert _ext4_block_allocation_state(recovered, (candidate,)) == {
+            candidate: True
+        }
+        for home, original in untouched.items():
+            assert _read_ext4_home(
+                recovered, home, block_size=block_size
+            ) == original
+        _assert_e2fsck_clean(recovered, jbd2_toolchain)
+
+        _, stable_trace, stable_sha256 = _staged_create_recovery_view(
+            recovered,
+            stable,
+            expected_present=True,
+            expected_free_inodes=free_inodes_after,
+            expected_home_writes=0,
+            expected_replayed=False,
+            prefix="_ISF-S",
+            marker="EXT4-INDEXED-LEAF-SPLIT-W27-STABLE",
+            object_path="/fixture/indexed/new.txt",
+            parent_path="/fixture/indexed",
+            expected_parent_size=5120,
+            expected_parent_blocks=12,
+            expected_free_blocks=free_blocks_after,
+            expected_inode_number=33,
+            expected_generation=1,
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+        for home, _, expected in expected_homes.values():
+            assert _read_ext4_home(
+                stable, home, block_size=block_size
+            ) == expected
+        for home, original in untouched.items():
+            assert _read_ext4_home(
+                stable, home, block_size=block_size
+            ) == original
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
 @pytest.fixture(scope="session")
 def staged_public_indexed_create_fixture(
     extent_writer_activation_fixture: dict[str, object],
@@ -63982,6 +65658,9 @@ def _run_staged_indexed_create_refusal(
     marker: str,
     before_baseline: tuple[str, ...] = (),
     setup_checks: tuple[str, ...] = (),
+    post_create_checks: tuple[str, ...] = (),
+    metadata_capacity: int = 6,
+    max_steps: int = 1_200_000_000,
 ) -> None:
     """Exercise one indexed CREATE refusal through the public VFS."""
     assert target_name and '"' not in target_name
@@ -64014,7 +65693,7 @@ def _run_staged_indexed_create_refusal(
             *_ext4_dedicated_writer_profile_forth(
                 "_IR-PROFILE",
                 "_IR-V",
-                metadata_capacity=6,
+                metadata_capacity=metadata_capacity,
                 data_capacity=0,
             ),
             (
@@ -64059,6 +65738,7 @@ def _run_staged_indexed_create_refusal(
                 "CONSTANT _IR-CHILD"
             ),
             "_IR-V V.LAST-IOR @ CONSTANT _IR-LAST-IOR",
+            "_XC-META-COUNT @ CONSTANT _IR-META-COUNT",
             "_IR-V V.ICOUNT @ CONSTANT _IR-ICOUNT-AFTER",
             "_IR-V V.VCOUNT @ CONSTANT _IR-VCOUNT-AFTER",
             "_IR-V V.STR-PTR @ CONSTANT _IR-STR-AFTER",
@@ -64108,10 +65788,12 @@ def _run_staged_indexed_create_refusal(
                     "_IR-CLOCK-IOR 0=",
                     "_IR-PROFILE-SIZE-IOR 0=",
                     "_IR-PROFILE-BIND-IOR 0=",
+                    "_IR-PROFILE-USED _IR-PROFILE-SIZE =",
                     "_IR-CD-IOR 0=",
                     "_IR-LOAD-IOR 0=",
                     *setup_checks,
                     *expected_ior_checks,
+                    *post_create_checks,
                     "_IR-D 0=",
                     "_IR-CHILD 0=",
                     "_IR-LAST-IOR _IR-CREATE-IOR =",
@@ -64148,6 +65830,16 @@ def _run_staged_indexed_create_refusal(
                         "_EXT4-STAGED-WRITE-BLOCK-SIZE "
                         "_EXT4-BYTES-ZERO?"
                     ),
+                    (
+                        "_XC-ROOT-CURRENT "
+                        "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    (
+                        "_XC-INDEX-MAP-SNAPSHOT "
+                        "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
                     "_XC-DIRECTORY-DESC _EXT4-DD-SIZE _EXT4-BYTES-ZERO?",
                     (
                         "_XC-PARENT-SNAPSHOT "
@@ -64158,6 +65850,12 @@ def _run_staged_indexed_create_refusal(
                         "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                         "_EXT4-BYTES-ZERO?"
                     ),
+                    (
+                        "_XC-CONVERT-PLAN _XC-CONVERT-PLAN-MAX "
+                        "_XC-CONVERT-PLAN-CELLS * CELLS "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    "_XC-CONVERT-HASH-BASE 24 _EXT4-BYTES-ZERO?",
                     *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                     "_IR-UNMOUNT-IOR 0=",
                 ],
@@ -64166,6 +65864,7 @@ def _run_staged_indexed_create_refusal(
         ],
         patches=patches,
         capture_media=backing,
+        max_steps=max_steps,
     )
     _assert_emitted(output, marker)
     assert trace == ()
@@ -64238,54 +65937,43 @@ def test_staged_vfs_indexed_create_rejects_checksummed_misbucketed_names(
     )
 
 
-def test_staged_vfs_indexed_create_reports_nospc_for_selected_full_leaf(
-    extent_writer_activation_fixture: dict[str, object],
+def test_staged_vfs_indexed_leaf_split_refuses_one_short_profile_without_writes(
+    staged_public_indexed_leaf_split_prestate: dict[str, object],
     tmp_path: Path,
 ) -> None:
-    path = extent_writer_activation_fixture["image"]
-    source_patches = extent_writer_activation_fixture["source_patches"]
+    case = staged_public_indexed_leaf_split_prestate
+    path = case["source"]
+    source_patches = case["source_patches"]
+    block_size = case["block_size"]
+    candidate = case["candidate"]
+    expected_homes = case["expected_homes"]
     assert isinstance(path, Path)
     assert isinstance(source_patches, tuple)
-
-    superblock, block_size, leaf = _indexed_directory_leaf(path, 1357)
-    entries = _checked_linear_directory_entries(
-        superblock, 27, 0, bytes(leaf)
-    )
-    assert entries[-1] == (
-        792,
-        28,
-        220,
-        1,
-        b"collision-068446",
-    )
-    leaf[816:1012] = bytes(196)
-    struct.pack_into("<H", leaf, 796, 28)
-    for offset in range(820, 1012, 12):
-        struct.pack_into("<IHBB", leaf, offset, 0, 12, 0, 0)
-    assert len(range(820, 1012, 12)) == 16
-    after = _linear_directory_block_with_checksum(
-        superblock, 27, 0, leaf
-    )
-    after_entries = _checked_linear_directory_entries(
-        superblock, 27, 0, after
-    )
-    assert after_entries[-1] == (
-        792,
-        28,
-        28,
-        1,
-        b"collision-068446",
-    )
+    assert isinstance(block_size, int)
+    assert isinstance(candidate, int)
+    assert isinstance(expected_homes, dict)
+    assert candidate == 1364
+    backing = tmp_path / "indexed-create-leaf-split-profile-nine.img"
 
     _run_staged_indexed_create_refusal(
         path=path,
         source_patches=source_patches,
-        extra_patches=((1357 * block_size, after),),
-        backing=tmp_path / "indexed-create-no-slack.img",
+        extra_patches=(),
+        backing=backing,
         target_name="new.txt",
         expected_ior_checks=("_IR-CREATE-IOR VFS-E-NOSPC =",),
-        marker="EXT4-INDEXED-CREATE-NO-SLACK",
+        post_create_checks=("_IR-META-COUNT 10 =",),
+        metadata_capacity=9,
+        max_steps=200_000_000,
+        marker="EXT4-INDEXED-LEAF-SPLIT-PROFILE-REFUSAL",
     )
+    for home, original, _ in expected_homes.values():
+        assert _read_ext4_home(
+            backing, home, block_size=block_size
+        ) == original
+    assert _ext4_block_allocation_state(backing, (candidate,)) == {
+        candidate: False
+    }
 
 
 def test_staged_vfs_indexed_create_rejects_exact_i_blocks_mismatch(

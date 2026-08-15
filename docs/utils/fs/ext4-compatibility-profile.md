@@ -94,22 +94,32 @@ leaves, allocating exactly two blocks and publishing exact three-block parent
 size, sector, and extent state. It allocates from an initialized inode bitmap
 and commits the selected namespace blocks, parent/new inode records,
 allocation bitmaps, descriptors, and primary-super accounting atomically.
-Indexed admission
-binds live hash policy, validates every leaf and exact interval, rejects
-duplicates globally, proves the selected leaf through a complete map audit,
+An existing depth-zero HTree may also split a full hash-selected leaf under the
+bound seeded half-MD4 policy while its root retains an entry slot. The split
+rewrites that leaf and the root,
+allocates and journals one new checksummed leaf, and advances parent size,
+sector count, extent map, and block accounting by exactly one filesystem block.
+Its parent map must be either an inline resident depth-zero extent root or a
+singleton resident depth-one root naming one authenticated external depth-zero
+extent leaf. The EOF extent must coalesce with the newly selected physical
+block or the governing extent node must retain an entry slot; wider map
+shapes and HTree root-depth growth remain gated. Indexed admission binds live
+hash policy, validates every leaf and exact interval, rejects duplicates
+globally, proves the selected leaf through a complete map audit,
 and reauthenticates the parent inode location plus exact root/leaf/insertion
 snapshots across cold, dry, and live passes. A committed selected-leaf tear
-retains the public object and replays all six homes before a write-free stable
-remount, without rewriting the root, other leaves, external extent node, or
+in the slack-only indexed form retains the public object and replays all six
+homes before a write-free stable remount, without rewriting the root, other
+leaves, external extent node, or
 block bitmap. Linear conversion binds identical hash and source authority
 across all three planning passes, derives `8/0/0` through `12/0/0` metadata
 credit from actual home deduplication, and proves the old root plus both
 allocation candidates in one filesystem-wide range scope. The credential and
 inheritance envelope remains explicit:
 root-owned, non-setgid parents without inline or external xattrs/default ACLs
-create root-owned mode-0666 files. Indexed full-leaf splitting, indexed LINK or
-MKDIR, wider indexed-map policy, and lazy inode-table initialization remain
-unsupported. The first shrink `TRUNCATE` slice is now public as well:
+create root-owned mode-0666 files. Indexed HTree root-depth growth, indexed
+LINK or MKDIR, wider indexed-map policy, and lazy inode-table initialization
+remain unsupported. The first shrink `TRUNCATE` slice is now public as well:
 it accepts a strict new EOF inside the old final initialized block, journals
 the zeroed retained-block tail and checksummed inode together as exact `2/0/0`
 metadata payloads, and preserves mapping, `i_blocks`, links, xattrs, and free-
@@ -176,9 +186,10 @@ parent link, and rewrites the child's `..` entry and checksum under exact
 descriptors, and current-working-directory object. Same-parent directories,
 victims, and replacement remain unsupported. Singleton-modern-orphan final-
 link removal is operation-admitted for both closed and descriptor-retained
-targets. Existing depth-zero HTree CREATE and atomic one-block linear-to-HTree
-growth are operation-admitted; indexed full-leaf mutation is the next delivery
-phase. Extent-tree
+targets. Existing depth-zero HTree CREATE, atomic one-block linear-to-HTree
+growth, and full-leaf splitting under a depth-zero root with entry capacity are
+operation-admitted. Indexed root-depth growth and indexed LINK/MKDIR remain
+later delivery phases. Extent-tree
 depth and indexed-directory HTree depth are
 independent ratchets. Broaden either only when the next operation or a pinned
 realistic corpus demands it; directory growth does not imply speculative
@@ -2094,6 +2105,26 @@ replays all nine homes in 209,835,075, and reaches a byte-stable, write-free
 remount in 51,001,379. Both clean results pass pinned `debugfs` and read-only
 e2fsprogs 1.47.4 `e2fsck`.
 
+Existing-index full-leaf qualification starts from directory inode 27 with a
+three-entry depth-zero HTree root, a full selected leaf at block 1357, and a
+singleton resident depth-one extent root naming checksummed external map leaf
+1365. `CREATE new.txt` allocates block 1364 as logical block four, splits and
+restamps the selected records into old and new leaves, inserts the new hash
+separator into root 1355, and updates external extent leaf 1365. The parent
+advances from 4,096 to 5,120 bytes and from ten to twelve 512-byte sectors;
+free blocks and free inodes each fall by one. Its exact ten checkpoint homes at
+W24 through W33 are child inode table 283, parent inode table 281, old leaf
+1357, new leaf 1364, HTree root 1355, external extent leaf 1365, block bitmap
+259, primary GDT 2, primary superblock 1, and inode bitmap 267. The clean
+journey completes in 1,412,826,248 of its 1.45-billion-step guard after a cold
+source build of 1,592,943,041 steps under the narrow 1.6-billion source guard.
+A nine-metadata profile measures the same exact ten homes, returns `NOSPC`,
+and performs no transaction or media write. A committed W27 new-leaf tear
+retains public CREATE authority; recovery replays all ten after-images before
+an 84,152,965-step byte-stable write-free remount. The clean and recovered
+images pass independent raw after-image checks, pinned `debugfs`, and read-only
+e2fsprogs 1.47.4 `e2fsck`.
+
 The public `UNLINK` lifetimes are regular-file removals from an
 authenticated one-block linear directory. The staged binding alone advertises
 the capability. The target and parent are root-owned on the qualified 1
@@ -2445,7 +2476,9 @@ descriptor journey measures 4,549,770 steps.
 `VFS-CAP-RENAME-REPLACE` remains absent. Victims, replacement, and same-parent
 directory moves remain gated. Qualified singleton-modern-orphan final-link
 lifetime closure is complete. One-block linear-to-HTree growth is complete;
-the next delivery phase is full-leaf mutation in an existing indexed parent.
+full-leaf mutation in an existing depth-zero indexed parent is complete while
+the root retains an entry slot. HTree root-depth growth and indexed `LINK` and
+`MKDIR` remain later directory-mutation phases.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
