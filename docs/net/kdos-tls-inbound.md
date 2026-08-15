@@ -176,6 +176,15 @@ Listener ownership and accept scheduling remain outside HCONN. HTTP parsing,
 routing, and application code continue to consume an already-open NIO port and
 require no TLS-specific branch.
 
+HCONN terminal close proves that TLS and socket authority have been retired
+after the TCP FIN is emitted. The unowned TCP terminal state still advances
+through the ordinary machine network service; it is not retained by the NIO
+port or listener for the connection lifetime. A cooperative server therefore
+continues serialized network polling after HCONN becomes terminal. The real
+vertical performs one `KDOSNET-WITH`-guarded `TCP-POLL` service operation per
+completed connection, which consumes the independent peer's queued final ACK
+and proves the child TCB reaches `CLOSED`.
+
 When the listener owner is idle and no terminal result remains to be returned:
 
 ```forth
@@ -185,3 +194,18 @@ owner KDOSTLSL-FINI                       ( -- status )
 `KDOSTLSL-FINI` wipes only the Akashic owner record. It returns
 `KDOSTLSL-S-BUSY` while any request, retained result, cleanup, or borrowed port
 is still live and never performs lower teardown itself.
+
+## Real vertical qualification
+
+`local_testing/test_kdos_tls_inbound_vertical.py` builds the modules from
+source and drives two independent Python TLS 1.3 clients over emulated raw
+Ethernet/TCP. Each client verifies the exact leaf certificate and `http/1.1`
+ALPN, sends `GET /probe`, receives the HCONN response, exchanges TLS
+close-notify and TCP FIN in both directions, and leaves no live socket, TLS
+context, TCB, credential pin, or network/TLS lock. The second connection uses
+the same secure listener and a fresh shared-port record.
+
+```text
+MEGAPAD_ROOT=/path/to/megapad-secure-server-transport \
+  python3 -m unittest local_testing.test_kdos_tls_inbound_vertical
+```

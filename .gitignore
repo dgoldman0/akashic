@@ -207,6 +207,9 @@ local_testing/*
 !local_testing/test_vfs_ext4.py
 !local_testing/test_gap_buf.py
 !local_testing/test_textarea.py
+!local_testing/test_kdos_tls_inbound_vertical.py
+!local_testing/kdos_tls_memory_peer.py
+!local_testing/tls-inbound-vertical.f
 !local_testing/evidence/
 local_testing/evidence/*
 !local_testing/evidence/*.md

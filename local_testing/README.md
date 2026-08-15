@@ -387,6 +387,12 @@ The Streams qualification path is intentionally split by boundary:
   post-DNS public-address admission, policy override/mutation hardening,
   cancellation, graceful close, and bounded abort fallback without external
   network access.
+- `test_kdos_tls_inbound_vertical.py` is the unprivileged source-mode inbound
+  capstone. Two independent Python `ssl.MemoryBIO` TLS 1.3 clients traverse
+  the real KDOS listener, the persistent Akashic accept owner, the shared NIO
+  TLS port, and HCONN. It proves HTTP bytes, certificate and ALPN identity,
+  bidirectional close-notify/FIN, listener reuse, and exact final resource
+  cleanup without TAP or host networking.
 - `streams` covers the standalone timeline, context, search, and draft UI.
 - `desktop-streams` covers real launcher-driven source create/toggle/removal,
   exact source/draft persistence, close, relaunch, and recovery through Desk.
@@ -418,6 +424,13 @@ Desk-hosted responsiveness journey. The connector records cycles per poll,
 but the complete live certificate-chain and signature phases do not yet have a
 measured per-poll CPU ceiling. Context cleanup also does not prove that every
 machine-global KDOS TLS/cryptographic scratch buffer has been sanitized.
+
+Run the inbound secure-server capstone against the matching MegaPad worktree:
+
+```text
+MEGAPAD_ROOT=/path/to/megapad-secure-server-transport \
+  python3 -m unittest local_testing.test_kdos_tls_inbound_vertical
+```
 
 The no-network construction/configuration gate is:
 
