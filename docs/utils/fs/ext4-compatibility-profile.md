@@ -86,18 +86,22 @@ profile-admitted operation and recovery closure.
 The existing multi-leaf depth-one allocation ratchet is closed: the driver
 selects and reauthenticates the governing leaf, edits and repairs only its
 resident key, and splits it while the resident root has index capacity. The
-first `CREATE` slice is also public in the staged binding. It allocates from an
-already initialized inode bitmap and inserts one empty regular file into
-authenticated slack in an existing one-block linear directory, committing its
-directory block, parent/new inode records, inode bitmap, descriptor, and
-primary-super accounting atomically. A precommit descriptor tear publishes no
-namespace or allocation state; a committed directory-home tear retains the
-public object and replays all six homes on the next mount before a write-free
-stable remount. Its current credential and inheritance
-envelope is deliberately explicit: root-owned, non-setgid parents without
-inline or external xattrs/default ACLs create root-owned mode-0666 files;
-indexed/multi-block directory insertion and lazy inode-table initialization
-remain unsupported. The first shrink `TRUNCATE` slice is now public as well:
+staged `CREATE` capability now inserts one empty regular file into
+authenticated slack in either an existing one-block linear directory or an
+existing depth-zero HTree leaf. It allocates from an initialized inode bitmap
+and commits the selected directory block, parent/new inode records, inode
+bitmap, descriptor, and primary-super accounting atomically. Indexed admission
+binds live hash policy, validates every leaf and exact interval, rejects
+duplicates globally, proves the selected leaf through a complete map audit,
+and reauthenticates the parent inode location plus exact root/leaf/insertion
+snapshots across cold, dry, and live passes. A committed selected-leaf tear
+retains the public object and replays all six homes before a write-free stable
+remount, without rewriting the root, other leaves, external extent node, or
+block bitmap. The credential and inheritance envelope remains explicit:
+root-owned, non-setgid parents without inline or external xattrs/default ACLs
+create root-owned mode-0666 files. Directory growth/splitting, indexed LINK or
+MKDIR, wider indexed-map policy, and lazy inode-table initialization remain
+unsupported. The first shrink `TRUNCATE` slice is now public as well:
 it accepts a strict new EOF inside the old final initialized block, journals
 the zeroed retained-block tail and checksummed inode together as exact `2/0/0`
 metadata payloads, and preserves mapping, `i_blocks`, links, xattrs, and free-
@@ -164,7 +168,8 @@ parent link, and rewrites the child's `..` entry and checksum under exact
 descriptors, and current-working-directory object. Same-parent directories,
 victims, and replacement remain unsupported. Singleton-modern-orphan final-
 link removal is operation-admitted for both closed and descriptor-retained
-targets. Directory growth and indexed-directory mutation are the next delivery
+targets. Existing depth-zero HTree CREATE is operation-admitted; atomic
+linear-to-HTree growth and indexed full-leaf mutation are the next delivery
 phase. Extent-tree
 depth and indexed-directory HTree depth are
 independent ratchets. Broaden either only when the next operation or a pinned
@@ -2061,7 +2066,11 @@ At this generalized-TRUNCATE milestone, cold source mode used 1,317,793,564 of
 1.35 billion steps across 3,266 packed ext4 lines. No checked-in limit was
 raised for that slice. The later orphan-backed final-link source measures
 1,402,709,928 of the current 1.42-billion cold-source guard across 3,421 packed
-lines.
+lines. Existing HTree CREATE now measures 1,476,019,687 of the narrowly raised
+1.48-billion guard across 3,535 packed lines; the preceding authenticated
+directory-descriptor build had already used 1,447,937,156 of 1.45 billion, so
+the increase reflects completed cold-source work rather than a journey or
+harness failure.
 
 The public `UNLINK` lifetimes are regular-file removals from an
 authenticated one-block linear directory. The staged binding alone advertises

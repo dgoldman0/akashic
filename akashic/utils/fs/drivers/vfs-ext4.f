@@ -23718,18 +23718,19 @@ CREATE _XB _EXT4-MAX-BLOCK ALLOT
 ; _EXT4-WR-HOOK !
 
 \ =====================================================================
-\  Atomic inode creation and hard-link insertion in one directory block
+\  Atomic inode creation and namespace insertion
 \ =====================================================================
 \
 \ CREATE allocates an empty regular inode.  MKDIR extends the same authority
 \ with one geometry-selected block containing checksummed `.` and `..` entries,
 \ exact parent/child link counts, and block plus inode allocation accounting.
-\ Both insert into authenticated slack in an existing one-block linear parent.
-\ LINK reuses that namespace authority without allocating: the target inode,
-\ parent inode, and parent directory become one exact deduplicated 2/0/0 or
-\ 3/0/0 transaction.  HTree insertion, ACL inheritance, non-root credential
-\ policy, and parent directory growth remain explicit unsupported edges.  Each
-\ admitted edit is one complete metadata-only journal transaction.
+\ CREATE inserts into authenticated slack in either a one-block linear parent
+\ or an existing depth-zero HTree.  LINK reuses the linear namespace authority
+\ without allocating: the target inode, parent inode, and parent directory
+\ become one exact deduplicated 2/0/0 or 3/0/0 transaction.  Indexed LINK,
+\ indexed MKDIR, ACL inheritance, non-root credential policy, and directory
+\ growth remain explicit unsupported edges.  Each admitted edit is one
+\ complete metadata-only journal transaction.
 
 9 CONSTANT _XC-META-HOME-MAX
 CREATE _XC-META-HOMES _XC-META-HOME-MAX CELLS ALLOT
@@ -23751,9 +23752,11 @@ VARIABLE _XC-PARENT-GEN
 VARIABLE _XC-PARENT-NLINK
 VARIABLE _XC-PARENT-NEW-NLINK
 VARIABLE _XC-PARENT-GROUP
-VARIABLE _XC-PARENT-INDEX
 VARIABLE _XC-PARENT-HOME
 VARIABLE _XC-PARENT-OFF
+VARIABLE _XC-PARENT-IN
+VARIABLE _XC-PARENT-FLAGS
+VARIABLE _XC-LOAD-INDEXED
 VARIABLE _XC-INODE
 VARIABLE _XC-LINK-OLD-NLINK
 VARIABLE _XC-LINK-NEW-NLINK
@@ -23787,9 +23790,44 @@ VARIABLE _XC-IOR
 VARIABLE _XC-WRITER
 VARIABLE _XC-TX
 VARIABLE _XC-ACTIVE
+VARIABLE _XC-INDEXED
+VARIABLE _XC-SHAPE-SET
+VARIABLE _XC-INDEX-BASELINE
+VARIABLE _XC-INDEX-ENTRY
+VARIABLE _XC-INDEX-ROUTE
+VARIABLE _XC-INDEX-LOGICAL
+VARIABLE _XC-INDEX-PHYS
+VARIABLE _XC-INDEX-SELECTED
+VARIABLE _XC-INDEX-SELECTED-SEEN
+VARIABLE _XC-INDEX-DUPLICATE
+VARIABLE _XC-INDEX-HASH
+VARIABLE _XC-INDEX-MINOR
+VARIABLE _XC-INDEX-SCAN-HASH
+VARIABLE _XC-INDEX-SCAN-MINOR
+VARIABLE _XC-INDEX-ROOT-HOME
+VARIABLE _XC-INDEX-BASE-ROUTE
+VARIABLE _XC-INDEX-BASE-ROUTE-LOGICAL
+VARIABLE _XC-INDEX-BASE-ENTRY
+VARIABLE _XC-INDEX-BASE-LOGICAL
+VARIABLE _XC-INDEX-BASE-HOME
+VARIABLE _XC-INDEX-BASE-ROOT-HOME
+VARIABLE _XC-INDEX-BASE-PARENT-GROUP
+VARIABLE _XC-INDEX-BASE-PARENT-HOME
+VARIABLE _XC-INDEX-BASE-PARENT-OFF
+VARIABLE _XC-INDEX-BASE-HASH
+VARIABLE _XC-INDEX-BASE-MINOR
+VARIABLE _XC-INDEX-BASE-INSERT-KIND
+VARIABLE _XC-INDEX-BASE-INSERT-OFF
+VARIABLE _XC-INDEX-BASE-INSERT-REC
+VARIABLE _XC-INDEX-BASE-PREV-OFF
+VARIABLE _XC-INDEX-BASE-PREV-USED
+VARIABLE _XC-MAP-LIMIT
 
 CREATE _XC-NAME-SNAPSHOT 256 ALLOT
 CREATE _XC-DIR-SNAPSHOT _EXT4-STAGED-WRITE-BLOCK-SIZE ALLOT
+CREATE _XC-ROOT-SNAPSHOT _EXT4-STAGED-WRITE-BLOCK-SIZE ALLOT
+CREATE _XC-ROOT-CURRENT _EXT4-STAGED-WRITE-BLOCK-SIZE ALLOT
+CREATE _XC-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
 CREATE _XC-PARENT-SNAPSHOT _EXT4-STAGED-WRITE-INODE-SIZE ALLOT
 CREATE _XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE ALLOT
 
@@ -23911,6 +23949,285 @@ CREATE _XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE ALLOT
     THEN
     _XC-INSERT-OFF @ -1 = IF VFS-E-NOSPC EXIT THEN
     0 ;
+
+VARIABLE _XC-HASH-SUPER
+
+\ Recheck the live primary fields that select the HTree hash function and
+\ seed.  Generic read mounts may tolerate historically stale backup s_flags;
+\ mutation instead binds the checksummed live primary to the mounted cache.
+: _XC-REQUIRE-HASH-AUTHORITY  ( -- ior )
+    _XC-CTX @ _EXT4-PRIMARY-SUPER-BLOCK
+    _XC-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
+    _XC-CTX @ _EXT4-C.BLOCK +
+    _XC-CTX @ _EXT4-PRIMARY-SUPER-OFF + DUP _XC-HASH-SUPER !
+    _EXT4-SUPER-CHECKSUM? ?DUP IF NIP EXIT THEN 0= IF
+        EXT4-D-SUPER-CHECKSUM _EXT4-CORRUPT EXIT
+    THEN
+    _XC-HASH-SUPER @ _EXT4-SUPER-SEED? ?DUP IF NIP EXIT THEN 0= IF
+        EXT4-D-SUPER-CHECKSUM _EXT4-CORRUPT EXIT
+    THEN
+    _XC-HASH-SUPER @ _EXT4-SB.HASH-SEED +
+    _XC-CTX @ _EXT4-C.SB + _EXT4-SB.HASH-SEED + 16
+    _EXT4-BYTES=? 0= IF VFS-E-CONFLICT EXIT THEN
+    _XC-HASH-SUPER @ _EXT4-SB.DEFAULT-HASH + C@
+    _XC-CTX @ _EXT4-C.SB + _EXT4-SB.DEFAULT-HASH + C@ <> IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    _XC-HASH-SUPER @ _EXT4-SB.FLAGS + L@
+    _XC-CTX @ _EXT4-C.SB + _EXT4-SB.FLAGS + L@ <> IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    0 ;
+
+\ An HTree leaf contains no dot records.  Authenticate every live entry's
+\ name, type, inode bound, and hash interval across the complete depth-zero
+\ tree.  An interval-eligible leaf may contribute an insertion point, while
+\ exact duplicate detection remains global.
+: _XC-INDEXED-LEAF-SCAN  ( selected? -- ior )
+    _XC-INDEX-SELECTED !
+    0 _XC-DIR-OFF !
+    _XC-CTX @ _EXT4-C.BSIZE + @ 12 - _XC-DIR-LIMIT !
+    BEGIN _XC-DIR-OFF @ _XC-DIR-LIMIT @ < WHILE
+        _XC-CTX @ _EXT4-C.DIR-BLOCK + _XC-DIR-OFF @ +
+        DUP _XC-DIR-DE !
+        4 + W@ DUP _XC-DIR-REC !
+        DUP 12 U< SWAP 3 AND 0<> OR IF
+            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+        THEN
+        _XC-DIR-OFF @ _XC-DIR-REC @ + _XC-DIR-LIMIT @ > IF
+            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+        THEN
+        _XC-DIR-DE @ 6 + C@ DUP _XC-DIR-NAME-LEN !
+        _XC-DIR-REC @ 8 - U> IF
+            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+        THEN
+        _XC-DIR-DE @ L@ DUP _XC-DIR-INODE ! IF
+            _XC-DIR-INODE @ _XC-CTX @ _EXT4-C.INODES + @ U> IF
+                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+            THEN
+            _XC-DIR-NAME-LEN @ 0= IF
+                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+            THEN
+            _XC-DIR-DE @ 8 + _XC-DIR-NAME-LEN @
+            _EXT4-DIRENT-NAME-VALID? 0= IF
+                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+            THEN
+            _XC-DIR-DE @ 7 + C@ _EXT4-DIRENT>TYPE 0= IF
+                DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+            THEN DROP
+            _XC-DIR-NAME-LEN @ 1 =
+            _XC-DIR-DE @ 8 + C@ [CHAR] . = AND
+            _XC-DIR-NAME-LEN @ 2 =
+            _XC-DIR-DE @ 8 + C@ [CHAR] . = AND
+            _XC-DIR-DE @ 9 + C@ [CHAR] . = AND OR IF
+                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+            THEN
+            _XC-DIR-DE @ _XC-DIRENT-NAME=? IF
+                -1 _XC-INDEX-DUPLICATE !
+            THEN
+            _XC-DIR-DE @ 8 + _XC-DIR-NAME-LEN @
+            _XC-DIRECTORY-DESC _EXT4-DD.DX-VERSION + @ _XC-CTX @
+            _EXT4-HALF-MD4-DIRHASH?
+            _XC-IOR ! _XC-INDEX-SCAN-MINOR ! _XC-INDEX-SCAN-HASH !
+            _XC-IOR @ ?DUP IF EXIT THEN
+            _XC-INDEX-SCAN-HASH @ _XC-DIRECTORY-DESC
+            _EXT4-DD-HASH-IN-INTERVAL? 0= IF
+                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+            THEN
+            _XC-DIR-NAME-LEN @ 8 + 3 + -4 AND
+            DUP _XC-DIR-USED !
+            _XC-DIR-REC @ U> IF
+                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+            THEN
+            _XC-INDEX-SELECTED @ _XC-INSERT-OFF @ -1 = AND IF
+                _XC-DIR-REC @ _XC-DIR-USED @ -
+                _XC-NEEDED @ U< 0= IF
+                    1 _XC-INSERT-KIND !
+                    _XC-DIR-OFF @ _XC-INSERT-PREV-OFF !
+                    _XC-DIR-USED @ _XC-INSERT-PREV-USED !
+                    _XC-DIR-OFF @ _XC-DIR-USED @ +
+                    _XC-INSERT-OFF !
+                    _XC-DIR-REC @ _XC-DIR-USED @ -
+                    _XC-INSERT-REC !
+                THEN
+            THEN
+        ELSE
+            _XC-DIR-NAME-LEN @
+            _XC-DIR-DE @ 7 + C@ OR IF
+                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+            THEN
+            _XC-INDEX-SELECTED @ _XC-INSERT-OFF @ -1 = AND
+            _XC-DIR-REC @ _XC-NEEDED @ U< 0= AND IF
+                2 _XC-INSERT-KIND !
+                _XC-DIR-OFF @ _XC-INSERT-OFF !
+                _XC-DIR-REC @ _XC-INSERT-REC !
+            THEN
+        THEN
+        _XC-DIR-REC @ _XC-DIR-OFF +!
+    REPEAT
+    _XC-DIR-OFF @ _XC-DIR-LIMIT @ <> IF
+        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
+\ The cold measurement, dry stage, and live stage must all refer to the same
+\ live VFS parent, not merely to an inode number that still parses on disk.
+: _XC-REQUIRE-PARENT-RUNTIME  ( -- ior )
+    _XC-V @ V.LIFECYCLE @ VFS-L-MOUNTED <> IF VFS-E-STALE EXIT THEN
+    _XC-V @ V.BCTX @ _XC-CTX @ <> IF VFS-E-STALE EXIT THEN
+    _XC-V @ _EXT4-ATTACHED? 0= _XC-V @ _EXT4-READY? 0= OR IF
+        VFS-E-STALE EXIT
+    THEN
+    _XC-D @ IN.PARENT @ _XC-PARENT @ <> IF VFS-E-CONFLICT EXIT THEN
+    _XC-PARENT @ _XC-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
+    _XC-PARENT @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
+    _XC-PARENT @ D.VNODE @ _XC-PARENT-VN @ <> IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    _XC-PARENT-VN @ VN.TYPE @ VFS-T-DIR <> IF VFS-E-NOTDIR EXIT THEN
+    _XC-PARENT-VN @ VN.BID @ _XC-PARENT-INO @ <> IF VFS-E-STALE EXIT THEN
+    _XC-PARENT-VN @ VN.GEN @ _XC-PARENT-GEN @ <> IF VFS-E-STALE EXIT THEN
+    _XC-PARENT @ IN.PARENT @ ?DUP IF
+        IN.BID @
+    ELSE
+        _XC-PARENT-INO @
+    THEN _XC-PARENT-PARENT-INO @ <> IF VFS-E-STALE EXIT THEN
+    _XC-LINKING @ 0= _XC-PARENT @ _XC-V @ V.CWD @ <> AND IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    0 ;
+
+\ Stream the complete depth-zero HTree in root-entry order.  Continuation
+\ boundaries intentionally give two adjacent leaves the same normalized hash
+\ endpoint, so the first eligible leaf with slack becomes the selected leaf;
+\ it need not be the initial lookup route when that route is full.
+: _XC-AUTH-INDEXED-PARENT  ( -- ior )
+    _XC-DIRECTORY-DESC _EXT4-DD-AUTH-HTREE-ROOT ?DUP IF EXIT THEN
+    _XC-DIRECTORY-DESC _EXT4-DD-REQUIRE-DEPTH0 ?DUP IF EXIT THEN
+    _XC-REQUIRE-HASH-AUTHORITY ?DUP IF EXIT THEN
+    _XC-NAME-SNAPSHOT _XC-NLEN @
+    _XC-DIRECTORY-DESC _EXT4-DD.DX-VERSION + @ _XC-CTX @
+    _EXT4-HALF-MD4-DIRHASH?
+    _XC-IOR ! _XC-INDEX-MINOR ! _XC-INDEX-HASH !
+    _XC-IOR @ ?DUP IF EXIT THEN
+    _XC-INDEX-MINOR @
+    _XC-DIRECTORY-DESC _EXT4-DD.TARGET-MINOR + !
+    _XC-INDEX-HASH @ _XC-DIRECTORY-DESC
+    _EXT4-DD-SELECT-ROUTE ?DUP IF EXIT THEN
+    _XC-DIRECTORY-DESC _EXT4-DD.ROUTE-ENTRY + @ _XC-INDEX-ROUTE !
+    _XC-DIRECTORY-DESC _EXT4-DD.LEAF-LOGICAL + @ _XC-INDEX-LOGICAL !
+    _XC-DIRECTORY-DESC _EXT4-DD.ROOT-HOME + @ _XC-INDEX-ROOT-HOME !
+    _XC-INDEX-BASELINE @ IF
+        _XC-INDEX-ROOT-HOME @ _XC-INDEX-BASE-ROOT-HOME @ <>
+        _XC-INDEX-ROUTE @ _XC-INDEX-BASE-ROUTE @ <> OR
+        _XC-INDEX-LOGICAL @ _XC-INDEX-BASE-ROUTE-LOGICAL @ <> OR
+        _XC-INDEX-HASH @ _XC-INDEX-BASE-HASH @ <> OR
+        _XC-INDEX-MINOR @ _XC-INDEX-BASE-MINOR @ <> OR IF
+            VFS-E-CONFLICT EXIT
+        THEN
+        _XC-ROOT-CURRENT _XC-ROOT-SNAPSHOT
+        _XC-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
+            VFS-E-CONFLICT EXIT
+        THEN
+    THEN
+    -1 _XC-INSERT-OFF ! 0 _XC-INSERT-KIND !
+    0 _XC-INDEX-SELECTED-SEEN ! 0 _XC-INDEX-DUPLICATE !
+    _XC-DIRECTORY-DESC _EXT4-DD.DX-COUNT + @ 0 ?DO
+        I _XC-INDEX-ENTRY !
+        I _XC-DIRECTORY-DESC _EXT4-DD-SET-INTERVAL
+        ?DUP IF UNLOOP EXIT THEN
+        _XC-DIRECTORY-DESC _EXT4-DD.LEAF-LOGICAL + @
+        _XC-DIRECTORY-DESC _EXT4-DD-LOAD-LOGICAL
+        _XC-IOR ! _XC-INDEX-PHYS !
+        _XC-IOR @ ?DUP IF UNLOOP EXIT THEN
+        _XC-PARENT-INO @ _XC-PARENT-GEN @ _XC-CTX @
+        _EXT4-VALIDATE-DIR-BLOCK ?DUP IF UNLOOP EXIT THEN
+        _XC-INDEX-HASH @ _XC-DIRECTORY-DESC
+        _EXT4-DD-HASH-IN-INTERVAL? _XC-INDEX-SELECTED !
+        _XC-INDEX-SELECTED @ _XC-INDEXED-LEAF-SCAN
+        ?DUP IF UNLOOP EXIT THEN
+        _XC-INDEX-SELECTED-SEEN @ 0=
+        _XC-INSERT-OFF @ -1 <> AND IF
+            -1 _XC-INDEX-SELECTED-SEEN !
+            _XC-INDEX-PHYS @ _XC-DIR-HOME !
+            _XC-INDEX-BASELINE @ IF
+                _XC-INDEX-ENTRY @ _XC-INDEX-BASE-ENTRY @ <>
+                _XC-DIRECTORY-DESC _EXT4-DD.LEAF-LOGICAL + @
+                    _XC-INDEX-BASE-LOGICAL @ <> OR
+                _XC-INDEX-PHYS @ _XC-INDEX-BASE-HOME @ <> OR IF
+                    VFS-E-CONFLICT UNLOOP EXIT
+                THEN
+                _XC-CTX @ _EXT4-C.DIR-BLOCK + _XC-DIR-SNAPSHOT
+                _XC-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
+                    VFS-E-CONFLICT UNLOOP EXIT
+                THEN
+            ELSE
+                _XC-INDEX-ENTRY @ _XC-INDEX-BASE-ENTRY !
+                _XC-DIRECTORY-DESC _EXT4-DD.LEAF-LOGICAL + @
+                    _XC-INDEX-BASE-LOGICAL !
+                _XC-INDEX-PHYS @ _XC-INDEX-BASE-HOME !
+                _XC-CTX @ _EXT4-C.DIR-BLOCK + _XC-DIR-SNAPSHOT
+                _XC-CTX @ _EXT4-C.BSIZE + @ CMOVE
+            THEN
+        THEN
+    LOOP
+    _XC-INDEX-DUPLICATE @ IF VFS-E-EXISTS EXIT THEN
+    _XC-INDEX-SELECTED-SEEN @ 0= IF VFS-E-NOSPC EXIT THEN
+    _XC-INDEX-BASELINE @ IF
+        _XC-INSERT-KIND @ _XC-INDEX-BASE-INSERT-KIND @ <>
+        _XC-INSERT-OFF @ _XC-INDEX-BASE-INSERT-OFF @ <> OR
+        _XC-INSERT-REC @ _XC-INDEX-BASE-INSERT-REC @ <> OR IF
+            VFS-E-CONFLICT EXIT
+        THEN
+        _XC-INSERT-KIND @ 1 = IF
+            _XC-INSERT-PREV-OFF @ _XC-INDEX-BASE-PREV-OFF @ <>
+            _XC-INSERT-PREV-USED @ _XC-INDEX-BASE-PREV-USED @ <> OR IF
+                VFS-E-CONFLICT EXIT
+            THEN
+        THEN
+    ELSE
+        _XC-ROOT-CURRENT _XC-ROOT-SNAPSHOT
+        _XC-CTX @ _EXT4-C.BSIZE + @ CMOVE
+        _XC-INDEX-ROOT-HOME @ _XC-INDEX-BASE-ROOT-HOME !
+        _XC-INDEX-ROUTE @ _XC-INDEX-BASE-ROUTE !
+        _XC-INDEX-LOGICAL @ _XC-INDEX-BASE-ROUTE-LOGICAL !
+        _XC-INDEX-HASH @ _XC-INDEX-BASE-HASH !
+        _XC-INDEX-MINOR @ _XC-INDEX-BASE-MINOR !
+        _XC-INSERT-KIND @ _XC-INDEX-BASE-INSERT-KIND !
+        _XC-INSERT-OFF @ _XC-INDEX-BASE-INSERT-OFF !
+        _XC-INSERT-REC @ _XC-INDEX-BASE-INSERT-REC !
+        _XC-INSERT-PREV-OFF @ _XC-INDEX-BASE-PREV-OFF !
+        _XC-INSERT-PREV-USED @ _XC-INDEX-BASE-PREV-USED !
+        _XC-PARENT-GROUP @ _XC-INDEX-BASE-PARENT-GROUP !
+        _XC-PARENT-HOME @ _XC-INDEX-BASE-PARENT-HOME !
+        _XC-PARENT-OFF @ _XC-INDEX-BASE-PARENT-OFF !
+        -1 _XC-INDEX-BASELINE !
+    THEN
+    0 ;
+
+\ The parent is excluded from the filesystem-wide owner scan, so first prove
+\ from its complete extent tree that the chosen leaf is ordinary mutable data
+\ exactly once, never an external extent node, and that no extent escapes the
+\ authenticated directory size.
+: _XC-REQUIRE-DIRECTORY-MAP-AUDIT  ( -- ior )
+    _EXT4-MUTATION-MAP-TARGET @
+    _EXT4-MUTATION-MAP-ACTIVE @ OR
+    _EXT4-MUTATION-MAP-HITS @ OR IF VFS-E-BUSY EXIT THEN
+    _EXT4-MAP-VALIDATION-LIMIT @ _XC-MAP-LIMIT !
+    _XC-DIR-HOME @ _EXT4-MUTATION-MAP-TARGET !
+    0 _EXT4-MUTATION-MAP-HITS !
+    _XC-DIRECTORY-DESC _EXT4-DD.LOGICAL-BLOCKS + @
+    _EXT4-MAP-VALIDATION-LIMIT !
+    -1 _EXT4-MUTATION-MAP-ACTIVE !
+    _XC-DIRECTORY-DESC _EXT4-DD-REQUIRE-INODE _XC-IOR !
+    0 _EXT4-MUTATION-MAP-ACTIVE !
+    0 _EXT4-MUTATION-MAP-TARGET !
+    _XC-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
+    _XC-IOR @ 0= _EXT4-MUTATION-MAP-HITS @ 1 <> AND IF
+        EXT4-D-DATA-MAP _EXT4-CORRUPT _XC-IOR !
+    THEN
+    0 _EXT4-MUTATION-MAP-HITS !
+    _XC-IOR @ ;
 
 : _XC-DIR-APPLY  ( image -- ior )
     DUP _XC-DIR-IMAGE ! 0= IF VFS-E-INVALID EXIT THEN
@@ -24235,16 +24552,32 @@ VARIABLE _XC-NEW-DIR-IMAGE
         _XC-PARENT-VN @ VN.CTIME-NS @ = AND ;
 
 : _XC-LOAD-PARENT  ( -- ior )
-    _XC-PARENT-INO @ _XC-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
-    _EXT4-IR-GROUP @ _XC-PARENT-GROUP !
-    _EXT4-IR-INDEX @ _XC-PARENT-INDEX !
-    _EXT4-IR-BLOCK @ _XC-PARENT-HOME !
-    _EXT4-IR-OFF @ _XC-PARENT-OFF !
-    _XC-CTX @ _EXT4-STAGE-CURRENT-INODE
-    _XC-IOR ! DUP VFS-T-DIR <> IF
-        DROP _XC-IOR @ ?DUP IF EXIT THEN VFS-E-NOTDIR EXIT
-    THEN DROP
-    _XC-IOR @ ?DUP IF EXIT THEN
+    _XC-REQUIRE-PARENT-RUNTIME ?DUP IF EXIT THEN
+    _XC-ROOT-CURRENT _XC-DIRECTORY-DESC _EXT4-DD-INIT
+    _XC-PARENT @ _XC-V @ _XC-CTX @ _XC-DIRECTORY-DESC
+    _EXT4-DD-AUTH-INODE ?DUP IF EXIT THEN
+    _XC-DIRECTORY-DESC _EXT4-DD.CTX + @ _XC-CTX @ <>
+    _XC-DIRECTORY-DESC _EXT4-DD.PARENT + @ _XC-PARENT @ <> OR
+    _XC-DIRECTORY-DESC _EXT4-DD.VFS + @ _XC-V @ <> OR
+    _XC-DIRECTORY-DESC _EXT4-DD.INO + @ _XC-PARENT-INO @ <> OR
+    _XC-DIRECTORY-DESC _EXT4-DD.PARINO + @
+        _XC-PARENT-PARENT-INO @ <> OR
+    _XC-DIRECTORY-DESC _EXT4-DD.GEN + @ _XC-PARENT-GEN @ <> OR IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    _XC-INDEX-BASELINE @ IF
+        _XC-DIRECTORY-DESC _EXT4-DD.GROUP + @
+            _XC-INDEX-BASE-PARENT-GROUP @ <>
+        _XC-DIRECTORY-DESC _EXT4-DD.INODE-HOME + @
+            _XC-INDEX-BASE-PARENT-HOME @ <> OR
+        _XC-DIRECTORY-DESC _EXT4-DD.INODE-OFF + @
+            _XC-INDEX-BASE-PARENT-OFF @ <> OR IF
+            VFS-E-CONFLICT EXIT
+        THEN
+    THEN
+    _XC-DIRECTORY-DESC _EXT4-DD.GROUP + @ _XC-PARENT-GROUP !
+    _XC-DIRECTORY-DESC _EXT4-DD.INODE-HOME + @ _XC-PARENT-HOME !
+    _XC-DIRECTORY-DESC _EXT4-DD.INODE-OFF + @ _XC-PARENT-OFF !
     _XC-PARENT-CACHE-MATCH? 0= IF VFS-E-CONFLICT EXIT THEN
     _XC-CTX @ _EXT4-C.R.NLINK + @ DUP _XC-PARENT-NLINK !
     _XC-DIRECTORY @ IF
@@ -24262,31 +24595,84 @@ VARIABLE _XC-NEW-DIR-IMAGE
     _XC-CTX @ _EXT4-C.R.MODE + @ 0x0800 AND IF
         EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
-    _XC-CTX @ _EXT4-C.R.SIZE + @
-    _XC-CTX @ _EXT4-C.BSIZE + @ <> IF
+    _XC-CTX @ _EXT4-C.INODE + _XC-PARENT-IN !
+    _XC-PARENT-IN @ _EXT4-I.FLAGS + L@ DUP _XC-PARENT-FLAGS !
+    _EXT4-INDEX-FL AND 0<> _XC-LOAD-INDEXED !
+    _XC-LOAD-INDEXED @ IF
+        _XC-PARENT-FLAGS @
+        _EXT4-EXTENTS-FL _EXT4-INDEX-FL OR <> IF
+            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+        THEN
+        _XC-LINKING @ _XC-DIRECTORY @ OR IF
+            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+        THEN
+    ELSE
+        _XC-PARENT-FLAGS @ _EXT4-EXTENTS-FL <> IF
+            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+        THEN
+    THEN
+    _XC-SHAPE-SET @ IF
+        _XC-LOAD-INDEXED @ _XC-INDEXED @ <> IF VFS-E-CONFLICT EXIT THEN
+    ELSE
+        _XC-LOAD-INDEXED @ _XC-INDEXED !
+        -1 _XC-SHAPE-SET !
+    THEN
+    _XC-DIRECTORY-DESC _EXT4-DD.INDEXED + @ 0<>
+    _XC-LOAD-INDEXED @ <> IF VFS-E-CONFLICT EXIT THEN
+    _XC-LOAD-INDEXED @ IF
+        _XC-DIRECTORY-DESC _EXT4-DD.LOGICAL-BLOCKS + @
+        _XC-PARENT-IN @ _EXT4-I.BLOCK + 6 + W@ DUP IF
+            1 <> IF
+                DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+            THEN
+            _XC-PARENT-IN @ _EXT4-I.BLOCK + 2 + W@ 1 <> IF
+                DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+            THEN
+            1+
+        ELSE
+            DROP
+        THEN
+        _XC-CTX @ _EXT4-C.SPB + @ *
+        _XC-DIRECTORY-DESC _EXT4-DD.SECTORS + @ <> IF
+            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+        THEN
+    ELSE
+        _XC-CTX @ _EXT4-C.R.SIZE + @
+        _XC-CTX @ _EXT4-C.BSIZE + @ <> IF
+            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+        THEN
+        _XC-CTX @ _EXT4-C.R.BLOCKS + @
+        _XC-CTX @ _EXT4-C.SPB + @ <> IF
+            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+        THEN
+    THEN
+    _XC-PARENT-IN @ _EXT4-I.FILE-ACL-LO + L@
+    _XC-PARENT-IN @ _EXT4-I.FILE-ACL-HI + W@ OR IF
         EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
-    _XC-CTX @ _EXT4-C.R.BLOCKS + @
-    _XC-CTX @ _EXT4-C.SPB + @ <> IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+    _XC-PARENT-IN @ _EXT4-I.EXTRA-SIZE + W@ 32 <> IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
-    _XC-CTX @ _EXT4-C.INODE + DUP _EXT4-I.FLAGS + L@
-    _EXT4-EXTENTS-FL <> IF
-        DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    _XC-PARENT-IN @ _EXT4-I.PROJECT-ID + L@ IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
-    DUP _EXT4-I.FILE-ACL-LO + L@
-    OVER _EXT4-I.FILE-ACL-HI + W@ OR IF
-        DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    DUP _EXT4-I.EXTRA-SIZE + W@ 32 <> IF
-        DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    DUP _EXT4-I.PROJECT-ID + L@ IF
-        DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-    THEN
-    160 + _XC-CTX @ _EXT4-C.ISIZE + @ 160 -
+    _XC-PARENT-IN @ 160 + _XC-CTX @ _EXT4-C.ISIZE + @ 160 -
     _EXT4-BYTES-ZERO? 0= IF
         EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XC-PARENT-HOME @ _XC-PARENT-GROUP @ _XC-CTX @
+    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
+    _XC-LOAD-INDEXED @ IF
+        _XC-INDEX-BASELINE @ IF
+            _XC-PARENT-IN @ _XC-PARENT-SNAPSHOT
+            _XC-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF
+                VFS-E-CONFLICT EXIT
+            THEN
+        ELSE
+            _XC-PARENT-IN @ _XC-PARENT-SNAPSHOT
+            _XC-CTX @ _EXT4-C.ISIZE + @ CMOVE
+        THEN
+        _XC-AUTH-INDEXED-PARENT EXIT
     THEN
     0 _XC-CTX @ _EXT4-MAP-BLOCK
     _XC-DIR-IOR ! _XC-DIR-PRESENT !
@@ -24299,9 +24685,7 @@ VARIABLE _XC-NEW-DIR-IMAGE
     ELSE
         _XC-DIR-HOME !
     THEN
-    _XC-PARENT-HOME @ _XC-PARENT-GROUP @ _XC-CTX @
-    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
-    _XC-CTX @ _EXT4-C.INODE + _XC-PARENT-SNAPSHOT
+    _XC-PARENT-IN @ _XC-PARENT-SNAPSHOT
     _XC-CTX @ _EXT4-C.ISIZE + @ CMOVE
     0 ;
 
@@ -24309,10 +24693,13 @@ VARIABLE _XC-NEW-DIR-IMAGE
     0 _XC-DIR-HOME !
     _XC-LOAD-PARENT ?DUP IF EXIT THEN
     _XC-DIR-HOME @ 1 _XC-CTX @
-    _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ;
+    _EXT4-VALIDATE-MUTATION-RANGE-TARGETS ?DUP IF EXIT THEN
+    _XC-INDEXED @ IF _XC-REQUIRE-DIRECTORY-MAP-AUDIT EXIT THEN
+    0 ;
 
 : _XC-CAPTURE-PARENT-DIRECTORY  ( -- ior )
     _XC-LOAD-PARENT ?DUP IF EXIT THEN
+    _XC-INDEXED @ IF 0 EXIT THEN
     _XC-DIR-HOME @ _XC-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
     _XC-CTX @ _EXT4-C.BLOCK +
     _XC-CTX @ _EXT4-C.DIR-BLOCK +
@@ -24556,6 +24943,11 @@ VARIABLE _XC-NEW-ROOT
     _EXT4-JTX-META-REPLACE ;
 
 : _XC-STAGE-DIRECTORY  ( -- ior )
+    _XC-INDEXED @ IF
+        \ Parent-inode staging may have reused the shared caches.  Rewalk the
+        \ exact root and every leaf before acquiring the selected afterimage.
+        _XC-LOAD-PARENT ?DUP IF EXIT THEN
+    THEN
     _XC-DIR-HOME @ _XC-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
     _XC-CTX @ _EXT4-C.BLOCK + _XC-DIR-SNAPSHOT
     _XC-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
@@ -24743,8 +25135,12 @@ VARIABLE _XC-NEW-ROOT
 : _XC-SCRUB  ( -- )
     _XC-NAME-SNAPSHOT 256 0 FILL
     _XC-DIR-SNAPSHOT _EXT4-STAGED-WRITE-BLOCK-SIZE 0 FILL
+    _XC-ROOT-SNAPSHOT _EXT4-STAGED-WRITE-BLOCK-SIZE 0 FILL
+    _XC-ROOT-CURRENT _EXT4-STAGED-WRITE-BLOCK-SIZE 0 FILL
+    _XC-DIRECTORY-DESC _EXT4-DD-SIZE 0 FILL
     _XC-PARENT-SNAPSHOT _EXT4-STAGED-WRITE-INODE-SIZE 0 FILL
-    _XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE 0 FILL ;
+    _XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE 0 FILL
+    0 _XC-INDEXED ! 0 _XC-SHAPE-SET ! 0 _XC-INDEX-BASELINE ! ;
 
 : _XC-ENTRY  ( -- ior )
     _XC-D @ 0= _XC-V @ 0= OR IF VFS-E-INVALID EXIT THEN
@@ -24951,6 +25347,7 @@ VARIABLE _XC-NEW-ROOT
 
 : _XC-INSERT-COMMON  ( -- ior )
     0 _XC-WRITER ! 0 _XC-TX !
+    0 _XC-INDEXED ! 0 _XC-SHAPE-SET ! 0 _XC-INDEX-BASELINE !
     _XC-ENTRY ?DUP IF _XC-REFUSE EXIT THEN
     _XC-NOW ?DUP IF _XC-REFUSE EXIT THEN
     _XC-PLAN ?DUP IF _XC-REFUSE EXIT THEN

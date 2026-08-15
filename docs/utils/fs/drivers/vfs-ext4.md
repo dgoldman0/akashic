@@ -93,9 +93,11 @@ transfers one parent link, and rewrites the child's `..` entry and checksum
 under exact `4/0/0` through `6/0/0` credit. Its canonical `5/0/0` homes are
 283, 275, 1299, 1377, and 1364. Neither form allocates storage or creates
 orphan state. Same-parent directories and replacement remain gated.
-Directory growth, HTree parents, inheritance beyond the explicit root-owned
-non-setgid envelope, and broader directory shapes remain gated. The driver
-also implements bounded mount-time recovery and
+Regular-file CREATE also admits existing depth-zero HTree parents when an
+authenticated hash interval already contains insertion slack. Directory
+growth and linear-to-HTree conversion, indexed LINK and MKDIR, inheritance
+beyond the explicit root-owned non-setgid envelope, and broader directory
+shapes remain gated. The driver also implements bounded mount-time recovery and
 durable transaction emission for an internal checksum-v3 JBD2 journal. It never
 uses the ambient filesystem volume: reads and all recovery, activation,
 emission, checkpoint, and clean-deactivation writes go through checked volume
@@ -119,14 +121,16 @@ geometry boundary: the validator requires each scheduled backup group number
 to equal the 16-bit on-disk `s_block_group_nr`, so a required sparse-super
 backup above group 65535 is refused.
 
-The checked-in 1,420,000,000-step ext4 cold-source value is a qualification
+The checked-in 1,480,000,000-step ext4 cold-source value is a qualification
 watchdog and measurement guide, not an ext4 implementation capacity or a
-reason to weaken functionality. The orphan-backed final-link slice measures
-1,402,709,928 steps across 3,421 packed lines under that guard. The source
-first exhausted a provisional 1.40-billion guard after reaching 3,416 of 3,422
-packed lines without a Forth diagnostic; the measured completed load, rather
-than a mutation-journey failure, justified the narrow 1.42-billion value. At
-the earlier cross-parent empty-directory
+reason to weaken functionality. Existing depth-zero HTree CREATE measures
+1,476,019,687 steps across 3,535 packed lines under that guard. The preceding
+shared-directory-descriptor source measured 1,447,937,156 steps under its
+1.45-billion guard, leaving too little measured margin for the indexed
+mutation slice; the completed cold build, rather than a mutation-journey or
+harness failure, justified the narrow 1.48-billion value. Historically, the
+orphan-backed final-link slice measured 1,402,709,928 steps across 3,421 packed
+lines under its 1.42-billion guard. At the earlier cross-parent empty-directory
 `RENAME` milestone, the source measured 1,224,225,598 ext4-load steps across
 3,095 packed lines under the then-checked-in 1.25-billion watchdog. If correct
 source legitimately outgrows it, the budget
@@ -2025,7 +2029,7 @@ key repair, cross-leaf alias refusal, typed and public fanout splitting, both
 external-oracle paths, and both four-index boundaries: 14 tests pass in one
 sequential process. Deeper-tree mutation is still outside this envelope.
 
-### Initial atomic CREATE slice
+### Atomic CREATE slices
 
 The staged binding now advertises `VFS-CAP-CREATE` and installs `_EXT4-CREATE`
 in operation slot 9. The ordinary binding remains read-only and retains a null
@@ -2034,16 +2038,29 @@ provisional cache dentry/vnode; the ext4 callback either commits the on-disk
 namespace operation and publishes its stable inode identity or returns an
 error, allowing the VFS to remove that provisional object.
 
-The admitted parent is an authenticated one-block linear directory with flags
-exactly `EXTENTS`, one initialized mapped block, a valid directory checksum
-tail, root UID/GID, no setgid bit, and no inline or external xattrs. Its entire
-dirent sequence is revalidated, including `.`/`..`, name syntax, record
-alignment and bounds, target inode bounds, duplicate-name refusal, and usable
-record slack. HTree/indexed directories, multi-block directories, directory
-growth, default-ACL inheritance, and non-root credential policy return typed
-unsupported or `NOSPC`; none is silently approximated. The existing directory
-data block is proved disjoint from static metadata and the journal and uniquely
-owned by the parent before it becomes a metadata replacement home.
+Every admitted parent has root UID/GID, no setgid bit, and no inline or
+external xattrs. The initial shape remains a one-block linear directory with
+flags exactly `EXTENTS`, one initialized mapped block, a valid directory
+checksum tail, and usable authenticated dirent slack. Regular-file CREATE now
+also admits an existing `EXTENTS|INDEX` depth-zero HTree whose complete logical
+map and DX leaf permutation authenticate. Indexed LINK and MKDIR, directory
+growth or splitting, default-ACL inheritance, and non-root credential policy
+remain typed refusals; none is silently approximated.
+
+Indexed admission binds the checksummed live primary hash seed, default hash
+version, and full `s_flags` to the mounted superblock cache. It hashes and
+validates every live name in every leaf against the exact even/continuation
+interval, rejects dot records and malformed deleted records, and detects the
+new name anywhere in the tree even when it is not in the initial lookup leaf.
+The first interval-eligible leaf with sufficient slack is selected in root
+entry order. Cold planning then binds the exact parent inode location and
+bytes, HTree root, route, selected leaf, target hash, and insertion tuple;
+every dry and live pass must reproduce them. A scoped complete-map audit proves
+the selected leaf occurs exactly once as directory data and never as an
+external extent node before the filesystem-wide owner proof excludes the
+parent. Admitted indexed sector accounting is exact for an inline depth-zero
+map or a singleton depth-one extent node; wider valid maps remain an explicit
+later policy rather than being mis-accounted.
 
 Inode selection starts in the parent group and wraps across runtime geometry.
 It accepts only initialized inode groups, verifies the bitmap checksum and its
@@ -2065,15 +2082,18 @@ directory checksum.
 
 All edits are one no-data/no-revoke transaction over the deduplicated set of
 primary superblock, primary GDT page, inode bitmap, new inode-table page,
-parent inode-table page, and directory block: at most exact `6/0/0` credit and
-fewer homes when pages coincide. A clean mount dry-stages the complete edit
-before journal activation; live staging reauthenticates every locator, emits,
-checkpoints synchronously, and only then publishes inode number, generation,
-metadata, parent times, and free-inode accounting into the VFS cache. The
-focused public qualification creates `/created.txt` as inode 33, resolves the
-same dentry, unmounts cleanly, and passes pinned e2fsprogs 1.47.4 `debugfs`
-stat/list plus read-only `e2fsck`. A missing trusted clock rolls the provisional
-VFS object back before writer creation or media I/O.
+parent inode-table page, and the selected directory leaf: at most exact
+`6/0/0` credit and fewer homes when pages coincide. An indexed insertion does
+not rewrite its HTree root, other leaves, external extent node, or block bitmap.
+A clean mount dry-stages the complete edit before journal activation; live
+staging reauthenticates every locator, emits, checkpoints synchronously, and
+only then publishes inode number, generation, metadata, parent times, and
+free-inode accounting into the VFS cache. Public qualification creates inode
+33 both as `/created.txt` in the linear root and as
+`/fixture/indexed/new.txt` in existing leaf 1357. The indexed case pins the
+six home writes, target hash and route, untouched topology, `debugfs` result,
+and read-only e2fsprogs 1.47.4 `e2fsck`. A missing trusted clock rolls the
+provisional VFS object back before writer creation or media I/O.
 
 Operation-specific crash qualification covers both sides of commit authority.
 A W7 torn journal descriptor returns an I/O error, removes the provisional VFS
@@ -2084,6 +2104,15 @@ records the checkpoint error in `V.LAST-IOR`, and quarantines the live mount.
 The next ordinary read-only mount replays all six metadata homes, resolves the
 file with its exact timestamps and identity, and passes `e2fsck`; the following
 mount is byte-stable and performs zero writes.
+
+The indexed crash boundary tears selected leaf 1357 in sector one at W22,
+after the new and parent inode-table homes have landed. The public namespace
+retains commit authority and the live mount is quarantined. Recovery replays
+the same six after-images while root 1355, leaves 1359/1361, extent node 1365,
+and block bitmap 259 remain byte-exact; a second mount is write-free and
+byte-stable. Checksum-valid misbucketed names, a duplicate in a nonrouted
+continuation leaf, an eligible leaf with no slack, inexact `i_blocks`, and
+indexed LINK all refuse without a transaction or cache/accounting publication.
 
 ### Initial atomic MKDIR slice
 
