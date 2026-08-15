@@ -383,6 +383,76 @@ def _checked_linear_directory_entries(
     return tuple(entries)
 
 
+def _linear_directory_unlink_afterimage(
+    superblock: bytes,
+    *,
+    parent_inode: int,
+    parent_generation: int,
+    original: bytes,
+    target_inode: int,
+    name: bytes,
+) -> tuple[bytes, int, int]:
+    """Apply ext4's immediate-predecessor linear UNLINK splice."""
+    assert target_inode > 0
+    assert name and len(name) <= 255
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    assert len(original) == block_size
+    assert original == _linear_directory_block_with_checksum(
+        superblock,
+        parent_inode,
+        parent_generation,
+        original,
+    )
+    tail_offset = block_size - 12
+    previous: tuple[int, int, int] | None = None
+    target: tuple[int, int] | None = None
+    offset = 0
+    while offset < tail_offset:
+        entry_inode, record_length, name_length, file_type = (
+            struct.unpack_from("<IHBB", original, offset)
+        )
+        assert record_length >= 12
+        assert record_length % 4 == 0
+        assert offset + record_length <= tail_offset
+        assert name_length <= record_length - 8
+        entry_name = original[offset + 8 : offset + 8 + name_length]
+        if entry_inode == target_inode and entry_name == name:
+            assert target is None
+            assert previous is not None and previous[1] != 0
+            target = (offset, record_length)
+            break
+        previous = (offset, entry_inode, record_length)
+        offset += record_length
+    assert target is not None
+    assert previous is not None
+    previous_offset, _, previous_record = previous
+    target_offset, target_record = target
+    assert previous_offset + previous_record == target_offset
+    result = bytearray(original)
+    struct.pack_into(
+        "<H", result, previous_offset + 4, previous_record + target_record
+    )
+    result[target_offset : target_offset + target_record] = bytes(
+        target_record
+    )
+    expected = _linear_directory_block_with_checksum(
+        superblock,
+        parent_inode,
+        parent_generation,
+        result,
+    )
+    entries = _checked_linear_directory_entries(
+        superblock,
+        parent_inode,
+        parent_generation,
+        expected,
+    )
+    assert all(
+        entry[1] != target_inode or entry[4] != name for entry in entries
+    )
+    return expected, previous_offset, target_offset
+
+
 def _extent_node_with_checksum(
     superblock: bytes,
     inode_number: int,
@@ -4208,7 +4278,7 @@ def build_snapshot():
     # distinct cold source stages.  This preserves the existing measured ext4
     # watchdog instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
-    max_ext4_source_steps = 1_350_000_000
+    max_ext4_source_steps = 1_420_000_000
     bootstrap_steps = _feed_until_idle(system, bootstrap, max_crc_source_steps)
 
     def load_source_stage(
@@ -7484,6 +7554,12 @@ def test_binding_descriptors_are_valid_and_truthful(
                 "I VFS-OP-MOUNT = IF "
                 "EXT4-STAGED-WRITE-OPS I CELLS + @ "
                 "['] _EXT4-STAGED-WRITE-MOUNT <> "
+                "ELSE I VFS-OP-RELEASE = IF "
+                "EXT4-STAGED-WRITE-OPS I CELLS + @ "
+                "['] _EXT4-STAGED-RELEASE <> "
+                "ELSE I VFS-OP-SYNCFS = IF "
+                "EXT4-STAGED-WRITE-OPS I CELLS + @ "
+                "['] _EXT4-STAGED-SYNCFS <> "
                 "ELSE I VFS-OP-WRITE = IF "
                 "EXT4-STAGED-WRITE-OPS I CELLS + @ ['] _EXT4-WRITE <> "
                 "ELSE I VFS-OP-CREATE = IF "
@@ -7503,7 +7579,7 @@ def test_binding_descriptors_are_valid_and_truthful(
                 "ELSE "
                 "EXT4-STAGED-WRITE-OPS I CELLS + @ "
                 "EXT4-OPS I CELLS + @ <> "
-                "THEN THEN THEN THEN THEN THEN THEN THEN THEN "
+                "THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN "
                 "IF FALSE UNLOOP EXIT THEN "
                 "LOOP TRUE ;"
             ),
@@ -68413,9 +68489,7 @@ def staged_public_unlink_fixture(
     free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
         struct.unpack_from("<I", superblock, 0x158)[0] << 32
     )
-    free_inodes_before = struct.unpack_from("<I", superblock, 0x10)[0] | (
-        struct.unpack_from("<I", superblock, 0x15C)[0] << 32
-    )
+    free_inodes_before = struct.unpack_from("<I", superblock, 0x10)[0]
     original_inode_home = _patched_ext4_home(
         path, source_patches, inode_home, block_size=block_size
     )
@@ -68834,9 +68908,7 @@ def staged_public_unlink_fixture(
     final_free_blocks = struct.unpack_from(
         "<I", final_superblock, 0x0C
     )[0] | (struct.unpack_from("<I", final_superblock, 0x158)[0] << 32)
-    final_free_inodes = struct.unpack_from(
-        "<I", final_superblock, 0x10
-    )[0] | (struct.unpack_from("<I", final_superblock, 0x15C)[0] << 32)
+    final_free_inodes = struct.unpack_from("<I", final_superblock, 0x10)[0]
     assert final_free_blocks == free_blocks_before
     assert final_free_inodes == free_inodes_before
     assert struct.unpack_from("<I", final_superblock, 0x60)[0] & 0x04 == 0
@@ -68941,10 +69013,2775 @@ def test_staged_vfs_unlink_nonfinal_open_file(
     assert trace
 
 
-def test_staged_vfs_unlink_refuses_open_last_link_and_missing_clock(
+_STAGED_FINAL_UNLINK_MAX_STEPS = 1_500_000_000
+
+
+def _staged_final_unlink_attempt_forth(
+    prefix: str,
+    *,
+    epoch_ms: int,
+    open_target: bool,
+    target_path: str = "/fixture/sparse.bin",
+    meta_capacity: int = 6,
+    revoke_capacity: int = 0,
+) -> tuple[str, ...]:
+    """Build one regular-file final-link attempt with its prestate captured."""
+    assert target_path.startswith("/") and '"' not in target_path
+    assert meta_capacity >= 0
+    assert revoke_capacity >= 0
+    lines = [
+        f"CREATE {prefix}-STAT VFS-STATFS-SIZE ALLOT",
+        f"VARIABLE {prefix}-CLOCK-CALLS",
+        (
+            f": {prefix}-NOW ( context -- epoch-ms ior ) "
+            f"DROP 1 {prefix}-CLOCK-CALLS +! {epoch_ms} 0 ;"
+        ),
+        f"T-ARENA CONSTANT {prefix}-ARENA",
+        (
+            f"{prefix}-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+            f"CONSTANT {prefix}-MOUNT-IOR CONSTANT {prefix}-V"
+        ),
+        f"{prefix}-V _EXT4-CTX CONSTANT {prefix}-CTX",
+        (
+            f"' {prefix}-NOW 0 {prefix}-V EXT4-BIND-WRITE-CLOCK? "
+            f"CONSTANT {prefix}-CLOCK-IOR"
+        ),
+        *_ext4_dedicated_writer_profile_forth(
+            f"{prefix}-PROFILE",
+            f"{prefix}-V",
+            meta_capacity,
+            0,
+            revoke_capacity,
+        ),
+        (
+            f'S" {target_path}" {prefix}-V VFS-RESOLVE? '
+            f"CONSTANT {prefix}-RESOLVE-IOR CONSTANT {prefix}-D"
+        ),
+        (
+            f'S" /fixture" {prefix}-V VFS-RESOLVE? '
+            f"CONSTANT {prefix}-PARENT-IOR CONSTANT {prefix}-PARENT"
+        ),
+        f"{prefix}-D D.VNODE @ CONSTANT {prefix}-VN",
+        f"{prefix}-PARENT D.VNODE @ CONSTANT {prefix}-PARENT-VN",
+        f"{prefix}-VN VN.NLINK @ CONSTANT {prefix}-OLD-NLINK",
+        f"{prefix}-VN VN.SIZE-LO @ CONSTANT {prefix}-OLD-SIZE",
+        f"{prefix}-VN VN.BLOCKS @ CONSTANT {prefix}-OLD-BLOCKS",
+        f"{prefix}-VN VN.MTIME @ CONSTANT {prefix}-OLD-MTIME",
+        f"{prefix}-VN VN.MTIME-NS @ CONSTANT {prefix}-OLD-MTIME-NS",
+        f"{prefix}-VN VN.CTIME @ CONSTANT {prefix}-OLD-CTIME",
+        f"{prefix}-VN VN.CTIME-NS @ CONSTANT {prefix}-OLD-CTIME-NS",
+        (
+            f"{prefix}-PARENT-VN VN.MTIME @ "
+            f"CONSTANT {prefix}-OLD-PARENT-MTIME"
+        ),
+        (
+            f"{prefix}-PARENT-VN VN.MTIME-NS @ "
+            f"CONSTANT {prefix}-OLD-PARENT-MTIME-NS"
+        ),
+        (
+            f"{prefix}-PARENT-VN VN.CTIME @ "
+            f"CONSTANT {prefix}-OLD-PARENT-CTIME"
+        ),
+        (
+            f"{prefix}-PARENT-VN VN.CTIME-NS @ "
+            f"CONSTANT {prefix}-OLD-PARENT-CTIME-NS"
+        ),
+        f"{prefix}-V V.ICOUNT @ CONSTANT {prefix}-OLD-ICOUNT",
+        f"{prefix}-V V.VCOUNT @ CONSTANT {prefix}-OLD-VCOUNT",
+        (
+            f"{prefix}-STAT VFS-STATFS-SIZE {prefix}-V VFS-STATFS "
+            f"CONSTANT {prefix}-BEFORE-IOR"
+        ),
+        f"{prefix}-STAT VSF.BFREE @ CONSTANT {prefix}-BFREE-BEFORE",
+        f"{prefix}-STAT VSF.FFREE @ CONSTANT {prefix}-FFREE-BEFORE",
+    ]
+    if open_target:
+        lines.extend(
+            (
+                (
+                    f'S" {target_path}" VFS-FF-READ {prefix}-V '
+                    f"VFS-OPEN? CONSTANT {prefix}-OPEN-IOR "
+                    f"CONSTANT {prefix}-FD"
+                ),
+                (
+                    f"{prefix}-VN VN.OPEN-REFS @ "
+                    f"CONSTANT {prefix}-OPEN-REFS"
+                ),
+            )
+        )
+    lines.extend(
+        (
+            (
+                f'S" {target_path}" {prefix}-V VFS-RM '
+                f"CONSTANT {prefix}-UNLINK-IOR"
+            ),
+            (
+                f"{prefix}-V V.LAST-IOR @ "
+                f"CONSTANT {prefix}-UNLINK-LAST-IOR"
+            ),
+            (
+                f"{prefix}-CTX _EXT4-C.J.HOME-WRITES + @ "
+                f"CONSTANT {prefix}-ADD-HOMES"
+            ),
+            (
+                f'S" {target_path}" {prefix}-V VFS-RESOLVE? '
+                f"CONSTANT {prefix}-AFTER-IOR CONSTANT {prefix}-AFTER"
+            ),
+            (
+                f"{prefix}-STAT VFS-STATFS-SIZE {prefix}-V VFS-STATFS "
+                f"CONSTANT {prefix}-AFTER-STAT-IOR"
+            ),
+            f"{prefix}-STAT VSF.BFREE @ CONSTANT {prefix}-BFREE-AFTER",
+            f"{prefix}-STAT VSF.FFREE @ CONSTANT {prefix}-FFREE-AFTER",
+            f"{prefix}-V V.ICOUNT @ CONSTANT {prefix}-AFTER-ICOUNT",
+            f"{prefix}-V V.VCOUNT @ CONSTANT {prefix}-AFTER-VCOUNT",
+            (
+                f"{prefix}-CTX _EXT4-C.J.WRITER + @ "
+                f"CONSTANT {prefix}-WRITER"
+            ),
+        )
+    )
+    return tuple(lines)
+
+
+def _staged_final_unlink_recovery_view(
+    source: Path,
+    destination: Path,
+    *,
+    expected_free_blocks: int,
+    expected_free_inodes: int,
+    expected_home_writes: int,
+    expected_replayed: bool,
+    prefix: str,
+    marker: str,
+    target_path: str = "/fixture/sparse.bin",
+) -> tuple[str, tuple[tuple[str, int, int], ...], str]:
+    """Recover one final-link deletion and prove the name stays absent."""
+    assert target_path.startswith("/") and '"' not in target_path
+    replay_check = (
+        f"{prefix}-CTX _EXT4-C.J.REPLAYED + @ 0<>"
+        if expected_replayed
+        else f"{prefix}-CTX _EXT4-C.J.REPLAYED + @ 0="
+    )
+    output, trace, media_sha256 = run_recovery_forth(
+        source,
+        destination,
+        [
+            f"CREATE {prefix}-STAT VFS-STATFS-SIZE ALLOT",
+            (
+                f"T-ARENA T-VOLUME EXT4-NEW CONSTANT {prefix}-MOUNT-IOR "
+                f"CONSTANT {prefix}-V"
+            ),
+            f"{prefix}-V _EXT4-CTX CONSTANT {prefix}-CTX",
+            (
+                f'S" {target_path}" {prefix}-V VFS-RESOLVE? '
+                f"CONSTANT {prefix}-RESOLVE-IOR CONSTANT {prefix}-D"
+            ),
+            (
+                f"{prefix}-STAT VFS-STATFS-SIZE {prefix}-V VFS-STATFS "
+                f"CONSTANT {prefix}-STAT-IOR"
+            ),
+            f"{prefix}-STAT VSF.BFREE @ CONSTANT {prefix}-BFREE",
+            f"{prefix}-STAT VSF.FFREE @ CONSTANT {prefix}-FFREE",
+            (
+                _forth_conjunction(
+                    [
+                        f"{prefix}-MOUNT-IOR 0=",
+                        f"{prefix}-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        f"{prefix}-V _EXT4-READY?",
+                        f"{prefix}-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        f"{prefix}-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                        f"{prefix}-CTX _EXT4-C.RECOVERY + @ 0=",
+                        f"{prefix}-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                        f"{prefix}-CTX _EXT4-C.J.WRITER + @ 0=",
+                        replay_check,
+                        (
+                            f"{prefix}-CTX _EXT4-C.J.HOME-WRITES + @ "
+                            f"{expected_home_writes} ="
+                        ),
+                        f"{prefix}-D 0=",
+                        (
+                            f"{prefix}-RESOLVE-IOR VFS-IOR-REASON "
+                            "VFS-R-NOENT ="
+                        ),
+                        f"{prefix}-STAT-IOR 0=",
+                        f"{prefix}-BFREE {expected_free_blocks} =",
+                        f"{prefix}-FFREE {expected_free_inodes} =",
+                        f"{prefix}-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        f"{prefix}-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        f"{prefix}-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        f"{prefix}-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        (
+                            f"{prefix}-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                    ]
+                )
+                + f' IF ." {marker}" THEN'
+            ),
+            f"0 {prefix}-V VFS-UNMOUNT CONSTANT {prefix}-UNMOUNT-IOR",
+            (
+                f"{prefix}-UNMOUNT-IOR 0= "
+                f"{prefix}-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                f'IF ." {marker}-UNMOUNTED" THEN'
+            ),
+        ],
+        capture_media=destination,
+        max_steps=_STAGED_FINAL_UNLINK_MAX_STEPS,
+    )
+    _assert_emitted(output, marker)
+    _assert_emitted(output, f"{marker}-UNMOUNTED")
+    return output, trace, media_sha256
+
+
+@pytest.fixture(scope="session")
+def staged_public_final_unlink_closed_fixture(
+    compact_primary_writer_activation_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Delete a closed sparse final link and reclaim it immediately."""
+    case = compact_primary_writer_activation_fixture
+    path = case["image"]
+    source_patches = case["source_patches"]
+    activation_trace = case["success_trace"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    parent_number = 13
+    inode_number = 17
+    superblock, parent_inode, parent_offset = _ext4_inode_record(
+        path, parent_number
+    )
+    _, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    parent_home, parent_block_offset = divmod(parent_offset, block_size)
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    directory_home = _extent_root_physical(parent_inode, 0)
+    data_blocks = (
+        _extent_root_physical(inode, 0),
+        _extent_root_physical(inode, 2),
+    )
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, orphan_inode, _ = _ext4_inode_record(path, orphan_inode_number)
+    orphan_home = _extent_root_physical(orphan_inode, 0)
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0]
+    free_inodes_before = struct.unpack_from("<I", superblock, 0x10)[0]
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    parent_generation = struct.unpack_from("<I", parent_inode, 0x64)[0]
+    old_size = struct.unpack_from("<I", inode, 0x04)[0]
+    old_blocks = struct.unpack_from("<I", inode, 0x1C)[0]
+    old_links = struct.unpack_from("<H", inode, 0x1A)[0]
+    old_mtime_ms = _ext4_inode_timestamp_ms(inode, 0x10, 0x88)
+    old_ctime_ms = _ext4_inode_timestamp_ms(inode, 0x0C, 0x84)
+    original_parent_home = _patched_ext4_home(
+        path, source_patches, parent_home, block_size=block_size
+    )
+    original_inode_home = _patched_ext4_home(
+        path, source_patches, inode_home, block_size=block_size
+    )
+    original_directory = _patched_ext4_home(
+        path, source_patches, directory_home, block_size=block_size
+    )
+    original_orphan = _patched_ext4_home(
+        path, source_patches, orphan_home, block_size=block_size
+    )
+    original_data = tuple(
+        _patched_ext4_home(
+            path, source_patches, home, block_size=block_size
+        )
+        for home in data_blocks
+    )
+    expected_directory, previous_offset, target_offset = (
+        _linear_directory_unlink_afterimage(
+            superblock,
+            parent_inode=parent_number,
+            parent_generation=parent_generation,
+            original=original_directory,
+            target_inode=inode_number,
+            name=b"sparse.bin",
+        )
+    )
+    epoch_ms = 3_000_002_345_678
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = (
+        low_seconds
+        if low_seconds < 0x8000_0000
+        else low_seconds - 0x1_0000_0000
+    )
+    epoch = (seconds - signed_low) >> 32
+    extra_time = (nanoseconds << 2) | epoch
+    expected_parent = bytearray(parent_inode)
+    struct.pack_into("<I", expected_parent, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x10, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x84, extra_time)
+    struct.pack_into("<I", expected_parent, 0x88, extra_time)
+    expected_parent = _inode_with_checksum(
+        superblock, parent_number, expected_parent
+    )
+    expected_parent_home_buffer = bytearray(original_parent_home)
+    expected_parent_home_buffer[
+        parent_block_offset : parent_block_offset + inode_size
+    ] = expected_parent
+    expected_parent_home = bytes(expected_parent_home_buffer)
+    expected_retained_inode = bytearray(inode)
+    struct.pack_into("<H", expected_retained_inode, 0x1A, 0)
+    struct.pack_into("<I", expected_retained_inode, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_retained_inode, 0x84, extra_time)
+    expected_retained_inode = _inode_with_checksum(
+        superblock, inode_number, expected_retained_inode
+    )
+    expected_retained_inode_home_buffer = bytearray(original_inode_home)
+    expected_retained_inode_home_buffer[
+        inode_block_offset : inode_block_offset + inode_size
+    ] = expected_retained_inode
+    expected_retained_inode_home = bytes(expected_retained_inode_home_buffer)
+    expected_orphan_offset, expected_orphan = _modern_orphan_patches(
+        path, (inode_number,)
+    )[1]
+
+    assert block_size == 1024
+    assert inode_size == 256
+    assert old_size == 3 * block_size
+    assert old_blocks == 4
+    assert old_links == 1
+    assert old_mtime_ms == old_ctime_ms
+    assert struct.unpack_from("<I", inode, 0x68)[0] == 0
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (0xF30A, 2, 4, 0)
+    assert len(set((parent_home, inode_home, directory_home, orphan_home))) == 4
+    assert not set(data_blocks) & {
+        parent_home,
+        inode_home,
+        directory_home,
+        orphan_home,
+    }
+    assert expected_orphan_offset == orphan_home * block_size
+    assert (
+        original_parent_home[
+            parent_block_offset : parent_block_offset + inode_size
+        ]
+        == parent_inode
+    )
+    assert (
+        original_inode_home[
+            inode_block_offset : inode_block_offset + inode_size
+        ]
+        == inode
+    )
+    assert _ext4_block_allocation_state(path, data_blocks) == {
+        data_blocks[0]: True,
+        data_blocks[1]: True,
+    }
+
+    directory = tmp_path_factory.mktemp("ext4-public-final-unlink-closed")
+    backing = directory / "staged-final-unlink-closed.img"
+    stable = directory / "staged-final-unlink-closed-stable.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        backing,
+        [
+            "CREATE _UFC-STAT VFS-STATFS-SIZE ALLOT",
+            "VARIABLE _UFC-CLOCK-CALLS",
+            (
+                ": _UFC-NOW ( context -- epoch-ms ior ) "
+                f"DROP 1 _UFC-CLOCK-CALLS +! {epoch_ms} 0 ;"
+            ),
+            "T-ARENA CONSTANT _UFC-ARENA",
+            (
+                "_UFC-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _UFC-MOUNT-IOR CONSTANT _UFC-V"
+            ),
+            "_UFC-V _EXT4-CTX CONSTANT _UFC-CTX",
+            (
+                "' _UFC-NOW 0 _UFC-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _UFC-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_UFC-PROFILE", "_UFC-V", 6, 0, 0
+            ),
+            (
+                'S" /fixture/sparse.bin" _UFC-V VFS-RESOLVE? '
+                "CONSTANT _UFC-RESOLVE-IOR CONSTANT _UFC-D"
+            ),
+            "_UFC-D D.VNODE @ CONSTANT _UFC-VN",
+            "_UFC-VN VN.BID @ CONSTANT _UFC-OLD-BID",
+            "_UFC-VN VN.GEN @ CONSTANT _UFC-OLD-GEN",
+            "_UFC-VN VN.SIZE-LO @ CONSTANT _UFC-OLD-SIZE",
+            "_UFC-VN VN.BLOCKS @ CONSTANT _UFC-OLD-BLOCKS",
+            "_UFC-VN VN.NLINK @ CONSTANT _UFC-OLD-NLINK",
+            "_UFC-VN VN.OPEN-REFS @ CONSTANT _UFC-OLD-OPEN-REFS",
+            "_UFC-V V.ICOUNT @ CONSTANT _UFC-OLD-ICOUNT",
+            "_UFC-V V.VCOUNT @ CONSTANT _UFC-OLD-VCOUNT",
+            (
+                "_UFC-STAT VFS-STATFS-SIZE _UFC-V VFS-STATFS "
+                "CONSTANT _UFC-BEFORE-IOR"
+            ),
+            "_UFC-STAT VSF.BFREE @ CONSTANT _UFC-BFREE-BEFORE",
+            "_UFC-STAT VSF.FFREE @ CONSTANT _UFC-FFREE-BEFORE",
+            (
+                'S" /fixture/sparse.bin" _UFC-V VFS-RM '
+                "CONSTANT _UFC-UNLINK-IOR"
+            ),
+            (
+                'S" /fixture/sparse.bin" _UFC-V VFS-RESOLVE? '
+                "CONSTANT _UFC-AFTER-IOR CONSTANT _UFC-AFTER"
+            ),
+            (
+                "_UFC-STAT VFS-STATFS-SIZE _UFC-V VFS-STATFS "
+                "CONSTANT _UFC-AFTER-STAT-IOR"
+            ),
+            "_UFC-STAT VSF.BFREE @ CONSTANT _UFC-BFREE-AFTER",
+            "_UFC-STAT VSF.FFREE @ CONSTANT _UFC-FFREE-AFTER",
+            "_UFC-CTX _EXT4-C.J.WRITER + @ CONSTANT _UFC-WRITER",
+            *_forth_accumulated_conjunction(
+                "_UFC-ALL-PUBLISHED",
+                [
+                    "_UFC-MOUNT-IOR 0=",
+                    "_UFC-CLOCK-IOR 0=",
+                    "_UFC-PROFILE-SIZE-IOR 0=",
+                    "_UFC-PROFILE-BIND-IOR 0=",
+                    "_UFC-RESOLVE-IOR 0=",
+                    f"_UFC-OLD-BID {inode_number} =",
+                    f"_UFC-OLD-GEN {generation} =",
+                    f"_UFC-OLD-SIZE {old_size} =",
+                    f"_UFC-OLD-BLOCKS {old_blocks} =",
+                    "_UFC-OLD-NLINK 1 =",
+                    "_UFC-OLD-OPEN-REFS 0=",
+                    "_UFC-BEFORE-IOR 0=",
+                    "_UFC-UNLINK-IOR 0=",
+                    "_UFC-V V.LAST-IOR @ 0=",
+                    "_UFC-CLOCK-CALLS @ 1 =",
+                    "_UFC-AFTER 0=",
+                    (
+                        "_UFC-AFTER-IOR VFS-IOR-REASON "
+                        "VFS-R-NOENT ="
+                    ),
+                    "_UFC-AFTER-STAT-IOR 0=",
+                    "_UFC-BFREE-AFTER _UFC-BFREE-BEFORE 2 + =",
+                    "_UFC-FFREE-AFTER _UFC-FFREE-BEFORE 1+ =",
+                    (
+                        "_UFC-CTX _EXT4-C.FREE-BLOCKS + @ "
+                        "_UFC-BFREE-AFTER ="
+                    ),
+                    (
+                        "_UFC-CTX _EXT4-C.FREE-INODES + @ "
+                        "_UFC-FFREE-AFTER ="
+                    ),
+                    "_UFC-V V.ICOUNT @ _UFC-OLD-ICOUNT 1- =",
+                    "_UFC-V V.VCOUNT @ _UFC-OLD-VCOUNT 1- =",
+                    "_XU-CLEANUP-EXPECTED-CREDIT @ 6 =",
+                    "_XU-CLEANUP-EXPECTED-REVOKE @ 0=",
+                    "_UFC-WRITER _UFC-PROFILE-BASE =",
+                    "_UFC-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                    "_UFC-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                    "_UFC-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                    "_UFC-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                    "_UFC-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                    (
+                        "_UFC-CTX _EXT4-C.SB + "
+                        "_EXT4-SB.RO-COMPAT + L@ "
+                        "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                    ),
+                    "_UFC-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_UFC-V V.FLAGS @ VFS-F-RO AND 0=",
+                    "_EXT4-JFO-CERT-SCOPE @ 0=",
+                    "_EXT4-JFO-CERT-VALID @ 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            (
+                '_UFC-ALL-PUBLISHED @ IF ." '
+                'EXT4-PUBLIC-FINAL-UNLINK-CLOSED" ELSE ." '
+                'EXT4-PUBLIC-FINAL-UNLINK-CLOSED-CHECK " '
+                "_UFC-ALL-PUBLISHED-FIRST-FAILURE @ . THEN"
+            ),
+            "0 _UFC-V VFS-UNMOUNT CONSTANT _UFC-UNMOUNT-IOR",
+            (
+                "_UFC-UNMOUNT-IOR 0= "
+                "_UFC-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_UFC-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-PUBLIC-FINAL-UNLINK-CLOSED-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=source_patches,
+        capture_media=backing,
+        max_steps=_STAGED_FINAL_UNLINK_MAX_STEPS,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-FINAL-UNLINK-CLOSED")
+    _assert_emitted(output, "EXT4-PUBLIC-FINAL-UNLINK-CLOSED-UNMOUNTED")
+    assert trace[: len(activation_trace)] == activation_trace
+    assert backing.is_file()
+
+    final_superblock, final_parent, _ = _ext4_inode_record(
+        backing, parent_number
+    )
+    _, final_inode, _ = _ext4_inode_record(backing, inode_number)
+    assert struct.unpack_from("<I", final_superblock, 0x0C)[0] == (
+        free_blocks_before + 2
+    )
+    assert struct.unpack_from("<I", final_superblock, 0x10)[0] == (
+        free_inodes_before + 1
+    )
+    assert struct.unpack_from("<I", final_superblock, 0x64)[0] & 0x0001_0000 == 0
+    assert final_inode == bytes(inode_size)
+    assert final_parent == expected_parent
+    assert _read_ext4_home(
+        backing, directory_home, block_size=block_size
+    ) == expected_directory
+    assert _read_ext4_home(
+        backing, orphan_home, block_size=block_size
+    ) == original_orphan
+    assert _ext4_block_allocation_state(backing, data_blocks) == {
+        data_blocks[0]: False,
+        data_blocks[1]: False,
+    }
+    assert _ext4_inode_allocation_state(backing, (inode_number,)) == {
+        inode_number: False
+    }
+    for home, original in zip(data_blocks, original_data):
+        assert _read_ext4_home(
+            backing, home, block_size=block_size
+        ) == original
+    listing = subprocess.run(
+        [str(debugfs), "-R", "ls -l /fixture", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert listing.returncode == 0, listing.stdout + listing.stderr
+    assert "sparse.bin" not in listing.stdout
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+    _, stable_trace, stable_sha256 = _staged_final_unlink_recovery_view(
+        backing,
+        stable,
+        expected_free_blocks=free_blocks_before + 2,
+        expected_free_inodes=free_inodes_before + 1,
+        expected_home_writes=0,
+        expected_replayed=False,
+        prefix="_UFC-S",
+        marker="EXT4-PUBLIC-FINAL-UNLINK-CLOSED-STABLE",
+    )
+    assert stable_trace == ()
+    assert stable_sha256 == media_sha256
+    assert _sha256(stable) == stable_sha256
+    return {
+        "source": path,
+        "source_patches": source_patches,
+        "image": stable,
+        "trace": trace,
+        "activation_trace": activation_trace,
+        "block_size": block_size,
+        "parent_number": parent_number,
+        "inode_number": inode_number,
+        "parent_home": parent_home,
+        "parent_block_offset": parent_block_offset,
+        "inode_home": inode_home,
+        "inode_block_offset": inode_block_offset,
+        "directory_home": directory_home,
+        "orphan_home": orphan_home,
+        "data_blocks": data_blocks,
+        "old_size": old_size,
+        "old_blocks": old_blocks,
+        "old_mtime_ms": old_mtime_ms,
+        "generation": generation,
+        "epoch_ms": epoch_ms,
+        "free_blocks_before": free_blocks_before,
+        "free_inodes_before": free_inodes_before,
+        "previous_offset": previous_offset,
+        "target_offset": target_offset,
+        "original_directory": original_directory,
+        "expected_directory": expected_directory,
+        "original_parent_home": original_parent_home,
+        "expected_parent": expected_parent,
+        "expected_parent_home": expected_parent_home,
+        "original_inode_home": original_inode_home,
+        "expected_retained_inode": expected_retained_inode,
+        "expected_retained_inode_home": expected_retained_inode_home,
+        "original_orphan": original_orphan,
+        "expected_orphan": expected_orphan,
+        "original_data": original_data,
+    }
+
+
+def test_staged_vfs_unlink_closed_nonempty_final_link(
+    staged_public_final_unlink_closed_fixture: dict[str, object],
+) -> None:
+    image = staged_public_final_unlink_closed_fixture["image"]
+    data_blocks = staged_public_final_unlink_closed_fixture["data_blocks"]
+    assert isinstance(image, Path)
+    assert isinstance(data_blocks, tuple)
+    assert image.is_file()
+    assert not any(_ext4_block_allocation_state(image, data_blocks).values())
+
+
+def test_staged_vfs_unlink_final_add_deduplicates_shared_inode_home(
+    staged_public_unlink_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A retained final link publishes the exact shared-inode four-home ADD."""
+    case = staged_public_unlink_fixture
+    path = case["image"]
+    block_size = case["block_size"]
+    directory_home = case["directory_home"]
+    data_block = case["data_block"]
+    xattr_block = case["xattr_block"]
+    old_file = case["old_file"]
+    free_blocks_before = case["free_blocks_before"]
+    free_inodes_before = case["free_inodes_before"]
+    source_inode_home = case["expected_inode_home"]
+    source_directory = case["expected_directory"]
+    source_data = case["original_data"]
+    source_xattr = case["original_xattr"]
+    assert isinstance(path, Path)
+    assert isinstance(block_size, int)
+    assert isinstance(directory_home, int)
+    assert isinstance(data_block, int)
+    assert isinstance(xattr_block, int)
+    assert isinstance(old_file, bytes)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(source_inode_home, bytes)
+    assert isinstance(source_directory, bytes)
+    assert isinstance(source_data, bytes)
+    assert isinstance(source_xattr, bytes)
+
+    parent_number = 13
+    inode_number = 14
+    superblock, parent_inode, parent_offset = _ext4_inode_record(
+        path, parent_number
+    )
+    _, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    parent_home, parent_block_offset = divmod(parent_offset, block_size)
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    layout = _ext4_recovery_layout(path)
+    primary_super_home = layout["primary_super"]
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, orphan_inode, _ = _ext4_inode_record(path, orphan_inode_number)
+    orphan_home = _extent_root_physical(orphan_inode, 0)
+    parent_generation = struct.unpack_from("<I", parent_inode, 0x64)[0]
+    old_size = struct.unpack_from("<I", inode, 0x04)[0]
+    old_blocks = struct.unpack_from("<I", inode, 0x1C)[0]
+    generation = struct.unpack_from("<I", inode, 0x64)[0]
+    original_inode_home = _read_ext4_home(
+        path, inode_home, block_size=block_size
+    )
+    original_directory = _read_ext4_home(
+        path, directory_home, block_size=block_size
+    )
+    original_orphan = _read_ext4_home(
+        path, orphan_home, block_size=block_size
+    )
+    original_data = _read_ext4_home(
+        path, data_block, block_size=block_size
+    )
+    original_xattr = _read_ext4_home(
+        path, xattr_block, block_size=block_size
+    )
+    expected_directory, _, _ = _linear_directory_unlink_afterimage(
+        superblock,
+        parent_inode=parent_number,
+        parent_generation=parent_generation,
+        original=original_directory,
+        target_inode=inode_number,
+        name=b"payload.txt",
+    )
+
+    epoch_ms = 3_000_003_456_789
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = (
+        low_seconds
+        if low_seconds < 0x8000_0000
+        else low_seconds - 0x1_0000_0000
+    )
+    epoch = (seconds - signed_low) >> 32
+    assert 0 <= epoch <= 3
+    extra_time = (nanoseconds << 2) | epoch
+
+    expected_parent = bytearray(parent_inode)
+    struct.pack_into("<I", expected_parent, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x10, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x84, extra_time)
+    struct.pack_into("<I", expected_parent, 0x88, extra_time)
+    expected_parent = _inode_with_checksum(
+        superblock, parent_number, expected_parent
+    )
+    expected_retained_inode = bytearray(inode)
+    struct.pack_into("<H", expected_retained_inode, 0x1A, 0)
+    struct.pack_into("<I", expected_retained_inode, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_retained_inode, 0x84, extra_time)
+    expected_retained_inode = _inode_with_checksum(
+        superblock, inode_number, expected_retained_inode
+    )
+    expected_inode_home_buffer = bytearray(original_inode_home)
+    expected_inode_home_buffer[
+        parent_block_offset : parent_block_offset + inode_size
+    ] = expected_parent
+    expected_inode_home_buffer[
+        inode_block_offset : inode_block_offset + inode_size
+    ] = expected_retained_inode
+    expected_inode_home = bytes(expected_inode_home_buffer)
+    expected_recovered_inode_home_buffer = bytearray(expected_inode_home)
+    expected_recovered_inode_home_buffer[
+        inode_block_offset : inode_block_offset + inode_size
+    ] = bytes(inode_size)
+    expected_recovered_inode_home = bytes(
+        expected_recovered_inode_home_buffer
+    )
+    orphan_patches = dict(_modern_orphan_patches(path, (inode_number,)))
+    expected_orphan = orphan_patches[orphan_home * block_size]
+    expected_file_crc = _crc32c_raw(old_file)
+
+    assert block_size == 1024
+    assert inode_size == 256
+    assert parent_home == inode_home == case["inode_home"] == 278
+    assert parent_block_offset == 0
+    assert inode_block_offset == 256
+    assert len(
+        {inode_home, directory_home, orphan_home, primary_super_home}
+    ) == 4
+    assert not {data_block, xattr_block} & {
+        inode_home,
+        directory_home,
+        orphan_home,
+        primary_super_home,
+    }
+    assert data_block != xattr_block
+    assert original_inode_home == source_inode_home
+    assert original_directory == source_directory
+    assert original_data == source_data
+    assert original_xattr == source_xattr
+    assert original_xattr == _external_xattr_block_with_checksum(
+        superblock, xattr_block, original_xattr
+    )
+    assert struct.unpack_from("<I", original_xattr, 0x04)[0] == 1
+    assert struct.unpack_from("<H", inode, 0x1A)[0] == 1
+    assert old_size == len(old_file) == 54
+    assert old_blocks == 4
+    assert struct.unpack_from("<I", inode, 0x68)[0] == xattr_block
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (0xF30A, 1, 4, 0)
+    assert _ext4_inode_allocation_state(path, (inode_number,)) == {
+        inode_number: True
+    }
+    assert _ext4_block_allocation_state(
+        path, (data_block, xattr_block)
+    ) == {data_block: True, xattr_block: True}
+
+    activation_trace = _jbd2_writer_activation_trace(path)
+    active = tmp_path / "staged-final-unlink-shared-home-active.img"
+    recovered = tmp_path / "staged-final-unlink-shared-home-recovered.img"
+    stable = tmp_path / "staged-final-unlink-shared-home-stable.img"
+    output, trace, active_sha256 = run_recovery_forth(
+        path,
+        active,
+        [
+            f"CREATE _UF4-BUF {old_size} ALLOT",
+            *_staged_final_unlink_attempt_forth(
+                "_UF4",
+                epoch_ms=epoch_ms,
+                open_target=True,
+                target_path="/fixture/payload.txt",
+                meta_capacity=6,
+                revoke_capacity=1,
+            ),
+            "_UF4-VN VN.NLINK @ CONSTANT _UF4-ADD-NLINK",
+            "_UF4-VN VN.OPEN-REFS @ CONSTANT _UF4-ADD-OPEN-REFS",
+            "_UF4-VN VN.SIZE-LO @ CONSTANT _UF4-ADD-SIZE",
+            "_UF4-VN VN.BLOCKS @ CONSTANT _UF4-ADD-BLOCKS",
+            "_UF4-D D.FLAGS @ CONSTANT _UF4-ADD-D-FLAGS",
+            (
+                f"_UF4-BUF {old_size} _UF4-FD VFS-READ? "
+                "CONSTANT _UF4-READ-IOR CONSTANT _UF4-ACTUAL"
+            ),
+            "0xFFFFFFFF _EXT4-CRC-START",
+            (
+                f"_UF4-BUF {old_size} _EXT4-CRC-ADD "
+                "CONSTANT _UF4-CRC-IOR"
+            ),
+            "_EXT4-CRC@ CONSTANT _UF4-CRC",
+            *_forth_accumulated_conjunction(
+                "_UF4-ALL-RETAINED",
+                [
+                    "_UF4-MOUNT-IOR 0=",
+                    "_UF4-CLOCK-IOR 0=",
+                    "_UF4-PROFILE-SIZE-IOR 0=",
+                    "_UF4-PROFILE-BIND-IOR 0=",
+                    "_UF4-RESOLVE-IOR 0=",
+                    "_UF4-PARENT-IOR 0=",
+                    f"_UF4-VN VN.BID @ {inode_number} =",
+                    f"_UF4-VN VN.GEN @ {generation} =",
+                    "_UF4-OLD-NLINK 1 =",
+                    f"_UF4-OLD-SIZE {old_size} =",
+                    f"_UF4-OLD-BLOCKS {old_blocks} =",
+                    "_UF4-OPEN-IOR 0=",
+                    "_UF4-OPEN-REFS 1 =",
+                    "_UF4-FD FD.INODE @ _UF4-D =",
+                    "_UF4-FD FD.VFS @ _UF4-V =",
+                    "_UF4-UNLINK-IOR 0=",
+                    "_UF4-UNLINK-LAST-IOR 0=",
+                    "_UF4-CLOCK-CALLS @ 1 =",
+                    "_UF4-ADD-HOMES 4 =",
+                    "_UF4-AFTER 0=",
+                    (
+                        "_UF4-AFTER-IOR VFS-IOR-REASON "
+                        "VFS-R-NOENT ="
+                    ),
+                    "_UF4-BEFORE-IOR 0=",
+                    "_UF4-AFTER-STAT-IOR 0=",
+                    "_UF4-BFREE-AFTER _UF4-BFREE-BEFORE =",
+                    "_UF4-FFREE-AFTER _UF4-FFREE-BEFORE =",
+                    (
+                        "_UF4-CTX _EXT4-C.FREE-BLOCKS + @ "
+                        "_UF4-BFREE-AFTER ="
+                    ),
+                    (
+                        "_UF4-CTX _EXT4-C.FREE-INODES + @ "
+                        "_UF4-FFREE-AFTER ="
+                    ),
+                    "_UF4-AFTER-ICOUNT _UF4-OLD-ICOUNT 1- =",
+                    "_UF4-AFTER-VCOUNT _UF4-OLD-VCOUNT =",
+                    "_UF4-V V.OPEN-COUNT @ 1 =",
+                    "_UF4-ADD-NLINK 0=",
+                    "_UF4-ADD-OPEN-REFS 1 =",
+                    f"_UF4-ADD-SIZE {old_size} =",
+                    f"_UF4-ADD-BLOCKS {old_blocks} =",
+                    "_UF4-ADD-D-FLAGS VFS-DF-UNLINKED AND 0<>",
+                    "_UF4-VN VN.DREFS @ 1 =",
+                    "_UF4-VN VN.MTIME @ _UF4-OLD-MTIME =",
+                    "_UF4-VN VN.MTIME-NS @ _UF4-OLD-MTIME-NS =",
+                    f"_UF4-VN VN.CTIME @ {seconds} =",
+                    f"_UF4-VN VN.CTIME-NS @ {nanoseconds} =",
+                    f"_UF4-PARENT-VN VN.MTIME @ {seconds} =",
+                    f"_UF4-PARENT-VN VN.MTIME-NS @ {nanoseconds} =",
+                    f"_UF4-PARENT-VN VN.CTIME @ {seconds} =",
+                    f"_UF4-PARENT-VN VN.CTIME-NS @ {nanoseconds} =",
+                    "_UF4-READ-IOR 0=",
+                    f"_UF4-ACTUAL {old_size} =",
+                    "_UF4-CRC-IOR 0=",
+                    f"_UF4-CRC {expected_file_crc} =",
+                    "_XU-CLEANUP-EXPECTED-CREDIT @ 6 =",
+                    "_XU-CLEANUP-EXPECTED-REVOKE @ 1 =",
+                    "_UF4-WRITER _UF4-PROFILE-BASE =",
+                    "_UF4-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                    "_UF4-WRITER _EXT4-JWR.META-CAP + @ 6 =",
+                    "_UF4-WRITER _EXT4-JWR.REVOKE-CAP + @ 1 =",
+                    "_UF4-CTX _EXT4-C.O.ACTIVE + @ 1 =",
+                    "_UF4-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
+                    "_UF4-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                    "_UF4-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                    (
+                        "_UF4-CTX _EXT4-C.SB + "
+                        "_EXT4-SB.RO-COMPAT + L@ "
+                        "_EXT4-RO-ORPHAN-PRESENT AND 0<>"
+                    ),
+                    "_UF4-CTX _EXT4-C.RECOVERY + @ 0<>",
+                    "_UF4-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                    "_UF4-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_UF4-V V.FLAGS @ VFS-F-RO AND 0=",
+                    "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                    (
+                        "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    (
+                        "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    (
+                        "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    "_EXT4-JFO-CERT-SCOPE @ 0=",
+                    "_EXT4-JFO-CERT-VALID @ 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            (
+                '_UF4-ALL-RETAINED @ IF ." '
+                'EXT4-PUBLIC-FINAL-UNLINK-SHARED-HOME-RETAINED" '
+                'ELSE ." EXT4-PUBLIC-FINAL-UNLINK-SHARED-HOME-CHECK " '
+                "_UF4-ALL-RETAINED-FIRST-FAILURE @ . THEN"
+            ),
+        ],
+        capture_media=active,
+        max_steps=_STAGED_FINAL_UNLINK_MAX_STEPS,
+    )
+    _assert_emitted(
+        output, "EXT4-PUBLIC-FINAL-UNLINK-SHARED-HOME-RETAINED"
+    )
+    assert trace[: len(activation_trace)] == activation_trace
+    mutation_trace = trace[len(activation_trace) :]
+    inode_ordinals = _write_ordinals_for_ext4_home(
+        mutation_trace, inode_home, block_size=block_size
+    )
+    directory_ordinals = _write_ordinals_for_ext4_home(
+        mutation_trace, directory_home, block_size=block_size
+    )
+    orphan_ordinals = _write_ordinals_for_ext4_home(
+        mutation_trace, orphan_home, block_size=block_size
+    )
+    super_ordinals = _write_ordinals_for_ext4_home(
+        mutation_trace, primary_super_home, block_size=block_size
+    )
+    assert all(
+        len(ordinals) == 1
+        for ordinals in (
+            inode_ordinals,
+            directory_ordinals,
+            orphan_ordinals,
+            super_ordinals,
+        )
+    )
+    assert (
+        inode_ordinals[0]
+        < directory_ordinals[0]
+        < orphan_ordinals[0]
+        < super_ordinals[0]
+    )
+    assert not _write_ordinals_for_ext4_home(
+        mutation_trace, data_block, block_size=block_size
+    )
+    assert not _write_ordinals_for_ext4_home(
+        mutation_trace, xattr_block, block_size=block_size
+    )
+    assert _sha256(active) == active_sha256
+
+    active_superblock, active_parent, _ = _ext4_inode_record(
+        active, parent_number
+    )
+    _, active_inode, _ = _ext4_inode_record(active, inode_number)
+    active_free_blocks = struct.unpack_from(
+        "<I", active_superblock, 0x0C
+    )[0] | (struct.unpack_from("<I", active_superblock, 0x158)[0] << 32)
+    active_free_inodes = struct.unpack_from("<I", active_superblock, 0x10)[0]
+    assert active_free_blocks == free_blocks_before
+    assert active_free_inodes == free_inodes_before
+    assert struct.unpack_from("<I", active_superblock, 0x60)[0] & 0x04
+    assert struct.unpack_from("<I", active_superblock, 0x64)[0] & 0x0001_0000
+    assert active_parent == expected_parent
+    assert active_inode == expected_retained_inode
+    assert _read_ext4_home(
+        active, inode_home, block_size=block_size
+    ) == expected_inode_home
+    assert _read_ext4_home(
+        active, directory_home, block_size=block_size
+    ) == expected_directory
+    assert _read_ext4_home(
+        active, orphan_home, block_size=block_size
+    ) == expected_orphan
+    assert _read_ext4_home(
+        active, data_block, block_size=block_size
+    ) == original_data
+    assert _read_ext4_home(
+        active, xattr_block, block_size=block_size
+    ) == original_xattr
+    assert _ext4_inode_allocation_state(active, (inode_number,)) == {
+        inode_number: True
+    }
+    assert _ext4_block_allocation_state(
+        active, (data_block, xattr_block)
+    ) == {data_block: True, xattr_block: True}
+
+    _, recovery_trace, recovery_sha256 = _staged_final_unlink_recovery_view(
+        active,
+        recovered,
+        expected_free_blocks=free_blocks_before + 2,
+        expected_free_inodes=free_inodes_before + 1,
+        expected_home_writes=6,
+        expected_replayed=True,
+        prefix="_UF4-R",
+        marker="EXT4-PUBLIC-FINAL-UNLINK-SHARED-HOME-RECOVERED",
+        target_path="/fixture/payload.txt",
+    )
+    assert recovery_trace
+    recovered_superblock, recovered_parent, _ = _ext4_inode_record(
+        recovered, parent_number
+    )
+    _, recovered_inode, _ = _ext4_inode_record(recovered, inode_number)
+    recovered_free_blocks = struct.unpack_from(
+        "<I", recovered_superblock, 0x0C
+    )[0] | (struct.unpack_from("<I", recovered_superblock, 0x158)[0] << 32)
+    recovered_free_inodes = struct.unpack_from(
+        "<I", recovered_superblock, 0x10
+    )[0]
+    assert recovered_free_blocks == free_blocks_before + 2
+    assert recovered_free_inodes == free_inodes_before + 1
+    assert struct.unpack_from("<I", recovered_superblock, 0x64)[0] & (
+        0x0001_0000
+    ) == 0
+    assert recovered_parent == expected_parent
+    assert recovered_inode == bytes(inode_size)
+    assert _read_ext4_home(
+        recovered, inode_home, block_size=block_size
+    ) == expected_recovered_inode_home
+    assert _read_ext4_home(
+        recovered, directory_home, block_size=block_size
+    ) == expected_directory
+    assert _read_ext4_home(
+        recovered, orphan_home, block_size=block_size
+    ) == original_orphan
+    assert _read_ext4_home(
+        recovered, data_block, block_size=block_size
+    ) == original_data
+    assert _read_ext4_home(
+        recovered, xattr_block, block_size=block_size
+    ) == original_xattr
+    assert _ext4_inode_allocation_state(recovered, (inode_number,)) == {
+        inode_number: False
+    }
+    assert _ext4_block_allocation_state(
+        recovered, (data_block, xattr_block)
+    ) == {data_block: False, xattr_block: False}
+    _assert_e2fsck_clean(recovered, jbd2_toolchain)
+
+    _, stable_trace, stable_sha256 = _staged_final_unlink_recovery_view(
+        recovered,
+        stable,
+        expected_free_blocks=free_blocks_before + 2,
+        expected_free_inodes=free_inodes_before + 1,
+        expected_home_writes=0,
+        expected_replayed=False,
+        prefix="_UF4-S",
+        marker="EXT4-PUBLIC-FINAL-UNLINK-SHARED-HOME-STABLE",
+        target_path="/fixture/payload.txt",
+    )
+    assert stable_trace == ()
+    assert stable_sha256 == recovery_sha256
+    assert _sha256(stable) == stable_sha256
+    assert stable_sha256 != active_sha256
+
+
+@pytest.fixture(scope="session")
+def staged_public_final_unlink_open_retained_fixture(
+    staged_public_final_unlink_closed_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Crash with one of two descriptors retaining a deleted final link."""
+    case = staged_public_final_unlink_closed_fixture
+    path = case["source"]
+    source_patches = case["source_patches"]
+    activation_trace = case["activation_trace"]
+    block_size = case["block_size"]
+    inode_number = case["inode_number"]
+    inode_home = case["inode_home"]
+    directory_home = case["directory_home"]
+    orphan_home = case["orphan_home"]
+    data_blocks = case["data_blocks"]
+    old_size = case["old_size"]
+    old_blocks = case["old_blocks"]
+    generation = case["generation"]
+    free_blocks_before = case["free_blocks_before"]
+    free_inodes_before = case["free_inodes_before"]
+    expected_directory = case["expected_directory"]
+    original_orphan = case["original_orphan"]
+    original_data = case["original_data"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(directory_home, int)
+    assert isinstance(orphan_home, int)
+    assert isinstance(data_blocks, tuple)
+    assert isinstance(old_size, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(generation, int)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(expected_directory, bytes)
+    assert isinstance(original_orphan, bytes)
+    assert isinstance(original_data, tuple)
+    expected_file = original_data[0] + bytes(block_size) + original_data[1]
+    expected_file_crc = _crc32c_raw(expected_file)
+    epoch_ms = 3_000_002_456_789
+
+    directory = tmp_path_factory.mktemp("ext4-public-final-unlink-retained")
+    active = directory / "staged-final-unlink-open-retained.img"
+    recovered = directory / "staged-final-unlink-open-recovered.img"
+    stable = directory / "staged-final-unlink-open-stable.img"
+    output, trace, active_sha256 = run_recovery_forth(
+        path,
+        active,
+        [
+            f"CREATE _UFR-BUF {old_size} ALLOT",
+            "CREATE _UFR-STAT VFS-STATFS-SIZE ALLOT",
+            "VARIABLE _UFR-CLOCK-CALLS",
+            (
+                ": _UFR-NOW ( context -- epoch-ms ior ) "
+                f"DROP 1 _UFR-CLOCK-CALLS +! {epoch_ms} 0 ;"
+            ),
+            "T-ARENA CONSTANT _UFR-ARENA",
+            (
+                "_UFR-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _UFR-MOUNT-IOR CONSTANT _UFR-V"
+            ),
+            "_UFR-V _EXT4-CTX CONSTANT _UFR-CTX",
+            (
+                "' _UFR-NOW 0 _UFR-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _UFR-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_UFR-PROFILE", "_UFR-V", 6, 0, 0
+            ),
+            (
+                'S" /fixture/sparse.bin" VFS-FF-READ _UFR-V '
+                "VFS-OPEN? CONSTANT _UFR-OPEN1-IOR CONSTANT _UFR-FD1"
+            ),
+            (
+                'S" /fixture/sparse.bin" VFS-FF-READ _UFR-V '
+                "VFS-OPEN? CONSTANT _UFR-OPEN2-IOR CONSTANT _UFR-FD2"
+            ),
+            "_UFR-FD1 FD.INODE @ CONSTANT _UFR-D",
+            "_UFR-D D.VNODE @ CONSTANT _UFR-VN",
+            "_UFR-V V.ICOUNT @ CONSTANT _UFR-OLD-ICOUNT",
+            "_UFR-V V.VCOUNT @ CONSTANT _UFR-OLD-VCOUNT",
+            (
+                "_UFR-STAT VFS-STATFS-SIZE _UFR-V VFS-STATFS "
+                "CONSTANT _UFR-BEFORE-IOR"
+            ),
+            "_UFR-STAT VSF.BFREE @ CONSTANT _UFR-BFREE-BEFORE",
+            "_UFR-STAT VSF.FFREE @ CONSTANT _UFR-FFREE-BEFORE",
+            (
+                'S" /fixture/sparse.bin" _UFR-V VFS-RM '
+                "CONSTANT _UFR-UNLINK-IOR"
+            ),
+            "_UFR-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _UFR-ADD-HOMES",
+            (
+                'S" /fixture/sparse.bin" _UFR-V VFS-RESOLVE? '
+                "CONSTANT _UFR-AFTER-IOR CONSTANT _UFR-AFTER"
+            ),
+            "_UFR-V VFS-SYNC CONSTANT _UFR-SYNC-IOR",
+            "_UFR-V V.LAST-IOR @ CONSTANT _UFR-SYNC-LAST-IOR",
+            "_UFR-FD1 VFS-CLOSE? CONSTANT _UFR-CLOSE1-IOR",
+            (
+                f"_UFR-BUF {old_size} _UFR-FD2 VFS-READ? "
+                "CONSTANT _UFR-READ-IOR CONSTANT _UFR-ACTUAL"
+            ),
+            "0xFFFFFFFF _EXT4-CRC-START",
+            (
+                f"_UFR-BUF {old_size} _EXT4-CRC-ADD "
+                "CONSTANT _UFR-CRC-IOR"
+            ),
+            "_EXT4-CRC@ CONSTANT _UFR-CRC",
+            (
+                "_UFR-STAT VFS-STATFS-SIZE _UFR-V VFS-STATFS "
+                "CONSTANT _UFR-AFTER-STAT-IOR"
+            ),
+            "_UFR-STAT VSF.BFREE @ CONSTANT _UFR-BFREE-AFTER",
+            "_UFR-STAT VSF.FFREE @ CONSTANT _UFR-FFREE-AFTER",
+            "_UFR-CTX _EXT4-C.J.WRITER + @ CONSTANT _UFR-WRITER",
+            *_forth_accumulated_conjunction(
+                "_UFR-ALL-RETAINED",
+                [
+                    "_UFR-MOUNT-IOR 0=",
+                    "_UFR-CLOCK-IOR 0=",
+                    "_UFR-PROFILE-SIZE-IOR 0=",
+                    "_UFR-PROFILE-BIND-IOR 0=",
+                    "_UFR-OPEN1-IOR 0=",
+                    "_UFR-OPEN2-IOR 0=",
+                    "_UFR-FD1 FD.INODE @ 0=",
+                    "_UFR-FD1 FD.VFS @ 0=",
+                    "_UFR-FD2 FD.INODE @ _UFR-D =",
+                    "_UFR-UNLINK-IOR 0=",
+                    "_UFR-CLOCK-CALLS @ 1 =",
+                    "_UFR-ADD-HOMES 5 =",
+                    "_UFR-AFTER 0=",
+                    (
+                        "_UFR-AFTER-IOR VFS-IOR-REASON "
+                        "VFS-R-NOENT ="
+                    ),
+                    "_UFR-SYNC-IOR VFS-E-BUSY =",
+                    "_UFR-SYNC-LAST-IOR _UFR-SYNC-IOR =",
+                    "_UFR-CLOSE1-IOR 0=",
+                    "_UFR-D D.FLAGS @ VFS-DF-UNLINKED AND 0<>",
+                    "_UFR-D D.VNODE @ _UFR-VN =",
+                    "_UFR-VN VN.NLINK @ 0=",
+                    "_UFR-VN VN.OPEN-REFS @ 1 =",
+                    "_UFR-VN VN.DREFS @ 1 =",
+                    f"_UFR-VN VN.SIZE-LO @ {old_size} =",
+                    f"_UFR-VN VN.BLOCKS @ {old_blocks} =",
+                    "_UFR-V V.ICOUNT @ _UFR-OLD-ICOUNT 1- =",
+                    "_UFR-V V.VCOUNT @ _UFR-OLD-VCOUNT =",
+                    "_UFR-READ-IOR 0=",
+                    f"_UFR-ACTUAL {old_size} =",
+                    "_UFR-CRC-IOR 0=",
+                    f"_UFR-CRC {expected_file_crc} =",
+                    "_UFR-BEFORE-IOR 0=",
+                    "_UFR-AFTER-STAT-IOR 0=",
+                    "_UFR-BFREE-AFTER _UFR-BFREE-BEFORE =",
+                    "_UFR-FFREE-AFTER _UFR-FFREE-BEFORE =",
+                    (
+                        "_UFR-CTX _EXT4-C.FREE-BLOCKS + @ "
+                        "_UFR-BFREE-AFTER ="
+                    ),
+                    (
+                        "_UFR-CTX _EXT4-C.FREE-INODES + @ "
+                        "_UFR-FFREE-AFTER ="
+                    ),
+                    "_XU-CLEANUP-EXPECTED-CREDIT @ 6 =",
+                    "_XU-CLEANUP-EXPECTED-REVOKE @ 0=",
+                    "_UFR-WRITER _UFR-PROFILE-BASE =",
+                    "_UFR-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                    "_UFR-CTX _EXT4-C.O.ACTIVE + @ 1 =",
+                    "_UFR-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
+                    "_UFR-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                    "_UFR-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                    (
+                        "_UFR-CTX _EXT4-C.SB + "
+                        "_EXT4-SB.RO-COMPAT + L@ "
+                        "_EXT4-RO-ORPHAN-PRESENT AND 0<>"
+                    ),
+                    "_UFR-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_UFR-V V.FLAGS @ VFS-F-RO AND 0=",
+                    "_EXT4-JFO-CERT-SCOPE @ 0=",
+                    "_EXT4-JFO-CERT-VALID @ 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            (
+                '_UFR-ALL-RETAINED @ IF ." '
+                'EXT4-PUBLIC-FINAL-UNLINK-OPEN-RETAINED" ELSE ." '
+                'EXT4-PUBLIC-FINAL-UNLINK-OPEN-RETAINED-CHECK " '
+                "_UFR-ALL-RETAINED-FIRST-FAILURE @ . THEN"
+            ),
+        ],
+        patches=source_patches,
+        capture_media=active,
+        max_steps=_STAGED_FINAL_UNLINK_MAX_STEPS,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-FINAL-UNLINK-OPEN-RETAINED")
+    assert trace[: len(activation_trace)] == activation_trace
+    assert active.is_file()
+
+    final_superblock, final_inode, _ = _ext4_inode_record(
+        active, inode_number
+    )
+    assert struct.unpack_from("<I", final_superblock, 0x0C)[0] == (
+        free_blocks_before
+    )
+    assert struct.unpack_from("<I", final_superblock, 0x10)[0] == (
+        free_inodes_before
+    )
+    assert struct.unpack_from("<I", final_superblock, 0x64)[0] & 0x0001_0000
+    assert struct.unpack_from("<H", final_inode, 0x1A)[0] == 0
+    assert struct.unpack_from("<I", final_inode, 0x04)[0] == old_size
+    assert struct.unpack_from("<I", final_inode, 0x1C)[0] == old_blocks
+    assert struct.unpack_from("<I", final_inode, 0x64)[0] == generation
+    assert struct.unpack_from("<HHHH", final_inode, 0x28) == (0xF30A, 2, 4, 0)
+    assert _read_ext4_home(
+        active, directory_home, block_size=block_size
+    ) == expected_directory
+    retained_orphan = _read_ext4_home(
+        active, orphan_home, block_size=block_size
+    )
+    assert struct.unpack_from("<I", retained_orphan, 0)[0] == inode_number
+    assert retained_orphan != original_orphan
+    assert _ext4_block_allocation_state(active, data_blocks) == {
+        data_blocks[0]: True,
+        data_blocks[1]: True,
+    }
+
+    _, recovery_trace, recovery_sha256 = _staged_final_unlink_recovery_view(
+        active,
+        recovered,
+        expected_free_blocks=free_blocks_before + 2,
+        expected_free_inodes=free_inodes_before + 1,
+        expected_home_writes=6,
+        expected_replayed=True,
+        prefix="_UFR-R",
+        marker="EXT4-PUBLIC-FINAL-UNLINK-OPEN-RECOVERED",
+    )
+    assert recovery_trace
+    _assert_e2fsck_clean(recovered, jbd2_toolchain)
+    _, stable_trace, stable_sha256 = _staged_final_unlink_recovery_view(
+        recovered,
+        stable,
+        expected_free_blocks=free_blocks_before + 2,
+        expected_free_inodes=free_inodes_before + 1,
+        expected_home_writes=0,
+        expected_replayed=False,
+        prefix="_UFR-S",
+        marker="EXT4-PUBLIC-FINAL-UNLINK-OPEN-STABLE",
+    )
+    assert stable_trace == ()
+    assert stable_sha256 == recovery_sha256
+    assert stable_sha256 != active_sha256
+    return {
+        "active": active,
+        "recovered": recovered,
+        "stable": stable,
+        "trace": trace,
+        "recovery_trace": recovery_trace,
+        "expected_file": expected_file,
+        "expected_file_crc": expected_file_crc,
+    }
+
+
+def test_staged_vfs_unlink_open_final_link_survives_until_recovery(
+    staged_public_final_unlink_open_retained_fixture: dict[str, object],
+) -> None:
+    active = staged_public_final_unlink_open_retained_fixture["active"]
+    recovered = staged_public_final_unlink_open_retained_fixture["recovered"]
+    assert isinstance(active, Path)
+    assert isinstance(recovered, Path)
+    assert active.is_file()
+    assert recovered.is_file()
+    assert _sha256(active) != _sha256(recovered)
+
+
+def test_staged_vfs_unlink_open_final_link_drains_on_last_close(
+    staged_public_final_unlink_closed_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Two open descriptors delay reclamation until the final close."""
+    case = staged_public_final_unlink_closed_fixture
+    path = case["source"]
+    source_patches = case["source_patches"]
+    success_image = case["image"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    inode_number = case["inode_number"]
+    data_blocks = case["data_blocks"]
+    old_size = case["old_size"]
+    old_blocks = case["old_blocks"]
+    epoch_ms = case["epoch_ms"]
+    free_blocks_before = case["free_blocks_before"]
+    free_inodes_before = case["free_inodes_before"]
+    original_data = case["original_data"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(success_image, Path)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(inode_number, int)
+    assert isinstance(data_blocks, tuple)
+    assert isinstance(old_size, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(epoch_ms, int)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(original_data, tuple)
+    expected_file = original_data[0] + bytes(block_size) + original_data[1]
+    expected_file_crc = _crc32c_raw(expected_file)
+
+    backing = tmp_path / "staged-final-unlink-open-last-close.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        backing,
+        [
+            f"CREATE _UFL-BUF {old_size} ALLOT",
+            "CREATE _UFL-STAT VFS-STATFS-SIZE ALLOT",
+            "VARIABLE _UFL-CLOCK-CALLS",
+            (
+                ": _UFL-NOW ( context -- epoch-ms ior ) "
+                f"DROP 1 _UFL-CLOCK-CALLS +! {epoch_ms} 0 ;"
+            ),
+            "T-ARENA CONSTANT _UFL-ARENA",
+            (
+                "_UFL-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _UFL-MOUNT-IOR CONSTANT _UFL-V"
+            ),
+            "_UFL-V _EXT4-CTX CONSTANT _UFL-CTX",
+            (
+                "' _UFL-NOW 0 _UFL-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _UFL-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_UFL-PROFILE", "_UFL-V", 6, 0, 0
+            ),
+            (
+                'S" /fixture/sparse.bin" VFS-FF-READ _UFL-V '
+                "VFS-OPEN? CONSTANT _UFL-OPEN1-IOR CONSTANT _UFL-FD1"
+            ),
+            (
+                'S" /fixture/sparse.bin" VFS-FF-READ _UFL-V '
+                "VFS-OPEN? CONSTANT _UFL-OPEN2-IOR CONSTANT _UFL-FD2"
+            ),
+            "_UFL-FD1 FD.INODE @ CONSTANT _UFL-D",
+            "_UFL-D D.VNODE @ CONSTANT _UFL-VN",
+            "_UFL-V V.ICOUNT @ CONSTANT _UFL-OLD-ICOUNT",
+            "_UFL-V V.VCOUNT @ CONSTANT _UFL-OLD-VCOUNT",
+            (
+                "_UFL-STAT VFS-STATFS-SIZE _UFL-V VFS-STATFS "
+                "CONSTANT _UFL-BEFORE-IOR"
+            ),
+            "_UFL-STAT VSF.BFREE @ CONSTANT _UFL-BFREE-BEFORE",
+            "_UFL-STAT VSF.FFREE @ CONSTANT _UFL-FFREE-BEFORE",
+            (
+                'S" /fixture/sparse.bin" _UFL-V VFS-RM '
+                "CONSTANT _UFL-UNLINK-IOR"
+            ),
+            "_UFL-CTX _EXT4-C.J.HOME-WRITES + @ CONSTANT _UFL-ADD-HOMES",
+            "_UFL-VN VN.NLINK @ CONSTANT _UFL-RETAINED-NLINK",
+            "_UFL-VN VN.OPEN-REFS @ CONSTANT _UFL-RETAINED-OPEN-REFS",
+            "_UFL-CTX _EXT4-C.O.ACTIVE + @ CONSTANT _UFL-RETAINED-ORPHANS",
+            "_UFL-FD1 VFS-CLOSE? CONSTANT _UFL-CLOSE1-IOR",
+            "_UFL-VN VN.OPEN-REFS @ CONSTANT _UFL-FIRST-CLOSE-REFS",
+            (
+                f"_UFL-BUF {old_size} _UFL-FD2 VFS-READ? "
+                "CONSTANT _UFL-READ-IOR CONSTANT _UFL-ACTUAL"
+            ),
+            "0xFFFFFFFF _EXT4-CRC-START",
+            (
+                f"_UFL-BUF {old_size} _EXT4-CRC-ADD "
+                "CONSTANT _UFL-CRC-IOR"
+            ),
+            "_EXT4-CRC@ CONSTANT _UFL-CRC",
+            "_UFL-FD2 VFS-CLOSE? CONSTANT _UFL-CLOSE2-IOR",
+            "_UFL-FD2 VFS-CLOSE? CONSTANT _UFL-CLOSE2-AGAIN-IOR",
+            (
+                'S" /fixture/sparse.bin" _UFL-V VFS-RESOLVE? '
+                "CONSTANT _UFL-AFTER-IOR CONSTANT _UFL-AFTER"
+            ),
+            (
+                "_UFL-STAT VFS-STATFS-SIZE _UFL-V VFS-STATFS "
+                "CONSTANT _UFL-AFTER-STAT-IOR"
+            ),
+            "_UFL-STAT VSF.BFREE @ CONSTANT _UFL-BFREE-AFTER",
+            "_UFL-STAT VSF.FFREE @ CONSTANT _UFL-FFREE-AFTER",
+            "_UFL-CTX _EXT4-C.J.WRITER + @ CONSTANT _UFL-WRITER",
+            *_forth_accumulated_conjunction(
+                "_UFL-ALL-CLOSED",
+                [
+                    "_UFL-MOUNT-IOR 0=",
+                    "_UFL-CLOCK-IOR 0=",
+                    "_UFL-PROFILE-SIZE-IOR 0=",
+                    "_UFL-PROFILE-BIND-IOR 0=",
+                    "_UFL-OPEN1-IOR 0=",
+                    "_UFL-OPEN2-IOR 0=",
+                    "_UFL-UNLINK-IOR 0=",
+                    "_UFL-CLOCK-CALLS @ 1 =",
+                    "_UFL-ADD-HOMES 5 =",
+                    "_UFL-RETAINED-NLINK 0=",
+                    "_UFL-RETAINED-OPEN-REFS 2 =",
+                    "_UFL-RETAINED-ORPHANS 1 =",
+                    "_UFL-CLOSE1-IOR 0=",
+                    "_UFL-FD1 FD.INODE @ 0=",
+                    "_UFL-FD1 FD.VFS @ 0=",
+                    "_UFL-FIRST-CLOSE-REFS 1 =",
+                    "_UFL-READ-IOR 0=",
+                    f"_UFL-ACTUAL {old_size} =",
+                    "_UFL-CRC-IOR 0=",
+                    f"_UFL-CRC {expected_file_crc} =",
+                    "_UFL-CLOSE2-IOR 0=",
+                    "_UFL-CLOSE2-AGAIN-IOR VFS-E-BADF =",
+                    "_UFL-FD2 FD.INODE @ 0=",
+                    "_UFL-FD2 FD.VFS @ 0=",
+                    "_UFL-V V.OPEN-COUNT @ 0=",
+                    "_UFL-AFTER 0=",
+                    (
+                        "_UFL-AFTER-IOR VFS-IOR-REASON "
+                        "VFS-R-NOENT ="
+                    ),
+                    "_UFL-BEFORE-IOR 0=",
+                    "_UFL-AFTER-STAT-IOR 0=",
+                    "_UFL-BFREE-AFTER _UFL-BFREE-BEFORE 2 + =",
+                    "_UFL-FFREE-AFTER _UFL-FFREE-BEFORE 1+ =",
+                    (
+                        "_UFL-CTX _EXT4-C.FREE-BLOCKS + @ "
+                        "_UFL-BFREE-AFTER ="
+                    ),
+                    (
+                        "_UFL-CTX _EXT4-C.FREE-INODES + @ "
+                        "_UFL-FFREE-AFTER ="
+                    ),
+                    "_UFL-V V.ICOUNT @ _UFL-OLD-ICOUNT 1- =",
+                    "_UFL-V V.VCOUNT @ _UFL-OLD-VCOUNT 1- =",
+                    "_UFL-WRITER _UFL-PROFILE-BASE =",
+                    "_UFL-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                    "_UFL-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                    "_UFL-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                    "_UFL-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                    "_UFL-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                    (
+                        "_UFL-CTX _EXT4-C.SB + "
+                        "_EXT4-SB.RO-COMPAT + L@ "
+                        "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                    ),
+                    "_UFL-V V.LAST-IOR @ 0=",
+                    "_UFL-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_UFL-V V.FLAGS @ VFS-F-RO AND 0=",
+                    "_EXT4-JFO-CERT-SCOPE @ 0=",
+                    "_EXT4-JFO-CERT-VALID @ 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            (
+                '_UFL-ALL-CLOSED @ IF ." '
+                'EXT4-PUBLIC-FINAL-UNLINK-LAST-CLOSE" ELSE ." '
+                'EXT4-PUBLIC-FINAL-UNLINK-LAST-CLOSE-CHECK " '
+                "_UFL-ALL-CLOSED-FIRST-FAILURE @ . THEN"
+            ),
+            "0 _UFL-V VFS-UNMOUNT CONSTANT _UFL-UNMOUNT-IOR",
+            (
+                "_UFL-UNMOUNT-IOR 0= "
+                "_UFL-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_UFL-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-PUBLIC-FINAL-UNLINK-LAST-CLOSE-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=source_patches,
+        capture_media=backing,
+        max_steps=_STAGED_FINAL_UNLINK_MAX_STEPS,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-FINAL-UNLINK-LAST-CLOSE")
+    _assert_emitted(output, "EXT4-PUBLIC-FINAL-UNLINK-LAST-CLOSE-UNMOUNTED")
+    assert trace == success_trace
+    assert _sha256(backing) == media_sha256
+    assert media_sha256 == _sha256(success_image)
+    final_superblock, final_inode, _ = _ext4_inode_record(
+        backing, inode_number
+    )
+    assert struct.unpack_from("<I", final_superblock, 0x0C)[0] == (
+        free_blocks_before + 2
+    )
+    assert struct.unpack_from("<I", final_superblock, 0x10)[0] == (
+        free_inodes_before + 1
+    )
+    assert final_inode == bytes(len(final_inode))
+    assert _ext4_inode_allocation_state(backing, (inode_number,)) == {
+        inode_number: False
+    }
+    assert not any(_ext4_block_allocation_state(backing, data_blocks).values())
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+
+def test_staged_vfs_unlink_nonempty_final_add_descriptor_tear_rolls_back(
+    staged_public_final_unlink_closed_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A precommit final-link ADD tear retains the complete sparse file."""
+    case = staged_public_final_unlink_closed_fixture
+    path = case["source"]
+    source_patches = case["source_patches"]
+    success_trace = case["trace"]
+    activation_trace = case["activation_trace"]
+    block_size = case["block_size"]
+    parent_home = case["parent_home"]
+    inode_number = case["inode_number"]
+    inode_home = case["inode_home"]
+    directory_home = case["directory_home"]
+    orphan_home = case["orphan_home"]
+    data_blocks = case["data_blocks"]
+    old_size = case["old_size"]
+    old_blocks = case["old_blocks"]
+    old_mtime_ms = case["old_mtime_ms"]
+    epoch_ms = case["epoch_ms"]
+    free_blocks_before = case["free_blocks_before"]
+    free_inodes_before = case["free_inodes_before"]
+    original_parent_home = case["original_parent_home"]
+    original_inode_home = case["original_inode_home"]
+    original_directory = case["original_directory"]
+    original_orphan = case["original_orphan"]
+    original_data = case["original_data"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(parent_home, int)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(directory_home, int)
+    assert isinstance(orphan_home, int)
+    assert isinstance(data_blocks, tuple)
+    assert isinstance(old_size, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(old_mtime_ms, int)
+    assert isinstance(epoch_ms, int)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(original_parent_home, bytes)
+    assert isinstance(original_inode_home, bytes)
+    assert isinstance(original_directory, bytes)
+    assert isinstance(original_orphan, bytes)
+    assert isinstance(original_data, tuple)
+    expected_file = original_data[0] + bytes(block_size) + original_data[1]
+
+    target_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, inode_home, block_size=block_size
+    )
+    assert len(target_ordinals) == 2
+    descriptor_ordinal = target_ordinals[0] - 12
+    assert descriptor_ordinal == sum(
+        kind == "write" for kind, _, _ in activation_trace
+    ) + 1
+    descriptor_event = _trace_event_index_for_ordinal(
+        success_trace, "write", descriptor_ordinal
+    )
+    faulted = tmp_path / "staged-final-unlink-add-descriptor.img"
+    recovered = tmp_path / "staged-final-unlink-add-descriptor-recovered.img"
+    stable = tmp_path / "staged-final-unlink-add-descriptor-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                *_staged_final_unlink_attempt_forth(
+                    "_FAD", epoch_ms=epoch_ms, open_target=False
+                ),
+                *_forth_accumulated_conjunction(
+                    "_FAD-ALL-ROLLBACK",
+                    [
+                        "_FAD-MOUNT-IOR 0=",
+                        "_FAD-CLOCK-IOR 0=",
+                        "_FAD-PROFILE-SIZE-IOR 0=",
+                        "_FAD-PROFILE-BIND-IOR 0=",
+                        "_FAD-RESOLVE-IOR 0=",
+                        "_FAD-PARENT-IOR 0=",
+                        f"_FAD-VN VN.BID @ {inode_number} =",
+                        "_FAD-OLD-NLINK 1 =",
+                        f"_FAD-OLD-SIZE {old_size} =",
+                        f"_FAD-OLD-BLOCKS {old_blocks} =",
+                        (
+                            "_FAD-UNLINK-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-VOLUME ="
+                        ),
+                        "_FAD-UNLINK-IOR VFS-IOR-REASON VFS-R-IO =",
+                        (
+                            "_FAD-UNLINK-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-PARTIAL AND 0<>"
+                        ),
+                        "_FAD-UNLINK-LAST-IOR _FAD-UNLINK-IOR =",
+                        "_FAD-CLOCK-CALLS @ 1 =",
+                        "_FAD-AFTER-IOR 0=",
+                        "_FAD-AFTER _FAD-D =",
+                        "_FAD-VN VN.NLINK @ _FAD-OLD-NLINK =",
+                        "_FAD-VN VN.SIZE-LO @ _FAD-OLD-SIZE =",
+                        "_FAD-VN VN.BLOCKS @ _FAD-OLD-BLOCKS =",
+                        "_FAD-VN VN.MTIME @ _FAD-OLD-MTIME =",
+                        "_FAD-VN VN.MTIME-NS @ _FAD-OLD-MTIME-NS =",
+                        "_FAD-VN VN.CTIME @ _FAD-OLD-CTIME =",
+                        "_FAD-VN VN.CTIME-NS @ _FAD-OLD-CTIME-NS =",
+                        (
+                            "_FAD-PARENT-VN VN.MTIME @ "
+                            "_FAD-OLD-PARENT-MTIME ="
+                        ),
+                        (
+                            "_FAD-PARENT-VN VN.MTIME-NS @ "
+                            "_FAD-OLD-PARENT-MTIME-NS ="
+                        ),
+                        (
+                            "_FAD-PARENT-VN VN.CTIME @ "
+                            "_FAD-OLD-PARENT-CTIME ="
+                        ),
+                        (
+                            "_FAD-PARENT-VN VN.CTIME-NS @ "
+                            "_FAD-OLD-PARENT-CTIME-NS ="
+                        ),
+                        "_FAD-BEFORE-IOR 0=",
+                        "_FAD-AFTER-STAT-IOR 0=",
+                        "_FAD-BFREE-AFTER _FAD-BFREE-BEFORE =",
+                        "_FAD-FFREE-AFTER _FAD-FFREE-BEFORE =",
+                        (
+                            "_FAD-CTX _EXT4-C.FREE-BLOCKS + @ "
+                            "_FAD-BFREE-AFTER ="
+                        ),
+                        (
+                            "_FAD-CTX _EXT4-C.FREE-INODES + @ "
+                            "_FAD-FFREE-AFTER ="
+                        ),
+                        "_FAD-AFTER-ICOUNT _FAD-OLD-ICOUNT =",
+                        "_FAD-AFTER-VCOUNT _FAD-OLD-VCOUNT =",
+                        "_FAD-WRITER _FAD-PROFILE-BASE =",
+                        "_FAD-WRITER _EXT4-JWR-VALID?",
+                        (
+                            "_FAD-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-FAULTED ="
+                        ),
+                        (
+                            "_FAD-WRITER _EXT4-JWR.PHASE + @ "
+                            "_EXT4-JWP-DESCRIPTOR ="
+                        ),
+                        (
+                            "_FAD-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                            "5 ="
+                        ),
+                        "_FAD-ADD-HOMES 0=",
+                        "_FAD-CTX _EXT4-C.J.COMMITTED + @ 0=",
+                        "_FAD-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        "_FAD-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                        "_FAD-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        "_FAD-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                        "_FAD-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        (
+                            "_FAD-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                        ),
+                        "_FAD-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_FAD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        (
+                            "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ],
+                ),
+                (
+                    '_FAD-ALL-ROLLBACK @ IF ." '
+                    'EXT4-PUBLIC-FINAL-UNLINK-ADD-DESCRIPTOR-ROLLBACK" '
+                    'ELSE ." EXT4-PUBLIC-FINAL-UNLINK-ADD-'
+                    'DESCRIPTOR-CHECK " '
+                    "_FAD-ALL-ROLLBACK-FIRST-FAILURE @ . THEN"
+                ),
+            ],
+            patches=source_patches,
+            write_faults_by_ordinal={
+                descriptor_ordinal: {
+                    "stage": "media",
+                    "sector_index": 0,
+                    "byte_index": 200,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+            max_steps=_STAGED_FINAL_UNLINK_MAX_STEPS,
+        )
+        _assert_emitted(
+            output, "EXT4-PUBLIC-FINAL-UNLINK-ADD-DESCRIPTOR-ROLLBACK"
+        )
+        assert failed_trace == success_trace[: descriptor_event + 1]
+        assert _read_ext4_home(
+            faulted, parent_home, block_size=block_size
+        ) == original_parent_home
+        assert _read_ext4_home(
+            faulted, inode_home, block_size=block_size
+        ) == original_inode_home
+        assert _read_ext4_home(
+            faulted, directory_home, block_size=block_size
+        ) == original_directory
+        assert _read_ext4_home(
+            faulted, orphan_home, block_size=block_size
+        ) == original_orphan
+        for home, original in zip(data_blocks, original_data, strict=True):
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == original
+        faulted_superblock, faulted_inode, _ = _ext4_inode_record(
+            faulted, inode_number
+        )
+        assert struct.unpack_from("<I", faulted_superblock, 0x0C)[0] == (
+            free_blocks_before
+        )
+        assert struct.unpack_from("<I", faulted_superblock, 0x10)[0] == (
+            free_inodes_before
+        )
+        assert (
+            struct.unpack_from("<I", faulted_superblock, 0x64)[0]
+            & 0x0001_0000
+            == 0
+        )
+        assert struct.unpack_from("<H", faulted_inode, 0x1A)[0] == 1
+        assert _ext4_inode_allocation_state(faulted, (inode_number,)) == {
+            inode_number: True
+        }
+        assert all(_ext4_block_allocation_state(faulted, data_blocks).values())
+
+        _, recovery_trace, recovery_sha256 = _staged_write_recovery_readback(
+            faulted,
+            recovered,
+            expected_file=expected_file,
+            expected_epoch_ms=old_mtime_ms,
+            expected_home_writes=0,
+            expected_replayed=True,
+            expected_blocks=old_blocks,
+            prefix="_FAD-R",
+            marker="EXT4-PUBLIC-FINAL-UNLINK-ADD-DESCRIPTOR-RECOVERED",
+            primary_path="/fixture/sparse.bin",
+            alias_path="/fixture/sparse.bin",
+        )
+        assert recovery_trace
+        _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+            recovered,
+            stable,
+            expected_file=expected_file,
+            expected_epoch_ms=old_mtime_ms,
+            expected_home_writes=0,
+            expected_replayed=False,
+            expected_blocks=old_blocks,
+            prefix="_FAD-S",
+            marker="EXT4-PUBLIC-FINAL-UNLINK-ADD-DESCRIPTOR-STABLE",
+            primary_path="/fixture/sparse.bin",
+            alias_path="/fixture/sparse.bin",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+        _assert_e2fsck_clean(recovered, jbd2_toolchain)
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
+def test_staged_vfs_unlink_nonempty_final_add_home_tear_replays_and_drains(
+    staged_public_final_unlink_closed_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A committed torn namespace ADD replays before orphan reclamation."""
+    case = staged_public_final_unlink_closed_fixture
+    path = case["source"]
+    source_patches = case["source_patches"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    parent_number = case["parent_number"]
+    parent_home = case["parent_home"]
+    inode_number = case["inode_number"]
+    inode_home = case["inode_home"]
+    directory_home = case["directory_home"]
+    orphan_home = case["orphan_home"]
+    data_blocks = case["data_blocks"]
+    epoch_ms = case["epoch_ms"]
+    free_blocks_before = case["free_blocks_before"]
+    free_inodes_before = case["free_inodes_before"]
+    target_offset = case["target_offset"]
+    expected_parent = case["expected_parent"]
+    expected_parent_home = case["expected_parent_home"]
+    expected_retained_inode_home = case["expected_retained_inode_home"]
+    original_directory = case["original_directory"]
+    expected_directory = case["expected_directory"]
+    original_orphan = case["original_orphan"]
+    original_data = case["original_data"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(parent_number, int)
+    assert isinstance(parent_home, int)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(directory_home, int)
+    assert isinstance(orphan_home, int)
+    assert isinstance(data_blocks, tuple)
+    assert isinstance(epoch_ms, int)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(target_offset, int)
+    assert isinstance(expected_parent, bytes)
+    assert isinstance(expected_parent_home, bytes)
+    assert isinstance(expected_retained_inode_home, bytes)
+    assert isinstance(original_directory, bytes)
+    assert isinstance(expected_directory, bytes)
+    assert isinstance(original_orphan, bytes)
+    assert isinstance(original_data, tuple)
+
+    inode_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, inode_home, block_size=block_size
+    )
+    parent_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, parent_home, block_size=block_size
+    )
+    directory_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, directory_home, block_size=block_size
+    )
+    assert len(inode_ordinals) == 2
+    assert len(parent_ordinals) == 1
+    assert len(directory_ordinals) == 1
+    directory_ordinal = directory_ordinals[0]
+    assert inode_ordinals[0] < parent_ordinals[0] < directory_ordinal
+    assert directory_ordinal < inode_ordinals[1]
+    directory_event = _trace_event_index_for_ordinal(
+        success_trace, "write", directory_ordinal
+    )
+    tear_offset = target_offset + 4
+    assert 0 < tear_offset < 512
+    expected_torn_directory = (
+        expected_directory[:tear_offset] + original_directory[tear_offset:]
+    )
+    assert expected_torn_directory not in {
+        original_directory,
+        expected_directory,
+    }
+
+    faulted = tmp_path / "staged-final-unlink-add-home.img"
+    recovered = tmp_path / "staged-final-unlink-add-home-recovered.img"
+    stable = tmp_path / "staged-final-unlink-add-home-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                *_staged_final_unlink_attempt_forth(
+                    "_FAH", epoch_ms=epoch_ms, open_target=False
+                ),
+                *_forth_accumulated_conjunction(
+                    "_FAH-ALL-COMMITTED",
+                    [
+                        "_FAH-MOUNT-IOR 0=",
+                        "_FAH-CLOCK-IOR 0=",
+                        "_FAH-PROFILE-SIZE-IOR 0=",
+                        "_FAH-PROFILE-BIND-IOR 0=",
+                        "_FAH-RESOLVE-IOR 0=",
+                        "_FAH-PARENT-IOR 0=",
+                        "_FAH-UNLINK-IOR 0=",
+                        (
+                            "_FAH-UNLINK-LAST-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-VOLUME ="
+                        ),
+                        (
+                            "_FAH-UNLINK-LAST-IOR VFS-IOR-REASON "
+                            "VFS-R-IO ="
+                        ),
+                        (
+                            "_FAH-UNLINK-LAST-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-PARTIAL AND 0<>"
+                        ),
+                        "_FAH-CLOCK-CALLS @ 1 =",
+                        "_FAH-AFTER 0=",
+                        (
+                            "_FAH-AFTER-IOR VFS-IOR-REASON "
+                            "VFS-R-NOENT ="
+                        ),
+                        "_FAH-BEFORE-IOR 0=",
+                        "_FAH-AFTER-STAT-IOR 0=",
+                        "_FAH-BFREE-AFTER _FAH-BFREE-BEFORE =",
+                        "_FAH-FFREE-AFTER _FAH-FFREE-BEFORE =",
+                        (
+                            "_FAH-CTX _EXT4-C.FREE-BLOCKS + @ "
+                            "_FAH-BFREE-AFTER ="
+                        ),
+                        (
+                            "_FAH-CTX _EXT4-C.FREE-INODES + @ "
+                            "_FAH-FFREE-AFTER ="
+                        ),
+                        "_FAH-AFTER-ICOUNT _FAH-OLD-ICOUNT 1- =",
+                        "_FAH-AFTER-VCOUNT _FAH-OLD-VCOUNT 1- =",
+                        "_FAH-WRITER _FAH-PROFILE-BASE =",
+                        "_FAH-WRITER _EXT4-JWR-VALID?",
+                        (
+                            "_FAH-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-FAULTED ="
+                        ),
+                        (
+                            "_FAH-WRITER _EXT4-JWR.PHASE + @ "
+                            "_EXT4-JWP-CHECKPOINT-HOME ="
+                        ),
+                        (
+                            "_FAH-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                            "5 ="
+                        ),
+                        (
+                            "_FAH-WRITER _EXT4-JWR.CP-MODE + @ "
+                            "_EXT4-JCPM-ORPHAN-MODERN-UNLINK-"
+                            "ADD-FIRST ="
+                        ),
+                        "_FAH-ADD-HOMES 2 =",
+                        "_FAH-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                        "_FAH-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        "_FAH-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                        "_FAH-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_FAH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        (
+                            "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ],
+                ),
+                (
+                    '_FAH-ALL-COMMITTED @ IF ." '
+                    'EXT4-PUBLIC-FINAL-UNLINK-ADD-HOME-COMMITTED" '
+                    'ELSE ." EXT4-PUBLIC-FINAL-UNLINK-ADD-HOME-CHECK " '
+                    "_FAH-ALL-COMMITTED-FIRST-FAILURE @ . THEN"
+                ),
+            ],
+            patches=source_patches,
+            write_faults_by_ordinal={
+                directory_ordinal: {
+                    "stage": "media",
+                    "sector_index": 0,
+                    "byte_index": tear_offset,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+            max_steps=_STAGED_FINAL_UNLINK_MAX_STEPS,
+        )
+        _assert_emitted(
+            output, "EXT4-PUBLIC-FINAL-UNLINK-ADD-HOME-COMMITTED"
+        )
+        assert failed_trace == success_trace[: directory_event + 1]
+        assert _read_ext4_home(
+            faulted, inode_home, block_size=block_size
+        ) == expected_retained_inode_home
+        assert _read_ext4_home(
+            faulted, parent_home, block_size=block_size
+        ) == expected_parent_home
+        assert _read_ext4_home(
+            faulted, directory_home, block_size=block_size
+        ) == expected_torn_directory
+        assert _read_ext4_home(
+            faulted, orphan_home, block_size=block_size
+        ) == original_orphan
+        faulted_superblock, _, _ = _ext4_inode_record(
+            faulted, inode_number
+        )
+        assert struct.unpack_from("<I", faulted_superblock, 0x0C)[0] == (
+            free_blocks_before
+        )
+        assert struct.unpack_from("<I", faulted_superblock, 0x10)[0] == (
+            free_inodes_before
+        )
+        assert (
+            struct.unpack_from("<I", faulted_superblock, 0x64)[0]
+            & 0x0001_0000
+            == 0
+        )
+        assert _ext4_inode_allocation_state(faulted, (inode_number,)) == {
+            inode_number: True
+        }
+        assert all(_ext4_block_allocation_state(faulted, data_blocks).values())
+        for home, original in zip(data_blocks, original_data, strict=True):
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == original
+
+        _, recovery_trace, recovery_sha256 = _staged_final_unlink_recovery_view(
+            faulted,
+            recovered,
+            expected_free_blocks=free_blocks_before + 2,
+            expected_free_inodes=free_inodes_before + 1,
+            expected_home_writes=6,
+            expected_replayed=True,
+            prefix="_FAH-R",
+            marker="EXT4-PUBLIC-FINAL-UNLINK-ADD-HOME-RECOVERED",
+        )
+        assert recovery_trace
+        recovered_superblock, recovered_parent, _ = _ext4_inode_record(
+            recovered, parent_number
+        )
+        _, recovered_inode, _ = _ext4_inode_record(recovered, inode_number)
+        assert recovered_parent == expected_parent
+        assert recovered_inode == bytes(len(recovered_inode))
+        assert struct.unpack_from("<I", recovered_superblock, 0x0C)[0] == (
+            free_blocks_before + 2
+        )
+        assert struct.unpack_from("<I", recovered_superblock, 0x10)[0] == (
+            free_inodes_before + 1
+        )
+        assert _read_ext4_home(
+            recovered, directory_home, block_size=block_size
+        ) == expected_directory
+        assert _read_ext4_home(
+            recovered, orphan_home, block_size=block_size
+        ) == original_orphan
+        assert _ext4_inode_allocation_state(recovered, (inode_number,)) == {
+            inode_number: False
+        }
+        assert not any(
+            _ext4_block_allocation_state(recovered, data_blocks).values()
+        )
+        _assert_e2fsck_clean(recovered, jbd2_toolchain)
+        _, stable_trace, stable_sha256 = _staged_final_unlink_recovery_view(
+            recovered,
+            stable,
+            expected_free_blocks=free_blocks_before + 2,
+            expected_free_inodes=free_inodes_before + 1,
+            expected_home_writes=0,
+            expected_replayed=False,
+            prefix="_FAH-S",
+            marker="EXT4-PUBLIC-FINAL-UNLINK-ADD-HOME-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
+def test_staged_vfs_unlink_last_close_descriptor_tear_recovers_orphan(
+    staged_public_final_unlink_closed_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A last-RELEASE descriptor tear consumes the FD but retains recovery."""
+    case = staged_public_final_unlink_closed_fixture
+    path = case["source"]
+    source_patches = case["source_patches"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    parent_number = case["parent_number"]
+    parent_home = case["parent_home"]
+    inode_number = case["inode_number"]
+    inode_home = case["inode_home"]
+    directory_home = case["directory_home"]
+    orphan_home = case["orphan_home"]
+    data_blocks = case["data_blocks"]
+    old_size = case["old_size"]
+    old_blocks = case["old_blocks"]
+    epoch_ms = case["epoch_ms"]
+    free_blocks_before = case["free_blocks_before"]
+    free_inodes_before = case["free_inodes_before"]
+    expected_parent = case["expected_parent"]
+    expected_parent_home = case["expected_parent_home"]
+    expected_retained_inode = case["expected_retained_inode"]
+    expected_retained_inode_home = case["expected_retained_inode_home"]
+    expected_directory = case["expected_directory"]
+    original_orphan = case["original_orphan"]
+    expected_orphan = case["expected_orphan"]
+    original_data = case["original_data"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(parent_number, int)
+    assert isinstance(parent_home, int)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(directory_home, int)
+    assert isinstance(orphan_home, int)
+    assert isinstance(data_blocks, tuple)
+    assert isinstance(old_size, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(epoch_ms, int)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(expected_parent, bytes)
+    assert isinstance(expected_parent_home, bytes)
+    assert isinstance(expected_retained_inode, bytes)
+    assert isinstance(expected_retained_inode_home, bytes)
+    assert isinstance(expected_directory, bytes)
+    assert isinstance(original_orphan, bytes)
+    assert isinstance(expected_orphan, bytes)
+    assert isinstance(original_data, tuple)
+
+    target_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, inode_home, block_size=block_size
+    )
+    assert len(target_ordinals) == 2
+    descriptor_ordinal = target_ordinals[1] - 13
+    assert descriptor_ordinal > target_ordinals[0]
+    descriptor_event = _trace_event_index_for_ordinal(
+        success_trace, "write", descriptor_ordinal
+    )
+    faulted = tmp_path / "staged-final-unlink-close-descriptor.img"
+    recovered = tmp_path / "staged-final-unlink-close-descriptor-recovered.img"
+    stable = tmp_path / "staged-final-unlink-close-descriptor-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                *_staged_final_unlink_attempt_forth(
+                    "_FCD", epoch_ms=epoch_ms, open_target=True
+                ),
+                "_FCD-VN VN.NLINK @ CONSTANT _FCD-ADD-NLINK",
+                "_FCD-VN VN.OPEN-REFS @ CONSTANT _FCD-ADD-OPEN-REFS",
+                "_FCD-VN VN.SIZE-LO @ CONSTANT _FCD-ADD-SIZE",
+                "_FCD-VN VN.BLOCKS @ CONSTANT _FCD-ADD-BLOCKS",
+                "_FCD-D D.FLAGS @ CONSTANT _FCD-ADD-D-FLAGS",
+                (
+                    "_FCD-CTX _EXT4-C.O.ACTIVE + @ "
+                    "CONSTANT _FCD-ADD-ORPHANS"
+                ),
+                (
+                    "_FCD-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
+                    "_EXT4-RO-ORPHAN-PRESENT AND "
+                    "CONSTANT _FCD-ADD-ORPHAN-FEATURE"
+                ),
+                "_FCD-FD VFS-CLOSE? CONSTANT _FCD-CLOSE-IOR",
+                "_FCD-V V.LAST-IOR @ CONSTANT _FCD-CLOSE-LAST-IOR",
+                "_FCD-FD VFS-CLOSE? CONSTANT _FCD-CLOSE-AGAIN-IOR",
+                "_FCD-V V.ICOUNT @ CONSTANT _FCD-CLOSE-ICOUNT",
+                "_FCD-V V.VCOUNT @ CONSTANT _FCD-CLOSE-VCOUNT",
+                (
+                    "_FCD-STAT VFS-STATFS-SIZE _FCD-V VFS-STATFS "
+                    "CONSTANT _FCD-CLOSE-STAT-IOR"
+                ),
+                "_FCD-STAT VSF.BFREE @ CONSTANT _FCD-BFREE-CLOSE",
+                "_FCD-STAT VSF.FFREE @ CONSTANT _FCD-FFREE-CLOSE",
+                *_forth_accumulated_conjunction(
+                    "_FCD-ALL-RETAINED",
+                    [
+                        "_FCD-MOUNT-IOR 0=",
+                        "_FCD-CLOCK-IOR 0=",
+                        "_FCD-PROFILE-SIZE-IOR 0=",
+                        "_FCD-PROFILE-BIND-IOR 0=",
+                        "_FCD-RESOLVE-IOR 0=",
+                        "_FCD-PARENT-IOR 0=",
+                        "_FCD-OPEN-IOR 0=",
+                        "_FCD-OPEN-REFS 1 =",
+                        "_FCD-UNLINK-IOR 0=",
+                        "_FCD-UNLINK-LAST-IOR 0=",
+                        "_FCD-CLOCK-CALLS @ 1 =",
+                        "_FCD-ADD-HOMES 5 =",
+                        "_FCD-AFTER 0=",
+                        (
+                            "_FCD-AFTER-IOR VFS-IOR-REASON "
+                            "VFS-R-NOENT ="
+                        ),
+                        "_FCD-ADD-NLINK 0=",
+                        "_FCD-ADD-OPEN-REFS 1 =",
+                        f"_FCD-ADD-SIZE {old_size} =",
+                        f"_FCD-ADD-BLOCKS {old_blocks} =",
+                        "_FCD-ADD-D-FLAGS VFS-DF-UNLINKED AND 0<>",
+                        "_FCD-ADD-ORPHANS 1 =",
+                        "_FCD-ADD-ORPHAN-FEATURE 0<>",
+                        "_FCD-BEFORE-IOR 0=",
+                        "_FCD-AFTER-STAT-IOR 0=",
+                        "_FCD-BFREE-AFTER _FCD-BFREE-BEFORE =",
+                        "_FCD-FFREE-AFTER _FCD-FFREE-BEFORE =",
+                        (
+                            "_FCD-CLOSE-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-VOLUME ="
+                        ),
+                        "_FCD-CLOSE-IOR VFS-IOR-REASON VFS-R-IO =",
+                        (
+                            "_FCD-CLOSE-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-PARTIAL AND 0<>"
+                        ),
+                        "_FCD-CLOSE-LAST-IOR _FCD-CLOSE-IOR =",
+                        "_FCD-CLOSE-AGAIN-IOR VFS-E-BADF =",
+                        "_FCD-FD FD.INODE @ 0=",
+                        "_FCD-FD FD.VFS @ 0=",
+                        "_FCD-V V.OPEN-COUNT @ 0=",
+                        "_FCD-CLOSE-STAT-IOR 0=",
+                        "_FCD-BFREE-CLOSE _FCD-BFREE-BEFORE =",
+                        "_FCD-FFREE-CLOSE _FCD-FFREE-BEFORE =",
+                        (
+                            "_FCD-CTX _EXT4-C.FREE-BLOCKS + @ "
+                            "_FCD-BFREE-CLOSE ="
+                        ),
+                        (
+                            "_FCD-CTX _EXT4-C.FREE-INODES + @ "
+                            "_FCD-FFREE-CLOSE ="
+                        ),
+                        "_FCD-CLOSE-ICOUNT _FCD-OLD-ICOUNT 1- =",
+                        "_FCD-CLOSE-VCOUNT _FCD-OLD-VCOUNT 1- =",
+                        "_FCD-WRITER _FCD-PROFILE-BASE =",
+                        "_FCD-WRITER _EXT4-JWR-VALID?",
+                        (
+                            "_FCD-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-FAULTED ="
+                        ),
+                        (
+                            "_FCD-WRITER _EXT4-JWR.PHASE + @ "
+                            "_EXT4-JWP-DESCRIPTOR ="
+                        ),
+                        (
+                            "_FCD-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                            "6 ="
+                        ),
+                        (
+                            "_FCD-WRITER _EXT4-JWR.CP-MODE + @ "
+                            "_EXT4-JCPM-ORPHAN-MODERN-DATA-"
+                            "DELETE-FINAL ="
+                        ),
+                        "_FCD-CTX _EXT4-C.J.HOME-WRITES + @ 5 =",
+                        "_FCD-CTX _EXT4-C.J.COMMITTED + @ 0=",
+                        "_FCD-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        "_FCD-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                        "_FCD-CTX _EXT4-C.O.ACTIVE + @ 1 =",
+                        "_FCD-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
+                        "_FCD-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        (
+                            "_FCD-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0<>"
+                        ),
+                        "_FCD-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_FCD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        (
+                            "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ],
+                ),
+                (
+                    '_FCD-ALL-RETAINED @ IF ." '
+                    'EXT4-PUBLIC-FINAL-UNLINK-CLOSE-DESCRIPTOR-RETAINED" '
+                    'ELSE ." EXT4-PUBLIC-FINAL-UNLINK-CLOSE-'
+                    'DESCRIPTOR-CHECK " '
+                    "_FCD-ALL-RETAINED-FIRST-FAILURE @ . THEN"
+                ),
+            ],
+            patches=source_patches,
+            write_faults_by_ordinal={
+                descriptor_ordinal: {
+                    "stage": "media",
+                    "sector_index": 0,
+                    "byte_index": 200,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+            max_steps=_STAGED_FINAL_UNLINK_MAX_STEPS,
+        )
+        _assert_emitted(
+            output, "EXT4-PUBLIC-FINAL-UNLINK-CLOSE-DESCRIPTOR-RETAINED"
+        )
+        assert failed_trace == success_trace[: descriptor_event + 1]
+        assert _read_ext4_home(
+            faulted, parent_home, block_size=block_size
+        ) == expected_parent_home
+        assert _read_ext4_home(
+            faulted, inode_home, block_size=block_size
+        ) == expected_retained_inode_home
+        assert _read_ext4_home(
+            faulted, directory_home, block_size=block_size
+        ) == expected_directory
+        assert _read_ext4_home(
+            faulted, orphan_home, block_size=block_size
+        ) == expected_orphan
+        for home, original in zip(data_blocks, original_data, strict=True):
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == original
+        faulted_superblock, faulted_parent, _ = _ext4_inode_record(
+            faulted, parent_number
+        )
+        _, faulted_inode, _ = _ext4_inode_record(faulted, inode_number)
+        assert faulted_parent == expected_parent
+        assert faulted_inode == expected_retained_inode
+        assert struct.unpack_from("<I", faulted_superblock, 0x0C)[0] == (
+            free_blocks_before
+        )
+        assert struct.unpack_from("<I", faulted_superblock, 0x10)[0] == (
+            free_inodes_before
+        )
+        assert struct.unpack_from("<I", faulted_superblock, 0x64)[0] & (
+            0x0001_0000
+        )
+        assert _ext4_inode_allocation_state(faulted, (inode_number,)) == {
+            inode_number: True
+        }
+        assert all(_ext4_block_allocation_state(faulted, data_blocks).values())
+
+        _, recovery_trace, recovery_sha256 = _staged_final_unlink_recovery_view(
+            faulted,
+            recovered,
+            expected_free_blocks=free_blocks_before + 2,
+            expected_free_inodes=free_inodes_before + 1,
+            expected_home_writes=6,
+            expected_replayed=True,
+            prefix="_FCD-R",
+            marker="EXT4-PUBLIC-FINAL-UNLINK-CLOSE-DESCRIPTOR-RECOVERED",
+        )
+        assert recovery_trace
+        recovered_superblock, recovered_parent, _ = _ext4_inode_record(
+            recovered, parent_number
+        )
+        _, recovered_inode, _ = _ext4_inode_record(recovered, inode_number)
+        assert recovered_parent == expected_parent
+        assert recovered_inode == bytes(len(recovered_inode))
+        assert struct.unpack_from("<I", recovered_superblock, 0x0C)[0] == (
+            free_blocks_before + 2
+        )
+        assert struct.unpack_from("<I", recovered_superblock, 0x10)[0] == (
+            free_inodes_before + 1
+        )
+        assert _read_ext4_home(
+            recovered, directory_home, block_size=block_size
+        ) == expected_directory
+        assert _read_ext4_home(
+            recovered, orphan_home, block_size=block_size
+        ) == original_orphan
+        assert _ext4_inode_allocation_state(recovered, (inode_number,)) == {
+            inode_number: False
+        }
+        assert not any(
+            _ext4_block_allocation_state(recovered, data_blocks).values()
+        )
+        for home, original in zip(data_blocks, original_data, strict=True):
+            assert _read_ext4_home(
+                recovered, home, block_size=block_size
+            ) == original
+        _assert_e2fsck_clean(recovered, jbd2_toolchain)
+        _, stable_trace, stable_sha256 = _staged_final_unlink_recovery_view(
+            recovered,
+            stable,
+            expected_free_blocks=free_blocks_before + 2,
+            expected_free_inodes=free_inodes_before + 1,
+            expected_home_writes=0,
+            expected_replayed=False,
+            prefix="_FCD-S",
+            marker="EXT4-PUBLIC-FINAL-UNLINK-CLOSE-DESCRIPTOR-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
+def test_staged_vfs_unlink_last_close_inode_home_tear_replays_cleanup(
+    staged_public_final_unlink_closed_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A committed last-RELEASE cleanup tear remains recoverable."""
+    case = staged_public_final_unlink_closed_fixture
+    path = case["source"]
+    source_patches = case["source_patches"]
+    success_image = case["image"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    parent_home = case["parent_home"]
+    inode_number = case["inode_number"]
+    inode_home = case["inode_home"]
+    inode_block_offset = case["inode_block_offset"]
+    directory_home = case["directory_home"]
+    orphan_home = case["orphan_home"]
+    data_blocks = case["data_blocks"]
+    old_size = case["old_size"]
+    old_blocks = case["old_blocks"]
+    epoch_ms = case["epoch_ms"]
+    free_blocks_before = case["free_blocks_before"]
+    free_inodes_before = case["free_inodes_before"]
+    expected_parent_home = case["expected_parent_home"]
+    expected_retained_inode_home = case["expected_retained_inode_home"]
+    expected_directory = case["expected_directory"]
+    expected_orphan = case["expected_orphan"]
+    original_data = case["original_data"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(success_image, Path)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(parent_home, int)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(inode_block_offset, int)
+    assert isinstance(directory_home, int)
+    assert isinstance(orphan_home, int)
+    assert isinstance(data_blocks, tuple)
+    assert isinstance(old_size, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(epoch_ms, int)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(expected_parent_home, bytes)
+    assert isinstance(expected_retained_inode_home, bytes)
+    assert isinstance(expected_directory, bytes)
+    assert isinstance(expected_orphan, bytes)
+    assert isinstance(original_data, tuple)
+
+    target_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, inode_home, block_size=block_size
+    )
+    assert len(target_ordinals) == 2
+    cleanup_inode_ordinal = target_ordinals[1]
+    cleanup_inode_event = _trace_event_index_for_ordinal(
+        success_trace, "write", cleanup_inode_ordinal
+    )
+    expected_final_inode_home = _read_ext4_home(
+        success_image, inode_home, block_size=block_size
+    )
+    assert expected_final_inode_home != expected_retained_inode_home
+    tear_offset = inode_block_offset + 100
+    assert inode_block_offset < tear_offset < 512
+    expected_torn_inode_home = (
+        expected_final_inode_home[:tear_offset]
+        + expected_retained_inode_home[tear_offset:]
+    )
+    assert expected_torn_inode_home not in {
+        expected_final_inode_home,
+        expected_retained_inode_home,
+    }
+
+    faulted = tmp_path / "staged-final-unlink-close-inode-home.img"
+    recovered = tmp_path / "staged-final-unlink-close-inode-home-recovered.img"
+    stable = tmp_path / "staged-final-unlink-close-inode-home-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                *_staged_final_unlink_attempt_forth(
+                    "_FCH", epoch_ms=epoch_ms, open_target=True
+                ),
+                "_FCH-VN VN.NLINK @ CONSTANT _FCH-ADD-NLINK",
+                "_FCH-VN VN.OPEN-REFS @ CONSTANT _FCH-ADD-OPEN-REFS",
+                "_FCH-VN VN.SIZE-LO @ CONSTANT _FCH-ADD-SIZE",
+                "_FCH-VN VN.BLOCKS @ CONSTANT _FCH-ADD-BLOCKS",
+                "_FCH-D D.FLAGS @ CONSTANT _FCH-ADD-D-FLAGS",
+                (
+                    "_FCH-CTX _EXT4-C.O.ACTIVE + @ "
+                    "CONSTANT _FCH-ADD-ORPHANS"
+                ),
+                "_FCH-FD VFS-CLOSE? CONSTANT _FCH-CLOSE-IOR",
+                "_FCH-V V.LAST-IOR @ CONSTANT _FCH-CLOSE-LAST-IOR",
+                "_FCH-FD VFS-CLOSE? CONSTANT _FCH-CLOSE-AGAIN-IOR",
+                "_FCH-V V.ICOUNT @ CONSTANT _FCH-CLOSE-ICOUNT",
+                "_FCH-V V.VCOUNT @ CONSTANT _FCH-CLOSE-VCOUNT",
+                (
+                    "_FCH-STAT VFS-STATFS-SIZE _FCH-V VFS-STATFS "
+                    "CONSTANT _FCH-CLOSE-STAT-IOR"
+                ),
+                "_FCH-STAT VSF.BFREE @ CONSTANT _FCH-BFREE-CLOSE",
+                "_FCH-STAT VSF.FFREE @ CONSTANT _FCH-FFREE-CLOSE",
+                *_forth_accumulated_conjunction(
+                    "_FCH-ALL-COMMITTED",
+                    [
+                        "_FCH-MOUNT-IOR 0=",
+                        "_FCH-CLOCK-IOR 0=",
+                        "_FCH-PROFILE-SIZE-IOR 0=",
+                        "_FCH-PROFILE-BIND-IOR 0=",
+                        "_FCH-RESOLVE-IOR 0=",
+                        "_FCH-PARENT-IOR 0=",
+                        "_FCH-OPEN-IOR 0=",
+                        "_FCH-OPEN-REFS 1 =",
+                        "_FCH-UNLINK-IOR 0=",
+                        "_FCH-UNLINK-LAST-IOR 0=",
+                        "_FCH-CLOCK-CALLS @ 1 =",
+                        "_FCH-ADD-HOMES 5 =",
+                        "_FCH-AFTER 0=",
+                        (
+                            "_FCH-AFTER-IOR VFS-IOR-REASON "
+                            "VFS-R-NOENT ="
+                        ),
+                        "_FCH-ADD-NLINK 0=",
+                        "_FCH-ADD-OPEN-REFS 1 =",
+                        f"_FCH-ADD-SIZE {old_size} =",
+                        f"_FCH-ADD-BLOCKS {old_blocks} =",
+                        "_FCH-ADD-D-FLAGS VFS-DF-UNLINKED AND 0<>",
+                        "_FCH-ADD-ORPHANS 1 =",
+                        "_FCH-BEFORE-IOR 0=",
+                        "_FCH-AFTER-STAT-IOR 0=",
+                        "_FCH-BFREE-AFTER _FCH-BFREE-BEFORE =",
+                        "_FCH-FFREE-AFTER _FCH-FFREE-BEFORE =",
+                        (
+                            "_FCH-CLOSE-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-VOLUME ="
+                        ),
+                        "_FCH-CLOSE-IOR VFS-IOR-REASON VFS-R-IO =",
+                        (
+                            "_FCH-CLOSE-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-PARTIAL AND 0<>"
+                        ),
+                        "_FCH-CLOSE-LAST-IOR _FCH-CLOSE-IOR =",
+                        "_FCH-CLOSE-AGAIN-IOR VFS-E-BADF =",
+                        "_FCH-FD FD.INODE @ 0=",
+                        "_FCH-FD FD.VFS @ 0=",
+                        "_FCH-V V.OPEN-COUNT @ 0=",
+                        "_FCH-CLOSE-STAT-IOR 0=",
+                        "_FCH-BFREE-CLOSE _FCH-BFREE-BEFORE =",
+                        "_FCH-FFREE-CLOSE _FCH-FFREE-BEFORE =",
+                        (
+                            "_FCH-CTX _EXT4-C.FREE-BLOCKS + @ "
+                            "_FCH-BFREE-CLOSE ="
+                        ),
+                        (
+                            "_FCH-CTX _EXT4-C.FREE-INODES + @ "
+                            "_FCH-FFREE-CLOSE ="
+                        ),
+                        "_FCH-CLOSE-ICOUNT _FCH-OLD-ICOUNT 1- =",
+                        "_FCH-CLOSE-VCOUNT _FCH-OLD-VCOUNT 1- =",
+                        "_FCH-WRITER _FCH-PROFILE-BASE =",
+                        "_FCH-WRITER _EXT4-JWR-VALID?",
+                        (
+                            "_FCH-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-FAULTED ="
+                        ),
+                        (
+                            "_FCH-WRITER _EXT4-JWR.PHASE + @ "
+                            "_EXT4-JWP-CHECKPOINT-HOME ="
+                        ),
+                        (
+                            "_FCH-WRITER _EXT4-JWR.META-ACTIVE + @ "
+                            "6 ="
+                        ),
+                        (
+                            "_FCH-WRITER _EXT4-JWR.CP-MODE + @ "
+                            "_EXT4-JCPM-ORPHAN-MODERN-DATA-"
+                            "DELETE-FINAL ="
+                        ),
+                        "_FCH-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                        "_FCH-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                        "_FCH-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        "_FCH-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                        "_FCH-CTX _EXT4-C.O.ACTIVE + @ 1 =",
+                        "_FCH-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
+                        "_FCH-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                        (
+                            "_FCH-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.RO-COMPAT + L@ "
+                            "_EXT4-RO-ORPHAN-PRESENT AND 0<>"
+                        ),
+                        "_FCH-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_FCH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                        "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        (
+                            "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XU-TARGET-SNAPSHOT _EXT4-MAX-INODE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ],
+                ),
+                (
+                    '_FCH-ALL-COMMITTED @ IF ." '
+                    'EXT4-PUBLIC-FINAL-UNLINK-CLOSE-HOME-COMMITTED" '
+                    'ELSE ." EXT4-PUBLIC-FINAL-UNLINK-CLOSE-HOME-CHECK " '
+                    "_FCH-ALL-COMMITTED-FIRST-FAILURE @ . THEN"
+                ),
+            ],
+            patches=source_patches,
+            write_faults_by_ordinal={
+                cleanup_inode_ordinal: {
+                    "stage": "media",
+                    "sector_index": 0,
+                    "byte_index": tear_offset,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+            max_steps=_STAGED_FINAL_UNLINK_MAX_STEPS,
+        )
+        _assert_emitted(
+            output, "EXT4-PUBLIC-FINAL-UNLINK-CLOSE-HOME-COMMITTED"
+        )
+        assert failed_trace == success_trace[: cleanup_inode_event + 1]
+        assert _read_ext4_home(
+            faulted, parent_home, block_size=block_size
+        ) == expected_parent_home
+        assert _read_ext4_home(
+            faulted, inode_home, block_size=block_size
+        ) == expected_torn_inode_home
+        assert _read_ext4_home(
+            faulted, directory_home, block_size=block_size
+        ) == expected_directory
+        assert _read_ext4_home(
+            faulted, orphan_home, block_size=block_size
+        ) == expected_orphan
+        faulted_superblock, _, _ = _ext4_inode_record(
+            faulted, inode_number
+        )
+        assert struct.unpack_from("<I", faulted_superblock, 0x0C)[0] == (
+            free_blocks_before
+        )
+        assert struct.unpack_from("<I", faulted_superblock, 0x10)[0] == (
+            free_inodes_before
+        )
+        assert struct.unpack_from("<I", faulted_superblock, 0x64)[0] & (
+            0x0001_0000
+        )
+        assert _ext4_inode_allocation_state(faulted, (inode_number,)) == {
+            inode_number: True
+        }
+        assert all(_ext4_block_allocation_state(faulted, data_blocks).values())
+        for home, original in zip(data_blocks, original_data, strict=True):
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == original
+
+        _, recovery_trace, recovery_sha256 = _staged_final_unlink_recovery_view(
+            faulted,
+            recovered,
+            expected_free_blocks=free_blocks_before + 2,
+            expected_free_inodes=free_inodes_before + 1,
+            expected_home_writes=6,
+            expected_replayed=True,
+            prefix="_FCH-R",
+            marker="EXT4-PUBLIC-FINAL-UNLINK-CLOSE-HOME-RECOVERED",
+        )
+        assert recovery_trace
+        _, recovered_inode, _ = _ext4_inode_record(recovered, inode_number)
+        assert recovered_inode == bytes(len(recovered_inode))
+        assert _read_ext4_home(
+            recovered, directory_home, block_size=block_size
+        ) == expected_directory
+        assert _ext4_inode_allocation_state(recovered, (inode_number,)) == {
+            inode_number: False
+        }
+        assert not any(
+            _ext4_block_allocation_state(recovered, data_blocks).values()
+        )
+        _assert_e2fsck_clean(recovered, jbd2_toolchain)
+        _, stable_trace, stable_sha256 = _staged_final_unlink_recovery_view(
+            recovered,
+            stable,
+            expected_free_blocks=free_blocks_before + 2,
+            expected_free_inodes=free_inodes_before + 1,
+            expected_home_writes=0,
+            expected_replayed=False,
+            prefix="_FCH-S",
+            marker="EXT4-PUBLIC-FINAL-UNLINK-CLOSE-HOME-STABLE",
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
+
+
+def test_staged_vfs_unlink_refuses_missing_clock_and_undersized_writer(
     writer_activation_fixture: dict[str, object],
 ) -> None:
-    """Unsupported UNLINK boundaries must leave cache and media untouched."""
+    """Final-link UNLINK still requires a clock and measured writer space."""
     path = writer_activation_fixture["image"]
     source_patches = writer_activation_fixture["source_patches"]
     assert isinstance(path, Path)
@@ -69044,7 +71881,7 @@ def test_staged_vfs_unlink_refuses_open_last_link_and_missing_clock(
                         "_UR-S-VN VN.NLINK @ 1 =",
                         "_UR-OPEN-IOR 0=",
                         "_UR-BUSY-OPEN-REFS 1 =",
-                        "_UR-BUSY-IOR VFS-E-BUSY =",
+                        "_UR-BUSY-IOR VFS-E-UNSUPPORTED =",
                         "_UR-BUSY-LAST-IOR _UR-BUSY-IOR =",
                         "_UR-BUSY-RESOLVE-IOR 0=",
                         "_UR-BUSY-D _UR-S =",
@@ -69052,21 +71889,18 @@ def test_staged_vfs_unlink_refuses_open_last_link_and_missing_clock(
                         "_UR-S-VN VN.OPEN-REFS @ 0=",
                     ]
                 )
-                + ' IF ." EXT4-PUBLIC-UNLINK-REFUSAL-BUSY" THEN'
+                + ' IF ." EXT4-PUBLIC-UNLINK-REFUSAL-NOCLOCK-OPEN" THEN'
             ),
             (
                 _forth_conjunction(
                     [
-                        (
-                            "_UR-LAST-IOR EXT4-D-WRITE-POLICY "
-                            "_EXT4-UNSUPPORTED ="
-                        ),
+                        "_UR-LAST-IOR VFS-E-NOSPC =",
                         "_UR-LAST-LAST-IOR _UR-LAST-IOR =",
                         "_UR-LAST-RESOLVE-IOR 0=",
                         "_UR-LAST-D _UR-S =",
                     ]
                 )
-                + ' IF ." EXT4-PUBLIC-UNLINK-REFUSAL-NONEMPTY" THEN'
+                + ' IF ." EXT4-PUBLIC-UNLINK-REFUSAL-FINAL-CAPACITY" THEN'
             ),
             (
                 _forth_conjunction(
@@ -69138,8 +71972,8 @@ def test_staged_vfs_unlink_refuses_open_last_link_and_missing_clock(
         ],
         patches=source_patches,
     )
-    _assert_emitted(output, "EXT4-PUBLIC-UNLINK-REFUSAL-BUSY")
-    _assert_emitted(output, "EXT4-PUBLIC-UNLINK-REFUSAL-NONEMPTY")
+    _assert_emitted(output, "EXT4-PUBLIC-UNLINK-REFUSAL-NOCLOCK-OPEN")
+    _assert_emitted(output, "EXT4-PUBLIC-UNLINK-REFUSAL-FINAL-CAPACITY")
     _assert_emitted(output, "EXT4-PUBLIC-UNLINK-REFUSAL-NOCLOCK")
     _assert_emitted(output, "EXT4-PUBLIC-UNLINK-REFUSAL-CAPACITY")
     _assert_emitted(output, "EXT4-PUBLIC-UNLINK-REFUSAL-CLEAN")
@@ -69594,9 +72428,7 @@ def test_staged_vfs_unlink_directory_home_tear_replays_both_homes(
         )
         recovered_free_inodes = struct.unpack_from(
             "<I", recovered_superblock, 0x10
-        )[0] | (
-            struct.unpack_from("<I", recovered_superblock, 0x15C)[0] << 32
-        )
+        )[0]
         assert recovered_free_blocks == free_blocks_before
         assert recovered_free_inodes == free_inodes_before
         _assert_e2fsck_clean(recovered, jbd2_toolchain)

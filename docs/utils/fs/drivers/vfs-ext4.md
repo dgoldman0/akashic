@@ -54,13 +54,16 @@ to release every
 captured physical range while retaining any qualified external xattr, and
 finally clears transient
 `ORPHAN_PRESENT` after the complete union drains while leaving the mounted
-writer active. The staged surface also provides two `UNLINK` lifetimes. A regular inode with more
-than one link may lose one same-parent name without changing allocation, even
-when an open descriptor retains the removed dentry. An already-empty inode
-with one link and no external allocation may
-lose its final name and inode allocation in one at-most-six-home transaction.
-Neither shape creates orphan state; nonempty final-link removal and open
-final-link removal remain later boundaries. The same surface now provides a
+writer active. The staged surface also provides three `UNLINK` forms. A
+regular inode with more than one link may lose one same-parent name without
+changing allocation, even when an open descriptor retains the removed dentry.
+An already-empty inode with one link and no external allocation may lose its
+final name and inode allocation in one at-most-six-home transaction. An
+allocation-backed final regular inode instead commits link zero, the namespace
+splice, and a singleton modern orphan in an exact `4/0/0` or `5/0/0` ADD
+transaction. A closed target drains immediately; an open target remains
+readable through its detached descriptors and drains on the last staged
+`RELEASE`. The same surface now provides a
 bounded atomic `MKDIR`: it allocates one inode and one globally unowned block,
 builds a canonical checksummed one-block `.`/`..` directory, inserts its typed
 name into the authenticated one-block linear parent, and updates parent links,
@@ -116,9 +119,14 @@ geometry boundary: the validator requires each scheduled backup group number
 to equal the 16-bit on-disk `s_block_group_nr`, so a required sparse-super
 backup above group 65535 is refused.
 
-The checked-in 1,350,000,000-step ext4 cold-source value is a qualification
+The checked-in 1,420,000,000-step ext4 cold-source value is a qualification
 watchdog and measurement guide, not an ext4 implementation capacity or a
-reason to weaken functionality. At the earlier cross-parent empty-directory
+reason to weaken functionality. The orphan-backed final-link slice measures
+1,402,709,928 steps across 3,421 packed lines under that guard. The source
+first exhausted a provisional 1.40-billion guard after reaching 3,416 of 3,422
+packed lines without a Forth diagnostic; the measured completed load, rather
+than a mutation-journey failure, justified the narrow 1.42-billion value. At
+the earlier cross-parent empty-directory
 `RENAME` milestone, the source measured 1,224,225,598 ext4-load steps across
 3,095 packed lines under the then-checked-in 1.25-billion watchdog. If correct
 source legitimately outgrows it, the budget
@@ -2416,8 +2424,9 @@ journey measures 4,549,770 steps.
 
 `VFS-CAP-RENAME-REPLACE` remains absent. Destination victims, directory
 replacement, same-parent directory moves, multi-block or indexed parents, and
-directory growth remain gated. The next delivery phase is full deletion and
-truncation lifetime semantics rather than another rename expansion.
+directory growth remain gated at this historical RENAME milestone. Qualified
+singleton-modern-orphan final-link lifetime closure is now complete; the next
+delivery phase is directory growth and indexed-directory mutation.
 
 ### Same-retained-block shrink TRUNCATE
 
@@ -2607,8 +2616,9 @@ the global proof's inode-slot, group, and block-accounting scan geometry while
 leaving transaction shapes, exact credits, and recovery assertions unchanged.
 The five-test zero-through-four capstone passes sequentially in 496.67 host
 seconds, with the separately run saturated public case passing in 121.85.
-Cold source mode measures 1,317,793,564 of 1.35 billion steps across 3,266
-packed ext4 lines. No checked-in limit was raised.
+At this generalized-TRUNCATE milestone, cold source mode measured
+1,317,793,564 of 1.35 billion steps across 3,266 packed ext4 lines. No
+checked-in limit was raised for that slice.
 
 ### Regular-file UNLINK lifetimes
 
@@ -2619,13 +2629,17 @@ target has at least two links and the same authenticated parent contains
 another live name for that inode. Descriptors may retain the selected dentry:
 generic VFS lifetime rules detach it from the namespace after commit, keep the
 shared vnode and exact dentry readable through those descriptors, and reclaim
-that dentry on its last close. The closed final lifetime accepts only an
-already-empty, allocation-free inode with link count one and exactly one
-authenticated directory reference. Nonempty final-link removal, unlink while
-any descriptor references the final link, directory removal through `UNLINK`, and
-nonfinal links whose remaining name is outside the same-parent proof remain
-explicit later boundaries. The bounded empty-directory `RMDIR` path is a
-separate operation with its own admission and revoke contract.
+that dentry on its last close. The direct final lifetime accepts an already-
+empty, allocation-free inode with link count one and exactly one authenticated
+directory reference. The orphan-backed final lifetime accepts an allocation-
+bearing regular inode inside the inode-directed JFI cleanup envelope. It
+publishes link zero and a singleton modern orphan while retaining the complete
+map and allocation state, then drains immediately when closed or on the last
+staged `RELEASE` when open. Both final forms currently require an authenticated
+empty orphan union before the namespace operation. Directory removal through
+`UNLINK` and nonfinal links whose remaining name is outside the same-parent
+proof remain explicit later boundaries. The bounded empty-directory `RMDIR`
+path is a separate operation with its own admission and revoke contract.
 
 The target and parent must be root-owned objects on the qualified 1 KiB/
 256-byte-inode staged geometry. The target inode, its complete current extent
@@ -2649,7 +2663,7 @@ counts, and orphan state do not change. A one-home caller profile returns
 `NOSPC` after one trusted-clock sample but before activation or media writes on
 the canonical two-home case.
 
-Final-link admission additionally requires zero size and `i_blocks`, a
+Direct final-link admission additionally requires zero size and `i_blocks`, a
 canonical empty extent or legacy map, no external xattr or project ID, and no
 open reference. It authenticates the group-relative inode-bitmap index,
 initialized bitmap and set allocation bit, primary descriptor and inode-table
@@ -2660,17 +2674,46 @@ global free-inode counts, and restamps their checksums. No orphan interval is
 needed because the admitted inode has no data, map-node, or external-xattr
 allocation that can survive its final name.
 
+Orphan-backed final admission instead reauthenticates the complete prospective
+cleanup topology before emission. Its exact `4/0/0` or `5/0/0` ADD retains the
+inode map and allocation, sets link zero and ctime, splices the directory,
+updates parent times, inserts the inode into modern-orphan slot zero, and sets
+`ORPHAN_PRESENT`. A closed target then executes topology-derived JFI cleanup
+and exact `1/0/0` transient-feature retirement before returning. An open target
+leaves that durable singleton live until the last staged `RELEASE`.
+
+Qualification covers clean closed deletion, a descriptor-retained crash and
+recovery, clean last close, ADD descriptor and committed-home tears, cleanup
+descriptor and committed-inode-home tears, missing-clock and undersized-writer
+refusals, and recovery followed by a write-free stable mount. A separate
+shared-home case removes the remaining `/fixture/payload.txt` link while it is
+open: target inode 14 and parent inode 13 occupy offsets 256 and 0 of the same
+inode-table home, so ADD publishes exactly four distinct homes in inode,
+directory, orphan, and primary-super order. The retained descriptor reads all
+54 bytes; recovery then reclaims its data block, unique external-xattr block,
+and inode under exact `6/0/1` cleanup, passes pinned `e2fsck`, and reaches a
+47,211,173-step zero-write stable remount. The ADD journey measures
+1,118,701,985 steps and the cleanup recovery measures 1,397,480,707 under the
+final-link-only 1.5-billion journey guard. The six-case last-close/fault batch
+passes sequentially in 673.75 host seconds; the shared-home qualification
+passes in 371.80 seconds. The scoped guard's other largest measured journeys
+are 1,366,957,417 for clean last close and 1,335,392,084 for immediate closed
+cleanup, so the guard is measured recovery headroom rather than a filesystem
+capacity.
+
 After commit authority, the callback publishes target ctime for a nonfinal
 removal and parent times for both shapes; generic `VFS-RM` then removes the
 dentry, decrements the vnode link count, and updates cache counts. A later
 checkpoint failure therefore returns public unlink success, retains its
 structured error in `V.LAST-IOR`, and quarantines the mount. Before commit,
 the callback returns the operation error and generic VFS leaves the old
-namespace and vnode projection intact. Open final-link and missing-clock
-refusals occur before clock sampling or media writes. Once a clock is bound, a
-nonempty last link is refused by the ext4 write policy before activation; an
-undersized workspace likewise leaves cache and media untouched. Every refusal
-scrubs the operation snapshots. Clean open-nonfinal qualification retains the
+namespace and vnode projection intact. Missing-clock and undersized-workspace
+refusals leave cache and media untouched, and every refusal scrubs the
+operation snapshots. While a final-link orphan is live, staged `SYNCFS` returns
+`BUSY`. Non-last closes perform no ext4 transaction; the last `RELEASE`
+reauthenticates the exact inode/generation orphan and drains it. A release
+failure still consumes the descriptor, quarantines the mount, and leaves the
+durable orphan recoverable. Clean open-nonfinal qualification retains the
 removed dentry with `OPEN_REFS=1` and `DREFS=2`, reads the complete 54-byte file
 through the detached descriptor, then proves close returns those counts to
 `0/1`. Its mutation journey measures 602,649,678 guest steps; pinned `e2fsck`
@@ -3207,8 +3250,8 @@ The ratchet order is:
    depth-zero `TRUNCATE`-to-zero release, and close the first nonfinal regular-
    file `UNLINK` slice plus atomic closed last-link removal of an already-empty,
    allocation-free regular inode, including descriptor-retained nonfinal
-   unlink (completed in the current worktree); retain nonempty and open
-   final-link deletion as explicit later lifetime boundaries;
+   unlink and orphan-backed closed/open final-link lifetime handling (completed
+   in the current worktree);
 6. retain bounded `MKDIR` and `RMDIR`, including `.`/`..`, parent/child link
    counts, inode/block allocation and release, directory accounting, and
    child-block revoke authority (completed in the current worktree);
@@ -3216,8 +3259,8 @@ The ratchet order is:
    same-parent in-place/compacted forms, regular-file cross-parent canonical
    remove/append mutation, and canonical cross-parent empty-directory link
    transfer plus `..` rewrite (completed in the current worktree);
-8. close full deletion and truncation lifetime semantics, then add remaining
-   metadata and xattr mutation; and
+8. add directory growth and indexed-directory mutation, then remaining
+   deletion, truncation, metadata, and xattr forms; and
 9. perform the final profile closure audit across every profile-admitted
    operation and recovery state.
 
@@ -3243,9 +3286,11 @@ allocated-EOF exact compositions preserve independently durable prefixes, but
 no broader geometry or operation inherits that status.
 `EXT4-STAGED-WRITE-OPS` adds staged `MOUNT`, `WRITE`, bounded linear-directory
 `CREATE` and `MKDIR`, qualified shrink `TRUNCATE`, bounded regular-file
-`UNLINK`—including nonfinal and empty final-link removal—and bounded canonical
-empty-directory `RMDIR` plus bounded regular-file `LINK` dispatch slots to its
-copy of the ordinary table. The current worktree also installs the qualified
+`UNLINK`—including nonfinal, direct empty-final, and orphan-backed closed/open
+final removal—and bounded canonical empty-directory `RMDIR` plus bounded
+regular-file `LINK` dispatch slots to its copy of the ordinary table. It also
+installs staged `RELEASE` and `SYNCFS` lifetime handling. The current worktree
+installs the qualified
 regular-file and cross-parent empty-directory no-replacement RENAME callback
 and advertises `VFS-CAP-RENAME`,
 `VFS-CAP-ATOMIC-RENAME`, and `VFS-CAP-CROSSDIR-RENAME`. It deliberately omits
@@ -3260,7 +3305,7 @@ and inode allocation, extent and legacy-map growth and shrink, directory-entry
 mutation, inode/link/time/accounting updates, xattr mutation, broader per-record
 orphan closure, and the final compositional release matrix.
 
-The staged binding's production-closed inventory now contains thirteen
+The staged binding's production-closed inventory contains the following
 concrete durable paths. Initialized
 overwrite uses a full-block ordered-data RMW plus one checksummed inode-table
 after-image and consumes `1/1/0`. Strict append uses the same transaction shape
@@ -3285,14 +3330,20 @@ uses exact deduplicated `2/0/0` or `3/0/0` metadata credit to decrement one link
 target/parent times, and remove one checksummed linear-directory record without
 allocation or orphan state. Open descriptors may retain the removed dentry;
 the final close reclaims that cache object without an ext4 transaction because
-another persistent link keeps the inode live. Closed final-link UNLINK admits only a canonical
-empty regular inode with zero size, zero `i_blocks`, no external xattr or
-project ID, no open references, and exactly one authenticated directory
-reference. Its at-most-six-home transaction removes that record, updates the
-parent times, zeroes the complete inode record, clears the inode bitmap bit,
-and increments the descriptor and primary-super free-inode counts. No orphan
-interval is needed because no data, extent node, legacy map block, or external
-xattr allocation can survive the atomic namespace commit. Bounded `RMDIR`
+another persistent link keeps the inode live. Direct closed final-link UNLINK
+admits only a canonical empty regular inode with zero size, zero `i_blocks`, no
+external xattr or project ID, no open references, and exactly one authenticated
+directory reference. Its at-most-six-home transaction removes that record,
+updates the parent times, zeroes the complete inode record, clears the inode
+bitmap bit, and increments the descriptor and primary-super free-inode counts.
+No orphan interval is needed because no allocation can survive the atomic
+namespace commit. Orphan-backed final-link UNLINK admits a regular inode inside
+the complete JFI cleanup envelope. Its exact `4/0/0` or `5/0/0` ADD retains the
+allocation state while atomically publishing link zero, parent/target times,
+the directory splice, a singleton modern orphan, and `ORPHAN_PRESENT`. Closed
+targets drain immediately; open targets remain readable until the last staged
+`RELEASE`, which reauthenticates and drains that same inode/generation. Staged
+`SYNCFS` returns `BUSY` while the singleton is live. Bounded `RMDIR`
 accepts only the canonical one-block empty directory produced by MKDIR. It
 uses exact `6/0/1` through `8/0/1` credit to remove the typed parent entry,
 decrement parent links and `used_dirs`, free the inode and directory block,
@@ -3429,10 +3480,11 @@ pass. The stable preimage completed in 193.06 seconds, canonical success in
 watchdog, in 260.07 seconds. Fresh source mode now measures 1,224,225,598 ext4-load steps
 across 3,095 packed lines under the 1.25-billion-step watchdog; the descriptor
 journey measures 4,549,770 steps. Replacement, victims, and same-parent
-directory moves remain outside this envelope. The next phase is full deletion
-and truncation lifetime semantics.
-Nonempty and open final-link deletion remain later lifetime closure, rather
-than a reason to expand orphan recovery speculatively. General sparse/gap
+directory moves remain outside this envelope. Qualified singleton-modern-
+orphan final-link lifetime closure now covers closed and descriptor-retained
+targets, including last-close failure recovery. The next phase is directory
+growth and indexed-directory mutation. Replacement, victims, broader
+concurrent orphan unions, general sparse/gap
 growth, unwritten conversion, growth beyond a
 full resident root plus full unmergeable selected leaf, mutation starting from
 a deeper extent tree, other broader allocation and mutation geometry, multi-
