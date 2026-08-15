@@ -103,18 +103,24 @@ the zeroed retained-block tail and checksummed inode together as exact `2/0/0`
 metadata payloads, and preserves mapping, `i_blocks`, links, xattrs, and free-
 space accounting. A W7 descriptor tear retains the old EOF and both old homes;
 a committed W17 inode-home tear retains the new public EOF and replays both
-homes on recovery. One block-releasing shape is now public too: shrink-to-zero
-of a linked file backed by one initialized depth-zero extent. It atomically
-publishes the zero-size inode into either an empty modern orphan union or the
-first free slot of an authenticated modern-only union, composes the existing
-linked-orphan cleanup over the complete resulting union to release storage,
-and retires transient `ORPHAN_PRESENT` while retaining the mounted writer.
-Precommit descriptor
-failure preserves the old file; a committed torn inode home converges through
+homes on recovery. Generalized depth-zero zero-TRUNCATE is now public too:
+shrink-to-zero of a linked positive-size regular inode whose flags are exactly
+`EXTENTS` and whose valid inline root contains zero through four initialized or
+unwritten extents with arbitrary valid logical gaps. Before emission, retained
+transaction certificate state binds exact release authority. The first
+transaction atomically publishes the zero-size inode while retaining its old
+map and `i_blocks` and publishes membership in either an empty modern orphan
+union or the first free slot of an authenticated modern-only union. It
+composes linked-orphan cleanup over the
+complete resulting union to release the certified physical vector while
+retaining any qualified external xattr, and retires transient
+`ORPHAN_PRESENT` while retaining the mounted
+writer. In the original singleton fault fixture, precommit descriptor failure
+preserves the old file and a committed torn inode home converges through
 replay and orphan cleanup to a stable checker-clean empty file. Partial release,
-wider maps, aligned nonzero EOFs, cross-block nonzero EOFs, and growth remain
-unsupported. The first nonfinal regular-file `UNLINK` lifetime is public too:
-one same-parent hard-link name, target/parent inode times and link count, and
+depth-positive maps, aligned nonzero EOFs, cross-block nonzero EOFs, and growth
+remain unsupported. The first nonfinal regular-file `UNLINK` lifetime is public
+too: one same-parent hard-link name, target/parent inode times and link count, and
 the checksummed linear-directory block commit together without allocation or
 orphan state. An open descriptor may retain and read the removed dentry until
 close because another persistent link keeps the inode live. W7 preserves both
@@ -1917,19 +1923,32 @@ byte-stable. This retained-block slice does not create orphan state. Aligned or
 cross-block nonzero EOFs and growth remain gated; the first zero-release
 closure follows.
 
-The first such block-release half is now closed for shrink-to-zero of a linked
-regular file with one initialized logical-zero extent in a depth-zero root.
-The file may retain one qualified external xattr block; the positive old size
-must fit within one filesystem block. Partial block release, multiple extents,
-unwritten extents, and depth-positive release remain outside this slice.
+The zero-TRUNCATE half is now generalized for shrink-to-zero of a linked
+positive-size regular inode whose flags are exactly `EXTENTS`. Its authenticated
+inline extent root must be depth zero but may contain any format-valid count
+from zero through four. Count zero admits a wholly sparse positive-size file;
+nonempty roots may begin at any valid logical block and contain arbitrary valid
+logical gaps. Every entry retains its standard decoded initialized length of 1
+through 32,768 blocks or unwritten length of 1 through 32,767 blocks. Admission
+captures the ordered exact physical `{ first, count }` vector and aggregate
+data-block count independently of file size and logical continuity. The file
+may retain one qualified external xattr block and its exact `i_blocks`
+contribution. Partial release, nonzero block-releasing EOFs, and depth-positive
+release remain outside this slice.
 
 The operation uses one insertion, one independently committed and synchronously
 checkpointed cleanup transaction per retained record, and a final clear through
 one caller-owned writer. Its component capacities are the maxima of the exact
 insertion, prospective-target cleanup, every prequalified retained cleanup,
-and the one-home clear; the canonical fixture's five metadata slots are not a
-general cleanup ceiling. An exact `3/0/0` `ADD_FIRST` transaction updates the
-inode to zero size and trusted timestamps while retaining its old map and
+and the one-home clear. Prospective cleanup credit is topology-derived: a
+count-zero target needs the one orphan-file home, while a nonempty target begins
+with distinct target-inode, orphan-file, and primary-super homes, then adds one
+bitmap home per touched group and every distinct primary GDT page for those
+groups. Target cleanup is therefore exact `1/0/0` for count zero; a nonempty
+target uses its computed metadata count with zero data and revoke credit. No
+singleton fixture credit is a general ceiling. An exact `3/0/0` `ADD_FIRST`
+transaction updates the inode to zero size and trusted timestamps
+while retaining its old map and
 `i_blocks`, writes its inode number into the first authenticated empty modern
 orphan-file slot, and sets `ORPHAN_PRESENT`. With an existing authenticated
 modern-only union, exact `2/0/0` `ADD_MORE` instead changes only the target
@@ -1937,10 +1956,19 @@ inode and deterministic first free orphan-file slot, retaining the already-set
 feature bit without a primary-super after-image. Both mode-specific checkpoint
 certificates freeze the exact pre-union counts, inode, slot, orphan
 home/generation, and timestamps; `ADD_FIRST` additionally freezes the superblock
-after-image. They reconstruct every owned after-image from current media before
-the first home write and require the post-home union to equal the pre-union plus
-the linked zero-size target. Admission requires geometry-derived runtime-plan
-capacity for that additional record and rejects duplicates without media I/O.
+after-image. A prospective JTA ownership certificate binds context, inode,
+generation, the complete ordered data vector, and the target inode-table home
+as a one-block ownership range that is not released. It retains the target
+xattr identity with zero refcount action. One global other-inode walk proves
+the combined data/home vector, so count zero still performs a one-range owner
+proof for the inode home. The prospective checkpoint (CP)
+authority independently seals the exact target entry count, physical release
+vector, aggregate data-block count, and inline-extents map discriminator;
+unused range slots and all EA-release fields are zero. The checkpoint path
+reconstructs every owned after-image from current media before the first home write and requires the
+post-home union to equal the pre-union plus the linked zero-size target.
+Admission requires geometry-derived runtime-plan capacity for that additional
+record and rejects duplicates without media I/O.
 Every preexisting record is authenticated and measured before insertion and
 must remain linked: an unlinked record can represent a live detached-file
 lifetime, so same-session truncate returns `BUSY` before clock or media while
@@ -1951,13 +1979,24 @@ Lazy `BLOCK_UNINIT` groups remain untouched and cannot own an admitted release
 range. This proves cumulative free-counter capacity for the disjoint union
 before `ADD`, without requiring one union-sized transaction or writer profile.
 
+An admitted count-zero root may contain arbitrary bytes in all four inactive
+extent slots. `ADD_FIRST` or `ADD_MORE` zeroes those 48 bytes as it publishes
+the new size, creating the canonical empty depth-zero after-image before the
+orphan becomes recoverable. Its cleanup can therefore clear only the modern
+slot, and final refresh verifies the canonical root. A nonempty target retains
+its complete root through `ADD`; cleanup receives the exact release authority
+before constructing the canonical empty root.
+
 The existing linked-orphan cleanup then measures and commits its exact homes.
-For the qualified inode-14 fixture it uses `5/0/0`: target inode, orphan-file
-block, data bitmap, primary GDT page, and primary superblock. It empties the
-extent root, reduces `i_blocks` from four to the external xattr's two sectors,
-frees data block 1346, advances group/global free-block accounting, and clears
-the orphan slot. A final exact `1/0/0` superblock transaction clears transient
-`ORPHAN_PRESENT` only from an authenticated empty-clear-pending endpoint.
+For a nonempty target it empties the extent root, reduces `i_blocks` to the
+retained external-xattr contribution, frees every exact physical range, updates
+all touched group bitmaps and group/global free-block accounts, and clears the
+orphan slot. For count zero, `ADD` already canonicalized the inode and cleanup
+is the exact one-home slot clear: `ADD` zeroes only the 48 inactive extent bytes
+while retaining the external-xattr pointer, xattr-only `i_blocks`, allocation,
+and byte-exact contents. A final exact `1/0/0` superblock transaction
+clears transient `ORPHAN_PRESENT` only from an authenticated empty-clear-pending
+endpoint.
 `RECOVER` remains active so the same mounted writer can serve later operations;
 ordinary clean unmount performs the existing witnessed deactivation.
 After each successful cleanup emit, any cached vnode matching the selected
@@ -1965,12 +2004,14 @@ inode number and generation receives the committed post-cleanup `i_blocks`
 value before checkpoint. Every hard-link dentry therefore observes the same
 projection, including preexisting union members materialized by `READDIR`.
 
-Clean public qualification observes EOF zero and zero-byte reads through both
-hard links, preserves link count, generation, atime, and xattr, gains exactly
-one free block, restores the modern orphan block byte-for-byte, unmounts
-cleanly, and reaches a zero-I/O ordinary remount accepted by pinned e2fsprogs
-1.47.4 `debugfs` and read-only `e2fsck`. A W7 add-descriptor tear returns the
-precommit volume error, restores the old 54-byte vnode/cursor projection, and
+The original singleton public qualification observes EOF zero and zero-byte
+reads through both hard links, preserves link count, generation, atime, and
+xattr, gains exactly one free block, restores the modern orphan block byte-for-
+byte. It closes the mutating session while recovery remains active, then
+requires authenticated recovery/deactivation and a zero-I/O stable mount
+accepted by pinned e2fsprogs 1.47.4 `debugfs` and read-only `e2fsck`. A W7 add-descriptor
+tear returns the precommit volume error, restores the old 54-byte vnode/cursor
+projection, and
 leaves the inode, payload, and allocation bit unchanged. A committed tear of
 the first inode checkpoint home returns public success with EOF zero and
 quarantines the live writer. Fresh mount replays the three-home add, recognizes
@@ -1991,7 +2032,27 @@ proves the already-cached inode-17 vnode changes from four sectors to zero,
 all three data blocks are released, both link counts and the target xattr are
 preserved, and pinned `e2fsck` accepts the result. The ordinary one-record
 public path, including exact counter reconciliation and a stable remount,
-completes in 1,195,226,705 steps under the unchanged 1.2-billion guard.
+completed in 1,195,226,705 steps at the pre-generalization `109158b` boundary
+under the unchanged 1.2-billion guard.
+
+Final generalized-envelope qualification spans counts zero through four,
+sparse logical gaps, initialized and unwritten extents, topology-derived
+credit, exact prospective-owner and checkpoint vectors, zero EA-release
+authority, and count-zero canonicalization with retained byte-exact xattr
+state. Direct seal/abort journeys measure 226,531,856 steps for sparse count
+two, 227,974,625 for mixed/unwritten count three, and 231,319,776 for saturated
+count four under the unchanged 800-million guard. Public mutation journeys
+measure 1,116,644,505 for the singleton, 886,800,408 for wholly sparse count
+zero, 1,156,748,458 for sparse count two, and 950,483,090 for saturated count
+four under the unchanged 1.2-billion guard. Each public case reaches
+authenticated recovery/deactivation, a zero-write stable remount, and pinned
+`e2fsck` acceptance. The focused five-test capstone passes sequentially in
+496.67 host seconds; the separately run saturated public case passes in 121.85.
+That saturated case explicitly activates a clean writer before the public call,
+then exercises the ordinary live-stage/emit/checkpoint/drain path on a compact
+primary-profile image; other public cases retain first-activation coverage.
+Cold source mode uses 1,317,793,564 of 1.35 billion steps across 3,266 packed
+ext4 lines. No checked-in limit was raised.
 
 The first public `UNLINK` lifetimes are regular-file removals from an
 authenticated one-block linear directory. The staged binding alone advertises
@@ -2037,8 +2098,8 @@ the removed name and link count one, retains the checkpoint error in
 `V.LAST-IOR`, and quarantines the mount; recovery rewrites both homes exactly
 once before a byte-stable second mount. The final sequential adjacency
 capstone combines these four nonfinal-UNLINK cases with initial CREATE, both
-qualified TRUNCATE forms, and TRUNCATE policy refusal; all eight pass in 534.05
-host seconds.
+retained-shrink TRUNCATE and the original singleton zero-release TRUNCATE, plus
+TRUNCATE policy refusal; all eight pass in 534.05 host seconds.
 
 Closed final-link removal of an empty inode uses the same authenticated name,
 target, parent, and directory proof, then adds exact inode-allocation
@@ -2058,10 +2119,10 @@ and allocation; recovery performs zero ext4-home replay before a stable mount.
 A committed torn directory home has already published absence and capacity
 recovery, so the live mount retains the checkpoint diagnostic while the next
 mount replays all six homes. The following mount is write-free and byte-stable,
-and neither path sets `ORPHAN_PRESENT`. The expanded sequential capstone runs
-the prior eight CREATE/TRUNCATE/nonfinal-UNLINK cases plus clean final-link
-removal and both final-link crash boundaries: all 11 pass in 949.80 host
-seconds. At that pre-MKDIR milestone, fresh source mode measured
+and neither path sets `ORPHAN_PRESENT`. The expanded pre-generalization
+sequential capstone runs the prior eight CREATE/TRUNCATE/nonfinal-UNLINK cases
+plus clean final-link removal and both final-link crash boundaries: all 11 pass
+in 949.80 host seconds. At that pre-MKDIR milestone, fresh source mode measured
 1,078,694,775 ext4-load steps across 2,859 packed lines under the
 then-checked-in 1.10-billion-step watchdog.
 

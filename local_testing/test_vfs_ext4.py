@@ -4824,6 +4824,88 @@ def cross_gdt_writer_activation_fixture(
 
 
 @pytest.fixture(scope="session")
+def compact_primary_writer_activation_fixture(
+    jbd2_toolchain: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Build a pinned two-group primary image for bounded mutation journeys."""
+    tool_dir = jbd2_toolchain["tool_dir"]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(tool_dir, Path)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    directory = tmp_path_factory.mktemp("ext4-compact-primary-source")
+    image = directory / "compact-primary-1k-i256.img"
+    image_spec = {
+        "id": "compact-primary-1k-i256",
+        "profile": "primary",
+        "filename": image.name,
+        "image_bytes": 16 * (1 << 20),
+        "block_size": 1024,
+        "block_count": 16384,
+        "blocks_per_group": 8192,
+        "expected_groups": 2,
+        "expected_inodes": 1024,
+        "inode_size": 256,
+        "uuid": "83111111-1111-4111-8111-111111111111",
+        "hash_seed": "84111111-1111-4111-8111-111111111111",
+        "label": "AKEXT4-COMPACT",
+    }
+    with image.open("wb") as destination:
+        destination.truncate(image_spec["image_bytes"])
+    context = dict(image_spec)
+    context.update(
+        {
+            "tool_dir": tool_dir,
+            "image": image,
+            "feature_names": ",".join(
+                ext4_fixture_generator.profile_feature_names(
+                    PROFILE, image_spec
+                )
+            ),
+        }
+    )
+    mkfs_argv = ext4_fixture_generator.render_argv(
+        PROFILE["generator"]["mkfs_argv"], context
+    )
+    made = subprocess.run(
+        mkfs_argv,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert made.returncode == 0, made.stdout + made.stderr
+    observed = ext4_fixture_generator.read_superblock(image)
+    ext4_fixture_generator.validate_observed_superblock(
+        PROFILE, image_spec, observed
+    )
+    assert observed["group_count"] == 2
+    assert observed["inode_count"] == 1024
+    assert observed["journal_backup_size"] == 4 * (1 << 20)
+
+    ext4_fixture_generator.populate_image(
+        PROFILE,
+        image_spec,
+        {"debugfs": {"path": str(debugfs)}},
+        env,
+        image,
+        1024,
+        directory,
+    )
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+    fixture = _build_jbd2_activation_fixture(image)
+    layout = fixture["layout"]
+    assert isinstance(layout, dict)
+    assert layout["blocks"] == 16384
+    assert layout["groups"] == 2
+    assert layout["witness_gdt_span"] == 1
+    return fixture
+
+
+@pytest.fixture(scope="session")
 def replay_fixture(
     canonical_images: dict[str, Path],
     jbd2_toolchain: dict[str, object],
@@ -16453,6 +16535,758 @@ def test_modern_orphan_add_more_stages_exact_two_home_transaction_without_io(
     )
     _assert_emitted(output, "EXT4-ORPHAN-ADD-MORE-EXACT")
     _assert_emitted(output, "EXT4-ORPHAN-ADD-MORE-ABORTED")
+
+
+def test_modern_orphan_add_more_seals_sparse_depth0_vectors_without_io(
+    canonical_images: dict[str, Path],
+) -> None:
+    """Seal inode 17's two sparse extents into every ADD authority layer."""
+    path = canonical_images["primary-1k-i256"]
+    patches = _modern_orphan_patches(path, (13,))
+    superblock, target_inode, target_offset = _ext4_inode_record(path, 17)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    old_size = struct.unpack_from("<I", target_inode, 0x04)[0]
+    old_blocks = struct.unpack_from("<I", target_inode, 0x1C)[0]
+    old_links = struct.unpack_from("<H", target_inode, 0x1A)[0]
+    generation = struct.unpack_from("<I", target_inode, 0x64)[0]
+    target_home, target_block_offset = divmod(target_offset, block_size)
+    orphan_home = patches[1][0] // block_size
+    data_ranges = (
+        (_extent_root_physical(target_inode, 0), 1),
+        (_extent_root_physical(target_inode, 2), 1),
+    )
+    seconds = 3_000_000_988
+    nanoseconds = 655_000_000
+
+    assert block_size == 1024
+    assert old_size == 3072
+    assert old_blocks == 4
+    assert old_links == 1
+    assert generation == 0
+    assert target_home == 279
+    assert target_block_offset == 0
+    assert target_home != orphan_home
+    assert struct.unpack_from("<I", target_inode, 0x68)[0] == 0
+    assert struct.unpack_from("<HHHH", target_inode, 0x28) == (
+        0xF30A,
+        2,
+        4,
+        0,
+    )
+    assert data_ranges == ((1348, 1), (1350, 1))
+    with pytest.raises(AssertionError, match="logical block 1 is unmapped"):
+        _extent_root_physical(target_inode, 1)
+
+    output = run_forth(
+        path,
+        [
+            (
+                ": _AS-MOUNT ( vfs -- ior ) "
+                "-1 _EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN "
+                "EXT4-D-RECOVERY _EXT4-UNSUPPORTED ;"
+            ),
+            "CREATE _AS-OPS VFS-OPS-SIZE ALLOT",
+            "EXT4-STAGED-WRITE-OPS _AS-OPS VFS-OPS-SIZE CMOVE",
+            "' _AS-MOUNT _AS-OPS VFS-OP-MOUNT CELLS + !",
+            "CREATE _AS-BINDING VFS-BINDING-DESC-SIZE ALLOT",
+            (
+                "EXT4-STAGED-WRITE-BINDING _AS-BINDING "
+                "VFS-BINDING-DESC-SIZE CMOVE"
+            ),
+            "_AS-OPS _AS-BINDING VB.OPS !",
+            ": _AS-NEW _AS-BINDING SWAP VFS-NEW ;",
+            "T-ARENA CONSTANT _AS-ARENA",
+            (
+                "_AS-ARENA T-VOLUME _AS-NEW "
+                "CONSTANT _AS-MOUNT-IOR CONSTANT _AS-V"
+            ),
+            "_AS-V _EXT4-CTX CONSTANT _AS-CTX",
+            (
+                "_AS-CTX _EXT4-C.O.RUNTIME-TABLE + @ "
+                "CONSTANT _AS-RUNTIME"
+            ),
+            (
+                "_AS-CTX _EXT4-C.O.TABLE + @ "
+                "CONSTANT _AS-TRANSIENT"
+            ),
+            (
+                "13 _AS-CTX _EXT4-ORPHAN-PLAN-FIND "
+                "CONSTANT _AS-FIND-IOR CONSTANT _AS-RECORD"
+            ),
+            "CREATE _AS-SAVED _EXT4-ORPHAN-RECORD-SIZE ALLOT",
+            (
+                "_AS-RECORD _AS-SAVED _EXT4-ORPHAN-RECORD-SIZE "
+                "CMOVE"
+            ),
+            (
+                "_AS-CTX _EXT4-MOUNT-TAIL-RELEASE "
+                "CONSTANT _AS-RELEASE-IOR"
+            ),
+            (
+                "_AS-CTX _AS-V _EXT4-BIND-RUNTIME-ORPHAN-WORKSPACE "
+                "CONSTANT _AS-BIND-IOR"
+            ),
+            (
+                "_AS-SAVED @ _AS-SAVED _EXT4-OE.KIND + @ "
+                "_AS-SAVED _EXT4-OE.LOCATOR-A + @ "
+                "_AS-SAVED _EXT4-OE.LOCATOR-B + @ _AS-CTX "
+                "_EXT4-ORPHAN-TABLE-PUT CONSTANT _AS-PUT-IOR"
+            ),
+            (
+                "13 _AS-CTX _EXT4-REAUTH-MODERN-ORPHAN-BY-INODE "
+                "CONSTANT _AS-REAUTH-IOR CONSTANT _AS-RUNTIME-RECORD"
+            ),
+            "-1 _AS-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "2 0 0 _AS-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _AS-WRITER-IOR CONSTANT _AS-WRITER"
+            ),
+            (
+                "2 0 0 _AS-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _AS-TX-IOR CONSTANT _AS-TX"
+            ),
+            "_AS-V V.VOLUME @ _EXT4-IO-VOL ! _AS-V _EXT4-IO-VFS !",
+            "_EXT4-JFO-CERT-BEGIN CONSTANT _AS-CERT-BEGIN-IOR",
+            (
+                f"{old_size} 17 {generation} {seconds} {nanoseconds} "
+                "_AS-TX _EXT4-JTX-STAGE-MODERN-ORPHAN-TRUNCATE-ZERO "
+                "CONSTANT _AS-STAGE-IOR"
+            ),
+            "0 _AS-WRITER _EXT4-JWR-META-IMAGE CONSTANT _AS-TARGET-IMAGE",
+            "1 _AS-WRITER _EXT4-JWR-META-IMAGE CONSTANT _AS-ORPHAN-IMAGE",
+            (
+                "_AS-TARGET-IMAGE _AS-WRITER "
+                "_EXT4-JWR.CP-TARGET-OFF + @ + "
+                "CONSTANT _AS-TARGET-RECORD"
+            ),
+            "0x12345678 _EXT4-JFO-IOR !",
+            "_AS-WRITER _EXT4-JTA-STAGED? CONSTANT _AS-STAGED-IOR",
+            "_EXT4-JFO-IOR @ CONSTANT _AS-CERT-REUSE-SENTINEL",
+            "_EXT4-JOT-COUNT @ CONSTANT _AS-JOT-COUNT",
+            "_EXT4-JOT-DATA-BLOCKS @ CONSTANT _AS-JOT-BLOCKS",
+            "0 _EXT4-JOT-RANGE @ CONSTANT _AS-JOT-FIRST-A",
+            "0 _EXT4-JOT-RANGE CELL+ @ CONSTANT _AS-JOT-COUNT-A",
+            "1 _EXT4-JOT-RANGE @ CONSTANT _AS-JOT-FIRST-B",
+            "1 _EXT4-JOT-RANGE CELL+ @ CONSTANT _AS-JOT-COUNT-B",
+            (
+                "_EXT4-JOT-RANGES 4 CELLS + 4 CELLS "
+                "_EXT4-BYTES-ZERO? CONSTANT _AS-JOT-TAIL-ZERO"
+            ),
+            "_EXT4-JTA-CERT-PRESENT? CONSTANT _AS-CERT-PRESENT",
+            "_EXT4-JTA-CERT-CONTENTS? CONSTANT _AS-CERT-CONTENTS",
+            "_EXT4-JFO-CERT-VALID @ CONSTANT _AS-CERT-VALID",
+            "_EXT4-JFO-CERT-KIND @ CONSTANT _AS-CERT-KIND",
+            "_EXT4-JFO-CERT-CTX @ CONSTANT _AS-CERT-CTX",
+            "_EXT4-JFO-CERT-INO @ CONSTANT _AS-CERT-INO",
+            "_EXT4-JFO-CERT-GEN @ CONSTANT _AS-CERT-GEN",
+            (
+                "_EXT4-JFO-CERT-RANGE-COUNT @ "
+                "CONSTANT _AS-CERT-RANGE-COUNT"
+            ),
+            (
+                "_EXT4-JFO-CERT-DATA-MAP-KIND @ "
+                "CONSTANT _AS-CERT-MAP-KIND"
+            ),
+            "_EXT4-JFO-CERT-EA @ CONSTANT _AS-CERT-EA",
+            "0 _EXT4-JFO-CERT-RANGE @ CONSTANT _AS-CERT-FIRST-A",
+            (
+                "0 _EXT4-JFO-CERT-RANGE CELL+ @ "
+                "CONSTANT _AS-CERT-COUNT-A"
+            ),
+            "1 _EXT4-JFO-CERT-RANGE @ CONSTANT _AS-CERT-FIRST-B",
+            (
+                "1 _EXT4-JFO-CERT-RANGE CELL+ @ "
+                "CONSTANT _AS-CERT-COUNT-B"
+            ),
+            "2 _EXT4-JFO-CERT-RANGE @ CONSTANT _AS-CERT-HOME",
+            (
+                "2 _EXT4-JFO-CERT-RANGE CELL+ @ "
+                "CONSTANT _AS-CERT-HOME-COUNT"
+            ),
+            (
+                "_EXT4-JFO-CERT-RANGES 6 CELLS + "
+                "_EXT4-JFO-CERT-RANGE-CAP 3 - 2* CELLS "
+                "_EXT4-BYTES-ZERO? CONSTANT _AS-CERT-TAIL-ZERO"
+            ),
+            "1349 _AS-WRITER _EXT4-JWR.CP-EA-HOME + !",
+            (
+                "_EXT4-JEA-RELEASE _AS-WRITER "
+                "_EXT4-JWR.CP-EA-ACTION + !"
+            ),
+            (
+                "_AS-WRITER _EXT4-JWR-CP-AUTHORITY? 0= "
+                "CONSTANT _AS-CP-REJECTS-EA"
+            ),
+            "0 _AS-WRITER _EXT4-JWR.CP-EA-HOME + !",
+            "0 _AS-WRITER _EXT4-JWR.CP-EA-ACTION + !",
+            (
+                "_AS-WRITER _EXT4-JWR-CP-AUTHORITY? "
+                "CONSTANT _AS-CP-AUTHORITY-RESTORED"
+            ),
+            "_EXT4-JFO-CERT-END",
+            (
+                "_AS-CTX _EXT4-PRIMARY-SUPER-BLOCK _AS-WRITER "
+                "_EXT4-JFC-FIND-META CONSTANT _AS-SUPER-FIND-IOR"
+            ),
+            "_EXT4-JFC-FOUND @ CONSTANT _AS-SUPER-FOUND",
+            *_forth_accumulated_conjunction(
+                "_AS-ALL-SAFE",
+                [
+                    (
+                        "_AS-MOUNT-IOR VFS-IOR-REASON "
+                        "VFS-R-UNSUPPORTED ="
+                    ),
+                    (
+                        "_AS-MOUNT-IOR VFS-IOR-DETAIL "
+                        "EXT4-D-RECOVERY ="
+                    ),
+                    "_AS-RUNTIME 0<>",
+                    "_AS-TRANSIENT 0<>",
+                    "_AS-TRANSIENT _AS-RUNTIME <>",
+                    "_AS-FIND-IOR 0=",
+                    "_AS-RECORD 0<>",
+                    "_AS-SAVED _EXT4-OE.INO + @ 13 =",
+                    (
+                        "_AS-SAVED _EXT4-OE.KIND + @ "
+                        "_EXT4-OK-MODERN ="
+                    ),
+                    "_AS-RELEASE-IOR 0=",
+                    "_AS-BIND-IOR 0=",
+                    "_AS-PUT-IOR 0=",
+                    "_AS-REAUTH-IOR 0=",
+                    "_AS-RUNTIME-RECORD 0<>",
+                    (
+                        "_AS-RUNTIME-RECORD _AS-CTX "
+                        "_EXT4-ORPHAN-PLAN-MEMBER?"
+                    ),
+                    "_AS-CTX _EXT4-C.O.ACTIVE + @ 1 =",
+                    "_AS-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
+                    "_AS-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                    "_AS-WRITER-IOR 0=",
+                    "_AS-TX-IOR 0=",
+                    "_AS-CERT-BEGIN-IOR 0=",
+                    "_AS-STAGE-IOR 0=",
+                    "_AS-STAGED-IOR 0=",
+                    "_AS-CERT-REUSE-SENTINEL 0x12345678 =",
+                    "_AS-JOT-COUNT 2 =",
+                    "_AS-JOT-BLOCKS 2 =",
+                    f"_AS-JOT-FIRST-A {data_ranges[0][0]} =",
+                    "_AS-JOT-COUNT-A 1 =",
+                    f"_AS-JOT-FIRST-B {data_ranges[1][0]} =",
+                    "_AS-JOT-COUNT-B 1 =",
+                    "_AS-JOT-TAIL-ZERO",
+                    "_AS-CERT-PRESENT",
+                    "_AS-CERT-CONTENTS",
+                    "_AS-CERT-VALID 0<>",
+                    "_AS-CERT-KIND _EXT4-JFO-CERT-JTA =",
+                    "_AS-CERT-CTX _AS-CTX =",
+                    "_AS-CERT-INO 17 =",
+                    f"_AS-CERT-GEN {generation} =",
+                    "_AS-CERT-RANGE-COUNT 3 =",
+                    "_AS-CERT-MAP-KIND _EXT4-JDM-INLINE-EXTENTS =",
+                    "_AS-CERT-EA 0=",
+                    f"_AS-CERT-FIRST-A {data_ranges[0][0]} =",
+                    "_AS-CERT-COUNT-A 1 =",
+                    f"_AS-CERT-FIRST-B {data_ranges[1][0]} =",
+                    "_AS-CERT-COUNT-B 1 =",
+                    f"_AS-CERT-HOME {target_home} =",
+                    "_AS-CERT-HOME-COUNT 1 =",
+                    "_AS-CERT-TAIL-ZERO",
+                    "_AS-CP-REJECTS-EA",
+                    "_AS-CP-AUTHORITY-RESTORED",
+                    (
+                        "_AS-WRITER _EXT4-JWR.STATE + @ "
+                        "_EXT4-JWR-STAGING ="
+                    ),
+                    (
+                        "_AS-WRITER _EXT4-JWR.CP-MODE + @ "
+                        "_EXT4-JCPM-ORPHAN-MODERN-ADD-MORE ="
+                    ),
+                    "_AS-WRITER _EXT4-JWR.META-CREDIT + @ 2 =",
+                    "_AS-WRITER _EXT4-JWR.META-USED + @ 2 =",
+                    "_AS-WRITER _EXT4-JWR.META-ACTIVE + @ 2 =",
+                    "_AS-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                    "_AS-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                    (
+                        "_AS-WRITER _EXT4-JWR.CP-TARGET-HOME + @ "
+                        f"{target_home} ="
+                    ),
+                    (
+                        "_AS-WRITER _EXT4-JWR.CP-TARGET-OFF + @ "
+                        f"{target_block_offset} ="
+                    ),
+                    (
+                        "_AS-WRITER _EXT4-JWR.CP-O-HOME + @ "
+                        f"{orphan_home} ="
+                    ),
+                    "_AS-WRITER _EXT4-JWR.CP-O-LOGICAL + @ 0=",
+                    "_AS-WRITER _EXT4-JWR.CP-O-SLOT + @ 1 =",
+                    "_AS-WRITER _EXT4-JWR.CP-O-INO + @ 17 =",
+                    (
+                        "_AS-WRITER _EXT4-JWR.CP-TARGET-GEN + @ "
+                        f"{generation} ="
+                    ),
+                    "_AS-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ 2 =",
+                    (
+                        "_AS-WRITER _EXT4-JWR.CP-DATA-MAP-KIND + @ "
+                        "_EXT4-JDM-INLINE-EXTENTS ="
+                    ),
+                    *_forth_cp_delete_vector_checks(
+                        "_AS-WRITER",
+                        data_ranges,
+                    ),
+                    (
+                        "_AS-WRITER _EXT4-JWR.CP-ADD-SECONDS + @ "
+                        f"{seconds} ="
+                    ),
+                    (
+                        "_AS-WRITER _EXT4-JWR.CP-ADD-NSEC + @ "
+                        f"{nanoseconds} ="
+                    ),
+                    "_AS-WRITER _EXT4-JWR.CP-ADD-SUPER-CRC + @ 0=",
+                    "_AS-TARGET-RECORD _EXT4-I.SIZE-LO + L@ 0=",
+                    "_AS-TARGET-RECORD _EXT4-I.SIZE-HI + L@ 0=",
+                    (
+                        "_AS-TARGET-RECORD _EXT4-I.BLOCKS-LO + L@ "
+                        f"{old_blocks} ="
+                    ),
+                    (
+                        "_AS-TARGET-RECORD _EXT4-I.BLOCK + DUP W@ "
+                        "_EXT4-EXTENT-MAGIC = SWAP 2 + W@ 2 = AND"
+                    ),
+                    (
+                        "_AS-TARGET-RECORD _EXT4-I.BLOCK + 12 + "
+                        "DUP L@ 0= SWAP 4 + W@ 1 = AND"
+                    ),
+                    (
+                        "_AS-TARGET-RECORD _EXT4-I.BLOCK + 20 + L@ "
+                        f"{data_ranges[0][0]} ="
+                    ),
+                    (
+                        "_AS-TARGET-RECORD _EXT4-I.BLOCK + 24 + "
+                        "DUP L@ 2 = SWAP 4 + W@ 1 = AND"
+                    ),
+                    (
+                        "_AS-TARGET-RECORD _EXT4-I.BLOCK + 32 + L@ "
+                        f"{data_ranges[1][0]} ="
+                    ),
+                    "_AS-ORPHAN-IMAGE L@ 13 =",
+                    "_AS-ORPHAN-IMAGE 4 + L@ 17 =",
+                    "_AS-SUPER-FIND-IOR 0=",
+                    "_AS-SUPER-FOUND 0=",
+                    "_AS-WRITER _EXT4-JTX-TABLES-VALID?",
+                    "_AS-WRITER _EXT4-JWR-CP-AUTHORITY?",
+                    "_AS-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    "_EXT4-JFO-CERT-SCOPE @ 0=",
+                    "_EXT4-JFO-CERT-VALID @ 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            (
+                '_AS-ALL-SAFE @ IF ." EXT4-ORPHAN-ADD-SPARSE-EXACT" '
+                'ELSE ." EXT4-ORPHAN-ADD-SPARSE-CHECK " '
+                "_AS-ALL-SAFE-FIRST-FAILURE @ . THEN"
+            ),
+            "_AS-TX _EXT4-JTX-ABORT CONSTANT _AS-ABORT-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_AS-ABORT-IOR 0=",
+                        (
+                            "_AS-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_AS-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_AS-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-ORPHAN-ADD-SPARSE-ABORTED" THEN'
+            ),
+        ],
+        patches=patches,
+    )
+    _assert_emitted(output, "EXT4-ORPHAN-ADD-SPARSE-EXACT")
+    _assert_emitted(output, "EXT4-ORPHAN-ADD-SPARSE-ABORTED")
+
+
+@pytest.mark.parametrize(
+    "shape",
+    ("full-four", "mixed-three"),
+)
+def test_modern_orphan_add_first_seals_depth0_vector_shapes_without_io(
+    staged_public_extent_root_growth_prestate: dict[str, object],
+    shape: str,
+) -> None:
+    """Seal full and mixed/unwritten resident vectors without xattr release."""
+    geometry = staged_public_extent_root_growth_prestate
+    path = geometry["path"]
+    input_patches = geometry["input_patches"]
+    superblock = geometry["superblock"]
+    target_inode = geometry["inode"]
+    target_offset = geometry["inode_offset"]
+    inode_number = geometry["inode_number"]
+    block_size = geometry["block_size"]
+    old_size = geometry["old_size"]
+    old_blocks = geometry["old_blocks"]
+    generation = geometry["generation"]
+    root_generation = geometry["root_generation"]
+    extent_entries = geometry["extent_entries"]
+    xattr_block = geometry["xattr_block"]
+    assert isinstance(path, Path)
+    assert isinstance(input_patches, tuple)
+    assert isinstance(superblock, bytes)
+    assert isinstance(target_inode, bytes)
+    assert isinstance(target_offset, int)
+    assert isinstance(inode_number, int)
+    assert isinstance(block_size, int)
+    assert isinstance(old_size, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(generation, int)
+    assert isinstance(root_generation, int)
+    assert isinstance(extent_entries, tuple)
+    assert isinstance(xattr_block, int)
+
+    if shape == "mixed-three":
+        mixed_entries = (
+            (0, 1, 1346),
+            (2, 0x8002, 1351),
+            (5, 1, 1353),
+        )
+        mixed_inode = bytearray(target_inode)
+        struct.pack_into("<H", mixed_inode, 0x2A, len(mixed_entries))
+        mixed_inode[0x34:0x64] = bytes(48)
+        for index, (logical, raw_length, physical) in enumerate(
+            mixed_entries
+        ):
+            struct.pack_into(
+                "<IHHI",
+                mixed_inode,
+                0x34 + index * 12,
+                logical,
+                raw_length,
+                physical >> 32,
+                physical & 0xFFFF_FFFF,
+            )
+        target_inode = _inode_with_checksum(
+            superblock,
+            inode_number,
+            mixed_inode,
+        )
+        input_patches = tuple(
+            (offset, target_inode if offset == target_offset else data)
+            for offset, data in input_patches
+        )
+        extent_entries = tuple(
+            (logical, raw_length & 0x7FFF, physical)
+            for logical, raw_length, physical in mixed_entries
+        )
+        raw_lengths = tuple(entry[1] for entry in mixed_entries)
+    else:
+        raw_lengths = tuple(entry[1] for entry in extent_entries)
+
+    target_home, target_block_offset = divmod(target_offset, block_size)
+    orphan_inode_number = struct.unpack_from("<I", superblock, 0x280)[0]
+    _, orphan_inode, _ = _ext4_inode_record(path, orphan_inode_number)
+    orphan_home = _extent_root_physical(orphan_inode, 0)
+    super_home = 1
+    data_ranges = tuple(
+        (physical, length) for _, length, physical in extent_entries
+    )
+    entry_count = len(extent_entries)
+    seconds = 3_000_000_989
+    nanoseconds = 656_000_000
+
+    assert block_size == 1024
+    assert inode_number == 14
+    assert old_size == 6 * block_size
+    assert old_blocks == 10
+    assert generation != root_generation
+    assert target_home == 278
+    assert target_block_offset == 256
+    assert orphan_home not in {target_home, super_home, xattr_block}
+    assert xattr_block not in {target_home, super_home}
+    assert entry_count in {3, 4}
+    assert sum(length for _, length in data_ranges) == 4
+    assert raw_lengths == (
+        (1, 0x8002, 1)
+        if shape == "mixed-three"
+        else (1, 1, 1, 1)
+    )
+    assert all(
+        physical not in {target_home, orphan_home, super_home, xattr_block}
+        for physical, _ in data_ranges
+    )
+    assert struct.unpack_from("<HHHHI", target_inode, 0x28) == (
+        0xF30A,
+        entry_count,
+        4,
+        0,
+        root_generation,
+    )
+    assert struct.unpack_from("<I", target_inode, 0x68)[0] == xattr_block
+    assert struct.unpack_from("<I", superblock, 0x64)[0] & 0x0001_0000 == 0
+
+    output = run_forth(
+        path,
+        [
+            (
+                ": _A4-MOUNT ( vfs -- ior ) "
+                "-1 _EXT4-MOUNT-AUTHENTICATE ?DUP IF EXIT THEN "
+                "EXT4-D-RECOVERY _EXT4-UNSUPPORTED ;"
+            ),
+            "CREATE _A4-OPS VFS-OPS-SIZE ALLOT",
+            "EXT4-STAGED-WRITE-OPS _A4-OPS VFS-OPS-SIZE CMOVE",
+            "' _A4-MOUNT _A4-OPS VFS-OP-MOUNT CELLS + !",
+            "CREATE _A4-BINDING VFS-BINDING-DESC-SIZE ALLOT",
+            (
+                "EXT4-STAGED-WRITE-BINDING _A4-BINDING "
+                "VFS-BINDING-DESC-SIZE CMOVE"
+            ),
+            "_A4-OPS _A4-BINDING VB.OPS !",
+            ": _A4-NEW _A4-BINDING SWAP VFS-NEW ;",
+            "T-ARENA CONSTANT _A4-ARENA",
+            (
+                "_A4-ARENA T-VOLUME _A4-NEW "
+                "CONSTANT _A4-MOUNT-IOR CONSTANT _A4-V"
+            ),
+            "_A4-V _EXT4-CTX CONSTANT _A4-CTX",
+            (
+                "_A4-CTX _EXT4-C.O.ACTIVE + @ "
+                "CONSTANT _A4-PRE-ACTIVE"
+            ),
+            (
+                "_A4-CTX _EXT4-C.O.MODERN-ACTIVE + @ "
+                "CONSTANT _A4-PRE-MODERN"
+            ),
+            (
+                "_A4-CTX _EXT4-MOUNT-TAIL-RELEASE "
+                "CONSTANT _A4-RELEASE-IOR"
+            ),
+            (
+                "_A4-CTX _A4-V _EXT4-BIND-RUNTIME-ORPHAN-WORKSPACE "
+                "CONSTANT _A4-BIND-IOR"
+            ),
+            "-1 _A4-CTX _EXT4-C.J.WRITER-CURRENT + !",
+            (
+                "3 0 0 _A4-CTX _EXT4-JWR-ALLOCATE-MOUNT "
+                "CONSTANT _A4-WRITER-IOR CONSTANT _A4-WRITER"
+            ),
+            (
+                "3 0 0 _A4-WRITER _EXT4-JTX-BEGIN "
+                "CONSTANT _A4-TX-IOR CONSTANT _A4-TX"
+            ),
+            "_A4-V V.VOLUME @ _EXT4-IO-VOL ! _A4-V _EXT4-IO-VFS !",
+            "_EXT4-JFO-CERT-BEGIN CONSTANT _A4-CERT-BEGIN-IOR",
+            (
+                f"{old_size} {inode_number} {generation} "
+                f"{seconds} {nanoseconds} _A4-TX "
+                "_EXT4-JTX-STAGE-MODERN-ORPHAN-TRUNCATE-ZERO "
+                "CONSTANT _A4-STAGE-IOR"
+            ),
+            "0 _A4-WRITER _EXT4-JWR-META-IMAGE CONSTANT _A4-TARGET-IMAGE",
+            (
+                "_A4-TARGET-IMAGE _A4-WRITER "
+                "_EXT4-JWR.CP-TARGET-OFF + @ + "
+                "CONSTANT _A4-TARGET-RECORD"
+            ),
+            "0x12345678 _EXT4-JFO-IOR !",
+            "_A4-WRITER _EXT4-JTA-STAGED? CONSTANT _A4-STAGED-IOR",
+            "_EXT4-JFO-IOR @ CONSTANT _A4-CERT-REUSE-SENTINEL",
+            "_EXT4-JTA-CERT-PRESENT? CONSTANT _A4-CERT-PRESENT",
+            "_EXT4-JTA-CERT-CONTENTS? CONSTANT _A4-CERT-CONTENTS",
+            "_EXT4-JFO-CERT-VALID @ CONSTANT _A4-CERT-VALID",
+            "_EXT4-JFO-CERT-KIND @ CONSTANT _A4-CERT-KIND",
+            (
+                "_EXT4-JFO-CERT-RANGE-COUNT @ "
+                "CONSTANT _A4-CERT-RANGE-COUNT"
+            ),
+            "_EXT4-JFO-CERT-EA @ CONSTANT _A4-CERT-EA",
+            (
+                "_EXT4-JFO-CERT-EA-ACTION @ "
+                "CONSTANT _A4-CERT-EA-ACTION"
+            ),
+            (
+                "_EXT4-JFO-CERT-EA-REFCOUNT @ "
+                "CONSTANT _A4-CERT-EA-REFCOUNT"
+            ),
+            (
+                "_A4-WRITER _EXT4-JWR-CP-AUTHORITY? "
+                "CONSTANT _A4-CP-AUTHORITY"
+            ),
+            "DEPTH CONSTANT _A4-STAGED-DEPTH",
+            "_EXT4-JFO-CERT-END",
+            *_forth_accumulated_conjunction(
+                "_A4-ALL-SAFE",
+                [
+                    (
+                        "_A4-MOUNT-IOR VFS-IOR-REASON "
+                        "VFS-R-UNSUPPORTED ="
+                    ),
+                    (
+                        "_A4-MOUNT-IOR VFS-IOR-DETAIL "
+                        "EXT4-D-RECOVERY ="
+                    ),
+                    "_A4-PRE-ACTIVE 0=",
+                    "_A4-PRE-MODERN 0=",
+                    "_A4-RELEASE-IOR 0=",
+                    "_A4-BIND-IOR 0=",
+                    "_A4-WRITER-IOR 0=",
+                    "_A4-TX-IOR 0=",
+                    "_A4-CERT-BEGIN-IOR 0=",
+                    "_A4-STAGE-IOR 0=",
+                    "_A4-STAGED-IOR 0=",
+                    "_A4-CERT-REUSE-SENTINEL 0x12345678 =",
+                    "_A4-STAGED-DEPTH 0=",
+                    f"_EXT4-JOT-COUNT @ {entry_count} =",
+                    "_EXT4-JOT-DATA-BLOCKS @ 4 =",
+                    *(
+                        check
+                        for index, (physical, length) in enumerate(data_ranges)
+                        for check in (
+                            (
+                                f"{index} _EXT4-JOT-RANGE @ "
+                                f"{physical} ="
+                            ),
+                            (
+                                f"{index} _EXT4-JOT-RANGE CELL+ @ "
+                                f"{length} ="
+                            ),
+                        )
+                    ),
+                    f"_EXT4-JOT-EA @ {xattr_block} =",
+                    "_A4-CERT-PRESENT",
+                    "_A4-CERT-CONTENTS",
+                    "_A4-CERT-VALID 0<>",
+                    "_A4-CERT-KIND _EXT4-JFO-CERT-JTA =",
+                    f"_A4-CERT-RANGE-COUNT {entry_count + 1} =",
+                    f"_A4-CERT-EA {xattr_block} =",
+                    "_A4-CERT-EA-ACTION 0=",
+                    "_A4-CERT-EA-REFCOUNT 0=",
+                    *(
+                        check
+                        for index, (physical, length) in enumerate(data_ranges)
+                        for check in (
+                            (
+                                f"{index} _EXT4-JFO-CERT-RANGE @ "
+                                f"{physical} ="
+                            ),
+                            (
+                                f"{index} _EXT4-JFO-CERT-RANGE CELL+ @ "
+                                f"{length} ="
+                            ),
+                        )
+                    ),
+                    (
+                        f"{entry_count} _EXT4-JFO-CERT-RANGE @ "
+                        f"{target_home} ="
+                    ),
+                    (
+                        f"{entry_count} _EXT4-JFO-CERT-RANGE "
+                        "CELL+ @ 1 ="
+                    ),
+                    (
+                        "_EXT4-JFO-CERT-RANGES "
+                        f"{(entry_count + 1) * 2} CELLS + "
+                        "_EXT4-JFO-CERT-RANGE-CAP "
+                        f"{entry_count + 1} - 2* CELLS "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    "_A4-CP-AUTHORITY",
+                    (
+                        "_A4-WRITER _EXT4-JWR.CP-MODE + @ "
+                        "_EXT4-JCPM-ORPHAN-MODERN-ADD-FIRST ="
+                    ),
+                    "_A4-WRITER _EXT4-JWR.META-CREDIT + @ 3 =",
+                    "_A4-WRITER _EXT4-JWR.META-USED + @ 3 =",
+                    "_A4-WRITER _EXT4-JWR.META-ACTIVE + @ 3 =",
+                    (
+                        "_A4-WRITER _EXT4-JWR.CP-TARGET-HOME + @ "
+                        f"{target_home} ="
+                    ),
+                    (
+                        "_A4-WRITER _EXT4-JWR.CP-O-HOME + @ "
+                        f"{orphan_home} ="
+                    ),
+                    (
+                        "_A4-WRITER _EXT4-JWR.CP-TARGET-ENTRIES + @ "
+                        f"{entry_count} ="
+                    ),
+                    (
+                        "_A4-WRITER _EXT4-JWR.CP-DATA-MAP-KIND + @ "
+                        "_EXT4-JDM-INLINE-EXTENTS ="
+                    ),
+                    *_forth_cp_delete_vector_checks(
+                        "_A4-WRITER",
+                        data_ranges,
+                    ),
+                    "_A4-WRITER _EXT4-JWR.CP-EA-HOME + @ 0=",
+                    "_A4-WRITER _EXT4-JWR.CP-EA-ACTION + @ 0=",
+                    "_A4-WRITER _EXT4-JWR.CP-EA-REFCOUNT + @ 0=",
+                    "_A4-WRITER _EXT4-JWR.CP-EA-CRC + @ 0=",
+                    "_A4-TARGET-RECORD _EXT4-I.SIZE-LO + L@ 0=",
+                    "_A4-TARGET-RECORD _EXT4-I.SIZE-HI + L@ 0=",
+                    (
+                        "_A4-TARGET-RECORD _EXT4-I.BLOCKS-LO + L@ "
+                        f"{old_blocks} ="
+                    ),
+                    (
+                        "_A4-TARGET-RECORD _EXT4-I.FILE-ACL-LO + L@ "
+                        f"{xattr_block} ="
+                    ),
+                    (
+                        "_A4-TARGET-RECORD _EXT4-I.BLOCK + DUP W@ "
+                        "_EXT4-EXTENT-MAGIC = SWAP 2 + W@ "
+                        f"{entry_count} = AND"
+                    ),
+                    (
+                        "_A4-TARGET-RECORD _EXT4-I.BLOCK + DUP 4 + W@ "
+                        "4 = SWAP 6 + W@ 0= AND"
+                    ),
+                    (
+                        "_A4-TARGET-RECORD _EXT4-I.BLOCK + 8 + L@ "
+                        f"{root_generation} ="
+                    ),
+                    *(
+                        (
+                            "_A4-TARGET-RECORD _EXT4-I.BLOCK + "
+                            f"{12 + index * 12 + 4} + W@ "
+                            f"{raw_length} ="
+                        )
+                        for index, raw_length in enumerate(raw_lengths)
+                    ),
+                    "_A4-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    "_EXT4-JFO-CERT-SCOPE @ 0=",
+                    "_EXT4-JFO-CERT-VALID @ 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            (
+                '_A4-ALL-SAFE @ IF ." EXT4-ORPHAN-ADD-FOUR-EXACT" '
+                'ELSE ." EXT4-ORPHAN-ADD-FOUR-CHECK " '
+                "_A4-ALL-SAFE-FIRST-FAILURE @ . THEN"
+            ),
+            "_A4-TX _EXT4-JTX-ABORT CONSTANT _A4-ABORT-IOR",
+            "DEPTH CONSTANT _A4-ABORT-DEPTH",
+            (
+                _forth_conjunction(
+                    [
+                        "_A4-ABORT-IOR 0=",
+                        "_A4-ABORT-DEPTH 0=",
+                        (
+                            "_A4-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_A4-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                        "_A4-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    ]
+                )
+                + ' IF ." EXT4-ORPHAN-ADD-FOUR-ABORTED" THEN'
+            ),
+        ],
+        patches=input_patches,
+    )
+    _assert_emitted(output, "EXT4-ORPHAN-ADD-FOUR-EXACT")
+    _assert_emitted(output, "EXT4-ORPHAN-ADD-FOUR-ABORTED")
 
 
 def test_modern_orphan_add_refuses_a_full_runtime_plan_without_io(
@@ -38992,6 +39826,8 @@ def _staged_write_recovery_readback(
     expected_blocks: int | None = None,
     prefix: str,
     marker: str,
+    primary_path: str = "/fixture/payload.txt",
+    alias_path: str = "/fixture/hardlink.txt",
 ) -> tuple[str, tuple[tuple[str, int, int], ...], str]:
     """Mount, verify, and cleanly unmount one staged-write crash view."""
     seconds, milliseconds = divmod(expected_epoch_ms, 1000)
@@ -39022,12 +39858,12 @@ def _staged_write_recovery_readback(
             ),
             f"{prefix}-V _EXT4-CTX CONSTANT {prefix}-CTX",
             (
-                f'S" /fixture/payload.txt" VFS-FF-READ {prefix}-V '
+                f'S" {primary_path}" VFS-FF-READ {prefix}-V '
                 f"VFS-OPEN? CONSTANT {prefix}-OPEN-IOR "
                 f"CONSTANT {prefix}-FD"
             ),
             (
-                f'S" /fixture/hardlink.txt" VFS-FF-READ {prefix}-V '
+                f'S" {alias_path}" VFS-FF-READ {prefix}-V '
                 f"VFS-OPEN? CONSTANT {prefix}-ALIAS-OPEN-IOR "
                 f"CONSTANT {prefix}-ALIAS-FD"
             ),
@@ -43007,9 +43843,13 @@ def staged_public_extent_root_growth_prestate(
     path = writer_activation_fixture["image"]
     source_patches = writer_activation_fixture["source_patches"]
     activation_trace = writer_activation_fixture["success_trace"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
     assert isinstance(path, Path)
     assert isinstance(source_patches, tuple)
     assert isinstance(activation_trace, tuple)
+    assert isinstance(journal0_physical, int)
+    assert isinstance(guard_physical, int)
 
     inode_number = 14
     data_candidate = 1354
@@ -43139,6 +43979,8 @@ def staged_public_extent_root_growth_prestate(
         "path": path,
         "input_patches": input_patches,
         "activation_trace": activation_trace,
+        "journal0_physical": journal0_physical,
+        "guard_physical": guard_physical,
         "superblock": prepared_super,
         "inode": bytes(prepared_inode),
         "inode_offset": inode_offset,
@@ -43161,6 +44003,175 @@ def staged_public_extent_root_growth_prestate(
         "original_data_candidate": original_data_candidate,
         "original_leaf_candidate": original_leaf_candidate,
         "expected_file_prefix": expected_file_prefix,
+    }
+
+
+@pytest.fixture(scope="session")
+def staged_public_compact_saturated_depth0_prestate(
+    compact_primary_writer_activation_fixture: dict[str, object],
+) -> dict[str, object]:
+    """Build a full linked root on the compact primary-profile image."""
+    fixture = compact_primary_writer_activation_fixture
+    path = fixture["image"]
+    source_patches = fixture["source_patches"]
+    activation_trace = fixture["success_trace"]
+    journal0_physical = fixture["journal0_physical"]
+    guard_physical = fixture["guard_physical"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(journal0_physical, int)
+    assert isinstance(guard_physical, int)
+
+    inode_number = 14
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    data_block = _extent_root_physical(inode, 0)
+    xattr_block = struct.unpack_from("<I", inode, 0x68)[0]
+    links = struct.unpack_from("<H", inode, 0x1A)[0]
+    canonical_payload = PROFILE["generator"]["population"][
+        "payload_utf8"
+    ].encode("utf-8")
+    original_data = _read_ext4_home(
+        path,
+        data_block,
+        block_size=block_size,
+    )
+    original_xattr = _read_ext4_home(
+        path,
+        xattr_block,
+        block_size=block_size,
+    )
+    assert block_size == 1024
+    assert inode_size == 256
+    assert struct.unpack_from("<I", inode, 0x04)[0] == len(canonical_payload)
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 4
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        1,
+        4,
+        0,
+    )
+    assert data_block != xattr_block
+    assert xattr_block != 0
+    assert links == 2
+    assert original_data[: len(canonical_payload)] == canonical_payload
+    assert original_xattr != bytes(block_size)
+
+    allocated_patches, physical_ranges = _allocate_unlinked_extent_ranges(
+        path,
+        protocol="modern",
+        extent_specs=((0, 3, False),),
+        inode_number=inode_number,
+        seed_payloads=True,
+        base_patches=((1024, superblock), (inode_offset, inode)),
+    )
+    assert len(physical_ranges) == 1
+    allocated_first, allocated_count = physical_ranges[0]
+    assert allocated_count == 3
+    allocated_blocks = tuple(range(allocated_first, allocated_first + 3))
+    assert len(set((data_block, xattr_block, *allocated_blocks))) == 5
+
+    patch_map = dict(allocated_patches)
+    prepared_super = patch_map[1024]
+    old_size = 6 * block_size
+    generation = 0x1357_9BDF
+    root_generation = 0x2468_ACE0
+    extent_entries = (
+        (0, 1, data_block),
+        (2, 1, allocated_blocks[1]),
+        (4, 1, allocated_blocks[2]),
+        (5, 1, allocated_blocks[0]),
+    )
+    old_blocks = (len(extent_entries) + 1) * (block_size // 512)
+    assert tuple(entry[0] for entry in extent_entries) == (0, 2, 4, 5)
+    assert all(entry[1] == 1 for entry in extent_entries)
+    assert all(
+        logical + length < next_logical
+        or physical + length != next_physical
+        for (logical, length, physical), (
+            next_logical,
+            _,
+            next_physical,
+        ) in zip(extent_entries, extent_entries[1:])
+    )
+
+    prepared_inode = bytearray(inode)
+    struct.pack_into("<I", prepared_inode, 0x04, old_size)
+    struct.pack_into("<I", prepared_inode, 0x6C, 0)
+    struct.pack_into("<I", prepared_inode, 0x1C, old_blocks)
+    struct.pack_into("<H", prepared_inode, 0x74, 0)
+    struct.pack_into("<I", prepared_inode, 0x30, root_generation)
+    struct.pack_into("<I", prepared_inode, 0x64, generation)
+    prepared_inode[0x34:0x64] = bytes(48)
+    struct.pack_into("<H", prepared_inode, 0x2A, len(extent_entries))
+    for index, (logical, length, physical) in enumerate(extent_entries):
+        struct.pack_into(
+            "<IHHI",
+            prepared_inode,
+            0x34 + index * 12,
+            logical,
+            length,
+            physical >> 32,
+            physical & 0xFFFF_FFFF,
+        )
+    prepared_inode[:] = _inode_with_checksum(
+        prepared_super,
+        inode_number,
+        prepared_inode,
+    )
+    patch_map[inode_offset] = bytes(prepared_inode)
+    input_patches = source_patches + tuple(patch_map.items())
+
+    original_blocks = {
+        physical: _patched_ext4_home(
+            path,
+            input_patches,
+            physical,
+            block_size=block_size,
+        )
+        for physical in (*allocated_blocks, data_block, xattr_block)
+    }
+    assert original_blocks[data_block] == original_data
+    assert original_blocks[xattr_block] == original_xattr
+    assert struct.unpack_from("<HHHHI", prepared_inode, 0x28) == (
+        0xF30A,
+        4,
+        4,
+        0,
+        root_generation,
+    )
+    assert struct.unpack_from("<I", prepared_inode, 0x04)[0] == old_size
+    assert struct.unpack_from("<I", prepared_inode, 0x1C)[0] == old_blocks
+    assert struct.unpack_from("<I", prepared_inode, 0x64)[0] == generation
+    assert struct.unpack_from("<I", prepared_inode, 0x68)[0] == xattr_block
+    assert struct.unpack_from("<H", prepared_inode, 0x1A)[0] == links
+    return {
+        "path": path,
+        "input_patches": input_patches,
+        "activation_trace": activation_trace,
+        "journal0_physical": journal0_physical,
+        "guard_physical": guard_physical,
+        "superblock": prepared_super,
+        "inode": bytes(prepared_inode),
+        "inode_number": inode_number,
+        "inode_offset": inode_offset,
+        "inode_home": inode_home,
+        "inode_block_offset": inode_block_offset,
+        "inode_size": inode_size,
+        "block_size": block_size,
+        "old_size": old_size,
+        "old_blocks": old_blocks,
+        "generation": generation,
+        "root_generation": root_generation,
+        "links": links,
+        "extent_entries": extent_entries,
+        "data_block": data_block,
+        "xattr_block": xattr_block,
+        "allocated_blocks": allocated_blocks,
+        "original_blocks": original_blocks,
     }
 
 
@@ -64368,9 +65379,13 @@ def staged_public_truncate_zero_fixture(
     path = writer_activation_fixture["image"]
     source_patches = writer_activation_fixture["source_patches"]
     activation_trace = writer_activation_fixture["success_trace"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
     assert isinstance(path, Path)
     assert isinstance(source_patches, tuple)
     assert isinstance(activation_trace, tuple)
+    assert isinstance(journal0_physical, int)
+    assert isinstance(guard_physical, int)
 
     inode_number = 14
     superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
@@ -64446,6 +65461,7 @@ def staged_public_truncate_zero_fixture(
 
     directory = tmp_path_factory.mktemp("ext4-public-truncate-zero")
     backing = directory / "staged-public-truncate-zero.img"
+    recovered = directory / "staged-public-truncate-zero-recovered.img"
     stable = directory / "staged-public-truncate-zero-stable.img"
     output, trace, media_sha256 = run_recovery_forth(
         path,
@@ -64618,21 +65634,23 @@ def staged_public_truncate_zero_fixture(
             ),
             "_TZ-FD VFS-CLOSE? CONSTANT _TZ-CLOSE-IOR",
             "_TZ-HFD VFS-CLOSE? CONSTANT _TZ-HCLOSE-IOR",
-            "0 _TZ-V VFS-UNMOUNT CONSTANT _TZ-UNMOUNT-IOR",
             (
                 "_TZ-CLOSE-IOR 0= _TZ-HCLOSE-IOR 0= AND "
-                "_TZ-UNMOUNT-IOR 0= AND "
-                "_TZ-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
-                "_TZ-PROFILE-ARENA ARENA-USED 0= AND "
-                "_TZ-PROFILE-ARENA A.PTR @ _TZ-PROFILE-BASE = AND "
-                'IF ." EXT4-PUBLIC-TRUNCATE-ZERO-UNMOUNTED" THEN'
+                "_TZ-V V.OPEN-COUNT @ 0= AND "
+                "_TZ-V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_TZ-V V.FLAGS @ VFS-F-DIRTY AND 0<> AND "
+                "_TZ-V V.FLAGS @ VFS-F-RO AND 0= AND "
+                "_TZ-CTX _EXT4-C.RECOVERY + @ 0<> AND "
+                "_TZ-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<> AND "
+                "_TZ-CTX _EXT4-C.J.COMMITTED + @ 0= AND "
+                'IF ." EXT4-PUBLIC-TRUNCATE-ZERO-CLOSED-ACTIVE" THEN'
             ),
         ],
         patches=source_patches,
         capture_media=backing,
     )
     _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-ZERO-PUBLISHED")
-    _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-ZERO-UNMOUNTED")
+    _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-ZERO-CLOSED-ACTIVE")
     assert trace[: len(activation_trace)] == activation_trace
 
     final_superblock, final_inode, _ = _ext4_inode_record(
@@ -64642,7 +65660,7 @@ def staged_public_truncate_zero_fixture(
         "<I", final_superblock, 0x0C
     )[0] | (struct.unpack_from("<I", final_superblock, 0x158)[0] << 32)
     assert final_free_blocks == free_blocks_before + 1
-    assert struct.unpack_from("<I", final_superblock, 0x60)[0] & 0x04 == 0
+    assert struct.unpack_from("<I", final_superblock, 0x60)[0] & 0x04
     assert struct.unpack_from("<I", final_superblock, 0x64)[0] & 0x0001_0000 == 0
     assert struct.unpack_from("<I", final_inode, 0x04)[0] == 0
     assert struct.unpack_from("<I", final_inode, 0x6C)[0] == 0
@@ -64663,10 +65681,35 @@ def staged_public_truncate_zero_fixture(
     assert _read_ext4_home(
         backing, orphan_block, block_size=block_size
     ) == original_orphan_block
-    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+    _, recovery_trace, recovery_sha256 = _staged_write_recovery_readback(
+        backing,
+        recovered,
+        expected_file=b"",
+        expected_epoch_ms=epoch_ms,
+        expected_home_writes=0,
+        expected_replayed=True,
+        expected_blocks=2,
+        prefix="_TZ-R",
+        marker="EXT4-PUBLIC-TRUNCATE-ZERO-RECOVERED",
+    )
+    _assert_activation_cleanup_trace(
+        recovery_trace,
+        journal0_physical=journal0_physical,
+        guard_physical=guard_physical,
+    )
+    assert recovery_trace.count(("write", 2, 2)) == 1
+    for untouched_home in (
+        inode_home,
+        data_block,
+        orphan_block,
+        xattr_block,
+    ):
+        assert ("write", untouched_home * 2, 2) not in recovery_trace
+    _assert_e2fsck_clean(recovered, jbd2_toolchain)
 
     _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
-        backing,
+        recovered,
         stable,
         expected_file=b"",
         expected_epoch_ms=epoch_ms,
@@ -64677,7 +65720,8 @@ def staged_public_truncate_zero_fixture(
         marker="EXT4-PUBLIC-TRUNCATE-ZERO-STABLE",
     )
     assert stable_trace == ()
-    assert stable_sha256 == media_sha256
+    assert stable_sha256 == recovery_sha256
+    assert stable_sha256 != media_sha256
     return {
         "source": path,
         "source_patches": source_patches,
@@ -64713,6 +65757,799 @@ def test_staged_vfs_truncate_zero_releases_one_block(
     assert _ext4_block_allocation_state(image, (data_block,)) == {
         data_block: False
     }
+
+
+def test_staged_vfs_truncate_zero_canonicalizes_hole_only_depth0_root(
+    staged_public_truncate_zero_fixture: dict[str, object],
+    writer_activation_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A positive-size all-hole file truncates without release authority."""
+    path = staged_public_truncate_zero_fixture["image"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    assert isinstance(path, Path)
+    assert isinstance(journal0_physical, int)
+    assert isinstance(guard_physical, int)
+
+    inode_number = 14
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    old_mode = struct.unpack_from("<H", inode, 0x00)[0]
+    old_flags = struct.unpack_from("<I", inode, 0x20)[0]
+    old_links = struct.unpack_from("<H", inode, 0x1A)[0]
+    old_generation = struct.unpack_from("<I", inode, 0x64)[0]
+    root_generation = struct.unpack_from("<I", inode, 0x30)[0]
+    xattr_block = struct.unpack_from("<I", inode, 0x68)[0]
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", superblock, 0x158)[0] << 32
+    )
+    original_xattr = _read_ext4_home(
+        path,
+        xattr_block,
+        block_size=block_size,
+    )
+    old_size = 3 * block_size + 17
+    ignored_tail = bytes(range(1, 49))
+    pre_inode = bytearray(inode)
+    struct.pack_into("<I", pre_inode, 0x04, old_size)
+    struct.pack_into("<I", pre_inode, 0x6C, 0)
+    pre_inode[0x34:0x64] = ignored_tail
+    pre_inode = bytearray(
+        _inode_with_checksum(superblock, inode_number, pre_inode)
+    )
+    epoch_ms = 3_000_001_111_222
+
+    assert block_size == 1024
+    assert inode_home == 278
+    assert inode_block_offset == 256
+    assert struct.unpack_from("<I", inode, 0x04)[0] == 0
+    assert struct.unpack_from("<I", inode, 0x1C)[0] == 2
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        0,
+        4,
+        0,
+    )
+    assert inode[0x34:0x64] == bytes(48)
+    assert struct.unpack_from("<I", pre_inode, 0x04)[0] == old_size
+    assert struct.unpack_from("<I", pre_inode, 0x1C)[0] == 2
+    assert pre_inode[0x34:0x64] == ignored_tail
+    assert xattr_block > 0
+    assert _ext4_block_allocation_state(path, (xattr_block,)) == {
+        xattr_block: True
+    }
+
+    active = tmp_path / "staged-public-truncate-zero-hole-only-active.img"
+    recovered = (
+        tmp_path / "staged-public-truncate-zero-hole-only-recovered.img"
+    )
+    stable = tmp_path / "staged-public-truncate-zero-hole-only-stable.img"
+    output, trace, active_sha256 = run_recovery_forth(
+        path,
+        active,
+        [
+            "VARIABLE _T0-CLOCK-CALLS",
+            (
+                ": _T0-NOW ( context -- epoch-ms ior ) "
+                f"DROP 1 _T0-CLOCK-CALLS +! {epoch_ms} 0 ;"
+            ),
+            "T-ARENA CONSTANT _T0-ARENA",
+            (
+                "_T0-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _T0-MOUNT-IOR CONSTANT _T0-V"
+            ),
+            "_T0-V _EXT4-CTX CONSTANT _T0-CTX",
+            (
+                "' _T0-NOW 0 _T0-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _T0-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_T0-PROFILE", "_T0-V", 3, 0, 0
+            ),
+            (
+                'S" /fixture/payload.txt" '
+                "VFS-FF-READ VFS-FF-WRITE OR _T0-V VFS-OPEN? "
+                "CONSTANT _T0-OPEN-IOR CONSTANT _T0-FD"
+            ),
+            "_T0-FD FD.INODE @ D.VNODE @ CONSTANT _T0-VN",
+            "_T0-VN VN.SIZE-LO @ CONSTANT _T0-OLD-SIZE",
+            "0 _T0-FD VFS-TRUNCATE CONSTANT _T0-TRUNCATE-IOR",
+            (
+                _forth_conjunction(
+                    [
+                        "_T0-MOUNT-IOR 0=",
+                        "_T0-CLOCK-IOR 0=",
+                        "_T0-PROFILE-SIZE-IOR 0=",
+                        "_T0-PROFILE-BIND-IOR 0=",
+                        "_T0-OPEN-IOR 0=",
+                        f"_T0-OLD-SIZE {old_size} =",
+                        "_T0-TRUNCATE-IOR 0=",
+                        "_T0-V V.LAST-IOR @ 0=",
+                        "_T0-CLOCK-CALLS @ 1 =",
+                        "_XT-ADD-CREDIT @ 3 =",
+                        "_XT-TARGET-CREDIT @ 1 =",
+                        "_XT-META-CAP @ 3 =",
+                        "_XT-TARGET-DRAINED @ -1 =",
+                        "_T0-VN VN.SIZE-LO @ 0=",
+                        "_T0-VN VN.SIZE-HI @ 0=",
+                        "_T0-VN VN.BLOCKS @ 2 =",
+                        "_T0-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                        (
+                            "_T0-CTX _EXT4-C.J.WRITER + @ "
+                            "_EXT4-JWR-IDLE-CLEAN?"
+                        ),
+                    ]
+                )
+                + " CONSTANT _T0-OP-OK"
+            ),
+            (
+                '_T0-OP-OK IF ." '
+                'EXT4-PUBLIC-TRUNCATE-HOLE-ONLY-PUBLISHED" THEN'
+            ),
+            "_T0-FD VFS-CLOSE? CONSTANT _T0-CLOSE-IOR",
+            (
+                "_T0-OP-OK _T0-CLOSE-IOR 0= AND "
+                "_T0-V V.OPEN-COUNT @ 0= AND "
+                "_T0-V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_T0-V V.FLAGS @ VFS-F-DIRTY AND 0<> AND "
+                "_T0-V V.FLAGS @ VFS-F-RO AND 0= AND "
+                "_T0-CTX _EXT4-C.RECOVERY + @ 0<> AND "
+                "_T0-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<> AND "
+                "_T0-CTX _EXT4-C.J.COMMITTED + @ 0= AND "
+                'IF ." EXT4-PUBLIC-TRUNCATE-HOLE-ONLY-CLOSED-ACTIVE" '
+                "THEN"
+            ),
+        ],
+        patches=((inode_offset, bytes(pre_inode)),),
+        capture_media=active,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-HOLE-ONLY-PUBLISHED")
+    _assert_emitted(
+        output,
+        "EXT4-PUBLIC-TRUNCATE-HOLE-ONLY-CLOSED-ACTIVE",
+    )
+    assert ("write", xattr_block * 2, 2) not in trace
+
+    final_superblock, final_inode, final_offset = _ext4_inode_record(
+        active,
+        inode_number,
+    )
+    final_free_blocks = struct.unpack_from(
+        "<I", final_superblock, 0x0C
+    )[0] | (struct.unpack_from("<I", final_superblock, 0x158)[0] << 32)
+    assert final_offset == inode_offset
+    assert final_free_blocks == free_blocks_before
+    assert struct.unpack_from("<I", final_superblock, 0x60)[0] & 0x04
+    assert struct.unpack_from("<I", final_superblock, 0x64)[0] & 0x0001_0000 == 0
+    assert struct.unpack_from("<H", final_inode, 0x00)[0] == old_mode
+    assert struct.unpack_from("<I", final_inode, 0x04)[0] == 0
+    assert struct.unpack_from("<I", final_inode, 0x6C)[0] == 0
+    assert struct.unpack_from("<I", final_inode, 0x1C)[0] == 2
+    assert struct.unpack_from("<H", final_inode, 0x1A)[0] == old_links
+    assert struct.unpack_from("<I", final_inode, 0x64)[0] == old_generation
+    assert struct.unpack_from("<I", final_inode, 0x20)[0] == old_flags
+    assert struct.unpack_from("<I", final_inode, 0x68)[0] == xattr_block
+    assert struct.unpack_from("<HHHHI", final_inode, 0x28) == (
+        0xF30A,
+        0,
+        4,
+        0,
+        root_generation,
+    )
+    assert final_inode[0x34:0x64] == bytes(48)
+    assert _inode_with_checksum(
+        final_superblock,
+        inode_number,
+        final_inode,
+    ) == final_inode
+    assert _ext4_block_allocation_state(active, (xattr_block,)) == {
+        xattr_block: True
+    }
+    assert _read_ext4_home(
+        active,
+        xattr_block,
+        block_size=block_size,
+    ) == original_xattr
+
+    _, recovery_trace, recovery_sha256 = _staged_write_recovery_readback(
+        active,
+        recovered,
+        expected_file=b"",
+        expected_epoch_ms=epoch_ms,
+        expected_home_writes=0,
+        expected_replayed=True,
+        expected_blocks=2,
+        prefix="_T0-R",
+        marker="EXT4-PUBLIC-TRUNCATE-HOLE-ONLY-RECOVERED",
+    )
+    _assert_activation_cleanup_trace(
+        recovery_trace,
+        journal0_physical=journal0_physical,
+        guard_physical=guard_physical,
+    )
+    assert recovery_trace.count(("write", 2, 2)) == 1
+    for untouched_home in (inode_home, xattr_block):
+        assert ("write", untouched_home * 2, 2) not in recovery_trace
+    _assert_e2fsck_clean(recovered, jbd2_toolchain)
+
+    _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+        recovered,
+        stable,
+        expected_file=b"",
+        expected_epoch_ms=epoch_ms,
+        expected_home_writes=0,
+        expected_replayed=False,
+        expected_blocks=2,
+        prefix="_T0-S",
+        marker="EXT4-PUBLIC-TRUNCATE-HOLE-ONLY-STABLE",
+    )
+    assert stable_trace == ()
+    assert stable_sha256 == recovery_sha256
+    assert stable_sha256 != active_sha256
+    assert _sha256(stable) == stable_sha256
+    assert _read_ext4_home(
+        stable,
+        xattr_block,
+        block_size=block_size,
+    ) == original_xattr
+
+
+def test_staged_vfs_truncate_zero_releases_sparse_depth0_root(
+    writer_activation_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Public truncate drains both mapped blocks around an in-file hole."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    journal0_physical = writer_activation_fixture["journal0_physical"]
+    guard_physical = writer_activation_fixture["guard_physical"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(journal0_physical, int)
+    assert isinstance(guard_physical, int)
+
+    inode_number = 17
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    data_blocks = (
+        _extent_root_physical(inode, 0),
+        _extent_root_physical(inode, 2),
+    )
+    old_size = struct.unpack_from("<I", inode, 0x04)[0]
+    old_blocks = struct.unpack_from("<I", inode, 0x1C)[0]
+    old_links = struct.unpack_from("<H", inode, 0x1A)[0]
+    old_generation = struct.unpack_from("<I", inode, 0x64)[0]
+    old_mode = struct.unpack_from("<H", inode, 0x00)[0]
+    old_flags = struct.unpack_from("<I", inode, 0x20)[0]
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", superblock, 0x158)[0] << 32
+    )
+    epoch_ms = 3_000_000_989_656
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+
+    assert block_size == 1024
+    assert inode_size == 256
+    assert inode_home == 279
+    assert inode_block_offset == 0
+    assert data_blocks == (1348, 1350)
+    assert old_size == 3 * block_size
+    assert old_blocks == 4
+    assert old_links == 1
+    assert old_generation == 0
+    assert old_mode & 0xF000 == 0x8000
+    assert old_flags & 0x0008_0000
+    assert struct.unpack_from("<I", inode, 0x68)[0] == 0
+    assert struct.unpack_from("<HHHH", inode, 0x28) == (
+        0xF30A,
+        2,
+        4,
+        0,
+    )
+    with pytest.raises(AssertionError, match="logical block 1 is unmapped"):
+        _extent_root_physical(inode, 1)
+    assert _ext4_block_allocation_state(path, data_blocks) == {
+        data_blocks[0]: True,
+        data_blocks[1]: True,
+    }
+
+    image = tmp_path / "staged-public-truncate-zero-sparse.img"
+    recovered = tmp_path / "staged-public-truncate-zero-sparse-recovered.img"
+    stable = tmp_path / "staged-public-truncate-zero-sparse-stable.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        image,
+        [
+            "VARIABLE _TS-CLOCK-CALLS",
+            (
+                ": _TS-NOW ( context -- epoch-ms ior ) "
+                "DROP 1 _TS-CLOCK-CALLS +! "
+                f"{epoch_ms} 0 ;"
+            ),
+            "T-ARENA CONSTANT _TS-ARENA",
+            (
+                "_TS-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _TS-MOUNT-IOR CONSTANT _TS-V"
+            ),
+            "_TS-V _EXT4-CTX CONSTANT _TS-CTX",
+            (
+                "' _TS-NOW 0 _TS-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _TS-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_TS-PROFILE", "_TS-V", 5, 0, 0
+            ),
+            (
+                'S" /fixture/sparse.bin" '
+                "VFS-FF-READ VFS-FF-WRITE OR _TS-V VFS-OPEN? "
+                "CONSTANT _TS-OPEN-IOR CONSTANT _TS-FD"
+            ),
+            "0 _TS-FD VFS-TRUNCATE CONSTANT _TS-TRUNCATE-IOR",
+            (
+                _forth_conjunction(
+                    [
+                    "_TS-MOUNT-IOR 0=",
+                    "_TS-CLOCK-IOR 0=",
+                    "_TS-PROFILE-SIZE-IOR 0=",
+                    "_TS-PROFILE-BIND-IOR 0=",
+                    "_TS-OPEN-IOR 0=",
+                    "_TS-TRUNCATE-IOR 0=",
+                    "_TS-V V.LAST-IOR @ 0=",
+                    "_TS-CLOCK-CALLS @ 1 =",
+                    ]
+                )
+                + " CONSTANT _TS-OP-OK"
+            ),
+            (
+                '_TS-OP-OK IF ." '
+                'EXT4-PUBLIC-TRUNCATE-SPARSE-PUBLISHED" THEN'
+            ),
+            "_TS-FD VFS-CLOSE? CONSTANT _TS-CLOSE-IOR",
+            (
+                "_TS-OP-OK _TS-CLOSE-IOR 0= AND "
+                "_TS-V V.OPEN-COUNT @ 0= AND "
+                "_TS-V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_TS-V V.FLAGS @ VFS-F-DIRTY AND 0<> AND "
+                "_TS-V V.FLAGS @ VFS-F-RO AND 0= AND "
+                "_TS-CTX _EXT4-C.RECOVERY + @ 0<> AND "
+                "_TS-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<> AND "
+                "_TS-CTX _EXT4-C.J.COMMITTED + @ 0= AND "
+                "_TS-CTX _EXT4-C.J.WRITER + @ "
+                "_EXT4-JWR-IDLE-CLEAN? AND "
+                'IF ." EXT4-PUBLIC-TRUNCATE-SPARSE-CLOSED-ACTIVE" '
+                "THEN"
+            ),
+        ],
+        patches=source_patches,
+        capture_media=image,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-SPARSE-PUBLISHED")
+    _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-SPARSE-CLOSED-ACTIVE")
+    assert trace[: len(activation_trace)] == activation_trace
+
+    final_superblock, final_inode, final_offset = _ext4_inode_record(
+        image,
+        inode_number,
+    )
+    final_free_blocks = struct.unpack_from(
+        "<I", final_superblock, 0x0C
+    )[0] | (struct.unpack_from("<I", final_superblock, 0x158)[0] << 32)
+    assert final_offset == inode_offset
+    assert final_free_blocks == free_blocks_before + 2
+    assert struct.unpack_from("<I", final_superblock, 0x60)[0] & 0x04
+    assert struct.unpack_from("<I", final_superblock, 0x64)[0] & 0x0001_0000 == 0
+    assert struct.unpack_from("<H", final_inode, 0x00)[0] == old_mode
+    assert struct.unpack_from("<I", final_inode, 0x04)[0] == 0
+    assert struct.unpack_from("<I", final_inode, 0x6C)[0] == 0
+    assert struct.unpack_from("<I", final_inode, 0x1C)[0] == 0
+    assert struct.unpack_from("<H", final_inode, 0x74)[0] == 0
+    assert struct.unpack_from("<H", final_inode, 0x1A)[0] == old_links
+    assert struct.unpack_from("<I", final_inode, 0x64)[0] == old_generation
+    assert struct.unpack_from("<I", final_inode, 0x20)[0] == old_flags
+    assert struct.unpack_from("<I", final_inode, 0x68)[0] == 0
+    assert struct.unpack_from("<HHHH", final_inode, 0x28) == (
+        0xF30A,
+        0,
+        4,
+        0,
+    )
+    assert final_inode[0x34:0x64] == bytes(48)
+    assert _ext4_block_allocation_state(image, data_blocks) == {
+        data_blocks[0]: False,
+        data_blocks[1]: False,
+    }
+
+    _, recovery_trace, recovery_sha256 = _staged_write_recovery_readback(
+        image,
+        recovered,
+        expected_file=b"",
+        expected_epoch_ms=epoch_ms,
+        expected_home_writes=0,
+        expected_replayed=True,
+        expected_blocks=0,
+        prefix="_TSS-R",
+        marker="EXT4-PUBLIC-TRUNCATE-SPARSE-RECOVERED",
+        primary_path="/fixture/sparse.bin",
+        alias_path="/fixture/sparse.bin",
+    )
+    assert recovery_trace
+    _assert_activation_cleanup_trace(
+        recovery_trace,
+        journal0_physical=journal0_physical,
+        guard_physical=guard_physical,
+    )
+    assert recovery_trace.count(("write", 2, 2)) == 1
+    for untouched_home in (inode_home, *data_blocks):
+        assert ("write", untouched_home * 2, 2) not in recovery_trace
+    _assert_e2fsck_clean(recovered, jbd2_toolchain)
+
+    stable_output, stable_trace, stable_sha256 = run_recovery_forth(
+        recovered,
+        stable,
+        [
+            "CREATE _TSS-BUF 1 ALLOT",
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _TSS-MOUNT-IOR CONSTANT _TSS-V"
+            ),
+            "_TSS-V _EXT4-CTX CONSTANT _TSS-CTX",
+            (
+                'S" /fixture/sparse.bin" _TSS-V VFS-RESOLVE? '
+                "CONSTANT _TSS-RESOLVE-IOR CONSTANT _TSS-D"
+            ),
+            (
+                'S" /fixture/sparse.bin" VFS-FF-READ _TSS-V VFS-OPEN? '
+                "CONSTANT _TSS-OPEN-IOR CONSTANT _TSS-FD"
+            ),
+            "_TSS-FD FD.INODE @ D.VNODE @ CONSTANT _TSS-VN",
+            (
+                "_TSS-BUF 1 _TSS-FD VFS-READ? "
+                "CONSTANT _TSS-READ-IOR CONSTANT _TSS-READ-ACTUAL"
+            ),
+            *_forth_accumulated_conjunction(
+                "_TSS-ALL-STABLE",
+                [
+                    "_TSS-MOUNT-IOR 0=",
+                    "_TSS-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                    "_TSS-V _EXT4-READY?",
+                    "_TSS-V V.FLAGS @ VFS-F-RO AND 0<>",
+                    "_TSS-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                    "_TSS-CTX _EXT4-C.RECOVERY + @ 0=",
+                    "_TSS-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                    "_TSS-CTX _EXT4-C.J.START + @ 0=",
+                    (
+                        "_TSS-CTX _EXT4-C.J.WITNESS + @ "
+                        "_EXT4-JW-NONE ="
+                    ),
+                    "_TSS-CTX _EXT4-C.J.ANCHOR + @ 0=",
+                    "_TSS-CTX _EXT4-C.J.PRIMARY-TORN + @ 0=",
+                    "_TSS-CTX _EXT4-C.SUPER-TORN + @ 0=",
+                    "_TSS-CTX _EXT4-C.J.WRITER + @ 0=",
+                    "_TSS-CTX _EXT4-C.J.WRITER-CURRENT + @ -1 =",
+                    "_TSS-CTX _EXT4-C.J.REPLAYED + @ 0=",
+                    "_TSS-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    "_TSS-RESOLVE-IOR 0=",
+                    "_TSS-OPEN-IOR 0=",
+                    "_TSS-D D.VNODE @ _TSS-VN =",
+                    f"_TSS-VN VN.BID @ {inode_number} =",
+                    f"_TSS-VN VN.GEN @ {old_generation} =",
+                    f"_TSS-VN VN.NLINK @ {old_links} =",
+                    "_TSS-VN VN.SIZE-LO @ 0=",
+                    "_TSS-VN VN.SIZE-HI @ 0=",
+                    "_TSS-VN VN.BLOCKS @ 0=",
+                    f"_TSS-VN VN.MTIME @ {seconds} =",
+                    f"_TSS-VN VN.MTIME-NS @ {nanoseconds} =",
+                    f"_TSS-VN VN.CTIME @ {seconds} =",
+                    f"_TSS-VN VN.CTIME-NS @ {nanoseconds} =",
+                    "_TSS-VN VN.FLAGS @ VFS-IF-DIRTY AND 0=",
+                    "_TSS-READ-IOR 0=",
+                    "_TSS-READ-ACTUAL 0=",
+                ],
+            ),
+            (
+                '_TSS-ALL-STABLE @ IF ." '
+                'EXT4-PUBLIC-TRUNCATE-SPARSE-STABLE" ELSE ." '
+                'EXT4-PUBLIC-TRUNCATE-SPARSE-STABLE-CHECK " '
+                "_TSS-ALL-STABLE-FIRST-FAILURE @ . THEN"
+            ),
+            "_TSS-FD VFS-CLOSE? CONSTANT _TSS-CLOSE-IOR",
+            "0 _TSS-V VFS-UNMOUNT CONSTANT _TSS-UNMOUNT-IOR",
+            (
+                "_TSS-CLOSE-IOR 0= _TSS-UNMOUNT-IOR 0= AND "
+                "_TSS-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                'IF ." EXT4-PUBLIC-TRUNCATE-SPARSE-STABLE-UNMOUNTED" '
+                "THEN"
+            ),
+        ],
+        capture_media=stable,
+    )
+    _assert_emitted(
+        stable_output,
+        "EXT4-PUBLIC-TRUNCATE-SPARSE-STABLE",
+    )
+    _assert_emitted(
+        stable_output,
+        "EXT4-PUBLIC-TRUNCATE-SPARSE-STABLE-UNMOUNTED",
+    )
+    assert stable_trace == ()
+    assert stable_sha256 == recovery_sha256
+    assert stable_sha256 != media_sha256
+    assert _sha256(stable) == stable_sha256
+    assert _ext4_block_allocation_state(stable, data_blocks) == {
+        data_blocks[0]: False,
+        data_blocks[1]: False,
+    }
+
+
+def test_staged_vfs_truncate_zero_accepts_saturated_depth0_root(
+    staged_public_compact_saturated_depth0_prestate: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Public truncate drains every entry in a full resident extent root."""
+    geometry = staged_public_compact_saturated_depth0_prestate
+    path = geometry["path"]
+    input_patches = geometry["input_patches"]
+    activation_trace = geometry["activation_trace"]
+    journal0_physical = geometry["journal0_physical"]
+    guard_physical = geometry["guard_physical"]
+    superblock = geometry["superblock"]
+    inode = geometry["inode"]
+    inode_number = geometry["inode_number"]
+    inode_offset = geometry["inode_offset"]
+    inode_home = geometry["inode_home"]
+    block_size = geometry["block_size"]
+    old_size = geometry["old_size"]
+    old_blocks = geometry["old_blocks"]
+    generation = geometry["generation"]
+    root_generation = geometry["root_generation"]
+    links = geometry["links"]
+    extent_entries = geometry["extent_entries"]
+    xattr_block = geometry["xattr_block"]
+    original_blocks = geometry["original_blocks"]
+    assert isinstance(path, Path)
+    assert isinstance(input_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(journal0_physical, int)
+    assert isinstance(guard_physical, int)
+    assert isinstance(superblock, bytes)
+    assert isinstance(inode, bytes)
+    assert isinstance(inode_number, int)
+    assert isinstance(inode_offset, int)
+    assert isinstance(inode_home, int)
+    assert isinstance(block_size, int)
+    assert isinstance(old_size, int)
+    assert isinstance(old_blocks, int)
+    assert isinstance(generation, int)
+    assert isinstance(root_generation, int)
+    assert isinstance(links, int)
+    assert isinstance(extent_entries, tuple)
+    assert isinstance(xattr_block, int)
+    assert isinstance(original_blocks, dict)
+
+    data_blocks = tuple(entry[2] for entry in extent_entries)
+    original_xattr = original_blocks[xattr_block]
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", superblock, 0x158)[0] << 32
+    )
+    epoch_ms = 3_000_001_246_810
+    image = tmp_path / "staged-public-truncate-zero-saturated.img"
+    recovered = tmp_path / "staged-public-truncate-zero-saturated-recovered.img"
+    stable = tmp_path / "staged-public-truncate-zero-saturated-stable.img"
+
+    assert block_size == 1024
+    assert inode_number == 14
+    assert old_size == 6 * block_size
+    assert old_blocks == 10
+    assert links == 2
+    assert generation != root_generation
+    assert tuple(
+        (logical, length) for logical, length, _ in extent_entries
+    ) == (
+        (0, 1),
+        (2, 1),
+        (4, 1),
+        (5, 1),
+    )
+    assert len(set(data_blocks)) == 4
+    assert struct.unpack_from("<HHHHI", inode, 0x28) == (
+        0xF30A,
+        4,
+        4,
+        0,
+        root_generation,
+    )
+    assert struct.unpack_from("<I", inode, 0x68)[0] == xattr_block
+    assert isinstance(original_xattr, bytes)
+    assert len(original_xattr) == block_size
+
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        image,
+        [
+            "VARIABLE _T4-CLOCK-CALLS",
+            (
+                ": _T4-NOW ( context -- epoch-ms ior ) "
+                f"DROP 1 _T4-CLOCK-CALLS +! {epoch_ms} 0 ;"
+            ),
+            "T-ARENA CONSTANT _T4-ARENA",
+            (
+                "_T4-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _T4-MOUNT-IOR CONSTANT _T4-V"
+            ),
+            "_T4-V _EXT4-CTX CONSTANT _T4-CTX",
+            (
+                "' _T4-NOW 0 _T4-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _T4-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_T4-PROFILE", "_T4-V", 5, 0, 0
+            ),
+            (
+                "_T4-CTX _EXT4-C.J.WRITER + @ "
+                "CONSTANT _T4-WRITER"
+            ),
+            (
+                "_T4-WRITER _EXT4-JWR-ACTIVATE "
+                "CONSTANT _T4-ACTIVATE-IOR"
+            ),
+            (
+                'S" /fixture/payload.txt" '
+                "VFS-FF-READ VFS-FF-WRITE OR _T4-V VFS-OPEN? "
+                "CONSTANT _T4-OPEN-IOR CONSTANT _T4-FD"
+            ),
+            "_T4-FD FD.INODE @ D.VNODE @ CONSTANT _T4-VN",
+            "0 _T4-FD VFS-TRUNCATE CONSTANT _T4-TRUNCATE-IOR",
+            (
+                _forth_conjunction(
+                    [
+                    "_T4-MOUNT-IOR 0=",
+                    "_T4-CLOCK-IOR 0=",
+                    "_T4-PROFILE-SIZE-IOR 0=",
+                    "_T4-PROFILE-BIND-IOR 0=",
+                    "_T4-ACTIVATE-IOR 0=",
+                    "_T4-OPEN-IOR 0=",
+                    "_T4-TRUNCATE-IOR 0=",
+                    "_T4-V V.LAST-IOR @ 0=",
+                    "_T4-CLOCK-CALLS @ 1 =",
+                    "_XT-ADD-CREDIT @ 3 =",
+                    "_XT-TARGET-CREDIT @ 5 =",
+                    "_XT-TARGET-DRAINED @ -1 =",
+                    "_T4-VN VN.SIZE-LO @ 0=",
+                    "_T4-VN VN.SIZE-HI @ 0=",
+                    "_T4-VN VN.BLOCKS @ 2 =",
+                    (
+                        "_T4-CTX _EXT4-C.J.WRITER + @ "
+                        "_EXT4-JWR-IDLE-CLEAN?"
+                    ),
+                    "_T4-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                    ]
+                )
+                + " CONSTANT _T4-OP-OK"
+            ),
+            (
+                '_T4-OP-OK IF ." '
+                'EXT4-PUBLIC-TRUNCATE-SATURATED-PUBLISHED" THEN'
+            ),
+            "_T4-FD VFS-CLOSE? CONSTANT _T4-CLOSE-IOR",
+            (
+                "_T4-OP-OK _T4-CLOSE-IOR 0= AND "
+                "_T4-V V.OPEN-COUNT @ 0= AND "
+                "_T4-V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
+                "_T4-V V.FLAGS @ VFS-F-DIRTY AND 0<> AND "
+                "_T4-V V.FLAGS @ VFS-F-RO AND 0= AND "
+                "_T4-CTX _EXT4-C.RECOVERY + @ 0<> AND "
+                "_T4-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<> AND "
+                "_T4-CTX _EXT4-C.J.COMMITTED + @ 0= AND "
+                'IF ." EXT4-PUBLIC-TRUNCATE-SATURATED-CLOSED-ACTIVE" '
+                "THEN"
+            ),
+        ],
+        patches=input_patches,
+        capture_media=image,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-SATURATED-PUBLISHED")
+    _assert_emitted(
+        output,
+        "EXT4-PUBLIC-TRUNCATE-SATURATED-CLOSED-ACTIVE",
+    )
+    assert trace[: len(activation_trace)] == activation_trace
+    transaction_trace = trace[len(activation_trace) :]
+    for home in (*data_blocks, xattr_block):
+        assert ("write", home * 2, 2) not in transaction_trace
+
+    final_superblock, final_inode, final_offset = _ext4_inode_record(
+        image,
+        inode_number,
+    )
+    final_free_blocks = struct.unpack_from(
+        "<I", final_superblock, 0x0C
+    )[0] | (struct.unpack_from("<I", final_superblock, 0x158)[0] << 32)
+    assert final_offset == inode_offset
+    assert final_free_blocks == free_blocks_before + 4
+    assert struct.unpack_from("<I", final_superblock, 0x60)[0] & 0x04
+    assert struct.unpack_from("<I", final_superblock, 0x64)[0] & 0x0001_0000 == 0
+    assert struct.unpack_from("<I", final_inode, 0x04)[0] == 0
+    assert struct.unpack_from("<I", final_inode, 0x6C)[0] == 0
+    assert struct.unpack_from("<I", final_inode, 0x1C)[0] == 2
+    assert struct.unpack_from("<H", final_inode, 0x74)[0] == 0
+    assert struct.unpack_from("<H", final_inode, 0x1A)[0] == links
+    assert struct.unpack_from("<I", final_inode, 0x64)[0] == generation
+    assert struct.unpack_from("<I", final_inode, 0x68)[0] == xattr_block
+    assert struct.unpack_from("<HHHHI", final_inode, 0x28) == (
+        0xF30A,
+        0,
+        4,
+        0,
+        root_generation,
+    )
+    assert final_inode[0x34:0x64] == bytes(48)
+    expected_allocation = {block: False for block in data_blocks}
+    expected_allocation[xattr_block] = True
+    assert _ext4_block_allocation_state(
+        image,
+        (*data_blocks, xattr_block),
+    ) == expected_allocation
+    assert _read_ext4_home(
+        image,
+        xattr_block,
+        block_size=block_size,
+    ) == original_xattr
+
+    _, recovery_trace, recovery_sha256 = _staged_write_recovery_readback(
+        image,
+        recovered,
+        expected_file=b"",
+        expected_epoch_ms=epoch_ms,
+        expected_home_writes=0,
+        expected_replayed=True,
+        expected_blocks=2,
+        prefix="_T4-R",
+        marker="EXT4-PUBLIC-TRUNCATE-SATURATED-RECOVERED",
+    )
+    assert recovery_trace
+    _assert_activation_cleanup_trace(
+        recovery_trace,
+        journal0_physical=journal0_physical,
+        guard_physical=guard_physical,
+    )
+    assert recovery_trace.count(("write", 2, 2)) == 1
+    for untouched_home in (inode_home, *data_blocks, xattr_block):
+        assert ("write", untouched_home * 2, 2) not in recovery_trace
+    _assert_e2fsck_clean(recovered, jbd2_toolchain)
+
+    _, stable_trace, stable_sha256 = _staged_write_recovery_readback(
+        recovered,
+        stable,
+        expected_file=b"",
+        expected_epoch_ms=epoch_ms,
+        expected_home_writes=0,
+        expected_replayed=False,
+        expected_blocks=2,
+        prefix="_T4-S",
+        marker="EXT4-PUBLIC-TRUNCATE-SATURATED-STABLE",
+    )
+    assert stable_trace == ()
+    assert stable_sha256 == recovery_sha256
+    assert stable_sha256 != media_sha256
+    assert _sha256(stable) == stable_sha256
+    assert _ext4_block_allocation_state(
+        stable,
+        (*data_blocks, xattr_block),
+    ) == expected_allocation
+    assert _read_ext4_home(
+        stable,
+        xattr_block,
+        block_size=block_size,
+    ) == original_xattr
 
 
 def test_staged_vfs_truncate_zero_add_more_drains_linked_union(
