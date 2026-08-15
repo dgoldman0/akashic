@@ -421,7 +421,7 @@ class KdosTlsMemoryPeer:
         payload = frame["payload"]
 
         if flags & TCP_RST:
-            self._note_error("server-rst", frame)
+            self._consume_server_reset(frame)
             return
 
         if flags & TCP_SYN:
@@ -466,6 +466,10 @@ class KdosTlsMemoryPeer:
         if (payload or flags & TCP_FIN) and self._peer_frames_sent == frames_before:
             self._inject_segment(nic)
 
+    def _consume_server_reset(self, frame: dict[str, Any]) -> None:
+        """Handle a server reset; fault peers may accept an exact reset."""
+        self._note_error("server-rst", frame)
+
     def _consume_synack(self, nic: Any, frame: dict[str, Any]) -> None:
         if self.synack_seen:
             self._note_error("duplicate-server-syn", frame)
@@ -486,6 +490,10 @@ class KdosTlsMemoryPeer:
         self.synack_seen = True
         self.server_next = self._seq_add(frame["seq"], 1)
         self._inject_segment(nic)
+        self._send_initial_client_hello(nic)
+
+    def _send_initial_client_hello(self, nic: Any) -> None:
+        """Send the generated ClientHello after acknowledging the SYN-ACK."""
         self._inject_payload(nic, self._client_hello)
 
     def _consume_tls_payload(self, nic: Any, payload: bytes) -> None:
@@ -759,6 +767,178 @@ class KdosTlsMemoryPeer:
         return 0 < difference < 0x80000000
 
 
+class KdosTlsFaultPeer(KdosTlsMemoryPeer):
+    """TLS peer for accept-failure tests that expect an exact TCP reset.
+
+    The peer always completes the TCP three-way handshake.  It can then either
+    withhold its generated ClientHello or pass that wire image through a caller
+    transform before sending it.  A payload-free RST|ACK for the exact current
+    TCP sequence space is the successful terminal outcome.
+    """
+
+    _FAULT_REQUEST = b"\x00"
+
+    def __init__(
+        self,
+        root_certificate_der: bytes,
+        *,
+        client_port: int,
+        client_isn: int,
+        withhold_client_hello: bool = False,
+        client_hello_transform: Callable[[bytes], bytes] | None = None,
+        alpn_protocols: Sequence[str] = ("http/1.1",),
+        server_hostname: str = "test.example.com",
+        server_port: int = 443,
+    ) -> None:
+        if withhold_client_hello and client_hello_transform is not None:
+            raise ValueError(
+                "withhold_client_hello and client_hello_transform are exclusive"
+            )
+
+        self.withhold_client_hello = bool(withhold_client_hello)
+        self.client_hello_transform = client_hello_transform
+        self.client_hello_withheld = False
+        self.client_hello_sent = False
+        self.client_hello_transformed = client_hello_transform is not None
+        self.client_hello_wire = b""
+        self.rst_seen = False
+        self.rst_flags: int | None = None
+        self.rst_payload = b""
+        self.rst_sequence: int | None = None
+        self.rst_acknowledgement: int | None = None
+        self.rst_expected_sequence: int | None = None
+        self.rst_expected_acknowledgement: int | None = None
+        self.rst_exact = False
+
+        super().__init__(
+            root_certificate_der,
+            self._FAULT_REQUEST,
+            client_port=client_port,
+            client_isn=client_isn,
+            alpn_protocols=alpn_protocols,
+            server_hostname=server_hostname,
+            server_port=server_port,
+        )
+
+        generated = bytes(self._client_hello)
+        if self.withhold_client_hello:
+            return
+        if self.client_hello_transform is None:
+            self.client_hello_wire = generated
+            return
+        transformed = self.client_hello_transform(generated)
+        try:
+            self.client_hello_wire = bytes(transformed)
+        except (TypeError, ValueError) as error:
+            raise TypeError(
+                "client_hello_transform must return a bytes-like value"
+            ) from error
+        if not self.client_hello_wire:
+            raise ValueError(
+                "client_hello_transform returned an empty ClientHello; "
+                "use withhold_client_hello instead"
+            )
+
+    @property
+    def succeeded(self) -> bool:
+        """Whether the selected fault was followed by the exact reset."""
+        hello_action_complete = (
+            self.client_hello_withheld
+            if self.withhold_client_hello
+            else self.client_hello_sent
+        )
+        return (
+            not self.errors
+            and self.synack_seen
+            and hello_action_complete
+            and self.rst_seen
+            and self.rst_exact
+        )
+
+    @property
+    def assertion_state(self) -> dict[str, Any]:
+        """Return normal peer diagnostics plus fault/reset evidence."""
+        state = super().assertion_state
+        state.update(
+            {
+                "withhold_client_hello": self.withhold_client_hello,
+                "client_hello_withheld": self.client_hello_withheld,
+                "client_hello_sent": self.client_hello_sent,
+                "client_hello_transformed": self.client_hello_transformed,
+                "client_hello_wire": self.client_hello_wire,
+                "rst_seen": self.rst_seen,
+                "rst_flags": self.rst_flags,
+                "rst_payload": self.rst_payload,
+                "rst_sequence": self.rst_sequence,
+                "rst_acknowledgement": self.rst_acknowledgement,
+                "rst_expected_sequence": self.rst_expected_sequence,
+                "rst_expected_acknowledgement": (
+                    self.rst_expected_acknowledgement
+                ),
+                "rst_exact": self.rst_exact,
+            }
+        )
+        return state
+
+    def _send_initial_client_hello(self, nic: Any) -> None:
+        if self.withhold_client_hello:
+            self.client_hello_withheld = True
+            return
+        self.client_hello_sent = True
+        self._inject_payload(nic, self.client_hello_wire)
+
+    def _consume_server_reset(self, frame: dict[str, Any]) -> None:
+        if self.rst_seen:
+            self._note_error("duplicate-server-rst", frame)
+            return
+
+        self.rst_seen = True
+        self.rst_flags = frame["flags"]
+        self.rst_payload = bytes(frame["payload"])
+        self.rst_sequence = frame["seq"]
+        self.rst_acknowledgement = frame["ack"]
+        self.rst_expected_sequence = self.server_next
+        self.rst_expected_acknowledgement = self.client_next
+
+        expected_flags = TCP_RST | TCP_ACK
+        flags_exact = self.rst_flags == expected_flags
+        payload_exact = not self.rst_payload
+        sequence_exact = (
+            self.rst_expected_sequence is not None
+            and self.rst_sequence == self.rst_expected_sequence
+        )
+        acknowledgement_exact = (
+            self.rst_acknowledgement == self.rst_expected_acknowledgement
+        )
+        self.rst_exact = (
+            self.synack_seen
+            and flags_exact
+            and payload_exact
+            and sequence_exact
+            and acknowledgement_exact
+        )
+
+        if not self.synack_seen:
+            self._note_error("server-rst-before-synack", frame)
+        if not flags_exact:
+            self._note_error("server-rst-flags", self.rst_flags)
+        if not payload_exact:
+            self._note_error("server-rst-payload", self.rst_payload)
+        if not sequence_exact:
+            self._note_error(
+                "server-rst-sequence",
+                (self.rst_sequence, self.rst_expected_sequence),
+            )
+        if not acknowledgement_exact:
+            self._note_error(
+                "server-rst-acknowledgement",
+                (
+                    self.rst_acknowledgement,
+                    self.rst_expected_acknowledgement,
+                ),
+            )
+
+
 class KdosTlsMemoryPeerMux:
     """Dispatch server frames among explicitly activated sequential peers."""
 
@@ -822,6 +1002,7 @@ class KdosTlsMemoryPeerMux:
 
 __all__ = [
     "GUEST_IP",
+    "KdosTlsFaultPeer",
     "KdosTlsMemoryPeer",
     "KdosTlsMemoryPeerMux",
     "MEGAPAD_MAC",

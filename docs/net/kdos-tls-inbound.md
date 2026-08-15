@@ -205,7 +205,37 @@ close-notify and TCP FIN in both directions, and leaves no live socket, TLS
 context, TCB, credential pin, or network/TLS lock. The second connection uses
 the same secure listener and a fresh shared-port record.
 
+`local_testing/test_kdos_tls_inbound_failures.py` uses the same independent
+wire peer and listener for the complementary recovery gate. It first proves
+that cancellation before lower start returns the reserved port without
+claiming a child. A withheld-ClientHello connection is then claimed and
+cancelled while a foreign token blocks exactly one cleanup operation; the
+exact context and child remain live during that contention tick and retire
+after it clears. A second withheld ClientHello reaches a real 250 ms XIO
+deadline. An empty TLS handshake record then produces the exact retained
+`decode_error(50)` classification. Each claimed failure produces a
+payload-free, sequence-exact TCP RST|ACK and leaves the persistent listener as
+the only live lower resource.
+
+Finally, a fresh Python TLS 1.3 client authenticates through that same
+listener, and the returned shared NIO port receives `ping?`, sends `pong!`,
+and completes bidirectional TLS/TCP shutdown. Any already-queued terminal TCP
+acknowledgements are consumed by bounded, individually `KDOSNET-WITH`-guarded
+service operations; no global network lease survives an operation. Teardown
+then proves zero sockets, contexts, TCBs, credential pins, and network/TLS
+locks. Both capstones share only fixture/image/emulator helpers and the raw
+Python peer; the established TLS NIO implementation remains the production
+shared port.
+
 ```text
 MEGAPAD_ROOT=/path/to/megapad-secure-server-transport \
   python3 -m unittest local_testing.test_kdos_tls_inbound_vertical
+MEGAPAD_ROOT=/path/to/megapad-secure-server-transport \
+  python3 -m unittest local_testing.test_kdos_tls_inbound_failures
 ```
+
+The checked source runs on the matching migration worktrees completed in
+1,169,609,877 guest steps (29.41 s) for the two-client HCONN path and
+951,435,597 guest steps (24.67 s) for failure/recovery. Both used one core,
+128 MiB external memory, and the unchanged 1.5-billion-step/180-second
+capstone ceiling.

@@ -393,6 +393,12 @@ The Streams qualification path is intentionally split by boundary:
   TLS port, and HCONN. It proves HTTP bytes, certificate and ALPN identity,
   bidirectional close-notify/FIN, listener reuse, and exact final resource
   cleanup without TAP or host networking.
+- `test_kdos_tls_inbound_failures.py` is the companion real-wire recovery
+  capstone. It proves immediate and post-claim cancellation, cleanup blocked
+  for one operation by foreign KDOS network ownership, a real handshake
+  deadline, deterministic malformed-ClientHello rejection, exact reset and
+  lower-authority retirement, then a fresh authenticated NIO byte exchange
+  and graceful close on the same listener.
 - `streams` covers the standalone timeline, context, search, and draft UI.
 - `desktop-streams` covers real launcher-driven source create/toggle/removal,
   exact source/draft persistence, close, relaunch, and recovery through Desk.
@@ -430,6 +436,8 @@ Run the inbound secure-server capstone against the matching MegaPad worktree:
 ```text
 MEGAPAD_ROOT=/path/to/megapad-secure-server-transport \
   python3 -m unittest local_testing.test_kdos_tls_inbound_vertical
+MEGAPAD_ROOT=/path/to/megapad-secure-server-transport \
+  python3 -m unittest local_testing.test_kdos_tls_inbound_failures
 ```
 
 The no-network construction/configuration gate is:

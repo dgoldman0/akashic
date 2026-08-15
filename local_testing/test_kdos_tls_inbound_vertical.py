@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import base64
 import sys
 import tempfile
 import time
@@ -19,14 +18,6 @@ FIRST_DONE_MARKER = "TLS INBOUND FIRST DONE"
 PASS_MARKER = "TLS INBOUND VERTICAL PASS"
 FAIL_MARKER = "TLS INBOUND VERTICAL FAIL"
 
-# This qualification owns a new bounded budget; it does not override any
-# checked-in MegaPad or Akashic smoke ceiling.  Runs remain single-core and
-# advance in short chunks so a guest failure is reported promptly.
-RUN_CHUNK_STEPS = 50_000_000
-TOTAL_MAX_STEPS = 1_500_000_000
-TOTAL_WALL_TIMEOUT_S = 180.0
-EXT_MEM_SIZE = 128 << 20
-
 REQUEST = b"GET /probe HTTP/1.1\r\nHost: test.example.com\r\n\r\n"
 RESPONSE_BODY = b"Akashic secure transport\n"
 EXPECTED_RESPONSE = (
@@ -41,34 +32,19 @@ EXPECTED_RESPONSE = (
 sys.path.insert(0, str(LOCAL_TESTING))
 
 import akashic_tui as harness  # noqa: E402
+from kdos_tls_vertical_harness import (  # noqa: E402
+    EXT_MEM_SIZE,
+    TOTAL_WALL_TIMEOUT_S,
+    diagnostics as _diagnostics,
+    fixture as _fixture,
+    forth_bytes as _forth_bytes,
+    guest_failures as _guest_failures,
+    run_until as _run_until,
+)
 from kdos_tls_memory_peer import (  # noqa: E402
     KdosTlsMemoryPeer,
     KdosTlsMemoryPeerMux,
 )
-
-
-class _VerticalFailure(RuntimeError):
-    """An emulator lifecycle failure that needs full guest diagnostics."""
-
-
-def _fixture(name: str) -> bytes:
-    path = (
-        harness.MEGAPAD_ROOT
-        / "tests"
-        / "fixtures"
-        / "tls"
-        / f"{name}.der.b64"
-    )
-    encoded = b"".join(path.read_bytes().split())
-    return base64.b64decode(encoded, validate=True)
-
-
-def _forth_bytes(name: str, data: bytes) -> list[str]:
-    lines = [f"CREATE {name}"]
-    for offset in range(0, len(data), 16):
-        chunk = data[offset : offset + 16]
-        lines.append(" ".join(f"{byte} C," for byte in chunk))
-    return lines
 
 
 def _autoexec(leaf: bytes, intermediate: bytes) -> str:
@@ -115,85 +91,6 @@ def _profile(leaf: bytes, intermediate: bytes) -> object:
         requires_tap=False,
         include_large_sample=False,
     )
-
-
-def _guest_failures(profile: object, machine: object) -> tuple[str, ...]:
-    raw = machine.raw_text()
-    return tuple(
-        dict.fromkeys(
-            (
-                *harness._has_forth_error(raw),  # noqa: SLF001
-                *harness._matched_failure_markers(  # noqa: SLF001
-                    profile,
-                    raw,
-                    machine.screen_text(),
-                ),
-            )
-        )
-    )
-
-
-def _diagnostics(machine: object, *peers: object) -> str:
-    peer_lines = []
-    for index, peer in enumerate(peers, start=1):
-        peer_lines.append(
-            f"peer {index}: state={peer.assertion_state!r}; "
-            f"errors={peer.errors!r}"
-        )
-    return "\n".join(
-        (
-            *peer_lines,
-            "screen:",
-            machine.screen_text(),
-            "recent raw output:",
-            machine.raw_text()[-8000:],
-        )
-    )
-
-
-def _run_until(
-    machine: object,
-    profile: object,
-    marker: str,
-    *,
-    deadline: float,
-    steps: list[int],
-) -> None:
-    while True:
-        raw = machine.raw_text()
-        failures = _guest_failures(profile, machine)
-        if failures:
-            raise _VerticalFailure(
-                f"guest failed before {marker!r}: {failures!r}"
-            )
-        if marker in raw:
-            return
-        if steps[0] >= TOTAL_MAX_STEPS:
-            raise _VerticalFailure(
-                f"guest did not reach {marker!r} within "
-                f"{TOTAL_MAX_STEPS:,} steps"
-            )
-        remaining_wall = deadline - time.monotonic()
-        if remaining_wall <= 0:
-            raise _VerticalFailure(
-                f"guest did not reach {marker!r} within "
-                f"{TOTAL_WALL_TIMEOUT_S:.0f} seconds"
-            )
-        report = machine.run(
-            max_steps=min(
-                RUN_CHUNK_STEPS,
-                TOTAL_MAX_STEPS - steps[0],
-            ),
-            wall_timeout_s=min(5.0, remaining_wall),
-            until_text=marker,
-            text_scope="raw",
-            advance_idle=True,
-        )
-        steps[0] += report.steps
-        if report.reason in ("halted", "stalled"):
-            raise _VerticalFailure(
-                f"guest stopped ({report.reason}) before {marker!r}"
-            )
 
 
 class TestKdosTlsInboundVertical(unittest.TestCase):
