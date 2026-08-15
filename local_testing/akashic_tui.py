@@ -4580,80 +4580,79 @@ _ko-run
     "tls-inbound": Profile(
         roots=("net/transports/kdos-tls-inbound.f",),
         resources=(),
-        autoexec=r"""\ autoexec.f - XIO-driven inbound KDOS TLS tests
+        autoexec=r"""\ autoexec.f - persistent XIO-driven inbound KDOS TLS owner tests
 ENTER-USERLAND
 ." [akashic] loading inbound KDOS TLS transport" CR
 
 \ Bind direct production calls to deterministic lower fixtures before the
-\ adapter is compiled. networking.f has already supplied constants/layouts.
-VARIABLE _ki-now
-: MS@  ( -- ms ) _ki-now @ ;
+\ owner and shared port are compiled. networking.f supplies the lower ABI.
+0 CONSTANT _KI-SC-EMPTY
+1 CONSTANT _KI-SC-SUCCESS
+2 CONSTANT _KI-SC-HOLD
+3 CONSTANT _KI-SC-EARLY-ALERT
+4 CONSTANT _KI-SC-MALFORMED-TERMINAL
+5 CONSTANT _KI-SC-CLAIM-BUSY
+6 CONSTANT _KI-SC-BAD-PUBLISH
 
+VARIABLE _ki-now
 VARIABLE _ki-scenario
 VARIABLE _ki-polls
-VARIABLE _ki-poll-throw
 VARIABLE _ki-claim-hits
 VARIABLE _ki-ch-hits
-VARIABLE _ki-ph-hits
+VARIABLE _ki-prepare-hello-hits
 VARIABLE _ki-flight-hits
-VARIABLE _ki-cf-hits
-VARIABLE _ki-disp-hits
+VARIABLE _ki-client-flight-hits
+VARIABLE _ki-disposition-hits
 VARIABLE _ki-terminal-close-hits
+VARIABLE _ki-publish-hits
+VARIABLE _ki-next-sd
 VARIABLE _ki-abort-busy
 VARIABLE _ki-abort-hits
+VARIABLE _ki-sock-close-hits
 VARIABLE _ki-sock-abort-busy
 VARIABLE _ki-sock-abort-hits
-VARIABLE _ki-close-would
-VARIABLE _ki-close-error
-VARIABLE _ki-close-throw
-VARIABLE _ki-close-hits
-VARIABLE _ki-send-throw
-VARIABLE _ki-recv-throw
-VARIABLE _ki-sock-abort-throw
-VARIABLE _ki-fixture-throw
-VARIABLE _ki-recv-result
-VARIABLE _ki-io-status
-VARIABLE _ki-ready
+VARIABLE _ki-send-hits
+
+: MS@  ( -- ms ) _ki-now @ ;
 
 : TCP-POLL  ( -- )
-    _ki-poll-throw @ ?DUP IF 0 _ki-poll-throw ! THROW THEN
     1 _ki-polls +! ;
 
 : TLS-SERVER-ACCEPT-CLAIM  ( sd h1 gen -- ctx ctx-gen ior )
     2DROP DROP 1 _ki-claim-hits +!
-    _ki-scenario @ 0= IF 0 0 TLS-E-WOULD-BLOCK EXIT THEN
-    _ki-scenario @ 5 = IF 0 0 TLS-E-BUSY EXIT THEN
+    _ki-scenario @ _KI-SC-EMPTY = IF
+        0 0 TLS-E-WOULD-BLOCK EXIT
+    THEN
+    _ki-scenario @ _KI-SC-CLAIM-BUSY = IF
+        0 0 TLS-E-BUSY EXIT
+    THEN
     4096 7 0 ;
 
 : TLS-SERVER-CLIENT-HELLO-STEP  ( ctx gen -- progress alert ior )
     2DROP 1 _ki-ch-hits +!
-    _ki-scenario @ 3 = IF
+    _ki-scenario @ _KI-SC-EARLY-ALERT = IF
         TLS-SERVER-CLIENT-HELLO-NONE 47 0 EXIT
     THEN
-    _ki-scenario @ 1 = _ki-ch-hits @ 1 = AND IF
+    _ki-scenario @ _KI-SC-HOLD = IF
+        TLS-SERVER-CLIENT-HELLO-NONE 0 TLS-E-WOULD-BLOCK EXIT
+    THEN
+    _ki-scenario @ _KI-SC-SUCCESS =
+    _ki-ch-hits @ 1 = AND IF
         TLS-SERVER-CLIENT-HELLO-NONE 0 TLS-E-WOULD-BLOCK EXIT
     THEN
     TLS-SERVER-CLIENT-HELLO-COMPLETE 0 0 ;
 
 : TLS-SERVER-PREPARE-HELLO-EXACT  ( ctx gen -- alert ior )
-    2DROP 1 _ki-ph-hits +!
-    _ki-scenario @ 1 = _ki-ph-hits @ 1 = AND IF
-        0 TLS-E-BUSY EXIT
-    THEN
-    0 0 ;
+    2DROP 1 _ki-prepare-hello-hits +! 0 0 ;
 
 : TLS-SERVER-PREPARE-FLIGHT-EXACT  ( ctx gen -- ior )
     2DROP 0 ;
 
 : TLS-SERVER-FLIGHT-STEP  ( ctx gen -- progress ior )
     2DROP 1 _ki-flight-hits +!
-    _ki-scenario @ 1 = IF
-        _ki-flight-hits @ 1 = IF
-            TLS-SERVER-EMIT-NONE TLS-E-WOULD-BLOCK EXIT
-        THEN
-        _ki-flight-hits @ 2 = IF
-            TLS-SERVER-EMIT-RECORD 0 EXIT
-        THEN
+    _ki-scenario @ _KI-SC-SUCCESS =
+    _ki-flight-hits @ 1 = AND IF
+        TLS-SERVER-EMIT-RECORD 0 EXIT
     THEN
     TLS-SERVER-EMIT-COMPLETE 0 ;
 
@@ -4661,87 +4660,77 @@ VARIABLE _ki-ready
     2DROP DROP 0 ;
 
 : TLS-SERVER-CLIENT-FLIGHT-STEP  ( ctx gen -- progress alert ior )
-    2DROP 1 _ki-cf-hits +!
-    _ki-scenario @ 4 = IF
+    2DROP 1 _ki-client-flight-hits +!
+    _ki-scenario @ _KI-SC-MALFORMED-TERMINAL = IF
         TLS-SERVER-INGRESS-SEND-FATAL 40 -4999 EXIT
     THEN
-    _ki-scenario @ 1 = IF
-        _ki-cf-hits @ 1 = IF
-            TLS-SERVER-INGRESS-NONE 0 TLS-E-WOULD-BLOCK EXIT
-        THEN
-        _ki-cf-hits @ 2 = IF
-            TLS-SERVER-INGRESS-RECORD 0 0 EXIT
-        THEN
+    _ki-scenario @ _KI-SC-SUCCESS =
+    _ki-client-flight-hits @ 1 = AND IF
+        TLS-SERVER-INGRESS-RECORD 0 0 EXIT
     THEN
     TLS-SERVER-INGRESS-FINISHED 0 0 ;
 
 : TLS-SERVER-INGRESS-DISPOSITION-STEP  ( ctx gen -- progress ior )
-    2DROP 1 _ki-disp-hits +!
-    _ki-disp-hits @ 1 = IF
+    2DROP 1 _ki-disposition-hits +!
+    _ki-disposition-hits @ 1 = IF
         TLS-SERVER-DISPOSITION-NONE TLS-E-WOULD-BLOCK EXIT
     THEN
     TLS-SERVER-DISPOSITION-COMPLETE 0 ;
 
 : TLS-SERVER-CLOSE-EXACT-TRY  ( ctx gen -- retired? ior )
     2DROP 1 _ki-terminal-close-hits +!
-    _ki-terminal-close-hits @ 1 = IF 0 TLS-E-WOULD-BLOCK EXIT THEN
+    _ki-terminal-close-hits @ 1 = IF
+        0 TLS-E-WOULD-BLOCK EXIT
+    THEN
     -1 0 ;
 
 : TLS-SERVER-SOCKET-PUBLISH  ( ctx gen -- sd ior )
-    2DROP _ki-scenario @ 6 = IF 55 -4880 EXIT THEN 55 0 ;
+    2DROP 1 _ki-publish-hits +!
+    _ki-next-sd @ 1+ DUP _ki-next-sd !
+    _ki-scenario @ _KI-SC-BAD-PUBLISH = IF -4880 ELSE 0 THEN ;
 
-: TLS-SERVER-ABORT-EXACT  ( ctx gen -- retired? ior )
+: TLS-ABORT-EXACT  ( ctx gen -- retired? ior )
     2DROP 1 _ki-abort-hits +!
     _ki-abort-busy @ IF
         -1 _ki-abort-busy +! 0 TLS-E-BUSY EXIT
     THEN
     -1 0 ;
 
-: SEND  ( sd buffer length -- actual )
-    _ki-send-throw @ ?DUP IF
-        _ki-fixture-throw ! 0 _ki-send-throw ! 2DROP DROP
-        _ki-fixture-throw @ THROW
-    THEN
-    >R 2DROP R> ;
+: SOCK-TLS-CLOSE-EXACT-TRY  ( sd -- ior )
+    DROP 1 _ki-sock-close-hits +! 0 ;
 
-: RECV  ( sd buffer capacity -- actual )
-    _ki-recv-throw @ ?DUP IF
-        _ki-fixture-throw ! 0 _ki-recv-throw ! 2DROP DROP
-        _ki-fixture-throw @ THROW
-    THEN
-    2DROP DROP _ki-recv-result @ ;
-
-: SOCK-TLS-IO-STATUS  ( sd -- ior ) DROP _ki-io-status @ ;
-: SOCKET-READY?  ( sd -- flag ) DROP _ki-ready @ ;
-
-: CLOSE-TRY  ( sd -- ior )
-    DROP 1 _ki-close-hits +!
-    _ki-close-throw @ ?DUP IF 0 _ki-close-throw ! THROW THEN
-    _ki-close-would @ IF
-        -1 _ki-close-would +! TLS-E-WOULD-BLOCK EXIT
-    THEN
-    _ki-close-error @ ?DUP IF 0 _ki-close-error ! EXIT THEN
-    0 ;
-
-: SOCK-ABORT  ( sd -- status ior )
+: SOCK-TLS-ABORT-EXACT-TRY  ( sd -- abort-status ior )
     DROP 1 _ki-sock-abort-hits +!
-    _ki-sock-abort-throw @ ?DUP IF
-        0 _ki-sock-abort-throw ! THROW
-    THEN
     _ki-sock-abort-busy @ IF
         -1 _ki-sock-abort-busy +!
         TLS-ABORT-S-BUSY TLS-E-BUSY EXIT
     THEN
     TLS-ABORT-S-LOCAL 0 ;
 
+: SEND  ( sd buffer length -- actual )
+    1 _ki-send-hits +! NIP NIP ;
+
+: RECV  ( sd buffer capacity -- actual )
+    2DROP DROP 0 ;
+
+: SOCK-TLS-IO-STATUS  ( sd -- ior ) DROP 0 ;
+: SOCKET-READY?  ( sd -- flag ) DROP 0 ;
+
 REQUIRE net/transports/kdos-tls-inbound.f
 
 VARIABLE _ki-fails
 VARIABLE _ki-checks
 VARIABLE _ki-depth
+VARIABLE _ki-step-port
+VARIABLE _ki-step-status
+VARIABLE _ki-nio-a
+VARIABLE _ki-nio-b
+VARIABLE _ki-port-a-sd
+
 : _ki-assert  ( flag -- )
     1 _ki-checks +!
     0= IF 1 _ki-fails +! ." ASSERT " _ki-checks @ . CR THEN ;
+
 : _ki-stack  ( -- )
     DEPTH DUP _ki-depth @ <> IF
         ." STACK " _ki-depth @ . ." -> " DUP . CR .S CR
@@ -4749,378 +4738,309 @@ VARIABLE _ki-depth
     _ki-depth @ = _ki-assert ;
 
 CREATE _ki-service XIO-SERVICE-SIZE ALLOT
-CREATE _ki-op XIO-OP-SIZE ALLOT
-CREATE _ki-adapter KDOSTLSA-SIZE ALLOT
-CREATE _ki-result KDOSTLSP-SIZE ALLOT
+CREATE _ki-owner KDOSTLSL-SIZE ALLOT
+CREATE _ki-port-a KDOSTLSP-SIZE ALLOT
+CREATE _ki-port-b KDOSTLSP-SIZE ALLOT
+CREATE _ki-uninitialized-port KDOSTLSP-SIZE ALLOT
 CREATE _ki-foreign 8 ALLOT
 CREATE _ki-buffer 32 ALLOT
-VARIABLE _ki-request-gen
-VARIABLE _ki-port
-VARIABLE _ki-timeout
 
 : _ki-counts-clear  ( -- )
-    0 _ki-polls ! 0 _ki-poll-throw !
-    0 _ki-claim-hits ! 0 _ki-ch-hits !
-    0 _ki-ph-hits ! 0 _ki-flight-hits ! 0 _ki-cf-hits !
-    0 _ki-disp-hits ! 0 _ki-terminal-close-hits !
-    0 _ki-abort-busy ! 0 _ki-abort-hits !
-    0 _ki-sock-abort-busy ! 0 _ki-sock-abort-hits !
-    0 _ki-close-would ! 0 _ki-close-error ! 0 _ki-close-throw !
-    0 _ki-close-hits ! 0 _ki-send-throw ! 0 _ki-recv-throw !
-    0 _ki-sock-abort-throw ! 0 _ki-fixture-throw !
-    0 _ki-recv-result ! 0 _ki-io-status ! 0 _ki-ready ! ;
+    0 _ki-polls !
+    0 _ki-claim-hits !
+    0 _ki-ch-hits !
+    0 _ki-prepare-hello-hits !
+    0 _ki-flight-hits !
+    0 _ki-client-flight-hits !
+    0 _ki-disposition-hits !
+    0 _ki-terminal-close-hits !
+    0 _ki-publish-hits !
+    0 _ki-abort-busy !
+    0 _ki-abort-hits !
+    0 _ki-sock-close-hits !
+    0 _ki-sock-abort-busy !
+    0 _ki-sock-abort-hits !
+    0 _ki-send-hits ! ;
 
-: _ki-configure  ( timeout -- )
-    _ki-timeout ! _ki-counts-clear
-    _ki-result KDOSTLSP-INIT KDOSTLSA-S-OK = _ki-assert
-    _ki-adapter KDOSTLSA-INIT KDOSTLSA-S-OK = _ki-assert
-    11 2 3 _ki-timeout @ 0 _ki-result _ki-adapter KDOSTLSA-CONFIGURE
-        KDOSTLSA-S-OK = _ki-assert
-    _ki-op XIO-OP-INIT ;
+: _ki-prepare  ( scenario -- )
+    _ki-counts-clear _ki-scenario ! ;
 
-: _ki-submit  ( -- )
-    1 _ki-request-gen +!
-    _ki-service 101 7 _ki-request-gen @ _ki-op _ki-adapter
-        KDOSTLSA-SUBMIT XIO-S-OK = _ki-assert ;
+: _ki-op  ( -- operation )
+    _ki-owner _KDOSTLSL.XIO-OP ;
 
-: _ki-drive  ( max-ticks -- )
+: _ki-accept  ( shared-port -- )
+    _ki-owner KDOSTLSL-ACCEPT KDOSTLSL-S-OK = _ki-assert ;
+
+: _ki-step!  ( -- )
+    _ki-owner KDOSTLSL-STEP
+    _ki-step-status ! _ki-step-port ! ;
+
+: _ki-pending-step  ( -- )
+    _ki-step!
+    _ki-step-port @ 0= _ki-assert
+    _ki-step-status @ KDOSTLSL-S-PENDING = _ki-assert ;
+
+: _ki-drive  ( max-steps -- )
+    KDOSTLSL-S-PENDING _ki-step-status !
     0 DO
-        _ki-service XIO-ACTIVE? 0= IF UNLOOP EXIT THEN
-        _ki-service XIO-TICK
+        _ki-step!
+        _ki-step-status @ KDOSTLSL-S-PENDING <> IF UNLOOP EXIT THEN
     LOOP ;
 
-: _ki-reset-op  ( -- )
-    _ki-service _ki-op XIO-RESET XIO-S-OK = _ki-assert ;
+: _ki-drive-to-retained  ( max-steps -- )
+    0 DO
+        _ki-op XIOO.STATE @ XIO-STATE-SUCCEEDED = IF UNLOOP EXIT THEN
+        _ki-pending-step
+    LOOP
+    _ki-op XIOO.STATE @ XIO-STATE-SUCCEEDED = _ki-assert ;
 
-: _ki-test-config  ( -- )
-    _ki-result KDOSTLSP-INIT KDOSTLSA-S-OK = _ki-assert
-    _ki-adapter KDOSTLSA-INIT KDOSTLSA-S-OK = _ki-assert
-    11 2 3 25 0 _ki-result _ki-adapter KDOSTLSA-CONFIGURE
-        KDOSTLSA-S-OK = _ki-assert
-    _ki-adapter KDOSTLSA.LISTENER-SD @ 11 = _ki-assert
-    _ki-adapter KDOSTLSA.LISTENER-H1 @ 2 = _ki-assert
-    _ki-adapter KDOSTLSA.LISTENER-GEN @ 3 = _ki-assert
-    _ki-adapter KDOSTLSA.TIMEOUT-MS @ 25 = _ki-assert
-    _ki-adapter KDOSTLSA.EARLY-BUDGET @ 0= _ki-assert
-    11 2 3 0 0 _ki-result _ki-adapter KDOSTLSA-CONFIGURE
-        KDOSTLSA-S-INVALID = _ki-assert ;
-
-: _ki-test-empty  ( -- )
-    0 _ki-scenario ! 20 _ki-configure _ki-submit
-    _ki-service XIO-TICK
-    _ki-polls @ 1 = _ki-assert
-    _ki-service XIO-TICK
-    _ki-op XIO-CLEANUP-PENDING? _ki-assert
-    _ki-service XIO-TICK
-    _ki-op XIOO.STATE @ XIO-STATE-FAILED = _ki-assert
-    _ki-op XIOO.ERROR @ TLS-E-WOULD-BLOCK = _ki-assert
-    _ki-op KDOSTLSA-RETRY? _ki-assert
-    _ki-result KDOSNET-OWNER? 0= _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-RESET = _ki-assert
-    _ki-reset-op
-
-    5 _ki-scenario ! 20 _ki-configure _ki-submit 4 _ki-drive
-    _ki-op XIOO.STATE @ XIO-STATE-FAILED = _ki-assert
-    _ki-op XIOO.ERROR @ TLS-E-BUSY = _ki-assert
-    _ki-op KDOSTLSA-RETRY? _ki-assert
-    _ki-result KDOSNET-OWNER? 0= _ki-assert
-    _ki-reset-op ;
-
-: _ki-test-contention  ( -- )
-    2 _ki-scenario ! 20 _ki-configure
-    _ki-foreign KDOSNET-CLAIM KDOSNET-S-OK = _ki-assert
-    _ki-submit 4 _ki-drive
-    _ki-op XIOO.STATE @ XIO-STATE-FAILED = _ki-assert
-    _ki-op XIOO.ERROR @ KDOSTLSA-E-CONTENTION = _ki-assert
-    _ki-op KDOSTLSA-RETRY? _ki-assert
-    _ki-foreign KDOSNET-RELEASE KDOSNET-S-OK = _ki-assert
-    _ki-reset-op ;
-
-: _ki-test-pre-take-port-gate  ( -- )
-    \ RESERVED port calls cannot bypass XIO scheduling or mutate provider
-    \ authority, even though io-port records their contained exceptions.
-    2 _ki-scenario ! 20 _ki-configure _ki-submit
-    _ki-service XIO-TICK
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-RESERVED = _ki-assert
-    _ki-buffer 8 _ki-result KDOSTLSP.PORT NIO-SEND
-    NIO-S-FAILED = _ki-assert 0= _ki-assert
-    _ki-polls @ 1 = _ki-assert
-    _ki-result KDOSTLSP.PORT NIO-POLL
-    _ki-polls @ 1 = _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-RESERVED = _ki-assert
-    _ki-result KDOSTLSP.PORT NIO-CANCEL NIO-S-FAILED = _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-RESERVED = _ki-assert
-    _ki-result KDOSNET-OWNER? _ki-assert
-    _ki-service _ki-op XIO-CANCEL XIO-S-PENDING = _ki-assert
-    4 _ki-drive
-    _ki-op XIOO.STATE @ XIO-STATE-CANCELLED = _ki-assert
-    _ki-result KDOSNET-OWNER? 0= _ki-assert
-    _ki-reset-op
-
-    \ A PUBLISHED port is equally inert. TAKE reinstalls NIO bookkeeping only
-    \ after the retained generations and exact socket authority are proven.
-    2 _ki-scenario ! 20 _ki-configure _ki-submit 24 _ki-drive
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-PUBLISHED = _ki-assert
-    _ki-result KDOSTLSP.PORT NIO-CANCEL NIO-S-FAILED = _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-PUBLISHED = _ki-assert
-    _ki-result KDOSNET-OWNER? _ki-assert
-    _ki-service 101 7 _ki-request-gen @ _ki-op _ki-adapter KDOSTLSA-TAKE
-    KDOSTLSA-S-OK = _ki-assert _ki-port !
-    _ki-port @ NIO.OPEN-STATE @ NIO-OPEN-STATE-OPEN = _ki-assert
-    _ki-service _ki-op XIO-RESET XIO-S-PENDING = _ki-assert
-    _ki-service XIO-TICK
-    _ki-port @ NIO-CANCEL NIO-S-CANCELLED = _ki-assert
-    _ki-result KDOSTLSP-RESET KDOSTLSA-S-OK = _ki-assert ;
-
-: _ki-test-success-port  ( -- )
-    1 _ki-scenario ! 20 _ki-configure _ki-submit
-    32 _ki-drive
-    _ki-op XIOO.STATE @ XIO-STATE-SUCCEEDED = _ki-assert
-    _ki-op XIOO.RESULT @ _ki-result = _ki-assert
-    _ki-adapter KDOSTLSA.PHASE @ KDOSTLSA-PHASE-PUBLISHED = _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-PUBLISHED = _ki-assert
-    _ki-result KDOSNET-OWNER? _ki-assert
-    _ki-polls @ 4 >= _ki-assert
-    _ki-service 101 8 _ki-request-gen @ _ki-op _ki-adapter KDOSTLSA-TAKE
-    KDOSTLSA-S-NOT-OWNER = _ki-assert 0= _ki-assert
-    _ki-service 101 7 _ki-request-gen @ _ki-op _ki-adapter KDOSTLSA-TAKE
-    KDOSTLSA-S-OK = _ki-assert DUP _ki-port ! 0<> _ki-assert
-    _ki-port @ NIO.OPEN-STATE @ NIO-OPEN-STATE-OPEN = _ki-assert
-    _ki-service _ki-op XIO-RESET XIO-S-PENDING = _ki-assert
-    _ki-service XIO-TICK
+: _ki-assert-owner-idle  ( -- )
+    _ki-owner _KDOSTLSL.PHASE @ _KDOSTLSL-PHASE-IDLE = _ki-assert
+    _ki-owner _KDOSTLSL.CTX @ 0= _ki-assert
+    _ki-owner _KDOSTLSL.CTX-GEN @ 0= _ki-assert
+    _ki-owner _KDOSTLSL.BORROWED-PORT @ 0= _ki-assert
+    _ki-owner _KDOSTLSL.TERMINAL @ 0= _ki-assert
+    _ki-owner _KDOSTLSL.STAGING-SOCKET @ 0= _ki-assert
     _ki-op XIOO.STATE @ XIO-STATE-RESET = _ki-assert
-    _ki-result KDOSNET-OWNER? _ki-assert
+    _ki-service XIOS.ACTIVE @ 0= _ki-assert
+    _ki-service XIOS.RETAINED @ 0= _ki-assert
+    KDOSNET-OWNER@ 0= _ki-assert ;
 
-    _ki-buffer 7 _ki-port @ NIO-SEND
-    NIO-S-OK = _ki-assert 7 = _ki-assert
-    0 _ki-recv-result ! 0 _ki-io-status ! 0 _ki-ready !
-    _ki-buffer 16 _ki-port @ NIO-RECV
-    NIO-S-OK = _ki-assert 0= _ki-assert
-    -1 _ki-ready !
-    _ki-buffer 16 _ki-port @ NIO-RECV
-    NIO-S-EOF = _ki-assert 0= _ki-assert
+: _ki-assert-port-reset  ( shared-port -- )
+    DUP KDOSTLSP.STATE @ KDOSTLSP-STATE-RESET = _ki-assert
+    DUP KDOSTLSP.SOCKET-SD @ 0= _ki-assert
+    DROP ;
 
-    1 _ki-close-would !
-    _ki-port @ NIO-CLOSE-START NIO-S-PENDING = _ki-assert
-    _ki-port @ NIO-CLOSE-POLL NIO-S-PENDING = _ki-assert
-    _ki-port @ NIO-CLOSE-POLL NIO-S-OK = _ki-assert
-    _ki-result KDOSNET-OWNER? 0= _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-CLOSED = _ki-assert
-    _ki-result KDOSTLSP-RESET KDOSTLSA-S-OK = _ki-assert ;
+: _ki-test-init-geometry  ( -- )
+    _ki-service XIO-SERVICE-INIT XIO-S-OK = _ki-assert
+    _ki-owner KDOSTLSL-SIZE 0 FILL
+    _ki-service 11 2 3 0 0 _ki-owner KDOSTLSL-INIT
+        KDOSTLSL-S-INVALID = _ki-assert
+    _ki-service 11 2 3 5 0 _ki-owner KDOSTLSL-INIT
+        KDOSTLSL-S-OK = _ki-assert
 
-: _ki-test-discard  ( -- )
-    2 _ki-scenario ! 20 _ki-configure _ki-submit 24 _ki-drive
-    _ki-op XIOO.STATE @ XIO-STATE-SUCCEEDED = _ki-assert
+    _ki-owner _KDOSTLSL.XIO-SERVICE @ _ki-service = _ki-assert
+    _ki-owner _KDOSTLSL.LISTENER-SD @ 11 = _ki-assert
+    _ki-owner _KDOSTLSL.LISTENER-H1 @ 2 = _ki-assert
+    _ki-owner _KDOSTLSL.LISTENER-GEN @ 3 = _ki-assert
+    _ki-owner _KDOSTLSL.TIMEOUT-MS @ 5 = _ki-assert
+    _ki-owner _KDOSTLSL.EARLY-BUDGET @ 0= _ki-assert
+    _ki-owner _KDOSTLSL.OWNER-GEN @ 1 = _ki-assert
+    _ki-owner _KDOSTLSL.REQUEST-GEN @ 0= _ki-assert
+    KDOSTLSL-SIZE 120 XIO-OP-SIZE + = _ki-assert
+
+    _ki-owner _ki-owner KDOSTLSL-ACCEPT
+        KDOSTLSL-S-INVALID = _ki-assert
+    _ki-service _ki-owner KDOSTLSL-ACCEPT
+        KDOSTLSL-S-INVALID = _ki-assert
+    _ki-uninitialized-port KDOSTLSP-SIZE 0 FILL
+    _ki-uninitialized-port _ki-owner KDOSTLSL-ACCEPT
+        KDOSTLSL-S-INVALID = _ki-assert
+
+    _ki-port-a KDOSTLSP-INIT KDOSTLSP-S-OK = _ki-assert
+    _ki-port-b KDOSTLSP-INIT KDOSTLSP-S-OK = _ki-assert
+    _ki-assert-owner-idle ;
+
+: _ki-test-empty-reuse-retained-cancel  ( -- )
+    _KI-SC-EMPTY _ki-prepare
+    _ki-port-a _ki-accept
+    _ki-owner _KDOSTLSL.REQUEST-GEN @ 1 = _ki-assert
+    _ki-owner _KDOSTLSL-XIO-EXACT? _ki-assert
+    _ki-port-a KDOSTLSP.STATE @
+        KDOSTLSP-STATE-RESERVED = _ki-assert
+    12 _ki-drive
+    _ki-step-port @ 0= _ki-assert
+    _ki-step-status @ KDOSTLSL-S-RETRY = _ki-assert
+    _ki-claim-hits @ 1 = _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-assert-owner-idle
+
+    \ Reuse the exact port after RETRY, stop at retained success, then make
+    \ XIO discard it cooperatively rather than exposing the staged socket.
+    _KI-SC-SUCCESS _ki-prepare
+    _ki-port-a _ki-accept
+    _ki-owner _KDOSTLSL.REQUEST-GEN @ 2 = _ki-assert
+    40 _ki-drive-to-retained
+    _ki-owner _KDOSTLSL-XIO-EXACT? _ki-assert
+    _ki-op XIOO.RESULT @ _ki-port-a = _ki-assert
+    _ki-owner _KDOSTLSL.PHASE @
+        _KDOSTLSL-PHASE-PUBLISHED = _ki-assert
+    _ki-port-a KDOSTLSP.STATE @
+        KDOSTLSP-STATE-PUBLISHED = _ki-assert
     1 _ki-sock-abort-busy !
-    _ki-service _ki-op XIO-RESET XIO-S-PENDING = _ki-assert
-    _ki-service XIO-TICK
-    _ki-result KDOSNET-OWNER? _ki-assert
-    _ki-service XIO-TICK
-    _ki-op XIOO.STATE @ XIO-STATE-RESET = _ki-assert
-    _ki-result KDOSNET-OWNER? 0= _ki-assert
-    _ki-result KDOSTLSP.SOCKET-SD @ 0= _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-RESET = _ki-assert
-    _ki-sock-abort-hits @ 2 = _ki-assert ;
+    _ki-owner KDOSTLSL-CANCEL
+        KDOSTLSL-S-PENDING = _ki-assert
+    _ki-op XIO-CLEANUP-PENDING? _ki-assert
+    20 _ki-drive
+    _ki-step-status @ KDOSTLSL-S-CANCELLED = _ki-assert
+    _ki-sock-abort-hits @ 2 = _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-assert-owner-idle ;
+
+: _ki-test-preclaim-contention  ( -- )
+    _KI-SC-SUCCESS _ki-prepare
+    _ki-foreign KDOSNET-CLAIM KDOSNET-S-OK = _ki-assert
+    _ki-port-a _ki-accept
+    12 _ki-drive
+    _ki-step-port @ 0= _ki-assert
+    _ki-step-status @ KDOSTLSL-S-RETRY = _ki-assert
+    _ki-claim-hits @ 0= _ki-assert
+    _ki-foreign KDOSNET-OWNER? _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-foreign KDOSNET-RELEASE KDOSNET-S-OK = _ki-assert
+    _ki-assert-owner-idle ;
+
+: _ki-test-cancel-retrying-cleanup  ( -- )
+    0 _ki-now !
+    _KI-SC-HOLD _ki-prepare
+    _ki-port-a _ki-accept
+    _ki-pending-step
+    _ki-op XIOO.DEADLINE-MS @ 0= _ki-assert
+    _ki-pending-step
+    _ki-owner _KDOSTLSL.CTX @ 4096 = _ki-assert
+    _ki-owner _KDOSTLSL.CTX-GEN @ 7 = _ki-assert
+    _ki-op XIOO.DEADLINE-MS @ 5 = _ki-assert
+    _ki-owner _KDOSTLSL-XIO-EXACT? _ki-assert
+    1 _ki-abort-busy !
+    _ki-owner KDOSTLSL-CANCEL
+        KDOSTLSL-S-PENDING = _ki-assert
+    20 _ki-drive
+    _ki-step-port @ 0= _ki-assert
+    _ki-step-status @ KDOSTLSL-S-CANCELLED = _ki-assert
+    _ki-abort-hits @ 2 = _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-assert-owner-idle ;
+
+: _ki-test-postclaim-deadline  ( -- )
+    100 _ki-now !
+    _KI-SC-HOLD _ki-prepare
+    _ki-port-a _ki-accept
+    _ki-pending-step
+    _ki-op XIOO.DEADLINE-MS @ 0= _ki-assert
+    _ki-pending-step
+    _ki-owner _KDOSTLSL.CTX @ 4096 = _ki-assert
+    _ki-op XIOO.DEADLINE-MS @ 105 = _ki-assert
+    106 _ki-now !
+    _ki-pending-step
+    _ki-op XIO-CLEANUP-PENDING? _ki-assert
+    20 _ki-drive
+    _ki-step-port @ 0= _ki-assert
+    _ki-step-status @ KDOSTLSL-S-TIMED-OUT = _ki-assert
+    _ki-abort-hits @ 1 = _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-assert-owner-idle
+    0 _ki-now ! ;
+
+: _ki-test-malformed-handshakes  ( -- )
+    \ An early alert is terminal lower failure and retires raw context.
+    _KI-SC-EARLY-ALERT _ki-prepare
+    _ki-port-a _ki-accept
+    _ki-pending-step
+    _ki-pending-step
+    _ki-pending-step
+    _ki-op XIO-CLEANUP-PENDING? _ki-assert
+    _ki-op XIOO.ERROR @
+        KDOSTLSL-E-HANDSHAKE-ALERT = _ki-assert
+    _ki-op XIOO.RESULT @ 47 = _ki-assert
+    20 _ki-drive
+    _ki-step-status @ KDOSTLSL-S-LOWER = _ki-assert
+    _ki-abort-hits @ 1 = _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-assert-owner-idle
+
+    \ A terminal client-flight error is disposed, closed exactly, and never
+    \ falls back to abort after the raw authority reports itself retired.
+    _KI-SC-MALFORMED-TERMINAL _ki-prepare
+    _ki-port-a _ki-accept
+    64 _ki-drive
+    _ki-step-port @ 0= _ki-assert
+    _ki-step-status @ KDOSTLSL-S-LOWER = _ki-assert
+    _ki-disposition-hits @ 2 = _ki-assert
+    _ki-terminal-close-hits @ 2 = _ki-assert
+    _ki-abort-hits @ 0= _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-assert-owner-idle ;
 
 : _ki-test-malformed-publish  ( -- )
-    \ A contradictory nonzero socket plus error retains the potentially
-    \ transferred socket authority and retires it through XIO cleanup.
-    6 _ki-scenario ! 20 _ki-configure _ki-submit 24 _ki-drive
-    _ki-op XIOO.STATE @ XIO-STATE-FAILED = _ki-assert
-    _ki-op XIOO.ERROR @ TLS-E-TRANSPORT = _ki-assert
-    _ki-adapter KDOSTLSA.CTX @ 0= _ki-assert
-    _ki-result KDOSTLSP.SOCKET-SD @ 0= _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-RESET = _ki-assert
-    _ki-result KDOSNET-OWNER? 0= _ki-assert
+    \ A contradictory nonzero socket plus ior is staged before failure so
+    \ cleanup retires that exact socket rather than losing its authority.
+    _KI-SC-BAD-PUBLISH _ki-prepare
+    _ki-port-a _ki-accept
+    64 _ki-drive
+    _ki-step-port @ 0= _ki-assert
+    _ki-step-status @ KDOSTLSL-S-LOWER = _ki-assert
+    _ki-publish-hits @ 1 = _ki-assert
     _ki-sock-abort-hits @ 1 = _ki-assert
-    _ki-reset-op ;
+    _ki-owner _KDOSTLSL.STAGING-SOCKET @ 0= _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-assert-owner-idle ;
 
-: _ki-test-cancel-timeout  ( -- )
-    2 _ki-scenario ! 20 _ki-configure _ki-submit
-    _ki-service XIO-TICK _ki-service XIO-TICK
-    _ki-adapter KDOSTLSA.CTX @ 4096 = _ki-assert
-    1 _ki-abort-busy !
-    _ki-service _ki-op XIO-CANCEL XIO-S-PENDING = _ki-assert
-    _ki-service XIO-TICK _ki-service XIO-TICK
-    _ki-op XIOO.STATE @ XIO-STATE-CANCELLED = _ki-assert
-    _ki-abort-hits @ 2 = _ki-assert
-    _ki-adapter KDOSTLSA.CTX @ 0= _ki-assert
-    _ki-result KDOSNET-OWNER? 0= _ki-assert
-    _ki-reset-op
+: _ki-test-success-fresh-port  ( -- )
+    _KI-SC-SUCCESS _ki-prepare
+    _ki-port-a _ki-accept
+    64 _ki-drive
+    _ki-step-status @ KDOSTLSL-S-OK = _ki-assert
+    _ki-step-port @ DUP
+        _ki-port-a KDOSTLSP.PORT = _ki-assert
+        _ki-nio-a !
+    _ki-port-a KDOSTLSP.STATE @
+        KDOSTLSP-STATE-OPEN = _ki-assert
+    _ki-nio-a @ NIO.OPEN-STATE @
+        NIO-OPEN-STATE-OPEN = _ki-assert
+    _ki-port-a KDOSTLSP.SOCKET-SD @ DUP 0<> _ki-assert
+        _ki-port-a-sd !
+    _ki-buffer 7 _ki-nio-a @ NIO-SEND
+        NIO-S-OK = _ki-assert
+        7 = _ki-assert
+    _ki-send-hits @ 1 = _ki-assert
+    _ki-assert-owner-idle
 
-    100 _ki-now ! 2 _ki-scenario ! 5 _ki-configure _ki-submit
-    _ki-service XIO-TICK
-    _ki-op XIOO.DEADLINE-MS @ 0= _ki-assert
-    _ki-service XIO-TICK
-    _ki-op XIOO.DEADLINE-MS @ 105 = _ki-assert
-    106 _ki-now ! _ki-service XIO-TICK
-    _ki-op XIO-CLEANUP-PENDING? _ki-assert
-    _ki-service XIO-TICK
-    _ki-op XIOO.STATE @ XIO-STATE-TIMED-OUT = _ki-assert
-    _ki-op XIOO.ERROR @ XIO-E-DEADLINE = _ki-assert
-    _ki-reset-op ;
+    \ The persistent listener owner accepts again with a fresh result record;
+    \ the first established port remains independently open.
+    _KI-SC-SUCCESS _ki-prepare
+    _ki-port-b _ki-accept
+    64 _ki-drive
+    _ki-step-status @ KDOSTLSL-S-OK = _ki-assert
+    _ki-step-port @ DUP
+        _ki-port-b KDOSTLSP.PORT = _ki-assert
+        _ki-nio-b !
+    _ki-port-b KDOSTLSP.STATE @
+        KDOSTLSP-STATE-OPEN = _ki-assert
+    _ki-port-a KDOSTLSP.STATE @
+        KDOSTLSP-STATE-OPEN = _ki-assert
+    _ki-port-b KDOSTLSP.SOCKET-SD @
+        _ki-port-a-sd @ <> _ki-assert
+    _ki-assert-owner-idle
 
-: _ki-test-malformed-terminal  ( -- )
-    3 _ki-scenario ! 20 _ki-configure _ki-submit 12 _ki-drive
-    _ki-op XIOO.STATE @ XIO-STATE-FAILED = _ki-assert
-    _ki-op XIOO.ERROR @ KDOSTLSA-E-HANDSHAKE-ALERT = _ki-assert
-    _ki-op XIOO.RESULT @ 47 = _ki-assert
-    _ki-reset-op
-
-    4 _ki-scenario ! 20 _ki-configure _ki-submit 32 _ki-drive
-    _ki-op XIOO.STATE @ XIO-STATE-FAILED = _ki-assert
-    _ki-op XIOO.ERROR @ -4999 = _ki-assert
-    _ki-op XIOO.RESULT @ 40 = _ki-assert
-    _ki-disp-hits @ 2 = _ki-assert
-    _ki-terminal-close-hits @ 2 = _ki-assert
-    _ki-reset-op ;
-
-: _ki-test-terminal-timeout-latch  ( -- )
-    200 _ki-now ! 4 _ki-scenario ! 20 _ki-configure _ki-submit
-    8 _ki-drive
-    _ki-adapter KDOSTLSA.PHASE @ KDOSTLSA-PHASE-DISPOSITION = _ki-assert
-    _ki-result KDOSTLSP.LAST-ERROR @ -4999 = _ki-assert
-    221 _ki-now ! _ki-service XIO-TICK
-    _ki-op XIO-CLEANUP-PENDING? _ki-assert
-    _ki-service XIO-TICK
-    _ki-op XIOO.STATE @ XIO-STATE-TIMED-OUT = _ki-assert
-    _ki-op XIOO.ERROR @ XIO-E-DEADLINE = _ki-assert
-    _ki-result KDOSTLSP.LAST-ERROR @ -4999 = _ki-assert
-    _ki-result KDOSNET-OWNER? 0= _ki-assert
-    _ki-reset-op ;
-
-: _ki-test-close-fallback  ( -- )
-    2 _ki-scenario ! 20 _ki-configure _ki-submit 24 _ki-drive
-    _ki-service 101 7 _ki-request-gen @ _ki-op _ki-adapter KDOSTLSA-TAKE
-    KDOSTLSA-S-OK = _ki-assert _ki-port !
-    _ki-service _ki-op XIO-RESET XIO-S-PENDING = _ki-assert
-    _ki-service XIO-TICK
-    -4888 _ki-close-error !
-    _ki-port @ NIO-CLOSE-START NIO-S-PENDING = _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-CLOSE-ABORT = _ki-assert
-    _ki-port @ NIO-CLOSE-POLL NIO-S-FAILED = _ki-assert
-    _ki-sock-abort-hits @ 1 = _ki-assert
-    _ki-result KDOSTLSP.LAST-ERROR @ -4888 = _ki-assert
-    _ki-result KDOSNET-OWNER? 0= _ki-assert
-    _ki-result KDOSTLSP-RESET KDOSTLSA-S-OK = _ki-assert ;
-
-: _ki-open-span-port  ( -- )
-    2 _ki-scenario ! 20 _ki-configure _ki-submit 24 _ki-drive
-    _ki-op XIOO.STATE @ XIO-STATE-SUCCEEDED = _ki-assert
-    _ki-service 101 7 _ki-request-gen @ _ki-op _ki-adapter KDOSTLSA-TAKE
-    KDOSTLSA-S-OK = _ki-assert _ki-port !
-    _ki-service _ki-op XIO-RESET XIO-S-PENDING = _ki-assert
-    _ki-service XIO-TICK
-    _ki-op XIOO.STATE @ XIO-STATE-RESET = _ki-assert ;
-
-: _ki-close-span-error  ( -- )
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-ERROR = _ki-assert
-    _ki-port @ NIO-CLOSE-START NIO-S-PENDING = _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-CLOSE-ABORT = _ki-assert
-    _ki-port @ NIO-CLOSE-POLL NIO-S-FAILED = _ki-assert
-    _ki-result KDOSNET-OWNER? 0= _ki-assert
-    _ki-result KDOSTLSP-RESET KDOSTLSA-S-OK = _ki-assert ;
-
-: _ki-test-port-span-guards  ( -- )
-    \ A wrapping send span rejects before SEND can dereference it.  The
-    \ resulting errored port still retires through cooperative close.
-    _ki-open-span-port
-    -8 16 _ki-port @ NIO-SEND
-    NIO-S-FAILED = _ki-assert 0= _ki-assert
-    _ki-close-span-error
-
-    \ A receive span inside the result record is valid geometry in isolation,
-    \ but aliases the live port authority and must reject before RECV.
-    _ki-open-span-port
-    _ki-result 8 _ki-port @ NIO-RECV
-    NIO-S-FAILED = _ki-assert 0= _ki-assert
-    _ki-close-span-error ;
-
-: _ki-test-port-throw-recovery  ( -- )
-    \ A contained data-path throw publishes ERROR, so cooperative close goes
-    \ directly to exact socket abort instead of losing the global token.
-    _ki-open-span-port
-    -4871 _ki-send-throw !
-    _ki-buffer 8 _ki-port @ NIO-SEND
-    NIO-S-FAILED = _ki-assert 0= _ki-assert
-    _ki-result KDOSTLSP.LAST-ERROR @ -4871 = _ki-assert
-    _ki-close-span-error
-
-    \ A close attempt throw becomes CLOSE-ABORT before io-port sees it.
-    _ki-open-span-port
-    -4872 _ki-close-throw !
-    _ki-port @ NIO-CLOSE-START NIO-S-PENDING = _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-CLOSE-ABORT = _ki-assert
-    _ki-result KDOSTLSP.LAST-ERROR @ -4872 = _ki-assert
-    _ki-port @ NIO-CLOSE-POLL NIO-S-FAILED = _ki-assert
-    _ki-result KDOSNET-OWNER? 0= _ki-assert
-    _ki-result KDOSTLSP-RESET KDOSTLSA-S-OK = _ki-assert
-
-    \ The paired close transport poll has the same recoverable transition.
-    _ki-open-span-port
-    1 _ki-close-would !
-    _ki-port @ NIO-CLOSE-START NIO-S-PENDING = _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-CLOSE-POLL = _ki-assert
-    -4873 _ki-poll-throw !
-    _ki-port @ NIO-CLOSE-POLL NIO-S-PENDING = _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-CLOSE-ABORT = _ki-assert
-    _ki-port @ NIO-CLOSE-POLL NIO-S-FAILED = _ki-assert
-    _ki-result KDOSNET-OWNER? 0= _ki-assert
-    _ki-result KDOSTLSP-RESET KDOSTLSA-S-OK = _ki-assert
-
-    \ A one-shot cancellation throw is quarantined before NIO contains it;
-    \ the diagnostic recovery step can then finish exact retirement.
-    _ki-open-span-port
-    -4874 _ki-sock-abort-throw !
-    _ki-port @ NIO-CANCEL NIO-S-FAILED = _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-QUARANTINED = _ki-assert
-    _ki-result KDOSTLSP.CLEANUP-ERROR @ -4874 = _ki-assert
-    _ki-result KDOSNET-OWNER? _ki-assert
-    _ki-result KDOSTLSP-RECOVER-STEP KDOSTLSA-S-OK = _ki-assert
-    _ki-result KDOSNET-OWNER? 0= _ki-assert
-    _ki-result KDOSTLSP-RESET KDOSTLSA-S-OK = _ki-assert
-
-    \ A clean one-shot cancellation is terminal and immediately resettable.
-    _ki-open-span-port
-    _ki-port @ NIO-CANCEL NIO-S-CANCELLED = _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-CANCELLED = _ki-assert
-    _ki-result KDOSNET-OWNER? 0= _ki-assert
-    _ki-result KDOSTLSP-RESET KDOSTLSA-S-OK = _ki-assert ;
-
-: _ki-test-cancel-recovery  ( -- )
-    2 _ki-scenario ! 20 _ki-configure _ki-submit 24 _ki-drive
-    _ki-service 101 7 _ki-request-gen @ _ki-op _ki-adapter KDOSTLSA-TAKE
-    KDOSTLSA-S-OK = _ki-assert _ki-port !
-    _ki-service _ki-op XIO-RESET XIO-S-PENDING = _ki-assert
-    _ki-service XIO-TICK
-    1 _ki-sock-abort-busy !
-    _ki-port @ NIO-CANCEL NIO-S-FAILED = _ki-assert
-    _ki-result KDOSTLSP.STATE @ KDOSTLSP-STATE-QUARANTINED = _ki-assert
-    _ki-result KDOSNET-OWNER? _ki-assert
-    _ki-result KDOSTLSP-RECOVER-STEP KDOSTLSA-S-OK = _ki-assert
-    _ki-result KDOSNET-OWNER? 0= _ki-assert
-    _ki-result KDOSTLSP-RESET KDOSTLSA-S-OK = _ki-assert
-    _ki-adapter KDOSTLSA-INIT KDOSTLSA-S-OK = _ki-assert
-    11 2 3 20 0 _ki-result _ki-adapter KDOSTLSA-CONFIGURE
-        KDOSTLSA-S-OK = _ki-assert ;
+    \ Established-port behavior has its own profile; retain only a compact
+    \ cleanup assertion here so this fixture stays about accept composition.
+    _ki-nio-a @ NIO-CANCEL NIO-S-CANCELLED = _ki-assert
+    _ki-nio-b @ NIO-CANCEL NIO-S-CANCELLED = _ki-assert
+    _ki-port-a KDOSTLSP-RESET KDOSTLSP-S-OK = _ki-assert
+    _ki-port-b KDOSTLSP-RESET KDOSTLSP-S-OK = _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-port-b _ki-assert-port-reset
+    _ki-assert-owner-idle ;
 
 : _ki-run  ( -- )
-    0 _ki-fails ! 0 _ki-checks ! DEPTH _ki-depth ! 0 _ki-now !
-    _ki-service XIO-SERVICE-INIT XIO-S-OK = _ki-assert
-    _ki-test-config
-    _ki-test-empty
-    _ki-test-contention
-    _ki-test-pre-take-port-gate
-    _ki-test-success-port
-    _ki-test-discard
+    0 _ki-fails !
+    0 _ki-checks !
+    DEPTH _ki-depth !
+    0 _ki-now !
+    100 _ki-next-sd !
+
+    _ki-test-init-geometry
+    _ki-test-empty-reuse-retained-cancel
+    _ki-test-preclaim-contention
+    _ki-test-cancel-retrying-cleanup
+    _ki-test-postclaim-deadline
+    _ki-test-malformed-handshakes
     _ki-test-malformed-publish
-    _ki-test-cancel-timeout
-    _ki-test-malformed-terminal
-    _ki-test-terminal-timeout-latch
-    _ki-test-close-fallback
-    _ki-test-port-span-guards
-    _ki-test-port-throw-recovery
-    _ki-test-cancel-recovery
+    _ki-test-success-fresh-port
+
+    _ki-owner KDOSTLSL-FINI KDOSTLSL-S-OK = _ki-assert
+    _ki-service XIO-SERVICE-FINI XIO-S-OK = _ki-assert
+    KDOSNET-OWNER@ 0= _ki-assert
     _ki-stack
     _ki-fails @ 0= IF
         ." TLS INBOUND PASS " _ki-checks @ .
