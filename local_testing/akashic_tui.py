@@ -13,8 +13,10 @@ import argparse
 import json
 import os
 import re
+import struct
 import sys
 import time
+import zlib
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -201,6 +203,14 @@ FORTH_CONDITIONAL_TOKENS = frozenset(("[IF]", "[ELSE]", "[THEN]"))
 # transfers.  This bounds source prescan/evaluation work and leaves room for
 # profile growth without changing the generated chunk topology on every edit.
 LINK_CHUNK_BYTES = 120 * 1024
+COLD_SOURCE_MAGIC = b"AKLZSS01"
+COLD_SOURCE_VERSION = 1
+COLD_SOURCE_FLAGS = 0
+COLD_SOURCE_HEADER_BYTES = 40
+COLD_SOURCE_RAW_MAX_BYTES = LINK_CHUNK_BYTES
+COLD_SOURCE_LOADER_PATH = "c5-coldsrc.f"
+COLD_SOURCE_CHUNK_TEMPLATE = "csrc-{index:02d}.lz"
+COLD_SOURCE_HEADER = struct.Struct("<8sHHIQQII")
 MEGAPAD_EVALUATE_SOURCE_MAX_BYTES = 255
 FORTH_LINE_COALESCE_BARRIERS = frozenset(
     ("(", 'S"', 'C"', '."', 'ABORT"', ".(", "[IF]", "[ELSE]", "[THEN]")
@@ -245,6 +255,7 @@ sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from diskutil import (  # noqa: E402
     FLAG_SYSTEM,
+    FTYPE_DATA,
     FTYPE_FORTH,
     FTYPE_TEXT,
     MAX_FILES,
@@ -266,9 +277,19 @@ class Profile:
     requires_tap: bool = False
     failure_markers: tuple[str, ...] = ()
     initial_files: tuple[tuple[str, bytes], ...] = ()
+    # Raw Forth sources deployed as checked AKLZSS01 data containers.  Each
+    # tuple names the on-image container, not the host source.  This keeps
+    # qualification leaves on the same checked cold-compile path as linked
+    # production modules instead of routing them through KDOS's unchecked
+    # line walker.
+    cold_source_initial_files: tuple[tuple[str, bytes], ...] = ()
     include_large_sample: bool = True
     total_sectors: int = 4096
     link_chunk_bytes: int = LINK_CHUNK_BYTES
+    # Cold-source packing is an opt-in filesystem representation.  The guest
+    # expands each linked source chunk and compiles it through the checked
+    # source evaluator; this is not a compiled dictionary cache.
+    cold_source_packed: bool = False
     # Physical-line joining is safe only for a source closure audited for
     # line-sensitive custom parsing words.  It is never a default transform.
     audited_link_line_bytes: int | None = None
@@ -20290,6 +20311,121 @@ DESK-LIBRARY-BURROW-RUN
     total_sectors=PROFILES["desktop"].total_sectors,
 )
 
+PROFILES["desktop-library-burrow-capstone"] = Profile(
+    roots=(
+        "tui/applets/desk/desk.f",
+        "tui/applets/library/library.f",
+        "tui/applets/streams/rabbit-capabilities.f",
+        "tui/applets/streams/streams.f",
+        "tui/applets/agent/agent.f",
+        "tui/applets/agent/providers/devtools/scripted.f",
+        "tui/applets/streams/rabbit-library-profile.f",
+        "net/transports/memory-duplex.f",
+        "tui/applets/streams/rabbit-connector.f",
+    ),
+    resources=(
+        "tui/applets/desk/desk.toml",
+        "tui/applets/library/library.uidl",
+        "tui/applets/streams/streams.uidl",
+        "tui/applets/agent/agent.uidl",
+    ),
+    autoexec=r"""\ autoexec.f - Desk/Library framed Rabbit capstone
+ENTER-USERLAND
+." [akashic] loading Desk Library Rabbit capstone" CR TX-FLUSH
+REQUIRE tui/applets/desk/desk.f
+REQUIRE tui/applets/library/library.f
+REQUIRE tui/applets/streams/rabbit-capabilities.f
+REQUIRE tui/applets/streams/streams.f
+REQUIRE tui/applets/agent/agent.f
+REQUIRE tui/applets/agent/providers/devtools/scripted.f
+REQUIRE tui/applets/streams/rabbit-library-profile.f
+REQUIRE net/transports/memory-duplex.f
+REQUIRE tui/applets/streams/rabbit-connector.f
+_C5-BOOT-SOURCE c5-srbprov.f.lz
+." DESK LIBRARY RABBIT LOAD C4 PROVIDER PASS" CR TX-FLUSH
+_C5-BOOT-SOURCE c5-dlburrow.f.lz
+." DESK LIBRARY RABBIT LOAD C4 PRODUCT PASS" CR TX-FLUSH
+_C5-BOOT-SOURCE c5-slrabbit.f.lz
+." DESK LIBRARY RABBIT LOAD C5 PROVIDER PASS" CR TX-FLUSH
+_C5-BOOT-SOURCE c5-dlcap.f.lz
+." DESK LIBRARY RABBIT LOAD C5 CAPSTONE PASS" CR TX-FLUSH
+
+CREATE _boot-practice-head PHEAD-SIZE ALLOT
+CREATE _boot-practice-out PHEAD-SIZE ALLOT
+CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
+: _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
+: _boot-practice-slot?  ( path-a path-u -- flag )
+    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+: _boot-practice-present?  ( -- flag )
+    S" /practice-head-a.bin" _boot-practice-slot?
+    S" /practice-head-b.bin" _boot-practice-slot? OR ;
+: _boot-practice-provision  ( -- )
+    _boot-practice-present? IF EXIT THEN
+    VFS-CUR _boot-practice-store PHEADVFS-INIT
+        PHEADVFS-S-OK <> ABORT" Practice store init failed"
+    _boot-practice-out _boot-practice-store PHEADVFS-LOAD
+        PHEADVFS-S-RECOVERY <> ABORT" blank Practice did not enter recovery"
+    _boot-practice-head PHEAD-INIT
+    1 _boot-practice-head PHEAD.ID _boot-practice-id!
+    2 _boot-practice-head PHEAD.CURRENT-ROOT _boot-practice-id!
+    _boot-practice-head _boot-practice-store PHEADVFS-REINITIALIZE
+        PHEADVFS-S-OK <> ABORT" Practice provision failed" ;
+_boot-practice-provision
+." DESK LIBRARY RABBIT PRACTICE PASS" CR TX-FLUSH
+
+DESK-LIBRARY-BURROW-CONFIGURE
+." [akashic] starting Desk Library Rabbit capstone" CR
+DESK-LIBRARY-BURROW-RUN
+." [akashic] Desk Library Rabbit capstone exited" CR
+""",
+    ready_markers=("Library", "Streams", "Agent"),
+    stable_markers=("LIBRARY", "STREAMS", "Agent"),
+    failure_markers=(
+        "DESK LIBRARY BURROW FAIL",
+        "DESK LIBRARY BURROW ASSERT",
+        "DESK LIBRARY BURROW STACK",
+        "DESK LIBRARY RABBIT FAIL",
+        "DESK LIBRARY RABBIT ASSERT",
+        "DESK LIBRARY RABBIT STACK",
+        "COLD SOURCE LOAD FAIL",
+        "desktop exception",
+    ),
+    cold_source_initial_files=(
+        (
+            "c5-srbprov.f.lz",
+            (
+                AKASHIC_ROOT / "local_testing" / "streams-burrow-prov.f"
+            ).read_bytes(),
+        ),
+        (
+            "c5-dlburrow.f.lz",
+            (
+                AKASHIC_ROOT / "local_testing" / "desk-library-burrow.f"
+            ).read_bytes(),
+        ),
+        (
+            "c5-slrabbit.f.lz",
+            (
+                AKASHIC_ROOT
+                / "local_testing"
+                / "streams-library-rabbit-provider.f"
+            ).read_bytes(),
+        ),
+        (
+            "c5-dlcap.f.lz",
+            (
+                AKASHIC_ROOT
+                / "local_testing"
+                / "desk-library-burrow-capstone.f"
+            ).read_bytes(),
+        ),
+    ),
+    linked=True,
+    cold_source_packed=True,
+    include_large_sample=False,
+    total_sectors=PROFILES["desktop"].total_sectors,
+)
+
 _STREAMS_VERTICAL_FEED_URL = (
     "https://foo-dogsquared.github.io/"
     "hugo-theme-more-contentful/feed.rss"
@@ -24294,12 +24430,233 @@ def _linked_chunks(
     return linked_chunks
 
 
+def _cold_source_lzss_encode(source: bytes) -> bytes:
+    """Encode one bounded source chunk with deterministic LZSS tokens.
+
+    Control groups describe at most eight tokens, least-significant bit
+    first.  A set bit is one literal.  A clear bit is a two-byte little-endian
+    ``((distance - 1) << 4) | (length - 3)`` match with a 4 KiB window and a
+    3..18 byte length.  Greedy longest-match selection prefers the nearest
+    equal-length match and does not impose a candidate-count heuristic.
+    """
+    if not source:
+        raise ValueError("Cold source chunks must not be empty")
+
+    encoded = bytearray()
+    cursor = 0
+    while cursor < len(source):
+        control_offset = len(encoded)
+        encoded.append(0)
+        control = 0
+        for bit in range(8):
+            if cursor == len(source):
+                break
+
+            best_length = 0
+            best_distance = 0
+            maximum_length = min(18, len(source) - cursor)
+            if maximum_length >= 3:
+                window_start = max(0, cursor - 4096)
+                for distance in range(1, min(2, cursor) + 1):
+                    length = 0
+                    while (
+                        length < maximum_length
+                        and source[cursor + length - distance]
+                        == source[cursor + length]
+                    ):
+                        length += 1
+                    if length >= 3 and length > best_length:
+                        best_length = length
+                        best_distance = distance
+                        if length == maximum_length:
+                            break
+
+                needle = source[cursor : cursor + 3]
+                candidate = (
+                    -1
+                    if best_length == maximum_length
+                    else source.rfind(needle, window_start, cursor)
+                )
+                while candidate >= window_start:
+                    distance = cursor - candidate
+                    length = 3
+                    while (
+                        length < maximum_length
+                        and source[cursor + length - distance]
+                        == source[cursor + length]
+                    ):
+                        length += 1
+                    if length >= 3 and length > best_length:
+                        best_length = length
+                        best_distance = distance
+                        if length == maximum_length:
+                            break
+                    candidate = source.rfind(
+                        needle, window_start, candidate
+                    )
+
+            if best_length >= 3:
+                code = ((best_distance - 1) << 4) | (best_length - 3)
+                encoded.extend(struct.pack("<H", code))
+                cursor += best_length
+            else:
+                control |= 1 << bit
+                encoded.append(source[cursor])
+                cursor += 1
+        encoded[control_offset] = control
+    return bytes(encoded)
+
+
+def _cold_source_lzss_decode(payload: bytes, raw_bytes: int) -> bytes:
+    """Host-side exact decoder used to validate every generated payload."""
+    if raw_bytes <= 0:
+        raise ValueError("Cold source raw size must be positive")
+
+    decoded = bytearray()
+    cursor = 0
+    while len(decoded) < raw_bytes:
+        if cursor >= len(payload):
+            raise ValueError("Truncated cold source control group")
+        control = payload[cursor]
+        cursor += 1
+        for _ in range(8):
+            if len(decoded) == raw_bytes:
+                if control:
+                    raise ValueError("Non-canonical cold source control bits")
+                if cursor != len(payload):
+                    raise ValueError("Trailing cold source payload")
+                return bytes(decoded)
+
+            if control & 1:
+                if cursor >= len(payload):
+                    raise ValueError("Truncated cold source literal")
+                decoded.append(payload[cursor])
+                cursor += 1
+            else:
+                if cursor + 2 > len(payload):
+                    raise ValueError("Truncated cold source match")
+                code = payload[cursor] | (payload[cursor + 1] << 8)
+                cursor += 2
+                distance = (code >> 4) + 1
+                length = (code & 0x0F) + 3
+                if distance > 4096 or distance > len(decoded):
+                    raise ValueError("Invalid cold source match distance")
+                if length > raw_bytes - len(decoded):
+                    raise ValueError("Cold source match overruns output")
+                for _ in range(length):
+                    decoded.append(decoded[-distance])
+            control >>= 1
+
+    if cursor != len(payload):
+        raise ValueError("Trailing cold source payload")
+    return bytes(decoded)
+
+
+def _pack_cold_source(
+    source: bytes,
+    maximum_raw_bytes: int = COLD_SOURCE_RAW_MAX_BYTES,
+) -> bytes:
+    """Wrap one linked source chunk in the checked AKLZSS01 container."""
+    if not 0 < len(source) <= maximum_raw_bytes:
+        raise ValueError(
+            "Cold source raw size must be between 1 and "
+            f"{maximum_raw_bytes} bytes"
+        )
+    payload = _cold_source_lzss_encode(source)
+    header = COLD_SOURCE_HEADER.pack(
+        COLD_SOURCE_MAGIC,
+        COLD_SOURCE_VERSION,
+        COLD_SOURCE_FLAGS,
+        COLD_SOURCE_HEADER_BYTES,
+        len(source),
+        len(payload),
+        zlib.crc32(source) & 0xFFFFFFFF,
+        0,
+    )
+    packed = header + payload
+    if _unpack_cold_source(packed, maximum_raw_bytes) != source:
+        raise RuntimeError("Cold source packer failed its exact round trip")
+    return packed
+
+
+def _unpack_cold_source(
+    packed: bytes,
+    maximum_raw_bytes: int = COLD_SOURCE_RAW_MAX_BYTES,
+) -> bytes:
+    """Validate and expand one AKLZSS01 container on the host."""
+    if len(packed) < COLD_SOURCE_HEADER_BYTES:
+        raise ValueError("Truncated cold source header")
+    (
+        magic,
+        version,
+        flags,
+        header_bytes,
+        raw_bytes,
+        payload_bytes,
+        raw_crc32,
+        reserved,
+    ) = COLD_SOURCE_HEADER.unpack_from(packed)
+    if magic != COLD_SOURCE_MAGIC:
+        raise ValueError("Invalid cold source magic")
+    if version != COLD_SOURCE_VERSION:
+        raise ValueError("Unsupported cold source version")
+    if flags != COLD_SOURCE_FLAGS or reserved != 0:
+        raise ValueError("Unsupported cold source flags")
+    if header_bytes != COLD_SOURCE_HEADER_BYTES:
+        raise ValueError("Invalid cold source header size")
+    if not 0 < raw_bytes <= maximum_raw_bytes:
+        raise ValueError("Invalid cold source raw size")
+    if payload_bytes <= 0 or payload_bytes != len(packed) - header_bytes:
+        raise ValueError("Invalid cold source payload size")
+    source = _cold_source_lzss_decode(
+        packed[header_bytes:], raw_bytes
+    )
+    if zlib.crc32(source) & 0xFFFFFFFF != raw_crc32:
+        raise ValueError("Cold source CRC mismatch")
+    return source
+
+
+def _packed_linked_chunks(
+    linked_chunks: dict[str, bytes],
+    maximum_raw_bytes: int = COLD_SOURCE_RAW_MAX_BYTES,
+) -> dict[str, bytes]:
+    """Replace linked source files with short, root-level containers."""
+    return {
+        COLD_SOURCE_CHUNK_TEMPLATE.format(index=index): _pack_cold_source(
+            source, maximum_raw_bytes
+        )
+        for index, source in enumerate(linked_chunks.values())
+    }
+
+
 def _linked_autoexec(
     autoexec: str,
     chunk_names: tuple[str, ...],
     modules: tuple[str, ...],
+    *,
+    cold_source_packed: bool = False,
 ) -> str:
     """Replace linked source REQUIREs while retaining injected test leaves."""
+    load_lines = [f"REQUIRE {name}" for name in chunk_names]
+    if cold_source_packed:
+        load_lines = [
+            f"REQUIRE {COLD_SOURCE_LOADER_PATH}",
+            "VARIABLE _C5-BOOT-SOURCE-STATUS",
+            ': _C5-BOOT-SOURCE  ( "filename" -- )',
+            "    C5-COLD-SOURCE DUP _C5-BOOT-SOURCE-STATUS ! ?DUP IF",
+            '        ." COLD SOURCE LOAD FAIL status=" .',
+            '        ." eval=" CSL-LAST-EVAL@ .',
+            '        ." line=" EVAL-LINE @ .',
+            '        ." column=" EVAL-COLUMN @ .',
+            '        ." throw=" CSL-LAST-THROW@ .',
+            '        ." token=" EVAL-TOKEN TYPE CR TX-FLUSH ABORT',
+            "    THEN ;",
+        ] + [
+            (
+                f"_C5-BOOT-SOURCE {name}"
+            )
+            for name in chunk_names
+        ]
     lines: list[str] = []
     inserted = False
     linked_modules = set(modules)
@@ -24307,13 +24664,26 @@ def _linked_autoexec(
         match = REQUIRE_RE.match(line)
         if match and match.group(1) in linked_modules:
             if not inserted:
-                lines.extend(f"REQUIRE {name}" for name in chunk_names)
+                lines.extend(load_lines)
                 inserted = True
             continue
         lines.append(line)
     if not inserted:
-        lines[0:0] = [f"REQUIRE {name}" for name in chunk_names]
-    return _minify_forth("\n".join(lines) + "\n")
+        if cold_source_packed:
+            raise RuntimeError(
+                "Cold source profile autoexec has no linked REQUIRE insertion "
+                "point"
+            )
+        lines[0:0] = load_lines
+    linked_autoexec = _minify_forth("\n".join(lines) + "\n")
+    if cold_source_packed:
+        enter = linked_autoexec.find("ENTER-USERLAND")
+        loader = linked_autoexec.find(f"REQUIRE {COLD_SOURCE_LOADER_PATH}")
+        if enter < 0 or loader < enter:
+            raise RuntimeError(
+                "Cold source loader must run after ENTER-USERLAND"
+            )
+    return linked_autoexec
 
 
 def _directories(paths: set[str]) -> list[str]:
@@ -24331,6 +24701,12 @@ def _validate_image_paths(
     *,
     include_networking: bool = False,
 ):
+    file_directory_aliases = paths & set(directories)
+    if file_directory_aliases:
+        raise RuntimeError(
+            "Image paths collide as both files and directories: "
+            + ", ".join(sorted(file_directory_aliases))
+        )
     # Include kdos/autoexec, optional networking, and two temporary
     # fragmentation fixtures.
     entries = (
@@ -24353,24 +24729,43 @@ def _validate_image_paths(
             )
 
 
-def _validate_module_ids(modules: tuple[str, ...]):
-    """Reject PROVIDED names that alias in KDOS's bounded module table."""
+def _validate_module_ids(
+    modules: tuple[str, ...],
+    initial_files: tuple[tuple[str, bytes], ...] = (),
+):
+    """Reject PROVIDED names that alias in KDOS's bounded module table.
+
+    Injected Forth leaves participate in the same runtime module table as the
+    linked Akashic closure, so validating only ``SOURCE_ROOT`` modules would
+    miss collisions that make a later REQUIRE silently skip its fixture.
+    """
     keys: dict[bytes, tuple[str, str]] = {}
-    for module in modules:
-        text = (SOURCE_ROOT / module).read_text(encoding="utf-8")
-        match = PROVIDED_RE.search(text)
-        if not match:
-            continue
-        module_id = match.group(1)
-        key = module_key(module_id)
-        previous = keys.get(key)
-        if previous and previous != (module, module_id):
-            other_module, other_id = previous
-            raise RuntimeError(
-                "KDOS PROVIDED key collision: "
-                f"{other_id!r} ({other_module}) and {module_id!r} ({module})"
-            )
-        keys[key] = (module, module_id)
+    sources = [
+        (
+            module,
+            (SOURCE_ROOT / module).read_text(encoding="utf-8"),
+        )
+        for module in modules
+    ]
+    sources.extend(
+        (path, content.decode("utf-8"))
+        for path, content in initial_files
+        if path.lower().endswith((".f", ".f.lz"))
+    )
+    for source_path, text in sources:
+        for match in PROVIDED_RE.finditer(text):
+            module_id = match.group(1)
+            key = module_key(module_id)
+            previous = keys.get(key)
+            identity = (source_path, module_id)
+            if previous and previous != identity:
+                other_path, other_id = previous
+                raise RuntimeError(
+                    "KDOS PROVIDED key collision: "
+                    f"{other_id!r} ({other_path}) and "
+                    f"{module_id!r} ({source_path})"
+                )
+            keys[key] = identity
 
 
 def default_image_path(profile: str) -> Path:
@@ -24492,17 +24887,119 @@ def build_image(
         if profile.linked
         else {}
     )
+    deployed_chunks = linked_chunks
+    generated_files: dict[str, bytes] = dict(linked_chunks)
+    generated_validation_files: tuple[tuple[str, bytes], ...] = ()
+    cold_source_initial_files: dict[str, bytes] = {}
+    cold_source_raw_bytes = 0
+    cold_source_container_bytes = 0
+    if profile.cold_source_packed:
+        if not profile.linked:
+            raise RuntimeError("Cold source packing requires a linked profile")
+        if profile.link_chunk_bytes > COLD_SOURCE_RAW_MAX_BYTES:
+            raise RuntimeError(
+                "Cold source chunk limit exceeds the audited guest decoder "
+                f"bound of {COLD_SOURCE_RAW_MAX_BYTES} bytes"
+            )
+        deployed_chunks = _packed_linked_chunks(
+            linked_chunks,
+            COLD_SOURCE_RAW_MAX_BYTES,
+        )
+        cold_source_raw_bytes = sum(map(len, linked_chunks.values()))
+        cold_source_container_bytes = sum(map(len, deployed_chunks.values()))
+        loader_source = (
+            AKASHIC_ROOT / "local_testing" / "cold-source-loader.f"
+        )
+        if not loader_source.is_file():
+            raise FileNotFoundError(
+                f"Missing cold source loader: {loader_source}"
+            )
+        generated_files = dict(deployed_chunks)
+        loader_content = loader_source.read_bytes()
+        generated_files[COLD_SOURCE_LOADER_PATH] = loader_content
+        generated_validation_files = (
+            (COLD_SOURCE_LOADER_PATH, loader_content),
+        )
+    if profile.cold_source_initial_files:
+        if not profile.cold_source_packed:
+            raise RuntimeError(
+                "Checked cold-source leaves require cold source packing"
+            )
+        for path, source in profile.cold_source_initial_files:
+            if not path.endswith(".f.lz"):
+                raise RuntimeError(
+                    "Checked cold-source leaf names must end in .f.lz: "
+                    f"{path}"
+                )
+            if path in cold_source_initial_files:
+                raise RuntimeError(
+                    f"Duplicate checked cold-source leaf path: {path}"
+                )
+            cold_source_initial_files[path] = _pack_cold_source(
+                source,
+                COLD_SOURCE_RAW_MAX_BYTES,
+            )
+        cold_source_raw_bytes += sum(
+            len(source) for _, source in profile.cold_source_initial_files
+        )
+        cold_source_container_bytes += sum(
+            map(len, cold_source_initial_files.values())
+        )
     if profile.linked:
         autoexec = _linked_autoexec(
-            autoexec, tuple(linked_chunks), modules
+            autoexec,
+            tuple(deployed_chunks),
+            modules,
+            cold_source_packed=profile.cold_source_packed,
         )
     if requires_networking:
         autoexec = _with_megapad_networking(autoexec)
-    paths = set(linked_chunks) | resources if profile.linked else set(modules) | resources
-    initial_paths = {path for path, _ in profile.initial_files}
+    paths = (
+        set(generated_files) | resources
+        if profile.linked
+        else set(modules) | resources
+    )
+    regular_initial_paths = {path for path, _ in profile.initial_files}
+    cold_initial_paths = set(cold_source_initial_files)
+    initial_aliases = regular_initial_paths & cold_initial_paths
+    if initial_aliases:
+        raise RuntimeError(
+            "Regular and checked cold-source leaves collide: "
+            + ", ".join(sorted(initial_aliases))
+        )
+    initial_paths = regular_initial_paths | cold_initial_paths
+    overlap = set(generated_files) & (resources | initial_paths)
+    if overlap:
+        raise RuntimeError(
+            "Generated image paths collide with profile files: "
+            + ", ".join(sorted(overlap))
+        )
+    if profile.cold_source_packed:
+        reserved_root_paths = set(SAMPLE_FILES) | {
+            "autoexec.f",
+            "kdos.f",
+        }
+        if requires_networking:
+            reserved_root_paths.add("networking.f")
+        root_generated = {
+            path
+            for path in set(generated_files) | cold_initial_paths
+            if PurePosixPath(path).parent == PurePosixPath(".")
+        }
+        reserved_overlap = root_generated & reserved_root_paths
+        if reserved_overlap:
+            raise RuntimeError(
+                "Cold source paths collide with image boot/sample files: "
+                + ", ".join(sorted(reserved_overlap))
+            )
     image_paths = paths | initial_paths
     directories = _directories(image_paths)
-    _validate_module_ids(modules)
+    _validate_module_ids(
+        modules,
+        profile.initial_files
+        + profile.cold_source_initial_files
+        + generated_validation_files,
+    )
     _validate_image_paths(
         image_paths,
         directories,
@@ -24534,21 +25031,34 @@ def build_image(
 
     for path in sorted(paths):
         source = SOURCE_ROOT / path
-        if path in linked_chunks:
-            content = linked_chunks[path]
+        if path in generated_files:
+            content = generated_files[path]
         else:
             if not source.is_file():
                 raise FileNotFoundError(f"Missing Akashic resource: {path}")
             content = source.read_bytes()
         disk_path = PurePosixPath(path)
-        file_type = FTYPE_FORTH if disk_path.suffix == ".f" else FTYPE_TEXT
+        is_cold_source_chunk = (
+            profile.cold_source_packed and path in deployed_chunks
+        )
+        if is_cold_source_chunk:
+            file_type = FTYPE_DATA
+        else:
+            file_type = (
+                FTYPE_FORTH if disk_path.suffix == ".f" else FTYPE_TEXT
+            )
         parent = "/" if str(disk_path.parent) == "." else "/" + str(disk_path.parent)
-        fs.inject_file(
+        entry = fs.inject_file(
             disk_path.name,
             content,
             ftype=file_type,
             path=parent,
         )
+        if is_cold_source_chunk and entry.ext1_count:
+            raise RuntimeError(
+                "Cold source payload must occupy one MP64FS extent for "
+                f"checked guest FREAD: {path}"
+            )
 
     for path, content in profile.initial_files:
         disk_path = PurePosixPath(path)
@@ -24562,6 +25072,21 @@ def build_image(
             )
         parent = "/" if str(disk_path.parent) == "." else "/" + str(disk_path.parent)
         fs.inject_file(disk_path.name, content, path=parent)
+
+    for path, content in cold_source_initial_files.items():
+        disk_path = PurePosixPath(path)
+        parent = "/" if str(disk_path.parent) == "." else "/" + str(disk_path.parent)
+        entry = fs.inject_file(
+            disk_path.name,
+            content,
+            ftype=FTYPE_DATA,
+            path=parent,
+        )
+        if entry.ext1_count:
+            raise RuntimeError(
+                "Checked cold-source leaf must occupy one MP64FS extent: "
+                f"{path}"
+            )
 
     if profile.include_large_sample:
         fs.inject_file("large.txt", LARGE_SAMPLE, ftype=FTYPE_TEXT)
@@ -24599,9 +25124,21 @@ def build_image(
         f"Built {profile_name} image: {target}\n"
         f"  {len(modules)} modules"
         f"{f' linked in {len(linked_chunks)} chunks' if profile.linked else ''}, "
+        f"{'cold-source packed, ' if profile.cold_source_packed else ''}"
         f"{'MegaPad networking, ' if requires_networking else ''}"
         f"{len(resources)} resources, "
         f"{len(directories)} directories\n"
+        + (
+            "  cold source: "
+            f"{cold_source_raw_bytes:,} raw bytes -> "
+            f"{cold_source_container_bytes:,} container bytes "
+            f"({cold_source_container_bytes / cold_source_raw_bytes:.1%}, "
+            f"{cold_source_raw_bytes - cold_source_container_bytes:,} "
+            "bytes saved)\n"
+            if profile.cold_source_packed
+            else ""
+        )
+        +
         f"  {info['files']} MP64FS entries, {target.stat().st_size:,} bytes, "
         f"{info['free_sectors']} free sectors"
     )
@@ -29871,22 +30408,37 @@ REQUIRE local_testing/library-app-func.f
     ),
 )
 
-# The product profile is declared beside the other focused Desktop
-# compositions, before the shared linker compactor is defined.  Hydrate its
-# two test-only guest leaves here so deployed qualification media carries the
-# same conservative source minification used by the newer focused profiles.
-PROFILES["desktop-library-burrow"] = replace(
-    PROFILES["desktop-library-burrow"],
-    initial_files=tuple(
-        (
-            path,
-            _minify_forth(
-                (AKASHIC_ROOT / path).read_text(encoding="utf-8")
-            ).encode("utf-8"),
-        )
-        for path, _ in PROFILES["desktop-library-burrow"].initial_files
-    ),
-)
+# These product profiles are declared beside the focused Desktop
+# compositions, before the shared linker compactor is defined.  Hydrate their
+# test-only guest leaves here so qualification media carries the same
+# conservative source minification as the newer focused profiles.
+for _burrow_profile_name in (
+    "desktop-library-burrow",
+    "desktop-library-burrow-capstone",
+):
+    PROFILES[_burrow_profile_name] = replace(
+        PROFILES[_burrow_profile_name],
+        initial_files=tuple(
+            (
+                path,
+                _minify_forth(
+                    content.decode("utf-8")
+                ).encode("utf-8"),
+            )
+            for path, content in PROFILES[_burrow_profile_name].initial_files
+        ),
+        cold_source_initial_files=tuple(
+            (
+                path,
+                _minify_forth(
+                    content.decode("utf-8")
+                ).encode("utf-8"),
+            )
+            for path, content in PROFILES[
+                _burrow_profile_name
+            ].cold_source_initial_files
+        ),
+    )
 
 
 def _positive_mib(value: str) -> int:

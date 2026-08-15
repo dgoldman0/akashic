@@ -20,11 +20,18 @@
 \ malformed authorizers deny.  Only an explicit allow stamps the request as a
 \ component principal and approved before synchronous CBUS-DISPATCH.
 \
-\ Input and output are ordinary schema-constrained IVJSON.  The mount owns an
-\ inline reusable CBR plus an exclusive caller-provided JSON scratch arena.
-\ The response builder copies successful output before the complete scratch
-\ arena is wiped.  No selector, response, or application capacity is fixed by
-\ this module.
+\ Input and output are ordinary schema-constrained IVJSON.  The direct INIT
+\ decodes the wire body as the target capability's input schema.  PROFILED
+\ INIT instead borrows an argument preparer with this exact contract:
+\   ( held-frame writable-CBR.ARGS context -- ivjson-status )
+\ The frame is read-only and CBR.ARGS is the callback's only writable request
+\ storage.  The callback is caught with exact stack checking, and a successful
+\ constructed value is deep-validated against CAP.IN-SCHEMA before dispatch.
+\
+\ The mount owns an inline reusable CBR plus an exclusive caller-provided JSON
+\ scratch arena.  The response builder copies successful output before the
+\ complete scratch arena is wiped.  No selector, response, or application
+\ capacity is fixed by this module.
 \
 \ The neutral Rabbit and interoperability codecs still use serialized
 \ synchronous scratch.  The hosted Burrow scheduler provides the normal
@@ -77,6 +84,9 @@ REQUIRE ../../../concurrency/guard.f
 7 CONSTANT STREAMS-RABBIT-FACET-MOUNT-DETAIL-BUILDER
 8 CONSTANT STREAMS-RABBIT-FACET-MOUNT-DETAIL-AUTHORIZER
 9 CONSTANT STREAMS-RABBIT-FACET-MOUNT-DETAIL-DISCLOSURE
+10 CONSTANT STREAMS-RABBIT-FACET-MOUNT-DETAIL-ARG-PREPARER
+
+-261 CONSTANT STREAMS-RABBIT-FACET-MOUNT-PREPARER-E-STACK
 
 : STREAMS-RABBIT-FACET-MOUNT-STATUS-VALID?  ( status -- flag )
     DUP STREAMS-RABBIT-FACET-MOUNT-S-OK >=
@@ -91,7 +101,7 @@ REQUIRE ../../../concurrency/guard.f
 \ =====================================================================
 
 0x5352464D4F554E31 CONSTANT _SRFM-MAGIC-VALUE  \ "SRFMOUN1"
-1                  CONSTANT _SRFM-ABI-VERSION
+2                  CONSTANT _SRFM-ABI-VERSION
 
   0 CONSTANT _SRFM-MAGIC
   8 CONSTANT _SRFM-ABI
@@ -117,7 +127,9 @@ REQUIRE ../../../concurrency/guard.f
 168 CONSTANT _SRFM-DETAIL-STATUS
 176 CONSTANT _SRFM-RESOURCE-ID          \ RID-SIZE bytes
 208 CONSTANT _SRFM-REQUEST              \ inline CBR-SIZE bytes
-720 CONSTANT STREAMS-RABBIT-FACET-MOUNT-SIZE
+720 CONSTANT _SRFM-PREPARER-XT
+728 CONSTANT _SRFM-PREPARER-CONTEXT
+736 CONSTANT STREAMS-RABBIT-FACET-MOUNT-SIZE
 
 : SRFM.MAGIC          ( mount -- field ) _SRFM-MAGIC + ;
 : SRFM.ABI            ( mount -- field ) _SRFM-ABI + ;
@@ -143,6 +155,8 @@ REQUIRE ../../../concurrency/guard.f
 : SRFM.DETAIL-STATUS  ( mount -- field ) _SRFM-DETAIL-STATUS + ;
 : SRFM.RESOURCE-ID    ( mount -- rid ) _SRFM-RESOURCE-ID + ;
 : SRFM.REQUEST        ( mount -- request ) _SRFM-REQUEST + ;
+: SRFM.PREPARER-XT    ( mount -- field ) _SRFM-PREPARER-XT + ;
+: SRFM.PREPARER-CONTEXT ( mount -- field ) _SRFM-PREPARER-CONTEXT + ;
 
 DEFER _SRFM-HANDLE-BODY
 
@@ -264,6 +278,9 @@ VARIABLE _SRFMV-REGISTRY
     _SRFMV-M @ SRFM.CAP @ CAP-DESC
         _SRFMV-M @ SRFM.BURROW @ STREAMS-RABBIT-BURROW-SIZE
         MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SRFMV-M @ SRFM.PREPARER-XT @ 0= IF
+        _SRFMV-M @ SRFM.PREPARER-CONTEXT @ IF 0 EXIT THEN
+    THEN
     _SRFMV-M @ SRFM.BUSY @ DUP 0= SWAP -1 = OR 0= IF 0 EXIT THEN
     _SRFMV-M @ SRFM.LAST-STATUS @
         STREAMS-RABBIT-FACET-MOUNT-STATUS-VALID? 0= IF 0 EXIT THEN
@@ -405,6 +422,9 @@ VARIABLE _SRFMH-LABEL-A
 VARIABLE _SRFMH-LABEL-U
 VARIABLE _SRFMH-AUTH-DECISION
 VARIABLE _SRFMH-AUTH-DEPTH
+VARIABLE _SRFMH-PREP-STATUS
+VARIABLE _SRFMH-PREP-THROW
+VARIABLE _SRFMH-PREP-DEPTH
 VARIABLE _SRFMH-BURROW-BYTES
 
 -260 CONSTANT _SRFM-AUTH-E-STACK
@@ -553,6 +573,39 @@ VARIABLE _SRFMH-BURROW-BYTES
     _SRFMH-A @ _SRFMH-U @
     _SRFMH-MOUNT @ SRFM.CAP @ CAP.IN-SCHEMA @
     _SRFMH-MOUNT @ SRFM.REQUEST CBR.ARGS IVJSON-DECODE-AS ;
+
+\ A profiled preparer receives the held frame, the one writable CV root, and
+\ its borrowed context.  Saving the returned status before comparing DEPTH
+\ requires the callback to consume all three arguments and return exactly one
+\ cell.  CATCH restores the caller's stack even when that contract is broken.
+: _SRFMH-PREP-CALL  ( -- )
+    DEPTH _SRFMH-PREP-DEPTH !
+    _SRFMH-FRAME @ _SRFMH-MOUNT @ SRFM.REQUEST CBR.ARGS
+    _SRFMH-MOUNT @ SRFM.PREPARER-CONTEXT @
+    _SRFMH-MOUNT @ SRFM.PREPARER-XT @ EXECUTE
+    _SRFMH-PREP-STATUS !
+    DEPTH _SRFMH-PREP-DEPTH @ <> IF
+        STREAMS-RABBIT-FACET-MOUNT-PREPARER-E-STACK THROW
+    THEN ;
+
+: _SRFMH-SCHEMA>IVJSON  ( schema-status -- ivjson-status )
+    DUP CS-E-DEPTH = IF DROP IVJSON-E-DEPTH EXIT THEN
+    CS-E-CAPACITY = IF IVJSON-E-CAPACITY ELSE IVJSON-E-TYPE THEN ;
+
+: _SRFMH-PREPARE  ( -- ivjson-status )
+    0 _SRFMH-PREP-THROW !
+    _SRFMH-MOUNT @ SRFM.PREPARER-XT @ IF
+        IVJSON-E-INVALID _SRFMH-PREP-STATUS !
+        ['] _SRFMH-PREP-CALL CATCH DUP IF
+            _SRFMH-PREP-THROW ! IVJSON-E-INVALID EXIT
+        THEN
+        DROP _SRFMH-PREP-STATUS @ ?DUP IF EXIT THEN
+    ELSE
+        _SRFMH-DECODE EXIT
+    THEN
+    _SRFMH-MOUNT @ SRFM.REQUEST CBR.ARGS
+    _SRFMH-MOUNT @ SRFM.CAP @ CAP.IN-SCHEMA @
+    CS-VALIDATE-DEEP ?DUP IF _SRFMH-SCHEMA>IVJSON ELSE 0 THEN ;
 
 : _SRFMH-STAMP-REQUEST  ( -- )
     _SRFMH-MOUNT @ SRFM.REQUEST >R
@@ -717,9 +770,15 @@ VARIABLE _SRFMH-BURROW-BYTES
         400 S" BAD REQUEST" _SRFMH-BODYLESS EXIT
     THEN
     _SRFMH-MOUNT @ _SRFM-REQUEST-CLEAR
-    _SRFMH-DECODE DUP _SRFMH-STATUS ! IF
-        STREAMS-RABBIT-FACET-MOUNT-S-CODEC
-        STREAMS-RABBIT-FACET-MOUNT-DETAIL-IVJSON _SRFMH-STATUS @
+    _SRFMH-PREPARE DUP _SRFMH-STATUS ! IF
+        _SRFMH-PREP-THROW @ IF
+            STREAMS-RABBIT-FACET-MOUNT-S-CALLBACK
+            STREAMS-RABBIT-FACET-MOUNT-DETAIL-ARG-PREPARER
+            _SRFMH-PREP-THROW @
+        ELSE
+            STREAMS-RABBIT-FACET-MOUNT-S-CODEC
+            STREAMS-RABBIT-FACET-MOUNT-DETAIL-IVJSON _SRFMH-STATUS @
+        THEN
         _SRFMH-MOUNT @ _SRFM-STATUS! DROP
         _SRFMH-STATUS @ IVJSON-E-CAPACITY = IF
             413 S" PAYLOAD TOO LARGE"
@@ -821,6 +880,9 @@ VARIABLE _SRFMI-BUS
 VARIABLE _SRFMI-BURROW
 VARIABLE _SRFMI-AUTH-XT
 VARIABLE _SRFMI-AUTH-CONTEXT
+VARIABLE _SRFMI-PREPARER-XT
+VARIABLE _SRFMI-PREPARER-CONTEXT
+VARIABLE _SRFMI-PROFILED
 VARIABLE _SRFMI-JSON-A
 VARIABLE _SRFMI-JSON-CAP
 VARIABLE _SRFMI-ROUTER
@@ -951,6 +1013,12 @@ VARIABLE _SRFMI-OWN-STATUS
     _SRFMI-SELECTOR-U @ 0> 0= IF 0 EXIT THEN
     _SRFMI-SELECTOR-A @ _SRFMI-SELECTOR-U @
         MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _SRFMI-PROFILED @ IF
+        _SRFMI-PREPARER-XT @ 0= IF 0 EXIT THEN
+    THEN
+    _SRFMI-PREPARER-XT @ 0= IF
+        _SRFMI-PREPARER-CONTEXT @ IF 0 EXIT THEN
+    THEN
     _SRFMI-JSON-CAP @ 0> 0= IF 0 EXIT THEN
     _SRFMI-JSON-A @ DUP 0= IF DROP 0 EXIT THEN
     _SRFMI-JSON-CAP @ MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
@@ -1014,8 +1082,10 @@ VARIABLE _SRFMI-OWN-STATUS
 : _SRFM-INIT
   ( kind selector-a selector-u caller target cap resource-rid|0 )
   ( bus future-burrow authorizer-xt authorizer-context )
+  ( preparer-xt|0 preparer-context|0 )
   ( json-a json-cap building-router mount -- status )
     _SRFMI-MOUNT ! _SRFMI-ROUTER ! _SRFMI-JSON-CAP ! _SRFMI-JSON-A !
+    _SRFMI-PREPARER-CONTEXT ! _SRFMI-PREPARER-XT !
     _SRFMI-AUTH-CONTEXT ! _SRFMI-AUTH-XT ! _SRFMI-BURROW !
     _SRFMI-BUS ! _SRFMI-RESOURCE ! _SRFMI-CAP ! _SRFMI-TARGET !
     _SRFMI-CALLER ! _SRFMI-SELECTOR-U ! _SRFMI-SELECTOR-A !
@@ -1039,6 +1109,8 @@ VARIABLE _SRFMI-OWN-STATUS
     _SRFMI-AUTH-CONTEXT @ _SRFMI-MOUNT @ SRFM.AUTH-CONTEXT !
     _SRFMI-JSON-A @ _SRFMI-MOUNT @ SRFM.JSON-A !
     _SRFMI-JSON-CAP @ _SRFMI-MOUNT @ SRFM.JSON-CAP !
+    _SRFMI-PREPARER-XT @ _SRFMI-MOUNT @ SRFM.PREPARER-XT !
+    _SRFMI-PREPARER-CONTEXT @ _SRFMI-MOUNT @ SRFM.PREPARER-CONTEXT !
     _SRFMI-RESOURCE @ ?DUP IF
         _SRFMI-MOUNT @ SRFM.RESOURCE-ID RID-COPY
     THEN
@@ -1056,11 +1128,32 @@ VARIABLE _SRFMI-OWN-STATUS
     STREAMS-RABBIT-FACET-MOUNT-S-OK _SRFMI-MOUNT @ SRFM.LAST-STATUS !
     STREAMS-RABBIT-FACET-MOUNT-S-OK ;
 
+: _SRFM-INIT-DIRECT
+  ( kind selector-a selector-u caller target cap resource-rid|0 )
+  ( bus future-burrow authorizer-xt authorizer-context )
+  ( json-a json-cap building-router mount -- status )
+    0 _SRFMI-PROFILED !
+    2>R 2>R 0 0 2R> 2R> _SRFM-INIT ;
+
+: _SRFM-INIT-PROFILED
+  ( kind selector-a selector-u caller target cap resource-rid|0 )
+  ( bus future-burrow authorizer-xt authorizer-context )
+  ( preparer-xt preparer-context )
+  ( json-a json-cap building-router mount -- status )
+    -1 _SRFMI-PROFILED ! _SRFM-INIT ;
+
 : STREAMS-RABBIT-FACET-MOUNT-INIT
   ( kind selector-a selector-u caller target cap resource-rid|0 )
   ( bus future-burrow authorizer-xt authorizer-context )
   ( json-a json-cap building-router mount -- status )
-    ['] _SRFM-INIT _SRFM-GUARD WITH-GUARD ;
+    ['] _SRFM-INIT-DIRECT _SRFM-GUARD WITH-GUARD ;
+
+: STREAMS-RABBIT-FACET-MOUNT-INIT-PROFILED
+  ( kind selector-a selector-u caller target cap resource-rid|0 )
+  ( bus future-burrow authorizer-xt authorizer-context )
+  ( preparer-xt preparer-context )
+  ( json-a json-cap building-router mount -- status )
+    ['] _SRFM-INIT-PROFILED _SRFM-GUARD WITH-GUARD ;
 
 \ Router storage owns the borrowed handler pointer.  Servers and the Burrow
 \ must be finalized first, then the router must be RESET or FINI before this

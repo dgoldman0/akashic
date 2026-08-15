@@ -6,7 +6,9 @@
 \  exact replay and scoped-read behavior, and then proves that ordinary UI
 \  reload observes capability-created authority.  The last phase exercises
 \  the canonical 65,536-byte read window and its 65,537-byte rejection at the
-\  service boundary without manufacturing a second owner.
+\  service boundary without manufacturing a second owner.  A separate focused
+\  runner regenerates the query/read IVJSON maxima and exercises the
+\  caller-bounded full-result decoder without provisioning Library storage.
 \ =====================================================================
 
 PROVIDED akashic-library-capability-l1-contracts
@@ -1242,6 +1244,301 @@ VARIABLE _LC1-canonical-expected
     ." LIBRARY CAPABILITY CREATE BOUNDARY L1 PHASE EXACT MAX" CR _LC1-flush
     _LC1-create-content-max
     _LC1-shell-finish ;
+
+\ ---------------------------------------------------------------------
+\ Query/read IVJSON maxima and caller-bounded decode
+\ ---------------------------------------------------------------------
+\ This focused phase regenerates every published query/read capability bound
+\ from a schema-valid worst-case graph.  It also proves that a full escaped
+\ read result needs the caller-bounded decode entry point: the normal 65,536
+\ byte document ceiling remains unchanged, one byte below the declared limit
+\ is rejected without replacing the destination, and the exact limit decodes
+\ deeply against the public result schema.
+
+VARIABLE _LC1-wb-schema-wide
+VARIABLE _LC1-wb-node
+VARIABLE _LC1-wb-list
+VARIABLE _LC1-wb-row
+VARIABLE _LC1-wb-expected
+VARIABLE _LC1-wb-encoder
+VARIABLE _LC1-wb-length
+VARIABLE _LC1-wb-ior
+VARIABLE _LC1-wb-buffer
+VARIABLE _LC1-wb-control
+
+CREATE _LC1-wb-root CV-SIZE ALLOT
+CREATE _LC1-wb-decoded CV-SIZE ALLOT
+CREATE _LC1-wb-rid RID-SIZE ALLOT
+CREATE _LC1-wb-ref RREF-SIZE ALLOT
+CREATE _LC1-wb-hex SHA3-256-HEX-LEN ALLOT
+
+_LC1-wb-root CV-INIT
+_LC1-wb-decoded CV-INIT
+0 _LC1-wb-buffer !
+0 _LC1-wb-control !
+
+: _LC1-wb-allocate  ( bytes -- address )
+    ALLOCATE DUP IF NIP THROW THEN DROP ;
+
+: _LC1-wb-buffers-free  ( -- )
+    _LC1-wb-buffer @ ?DUP IF FREE 0 _LC1-wb-buffer ! THEN
+    _LC1-wb-control @ ?DUP IF FREE 0 _LC1-wb-control ! THEN ;
+
+: _LC1-wb-buffers-allocate  ( -- )
+    _LC1-wb-buffers-free
+    LIBRARY-DOCUMENT-READ-RESULT-SCHEMA-TYPED-MAX
+        _LC1-wb-allocate _LC1-wb-buffer !
+    CV-MAX-STRING-LEN _LC1-wb-allocate DUP _LC1-wb-control !
+        CV-MAX-STRING-LEN 1 FILL ;
+
+: _LC1-wb-root-free  ( -- ) _LC1-wb-root CV-FREE ;
+
+: _LC1-wb-root-map  ( count -- )
+    _LC1-wb-root-free _LC1-wb-root CV-MAP! _LC1-ok ;
+
+: _LC1-wb-map-slot  ( key-a key-u index map -- value )
+    CV-MAP-SLOT! DUP 0= _LC1-assert DROP ;
+
+: _LC1-wb-root-slot  ( key-a key-u index -- value )
+    _LC1-wb-root _LC1-wb-map-slot ;
+
+: _LC1-wb-r0!  ( value -- )
+    >R _LC1-wb-ref RREF-INIT
+    _LC1-wb-rid _LC1-wb-ref RREF.ID RID-COPY
+    _LC1-wb-ref R> IRES-RREF! IRES-S-OK = _LC1-assert ;
+
+: _LC1-wb-resource!  ( value -- )
+    _LC1-wb-schema-wide @ IF
+        _LC1-wb-control @ IRES-RREF-URI-MAX ROT CV-RESOURCE! _LC1-ok
+    ELSE
+        _LC1-wb-r0!
+    THEN ;
+
+: _LC1-wb-text!  ( semantic-a semantic-u maximum value -- )
+    >R
+    _LC1-wb-schema-wide @ IF
+        NIP NIP _LC1-wb-control @ SWAP R> CV-STRING! _LC1-ok
+    ELSE
+        DROP R> CV-STRING! _LC1-ok
+    THEN ;
+
+: _LC1-wb-digest!  ( value -- )
+    >R _LC1-wb-hex SHA3-256-HEX-LEN SHA3-256-HEX-LEN R>
+        _LC1-wb-text! ;
+
+: _LC1-wb-cursor!  ( value -- )
+    _LC1-wb-node ! 6 _LC1-wb-node @ CV-MAP! _LC1-ok
+    S" fingerprint" 0 _LC1-wb-node @ _LC1-wb-map-slot _LC1-wb-digest!
+    S" observed_logical_generation" 1
+        _LC1-wb-node @ _LC1-wb-map-slot
+        CV-CELL-MAX SWAP CV-INT!
+    S" first_order_sequence" 2 _LC1-wb-node @ _LC1-wb-map-slot
+        CV-CELL-MAX SWAP CV-INT!
+    S" first_resource" 3 _LC1-wb-node @ _LC1-wb-map-slot
+        _LC1-wb-resource!
+    S" last_order_sequence" 4 _LC1-wb-node @ _LC1-wb-map-slot
+        CV-CELL-MAX SWAP CV-INT!
+    S" last_resource" 5 _LC1-wb-node @ _LC1-wb-map-slot
+        _LC1-wb-resource! ;
+
+: _LC1-wb-row!  ( value -- )
+    _LC1-wb-row ! 6 _LC1-wb-row @ CV-MAP! _LC1-ok
+    S" resource" 0 _LC1-wb-row @ _LC1-wb-map-slot _LC1-wb-resource!
+    S" domain_revision" 1 _LC1-wb-row @ _LC1-wb-map-slot
+        CV-CELL-MAX SWAP CV-INT!
+    _LC1-wb-control @ LIB-TITLE-MAX LIB-TITLE-MAX
+        S" title" 2 _LC1-wb-row @ _LC1-wb-map-slot _LC1-wb-text!
+    S" text/markdown" 13
+        S" media_type" 3 _LC1-wb-row @ _LC1-wb-map-slot _LC1-wb-text!
+    S" content_bytes" 4 _LC1-wb-row @ _LC1-wb-map-slot
+        CV-CELL-MAX SWAP CV-INT!
+    S" content_digest" 5 _LC1-wb-row @ _LC1-wb-map-slot
+        _LC1-wb-digest! ;
+
+: _LC1-wb-documents!  ( value -- )
+    _LC1-wb-list ! LIBRARY-CAPABILITY-QUERY-MAX _LC1-wb-list @
+        CV-LIST! _LC1-ok
+    LIBRARY-CAPABILITY-QUERY-MAX 0 ?DO
+        I _LC1-wb-list @ CV-LIST-NTH _LC1-wb-row!
+    LOOP ;
+
+: _LC1-wb-build-query-request  ( schema-wide? -- )
+    _LC1-wb-schema-wide ! 5 _LC1-wb-root-map
+    S" collection" 0 _LC1-wb-root-slot _LC1-wb-resource!
+    S" collection_domain_revision" 1 _LC1-wb-root-slot
+        CV-CELL-MAX SWAP CV-INT!
+    S" request_digest" 2 _LC1-wb-root-slot _LC1-wb-digest!
+    S" after" 3 _LC1-wb-root-slot _LC1-wb-cursor!
+    S" limit" 4 _LC1-wb-root-slot
+        LIBRARY-CAPABILITY-QUERY-MAX SWAP CV-INT! ;
+
+: _LC1-wb-build-query-result  ( schema-wide? -- )
+    _LC1-wb-schema-wide ! 5 _LC1-wb-root-map
+    S" collection" 0 _LC1-wb-root-slot _LC1-wb-resource!
+    S" collection_domain_revision" 1 _LC1-wb-root-slot
+        CV-CELL-MAX SWAP CV-INT!
+    S" request_digest" 2 _LC1-wb-root-slot _LC1-wb-digest!
+    S" documents" 3 _LC1-wb-root-slot _LC1-wb-documents!
+    S" next" 4 _LC1-wb-root-slot _LC1-wb-cursor! ;
+
+: _LC1-wb-build-read-request  ( schema-wide? -- )
+    _LC1-wb-schema-wide ! 5 _LC1-wb-root-map
+    S" collection" 0 _LC1-wb-root-slot _LC1-wb-resource!
+    S" collection_domain_revision" 1 _LC1-wb-root-slot
+        CV-CELL-MAX SWAP CV-INT!
+    S" request_digest" 2 _LC1-wb-root-slot _LC1-wb-digest!
+    S" resource" 3 _LC1-wb-root-slot _LC1-wb-resource!
+    S" domain_revision" 4 _LC1-wb-root-slot
+        CV-CELL-MAX SWAP CV-INT! ;
+
+: _LC1-wb-build-read-result  ( schema-wide? -- )
+    _LC1-wb-schema-wide ! 9 _LC1-wb-root-map
+    S" collection" 0 _LC1-wb-root-slot _LC1-wb-resource!
+    S" collection_domain_revision" 1 _LC1-wb-root-slot
+        CV-CELL-MAX SWAP CV-INT!
+    S" request_digest" 2 _LC1-wb-root-slot _LC1-wb-digest!
+    S" resource" 3 _LC1-wb-root-slot _LC1-wb-resource!
+    S" domain_revision" 4 _LC1-wb-root-slot
+        CV-CELL-MAX SWAP CV-INT!
+    S" text/markdown" 13
+        S" media_type" 5 _LC1-wb-root-slot _LC1-wb-text!
+    S" content_bytes" 6 _LC1-wb-root-slot
+    _LC1-wb-schema-wide @ IF CV-CELL-MAX ELSE CV-MAX-STRING-LEN THEN
+        SWAP CV-INT!
+    S" content_digest" 7 _LC1-wb-root-slot _LC1-wb-digest!
+    _LC1-wb-control @ CV-MAX-STRING-LEN
+        S" content" 8 _LC1-wb-root-slot CV-STRING! _LC1-ok ;
+
+: _LC1-wb-exact-encode  ( expected encoder-xt -- )
+    _LC1-wb-encoder ! _LC1-wb-expected !
+    _LC1-wb-root _LC1-wb-buffer @ _LC1-wb-expected @
+        _LC1-wb-encoder @ EXECUTE
+    _LC1-wb-ior ! _LC1-wb-length !
+    _LC1-wb-ior @ 0= _LC1-assert
+    _LC1-wb-length @ _LC1-wb-expected @ = _LC1-assert
+
+    0xA5 _LC1-wb-buffer @ _LC1-wb-expected @ 1- + C!
+    _LC1-wb-root _LC1-wb-buffer @ _LC1-wb-expected @ 1-
+        _LC1-wb-encoder @ EXECUTE
+    _LC1-wb-ior ! _LC1-wb-length !
+    _LC1-wb-ior @ IVJSON-E-CAPACITY = _LC1-assert
+    _LC1-wb-length @ 0= _LC1-assert
+    _LC1-wb-buffer @ _LC1-wb-expected @ 1- + C@
+        0xA5 = _LC1-assert ;
+
+: _LC1-wb-bound-check  ( plain-max typed-max schema -- )
+    >R
+    _LC1-wb-root R@ CS-VALIDATE-DEEP 0= _LC1-assert
+    SWAP ['] IVJSON-ENCODE _LC1-wb-exact-encode
+    ['] IVJSON-TYPED-ENCODE _LC1-wb-exact-encode
+    R> DROP _LC1-wb-root-free ;
+
+: _LC1-wb-encoded-bounds  ( -- )
+    0 _LC1-wb-build-query-request
+    LIBRARY-DOCUMENT-QUERY-REQUEST-SEMANTIC-PLAIN-MAX
+    LIBRARY-DOCUMENT-QUERY-REQUEST-SEMANTIC-TYPED-MAX
+    LIBRARY-CAP-DOCUMENT-QUERY CAP.IN-SCHEMA @ _LC1-wb-bound-check
+    -1 _LC1-wb-build-query-request
+    LIBRARY-DOCUMENT-QUERY-REQUEST-SCHEMA-PLAIN-MAX
+    LIBRARY-DOCUMENT-QUERY-REQUEST-SCHEMA-TYPED-MAX
+    LIBRARY-CAP-DOCUMENT-QUERY CAP.IN-SCHEMA @ _LC1-wb-bound-check
+
+    0 _LC1-wb-build-query-result
+    LIBRARY-DOCUMENT-QUERY-RESULT-SEMANTIC-PLAIN-MAX
+    LIBRARY-DOCUMENT-QUERY-RESULT-SEMANTIC-TYPED-MAX
+    LIBRARY-CAP-DOCUMENT-QUERY CAP.OUT-SCHEMA @ _LC1-wb-bound-check
+    -1 _LC1-wb-build-query-result
+    LIBRARY-DOCUMENT-QUERY-RESULT-SCHEMA-PLAIN-MAX
+    LIBRARY-DOCUMENT-QUERY-RESULT-SCHEMA-TYPED-MAX
+    LIBRARY-CAP-DOCUMENT-QUERY CAP.OUT-SCHEMA @ _LC1-wb-bound-check
+
+    0 _LC1-wb-build-read-request
+    LIBRARY-DOCUMENT-READ-REQUEST-SEMANTIC-PLAIN-MAX
+    LIBRARY-DOCUMENT-READ-REQUEST-SEMANTIC-TYPED-MAX
+    LIBRARY-CAP-DOCUMENT-READ CAP.IN-SCHEMA @ _LC1-wb-bound-check
+    -1 _LC1-wb-build-read-request
+    LIBRARY-DOCUMENT-READ-REQUEST-SCHEMA-PLAIN-MAX
+    LIBRARY-DOCUMENT-READ-REQUEST-SCHEMA-TYPED-MAX
+    LIBRARY-CAP-DOCUMENT-READ CAP.IN-SCHEMA @ _LC1-wb-bound-check
+
+    0 _LC1-wb-build-read-result
+    LIBRARY-DOCUMENT-READ-RESULT-SEMANTIC-PLAIN-MAX
+    LIBRARY-DOCUMENT-READ-RESULT-SEMANTIC-TYPED-MAX
+    LIBRARY-CAP-DOCUMENT-READ CAP.OUT-SCHEMA @ _LC1-wb-bound-check
+    -1 _LC1-wb-build-read-result
+    LIBRARY-DOCUMENT-READ-RESULT-SCHEMA-PLAIN-MAX
+    LIBRARY-DOCUMENT-READ-RESULT-SCHEMA-TYPED-MAX
+    LIBRARY-CAP-DOCUMENT-READ CAP.OUT-SCHEMA @ _LC1-wb-bound-check
+    _LC1-stack ;
+
+: _LC1-wb-decoded-sentinel!  ( -- )
+    _LC1-wb-decoded CV-FREE 42 _LC1-wb-decoded CV-INT! ;
+
+: _LC1-wb-decoded-sentinel?  ( -- flag )
+    _LC1-wb-decoded CV-TYPE@ CV-T-INT =
+    _LC1-wb-decoded CV-DATA@ 42 = AND ;
+
+: _LC1-wb-bounded-decode  ( -- )
+    -1 _LC1-wb-build-read-result
+    _LC1-wb-root _LC1-wb-buffer @
+        LIBRARY-DOCUMENT-READ-RESULT-SCHEMA-PLAIN-MAX
+        IVJSON-ENCODE
+    _LC1-wb-ior ! _LC1-wb-length !
+    _LC1-wb-ior @ 0= _LC1-assert
+    _LC1-wb-length @
+        LIBRARY-DOCUMENT-READ-RESULT-SCHEMA-PLAIN-MAX = _LC1-assert
+
+    _LC1-wb-decoded-sentinel!
+    _LC1-wb-buffer @ _LC1-wb-length @
+        LIBRARY-CAP-DOCUMENT-READ CAP.OUT-SCHEMA @ _LC1-wb-decoded
+        IVJSON-DECODE-AS IVJSON-E-INVALID = _LC1-assert
+    _LC1-wb-decoded-sentinel? _LC1-assert
+
+    _LC1-wb-buffer @ _LC1-wb-length @ _LC1-wb-length @ 1-
+        LIBRARY-CAP-DOCUMENT-READ CAP.OUT-SCHEMA @ _LC1-wb-decoded
+        IVJSON-DECODE-AS-LIMIT IVJSON-E-INVALID = _LC1-assert
+    _LC1-wb-decoded-sentinel? _LC1-assert
+
+    _LC1-wb-buffer @ _LC1-wb-length @ _LC1-wb-length @
+        LIBRARY-CAP-DOCUMENT-READ CAP.OUT-SCHEMA @ _LC1-wb-decoded
+        IVJSON-DECODE-AS-LIMIT _LC1-ok
+    _LC1-wb-decoded LIBRARY-CAP-DOCUMENT-READ CAP.OUT-SCHEMA @
+        CS-VALIDATE-DEEP 0= _LC1-assert
+    S" content" _LC1-wb-decoded CV-MAP-FIND
+        DUP 0<> _LC1-assert
+        DUP CV-TYPE@ CV-T-STRING = _LC1-assert
+        CV-LEN@ CV-MAX-STRING-LEN = _LC1-assert
+    _LC1-wb-root-free _LC1-wb-decoded CV-FREE
+    _LC1-stack ;
+
+: _LC1-WIRE-BOUND-RUN  ( -- )
+    0 _LC1-checks ! 0 _LC1-fails !
+    DEPTH _LC1-depth !
+    ." LIBRARY WIRE BOUNDS PHASE SETUP" CR _LC1-flush
+    _LC1-wb-buffers-allocate
+    0x41 _LC1-wb-rid _LC1-id!
+    _LC1-wb-rid _LC1-wb-hex SHA3-256->HEX
+        SHA3-256-HEX-LEN = _LC1-assert
+    LIBRARY-APPLET-CAPABILITIES-SETUP
+    JSON-MAX-DOCUMENT 65536 = _LC1-assert
+    LIBRARY-DOCUMENT-QUERY-RESULT-SCHEMA-PLAIN-MAX
+        JSON-MAX-DOCUMENT > _LC1-assert
+    LIBRARY-DOCUMENT-READ-RESULT-SCHEMA-PLAIN-MAX
+        JSON-MAX-DOCUMENT > _LC1-assert
+    ." LIBRARY WIRE BOUNDS PHASE ENCODE" CR _LC1-flush
+    _LC1-wb-encoded-bounds
+    ." LIBRARY WIRE BOUNDS PHASE DECODE" CR _LC1-flush
+    _LC1-wb-bounded-decode
+    ." LIBRARY WIRE BOUNDS PHASE CLEANUP" CR _LC1-flush
+    _LC1-wb-buffers-free
+    _LC1-stack
+    _LC1-fails @ ?DUP IF
+        ." LIBRARY WIRE BOUNDS FAIL " .
+        ." / " _LC1-checks @ . CR
+    ELSE
+        ." LIBRARY WIRE BOUNDS PASS " _LC1-checks @ . CR
+    THEN
+    _LC1-flush ;
 
 : _LC1-RUN  ( -- )
     0 _LC1-checks ! 0 _LC1-fails !

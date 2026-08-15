@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+import struct
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -15,6 +16,14 @@ if str(LOCAL_TESTING) not in sys.path:
 
 from akashic_tui import (  # noqa: E402
     APP_SHELL_MODULE,
+    COLD_SOURCE_CHUNK_TEMPLATE,
+    COLD_SOURCE_FLAGS,
+    COLD_SOURCE_HEADER,
+    COLD_SOURCE_HEADER_BYTES,
+    COLD_SOURCE_LOADER_PATH,
+    COLD_SOURCE_MAGIC,
+    COLD_SOURCE_RAW_MAX_BYTES,
+    COLD_SOURCE_VERSION,
     DEFAULT_SMOKE_MAX_STEPS,
     DEFAULT_SMOKE_TIMEOUT,
     FORTH_LINE_COALESCE_BARRIERS,
@@ -29,20 +38,34 @@ from akashic_tui import (  # noqa: E402
     REQUIRE_RE,
     SOURCE_ROOT,
     _coalesce_audited_forth_lines,
+    _cold_source_lzss_decode,
+    _cold_source_lzss_encode,
     _forth_line_tokens,
     _has_forth_error,
     _linked_autoexec,
+    _linked_chunks,
     _minify_forth,
     _matched_failure_markers,
+    _pack_cold_source,
+    _packed_linked_chunks,
     _parser,
     _requires_megapad_networking,
+    _unpack_cold_source,
+    _validate_image_paths,
+    _validate_module_ids,
     _with_megapad_networking,
     _with_mp64fs_vfs_platform,
     build_image,
     dependency_closure,
     dependency_order,
 )
-from diskutil import MP64FS, pack_forth_source  # noqa: E402
+from diskutil import (  # noqa: E402
+    FTYPE_DATA,
+    FTYPE_FORTH,
+    MP64FS,
+    PARENT_ROOT,
+    pack_forth_source,
+)
 
 
 LIBRARY_RENDERER_FREE_PROFILES = (
@@ -99,6 +122,246 @@ def test_link_unit_lexer_omits_parser_payload_tokens() -> None:
         "DROP",
         ";",
     )
+
+
+def test_cold_source_container_is_deterministic_exact_and_crc_checked() -> None:
+    source = b"123456789" + (b" overlap-safe source" * 64)
+    packed = _pack_cold_source(source)
+    assert packed == _pack_cold_source(source)
+    assert _unpack_cold_source(packed) == source
+
+    (
+        magic,
+        version,
+        flags,
+        header_bytes,
+        raw_bytes,
+        payload_bytes,
+        raw_crc32,
+        reserved,
+    ) = COLD_SOURCE_HEADER.unpack_from(packed)
+    assert magic == COLD_SOURCE_MAGIC == b"AKLZSS01"
+    assert version == COLD_SOURCE_VERSION == 1
+    assert flags == COLD_SOURCE_FLAGS == 0
+    assert header_bytes == COLD_SOURCE_HEADER_BYTES == 40
+    assert raw_bytes == len(source) <= COLD_SOURCE_RAW_MAX_BYTES
+    assert payload_bytes == len(packed) - COLD_SOURCE_HEADER_BYTES
+    assert reserved == 0
+    assert _unpack_cold_source(_pack_cold_source(b"123456789")) == b"123456789"
+    assert COLD_SOURCE_HEADER.unpack_from(
+        _pack_cold_source(b"123456789")
+    )[6] == 0xCBF43926
+    assert raw_crc32 != 0
+
+    corrupt = bytearray(packed)
+    corrupt[32] ^= 0x01
+    with pytest.raises(ValueError, match="CRC mismatch"):
+        _unpack_cold_source(bytes(corrupt))
+
+
+def test_cold_source_container_rejects_every_fixed_header_violation() -> None:
+    source = b": COLD-HEADER-TEST 1 ;\n"
+    valid = _pack_cold_source(source)
+
+    def changed(offset: int, fmt: str, value: int) -> bytes:
+        packed = bytearray(valid)
+        struct.pack_into(fmt, packed, offset, value)
+        return bytes(packed)
+
+    malformed = (
+        (bytes([valid[0] ^ 1]) + valid[1:], "magic"),
+        (changed(8, "<H", 2), "version"),
+        (changed(10, "<H", 1), "flags"),
+        (changed(12, "<I", COLD_SOURCE_HEADER_BYTES + 1), "header size"),
+        (changed(16, "<Q", 0), "raw size"),
+        (
+            changed(16, "<Q", COLD_SOURCE_RAW_MAX_BYTES + 1),
+            "raw size",
+        ),
+        (changed(24, "<Q", len(valid)), "payload size"),
+        (changed(36, "<I", 1), "flags"),
+    )
+    for packed, message in malformed:
+        with pytest.raises(ValueError, match=message):
+            _unpack_cold_source(packed)
+
+
+def test_cold_source_lzss_enforces_canonical_and_bounded_streams() -> None:
+    assert _cold_source_lzss_encode(b"ABCDEFGH") == b"\xffABCDEFGH"
+    assert _cold_source_lzss_encode(b"ABCABC") == b"\x07ABC\x20\x00"
+    assert _cold_source_lzss_encode(b"A" * 19) == b"\x01A\x0f\x00"
+    source = b"A" * 257
+    payload = _cold_source_lzss_encode(source)
+    assert _cold_source_lzss_decode(payload, len(source)) == source
+
+    # A single literal consumes bit zero; all seven unused control bits must
+    # be zero so the same raw source has one canonical token stream shape.
+    with pytest.raises(ValueError, match="Non-canonical"):
+        _cold_source_lzss_decode(b"\x03A", 1)
+    with pytest.raises(ValueError, match="distance"):
+        _cold_source_lzss_decode(b"\x00\x00\x00", 3)
+    with pytest.raises(ValueError, match="Truncated"):
+        _cold_source_lzss_decode(b"\x01", 1)
+    with pytest.raises(ValueError, match="Trailing"):
+        _cold_source_lzss_decode(b"\x01A\x00", 1)
+
+
+def test_cold_source_autoexec_is_opt_in_and_preserves_source_order() -> None:
+    autoexec = (
+        "ENTER-USERLAND\n"
+        "REQUIRE one.f\n"
+        "REQUIRE local_testing/fixture.f\n"
+    )
+    ordinary = _linked_autoexec(
+        autoexec,
+        (".akashic/link-00.f",),
+        ("one.f",),
+    )
+    assert f"REQUIRE {COLD_SOURCE_LOADER_PATH}" not in ordinary
+    assert "REQUIRE .akashic/link-00.f" in ordinary
+
+    chunk = COLD_SOURCE_CHUNK_TEMPLATE.format(index=0)
+    packed = _linked_autoexec(
+        autoexec,
+        (chunk,),
+        ("one.f",),
+        cold_source_packed=True,
+    )
+    assert packed.count(f"REQUIRE {COLD_SOURCE_LOADER_PATH}") == 1
+    assert "COLD SOURCE LOAD FAIL status=" in packed
+    assert f"_C5-BOOT-SOURCE {chunk}" in packed
+    assert packed.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}") < packed.index(
+        f"_C5-BOOT-SOURCE {chunk}"
+    ) < packed.index("REQUIRE local_testing/fixture.f")
+    assert PROFILES["desktop-library-burrow-capstone"].cold_source_packed
+    assert not PROFILES["desktop-library-burrow"].cold_source_packed
+    assert not PROFILES["desktop"].cold_source_packed
+    with pytest.raises(RuntimeError, match="no linked REQUIRE"):
+        _linked_autoexec(
+            "ENTER-USERLAND\nREQUIRE local_testing/fixture.f\n",
+            (chunk,),
+            ("one.f",),
+            cold_source_packed=True,
+        )
+
+
+def test_cp5_cold_source_image_roundtrips_the_real_linked_closure(
+    tmp_path: Path,
+) -> None:
+    profile_name = "desktop-library-burrow-capstone"
+    profile = PROFILES[profile_name]
+    profile_modules = dependency_order(profile.roots)
+    composition_roots = profile.roots
+    if APP_SHELL_MODULE in profile_modules:
+        composition_roots = (MP64FS_VFS_PLATFORM_MODULE,) + profile.roots
+    modules = dependency_order(composition_roots)
+    linked = _linked_chunks(
+        modules,
+        profile.link_chunk_bytes,
+        profile.audited_link_line_bytes,
+    )
+    packed = _packed_linked_chunks(linked)
+    image = build_image(profile_name, tmp_path / "cp5-cold-source.img")
+    filesystem = MP64FS(bytearray(image.read_bytes()))
+
+    loader = filesystem.find_file(COLD_SOURCE_LOADER_PATH)
+    assert loader is not None
+    _, loader_entry = loader
+    assert loader_entry.ftype == FTYPE_FORTH
+    assert loader_entry.ext1_count == 0
+    assert filesystem.read_file(COLD_SOURCE_LOADER_PATH) == (
+        LOCAL_TESTING / "cold-source-loader.f"
+    ).read_bytes()
+
+    packed_names = tuple(
+        COLD_SOURCE_CHUNK_TEMPLATE.format(index=index)
+        for index in range(len(linked))
+    )
+    root_names = {
+        entry.name for entry in filesystem.list_files(parent=PARENT_ROOT)
+    }
+    assert set(packed_names) <= root_names
+    assert not any(name.startswith("link-") for name in root_names)
+    for name, raw in zip(packed_names, linked.values(), strict=True):
+        found = filesystem.find_file(name)
+        assert found is not None
+        _, entry = found
+        assert entry.ftype == FTYPE_DATA
+        assert entry.ext1_count == 0
+        container = filesystem.read_file(name)
+        assert container == packed[name]
+        assert _unpack_cold_source(container) == raw
+
+    leaf_names = tuple(
+        path for path, _ in profile.cold_source_initial_files
+    )
+    assert set(leaf_names) <= root_names
+    for path, raw in profile.cold_source_initial_files:
+        found = filesystem.find_file(path)
+        assert found is not None
+        _, entry = found
+        assert entry.ftype == FTYPE_DATA
+        assert entry.ext1_count == 0
+        assert _unpack_cold_source(filesystem.read_file(path)) == raw
+
+    loader_source = (LOCAL_TESTING / "cold-source-loader.f").read_text(
+        encoding="utf-8"
+    )
+    executable_tokens = {
+        token
+        for line in loader_source.splitlines()
+        for token in line.split("\\", 1)[0].split()
+    }
+    assert "PROVIDED akashic-test-cold-source-loader" in loader_source
+    assert "C5-COLD-SOURCE" in executable_tokens
+    assert "(FCLOSE-NOFS)" in executable_tokens
+    assert "FCLOSE" not in executable_tokens
+    assert "CRC32-IEEE-BUF" in executable_tokens
+    assert "SOURCE-EVALUATE-CHECKED" in executable_tokens
+
+    autoexec = filesystem.read_file("autoexec.f").decode("utf-8")
+    assert autoexec.count(f"REQUIRE {COLD_SOURCE_LOADER_PATH}") == 1
+    assert "REQUIRE .akashic/link-" not in autoexec
+    assert autoexec.index("ENTER-USERLAND") < autoexec.index(
+        f"REQUIRE {COLD_SOURCE_LOADER_PATH}"
+    ) < autoexec.index(f"_C5-BOOT-SOURCE {packed_names[0]}")
+    positions = [
+        autoexec.index(f"_C5-BOOT-SOURCE {name}") for name in packed_names
+    ]
+    assert positions == sorted(positions)
+    leaf_positions = [
+        autoexec.index(f"_C5-BOOT-SOURCE {name}") for name in leaf_names
+    ]
+    assert leaf_positions == sorted(leaf_positions)
+    assert positions[-1] < leaf_positions[0]
+    assert profile.initial_files == ()
+    assert filesystem.info()["free_sectors"] * 512 >= 1 << 20
+
+
+def test_injected_forth_provided_keys_share_module_collision_validation() -> None:
+    prefix = "abcdefghijklmnopqrstuvw"
+    with pytest.raises(RuntimeError, match="KDOS PROVIDED key collision"):
+        _validate_module_ids(
+            (),
+            (
+                ("first.f.lz", f"PROVIDED {prefix}-first\n".encode()),
+                ("second.f", f"PROVIDED {prefix}-second\n".encode()),
+            ),
+        )
+
+    profile = PROFILES["desktop-library-burrow-capstone"]
+    _validate_module_ids(
+        dependency_order(profile.roots),
+        profile.initial_files + profile.cold_source_initial_files,
+    )
+
+
+def test_image_paths_reject_file_directory_aliases() -> None:
+    with pytest.raises(RuntimeError, match="both files and directories"):
+        _validate_image_paths(
+            {"collision", "collision/child.f"},
+            ["collision"],
+        )
 
 
 @pytest.mark.parametrize(
@@ -654,6 +917,7 @@ def test_library_dependency_chain_and_ui_storage_boundary() -> None:
         "controller.f",
         "../../../interop/request-bus.f",
         "../../../interop/schema-common.f",
+        "../../../interop/profiles/library-read-v1.f",
     }
     assert direct_requires["capability-work.f"] == {
         "service.f",

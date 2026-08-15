@@ -14,6 +14,16 @@ REQUIRE capability-work.f
 REQUIRE controller.f
 REQUIRE ../../../interop/request-bus.f
 REQUIRE ../../../interop/schema-common.f
+REQUIRE ../../../interop/profiles/library-read-v1.f
+
+\ =====================================================================
+\ Frozen capability encoding bounds (plain / typed IVJSON)
+\ =====================================================================
+\ These are the complete public capability maps, not the narrower peer-body
+\ projections used by a fixed-scope Rabbit profile.  Semantic maxima use the
+\ handler's canonical R0, lowercase H64, and managed-media invariants;
+\ schema-wide maxima include the worst JSON escaping admitted by each coarse
+\ text/resource shape.  Rabbit results use the schema-wide plain maxima.
 
 \ =====================================================================
 \ Static schemas and descriptors

@@ -143,6 +143,7 @@ REQUIRE ../../../utils/memory-span.f
     THEN
     DUP SRBPROV-SPEC.COLLECTION RID-PRESENT? 0= IF DROP 0 EXIT THEN
     DUP SRBPROV-SPEC.COLLECTION-REVISION @ 0> 0= IF DROP 0 EXIT THEN
+    DUP SRBPROV-SPEC.REQUEST-DIGEST RID-PRESENT? 0= IF DROP 0 EXIT THEN
     SRBPROV-SPEC.PEER-CAPACITY @ 0> ;
 
 \ =====================================================================

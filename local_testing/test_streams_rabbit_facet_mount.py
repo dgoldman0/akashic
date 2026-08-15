@@ -138,6 +138,31 @@ MOUNT_CONTRACT_STAGES = (
         "_RBT-FM-PHASE-SUCCESS-START",
         "_RBT-FM-PHASE-SUCCESS-RESULTS",
     ),
+    *_request_case_stages(
+        "profile-success",
+        "_RBT-FM-PHASE-PROFILE-SUCCESS-START",
+        "_RBT-FM-PHASE-PROFILE-SUCCESS-RESULTS",
+    ),
+    *_request_case_stages(
+        "profile-throw",
+        "_RBT-FM-PHASE-PROFILE-THROW-START",
+        "_RBT-FM-PHASE-PROFILE-THROW-RESULTS",
+    ),
+    *_request_case_stages(
+        "profile-stack",
+        "_RBT-FM-PHASE-PROFILE-STACK-START",
+        "_RBT-FM-PHASE-PROFILE-STACK-RESULTS",
+    ),
+    *_request_case_stages(
+        "profile-malformed",
+        "_RBT-FM-PHASE-PROFILE-MALFORMED-START",
+        "_RBT-FM-PHASE-PROFILE-MALFORMED-RESULTS",
+    ),
+    *_request_case_stages(
+        "profile-schema",
+        "_RBT-FM-PHASE-PROFILE-SCHEMA-START",
+        "_RBT-FM-PHASE-PROFILE-SCHEMA-RESULTS",
+    ),
     (
         "mount-fini-borrowed",
         "_RBT-FM-PHASE-FINI-BORROWED",
@@ -176,6 +201,7 @@ def _assert_static_contracts() -> None:
     assert "PROVIDED akashic-streams-rfmount" in mount
     for word in (
         "STREAMS-RABBIT-FACET-MOUNT-INIT",
+        "STREAMS-RABBIT-FACET-MOUNT-INIT-PROFILED",
         "STREAMS-RABBIT-FACET-MOUNT-BINDING-VALID?",
         "STREAMS-RABBIT-FACET-MOUNT-VALID?",
         "STREAMS-RABBIT-FACET-MOUNT-LAST@",

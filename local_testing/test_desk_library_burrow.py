@@ -425,6 +425,8 @@ def _assert_static_contracts() -> None:
 
 
 class ProductJourney:
+    configure_step_budget: int = CONFIGURE_MAX_STEPS
+
     def __init__(
         self,
         session: harness.MachineSession,
@@ -437,6 +439,7 @@ class ProductJourney:
         self.ledger = ledger
         self.deadline = time.monotonic() + timeout
         self.total_steps = 0
+        self.configured_steps = 0
         self.activity = "product startup"
 
     def _captured(self) -> tuple[str, str]:
@@ -606,12 +609,31 @@ class ProductJourney:
         self.sample("Library collection visible")
         self.toggle_full_frame()
 
+    def _drive_tool_call(self, call_number: int, operation: str) -> None:
+        """Drive one logical Agent tool call through its ordinary review."""
+
+        self.wait_raw(
+            f"DESK LIBRARY BURROW CALL {call_number} {operation}"
+        )
+        if call_number in MUTATION_CALLS:
+            self.approve_once(call_number)
+        self.wait_raw(
+            f"DESK LIBRARY BURROW RESULT {call_number} {operation} PASS"
+        )
+
+    def _after_tool_result(self, call_number: int, operation: str) -> None:
+        """Checkpoint-specific product evidence hook."""
+
     def run(self) -> str:
         # Cold source qualification has to cover the whole linked Desktop
         # closure before this fixture can emit its first marker.  Keep that
         # startup allowance within the single journey ceiling while leaving
         # the other half for UI input, reviews, persistence, and teardown.
-        self.wait_raw(CONFIGURED_MARKER, step_budget=CONFIGURE_MAX_STEPS)
+        self.wait_raw(
+            CONFIGURED_MARKER,
+            step_budget=self.configure_step_budget,
+        )
+        self.configured_steps = self.total_steps
         self.wait_screen("[1:Library", "[2:Streams", "[3:Agent")
         self.sample("Desk product ready")
 
@@ -625,15 +647,9 @@ class ProductJourney:
         self.settle_input()
 
         for call_number, operation in enumerate(EXPECTED_CALLS, start=1):
-            self.wait_raw(
-                f"DESK LIBRARY BURROW CALL {call_number} {operation}"
-            )
-            if call_number in MUTATION_CALLS:
-                self.approve_once(call_number)
-            self.wait_raw(
-                f"DESK LIBRARY BURROW RESULT {call_number} {operation} PASS"
-            )
+            self._drive_tool_call(call_number, operation)
             self.sample(f"tool result {call_number} {operation}")
+            self._after_tool_result(call_number, operation)
 
             if call_number == 6:
                 self.wait_raw(RUNNING_MARKER)
@@ -701,9 +717,14 @@ class ProductJourney:
                 )
 
 
-def _run_product(image: Path, timeout: float) -> int:
-    profile = harness.PROFILES[PROFILE]
-    built = harness.build_image(PROFILE, image)
+def _run_product(
+    image: Path,
+    timeout: float,
+    profile_name: str = PROFILE,
+    journey_class: type[ProductJourney] = ProductJourney,
+) -> int:
+    profile = harness.PROFILES[profile_name]
+    built = harness.build_image(profile_name, image)
     if built.stat().st_size != TOTAL_SECTORS * 512:
         raise JourneyFailure("focused product image is not exactly 8192 sectors")
     ledger = SpaceLedger(built.read_bytes())
@@ -736,7 +757,7 @@ def _run_product(image: Path, timeout: float) -> int:
 
             storage._complete = observed_complete
             session.boot()
-            journey = ProductJourney(session, profile, ledger, timeout)
+            journey = journey_class(session, profile, ledger, timeout)
             journey.run()
     except (AssertionError, JourneyFailure, RuntimeError, ValueError) as error:
         print(f"Desk Library Burrow product: FAIL\n  {error}")
@@ -749,6 +770,11 @@ def _run_product(image: Path, timeout: float) -> int:
                 f"MP64FS build/minimum {ledger.build_free}/"
                 f"{ledger.minimum_free} free sectors"
             )
+            if journey.configured_steps:
+                print(
+                    "  cold configuration marker: "
+                    f"{journey.configured_steps:,} guest steps"
+                )
             for sample in ledger.stable_samples:
                 print(f"    {sample.label}: {sample.free_sectors} free sectors")
             print(screen)
@@ -784,6 +810,7 @@ def _run_product(image: Path, timeout: float) -> int:
         f"  image: {built}\n"
         f"  guest: {journey.total_steps:,} steps in {elapsed:.2f}s; "
         f"one core, {EXT_MEMORY_BYTES >> 20} MiB external memory\n"
+        f"  cold configuration marker: {journey.configured_steps:,} guest steps\n"
         f"  MP64FS build: {ledger.build_free} free sectors "
         f"({ledger.build_free * 512:,} bytes)\n"
         f"  MP64FS observed minimum: {ledger.minimum_free} free sectors "

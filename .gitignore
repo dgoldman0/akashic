@@ -83,6 +83,12 @@ local_testing/*
 !local_testing/test_streams_burrow_lifecycle.py
 !local_testing/desk-library-burrow.f
 !local_testing/test_desk_library_burrow.py
+!local_testing/streams-library-rabbit-provider.f
+!local_testing/test_streams_library_rabbit_provider_load.py
+!local_testing/desk-library-burrow-capstone.f
+!local_testing/test_desk_library_burrow_capstone.py
+!local_testing/cold-source-loader.f
+!local_testing/test_cold_source_loader.py
 # Refactor architecture inventory and ratchet
 !local_testing/forth_dependencies.py
 !local_testing/refactor_inventory.py
