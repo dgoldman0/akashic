@@ -308,6 +308,7 @@ MEGAPAD_NETWORKING_CONSUMERS = frozenset(
         "net/tls-trust-registry.f",
         "net/transports/kdos-tls.f",
         "net/transports/kdos-tls-inbound.f",
+        "net/transports/kdos-tls-port.f",
         "net/ws.f",
         "web/response.f",
         "web/server.f",
@@ -3943,6 +3944,334 @@ _knw-run
         failure_markers=("KDOS NET WITH FAIL",),
         include_large_sample=False,
         total_sectors=1024,
+    ),
+    "tls-established-port": Profile(
+        roots=("net/transports/kdos-tls-port.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - shared established KDOS TLS port tests
+ENTER-USERLAND
+." [akashic] loading shared KDOS TLS port" CR
+REQUIRE net/transports/kdos-tls-port.f
+
+VARIABLE _kp-fails
+VARIABLE _kp-checks
+VARIABLE _kp-depth
+: _kp-assert  ( flag -- )
+    1 _kp-checks +!
+    0= IF 1 _kp-fails +! ." ASSERT " _kp-checks @ . CR THEN ;
+: _kp-stack  ( -- )
+    DEPTH DUP _kp-depth @ <> IF
+        ." STACK " _kp-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _kp-depth @ = _kp-assert ;
+
+CREATE _kp-a KDOSTLSP-SIZE ALLOT
+CREATE _kp-b KDOSTLSP-SIZE ALLOT
+CREATE _kp-foreign 8 ALLOT
+CREATE _kp-buffer 32 ALLOT
+
+VARIABLE _kp-send-mode
+VARIABLE _kp-send-hits
+VARIABLE _kp-recv-n
+VARIABLE _kp-recv-hits
+VARIABLE _kp-status-ior
+VARIABLE _kp-status-hits
+VARIABLE _kp-ready-flag
+VARIABLE _kp-ready-hits
+VARIABLE _kp-poll-hits
+VARIABLE _kp-close-ior
+VARIABLE _kp-close-hits
+VARIABLE _kp-abort-ior
+VARIABLE _kp-abort-status
+VARIABLE _kp-abort-hits
+VARIABLE _kp-now
+VARIABLE _kp-nesting
+VARIABLE _kp-bind-timeout
+
+VARIABLE _kp-cb-sd
+VARIABLE _kp-cb-b
+VARIABLE _kp-cb-u
+VARIABLE _kp-cb-r
+
+: _kp-owner  ( record -- )
+    DUP KDOSNET-OPERATE? _kp-assert
+    KDOSNET-OWNER@ = _kp-assert ;
+
+: _kp-check-sd  ( socket-sd record -- )
+    2DUP KDOSTLSP.SOCKET-SD @ = _kp-assert
+    NIP 0<> _kp-assert ;
+
+: _kp-status  ( socket-sd record -- ior )
+    DUP _kp-owner 2DUP _kp-check-sd 2DROP
+    1 _kp-status-hits +! _kp-status-ior @ ;
+
+: _kp-status-throw  ( socket-sd record -- ior )
+    DUP _kp-owner 2DUP _kp-check-sd 2DROP -7441 THROW 0 ;
+
+: _kp-status-release  ( socket-sd record -- ior )
+    DUP _kp-owner
+    DUP KDOSNET-RELEASE KDOSNET-S-OK = _kp-assert
+    2DROP 0 ;
+
+: _kp-send  ( socket-sd buffer length record -- count )
+    _kp-cb-r ! _kp-cb-u ! _kp-cb-b ! _kp-cb-sd !
+    _kp-cb-r @ _kp-owner
+    _kp-cb-sd @ _kp-cb-r @ _kp-check-sd
+    1 _kp-send-hits +!
+    _kp-send-mode @ 3 = IF -7442 THROW THEN
+    _kp-send-mode @ 4 = IF
+        _kp-cb-r @ KDOSNET-RELEASE KDOSNET-S-OK = _kp-assert
+    THEN
+    _kp-send-mode @ 5 = _kp-nesting @ 0= AND IF
+        -1 _kp-nesting !
+        S" n" _kp-b KDOSTLSP.PORT NIO-SEND
+        NIO-S-OK = _kp-assert 0= _kp-assert
+        0 _kp-nesting !
+    THEN
+    _kp-send-mode @ 1 = IF 0 EXIT THEN
+    _kp-send-mode @ 2 = IF _kp-cb-u @ 1+ EXIT THEN
+    _kp-cb-u @ 3 MIN ;
+
+: _kp-recv  ( socket-sd buffer capacity record -- count )
+    _kp-cb-r ! _kp-cb-u ! _kp-cb-b ! _kp-cb-sd !
+    _kp-cb-r @ _kp-owner
+    _kp-cb-sd @ _kp-cb-r @ _kp-check-sd
+    1 _kp-recv-hits +! _kp-recv-n @ ;
+
+: _kp-ready  ( socket-sd record -- flag )
+    DUP _kp-owner 2DUP _kp-check-sd 2DROP
+    1 _kp-ready-hits +! _kp-ready-flag @ ;
+
+: _kp-poll  ( record -- )
+    DUP _kp-owner DROP 1 _kp-poll-hits +! ;
+
+: _kp-close-try  ( socket-sd record -- ior )
+    DUP _kp-owner 2DUP _kp-check-sd 2DROP
+    1 _kp-close-hits +! _kp-close-ior @ ;
+
+: _kp-abort  ( socket-sd record -- abort-status ior )
+    DUP _kp-owner 2DUP _kp-check-sd 2DROP
+    1 _kp-abort-hits +!
+    _kp-abort-status @ _kp-abort-ior @ ;
+
+: _kp-abort-throw  ( socket-sd record -- abort-status ior )
+    DUP _kp-owner 2DUP _kp-check-sd 2DROP -7443 THROW 0 0 ;
+
+: _kp-now@  ( record -- ms ) DROP _kp-now @ ;
+
+: _kp-fixture-reset  ( -- )
+    0 _kp-send-mode ! 0 _kp-send-hits !
+    0 _kp-recv-n ! 0 _kp-recv-hits !
+    0 _kp-status-ior ! 0 _kp-status-hits !
+    0 _kp-ready-flag ! 0 _kp-ready-hits ! 0 _kp-poll-hits !
+    TLS-E-WOULD-BLOCK _kp-close-ior ! 0 _kp-close-hits !
+    0 _kp-abort-ior ! TLS-ABORT-S-LOCAL _kp-abort-status !
+    0 _kp-abort-hits ! 0 _kp-now ! 0 _kp-nesting !
+    KDOSTLSP-CLOSE-TIMEOUT-MS _kp-bind-timeout ! ;
+
+VARIABLE _kp-bind-sd
+VARIABLE _kp-bind-r
+: _kp-bind  ( socket-sd record -- )
+    _kp-bind-r ! _kp-bind-sd !
+    _kp-bind-r @ KDOSTLSP-INIT KDOSTLSP-S-OK = _kp-assert
+    ['] _kp-now@ _kp-bind-r @ KDOSTLSP.NOW-XT !
+    ['] _kp-send _kp-bind-r @ KDOSTLSP.SEND-XT !
+    ['] _kp-recv _kp-bind-r @ KDOSTLSP.RECV-XT !
+    ['] _kp-status _kp-bind-r @ KDOSTLSP.STATUS-XT !
+    ['] _kp-ready _kp-bind-r @ KDOSTLSP.READY-XT !
+    ['] _kp-poll _kp-bind-r @ KDOSTLSP.POLL-XT !
+    ['] _kp-close-try _kp-bind-r @ KDOSTLSP.CLOSE-TRY-XT !
+    ['] _kp-abort _kp-bind-r @ KDOSTLSP.ABORT-XT !
+    _kp-bind-r @ KDOSTLSP-RESERVE KDOSTLSP-S-OK = _kp-assert
+    _kp-bind-timeout @ _kp-bind-r @ KDOSTLSP-CLOSE-TIMEOUT!
+        KDOSTLSP-S-OK = _kp-assert
+    _kp-bind-sd @ _kp-bind-r @ KDOSTLSP-PUBLISH
+        KDOSTLSP-S-OK = _kp-assert ;
+
+: _kp-adopt  ( record -- )
+    DUP >R KDOSTLSP-ADOPT-OPEN
+    KDOSTLSP-S-OK = _kp-assert
+    R> KDOSTLSP.PORT = _kp-assert ;
+
+: _kp-open  ( socket-sd record -- )
+    DUP >R _kp-bind R> _kp-adopt ;
+
+: _kp-test-publication-and-io  ( -- )
+    _kp-fixture-reset
+    101 _kp-a _kp-bind
+    _kp-a KDOSTLSP.PORT _kp-a = _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-PUBLISHED = _kp-assert
+    S" inert" _kp-a KDOSTLSP.PORT NIO-SEND
+    NIO-S-FAILED = _kp-assert 0= _kp-assert
+    _kp-send-hits @ 0= _kp-assert KDOSNET-OWNER@ 0= _kp-assert
+    _kp-a _kp-adopt
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-OPEN = _kp-assert
+    _kp-a KDOSTLSP.PORT NIO.OPEN-STATE @
+        NIO-OPEN-STATE-OPEN = _kp-assert
+    _kp-status-hits @ 1 = _kp-assert KDOSNET-OWNER@ 0= _kp-assert
+
+    S" abcdef" _kp-a KDOSTLSP.PORT NIO-SEND
+    NIO-S-OK = _kp-assert 3 = _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert
+
+    _kp-foreign KDOSNET-CLAIM KDOSNET-S-OK = _kp-assert
+    S" busy" _kp-a KDOSTLSP.PORT NIO-SEND
+    NIO-S-OK = _kp-assert 0= _kp-assert
+    KDOSNET-OWNER@ _kp-foreign = _kp-assert
+    _kp-foreign KDOSNET-RELEASE KDOSNET-S-OK = _kp-assert
+
+    1 _kp-send-mode ! TLS-E-BUSY _kp-status-ior !
+    S" lower-busy" _kp-a KDOSTLSP.PORT NIO-SEND
+    NIO-S-OK = _kp-assert 0= _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-OPEN = _kp-assert
+    0 _kp-status-ior ! TLS-E-TRANSPORT _kp-status-ior !
+    S" lower-fail" _kp-a KDOSTLSP.PORT NIO-SEND
+    NIO-S-FAILED = _kp-assert 0= _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-ERROR = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 101 = _kp-assert
+    0 _kp-abort-ior !
+    _kp-a KDOSTLSP-DISCARD-STEP KDOSTLSP-S-OK = _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-RESET = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert ;
+
+: _kp-test-receive-and-interleave  ( -- )
+    _kp-fixture-reset 201 _kp-a _kp-open 202 _kp-b _kp-open
+    2 _kp-recv-n !
+    _kp-buffer 8 _kp-a KDOSTLSP.PORT NIO-RECV
+    NIO-S-OK = _kp-assert 2 = _kp-assert
+    0 _kp-recv-n ! 0 _kp-ready-flag !
+    _kp-buffer 8 _kp-a KDOSTLSP.PORT NIO-RECV
+    NIO-S-OK = _kp-assert 0= _kp-assert
+    -1 _kp-ready-flag !
+    _kp-buffer 8 _kp-a KDOSTLSP.PORT NIO-RECV
+    NIO-S-EOF = _kp-assert 0= _kp-assert
+
+    5 _kp-send-mode !
+    S" outer" _kp-a KDOSTLSP.PORT NIO-SEND
+    NIO-S-OK = _kp-assert 3 = _kp-assert
+    _kp-send-hits @ 1 = _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-OPEN = _kp-assert
+    _kp-b KDOSTLSP.STATE @ KDOSTLSP-STATE-OPEN = _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert
+    0 _kp-send-mode !
+    S" peer" _kp-b KDOSTLSP.PORT NIO-SEND
+    NIO-S-OK = _kp-assert 3 = _kp-assert
+    _kp-a KDOSTLSP.PORT NIO-POLL
+    _kp-b KDOSTLSP.PORT NIO-POLL
+    _kp-poll-hits @ 2 = _kp-assert KDOSNET-OWNER@ 0= _kp-assert
+
+    _kp-a KDOSTLSP.PORT NIO-CANCEL NIO-S-CANCELLED = _kp-assert
+    _kp-b KDOSTLSP.PORT NIO-CANCEL NIO-S-CANCELLED = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+    _kp-b KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert ;
+
+: _kp-test-close-and-recovery  ( -- )
+    _kp-fixture-reset 301 _kp-a _kp-open
+    _kp-a KDOSTLSP.PORT NIO-CLOSE-START NIO-S-PENDING = _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-CLOSE-POLL = _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert
+    _kp-foreign KDOSNET-CLAIM KDOSNET-S-OK = _kp-assert
+    _kp-a KDOSTLSP.PORT NIO-CLOSE-POLL NIO-S-PENDING = _kp-assert
+    _kp-poll-hits @ 0= _kp-assert
+    _kp-foreign KDOSNET-RELEASE KDOSNET-S-OK = _kp-assert
+    _kp-a KDOSTLSP.PORT NIO-CLOSE-POLL NIO-S-PENDING = _kp-assert
+    _kp-poll-hits @ 1 = _kp-assert
+    0 _kp-close-ior !
+    _kp-a KDOSTLSP.PORT NIO-CLOSE-POLL NIO-S-OK = _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-CLOSED = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert
+
+    _kp-fixture-reset 1 _kp-bind-timeout ! 302 _kp-a _kp-bind
+    _kp-a _kp-adopt
+    _kp-a KDOSTLSP.PORT NIO-CLOSE-START NIO-S-PENDING = _kp-assert
+    2 _kp-now !
+    _kp-a KDOSTLSP.PORT NIO-CLOSE-POLL NIO-S-PENDING = _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-CLOSE-ABORT = _kp-assert
+    _kp-a KDOSTLSP.PORT NIO-CLOSE-POLL NIO-S-FAILED = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+    _kp-a KDOSTLSP.CLOSE-FALLBACKS @ 1 = _kp-assert
+    _kp-a KDOSTLSP.LAST-ERROR @ KDOSTLSP-E-TIMEOUT = _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert
+
+    _kp-fixture-reset 303 _kp-b _kp-open
+    _kp-foreign KDOSNET-CLAIM KDOSNET-S-OK = _kp-assert
+    _kp-b KDOSTLSP.PORT NIO-CANCEL NIO-S-FAILED = _kp-assert
+    _kp-b KDOSTLSP.STATE @ KDOSTLSP-STATE-QUARANTINED = _kp-assert
+    _kp-b KDOSTLSP.SOCKET-SD @ 303 = _kp-assert
+    _kp-foreign KDOSNET-RELEASE KDOSNET-S-OK = _kp-assert
+    _kp-b KDOSTLSP-RECOVER-STEP KDOSTLSP-S-OK = _kp-assert
+    _kp-b KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert
+
+    _kp-fixture-reset 304 _kp-a _kp-bind
+    _kp-foreign KDOSNET-CLAIM KDOSNET-S-OK = _kp-assert
+    _kp-a KDOSTLSP-DISCARD-STEP KDOSTLSP-S-PENDING = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 304 = _kp-assert
+    _kp-foreign KDOSNET-RELEASE KDOSNET-S-OK = _kp-assert
+    _kp-a KDOSTLSP-DISCARD-STEP KDOSTLSP-S-OK = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+    ;
+
+: _kp-test-fault-containment  ( -- )
+    _kp-fixture-reset 401 _kp-a _kp-bind
+    ['] _kp-status-throw _kp-a KDOSTLSP.STATUS-XT !
+    _kp-a KDOSTLSP-ADOPT-OPEN
+    KDOSTLSP-S-LOWER = _kp-assert 0= _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-ERROR = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 401 = _kp-assert
+    ['] _kp-abort _kp-a KDOSTLSP.ABORT-XT !
+    _kp-a KDOSTLSP-DISCARD-STEP KDOSTLSP-S-OK = _kp-assert
+
+    _kp-fixture-reset 402 _kp-a _kp-bind
+    ['] _kp-status-release _kp-a KDOSTLSP.STATUS-XT !
+    _kp-a KDOSTLSP-ADOPT-OPEN
+    KDOSTLSP-S-LOWER = _kp-assert 0= _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-QUARANTINED = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 402 = _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert
+    ['] _kp-abort _kp-a KDOSTLSP.ABORT-XT !
+    _kp-a KDOSTLSP-RECOVER-STEP KDOSTLSP-S-OK = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+
+    _kp-fixture-reset 403 _kp-b _kp-bind
+    ['] _kp-abort-throw _kp-b KDOSTLSP.ABORT-XT !
+    _kp-b KDOSTLSP-DISCARD-STEP KDOSTLSP-S-LOWER = _kp-assert
+    _kp-b KDOSTLSP.STATE @ KDOSTLSP-STATE-QUARANTINED = _kp-assert
+    _kp-b KDOSTLSP.SOCKET-SD @ 403 = _kp-assert
+    ['] _kp-abort _kp-b KDOSTLSP.ABORT-XT !
+    _kp-b KDOSTLSP-RECOVER-STEP KDOSTLSP-S-OK = _kp-assert
+
+    _kp-fixture-reset 404 _kp-a _kp-open
+    _kp-a 1 _kp-a KDOSTLSP.PORT NIO-SEND
+    NIO-S-FAILED = _kp-assert 0= _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-ERROR = _kp-assert
+    _kp-a KDOSTLSP-DISCARD-STEP KDOSTLSP-S-OK = _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert ;
+
+: _kp-run  ( -- )
+    0 _kp-fails ! 0 _kp-checks ! DEPTH _kp-depth !
+    _kp-test-publication-and-io
+    _kp-test-receive-and-interleave
+    _kp-test-close-and-recovery
+    _kp-test-fault-containment
+    _kp-stack
+    _kp-fails @ 0= IF
+        ." TLS ESTABLISHED PORT PASS " _kp-checks @ .
+    ELSE
+        ." TLS ESTABLISHED PORT FAIL " _kp-fails @ .
+        ." / " _kp-checks @ .
+    THEN CR ;
+
+_kp-run
+""",
+        ready_markers=("TLS ESTABLISHED PORT PASS",),
+        stable_markers=("TLS ESTABLISHED PORT PASS",),
+        failure_markers=("TLS ESTABLISHED PORT FAIL",),
+        include_large_sample=False,
+        total_sectors=2048,
     ),
     "tls-port": Profile(
         roots=("net/transports/kdos-tls.f", "utils/string.f"),
