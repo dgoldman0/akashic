@@ -1925,7 +1925,10 @@ unwritten extents, and depth-positive release remain outside this slice.
 
 The operation uses one insertion, one independently committed and synchronously
 checkpointed cleanup transaction per retained record, and a final clear through
-one caller-owned writer. An exact `3/0/0` `ADD_FIRST` transaction updates the
+one caller-owned writer. Its component capacities are the maxima of the exact
+insertion, prospective-target cleanup, every prequalified retained cleanup,
+and the one-home clear; the canonical fixture's five metadata slots are not a
+general cleanup ceiling. An exact `3/0/0` `ADD_FIRST` transaction updates the
 inode to zero size and trusted timestamps while retaining its old map and
 `i_blocks`, writes its inode number into the first authenticated empty modern
 orphan-file slot, and sets `ORPHAN_PRESENT`. With an existing authenticated
@@ -1938,6 +1941,15 @@ after-image. They reconstruct every owned after-image from current media before
 the first home write and require the post-home union to equal the pre-union plus
 the linked zero-size target. Admission requires geometry-derived runtime-plan
 capacity for that additional record and rejects duplicates without media I/O.
+Every preexisting record is authenticated and measured before insertion and
+must remain linked: an unlinked record can represent a live detached-file
+lifetime, so same-session truncate returns `BUSY` before clock or media while
+crash-time mount recovery keeps its unlinked-delete authority. Admission also
+reconciles exact clear-bit counts for every initialized block bitmap with its
+authenticated group descriptor and the aggregate mounted superblock count.
+Lazy `BLOCK_UNINIT` groups remain untouched and cannot own an admitted release
+range. This proves cumulative free-counter capacity for the disjoint union
+before `ADD`, without requiring one union-sized transaction or writer profile.
 
 The existing linked-orphan cleanup then measures and commits its exact homes.
 For the qualified inode-14 fixture it uses `5/0/0`: target inode, orphan-file
@@ -1948,6 +1960,10 @@ the orphan slot. A final exact `1/0/0` superblock transaction clears transient
 `ORPHAN_PRESENT` only from an authenticated empty-clear-pending endpoint.
 `RECOVER` remains active so the same mounted writer can serve later operations;
 ordinary clean unmount performs the existing witnessed deactivation.
+After each successful cleanup emit, any cached vnode matching the selected
+inode number and generation receives the committed post-cleanup `i_blocks`
+value before checkpoint. Every hard-link dentry therefore observes the same
+projection, including preexisting union members materialized by `READDIR`.
 
 Clean public qualification observes EOF zero and zero-byte reads through both
 hard links, preserves link count, generation, atime, and xattr, gains exactly
@@ -1968,6 +1984,14 @@ data-bearing linked records in 1,679,279,160 guest steps under the established
 3-billion-step data-recovery watchdog. It frees all three retained data blocks,
 preserves both positive link counts and the target xattr, passes pinned
 `e2fsck`, and reaches a write-free stable remount in 44,133,436 steps.
+An authenticated test-only mount that deliberately retains that preexisting
+union drives public `VFS-TRUNCATE` through `ADD_MORE`, both cleanups, and the
+final clear in 1,656,718,410 guest steps under the same unchanged watchdog. It
+proves the already-cached inode-17 vnode changes from four sectors to zero,
+all three data blocks are released, both link counts and the target xattr are
+preserved, and pinned `e2fsck` accepts the result. The ordinary one-record
+public path, including exact counter reconciliation and a stable remount,
+completes in 1,195,226,705 steps under the unchanged 1.2-billion guard.
 
 The first public `UNLINK` lifetimes are regular-file removals from an
 authenticated one-block linear directory. The staged binding alone advertises

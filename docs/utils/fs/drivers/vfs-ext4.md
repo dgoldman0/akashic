@@ -147,7 +147,9 @@ journey measures 2,196,652,327; each clean remount measures 55,772,107. The
 modern `ADD_MORE` orphan-home tear journey, which first replays the insertion
 and then drains two independently data-bearing linked records, measures
 1,679,279,160 steps under that same watchdog; its write-free stable remount
-measures 44,133,436. The clean insertion and injected-fault setup journeys
+measures 44,133,436. The public retained-union `TRUNCATE(0)` composition
+journey measures 1,656,718,410 steps under the same unchanged watchdog. The
+clean insertion and injected-fault setup journeys
 measure 519,567,371 and 421,722,917 steps respectively. The
 direct COW stage/seal/abort workloads without persistence tracing measure
 615,185,969 and 825,905,086 steps respectively. These are workload-specific
@@ -2463,9 +2465,13 @@ release, nonzero block-releasing EOFs, unwritten extents, and depth-positive
 release remain typed unsupported boundaries.
 
 The callback composes an insertion, one cleanup transaction per retained
-record, and a final clear through a caller-owned writer with at least five
-metadata slots. Thus the empty-union path has three synchronously checkpointed
-transactions, while `ADD_MORE` drains the complete enlarged union. First, an
+record, and a final clear through a caller-owned writer sized componentwise to
+the maximum exact insertion, prospective-target cleanup, retained-union
+cleanup, and one-home clear requirements. The qualified canonical topology
+needs five metadata slots and no revokes; broader supported cleanup topologies
+are not forced into that fixture value. Thus the empty-union path has three
+synchronously checkpointed transactions, while `ADD_MORE` drains the complete
+enlarged union. First, an
 exact `3/0/0`
 `ADD_FIRST` transaction atomically sets the target size and trusted-clock
 `mtime`/`ctime`, inserts the target inode number into the first authenticated
@@ -2479,6 +2485,17 @@ target, and rebuild their exact after-images from current media before the
 first home write. Their poststate is exactly the old union plus the new linked
 zero-size inode while the old extent and `i_blocks` remain recoverable.
 
+Before insertion, every preexisting record is authenticated and measured and
+must still be linked. An unlinked record is a live-session lifetime authority
+that this operation may not consume, so it returns `BUSY` before the clock or
+media mutation; crash-time mount recovery retains its broader delete semantics.
+Admission also reconciles each initialized block bitmap's exact clear-bit
+count with its authenticated group descriptor and reconciles the group sum
+with the mounted superblock free count. `BLOCK_UNINIT` groups remain lazy and
+cannot own any admitted release range. Together with disjoint allocated-range
+ownership, this proves the union's cumulative counter updates before `ADD`
+even though cleanup is deliberately checkpointed one record at a time.
+
 Second, the existing linked-orphan cleanup measures its exact homes, replaces
 the target map with an empty extent root, updates `i_blocks`, releases the data
 bitmap bit and free-block counters, and clears the modern slot. On the qualified
@@ -2489,6 +2506,14 @@ sectors. Third, an exact `1/0/0` transaction clears transient
 `ORPHAN_PRESENT` only after authenticated empty-union proof. It deliberately
 leaves ext4 `RECOVER` and the private writer active so a later operation can
 reuse the mounted write session.
+
+After each cleanup emit, the driver projects the committed `i_blocks` value
+into the shared cached vnode identified by inode number and generation before
+checkpoint. Thus a retained union member already materialized by directory
+enumeration cannot remain stale after its on-disk map is released; all hard
+link dentries continue to share that one corrected vnode. A checkpoint failure
+does not roll this projection back because the committed journal remains the
+authoritative state.
 
 Public success clamps every descriptor sharing the vnode to EOF zero, exposes
 zero bytes through both hard-link names, advances free space by one block, and
@@ -2510,7 +2535,15 @@ drains the full two-record union. The final image frees all three data blocks,
 preserves both positive link counts and the target xattr, passes pinned
 `e2fsck`, and remounts without I/O. These boundaries prove that durable EOF
 zero cannot strand the old allocation and that a failed precommit orphan
-insertion cannot publish the shrink. The consolidated zero-release,
+insertion cannot publish the shrink. A focused authenticated retained-union
+mount fixture, intentionally bypassing ordinary mount-time orphan draining,
+also drives public `VFS-TRUNCATE` through `ADD_MORE` and the full two-record
+drain in 1,656,718,410 guest steps. It verifies inode 17's already-cached vnode
+changes from four sectors to zero, all three data blocks become free, the
+target retains its two-sector xattr accounting, the feature bit clears, and
+pinned `e2fsck` accepts the image. The ordinary one-record public journey with
+the exact counter audit and stable remount completes in 1,195,226,705 steps
+under the unchanged 1.2-billion guard. The consolidated zero-release,
 retained-shrink, policy,
 orphan-cleanup, and CREATE adjacency capstone passes all eight selected tests
 sequentially in 573.98 host seconds.

@@ -64715,6 +64715,265 @@ def test_staged_vfs_truncate_zero_releases_one_block(
     }
 
 
+def test_staged_vfs_truncate_zero_add_more_drains_linked_union(
+    canonical_images: dict[str, Path],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Public ADD_MORE drains the retained linked union before clearing it."""
+    path = canonical_images["primary-1k-i256"]
+    source_patches = list(_modern_orphan_patches(path, (17,)))
+    superblock, target_inode, _ = _ext4_inode_record(path, 14)
+    _, seed_inode, seed_offset = _ext4_inode_record(path, 17)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    target_data = _extent_root_physical(target_inode, 0)
+    target_xattr = struct.unpack_from("<I", target_inode, 0x68)[0]
+    target_links = struct.unpack_from("<H", target_inode, 0x1A)[0]
+    target_generation = struct.unpack_from("<I", target_inode, 0x64)[0]
+    seed_data = (
+        _extent_root_physical(seed_inode, 0),
+        _extent_root_physical(seed_inode, 2),
+    )
+    seed_blocks = struct.unpack_from("<I", seed_inode, 0x1C)[0]
+    seed_links = struct.unpack_from("<H", seed_inode, 0x1A)[0]
+    seed_generation = struct.unpack_from("<I", seed_inode, 0x64)[0]
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", superblock, 0x158)[0] << 32
+    )
+    epoch_ms = 3_000_004_321_765
+
+    assert block_size == 1024
+    assert target_data == 1346
+    assert target_xattr > 0
+    assert target_links == 2
+    assert target_generation == 0
+    assert seed_data == (1348, 1350)
+    assert seed_blocks == 4
+    assert seed_links == 1
+
+    zero_size_seed = bytearray(seed_inode)
+    struct.pack_into("<I", zero_size_seed, 0x04, 0)
+    struct.pack_into("<I", zero_size_seed, 0x6C, 0)
+    zero_size_seed = _inode_with_checksum(
+        source_patches[0][1],
+        17,
+        zero_size_seed,
+    )
+    source_patches.append((seed_offset, zero_size_seed))
+    source_patches = tuple(source_patches)
+
+    image = tmp_path / "staged-public-truncate-zero-add-more.img"
+    output, _, _ = run_recovery_forth(
+        path,
+        image,
+        [
+            ": _TZM-MOUNT ( vfs -- ior )",
+            (
+                "-1 _EXT4-MOUNT-AUTHENTICATE ?DUP IF "
+                "_EXT4-MOUNT-FAIL EXIT THEN"
+            ),
+            (
+                "_EXT4-M-CTX @ _EXT4-MOUNT-TAIL-RELEASE "
+                "?DUP IF _EXT4-MOUNT-FAIL EXIT THEN"
+            ),
+            (
+                "_EXT4-M-CTX @ _EXT4-M-V @ "
+                "_EXT4-BIND-RUNTIME-ORPHAN-WORKSPACE "
+                "?DUP IF _EXT4-MOUNT-FAIL EXIT THEN"
+            ),
+            (
+                "_EXT4-M-CTX @ _EXT4-AUTHENTICATE-ORPHAN-PLAN "
+                "?DUP IF _EXT4-MOUNT-FAIL EXIT THEN"
+            ),
+            (
+                "_EXT4-M-CTX @ _EXT4-JWR-REBASE-MOUNTED "
+                "?DUP IF _EXT4-MOUNT-FAIL EXIT THEN"
+            ),
+            (
+                "_EXT4-M-V @ V.FLAGS DUP @ VFS-F-DIRTY INVERT AND SWAP ! "
+                "_EXT4-M-CTX @ _EXT4-M-V @ _EXT4-PUBLISH-ROOT"
+            ),
+            (
+                "-1 _EXT4-M-CTX @ _EXT4-C.J.WRITER-CURRENT + ! "
+                "-1 _EXT4-M-CTX @ _EXT4-C.READY + ! 0 ;"
+            ),
+            "CREATE _TZM-OPS VFS-OPS-SIZE ALLOT",
+            "EXT4-STAGED-WRITE-OPS _TZM-OPS VFS-OPS-SIZE CMOVE",
+            "' _TZM-MOUNT _TZM-OPS VFS-OP-MOUNT CELLS + !",
+            "CREATE _TZM-BINDING VFS-BINDING-DESC-SIZE ALLOT",
+            (
+                "EXT4-STAGED-WRITE-BINDING _TZM-BINDING "
+                "VFS-BINDING-DESC-SIZE CMOVE"
+            ),
+            "_TZM-OPS _TZM-BINDING VB.OPS !",
+            ": _TZM-NEW _TZM-BINDING SWAP VFS-NEW ;",
+            "VARIABLE _TZM-CLOCK-CALLS",
+            (
+                ": _TZM-NOW ( context -- epoch-ms ior ) "
+                "DROP 1 _TZM-CLOCK-CALLS +! "
+                f"{epoch_ms} 0 ;"
+            ),
+            "CREATE _TZM-STAT VFS-STATFS-SIZE ALLOT",
+            "VARIABLE _TZM-SEED-VN",
+            "VARIABLE _TZM-SEED-BLOCKS-BEFORE",
+            "T-ARENA CONSTANT _TZM-ARENA",
+            (
+                "_TZM-ARENA T-VOLUME _TZM-NEW "
+                "CONSTANT _TZM-MOUNT-IOR CONSTANT _TZM-V"
+            ),
+            "_TZM-V _EXT4-CTX CONSTANT _TZM-CTX",
+            (
+                "_TZM-CTX _EXT4-C.O.ACTIVE + @ "
+                "CONSTANT _TZM-PRE-ACTIVE"
+            ),
+            (
+                "_TZM-CTX _EXT4-C.O.MODERN-ACTIVE + @ "
+                "CONSTANT _TZM-PRE-MODERN"
+            ),
+            (
+                "' _TZM-NOW 0 _TZM-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _TZM-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_TZM-PROFILE", "_TZM-V", 5, 0, 0
+            ),
+            (
+                'S" /fixture/payload.txt" '
+                "VFS-FF-READ VFS-FF-WRITE OR _TZM-V VFS-OPEN? "
+                "CONSTANT _TZM-OPEN-IOR CONSTANT _TZM-FD"
+            ),
+            "_TZM-FD FD.INODE @ D.VNODE @ CONSTANT _TZM-VN",
+            (
+                ": _TZM-CAPTURE-SEED-VN ( -- ) "
+                f"17 {seed_generation} _TZM-V _VFS-FIND-VNODE "
+                "DUP _TZM-SEED-VN ! ?DUP IF "
+                "VN.BLOCKS @ _TZM-SEED-BLOCKS-BEFORE ! THEN ; "
+                "_TZM-CAPTURE-SEED-VN"
+            ),
+            (
+                ": _TZM-SEED-BLOCKS-ZERO? ( -- flag ) "
+                "_TZM-SEED-VN @ ?DUP IF VN.BLOCKS @ 0= "
+                "ELSE FALSE THEN ;"
+            ),
+            (
+                "_TZM-STAT VFS-STATFS-SIZE _TZM-V VFS-STATFS "
+                "CONSTANT _TZM-BEFORE-IOR"
+            ),
+            "_TZM-STAT VSF.BFREE @ CONSTANT _TZM-FREE-BEFORE",
+            "0 _TZM-FD VFS-TRUNCATE CONSTANT _TZM-IOR",
+            (
+                "_TZM-STAT VFS-STATFS-SIZE _TZM-V VFS-STATFS "
+                "CONSTANT _TZM-AFTER-IOR"
+            ),
+            "_TZM-STAT VSF.BFREE @ CONSTANT _TZM-FREE-AFTER",
+            *_forth_accumulated_conjunction(
+                "_TZM-ALL-CLEAN",
+                [
+                    "_TZM-MOUNT-IOR 0=",
+                    "_TZM-PRE-ACTIVE 1 =",
+                    "_TZM-PRE-MODERN 1 =",
+                    "_TZM-CLOCK-IOR 0=",
+                    "_TZM-PROFILE-SIZE-IOR 0=",
+                    "_TZM-PROFILE-BIND-IOR 0=",
+                    "_TZM-OPEN-IOR 0=",
+                    "_TZM-SEED-VN @ 0<>",
+                    "_TZM-SEED-BLOCKS-BEFORE @ 4 =",
+                    "_TZM-IOR 0=",
+                    "_TZM-V V.LAST-IOR @ 0=",
+                    "_TZM-CLOCK-CALLS @ 1 =",
+                    "_XT-ADD-CREDIT @ 2 =",
+                    "_XT-TARGET-CREDIT @ 5 =",
+                    "_XT-PLAN-META-CAP @ 5 =",
+                    "_XT-PLAN-REVOKE-CAP @ 0=",
+                    "_XT-META-CAP @ 5 =",
+                    "_XT-REVOKE-CAP @ 0=",
+                    "_XT-TARGET-DRAINED @ -1 =",
+                    "_TZM-VN VN.SIZE-LO @ 0=",
+                    "_TZM-VN VN.SIZE-HI @ 0=",
+                    "_TZM-VN VN.BLOCKS @ 2 =",
+                    f"_TZM-VN VN.GEN @ {target_generation} =",
+                    f"_TZM-VN VN.NLINK @ {target_links} =",
+                    "_TZM-SEED-BLOCKS-ZERO?",
+                    "_TZM-BEFORE-IOR 0=",
+                    "_TZM-AFTER-IOR 0=",
+                    "_TZM-FREE-AFTER _TZM-FREE-BEFORE 3 + =",
+                    "_TZM-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                    "_TZM-CTX _EXT4-C.O.MODERN-ACTIVE + @ 0=",
+                    "_TZM-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
+                    "_TZM-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                    (
+                        "_TZM-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
+                        "_EXT4-RO-ORPHAN-PRESENT AND 0="
+                    ),
+                    "_TZM-CTX _EXT4-C.RECOVERY + @ 0<>",
+                    "_TZM-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                    "_TZM-CTX _EXT4-C.J.WRITER + @ _EXT4-JWR-IDLE-CLEAN?",
+                    "_TZM-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_TZM-V V.FLAGS @ VFS-F-RO AND 0=",
+                ],
+            ),
+            (
+                '_TZM-ALL-CLEAN @ IF ." '
+                'EXT4-PUBLIC-TRUNCATE-ZERO-ADD-MORE" ELSE ." '
+                'EXT4-PUBLIC-TRUNCATE-ZERO-ADD-MORE-CHECK " '
+                "_TZM-ALL-CLEAN-FIRST-FAILURE @ . THEN"
+            ),
+            "_TZM-FD VFS-CLOSE? CONSTANT _TZM-CLOSE-IOR",
+            "0 _TZM-V VFS-UNMOUNT CONSTANT _TZM-UNMOUNT-IOR",
+            (
+                "_TZM-CLOSE-IOR 0= _TZM-UNMOUNT-IOR 0= AND "
+                "_TZM-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-PUBLIC-TRUNCATE-ZERO-ADD-MORE-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=source_patches,
+        capture_media=image,
+        max_steps=_MULTI_ORPHAN_DATA_RECOVERY_MAX_STEPS,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-TRUNCATE-ZERO-ADD-MORE")
+    _assert_emitted(
+        output,
+        "EXT4-PUBLIC-TRUNCATE-ZERO-ADD-MORE-UNMOUNTED",
+    )
+
+    final_superblock, final_target, _ = _ext4_inode_record(image, 14)
+    _, final_seed, _ = _ext4_inode_record(image, 17)
+    final_free_blocks = struct.unpack_from("<I", final_superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", final_superblock, 0x158)[0] << 32
+    )
+    assert final_free_blocks == free_blocks_before + 3
+    assert struct.unpack_from("<I", final_superblock, 0x64)[0] & 0x0001_0000 == 0
+    assert struct.unpack_from("<I", final_target, 0x04)[0] == 0
+    assert struct.unpack_from("<I", final_target, 0x1C)[0] == 2
+    assert struct.unpack_from("<I", final_target, 0x68)[0] == target_xattr
+    assert struct.unpack_from("<H", final_target, 0x1A)[0] == target_links
+    assert struct.unpack_from("<HHHH", final_target, 0x28) == (
+        0xF30A,
+        0,
+        4,
+        0,
+    )
+    assert struct.unpack_from("<I", final_seed, 0x04)[0] == 0
+    assert struct.unpack_from("<I", final_seed, 0x1C)[0] == 0
+    assert struct.unpack_from("<H", final_seed, 0x1A)[0] == seed_links
+    assert struct.unpack_from("<HHHH", final_seed, 0x28) == (
+        0xF30A,
+        0,
+        4,
+        0,
+    )
+    assert not any(final_seed[0x34:0x64])
+    assert _ext4_block_allocation_state(
+        image,
+        (target_data, *seed_data),
+    ) == {
+        target_data: False,
+        seed_data[0]: False,
+        seed_data[1]: False,
+    }
+    _assert_e2fsck_clean(image, jbd2_toolchain)
+
+
 def test_staged_vfs_truncate_zero_descriptor_tear_retains_old_file(
     staged_public_truncate_zero_fixture: dict[str, object],
     jbd2_toolchain: dict[str, object],

@@ -18592,6 +18592,11 @@ VARIABLE _EXT4-MOW-STAGE-XT
 VARIABLE _EXT4-MOW-IOR
 VARIABLE _EXT4-MOW-ACTUAL
 VARIABLE _EXT4-MOW-ACTIVE
+VARIABLE _EXT4-MOW-ALLOW-ORPHAN-UNION
+VARIABLE _EXT4-MOW-O-ACTIVE
+VARIABLE _EXT4-MOW-O-MODERN
+VARIABLE _EXT4-MOW-O-LEGACY
+VARIABLE _EXT4-MOW-O-PRESENT
 CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
 
 : _EXT4-MOW-SCRUB  ( -- )
@@ -18610,7 +18615,60 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
     _EXT4-MOW-CREDIT !
     0 ;
 
-: _EXT4-MOW-ENTRY  ( -- ior )
+\ Classify the complete retained orphan state before admitting any mounted
+\ mutation.  Ordinary writers remain strict.  A caller that explicitly owns
+\ modern-orphan composition may retain only an authenticated modern-only
+\ union; legacy authority and the clear-pending endpoint remain recovery work.
+: _EXT4-MOW-REQUIRE-ORPHAN-STATE  ( -- ior )
+    _EXT4-MOW-CTX @ _EXT4-C.O.ACTIVE + @ DUP
+    _EXT4-MOW-O-ACTIVE ! 0< IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-MOW-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ DUP
+    _EXT4-MOW-O-MODERN ! 0< IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-MOW-CTX @ _EXT4-C.O.LEGACY-ACTIVE + @ DUP
+    _EXT4-MOW-O-LEGACY ! 0< IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-MOW-O-MODERN @ _EXT4-MOW-O-LEGACY @ _EXT4-UADD?
+    DUP IF 2DROP EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT THEN
+    DROP _EXT4-MOW-O-ACTIVE @ <> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-MOW-CTX @ _EXT4-C.O.CLEAR-PENDING + @ IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-MOW-CTX @ _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@
+    _EXT4-RO-ORPHAN-PRESENT AND 0<> _EXT4-MOW-O-PRESENT !
+    _EXT4-MOW-O-LEGACY @
+    _EXT4-MOW-CTX @ _EXT4-C.SB + _EXT4-SB.LAST-ORPHAN + L@ OR IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-MOW-O-ACTIVE @ 0= IF
+        _EXT4-MOW-O-MODERN @ _EXT4-MOW-O-PRESENT @ OR IF
+            EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+        THEN
+        0 EXIT
+    THEN
+    _EXT4-MOW-O-MODERN @ _EXT4-MOW-O-ACTIVE @ <>
+    _EXT4-MOW-O-PRESENT @ 0= OR IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-MOW-ALLOW-ORPHAN-UNION @ 0= IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-MOW-CTX @ _EXT4-MOW-V @
+    _EXT4-REQUIRE-RUNTIME-ORPHAN-BINDING ?DUP IF EXIT THEN
+    _EXT4-MOW-O-ACTIVE @
+    _EXT4-MOW-CTX @ _EXT4-C.O.RUNTIME-CAPACITY + @ U> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
+: _EXT4-MOW-ENTRY  ( allow-modern-orphan-union? -- ior )
+    _EXT4-MOW-ALLOW-ORPHAN-UNION !
     _EXT4-MOW-V @ 0= IF VFS-E-INVALID EXIT THEN
     _EXT4-MOW-V @ V.LIFECYCLE @ VFS-L-MOUNTED <> IF
         VFS-E-STALE EXIT
@@ -18634,12 +18692,7 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
     _EXT4-MOW-CTX @ _EXT4-C.SUPER-TORN + @ OR IF
         VFS-E-BUSY EXIT
     THEN
-    _EXT4-MOW-CTX @ _EXT4-C.O.ACTIVE + @
-    _EXT4-MOW-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ OR
-    _EXT4-MOW-CTX @ _EXT4-C.O.LEGACY-ACTIVE + @ OR
-    _EXT4-MOW-CTX @ _EXT4-C.O.CLEAR-PENDING + @ OR IF
-        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
-    THEN
+    _EXT4-MOW-REQUIRE-ORPHAN-STATE ?DUP IF EXIT THEN
     _EXT4-MOW-CTX @ _EXT4-C.RECOVERY + @ 0<> DUP
     _EXT4-MOW-ACTIVE !
     _EXT4-MOW-CTX @ _EXT4-C.J.WRITE-ACTIVE + @ 0<> = 0= IF
@@ -18763,7 +18816,7 @@ CREATE _EXT4-MOW-SNAPSHOT _EXT4-MAX-BLOCK ALLOT
     _EXT4-MOW-GEN ! _EXT4-MOW-INO ! _EXT4-MOW-OFFSET !
     _EXT4-MOW-COUNT ! _EXT4-MOW-SOURCE !
     0 _EXT4-MOW-WRITER ! 0 _EXT4-MOW-ACTUAL !
-    _EXT4-MOW-ENTRY ?DUP IF 0 SWAP EXIT THEN
+    0 _EXT4-MOW-ENTRY ?DUP IF 0 SWAP EXIT THEN
     _EXT4-MOW-COUNT @ 0< IF 0 VFS-E-INVALID EXIT THEN
     _EXT4-MOW-COUNT @ 0= IF 0 0 EXIT THEN
     _EXT4-MOW-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @
@@ -23002,7 +23055,7 @@ VARIABLE _XC-NEW-ROOT
     _XC-D @ 0= _XC-V @ 0= OR IF VFS-E-INVALID EXIT THEN
     _XC-LINKING @ 0<> _XC-DIRECTORY @ 0<> AND IF VFS-E-INVALID EXIT THEN
     _XC-V @ _EXT4-MOW-V !
-    _EXT4-MOW-ENTRY ?DUP IF EXIT THEN
+    0 _EXT4-MOW-ENTRY ?DUP IF EXIT THEN
     _EXT4-MOW-CTX @ _XC-CTX !
     _EXT4-MOW-ACTIVE @ _XC-ACTIVE !
     _XC-D @ _XC-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
@@ -23266,10 +23319,10 @@ VARIABLE _XC-NEW-ROOT
 \ The generic VFS has already published the requested size when this callback
 \ runs and retains the old size in its guarded operation state.  A nonzero EOF
 \ may shrink inside the same retained block.  Zero may release one initialized
-\ depth-zero extent through three synchronous transactions: add a recoverable
-\ modern orphan while retaining the map, clean the linked orphan and free its
-\ data block, then retire ORPHAN_PRESENT while leaving RECOVER/write-active.
-\ Partial block release and wider maps remain explicit unsupported results.
+\ depth-zero extent by adding a recoverable modern orphan while retaining the
+\ map, draining every fully prequalified linked record in the enlarged union,
+\ then retiring ORPHAN_PRESENT while leaving RECOVER/write-active.  Partial
+\ block release and wider maps remain explicit unsupported results.
 
 VARIABLE _XT-D
 VARIABLE _XT-V
@@ -23294,6 +23347,26 @@ VARIABLE _XT-REVOKE
 VARIABLE _XT-BLOCKS
 VARIABLE _XT-RELEASE-BLOCKS
 VARIABLE _XT-ADD-CREDIT
+VARIABLE _XT-TARGET-CREDIT
+VARIABLE _XT-PLAN-META-CAP
+VARIABLE _XT-PLAN-REVOKE-CAP
+VARIABLE _XT-META-CAP
+VARIABLE _XT-REVOKE-CAP
+VARIABLE _XT-PLAN-INDEX
+VARIABLE _XT-PLAN-COUNT
+VARIABLE _XT-PLAN-RECORD
+VARIABLE _XT-SELECTED-INO
+VARIABLE _XT-SELECTED-GEN
+VARIABLE _XT-SELECTED-VN
+VARIABLE _XT-SELECTED-POST-BLOCKS
+VARIABLE _XT-SELECTED-TARGET
+VARIABLE _XT-TARGET-DRAINED
+VARIABLE _XT-ACCOUNT-GROUP
+VARIABLE _XT-ACCOUNT-GROUP-BLOCKS
+VARIABLE _XT-ACCOUNT-GROUP-FREE
+VARIABLE _XT-ACCOUNT-EXPECTED-FREE
+VARIABLE _XT-ACCOUNT-TOTAL-FREE
+VARIABLE _XT-ACCOUNT-GROUP-SET
 CREATE _XT-ZERO _EXT4-MAX-BLOCK ALLOT
 
 : _XT-SCRUB  ( -- )
@@ -23304,7 +23377,7 @@ CREATE _XT-ZERO _EXT4-MAX-BLOCK ALLOT
 : _XT-ENTRY  ( -- ior )
     _XT-D @ 0= _XT-V @ 0= OR IF VFS-E-INVALID EXIT THEN
     _XT-V @ _EXT4-MOW-V !
-    _EXT4-MOW-ENTRY ?DUP IF EXIT THEN
+    _VTR-SIZE @ 0= _EXT4-MOW-ENTRY ?DUP IF EXIT THEN
     _EXT4-MOW-CTX @ _XT-CTX !
     _EXT4-MOW-ACTIVE @ _XT-ACTIVE !
     _XT-D @ _XT-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
@@ -23428,6 +23501,168 @@ CREATE _XT-ZERO _EXT4-MAX-BLOCK ALLOT
     THEN
     0 ;
 
+: _XT-INCLUDE-META-CAP  ( credit -- )
+    DUP _XT-META-CAP @ U> IF
+        _XT-META-CAP !
+    ELSE
+        DROP
+    THEN ;
+
+\ Count one byte without an eight-iteration inner loop.  The standard parallel
+\ bit reduction is exact for the unsigned octet supplied by C@.
+: _XT-BYTE-POPCOUNT  ( byte -- set-bits )
+    DUP 1 RSHIFT 0x55 AND -
+    DUP 0x33 AND SWAP 2 RSHIFT 0x33 AND +
+    DUP 4 RSHIFT + 0x0F AND ;
+
+\ Count only the physical bits admitted by one group's exact geometry.  Full
+\ bytes use the constant-work reduction above; the short final byte is masked
+\ so format padding never contributes to the descriptor's free-block count.
+: _XT-COUNT-CLEAR-GROUP-BITS  ( group-blocks -- free-blocks )
+    _XT-ACCOUNT-GROUP-BLOCKS !
+    0 _XT-ACCOUNT-GROUP-SET !
+    _XT-ACCOUNT-GROUP-BLOCKS @ 8 / 0 ?DO
+        _XT-CTX @ _EXT4-C.BLOCK + I + C@
+        _XT-BYTE-POPCOUNT _XT-ACCOUNT-GROUP-SET +!
+    LOOP
+    _XT-ACCOUNT-GROUP-BLOCKS @ 8 MOD DUP IF
+        1 SWAP LSHIFT 1-
+        _XT-CTX @ _EXT4-C.BLOCK +
+        _XT-ACCOUNT-GROUP-BLOCKS @ 8 / + C@ AND
+        _XT-BYTE-POPCOUNT _XT-ACCOUNT-GROUP-SET +!
+    ELSE
+        DROP
+    THEN
+    _XT-ACCOUNT-GROUP-BLOCKS @ _XT-ACCOUNT-GROUP-SET @ -
+    DUP _XT-ACCOUNT-GROUP-FREE ! ;
+
+\ The scalar range-free builder correctly rejects an individual counter
+\ overflow, but a union is drained through several committed transactions.
+\ Before publishing ADD, prove the mounted free counters equal every
+\ initialized block bitmap.  Consequently the disjoint, allocated ranges
+\ authenticated for this union all fit cumulatively as they are released.
+\ BLOCK_UNINIT groups cannot own an admitted release range and retain their
+\ descriptor count without forcing eager initialization.
+: _XT-REQUIRE-EXACT-BLOCK-ACCOUNTING  ( -- ior )
+    0 _XT-ACCOUNT-GROUP ! 0 _XT-ACCOUNT-TOTAL-FREE !
+    BEGIN
+        _XT-ACCOUNT-GROUP @ _XT-CTX @ _EXT4-C.GROUPS + @ U<
+    WHILE
+        _XT-ACCOUNT-GROUP @ _XT-CTX @ _EXT4-GROUP-BLOCK-COUNT
+        _XT-IOR ! _XT-ACCOUNT-GROUP-BLOCKS !
+        _XT-IOR @ ?DUP IF EXIT THEN
+        _XT-ACCOUNT-GROUP @ _XT-CTX @ _EXT4-LOAD-DESC
+        ?DUP IF EXIT THEN
+        _XT-CTX @ _EXT4-C.DESC + _EXT4-JFB-DESC-FREE@
+        DUP _XT-ACCOUNT-EXPECTED-FREE ! _XT-ACCOUNT-GROUP-FREE !
+        _EXT4-GD-FLAGS @ _EXT4-BG-BLOCK-UNINIT AND IF
+            _XT-ACCOUNT-GROUP-FREE @
+            _XT-ACCOUNT-GROUP-BLOCKS @ U> IF
+                EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+            THEN
+        ELSE
+            _XT-ACCOUNT-GROUP @ _XT-CTX @ _EXT4-LOAD-BLOCK-BITMAP
+            _XT-IOR ! DROP
+            _XT-IOR @ ?DUP IF EXIT THEN
+            _XT-ACCOUNT-GROUP-BLOCKS @ _XT-COUNT-CLEAR-GROUP-BITS
+            _XT-ACCOUNT-EXPECTED-FREE @ <> IF
+                EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+            THEN
+        THEN
+        _XT-ACCOUNT-TOTAL-FREE @ _XT-ACCOUNT-GROUP-FREE @
+        _EXT4-UADD? _XT-IOR ! _XT-ACCOUNT-TOTAL-FREE !
+        _XT-IOR @ ?DUP IF EXIT THEN
+        1 _XT-ACCOUNT-GROUP +!
+    REPEAT
+    _XT-ACCOUNT-TOTAL-FREE @
+    _XT-CTX @ _EXT4-C.FREE-BLOCKS + @ <> IF
+        EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
+\ A live mounted mutation must not consume an unlinked retained inode: that
+\ record may still be the lifetime authority for an open detached vnode.
+\ Crash-time mount recovery has no such live references and keeps its broader
+\ delete semantics.  The geometry-derived plan table is the sole loop bound.
+: _XT-REQUIRE-PREUNION-LINKED  ( -- ior )
+    0 _XT-PLAN-INDEX ! 0 _XT-PLAN-COUNT !
+    BEGIN
+        _XT-PLAN-INDEX @ _XT-CTX @ _EXT4-C.O.SLOTS + @ U<
+    WHILE
+        _XT-PLAN-INDEX @ _XT-CTX @ _EXT4-ORPHAN-TABLE-ENTRY DUP @ IF
+            DUP _XT-PLAN-RECORD ! 1 _XT-PLAN-COUNT +!
+            _XT-PLAN-RECORD @ _XT-CTX @
+            _EXT4-REAUTH-ORPHAN-PLAN-RECORD
+            ?DUP IF NIP EXIT THEN
+            _XT-CTX @ _EXT4-C.INODE + _EXT4-I.LINKS + W@ 0= IF
+                DROP VFS-E-BUSY EXIT
+            THEN
+        THEN
+        DROP 1 _XT-PLAN-INDEX +!
+    REPEAT
+    _XT-PLAN-COUNT @ _XT-CTX @ _EXT4-C.O.ACTIVE + @ <> IF
+        EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT
+    THEN
+    0 ;
+
+\ Derive the prospective target's linked-modern cleanup credit from the exact
+\ homes and singleton extent proven by JTA preflight.  This uses filesystem
+\ topology rather than freezing the canonical image's five-home result into
+\ public policy.
+: _XT-MEASURE-TARGET-CLEANUP  ( -- meta-credit ior )
+    _EXT4-JOW-REQUIRE-SAME-TARGET ?DUP IF 0 SWAP EXIT THEN
+    _XT-CTX @ _EXT4-JCM-CTX !
+    _EXT4-OK-MODERN _EXT4-JCM-KIND !
+    0 _EXT4-JCM-DELETE !
+    _EXT4-JTA-O-HOME @ _EXT4-JCM-ORPHAN-HOME !
+    _EXT4-JOW-INODE-HOME @ _EXT4-JCM-INODE-HOME !
+    _XT-CTX @ _EXT4-PRIMARY-SUPER-BLOCK _EXT4-JCM-SUPER-HOME !
+    1 _EXT4-JOT-COUNT !
+    _EXT4-JOW-PHYS @ 0 _EXT4-JOT-RANGE !
+    1 0 _EXT4-JOT-RANGE CELL+ !
+    _EXT4-JCM-VALIDATE-RANGES ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-JCM-BASE-DISJOINT? 0= IF
+        0 EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
+    THEN
+    3 _EXT4-JCM-CREDIT !
+    _EXT4-JCM-COUNT-GROUP-HOMES ?DUP IF 0 SWAP EXIT THEN
+    _EXT4-JCM-CREDIT @ 0 ;
+
+\ Authenticate and measure every preexisting cleanup plus the prospective
+\ target before sampling the clock, activating the journal, or changing media.
+\ The reusable writer is sized componentwise to the largest exact transaction.
+: _XT-PREQUALIFY-RELEASE-ZERO  ( -- ior )
+    0 _XT-PLAN-META-CAP ! 0 _XT-PLAN-REVOKE-CAP !
+    0 _XT-META-CAP ! 0 _XT-REVOKE-CAP !
+    _XT-CTX @ _EXT4-C.O.ACTIVE + @ IF
+        _XT-CTX @ _EXT4-QUALIFY-ORPHAN-PLAN
+        _XT-IOR ! _XT-PLAN-REVOKE-CAP ! _XT-PLAN-META-CAP !
+        _XT-IOR @ ?DUP IF EXIT THEN
+        _XT-REQUIRE-PREUNION-LINKED ?DUP IF EXIT THEN
+    THEN
+    _XT-CTX @ _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS ?DUP IF EXIT THEN
+    _XT-CTX @ _EXT4-JTA-CTX ! _XT-V @ _EXT4-JTA-V !
+    _XT-OLD @ _EXT4-JTA-OLD ! _XT-BID @ _EXT4-JTA-INO !
+    _XT-GEN @ _EXT4-JTA-GEN !
+    _EXT4-JTA-CLASSIFY-PRESTATE ?DUP IF EXIT THEN
+    _EXT4-JTA-META @ _XT-ADD-CREDIT !
+    _EXT4-JTA-AUTH-PREFLIGHT ?DUP IF EXIT THEN
+    _XT-MEASURE-TARGET-CLEANUP
+    _XT-IOR ! _XT-TARGET-CREDIT !
+    _XT-IOR @ ?DUP IF EXIT THEN
+    1 _XT-INCLUDE-META-CAP
+    _XT-ADD-CREDIT @ _XT-INCLUDE-META-CAP
+    _XT-TARGET-CREDIT @ _XT-INCLUDE-META-CAP
+    _XT-PLAN-META-CAP @ _XT-INCLUDE-META-CAP
+    _XT-PLAN-REVOKE-CAP @ _XT-REVOKE-CAP !
+    _XT-META-CAP @ 0 _XT-REVOKE-CAP @ _XT-CTX @
+    _EXT4-JTX-PREFLIGHT-CAPACITY ?DUP IF EXIT THEN
+    _XT-REQUIRE-EXACT-BLOCK-ACCOUNTING ?DUP IF EXIT THEN
+    _XT-META-CAP @ 0 _XT-REVOKE-CAP @ _XT-CTX @ _EXT4-JWR-ENSURE
+    DUP IF NIP EXIT THEN
+    DROP _XT-WRITER !
+    _XT-REQUIRE-IDLE ;
+
 : _XT-TRUNCATE-RETAINED  ( -- ior )
     2 0 0 _XT-CTX @ _EXT4-JTX-PREFLIGHT-CAPACITY
     ?DUP IF _XT-SCRUB EXIT THEN
@@ -23470,23 +23705,96 @@ CREATE _XT-ZERO _EXT4-MAX-BLOCK ALLOT
     _XT-CTX @ _EXT4-C.INODE + DUP _EXT4-I.GENERATION + L@
     _XT-GEN @ <>
     SWAP _EXT4-I.LINKS + W@ 0= OR IF VFS-E-CORRUPT EXIT THEN
-    _XT-CTX @ _EXT4-C.R.BLOCKS + @ _XT-BLOCKS !
+    _XT-CTX @ _EXT4-C.INODE + DUP _EXT4-I.FLAGS + L@
+    _EXT4-EXTENTS-FL AND 0<> SWAP
+    _EXT4-JOT-EMPTY-AFTERIMAGE-MAP? 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _XT-CTX @ _EXT4-C.R.BLOCKS + @ DUP _XT-BLOCKS @ <> IF
+        DROP VFS-E-CORRUPT EXIT
+    THEN
+    _XT-BLOCKS !
+    0 ;
+
+\ Capture the exact committed cache projection for every selected linked
+\ record.  Stable BID+generation identifies one shared vnode for all of an
+\ inode's dentries; a missing vnode simply means that inode was never cached.
+\ The newly truncated target has additional exactly-once and credit checks.
+: _XT-CAPTURE-CLEANUP-PROJECTION  ( -- ior )
+    0 _XT-SELECTED-TARGET !
+    _EXT4-JFC-INO @ _XT-SELECTED-INO !
+    _EXT4-JFC-TARGET-GEN @ _XT-SELECTED-GEN !
+    _EXT4-JFC-DELETE @ IF VFS-E-CORRUPT EXIT THEN
+    _XT-SELECTED-INO @ _XT-SELECTED-GEN @ _XT-V @
+    _VFS-FIND-VNODE DUP _XT-SELECTED-VN ! ?DUP IF
+        DUP VN.TYPE @ VFS-T-FILE <> IF
+            DROP VFS-E-CORRUPT EXIT
+        THEN
+        DUP VN.NLINK @ 0= IF DROP VFS-E-CORRUPT EXIT THEN
+        VN.BLOCKS @ _EXT4-JOT-ACTUAL @ <> IF
+            VFS-E-CONFLICT EXIT
+        THEN
+    THEN
+    _EXT4-JOT-EA @ IF
+        _XT-CTX @ _EXT4-C.SPB + @
+    ELSE
+        0
+    THEN _XT-SELECTED-POST-BLOCKS !
+    _XT-SELECTED-INO @ _XT-BID @ <> IF 0 EXIT THEN
+    _XT-SELECTED-GEN @ _XT-GEN @ <> IF VFS-E-CORRUPT EXIT THEN
+    _XT-SELECTED-VN @ _XT-VN @ <> IF VFS-E-CORRUPT EXIT THEN
+    _XT-TARGET-DRAINED @ IF VFS-E-CORRUPT EXIT THEN
+    _XT-CREDIT @ _XT-TARGET-CREDIT @ <>
+    _XT-REVOKE @ 0<> OR IF VFS-E-CORRUPT EXIT THEN
+    _XT-SELECTED-POST-BLOCKS @ _XT-RELEASE-BLOCKS !
+    -1 _XT-SELECTED-TARGET !
+    0 ;
+
+: _XT-PUBLISH-CLEANUP-PROJECTION  ( -- )
+    _XT-SELECTED-VN @ ?DUP IF
+        _XT-SELECTED-POST-BLOCKS @ SWAP VN.BLOCKS !
+    THEN
+    _XT-SELECTED-TARGET @ IF
+        _XT-RELEASE-BLOCKS @ _XT-BLOCKS !
+        -1 _XT-TARGET-DRAINED !
+        _XT-PUBLISH-COMMITTED
+    THEN ;
+
+\ Drain the complete post-ADD union in authenticated selection order.  Every
+\ checkpoint rebuilds the retained plan, so no record pointer crosses it.
+\ Exact transaction credits may vary as shared storage reaches its last owner;
+\ the prequalified componentwise maxima are the only reusable-writer bounds.
+: _XT-DRAIN-ORPHAN-UNION  ( -- ior )
+    0 _XT-TARGET-DRAINED !
+    BEGIN _XT-CTX @ _EXT4-C.O.ACTIVE + @ WHILE
+        _XT-CTX @ _EXT4-FIND-SELECTED-ORPHAN
+        _XT-IOR ! _XT-RECORD !
+        _XT-IOR @ ?DUP IF EXIT THEN
+        _XT-RECORD @ _XT-CTX @ _EXT4-MEASURE-ORPHAN-CLEANUP
+        _XT-IOR ! _XT-REVOKE ! _XT-CREDIT !
+        _XT-IOR @ ?DUP IF EXIT THEN
+        _XT-CREDIT @ 0= IF VFS-E-CORRUPT EXIT THEN
+        _XT-CREDIT @ _XT-META-CAP @ U>
+        _XT-REVOKE @ _XT-REVOKE-CAP @ U> OR IF
+            VFS-E-CORRUPT EXIT
+        THEN
+        _XT-CREDIT @ 0 _XT-REVOKE @ _XT-WRITER @ _EXT4-JTX-BEGIN
+        DUP IF NIP EXIT THEN
+        DROP _XT-TX !
+        _XT-RECORD @ _XT-TX @ _EXT4-JTX-STAGE-ORPHAN-CLEANUP
+        ?DUP IF EXIT THEN
+        _XT-CAPTURE-CLEANUP-PROJECTION ?DUP IF EXIT THEN
+        _XT-TX @ _EXT4-JTX-EMIT ?DUP IF EXIT THEN
+        _XT-PUBLISH-CLEANUP-PROJECTION
+        0 _XT-RECORD !
+        _XT-TX @ _EXT4-JTX-CHECKPOINT ?DUP IF EXIT THEN
+        _XT-REQUIRE-IDLE ?DUP IF EXIT THEN
+    REPEAT
+    _XT-TARGET-DRAINED @ 0= IF VFS-E-CORRUPT EXIT THEN
     0 ;
 
 : _XT-TRUNCATE-RELEASE-ZERO  ( -- ior )
-    _XT-CTX @ _XT-V @ _EXT4-MEASURE-MODERN-ORPHAN-ADD
-    _XT-IOR ! _XT-ADD-CREDIT !
-    _XT-IOR @ ?DUP IF _XT-SCRUB EXIT THEN
-    5 0 0 _XT-CTX @ _EXT4-JTX-PREFLIGHT-CAPACITY
-    ?DUP IF _XT-SCRUB EXIT THEN
-    \ Establish the mount-wide protocol-home proof before dry ADD staging.
-    \ Clean-journal activation then reuses it without invalidating the exact
-    \ pair-ownership certificate retained by that dry stage.
-    _XT-CTX @ _EXT4-REQUIRE-PROTOCOL-HOME-OWNERS
-    ?DUP IF _XT-SCRUB EXIT THEN
-    5 0 0 _XT-CTX @ _EXT4-JWR-ENSURE
-    DUP IF NIP _XT-FAIL EXIT THEN
-    DROP _XT-WRITER !
+    _XT-REQUIRE-IDLE ?DUP IF _XT-FAIL EXIT THEN
     _XT-ACTIVE @ 0= IF
         _XT-ADD-CREDIT @ 0 0 _XT-WRITER @ _EXT4-JTX-BEGIN
         DUP IF NIP _XT-FAIL EXIT THEN
@@ -23508,34 +23816,12 @@ CREATE _XT-ZERO _EXT4-MAX-BLOCK ALLOT
     _XT-TX @ _EXT4-JTX-CHECKPOINT
     ?DUP IF _XT-POSTCOMMIT-FAIL EXIT THEN
     _XT-REQUIRE-IDLE ?DUP IF _XT-DURABLE-FAIL EXIT THEN
-    _XT-CTX @ _EXT4-FIND-SELECTED-ORPHAN
-    _XT-IOR ! _XT-RECORD !
-    _XT-IOR @ ?DUP IF _XT-DURABLE-FAIL EXIT THEN
-    _XT-RECORD @ _XT-CTX @ _EXT4-MEASURE-ORPHAN-CLEANUP
-    _XT-IOR ! _XT-REVOKE ! _XT-CREDIT !
-    _XT-IOR @ ?DUP IF _XT-DURABLE-FAIL EXIT THEN
-    _XT-CREDIT @ 0= _XT-CREDIT @ 5 U> OR
-    _XT-REVOKE @ 0<> OR IF
+    _XT-DRAIN-ORPHAN-UNION ?DUP IF _XT-DURABLE-FAIL EXIT THEN
+    _XT-REFRESH-ZERO-INODE ?DUP IF _XT-DURABLE-FAIL EXIT THEN
+    _XT-PUBLISH-COMMITTED
+    _XT-CTX @ _EXT4-AUTHENTICATED-EMPTY-ORPHAN-UNION? 0= IF
         VFS-E-CORRUPT _XT-DURABLE-FAIL EXIT
     THEN
-    _XT-CREDIT @ 0 0 _XT-WRITER @ _EXT4-JTX-BEGIN
-    DUP IF NIP _XT-DURABLE-FAIL EXIT THEN
-    DROP _XT-TX !
-    _XT-RECORD @ _XT-TX @ _EXT4-JTX-STAGE-ORPHAN-CLEANUP
-    ?DUP IF _XT-DURABLE-FAIL EXIT THEN
-    _EXT4-JOT-EA @ IF
-        _XT-CTX @ _EXT4-C.SPB + @
-    ELSE
-        0
-    THEN _XT-RELEASE-BLOCKS !
-    _XT-TX @ _EXT4-JTX-EMIT ?DUP IF _XT-DURABLE-FAIL EXIT THEN
-    _XT-RELEASE-BLOCKS @ _XT-BLOCKS !
-    _XT-PUBLISH-COMMITTED
-    0 _XT-RECORD !
-    _XT-TX @ _EXT4-JTX-CHECKPOINT
-    ?DUP IF _XT-DURABLE-FAIL EXIT THEN
-    _XT-REQUIRE-IDLE ?DUP IF _XT-DURABLE-FAIL EXIT THEN
-    _XT-REFRESH-ZERO-INODE ?DUP IF _XT-DURABLE-FAIL EXIT THEN
     1 0 0 _XT-WRITER @ _EXT4-JTX-BEGIN
     DUP IF NIP _XT-DURABLE-FAIL EXIT THEN
     DROP _XT-TX !
@@ -23557,6 +23843,9 @@ CREATE _XT-ZERO _EXT4-MAX-BLOCK ALLOT
 
 : _EXT4-TRUNCATE-BODY  ( -- ior )
     _XT-ENTRY ?DUP IF _XT-SCRUB EXIT THEN
+    _XT-RELEASE @ IF
+        _XT-PREQUALIFY-RELEASE-ZERO ?DUP IF _XT-SCRUB EXIT THEN
+    THEN
     _XT-NOW ?DUP IF _XT-SCRUB EXIT THEN
     _XT-RELEASE @ IF
         _XT-TRUNCATE-RELEASE-ZERO
@@ -23566,9 +23855,9 @@ CREATE _XT-ZERO _EXT4-MAX-BLOCK ALLOT
 
 \ One public truncate owns the exact range-certificate scope.  ADD staging
 \ invalidates unrelated certificate kinds, and each checkpoint invalidates
-\ the current certificate before its first home write.  The subsequent
-\ linked-orphan cleanup may therefore scan once, retain its exact JOT tuple
-\ across dry/live/preflight reconstruction, and still fail closed at mutation.
+\ the current certificate before its first home write.  The subsequent drain
+\ may therefore reacquire one exact JOT tuple per rebuilt plan and still fail
+\ closed at mutation.
 : _EXT4-TRUNCATE  ( dentry vfs -- ior )
     _XT-V ! _XT-D !
     0 _XT-WRITER ! 0 _XT-TX !
@@ -24528,7 +24817,7 @@ CREATE _XU-TARGET-SNAPSHOT _EXT4-MAX-INODE ALLOT
 : _XU-ENTRY  ( -- ior )
     _XU-D @ 0= _XU-V @ 0= OR IF VFS-E-INVALID EXIT THEN
     _XU-V @ _EXT4-MOW-V !
-    _EXT4-MOW-ENTRY ?DUP IF EXIT THEN
+    0 _EXT4-MOW-ENTRY ?DUP IF EXIT THEN
     _EXT4-MOW-CTX @ _XU-CTX ! _EXT4-MOW-ACTIVE @ _XU-ACTIVE !
     _XU-D @ _XU-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
     _XU-D @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
@@ -25333,7 +25622,7 @@ CREATE _XR-NP-PARENT-SNAPSHOT _EXT4-MAX-INODE ALLOT
         EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
     _XR-V @ _EXT4-MOW-V !
-    _EXT4-MOW-ENTRY ?DUP IF EXIT THEN
+    0 _EXT4-MOW-ENTRY ?DUP IF EXIT THEN
     _EXT4-MOW-CTX @ _XU-CTX ! _EXT4-MOW-ACTIVE @ _XU-ACTIVE !
     _XR-V @ _XU-V ! _XR-SOURCE @ _XU-D !
     _XR-SOURCE @ _XR-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
