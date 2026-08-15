@@ -3806,6 +3806,144 @@ _rt-run
         ready_markers=("HTTP REQUEST PASS",),
         stable_markers=("HTTP REQUEST PASS",),
     ),
+    "kdos-network-owner": Profile(
+        roots=("net/kdos-network-owner.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - scoped KDOS network-owner tests
+ENTER-USERLAND
+." [akashic] loading KDOS network owner" CR
+REQUIRE net/kdos-network-owner.f
+
+VARIABLE _knw-fails
+VARIABLE _knw-checks
+VARIABLE _knw-depth
+VARIABLE _knw-hits
+VARIABLE _knw-claim
+VARIABLE _knw-throw
+VARIABLE _knw-release
+
+CREATE _knw-token-a 8 ALLOT
+CREATE _knw-token-b 8 ALLOT
+
+: _knw-assert  ( flag -- )
+    1 _knw-checks +!
+    0= IF 1 _knw-fails +! ." ASSERT " _knw-checks @ . CR THEN ;
+
+: _knw-stack  ( -- )
+    DEPTH DUP _knw-depth @ <> IF
+        ." STACK " _knw-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _knw-depth @ = _knw-assert ;
+
+: _knw-results!  ( claim-status throw release-status -- )
+    _knw-release ! _knw-throw ! _knw-claim ! ;
+
+: _knw-check-result  ( claim-status throw release-status -- )
+    _knw-results!
+    _knw-claim @ KDOSNET-S-OK = _knw-assert
+    _knw-throw @ 0= _knw-assert
+    _knw-release @ KDOSNET-S-OK = _knw-assert ;
+
+: _knw-operate  ( -- )
+    DEPTH _knw-depth @ = _knw-assert
+    _knw-token-a KDOSNET-OPERATE? _knw-assert
+    1 _knw-hits +! ;
+
+: _knw-operate-throw  ( -- )
+    DEPTH _knw-depth @ = _knw-assert
+    _knw-token-a KDOSNET-OPERATE? _knw-assert
+    1 _knw-hits +!
+    111 222 -7331 THROW ;
+
+: _knw-release-own  ( -- )
+    _knw-token-a KDOSNET-RELEASE KDOSNET-S-OK = _knw-assert ;
+
+: _knw-install-foreign  ( -- )
+    _knw-token-a KDOSNET-RELEASE KDOSNET-S-OK = _knw-assert
+    _knw-token-b KDOSNET-CLAIM KDOSNET-S-OK = _knw-assert ;
+
+: _knw-install-foreign-throw  ( -- )
+    _knw-install-foreign
+    -7332 THROW ;
+
+: _knw-run  ( -- )
+    0 _knw-fails ! 0 _knw-checks ! 0 _knw-hits !
+    DEPTH _knw-depth !
+    KDOSNET-OWNER@ 0= _knw-assert
+
+    _knw-token-a ['] _knw-operate KDOSNET-WITH
+        _knw-check-result
+    _knw-hits @ 1 = _knw-assert
+    KDOSNET-OWNER@ 0= _knw-assert
+
+    _knw-token-a ['] _knw-operate-throw KDOSNET-WITH
+        _knw-results!
+    _knw-claim @ KDOSNET-S-OK = _knw-assert
+    _knw-throw @ -7331 = _knw-assert
+    _knw-release @ KDOSNET-S-OK = _knw-assert
+    _knw-hits @ 2 = _knw-assert
+    KDOSNET-OWNER@ 0= _knw-assert
+
+    0 ['] _knw-operate KDOSNET-WITH _knw-results!
+    _knw-claim @ KDOSNET-S-INVALID = _knw-assert
+    _knw-throw @ 0= _knw-assert
+    _knw-release @ 0= _knw-assert
+    _knw-hits @ 2 = _knw-assert
+    KDOSNET-OWNER@ 0= _knw-assert
+
+    _knw-token-b KDOSNET-CLAIM KDOSNET-S-OK = _knw-assert
+    _knw-token-a 0 KDOSNET-WITH _knw-results!
+    _knw-claim @ KDOSNET-S-INVALID = _knw-assert
+    _knw-throw @ 0= _knw-assert
+    _knw-release @ 0= _knw-assert
+    KDOSNET-OWNER@ _knw-token-b = _knw-assert
+
+    _knw-token-a ['] _knw-operate KDOSNET-WITH _knw-results!
+    _knw-claim @ KDOSNET-S-BUSY = _knw-assert
+    _knw-throw @ 0= _knw-assert
+    _knw-release @ 0= _knw-assert
+    _knw-hits @ 2 = _knw-assert
+    KDOSNET-OWNER@ _knw-token-b = _knw-assert
+    _knw-token-b KDOSNET-RELEASE KDOSNET-S-OK = _knw-assert
+
+    _knw-token-a ['] _knw-release-own KDOSNET-WITH _knw-results!
+    _knw-claim @ KDOSNET-S-OK = _knw-assert
+    _knw-throw @ 0= _knw-assert
+    _knw-release @ KDOSNET-S-NOT-OWNER = _knw-assert
+    KDOSNET-OWNER@ 0= _knw-assert
+
+    _knw-token-a ['] _knw-install-foreign KDOSNET-WITH _knw-results!
+    _knw-claim @ KDOSNET-S-OK = _knw-assert
+    _knw-throw @ 0= _knw-assert
+    _knw-release @ KDOSNET-S-NOT-OWNER = _knw-assert
+    KDOSNET-OWNER@ _knw-token-b = _knw-assert
+    _knw-token-b KDOSNET-RELEASE KDOSNET-S-OK = _knw-assert
+
+    _knw-token-a ['] _knw-install-foreign-throw KDOSNET-WITH
+        _knw-results!
+    _knw-claim @ KDOSNET-S-OK = _knw-assert
+    _knw-throw @ -7332 = _knw-assert
+    _knw-release @ KDOSNET-S-NOT-OWNER = _knw-assert
+    KDOSNET-OWNER@ _knw-token-b = _knw-assert
+    _knw-token-b KDOSNET-RELEASE KDOSNET-S-OK = _knw-assert
+    KDOSNET-OWNER@ 0= _knw-assert
+
+    _knw-stack
+    _knw-fails @ 0= IF
+        ." KDOS NET WITH PASS " _knw-checks @ .
+    ELSE
+        ." KDOS NET WITH FAIL " _knw-fails @ .
+        ." / " _knw-checks @ .
+    THEN CR ;
+
+_knw-run
+""",
+        ready_markers=("KDOS NET WITH PASS",),
+        stable_markers=("KDOS NET WITH PASS",),
+        failure_markers=("KDOS NET WITH FAIL",),
+        include_large_sample=False,
+        total_sectors=1024,
+    ),
     "tls-port": Profile(
         roots=("net/transports/kdos-tls.f", "utils/string.f"),
         resources=(),

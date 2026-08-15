@@ -3,8 +3,9 @@
 \ =====================================================================
 \  KDOS exposes machine-global NIC receive, transmit, TCP, and TLS state.
 \  This core-0-only exact-token gate serializes transports which operate that
-\  state.  Tokens are compared but never dereferenced.  The owner remains
-\  retained until its transport proves lower detachment and releases it.
+\  state.  Tokens are compared but never dereferenced.  Callers may hold an
+\  explicit lease across a lower lifetime or use KDOSNET-WITH for one guarded
+\  stack-neutral operation with exact release and separate diagnostics.
 \ =====================================================================
 
 PROVIDED akashic-kdos-net-owner
@@ -42,3 +43,13 @@ VARIABLE _KDOSNET-OWNER
     THEN
     DROP 0 _KDOSNET-OWNER !
     KDOSNET-S-OK ;
+
+: KDOSNET-WITH  ( token xt -- claim-status throw release-status )
+    DUP 0= IF 2DROP KDOSNET-S-INVALID 0 0 EXIT THEN
+    OVER KDOSNET-CLAIM DUP IF
+        >R 2DROP R> 0 0 EXIT
+    THEN
+    DROP
+    SWAP >R CATCH
+    R> KDOSNET-RELEASE
+    0 -ROT ;
