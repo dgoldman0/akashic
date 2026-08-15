@@ -30,6 +30,7 @@ service operation XIO-SUBMIT
 service XIO-TICK
 service operation XIO-CANCEL
 service operation XIO-RESET
+service owner-id owner-generation request-generation operation XIO-TAKE
 ```
 
 Exactly one service descriptor can be bound machine-wide, and it is initialized
@@ -115,6 +116,19 @@ publishes `FAILED`, clears the active slot, and leaves the result and retained
 wipe obligation intact; a subsequent `XIO-RESET` performs that wipe and clears
 the descriptor. Thus neither a callback fault nor a premature reset can lose a
 published lower authority.
+
+`XIO-TAKE` is the complementary retained-success operation. It requires the
+exact owner, owner generation, request generation, operation, canonical
+service, and retained `SUCCEEDED` state. A successful call returns the saved
+result, invokes the ordinary wipe callback exactly once for transient request
+state, clears the retained slot, and resets the operation immediately. It does
+not invoke `cleanup-poll-xt`: the provider must validate and commit transfer of
+any external result authority before calling `XIO-TAKE`. A stale generation or
+wrong owner cannot consume the result. A wipe fault returns `XIO-S-CALLBACK`
+and leaves the result and retained operation observable as `FAILED` for the
+ordinary reset path. This gives resource-returning adapters an exact adoption
+path without a provider-specific `TAKE`, `XIO-RESET`, then `XIO-TICK`
+sequence; `XIO-RESET` remains the deliberate discard operation.
 
 Repeated cancellation of an already cancelled operation is harmless. Resetting
 an ordinarily active operation is rejected. Repeating reset while cooperative

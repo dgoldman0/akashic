@@ -2101,6 +2101,49 @@ VARIABLE _xi-config-op
     _xi-service XIOS.RETAINED @ 0= _xi-assert
     _xi-wipes @ 1 = _xi-assert ;
 
+: _xi-test-retained-take  ( -- )
+    \ TAKE consumes an exact retained success without entering the provider's
+    \ discard cleanup path.  The ordinary transient-state wipe remains exact
+    \ once, and the service is immediately reusable.
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    0 _xi-op-b _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK _xi-service XIO-TICK _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-SUCCEEDED = _xi-assert
+    _xi-service XIOS.RETAINED @ _xi-op-a = _xi-assert
+    _xi-service 101 8 1 _xi-op-a XIO-TAKE
+        XIO-S-NOT-OWNER = _xi-assert 0= _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-SUCCEEDED = _xi-assert
+    _xi-wipes @ 0= _xi-assert _xi-cleanup-polls @ 0= _xi-assert
+    _xi-service 101 7 1 _xi-op-a XIO-TAKE
+        XIO-S-OK = _xi-assert 42 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-RESET = _xi-assert
+    _xi-op-a XIOO.RESULT @ 0= _xi-assert
+    _xi-service XIOS.RETAINED @ 0= _xi-assert
+    _xi-wipes @ 1 = _xi-assert _xi-cleanup-polls @ 0= _xi-assert
+    _xi-service _xi-op-b XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-b XIO-CANCEL XIO-S-OK = _xi-assert
+
+    \ A wipe fault does not falsely publish a taken result.  The retained
+    \ descriptor and original result remain available for ordinary reset.
+    _xi-fresh 7 _xi-mode !
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK _xi-service XIO-TICK _xi-service XIO-TICK
+    _xi-service 101 7 1 _xi-op-a XIO-TAKE
+        XIO-S-CALLBACK = _xi-assert 0= _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.RESULT @ 42 = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -779 = _xi-assert
+    _xi-service XIOS.RETAINED @ _xi-op-a = _xi-assert
+    _xi-wipes @ 1 = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert
+    _xi-service XIOS.RETAINED @ 0= _xi-assert
+    _xi-wipes @ 1 = _xi-assert ;
+
 : _xi-test-cleanup-recovery  ( -- )
     _xi-fresh
     0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
@@ -2376,6 +2419,7 @@ VARIABLE _xi-config-op
     _xi-test-busy-cancel
     _xi-test-cooperative-cleanup
     _xi-test-cooperative-success-reset
+    _xi-test-retained-take
     _xi-test-cleanup-recovery
     _xi-test-cooperative-callback-faults
     _xi-test-invalid-cleanup-step

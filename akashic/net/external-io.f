@@ -574,3 +574,48 @@ VARIABLE _XIOR-OP
     THEN
     _XIOR-SERVICE @ _XIOR-OP @ _XIO-CLEAR-RESET
     XIO-S-OK ;
+
+VARIABLE _XIOTAKE-SERVICE
+VARIABLE _XIOTAKE-OWNER
+VARIABLE _XIOTAKE-OWNER-GEN
+VARIABLE _XIOTAKE-REQUEST-GEN
+VARIABLE _XIOTAKE-OP
+VARIABLE _XIOTAKE-RESULT
+
+\ Consume one exact retained success without running its discard cleanup.
+\ The provider must validate and commit transfer of any external authority
+\ before calling this word.  XIO still invokes the ordinary wipe callback
+\ exactly once so transient request state cannot escape the lifecycle.
+: XIO-TAKE
+    \ ( service owner-id owner-generation request-generation operation
+    \   -- result status )
+    _XIOTAKE-OP ! _XIOTAKE-REQUEST-GEN ! _XIOTAKE-OWNER-GEN !
+    _XIOTAKE-OWNER ! _XIOTAKE-SERVICE !
+    _XIOTAKE-SERVICE @ XIO-SERVICE-BOUND? 0= IF
+        0 XIO-S-INVALID EXIT
+    THEN
+    _XIOTAKE-SERVICE @ XIO-SERVICE-OWNER? 0= IF
+        0 XIO-S-NOT-OWNER EXIT
+    THEN
+    _XIOTAKE-OP @ XIO-OP-VALID? 0= IF 0 XIO-S-INVALID EXIT THEN
+    _XIOTAKE-OWNER @ _XIOTAKE-OWNER-GEN @ _XIOTAKE-REQUEST-GEN @
+        _XIOTAKE-OP @ XIO-OP-MATCH? 0= IF
+        0 XIO-S-NOT-OWNER EXIT
+    THEN
+    _XIOTAKE-OP @ XIO-CLEANUP-PENDING? IF 0 XIO-S-PENDING EXIT THEN
+    _XIOTAKE-SERVICE @ XIO-ACTIVE? IF 0 XIO-S-BUSY EXIT THEN
+    _XIOTAKE-SERVICE @ XIOS.RETAINED @ _XIOTAKE-OP @ <> IF
+        0 XIO-S-STATE EXIT
+    THEN
+    _XIOTAKE-OP @ XIOO.STATE @ XIO-STATE-SUCCEEDED <> IF
+        0 XIO-S-STATE EXIT
+    THEN
+    _XIOTAKE-OP @ XIOO.RESULT @ _XIOTAKE-RESULT !
+    _XIOTAKE-OP @ _XIO-WIPE-ONCE ?DUP IF
+        DUP _XIOTAKE-OP @ XIOO.ERROR !
+        DUP _XIOTAKE-OP @ XIOO.CLEANUP-ERROR ! DROP
+        XIO-STATE-FAILED _XIOTAKE-OP @ XIOO.STATE !
+        0 XIO-S-CALLBACK EXIT
+    THEN
+    _XIOTAKE-SERVICE @ _XIOTAKE-OP @ _XIO-CLEAR-RESET
+    _XIOTAKE-RESULT @ XIO-S-OK ;
