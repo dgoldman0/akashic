@@ -23,8 +23,11 @@ redirected.
   `binimg`, and ext4 now delegate their duplicated overlap, membership, and
   range-construction proofs through the shared algebra while preserving typed
   fail-closed policy at their boundaries.
-- Stage 2 is in progress. The checked bitset contract lands before filesystem
-  consumers, followed by MP64FS and then bounded ext4 helper families.
+- Stage 2 is in progress through the complete MP64FS consumer migration. The
+  checked `bitset.f` contract landed at `4557527` and now owns logical bitmap
+  admission and range mutation for MP64FS's allocation and pending-free views.
+  MP64FS retains contiguous first-fit search, pending-mask application, and
+  durability sequencing. Bounded ext4 helper families follow one at a time.
 
 ## Baseline and objective
 

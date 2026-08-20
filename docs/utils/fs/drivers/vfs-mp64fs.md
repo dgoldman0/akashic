@@ -114,6 +114,15 @@ the copied run as unreachable allocation rather than risk reusing live data.
 Rename updates the existing reusable directory slot and parent byte in the
 same cached metadata transaction.
 
+Bitmap admission and mutation use the shared checked LSB0 bitset algebra with
+`total_sectors` as the logical bit count. The on-disk bitmap remains rounded to
+whole 512-byte sectors, but its final padding bits are neither allocatable nor
+counted by logical queries, and shared mutations do not normalize them. The
+driver retains contiguous first-fit search policy, exact on-disk sector-count
+validation, dirty-state publication, and full-physical-span persistence.
+Malformed internal run geometry is reported as corruption before an immediate
+claim or retirement can publish dependent extent state.
+
 Free sectors are zeroed through `VOL-WRITE` before the bitmap or extent fields
 claim them. A seek gap and truncate growth are likewise zeroed before
 `used_bytes` advances, including the invisible tail of a pre-existing partial
@@ -131,7 +140,12 @@ either directory version. A failed phase retains the remaining dirty or
 deferred state for retry. If the mount itself is lost after directory
 publication but before retirement, those now-unreachable sectors remain
 conservatively allocated rather than becoming unsafe reusable space. Unmount
-reports sync failure rather than silently discarding it.
+reports sync failure rather than silently discarding it. Delete and multi-run
+shrink validate every pending range before setting the first pending-free bit;
+an empty optional extent remains a no-op. Applying pending frees stays a
+driver-local bytewise operation over the rounded physical bitmap because it
+owns that durability transition and padding cleanup rather than generic bit
+semantics.
 
 ## On-disk layout
 

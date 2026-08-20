@@ -240,24 +240,20 @@ VARIABLE _VMFF-TOTAL
 \ Deallocation is deferred until the directory version that drops the
 \ reference is durable.  The pending map has the same bit geometry as BMAP,
 \ but set bits mean "clear after the directory publication boundary".
-: _VMP-PFREE-BIT-SET  ( sector ctx -- )
-    _VMP-C.PFREE +
-    SWAP DUP 8 / ROT +
-    DUP C@
-    ROT 8 MOD 1 SWAP LSHIFT
-    OR SWAP C! ;
+: _VMP-PFREE-BITSET  ( ctx -- bitmap logical-bits )
+    DUP _VMP-C.PFREE + SWAP _VMP-C.TOTAL + @ ;
 
-VARIABLE _VMPF-START
-VARIABLE _VMPF-COUNT
-VARIABLE _VMPF-CTX
+: _VMP-PFREE-RANGE-VALID?  ( start count ctx -- valid? )
+    OVER 0= IF 2DROP DROP TRUE EXIT THEN
+    _VMP-PFREE-BITSET 2SWAP BITSET-ALL-SET? NIP ;
 
-: _VMP-RUN-DEFER-FREE  ( start count ctx -- )
-    _VMPF-CTX ! _VMPF-COUNT ! _VMPF-START !
-    _VMPF-COUNT @ 0= IF EXIT THEN
-    _VMPF-COUNT @ 0 ?DO
-        _VMPF-START @ I + _VMPF-CTX @ _VMP-PFREE-BIT-SET
-    LOOP
-    -1 _VMPF-CTX @ _VMP-C.DFREE + ! ;
+: _VMP-RUN-DEFER-FREE  ( start count ctx -- ior )
+    OVER 0= IF 2DROP DROP 0 EXIT THEN
+    DUP _VMP-PFREE-BITSET
+    4 PICK 4 PICK BITSET-RANGE-SET?
+    0= IF 2DROP DROP VFS-E-CORRUPT EXIT THEN
+    NIP NIP
+    -1 SWAP _VMP-C.DFREE + ! 0 ;
 
 VARIABLE _VMPA-CTX
 
@@ -1367,13 +1363,25 @@ VARIABLE _VMDL-CTX
     _VMDL-IN @ D.VNODE @ VN.OPEN-REFS @ IF VFS-E-BUSY EXIT THEN
     _VMDL-V @ V.BCTX @  _VMDL-CTX !
     \ Keep bitmap ownership until the cleared directory entry is durable.
+    \ Validate every pending range before changing the first pending bit.
+    _VMDL-IN @ IN.BDATA @
+    _VMDL-IN @ IN.BDATA 8 + @
+    _VMDL-CTX @ _VMP-PFREE-RANGE-VALID?
+    0= IF VFS-E-CORRUPT EXIT THEN
+    _VMDL-IN @ IN.BID @ _VMDL-CTX @ _VMP-DIRENT
+    DUP _VMP-DE.EXT1S
+    SWAP _VMP-DE.EXT1C
+    _VMDL-CTX @ _VMP-PFREE-RANGE-VALID?
+    0= IF VFS-E-CORRUPT EXIT THEN
     _VMDL-IN @ IN.BDATA @
     _VMDL-IN @ IN.BDATA 8 + @
     _VMDL-CTX @ _VMP-RUN-DEFER-FREE
+    ?DUP IF EXIT THEN
     _VMDL-IN @ IN.BID @ _VMDL-CTX @ _VMP-DIRENT
     DUP _VMP-DE.EXT1S
     SWAP _VMP-DE.EXT1C
     _VMDL-CTX @ _VMP-RUN-DEFER-FREE
+    ?DUP IF EXIT THEN
     \ Clear directory entry
     _VMDL-IN @ IN.BID @  _VMDL-CTX @  _VMP-DIRENT
     _VMP-ENTRY-SIZE 0 FILL
@@ -1398,7 +1406,7 @@ VARIABLE _VMTR-ECOUNT
 VARIABLE _VMTR-KEEP-E
 VARIABLE _VMTR-OLD
 
-: _VMP-SHRINK  ( bytes inode vfs -- )
+: _VMP-SHRINK  ( bytes inode vfs -- ior )
     _VMTR-V ! _VMTR-IN !
     _VMP-SECTOR 1- + _VMP-SECTOR / 1 MAX _VMTR-WANT !
     _VMTR-V @ V.BCTX @ _VMTR-CTX !
@@ -1406,26 +1414,37 @@ VARIABLE _VMTR-OLD
     DUP _VMP-DE.COUNT _VMTR-PCOUNT !
     DUP _VMP-DE.EXT1S _VMTR-ESTART !
         _VMP-DE.EXT1C _VMTR-ECOUNT !
-    _VMTR-WANT @ _VMTR-PCOUNT @ _VMTR-ECOUNT @ + >= IF EXIT THEN
+    _VMTR-WANT @ _VMTR-PCOUNT @ _VMTR-ECOUNT @ + >= IF 0 EXIT THEN
     _VMTR-WANT @ _VMTR-PCOUNT @ >= IF
         _VMTR-WANT @ _VMTR-PCOUNT @ - _VMTR-KEEP-E !
         _VMTR-ESTART @ _VMTR-KEEP-E @ +
         _VMTR-ECOUNT @ _VMTR-KEEP-E @ -
         _VMTR-CTX @ _VMP-RUN-DEFER-FREE
+        ?DUP IF EXIT THEN
         _VMTR-KEEP-E @ DUP _VMTR-DE @ 46 + W!
         0= IF 0 _VMTR-DE @ 44 + W! THEN
     ELSE
+        \ Both retirements must be admissible before either is pending.
+        _VMTR-IN @ IN.BDATA @ _VMTR-WANT @ +
+        _VMTR-PCOUNT @ _VMTR-WANT @ -
+        _VMTR-CTX @ _VMP-PFREE-RANGE-VALID?
+        0= IF VFS-E-CORRUPT EXIT THEN
+        _VMTR-ESTART @ _VMTR-ECOUNT @
+        _VMTR-CTX @ _VMP-PFREE-RANGE-VALID?
+        0= IF VFS-E-CORRUPT EXIT THEN
         _VMTR-IN @ IN.BDATA @ _VMTR-WANT @ +
         _VMTR-PCOUNT @ _VMTR-WANT @ -
         _VMTR-CTX @ _VMP-RUN-DEFER-FREE
+        ?DUP IF EXIT THEN
         _VMTR-ESTART @ _VMTR-ECOUNT @
             _VMTR-CTX @ _VMP-RUN-DEFER-FREE
+        ?DUP IF EXIT THEN
         _VMTR-WANT @ DUP _VMTR-IN @ IN.BDATA 8 + !
             _VMTR-DE @ 26 + W!
         0 _VMTR-DE @ 44 + W!
         0 _VMTR-DE @ 46 + W!
     THEN
-    -1 _VMTR-CTX @ _VMP-C.DDIR + ! ;
+    -1 _VMTR-CTX @ _VMP-C.DDIR + ! 0 ;
 
 : _VMP-TRUNCATE  ( inode vfs -- ior )
     DUP _VMP-READY? 0= IF 2DROP VFS-E-BUSY EXIT THEN
@@ -1441,6 +1460,7 @@ VARIABLE _VMTR-OLD
         ?DUP IF EXIT THEN
     THEN
     _VMTR-IN @ IN.SIZE-LO @ _VMTR-IN @ _VMTR-V @ _VMP-SHRINK
+    ?DUP IF EXIT THEN
     _VMTR-IN @ IN.BID @ _VMTR-V @ V.BCTX @ _VMP-DIRENT
     _VMTR-IN @ IN.SIZE-LO @ OVER 28 + L!
     DROP

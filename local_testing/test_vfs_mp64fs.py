@@ -682,6 +682,100 @@ def test_bitmap_mutations_use_checked_shared_ranges():
     assert "_VMP-RUN-SET\n        ?DUP IF NIP EXIT THEN" in create
 
 
+def test_deferred_frees_validate_all_ranges_before_publication():
+    """MP64FS queues checked PFREE ranges before dropping authority."""
+    with open(VFS_MP_F, encoding="utf-8") as source_file:
+        source = source_file.read()
+
+    def word_body(name):
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    pfree_view = word_body("_VMP-PFREE-BITSET")
+    validator = word_body("_VMP-PFREE-RANGE-VALID?")
+    defer = word_body("_VMP-RUN-DEFER-FREE")
+    delete = word_body("_VMP-DELETE")
+    shrink = word_body("_VMP-SHRINK")
+    truncate = word_body("_VMP-TRUNCATE")
+    apply_deferred = word_body("_VMP-APPLY-DEFERRED-FREES")
+    settle = word_body("_VMP-SETTLE-METADATA")
+
+    assert "_VMP-C.PFREE" in pfree_view
+    assert "_VMP-C.TOTAL" in pfree_view
+    assert "_VMP-C.BN" not in pfree_view
+    assert "OVER 0= IF 2DROP DROP TRUE EXIT THEN" in validator
+    assert "_VMP-PFREE-BITSET 2SWAP BITSET-ALL-SET? NIP" in validator
+    assert "OVER 0= IF 2DROP DROP 0 EXIT THEN" in defer
+    assert (
+        "DUP _VMP-PFREE-BITSET\n"
+        "    4 PICK 4 PICK BITSET-RANGE-SET?"
+    ) in defer
+    assert "0= IF 2DROP DROP VFS-E-CORRUPT EXIT THEN" in defer
+    assert "NIP NIP\n    -1 SWAP _VMP-C.DFREE + ! 0" in defer
+    assert defer.index("BITSET-RANGE-SET?") < defer.index("_VMP-C.DFREE")
+    for old in (
+        "_VMP-PFREE-BIT-SET",
+        "_VMPF-START",
+        "_VMPF-COUNT",
+        "_VMPF-CTX",
+    ):
+        assert old not in source
+    assert source.count("_VMP-RUN-DEFER-FREE") == 6
+    assert source.count("_VMP-PFREE-RANGE-VALID?") == 5
+
+    assert delete.count("_VMP-PFREE-RANGE-VALID?") == 2
+    assert delete.rindex("_VMP-PFREE-RANGE-VALID?") < delete.index(
+        "_VMP-RUN-DEFER-FREE"
+    )
+    assert len(
+        re.findall(r"_VMP-RUN-DEFER-FREE\s+\?DUP IF EXIT THEN", delete)
+    ) == 2
+    assert delete.rindex("_VMP-RUN-DEFER-FREE") < delete.index(
+        "_VMP-ENTRY-SIZE 0 FILL"
+    ) < delete.rindex("_VMP-C.DDIR")
+
+    assert shrink.count("_VMP-PFREE-RANGE-VALID?") == 2
+    assert len(
+        re.findall(r"_VMP-RUN-DEFER-FREE\s+\?DUP IF EXIT THEN", shrink)
+    ) == 3
+    assert ">= IF 0 EXIT THEN" in shrink
+    assert "_VMP-C.DDIR + ! 0" in shrink
+    one_range = shrink.split("ELSE", 1)[0]
+    assert one_range.index("_VMP-RUN-DEFER-FREE") < one_range.index(
+        "_VMTR-DE @ 46 + W!"
+    )
+    two_range = shrink.split("\\ Both retirements", 1)[1]
+    assert two_range.rindex("_VMP-PFREE-RANGE-VALID?") < two_range.index(
+        "_VMP-RUN-DEFER-FREE"
+    )
+    assert two_range.rindex("_VMP-RUN-DEFER-FREE") < two_range.index(
+        "_VMTR-IN @ IN.BDATA 8 + !"
+    )
+    assert "_VMP-SHRINK\n    ?DUP IF EXIT THEN" in truncate
+    shrink_call = truncate.index("_VMP-SHRINK")
+    shrink_check = truncate.index("?DUP IF EXIT THEN", shrink_call)
+    assert shrink_call < shrink_check < truncate.index("L!", shrink_check)
+
+    assert "_VMP-C.BN" in apply_deferred
+    assert "_VMP-C.PFREE" in apply_deferred
+    assert "INVERT AND" in apply_deferred
+    assert apply_deferred.index("INVERT AND") < apply_deferred.index(
+        "_VMP-SECTOR * 0 FILL"
+    ) < apply_deferred.index("0 _VMPA-CTX @ _VMP-C.DFREE") < apply_deferred.index(
+        "-1 _VMPA-CTX @ _VMP-C.DBMAP"
+    )
+    first_bmap = settle.index("_VMP-PUBLISH-BMAP-CACHE")
+    directory = settle.index("_VMP-PUBLISH-DIR-CACHE")
+    apply_pending = settle.index("_VMP-APPLY-DEFERRED-FREES")
+    final_bmap = settle.rindex("_VMP-PUBLISH-BMAP-CACHE")
+    assert first_bmap < directory < apply_pending < final_bmap
+
+
 def test_constructor_binds_and_mounts_volume():
     """The public constructor is the single successful mount boundary."""
     check("constructor binds and mounts volume", [
