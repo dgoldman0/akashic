@@ -165,10 +165,15 @@ of reading scanner state. The independent
 logical-map geometry, build-time physical uniqueness reservation, completed
 map membership, mapped block I/O, and journal-ring stepping. All 16 scratch
 cells are private; snapshot construction, protected-authority policy,
-scanning, transactions, and durability remain in the facade. The facade
-begins at allocation ownership and initialized-bitmap policy and retains all
-later filesystem authority, recovery, transaction, mutation, and VFS-operation
-policy. Consumers should not require these internal units directly.
+scanning, transactions, and durability remain in the facade. The independent
+[`vfs-ext4-jbd2-revoke.f`](vfs-ext4-jbd2-revoke.md) unit owns recovery
+revoke-table geometry, allocation, clearing, modular transaction ordering,
+insertion, and lookup. Its ten scratch cells are private; parsing,
+`REVOKE-READY` publication, replay authority, scrubbing, and durability remain
+in the facade. The facade begins at allocation ownership and
+initialized-bitmap policy and retains all later filesystem authority,
+recovery, transaction, mutation, and VFS-operation policy. Consumers should
+not require these internal units directly.
 
 The post-`abb3f94` implementation sequence is fixed in the
 [ext4 recovery refactor plan](../ext4-refactor-plan.md). That plan records the
@@ -180,9 +185,9 @@ verification cadence that apply before the next indexed-directory capability.
 The real-image harness cold-compiles the dependency-ordered production ext4
 source closure into the restored FAT/VFS snapshot. The current ext4 stage is
 the admission, descriptor, bitmap-admission, inode-format, external-xattr,
-orphan-block, backup-authority, directory-hash, linear-dirent, and
-JBD2-checksum and journal-map units followed by the public facade; VFS, CRC,
-and bitset are already present in earlier measured stages.
+orphan-block, backup-authority, directory-hash, linear-dirent, JBD2-checksum,
+journal-map, and recovery-revoke units followed by the public facade; VFS,
+CRC, and bitset are already present in earlier measured stages.
 It does not use a compiled shard or warm cache.
 To avoid making UART echo volume an implementation-size limit, the host
 injects each compacted physical source line into the BIOS `FSLOAD`

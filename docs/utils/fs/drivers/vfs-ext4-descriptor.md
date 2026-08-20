@@ -42,5 +42,5 @@ and packaging closure resolve admission, descriptor loading and checksum
 services, exact bitmap admission, inode-record formatting, external-xattr
 block authentication, orphan-file block checksums, sparse-super backup
 authority, the independent directory-hash service, the linear directory-entry
-codec, the independent JBD2 checksum and map services, and then the facade
-without a backwards dependency.
+codec, the independent JBD2 checksum, map, and recovery-revoke services, and
+then the facade without a backwards dependency.

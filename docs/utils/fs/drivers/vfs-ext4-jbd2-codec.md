@@ -37,4 +37,5 @@ of its endian, validator, and encoder scratch cells are private. Journal
 logical mapping and ring stepping live in the independent
 [`vfs-ext4-jbd2-map.f`](vfs-ext4-jbd2-map.md) service. Journal authority, scan
 ordering, witness policy, transaction assembly, and durability remain in the
-facade.
+facade; recovery revoke-table mechanics live in the independent
+[`vfs-ext4-jbd2-revoke.f`](vfs-ext4-jbd2-revoke.md) service.

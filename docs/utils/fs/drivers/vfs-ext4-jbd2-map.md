@@ -11,7 +11,9 @@ perform mapped journal-block reads and writes, and advance through the journal
 ring. Snapshot construction, recovery-authority refusal, map publication
 policy, JBD2 validation and scanning, transaction assembly, and durability
 remain in the facade. Raw endian and checksum work remains in the sibling
-[`vfs-ext4-jbd2-codec.f`](vfs-ext4-jbd2-codec.md) unit.
+[`vfs-ext4-jbd2-codec.f`](vfs-ext4-jbd2-codec.md) unit. Recovery revoke-table
+geometry and indexing live in the independent
+[`vfs-ext4-jbd2-revoke.f`](vfs-ext4-jbd2-revoke.md) unit.
 
 `_EXT4-ENSURE-JOURNAL-WORKSPACE ( maxlen ctx -- ior )` derives an exact
 logical map and a power-of-two open-addressed uniqueness table at no more than

@@ -51,6 +51,7 @@ EXT4_DIRHASH_MODULE = "utils/fs/drivers/vfs-ext4-dirhash.f"
 EXT4_DIRENT_MODULE = "utils/fs/drivers/vfs-ext4-dirent.f"
 EXT4_JBD2_CODEC_MODULE = "utils/fs/drivers/vfs-ext4-jbd2-codec.f"
 EXT4_JBD2_MAP_MODULE = "utils/fs/drivers/vfs-ext4-jbd2-map.f"
+EXT4_JBD2_REVOKE_MODULE = "utils/fs/drivers/vfs-ext4-jbd2-revoke.f"
 EXT4_MODULE = "utils/fs/drivers/vfs-ext4.f"
 CRC_F = AKASHIC_ROOT / CRC_MODULE
 BITSET_F = AKASHIC_ROOT / BITSET_MODULE
@@ -86544,6 +86545,7 @@ def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
         EXT4_DIRENT_MODULE,
         EXT4_JBD2_CODEC_MODULE,
         EXT4_JBD2_MAP_MODULE,
+        EXT4_JBD2_REVOKE_MODULE,
         EXT4_MODULE,
     )
     assert set(expected).isdisjoint(already_staged)
@@ -86592,6 +86594,7 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
         "vfs-ext4-dirent.f",
         "vfs-ext4-jbd2-codec.f",
         "vfs-ext4-jbd2-map.f",
+        "vfs-ext4-jbd2-revoke.f",
     )
     assert "URANGE-" not in admission
     assert "BITSET-" not in admission
@@ -88430,6 +88433,194 @@ def test_ext4_jbd2_map_service_is_private_acyclic_unit() -> None:
         ordered_source.index(": _EXT4-ENSURE-JOURNAL-WORKSPACE")
     )
     assert ordered_source.index(": _EXT4-JOURNAL-ADVANCE") < (
+        ordered_source.index("4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX")
+    )
+
+
+def test_ext4_jbd2_revoke_service_is_private_acyclic_unit() -> None:
+    revoke = (AKASHIC_ROOT / EXT4_JBD2_REVOKE_MODULE).read_text(
+        encoding="utf-8"
+    )
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+    ordered_source = _ext4_source_text()
+
+    assert revoke.splitlines().count(
+        "PROVIDED akashic-ext4-jbd2-rvk"
+    ) == 1
+    assert len("akashic-ext4-jbd2-rvk".encode("utf-8")) == 21
+    assert tuple(
+        line.removeprefix("REQUIRE ")
+        for line in revoke.splitlines()
+        if line.startswith("REQUIRE ")
+    ) == ("vfs-ext4-admission.f",)
+    assert (
+        "-1 1 RSHIFT 2 CELLS / CONSTANT _EXT4-REVOKE-SLOTS-MAX"
+        in revoke
+    )
+
+    service_definitions = (
+        ": _EXT4-REVOKE-GEOMETRY?  ( ctx -- flag )",
+        ": _EXT4-ENSURE-REVOKE-WORKSPACE  ( count ctx -- ior )",
+        ": _EXT4-JOURNAL-TID-AFTER?  ( candidate previous -- flag )",
+        ": _EXT4-REVOKE-ENTRY  ( slot ctx -- entry )",
+        ": _EXT4-REVOKE-PUT  ( block sequence ctx -- ior )",
+        ": _EXT4-JOURNAL-REVOKED?  ( block sequence ctx -- flag )",
+    )
+    for definition in service_definitions:
+        assert revoke.splitlines().count(definition) == 1
+        assert definition not in facade
+
+    facade_services = (
+        "_EXT4-REVOKE-GEOMETRY?",
+        "_EXT4-ENSURE-REVOKE-WORKSPACE",
+        "_EXT4-REVOKE-PUT",
+        "_EXT4-JOURNAL-REVOKED?",
+    )
+    for service in facade_services:
+        assert service in facade
+        assert re.search(
+            rf"(?m)^:[ \t]+{re.escape(service)}(?=[ \t\r\n(])",
+            facade,
+        ) is None
+    for private_service in (
+        "_EXT4-JOURNAL-TID-AFTER?",
+        "_EXT4-REVOKE-ENTRY",
+    ):
+        assert private_service not in facade
+
+    private_cells = set(
+        re.findall(r"^VARIABLE (\S+)$", revoke, re.MULTILINE)
+    )
+    assert private_cells == {
+        "_EXT4-JRW-CTX",
+        "_EXT4-JRW-COUNT",
+        "_EXT4-JRW-SLOTS",
+        "_EXT4-JRW-BYTES",
+        "_EXT4-JRH-BLOCK",
+        "_EXT4-JRH-SEQUENCE",
+        "_EXT4-JRH-CTX",
+        "_EXT4-JRH-KEY",
+        "_EXT4-JRH-SLOT",
+        "_EXT4-JRH-ENTRY",
+    }
+    assert len(private_cells) == 10
+    assert all(cell not in facade for cell in private_cells)
+    assert "EXECUTE" not in revoke
+    assert "-XT" not in revoke
+    assert "_EXT4-JOURNAL-MAP" not in revoke
+    assert "_EXT4-JBD2-" not in revoke
+    assert "_EXT4-RECOVERY-AUTHORITY" not in revoke
+    assert "_EXT4-MUTATION-" not in revoke
+
+    revoke_executable = "\n".join(
+        line.split("\\", 1)[0] for line in revoke.splitlines()
+    )
+    facade_executable = "\n".join(
+        line.split("\\", 1)[0] for line in facade.splitlines()
+    )
+
+    def word_body(source: str, name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None
+        return " ".join(match.group("body").split())
+
+    geometry = word_body(revoke_executable, "_EXT4-REVOKE-GEOMETRY?")
+    ensure = word_body(
+        revoke_executable, "_EXT4-ENSURE-REVOKE-WORKSPACE"
+    )
+    tid_after = word_body(
+        revoke_executable, "_EXT4-JOURNAL-TID-AFTER?"
+    )
+    put = word_body(revoke_executable, "_EXT4-REVOKE-PUT")
+    query = word_body(revoke_executable, "_EXT4-JOURNAL-REVOKED?")
+
+    assert "2DUP OR 0= IF 2DROP TRUE EXIT THEN" in geometry
+    assert "OVER 0= OVER 0= OR IF 2DROP FALSE EXIT THEN" in geometry
+    assert "DUP 2 U< IF 2DROP FALSE EXIT THEN" in geometry
+    assert "_EXT4-REVOKE-SLOTS-MAX U> IF 2DROP FALSE EXIT THEN" in geometry
+    assert geometry.endswith("DUP 1- AND 0= NIP")
+
+    ready_clear = "0 _EXT4-JRW-CTX @ _EXT4-C.J.REVOKE-READY + !"
+    ensure_order = (
+        ready_clear,
+        "_EXT4-REVOKE-GEOMETRY? 0= IF",
+        "_EXT4-JRW-COUNT @ -1 1 RSHIFT 2 / U> IF",
+        "0 _EXT4-JRW-SLOTS !",
+        "_EXT4-C.J.REVOKE-TABLE + @ IF",
+        "_EXT4-JRW-SLOTS @ U< IF VFS-E-NOMEM EXIT THEN",
+        "_EXT4-C.J.REVOKE-SLOTS + @ 2* CELLS 0 FILL",
+        "_EXT4-JRW-COUNT @ 0= IF 0 EXIT THEN",
+        "_EXT4-C.ARENA + @ _EXT4-JRW-BYTES @ ARENA-ALLOT?",
+        "_EXT4-C.J.REVOKE-TABLE + !",
+        "_EXT4-JRW-BYTES @ 0 FILL",
+        "_EXT4-C.J.REVOKE-SLOTS + !",
+    )
+    ensure_positions = tuple(ensure.index(fragment) for fragment in ensure_order)
+    assert ensure_positions == tuple(sorted(ensure_positions))
+    assert ensure.count(ready_clear) == 1
+    assert "VFS-E-NOMEM EXIT" in ensure
+    assert ensure.rfind("_EXT4-C.J.REVOKE-TABLE + !") < ensure.rfind(
+        "_EXT4-C.J.REVOKE-SLOTS + !"
+    )
+
+    assert tid_after == (
+        "( candidate previous -- flag ) - 0xFFFFFFFF AND DUP 0<> "
+        "SWAP 0x80000000 U< AND"
+    )
+    put_checks = (
+        "_EXT4-C.BLOCKS + @ U< 0= IF",
+        "_EXT4-REVOKE-GEOMETRY? 0= IF",
+        "_EXT4-C.J.REVOKE-TABLE + @ 0= IF",
+        "_EXT4-JRH-BLOCK @ 1+ _EXT4-JRH-KEY !",
+        "_EXT4-C.J.REVOKE-SLOTS + @ 0 DO",
+    )
+    put_positions = tuple(put.index(fragment) for fragment in put_checks)
+    assert put_positions == tuple(sorted(put_positions))
+    assert put.count("UNLOOP EXIT") == 2
+    assert put.index("_EXT4-JRH-KEY @ _EXT4-JRH-ENTRY @ !") < put.index(
+        "_EXT4-JRH-SEQUENCE @ _EXT4-JRH-ENTRY @ CELL+ !"
+    )
+    assert (
+        "_EXT4-JRH-ENTRY @ CELL+ @ _EXT4-JOURNAL-TID-AFTER? IF"
+        in put
+    )
+    assert put.rfind("_EXT4-JRH-ENTRY @ CELL+ !") < put.rfind(
+        "0 UNLOOP EXIT"
+    )
+
+    assert query.count("UNLOOP EXIT") == 2
+    assert "_EXT4-C.J.REVOKE-TABLE + @ 0= IF FALSE EXIT THEN" in query
+    assert "DUP @ DUP 0= IF 2DROP FALSE UNLOOP EXIT THEN" in query
+    assert "_EXT4-JOURNAL-TID-AFTER? 0= UNLOOP EXIT" in query
+    assert "_EXT4-JRH-ENTRY @ !" not in query
+    assert "_EXT4-JRH-ENTRY @ CELL+ !" not in query
+
+    expected_facade_calls = {
+        "_EXT4-REVOKE-GEOMETRY?": 2,
+        "_EXT4-ENSURE-REVOKE-WORKSPACE": 1,
+        "_EXT4-REVOKE-PUT": 1,
+        "_EXT4-JOURNAL-REVOKED?": 2,
+    }
+    for service, count in expected_facade_calls.items():
+        assert facade_executable.count(service) == count
+
+    for retained_policy in (
+        ": _EXT4-JSCAN-REVOKE",
+        ": _EXT4-JSCAN  ( pass ctx -- ior )",
+        ": _EXT4-RECOVER-JOURNAL",
+        ": _EXT4-MOUNT-TAIL-RELEASE",
+    ):
+        assert retained_policy in facade
+        assert retained_policy not in revoke
+    assert "_EXT4-C.J.REVOKE-READY + !" in facade
+    assert ordered_source.index(": _EXT4-JOURNAL-ADVANCE") < (
+        ordered_source.index(": _EXT4-REVOKE-GEOMETRY?")
+    )
+    assert ordered_source.index(": _EXT4-JOURNAL-REVOKED?") < (
         ordered_source.index("4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX")
     )
 
