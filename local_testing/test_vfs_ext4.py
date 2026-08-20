@@ -24,6 +24,7 @@ if str(LOCAL_TESTING) not in sys.path:
 
 import test_vfs_fat as fat_harness  # noqa: E402
 import generate_ext4_profile_fixtures as ext4_fixture_generator  # noqa: E402
+from forth_dependencies import dependency_order  # noqa: E402
 from devices import (  # noqa: E402
     STORAGE_CMD_FLUSH,
     STORAGE_CMD_READ,
@@ -35,9 +36,14 @@ from devices import (  # noqa: E402
 )
 
 
-CRC_F = ROOT / "akashic" / "math" / "crc.f"
-BITSET_F = ROOT / "akashic" / "utils" / "bitset.f"
-EXT4_F = ROOT / "akashic" / "utils" / "fs" / "drivers" / "vfs-ext4.f"
+AKASHIC_ROOT = ROOT / "akashic"
+CRC_MODULE = "math/crc.f"
+BITSET_MODULE = "utils/bitset.f"
+VFS_MODULE = "utils/fs/vfs.f"
+EXT4_MODULE = "utils/fs/drivers/vfs-ext4.f"
+CRC_F = AKASHIC_ROOT / CRC_MODULE
+BITSET_F = AKASHIC_ROOT / BITSET_MODULE
+EXT4_F = AKASHIC_ROOT / EXT4_MODULE
 MANIFEST = ROOT / "local_testing" / "fixtures" / "ext4-profile" / "manifest.json"
 IMAGE_DIR = ROOT / "local_testing" / "out" / "ext4-profile"
 
@@ -4208,6 +4214,37 @@ def _compact_source_load_lines(lines: list[str]) -> list[str]:
     return result
 
 
+def _ext4_source_stage_modules() -> tuple[str, ...]:
+    """Return ext4's dependency order minus the already staged foundation."""
+    already_staged = set(
+        dependency_order(
+            AKASHIC_ROOT,
+            (VFS_MODULE, CRC_MODULE, BITSET_MODULE),
+        )
+    )
+    return tuple(
+        module
+        for module in dependency_order(AKASHIC_ROOT, (EXT4_MODULE,))
+        if module not in already_staged
+    )
+
+
+def _ext4_source_stage_lines() -> list[str]:
+    """Load every not-yet-staged ext4 source unit in dependency order."""
+    lines: list[str] = []
+    for module in _ext4_source_stage_modules():
+        lines.extend(fat_harness._load_forth_lines(str(AKASHIC_ROOT / module)))
+    return _compact_source_load_lines(lines)
+
+
+def _ext4_source_text() -> str:
+    """Return the same ordered ext4 source closure used by static contracts."""
+    return "\n".join(
+        (AKASHIC_ROOT / module).read_text(encoding="utf-8")
+        for module in _ext4_source_stage_modules()
+    )
+
+
 def build_snapshot():
     """Extend the proven FAT/VFS snapshot with the ext4 binding once."""
     global _snapshot
@@ -4232,9 +4269,8 @@ def build_snapshot():
     bitset_lines = _compact_source_load_lines(
         fat_harness._load_forth_lines(str(BITSET_F))
     )
-    ext4_lines = _compact_source_load_lines(
-        fat_harness._load_forth_lines(str(EXT4_F))
-    )
+    ext4_modules = _ext4_source_stage_modules()
+    ext4_lines = _ext4_source_stage_lines()
 
     system = fat_harness.MegapadSystem(
         ram_size=1024 * 1024,
@@ -4361,7 +4397,8 @@ def build_snapshot():
             f"bitset={bitset_source_steps:,}/{max_bitset_source_steps:,} "
             f"steps across {len(bitset_lines):,} packed lines; "
             f"ext4={ext4_source_steps:,}/{max_ext4_source_steps:,} steps "
-            f"across {len(ext4_lines):,} packed lines"
+            f"across {len(ext4_lines):,} packed lines from "
+            f"{len(ext4_modules):,} source units"
         )
 
     _snapshot = (
@@ -86469,8 +86506,32 @@ def test_staged_vfs_mkdir_then_directory_rename_in_one_write_session(
     _assert_e2fsck_clean(backing, jbd2_toolchain)
 
 
+def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
+    full_order = dependency_order(AKASHIC_ROOT, (EXT4_MODULE,))
+    already_staged = set(
+        dependency_order(
+            AKASHIC_ROOT,
+            (VFS_MODULE, CRC_MODULE, BITSET_MODULE),
+        )
+    )
+    expected = tuple(
+        module for module in full_order if module not in already_staged
+    )
+
+    assert _ext4_source_stage_modules() == expected
+    assert expected
+    assert expected[-1] == EXT4_MODULE
+    assert set(expected).isdisjoint(already_staged)
+    assert set(full_order) == set(expected) | (set(full_order) & already_staged)
+    assert {VFS_MODULE, CRC_MODULE, BITSET_MODULE}.isdisjoint(expected)
+
+    packed = _ext4_source_stage_lines()
+    assert packed
+    assert all(len(line.encode("utf-8")) <= 255 for line in packed)
+
+
 def test_ext4_crc_source_uses_checked_hardware_without_fallback() -> None:
-    source = EXT4_F.read_text(encoding="utf-8")
+    source = _ext4_source_text()
     executable = "\n".join(
         line.split("\\", 1)[0] for line in source.splitlines()
     )
@@ -86485,7 +86546,7 @@ def test_ext4_crc_source_uses_checked_hardware_without_fallback() -> None:
 
 
 def test_ext4_manual_range_proofs_use_checked_shared_algebra() -> None:
-    source = EXT4_F.read_text(encoding="utf-8")
+    source = _ext4_source_text()
 
     def word_body(name: str) -> str:
         match = re.search(
@@ -86534,7 +86595,7 @@ def test_ext4_manual_range_proofs_use_checked_shared_algebra() -> None:
 
 
 def test_ext4_block_range_alias_policy_uses_shared_checked_algebra() -> None:
-    source = EXT4_F.read_text(encoding="utf-8")
+    source = _ext4_source_text()
 
     def word_body(name: str) -> str:
         match = re.search(
@@ -86581,7 +86642,7 @@ def test_ext4_block_range_alias_policy_uses_shared_checked_algebra() -> None:
 
 
 def test_ext4_exact_block_accounting_uses_shared_logical_popcount() -> None:
-    source = EXT4_F.read_text(encoding="utf-8")
+    source = _ext4_source_text()
 
     def word_body(name: str) -> str:
         match = re.search(
@@ -86613,7 +86674,7 @@ def test_ext4_exact_block_accounting_uses_shared_logical_popcount() -> None:
 
 
 def test_ext4_free_block_scan_uses_shared_bounded_queries() -> None:
-    source = EXT4_F.read_text(encoding="utf-8")
+    source = _ext4_source_text()
 
     def word_body(name: str) -> str:
         match = re.search(
@@ -86659,7 +86720,7 @@ def test_ext4_free_block_scan_uses_shared_bounded_queries() -> None:
 
 
 def test_ext4_single_block_allocation_uses_checked_bitset_mutation() -> None:
-    source = EXT4_F.read_text(encoding="utf-8")
+    source = _ext4_source_text()
 
     def word_body(name: str) -> str:
         match = re.search(
@@ -86696,7 +86757,7 @@ def test_ext4_single_block_allocation_uses_checked_bitset_mutation() -> None:
 
 
 def test_ext4_block_range_free_uses_checked_bitset_mutation() -> None:
-    source = EXT4_F.read_text(encoding="utf-8")
+    source = _ext4_source_text()
 
     def word_body(name: str) -> str:
         match = re.search(
@@ -86750,7 +86811,7 @@ def test_ext4_block_range_free_uses_checked_bitset_mutation() -> None:
 
 
 def test_ext4_block_allocation_reads_use_exact_checked_bitset_views() -> None:
-    source = EXT4_F.read_text(encoding="utf-8")
+    source = _ext4_source_text()
 
     def word_body(name: str) -> str:
         match = re.search(
@@ -86814,7 +86875,7 @@ def test_ext4_block_allocation_reads_use_exact_checked_bitset_views() -> None:
 
 
 def test_ext4_durable_delete_reconstruction_uses_checked_bitsets() -> None:
-    source = EXT4_F.read_text(encoding="utf-8")
+    source = _ext4_source_text()
 
     def word_body(name: str) -> str:
         match = re.search(
@@ -86879,7 +86940,7 @@ def test_ext4_durable_delete_reconstruction_uses_checked_bitsets() -> None:
 
 
 def test_ext4_inode_release_uses_checked_bitset_mutation() -> None:
-    source = EXT4_F.read_text(encoding="utf-8")
+    source = _ext4_source_text()
 
     def word_body(name: str) -> str:
         match = re.search(
@@ -86945,7 +87006,7 @@ def test_ext4_inode_release_uses_checked_bitset_mutation() -> None:
 
 
 def test_ext4_all_set_bridge_is_replaced_by_typed_exact_queries() -> None:
-    source = EXT4_F.read_text(encoding="utf-8")
+    source = _ext4_source_text()
 
     def word_body(name: str) -> str:
         match = re.search(
@@ -87045,7 +87106,7 @@ def test_ext4_all_set_bridge_is_replaced_by_typed_exact_queries() -> None:
 
 
 def test_ext4_checkpoint_delete_ranges_use_checked_exact_queries() -> None:
-    source = EXT4_F.read_text(encoding="utf-8")
+    source = _ext4_source_text()
     match = re.search(
         r"(?ms)^:[ \t]+_EXT4-JCP-REQUIRE-DELETE-RANGE"
         r"(?=[ \t\r\n(])(?P<body>.*?)[ \t]+;",
@@ -87075,7 +87136,7 @@ def test_ext4_checkpoint_delete_ranges_use_checked_exact_queries() -> None:
 
 
 def test_ext4_inode_allocation_uses_checked_exact_bitset_views() -> None:
-    source = EXT4_F.read_text(encoding="utf-8")
+    source = _ext4_source_text()
 
     def word_body(name: str) -> str:
         match = re.search(
@@ -87176,7 +87237,7 @@ def test_ext4_inode_allocation_uses_checked_exact_bitset_views() -> None:
 
 
 def test_ext4_early_inode_reads_use_checked_exact_bitset_views() -> None:
-    source = EXT4_F.read_text(encoding="utf-8")
+    source = _ext4_source_text()
 
     def word_body(name: str) -> str:
         match = re.search(
@@ -87244,7 +87305,7 @@ def test_ext4_early_inode_reads_use_checked_exact_bitset_views() -> None:
 
 
 def test_ext4_reverse_owner_iterator_uses_checked_exact_inode_views() -> None:
-    source = EXT4_F.read_text(encoding="utf-8")
+    source = _ext4_source_text()
 
     match = re.search(
         r"(?ms)^:[ \t]+_EXT4-JFO-SCAN-GROUP(?=[ \t\r\n(])"

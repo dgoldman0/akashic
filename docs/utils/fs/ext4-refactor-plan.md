@@ -55,6 +55,11 @@ redirected.
   delta by applying a checked singleton clear to the transient raw cache, then
   compares every physical byte. Filesystem checksum, accounting, iteration,
   padding-authentication, and durability policy remain with their owners.
+- Stage 3 is in progress. The cold ext4 source harness now derives the driver's
+  dependency-ordered closure and removes the VFS, CRC, and bitset foundation
+  already present in earlier measured stages. New internal source units will
+  therefore enter the existing ext4 stage in production order rather than
+  requiring another handwritten concatenation list.
 
 ## Baseline and objective
 

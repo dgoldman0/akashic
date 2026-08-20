@@ -42,6 +42,7 @@ from akashic_tui import (  # noqa: E402
     dependency_order,
 )
 from diskutil import MP64FS, pack_forth_source  # noqa: E402
+from forth_dependencies import module_key  # noqa: E402
 
 
 LIBRARY_RENDERER_FREE_PROFILES = (
@@ -791,6 +792,19 @@ def test_vfs_ram_capacity_profile_packages_its_exact_contract_leaf() -> None:
 
 
 def test_ext4_binding_has_a_bounded_headless_dependency_closure() -> None:
+    order = dependency_order(("utils/fs/drivers/vfs-ext4.f",))
+    assert order == (
+        "concurrency/event.f",
+        "concurrency/semaphore.f",
+        "concurrency/guard.f",
+        "text/utf8.f",
+        "utils/uint-range.f",
+        "utils/memory-span.f",
+        "utils/fs/vfs.f",
+        "utils/bitset.f",
+        "math/crc.f",
+        "utils/fs/drivers/vfs-ext4.f",
+    )
     assert tuple(dependency_closure(("utils/fs/drivers/vfs-ext4.f",))) == (
         "concurrency/event.f",
         "concurrency/guard.f",
@@ -802,6 +816,17 @@ def test_ext4_binding_has_a_bounded_headless_dependency_closure() -> None:
         "utils/fs/vfs.f",
         "utils/memory-span.f",
         "utils/uint-range.f",
+    )
+
+    identities: list[str] = []
+    for module in order:
+        matches = PROVIDED_RE.findall(
+            (SOURCE_ROOT / module).read_text(encoding="utf-8")
+        )
+        assert len(matches) == 1, module
+        identities.append(matches[0])
+    assert len({module_key(identity) for identity in identities}) == len(
+        identities
     )
 
 
