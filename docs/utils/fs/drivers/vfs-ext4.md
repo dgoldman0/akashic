@@ -1145,8 +1145,15 @@ after-image. It finally
 clears exactly one retained inode-bitmap bit, increments the split
 group free-inode count, installs the new inode-bitmap CRC32C, restamps the
 complete descriptor, increments the primary-super free-inode count, and
-restamps the super. Modern protocol removal adds its distinct orphan-file
-home, while legacy head removal composes in the same primary-super home.
+restamps the super. Raw and retained allocation checks and the private
+singleton clear use the shared checked bitset with the exact authenticated
+group inode count. Invalid logical geometry is bounds corruption, while a
+valid raw missing bit remains orphan-file corruption and a retained missing bit
+remains a transaction conflict. Inode counter, checksum, home-order, and abort
+policy stay within the builder; its bitmap CRC still spans the format-defined
+`IPG / 8` bytes, including padding the logical bitset does not normalize.
+Modern protocol removal adds its distinct orphan-file home, while legacy head
+removal composes in the same primary-super home.
 Semantic verification reconstructs every complete after-image from raw media:
 the inode-table home, every touched block bitmap, every coalesced data/inode
 GDT page, the inode bitmap, and the primary super, including range-sized group

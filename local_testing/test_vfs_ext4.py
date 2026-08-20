@@ -18944,6 +18944,12 @@ def test_typed_unlinked_orphan_inode_release_stages_exact_accounting(
             ),
             "DEPTH CONSTANT _UI-DEPTH-AFTER-STAGE",
             (
+                "_EXT4-JFI-BITMAP-HOME @ _UI-WRITER "
+                "_EXT4-JFC-FIND-META CONSTANT _UI-BITMAP-IOR"
+            ),
+            "_EXT4-JFC-FOUND @ CONSTANT _UI-BITMAP-FOUND",
+            "_EXT4-JFC-IMAGE @ CONSTANT _UI-BITMAP-IMAGE",
+            (
                 _forth_conjunction(
                     [
                         (
@@ -18982,6 +18988,14 @@ def test_typed_unlinked_orphan_inode_release_stages_exact_accounting(
                         "_EXT4-JFI-BITMAP-HOME @ 267 =",
                         "_EXT4-JFI-GDT-HOME @ 2 =",
                         "_EXT4-JFI-GDT-OFF @ 0=",
+                        "_UI-BITMAP-IOR 0=",
+                        "_UI-BITMAP-FOUND 0<>",
+                        (
+                            "_UI-BITMAP-IMAGE "
+                            "_EXT4-JFI-GROUP-INODES @ "
+                            "_EXT4-JFI-INDEX @ BITSET-TEST? "
+                            "SWAP 0= AND"
+                        ),
                         "_UI-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
                         "_UI-CTX _EXT4-C.FREE-INODES + @ 4078 =",
                     ]
@@ -86847,6 +86861,72 @@ def test_ext4_durable_delete_reconstruction_uses_checked_bitsets() -> None:
     )
     assert "_EXT4-BIT-RANGE-SET?" not in inode
     assert "_EXT4-CLEAR-BIT-RANGE" not in inode
+
+
+def test_ext4_inode_release_uses_checked_bitset_mutation() -> None:
+    source = EXT4_F.read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    auth = word_body("_EXT4-JFI-AUTH-PREFLIGHT")
+    preflight = word_body("_EXT4-JFI-PREFLIGHT")
+    stage = word_body("_EXT4-JFI-STAGE-GROUP")
+    exact_test = (
+        "_EXT4-JFI-GROUP-INODES @ _EXT4-JFI-INDEX @ BITSET-TEST?"
+    )
+
+    assert auth.count("BITSET-TEST?") == 1
+    assert exact_test in auth
+    assert (
+        "BITSET-TEST? 0= IF\n"
+        "        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+    ) in auth
+    assert "EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT" in auth
+
+    assert preflight.count("BITSET-TEST?") == 1
+    assert (
+        "DROP DUP _EXT4-JFI-IMAGE !\n"
+        "    _EXT4-JFI-GROUP-INODES @ _EXT4-JFI-INDEX @ BITSET-TEST?"
+    ) in preflight
+    assert "DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in preflight
+    assert "VFS-E-CONFLICT EXIT" in preflight
+
+    assert stage.count("BITSET-TEST?") == 1
+    assert f"DUP {exact_test}" in stage
+    assert "2DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in stage
+    assert "0= IF\n        DROP VFS-E-CONFLICT EXIT\n    THEN" in stage
+    assert (
+        "_EXT4-JFI-WRITER @ _EXT4-JWR.SCRATCH-B + @\n"
+        "    _EXT4-JFI-GROUP-INODES @ _EXT4-JFI-INDEX @\n"
+        "    BITSET-BIT-CLEAR?"
+    ) in stage
+    assert (
+        "BITSET-BIT-CLEAR? 0= IF\n"
+        "        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+    ) in stage
+    crc_calls = [
+        match.start()
+        for match in re.finditer("_EXT4-INODE-BITMAP-CRC", stage)
+    ]
+    assert len(crc_calls) == 2
+    query = stage.index("BITSET-TEST?")
+    move = stage.index("MOVE")
+    clear = stage.index("BITSET-BIT-CLEAR?")
+    assert crc_calls[0] < query < move < clear < crc_calls[1]
+    assert clear < stage.index("_EXT4-JFI-ACQUIRE-DESC")
+    assert clear < stage.index("_EXT4-JTX-META-REPLACE")
+
+    for body in (auth, preflight, stage):
+        assert "_EXT4-BIT-RANGE-SET?" not in body
+    assert "_EXT4-CLEAR-BIT-RANGE" not in stage
+    assert ": _EXT4-CLEAR-BIT-RANGE" not in source
 
 
 def test_hardware_crc32c_matches_fragmented_ext4_raw_vector(tmp_path: Path) -> None:

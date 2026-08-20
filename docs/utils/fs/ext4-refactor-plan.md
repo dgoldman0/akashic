@@ -37,7 +37,10 @@ redirected.
   group bound rather than direct byte/shift scans. Durable-delete semantic
   verification now reconstructs its block and inode bitmap after-images with
   the same checked logical views while retaining full ext4 CRC/home comparison.
-  Remaining query and mutation helper families follow one at a time.
+  The inode-release builder now also delegates its exact-group raw/retained
+  singleton checks and private clear without moving inode accounting or
+  transaction policy. Remaining query and mutation helper families follow one
+  at a time.
 
 ## Baseline and objective
 
