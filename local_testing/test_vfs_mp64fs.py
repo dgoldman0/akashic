@@ -587,7 +587,11 @@ def test_range_alias_policy_uses_shared_checked_algebra():
     assert "_VMP-RANGES-OVERLAP?" not in source
     for scratch in ("_VMOV-S1", "_VMOV-N1", "_VMOV-S2", "_VMOV-N2"):
         assert scratch not in source
-    assert source.count("URANGE-OVERLAP?") == 1
+    assert (
+        ": _VMP-RANGES-ALIAS-OR-INVALID?  "
+        "( start1 count1 start2 count2 -- flag )\n"
+        "    URANGE-OVERLAP? 0= IF DROP TRUE THEN ;"
+    ) in source
     assert source.count("_VMP-RANGES-ALIAS-OR-INVALID?") == 6
 
 
