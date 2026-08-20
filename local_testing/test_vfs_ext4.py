@@ -42,6 +42,7 @@ BITSET_MODULE = "utils/bitset.f"
 VFS_MODULE = "utils/fs/vfs.f"
 EXT4_ADMISSION_MODULE = "utils/fs/drivers/vfs-ext4-admission.f"
 EXT4_DESCRIPTOR_MODULE = "utils/fs/drivers/vfs-ext4-descriptor.f"
+EXT4_BITMAP_MODULE = "utils/fs/drivers/vfs-ext4-bitmap.f"
 EXT4_BACKUPS_MODULE = "utils/fs/drivers/vfs-ext4-backups.f"
 EXT4_DIRHASH_MODULE = "utils/fs/drivers/vfs-ext4-dirhash.f"
 EXT4_DIRENT_MODULE = "utils/fs/drivers/vfs-ext4-dirent.f"
@@ -86527,6 +86528,7 @@ def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
     assert expected == (
         EXT4_ADMISSION_MODULE,
         EXT4_DESCRIPTOR_MODULE,
+        EXT4_BITMAP_MODULE,
         EXT4_BACKUPS_MODULE,
         EXT4_DIRHASH_MODULE,
         EXT4_DIRENT_MODULE,
@@ -86570,6 +86572,7 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
         "../../bitset.f",
         "vfs-ext4-admission.f",
         "vfs-ext4-descriptor.f",
+        "vfs-ext4-bitmap.f",
         "vfs-ext4-backups.f",
         "vfs-ext4-dirhash.f",
         "vfs-ext4-dirent.f",
@@ -86755,6 +86758,227 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
     ) < ordered_source.index(": _EXT4-GDT-BASE")
     assert ordered_source.index(": _EXT4-GDT-BASE") < (
         ordered_source.index("4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX")
+    )
+
+
+def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
+    bitmap = (AKASHIC_ROOT / EXT4_BITMAP_MODULE).read_text(encoding="utf-8")
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+    ordered_source = _ext4_source_text()
+
+    assert bitmap.splitlines().count("PROVIDED akashic-ext4-bitmap") == 1
+    assert len("akashic-ext4-bitmap".encode("utf-8")) == 19
+    assert tuple(
+        line.removeprefix("REQUIRE ")
+        for line in bitmap.splitlines()
+        if line.startswith("REQUIRE ")
+    ) == (
+        "../../bitset.f",
+        "vfs-ext4-admission.f",
+        "vfs-ext4-descriptor.f",
+    )
+
+    service_definitions = (
+        ": _EXT4-GROUP-BLOCK-COUNT  ( group ctx -- blocks ior )",
+        ": _EXT4-GROUP-INODE-COUNT  ( group ctx -- inodes ior )",
+        ": _EXT4-GROUP-BLOCK-RANGE  ( group ctx -- first count ior )",
+        ": _EXT4-BLOCK-BITMAP-CRC  ( bitmap ctx -- crc ior )",
+        ": _EXT4-INODE-BITMAP-CRC  ( bitmap ctx -- crc ior )",
+        ": _EXT4-LOAD-BLOCK-BITMAP  ( group ctx -- bitmap-home ior )",
+        ": _EXT4-LOAD-INODE-BITMAP  ( group ctx -- bitmap-home ior )",
+        (
+            ": _EXT4-BLOCK-ALLOCATED?  "
+            "( physical-block ctx -- allocated? ior )"
+        ),
+    )
+    service_names = (
+        "_EXT4-GROUP-BLOCK-COUNT",
+        "_EXT4-GROUP-INODE-COUNT",
+        "_EXT4-GROUP-BLOCK-RANGE",
+        "_EXT4-BLOCK-BITMAP-CRC",
+        "_EXT4-INODE-BITMAP-CRC",
+        "_EXT4-LOAD-BLOCK-BITMAP",
+        "_EXT4-LOAD-INODE-BITMAP",
+        "_EXT4-BLOCK-ALLOCATED?",
+    )
+    for definition in service_definitions:
+        assert bitmap.splitlines().count(definition) == 1
+        assert definition not in facade
+    for service in service_names:
+        assert service in facade
+        assert re.search(
+            rf"(?m)^:[ \t]+{re.escape(service)}(?=[ \t\r\n(])",
+            facade,
+        ) is None
+
+    private_cells = set(
+        re.findall(r"^VARIABLE (\S+)$", bitmap, re.MULTILINE)
+    )
+    assert private_cells == {
+        "_EXT4-GBC-GROUP",
+        "_EXT4-GBC-CTX",
+        "_EXT4-GBC-START",
+        "_EXT4-GIC-GROUP",
+        "_EXT4-GIC-CTX",
+        "_EXT4-GIC-FIRST",
+        "_EXT4-GBR-GROUP",
+        "_EXT4-GBR-CTX",
+        "_EXT4-GBR-COUNT",
+        "_EXT4-LBB-GROUP",
+        "_EXT4-LBB-CTX",
+        "_EXT4-LBB-HOME",
+        "_EXT4-LBB-STORED",
+        "_EXT4-LIB-GROUP",
+        "_EXT4-LIB-CTX",
+        "_EXT4-LIB-HOME",
+        "_EXT4-LIB-STORED",
+        "_EXT4-BA-BLOCK",
+        "_EXT4-BA-CTX",
+        "_EXT4-BA-GROUP",
+        "_EXT4-BA-INDEX",
+        "_EXT4-BA-GROUP-BLOCKS",
+    }
+    assert len(private_cells) == 22
+    assert all(cell not in facade for cell in private_cells)
+    for removed in (
+        "_EXT4-BBC-BUFFER",
+        "_EXT4-BBC-CTX",
+        "_EXT4-IBC-BUFFER",
+        "_EXT4-IBC-CTX",
+    ):
+        assert removed not in ordered_source
+    assert "EXECUTE" not in bitmap
+    assert "-XT" not in bitmap
+    assert "_EXT4-MUTATION-" not in bitmap
+
+    bitmap_executable = "\n".join(
+        line.split("\\", 1)[0] for line in bitmap.splitlines()
+    )
+    facade_executable = "\n".join(
+        line.split("\\", 1)[0] for line in facade.splitlines()
+    )
+
+    def word_body(source: str, name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None
+        return " ".join(match.group("body").split())
+
+    group_blocks = word_body(bitmap_executable, "_EXT4-GROUP-BLOCK-COUNT")
+    group_inodes = word_body(bitmap_executable, "_EXT4-GROUP-INODE-COUNT")
+    group_range = word_body(bitmap_executable, "_EXT4-GROUP-BLOCK-RANGE")
+    block_crc = word_body(bitmap_executable, "_EXT4-BLOCK-BITMAP-CRC")
+    inode_crc = word_body(bitmap_executable, "_EXT4-INODE-BITMAP-CRC")
+    block_loader = word_body(bitmap_executable, "_EXT4-LOAD-BLOCK-BITMAP")
+    inode_loader = word_body(bitmap_executable, "_EXT4-LOAD-INODE-BITMAP")
+    allocated = word_body(bitmap_executable, "_EXT4-BLOCK-ALLOCATED?")
+    validate = word_body(facade_executable, "_EXT4-VALIDATE-BITMAPS")
+
+    assert bitmap.index(service_definitions[0]) < bitmap.index(
+        service_definitions[2]
+    )
+    assert bitmap.index(service_definitions[0]) < bitmap.index(
+        service_definitions[7]
+    )
+    assert bitmap.index(service_definitions[3]) < bitmap.index(
+        service_definitions[5]
+    )
+    assert bitmap.index(service_definitions[4]) < bitmap.index(
+        service_definitions[6]
+    )
+
+    assert group_blocks.index("_EXT4-UMUL?") < group_blocks.index(
+        "_EXT4-UADD?"
+    ) < group_blocks.index("_EXT4-C.BPG + @ MIN 0")
+    assert "_EXT4-C.BLOCKS + @ _EXT4-GBC-START @ -" in group_blocks
+    assert group_inodes.index("_EXT4-UMUL?") < group_inodes.index(
+        "_EXT4-C.IPG + @ MIN 0"
+    )
+    assert "_EXT4-C.INODES + @ _EXT4-GIC-FIRST @ -" in group_inodes
+    assert group_range.count("_EXT4-GROUP-BLOCK-COUNT") == 1
+    assert group_range.index("_EXT4-GROUP-BLOCK-COUNT") < (
+        group_range.index("_EXT4-UMUL?")
+    ) < group_range.index("_EXT4-UADD?")
+
+    for calculator, span in (
+        (block_crc, "_EXT4-C.BPG + @ 8 /"),
+        (inode_crc, "_EXT4-C.IPG + @ 8 /"),
+    ):
+        assert calculator.index("_EXT4-C.SEED + @ _EXT4-CRC-START") < (
+            calculator.index(span)
+        ) < calculator.index("_EXT4-CRC-ADD") < calculator.index(
+            "_EXT4-CRC@ 0"
+        )
+        assert "_EXT4-CRC-ADD ?DUP IF 0 SWAP EXIT THEN" in calculator
+
+    for loader, uninit, calculator, stored in (
+        (
+            block_loader,
+            "_EXT4-BG-BLOCK-UNINIT",
+            "_EXT4-BLOCK-BITMAP-CRC",
+            "_EXT4-LBB-STORED @ <>",
+        ),
+        (
+            inode_loader,
+            "_EXT4-BG-INODE-UNINIT",
+            "_EXT4-INODE-BITMAP-CRC",
+            "_EXT4-LIB-STORED @ <>",
+        ),
+    ):
+        assert loader.index("_EXT4-LOAD-DESC") < loader.index(uninit)
+        assert loader.index(uninit) < loader.index("_EXT4-READ-BLOCK")
+        assert loader.index("_EXT4-READ-BLOCK") < loader.index(calculator)
+        assert loader.index(calculator) < loader.index(stored)
+        assert "?DUP IF NIP 0 SWAP EXIT THEN" in loader
+        assert "_EXT4-CRC-START" not in loader
+        assert "_EXT4-CRC-ADD" not in loader
+        assert "_EXT4-CRC@" not in loader
+
+    assert "_EXT4-GROUP-BLOCK-COUNT" in allocated
+    assert "_EXT4-BG-BLOCK-UNINIT AND IF FALSE 0 EXIT THEN" in allocated
+    assert "_EXT4-LOAD-BLOCK-BITMAP" not in allocated
+    assert (
+        "_EXT4-BA-GROUP-BLOCKS @ _EXT4-BA-INDEX @ BITSET-TEST?"
+        in allocated
+    )
+    assert "DROP FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in allocated
+
+    assert validate.count("_EXT4-BLOCK-BITMAP-CRC") == 1
+    assert validate.count("_EXT4-INODE-BITMAP-CRC") == 1
+    assert validate.count("?DUP IF NIP EXIT THEN") == 2
+    assert "_EXT4-CRC-START" not in validate
+    assert "_EXT4-CRC-ADD" not in validate
+    assert "_EXT4-CRC@" not in validate
+    for policy in (
+        ": _EXT4-REQUIRE-ALLOCATED-BLOCK",
+        ": _EXT4-REQUIRE-ALLOCATED-RANGE",
+        ": _EXT4-VALIDATE-BITMAPS",
+        ": _EXT4-VALIDATE-GROUPS",
+    ):
+        assert policy in facade
+        assert policy not in bitmap
+
+    expected_facade_calls = {
+        "_EXT4-GROUP-BLOCK-COUNT": 6,
+        "_EXT4-GROUP-INODE-COUNT": 7,
+        "_EXT4-BLOCK-ALLOCATED?": 3,
+        "_EXT4-GROUP-BLOCK-RANGE": 3,
+        "_EXT4-LOAD-BLOCK-BITMAP": 28,
+        "_EXT4-LOAD-INODE-BITMAP": 11,
+        "_EXT4-BLOCK-BITMAP-CRC": 8,
+        "_EXT4-INODE-BITMAP-CRC": 10,
+    }
+    for service, count in expected_facade_calls.items():
+        assert facade_executable.count(service) == count
+
+    assert ordered_source.index(": _EXT4-LOAD-DESC  (") < (
+        ordered_source.index(": _EXT4-GROUP-BLOCK-COUNT")
+    )
+    assert ordered_source.index(": _EXT4-BLOCK-ALLOCATED?") < (
+        ordered_source.index(": _EXT4-VALIDATE-BACKUPS")
     )
 
 

@@ -129,6 +129,10 @@ checked geometry arithmetic, and primary-super validation. The following
 [`vfs-ext4-descriptor.f`](vfs-ext4-descriptor.md) unit authenticates one group
 descriptor and its bounded metadata geometry, and owns the shared checked
 descriptor-CRC query and restamper used by later policy owners. The
+[`vfs-ext4-bitmap.f`](vfs-ext4-bitmap.md) unit owns exact short-group geometry,
+format-span bitmap CRC calculation, authenticated bitmap loading, and raw
+single-block allocation evidence. It keeps all 22 scratch cells private while
+mount-wide ownership validation and mutation policy remain in the facade. The
 [`vfs-ext4-backups.f`](vfs-ext4-backups.md) unit authenticates sparse-super
 copies, immutable superblock identity, and backup descriptor locations without
 treating mutable counters as identity. The independent
@@ -155,10 +159,10 @@ verification cadence that apply before the next indexed-directory capability.
 
 The real-image harness cold-compiles the dependency-ordered production ext4
 source closure into the restored FAT/VFS snapshot. The current ext4 stage is
-the admission, descriptor, backup-authority, directory-hash, linear-dirent, and
-JBD2-checksum units followed by the public facade; VFS, CRC, and bitset are
-already present in earlier measured stages. It does not use a compiled shard
-or warm cache.
+the admission, descriptor, bitmap-admission, backup-authority, directory-hash,
+linear-dirent, and JBD2-checksum units followed by the public facade; VFS, CRC,
+and bitset are already present in earlier measured stages. It does not use a
+compiled shard or warm cache.
 To avoid making UART echo volume an implementation-size limit, the host
 injects each compacted physical source line into the BIOS `FSLOAD`
 source-buffer span and invokes an immediate `EVALUATE-CHECKED` shim;

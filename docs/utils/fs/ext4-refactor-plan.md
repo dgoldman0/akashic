@@ -64,6 +64,11 @@ redirected.
   group-descriptor location, shared CRC verification/restamping, pointer/span,
   flag, and counter admission. Its loader and the group-0 recovery candidate
   delegate to the same predicate, eliminating their duplicate CRC algebra.
+  `vfs-ext4-bitmap.f` now owns canonical short-group geometry, nominal-format
+  bitmap CRCs, authenticated bitmap loading, and the raw exact-bit allocation
+  predicate. All 22 scratch cells are private after making the CRC calculators
+  stack-direct, and mount validation delegates its duplicate CRC tails without
+  moving allocation-owner policy.
   `vfs-ext4-backups.f` owns sparse-super copy authority, immutable-super
   comparison, exact journal-backup tuples, and backup-GDT location checks; all
   13 of its scratch cells are private.
@@ -80,12 +85,13 @@ redirected.
   private, and the module adds no mutable cross-component result surface.
   `vfs-ext4.f` remains the only public facade and begins with allocation-owner
   and initialized-bitmap policy. The aggregate source stage now loads
-  `(admission, descriptor, backups, dirhash, dirent, jbd2-codec, facade)` in
-  production order rather than relying on a handwritten concatenation list.
+  `(admission, descriptor, bitmap, backups, dirhash, dirent, jbd2-codec,
+  facade)` in production order rather than relying on a handwritten
+  concatenation list.
   Four checked-I/O session/evidence cells and four success-only descriptor
   parser-result cells remain temporary cross-component surfaces until the
-  operation-lifetime context stage; backups, dirhash, dirent, and the JBD2
-  codec add none.
+  operation-lifetime context stage; bitmap admission, backups, dirhash, dirent,
+  and the JBD2 codec add none.
 
 ## Baseline and objective
 
@@ -199,10 +205,17 @@ The predicate restores any temporarily cleared checksum on every return. A
 restamp CRC error intentionally leaves the caller-owned target with a zero
 checksum, and the caller aborts its operation. The loader and group-0 recovery
 candidate now delegate to that predicate instead of retaining separate
-checksum implementations. A backup-authority unit then uses those two
-foundations to authenticate sparse-super copies and backup descriptor
-locations; its three services are stack-only and all scratch state remains
-private. The independent dirhash unit owns name-byte validation, seeded
+checksum implementations. The allocation-bitmap unit then owns checked
+short-group geometry, nominal-format bitmap CRCs, authenticated bitmap loaders,
+and the exact-bit raw allocation predicate. It keeps 22 scratch cells private,
+makes both CRC calculators stack-direct, and removes the facade's duplicate
+bitmap CRC tails. Logical queries exclude short-final-group padding while ext4
+CRCs retain their format-defined nominal byte spans. Raw `BLOCK_UNINIT`
+evidence remains `FALSE 0`; stricter loader and facade policy is unchanged. A
+backup-authority unit uses the admission and descriptor foundations to
+authenticate sparse-super copies and backup descriptor locations; its three
+services are stack-only and all scratch state remains private. The independent
+dirhash unit owns name-byte validation, seeded
 half-MD4, and the mounted version/flag policy behind one checked entry point.
 It depends only on admission, keeps all hash scratch private, and moves before
 the facade without a callback or mutable cross-module seam. The linear dirent

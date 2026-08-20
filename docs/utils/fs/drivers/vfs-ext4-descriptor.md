@@ -39,6 +39,7 @@ group-0 recovery candidate uses the same service after preserving its existing
 pointer-field checks. This removes duplicate CRC algebra and checksum-only
 scratch without changing descriptor error precedence. The cold-source harness
 and packaging closure resolve admission, descriptor loading and checksum
-services, sparse-super backup authority, the independent directory-hash
-service, the linear directory-entry codec, the independent JBD2 checksum
-codec, and then the facade without a backwards dependency.
+services, exact bitmap admission, sparse-super backup authority, the
+independent directory-hash service, the linear directory-entry codec, the
+independent JBD2 checksum codec, and then the facade without a backwards
+dependency.
