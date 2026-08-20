@@ -1,9 +1,10 @@
 # ext4 recovery refactor plan
 
 This document fixes the refactor sequence that follows the bounded depth-zero
-HTree full-leaf CREATE milestone at commit `abb3f94`. The first tranche removes
-the duplicate planning machinery on the next indexed-directory critical path;
-the later stages sequence the broader cleanup around continued feature work.
+HTree full-leaf CREATE milestone at commit `abb3f94`. The first tranche proves
+the ordered home-plan seam in one bounded allocating mutation family before it
+is routed into the next indexed-directory critical path; the later stages
+sequence the broader cleanup around continued feature work.
 No refactor stage may change the filesystem formats admitted by the driver or
 weaken any authority, recovery, transaction, or persistence guarantee already
 qualified by the production source path.
@@ -58,8 +59,11 @@ feature change names and qualifies a new contract:
 - Credit is the exact number of distinct homes in each journal kind. Capacity
   is supplied by the operation's caller-owned storage; it is not a global
   design limit.
-- Measurement is read-only. Failure leaves the plan and transaction state
-  unchanged, and no write may begin until the whole preplan has authenticated.
+- Measurement performs no filesystem writes and leaves transaction state
+  unchanged. Each individual ledger mutation validates before changing plan
+  bytes; a failed multi-step build may leave an open partial plan that the
+  operation discards and reinitializes. Only a fully authenticated sealed plan
+  may authorize staging, and no write may begin before that seal.
 - Cold, dry, and live passes continue to reauthenticate mutable filesystem
   state at their existing boundaries. A cached descriptor is not authority to
   skip the live check.

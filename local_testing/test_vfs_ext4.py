@@ -35921,7 +35921,7 @@ def test_typed_one_block_hole_fill_requires_measured_credit_for_full_root(
                         f"_XH-CANDIDATE @ {candidate} =",
                         "_XH-LEAF-CANDIDATE @ 1354 =",
                         "_XH-ROOT-GROW @ -1 =",
-                        "_XH-META-CREDIT @ 5 =",
+                        "_XH-META-CREDIT@ 5 =",
                         "_XH-PUBLISHED @ 0=",
                         (
                             "_FR-WRITER _EXT4-JWR.STATE + @ "
@@ -44136,7 +44136,7 @@ def test_staged_public_multi_allocated_eof_preserves_prefix_on_profile_capacity_
                             f"_XH-CANDIDATE @ {second_candidate} =",
                             "_XH-LEAF-CANDIDATE @ 1355 =",
                             "_XH-ROOT-GROW @ 0<",
-                            "_XH-META-CREDIT @ 5 =",
+                            "_XH-META-CREDIT@ 5 =",
                             "_EXT4-MOW-CREDIT @ -5 =",
                             "_XH-ENTRIES @ 4 =",
                             "_MR-V V.FLAGS @ VFS-F-RO AND 0=",
@@ -45274,7 +45274,7 @@ def staged_public_extent_root_growth_fixture(
                             "_RG-HOMES 5 =",
                             "_EXT4-MOW-CREDIT @ -5 =",
                             "_XH-ROOT-GROW @ 0<",
-                            "_XH-META-CREDIT @ 5 =",
+                            "_XH-META-CREDIT@ 5 =",
                             f"_XH-CANDIDATE @ {data_candidate} =",
                             f"_XH-LEAF-CANDIDATE @ {leaf_candidate} =",
                             "_XH-EDIT @ _XH-EDIT-GROW-ROOT =",
@@ -45818,7 +45818,7 @@ def staged_public_extent_root_growth_seven_home_fixture(
                             "_R7-HOMES 7 =",
                             "_EXT4-MOW-CREDIT @ -7 =",
                             "_XH-ROOT-GROW @ 0<",
-                            "_XH-META-CREDIT @ 7 =",
+                            "_XH-META-CREDIT@ 7 =",
                             "_XH-EDIT @ _XH-EDIT-GROW-ROOT =",
                             "_XH-INSERT @ 4 =",
                             f"_XH-CANDIDATE @ {data_candidate} =",
@@ -45839,18 +45839,18 @@ def staged_public_extent_root_growth_seven_home_fixture(
                             "_XH-PUBLISHED @ 0<",
                             *(
                                 (
-                                    f"{home_index} CELLS "
-                                    f"_XH-META-HOMES + @ {home} ="
+                                    f"{home_index} _XH-META-HOME@ "
+                                    f"{home} ="
                                 )
                                 for home_index, home in enumerate(
                                     (
                                         bitmap_home,
                                         gdt_home,
                                         super_home,
-                                        inode_home,
                                         leaf_candidate,
                                         leaf_bitmap_home,
                                         leaf_gdt_home,
+                                        inode_home,
                                     )
                                 )
                             ),
@@ -46277,7 +46277,7 @@ def staged_public_existing_extent_leaf_fixture(
                             f"_XH-EXISTING-LEAF @ {leaf_home} =",
                             "_XH-LEAF-CANDIDATE @ 0=",
                             "_XH-ROOT-GROW @ 0=",
-                            "_XH-META-CREDIT @ 5 =",
+                            "_XH-META-CREDIT@ 5 =",
                             "_XH-EDIT @ _XH-EDIT-INSERT =",
                             "_XH-INSERT @ 5 =",
                             "_XH-ENTRIES @ 6 =",
@@ -46949,7 +46949,7 @@ def staged_public_existing_extent_leaf_first_key_fixture(
                             f"_XH-EXISTING-LEAF @ {leaf_home} =",
                             "_XH-LEAF-CANDIDATE @ 0=",
                             "_XH-ROOT-GROW @ 0=",
-                            "_XH-META-CREDIT @ 5 =",
+                            "_XH-META-CREDIT@ 5 =",
                             "_XH-EDIT @ _XH-EDIT-INSERT =",
                             "_XH-INSERT @ 0=",
                             "_XH-ENTRIES @ 6 =",
@@ -47311,7 +47311,7 @@ def _staged_existing_extent_leaf_first_key_fault_lines(
                     f"_XH-EXISTING-LEAF @ {leaf_home} =",
                     "_XH-LEAF-CANDIDATE @ 0=",
                     "_XH-ROOT-GROW @ 0=",
-                    "_XH-META-CREDIT @ 5 =",
+                    "_XH-META-CREDIT@ 5 =",
                     "_XH-EDIT @ _XH-EDIT-INSERT =",
                     "_XH-INSERT @ 0=",
                     "_XH-ENTRIES @ 6 =",
@@ -47903,9 +47903,9 @@ def test_existing_extent_leaf_rejects_alias_roles_without_io(
         patches = ((other_inode_offset, bytes(patched_other)),)
 
     late_checks = (
-        ["_XH-META-CREDIT @ 5 =", "_XH-CANDIDATE @ 0<>"]
+        ["_XH-META-CREDIT@ 5 =", "_XH-CANDIDATE @ 0<>"]
         if leaf_alias_case == "other-owner"
-        else ["_XH-META-CREDIT @ 0="]
+        else ["_XH-META-CREDIT@ 0="]
     )
     captured_leaf_check = (
         "_XH-EXISTING-LEAF @ 0="
@@ -48171,7 +48171,7 @@ def test_existing_extent_leaf_full_unmergeable_stages_split_without_io(
                         "_XH-SPLIT-RIGHT @ 43 =",
                         "_XH-LEAF-FIRST @ 0=",
                         "_XH-LEAF-SECOND-FIRST @ 84 =",
-                        "_XH-META-CREDIT @ 6 =",
+                        "_XH-META-CREDIT@ 6 =",
                         "_XH-NEW-BLOCKS @ 174 =",
                         "_XH-PUBLISHED @ 0<",
                         "_LF-META-USED 6 =",
@@ -48783,32 +48783,32 @@ def staged_public_extent_leaf_split_fixture(
                             f"_XH-LEAF-MAX @ {leaf_max} =",
                             "_XH-LEAF-FIRST @ 0=",
                             "_XH-LEAF-SECOND-FIRST @ 82 =",
-                            "_XH-META-CREDIT @ 6 =",
+                            "_XH-META-CREDIT@ 6 =",
                             f"_XH-NEW-BLOCKS @ {new_blocks} =",
                             f"_XH-NEW-FREE @ {free_blocks_before - 2} =",
                             (
-                                "0 CELLS _XH-META-HOMES + @ "
+                                "0 _XH-META-HOME@ "
                                 f"{bitmap_home} ="
                             ),
                             (
-                                "1 CELLS _XH-META-HOMES + @ "
+                                "1 _XH-META-HOME@ "
                                 f"{gdt_home} ="
                             ),
                             (
-                                "2 CELLS _XH-META-HOMES + @ "
+                                "2 _XH-META-HOME@ "
                                 f"{super_home} ="
                             ),
                             (
-                                "3 CELLS _XH-META-HOMES + @ "
-                                f"{inode_home} ="
-                            ),
-                            (
-                                "4 CELLS _XH-META-HOMES + @ "
+                                "3 _XH-META-HOME@ "
                                 f"{existing_leaf} ="
                             ),
                             (
-                                "5 CELLS _XH-META-HOMES + @ "
+                                "4 _XH-META-HOME@ "
                                 f"{leaf_candidate} ="
+                            ),
+                            (
+                                "5 _XH-META-HOME@ "
+                                f"{inode_home} ="
                             ),
                         ]
                     )
@@ -49077,30 +49077,30 @@ def test_existing_multi_leaf_depth_one_selects_second_leaf_without_io(
                         "_XH-ROOT-GROW @ 0=",
                         "_XH-LEAF-SPLIT @ 0=",
                         "_XH-LEAF-CANDIDATE @ 0=",
-                        "_XH-META-CREDIT @ 5 =",
+                        "_XH-META-CREDIT@ 5 =",
                         "_XH-NEW-BLOCKS @ 176 =",
                         "_XH-PUBLISHED @ 0<",
                         "_ML-META-USED 5 =",
                         "_ML-DATA-USED 1 =",
                         (
-                            "0 CELLS _XH-META-HOMES + @ "
+                            "0 _XH-META-HOME@ "
                             f"{bitmap_home} ="
                         ),
                         (
-                            "1 CELLS _XH-META-HOMES + @ "
+                            "1 _XH-META-HOME@ "
                             f"{gdt_home} ="
                         ),
                         (
-                            "2 CELLS _XH-META-HOMES + @ "
+                            "2 _XH-META-HOME@ "
                             f"{super_home} ="
                         ),
                         (
-                            "3 CELLS _XH-META-HOMES + @ "
-                            f"{inode_home} ="
+                            "3 _XH-META-HOME@ "
+                            f"{selected_leaf} ="
                         ),
                         (
-                            "4 CELLS _XH-META-HOMES + @ "
-                            f"{selected_leaf} ="
+                            "4 _XH-META-HOME@ "
+                            f"{inode_home} ="
                         ),
                         "_ML-WRITER _EXT4-JWR.META-USED + @ 0=",
                         "_ML-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
@@ -49287,7 +49287,7 @@ def test_existing_multi_leaf_first_key_repairs_only_selected_root_index(
                         "_XH-LEAF-CANDIDATE @ 0=",
                         "_XH-ROOT-GROW @ 0=",
                         "_XH-LEAF-SPLIT @ 0=",
-                        "_XH-META-CREDIT @ 5 =",
+                        "_XH-META-CREDIT@ 5 =",
                         "_XH-NEW-BLOCKS @ 176 =",
                         "_XH-PUBLISHED @ 0<",
                         "_MLK-META-USED 5 =",
@@ -49419,7 +49419,7 @@ def test_multi_leaf_capture_rejects_unselected_data_alias_to_selected_leaf(
                             "EXT4-D-DATA-MAP ="
                         ),
                         "_XH-PUBLISHED @ 0=",
-                        "_XH-META-CREDIT @ 0=",
+                        "_XH-META-CREDIT@ 0=",
                         "_MLA-WRITER _EXT4-JWR.META-USED + @ 0=",
                         "_MLA-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
                         "_MLA-WRITER _EXT4-JWR.DATA-USED + @ 0=",
@@ -49696,7 +49696,7 @@ def staged_public_multi_leaf_second_edit_fixture(
                         "_XH-LEAF-CANDIDATE @ 0=",
                         "_XH-ROOT-GROW @ 0=",
                         "_XH-LEAF-SPLIT @ 0=",
-                        "_XH-META-CREDIT @ 5 =",
+                        "_XH-META-CREDIT@ 5 =",
                         "_XH-EDIT @ _XH-EDIT-INSERT =",
                         "_XH-INSERT @ 1 =",
                         "_XH-ENTRIES @ 44 =",
@@ -50150,7 +50150,7 @@ def test_existing_multi_leaf_full_selected_leaf_stages_split_without_io(
                         "_XH-SPLIT-RIGHT @ 43 =",
                         "_XH-LEAF-FIRST @ 1 =",
                         "_XH-LEAF-SECOND-FIRST @ 84 =",
-                        "_XH-META-CREDIT @ 6 =",
+                        "_XH-META-CREDIT@ 6 =",
                         f"_XH-NEW-BLOCKS @ {new_blocks} =",
                         "_XH-PUBLISHED @ 0<",
                         "_MLS-META-USED 6 =",
@@ -50359,7 +50359,7 @@ def staged_public_multi_leaf_split_fixture(
                         "_XH-SPLIT-RIGHT @ 43 =",
                         "_XH-LEAF-FIRST @ 1 =",
                         "_XH-LEAF-SECOND-FIRST @ 84 =",
-                        "_XH-META-CREDIT @ 6 =",
+                        "_XH-META-CREDIT@ 6 =",
                         f"_XH-NEW-BLOCKS @ {new_blocks} =",
                         *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                     ]
@@ -50879,7 +50879,7 @@ def test_full_depth1_root_edits_selected_leaf_with_room_without_io(
                         "_XH-LEAF-CANDIDATE @ 0=",
                         "_XH-ROOT-GROW @ 0=",
                         "_XH-LEAF-SPLIT @ 0=",
-                        "_XH-META-CREDIT @ 5 =",
+                        "_XH-META-CREDIT@ 5 =",
                         "_XH-NEW-BLOCKS @ 182 =",
                         "_XH-PUBLISHED @ 0<",
                         "_FRE-META-USED 5 =",
@@ -51103,7 +51103,7 @@ def test_full_depth1_root_full_leaf_refuses_growth_without_io(
                         "_XH-LEAF-CANDIDATE @ 0=",
                         "_XH-ROOT-GROW @ 0=",
                         "_XH-LEAF-SPLIT @ 0=",
-                        "_XH-META-CREDIT @ 0=",
+                        "_XH-META-CREDIT@ 0=",
                         "_XH-PUBLISHED @ 0=",
                         (
                             "_FRF-STATE-BEFORE-ABORT "
@@ -51371,7 +51371,7 @@ def _staged_extent_leaf_split_fault_lines(
                     f"_XH-LEAF-MAX @ {leaf_max} =",
                     "_XH-LEAF-FIRST @ 0=",
                     "_XH-LEAF-SECOND-FIRST @ 82 =",
-                    "_XH-META-CREDIT @ 6 =",
+                    "_XH-META-CREDIT@ 6 =",
                     "_XH-PUBLISHED @ 0<",
                     "_LST-CLOSE-IOR 0=",
                     "_LST-ACT-CLOSE-IOR 0=",
@@ -51706,7 +51706,7 @@ def _staged_extent_root_growth_leaf_fault_lines(
                     "_RGL-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                     "_EXT4-MOW-CREDIT @ -5 =",
                     "_XH-ROOT-GROW @ 0<",
-                    "_XH-META-CREDIT @ 5 =",
+                    "_XH-META-CREDIT@ 5 =",
                     f"_XH-CANDIDATE @ {data_candidate} =",
                     f"_XH-LEAF-CANDIDATE @ {leaf_candidate} =",
                     "_XH-EDIT @ _XH-EDIT-GROW-ROOT =",
@@ -51979,7 +51979,7 @@ def test_staged_public_extent_root_growth_fills_in_size_hole(
                             "_RH-WRITER _EXT4-JWR-IDLE-CLEAN?",
                             "_EXT4-WR-KIND @ _EXT4-WRK-HOLE-FILL =",
                             "_EXT4-MOW-CREDIT @ -5 =",
-                            "_XH-META-CREDIT @ 5 =",
+                            "_XH-META-CREDIT@ 5 =",
                             "_XH-ROOT-GROW @ 0<",
                             "_XH-EDIT @ _XH-EDIT-GROW-ROOT =",
                             "_XH-INSERT @ 1 =",
@@ -52390,7 +52390,7 @@ def test_staged_public_extent_root_growth_refuses_profile_four_without_io(
                             "_RG4-HOMES 0=",
                             "_EXT4-MOW-CREDIT @ -5 =",
                             "_XH-ROOT-GROW @ 0<",
-                            "_XH-META-CREDIT @ 5 =",
+                            "_XH-META-CREDIT@ 5 =",
                             f"_XH-CANDIDATE @ {data_candidate} =",
                             f"_XH-LEAF-CANDIDATE @ {leaf_candidate} =",
                             "_EXT4-WR-ACTUAL @ 0=",
@@ -52653,7 +52653,7 @@ def test_staged_public_extent_root_growth_refuses_single_free_block_without_io(
                             "_R1-WRITER _EXT4-JWR-IDLE-CLEAN?",
                             "_R1-HOMES 0=",
                             "_EXT4-MOW-CREDIT @ 0=",
-                            "_XH-META-CREDIT @ 0=",
+                            "_XH-META-CREDIT@ 0=",
                             "_XH-ROOT-GROW @ 0<",
                             "_XH-EDIT @ _XH-EDIT-GROW-ROOT =",
                             f"_XH-CANDIDATE @ {data_candidate} =",
@@ -53059,7 +53059,7 @@ def test_typed_extent_root_growth_measures_six_shared_gdt_homes(
                         "_S6-BEGIN-IOR 0=",
                         "_S6-STAGE-IOR 0=",
                         "_S6-DEPTH-BEFORE _S6-DEPTH-AFTER =",
-                        "_XH-META-CREDIT @ 6 =",
+                        "_XH-META-CREDIT@ 6 =",
                         "_XH-ROOT-GROW @ 0<",
                         "_XH-EDIT @ _XH-EDIT-GROW-ROOT =",
                         "_XH-INSERT @ 2 =",
@@ -55058,7 +55058,7 @@ def test_staged_public_cross_tail_exact_preserves_committed_prefix_on_profile_ca
                             f"_XH-CANDIDATE @ {candidate} =",
                             f"_XH-LEAF-CANDIDATE @ {leaf_candidate} =",
                             "_XH-ROOT-GROW @ 0<",
-                            "_XH-META-CREDIT @ 5 =",
+                            "_XH-META-CREDIT@ 5 =",
                             "_XH-ENTRIES @ 4 =",
                             "_XH-PUBLISHED @ 0=",
                             "_LR-STAT-BEFORE-IOR 0=",
