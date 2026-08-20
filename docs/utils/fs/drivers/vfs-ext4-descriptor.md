@@ -17,10 +17,11 @@ On a successful return, callers consume four parser-result cells:
 They respectively identify the descriptor home, its byte offset, authenticated
 initialization flags, and the bounded inode-table span. After any nonzero
 return their contents are unspecified and are not authority evidence. The
-other six parser cells are private. These four cells are temporary operation-
-order coupling to be replaced by explicit operation-lifetime state; adding
-getters would not change that lifetime contract.
+other six parser cells are private. These four cells are temporary
+operation-order coupling to be replaced by explicit operation-lifetime state;
+adding getters would not change that lifetime contract.
 
 The physical split preserves the descriptor parser and its error precedence
 byte for byte. The cold-source harness and packaging closure resolve admission,
-descriptor loading, and then the facade in one direction.
+descriptor loading, the independent directory-hash service, and then the
+facade without a backwards dependency.

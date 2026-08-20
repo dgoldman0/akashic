@@ -42,6 +42,7 @@ BITSET_MODULE = "utils/bitset.f"
 VFS_MODULE = "utils/fs/vfs.f"
 EXT4_ADMISSION_MODULE = "utils/fs/drivers/vfs-ext4-admission.f"
 EXT4_DESCRIPTOR_MODULE = "utils/fs/drivers/vfs-ext4-descriptor.f"
+EXT4_DIRHASH_MODULE = "utils/fs/drivers/vfs-ext4-dirhash.f"
 EXT4_MODULE = "utils/fs/drivers/vfs-ext4.f"
 CRC_F = AKASHIC_ROOT / CRC_MODULE
 BITSET_F = AKASHIC_ROOT / BITSET_MODULE
@@ -86523,6 +86524,7 @@ def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
     assert expected == (
         EXT4_ADMISSION_MODULE,
         EXT4_DESCRIPTOR_MODULE,
+        EXT4_DIRHASH_MODULE,
         EXT4_MODULE,
     )
     assert set(expected).isdisjoint(already_staged)
@@ -86562,6 +86564,7 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
         "../../bitset.f",
         "vfs-ext4-admission.f",
         "vfs-ext4-descriptor.f",
+        "vfs-ext4-dirhash.f",
     )
     assert "URANGE-" not in admission
     assert "BITSET-" not in admission
@@ -86612,6 +86615,94 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
         ": _EXT4-VALIDATE-SUPER  ( ctx vfs -- ior )"
     ) < ordered_source.index(": _EXT4-GDT-BASE")
     assert ordered_source.index(": _EXT4-GDT-BASE") < (
+        ordered_source.index("4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX")
+    )
+
+
+def test_ext4_dirhash_service_is_private_acyclic_unit() -> None:
+    dirhash = (AKASHIC_ROOT / EXT4_DIRHASH_MODULE).read_text(
+        encoding="utf-8"
+    )
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+    ordered_source = _ext4_source_text()
+
+    assert dirhash.splitlines().count("PROVIDED akashic-ext4-dirhash") == 1
+    assert tuple(
+        line.removeprefix("REQUIRE ")
+        for line in dirhash.splitlines()
+        if line.startswith("REQUIRE ")
+    ) == ("vfs-ext4-admission.f",)
+
+    service_definitions = (
+        ": _EXT4-DIRENT-NAME-VALID?  ( addr len -- flag )",
+        "1 CONSTANT _EXT4-DX-HASH-HALF-MD4",
+        ": _EXT4-DIRHASH-POLICY  ( ctx root-version -- unsigned? ior )",
+        (
+            ": _EXT4-HALF-MD4-DIRHASH?  "
+            "( addr len root-version ctx -- hash minor ior )"
+        ),
+    )
+    for definition in service_definitions:
+        assert definition in dirhash
+        assert definition not in facade
+    assert "_EXT4-DIRENT-NAME-VALID?" in facade
+    assert "_EXT4-DX-HASH-HALF-MD4" in facade
+    assert "_EXT4-DIRHASH-POLICY" in facade
+    assert "_EXT4-HALF-MD4-DIRHASH?" in facade
+
+    private_cells = set(
+        re.findall(
+            r"^(?:CREATE|VARIABLE) (_EXT4-DH(?:P)?-[A-Z0-9-]+)",
+            dirhash,
+            re.MULTILINE,
+        )
+    )
+    assert len(private_cells) == 21
+    assert all(cell not in facade for cell in private_cells)
+    assert "_EXT4-DH-" not in facade
+    assert "_EXT4-DHP-" not in facade
+    assert "EXECUTE" not in dirhash
+    assert "-XT" not in dirhash
+
+    executable = "\n".join(
+        line.split("\\", 1)[0] for line in dirhash.splitlines()
+    )
+    checked_match = re.search(
+        r": _EXT4-HALF-MD4-DIRHASH\?\s+(.*?);",
+        executable,
+        re.DOTALL,
+    )
+    policy_match = re.search(
+        r": _EXT4-DIRHASH-POLICY\s+(.*?);",
+        executable,
+        re.DOTALL,
+    )
+    assert checked_match is not None
+    assert policy_match is not None
+    checked = checked_match.group(1)
+    policy = policy_match.group(1)
+    length_gate = "_EXT4-DH-LEN @ DUP 0= SWAP 255 U> OR"
+    name_gate = "_EXT4-DIRENT-NAME-VALID?"
+    policy_gate = "_EXT4-DIRHASH-POLICY"
+    hash_call = "_EXT4-HALF-MD4-DIRHASH 0"
+    assert checked.index(length_gate) < checked.index(name_gate)
+    assert checked.index(name_gate) < checked.index(policy_gate)
+    assert checked.index(policy_gate) < checked.index(hash_call)
+    assert checked.count("0 0 VFS-E-INVALID EXIT") == 2
+    assert "DUP IF NIP 0 0 ROT EXIT THEN" in checked
+    assert (
+        "_EXT4-DHP-VERSION @ _EXT4-DX-HASH-HALF-MD4 <> IF"
+        in policy
+    )
+    assert "_EXT4-SB-FL-SIGNED-HASH = IF DROP FALSE 0 EXIT THEN" in policy
+    assert "_EXT4-SB-FL-UNSIGNED-HASH = IF TRUE 0 EXIT THEN" in policy
+    assert policy.count("EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED") == 2
+
+    assert "_EXT4-DX-HASH-HALF-MD4-UNSIGNED" not in ordered_source
+    assert ordered_source.index(": _EXT4-LOAD-DESC") < (
+        ordered_source.index(": _EXT4-DIRENT-NAME-VALID?")
+    )
+    assert ordered_source.index(": _EXT4-HALF-MD4-DIRHASH?") < (
         ordered_source.index("4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX")
     )
 

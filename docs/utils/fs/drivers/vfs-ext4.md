@@ -127,10 +127,13 @@ REQUIRE utils/fs/drivers/vfs-ext4.f
 profile and context layout, checked volume I/O and CRC adapter, probing,
 checked geometry arithmetic, and primary-super validation. The following
 [`vfs-ext4-descriptor.f`](vfs-ext4-descriptor.md) unit authenticates one group
-descriptor and its bounded metadata geometry. The facade begins at allocation
-ownership and initialized-bitmap policy and retains all later filesystem
-authority, recovery, transaction, mutation, and VFS-operation policy.
-Consumers should not require either internal unit directly.
+descriptor and its bounded metadata geometry. The independent
+[`vfs-ext4-dirhash.f`](vfs-ext4-dirhash.md) unit owns directory-name byte
+admission, the ext4 half-MD4 engine, and the checked mounted hash policy. The
+facade begins at allocation ownership and initialized-bitmap policy and retains
+all later filesystem authority, recovery, transaction, mutation, and
+VFS-operation policy. Consumers should not require these internal units
+directly.
 
 The post-`abb3f94` implementation sequence is fixed in the
 [ext4 recovery refactor plan](../ext4-refactor-plan.md). That plan records the
@@ -141,9 +144,9 @@ verification cadence that apply before the next indexed-directory capability.
 
 The real-image harness cold-compiles the dependency-ordered production ext4
 source closure into the restored FAT/VFS snapshot. The current ext4 stage is
-the admission and descriptor units followed by the public facade; VFS, CRC,
-and bitset are already present in earlier measured stages. It does not use a
-compiled shard or warm cache.
+the admission, descriptor, and directory-hash units followed by the public
+facade; VFS, CRC, and bitset are already present in earlier measured stages.
+It does not use a compiled shard or warm cache.
 To avoid making UART echo volume an implementation-size limit, the host
 injects each compacted physical source line into the BIOS `FSLOAD`
 source-buffer span and invokes an immediate `EVALUATE-CHECKED` shim;

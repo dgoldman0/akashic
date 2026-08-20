@@ -13,8 +13,11 @@ structured ext4 errors, the checked CRC32C adapter, checked volume reads and
 writes, probe helpers, checked unsigned arithmetic, sparse-super geometry, and
 primary-super validation. It depends directly on `vfs.f` and `math/crc.f` and
 has no dependency or callback into the facade. The internal
-[`vfs-ext4-descriptor.f`](vfs-ext4-descriptor.md) unit is its next consumer and
-authenticates group descriptors before the facade applies allocation policy.
+[`vfs-ext4-descriptor.f`](vfs-ext4-descriptor.md) unit consumes that foundation
+to authenticate group descriptors. The independent
+[`vfs-ext4-dirhash.f`](vfs-ext4-dirhash.md) unit consumes the admitted
+superblock hash seed and flags for checked directory-name hashing. Neither
+unit calls back into later filesystem policy.
 
 Most mutable scratch in this unit is private to admission. Four cells remain
 an intentional temporary cross-module surface: `_EXT4-IO-VFS` and
@@ -24,7 +27,7 @@ consumed by later durability code. They are implementation state, not public
 API, and are candidates for the operation-lifetime context stage rather than
 for a backwards dependency into admission.
 
-Physical extraction does not change the profile, error precedence, source
-order, or cold-source qualification model. Packaging and the real-image
-harness resolve admission, descriptor loading, and the facade in that order
-and continue to compile the aggregate closure in source mode.
+Physical extraction does not change the profile, error precedence, or
+cold-source qualification model. Packaging and the real-image harness resolve
+admission, descriptor loading, directory hashing, and the facade in production
+order and continue to compile the aggregate closure in source mode.
