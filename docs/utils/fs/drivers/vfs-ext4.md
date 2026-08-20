@@ -122,6 +122,11 @@ operations relative to the supplied `VOL-RAW` or `VOL-SLICE` object.
 REQUIRE utils/fs/drivers/vfs-ext4.f
 ```
 
+The post-`abb3f94` implementation sequence is fixed in the
+[ext4 recovery refactor plan](../ext4-refactor-plan.md). That plan records the
+semantic invariants, migration order, commit thresholds, and focused
+verification cadence that apply before the next indexed-directory capability.
+
 ## Cold source qualification
 
 The real-image harness cold-compiles the production ext4 Forth source into

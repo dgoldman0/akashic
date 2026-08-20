@@ -1,0 +1,233 @@
+# ext4 recovery refactor plan
+
+This document fixes the refactor sequence that follows the bounded depth-zero
+HTree full-leaf CREATE milestone at commit `abb3f94`. The first tranche removes
+the duplicate planning machinery on the next indexed-directory critical path;
+the later stages sequence the broader cleanup around continued feature work.
+No refactor stage may change the filesystem formats admitted by the driver or
+weaken any authority, recovery, transaction, or persistence guarantee already
+qualified by the production source path.
+
+The plan is intentionally staged. Each stage must leave one production path,
+not a permanent compatibility path beside its replacement. A later stage may
+be reordered only when a newly discovered dependency makes the stated order
+incorrect; that change belongs in this document before the implementation is
+redirected.
+
+## Baseline and objective
+
+The frozen semantic comparison point is the clean `ext4-recovery` tree at
+`abb3f9462d379b0adb2f09d1009831dd2f85afdb`. Documentation and refactor commits
+advance `HEAD`, but that commit remains the behavior, ordering, persistent-byte,
+and crash comparison baseline. It includes bounded depth-zero HTree full-leaf
+CREATE and its recovery qualification. The next feature boundary remains HTree
+root-depth growth or a separately chosen indexed-directory mutation.
+Refactoring must not silently cross that boundary or admit indexed LINK/MKDIR,
+broader map shapes, or another previously gated filesystem behavior.
+
+The objective is to establish one authoritative implementation for each of
+these recurring mechanisms:
+
+- ordered, role-aware transaction-home preplanning;
+- validated half-open integer-range algebra;
+- checked LSB0 bitmap operations over caller-described storage;
+- operation-lifetime mutation state; and
+- the production source closure and its semantic module boundaries.
+
+Success is fewer independent implementations of the same invariant, not fewer
+source lines. No stage introduces a generic authority framework merely to give
+different ext4 proofs a common vocabulary.
+
+The existing JBD2 transaction object remains the transaction engine. It
+already owns metadata/data/revoke acquisition, same-home composition, credit,
+emission, and checkpoint. The missing seam is the ordered certificate prepared
+by callers before acquisition; the refactor must not create a second journal
+or transaction representation.
+
+## Invariants that do not move
+
+Every migration preserves the following behavior exactly unless a later
+feature change names and qualifies a new contract:
+
+- Home identity is deduplicated while first insertion order is retained.
+  Staging, journal emission, and checkpoint order must not be changed by
+  sorting or by an implementation-dependent traversal.
+- A role has one exact home. Two roles may intentionally alias one home, but a
+  role may not silently change homes and a home may not cross metadata, data,
+  and revoke kinds.
+- Credit is the exact number of distinct homes in each journal kind. Capacity
+  is supplied by the operation's caller-owned storage; it is not a global
+  design limit.
+- Measurement is read-only. Failure leaves the plan and transaction state
+  unchanged, and no write may begin until the whole preplan has authenticated.
+- Cold, dry, and live passes continue to reauthenticate mutable filesystem
+  state at their existing boundaries. A cached descriptor is not authority to
+  skip the live check.
+- Malformed or wrapping range and bitmap geometry fails closed. An invalid
+  query must not be represented as an ordinary non-overlap or clear bit.
+- Bitmap range mutation validates the complete range before changing the first
+  byte. Popcount observes exactly the logical bit count and neither counts nor
+  normalizes high padding bits in the final byte.
+- Filesystem-format concerns stay in the driver: block/inode geometry,
+  checksums, dirty state, free-space accounting, allocation policy, and JBD2
+  semantics are not generic utility responsibilities.
+- Production qualification continues through the cold source loader. A warm
+  cache or compiled shard is not evidence for source loading or source/runtime
+  equivalence.
+
+## Stage 1: ordered ext4 home preplanning
+
+Introduce a small ext4-local, caller-bounded plan whose entries bind an
+operation role, a journal kind, and a home block. The plan must expose checked
+insertion, role lookup, first-seen distinct-home traversal, per-kind credit,
+and intentional-alias inspection. Its representation is not promoted as a
+generic Akashic collection in this stage.
+
+Migrate one bounded mutation family completely as the pilot. Replace its
+private home array, count, duplicate scan, and credit derivation; retain its
+operation-specific authentication and staging policy. Delete the replaced
+planner in the same implementation tranche. Once the pilot proves the seam,
+migrate CREATE/HTree planning and the remaining bounded mutation families one
+at a time. RENAME may continue to share the unlink-family operation machinery
+while that family migrates.
+
+The modern-orphan cleanup walk is not converted to a home list. Its geometry-
+driven constant-space measurement is the correct representation for an
+unbounded on-disk union.
+
+## Stage 2: resume the indexed-directory vertical
+
+After CREATE and its HTree variants use the shared home preplan, resume the
+next selected indexed-directory capability. New functionality must consume the
+new seam directly; it must not add another private home collector. A newly
+found cleanup defect interrupts that vertical only when the next end-to-end
+step cannot be correct without the repair. At this point qualification returns
+to the full feature-development standard, including boundary, refusal,
+transaction, crash-fence, repair, stable-remount, and external-tool evidence
+appropriate to the new mutation.
+
+## Stage 3: extract scalar range and bitmap algebra
+
+Land range and bitmap work as independent utility changes so their contracts
+and regressions remain reviewable.
+
+First add stateless validated half-open range algebra for a start plus a
+nonnegative cell-sized count. Validity and overlap must be distinguishable so
+fail-closed ext4 callers cannot confuse malformed geometry with disjoint
+geometry. Preserve the established `MSPAN-*` API and in-memory set layout while
+delegating its scalar predicates. Migrate scalar duplicates in ext4, MP64FS,
+and `binimg` only after their existing invalid-input policies are retained by
+their wrappers. Do not replace ext4's headerless authoritative vectors with a
+generic range-set representation, and do not duplicate the lower-layer KDOS
+`BLOCK-RANGE?` primitive merely to claim complete deduplication.
+
+Then add a checked, stateless LSB0 bitmap utility over a buffer and explicit
+logical bit count. Its initial surface is byte-span sizing without `bits + 7`
+overflow, bit test/set/clear, all-set/all-clear range predicates, whole-range
+set/clear, exact-N set-bit count, and find-clear with an unambiguous status.
+`(0, 0)` may describe an empty optional view; a null buffer with a positive bit
+count is invalid. Search policy, run allocation, filesystem checksums,
+accounting, padding rewrites, and transaction behavior stay with their current
+owners. Migrate MP64FS first, then one ext4 helper family at a time with the
+exact group block or inode count supplied by its authenticated caller.
+
+The KDOS bitmap implementation remains below Akashic's dependency layer and is
+not part of this extraction. Run-search helpers are promoted only when a
+second real caller demonstrates a common contract.
+
+## Stage 4: operation-lifetime contexts
+
+Move mutable driver globals into caller-owned contexts by operation family and
+lifetime, beginning with the families touched by the shared preplan. Directory
+authority, mutation planning, transaction execution, recovery, and mount state
+must remain separate concepts; this stage must not replace thousands of
+globals with one monolithic record.
+
+The currently guarded public VFS entry points serialize mutations, so this is
+primarily a composability, test-isolation, and future-concurrency repair. It
+does not justify weakening the guard before reentrancy has separate evidence.
+
+## Stage 5: semantic source split
+
+Physically split the driver only after the preceding interfaces are stable.
+Keep `utils/fs/drivers/vfs-ext4.f` as the public order-preserving facade and
+move coherent mechanisms behind it in dependency order. Avoid late-bound
+execution-token cycles and preserve the exact production source closure used
+by the harness and package.
+
+Immediately before the first physical split, teach the source harness and
+packaging checks to derive and inject that explicit closure in dependency
+order. There is no benefit in generalizing the loader while the driver remains
+one physical source file. This seam is not permission to enable a compiled
+Forth shard. New KDOS `PROVIDED` names must remain unique within the registry's
+truncated module-key width.
+
+Candidate boundaries are validated geometry/authority, JBD2 recovery and
+transaction execution, directory/HTree mechanics, allocation and extent
+mutation, orphan handling, and VFS operation adapters. They are candidates,
+not mandatory filenames: cohesion and acyclic load order decide the final
+split.
+
+## Verification cadence
+
+Refactor-only commits use deliberately narrow evidence until a meaningful
+amount of duplicate machinery has been removed. For each early tranche:
+
+1. run whitespace/diff checks and the smallest static or host-side contract
+   check that covers the changed seam;
+2. compile changed Python only when Python changes; and
+3. run at most one directly relevant happy-path mutation for a migrated
+   operation family.
+
+Do not repeatedly run the broad recovery, persistence, fault-injection, crash-
+fence, cold-source, stable-remount, or external-tool matrices while behavior is
+only being rearranged. Run heavy suites sequentially, and do not increase
+checked-in step guards merely to accelerate qualification. After a substantial
+tranche is integrated, run one sequential source-mode cold build and a compact
+representative happy-path equivalence set. Before leaving refactoring for new
+functionality, run the accumulated sequential equivalence gate. When new
+filesystem functionality resumes, restore the extensive qualification cadence
+and include the refactored paths in that feature's evidence. The current cold
+source measurement is 1,592,943,041 of the 1,600,000,000-step watchdog across
+3,724 packed lines; that narrow measured guard is not an implementation
+capacity.
+
+## Commit boundaries
+
+Use a commit when an independently reviewable invariant has one production
+owner:
+
+- this plan and its driver-document link;
+- the home-plan contract plus one fully migrated operation family, with the old
+  collector removed;
+- each subsequent family migration when its former collector is deleted;
+- the range utility and compatibility migrations;
+- the bitmap utility and each filesystem migration;
+- each coherent operation-context migration; and
+- the explicit source-closure seam together with the first acyclic source-
+  module extraction, facade, and packaging update.
+
+Do not commit half-routed operations or leave dormant old/new paths for a later
+cleanup commit. Commit messages should name the invariant centralized, the old
+implementation removed, and the focused evidence run. Follow-up corrections
+receive new commits rather than amendments.
+
+## Stop conditions and completion
+
+Stop and revise the plan before proceeding if a migration changes an admitted
+filesystem shape, transaction home/order/credit, refusal timing, persistent
+bytes, recovery decision, or authenticated bound. Also stop if a proposed
+generic interface requires a filesystem policy, if a capacity ceases to be
+derived from caller storage or authenticated geometry, or if source loading
+cannot be qualified within measured system resources without weakening the
+implementation.
+
+The planned cleanup is complete when the migrated operation families share one
+ordered role/home preplan; scalar range and bitmap contracts have one checked
+Akashic implementation with filesystem wrappers retaining their policies;
+mutable mutation state has explicit operation lifetimes; the production facade
+loads an explicit acyclic source closure; duplicate paths are gone; and the
+accumulated focused regression set passes from a real cold source build. The
+smaller Stage 1 gate is sufficient to resume the selected indexed-directory
+vertical; the remaining cleanup must not displace that critical path unless
+the next correct end-to-end step depends on it.
