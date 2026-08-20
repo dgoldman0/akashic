@@ -2698,6 +2698,10 @@ with the mounted superblock free count. `BLOCK_UNINIT` groups remain lazy and
 cannot own any admitted release range. Together with disjoint allocated-range
 ownership, this proves the union's cumulative counter updates before `ADD`
 even though cleanup is deliberately checkpointed one record at a time.
+The clear-bit reconciliation delegates LSB0 popcount to the shared checked
+bitset utility with the authenticated exact group-block count as its logical
+bound. A short final group's padding is ignored without being normalized;
+ext4 bitmap checksum authentication remains over the format-defined byte span.
 
 Second, the existing linked-orphan cleanup measures its exact homes. For a
 nonempty target it replaces the map with a canonical empty extent root, reduces

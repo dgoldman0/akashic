@@ -16,6 +16,7 @@
 PROVIDED akashic-vfs-ext4
 REQUIRE ../vfs.f
 REQUIRE ../../uint-range.f
+REQUIRE ../../bitset.f
 REQUIRE ../../../math/crc.f
 
 \ =====================================================================
@@ -26966,7 +26967,6 @@ VARIABLE _XT-ACCOUNT-GROUP-BLOCKS
 VARIABLE _XT-ACCOUNT-GROUP-FREE
 VARIABLE _XT-ACCOUNT-EXPECTED-FREE
 VARIABLE _XT-ACCOUNT-TOTAL-FREE
-VARIABLE _XT-ACCOUNT-GROUP-SET
 CREATE _XT-ZERO _EXT4-MAX-BLOCK ALLOT
 
 : _XT-SCRUB  ( -- )
@@ -27108,33 +27108,15 @@ CREATE _XT-ZERO _EXT4-MAX-BLOCK ALLOT
         DROP
     THEN ;
 
-\ Count one byte without an eight-iteration inner loop.  The standard parallel
-\ bit reduction is exact for the unsigned octet supplied by C@.
-: _XT-BYTE-POPCOUNT  ( byte -- set-bits )
-    DUP 1 RSHIFT 0x55 AND -
-    DUP 0x33 AND SWAP 2 RSHIFT 0x33 AND +
-    DUP 4 RSHIFT + 0x0F AND ;
-
-\ Count only the physical bits admitted by one group's exact geometry.  Full
-\ bytes use the constant-work reduction above; the short final byte is masked
-\ so format padding never contributes to the descriptor's free-block count.
-: _XT-COUNT-CLEAR-GROUP-BITS  ( group-blocks -- free-blocks )
+\ Count only the physical bits admitted by one group's exact geometry.  The
+\ shared logical view ignores final-byte padding without rewriting it.
+: _XT-COUNT-CLEAR-GROUP-BITS  ( group-blocks -- free-blocks ior )
     _XT-ACCOUNT-GROUP-BLOCKS !
-    0 _XT-ACCOUNT-GROUP-SET !
-    _XT-ACCOUNT-GROUP-BLOCKS @ 8 / 0 ?DO
-        _XT-CTX @ _EXT4-C.BLOCK + I + C@
-        _XT-BYTE-POPCOUNT _XT-ACCOUNT-GROUP-SET +!
-    LOOP
-    _XT-ACCOUNT-GROUP-BLOCKS @ 8 MOD DUP IF
-        1 SWAP LSHIFT 1-
-        _XT-CTX @ _EXT4-C.BLOCK +
-        _XT-ACCOUNT-GROUP-BLOCKS @ 8 / + C@ AND
-        _XT-BYTE-POPCOUNT _XT-ACCOUNT-GROUP-SET +!
-    ELSE
-        DROP
+    _XT-CTX @ _EXT4-C.BLOCK + _XT-ACCOUNT-GROUP-BLOCKS @
+    BITSET-COUNT-SET? 0= IF
+        DROP 0 EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
     THEN
-    _XT-ACCOUNT-GROUP-BLOCKS @ _XT-ACCOUNT-GROUP-SET @ -
-    DUP _XT-ACCOUNT-GROUP-FREE ! ;
+    _XT-ACCOUNT-GROUP-BLOCKS @ SWAP - 0 ;
 
 \ The scalar range-free builder correctly rejects an individual counter
 \ overflow, but a union is drained through several committed transactions.
@@ -27165,6 +27147,9 @@ CREATE _XT-ZERO _EXT4-MAX-BLOCK ALLOT
             _XT-IOR ! DROP
             _XT-IOR @ ?DUP IF EXIT THEN
             _XT-ACCOUNT-GROUP-BLOCKS @ _XT-COUNT-CLEAR-GROUP-BITS
+            _XT-IOR ! _XT-ACCOUNT-GROUP-FREE !
+            _XT-IOR @ ?DUP IF EXIT THEN
+            _XT-ACCOUNT-GROUP-FREE @
             _XT-ACCOUNT-EXPECTED-FREE @ <> IF
                 EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
             THEN

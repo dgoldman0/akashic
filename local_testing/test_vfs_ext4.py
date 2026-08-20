@@ -36,6 +36,7 @@ from devices import (  # noqa: E402
 
 
 CRC_F = ROOT / "akashic" / "math" / "crc.f"
+BITSET_F = ROOT / "akashic" / "utils" / "bitset.f"
 EXT4_F = ROOT / "akashic" / "utils" / "fs" / "drivers" / "vfs-ext4.f"
 MANIFEST = ROOT / "local_testing" / "fixtures" / "ext4-profile" / "manifest.json"
 IMAGE_DIR = ROOT / "local_testing" / "out" / "ext4-profile"
@@ -4223,9 +4224,13 @@ def build_snapshot():
     # multi-line definitions retain their compiler state without transmitting
     # the source itself through the UART.
     crc_source_ready = "CRC-SOURCE-READY"
+    bitset_source_ready = "BITSET-SOURCE-READY"
     ext4_source_ready = "EXT4-SOURCE-READY"
     crc_lines = _compact_source_load_lines(
         fat_harness._load_forth_lines(str(CRC_F))
+    )
+    bitset_lines = _compact_source_load_lines(
+        fat_harness._load_forth_lines(str(BITSET_F))
     )
     ext4_lines = _compact_source_load_lines(
         fat_harness._load_forth_lines(str(EXT4_F))
@@ -4274,10 +4279,11 @@ def build_snapshot():
             "IMMEDIATE",
         ]
     ).encode() + b"\n"
-    # Qualify the newly required hardware CRC module and the ext4 driver as
-    # distinct cold source stages.  This preserves the existing measured ext4
-    # watchdog instead of hiding dependency compilation inside a larger cap.
+    # Qualify the required utility modules and the ext4 driver as distinct
+    # cold source stages.  This preserves the existing measured ext4 watchdog
+    # instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
+    max_bitset_source_steps = 150_000_000
     # Indexed full-leaf splitting measures 1,592,943,041 cold source steps.
     # Retain a narrow deterministic watchdog margin without conflating source
     # compilation with the independently bounded recovery journey.
@@ -4335,6 +4341,12 @@ def build_snapshot():
         max_crc_source_steps,
         bootstrap_steps,
     )
+    bitset_source_steps = load_source_stage(
+        "bitset",
+        bitset_lines,
+        bitset_source_ready,
+        max_bitset_source_steps,
+    )
     ext4_source_steps = load_source_stage(
         "ext4",
         ext4_lines,
@@ -4343,9 +4355,11 @@ def build_snapshot():
     )
     if os.environ.get("EXT4_REPORT_STEPS"):
         print(
-            "[*] CRC/ext4 cold source load: "
+            "[*] CRC/bitset/ext4 cold source load: "
             f"CRC={crc_source_steps:,}/{max_crc_source_steps:,} steps "
             f"across {len(crc_lines):,} packed lines; "
+            f"bitset={bitset_source_steps:,}/{max_bitset_source_steps:,} "
+            f"steps across {len(bitset_lines):,} packed lines; "
             f"ext4={ext4_source_steps:,}/{max_ext4_source_steps:,} steps "
             f"across {len(ext4_lines):,} packed lines"
         )
@@ -86514,6 +86528,38 @@ def test_ext4_block_range_alias_policy_uses_shared_checked_algebra() -> None:
         "DROP FALSE EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT"
         in group_touched
     )
+
+
+def test_ext4_exact_block_accounting_uses_shared_logical_popcount() -> None:
+    source = EXT4_F.read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    counter = word_body("_XT-COUNT-CLEAR-GROUP-BITS")
+    accounting = word_body("_XT-REQUIRE-EXACT-BLOCK-ACCOUNTING")
+
+    assert "REQUIRE ../../bitset.f" in source
+    assert (
+        "_XT-CTX @ _EXT4-C.BLOCK + _XT-ACCOUNT-GROUP-BLOCKS @\n"
+        "    BITSET-COUNT-SET?"
+    ) in counter
+    assert "DROP 0 EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in counter
+    assert "_XT-ACCOUNT-GROUP-BLOCKS @ SWAP - 0" in counter
+    assert (
+        "_XT-COUNT-CLEAR-GROUP-BITS\n"
+        "            _XT-IOR ! _XT-ACCOUNT-GROUP-FREE !\n"
+        "            _XT-IOR @ ?DUP IF EXIT THEN\n"
+        "            _XT-ACCOUNT-GROUP-FREE @"
+    ) in accounting
+    assert "_XT-BYTE-POPCOUNT" not in source
+    assert "_XT-ACCOUNT-GROUP-SET" not in source
 
 
 def test_hardware_crc32c_matches_fragmented_ext4_raw_vector(tmp_path: Path) -> None:
