@@ -578,6 +578,19 @@ def check(name, forth_lines, expected, disk_image=None, storage_faults=None):
 #  Tests
 # =====================================================================
 
+def test_range_alias_policy_uses_shared_checked_algebra():
+    """MP64FS maps malformed extent geometry to an alias rejection."""
+    with open(VFS_MP_F, encoding="utf-8") as source_file:
+        source = source_file.read()
+
+    assert "REQUIRE ../../uint-range.f" in source
+    assert "_VMP-RANGES-OVERLAP?" not in source
+    for scratch in ("_VMOV-S1", "_VMOV-N1", "_VMOV-S2", "_VMOV-N2"):
+        assert scratch not in source
+    assert source.count("URANGE-OVERLAP?") == 1
+    assert source.count("_VMP-RANGES-ALIAS-OR-INVALID?") == 6
+
+
 def test_constructor_binds_and_mounts_volume():
     """The public constructor is the single successful mount boundary."""
     check("constructor binds and mounts volume", [
