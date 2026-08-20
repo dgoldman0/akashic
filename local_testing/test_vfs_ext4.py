@@ -32895,6 +32895,9 @@ def test_typed_depth0_orphan_truncation_stages_exact_afterimages_without_io(
     block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
     sectors_per_block = block_size // 512
     first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    total_blocks = struct.unpack_from("<I", superblock, 0x04)[0] | (
+        struct.unpack_from("<I", superblock, 0x150)[0] << 32
+    )
     blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
     seed = struct.unpack_from("<I", superblock, 0x270)[0]
     group, data_index = divmod(data_block - first_data, blocks_per_group)
@@ -32902,6 +32905,9 @@ def test_typed_depth0_orphan_truncation_stages_exact_afterimages_without_io(
         xattr_block - first_data, blocks_per_group
     )
     assert group == xattr_group == 0
+    group_first = first_data + group * blocks_per_group
+    group_blocks = min(blocks_per_group, total_blocks - group_first)
+    assert max(data_index, xattr_index) < group_blocks
     inode_home, inode_block_offset = divmod(inode_offset, block_size)
     gdt_home = 2 if block_size == 1024 else 1
     super_home = 1 if block_size == 1024 else 0
@@ -33173,12 +33179,12 @@ def test_typed_depth0_orphan_truncation_stages_exact_afterimages_without_io(
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            f"_OT-BITMAP-IMAGE {data_index} 1 "
-                            "_EXT4-BIT-RANGE-SET? 0="
+                            f"_OT-BITMAP-IMAGE {group_blocks} {data_index} "
+                            "BITSET-TEST? SWAP 0= AND"
                         ),
                         (
-                            f"_OT-BITMAP-IMAGE {xattr_index} 1 "
-                            "_EXT4-BIT-RANGE-SET?"
+                            f"_OT-BITMAP-IMAGE {group_blocks} {xattr_index} "
+                            "BITSET-TEST? AND"
                         ),
                         (
                             f"_OT-GDT-IMAGE {descriptor_offset} + "
@@ -35243,16 +35249,22 @@ def test_typed_one_block_hole_fill_stages_exact_allocation_and_inode(
     block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
     inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
     first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    total_blocks = struct.unpack_from("<I", superblock, 0x04)[0] | (
+        struct.unpack_from("<I", superblock, 0x150)[0] << 32
+    )
     blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
     seed = struct.unpack_from("<I", superblock, 0x270)[0]
     inode_home, inode_block_offset = divmod(inode_offset, block_size)
     group, block_index = divmod(candidate - first_data, blocks_per_group)
+    group_first = first_data + group * blocks_per_group
+    group_blocks = min(blocks_per_group, total_blocks - group_first)
     generation = struct.unpack_from("<I", inode, 0x64)[0]
     assert block_size == 1024
     assert inode_size == 256
     assert inode_home == 279
     assert inode_block_offset == 0
     assert group == 0
+    assert block_index < group_blocks
     assert generation == 0
     assert struct.unpack_from("<I", inode, 0x04)[0] == 3 * block_size
     assert struct.unpack_from("<I", inode, 0x1C)[0] == 4
@@ -35476,7 +35488,10 @@ def test_typed_one_block_hole_fill_stages_exact_allocation_and_inode(
                             "_EXT4-JTX-IMAGE-CRC 0= SWAP "
                             f"{expected_data_crc} = AND"
                         ),
-                        f"_HF-BITMAP {block_index} 1 _EXT4-BIT-RANGE-SET?",
+                        (
+                            f"_HF-BITMAP {group_blocks} {block_index} "
+                            "BITSET-TEST? AND"
+                        ),
                         (
                             "_HF-GDT _EXT4-GD.FREE-BLOCKS-LO + W@ "
                             f"{group_free_after & 0xFFFF} ="
@@ -86927,6 +86942,73 @@ def test_ext4_inode_release_uses_checked_bitset_mutation() -> None:
         assert "_EXT4-BIT-RANGE-SET?" not in body
     assert "_EXT4-CLEAR-BIT-RANGE" not in stage
     assert ": _EXT4-CLEAR-BIT-RANGE" not in source
+
+
+def test_ext4_all_set_bridge_is_replaced_by_typed_exact_queries() -> None:
+    source = EXT4_F.read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    staged = word_body("_EXT4-JFD-VERIFY-EMPTY-STAGED")
+    checkpoint = word_body("_EXT4-JCP-REQUIRE-DELETE-HOMES")
+    final_inode = word_body("_XU-AUTH-FINAL-RELEASE")
+    final_directory = word_body("_XU-AUTH-DIRECTORY-BLOCK-RELEASE")
+
+    assert (
+        "_EXT4-JFC-IMAGE @ DUP _EXT4-JFD-STAGED-BITMAP !\n"
+        "    _EXT4-JFI-GROUP-INODES @ _EXT4-JFI-INDEX @ BITSET-TEST?"
+    ) in staged
+    assert (
+        "BITSET-TEST? 0= IF\n"
+        "        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+    ) in staged
+    assert "IF\n        VFS-E-CORRUPT EXIT\n    THEN" in staged
+    assert staged.index("BITSET-TEST?") < staged.index(
+        "_EXT4-JFD-BITMAP-EXACT?"
+    ) < staged.index("_EXT4-INODE-BITMAP-CRC")
+
+    assert checkpoint.count("_EXT4-GROUP-INODE-COUNT") == 1
+    assert (
+        "_EXT4-JCE-GROUP @ _EXT4-JCP-CTX @ _EXT4-GROUP-INODE-COUNT\n"
+        "    _EXT4-JCE-IOR ! _EXT4-JCE-GROUP-INODES !"
+    ) in checkpoint
+    assert (
+        "_EXT4-JCE-GROUP-INODES @ _EXT4-JCE-INDEX @ BITSET-TEST?"
+        in checkpoint
+    )
+    assert checkpoint.index("_EXT4-LOAD-INODE-BITMAP") < checkpoint.index(
+        "_EXT4-GROUP-INODE-COUNT"
+    ) < checkpoint.index("BITSET-TEST?")
+    assert (
+        "BITSET-TEST? 0= IF\n"
+        "        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+    ) in checkpoint
+    assert "IF VFS-E-CORRUPT EXIT THEN" in checkpoint
+
+    assert (
+        "_XU-GROUP-INODES @ _XU-TARGET-INDEX @ BITSET-TEST?"
+        in final_inode
+    )
+    assert (
+        "_XU-DATA-GROUP-BLOCKS @ _XU-DATA-INDEX @ BITSET-TEST?"
+        in final_directory
+    )
+    for body in (final_inode, final_directory):
+        assert (
+            "BITSET-TEST? 0= IF\n"
+            "        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+        ) in body
+        assert "0= IF VFS-E-CONFLICT EXIT THEN" in body
+        assert "_EXT4-BIT-RANGE-SET?" not in body
+
+    assert ": _EXT4-BIT-RANGE-SET?" not in source
 
 
 def test_hardware_crc32c_matches_fragmented_ext4_raw_vector(tmp_path: Path) -> None:

@@ -1163,7 +1163,12 @@ use checked exact-group bitset views: malformed logical geometry is bounds
 corruption, while valid missing source allocations retain their data-map or
 orphan-file detail. The ext4 CRC and complete-home comparison still cover the
 format-defined physical bytes, including padding that the logical mutation
-does not touch. `itable_unused` remains
+does not touch. The staged-empty and checkpoint proofs independently require
+the target inode bit to be clear through that exact logical group view.
+Invalid query geometry is bounds corruption; a valid bit that is still set
+retains the existing corrupt staged-state refusal. Each proof preserves its
+existing surrounding complete-home CRC and byte-comparison order.
+`itable_unused` remains
 at its pre-free conservative high-water value and is not incremented during
 release; the now-free target record itself is exactly zero. Publish-then-fail
 paths abort and scrub the complete transaction.
@@ -2872,6 +2877,12 @@ and checksums the directory record, clears the inode bit, increments group and
 global free-inode counts, and restamps their checksums. No orphan interval is
 needed because the admitted inode has no data, map-node, or external-xattr
 allocation that can survive its final name.
+The shared final-release authorization tests the target inode and, for RMDIR,
+the released directory block through checked singleton views bounded by their
+canonical exact group lengths. Invalid view geometry is bounds corruption;
+valid but unexpectedly clear allocation bits retain the existing transaction
+conflict result. Checksums, counters, and publication order remain local to
+the final-release operation.
 
 Orphan-backed final admission instead reauthenticates the complete prospective
 cleanup topology before emission. Its exact `4/0/0` or `5/0/0` ADD retains the

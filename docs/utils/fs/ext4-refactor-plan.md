@@ -39,8 +39,10 @@ redirected.
   the same checked logical views while retaining full ext4 CRC/home comparison.
   The inode-release builder now also delegates its exact-group raw/retained
   singleton checks and private clear without moving inode accounting or
-  transaction policy. Remaining query and mutation helper families follow one
-  at a time.
+  transaction policy. Staged-delete, checkpoint, and final-release admission
+  now use exact checked singleton queries as well, removing ext4's last manual
+  all-set reader. The remaining all-clear query and set-mutation helper
+  families follow one at a time.
 
 ## Baseline and objective
 
