@@ -1006,64 +1006,6 @@ VARIABLE _EXT4-LM-DIV
         _EXT4-MAP-LEGACY
     THEN ;
 
-VARIABLE _EXT4-SD-CTX
-VARIABLE _EXT4-SD-IN
-VARIABLE _EXT4-SD-MODE
-VARIABLE _EXT4-SD-RAW
-VARIABLE _EXT4-SD-MAJOR
-VARIABLE _EXT4-SD-MINOR
-VARIABLE _EXT4-SD-INDEX
-
-: _EXT4-I-BLOCK-ZERO-FROM?  ( first-word ctx -- flag )
-    _EXT4-SD-CTX ! _EXT4-SD-INDEX !
-    BEGIN _EXT4-SD-INDEX @ _EXT4-N-BLOCK-PTRS < WHILE
-        _EXT4-SD-CTX @ _EXT4-C.INODE + _EXT4-I.BLOCK +
-        _EXT4-SD-INDEX @ 4 * + L@ IF FALSE EXIT THEN
-        1 _EXT4-SD-INDEX +!
-    REPEAT TRUE ;
-
-\ Device inodes use ext4's old encoding in i_block[0] or its new encoding
-\ in i_block[1].  Publish a binding-neutral 64-bit major/minor pair while
-\ retaining stable unsupported behavior for OPEN on the resulting vnode.
-: _EXT4-DECODE-SPECIAL  ( ctx -- rdev ior )
-    DUP _EXT4-SD-CTX ! _EXT4-C.INODE + DUP _EXT4-SD-IN !
-    _EXT4-I.MODE + W@ 0xF000 AND _EXT4-SD-MODE !
-    _EXT4-SD-CTX @ _EXT4-C.R.SIZE + @
-    _EXT4-SD-CTX @ _EXT4-C.R.BLOCKS + @ OR IF
-        0 EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-SD-MODE @ 0x2000 = _EXT4-SD-MODE @ 0x6000 = OR IF
-        _EXT4-SD-IN @ _EXT4-I.BLOCK + L@ DUP _EXT4-SD-RAW ! IF
-            _EXT4-SD-RAW @ 0xFFFF U> IF
-                0 EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-            1 _EXT4-SD-CTX @ _EXT4-I-BLOCK-ZERO-FROM? 0= IF
-                0 EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-            _EXT4-SD-RAW @ 8 RSHIFT 0xFF AND _EXT4-SD-MAJOR !
-            _EXT4-SD-RAW @ 0xFF AND _EXT4-SD-MINOR !
-        ELSE
-            _EXT4-SD-IN @ _EXT4-I.BLOCK + 4 + L@ _EXT4-SD-RAW !
-            2 _EXT4-SD-CTX @ _EXT4-I-BLOCK-ZERO-FROM? 0= IF
-                0 EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-            _EXT4-SD-RAW @ 0xFFF00 AND 8 RSHIFT _EXT4-SD-MAJOR !
-            _EXT4-SD-RAW @ 0xFF AND
-            _EXT4-SD-RAW @ 12 RSHIFT 0xFFF00 AND OR _EXT4-SD-MINOR !
-            _EXT4-SD-MINOR @ 0xFF AND
-            _EXT4-SD-MAJOR @ 8 LSHIFT OR
-            _EXT4-SD-MINOR @ 0xFF INVERT AND 12 LSHIFT OR
-            _EXT4-SD-RAW @ <> IF
-                0 EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-            THEN
-        THEN
-        _EXT4-SD-MAJOR @ _EXT4-SD-MINOR @ VFS-RDEV-MAKE 0 EXIT
-    THEN
-    0 _EXT4-SD-CTX @ _EXT4-I-BLOCK-ZERO-FROM? 0= IF
-        0 EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT
-    THEN
-    0 0 ;
-
 \ =====================================================================
 \  Root metadata staging and publication
 \ =====================================================================

@@ -87016,6 +87016,8 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
     service_definitions = (
         ": _EXT4-DECODE-I-BLOCKS  ( inode ctx -- blocks-512 ior )",
         ": _EXT4-S32@  ( addr -- n )",
+        ": _EXT4-I-BLOCK-ZERO-FROM?  ( first-word ctx -- flag )",
+        ": _EXT4-DECODE-SPECIAL  ( ctx -- rdev ior )",
         ": _EXT4-RESTAMP-INODE  ( inode inode-number ctx -- ior )",
         (
             ": _EXT4-SET-INODE-MTIME-CTIME  "
@@ -87027,6 +87029,8 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
     service_names = (
         "_EXT4-DECODE-I-BLOCKS",
         "_EXT4-S32@",
+        "_EXT4-I-BLOCK-ZERO-FROM?",
+        "_EXT4-DECODE-SPECIAL",
         "_EXT4-RESTAMP-INODE",
         "_EXT4-SET-INODE-MTIME-CTIME",
         "_EXT4-SET-INODE-CTIME",
@@ -87049,6 +87053,13 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
     assert private_cells == {
         "_EXT4-IB-IN",
         "_EXT4-IB-CTX",
+        "_EXT4-SD-CTX",
+        "_EXT4-SD-IN",
+        "_EXT4-SD-MODE",
+        "_EXT4-SD-RAW",
+        "_EXT4-SD-MAJOR",
+        "_EXT4-SD-MINOR",
+        "_EXT4-SD-INDEX",
         "_EXT4-RI-INODE",
         "_EXT4-RI-INO",
         "_EXT4-RI-CTX",
@@ -87075,7 +87086,7 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
         "_EXT4-EIB-RAW",
         "_EXT4-EIB-LIMIT",
     }
-    assert len(private_cells) == 27
+    assert len(private_cells) == 34
     assert all(cell not in facade for cell in private_cells)
     assert "EXECUTE" not in inode
     assert "-XT" not in inode
@@ -87112,6 +87123,8 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
 
     decode = word_body(inode_executable, "_EXT4-DECODE-I-BLOCKS")
     signed = word_body(inode_executable, "_EXT4-S32@")
+    zero_tail = word_body(inode_executable, "_EXT4-I-BLOCK-ZERO-FROM?")
+    special = word_body(inode_executable, "_EXT4-DECODE-SPECIAL")
     restamp = word_body(inode_executable, "_EXT4-RESTAMP-INODE")
     both_times = word_body(
         inode_executable, "_EXT4-SET-INODE-MTIME-CTIME"
@@ -87132,6 +87145,26 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
         "( addr -- n ) L@ DUP 0x80000000 AND IF "
         "0xFFFFFFFF00000000 OR THEN"
     )
+    assert "BEGIN _EXT4-SD-INDEX @ _EXT4-N-BLOCK-PTRS < WHILE" in zero_tail
+    assert "_EXT4-I.BLOCK + _EXT4-SD-INDEX @ 4 * + L@ IF FALSE EXIT" in (
+        zero_tail
+    )
+    assert zero_tail.endswith("1 _EXT4-SD-INDEX +! REPEAT TRUE")
+
+    special_checks = (
+        "_EXT4-C.R.SIZE + @ _EXT4-SD-CTX @ _EXT4-C.R.BLOCKS + @ OR IF",
+        "_EXT4-SD-RAW @ 0xFFFF U> IF",
+        "1 _EXT4-SD-CTX @ _EXT4-I-BLOCK-ZERO-FROM? 0= IF",
+        "2 _EXT4-SD-CTX @ _EXT4-I-BLOCK-ZERO-FROM? 0= IF",
+        "_EXT4-SD-RAW @ <> IF",
+        "_EXT4-SD-MAJOR @ _EXT4-SD-MINOR @ VFS-RDEV-MAKE 0 EXIT",
+        "0 _EXT4-SD-CTX @ _EXT4-I-BLOCK-ZERO-FROM? 0= IF",
+        "0 0",
+    )
+    assert all(fragment in special for fragment in special_checks)
+    assert special.count("EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT") == 6
+    assert special.index("0x2000 =") < special.index("VFS-RDEV-MAKE")
+    assert special.index("0x6000 =") < special.index("VFS-RDEV-MAKE")
 
     restamp_zero = "0 _EXT4-RI-INODE @ _EXT4-I.CSUM-LO + W!"
     assert restamp.index("_EXT4-RI-INODE @ 0=") < restamp.index(
@@ -87194,6 +87227,8 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
     expected_facade_calls = {
         "_EXT4-DECODE-I-BLOCKS": 4,
         "_EXT4-S32@": 6,
+        "_EXT4-I-BLOCK-ZERO-FROM?": 1,
+        "_EXT4-DECODE-SPECIAL": 1,
         "_EXT4-RESTAMP-INODE": 16,
         "_EXT4-SET-INODE-MTIME-CTIME": 10,
         "_EXT4-SET-INODE-CTIME": 5,
@@ -87202,8 +87237,11 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
     for service, count in expected_facade_calls.items():
         assert facade_executable.count(service) == count
 
-    assert inode.index(service_definitions[3]) < inode.index(
-        service_definitions[4]
+    assert inode.index(service_definitions[2]) < inode.index(
+        service_definitions[3]
+    )
+    assert inode.index(service_definitions[5]) < inode.index(
+        service_definitions[6]
     )
     assert ordered_source.index(": _EXT4-BLOCK-ALLOCATED?") < (
         ordered_source.index(": _EXT4-DECODE-I-BLOCKS")

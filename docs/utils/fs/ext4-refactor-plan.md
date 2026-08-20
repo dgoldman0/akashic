@@ -55,7 +55,9 @@ redirected.
   delta by applying a checked singleton clear to the transient raw cache, then
   compares every physical byte. Filesystem checksum, accounting, iteration,
   padding-authentication, and durability policy remain with their owners.
-- Stage 3 is in progress. The cold ext4 source harness derives the driver's
+- Stage 3 is complete for the acyclic mechanism boundaries that can be
+  extracted without adding mutable cross-component results or late-bound
+  callbacks. The cold ext4 source harness derives the driver's
   dependency-ordered closure and removes the VFS, CRC, and bitset foundation
   already present in earlier measured stages. The first physical component,
   `vfs-ext4-admission.f`, now owns the on-disk profile and private context
@@ -69,11 +71,12 @@ redirected.
   predicate. All 22 scratch cells are private after making the CRC calculators
   stack-direct, and mount validation delegates its duplicate CRC tails without
   moving allocation-owner policy.
-  `vfs-ext4-inode.f` owns stack-only `i_blocks` decode/encode, signed timestamp
-  loading, inode-checksum restamping, and mtime/ctime encoding. All 27 scratch
+  `vfs-ext4-inode.f` owns stack-only `i_blocks` decode/encode, bounded
+  `i_block`-tail checks, canonical special-device decoding, signed timestamp
+  loading, inode-checksum restamping, and mtime/ctime encoding. All 34 scratch
   cells are private; inode media lookup, checksum verification, and the
-  success-only IR identity/locator results remain in the facade pending
-  Stage 4.
+  success-only IR identity/locator results remain in the facade pending Stage
+  4.
   `vfs-ext4-xattr.f` owns external-xattr block header admission, shared
   physical-location-bound CRC calculation, authenticated loading, and
   checksum restamping. Its six scratch cells are private and it exports no
@@ -119,7 +122,13 @@ redirected.
   operation-lifetime context stage. Five inode-lookup identity/locator cells
   remain facade-local operation-lifetime state; bitmap admission, inode
   formatting, external-xattr and orphan-block handling, backups, dirhash,
-  dirent, and the JBD2 codec, map, and revoke services add none.
+  dirent, and the JBD2 codec, map, and revoke services add none. The remaining
+  extent/map, HTree, xattr-entry, inode-media, orphan-planning, and JBD2
+  recovery/transaction families all carry mutable operation-lifetime state,
+  late policy callbacks, or success results across their prospective seams.
+  They remain facade-local until Stage 4 gives those lifetimes explicit
+  caller-owned interfaces; Stage 3 does not turn those couplings into module
+  APIs merely to create more files.
 
 ## Baseline and objective
 
@@ -240,9 +249,10 @@ makes both CRC calculators stack-direct, and removes the facade's duplicate
 bitmap CRC tails. Logical queries exclude short-final-group padding while ext4
 CRCs retain their format-defined nominal byte spans. Raw `BLOCK_UNINIT`
 evidence remains `FALSE 0`; stricter loader and facade policy is unchanged.
-The inode-format unit then moves six stack services for normalized `i_blocks`,
+The inode-format unit then moves eight stack services for normalized
+`i_blocks`, bounded `i_block`-tail checks, canonical special-device decoding,
 signed timestamp loading, checksum restamping, and timestamp encoding behind
-an admission-only dependency. Its 27 scratch cells are private, and it leaves
+an admission-only dependency. Its 34 scratch cells are private, and it leaves
 media lookup, readable-old-format checksum policy, and IR identity/locator
 results in the facade rather than creating a new mutable cross-module seam.
 The external-xattr block unit likewise depends only on admission. It owns
@@ -309,14 +319,14 @@ until it forms another one-directional ownership boundary. The facade's direct
 CRC edge is removed; CRC is an implementation dependency of admission's
 checked adapter.
 
-Remaining candidate boundaries are validated geometry/authority, JBD2 recovery
-and transaction policy above the extracted codec, HTree and directory-scan
-policy above the linear codec, xattr parsing and authority above the extracted
-block codec, allocation and extent mutation, orphan planning and transaction
-policy above the extracted block codec, and VFS operation adapters. They are
-candidates, not mandatory filenames: cohesion and acyclic load order decide
-the actual split. New KDOS `PROVIDED` names must remain unique within the
-registry's truncated module-key width.
+The remaining geometry/authority, JBD2 recovery and transaction, HTree and
+directory-scan, xattr-entry, allocation/extent, orphan-planning, and VFS
+operation families are intentionally not Stage 3 extraction candidates. Each
+still crosses a prospective seam through mutable operation state, late policy
+callbacks, or success-result lifetimes. Stage 4 must make those lifetimes and
+interfaces explicit before another physical split is justified. Any later
+KDOS `PROVIDED` names must remain unique within the registry's truncated
+module-key width.
 
 This seam is not permission to enable a compiled Forth shard. Source loading
 remains the qualification path, and each extracted module must have one real

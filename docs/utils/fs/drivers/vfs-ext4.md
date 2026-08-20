@@ -134,9 +134,10 @@ format-span bitmap CRC calculation, authenticated bitmap loading, and raw
 single-block allocation evidence. It keeps all 22 scratch cells private while
 mount-wide ownership validation and mutation policy remain in the facade. The
 [`vfs-ext4-inode.f`](vfs-ext4-inode.md) unit owns stack-only inode-record
-decoding, `i_blocks` encoding, checksum restamping, and timestamp encoding. It
-keeps all 27 scratch cells private while media lookup, checksum verification,
-and identity/locator-result lifetime remain in the facade. The
+decoding, `i_blocks` encoding, canonical special-device decoding, checksum
+restamping, and timestamp encoding. It keeps all 34 scratch cells private
+while media lookup, checksum verification, and identity/locator-result
+lifetime remain in the facade. The
 [`vfs-ext4-xattr.f`](vfs-ext4-xattr.md) unit owns external-xattr block header
 admission, physical-location-bound checksum calculation, authenticated loading,
 and checksum restamping. Its six scratch cells are private, it exports no

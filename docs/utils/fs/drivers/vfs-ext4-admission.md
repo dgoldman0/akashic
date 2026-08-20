@@ -19,8 +19,8 @@ to authenticate, verify, and checksum group descriptors. The independent
 descriptor evidence, checked reads and CRCs, and exact generic bitset queries
 for allocation-bitmap admission. The independent
 [`vfs-ext4-inode.f`](vfs-ext4-inode.md) unit consumes the admitted inode
-layout, arithmetic, and CRC adapter for stack-only record decoding and
-encoding. The independent
+layout, arithmetic, and CRC adapter for stack-only record decoding,
+special-device representation, and encoding. The independent
 [`vfs-ext4-xattr.f`](vfs-ext4-xattr.md) unit uses admitted checked reads,
 context geometry, and the CRC adapter to authenticate and restamp external
 xattr blocks without moving entry parsing, allocation, reference-count, or
