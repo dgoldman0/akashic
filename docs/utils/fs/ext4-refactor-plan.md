@@ -34,8 +34,10 @@ redirected.
   raw/effective allocation proofs and private after-image clear while ext4
   retains authentication, counters, checksums, and transactional publication.
   Foundational block point/range allocation reads also use the canonical exact
-  group bound rather than direct byte/shift scans. Remaining query and mutation
-  helper families follow one at a time.
+  group bound rather than direct byte/shift scans. Durable-delete semantic
+  verification now reconstructs its block and inode bitmap after-images with
+  the same checked logical views while retaining full ext4 CRC/home comparison.
+  Remaining query and mutation helper families follow one at a time.
 
 ## Baseline and objective
 

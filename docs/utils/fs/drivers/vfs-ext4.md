@@ -1151,7 +1151,12 @@ Semantic verification reconstructs every complete after-image from raw media:
 the inode-table home, every touched block bitmap, every coalesced data/inode
 GDT page, the inode bitmap, and the primary super, including range-sized group
 and super counter increments. This covers sibling inode records, unrelated
-descriptors, and all block padding. `itable_unused` remains
+descriptors, and all block padding. Its block and inode bitmap reconstructions
+use checked exact-group bitset views: malformed logical geometry is bounds
+corruption, while valid missing source allocations retain their data-map or
+orphan-file detail. The ext4 CRC and complete-home comparison still cover the
+format-defined physical bytes, including padding that the logical mutation
+does not touch. `itable_unused` remains
 at its pre-free conservative high-water value and is not incremented during
 release; the now-free target record itself is exactly zero. Publish-then-fail
 paths abort and scrub the complete transaction.

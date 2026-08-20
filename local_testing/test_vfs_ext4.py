@@ -19532,8 +19532,12 @@ def _assert_unlinked_external_xattr_cleanup_seals_exact_release_authority(
     patch_map = dict(patches)
     superblock = patch_map[1024]
     block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    total_blocks = struct.unpack_from("<I", superblock, 0x04)[0] | (
+        struct.unpack_from("<I", superblock, 0x150)[0] << 32
+    )
     first_data = struct.unpack_from("<I", superblock, 0x14)[0]
     blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
+    group_blocks = min(blocks_per_group, total_blocks - first_data)
     assert (xattr_block - first_data) // blocks_per_group == 0
     descriptor_home = first_data + 1
     descriptor = patch_map[descriptor_home * block_size][:64]
@@ -19543,6 +19547,10 @@ def _assert_unlinked_external_xattr_cleanup_seals_exact_release_authority(
         for first, count in data_ranges
         for physical in range(first, first + count)
     ) + (xattr_block,)
+    assert all(
+        (physical - first_data) // blocks_per_group == 0
+        for physical in released_blocks
+    )
     expected_credit = 6 if protocol == "modern" else 5
     if data_ranges:
         expected_mode = (
@@ -19699,8 +19707,9 @@ def _assert_unlinked_external_xattr_cleanup_seals_exact_release_authority(
                         "_UX-BITMAP-FOUND 0<>",
                         *[
                             (
-                                f"_UX-BITMAP-IMAGE {physical - first_data} "
-                                "1 _EXT4-BIT-RANGE-CLEAR?"
+                                f"_UX-BITMAP-IMAGE {group_blocks} "
+                                f"{physical - first_data} 1 "
+                                "BITSET-ALL-CLEAR? AND"
                             )
                             for physical in released_blocks
                         ],
@@ -86773,6 +86782,71 @@ def test_ext4_block_allocation_reads_use_exact_checked_bitset_views() -> None:
         assert "LSHIFT" not in body
         assert "?DO" not in body
         assert "UNLOOP" not in body
+
+
+def test_ext4_durable_delete_reconstruction_uses_checked_bitsets() -> None:
+    source = EXT4_F.read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    data = word_body("_EXT4-JDD-AUTH-DATA-GROUP")
+    inode = word_body("_EXT4-JDD-REQUIRE-INODE-BITMAP")
+
+    assert (
+        "_EXT4-JFD-CTX @ _EXT4-C.TREE-BLOCK +\n"
+        "            _EXT4-JFB-GROUP-BLOCKS @\n"
+        "            _EXT4-JFB-INDEX @ _EXT4-JFB-CHUNK @ "
+        "BITSET-ALL-SET?"
+    ) in data
+    assert (
+        "_EXT4-JFD-CTX @ _EXT4-C.TREE-BLOCK +\n"
+        "            _EXT4-JFB-GROUP-BLOCKS @\n"
+        "            _EXT4-JFB-INDEX @ _EXT4-JFB-CHUNK @\n"
+        "            BITSET-RANGE-CLEAR?"
+    ) in data
+    assert data.count("EXT4-D-BOUNDS _EXT4-CORRUPT EXIT") == 2
+    assert (
+        "BITSET-ALL-SET? 0= IF\n"
+        "                DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+    ) in data
+    assert "EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT" in data
+    assert data.index("BITSET-ALL-SET?") < data.index(
+        "BITSET-RANGE-CLEAR?"
+    ) < data.index("_EXT4-BLOCK-BITMAP-CRC") < data.index(
+        "_EXT4-JDD-REQUIRE-EXPECTED"
+    )
+    assert "_EXT4-BIT-RANGE-SET?" not in data
+    assert "_EXT4-CLEAR-BIT-RANGE" not in data
+
+    assert (
+        "_EXT4-JFI-GROUP-INODES @ _EXT4-JFI-INDEX @ BITSET-TEST?"
+        in inode
+    )
+    assert (
+        "_EXT4-JFD-CTX @ _EXT4-C.TREE-BLOCK +\n"
+        "    _EXT4-JFI-GROUP-INODES @ _EXT4-JFI-INDEX @\n"
+        "    BITSET-BIT-CLEAR?"
+    ) in inode
+    assert inode.count("EXT4-D-BOUNDS _EXT4-CORRUPT EXIT") == 2
+    assert (
+        "BITSET-TEST? 0= IF\n"
+        "        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+    ) in inode
+    assert "EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT" in inode
+    assert inode.index("BITSET-TEST?") < inode.index("MOVE") < inode.index(
+        "BITSET-BIT-CLEAR?"
+    ) < inode.index("_EXT4-INODE-BITMAP-CRC") < inode.index(
+        "_EXT4-JDD-REQUIRE-EXPECTED"
+    )
+    assert "_EXT4-BIT-RANGE-SET?" not in inode
+    assert "_EXT4-CLEAR-BIT-RANGE" not in inode
 
 
 def test_hardware_crc32c_matches_fragmented_ext4_raw_vector(tmp_path: Path) -> None:
