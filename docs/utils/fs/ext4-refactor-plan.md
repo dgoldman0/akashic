@@ -74,6 +74,12 @@ redirected.
   cells are private; inode media lookup, checksum verification, and the
   success-only IR identity/locator results remain in the facade pending
   Stage 4.
+  `vfs-ext4-xattr.f` owns external-xattr block header admission, shared
+  physical-location-bound CRC calculation, authenticated loading, and
+  checksum restamping. Its six scratch cells are private and it exports no
+  mutable result: authenticated bytes reside in the caller-owned context
+  `C.BLOCK` only after a successful load. Entry parsing, allocation,
+  reference-count, transaction, and recovery policy remain in the facade.
   `vfs-ext4-backups.f` owns sparse-super copy authority, immutable-super
   comparison, exact journal-backup tuples, and backup-GDT location checks; all
   13 of its scratch cells are private.
@@ -90,14 +96,15 @@ redirected.
   private, and the module adds no mutable cross-component result surface.
   `vfs-ext4.f` remains the only public facade and begins with allocation-owner
   and initialized-bitmap policy. The aggregate source stage now loads
-  `(admission, descriptor, bitmap, inode, backups, dirhash, dirent,
+  `(admission, descriptor, bitmap, inode, xattr, backups, dirhash, dirent,
   jbd2-codec, facade)` in production order rather than relying on a handwritten
   concatenation list.
   Four checked-I/O session/evidence cells and four success-only descriptor
   parser-result cells remain temporary cross-component surfaces until the
   operation-lifetime context stage. Five inode-lookup identity/locator cells
   remain facade-local operation-lifetime state; bitmap admission, inode
-  formatting, backups, dirhash, dirent, and the JBD2 codec add none.
+  formatting, external-xattr block handling, backups, dirhash, dirent, and the
+  JBD2 codec add none.
 
 ## Baseline and objective
 
@@ -222,7 +229,17 @@ The inode-format unit then moves six stack services for normalized `i_blocks`,
 signed timestamp loading, checksum restamping, and timestamp encoding behind
 an admission-only dependency. Its 27 scratch cells are private, and it leaves
 media lookup, readable-old-format checksum policy, and IR identity/locator
-results in the facade rather than creating a new mutable cross-module seam. A
+results in the facade rather than creating a new mutable cross-module seam.
+The external-xattr block unit likewise depends only on admission. It owns
+header admission, a shared location-bound checksum calculator, authenticated
+physical loading, and checksum restamping behind stack-only services. All six
+scratch cells are private. The loader restores the stored checksum on every
+checked-CRC error and before reporting a mismatch; the caller-owned context
+`C.BLOCK` is authentication evidence only after success. The stamper instead
+leaves that field zero on a checked-CRC error; callers stop and route the
+failure through their enclosing transaction owner. Xattr entry parsing,
+allocation and reference-count
+authority, transaction reconstruction, and recovery remain in the facade. A
 backup-authority unit uses the admission and descriptor foundations to
 authenticate sparse-super copies and backup descriptor locations; its three
 services are stack-only and all scratch state remains private. The independent
@@ -254,10 +271,11 @@ checked adapter.
 
 Remaining candidate boundaries are validated geometry/authority, JBD2 recovery
 and transaction policy above the extracted codec, HTree and directory-scan
-policy above the linear codec, allocation and extent mutation, orphan handling,
-and VFS operation adapters. They are candidates, not mandatory filenames:
-cohesion and acyclic load order decide the actual split. New KDOS `PROVIDED`
-names must remain unique within the registry's truncated module-key width.
+policy above the linear codec, xattr parsing and authority above the extracted
+block codec, allocation and extent mutation, orphan handling, and VFS
+operation adapters. They are candidates, not mandatory filenames: cohesion
+and acyclic load order decide the actual split. New KDOS `PROVIDED` names must
+remain unique within the registry's truncated module-key width.
 
 This seam is not permission to enable a compiled Forth shard. Source loading
 remains the qualification path, and each extracted module must have one real

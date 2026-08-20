@@ -21,6 +21,10 @@ for allocation-bitmap admission. The independent
 [`vfs-ext4-inode.f`](vfs-ext4-inode.md) unit consumes the admitted inode
 layout, arithmetic, and CRC adapter for stack-only record decoding and
 encoding. The independent
+[`vfs-ext4-xattr.f`](vfs-ext4-xattr.md) unit uses admitted checked reads,
+context geometry, and the CRC adapter to authenticate and restamp external
+xattr blocks without moving entry parsing, allocation, reference-count, or
+transaction policy out of the facade. The independent
 [`vfs-ext4-backups.f`](vfs-ext4-backups.md) unit uses the admitted superblock
 and descriptor services to authenticate sparse-super copies. The independent
 [`vfs-ext4-dirhash.f`](vfs-ext4-dirhash.md) unit consumes the admitted
@@ -44,6 +48,7 @@ for a backwards dependency into admission.
 Physical extraction does not change the profile, error precedence, or
 cold-source qualification model. Packaging and the real-image harness resolve
 admission, descriptor loading, bitmap admission, inode-record formatting,
-backup authority, directory hashing, the linear directory-entry codec, the
-JBD2 checksum codec, and the facade in production order and continue to
-compile the aggregate closure in source mode.
+external-xattr block authentication, backup authority, directory hashing, the
+linear directory-entry codec, the JBD2 checksum codec, and the facade in
+production order and continue to compile the aggregate closure in source
+mode.

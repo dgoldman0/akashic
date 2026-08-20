@@ -21,6 +21,7 @@ REQUIRE vfs-ext4-admission.f
 REQUIRE vfs-ext4-descriptor.f
 REQUIRE vfs-ext4-bitmap.f
 REQUIRE vfs-ext4-inode.f
+REQUIRE vfs-ext4-xattr.f
 REQUIRE vfs-ext4-backups.f
 REQUIRE vfs-ext4-dirhash.f
 REQUIRE vfs-ext4-dirent.f
@@ -2058,62 +2059,6 @@ VARIABLE _EXT4-RL-V
 \ =====================================================================
 \  In-inode and external-block namespaced xattrs
 \ =====================================================================
-
-0xEA020000 CONSTANT _EXT4-XATTR-MAGIC
-1024 CONSTANT _EXT4-XATTR-REFCOUNT-MAX
-
-VARIABLE _EXT4-XC-CTX
-VARIABLE _EXT4-XC-BLOCK
-VARIABLE _EXT4-XC-BUF
-
-\ Restamp one already authenticated external-xattr block after changing only
-\ checksum-covered header state.  ext4's metadata checksum covers the 64-bit
-\ physical block number followed by the complete block with h_checksum zero.
-: _EXT4-STAMP-XATTR-BLOCK  ( buffer physical-block ctx -- ior )
-    _EXT4-XC-CTX ! _EXT4-XC-BLOCK ! _EXT4-XC-BUF !
-    0 _EXT4-XC-BUF @ 0x10 + L!
-    _EXT4-XC-BLOCK @ _EXT4-XC-CTX @ _EXT4-C.TMP + L!
-    0 _EXT4-XC-CTX @ _EXT4-C.TMP 4 + + L!
-    _EXT4-XC-CTX @ _EXT4-C.SEED + @ _EXT4-CRC-START
-    _EXT4-XC-CTX @ _EXT4-C.TMP + 8 _EXT4-CRC-ADD ?DUP IF EXIT THEN
-    _EXT4-XC-BUF @ _EXT4-XC-CTX @ _EXT4-C.BSIZE + @ _EXT4-CRC-ADD
-    ?DUP IF EXIT THEN
-    _EXT4-CRC@ _EXT4-XC-BUF @ 0x10 + L! 0 ;
-
-VARIABLE _EXT4-XB-CTX
-VARIABLE _EXT4-XB-BLOCK
-VARIABLE _EXT4-XB-BUF
-VARIABLE _EXT4-XB-STORED
-
-: _EXT4-LOAD-XATTR-BLOCK  ( physical-block ctx -- ior )
-    _EXT4-XB-CTX ! DUP _EXT4-XB-BLOCK !
-    _EXT4-XB-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-    _EXT4-XB-CTX @ _EXT4-C.BLOCK + DUP _EXT4-XB-BUF !
-    DUP L@ _EXT4-XATTR-MAGIC <>
-    OVER 4 + L@ 0= OR
-    OVER 8 + L@ 1 <> OR
-    OVER 0x14 + L@ 0<> OR
-    OVER 0x18 + L@ 0<> OR
-    OVER 0x1C + L@ 0<> OR IF
-        DROP EXT4-D-XATTR _EXT4-CORRUPT EXIT
-    THEN
-    DUP 0x10 + L@ _EXT4-XB-STORED !
-    0 SWAP 0x10 + L!
-    _EXT4-XB-BLOCK @ _EXT4-XB-CTX @ _EXT4-C.TMP + L!
-    0 _EXT4-XB-CTX @ _EXT4-C.TMP 4 + + L!
-    _EXT4-XB-CTX @ _EXT4-C.SEED + @ _EXT4-CRC-START
-    _EXT4-XB-CTX @ _EXT4-C.TMP + 8 _EXT4-CRC-ADD ?DUP IF
-        _EXT4-XB-STORED @ _EXT4-XB-BUF @ 0x10 + L! EXIT
-    THEN
-    _EXT4-XB-BUF @ _EXT4-XB-CTX @ _EXT4-C.BSIZE + @ _EXT4-CRC-ADD
-    ?DUP IF
-        _EXT4-XB-STORED @ _EXT4-XB-BUF @ 0x10 + L! EXIT
-    THEN
-    _EXT4-XB-STORED @ _EXT4-XB-BUF @ 0x10 + L!
-    _EXT4-CRC@ _EXT4-XB-STORED @ <> IF
-        EXT4-D-XATTR _EXT4-CORRUPT EXIT
-    THEN
-    0 ;
 
 1 CONSTANT _EXT4-XOP-LIST
 2 CONSTANT _EXT4-XOP-GET
@@ -12850,7 +12795,8 @@ VARIABLE _EXT4-JTS-RECORD
     0 _EXT4-XA-TOTAL ! 0 _EXT4-XA-EMIT !
     _EXT4-JFI-CTX @ _EXT4-XA-SCAN-BOTH ?DUP IF EXIT THEN
     _EXT4-JFI-EA @ IF
-        _EXT4-XB-BUF @ 4 + L@ DUP _EXT4-JFI-EA-REFCOUNT !
+        _EXT4-JFI-CTX @ _EXT4-C.BLOCK + 4 + L@
+        DUP _EXT4-JFI-EA-REFCOUNT !
         DUP 0= OVER _EXT4-XATTR-REFCOUNT-MAX U> OR IF
             DROP EXT4-D-XATTR _EXT4-CORRUPT EXIT
         THEN
@@ -13754,10 +13700,12 @@ VARIABLE _EXT4-JFP-IOR
     _EXT4-JFI-EA-REFDEC? 0= IF VFS-E-CORRUPT EXIT THEN
     _EXT4-JFI-EA @ _EXT4-JFI-CTX @ _EXT4-LOAD-XATTR-BLOCK
     ?DUP IF EXIT THEN
-    _EXT4-XB-BUF @ 4 + L@ _EXT4-JFI-EA-REFCOUNT @ <> IF
+    _EXT4-JFI-CTX @ _EXT4-C.BLOCK + 4 + L@
+    _EXT4-JFI-EA-REFCOUNT @ <> IF
         VFS-E-CONFLICT EXIT
     THEN
-    _EXT4-XB-BUF @ _EXT4-JFI-EA @ _EXT4-JFI-WRITER @
+    _EXT4-JFI-CTX @ _EXT4-C.BLOCK +
+    _EXT4-JFI-EA @ _EXT4-JFI-WRITER @
     _EXT4-JTX-META-ACQUIRE
     DUP IF NIP EXIT THEN DROP DUP _EXT4-JFI-EA-IMAGE !
     4 + L@ _EXT4-JFI-EA-REFCOUNT @ <> IF VFS-E-CONFLICT EXIT THEN
@@ -15963,10 +15911,12 @@ VARIABLE _EXT4-JFD-STAGED-TARGET-HOME
     THEN
     _EXT4-JFI-EA @ _EXT4-JFD-CTX @ _EXT4-LOAD-XATTR-BLOCK
     ?DUP IF EXIT THEN
-    _EXT4-XB-BUF @ 4 + L@ _EXT4-JFI-EA-REFCOUNT @ <> IF
+    _EXT4-JFD-CTX @ _EXT4-C.BLOCK + 4 + L@
+    _EXT4-JFI-EA-REFCOUNT @ <> IF
         VFS-E-CONFLICT EXIT
     THEN
-    _EXT4-XB-BUF @ _EXT4-JFD-CTX @ _EXT4-C.TREE-BLOCK +
+    _EXT4-JFD-CTX @ _EXT4-C.BLOCK +
+    _EXT4-JFD-CTX @ _EXT4-C.TREE-BLOCK +
     _EXT4-JFD-CTX @ _EXT4-C.BSIZE + @ MOVE
     _EXT4-JFI-EA-POST-REFCOUNT
     _EXT4-JFD-CTX @ _EXT4-C.TREE-BLOCK + 4 + L!
@@ -17872,11 +17822,11 @@ VARIABLE _EXT4-JCE-GROUP-INODES
     THEN
     _EXT4-JCP-WRITER @ _EXT4-JWR.CP-EA-HOME + @
     _EXT4-JCP-CTX @ _EXT4-LOAD-XATTR-BLOCK ?DUP IF EXIT THEN
-    _EXT4-XB-BUF @ 4 + L@
+    _EXT4-JCP-CTX @ _EXT4-C.BLOCK + 4 + L@
     _EXT4-JCP-WRITER @ _EXT4-JWR.CP-EA-REFCOUNT + @ <> IF
         VFS-E-CORRUPT EXIT
     THEN
-    _EXT4-XB-BUF @ _EXT4-JFC-IMAGE @
+    _EXT4-JCP-CTX @ _EXT4-C.BLOCK + _EXT4-JFC-IMAGE @
     _EXT4-JCP-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF
         VFS-E-CORRUPT EXIT
     THEN

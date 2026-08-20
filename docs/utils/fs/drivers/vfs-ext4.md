@@ -137,6 +137,12 @@ mount-wide ownership validation and mutation policy remain in the facade. The
 decoding, `i_blocks` encoding, checksum restamping, and timestamp encoding. It
 keeps all 27 scratch cells private while media lookup, checksum verification,
 and identity/locator-result lifetime remain in the facade. The
+[`vfs-ext4-xattr.f`](vfs-ext4-xattr.md) unit owns external-xattr block header
+admission, physical-location-bound checksum calculation, authenticated loading,
+and checksum restamping. Its six scratch cells are private, it exports no
+mutable result cell, and authenticated bytes reside in the caller-owned
+context `C.BLOCK` only after success; xattr entry parsing, allocation,
+reference-count, transaction, and recovery policy remain in the facade. The
 [`vfs-ext4-backups.f`](vfs-ext4-backups.md) unit authenticates sparse-super
 copies, immutable superblock identity, and backup descriptor locations without
 treating mutable counters as identity. The independent
@@ -163,9 +169,10 @@ verification cadence that apply before the next indexed-directory capability.
 
 The real-image harness cold-compiles the dependency-ordered production ext4
 source closure into the restored FAT/VFS snapshot. The current ext4 stage is
-the admission, descriptor, bitmap-admission, inode-format, backup-authority,
-directory-hash, linear-dirent, and JBD2-checksum units followed by the public
-facade; VFS, CRC, and bitset are already present in earlier measured stages.
+the admission, descriptor, bitmap-admission, inode-format, external-xattr,
+backup-authority, directory-hash, linear-dirent, and JBD2-checksum units
+followed by the public facade; VFS, CRC, and bitset are already present in
+earlier measured stages.
 It does not use a compiled shard or warm cache.
 To avoid making UART echo volume an implementation-size limit, the host
 injects each compacted physical source line into the BIOS `FSLOAD`

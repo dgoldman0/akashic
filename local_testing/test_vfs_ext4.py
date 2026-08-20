@@ -44,6 +44,7 @@ EXT4_ADMISSION_MODULE = "utils/fs/drivers/vfs-ext4-admission.f"
 EXT4_DESCRIPTOR_MODULE = "utils/fs/drivers/vfs-ext4-descriptor.f"
 EXT4_BITMAP_MODULE = "utils/fs/drivers/vfs-ext4-bitmap.f"
 EXT4_INODE_MODULE = "utils/fs/drivers/vfs-ext4-inode.f"
+EXT4_XATTR_MODULE = "utils/fs/drivers/vfs-ext4-xattr.f"
 EXT4_BACKUPS_MODULE = "utils/fs/drivers/vfs-ext4-backups.f"
 EXT4_DIRHASH_MODULE = "utils/fs/drivers/vfs-ext4-dirhash.f"
 EXT4_DIRENT_MODULE = "utils/fs/drivers/vfs-ext4-dirent.f"
@@ -20850,7 +20851,10 @@ def _run_singleton_unlinked_cleanup(
                     f"{retained_xattr_block} _UR-CTX "
                     "_EXT4-LOAD-XATTR-BLOCK CONSTANT _UR-EA-IOR"
                 ),
-                "_EXT4-XB-BUF @ 4 + L@ CONSTANT _UR-EA-REFCOUNT",
+                (
+                    "_UR-CTX _EXT4-C.BLOCK + 4 + L@ "
+                    "CONSTANT _UR-EA-REFCOUNT"
+                ),
             )
         )
         xattr_probe_checks.extend(
@@ -86531,6 +86535,7 @@ def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
         EXT4_DESCRIPTOR_MODULE,
         EXT4_BITMAP_MODULE,
         EXT4_INODE_MODULE,
+        EXT4_XATTR_MODULE,
         EXT4_BACKUPS_MODULE,
         EXT4_DIRHASH_MODULE,
         EXT4_DIRENT_MODULE,
@@ -86576,6 +86581,7 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
         "vfs-ext4-descriptor.f",
         "vfs-ext4-bitmap.f",
         "vfs-ext4-inode.f",
+        "vfs-ext4-xattr.f",
         "vfs-ext4-backups.f",
         "vfs-ext4-dirhash.f",
         "vfs-ext4-dirent.f",
@@ -87194,6 +87200,193 @@ def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
         ordered_source.index(": _EXT4-DECODE-I-BLOCKS")
     )
     assert ordered_source.index(": _EXT4-ENCODE-I-BLOCKS") < (
+        ordered_source.index(": _EXT4-VALIDATE-BACKUPS")
+    )
+
+
+def test_ext4_xattr_block_service_is_private_acyclic_unit() -> None:
+    xattr = (AKASHIC_ROOT / EXT4_XATTR_MODULE).read_text(encoding="utf-8")
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+    ordered_source = _ext4_source_text()
+
+    assert xattr.splitlines().count("PROVIDED akashic-ext4-xattr") == 1
+    assert len("akashic-ext4-xattr".encode("utf-8")) == 18
+    assert tuple(
+        line.removeprefix("REQUIRE ")
+        for line in xattr.splitlines()
+        if line.startswith("REQUIRE ")
+    ) == ("vfs-ext4-admission.f",)
+
+    service_definitions = (
+        (
+            ": _EXT4-XATTR-BLOCK-CRC  "
+            "( buffer physical-block ctx -- crc ior )"
+        ),
+        (
+            ": _EXT4-STAMP-XATTR-BLOCK  "
+            "( buffer physical-block ctx -- ior )"
+        ),
+        ": _EXT4-LOAD-XATTR-BLOCK  ( physical-block ctx -- ior )",
+    )
+    service_names = (
+        "_EXT4-XATTR-BLOCK-CRC",
+        "_EXT4-STAMP-XATTR-BLOCK",
+        "_EXT4-LOAD-XATTR-BLOCK",
+    )
+    for definition in service_definitions:
+        assert xattr.splitlines().count(definition) == 1
+        assert ordered_source.count(definition) == 1
+        assert definition not in facade
+    for service in service_names:
+        assert re.search(
+            rf"(?m)^:[ \t]+{re.escape(service)}(?=[ \t\r\n(])",
+            facade,
+        ) is None
+    assert "_EXT4-STAMP-XATTR-BLOCK" in facade
+    assert "_EXT4-LOAD-XATTR-BLOCK" in facade
+    assert "_EXT4-XATTR-BLOCK-CRC" not in facade
+
+    assert xattr.splitlines().count(
+        "0xEA020000 CONSTANT _EXT4-XATTR-MAGIC"
+    ) == 1
+    assert xattr.splitlines().count(
+        "1024 CONSTANT _EXT4-XATTR-REFCOUNT-MAX"
+    ) == 1
+    assert "CONSTANT _EXT4-XATTR-MAGIC" not in facade
+    assert "CONSTANT _EXT4-XATTR-REFCOUNT-MAX" not in facade
+
+    private_cells = set(
+        re.findall(r"^VARIABLE (\S+)$", xattr, re.MULTILINE)
+    )
+    assert private_cells == {
+        "_EXT4-XC-CTX",
+        "_EXT4-XC-BLOCK",
+        "_EXT4-XC-BUF",
+        "_EXT4-XB-CTX",
+        "_EXT4-XB-BLOCK",
+        "_EXT4-XB-STORED",
+    }
+    assert len(private_cells) == 6
+    assert all(cell not in facade for cell in private_cells)
+    assert "_EXT4-XB-BUF" not in ordered_source
+    assert "EXECUTE" not in xattr
+    assert "-XT" not in xattr
+    assert "_EXT4-MUTATION-" not in xattr
+
+    xattr_executable = "\n".join(
+        line.split("\\", 1)[0] for line in xattr.splitlines()
+    )
+    facade_executable = "\n".join(
+        line.split("\\", 1)[0] for line in facade.splitlines()
+    )
+
+    def word_body(source: str, name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None
+        return " ".join(match.group("body").split())
+
+    calculator = word_body(xattr_executable, "_EXT4-XATTR-BLOCK-CRC")
+    stamper = word_body(xattr_executable, "_EXT4-STAMP-XATTR-BLOCK")
+    loader = word_body(xattr_executable, "_EXT4-LOAD-XATTR-BLOCK")
+
+    calculator_order = (
+        "_EXT4-XC-CTX ! _EXT4-XC-BLOCK ! _EXT4-XC-BUF !",
+        "_EXT4-XC-BLOCK @ _EXT4-XC-CTX @ _EXT4-C.TMP + L!",
+        "0 _EXT4-XC-CTX @ _EXT4-C.TMP 4 + + L!",
+        "_EXT4-XC-CTX @ _EXT4-C.SEED + @ _EXT4-CRC-START",
+        "_EXT4-XC-CTX @ _EXT4-C.TMP + 8 _EXT4-CRC-ADD",
+        "_EXT4-XC-BUF @ _EXT4-XC-CTX @ _EXT4-C.BSIZE + @ "
+        "_EXT4-CRC-ADD",
+        "_EXT4-CRC@ 0",
+    )
+    calculator_positions = tuple(
+        calculator.index(fragment) for fragment in calculator_order
+    )
+    assert calculator_positions == tuple(sorted(calculator_positions))
+    assert calculator.count("?DUP IF 0 SWAP EXIT THEN") == 2
+
+    stamp_zero = "0 _EXT4-XC-BUF @ 0x10 + L!"
+    stamp_delegate = (
+        "_EXT4-XC-BUF @ _EXT4-XC-BLOCK @ _EXT4-XC-CTX @ "
+        "_EXT4-XATTR-BLOCK-CRC"
+    )
+    stamp_store = "_EXT4-XC-BUF @ 0x10 + L! 0"
+    assert stamper.index(stamp_zero) < stamper.index(stamp_delegate)
+    assert stamper.index(stamp_delegate) < stamper.index(stamp_store)
+    assert "_EXT4-XATTR-BLOCK-CRC ?DUP IF NIP EXIT THEN" in stamper
+    assert stamper.count("0x10 + L!") == 2
+
+    assert loader.index("_EXT4-READ-BLOCK ?DUP IF EXIT THEN") < (
+        loader.index("_EXT4-XATTR-MAGIC <>")
+    )
+    for header_gate in (
+        "OVER 4 + L@ 0= OR",
+        "OVER 8 + L@ 1 <> OR",
+        "OVER 0x14 + L@ 0<> OR",
+        "OVER 0x18 + L@ 0<> OR",
+        "OVER 0x1C + L@ 0<> OR",
+    ):
+        assert header_gate in loader
+    header_failure = "DROP EXT4-D-XATTR _EXT4-CORRUPT EXIT"
+    saved = "DUP 0x10 + L@ _EXT4-XB-STORED !"
+    zeroed = "0 SWAP 0x10 + L!"
+    delegated = (
+        "_EXT4-XB-CTX @ _EXT4-C.BLOCK + _EXT4-XB-BLOCK @ "
+        "_EXT4-XB-CTX @ _EXT4-XATTR-BLOCK-CRC"
+    )
+    restore = (
+        "_EXT4-XB-STORED @ _EXT4-XB-CTX @ _EXT4-C.BLOCK + "
+        "0x10 + L!"
+    )
+    mismatch = "_EXT4-XB-STORED @ <> IF"
+    assert loader.index(header_failure) < loader.index(saved)
+    assert loader.index(saved) < loader.index(zeroed)
+    assert loader.index(zeroed) < loader.index(delegated)
+    assert loader.index(delegated) < loader.index(restore)
+    assert loader.rindex(restore) < loader.index(mismatch)
+    assert loader.count(restore) == 2
+    assert "?DUP IF NIP" in loader
+    assert "EXT4-D-XATTR _EXT4-CORRUPT EXIT" in loader
+
+    expected_facade_calls = {
+        "_EXT4-LOAD-XATTR-BLOCK": 9,
+        "_EXT4-STAMP-XATTR-BLOCK": 2,
+        "_EXT4-XATTR-MAGIC": 1,
+        "_EXT4-XATTR-REFCOUNT-MAX": 2,
+    }
+    for service, count in expected_facade_calls.items():
+        assert facade_executable.count(service) == count
+
+    assert xattr.index(service_definitions[0]) < xattr.index(
+        service_definitions[1]
+    ) < xattr.index(service_definitions[2])
+
+    derived_buffers = {
+        "_EXT4-JFI-XATTR-PREFLIGHT": ("_EXT4-JFI-CTX", 1),
+        "_EXT4-JFI-STAGE-EA-REFDEC": ("_EXT4-JFI-CTX", 2),
+        "_EXT4-JFD-REQUIRE-EA-REFDEC": ("_EXT4-JFD-CTX", 2),
+        "_EXT4-JCP-REQUIRE-REFDEC-EA": ("_EXT4-JCP-CTX", 2),
+    }
+    for word, (ctx, count) in derived_buffers.items():
+        body = word_body(facade_executable, word)
+        assert body.count(f"{ctx} @ _EXT4-C.BLOCK +") == count
+
+    for retained_policy in (
+        ": _EXT4-XA-WALK",
+        ": _EXT4-XA-SCAN-BOTH",
+        ": _EXT4-JFI-XATTR-PREFLIGHT",
+    ):
+        assert retained_policy in facade
+        assert retained_policy not in xattr
+
+    assert ordered_source.index(": _EXT4-ENCODE-I-BLOCKS") < (
+        ordered_source.index(": _EXT4-XATTR-BLOCK-CRC")
+    )
+    assert ordered_source.index(": _EXT4-LOAD-XATTR-BLOCK") < (
         ordered_source.index(": _EXT4-VALIDATE-BACKUPS")
     )
 
