@@ -45,9 +45,11 @@ redirected.
   checked all-clear queries. The XC inode-allocation family now delegates its
   exact-group popcount, reserved-aware search, raw/effective singleton checks,
   and private bit set, eliminating ext4's generic range bridge and its shared
-  scratch state. Remaining standalone bitmap readers, authority iterators, and
-  the exact staged-bitmap delta comparator follow at their own typed boundaries
-  before Stage 2 closes.
+  scratch state. The ordinary/bootstrap inode loader and recovery's inode-8
+  allocation witness now share the canonical exact group-inode count and
+  checked singleton query. The remaining owner iterator and exact staged
+  bitmap delta comparator follow at their own typed boundaries before Stage 2
+  closes.
 
 ## Baseline and objective
 

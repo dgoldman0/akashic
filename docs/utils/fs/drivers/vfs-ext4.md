@@ -384,6 +384,10 @@ bounds corruption, while a valid missing allocation bit retains the semantic
 detail supplied by the caller. The raw point predicate continues to report an
 uninitialized block group as ordinary negative evidence; the requiring block
 and range wrappers retain their existing rejection policy.
+Ordinary and orphan inode loading applies the same rule to the descriptor's
+inode bitmap with the canonical exact group-inode count. Invalid logical views
+and valid clear target bits both retain the loader's bounds-corruption result;
+the record read and checksum remain filesystem-owned.
 
 Before the first cleanup-specific write, mount authenticates every record in
 the complete legacy/modern union and measures the exact coalesced metadata
@@ -605,7 +609,11 @@ blocks from the committed prefix. All passes use the immutable map expanded
 from the checksum-valid group-1 tuple; no external extent node, legacy pointer
 block, primary descriptor, or block-allocation bitmap is needed to expand or
 locate that tuple during dirty bootstrap. The witnessed inode-allocation
-bitmap remains part of authenticating live inode 8. Before any journal read,
+bitmap remains part of authenticating live inode 8. Candidate recovery
+after-images recheck inode 8 through a checked group-0 exact logical view:
+invalid geometry is bounds corruption, while a valid clear bit remains
+ordinary negative preservation evidence for the enclosing journal policy.
+Before any journal read,
 every tuple extent is also proven disjoint from all backup-GDT-described
 bitmap and inode-table ranges and all deterministic
 sparse-super/GDT/reserved-GDT ranges.

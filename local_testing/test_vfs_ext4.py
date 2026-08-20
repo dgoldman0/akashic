@@ -87142,6 +87142,74 @@ def test_ext4_inode_allocation_uses_checked_exact_bitset_views() -> None:
         assert removed not in source
 
 
+def test_ext4_early_inode_reads_use_checked_exact_bitset_views() -> None:
+    source = EXT4_F.read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    loader = word_body("_EXT4-LOAD-INODE-FROM-DESC-RAW")
+    recovery = word_body("_EXT4-RECOVERY-AUTHORITY-PRESERVED?")
+
+    assert source.count(": _EXT4-GROUP-INODE-COUNT") == 1
+    assert source.index(": _EXT4-UMUL?") < source.index(
+        ": _EXT4-GROUP-BLOCK-COUNT"
+    ) < source.index(": _EXT4-GROUP-INODE-COUNT") < source.index(
+        ": _EXT4-LOAD-INODE-FROM-DESC-RAW"
+    )
+
+    assert (
+        "_EXT4-IR-GROUP @ _EXT4-IR-CTX @ _EXT4-GROUP-INODE-COUNT\n"
+        "    DUP IF NIP EXIT THEN DROP\n"
+        "    _EXT4-IR-CTX @ _EXT4-C.BLOCK + SWAP\n"
+        "    _EXT4-IR-INDEX @ BITSET-TEST?"
+    ) in loader
+    assert loader.index("_EXT4-READ-BLOCK") < loader.index(
+        "_EXT4-GROUP-INODE-COUNT"
+    ) < loader.index("BITSET-TEST?") < loader.index(
+        "_EXT4-LOAD-INODE-RECORD-RAW"
+    )
+    assert (
+        "BITSET-TEST? 0= IF\n"
+        "        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+    ) in loader
+    assert (
+        "0= IF\n"
+        "        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT\n"
+        "    THEN"
+    ) in loader
+
+    assert (
+        "0 _EXT4-RAP-CTX @ _EXT4-GROUP-INODE-COUNT\n"
+        "        DUP IF NIP FALSE SWAP EXIT THEN DROP\n"
+        "        _EXT4-RAP-BUF @ SWAP\n"
+        "        _EXT4-JOURNAL-INODE 1- BITSET-TEST?"
+    ) in recovery
+    assert (
+        "BITSET-TEST? 0= IF\n"
+        "            DROP FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+    ) in recovery
+    assert "0= IF FALSE 0 EXIT THEN" in recovery
+    assert recovery.index("_EXT4-JOURNAL-INODE-PRESERVED?") < (
+        recovery.index("_EXT4-GROUP-INODE-COUNT")
+    ) < recovery.index("BITSET-TEST?") < recovery.index(
+        "_EXT4-PRIMARY-SUPER-CANDIDATE?"
+    )
+
+    for body in (loader, recovery):
+        assert body.count("BITSET-TEST?") == 1
+        assert "C@" not in body
+        assert "LSHIFT" not in body
+    assert "_EXT4-IR-INDEX @ 8 /" not in loader
+    assert "_EXT4-JOURNAL-INODE 1- 8 /" not in recovery
+
+
 def test_hardware_crc32c_matches_fragmented_ext4_raw_vector(tmp_path: Path) -> None:
     blank = tmp_path / "crc-storage.img"
     blank.write_bytes(bytes(4 * 512))
