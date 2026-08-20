@@ -80,6 +80,11 @@ redirected.
   mutable result: authenticated bytes reside in the caller-owned context
   `C.BLOCK` only after a successful load. Entry parsing, allocation,
   reference-count, transaction, and recovery policy remain in the facade.
+  `vfs-ext4-orphan.f` owns the orphan-file block tail magic and the checked
+  checksum predicate and restamper. All seven scratch cells are private and
+  the unit exports no mutable result. The facade reader delegates its duplicate
+  checksum tail while retaining inode preparation, mapping, physical I/O, and
+  all `_EXT4-OV-*` operation state.
   `vfs-ext4-backups.f` owns sparse-super copy authority, immutable-super
   comparison, exact journal-backup tuples, and backup-GDT location checks; all
   13 of its scratch cells are private.
@@ -96,15 +101,15 @@ redirected.
   private, and the module adds no mutable cross-component result surface.
   `vfs-ext4.f` remains the only public facade and begins with allocation-owner
   and initialized-bitmap policy. The aggregate source stage now loads
-  `(admission, descriptor, bitmap, inode, xattr, backups, dirhash, dirent,
-  jbd2-codec, facade)` in production order rather than relying on a handwritten
-  concatenation list.
+  `(admission, descriptor, bitmap, inode, xattr, orphan, backups, dirhash,
+  dirent, jbd2-codec, facade)` in production order rather than relying on a
+  handwritten concatenation list.
   Four checked-I/O session/evidence cells and four success-only descriptor
   parser-result cells remain temporary cross-component surfaces until the
   operation-lifetime context stage. Five inode-lookup identity/locator cells
   remain facade-local operation-lifetime state; bitmap admission, inode
-  formatting, external-xattr block handling, backups, dirhash, dirent, and the
-  JBD2 codec add none.
+  formatting, external-xattr and orphan-block handling, backups, dirhash,
+  dirent, and the JBD2 codec add none.
 
 ## Baseline and objective
 
@@ -238,9 +243,22 @@ checked-CRC error and before reporting a mismatch; the caller-owned context
 `C.BLOCK` is authentication evidence only after success. The stamper instead
 leaves that field zero on a checked-CRC error; callers stop and route the
 failure through their enclosing transaction owner. Xattr entry parsing,
-allocation and reference-count
-authority, transaction reconstruction, and recovery remain in the facade. A
-backup-authority unit uses the admission and descriptor foundations to
+allocation and reference-count authority, transaction reconstruction, and
+recovery remain in the facade.
+The orphan-file block unit also depends only on admission. It owns the tail
+magic and two explicit stack services for checksum verification and
+restamping, with all seven scratch cells private and no mutable result surface.
+The predicate leaves caller bytes unchanged and distinguishes ordinary
+negative evidence as `FALSE 0` from checked-CRC failure as `FALSE ior`. The
+restamper validates arguments, admitted orphan identity, physical bounds,
+encoded widths, and tail magic before CRC calculation. Its sole target
+mutation is the final checksum store after both CRC additions; because the tail
+is excluded from the CRC, every failure leaves the caller block byte-identical.
+The facade reader delegates its duplicate CRC tail and treats `C.BLOCK` as
+authenticated only after success, while inode preparation, mapping, reads,
+`_EXT4-OV-*` lifetime, orphan planning, transaction, and recovery policy remain
+in the facade. A backup-authority unit uses the admission and descriptor
+foundations to
 authenticate sparse-super copies and backup descriptor locations; its three
 services are stack-only and all scratch state remains private. The independent
 dirhash unit owns name-byte validation, seeded
@@ -272,10 +290,11 @@ checked adapter.
 Remaining candidate boundaries are validated geometry/authority, JBD2 recovery
 and transaction policy above the extracted codec, HTree and directory-scan
 policy above the linear codec, xattr parsing and authority above the extracted
-block codec, allocation and extent mutation, orphan handling, and VFS
-operation adapters. They are candidates, not mandatory filenames: cohesion
-and acyclic load order decide the actual split. New KDOS `PROVIDED` names must
-remain unique within the registry's truncated module-key width.
+block codec, allocation and extent mutation, orphan planning and transaction
+policy above the extracted block codec, and VFS operation adapters. They are
+candidates, not mandatory filenames: cohesion and acyclic load order decide
+the actual split. New KDOS `PROVIDED` names must remain unique within the
+registry's truncated module-key width.
 
 This seam is not permission to enable a compiled Forth shard. Source loading
 remains the qualification path, and each extracted module must have one real

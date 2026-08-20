@@ -40,6 +40,7 @@ pointer-field checks. This removes duplicate CRC algebra and checksum-only
 scratch without changing descriptor error precedence. The cold-source harness
 and packaging closure resolve admission, descriptor loading and checksum
 services, exact bitmap admission, inode-record formatting, external-xattr
-block authentication, sparse-super backup authority, the independent
-directory-hash service, the linear directory-entry codec, the independent
-JBD2 checksum codec, and then the facade without a backwards dependency.
+block authentication, orphan-file block checksums, sparse-super backup
+authority, the independent directory-hash service, the linear directory-entry
+codec, the independent JBD2 checksum codec, and then the facade without a
+backwards dependency.

@@ -45,6 +45,7 @@ EXT4_DESCRIPTOR_MODULE = "utils/fs/drivers/vfs-ext4-descriptor.f"
 EXT4_BITMAP_MODULE = "utils/fs/drivers/vfs-ext4-bitmap.f"
 EXT4_INODE_MODULE = "utils/fs/drivers/vfs-ext4-inode.f"
 EXT4_XATTR_MODULE = "utils/fs/drivers/vfs-ext4-xattr.f"
+EXT4_ORPHAN_MODULE = "utils/fs/drivers/vfs-ext4-orphan.f"
 EXT4_BACKUPS_MODULE = "utils/fs/drivers/vfs-ext4-backups.f"
 EXT4_DIRHASH_MODULE = "utils/fs/drivers/vfs-ext4-dirhash.f"
 EXT4_DIRENT_MODULE = "utils/fs/drivers/vfs-ext4-dirent.f"
@@ -86536,6 +86537,7 @@ def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
         EXT4_BITMAP_MODULE,
         EXT4_INODE_MODULE,
         EXT4_XATTR_MODULE,
+        EXT4_ORPHAN_MODULE,
         EXT4_BACKUPS_MODULE,
         EXT4_DIRHASH_MODULE,
         EXT4_DIRENT_MODULE,
@@ -86582,6 +86584,7 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
         "vfs-ext4-bitmap.f",
         "vfs-ext4-inode.f",
         "vfs-ext4-xattr.f",
+        "vfs-ext4-orphan.f",
         "vfs-ext4-backups.f",
         "vfs-ext4-dirhash.f",
         "vfs-ext4-dirent.f",
@@ -87387,6 +87390,215 @@ def test_ext4_xattr_block_service_is_private_acyclic_unit() -> None:
         ordered_source.index(": _EXT4-XATTR-BLOCK-CRC")
     )
     assert ordered_source.index(": _EXT4-LOAD-XATTR-BLOCK") < (
+        ordered_source.index(": _EXT4-VALIDATE-BACKUPS")
+    )
+
+
+def test_ext4_orphan_block_service_is_private_acyclic_unit() -> None:
+    orphan = (AKASHIC_ROOT / EXT4_ORPHAN_MODULE).read_text(
+        encoding="utf-8"
+    )
+    admission = (AKASHIC_ROOT / EXT4_ADMISSION_MODULE).read_text(
+        encoding="utf-8"
+    )
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+    ordered_source = _ext4_source_text()
+
+    assert orphan.splitlines().count("PROVIDED akashic-ext4-orphan") == 1
+    assert len("akashic-ext4-orphan".encode("utf-8")) == 19
+    assert tuple(
+        line.removeprefix("REQUIRE ")
+        for line in orphan.splitlines()
+        if line.startswith("REQUIRE ")
+    ) == ("vfs-ext4-admission.f",)
+
+    service_signatures = (
+        (
+            ": _EXT4-RESTAMP-ORPHAN-BLOCK\n"
+            "  ( block physical orphan-inode generation ctx -- ior )"
+        ),
+        (
+            ": _EXT4-ORPHAN-BLOCK-CHECKSUM?\n"
+            "  ( block physical orphan-inode generation ctx -- flag ior )"
+        ),
+    )
+    service_names = (
+        "_EXT4-RESTAMP-ORPHAN-BLOCK",
+        "_EXT4-ORPHAN-BLOCK-CHECKSUM?",
+    )
+    for signature in service_signatures:
+        assert orphan.count(signature) == 1
+        assert ordered_source.count(signature) == 1
+        assert signature not in facade
+    for service in service_names:
+        assert service in facade
+        assert re.search(
+            rf"(?m)^:[ \t]+{re.escape(service)}(?=[ \t\r\n(])",
+            facade,
+        ) is None
+    assert orphan.index(service_signatures[0]) < orphan.index(
+        service_signatures[1]
+    )
+
+    private_cells = set(
+        re.findall(r"^VARIABLE (\S+)$", orphan, re.MULTILINE)
+    )
+    assert private_cells == {
+        "_EXT4-ROB-BLOCK",
+        "_EXT4-ROB-PHYS",
+        "_EXT4-ROB-INO",
+        "_EXT4-ROB-GEN",
+        "_EXT4-ROB-CTX",
+        "_EXT4-ROB-TAIL",
+        "_EXT4-OCV-STORED",
+    }
+    assert len(private_cells) == 7
+    assert all(cell not in facade for cell in private_cells)
+    assert "_EXT4-OV-TAIL" not in ordered_source
+    assert "_EXT4-OV-STORED" not in ordered_source
+    assert "_EXT4-OV-SIZE" not in ordered_source
+    assert "EXECUTE" not in orphan
+    assert "-XT" not in orphan
+    assert "_EXT4-MUTATION-" not in orphan
+    assert "_EXT4-READ-BLOCK" not in orphan
+    assert "_EXT4-MAP-BLOCK" not in orphan
+    assert "_EXT4-LOAD-INODE" not in orphan
+    assert "_EXT4-OV-" not in orphan
+    assert "0x0B10CA04 CONSTANT _EXT4-ORPHAN-MAGIC" in orphan
+    assert "CONSTANT _EXT4-ORPHAN-MAGIC" not in admission
+    assert "_EXT4-ORPHAN-MAGIC" not in facade
+
+    orphan_executable = "\n".join(
+        line.split("\\", 1)[0] for line in orphan.splitlines()
+    )
+    facade_executable = "\n".join(
+        line.split("\\", 1)[0] for line in facade.splitlines()
+    )
+
+    def word_body(source: str, name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None
+        return " ".join(match.group("body").split())
+
+    restamper = word_body(
+        orphan_executable, "_EXT4-RESTAMP-ORPHAN-BLOCK"
+    )
+    predicate = word_body(
+        orphan_executable, "_EXT4-ORPHAN-BLOCK-CHECKSUM?"
+    )
+    reader = word_body(facade_executable, "_EXT4-READ-ORPHAN-BLOCK")
+
+    restamp_order = (
+        "_EXT4-ROB-BLOCK @ 0= _EXT4-ROB-CTX @ 0= OR IF",
+        "_EXT4-C.ORPHAN-INO + @ <> IF",
+        "_EXT4-C.BLOCKS + @ U< 0= IF",
+        "_EXT4-ROB-PHYS @ 0xFFFFFFFF U>",
+        "_EXT4-ROB-GEN @ 0xFFFFFFFF U> OR IF",
+        "DUP _EXT4-ROB-TAIL ! L@ _EXT4-ORPHAN-MAGIC <> IF",
+        "_EXT4-ROB-INO @ _EXT4-ROB-CTX @ _EXT4-C.TMP + L!",
+        "_EXT4-ROB-GEN @ _EXT4-ROB-CTX @ _EXT4-C.TMP 4 + + L!",
+        "_EXT4-ROB-PHYS @ _EXT4-ROB-CTX @ _EXT4-C.TMP 8 + + L!",
+        "0 _EXT4-ROB-CTX @ _EXT4-C.TMP 12 + + L!",
+        "_EXT4-C.SEED + @ _EXT4-CRC-START",
+        "_EXT4-C.TMP + 16 _EXT4-CRC-ADD",
+        "_EXT4-C.BSIZE + @ 8 - _EXT4-CRC-ADD",
+        "_EXT4-CRC@",
+        "_EXT4-ROB-TAIL @ 4 + L!",
+    )
+    restamp_positions = tuple(
+        restamper.index(fragment) for fragment in restamp_order
+    )
+    assert restamp_positions == tuple(sorted(restamp_positions))
+    assert "VFS-E-INVALID EXIT" in restamper
+    assert restamper.count(
+        "EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT"
+    ) == 4
+    assert restamper.count("_EXT4-CRC-ADD ?DUP IF EXIT THEN") == 2
+    assert restamper.count("_EXT4-ROB-TAIL @ 4 + L!") == 1
+
+    predicate_order = (
+        "_EXT4-ROB-BLOCK @ 0= _EXT4-ROB-CTX @ 0= OR IF FALSE 0 EXIT",
+        "_EXT4-C.ORPHAN-INO + @ <> IF FALSE 0 EXIT",
+        "_EXT4-C.BLOCKS + @ U< 0= IF FALSE 0 EXIT",
+        "_EXT4-ROB-GEN @ 0xFFFFFFFF U> OR IF FALSE 0 EXIT",
+        "L@ _EXT4-ORPHAN-MAGIC <> IF DROP FALSE 0 EXIT",
+        "4 + L@ _EXT4-OCV-STORED !",
+        "_EXT4-C.SEED + @ _EXT4-CRC-START",
+        "_EXT4-C.TMP + 16 _EXT4-CRC-ADD",
+        "_EXT4-C.BSIZE + @ 8 - _EXT4-CRC-ADD",
+        "_EXT4-CRC@ _EXT4-OCV-STORED @ = 0",
+    )
+    predicate_positions = tuple(
+        predicate.index(fragment) for fragment in predicate_order
+    )
+    assert predicate_positions == tuple(sorted(predicate_positions))
+    assert predicate.count("FALSE 0 EXIT") == 5
+    assert predicate.count("?DUP IF 0 SWAP EXIT THEN") == 2
+    for prefix_store in (
+        "_EXT4-ROB-INO @ _EXT4-ROB-CTX @ _EXT4-C.TMP + L!",
+        "_EXT4-ROB-GEN @ _EXT4-ROB-CTX @ _EXT4-C.TMP 4 + + L!",
+        "_EXT4-ROB-PHYS @ _EXT4-ROB-CTX @ _EXT4-C.TMP 8 + + L!",
+        "0 _EXT4-ROB-CTX @ _EXT4-C.TMP 12 + + L!",
+    ):
+        assert prefix_store in predicate
+    assert "_EXT4-ROB-TAIL @ 4 + L!" not in predicate
+
+    reader_order = (
+        "_EXT4-MAP-BLOCK",
+        "_EXT4-OV-PRESENT @ 0= IF",
+        "_EXT4-READ-BLOCK ?DUP IF EXIT THEN",
+        "_EXT4-ORPHAN-BLOCK-CHECKSUM?",
+        "?DUP IF NIP EXIT THEN",
+    )
+    reader_positions = tuple(
+        reader.index(fragment) for fragment in reader_order
+    )
+    assert reader_positions == tuple(sorted(reader_positions))
+    false_detail = "0= IF EXT4-D-ORPHAN-FILE _EXT4-CORRUPT EXIT THEN"
+    assert reader.rindex(false_detail) > reader.index(
+        "_EXT4-ORPHAN-BLOCK-CHECKSUM?"
+    )
+    assert (
+        "_EXT4-OV-CTX @ _EXT4-C.BLOCK + _EXT4-OV-PHYS @ "
+        "_EXT4-OV-INO @ _EXT4-OV-GEN @ _EXT4-OV-CTX @ "
+        "_EXT4-ORPHAN-BLOCK-CHECKSUM?"
+    ) in reader
+    assert "_EXT4-CRC-" not in reader
+    assert "_EXT4-ORPHAN-MAGIC" not in reader
+    assert "_EXT4-C.TMP" not in reader
+
+    assert facade_executable.count("_EXT4-RESTAMP-ORPHAN-BLOCK") == 4
+    assert facade_executable.count("_EXT4-ORPHAN-BLOCK-CHECKSUM?") == 4
+    for retained in (
+        ": _EXT4-PREPARE-ORPHAN-FILE",
+        ": _EXT4-READ-ORPHAN-BLOCK",
+    ):
+        assert retained in facade
+        assert retained not in orphan
+    for retained_cell in (
+        "_EXT4-OV-CTX",
+        "_EXT4-OV-INO",
+        "_EXT4-OV-IN",
+        "_EXT4-OV-GEN",
+        "_EXT4-OV-BLOCKS",
+        "_EXT4-OV-LOGICAL",
+        "_EXT4-OV-PHYS",
+        "_EXT4-OV-PRESENT",
+        "_EXT4-OV-IOR",
+        "_EXT4-OV-HI",
+        "_EXT4-OV-DEPTH",
+    ):
+        assert f"VARIABLE {retained_cell}" in facade
+        assert retained_cell not in orphan
+
+    assert ordered_source.index(": _EXT4-LOAD-XATTR-BLOCK") < (
+        ordered_source.index(": _EXT4-RESTAMP-ORPHAN-BLOCK")
+    )
+    assert ordered_source.index(": _EXT4-ORPHAN-BLOCK-CHECKSUM?") < (
         ordered_source.index(": _EXT4-VALIDATE-BACKUPS")
     )
 

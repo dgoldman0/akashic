@@ -143,6 +143,11 @@ and checksum restamping. Its six scratch cells are private, it exports no
 mutable result cell, and authenticated bytes reside in the caller-owned
 context `C.BLOCK` only after success; xattr entry parsing, allocation,
 reference-count, transaction, and recovery policy remain in the facade. The
+[`vfs-ext4-orphan.f`](vfs-ext4-orphan.md) unit owns the orphan-file block tail
+magic plus the checked checksum predicate and restamper. Its seven scratch
+cells are private and it exports no mutable result. Orphan-file inode
+preparation, mapping, physical reads, operation-lifetime locator state,
+planning, transaction, and recovery policy remain in the facade. The
 [`vfs-ext4-backups.f`](vfs-ext4-backups.md) unit authenticates sparse-super
 copies, immutable superblock identity, and backup descriptor locations without
 treating mutable counters as identity. The independent
@@ -170,9 +175,9 @@ verification cadence that apply before the next indexed-directory capability.
 The real-image harness cold-compiles the dependency-ordered production ext4
 source closure into the restored FAT/VFS snapshot. The current ext4 stage is
 the admission, descriptor, bitmap-admission, inode-format, external-xattr,
-backup-authority, directory-hash, linear-dirent, and JBD2-checksum units
-followed by the public facade; VFS, CRC, and bitset are already present in
-earlier measured stages.
+orphan-block, backup-authority, directory-hash, linear-dirent, and
+JBD2-checksum units followed by the public facade; VFS, CRC, and bitset are
+already present in earlier measured stages.
 It does not use a compiled shard or warm cache.
 To avoid making UART echo volume an implementation-size limit, the host
 injects each compacted physical source line into the BIOS `FSLOAD`

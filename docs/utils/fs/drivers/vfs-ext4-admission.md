@@ -8,7 +8,7 @@ separate binding. Load ext4 through the facade:
 REQUIRE utils/fs/drivers/vfs-ext4.f
 ```
 
-The admission unit owns the pinned on-disk constants and context layout,
+The admission unit owns the shared pinned on-disk constants and context layout,
 structured ext4 errors, the checked CRC32C adapter, checked volume reads and
 writes, probe helpers, checked unsigned arithmetic, sparse-super geometry, and
 primary-super validation. It depends directly on `vfs.f` and `math/crc.f` and
@@ -25,6 +25,9 @@ encoding. The independent
 context geometry, and the CRC adapter to authenticate and restamp external
 xattr blocks without moving entry parsing, allocation, reference-count, or
 transaction policy out of the facade. The independent
+[`vfs-ext4-orphan.f`](vfs-ext4-orphan.md) unit owns the orphan-file block tail
+magic and consumes admitted geometry, identity, workspace, and checked CRCs
+for stack-only checksum verification and restamping. The independent
 [`vfs-ext4-backups.f`](vfs-ext4-backups.md) unit uses the admitted superblock
 and descriptor services to authenticate sparse-super copies. The independent
 [`vfs-ext4-dirhash.f`](vfs-ext4-dirhash.md) unit consumes the admitted
@@ -48,7 +51,7 @@ for a backwards dependency into admission.
 Physical extraction does not change the profile, error precedence, or
 cold-source qualification model. Packaging and the real-image harness resolve
 admission, descriptor loading, bitmap admission, inode-record formatting,
-external-xattr block authentication, backup authority, directory hashing, the
-linear directory-entry codec, the JBD2 checksum codec, and the facade in
-production order and continue to compile the aggregate closure in source
-mode.
+external-xattr block authentication, orphan-file block checksums, backup
+authority, directory hashing, the linear directory-entry codec, the JBD2
+checksum codec, and the facade in production order and continue to compile the
+aggregate closure in source mode.
