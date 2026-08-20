@@ -60,9 +60,11 @@ redirected.
   callbacks. The cold ext4 source harness derives the driver's
   dependency-ordered closure and removes the VFS, CRC, and bitset foundation
   already present in earlier measured stages. The first physical component,
-  `ext4/vfs-ext4-admission.f`, now owns the on-disk profile and private context
-  layout, checked I/O and CRC adapter, probe helpers, checked arithmetic, and
-  primary-super admission. `ext4/vfs-ext4-descriptor.f` now owns authenticated
+  `ext4/vfs-ext4-admission.f`, now owns the on-disk profile and base binding
+  context layout, checked I/O and CRC adapter, probe helpers, checked
+  arithmetic, and primary-super admission. Facade-owned operation records may
+  use opaque pointer/span slots in that base layout without moving their schema
+  or policy into admission. `ext4/vfs-ext4-descriptor.f` now owns authenticated
   group-descriptor location, shared CRC verification/restamping, pointer/span,
   flag, and counter admission. Its loader and the group-0 recovery candidate
   delegate to the same predicate, eliminating their duplicate CRC algebra.
@@ -134,6 +136,28 @@ redirected.
   operation state, late policy callbacks, or success results across their
   prospective seams. Stage 3 does not turn those couplings into module APIs
   merely to create more files.
+- Stage 4 is complete at the CREATE/HTree context checkpoint. The 44 selected
+  ambient objects are gone; the facade now owns one 3,664-byte binding record
+  containing 39 cells, a 24-byte hash authority, three 1,024-byte block
+  snapshots, and one 256-byte inode snapshot. Admission carries only its
+  opaque pointer/span. Exact allocated-prefix ownership, fresh-allocation
+  rollback, retained-mount reuse, explicit plan threading, sealed topology
+  authority, branch-specific comparison, and complete return-path scrubbing
+  are now one production path. The shared CREATE/MKDIR/LINK insertion path
+  consumes the record without adding indexed MKDIR/LINK or Stage 5 home
+  planning.
+  Relative to the Stage 3 source shape at `131bf83`, the 13-unit production
+  closure grew from 29,965 to 30,203 physical lines, 1,153,521 to 1,163,093
+  raw bytes, 26,964 to 27,163 loader-executable lines, 3,719 to 3,745 packed
+  lines, and 873,712 to 879,851 packed bytes. This is +238 physical lines,
+  +9,572 raw bytes, +199 executable lines, +26 packed lines, and +6,139 packed
+  bytes. A source-mode cold build passed at 1,029,626,802 of 1,600,000,000
+  steps, and the sequential focused gate passed two-record isolation,
+  poisoned-record reuse/refusal cleanup, all four admitted CREATE shapes, and
+  canonical MKDIR and LINK. The initial run found an overbroad whole-VFS-arena
+  oracle and a full-leaf split guard reached only after all 54 mutation checks;
+  the plan-specific oracle and narrow 1.50-billion journey bound then passed,
+  with the split completing in 1,453,284,730 steps.
 
 ## Baseline and objective
 
@@ -344,14 +368,15 @@ layer.
 Stage 4 is one bounded pilot, not a driver-wide conversion of mutable globals.
 Move only the CREATE/HTree state published by the first authenticated planning
 pass and later consumed or compared by the dry and live staging passes into an
-explicit caller-owned context.
+explicit binding-owned record funded by the binding's caller-provided arena.
 
-At the current boundary, the context owns `_XC-INDEXED`, `_XC-SHAPE-SET`,
-every `_XC-INDEX-BASE*` field, `_XC-INDEX-CANDIDATE-BASELINE`, every
+The migration inventory comprised `_XC-INDEXED`, `_XC-SHAPE-SET`, every
+`_XC-INDEX-BASE*` field, `_XC-INDEX-CANDIDATE-BASELINE`, every
 `_XC-CONVERT-BASE*` field, `_XC-CONVERT-CANDIDATE-BASELINE`, and the retained
 comparison buffers `_XC-CONVERT-HASH-BASE`, `_XC-DIR-SNAPSHOT`,
 `_XC-ROOT-SNAPSHOT`, `_XC-INDEX-MAP-SNAPSHOT`, and `_XC-PARENT-SNAPSHOT`.
-These are 44 mutable objects at the start of the pilot. This inventory is a
+These were 44 mutable objects at the start of the pilot; `_XC-P.STATE` replaces
+the former `_XC-SHAPE-SET` flag in the record lifecycle. This inventory is a
 migration boundary, not a permanent ABI: a value may instead become
 stack-local when that removes rather than relocates state.
 
@@ -363,30 +388,61 @@ operation family. Immutable request and name data remain explicit planner
 inputs. Stage 4 does not require every `_XC-*` object, much less every driver
 global, to move.
 
-The binding supplies the context storage from its caller-owned arena and owns
-its address and exact byte span. That storage may remain allocated for the
-binding lifetime, but its evidence is valid for exactly one guarded namespace
-operation. Entry resets the complete transient record before building
-evidence. The initial planner is its sole writer; later dry and live passes may
-only reauthenticate and compare sealed fields. Every refusal, error, and
-successful return invalidates and scrubs the record after any required
-committed cache projection. No ambient current-context alias may substitute
-for an explicit context argument, and no callee may retain the argument beyond
-its call.
+The staged binding allocates one facade-defined 3,664-byte record from its
+caller-provided VFS arena: 39 cells, a 24-byte hash-authority snapshot, three
+1,024-byte block snapshots, and one 256-byte inode snapshot. Admission does
+not interpret that record. Its base context owns only the opaque
+`_EXT4-C.XC-PLAN` pointer and `_EXT4-C.XC-PLAN-SPAN`; the common base context
+is 15,568 bytes. The record must be the exact next allocation after that base
+context and wholly inside the arena's allocated prefix. Ordinary bindings keep
+both ownership slots zero and do not allocate the additional record. A staged
+mount retry revalidates and clears the same allocation rather than growing the
+arena. A retained certificate that fails ownership validation returns a typed
+failure without dereferencing or clearing its untrusted span.
 
-The existing public mutation guard remains authoritative. Independent
-contexts must prove isolation and reset behavior, but this stage neither
-claims nor enables concurrent mutation.
+The allocation may remain for the binding lifetime, but its evidence is valid
+for exactly one guarded namespace operation. Each insertion resolves the
+record once, clears it, advances it through building-without-shape,
+building-with-shape, and sealed states, and passes its address explicitly
+through planning and staging. Indexed and linear-to-HTree conversion baselines
+and snapshots become immutable once sealed and are compared during dry and
+live replanning. The ordinary nonconversion linear branch intentionally
+refreshes its parent-inode and directory buffers after each phase's
+reauthentication; those buffers remain bounded per-pass workspace so this
+refactor preserves existing refusal behavior rather than turning them into
+authority for a topology change. A sealed ordinary plan cannot become indexed
+or acquire conversion authority that its cold pass did not bind; either change
+returns conflict.
+
+After ownership is established, every refusal, transaction failure, postcommit
+failure, and successful return scrubs the complete record and facade-private
+scratch after any required committed cache projection. An ownership failure
+never attempts to scrub an untrusted address. No ambient alias to the plan
+record may substitute for an explicit argument, and no callee may retain that
+argument beyond its call. Shared CREATE/MKDIR/LINK threading through
+`_XC-INSERT-COMMON` is an implementation consequence of this lifetime
+boundary; it does not admit indexed MKDIR/LINK or implement Stage 5 home
+planning.
+
+The existing public mutation guard remains authoritative. Independent plan
+records must prove isolation and reset behavior, but this stage neither claims
+nor enables concurrent mutation.
 
 Stage 4 is accepted when the complete inventory above has explicit ownership
 and lifetime, no listed object remains dictionary-global, and canonical
 linear CREATE, linear-to-HTree conversion, existing-leaf CREATE, and full-leaf
 split retain identical refusal timing, journal home identity and first-seen
-order, credit, persistent bytes, and cache projection. Poisoned-context reuse
-and two independent context fixtures must prove that no prior operation
-supplies evidence to the next. The implementation commit must delete the
-migrated ambient objects and report both physical and packed-source deltas;
-parallel old/new evidence paths are not accepted.
+order, credit, persistent bytes, and cache projection. Canonical linear MKDIR
+and LINK must retain the same properties because they share the threaded
+`_XC-INSERT-COMMON` path. Poisoned-record reuse at the same address and span
+must prove complete zeroing, and retained mount retry must revalidate and clear
+that allocation without allocating a second record. Two independent
+plan-record fixtures must prove that no prior operation supplies evidence to
+the next. Exact allocated-prefix ownership validation and the absence of an
+ambient plan alias are part of the source contract. The implementation commit
+must delete the migrated ambient objects, pass one
+sequential cold-source/focused runtime checkpoint, and report both physical
+and packed-source deltas; parallel old/new evidence paths are not accepted.
 
 Stop and revise if the pilot requires transaction or recovery state, a generic
 callback framework, an ambient context pointer, a new fixed capacity, a
@@ -464,18 +520,24 @@ representative happy-path equivalence set. Before leaving refactoring for new
 functionality, run the accumulated sequential equivalence gate. When new
 filesystem functionality resumes, restore the extensive qualification cadence
 and include the refactored paths in that feature's evidence. The last recorded
-cold source build measured CRC at 5,023,896 of 150,000,000 steps across 26
-packed lines, bitset at 2,345,116 of 150,000,000 across 9 packed lines, and the
-dependency-derived ext4 closure at 1,011,612,875 of 1,600,000,000 across 3,719
-packed lines from 13 source units. The sequential checkpoint also passed Gate
-2A, MP64FS create/write/read/delete/sync and second-bitmap-sector sync/remount,
-canonical ext4 image inspection, checksum-v3 replay, and five revoke/recovery
-cases. The first
-revoke run found stale post-mount transient-state expectations; `8918024`
+cold source build is the Stage 4 context checkpoint: CRC at 5,023,896 of
+150,000,000 steps across 26 packed lines, bitset at 2,345,116 of 150,000,000
+across 9 packed lines, and the dependency-derived ext4 closure at
+1,029,626,802 of 1,600,000,000 across 3,745 packed lines from 13 source units.
+Its sequential focused runtime set passed two-record isolation,
+poisoned-record reuse and refusal cleanup, the four admitted CREATE shapes,
+and canonical MKDIR and LINK. The first run corrected an overbroad whole-arena
+oracle and a narrow split-journey cap after the production mutation checks had
+already passed; the affected cases then passed at their plan-specific bounds.
+
+The preceding sequential Stage 3 checkpoint passed Gate 2A, MP64FS
+create/write/read/delete/sync and second-bitmap-sector sync/remount, canonical
+ext4 image inspection, checksum-v3 replay, and five revoke/recovery cases. The
+first revoke run found stale post-mount transient-state expectations; `8918024`
 corrected those oracles and all five cases then passed. This is the accumulated
-Stage 3 checkpoint, not completion of Stages 4 or 5 and not a rerun of the
-broad recovery matrices. Static source shape may advance between intentionally
-sparse cold measurements.
+Stage 1-3 checkpoint, not a rerun of the broad recovery matrices. Neither
+checkpoint qualifies Stage 5. Static source shape may advance between
+intentionally sparse cold measurements.
 
 ## Commit boundaries
 

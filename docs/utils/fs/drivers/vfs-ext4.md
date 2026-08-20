@@ -126,8 +126,11 @@ REQUIRE utils/fs/drivers/vfs-ext4.f
 sources live under `utils/fs/drivers/ext4/` rather than appearing as peer
 drivers beside the facade, FAT, and MP64FS. Its internal
 [`vfs-ext4-admission.f`](ext4/vfs-ext4-admission.md) dependency owns the on-disk
-profile and context layout, checked volume I/O and CRC adapter, probing,
-checked geometry arithmetic, and primary-super validation. The following
+profile and base binding-context layout, checked volume I/O and CRC adapter,
+probing, checked geometry arithmetic, and primary-super validation. The base
+layout includes two opaque pointer/span slots for the facade-owned XC operation
+record; admission does not interpret that record's schema or policy. The
+following
 [`vfs-ext4-descriptor.f`](ext4/vfs-ext4-descriptor.md) unit authenticates one
 group descriptor and its bounded metadata geometry, and owns the shared
 checked descriptor-CRC query and restamper used by later policy owners. The
@@ -179,6 +182,20 @@ initialized-bitmap policy and retains all later filesystem authority,
 recovery, transaction, mutation, and VFS-operation policy. Consumers should
 not require these internal units directly.
 
+For CREATE/HTree cross-phase evidence, the facade defines one 3,664-byte
+binding-owned record: 39 cells, a 24-byte hash-authority snapshot, three
+1,024-byte block snapshots, and one 256-byte inode snapshot. Namespace
+planning and staging receive its address explicitly; there is no ambient alias
+to the record. Indexed and linear-to-HTree conversion evidence becomes
+immutable after sealing. Ordinary nonconversion linear insertion may refresh
+its bounded parent-inode and directory work buffers after each phase's
+reauthentication, preserving the established refusal behavior, but a sealed
+ordinary plan cannot become indexed or acquire new conversion authority. Each
+return after record ownership is established clears the complete record after
+any required committed cache projection. A failed ownership check does not
+dereference or clear an untrusted pointer; it returns a typed failure without
+touching that storage.
+
 The post-`abb3f94` implementation sequence is fixed in the
 [ext4 recovery refactor plan](../ext4-refactor-plan.md). That plan records the
 semantic invariants, migration order, commit thresholds, and focused
@@ -205,8 +222,22 @@ backup above group 65535 is refused.
 
 The checked-in 1,600,000,000-step ext4 cold-source value is a qualification
 watchdog and measurement guide, not an ext4 implementation capacity or a
-reason to weaken functionality. At the Stage 3 checkpoint `8918024`, after
-the private-component nesting in `979d145`, a real cold source build loaded
+reason to weaken functionality. At the Stage 4 context checkpoint, a real
+cold source build loaded CRC in 5,023,896 of 150,000,000 steps across 26
+packed lines, bitset in 2,345,116 of 150,000,000 across 9 packed lines, and
+the dependency-derived ext4 closure in 1,029,626,802 of 1,600,000,000 across
+3,745 packed lines from 13 source units. Relative to the Stage 3 source shape
+at `131bf83`, that closure grew from 29,965 physical lines, 1,153,521 raw
+bytes, 26,964 loader-executable lines, 3,719 packed lines, and 873,712 packed
+bytes to 30,203 physical lines, 1,163,093 raw bytes, 27,163 executable lines,
+3,745 packed lines, and 879,851 packed bytes. The exact deltas are +238
+physical lines, +9,572 raw bytes, +199 executable lines, +26 packed lines,
+and +6,139 packed bytes. The cold-source cost increased by 18,013,927 steps,
+about 1.78 percent; this is the explicit context lifecycle and threading cost,
+not a promised size reduction.
+
+At the Stage 3 checkpoint `8918024`, after the private-component nesting in
+`979d145`, a real cold source build loaded
 CRC in 5,023,896 of 150,000,000 steps across 26 packed lines, bitset in
 2,345,116 of 150,000,000 across 9 packed lines, and the dependency-derived
 ext4 closure in 1,011,612,875 of 1,600,000,000 across 3,719 packed lines from
@@ -284,6 +315,21 @@ compact representative source/runtime equivalence without a compiled cache or
 certificate-preservation shortcut, not a rerun of the broad persistence,
 fault-injection, crash-fence, stable-remount, or external-tool matrices.
 
+The Stage 4 focused gate then ran sequentially from cold source. It passed
+explicit two-plan-record isolation, poisoned same-record reuse and complete
+scrubbing across early `BUSY` and one-short `NOSPC` refusals, the four
+admitted CREATE shapes (ordinary linear, linear-to-HTree conversion, existing
+depth-zero leaf, and full-leaf split), and canonical MKDIR and LINK. The first
+run exposed two harness boundaries rather than production failures: a refused
+public CREATE legitimately retained one reusable 184-byte VFS vnode while the
+test incorrectly required the whole arena pointer to remain fixed, and the
+full-leaf split passed all 54 mutation checks before reaching its 1.45-billion
+guard during unmount. The corrected plan-specific oracle retains exact plan
+address/span reuse and full-record zeroing; the narrowly revised 1.50-billion
+journey completed mutation, unmount, and host media checks in 1,453,284,730
+steps. This is the Stage 4 context checkpoint, not qualification of Stage 5 or
+a rerun of the broad persistence and fault matrices.
+
 At bounded hard-`LINK` closure, the production source measured 1,140,381,589
 steps across 2,962 packed lines in source mode. The then-approved 1.15-billion
 watchdog left 9,618,411 steps, about 0.84 percent measured growth margin. That
@@ -330,6 +376,18 @@ writer-arena 8 1 0 fs EXT4-BIND-WRITER-ARENA? THROW
 \ APP-NOW-MS ( clock-context -- epoch-ms ior )
 ' APP-NOW-MS app-clock fs EXT4-BIND-WRITE-CLOCK? THROW
 ```
+
+The common base binding context is 15,568 bytes. The staged constructor also
+reserves the facade's 3,664-byte namespace-plan record from `fs-arena`, not the
+dedicated writer arena. The base-context-plus-record reservation is 19,232
+contiguous bytes; other VFS and mount allocations remain separate. The record
+is the exact allocation immediately following the base context and must remain
+inside the arena's allocated prefix. Allocation occurs only after authenticated
+superblock and staged-geometry qualification. A retained staged mount retries
+with the same valid allocation and clears it rather than growing the arena; an
+invalid retained certificate fails without dereferencing or clearing the
+untrusted span. Ordinary construction keeps the two common ownership slots
+zero and does not allocate the additional record.
 
 The staged mount admits nonempty mutation only on authenticated 1 KiB
 filesystem geometry with 256-byte inodes and a journal capable of at least the

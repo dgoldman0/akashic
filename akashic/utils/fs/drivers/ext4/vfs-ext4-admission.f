@@ -260,6 +260,7 @@ REQUIRE ../../../../math/crc.f
 \ +15440   caller-installed trusted write-clock provider and context
 \ +15456   mount-scoped protocol-home ownership certificate
 \ +15480   persistent caller-bounded mutation-range workspace
+\ +15552   opaque CREATE/HTree plan pointer and exact byte span
 
    0 CONSTANT _EXT4-C.SB
 1024 CONSTANT _EXT4-C.BLOCK
@@ -369,7 +370,9 @@ REQUIRE ../../../../math/crc.f
 15528 CONSTANT _EXT4-C.O.RUNTIME-CAPACITY
 15536 CONSTANT _EXT4-C.O.RUNTIME-END
 15544 CONSTANT _EXT4-C.O.MOUNT-TAIL-MARK
-15552 CONSTANT _EXT4-CTX-SIZE
+15552 CONSTANT _EXT4-C.XC-PLAN
+15560 CONSTANT _EXT4-C.XC-PLAN-SPAN
+15568 CONSTANT _EXT4-CTX-SIZE
 
 4 CONSTANT _EXT4-ORPHAN-RECORD-CELLS
 _EXT4-ORPHAN-RECORD-CELLS CELLS CONSTANT _EXT4-ORPHAN-RECORD-SIZE

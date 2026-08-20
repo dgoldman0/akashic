@@ -4331,8 +4331,8 @@ def build_snapshot():
     # instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
     max_bitset_source_steps = 150_000_000
-    # The post-Stage-3 dependency-derived closure measures 1,011,612,875 cold
-    # source steps across 3,719 packed lines from 13 source units.  Retain the
+    # The Stage-4 dependency-derived closure measures 1,029,626,802 cold
+    # source steps across 3,745 packed lines from 13 source units. Retain the
     # existing deterministic watchdog without conflating source compilation
     # with the independently bounded recovery journey.
     max_ext4_source_steps = 1_600_000_000
@@ -4700,6 +4700,17 @@ def _forth_accumulated_conjunction(
         assert len(line.encode("utf-8")) <= 255
         lines.append(line)
     return tuple(lines)
+
+
+def _forth_xc_plan_scrubbed(name: str, ctx: str) -> str:
+    """Capture complete binding-owned CREATE-plan withdrawal before unmount."""
+    line = (
+        f"{ctx} _EXT4-C.XC-PLAN + @ DUP 0= IF DROP 0 ELSE "
+        f"{ctx} _EXT4-C.XC-PLAN-SPAN + @ _XC-P-SIZE = "
+        f"SWAP _XC-P-SIZE _EXT4-BYTES-ZERO? AND THEN CONSTANT {name}"
+    )
+    assert len(line.encode("utf-8")) <= 255
+    return line
 
 
 def _forth_cp_delete_vector_checks(
@@ -62556,6 +62567,14 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
             ),
             "_CHR-V _EXT4-CTX CONSTANT _CHR-CTX",
             (
+                "_CHR-CTX _CHR-V _XC-P-CONTEXT? "
+                "CONSTANT _CHR-XC-PLAN-IOR CONSTANT _CHR-XC-PLAN"
+            ),
+            (
+                "_CHR-CTX _EXT4-C.XC-PLAN-SPAN + @ "
+                "CONSTANT _CHR-XC-PLAN-SPAN"
+            ),
+            (
                 "' _CHR-NOW 0 _CHR-V EXT4-BIND-WRITE-CLOCK? "
                 "CONSTANT _CHR-CLOCK-IOR"
             ),
@@ -62593,6 +62612,7 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
             ),
             "_CHR-STAT VSF.BFREE @ CONSTANT _CHR-BFREE-BEFORE",
             "_CHR-STAT VSF.FFREE @ CONSTANT _CHR-FFREE-BEFORE",
+            "_CHR-XC-PLAN ?DUP IF _XC-P-SIZE 0xA5 FILL THEN",
             (
                 "_CHR-CTX _EXT4-C.MUTATION-RANGES + @ "
                 "CONSTANT _CHR-AMBIENT-RANGES"
@@ -62623,6 +62643,18 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
                 "CONSTANT _CHR-AMBIENT-CHILD"
             ),
             "_CHR-V V.LAST-IOR @ CONSTANT _CHR-AMBIENT-LAST-IOR",
+            (
+                "_CHR-CTX _CHR-V _XC-P-CONTEXT? "
+                "CONSTANT _CHR-AMBIENT-PLAN-IOR "
+                "CONSTANT _CHR-AMBIENT-PLAN"
+            ),
+            (
+                "_CHR-AMBIENT-PLAN-IOR 0= "
+                "_CHR-AMBIENT-PLAN _CHR-XC-PLAN = AND "
+                "_CHR-XC-PLAN DUP 0= IF DROP 0 ELSE "
+                "_XC-P-SIZE _EXT4-BYTES-ZERO? THEN AND "
+                "CONSTANT _CHR-AMBIENT-PLAN-SCRUBBED"
+            ),
             "_CHR-V V.ICOUNT @ CONSTANT _CHR-AMBIENT-ICOUNT",
             "_CHR-V V.VCOUNT @ CONSTANT _CHR-AMBIENT-VCOUNT",
             "_CHR-V V.STR-PTR @ CONSTANT _CHR-AMBIENT-STR",
@@ -62642,10 +62674,23 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
                 ],
             ),
             "_EXT4-MUTATION-OWNER-RANGES-CLEAR",
+            "_CHR-XC-PLAN ?DUP IF _XC-P-SIZE 0x5A FILL THEN",
             "DEPTH CONSTANT _CHR-DEPTH-BEFORE",
             (
                 'S" new.txt" _CHR-V VFS-MKFILE? '
                 "CONSTANT _CHR-CREATE-IOR CONSTANT _CHR-D"
+            ),
+            (
+                "_CHR-CTX _CHR-V _XC-P-CONTEXT? "
+                "CONSTANT _CHR-FINAL-PLAN-IOR CONSTANT _CHR-FINAL-PLAN"
+            ),
+            (
+                "_CHR-FINAL-PLAN _CHR-XC-PLAN = "
+                "_CHR-CTX _EXT4-C.XC-PLAN-SPAN + @ "
+                "_CHR-XC-PLAN-SPAN = AND "
+                "_CHR-XC-PLAN DUP 0= IF DROP 0 ELSE "
+                "_XC-P-SIZE _EXT4-BYTES-ZERO? THEN AND "
+                "CONSTANT _CHR-XC-PLAN-REUSED"
             ),
             "DEPTH CONSTANT _CHR-DEPTH-AFTER",
             (
@@ -62705,6 +62750,8 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
                     "_CHR-PROFILE-SIZE-IOR 0=",
                     "_CHR-PROFILE-BIND-IOR 0=",
                     "_CHR-PROFILE-USED _CHR-PROFILE-SIZE =",
+                    "_CHR-XC-PLAN-IOR 0=",
+                    "_CHR-XC-PLAN-SPAN _XC-P-SIZE =",
                     "_CHR-CD-IOR 0=",
                     "_CHR-LOAD-IOR 0=",
                     "_CHR-STAT-BEFORE-IOR 0=",
@@ -62722,7 +62769,9 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
                     "_CHR-AMBIENT-VCOUNT _CHR-VCOUNT-BEFORE =",
                     "_CHR-AMBIENT-STR _CHR-STR-BEFORE =",
                     "_CHR-AMBIENT-PRESERVED @ 0<>",
+                    "_CHR-AMBIENT-PLAN-SCRUBBED 0<>",
                     "_CHR-CREATE-IOR VFS-E-NOSPC =",
+                    "_CHR-FINAL-PLAN-IOR 0=",
                     "_CHR-LAST-IOR _CHR-CREATE-IOR =",
                     "_CHR-D 0=",
                     "_CHR-CHILD 0=",
@@ -62754,27 +62803,13 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
                     "_XC-WRITER @ 0=",
                     "_XC-TX @ 0=",
                     "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                    (
-                        "_XC-DIR-SNAPSHOT "
-                        "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                        "_EXT4-BYTES-ZERO?"
-                    ),
-                    (
-                        "_XC-ROOT-SNAPSHOT "
-                        "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                        "_EXT4-BYTES-ZERO?"
-                    ),
+                    "_CHR-XC-PLAN-REUSED 0<>",
                     (
                         "_XC-ROOT-CURRENT "
                         "_EXT4-STAGED-WRITE-BLOCK-SIZE "
                         "_EXT4-BYTES-ZERO?"
                     ),
                     "_XC-DIRECTORY-DESC _EXT4-DD-SIZE _EXT4-BYTES-ZERO?",
-                    (
-                        "_XC-PARENT-SNAPSHOT "
-                        "_EXT4-STAGED-WRITE-INODE-SIZE "
-                        "_EXT4-BYTES-ZERO?"
-                    ),
                     (
                         "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                         "_EXT4-BYTES-ZERO?"
@@ -62784,13 +62819,7 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
                         "_XC-CONVERT-PLAN-CELLS * CELLS "
                         "_EXT4-BYTES-ZERO?"
                     ),
-                    "_XC-CONVERT-HASH-BASE 24 _EXT4-BYTES-ZERO?",
-                    "_XC-INDEXED @ _XC-SHAPE-SET @ OR 0=",
-                    "_XC-INDEX-BASELINE @ 0=",
-                    (
-                        "_XC-CONVERTING @ _XC-CONVERT-BASELINE @ OR "
-                        "_XC-CONVERT-CANDIDATE-BASELINE @ OR 0="
-                    ),
+                    "_XC-CONVERTING @ 0=",
                     (
                         "_XC-CONVERT-HASH-VERSION @ _XC-CONVERT-COUNT @ OR "
                         "_XC-CONVERT-TOTAL @ OR _XC-CONVERT-SPLIT @ OR 0="
@@ -62804,33 +62833,14 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
                         "_XC-CONVERT-SEPARATOR @ OR 0="
                     ),
                     (
-                        "_XC-CONVERT-BASE-PARENT-GROUP @ "
-                        "_XC-CONVERT-BASE-PARENT-HOME @ OR "
-                        "_XC-CONVERT-BASE-PARENT-OFF @ OR 0="
-                    ),
-                    (
-                        "_XC-CONVERT-BASE-DIR-HOME @ "
-                        "_XC-CONVERT-A-GROUP @ OR "
+                        "_XC-CONVERT-A-GROUP @ "
                         "_XC-CONVERT-A-BITMAP-HOME @ OR 0="
                     ),
                     (
                         "_XC-CONVERT-A-GDT-HOME @ _XC-CONVERT-B-GROUP @ OR "
                         "_XC-CONVERT-B-BITMAP-HOME @ OR 0="
                     ),
-                    (
-                        "_XC-CONVERT-B-GDT-HOME @ _XC-CONVERT-BASE-A @ OR "
-                        "_XC-CONVERT-BASE-A-GROUP @ OR 0="
-                    ),
-                    (
-                        "_XC-CONVERT-BASE-A-BITMAP-HOME @ "
-                        "_XC-CONVERT-BASE-A-GDT-HOME @ OR "
-                        "_XC-CONVERT-BASE-B @ OR 0="
-                    ),
-                    (
-                        "_XC-CONVERT-BASE-B-GROUP @ "
-                        "_XC-CONVERT-BASE-B-BITMAP-HOME @ OR "
-                        "_XC-CONVERT-BASE-B-GDT-HOME @ OR 0="
-                    ),
+                    "_XC-CONVERT-B-GDT-HOME @ 0=",
                     (
                         "_XC-CONVERT-LEAF-IMAGE @ _XC-CONVERT-ROOT-GEN @ OR "
                         "_XC-CONVERT-EXTENT-ROOT @ OR "
@@ -63043,6 +63053,7 @@ def test_staged_vfs_linear_htree_second_leaf_tear_replays_all_nine_homes(
                     'S" new.txt" _CHT-V VFS-MKFILE? '
                     "CONSTANT _CHT-CREATE-IOR CONSTANT _CHT-D"
                 ),
+                _forth_xc_plan_scrubbed("_CHT-XC-PLAN-SCRUBBED", "_CHT-CTX"),
                 "DEPTH CONSTANT _CHT-DEPTH-AFTER",
                 "_CHT-V V.LAST-IOR @ CONSTANT _CHT-LAST-IOR",
                 "_CHT-D D.VNODE @ CONSTANT _CHT-VN",
@@ -63162,16 +63173,7 @@ def test_staged_vfs_linear_htree_second_leaf_tear_replays_all_nine_homes(
                     "_CHT-SCRUBBED-OK",
                     [
                             "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                            (
-                                "_XC-DIR-SNAPSHOT "
-                                "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
-                                "_XC-ROOT-SNAPSHOT "
-                                "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
+                            "_CHT-XC-PLAN-SCRUBBED 0<>",
                             (
                                 "_XC-ROOT-CURRENT "
                                 "_EXT4-STAGED-WRITE-BLOCK-SIZE "
@@ -63179,11 +63181,6 @@ def test_staged_vfs_linear_htree_second_leaf_tear_replays_all_nine_homes(
                             ),
                             (
                                 "_XC-DIRECTORY-DESC _EXT4-DD-SIZE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
-                                "_XC-PARENT-SNAPSHOT "
-                                "_EXT4-STAGED-WRITE-INODE-SIZE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
@@ -63196,14 +63193,7 @@ def test_staged_vfs_linear_htree_second_leaf_tear_replays_all_nine_homes(
                                 "_XC-CONVERT-PLAN-CELLS * CELLS "
                                 "_EXT4-BYTES-ZERO?"
                             ),
-                            "_XC-CONVERT-HASH-BASE 24 _EXT4-BYTES-ZERO?",
-                            "_XC-INDEXED @ _XC-SHAPE-SET @ OR 0=",
-                            "_XC-INDEX-BASELINE @ 0=",
-                            (
-                                "_XC-CONVERTING @ "
-                                "_XC-CONVERT-BASELINE @ OR "
-                                "_XC-CONVERT-CANDIDATE-BASELINE @ OR 0="
-                            ),
+                            "_XC-CONVERTING @ 0=",
                             (
                                 "_XC-CONVERT-HASH-VERSION @ "
                                 "_XC-CONVERT-COUNT @ OR "
@@ -63220,13 +63210,7 @@ def test_staged_vfs_linear_htree_second_leaf_tear_replays_all_nine_homes(
                                 "_XC-CONVERT-SEPARATOR @ OR 0="
                             ),
                             (
-                                "_XC-CONVERT-BASE-PARENT-GROUP @ "
-                                "_XC-CONVERT-BASE-PARENT-HOME @ OR "
-                                "_XC-CONVERT-BASE-PARENT-OFF @ OR 0="
-                            ),
-                            (
-                                "_XC-CONVERT-BASE-DIR-HOME @ "
-                                "_XC-CONVERT-A-GROUP @ OR "
+                                "_XC-CONVERT-A-GROUP @ "
                                 "_XC-CONVERT-A-BITMAP-HOME @ OR 0="
                             ),
                             (
@@ -63234,21 +63218,7 @@ def test_staged_vfs_linear_htree_second_leaf_tear_replays_all_nine_homes(
                                 "_XC-CONVERT-B-GROUP @ OR "
                                 "_XC-CONVERT-B-BITMAP-HOME @ OR 0="
                             ),
-                            (
-                                "_XC-CONVERT-B-GDT-HOME @ "
-                                "_XC-CONVERT-BASE-A @ OR "
-                                "_XC-CONVERT-BASE-A-GROUP @ OR 0="
-                            ),
-                            (
-                                "_XC-CONVERT-BASE-A-BITMAP-HOME @ "
-                                "_XC-CONVERT-BASE-A-GDT-HOME @ OR "
-                                "_XC-CONVERT-BASE-B @ OR 0="
-                            ),
-                            (
-                                "_XC-CONVERT-BASE-B-GROUP @ "
-                                "_XC-CONVERT-BASE-B-BITMAP-HOME @ OR "
-                                "_XC-CONVERT-BASE-B-GDT-HOME @ OR 0="
-                            ),
+                            "_XC-CONVERT-B-GDT-HOME @ 0=",
                             (
                                 "_XC-CONVERT-LEAF-IMAGE @ "
                                 "_XC-CONVERT-ROOT-GEN @ OR "
@@ -63429,35 +63399,45 @@ def test_indexed_split_inline_depth_zero_map_extend_and_append(
             ),
             "_IM-V _EXT4-CTX CONSTANT _IM-CTX",
             "_IM-CTX _XC-CTX !",
-            "_XC-PARENT-SNAPSHOT _EXT4-I.BLOCK + CONSTANT _IM-NODE",
-            ": _IM-RESET ( -- )",
+            "CREATE _IM-PLAN-E _XC-P-SIZE ALLOT",
+            "CREATE _IM-PLAN-A _XC-P-SIZE ALLOT",
+            "CREATE _IM-PLAN-E-GOLD _XC-P-SIZE ALLOT",
+            "CREATE _IM-PLAN-A-GOLD _XC-P-SIZE ALLOT",
             (
-                "_XC-PARENT-SNAPSHOT _EXT4-STAGED-WRITE-INODE-SIZE "
-                "0 FILL"
+                "_IM-PLAN-E _XC-P.PARENT-SNAPSHOT + _EXT4-I.BLOCK + "
+                "CONSTANT _IM-E-NODE"
             ),
+            (
+                "_IM-PLAN-A _XC-P.PARENT-SNAPSHOT + _EXT4-I.BLOCK + "
+                "CONSTANT _IM-A-NODE"
+            ),
+            ": _IM-RESET ( plan -- )",
+            "DUP _XC-P-SIZE 0 FILL",
+            "_XC-P.PARENT-SNAPSHOT + _EXT4-I.BLOCK +",
             "_XC-DIRECTORY-DESC _EXT4-DD-SIZE 0 FILL",
-            "0xF30A _IM-NODE W!",
-            "2 _IM-NODE 2 + W!",
-            "4 _IM-NODE 4 + W!",
-            "0 _IM-NODE 6 + W!",
-            "0x11223344 _IM-NODE 8 + L!",
-            "0 _IM-NODE 12 + L!",
-            "1 _IM-NODE 16 + W!",
-            "0 _IM-NODE 18 + W!",
-            "100 _IM-NODE 20 + L!",
-            "1 _IM-NODE 24 + L!",
-            "2 _IM-NODE 28 + W!",
-            "0 _IM-NODE 30 + W!",
-            "200 _IM-NODE 32 + L!",
+            "0xF30A OVER W!",
+            "2 OVER 2 + W!",
+            "4 OVER 4 + W!",
+            "0 OVER 6 + W!",
+            "0x11223344 OVER 8 + L!",
+            "0 OVER 12 + L!",
+            "1 OVER 16 + W!",
+            "0 OVER 18 + W!",
+            "100 OVER 20 + L!",
+            "1 OVER 24 + L!",
+            "2 OVER 28 + W!",
+            "0 OVER 30 + W!",
+            "200 SWAP 32 + L!",
             "3072 _XC-DIRECTORY-DESC _EXT4-DD.SIZE + !",
             "3 _XC-DIRECTORY-DESC _EXT4-DD.LOGICAL-BLOCKS + !",
             "6 _XC-DIRECTORY-DESC _EXT4-DD.SECTORS + !",
-            "0 _XC-INDEX-BASELINE !",
             ";",
-            "_IM-RESET",
+            "_IM-PLAN-E _IM-RESET",
+            "_IM-PLAN-A _XC-P-SIZE 0xA5 FILL",
+            "_IM-PLAN-A _IM-PLAN-A-GOLD _XC-P-SIZE MOVE",
             "DEPTH CONSTANT _IM-E-DEPTH-BEFORE",
             (
-                "_XC-INDEX-CAPTURE-MAP "
+                "_IM-PLAN-E _XC-INDEX-CAPTURE-MAP NIP "
                 "CONSTANT _IM-E-CAPTURE-IOR"
             ),
             "202 _XC-INDEX-NEW-HOME !",
@@ -63466,9 +63446,15 @@ def test_indexed_split_inline_depth_zero_map_extend_and_append(
                 "CONSTANT _IM-E-PLAN-IOR"
             ),
             (
-                "_XC-PARENT-SNAPSHOT _XC-APPLY-INDEX-SPLIT-PARENT "
+                "_IM-PLAN-E _XC-P.PARENT-SNAPSHOT + "
+                "_XC-APPLY-INDEX-SPLIT-PARENT "
                 "CONSTANT _IM-E-APPLY-IOR"
             ),
+            (
+                "_IM-PLAN-A _IM-PLAN-A-GOLD _XC-P-SIZE _EXT4-BYTES=? "
+                "CONSTANT _IM-E-ISOLATED"
+            ),
+            "_IM-PLAN-E _IM-PLAN-E-GOLD _XC-P-SIZE MOVE",
             "DEPTH CONSTANT _IM-E-DEPTH-AFTER",
             *_forth_accumulated_conjunction(
                 "_IM-EXTEND-OK",
@@ -63478,10 +63464,11 @@ def test_indexed_split_inline_depth_zero_map_extend_and_append(
                     "_IM-E-CAPTURE-IOR 0=",
                     "_IM-E-PLAN-IOR 0=",
                     "_IM-E-APPLY-IOR 0=",
+                    "_IM-E-ISOLATED 0<>",
                     "_IM-E-DEPTH-AFTER _IM-E-DEPTH-BEFORE =",
                     "_XC-INDEX-MAP-DEPTH @ 0=",
                     "_XC-INDEX-MAP-HOME @ 0=",
-                    "_XC-INDEX-MAP-NODE @ _IM-NODE =",
+                    "_XC-INDEX-MAP-NODE @ _IM-E-NODE =",
                     "_XC-INDEX-MAP-COUNT @ 2 =",
                     "_XC-INDEX-MAP-MAX @ 4 =",
                     "_XC-INDEX-MAP-LAST-LOGICAL @ 1 =",
@@ -63491,27 +63478,42 @@ def test_indexed_split_inline_depth_zero_map_extend_and_append(
                     "_XC-INDEX-NEW-LOGICAL @ 3 =",
                     "_XC-INDEX-NEW-SIZE @ 4096 =",
                     "_XC-INDEX-NEW-SECTORS @ 8 =",
-                    "_XC-NEW-INODE-PTR @ _XC-PARENT-SNAPSHOT =",
-                    "_XC-PARENT-SNAPSHOT _EXT4-I.SIZE-LO + L@ 4096 =",
-                    "_XC-PARENT-SNAPSHOT _EXT4-I.SIZE-HI + L@ 0=",
-                    "_XC-PARENT-SNAPSHOT _EXT4-I.BLOCKS-LO + L@ 8 =",
-                    "_XC-PARENT-SNAPSHOT _EXT4-I.BLOCKS-HI + W@ 0=",
-                    "_IM-NODE W@ 0xF30A =",
-                    "_IM-NODE 2 + W@ 2 =",
-                    "_IM-NODE 4 + W@ 4 =",
-                    "_IM-NODE 6 + W@ 0=",
-                    "_IM-NODE 8 + L@ 0x11223344 =",
-                    "_IM-NODE 24 + L@ 1 =",
-                    "_IM-NODE 28 + W@ 3 =",
-                    "_IM-NODE 30 + W@ 0=",
-                    "_IM-NODE 32 + L@ 200 =",
-                    "_IM-NODE 36 + 12 _EXT4-BYTES-ZERO?",
+                    (
+                        "_XC-NEW-INODE-PTR @ "
+                        "_IM-PLAN-E _XC-P.PARENT-SNAPSHOT + ="
+                    ),
+                    (
+                        "_IM-PLAN-E _XC-P.PARENT-SNAPSHOT + "
+                        "_EXT4-I.SIZE-LO + L@ 4096 ="
+                    ),
+                    (
+                        "_IM-PLAN-E _XC-P.PARENT-SNAPSHOT + "
+                        "_EXT4-I.SIZE-HI + L@ 0="
+                    ),
+                    (
+                        "_IM-PLAN-E _XC-P.PARENT-SNAPSHOT + "
+                        "_EXT4-I.BLOCKS-LO + L@ 8 ="
+                    ),
+                    (
+                        "_IM-PLAN-E _XC-P.PARENT-SNAPSHOT + "
+                        "_EXT4-I.BLOCKS-HI + W@ 0="
+                    ),
+                    "_IM-E-NODE W@ 0xF30A =",
+                    "_IM-E-NODE 2 + W@ 2 =",
+                    "_IM-E-NODE 4 + W@ 4 =",
+                    "_IM-E-NODE 6 + W@ 0=",
+                    "_IM-E-NODE 8 + L@ 0x11223344 =",
+                    "_IM-E-NODE 24 + L@ 1 =",
+                    "_IM-E-NODE 28 + W@ 3 =",
+                    "_IM-E-NODE 30 + W@ 0=",
+                    "_IM-E-NODE 32 + L@ 200 =",
+                    "_IM-E-NODE 36 + 12 _EXT4-BYTES-ZERO?",
                 ],
             ),
-            "_IM-RESET",
+            "_IM-PLAN-A _IM-RESET",
             "DEPTH CONSTANT _IM-A-DEPTH-BEFORE",
             (
-                "_XC-INDEX-CAPTURE-MAP "
+                "_IM-PLAN-A _XC-INDEX-CAPTURE-MAP NIP "
                 "CONSTANT _IM-A-CAPTURE-IOR"
             ),
             "300 _XC-INDEX-NEW-HOME !",
@@ -63520,8 +63522,13 @@ def test_indexed_split_inline_depth_zero_map_extend_and_append(
                 "CONSTANT _IM-A-PLAN-IOR"
             ),
             (
-                "_XC-PARENT-SNAPSHOT _XC-APPLY-INDEX-SPLIT-PARENT "
+                "_IM-PLAN-A _XC-P.PARENT-SNAPSHOT + "
+                "_XC-APPLY-INDEX-SPLIT-PARENT "
                 "CONSTANT _IM-A-APPLY-IOR"
+            ),
+            (
+                "_IM-PLAN-E _IM-PLAN-E-GOLD _XC-P-SIZE _EXT4-BYTES=? "
+                "CONSTANT _IM-A-ISOLATED"
             ),
             "DEPTH CONSTANT _IM-A-DEPTH-AFTER",
             *_forth_accumulated_conjunction(
@@ -63530,10 +63537,11 @@ def test_indexed_split_inline_depth_zero_map_extend_and_append(
                     "_IM-A-CAPTURE-IOR 0=",
                     "_IM-A-PLAN-IOR 0=",
                     "_IM-A-APPLY-IOR 0=",
+                    "_IM-A-ISOLATED 0<>",
                     "_IM-A-DEPTH-AFTER _IM-A-DEPTH-BEFORE =",
                     "_XC-INDEX-MAP-DEPTH @ 0=",
                     "_XC-INDEX-MAP-HOME @ 0=",
-                    "_XC-INDEX-MAP-NODE @ _IM-NODE =",
+                    "_XC-INDEX-MAP-NODE @ _IM-A-NODE =",
                     "_XC-INDEX-MAP-COUNT @ 2 =",
                     "_XC-INDEX-MAP-MAX @ 4 =",
                     "_XC-INDEX-MAP-LAST-LOGICAL @ 1 =",
@@ -63543,25 +63551,40 @@ def test_indexed_split_inline_depth_zero_map_extend_and_append(
                     "_XC-INDEX-NEW-LOGICAL @ 3 =",
                     "_XC-INDEX-NEW-SIZE @ 4096 =",
                     "_XC-INDEX-NEW-SECTORS @ 8 =",
-                    "_XC-NEW-INODE-PTR @ _XC-PARENT-SNAPSHOT =",
-                    "_XC-PARENT-SNAPSHOT _EXT4-I.SIZE-LO + L@ 4096 =",
-                    "_XC-PARENT-SNAPSHOT _EXT4-I.SIZE-HI + L@ 0=",
-                    "_XC-PARENT-SNAPSHOT _EXT4-I.BLOCKS-LO + L@ 8 =",
-                    "_XC-PARENT-SNAPSHOT _EXT4-I.BLOCKS-HI + W@ 0=",
-                    "_IM-NODE W@ 0xF30A =",
-                    "_IM-NODE 2 + W@ 3 =",
-                    "_IM-NODE 4 + W@ 4 =",
-                    "_IM-NODE 6 + W@ 0=",
-                    "_IM-NODE 8 + L@ 0x11223344 =",
-                    "_IM-NODE 24 + L@ 1 =",
-                    "_IM-NODE 28 + W@ 2 =",
-                    "_IM-NODE 30 + W@ 0=",
-                    "_IM-NODE 32 + L@ 200 =",
-                    "_IM-NODE 36 + L@ 3 =",
-                    "_IM-NODE 40 + W@ 1 =",
-                    "_IM-NODE 42 + W@ 0=",
-                    "_IM-NODE 44 + L@ 300 =",
-                    "_IM-NODE 48 + 12 _EXT4-BYTES-ZERO?",
+                    (
+                        "_XC-NEW-INODE-PTR @ "
+                        "_IM-PLAN-A _XC-P.PARENT-SNAPSHOT + ="
+                    ),
+                    (
+                        "_IM-PLAN-A _XC-P.PARENT-SNAPSHOT + "
+                        "_EXT4-I.SIZE-LO + L@ 4096 ="
+                    ),
+                    (
+                        "_IM-PLAN-A _XC-P.PARENT-SNAPSHOT + "
+                        "_EXT4-I.SIZE-HI + L@ 0="
+                    ),
+                    (
+                        "_IM-PLAN-A _XC-P.PARENT-SNAPSHOT + "
+                        "_EXT4-I.BLOCKS-LO + L@ 8 ="
+                    ),
+                    (
+                        "_IM-PLAN-A _XC-P.PARENT-SNAPSHOT + "
+                        "_EXT4-I.BLOCKS-HI + W@ 0="
+                    ),
+                    "_IM-A-NODE W@ 0xF30A =",
+                    "_IM-A-NODE 2 + W@ 3 =",
+                    "_IM-A-NODE 4 + W@ 4 =",
+                    "_IM-A-NODE 6 + W@ 0=",
+                    "_IM-A-NODE 8 + L@ 0x11223344 =",
+                    "_IM-A-NODE 24 + L@ 1 =",
+                    "_IM-A-NODE 28 + W@ 2 =",
+                    "_IM-A-NODE 30 + W@ 0=",
+                    "_IM-A-NODE 32 + L@ 200 =",
+                    "_IM-A-NODE 36 + L@ 3 =",
+                    "_IM-A-NODE 40 + W@ 1 =",
+                    "_IM-A-NODE 42 + W@ 0=",
+                    "_IM-A-NODE 44 + L@ 300 =",
+                    "_IM-A-NODE 48 + 12 _EXT4-BYTES-ZERO?",
                 ],
             ),
             "0 _IM-V VFS-UNMOUNT CONSTANT _IM-UNMOUNT-IOR",
@@ -64391,7 +64414,10 @@ def staged_public_indexed_leaf_split_fixture(
         ],
         patches=source_patches,
         capture_media=backing,
-        max_steps=1_450_000_000,
+        # Stage 4 completed all mutation checks under the former 1.45B
+        # bound but reached it while unmounting. Keep a narrow deterministic
+        # allowance for the explicitly threaded plan lifecycle and cleanup.
+        max_steps=1_500_000_000,
     )
     _assert_emitted(output, "EXT4-PUBLIC-CREATE-INDEXED-LEAF-SPLIT")
     _assert_emitted(
@@ -64678,6 +64704,7 @@ def test_staged_vfs_indexed_leaf_split_new_leaf_tear_replays_ten_homes(
                     'S" new.txt" _ISF-V VFS-MKFILE? '
                     "CONSTANT _ISF-CREATE-IOR CONSTANT _ISF-D"
                 ),
+                _forth_xc_plan_scrubbed("_ISF-XC-PLAN-SCRUBBED", "_ISF-CTX"),
                 "DEPTH CONSTANT _ISF-DEPTH-AFTER",
                 "_ISF-V V.LAST-IOR @ CONSTANT _ISF-LAST-IOR",
                 "_ISF-D D.VNODE @ CONSTANT _ISF-VN",
@@ -64792,33 +64819,14 @@ def test_staged_vfs_indexed_leaf_split_new_leaf_tear_replays_ten_homes(
                     "_ISF-SCRUBBED-OK",
                     [
                         "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        (
-                            "_XC-DIR-SNAPSHOT "
-                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XC-ROOT-SNAPSHOT "
-                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
+                        "_ISF-XC-PLAN-SCRUBBED 0<>",
                         (
                             "_XC-ROOT-CURRENT "
                             "_EXT4-STAGED-WRITE-BLOCK-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XC-INDEX-MAP-SNAPSHOT "
-                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
                             "_XC-DIRECTORY-DESC _EXT4-DD-SIZE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XC-PARENT-SNAPSHOT "
-                            "_EXT4-STAGED-WRITE-INODE-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
@@ -64831,9 +64839,6 @@ def test_staged_vfs_indexed_leaf_split_new_leaf_tear_replays_ten_homes(
                             "_XC-CONVERT-PLAN-CELLS * CELLS "
                             "_EXT4-BYTES-ZERO?"
                         ),
-                        "_XC-CONVERT-HASH-BASE 24 _EXT4-BYTES-ZERO?",
-                        "_XC-INDEXED @ _XC-SHAPE-SET @ OR 0=",
-                        "_XC-INDEX-BASELINE @ 0=",
                         "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
                         "_EXT4-MUTATION-OWNER-INO @ 0=",
                         "_EXT4-MUTATION-MAP-TARGET @ 0=",
@@ -64882,7 +64887,8 @@ def test_staged_vfs_indexed_leaf_split_new_leaf_tear_replays_ten_homes(
                 }
             },
             capture_media=faulted,
-            max_steps=1_450_000_000,
+            # Match the qualified success journey's Stage 4 cleanup bound.
+            max_steps=1_500_000_000,
         )
         for marker in (
             "EXT4-INDEXED-LEAF-SPLIT-W27-PUBLISHED",
@@ -65095,6 +65101,7 @@ def staged_public_indexed_create_fixture(
                 'S" new.txt" _IC-V VFS-MKFILE? '
                 "CONSTANT _IC-CREATE-IOR CONSTANT _IC-D"
             ),
+            _forth_xc_plan_scrubbed("_IC-XC-PLAN-SCRUBBED", "_IC-CTX"),
             "_IC-D D.VNODE @ CONSTANT _IC-VN",
             (
                 'S" /fixture/indexed/new.txt" _IC-V VFS-RESOLVE? '
@@ -65109,11 +65116,6 @@ def staged_public_indexed_create_fixture(
             "_XC-INODE @ CONSTANT _IC-INODE",
             "_XC-NEW-GEN @ CONSTANT _IC-GEN",
             "_XC-DIR-HOME @ CONSTANT _IC-LEAF-HOME",
-            "_XC-INDEX-BASE-ROOT-HOME @ CONSTANT _IC-ROOT-HOME",
-            "_XC-INDEX-BASE-HASH @ CONSTANT _IC-HASH",
-            "_XC-INDEX-BASE-ROUTE @ CONSTANT _IC-ROUTE",
-            "_XC-INDEX-BASE-ENTRY @ CONSTANT _IC-ENTRY",
-            "_XC-INDEX-BASE-LOGICAL @ CONSTANT _IC-LOGICAL",
             "_IC-CTX _EXT4-C.J.WRITER + @ CONSTANT _IC-WRITER",
             "0 _IC-V VFS-UNMOUNT CONSTANT _IC-UNMOUNT-IOR",
             *_forth_accumulated_conjunction(
@@ -65153,11 +65155,7 @@ def staged_public_indexed_create_fixture(
                     "_IC-INODE 33 =",
                     "_IC-GEN 1 =",
                     "_IC-LEAF-HOME 1357 =",
-                    "_IC-ROOT-HOME 1355 =",
-                    "_IC-HASH 0x12485C58 =",
-                    "_IC-ROUTE 0=",
-                    "_IC-ENTRY 0=",
-                    "_IC-LOGICAL 1 =",
+                    "_IC-XC-PLAN-SCRUBBED 0<>",
                     "_IC-WRITER _EXT4-JWR-IDLE-CLEAN?",
                     "_IC-UNMOUNT-IOR 0=",
                 ],
@@ -65393,6 +65391,9 @@ def test_staged_vfs_indexed_create_selected_leaf_tear_replays_six_homes(
                 ),
                 "_ICH-D D.VNODE @ CONSTANT _ICH-VN",
                 "_ICH-V V.LAST-IOR @ CONSTANT _ICH-LAST-IOR",
+                _forth_xc_plan_scrubbed(
+                    "_ICH-XC-PLAN-SCRUBBED", "_ICH-CTX"
+                ),
                 (
                     'S" /fixture/indexed/new.txt" _ICH-V VFS-RESOLVE? '
                     "CONSTANT _ICH-RESOLVE-IOR CONSTANT _ICH-RESOLVED"
@@ -65497,16 +65498,7 @@ def test_staged_vfs_indexed_create_selected_leaf_tear_replays_six_homes(
                     _forth_conjunction(
                         [
                             "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                            (
-                                "_XC-DIR-SNAPSHOT "
-                                "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
-                                "_XC-ROOT-SNAPSHOT "
-                                "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
+                            "_ICH-XC-PLAN-SCRUBBED 0<>",
                             (
                                 "_XC-ROOT-CURRENT "
                                 "_EXT4-STAGED-WRITE-BLOCK-SIZE "
@@ -65517,18 +65509,10 @@ def test_staged_vfs_indexed_create_selected_leaf_tear_replays_six_homes(
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XC-PARENT-SNAPSHOT "
-                                "_EXT4-STAGED-WRITE-INODE-SIZE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
                                 "_XC-OLD-INODE "
                                 "_EXT4-STAGED-WRITE-INODE-SIZE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
-                            "_XC-INDEXED @ 0=",
-                            "_XC-SHAPE-SET @ 0=",
-                            "_XC-INDEX-BASELINE @ 0=",
                             *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                         ]
                     )
@@ -65896,6 +65880,7 @@ def _run_staged_indexed_create_refusal(
                 "CONSTANT _IR-DIRTY"
             ),
             "_IR-V V.FLAGS @ VFS-F-RO AND CONSTANT _IR-RO",
+            _forth_xc_plan_scrubbed("_IR-XC-PLAN-SCRUBBED", "_IR-CTX"),
             "0 _IR-V VFS-UNMOUNT CONSTANT _IR-UNMOUNT-IOR",
             *_forth_accumulated_conjunction(
                 "_IR-OK",
@@ -65936,32 +65921,13 @@ def _run_staged_indexed_create_refusal(
                     "_IR-DIRTY 0=",
                     "_IR-RO 0=",
                     "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                    (
-                        "_XC-DIR-SNAPSHOT "
-                        "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                        "_EXT4-BYTES-ZERO?"
-                    ),
-                    (
-                        "_XC-ROOT-SNAPSHOT "
-                        "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                        "_EXT4-BYTES-ZERO?"
-                    ),
+                    "_IR-XC-PLAN-SCRUBBED 0<>",
                     (
                         "_XC-ROOT-CURRENT "
                         "_EXT4-STAGED-WRITE-BLOCK-SIZE "
                         "_EXT4-BYTES-ZERO?"
                     ),
-                    (
-                        "_XC-INDEX-MAP-SNAPSHOT "
-                        "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                        "_EXT4-BYTES-ZERO?"
-                    ),
                     "_XC-DIRECTORY-DESC _EXT4-DD-SIZE _EXT4-BYTES-ZERO?",
-                    (
-                        "_XC-PARENT-SNAPSHOT "
-                        "_EXT4-STAGED-WRITE-INODE-SIZE "
-                        "_EXT4-BYTES-ZERO?"
-                    ),
                     (
                         "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                         "_EXT4-BYTES-ZERO?"
@@ -65971,7 +65937,6 @@ def _run_staged_indexed_create_refusal(
                         "_XC-CONVERT-PLAN-CELLS * CELLS "
                         "_EXT4-BYTES-ZERO?"
                     ),
-                    "_XC-CONVERT-HASH-BASE 24 _EXT4-BYTES-ZERO?",
                     *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
                     "_IR-UNMOUNT-IOR 0=",
                 ],
@@ -66334,6 +66299,7 @@ def test_staged_vfs_link_into_indexed_parent_remains_unsupported(
             ),
             "_IL-V V.FLAGS @ VFS-F-DIRTY AND CONSTANT _IL-DIRTY",
             "_IL-V V.FLAGS @ VFS-F-RO AND CONSTANT _IL-RO",
+            _forth_xc_plan_scrubbed("_IL-XC-PLAN-SCRUBBED", "_IL-CTX"),
             "0 _IL-V VFS-UNMOUNT CONSTANT _IL-UNMOUNT-IOR",
             *_forth_accumulated_conjunction(
                 "_IL-OK",
@@ -66378,22 +66344,8 @@ def test_staged_vfs_link_into_indexed_parent_remains_unsupported(
                     "_IL-DIRTY 0=",
                     "_IL-RO 0=",
                     "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                    (
-                        "_XC-DIR-SNAPSHOT "
-                        "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                        "_EXT4-BYTES-ZERO?"
-                    ),
-                    (
-                        "_XC-ROOT-SNAPSHOT "
-                        "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                        "_EXT4-BYTES-ZERO?"
-                    ),
+                    "_IL-XC-PLAN-SCRUBBED 0<>",
                     "_XC-DIRECTORY-DESC _EXT4-DD-SIZE _EXT4-BYTES-ZERO?",
-                    (
-                        "_XC-PARENT-SNAPSHOT "
-                        "_EXT4-STAGED-WRITE-INODE-SIZE "
-                        "_EXT4-BYTES-ZERO?"
-                    ),
                     (
                         "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                         "_EXT4-BYTES-ZERO?"
@@ -67390,6 +67342,9 @@ def test_staged_vfs_mkdir_descriptor_tear_rolls_back_directory(
             faulted,
             [
                 *_staged_mkdir_attempt_forth("_MDF"),
+                _forth_xc_plan_scrubbed(
+                    "_MDF-XC-PLAN-SCRUBBED", "_MDF-CTX"
+                ),
                 (
                     _forth_conjunction(
                         [
@@ -67471,16 +67426,7 @@ def test_staged_vfs_mkdir_descriptor_tear_rolls_back_directory(
                                 "_XC-NAME-SNAPSHOT 256 "
                                 "_EXT4-BYTES-ZERO?"
                             ),
-                            (
-                                "_XC-DIR-SNAPSHOT "
-                                "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
-                                "_XC-PARENT-SNAPSHOT "
-                                "_EXT4-STAGED-WRITE-INODE-SIZE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
+                            "_MDF-XC-PLAN-SCRUBBED 0<>",
                             (
                                 "_XC-OLD-INODE "
                                 "_EXT4-STAGED-WRITE-INODE-SIZE "
@@ -70839,6 +70785,9 @@ def test_staged_vfs_create_descriptor_tear_rolls_back_namespace(
                     'S" created.txt" _CDF-V VFS-MKFILE? '
                     "CONSTANT _CDF-CREATE-IOR CONSTANT _CDF-D"
                 ),
+                _forth_xc_plan_scrubbed(
+                    "_CDF-XC-PLAN-SCRUBBED", "_CDF-CTX"
+                ),
                 (
                     'S" created.txt" _CDF-V V.ROOT @ _VFS-FIND-CHILD '
                     "CONSTANT _CDF-CHILD"
@@ -70897,11 +70846,7 @@ def test_staged_vfs_create_descriptor_tear_rolls_back_namespace(
                                 "_XC-NAME-SNAPSHOT 256 "
                                 "_EXT4-BYTES-ZERO?"
                             ),
-                            (
-                                "_XC-DIR-SNAPSHOT "
-                                "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
+                            "_CDF-XC-PLAN-SCRUBBED 0<>",
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-CREATE-W7-FAULT" THEN'
@@ -71066,6 +71011,9 @@ def test_staged_vfs_create_directory_tear_replays_all_six_homes(
                     'S" created.txt" _CDH-V VFS-MKFILE? '
                     "CONSTANT _CDH-CREATE-IOR CONSTANT _CDH-D"
                 ),
+                _forth_xc_plan_scrubbed(
+                    "_CDH-XC-PLAN-SCRUBBED", "_CDH-CTX"
+                ),
                 "_CDH-D D.VNODE @ CONSTANT _CDH-VN",
                 "_CDH-V V.ROOT @ D.VNODE @ CONSTANT _CDH-ROOT-VN",
                 "_CDH-V V.LAST-IOR @ CONSTANT _CDH-LAST-IOR",
@@ -71159,11 +71107,7 @@ def test_staged_vfs_create_directory_tear_replays_all_six_homes(
                                 "_XC-NAME-SNAPSHOT 256 "
                                 "_EXT4-BYTES-ZERO?"
                             ),
-                            (
-                                "_XC-DIR-SNAPSHOT "
-                                "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
+                            "_CDH-XC-PLAN-SCRUBBED 0<>",
                         ]
                     )
                     + ' IF ." EXT4-PUBLIC-CREATE-W22-SCRUBBED" THEN'
@@ -78970,6 +78914,7 @@ def staged_public_link_fixture(
             "CREATE _LK-BUF 54 ALLOT",
             *expected_forth,
             *_staged_link_attempt_forth("_LK", epoch_ms=epoch_ms),
+            _forth_xc_plan_scrubbed("_LK-XC-PLAN-SCRUBBED", "_LK-CTX"),
             (
                 "_LK-BUF 54 _LK-FD VFS-READ? "
                 "CONSTANT _LK-READ-IOR CONSTANT _LK-ACTUAL"
@@ -79037,15 +78982,7 @@ def staged_public_link_fixture(
                             "_XC-NAME-SNAPSHOT 256 "
                             "_EXT4-BYTES-ZERO?"
                         ),
-                        (
-                            "_XC-DIR-SNAPSHOT "
-                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XC-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
+                        "_LK-XC-PLAN-SCRUBBED 0<>",
                         (
                             "_XC-OLD-INODE _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
@@ -79292,6 +79229,9 @@ def test_staged_vfs_link_descriptor_tear_rolls_back_provisional_name(
             faulted,
             [
                 *_staged_link_attempt_forth("_LD", epoch_ms=epoch_ms),
+                _forth_xc_plan_scrubbed(
+                    "_LD-XC-PLAN-SCRUBBED", "_LD-CTX"
+                ),
                 (
                     _forth_conjunction(
                         [
@@ -79381,15 +79321,7 @@ def test_staged_vfs_link_descriptor_tear_rolls_back_provisional_name(
                                 "_XC-NAME-SNAPSHOT 256 "
                                 "_EXT4-BYTES-ZERO?"
                             ),
-                            (
-                                "_XC-DIR-SNAPSHOT "
-                                "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
-                                "_XC-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
+                            "_LD-XC-PLAN-SCRUBBED 0<>",
                             (
                                 "_XC-OLD-INODE _EXT4-MAX-INODE "
                                 "_EXT4-BYTES-ZERO?"
@@ -79553,6 +79485,9 @@ def test_staged_vfs_link_directory_tear_replays_both_homes(
             faulted,
             [
                 *_staged_link_attempt_forth("_LH", epoch_ms=epoch_ms),
+                _forth_xc_plan_scrubbed(
+                    "_LH-XC-PLAN-SCRUBBED", "_LH-CTX"
+                ),
                 (
                     _forth_conjunction(
                         [
@@ -79632,15 +79567,7 @@ def test_staged_vfs_link_directory_tear_replays_both_homes(
                                 "_XC-NAME-SNAPSHOT 256 "
                                 "_EXT4-BYTES-ZERO?"
                             ),
-                            (
-                                "_XC-DIR-SNAPSHOT "
-                                "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
-                            (
-                                "_XC-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                                "_EXT4-BYTES-ZERO?"
-                            ),
+                            "_LH-XC-PLAN-SCRUBBED 0<>",
                             (
                                 "_XC-OLD-INODE _EXT4-MAX-INODE "
                                 "_EXT4-BYTES-ZERO?"
@@ -80106,6 +80033,7 @@ def test_staged_vfs_link_refuses_unsupported_edges_without_media_writes(
                 'S" /fixture/saturated.txt" _LR-V VFS-RESOLVE? '
                 "CONSTANT _LR-MX-R-IOR CONSTANT _LR-MX-R"
             ),
+            _forth_xc_plan_scrubbed("_LR-XC-PLAN-SCRUBBED", "_LR-CTX"),
             "_LR-CTX _EXT4-C.J.WRITER + @ CONSTANT _LR-WRITER",
             (
                 _forth_conjunction(
@@ -80224,15 +80152,7 @@ def test_staged_vfs_link_refuses_unsupported_edges_without_media_writes(
                 _forth_conjunction(
                     [
                         "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                        (
-                            "_XC-DIR-SNAPSHOT "
-                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "_XC-PARENT-SNAPSHOT _EXT4-MAX-INODE "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
+                        "_LR-XC-PLAN-SCRUBBED 0<>",
                         (
                             "_XC-OLD-INODE _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
@@ -86519,6 +86439,116 @@ def test_staged_vfs_mkdir_then_directory_rename_in_one_write_session(
     assert "landing-dir" in root_listing.stdout
     assert "moved-dir" in landing_listing.stdout
     _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+
+def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
+    """Pin the Stage 4 CREATE certificate, ownership, and lifetime seams."""
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+    admission = (AKASHIC_ROOT / EXT4_ADMISSION_MODULE).read_text(
+        encoding="utf-8"
+    )
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            facade,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    offset_pairs = tuple(
+        (int(index), name)
+        for index, name in re.findall(
+            r"(?m)^\s*(\d+) CELLS CONSTANT (_XC-P\.[A-Z0-9-]+)$",
+            facade,
+        )
+        if int(index) < 39
+    )
+    assert tuple(index for index, _ in offset_pairs) == tuple(range(39))
+    assert offset_pairs[0][1] == "_XC-P.STATE"
+    old_cells = (
+        "_XC-SHAPE-SET",
+        *(name.replace("_XC-P.", "_XC-") for _, name in offset_pairs[1:]),
+    )
+    old_buffers = tuple(
+        name.replace("_XC-P.", "_XC-")
+        for name in (
+            "_XC-P.CONVERT-HASH-BASE",
+            "_XC-P.DIR-SNAPSHOT",
+            "_XC-P.ROOT-SNAPSHOT",
+            "_XC-P.INDEX-MAP-SNAPSHOT",
+            "_XC-P.PARENT-SNAPSHOT",
+        )
+    )
+    assert len(set(old_cells)) == 39
+    assert len(set(old_buffers)) == 5
+    for old_name in (*old_cells, *old_buffers):
+        declaration = rf"(?m)^\s*(?:VARIABLE|CREATE)\s+{re.escape(old_name)}\b"
+        assert re.search(declaration, facade) is None
+    assert re.search(
+        r"(?m)^\s*(?:VARIABLE|CREATE)\s+_XC-P(?:[.\-]|\s|$)", facade
+    ) is None
+
+    assert 39 * 8 + 24 + 3 * 1024 + 256 == 3664
+    for layout_fragment in (
+        "39 CELLS CONSTANT _XC-P.CONVERT-HASH-BASE",
+        "39 CELLS 24 + CONSTANT _XC-P.DIR-SNAPSHOT",
+        "CONSTANT _XC-P.ROOT-SNAPSHOT",
+        "CONSTANT _XC-P.INDEX-MAP-SNAPSHOT",
+        "CONSTANT _XC-P.PARENT-SNAPSHOT",
+        "CONSTANT _XC-P-SIZE",
+        "3 CONSTANT _XC-PS-SEALED",
+    ):
+        assert layout_fragment in facade
+    for admission_fragment in (
+        "15552 CONSTANT _EXT4-C.XC-PLAN",
+        "15560 CONSTANT _EXT4-C.XC-PLAN-SPAN",
+        "15568 CONSTANT _EXT4-CTX-SIZE",
+    ):
+        assert admission_fragment in admission
+
+    ownership = word_body("_EXT4-XC-PLAN-CONTEXT?")
+    mount_plan = word_body("_EXT4-MOUNT-XC-PLAN")
+    context = word_body("_XC-P-CONTEXT?")
+    insert = word_body("_XC-INSERT-COMMON")
+    stage = word_body("_EXT4-JTX-STAGE-INSERT")
+    conversion = word_body("_XC-PLAN-LINEAR-CONVERSION")
+    scrub = word_body("_XC-SCRUB")
+
+    assert "_EXT4-XCP-CTX @ _EXT4-CTX-SIZE + DUP" in ownership
+    assert "_EXT4-C.XC-PLAN + @ <> IF" in ownership
+    assert "_EXT4-XCP-PLAN @ _XC-P-SIZE + _EXT4-XCP-END @ U>" in ownership
+    assert facade.count("_EXT4-XCP-PLAN") == (
+        ownership.count("_EXT4-XCP-PLAN") + 1
+    )
+    assert mount_plan.index("_EXT4-M-STAGED-WRITE @ 0= IF") < (
+        mount_plan.index("ARENA-ALLOT?")
+    )
+    assert "OR IF VFS-E-CORRUPT ELSE 0 THEN EXIT" in mount_plan
+    assert "_EXT4-C.XC-PLAN-SPAN + !" in mount_plan
+    assert mount_plan.count("ARENA-ROLLBACK") >= 3
+    assert "_EXT4-XC-PLAN-CONTEXT?" in context
+    assert " !" not in context
+
+    lifecycle = (
+        "_XC-P-CONTEXT?",
+        "_XC-P-BEGIN",
+        "_XC-PLAN",
+        "_XC-P-SEAL",
+        "_EXT4-JTX-STAGE-INSERT",
+        "_XC-SCRUB",
+    )
+    positions = tuple(insert.index(name) for name in lifecycle)
+    assert positions == tuple(sorted(positions))
+    assert "_XC-P-REQUIRE-SEALED" in stage
+    assert "_XC-P-SCRUB" in scrub
+    assert "_XC-SCRUB-PRIVATE" in scrub
+    sealed_check = conversion.index("_XC-P.STATE + @ _XC-PS-SEALED =")
+    authority = conversion.index("_XC-REQUIRE-HASH-AUTHORITY")
+    assert sealed_check < authority
+    assert "_XC-P.CONVERT-BASELINE + @ 0= AND IF" in conversion
+    assert "VFS-E-CONFLICT EXIT" in conversion[sealed_check:authority]
 
 
 def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:

@@ -8,11 +8,14 @@ separate binding. Load ext4 through the facade:
 REQUIRE utils/fs/drivers/vfs-ext4.f
 ```
 
-The admission unit owns the shared pinned on-disk constants and context layout,
-structured ext4 errors, the checked CRC32C adapter, checked volume reads and
-writes, probe helpers, checked unsigned arithmetic, sparse-super geometry, and
-primary-super validation. It depends directly on `vfs.f` and `math/crc.f` and
-has no dependency or callback into the facade. The internal
+The admission unit owns the shared pinned on-disk constants and base binding-
+context layout, structured ext4 errors, the checked CRC32C adapter, checked
+volume reads and writes, probe helpers, checked unsigned arithmetic,
+sparse-super geometry, and primary-super validation. Its base layout includes
+opaque pointer/span ownership for the facade-defined XC operation record but
+does not interpret that record's schema or policy. It depends directly on
+`vfs.f` and `math/crc.f` and has no dependency or callback into the facade.
+The internal
 [`vfs-ext4-descriptor.f`](vfs-ext4-descriptor.md) unit consumes that foundation
 to authenticate, verify, and checksum group descriptors. The independent
 [`vfs-ext4-bitmap.f`](vfs-ext4-bitmap.md) unit combines admitted geometry,
