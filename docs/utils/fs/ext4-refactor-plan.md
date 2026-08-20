@@ -41,8 +41,9 @@ redirected.
   singleton checks and private clear without moving inode accounting or
   transaction policy. Staged-delete, checkpoint, and final-release admission
   now use exact checked singleton queries as well, removing ext4's last manual
-  all-set reader. The remaining all-clear query and set-mutation helper
-  families follow one at a time.
+  all-set reader. Checkpoint release-range verification likewise uses exact
+  checked all-clear queries. The remaining all-clear query and set-mutation
+  bridge is isolated to inode allocation and follows as one family.
 
 ## Baseline and objective
 

@@ -1168,7 +1168,10 @@ the target inode bit to be clear through that exact logical group view.
 Invalid query geometry is bounds corruption; a valid bit that is still set
 retains the existing corrupt staged-state refusal. Each proof preserves its
 existing surrounding complete-home CRC and byte-comparison order.
-`itable_unused` remains
+Checkpoint release-range verification also requires every released block bit
+to be clear through the canonical exact group-block view; malformed view
+geometry is bounds corruption, while a valid non-clear range retains the
+existing corrupt checkpoint refusal. `itable_unused` remains
 at its pre-free conservative high-water value and is not incremented during
 release; the now-free target record itself is exactly zero. Publish-then-fail
 paths abort and scrub the complete transaction.

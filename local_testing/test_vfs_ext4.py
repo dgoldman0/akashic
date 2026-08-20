@@ -87011,6 +87011,36 @@ def test_ext4_all_set_bridge_is_replaced_by_typed_exact_queries() -> None:
     assert ": _EXT4-BIT-RANGE-SET?" not in source
 
 
+def test_ext4_checkpoint_delete_ranges_use_checked_exact_queries() -> None:
+    source = EXT4_F.read_text(encoding="utf-8")
+    match = re.search(
+        r"(?ms)^:[ \t]+_EXT4-JCP-REQUIRE-DELETE-RANGE"
+        r"(?=[ \t\r\n(])(?P<body>.*?)[ \t]+;",
+        source,
+    )
+    assert match is not None
+    body = match.group("body")
+
+    assert (
+        "_EXT4-JCP-CTX @ _EXT4-C.BLOCK +\n"
+        "        _EXT4-JFB-GROUP-BLOCKS @\n"
+        "        _EXT4-JFB-INDEX @ _EXT4-JFB-CHUNK @ "
+        "BITSET-ALL-CLEAR?"
+    ) in body
+    assert (
+        "BITSET-ALL-CLEAR? 0= IF\n"
+        "            DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+    ) in body
+    assert "0= IF VFS-E-CORRUPT EXIT THEN" in body
+    assert body.index("_EXT4-JFB-NEXT-CHUNK") < body.index(
+        "_EXT4-LOAD-BLOCK-BITMAP"
+    ) < body.index("BITSET-ALL-CLEAR?") < body.index(
+        "_EXT4-JFC-FIND-META"
+    )
+    assert "_EXT4-BIT-RANGE-CLEAR?" not in body
+    assert source.count("_EXT4-BIT-RANGE-CLEAR?") == 5
+
+
 def test_hardware_crc32c_matches_fragmented_ext4_raw_vector(tmp_path: Path) -> None:
     blank = tmp_path / "crc-storage.img"
     blank.write_bytes(bytes(4 * 512))
