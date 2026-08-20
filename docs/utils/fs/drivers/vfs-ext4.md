@@ -968,6 +968,11 @@ requires every initialized bitmap's observed clear-bit count to equal its
 authenticated descriptor counter. Candidate arithmetic is checked and the
 result must pass the complete journal/static-role validator; the exact bitmap
 home and clear bit are then reauthenticated after that cache-clobbering scan.
+Logical popcount, first-clear search, and the final singleton recheck delegate
+to the shared checked bitset utility with the exact group-block count. The
+excluding form searches again only when the ordinary first candidate is the
+withheld bit, so earlier eligible blocks and descriptor accounting retain
+their original meaning.
 Groups with `BLOCK_UNINIT` are skipped rather than initialized implicitly. If
 only such groups advertise free space, selection returns a stable unsupported
 result rather than claiming disk-full or interpreting nonexistent bitmap

@@ -27,9 +27,10 @@ redirected.
   checked `bitset.f` contract landed at `4557527` and now owns logical bitmap
   admission and range mutation for MP64FS's allocation and pending-free views.
   MP64FS retains contiguous first-fit search, pending-mask application, and
-  durability sequencing. The ext4 migration has begun with exact logical
-  block-accounting popcount; its remaining bounded query and mutation helper
-  families follow one at a time.
+  durability sequencing. The ext4 migration now uses exact logical popcount
+  for block accounting and bounded shared queries for free-block candidate
+  selection; its remaining query and mutation helper families follow one at a
+  time.
 
 ## Baseline and objective
 

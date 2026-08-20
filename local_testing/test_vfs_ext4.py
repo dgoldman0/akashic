@@ -86562,6 +86562,52 @@ def test_ext4_exact_block_accounting_uses_shared_logical_popcount() -> None:
     assert "_XT-ACCOUNT-GROUP-SET" not in source
 
 
+def test_ext4_free_block_scan_uses_shared_bounded_queries() -> None:
+    source = EXT4_F.read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    find_from = word_body("_EXT4-FFB-FIND-CLEAR-FROM")
+    scan = word_body("_EXT4-FFB-SCAN-BITMAP")
+    recheck = word_body("_EXT4-FFB-REQUIRE-SAME-CLEAR-BIT")
+
+    assert "-1 _EXT4-FFB-FIRST-CLEAR !" in find_from
+    assert "_EXT4-FFB-GROUP-BLOCKS @ ROT BITSET-FIND-CLEAR?" in find_from
+    assert "2DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in find_from
+    assert "IF _EXT4-FFB-FIRST-CLEAR ! ELSE DROP THEN" in find_from
+    assert scan.count("BITSET-COUNT-SET?") == 1
+    assert (
+        "_EXT4-FFB-CTX @ _EXT4-C.BLOCK +\n"
+        "    _EXT4-FFB-GROUP-BLOCKS @ BITSET-COUNT-SET?"
+    ) in scan
+    assert "_EXT4-FFB-GROUP-BLOCKS @ SWAP -" in scan
+    assert "_EXT4-FFB-GROUP-FREE @ <>" in scan
+    assert scan.count("_EXT4-FFB-FIND-CLEAR-FROM") == 2
+    assert scan.index("BITSET-COUNT-SET?") < scan.index(
+        "_EXT4-FFB-FIND-CLEAR-FROM"
+    )
+    assert "_EXT4-FFB-FIRST-CLEAR @ -1 = IF 0 EXIT THEN" in scan
+    assert "_EXT4-FFB-EXCLUDE-ACTIVE @" in scan
+    assert "_EXT4-FFB-GROUP @ _EXT4-FFB-EXCLUDE-GROUP @ = AND" in scan
+    assert "_EXT4-FFB-FIRST-CLEAR @ _EXT4-FFB-EXCLUDE-INDEX @ = AND" in scan
+    assert "_EXT4-FFB-EXCLUDE-INDEX @ 1+ _EXT4-FFB-FIND-CLEAR-FROM" in scan
+    assert (
+        "_EXT4-FFB-GROUP-BLOCKS @ _EXT4-FFB-FIRST-CLEAR @ BITSET-TEST?"
+        in recheck
+    )
+    assert "DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in recheck
+    assert "VFS-E-CONFLICT EXIT" in recheck
+    assert "_EXT4-FFB-INDEX" not in source
+    assert "_EXT4-FFB-CLEAR-COUNT" not in source
+
+
 def test_hardware_crc32c_matches_fragmented_ext4_raw_vector(tmp_path: Path) -> None:
     blank = tmp_path / "crc-storage.img"
     blank.write_bytes(bytes(4 * 512))
