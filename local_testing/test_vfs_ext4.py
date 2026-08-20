@@ -33594,12 +33594,17 @@ def test_typed_free_block_range_afterimages_compose_and_abort_without_io(
         superblock = source.read(1024)
     assert len(superblock) == 1024
     block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    total_blocks = struct.unpack_from("<I", superblock, 0x04)[0] | (
+        struct.unpack_from("<I", superblock, 0x150)[0] << 32
+    )
     first_data = struct.unpack_from("<I", superblock, 0x14)[0]
     blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
     seed = struct.unpack_from("<I", superblock, 0x270)[0]
     group, first_index = divmod(first_block - first_data, blocks_per_group)
     assert group == 0
-    assert first_index + 5 <= blocks_per_group
+    group_first = first_data + group * blocks_per_group
+    group_blocks = min(blocks_per_group, total_blocks - group_first)
+    assert first_index + 5 <= group_blocks
     gdt_home = 2 if block_size == 1024 else 1
     super_home = 1 if block_size == 1024 else 0
     super_offset = 0 if block_size == 1024 else 1024
@@ -33714,8 +33719,8 @@ def test_typed_free_block_range_afterimages_compose_and_abort_without_io(
                             f"{super_home} ="
                         ),
                         (
-                            f"_FB-BITMAP-IMAGE {first_index} 5 "
-                            "_EXT4-BIT-RANGE-SET? 0="
+                            f"_FB-BITMAP-IMAGE {group_blocks} "
+                            f"{first_index} 5 BITSET-ALL-CLEAR? AND"
                         ),
                         (
                             f"_FB-GDT-IMAGE {descriptor_offset} + "
@@ -86650,6 +86655,60 @@ def test_ext4_single_block_allocation_uses_checked_bitset_mutation() -> None:
         "_EXT4-BLOCK-BITMAP-CRC"
     ) < stage.index("_EXT4-JTX-META-REPLACE")
     assert "_EXT4-SET-BIT-RANGE" not in stage
+
+
+def test_ext4_block_range_free_uses_checked_bitset_mutation() -> None:
+    source = EXT4_F.read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    preflight = word_body("_EXT4-JFB-PREFLIGHT-GROUP")
+    after_home = word_body("_EXT4-JFB-PREFLIGHT-GROUP-AFTER-HOME")
+    stage = word_body("_EXT4-JFB-STAGE-GROUP")
+    staged = word_body("_EXT4-JFB-STAGE-PREFLIGHTED")
+
+    for body in (preflight, after_home):
+        raw, retained = body.split("_EXT4-JTX-META-ACQUIRE", 1)
+        assert body.count("BITSET-ALL-SET?") == 2
+        for view in (raw, retained):
+            assert (
+                "_EXT4-JFB-GROUP-BLOCKS @\n"
+                "    _EXT4-JFB-INDEX @ _EXT4-JFB-CHUNK @ "
+                "BITSET-ALL-SET?"
+            ) in view
+            assert "DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in view
+        assert "EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT" in raw
+        assert "VFS-E-CONFLICT EXIT" in retained
+        assert "_EXT4-BIT-RANGE-SET?" not in body
+
+    assert (
+        "_EXT4-JFB-WRITER @ _EXT4-JWR.SCRATCH-B + @\n"
+        "    _EXT4-JFB-GROUP-BLOCKS @\n"
+        "    _EXT4-JFB-INDEX @ _EXT4-JFB-CHUNK @ "
+        "BITSET-RANGE-CLEAR?"
+    ) in stage
+    assert "0= IF\n        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT\n    THEN" in stage
+    mutation = stage.index("BITSET-RANGE-CLEAR?")
+    crc_calls = [
+        match.start()
+        for match in re.finditer("_EXT4-BLOCK-BITMAP-CRC", stage)
+    ]
+    assert len(crc_calls) == 2
+    assert crc_calls[0] < mutation < crc_calls[1]
+    assert mutation < stage.index("_EXT4-JFB-ACQUIRE-DESC")
+    assert mutation < stage.index("_EXT4-JTX-META-REPLACE")
+    assert "_EXT4-CLEAR-BIT-RANGE" not in stage
+    assert (
+        "_EXT4-JFB-STAGE-GROUP ?DUP IF\n"
+        "            _EXT4-JFB-FAIL-AFTER-PUBLISH EXIT"
+    ) in staged
 
 
 def test_hardware_crc32c_matches_fragmented_ext4_raw_vector(tmp_path: Path) -> None:

@@ -30,8 +30,10 @@ redirected.
   durability sequencing. The ext4 migration now uses exact logical popcount
   for block accounting and bounded shared queries for free-block candidate
   selection, and its singleton block-allocation family uses checked query and
-  mutation views. Remaining query and mutation helper families follow one at
-  a time.
+  mutation views. Block-range release now likewise delegates its exact-group
+  raw/effective allocation proofs and private after-image clear while ext4
+  retains authentication, counters, checksums, and transactional publication.
+  Remaining query and mutation helper families follow one at a time.
 
 ## Baseline and objective
 

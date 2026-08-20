@@ -923,20 +923,24 @@ inode bitmap/table, sparse-super/GDT interval, or journal extent. This
 anti-alias proof is stronger than the read-side checksum and allocation
 admission needed merely to inspect a filesystem.
 
-For each group, the builder clears the retained effective bitmap bits,
-increments the split group free-block counter, installs the seeded bitmap
-CRC32C, and restamps the descriptor CRC. It coalesces descriptors sharing one
-primary GDT block, then increments and restamps the checksum-valid primary
-superblock inside its complete 1/2/4 KiB home-block image. Repeated disjoint
-calls compose through the transaction-aware acquire boundary; duplicate or
-partially overlapping staged frees return `VFS-E-CONFLICT`. Context caches
-remain media-derived and unchanged until a later strict reload. If any
-internal failure occurs after the first replacement is published, the
-operation automatically aborts and scrubs the whole transaction, so no
-descriptor/bitmap prefix can remain eligible for emission without its
-aggregate superblock update. This builder does not remove an extent or legacy
-map entry, change `i_blocks`, stage a revoke, or free an inode, and it emits no
-media write.
+For each group, exact logical group bounds are passed to the shared checked
+LSB0 bitset operations for both the raw/effective all-allocated proofs and the
+private after-image range clear. Invalid geometry is corruption; a valid
+retained range that is no longer allocated remains a transaction conflict.
+The builder then increments the split group free-block counter, installs the
+seeded bitmap CRC32C, and restamps the descriptor CRC. These filesystem-owned
+CRC, accounting, authenticated-home, and publication rules remain outside the
+generic bitset layer. It coalesces descriptors sharing one primary GDT block,
+then increments and restamps the checksum-valid primary superblock inside its
+complete 1/2/4 KiB home-block image. Repeated disjoint calls compose through
+the transaction-aware acquire boundary; duplicate or partially overlapping
+staged frees return `VFS-E-CONFLICT`. Context caches remain media-derived and
+unchanged until a later strict reload. If any internal failure occurs after
+the first replacement is published, the operation automatically aborts and
+scrubs the whole transaction, so no descriptor/bitmap prefix can remain
+eligible for emission without its aggregate superblock update. This builder
+does not remove an extent or legacy map entry, change `i_blocks`, stage a
+revoke, or free an inode, and it emits no media write.
 
 The exact-vector wrapper proves every target and touched bitmap home before
 execution. Consecutive physical members are then combined with checked
