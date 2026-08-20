@@ -60,7 +60,7 @@ The first build error is sticky. Once an operation latches an error, subsequent 
 
 ### Buffer ownership
 
-`IMG-BUFFER-MAX` finalizes and prechecks the marked region and returns the exact version-2 image size. `IMG-BUILD-INTO` requires a nonzero caller-owned buffer of at least that size. The destination must not overlap the relocation buffer or live marked segment.
+`IMG-BUFFER-MAX` finalizes and prechecks the marked region and returns the exact version-2 image size. `IMG-BUILD-INTO` requires a nonzero caller-owned buffer of at least that size. A malformed or wrapping destination is a capacity error. Malformed live build geometry is a state error, as is a destination that overlaps the relocation buffer or live marked segment.
 
 Construction temporarily normalizes pointers in the live marked region, serializes the image, restores the live pointers, and verifies the completed output. On success, `used` is the exact image length. The caller owns the output buffer; binimg neither allocates nor frees it.
 

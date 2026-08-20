@@ -34,6 +34,7 @@ from system import MegapadSystem
 BIOS_PATH   = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH   = os.path.join(EMU_DIR, "kdos.f")
 BINIMG_PATH = os.path.join(AK_DIR, "utils", "binimg.f")
+UINT_RANGE_PATH = os.path.join(AK_DIR, "utils", "uint-range.f")
 SECTOR = 512
 
 # ── helpers (copied from test_binimg.py) ──
@@ -146,7 +147,9 @@ def main():
 
     # Load binimg.f
     buf.clear()
-    binimg_payload = "\n".join(load_forth_lines(BINIMG_PATH)) + "\n"
+    binimg_payload = "\n".join(
+        load_forth_lines(UINT_RANGE_PATH) + load_forth_lines(BINIMG_PATH)
+    ) + "\n"
     steps = feed_and_run(sys_obj, binimg_payload)
     load_text = uart_text(buf)
     errs = [l for l in load_text.split('\n') if '? not found' in l.lower()]

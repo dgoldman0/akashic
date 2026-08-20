@@ -31,6 +31,7 @@ from system import MegapadSystem
 BIOS_PATH   = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH   = os.path.join(EMU_DIR, "kdos.f")
 BINIMG_PATH = os.path.join(AK_DIR, "utils", "binimg.f")
+UINT_RANGE_PATH = os.path.join(AK_DIR, "utils", "uint-range.f")
 SECTOR = 512
 
 def make_entry(name, start_sec, sec_count, used_bytes, ftype, parent):
@@ -122,7 +123,9 @@ def main():
 
     # Load binimg.f
     buf.clear()
-    binimg_payload = "\n".join(load_forth_lines(BINIMG_PATH)) + "\n"
+    binimg_payload = "\n".join(
+        load_forth_lines(UINT_RANGE_PATH) + load_forth_lines(BINIMG_PATH)
+    ) + "\n"
     feed_and_run(sys_obj, binimg_payload, buf, "binimg")
     bt = uart_text(buf)
     if bt.strip(): print(f"    binimg output: {bt.strip()[:200]}")

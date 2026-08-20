@@ -51,6 +51,7 @@ from system import MegapadSystem
 BIOS_PATH  = os.path.join(EMU_DIR, "bios.asm")
 KDOS_PATH  = os.path.join(EMU_DIR, "kdos.f")
 BINIMG_PATH = os.path.join(AK_DIR, "utils", "binimg.f")
+UINT_RANGE_PATH = os.path.join(AK_DIR, "utils", "uint-range.f")
 
 SECTOR = 512
 
@@ -353,8 +354,9 @@ def main():
     # ── 3. Load binimg.f ─────────────────────────────────────────────
     print("[*] Loading binimg.f ...")
     buf.clear()
+    uint_range_lines = load_forth_lines(UINT_RANGE_PATH)
     binimg_lines = load_forth_lines(BINIMG_PATH)
-    binimg_payload = "\n".join(binimg_lines) + "\n"
+    binimg_payload = "\n".join(uint_range_lines + binimg_lines) + "\n"
     steps = feed_and_run(sys_obj, binimg_payload)
     binimg_text = uart_text(buf)
     elapsed_total = time.time() - t0

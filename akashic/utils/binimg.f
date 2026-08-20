@@ -9,6 +9,7 @@
 \ Private prefix: _IMG- / _img- / _IMV- / _imv-
 
 PROVIDED akashic-binimg
+REQUIRE uint-range.f
 
 \ =====================================================================
 \ Format and status values
@@ -129,11 +130,6 @@ VARIABLE _img-import-entry
         THEN
     LOOP
     -1 ;
-
-: _IMG-RANGE-OVERLAP?  ( a1 u1 a2 u2 -- flag )
-    _img-u1 ! _img-a1 ! _img-u0 ! _img-a0 !
-    _img-a0 @ _img-u0 @ + _img-a1 @ >
-    _img-a1 @ _img-u1 @ + _img-a0 @ > AND ;
 
 : _IMG-DICT-ROOM?  ( u -- flag )
     DUP 0< IF DROP 0 EXIT THEN
@@ -860,12 +856,16 @@ VARIABLE _imv-name-u
     _IMG-IMAGE-SIZE _img-build-used !
     _img-build-dst @ 0=
     _img-build-cap @ _img-build-used @ < OR IF 0 IMG-E-CAPACITY EXIT THEN
-    _img-build-dst @ _img-build-used @ + _img-build-dst @ < IF
+    _img-build-dst @ _img-build-used @ URANGE-VALID? 0= IF
         0 IMG-E-CAPACITY EXIT
+    THEN
+    _img-reloc-buf @ HERE _img-reloc-buf @ - URANGE-VALID? 0= IF
+        0 IMG-E-STATE EXIT
     THEN
     _img-build-dst @ _img-build-used @
     _img-reloc-buf @ HERE _img-reloc-buf @ -
-    _IMG-RANGE-OVERLAP? IF 0 IMG-E-STATE EXIT THEN
+    URANGE-OVERLAP? 0= IF DROP 0 IMG-E-STATE EXIT THEN
+    IF 0 IMG-E-STATE EXIT THEN
 
     _IMG-NORMALIZE
     _img-build-dst @ _img-build-used @ _IMG-SERIALIZE-V2
