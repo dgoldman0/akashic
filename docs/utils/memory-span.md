@@ -1,7 +1,10 @@
 # Memory-span predicates
 
 `akashic/utils/memory-span.f` provides allocation-free predicates and an
-inline, caller-owned bounded collection for 64-bit half-open memory spans.
+inline, caller-owned bounded collection for 64-bit half-open memory spans. Its
+scalar predicates are compatibility wrappers over the domain-neutral
+[`uint-range.f`](uint-range.md) algebra; the set representation and API remain
+owned by this module.
 
 | Word | Stack effect | Meaning |
 |---|---|---|
@@ -14,8 +17,11 @@ null-pointer error, and no ownership or private-range rule is implied. A
 public API that rejects null, requires nonempty storage, or protects private
 allocations must keep those checks at its own boundary.
 
-Malformed or wrapping spans never overlap. Exact adjacency does not overlap.
-The predicates do not dereference either address and own no mutable storage.
+Malformed or wrapping spans never overlap. This compatibility policy maps the
+two-result `URANGE-OVERLAP?` invalid result to false; callers that must
+distinguish invalid geometry use the range primitive directly. Exact adjacency
+does not overlap. The predicates do not dereference either address and own no
+mutable storage.
 
 ## Caller-owned span sets
 

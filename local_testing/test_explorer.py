@@ -19,6 +19,7 @@ KEYS_F     = os.path.join(ROOT_DIR, "akashic", "tui", "keys.f")
 UTF8_F     = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
 CELL_WIDTH_F = os.path.join(ROOT_DIR, "akashic", "text", "cell-width.f")
 TERM_F     = os.path.join(ROOT_DIR, "akashic", "utils", "term.f")
+UINT_RANGE_F = os.path.join(ROOT_DIR, "akashic", "utils", "uint-range.f")
 MEMORY_SPAN_F = os.path.join(ROOT_DIR, "akashic", "utils", "memory-span.f")
 CELL_F     = os.path.join(ROOT_DIR, "akashic", "tui", "cell.f")
 SCREEN_F   = os.path.join(ROOT_DIR, "akashic", "tui", "screen.f")
@@ -110,6 +111,7 @@ def build_snapshot():
     utf8_lines     = _load_forth_lines(UTF8_F)
     cell_width_lines = _load_forth_lines(CELL_WIDTH_F)
     term_lines     = _load_forth_lines(TERM_F)
+    uint_range_lines = _load_forth_lines(UINT_RANGE_F)
     memory_span_lines = _load_forth_lines(MEMORY_SPAN_F)
     ansi_lines     = _load_forth_lines(ANSI_F)
     keys_lines     = _load_forth_lines(KEYS_F)
@@ -152,7 +154,8 @@ def build_snapshot():
 
     payload = "\n".join(
         kdos_lines + ["ENTER-USERLAND"] +
-        utf8_lines + cell_width_lines + term_lines + memory_span_lines +
+        utf8_lines + cell_width_lines + term_lines + uint_range_lines +
+        memory_span_lines +
         ansi_lines + keys_lines +
         cell_lines + screen_lines +
         draw_lines + box_lines +

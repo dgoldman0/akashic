@@ -31,6 +31,7 @@ MODULES = dependency_order(
     SOURCE_ROOT, ("atproto/bluesky-text-record.f",)
 )
 EXPECTED_MODULES = (
+    "utils/uint-range.f",
     "utils/memory-span.f",
     "utils/caller-span.f",
     "utils/buffer-writer.f",

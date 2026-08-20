@@ -50,6 +50,7 @@ RUNTIME_ROOTS = (
 RUNTIME_MODULES = dependency_order(SOURCE_ROOT, RUNTIME_ROOTS)
 EXPECTED_RUNTIME_MODULES = (
     "runtime/identity.f",
+    "utils/uint-range.f",
     "utils/memory-span.f",
     "concurrency/event.f",
     "concurrency/semaphore.f",

@@ -19,6 +19,7 @@ EVENT_F   = os.path.join(ROOT_DIR, "akashic", "concurrency", "event.f")
 SEM_F     = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
 GUARD_F   = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
 UTF8_F    = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
+UINT_RANGE_F = os.path.join(ROOT_DIR, "akashic", "utils", "uint-range.f")
 MEMORY_SPAN_F = os.path.join(ROOT_DIR, "akashic", "utils", "memory-span.f")
 VFS_F     = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs.f")
 VFS_MNT_F = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs-mount.f")
@@ -322,7 +323,7 @@ def build_snapshot():
 
     dep_lines = []
     for path in [
-        EVENT_F, SEM_F, GUARD_F, UTF8_F, MEMORY_SPAN_F,
+        EVENT_F, SEM_F, GUARD_F, UTF8_F, UINT_RANGE_F, MEMORY_SPAN_F,
         VFS_F, VFS_MNT_F, VFS_MP_F,
     ]:
         dep_lines += _load_forth_lines(path)
@@ -458,7 +459,7 @@ def run_fresh_forth(image_path, lines, max_steps=800_000_000):
     bios_code = _load_bios()
     load_lines = _load_forth_lines(KDOS_PATH) + ["ENTER-USERLAND"]
     for path in [
-        EVENT_F, SEM_F, GUARD_F, UTF8_F, MEMORY_SPAN_F,
+        EVENT_F, SEM_F, GUARD_F, UTF8_F, UINT_RANGE_F, MEMORY_SPAN_F,
         VFS_F, VFS_MNT_F, VFS_MP_F,
     ]:
         load_lines += _load_forth_lines(path)

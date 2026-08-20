@@ -36,6 +36,7 @@ EXPECTED_MODULES = (
     "text/utf8.f",
     "utils/string.f",
     "utils/json.f",
+    "utils/uint-range.f",
     "utils/memory-span.f",
     "utils/caller-span.f",
     "atproto/tid.f",

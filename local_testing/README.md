@@ -437,13 +437,15 @@ mapping, and Practice owns its head schema and readonly recovery policy. The
 neutral modules do not create a generic applet, repository, or compatibility
 format stack.
 
-`gate2a-contracts` isolates the policy-neutral memory-span predicates, inline
-caller-owned span sets, checked buffer writer, and caller-owned scalar/locator
-schema initializers. It covers signed-length and unsigned-wrap boundaries,
-empty/null policy separation, half-open overlap and adjacency, borrowed span
-geometry, independent bounded sets and writers, sticky all-or-nothing capacity
-failure, decimal cell extrema, exact schema bytes, UTF-8/type/length rejection,
-and the distinct 110-byte semantic RREF and 516-byte VFS-locator text bounds.
+`gate2a-contracts` isolates the policy-neutral unsigned-start range algebra,
+memory-span compatibility predicates and inline caller-owned span sets, checked
+buffer writer, and caller-owned scalar/locator schema initializers. It covers
+the range primitive's separate validity result, signed-length and unsigned-wrap
+boundaries, empty/null policy separation, half-open overlap and adjacency,
+borrowed span geometry, independent bounded sets and writers, sticky
+all-or-nothing capacity failure, decimal cell extrema, exact schema bytes,
+UTF-8/type/length rejection, and the distinct 110-byte semantic RREF and
+516-byte VFS-locator text bounds.
 It also qualifies complete owned-value graph geometry across nested maps,
 lists, blobs, and resource identifiers: root/allocation overlap, independent
 graphs, malformed shared and partial ownership, fail-closed re-entry, and

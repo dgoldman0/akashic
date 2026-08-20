@@ -46,6 +46,7 @@ MODULES = dependency_order(
     ("atproto/create-record-codec.f",),
 )
 EXPECTED_MODULES = (
+    "utils/uint-range.f",
     "utils/memory-span.f",
     "utils/caller-span.f",
     "utils/buffer-writer.f",

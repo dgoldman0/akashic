@@ -795,10 +795,12 @@ def test_ext4_binding_has_a_bounded_headless_dependency_closure() -> None:
         "concurrency/event.f",
         "concurrency/guard.f",
         "concurrency/semaphore.f",
+        "math/crc.f",
         "text/utf8.f",
         "utils/fs/drivers/vfs-ext4.f",
         "utils/fs/vfs.f",
         "utils/memory-span.f",
+        "utils/uint-range.f",
     )
 
 

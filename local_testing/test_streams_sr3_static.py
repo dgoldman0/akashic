@@ -377,6 +377,7 @@ def test_streams_sr3_incremental_hash_uses_checked_raw_permutation() -> None:
     assert closure == {
         SHA3_CONTEXT,
         "utils/memory-span.f",
+        "utils/uint-range.f",
     }
     assert public_api <= words
     assert owned_mutable == {}
