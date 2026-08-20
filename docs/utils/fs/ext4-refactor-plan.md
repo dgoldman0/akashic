@@ -29,8 +29,9 @@ redirected.
   MP64FS retains contiguous first-fit search, pending-mask application, and
   durability sequencing. The ext4 migration now uses exact logical popcount
   for block accounting and bounded shared queries for free-block candidate
-  selection; its remaining query and mutation helper families follow one at a
-  time.
+  selection, and its singleton block-allocation family uses checked query and
+  mutation views. Remaining query and mutation helper families follow one at
+  a time.
 
 ## Baseline and objective
 

@@ -956,6 +956,10 @@ descriptor must authenticate the same bitmap home and checksum, and the
 primary super must retain a positive bounded global count. Only after all of
 those checks succeed does the builder set the bit, decrement both counters,
 replace the bitmap checksum, and restamp the descriptor and super checksums.
+The raw and retained clear-bit checks and the private after-image bit set use
+the shared checked bitset utility with the exact owning group length; invalid
+internal geometry is corruption, while a valid retained-state change remains
+the existing transaction conflict.
 The retained homes are the exact bitmap, primary GDT block, and primary-super
 home; context caches remain media-derived until reload. Any failure after the
 first replacement aborts and scrubs the transaction.

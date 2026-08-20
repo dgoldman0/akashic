@@ -33825,12 +33825,19 @@ def test_typed_allocate_block_afterimages_are_exact_and_abort_without_io(
     assert len(superblock) == 1024
     assert 1024 << struct.unpack_from("<I", superblock, 0x18)[0] == block_size
     first_data = struct.unpack_from("<I", superblock, 0x14)[0]
+    total_blocks = struct.unpack_from("<I", superblock, 0x04)[0] | (
+        struct.unpack_from("<I", superblock, 0x150)[0] << 32
+    )
     blocks_per_group = struct.unpack_from("<I", superblock, 0x20)[0]
     seed = struct.unpack_from("<I", superblock, 0x270)[0]
     group, block_index = divmod(
         physical_block - first_data, blocks_per_group
     )
     assert group == 0
+    group_blocks = min(
+        blocks_per_group,
+        total_blocks - (first_data + group * blocks_per_group),
+    )
 
     def read_block(block: int) -> bytearray:
         with path.open("rb") as source:
@@ -33930,8 +33937,8 @@ def test_typed_allocate_block_afterimages_are_exact_and_abort_without_io(
                             f"{super_home} ="
                         ),
                         (
-                            f"_AB-BITMAP {block_index} 1 "
-                            "_EXT4-BIT-RANGE-SET?"
+                            f"_AB-BITMAP {group_blocks} {block_index} "
+                            "BITSET-TEST? AND"
                         ),
                         (
                             f"_AB-GDT {descriptor_offset} + "
@@ -86606,6 +86613,43 @@ def test_ext4_free_block_scan_uses_shared_bounded_queries() -> None:
     assert "VFS-E-CONFLICT EXIT" in recheck
     assert "_EXT4-FFB-INDEX" not in source
     assert "_EXT4-FFB-CLEAR-COUNT" not in source
+
+
+def test_ext4_single_block_allocation_uses_checked_bitset_mutation() -> None:
+    source = EXT4_F.read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    acquire = word_body("_EXT4-JAB-ACQUIRE-BITMAP")
+    stage = word_body("_EXT4-JAB-STAGE-GROUP")
+    raw, retained = acquire.split("_EXT4-JTX-META-ACQUIRE", 1)
+
+    assert acquire.count("BITSET-TEST?") == 2
+    for view in (raw, retained):
+        assert (
+            "_EXT4-JAB-GROUP-BLOCKS @ _EXT4-JAB-INDEX @ BITSET-TEST?"
+        ) in view
+        assert "DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in view
+    assert "EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT" in raw
+    assert "VFS-E-CONFLICT EXIT" in retained
+    assert "_EXT4-BIT-RANGE-CLEAR?" not in acquire
+
+    assert (
+        "_EXT4-JAB-WRITER @ _EXT4-JWR.SCRATCH-B + @\n"
+        "    _EXT4-JAB-GROUP-BLOCKS @ _EXT4-JAB-INDEX @ BITSET-BIT-SET?"
+    ) in stage
+    assert "0= IF EXT4-D-BOUNDS _EXT4-CORRUPT EXIT THEN" in stage
+    assert stage.index("BITSET-BIT-SET?") < stage.index(
+        "_EXT4-BLOCK-BITMAP-CRC"
+    ) < stage.index("_EXT4-JTX-META-REPLACE")
+    assert "_EXT4-SET-BIT-RANGE" not in stage
 
 
 def test_hardware_crc32c_matches_fragmented_ext4_raw_vector(tmp_path: Path) -> None:
