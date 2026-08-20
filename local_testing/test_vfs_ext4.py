@@ -86420,6 +86420,55 @@ def test_ext4_crc_source_uses_checked_hardware_without_fallback() -> None:
     assert "platform CRC32C word is intentionally MSB-first" not in source
 
 
+def test_ext4_manual_range_proofs_use_checked_shared_algebra() -> None:
+    source = EXT4_F.read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    owner = word_body("_EXT4-MUTATION-OWNER-RANGES-PUBLISH")
+    owner_alias = word_body("_EXT4-MUTATION-OWNER-ALIASES?")
+    map_alias = word_body("_EXT4-MUTATION-MAP-ALIASES?")
+    extent = word_body("_EXT4-VALIDATE-EXTENT-LEAF-ENTRY")
+    extent_node = word_body("_EXT4-LOAD-EXTENT-NODE")
+    xattr_prior = word_body("_EXT4-XA-OVERLAPS-PRIOR?")
+    xattr_walk = word_body("_EXT4-XA-WALK")
+    journal_root = word_body("_EXT4-VALIDATE-JOURNAL-BACKUP-ROOT-AT")
+    journal_disjoint = word_body("_EXT4-JOURNAL-RANGE-DISJOINT")
+
+    assert "REQUIRE ../../uint-range.f" in source
+    assert owner.count("URANGE-VALID?") == 2
+    assert owner.count("_EXT4-MUTATION-OWNER-RANGES-CLEAR") == 5
+    assert owner_alias.count("URANGE-OVERLAP?") == 1
+    assert "0= IF DROP TRUE EXIT THEN" in owner_alias
+    assert map_alias.count("URANGE-OVERLAP?") == 1
+    assert "IF 2DROP FALSE TRUE EXIT THEN" in map_alias
+    assert extent.count("URANGE-OVERLAP?") == 1
+    assert extent.count("URANGE-VALID?") == 1
+    assert "_EXT4-MUTATION-MAP-ALIASES? 0= IF" in extent
+    assert "_EXT4-MUTATION-MAP-ALIASES? 0= IF" in extent_node
+    assert "DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT" in extent
+    assert xattr_prior.count("URANGE-OVERLAP?") == 1
+    assert "0= IF DROP TRUE EXIT THEN" in xattr_prior
+    assert xattr_walk.count("URANGE-VALID?") == 2
+    assert "DROP EXT4-D-XATTR _EXT4-CORRUPT EXIT" in xattr_walk
+    assert journal_root.count("URANGE-OVERLAP?") == 1
+    assert journal_root.count("URANGE-VALID?") == 1
+    assert journal_disjoint.count("URANGE-OVERLAP?") == 1
+    for body in (journal_root, journal_disjoint):
+        assert "DROP EXT4-D-JOURNAL _EXT4-CORRUPT UNLOOP EXIT" in body
+    assert "_EXT4-XA-VEND" not in source
+    assert "_EXT4-JO-END" not in source
+    assert "_EXT4-MMA-FIRST" not in source
+    assert "_EXT4-MMA-COUNT" not in source
+
+
 def test_hardware_crc32c_matches_fragmented_ext4_raw_vector(tmp_path: Path) -> None:
     blank = tmp_path / "crc-storage.img"
     blank.write_bytes(bytes(4 * 512))
