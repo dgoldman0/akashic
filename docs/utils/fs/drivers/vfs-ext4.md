@@ -127,7 +127,8 @@ REQUIRE utils/fs/drivers/vfs-ext4.f
 profile and context layout, checked volume I/O and CRC adapter, probing,
 checked geometry arithmetic, and primary-super validation. The following
 [`vfs-ext4-descriptor.f`](vfs-ext4-descriptor.md) unit authenticates one group
-descriptor and its bounded metadata geometry. The
+descriptor and its bounded metadata geometry, and owns the shared checked
+descriptor-CRC query and restamper used by later policy owners. The
 [`vfs-ext4-backups.f`](vfs-ext4-backups.md) unit authenticates sparse-super
 copies, immutable superblock identity, and backup descriptor locations without
 treating mutable counters as identity. The independent

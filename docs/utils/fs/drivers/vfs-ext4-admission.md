@@ -14,7 +14,7 @@ writes, probe helpers, checked unsigned arithmetic, sparse-super geometry, and
 primary-super validation. It depends directly on `vfs.f` and `math/crc.f` and
 has no dependency or callback into the facade. The internal
 [`vfs-ext4-descriptor.f`](vfs-ext4-descriptor.md) unit consumes that foundation
-to authenticate group descriptors. The independent
+to authenticate, verify, and checksum group descriptors. The independent
 [`vfs-ext4-backups.f`](vfs-ext4-backups.md) unit uses the admitted superblock
 and descriptor services to authenticate sparse-super copies. The independent
 [`vfs-ext4-dirhash.f`](vfs-ext4-dirhash.md) unit consumes the admitted

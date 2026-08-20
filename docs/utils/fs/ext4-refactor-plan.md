@@ -61,7 +61,9 @@ redirected.
   `vfs-ext4-admission.f`, now owns the on-disk profile and private context
   layout, checked I/O and CRC adapter, probe helpers, checked arithmetic, and
   primary-super admission. `vfs-ext4-descriptor.f` now owns authenticated
-  group-descriptor location, CRC, pointer/span, flag, and counter admission.
+  group-descriptor location, shared CRC verification/restamping, pointer/span,
+  flag, and counter admission. Its loader and the group-0 recovery candidate
+  delegate to the same predicate, eliminating their duplicate CRC algebra.
   `vfs-ext4-backups.f` owns sparse-super copy authority, immutable-super
   comparison, exact journal-backup tuples, and backup-GDT location checks; all
   13 of its scratch cells are private.
@@ -192,23 +194,29 @@ and CRC, has no callback into the facade, and ends after primary-super
 validation. The next acyclic unit authenticates one group descriptor and
 exposes its block, offset, flags, and inode-table span to callers only after a
 successful return; those temporary result cells are not evidence after an
-error. A backup-authority unit then uses those two foundations to authenticate
-sparse-super copies and backup descriptor locations; its three services are
-stack-only and all scratch state remains private. The independent dirhash unit
-owns name-byte validation, seeded half-MD4, and the mounted version/flag policy
-behind one checked entry point. It depends only on admission, keeps all hash
-scratch private, and moves before the facade without a callback or mutable
-cross-module seam. The linear dirent codec depends on admission and dirhash and
-owns three stack services for type decoding, complete block validation, and
-checksum restamping. Its validator checks the tail and CRC before parsing the
-record chain, so a checked-CRC error retains precedence over latent directory
-corruption. Its restamper completes argument, inode-bound, and tail validation
-before zeroing the checksum; a later CRC error leaves that field zero. All 14
-scratch cells are private, and scanner-owned dot identities, inode loading,
-cache publication, and rollback remain in the facade. The independent JBD2
-codec likewise depends only on admission. It owns raw big-endian access,
-checked block/super/commit validation, and the corresponding encoders, while
-taking tag payload, stored checksum, sequence, and context inputs explicitly.
+error. It also owns the shared descriptor checksum predicate and restamper.
+The predicate restores any temporarily cleared checksum on every return. A
+restamp CRC error intentionally leaves the caller-owned target with a zero
+checksum, and the caller aborts its operation. The loader and group-0 recovery
+candidate now delegate to that predicate instead of retaining separate
+checksum implementations. A backup-authority unit then uses those two
+foundations to authenticate sparse-super copies and backup descriptor
+locations; its three services are stack-only and all scratch state remains
+private. The independent dirhash unit owns name-byte validation, seeded
+half-MD4, and the mounted version/flag policy behind one checked entry point.
+It depends only on admission, keeps all hash scratch private, and moves before
+the facade without a callback or mutable cross-module seam. The linear dirent
+codec depends on admission and dirhash and owns three stack services for type
+decoding, complete block validation, and checksum restamping. Its validator
+checks the tail and CRC before parsing the record chain, so a checked-CRC error
+retains precedence over latent directory corruption. Its restamper completes
+argument, inode-bound, and tail validation before zeroing the checksum; a later
+CRC error leaves that field zero. All 14 scratch cells are private, and
+scanner-owned dot identities, inode loading, cache publication, and rollback
+remain in the facade. The independent JBD2 codec likewise depends only on
+admission. It owns raw big-endian access, checked block/super/commit validation,
+and the corresponding encoders, while taking tag payload, stored checksum,
+sequence, and context inputs explicitly.
 Its 11 scratch cells remain private, its validators restore temporarily cleared
 checksum fields, and its encoders retain the prior zero-on-CRC-error state. The
 shared superblock stamper removes the duplicate witness/reset/activation

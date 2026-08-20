@@ -86600,6 +86600,14 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
     descriptor_definitions = (
         "VARIABLE _EXT4-GD-GROUP",
         ": _EXT4-GDT-BASE  ( ctx -- block )",
+        (
+            ": _EXT4-GROUP-DESC-CHECKSUM?  "
+            "( descriptor group ctx -- flag ior )"
+        ),
+        (
+            ": _EXT4-RESTAMP-GROUP-DESC  "
+            "( descriptor group ctx -- ior )"
+        ),
         ": _EXT4-LOAD-DESC-AT  ( group gdt-base ctx -- ior )",
         ": _EXT4-LOAD-DESC  ( group ctx -- ior )",
     )
@@ -86614,6 +86622,128 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
     ):
         assert result_cell in descriptor
         assert result_cell in facade
+
+    result_cells = {
+        "_EXT4-GD-BLOCK",
+        "_EXT4-GD-OFF",
+        "_EXT4-GD-FLAGS",
+        "_EXT4-GD-SPAN",
+    }
+    descriptor_cells = set(
+        re.findall(
+            r"^VARIABLE (_EXT4-GD(?:C)?-[A-Z0-9-]+)$",
+            descriptor,
+            re.MULTILINE,
+        )
+    )
+    private_cells = descriptor_cells - result_cells
+    assert descriptor_cells == result_cells | {
+        "_EXT4-GD-GROUP",
+        "_EXT4-GD-BASE",
+        "_EXT4-GD-CTX",
+        "_EXT4-GD-BYTE",
+        "_EXT4-GD-PTR",
+        "_EXT4-GDC-DESC",
+        "_EXT4-GDC-GROUP",
+        "_EXT4-GDC-CTX",
+        "_EXT4-GDC-STORED",
+        "_EXT4-GDC-CALC",
+    }
+    assert len(private_cells) == 10
+    assert all(cell not in facade for cell in private_cells)
+    assert "_EXT4-GD-STORED" not in ordered_source
+    assert "_EXT4-RGD-DESC" not in ordered_source
+    assert "_EXT4-RGD-STORED" not in ordered_source
+    assert "_EXT4-RGD-CALC" not in ordered_source
+
+    descriptor_executable = "\n".join(
+        line.split("\\", 1)[0] for line in descriptor.splitlines()
+    )
+    facade_executable = "\n".join(
+        line.split("\\", 1)[0] for line in facade.splitlines()
+    )
+
+    def word_body(source: str, name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None
+        return " ".join(match.group("body").split())
+
+    predicate = word_body(
+        descriptor_executable, "_EXT4-GROUP-DESC-CHECKSUM?"
+    )
+    restamper = word_body(
+        descriptor_executable, "_EXT4-RESTAMP-GROUP-DESC"
+    )
+    loader = word_body(descriptor_executable, "_EXT4-LOAD-DESC-AT")
+    primary_candidate = word_body(
+        facade_executable, "_EXT4-PRIMARY-GDT-CANDIDATE?"
+    )
+
+    restore = (
+        "_EXT4-GDC-STORED @ _EXT4-GDC-DESC @ "
+        "_EXT4-GD.CHECKSUM + W!"
+    )
+    predicate_order = (
+        "_EXT4-GDC-DESC @ 0= _EXT4-GDC-CTX @ 0= OR IF FALSE 0 EXIT THEN",
+        "_EXT4-C.GROUPS + @ U< 0= IF FALSE 0 EXIT THEN",
+        "_EXT4-GD.CHECKSUM + W@ _EXT4-GDC-STORED !",
+        "0 _EXT4-GDC-DESC @ _EXT4-GD.CHECKSUM + W!",
+        "_EXT4-GDC-GROUP @ _EXT4-GDC-CTX @ _EXT4-C.TMP + L!",
+        "_EXT4-C.SEED + @ _EXT4-CRC-START",
+        "_EXT4-C.TMP + 4 _EXT4-CRC-ADD",
+        "_EXT4-GDC-DESC @ _EXT4-DESC-SIZE _EXT4-CRC-ADD",
+        "_EXT4-CRC@ 0xFFFF AND _EXT4-GDC-CALC !",
+        "_EXT4-GDC-CALC @ _EXT4-GDC-STORED @ = 0",
+    )
+    predicate_positions = tuple(
+        predicate.index(fragment) for fragment in predicate_order
+    )
+    assert predicate_positions == tuple(sorted(predicate_positions))
+    assert predicate.count(restore) == 3
+    assert predicate.count("0 SWAP EXIT") == 2
+
+    restamp_order = (
+        "_EXT4-GDC-DESC @ 0= _EXT4-GDC-CTX @ 0= OR IF VFS-E-INVALID EXIT THEN",
+        "_EXT4-C.GROUPS + @ U< 0= IF EXT4-D-BOUNDS _EXT4-CORRUPT EXIT THEN",
+        "0 _EXT4-GDC-DESC @ _EXT4-GD.CHECKSUM + W!",
+        "_EXT4-GDC-GROUP @ _EXT4-GDC-CTX @ _EXT4-C.TMP + L!",
+        "_EXT4-C.SEED + @ _EXT4-CRC-START",
+        "_EXT4-C.TMP + 4 _EXT4-CRC-ADD ?DUP IF EXIT THEN",
+        "_EXT4-GDC-DESC @ _EXT4-DESC-SIZE _EXT4-CRC-ADD ?DUP IF EXIT THEN",
+        "_EXT4-CRC@ 0xFFFF AND _EXT4-GDC-DESC @ _EXT4-GD.CHECKSUM + W!",
+    )
+    restamp_positions = tuple(
+        restamper.index(fragment) for fragment in restamp_order
+    )
+    assert restamp_positions == tuple(sorted(restamp_positions))
+    assert restore not in restamper
+
+    copy = "_EXT4-C.DESC + _EXT4-DESC-SIZE CMOVE"
+    delegate = "_EXT4-GROUP-DESC-CHECKSUM? ?DUP IF NIP EXIT THEN 0= IF"
+    high_pointer_gate = "_EXT4-GD.BLOCK-BITMAP-HI + L@ 0<>"
+    assert loader.index(copy) < loader.index(delegate)
+    assert loader.index(delegate) < loader.index(high_pointer_gate)
+    assert "EXT4-D-DESC-CHECKSUM _EXT4-CORRUPT EXIT" in loader
+    assert "_EXT4-CRC-" not in loader
+
+    candidate_delegate = (
+        "0 _EXT4-RGD-CTX @ _EXT4-GROUP-DESC-CHECKSUM?"
+    )
+    assert primary_candidate.endswith(candidate_delegate)
+    assert primary_candidate.index("_EXT4-GD.INODE-TABLE-LO + L@") < (
+        primary_candidate.index(candidate_delegate)
+    )
+    assert "_EXT4-CRC-" not in primary_candidate
+    assert "_EXT4-GD.CHECKSUM" not in facade_executable
+    assert facade_executable.count("_EXT4-GROUP-DESC-CHECKSUM?") == 8
+    assert facade_executable.count("_EXT4-RESTAMP-GROUP-DESC") == 7
+    assert descriptor.index(
+        ": _EXT4-GROUP-DESC-CHECKSUM?"
+    ) < descriptor.index(": _EXT4-LOAD-DESC-AT")
     assert "EXECUTE" not in descriptor
     assert "_EXT4-MUTATION-PROTOCOL-XT" not in descriptor
     assert "_EXT4-MUTATION-PROTOCOL-PROOF-XT" not in descriptor
