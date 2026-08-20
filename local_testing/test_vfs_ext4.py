@@ -86469,6 +86469,44 @@ def test_ext4_manual_range_proofs_use_checked_shared_algebra() -> None:
     assert "_EXT4-MMA-COUNT" not in source
 
 
+def test_ext4_block_range_alias_policy_uses_shared_checked_algebra() -> None:
+    source = EXT4_F.read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    adapter_name = "_EXT4-BLOCK-RANGES-ALIAS-OR-INVALID?"
+    adapter = word_body(adapter_name)
+    inode_table = word_body("_EXT4-VALIDATE-INODE-TABLE-HOME")
+    group_touched = word_body("_EXT4-JCM-GROUP-TOUCHED?")
+
+    assert "URANGE-OVERLAP? 0= IF DROP TRUE THEN" in adapter
+    assert source.count(adapter_name) == 32
+    assert "_EXT4-BLOCK-RANGES-OVERLAP?" not in source
+    for scratch in (
+        "_EXT4-BRO-A",
+        "_EXT4-BRO-ACOUNT",
+        "_EXT4-BRO-B",
+        "_EXT4-BRO-BCOUNT",
+    ):
+        assert scratch not in source
+    assert inode_table.count("URANGE-OVERLAP?") == 1
+    assert inode_table.count(adapter_name) == 3
+    assert "DROP EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT" in inode_table
+    assert group_touched.count("URANGE-OVERLAP?") == 1
+    assert adapter_name not in group_touched
+    assert (
+        "DROP FALSE EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT"
+        in group_touched
+    )
+
+
 def test_hardware_crc32c_matches_fragmented_ext4_raw_vector(tmp_path: Path) -> None:
     blank = tmp_path / "crc-storage.img"
     blank.write_bytes(bytes(4 * 512))
