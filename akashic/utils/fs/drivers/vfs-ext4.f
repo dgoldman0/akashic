@@ -18,108 +18,11 @@ REQUIRE ../vfs.f
 REQUIRE ../../uint-range.f
 REQUIRE ../../bitset.f
 REQUIRE vfs-ext4-admission.f
-
+REQUIRE vfs-ext4-descriptor.f
 
 \ =====================================================================
-\  Group descriptors and initialized bitmap checksums
+\  Allocation ownership and initialized bitmap checksums
 \ =====================================================================
-
-VARIABLE _EXT4-GD-GROUP
-VARIABLE _EXT4-GD-BASE
-VARIABLE _EXT4-GD-CTX
-VARIABLE _EXT4-GD-BYTE
-VARIABLE _EXT4-GD-BLOCK
-VARIABLE _EXT4-GD-OFF
-VARIABLE _EXT4-GD-STORED
-VARIABLE _EXT4-GD-FLAGS
-VARIABLE _EXT4-GD-PTR
-VARIABLE _EXT4-GD-SPAN
-
-: _EXT4-GDT-BASE  ( ctx -- block )
-    _EXT4-C.BSIZE + @ 1024 = IF 2 ELSE 1 THEN ;
-
-: _EXT4-LOAD-DESC-AT  ( group gdt-base ctx -- ior )
-    _EXT4-GD-CTX ! _EXT4-GD-BASE ! _EXT4-GD-GROUP !
-    _EXT4-GD-GROUP @ _EXT4-GD-CTX @ _EXT4-C.GROUPS + @ >= IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-GD-GROUP @ _EXT4-DESC-SIZE * _EXT4-GD-BYTE !
-    _EXT4-GD-BASE @
-    _EXT4-GD-BYTE @ _EXT4-GD-CTX @ _EXT4-C.BSIZE + @ / +
-    DUP _EXT4-GD-BLOCK ! _EXT4-GD-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
-    _EXT4-GD-BYTE @ _EXT4-GD-CTX @ _EXT4-C.BSIZE + @ MOD
-    DUP _EXT4-GD-OFF ! _EXT4-DESC-SIZE +
-    _EXT4-GD-CTX @ _EXT4-C.BSIZE + @ > IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-GD-CTX @ _EXT4-C.BLOCK + _EXT4-GD-OFF @ +
-    _EXT4-GD-CTX @ _EXT4-C.DESC + _EXT4-DESC-SIZE CMOVE
-    _EXT4-GD-CTX @ _EXT4-C.DESC + DUP
-    _EXT4-GD.CHECKSUM + W@ _EXT4-GD-STORED !
-    0 SWAP _EXT4-GD.CHECKSUM + W!
-    _EXT4-GD-GROUP @ _EXT4-GD-CTX @ _EXT4-C.TMP + L!
-    _EXT4-GD-CTX @ _EXT4-C.SEED + @ _EXT4-CRC-START
-    _EXT4-GD-CTX @ _EXT4-C.TMP + 4 _EXT4-CRC-ADD ?DUP IF
-        _EXT4-GD-STORED @ _EXT4-GD-CTX @ _EXT4-C.DESC +
-        _EXT4-GD.CHECKSUM + W! EXIT
-    THEN
-    _EXT4-GD-CTX @ _EXT4-C.DESC + _EXT4-DESC-SIZE _EXT4-CRC-ADD
-    ?DUP IF
-        _EXT4-GD-STORED @ _EXT4-GD-CTX @ _EXT4-C.DESC +
-        _EXT4-GD.CHECKSUM + W! EXIT
-    THEN
-    _EXT4-GD-STORED @ _EXT4-GD-CTX @ _EXT4-C.DESC +
-    _EXT4-GD.CHECKSUM + W!
-    _EXT4-CRC@ 0xFFFF AND _EXT4-GD-STORED @ <> IF
-        EXT4-D-DESC-CHECKSUM _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-GD-CTX @ _EXT4-C.DESC + DUP
-    _EXT4-GD.BLOCK-BITMAP-HI + L@ 0<>
-    OVER _EXT4-GD.INODE-BITMAP-HI + L@ 0<> OR
-    OVER _EXT4-GD.INODE-TABLE-HI + L@ 0<> OR IF
-        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    DUP _EXT4-GD.BLOCK-BITMAP-LO + L@ DUP _EXT4-GD-PTR !
-    0= _EXT4-GD-PTR @ _EXT4-GD-CTX @ _EXT4-C.BLOCKS + @ >= OR IF
-        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    DUP _EXT4-GD.INODE-BITMAP-LO + L@ DUP _EXT4-GD-PTR !
-    0= _EXT4-GD-PTR @ _EXT4-GD-CTX @ _EXT4-C.BLOCKS + @ >= OR IF
-        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    DUP _EXT4-GD.INODE-TABLE-LO + L@ DUP _EXT4-GD-PTR !
-    0= IF DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT THEN
-    _EXT4-GD-CTX @ _EXT4-C.IPG + @
-    _EXT4-GD-CTX @ _EXT4-C.ISIZE + @ *
-    _EXT4-GD-CTX @ _EXT4-C.BSIZE + @ 1- +
-    _EXT4-GD-CTX @ _EXT4-C.BSIZE + @ /
-    DUP _EXT4-GD-SPAN !
-    _EXT4-GD-PTR @ SWAP
-    _EXT4-GD-CTX @ _EXT4-C.BLOCKS + @ BLOCK-RANGE? 0= IF
-        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    DUP _EXT4-GD.FLAGS + W@ DUP _EXT4-GD-FLAGS ! 7 INVERT AND IF
-        DROP EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
-    THEN
-    DUP _EXT4-GD.FREE-BLOCKS-LO + W@
-    OVER _EXT4-GD.FREE-BLOCKS-HI + W@ 16 LSHIFT OR
-    _EXT4-GD-CTX @ _EXT4-C.BPG + @ U> IF
-        DROP EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
-    THEN
-    DUP _EXT4-GD.FREE-INODES-LO + W@
-    OVER _EXT4-GD.FREE-INODES-HI + W@ 16 LSHIFT OR
-    _EXT4-GD-CTX @ _EXT4-C.IPG + @ U> IF
-        DROP EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
-    THEN
-    DUP _EXT4-GD.USED-DIRS-LO + W@
-    SWAP _EXT4-GD.USED-DIRS-HI + W@ 16 LSHIFT OR
-    _EXT4-GD-CTX @ _EXT4-C.IPG + @ U> IF
-        EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
-    THEN
-    0 ;
-
-: _EXT4-LOAD-DESC  ( group ctx -- ior )
-    DUP _EXT4-GDT-BASE SWAP _EXT4-LOAD-DESC-AT ;
 
 \ A format checksum proves that a bitmap was not silently altered; it does
 \ not prove that a block referenced by an inode or metadata pointer is marked

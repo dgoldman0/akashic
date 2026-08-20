@@ -804,6 +804,7 @@ def test_ext4_binding_has_a_bounded_headless_dependency_closure() -> None:
         "utils/bitset.f",
         "math/crc.f",
         "utils/fs/drivers/vfs-ext4-admission.f",
+        "utils/fs/drivers/vfs-ext4-descriptor.f",
         "utils/fs/drivers/vfs-ext4.f",
     )
     assert tuple(dependency_closure(("utils/fs/drivers/vfs-ext4.f",))) == (
@@ -814,6 +815,7 @@ def test_ext4_binding_has_a_bounded_headless_dependency_closure() -> None:
         "text/utf8.f",
         "utils/bitset.f",
         "utils/fs/drivers/vfs-ext4-admission.f",
+        "utils/fs/drivers/vfs-ext4-descriptor.f",
         "utils/fs/drivers/vfs-ext4.f",
         "utils/fs/vfs.f",
         "utils/memory-span.f",

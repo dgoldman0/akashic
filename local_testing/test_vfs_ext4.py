@@ -41,6 +41,7 @@ CRC_MODULE = "math/crc.f"
 BITSET_MODULE = "utils/bitset.f"
 VFS_MODULE = "utils/fs/vfs.f"
 EXT4_ADMISSION_MODULE = "utils/fs/drivers/vfs-ext4-admission.f"
+EXT4_DESCRIPTOR_MODULE = "utils/fs/drivers/vfs-ext4-descriptor.f"
 EXT4_MODULE = "utils/fs/drivers/vfs-ext4.f"
 CRC_F = AKASHIC_ROOT / CRC_MODULE
 BITSET_F = AKASHIC_ROOT / BITSET_MODULE
@@ -86519,7 +86520,11 @@ def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
     )
 
     assert _ext4_source_stage_modules() == expected
-    assert expected == (EXT4_ADMISSION_MODULE, EXT4_MODULE)
+    assert expected == (
+        EXT4_ADMISSION_MODULE,
+        EXT4_DESCRIPTOR_MODULE,
+        EXT4_MODULE,
+    )
     assert set(expected).isdisjoint(already_staged)
     assert set(full_order) == set(expected) | (set(full_order) & already_staged)
     assert {VFS_MODULE, CRC_MODULE, BITSET_MODULE}.isdisjoint(expected)
@@ -86529,8 +86534,11 @@ def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
     assert all(len(line.encode("utf-8")) <= 255 for line in packed)
 
 
-def test_ext4_admission_is_an_acyclic_internal_source_unit() -> None:
+def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
     admission = (AKASHIC_ROOT / EXT4_ADMISSION_MODULE).read_text(
+        encoding="utf-8"
+    )
+    descriptor = (AKASHIC_ROOT / EXT4_DESCRIPTOR_MODULE).read_text(
         encoding="utf-8"
     )
     facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
@@ -86553,6 +86561,7 @@ def test_ext4_admission_is_an_acyclic_internal_source_unit() -> None:
         "../../uint-range.f",
         "../../bitset.f",
         "vfs-ext4-admission.f",
+        "vfs-ext4-descriptor.f",
     )
     assert "URANGE-" not in admission
     assert "BITSET-" not in admission
@@ -86568,11 +86577,42 @@ def test_ext4_admission_is_an_acyclic_internal_source_unit() -> None:
         assert definition in admission
         assert definition not in facade
 
-    assert "Group descriptors and initialized bitmap checksums" in facade
+    assert descriptor.splitlines().count(
+        "PROVIDED akashic-ext4-descriptor"
+    ) == 1
+    assert tuple(
+        line.removeprefix("REQUIRE ")
+        for line in descriptor.splitlines()
+        if line.startswith("REQUIRE ")
+    ) == ("vfs-ext4-admission.f",)
+    descriptor_definitions = (
+        "VARIABLE _EXT4-GD-GROUP",
+        ": _EXT4-GDT-BASE  ( ctx -- block )",
+        ": _EXT4-LOAD-DESC-AT  ( group gdt-base ctx -- ior )",
+        ": _EXT4-LOAD-DESC  ( group ctx -- ior )",
+    )
+    for definition in descriptor_definitions:
+        assert definition in descriptor
+        assert definition not in facade
+    for result_cell in (
+        "_EXT4-GD-BLOCK",
+        "_EXT4-GD-OFF",
+        "_EXT4-GD-FLAGS",
+        "_EXT4-GD-SPAN",
+    ):
+        assert result_cell in descriptor
+        assert result_cell in facade
+    assert "EXECUTE" not in descriptor
+    assert "_EXT4-MUTATION-PROTOCOL-XT" not in descriptor
+    assert "_EXT4-MUTATION-PROTOCOL-PROOF-XT" not in descriptor
+    assert "_EXT4-MUTATION-ROLE-XT" not in descriptor
+
+    assert "Allocation ownership and initialized bitmap checksums" in facade
     assert ordered_source.index(
         ": _EXT4-VALIDATE-SUPER  ( ctx vfs -- ior )"
-    ) < (
-        ordered_source.index(": _EXT4-GDT-BASE")
+    ) < ordered_source.index(": _EXT4-GDT-BASE")
+    assert ordered_source.index(": _EXT4-GDT-BASE") < (
+        ordered_source.index("4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX")
     )
 
 

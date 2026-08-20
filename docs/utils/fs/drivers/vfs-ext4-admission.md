@@ -12,8 +12,9 @@ The admission unit owns the pinned on-disk constants and context layout,
 structured ext4 errors, the checked CRC32C adapter, checked volume reads and
 writes, probe helpers, checked unsigned arithmetic, sparse-super geometry, and
 primary-super validation. It depends directly on `vfs.f` and `math/crc.f` and
-has no dependency or callback into the facade. The next source unit consumes
-its admitted context beginning with group-descriptor validation.
+has no dependency or callback into the facade. The internal
+[`vfs-ext4-descriptor.f`](vfs-ext4-descriptor.md) unit is its next consumer and
+authenticates group descriptors before the facade applies allocation policy.
 
 Most mutable scratch in this unit is private to admission. Four cells remain
 an intentional temporary cross-module surface: `_EXT4-IO-VFS` and
@@ -25,5 +26,5 @@ for a backwards dependency into admission.
 
 Physical extraction does not change the profile, error precedence, source
 order, or cold-source qualification model. Packaging and the real-image
-harness resolve the admission unit before the facade and continue to compile
-the aggregate closure in source mode.
+harness resolve admission, descriptor loading, and the facade in that order
+and continue to compile the aggregate closure in source mode.
