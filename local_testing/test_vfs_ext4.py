@@ -40,10 +40,10 @@ AKASHIC_ROOT = ROOT / "akashic"
 CRC_MODULE = "math/crc.f"
 BITSET_MODULE = "utils/bitset.f"
 VFS_MODULE = "utils/fs/vfs.f"
+EXT4_ADMISSION_MODULE = "utils/fs/drivers/vfs-ext4-admission.f"
 EXT4_MODULE = "utils/fs/drivers/vfs-ext4.f"
 CRC_F = AKASHIC_ROOT / CRC_MODULE
 BITSET_F = AKASHIC_ROOT / BITSET_MODULE
-EXT4_F = AKASHIC_ROOT / EXT4_MODULE
 MANIFEST = ROOT / "local_testing" / "fixtures" / "ext4-profile" / "manifest.json"
 IMAGE_DIR = ROOT / "local_testing" / "out" / "ext4-profile"
 
@@ -86519,8 +86519,7 @@ def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
     )
 
     assert _ext4_source_stage_modules() == expected
-    assert expected
-    assert expected[-1] == EXT4_MODULE
+    assert expected == (EXT4_ADMISSION_MODULE, EXT4_MODULE)
     assert set(expected).isdisjoint(already_staged)
     assert set(full_order) == set(expected) | (set(full_order) & already_staged)
     assert {VFS_MODULE, CRC_MODULE, BITSET_MODULE}.isdisjoint(expected)
@@ -86528,6 +86527,53 @@ def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
     packed = _ext4_source_stage_lines()
     assert packed
     assert all(len(line.encode("utf-8")) <= 255 for line in packed)
+
+
+def test_ext4_admission_is_an_acyclic_internal_source_unit() -> None:
+    admission = (AKASHIC_ROOT / EXT4_ADMISSION_MODULE).read_text(
+        encoding="utf-8"
+    )
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+    ordered_source = _ext4_source_text()
+
+    assert admission.splitlines().count(
+        "PROVIDED akashic-ext4-admission"
+    ) == 1
+    assert tuple(
+        line.removeprefix("REQUIRE ")
+        for line in admission.splitlines()
+        if line.startswith("REQUIRE ")
+    ) == ("../vfs.f", "../../../math/crc.f")
+    assert tuple(
+        line.removeprefix("REQUIRE ")
+        for line in facade.splitlines()
+        if line.startswith("REQUIRE ")
+    ) == (
+        "../vfs.f",
+        "../../uint-range.f",
+        "../../bitset.f",
+        "vfs-ext4-admission.f",
+    )
+    assert "URANGE-" not in admission
+    assert "BITSET-" not in admission
+
+    moved_definitions = (
+        "CONSTANT _EXT4-CTX-SIZE",
+        ": _EXT4-CRC-ADD",
+        ": _EXT4-READ-BLOCK",
+        ": _EXT4-PROBE",
+        ": _EXT4-VALIDATE-SUPER  ( ctx vfs -- ior )",
+    )
+    for definition in moved_definitions:
+        assert definition in admission
+        assert definition not in facade
+
+    assert "Group descriptors and initialized bitmap checksums" in facade
+    assert ordered_source.index(
+        ": _EXT4-VALIDATE-SUPER  ( ctx vfs -- ior )"
+    ) < (
+        ordered_source.index(": _EXT4-GDT-BASE")
+    )
 
 
 def test_ext4_crc_source_uses_checked_hardware_without_fallback() -> None:

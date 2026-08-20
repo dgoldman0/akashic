@@ -55,11 +55,17 @@ redirected.
   delta by applying a checked singleton clear to the transient raw cache, then
   compares every physical byte. Filesystem checksum, accounting, iteration,
   padding-authentication, and durability policy remain with their owners.
-- Stage 3 is in progress. The cold ext4 source harness now derives the driver's
+- Stage 3 is in progress. The cold ext4 source harness derives the driver's
   dependency-ordered closure and removes the VFS, CRC, and bitset foundation
-  already present in earlier measured stages. New internal source units will
-  therefore enter the existing ext4 stage in production order rather than
-  requiring another handwritten concatenation list.
+  already present in earlier measured stages. The first physical component,
+  `vfs-ext4-admission.f`, now owns the on-disk profile and private context
+  layout, checked I/O and CRC adapter, probe helpers, checked arithmetic, and
+  primary-super admission.
+  `vfs-ext4.f` remains the only public facade and begins with group-descriptor
+  admission. The aggregate source stage now loads `(admission, facade)` in
+  production order rather than relying on a handwritten concatenation list.
+  Four checked-I/O session/evidence cells remain a temporary cross-component
+  surface until the operation-lifetime context stage.
 
 ## Baseline and objective
 
@@ -163,6 +169,13 @@ move coherent mechanisms behind it without late-bound execution-token cycles.
 The split must preserve the exact production source closure used by the
 harness and package.
 
+The first split is the acyclic admission prefix. It depends directly on VFS
+and CRC, has no callback into the facade, and ends after primary-super
+validation. Group descriptors and every later authority, recovery, mutation,
+and VFS-operation policy remain in the facade until they form another
+one-directional ownership boundary. The facade's direct CRC edge is removed;
+CRC is an implementation dependency of admission's checked adapter.
+
 Candidate boundaries are validated geometry/authority, JBD2 recovery and
 transaction execution, directory/HTree mechanics, allocation and extent
 mutation, orphan handling, and VFS operation adapters. They are candidates,
@@ -240,10 +253,11 @@ tranche is integrated, run one sequential source-mode cold build and a compact
 representative happy-path equivalence set. Before leaving refactoring for new
 functionality, run the accumulated sequential equivalence gate. When new
 filesystem functionality resumes, restore the extensive qualification cadence
-and include the refactored paths in that feature's evidence. The current cold
-source measurement is 1,592,943,041 of the 1,600,000,000-step watchdog across
-3,724 packed lines; that narrow measured guard is not an implementation
-capacity.
+and include the refactored paths in that feature's evidence. The last recorded
+cold-source measurement is 1,592,943,041 of the 1,600,000,000-step watchdog
+across 3,724 packed lines; that narrow measured guard is not an implementation
+capacity. Static source shape may advance between those intentionally sparse
+cold measurements.
 
 ## Commit boundaries
 
@@ -253,8 +267,9 @@ owner:
 - this plan and its driver-document link;
 - the range utility and compatibility migrations;
 - the bitmap utility and each filesystem migration;
-- the explicit source-closure seam together with the first acyclic source-
-  module extraction, facade, and packaging update;
+- the explicit source-closure seam and its packaging contract;
+- each acyclic source-module extraction together with its facade and packaging
+  update;
 - each coherent operation-context migration; and
 - the home-plan contract plus one fully migrated operation family, with the old
   collector removed; and

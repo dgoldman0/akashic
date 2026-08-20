@@ -122,6 +122,14 @@ operations relative to the supplied `VOL-RAW` or `VOL-SLICE` object.
 REQUIRE utils/fs/drivers/vfs-ext4.f
 ```
 
+`vfs-ext4.f` remains the sole public entry facade. Its internal
+[`vfs-ext4-admission.f`](vfs-ext4-admission.md) dependency owns the on-disk
+profile and context layout, checked volume I/O and CRC adapter, probing,
+checked geometry arithmetic, and primary-super validation. The facade begins
+at group-descriptor admission and retains all later filesystem authority,
+recovery, transaction, mutation, and VFS-operation policy. Consumers should
+not require the internal unit directly.
+
 The post-`abb3f94` implementation sequence is fixed in the
 [ext4 recovery refactor plan](../ext4-refactor-plan.md). That plan records the
 semantic invariants, migration order, commit thresholds, and focused
@@ -129,8 +137,11 @@ verification cadence that apply before the next indexed-directory capability.
 
 ## Cold source qualification
 
-The real-image harness cold-compiles the production ext4 Forth source into
-the restored FAT/VFS snapshot. It does not use a compiled shard or warm cache.
+The real-image harness cold-compiles the dependency-ordered production ext4
+source closure into the restored FAT/VFS snapshot. The current ext4 stage is
+the admission unit followed by the public facade; VFS, CRC, and bitset are
+already present in earlier measured stages. It does not use a compiled shard
+or warm cache.
 To avoid making UART echo volume an implementation-size limit, the host
 injects each compacted physical source line into the BIOS `FSLOAD`
 source-buffer span and invokes an immediate `EVALUATE-CHECKED` shim;
