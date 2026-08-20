@@ -18,6 +18,9 @@ to authenticate, verify, and checksum group descriptors. The independent
 [`vfs-ext4-bitmap.f`](vfs-ext4-bitmap.md) unit combines admitted geometry,
 descriptor evidence, checked reads and CRCs, and exact generic bitset queries
 for allocation-bitmap admission. The independent
+[`vfs-ext4-inode.f`](vfs-ext4-inode.md) unit consumes the admitted inode
+layout, arithmetic, and CRC adapter for stack-only record decoding and
+encoding. The independent
 [`vfs-ext4-backups.f`](vfs-ext4-backups.md) unit uses the admitted superblock
 and descriptor services to authenticate sparse-super copies. The independent
 [`vfs-ext4-dirhash.f`](vfs-ext4-dirhash.md) unit consumes the admitted
@@ -40,7 +43,7 @@ for a backwards dependency into admission.
 
 Physical extraction does not change the profile, error precedence, or
 cold-source qualification model. Packaging and the real-image harness resolve
-admission, descriptor loading, bitmap admission, backup authority, directory
-hashing, the linear directory-entry codec, the JBD2 checksum codec, and the
-facade in production order and continue to compile the aggregate closure in
-source mode.
+admission, descriptor loading, bitmap admission, inode-record formatting,
+backup authority, directory hashing, the linear directory-entry codec, the
+JBD2 checksum codec, and the facade in production order and continue to
+compile the aggregate closure in source mode.

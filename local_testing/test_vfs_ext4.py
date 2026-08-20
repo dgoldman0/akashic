@@ -43,6 +43,7 @@ VFS_MODULE = "utils/fs/vfs.f"
 EXT4_ADMISSION_MODULE = "utils/fs/drivers/vfs-ext4-admission.f"
 EXT4_DESCRIPTOR_MODULE = "utils/fs/drivers/vfs-ext4-descriptor.f"
 EXT4_BITMAP_MODULE = "utils/fs/drivers/vfs-ext4-bitmap.f"
+EXT4_INODE_MODULE = "utils/fs/drivers/vfs-ext4-inode.f"
 EXT4_BACKUPS_MODULE = "utils/fs/drivers/vfs-ext4-backups.f"
 EXT4_DIRHASH_MODULE = "utils/fs/drivers/vfs-ext4-dirhash.f"
 EXT4_DIRENT_MODULE = "utils/fs/drivers/vfs-ext4-dirent.f"
@@ -86529,6 +86530,7 @@ def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
         EXT4_ADMISSION_MODULE,
         EXT4_DESCRIPTOR_MODULE,
         EXT4_BITMAP_MODULE,
+        EXT4_INODE_MODULE,
         EXT4_BACKUPS_MODULE,
         EXT4_DIRHASH_MODULE,
         EXT4_DIRENT_MODULE,
@@ -86573,6 +86575,7 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
         "vfs-ext4-admission.f",
         "vfs-ext4-descriptor.f",
         "vfs-ext4-bitmap.f",
+        "vfs-ext4-inode.f",
         "vfs-ext4-backups.f",
         "vfs-ext4-dirhash.f",
         "vfs-ext4-dirent.f",
@@ -86978,6 +86981,219 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         ordered_source.index(": _EXT4-GROUP-BLOCK-COUNT")
     )
     assert ordered_source.index(": _EXT4-BLOCK-ALLOCATED?") < (
+        ordered_source.index(": _EXT4-VALIDATE-BACKUPS")
+    )
+
+
+def test_ext4_inode_format_service_is_private_acyclic_unit() -> None:
+    inode = (AKASHIC_ROOT / EXT4_INODE_MODULE).read_text(encoding="utf-8")
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+    ordered_source = _ext4_source_text()
+
+    assert inode.splitlines().count("PROVIDED akashic-ext4-inode") == 1
+    assert len("akashic-ext4-inode".encode("utf-8")) == 18
+    assert tuple(
+        line.removeprefix("REQUIRE ")
+        for line in inode.splitlines()
+        if line.startswith("REQUIRE ")
+    ) == ("vfs-ext4-admission.f",)
+
+    service_definitions = (
+        ": _EXT4-DECODE-I-BLOCKS  ( inode ctx -- blocks-512 ior )",
+        ": _EXT4-S32@  ( addr -- n )",
+        ": _EXT4-RESTAMP-INODE  ( inode inode-number ctx -- ior )",
+        (
+            ": _EXT4-SET-INODE-MTIME-CTIME  "
+            "( seconds nsec inode ctx -- ior )"
+        ),
+        ": _EXT4-SET-INODE-CTIME  ( seconds nsec inode ctx -- ior )",
+        ": _EXT4-ENCODE-I-BLOCKS  ( blocks-512 inode ctx -- ior )",
+    )
+    service_names = (
+        "_EXT4-DECODE-I-BLOCKS",
+        "_EXT4-S32@",
+        "_EXT4-RESTAMP-INODE",
+        "_EXT4-SET-INODE-MTIME-CTIME",
+        "_EXT4-SET-INODE-CTIME",
+        "_EXT4-ENCODE-I-BLOCKS",
+    )
+    for definition in service_definitions:
+        assert inode.splitlines().count(definition) == 1
+        assert ordered_source.count(definition) == 1
+        assert definition not in facade
+    for service in service_names:
+        assert service in facade
+        assert re.search(
+            rf"(?m)^:[ \t]+{re.escape(service)}(?=[ \t\r\n(])",
+            facade,
+        ) is None
+
+    private_cells = set(
+        re.findall(r"^VARIABLE (\S+)$", inode, re.MULTILINE)
+    )
+    assert private_cells == {
+        "_EXT4-IB-IN",
+        "_EXT4-IB-CTX",
+        "_EXT4-RI-INODE",
+        "_EXT4-RI-INO",
+        "_EXT4-RI-CTX",
+        "_EXT4-RI-EXTRA",
+        "_EXT4-RI-HAS-HI",
+        "_EXT4-RI-CALC",
+        "_EXT4-ITM-SECONDS",
+        "_EXT4-ITM-NSEC",
+        "_EXT4-ITM-INODE",
+        "_EXT4-ITM-CTX",
+        "_EXT4-ITM-LOW",
+        "_EXT4-ITM-SIGNED",
+        "_EXT4-ITM-EPOCH",
+        "_EXT4-ITM-EXTRA",
+        "_EXT4-ICT-SECONDS",
+        "_EXT4-ICT-NSEC",
+        "_EXT4-ICT-INODE",
+        "_EXT4-ICT-CTX",
+        "_EXT4-ICT-MTIME-LOW",
+        "_EXT4-ICT-MTIME-EXTRA",
+        "_EXT4-EIB-SECTORS",
+        "_EXT4-EIB-INODE",
+        "_EXT4-EIB-CTX",
+        "_EXT4-EIB-RAW",
+        "_EXT4-EIB-LIMIT",
+    }
+    assert len(private_cells) == 27
+    assert all(cell not in facade for cell in private_cells)
+    assert "EXECUTE" not in inode
+    assert "-XT" not in inode
+    assert "_EXT4-IR-" not in inode
+    assert "_EXT4-GD-" not in inode
+    assert "_EXT4-LOAD-" not in inode
+    assert "BITSET-" not in inode
+    assert "_EXT4-MUTATION-" not in inode
+    for retained_result in (
+        "_EXT4-IR-INO",
+        "_EXT4-IR-GROUP",
+        "_EXT4-IR-INDEX",
+        "_EXT4-IR-BLOCK",
+        "_EXT4-IR-OFF",
+    ):
+        assert retained_result in facade
+        assert retained_result not in inode
+
+    inode_executable = "\n".join(
+        line.split("\\", 1)[0] for line in inode.splitlines()
+    )
+    facade_executable = "\n".join(
+        line.split("\\", 1)[0] for line in facade.splitlines()
+    )
+
+    def word_body(source: str, name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None
+        return " ".join(match.group("body").split())
+
+    decode = word_body(inode_executable, "_EXT4-DECODE-I-BLOCKS")
+    signed = word_body(inode_executable, "_EXT4-S32@")
+    restamp = word_body(inode_executable, "_EXT4-RESTAMP-INODE")
+    both_times = word_body(
+        inode_executable, "_EXT4-SET-INODE-MTIME-CTIME"
+    )
+    ctime = word_body(inode_executable, "_EXT4-SET-INODE-CTIME")
+    encode = word_body(inode_executable, "_EXT4-ENCODE-I-BLOCKS")
+
+    assert decode.index("_EXT4-I.BLOCKS-HI + W@ 32 LSHIFT") < (
+        decode.index("_EXT4-I.BLOCKS-LO + L@ OR")
+    ) < decode.index("_EXT4-HUGE-FILE-FL AND IF")
+    assert "_EXT4-C.SPB + @ *" in decode
+    assert (
+        "_EXT4-C.BLOCKS + @ _EXT4-IB-CTX @ _EXT4-C.SPB + @ * U> IF"
+        in decode
+    )
+    assert "DROP 0 EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in decode
+    assert signed == (
+        "( addr -- n ) L@ DUP 0x80000000 AND IF "
+        "0xFFFFFFFF00000000 OR THEN"
+    )
+
+    restamp_zero = "0 _EXT4-RI-INODE @ _EXT4-I.CSUM-LO + W!"
+    assert restamp.index("_EXT4-RI-INODE @ 0=") < restamp.index(
+        "_EXT4-RI-INO @ 0="
+    ) < restamp.index("_EXT4-C.ISIZE + @ 128 U<")
+    assert restamp.index("_EXT4-RI-EXTRA @ 4 MOD") < restamp.index(
+        restamp_zero
+    )
+    assert restamp.index(restamp_zero) < restamp.index(
+        "_EXT4-C.SEED + @ _EXT4-CRC-START"
+    )
+    assert restamp.index("_EXT4-C.TMP + 4 _EXT4-CRC-ADD") < (
+        restamp.index("_EXT4-I.GENERATION + 4 _EXT4-CRC-ADD")
+    ) < restamp.index("_EXT4-C.ISIZE + @ _EXT4-CRC-ADD")
+    assert restamp.count("_EXT4-CRC-ADD ?DUP IF EXIT THEN") == 3
+    assert "_EXT4-CRC@ DUP _EXT4-RI-CALC !" in restamp
+    assert restamp.index("_EXT4-CRC@") < restamp.rindex(
+        "_EXT4-I.CSUM-LO + W!"
+    ) < restamp.rindex("_EXT4-I.CSUM-HI + W!")
+
+    first_time_store = "_EXT4-I.CTIME + L!"
+    time_validation = (
+        "_EXT4-ITM-NSEC @ 1000000000 U< 0= OR IF",
+        "_EXT4-C.ISIZE + @ DUP 128 = SWAP 256 = OR 0= IF",
+        "_EXT4-ITM-SECONDS @ 15032385535 > OR IF",
+        "_EXT4-ITM-EPOCH ! 3 U> IF",
+        "_EXT4-I.EXTRA-SIZE + W@",
+        "_EXT4-ITM-EXTRA !",
+    )
+    assert all(
+        both_times.index(fragment) < both_times.index(first_time_store)
+        for fragment in time_validation
+    )
+    assert both_times.index(first_time_store) < both_times.index(
+        "_EXT4-I.MTIME + L!"
+    )
+    assert "_EXT4-I.CTIME-EXTRA + L!" in both_times
+    assert "_EXT4-I.MTIME-EXTRA + L!" in both_times
+
+    assert ctime.index("_EXT4-I.MTIME + L@ _EXT4-ICT-MTIME-LOW !") < (
+        ctime.index("_EXT4-SET-INODE-MTIME-CTIME ?DUP IF EXIT THEN")
+    ) < ctime.index("_EXT4-ICT-MTIME-LOW @ _EXT4-ICT-INODE @")
+    assert "_EXT4-I.MTIME-EXTRA + L@" in ctime
+    assert "_EXT4-I.MTIME-EXTRA + L!" in ctime
+
+    first_block_store = "_EXT4-I.BLOCKS-LO + L!"
+    for validation in (
+        "_EXT4-EIB-SECTORS @ 0< IF",
+        "_EXT4-C.SPB + @ 0= IF",
+        "_EXT4-C.SPB + @ _EXT4-UMUL?",
+        "_EXT4-EIB-SECTORS @ _EXT4-EIB-LIMIT @ U> IF",
+        "SWAP IF DROP EXT4-D-DATA-MAP _EXT4-CORRUPT EXIT THEN",
+        "0xFFFFFFFFFFFF U> IF",
+    ):
+        assert encode.index(validation) < encode.index(first_block_store)
+    assert encode.index(first_block_store) < encode.index(
+        "_EXT4-I.BLOCKS-HI + W!"
+    )
+
+    expected_facade_calls = {
+        "_EXT4-DECODE-I-BLOCKS": 4,
+        "_EXT4-S32@": 6,
+        "_EXT4-RESTAMP-INODE": 16,
+        "_EXT4-SET-INODE-MTIME-CTIME": 10,
+        "_EXT4-SET-INODE-CTIME": 5,
+        "_EXT4-ENCODE-I-BLOCKS": 5,
+    }
+    for service, count in expected_facade_calls.items():
+        assert facade_executable.count(service) == count
+
+    assert inode.index(service_definitions[3]) < inode.index(
+        service_definitions[4]
+    )
+    assert ordered_source.index(": _EXT4-BLOCK-ALLOCATED?") < (
+        ordered_source.index(": _EXT4-DECODE-I-BLOCKS")
+    )
+    assert ordered_source.index(": _EXT4-ENCODE-I-BLOCKS") < (
         ordered_source.index(": _EXT4-VALIDATE-BACKUPS")
     )
 

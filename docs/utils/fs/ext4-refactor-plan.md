@@ -69,6 +69,10 @@ redirected.
   predicate. All 22 scratch cells are private after making the CRC calculators
   stack-direct, and mount validation delegates its duplicate CRC tails without
   moving allocation-owner policy.
+  `vfs-ext4-inode.f` owns stack-only `i_blocks` decode/encode, signed timestamp
+  loading, inode-checksum restamping, and mtime/ctime encoding. All 27 scratch
+  cells are private; inode media lookup, checksum verification, and the
+  success-only IR locator results remain in the facade pending Stage 4.
   `vfs-ext4-backups.f` owns sparse-super copy authority, immutable-super
   comparison, exact journal-backup tuples, and backup-GDT location checks; all
   13 of its scratch cells are private.
@@ -85,13 +89,14 @@ redirected.
   private, and the module adds no mutable cross-component result surface.
   `vfs-ext4.f` remains the only public facade and begins with allocation-owner
   and initialized-bitmap policy. The aggregate source stage now loads
-  `(admission, descriptor, bitmap, backups, dirhash, dirent, jbd2-codec,
-  facade)` in production order rather than relying on a handwritten
+  `(admission, descriptor, bitmap, inode, backups, dirhash, dirent,
+  jbd2-codec, facade)` in production order rather than relying on a handwritten
   concatenation list.
-  Four checked-I/O session/evidence cells and four success-only descriptor
-  parser-result cells remain temporary cross-component surfaces until the
-  operation-lifetime context stage; bitmap admission, backups, dirhash, dirent,
-  and the JBD2 codec add none.
+  Four checked-I/O session/evidence cells, four success-only descriptor
+  parser-result cells, and five inode-lookup locator cells remain temporary
+  cross-component surfaces until the operation-lifetime context stage; bitmap
+  admission, inode formatting, backups, dirhash, dirent, and the JBD2 codec add
+  none.
 
 ## Baseline and objective
 
@@ -211,7 +216,12 @@ and the exact-bit raw allocation predicate. It keeps 22 scratch cells private,
 makes both CRC calculators stack-direct, and removes the facade's duplicate
 bitmap CRC tails. Logical queries exclude short-final-group padding while ext4
 CRCs retain their format-defined nominal byte spans. Raw `BLOCK_UNINIT`
-evidence remains `FALSE 0`; stricter loader and facade policy is unchanged. A
+evidence remains `FALSE 0`; stricter loader and facade policy is unchanged.
+The inode-format unit then moves six stack services for normalized `i_blocks`,
+signed timestamp loading, checksum restamping, and timestamp encoding behind
+an admission-only dependency. Its 27 scratch cells are private, and it leaves
+media lookup, readable-old-format checksum policy, and IR locator results in
+the facade rather than creating a new mutable cross-module seam. A
 backup-authority unit uses the admission and descriptor foundations to
 authenticate sparse-super copies and backup descriptor locations; its three
 services are stack-only and all scratch state remains private. The independent
