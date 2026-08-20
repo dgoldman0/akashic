@@ -47,9 +47,11 @@ redirected.
   and private bit set, eliminating ext4's generic range bridge and its shared
   scratch state. The ordinary/bootstrap inode loader and recovery's inode-8
   allocation witness now share the canonical exact group-inode count and
-  checked singleton query. The remaining owner iterator and exact staged
-  bitmap delta comparator follow at their own typed boundaries before Stage 2
-  closes.
+  checked singleton query. The reverse-owner scan now also walks each
+  authenticated inode bitmap through checked exact-group singleton queries
+  while retaining its filesystem-specific ascending iteration and owner
+  policy. The exact staged bitmap delta comparator is the remaining Stage 2
+  boundary.
 
 ## Baseline and objective
 

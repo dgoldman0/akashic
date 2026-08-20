@@ -1106,13 +1106,17 @@ space, be disjoint from every other target range, and be disjoint from static
 metadata, the journal, and all modern-orphan-file extents.
 
 Release admission then walks every initialized, checksum-authenticated inode
-bitmap and every set inode record except the target. Each record's inode
-checksum is verified before the normal complete extent or legacy-map validator
-enumerates data ranges and external tree/indirect nodes; a nonzero external
-xattr pointer is included as ownership. Extent leaves and index nodes, legacy
-direct data and indirect metadata/data, and external xattr storage therefore
-all participate in the reverse-owner proof. `INODE_UNINIT` groups contain no
-allocated owners and are skipped. Inode 1 retains its format-defined legacy
+bitmap and every set inode record except the target. The retained bitmap copy
+is queried in ascending order through the checked exact group-inode view;
+invalid geometry is bounds corruption and valid clear bits are skipped. The
+copy remains separate because loading each selected inode record reuses the
+primary block buffer. Each record's inode checksum is verified before the
+normal complete extent or legacy-map validator enumerates data ranges and
+external tree/indirect nodes; a nonzero external xattr pointer is included as
+ownership. Extent leaves and index nodes, legacy direct data and indirect
+metadata/data, and external xattr storage therefore all participate in the
+reverse-owner proof. `INODE_UNINIT` groups contain no allocated owners and are
+skipped. Inode 1 retains its format-defined legacy
 bad-block-map interpretation; other mode-zero reserved records must be
 storage-empty, while fast-symlink and device payload bytes retain their normal
 non-map interpretation. Any data or map-metadata reference to a candidate range

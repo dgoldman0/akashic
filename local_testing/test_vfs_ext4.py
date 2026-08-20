@@ -87210,6 +87210,45 @@ def test_ext4_early_inode_reads_use_checked_exact_bitset_views() -> None:
     assert "_EXT4-JOURNAL-INODE 1- 8 /" not in recovery
 
 
+def test_ext4_reverse_owner_iterator_uses_checked_exact_inode_views() -> None:
+    source = EXT4_F.read_text(encoding="utf-8")
+
+    match = re.search(
+        r"(?ms)^:[ \t]+_EXT4-JFO-SCAN-GROUP(?=[ \t\r\n(])"
+        r"(?P<body>.*?)[ \t]+;",
+        source,
+    )
+    assert match is not None
+    scan = match.group("body")
+
+    exact_test = (
+        "_EXT4-JFO-CTX @ _EXT4-C.DIR-BLOCK +\n"
+        "        _EXT4-JFO-GROUP-INODES @ I BITSET-TEST?"
+    )
+    assert scan.count("BITSET-TEST?") == 1
+    assert exact_test in scan
+    assert (
+        "BITSET-TEST? 0= IF\n"
+        "            DROP EXT4-D-BOUNDS _EXT4-CORRUPT UNLOOP EXIT"
+    ) in scan
+    assert "_EXT4-JFO-GROUP-INODES @ 0 ?DO" in scan
+    assert "_EXT4-JFO-GROUP-BASE @ I + 1+ DUP _EXT4-JFO-INO !" in scan
+    assert "DUP _EXT4-JFO-TARGET-INO @ <>" in scan
+    assert "SWAP _EXT4-JFO-TARGET-INO-B @ <> AND IF" in scan
+    assert (
+        "_EXT4-JFO-INO @ _EXT4-MUTATION-OWNER-INO !\n"
+        "                _EXT4-JFO-CHECK-CURRENT-INODE _EXT4-JFO-IOR !\n"
+        "                0 _EXT4-MUTATION-OWNER-INO !"
+    ) in scan
+    assert scan.index("_EXT4-LOAD-INODE-BITMAP") < scan.index(
+        "_EXT4-C.DIR-BLOCK +"
+    ) < scan.index("_EXT4-JFO-GROUP-INODES @ 0 ?DO") < scan.index(
+        "BITSET-TEST?"
+    ) < scan.index("_EXT4-JFO-LOAD-CURRENT-INODE")
+    for removed in ("C@", "LSHIFT", "8 /", "8 MOD", "BITSET-FIND"):
+        assert removed not in scan
+
+
 def test_hardware_crc32c_matches_fragmented_ext4_raw_vector(tmp_path: Path) -> None:
     blank = tmp_path / "crc-storage.img"
     blank.write_bytes(bytes(4 * 512))
