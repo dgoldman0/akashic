@@ -19,10 +19,13 @@ to authenticate group descriptors. The independent
 and descriptor services to authenticate sparse-super copies. The independent
 [`vfs-ext4-dirhash.f`](vfs-ext4-dirhash.md) unit consumes the admitted
 superblock hash seed and flags for checked directory-name hashing. The
-independent [`vfs-ext4-jbd2-codec.f`](vfs-ext4-jbd2-codec.md) unit consumes the
-checked CRC adapter plus admitted context geometry and journal seed for raw
-JBD2 checksum validation and encoding. None of these units calls back into
-later filesystem policy.
+independent [`vfs-ext4-dirent.f`](vfs-ext4-dirent.md) unit consumes the checked
+CRC adapter, context geometry, typed errors, and that name-byte predicate for
+linear directory-block validation and checksum encoding. The independent
+[`vfs-ext4-jbd2-codec.f`](vfs-ext4-jbd2-codec.md) unit consumes the checked CRC
+adapter plus admitted context geometry and journal seed for raw JBD2 checksum
+validation and encoding. None of these units calls back into later filesystem
+policy.
 
 Most mutable scratch in this unit is private to admission. Four cells remain
 an intentional temporary cross-module surface: `_EXT4-IO-VFS` and
@@ -34,6 +37,6 @@ for a backwards dependency into admission.
 
 Physical extraction does not change the profile, error precedence, or
 cold-source qualification model. Packaging and the real-image harness resolve
-admission, descriptor loading, backup authority, directory hashing, the JBD2
-checksum codec, and the facade in production order and continue to compile the
-aggregate closure in source mode.
+admission, descriptor loading, backup authority, directory hashing, the linear
+directory-entry codec, the JBD2 checksum codec, and the facade in production
+order and continue to compile the aggregate closure in source mode.

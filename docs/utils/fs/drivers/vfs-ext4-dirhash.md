@@ -26,3 +26,8 @@ flags, and typed errors. It has no descriptor dependency, callback,
 execution-token hook, or mutable state shared with the facade. Existing pinned
 half-MD4 vectors remain the behavioral oracle; the physical extraction leaves
 their name-validation, policy, and hash order unchanged.
+
+The downstream [`vfs-ext4-dirent.f`](vfs-ext4-dirent.md) unit reuses the name
+byte predicate when authenticating each live linear directory entry. Dirhash
+does not depend on that codec, so the production order remains acyclic and
+neither unit calls back into facade scan or cache policy.

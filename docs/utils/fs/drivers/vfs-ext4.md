@@ -133,11 +133,15 @@ copies, immutable superblock identity, and backup descriptor locations without
 treating mutable counters as identity. The independent
 [`vfs-ext4-dirhash.f`](vfs-ext4-dirhash.md) unit owns directory-name byte
 admission, the ext4 half-MD4 engine, and the checked mounted hash policy. The
-independent [`vfs-ext4-jbd2-codec.f`](vfs-ext4-jbd2-codec.md) unit owns raw
-big-endian access and shared JBD2 checksum validation and encoding; its tag
-validator takes the payload, stored checksum, sequence, and context explicitly
-instead of reading scanner state. The facade begins at allocation ownership
-and initialized-bitmap policy and retains all later filesystem authority,
+[`vfs-ext4-dirent.f`](vfs-ext4-dirent.md) unit owns directory-entry type
+decoding plus complete linear-block validation and checksum restamping. It
+keeps all 14 scratch cells private; directory scanning, child-inode admission,
+VFS cache publication, and rollback remain in the facade. The independent
+[`vfs-ext4-jbd2-codec.f`](vfs-ext4-jbd2-codec.md) unit owns raw big-endian
+access and shared JBD2 checksum validation and encoding; its tag validator
+takes the payload, stored checksum, sequence, and context explicitly instead
+of reading scanner state. The facade begins at allocation ownership and
+initialized-bitmap policy and retains all later filesystem authority,
 recovery, transaction, mutation, and VFS-operation policy. Consumers should
 not require these internal units directly.
 
@@ -150,9 +154,10 @@ verification cadence that apply before the next indexed-directory capability.
 
 The real-image harness cold-compiles the dependency-ordered production ext4
 source closure into the restored FAT/VFS snapshot. The current ext4 stage is
-the admission, descriptor, backup-authority, directory-hash, and JBD2-checksum
-units followed by the public facade; VFS, CRC, and bitset are already present
-in earlier measured stages. It does not use a compiled shard or warm cache.
+the admission, descriptor, backup-authority, directory-hash, linear-dirent, and
+JBD2-checksum units followed by the public facade; VFS, CRC, and bitset are
+already present in earlier measured stages. It does not use a compiled shard
+or warm cache.
 To avoid making UART echo volume an implementation-size limit, the host
 injects each compacted physical source line into the BIOS `FSLOAD`
 source-buffer span and invokes an immediate `EVALUATE-CHECKED` shim;

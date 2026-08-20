@@ -807,6 +807,7 @@ def test_ext4_binding_has_a_bounded_headless_dependency_closure() -> None:
         "utils/fs/drivers/vfs-ext4-descriptor.f",
         "utils/fs/drivers/vfs-ext4-backups.f",
         "utils/fs/drivers/vfs-ext4-dirhash.f",
+        "utils/fs/drivers/vfs-ext4-dirent.f",
         "utils/fs/drivers/vfs-ext4-jbd2-codec.f",
         "utils/fs/drivers/vfs-ext4.f",
     )
@@ -820,6 +821,7 @@ def test_ext4_binding_has_a_bounded_headless_dependency_closure() -> None:
         "utils/fs/drivers/vfs-ext4-admission.f",
         "utils/fs/drivers/vfs-ext4-backups.f",
         "utils/fs/drivers/vfs-ext4-descriptor.f",
+        "utils/fs/drivers/vfs-ext4-dirent.f",
         "utils/fs/drivers/vfs-ext4-dirhash.f",
         "utils/fs/drivers/vfs-ext4-jbd2-codec.f",
         "utils/fs/drivers/vfs-ext4.f",

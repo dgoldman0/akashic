@@ -44,6 +44,7 @@ EXT4_ADMISSION_MODULE = "utils/fs/drivers/vfs-ext4-admission.f"
 EXT4_DESCRIPTOR_MODULE = "utils/fs/drivers/vfs-ext4-descriptor.f"
 EXT4_BACKUPS_MODULE = "utils/fs/drivers/vfs-ext4-backups.f"
 EXT4_DIRHASH_MODULE = "utils/fs/drivers/vfs-ext4-dirhash.f"
+EXT4_DIRENT_MODULE = "utils/fs/drivers/vfs-ext4-dirent.f"
 EXT4_JBD2_CODEC_MODULE = "utils/fs/drivers/vfs-ext4-jbd2-codec.f"
 EXT4_MODULE = "utils/fs/drivers/vfs-ext4.f"
 CRC_F = AKASHIC_ROOT / CRC_MODULE
@@ -86528,6 +86529,7 @@ def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
         EXT4_DESCRIPTOR_MODULE,
         EXT4_BACKUPS_MODULE,
         EXT4_DIRHASH_MODULE,
+        EXT4_DIRENT_MODULE,
         EXT4_JBD2_CODEC_MODULE,
         EXT4_MODULE,
     )
@@ -86570,6 +86572,7 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
         "vfs-ext4-descriptor.f",
         "vfs-ext4-backups.f",
         "vfs-ext4-dirhash.f",
+        "vfs-ext4-dirent.f",
         "vfs-ext4-jbd2-codec.f",
     )
     assert "URANGE-" not in admission
@@ -86815,6 +86818,232 @@ def test_ext4_dirhash_service_is_private_acyclic_unit() -> None:
     )
     assert ordered_source.index(": _EXT4-HALF-MD4-DIRHASH?") < (
         ordered_source.index("4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX")
+    )
+
+
+def test_ext4_dirent_codec_is_private_acyclic_unit() -> None:
+    codec = (AKASHIC_ROOT / EXT4_DIRENT_MODULE).read_text(encoding="utf-8")
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+    ordered_source = _ext4_source_text()
+
+    assert codec.splitlines().count("PROVIDED akashic-ext4-dirent") == 1
+    assert len("akashic-ext4-dirent".encode("utf-8")) == 19
+    assert tuple(
+        line.removeprefix("REQUIRE ")
+        for line in codec.splitlines()
+        if line.startswith("REQUIRE ")
+    ) == ("vfs-ext4-admission.f", "vfs-ext4-dirhash.f")
+
+    service_definitions = (
+        ": _EXT4-DIRENT>TYPE  ( dtype -- type supported? )",
+        ": _EXT4-VALIDATE-DIR-BLOCK  ( dir-inum generation ctx -- ior )",
+        (
+            ": _EXT4-RESTAMP-DIR-BLOCK  "
+            "( block dir-inum generation ctx -- ior )"
+        ),
+    )
+    service_names = (
+        "_EXT4-DIRENT>TYPE",
+        "_EXT4-VALIDATE-DIR-BLOCK",
+        "_EXT4-RESTAMP-DIR-BLOCK",
+    )
+    for definition in service_definitions:
+        assert codec.splitlines().count(definition) == 1
+        assert definition not in facade
+    for service in service_names:
+        assert service in facade
+        assert re.search(
+            rf"(?m)^:[ \t]+{re.escape(service)}(?=[ \t\r\n(])",
+            facade,
+        ) is None
+
+    private_cells = set(
+        re.findall(
+            r"^VARIABLE (_EXT4-(?:DV|RDB)-[A-Z0-9-]+)$",
+            codec,
+            re.MULTILINE,
+        )
+    )
+    assert len(private_cells) == 14
+    assert private_cells == {
+        "_EXT4-DV-INO",
+        "_EXT4-DV-GEN",
+        "_EXT4-DV-CTX",
+        "_EXT4-DV-STORED",
+        "_EXT4-DV-OFF",
+        "_EXT4-DV-LIMIT",
+        "_EXT4-DV-DE",
+        "_EXT4-DV-REC",
+        "_EXT4-DV-NLEN",
+        "_EXT4-RDB-BLOCK",
+        "_EXT4-RDB-INO",
+        "_EXT4-RDB-GEN",
+        "_EXT4-RDB-CTX",
+        "_EXT4-RDB-TAIL",
+    }
+    assert all(cell not in facade for cell in private_cells)
+    assert "_EXT4-DV-TAIL" not in ordered_source
+    assert "EXECUTE" not in codec
+    assert "-XT" not in codec
+
+    codec_executable = "\n".join(
+        line.split("\\", 1)[0] for line in codec.splitlines()
+    )
+    facade_executable = "\n".join(
+        line.split("\\", 1)[0] for line in facade.splitlines()
+    )
+
+    def word_body(source: str, name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None
+        return " ".join(match.group("body").split())
+
+    dtype = word_body(codec_executable, "_EXT4-DIRENT>TYPE")
+    dtype_arms = (
+        "0 OF 0 TRUE ENDOF",
+        "1 OF VFS-T-FILE TRUE ENDOF",
+        "2 OF VFS-T-DIR TRUE ENDOF",
+        "3 OF VFS-T-SPECIAL TRUE ENDOF",
+        "4 OF VFS-T-SPECIAL TRUE ENDOF",
+        "5 OF VFS-T-SPECIAL TRUE ENDOF",
+        "6 OF VFS-T-SPECIAL TRUE ENDOF",
+        "7 OF VFS-T-SYMLINK TRUE ENDOF",
+    )
+    dtype_positions = tuple(dtype.index(arm) for arm in dtype_arms)
+    assert dtype_positions == tuple(sorted(dtype_positions))
+    assert dtype.count("TRUE ENDOF") == 8
+    assert dtype.endswith("0 FALSE ROT ENDCASE")
+
+    validator = word_body(codec_executable, "_EXT4-VALIDATE-DIR-BLOCK")
+    tail_gate = (
+        "DUP L@ 0<> OVER 4 + W@ 12 <> OR OVER 6 + C@ 0<> OR "
+        "OVER 7 + C@ 0xDE <> OR IF"
+    )
+    stored = "8 + L@ _EXT4-DV-STORED !"
+    crc_start = "_EXT4-DV-CTX @ _EXT4-C.SEED + @ _EXT4-CRC-START"
+    prefix_crc = (
+        "_EXT4-DV-CTX @ _EXT4-C.TMP + 8 "
+        "_EXT4-CRC-ADD ?DUP IF EXIT THEN"
+    )
+    block_crc = (
+        "_EXT4-DV-CTX @ _EXT4-C.DIR-BLOCK + _EXT4-DV-LIMIT @ "
+        "_EXT4-CRC-ADD ?DUP IF EXIT THEN"
+    )
+    checksum_gate = "_EXT4-CRC@ _EXT4-DV-STORED @ <> IF"
+    record_loop = "BEGIN _EXT4-DV-OFF @ _EXT4-DV-LIMIT @ < WHILE"
+    validator_order = (
+        "_EXT4-C.BSIZE + @ 12 - DUP _EXT4-DV-LIMIT !",
+        tail_gate,
+        stored,
+        "_EXT4-DV-INO @ _EXT4-DV-CTX @ _EXT4-C.TMP + L!",
+        "_EXT4-DV-GEN @ _EXT4-DV-CTX @ _EXT4-C.TMP 4 + + L!",
+        crc_start,
+        prefix_crc,
+        block_crc,
+        checksum_gate,
+        record_loop,
+    )
+    validator_positions = tuple(
+        validator.index(fragment) for fragment in validator_order
+    )
+    assert validator_positions == tuple(sorted(validator_positions))
+    assert validator.count("_EXT4-CRC-ADD ?DUP IF EXIT THEN") == 2
+    assert validator.count("EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT") == 9
+    assert validator.count("L!") == 2
+    assert " W!" not in validator
+    assert " C!" not in validator
+
+    record_contract = (
+        "DUP 12 U< SWAP 3 AND 0<> OR IF",
+        "_EXT4-DV-OFF @ _EXT4-DV-REC @ + _EXT4-DV-LIMIT @ U> IF",
+        "_EXT4-DV-DE @ 6 + C@ DUP _EXT4-DV-NLEN !",
+        "_EXT4-DV-REC @ 8 - U> IF",
+        "_EXT4-DV-DE @ L@ IF",
+        (
+            "_EXT4-DV-DE @ L@ _EXT4-DV-CTX @ _EXT4-C.INODES + @ U> "
+            "_EXT4-DV-NLEN @ 0= OR IF"
+        ),
+        "_EXT4-DIRENT-NAME-VALID? 0= IF",
+        "_EXT4-DV-DE @ 7 + C@ _EXT4-DIRENT>TYPE 0= IF",
+        "THEN DROP THEN _EXT4-DV-REC @ _EXT4-DV-OFF +!",
+        "_EXT4-DV-OFF @ _EXT4-DV-LIMIT @ <> IF",
+    )
+    record_positions = tuple(
+        validator.index(fragment) for fragment in record_contract
+    )
+    assert record_positions == tuple(sorted(record_positions))
+
+    restamper = word_body(codec_executable, "_EXT4-RESTAMP-DIR-BLOCK")
+    null_gate = (
+        "_EXT4-RDB-BLOCK @ 0= _EXT4-RDB-CTX @ 0= OR IF "
+        "VFS-E-INVALID EXIT THEN"
+    )
+    inode_gate = (
+        "_EXT4-RDB-INO @ 0= _EXT4-RDB-INO @ _EXT4-RDB-CTX @ "
+        "_EXT4-C.INODES + @ U> OR IF EXT4-D-BOUNDS _EXT4-CORRUPT EXIT THEN"
+    )
+    zero_checksum = "0 _EXT4-RDB-TAIL @ 8 + L!"
+    restamp_prefix = (
+        "_EXT4-RDB-CTX @ _EXT4-C.TMP + 8 "
+        "_EXT4-CRC-ADD ?DUP IF EXIT THEN"
+    )
+    restamp_block = (
+        "_EXT4-RDB-BLOCK @ _EXT4-RDB-CTX @ _EXT4-C.BSIZE + @ 12 - "
+        "_EXT4-CRC-ADD ?DUP IF EXIT THEN"
+    )
+    final_checksum = "_EXT4-CRC@ _EXT4-RDB-TAIL @ 8 + L!"
+    restamp_order = (
+        null_gate,
+        inode_gate,
+        "_EXT4-RDB-CTX @ _EXT4-C.BSIZE + @ 12 - +",
+        tail_gate,
+        zero_checksum,
+        "_EXT4-RDB-INO @ _EXT4-RDB-CTX @ _EXT4-C.TMP + L!",
+        "_EXT4-RDB-GEN @ _EXT4-RDB-CTX @ _EXT4-C.TMP 4 + + L!",
+        "_EXT4-RDB-CTX @ _EXT4-C.SEED + @ _EXT4-CRC-START",
+        restamp_prefix,
+        restamp_block,
+        final_checksum,
+    )
+    restamp_positions = tuple(
+        restamper.index(fragment) for fragment in restamp_order
+    )
+    assert restamp_positions == tuple(sorted(restamp_positions))
+    assert restamper.count("_EXT4-CRC-ADD ?DUP IF EXIT THEN") == 2
+    assert restamper.count("_EXT4-RDB-TAIL @ 8 + L!") == 2
+    assert restamper.count("EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT") == 1
+
+    assert ": _EXT4-SCAN-DIR-BLOCK  ( parent vfs ctx -- ior )" in facade
+    assert "_EXT4-SCAN-DIR-BLOCK" not in codec
+    assert "_EXT4-DS-DOT" in facade
+    assert "_EXT4-DS-DOTDOT" in facade
+    assert "_EXT4-DS-" not in codec
+    scanner = word_body(facade_executable, "_EXT4-SCAN-DIR-BLOCK")
+    scanner_order = (
+        "_EXT4-VALIDATE-DIR-BLOCK ?DUP IF EXIT THEN",
+        "_EXT4-LOAD-INODE",
+        "_EXT4-STAGE-CURRENT-INODE",
+        "VFS-CACHE-DENTRY",
+        "_EXT4-PUBLISH-STAGED",
+    )
+    scanner_positions = tuple(scanner.index(fragment) for fragment in scanner_order)
+    assert scanner_positions == tuple(sorted(scanner_positions))
+
+    assert ordered_source.index(": _EXT4-HALF-MD4-DIRHASH?") < (
+        ordered_source.index(": _EXT4-DIRENT>TYPE")
+    )
+    assert ordered_source.index(": _EXT4-DIRENT>TYPE") < (
+        ordered_source.index(": _EXT4-VALIDATE-DIR-BLOCK")
+    )
+    assert ordered_source.index(": _EXT4-VALIDATE-DIR-BLOCK") < (
+        ordered_source.index(": _EXT4-RESTAMP-DIR-BLOCK")
+    )
+    assert ordered_source.index(": _EXT4-RESTAMP-DIR-BLOCK") < (
+        ordered_source.index(": _EXT4-BE32@")
     )
 
 

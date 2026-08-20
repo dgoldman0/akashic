@@ -21,6 +21,7 @@ REQUIRE vfs-ext4-admission.f
 REQUIRE vfs-ext4-descriptor.f
 REQUIRE vfs-ext4-backups.f
 REQUIRE vfs-ext4-dirhash.f
+REQUIRE vfs-ext4-dirent.f
 REQUIRE vfs-ext4-jbd2-codec.f
 
 \ =====================================================================
@@ -1409,21 +1410,6 @@ VARIABLE _EXT4-MP-VN
     _EXT4-MP-CTX @ _EXT4-C.R.RDEV + @ _EXT4-MP-VN @ VN.RDEV ! ;
 
 \ =====================================================================
-\  Checksummed linear directories and cache population
-\ =====================================================================
-
-VARIABLE _EXT4-DV-INO
-VARIABLE _EXT4-DV-GEN
-VARIABLE _EXT4-DV-CTX
-VARIABLE _EXT4-DV-TAIL
-VARIABLE _EXT4-DV-STORED
-VARIABLE _EXT4-DV-OFF
-VARIABLE _EXT4-DV-LIMIT
-VARIABLE _EXT4-DV-DE
-VARIABLE _EXT4-DV-REC
-VARIABLE _EXT4-DV-NLEN
-
-\ =====================================================================
 \  Checksummed HTree index blocks
 \ =====================================================================
 
@@ -1560,39 +1546,6 @@ VARIABLE _EXT4-DX-J
     _EXT4-VALIDATE-DX-ENTRIES ?DUP IF EXIT THEN
     _EXT4-DX-BUF @ _EXT4-DX-ENTRY @ _EXT4-DX-CTX @
     _EXT4-VALIDATE-DX-CHECKSUM ;
-
-VARIABLE _EXT4-DS-PARENT
-VARIABLE _EXT4-DS-V
-VARIABLE _EXT4-DS-CTX
-VARIABLE _EXT4-DS-DIRINO
-VARIABLE _EXT4-DS-PARINO
-VARIABLE _EXT4-DS-GEN
-VARIABLE _EXT4-DS-OFF
-VARIABLE _EXT4-DS-LIMIT
-VARIABLE _EXT4-DS-DE
-VARIABLE _EXT4-DS-REC
-VARIABLE _EXT4-DS-NLEN
-VARIABLE _EXT4-DS-CINO
-VARIABLE _EXT4-DS-DTYPE
-VARIABLE _EXT4-DS-TYPE
-VARIABLE _EXT4-DS-DENTRY
-VARIABLE _EXT4-DS-IOR
-VARIABLE _EXT4-DS-DOT
-VARIABLE _EXT4-DS-DOTDOT
-
-: _EXT4-DIRENT>TYPE  ( dtype -- type supported? )
-    CASE
-        0 OF 0 TRUE          ENDOF
-        1 OF VFS-T-FILE TRUE ENDOF
-        2 OF VFS-T-DIR TRUE  ENDOF
-        3 OF VFS-T-SPECIAL TRUE ENDOF
-        4 OF VFS-T-SPECIAL TRUE ENDOF
-        5 OF VFS-T-SPECIAL TRUE ENDOF
-        6 OF VFS-T-SPECIAL TRUE ENDOF
-        7 OF VFS-T-SYMLINK TRUE ENDOF
-        0 FALSE ROT
-    ENDCASE ;
-
 
 \ A directory descriptor binds the mounted identity and parsed topology to a
 \ caller-owned root snapshot.  Read traversal and mutation use the same inode,
@@ -1876,61 +1829,28 @@ VARIABLE _EXT4-DDI-RAW
     _EXT4-DDI-HASH @ _EXT4-DDI-DESC @ _EXT4-DD.TARGET-HASH + !
     0 ;
 
-\ Authenticate both the checksum tail and the complete dirent chain.  Callers
-\ may then bind a mutation payload to record boundaries instead of treating a
-\ checksum-valid byte offset inside name or slack storage as a directory entry.
-: _EXT4-VALIDATE-DIR-BLOCK  ( dir-inum generation ctx -- ior )
-    _EXT4-DV-CTX ! _EXT4-DV-GEN ! _EXT4-DV-INO !
-    _EXT4-DV-CTX @ _EXT4-C.BSIZE + @ 12 - DUP _EXT4-DV-LIMIT !
-    DROP _EXT4-DV-CTX @ _EXT4-C.DIR-BLOCK +
-    _EXT4-DV-LIMIT @ + DUP _EXT4-DV-TAIL !
-    DUP L@ 0<> OVER 4 + W@ 12 <> OR OVER 6 + C@ 0<> OR
-    OVER 7 + C@ 0xDE <> OR IF
-        DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    8 + L@ _EXT4-DV-STORED !
-    _EXT4-DV-INO @ _EXT4-DV-CTX @ _EXT4-C.TMP + L!
-    _EXT4-DV-GEN @ _EXT4-DV-CTX @ _EXT4-C.TMP 4 + + L!
-    _EXT4-DV-CTX @ _EXT4-C.SEED + @ _EXT4-CRC-START
-    _EXT4-DV-CTX @ _EXT4-C.TMP + 8 _EXT4-CRC-ADD ?DUP IF EXIT THEN
-    _EXT4-DV-CTX @ _EXT4-C.DIR-BLOCK + _EXT4-DV-LIMIT @
-    _EXT4-CRC-ADD ?DUP IF EXIT THEN
-    _EXT4-CRC@ _EXT4-DV-STORED @ <> IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    0 _EXT4-DV-OFF !
-    BEGIN _EXT4-DV-OFF @ _EXT4-DV-LIMIT @ < WHILE
-        _EXT4-DV-CTX @ _EXT4-C.DIR-BLOCK + _EXT4-DV-OFF @ +
-        DUP _EXT4-DV-DE ! 4 + W@ DUP _EXT4-DV-REC !
-        DUP 12 U< SWAP 3 AND 0<> OR IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _EXT4-DV-OFF @ _EXT4-DV-REC @ + _EXT4-DV-LIMIT @ U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _EXT4-DV-DE @ 6 + C@ DUP _EXT4-DV-NLEN !
-        _EXT4-DV-REC @ 8 - U> IF
-            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-        THEN
-        _EXT4-DV-DE @ L@ IF
-            _EXT4-DV-DE @ L@ _EXT4-DV-CTX @ _EXT4-C.INODES + @ U>
-            _EXT4-DV-NLEN @ 0= OR IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _EXT4-DV-DE @ 8 + _EXT4-DV-NLEN @
-            _EXT4-DIRENT-NAME-VALID? 0= IF
-                EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN
-            _EXT4-DV-DE @ 7 + C@ _EXT4-DIRENT>TYPE 0= IF
-                DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-            THEN DROP
-        THEN
-        _EXT4-DV-REC @ _EXT4-DV-OFF +!
-    REPEAT
-    _EXT4-DV-OFF @ _EXT4-DV-LIMIT @ <> IF
-        EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    0 ;
+\ =====================================================================
+\  Checksummed directory cache population
+\ =====================================================================
+
+VARIABLE _EXT4-DS-PARENT
+VARIABLE _EXT4-DS-V
+VARIABLE _EXT4-DS-CTX
+VARIABLE _EXT4-DS-DIRINO
+VARIABLE _EXT4-DS-PARINO
+VARIABLE _EXT4-DS-GEN
+VARIABLE _EXT4-DS-OFF
+VARIABLE _EXT4-DS-LIMIT
+VARIABLE _EXT4-DS-DE
+VARIABLE _EXT4-DS-REC
+VARIABLE _EXT4-DS-NLEN
+VARIABLE _EXT4-DS-CINO
+VARIABLE _EXT4-DS-DTYPE
+VARIABLE _EXT4-DS-TYPE
+VARIABLE _EXT4-DS-DENTRY
+VARIABLE _EXT4-DS-IOR
+VARIABLE _EXT4-DS-DOT
+VARIABLE _EXT4-DS-DOTDOT
 
 : _EXT4-SCAN-DIR-BLOCK  ( parent vfs ctx -- ior )
     _EXT4-DS-CTX ! _EXT4-DS-V ! _EXT4-DS-PARENT !
@@ -15692,41 +15612,6 @@ CREATE _EXT4-JTA-EXPECTED-SUPER _EXT4-MAX-BLOCK ALLOT
 \ inode-oriented future-deletion proof.  The initial lifetime slice admits an
 \ authenticated empty union only, so the published orphan is the sole zero-
 \ link record and ADD always owns ORPHAN_PRESENT.
-
-VARIABLE _EXT4-RDB-BLOCK
-VARIABLE _EXT4-RDB-INO
-VARIABLE _EXT4-RDB-GEN
-VARIABLE _EXT4-RDB-CTX
-VARIABLE _EXT4-RDB-TAIL
-
-: _EXT4-RESTAMP-DIR-BLOCK  ( block dir-inum generation ctx -- ior )
-    _EXT4-RDB-CTX ! _EXT4-RDB-GEN ! _EXT4-RDB-INO !
-    _EXT4-RDB-BLOCK !
-    _EXT4-RDB-BLOCK @ 0= _EXT4-RDB-CTX @ 0= OR IF
-        VFS-E-INVALID EXIT
-    THEN
-    _EXT4-RDB-INO @ 0=
-    _EXT4-RDB-INO @ _EXT4-RDB-CTX @ _EXT4-C.INODES + @ U> OR IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-RDB-BLOCK @ _EXT4-RDB-CTX @ _EXT4-C.BSIZE + @ 12 - +
-    DUP _EXT4-RDB-TAIL !
-    DUP L@ 0<>
-    OVER 4 + W@ 12 <> OR
-    OVER 6 + C@ 0<> OR
-    OVER 7 + C@ 0xDE <> OR IF
-        DROP EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
-    THEN
-    DROP
-    0 _EXT4-RDB-TAIL @ 8 + L!
-    _EXT4-RDB-INO @ _EXT4-RDB-CTX @ _EXT4-C.TMP + L!
-    _EXT4-RDB-GEN @ _EXT4-RDB-CTX @ _EXT4-C.TMP 4 + + L!
-    _EXT4-RDB-CTX @ _EXT4-C.SEED + @ _EXT4-CRC-START
-    _EXT4-RDB-CTX @ _EXT4-C.TMP + 8 _EXT4-CRC-ADD ?DUP IF EXIT THEN
-    _EXT4-RDB-BLOCK @ _EXT4-RDB-CTX @ _EXT4-C.BSIZE + @ 12 -
-    _EXT4-CRC-ADD ?DUP IF EXIT THEN
-    _EXT4-CRC@ _EXT4-RDB-TAIL @ 8 + L!
-    0 ;
 
 \ A caller constructing a depth-zero HTree root supplies the complete root
 \ image and its authenticated logical-block count.  Validate the same root
