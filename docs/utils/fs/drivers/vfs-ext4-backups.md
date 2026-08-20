@@ -25,5 +25,5 @@ geometry, checked I/O, checksum helpers, and typed errors, and on
 [`vfs-ext4-descriptor.f`](vfs-ext4-descriptor.md) for descriptor parsing. It
 exports only three stack services used by later recovery and transaction
 policy: journal-tuple equality, immutable-super equality, and complete backup
-validation. All 13 parser cells are private, so the split introduces no new
+validation. All 13 scratch cells are private, so the split introduces no new
 mutable result or evidence seam and no callback into the facade.

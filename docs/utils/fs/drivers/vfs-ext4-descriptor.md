@@ -24,4 +24,5 @@ adding getters would not change that lifetime contract.
 The physical split preserves the descriptor parser and its error precedence
 byte for byte. The cold-source harness and packaging closure resolve admission,
 descriptor loading, sparse-super backup authority, the independent
-directory-hash service, and then the facade without a backwards dependency.
+directory-hash service, the independent JBD2 checksum codec, and then the
+facade without a backwards dependency.

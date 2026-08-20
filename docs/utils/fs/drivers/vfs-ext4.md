@@ -133,10 +133,13 @@ copies, immutable superblock identity, and backup descriptor locations without
 treating mutable counters as identity. The independent
 [`vfs-ext4-dirhash.f`](vfs-ext4-dirhash.md) unit owns directory-name byte
 admission, the ext4 half-MD4 engine, and the checked mounted hash policy. The
-facade begins at allocation ownership and initialized-bitmap policy and retains
-all later filesystem authority, recovery, transaction, mutation, and
-VFS-operation policy. Consumers should not require these internal units
-directly.
+independent [`vfs-ext4-jbd2-codec.f`](vfs-ext4-jbd2-codec.md) unit owns raw
+big-endian access and shared JBD2 checksum validation and encoding; its tag
+validator takes the payload, stored checksum, sequence, and context explicitly
+instead of reading scanner state. The facade begins at allocation ownership
+and initialized-bitmap policy and retains all later filesystem authority,
+recovery, transaction, mutation, and VFS-operation policy. Consumers should
+not require these internal units directly.
 
 The post-`abb3f94` implementation sequence is fixed in the
 [ext4 recovery refactor plan](../ext4-refactor-plan.md). That plan records the
@@ -147,9 +150,9 @@ verification cadence that apply before the next indexed-directory capability.
 
 The real-image harness cold-compiles the dependency-ordered production ext4
 source closure into the restored FAT/VFS snapshot. The current ext4 stage is
-the admission, descriptor, backup-authority, and directory-hash units followed
-by the public facade; VFS, CRC, and bitset are already present in earlier
-measured stages. It does not use a compiled shard or warm cache.
+the admission, descriptor, backup-authority, directory-hash, and JBD2-checksum
+units followed by the public facade; VFS, CRC, and bitset are already present
+in earlier measured stages. It does not use a compiled shard or warm cache.
 To avoid making UART echo volume an implementation-size limit, the host
 injects each compacted physical source line into the BIOS `FSLOAD`
 source-buffer span and invokes an immediate `EVALUATE-CHECKED` shim;

@@ -64,17 +64,21 @@ redirected.
   group-descriptor location, CRC, pointer/span, flag, and counter admission.
   `vfs-ext4-backups.f` owns sparse-super copy authority, immutable-super
   comparison, exact journal-backup tuples, and backup-GDT location checks; all
-  13 of its parser cells are private.
+  13 of its scratch cells are private.
   `vfs-ext4-dirhash.f` owns directory-name byte admission, the seeded
   half-MD4 engine, and checked mounted hash policy; all 21 of its scratch
   objects are private, and its unused rejected-version constant is gone.
+  `vfs-ext4-jbd2-codec.f` owns raw big-endian access and the shared JBD2 block,
+  superblock, commit, and tag checksum validators and encoders. Tag validation
+  takes its sequence and context explicitly, all 11 codec scratch cells are
+  private, and the module adds no mutable cross-component result surface.
   `vfs-ext4.f` remains the only public facade and begins with allocation-owner
   and initialized-bitmap policy. The aggregate source stage now loads
-  `(admission, descriptor, backups, dirhash, facade)` in production order
-  rather than relying on a handwritten concatenation list. Four checked-I/O
-  session/evidence cells and four success-only descriptor parser-result cells
-  remain temporary cross-component surfaces until the operation-lifetime
-  context stage; backups and dirhash add none.
+  `(admission, descriptor, backups, dirhash, jbd2-codec, facade)` in production
+  order rather than relying on a handwritten concatenation list. Four
+  checked-I/O session/evidence cells and four success-only descriptor
+  parser-result cells remain temporary cross-component surfaces until the
+  operation-lifetime context stage; backups, dirhash, and the codec add none.
 
 ## Baseline and objective
 
@@ -185,23 +189,30 @@ exposes its block, offset, flags, and inode-table span to callers only after a
 successful return; those temporary result cells are not evidence after an
 error. A backup-authority unit then uses those two foundations to authenticate
 sparse-super copies and backup descriptor locations; its three services are
-stack-only and all parser state remains private. The independent dirhash unit
+stack-only and all scratch state remains private. The independent dirhash unit
 owns name-byte validation, seeded half-MD4, and the mounted version/flag policy
 behind one checked entry point. It depends only on admission, keeps all hash
 scratch private, and moves before the facade without a callback or mutable
-cross-module seam. Allocation ownership begins the facade because broadening
-that prefix would capture mutation hooks whose implementations are bound much
-later. Every later authority, recovery, mutation, and VFS-operation policy
-remains in the facade until it forms another one-directional ownership
+cross-module seam. The independent JBD2 codec likewise depends only on
+admission. It owns raw big-endian access, checked block/super/commit validation,
+and the corresponding encoders, while taking tag payload, stored checksum,
+sequence, and context inputs explicitly. Its 11 scratch cells remain private,
+its validators restore temporarily cleared checksum fields, and its encoders
+retain the prior zero-on-CRC-error state. The shared superblock stamper removes
+the duplicate witness/reset/activation checksum tails without moving their
+policy or write ordering. Allocation ownership begins the facade because
+broadening that prefix would capture mutation hooks whose implementations are
+bound much later. Every later authority, recovery, mutation, and VFS-operation
+policy remains in the facade until it forms another one-directional ownership
 boundary. The facade's direct CRC edge is removed; CRC is an implementation
 dependency of admission's checked adapter.
 
-Candidate boundaries are validated geometry/authority, JBD2 recovery and
-transaction execution, directory/HTree mechanics, allocation and extent
-mutation, orphan handling, and VFS operation adapters. They are candidates,
-not mandatory filenames: cohesion and acyclic load order decide the actual
-split. New KDOS `PROVIDED` names must remain unique within the registry's
-truncated module-key width.
+Remaining candidate boundaries are validated geometry/authority, JBD2 recovery
+and transaction policy above the extracted codec, directory/HTree mechanics,
+allocation and extent mutation, orphan handling, and VFS operation adapters.
+They are candidates, not mandatory filenames: cohesion and acyclic load order
+decide the actual split. New KDOS `PROVIDED` names must remain unique within
+the registry's truncated module-key width.
 
 This seam is not permission to enable a compiled Forth shard. Source loading
 remains the qualification path, and each extracted module must have one real

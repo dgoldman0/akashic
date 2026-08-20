@@ -44,6 +44,7 @@ EXT4_ADMISSION_MODULE = "utils/fs/drivers/vfs-ext4-admission.f"
 EXT4_DESCRIPTOR_MODULE = "utils/fs/drivers/vfs-ext4-descriptor.f"
 EXT4_BACKUPS_MODULE = "utils/fs/drivers/vfs-ext4-backups.f"
 EXT4_DIRHASH_MODULE = "utils/fs/drivers/vfs-ext4-dirhash.f"
+EXT4_JBD2_CODEC_MODULE = "utils/fs/drivers/vfs-ext4-jbd2-codec.f"
 EXT4_MODULE = "utils/fs/drivers/vfs-ext4.f"
 CRC_F = AKASHIC_ROOT / CRC_MODULE
 BITSET_F = AKASHIC_ROOT / BITSET_MODULE
@@ -86527,6 +86528,7 @@ def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
         EXT4_DESCRIPTOR_MODULE,
         EXT4_BACKUPS_MODULE,
         EXT4_DIRHASH_MODULE,
+        EXT4_JBD2_CODEC_MODULE,
         EXT4_MODULE,
     )
     assert set(expected).isdisjoint(already_staged)
@@ -86568,6 +86570,7 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
         "vfs-ext4-descriptor.f",
         "vfs-ext4-backups.f",
         "vfs-ext4-dirhash.f",
+        "vfs-ext4-jbd2-codec.f",
     )
     assert "URANGE-" not in admission
     assert "BITSET-" not in admission
@@ -86813,6 +86816,212 @@ def test_ext4_dirhash_service_is_private_acyclic_unit() -> None:
     assert ordered_source.index(": _EXT4-HALF-MD4-DIRHASH?") < (
         ordered_source.index("4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX")
     )
+
+
+def test_ext4_jbd2_codec_is_private_acyclic_unit() -> None:
+    codec = (AKASHIC_ROOT / EXT4_JBD2_CODEC_MODULE).read_text(
+        encoding="utf-8"
+    )
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+    ordered_source = _ext4_source_text()
+
+    assert codec.splitlines().count(
+        "PROVIDED akashic-ext4-jbd2-codec"
+    ) == 1
+    assert len("akashic-ext4-jbd2-codec".encode("utf-8")) == 23
+    assert tuple(
+        line.removeprefix("REQUIRE ")
+        for line in codec.splitlines()
+        if line.startswith("REQUIRE ")
+    ) == ("vfs-ext4-admission.f",)
+
+    service_definitions = (
+        ": _EXT4-BE32@  ( addr -- u )",
+        ": _EXT4-BE32!  ( u addr -- )",
+        ": _EXT4-JBD2-BLOCK-CHECKSUM?  ( buffer ctx -- flag ior )",
+        ": _EXT4-JBD2-SUPER-CHECKSUM?  ( buffer -- flag ior )",
+        ": _EXT4-JBD2-COMMIT-CHECKSUM?  ( buffer ctx -- flag ior )",
+        ": _EXT4-JBD2-STAMP-SUPER-CHECKSUM  ( buffer -- ior )",
+        ": _EXT4-JBD2-STAMP-BLOCK-CHECKSUM  ( buffer ctx -- ior )",
+        ": _EXT4-JBD2-STAMP-COMMIT-CHECKSUM  ( buffer ctx -- ior )",
+        (
+            ": _EXT4-JBD2-EMIT-TAG-CHECKSUM  "
+            "( payload tid ctx -- crc ior )"
+        ),
+        (
+            ": _EXT4-JBD2-TAG-CHECKSUM?  "
+            "( buffer stored sequence ctx -- flag ior )"
+        ),
+    )
+    for definition in service_definitions:
+        assert codec.splitlines().count(definition) == 1
+        assert definition not in facade
+
+    service_names = (
+        "_EXT4-BE32@",
+        "_EXT4-BE32!",
+        "_EXT4-JBD2-BLOCK-CHECKSUM?",
+        "_EXT4-JBD2-SUPER-CHECKSUM?",
+        "_EXT4-JBD2-COMMIT-CHECKSUM?",
+        "_EXT4-JBD2-STAMP-SUPER-CHECKSUM",
+        "_EXT4-JBD2-STAMP-BLOCK-CHECKSUM",
+        "_EXT4-JBD2-STAMP-COMMIT-CHECKSUM",
+        "_EXT4-JBD2-EMIT-TAG-CHECKSUM",
+        "_EXT4-JBD2-TAG-CHECKSUM?",
+    )
+    for service in service_names:
+        assert service in facade
+        assert re.search(
+            rf"(?m)^:[ \t]+{re.escape(service)}(?=[ \t\r\n(])",
+            facade,
+        ) is None
+
+    private_cells = set(
+        re.findall(
+            r"^VARIABLE (_EXT4-(?:BE|JC|JEC)-[A-Z0-9-]+)$",
+            codec,
+            re.MULTILINE,
+        )
+    )
+    assert len(private_cells) == 11
+    assert private_cells == {
+        "_EXT4-BE-A",
+        "_EXT4-BE-V",
+        "_EXT4-JC-BUF",
+        "_EXT4-JC-CTX",
+        "_EXT4-JC-FIELD",
+        "_EXT4-JC-STORED",
+        "_EXT4-JC-CALC",
+        "_EXT4-JEC-BUF",
+        "_EXT4-JEC-CTX",
+        "_EXT4-JEC-FIELD",
+        "_EXT4-JEC-TID",
+    }
+    assert all(cell not in facade for cell in private_cells)
+    assert "_EXT4-JEC-" not in facade
+    assert "_EXT4-BE-A" not in facade
+    assert "_EXT4-BE-V" not in facade
+    assert "EXECUTE" not in codec
+    assert "-XT" not in codec
+    assert "_EXT4-JS-CTX" not in codec
+    assert "_EXT4-JS-SEQUENCE" not in codec
+
+    codec_executable = "\n".join(
+        line.split("\\", 1)[0] for line in codec.splitlines()
+    )
+    facade_executable = "\n".join(
+        line.split("\\", 1)[0] for line in facade.splitlines()
+    )
+
+    def word_body(source: str, name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None
+        return match.group("body")
+
+    tag_encoder = word_body(
+        codec_executable, "_EXT4-JBD2-EMIT-TAG-CHECKSUM"
+    )
+    tag_validator = word_body(
+        codec_executable, "_EXT4-JBD2-TAG-CHECKSUM?"
+    )
+    validators = tuple(
+        word_body(codec_executable, name)
+        for name in (
+            "_EXT4-JBD2-BLOCK-CHECKSUM?",
+            "_EXT4-JBD2-SUPER-CHECKSUM?",
+            "_EXT4-JBD2-COMMIT-CHECKSUM?",
+        )
+    )
+    for validator in validators:
+        zero = "0 _EXT4-JC-FIELD @ _EXT4-BE32!"
+        restore = "_EXT4-JC-STORED @ _EXT4-JC-FIELD @ _EXT4-BE32!"
+        assert validator.index(zero) < validator.index("_EXT4-CRC-ADD")
+        assert validator.count(restore) == 2
+        assert "0 SWAP EXIT" in validator
+
+    commit_validator = validators[2]
+    assert commit_validator.index("DUP 12 + C@") < (
+        commit_validator.index("0 _EXT4-JC-FIELD @ _EXT4-BE32!")
+    )
+    assert tag_validator.count("_EXT4-JBD2-EMIT-TAG-CHECKSUM") == 1
+    assert "ROT _EXT4-JC-STORED !" in tag_validator
+    assert tag_validator.index("ROT _EXT4-JC-STORED !") < (
+        tag_validator.index("_EXT4-JBD2-EMIT-TAG-CHECKSUM")
+    )
+    assert tag_validator.index("_EXT4-JBD2-EMIT-TAG-CHECKSUM") < (
+        tag_validator.index("?DUP IF NIP 0 SWAP EXIT THEN")
+    )
+    assert tag_validator.index("?DUP IF NIP 0 SWAP EXIT THEN") < (
+        tag_validator.index("_EXT4-JC-STORED @ = 0")
+    )
+    assert "_EXT4-CRC-" not in tag_validator
+
+    sequence = "_EXT4-JEC-TID @ _EXT4-JEC-CTX @ _EXT4-C.TMP + _EXT4-BE32!"
+    seed = "_EXT4-JEC-CTX @ _EXT4-C.J.SEED + @ _EXT4-CRC-START"
+    prefix = "_EXT4-JEC-CTX @ _EXT4-C.TMP + 4 _EXT4-CRC-ADD"
+    payload = (
+        "_EXT4-JEC-BUF @ _EXT4-JEC-CTX @ "
+        "_EXT4-C.BSIZE + @ _EXT4-CRC-ADD"
+    )
+    assert tag_encoder.index(sequence) < tag_encoder.index(seed)
+    assert tag_encoder.index(seed) < tag_encoder.index(prefix)
+    assert tag_encoder.index(prefix) < tag_encoder.index(payload)
+
+    scan = word_body(facade_executable, "_EXT4-JSCAN-DESCRIPTOR")
+    compact_scan = " ".join(scan.split())
+    assert (
+        "_EXT4-JS-CTX @ _EXT4-C.BLOCK + "
+        "_EXT4-JS-TAG-CHECKSUM @ _EXT4-JS-SEQUENCE @ _EXT4-JS-CTX @ "
+        "_EXT4-JBD2-TAG-CHECKSUM?"
+    ) in compact_scan
+    assert scan.index("_EXT4-JSCAN-READ-NEXT") < scan.index(
+        "_EXT4-JBD2-TAG-CHECKSUM?"
+    )
+    assert scan.index("_EXT4-JBD2-TAG-CHECKSUM?") < scan.index(
+        "_EXT4-JBD2-F-ESCAPE"
+    )
+
+    super_stamper_callers = (
+        "_EXT4-ZERO-JOURNAL-WITNESS",
+        "_EXT4-ACTIVE-GUARD-OLD-PRIMARY",
+        "_EXT4-STAMP-JOURNAL-RESET",
+        "_EXT4-STAMP-JOURNAL-ACTIVATION",
+        "_EXT4-JTX-STAMP-ACTIVE-SUPER",
+    )
+    for caller in super_stamper_callers:
+        body = word_body(facade_executable, caller)
+        assert body.count("_EXT4-JBD2-STAMP-SUPER-CHECKSUM") == 1
+    assert facade_executable.count(
+        "_EXT4-JBD2-STAMP-SUPER-CHECKSUM"
+    ) == len(
+        super_stamper_callers
+    )
+    for delegated in (
+        "_EXT4-ZERO-JOURNAL-WITNESS",
+        "_EXT4-STAMP-JOURNAL-RESET",
+        "_EXT4-STAMP-JOURNAL-ACTIVATION",
+    ):
+        body = word_body(facade_executable, delegated)
+        assert "_EXT4-CRC-START" not in body
+        assert "_EXT4-CRC-ADD" not in body
+        assert "_EXT4-CRC@" not in body
+
+    assert "_EXT4-STAMP-JOURNAL-SUPER-CHECKSUM" not in ordered_source
+    assert "_EXT4-JZ-BUF" not in ordered_source
+    assert (
+        ": _EXT4-JBD2-TAG-CHECKSUM?  ( buffer stored -- flag ior )"
+        not in ordered_source
+    )
+    assert ordered_source.index(": _EXT4-HALF-MD4-DIRHASH?") < (
+        ordered_source.index(": _EXT4-BE32@")
+    )
+    assert ordered_source.index(
+        ": _EXT4-JBD2-TAG-CHECKSUM?"
+    ) < ordered_source.index("4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX")
 
 
 def test_ext4_crc_source_uses_checked_hardware_without_fallback() -> None:
