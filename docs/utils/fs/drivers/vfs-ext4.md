@@ -2174,6 +2174,13 @@ Inode selection starts in the parent group and wraps across runtime geometry.
 It accepts only initialized inode groups, verifies the bitmap checksum and its
 free count, skips reserved inode numbers, proves the bitmap and inode-table
 homes have their unique descriptor roles, and rechecks the selected clear bit.
+The scan counts set bits across the canonical exact group-inode view, derives
+the complete logical clear count for descriptor reconciliation, and searches
+only from the one-based `s_first_ino` cutoff. Raw and transaction-effective
+singleton rechecks plus the private after-image set use the same exact bound.
+Invalid checked geometry is bounds corruption and a selected bit that becomes
+set is a transaction conflict; the mutation preserves final-group padding
+while ext4's bitmap CRC still covers the format-defined `IPG / 8` bytes.
 Allocation advances the free inode's prior generation modulo 32 bits with zero
 mapped to one, updates `bg_free_inodes_count`, `bg_itable_unused`, and
 `s_free_inodes_count`, and restamps the bitmap, descriptor, and superblock

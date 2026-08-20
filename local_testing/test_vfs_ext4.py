@@ -87038,7 +87038,108 @@ def test_ext4_checkpoint_delete_ranges_use_checked_exact_queries() -> None:
         "_EXT4-JFC-FIND-META"
     )
     assert "_EXT4-BIT-RANGE-CLEAR?" not in body
-    assert source.count("_EXT4-BIT-RANGE-CLEAR?") == 5
+    assert "_EXT4-BIT-RANGE-CLEAR?" not in source
+
+
+def test_ext4_inode_allocation_uses_checked_exact_bitset_views() -> None:
+    source = EXT4_F.read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    eligible = word_body("_XC-FIRST-ELIGIBLE-INDEX")
+    scan = word_body("_XC-FI-SCAN-GROUP")
+    stage = word_body("_XC-STAGE-INODE-ALLOCATION")
+
+    assert "_EXT4-SB.FIRST-INO + L@" in eligible
+    assert (
+        "_XC-GROUP-BASE @ 1+ 2DUP U> IF - ELSE 2DROP 0 THEN"
+        in eligible
+    )
+    assert "_XC-GROUP-INODES @ MIN" in eligible
+
+    assert (
+        "_XC-CTX @ _EXT4-C.BLOCK +\n"
+        "    _XC-GROUP-INODES @ BITSET-COUNT-SET?"
+    ) in scan
+    assert (
+        "BITSET-COUNT-SET? 0= IF\n"
+        "        DROP FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+    ) in scan
+    assert (
+        "_XC-GROUP-INODES @ SWAP -\n"
+        "    _XC-GROUP-FREE @ <> IF"
+    ) in scan
+    assert "-1 _XC-FIRST-CLEAR !" in scan
+    assert (
+        "_XC-CTX @ _EXT4-C.BLOCK + _XC-GROUP-INODES @\n"
+        "    _XC-FIRST-ELIGIBLE-INDEX BITSET-FIND-CLEAR?"
+    ) in scan
+    assert (
+        "BITSET-FIND-CLEAR? 0= IF\n"
+        "        2DROP FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+    ) in scan
+    assert "0= IF DROP FALSE 0 EXIT THEN" in scan
+    assert (
+        "_XC-GROUP-INODES @ _XC-FIRST-CLEAR @ BITSET-TEST?"
+        in scan
+    )
+    assert "DROP FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in scan
+    assert "IF FALSE VFS-E-CONFLICT EXIT THEN" in scan
+    assert scan.index("BITSET-COUNT-SET?") < scan.index(
+        "_XC-GROUP-FREE @ <>"
+    ) < scan.index("BITSET-FIND-CLEAR?") < scan.index(
+        "_EXT4-VALIDATE-INODE-BITMAP-HOME"
+    ) < scan.index("BITSET-TEST?")
+    assert "?DO" not in scan
+
+    exact_test = "_XC-GROUP-INODES @ _XC-FIRST-CLEAR @ BITSET-TEST?"
+    assert stage.count("BITSET-TEST?") == 2
+    assert stage.count(exact_test) == 2
+    assert f"DUP {exact_test}" in stage
+    assert "DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in stage
+    assert "2DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in stage
+    assert "IF VFS-E-CONFLICT EXIT THEN" in stage
+    assert "IF DROP VFS-E-CONFLICT EXIT THEN" in stage
+    assert (
+        "_XC-WRITER @ _EXT4-JWR.SCRATCH-B + @\n"
+        "    _XC-GROUP-INODES @ _XC-FIRST-CLEAR @ BITSET-BIT-SET?"
+    ) in stage
+    assert (
+        "BITSET-BIT-SET? 0= IF\n"
+        "        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+    ) in stage
+    tests = [match.start() for match in re.finditer("BITSET-TEST?", stage)]
+    crcs = [
+        match.start()
+        for match in re.finditer("_EXT4-INODE-BITMAP-CRC", stage)
+    ]
+    assert len(tests) == 2
+    assert len(crcs) == 3
+    move = stage.index("MOVE")
+    set_bit = stage.index("BITSET-BIT-SET?")
+    assert tests[0] < crcs[0] < stage.index(
+        "_EXT4-JTX-META-ACQUIRE"
+    ) < tests[1] < crcs[1] < move < set_bit < crcs[2]
+    assert set_bit < stage.index("_EXT4-JTX-META-REPLACE")
+
+    for removed in (
+        "_EXT4-BIT-RANGE-CLEAR?",
+        "_EXT4-SET-BIT-RANGE",
+        "_EXT4-BRS-BUFFER",
+        "_EXT4-BRS-FIRST",
+        "_EXT4-BRS-COUNT",
+        "_EXT4-BRS-BIT",
+        "_EXT4-BRS-ADDR",
+        "_XC-CLEAR-COUNT",
+    ):
+        assert removed not in source
 
 
 def test_hardware_crc32c_matches_fragmented_ext4_raw_vector(tmp_path: Path) -> None:

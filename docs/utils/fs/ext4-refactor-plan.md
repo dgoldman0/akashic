@@ -42,8 +42,12 @@ redirected.
   transaction policy. Staged-delete, checkpoint, and final-release admission
   now use exact checked singleton queries as well, removing ext4's last manual
   all-set reader. Checkpoint release-range verification likewise uses exact
-  checked all-clear queries. The remaining all-clear query and set-mutation
-  bridge is isolated to inode allocation and follows as one family.
+  checked all-clear queries. The XC inode-allocation family now delegates its
+  exact-group popcount, reserved-aware search, raw/effective singleton checks,
+  and private bit set, eliminating ext4's generic range bridge and its shared
+  scratch state. Remaining standalone bitmap readers, authority iterators, and
+  the exact staged-bitmap delta comparator follow at their own typed boundaries
+  before Stage 2 closes.
 
 ## Baseline and objective
 
