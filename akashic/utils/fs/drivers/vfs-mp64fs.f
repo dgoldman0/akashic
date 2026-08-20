@@ -197,20 +197,6 @@ VARIABLE _VMP-NL
     _VMP-BITSET 2SWAP BITSET-ALL-CLEAR?
     0= IF DROP FALSE THEN ;
 
-: _VMP-BIT-SET  ( sector ctx -- )
-    _VMP-C.BMAP +                     ( sector bmap )
-    SWAP DUP 8 /  ROT +              ( sector bmap-byte-addr )
-    DUP C@                            ( sector addr val )
-    ROT 8 MOD 1 SWAP LSHIFT          ( addr val mask )
-    OR SWAP C! ;
-
-: _VMP-BIT-CLR  ( sector ctx -- )
-    _VMP-C.BMAP +
-    SWAP DUP 8 /  ROT +
-    DUP C@
-    ROT 8 MOD 1 SWAP LSHIFT
-    INVERT AND SWAP C! ;
-
 \ Find a contiguous run of free sectors in the cached bitmap.
 VARIABLE _VMFF-NEED
 VARIABLE _VMFF-START
@@ -237,27 +223,19 @@ VARIABLE _VMFF-TOTAL
         THEN
     LOOP ;
 
-VARIABLE _VMRUN-START
-VARIABLE _VMRUN-COUNT
-VARIABLE _VMRUN-CTX
-
 : _VMP-RUN-FREE?  ( start count ctx -- flag )
     DUP _VMP-C.DSTART + @ 3 PICK > IF
         2DROP DROP FALSE EXIT
     THEN
     _VMP-BMAP-ALL-CLEAR? ;
 
-: _VMP-RUN-SET  ( start count ctx -- )
-    _VMRUN-CTX ! _VMRUN-COUNT ! _VMRUN-START !
-    _VMRUN-COUNT @ 0 ?DO
-        _VMRUN-START @ I + _VMRUN-CTX @ _VMP-BIT-SET
-    LOOP ;
+: _VMP-RUN-SET  ( start count ctx -- ior )
+    _VMP-BITSET 2SWAP BITSET-RANGE-SET?
+    IF 0 ELSE VFS-E-CORRUPT THEN ;
 
-: _VMP-RUN-CLR  ( start count ctx -- )
-    _VMRUN-CTX ! _VMRUN-COUNT ! _VMRUN-START !
-    _VMRUN-COUNT @ 0 ?DO
-        _VMRUN-START @ I + _VMRUN-CTX @ _VMP-BIT-CLR
-    LOOP ;
+: _VMP-RUN-CLR  ( start count ctx -- ior )
+    _VMP-BITSET 2SWAP BITSET-RANGE-CLEAR?
+    IF 0 ELSE VFS-E-CORRUPT THEN ;
 
 \ Deallocation is deferred until the directory version that drops the
 \ reference is durable.  The pending map has the same bit geometry as BMAP,
@@ -969,10 +947,12 @@ VARIABLE _VMM-CTX
     \ durable together.  A failure rolls back only the cached new claim; the
     \ dirty bit remains set so a later sync can repair a maybe-written bitmap.
     _VMG-START @ _VMG-TARGET @ _VMG-CTX @ _VMP-RUN-SET
+    ?DUP IF EXIT THEN
     -1 _VMG-CTX @ _VMP-C.DBMAP + !
     _VMG-CTX @ _VMP-PUBLISH-BMAP-CACHE DUP IF
         >R
         _VMG-START @ _VMG-TARGET @ _VMG-CTX @ _VMP-RUN-CLR
+        DROP
         -1 _VMG-CTX @ _VMP-C.DBMAP + !
         R> EXIT
     THEN DROP
@@ -989,6 +969,7 @@ VARIABLE _VMM-CTX
         ELSE
             DROP
             _VMG-START @ _VMG-TARGET @ _VMG-CTX @ _VMP-RUN-CLR
+            DROP
             -1 _VMG-CTX @ _VMP-C.DBMAP + !
             _VMG-CTX @ _VMP-PUBLISH-BMAP-CACHE DROP
         THEN
@@ -998,10 +979,12 @@ VARIABLE _VMM-CTX
     \ Phase three: only after the new directory is durable may the old
     \ allocation be retired.  A failed cleanup is safe and remains retryable.
     _VMG-OLDSTART @ _VMG-PCOUNT @ _VMG-CTX @ _VMP-RUN-CLR
+    ?DUP IF EXIT THEN
+    -1 _VMG-CTX @ _VMP-C.DBMAP + !
     _VMG-ECOUNT @ IF
         _VMG-ESTART @ _VMG-ECOUNT @ _VMG-CTX @ _VMP-RUN-CLR
+        ?DUP IF EXIT THEN
     THEN
-    -1 _VMG-CTX @ _VMP-C.DBMAP + !
     _VMG-CTX @ _VMP-PUBLISH-BMAP-CACHE ;
 
 : _VMP-RELOCATE-GROWTH  ( -- ior )
@@ -1039,6 +1022,7 @@ VARIABLE _VMM-CTX
         _VMG-ADD @ _VMG-CTX @ _VMP-ZERO-RUN ?DUP IF EXIT THEN
         _VMG-ESTART @ _VMG-ECOUNT @ +
         _VMG-ADD @ _VMG-CTX @ _VMP-RUN-SET
+        ?DUP IF EXIT THEN
         _VMG-ECOUNT @ _VMG-ADD @ +
         DUP _VMG-ECOUNT ! _VMG-DE @ 46 + W!
     ELSE
@@ -1049,6 +1033,7 @@ VARIABLE _VMM-CTX
             _VMG-ADD @ _VMG-CTX @ _VMP-ZERO-RUN ?DUP IF EXIT THEN
             _VMG-IN @ IN.BDATA @ _VMG-PCOUNT @ +
             _VMG-ADD @ _VMG-CTX @ _VMP-RUN-SET
+            ?DUP IF EXIT THEN
             _VMG-PCOUNT @ _VMG-ADD @ + DUP _VMG-PCOUNT !
             DUP _VMG-IN @ IN.BDATA 8 + !
                 _VMG-DE @ 26 + W!
@@ -1061,6 +1046,7 @@ VARIABLE _VMM-CTX
             _VMG-START @ _VMG-ADD @ _VMG-CTX @ _VMP-ZERO-RUN
             ?DUP IF EXIT THEN
             _VMG-START @ _VMG-ADD @ _VMG-CTX @ _VMP-RUN-SET
+            ?DUP IF EXIT THEN
             _VMG-START @ _VMG-DE @ 44 + W!
             _VMG-ADD @   _VMG-DE @ 46 + W!
         THEN
@@ -1324,9 +1310,10 @@ VARIABLE _VMFS-CTX
         THEN
         DUP _VMCR-NSEC @ _VMCR-CTX @ _VMP-ZERO-RUN
         ?DUP IF NIP EXIT THEN
+        DUP _VMCR-NSEC @ _VMCR-CTX @ _VMP-RUN-SET
+        ?DUP IF NIP EXIT THEN
         _VMCR-IN @ IN.BDATA !           \ bdata-0 = start_sector
         _VMCR-NSEC @  _VMCR-IN @ IN.BDATA 8 + !  \ bdata-1 = sec_count
-        _VMCR-IN @ IN.BDATA @ _VMCR-NSEC @ _VMCR-CTX @ _VMP-RUN-SET
         -1 _VMCR-CTX @ _VMP-C.DBMAP + !   \ bitmap dirty
     THEN
     \ Build directory entry

@@ -633,6 +633,55 @@ def test_bitmap_queries_use_shared_logical_bit_bounds():
     assert "_VMEV-COUNT" not in source
 
 
+def test_bitmap_mutations_use_checked_shared_ranges():
+    """MP64FS checks BMAP mutation before publishing dependent state."""
+    with open(VFS_MP_F, encoding="utf-8") as source_file:
+        source = source_file.read()
+
+    def word_body(name):
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    run_set = word_body("_VMP-RUN-SET")
+    run_clear = word_body("_VMP-RUN-CLR")
+    relocate = word_body("_VMP-RELOCATE")
+    ensure = word_body("_VMP-ENSURE")
+    create = word_body("_VMP-CREATE")
+
+    assert "_VMP-BITSET 2SWAP BITSET-RANGE-SET?" in run_set
+    assert "_VMP-BITSET 2SWAP BITSET-RANGE-CLEAR?" in run_clear
+    for body in (run_set, run_clear):
+        assert "IF 0 ELSE VFS-E-CORRUPT THEN" in body
+    for old in (
+        "_VMP-BIT-SET",
+        "_VMP-BIT-CLR",
+        "_VMRUN-START",
+        "_VMRUN-COUNT",
+        "_VMRUN-CTX",
+    ):
+        assert old not in source
+    assert source.count("_VMP-RUN-SET") == 6
+    assert source.count("_VMP-RUN-CLR") == 5
+    assert len(re.findall(r"_VMP-RUN-SET\s+\?DUP IF EXIT THEN", ensure)) == 3
+    assert relocate.count("_VMP-RUN-SET") == 1
+    assert len(re.findall(r"_VMP-RUN-SET\s+\?DUP IF EXIT THEN", relocate)) == 1
+    assert relocate.count("_VMP-RUN-CLR") == 4
+    assert len(re.findall(r"_VMP-RUN-CLR\s+DROP", relocate)) == 2
+    assert len(re.findall(r"_VMP-RUN-CLR\s+\?DUP IF EXIT THEN", relocate)) == 2
+    retirement = relocate.split("\\ Phase three:", 1)[1]
+    assert retirement.index("_VMG-OLDSTART") < retirement.index(
+        "-1 _VMG-CTX @ _VMP-C.DBMAP + !"
+    ) < retirement.rindex("_VMP-RUN-CLR")
+    set_claim = create.index("_VMP-RUN-SET")
+    assert set_claim < create.index("_VMCR-IN @ IN.BDATA !")
+    assert "_VMP-RUN-SET\n        ?DUP IF NIP EXIT THEN" in create
+
+
 def test_constructor_binds_and_mounts_volume():
     """The public constructor is the single successful mount boundary."""
     check("constructor binds and mounts volume", [
