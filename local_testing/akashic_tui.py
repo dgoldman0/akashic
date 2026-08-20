@@ -29103,6 +29103,7 @@ _lrc-run
 PROFILES["gate2a-contracts"] = Profile(
     roots=(
         "utils/memory-span.f",
+        "utils/bitset.f",
         "utils/buffer-writer.f",
         "interop/schema-common.f",
     ),
@@ -29110,6 +29111,7 @@ PROFILES["gate2a-contracts"] = Profile(
     autoexec=r"""\ autoexec.f - Gate 2A mechanical primitive contracts
 ENTER-USERLAND
 REQUIRE utils/memory-span.f
+REQUIRE utils/bitset.f
 REQUIRE utils/buffer-writer.f
 REQUIRE interop/schema-common.f
 ." [akashic] loading Gate 2A contracts" CR

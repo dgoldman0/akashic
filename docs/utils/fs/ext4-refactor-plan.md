@@ -16,6 +16,16 @@ be reordered only when a newly discovered dependency makes the stated order
 incorrect; that change belongs in this document before the implementation is
 redirected.
 
+## Implementation ledger
+
+- Stage 1 is complete through `78bcc71`. `uint-range.f` owns validated scalar
+  geometry; memory-span retains its established API and layout; MP64FS,
+  `binimg`, and ext4 now delegate their duplicated overlap, membership, and
+  range-construction proofs through the shared algebra while preserving typed
+  fail-closed policy at their boundaries.
+- Stage 2 is in progress. The checked bitset contract lands before filesystem
+  consumers, followed by MP64FS and then bounded ext4 helper families.
+
 ## Baseline and objective
 
 The frozen semantic comparison point is the clean `ext4-recovery` tree at

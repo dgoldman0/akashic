@@ -438,11 +438,14 @@ neutral modules do not create a generic applet, repository, or compatibility
 format stack.
 
 `gate2a-contracts` isolates the policy-neutral unsigned-start range algebra,
-memory-span compatibility predicates and inline caller-owned span sets, checked
-buffer writer, and caller-owned scalar/locator schema initializers. It covers
-the range primitive's separate validity result, signed-length and unsigned-wrap
-boundaries, empty/null policy separation, half-open overlap and adjacency,
-borrowed span geometry, independent bounded sets and writers, sticky
+checked caller-bounded LSB0 bitsets, memory-span compatibility predicates and
+inline caller-owned span sets, checked buffer writer, and caller-owned
+scalar/locator schema initializers. It covers the range primitive's separate
+validity result, signed-length and unsigned-wrap boundaries, bitset byte-span
+sizing, null and logical-padding policy, prevalidated range mutation, exact
+logical popcount and unambiguous clear-bit search, empty/null policy separation,
+half-open overlap and adjacency, borrowed span geometry, independent bounded
+sets and writers, sticky
 all-or-nothing capacity failure, decimal cell extrema, exact schema bytes,
 UTF-8/type/length rejection, and the distinct 110-byte semantic RREF and
 516-byte VFS-locator text bounds.
