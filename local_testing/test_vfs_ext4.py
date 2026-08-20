@@ -42,6 +42,7 @@ BITSET_MODULE = "utils/bitset.f"
 VFS_MODULE = "utils/fs/vfs.f"
 EXT4_ADMISSION_MODULE = "utils/fs/drivers/vfs-ext4-admission.f"
 EXT4_DESCRIPTOR_MODULE = "utils/fs/drivers/vfs-ext4-descriptor.f"
+EXT4_BACKUPS_MODULE = "utils/fs/drivers/vfs-ext4-backups.f"
 EXT4_DIRHASH_MODULE = "utils/fs/drivers/vfs-ext4-dirhash.f"
 EXT4_MODULE = "utils/fs/drivers/vfs-ext4.f"
 CRC_F = AKASHIC_ROOT / CRC_MODULE
@@ -86524,6 +86525,7 @@ def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
     assert expected == (
         EXT4_ADMISSION_MODULE,
         EXT4_DESCRIPTOR_MODULE,
+        EXT4_BACKUPS_MODULE,
         EXT4_DIRHASH_MODULE,
         EXT4_MODULE,
     )
@@ -86564,6 +86566,7 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
         "../../bitset.f",
         "vfs-ext4-admission.f",
         "vfs-ext4-descriptor.f",
+        "vfs-ext4-backups.f",
         "vfs-ext4-dirhash.f",
     )
     assert "URANGE-" not in admission
@@ -86616,6 +86619,111 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
     ) < ordered_source.index(": _EXT4-GDT-BASE")
     assert ordered_source.index(": _EXT4-GDT-BASE") < (
         ordered_source.index("4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX")
+    )
+
+
+def test_ext4_backup_authority_is_private_acyclic_unit() -> None:
+    backups = (AKASHIC_ROOT / EXT4_BACKUPS_MODULE).read_text(
+        encoding="utf-8"
+    )
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+    ordered_source = _ext4_source_text()
+
+    assert backups.splitlines().count("PROVIDED akashic-ext4-backups") == 1
+    assert tuple(
+        line.removeprefix("REQUIRE ")
+        for line in backups.splitlines()
+        if line.startswith("REQUIRE ")
+    ) == ("vfs-ext4-admission.f", "vfs-ext4-descriptor.f")
+
+    moved_definitions = (
+        ": _EXT4-JOURNAL-BACKUP-TUPLE=?  ( a b -- flag )",
+        ": _EXT4-VALIDATE-BACKUP-GDT  ( gdt-base ctx -- ior )",
+        (
+            ": _EXT4-SUPER-INVARIANTS?  "
+            "( candidate group reference -- flag )"
+        ),
+        ": _EXT4-BACKUP-SUPER-FIELDS?  ( backup ctx -- flag )",
+        ": _EXT4-VALIDATE-BACKUP-SUPER  ( group ctx -- ior )",
+        ": _EXT4-VALIDATE-BACKUPS  ( ctx -- ior )",
+    )
+    for definition in moved_definitions:
+        assert definition in backups
+        assert definition not in facade
+    for service in (
+        "_EXT4-JOURNAL-BACKUP-TUPLE=?",
+        "_EXT4-SUPER-INVARIANTS?",
+        "_EXT4-VALIDATE-BACKUPS",
+    ):
+        assert service in facade
+
+    private_cells = set(
+        re.findall(
+            r"^VARIABLE (_EXT4-(?:BS|BG|JBT|VB)-[A-Z0-9-]+)",
+            backups,
+            re.MULTILINE,
+        )
+    )
+    assert len(private_cells) == 13
+    assert all(cell not in facade for cell in private_cells)
+    assert "EXECUTE" not in backups
+    assert "-XT" not in backups
+
+    executable = "\n".join(
+        line.split("\\", 1)[0] for line in backups.splitlines()
+    )
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf": {re.escape(name)}\s+(.*?);",
+            executable,
+            re.DOTALL,
+        )
+        assert match is not None
+        return match.group(1)
+
+    gdt = word_body("_EXT4-VALIDATE-BACKUP-GDT")
+    invariants = word_body("_EXT4-SUPER-INVARIANTS?")
+    backup_super = word_body("_EXT4-VALIDATE-BACKUP-SUPER")
+    all_backups = word_body("_EXT4-VALIDATE-BACKUPS")
+
+    assert gdt.index("_EXT4-LOAD-DESC ?DUP IF") < gdt.index(
+        "_EXT4-LOAD-DESC-AT"
+    )
+    assert gdt.count("EXT4-D-DESC-CHECKSUM _EXT4-CORRUPT") == 3
+    assert gdt.count("UNLOOP EXIT") == 5
+    assert "_EXT4-INCOMPAT-RECOVER INVERT AND" in invariants
+    assert "_EXT4-RO-ORPHAN-PRESENT INVERT AND" in invariants
+    assert "68 _EXT4-BYTES=? AND" in invariants
+    assert "16 _EXT4-BYTES=? AND" in invariants
+
+    read = "_EXT4-READ-BLOCK"
+    checksum = "_EXT4-SUPER-CHECKSUM?"
+    seed = "_EXT4-SUPER-SEED?"
+    fields = "_EXT4-BACKUP-SUPER-FIELDS?"
+    descriptor = "_EXT4-VALIDATE-BACKUP-GDT"
+    assert backup_super.index(read) < backup_super.index(checksum)
+    assert backup_super.index(checksum) < backup_super.index(seed)
+    assert backup_super.index(seed) < backup_super.index(fields)
+    assert backup_super.index(fields) < backup_super.index(descriptor)
+    assert all_backups.index("1 ?DO") < all_backups.index(
+        "_EXT4-SPARSE-GROUP?"
+    )
+    assert "_EXT4-VALIDATE-BACKUP-SUPER ?DUP IF" in all_backups
+    assert "UNLOOP EXIT" in all_backups
+
+    descriptor_signature = ": _EXT4-LOAD-DESC  ( group ctx -- ior )"
+    backups_signature = ": _EXT4-VALIDATE-BACKUPS  ( ctx -- ior )"
+    dirhash_signature = ": _EXT4-DIRENT-NAME-VALID?  ( addr len -- flag )"
+    facade_sentinel = "4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX"
+    assert ordered_source.index(descriptor_signature) < (
+        ordered_source.index(backups_signature)
+    )
+    assert ordered_source.index(backups_signature) < (
+        ordered_source.index(dirhash_signature)
+    )
+    assert ordered_source.index(dirhash_signature) < (
+        ordered_source.index(facade_sentinel)
     )
 
 
