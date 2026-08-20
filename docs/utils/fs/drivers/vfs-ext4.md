@@ -136,7 +136,7 @@ mount-wide ownership validation and mutation policy remain in the facade. The
 [`vfs-ext4-inode.f`](vfs-ext4-inode.md) unit owns stack-only inode-record
 decoding, `i_blocks` encoding, checksum restamping, and timestamp encoding. It
 keeps all 27 scratch cells private while media lookup, checksum verification,
-and locator-result lifetime remain in the facade. The
+and identity/locator-result lifetime remain in the facade. The
 [`vfs-ext4-backups.f`](vfs-ext4-backups.md) unit authenticates sparse-super
 copies, immutable superblock identity, and backup descriptor locations without
 treating mutable counters as identity. The independent
