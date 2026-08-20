@@ -4331,9 +4331,10 @@ def build_snapshot():
     # instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
     max_bitset_source_steps = 150_000_000
-    # Indexed full-leaf splitting measures 1,592,943,041 cold source steps.
-    # Retain a narrow deterministic watchdog margin without conflating source
-    # compilation with the independently bounded recovery journey.
+    # The post-Stage-3 dependency-derived closure measures 1,011,612,875 cold
+    # source steps across 3,719 packed lines from 13 source units.  Retain the
+    # existing deterministic watchdog without conflating source compilation
+    # with the independently bounded recovery journey.
     max_ext4_source_steps = 1_600_000_000
     bootstrap_steps = _feed_until_idle(system, bootstrap, max_crc_source_steps)
 

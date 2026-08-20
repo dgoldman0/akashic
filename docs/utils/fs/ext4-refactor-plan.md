@@ -75,8 +75,8 @@ redirected.
   `i_block`-tail checks, canonical special-device decoding, signed timestamp
   loading, inode-checksum restamping, and mtime/ctime encoding. All 34 scratch
   cells are private; inode media lookup, checksum verification, and the
-  success-only IR identity/locator results remain in the facade pending Stage
-  4.
+  success-only IR identity/locator results remain facade-local until a concrete
+  later feature needs that seam.
   `ext4/vfs-ext4-xattr.f` owns external-xattr block header admission, shared
   physical-location-bound CRC calculation, authenticated loading, and
   checksum restamping. Its six scratch cells are private and it exports no
@@ -118,18 +118,22 @@ redirected.
   `(admission, descriptor, bitmap, inode, xattr, orphan, backups, dirhash,
   dirent, jbd2-codec, jbd2-map, jbd2-revoke, facade)` in production order
   rather than relying on a handwritten concatenation list.
+  Commit `979d145` performs the final organizational nesting of those private
+  sources and their documentation under `utils/fs/drivers/ext4/`; it preserves
+  the public facade, dependency order, provider identities, and production
+  source closure.
   Four checked-I/O session/evidence cells and four success-only descriptor
-  parser-result cells remain temporary cross-component surfaces until the
-  operation-lifetime context stage. Five inode-lookup identity/locator cells
-  remain facade-local operation-lifetime state; bitmap admission, inode
-  formatting, external-xattr and orphan-block handling, backups, dirhash,
-  dirent, and the JBD2 codec, map, and revoke services add none. The remaining
-  extent/map, HTree, xattr-entry, inode-media, orphan-planning, and JBD2
-  recovery/transaction families all carry mutable operation-lifetime state,
-  late policy callbacks, or success results across their prospective seams.
-  They remain facade-local until Stage 4 gives those lifetimes explicit
-  caller-owned interfaces; Stage 3 does not turn those couplings into module
-  APIs merely to create more files.
+  parser-result cells remain documented cross-component surfaces. Five inode-
+  lookup identity/locator cells remain facade-local operation-lifetime state;
+  bitmap admission, inode formatting, external-xattr and orphan-block
+  handling, backups, dirhash, dirent, and the JBD2 codec, map, and revoke
+  services add none. Those I/O, descriptor, and inode surfaces are outside the
+  bounded Stage 4 pilot and remain facade-local until a concrete feature needs
+  their seam. The remaining extent/map, xattr-entry, inode-media, orphan-
+  planning, and JBD2 recovery/transaction families likewise carry mutable
+  operation state, late policy callbacks, or success results across their
+  prospective seams. Stage 3 does not turn those couplings into module APIs
+  merely to create more files.
 
 ## Baseline and objective
 
@@ -148,7 +152,7 @@ these recurring mechanisms:
 - validated half-open integer-range algebra;
 - checked LSB0 bitmap operations over caller-described storage;
 - the production source closure and its semantic module boundaries;
-- operation-lifetime mutation state; and
+- the CREATE/HTree cross-phase evidence lifetime; and
 - ordered, role-aware transaction-home preplanning.
 
 Success is fewer independent implementations of the same invariant, not fewer
@@ -320,48 +324,107 @@ until it forms another one-directional ownership boundary. The facade's direct
 CRC edge is removed; CRC is an implementation dependency of admission's
 checked adapter.
 
-The remaining geometry/authority, JBD2 recovery and transaction, HTree and
-directory-scan, xattr-entry, allocation/extent, orphan-planning, and VFS
-operation families are intentionally not Stage 3 extraction candidates. Each
-still crosses a prospective seam through mutable operation state, late policy
-callbacks, or success-result lifetimes. Stage 4 must make those lifetimes and
-interfaces explicit before another physical split is justified. Any later
-KDOS `PROVIDED` names must remain unique within the registry's truncated
-module-key width.
+The remaining geometry/authority, JBD2 recovery and transaction, directory-
+scan, xattr-entry, allocation/extent, orphan-planning, and VFS operation
+families are intentionally not Stage 3 extraction candidates. Each still
+crosses a prospective seam through mutable operation state, late policy
+callbacks, or success-result lifetimes. No further physical split is part of
+the current critical path. A later feature may justify one only after giving
+that specific lifetime an explicit caller-owned interface. Any later KDOS
+`PROVIDED` names must remain unique within the registry's truncated module-key
+width.
 
 This seam is not permission to enable a compiled Forth shard. Source loading
 remains the qualification path, and each extracted module must have one real
 production consumer rather than becoming an empty namespace or forwarding
 layer.
 
-## Stage 4: operation-lifetime contexts
+## Stage 4: CREATE/HTree cross-phase context pilot
 
-Move mutable driver globals into caller-owned contexts by operation family and
-lifetime, beginning with the namespace and allocation families that will later
-consume the shared preplan. Directory authority, mutation planning,
-transaction execution, recovery, and mount state must remain separate
-concepts; this stage must not replace thousands of globals with one monolithic
-record.
+Stage 4 is one bounded pilot, not a driver-wide conversion of mutable globals.
+Move only the CREATE/HTree state published by the first authenticated planning
+pass and later consumed or compared by the dry and live staging passes into an
+explicit caller-owned context.
 
-The currently guarded public VFS entry points serialize mutations, so this is
-primarily a composability, test-isolation, and future-concurrency repair. It
-does not justify weakening the guard before reentrancy has separate evidence.
+At the current boundary, the context owns `_XC-INDEXED`, `_XC-SHAPE-SET`,
+every `_XC-INDEX-BASE*` field, `_XC-INDEX-CANDIDATE-BASELINE`, every
+`_XC-CONVERT-BASE*` field, `_XC-CONVERT-CANDIDATE-BASELINE`, and the retained
+comparison buffers `_XC-CONVERT-HASH-BASE`, `_XC-DIR-SNAPSHOT`,
+`_XC-ROOT-SNAPSHOT`, `_XC-INDEX-MAP-SNAPSHOT`, and `_XC-PARENT-SNAPSHOT`.
+These are 44 mutable objects at the start of the pilot. This inventory is a
+migration boundary, not a permanent ABI: a value may instead become
+stack-local when that removes rather than relocates state.
+
+The context does not absorb `_XC-ROOT-CURRENT`, `_XC-CONVERT-PLAN`, current-
+pass route, scan, sort, allocation, CRC, or I/O scratch, transaction writer and
+transaction objects, staged afterimages, postcommit cache projection, shared
+mutation-owner or protocol scopes, mount or recovery state, or another
+operation family. Immutable request and name data remain explicit planner
+inputs. Stage 4 does not require every `_XC-*` object, much less every driver
+global, to move.
+
+The binding supplies the context storage from its caller-owned arena and owns
+its address and exact byte span. That storage may remain allocated for the
+binding lifetime, but its evidence is valid for exactly one guarded namespace
+operation. Entry resets the complete transient record before building
+evidence. The initial planner is its sole writer; later dry and live passes may
+only reauthenticate and compare sealed fields. Every refusal, error, and
+successful return invalidates and scrubs the record after any required
+committed cache projection. No ambient current-context alias may substitute
+for an explicit context argument, and no callee may retain the argument beyond
+its call.
+
+The existing public mutation guard remains authoritative. Independent
+contexts must prove isolation and reset behavior, but this stage neither
+claims nor enables concurrent mutation.
+
+Stage 4 is accepted when the complete inventory above has explicit ownership
+and lifetime, no listed object remains dictionary-global, and canonical
+linear CREATE, linear-to-HTree conversion, existing-leaf CREATE, and full-leaf
+split retain identical refusal timing, journal home identity and first-seen
+order, credit, persistent bytes, and cache projection. Poisoned-context reuse
+and two independent context fixtures must prove that no prior operation
+supplies evidence to the next. The implementation commit must delete the
+migrated ambient objects and report both physical and packed-source deltas;
+parallel old/new evidence paths are not accepted.
+
+Stop and revise if the pilot requires transaction or recovery state, a generic
+callback framework, an ambient context pointer, a new fixed capacity, a
+changed admitted topology, or a material cold-source regression. Once this
+pilot passes, proceed directly to Stage 5; remaining driver globals are not a
+prerequisite.
 
 ## Stage 5: ordered ext4 home preplanning
 
-Introduce a small ext4-local, caller-bounded plan whose entries bind an
-operation role, a journal kind, and a home block. The plan must expose checked
-insertion, role lookup, first-seen distinct-home traversal, per-kind credit,
-and intentional-alias inspection. Its representation is not promoted as a
-generic Akashic collection in this stage.
+Add a small ext4-local, caller-bounded plan to the Stage 4 context. Its entries
+bind an operation role, a journal kind, and a home block. The plan must expose
+checked insertion, role lookup, first-seen distinct-home traversal, per-kind
+credit, and intentional-alias inspection. Every API in that surface must have
+an immediate production consumer: planning inserts each required role and uses
+alias inspection to authorize any co-located role pair before sealing; dry and
+live staging resolve the expected kind and home by role; preflight and writer
+construction derive their credits by kind; and the post-staging audit walks
+the sealed first-seen home order against the transaction tables. Omit an API
+if the implementation does not use it for one of those checks. The
+representation is not promoted as a generic Akashic collection in this stage.
 
-Migrate one bounded mutation family completely as the pilot. Replace its
-private home array, count, duplicate scan, and credit derivation; retain its
-operation-specific authentication and staging policy. Delete the replaced
-planner in the same implementation tranche. Once the pilot proves the seam,
-migrate CREATE/HTree planning and the remaining bounded mutation families one
-at a time. RENAME may continue to share the unlink-family operation machinery
-while that family migrates.
+Migrate the shared `_XC-INSERT-COMMON` namespace-insertion collector as one
+production path. CREATE's ordinary linear insertion, linear-to-HTree
+conversion, existing depth-zero leaf insertion, and full-leaf split are the
+qualification pilot. MKDIR and LINK already share that collector and therefore
+consume the same plan without gaining a new admitted behavior. Replace
+`_XC-META-HOME-MAX`, `_XC-META-HOMES`, `_XC-META-COUNT`, `_XC-META-HOME`,
+`_XC-META-RESET`, `_XC-ADD-META-HOME`, and the collector-derived credit path;
+retain operation-specific authentication and staging policy, and delete every
+named artifact in the same implementation tranche. Acceptance covers the four
+CREATE shapes above plus canonical MKDIR and LINK, including LINK's two- and
+three-distinct-home cases; each must preserve homes, first-seen order, credit,
+refusal timing, persistent result, and cache projection.
+
+XH allocation/hole-fill, XU unlink/rename, recovery, orphan cleanup, and every
+other mutation family remain outside this critical-path pilot. They may
+migrate when later feature work actually needs their seam, but they are not a
+prerequisite to Stage 6 and no new private collector may be added.
 
 The modern-orphan cleanup walk is not converted to a home list. Its geometry-
 driven constant-space measurement is the correct representation for an
@@ -371,12 +434,13 @@ be considered.
 
 ## Stage 6: resume the indexed-directory vertical
 
-After CREATE and its HTree variants use the shared home preplan, resume the
-next selected indexed-directory capability. New functionality must consume the
-new seam directly; it must not add another private home collector. A newly
-found cleanup defect interrupts that vertical only when the next end-to-end
-step cannot be correct without the repair. At this point qualification returns
-to the full feature-development standard, including boundary, refusal,
+After the namespace-insertion family uses the sealed home preplan, resume the
+next selected indexed-directory capability immediately. New HTree
+functionality must consume the new context and plan directly; it must not add
+another private home collector. No whole-driver context conversion or
+migration of another mutation family intervenes unless the next end-to-end
+indexed operation cannot be correct without it. At this point qualification
+returns to the full feature-development standard, including boundary, refusal,
 transaction, crash-fence, repair, stable-remount, and external-tool evidence
 appropriate to the new mutation.
 
@@ -400,10 +464,18 @@ representative happy-path equivalence set. Before leaving refactoring for new
 functionality, run the accumulated sequential equivalence gate. When new
 filesystem functionality resumes, restore the extensive qualification cadence
 and include the refactored paths in that feature's evidence. The last recorded
-cold-source measurement is 1,592,943,041 of the 1,600,000,000-step watchdog
-across 3,724 packed lines; that narrow measured guard is not an implementation
-capacity. Static source shape may advance between those intentionally sparse
-cold measurements.
+cold source build measured CRC at 5,023,896 of 150,000,000 steps across 26
+packed lines, bitset at 2,345,116 of 150,000,000 across 9 packed lines, and the
+dependency-derived ext4 closure at 1,011,612,875 of 1,600,000,000 across 3,719
+packed lines from 13 source units. The sequential checkpoint also passed Gate
+2A, MP64FS create/write/read/delete/sync and second-bitmap-sector sync/remount,
+canonical ext4 image inspection, checksum-v3 replay, and five revoke/recovery
+cases. The first
+revoke run found stale post-mount transient-state expectations; `8918024`
+corrected those oracles and all five cases then passed. This is the accumulated
+Stage 3 checkpoint, not completion of Stages 4 or 5 and not a rerun of the
+broad recovery matrices. Static source shape may advance between intentionally
+sparse cold measurements.
 
 ## Commit boundaries
 
@@ -416,9 +488,9 @@ owner:
 - the explicit source-closure seam and its packaging contract;
 - each acyclic source-module extraction together with its facade and packaging
   update;
-- each coherent operation-context migration; and
-- the home-plan contract plus one fully migrated operation family, with the old
-  collector removed; and
+- the complete 44-object CREATE/HTree cross-phase context and lifecycle; and
+- the home-plan contract plus the fully migrated namespace-insertion collector,
+  with the old collector removed; and
 - each subsequent family migration when its former collector is deleted.
 
 Do not commit half-routed operations or leave dormant old/new paths for a later
@@ -436,11 +508,13 @@ derived from caller storage or authenticated geometry, or if source loading
 cannot be qualified within measured system resources without weakening the
 implementation.
 
-The planned cleanup is complete when the migrated operation families share one
-ordered role/home preplan; scalar range and bitmap contracts have one checked
-Akashic implementation with filesystem wrappers retaining their policies;
-mutable mutation state has explicit operation lifetimes; the production facade
-loads an explicit acyclic source closure; duplicate paths are gone; and the
-accumulated focused regression set passes from a real cold source build. The
-Stage 5 gate is the transition back to the selected indexed-directory vertical
-and its full feature-development qualification cadence.
+The current critical-path cleanup is complete when the namespace-insertion
+family uses one ordered role/home preplan; its cross-phase CREATE/HTree
+evidence has an explicit operation lifetime; scalar range and bitmap contracts
+have one checked Akashic implementation with filesystem wrappers retaining
+their policies; the production facade loads an explicit acyclic source
+closure; the replaced paths are gone; and the accumulated focused regression
+set passes from a real cold source build. XH and XU collector migrations remain
+future cleanup when feature work reaches those families; they do not block the
+Stage 5 transition back to the selected indexed-directory vertical and its
+full feature-development qualification cadence.

@@ -51,8 +51,9 @@ an intentional temporary cross-module surface: `_EXT4-IO-VFS` and
 `_EXT4-IO-VOL` identify the callback-selected checked I/O session, while
 `_EXT4-IO-EXPECTED` and `_EXT4-IO-COMPLETED` preserve write-attempt evidence
 consumed by later durability code. They are implementation state, not public
-API, and are candidates for the operation-lifetime context stage rather than
-for a backwards dependency into admission.
+API, and remain documented facade coupling rather than a backwards dependency
+into admission. They are outside the bounded CREATE/HTree context pilot; a
+later feature must justify any separate lifetime migration.
 
 Physical extraction does not change the profile, error precedence, or
 cold-source qualification model. Packaging and the real-image harness resolve

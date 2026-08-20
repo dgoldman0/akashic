@@ -45,7 +45,8 @@ writes the low checksum and, when admitted, its high word.
 All 34 IB/SD/RI/ITM/ICT/EIB scratch cells are private, and the unit adds no
 mutable result or evidence surface. Media lookup, allocation admission, inode
 checksum verification, and the five ambient IR identity/locator results
-deliberately remain in the facade until the operation-lifetime context stage.
+deliberately remain in the facade. They are outside the bounded CREATE/HTree
+context pilot and move only when a concrete later feature requires that seam.
 In particular, readable old-format 256-byte records may retain `extra_isize`
 zero, while the write services intentionally require the stricter modern
 geometry; this extraction does not merge those policies.

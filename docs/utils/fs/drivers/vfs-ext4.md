@@ -205,8 +205,13 @@ backup above group 65535 is refused.
 
 The checked-in 1,600,000,000-step ext4 cold-source value is a qualification
 watchdog and measurement guide, not an ext4 implementation capacity or a
-reason to weaken functionality. Existing indexed full-leaf CREATE measures
-1,592,943,041 cold-source steps under that narrow guard. Linear-to-HTree
+reason to weaken functionality. At the Stage 3 checkpoint `8918024`, after
+the private-component nesting in `979d145`, a real cold source build loaded
+CRC in 5,023,896 of 150,000,000 steps across 26 packed lines, bitset in
+2,345,116 of 150,000,000 across 9 packed lines, and the dependency-derived
+ext4 closure in 1,011,612,875 of 1,600,000,000 across 3,719 packed lines from
+13 source units. Before this refactor, indexed full-leaf CREATE measured
+1,592,943,041 cold-source steps under the same ext4 watchdog. Linear-to-HTree
 conversion plus its authority guards previously measured 1,544,762,450 steps
 across 3,646 packed lines under the preceding 1.55-billion guard.
 Existing depth-zero HTree CREATE previously measured 1,476,019,687 steps
@@ -264,9 +269,20 @@ journey exceeded the old ceiling; the measured journey completed in
 811,281,646 steps, on one core, below 1 GiB peak RSS with no swapping. It is
 historical sizing evidence, not a claim that W18 is rerun for every source
 revision. `EXT4_REPORT_STEPS` reports actual use and source/backing media;
-budget failures include used and allowed steps. The current source passes cold
-builds and focused recovery qualification without a compiled cache or
-certificate-preservation shortcut.
+budget failures include used and allowed steps.
+
+The compact accumulated Stage 3 gate passed sequentially: Gate 2A smoke in
+203,248,854 steps; MP64FS create/write/read/delete/sync and second-bitmap-
+sector sync/remount against a 150,183,005-step source snapshot; ext4 canonical
+image inspection for `primary-1k-i256`; durable and idempotent checksum-v3
+replay; and committed-revoke suppression, later-write-after-revoke,
+multi-record collision, revoked-primary-super refusal, and large-ring-wrap
+recovery. The first combined revoke run exposed old public-mount oracles that
+expected transient revoke state to survive mount-tail cleanup; `8918024`
+corrected those assertions, after which all five revoke cases passed. This is
+compact representative source/runtime equivalence without a compiled cache or
+certificate-preservation shortcut, not a rerun of the broad persistence,
+fault-injection, crash-fence, stable-remount, or external-tool matrices.
 
 At bounded hard-`LINK` closure, the production source measured 1,140,381,589
 steps across 2,962 packed lines in source mode. The then-approved 1.15-billion
