@@ -40,18 +40,18 @@ AKASHIC_ROOT = ROOT / "akashic"
 CRC_MODULE = "math/crc.f"
 BITSET_MODULE = "utils/bitset.f"
 VFS_MODULE = "utils/fs/vfs.f"
-EXT4_ADMISSION_MODULE = "utils/fs/drivers/vfs-ext4-admission.f"
-EXT4_DESCRIPTOR_MODULE = "utils/fs/drivers/vfs-ext4-descriptor.f"
-EXT4_BITMAP_MODULE = "utils/fs/drivers/vfs-ext4-bitmap.f"
-EXT4_INODE_MODULE = "utils/fs/drivers/vfs-ext4-inode.f"
-EXT4_XATTR_MODULE = "utils/fs/drivers/vfs-ext4-xattr.f"
-EXT4_ORPHAN_MODULE = "utils/fs/drivers/vfs-ext4-orphan.f"
-EXT4_BACKUPS_MODULE = "utils/fs/drivers/vfs-ext4-backups.f"
-EXT4_DIRHASH_MODULE = "utils/fs/drivers/vfs-ext4-dirhash.f"
-EXT4_DIRENT_MODULE = "utils/fs/drivers/vfs-ext4-dirent.f"
-EXT4_JBD2_CODEC_MODULE = "utils/fs/drivers/vfs-ext4-jbd2-codec.f"
-EXT4_JBD2_MAP_MODULE = "utils/fs/drivers/vfs-ext4-jbd2-map.f"
-EXT4_JBD2_REVOKE_MODULE = "utils/fs/drivers/vfs-ext4-jbd2-revoke.f"
+EXT4_ADMISSION_MODULE = "utils/fs/drivers/ext4/vfs-ext4-admission.f"
+EXT4_DESCRIPTOR_MODULE = "utils/fs/drivers/ext4/vfs-ext4-descriptor.f"
+EXT4_BITMAP_MODULE = "utils/fs/drivers/ext4/vfs-ext4-bitmap.f"
+EXT4_INODE_MODULE = "utils/fs/drivers/ext4/vfs-ext4-inode.f"
+EXT4_XATTR_MODULE = "utils/fs/drivers/ext4/vfs-ext4-xattr.f"
+EXT4_ORPHAN_MODULE = "utils/fs/drivers/ext4/vfs-ext4-orphan.f"
+EXT4_BACKUPS_MODULE = "utils/fs/drivers/ext4/vfs-ext4-backups.f"
+EXT4_DIRHASH_MODULE = "utils/fs/drivers/ext4/vfs-ext4-dirhash.f"
+EXT4_DIRENT_MODULE = "utils/fs/drivers/ext4/vfs-ext4-dirent.f"
+EXT4_JBD2_CODEC_MODULE = "utils/fs/drivers/ext4/vfs-ext4-jbd2-codec.f"
+EXT4_JBD2_MAP_MODULE = "utils/fs/drivers/ext4/vfs-ext4-jbd2-map.f"
+EXT4_JBD2_REVOKE_MODULE = "utils/fs/drivers/ext4/vfs-ext4-jbd2-revoke.f"
 EXT4_MODULE = "utils/fs/drivers/vfs-ext4.f"
 CRC_F = AKASHIC_ROOT / CRC_MODULE
 BITSET_F = AKASHIC_ROOT / BITSET_MODULE
@@ -86551,6 +86551,14 @@ def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
     assert set(expected).isdisjoint(already_staged)
     assert set(full_order) == set(expected) | (set(full_order) & already_staged)
     assert {VFS_MODULE, CRC_MODULE, BITSET_MODULE}.isdisjoint(expected)
+    private_dir = AKASHIC_ROOT / "utils/fs/drivers/ext4"
+    assert all(
+        (AKASHIC_ROOT / module).parent == private_dir
+        for module in expected[:-1]
+    )
+    assert not tuple(
+        (AKASHIC_ROOT / "utils/fs/drivers").glob("vfs-ext4-*.f")
+    )
 
     packed = _ext4_source_stage_lines()
     assert packed
@@ -86574,7 +86582,7 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
         line.removeprefix("REQUIRE ")
         for line in admission.splitlines()
         if line.startswith("REQUIRE ")
-    ) == ("../vfs.f", "../../../math/crc.f")
+    ) == ("../../vfs.f", "../../../../math/crc.f")
     assert tuple(
         line.removeprefix("REQUIRE ")
         for line in facade.splitlines()
@@ -86583,18 +86591,18 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
         "../vfs.f",
         "../../uint-range.f",
         "../../bitset.f",
-        "vfs-ext4-admission.f",
-        "vfs-ext4-descriptor.f",
-        "vfs-ext4-bitmap.f",
-        "vfs-ext4-inode.f",
-        "vfs-ext4-xattr.f",
-        "vfs-ext4-orphan.f",
-        "vfs-ext4-backups.f",
-        "vfs-ext4-dirhash.f",
-        "vfs-ext4-dirent.f",
-        "vfs-ext4-jbd2-codec.f",
-        "vfs-ext4-jbd2-map.f",
-        "vfs-ext4-jbd2-revoke.f",
+        "ext4/vfs-ext4-admission.f",
+        "ext4/vfs-ext4-descriptor.f",
+        "ext4/vfs-ext4-bitmap.f",
+        "ext4/vfs-ext4-inode.f",
+        "ext4/vfs-ext4-xattr.f",
+        "ext4/vfs-ext4-orphan.f",
+        "ext4/vfs-ext4-backups.f",
+        "ext4/vfs-ext4-dirhash.f",
+        "ext4/vfs-ext4-dirent.f",
+        "ext4/vfs-ext4-jbd2-codec.f",
+        "ext4/vfs-ext4-jbd2-map.f",
+        "ext4/vfs-ext4-jbd2-revoke.f",
     )
     assert "URANGE-" not in admission
     assert "BITSET-" not in admission
@@ -86791,7 +86799,7 @@ def test_ext4_bitmap_service_is_private_acyclic_unit() -> None:
         for line in bitmap.splitlines()
         if line.startswith("REQUIRE ")
     ) == (
-        "../../bitset.f",
+        "../../../bitset.f",
         "vfs-ext4-admission.f",
         "vfs-ext4-descriptor.f",
     )
@@ -88669,7 +88677,7 @@ def test_ext4_crc_source_uses_checked_hardware_without_fallback() -> None:
         line.split("\\", 1)[0] for line in source.splitlines()
     )
     adapter = re.search(r": _EXT4-CRC-ADD\b(.*?);", executable, re.DOTALL)
-    assert "REQUIRE ../../../math/crc.f" in source
+    assert "REQUIRE ../../../../math/crc.f" in source
     assert adapter is not None
     assert "CRC32C-RAW?" in adapter.group(1)
     assert "_EXT4-CRC-TABLE" not in source

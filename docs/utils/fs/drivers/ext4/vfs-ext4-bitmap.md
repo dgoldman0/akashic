@@ -1,7 +1,7 @@
 # ext4 allocation-bitmap admission
 
-`akashic/utils/fs/drivers/vfs-ext4-bitmap.f` is an internal dependency of the
-public [`vfs-ext4.f`](vfs-ext4.md) facade. Consumers load the facade rather than
+`akashic/utils/fs/drivers/ext4/vfs-ext4-bitmap.f` is an internal dependency of the
+public [`vfs-ext4.f`](../vfs-ext4.md) facade. Consumers load the facade rather than
 this source unit directly.
 
 The unit owns eight stack services: canonical block- and inode-group counts,

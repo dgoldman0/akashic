@@ -1,7 +1,7 @@
 # ext4 orphan-file block checksum codec
 
-`akashic/utils/fs/drivers/vfs-ext4-orphan.f` is an internal dependency of the
-public [`vfs-ext4.f`](vfs-ext4.md) facade. Consumers load the facade rather
+`akashic/utils/fs/drivers/ext4/vfs-ext4-orphan.f` is an internal dependency of the
+public [`vfs-ext4.f`](../vfs-ext4.md) facade. Consumers load the facade rather
 than this source unit directly.
 
 The unit owns the orphan-file block tail magic and two stack services: a

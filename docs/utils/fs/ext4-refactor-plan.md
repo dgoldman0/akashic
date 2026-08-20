@@ -60,58 +60,59 @@ redirected.
   callbacks. The cold ext4 source harness derives the driver's
   dependency-ordered closure and removes the VFS, CRC, and bitset foundation
   already present in earlier measured stages. The first physical component,
-  `vfs-ext4-admission.f`, now owns the on-disk profile and private context
+  `ext4/vfs-ext4-admission.f`, now owns the on-disk profile and private context
   layout, checked I/O and CRC adapter, probe helpers, checked arithmetic, and
-  primary-super admission. `vfs-ext4-descriptor.f` now owns authenticated
+  primary-super admission. `ext4/vfs-ext4-descriptor.f` now owns authenticated
   group-descriptor location, shared CRC verification/restamping, pointer/span,
   flag, and counter admission. Its loader and the group-0 recovery candidate
   delegate to the same predicate, eliminating their duplicate CRC algebra.
-  `vfs-ext4-bitmap.f` now owns canonical short-group geometry, nominal-format
-  bitmap CRCs, authenticated bitmap loading, and the raw exact-bit allocation
-  predicate. All 22 scratch cells are private after making the CRC calculators
-  stack-direct, and mount validation delegates its duplicate CRC tails without
-  moving allocation-owner policy.
-  `vfs-ext4-inode.f` owns stack-only `i_blocks` decode/encode, bounded
+  `ext4/vfs-ext4-bitmap.f` now owns canonical short-group geometry,
+  nominal-format bitmap CRCs, authenticated bitmap loading, and the raw
+  exact-bit allocation predicate. All 22 scratch cells are private after
+  making the CRC calculators stack-direct, and mount validation delegates its
+  duplicate CRC tails without moving allocation-owner policy.
+  `ext4/vfs-ext4-inode.f` owns stack-only `i_blocks` decode/encode, bounded
   `i_block`-tail checks, canonical special-device decoding, signed timestamp
   loading, inode-checksum restamping, and mtime/ctime encoding. All 34 scratch
   cells are private; inode media lookup, checksum verification, and the
   success-only IR identity/locator results remain in the facade pending Stage
   4.
-  `vfs-ext4-xattr.f` owns external-xattr block header admission, shared
+  `ext4/vfs-ext4-xattr.f` owns external-xattr block header admission, shared
   physical-location-bound CRC calculation, authenticated loading, and
   checksum restamping. Its six scratch cells are private and it exports no
   mutable result: authenticated bytes reside in the caller-owned context
   `C.BLOCK` only after a successful load. Entry parsing, allocation,
   reference-count, transaction, and recovery policy remain in the facade.
-  `vfs-ext4-orphan.f` owns the orphan-file block tail magic and the checked
+  `ext4/vfs-ext4-orphan.f` owns the orphan-file block tail magic and the checked
   checksum predicate and restamper. All seven scratch cells are private and
   the unit exports no mutable result. The facade reader delegates its duplicate
   checksum tail while retaining inode preparation, mapping, physical I/O, and
   all `_EXT4-OV-*` operation state.
-  `vfs-ext4-backups.f` owns sparse-super copy authority, immutable-super
+  `ext4/vfs-ext4-backups.f` owns sparse-super copy authority, immutable-super
   comparison, exact journal-backup tuples, and backup-GDT location checks; all
   13 of its scratch cells are private.
-  `vfs-ext4-dirhash.f` owns directory-name byte admission, the seeded
+  `ext4/vfs-ext4-dirhash.f` owns directory-name byte admission, the seeded
   half-MD4 engine, and checked mounted hash policy; all 21 of its scratch
   objects are private, and its unused rejected-version constant is gone.
-  `vfs-ext4-dirent.f` owns directory-entry type decoding, full linear-block
+  `ext4/vfs-ext4-dirent.f` owns directory-entry type decoding, full linear-block
   validation, and checksum restamping. Its three services keep all 14 scratch
   cells private after removal of the dead validator-tail cell; scan, inode,
   cache, rollback, transaction, and durability policy remain in the facade.
-  `vfs-ext4-jbd2-codec.f` owns raw big-endian access and the shared JBD2 block,
-  superblock, commit, and tag checksum validators and encoders. Tag validation
-  takes its sequence and context explicitly, all 11 codec scratch cells are
-  private, and the module adds no mutable cross-component result surface.
-  `vfs-ext4-jbd2-map.f` owns reusable arena-backed map geometry, physical-home
-  uniqueness reservation during construction, completed-map membership,
-  mapped journal-block I/O, and logical ring stepping. Its 16 scratch cells
-  are private; snapshot construction and all recovery-authority, scan,
-  transaction, and durability policy remain in the facade.
-  `vfs-ext4-jbd2-revoke.f` owns recovery revoke-table geometry, caller-arena
-  allocation and reuse, bounded insertion and lookup, and modular transaction
-  ordering. Its ten scratch cells are private; the facade retains record
-  parsing/checksums, `REVOKE-READY` publication, replay authority, scrubbing,
-  and durability.
+  `ext4/vfs-ext4-jbd2-codec.f` owns raw big-endian access and the shared JBD2
+  block, superblock, commit, and tag checksum validators and encoders. Tag
+  validation takes its sequence and context explicitly, all 11 codec scratch
+  cells are private, and the module adds no mutable cross-component result
+  surface.
+  `ext4/vfs-ext4-jbd2-map.f` owns reusable arena-backed map geometry,
+  physical-home uniqueness reservation during construction, completed-map
+  membership, mapped journal-block I/O, and logical ring stepping. Its 16
+  scratch cells are private; snapshot construction and all recovery-authority,
+  scan, transaction, and durability policy remain in the facade.
+  `ext4/vfs-ext4-jbd2-revoke.f` owns recovery revoke-table geometry,
+  caller-arena allocation and reuse, bounded insertion and lookup, and modular
+  transaction ordering. Its ten scratch cells are private; the facade retains
+  record parsing/checksums, `REVOKE-READY` publication, replay authority,
+  scrubbing, and durability.
   `vfs-ext4.f` remains the only public facade and begins with allocation-owner
   and initialized-bitmap policy. The aggregate source stage now loads
   `(admission, descriptor, bitmap, inode, xattr, orphan, backups, dirhash,

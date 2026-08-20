@@ -1,7 +1,7 @@
 # ext4 admission foundation
 
-`akashic/utils/fs/drivers/vfs-ext4-admission.f` is an internal dependency of
-the public [`vfs-ext4.f`](vfs-ext4.md) facade. It is not a second driver or a
+`akashic/utils/fs/drivers/ext4/vfs-ext4-admission.f` is an internal dependency of
+the public [`vfs-ext4.f`](../vfs-ext4.md) facade. It is not a second driver or a
 separate binding. Load ext4 through the facade:
 
 ```forth

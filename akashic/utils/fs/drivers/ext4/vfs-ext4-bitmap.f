@@ -3,7 +3,7 @@
 \ Internal dependency of the vfs-ext4.f public facade.
 
 PROVIDED akashic-ext4-bitmap
-REQUIRE ../../bitset.f
+REQUIRE ../../../bitset.f
 REQUIRE vfs-ext4-admission.f
 REQUIRE vfs-ext4-descriptor.f
 

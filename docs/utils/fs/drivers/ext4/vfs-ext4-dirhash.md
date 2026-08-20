@@ -1,7 +1,7 @@
 # ext4 directory-name hash policy
 
-`akashic/utils/fs/drivers/vfs-ext4-dirhash.f` is an internal dependency of the
-public [`vfs-ext4.f`](vfs-ext4.md) facade. Consumers load the facade, not this
+`akashic/utils/fs/drivers/ext4/vfs-ext4-dirhash.f` is an internal dependency of the
+public [`vfs-ext4.f`](../vfs-ext4.md) facade. Consumers load the facade, not this
 source unit directly.
 
 The unit owns the ext4 directory-name byte predicate, the seeded half-MD4

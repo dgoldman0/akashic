@@ -4,8 +4,8 @@
 \ REQUIRE utils/fs/drivers/vfs-ext4.f
 
 PROVIDED akashic-ext4-admission
-REQUIRE ../vfs.f
-REQUIRE ../../../math/crc.f
+REQUIRE ../../vfs.f
+REQUIRE ../../../../math/crc.f
 
 \ =====================================================================
 \  Profile constants and on-disk offsets

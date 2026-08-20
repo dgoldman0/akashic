@@ -17,18 +17,18 @@ PROVIDED akashic-vfs-ext4
 REQUIRE ../vfs.f
 REQUIRE ../../uint-range.f
 REQUIRE ../../bitset.f
-REQUIRE vfs-ext4-admission.f
-REQUIRE vfs-ext4-descriptor.f
-REQUIRE vfs-ext4-bitmap.f
-REQUIRE vfs-ext4-inode.f
-REQUIRE vfs-ext4-xattr.f
-REQUIRE vfs-ext4-orphan.f
-REQUIRE vfs-ext4-backups.f
-REQUIRE vfs-ext4-dirhash.f
-REQUIRE vfs-ext4-dirent.f
-REQUIRE vfs-ext4-jbd2-codec.f
-REQUIRE vfs-ext4-jbd2-map.f
-REQUIRE vfs-ext4-jbd2-revoke.f
+REQUIRE ext4/vfs-ext4-admission.f
+REQUIRE ext4/vfs-ext4-descriptor.f
+REQUIRE ext4/vfs-ext4-bitmap.f
+REQUIRE ext4/vfs-ext4-inode.f
+REQUIRE ext4/vfs-ext4-xattr.f
+REQUIRE ext4/vfs-ext4-orphan.f
+REQUIRE ext4/vfs-ext4-backups.f
+REQUIRE ext4/vfs-ext4-dirhash.f
+REQUIRE ext4/vfs-ext4-dirent.f
+REQUIRE ext4/vfs-ext4-jbd2-codec.f
+REQUIRE ext4/vfs-ext4-jbd2-map.f
+REQUIRE ext4/vfs-ext4-jbd2-revoke.f
 
 \ =====================================================================
 \  Allocation ownership and initialized bitmap checksums

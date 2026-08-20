@@ -122,52 +122,55 @@ operations relative to the supplied `VOL-RAW` or `VOL-SLICE` object.
 REQUIRE utils/fs/drivers/vfs-ext4.f
 ```
 
-`vfs-ext4.f` remains the sole public entry facade. Its internal
-[`vfs-ext4-admission.f`](vfs-ext4-admission.md) dependency owns the on-disk
+`vfs-ext4.f` remains the sole public entry facade. Private implementation
+sources live under `utils/fs/drivers/ext4/` rather than appearing as peer
+drivers beside the facade, FAT, and MP64FS. Its internal
+[`vfs-ext4-admission.f`](ext4/vfs-ext4-admission.md) dependency owns the on-disk
 profile and context layout, checked volume I/O and CRC adapter, probing,
 checked geometry arithmetic, and primary-super validation. The following
-[`vfs-ext4-descriptor.f`](vfs-ext4-descriptor.md) unit authenticates one group
-descriptor and its bounded metadata geometry, and owns the shared checked
-descriptor-CRC query and restamper used by later policy owners. The
-[`vfs-ext4-bitmap.f`](vfs-ext4-bitmap.md) unit owns exact short-group geometry,
+[`vfs-ext4-descriptor.f`](ext4/vfs-ext4-descriptor.md) unit authenticates one
+group descriptor and its bounded metadata geometry, and owns the shared
+checked descriptor-CRC query and restamper used by later policy owners. The
+[`vfs-ext4-bitmap.f`](ext4/vfs-ext4-bitmap.md) unit owns exact short-group
+geometry,
 format-span bitmap CRC calculation, authenticated bitmap loading, and raw
 single-block allocation evidence. It keeps all 22 scratch cells private while
 mount-wide ownership validation and mutation policy remain in the facade. The
-[`vfs-ext4-inode.f`](vfs-ext4-inode.md) unit owns stack-only inode-record
+[`vfs-ext4-inode.f`](ext4/vfs-ext4-inode.md) unit owns stack-only inode-record
 decoding, `i_blocks` encoding, canonical special-device decoding, checksum
 restamping, and timestamp encoding. It keeps all 34 scratch cells private
 while media lookup, checksum verification, and identity/locator-result
 lifetime remain in the facade. The
-[`vfs-ext4-xattr.f`](vfs-ext4-xattr.md) unit owns external-xattr block header
+[`vfs-ext4-xattr.f`](ext4/vfs-ext4-xattr.md) unit owns external-xattr block header
 admission, physical-location-bound checksum calculation, authenticated loading,
 and checksum restamping. Its six scratch cells are private, it exports no
 mutable result cell, and authenticated bytes reside in the caller-owned
 context `C.BLOCK` only after success; xattr entry parsing, allocation,
 reference-count, transaction, and recovery policy remain in the facade. The
-[`vfs-ext4-orphan.f`](vfs-ext4-orphan.md) unit owns the orphan-file block tail
+[`vfs-ext4-orphan.f`](ext4/vfs-ext4-orphan.md) unit owns the orphan-file block tail
 magic plus the checked checksum predicate and restamper. Its seven scratch
 cells are private and it exports no mutable result. Orphan-file inode
 preparation, mapping, physical reads, operation-lifetime locator state,
 planning, transaction, and recovery policy remain in the facade. The
-[`vfs-ext4-backups.f`](vfs-ext4-backups.md) unit authenticates sparse-super
+[`vfs-ext4-backups.f`](ext4/vfs-ext4-backups.md) unit authenticates sparse-super
 copies, immutable superblock identity, and backup descriptor locations without
 treating mutable counters as identity. The independent
-[`vfs-ext4-dirhash.f`](vfs-ext4-dirhash.md) unit owns directory-name byte
+[`vfs-ext4-dirhash.f`](ext4/vfs-ext4-dirhash.md) unit owns directory-name byte
 admission, the ext4 half-MD4 engine, and the checked mounted hash policy. The
-[`vfs-ext4-dirent.f`](vfs-ext4-dirent.md) unit owns directory-entry type
+[`vfs-ext4-dirent.f`](ext4/vfs-ext4-dirent.md) unit owns directory-entry type
 decoding plus complete linear-block validation and checksum restamping. It
 keeps all 14 scratch cells private; directory scanning, child-inode admission,
 VFS cache publication, and rollback remain in the facade. The independent
-[`vfs-ext4-jbd2-codec.f`](vfs-ext4-jbd2-codec.md) unit owns raw big-endian
+[`vfs-ext4-jbd2-codec.f`](ext4/vfs-ext4-jbd2-codec.md) unit owns raw big-endian
 access and shared JBD2 checksum validation and encoding; its tag validator
 takes the payload, stored checksum, sequence, and context explicitly instead
 of reading scanner state. The independent
-[`vfs-ext4-jbd2-map.f`](vfs-ext4-jbd2-map.md) unit owns reusable arena-backed
+[`vfs-ext4-jbd2-map.f`](ext4/vfs-ext4-jbd2-map.md) unit owns reusable arena-backed
 logical-map geometry, build-time physical uniqueness reservation, completed
 map membership, mapped block I/O, and journal-ring stepping. All 16 scratch
 cells are private; snapshot construction, protected-authority policy,
 scanning, transactions, and durability remain in the facade. The independent
-[`vfs-ext4-jbd2-revoke.f`](vfs-ext4-jbd2-revoke.md) unit owns recovery
+[`vfs-ext4-jbd2-revoke.f`](ext4/vfs-ext4-jbd2-revoke.md) unit owns recovery
 revoke-table geometry, allocation, clearing, modular transaction ordering,
 insertion, and lookup. Its ten scratch cells are private; parsing,
 `REVOKE-READY` publication, replay authority, scrubbing, and durability remain

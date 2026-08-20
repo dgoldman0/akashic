@@ -1,7 +1,7 @@
 # ext4 linear directory-entry codec
 
-`akashic/utils/fs/drivers/vfs-ext4-dirent.f` is an internal dependency of the
-public [`vfs-ext4.f`](vfs-ext4.md) facade. Consumers load the facade, not this
+`akashic/utils/fs/drivers/ext4/vfs-ext4-dirent.f` is an internal dependency of the
+public [`vfs-ext4.f`](../vfs-ext4.md) facade. Consumers load the facade, not this
 source unit directly.
 
 The unit owns three stack services for linear directory-entry blocks:

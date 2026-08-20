@@ -1,7 +1,7 @@
 # ext4 JBD2 recovery revoke index
 
-`akashic/utils/fs/drivers/vfs-ext4-jbd2-revoke.f` is an internal dependency of
-the public [`vfs-ext4.f`](vfs-ext4.md) facade. Consumers load the facade, not
+`akashic/utils/fs/drivers/ext4/vfs-ext4-jbd2-revoke.f` is an internal dependency of
+the public [`vfs-ext4.f`](../vfs-ext4.md) facade. Consumers load the facade, not
 this source unit directly.
 
 The unit owns recovery revoke-table geometry, arena allocation and reuse,
