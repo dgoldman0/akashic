@@ -33,7 +33,9 @@ redirected.
   mutation views. Block-range release now likewise delegates its exact-group
   raw/effective allocation proofs and private after-image clear while ext4
   retains authentication, counters, checksums, and transactional publication.
-  Remaining query and mutation helper families follow one at a time.
+  Foundational block point/range allocation reads also use the canonical exact
+  group bound rather than direct byte/shift scans. Remaining query and mutation
+  helper families follow one at a time.
 
 ## Baseline and objective
 

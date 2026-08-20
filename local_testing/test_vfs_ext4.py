@@ -86711,6 +86711,70 @@ def test_ext4_block_range_free_uses_checked_bitset_mutation() -> None:
     ) in staged
 
 
+def test_ext4_block_allocation_reads_use_exact_checked_bitset_views() -> None:
+    source = EXT4_F.read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    assert source.count(": _EXT4-UADD?") == 1
+    assert source.count(": _EXT4-UMUL?") == 1
+    assert source.count(": _EXT4-GROUP-BLOCK-COUNT") == 1
+    assert source.index(": _EXT4-UADD?") < source.index(
+        ": _EXT4-GROUP-BLOCK-COUNT"
+    ) < source.index(": _EXT4-BLOCK-ALLOCATED?")
+    assert source.index(": _EXT4-UMUL?") < source.index(
+        ": _EXT4-GROUP-BLOCK-COUNT"
+    )
+
+    allocated = word_body("_EXT4-BLOCK-ALLOCATED?")
+    allocated_range = word_body("_EXT4-REQUIRE-ALLOCATED-RANGE")
+
+    assert allocated.count("_EXT4-GROUP-BLOCK-COUNT") == 1
+    assert (
+        "_EXT4-BA-GROUP-BLOCKS @ _EXT4-BA-INDEX @ BITSET-TEST?"
+        in allocated
+    )
+    assert "DROP FALSE EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in allocated
+    assert "_EXT4-BG-BLOCK-UNINIT AND IF FALSE 0 EXIT THEN" in allocated
+
+    assert allocated_range.count("_EXT4-GROUP-BLOCK-COUNT") == 1
+    assert (
+        "_EXT4-RAR-FIRST @ _EXT4-RAR-CTX @ _EXT4-C.FIRST + @ U< IF"
+        in allocated_range
+    )
+    assert (
+        "_EXT4-RAR-INDEX @ _EXT4-RAR-GROUP-BLOCKS @ U< 0= IF"
+        in allocated_range
+    )
+    assert (
+        "_EXT4-RAR-GROUP-BLOCKS @ _EXT4-RAR-INDEX @ -\n"
+        "        _EXT4-RAR-REMAIN @ MIN _EXT4-RAR-CHUNK !"
+        in allocated_range
+    )
+    assert (
+        "_EXT4-RAR-GROUP-BLOCKS @\n"
+        "        _EXT4-RAR-INDEX @ _EXT4-RAR-CHUNK @ "
+        "BITSET-ALL-SET?"
+        in allocated_range
+    )
+    assert "DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT" in allocated_range
+    assert "0= IF _EXT4-RAR-DETAIL @ _EXT4-CORRUPT EXIT THEN" in (
+        allocated_range
+    )
+    for body in (allocated, allocated_range):
+        assert "C@" not in body
+        assert "LSHIFT" not in body
+        assert "?DO" not in body
+        assert "UNLOOP" not in body
+
+
 def test_hardware_crc32c_matches_fragmented_ext4_raw_vector(tmp_path: Path) -> None:
     blank = tmp_path / "crc-storage.img"
     blank.write_bytes(bytes(4 * 512))

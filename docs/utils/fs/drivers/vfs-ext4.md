@@ -377,6 +377,14 @@ root, mount verifies:
   then authenticates every referenced inode's bounded `i_dtime`, type, size,
   flags, and applicable data map. Linked entries must be truncatable.
 
+Initialized block-allocation point and range reads use the shared checked LSB0
+bitset operations with the canonical exact group block count, so a partial
+final group's padding is never allocation evidence. Invalid internal views are
+bounds corruption, while a valid missing allocation bit retains the semantic
+detail supplied by the caller. The raw point predicate continues to report an
+uninitialized block group as ordinary negative evidence; the requiring block
+and range wrappers retain their existing rejection policy.
+
 Before the first cleanup-specific write, mount authenticates every record in
 the complete legacy/modern union and measures the exact coalesced metadata
 credit for each supported record. The largest measurement sizes one reusable
