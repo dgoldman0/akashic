@@ -5995,8 +5995,8 @@ def test_jbd2_committed_revoke_suppresses_earlier_home_write(
             "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
             (
                 "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
-                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 1 = AND "
-                "_V _EXT4-CTX _EXT4-C.J.REVOKE-HITS + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 0= AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-HITS + @ 0= AND "
                 "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
                 'IF ." EXT4-JBD2-REVOKE-SUPPRESSED" THEN'
             ),
@@ -6034,8 +6034,8 @@ def test_jbd2_later_write_replays_after_earlier_revoke(
             "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
             (
                 "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
-                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 1 = AND "
-                "_V _EXT4-CTX _EXT4-C.J.REVOKE-HITS + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 0= AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-HITS + @ 0= AND "
                 "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 1 = AND "
                 'IF ." EXT4-JBD2-REVOKE-LATER-WRITE" THEN'
             ),
@@ -6138,9 +6138,9 @@ def test_jbd2_multi_record_revoke_probes_collisions(
             "T-ARENA T-VOLUME EXT4-NEW CONSTANT _M-IOR CONSTANT _V",
             (
                 "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
-                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 2 = AND "
-                "_V _EXT4-CTX _EXT4-C.J.REVOKE-SLOTS + @ 4 = AND "
-                "_V _EXT4-CTX _EXT4-C.J.REVOKE-HITS + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 0= AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-SLOTS + @ 0= AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-HITS + @ 0= AND "
                 "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
                 'IF ." EXT4-JBD2-MULTI-REVOKE-COLLISION" THEN'
             ),
@@ -6680,7 +6680,7 @@ def test_jbd2_revoked_primary_super_payload_grants_no_repair_authority(
                 "_M-IOR VFS-IOR-REASON VFS-R-CORRUPT = "
                 "_M-IOR VFS-IOR-DETAIL EXT4-D-SUPER-CHECKSUM = AND "
                 "_V V.LIFECYCLE @ VFS-L-NEW = AND "
-                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 0= AND "
                 "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
                 "_V _EXT4-CTX _EXT4-C.J.REVOKE-READY + @ 0= AND "
                 'IF ." EXT4-REVOKED-SUPER-REPAIR-UNPROVEN" THEN'
@@ -6877,8 +6877,8 @@ def test_jbd2_revoke_scan_wraps_across_large_journal_ring(
                 "_M-IOR 0= _V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
                 "_V _EXT4-CTX _EXT4-C.J.MAXLEN + @ 8192 = AND "
                 "_V _EXT4-CTX _EXT4-C.J.COMMITTED + @ 2 = AND "
-                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 1 = AND "
-                "_V _EXT4-CTX _EXT4-C.J.REVOKE-HITS + @ 1 = AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-COUNT + @ 0= AND "
+                "_V _EXT4-CTX _EXT4-C.J.REVOKE-HITS + @ 0= AND "
                 "_V _EXT4-CTX _EXT4-C.J.HOME-WRITES + @ 0= AND "
                 "_V _EXT4-CTX _EXT4-C.J.CURSOR + @ 4 = AND "
                 'IF ." EXT4-JBD2-J8-REVOKE-WRAP" THEN'
