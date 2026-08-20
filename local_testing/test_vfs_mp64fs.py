@@ -5,7 +5,7 @@ These tests attach a formatted MP64FS disk image to the emulator,
 load the VFS + binding, then exercise probe, init, readdir, read,
 write, create, delete, sync, and teardown through the VFS API.
 """
-import os, subprocess, sys, struct, tempfile, time
+import os, re, subprocess, sys, struct, tempfile, time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -20,6 +20,7 @@ SEM_F     = os.path.join(ROOT_DIR, "akashic", "concurrency", "semaphore.f")
 GUARD_F   = os.path.join(ROOT_DIR, "akashic", "concurrency", "guard.f")
 UTF8_F    = os.path.join(ROOT_DIR, "akashic", "text", "utf8.f")
 UINT_RANGE_F = os.path.join(ROOT_DIR, "akashic", "utils", "uint-range.f")
+BITSET_F = os.path.join(ROOT_DIR, "akashic", "utils", "bitset.f")
 MEMORY_SPAN_F = os.path.join(ROOT_DIR, "akashic", "utils", "memory-span.f")
 VFS_F     = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs.f")
 VFS_MNT_F = os.path.join(ROOT_DIR, "akashic", "utils", "fs", "vfs-mount.f")
@@ -323,7 +324,7 @@ def build_snapshot():
 
     dep_lines = []
     for path in [
-        EVENT_F, SEM_F, GUARD_F, UTF8_F, UINT_RANGE_F, MEMORY_SPAN_F,
+        EVENT_F, SEM_F, GUARD_F, UTF8_F, UINT_RANGE_F, BITSET_F, MEMORY_SPAN_F,
         VFS_F, VFS_MNT_F, VFS_MP_F,
     ]:
         dep_lines += _load_forth_lines(path)
@@ -459,7 +460,7 @@ def run_fresh_forth(image_path, lines, max_steps=800_000_000):
     bios_code = _load_bios()
     load_lines = _load_forth_lines(KDOS_PATH) + ["ENTER-USERLAND"]
     for path in [
-        EVENT_F, SEM_F, GUARD_F, UTF8_F, UINT_RANGE_F, MEMORY_SPAN_F,
+        EVENT_F, SEM_F, GUARD_F, UTF8_F, UINT_RANGE_F, BITSET_F, MEMORY_SPAN_F,
         VFS_F, VFS_MNT_F, VFS_MP_F,
     ]:
         load_lines += _load_forth_lines(path)
@@ -593,6 +594,43 @@ def test_range_alias_policy_uses_shared_checked_algebra():
         "    URANGE-OVERLAP? 0= IF DROP TRUE THEN ;"
     ) in source
     assert source.count("_VMP-RANGES-ALIAS-OR-INVALID?") == 6
+
+
+def test_bitmap_queries_use_shared_logical_bit_bounds():
+    """MP64FS keeps search policy while sharing checked LSB0 queries."""
+    with open(VFS_MP_F, encoding="utf-8") as source_file:
+        source = source_file.read()
+
+    def word_body(name):
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    assert "REQUIRE ../../bitset.f" in source
+    assert "_VMP-BITS-PER-BMAP-SECTOR" not in source
+    bitset_view = word_body("_VMP-BITSET")
+    assert "_VMP-C.BMAP" in bitset_view
+    assert "_VMP-C.TOTAL" in bitset_view
+    assert "_VMP-C.BN" not in bitset_view
+    assert "BITSET-BYTES?" in word_body("_VMP-GEOMETRY?")
+    for name, shared_word in (
+        ("_VMP-BIT-FREE?", "BITSET-TEST?"),
+        ("_VMP-BMAP-ALL-CLEAR?", "BITSET-ALL-CLEAR?"),
+        ("_VMP-BMAP-ALL-SET?", "BITSET-ALL-SET?"),
+    ):
+        body = word_body(name)
+        assert shared_word in body
+        assert "0= IF DROP FALSE" in body
+    assert "_VMP-BMAP-ALL-CLEAR?" in word_body("_VMP-RUN-FREE?")
+    assert "_VMP-BMAP-ALL-SET?" in word_body("_VMP-RUN-ALLOCATED?")
+    assert "_VMP-BIT-FREE?" in word_body("_VMP-FIND-FREE")
+    assert "_VMP-BMAP-ALL-SET?" in word_body("_VMP-INIT")
+    assert "_VMEV-START" not in source
+    assert "_VMEV-COUNT" not in source
 
 
 def test_constructor_binds_and_mounts_volume():

@@ -13,6 +13,7 @@
 PROVIDED akashic-vfs-mp64fs
 REQUIRE ../vfs.f
 REQUIRE ../../uint-range.f
+REQUIRE ../../bitset.f
 
 \ =====================================================================
 \  On-disk constants (must match diskutil.py & kdos.f §7.6)
@@ -23,7 +24,6 @@ REQUIRE ../../uint-range.f
 48   CONSTANT _VMP-ENTRY-SIZE
 12   CONSTANT _VMP-DIR-SECTORS
 2    CONSTANT _VMP-MAX-BMAP-SECTORS
-4096 CONSTANT _VMP-BITS-PER-BMAP-SECTOR
 8192 CONSTANT _VMP-MAX-SECTORS
 255  CONSTANT _VMP-ROOT-PARENT     \ parent=0xFF means root dir
 
@@ -182,11 +182,20 @@ VARIABLE _VMP-NL
 \  Bitmap Helpers (operate on ctx bitmap cache)
 \ =====================================================================
 
+: _VMP-BITSET  ( ctx -- bitmap logical-bits )
+    DUP _VMP-C.BMAP + SWAP _VMP-C.TOTAL + @ ;
+
 : _VMP-BIT-FREE?  ( sector ctx -- flag )
-    _VMP-C.BMAP +                     ( sector bmap )
-    SWAP DUP 8 / ROT +  C@           ( sector byte-val )
-    SWAP 8 MOD 1 SWAP LSHIFT         ( byte-val mask )
-    AND 0= ;
+    _VMP-BITSET ROT BITSET-TEST?
+    0= IF DROP FALSE EXIT THEN 0= ;
+
+: _VMP-BMAP-ALL-SET?  ( start count ctx -- flag )
+    _VMP-BITSET 2SWAP BITSET-ALL-SET?
+    0= IF DROP FALSE THEN ;
+
+: _VMP-BMAP-ALL-CLEAR?  ( start count ctx -- flag )
+    _VMP-BITSET 2SWAP BITSET-ALL-CLEAR?
+    0= IF DROP FALSE THEN ;
 
 : _VMP-BIT-SET  ( sector ctx -- )
     _VMP-C.BMAP +                     ( sector bmap )
@@ -233,16 +242,10 @@ VARIABLE _VMRUN-COUNT
 VARIABLE _VMRUN-CTX
 
 : _VMP-RUN-FREE?  ( start count ctx -- flag )
-    _VMRUN-CTX ! _VMRUN-COUNT ! _VMRUN-START !
-    _VMRUN-START @ _VMRUN-CTX @ _VMP-C.DSTART + @ < IF FALSE EXIT THEN
-    _VMRUN-START @ _VMRUN-COUNT @ +
-    _VMRUN-CTX @ _VMP-C.TOTAL + @ > IF FALSE EXIT THEN
-    TRUE
-    _VMRUN-COUNT @ 0 ?DO
-        _VMRUN-START @ I + _VMRUN-CTX @ _VMP-BIT-FREE? 0= IF
-            DROP FALSE LEAVE
-        THEN
-    LOOP ;
+    DUP _VMP-C.DSTART + @ 3 PICK > IF
+        2DROP DROP FALSE EXIT
+    THEN
+    _VMP-BMAP-ALL-CLEAR? ;
 
 : _VMP-RUN-SET  ( start count ctx -- )
     _VMRUN-CTX ! _VMRUN-COUNT ! _VMRUN-START !
@@ -370,8 +373,9 @@ VARIABLE _VMGV-V
     _VMGV-CTX @ _VMP-SB-BSTART 1 <> IF FALSE EXIT THEN
     _VMGV-CTX @ _VMP-SB-BN DUP 1 < SWAP _VMP-MAX-BMAP-SECTORS > OR
         IF FALSE EXIT THEN
-    _VMGV-CTX @ _VMP-SB-TOTAL _VMP-BITS-PER-BMAP-SECTOR 1- +
-        _VMP-BITS-PER-BMAP-SECTOR /
+    _VMGV-CTX @ _VMP-SB-TOTAL BITSET-BYTES?
+        0= IF DROP FALSE EXIT THEN
+        _VMP-SECTOR /MOD SWAP 0<> IF 1+ THEN
         _VMGV-CTX @ _VMP-SB-BN <> IF FALSE EXIT THEN
     _VMGV-CTX @ _VMP-SB-DIRSTART
         _VMGV-CTX @ _VMP-SB-BSTART _VMGV-CTX @ _VMP-SB-BN + <>
@@ -393,8 +397,6 @@ VARIABLE _VMGV-V
 \ extents instead of reinterpreting untrusted disk fields at mutation time.
 VARIABLE _VMEV-CTX
 VARIABLE _VMEV-DE
-VARIABLE _VMEV-START
-VARIABLE _VMEV-COUNT
 VARIABLE _VMPV-CTX
 VARIABLE _VMDV-CTX
 VARIABLE _VMOV-A
@@ -422,19 +424,11 @@ VARIABLE _VMDV-OK
     _VMP-RANGES-ALIAS-OR-INVALID? ;
 
 : _VMP-RUN-ALLOCATED?  ( start count ctx -- flag )
-    _VMEV-CTX ! _VMEV-COUNT ! _VMEV-START !
-    _VMEV-COUNT @ 0= IF FALSE EXIT THEN
-    _VMEV-START @ _VMEV-CTX @ _VMP-C.DSTART + @ < IF FALSE EXIT THEN
-    _VMEV-START @ _VMEV-CTX @ _VMP-C.TOTAL + @ >= IF FALSE EXIT THEN
-    _VMEV-COUNT @
-        _VMEV-CTX @ _VMP-C.TOTAL + @ _VMEV-START @ - >
-        IF FALSE EXIT THEN
-    TRUE
-    _VMEV-COUNT @ 0 DO
-        _VMEV-START @ I + _VMEV-CTX @ _VMP-BIT-FREE? IF
-            DROP FALSE LEAVE
-        THEN
-    LOOP ;
+    OVER 0= IF 2DROP DROP FALSE EXIT THEN
+    DUP _VMP-C.DSTART + @ 3 PICK > IF
+        2DROP DROP FALSE EXIT
+    THEN
+    _VMP-BMAP-ALL-SET? ;
 
 : _VMP-PARENT-VALID?  ( parent ctx -- flag )
     _VMPV-CTX !
@@ -555,11 +549,8 @@ VARIABLE _VMDV-OK
     _VMI-CTX @ _VMP-C.DIRN + @  _VMP-VOL-READ
     ?DUP IF EXIT THEN
     \ Metadata sectors must all be reserved in the allocation bitmap.
-    _VMI-CTX @ _VMP-C.DSTART + @ 0 DO
-        I _VMI-CTX @ _VMP-BIT-FREE? IF
-            3 _VMP-FORMAT-CORRUPT UNLOOP EXIT
-        THEN
-    LOOP
+    0 _VMI-CTX @ _VMP-C.DSTART + @ _VMI-CTX @
+    _VMP-BMAP-ALL-SET? 0= IF 3 _VMP-FORMAT-CORRUPT EXIT THEN
     _VMI-CTX @ _VMP-DIRECTORY-VALID? 0= IF
         4 _VMP-FORMAT-CORRUPT EXIT
     THEN

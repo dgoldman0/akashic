@@ -88,6 +88,7 @@ _DEP_PATHS = [
     os.path.join(AK, "tui",         "app-desc.f"),
     # VFS (app-shell.f requires vfs-mp64fs.f for VFS init)
     os.path.join(AK, "utils",       "uint-range.f"),
+    os.path.join(AK, "utils",       "bitset.f"),
     os.path.join(AK, "utils",       "memory-span.f"),
     os.path.join(AK, "utils",       "fs", "vfs.f"),
     os.path.join(AK, "utils",       "fs", "drivers", "vfs-mp64fs.f"),
