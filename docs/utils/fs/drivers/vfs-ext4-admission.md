@@ -37,8 +37,11 @@ CRC adapter, context geometry, typed errors, and that name-byte predicate for
 linear directory-block validation and checksum encoding. The independent
 [`vfs-ext4-jbd2-codec.f`](vfs-ext4-jbd2-codec.md) unit consumes the checked CRC
 adapter plus admitted context geometry and journal seed for raw JBD2 checksum
-validation and encoding. None of these units calls back into later filesystem
-policy.
+validation and encoding. The independent
+[`vfs-ext4-jbd2-map.f`](vfs-ext4-jbd2-map.md) unit consumes admitted journal
+geometry, checked block I/O, typed errors, and the VFS arena available through
+the admission closure for logical mapping, mapped I/O, and ring stepping. None
+of these units calls back into later filesystem policy.
 
 Most mutable scratch in this unit is private to admission. Four cells remain
 an intentional temporary cross-module surface: `_EXT4-IO-VFS` and
@@ -53,5 +56,5 @@ cold-source qualification model. Packaging and the real-image harness resolve
 admission, descriptor loading, bitmap admission, inode-record formatting,
 external-xattr block authentication, orphan-file block checksums, backup
 authority, directory hashing, the linear directory-entry codec, the JBD2
-checksum codec, and the facade in production order and continue to compile the
-aggregate closure in source mode.
+checksum codec, the JBD2 map service, and the facade in production order and
+continue to compile the aggregate closure in source mode.

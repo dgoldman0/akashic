@@ -99,17 +99,22 @@ redirected.
   superblock, commit, and tag checksum validators and encoders. Tag validation
   takes its sequence and context explicitly, all 11 codec scratch cells are
   private, and the module adds no mutable cross-component result surface.
+  `vfs-ext4-jbd2-map.f` owns reusable arena-backed map geometry, physical-home
+  uniqueness reservation during construction, completed-map membership,
+  mapped journal-block I/O, and logical ring stepping. Its 16 scratch cells
+  are private; snapshot construction and all recovery-authority, scan,
+  transaction, and durability policy remain in the facade.
   `vfs-ext4.f` remains the only public facade and begins with allocation-owner
   and initialized-bitmap policy. The aggregate source stage now loads
   `(admission, descriptor, bitmap, inode, xattr, orphan, backups, dirhash,
-  dirent, jbd2-codec, facade)` in production order rather than relying on a
-  handwritten concatenation list.
+  dirent, jbd2-codec, jbd2-map, facade)` in production order rather than
+  relying on a handwritten concatenation list.
   Four checked-I/O session/evidence cells and four success-only descriptor
   parser-result cells remain temporary cross-component surfaces until the
   operation-lifetime context stage. Five inode-lookup identity/locator cells
   remain facade-local operation-lifetime state; bitmap admission, inode
   formatting, external-xattr and orphan-block handling, backups, dirhash,
-  dirent, and the JBD2 codec add none.
+  dirent, and the JBD2 codec and map service add none.
 
 ## Baseline and objective
 
@@ -279,7 +284,12 @@ sequence, and context inputs explicitly.
 Its 11 scratch cells remain private, its validators restore temporarily cleared
 checksum fields, and its encoders retain the prior zero-on-CRC-error state. The
 shared superblock stamper removes the duplicate witness/reset/activation
-checksum tails without moving their policy or write ordering. Allocation
+checksum tails without moving their policy or write ordering. The independent
+JBD2 map service also depends only on admission and owns the caller-arena
+map/hash allocation, mutating build-time uniqueness reservation, read-only
+completed-map membership, mapped journal I/O, and ring stepping. It
+deliberately does not authenticate or clear reused contents; facade-owned
+snapshot construction does that before the map becomes evidence. Allocation
 ownership begins the facade because broadening that prefix would capture
 mutation hooks whose implementations are bound much later. Every later
 authority, recovery, mutation, and VFS-operation policy remains in the facade

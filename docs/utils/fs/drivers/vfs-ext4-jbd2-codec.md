@@ -34,5 +34,7 @@ The module depends only on
 [`vfs-ext4-admission.f`](vfs-ext4-admission.md) and has no callback,
 execution-token hook, or mutable result surface shared with the facade. All 11
 of its endian, validator, and encoder scratch cells are private. Journal
-geometry and authority, scan ordering, witness policy, transaction assembly,
-media writes, and durability remain in the facade.
+logical mapping and ring stepping live in the independent
+[`vfs-ext4-jbd2-map.f`](vfs-ext4-jbd2-map.md) service. Journal authority, scan
+ordering, witness policy, transaction assembly, and durability remain in the
+facade.

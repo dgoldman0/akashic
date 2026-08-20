@@ -160,10 +160,15 @@ VFS cache publication, and rollback remain in the facade. The independent
 [`vfs-ext4-jbd2-codec.f`](vfs-ext4-jbd2-codec.md) unit owns raw big-endian
 access and shared JBD2 checksum validation and encoding; its tag validator
 takes the payload, stored checksum, sequence, and context explicitly instead
-of reading scanner state. The facade begins at allocation ownership and
-initialized-bitmap policy and retains all later filesystem authority,
-recovery, transaction, mutation, and VFS-operation policy. Consumers should
-not require these internal units directly.
+of reading scanner state. The independent
+[`vfs-ext4-jbd2-map.f`](vfs-ext4-jbd2-map.md) unit owns reusable arena-backed
+logical-map geometry, build-time physical uniqueness reservation, completed
+map membership, mapped block I/O, and journal-ring stepping. All 16 scratch
+cells are private; snapshot construction, protected-authority policy,
+scanning, transactions, and durability remain in the facade. The facade
+begins at allocation ownership and initialized-bitmap policy and retains all
+later filesystem authority, recovery, transaction, mutation, and VFS-operation
+policy. Consumers should not require these internal units directly.
 
 The post-`abb3f94` implementation sequence is fixed in the
 [ext4 recovery refactor plan](../ext4-refactor-plan.md). That plan records the
@@ -176,8 +181,8 @@ The real-image harness cold-compiles the dependency-ordered production ext4
 source closure into the restored FAT/VFS snapshot. The current ext4 stage is
 the admission, descriptor, bitmap-admission, inode-format, external-xattr,
 orphan-block, backup-authority, directory-hash, linear-dirent, and
-JBD2-checksum units followed by the public facade; VFS, CRC, and bitset are
-already present in earlier measured stages.
+JBD2-checksum and journal-map units followed by the public facade; VFS, CRC,
+and bitset are already present in earlier measured stages.
 It does not use a compiled shard or warm cache.
 To avoid making UART echo volume an implementation-size limit, the host
 injects each compacted physical source line into the BIOS `FSLOAD`

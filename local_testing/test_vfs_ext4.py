@@ -50,6 +50,7 @@ EXT4_BACKUPS_MODULE = "utils/fs/drivers/vfs-ext4-backups.f"
 EXT4_DIRHASH_MODULE = "utils/fs/drivers/vfs-ext4-dirhash.f"
 EXT4_DIRENT_MODULE = "utils/fs/drivers/vfs-ext4-dirent.f"
 EXT4_JBD2_CODEC_MODULE = "utils/fs/drivers/vfs-ext4-jbd2-codec.f"
+EXT4_JBD2_MAP_MODULE = "utils/fs/drivers/vfs-ext4-jbd2-map.f"
 EXT4_MODULE = "utils/fs/drivers/vfs-ext4.f"
 CRC_F = AKASHIC_ROOT / CRC_MODULE
 BITSET_F = AKASHIC_ROOT / BITSET_MODULE
@@ -86542,6 +86543,7 @@ def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:
         EXT4_DIRHASH_MODULE,
         EXT4_DIRENT_MODULE,
         EXT4_JBD2_CODEC_MODULE,
+        EXT4_JBD2_MAP_MODULE,
         EXT4_MODULE,
     )
     assert set(expected).isdisjoint(already_staged)
@@ -86589,6 +86591,7 @@ def test_ext4_foundation_units_are_acyclic_and_ordered() -> None:
         "vfs-ext4-dirhash.f",
         "vfs-ext4-dirent.f",
         "vfs-ext4-jbd2-codec.f",
+        "vfs-ext4-jbd2-map.f",
     )
     assert "URANGE-" not in admission
     assert "BITSET-" not in admission
@@ -88226,6 +88229,209 @@ def test_ext4_jbd2_codec_is_private_acyclic_unit() -> None:
     assert ordered_source.index(
         ": _EXT4-JBD2-TAG-CHECKSUM?"
     ) < ordered_source.index("4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX")
+
+
+def test_ext4_jbd2_map_service_is_private_acyclic_unit() -> None:
+    journal_map = (AKASHIC_ROOT / EXT4_JBD2_MAP_MODULE).read_text(
+        encoding="utf-8"
+    )
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+    ordered_source = _ext4_source_text()
+
+    assert journal_map.splitlines().count(
+        "PROVIDED akashic-ext4-jbd2-map"
+    ) == 1
+    assert len("akashic-ext4-jbd2-map".encode("utf-8")) == 21
+    assert tuple(
+        line.removeprefix("REQUIRE ")
+        for line in journal_map.splitlines()
+        if line.startswith("REQUIRE ")
+    ) == ("vfs-ext4-admission.f",)
+
+    service_definitions = (
+        (
+            ": _EXT4-ENSURE-JOURNAL-WORKSPACE  "
+            "( maxlen ctx -- ior )"
+        ),
+        ": _EXT4-JOURNAL-MAP@  ( logical ctx -- physical )",
+        (
+            ": _EXT4-JOURNAL-MAP-UNIQUE?  "
+            "( physical ctx -- flag )"
+        ),
+        ": _EXT4-JOURNAL-DATA?  ( physical ctx -- flag )",
+        ": _EXT4-READ-JBLOCK  ( logical ctx -- ior )",
+        ": _EXT4-WRITE-JBLOCK  ( buffer logical ctx -- ior )",
+        ": _EXT4-JOURNAL-NEXT  ( logical ctx -- next )",
+        (
+            ": _EXT4-JOURNAL-ADVANCE  "
+            "( logical count ctx -- logical )"
+        ),
+    )
+    service_names = (
+        "_EXT4-ENSURE-JOURNAL-WORKSPACE",
+        "_EXT4-JOURNAL-MAP@",
+        "_EXT4-JOURNAL-MAP-UNIQUE?",
+        "_EXT4-JOURNAL-DATA?",
+        "_EXT4-READ-JBLOCK",
+        "_EXT4-WRITE-JBLOCK",
+        "_EXT4-JOURNAL-NEXT",
+        "_EXT4-JOURNAL-ADVANCE",
+    )
+    for definition in service_definitions:
+        assert journal_map.splitlines().count(definition) == 1
+        assert definition not in facade
+    for service in service_names:
+        assert service in facade
+        assert re.search(
+            rf"(?m)^:[ \t]+{re.escape(service)}(?=[ \t\r\n(])",
+            facade,
+        ) is None
+
+    private_cells = set(
+        re.findall(r"^VARIABLE (\S+)$", journal_map, re.MULTILINE)
+    )
+    assert private_cells == {
+        "_EXT4-JW-CTX",
+        "_EXT4-JW-MAXLEN",
+        "_EXT4-JW-SLOTS",
+        "_EXT4-JW-MAP-BYTES",
+        "_EXT4-JW-BYTES",
+        "_EXT4-JMH-CTX",
+        "_EXT4-JMH-KEY",
+        "_EXT4-JMH-SLOT",
+        "_EXT4-JR-LOGICAL",
+        "_EXT4-JR-CTX",
+        "_EXT4-JWB-BUF",
+        "_EXT4-JN-BLOCK",
+        "_EXT4-JN-CTX",
+        "_EXT4-JADV-POS",
+        "_EXT4-JADV-COUNT",
+        "_EXT4-JADV-CTX",
+    }
+    assert len(private_cells) == 16
+    assert all(cell not in facade for cell in private_cells)
+    assert "_EXT4-JV-MAP-KEY" not in ordered_source
+    assert "_EXT4-JV-MAP-SLOT" not in ordered_source
+    assert "_EXT4-JH-CTX" not in ordered_source
+    assert "EXECUTE" not in journal_map
+    assert "-XT" not in journal_map
+    assert "_EXT4-RECOVERY-AUTHORITY" not in journal_map
+    assert "_EXT4-JOURNAL-MAP-PUT" not in journal_map
+
+    map_executable = "\n".join(
+        line.split("\\", 1)[0] for line in journal_map.splitlines()
+    )
+    facade_executable = "\n".join(
+        line.split("\\", 1)[0] for line in facade.splitlines()
+    )
+
+    def word_body(source: str, name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            source,
+        )
+        assert match is not None
+        return " ".join(match.group("body").split())
+
+    ensure = word_body(
+        map_executable, "_EXT4-ENSURE-JOURNAL-WORKSPACE"
+    )
+    unique = word_body(map_executable, "_EXT4-JOURNAL-MAP-UNIQUE?")
+    member = word_body(map_executable, "_EXT4-JOURNAL-DATA?")
+    reader = word_body(map_executable, "_EXT4-READ-JBLOCK")
+    writer = word_body(map_executable, "_EXT4-WRITE-JBLOCK")
+    next_block = word_body(map_executable, "_EXT4-JOURNAL-NEXT")
+    advance = word_body(map_executable, "_EXT4-JOURNAL-ADVANCE")
+
+    ensure_order = (
+        "DUP 0= IF DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN",
+        "DUP 0xFFFFFFFF U> IF",
+        "1 _EXT4-JW-SLOTS !",
+        "_EXT4-JW-MAXLEN @ CELLS _EXT4-JW-MAP-BYTES !",
+        "_EXT4-JW-MAP-BYTES @ _EXT4-JW-SLOTS @ CELLS +",
+        "_EXT4-C.J.MAP + @ IF",
+        "_EXT4-C.J.MAP-HASH + @ _EXT4-JW-CTX @",
+        "_EXT4-C.ARENA + @ _EXT4-JW-BYTES @ ARENA-ALLOT?",
+        "_EXT4-C.J.MAP + !",
+        "_EXT4-C.J.MAP-HASH + !",
+        "_EXT4-C.J.MAP-CAPACITY + !",
+        "_EXT4-C.J.MAP-HASH-SLOTS + !",
+    )
+    ensure_positions = tuple(ensure.index(fragment) for fragment in ensure_order)
+    assert ensure_positions == tuple(sorted(ensure_positions))
+    assert "VFS-E-NOMEM EXIT" in ensure
+    assert "EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT" in ensure
+
+    assert unique.count("UNLOOP EXIT") == 2
+    assert "_EXT4-JMH-KEY @ SWAP ! TRUE UNLOOP EXIT" in unique
+    assert "_EXT4-JMH-KEY @ = IF DROP FALSE UNLOOP EXIT" in unique
+    assert member.count("UNLOOP EXIT") == 2
+    assert "SWAP !" not in member
+    assert "_EXT4-JMH-KEY @ = IF TRUE UNLOOP EXIT" in member
+
+    assert reader.index("_EXT4-JR-CTX @ 0= IF") < reader.index(
+        "_EXT4-C.J.MAXLEN + @ U< 0= IF"
+    ) < reader.index("_EXT4-JOURNAL-MAP@") < reader.index(
+        "_EXT4-READ-BLOCK"
+    )
+    assert writer.index("_EXT4-JR-CTX @ 0= IF") < writer.index(
+        "_EXT4-JWB-BUF @ 0= IF"
+    ) < writer.index("_EXT4-C.J.MAXLEN + @ U< 0= IF") < writer.index(
+        "_EXT4-JOURNAL-MAP@"
+    ) < writer.index("_EXT4-WRITE-BLOCK")
+
+    assert "_EXT4-JN-BLOCK @ 1+ DUP" in next_block
+    assert next_block.index("_EXT4-C.J.MAXLEN + @ >= IF") < (
+        next_block.index("_EXT4-C.J.FIRST + @")
+    )
+    assert "_EXT4-JADV-COUNT @ 0 ?DO" in advance
+    assert advance.count("_EXT4-JOURNAL-NEXT") == 1
+    assert "LOOP _EXT4-JADV-POS @" in advance
+
+    expected_facade_calls = {
+        "_EXT4-ENSURE-JOURNAL-WORKSPACE": 1,
+        "_EXT4-JOURNAL-MAP@": 7,
+        "_EXT4-JOURNAL-MAP-UNIQUE?": 1,
+        "_EXT4-JOURNAL-DATA?": 3,
+        "_EXT4-READ-JBLOCK": 26,
+        "_EXT4-WRITE-JBLOCK": 16,
+        "_EXT4-JOURNAL-NEXT": 7,
+        "_EXT4-JOURNAL-ADVANCE": 3,
+    }
+    for service, count in expected_facade_calls.items():
+        assert facade_executable.count(service) == count
+
+    map_put = word_body(facade_executable, "_EXT4-JOURNAL-MAP-PUT")
+    map_put_checks = (
+        "_EXT4-C.J.MAXLEN + @ U< 0= IF",
+        "_EXT4-C.BLOCKS + @ U< 0= OR IF",
+        "_EXT4-RECOVERY-AUTHORITY-BLOCK? IF",
+        "_EXT4-JP-LOGICAL @ CELLS + DUP _EXT4-JP-SLOT ! @ IF",
+        "_EXT4-JOURNAL-MAP-UNIQUE? 0= IF",
+        "_EXT4-JP-PHYS @ _EXT4-JP-SLOT @ ! 0",
+    )
+    map_put_positions = tuple(
+        map_put.index(fragment) for fragment in map_put_checks
+    )
+    assert map_put_positions == tuple(sorted(map_put_positions))
+    assert map_put.rfind("EXT4-D-JOURNAL _EXT4-CORRUPT EXIT") < (
+        map_put.index("_EXT4-JP-PHYS @ _EXT4-JP-SLOT @ !")
+    )
+
+    for retained_policy in (
+        ": _EXT4-RECOVERY-AUTHORITY-BLOCK?",
+        ": _EXT4-JOURNAL-MAP-PUT",
+        ": _EXT4-SNAPSHOT-JOURNAL-MAP",
+    ):
+        assert retained_policy in facade
+        assert retained_policy not in journal_map
+    assert ordered_source.index(": _EXT4-JBD2-TAG-CHECKSUM?") < (
+        ordered_source.index(": _EXT4-ENSURE-JOURNAL-WORKSPACE")
+    )
+    assert ordered_source.index(": _EXT4-JOURNAL-ADVANCE") < (
+        ordered_source.index("4 CONSTANT _EXT4-RESIDENT-EXTENT-ENTRY-MAX")
+    )
 
 
 def test_ext4_crc_source_uses_checked_hardware_without_fallback() -> None:

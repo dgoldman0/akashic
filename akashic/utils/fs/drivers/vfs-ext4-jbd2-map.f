@@ -1,0 +1,148 @@
+\ vfs-ext4-jbd2-map.f — ext4 JBD2 logical-to-physical map services
+\
+\ Internal dependency of the vfs-ext4.f public facade.
+
+PROVIDED akashic-ext4-jbd2-map
+REQUIRE vfs-ext4-admission.f
+
+VARIABLE _EXT4-JW-CTX
+VARIABLE _EXT4-JW-MAXLEN
+VARIABLE _EXT4-JW-SLOTS
+VARIABLE _EXT4-JW-MAP-BYTES
+VARIABLE _EXT4-JW-BYTES
+
+\ Allocate the exact journal snapshot and a power-of-two uniqueness table at
+\ no more than one-half load.  These are arena capacity, not format limits.
+\ A failed mount may be retried on the same VFS, so an existing allocation is
+\ accepted only when its complete geometry matches the journal inode exactly.
+: _EXT4-ENSURE-JOURNAL-WORKSPACE  ( maxlen ctx -- ior )
+    _EXT4-JW-CTX ! DUP _EXT4-JW-MAXLEN !
+    DUP 0= IF DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN
+    DUP 0xFFFFFFFF U> IF
+        DROP EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT
+    THEN
+    DROP
+    1 _EXT4-JW-SLOTS !
+    BEGIN
+        _EXT4-JW-SLOTS @ _EXT4-JW-MAXLEN @ 2* U<
+    WHILE
+        _EXT4-JW-SLOTS @ 2* _EXT4-JW-SLOTS !
+    REPEAT
+    _EXT4-JW-MAXLEN @ CELLS _EXT4-JW-MAP-BYTES !
+    _EXT4-JW-MAP-BYTES @ _EXT4-JW-SLOTS @ CELLS +
+    DUP _EXT4-JW-BYTES ! _EXT4-JW-MAP-BYTES @ U< IF
+        EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT
+    THEN
+    _EXT4-JW-CTX @ _EXT4-C.J.MAP + @ IF
+        _EXT4-JW-CTX @ _EXT4-C.J.MAP-CAPACITY + @
+        _EXT4-JW-MAXLEN @ =
+        _EXT4-JW-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @
+        _EXT4-JW-SLOTS @ = AND
+        _EXT4-JW-CTX @ _EXT4-C.J.MAP + @ _EXT4-JW-MAP-BYTES @ +
+        _EXT4-JW-CTX @ _EXT4-C.J.MAP-HASH + @ = AND IF
+            0 EXIT
+        THEN
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JW-CTX @ _EXT4-C.J.MAP-HASH + @
+    _EXT4-JW-CTX @ _EXT4-C.J.MAP-CAPACITY + @ OR
+    _EXT4-JW-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ OR IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JW-CTX @ _EXT4-C.ARENA + @
+    _EXT4-JW-BYTES @ ARENA-ALLOT? IF DROP VFS-E-NOMEM EXIT THEN
+    DUP _EXT4-JW-CTX @ _EXT4-C.J.MAP + !
+    _EXT4-JW-MAP-BYTES @ +
+    _EXT4-JW-CTX @ _EXT4-C.J.MAP-HASH + !
+    _EXT4-JW-MAXLEN @
+    _EXT4-JW-CTX @ _EXT4-C.J.MAP-CAPACITY + !
+    _EXT4-JW-SLOTS @
+    _EXT4-JW-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + !
+    0 ;
+
+: _EXT4-JOURNAL-MAP@  ( logical ctx -- physical )
+    _EXT4-C.J.MAP + @ SWAP CELLS + @ ;
+
+VARIABLE _EXT4-JMH-CTX
+VARIABLE _EXT4-JMH-KEY
+VARIABLE _EXT4-JMH-SLOT
+
+: _EXT4-JOURNAL-MAP-UNIQUE?  ( physical ctx -- flag )
+    _EXT4-JMH-CTX ! DUP _EXT4-JMH-KEY !
+    _EXT4-JMH-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 1- AND
+    _EXT4-JMH-SLOT !
+    _EXT4-JMH-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 0 DO
+        _EXT4-JMH-CTX @ _EXT4-C.J.MAP-HASH + @
+        _EXT4-JMH-SLOT @ CELLS + DUP @ DUP 0= IF
+            DROP _EXT4-JMH-KEY @ SWAP ! TRUE UNLOOP EXIT
+        THEN
+        _EXT4-JMH-KEY @ = IF DROP FALSE UNLOOP EXIT THEN
+        DROP
+        _EXT4-JMH-SLOT @ 1+
+        _EXT4-JMH-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 1- AND
+        _EXT4-JMH-SLOT !
+    LOOP
+    FALSE ;
+
+: _EXT4-JOURNAL-DATA?  ( physical ctx -- flag )
+    _EXT4-JMH-CTX ! DUP _EXT4-JMH-KEY !
+    _EXT4-JMH-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 1- AND
+    _EXT4-JMH-SLOT !
+    _EXT4-JMH-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 0 DO
+        _EXT4-JMH-CTX @ _EXT4-C.J.MAP-HASH + @
+        _EXT4-JMH-SLOT @ CELLS + @ DUP 0= IF
+            DROP FALSE UNLOOP EXIT
+        THEN
+        _EXT4-JMH-KEY @ = IF TRUE UNLOOP EXIT THEN
+        _EXT4-JMH-SLOT @ 1+
+        _EXT4-JMH-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 1- AND
+        _EXT4-JMH-SLOT !
+    LOOP
+    FALSE ;
+
+VARIABLE _EXT4-JR-LOGICAL
+VARIABLE _EXT4-JR-CTX
+VARIABLE _EXT4-JWB-BUF
+
+: _EXT4-READ-JBLOCK  ( logical ctx -- ior )
+    _EXT4-JR-CTX ! DUP _EXT4-JR-LOGICAL !
+    _EXT4-JR-CTX @ 0= IF DROP VFS-E-INVALID EXIT THEN
+    _EXT4-JR-CTX @ _EXT4-C.J.MAXLEN + @ U< 0= IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JR-LOGICAL @ _EXT4-JR-CTX @ _EXT4-JOURNAL-MAP@
+    _EXT4-JR-CTX @ _EXT4-READ-BLOCK ;
+
+: _EXT4-WRITE-JBLOCK  ( buffer logical ctx -- ior )
+    _EXT4-JR-CTX ! _EXT4-JR-LOGICAL ! _EXT4-JWB-BUF !
+    _EXT4-JR-CTX @ 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-JWB-BUF @ 0= IF VFS-E-INVALID EXIT THEN
+    _EXT4-JR-LOGICAL @
+    _EXT4-JR-CTX @ _EXT4-C.J.MAXLEN + @ U< 0= IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _EXT4-JWB-BUF @
+    _EXT4-JR-LOGICAL @ _EXT4-JR-CTX @ _EXT4-JOURNAL-MAP@
+    _EXT4-JR-CTX @ _EXT4-WRITE-BLOCK ;
+
+VARIABLE _EXT4-JN-BLOCK
+VARIABLE _EXT4-JN-CTX
+
+: _EXT4-JOURNAL-NEXT  ( logical ctx -- next )
+    _EXT4-JN-CTX ! _EXT4-JN-BLOCK !
+    _EXT4-JN-BLOCK @ 1+ DUP
+    _EXT4-JN-CTX @ _EXT4-C.J.MAXLEN + @ >= IF
+        DROP _EXT4-JN-CTX @ _EXT4-C.J.FIRST + @
+    THEN ;
+
+VARIABLE _EXT4-JADV-POS
+VARIABLE _EXT4-JADV-COUNT
+VARIABLE _EXT4-JADV-CTX
+
+: _EXT4-JOURNAL-ADVANCE  ( logical count ctx -- logical )
+    _EXT4-JADV-CTX ! _EXT4-JADV-COUNT ! _EXT4-JADV-POS !
+    _EXT4-JADV-COUNT @ 0 ?DO
+        _EXT4-JADV-POS @ _EXT4-JADV-CTX @ _EXT4-JOURNAL-NEXT
+        _EXT4-JADV-POS !
+    LOOP
+    _EXT4-JADV-POS @ ;

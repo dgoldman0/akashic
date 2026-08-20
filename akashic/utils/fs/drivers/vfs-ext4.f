@@ -27,6 +27,7 @@ REQUIRE vfs-ext4-backups.f
 REQUIRE vfs-ext4-dirhash.f
 REQUIRE vfs-ext4-dirent.f
 REQUIRE vfs-ext4-jbd2-codec.f
+REQUIRE vfs-ext4-jbd2-map.f
 
 \ =====================================================================
 \  Allocation ownership and initialized bitmap checksums
@@ -2443,13 +2444,6 @@ VARIABLE _EXT4-JV-SIZE
 VARIABLE _EXT4-JV-JSB
 VARIABLE _EXT4-JV-FEATURES
 VARIABLE _EXT4-JV-START
-VARIABLE _EXT4-JV-MAP-KEY
-VARIABLE _EXT4-JV-MAP-SLOT
-VARIABLE _EXT4-JW-CTX
-VARIABLE _EXT4-JW-MAXLEN
-VARIABLE _EXT4-JW-SLOTS
-VARIABLE _EXT4-JW-MAP-BYTES
-VARIABLE _EXT4-JW-BYTES
 VARIABLE _EXT4-JRW-CTX
 VARIABLE _EXT4-JRW-COUNT
 VARIABLE _EXT4-JRW-SLOTS
@@ -2468,55 +2462,6 @@ VARIABLE _EXT4-JRW-BYTES
     DUP 2 U< IF 2DROP FALSE EXIT THEN
     DUP _EXT4-REVOKE-SLOTS-MAX U> IF 2DROP FALSE EXIT THEN
     DUP 1- AND 0= NIP ;
-
-\ Allocate the exact journal snapshot and a power-of-two uniqueness table at
-\ no more than one-half load.  These are arena capacity, not format limits.
-\ A failed mount may be retried on the same VFS, so an existing allocation is
-\ accepted only when its complete geometry matches the journal inode exactly.
-: _EXT4-ENSURE-JOURNAL-WORKSPACE  ( maxlen ctx -- ior )
-    _EXT4-JW-CTX ! DUP _EXT4-JW-MAXLEN !
-    DUP 0= IF DROP EXT4-D-JOURNAL _EXT4-CORRUPT EXIT THEN
-    DUP 0xFFFFFFFF U> IF
-        DROP EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT
-    THEN
-    DROP
-    1 _EXT4-JW-SLOTS !
-    BEGIN
-        _EXT4-JW-SLOTS @ _EXT4-JW-MAXLEN @ 2* U<
-    WHILE
-        _EXT4-JW-SLOTS @ 2* _EXT4-JW-SLOTS !
-    REPEAT
-    _EXT4-JW-MAXLEN @ CELLS _EXT4-JW-MAP-BYTES !
-    _EXT4-JW-MAP-BYTES @ _EXT4-JW-SLOTS @ CELLS +
-    DUP _EXT4-JW-BYTES ! _EXT4-JW-MAP-BYTES @ U< IF
-        EXT4-D-JOURNAL _EXT4-UNSUPPORTED EXIT
-    THEN
-    _EXT4-JW-CTX @ _EXT4-C.J.MAP + @ IF
-        _EXT4-JW-CTX @ _EXT4-C.J.MAP-CAPACITY + @
-        _EXT4-JW-MAXLEN @ =
-        _EXT4-JW-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @
-        _EXT4-JW-SLOTS @ = AND
-        _EXT4-JW-CTX @ _EXT4-C.J.MAP + @ _EXT4-JW-MAP-BYTES @ +
-        _EXT4-JW-CTX @ _EXT4-C.J.MAP-HASH + @ = AND IF
-            0 EXIT
-        THEN
-        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-JW-CTX @ _EXT4-C.J.MAP-HASH + @
-    _EXT4-JW-CTX @ _EXT4-C.J.MAP-CAPACITY + @ OR
-    _EXT4-JW-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ OR IF
-        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-JW-CTX @ _EXT4-C.ARENA + @
-    _EXT4-JW-BYTES @ ARENA-ALLOT? IF DROP VFS-E-NOMEM EXIT THEN
-    DUP _EXT4-JW-CTX @ _EXT4-C.J.MAP + !
-    _EXT4-JW-MAP-BYTES @ +
-    _EXT4-JW-CTX @ _EXT4-C.J.MAP-HASH + !
-    _EXT4-JW-MAXLEN @
-    _EXT4-JW-CTX @ _EXT4-C.J.MAP-CAPACITY + !
-    _EXT4-JW-SLOTS @
-    _EXT4-JW-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + !
-    0 ;
 
 \ Revoke recovery needs the latest committed transaction ID for each home
 \ block.  Size an open-addressed table from the exact number of committed
@@ -2640,26 +2585,6 @@ VARIABLE _EXT4-JRH-ENTRY
     LOOP
     FALSE ;
 
-: _EXT4-JOURNAL-MAP@  ( logical ctx -- physical )
-    _EXT4-C.J.MAP + @ SWAP CELLS + @ ;
-
-: _EXT4-JOURNAL-MAP-UNIQUE?  ( physical ctx -- flag )
-    _EXT4-JV-CTX ! DUP _EXT4-JV-MAP-KEY !
-    _EXT4-JV-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 1- AND
-    _EXT4-JV-MAP-SLOT !
-    _EXT4-JV-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 0 DO
-        _EXT4-JV-CTX @ _EXT4-C.J.MAP-HASH + @
-        _EXT4-JV-MAP-SLOT @ CELLS + DUP @ DUP 0= IF
-            DROP _EXT4-JV-MAP-KEY @ SWAP ! TRUE UNLOOP EXIT
-        THEN
-        _EXT4-JV-MAP-KEY @ = IF DROP FALSE UNLOOP EXIT THEN
-        DROP
-        _EXT4-JV-MAP-SLOT @ 1+
-        _EXT4-JV-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 1- AND
-        _EXT4-JV-MAP-SLOT !
-    LOOP
-    FALSE ;
-
 VARIABLE _EXT4-JM-CTX
 VARIABLE _EXT4-JM-ENTRY
 VARIABLE _EXT4-JM-LOGICAL
@@ -2775,50 +2700,6 @@ VARIABLE _EXT4-RAB-CTX
         THEN
     LOOP
     0 ;
-
-VARIABLE _EXT4-JR-LOGICAL
-VARIABLE _EXT4-JR-CTX
-
-: _EXT4-READ-JBLOCK  ( logical ctx -- ior )
-    _EXT4-JR-CTX ! DUP _EXT4-JR-LOGICAL !
-    _EXT4-JR-CTX @ 0= IF DROP VFS-E-INVALID EXIT THEN
-    _EXT4-JR-CTX @ _EXT4-C.J.MAXLEN + @ U< 0= IF
-        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-JR-LOGICAL @ _EXT4-JR-CTX @ _EXT4-JOURNAL-MAP@
-    _EXT4-JR-CTX @ _EXT4-READ-BLOCK ;
-
-VARIABLE _EXT4-JWB-BUF
-
-: _EXT4-WRITE-JBLOCK  ( buffer logical ctx -- ior )
-    _EXT4-JR-CTX ! _EXT4-JR-LOGICAL ! _EXT4-JWB-BUF !
-    _EXT4-JR-CTX @ 0= IF VFS-E-INVALID EXIT THEN
-    _EXT4-JWB-BUF @ 0= IF VFS-E-INVALID EXIT THEN
-    _EXT4-JR-LOGICAL @
-    _EXT4-JR-CTX @ _EXT4-C.J.MAXLEN + @ U< 0= IF
-        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
-    THEN
-    _EXT4-JWB-BUF @
-    _EXT4-JR-LOGICAL @ _EXT4-JR-CTX @ _EXT4-JOURNAL-MAP@
-    _EXT4-JR-CTX @ _EXT4-WRITE-BLOCK ;
-
-VARIABLE _EXT4-JH-CTX
-
-: _EXT4-JOURNAL-DATA?  ( physical ctx -- flag )
-    _EXT4-JH-CTX ! DUP _EXT4-JV-MAP-KEY !
-    _EXT4-JH-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 1- AND
-    _EXT4-JV-MAP-SLOT !
-    _EXT4-JH-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 0 DO
-        _EXT4-JH-CTX @ _EXT4-C.J.MAP-HASH + @
-        _EXT4-JV-MAP-SLOT @ CELLS + @ DUP 0= IF
-            DROP FALSE UNLOOP EXIT
-        THEN
-        _EXT4-JV-MAP-KEY @ = IF TRUE UNLOOP EXIT THEN
-        _EXT4-JV-MAP-SLOT @ 1+
-        _EXT4-JH-CTX @ _EXT4-C.J.MAP-HASH-SLOTS + @ 1- AND
-        _EXT4-JV-MAP-SLOT !
-    LOOP
-    FALSE ;
 
 VARIABLE _EXT4-JA-BUF
 VARIABLE _EXT4-JA-CTX
@@ -3955,28 +3836,6 @@ VARIABLE _EXT4-RW-GDT-BLOCK
     _EXT4-JV-CTX @ _EXT4-C.TREE-BLOCK +
     _EXT4-JV-CTX @ _EXT4-C.ISIZE + @ CMOVE
     0 ;
-
-VARIABLE _EXT4-JN-BLOCK
-VARIABLE _EXT4-JN-CTX
-
-: _EXT4-JOURNAL-NEXT  ( logical ctx -- next )
-    _EXT4-JN-CTX ! _EXT4-JN-BLOCK !
-    _EXT4-JN-BLOCK @ 1+ DUP
-    _EXT4-JN-CTX @ _EXT4-C.J.MAXLEN + @ >= IF
-        DROP _EXT4-JN-CTX @ _EXT4-C.J.FIRST + @
-    THEN ;
-
-VARIABLE _EXT4-JADV-POS
-VARIABLE _EXT4-JADV-COUNT
-VARIABLE _EXT4-JADV-CTX
-
-: _EXT4-JOURNAL-ADVANCE  ( logical count ctx -- logical )
-    _EXT4-JADV-CTX ! _EXT4-JADV-COUNT ! _EXT4-JADV-POS !
-    _EXT4-JADV-COUNT @ 0 ?DO
-        _EXT4-JADV-POS @ _EXT4-JADV-CTX @ _EXT4-JOURNAL-NEXT
-        _EXT4-JADV-POS !
-    LOOP
-    _EXT4-JADV-POS @ ;
 
 \ =====================================================================
 \  Private arena-bounded JBD2 transaction staging
