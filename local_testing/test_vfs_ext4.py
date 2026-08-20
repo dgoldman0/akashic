@@ -86483,11 +86483,13 @@ def test_ext4_block_range_alias_policy_uses_shared_checked_algebra() -> None:
 
     adapter_name = "_EXT4-BLOCK-RANGES-ALIAS-OR-INVALID?"
     adapter = word_body(adapter_name)
+    frozen = word_body("_EXT4-RECOVERY-FROZEN-BLOCK?")
+    authority = word_body("_EXT4-RECOVERY-AUTHORITY-BLOCK?")
     inode_table = word_body("_EXT4-VALIDATE-INODE-TABLE-HOME")
     group_touched = word_body("_EXT4-JCM-GROUP-TOUCHED?")
 
     assert "URANGE-OVERLAP? 0= IF DROP TRUE THEN" in adapter
-    assert source.count(adapter_name) == 32
+    assert source.count(adapter_name) == 34
     assert "_EXT4-BLOCK-RANGES-OVERLAP?" not in source
     for scratch in (
         "_EXT4-BRO-A",
@@ -86496,6 +86498,13 @@ def test_ext4_block_range_alias_policy_uses_shared_checked_algebra() -> None:
         "_EXT4-BRO-BCOUNT",
     ):
         assert scratch not in source
+    assert frozen.count(adapter_name) == 1
+    assert "_EXT4-C.J.WITNESS-SUPER-BLOCK + @ =" in frozen
+    assert authority.count(adapter_name) == 1
+    assert "_EXT4-PRIMARY-SUPER-BLOCK = OR" in authority
+    for body in (frozen, authority):
+        assert ">=" not in body
+        assert "+ U< AND" not in body
     assert inode_table.count("URANGE-OVERLAP?") == 1
     assert inode_table.count(adapter_name) == 3
     assert "DROP EXT4-D-DATA-MAP _EXT4-CORRUPT UNLOOP EXIT" in inode_table
