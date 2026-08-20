@@ -1175,11 +1175,16 @@ use checked exact-group bitset views: malformed logical geometry is bounds
 corruption, while valid missing source allocations retain their data-map or
 orphan-file detail. The ext4 CRC and complete-home comparison still cover the
 format-defined physical bytes, including padding that the logical mutation
-does not touch. The staged-empty and checkpoint proofs independently require
-the target inode bit to be clear through that exact logical group view.
-Invalid query geometry is bounds corruption; a valid bit that is still set
-retains the existing corrupt staged-state refusal. Each proof preserves its
-existing surrounding complete-home CRC and byte-comparison order.
+does not touch. Staged-empty verification applies one checked exact-group clear
+to the transient authenticated raw bitmap cache, then compares that
+reconstruction with the retained home across the complete block.
+Invalid clear geometry is bounds corruption and any full-home mismatch retains
+the corrupt staged-state refusal. The staged-empty and checkpoint proofs also
+independently require the target inode bit to be clear through that exact
+logical group view. Invalid query geometry is bounds corruption; a valid bit
+that is still set retains the existing corrupt staged-state refusal. Each
+proof preserves its existing surrounding complete-home CRC and byte-comparison
+order.
 Checkpoint release-range verification also requires every released block bit
 to be clear through the canonical exact group-block view; malformed view
 geometry is bounds corruption, while a valid non-clear range retains the

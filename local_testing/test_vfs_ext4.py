@@ -86957,22 +86957,55 @@ def test_ext4_all_set_bridge_is_replaced_by_typed_exact_queries() -> None:
         return match.group("body")
 
     staged = word_body("_EXT4-JFD-VERIFY-EMPTY-STAGED")
+    bitmap_exact = word_body("_EXT4-JFD-REQUIRE-BITMAP-EXACT")
     checkpoint = word_body("_EXT4-JCP-REQUIRE-DELETE-HOMES")
     final_inode = word_body("_XU-AUTH-FINAL-RELEASE")
     final_directory = word_body("_XU-AUTH-DIRECTORY-BLOCK-RELEASE")
 
     assert (
-        "_EXT4-JFC-IMAGE @ DUP _EXT4-JFD-STAGED-BITMAP !\n"
+        "_EXT4-JFC-IMAGE @ DUP\n"
         "    _EXT4-JFI-GROUP-INODES @ _EXT4-JFI-INDEX @ BITSET-TEST?"
     ) in staged
     assert (
         "BITSET-TEST? 0= IF\n"
-        "        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+        "        2DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
     ) in staged
-    assert "IF\n        VFS-E-CORRUPT EXIT\n    THEN" in staged
+    assert "IF\n        DROP VFS-E-CORRUPT EXIT\n    THEN" in staged
+    assert (
+        "_EXT4-JFD-CTX @ _EXT4-C.BLOCK + SWAP\n"
+        "    _EXT4-JFD-REQUIRE-BITMAP-EXACT"
+    ) in staged
     assert staged.index("BITSET-TEST?") < staged.index(
-        "_EXT4-JFD-BITMAP-EXACT?"
+        "_EXT4-JFD-REQUIRE-BITMAP-EXACT"
     ) < staged.index("_EXT4-INODE-BITMAP-CRC")
+
+    assert (
+        "OVER _EXT4-JFI-GROUP-INODES @ _EXT4-JFI-INDEX @\n"
+        "    BITSET-BIT-CLEAR?"
+    ) in bitmap_exact
+    assert (
+        "BITSET-BIT-CLEAR? 0= IF\n"
+        "        2DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT"
+    ) in bitmap_exact
+    assert (
+        "_EXT4-JFD-CTX @ _EXT4-C.BSIZE + @ _EXT4-BYTES=? 0= IF\n"
+        "        VFS-E-CORRUPT EXIT"
+    ) in bitmap_exact
+    assert bitmap_exact.index("BITSET-BIT-CLEAR?") < bitmap_exact.index(
+        "_EXT4-BYTES=?"
+    )
+    assert "_EXT4-C.TREE-BLOCK" not in bitmap_exact
+    assert "_EXT4-JWR.SCRATCH-" not in bitmap_exact
+    for removed in ("MOVE", "C@", "8 /", "8 MOD", "LSHIFT"):
+        assert removed not in bitmap_exact
+    for removed in (
+        "_EXT4-JFD-BITMAP-EXACT?",
+        "_EXT4-JFD-RAW-BITMAP",
+        "_EXT4-JFD-STAGED-BITMAP",
+        "_EXT4-JFD-BITMAP-BYTE",
+        "_EXT4-JFD-BITMAP-MASK",
+    ):
+        assert removed not in source
 
     assert checkpoint.count("_EXT4-GROUP-INODE-COUNT") == 1
     assert (

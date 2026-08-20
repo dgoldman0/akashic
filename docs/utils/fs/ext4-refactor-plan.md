@@ -23,9 +23,10 @@ redirected.
   `binimg`, and ext4 now delegate their duplicated overlap, membership, and
   range-construction proofs through the shared algebra while preserving typed
   fail-closed policy at their boundaries.
-- Stage 2 is in progress through the complete MP64FS consumer migration. The
-  checked `bitset.f` contract landed at `4557527` and now owns logical bitmap
-  admission and range mutation for MP64FS's allocation and pending-free views.
+- Stage 2 is complete for the identified Akashic MP64FS and ext4 consumer
+  families. The checked `bitset.f` contract landed at `4557527` and now owns
+  logical bitmap admission and range mutation for MP64FS's allocation and
+  pending-free views.
   MP64FS retains contiguous first-fit search, pending-mask application, and
   durability sequencing. The ext4 migration now uses exact logical popcount
   for block accounting and bounded shared queries for free-block candidate
@@ -50,8 +51,10 @@ redirected.
   checked singleton query. The reverse-owner scan now also walks each
   authenticated inode bitmap through checked exact-group singleton queries
   while retaining its filesystem-specific ascending iteration and owner
-  policy. The exact staged bitmap delta comparator is the remaining Stage 2
-  boundary.
+  policy. Staged inode-bitmap verification now reconstructs its exact full-home
+  delta by applying a checked singleton clear to the transient raw cache, then
+  compares every physical byte. Filesystem checksum, accounting, iteration,
+  padding-authentication, and durability policy remain with their owners.
 
 ## Baseline and objective
 
