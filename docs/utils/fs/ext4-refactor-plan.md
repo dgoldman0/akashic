@@ -144,8 +144,8 @@ redirected.
   rollback, retained-mount reuse, explicit plan threading, sealed topology
   authority, branch-specific comparison, and complete return-path scrubbing
   are now one production path. The shared CREATE/MKDIR/LINK insertion path
-  consumes the record without adding indexed MKDIR/LINK or Stage 5 home
-  planning.
+  consumed the Stage 4 record without adding indexed MKDIR/LINK or, at that
+  checkpoint, Stage 5 home planning.
   Relative to the Stage 3 source shape at `131bf83`, the 13-unit production
   closure grew from 29,965 to 30,203 physical lines, 1,153,521 to 1,163,093
   raw bytes, 26,964 to 27,163 loader-executable lines, 3,719 to 3,745 packed
@@ -158,6 +158,25 @@ redirected.
   oracle and a full-leaf split guard reached only after all 54 mutation checks;
   the plan-specific oracle and narrow 1.50-billion journey bound then passed,
   with the split completing in 1,453,284,730 steps.
+- Stage 5 is complete at the namespace-insertion home-plan checkpoint. A
+  488-byte tail extends the Stage 4 record to 4,152 bytes with one count cell
+  and 20 enum-derived `{ role, journal kind, home }` entries. The entry span is
+  derived from the complete semantic role universe, not a fixed maximum for a
+  current topology. Cold planning inserts the vector, and seal fully audits it;
+  dry/live planning rebinds every expected role, kind, home, and exact
+  role count; preflight and writer construction derive per-kind first-seen
+  credits; and the final staging boundary reconciles first-seen home order
+  against the transaction tables. The six private collector artifacts and the
+  collector-derived credit path are gone. CREATE's four admitted shapes,
+  canonical MKDIR, and LINK's two- and three-distinct-home cases passed the
+  sequential focused gate without changing their checked-in journey caps.
+  Relative to Stage 4, the 13-unit closure grew from 30,203 to 30,616 physical
+  lines, 1,163,093 to 1,177,113 raw bytes, 27,163 to 27,537 executable lines,
+  3,745 to 3,788 packed lines, and 879,851 to 889,803 packed bytes. This is
+  +413 physical lines, +14,020 raw bytes, +374 executable lines, +43 packed
+  lines, and +9,952 packed bytes even after collector deletion. The cold source
+  build passed at 1,049,876,551 of 1,600,000,000 steps, 20,249,749 steps above
+  Stage 4. Stage 5 centralizes authorization; it does not claim a LOC payback.
 
 ## Baseline and objective
 
@@ -388,10 +407,13 @@ operation family. Immutable request and name data remain explicit planner
 inputs. Stage 4 does not require every `_XC-*` object, much less every driver
 global, to move.
 
-The staged binding allocates one facade-defined 3,664-byte record from its
-caller-provided VFS arena: 39 cells, a 24-byte hash-authority snapshot, three
-1,024-byte block snapshots, and one 256-byte inode snapshot. Admission does
-not interpret that record. Its base context owns only the opaque
+At the Stage 4 checkpoint the staged binding allocated one facade-defined
+3,664-byte record from its caller-provided VFS arena: 39 cells, a 24-byte
+hash-authority snapshot, three 1,024-byte block snapshots, and one 256-byte
+inode snapshot. Stage 5 appends a 488-byte home-plan tail, making the current
+record 4,152 bytes and the contiguous base-context-plus-record reservation
+19,720 bytes. Admission does not interpret that record. Its base context owns
+only the opaque
 `_EXT4-C.XC-PLAN` pointer and `_EXT4-C.XC-PLAN-SPAN`; the common base context
 is 15,568 bytes. The record must be the exact next allocation after that base
 context and wholly inside the arena's allocated prefix. Ordinary bindings keep
@@ -477,6 +499,18 @@ CREATE shapes above plus canonical MKDIR and LINK, including LINK's two- and
 three-distinct-home cases; each must preserve homes, first-seen order, credit,
 refusal timing, persistent result, and cache projection.
 
+This stage is now complete. The record tail contains one count and 20
+enum-derived triple entries, so capacity follows the declared semantic role
+universe instead of the largest current role vector. Seal checks the complete
+table and the explicit inode/parent, conversion-bitmap, and operation-local GDT
+alias policy. Every exposed plan operation has a production consumer. The old
+collector declarations, reset/add helper, scratch home, count, and credit path
+were deleted together. The focused sequential gate passed the direct plan
+contract, all four CREATE shapes, both one-short credit refusals, MKDIR, and
+both LINK home topologies from a real cold source build. XH and XU retain their
+existing private collectors until feature work reaches those families; no
+compatibility copy of the XC collector remains.
+
 XH allocation/hole-fill, XU unlink/rename, recovery, orphan cleanup, and every
 other mutation family remain outside this critical-path pilot. They may
 migrate when later feature work actually needs their seam, but they are not a
@@ -520,23 +554,26 @@ representative happy-path equivalence set. Before leaving refactoring for new
 functionality, run the accumulated sequential equivalence gate. When new
 filesystem functionality resumes, restore the extensive qualification cadence
 and include the refactored paths in that feature's evidence. The last recorded
-cold source build is the Stage 4 context checkpoint: CRC at 5,023,896 of
+cold source build is the Stage 5 home-plan checkpoint: CRC at 5,023,896 of
 150,000,000 steps across 26 packed lines, bitset at 2,345,116 of 150,000,000
 across 9 packed lines, and the dependency-derived ext4 closure at
-1,029,626,802 of 1,600,000,000 across 3,745 packed lines from 13 source units.
-Its sequential focused runtime set passed two-record isolation,
-poisoned-record reuse and refusal cleanup, the four admitted CREATE shapes,
-and canonical MKDIR and LINK. The first run corrected an overbroad whole-arena
-oracle and a narrow split-journey cap after the production mutation checks had
-already passed; the affected cases then passed at their plan-specific bounds.
+1,049,876,551 of 1,600,000,000 across 3,788 packed lines from 13 source units.
+Its 11-node sequential focused set passed the static and direct plan contracts,
+ordinary CREATE, linear-to-HTree conversion, existing-leaf CREATE, full-leaf
+split, the conversion and split one-short credit refusals, MKDIR, and LINK with
+both two and three distinct homes. The conversion and split journeys passed
+their unchanged 1.60- and 1.50-billion checked-in bounds at 1,590,846,839 and
+1,489,035,605 steps. This qualifies the Stage 5 XC migration, not XH, XU, broad
+recovery/fault matrices, or a new indexed-directory capability.
 
 The preceding sequential Stage 3 checkpoint passed Gate 2A, MP64FS
 create/write/read/delete/sync and second-bitmap-sector sync/remount, canonical
 ext4 image inspection, checksum-v3 replay, and five revoke/recovery cases. The
 first revoke run found stale post-mount transient-state expectations; `8918024`
 corrected those oracles and all five cases then passed. This is the accumulated
-Stage 1-3 checkpoint, not a rerun of the broad recovery matrices. Neither
-checkpoint qualifies Stage 5. Static source shape may advance between
+Stage 1-3 checkpoint, not a rerun of the broad recovery matrices. The later
+Stage 4 and Stage 5 checkpoints remain bounded refactor qualification rather
+than broad feature qualification. Static source shape may advance between
 intentionally sparse cold measurements.
 
 ## Commit boundaries
@@ -570,13 +607,13 @@ derived from caller storage or authenticated geometry, or if source loading
 cannot be qualified within measured system resources without weakening the
 implementation.
 
-The current critical-path cleanup is complete when the namespace-insertion
-family uses one ordered role/home preplan; its cross-phase CREATE/HTree
+The current critical-path cleanup is complete: the namespace-insertion family
+uses one ordered role/kind/home preplan; its cross-phase CREATE/HTree
 evidence has an explicit operation lifetime; scalar range and bitmap contracts
 have one checked Akashic implementation with filesystem wrappers retaining
 their policies; the production facade loads an explicit acyclic source
 closure; the replaced paths are gone; and the accumulated focused regression
 set passes from a real cold source build. XH and XU collector migrations remain
 future cleanup when feature work reaches those families; they do not block the
-Stage 5 transition back to the selected indexed-directory vertical and its
-full feature-development qualification cadence.
+transition to the selected indexed-directory vertical and its full
+feature-development qualification cadence.

@@ -18327,6 +18327,36 @@ VARIABLE _EXT4-BWC-CTX
 \ remains in this facade; admission owns only the two pointer/span slots in the
 \ base binding context.  One lifecycle cell replaces SHAPE-SET; the other 38
 \ cells retain semantic-name offsets before five exact-size comparison buffers.
+\ The ordered home-plan tail is sized by its complete semantic role universe,
+\ not by a fixed maximum for today's largest admitted topology.  A new role
+\ therefore extends both the enum and the caller-funded record automatically.
+0 CONSTANT _XC-HK-META
+1 CONSTANT _XC-HK-DATA
+2 CONSTANT _XC-HK-REVOKE
+
+ 1 CONSTANT _XC-HR-INODE
+ 2 CONSTANT _XC-HR-PARENT-INODE
+ 3 CONSTANT _XC-HR-PARENT-DIRECTORY
+ 4 CONSTANT _XC-HR-INODE-GDT
+ 5 CONSTANT _XC-HR-INODE-BITMAP
+ 6 CONSTANT _XC-HR-PRIMARY-SUPER
+ 7 CONSTANT _XC-HR-MKDIR-DIRECTORY
+ 8 CONSTANT _XC-HR-MKDIR-BITMAP
+ 9 CONSTANT _XC-HR-MKDIR-GDT
+10 CONSTANT _XC-HR-CONVERT-A
+11 CONSTANT _XC-HR-CONVERT-A-BITMAP
+12 CONSTANT _XC-HR-CONVERT-A-GDT
+13 CONSTANT _XC-HR-CONVERT-B
+14 CONSTANT _XC-HR-CONVERT-B-BITMAP
+15 CONSTANT _XC-HR-CONVERT-B-GDT
+16 CONSTANT _XC-HR-INDEX-NEW-LEAF
+17 CONSTANT _XC-HR-INDEX-ROOT
+18 CONSTANT _XC-HR-INDEX-MAP
+19 CONSTANT _XC-HR-INDEX-BITMAP
+20 CONSTANT _XC-HR-INDEX-GDT
+21 CONSTANT _XC-HR-LIMIT
+
+3 CONSTANT _XC-HP-ENTRY-CELLS
  0 CELLS CONSTANT _XC-P.STATE
  1 CELLS CONSTANT _XC-P.INDEXED
  2 CELLS CONSTANT _XC-P.INDEX-BASELINE
@@ -18375,6 +18405,10 @@ VARIABLE _EXT4-BWC-CTX
 39 CELLS 24 + _EXT4-STAGED-WRITE-BLOCK-SIZE 3 * +
     CONSTANT _XC-P.PARENT-SNAPSHOT
 _XC-P.PARENT-SNAPSHOT _EXT4-STAGED-WRITE-INODE-SIZE +
+    CONSTANT _XC-P.HOME-COUNT
+_XC-P.HOME-COUNT CELL+ CONSTANT _XC-P.HOME-ENTRIES
+_XC-P.HOME-ENTRIES
+    _XC-HR-LIMIT 1- _XC-HP-ENTRY-CELLS * CELLS +
     CONSTANT _XC-P-SIZE
 
 0 CONSTANT _XC-PS-IDLE
@@ -21556,13 +21590,9 @@ CREATE _XB _EXT4-MAX-BLOCK ALLOT
 \ full depth-zero HTree leaf may split while its root still has an entry slot.
 \ Each admitted edit is one complete metadata-only journal transaction.
 
-\ Base CREATE owns at most six homes.  Linear-to-HTree conversion adds two
-\ distinct leaf homes and, for each independently selected block, at most one
-\ bitmap and one primary-GDT home; the primary superblock is already present.
-12 CONSTANT _XC-META-HOME-MAX
-CREATE _XC-META-HOMES _XC-META-HOME-MAX CELLS ALLOT
-VARIABLE _XC-META-COUNT
-VARIABLE _XC-META-HOME
+\ The binding record above carries the ordered role/kind/home certificate.
+\ This namespace retains operation-specific authentication and staging policy;
+\ it does not keep a second home array or a facade-global credit counter.
 
 VARIABLE _XC-D
 VARIABLE _XC-V
@@ -21779,43 +21809,401 @@ CREATE _XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE ALLOT
         DUP _XC-P.CONVERT-CANDIDATE-BASELINE + @ -1 =
     THEN ;
 
+: _XC-P-SCRUB  ( plan -- )
+    _XC-P-SIZE 0 FILL ;
+
+VARIABLE _XC-HP-ROLE
+VARIABLE _XC-HP-KIND
+VARIABLE _XC-HP-HOME
+VARIABLE _XC-HP-I
+VARIABLE _XC-HP-J
+VARIABLE _XC-HP-FIND-I
+VARIABLE _XC-HP-AT
+VARIABLE _XC-HP-SCAN
+VARIABLE _XC-HP-OUTER-ROLE
+VARIABLE _XC-HP-ALIAS-A
+VARIABLE _XC-HP-ALIAS-B
+VARIABLE _XC-HP-META-CREDIT
+VARIABLE _XC-HP-DATA-CREDIT
+VARIABLE _XC-HP-REVOKE-CREDIT
+VARIABLE _XC-HP-ORDINAL
+VARIABLE _XC-HP-COUNT
+VARIABLE _XC-HP-STAGED-I
+VARIABLE _XC-HP-STAGED-COUNT
+VARIABLE _XC-HP-WRITER
+VARIABLE _XC-HP-ENTRIES
+VARIABLE _XC-HP-STRIDE
+
+: _XC-HP-ENTRY  ( plan index -- entry )
+    _XC-HP-ENTRY-CELLS * CELLS
+    SWAP _XC-P.HOME-ENTRIES + + ;
+
+: _XC-HP-ROLE?  ( role -- flag )
+    DUP 0> SWAP _XC-HR-LIMIT U< AND ;
+
+: _XC-HP-KIND?  ( kind -- flag )
+    DUP 0< 0= SWAP 3 U< AND ;
+
+: _XC-HP-COUNT?  ( plan -- plan flag )
+    DUP _XC-P.HOME-COUNT + @ _XC-HR-LIMIT 1- U> 0= ;
+
+\ Insert one semantic role without mutating the record on any refusal.  Role
+\ uniqueness bounds the vector by the enum-backed storage rather than by a
+\ topology-specific collection maximum.  Same-kind home aliases remain
+\ provisional until the complete pairwise policy audit at seal.
+: _XC-HP-ADD  ( plan role kind home -- plan ior )
+    _XC-HP-HOME ! _XC-HP-KIND ! _XC-HP-ROLE !
+    DUP _XC-P.STATE + @ _XC-PS-BUILDING-SHAPE-SET <> IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _XC-HP-ROLE @ _XC-HP-ROLE? 0= IF VFS-E-INVALID EXIT THEN
+    _XC-HP-KIND @ _XC-HP-KIND? 0= IF VFS-E-INVALID EXIT THEN
+    _XC-CTX @ DUP 0= IF DROP VFS-E-CORRUPT EXIT THEN
+    _XC-HP-HOME @ OVER _EXT4-C.BLOCKS + @ U< 0= IF
+        DROP EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _XC-HP-HOME @ SWAP _EXT4-JOURNAL-DATA? IF
+        EXT4-D-JOURNAL _EXT4-CORRUPT EXIT
+    THEN
+    _XC-HP-COUNT? 0= IF VFS-E-CORRUPT EXIT THEN
+    0 _XC-HP-I !
+    BEGIN
+        _XC-HP-I @ OVER _XC-P.HOME-COUNT + @ U<
+    WHILE
+        DUP _XC-HP-I @ _XC-HP-ENTRY
+        DUP @ _XC-HP-ROLE @ = IF DROP VFS-E-CONFLICT EXIT THEN
+        DUP 2 CELLS + @ _XC-HP-HOME @ = IF
+            CELL+ @ _XC-HP-KIND @ <> IF VFS-E-CONFLICT EXIT THEN
+        ELSE
+            DROP
+        THEN
+        1 _XC-HP-I +!
+    REPEAT
+    DUP _XC-P.HOME-COUNT + @
+    DUP _XC-HR-LIMIT 1- U< 0= IF DROP VFS-E-CORRUPT EXIT THEN
+    2DUP _XC-HP-ENTRY
+    _XC-HP-ROLE @ OVER !
+    _XC-HP-KIND @ OVER CELL+ !
+    _XC-HP-HOME @ OVER 2 CELLS + !
+    DROP 1+ OVER _XC-P.HOME-COUNT + !
+    0 ;
+
+: _XC-HP-FIND-ROLE  ( plan role -- plan entry ior )
+    _XC-HP-ROLE !
+    _XC-HP-ROLE @ _XC-HP-ROLE? 0= IF 0 VFS-E-INVALID EXIT THEN
+    _XC-HP-COUNT? 0= IF 0 VFS-E-CORRUPT EXIT THEN
+    0 _XC-HP-FIND-I !
+    BEGIN
+        _XC-HP-FIND-I @ OVER _XC-P.HOME-COUNT + @ U<
+    WHILE
+        DUP _XC-HP-FIND-I @ _XC-HP-ENTRY
+        DUP @ _XC-HP-ROLE @ = IF 0 EXIT THEN
+        DROP 1 _XC-HP-FIND-I +!
+    REPEAT
+    0 VFS-E-CONFLICT ;
+
+: _XC-HP-ROLE@  ( plan role -- plan kind home ior )
+    _XC-HP-ROLE !
+    DUP _XC-P.STATE + @ _XC-PS-SEALED <> IF
+        0 0 VFS-E-CORRUPT EXIT
+    THEN
+    _XC-HP-ROLE @ _XC-HP-FIND-ROLE
+    DUP IF >R DROP 0 0 R> EXIT THEN DROP
+    DUP CELL+ @ SWAP 2 CELLS + @ 0 ;
+
+\ Inspect two semantic roles without exposing an entry index or a second home
+\ array.  This is used by the seal-time alias policy, not only by tests.
+: _XC-HP-ROLES-ALIAS?  ( plan role-a role-b -- plan aliased? ior )
+    _XC-HP-ALIAS-B ! _XC-HP-ALIAS-A !
+    _XC-HP-ALIAS-A @ _XC-HP-ALIAS-B @ = IF FALSE 0 EXIT THEN
+    _XC-HP-ALIAS-A @ _XC-HP-FIND-ROLE
+    DUP IF >R DROP FALSE R> EXIT THEN DROP
+    DUP CELL+ @ _XC-HP-KIND !
+    2 CELLS + @ _XC-HP-HOME !
+    _XC-HP-ALIAS-B @ _XC-HP-FIND-ROLE
+    DUP IF >R DROP FALSE R> EXIT THEN DROP
+    DUP CELL+ @ _XC-HP-KIND @ =
+    SWAP 2 CELLS + @ _XC-HP-HOME @ = AND 0 ;
+
+: _XC-HP-GDT-ROLE?  ( role -- flag )
+    DUP _XC-HR-INODE-GDT =
+    OVER _XC-HR-MKDIR-GDT = OR
+    OVER _XC-HR-CONVERT-A-GDT = OR
+    OVER _XC-HR-CONVERT-B-GDT = OR
+    SWAP _XC-HR-INDEX-GDT = OR ;
+
+: _XC-HP-ALIAS-ALLOWED?  ( role-a role-b -- flag )
+    _XC-HP-ALIAS-B ! _XC-HP-ALIAS-A !
+    _XC-HP-ALIAS-A @ _XC-HP-ALIAS-B @ U> IF
+        _XC-HP-ALIAS-A @
+        _XC-HP-ALIAS-B @ _XC-HP-ALIAS-A !
+        _XC-HP-ALIAS-B !
+    THEN
+    _XC-HP-ALIAS-A @ _XC-HR-INODE =
+    _XC-HP-ALIAS-B @ _XC-HR-PARENT-INODE = AND IF TRUE EXIT THEN
+    _XC-HP-ALIAS-A @ _XC-HR-CONVERT-A-BITMAP =
+    _XC-HP-ALIAS-B @ _XC-HR-CONVERT-B-BITMAP = AND IF TRUE EXIT THEN
+    _XC-HP-ALIAS-A @ _XC-HP-GDT-ROLE?
+    _XC-HP-ALIAS-B @ _XC-HP-GDT-ROLE? AND ;
+
+: _XC-HP-TABLE?  ( plan -- plan flag )
+    DUP _XC-P.HOME-COUNT + @
+    DUP 0= SWAP _XC-HR-LIMIT 1- U> OR IF FALSE EXIT THEN
+    0 _XC-HP-I !
+    BEGIN
+        _XC-HP-I @ OVER _XC-P.HOME-COUNT + @ U<
+    WHILE
+        DUP _XC-HP-I @ _XC-HP-ENTRY
+        DUP @ _XC-HP-OUTER-ROLE !
+        DUP CELL+ @ _XC-HP-KIND !
+        2 CELLS + @ _XC-HP-HOME !
+        _XC-HP-OUTER-ROLE @ _XC-HP-ROLE? 0= IF FALSE EXIT THEN
+        _XC-HP-KIND @ _XC-HP-KIND? 0= IF FALSE EXIT THEN
+        _XC-CTX @ DUP 0= IF DROP FALSE EXIT THEN
+        _XC-HP-HOME @ OVER _EXT4-C.BLOCKS + @ U< 0= IF
+            DROP FALSE EXIT
+        THEN
+        _XC-HP-HOME @ SWAP _EXT4-JOURNAL-DATA? IF FALSE EXIT THEN
+        0 _XC-HP-J !
+        BEGIN _XC-HP-J @ _XC-HP-I @ U< WHILE
+            DUP _XC-HP-J @ _XC-HP-ENTRY
+            DUP @ _XC-HP-OUTER-ROLE @ = IF DROP FALSE EXIT THEN
+            DUP 2 CELLS + @ _XC-HP-HOME @ = IF
+                CELL+ @ _XC-HP-KIND @ <> IF FALSE EXIT THEN
+            ELSE
+                DROP
+            THEN
+            1 _XC-HP-J +!
+        REPEAT
+        1 _XC-HP-I +!
+    REPEAT
+    TRUE ;
+
+: _XC-HP-ALIASES?  ( plan -- plan flag )
+    0 _XC-HP-I !
+    BEGIN
+        _XC-HP-I @ OVER _XC-P.HOME-COUNT + @ U<
+    WHILE
+        DUP _XC-HP-I @ _XC-HP-ENTRY
+        DUP @ _XC-HP-OUTER-ROLE !
+        2 CELLS + @ _XC-HP-HOME !
+        _XC-HP-I @ 1+ _XC-HP-J !
+        BEGIN
+            _XC-HP-J @ OVER _XC-P.HOME-COUNT + @ U<
+        WHILE
+            DUP _XC-HP-J @ _XC-HP-ENTRY
+            DUP 2 CELLS + @ _XC-HP-HOME @ = IF
+                @ _XC-HP-ALIAS-B !
+                _XC-HP-OUTER-ROLE @ _XC-HP-ALIAS-B @
+                _XC-HP-ROLES-ALIAS?
+                DUP IF 2DROP FALSE EXIT THEN DROP
+                0= IF FALSE EXIT THEN
+                _XC-HP-OUTER-ROLE @ _XC-HP-ALIAS-B @
+                _XC-HP-ALIAS-ALLOWED? 0= IF FALSE EXIT THEN
+            ELSE
+                DROP
+            THEN
+            1 _XC-HP-J +!
+        REPEAT
+        1 _XC-HP-I +!
+    REPEAT
+    TRUE ;
+
 : _XC-P-SEAL  ( plan -- plan ior )
     DUP _XC-P.STATE + @ _XC-PS-BUILDING-SHAPE-SET <> IF
         VFS-E-CORRUPT EXIT
     THEN
     _XC-P-SHAPE? 0= IF VFS-E-CORRUPT EXIT THEN
+    _XC-HP-TABLE? 0= IF VFS-E-CORRUPT EXIT THEN
+    _XC-HP-ALIASES? 0= IF VFS-E-CONFLICT EXIT THEN
     _XC-PS-SEALED OVER _XC-P.STATE + !
     0 ;
 
 : _XC-P-REQUIRE-SEALED  ( plan -- plan ior )
     DUP _XC-P.STATE + @ _XC-PS-SEALED <> IF VFS-E-CORRUPT EXIT THEN
     _XC-P-SHAPE? 0= IF VFS-E-CORRUPT EXIT THEN
+    \ Seal already performed the full bounds, journal-exclusion, table, and
+    \ alias audit.  Every staged pass immediately rebinds the exact expected
+    \ role/kind/home vector and count before it may publish an image, then the
+    \ final boundary reconciles first-seen order against the writer tables.
     0 ;
 
-: _XC-P-SCRUB  ( plan -- )
-    _XC-P-SIZE 0 FILL ;
+: _XC-HP-FIRST?  ( plan index -- plan flag )
+    _XC-HP-AT !
+    _XC-HP-AT @ OVER _XC-P.HOME-COUNT + @ U< 0= IF FALSE EXIT THEN
+    DUP _XC-HP-AT @ _XC-HP-ENTRY 2 CELLS + @ _XC-HP-HOME !
+    0 _XC-HP-SCAN !
+    BEGIN _XC-HP-SCAN @ _XC-HP-AT @ U< WHILE
+        DUP _XC-HP-SCAN @ _XC-HP-ENTRY 2 CELLS + @
+        _XC-HP-HOME @ = IF FALSE EXIT THEN
+        1 _XC-HP-SCAN +!
+    REPEAT
+    TRUE ;
 
-: _XC-META-RESET  ( -- )
-    0 _XC-META-COUNT !
-    _XC-META-HOMES _XC-META-HOME-MAX CELLS 0 FILL ;
-
-: _XC-ADD-META-HOME  ( home -- ior )
-    _XC-META-HOME !
-    _XC-META-HOME @ _XC-CTX @ _EXT4-C.BLOCKS + @ U< 0= IF
-        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+: _XC-HP-CREDITS@  ( plan -- plan meta data revoke ior )
+    DUP _XC-P.STATE + @ _XC-PS-SEALED <> IF
+        0 0 0 VFS-E-CORRUPT EXIT
     THEN
-    _XC-META-COUNT @ 0 ?DO
-        I CELLS _XC-META-HOMES + @ _XC-META-HOME @ = IF
-            0 UNLOOP EXIT
+    _XC-HP-COUNT? 0= IF 0 0 0 VFS-E-CORRUPT EXIT THEN
+    0 _XC-HP-META-CREDIT !
+    0 _XC-HP-DATA-CREDIT !
+    0 _XC-HP-REVOKE-CREDIT !
+    0 _XC-HP-I !
+    BEGIN
+        _XC-HP-I @ OVER _XC-P.HOME-COUNT + @ U<
+    WHILE
+        _XC-HP-I @ _XC-HP-FIRST? IF
+            DUP _XC-HP-I @ _XC-HP-ENTRY CELL+ @
+            DUP _XC-HK-META = IF
+                DROP 1 _XC-HP-META-CREDIT +!
+            ELSE DUP _XC-HK-DATA = IF
+                DROP 1 _XC-HP-DATA-CREDIT +!
+            ELSE _XC-HK-REVOKE = IF
+                1 _XC-HP-REVOKE-CREDIT +!
+            ELSE
+                0 0 0 VFS-E-CORRUPT EXIT
+            THEN THEN THEN
         THEN
-    LOOP
-    _XC-META-COUNT @ _XC-META-HOME-MAX U< 0= IF
+        1 _XC-HP-I +!
+    REPEAT
+    _XC-HP-META-CREDIT @ _XC-HP-DATA-CREDIT @
+    _XC-HP-REVOKE-CREDIT @ 0 ;
+
+: _XC-HP-HOME@  ( plan kind ordinal -- plan home ior )
+    _XC-HP-ORDINAL ! _XC-HP-KIND !
+    DUP _XC-P.STATE + @ _XC-PS-SEALED <> IF
+        0 VFS-E-CORRUPT EXIT
+    THEN
+    _XC-HP-KIND @ _XC-HP-KIND? 0= IF 0 VFS-E-INVALID EXIT THEN
+    _XC-HP-ORDINAL @ 0< IF 0 VFS-E-INVALID EXIT THEN
+    _XC-HP-COUNT? 0= IF 0 VFS-E-CORRUPT EXIT THEN
+    0 _XC-HP-COUNT ! 0 _XC-HP-I !
+    BEGIN
+        _XC-HP-I @ OVER _XC-P.HOME-COUNT + @ U<
+    WHILE
+        DUP _XC-HP-I @ _XC-HP-ENTRY CELL+ @ _XC-HP-KIND @ = IF
+            _XC-HP-I @ _XC-HP-FIRST? IF
+                _XC-HP-COUNT @ _XC-HP-ORDINAL @ = IF
+                    DUP _XC-HP-I @ _XC-HP-ENTRY 2 CELLS + @ 0 EXIT
+                THEN
+                1 _XC-HP-COUNT +!
+            THEN
+        THEN
+        1 _XC-HP-I +!
+    REPEAT
+    0 VFS-E-CONFLICT ;
+
+: _XC-HP-REQUIRE-KIND
+  ( plan kind entries entry-cells count -- plan ior )
+    _XC-HP-STAGED-COUNT !
+    _XC-HP-STRIDE ! _XC-HP-ENTRIES ! _XC-HP-KIND !
+    0 _XC-HP-STAGED-I !
+    BEGIN _XC-HP-STAGED-I @ _XC-HP-STAGED-COUNT @ U< WHILE
+        _XC-HP-KIND @ _XC-HP-STAGED-I @ _XC-HP-HOME@
+        DUP IF >R DROP R> EXIT THEN DROP
+        _XC-HP-HOME !
+        _XC-HP-STAGED-I @ _XC-HP-STRIDE @ * CELLS
+        _XC-HP-ENTRIES @ +
+        DUP @ _XC-HP-HOME @ <>
+        SWAP CELL+ @ _EXT4-JE-ACTIVE <> OR IF
+            VFS-E-CORRUPT EXIT
+        THEN
+        1 _XC-HP-STAGED-I +!
+    REPEAT
+    0 ;
+
+: _XC-HP-REQUIRE-CREDITS  ( plan writer -- plan ior )
+    _XC-HP-WRITER !
+    _XC-HP-WRITER @ _EXT4-JWR-VALID? 0= IF VFS-E-CORRUPT EXIT THEN
+    _XC-HP-CREDITS@
+    DUP IF >R 2DROP DROP R> EXIT THEN DROP
+    _XC-HP-REVOKE-CREDIT !
+    _XC-HP-DATA-CREDIT !
+    _XC-HP-META-CREDIT !
+    _XC-HP-WRITER @ _EXT4-JWR.META-CREDIT + @
+        _XC-HP-META-CREDIT @ <>
+    _XC-HP-WRITER @ _EXT4-JWR.DATA-CREDIT + @
+        _XC-HP-DATA-CREDIT @ <> OR
+    _XC-HP-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @
+        _XC-HP-REVOKE-CREDIT @ <> OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    0 ;
+
+: _XC-HP-REQUIRE-STAGED  ( plan writer -- plan ior )
+    _XC-HP-WRITER !
+    _XC-HP-WRITER @ _EXT4-JWR-VALID? 0= IF VFS-E-CORRUPT EXIT THEN
+    _XC-HP-CREDITS@
+    DUP IF >R 2DROP DROP R> EXIT THEN DROP
+    _XC-HP-REVOKE-CREDIT !
+    _XC-HP-DATA-CREDIT !
+    _XC-HP-META-CREDIT !
+    _XC-HP-WRITER @ _EXT4-JWR.META-CREDIT + @
+        _XC-HP-META-CREDIT @ <>
+    _XC-HP-WRITER @ _EXT4-JWR.DATA-CREDIT + @
+        _XC-HP-DATA-CREDIT @ <> OR
+    _XC-HP-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @
+        _XC-HP-REVOKE-CREDIT @ <> OR
+    _XC-HP-WRITER @ _EXT4-JWR.META-USED + @
+        _XC-HP-META-CREDIT @ <> OR
+    _XC-HP-WRITER @ _EXT4-JWR.DATA-USED + @
+        _XC-HP-DATA-CREDIT @ <> OR
+    _XC-HP-WRITER @ _EXT4-JWR.REVOKE-USED + @
+        _XC-HP-REVOKE-CREDIT @ <> OR
+    _XC-HP-WRITER @ _EXT4-JWR.META-ACTIVE + @
+        _XC-HP-META-CREDIT @ <> OR
+    _XC-HP-WRITER @ _EXT4-JWR.DATA-ACTIVE + @
+        _XC-HP-DATA-CREDIT @ <> OR
+    _XC-HP-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @
+        _XC-HP-REVOKE-CREDIT @ <> OR IF
         VFS-E-CORRUPT EXIT
     THEN
-    _XC-META-HOME @
-    _XC-META-COUNT @ CELLS _XC-META-HOMES + !
-    1 _XC-META-COUNT +!
-    0 ;
+    _XC-HP-WRITER @ _EXT4-JTX-TABLES-VALID? 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _XC-HK-META
+    _XC-HP-WRITER @ _EXT4-JWR.META-ENTRIES + @
+    _EXT4-JWR-IMAGE-ENTRY-CELLS _XC-HP-META-CREDIT @
+    _XC-HP-REQUIRE-KIND ?DUP IF EXIT THEN
+    _XC-HK-DATA
+    _XC-HP-WRITER @ _EXT4-JWR.DATA-ENTRIES + @
+    _EXT4-JWR-IMAGE-ENTRY-CELLS _XC-HP-DATA-CREDIT @
+    _XC-HP-REQUIRE-KIND ?DUP IF EXIT THEN
+    _XC-HK-REVOKE
+    _XC-HP-WRITER @ _EXT4-JWR.REVOKE-ENTRIES + @
+    _EXT4-JWR-REVOKE-ENTRY-CELLS _XC-HP-REVOKE-CREDIT @
+    _XC-HP-REQUIRE-KIND ;
+
+\ During the cold plan this inserts.  During dry and live replanning it uses
+\ sealed role lookup to require the exact reauthenticated kind and home.
+: _XC-HP-BIND  ( plan role kind home -- plan ior )
+    _XC-HP-HOME ! _XC-HP-KIND ! _XC-HP-ROLE !
+    DUP _XC-P.STATE + @ _XC-PS-SEALED = IF
+        _XC-HP-ROLE @ _XC-HP-ROLE@
+        DUP IF >R 2DROP R> EXIT THEN DROP
+        _XC-HP-HOME @ <>
+        SWAP _XC-HP-KIND @ <> OR IF VFS-E-CONFLICT EXIT THEN
+        0 EXIT
+    THEN
+    _XC-HP-ROLE @ _XC-HP-KIND @ _XC-HP-HOME @ _XC-HP-ADD ;
+
+: _XC-HP-BIND-META  ( plan role home -- plan ior )
+    _XC-HK-META SWAP _XC-HP-BIND ;
+
+: _XC-HP-PREFLIGHT  ( plan -- plan ior )
+    _XC-HP-CREDITS@
+    DUP IF >R 2DROP DROP R> EXIT THEN DROP
+    _XC-CTX @ _EXT4-JTX-PREFLIGHT-CAPACITY ;
+
+: _XC-HP-ENSURE  ( plan -- plan writer ior )
+    _XC-HP-CREDITS@
+    DUP IF >R 2DROP DROP 0 R> EXIT THEN DROP
+    _XC-CTX @ _EXT4-JWR-ENSURE ;
+
+: _XC-HP-BEGIN-TX  ( plan -- plan transaction ior )
+    _XC-HP-CREDITS@
+    DUP IF >R 2DROP DROP 0 R> EXIT THEN DROP
+    _XC-WRITER @ _EXT4-JTX-BEGIN ;
 
 : _XC-DIRENT-NAME=?  ( dirent -- flag )
     DUP 6 + C@ _XC-NLEN @ <> IF DROP FALSE EXIT THEN
@@ -23566,6 +23954,106 @@ VARIABLE _XC-NEW-DIR-IMAGE
     THEN
     0 ;
 
+: _XC-HP-EXPECTED-ROLES  ( -- count )
+    _XC-LINKING @ IF 3 EXIT THEN
+    _XC-DIRECTORY @ IF 9 EXIT THEN
+    _XC-CONVERTING @ IF 12 EXIT THEN
+    _XC-INDEX-SPLITTING @ IF
+        _XC-INDEX-MAP-DEPTH @ IF 11 ELSE 10 THEN EXIT
+    THEN
+    6 ;
+
+\ Bind semantic roles in the order in which META-PUT/REPLACE first publishes
+\ them to JTX.  The former collector's construction order was only a credit
+\ counter and deliberately is not preserved here.
+: _XC-HP-PLAN-HOMES  ( plan -- plan ior )
+    _XC-LINKING @ IF
+        _XC-DIR-HOME @ _XC-INODE-HOME @ =
+        _XC-DIR-HOME @ _XC-PARENT-HOME @ = OR IF
+            EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
+        THEN
+        _XC-HR-INODE _XC-INODE-HOME @
+        _XC-HP-BIND-META ?DUP IF EXIT THEN
+        _XC-HR-PARENT-INODE _XC-PARENT-HOME @
+        _XC-HP-BIND-META ?DUP IF EXIT THEN
+        _XC-HR-PARENT-DIRECTORY _XC-DIR-HOME @
+        _XC-HP-BIND-META ?DUP IF EXIT THEN
+    ELSE
+        _XC-CTX @ _EXT4-PRIMARY-SUPER-BLOCK _XC-SUPER-HOME !
+        _XC-HR-INODE _XC-INODE-HOME @
+        _XC-HP-BIND-META ?DUP IF EXIT THEN
+        _XC-HR-PARENT-INODE _XC-PARENT-HOME @
+        _XC-HP-BIND-META ?DUP IF EXIT THEN
+        _XC-HR-PARENT-DIRECTORY _XC-DIR-HOME @
+        _XC-HP-BIND-META ?DUP IF EXIT THEN
+        _XC-DIRECTORY @ IF
+            _XC-DATA-SUPER-HOME @ _XC-SUPER-HOME @ <> IF
+                VFS-E-CONFLICT EXIT
+            THEN
+            _XC-HR-MKDIR-DIRECTORY _XC-DATA-BLOCK @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-MKDIR-BITMAP _XC-DATA-BITMAP-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-MKDIR-GDT _XC-DATA-GDT-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-PRIMARY-SUPER _XC-SUPER-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-INODE-GDT _XC-GDT-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-INODE-BITMAP _XC-BITMAP-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+        ELSE _XC-CONVERTING @ IF
+            _XC-HR-CONVERT-A _XC-CONVERT-A @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-CONVERT-B _XC-CONVERT-B @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-CONVERT-A-BITMAP _XC-CONVERT-A-BITMAP-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-CONVERT-A-GDT _XC-CONVERT-A-GDT-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-PRIMARY-SUPER _XC-SUPER-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-CONVERT-B-BITMAP _XC-CONVERT-B-BITMAP-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-CONVERT-B-GDT _XC-CONVERT-B-GDT-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-INODE-GDT _XC-GDT-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-INODE-BITMAP _XC-BITMAP-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+        ELSE _XC-INDEX-SPLITTING @ IF
+            _XC-HR-INDEX-NEW-LEAF _XC-INDEX-NEW-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-INDEX-ROOT _XC-INDEX-ROOT-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-INDEX-MAP-DEPTH @ IF
+                _XC-HR-INDEX-MAP _XC-INDEX-MAP-HOME @
+                _XC-HP-BIND-META ?DUP IF EXIT THEN
+            THEN
+            _XC-HR-INDEX-BITMAP _XC-INDEX-NEW-BITMAP-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-INDEX-GDT _XC-INDEX-NEW-GDT-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-PRIMARY-SUPER _XC-SUPER-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-INODE-GDT _XC-GDT-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-INODE-BITMAP _XC-BITMAP-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+        ELSE
+            _XC-HR-INODE-GDT _XC-GDT-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-INODE-BITMAP _XC-BITMAP-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+            _XC-HR-PRIMARY-SUPER _XC-SUPER-HOME @
+            _XC-HP-BIND-META ?DUP IF EXIT THEN
+        THEN THEN THEN
+    THEN
+    DUP _XC-P.HOME-COUNT + @ _XC-HP-EXPECTED-ROLES <> IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    0 ;
+
 : _XC-PLAN  ( plan -- plan ior )
     0 _XC-CONVERTING !
     DUP _XC-P.CONVERT-BASELINE + @ IF -1 _XC-CONVERTING ! THEN
@@ -23595,68 +24083,7 @@ VARIABLE _XC-NEW-DIR-IMAGE
         _XC-SELECT-INDEX-BLOCK ?DUP IF EXIT THEN
     THEN
     _XC-CTX @ _EXT4-VALIDATE-PRIMARY-MUTATION-HOMES ?DUP IF EXIT THEN
-    _XC-META-RESET
-    _XC-LINKING @ IF
-        _XC-DIR-HOME @ _XC-INODE-HOME @ =
-        _XC-DIR-HOME @ _XC-PARENT-HOME @ = OR IF
-            EXT4-D-GEOMETRY _EXT4-CORRUPT EXIT
-        THEN
-        _XC-INODE-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-        _XC-PARENT-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-        _XC-DIR-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-        _XC-META-COUNT @ DUP 2 U< SWAP 3 U> OR IF
-            VFS-E-CORRUPT EXIT
-        THEN
-        0 EXIT
-    THEN
-    _XC-CTX @ _EXT4-PRIMARY-SUPER-BLOCK DUP _XC-SUPER-HOME !
-    _XC-ADD-META-HOME ?DUP IF EXIT THEN
-    _XC-GDT-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-    _XC-BITMAP-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-    _XC-INODE-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-    _XC-PARENT-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-    _XC-DIR-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-    _XC-DIRECTORY @ IF
-        _XC-DATA-BITMAP-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-        _XC-DATA-GDT-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-        _XC-DATA-BLOCK @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-        _XC-DATA-SUPER-HOME @ _XC-SUPER-HOME @ <> IF
-            VFS-E-CONFLICT EXIT
-        THEN
-    ELSE _XC-CONVERTING @ IF
-        _XC-CONVERT-A @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-        _XC-CONVERT-A-BITMAP-HOME @ _XC-ADD-META-HOME
-        ?DUP IF EXIT THEN
-        _XC-CONVERT-A-GDT-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-        _XC-CONVERT-B @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-        _XC-CONVERT-B-BITMAP-HOME @ _XC-ADD-META-HOME
-        ?DUP IF EXIT THEN
-        _XC-CONVERT-B-GDT-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-        \ Even maximal deduplication still needs super, one GDT, inode and
-        \ block bitmaps, one inode-table page, the old root, and both leaves.
-        \ Fully distinct inode/parent tables and A/B bitmap/GDT pages reach 12.
-        _XC-META-COUNT @ DUP 8 U< SWAP _XC-META-HOME-MAX U> OR IF
-            VFS-E-CORRUPT EXIT
-        THEN
-    THEN
-    THEN
-    _XC-INDEX-SPLITTING @ IF
-        _XC-INDEX-ROOT-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-        _XC-INDEX-NEW-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-        _XC-INDEX-NEW-BITMAP-HOME @ _XC-ADD-META-HOME
-        ?DUP IF EXIT THEN
-        _XC-INDEX-NEW-GDT-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-        _XC-INDEX-MAP-DEPTH @ IF
-            _XC-INDEX-MAP-HOME @ _XC-ADD-META-HOME ?DUP IF EXIT THEN
-        THEN
-        \ Fully distinct depth-one accounting reaches eleven homes; the
-        \ canonical fixture deduplicates the two GDT roles and uses ten.
-        _XC-META-COUNT @ _XC-META-HOME-MAX U> IF
-            VFS-E-CORRUPT EXIT
-        THEN
-    THEN
-    _XC-META-COUNT @ 0= IF VFS-E-CORRUPT EXIT THEN
-    0 ;
+    _XC-HP-PLAN-HOMES ;
 
 VARIABLE _XC-NEW-INODE-PTR
 VARIABLE _XC-NEW-ROOT
@@ -24252,11 +24679,7 @@ VARIABLE _XC-NEW-ROOT
     THEN DROP
     _XC-P-REQUIRE-SEALED ?DUP IF EXIT THEN
     _XC-PLAN ?DUP IF EXIT THEN
-    _XC-WRITER @ _EXT4-JWR.META-CREDIT + @ _XC-META-COUNT @ <>
-    _XC-WRITER @ _EXT4-JWR.DATA-CREDIT + @ 0<> OR
-    _XC-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ 0<> OR IF
-        VFS-E-INVALID EXIT
-    THEN
+    _XC-WRITER @ _XC-HP-REQUIRE-CREDITS ?DUP IF EXIT THEN
     _XC-LINKING @ IF
         _XC-STAGE-LINK-TARGET
     ELSE
@@ -24289,16 +24712,7 @@ VARIABLE _XC-NEW-ROOT
         _XC-STAGE-INODE-ALLOCATION ?DUP IF EXIT THEN
         _XC-STAGE-SUPER ?DUP IF EXIT THEN
     THEN
-    _XC-WRITER @ _EXT4-JWR.META-USED + @ _XC-META-COUNT @ <>
-    _XC-WRITER @ _EXT4-JWR.META-ACTIVE + @ _XC-META-COUNT @ <> OR
-    _XC-WRITER @ _EXT4-JWR.DATA-USED + @ 0<> OR
-    _XC-WRITER @ _EXT4-JWR.DATA-ACTIVE + @ 0<> OR
-    _XC-WRITER @ _EXT4-JWR.REVOKE-USED + @ 0<> OR
-    _XC-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ 0<> OR
-    _XC-WRITER @ _EXT4-JTX-TABLES-VALID? 0= OR IF
-        VFS-E-CORRUPT EXIT
-    THEN
-    0 ;
+    _XC-WRITER @ _XC-HP-REQUIRE-STAGED ;
 
 : _XC-SCRUB-PRIVATE  ( -- )
     _XC-NAME-SNAPSHOT 256 0 FILL
@@ -24606,13 +25020,12 @@ VARIABLE _XC-POST-INDEX-NEW-FREE
     _XC-NOW ?DUP IF _XC-REFUSE EXIT THEN
     _XC-PLAN ?DUP IF _XC-REFUSE EXIT THEN
     _XC-P-SEAL ?DUP IF _XC-REFUSE EXIT THEN
-    _XC-META-COUNT @ 0 0 _XC-CTX @ _EXT4-JTX-PREFLIGHT-CAPACITY
-    ?DUP IF _XC-REFUSE EXIT THEN
-    _XC-META-COUNT @ 0 0 _XC-CTX @ _EXT4-JWR-ENSURE
+    _XC-HP-PREFLIGHT ?DUP IF _XC-REFUSE EXIT THEN
+    _XC-HP-ENSURE
     DUP IF NIP _XC-FAIL EXIT THEN
     DROP _XC-WRITER !
     _XC-ACTIVE @ 0= IF
-        _XC-META-COUNT @ 0 0 _XC-WRITER @ _EXT4-JTX-BEGIN
+        _XC-HP-BEGIN-TX
         DUP IF NIP _XC-FAIL EXIT THEN
         DROP _XC-TX !
         _XC-TX @ _EXT4-JTX-STAGE-INSERT
@@ -24620,7 +25033,7 @@ VARIABLE _XC-POST-INDEX-NEW-FREE
         _XC-TX @ _EXT4-JTX-ABORT ?DUP IF _XC-FAIL EXIT THEN
         _XC-WRITER @ _EXT4-JWR-ACTIVATE ?DUP IF _XC-FAIL EXIT THEN
     THEN
-    _XC-META-COUNT @ 0 0 _XC-WRITER @ _EXT4-JTX-BEGIN
+    _XC-HP-BEGIN-TX
     DUP IF NIP _XC-FAIL EXIT THEN
     DROP _XC-TX !
     _XC-TX @ _EXT4-JTX-STAGE-INSERT

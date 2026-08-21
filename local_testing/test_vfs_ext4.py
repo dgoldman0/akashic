@@ -4331,8 +4331,8 @@ def build_snapshot():
     # instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
     max_bitset_source_steps = 150_000_000
-    # The Stage-4 dependency-derived closure measures 1,029,626,802 cold
-    # source steps across 3,745 packed lines from 13 source units. Retain the
+    # The Stage-5 dependency-derived closure measures 1,049,876,551 cold
+    # source steps across 3,788 packed lines from 13 source units. Retain the
     # existing deterministic watchdog without conflating source compilation
     # with the independently bounded recovery journey.
     max_ext4_source_steps = 1_600_000_000
@@ -62225,7 +62225,6 @@ def test_staged_vfs_linear_htree_conversion_uses_nonadjacent_cross_group_leaves(
             ),
             "_XCG-STAT VSF.BFREE @ CONSTANT _XCG-BFREE-AFTER",
             "_XCG-STAT VSF.FFREE @ CONSTANT _XCG-FFREE-AFTER",
-            "_XC-META-COUNT @ CONSTANT _XCG-META-COUNT",
             "_XCG-CTX _EXT4-C.J.WRITER + @ CONSTANT _XCG-WRITER",
             *_forth_accumulated_conjunction(
                 "_XCG-OK",
@@ -62260,7 +62259,6 @@ def test_staged_vfs_linear_htree_conversion_uses_nonadjacent_cross_group_leaves(
                     "_XCG-BFREE-AFTER _XCG-BFREE-BEFORE 2 - =",
                     "_XCG-FFREE-AFTER _XCG-FFREE-BEFORE 1- =",
                     "_XCG-CLOCK-CALLS @ 1 =",
-                    "_XCG-META-COUNT 10 =",
                     "_XCG-WRITER _XCG-PROFILE-BASE =",
                     "_XCG-WRITER _EXT4-JWR-IDLE-CLEAN?",
                     "_XCG-CTX _EXT4-C.J.HOME-WRITES + @ 10 =",
@@ -62799,7 +62797,6 @@ def test_staged_vfs_linear_htree_create_refuses_one_short_metadata_profile_witho
                     "_CHR-WRITE-ACTIVE 0=",
                     "_CHR-DIRTY 0=",
                     "_CHR-RO 0=",
-                    "_XC-META-COUNT @ 9 =",
                     "_XC-WRITER @ 0=",
                     "_XC-TX @ 0=",
                     "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
@@ -64345,7 +64342,6 @@ def staged_public_indexed_leaf_split_fixture(
             ),
             "_ILS-STAT VSF.BFREE @ CONSTANT _ILS-BFREE-AFTER",
             "_ILS-STAT VSF.FFREE @ CONSTANT _ILS-FFREE-AFTER",
-            "_XC-META-COUNT @ CONSTANT _ILS-META-COUNT",
             "_ILS-CTX _EXT4-C.J.WRITER + @ CONSTANT _ILS-WRITER",
             *_forth_accumulated_conjunction(
                 "_ILS-OK",
@@ -64389,7 +64385,6 @@ def staged_public_indexed_leaf_split_fixture(
                     "_ILS-BFREE-AFTER _ILS-BFREE-BEFORE 1- =",
                     "_ILS-FFREE-AFTER _ILS-FFREE-BEFORE 1- =",
                     "_ILS-CLOCK-CALLS @ 1 =",
-                    "_ILS-META-COUNT 10 =",
                     "_ILS-WRITER _ILS-PROFILE-BASE =",
                     "_ILS-WRITER _EXT4-JWR-IDLE-CLEAN?",
                     "_ILS-CTX _EXT4-C.J.HOME-WRITES + @ 10 =",
@@ -65112,7 +65107,6 @@ def staged_public_indexed_create_fixture(
                 "CONSTANT _IC-AFTER-IOR"
             ),
             "_IC-STAT VSF.FFREE @ CONSTANT _IC-FFREE-AFTER",
-            "_XC-META-COUNT @ CONSTANT _IC-META-COUNT",
             "_XC-INODE @ CONSTANT _IC-INODE",
             "_XC-NEW-GEN @ CONSTANT _IC-GEN",
             "_XC-DIR-HOME @ CONSTANT _IC-LEAF-HOME",
@@ -65151,7 +65145,6 @@ def staged_public_indexed_create_fixture(
                     "_IC-CLOCK-CALLS @ 1 =",
                     "_IC-AFTER-IOR 0=",
                     "_IC-FFREE-AFTER _IC-FFREE-BEFORE 1- =",
-                    "_IC-META-COUNT 6 =",
                     "_IC-INODE 33 =",
                     "_IC-GEN 1 =",
                     "_IC-LEAF-HOME 1357 =",
@@ -65758,7 +65751,6 @@ def _run_staged_indexed_create_refusal(
     marker: str,
     before_baseline: tuple[str, ...] = (),
     setup_checks: tuple[str, ...] = (),
-    post_create_checks: tuple[str, ...] = (),
     metadata_capacity: int = 6,
     max_steps: int = 1_200_000_000,
 ) -> None:
@@ -65838,7 +65830,6 @@ def _run_staged_indexed_create_refusal(
                 "CONSTANT _IR-CHILD"
             ),
             "_IR-V V.LAST-IOR @ CONSTANT _IR-LAST-IOR",
-            "_XC-META-COUNT @ CONSTANT _IR-META-COUNT",
             "_IR-V V.ICOUNT @ CONSTANT _IR-ICOUNT-AFTER",
             "_IR-V V.VCOUNT @ CONSTANT _IR-VCOUNT-AFTER",
             "_IR-V V.STR-PTR @ CONSTANT _IR-STR-AFTER",
@@ -65894,7 +65885,6 @@ def _run_staged_indexed_create_refusal(
                     "_IR-LOAD-IOR 0=",
                     *setup_checks,
                     *expected_ior_checks,
-                    *post_create_checks,
                     "_IR-D 0=",
                     "_IR-CHILD 0=",
                     "_IR-LAST-IOR _IR-CREATE-IOR =",
@@ -66043,7 +66033,6 @@ def test_staged_vfs_indexed_leaf_split_refuses_one_short_profile_without_writes(
         backing=backing,
         target_name="new.txt",
         expected_ior_checks=("_IR-CREATE-IOR VFS-E-NOSPC =",),
-        post_create_checks=("_IR-META-COUNT 10 =",),
         metadata_capacity=9,
         max_steps=200_000_000,
         marker="EXT4-INDEXED-LEAF-SPLIT-PROFILE-REFUSAL",
@@ -66454,7 +66443,6 @@ def staged_public_create_fixture(
                 "CONSTANT _CR-STAT-AFTER-IOR"
             ),
             "_CR-STAT VSF.FFREE @ CONSTANT _CR-FREE-AFTER",
-            "_XC-META-COUNT @ CONSTANT _CR-META-COUNT",
             "_XC-INODE @ CONSTANT _CR-INODE",
             "_XC-NEW-GEN @ CONSTANT _CR-GEN",
             "_CR-CTX _EXT4-C.J.WRITER + @ CONSTANT _CR-WRITER",
@@ -66499,7 +66487,6 @@ def staged_public_create_fixture(
                         "_CR-CLOCK-CALLS @ 1 =",
                         "_CR-STAT-AFTER-IOR 0=",
                         "_CR-FREE-AFTER _CR-FREE-BEFORE 1- =",
-                        "_CR-META-COUNT 6 =",
                         "_CR-INODE 33 =",
                         "_CR-GEN 1 =",
                         "_CR-WRITER-STATE _EXT4-JWR-IDLE =",
@@ -66701,7 +66688,6 @@ def staged_public_mkdir_fixture(
             ),
             "_MD-STAT VSF.BFREE @ CONSTANT _MD-BFREE-AFTER",
             "_MD-STAT VSF.FFREE @ CONSTANT _MD-FFREE-AFTER",
-            "_XC-META-COUNT @ CONSTANT _MD-META-COUNT",
             "_XC-INODE @ CONSTANT _MD-INODE",
             "_XC-NEW-GEN @ CONSTANT _MD-GEN",
             "_XC-DATA-BLOCK @ CONSTANT _MD-DATA-BLOCK",
@@ -66779,7 +66765,6 @@ def staged_public_mkdir_fixture(
                             "_MD-V V.VCOUNT @ "
                             "_MD-VCOUNT-BEFORE 1+ ="
                         ),
-                        "_MD-META-COUNT 8 =",
                         "_MD-HOME-WRITES 8 =",
                         "_MD-INODE 33 =",
                         "_MD-GEN 1 =",
@@ -78958,7 +78943,6 @@ def staged_public_link_fixture(
                         "_LK-READ-IOR 0=",
                         "_LK-ACTUAL 54 =",
                         "_LK-BUF _LK-EXPECTED 54 _EXT4-BYTES=?",
-                        "_XC-META-COUNT @ 2 =",
                         f"_XC-INODE-HOME @ {inode_home} =",
                         f"_XC-PARENT-HOME @ {parent_home} =",
                         f"_XC-DIR-HOME @ {directory_home} =",
@@ -79822,7 +79806,6 @@ def test_staged_vfs_link_distinct_parent_uses_three_exact_homes(
                 _forth_conjunction(
                     [
                         "_L3-CLOCK-CALLS @ 1 =",
-                        "_XC-META-COUNT @ 3 =",
                         f"_XC-INODE-HOME @ {target_home} =",
                         f"_XC-PARENT-HOME @ {parent_home} =",
                         f"_XC-DIR-HOME @ {directory_home} =",
@@ -84234,7 +84217,6 @@ def staged_directory_rename_preimage_fixture(
                 'S" landing-dir" _DMP-V VFS-MKDIR '
                 "CONSTANT _DMP-MKDIR-IOR"
             ),
-            "_XC-META-COUNT @ CONSTANT _DMP-META-COUNT",
             "_XC-INODE @ CONSTANT _DMP-INODE",
             "_XC-DATA-BLOCK @ CONSTANT _DMP-DATA-BLOCK",
             (
@@ -84295,7 +84277,6 @@ def staged_directory_rename_preimage_fixture(
                         "_DMP-FFREE-AFTER _DMP-FFREE-BEFORE 1- =",
                         "_DMP-V V.ICOUNT @ _DMP-ICOUNT-BEFORE 1+ =",
                         "_DMP-V V.VCOUNT @ _DMP-VCOUNT-BEFORE 1+ =",
-                        "_DMP-META-COUNT 8 =",
                         f"_DMP-INODE {landing_number} =",
                         f"_DMP-DATA-BLOCK {landing_directory_home} =",
                         "_DMP-HOMES 8 =",
@@ -86442,7 +86423,7 @@ def test_staged_vfs_mkdir_then_directory_rename_in_one_write_session(
 
 
 def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
-    """Pin the Stage 4 CREATE certificate, ownership, and lifetime seams."""
+    """Pin the Stage 4/5 CREATE certificate, ownership, and home plan."""
     facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
     admission = (AKASHIC_ROOT / EXT4_ADMISSION_MODULE).read_text(
         encoding="utf-8"
@@ -86549,6 +86530,252 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
     assert sealed_check < authority
     assert "_XC-P.CONVERT-BASELINE + @ 0= AND IF" in conversion
     assert "VFS-E-CONFLICT EXIT" in conversion[sealed_check:authority]
+
+    role_constants = tuple(
+        (int(value), name)
+        for value, name in re.findall(
+            r"(?m)^\s*(\d+) CONSTANT (_XC-HR-[A-Z0-9-]+)$", facade
+        )
+    )
+    assert tuple(value for value, _ in role_constants) == tuple(range(1, 22))
+    assert role_constants[-1] == (21, "_XC-HR-LIMIT")
+    assert "3 CONSTANT _XC-HP-ENTRY-CELLS" in facade
+    assert 3664 + 8 + 20 * 3 * 8 == 4152
+    assert (
+        "_XC-P.HOME-COUNT CELL+ CONSTANT _XC-P.HOME-ENTRIES" in facade
+    )
+    assert re.search(
+        r"(?ms)_XC-P\.HOME-ENTRIES\s+"
+        r"_XC-HR-LIMIT 1- _XC-HP-ENTRY-CELLS \* CELLS \+\s+"
+        r"CONSTANT _XC-P-SIZE",
+        facade,
+    )
+    for removed in (
+        "_XC-META-HOME-MAX",
+        "_XC-META-HOMES",
+        "_XC-META-COUNT",
+        "_XC-META-HOME",
+        "_XC-META-RESET",
+        "_XC-ADD-META-HOME",
+    ):
+        assert removed not in facade
+
+    seal = word_body("_XC-P-SEAL")
+    bind = word_body("_XC-HP-BIND")
+    aliases = word_body("_XC-HP-ALIASES?")
+    home = word_body("_XC-HP-HOME@")
+    require_kind = word_body("_XC-HP-REQUIRE-KIND")
+    require_staged = word_body("_XC-HP-REQUIRE-STAGED")
+    plan_homes = word_body("_XC-HP-PLAN-HOMES")
+    assert seal.index("_XC-HP-TABLE?") < seal.index("_XC-PS-SEALED")
+    assert seal.index("_XC-HP-ALIASES?") < seal.index("_XC-PS-SEALED")
+    assert "_XC-HP-ROLES-ALIAS?" in aliases
+    assert "_XC-HP-ALIAS-ALLOWED?" in aliases
+    assert "_XC-HP-ROLE@" in bind
+    assert "_XC-HP-BIND-META" in plan_homes
+    assert "_XC-HP-FIRST?" in home
+    assert "_XC-HP-HOME@" in require_kind
+    assert require_staged.count("_XC-HP-REQUIRE-KIND") == 3
+    assert "_XC-HP-PREFLIGHT" in insert
+    assert "_XC-HP-ENSURE" in insert
+    assert insert.count("_XC-HP-BEGIN-TX") == 2
+    assert stage.index("_XC-HP-REQUIRE-CREDITS") < stage.index(
+        "_XC-STAGE-NEW-INODE"
+    )
+    assert stage.rstrip().endswith("_XC-WRITER @ _XC-HP-REQUIRE-STAGED")
+
+
+def test_ext4_create_home_plan_checks_roles_credits_and_order(
+    canonical_images: dict[str, Path],
+) -> None:
+    """Exercise the Stage 5 plan core without publishing filesystem writes."""
+    path = canonical_images["primary-1k-i256"]
+    output = run_forth(
+        path,
+        [
+            (
+                "T-ARENA T-VOLUME EXT4-NEW "
+                "CONSTANT _HP-MOUNT-IOR CONSTANT _HP-V"
+            ),
+            "_HP-V _EXT4-CTX CONSTANT _HP-CTX",
+            "_HP-CTX _XC-CTX !",
+            "CREATE _HP-P _XC-P-SIZE ALLOT",
+            "_HP-P _XC-P-BEGIN NIP CONSTANT _HP-BEGIN-IOR",
+            "_HP-P 0 _XC-P-BIND-SHAPE NIP CONSTANT _HP-SHAPE-IOR",
+            (
+                "_HP-P _XC-HR-INODE _XC-HK-META 279 _XC-HP-ADD "
+                "NIP CONSTANT _HP-INODE-IOR"
+            ),
+            "_HP-P _XC-P.HOME-COUNT + @ CONSTANT _HP-COUNT-A",
+            (
+                "_HP-P _XC-HR-INODE _XC-HK-META 280 _XC-HP-ADD "
+                "NIP CONSTANT _HP-DUPLICATE-IOR"
+            ),
+            "_HP-P _XC-P.HOME-COUNT + @ CONSTANT _HP-COUNT-B",
+            (
+                "_HP-P _XC-HR-LIMIT _XC-HK-META 280 _XC-HP-ADD "
+                "NIP CONSTANT _HP-ROLE-BOUND-IOR"
+            ),
+            "_HP-P _XC-P.HOME-COUNT + @ CONSTANT _HP-COUNT-C",
+            (
+                "_HP-P _XC-HR-PARENT-DIRECTORY _XC-HK-DATA 279 "
+                "_XC-HP-ADD NIP CONSTANT _HP-CROSS-KIND-IOR"
+            ),
+            "_HP-P _XC-P.HOME-COUNT + @ CONSTANT _HP-COUNT-D",
+            (
+                "_HP-P _XC-HR-PARENT-INODE _XC-HK-META 279 "
+                "_XC-HP-ADD NIP CONSTANT _HP-PARENT-IOR"
+            ),
+            (
+                "_HP-P _XC-HR-PARENT-DIRECTORY _XC-HK-DATA 1357 "
+                "_XC-HP-ADD NIP CONSTANT _HP-DIRECTORY-IOR"
+            ),
+            (
+                "_HP-P _XC-HR-INODE-GDT _XC-HK-META 2 _XC-HP-ADD "
+                "NIP CONSTANT _HP-GDT-IOR"
+            ),
+            (
+                "_HP-P _XC-HR-PRIMARY-SUPER _XC-HK-REVOKE 1 "
+                "_XC-HP-ADD NIP CONSTANT _HP-SUPER-IOR"
+            ),
+            "_HP-P _XC-P-SEAL NIP CONSTANT _HP-SEAL-IOR",
+            "_HP-P _XC-P.HOME-COUNT + @ CONSTANT _HP-SEALED-COUNT",
+            "_HP-P _XC-HP-CREDITS@",
+            "CONSTANT _HP-CREDITS-IOR",
+            "CONSTANT _HP-REVOKE-CREDIT",
+            "CONSTANT _HP-DATA-CREDIT",
+            "CONSTANT _HP-META-CREDIT",
+            "DROP",
+            "_HP-P _XC-HR-PARENT-INODE _XC-HP-ROLE@",
+            "CONSTANT _HP-ROLE-IOR",
+            "CONSTANT _HP-ROLE-HOME",
+            "CONSTANT _HP-ROLE-KIND",
+            "DROP",
+            (
+                "_HP-P _XC-HR-INODE _XC-HR-PARENT-INODE "
+                "_XC-HP-ROLES-ALIAS?"
+            ),
+            "CONSTANT _HP-ALIAS-IOR CONSTANT _HP-ALIASED DROP",
+            "_HP-P _XC-HK-META 0 _XC-HP-HOME@",
+            "CONSTANT _HP-META-0-IOR CONSTANT _HP-META-0 DROP",
+            "_HP-P _XC-HK-META 1 _XC-HP-HOME@",
+            "CONSTANT _HP-META-1-IOR CONSTANT _HP-META-1 DROP",
+            "_HP-P _XC-HK-DATA 0 _XC-HP-HOME@",
+            "CONSTANT _HP-DATA-0-IOR CONSTANT _HP-DATA-0 DROP",
+            "_HP-P _XC-HK-REVOKE 0 _XC-HP-HOME@",
+            "CONSTANT _HP-REVOKE-0-IOR CONSTANT _HP-REVOKE-0 DROP",
+            "_HP-P _XC-HK-META 2 _XC-HP-HOME@",
+            "CONSTANT _HP-META-2-IOR CONSTANT _HP-META-2 DROP",
+            (
+                "_HP-P _XC-HR-PARENT-DIRECTORY _XC-HK-DATA 1357 "
+                "_XC-HP-BIND NIP CONSTANT _HP-BIND-IOR"
+            ),
+            (
+                "_HP-P _XC-HR-PARENT-DIRECTORY _XC-HK-DATA 1358 "
+                "_XC-HP-BIND NIP CONSTANT _HP-BIND-MISMATCH-IOR"
+            ),
+            (
+                "_HP-P _XC-HR-INODE-BITMAP _XC-HK-META 267 "
+                "_XC-HP-ADD NIP CONSTANT _HP-POSTSEAL-IOR"
+            ),
+            "_HP-P _XC-P.HOME-COUNT + @ CONSTANT _HP-POSTSEAL-COUNT",
+            (
+                "CREATE _HP-WRITER-TABLE "
+                "2 _EXT4-JWR-IMAGE-ENTRY-CELLS * CELLS ALLOT"
+            ),
+            "VARIABLE _HP-WRITER-ENTRY",
+            ": _HP-WRITER-ENTRY! ( home index -- )",
+            (
+                "_EXT4-JWR-IMAGE-ENTRY-CELLS * CELLS "
+                "_HP-WRITER-TABLE + _HP-WRITER-ENTRY !"
+            ),
+            "_HP-WRITER-ENTRY @ !",
+            "_EXT4-JE-ACTIVE _HP-WRITER-ENTRY @ CELL+ ! ;",
+            "2 0 _HP-WRITER-ENTRY! 279 1 _HP-WRITER-ENTRY!",
+            (
+                "_HP-P _XC-HK-META _HP-WRITER-TABLE "
+                "_EXT4-JWR-IMAGE-ENTRY-CELLS 2 _XC-HP-REQUIRE-KIND "
+                "NIP CONSTANT _HP-SWAPPED-IOR"
+            ),
+            "279 0 _HP-WRITER-ENTRY! 2 1 _HP-WRITER-ENTRY!",
+            (
+                "_HP-P _XC-HK-META _HP-WRITER-TABLE "
+                "_EXT4-JWR-IMAGE-ENTRY-CELLS 2 _XC-HP-REQUIRE-KIND "
+                "NIP CONSTANT _HP-ORDERED-IOR"
+            ),
+            "CREATE _HP-Q _XC-P-SIZE ALLOT",
+            "_HP-Q _XC-P-BEGIN NIP CONSTANT _HP-Q-BEGIN-IOR",
+            "_HP-Q 0 _XC-P-BIND-SHAPE NIP CONSTANT _HP-Q-SHAPE-IOR",
+            (
+                "_HP-Q _XC-HR-INODE _XC-HK-META 279 _XC-HP-ADD "
+                "NIP CONSTANT _HP-Q-INODE-IOR"
+            ),
+            (
+                "_HP-Q _XC-HR-PARENT-DIRECTORY _XC-HK-META 279 "
+                "_XC-HP-ADD NIP CONSTANT _HP-Q-DIRECTORY-IOR"
+            ),
+            "_HP-Q _XC-P-SEAL NIP CONSTANT _HP-Q-SEAL-IOR",
+            "_HP-Q _XC-P.STATE + @ CONSTANT _HP-Q-STATE",
+            "0 _HP-V VFS-UNMOUNT CONSTANT _HP-UNMOUNT-IOR",
+            *_forth_accumulated_conjunction(
+                "_HP-OK",
+                [
+                    "_HP-MOUNT-IOR 0=",
+                    "_HP-BEGIN-IOR 0=",
+                    "_HP-SHAPE-IOR 0=",
+                    "_HP-INODE-IOR 0=",
+                    "_HP-COUNT-A 1 =",
+                    "_HP-DUPLICATE-IOR VFS-E-CONFLICT =",
+                    "_HP-COUNT-B 1 =",
+                    "_HP-ROLE-BOUND-IOR VFS-E-INVALID =",
+                    "_HP-COUNT-C 1 =",
+                    "_HP-CROSS-KIND-IOR VFS-E-CONFLICT =",
+                    "_HP-COUNT-D 1 =",
+                    "_HP-PARENT-IOR 0=",
+                    "_HP-DIRECTORY-IOR 0=",
+                    "_HP-GDT-IOR 0=",
+                    "_HP-SUPER-IOR 0=",
+                    "_HP-SEAL-IOR 0=",
+                    "_HP-SEALED-COUNT 5 =",
+                    "_HP-CREDITS-IOR 0=",
+                    "_HP-META-CREDIT 2 =",
+                    "_HP-DATA-CREDIT 1 =",
+                    "_HP-REVOKE-CREDIT 1 =",
+                    "_HP-ROLE-IOR 0=",
+                    "_HP-ROLE-KIND _XC-HK-META =",
+                    "_HP-ROLE-HOME 279 =",
+                    "_HP-ALIAS-IOR 0=",
+                    "_HP-ALIASED 0<>",
+                    "_HP-META-0-IOR 0=",
+                    "_HP-META-0 279 =",
+                    "_HP-META-1-IOR 0=",
+                    "_HP-META-1 2 =",
+                    "_HP-DATA-0-IOR 0=",
+                    "_HP-DATA-0 1357 =",
+                    "_HP-REVOKE-0-IOR 0=",
+                    "_HP-REVOKE-0 1 =",
+                    "_HP-META-2-IOR VFS-E-CONFLICT =",
+                    "_HP-META-2 0=",
+                    "_HP-BIND-IOR 0=",
+                    "_HP-BIND-MISMATCH-IOR VFS-E-CONFLICT =",
+                    "_HP-POSTSEAL-IOR VFS-E-CORRUPT =",
+                    "_HP-POSTSEAL-COUNT 5 =",
+                    "_HP-SWAPPED-IOR VFS-E-CORRUPT =",
+                    "_HP-ORDERED-IOR 0=",
+                    "_HP-Q-BEGIN-IOR 0=",
+                    "_HP-Q-SHAPE-IOR 0=",
+                    "_HP-Q-INODE-IOR 0=",
+                    "_HP-Q-DIRECTORY-IOR 0=",
+                    "_HP-Q-SEAL-IOR VFS-E-CONFLICT =",
+                    "_HP-Q-STATE _XC-PS-BUILDING-SHAPE-SET =",
+                    "_HP-UNMOUNT-IOR 0=",
+                ],
+            ),
+            '_HP-OK @ IF ." EXT4-CREATE-HOME-PLAN-OK" THEN',
+        ],
+        max_steps=150_000_000,
+    )
+    _assert_emitted(output, "EXT4-CREATE-HOME-PLAN-OK")
 
 
 def test_ext4_cold_source_stage_uses_unloaded_dependency_order() -> None:

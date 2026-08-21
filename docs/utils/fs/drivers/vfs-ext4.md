@@ -182,19 +182,26 @@ initialized-bitmap policy and retains all later filesystem authority,
 recovery, transaction, mutation, and VFS-operation policy. Consumers should
 not require these internal units directly.
 
-For CREATE/HTree cross-phase evidence, the facade defines one 3,664-byte
-binding-owned record: 39 cells, a 24-byte hash-authority snapshot, three
-1,024-byte block snapshots, and one 256-byte inode snapshot. Namespace
-planning and staging receive its address explicitly; there is no ambient alias
-to the record. Indexed and linear-to-HTree conversion evidence becomes
-immutable after sealing. Ordinary nonconversion linear insertion may refresh
-its bounded parent-inode and directory work buffers after each phase's
-reauthentication, preserving the established refusal behavior, but a sealed
-ordinary plan cannot become indexed or acquire new conversion authority. Each
-return after record ownership is established clears the complete record after
-any required committed cache projection. A failed ownership check does not
-dereference or clear an untrusted pointer; it returns a typed failure without
-touching that storage.
+For CREATE/HTree cross-phase evidence and home preplanning, the facade defines
+one 4,152-byte binding-owned record. Its 3,664-byte evidence body contains 39
+cells, a 24-byte hash-authority snapshot, three 1,024-byte block snapshots,
+and one 256-byte inode snapshot. Its 488-byte tail contains one entry-count
+cell and 20 enum-derived `{ role, journal kind, home }` entries; storage is
+derived from the complete semantic role universe rather than a fixed maximum
+for one current topology. Namespace planning and staging receive the record
+address explicitly; there is no ambient alias. Seal performs the complete
+bounds, journal-exclusion, uniqueness, and intentional-alias audit. Dry and
+live replanning then reauthenticate and resolve every expected role, kind,
+home, and exact role count before staging, and the final audit reconciles
+first-seen distinct-home order against the transaction tables. Indexed and
+linear-to-HTree conversion evidence becomes immutable after sealing. Ordinary
+nonconversion linear insertion may refresh its bounded parent-inode and
+directory work buffers after each phase's reauthentication, preserving the
+established refusal behavior, but a sealed ordinary plan cannot become indexed
+or acquire new conversion authority. Each return after record ownership is
+established clears the complete record after any required committed cache
+projection. A failed ownership check does not dereference or clear an untrusted
+pointer; it returns a typed failure without touching that storage.
 
 The post-`abb3f94` implementation sequence is fixed in the
 [ext4 recovery refactor plan](../ext4-refactor-plan.md). That plan records the
@@ -222,8 +229,20 @@ backup above group 65535 is refused.
 
 The checked-in 1,600,000,000-step ext4 cold-source value is a qualification
 watchdog and measurement guide, not an ext4 implementation capacity or a
-reason to weaken functionality. At the Stage 4 context checkpoint, a real
+reason to weaken functionality. At the Stage 5 home-plan checkpoint, a real
 cold source build loaded CRC in 5,023,896 of 150,000,000 steps across 26
+packed lines, bitset in 2,345,116 of 150,000,000 across 9 packed lines, and
+the dependency-derived ext4 closure in 1,049,876,551 of 1,600,000,000 across
+3,788 packed lines from 13 source units. The closure contains 30,616 physical
+lines, 1,177,113 raw bytes, 27,537 loader-executable lines, and 889,803 packed
+bytes. Relative to Stage 4, Stage 5 adds 413 physical lines, 14,020 raw bytes,
+374 executable lines, 43 packed lines, 9,952 packed bytes, and 20,249,749 cold
+source steps (1.97 percent). This remains net source growth after deleting the
+six private collector artifacts: the payoff is one ordered authorization and
+audit path, not an immediate LOC reduction.
+
+At the Stage 4 context checkpoint, a real cold source build loaded CRC in
+5,023,896 of 150,000,000 steps across 26
 packed lines, bitset in 2,345,116 of 150,000,000 across 9 packed lines, and
 the dependency-derived ext4 closure in 1,029,626,802 of 1,600,000,000 across
 3,745 packed lines from 13 source units. Relative to the Stage 3 source shape
@@ -330,6 +349,26 @@ journey completed mutation, unmount, and host media checks in 1,453,284,730
 steps. This is the Stage 4 context checkpoint, not qualification of Stage 5 or
 a rerun of the broad persistence and fault matrices.
 
+The Stage 5 focused gate passed 11 nodes sequentially in 711.34 seconds from
+one source-mode snapshot. The direct no-write plan oracle completed in
+95,740,969 of 150,000,000 steps and covered atomic checked insertion, duplicate
+and cross-kind refusal,
+allowed and forbidden aliases, per-kind credit, role lookup, first-seen order,
+post-seal immutability, and exact writer-table reconciliation. Ordinary CREATE
+completed in 876,534,019 steps; linear-to-HTree conversion in 1,590,846,839;
+existing-leaf CREATE in 988,460,471; and full-leaf split in 1,489,035,605. The
+conversion and split retain only 9,153,161 and 10,964,395 steps of margin under
+their unchanged checked-in caps. The one-short conversion and split profiles
+refused before writes in 165,120,935 and 186,321,841 steps. MKDIR completed in
+1,152,460,026 steps, the aliased
+two-home LINK in 701,408,577, and the distinct three-home LINK in 706,751,366;
+their write-free stable remounts completed in 55,245,025, 62,591,725, and
+54,979,893 steps respectively. Exact home-write counts, first-seen
+trace order, media afterimages, cache/accounting projection, and the existing
+external `debugfs`/pinned `e2fsck` oracles remained authoritative. This is the
+Stage 5 namespace-insertion checkpoint, not qualification of XH, XU, the broad
+recovery/fault matrices, or a new indexed-directory capability.
+
 At bounded hard-`LINK` closure, the production source measured 1,140,381,589
 steps across 2,962 packed lines in source mode. The then-approved 1.15-billion
 watchdog left 9,618,411 steps, about 0.84 percent measured growth margin. That
@@ -378,8 +417,8 @@ writer-arena 8 1 0 fs EXT4-BIND-WRITER-ARENA? THROW
 ```
 
 The common base binding context is 15,568 bytes. The staged constructor also
-reserves the facade's 3,664-byte namespace-plan record from `fs-arena`, not the
-dedicated writer arena. The base-context-plus-record reservation is 19,232
+reserves the facade's 4,152-byte namespace-plan record from `fs-arena`, not the
+dedicated writer arena. The base-context-plus-record reservation is 19,720
 contiguous bytes; other VFS and mount allocations remain separate. The record
 is the exact allocation immediately following the base context and must remain
 inside the arena's allocated prefix. Allocation occurs only after authenticated
