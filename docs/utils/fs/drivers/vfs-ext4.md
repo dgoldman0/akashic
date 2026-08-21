@@ -2343,6 +2343,10 @@ fresh mount, passes `e2fsck`, and is followed by a zero-write, byte-identical
 stable remount. A ten-home writer profile cannot admit the exact 11-home plan,
 and an allocated unrelated inode cannot alias the HTree root during reverse-
 owner proof; both refusals leave the cache and complete media image unchanged.
+The accumulated seven-test source-JIT capstone passes those public, recovery,
+refusal, depth-one follow-on, and external-oracle paths sequentially in 926.68
+host seconds. The final depth-one mutation completes in 1,449,054,483 of its
+2,400,000,000-step guard.
 
 Indexed admission binds the checksummed live primary hash seed, default hash
 version, and full `s_flags` to the mounted superblock cache. It hashes and

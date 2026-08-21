@@ -4339,11 +4339,10 @@ def build_snapshot():
     # instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
     max_bitset_source_steps = 150_000_000
-    # The root-growth closure measures 1,089,231,446 cold source steps with
-    # the production-like JIT policy and 1,073,526,553 with the differential
-    # policy off, across 3,842 packed lines from 13 source units. Retain the
-    # deterministic watchdog without conflating source compilation with the
-    # independently bounded recovery journey.
+    # The closed root-growth vertical measures 1,097,074,756 cold source
+    # steps with the production-like JIT policy across 3,860 packed lines
+    # from 13 source units. Retain the deterministic watchdog without
+    # conflating source compilation with independently bounded journeys.
     max_ext4_source_steps = 1_600_000_000
     bootstrap_steps = _feed_until_idle(system, bootstrap, max_crc_source_steps)
 
@@ -68134,7 +68133,7 @@ def staged_public_depth_one_indexed_create_fixture(
         ],
         capture_media=backing,
         # This source journey authenticates all 124 leaves in three phases;
-        # retain the same guarded envelope as the preceding root growth.
+        # it measures 1,449,054,483 steps under the shared guarded envelope.
         max_steps=2_400_000_000,
     )
     _assert_emitted(output, "EXT4-DEPTH-ONE-INDEXED-CREATE")

@@ -620,7 +620,17 @@ representative happy-path equivalence set. Before leaving refactoring for new
 functionality, run the accumulated sequential equivalence gate. When new
 filesystem functionality resumes, restore the extensive qualification cadence
 and include the refactored paths in that feature's evidence. The last recorded
-cold source build is the Stage 5 home-plan checkpoint: CRC at 5,023,896 of
+cold source build is the closed root-growth capstone: CRC at 5,091,826 of
+150,000,000 steps across 26 packed lines, bitset at 2,386,559 of 150,000,000
+across 9 packed lines, and the dependency-derived ext4 closure at
+1,097,074,756 of 1,600,000,000 across 3,860 packed lines from 13 source units.
+Its seven selected tests passed sequentially in 926.68 host seconds: public
+11-home root growth and external oracles, the committed W28 recovery and
+stable-remount journey, exact-credit and unrelated-owner refusals, and the
+six-home fresh-mount depth-one CREATE plus external oracles. The final
+depth-one mutation measured 1,449,054,483 of 2,400,000,000 steps.
+
+The earlier Stage 5 home-plan checkpoint measured CRC at 5,023,896 of
 150,000,000 steps across 26 packed lines, bitset at 2,345,116 of 150,000,000
 across 9 packed lines, and the dependency-derived ext4 closure at
 1,049,876,551 of 1,600,000,000 across 3,788 packed lines from 13 source units.
