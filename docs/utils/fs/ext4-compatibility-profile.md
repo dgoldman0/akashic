@@ -103,13 +103,13 @@ Its parent map must be either an inline resident depth-zero extent root or a
 singleton resident depth-one root naming one authenticated external depth-zero
 extent leaf. The EOF extent must coalesce with the newly selected physical
 block or the governing extent node must retain an entry slot; wider map
-shapes and public HTree root-depth growth remain gated. A focused internal
-harness plans and dry-stages the first depth-one transition through the sealed
-CREATE record and exact role-aware home certificate; its private live path also
-emits and checkpoints the 11-home result without expanding the advertised
-operation profile. Ordinary CREATE can then mutate an authenticated slack leaf
-on a fresh mount of that singleton depth-one tree without changing its root,
-DX node, map, allocation state, size, or sector count. Indexed admission binds
+shapes remain gated. Regular CREATE may grow a saturated depth-zero HTree root
+through the sealed CREATE record and exact role-aware home certificate, then
+emit and checkpoint the exact 11-home transition. Ordinary CREATE can then
+mutate an authenticated slack leaf on a fresh mount of that singleton
+depth-one tree without changing its root, DX node, map, allocation state,
+size, or sector count. Root-growth crash/replay qualification remains the next
+completion gate. Indexed admission binds
 live hash policy, validates every leaf and exact interval, rejects duplicates
 globally, proves the selected leaf through a complete map audit,
 and reauthenticates the parent inode location plus exact root/leaf/insertion
@@ -123,7 +123,7 @@ credit from actual home deduplication, and proves the old root plus both
 allocation candidates in one filesystem-wide range scope. The credential and
 inheritance envelope remains explicit:
 root-owned, non-setgid parents without inline or external xattrs/default ACLs
-create root-owned mode-0666 files. Indexed HTree root-depth growth, indexed
+create root-owned mode-0666 files. Depth-one indexed leaf splitting, indexed
 LINK or MKDIR, wider indexed-map policy, and lazy inode-table initialization
 remain unsupported. The first shrink `TRUNCATE` slice is now public as well:
 it accepts a strict new EOF inside the old final initialized block, journals
@@ -194,9 +194,9 @@ victims, and replacement remain unsupported. Singleton-modern-orphan final-
 link removal is operation-admitted for both closed and descriptor-retained
 targets. Existing depth-zero HTree CREATE, atomic one-block linear-to-HTree
 growth, and full-leaf splitting under a depth-zero root with entry capacity are
-operation-admitted. Indexed root-depth planning and a private live transition
-are qualified, as is stable singleton depth-one CREATE. Root-growth recovery
-and public admission, then indexed LINK/MKDIR, remain later delivery phases.
+operation-admitted. Public indexed root-depth growth and stable singleton
+depth-one CREATE are qualified. Root-growth recovery, then indexed LINK/MKDIR,
+remain later delivery phases.
 Extent-tree
 depth and indexed-directory HTree depth are
 independent ratchets. Broaden either only when the next operation or a pinned
@@ -2485,9 +2485,9 @@ descriptor journey measures 4,549,770 steps.
 directory moves remain gated. Qualified singleton-modern-orphan final-link
 lifetime closure is complete. One-block linear-to-HTree growth is complete;
 full-leaf mutation in an existing depth-zero indexed parent is complete while
-the root retains an entry slot. The root-growth planner and private live path
-remain internal, while stable singleton depth-one CREATE is qualified.
-Root-growth recovery/public admission and indexed `LINK`/`MKDIR` remain later
+the root retains an entry slot. Public regular CREATE now completes the exact
+singleton root-growth transition, and stable singleton depth-one CREATE is
+qualified. Root-growth recovery and indexed `LINK`/`MKDIR` remain later
 directory-mutation phases.
 
 Profile completion does not waive the larger bidirectional matrix: externally

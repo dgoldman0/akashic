@@ -190,15 +190,16 @@ redirected.
   external-map same-group probe has 14 semantic roles and 11 first-seen homes.
   The original probe was deliberately nonpublishing: ordinary CREATE left
   probe admission clear and retained the old early `VFS-E-NOSPC`; the probe
-  dry-staged then aborted before writer activation. The later private
-  qualification now also activates, emits, checkpoints, and externally
-  validates the exact 11-home transition. Stage 6 then added two locator cells
+  dry-staged then aborted before writer activation. The later live
+  qualification activates, emits, checkpoints, and externally validates the
+  exact 11-home transition. Stage 6 then added two locator cells
   and one operation-owned DX-node snapshot, making the current record 5,312
   bytes with a 4,752-byte evidence body. An ordinary staged CREATE on a fresh
   mount of that produced singleton depth-one tree now authenticates all 124
   leaves and updates one slack leaf through the unchanged exact six-home
-  transaction. Public root-growth admission and root-growth recovery remain
-  the next feature boundary. The original exact source-mode qualification
+  transaction. The production CREATE wrapper now supplies that root-growth
+  admission and passes the same exact public journey; root-growth recovery is
+  the remaining vertical-completion boundary. The original exact source-mode qualification
   passed with the 13-unit ext4 closure loading in 1,073,526,553 of
   1,600,000,000 steps across 3,842 packed
   lines. Its saturated-root journey completed in 1,545,877,690 of
@@ -213,9 +214,9 @@ The frozen semantic comparison point is the clean `ext4-recovery` tree at
 `abb3f9462d379b0adb2f09d1009831dd2f85afdb`. Documentation and refactor commits
 advance `HEAD`, but that commit remains the behavior, ordering, persistent-byte,
 and crash comparison baseline. It includes bounded depth-zero HTree full-leaf
-CREATE and its recovery qualification. The next public feature boundary
-remains HTree root-depth activation/recovery or a separately chosen indexed-
-directory mutation.
+CREATE and its recovery qualification. Stage 6 has now crossed the positive
+HTree root-depth activation boundary; crash/replay closure is the remaining
+gate before the vertical advances to indexed LINK/MKDIR.
 Refactoring must not silently cross that boundary or admit indexed LINK/MKDIR,
 broader map shapes, or another previously gated filesystem behavior.
 
@@ -580,9 +581,11 @@ in one of those leaves without changing the root, node, extent map, block
 bitmap, directory size, or sector count. A fresh-mount `new2.txt` capstone
 routes through node logical 124/home 1364 to leaf logical 1/home 1357, commits
 the exact six homes, unmounts cleanly, and passes pinned `debugfs` and
-`e2fsck`. Depth-one leaf splitting remains fail-closed. Public root-growth
-admission is the next positive slice; refusal and crash matrices remain the
-vertical-completion gate rather than interrupting this happy-path sequence.
+`e2fsck`. Depth-one leaf splitting remains fail-closed. The production CREATE
+wrapper now admits the same exact root-growth transition, and the public
+11-home journey plus fresh-mount follow-on mutation pass. Refusal and crash
+matrices remain the vertical-completion gate rather than interrupting this
+happy-path sequence.
 
 ## Verification cadence
 

@@ -4743,61 +4743,6 @@ def _forth_xc_plan_scrubbed(name: str, ctx: str) -> str:
     return line
 
 
-def _forth_admitted_root_growth_create(name: str) -> tuple[str, ...]:
-    """Return a private CREATE callback that admits only the root-growth probe."""
-    assert name and " " not in name
-    return (
-        f": {name} ( dentry vfs -- ior )",
-        "_XC-V ! _XC-D !",
-        "0 _XC-TARGET ! 0 _XC-LINKING ! 0 _XC-DIRECTORY !",
-        "0 _XC-WRITER ! 0 _XC-TX !",
-        "0 _XC-CTX ! 0 _EXT4-MOW-CTX !",
-        "0 _XC-INDEX-SPLITTING ! 0 _XC-INDEX-ROOT-GROWING !",
-        "0 _XC-INDEX-NODE-HOME ! 0 _XC-INDEX-NODE-GROUP !",
-        "0 _XC-INDEX-NODE-BITMAP-HOME ! 0 _XC-INDEX-NODE-GDT-HOME !",
-        "0 _XC-CONVERTING !",
-        "_XC-ENTRY ?DUP IF _XC-REFUSE-ENTRY EXIT THEN",
-        "_XC-CTX @ _XC-V @ _XC-P-CONTEXT?",
-        "DUP IF NIP _XC-REFUSE-ENTRY EXIT THEN DROP",
-        "_XC-P-BEGIN ?DUP IF _XC-REFUSE EXIT THEN",
-        "-1 OVER _XC-P.INDEX-ROOT-GROWTH-ADMISSION + !",
-        "_XC-NOW ?DUP IF _XC-REFUSE EXIT THEN",
-        "_XC-PLAN ?DUP IF _XC-REFUSE EXIT THEN",
-        "_XC-P-SEAL ?DUP IF _XC-REFUSE EXIT THEN",
-        "_XC-HP-PREFLIGHT ?DUP IF _XC-REFUSE EXIT THEN",
-        "_XC-HP-ENSURE",
-        "DUP IF NIP _XC-FAIL EXIT THEN DROP _XC-WRITER !",
-        "_XC-ACTIVE @ 0= IF",
-        "_XC-HP-BEGIN-TX",
-        "DUP IF NIP _XC-FAIL EXIT THEN DROP _XC-TX !",
-        "_XC-TX @ _EXT4-JTX-STAGE-INSERT",
-        "?DUP IF _XC-FAIL EXIT THEN",
-        "_XC-TX @ _EXT4-JTX-ABORT ?DUP IF _XC-FAIL EXIT THEN",
-        f'CR ." {name}-DRY-DONE"',
-        "_XC-WRITER @ _EXT4-JWR-ACTIVATE ?DUP IF _XC-FAIL EXIT THEN",
-        f'CR ." {name}-ACTIVATED"',
-        "THEN",
-        "_XC-HP-BEGIN-TX",
-        "DUP IF NIP _XC-FAIL EXIT THEN DROP _XC-TX !",
-        "_XC-TX @ _EXT4-JTX-STAGE-INSERT",
-        "?DUP IF _XC-FAIL EXIT THEN",
-        f'CR ." {name}-LIVE-STAGED"',
-        "_XC-TX @ _EXT4-JTX-EMIT ?DUP IF _XC-FAIL EXIT THEN",
-        f'CR ." {name}-EMITTED"',
-        "_XC-PUBLISH-COMMITTED",
-        "_XC-TX @ _EXT4-JTX-CHECKPOINT",
-        "?DUP IF _XC-POSTCOMMIT-FAIL EXIT THEN",
-        f'CR ." {name}-CHECKPOINTED"',
-        "_XC-WRITER @ _EXT4-JWR-VALID? 0= IF",
-        "VFS-E-CORRUPT _XC-POSTCOMMIT-FAIL EXIT THEN",
-        "_XC-WRITER @ _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <>",
-        "_XC-WRITER @ _EXT4-JWR-IDLE-CLEAN? 0= OR IF",
-        "VFS-E-CORRUPT _XC-POSTCOMMIT-FAIL EXIT THEN",
-        "0 _XC-V @ V.LAST-IOR !",
-        "_XC-SCRUB 0 ;",
-    )
-
-
 def _forth_cp_delete_vector_checks(
     writer: str,
     ranges: tuple[tuple[int, int], ...],
@@ -67029,11 +66974,11 @@ def test_staged_vfs_indexed_root_growth_uses_sealed_plan_without_io(
 
 
 @pytest.fixture(scope="session")
-def staged_internal_indexed_root_growth_live_fixture(
+def staged_public_indexed_root_growth_live_fixture(
     staged_public_indexed_root_growth_probe_prestate: dict[str, object],
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, object]:
-    """Activate the admitted transition and qualify all eleven exact homes."""
+    """Publish root growth through CREATE and qualify all eleven exact homes."""
     case = staged_public_indexed_root_growth_probe_prestate
     path = case["source"]
     patches = case["source_patches"]
@@ -67082,22 +67027,11 @@ def staged_internal_indexed_root_growth_live_fixture(
                 "1 _RGL-CLOCK-CALLS +! "
                 f"{_STAGED_APPEND_EPOCH_MS} 0 ;"
             ),
-            *_forth_admitted_root_growth_create("_RGL-CREATE"),
-            "CREATE _RGL-OPS VFS-OPS-SIZE ALLOT",
-            "EXT4-STAGED-WRITE-OPS _RGL-OPS VFS-OPS-SIZE CMOVE",
-            "' _RGL-CREATE _RGL-OPS VFS-OP-CREATE CELLS + !",
-            "CREATE _RGL-BINDING VFS-BINDING-DESC-SIZE ALLOT",
-            (
-                "EXT4-STAGED-WRITE-BINDING _RGL-BINDING "
-                "VFS-BINDING-DESC-SIZE CMOVE"
-            ),
-            "_RGL-OPS _RGL-BINDING VB.OPS !",
-            ": _RGL-NEW _RGL-BINDING SWAP VFS-NEW ;",
             *_EXT4_SOURCE_JIT_END,
             "CREATE _RGL-STAT VFS-STATFS-SIZE ALLOT",
             "T-ARENA CONSTANT _RGL-ARENA",
             (
-                "_RGL-ARENA T-VOLUME _RGL-NEW "
+                "_RGL-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
                 "CONSTANT _RGL-MOUNT-IOR CONSTANT _RGL-V"
             ),
             "_RGL-V _EXT4-CTX CONSTANT _RGL-CTX",
@@ -67264,31 +67198,31 @@ def staged_internal_indexed_root_growth_live_fixture(
     return result
 
 
-def test_staged_internal_indexed_root_growth_activates_exact_transaction(
-    staged_internal_indexed_root_growth_live_fixture: dict[str, object],
+def test_staged_public_indexed_root_growth_activates_exact_transaction(
+    staged_public_indexed_root_growth_live_fixture: dict[str, object],
 ) -> None:
-    """The internal admission path durably publishes the exact transition."""
-    image = staged_internal_indexed_root_growth_live_fixture["image"]
-    trace = staged_internal_indexed_root_growth_live_fixture["trace"]
+    """The public CREATE path durably publishes the exact transition."""
+    image = staged_public_indexed_root_growth_live_fixture["image"]
+    trace = staged_public_indexed_root_growth_live_fixture["trace"]
     assert isinstance(image, Path)
     assert isinstance(trace, tuple)
     assert image.is_file()
     assert trace
 
 
-def test_staged_internal_indexed_root_growth_passes_external_oracles(
-    staged_internal_indexed_root_growth_live_fixture: dict[str, object],
+def test_staged_public_indexed_root_growth_passes_external_oracles(
+    staged_public_indexed_root_growth_live_fixture: dict[str, object],
     jbd2_toolchain: dict[str, object],
 ) -> None:
-    """debugfs and e2fsck accept the private live transition."""
-    backing = staged_internal_indexed_root_growth_live_fixture["image"]
-    map_node_home = staged_internal_indexed_root_growth_live_fixture[
+    """debugfs and e2fsck accept the public live transition."""
+    backing = staged_public_indexed_root_growth_live_fixture["image"]
+    map_node_home = staged_public_indexed_root_growth_live_fixture[
         "map_node_home"
     ]
-    node_candidate = staged_internal_indexed_root_growth_live_fixture[
+    node_candidate = staged_public_indexed_root_growth_live_fixture[
         "node_candidate"
     ]
-    leaf_candidate = staged_internal_indexed_root_growth_live_fixture[
+    leaf_candidate = staged_public_indexed_root_growth_live_fixture[
         "leaf_candidate"
     ]
     debugfs = jbd2_toolchain["debugfs"]
@@ -67360,11 +67294,11 @@ def test_staged_internal_indexed_root_growth_passes_external_oracles(
 
 @pytest.fixture(scope="session")
 def staged_public_depth_one_indexed_create_fixture(
-    staged_internal_indexed_root_growth_live_fixture: dict[str, object],
+    staged_public_indexed_root_growth_live_fixture: dict[str, object],
     tmp_path_factory: pytest.TempPathFactory,
 ) -> dict[str, object]:
     """Create one file through the ordinary writer in the grown HTree."""
-    case = staged_internal_indexed_root_growth_live_fixture
+    case = staged_public_indexed_root_growth_live_fixture
     path = case["image"]
     block_size = case["block_size"]
     parent_number = case["parent_number"]
@@ -88555,6 +88489,14 @@ def test_ext4_indexed_root_growth_probe_extends_the_sealed_certificate() -> None
 
     assert "_XC-P.INDEX-BASE-ROOT-GROWING + @ _XC-P-FLAG?" in shape
     assert "_XC-P.INDEX-ROOT-GROWTH-ADMISSION + @ _XC-P-FLAG?" in shape
+    growth_implication = shape.index(
+        "_XC-P.INDEX-BASE-ROOT-GROWING + @ IF"
+    )
+    admitted_growth = shape.index(
+        "_XC-P.INDEX-ROOT-GROWTH-ADMISSION + @ 0= IF",
+        growth_implication,
+    )
+    assert growth_implication < admitted_growth
     assert "_XC-P.INDEX-BASE-NODE-HOME + @" in shape
     assert "_XC-P.INDEX-BASE-DEPTH + @" in shape
     assert "_XC-P.INDEX-BASE-ROUTE-NODE-HOME + @" in shape
@@ -88616,6 +88558,14 @@ def test_ext4_indexed_root_growth_probe_extends_the_sealed_certificate() -> None
     refusal = auth.index("VFS-E-NOSPC EXIT", admission)
     publication = auth.index("-1 _XC-INDEX-ROOT-GROWING !", admission)
     assert admission < refusal < publication
+    create_admission = insert.index(
+        "_XC-LINKING @ 0= _XC-DIRECTORY @ 0= AND"
+    )
+    admission_store = insert.index(
+        "_XC-P.INDEX-ROOT-GROWTH-ADMISSION + !", create_admission
+    )
+    assert insert.index("_XC-P-BEGIN") < create_admission < admission_store
+    assert admission_store < insert.index("_XC-NOW")
     assert "_XC-INDEX-ROOT-GROWING @ IF VFS-E-NOSPC" not in insert
 
 

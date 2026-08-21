@@ -18430,9 +18430,9 @@ VARIABLE _EXT4-BWC-CTX
 \ remains in this facade; admission owns only the two pointer/span slots in the
 \ base binding context.  One lifecycle cell replaces SHAPE-SET; the other 46
 \ cells retain semantic-name offsets before six exact-size comparison buffers.
-\ One of those cells is an explicit, record-scoped admission for the focused
-\ root-growth dry probe; the public callback leaves it clear and therefore
-\ retains the earlier root-full NOSPC precedence at topology detection.
+\ One of those cells is explicit, record-scoped root-growth admission.  The
+\ operation wrapper enables it only for regular CREATE; indexed MKDIR and LINK
+\ retain their earlier policy refusal without acquiring this authority.
 \ The ordered home-plan tail is sized by its complete semantic role universe,
 \ not by a fixed maximum for today's largest admitted topology.  A new role
 \ therefore extends both the enum and the caller-funded record automatically.
@@ -21700,15 +21700,15 @@ CREATE _XB _EXT4-MAX-BLOCK ALLOT
 \ CREATE allocates an empty regular inode.  MKDIR extends the same authority
 \ with one geometry-selected block containing checksummed `.` and `..` entries,
 \ exact parent/child link counts, and block plus inode allocation accounting.
-\ CREATE inserts into authenticated slack in either a one-block linear parent
-\ or an existing depth-zero HTree.  A full one-block linear parent converts in
-\ one transaction to a canonical depth-zero HTree root plus two packed leaves.
-\ LINK reuses only the linear namespace authority without allocating.  Indexed
-\ LINK/MKDIR, public indexed-root depth growth, ACL inheritance, non-root
-\ credential policy, and other directory growth remain explicit unsupported
-\ edges.  A focused internal probe may plan and dry-stage the first depth-one
-\ transition through the binding record, but it cannot publish it.  A full
-\ depth-zero HTree leaf may split while its root still has an entry slot.
+\ CREATE inserts into authenticated slack in a one-block linear parent, an
+\ existing depth-zero HTree, or the singleton depth-one HTree shape produced by
+\ this writer.  A full one-block linear parent converts in one transaction to a
+\ canonical depth-zero HTree root plus two packed leaves.  A full depth-zero
+\ leaf may split while its root retains an entry slot; a saturated root may grow
+\ through one new DX node and one new leaf.  LINK reuses only the linear
+\ namespace authority without allocating.  Indexed LINK/MKDIR, depth-one leaf
+\ splitting, ACL inheritance, non-root credential policy, and other directory
+\ growth remain explicit unsupported edges.
 \ Each admitted edit is one complete metadata-only journal transaction.
 
 \ The binding record above carries the ordered role/kind/home certificate.
@@ -21925,8 +21925,9 @@ CREATE _XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE ALLOT
     DUP _XC-P.INDEX-BASE-ROOT-GROWING + @ _XC-P-FLAG? 0= IF
         FALSE EXIT
     THEN
-    DUP _XC-P.INDEX-ROOT-GROWTH-ADMISSION + @
-    OVER _XC-P.INDEX-BASE-ROOT-GROWING + @ <> IF FALSE EXIT THEN
+    DUP _XC-P.INDEX-BASE-ROOT-GROWING + @ IF
+        DUP _XC-P.INDEX-ROOT-GROWTH-ADMISSION + @ 0= IF FALSE EXIT THEN
+    THEN
     DUP _XC-P.INDEX-BASE-ROOT-GROWING + @ 0= IF
         DUP _XC-P.INDEX-BASE-NODE-HOME + @
         OVER _XC-P.INDEX-BASE-NODE-GROUP + @ OR
@@ -25568,6 +25569,8 @@ VARIABLE _XC-POST-INDEX-NEW-FREE
     _XC-CTX @ _XC-V @ _XC-P-CONTEXT?
     DUP IF NIP _XC-REFUSE-ENTRY EXIT THEN DROP
     _XC-P-BEGIN ?DUP IF _XC-REFUSE EXIT THEN
+    _XC-LINKING @ 0= _XC-DIRECTORY @ 0= AND
+    OVER _XC-P.INDEX-ROOT-GROWTH-ADMISSION + !
     _XC-NOW ?DUP IF _XC-REFUSE EXIT THEN
     _XC-PLAN ?DUP IF _XC-REFUSE EXIT THEN
     _XC-P-SEAL ?DUP IF _XC-REFUSE EXIT THEN

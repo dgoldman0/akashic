@@ -125,21 +125,20 @@ orphan cleanup path, both closed-file `UNLINK` lifetimes, bounded one-block
 `MKDIR`, and bounded `RMDIR` of the exact canonical empty child produced by
 MKDIR. RMDIR releases the inode and directory block, decrements parent links
 and `used_dirs`, and revokes the unchanged freed child block in an exact
-`6/0/1` through `8/0/1` transaction. Depth-positive truncation, public indexed
-HTree root-depth growth, and indexed `LINK`/`MKDIR` remain outside those
-envelopes. An internal harness carries the first root-depth transition through
-the operation-owned sealed plan and exact home certificate; a private callback
-also emits and checkpoints the exact live result without advertising a public
-capability. Ordinary staged CREATE can mutate authenticated slack after a fresh
-mount of the resulting singleton depth-one tree.
+`6/0/1` through `8/0/1` transaction. Depth-positive truncation and indexed
+`LINK`/`MKDIR` remain outside those envelopes. Public regular CREATE carries
+the first HTree root-depth transition through the operation-owned sealed plan,
+exact home certificate, emission, and checkpoint. Ordinary staged CREATE can
+then mutate authenticated slack after a fresh mount of the resulting singleton
+depth-one tree. Root-growth crash/replay qualification remains pending.
 Bounded hard `LINK` adds one typed dirent, increments target `nlink`
 and ctime, and updates parent mtime/ctime in an exact deduplicated `2/0/0` or
 `3/0/0` transaction. Five focused LINK qualifications cover same- and
 cross-parent success, W7 precommit rollback, W17 committed replay, zero-write
 refusals, external filesystem checks, and a write-free byte-stable remount. The
-next directory ratchet is recovery and public admission for the probed HTree
-root-growth plan; stable singleton depth-one CREATE is qualified, while indexed
-`LINK` and `MKDIR` remain separate gated slices.
+next directory ratchet is recovery for the public HTree root-growth plan;
+stable singleton depth-one CREATE is qualified, while indexed `LINK` and
+`MKDIR` remain separate gated slices.
 HTree depth grows independently when an operation or a pinned corpus requires
 it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate
