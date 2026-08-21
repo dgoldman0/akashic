@@ -69372,6 +69372,225 @@ def test_staged_vfs_link_into_singleton_depth_one_indexed_parent(
     )
 
 
+def test_staged_vfs_unlink_empty_direct_final_from_singleton_depth_one_indexed_parent(
+    staged_public_indexed_root_growth_live_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A public depth-one UNLINK changes only its six sealed homes."""
+    case = staged_public_indexed_root_growth_live_fixture
+    path = case["image"]
+    block_size = case["block_size"]
+    parent_number = case["parent_number"]
+    target_number = case["child_number"]
+    root_home = case["root_home"]
+    node_home = case["node_candidate"]
+    selected_leaf_home = case["selected_leaf_home"]
+    sibling_leaf_home = case["leaf_candidate"]
+    map_node_home = case["map_node_home"]
+    assert isinstance(path, Path)
+    assert isinstance(block_size, int)
+    assert isinstance(parent_number, int)
+    assert isinstance(target_number, int)
+    assert isinstance(root_home, int)
+    assert isinstance(node_home, int)
+    assert isinstance(selected_leaf_home, int)
+    assert isinstance(sibling_leaf_home, int)
+    assert isinstance(map_node_home, int)
+    assert (
+        block_size,
+        parent_number,
+        target_number,
+        root_home,
+        node_home,
+        selected_leaf_home,
+        sibling_leaf_home,
+        map_node_home,
+    ) == (1024, 27, 33, 1355, 1364, 1357, 1497, 1365)
+
+    super_before, target_before, target_offset = _ext4_inode_record(
+        path, target_number
+    )
+    _, parent_before, _ = _ext4_inode_record(path, parent_number)
+    target_home, target_block_offset = divmod(target_offset, block_size)
+    expected_home_order = (target_home, 281, selected_leaf_home, 2, 267, 1)
+    assert (target_home, target_block_offset) == (283, 0)
+    assert expected_home_order == (283, 281, 1357, 2, 267, 1)
+    assert (
+        struct.unpack_from("<H", target_before, 0x00)[0],
+        struct.unpack_from("<I", target_before, 0x04)[0],
+        struct.unpack_from("<H", target_before, 0x1A)[0],
+        struct.unpack_from("<I", target_before, 0x1C)[0],
+    ) == (0x81B6, 0, 1, 0)
+    assert (
+        struct.unpack_from("<I", parent_before, 0x04)[0],
+        struct.unpack_from("<H", parent_before, 0x1A)[0],
+        struct.unpack_from("<I", parent_before, 0x1C)[0],
+    ) == (129024, 2, 254)
+
+    free_blocks_before = struct.unpack_from("<I", super_before, 0x0C)[0] | (
+        struct.unpack_from("<I", super_before, 0x158)[0] << 32
+    )
+    free_inodes_before = struct.unpack_from("<I", super_before, 0x10)[0]
+    group_counts_before = _ext4_group_counts(path, 0)
+    original_homes = {
+        home: _read_ext4_home(path, home, block_size=block_size)
+        for home in expected_home_order
+    }
+    immutable_before = {
+        home: _read_ext4_home(path, home, block_size=block_size)
+        for home in (
+            root_home,
+            node_home,
+            map_node_home,
+            sibling_leaf_home,
+        )
+    }
+    selected_before = original_homes[selected_leaf_home]
+    parent_generation = struct.unpack_from("<I", parent_before, 0x64)[0]
+    assert any(
+        inode == target_number and name == b"new.txt"
+        for _, inode, _, _, name in _checked_linear_directory_entries(
+            super_before,
+            parent_number,
+            parent_generation,
+            selected_before,
+        )
+    )
+
+    activation_trace = _jbd2_writer_activation_trace(path)
+    backing = tmp_path / "indexed-unlink-depth-one-direct-final.img"
+    output, trace, _ = run_recovery_forth(
+        path,
+        backing,
+        [
+            *_staged_final_unlink_attempt_forth(
+                "_IUD",
+                epoch_ms=_STAGED_APPEND_EPOCH_MS + 2_000,
+                open_target=False,
+                target_path="/fixture/indexed/new.txt",
+                parent_path="/fixture/indexed",
+                meta_capacity=6,
+            ),
+            *_forth_accumulated_conjunction(
+                "_IUD-OK",
+                [
+                    "_IUD-MOUNT-IOR 0=",
+                    "_IUD-CLOCK-IOR 0=",
+                    "_IUD-PROFILE-SIZE-IOR 0=",
+                    "_IUD-PROFILE-BIND-IOR 0=",
+                    "_IUD-PROFILE-USED _IUD-PROFILE-SIZE =",
+                    "_IUD-RESOLVE-IOR 0=",
+                    "_IUD-PARENT-IOR 0=",
+                    f"_IUD-OLD-BID {target_number} =",
+                    f"_IUD-PARENT-VN VN.BID @ {parent_number} =",
+                    "_IUD-BEFORE-IOR 0=",
+                    "_IUD-UNLINK-IOR 0=",
+                    "_IUD-UNLINK-LAST-IOR 0=",
+                    "_IUD-CLOCK-CALLS @ 1 =",
+                    "_IUD-ADD-HOMES 6 =",
+                    "_IUD-AFTER 0=",
+                    "_IUD-AFTER-IOR VFS-IOR-REASON VFS-R-NOENT =",
+                    "_IUD-AFTER-STAT-IOR 0=",
+                    "_IUD-BFREE-AFTER _IUD-BFREE-BEFORE =",
+                    "_IUD-FFREE-AFTER _IUD-FFREE-BEFORE 1+ =",
+                    "_IUD-AFTER-ICOUNT _IUD-OLD-ICOUNT 1- =",
+                    "_IUD-AFTER-VCOUNT _IUD-OLD-VCOUNT 1- =",
+                ],
+            ),
+            (
+                '_IUD-OK @ IF ." EXT4-INDEXED-UNLINK-DEPTH-ONE" '
+                'ELSE ." EXT4-INDEXED-UNLINK-DEPTH-ONE-FAIL " '
+                "_IUD-OK-FIRST-FAILURE @ . THEN"
+            ),
+            "0 _IUD-V VFS-UNMOUNT CONSTANT _IUD-UNMOUNT-IOR",
+            (
+                "_IUD-UNMOUNT-IOR 0= "
+                "_IUD-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_IUD-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-INDEXED-UNLINK-DEPTH-ONE-UNMOUNTED" THEN'
+            ),
+        ],
+        capture_media=backing,
+        # The indexed cold/live rebind authenticates all 124 leaves.
+        max_steps=2_400_000_000,
+    )
+    _assert_emitted(output, "EXT4-INDEXED-UNLINK-DEPTH-ONE")
+    _assert_emitted(output, "EXT4-INDEXED-UNLINK-DEPTH-ONE-UNMOUNTED")
+    assert trace[: len(activation_trace)] == activation_trace
+
+    home_events = tuple(
+        ("write", home * (block_size // 512), block_size // 512)
+        for home in expected_home_order
+    )
+    super_event = home_events[-1]
+    assert tuple(event for event in trace if event in set(home_events)) == (
+        super_event,
+        *home_events[:-1],
+        super_event,
+        super_event,
+    )
+    single_home_ordinals = tuple(
+        _write_ordinals_for_ext4_home(trace, home, block_size=block_size)
+        for home in expected_home_order[:-1]
+    )
+    assert all(len(ordinals) == 1 for ordinals in single_home_ordinals)
+    super_ordinals = _write_ordinals_for_ext4_home(
+        trace, expected_home_order[-1], block_size=block_size
+    )
+    assert len(super_ordinals) == 3
+    checkpoint_ordinals = tuple(
+        ordinals[0] for ordinals in single_home_ordinals
+    ) + (super_ordinals[1],)
+    assert checkpoint_ordinals == tuple(
+        range(checkpoint_ordinals[0], checkpoint_ordinals[0] + 6)
+    )
+
+    assert all(
+        _read_ext4_home(backing, home, block_size=block_size)
+        != original_homes[home]
+        for home in expected_home_order
+    )
+    assert all(
+        _read_ext4_home(backing, home, block_size=block_size) == original
+        for home, original in immutable_before.items()
+    )
+
+    final_super, final_target, _ = _ext4_inode_record(
+        backing, target_number
+    )
+    assert final_target == bytes(len(target_before))
+    assert (
+        struct.unpack_from("<I", final_super, 0x0C)[0]
+        | (struct.unpack_from("<I", final_super, 0x158)[0] << 32)
+    ) == free_blocks_before
+    assert struct.unpack_from("<I", final_super, 0x10)[0] == (
+        free_inodes_before + 1
+    )
+    assert _ext4_inode_allocation_state(backing, (target_number,)) == {
+        target_number: False
+    }
+    assert _ext4_group_counts(backing, 0) == {
+        "free_blocks": group_counts_before["free_blocks"],
+        "free_inodes": group_counts_before["free_inodes"] + 1,
+        "used_dirs": group_counts_before["used_dirs"],
+        "itable_unused": group_counts_before["itable_unused"],
+    }
+
+    selected_after = _read_ext4_home(
+        backing, selected_leaf_home, block_size=block_size
+    )
+    assert selected_after != selected_before
+    assert all(
+        inode != target_number or name != b"new.txt"
+        for _, inode, _, _, name in _checked_linear_directory_entries(
+            final_super,
+            parent_number,
+            parent_generation,
+            selected_after,
+        )
+    )
+
+
 @pytest.fixture(scope="session")
 def staged_public_create_fixture(
     extent_writer_activation_fixture: dict[str, object],
@@ -72139,7 +72358,7 @@ def test_staged_vfs_rmdir_descriptor_tear_retains_directory(
                         [
                             "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                             (
-                                "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
@@ -72147,7 +72366,7 @@ def test_staged_vfs_rmdir_descriptor_tear_retains_directory(
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                                "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
@@ -73735,11 +73954,11 @@ def test_staged_vfs_empty_final_unlink_descriptor_tear_retains_name(
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                                "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
@@ -73967,11 +74186,11 @@ def test_staged_vfs_empty_final_unlink_directory_tear_replays_release(
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                                "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
@@ -77884,11 +78103,11 @@ def staged_public_unlink_fixture(
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
@@ -77956,11 +78175,11 @@ def staged_public_unlink_fixture(
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
@@ -78122,11 +78341,13 @@ def _staged_final_unlink_attempt_forth(
     epoch_ms: int,
     open_target: bool,
     target_path: str = "/fixture/sparse.bin",
+    parent_path: str = "/fixture",
     meta_capacity: int = 6,
     revoke_capacity: int = 0,
 ) -> tuple[str, ...]:
     """Build one regular-file final-link attempt with its prestate captured."""
     assert target_path.startswith("/") and '"' not in target_path
+    assert parent_path.startswith("/") and '"' not in parent_path
     assert meta_capacity >= 0
     assert revoke_capacity >= 0
     lines = [
@@ -78158,11 +78379,12 @@ def _staged_final_unlink_attempt_forth(
             f"CONSTANT {prefix}-RESOLVE-IOR CONSTANT {prefix}-D"
         ),
         (
-            f'S" /fixture" {prefix}-V VFS-RESOLVE? '
+            f'S" {parent_path}" {prefix}-V VFS-RESOLVE? '
             f"CONSTANT {prefix}-PARENT-IOR CONSTANT {prefix}-PARENT"
         ),
         f"{prefix}-D D.VNODE @ CONSTANT {prefix}-VN",
         f"{prefix}-PARENT D.VNODE @ CONSTANT {prefix}-PARENT-VN",
+        f"{prefix}-VN VN.BID @ CONSTANT {prefix}-OLD-BID",
         f"{prefix}-VN VN.NLINK @ CONSTANT {prefix}-OLD-NLINK",
         f"{prefix}-VN VN.SIZE-LO @ CONSTANT {prefix}-OLD-SIZE",
         f"{prefix}-VN VN.BLOCKS @ CONSTANT {prefix}-OLD-BLOCKS",
@@ -78994,11 +79216,11 @@ def test_staged_vfs_unlink_final_add_deduplicates_shared_inode_home(
                     "_UF4-V V.FLAGS @ VFS-F-RO AND 0=",
                     "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                     (
-                        "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                        "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
                         "_EXT4-BYTES-ZERO?"
                     ),
                     (
-                        "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                        "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                         "_EXT4-BYTES-ZERO?"
                     ),
                     (
@@ -79831,11 +80053,11 @@ def test_staged_vfs_unlink_nonempty_final_add_descriptor_tear_rolls_back(
                         "_FAD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                         "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
@@ -80105,11 +80327,11 @@ def test_staged_vfs_unlink_nonempty_final_add_home_tear_replays_and_drains(
                         "_FAH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                         "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
@@ -80429,11 +80651,11 @@ def test_staged_vfs_unlink_last_close_descriptor_tear_recovers_orphan(
                         "_FCD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                         "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
@@ -80763,11 +80985,11 @@ def test_staged_vfs_unlink_last_close_inode_home_tear_replays_cleanup(
                         "_FCH-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
                         "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
@@ -81054,11 +81276,11 @@ def test_staged_vfs_unlink_refuses_missing_clock_and_undersized_writer(
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                            "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
@@ -81213,11 +81435,11 @@ def test_staged_vfs_unlink_descriptor_tear_retains_both_names(
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                                "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
@@ -81450,11 +81672,11 @@ def test_staged_vfs_unlink_directory_home_tear_replays_both_homes(
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XU-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
+                                "_XU-SHARED-DIR-SNAPSHOT _EXT4-MAX-BLOCK "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
-                                "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                                "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                                 "_EXT4-BYTES-ZERO?"
                             ),
                             (
@@ -84407,12 +84629,12 @@ def staged_public_rename_fixture(
                         "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-DIR-SNAPSHOT "
+                            "_XU-SHARED-DIR-SNAPSHOT "
                             "_EXT4-STAGED-WRITE-BLOCK-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
@@ -84868,12 +85090,12 @@ def test_staged_vfs_rename_compacts_fragmented_one_block_directory(
                         "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-DIR-SNAPSHOT "
+                            "_XU-SHARED-DIR-SNAPSHOT "
                             "_EXT4-STAGED-WRITE-BLOCK-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
@@ -85328,7 +85550,7 @@ def test_staged_vfs_rename_nlink_one_sparse_file_after_unused_dirent(
                         "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-DIR-SNAPSHOT "
+                            "_XU-SHARED-DIR-SNAPSHOT "
                             "_EXT4-STAGED-WRITE-BLOCK-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
@@ -85338,7 +85560,7 @@ def test_staged_vfs_rename_nlink_one_sparse_file_after_unused_dirent(
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
-                            "_XU-PARENT-SNAPSHOT _EXT4-MAX-INODE "
+                            "_XU-SHARED-PARENT-SNAPSHOT _EXT4-MAX-INODE "
                             "_EXT4-BYTES-ZERO?"
                         ),
                         (
@@ -86016,7 +86238,7 @@ def test_staged_vfs_rename_refuses_bounded_edges_without_media_writes(
                         "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-DIR-SNAPSHOT "
+                            "_XU-SHARED-DIR-SNAPSHOT "
                             "_EXT4-STAGED-WRITE-BLOCK-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
@@ -86225,7 +86447,7 @@ def test_staged_vfs_rename_refuses_aggregate_compaction_nospace_without_writes(
                         "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-DIR-SNAPSHOT "
+                            "_XU-SHARED-DIR-SNAPSHOT "
                             "_EXT4-STAGED-WRITE-BLOCK-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
@@ -86607,7 +86829,7 @@ def staged_cross_parent_rename_fixture(
                         ),
                         "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-DIR-SNAPSHOT "
+                            "_XU-SHARED-DIR-SNAPSHOT "
                             "_EXT4-STAGED-WRITE-BLOCK-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
@@ -87002,7 +87224,7 @@ def test_staged_vfs_rename_cross_parent_refuses_credit_and_existing_victim(
                         "_XR-NEW-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         "_XU-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
                         (
-                            "_XU-DIR-SNAPSHOT "
+                            "_XU-SHARED-DIR-SNAPSHOT "
                             "_EXT4-STAGED-WRITE-BLOCK-SIZE "
                             "_EXT4-BYTES-ZERO?"
                         ),
@@ -90099,9 +90321,7 @@ def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
     )
     xu_positions = tuple(xu_remove.index(name) for name in xu_lifecycle)
     assert xu_positions == tuple(sorted(xu_positions))
-    assert xu_plan.index("_XC-P-BIND-SHAPE") < xu_plan.index(
-        "_EXT4-STAGED-WRITE-FS-QUALIFY"
-    )
+    assert "_XC-P-BIND-SHAPE" not in xu_plan
     assert xu_remove.count("_XC-HP-BEGIN-TX") == 2
     assert xu_remove.count("_EXT4-JTX-STAGE-UNLINK-CLOSED") == 2
     assert "_XC-HP-CREDITS@" in xu_caps
@@ -90188,6 +90408,237 @@ def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
         assert scrub_word in word_body(cleanup_word)
     assert xu_remove.rstrip().endswith("0 _XU-V @ V.LAST-IOR ! _XU-SCRUB\n    0")
     assert xr_remove.rstrip().endswith("0 _XU-V @ V.LAST-IOR ! _XR-SCRUB\n    0")
+
+
+def test_ext4_indexed_unlink_reuses_authenticated_selected_leaf_plan(
+) -> None:
+    """Pin indexed UNLINK to its sealed selected-leaf splice and six homes."""
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            facade,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    for removed in ("_XU-DIR-SNAPSHOT", "_XU-PARENT-SNAPSHOT"):
+        assert removed not in facade
+    assert word_body("_XU-SHARED-DIR-SNAPSHOT").rstrip().endswith(
+        "_XU-SHARED-PLAN _XC-P.DIR-SNAPSHOT +"
+    )
+    assert word_body("_XU-SHARED-PARENT-SNAPSHOT").rstrip().endswith(
+        "_XU-SHARED-PLAN _XC-P.PARENT-SNAPSHOT +"
+    )
+
+    shape = word_body("_XC-P-SHAPE?")
+    parent_stage = word_body("_XU-STAGE-CURRENT-PARENT")
+    remove = word_body("_XU-REMOVE-COMMON")
+    rename = word_body("_XR-RENAME-COMMON")
+    assert (
+        "DUP _XC-P.OP + @ DUP _XC-PO-INSERT =\n"
+        "        SWAP _XC-PO-UNLINK = OR 0= IF FALSE EXIT THEN"
+    ) in shape
+    assert (
+        "_XU-SHARED-PLAN _XC-P.OP + @ _XC-PO-UNLINK <> IF"
+    ) in parent_stage
+    assert "_EXT4-EXTENTS-FL _EXT4-INDEX-FL OR <> IF" in parent_stage
+    assert "OVER _EXT4-I.BLOCK + 6 + W@ DUP 1 U> IF" in parent_stage
+    assert (
+        "_XU-SHARED-PLAN _XU-INDEXED @ _XC-P-BIND-SHAPE"
+    ) in parent_stage
+    assert "_XU-FINAL" not in parent_stage
+    assert "_XU-ORPHAN" not in parent_stage
+    assert (
+        "_XU-CTX @ _XU-DIRECTORY @ IF _XC-PO-RMDIR ELSE\n"
+        "        _XC-PO-UNLINK\n"
+        "    THEN _XC-P-BEGIN"
+    ) in remove
+    assert "_XU-CTX @ _XC-PO-RENAME _XC-P-BEGIN" in rename
+
+    active_table = word_body("_XU-AUTH-INDEX-ACTIVE-TABLE")
+    assert "_EXT4-DD-REQUIRE-DEPTH0 EXIT" in active_table
+    depth_one_order = (
+        "_EXT4-DD-REQUIRE-MUTABLE-HASH",
+        "_EXT4-DD.DX-COUNT + @ 1 <>",
+        "_EXT4-DD-LOAD-LOGICAL",
+        "_EXT4-VALIDATE-DX-NODE",
+        "_XC-P.NODE-SNAPSHOT",
+        "_EXT4-DD-REQUIRE-ACTIVE-HASHES",
+    )
+    depth_one_positions = tuple(
+        active_table.index(name) for name in depth_one_order
+    )
+    assert depth_one_positions == tuple(sorted(depth_one_positions))
+
+    bind_leaf = word_body("_XU-INDEX-BIND-SELECTED-LEAF")
+    leaf_scan = word_body("_XU-INDEXED-LEAF-SCAN")
+    indexed_auth = word_body("_XU-AUTH-INDEXED-PARENT")
+    complete_scan_order = (
+        "_EXT4-DD-AUTH-INODE",
+        "_EXT4-DD-AUTH-HTREE-ROOT",
+        "_XU-AUTH-INDEX-ACTIVE-TABLE",
+        "_XU-REQUIRE-HASH-AUTHORITY",
+        "_XU-BIND-HASH-AUTHORITY",
+        "_EXT4-DD-SELECT-ROUTE",
+        "_EXT4-DD.ACTIVE-COUNT + @ U<",
+        "_EXT4-DD-SET-INTERVAL",
+        "_EXT4-DD-LOAD-LOGICAL",
+        "_EXT4-VALIDATE-DIR-BLOCK",
+        "_XU-INDEXED-LEAF-SCAN",
+        "_XU-DIR-FOUND @ 0= IF",
+    )
+    complete_scan_positions = tuple(
+        indexed_auth.index(name) for name in complete_scan_order
+    )
+    assert complete_scan_positions == tuple(sorted(complete_scan_positions))
+    assert "_XU-FINAL @ IF" in indexed_auth
+    assert "_XU-TARGET-REFS @ 1 <>" in indexed_auth
+    assert "_XU-TARGET-REFS @ 2 U<" in indexed_auth
+    assert "_XU-ORPHAN" not in indexed_auth
+    for baseline_field in (
+        "_XC-P.INDEX-BASE-ROOT-HOME",
+        "_XC-P.INDEX-BASE-DEPTH",
+        "_XC-P.INDEX-BASE-ROUTE-NODE-HOME",
+        "_XC-P.INDEX-BASE-ROUTE",
+        "_XC-P.INDEX-BASE-ROUTE-LOGICAL",
+        "_XC-P.INDEX-BASE-HASH",
+        "_XC-P.INDEX-BASE-MINOR",
+        "_XC-P.INDEX-BASE-PARENT-GROUP",
+        "_XC-P.INDEX-BASE-PARENT-HOME",
+        "_XC-P.INDEX-BASE-PARENT-OFF",
+        "_XC-P.ROOT-SNAPSHOT",
+    ):
+        assert baseline_field in indexed_auth
+    for selected_field in (
+        "_XC-P.INDEX-BASE-ENTRY",
+        "_XC-P.INDEX-BASE-LOGICAL",
+        "_XC-P.INDEX-BASE-HOME",
+        "_XC-P.DIR-SNAPSHOT",
+    ):
+        assert selected_field in bind_leaf
+
+    predecessor_refusal = leaf_scan.index(
+        "_XU-PREV-OFF @ 0< _XU-PREV-INODE @ 0= OR IF"
+    )
+    predecessor_capture = leaf_scan.index(
+        "_XU-PREV-OFF @ _XU-TARGET-PREV-OFF !", predecessor_refusal
+    )
+    selected_bind = leaf_scan.index(
+        "_XU-SHARED-PLAN _XU-INDEX-BIND-SELECTED-LEAF",
+        predecessor_capture,
+    )
+    assert predecessor_refusal < predecessor_capture < selected_bind
+
+    capture = word_body("_XU-CAPTURE-PARENT-DIRECTORY")
+    parent_auth = word_body("_XU-AUTH-PARENT-DIRECTORY")
+    stage_directory = word_body("_XU-STAGE-DIRECTORY")
+    assert capture.index("_XU-AUTH-INDEXED-PARENT") < capture.index(
+        "_EXT4-VALIDATE-MUTATION-RANGE-TARGETS EXIT"
+    )
+    parent_auth_order = (
+        "_XU-CAPTURE-PARENT-DIRECTORY",
+        "_XU-REQUIRE-DIRECTORY-MAP-AUDIT",
+        "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER",
+        "_XU-CAPTURE-PARENT-DIRECTORY",
+    )
+    parent_auth_positions: list[int] = []
+    start = 0
+    for name in parent_auth_order:
+        position = parent_auth.index(name, start)
+        parent_auth_positions.append(position)
+        start = position + len(name)
+    assert parent_auth_positions == sorted(parent_auth_positions)
+    stage_order = (
+        "_XU-CAPTURE-PARENT-DIRECTORY",
+        "_EXT4-READ-BLOCK",
+        "_EXT4-BYTES=?",
+        "_EXT4-JTX-META-ACQUIRE",
+        "_EXT4-BYTES=?",
+        "_XU-DIR-APPLY",
+        "_EXT4-JTX-META-REPLACE",
+    )
+    stage_positions: list[int] = []
+    start = 0
+    for name in stage_order:
+        position = stage_directory.index(name, start)
+        stage_positions.append(position)
+        start = position + len(name)
+    assert stage_positions == sorted(stage_positions)
+
+    apply = word_body("_XU-DIR-APPLY")
+    adjacency = apply.index(
+        "_XU-TARGET-PREV-OFF @ _XU-TARGET-PREV-REC @ +"
+    )
+    predecessor_check = apply.index(
+        "L@ _XU-TARGET-PREV-INODE @ <>", adjacency
+    )
+    target_check = apply.index("L@ _XU-INO @ <>", predecessor_check)
+    merged_length = apply.index(
+        "_XU-TARGET-PREV-REC @ _XU-TARGET-DIR-REC @ +",
+        target_check,
+    )
+    merged_write = apply.index("4 + W!", merged_length)
+    target_zero = apply.index("_XU-TARGET-DIR-REC @ 0 FILL", merged_write)
+    restamp = apply.index("_EXT4-RESTAMP-DIR-BLOCK", target_zero)
+    assert (
+        adjacency
+        < predecessor_check
+        < target_check
+        < merged_length
+        < merged_write
+        < target_zero
+        < restamp
+    )
+
+    expected_roles = word_body("_XU-HP-EXPECTED-ROLES")
+    plan_homes = word_body("_XU-HP-PLAN-HOMES")
+    plan = word_body("_XU-PLAN")
+    stage = word_body("_EXT4-JTX-STAGE-UNLINK-CLOSED")
+    assert "_XU-ORPHAN @ IF 5 EXIT THEN" in expected_roles
+    assert "_XU-FINAL @ IF 6 ELSE 3 THEN" in expected_roles
+    assert tuple(re.findall(r"_XC-HR-[A-Z0-9-]+", plan_homes)) == (
+        "_XC-HR-INODE",
+        "_XC-HR-PARENT-INODE",
+        "_XC-HR-PARENT-DIRECTORY",
+        "_XC-HR-RELEASE-BLOCK-GDT",
+        "_XC-HR-RELEASE-BLOCK-BITMAP",
+        "_XC-HR-PRIMARY-SUPER",
+        "_XC-HR-RELEASE-DIRECTORY",
+        "_XC-HR-INODE-GDT",
+        "_XC-HR-INODE-BITMAP",
+        "_XC-HR-ORPHAN",
+        "_XC-HR-PRIMARY-SUPER",
+        "_XC-HR-INODE-GDT",
+        "_XC-HR-INODE-BITMAP",
+        "_XC-HR-PRIMARY-SUPER",
+    )
+    for immutable_role in (
+        "_XC-HR-INDEX-ROOT",
+        "_XC-HR-INDEX-MAP",
+        "_XC-HR-INDEX-NEW-NODE",
+    ):
+        assert immutable_role not in plan_homes
+    assert plan.index("_XU-AUTH-PARENT-DIRECTORY") < plan.index(
+        "_XU-AUTH-FINAL-RELEASE"
+    )
+    sealed_stage_order = (
+        "_XC-P-REQUIRE-SEALED",
+        "_XU-PLAN",
+        "_XC-HP-REQUIRE-CREDITS",
+        "_XU-STAGE-TARGET-INODE",
+        "_XU-STAGE-PARENT-INODE",
+        "_XU-STAGE-DIRECTORY",
+        "_XU-STAGE-ORPHAN-ADD",
+        "_XU-STAGE-FINAL-ACCOUNTING",
+        "_XC-HP-REQUIRE-STAGED",
+    )
+    sealed_stage_positions = tuple(
+        stage.index(name) for name in sealed_stage_order
+    )
+    assert sealed_stage_positions == tuple(sorted(sealed_stage_positions))
 
 
 def test_ext4_indexed_link_and_mkdir_reuse_only_authenticated_leaf_slack(

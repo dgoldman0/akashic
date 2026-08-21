@@ -239,6 +239,11 @@ existing indexed selected-leaf/root-growth replay evidence and the established
 operation-specific linear LINK/MKDIR recovery matrices remain authoritative.
 Refactoring must not silently broaden either operation to leaf splitting or
 growth, broader map shapes, or another previously gated filesystem behavior.
+Regular-file UNLINK has since reused the same authenticated HTree authority for
+depth-zero and singleton depth-one parents while preserving all existing
+lifetimes and home roles. That slice has one representative success and a
+compositional recovery argument; it does not close indexed deletion or admit
+indexed RMDIR/RENAME.
 
 The objective is to establish one authoritative implementation for each of
 these recurring mechanisms:
@@ -631,19 +636,18 @@ existing indexed CREATE selected-leaf and root-growth recovery/stable-remount
 evidence and the operation-specific linear LINK/MKDIR crash matrices, this
 draft-closes the namespace-insertion tranche without cloning recovery tests for
 an unchanged home-list protocol. Indexed LINK/MKDIR splitting and growth remain
-gated; the next Stage 6 work is the remaining indexed deletion, truncation,
-metadata, and xattr forms. The focused static-contract, combined-refusal, and
+gated. The focused static-contract, combined-refusal, and
 singleton-depth-one MKDIR gate passed sequentially as three tests in 554.75
 host seconds.
 
-Before indexed deletion changes admission, the existing linear UNLINK, RMDIR,
-and RENAME paths now share the binding-owned sealed namespace plan. This is a
-collector-only checkpoint and adds no filesystem behavior. The record binds
-one of the exact `INSERT`, `UNLINK`, `RMDIR`, or `RENAME` operation tags plus
-the owning ext4 context at begin; seal carries both values with the ordered
-role/kind/home vector, and every dry/live stage requires the same operation and
-context before rebinding the exact vector and reconciling first-seen homes
-against the transaction tables.
+At the following collector-only checkpoint, before indexed deletion changed
+admission, the existing linear UNLINK, RMDIR, and RENAME paths began sharing
+the binding-owned sealed namespace plan without adding filesystem behavior.
+The record binds one of the exact `INSERT`, `UNLINK`, `RMDIR`, or `RENAME`
+operation tags plus the owning ext4 context at begin; seal carries both values
+with the ordered role/kind/home vector, and every dry/live stage requires the
+same operation and context before rebinding the exact vector and reconciling
+first-seen homes against the transaction tables.
 
 The linear XU vectors are exact. Nonfinal UNLINK binds metadata roles
 `INODE=target-home`, `PARENT-INODE=parent-home`, and
@@ -674,11 +678,45 @@ derives the cleanup credit/revoke requirement, and the XU writer's containing
 capacity is the maximum of that requirement and the sealed namespace plan.
 `_XU-META-CAP` and `_XU-REVOKE-CAP` are therefore containing writer
 capacities, not collector outputs. The linear XU/XR media snapshots remain
-facade-private at this collector-only checkpoint. Indexed UNLINK will move
-their cross-phase authority into the plan
-when it consumes that evidence; this migration itself neither admits indexed
-UNLINK/RMDIR/RENAME nor changes any existing transaction, recovery, or
-persistence behavior. XH retains its private collector for future migration.
+facade-private at this historical collector-only checkpoint. The following
+indexed-UNLINK slice moved the parent-inode and selected-directory snapshots
+into the plan when it consumed that evidence; the collector migration itself
+neither admitted indexed UNLINK/RMDIR/RENAME nor changed any existing
+transaction, recovery, or persistence behavior. XH retains its private
+collector for future migration.
+
+Regular-file UNLINK now admits authenticated depth-zero and singleton
+depth-one indexed parents for all three existing lifetimes: nonfinal,
+allocation-free direct final, and orphan-backed closed/open final. The shared
+record owns the parent-inode and selected-directory snapshots for linear XU/XR
+as well as indexed UNLINK; the old private `_XU-PARENT-SNAPSHOT` and
+`_XU-DIR-SNAPSHOT` are gone without changing the 5,496-byte record geometry.
+Only the `UNLINK` operation tag may bind indexed XU shape, so indexed RMDIR and
+RENAME remain gated.
+
+The indexed path authenticates the complete parent map, root, mutable hash
+authority, active depth-zero table or singleton depth-one DX node, and every
+checksummed leaf. It binds the selected leaf, route/hash result, root, optional
+node, and parent locator across cold, dry, and live passes. Target-name
+uniqueness and target-inode reference cardinality are global, a complete map
+audit requires the selected leaf exactly once, and the existing unique-owner
+proof follows. The selected leaf substitutes for the linear parent block under
+the unchanged `PARENT-DIRECTORY` role. The root, optional node, extent map, and
+other leaves are immutable. The target must retain a live predecessor in the
+same leaf, preserving the established predecessor-splice recovery schema and
+leaving first-live-entry removal gated.
+
+Evidence remains deliberately compositional. One representative public
+singleton-depth-one direct-final removal commits the exact six homes
+`[283, 281, 1357, 2, 267, 1]`, frees inode 33 without changing free-block
+accounting, and leaves root 1355, node 1364, external-map block 1365, and the
+other leaf 1497 byte-immutable. The existing indexed topology authority and
+linear UNLINK lifetime/recovery evidence remain applicable because the
+selected-leaf substitution adds no home role or recovery branch. This
+checkpoint claims no new indexed crash, refusal, external-tool, or stable-
+remount evidence and does not close the deletion vertical. The next Stage 6
+work is indexed RMDIR and RENAME; indexed-parent truncation, metadata, and
+xattr forms follow.
 
 ## Verification cadence
 
@@ -769,8 +807,10 @@ operation and context are sealed alongside CREATE/HTree evidence; scalar range
 and bitmap contracts have one checked Akashic implementation with filesystem
 wrappers retaining their policies; the production facade loads an explicit
 acyclic source closure; and the replaced XC and XU collectors are gone. The
-latest recorded cold-source accumulated gate remains the earlier indexed checkpoint; this
-collector-only migration adds no new measurement claim. XH remains future
-collector cleanup. Indexed UNLINK is the next consumer that must move XU's
-private cross-phase snapshots into the shared record before broadening
-directory admission.
+latest recorded cold-source accumulated gate remains the earlier indexed
+checkpoint; this collector-only migration adds no new measurement claim. XH
+remains future collector cleanup. Indexed UNLINK now consumes the shared parent-inode and
+selected-directory snapshots for depth-zero and singleton-depth-one parents,
+with one representative runtime success and compositional prior recovery
+evidence. It does not complete indexed deletion: indexed RMDIR/RENAME are next,
+and indexed-parent truncation, metadata, and xattr forms remain ahead.

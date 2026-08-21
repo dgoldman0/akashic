@@ -22,8 +22,9 @@ an explicit staged-write binding with production-closed durable paths for:
 initialized overwrite, strict append inside an initialized partial EOF block,
 allocation-backed fill of complete in-size holes, allocation-backed growth
 from exact aligned EOF, bounded `CREATE` and `MKDIR`, retained-block and
-one-block-release `TRUNCATE`, nonfinal and empty-final closed-file `UNLINK`,
-canonical empty-directory `RMDIR`, and bounded hard `LINK`. The staged binding
+one-block-release `TRUNCATE`, regular-file `UNLINK` across its nonfinal,
+direct-final, and orphan-backed closed/open lifetimes, canonical empty-directory
+`RMDIR`, and bounded hard `LINK`. The staged binding
 advertises `VFS-CAP-LINK` and installs its callback in ABI slot 17; the ordinary
 binding remains read-only and leaves that slot null. Both descriptors are
 described by the [`akashic-vfs-ext4` contract](drivers/vfs-ext4.md) and remain
@@ -121,15 +122,21 @@ descriptor, and primary-superblock homes. Directory xattrs/default ACLs, lazy
 inode-group initialization, and non-root credential policy still refuse before
 publication. The staged binding also publishes strict same-block shrink
 `TRUNCATE` as exact `2/0/0`, one-block release to zero through the modern-
-orphan cleanup path, both closed-file `UNLINK` lifetimes, bounded one-block
-`MKDIR`, and bounded `RMDIR` of the exact canonical empty child produced by
-MKDIR. MKDIR may insert into a linear parent or authenticated existing slack in
-a depth-zero or singleton depth-one HTree; the indexed form retains its exact
-nine roles, allocates only the child inode/block, and leaves the HTree topology
-and parent map/size/sector accounting immutable. RMDIR releases the inode and directory block, decrements parent links
+orphan cleanup path, all three regular-file `UNLINK` lifetimes, bounded one-
+block `MKDIR`, and bounded `RMDIR` of the exact canonical empty child produced
+by MKDIR. UNLINK admits an authenticated linear parent or a depth-zero or
+singleton depth-one HTree parent. The indexed form substitutes its selected
+leaf for the linear directory home while leaving the root, optional DX node,
+extent map, other leaves, and parent geometry immutable. MKDIR may likewise
+insert into a linear parent or authenticated existing slack in either admitted
+HTree depth; its indexed form retains its exact nine roles, allocates only the
+child inode/block, and leaves the HTree topology and parent map/size/sector
+accounting immutable. RMDIR remains linear-parent-only; it releases the inode
+and directory block, decrements parent links
 and `used_dirs`, and revokes the unchanged freed child block in an exact
 `6/0/1` through `8/0/1` transaction. Depth-positive truncation and indexed
-LINK/MKDIR splitting or growth remain outside those envelopes. Public
+LINK/MKDIR splitting or growth remain outside those envelopes; indexed RMDIR
+and RENAME remain gated. Public
 regular CREATE carries the first HTree root-depth transition through the
 operation-owned sealed plan, exact home certificate, emission, and checkpoint.
 Ordinary staged CREATE can then mutate authenticated slack after a fresh mount
@@ -154,7 +161,13 @@ short credit and an unrelated root owner without writes or flushes.
 Representative committed replay and stable singleton depth-one CREATE are
 qualified. Existing indexed CREATE/root-growth replay plus the linear LINK and
 MKDIR crash matrices close the unchanged namespace-insertion recovery protocol
-compositionally. Indexed LINK/MKDIR splitting and growth remain gated.
+compositionally. Regular-file UNLINK now uses the same authenticated depth-zero
+and singleton depth-one parent authority for all existing lifetimes. Its
+selected-leaf substitution adds no home role or recovery branch, so prior
+linear UNLINK lifetime/recovery evidence composes with the indexed authority;
+only one representative singleton-depth-one direct-final success is newly
+claimed. Indexed LINK/MKDIR splitting and growth plus indexed RMDIR/RENAME
+remain gated.
 HTree depth grows independently when an operation or a pinned corpus requires
 it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate
