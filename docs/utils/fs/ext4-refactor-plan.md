@@ -177,23 +177,30 @@ redirected.
   lines, and +9,952 packed bytes even after collector deletion. The cold source
   build passed at 1,049,876,551 of 1,600,000,000 steps, 20,249,749 steps above
   Stage 4. Stage 5 centralizes authorization; it does not claim a LOC payback.
-- The root-growth probe is the first direct consumer of both checkpoints. It
+- The root-growth probe was the first direct consumer of both checkpoints. It
   extends the record by six cells—one explicit probe admission, one derived
   root-growing shape flag, and the new DX node's home/group/bitmap/GDT tuple—
   and extends the enum-sized home tail by three roles for the node image,
-  allocation bitmap, and descriptor. The current record is therefore 4,272
-  bytes: a 3,712-byte evidence body and a 560-byte, 23-role home tail. It adds
-  no snapshot, topology maximum, ambient home collector, or independent credit
-  counter. A saturated 123-entry root with a full selected leaf plans the new
-  DX node at logical EOF and the split leaf at EOF+1, rebinds both exact
+  allocation bitmap, and descriptor. It added no snapshot, topology maximum,
+  ambient home collector, or independent credit counter. At that checkpoint
+  the record was 4,272 bytes: a 3,712-byte evidence body and a 560-byte,
+  23-role home tail. A saturated 123-entry root with a full selected leaf plans
+  the new DX node at logical EOF and the split leaf at EOF+1, rebinds both exact
   candidates after seal, and composes the two extent-map/allocation edits. The
   external-map same-group probe has 14 semantic roles and 11 first-seen homes.
-  This is deliberately nonpublishing: ordinary CREATE leaves probe admission
-  clear and retains the old early `VFS-E-NOSPC`; the probe dry-stages then
-  aborts before writer activation. Live emission, recovery, stable depth-one
-  mutation, and the broader qualification matrix remain the next feature
-  boundary. The exact source-mode qualification passed with the 13-unit ext4
-  closure loading in 1,073,526,553 of 1,600,000,000 steps across 3,842 packed
+  The original probe was deliberately nonpublishing: ordinary CREATE left
+  probe admission clear and retained the old early `VFS-E-NOSPC`; the probe
+  dry-staged then aborted before writer activation. The later private
+  qualification now also activates, emits, checkpoints, and externally
+  validates the exact 11-home transition. Stage 6 then added two locator cells
+  and one operation-owned DX-node snapshot, making the current record 5,312
+  bytes with a 4,752-byte evidence body. An ordinary staged CREATE on a fresh
+  mount of that produced singleton depth-one tree now authenticates all 124
+  leaves and updates one slack leaf through the unchanged exact six-home
+  transaction. Public root-growth admission and root-growth recovery remain
+  the next feature boundary. The original exact source-mode qualification
+  passed with the 13-unit ext4 closure loading in 1,073,526,553 of
+  1,600,000,000 steps across 3,842 packed
   lines. Its saturated-root journey completed in 1,545,877,690 of
   1,600,000,000 steps while the harness observed zero storage writes and zero
   flushes; it checked the complete seven-entry extent vector, checksum
@@ -417,6 +424,8 @@ The migration inventory comprised `_XC-INDEXED`, `_XC-SHAPE-SET`, every
 `_XC-CONVERT-BASE*` field, `_XC-CONVERT-CANDIDATE-BASELINE`, and the retained
 comparison buffers `_XC-CONVERT-HASH-BASE`, `_XC-DIR-SNAPSHOT`,
 `_XC-ROOT-SNAPSHOT`, `_XC-INDEX-MAP-SNAPSHOT`, and `_XC-PARENT-SNAPSHOT`.
+Stage 6 later added `_XC-NODE-SNAPSHOT` as the immutable route-node authority
+needed by singleton depth-one mutation.
 These were 44 mutable objects at the start of the pilot; `_XC-P.STATE` replaces
 the former `_XC-SHAPE-SET` flag in the record lifecycle. This inventory is a
 migration boundary, not a permanent ABI: a value may instead become
@@ -434,9 +443,11 @@ At the Stage 4 checkpoint the staged binding allocated one facade-defined
 3,664-byte record from its caller-provided VFS arena: 39 cells, a 24-byte
 hash-authority snapshot, three 1,024-byte block snapshots, and one 256-byte
 inode snapshot. Stage 5 appended its original 488-byte home-plan tail. The
-root-growth probe now adds six evidence cells and three enum-derived home roles,
-making the current record 4,272 bytes and the contiguous base-context-plus-
-record reservation 19,840 bytes. Admission does not interpret that record. Its
+root-growth probe added six evidence cells and three enum-derived home roles.
+Singleton depth-one mutation subsequently added two evidence cells and one
+1,024-byte DX-node snapshot, making the current record 5,312 bytes and the
+contiguous base-context-plus-record reservation 20,880 bytes. Admission does
+not interpret that record. Its
 base context owns only the opaque
 `_EXT4-C.XC-PLAN` pointer and `_EXT4-C.XC-PLAN-SPAN`; the common base context
 is 15,568 bytes. The record must be the exact next allocation after that base
@@ -557,6 +568,21 @@ indexed operation cannot be correct without it. At this point qualification
 returns to the full feature-development standard, including boundary, refusal,
 transaction, crash-fence, repair, stable-remount, and external-tool evidence
 appropriate to the new mutation.
+
+The first positive Stage 6 slice is now implemented. Mutation preserves the
+root limit/count as root geometry while binding an active entry table for
+routing. A depth-zero tree continues to route from the root snapshot. A
+depth-one tree is admitted only when the root names exactly one checksummed DX
+node; that node must enumerate every remaining logical directory block exactly
+once, cannot name itself, and is retained in the operation-owned node snapshot
+across cold, dry, and live passes. CREATE may insert into authenticated slack
+in one of those leaves without changing the root, node, extent map, block
+bitmap, directory size, or sector count. A fresh-mount `new2.txt` capstone
+routes through node logical 124/home 1364 to leaf logical 1/home 1357, commits
+the exact six homes, unmounts cleanly, and passes pinned `debugfs` and
+`e2fsck`. Depth-one leaf splitting remains fail-closed. Public root-growth
+admission is the next positive slice; refusal and crash matrices remain the
+vertical-completion gate rather than interrupting this happy-path sequence.
 
 ## Verification cadence
 

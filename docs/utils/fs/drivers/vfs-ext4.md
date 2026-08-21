@@ -99,7 +99,11 @@ under exact `4/0/0` through `6/0/0` credit. Its canonical `5/0/0` homes are
 283, 275, 1299, 1377, and 1364. Neither form allocates storage or creates
 orphan state. Same-parent directories and replacement remain gated.
 Regular-file CREATE also admits existing depth-zero HTree parents when an
-authenticated hash interval already contains insertion slack. A full linear
+authenticated hash interval already contains insertion slack, and it can
+insert into slack below the exact singleton depth-one HTree produced by root
+growth. The latter binds the checksummed route node in the operation record,
+authenticates its complete leaf permutation, and leaves the root, node, extent
+map, allocation metadata, size, and sector count unchanged. A full linear
 parent conversion allocates two globally unowned blocks, hashes every live and
 pending name under bound primary-super authority, builds two packed leaves and
 a checksummed root, and updates the parent's inline extent map and exact
@@ -111,8 +115,9 @@ external leaf named by a singleton resident depth-one root. The HTree root and
 governing extent node must each retain any entry slot the edit needs. Public
 HTree root-depth growth, indexed LINK and MKDIR, inheritance beyond the
 explicit root-owned non-setgid envelope, and broader directory shapes remain
-gated. An internal no-I/O probe can plan and dry-stage the first root-depth
-transition, but it cannot publish that transition. The driver also implements
+gated. The private root-growth harness now qualifies dry staging and a complete
+11-home live transition, but the production callback still leaves public
+admission clear. The driver also implements
 bounded mount-time recovery and
 durable transaction emission for an internal checksum-v3 JBD2 journal. It never
 uses the ambient filesystem volume: reads and all recovery, activation,
@@ -2308,11 +2313,14 @@ DX root and two packed leaves. Regular-file CREATE also admits an existing
 depth-zero HTree whose complete logical map and DX leaf permutation
 authenticate. It inserts into authenticated slack or splits a full selected
 leaf while the root retains an entry slot and the qualified parent map can
-attach one new EOF block. Indexed LINK and MKDIR, public HTree root-depth
-growth, default-ACL inheritance, and non-root credential policy remain typed
-refusals; none is silently approximated.
+attach one new EOF block. A singleton depth-one root may insert into an
+authenticated slack leaf after binding its root entry, DX-node home and
+snapshot, complete node fanout, selected route, and leaf snapshot across cold,
+dry, and live passes. Depth-one leaf splitting, indexed LINK and MKDIR, public
+HTree root-depth growth, default-ACL inheritance, and non-root credential
+policy remain typed refusals; none is silently approximated.
 
-The focused root-growth probe crosses that last edge only after setting an
+The focused root-growth harness crosses that last edge only after setting an
 explicit admission cell in the operation-owned record; ordinary CREATE leaves
 the cell zero and returns the previous `VFS-E-NOSPC` at root-full topology
 detection. The probe freezes the full root, selected leaf, parent inode, and
@@ -2322,8 +2330,10 @@ inline map or 14 for an external map. The same-group external-map fixture
 deduplicates those 14 roles to 11 exact metadata homes. A sealed replan must
 rebind both allocation candidates and every role before it may build the new
 DX node, packed leaf, depth-one root, extent-map edit, and two-block accounting
-afterimages. The probe aborts that transaction before activation, so it is
-architecture evidence rather than a newly advertised filesystem capability.
+afterimages. One test retains the abort-only planner certificate; a second
+private callback activates, emits, checkpoints, unmounts, and passes external
+oracles for all 11 homes. Neither changes the advertised production callback,
+and root-growth crash/replay qualification is still pending.
 
 Indexed admission binds the checksummed live primary hash seed, default hash
 version, and full `s_flags` to the mounted superblock cache. It hashes and
@@ -2844,9 +2854,11 @@ replacement, same-parent directory moves, multi-block or indexed parents, and
 directory growth remain gated for this RENAME slice. Qualified singleton-
 modern-orphan final-link lifetime closure and one-block linear-to-HTree CREATE
 growth are now complete. Existing depth-zero indexed full-leaf CREATE mutation
-is also complete while the root retains an entry slot. Root-depth planning and
-dry staging now have an internal bounded probe; activation, recovery, stable
-depth-one mutation, and indexed `LINK`/`MKDIR` remain later delivery phases.
+is also complete while the root retains an entry slot. Root-depth planning,
+dry staging, and a private live transition are qualified. Ordinary CREATE can
+stably mutate slack in the resulting singleton depth-one tree. Root-growth
+recovery and public admission, followed by indexed `LINK`/`MKDIR`, remain later
+delivery phases.
 
 ### Same-retained-block shrink TRUNCATE
 
@@ -3691,9 +3703,10 @@ The ratchet order is:
    transfer plus `..` rewrite (completed in the current worktree);
 8. retain atomic one-block linear-to-HTree conversion and indexed full-leaf
    mutation under a depth-zero root with entry capacity; use the completed
-   bounded planning/dry-stage probe to qualify HTree root-depth activation,
-   recovery, and stable depth-one mutation, then add indexed `LINK`/`MKDIR`
-   and the remaining deletion, truncation, metadata, and xattr forms; and
+   bounded planner and private live path to qualify HTree root-growth recovery
+   and public admission; stable singleton depth-one CREATE is complete, after
+   which add indexed `LINK`/`MKDIR` and the remaining deletion, truncation,
+   metadata, and xattr forms; and
 9. perform the final profile closure audit across every profile-admitted
    operation and recovery state.
 
@@ -3917,8 +3930,9 @@ directory moves remain outside this envelope. Qualified singleton-modern-
 orphan final-link lifetime closure now covers closed and descriptor-retained
 targets, including last-close failure recovery. Depth-zero indexed CREATE now
 splits a full selected leaf while its root retains entry capacity. The bounded
-root-growth planner/dry stager is present but not public; the next directory
-phases are its activation/recovery qualification and indexed `LINK`/`MKDIR`.
+root-growth planner and private live path are present but not public. Stable
+singleton depth-one CREATE is qualified; the next directory phases are
+root-growth recovery/public admission and indexed `LINK`/`MKDIR`.
 Replacement, victims, broader
 concurrent orphan unions, general sparse/gap
 growth, unwritten conversion, growth beyond a

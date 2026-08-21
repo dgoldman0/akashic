@@ -104,11 +104,13 @@ singleton resident depth-one root naming one authenticated external depth-zero
 extent leaf. The EOF extent must coalesce with the newly selected physical
 block or the governing extent node must retain an entry slot; wider map
 shapes and public HTree root-depth growth remain gated. A focused internal
-probe can plan and dry-stage the first depth-one transition through the sealed
-CREATE record and exact role-aware home certificate, but it aborts before
-activation and does not expand the advertised operation profile. Indexed
-admission binds live
-hash policy, validates every leaf and exact interval, rejects duplicates
+harness plans and dry-stages the first depth-one transition through the sealed
+CREATE record and exact role-aware home certificate; its private live path also
+emits and checkpoints the 11-home result without expanding the advertised
+operation profile. Ordinary CREATE can then mutate an authenticated slack leaf
+on a fresh mount of that singleton depth-one tree without changing its root,
+DX node, map, allocation state, size, or sector count. Indexed admission binds
+live hash policy, validates every leaf and exact interval, rejects duplicates
 globally, proves the selected leaf through a complete map audit,
 and reauthenticates the parent inode location plus exact root/leaf/insertion
 snapshots across cold, dry, and live passes. A committed selected-leaf tear
@@ -192,9 +194,10 @@ victims, and replacement remain unsupported. Singleton-modern-orphan final-
 link removal is operation-admitted for both closed and descriptor-retained
 targets. Existing depth-zero HTree CREATE, atomic one-block linear-to-HTree
 growth, and full-leaf splitting under a depth-zero root with entry capacity are
-operation-admitted. Indexed root-depth planning and dry staging now have an
-internal bounded probe; activation, recovery, stable depth-one mutation, and
-indexed LINK/MKDIR remain later delivery phases. Extent-tree
+operation-admitted. Indexed root-depth planning and a private live transition
+are qualified, as is stable singleton depth-one CREATE. Root-growth recovery
+and public admission, then indexed LINK/MKDIR, remain later delivery phases.
+Extent-tree
 depth and indexed-directory HTree depth are
 independent ratchets. Broaden either only when the next operation or a pinned
 realistic corpus demands it; directory growth does not imply speculative
@@ -2482,9 +2485,10 @@ descriptor journey measures 4,549,770 steps.
 directory moves remain gated. Qualified singleton-modern-orphan final-link
 lifetime closure is complete. One-block linear-to-HTree growth is complete;
 full-leaf mutation in an existing depth-zero indexed parent is complete while
-the root retains an entry slot. The root-growth planner/dry stager is internal
-and nonpublishing; activation/recovery and indexed `LINK` and `MKDIR` remain
-later directory-mutation phases.
+the root retains an entry slot. The root-growth planner and private live path
+remain internal, while stable singleton depth-one CREATE is qualified.
+Root-growth recovery/public admission and indexed `LINK`/`MKDIR` remain later
+directory-mutation phases.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
