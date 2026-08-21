@@ -108,8 +108,10 @@ through the sealed CREATE record and exact role-aware home certificate, then
 emit and checkpoint the exact 11-home transition. Ordinary CREATE can then
 mutate an authenticated slack leaf on a fresh mount of that singleton
 depth-one tree without changing its root, DX node, map, allocation state,
-size, or sector count. Root-growth crash/replay qualification remains the next
-completion gate. Indexed admission binds
+size, or sector count. A committed new-DX-node checkpoint tear leaves the
+public committed cache projection intact, replays all 11 homes on a fresh
+mount, and is followed by a write-free byte-stable remount. Indexed admission
+binds
 live hash policy, validates every leaf and exact interval, rejects duplicates
 globally, proves the selected leaf through a complete map audit,
 and reauthenticates the parent inode location plus exact root/leaf/insertion
@@ -195,8 +197,9 @@ link removal is operation-admitted for both closed and descriptor-retained
 targets. Existing depth-zero HTree CREATE, atomic one-block linear-to-HTree
 growth, and full-leaf splitting under a depth-zero root with entry capacity are
 operation-admitted. Public indexed root-depth growth and stable singleton
-depth-one CREATE are qualified. Root-growth recovery, then indexed LINK/MKDIR,
-remain later delivery phases.
+depth-one CREATE are qualified, including representative committed root-growth
+replay and a byte-stable remount. Focused boundary closure, then indexed
+LINK/MKDIR, remain later delivery phases.
 Extent-tree
 depth and indexed-directory HTree depth are
 independent ratchets. Broaden either only when the next operation or a pinned
@@ -2487,8 +2490,9 @@ lifetime closure is complete. One-block linear-to-HTree growth is complete;
 full-leaf mutation in an existing depth-zero indexed parent is complete while
 the root retains an entry slot. Public regular CREATE now completes the exact
 singleton root-growth transition, and stable singleton depth-one CREATE is
-qualified. Root-growth recovery and indexed `LINK`/`MKDIR` remain later
-directory-mutation phases.
+qualified. Representative committed root-growth replay and a write-free stable
+remount are also complete. Focused boundary closure and indexed `LINK`/`MKDIR`
+remain later directory-mutation phases.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

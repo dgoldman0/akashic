@@ -67146,7 +67146,7 @@ def staged_public_indexed_root_growth_live_fixture(
         patches=patches,
         capture_media=backing,
         # The production-like JIT source build qualifies this journey at
-        # 2,010,221,866 retired instructions; retain deterministic margin.
+        # 2,007,158,843 retired instructions; retain deterministic margin.
         max_steps=2_400_000_000,
     )
     _assert_emitted(output, "EXT4-INDEX-ROOT-GROWTH-LIVE")
@@ -67290,6 +67290,460 @@ def test_staged_public_indexed_root_growth_passes_external_oracles(
     ):
         assert fragment in htree.stdout
     _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+
+def test_staged_public_indexed_root_growth_node_tear_replays_all_eleven_homes(
+    staged_public_indexed_root_growth_live_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """A committed new-DX-node tear replays the complete root growth."""
+    case = staged_public_indexed_root_growth_live_fixture
+    path = case["source"]
+    source_patches = case["source_patches"]
+    success_image = case["image"]
+    success_trace = case["trace"]
+    block_size = case["block_size"]
+    expected_homes = case["expected_homes"]
+    expected_meta_homes = case["expected_meta_homes"]
+    node_candidate = case["node_candidate"]
+    leaf_candidate = case["leaf_candidate"]
+    child_number = case["child_number"]
+    parent_number = case["parent_number"]
+    free_blocks_before = case["free_blocks_before"]
+    free_blocks_after = case["free_blocks_after"]
+    free_inodes_before = case["free_inodes_before"]
+    free_inodes_after = case["free_inodes_after"]
+    group_counts_before = case["group_counts_before"]
+    expected_group_counts = case["expected_group_counts"]
+    dirty_super_before = case["dirty_super_before"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(success_image, Path)
+    assert isinstance(success_trace, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(expected_homes, dict)
+    assert isinstance(expected_meta_homes, tuple)
+    assert isinstance(node_candidate, int)
+    assert isinstance(leaf_candidate, int)
+    assert isinstance(child_number, int)
+    assert isinstance(parent_number, int)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_blocks_after, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(free_inodes_after, int)
+    assert isinstance(group_counts_before, dict)
+    assert isinstance(expected_group_counts, dict)
+    assert isinstance(dirty_super_before, bytes)
+    assert block_size == 1024
+    assert (parent_number, child_number, node_candidate, leaf_candidate) == (
+        27,
+        33,
+        1364,
+        1497,
+    )
+    assert tuple(home for home, _, _ in expected_homes.values()) == (
+        expected_meta_homes
+    )
+
+    for home, _, expected in expected_homes.values():
+        assert _read_ext4_home(
+            success_image, home, block_size=block_size
+        ) == expected
+
+    node_home, old_node, expected_node = expected_homes["new_node_home"]
+    assert node_home == node_candidate
+    node_ordinals = _write_ordinals_for_ext4_home(
+        success_trace, node_home, block_size=block_size
+    )
+    assert node_ordinals == (28,)
+    node_ordinal = node_ordinals[0]
+    node_event = _trace_event_index_for_ordinal(
+        success_trace, "write", node_ordinal
+    )
+    assert success_trace[node_event] == (
+        "write",
+        node_home * (block_size // 512),
+        block_size // 512,
+    )
+    sector_zero_differences = tuple(
+        index
+        for index, (old, new) in enumerate(
+            zip(old_node, expected_node, strict=True)
+        )
+        if old != new and 0 <= index < 512
+    )
+    assert len(sector_zero_differences) >= 2
+    tear_absolute = (
+        sector_zero_differences[0] + sector_zero_differences[-1]
+    ) // 2
+    assert any(index < tear_absolute for index in sector_zero_differences)
+    assert any(index >= tear_absolute for index in sector_zero_differences)
+    tear_sector, tear_offset = divmod(tear_absolute, 512)
+    assert tear_sector == 0
+    assert 0 < tear_offset < 512
+    expected_torn_node = (
+        expected_node[:tear_absolute] + old_node[tear_absolute:]
+    )
+    assert expected_torn_node not in {old_node, expected_node}
+
+    seconds, milliseconds = divmod(_STAGED_APPEND_EPOCH_MS, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    faulted = tmp_path / "staged-indexed-root-growth-w28-faulted.img"
+    recovered = tmp_path / "staged-indexed-root-growth-w28-recovered.img"
+    stable = tmp_path / "staged-indexed-root-growth-w28-stable.img"
+    try:
+        output, failed_trace, _ = run_recovery_forth(
+            path,
+            faulted,
+            [
+                *_EXT4_SOURCE_JIT_BEGIN,
+                "VARIABLE _RGT-CLOCK-CALLS",
+                (
+                    ": _RGT-NOW ( context -- epoch-ms ior ) DROP "
+                    "1 _RGT-CLOCK-CALLS +! "
+                    f"{_STAGED_APPEND_EPOCH_MS} 0 ;"
+                ),
+                *_EXT4_SOURCE_JIT_END,
+                "CREATE _RGT-STAT VFS-STATFS-SIZE ALLOT",
+                "T-ARENA CONSTANT _RGT-ARENA",
+                (
+                    "_RGT-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                    "CONSTANT _RGT-MOUNT-IOR CONSTANT _RGT-V"
+                ),
+                "_RGT-V _EXT4-CTX CONSTANT _RGT-CTX",
+                (
+                    "' _RGT-NOW 0 _RGT-V EXT4-BIND-WRITE-CLOCK? "
+                    "CONSTANT _RGT-CLOCK-IOR"
+                ),
+                *_ext4_dedicated_writer_profile_forth(
+                    "_RGT-PROFILE", "_RGT-V", 11, 0, 0
+                ),
+                (
+                    'S" /fixture/indexed" _RGT-V VFS-CD? '
+                    "CONSTANT _RGT-CD-IOR"
+                ),
+                (
+                    "_RGT-V V.CWD @ _RGT-V _VFS-ENSURE-CHILDREN? "
+                    "CONSTANT _RGT-LOAD-IOR"
+                ),
+                "_RGT-V V.CWD @ D.VNODE @ CONSTANT _RGT-PARENT-VN",
+                "_RGT-V V.ICOUNT @ CONSTANT _RGT-ICOUNT-BEFORE",
+                "_RGT-V V.VCOUNT @ CONSTANT _RGT-VCOUNT-BEFORE",
+                (
+                    "_RGT-STAT VFS-STATFS-SIZE _RGT-V VFS-STATFS "
+                    "CONSTANT _RGT-STAT-BEFORE-IOR"
+                ),
+                "_RGT-STAT VSF.BFREE @ CONSTANT _RGT-BFREE-BEFORE",
+                "_RGT-STAT VSF.FFREE @ CONSTANT _RGT-FFREE-BEFORE",
+                "DEPTH CONSTANT _RGT-DEPTH-BEFORE",
+                (
+                    'S" new.txt" _RGT-V VFS-MKFILE? '
+                    "CONSTANT _RGT-CREATE-IOR CONSTANT _RGT-D"
+                ),
+                "DEPTH CONSTANT _RGT-DEPTH-AFTER",
+                "_RGT-V V.LAST-IOR @ CONSTANT _RGT-LAST-IOR",
+                "_RGT-D D.VNODE @ CONSTANT _RGT-VN",
+                (
+                    'S" /fixture/indexed/new.txt" _RGT-V VFS-RESOLVE? '
+                    "CONSTANT _RGT-RESOLVE-IOR CONSTANT _RGT-R"
+                ),
+                (
+                    "_RGT-STAT VFS-STATFS-SIZE _RGT-V VFS-STATFS "
+                    "CONSTANT _RGT-STAT-AFTER-IOR"
+                ),
+                "_RGT-STAT VSF.BFREE @ CONSTANT _RGT-BFREE-AFTER",
+                "_RGT-STAT VSF.FFREE @ CONSTANT _RGT-FFREE-AFTER",
+                "_RGT-CTX _EXT4-C.J.WRITER + @ CONSTANT _RGT-WRITER",
+                _forth_xc_plan_scrubbed("_RGT-PLAN-SCRUBBED", "_RGT-CTX"),
+                *_forth_accumulated_conjunction(
+                    "_RGT-PUBLISHED-OK",
+                    [
+                        "_RGT-MOUNT-IOR 0=",
+                        "_RGT-CLOCK-IOR 0=",
+                        "_RGT-PROFILE-SIZE-IOR 0=",
+                        "_RGT-PROFILE-BIND-IOR 0=",
+                        "_RGT-PROFILE-USED _RGT-PROFILE-SIZE =",
+                        "_RGT-CD-IOR 0=",
+                        "_RGT-LOAD-IOR 0=",
+                        "_RGT-STAT-BEFORE-IOR 0=",
+                        "_RGT-CREATE-IOR 0=",
+                        "_RGT-DEPTH-AFTER _RGT-DEPTH-BEFORE =",
+                        "_RGT-D 0<>",
+                        "_RGT-RESOLVE-IOR 0=",
+                        "_RGT-R _RGT-D =",
+                        "_RGT-VN VN.TYPE @ VFS-T-FILE =",
+                        f"_RGT-VN VN.BID @ {child_number} =",
+                        f"_RGT-VN VN.BDATA @ {child_number} =",
+                        "_RGT-VN VN.GEN @ 1 =",
+                        "_RGT-VN VN.MODE @ 0x81B6 =",
+                        "_RGT-VN VN.SIZE-LO @ 0=",
+                        "_RGT-VN VN.SIZE-HI @ 0=",
+                        "_RGT-VN VN.NLINK @ 1 =",
+                        "_RGT-VN VN.BLOCKS @ 0=",
+                        f"_RGT-VN VN.ATIME @ {seconds} =",
+                        f"_RGT-VN VN.ATIME-NS @ {nanoseconds} =",
+                        "_RGT-PARENT-VN VN.SIZE-LO @ 129024 =",
+                        "_RGT-PARENT-VN VN.SIZE-HI @ 0=",
+                        "_RGT-PARENT-VN VN.BLOCKS @ 254 =",
+                        "_RGT-PARENT-VN VN.NLINK @ 2 =",
+                        f"_RGT-PARENT-VN VN.MTIME @ {seconds} =",
+                        f"_RGT-PARENT-VN VN.MTIME-NS @ {nanoseconds} =",
+                        f"_RGT-PARENT-VN VN.CTIME @ {seconds} =",
+                        f"_RGT-PARENT-VN VN.CTIME-NS @ {nanoseconds} =",
+                        "_RGT-V V.ICOUNT @ _RGT-ICOUNT-BEFORE 1+ =",
+                        "_RGT-V V.VCOUNT @ _RGT-VCOUNT-BEFORE 1+ =",
+                        "_RGT-STAT-AFTER-IOR 0=",
+                        "_RGT-BFREE-AFTER _RGT-BFREE-BEFORE 2 - =",
+                        "_RGT-FFREE-AFTER _RGT-FFREE-BEFORE 1- =",
+                    ],
+                ),
+                (
+                    '_RGT-PUBLISHED-OK @ IF ." '
+                    'EXT4-INDEX-ROOT-GROWTH-W28-PUBLISHED" THEN'
+                ),
+                *_forth_accumulated_conjunction(
+                    "_RGT-AUTHORITY-OK",
+                    [
+                        (
+                            "_RGT-LAST-IOR VFS-IOR-DOMAIN "
+                            "VFS-IOR-D-VOLUME ="
+                        ),
+                        (
+                            "_RGT-LAST-IOR VFS-IOR-REASON "
+                            "VFS-R-IO ="
+                        ),
+                        (
+                            "_RGT-LAST-IOR VFS-IOR-FLAGS "
+                            "VFS-IOR-F-PARTIAL AND 0<>"
+                        ),
+                        "_RGT-CLOCK-CALLS @ 1 =",
+                    ],
+                ),
+                (
+                    '_RGT-AUTHORITY-OK @ IF ." '
+                    'EXT4-INDEX-ROOT-GROWTH-W28-AUTHORITY" THEN'
+                ),
+                *_forth_accumulated_conjunction(
+                    "_RGT-WRITER-OK",
+                    [
+                        "_RGT-WRITER _RGT-PROFILE-BASE =",
+                        (
+                            "_RGT-WRITER _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-FAULTED ="
+                        ),
+                        (
+                            "_RGT-WRITER _EXT4-JWR.PHASE + @ "
+                            "_EXT4-JWP-CHECKPOINT-HOME ="
+                        ),
+                        "_RGT-WRITER _EXT4-JWR-VALID?",
+                        "_RGT-WRITER _EXT4-JWR.META-ACTIVE + @ 11 =",
+                        "_RGT-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                        "_RGT-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                        "_RGT-CTX _EXT4-C.J.HOME-WRITES + @ 3 =",
+                        "_RGT-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                        "_RGT-CTX _EXT4-C.RECOVERY + @ 0<>",
+                        "_RGT-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                        "_RGT-V V.FLAGS @ VFS-F-RO AND 0<>",
+                        "_RGT-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    ],
+                ),
+                (
+                    '_RGT-WRITER-OK @ IF ." '
+                    'EXT4-INDEX-ROOT-GROWTH-W28-WRITER" THEN'
+                ),
+                *_forth_accumulated_conjunction(
+                    "_RGT-SCRUBBED-OK",
+                    [
+                        "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                        "_RGT-PLAN-SCRUBBED 0<>",
+                        (
+                            "_XC-ROOT-CURRENT "
+                            "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XC-DIRECTORY-DESC _EXT4-DD-SIZE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XC-OLD-INODE "
+                            "_EXT4-STAGED-WRITE-INODE-SIZE "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        (
+                            "_XC-CONVERT-PLAN _XC-CONVERT-PLAN-MAX "
+                            "_XC-CONVERT-PLAN-CELLS * CELLS "
+                            "_EXT4-BYTES-ZERO?"
+                        ),
+                        "_XC-INDEX-SPLITTING @ 0=",
+                        "_XC-INDEX-ROOT-GROWING @ 0=",
+                        "_XC-INDEX-NODE-HOME @ 0=",
+                        "_XC-INDEX-NEW-HOME @ 0=",
+                        "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                        "_EXT4-MUTATION-OWNER-INO @ 0=",
+                        "_EXT4-MUTATION-MAP-TARGET @ 0=",
+                        "_EXT4-MUTATION-MAP-ACTIVE @ 0=",
+                        "_EXT4-MUTATION-MAP-HITS @ 0=",
+                        "_EXT4-MUTATION-PROTOCOL-CTX @ 0=",
+                        "_EXT4-MUTATION-PROTOCOL-ACTIVE @ 0=",
+                        "_EXT4-JFO-CERT-SCOPE @ 0=",
+                        "_EXT4-JFO-CERT-VALID @ 0=",
+                        *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                    ],
+                ),
+                (
+                    '_RGT-PUBLISHED-OK @ 0= IF ." '
+                    'EXT4-INDEX-ROOT-GROWTH-W28-PUBLISHED-FIRST-FAIL " '
+                    "_RGT-PUBLISHED-OK-FIRST-FAILURE @ . THEN"
+                ),
+                (
+                    '_RGT-AUTHORITY-OK @ 0= IF ." '
+                    'EXT4-INDEX-ROOT-GROWTH-W28-AUTHORITY-FIRST-FAIL " '
+                    "_RGT-AUTHORITY-OK-FIRST-FAILURE @ . THEN"
+                ),
+                (
+                    '_RGT-WRITER-OK @ 0= IF ." '
+                    'EXT4-INDEX-ROOT-GROWTH-W28-WRITER-FIRST-FAIL " '
+                    "_RGT-WRITER-OK-FIRST-FAILURE @ . THEN"
+                ),
+                (
+                    '_RGT-SCRUBBED-OK @ 0= IF ." '
+                    'EXT4-INDEX-ROOT-GROWTH-W28-SCRUBBED-FIRST-FAIL " '
+                    "_RGT-SCRUBBED-OK-FIRST-FAILURE @ . THEN"
+                ),
+                (
+                    '_RGT-SCRUBBED-OK @ IF ." '
+                    'EXT4-INDEX-ROOT-GROWTH-W28-SCRUBBED" THEN'
+                ),
+            ],
+            patches=source_patches,
+            write_faults_by_ordinal={
+                node_ordinal: {
+                    "stage": "media",
+                    "sector_index": tear_sector,
+                    "byte_index": tear_offset,
+                    "result": STORAGE_RESULT_MEDIA_FAILURE,
+                    "command": STORAGE_CMD_WRITE,
+                }
+            },
+            capture_media=faulted,
+            max_steps=2_400_000_000,
+        )
+        for marker in (
+            "EXT4-INDEX-ROOT-GROWTH-W28-PUBLISHED",
+            "EXT4-INDEX-ROOT-GROWTH-W28-AUTHORITY",
+            "EXT4-INDEX-ROOT-GROWTH-W28-WRITER",
+            "EXT4-INDEX-ROOT-GROWTH-W28-SCRUBBED",
+        ):
+            _assert_emitted(output, marker)
+        assert failed_trace == success_trace[: node_event + 1]
+        assert _read_ext4_home(
+            faulted, node_home, block_size=block_size
+        ) == expected_torn_node
+        for key in ("new_inode_home", "parent_inode_home", "old_leaf_home"):
+            home, _, expected = expected_homes[key]
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == expected
+        for key in (
+            "new_leaf_home",
+            "root_home",
+            "map_node_home",
+            "block_bitmap_home",
+            "gdt_home",
+            "inode_bitmap_home",
+        ):
+            home, original, _ = expected_homes[key]
+            assert _read_ext4_home(
+                faulted, home, block_size=block_size
+            ) == original
+        faulted_super, _, _ = _ext4_inode_record(faulted, 2)
+        assert faulted_super == dirty_super_before
+        assert (
+            struct.unpack_from("<I", faulted_super, 0x0C)[0]
+            | (struct.unpack_from("<I", faulted_super, 0x158)[0] << 32)
+        ) == free_blocks_before
+        assert struct.unpack_from("<I", faulted_super, 0x10)[0] == (
+            free_inodes_before
+        )
+        assert _ext4_block_allocation_state(
+            faulted, (node_candidate, leaf_candidate)
+        ) == {node_candidate: False, leaf_candidate: False}
+        assert _ext4_inode_allocation_state(
+            faulted, (child_number, child_number + 1)
+        ) == {child_number: False, child_number + 1: False}
+        assert _ext4_group_counts(faulted, 0) == group_counts_before
+
+        _, recovery_trace, recovery_sha256 = _staged_create_recovery_view(
+            faulted,
+            recovered,
+            expected_present=True,
+            expected_free_inodes=free_inodes_after,
+            expected_home_writes=11,
+            expected_replayed=True,
+            prefix="_RGT-R",
+            marker="EXT4-INDEX-ROOT-GROWTH-W28-RECOVERED",
+            object_path="/fixture/indexed/new.txt",
+            parent_path="/fixture/indexed",
+            expected_parent_size=129024,
+            expected_parent_blocks=254,
+            expected_free_blocks=free_blocks_after,
+            expected_inode_number=child_number,
+            expected_generation=1,
+        )
+        super_home = expected_homes["super_home"][0]
+        for home, _, expected in expected_homes.values():
+            if home != super_home:
+                assert len(
+                    _write_ordinals_for_ext4_home(
+                        recovery_trace, home, block_size=block_size
+                    )
+                ) == 1
+            assert _read_ext4_home(
+                recovered, home, block_size=block_size
+            ) == expected
+        assert _write_ordinals_for_ext4_home(
+            recovery_trace, super_home, block_size=block_size
+        )
+        assert _ext4_block_allocation_state(
+            recovered, (node_candidate, leaf_candidate)
+        ) == {node_candidate: True, leaf_candidate: True}
+        assert _ext4_inode_allocation_state(
+            recovered, (child_number, child_number + 1)
+        ) == {child_number: True, child_number + 1: False}
+        assert _ext4_group_counts(recovered, 0) == expected_group_counts
+        assert _sha256(recovered) == recovery_sha256
+        _assert_e2fsck_clean(recovered, jbd2_toolchain)
+
+        _, stable_trace, stable_sha256 = _staged_create_recovery_view(
+            recovered,
+            stable,
+            expected_present=True,
+            expected_free_inodes=free_inodes_after,
+            expected_home_writes=0,
+            expected_replayed=False,
+            prefix="_RGT-S",
+            marker="EXT4-INDEX-ROOT-GROWTH-W28-STABLE",
+            object_path="/fixture/indexed/new.txt",
+            parent_path="/fixture/indexed",
+            expected_parent_size=129024,
+            expected_parent_blocks=254,
+            expected_free_blocks=free_blocks_after,
+            expected_inode_number=child_number,
+            expected_generation=1,
+        )
+        assert stable_trace == ()
+        assert stable_sha256 == recovery_sha256
+        assert _sha256(stable) == stable_sha256
+        for home, _, expected in expected_homes.values():
+            assert _read_ext4_home(
+                stable, home, block_size=block_size
+            ) == expected
+    finally:
+        faulted.unlink(missing_ok=True)
+        recovered.unlink(missing_ok=True)
+        stable.unlink(missing_ok=True)
 
 
 @pytest.fixture(scope="session")

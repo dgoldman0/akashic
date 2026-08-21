@@ -130,15 +130,17 @@ and `used_dirs`, and revokes the unchanged freed child block in an exact
 the first HTree root-depth transition through the operation-owned sealed plan,
 exact home certificate, emission, and checkpoint. Ordinary staged CREATE can
 then mutate authenticated slack after a fresh mount of the resulting singleton
-depth-one tree. Root-growth crash/replay qualification remains pending.
+depth-one tree. A committed tear in the new DX-node home replays all 11 homes
+before a write-free byte-stable remount.
 Bounded hard `LINK` adds one typed dirent, increments target `nlink`
 and ctime, and updates parent mtime/ctime in an exact deduplicated `2/0/0` or
 `3/0/0` transaction. Five focused LINK qualifications cover same- and
 cross-parent success, W7 precommit rollback, W17 committed replay, zero-write
 refusals, external filesystem checks, and a write-free byte-stable remount. The
-next directory ratchet is recovery for the public HTree root-growth plan;
-stable singleton depth-one CREATE is qualified, while indexed `LINK` and
-`MKDIR` remain separate gated slices.
+next directory ratchet is focused boundary closure for the public HTree
+root-growth plan; representative committed replay and stable singleton
+depth-one CREATE are qualified, while indexed `LINK` and `MKDIR` remain
+separate gated slices.
 HTree depth grows independently when an operation or a pinned corpus requires
 it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate

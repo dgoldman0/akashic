@@ -198,8 +198,14 @@ redirected.
   mount of that produced singleton depth-one tree now authenticates all 124
   leaves and updates one slack leaf through the unchanged exact six-home
   transaction. The production CREATE wrapper now supplies that root-growth
-  admission and passes the same exact public journey; root-growth recovery is
-  the remaining vertical-completion boundary. The original exact source-mode qualification
+  admission and passes the same exact public journey. A committed W28 tear in
+  the new DX-node home leaves the first three checkpoint homes landed, replays
+  all 11 afterimages on a fresh mount, passes the external checker, and is
+  followed by a write-free byte-identical remount. The fault journey completed
+  in 1,875,529,452 of 2,400,000,000 steps, recovery in 279,355,135 of
+  1,200,000,000, and the stable mount in 149,036,061 of 1,200,000,000. Focused
+  boundary closure is the remaining vertical-completion gate. The original
+  exact source-mode qualification
   passed with the 13-unit ext4 closure loading in 1,073,526,553 of
   1,600,000,000 steps across 3,842 packed
   lines. Its saturated-root journey completed in 1,545,877,690 of
@@ -214,9 +220,10 @@ The frozen semantic comparison point is the clean `ext4-recovery` tree at
 `abb3f9462d379b0adb2f09d1009831dd2f85afdb`. Documentation and refactor commits
 advance `HEAD`, but that commit remains the behavior, ordering, persistent-byte,
 and crash comparison baseline. It includes bounded depth-zero HTree full-leaf
-CREATE and its recovery qualification. Stage 6 has now crossed the positive
-HTree root-depth activation boundary; crash/replay closure is the remaining
-gate before the vertical advances to indexed LINK/MKDIR.
+CREATE and its recovery qualification. Stage 6 has now crossed positive HTree
+root-depth activation, representative committed replay, and stable-remount
+boundaries; focused refusal/boundary closure is the remaining gate before the
+vertical advances to indexed LINK/MKDIR.
 Refactoring must not silently cross that boundary or admit indexed LINK/MKDIR,
 broader map shapes, or another previously gated filesystem behavior.
 
@@ -583,9 +590,10 @@ routes through node logical 124/home 1364 to leaf logical 1/home 1357, commits
 the exact six homes, unmounts cleanly, and passes pinned `debugfs` and
 `e2fsck`. Depth-one leaf splitting remains fail-closed. The production CREATE
 wrapper now admits the same exact root-growth transition, and the public
-11-home journey plus fresh-mount follow-on mutation pass. Refusal and crash
-matrices remain the vertical-completion gate rather than interrupting this
-happy-path sequence.
+11-home journey plus fresh-mount follow-on mutation pass. Its representative
+new-DX-node checkpoint tear now replays all 11 homes and reaches a write-free
+byte-stable remount. Focused boundary cases remain the vertical-completion gate;
+the broader refusal matrix does not interrupt this feature sequence.
 
 ## Verification cadence
 
