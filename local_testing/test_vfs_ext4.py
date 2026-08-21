@@ -18524,7 +18524,9 @@ def test_unified_orphan_discovery_rejects_corruption_without_writes(
             "_UC-CTX _EXT4-C.O.ACTIVE + @ 2 =",
             "_UC-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
             "_UC-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 1 =",
-            "_UC-CTX _EXT4-C.O.SLOTS + @ 4 =",
+            "_UC-CTX _EXT4-C.O.SLOTS + @ 0=",
+            "_UC-CTX _EXT4-C.O.TABLE + @ 0=",
+            "_UC-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ 0=",
         ]
 
     output, trace, _media_sha256 = run_recovery_forth(
@@ -18546,7 +18548,15 @@ def test_unified_orphan_discovery_rejects_corruption_without_writes(
                         *cross_protocol_checks,
                     ]
                 )
-                + ' IF ." EXT4-UNIFIED-ORPHAN-CORRUPTION" THEN'
+                + (
+                    ' IF ." EXT4-UNIFIED-ORPHAN-CORRUPTION" '
+                    'ELSE ." EXT4-UNIFIED-ORPHAN-CORRUPTION-STATE " '
+                    '_UC-IOR . '
+                    '_UC-CTX _EXT4-C.O.ACTIVE + @ . '
+                    '_UC-CTX _EXT4-C.O.MODERN-ACTIVE + @ . '
+                    '_UC-CTX _EXT4-C.O.LEGACY-ACTIVE + @ . '
+                    '_UC-CTX _EXT4-C.O.SLOTS + @ . THEN'
+                )
             ),
         ],
         patches=patches,
@@ -18614,8 +18624,9 @@ def test_typed_orphan_afterimages_coalesce_and_abort_without_io(
     output = run_forth(
         path,
         [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
             (
-                "T-ARENA T-VOLUME EXT4-NEW "
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
                 "CONSTANT _TO-MOUNT-IOR CONSTANT _TO-V"
             ),
             "_TO-V _EXT4-CTX CONSTANT _TO-CTX",
@@ -18800,8 +18811,9 @@ def test_typed_orphan_staging_rejects_stale_and_conflicting_authority(
     output = run_forth(
         path,
         [
+            *_EXT4_AUTH_ONLY_BINDING_FORTH,
             (
-                "T-ARENA T-VOLUME EXT4-NEW "
+                "T-ARENA T-VOLUME EXT4-TEST-AUTH-NEW "
                 "CONSTANT _TR-MOUNT-IOR CONSTANT _TR-V"
             ),
             "_TR-V _EXT4-CTX CONSTANT _TR-CTX",
@@ -25122,12 +25134,6 @@ def test_whole_orphan_union_refuses_later_unlinked_live_alias_before_io(
             ),
             "_UQ-V _EXT4-CTX CONSTANT _UQ-CTX",
             "_UQ-ARENA ARENA-USED CONSTANT _UQ-USED-BEFORE-RETRY",
-            "1 _UQ-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _UQ-LEGACY",
-            "2 _UQ-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _UQ-MODERN",
-            (
-                "_UQ-CTX _EXT4-FIND-SELECTED-ORPHAN "
-                "CONSTANT _UQ-SELECT-IOR CONSTANT _UQ-SELECTED"
-            ),
             "18 _UQ-CTX _EXT4-LOAD-INODE CONSTANT _UQ-INODE-IOR",
             (
                 "_UQ-CTX _EXT4-VALIDATE-INLINE-EXTENTS "
@@ -25168,7 +25174,9 @@ def test_whole_orphan_union_refuses_later_unlinked_live_alias_before_io(
                         "_UQ-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
                         "_UQ-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 1 =",
                         "_UQ-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
-                        "_UQ-CTX _EXT4-C.O.SLOTS + @ 4 =",
+                        "_UQ-CTX _EXT4-C.O.SLOTS + @ 0=",
+                        "_UQ-CTX _EXT4-C.O.TABLE + @ 0=",
+                        "_UQ-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ 0=",
                         (
                             "_UQ-CTX _EXT4-C.SB + "
                             "_EXT4-SB.LAST-ORPHAN + L@ 21 ="
@@ -25177,18 +25185,6 @@ def test_whole_orphan_union_refuses_later_unlinked_live_alias_before_io(
                             "_UQ-CTX _EXT4-C.SB + _EXT4-SB.RO-COMPAT + L@ "
                             "_EXT4-RO-ORPHAN-PRESENT AND 0<>"
                         ),
-                        "_UQ-LEGACY _EXT4-OE.INO + @ 21 =",
-                        (
-                            "_UQ-LEGACY _EXT4-OE.KIND + @ "
-                            "_EXT4-OK-LEGACY ="
-                        ),
-                        "_UQ-MODERN _EXT4-OE.INO + @ 18 =",
-                        (
-                            "_UQ-MODERN _EXT4-OE.KIND + @ "
-                            "_EXT4-OK-MODERN ="
-                        ),
-                        "_UQ-SELECT-IOR 0=",
-                        "_UQ-SELECTED _UQ-LEGACY =",
                         "_UQ-INODE-IOR 0=",
                         "_UQ-EXTENT-IOR 0=",
                         "_UQ-EXTENT-ENTRIES 4 =",
@@ -25264,10 +25260,6 @@ def test_whole_orphan_union_rejects_later_linked_live_alias_before_io(
             ),
             "_LA-V _EXT4-CTX CONSTANT _LA-CTX",
             "_LA-ARENA ARENA-USED CONSTANT _LA-USED-BEFORE",
-            (
-                "_LA-CTX _EXT4-FIND-SELECTED-ORPHAN "
-                "CONSTANT _LA-SELECT-IOR CONSTANT _LA-SELECTED"
-            ),
             "18 _LA-CTX _EXT4-LOAD-INODE CONSTANT _LA-INODE-IOR",
             (
                 "_LA-CTX _EXT4-VALIDATE-INLINE-EXTENTS "
@@ -25281,10 +25273,7 @@ def test_whole_orphan_union_rejects_later_linked_live_alias_before_io(
                 "_LA-CTX _EXT4-C.INODE + _EXT4-I.BLOCK + 2 + W@ "
                 "CONSTANT _LA-EXTENT-COUNT"
             ),
-            (
-                "_LA-CTX _LA-V _EXT4-COMPLETE-ORPHAN-PLAN "
-                "CONSTANT _LA-RETRY-IOR"
-            ),
+            "_LA-V _EXT4-MOUNT CONSTANT _LA-RETRY-IOR",
             "_LA-ARENA ARENA-USED CONSTANT _LA-USED-AFTER",
             (
                 _forth_conjunction(
@@ -25330,7 +25319,9 @@ def test_whole_orphan_union_rejects_later_linked_live_alias_before_io(
                             f"{expected_legacy} ="
                         ),
                         "_LA-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
-                        "_LA-CTX _EXT4-C.O.SLOTS + @ 4 =",
+                        "_LA-CTX _EXT4-C.O.SLOTS + @ 0=",
+                        "_LA-CTX _EXT4-C.O.TABLE + @ 0=",
+                        "_LA-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ 0=",
                         (
                             "_LA-CTX _EXT4-C.SB + "
                             "_EXT4-SB.LAST-ORPHAN + L@ 21 ="
@@ -25340,12 +25331,6 @@ def test_whole_orphan_union_rejects_later_linked_live_alias_before_io(
                             "_EXT4-SB.RO-COMPAT + L@ "
                             "_EXT4-RO-ORPHAN-PRESENT AND "
                             f"{expected_present_check}"
-                        ),
-                        "_LA-SELECT-IOR 0=",
-                        "_LA-SELECTED _EXT4-OE.INO + @ 21 =",
-                        (
-                            "_LA-SELECTED _EXT4-OE.KIND + @ "
-                            "_EXT4-OK-LEGACY ="
                         ),
                         "_LA-INODE-IOR 0=",
                         "_LA-EXTENT-IOR 0=",
@@ -29151,7 +29136,6 @@ def mixed_multi_record_second_commit_fence_fixture(
                 "CONSTANT _MC-IOR CONSTANT _MC-V"
             ),
             "_MC-V _EXT4-CTX CONSTANT _MC-CTX",
-            "1 _MC-CTX _EXT4-ORPHAN-TABLE-ENTRY CONSTANT _MC-REMAINING",
             (
                 "5 0 0 1024 _EXT4-JWR-MEASURE "
                 "CONSTANT _MC-MEASURE-IOR CONSTANT _MC-WRITER-BYTES"
@@ -29174,23 +29158,9 @@ def mixed_multi_record_second_commit_fence_fixture(
                         "_MC-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
                         "_MC-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
                         "_MC-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
-                        "_MC-CTX _EXT4-C.O.SLOTS + @ 4 =",
-                        "_MC-REMAINING _EXT4-OE.INO + @ 21 =",
-                        (
-                            "_MC-REMAINING _EXT4-OE.KIND + @ "
-                            "_EXT4-OK-MODERN ="
-                        ),
-                        "_MC-REMAINING _EXT4-OE.LOCATOR-A + @ 0=",
-                        "_MC-REMAINING _EXT4-OE.LOCATOR-B + @ 0=",
-                        (
-                            "0 _MC-CTX _EXT4-ORPHAN-TABLE-ENTRY "
-                            "_EXT4-ORPHAN-RECORD-SIZE _EXT4-BYTES-ZERO?"
-                        ),
-                        (
-                            "2 _MC-CTX _EXT4-ORPHAN-TABLE-ENTRY "
-                            "_EXT4-ORPHAN-RECORD-SIZE 2* "
-                            "_EXT4-BYTES-ZERO?"
-                        ),
+                        "_MC-CTX _EXT4-C.O.SLOTS + @ 0=",
+                        "_MC-CTX _EXT4-C.O.TABLE + @ 0=",
+                        "_MC-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ 0=",
                         (
                             "_MC-CTX _EXT4-C.SB + "
                             "_EXT4-SB.LAST-ORPHAN + L@ 0="
