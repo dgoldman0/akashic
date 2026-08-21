@@ -230,9 +230,13 @@ boundaries, and the first existing-slack indexed LINK and MKDIR happy-path
 slices. Exact
 one-short credit and unrelated-owner refusal close the focused root-growth
 vertical. Both namespace slices admit only existing slack in depth-zero and
-singleton depth-one parents without parent growth. LINK has happy-path evidence
-at both depths; MKDIR has one representative depth-zero qualification while its
-depth-one and accumulated boundary/recovery checks wait for draft closure.
+singleton depth-one parents without parent growth. LINK and MKDIR now have
+happy-path evidence at both depths, and one combined full-selected-leaf test
+proves that both operations return `VFS-E-NOSPC` without writes, flushes, or
+cache/accounting drift. This closes the namespace-insertion draft boundary
+compositionally: the operations add no journal role or recovery branch, so the
+existing indexed selected-leaf/root-growth replay evidence and the established
+operation-specific linear LINK/MKDIR recovery matrices remain authoritative.
 Refactoring must not silently broaden either operation to leaf splitting or
 growth, broader map shapes, or another previously gated filesystem behavior.
 
@@ -610,11 +614,19 @@ adding plan machinery. LINK keeps its exact three roles and no allocation;
 MKDIR keeps its exact nine roles and child inode/block allocation. Both admit
 existing slack in depth-zero and singleton depth-one parents while the root,
 optional DX node, extent map, other leaves, parent size, and parent sector count
-remain immutable. MKDIR currently has one representative depth-zero happy-path
-test;
-its depth-one check and the accumulated LINK/MKDIR refusal/recovery gate are
-reserved for draft closure. Indexed LINK/MKDIR splitting and growth remain
-gated.
+remain immutable. MKDIR now has a representative depth-zero happy path plus a
+direct singleton-depth-one success. One combined public full-leaf
+test exercises the LINK and MKDIR no-growth boundary and proves exact
+`VFS-E-NOSPC`, complete public/cache rollback, scrubbed operation authority,
+zero storage writes or flushes, and byte-identical media. Together with the
+existing indexed CREATE selected-leaf and root-growth recovery/stable-remount
+evidence and the operation-specific linear LINK/MKDIR crash matrices, this
+draft-closes the namespace-insertion tranche without cloning recovery tests for
+an unchanged home-list protocol. Indexed LINK/MKDIR splitting and growth remain
+gated; the next Stage 6 work is the remaining indexed deletion, truncation,
+metadata, and xattr forms. The focused static-contract, combined-refusal, and
+singleton-depth-one MKDIR gate passed sequentially as three tests in 554.75
+host seconds.
 
 ## Verification cadence
 

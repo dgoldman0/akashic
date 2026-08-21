@@ -67745,6 +67745,273 @@ def test_staged_public_indexed_root_growth_node_tear_replays_all_eleven_homes(
         stable.unlink(missing_ok=True)
 
 
+def test_staged_vfs_indexed_link_and_mkdir_full_leaf_refuse_without_writes(
+    staged_public_indexed_leaf_split_prestate: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """LINK and MKDIR refuse one full selected leaf without mutation."""
+    case = staged_public_indexed_leaf_split_prestate
+    path = case["source"]
+    source_patches = case["source_patches"]
+    block_size = case["block_size"]
+    candidate = case["candidate"]
+    child_number = case["child_number"]
+    expected_homes = case["expected_homes"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(candidate, int)
+    assert isinstance(child_number, int)
+    assert isinstance(expected_homes, dict)
+    assert block_size == 1024
+    assert candidate == 1364
+
+    prepared_super = expected_homes["super_home"][1]
+    prepared_root = expected_homes["root_home"][1]
+    prepared_leaf = expected_homes["old_leaf_home"][1]
+    assert isinstance(prepared_super, bytes)
+    assert isinstance(prepared_root, bytes)
+    assert isinstance(prepared_leaf, bytes)
+    assert struct.unpack_from("<HHI", prepared_root, 32) == (123, 3, 1)
+    target_hash, target_minor = _indexed_split_half_md4_hash(
+        prepared_super, b"linked.txt"
+    )
+    assert (target_hash, target_minor) == (0x2D9C_821A, 0x374D_DB14)
+    assert target_hash < struct.unpack_from("<I", prepared_root, 40)[0]
+    assert all(
+        entry[4] != b"linked.txt"
+        for entry in _checked_linear_directory_entries(
+            prepared_super, 27, 0, prepared_leaf
+        )
+    )
+
+    expected_media = bytearray(path.read_bytes())
+    for offset, payload in source_patches:
+        expected_media[offset : offset + len(payload)] = payload
+    expected_sha256 = hashlib.sha256(expected_media).hexdigest()
+    del expected_media
+
+    backing = tmp_path / "indexed-link-mkdir-full-leaf.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        backing,
+        [
+            "VARIABLE _ILM-CLOCK-CALLS",
+            (
+                ": _ILM-NOW ( context -- epoch-ms ior ) DROP "
+                "1 _ILM-CLOCK-CALLS +! 3000000123456 0 ;"
+            ),
+            "CREATE _ILM-STAT VFS-STATFS-SIZE ALLOT",
+            "T-ARENA CONSTANT _ILM-ARENA",
+            (
+                "_ILM-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _ILM-MOUNT-IOR CONSTANT _ILM-V"
+            ),
+            "_ILM-V _EXT4-CTX CONSTANT _ILM-CTX",
+            (
+                "' _ILM-NOW 0 _ILM-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _ILM-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_ILM-PROFILE", "_ILM-V", 9, 0, 0
+            ),
+            (
+                'S" /fixture/payload.txt" _ILM-V VFS-RESOLVE? '
+                "CONSTANT _ILM-TARGET-IOR CONSTANT _ILM-TARGET"
+            ),
+            (
+                'S" /fixture/indexed" _ILM-V VFS-CD? '
+                "CONSTANT _ILM-CD-IOR"
+            ),
+            "_ILM-V V.CWD @ CONSTANT _ILM-PARENT",
+            (
+                "_ILM-PARENT _ILM-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _ILM-LOAD-IOR"
+            ),
+            "_ILM-TARGET D.VNODE @ CONSTANT _ILM-TARGET-VN",
+            "_ILM-PARENT D.VNODE @ CONSTANT _ILM-PARENT-VN",
+            "_ILM-TARGET-VN VN.NLINK @ CONSTANT _ILM-TARGET-NLINK",
+            "_ILM-TARGET-VN VN.DREFS @ CONSTANT _ILM-TARGET-DREFS",
+            "_ILM-TARGET-VN VN.CTIME @ CONSTANT _ILM-TARGET-CTIME",
+            (
+                "_ILM-TARGET-VN VN.CTIME-NS @ "
+                "CONSTANT _ILM-TARGET-CTIME-NS"
+            ),
+            "_ILM-PARENT-VN VN.NLINK @ CONSTANT _ILM-PARENT-NLINK",
+            "_ILM-PARENT-VN VN.SIZE-LO @ CONSTANT _ILM-PARENT-SIZE",
+            "_ILM-PARENT-VN VN.BLOCKS @ CONSTANT _ILM-PARENT-BLOCKS",
+            "_ILM-PARENT-VN VN.MTIME @ CONSTANT _ILM-PARENT-MTIME",
+            (
+                "_ILM-PARENT-VN VN.MTIME-NS @ "
+                "CONSTANT _ILM-PARENT-MTIME-NS"
+            ),
+            "_ILM-PARENT-VN VN.CTIME @ CONSTANT _ILM-PARENT-CTIME",
+            (
+                "_ILM-PARENT-VN VN.CTIME-NS @ "
+                "CONSTANT _ILM-PARENT-CTIME-NS"
+            ),
+            "_ILM-V V.ICOUNT @ CONSTANT _ILM-ICOUNT",
+            "_ILM-V V.VCOUNT @ CONSTANT _ILM-VCOUNT",
+            "_ILM-V V.STR-PTR @ CONSTANT _ILM-STR-PTR",
+            "_ILM-V V.IFREE @ CONSTANT _ILM-IFREE",
+            (
+                "_ILM-STAT VFS-STATFS-SIZE _ILM-V VFS-STATFS "
+                "CONSTANT _ILM-STAT-BEFORE-IOR"
+            ),
+            "_ILM-STAT VSF.BFREE @ CONSTANT _ILM-BFREE",
+            "_ILM-STAT VSF.FFREE @ CONSTANT _ILM-FFREE",
+            "DEPTH CONSTANT _ILM-LINK-DEPTH-BEFORE",
+            (
+                'S" linked.txt" _ILM-TARGET _ILM-PARENT _ILM-V '
+                "VFS-LINK CONSTANT _ILM-LINK-IOR CONSTANT _ILM-LINK-D"
+            ),
+            "DEPTH CONSTANT _ILM-LINK-DEPTH-AFTER",
+            "_ILM-V V.LAST-IOR @ CONSTANT _ILM-LINK-LAST-IOR",
+            (
+                'S" linked.txt" _ILM-PARENT _VFS-FIND-CHILD '
+                "CONSTANT _ILM-LINK-CHILD"
+            ),
+            _forth_xc_plan_scrubbed(
+                "_ILM-LINK-PLAN-SCRUBBED", "_ILM-CTX"
+            ),
+            "DEPTH CONSTANT _ILM-MKDIR-DEPTH-BEFORE",
+            (
+                'S" linked.txt" _ILM-V VFS-MKDIR '
+                "CONSTANT _ILM-MKDIR-IOR"
+            ),
+            "DEPTH CONSTANT _ILM-MKDIR-DEPTH-AFTER",
+            "_ILM-V V.LAST-IOR @ CONSTANT _ILM-MKDIR-LAST-IOR",
+            (
+                'S" linked.txt" _ILM-PARENT _VFS-FIND-CHILD '
+                "CONSTANT _ILM-MKDIR-CHILD"
+            ),
+            (
+                "_ILM-STAT VFS-STATFS-SIZE _ILM-V VFS-STATFS "
+                "CONSTANT _ILM-STAT-AFTER-IOR"
+            ),
+            "_ILM-STAT VSF.BFREE @ CONSTANT _ILM-BFREE-AFTER",
+            "_ILM-STAT VSF.FFREE @ CONSTANT _ILM-FFREE-AFTER",
+            "_ILM-CTX _EXT4-C.J.WRITER + @ CONSTANT _ILM-WRITER",
+            _forth_xc_plan_scrubbed(
+                "_ILM-MKDIR-PLAN-SCRUBBED", "_ILM-CTX"
+            ),
+            *_forth_accumulated_conjunction(
+                "_ILM-OK",
+                [
+                    "_ILM-MOUNT-IOR 0=",
+                    "_ILM-CLOCK-IOR 0=",
+                    "_ILM-PROFILE-SIZE-IOR 0=",
+                    "_ILM-PROFILE-BIND-IOR 0=",
+                    "_ILM-PROFILE-USED _ILM-PROFILE-SIZE =",
+                    "_ILM-TARGET-IOR 0=",
+                    "_ILM-CD-IOR 0=",
+                    "_ILM-LOAD-IOR 0=",
+                    "_ILM-LINK-DEPTH-AFTER _ILM-LINK-DEPTH-BEFORE =",
+                    "_ILM-LINK-IOR VFS-E-NOSPC =",
+                    "_ILM-LINK-D 0=",
+                    "_ILM-LINK-CHILD 0=",
+                    "_ILM-LINK-LAST-IOR _ILM-LINK-IOR =",
+                    "_ILM-LINK-PLAN-SCRUBBED 0<>",
+                    "_ILM-MKDIR-DEPTH-AFTER _ILM-MKDIR-DEPTH-BEFORE =",
+                    "_ILM-MKDIR-IOR VFS-E-NOSPC =",
+                    "_ILM-MKDIR-CHILD 0=",
+                    "_ILM-MKDIR-LAST-IOR _ILM-MKDIR-IOR =",
+                    "_ILM-MKDIR-PLAN-SCRUBBED 0<>",
+                    "_ILM-CLOCK-CALLS @ 2 =",
+                    "_ILM-TARGET-VN VN.NLINK @ _ILM-TARGET-NLINK =",
+                    "_ILM-TARGET-VN VN.DREFS @ _ILM-TARGET-DREFS =",
+                    "_ILM-TARGET-VN VN.CTIME @ _ILM-TARGET-CTIME =",
+                    (
+                        "_ILM-TARGET-VN VN.CTIME-NS @ "
+                        "_ILM-TARGET-CTIME-NS ="
+                    ),
+                    "_ILM-PARENT-VN VN.NLINK @ _ILM-PARENT-NLINK =",
+                    "_ILM-PARENT-VN VN.SIZE-LO @ _ILM-PARENT-SIZE =",
+                    "_ILM-PARENT-VN VN.BLOCKS @ _ILM-PARENT-BLOCKS =",
+                    "_ILM-PARENT-VN VN.MTIME @ _ILM-PARENT-MTIME =",
+                    (
+                        "_ILM-PARENT-VN VN.MTIME-NS @ "
+                        "_ILM-PARENT-MTIME-NS ="
+                    ),
+                    "_ILM-PARENT-VN VN.CTIME @ _ILM-PARENT-CTIME =",
+                    (
+                        "_ILM-PARENT-VN VN.CTIME-NS @ "
+                        "_ILM-PARENT-CTIME-NS ="
+                    ),
+                    "_ILM-V V.ICOUNT @ _ILM-ICOUNT =",
+                    "_ILM-V V.VCOUNT @ _ILM-VCOUNT =",
+                    "_ILM-V V.STR-PTR @ _ILM-STR-PTR =",
+                    "_ILM-V V.IFREE @ _ILM-IFREE =",
+                    "_ILM-STAT-BEFORE-IOR 0=",
+                    "_ILM-STAT-AFTER-IOR 0=",
+                    "_ILM-BFREE-AFTER _ILM-BFREE =",
+                    "_ILM-FFREE-AFTER _ILM-FFREE =",
+                    "_ILM-WRITER _ILM-PROFILE-BASE =",
+                    "_ILM-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                    "_ILM-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                    "_ILM-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                    "_ILM-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                    "_ILM-CTX _EXT4-C.J.HOME-WRITES + @ 0=",
+                    "_ILM-CTX _EXT4-C.J.COMMITTED + @ 0=",
+                    "_ILM-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0=",
+                    "_ILM-V V.FLAGS @ VFS-F-DIRTY AND 0=",
+                    "_ILM-V V.FLAGS @ VFS-F-RO AND 0=",
+                    "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                    (
+                        "_XC-ROOT-CURRENT _EXT4-STAGED-WRITE-BLOCK-SIZE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    "_XC-DIRECTORY-DESC _EXT4-DD-SIZE _EXT4-BYTES-ZERO?",
+                    (
+                        "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    "_XC-INDEX-SPLITTING @ 0=",
+                    "_XC-INDEX-ROOT-GROWING @ 0=",
+                    "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                    "_EXT4-MUTATION-OWNER-INO @ 0=",
+                    "_EXT4-JFO-TARGET-INO-B @ 0=",
+                    "_EXT4-JFO-CERT-SCOPE @ 0=",
+                    "_EXT4-JFO-CERT-VALID @ 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            (
+                '_ILM-OK @ IF ." EXT4-INDEXED-LINK-MKDIR-FULL-LEAF" '
+                'ELSE ." EXT4-INDEXED-LINK-MKDIR-FULL-LEAF-FAIL " '
+                "_ILM-OK-FIRST-FAILURE @ . THEN"
+            ),
+            "0 _ILM-V VFS-UNMOUNT CONSTANT _ILM-UNMOUNT-IOR",
+            (
+                "_ILM-UNMOUNT-IOR 0= "
+                "_ILM-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_ILM-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-INDEXED-LINK-MKDIR-FULL-LEAF-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=source_patches,
+        capture_media=backing,
+        max_steps=1_600_000_000,
+    )
+    _assert_emitted(output, "EXT4-INDEXED-LINK-MKDIR-FULL-LEAF")
+    _assert_emitted(
+        output, "EXT4-INDEXED-LINK-MKDIR-FULL-LEAF-UNMOUNTED"
+    )
+    assert trace == ()
+    assert media_sha256 == expected_sha256
+    assert _sha256(backing) == expected_sha256
+    for home, original, _ in expected_homes.values():
+        assert _read_ext4_home(
+            backing, home, block_size=block_size
+        ) == original
+    assert _ext4_block_allocation_state(
+        backing, (candidate,)
+    ) == {candidate: False}
+    assert _ext4_inode_allocation_state(
+        backing, (child_number, child_number + 1)
+    ) == {child_number: False, child_number + 1: False}
+
+
 def test_staged_vfs_indexed_root_growth_refuses_one_short_profile_without_writes(
     staged_public_indexed_root_growth_probe_prestate: dict[str, object],
     tmp_path: Path,
@@ -69820,13 +70087,16 @@ def _staged_mkdir_attempt_forth(
     prefix: str,
     *,
     parent_path: str = "/",
+    directory_name: str = "created-dir",
 ) -> tuple[str, ...]:
     """Build one cold public MKDIR attempt with before/after observations."""
     assert parent_path.startswith("/") and '"' not in parent_path
+    assert directory_name and "/" not in directory_name
+    assert '"' not in directory_name and "\x00" not in directory_name
     object_path = (
-        "/created-dir"
+        f"/{directory_name}"
         if parent_path == "/"
-        else f"{parent_path.rstrip('/')}/created-dir"
+        else f"{parent_path.rstrip('/')}/{directory_name}"
     )
     if parent_path == "/":
         parent_setup = (
@@ -69881,13 +70151,13 @@ def _staged_mkdir_attempt_forth(
         f"{prefix}-STAT VSF.FFREE @ CONSTANT {prefix}-FFREE-BEFORE",
         f"DEPTH CONSTANT {prefix}-DEPTH-BEFORE",
         (
-            f'S" created-dir" {prefix}-V VFS-MKDIR '
+            f'S" {directory_name}" {prefix}-V VFS-MKDIR '
             f"CONSTANT {prefix}-MKDIR-IOR"
         ),
         f"DEPTH CONSTANT {prefix}-DEPTH-AFTER",
         f"{prefix}-V V.LAST-IOR @ CONSTANT {prefix}-LAST-IOR",
         (
-            f'S" created-dir" {prefix}-PARENT _VFS-FIND-CHILD '
+            f'S" {directory_name}" {prefix}-PARENT _VFS-FIND-CHILD '
             f"CONSTANT {prefix}-CHILD"
         ),
         (
@@ -69908,29 +70178,37 @@ def _staged_mkdir_attempt_forth(
     )
 
 
-def test_staged_vfs_mkdir_into_existing_depth_zero_indexed_parent(
-    extent_writer_activation_fixture: dict[str, object],
-    tmp_path: Path,
+def _run_staged_indexed_mkdir_success(
+    *,
+    path: Path,
+    source_patches: tuple[tuple[int, bytes], ...],
+    activation_trace: tuple[tuple[str, int, int], ...],
+    backing: Path,
+    directory_name: str,
+    child_number: int,
+    selected_leaf_home: int,
+    child_directory_home: int,
+    expected_parent_size: int,
+    expected_parent_blocks: int,
+    expected_insert_offset: int,
+    expected_insert_record: int,
+    immutable_homes: tuple[int, ...],
+    marker: str,
+    max_steps: int,
 ) -> None:
-    """MKDIR reuses one hash-selected HTree leaf with its existing plan."""
-    case = extent_writer_activation_fixture
-    path = case["image"]
-    source_patches = case["source_patches"]
-    activation_trace = case["success_trace"]
-    assert isinstance(path, Path)
-    assert isinstance(source_patches, tuple)
-    assert isinstance(activation_trace, tuple)
+    """Commit one exact eight-home MKDIR through an indexed parent."""
+    directory_bytes = directory_name.encode("ascii")
+    assert source_patches == tuple(source_patches)
+    assert activation_trace and immutable_homes
+    assert selected_leaf_home not in immutable_homes
+    assert child_directory_home not in immutable_homes
 
     parent_number = 27
-    child_number = 33
-    directory_name = b"created-dir"
-    selected_leaf_home = 1361
-    child_directory_home = 1364
     layout = _ext4_recovery_layout(path)
-    superblock, parent_inode, parent_offset = _ext4_inode_record(
+    superblock, parent_before, parent_offset = _ext4_inode_record(
         path, parent_number
     )
-    _, old_child_inode, child_offset = _ext4_inode_record(path, child_number)
+    _, child_before, child_offset = _ext4_inode_record(path, child_number)
     block_size = layout["block_size"]
     parent_home = parent_offset // block_size
     child_home = child_offset // block_size
@@ -69938,36 +70216,48 @@ def test_staged_vfs_mkdir_into_existing_depth_zero_indexed_parent(
     inode_bitmap_home = layout["inode_bitmap"]
     gdt_home = layout["primary_gdt"]
     super_home = layout["primary_super"]
+    parent_generation = struct.unpack_from("<I", parent_before, 0x64)[0]
     free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
         struct.unpack_from("<I", superblock, 0x158)[0] << 32
     )
     free_inodes_before = struct.unpack_from("<I", superblock, 0x10)[0]
     group_counts_before = _ext4_group_counts(path, 0)
-    assert block_size == 1024
-    assert old_child_inode == bytes(len(old_child_inode))
-    assert (child_home, parent_home) == (283, 281)
-    assert struct.unpack_from("<I", parent_inode, 0x04)[0] == 4096
-    assert struct.unpack_from("<I", parent_inode, 0x1C)[0] == 10
-    assert struct.unpack_from("<H", parent_inode, 0x1A)[0] == 2
+    assert (
+        block_size,
+        child_home,
+        parent_home,
+        block_bitmap_home,
+        inode_bitmap_home,
+        gdt_home,
+        super_home,
+        parent_generation,
+    ) == (1024, 283, 281, 259, 267, 2, 1, 0)
+    assert child_before == bytes(len(child_before))
+    assert (
+        struct.unpack_from("<I", parent_before, 0x04)[0],
+        struct.unpack_from("<H", parent_before, 0x1A)[0],
+        struct.unpack_from("<I", parent_before, 0x1C)[0],
+    ) == (expected_parent_size, 2, expected_parent_blocks)
 
-    root = _patched_ext4_home(path, source_patches, 1355, block_size=1024)
-    assert struct.unpack_from("<IBBBB", root, 24) == (0, 1, 8, 0, 0)
-    assert struct.unpack_from("<HHI", root, 32) == (123, 3, 1)
-    assert struct.unpack_from("<II", root, 40) == (0x40B1_F581, 2)
-    assert struct.unpack_from("<II", root, 48) == (0xB890_1A84, 3)
-    major, minor = _indexed_split_half_md4_hash(superblock, directory_name)
-    assert (major, minor) == (0xCBD8_220E, 0x4A54_184F)
-    assert major >= 0xB890_1A84
-
-    immutable_homes = {
-        home: _patched_ext4_home(
-            path, source_patches, home, block_size=block_size
-        )
-        for home in (1355, 1357, 1359, 1365)
-    }
     selected_leaf_before = _patched_ext4_home(
         path, source_patches, selected_leaf_home, block_size=block_size
     )
+    assert not [
+        entry
+        for entry in _checked_linear_directory_entries(
+            superblock,
+            parent_number,
+            parent_generation,
+            selected_leaf_before,
+        )
+        if entry[4] == directory_bytes
+    ]
+    original_immutable_homes = {
+        home: _patched_ext4_home(
+            path, source_patches, home, block_size=block_size
+        )
+        for home in immutable_homes
+    }
     assert not _ext4_block_allocation_state(
         path, (child_directory_home,)
     )[child_directory_home]
@@ -69975,7 +70265,6 @@ def test_staged_vfs_mkdir_into_existing_depth_zero_indexed_parent(
         child_number
     ]
 
-    backing = tmp_path / "indexed-mkdir-depth-zero.img"
     output, trace, media_sha256 = run_recovery_forth(
         path,
         backing,
@@ -69983,6 +70272,7 @@ def test_staged_vfs_mkdir_into_existing_depth_zero_indexed_parent(
             *_staged_mkdir_attempt_forth(
                 "_IMD",
                 parent_path="/fixture/indexed",
+                directory_name=directory_name,
             ),
             "_IMD-D D.VNODE @ CONSTANT _IMD-VN",
             (
@@ -70011,15 +70301,26 @@ def test_staged_vfs_mkdir_into_existing_depth_zero_indexed_parent(
                     "_IMD-READDIR-IOR 0=",
                     "_IMD-D IN.CHILD @ 0=",
                     "_IMD-VN VN.TYPE @ VFS-T-DIR =",
-                    "_IMD-VN VN.BID @ 33 =",
+                    f"_IMD-VN VN.BID @ {child_number} =",
+                    f"_IMD-VN VN.BDATA @ {child_number} =",
+                    "_IMD-VN VN.GEN @ 1 =",
                     "_IMD-VN VN.MODE @ 0x41ED =",
                     "_IMD-VN VN.SIZE-LO @ 1024 =",
                     "_IMD-VN VN.NLINK @ 2 =",
                     "_IMD-VN VN.BLOCKS @ 2 =",
                     "_IMD-ROOT-VN VN.BID @ 27 =",
-                    "_IMD-ROOT-VN VN.NLINK @ 3 =",
-                    "_IMD-ROOT-VN VN.SIZE-LO @ 4096 =",
-                    "_IMD-ROOT-VN VN.BLOCKS @ 10 =",
+                    (
+                        "_IMD-ROOT-VN VN.NLINK @ "
+                        "_IMD-ROOT-LINKS-BEFORE 1+ ="
+                    ),
+                    (
+                        f"_IMD-ROOT-VN VN.SIZE-LO @ "
+                        f"{expected_parent_size} ="
+                    ),
+                    (
+                        f"_IMD-ROOT-VN VN.BLOCKS @ "
+                        f"{expected_parent_blocks} ="
+                    ),
                     "_IMD-CLOCK-CALLS @ 1 =",
                     "_IMD-STAT-AFTER-IOR 0=",
                     "_IMD-BFREE-AFTER _IMD-BFREE-BEFORE 1- =",
@@ -70027,8 +70328,8 @@ def test_staged_vfs_mkdir_into_existing_depth_zero_indexed_parent(
                     "_IMD-V V.ICOUNT @ _IMD-ICOUNT-BEFORE 1+ =",
                     "_IMD-V V.VCOUNT @ _IMD-VCOUNT-BEFORE 1+ =",
                     "_IMD-HOME-WRITES 8 =",
-                    "_IMD-DATA-BLOCK 1364 =",
-                    "_IMD-PARENT-DIR-HOME 1361 =",
+                    f"_IMD-DATA-BLOCK {child_directory_home} =",
+                    f"_IMD-PARENT-DIR-HOME {selected_leaf_home} =",
                     "_IMD-WRITER _IMD-PROFILE-BASE =",
                     "_IMD-WRITER _EXT4-JWR-IDLE-CLEAN?",
                     "_IMD-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
@@ -70036,8 +70337,7 @@ def test_staged_vfs_mkdir_into_existing_depth_zero_indexed_parent(
                 ],
             ),
             (
-                '_IMD-OK @ IF ." EXT4-INDEXED-MKDIR-DEPTH-ZERO" '
-                'ELSE ." EXT4-INDEXED-MKDIR-DEPTH-ZERO-FAIL " '
+                f'_IMD-OK @ IF ." {marker}" ELSE ." {marker}-FAIL " '
                 "_IMD-OK-FIRST-FAILURE @ . THEN"
             ),
             "0 _IMD-V VFS-UNMOUNT CONSTANT _IMD-UNMOUNT-IOR",
@@ -70045,15 +70345,15 @@ def test_staged_vfs_mkdir_into_existing_depth_zero_indexed_parent(
                 "_IMD-UNMOUNT-IOR 0= "
                 "_IMD-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
                 "_IMD-PROFILE-ARENA ARENA-USED 0= AND "
-                'IF ." EXT4-INDEXED-MKDIR-DEPTH-ZERO-UNMOUNTED" THEN'
+                f'IF ." {marker}-UNMOUNTED" THEN'
             ),
         ],
         patches=source_patches,
         capture_media=backing,
-        max_steps=1_200_000_000,
+        max_steps=max_steps,
     )
-    _assert_emitted(output, "EXT4-INDEXED-MKDIR-DEPTH-ZERO")
-    _assert_emitted(output, "EXT4-INDEXED-MKDIR-DEPTH-ZERO-UNMOUNTED")
+    _assert_emitted(output, marker)
+    _assert_emitted(output, f"{marker}-UNMOUNTED")
     assert trace[: len(activation_trace)] == activation_trace
     assert backing.is_file()
     assert _sha256(backing) == media_sha256
@@ -70068,39 +70368,54 @@ def test_staged_vfs_mkdir_into_existing_depth_zero_indexed_parent(
         super_home,
         inode_bitmap_home,
     )
-    expected_ordinals = ((22,), (23,), (24,), (25,), (26,), (27,), (28,), (29,))
-    for home, ordinals in zip(
-        expected_home_order, expected_ordinals, strict=True
+    assert len(set(expected_home_order)) == 8
+    for home, ordinal in zip(
+        expected_home_order, range(22, 30), strict=True
     ):
         observed = _write_ordinals_for_ext4_home(
             trace, home, block_size=block_size
         )
-        if home == super_home:
-            assert observed == (4, ordinals[0], 38)
-        else:
-            assert observed == ordinals
+        assert observed == ((4, 28, 38) if home == super_home else (ordinal,))
 
     final_super, final_child, _ = _ext4_inode_record(backing, child_number)
     _, final_parent, _ = _ext4_inode_record(backing, parent_number)
-    assert struct.unpack_from("<H", final_child, 0x00)[0] == 0x41ED
-    assert struct.unpack_from("<I", final_child, 0x04)[0] == block_size
-    assert struct.unpack_from("<H", final_child, 0x1A)[0] == 2
-    assert struct.unpack_from("<I", final_child, 0x1C)[0] == 2
-    assert struct.unpack_from("<H", final_parent, 0x1A)[0] == 3
-    assert struct.unpack_from("<I", final_parent, 0x04)[0] == 4096
-    assert struct.unpack_from("<I", final_parent, 0x1C)[0] == 10
+    assert (
+        struct.unpack_from("<H", final_child, 0x00)[0],
+        struct.unpack_from("<I", final_child, 0x04)[0],
+        struct.unpack_from("<H", final_child, 0x1A)[0],
+        struct.unpack_from("<I", final_child, 0x1C)[0],
+        struct.unpack_from("<I", final_child, 0x20)[0],
+        struct.unpack_from("<I", final_child, 0x64)[0],
+        _extent_root_physical(final_child, 0),
+    ) == (0x41ED, block_size, 2, 2, 0x80000, 1, child_directory_home)
+    assert (
+        struct.unpack_from("<I", final_parent, 0x04)[0],
+        struct.unpack_from("<H", final_parent, 0x1A)[0],
+        struct.unpack_from("<I", final_parent, 0x1C)[0],
+    ) == (expected_parent_size, 3, expected_parent_blocks)
+
     selected_leaf_after = _read_ext4_home(
         backing, selected_leaf_home, block_size=block_size
     )
     assert selected_leaf_after != selected_leaf_before
     selected_entries = _checked_linear_directory_entries(
-        final_super, parent_number, parent_generation, selected_leaf_after
+        final_super,
+        parent_number,
+        parent_generation,
+        selected_leaf_after,
     )
-    assert any(
-        inode == child_number and file_type == 2 and name == directory_name
-        for _, inode, _, file_type, name in selected_entries
-    )
-    for home, original in immutable_homes.items():
+    assert [
+        entry for entry in selected_entries if entry[4] == directory_bytes
+    ] == [
+        (
+            expected_insert_offset,
+            child_number,
+            expected_insert_record,
+            2,
+            directory_bytes,
+        )
+    ]
+    for home, original in original_immutable_homes.items():
         assert _read_ext4_home(
             backing, home, block_size=block_size
         ) == original
@@ -70124,6 +70439,133 @@ def test_staged_vfs_mkdir_into_existing_depth_zero_indexed_parent(
         "used_dirs": group_counts_before["used_dirs"] + 1,
         "itable_unused": group_counts_before["itable_unused"] - 1,
     }
+
+
+def test_staged_vfs_mkdir_into_existing_depth_zero_indexed_parent(
+    extent_writer_activation_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """MKDIR reuses one hash-selected HTree leaf with existing slack."""
+    case = extent_writer_activation_fixture
+    path = case["image"]
+    source_patches = case["source_patches"]
+    activation_trace = case["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    superblock, _, _ = _ext4_inode_record(path, 27)
+    root = _patched_ext4_home(
+        path, source_patches, 1355, block_size=1024
+    )
+    assert struct.unpack_from("<IBBBB", root, 24) == (0, 1, 8, 0, 0)
+    assert struct.unpack_from("<HHI", root, 32) == (123, 3, 1)
+    assert struct.unpack_from("<II", root, 40) == (0x40B1_F581, 2)
+    assert struct.unpack_from("<II", root, 48) == (0xB890_1A84, 3)
+    major, minor = _indexed_split_half_md4_hash(superblock, b"created-dir")
+    assert (major, minor) == (0xCBD8_220E, 0x4A54_184F)
+    assert major >= 0xB890_1A84
+
+    _run_staged_indexed_mkdir_success(
+        path=path,
+        source_patches=source_patches,
+        activation_trace=activation_trace,
+        backing=tmp_path / "indexed-mkdir-depth-zero.img",
+        directory_name="created-dir",
+        child_number=33,
+        selected_leaf_home=1361,
+        child_directory_home=1364,
+        expected_parent_size=4096,
+        expected_parent_blocks=10,
+        expected_insert_offset=744,
+        expected_insert_record=268,
+        immutable_homes=(1355, 1357, 1359, 1365),
+        marker="EXT4-INDEXED-MKDIR-DEPTH-ZERO",
+        max_steps=1_200_000_000,
+    )
+
+
+def test_staged_vfs_mkdir_into_singleton_depth_one_indexed_parent(
+    staged_public_indexed_root_growth_live_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """MKDIR routes through the singleton root-growth DX node."""
+    case = staged_public_indexed_root_growth_live_fixture
+    path = case["image"]
+    block_size = case["block_size"]
+    root_home = case["root_home"]
+    node_home = case["node_candidate"]
+    selected_leaf_home = case["leaf_candidate"]
+    map_node_home = case["map_node_home"]
+    separator = case["separator"]
+    assert isinstance(path, Path)
+    assert isinstance(block_size, int)
+    assert isinstance(root_home, int)
+    assert isinstance(node_home, int)
+    assert isinstance(selected_leaf_home, int)
+    assert isinstance(map_node_home, int)
+    assert isinstance(separator, int)
+    assert (
+        block_size,
+        root_home,
+        node_home,
+        selected_leaf_home,
+        map_node_home,
+        separator,
+    ) == (1024, 1355, 1364, 1497, 1365, 0x1A48_8646)
+
+    superblock, _, _ = _ext4_inode_record(path, 27)
+    root = _read_ext4_home(path, root_home, block_size=block_size)
+    node = _read_ext4_home(path, node_home, block_size=block_size)
+    assert struct.unpack_from("<IBBBB", root, 24) == (0, 1, 8, 1, 0)
+    assert struct.unpack_from("<HHI", root, 32) == (123, 1, 124)
+    assert struct.unpack_from("<HH", node, 8) == (126, 124)
+    assert struct.unpack_from("<I", node, 12)[0] == 1
+    assert struct.unpack_from("<II", node, 16) == (separator, 125)
+    assert struct.unpack_from("<II", node, 24) == (0x40B1_F581, 2)
+    major, minor = _indexed_split_half_md4_hash(
+        superblock, b"mkdir-depth1"
+    )
+    assert (major, minor) == (0x2FC9_38F8, 0x77DC_91BC)
+    assert separator <= major < 0x40B1_F581
+    free_blocks = struct.unpack_from("<I", superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", superblock, 0x158)[0] << 32
+    )
+    assert (free_blocks, struct.unpack_from("<I", superblock, 0x10)[0]) == (
+        58910,
+        4063,
+    )
+    assert _ext4_group_counts(path, 0) == {
+        "free_blocks": 6695,
+        "free_inodes": 479,
+        "used_dirs": 4,
+        "itable_unused": 479,
+    }
+
+    _run_staged_indexed_mkdir_success(
+        path=path,
+        source_patches=(),
+        activation_trace=_jbd2_writer_activation_trace(path),
+        backing=tmp_path / "indexed-mkdir-depth-one.img",
+        directory_name="mkdir-depth1",
+        child_number=34,
+        selected_leaf_home=selected_leaf_home,
+        child_directory_home=1498,
+        expected_parent_size=129024,
+        expected_parent_blocks=254,
+        expected_insert_offset=408,
+        expected_insert_record=604,
+        immutable_homes=(
+            root_home,
+            node_home,
+            map_node_home,
+            1357,
+            1359,
+            1361,
+        ),
+        marker="EXT4-INDEXED-MKDIR-DEPTH-ONE",
+        max_steps=2_400_000_000,
+    )
 
 
 def _staged_mkdir_recovery_view(

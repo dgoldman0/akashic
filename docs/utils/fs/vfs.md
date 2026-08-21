@@ -144,15 +144,17 @@ first indexed-LINK happy-path qualification reuses existing slack in admitted
 depth-zero and singleton depth-one parents under the unchanged exact three-role
 target-inode, parent-inode, selected-leaf plan. The root, optional DX node,
 extent map, other leaves, parent size, and parent sector count remain immutable.
-One representative indexed-MKDIR happy path qualifies the depth-zero selected-
-leaf edit and unchanged eight-home transaction; the same production path admits
-singleton depth one through the shared HTree authority.
+Indexed-MKDIR happy paths qualify the selected-leaf edit and unchanged eight-
+home transaction at depth zero and through the singleton depth-one root-growth
+DX node. One combined full-leaf test proves exact no-growth refusal, complete
+public/cache rollback, and byte-identical zero-write media for both LINK and
+MKDIR.
 The public HTree root-growth plan now also refuses exact one-
 short credit and an unrelated root owner without writes or flushes.
 Representative committed replay and stable singleton depth-one CREATE are
-qualified. Indexed LINK/MKDIR splitting and growth remain gated; their
-accumulated boundary/recovery and MKDIR depth-one checks remain for draft
-closure.
+qualified. Existing indexed CREATE/root-growth replay plus the linear LINK and
+MKDIR crash matrices close the unchanged namespace-insertion recovery protocol
+compositionally. Indexed LINK/MKDIR splitting and growth remain gated.
 HTree depth grows independently when an operation or a pinned corpus requires
 it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate

@@ -206,10 +206,11 @@ operation-admitted. Public indexed root-depth growth and stable singleton
 depth-one CREATE are qualified, including representative committed root-growth
 replay, a byte-stable remount, exact one-short credit refusal, and unrelated-
 owner rejection. Existing-slack indexed LINK and MKDIR are admitted for depth-
-zero and singleton depth-one parents. LINK has happy-path qualification at both
-depths; MKDIR has one representative depth-zero qualification, with its depth-
-one and accumulated boundary/recovery checks deferred to draft closure.
-Indexed LINK/MKDIR splitting and growth remain gated.
+zero and singleton depth-one parents, with happy-path qualification at both
+depths. One combined full-leaf test qualifies their exact no-growth refusal and
+complete zero-write rollback. Existing indexed CREATE/root-growth replay and
+linear LINK/MKDIR crash evidence close the unchanged recovery protocol
+compositionally. Indexed LINK/MKDIR splitting and growth remain gated.
 Extent-tree
 depth and indexed-directory HTree depth are
 independent ratchets. Broaden either only when the next operation or a pinned
@@ -2284,9 +2285,14 @@ dirent chains, link/free/used-directory accounts and cache projection, then
 passes pinned e2fsprogs 1.47.4 `debugfs` and read-only `e2fsck` plus a zero-write
 byte-stable ordinary remount. A representative depth-zero indexed success also
 qualifies the unchanged nine-role/eight-home transaction, selected-leaf edit,
-immutable root/node/map topology, and accounting. The production path
-admits the same operation through singleton depth one; its shape-specific happy
-test and the indexed refusal/recovery matrix remain for draft closure. Missing-
+immutable root/node/map topology, and accounting. A direct singleton-depth-one
+success qualifies the same transaction through the root-growth DX node. A
+combined indexed full-leaf test proves exact `VFS-E-NOSPC`, complete cache and
+accounting rollback, scrubbed plan/owner state, no storage writes or flushes,
+and byte-identical media for both LINK and MKDIR. Because these operations add
+no recovery role or branch, the established indexed selected-leaf/root-growth
+and linear operation-specific crash matrices draft-close this tranche without
+duplicating the same journal protocol. Missing-
 clock, seven-home-profile, and checksum-valid `used_dirs`-over-allocated-inodes
 refusals leave both media and cache unchanged.
 
@@ -2530,10 +2536,11 @@ singleton root-growth transition, and stable singleton depth-one CREATE is
 qualified. Representative committed root-growth replay and a write-free stable
 remount are also complete, as are focused credit and reverse-owner boundaries.
 Existing-slack indexed `LINK` and `MKDIR` are admitted for depth-zero and
-singleton depth-one parents. LINK has happy-path qualification at both depths;
-MKDIR has one representative depth-zero qualification. Their accumulated
-boundary/recovery and MKDIR depth-one checks remain for draft closure; indexed
-LINK/MKDIR splitting and growth remain gated.
+singleton depth-one parents, with happy-path qualification at both depths.
+Their shared full-leaf refusal and compositional recovery boundary draft-close
+the namespace-insertion tranche. Indexed LINK/MKDIR splitting and growth remain
+gated; the next indexed work is deletion, truncation, metadata, and xattr
+coverage.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

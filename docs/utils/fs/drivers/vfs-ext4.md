@@ -2594,13 +2594,17 @@ link counts, checksums, and exact checkpoint order, then passes pinned
 e2fsprogs 1.47.4 `debugfs` and read-only `e2fsck` plus a zero-write byte-stable
 ordinary remount.
 
-The first indexed-MKDIR happy-path qualification exercises existing slack in a
-depth-zero parent while preserving the same exact nine-role certificate and
-eight distinct canonical homes. The production path admits the same operation
-through the already-authenticated singleton depth-one shape. Shape-specific
-depth-one MKDIR qualification and the focused indexed refusal/recovery matrix
-remain part of the draft-closure gate; indexed MKDIR splitting/growth remains
-gated.
+Indexed-MKDIR happy-path qualification now exercises existing slack in both a
+depth-zero parent and the singleton depth-one parent produced by root growth.
+Both preserve the same exact nine-role certificate and eight distinct
+canonical homes. A combined full-selected-leaf test proves that indexed LINK
+and MKDIR each return exact `VFS-E-NOSPC` with complete public/cache rollback,
+scrubbed operation authority, no storage writes or flushes, and byte-identical
+media. The indexed namespace-insertion draft boundary closes compositionally
+against the established indexed selected-leaf/root-growth replay evidence and
+the operation-specific linear LINK/MKDIR crash matrices; neither operation adds
+a journal role or recovery branch. Indexed LINK/MKDIR splitting and growth
+remain gated.
 
 The established linear-parent refusal/recovery qualification covers a missing
 trusted clock, a caller profile containing only seven metadata
@@ -2911,10 +2915,11 @@ dry staging, public live activation, and stable singleton depth-one CREATE are
 qualified. Representative committed root-growth replay, stable remount, and
 focused credit/ownership boundaries are also complete. Existing-slack indexed
 `LINK` and `MKDIR` are admitted for depth-zero and singleton depth-one parents;
-LINK has happy-path coverage at both depths and MKDIR has one representative
-depth-zero qualification. Their accumulated refusal/recovery and MKDIR depth-
-one checks are deferred to draft closure; indexed LINK/MKDIR splitting and
-growth remain gated.
+both have happy-path coverage at both depths. Their shared full-leaf no-growth
+boundary and compositional recovery argument are qualified, draft-closing the
+namespace-insertion tranche. Indexed LINK/MKDIR splitting and growth remain
+gated; remaining indexed deletion, truncation, metadata, and xattr forms are
+later Stage 6 work.
 
 ### Same-retained-block shrink TRUNCATE
 
@@ -3764,9 +3769,10 @@ The ratchet order is:
    public root growth, representative committed replay, stable remount, and
    singleton depth-one CREATE plus its focused credit/owner boundaries are
    complete; existing-slack indexed `LINK` and `MKDIR` are admitted for depth-
-   zero and singleton depth-one parents. Close their accumulated refusal,
-   recovery, and MKDIR depth-one qualification at the draft vertical boundary,
-   then add the remaining deletion, truncation, metadata, and xattr forms; and
+   zero and singleton depth-one parents. Their happy paths at both depths,
+   shared full-leaf refusal, and compositional recovery boundary are complete;
+   next add the remaining indexed deletion, truncation, metadata, and xattr
+   forms; and
 9. perform the final profile closure audit across every profile-admitted
    operation and recovery state.
 
@@ -3995,9 +4001,10 @@ root-growth planner and public live path are qualified, as is stable singleton
 depth-one CREATE. Representative committed root-growth replay and byte-stable
 remount plus focused credit and reverse-owner refusals are qualified. Existing-
 slack indexed `LINK` and `MKDIR` are admitted for depth-zero and singleton
-depth-one parents; MKDIR currently has one representative depth-zero happy-path
-qualification. Their accumulated boundary/recovery and MKDIR depth-one checks
-remain for draft closure; indexed LINK/MKDIR splitting and growth remain gated.
+depth-one parents, with happy-path qualification at both depths. Their shared
+full-leaf refusal and compositional recovery boundary draft-close the
+namespace-insertion tranche; indexed LINK/MKDIR splitting and growth remain
+gated.
 Replacement, victims, broader
 concurrent orphan unions, general sparse/gap
 growth, unwritten conversion, growth beyond a
