@@ -55,6 +55,13 @@ EXT4_JBD2_REVOKE_MODULE = "utils/fs/drivers/ext4/vfs-ext4-jbd2-revoke.f"
 EXT4_MODULE = "utils/fs/drivers/vfs-ext4.f"
 CRC_F = AKASHIC_ROOT / CRC_MODULE
 BITSET_F = AKASHIC_ROOT / BITSET_MODULE
+_EXT4_SOURCE_JIT_ENABLED = fat_harness.AKASHIC_SOURCE_JIT_ENABLED
+_EXT4_SOURCE_JIT_BEGIN = (
+    ("JIT-ON",) if _EXT4_SOURCE_JIT_ENABLED else ()
+)
+_EXT4_SOURCE_JIT_END = (
+    ("JIT-OFF",) if _EXT4_SOURCE_JIT_ENABLED else ()
+)
 MANIFEST = ROOT / "local_testing" / "fixtures" / "ext4-profile" / "manifest.json"
 IMAGE_DIR = ROOT / "local_testing" / "out" / "ext4-profile"
 
@@ -4324,6 +4331,7 @@ def build_snapshot():
             ": _EXT4-SOURCE-FINISH",
             "EVALUATE-FINISH DUP IF _EXT4-SOURCE-DIAGNOSTIC THEN DROP ;",
             "IMMEDIATE",
+            *_EXT4_SOURCE_JIT_BEGIN,
         ]
     ).encode() + b"\n"
     # Qualify the required utility modules and the ext4 driver as distinct
@@ -4331,10 +4339,11 @@ def build_snapshot():
     # instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
     max_bitset_source_steps = 150_000_000
-    # The Stage-5 dependency-derived closure measures 1,049,876,551 cold
-    # source steps across 3,788 packed lines from 13 source units. Retain the
-    # existing deterministic watchdog without conflating source compilation
-    # with the independently bounded recovery journey.
+    # The root-growth closure measures 1,089,231,446 cold source steps with
+    # the production-like JIT policy and 1,073,526,553 with the differential
+    # policy off, across 3,842 packed lines from 13 source units. Retain the
+    # deterministic watchdog without conflating source compilation with the
+    # independently bounded recovery journey.
     max_ext4_source_steps = 1_600_000_000
     bootstrap_steps = _feed_until_idle(system, bootstrap, max_crc_source_steps)
 
@@ -4401,16 +4410,35 @@ def build_snapshot():
         ext4_source_ready,
         max_ext4_source_steps,
     )
+    jit_teardown_steps = 0
+    if _EXT4_SOURCE_JIT_ENABLED:
+        remaining_steps = max_ext4_source_steps - ext4_source_steps
+        assert remaining_steps > 0
+        uart_offset = len(uart)
+        jit_teardown_steps = _feed_until_idle(
+            system,
+            b'JIT-OFF\n." EXT4-SOURCE-JIT-OFF"\n',
+            remaining_steps,
+        )
+        transcript = fat_harness.uart_text(uart[uart_offset:])
+        _assert_no_forth_diagnostics(transcript)
+        assert "\r\nEXT4-SOURCE-JIT-OFF ok\r\n" in transcript, (
+            "ext4 JIT source build did not restore JIT-OFF before snapshot "
+            f"after {jit_teardown_steps}/{remaining_steps} steps:\n"
+            + transcript[-4000:]
+        )
     if os.environ.get("EXT4_REPORT_STEPS"):
         print(
-            "[*] CRC/bitset/ext4 cold source load: "
+            "[*] CRC/bitset/ext4 cold source load "
+            f"(Akashic source JIT={fat_harness.AKASHIC_SOURCE_JIT}): "
             f"CRC={crc_source_steps:,}/{max_crc_source_steps:,} steps "
             f"across {len(crc_lines):,} packed lines; "
             f"bitset={bitset_source_steps:,}/{max_bitset_source_steps:,} "
             f"steps across {len(bitset_lines):,} packed lines; "
             f"ext4={ext4_source_steps:,}/{max_ext4_source_steps:,} steps "
             f"across {len(ext4_lines):,} packed lines from "
-            f"{len(ext4_modules):,} source units"
+            f"{len(ext4_modules):,} source units; "
+            f"JIT teardown={jit_teardown_steps:,} steps"
         )
 
     _snapshot = (
@@ -4491,7 +4519,8 @@ def run_forth(
         journey_steps = _feed_until_idle(system, payload, max_steps)
         if os.environ.get("EXT4_REPORT_STEPS"):
             print(
-                "[*] ext4 Forth journey: "
+                "[*] ext4 Forth journey "
+                f"(Akashic source JIT={fat_harness.AKASHIC_SOURCE_JIT}): "
                 f"{journey_steps:,}/{max_steps:,} steps ({image.name})"
             )
         output = fat_harness.uart_text(uart)
@@ -4647,7 +4676,8 @@ def run_recovery_forth(
     journey_steps = _feed_until_idle(system, payload, max_steps)
     if os.environ.get("EXT4_REPORT_STEPS"):
         print(
-            "[*] ext4 recovery journey: "
+            "[*] ext4 recovery journey "
+            f"(Akashic source JIT={fat_harness.AKASHIC_SOURCE_JIT}): "
             f"{journey_steps:,}/{max_steps:,} steps "
             f"({image.name} -> {backing.name})"
         )
@@ -4711,6 +4741,61 @@ def _forth_xc_plan_scrubbed(name: str, ctx: str) -> str:
     )
     assert len(line.encode("utf-8")) <= 255
     return line
+
+
+def _forth_admitted_root_growth_create(name: str) -> tuple[str, ...]:
+    """Return a private CREATE callback that admits only the root-growth probe."""
+    assert name and " " not in name
+    return (
+        f": {name} ( dentry vfs -- ior )",
+        "_XC-V ! _XC-D !",
+        "0 _XC-TARGET ! 0 _XC-LINKING ! 0 _XC-DIRECTORY !",
+        "0 _XC-WRITER ! 0 _XC-TX !",
+        "0 _XC-CTX ! 0 _EXT4-MOW-CTX !",
+        "0 _XC-INDEX-SPLITTING ! 0 _XC-INDEX-ROOT-GROWING !",
+        "0 _XC-INDEX-NODE-HOME ! 0 _XC-INDEX-NODE-GROUP !",
+        "0 _XC-INDEX-NODE-BITMAP-HOME ! 0 _XC-INDEX-NODE-GDT-HOME !",
+        "0 _XC-CONVERTING !",
+        "_XC-ENTRY ?DUP IF _XC-REFUSE-ENTRY EXIT THEN",
+        "_XC-CTX @ _XC-V @ _XC-P-CONTEXT?",
+        "DUP IF NIP _XC-REFUSE-ENTRY EXIT THEN DROP",
+        "_XC-P-BEGIN ?DUP IF _XC-REFUSE EXIT THEN",
+        "-1 OVER _XC-P.INDEX-ROOT-GROWTH-ADMISSION + !",
+        "_XC-NOW ?DUP IF _XC-REFUSE EXIT THEN",
+        "_XC-PLAN ?DUP IF _XC-REFUSE EXIT THEN",
+        "_XC-P-SEAL ?DUP IF _XC-REFUSE EXIT THEN",
+        "_XC-HP-PREFLIGHT ?DUP IF _XC-REFUSE EXIT THEN",
+        "_XC-HP-ENSURE",
+        "DUP IF NIP _XC-FAIL EXIT THEN DROP _XC-WRITER !",
+        "_XC-ACTIVE @ 0= IF",
+        "_XC-HP-BEGIN-TX",
+        "DUP IF NIP _XC-FAIL EXIT THEN DROP _XC-TX !",
+        "_XC-TX @ _EXT4-JTX-STAGE-INSERT",
+        "?DUP IF _XC-FAIL EXIT THEN",
+        "_XC-TX @ _EXT4-JTX-ABORT ?DUP IF _XC-FAIL EXIT THEN",
+        f'CR ." {name}-DRY-DONE"',
+        "_XC-WRITER @ _EXT4-JWR-ACTIVATE ?DUP IF _XC-FAIL EXIT THEN",
+        f'CR ." {name}-ACTIVATED"',
+        "THEN",
+        "_XC-HP-BEGIN-TX",
+        "DUP IF NIP _XC-FAIL EXIT THEN DROP _XC-TX !",
+        "_XC-TX @ _EXT4-JTX-STAGE-INSERT",
+        "?DUP IF _XC-FAIL EXIT THEN",
+        f'CR ." {name}-LIVE-STAGED"',
+        "_XC-TX @ _EXT4-JTX-EMIT ?DUP IF _XC-FAIL EXIT THEN",
+        f'CR ." {name}-EMITTED"',
+        "_XC-PUBLISH-COMMITTED",
+        "_XC-TX @ _EXT4-JTX-CHECKPOINT",
+        "?DUP IF _XC-POSTCOMMIT-FAIL EXIT THEN",
+        f'CR ." {name}-CHECKPOINTED"',
+        "_XC-WRITER @ _EXT4-JWR-VALID? 0= IF",
+        "VFS-E-CORRUPT _XC-POSTCOMMIT-FAIL EXIT THEN",
+        "_XC-WRITER @ _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <>",
+        "_XC-WRITER @ _EXT4-JWR-IDLE-CLEAN? 0= OR IF",
+        "VFS-E-CORRUPT _XC-POSTCOMMIT-FAIL EXIT THEN",
+        "0 _XC-V @ V.LAST-IOR !",
+        "_XC-SCRUB 0 ;",
+    )
 
 
 def _forth_cp_delete_vector_checks(
@@ -64440,9 +64525,287 @@ def staged_public_indexed_root_growth_probe_prestate(
 
     child_number = case["child_number"]
     assert isinstance(child_number, int)
-    _, _, child_offset = _ext4_inode_record(path, child_number)
+    _, old_child_inode, child_offset = _ext4_inode_record(path, child_number)
+    inode_size = layout["inode_size"]
+    assert old_child_inode == bytes(inode_size)
     parent_home = parent_offset // block_size
+    parent_block_offset = parent_offset % block_size
     child_home = child_offset // block_size
+    child_block_offset = child_offset % block_size
+    selected_expected = case["expected_homes"]["old_leaf_home"][2]
+    leaf_expected = case["expected_homes"]["new_leaf_home"][2]
+    assert isinstance(selected_expected, bytes)
+    assert isinstance(leaf_expected, bytes)
+
+    seconds, milliseconds = divmod(_STAGED_APPEND_EPOCH_MS, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = (
+        low_seconds
+        if low_seconds < 0x8000_0000
+        else low_seconds - 0x1_0000_0000
+    )
+    epoch = (seconds - signed_low) >> 32
+    assert 0 <= epoch <= 3
+    extra_time = (nanoseconds << 2) | epoch
+
+    free_blocks_before = struct.unpack_from("<I", prepared_super, 0x0C)[0] | (
+        struct.unpack_from("<I", prepared_super, 0x158)[0] << 32
+    )
+    free_inodes_before = struct.unpack_from("<I", prepared_super, 0x10)[0]
+    expected_super = bytearray(prepared_super)
+    free_blocks_after = free_blocks_before - 2
+    free_inodes_after = free_inodes_before - 1
+    struct.pack_into(
+        "<I", expected_super, 0x0C, free_blocks_after & 0xFFFF_FFFF
+    )
+    struct.pack_into("<I", expected_super, 0x158, free_blocks_after >> 32)
+    struct.pack_into("<I", expected_super, 0x10, free_inodes_after)
+    expected_super = _ext4_super_with_checksum(expected_super)
+
+    def recover_super(clean: bytes) -> bytes:
+        dirty = bytearray(clean)
+        struct.pack_into(
+            "<I",
+            dirty,
+            0x60,
+            struct.unpack_from("<I", dirty, 0x60)[0] | 0x04,
+        )
+        struct.pack_into("<H", dirty, 0x3A, 1)
+        return _ext4_super_with_checksum(dirty)
+
+    dirty_super_before = recover_super(prepared_super)
+    dirty_super_after = recover_super(expected_super)
+
+    expected_child = bytearray(inode_size)
+    struct.pack_into("<H", expected_child, 0x00, 0x81B6)
+    for field_offset in (0x08, 0x0C, 0x10, 0x90):
+        struct.pack_into("<I", expected_child, field_offset, low_seconds)
+    struct.pack_into("<H", expected_child, 0x1A, 1)
+    struct.pack_into("<I", expected_child, 0x20, 0x80000)
+    struct.pack_into("<HHHHI", expected_child, 0x28, 0xF30A, 0, 4, 0, 0)
+    struct.pack_into("<I", expected_child, 0x64, 1)
+    struct.pack_into("<H", expected_child, 0x80, 32)
+    for field_offset in (0x84, 0x88, 0x8C, 0x94):
+        struct.pack_into("<I", expected_child, field_offset, extra_time)
+    expected_child = _inode_with_checksum(
+        expected_super, child_number, expected_child
+    )
+
+    expected_parent = bytearray(prepared_parent)
+    struct.pack_into("<I", expected_parent, 0x04, 126 * block_size)
+    struct.pack_into("<I", expected_parent, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x10, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x1C, 254)
+    struct.pack_into("<I", expected_parent, 0x84, extra_time)
+    struct.pack_into("<I", expected_parent, 0x88, extra_time)
+    expected_parent = _inode_with_checksum(
+        expected_super, parent_number, expected_parent
+    )
+    expected_child_home = bytearray(
+        _patched_ext4_home(
+            path, tuple(patch_map.items()), child_home, block_size=block_size
+        )
+    )
+    expected_child_home[
+        child_block_offset : child_block_offset + inode_size
+    ] = expected_child
+    expected_parent_home = bytearray(
+        _patched_ext4_home(
+            path, tuple(patch_map.items()), parent_home, block_size=block_size
+        )
+    )
+    expected_parent_home[
+        parent_block_offset : parent_block_offset + inode_size
+    ] = expected_parent
+
+    expected_root = bytearray(prepared_root)
+    expected_root[40 : block_size - 8] = bytes(block_size - 48)
+    expected_root[30] = 1
+    struct.pack_into("<H", expected_root, 34, 1)
+    struct.pack_into("<I", expected_root, 36, final_logical_blocks)
+    struct.pack_into("<II", expected_root, block_size - 8, 0, 0)
+    root_checksum = _crc32c_raw(
+        struct.pack("<II", parent_number, parent_generation), checksum_seed
+    )
+    root_checksum = _crc32c_raw(expected_root[:40], root_checksum)
+    root_checksum = _crc32c_raw(bytes(8), root_checksum)
+    struct.pack_into("<II", expected_root, block_size - 8, 0, root_checksum)
+    expected_root = bytes(expected_root)
+
+    expected_node = bytearray(block_size)
+    struct.pack_into("<IHBB", expected_node, 0, 0, block_size, 0, 0)
+    expected_node[8 : 8 + 123 * 8] = prepared_root[32 : 32 + 123 * 8]
+    expected_node[24:1000] = expected_node[16:992]
+    struct.pack_into("<HH", expected_node, 8, 126, 124)
+    struct.pack_into(
+        "<II", expected_node, 16, case["separator"], final_logical_blocks + 1
+    )
+    node_checksum = _crc32c_raw(
+        struct.pack("<II", parent_number, parent_generation), checksum_seed
+    )
+    node_checksum = _crc32c_raw(expected_node[:1000], node_checksum)
+    node_checksum = _crc32c_raw(bytes(8), node_checksum)
+    struct.pack_into("<II", expected_node, block_size - 8, 0, node_checksum)
+    expected_node = bytes(expected_node)
+    expected_map = _extent_leaf_with_entries(
+        expected_super,
+        parent_number,
+        parent_generation,
+        map_generation,
+        tuple(expected_map_entries),
+    )
+
+    block_bitmap_home = layout["block_bitmap"]
+    original_block_bitmap = _patched_ext4_home(
+        path, tuple(patch_map.items()), block_bitmap_home, block_size=block_size
+    )
+    expected_block_bitmap = bytearray(original_block_bitmap)
+    for candidate in (node_candidate, leaf_candidate):
+        bit = candidate - group_first
+        expected_block_bitmap[bit // 8] |= 1 << (bit % 8)
+    inode_bitmap_home = layout["inode_bitmap"]
+    original_inode_bitmap = _patched_ext4_home(
+        path, tuple(patch_map.items()), inode_bitmap_home, block_size=block_size
+    )
+    expected_inode_bitmap = bytearray(original_inode_bitmap)
+    inode_bit = child_number - 1
+    expected_inode_bitmap[inode_bit // 8] |= 1 << (inode_bit % 8)
+
+    gdt_home = layout["primary_gdt"]
+    original_gdt = _patched_ext4_home(
+        path, tuple(patch_map.items()), gdt_home, block_size=block_size
+    )
+    expected_descriptor = bytearray(original_gdt[:64])
+
+    def descriptor_counter(low: int, high: int) -> int:
+        return struct.unpack_from("<H", original_gdt, low)[0] | (
+            struct.unpack_from("<H", original_gdt, high)[0] << 16
+        )
+
+    group_counts_before = {
+        "free_blocks": descriptor_counter(0x0C, 0x2C),
+        "free_inodes": descriptor_counter(0x0E, 0x2E),
+        "used_dirs": descriptor_counter(0x10, 0x30),
+        "itable_unused": descriptor_counter(0x1C, 0x32),
+    }
+    expected_group_counts = {
+        "free_blocks": group_counts_before["free_blocks"] - 2,
+        "free_inodes": group_counts_before["free_inodes"] - 1,
+        "used_dirs": group_counts_before["used_dirs"],
+        "itable_unused": group_counts_before["itable_unused"] - 1,
+    }
+
+    def store_descriptor_counter(low: int, high: int, value: int) -> None:
+        struct.pack_into("<H", expected_descriptor, low, value & 0xFFFF)
+        struct.pack_into("<H", expected_descriptor, high, value >> 16)
+
+    store_descriptor_counter(
+        0x0C, 0x2C, expected_group_counts["free_blocks"]
+    )
+    store_descriptor_counter(
+        0x0E, 0x2E, expected_group_counts["free_inodes"]
+    )
+    store_descriptor_counter(0x10, 0x30, expected_group_counts["used_dirs"])
+    store_descriptor_counter(
+        0x1C, 0x32, expected_group_counts["itable_unused"]
+    )
+    block_bitmap_checksum = _crc32c_raw(expected_block_bitmap, checksum_seed)
+    inode_bitmap_bytes = struct.unpack_from("<I", prepared_super, 0x28)[0] // 8
+    inode_bitmap_checksum = _crc32c_raw(
+        expected_inode_bitmap[:inode_bitmap_bytes], checksum_seed
+    )
+    struct.pack_into(
+        "<H", expected_descriptor, 0x18, block_bitmap_checksum & 0xFFFF
+    )
+    struct.pack_into(
+        "<H", expected_descriptor, 0x38, block_bitmap_checksum >> 16
+    )
+    struct.pack_into(
+        "<H", expected_descriptor, 0x1A, inode_bitmap_checksum & 0xFFFF
+    )
+    struct.pack_into(
+        "<H", expected_descriptor, 0x3A, inode_bitmap_checksum >> 16
+    )
+    expected_descriptor = _group_descriptor_with_checksum(
+        expected_super, expected_descriptor, 0
+    )
+    expected_gdt = bytearray(original_gdt)
+    expected_gdt[:64] = expected_descriptor
+
+    source_patch_tuple = tuple(patch_map.items())
+    expected_homes = {
+        "new_inode_home": (
+            child_home,
+            _patched_ext4_home(
+                path, source_patch_tuple, child_home, block_size=block_size
+            ),
+            bytes(expected_child_home),
+        ),
+        "parent_inode_home": (
+            parent_home,
+            _patched_ext4_home(
+                path, source_patch_tuple, parent_home, block_size=block_size
+            ),
+            bytes(expected_parent_home),
+        ),
+        "old_leaf_home": (
+            selected_leaf_home,
+            _patched_ext4_home(
+                path,
+                source_patch_tuple,
+                selected_leaf_home,
+                block_size=block_size,
+            ),
+            selected_expected,
+        ),
+        "new_node_home": (
+            node_candidate,
+            _patched_ext4_home(
+                path, source_patch_tuple, node_candidate, block_size=block_size
+            ),
+            expected_node,
+        ),
+        "new_leaf_home": (
+            leaf_candidate,
+            _patched_ext4_home(
+                path, source_patch_tuple, leaf_candidate, block_size=block_size
+            ),
+            leaf_expected,
+        ),
+        "root_home": (root_home, bytes(prepared_root), expected_root),
+        "map_node_home": (map_node_home, prepared_map, expected_map),
+        "block_bitmap_home": (
+            block_bitmap_home,
+            original_block_bitmap,
+            bytes(expected_block_bitmap),
+        ),
+        "gdt_home": (gdt_home, original_gdt, bytes(expected_gdt)),
+        "super_home": (
+            layout["primary_super"],
+            prepared_super,
+            expected_super,
+        ),
+        "inode_bitmap_home": (
+            inode_bitmap_home,
+            original_inode_bitmap,
+            bytes(expected_inode_bitmap),
+        ),
+    }
+    assert tuple(home for home, _, _ in expected_homes.values()) == (
+        child_home,
+        parent_home,
+        selected_leaf_home,
+        node_candidate,
+        leaf_candidate,
+        root_home,
+        map_node_home,
+        block_bitmap_home,
+        gdt_home,
+        layout["primary_super"],
+        inode_bitmap_home,
+    )
+    assert all(old != new for _, old, new in expected_homes.values())
     expected_meta_homes = (
         child_home,
         parent_home,
@@ -64461,7 +64824,8 @@ def staged_public_indexed_root_growth_probe_prestate(
 
     return {
         "source": path,
-        "source_patches": tuple(patch_map.items()),
+        "source_patches": source_patch_tuple,
+        "activation_trace": case["activation_trace"],
         "block_size": block_size,
         "parent_number": parent_number,
         "parent_generation": parent_generation,
@@ -64479,6 +64843,15 @@ def staged_public_indexed_root_growth_probe_prestate(
         "expected_map_count": len(expected_map_entries),
         "expected_role_count": 14,
         "expected_meta_homes": expected_meta_homes,
+        "expected_homes": expected_homes,
+        "free_blocks_before": free_blocks_before,
+        "free_blocks_after": free_blocks_after,
+        "free_inodes_before": free_inodes_before,
+        "free_inodes_after": free_inodes_after,
+        "group_counts_before": group_counts_before,
+        "expected_group_counts": expected_group_counts,
+        "dirty_super_before": dirty_super_before,
+        "dirty_super_after": dirty_super_after,
     }
 
 
@@ -66260,6 +66633,7 @@ def test_staged_vfs_indexed_root_growth_uses_sealed_plan_without_io(
     output = run_forth(
         path,
         [
+            *_EXT4_SOURCE_JIT_BEGIN,
             "VARIABLE _RGP-CLOCK-CALLS",
             (
                 ": _RGP-NOW ( context -- epoch-ms ior ) DROP "
@@ -66472,6 +66846,7 @@ def test_staged_vfs_indexed_root_growth_uses_sealed_plan_without_io(
             ),
             "_RGP-OPS _RGP-BINDING VB.OPS !",
             ": _RGP-NEW _RGP-BINDING SWAP VFS-NEW ;",
+            *_EXT4_SOURCE_JIT_END,
             (
                 "T-ARENA T-VOLUME _RGP-NEW "
                 "CONSTANT _RGP-MOUNT-IOR CONSTANT _RGP-V"
@@ -66648,6 +67023,336 @@ def test_staged_vfs_indexed_root_growth_uses_sealed_plan_without_io(
         max_steps=1_600_000_000,
     )
     _assert_emitted(output, "EXT4-INDEX-ROOT-GROWTH-PLAN-OK")
+
+
+@pytest.fixture(scope="session")
+def staged_internal_indexed_root_growth_live_fixture(
+    staged_public_indexed_root_growth_probe_prestate: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Activate the admitted transition and qualify all eleven exact homes."""
+    case = staged_public_indexed_root_growth_probe_prestate
+    path = case["source"]
+    patches = case["source_patches"]
+    activation_trace = case["activation_trace"]
+    expected_homes = case["expected_homes"]
+    expected_meta_homes = case["expected_meta_homes"]
+    node_candidate = case["node_candidate"]
+    leaf_candidate = case["leaf_candidate"]
+    free_blocks_before = case["free_blocks_before"]
+    free_blocks_after = case["free_blocks_after"]
+    free_inodes_before = case["free_inodes_before"]
+    free_inodes_after = case["free_inodes_after"]
+    expected_group_counts = case["expected_group_counts"]
+    block_size = case["block_size"]
+    child_number = case["child_number"]
+    assert isinstance(path, Path)
+    assert isinstance(patches, tuple)
+    assert isinstance(activation_trace, tuple)
+    assert isinstance(expected_homes, dict)
+    assert isinstance(expected_meta_homes, tuple)
+    assert isinstance(node_candidate, int)
+    assert isinstance(leaf_candidate, int)
+    assert isinstance(free_blocks_before, int)
+    assert isinstance(free_blocks_after, int)
+    assert isinstance(free_inodes_before, int)
+    assert isinstance(free_inodes_after, int)
+    assert isinstance(expected_group_counts, dict)
+    assert isinstance(block_size, int)
+    assert isinstance(child_number, int)
+    assert tuple(home for home, _, _ in expected_homes.values()) == (
+        expected_meta_homes
+    )
+
+    seconds, milliseconds = divmod(_STAGED_APPEND_EPOCH_MS, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    directory = tmp_path_factory.mktemp("ext4-indexed-root-growth-live")
+    backing = directory / "indexed-root-growth-live.img"
+    output, trace, media_sha256 = run_recovery_forth(
+        path,
+        backing,
+        [
+            *_EXT4_SOURCE_JIT_BEGIN,
+            "VARIABLE _RGL-CLOCK-CALLS",
+            (
+                ": _RGL-NOW ( context -- epoch-ms ior ) DROP "
+                "1 _RGL-CLOCK-CALLS +! "
+                f"{_STAGED_APPEND_EPOCH_MS} 0 ;"
+            ),
+            *_forth_admitted_root_growth_create("_RGL-CREATE"),
+            "CREATE _RGL-OPS VFS-OPS-SIZE ALLOT",
+            "EXT4-STAGED-WRITE-OPS _RGL-OPS VFS-OPS-SIZE CMOVE",
+            "' _RGL-CREATE _RGL-OPS VFS-OP-CREATE CELLS + !",
+            "CREATE _RGL-BINDING VFS-BINDING-DESC-SIZE ALLOT",
+            (
+                "EXT4-STAGED-WRITE-BINDING _RGL-BINDING "
+                "VFS-BINDING-DESC-SIZE CMOVE"
+            ),
+            "_RGL-OPS _RGL-BINDING VB.OPS !",
+            ": _RGL-NEW _RGL-BINDING SWAP VFS-NEW ;",
+            *_EXT4_SOURCE_JIT_END,
+            "CREATE _RGL-STAT VFS-STATFS-SIZE ALLOT",
+            "T-ARENA CONSTANT _RGL-ARENA",
+            (
+                "_RGL-ARENA T-VOLUME _RGL-NEW "
+                "CONSTANT _RGL-MOUNT-IOR CONSTANT _RGL-V"
+            ),
+            "_RGL-V _EXT4-CTX CONSTANT _RGL-CTX",
+            (
+                "' _RGL-NOW 0 _RGL-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _RGL-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_RGL-PROFILE", "_RGL-V", 11, 0, 0
+            ),
+            (
+                'S" /fixture/indexed" _RGL-V VFS-CD? '
+                "CONSTANT _RGL-CD-IOR"
+            ),
+            (
+                "_RGL-V V.CWD @ _RGL-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _RGL-LOAD-IOR"
+            ),
+            "_RGL-V V.CWD @ D.VNODE @ CONSTANT _RGL-PARENT-VN",
+            "_RGL-V V.ICOUNT @ CONSTANT _RGL-ICOUNT-BEFORE",
+            "_RGL-V V.VCOUNT @ CONSTANT _RGL-VCOUNT-BEFORE",
+            (
+                "_RGL-STAT VFS-STATFS-SIZE _RGL-V VFS-STATFS "
+                "CONSTANT _RGL-STAT-BEFORE-IOR"
+            ),
+            "_RGL-STAT VSF.BFREE @ CONSTANT _RGL-BFREE-BEFORE",
+            "_RGL-STAT VSF.FFREE @ CONSTANT _RGL-FFREE-BEFORE",
+            "DEPTH CONSTANT _RGL-DEPTH-BEFORE",
+            (
+                'S" new.txt" _RGL-V VFS-MKFILE? '
+                "CONSTANT _RGL-CREATE-IOR CONSTANT _RGL-D"
+            ),
+            "DEPTH CONSTANT _RGL-DEPTH-AFTER",
+            "_RGL-D D.VNODE @ CONSTANT _RGL-VN",
+            (
+                'S" /fixture/indexed/new.txt" _RGL-V VFS-RESOLVE? '
+                "CONSTANT _RGL-RESOLVE-IOR CONSTANT _RGL-R"
+            ),
+            (
+                "_RGL-STAT VFS-STATFS-SIZE _RGL-V VFS-STATFS "
+                "CONSTANT _RGL-STAT-AFTER-IOR"
+            ),
+            "_RGL-STAT VSF.BFREE @ CONSTANT _RGL-BFREE-AFTER",
+            "_RGL-STAT VSF.FFREE @ CONSTANT _RGL-FFREE-AFTER",
+            "_RGL-CTX _EXT4-C.J.WRITER + @ CONSTANT _RGL-WRITER",
+            _forth_xc_plan_scrubbed("_RGL-PLAN-SCRUBBED", "_RGL-CTX"),
+            *_forth_accumulated_conjunction(
+                "_RGL-OK",
+                [
+                    "_RGL-MOUNT-IOR 0=",
+                    "_RGL-CLOCK-IOR 0=",
+                    "_RGL-PROFILE-SIZE-IOR 0=",
+                    "_RGL-PROFILE-BIND-IOR 0=",
+                    "_RGL-PROFILE-USED _RGL-PROFILE-SIZE =",
+                    "_RGL-CD-IOR 0=",
+                    "_RGL-LOAD-IOR 0=",
+                    "_RGL-STAT-BEFORE-IOR 0=",
+                    "_RGL-CREATE-IOR 0=",
+                    "_RGL-DEPTH-AFTER _RGL-DEPTH-BEFORE =",
+                    "_RGL-V V.LAST-IOR @ 0=",
+                    "_RGL-D 0<>",
+                    "_RGL-RESOLVE-IOR 0=",
+                    "_RGL-R _RGL-D =",
+                    "_RGL-VN VN.TYPE @ VFS-T-FILE =",
+                    f"_RGL-VN VN.BID @ {child_number} =",
+                    f"_RGL-VN VN.BDATA @ {child_number} =",
+                    "_RGL-VN VN.GEN @ 1 =",
+                    "_RGL-VN VN.MODE @ 0x81B6 =",
+                    "_RGL-VN VN.SIZE-LO @ 0=",
+                    "_RGL-VN VN.SIZE-HI @ 0=",
+                    "_RGL-VN VN.NLINK @ 1 =",
+                    "_RGL-VN VN.BLOCKS @ 0=",
+                    f"_RGL-VN VN.ATIME @ {seconds} =",
+                    f"_RGL-VN VN.ATIME-NS @ {nanoseconds} =",
+                    "_RGL-PARENT-VN VN.SIZE-LO @ 129024 =",
+                    "_RGL-PARENT-VN VN.SIZE-HI @ 0=",
+                    "_RGL-PARENT-VN VN.BLOCKS @ 254 =",
+                    "_RGL-PARENT-VN VN.NLINK @ 2 =",
+                    f"_RGL-PARENT-VN VN.MTIME @ {seconds} =",
+                    f"_RGL-PARENT-VN VN.MTIME-NS @ {nanoseconds} =",
+                    f"_RGL-PARENT-VN VN.CTIME @ {seconds} =",
+                    f"_RGL-PARENT-VN VN.CTIME-NS @ {nanoseconds} =",
+                    "_RGL-V V.ICOUNT @ _RGL-ICOUNT-BEFORE 1+ =",
+                    "_RGL-V V.VCOUNT @ _RGL-VCOUNT-BEFORE 1+ =",
+                    "_RGL-STAT-AFTER-IOR 0=",
+                    "_RGL-BFREE-AFTER _RGL-BFREE-BEFORE 2 - =",
+                    "_RGL-FFREE-AFTER _RGL-FFREE-BEFORE 1- =",
+                    "_RGL-CLOCK-CALLS @ 1 =",
+                    "_RGL-WRITER _RGL-PROFILE-BASE =",
+                    "_RGL-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                    "_RGL-CTX _EXT4-C.J.HOME-WRITES + @ 11 =",
+                    "_RGL-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                    "_RGL-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_RGL-V V.FLAGS @ VFS-F-RO AND 0=",
+                    "_RGL-PLAN-SCRUBBED 0<>",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            (
+                '_RGL-OK @ IF ." EXT4-INDEX-ROOT-GROWTH-LIVE" '
+                'ELSE ." EXT4-INDEX-ROOT-GROWTH-LIVE-FAIL " '
+                "_RGL-OK-FIRST-FAILURE @ . THEN"
+            ),
+            "0 _RGL-V VFS-UNMOUNT CONSTANT _RGL-UNMOUNT-IOR",
+            (
+                "_RGL-UNMOUNT-IOR 0= "
+                "_RGL-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_RGL-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-INDEX-ROOT-GROWTH-LIVE-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=patches,
+        capture_media=backing,
+        # The production-like JIT source build qualifies this journey at
+        # 2,010,221,866 retired instructions; retain deterministic margin.
+        max_steps=2_400_000_000,
+    )
+    _assert_emitted(output, "EXT4-INDEX-ROOT-GROWTH-LIVE")
+    _assert_emitted(output, "EXT4-INDEX-ROOT-GROWTH-LIVE-UNMOUNTED")
+    assert trace[: len(activation_trace)] == activation_trace
+    assert backing.is_file()
+    assert _sha256(backing) == media_sha256
+
+    for home, _, expected in expected_homes.values():
+        assert _read_ext4_home(
+            backing, home, block_size=block_size
+        ) == expected
+    assert _ext4_block_allocation_state(
+        backing, (node_candidate, leaf_candidate)
+    ) == {node_candidate: True, leaf_candidate: True}
+    assert _ext4_inode_allocation_state(
+        backing, (child_number, child_number + 1)
+    ) == {child_number: True, child_number + 1: False}
+    assert _ext4_group_counts(backing, 0) == expected_group_counts
+    final_super, child_inode, _ = _ext4_inode_record(backing, child_number)
+    assert (
+        struct.unpack_from("<I", final_super, 0x0C)[0]
+        | (struct.unpack_from("<I", final_super, 0x158)[0] << 32)
+    ) == free_blocks_after
+    assert struct.unpack_from("<I", final_super, 0x10)[0] == free_inodes_after
+    assert free_blocks_after == free_blocks_before - 2
+    assert free_inodes_after == free_inodes_before - 1
+    assert struct.unpack_from("<H", child_inode, 0x00)[0] == 0x81B6
+    assert struct.unpack_from("<I", child_inode, 0x04)[0] == 0
+    assert struct.unpack_from("<H", child_inode, 0x1A)[0] == 1
+
+    checkpoint_ordinals = tuple(range(25, 36))
+    super_home = expected_homes["super_home"][0]
+    for ordinal, home in zip(
+        checkpoint_ordinals, expected_meta_homes, strict=True
+    ):
+        assert _write_ordinals_for_ext4_home(
+            trace, home, block_size=block_size
+        ) == ((4, 34, 44) if home == super_home else (ordinal,))
+
+    result = dict(case)
+    result.update(
+        {
+            "image": backing,
+            "trace": trace,
+            "media_sha256": media_sha256,
+        }
+    )
+    return result
+
+
+def test_staged_internal_indexed_root_growth_activates_exact_transaction(
+    staged_internal_indexed_root_growth_live_fixture: dict[str, object],
+) -> None:
+    """The internal admission path durably publishes the exact transition."""
+    image = staged_internal_indexed_root_growth_live_fixture["image"]
+    trace = staged_internal_indexed_root_growth_live_fixture["trace"]
+    assert isinstance(image, Path)
+    assert isinstance(trace, tuple)
+    assert image.is_file()
+    assert trace
+
+
+def test_staged_internal_indexed_root_growth_passes_external_oracles(
+    staged_internal_indexed_root_growth_live_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+) -> None:
+    """debugfs and e2fsck accept the private live transition."""
+    backing = staged_internal_indexed_root_growth_live_fixture["image"]
+    map_node_home = staged_internal_indexed_root_growth_live_fixture[
+        "map_node_home"
+    ]
+    node_candidate = staged_internal_indexed_root_growth_live_fixture[
+        "node_candidate"
+    ]
+    leaf_candidate = staged_internal_indexed_root_growth_live_fixture[
+        "leaf_candidate"
+    ]
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(backing, Path)
+    assert isinstance(map_node_home, int)
+    assert isinstance(node_candidate, int)
+    assert isinstance(leaf_candidate, int)
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    parent_stat = subprocess.run(
+        [str(debugfs), "-R", "stat /fixture/indexed", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert parent_stat.returncode == 0, parent_stat.stdout + parent_stat.stderr
+    for fragment in (
+        "Inode: 27",
+        "Size: 129024",
+        "Blockcount: 254",
+        "Flags: 0x81000",
+        f"(ETB0):{map_node_home}",
+        f"(124):{node_candidate}",
+        f"(125):{leaf_candidate}",
+    ):
+        assert fragment in parent_stat.stdout
+    child_stat = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "stat /fixture/indexed/new.txt",
+            str(backing),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert child_stat.returncode == 0, child_stat.stdout + child_stat.stderr
+    assert "Inode: 33" in child_stat.stdout
+    assert "Type: regular" in child_stat.stdout
+    htree = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "htree_dump /fixture/indexed",
+            str(backing),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert htree.returncode == 0, htree.stdout + htree.stderr
+    for fragment in (
+        "Indirect levels: 1",
+        "Number of entries (count): 1",
+        "Number of entries (limit): 123",
+        "Number of entries (count): 124",
+        "Number of entries (limit): 126",
+        "new.txt",
+    ):
+        assert fragment in htree.stdout
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
 
 
 def test_staged_vfs_indexed_create_rejects_checksummed_misbucketed_names(

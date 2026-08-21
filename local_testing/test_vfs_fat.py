@@ -52,6 +52,27 @@ SECTOR = 512
 # Keep additional room for the shared VFS test arena and loader allocations.
 VFS_EXT_MEM_SIZE = 64 * (1 << 20)
 VFS_USERLAND_MARKER = "VFS-USERLAND-READY"
+VFS_SOURCE_JIT_OFF_MARKER = "VFS-SOURCE-JIT-OFF"
+VFS_SOURCE_DIAGNOSTICS = (
+    "Stack underflow",
+    "Stack overflow",
+    "Return stack overflow",
+    "Branch offset overflow",
+    "dictionary full",
+    "dictionary overflow",
+    "EVALUATE depth limit exceeded",
+)
+
+# KDOS loads production autoexec modules under its compile-time JIT before
+# restoring the interactive JIT-OFF policy.  Keep source-mode VFS tests on the
+# same code-generation path; the explicit off mode remains a differential
+# oracle and must be selected before pytest imports this module.
+AKASHIC_SOURCE_JIT = os.environ.get("AKASHIC_SOURCE_JIT", "on")
+if AKASHIC_SOURCE_JIT not in {"off", "on"}:
+    raise RuntimeError(
+        "AKASHIC_SOURCE_JIT must be exactly 'off' or 'on'"
+    )
+AKASHIC_SOURCE_JIT_ENABLED = AKASHIC_SOURCE_JIT == "on"
 
 def _fat16_sfn(name):
     """Convert 'README.TXT' or 'readme.txt' → 11-byte space-padded SFN."""
@@ -536,10 +557,20 @@ def build_snapshot():
     sys_obj.load_binary(0, bios_code)
     sys_obj.boot()
 
+    jit_setup_lines = (
+        ["JIT-RESET", "JIT-ON"]
+        if AKASHIC_SOURCE_JIT_ENABLED
+        else []
+    )
+    jit_teardown_lines = (
+        ["JIT-OFF", f'." {VFS_SOURCE_JIT_OFF_MARKER}"']
+        if AKASHIC_SOURCE_JIT_ENABLED
+        else []
+    )
     all_lines = kdos_lines + [
         "ENTER-USERLAND",
         f'ULAND @ IF ." {VFS_USERLAND_MARKER}" CR THEN',
-    ] + dep_lines + helpers
+    ] + jit_setup_lines + dep_lines + helpers + jit_teardown_lines
     payload = "\n".join(all_lines) + "\n"
     data = payload.encode(); pos = 0; steps = 0; mx = 800_000_000
     while steps < mx:
@@ -563,16 +594,30 @@ def build_snapshot():
         if missing_word:
             errors.append(l.strip())
             print(f"  [!] {l.strip()}")
+    executed_lines = {line.strip().lower() for line in transcript_lines}
+    for marker in VFS_SOURCE_DIAGNOSTICS:
+        if marker.lower() in executed_lines:
+            errors.append(f"Forth diagnostic: {marker}")
     if VFS_USERLAND_MARKER not in {line.strip() for line in transcript_lines}:
         errors.append("userland activation marker missing")
+    if (
+        AKASHIC_SOURCE_JIT_ENABLED
+        and f"\r\n{VFS_SOURCE_JIT_OFF_MARKER} ok\r\n" not in text
+    ):
+        errors.append("Akashic source JIT teardown marker missing")
     if errors:
         print(f"  [FATAL] {len(errors)} errors during load!")
+        for error in errors:
+            print(f"  [!] {error}")
         for l in text.strip().split('\n')[-40:]:
             print(f"    {l}")
         sys.exit(1)
     _snapshot = (bios_code, bytes(sys_obj.cpu.mem), save_cpu_state(sys_obj.cpu),
                  bytes(sys_obj._ext_mem))
-    print(f"[*] Snapshot ready.  {steps:,} steps in {time.time()-t0:.1f}s")
+    print(
+        f"[*] Snapshot ready (Akashic source JIT={AKASHIC_SOURCE_JIT}).  "
+        f"{steps:,} steps in {time.time()-t0:.1f}s"
+    )
     return _snapshot
 
 
