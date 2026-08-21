@@ -116,10 +116,11 @@ governing extent node must each retain any entry slot the edit needs. When the
 depth-zero root is saturated, regular CREATE can instead allocate a DX node
 before the split leaf and publish the exact 11-home depth-one transition.
 Indexed LINK and MKDIR, inheritance beyond the explicit root-owned non-setgid
-envelope, broader directory shapes, and the remaining root-growth boundary
-matrix remain gated. A committed tear in the new DX-node home replays all 11
-afterimages before a write-free byte-stable remount. The driver also implements
-bounded mount-time recovery and
+envelope, and broader directory shapes remain gated. Exact one-short credit and
+unrelated-owner alias cases refuse without writes or flushes. A committed tear
+in the new DX-node home replays all 11 afterimages before a write-free
+byte-stable remount.
+The driver also implements bounded mount-time recovery and
 durable transaction emission for an internal checksum-v3 JBD2 journal. It never
 uses the ambient filesystem volume: reads and all recovery, activation,
 emission, checkpoint, and clean-deactivation writes go through checked volume
@@ -2339,7 +2340,9 @@ and passes external oracles for all 11 homes. A fresh mount then performs the
 qualified six-home depth-one slack CREATE. A representative committed W28 tear
 in the new DX node leaves three earlier homes landed, replays all 11 homes on a
 fresh mount, passes `e2fsck`, and is followed by a zero-write, byte-identical
-stable remount.
+stable remount. A ten-home writer profile cannot admit the exact 11-home plan,
+and an allocated unrelated inode cannot alias the HTree root during reverse-
+owner proof; both refusals leave the cache and complete media image unchanged.
 
 Indexed admission binds the checksummed live primary hash seed, default hash
 version, and full `s_flags` to the mounted superblock cache. It hashes and
@@ -2862,9 +2865,9 @@ modern-orphan final-link lifetime closure and one-block linear-to-HTree CREATE
 growth are now complete. Existing depth-zero indexed full-leaf CREATE mutation
 is also complete while the root retains an entry slot. Root-depth planning,
 dry staging, public live activation, and stable singleton depth-one CREATE are
-qualified. Representative committed root-growth replay and stable-remount
-qualification are also complete; focused boundary closure, followed by indexed
-`LINK`/`MKDIR`, remains the next delivery sequence.
+qualified. Representative committed root-growth replay, stable remount, and
+focused credit/ownership boundaries are also complete. Indexed `LINK`/`MKDIR`
+is the next delivery sequence.
 
 ### Same-retained-block shrink TRUNCATE
 
@@ -3712,8 +3715,8 @@ The ratchet order is:
    bounded planner and public live path to qualify one representative committed
    HTree root-growth recovery cut;
    public root growth, representative committed replay, stable remount, and
-   singleton depth-one CREATE are complete, after which close the focused
-   boundary gate and add indexed `LINK`/`MKDIR` plus the remaining deletion,
+   singleton depth-one CREATE plus its focused credit/owner boundaries are
+   complete, after which add indexed `LINK`/`MKDIR` plus the remaining deletion,
    truncation, metadata, and xattr forms; and
 9. perform the final profile closure audit across every profile-admitted
    operation and recovery state.
@@ -3940,8 +3943,8 @@ targets, including last-close failure recovery. Depth-zero indexed CREATE now
 splits a full selected leaf while its root retains entry capacity. The bounded
 root-growth planner and public live path are qualified, as is stable singleton
 depth-one CREATE. Representative committed root-growth replay and byte-stable
-remount are qualified. The next directory phases are focused boundary closure
-and indexed `LINK`/`MKDIR`.
+remount plus focused credit and reverse-owner refusals are qualified. The next
+directory phases are indexed `LINK`/`MKDIR`.
 Replacement, victims, broader
 concurrent orphan unions, general sparse/gap
 growth, unwritten conversion, growth beyond a

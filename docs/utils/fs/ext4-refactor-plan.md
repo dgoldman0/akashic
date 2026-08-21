@@ -203,8 +203,12 @@ redirected.
   all 11 afterimages on a fresh mount, passes the external checker, and is
   followed by a write-free byte-identical remount. The fault journey completed
   in 1,875,529,452 of 2,400,000,000 steps, recovery in 279,355,135 of
-  1,200,000,000, and the stable mount in 149,036,061 of 1,200,000,000. Focused
-  boundary closure is the remaining vertical-completion gate. The original
+  1,200,000,000, and the stable mount in 149,036,061 of 1,200,000,000. The
+  exact ten-versus-eleven-home profile refusal then completed in 346,405,702 of
+  1,600,000,000 steps; the unrelated-inode root-owner refusal completed in
+  564,354,763 of 1,600,000,000. Both observed zero writes and flushes and an
+  identical pre/post image SHA-256. This closes the focused root-growth vertical;
+  indexed LINK/MKDIR is the next directory feature boundary. The original
   exact source-mode qualification
   passed with the 13-unit ext4 closure loading in 1,073,526,553 of
   1,600,000,000 steps across 3,842 packed
@@ -222,8 +226,8 @@ advance `HEAD`, but that commit remains the behavior, ordering, persistent-byte,
 and crash comparison baseline. It includes bounded depth-zero HTree full-leaf
 CREATE and its recovery qualification. Stage 6 has now crossed positive HTree
 root-depth activation, representative committed replay, and stable-remount
-boundaries; focused refusal/boundary closure is the remaining gate before the
-vertical advances to indexed LINK/MKDIR.
+boundaries. Exact one-short credit and unrelated-owner refusal now close the
+focused vertical before work advances to indexed LINK/MKDIR.
 Refactoring must not silently cross that boundary or admit indexed LINK/MKDIR,
 broader map shapes, or another previously gated filesystem behavior.
 
@@ -592,8 +596,9 @@ the exact six homes, unmounts cleanly, and passes pinned `debugfs` and
 wrapper now admits the same exact root-growth transition, and the public
 11-home journey plus fresh-mount follow-on mutation pass. Its representative
 new-DX-node checkpoint tear now replays all 11 homes and reaches a write-free
-byte-stable remount. Focused boundary cases remain the vertical-completion gate;
-the broader refusal matrix does not interrupt this feature sequence.
+byte-stable remount. Its exact-credit and unrelated-owner boundaries refuse
+without writes or flushes and retain byte-identical media. The broader refusal
+matrix does not interrupt the next indexed-directory feature sequence.
 
 ## Verification cadence
 

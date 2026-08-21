@@ -137,10 +137,10 @@ and ctime, and updates parent mtime/ctime in an exact deduplicated `2/0/0` or
 `3/0/0` transaction. Five focused LINK qualifications cover same- and
 cross-parent success, W7 precommit rollback, W17 committed replay, zero-write
 refusals, external filesystem checks, and a write-free byte-stable remount. The
-next directory ratchet is focused boundary closure for the public HTree
-root-growth plan; representative committed replay and stable singleton
-depth-one CREATE are qualified, while indexed `LINK` and `MKDIR` remain
-separate gated slices.
+public HTree root-growth plan now also refuses exact one-short credit and an
+unrelated root owner without writes or flushes. Representative committed replay
+and stable singleton depth-one CREATE are qualified; indexed `LINK` and `MKDIR`
+are the next separate gated slices.
 HTree depth grows independently when an operation or a pinned corpus requires
 it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate

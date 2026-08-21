@@ -198,8 +198,8 @@ targets. Existing depth-zero HTree CREATE, atomic one-block linear-to-HTree
 growth, and full-leaf splitting under a depth-zero root with entry capacity are
 operation-admitted. Public indexed root-depth growth and stable singleton
 depth-one CREATE are qualified, including representative committed root-growth
-replay and a byte-stable remount. Focused boundary closure, then indexed
-LINK/MKDIR, remain later delivery phases.
+replay, a byte-stable remount, exact one-short credit refusal, and unrelated-
+owner rejection. Indexed LINK/MKDIR remain later delivery phases.
 Extent-tree
 depth and indexed-directory HTree depth are
 independent ratchets. Broaden either only when the next operation or a pinned
@@ -2491,8 +2491,8 @@ full-leaf mutation in an existing depth-zero indexed parent is complete while
 the root retains an entry slot. Public regular CREATE now completes the exact
 singleton root-growth transition, and stable singleton depth-one CREATE is
 qualified. Representative committed root-growth replay and a write-free stable
-remount are also complete. Focused boundary closure and indexed `LINK`/`MKDIR`
-remain later directory-mutation phases.
+remount are also complete, as are focused credit and reverse-owner boundaries.
+Indexed `LINK`/`MKDIR` remain later directory-mutation phases.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

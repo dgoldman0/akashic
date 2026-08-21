@@ -67746,6 +67746,115 @@ def test_staged_public_indexed_root_growth_node_tear_replays_all_eleven_homes(
         stable.unlink(missing_ok=True)
 
 
+def test_staged_vfs_indexed_root_growth_refuses_one_short_profile_without_writes(
+    staged_public_indexed_root_growth_probe_prestate: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """An exact ten-home profile cannot publish eleven-home root growth."""
+    case = staged_public_indexed_root_growth_probe_prestate
+    path = case["source"]
+    source_patches = case["source_patches"]
+    block_size = case["block_size"]
+    expected_homes = case["expected_homes"]
+    node_candidate = case["node_candidate"]
+    leaf_candidate = case["leaf_candidate"]
+    child_number = case["child_number"]
+    group_counts_before = case["group_counts_before"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(block_size, int)
+    assert isinstance(expected_homes, dict)
+    assert isinstance(node_candidate, int)
+    assert isinstance(leaf_candidate, int)
+    assert isinstance(child_number, int)
+    assert isinstance(group_counts_before, dict)
+
+    backing = tmp_path / "indexed-root-growth-profile-ten.img"
+    _run_staged_indexed_create_refusal(
+        path=path,
+        source_patches=source_patches,
+        extra_patches=(),
+        backing=backing,
+        target_name="new.txt",
+        expected_ior_checks=("_IR-CREATE-IOR VFS-E-NOSPC =",),
+        setup_checks=(
+            "_XC-INDEX-SPLITTING @ 0=",
+            "_XC-INDEX-ROOT-GROWING @ 0=",
+            "_XC-INDEX-NODE-HOME @ 0=",
+            "_XC-INDEX-NEW-HOME @ 0=",
+        ),
+        metadata_capacity=10,
+        max_steps=1_600_000_000,
+        marker="EXT4-INDEX-ROOT-GROWTH-PROFILE-REFUSAL",
+    )
+    for home, original, _ in expected_homes.values():
+        assert _read_ext4_home(
+            backing, home, block_size=block_size
+        ) == original
+    assert _ext4_block_allocation_state(
+        backing, (node_candidate, leaf_candidate)
+    ) == {node_candidate: False, leaf_candidate: False}
+    assert _ext4_inode_allocation_state(
+        backing, (child_number, child_number + 1)
+    ) == {child_number: False, child_number + 1: False}
+    assert _ext4_group_counts(backing, 0) == group_counts_before
+
+
+def test_staged_vfs_indexed_root_growth_refuses_other_inode_root_alias_without_writes(
+    staged_public_indexed_root_growth_probe_prestate: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """An unrelated allocated inode cannot also own the HTree root."""
+    case = staged_public_indexed_root_growth_probe_prestate
+    path = case["source"]
+    source_patches = case["source_patches"]
+    root_home = case["root_home"]
+    block_size = case["block_size"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(root_home, int)
+    assert isinstance(block_size, int)
+    assert _ext4_block_allocation_state(path, (root_home,)) == {
+        root_home: True
+    }
+    original_root = _patched_ext4_home(
+        path, source_patches, root_home, block_size=block_size
+    )
+    alias_patches = _inode14_extent_alias_patches(path, root_home)
+
+    backing = tmp_path / "indexed-root-growth-other-inode-alias.img"
+    _run_staged_indexed_create_refusal(
+        path=path,
+        source_patches=source_patches,
+        extra_patches=alias_patches,
+        backing=backing,
+        target_name="new.txt",
+        expected_ior_checks=(
+            "_IR-CREATE-IOR VFS-IOR-DOMAIN VFS-IOR-D-FORMAT =",
+            "_IR-CREATE-IOR VFS-IOR-REASON VFS-R-CORRUPT =",
+            "_IR-CREATE-IOR VFS-IOR-FLAGS VFS-IOR-F-CORRUPT =",
+            "_IR-CREATE-IOR VFS-IOR-DETAIL EXT4-D-DATA-MAP =",
+        ),
+        setup_checks=(
+            "_XC-INDEX-SPLITTING @ 0=",
+            "_XC-INDEX-ROOT-GROWING @ 0=",
+            "_XC-INDEX-NODE-HOME @ 0=",
+            "_XC-INDEX-NEW-HOME @ 0=",
+            "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+            "_EXT4-MUTATION-OWNER-INO @ 0=",
+            "_EXT4-JFO-TARGET-INO-B @ 0=",
+            "_EXT4-JFO-CERT-SCOPE @ 0=",
+            "_EXT4-JFO-CERT-VALID @ 0=",
+        ),
+        metadata_capacity=11,
+        max_steps=1_600_000_000,
+        marker="EXT4-INDEX-ROOT-GROWTH-OTHER-INODE-ALIAS",
+    )
+    assert _read_ext4_home(
+        backing, root_home, block_size=block_size
+    ) == original_root
+
+
 @pytest.fixture(scope="session")
 def staged_public_depth_one_indexed_create_fixture(
     staged_public_indexed_root_growth_live_fixture: dict[str, object],
@@ -71477,10 +71586,10 @@ def test_staged_vfs_rmdir_gdt_tear_replays_seven_homes_and_revoke(
         stable.unlink(missing_ok=True)
 
 
-def _rmdir_third_owner_alias_patches(
+def _inode14_extent_alias_patches(
     path: Path, physical_block: int
 ) -> tuple[tuple[int, bytes], ...]:
-    """Make allocated inode 14 claim one RMDIR directory home."""
+    """Make allocated inode 14 claim one supplied physical block."""
     superblock, inode, inode_offset = _ext4_inode_record(path, 14)
     assert struct.unpack_from("<H", inode, 0x00)[0] & 0xF000 == 0x8000
     assert struct.unpack_from("<HHHH", inode, 0x28) == (
@@ -71527,7 +71636,7 @@ def test_staged_vfs_rmdir_two_owner_proof_refuses_third_inode_aliases(
     ):
         prefix = f"_RDA{label[0]}"
         marker = f"EXT4-PUBLIC-RMDIR-{label}-THIRD-OWNER"
-        patches = _rmdir_third_owner_alias_patches(path, alias_home)
+        patches = _inode14_extent_alias_patches(path, alias_home)
         expected_image = bytearray(path.read_bytes())
         for offset, payload in patches:
             expected_image[offset : offset + len(payload)] = payload
