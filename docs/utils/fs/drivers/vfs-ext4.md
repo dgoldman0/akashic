@@ -3078,8 +3078,9 @@ matrix.
 same-parent directory moves, indexed leaf splitting or growth, HTree-key
 mutation, and deeper or multi-node HTree shapes remain gated. Indexed
 insertion, UNLINK, RMDIR, and this RENAME extension now draft-close the
-namespace/deletion vertical. Indexed-parent truncation, metadata, and xattr
-forms are the next Stage 6 handoff.
+namespace/deletion vertical. The indexed-parent retained-block TRUNCATE
+composition below is complete; metadata and xattr forms are the next Stage 6
+handoff.
 
 ### Same-retained-block shrink TRUNCATE
 
@@ -3114,6 +3115,19 @@ reads both aliases with the exact prefix and performs no writes; pinned
 e2fsprogs 1.47.4 `debugfs` observes the unchanged mapping/link/block counts and
 read-only `e2fsck` accepts the image. A missing trusted clock refuses before
 writer creation or media I/O and restores the prepublished cached size.
+
+The focused
+`test_staged_vfs_truncate_beneath_singleton_depth_one_indexed_parent`
+composition first uses the existing public exact `3/0/0` LINK to publish inode
+14 as `/fixture/indexed/linked.txt` in leaf 1497 and unmounts that qualified
+image. A fresh mount of the LINK after-image then installs the retained-block
+operation's exact `2/0/0` writer and shrinks through the indexed name. LINK
+checkpoints `[278, 281, 1497]`; the second stage checkpoints only data block
+1346 and inode-table home 278. Leaf 1497 retains exactly the LINK after-image
+and is not touched by TRUNCATE, while the root, DX node, external extent node,
+and every unselected mapped directory block remain byte-exact. This is
+resolver composition, not a wider TRUNCATE or indexed-directory mutation
+policy, and it introduces no new recovery state.
 
 The W7 descriptor tear returns the volume I/O error, restores the old cached
 EOF, leaves the descriptor cursor and both filesystem homes unchanged, and
@@ -3975,7 +3989,8 @@ The ratchet order is:
    including same-parent same- and cross-leaf regular moves and cross-parent
    regular/canonical-directory moves. Its two-operation positive gate and
    compositional evidence draft-close the namespace/deletion vertical; next
-   admit indexed-parent truncation, metadata, and xattr forms; and
+   retain the completed representative indexed-parent retained-block TRUNCATE
+   composition, then admit metadata and xattr forms; and
 9. perform the final profile closure audit across every profile-admitted
    operation and recovery state.
 

@@ -197,8 +197,14 @@ Existing linear RENAME recovery and indexed-parent authority evidence compose;
 no new crash, refusal, external-tool, or stable-remount matrix is claimed for
 this extension. Together with indexed insertion, UNLINK, and RMDIR, this
 draft-closes the namespace/deletion vertical. Indexed LINK/MKDIR splitting and
-growth remain gated; indexed-parent truncation, metadata, and xattr work is the
-next vertical handoff.
+growth remain gated. One representative retained-block TRUNCATE now composes
+beneath the singleton-depth-one root-growth parent. An exact `3/0/0` LINK stage
+first publishes inode 14 as `linked.txt` in the indexed parent and unmounts. A
+fresh mount of that image then uses TRUNCATE's unchanged exact `2/0/0` data-
+block/inode-home transaction through the new name. The selected leaf retains
+exactly the LINK after-image and every other parent HTree/map home remains
+byte-exact, so TRUNCATE adds no directory-mutation authority or recovery
+branch. Metadata and xattr work is the next vertical handoff.
 HTree depth grows independently when an operation or a pinned corpus requires
 it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate

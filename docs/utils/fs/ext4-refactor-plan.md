@@ -252,8 +252,12 @@ cross-parent regular moves, and the existing canonical empty-directory
 cross-parent move without HTree split, growth, or key mutation. A single
 source-built two-operation positive gate plus the prior linear RENAME recovery
 and indexed-authority evidence closes that step compositionally. Namespace
-insertion and deletion are therefore at draft vertical closure; indexed-parent
-truncation, metadata, and xattr forms are next.
+insertion and deletion are therefore at draft vertical closure. One exact
+`3/0/0` LINK stage followed by a fresh-mount retained-block TRUNCATE stage now
+composes the existing exact `2/0/0` inode/data transaction through an indexed
+name. The selected leaf retains its LINK after-image and the rest of the parent
+HTree and extent map remain unchanged; production policy and recovery shape do
+not widen. Metadata and xattr forms are next.
 
 The objective is to establish one authoritative implementation for each of
 these recurring mechanisms:
@@ -802,8 +806,11 @@ composed indexed-RENAME journey used 2,869,457,042 of 3,600,000,000 steps.
 Existing linear RENAME recovery and indexed topology evidence compose through
 the unchanged sealed-home replay; no new crash, refusal, external-tool, or
 stable-remount matrix is claimed.
-This draft-closes the namespace/deletion vertical. Indexed-parent truncation,
-metadata, and xattr forms follow.
+This draft-closes the namespace/deletion vertical. A focused
+singleton-depth-one LINK-to-TRUNCATE success now closes indexed-parent
+retained-block composition with the unchanged two-home `2/0/0` truncate
+transaction. The selected leaf retains the exact LINK after-image and the rest
+of the parent topology is byte-immutable. Metadata and xattr forms follow.
 
 ## Verification cadence
 
@@ -907,4 +914,6 @@ authority and admits the bounded same-parent regular, cross-parent regular,
 and cross-parent canonical-directory forms without topology mutation. Its one
 source-built two-operation positive gate plus compositional prior recovery
 evidence draft-closes the namespace/deletion vertical. Indexed-parent
-truncation, metadata, and xattr forms remain ahead.
+retained-block TRUNCATE now has one compositional two-stage indexed LINK-to-
+fresh-mount-TRUNCATE success without production or recovery widening. Metadata
+and xattr forms remain ahead.

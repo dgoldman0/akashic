@@ -67212,6 +67212,348 @@ def test_staged_public_indexed_root_growth_activates_exact_transaction(
     assert trace
 
 
+def test_staged_vfs_truncate_beneath_singleton_depth_one_indexed_parent(
+    staged_public_depth_one_indexed_link_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Remount the qualified indexed LINK image for exact TRUNCATE."""
+    case = staged_public_depth_one_indexed_link_fixture
+    path = case["image"]
+    block_size = case["block_size"]
+    parent_number = case["parent_number"]
+    root_home = case["root_home"]
+    node_home = case["node_candidate"]
+    selected_leaf_home = case["leaf_candidate"]
+    map_node_home = case["map_node_home"]
+    expected_map_entries = case["expected_map_entries"]
+    expected_linked_inode_home = case["expected_target_home"]
+    expected_linked_parent_home = case["expected_parent_home"]
+    expected_linked_leaf = case["expected_directory"]
+    assert isinstance(path, Path)
+    assert isinstance(block_size, int)
+    assert isinstance(parent_number, int)
+    assert isinstance(root_home, int)
+    assert isinstance(node_home, int)
+    assert isinstance(selected_leaf_home, int)
+    assert isinstance(map_node_home, int)
+    assert isinstance(expected_map_entries, tuple)
+    assert isinstance(expected_linked_inode_home, bytes)
+    assert isinstance(expected_linked_parent_home, bytes)
+    assert isinstance(expected_linked_leaf, bytes)
+    assert (
+        block_size,
+        parent_number,
+        root_home,
+        node_home,
+        selected_leaf_home,
+        map_node_home,
+    ) == (1024, 27, 1355, 1364, 1497, 1365)
+
+    inode_number = 14
+    super_before, inode_before, inode_offset = _ext4_inode_record(
+        path, inode_number
+    )
+    _, parent_before, parent_offset = _ext4_inode_record(path, parent_number)
+    inode_size = struct.unpack_from("<H", super_before, 0x58)[0]
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    parent_home, parent_block_offset = divmod(parent_offset, block_size)
+    data_block = _extent_root_physical(inode_before, 0)
+    xattr_block = struct.unpack_from("<I", inode_before, 0x68)[0]
+    old_size = struct.unpack_from("<I", inode_before, 0x04)[0]
+    old_blocks = struct.unpack_from("<I", inode_before, 0x1C)[0]
+    old_links = struct.unpack_from("<H", inode_before, 0x1A)[0]
+    old_generation = struct.unpack_from("<I", inode_before, 0x64)[0]
+    extent_root = inode_before[0x28:0x64]
+    parent_generation = struct.unpack_from("<I", parent_before, 0x64)[0]
+    assert inode_size == 256
+    assert (inode_home, inode_block_offset) == (278, 256)
+    assert (parent_home, parent_block_offset) == (281, 512)
+    assert (data_block, xattr_block, old_size, old_blocks, old_links) == (
+        1346,
+        1349,
+        54,
+        4,
+        3,
+    )
+    assert old_generation == parent_generation == 0
+
+    logical_homes: dict[int, int] = {}
+    for logical, length, high, low in expected_map_entries:
+        assert isinstance(logical, int)
+        assert isinstance(length, int)
+        assert isinstance(high, int)
+        assert isinstance(low, int)
+        physical = (high << 32) | low
+        for delta in range(length):
+            assert logical + delta not in logical_homes
+            logical_homes[logical + delta] = physical + delta
+    assert set(logical_homes) == set(range(126))
+    assert logical_homes[0] == root_home
+    assert logical_homes[124] == node_home
+    assert logical_homes[125] == selected_leaf_home
+    immutable_parent_homes = tuple(
+        home
+        for _, home in sorted(logical_homes.items())
+        if home != selected_leaf_home
+    ) + (map_node_home,)
+    assert len(immutable_parent_homes) == len(set(immutable_parent_homes)) == 126
+    immutable_parent_before = {
+        home: _read_ext4_home(path, home, block_size=block_size)
+        for home in immutable_parent_homes
+    }
+
+    original_inode_home = _read_ext4_home(
+        path, inode_home, block_size=block_size
+    )
+    original_parent_home = _read_ext4_home(
+        path, parent_home, block_size=block_size
+    )
+    original_selected = _read_ext4_home(
+        path, selected_leaf_home, block_size=block_size
+    )
+    original_data = _read_ext4_home(
+        path, data_block, block_size=block_size
+    )
+    original_xattr = _read_ext4_home(
+        path, xattr_block, block_size=block_size
+    )
+    assert original_xattr == _external_xattr_block_with_checksum(
+        super_before, xattr_block, original_xattr
+    )
+    assert original_inode_home == expected_linked_inode_home
+    assert original_parent_home == expected_linked_parent_home
+    assert original_selected == expected_linked_leaf
+    assert not {inode_home, parent_home, data_block, xattr_block} & set(
+        immutable_parent_homes
+    )
+
+    epoch_ms = 3_000_004_567_890
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+
+    new_size = 24
+    expected_data = bytearray(original_data)
+    expected_data[new_size:] = bytes(block_size - new_size)
+    expected_file = bytes(expected_data[:new_size])
+    expected_forth = "CREATE _ITR-EXPECTED " + " ".join(
+        f"{byte} C," for byte in expected_file
+    )
+    expected_inode_home = _staged_write_timestamped_inode_home(
+        super_before,
+        inode_before,
+        original_inode_home,
+        inode_number=inode_number,
+        inode_block_offset=inode_block_offset,
+        epoch_ms=epoch_ms,
+        expected_size=new_size,
+    )
+    free_blocks_before = struct.unpack_from("<I", super_before, 0x0C)[0] | (
+        struct.unpack_from("<I", super_before, 0x158)[0] << 32
+    )
+    free_inodes_before = struct.unpack_from("<I", super_before, 0x10)[0]
+    group_counts_before = _ext4_group_counts(path, 0)
+    activation_trace = _jbd2_writer_activation_trace(path)
+
+    backing = tmp_path / "indexed-truncate-depth-one.img"
+    output, trace, _ = run_recovery_forth(
+        path,
+        backing,
+        [
+            "CREATE _ITR-BUF 64 ALLOT",
+            expected_forth,
+            "VARIABLE _ITR-CLOCK-CALLS",
+            (
+                ": _ITR-NOW ( context -- epoch-ms ior ) DROP "
+                f"1 _ITR-CLOCK-CALLS +! {epoch_ms} 0 ;"
+            ),
+            "T-ARENA CONSTANT _ITR-ARENA",
+            (
+                "_ITR-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _ITR-MOUNT-IOR CONSTANT _ITR-V"
+            ),
+            "_ITR-V _EXT4-CTX CONSTANT _ITR-CTX",
+            (
+                "' _ITR-NOW 0 _ITR-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _ITR-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_ITR-PROFILE", "_ITR-V", 2, 0, 0
+            ),
+            (
+                'S" /fixture/payload.txt" _ITR-V VFS-RESOLVE? '
+                "CONSTANT _ITR-P-IOR CONSTANT _ITR-P"
+            ),
+            (
+                'S" /fixture/hardlink.txt" _ITR-V VFS-RESOLVE? '
+                "CONSTANT _ITR-H-IOR CONSTANT _ITR-H"
+            ),
+            (
+                'S" /fixture/indexed/linked.txt" _ITR-V VFS-RESOLVE? '
+                "CONSTANT _ITR-I-IOR CONSTANT _ITR-I"
+            ),
+            "_ITR-I D.VNODE @ CONSTANT _ITR-VN",
+            "_ITR-VN VN.ATIME @ CONSTANT _ITR-OLD-ATIME",
+            "_ITR-VN VN.ATIME-NS @ CONSTANT _ITR-OLD-ATIME-NS",
+            (
+                'S" /fixture/indexed/linked.txt" '
+                "VFS-FF-READ VFS-FF-WRITE OR _ITR-V VFS-OPEN? "
+                "CONSTANT _ITR-OPEN-IOR CONSTANT _ITR-FD"
+            ),
+            (
+                'S" /fixture/payload.txt" VFS-FF-READ _ITR-V '
+                "VFS-OPEN? CONSTANT _ITR-POPEN-IOR CONSTANT _ITR-PFD"
+            ),
+            "50 _ITR-FD VFS-SEEK? CONSTANT _ITR-SEEK-IOR",
+            f"{new_size} _ITR-FD VFS-TRUNCATE CONSTANT _ITR-TR-IOR",
+            "_ITR-FD FD.CUR-LO @ CONSTANT _ITR-CLAMPED",
+            "_ITR-CTX _EXT4-C.J.WRITER + @ CONSTANT _ITR-WRITER",
+            (
+                "_ITR-CTX _EXT4-C.J.HOME-WRITES + @ "
+                "CONSTANT _ITR-HOMES"
+            ),
+            (
+                "_ITR-BUF 64 _ITR-PFD VFS-READ? "
+                "CONSTANT _ITR-READ-IOR CONSTANT _ITR-ACTUAL"
+            ),
+            (
+                f"{data_block} _ITR-CTX _EXT4-READ-BLOCK "
+                "CONSTANT _ITR-DATA-IOR"
+            ),
+            *_forth_accumulated_conjunction(
+                "_ITR-OK",
+                [
+                    "_ITR-MOUNT-IOR 0=",
+                    "_ITR-CLOCK-IOR 0=",
+                    "_ITR-PROFILE-SIZE-IOR 0=",
+                    "_ITR-PROFILE-BIND-IOR 0=",
+                    "_ITR-PROFILE-USED _ITR-PROFILE-SIZE =",
+                    "_ITR-P-IOR 0=",
+                    "_ITR-H-IOR 0=",
+                    "_ITR-I-IOR 0=",
+                    "_ITR-P D.VNODE @ _ITR-H D.VNODE @ =",
+                    "_ITR-P D.VNODE @ _ITR-VN =",
+                    "_ITR-OPEN-IOR 0=",
+                    "_ITR-POPEN-IOR 0=",
+                    "_ITR-FD FD.INODE @ D.VNODE @ _ITR-VN =",
+                    "_ITR-PFD FD.INODE @ D.VNODE @ _ITR-VN =",
+                    "_ITR-SEEK-IOR 0=",
+                    "_ITR-TR-IOR 0=",
+                    "_ITR-V V.LAST-IOR @ 0=",
+                    f"_ITR-CLAMPED {new_size} =",
+                    "_ITR-HOMES 2 =",
+                    "_ITR-CLOCK-CALLS @ 1 =",
+                    f"_ITR-VN VN.SIZE-LO @ {new_size} =",
+                    "_ITR-VN VN.SIZE-HI @ 0=",
+                    "_ITR-VN VN.BLOCKS @ 4 =",
+                    "_ITR-VN VN.GEN @ 0=",
+                    "_ITR-VN VN.NLINK @ 3 =",
+                    f"_ITR-VN VN.MTIME @ {seconds} =",
+                    f"_ITR-VN VN.MTIME-NS @ {nanoseconds} =",
+                    f"_ITR-VN VN.CTIME @ {seconds} =",
+                    f"_ITR-VN VN.CTIME-NS @ {nanoseconds} =",
+                    "_ITR-VN VN.ATIME @ _ITR-OLD-ATIME =",
+                    "_ITR-VN VN.ATIME-NS @ _ITR-OLD-ATIME-NS =",
+                    "_ITR-READ-IOR 0=",
+                    f"_ITR-ACTUAL {new_size} =",
+                    (
+                        f"_ITR-BUF _ITR-EXPECTED {new_size} "
+                        "_EXT4-BYTES=?"
+                    ),
+                    "_ITR-DATA-IOR 0=",
+                    (
+                        f"_ITR-CTX _EXT4-C.BLOCK + {new_size} + "
+                        f"{block_size - new_size} "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    "_ITR-WRITER _ITR-PROFILE-BASE =",
+                    "_ITR-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                    "_ITR-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_ITR-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                    "_ITR-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            (
+                '_ITR-OK @ IF ." EXT4-INDEXED-TRUNCATE" '
+                'ELSE ." EXT4-INDEXED-TRUNCATE-FAIL " '
+                "_ITR-OK-FIRST-FAILURE @ . THEN"
+            ),
+            "_ITR-FD VFS-CLOSE? CONSTANT _ITR-CLOSE-IOR",
+            "_ITR-PFD VFS-CLOSE? CONSTANT _ITR-PCLOSE-IOR",
+            "0 _ITR-V VFS-UNMOUNT CONSTANT _ITR-UNMOUNT-IOR",
+            (
+                "_ITR-CLOSE-IOR 0= _ITR-PCLOSE-IOR 0= AND "
+                "_ITR-UNMOUNT-IOR 0= AND "
+                "_ITR-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_ITR-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-INDEXED-TRUNCATE-UNMOUNTED" THEN'
+            ),
+        ],
+        capture_media=backing,
+        max_steps=2_400_000_000,
+    )
+    _assert_emitted(output, "EXT4-INDEXED-TRUNCATE")
+    _assert_emitted(output, "EXT4-INDEXED-TRUNCATE-UNMOUNTED")
+    assert trace[: len(activation_trace)] == activation_trace
+    expected_home_events = tuple(
+        ("write", home * 2, 2)
+        for home in (data_block, inode_home)
+    )
+    assert tuple(
+        event for event in trace if event in set(expected_home_events)
+    ) == expected_home_events
+    inode_ordinals = _write_ordinals_for_ext4_home(
+        trace, inode_home, block_size=block_size
+    )
+    data_ordinals = _write_ordinals_for_ext4_home(
+        trace, data_block, block_size=block_size
+    )
+    assert len(inode_ordinals) == len(data_ordinals) == 1
+    assert (data_ordinals[0], inode_ordinals[0]) == (
+        data_ordinals[0],
+        data_ordinals[0] + 1,
+    )
+
+    super_after, inode_after, _ = _ext4_inode_record(backing, inode_number)
+    _, parent_after, _ = _ext4_inode_record(backing, parent_number)
+    assert struct.unpack_from("<I", super_after, 0x0C)[0] | (
+        struct.unpack_from("<I", super_after, 0x158)[0] << 32
+    ) == free_blocks_before
+    assert struct.unpack_from("<I", super_after, 0x10)[0] == free_inodes_before
+    assert struct.unpack_from("<I", inode_after, 0x04)[0] == new_size
+    assert struct.unpack_from("<I", inode_after, 0x6C)[0] == 0
+    assert struct.unpack_from("<I", inode_after, 0x1C)[0] == old_blocks
+    assert struct.unpack_from("<H", inode_after, 0x1A)[0] == old_links
+    assert struct.unpack_from("<I", inode_after, 0x64)[0] == old_generation
+    assert inode_after[0x28:0x64] == extent_root
+    assert parent_after == original_parent_home[
+        parent_block_offset : parent_block_offset + inode_size
+    ]
+    assert _read_ext4_home(
+        backing, data_block, block_size=block_size
+    ) == bytes(expected_data)
+    assert _read_ext4_home(
+        backing, inode_home, block_size=block_size
+    ) == expected_inode_home
+    assert _read_ext4_home(
+        backing, parent_home, block_size=block_size
+    ) == original_parent_home
+    assert _read_ext4_home(
+        backing, selected_leaf_home, block_size=block_size
+    ) == original_selected
+    assert _read_ext4_home(
+        backing, xattr_block, block_size=block_size
+    ) == original_xattr
+    assert _ext4_block_allocation_state(
+        backing, (data_block, xattr_block)
+    ) == {data_block: True, xattr_block: True}
+    assert _ext4_group_counts(backing, 0) == group_counts_before
+    for home, original in immutable_parent_before.items():
+        assert _read_ext4_home(
+            backing, home, block_size=block_size
+        ) == original
+
+
 def test_staged_public_indexed_root_growth_passes_external_oracles(
     staged_public_indexed_root_growth_live_fixture: dict[str, object],
     jbd2_toolchain: dict[str, object],
@@ -68831,13 +69173,68 @@ def test_staged_vfs_indexed_create_finds_duplicate_in_nonrouted_leaf(
     )
 
 
+def _assert_staged_indexed_link_external_oracles(
+    *,
+    backing: Path,
+    jbd2_toolchain: dict[str, object],
+    target_number: int,
+    old_size: int,
+    data_block: int,
+    old_file: bytes,
+    linked_path: str,
+    htree_fragments: tuple[str, ...],
+) -> None:
+    """Apply optional external-tool oracles to a qualified LINK artifact."""
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+
+    stat = subprocess.run(
+        [str(debugfs), "-R", f"stat {linked_path}", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stat.returncode == 0, stat.stdout + stat.stderr
+    assert f"Inode: {target_number}" in stat.stdout
+    assert f"Size: {old_size}" in stat.stdout
+    assert re.search(r"Links:\s+3\s+Blockcount:\s+4", stat.stdout)
+    assert f"(0):{data_block}" in stat.stdout
+    readback = subprocess.run(
+        [str(debugfs), "-R", f"cat {linked_path}", str(backing)],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert readback.returncode == 0, readback.stdout + readback.stderr
+    assert readback.stdout == old_file
+    htree = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "htree_dump /fixture/indexed",
+            str(backing),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert htree.returncode == 0, htree.stdout + htree.stderr
+    for fragment in htree_fragments:
+        assert fragment in htree.stdout
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+
 def _run_staged_indexed_link_success(
     *,
     path: Path,
     source_patches: tuple[tuple[int, bytes], ...],
     activation_trace: tuple[tuple[str, int, int], ...],
     backing: Path,
-    jbd2_toolchain: dict[str, object],
+    jbd2_toolchain: dict[str, object] | None,
     selected_leaf_home: int,
     expected_parent_size: int,
     expected_parent_blocks: int,
@@ -68846,12 +69243,8 @@ def _run_staged_indexed_link_success(
     htree_fragments: tuple[str, ...],
     marker: str,
     max_steps: int,
-) -> None:
+) -> dict[str, object]:
     """Commit one exact three-home LINK through an indexed parent."""
-    debugfs = jbd2_toolchain["debugfs"]
-    env = jbd2_toolchain["env"]
-    assert isinstance(debugfs, Path)
-    assert isinstance(env, dict)
     assert source_patches == tuple(source_patches)
     assert activation_trace
     assert selected_leaf_home > 0
@@ -69216,42 +69609,115 @@ def _run_staged_indexed_link_success(
         entry for entry in final_entries if entry[4] == link_name
     ]
     assert final_linked_entries == linked_entries
-    stat = subprocess.run(
-        [str(debugfs), "-R", f"stat {linked_path}", str(backing)],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
+    if jbd2_toolchain is not None:
+        _assert_staged_indexed_link_external_oracles(
+            backing=backing,
+            jbd2_toolchain=jbd2_toolchain,
+            target_number=target_number,
+            old_size=old_size,
+            data_block=data_block,
+            old_file=old_file,
+            linked_path=linked_path,
+            htree_fragments=htree_fragments,
+        )
+    return {
+        "source": path,
+        "source_patches": source_patches,
+        "image": backing,
+        "trace": trace,
+        "media_sha256": media_sha256,
+        "block_size": block_size,
+        "target_number": target_number,
+        "target_home": target_home,
+        "target_block_offset": target_block_offset,
+        "parent_number": parent_number,
+        "parent_home": parent_home,
+        "parent_block_offset": parent_block_offset,
+        "selected_leaf_home": selected_leaf_home,
+        "data_block": data_block,
+        "xattr_block": xattr_block,
+        "old_size": old_size,
+        "old_file": old_file,
+        "linked_path": linked_path,
+        "htree_fragments": htree_fragments,
+        "expected_target_home": bytes(expected_target_home),
+        "expected_parent_home": bytes(expected_parent_home),
+        "expected_directory": expected_directory,
+    }
+
+
+@pytest.fixture(scope="session")
+def staged_public_depth_one_indexed_link_fixture(
+    staged_public_indexed_root_growth_live_fixture: dict[str, object],
+    tmp_path_factory: pytest.TempPathFactory,
+) -> dict[str, object]:
+    """Publish and functionally qualify one exact depth-one indexed LINK."""
+    case = staged_public_indexed_root_growth_live_fixture
+    path = case["image"]
+    block_size = case["block_size"]
+    root_home = case["root_home"]
+    node_home = case["node_candidate"]
+    leaf_home = case["leaf_candidate"]
+    map_node_home = case["map_node_home"]
+    separator = case["separator"]
+    assert isinstance(path, Path)
+    assert isinstance(block_size, int)
+    assert isinstance(root_home, int)
+    assert isinstance(node_home, int)
+    assert isinstance(leaf_home, int)
+    assert isinstance(map_node_home, int)
+    assert isinstance(separator, int)
+    assert (block_size, root_home, node_home, leaf_home, map_node_home) == (
+        1024,
+        1355,
+        1364,
+        1497,
+        1365,
     )
-    assert stat.returncode == 0, stat.stdout + stat.stderr
-    assert f"Inode: {target_number}" in stat.stdout
-    assert f"Size: {old_size}" in stat.stdout
-    assert re.search(r"Links:\s+3\s+Blockcount:\s+4", stat.stdout)
-    assert f"(0):{data_block}" in stat.stdout
-    readback = subprocess.run(
-        [str(debugfs), "-R", f"cat {linked_path}", str(backing)],
-        env=env,
-        capture_output=True,
-        check=False,
+    assert separator == 0x1A48_8646
+
+    superblock, _, _ = _ext4_inode_record(path, 27)
+    root = _read_ext4_home(path, root_home, block_size=block_size)
+    node = _read_ext4_home(path, node_home, block_size=block_size)
+    assert struct.unpack_from("<IBBBB", root, 24) == (0, 1, 8, 1, 0)
+    assert struct.unpack_from("<HHI", root, 32) == (123, 1, 124)
+    assert struct.unpack_from("<HH", node, 8) == (126, 124)
+    assert struct.unpack_from("<I", node, 12)[0] == 1
+    assert struct.unpack_from("<II", node, 16) == (separator, 125)
+    assert struct.unpack_from("<II", node, 24) == (0x40B1_F581, 2)
+    major, minor = _indexed_split_half_md4_hash(superblock, b"linked.txt")
+    assert (major, minor) == (0x2D9C_821A, 0x374D_DB14)
+    assert separator <= major < 0x40B1_F581
+
+    directory = tmp_path_factory.mktemp("ext4-indexed-link-depth-one")
+    link_result = _run_staged_indexed_link_success(
+        path=path,
+        source_patches=(),
+        activation_trace=_jbd2_writer_activation_trace(path),
+        backing=directory / "indexed-link-depth-one.img",
+        jbd2_toolchain=None,
+        selected_leaf_home=leaf_home,
+        expected_parent_size=129024,
+        expected_parent_blocks=254,
+        expected_insert_offset=408,
+        immutable_homes=(root_home, node_home, map_node_home, 1357),
+        htree_fragments=(
+            "Hash Version: 1",
+            "Indirect levels: 1",
+            "Number of entries (count): 1\n",
+            "Number of entries (limit): 123",
+            "Number of entries (count): 124",
+            "Reading directory block 125, phys 1497",
+            "linked.txt",
+        ),
+        marker="EXT4-INDEXED-LINK-DEPTH-ONE",
+        max_steps=2_400_000_000,
     )
-    assert readback.returncode == 0, readback.stdout + readback.stderr
-    assert readback.stdout == old_file
-    htree = subprocess.run(
-        [
-            str(debugfs),
-            "-R",
-            "htree_dump /fixture/indexed",
-            str(backing),
-        ],
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert htree.returncode == 0, htree.stdout + htree.stderr
-    for fragment in htree_fragments:
-        assert fragment in htree.stdout
-    _assert_e2fsck_clean(backing, jbd2_toolchain)
+    result = dict(case)
+    result.update(link_result)
+    result["link_trace"] = link_result["trace"]
+    result["link_media_sha256"] = link_result["media_sha256"]
+    return result
 
 
 def test_staged_vfs_link_into_existing_depth_zero_indexed_parent(
@@ -69305,70 +69771,47 @@ def test_staged_vfs_link_into_existing_depth_zero_indexed_parent(
 
 
 def test_staged_vfs_link_into_singleton_depth_one_indexed_parent(
-    staged_public_indexed_root_growth_live_fixture: dict[str, object],
-    jbd2_toolchain: dict[str, object],
-    tmp_path: Path,
+    staged_public_depth_one_indexed_link_fixture: dict[str, object],
 ) -> None:
     """LINK routes through the immutable singleton root-growth DX node."""
-    case = staged_public_indexed_root_growth_live_fixture
-    path = case["image"]
-    block_size = case["block_size"]
-    root_home = case["root_home"]
-    node_home = case["node_candidate"]
-    leaf_home = case["leaf_candidate"]
-    map_node_home = case["map_node_home"]
-    separator = case["separator"]
-    assert isinstance(path, Path)
-    assert isinstance(block_size, int)
-    assert isinstance(root_home, int)
-    assert isinstance(node_home, int)
-    assert isinstance(leaf_home, int)
-    assert isinstance(map_node_home, int)
-    assert isinstance(separator, int)
-    assert (block_size, root_home, node_home, leaf_home, map_node_home) == (
-        1024,
-        1355,
-        1364,
-        1497,
-        1365,
-    )
-    assert separator == 0x1A48_8646
+    image = staged_public_depth_one_indexed_link_fixture["image"]
+    trace = staged_public_depth_one_indexed_link_fixture["link_trace"]
+    assert isinstance(image, Path)
+    assert isinstance(trace, tuple)
+    assert image.is_file()
+    assert trace
 
-    superblock, _, _ = _ext4_inode_record(path, 27)
-    root = _read_ext4_home(path, root_home, block_size=block_size)
-    node = _read_ext4_home(path, node_home, block_size=block_size)
-    assert struct.unpack_from("<IBBBB", root, 24) == (0, 1, 8, 1, 0)
-    assert struct.unpack_from("<HHI", root, 32) == (123, 1, 124)
-    assert struct.unpack_from("<HH", node, 8) == (126, 124)
-    assert struct.unpack_from("<I", node, 12)[0] == 1
-    assert struct.unpack_from("<II", node, 16) == (separator, 125)
-    assert struct.unpack_from("<II", node, 24) == (0x40B1_F581, 2)
-    major, minor = _indexed_split_half_md4_hash(superblock, b"linked.txt")
-    assert (major, minor) == (0x2D9C_821A, 0x374D_DB14)
-    assert separator <= major < 0x40B1_F581
 
-    _run_staged_indexed_link_success(
-        path=path,
-        source_patches=(),
-        activation_trace=_jbd2_writer_activation_trace(path),
-        backing=tmp_path / "indexed-link-depth-one.img",
+def test_staged_vfs_depth_one_indexed_link_passes_external_oracles(
+    jbd2_toolchain: dict[str, object],
+    staged_public_depth_one_indexed_link_fixture: dict[str, object],
+) -> None:
+    """Optional debugfs and e2fsck oracles consume the shared LINK image."""
+    case = staged_public_depth_one_indexed_link_fixture
+    backing = case["image"]
+    target_number = case["target_number"]
+    old_size = case["old_size"]
+    data_block = case["data_block"]
+    old_file = case["old_file"]
+    linked_path = case["linked_path"]
+    htree_fragments = case["htree_fragments"]
+    assert isinstance(backing, Path)
+    assert isinstance(target_number, int)
+    assert isinstance(old_size, int)
+    assert isinstance(data_block, int)
+    assert isinstance(old_file, bytes)
+    assert isinstance(linked_path, str)
+    assert isinstance(htree_fragments, tuple)
+
+    _assert_staged_indexed_link_external_oracles(
+        backing=backing,
         jbd2_toolchain=jbd2_toolchain,
-        selected_leaf_home=leaf_home,
-        expected_parent_size=129024,
-        expected_parent_blocks=254,
-        expected_insert_offset=408,
-        immutable_homes=(root_home, node_home, map_node_home, 1357),
-        htree_fragments=(
-            "Hash Version: 1",
-            "Indirect levels: 1",
-            "Number of entries (count): 1\n",
-            "Number of entries (limit): 123",
-            "Number of entries (count): 124",
-            "Reading directory block 125, phys 1497",
-            "linked.txt",
-        ),
-        marker="EXT4-INDEXED-LINK-DEPTH-ONE",
-        max_steps=2_400_000_000,
+        target_number=target_number,
+        old_size=old_size,
+        data_block=data_block,
+        old_file=old_file,
+        linked_path=linked_path,
+        htree_fragments=htree_fragments,
     )
 
 

@@ -2640,7 +2640,13 @@ matrices is claimed.
 directory moves, indexed split/growth, HTree-key mutation, and deeper or
 multi-node HTree shapes remain gated. Indexed insertion, UNLINK, RMDIR, and
 RENAME now draft-close the namespace/deletion vertical. Indexed-parent
-truncation, metadata, and xattr coverage follow.
+retained-block TRUNCATE is now covered by one compositional singleton-depth-one
+success. An exact `3/0/0` stage publishes inode 14 as indexed `linked.txt` and
+unmounts; a fresh mount of that LINK image installs the existing exact `2/0/0`
+writer and shrinks through the new name, changing only block 1346 and inode
+home 278. The selected leaf retains the exact LINK after-image; the remaining
+parent HTree and external map stay byte-exact. It adds no new production or
+recovery shape. Metadata and xattr coverage follow.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,
