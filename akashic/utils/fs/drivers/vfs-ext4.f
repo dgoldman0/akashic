@@ -8813,10 +8813,10 @@ CONSTANT _EXT4-ORPHAN-SLOTS-MAX
     _EXT4-ROE-CTX @ _EXT4-C.J.REVOKE-SLOTS + @ OR IF
         VFS-E-CONFLICT EXIT
     THEN
-    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER + @
-    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @ OR
-    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER-ARENA + @ OR
-    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER-CURRENT + @ OR IF
+    \ A failed or interrupted mount may retain a non-current writer below
+    \ this mark (or in its disjoint dedicated arena).  Final mount rebase
+    \ validates and scrubs that workspace; only live authority is forbidden.
+    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER-CURRENT + @ IF
         VFS-E-CONFLICT EXIT
     THEN
     _EXT4-ROE-CTX @ _EXT4-LOAD-MOUNT-ARENA ?DUP IF EXIT THEN
@@ -8833,10 +8833,10 @@ CONSTANT _EXT4-ORPHAN-SLOTS-MAX
     DUP _EXT4-ROE-CTX ! 0= IF VFS-E-INVALID EXIT THEN
     _EXT4-ROE-CTX @ _EXT4-C.O.MOUNT-TAIL-MARK + @ DUP
     _EXT4-ROE-MARK ! 0= IF 0 EXIT THEN
-    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER + @
-    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @ OR
-    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER-ARENA + @ OR
-    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER-CURRENT + @ OR IF
+    \ The rollback tail begins after persistent mount allocations.  Preserve
+    \ a retained non-current writer for final authenticated rebase while
+    \ refusing any publication that could still mutate through it.
+    _EXT4-ROE-CTX @ _EXT4-C.J.WRITER-CURRENT + @ IF
         VFS-E-BUSY EXIT
     THEN
     _EXT4-ROE-CTX @ _EXT4-LOAD-MOUNT-ARENA ?DUP IF EXIT THEN

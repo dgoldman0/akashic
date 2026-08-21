@@ -10128,35 +10128,39 @@ def test_jbd2_writer_batches_descriptors_and_revokes_across_ring_wrap(
                 'IF ." EXT4-JTX-BATCH-EMITTED" THEN',
                 "_GB-V _EXT4-MOUNT CONSTANT _GB-REMOUNT-IOR",
                 "_GB-ARENA ARENA-USED CONSTANT _GB-USED-AFTER-REMOUNT",
-                (
-                    "_GB-CTX _EXT4-C.J.WRITER + @ _GB-W = "
-                    "_GB-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<> AND "
-                    "_GB-W _EXT4-JWR-VALID? AND "
-                    "_GB-W _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE = AND "
-                    "_GB-W _EXT4-JWR.FAULT + @ 0= AND"
-                ),
-                (
-                    "_GB-W _EXT4-JWR.META-USED + @ 0= AND "
-                    "_GB-W _EXT4-JWR.DATA-USED + @ 0= AND "
-                    "_GB-W _EXT4-JWR.REVOKE-USED + @ 0= AND "
-                    "0 _GB-W _EXT4-JWR-META-IMAGE C@ 0= AND "
-                    "62 _GB-W _EXT4-JWR-META-IMAGE C@ 0= AND"
-                ),
-                (
-                    "0 _GB-W _EXT4-JWR-DATA-IMAGE C@ 0= AND "
-                    "0 _GB-W _EXT4-JWR-REVOKE-ENTRY @ 0= AND "
-                    "125 _GB-W _EXT4-JWR-REVOKE-ENTRY @ 0= AND"
-                ),
-                (
-                    "_GB-W _EXT4-JWR.HEAD + @ "
-                    "_GB-CTX _EXT4-C.J.HEAD + @ = AND "
-                    "_GB-W _EXT4-JWR.TAIL + @ "
-                    "_GB-CTX _EXT4-C.J.HEAD + @ = AND"
-                ),
-                (
-                    "_GB-W _EXT4-JWR.NEXT-TID + @ "
-                    "_GB-CTX _EXT4-C.J.SEQUENCE + @ 1+ "
-                    "0xFFFFFFFF AND = AND CONSTANT _GB-MOUNT-REBASED"
+                *_forth_accumulated_conjunction(
+                    "_GB-MOUNT-REBASED",
+                    [
+                        "_GB-CTX _EXT4-C.J.WRITER + @ _GB-W =",
+                        "_GB-CTX _EXT4-C.J.WRITER-CURRENT + @ 0<>",
+                        "_GB-W _EXT4-JWR-VALID?",
+                        (
+                            "_GB-W _EXT4-JWR.STATE + @ "
+                            "_EXT4-JWR-IDLE ="
+                        ),
+                        "_GB-W _EXT4-JWR.FAULT + @ 0=",
+                        "_GB-W _EXT4-JWR.META-USED + @ 0=",
+                        "_GB-W _EXT4-JWR.DATA-USED + @ 0=",
+                        "_GB-W _EXT4-JWR.REVOKE-USED + @ 0=",
+                        "0 _GB-W _EXT4-JWR-META-IMAGE C@ 0=",
+                        "62 _GB-W _EXT4-JWR-META-IMAGE C@ 0=",
+                        "0 _GB-W _EXT4-JWR-DATA-IMAGE C@ 0=",
+                        "0 _GB-W _EXT4-JWR-REVOKE-ENTRY @ 0=",
+                        "125 _GB-W _EXT4-JWR-REVOKE-ENTRY @ 0=",
+                        (
+                            "_GB-W _EXT4-JWR.HEAD + @ "
+                            "_GB-CTX _EXT4-C.J.HEAD + @ ="
+                        ),
+                        (
+                            "_GB-W _EXT4-JWR.TAIL + @ "
+                            "_GB-CTX _EXT4-C.J.HEAD + @ ="
+                        ),
+                        (
+                            "_GB-W _EXT4-JWR.NEXT-TID + @ "
+                            "_GB-CTX _EXT4-C.J.SEQUENCE + @ 1+ "
+                            "0xFFFFFFFF AND ="
+                        ),
+                    ],
                 ),
                 (
                     ": _GB-HOMES? ( -- flag ) 0 _GB-I ! BEGIN "
@@ -10171,40 +10175,58 @@ def test_jbd2_writer_batches_descriptors_and_revokes_across_ring_wrap(
                     "CONSTANT _GB-REUSE-IOR CONSTANT _GB-REUSE-W"
                 ),
                 "_GB-ARENA ARENA-USED CONSTANT _GB-USED-AFTER-ENSURE",
-                (
-                    "_GB-REMOUNT-IOR 0= "
-                    "_GB-V V.LIFECYCLE @ VFS-L-MOUNTED = AND "
-                    "_GB-V _EXT4-READY? AND _GB-MOUNT-REBASED AND "
-                    "_GB-CTX _EXT4-C.RECOVERY + @ 0= AND "
-                    "_GB-CTX _EXT4-C.J.REPLAYED + @ 0<> AND"
+                *_forth_accumulated_conjunction(
+                    "_GB-REMOUNTED",
+                    [
+                        "_GB-REMOUNT-IOR 0=",
+                        "_GB-V V.LIFECYCLE @ VFS-L-MOUNTED =",
+                        "_GB-V _EXT4-READY?",
+                        "_GB-MOUNT-REBASED @",
+                        "_GB-CTX _EXT4-C.RECOVERY + @ 0=",
+                        "_GB-CTX _EXT4-C.J.REPLAYED + @ 0<>",
+                        "_GB-CTX _EXT4-C.J.START + @ 0=",
+                        (
+                            "_GB-CTX _EXT4-C.J.WITNESS + @ "
+                            "_EXT4-JW-NONE ="
+                        ),
+                        (
+                            "_GB-CTX _EXT4-C.J.CLEANUP + @ "
+                            "_EXT4-JC-NONE ="
+                        ),
+                        (
+                            "_GB-CTX _EXT4-C.J.FEATURES + @ "
+                            "_EXT4-JBD2-I-RECOVERY-REVOKE ="
+                        ),
+                        "_GB-CTX _EXT4-C.J.COMMITTED + @ 1 =",
+                        "_GB-CTX _EXT4-C.J.HOME-WRITES + @ 63 =",
+                        "_GB-CTX _EXT4-C.J.REVOKE-COUNT + @ 0=",
+                        "_GB-CTX _EXT4-C.J.REVOKE-HITS + @ 0=",
+                        "_GB-CTX _EXT4-C.J.REVOKE-READY + @ 0=",
+                        (
+                            "_GB-CTX _EXT4-C.SB + "
+                            "_EXT4-SUPER-CHECKSUM? 0= AND"
+                        ),
+                        (
+                            "_GB-CTX _EXT4-C.SB + "
+                            "_EXT4-SB.INCOMPAT + L@ "
+                            "_EXT4-INCOMPAT-RECOVER AND 0="
+                        ),
+                        "_GB-HOMES?",
+                        "_GB-REUSE-IOR 0=",
+                        "_GB-REUSE-W _GB-W =",
+                        (
+                            "_GB-USED-AFTER-ENSURE "
+                            "_GB-USED-AFTER-REMOUNT ="
+                        ),
+                    ],
                 ),
                 (
-                    "_GB-CTX _EXT4-C.J.START + @ 0= AND "
-                    "_GB-CTX _EXT4-C.J.WITNESS + @ _EXT4-JW-NONE = AND "
-                    "_GB-CTX _EXT4-C.J.CLEANUP + @ _EXT4-JC-NONE = AND"
+                    '_GB-REMOUNTED @ IF ." EXT4-JTX-BATCH-REMOUNTED" '
+                    'ELSE ." EXT4-JTX-BATCH-REMOUNTED-CHECK " '
+                    '_GB-REMOUNTED-FIRST-FAILURE @ . '
+                    '." WRITER-CHECK " '
+                    '_GB-MOUNT-REBASED-FIRST-FAILURE @ . THEN'
                 ),
-                (
-                    "_GB-CTX _EXT4-C.J.FEATURES + @ "
-                    "_EXT4-JBD2-I-RECOVERY-REVOKE = AND "
-                    "_GB-CTX _EXT4-C.J.COMMITTED + @ 1 = AND "
-                    "_GB-CTX _EXT4-C.J.HOME-WRITES + @ 63 = AND"
-                ),
-                (
-                    "_GB-CTX _EXT4-C.J.REVOKE-COUNT + @ 126 = AND "
-                    "_GB-CTX _EXT4-C.J.REVOKE-HITS + @ 0= AND "
-                    "_GB-CTX _EXT4-C.J.REVOKE-READY + @ 0= AND"
-                ),
-                (
-                    "_GB-CTX _EXT4-C.SB + "
-                    "_EXT4-SUPER-CHECKSUM? 0= AND AND "
-                    "_GB-CTX _EXT4-C.SB + _EXT4-SB.INCOMPAT + L@ "
-                    "_EXT4-INCOMPAT-RECOVER AND 0= AND _GB-HOMES? AND"
-                ),
-                (
-                    "_GB-REUSE-IOR 0= AND _GB-REUSE-W _GB-W = AND "
-                    "_GB-USED-AFTER-ENSURE _GB-USED-AFTER-REMOUNT = AND"
-                ),
-                'IF ." EXT4-JTX-BATCH-REMOUNTED" THEN',
             ],
             patches=wrap_source_patches,
             capture_media=media_path,
