@@ -225,11 +225,13 @@ The frozen semantic comparison point is the clean `ext4-recovery` tree at
 advance `HEAD`, but that commit remains the behavior, ordering, persistent-byte,
 and crash comparison baseline. It includes bounded depth-zero HTree full-leaf
 CREATE and its recovery qualification. Stage 6 has now crossed positive HTree
-root-depth activation, representative committed replay, and stable-remount
-boundaries. Exact one-short credit and unrelated-owner refusal now close the
-focused vertical before work advances to indexed LINK/MKDIR.
-Refactoring must not silently cross that boundary or admit indexed LINK/MKDIR,
-broader map shapes, or another previously gated filesystem behavior.
+root-depth activation, representative committed replay, stable-remount
+boundaries, and the first existing-slack indexed LINK happy-path slice. Exact
+one-short credit and unrelated-owner refusal close the focused root-growth
+vertical. The LINK slice admits only depth-zero and singleton depth-one parents
+without growth. Refactoring must not silently broaden it to LINK leaf splitting
+or growth, indexed MKDIR, broader map shapes, or another previously gated
+filesystem behavior.
 
 The objective is to establish one authoritative implementation for each of
 these recurring mechanisms:
@@ -599,6 +601,14 @@ new-DX-node checkpoint tear now replays all 11 homes and reaches a write-free
 byte-stable remount. Its exact-credit and unrelated-owner boundaries refuse
 without writes or flushes and retain byte-identical media. The broader refusal
 matrix does not interrupt the next indexed-directory feature sequence.
+
+The next positive slice reuses that authenticated HTree authority for hard LINK
+without adding roles or allocation. Its happy paths cover existing slack in
+depth-zero and singleton depth-one parents; the exact three roles remain target
+inode, parent inode, and selected leaf, while the root, optional DX node, extent
+map, other leaves, and accounting remain immutable. This is a positive
+milestone only: indexed LINK splitting/growth and its focused refusal/recovery
+boundary gate remain open, and indexed MKDIR remains gated.
 
 ## Verification cadence
 

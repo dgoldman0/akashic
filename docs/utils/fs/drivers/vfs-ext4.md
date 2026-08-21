@@ -79,10 +79,12 @@ decrements the parent link and group `used_dirs` count, frees the child inode
 and data block, and revokes the freed directory-block home under exact
 `6/0/1` through `8/0/1` credit; the canonical fixture uses `7/0/1`.
 The staged binding also provides bounded hard `LINK` for an authenticated
-root-owned regular inode and one-block linear destination parent. It adds the
-typed directory record, increments the target link count, and updates target
-and parent timestamps under exact deduplicated `2/0/0` or `3/0/0` credit,
-without allocation, ordered data, revoke, or orphan state.
+root-owned regular inode and an admitted destination parent: either a one-block
+linear directory or an existing depth-zero or singleton depth-one HTree with
+authenticated slack in the selected checksummed leaf. It adds the typed
+directory record, increments the target link count, and updates target and
+parent timestamps under exact deduplicated `2/0/0` or `3/0/0` credit, without
+allocation, ordered data, revoke, or orphan state.
 The staged binding now includes qualified atomic no-replacement `RENAME` for
 regular files and one cross-parent empty-directory slice. Regular-file
 same-parent rename keeps the in-place rewrite fast path when the source record
@@ -115,11 +117,12 @@ external leaf named by a singleton resident depth-one root. The HTree root and
 governing extent node must each retain any entry slot the edit needs. When the
 depth-zero root is saturated, regular CREATE can instead allocate a DX node
 before the split leaf and publish the exact 11-home depth-one transition.
-Indexed LINK and MKDIR, inheritance beyond the explicit root-owned non-setgid
-envelope, and broader directory shapes remain gated. Exact one-short credit and
-unrelated-owner alias cases refuse without writes or flushes. A committed tear
-in the new DX-node home replays all 11 afterimages before a write-free
-byte-stable remount.
+`LINK` may reuse authenticated existing slack in an admitted depth-zero or
+singleton depth-one HTree without allocating. `LINK` leaf splitting/growth,
+indexed `MKDIR`, inheritance beyond the explicit root-owned non-setgid envelope,
+and broader directory shapes remain gated. Exact one-short credit and unrelated-
+owner alias cases refuse without writes or flushes. A committed tear in the new
+DX-node home replays all 11 afterimages before a write-free byte-stable remount.
 The driver also implements bounded mount-time recovery and
 durable transaction emission for an internal checksum-v3 JBD2 journal. It never
 uses the ambient filesystem volume: reads and all recovery, activation,
@@ -2321,9 +2324,10 @@ authenticated slack leaf after binding its root entry, DX-node home and
 snapshot, complete node fanout, selected route, and leaf snapshot across cold,
 dry, and live passes. If a saturated depth-zero root must split, regular CREATE
 allocates a DX node followed by the new leaf and emits the root, map, and
-allocation afterimages in the same exact transaction. Depth-one leaf splitting,
-indexed LINK and MKDIR, default-ACL inheritance, and non-root credential policy
-remain typed refusals; none is silently approximated.
+allocation afterimages in the same exact transaction. Depth-one CREATE leaf
+splitting, every LINK path requiring conversion, splitting, or growth, indexed
+MKDIR, default-ACL inheritance, and non-root credential policy remain gated;
+none is silently approximated.
 
 Root-growth authority is an explicit admission cell in the operation-owned
 record. The production wrapper sets it only for regular CREATE immediately
@@ -2472,9 +2476,9 @@ retains commit authority and the live mount is quarantined. Recovery replays
 the same six after-images while root 1355, leaves 1359/1361, extent node 1365,
 and block bitmap 259 remain byte-exact; a second mount is write-free and
 byte-stable. Checksum-valid misbucketed names, a duplicate in a nonrouted
-continuation leaf, a full eligible leaf under a saturated HTree root, inexact
-`i_blocks`, and indexed LINK all refuse without a transaction or
-cache/accounting publication.
+continuation leaf, a full eligible leaf under a saturated HTree root, and
+inexact `i_blocks` all refuse without a transaction or cache/accounting
+publication.
 
 Linear-conversion qualification starts from block 1345 with five live non-dot
 names and creates inode 18 for `new.txt`. The stable half-MD4 order splits
@@ -2665,25 +2669,31 @@ target remains admissible because every dentry and descriptor shares the same
 vnode.
 
 The destination parent is independently reauthenticated through the existing
-root-owned, non-setgid, checksummed one-block linear-directory insertion
-envelope. It must have a loaded cache, one initialized extent, a unique owner,
-a complete valid dirent chain and checksum tail, no HTree or xattr state, an
-absent destination name, and enough existing record slack. The target and
-parent inode identities must differ. The parent need not be the current
-directory, so the qualified surface includes both same-parent and distinct
-root-parent links without approximating directory growth or indexed insertion.
+root-owned, non-setgid directory-insertion envelope. It may be the qualified
+one-block linear parent, an authenticated depth-zero HTree, or the singleton
+depth-one HTree emitted by root growth. Indexed insertion requires existing
+slack in the selected checksummed leaf and binds the complete leaf permutation,
+live hash policy, route, root, and, at depth one, the sole DX node across cold,
+dry, and live passes. The root, optional DX node, extent map, directory size and
+sector count, and allocation state remain immutable. A full selected indexed
+leaf returns `VFS-E-NOSPC`; LINK never splits or allocates. Every parent requires
+a loaded cache, an absent destination name, root ownership, no setgid or xattrs,
+and unique ownership of the selected mutable block. The target and parent inode
+identities must differ; the parent need not be the current directory.
 
 Dry and live staging each authenticate the target inode, parent inode, and
-parent directory before retaining after-images. The transaction increments and
-restamps only the target inode, restamps the parent inode, and inserts and
-restamps one file-type-1 directory entry. Target size, mtime, atime, generation,
-map, `i_blocks`, xattrs, allocation state, and all free-space and orphan
-accounts remain unchanged. The exact deduplicated homes are acquired in target
-inode-table, parent inode-table, and parent-directory order, giving `2/0/0`
-when both inode records share a table block and `3/0/0` otherwise. On the
-canonical same-parent fixture, the shared target/parent inode-table home is W16
-and the directory home is W17. The distinct-root fixture writes each of the
-three homes once in target, parent, directory order.
+parent directory block before retaining after-images; for indexed LINK the
+third block is the selected leaf. The HTree root, optional DX node, extent map,
+and other leaves are authenticated immutable inputs, not transaction homes. The
+transaction increments and restamps only the target inode, restamps the parent
+inode, and inserts and restamps one file-type-1 directory entry. Target size,
+mtime, atime, generation, map, `i_blocks`, xattrs, allocation state, and all
+free-space and orphan accounts remain unchanged. The exact deduplicated homes
+are acquired in target-inode-table, parent-inode-table, and parent-directory
+order, giving `2/0/0` when both inode records share a table block and `3/0/0`
+otherwise. On the canonical same-parent fixture, the shared target/parent inode-
+table home is W16 and the directory home is W17. The distinct-root fixture
+writes each of the three homes once in target, parent, directory order.
 
 Complete success publishes the target ctime, parent mtime/ctime, one additional
 dentry reference and link, and one additional VFS inode count while leaving
@@ -2693,15 +2703,23 @@ object. Once commit authority exists, a later checkpoint error instead returns
 public LINK success, keeps the new dentry attached, retains the structured
 diagnostic in `V.LAST-IOR`, and quarantines the writer for recovery.
 
-Five focused LINK tests close the current envelope. Clean same-parent linking
-qualifies the shared vnode, open-FD continuity, exact cache counts, pinned
-e2fsprogs 1.47.4 `debugfs` and read-only `e2fsck`, and a byte-stable write-free
-ordinary remount. A W7 descriptor tear proves complete provisional rollback and
-zero home replay. A committed W17 directory-home tear keeps the public link and
-diagnostic, then replays both homes before a stable remount. A distinct-root
-link qualifies exact three-home ordering, external inspection, and stable
-remount. The fifth test proves zero-write refusal for a missing clock, a
-one-metadata-credit profile, a nonregular target, and link-count saturation.
+Five focused LINK tests close the original linear envelope. Clean same-parent
+linking qualifies the shared vnode, open-FD continuity, exact cache counts,
+pinned e2fsprogs 1.47.4 `debugfs` and read-only `e2fsck`, and a byte-stable
+write-free ordinary remount. A W7 descriptor tear proves complete provisional
+rollback and zero home replay. A committed W17 directory-home tear keeps the
+public link and diagnostic, then replays both homes before a stable remount. A
+distinct-root link qualifies exact three-home ordering, external inspection,
+and stable remount. The fifth test proves zero-write refusal for a missing
+clock, a one-metadata-credit profile, a nonregular target, and link-count
+saturation.
+
+The first indexed-LINK happy-path qualification reuses existing slack in
+admitted depth-zero and singleton depth-one parents. It preserves the exact
+three-role target-inode, parent-inode, selected-leaf plan, performs no
+allocation, and leaves the HTree root, optional DX node, extent map, other
+leaves, and accounting immutable. This milestone does not qualify indexed LINK
+leaf splitting/growth or its refusal and crash/replay matrix.
 
 ### Qualified NOREPLACE RENAME
 
@@ -2870,8 +2888,10 @@ growth are now complete. Existing depth-zero indexed full-leaf CREATE mutation
 is also complete while the root retains an entry slot. Root-depth planning,
 dry staging, public live activation, and stable singleton depth-one CREATE are
 qualified. Representative committed root-growth replay, stable remount, and
-focused credit/ownership boundaries are also complete. Indexed `LINK`/`MKDIR`
-is the next delivery sequence.
+focused credit/ownership boundaries are also complete. Existing-slack indexed
+`LINK` is qualified for admitted depth-zero and singleton depth-one parents.
+Its remaining refusal/recovery boundary qualification and indexed `MKDIR` are
+the next directory work; indexed LINK splitting/growth remains gated.
 
 ### Same-retained-block shrink TRUNCATE
 
@@ -3720,7 +3740,9 @@ The ratchet order is:
    HTree root-growth recovery cut;
    public root growth, representative committed replay, stable remount, and
    singleton depth-one CREATE plus its focused credit/owner boundaries are
-   complete, after which add indexed `LINK`/`MKDIR` plus the remaining deletion,
+   complete; existing-slack indexed `LINK` is qualified for admitted depth-zero
+   and singleton depth-one parents, after which close its remaining refusal and
+   recovery boundaries and add indexed `MKDIR` plus the remaining deletion,
    truncation, metadata, and xattr forms; and
 9. perform the final profile closure audit across every profile-admitted
    operation and recovery state.
@@ -3810,10 +3832,11 @@ uses exact `6/0/1` through `8/0/1` credit to remove the typed parent entry,
 decrement parent links and `used_dirs`, free the inode and directory block,
 and revoke the unchanged freed block; the canonical path is `7/0/1`. Bounded
 hard LINK uses exact deduplicated `2/0/0` or `3/0/0` credit to add one
-checksummed linear-directory record, increment and restamp the target inode,
-and restamp the parent inode without allocation, ordered data, revoke, or
-orphan state. Same-parent regular-file RENAME likewise uses exact deduplicated
-`2/0/0` or `3/0/0` metadata credit. It uses an in-place source-record rewrite
+checksummed record in an admitted linear or indexed slack leaf, increment and
+restamp the target inode, and restamp the parent inode without allocation,
+ordered data, revoke, or orphan state. Same-parent regular-file RENAME likewise
+uses exact deduplicated `2/0/0` or `3/0/0` metadata credit. It uses an in-place
+source-record rewrite
 when possible and otherwise emits the qualified deterministic same-block
 compacted after-image, restamps source ctime and parent mtime/ctime, and
 preserves link counts, allocation, data, maps, xattrs, and orphan state.
@@ -3947,8 +3970,11 @@ targets, including last-close failure recovery. Depth-zero indexed CREATE now
 splits a full selected leaf while its root retains entry capacity. The bounded
 root-growth planner and public live path are qualified, as is stable singleton
 depth-one CREATE. Representative committed root-growth replay and byte-stable
-remount plus focused credit and reverse-owner refusals are qualified. The next
-directory phases are indexed `LINK`/`MKDIR`.
+remount plus focused credit and reverse-owner refusals are qualified. Existing-
+slack indexed `LINK` is qualified for admitted depth-zero and singleton depth-
+one parents. Its remaining refusal/recovery boundary qualification and indexed
+`MKDIR` are the next directory work; indexed LINK splitting/growth remains
+gated.
 Replacement, victims, broader
 concurrent orphan unions, general sparse/gap
 growth, unwritten conversion, growth beyond a

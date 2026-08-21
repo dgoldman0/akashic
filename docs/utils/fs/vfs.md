@@ -125,22 +125,26 @@ orphan cleanup path, both closed-file `UNLINK` lifetimes, bounded one-block
 `MKDIR`, and bounded `RMDIR` of the exact canonical empty child produced by
 MKDIR. RMDIR releases the inode and directory block, decrements parent links
 and `used_dirs`, and revokes the unchanged freed child block in an exact
-`6/0/1` through `8/0/1` transaction. Depth-positive truncation and indexed
-`LINK`/`MKDIR` remain outside those envelopes. Public regular CREATE carries
-the first HTree root-depth transition through the operation-owned sealed plan,
-exact home certificate, emission, and checkpoint. Ordinary staged CREATE can
-then mutate authenticated slack after a fresh mount of the resulting singleton
-depth-one tree. A committed tear in the new DX-node home replays all 11 homes
-before a write-free byte-stable remount.
+`6/0/1` through `8/0/1` transaction. Depth-positive truncation, indexed LINK
+splitting/growth, and indexed MKDIR remain outside those envelopes. Public
+regular CREATE carries the first HTree root-depth transition through the
+operation-owned sealed plan, exact home certificate, emission, and checkpoint.
+Ordinary staged CREATE can then mutate authenticated slack after a fresh mount
+of the resulting singleton depth-one tree. A committed tear in the new DX-node
+home replays all 11 homes before a write-free byte-stable remount.
 Bounded hard `LINK` adds one typed dirent, increments target `nlink`
 and ctime, and updates parent mtime/ctime in an exact deduplicated `2/0/0` or
 `3/0/0` transaction. Five focused LINK qualifications cover same- and
 cross-parent success, W7 precommit rollback, W17 committed replay, zero-write
 refusals, external filesystem checks, and a write-free byte-stable remount. The
-public HTree root-growth plan now also refuses exact one-short credit and an
-unrelated root owner without writes or flushes. Representative committed replay
-and stable singleton depth-one CREATE are qualified; indexed `LINK` and `MKDIR`
-are the next separate gated slices.
+first indexed-LINK happy-path qualification reuses existing slack in admitted
+depth-zero and singleton depth-one parents under the unchanged exact three-role
+target-inode, parent-inode, selected-leaf plan. HTree authority and accounting
+remain immutable. The public HTree root-growth plan now also refuses exact one-
+short credit and an unrelated root owner without writes or flushes.
+Representative committed replay and stable singleton depth-one CREATE are
+qualified. Indexed LINK splitting/growth, its remaining refusal/recovery
+boundary qualification, and indexed MKDIR remain separate gated work.
 HTree depth grows independently when an operation or a pinned corpus requires
 it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate

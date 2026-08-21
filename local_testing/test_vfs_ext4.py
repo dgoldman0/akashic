@@ -68561,204 +68561,543 @@ def test_staged_vfs_indexed_create_finds_duplicate_in_nonrouted_leaf(
     )
 
 
-def test_staged_vfs_link_into_indexed_parent_remains_unsupported(
-    extent_writer_activation_fixture: dict[str, object],
-    tmp_path: Path,
+def _run_staged_indexed_link_success(
+    *,
+    path: Path,
+    source_patches: tuple[tuple[int, bytes], ...],
+    activation_trace: tuple[tuple[str, int, int], ...],
+    backing: Path,
+    jbd2_toolchain: dict[str, object],
+    selected_leaf_home: int,
+    expected_parent_size: int,
+    expected_parent_blocks: int,
+    expected_insert_offset: int,
+    immutable_homes: tuple[int, ...],
+    htree_fragments: tuple[str, ...],
+    marker: str,
+    max_steps: int,
 ) -> None:
-    path = extent_writer_activation_fixture["image"]
-    source_patches = extent_writer_activation_fixture["source_patches"]
-    assert isinstance(path, Path)
-    assert isinstance(source_patches, tuple)
-    expected_media = bytearray(path.read_bytes())
-    for offset, payload in source_patches:
-        expected_media[offset : offset + len(payload)] = payload
-    expected_sha256 = hashlib.sha256(expected_media).hexdigest()
-    del expected_media
-    backing = tmp_path / "indexed-parent-link-unsupported.img"
+    """Commit one exact three-home LINK through an indexed parent."""
+    debugfs = jbd2_toolchain["debugfs"]
+    env = jbd2_toolchain["env"]
+    assert isinstance(debugfs, Path)
+    assert isinstance(env, dict)
+    assert source_patches == tuple(source_patches)
+    assert activation_trace
+    assert selected_leaf_home > 0
+    assert immutable_homes
+    assert selected_leaf_home not in immutable_homes
+    assert marker and max_steps > 0
+
+    target_number = 14
+    parent_number = 27
+    link_name = b"linked.txt"
+    linked_path = "/fixture/indexed/linked.txt"
+    epoch_ms = 3_000_002_345_678
+    seconds, milliseconds = divmod(epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = (
+        low_seconds
+        if low_seconds < 0x8000_0000
+        else low_seconds - 0x1_0000_0000
+    )
+    epoch = (seconds - signed_low) >> 32
+    assert 0 <= epoch <= 3
+    extra_time = (nanoseconds << 2) | epoch
+
+    layout = _ext4_recovery_layout(path)
+    superblock, target_inode, target_offset = _ext4_inode_record(
+        path, target_number
+    )
+    _, parent_inode, parent_offset = _ext4_inode_record(path, parent_number)
+    block_size = layout["block_size"]
+    inode_size = layout["inode_size"]
+    target_home, target_block_offset = divmod(target_offset, block_size)
+    parent_home, parent_block_offset = divmod(parent_offset, block_size)
+    data_block = _extent_root_physical(target_inode, 0)
+    xattr_block = struct.unpack_from("<I", target_inode, 0x68)[0]
+    old_size = struct.unpack_from("<I", target_inode, 0x04)[0]
+    old_blocks = struct.unpack_from("<I", target_inode, 0x1C)[0]
+    old_links = struct.unpack_from("<H", target_inode, 0x1A)[0]
+    parent_generation = struct.unpack_from("<I", parent_inode, 0x64)[0]
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", superblock, 0x158)[0] << 32
+    )
+    free_inodes_before = struct.unpack_from("<I", superblock, 0x10)[0]
+    group_counts_before = _ext4_group_counts(path, 0)
+    assert block_size == 1024
+    assert inode_size == 256
+    assert (target_home, target_block_offset) == (278, 256)
+    assert (parent_home, parent_block_offset) == (281, 512)
+    assert (data_block, xattr_block, old_size, old_blocks, old_links) == (
+        1346,
+        1349,
+        54,
+        4,
+        2,
+    )
+    assert parent_generation == 0
+    assert struct.unpack_from("<I", parent_inode, 0x04)[0] == (
+        expected_parent_size
+    )
+    assert struct.unpack_from("<I", parent_inode, 0x1C)[0] == (
+        expected_parent_blocks
+    )
+    assert struct.unpack_from("<H", parent_inode, 0x1A)[0] == 2
+    assert _indexed_split_half_md4_hash(superblock, link_name) == (
+        0x2D9C_821A,
+        0x374D_DB14,
+    )
+
+    original_target_home = _patched_ext4_home(
+        path, source_patches, target_home, block_size=block_size
+    )
+    original_parent_home = _patched_ext4_home(
+        path, source_patches, parent_home, block_size=block_size
+    )
+    original_directory = _patched_ext4_home(
+        path, source_patches, selected_leaf_home, block_size=block_size
+    )
+    original_data = _patched_ext4_home(
+        path, source_patches, data_block, block_size=block_size
+    )
+    original_xattr = _patched_ext4_home(
+        path, source_patches, xattr_block, block_size=block_size
+    )
+    assert original_target_home[
+        target_block_offset : target_block_offset + inode_size
+    ] == target_inode
+    assert original_parent_home[
+        parent_block_offset : parent_block_offset + inode_size
+    ] == parent_inode
+
+    expected_target = bytearray(target_inode)
+    struct.pack_into("<H", expected_target, 0x1A, old_links + 1)
+    struct.pack_into("<I", expected_target, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_target, 0x84, extra_time)
+    expected_target = bytearray(
+        _inode_with_checksum(superblock, target_number, expected_target)
+    )
+    expected_parent = bytearray(parent_inode)
+    struct.pack_into("<I", expected_parent, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x10, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x84, extra_time)
+    struct.pack_into("<I", expected_parent, 0x88, extra_time)
+    expected_parent = bytearray(
+        _inode_with_checksum(superblock, parent_number, expected_parent)
+    )
+    expected_target_home = bytearray(original_target_home)
+    expected_target_home[
+        target_block_offset : target_block_offset + inode_size
+    ] = expected_target
+    expected_parent_home = bytearray(original_parent_home)
+    expected_parent_home[
+        parent_block_offset : parent_block_offset + inode_size
+    ] = expected_parent
+    expected_directory, insert_offset = _linear_directory_link_afterimage(
+        superblock,
+        parent_inode=parent_number,
+        parent_generation=parent_generation,
+        original=original_directory,
+        target_inode=target_number,
+        name=link_name,
+    )
+    assert insert_offset == expected_insert_offset
+    linked_entries = [
+        entry
+        for entry in _checked_linear_directory_entries(
+            superblock,
+            parent_number,
+            parent_generation,
+            expected_directory,
+        )
+        if entry[4] == link_name
+    ]
+    assert len(linked_entries) == 1
+    assert linked_entries[0][:2] == (expected_insert_offset, target_number)
+    assert linked_entries[0][3:] == (1, link_name)
+
+    allocator_homes = (
+        layout["block_bitmap"],
+        layout["inode_bitmap"],
+        layout["primary_gdt"],
+    )
+    original_allocator_homes = {
+        home: _patched_ext4_home(
+            path, source_patches, home, block_size=block_size
+        )
+        for home in allocator_homes
+    }
+    original_immutable_homes = {
+        home: _patched_ext4_home(
+            path, source_patches, home, block_size=block_size
+        )
+        for home in immutable_homes
+    }
+    old_file = original_data[:old_size]
 
     output, trace, media_sha256 = run_recovery_forth(
         path,
         backing,
         [
-            "VARIABLE _IL-CLOCK-CALLS",
-            (
-                ": _IL-NOW ( context -- epoch-ms ior ) DROP "
-                "1 _IL-CLOCK-CALLS +! 3000000123456 0 ;"
+            *_staged_link_attempt_forth(
+                "_IXL",
+                epoch_ms=epoch_ms,
+                metadata_capacity=3,
+                parent_path="/fixture/indexed",
+                linked_path=linked_path,
             ),
-            "CREATE _IL-STAT VFS-STATFS-SIZE ALLOT",
-            (
-                "T-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
-                "CONSTANT _IL-MOUNT-IOR CONSTANT _IL-V"
-            ),
-            "_IL-V _EXT4-CTX CONSTANT _IL-CTX",
-            (
-                "' _IL-NOW 0 _IL-V EXT4-BIND-WRITE-CLOCK? "
-                "CONSTANT _IL-CLOCK-IOR"
-            ),
-            *_ext4_dedicated_writer_profile_forth(
-                "_IL-PROFILE",
-                "_IL-V",
-                metadata_capacity=6,
-                data_capacity=0,
-            ),
-            (
-                'S" /fixture/payload.txt" _IL-V VFS-RESOLVE? '
-                "CONSTANT _IL-TARGET-IOR CONSTANT _IL-TARGET"
-            ),
-            (
-                'S" /fixture/indexed" _IL-V VFS-RESOLVE? '
-                "CONSTANT _IL-PARENT-IOR CONSTANT _IL-PARENT"
-            ),
-            (
-                "_IL-PARENT _IL-V _VFS-ENSURE-CHILDREN? "
-                "CONSTANT _IL-LOAD-IOR"
-            ),
-            "_IL-TARGET D.VNODE @ CONSTANT _IL-TARGET-VN",
-            "_IL-PARENT D.VNODE @ CONSTANT _IL-PARENT-VN",
-            "_IL-V V.ICOUNT @ CONSTANT _IL-ICOUNT-BEFORE",
-            "_IL-V V.VCOUNT @ CONSTANT _IL-VCOUNT-BEFORE",
-            "_IL-V V.STR-PTR @ CONSTANT _IL-STR-BEFORE",
-            "_IL-V V.IFREE @ CONSTANT _IL-IFREE-BEFORE",
-            "_IL-TARGET-VN VN.NLINK @ CONSTANT _IL-TLINK-BEFORE",
-            "_IL-TARGET-VN VN.DREFS @ CONSTANT _IL-DREFS-BEFORE",
-            "_IL-TARGET-VN VN.CTIME @ CONSTANT _IL-TCTIME-BEFORE",
-            (
-                "_IL-TARGET-VN VN.CTIME-NS @ "
-                "CONSTANT _IL-TCTIME-NS-BEFORE"
-            ),
-            "_IL-PARENT-VN VN.NLINK @ CONSTANT _IL-PLINK-BEFORE",
-            "_IL-PARENT-VN VN.MTIME @ CONSTANT _IL-PMTIME-BEFORE",
-            (
-                "_IL-PARENT-VN VN.MTIME-NS @ "
-                "CONSTANT _IL-PMTIME-NS-BEFORE"
-            ),
-            "_IL-PARENT-VN VN.CTIME @ CONSTANT _IL-PCTIME-BEFORE",
-            (
-                "_IL-PARENT-VN VN.CTIME-NS @ "
-                "CONSTANT _IL-PCTIME-NS-BEFORE"
-            ),
-            (
-                "_IL-STAT VFS-STATFS-SIZE _IL-V VFS-STATFS "
-                "CONSTANT _IL-STAT-BEFORE-IOR"
-            ),
-            "_IL-STAT VSF.BFREE @ CONSTANT _IL-BFREE-BEFORE",
-            "_IL-STAT VSF.FFREE @ CONSTANT _IL-FFREE-BEFORE",
-            (
-                'S" refused-link.txt" _IL-TARGET _IL-PARENT _IL-V '
-                "VFS-LINK CONSTANT _IL-LINK-IOR CONSTANT _IL-D"
-            ),
-            (
-                'S" refused-link.txt" _IL-PARENT _VFS-FIND-CHILD '
-                "CONSTANT _IL-CHILD"
-            ),
-            "_IL-V V.LAST-IOR @ CONSTANT _IL-LAST-IOR",
-            "_IL-V V.ICOUNT @ CONSTANT _IL-ICOUNT-AFTER",
-            "_IL-V V.VCOUNT @ CONSTANT _IL-VCOUNT-AFTER",
-            "_IL-V V.STR-PTR @ CONSTANT _IL-STR-AFTER",
-            "_IL-V V.IFREE @ CONSTANT _IL-IFREE-AFTER",
-            "_IL-TARGET-VN VN.NLINK @ CONSTANT _IL-TLINK-AFTER",
-            "_IL-TARGET-VN VN.DREFS @ CONSTANT _IL-DREFS-AFTER",
-            "_IL-TARGET-VN VN.CTIME @ CONSTANT _IL-TCTIME-AFTER",
-            (
-                "_IL-TARGET-VN VN.CTIME-NS @ "
-                "CONSTANT _IL-TCTIME-NS-AFTER"
-            ),
-            "_IL-PARENT-VN VN.NLINK @ CONSTANT _IL-PLINK-AFTER",
-            "_IL-PARENT-VN VN.MTIME @ CONSTANT _IL-PMTIME-AFTER",
-            (
-                "_IL-PARENT-VN VN.MTIME-NS @ "
-                "CONSTANT _IL-PMTIME-NS-AFTER"
-            ),
-            "_IL-PARENT-VN VN.CTIME @ CONSTANT _IL-PCTIME-AFTER",
-            (
-                "_IL-PARENT-VN VN.CTIME-NS @ "
-                "CONSTANT _IL-PCTIME-NS-AFTER"
-            ),
-            (
-                "_IL-STAT VFS-STATFS-SIZE _IL-V VFS-STATFS "
-                "CONSTANT _IL-STAT-AFTER-IOR"
-            ),
-            "_IL-STAT VSF.BFREE @ CONSTANT _IL-BFREE-AFTER",
-            "_IL-STAT VSF.FFREE @ CONSTANT _IL-FFREE-AFTER",
-            "_IL-CTX _EXT4-C.J.WRITER + @ CONSTANT _IL-WRITER",
-            (
-                "_IL-CTX _EXT4-C.J.HOME-WRITES + @ "
-                "CONSTANT _IL-HOME-WRITES"
-            ),
-            (
-                "_IL-WRITER _EXT4-JWR-IDLE-CLEAN? "
-                "CONSTANT _IL-WRITER-CLEAN"
-            ),
-            (
-                "_IL-CTX _EXT4-C.J.WRITE-ACTIVE + @ "
-                "CONSTANT _IL-WRITE-ACTIVE"
-            ),
-            "_IL-V V.FLAGS @ VFS-F-DIRTY AND CONSTANT _IL-DIRTY",
-            "_IL-V V.FLAGS @ VFS-F-RO AND CONSTANT _IL-RO",
-            _forth_xc_plan_scrubbed("_IL-XC-PLAN-SCRUBBED", "_IL-CTX"),
-            "0 _IL-V VFS-UNMOUNT CONSTANT _IL-UNMOUNT-IOR",
+            _forth_xc_plan_scrubbed("_IXL-XC-PLAN-SCRUBBED", "_IXL-CTX"),
             *_forth_accumulated_conjunction(
-                "_IL-OK",
+                "_IXL-OK",
                 [
-                    "_IL-MOUNT-IOR 0=",
-                    "_IL-CLOCK-IOR 0=",
-                    "_IL-PROFILE-SIZE-IOR 0=",
-                    "_IL-PROFILE-BIND-IOR 0=",
-                    "_IL-TARGET-IOR 0=",
-                    "_IL-PARENT-IOR 0=",
-                    "_IL-LOAD-IOR 0=",
-                    "_IL-D 0=",
-                    "_IL-CHILD 0=",
-                    "_IL-LINK-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED =",
+                    "_IXL-MOUNT-IOR 0=",
+                    "_IXL-CLOCK-IOR 0=",
+                    "_IXL-PROFILE-SIZE-IOR 0=",
+                    "_IXL-PROFILE-BIND-IOR 0=",
+                    "_IXL-PROFILE-USED _IXL-PROFILE-SIZE =",
+                    "_IXL-P-IOR 0=",
+                    "_IXL-H-IOR 0=",
+                    "_IXL-D-IOR 0=",
+                    "_IXL-LOAD-IOR 0=",
+                    "_IXL-P D.VNODE @ _IXL-H D.VNODE @ =",
+                    "_IXL-OLD-NLINK 2 =",
+                    "_IXL-OLD-DREFS 2 =",
+                    "_IXL-OLD-OPEN-REFS 0=",
+                    "_IXL-OPEN-IOR 0=",
+                    "_IXL-DEPTH-AFTER _IXL-DEPTH-BEFORE =",
+                    "_IXL-IOR 0=",
+                    "_IXL-LAST-IOR 0=",
+                    "_IXL-NEW 0<>",
+                    "_IXL-AFTER-IOR 0=",
+                    "_IXL-AFTER _IXL-NEW =",
+                    "_IXL-NEW D.VNODE @ _IXL-VN =",
+                    "_IXL-VN VN.BID @ 14 =",
+                    "_IXL-VN VN.NLINK @ 3 =",
+                    "_IXL-VN VN.DREFS @ 3 =",
+                    "_IXL-VN VN.OPEN-REFS @ 1 =",
+                    "_IXL-VN VN.SIZE-LO @ 54 =",
+                    "_IXL-VN VN.SIZE-HI @ 0=",
+                    "_IXL-VN VN.BLOCKS @ 4 =",
+                    "_IXL-VN VN.MTIME @ _IXL-OLD-MTIME =",
+                    "_IXL-VN VN.MTIME-NS @ _IXL-OLD-MTIME-NS =",
+                    f"_IXL-VN VN.CTIME @ {seconds} =",
+                    f"_IXL-VN VN.CTIME-NS @ {nanoseconds} =",
+                    "_IXL-D-VN VN.BID @ 27 =",
+                    "_IXL-D-VN VN.NLINK @ 2 =",
+                    f"_IXL-D-VN VN.SIZE-LO @ {expected_parent_size} =",
+                    "_IXL-D-VN VN.SIZE-HI @ 0=",
+                    f"_IXL-D-VN VN.BLOCKS @ {expected_parent_blocks} =",
+                    f"_IXL-D-VN VN.MTIME @ {seconds} =",
+                    f"_IXL-D-VN VN.MTIME-NS @ {nanoseconds} =",
+                    f"_IXL-D-VN VN.CTIME @ {seconds} =",
+                    f"_IXL-D-VN VN.CTIME-NS @ {nanoseconds} =",
+                    "_IXL-V V.ICOUNT @ _IXL-OLD-ICOUNT 1+ =",
+                    "_IXL-V V.VCOUNT @ _IXL-OLD-VCOUNT =",
                     (
-                        "_IL-LINK-IOR VFS-IOR-DETAIL "
-                        "EXT4-D-WRITE-POLICY ="
+                        f"_IXL-CTX _EXT4-C.FREE-BLOCKS + @ "
+                        f"{free_blocks_before} ="
                     ),
-                    "_IL-LAST-IOR _IL-LINK-IOR =",
-                    "_IL-ICOUNT-AFTER _IL-ICOUNT-BEFORE =",
-                    "_IL-VCOUNT-AFTER _IL-VCOUNT-BEFORE =",
-                    "_IL-STR-AFTER _IL-STR-BEFORE =",
-                    "_IL-IFREE-AFTER _IL-IFREE-BEFORE =",
-                    "_IL-TLINK-AFTER _IL-TLINK-BEFORE =",
-                    "_IL-DREFS-AFTER _IL-DREFS-BEFORE =",
-                    "_IL-TCTIME-AFTER _IL-TCTIME-BEFORE =",
-                    "_IL-TCTIME-NS-AFTER _IL-TCTIME-NS-BEFORE =",
-                    "_IL-PLINK-AFTER _IL-PLINK-BEFORE =",
-                    "_IL-PMTIME-AFTER _IL-PMTIME-BEFORE =",
-                    "_IL-PMTIME-NS-AFTER _IL-PMTIME-NS-BEFORE =",
-                    "_IL-PCTIME-AFTER _IL-PCTIME-BEFORE =",
-                    "_IL-PCTIME-NS-AFTER _IL-PCTIME-NS-BEFORE =",
-                    "_IL-STAT-BEFORE-IOR 0=",
-                    "_IL-STAT-AFTER-IOR 0=",
-                    "_IL-BFREE-AFTER _IL-BFREE-BEFORE =",
-                    "_IL-FFREE-AFTER _IL-FFREE-BEFORE =",
-                    "_IL-CLOCK-CALLS @ 1 =",
-                    "_IL-WRITER _IL-PROFILE-BASE =",
-                    "_IL-WRITER-CLEAN 0<>",
-                    "_IL-HOME-WRITES 0=",
-                    "_IL-WRITE-ACTIVE 0=",
-                    "_IL-DIRTY 0=",
-                    "_IL-RO 0=",
+                    (
+                        f"_IXL-CTX _EXT4-C.FREE-INODES + @ "
+                        f"{free_inodes_before} ="
+                    ),
+                    "_IXL-CLOCK-CALLS @ 1 =",
+                    "_XC-INODE @ 14 =",
+                    "_XC-PARENT-INO @ 27 =",
+                    f"_XC-INODE-HOME @ {target_home} =",
+                    f"_XC-PARENT-HOME @ {parent_home} =",
+                    f"_XC-DIR-HOME @ {selected_leaf_home} =",
+                    "_IXL-HOMES 3 =",
+                    "_IXL-WRITER _IXL-PROFILE-BASE =",
+                    "_IXL-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                    "_IXL-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                    "_IXL-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                    "_IXL-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                    "_IXL-CTX _EXT4-C.J.COMMITTED + @ 0=",
+                    "_IXL-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                    "_IXL-CTX _EXT4-C.O.ACTIVE + @ 0=",
+                    "_IXL-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                    "_IXL-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_IXL-V V.FLAGS @ VFS-F-RO AND 0=",
+                    "_IXL-XC-PLAN-SCRUBBED 0<>",
                     "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
-                    "_IL-XC-PLAN-SCRUBBED 0<>",
+                    (
+                        "_XC-ROOT-CURRENT _EXT4-STAGED-WRITE-BLOCK-SIZE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
                     "_XC-DIRECTORY-DESC _EXT4-DD-SIZE _EXT4-BYTES-ZERO?",
                     (
                         "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
                         "_EXT4-BYTES-ZERO?"
                     ),
+                    "_XC-INDEX-SPLITTING @ 0=",
+                    "_XC-INDEX-ROOT-GROWING @ 0=",
+                    "_XC-INDEX-DEPTH @ 0=",
+                    "_XC-INDEX-ROUTE-NODE-HOME @ 0=",
+                    "_XC-CONVERTING @ 0=",
+                    "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                    "_EXT4-MUTATION-OWNER-INO @ 0=",
+                    "_EXT4-JFO-TARGET-INO-B @ 0=",
+                    "_EXT4-JFO-CERT-SCOPE @ 0=",
+                    "_EXT4-JFO-CERT-VALID @ 0=",
                     *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
-                    "_IL-UNMOUNT-IOR 0=",
                 ],
             ),
-            '_IL-OK @ IF ." EXT4-INDEXED-PARENT-LINK-UNSUPPORTED" THEN',
+            (
+                f'_IXL-OK @ IF ." {marker}" ELSE ." {marker}-FAIL " '
+                "_IXL-OK-FIRST-FAILURE @ . THEN"
+            ),
+            "_IXL-FD VFS-CLOSE? CONSTANT _IXL-CLOSE-IOR",
+            "0 _IXL-V VFS-UNMOUNT CONSTANT _IXL-UNMOUNT-IOR",
+            (
+                "_IXL-CLOSE-IOR 0= _IXL-UNMOUNT-IOR 0= AND "
+                "_IXL-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_IXL-PROFILE-ARENA ARENA-USED 0= AND "
+                f'IF ." {marker}-UNMOUNTED" THEN'
+            ),
         ],
         patches=source_patches,
         capture_media=backing,
+        max_steps=max_steps,
     )
-    _assert_emitted(output, "EXT4-INDEXED-PARENT-LINK-UNSUPPORTED")
-    assert trace == ()
-    assert media_sha256 == expected_sha256
-    assert _sha256(backing) == expected_sha256
+    _assert_emitted(output, marker)
+    _assert_emitted(output, f"{marker}-UNMOUNTED")
+    assert trace[: len(activation_trace)] == activation_trace
+    assert backing.is_file()
+    assert _sha256(backing) == media_sha256
+
+    expected_home_order = (target_home, parent_home, selected_leaf_home)
+    home_events = tuple(
+        ("write", home * (block_size // 512), block_size // 512)
+        for home in expected_home_order
+    )
+    filtered_home_events = tuple(
+        event for event in trace if event in set(home_events)
+    )
+    assert filtered_home_events == home_events
+    home_ordinals = tuple(
+        _write_ordinals_for_ext4_home(trace, home, block_size=block_size)
+        for home in expected_home_order
+    )
+    assert all(len(ordinals) == 1 for ordinals in home_ordinals)
+    checkpoint_ordinals = tuple(ordinals[0] for ordinals in home_ordinals)
+    assert checkpoint_ordinals == tuple(
+        range(checkpoint_ordinals[0], checkpoint_ordinals[0] + 3)
+    )
+
+    final_superblock, final_target, final_target_offset = _ext4_inode_record(
+        backing, target_number
+    )
+    _, final_parent, final_parent_offset = _ext4_inode_record(
+        backing, parent_number
+    )
+    assert final_target_offset == target_offset
+    assert final_parent_offset == parent_offset
+    assert final_superblock == _ext4_super_with_checksum(final_superblock)
+    assert final_target == bytes(expected_target)
+    assert final_parent == bytes(expected_parent)
+    assert _read_ext4_home(
+        backing, target_home, block_size=block_size
+    ) == bytes(expected_target_home)
+    assert _read_ext4_home(
+        backing, parent_home, block_size=block_size
+    ) == bytes(expected_parent_home)
+    assert _read_ext4_home(
+        backing, selected_leaf_home, block_size=block_size
+    ) == expected_directory
+    for home, original in original_immutable_homes.items():
+        assert _read_ext4_home(
+            backing, home, block_size=block_size
+        ) == original
+    for home, original in original_allocator_homes.items():
+        assert _read_ext4_home(
+            backing, home, block_size=block_size
+        ) == original
+    assert _read_ext4_home(
+        backing, data_block, block_size=block_size
+    ) == original_data
+    assert _read_ext4_home(
+        backing, xattr_block, block_size=block_size
+    ) == original_xattr
+    final_free_blocks = struct.unpack_from("<I", final_superblock, 0x0C)[
+        0
+    ] | (struct.unpack_from("<I", final_superblock, 0x158)[0] << 32)
+    final_free_inodes = struct.unpack_from("<I", final_superblock, 0x10)[0]
+    assert final_free_blocks == free_blocks_before
+    assert final_free_inodes == free_inodes_before
+    assert _ext4_group_counts(backing, 0) == group_counts_before
+    assert struct.unpack_from("<I", final_superblock, 0x60)[0] & 0x04 == 0
+    assert (
+        struct.unpack_from("<I", final_superblock, 0x64)[0] & 0x0001_0000
+        == 0
+    )
+
+    final_entries = _checked_linear_directory_entries(
+        final_superblock,
+        parent_number,
+        parent_generation,
+        expected_directory,
+    )
+    final_linked_entries = [
+        entry for entry in final_entries if entry[4] == link_name
+    ]
+    assert final_linked_entries == linked_entries
+    stat = subprocess.run(
+        [str(debugfs), "-R", f"stat {linked_path}", str(backing)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stat.returncode == 0, stat.stdout + stat.stderr
+    assert f"Inode: {target_number}" in stat.stdout
+    assert f"Size: {old_size}" in stat.stdout
+    assert re.search(r"Links:\s+3\s+Blockcount:\s+4", stat.stdout)
+    assert f"(0):{data_block}" in stat.stdout
+    readback = subprocess.run(
+        [str(debugfs), "-R", f"cat {linked_path}", str(backing)],
+        env=env,
+        capture_output=True,
+        check=False,
+    )
+    assert readback.returncode == 0, readback.stdout + readback.stderr
+    assert readback.stdout == old_file
+    htree = subprocess.run(
+        [
+            str(debugfs),
+            "-R",
+            "htree_dump /fixture/indexed",
+            str(backing),
+        ],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert htree.returncode == 0, htree.stdout + htree.stderr
+    for fragment in htree_fragments:
+        assert fragment in htree.stdout
+    _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+
+def test_staged_vfs_link_into_existing_depth_zero_indexed_parent(
+    extent_writer_activation_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """LINK mutates only the hash-selected leaf of a depth-zero HTree."""
+    case = extent_writer_activation_fixture
+    path = case["image"]
+    source_patches = case["source_patches"]
+    activation_trace = case["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    superblock, _, _ = _ext4_inode_record(path, 27)
+    root = _patched_ext4_home(
+        path, source_patches, 1355, block_size=1024
+    )
+    assert struct.unpack_from("<IBBBB", root, 24) == (0, 1, 8, 0, 0)
+    assert struct.unpack_from("<HHI", root, 32) == (123, 3, 1)
+    assert struct.unpack_from("<II", root, 40) == (0x40B1_F581, 2)
+    assert struct.unpack_from("<II", root, 48) == (0xB890_1A84, 3)
+    major, minor = _indexed_split_half_md4_hash(superblock, b"linked.txt")
+    assert (major, minor) == (0x2D9C_821A, 0x374D_DB14)
+    assert major < 0x40B1_F581
+
+    _run_staged_indexed_link_success(
+        path=path,
+        source_patches=source_patches,
+        activation_trace=activation_trace,
+        backing=tmp_path / "indexed-link-depth-zero.img",
+        jbd2_toolchain=jbd2_toolchain,
+        selected_leaf_home=1357,
+        expected_parent_size=4096,
+        expected_parent_blocks=10,
+        expected_insert_offset=816,
+        immutable_homes=(1355, 1359, 1361, 1365),
+        htree_fragments=(
+            "Hash Version: 1",
+            "Indirect levels: 0",
+            "Number of entries (count): 3",
+            "Entry #0: Hash 0x00000000, block 1",
+            "Reading directory block 1, phys 1357",
+            "linked.txt",
+        ),
+        marker="EXT4-INDEXED-LINK-DEPTH-ZERO",
+        max_steps=1_200_000_000,
+    )
+
+
+def test_staged_vfs_link_into_singleton_depth_one_indexed_parent(
+    staged_public_indexed_root_growth_live_fixture: dict[str, object],
+    jbd2_toolchain: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """LINK routes through the immutable singleton root-growth DX node."""
+    case = staged_public_indexed_root_growth_live_fixture
+    path = case["image"]
+    block_size = case["block_size"]
+    root_home = case["root_home"]
+    node_home = case["node_candidate"]
+    leaf_home = case["leaf_candidate"]
+    map_node_home = case["map_node_home"]
+    separator = case["separator"]
+    assert isinstance(path, Path)
+    assert isinstance(block_size, int)
+    assert isinstance(root_home, int)
+    assert isinstance(node_home, int)
+    assert isinstance(leaf_home, int)
+    assert isinstance(map_node_home, int)
+    assert isinstance(separator, int)
+    assert (block_size, root_home, node_home, leaf_home, map_node_home) == (
+        1024,
+        1355,
+        1364,
+        1497,
+        1365,
+    )
+    assert separator == 0x1A48_8646
+
+    superblock, _, _ = _ext4_inode_record(path, 27)
+    root = _read_ext4_home(path, root_home, block_size=block_size)
+    node = _read_ext4_home(path, node_home, block_size=block_size)
+    assert struct.unpack_from("<IBBBB", root, 24) == (0, 1, 8, 1, 0)
+    assert struct.unpack_from("<HHI", root, 32) == (123, 1, 124)
+    assert struct.unpack_from("<HH", node, 8) == (126, 124)
+    assert struct.unpack_from("<I", node, 12)[0] == 1
+    assert struct.unpack_from("<II", node, 16) == (separator, 125)
+    assert struct.unpack_from("<II", node, 24) == (0x40B1_F581, 2)
+    major, minor = _indexed_split_half_md4_hash(superblock, b"linked.txt")
+    assert (major, minor) == (0x2D9C_821A, 0x374D_DB14)
+    assert separator <= major < 0x40B1_F581
+
+    _run_staged_indexed_link_success(
+        path=path,
+        source_patches=(),
+        activation_trace=_jbd2_writer_activation_trace(path),
+        backing=tmp_path / "indexed-link-depth-one.img",
+        jbd2_toolchain=jbd2_toolchain,
+        selected_leaf_home=leaf_home,
+        expected_parent_size=129024,
+        expected_parent_blocks=254,
+        expected_insert_offset=408,
+        immutable_homes=(root_home, node_home, map_node_home, 1357),
+        htree_fragments=(
+            "Hash Version: 1",
+            "Indirect levels: 1",
+            "Number of entries (count): 1\n",
+            "Number of entries (limit): 123",
+            "Number of entries (count): 124",
+            "Reading directory block 125, phys 1497",
+            "linked.txt",
+        ),
+        marker="EXT4-INDEXED-LINK-DEPTH-ONE",
+        max_steps=2_400_000_000,
+    )
 
 
 @pytest.fixture(scope="session")
@@ -81082,8 +81421,12 @@ def _staged_link_attempt_forth(
     *,
     epoch_ms: int,
     metadata_capacity: int = 2,
+    parent_path: str = "/fixture",
+    linked_path: str = "/fixture/linked.txt",
 ) -> tuple[str, ...]:
     """Build one public hard-LINK attempt with complete cache observations."""
+    assert parent_path.startswith("/") and '"' not in parent_path
+    assert linked_path.startswith("/") and '"' not in linked_path
     return (
         f"VARIABLE {prefix}-CLOCK-CALLS",
         (
@@ -81116,8 +81459,12 @@ def _staged_link_attempt_forth(
             f"CONSTANT {prefix}-H-IOR CONSTANT {prefix}-H"
         ),
         (
-            f'S" /fixture" {prefix}-V VFS-RESOLVE? '
+            f'S" {parent_path}" {prefix}-V VFS-RESOLVE? '
             f"CONSTANT {prefix}-D-IOR CONSTANT {prefix}-D"
+        ),
+        (
+            f"{prefix}-D {prefix}-V _VFS-ENSURE-CHILDREN? "
+            f"CONSTANT {prefix}-LOAD-IOR"
         ),
         f"{prefix}-P D.VNODE @ CONSTANT {prefix}-VN",
         f"{prefix}-D D.VNODE @ CONSTANT {prefix}-D-VN",
@@ -81146,13 +81493,15 @@ def _staged_link_attempt_forth(
             f'S" /fixture/payload.txt" VFS-FF-READ {prefix}-V '
             f"VFS-OPEN? CONSTANT {prefix}-OPEN-IOR CONSTANT {prefix}-FD"
         ),
+        f"DEPTH CONSTANT {prefix}-DEPTH-BEFORE",
         (
             f'S" linked.txt" {prefix}-P {prefix}-D {prefix}-V VFS-LINK '
             f"CONSTANT {prefix}-IOR CONSTANT {prefix}-NEW"
         ),
+        f"DEPTH CONSTANT {prefix}-DEPTH-AFTER",
         f"{prefix}-V V.LAST-IOR @ CONSTANT {prefix}-LAST-IOR",
         (
-            f'S" /fixture/linked.txt" {prefix}-V VFS-RESOLVE? '
+            f'S" {linked_path}" {prefix}-V VFS-RESOLVE? '
             f"CONSTANT {prefix}-AFTER-IOR CONSTANT {prefix}-AFTER"
         ),
         f"{prefix}-CTX _EXT4-C.J.WRITER + @ CONSTANT {prefix}-WRITER",
@@ -88997,6 +89346,119 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
         "_XC-STAGE-NEW-INODE"
     )
     assert stage.rstrip().endswith("_XC-WRITER @ _XC-HP-REQUIRE-STAGED")
+
+
+def test_ext4_indexed_link_reuses_only_authenticated_leaf_slack() -> None:
+    """Pin indexed LINK to its existing three-home, no-growth path."""
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            facade,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    load_parent = word_body("_XC-LOAD-PARENT")
+    auth = word_body("_XC-AUTH-INDEXED-PARENT")
+    expected_roles = word_body("_XC-HP-EXPECTED-ROLES")
+    plan_homes = word_body("_XC-HP-PLAN-HOMES")
+    plan = word_body("_XC-PLAN")
+    stage_directory = word_body("_XC-STAGE-DIRECTORY")
+    stage_insert = word_body("_EXT4-JTX-STAGE-INSERT")
+    insert = word_body("_XC-INSERT-COMMON")
+
+    indexed_start = load_parent.index("_XC-LOAD-INDEXED @ IF")
+    shape_bind = load_parent.index(
+        "_XC-LOAD-INDEXED @ _XC-P-BIND-SHAPE", indexed_start
+    )
+    indexed_gate = load_parent[indexed_start:shape_bind]
+    exact_flags = indexed_gate.index(
+        "_EXT4-EXTENTS-FL _EXT4-INDEX-FL OR <> IF"
+    )
+    mkdir_refusal = indexed_gate.index("_XC-DIRECTORY @ IF")
+    assert exact_flags < mkdir_refusal
+    assert "_XC-LINKING @" not in indexed_gate
+
+    split_found = auth.index("-1 _XC-INDEX-SPLITTING !")
+    create_growth = auth.index(
+        "_XC-INDEX-SPLITTING @ _XC-LINKING @ 0= AND IF",
+        split_found,
+    )
+    baseline_compare = auth.index(
+        "_XC-P.INDEX-BASE-SPLITTING + @ <>", create_growth
+    )
+    baseline_store = auth.index(
+        "_XC-P.INDEX-BASE-ROOT-GROWING + !", baseline_compare
+    )
+    link_refusal = auth.index(
+        "_XC-INDEX-SPLITTING @ _XC-LINKING @ AND "
+        "IF VFS-E-NOSPC EXIT THEN",
+        baseline_store,
+    )
+    split_build = auth.index("_XC-CONVERT-BUILD-PLAN", link_refusal)
+    split_capture = auth.index("_XC-INDEX-CAPTURE-MAP", split_build)
+    assert (
+        split_found
+        < create_growth
+        < baseline_compare
+        < baseline_store
+        < link_refusal
+        < split_build
+        < split_capture
+    )
+    assert plan.index("_XC-AUTH-PARENT-DIRECTORY") < plan.index(
+        "_XC-SELECT-INDEX-BLOCK"
+    )
+
+    link_admission = insert.index(
+        "_XC-LINKING @ 0= _XC-DIRECTORY @ 0= AND"
+    )
+    admission_store = insert.index(
+        "_XC-P.INDEX-ROOT-GROWTH-ADMISSION + !", link_admission
+    )
+    assert link_admission < admission_store
+
+    assert "_XC-LINKING @ IF 3 EXIT THEN" in expected_roles
+    link_homes_start = plan_homes.index("_XC-LINKING @ IF")
+    link_homes_end = plan_homes.index("\n    ELSE", link_homes_start)
+    link_homes = plan_homes[link_homes_start:link_homes_end]
+    link_bindings = tuple(
+        re.findall(
+            r"(_XC-HR-[A-Z0-9-]+)\s+"
+            r"(_XC-[A-Z0-9-]+ @)\s+_XC-HP-BIND-META",
+            link_homes,
+        )
+    )
+    assert link_bindings == (
+        ("_XC-HR-INODE", "_XC-INODE-HOME @"),
+        ("_XC-HR-PARENT-INODE", "_XC-PARENT-HOME @"),
+        ("_XC-HR-PARENT-DIRECTORY", "_XC-DIR-HOME @"),
+    )
+    assert link_homes.count("_XC-HP-BIND-META") == 3
+
+    stage_target = stage_insert.index("_XC-STAGE-LINK-TARGET")
+    stage_parent = stage_insert.index("_XC-STAGE-PARENT-INODE")
+    stage_leaf = stage_insert.index("_XC-STAGE-DIRECTORY")
+    allocation_gate = stage_insert.index("_XC-LINKING @ 0= IF", stage_leaf)
+    assert stage_target < stage_parent < stage_leaf < allocation_gate
+    before_allocation_gate = stage_insert[:allocation_gate]
+    after_allocation_gate = stage_insert[allocation_gate:]
+    for allocator in (
+        "_EXT4-JTX-STAGE-ALLOCATE-BLOCK",
+        "_XC-STAGE-INODE-ALLOCATION",
+        "_XC-STAGE-SUPER",
+    ):
+        assert allocator not in before_allocation_gate
+        assert allocator in after_allocation_gate
+
+    indexed_stage = stage_directory.index("DUP _XC-P.INDEXED + @ IF")
+    reload_parent = stage_directory.index("_XC-LOAD-PARENT", indexed_stage)
+    read_leaf = stage_directory.index("_EXT4-READ-BLOCK", reload_parent)
+    acquire_leaf = stage_directory.index("_EXT4-JTX-META-ACQUIRE", read_leaf)
+    assert indexed_stage < reload_parent < read_leaf < acquire_leaf
 
 
 def test_ext4_indexed_root_growth_probe_extends_the_sealed_certificate() -> None:

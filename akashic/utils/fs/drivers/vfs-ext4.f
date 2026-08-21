@@ -18431,8 +18431,8 @@ VARIABLE _EXT4-BWC-CTX
 \ base binding context.  One lifecycle cell replaces SHAPE-SET; the other 46
 \ cells retain semantic-name offsets before six exact-size comparison buffers.
 \ One of those cells is explicit, record-scoped root-growth admission.  The
-\ operation wrapper enables it only for regular CREATE; indexed MKDIR and LINK
-\ retain their earlier policy refusal without acquiring this authority.
+\ operation wrapper enables it only for regular CREATE; LINK and MKDIR leave it
+\ clear and cannot acquire root-growth authority.
 \ The ordered home-plan tail is sized by its complete semantic role universe,
 \ not by a fixed maximum for today's largest admitted topology.  A new role
 \ therefore extends both the enum and the caller-funded record automatically.
@@ -21705,10 +21705,10 @@ CREATE _XB _EXT4-MAX-BLOCK ALLOT
 \ this writer.  A full one-block linear parent converts in one transaction to a
 \ canonical depth-zero HTree root plus two packed leaves.  A full depth-zero
 \ leaf may split while its root retains an entry slot; a saturated root may grow
-\ through one new DX node and one new leaf.  LINK reuses only the linear
-\ namespace authority without allocating.  Indexed LINK/MKDIR, depth-one leaf
-\ splitting, ACL inheritance, non-root credential policy, and other directory
-\ growth remain explicit unsupported edges.
+\ through one new DX node and one new leaf.  LINK reuses the linear or indexed
+\ slack-insertion authority without allocating; indexed LINK leaf splitting,
+\ indexed MKDIR, depth-one leaf splitting, ACL inheritance, non-root credential
+\ policy, and other directory growth remain explicit unsupported edges.
 \ Each admitted edit is one complete metadata-only journal transaction.
 
 \ The binding record above carries the ordered role/kind/home certificate.
@@ -23268,7 +23268,7 @@ VARIABLE _XC-HASH-SUPER
         _XC-INDEX-SPLIT-SEEN @ 0= IF VFS-E-NOSPC EXIT THEN
         -1 _XC-INDEX-SPLITTING !
     THEN
-    _XC-INDEX-SPLITTING @ IF
+    _XC-INDEX-SPLITTING @ _XC-LINKING @ 0= AND IF
         _XC-INDEX-DEPTH @ 0= IF
             _XC-DIRECTORY-DESC _EXT4-DD.DX-COUNT + @
             _XC-DIRECTORY-DESC _EXT4-DD.DX-LIMIT + @ U< 0= IF
@@ -23290,6 +23290,7 @@ VARIABLE _XC-HASH-SUPER
         _XC-INDEX-ROOT-GROWING @
             OVER _XC-P.INDEX-BASE-ROOT-GROWING + !
     THEN
+    _XC-INDEX-SPLITTING @ _XC-LINKING @ AND IF VFS-E-NOSPC EXIT THEN
     _XC-INDEX-SPLITTING @ _XC-INDEX-DEPTH @ AND IF
         EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
@@ -23783,7 +23784,7 @@ VARIABLE _XC-NEW-DIR-IMAGE
         _EXT4-EXTENTS-FL _EXT4-INDEX-FL OR <> IF
             EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
         THEN
-        _XC-LINKING @ _XC-DIRECTORY @ OR IF
+        _XC-DIRECTORY @ IF
             EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
         THEN
     ELSE
