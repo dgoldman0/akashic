@@ -1013,13 +1013,15 @@ evidence. Existing multi-leaf input has clean public selection/edit and
 two-to-three-index split evidence, stable remounts, and pinned external-tool
 acceptance.
 The ordinary ext4 binding remains read-only. The explicitly staged descriptor
-additionally exposes only the qualified `CREATE`, `MKDIR`, `TRUNCATE`,
+additionally exposes the qualified `CREATE`, `MKDIR`, `TRUNCATE`,
 `UNLINK`, `RMDIR`, and `LINK` namespace/metadata slices documented below;
 the current worktree also installs the qualified regular-file and cross-parent
 empty-directory no-replacement RENAME callback and adds `VFS-CAP-RENAME`,
 `VFS-CAP-ATOMIC-RENAME`, and
-`VFS-CAP-CROSSDIR-RENAME`. It does not add `VFS-CAP-RENAME-REPLACE`. Other
-mutation capabilities remain disabled. Modern
+`VFS-CAP-CROSSDIR-RENAME`. It separately advertises `VFS-CAP-SETATTR` for the
+focused-qualified linked-regular scalar slice documented below. It does not
+add `VFS-CAP-RENAME-REPLACE`. Other mutation capabilities remain disabled.
+Modern
 `ORPHAN_PRESENT` and a nonzero legacy
 `s_last_orphan` are now admitted, after any required journal replay and strict
 reload, into a unified, non-mutating two-pass preflight. Legacy discovery
@@ -2646,7 +2648,41 @@ unmounts; a fresh mount of that LINK image installs the existing exact `2/0/0`
 writer and shrinks through the new name, changing only block 1346 and inode
 home 278. The selected leaf retains the exact LINK after-image; the remaining
 parent HTree and external map stay byte-exact. It adds no new production or
-recovery shape. Metadata and xattr coverage follow.
+recovery shape. The linked-regular scalar SETATTR slice is now
+focused-qualified and production-closed only inside its exact envelope. Xattr
+mutation remains next.
+
+That SETATTR slice accepts a still-linked regular dentry and a nonempty subset
+of `MODE`, `UID`, `GID`, `ATIME`, `MTIME`, and `CTIME`; it refuses `RDEV` and
+nonregular or detached targets. UID and GID are unsigned 32-bit values. MODE is
+a complete 16-bit ext4 mode that must retain the regular-file type field, and a
+MODE request refuses when `system.posix_acl_access` is present because ACL-mask
+synchronization is outside the slice. Each selected timestamp has explicit
+seconds bounds `-2147483648` through `15032385535`, inclusive, and nanoseconds
+bounds `0` through `999999999`.
+
+The request is raw scalar persistence, with no authorization or credential
+policy, `UTIME_NOW`/`UTIME_OMIT` interpretation, automatic set-id clearing, or
+implicit ctime update. It samples no trusted clock; a caller that will need a
+later clock-derived mutation in the mounted session must bind the clock at the
+clean endpoint before the first mutation. Admission plus dry/live staging
+reauthenticates the dentry/vnode, inode locator and table record, cache,
+complete mapping, and inline/external xattrs. The owner proof rejects any use
+of the inode-table home as data, map metadata, or external-xattr storage by the
+target or any other inode. The only after-image is that checksummed inode-table
+block under exact `1/0/0` credit, with no data, revoke, allocation, accounting,
+or orphan change and with every unselected field, map, file byte, and xattr
+preserved.
+
+Generic VFS clears `V.LAST-IOR` immediately before dispatch. Callback failure
+records the error without publishing requested vnode fields. If commit is
+already authoritative and checkpoint then fails, the binding retains that
+diagnostic in `V.LAST-IOR` while returning callback success, so public SETATTR
+returns zero and publishes the selected fields and dirty state. A successful
+nonzero UID or GID explicitly self-narrows later staged composition: current
+`LINK`, `UNLINK`, and `RENAME` paths on that inode require both ownership
+scalars to remain zero and will refuse it. This promotion makes no broader
+metadata or xattr-coverage claim.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

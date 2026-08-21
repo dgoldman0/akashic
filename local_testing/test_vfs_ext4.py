@@ -7645,8 +7645,9 @@ def test_binding_descriptors_are_valid_and_truthful(
             ),
             (
                 "EXT4-CAPS VFS-CAP-WRITE OR VFS-CAP-CREATE OR "
-                "VFS-CAP-MKDIR OR VFS-CAP-TRUNCATE OR VFS-CAP-UNLINK OR "
-                "VFS-CAP-RMDIR OR VFS-CAP-LINK OR VFS-CAP-RENAME OR "
+                "VFS-CAP-MKDIR OR VFS-CAP-TRUNCATE OR VFS-CAP-SETATTR OR "
+                "VFS-CAP-UNLINK OR VFS-CAP-RMDIR OR VFS-CAP-LINK OR "
+                "VFS-CAP-RENAME OR "
                 "VFS-CAP-ATOMIC-RENAME OR VFS-CAP-CROSSDIR-RENAME OR "
                 "CONSTANT _EXPECTED-E4-STAGED-CAPS"
             ),
@@ -7674,6 +7675,8 @@ def test_binding_descriptors_are_valid_and_truthful(
                 "EXT4-STAGED-WRITE-OPS I CELLS + @ ['] _EXT4-MKDIR <> "
                 "ELSE I VFS-OP-TRUNCATE = IF "
                 "EXT4-STAGED-WRITE-OPS I CELLS + @ ['] _EXT4-TRUNCATE <> "
+                "ELSE I VFS-OP-SETATTR = IF "
+                "EXT4-STAGED-WRITE-OPS I CELLS + @ ['] _EXT4-SETATTR <> "
                 "ELSE I VFS-OP-UNLINK = IF "
                 "EXT4-STAGED-WRITE-OPS I CELLS + @ ['] _EXT4-UNLINK <> "
                 "ELSE I VFS-OP-RMDIR = IF "
@@ -7685,7 +7688,7 @@ def test_binding_descriptors_are_valid_and_truthful(
                 "ELSE "
                 "EXT4-STAGED-WRITE-OPS I CELLS + @ "
                 "EXT4-OPS I CELLS + @ <> "
-                "THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN "
+                "THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN THEN "
                 "IF FALSE UNLOOP EXIT THEN "
                 "LOOP TRUE ;"
             ),
@@ -91560,6 +91563,449 @@ def test_staged_vfs_mkdir_then_directory_rename_in_one_write_session(
     assert "landing-dir" in root_listing.stdout
     assert "moved-dir" in landing_listing.stdout
     _assert_e2fsck_clean(backing, jbd2_toolchain)
+
+
+def test_staged_vfs_setattr_commits_all_linked_regular_scalars_exactly(
+    writer_activation_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """Commit all admitted scalar fields through one shared regular vnode."""
+    path = writer_activation_fixture["image"]
+    source_patches = writer_activation_fixture["source_patches"]
+    activation_trace = writer_activation_fixture["success_trace"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+    assert isinstance(activation_trace, tuple)
+
+    inode_number = 14
+    superblock, inode, inode_offset = _ext4_inode_record(path, inode_number)
+    block_size = 1024 << struct.unpack_from("<I", superblock, 0x18)[0]
+    inode_size = struct.unpack_from("<H", superblock, 0x58)[0]
+    inode_home, inode_block_offset = divmod(inode_offset, block_size)
+    data_block = _extent_root_physical(inode, 0)
+    xattr_block = struct.unpack_from("<I", inode, 0x68)[0]
+    old_size = struct.unpack_from("<I", inode, 0x04)[0]
+    old_blocks = struct.unpack_from("<I", inode, 0x1C)[0]
+    old_links = struct.unpack_from("<H", inode, 0x1A)[0]
+    old_generation = struct.unpack_from("<I", inode, 0x64)[0]
+    old_extent_root = inode[0x28:0x64]
+    free_blocks_before = struct.unpack_from("<I", superblock, 0x0C)[0] | (
+        struct.unpack_from("<I", superblock, 0x158)[0] << 32
+    )
+    free_inodes_before = struct.unpack_from("<I", superblock, 0x10)[0] | (
+        struct.unpack_from("<I", superblock, 0x15C)[0] << 32
+    )
+    group_counts_before = _ext4_group_counts(path, 0)
+    original_inode_home = _patched_ext4_home(
+        path, source_patches, inode_home, block_size=block_size
+    )
+    original_data = _patched_ext4_home(
+        path, source_patches, data_block, block_size=block_size
+    )
+    original_xattr = _patched_ext4_home(
+        path, source_patches, xattr_block, block_size=block_size
+    )
+
+    assert block_size == 1024
+    assert inode_size == 256
+    assert (inode_home, inode_block_offset) == (278, 256)
+    assert (data_block, xattr_block) == (1346, 1349)
+    assert (old_size, old_blocks, old_links, old_generation) == (54, 4, 2, 0)
+    assert struct.unpack_from("<H", inode, 0x00)[0] == 0x81B4
+    assert original_inode_home[
+        inode_block_offset : inode_block_offset + inode_size
+    ] == inode
+    assert original_xattr == _external_xattr_block_with_checksum(
+        superblock, xattr_block, original_xattr
+    )
+
+    mode = 0x81A0
+    uid = 0x1234_5678
+    gid = 0x9ABC_DEF0
+    atime = (-1_234_567_890, 111_222_333)
+    mtime = (3_000_000_001, 444_555_666)
+    ctime = (7_500_000_002, 777_888_999)
+
+    def encode_timestamp(seconds: int, nanoseconds: int) -> tuple[int, int]:
+        assert -2_147_483_648 <= seconds <= 15_032_385_535
+        assert 0 <= nanoseconds < 1_000_000_000
+        low = seconds & 0xFFFF_FFFF
+        signed_low = low if low < 0x8000_0000 else low - 0x1_0000_0000
+        epoch = (seconds - signed_low) >> 32
+        assert 0 <= epoch <= 3
+        return low, (nanoseconds << 2) | epoch
+
+    atime_raw = encode_timestamp(*atime)
+    mtime_raw = encode_timestamp(*mtime)
+    ctime_raw = encode_timestamp(*ctime)
+    assert atime_raw == (0xB669_FD2E, 0x1A84_78F4)
+    assert mtime_raw == (0xB2D0_5E01, 0x69FD_8649)
+    assert ctime_raw == (0xBF08_EB02, 0xB976_939E)
+
+    expected_inode = bytearray(inode)
+    struct.pack_into("<H", expected_inode, 0x00, mode)
+    struct.pack_into("<H", expected_inode, 0x02, uid & 0xFFFF)
+    struct.pack_into("<H", expected_inode, 0x78, uid >> 16)
+    struct.pack_into("<H", expected_inode, 0x18, gid & 0xFFFF)
+    struct.pack_into("<H", expected_inode, 0x7A, gid >> 16)
+    for low_offset, extra_offset, encoded in (
+        (0x08, 0x8C, atime_raw),
+        (0x10, 0x88, mtime_raw),
+        (0x0C, 0x84, ctime_raw),
+    ):
+        struct.pack_into("<I", expected_inode, low_offset, encoded[0])
+        struct.pack_into("<I", expected_inode, extra_offset, encoded[1])
+    expected_inode[:] = _inode_with_checksum(
+        superblock, inode_number, expected_inode
+    )
+    assert struct.unpack_from("<H", expected_inode, 0x7C)[0] == 0xF8CB
+    assert struct.unpack_from("<H", expected_inode, 0x82)[0] == 0x0872
+    assert expected_inode[0x28:0x64] == old_extent_root
+    assert expected_inode[0x68:0x6C] == inode[0x68:0x6C]
+    expected_inode_home = bytearray(original_inode_home)
+    expected_inode_home[
+        inode_block_offset : inode_block_offset + inode_size
+    ] = expected_inode
+
+    backing = tmp_path / "staged-setattr-all-scalars.img"
+    output, trace, _ = run_recovery_forth(
+        path,
+        backing,
+        [
+            "CREATE _SA-ATTR VFS-ATTR-SIZE ALLOT",
+            "_SA-ATTR VFS-ATTR-SIZE 0 FILL",
+            "T-ARENA CONSTANT _SA-ARENA",
+            (
+                "_SA-ARENA T-VOLUME EXT4-STAGED-WRITE-NEW "
+                "CONSTANT _SA-MOUNT-IOR CONSTANT _SA-V"
+            ),
+            "_SA-V _EXT4-CTX CONSTANT _SA-CTX",
+            *_ext4_dedicated_writer_profile_forth(
+                "_SA-PROFILE", "_SA-V", 1, 0, 0
+            ),
+            (
+                'S" /fixture/payload.txt" _SA-V VFS-RESOLVE? '
+                "CONSTANT _SA-P-IOR CONSTANT _SA-P"
+            ),
+            (
+                'S" /fixture/hardlink.txt" _SA-V VFS-RESOLVE? '
+                "CONSTANT _SA-H-IOR CONSTANT _SA-H"
+            ),
+            "_SA-P D.VNODE @ CONSTANT _SA-VN",
+            "_SA-VN VN.TYPE @ CONSTANT _SA-OLD-TYPE",
+            "_SA-VN VN.SIZE-LO @ CONSTANT _SA-OLD-SIZE",
+            "_SA-VN VN.SIZE-HI @ CONSTANT _SA-OLD-SIZE-HI",
+            "_SA-VN VN.BLOCKS @ CONSTANT _SA-OLD-BLOCKS",
+            "_SA-VN VN.NLINK @ CONSTANT _SA-OLD-NLINK",
+            "_SA-VN VN.GEN @ CONSTANT _SA-OLD-GEN",
+            "_SA-VN VN.BID @ CONSTANT _SA-OLD-BID",
+            "_SA-VN VN.RDEV @ CONSTANT _SA-OLD-RDEV",
+            (
+                "VFS-SA-MODE VFS-SA-UID OR VFS-SA-GID OR "
+                "VFS-SA-ATIME OR VFS-SA-MTIME OR VFS-SA-CTIME OR "
+                "_SA-ATTR VA.MASK !"
+            ),
+            f"{mode} _SA-ATTR VA.MODE !",
+            f"{uid} _SA-ATTR VA.UID !",
+            f"{gid} _SA-ATTR VA.GID !",
+            f"{atime[0]} _SA-ATTR VA.ATIME !",
+            f"{atime[1]} _SA-ATTR VA.ATIME-NS !",
+            f"{mtime[0]} _SA-ATTR VA.MTIME !",
+            f"{mtime[1]} _SA-ATTR VA.MTIME-NS !",
+            f"{ctime[0]} _SA-ATTR VA.CTIME !",
+            f"{ctime[1]} _SA-ATTR VA.CTIME-NS !",
+            "_SA-ATTR _SA-P _SA-V VFS-SETATTR CONSTANT _SA-IOR",
+            "_SA-H _SA-V VFS-GETATTR CONSTANT _SA-GETATTR-IOR",
+            "_SA-CTX _EXT4-C.J.WRITER + @ CONSTANT _SA-WRITER",
+            (
+                "_SA-CTX _EXT4-C.J.HOME-WRITES + @ "
+                "CONSTANT _SA-HOMES"
+            ),
+            *_forth_accumulated_conjunction(
+                "_SA-ALL-PUBLISHED",
+                [
+                    "_SA-MOUNT-IOR 0=",
+                    "_SA-PROFILE-SIZE-IOR 0=",
+                    "_SA-PROFILE-BIND-IOR 0=",
+                    "_SA-PROFILE-USED _SA-PROFILE-SIZE =",
+                    "_SA-P-IOR 0=",
+                    "_SA-H-IOR 0=",
+                    "_SA-P D.VNODE @ _SA-H D.VNODE @ =",
+                    "_SA-IOR 0=",
+                    "_SA-GETATTR-IOR 0=",
+                    "_SA-V V.LAST-IOR @ 0=",
+                    f"_SA-VN VN.MODE @ {mode} =",
+                    f"_SA-VN VN.UID @ {uid} =",
+                    f"_SA-VN VN.GID @ {gid} =",
+                    f"_SA-VN VN.ATIME @ {atime[0]} =",
+                    f"_SA-VN VN.ATIME-NS @ {atime[1]} =",
+                    f"_SA-VN VN.MTIME @ {mtime[0]} =",
+                    f"_SA-VN VN.MTIME-NS @ {mtime[1]} =",
+                    f"_SA-VN VN.CTIME @ {ctime[0]} =",
+                    f"_SA-VN VN.CTIME-NS @ {ctime[1]} =",
+                    "_SA-VN VN.TYPE @ _SA-OLD-TYPE =",
+                    "_SA-VN VN.SIZE-LO @ _SA-OLD-SIZE =",
+                    "_SA-VN VN.SIZE-HI @ _SA-OLD-SIZE-HI =",
+                    "_SA-VN VN.BLOCKS @ _SA-OLD-BLOCKS =",
+                    "_SA-VN VN.NLINK @ _SA-OLD-NLINK =",
+                    "_SA-VN VN.GEN @ _SA-OLD-GEN =",
+                    "_SA-VN VN.BID @ _SA-OLD-BID =",
+                    "_SA-VN VN.RDEV @ _SA-OLD-RDEV =",
+                    "_SA-OLD-TYPE VFS-T-FILE =",
+                    f"_SA-OLD-SIZE {old_size} =",
+                    "_SA-OLD-SIZE-HI 0=",
+                    f"_SA-OLD-BLOCKS {old_blocks} =",
+                    f"_SA-OLD-NLINK {old_links} =",
+                    f"_SA-OLD-GEN {old_generation} =",
+                    f"_SA-OLD-BID {inode_number} =",
+                    "_SA-OLD-RDEV 0=",
+                    "_SA-VN VN.FLAGS @ VFS-IF-DIRTY AND 0<>",
+                    "_SA-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_SA-V V.FLAGS @ VFS-F-RO AND 0=",
+                    "_SA-HOMES 1 =",
+                    "_SA-WRITER _SA-PROFILE-BASE =",
+                    "_SA-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                    "_SA-WRITER _EXT4-JWR.META-CREDIT + @ 0=",
+                    "_SA-WRITER _EXT4-JWR.DATA-CREDIT + @ 0=",
+                    "_SA-WRITER _EXT4-JWR.REVOKE-CREDIT + @ 0=",
+                    "_SA-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                    "_SA-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                    "_SA-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                    "_SA-CTX _EXT4-C.J.COMMITTED + @ 0=",
+                    "_SA-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                    (
+                        "_XS-ATTR-SNAPSHOT VFS-SETATTR-REQ-SIZE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    (
+                        "_XS-INODE-SNAPSHOT _EXT4-MAX-INODE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    "_EXT4-MUTATION-OWNER-INO @ 0=",
+                    "_EXT4-MAP-VALIDATION-LIMIT @ 0=",
+                    "_EXT4-JFO-CERT-SCOPE @ 0=",
+                    "_EXT4-JFO-CERT-VALID @ 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            (
+                '_SA-ALL-PUBLISHED @ IF ." EXT4-PUBLIC-SETATTR-OK" '
+                'ELSE ." EXT4-PUBLIC-SETATTR-CHECK " '
+                "_SA-ALL-PUBLISHED-FIRST-FAILURE @ . THEN"
+            ),
+            "0 _SA-V VFS-UNMOUNT CONSTANT _SA-UNMOUNT-IOR",
+            (
+                "_SA-UNMOUNT-IOR 0= "
+                "_SA-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_SA-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-PUBLIC-SETATTR-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=source_patches,
+        capture_media=backing,
+    )
+    _assert_emitted(output, "EXT4-PUBLIC-SETATTR-OK")
+    _assert_emitted(output, "EXT4-PUBLIC-SETATTR-UNMOUNTED")
+    assert trace[: len(activation_trace)] == activation_trace
+    assert _write_ordinals_for_ext4_home(
+        trace, inode_home, block_size=block_size
+    ) == (15,)
+    assert _write_ordinals_for_ext4_home(
+        trace, data_block, block_size=block_size
+    ) == ()
+    assert _write_ordinals_for_ext4_home(
+        trace, xattr_block, block_size=block_size
+    ) == ()
+
+    final_superblock, final_inode, _ = _ext4_inode_record(
+        backing, inode_number
+    )
+    assert final_superblock == _ext4_super_with_checksum(final_superblock)
+    assert final_inode == bytes(expected_inode)
+    assert final_inode == _inode_with_checksum(
+        final_superblock, inode_number, final_inode
+    )
+    assert final_inode[0x28:0x64] == old_extent_root
+    assert final_inode[0x68:0x6C] == inode[0x68:0x6C]
+    assert _read_ext4_home(
+        backing, inode_home, block_size=block_size
+    ) == bytes(expected_inode_home)
+    assert _read_ext4_home(
+        backing, data_block, block_size=block_size
+    ) == original_data
+    assert _read_ext4_home(
+        backing, xattr_block, block_size=block_size
+    ) == original_xattr
+    final_free_blocks = struct.unpack_from(
+        "<I", final_superblock, 0x0C
+    )[0] | (struct.unpack_from("<I", final_superblock, 0x158)[0] << 32)
+    final_free_inodes = struct.unpack_from(
+        "<I", final_superblock, 0x10
+    )[0] | (struct.unpack_from("<I", final_superblock, 0x15C)[0] << 32)
+    assert final_free_blocks == free_blocks_before
+    assert final_free_inodes == free_inodes_before
+    assert _ext4_group_counts(backing, 0) == group_counts_before
+
+
+def test_ext4_setattr_proves_global_ownership_before_single_home_stage(
+) -> None:
+    """Pin SETATTR's owner proof and exact dry/live transaction lifecycle."""
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            facade,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return " ".join(match.group("body").split())
+
+    target_disjoint = word_body("_XS-REQUIRE-TARGET-HOME-DISJOINT")
+    owners = word_body("_XS-REQUIRE-HOME-OWNERS")
+    validate_request = word_body("_XS-VALIDATE-REQUEST")
+    apply_request_body = word_body("_XS-APPLY-REQUEST")
+    stage = word_body("_EXT4-JTX-STAGE-SETATTR")
+    run = word_body("_XS-RUN")
+
+    for fragment in (
+        "_XS-MASK @ VFS-SA-MODE AND IF _XS-MODE @ 0xFFFF U>",
+        "_XS-MASK @ VFS-SA-UID AND IF _XS-UID @ 0xFFFFFFFF U>",
+        "_XS-MASK @ VFS-SA-GID AND IF _XS-GID @ 0xFFFFFFFF U>",
+        (
+            "_XS-MASK @ VFS-SA-ATIME AND IF _XS-ATIME @ "
+            "_XS-ATIME-NS @ _XS-VALIDATE-TIME"
+        ),
+        (
+            "_XS-MASK @ VFS-SA-MTIME AND IF _XS-MTIME @ "
+            "_XS-MTIME-NS @ _XS-VALIDATE-TIME"
+        ),
+        (
+            "_XS-MASK @ VFS-SA-CTIME AND IF _XS-CTIME @ "
+            "_XS-CTIME-NS @ _XS-VALIDATE-TIME"
+        ),
+    ):
+        assert fragment in validate_request
+    for fragment in (
+        (
+            "_XS-MASK @ VFS-SA-MODE AND IF _XS-MODE @ "
+            "_XS-RECORD @ _EXT4-I.MODE + W!"
+        ),
+        "_XS-MASK @ VFS-SA-UID AND IF _XS-UID @ 0xFFFF AND",
+        "_XS-MASK @ VFS-SA-GID AND IF _XS-GID @ 0xFFFF AND",
+        (
+            "_XS-MASK @ VFS-SA-ATIME AND IF _XS-RECORD @ "
+            "_XS-APPLY-ATIME"
+        ),
+        (
+            "_XS-MASK @ VFS-SA-MTIME AND IF _XS-RECORD @ "
+            "_XS-APPLY-MTIME"
+        ),
+        (
+            "_XS-MASK @ VFS-SA-CTIME AND IF _XS-CTIME @ "
+            "_XS-CTIME-NS @ _XS-RECORD @ _XS-CTX @ "
+            "_EXT4-SET-INODE-CTIME"
+        ),
+    ):
+        assert fragment in apply_request_body
+
+    assert owners.endswith(
+        "_XS-REQUIRE-TARGET-HOME-DISJOINT ?DUP IF EXIT THEN "
+        "_XS-INO @ _XS-HOME @ 1 _XS-CTX @ "
+        "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER"
+    )
+    assert "_XS-HOME @ 0 _EXT4-MUTATION-OWNER-RANGE !" in target_disjoint
+    assert (
+        "1 0 _EXT4-MUTATION-OWNER-RANGE CELL+ !" in target_disjoint
+    )
+    publish = target_disjoint.index(
+        "_EXT4-MUTATION-OWNER-RANGES-PUBLISH"
+    )
+    owner_bind = target_disjoint.index(
+        "_XS-INO @ _EXT4-MUTATION-OWNER-INO !", publish
+    )
+    target_reauth = target_disjoint.index("_XS-REQUIRE-TARGET", owner_bind)
+    owner_clear = target_disjoint.index(
+        "0 _EXT4-MUTATION-OWNER-INO !", target_reauth
+    )
+    ranges_clear = target_disjoint.index(
+        "_EXT4-MUTATION-OWNER-RANGES-CLEAR", owner_clear
+    )
+    map_limit_restore = target_disjoint.index(
+        "_XS-OWNER-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !",
+        ranges_clear,
+    )
+    assert (
+        publish
+        < owner_bind
+        < target_reauth
+        < owner_clear
+        < ranges_clear
+        < map_limit_restore
+    )
+
+    target_reloads = tuple(
+        match.start()
+        for match in re.finditer(r"\b_XS-REQUIRE-TARGET\b", stage)
+    )
+    owner_proof = stage.index("_XS-REQUIRE-HOME-OWNERS")
+    raw_read = stage.index("_EXT4-READ-BLOCK", owner_proof)
+    acquire = stage.index("_EXT4-JTX-META-ACQUIRE", raw_read)
+    snapshot_checks = tuple(
+        match.start() for match in re.finditer(r"_EXT4-BYTES=\?", stage)
+    )
+    apply_request = stage.index("_XS-APPLY-REQUEST", acquire)
+    restamp = stage.index("_EXT4-RESTAMP-INODE", apply_request)
+    replace = stage.index("_EXT4-JTX-META-REPLACE", restamp)
+    assert len(target_reloads) == 3
+    assert stage.count("_EXT4-VALIDATE-INODE-TABLE-HOME") == 2
+    assert len(snapshot_checks) == 2
+    assert (
+        target_reloads[0]
+        < owner_proof
+        < target_reloads[1]
+        < target_reloads[2]
+        < raw_read
+        < snapshot_checks[0]
+        < acquire
+        < snapshot_checks[1]
+        < apply_request
+        < restamp
+        < replace
+    )
+    assert "_EXT4-JWR.META-USED + @ 1 <>" in stage
+    assert "_EXT4-JWR.META-ACTIVE + @ 1 <>" in stage
+    assert "_EXT4-JWR.DATA-USED + @ 0<> OR" in stage
+    assert "_EXT4-JWR.REVOKE-USED + @ 0<> OR" in stage
+
+    assert run.count("1 0 0") == 4
+    assert "1 0 0 _XS-CTX @ _EXT4-JTX-PREFLIGHT-CAPACITY" in run
+    assert "1 0 0 _XS-CTX @ _EXT4-JWR-ENSURE" in run
+    begins = tuple(
+        match.start() for match in re.finditer(r"_EXT4-JTX-BEGIN", run)
+    )
+    stages = tuple(
+        match.start()
+        for match in re.finditer(r"_EXT4-JTX-STAGE-SETATTR", run)
+    )
+    abort = run.index("_EXT4-JTX-ABORT")
+    activate = run.index("_EXT4-JWR-ACTIVATE", abort)
+    emit = run.index("_EXT4-JTX-EMIT", activate)
+    checkpoint = run.index("_EXT4-JTX-CHECKPOINT", emit)
+    assert len(begins) == len(stages) == 2
+    assert (
+        begins[0]
+        < stages[0]
+        < abort
+        < activate
+        < begins[1]
+        < stages[1]
+        < emit
+        < checkpoint
+    )
+    assert checkpoint < run.rindex("_XS-REQUIRE-IDLE") < run.rindex(
+        "_XS-SCRUB"
+    )
 
 
 def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:

@@ -34,6 +34,12 @@ real ABI-1 production capabilities inside their documented envelope, not toy or
 provisional models; they do not claim that the complete writable profile is
 implemented.
 
+The current staged worktree additionally advertises `VFS-CAP-SETATTR` for its
+focused-qualified linked-regular-file scalar slice; the ordinary ext4 binding
+remains read-only with a null slot. This production-closed claim is confined to
+that documented scalar envelope and does not imply broader metadata or xattr
+coverage.
+
 Allocation-backed hole fill and aligned-EOF growth currently require
 authenticated 1 KiB filesystem geometry, 256-byte inodes, a linked regular file
 with an unmapped target and either an authenticated inline depth-zero extent
@@ -204,7 +210,8 @@ fresh mount of that image then uses TRUNCATE's unchanged exact `2/0/0` data-
 block/inode-home transaction through the new name. The selected leaf retains
 exactly the LINK after-image and every other parent HTree/map home remains
 byte-exact, so TRUNCATE adds no directory-mutation authority or recovery
-branch. Metadata and xattr work is the next vertical handoff.
+branch. The linked-regular-file scalar SETATTR slice is now focused-qualified;
+xattr mutation remains next.
 HTree depth grows independently when an operation or a pinned corpus requires
 it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate
@@ -602,10 +609,14 @@ Mutating forms also enforce read-only policy. An absent capability returns
 
 Mask bits are `VFS-SA-MODE`, `VFS-SA-UID`, `VFS-SA-GID`,
 `VFS-SA-ATIME`, `VFS-SA-MTIME`, `VFS-SA-CTIME`, and `VFS-SA-RDEV`.
-The binding commits the request first; only after callback success does the
-core publish selected values into the shared vnode. A selected zero is an
-update, while unselected fields remain unchanged. Size changes use
-`VFS-TRUNCATE` rather than SETATTR.
+The core clears `V.LAST-IOR` immediately before callback dispatch. A callback
+error leaves the shared-vnode projection unchanged and records that error in
+`V.LAST-IOR`. Only callback success publishes selected values and marks the
+shared vnode and mount dirty. A selected zero is an update, while unselected
+fields remain unchanged. A binding whose transaction is already committed may
+return callback success while retaining a later checkpoint error in
+`V.LAST-IOR`; the core publishes the committed values and does not erase that
+diagnostic. Size changes use `VFS-TRUNCATE` rather than SETATTR.
 
 Xattr names are 1–255 bytes. SET flags are zero, `VFS-XATTR-CREATE`, or
 `VFS-XATTR-REPLACE`; CREATE and REPLACE cannot be combined. A null buffer with
@@ -752,7 +763,9 @@ core restores the prior size if the callback fails. Before dispatch the core
 clears `V.LAST-IOR`. A binding that has durably committed the new size may
 return callback success while storing a later checkpoint failure there; the
 success path preserves that diagnostic instead of overwriting it. SETATTR
-instead receives a separate request and is published only after success.
+instead receives a separate request. It follows the same diagnostic rule:
+clear immediately before dispatch, publish selected vnode fields only after
+callback success, and preserve any binding-retained postcommit failure.
 
 Semantic caps are `VFS-CAP-ATOMIC-RENAME`,
 `VFS-CAP-CROSSDIR-RENAME`, `VFS-CAP-RENAME-REPLACE`,

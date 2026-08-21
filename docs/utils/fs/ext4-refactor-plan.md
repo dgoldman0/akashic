@@ -257,7 +257,8 @@ insertion and deletion are therefore at draft vertical closure. One exact
 composes the existing exact `2/0/0` inode/data transaction through an indexed
 name. The selected leaf retains its LINK after-image and the rest of the parent
 HTree and extent map remain unchanged; production policy and recovery shape do
-not widen. Metadata and xattr forms are next.
+not widen. The staged linked-regular scalar SETATTR slice is now
+focused-qualified under exact `1/0/0` credit, and xattr mutation is next.
 
 The objective is to establish one authoritative implementation for each of
 these recurring mechanisms:
@@ -810,7 +811,29 @@ This draft-closes the namespace/deletion vertical. A focused
 singleton-depth-one LINK-to-TRUNCATE success now closes indexed-parent
 retained-block composition with the unchanged two-home `2/0/0` truncate
 transaction. The selected leaf retains the exact LINK after-image and the rest
-of the parent topology is byte-immutable. Metadata and xattr forms follow.
+of the parent topology is byte-immutable.
+
+The current focused-qualified metadata increment is staged-only scalar SETATTR
+for a still-linked regular dentry. A nonempty request may select any subset of
+`MODE`, `UID`, `GID`, `ATIME`, `MTIME`, and `CTIME`; `RDEV`, nonregular or
+detached targets, MODE outside 16 bits or with a non-regular type nibble, and
+MODE on an inode with `system.posix_acl_access` remain gated. UID/GID admit the
+unsigned 32-bit range. Selected times require seconds in
+`[-2147483648, 15032385535]` and nanoseconds in `[0, 999999999]`.
+
+This slice is raw persistence without authorization or credential policy,
+special `UTIME_NOW`/`UTIME_OMIT` values, automatic ctime or set-id changes, or
+a clock sample. Its admission/dry/live reauthentication covers the dentry and
+vnode, inode/table/cache, complete map, and inline/external xattrs; exact owner
+proof excludes any data, map-node, or xattr alias of the inode-table home. One
+checksummed inode-table after-image consumes exact `1/0/0`, preserving all
+unselected scalars, data, maps, links, allocation, orphan state, and xattrs.
+Generic VFS clears `V.LAST-IOR` immediately before dispatch, publishes only
+after callback success, and preserves a postcommit checkpoint diagnostic while
+returning public success for the committed edit. A nonzero UID or GID
+self-narrows later `LINK`, `UNLINK`, and `RENAME`, whose current staged target
+envelopes require both values zero. This exact slice has passed focused
+qualification; xattr mutation follows.
 
 ## Verification cadence
 
@@ -915,5 +938,6 @@ and cross-parent canonical-directory forms without topology mutation. Its one
 source-built two-operation positive gate plus compositional prior recovery
 evidence draft-closes the namespace/deletion vertical. Indexed-parent
 retained-block TRUNCATE now has one compositional two-stage indexed LINK-to-
-fresh-mount-TRUNCATE success without production or recovery widening. Metadata
-and xattr forms remain ahead.
+fresh-mount-TRUNCATE success without production or recovery widening. The
+linked-regular scalar SETATTR slice is now focused-qualified under exact
+`1/0/0`; xattr mutation remains ahead.

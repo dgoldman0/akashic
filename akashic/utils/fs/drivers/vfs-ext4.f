@@ -1,4 +1,4 @@
-\ vfs-ext4.f — bounded ext4 recovery and read-only ABI-1 VFS access
+\ vfs-ext4.f — bounded ext4 recovery plus read/staged-write ABI-1 VFS access
 \
 \ This is the current bounded implementation of akashic-ext4-rw-v1.  It owns
 \ one explicit KDOS volume, validates the on-disk format before publication,
@@ -18758,7 +18758,7 @@ VARIABLE _EXT4-WR-KIND
 \ short success; VFS-WRITE-EXACT or the caller may advance and invoke it again,
 \ including through additional independently allocated EOF blocks.
 \ It remains absent from the ordinary EXT4-OPS and EXT4-CAPS.  The explicit
-\ staged binding below publishes only this qualified operation while broader
+\ staged binding below publishes this qualified operation while broader
 \ public-write gates remain.
 \ Confirmed progress and quarantine flags are safe for VFS cursor semantics.
 \ Successful checkpointed writes publish mtime/ctime.  Allocation-backed
@@ -20279,12 +20279,19 @@ EXT4-OPS ,
 \ an authenticated regular inode and raises its link count atomically with the
 \ parent timestamps and checksummed directory block.  RENAME admits atomic
 \ same-parent regular-file changes plus cross-parent regular-file and qualified
-\ empty-directory moves between authenticated one-block linear directories.
-\ Cross-parent moves rebuild both parent blocks; directory moves additionally
-\ transfer the parent link and rewrite the canonical child `..` record.
-\ Bind a containing profile and trusted clock before the first mutation.
+\ empty-directory moves between authenticated linear, depth-zero, or singleton
+\ depth-one indexed parents.  Cross-parent moves rebuild both selected parent
+\ blocks; directory moves additionally transfer the parent link and rewrite
+\ the canonical child `..` record.  SETATTR persists an explicit nonempty
+\ subset of MODE/UID/GID/ATIME/MTIME/CTIME for an authenticated linked regular
+\ inode under exact 1/0/0 credit; it refuses RDEV and MODE while an access ACL
+\ exists, and it does not sample the trusted clock.  Bind a containing profile
+\ before the first mutation.  Bind the trusted clock before that first
+\ mutation too if any later operation in the mounted session will derive time
+\ from it, because clock binding is admitted only at the clean endpoint.
 EXT4-CAPS VFS-CAP-WRITE OR VFS-CAP-CREATE OR VFS-CAP-MKDIR OR
-VFS-CAP-TRUNCATE OR VFS-CAP-UNLINK OR VFS-CAP-RMDIR OR VFS-CAP-LINK OR
+VFS-CAP-TRUNCATE OR VFS-CAP-SETATTR OR
+VFS-CAP-UNLINK OR VFS-CAP-RMDIR OR VFS-CAP-LINK OR
 VFS-CAP-RENAME OR VFS-CAP-ATOMIC-RENAME OR
 VFS-CAP-CROSSDIR-RENAME OR
 CONSTANT EXT4-STAGED-WRITE-CAPS
@@ -30151,3 +30158,488 @@ CREATE _XR-NP-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     _XR-RENAME-COMMON ;
 
 ' _EXT4-RENAME EXT4-STAGED-WRITE-OPS VFS-OP-RENAME CELLS + !
+
+\ =====================================================================
+\  Atomic linked-regular-file scalar metadata
+\ =====================================================================
+\
+\ SETATTR commits one checksummed inode-table after-image and no data or
+\ revoke payload.  It is intentionally a raw scalar interface: credential
+\ policy, authorization, and automatic set-id or ctime changes belong above
+\ this binding.  MODE must retain the complete regular-file type field and is
+\ refused while a POSIX access ACL exists because updating that ACL's mask is
+\ outside this slice.  Other authenticated inline and external xattrs remain
+\ immutable.  The public VFS publishes selected fields into the shared vnode
+\ only after this callback reports committed success.
+
+VARIABLE _XS-D
+VARIABLE _XS-V
+VARIABLE _XS-CTX
+VARIABLE _XS-VN
+VARIABLE _XS-MASK
+VARIABLE _XS-MODE
+VARIABLE _XS-UID
+VARIABLE _XS-GID
+VARIABLE _XS-ATIME
+VARIABLE _XS-ATIME-NS
+VARIABLE _XS-MTIME
+VARIABLE _XS-MTIME-NS
+VARIABLE _XS-CTIME
+VARIABLE _XS-CTIME-NS
+VARIABLE _XS-RDEV
+VARIABLE _XS-INO
+VARIABLE _XS-GEN
+VARIABLE _XS-GROUP
+VARIABLE _XS-INDEX
+VARIABLE _XS-HOME
+VARIABLE _XS-OFF
+VARIABLE _XS-WRITER
+VARIABLE _XS-TX
+VARIABLE _XS-IOR
+VARIABLE _XS-ACTIVE
+VARIABLE _XS-IMAGE
+VARIABLE _XS-RECORD
+VARIABLE _XS-SAVED-LOW
+VARIABLE _XS-SAVED-EXTRA
+VARIABLE _XS-OWNER-MAP-LIMIT
+VARIABLE _XS-OWNER-IOR
+CREATE _XS-ATTR-SNAPSHOT VFS-SETATTR-REQ-SIZE ALLOT
+CREATE _XS-INODE-SNAPSHOT _EXT4-MAX-INODE ALLOT
+
+: _XS-SCRUB  ( -- )
+    _XS-ATTR-SNAPSHOT VFS-SETATTR-REQ-SIZE 0 FILL
+    _XS-INODE-SNAPSHOT _EXT4-MAX-INODE 0 FILL
+    0 _XS-D ! 0 _XS-V ! 0 _XS-CTX ! 0 _XS-VN !
+    0 _XS-MASK ! 0 _XS-MODE ! 0 _XS-UID ! 0 _XS-GID !
+    0 _XS-ATIME ! 0 _XS-ATIME-NS !
+    0 _XS-MTIME ! 0 _XS-MTIME-NS !
+    0 _XS-CTIME ! 0 _XS-CTIME-NS ! 0 _XS-RDEV !
+    0 _XS-INO ! 0 _XS-GEN ! 0 _XS-GROUP ! 0 _XS-INDEX !
+    0 _XS-HOME ! 0 _XS-OFF ! 0 _XS-WRITER ! 0 _XS-TX !
+    0 _XS-IOR ! 0 _XS-ACTIVE ! 0 _XS-IMAGE ! 0 _XS-RECORD !
+    0 _XS-SAVED-LOW ! 0 _XS-SAVED-EXTRA !
+    0 _XS-OWNER-MAP-LIMIT ! 0 _XS-OWNER-IOR ! ;
+
+: _XS-VALIDATE-TIME  ( seconds nsec -- ior )
+    DUP 0< OVER 1000000000 U< 0= OR IF
+        2DROP VFS-E-INVALID EXIT
+    THEN
+    DROP
+    DUP -2147483648 < OVER 15032385535 > OR IF
+        DROP VFS-E-OVERFLOW EXIT
+    THEN
+    DROP 0 ;
+
+: _XS-VALIDATE-REQUEST  ( -- ior )
+    _XS-ATTR-SNAPSHOT VA.MASK @ DUP _XS-MASK !
+    DUP 0= IF DROP VFS-E-INVALID EXIT THEN
+    VFS-SA-ALL INVERT AND IF VFS-E-INVALID EXIT THEN
+    _XS-ATTR-SNAPSHOT VA.MODE @ _XS-MODE !
+    _XS-ATTR-SNAPSHOT VA.UID @ _XS-UID !
+    _XS-ATTR-SNAPSHOT VA.GID @ _XS-GID !
+    _XS-ATTR-SNAPSHOT VA.ATIME @ _XS-ATIME !
+    _XS-ATTR-SNAPSHOT VA.ATIME-NS @ _XS-ATIME-NS !
+    _XS-ATTR-SNAPSHOT VA.MTIME @ _XS-MTIME !
+    _XS-ATTR-SNAPSHOT VA.MTIME-NS @ _XS-MTIME-NS !
+    _XS-ATTR-SNAPSHOT VA.CTIME @ _XS-CTIME !
+    _XS-ATTR-SNAPSHOT VA.CTIME-NS @ _XS-CTIME-NS !
+    _XS-ATTR-SNAPSHOT VA.RDEV @ _XS-RDEV !
+    _XS-MASK @ VFS-SA-RDEV AND IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XS-MASK @ VFS-SA-MODE AND IF
+        _XS-MODE @ 0xFFFF U> IF VFS-E-OVERFLOW EXIT THEN
+        _XS-MODE @ 0xF000 AND 0x8000 <> IF
+            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+        THEN
+    THEN
+    _XS-MASK @ VFS-SA-UID AND IF
+        _XS-UID @ 0xFFFFFFFF U> IF VFS-E-OVERFLOW EXIT THEN
+    THEN
+    _XS-MASK @ VFS-SA-GID AND IF
+        _XS-GID @ 0xFFFFFFFF U> IF VFS-E-OVERFLOW EXIT THEN
+    THEN
+    _XS-MASK @ VFS-SA-ATIME AND IF
+        _XS-ATIME @ _XS-ATIME-NS @ _XS-VALIDATE-TIME ?DUP IF EXIT THEN
+    THEN
+    _XS-MASK @ VFS-SA-MTIME AND IF
+        _XS-MTIME @ _XS-MTIME-NS @ _XS-VALIDATE-TIME ?DUP IF EXIT THEN
+    THEN
+    _XS-MASK @ VFS-SA-CTIME AND IF
+        _XS-CTIME @ _XS-CTIME-NS @ _XS-VALIDATE-TIME ?DUP IF EXIT THEN
+    THEN
+    0 ;
+
+: _XS-ENTRY  ( -- ior )
+    _XS-D @ 0= _XS-V @ 0= OR IF VFS-E-INVALID EXIT THEN
+    _XS-V @ V.BINDING @ EXT4-STAGED-WRITE-BINDING <> IF
+        VFS-E-INVALID EXIT
+    THEN
+    _XS-V @ _EXT4-MOW-V !
+    0 _EXT4-MOW-ENTRY ?DUP IF EXIT THEN
+    _EXT4-MOW-CTX @ _XS-CTX !
+    _EXT4-MOW-ACTIVE @ _XS-ACTIVE !
+    _XS-CTX @ _EXT4-STAGED-WRITE-FS-QUALIFY ?DUP IF EXIT THEN
+    _XS-D @ _XS-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
+    _XS-D @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
+    _XS-D @ D.VNODE @ DUP _XS-VN ! 0= IF VFS-E-STALE EXIT THEN
+    _XS-VN @ VN.TYPE @ VFS-T-FILE <> IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XS-VN @ VN.BID @ DUP _XS-INO ! 0= IF VFS-E-STALE EXIT THEN
+    _XS-INO @ _XS-CTX @ _EXT4-C.INODES + @ U> IF VFS-E-STALE EXIT THEN
+    _XS-VN @ VN.GEN @ DUP _XS-GEN ! 0xFFFFFFFF U> IF
+        VFS-E-STALE EXIT
+    THEN
+    _XS-VN @ VN.NLINK @ 0= IF VFS-E-STALE EXIT THEN
+    _XS-CTX @ _EXT4-C.J.WRITER-STORE-KIND + @
+    _EXT4-JWR-STORE-DEDICATED <> IF VFS-E-NOSPC EXIT THEN
+    _XS-CTX @ _EXT4-C.J.WRITER-ARENA + @ 0=
+    _XS-CTX @ _EXT4-C.J.WRITER + @ 0= OR IF VFS-E-CORRUPT EXIT THEN
+    0 ;
+
+: _XS-REQUIRE-DENTRY  ( -- ior )
+    _XS-D @ _XS-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-STALE EXIT THEN
+    _XS-D @ D.FLAGS @ VFS-DF-UNLINKED AND IF VFS-E-STALE EXIT THEN
+    _XS-D @ D.VNODE @ _XS-VN @ <> IF VFS-E-STALE EXIT THEN
+    _XS-VN @ VN.TYPE @ VFS-T-FILE <>
+    _XS-VN @ VN.BID @ _XS-INO @ <> OR
+    _XS-VN @ VN.GEN @ _XS-GEN @ <> OR
+    _XS-VN @ VN.NLINK @ 0= OR IF VFS-E-STALE EXIT THEN
+    0 ;
+
+: _XS-CACHE-MATCH?  ( -- flag )
+    _XS-CTX @ _EXT4-C.R.GEN + @ _XS-VN @ VN.GEN @ =
+    _XS-CTX @ _EXT4-C.R.SIZE + @ _XS-VN @ VN.SIZE-LO @ = AND
+    _XS-VN @ VN.SIZE-HI @ 0= AND
+    _XS-CTX @ _EXT4-C.R.MODE + @ _XS-VN @ VN.MODE @ = AND
+    _XS-CTX @ _EXT4-C.R.UID + @ _XS-VN @ VN.UID @ = AND
+    _XS-CTX @ _EXT4-C.R.GID + @ _XS-VN @ VN.GID @ = AND
+    _XS-CTX @ _EXT4-C.R.NLINK + @ _XS-VN @ VN.NLINK @ = AND
+    _XS-CTX @ _EXT4-C.R.BLOCKS + @ _XS-VN @ VN.BLOCKS @ = AND
+    _XS-CTX @ _EXT4-C.R.ATIME + @ _XS-VN @ VN.ATIME @ = AND
+    _XS-CTX @ _EXT4-C.R.ATIME-NS + @ _XS-VN @ VN.ATIME-NS @ = AND
+    _XS-CTX @ _EXT4-C.R.MTIME + @ _XS-VN @ VN.MTIME @ = AND
+    _XS-CTX @ _EXT4-C.R.MTIME-NS + @ _XS-VN @ VN.MTIME-NS @ = AND
+    _XS-CTX @ _EXT4-C.R.CTIME + @ _XS-VN @ VN.CTIME @ = AND
+    _XS-CTX @ _EXT4-C.R.CTIME-NS + @ _XS-VN @ VN.CTIME-NS @ = AND
+    _XS-CTX @ _EXT4-C.R.RDEV + @ 0= AND
+    _XS-VN @ VN.RDEV @ 0= AND ;
+
+: _XS-SCAN-XATTRS  ( -- ior )
+    _XS-MASK @ VFS-SA-MODE AND IF
+        _EXT4-XOP-GET _EXT4-XA-OP !
+        S" system.posix_acl_access"
+        _EXT4-XA-REQ-U ! _EXT4-XA-REQ-A !
+        0 _EXT4-XA-OUT ! 0 _EXT4-XA-CAP !
+        0 _EXT4-XA-FOUND ! 0 _EXT4-XA-FOUND-SIZE ! 0 _EXT4-XA-IOR !
+        _XS-CTX @ _EXT4-XA-SCAN-BOTH ?DUP IF EXIT THEN
+        _EXT4-XA-IOR @ ?DUP IF EXIT THEN
+        _EXT4-XA-FOUND @ IF
+            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+        THEN
+    ELSE
+        _EXT4-XOP-LIST _EXT4-XA-OP !
+        0 _EXT4-XA-TOTAL ! 0 _EXT4-XA-EMIT !
+        _XS-CTX @ _EXT4-XA-SCAN-BOTH ?DUP IF EXIT THEN
+    THEN
+    0 ;
+
+: _XS-STAGE-CURRENT-TARGET  ( -- ior )
+    _XS-CTX @ _EXT4-STAGE-CURRENT-INODE
+    _XS-IOR ! DUP VFS-T-FILE <> IF
+        DROP _XS-IOR @ ?DUP IF EXIT THEN
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN DROP
+    _XS-IOR @ ?DUP IF EXIT THEN
+    _XS-REQUIRE-DENTRY ?DUP IF EXIT THEN
+    _XS-CACHE-MATCH? 0= IF VFS-E-CONFLICT EXIT THEN
+    _XS-CTX @ _EXT4-C.R.NLINK + @ 0= IF VFS-E-STALE EXIT THEN
+    _XS-SCAN-XATTRS ;
+
+: _XS-REQUIRE-TARGET  ( -- ior )
+    _XS-INO @ _XS-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
+    _EXT4-IR-GROUP @ _XS-GROUP @ <>
+    _EXT4-IR-INDEX @ _XS-INDEX @ <> OR
+    _EXT4-IR-BLOCK @ _XS-HOME @ <> OR
+    _EXT4-IR-OFF @ _XS-OFF @ <> OR IF VFS-E-STALE EXIT THEN
+    _XS-CTX @ _EXT4-C.INODE + _XS-INODE-SNAPSHOT
+    _XS-CTX @ _EXT4-C.ISIZE + @ _EXT4-BYTES=? 0= IF
+        VFS-E-CONFLICT EXIT
+    THEN
+    _XS-STAGE-CURRENT-TARGET ;
+
+: _XS-AUTH-TARGET  ( -- ior )
+    _XS-INO @
+    _XS-CTX @ _EXT4-C.SB + _EXT4-SB.FIRST-INO + L@ U< IF
+        EXT4-D-BOUNDS _EXT4-CORRUPT EXIT
+    THEN
+    _XS-INO @ 8 =
+    _XS-INO @ _XS-CTX @ _EXT4-C.ORPHAN-INO + @ = OR IF
+        EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
+    THEN
+    _XS-INO @ _XS-CTX @ _EXT4-LOAD-INODE ?DUP IF EXIT THEN
+    _EXT4-IR-GROUP @ _XS-GROUP !
+    _EXT4-IR-INDEX @ _XS-INDEX !
+    _EXT4-IR-BLOCK @ _XS-HOME !
+    _EXT4-IR-OFF @ _XS-OFF !
+    _XS-STAGE-CURRENT-TARGET ?DUP IF EXIT THEN
+    _XS-HOME @ _XS-GROUP @ _XS-CTX @
+    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
+    _XS-CTX @ _EXT4-C.INODE + _XS-INODE-SNAPSHOT
+    _XS-CTX @ _EXT4-C.ISIZE + @ CMOVE
+    _XS-REQUIRE-TARGET ;
+
+: _XS-OWNER-FAIL  ( ior -- ior )
+    _XS-OWNER-IOR !
+    _EXT4-MUTATION-OWNER-RANGES-CLEAR
+    0 _EXT4-MUTATION-OWNER-INO !
+    _XS-OWNER-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
+    _XS-OWNER-IOR @ ;
+
+\ The global other-owner service excludes the target inode, so first publish
+\ HOME around one exact target rebind.  Complete inode staging makes every data
+\ or extent-node reference hit the ordinary range predicate; XA-SCAN-BOTH does
+\ the same for the external-xattr pointer while fully authenticating its bytes.
+: _XS-REQUIRE-TARGET-HOME-DISJOINT  ( -- ior )
+    _EXT4-MUTATION-OWNER-RANGES-BUSY?
+    _EXT4-MUTATION-OWNER-INO @ OR
+    _EXT4-MUTATION-EA-REF-ACTIVE @ OR IF VFS-E-BUSY EXIT THEN
+    _XS-CTX @ _EXT4-MUTATION-RANGE-WORKSPACE? 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _XS-CTX @ _EXT4-C.MUTATION-RANGES + @ 0=
+    _XS-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @ 1 U< OR IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _EXT4-MAP-VALIDATION-LIMIT @ _XS-OWNER-MAP-LIMIT !
+    0 _EXT4-MAP-VALIDATION-LIMIT !
+    _EXT4-MUTATION-OWNER-RANGES-CLEAR
+    _XS-CTX @ _EXT4-C.MUTATION-RANGES + @
+    _EXT4-MUTATION-OWNER-RANGES !
+    _XS-HOME @ 0 _EXT4-MUTATION-OWNER-RANGE !
+    1 0 _EXT4-MUTATION-OWNER-RANGE CELL+ !
+    _XS-CTX @ _EXT4-C.MUTATION-RANGES + @ 1
+    _XS-CTX @ _EXT4-C.MUTATION-RANGE-CAP + @
+    _EXT4-MUTATION-OWNER-RANGES-PUBLISH ?DUP IF
+        _XS-OWNER-FAIL EXIT
+    THEN
+    _XS-INO @ _EXT4-MUTATION-OWNER-INO !
+    _XS-REQUIRE-TARGET _XS-OWNER-IOR !
+    0 _EXT4-MUTATION-OWNER-INO !
+    _EXT4-MUTATION-OWNER-RANGES-CLEAR
+    _XS-OWNER-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
+    _XS-OWNER-IOR @ ;
+
+\ After the target nonownership proof, reuse the bounded JFO walk to reject a
+\ data, map-metadata, or external-xattr reference from every other allocated
+\ inode.  Its terminal raw reload is followed by the exact snapshot rebind at
+\ the mutation site before any transaction image is acquired.
+: _XS-REQUIRE-HOME-OWNERS  ( -- ior )
+    _XS-REQUIRE-TARGET-HOME-DISJOINT ?DUP IF EXIT THEN
+    _XS-INO @ _XS-HOME @ 1 _XS-CTX @
+    _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER ;
+
+: _XS-REQUIRE-FRESH-EXACT  ( -- ior )
+    _XS-WRITER @ _EXT4-JWR.META-CREDIT + @ 1 <>
+    _XS-WRITER @ _EXT4-JWR.DATA-CREDIT + @ 0<> OR
+    _XS-WRITER @ _EXT4-JWR.REVOKE-CREDIT + @ 0<> OR IF
+        VFS-E-INVALID EXIT
+    THEN
+    _XS-WRITER @ _EXT4-JWR.META-USED + @
+    _XS-WRITER @ _EXT4-JWR.DATA-USED + @ OR
+    _XS-WRITER @ _EXT4-JWR.REVOKE-USED + @ OR
+    _XS-WRITER @ _EXT4-JWR.META-ACTIVE + @ OR
+    _XS-WRITER @ _EXT4-JWR.DATA-ACTIVE + @ OR
+    _XS-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ OR IF
+        VFS-E-BUSY EXIT
+    THEN
+    _XS-WRITER @ _EXT4-JWR.CP-MODE + @
+    _EXT4-JCPM-NONE <> IF VFS-E-BUSY EXIT THEN
+    _XS-WRITER @ _EXT4-JTX-TABLES-VALID? 0= IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    _XS-CTX @ _EXT4-C.O.ACTIVE + @
+    _XS-CTX @ _EXT4-C.O.MODERN-ACTIVE + @ OR
+    _XS-CTX @ _EXT4-C.O.LEGACY-ACTIVE + @ OR
+    _XS-CTX @ _EXT4-C.O.CLEAR-PENDING + @ OR IF
+        EXT4-D-RECOVERY _EXT4-UNSUPPORTED EXIT
+    THEN
+    0 ;
+
+: _XS-APPLY-ATIME  ( inode -- ior )
+    DUP _XS-RECORD !
+    DUP _EXT4-I.CTIME + L@ _XS-SAVED-LOW !
+    _EXT4-I.CTIME-EXTRA + L@ _XS-SAVED-EXTRA !
+    _XS-ATIME @ _XS-ATIME-NS @ _XS-RECORD @ _XS-CTX @
+    _EXT4-SET-INODE-CTIME _XS-IOR !
+    _XS-IOR @ 0= IF
+        _XS-RECORD @ _EXT4-I.CTIME + L@
+        _XS-RECORD @ _EXT4-I.ATIME + L!
+        _XS-RECORD @ _EXT4-I.CTIME-EXTRA + L@
+        _XS-RECORD @ _EXT4-I.ATIME-EXTRA + L!
+    THEN
+    _XS-SAVED-LOW @ _XS-RECORD @ _EXT4-I.CTIME + L!
+    _XS-SAVED-EXTRA @ _XS-RECORD @ _EXT4-I.CTIME-EXTRA + L!
+    _XS-IOR @ ;
+
+: _XS-APPLY-MTIME  ( inode -- ior )
+    DUP _XS-RECORD !
+    DUP _EXT4-I.CTIME + L@ _XS-SAVED-LOW !
+    _EXT4-I.CTIME-EXTRA + L@ _XS-SAVED-EXTRA !
+    _XS-MTIME @ _XS-MTIME-NS @ _XS-RECORD @ _XS-CTX @
+    _EXT4-SET-INODE-MTIME-CTIME _XS-IOR !
+    _XS-SAVED-LOW @ _XS-RECORD @ _EXT4-I.CTIME + L!
+    _XS-SAVED-EXTRA @ _XS-RECORD @ _EXT4-I.CTIME-EXTRA + L!
+    _XS-IOR @ ;
+
+: _XS-APPLY-REQUEST  ( inode -- ior )
+    _XS-RECORD !
+    _XS-MASK @ VFS-SA-MODE AND IF
+        _XS-MODE @ _XS-RECORD @ _EXT4-I.MODE + W!
+    THEN
+    _XS-MASK @ VFS-SA-UID AND IF
+        _XS-UID @ 0xFFFF AND _XS-RECORD @ _EXT4-I.UID-LO + W!
+        _XS-UID @ 16 RSHIFT 0xFFFF AND
+        _XS-RECORD @ _EXT4-I.UID-HI + W!
+    THEN
+    _XS-MASK @ VFS-SA-GID AND IF
+        _XS-GID @ 0xFFFF AND _XS-RECORD @ _EXT4-I.GID-LO + W!
+        _XS-GID @ 16 RSHIFT 0xFFFF AND
+        _XS-RECORD @ _EXT4-I.GID-HI + W!
+    THEN
+    _XS-MASK @ VFS-SA-ATIME AND IF
+        _XS-RECORD @ _XS-APPLY-ATIME ?DUP IF EXIT THEN
+    THEN
+    _XS-MASK @ VFS-SA-MTIME AND IF
+        _XS-RECORD @ _XS-APPLY-MTIME ?DUP IF EXIT THEN
+    THEN
+    _XS-MASK @ VFS-SA-CTIME AND IF
+        _XS-CTIME @ _XS-CTIME-NS @ _XS-RECORD @ _XS-CTX @
+        _EXT4-SET-INODE-CTIME ?DUP IF EXIT THEN
+    THEN
+    0 ;
+
+: _EXT4-JTX-STAGE-SETATTR  ( transaction -- ior )
+    DUP _XS-WRITER ! _EXT4-JTX-MUTABLE? ?DUP IF EXIT THEN
+    _XS-WRITER @ _EXT4-JWR.CTX + @ DUP _XS-CTX @ <> IF
+        DROP VFS-E-INVALID EXIT
+    THEN DROP
+    _XS-REQUIRE-FRESH-EXACT ?DUP IF EXIT THEN
+    _XS-REQUIRE-TARGET ?DUP IF EXIT THEN
+    _XS-HOME @ _XS-GROUP @ _XS-CTX @
+    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
+    _XS-REQUIRE-HOME-OWNERS ?DUP IF EXIT THEN
+    _XS-REQUIRE-TARGET ?DUP IF EXIT THEN
+    _XS-HOME @ _XS-GROUP @ _XS-CTX @
+    _EXT4-VALIDATE-INODE-TABLE-HOME ?DUP IF EXIT THEN
+    _XS-REQUIRE-TARGET ?DUP IF EXIT THEN
+    _XS-HOME @ _XS-CTX @ _EXT4-READ-BLOCK ?DUP IF EXIT THEN
+    _XS-CTX @ _EXT4-C.BLOCK + _XS-OFF @ +
+    _XS-INODE-SNAPSHOT _XS-CTX @ _EXT4-C.ISIZE + @
+    _EXT4-BYTES=? 0= IF VFS-E-CONFLICT EXIT THEN
+    _XS-CTX @ _EXT4-C.BLOCK + _XS-HOME @ _XS-WRITER @
+    _EXT4-JTX-META-ACQUIRE
+    DUP IF NIP EXIT THEN DROP DUP _XS-IMAGE !
+    _XS-OFF @ + DUP _XS-RECORD !
+    _XS-INODE-SNAPSHOT _XS-CTX @ _EXT4-C.ISIZE + @
+    _EXT4-BYTES=? 0= IF VFS-E-CONFLICT EXIT THEN
+    _XS-RECORD @ _XS-APPLY-REQUEST ?DUP IF EXIT THEN
+    _XS-RECORD @ _XS-INO @ _XS-CTX @
+    _EXT4-RESTAMP-INODE ?DUP IF EXIT THEN
+    _XS-IMAGE @ _XS-HOME @ _XS-WRITER @
+    _EXT4-JTX-META-REPLACE ?DUP IF EXIT THEN
+    _XS-WRITER @ _EXT4-JWR.META-USED + @ 1 <>
+    _XS-WRITER @ _EXT4-JWR.META-ACTIVE + @ 1 <> OR
+    _XS-WRITER @ _EXT4-JWR.DATA-USED + @ 0<> OR
+    _XS-WRITER @ _EXT4-JWR.DATA-ACTIVE + @ 0<> OR
+    _XS-WRITER @ _EXT4-JWR.REVOKE-USED + @ 0<> OR
+    _XS-WRITER @ _EXT4-JWR.REVOKE-ACTIVE + @ 0<> OR
+    _XS-WRITER @ _EXT4-JTX-TABLES-VALID? 0= OR IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    0 ;
+
+: _XS-FAIL  ( ior -- ior )
+    _XS-IOR !
+    _XS-WRITER @ ?DUP IF
+        DUP _EXT4-JWR.STATE + @ _EXT4-JWR-STAGING = IF
+            _EXT4-JTX-ABORT ?DUP IF
+                _XS-WRITER @ _EXT4-JWR-LATCH-FAULT _XS-IOR !
+            THEN
+        ELSE
+            DUP _EXT4-JWR.STATE + @ _EXT4-JWR-COMMITTED = IF
+                DROP _EXT4-JWP-CHECKPOINT-PREFLIGHT
+                _XS-WRITER @ _EXT4-JWR.PHASE + !
+                _XS-IOR @ _XS-WRITER @ _EXT4-JWR-LATCH-FAULT
+                _XS-IOR !
+            ELSE
+                DUP _EXT4-JWR.STATE + @ _EXT4-JWR-FAULTED = IF
+                    _EXT4-JWR.FAULT + @ ?DUP IF _XS-IOR ! THEN
+                ELSE DROP THEN
+            THEN
+        THEN
+    THEN
+    _XS-V @ ?DUP IF _XS-IOR @ SWAP V.LAST-IOR ! THEN
+    _XS-IOR @ _XS-SCRUB ;
+
+: _XS-POSTCOMMIT-FAIL  ( ior -- ior )
+    _XS-FAIL DROP
+    \ Journal commit is authoritative.  Return success so the public VFS,
+    \ rather than this driver, publishes the selected shared-vnode fields.
+    0 ;
+
+: _XS-REQUIRE-IDLE  ( -- ior )
+    _XS-WRITER @ _EXT4-JWR-VALID? 0= IF VFS-E-CORRUPT EXIT THEN
+    _XS-WRITER @ _EXT4-JWR.STATE + @ _EXT4-JWR-IDLE <>
+    _XS-WRITER @ _EXT4-JWR-IDLE-CLEAN? 0= OR IF
+        VFS-E-CORRUPT EXIT
+    THEN
+    0 ;
+
+: _XS-RUN  ( -- ior )
+    _XS-ENTRY ?DUP IF _XS-FAIL EXIT THEN
+    _XS-AUTH-TARGET ?DUP IF _XS-FAIL EXIT THEN
+    1 0 0 _XS-CTX @ _EXT4-JTX-PREFLIGHT-CAPACITY
+    ?DUP IF _XS-FAIL EXIT THEN
+    1 0 0 _XS-CTX @ _EXT4-JWR-ENSURE
+    DUP IF NIP _XS-FAIL EXIT THEN DROP _XS-WRITER !
+    _XS-REQUIRE-IDLE ?DUP IF _XS-FAIL EXIT THEN
+    _XS-ACTIVE @ 0= IF
+        1 0 0 _XS-WRITER @ _EXT4-JTX-BEGIN
+        DUP IF NIP _XS-FAIL EXIT THEN DROP _XS-TX !
+        _XS-TX @ _EXT4-JTX-STAGE-SETATTR ?DUP IF _XS-FAIL EXIT THEN
+        _XS-TX @ _EXT4-JTX-ABORT ?DUP IF _XS-FAIL EXIT THEN
+        _XS-WRITER @ _EXT4-JWR-ACTIVATE ?DUP IF _XS-FAIL EXIT THEN
+    THEN
+    1 0 0 _XS-WRITER @ _EXT4-JTX-BEGIN
+    DUP IF NIP _XS-FAIL EXIT THEN DROP _XS-TX !
+    _XS-TX @ _EXT4-JTX-STAGE-SETATTR ?DUP IF _XS-FAIL EXIT THEN
+    _XS-TX @ _EXT4-JTX-EMIT ?DUP IF _XS-FAIL EXIT THEN
+    _XS-TX @ _EXT4-JTX-CHECKPOINT
+    ?DUP IF _XS-POSTCOMMIT-FAIL EXIT THEN
+    _XS-REQUIRE-IDLE ?DUP IF _XS-POSTCOMMIT-FAIL EXIT THEN
+    0 _XS-V @ V.LAST-IOR !
+    _XS-SCRUB
+    0 ;
+
+: _EXT4-SETATTR  ( attr dentry vfs -- ior )
+    2 PICK VFS-SETATTR-REQ-SIZE _VFS-BUFFER? 0= IF
+        2DROP DROP _XS-SCRUB VFS-E-INVALID EXIT
+    THEN
+    2 PICK VFS-SETATTR-REQ-SIZE
+    _XS-ATTR-SNAPSHOT VFS-SETATTR-REQ-SIZE MSPAN-OVERLAP? IF
+        2DROP DROP _XS-SCRUB VFS-E-INVALID EXIT
+    THEN
+    2 PICK VFS-SETATTR-REQ-SIZE
+    _XS-INODE-SNAPSHOT _EXT4-MAX-INODE MSPAN-OVERLAP? IF
+        2DROP DROP _XS-SCRUB VFS-E-INVALID EXIT
+    THEN
+    2 PICK _XS-ATTR-SNAPSHOT VFS-SETATTR-REQ-SIZE MOVE
+    _XS-V ! _XS-D ! DROP
+    0 _XS-CTX ! 0 _XS-VN ! 0 _XS-WRITER ! 0 _XS-TX !
+    0 _XS-IMAGE ! 0 _XS-RECORD !
+    _XS-VALIDATE-REQUEST ?DUP IF _XS-FAIL EXIT THEN
+    _XS-RUN ;
+
+' _EXT4-SETATTR EXT4-STAGED-WRITE-OPS VFS-OP-SETATTR CELLS + !

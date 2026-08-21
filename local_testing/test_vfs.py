@@ -880,7 +880,7 @@ def test_truncate_clamps_every_open_alias_only_after_success():
 
 def test_successful_truncate_preserves_new_binding_diagnostic_only():
     """A committed callback may retain a checkpoint diagnostic on success."""
-    check("successful truncate diagnostic", [
+    check_emitted("successful truncate diagnostic", [
         "VARIABLE _TR-DIAG",
         (
             ": T-TRUNC-DIAG-CB ( inode vfs -- ior ) "
@@ -899,15 +899,58 @@ def test_successful_truncate_preserves_new_binding_diagnostic_only():
         "-1 _TR-DIAG ! 2 _FD VFS-TRUNCATE CONSTANT _FIRST-IOR",
         (
             '_FIRST-IOR 0= _V1 V.LAST-IOR @ VFS-E-IO = AND '
-            '_FD VFS-SIZE 2 = AND IF ." RETAINED " THEN'
+            '_FD VFS-SIZE 2 = AND IF ." RETAINED" CR THEN'
         ),
         "0 _TR-DIAG ! 1 _FD VFS-TRUNCATE CONSTANT _SECOND-IOR",
         (
             '_SECOND-IOR 0= _V1 V.LAST-IOR @ 0= AND '
-            '_FD VFS-SIZE 1 = AND IF ." CLEARED" THEN'
+            '_FD VFS-SIZE 1 = AND IF ." CLEARED" CR THEN'
         ),
         "_FD VFS-CLOSE",
-    ], "RETAINED CLEARED")
+    ], ("RETAINED", "CLEARED"))
+
+
+def test_successful_setattr_preserves_new_binding_diagnostic_only():
+    """Committed SETATTR publishes fields without erasing its diagnostic."""
+    check_emitted("successful setattr diagnostic", [
+        "VARIABLE _SA-DIAG",
+        (
+            ": T-SA-DIAG-CB ( attr dentry vfs -- ior ) "
+            "_SA-DIAG @ IF VFS-E-IO OVER V.LAST-IOR ! THEN "
+            "2DROP DROP 0 ;"
+        ),
+        "T-BINDING-CLONE CONSTANT _BIND",
+        (
+            "' T-SA-DIAG-CB _BIND VB.OPS @ "
+            "VFS-OP-SETATTR CELLS + !"
+        ),
+        "_BIND VB.CAPS DUP @ VFS-CAP-SETATTR OR SWAP !",
+        (
+            '_BIND 0 T-VFS-NEW-WITH CONSTANT _V1 S" attrs.bin" '
+            "_V1 VFS-MKFILE CONSTANT _D"
+        ),
+        "CREATE _SA-ATTR VFS-ATTR-SIZE ALLOT",
+        "_SA-ATTR VFS-ATTR-SIZE 0 FILL",
+        "VFS-SA-MODE VFS-SA-UID OR _SA-ATTR VA.MASK !",
+        "0x81A0 _SA-ATTR VA.MODE ! 0x12345678 _SA-ATTR VA.UID !",
+        "-1 _SA-DIAG !",
+        "_SA-ATTR _D _V1 VFS-SETATTR CONSTANT _FIRST-IOR",
+        (
+            '_FIRST-IOR 0= _V1 V.LAST-IOR @ VFS-E-IO = AND '
+            '_D IN.MODE @ 0x81A0 = AND '
+            '_D D.VNODE @ VN.UID @ 0x12345678 = AND '
+            'IF ." RETAINED" CR THEN'
+        ),
+        "0x8180 _SA-ATTR VA.MODE ! 0x87654321 _SA-ATTR VA.UID !",
+        "0 _SA-DIAG !",
+        "_SA-ATTR _D _V1 VFS-SETATTR CONSTANT _SECOND-IOR",
+        (
+            '_SECOND-IOR 0= _V1 V.LAST-IOR @ 0= AND '
+            '_D IN.MODE @ 0x8180 = AND '
+            '_D D.VNODE @ VN.UID @ 0x87654321 = AND '
+            'IF ." CLEARED" CR THEN'
+        ),
+    ], ("RETAINED", "CLEARED"))
 
 # ── VFS-RESOLVE ──
 
@@ -1913,6 +1956,8 @@ def main():
         test_invalid_offsets_never_reach_binding,
         test_successful_truncate_preserves_stack,
         test_truncate_clamps_every_open_alias_only_after_success,
+        test_successful_truncate_preserves_new_binding_diagnostic_only,
+        test_successful_setattr_preserves_new_binding_diagnostic_only,
         # RESOLVE
         test_resolve_root,
         test_resolve_absolute,

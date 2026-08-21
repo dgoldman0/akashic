@@ -192,7 +192,7 @@ VARIABLE _EXT4-ITM-EXTRA
         \ This first writable slice follows live-inode staging's modern
         \ profile: all three extra timestamps and the high checksum exist.
         \ Old-format 256-byte records with extra_isize zero remain readable
-        \ but are not silently upgraded by a data overwrite.
+        \ but are not silently upgraded by a writable mutation.
         _EXT4-ITM-INODE @ _EXT4-I.EXTRA-SIZE + W@
         DUP 16 U< IF DROP EXT4-D-INODE-CHECKSUM _EXT4-CORRUPT EXIT THEN
         DUP 4 MOD IF DROP EXT4-D-INODE-CHECKSUM _EXT4-CORRUPT EXIT THEN

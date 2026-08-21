@@ -307,7 +307,7 @@ VFS-R-NOVOLUME    CONSTANT _VFS-R-NOVOLUME
 \  +128   volume        explicit volume object (0 only for no-volume binding)
 \  +136   volume-cookie immutable attachment identity
 \  +144   media-gen     generation captured at mount
-\  +152   last-ior      diagnostic copy of the last result
+\  +152   last-ior      last dispatch result or retained postcommit diagnostic
 \  +160   lifecycle     VFS-L-* state
 \  +168   open-count    live file descriptors
 \  +176   vnode-free    reusable vnode records
@@ -2512,6 +2512,11 @@ VARIABLE _VSA-VN
     _VSA-IN @ _VSA-V @ _VFS-DENTRY-OWNED? 0= IF VFS-E-XDEV EXIT THEN
     _VSA-V @ V.FLAGS @ VFS-F-RO AND IF VFS-E-READONLY EXIT THEN
     VFS-OP-SETATTR _VSA-V @ _VFS-HAS-OP? 0= IF VFS-E-UNSUPPORTED EXIT THEN
+    \ Clear the prior diagnostic before dispatch.  A binding that has already
+    \ committed the requested attributes may return callback success while
+    \ retaining a later checkpoint error here; publish the committed vnode
+    \ projection without erasing that durable-progress diagnostic.
+    0 _VSA-V @ V.LAST-IOR !
     _VSA-ATTR @ _VSA-IN @ _VSA-V @
     VFS-OP-SETATTR _VSA-V @ _VFS-XT EXECUTE
     DUP IF _VSA-V @ _VFS-RESULT EXIT THEN DROP
@@ -2542,7 +2547,7 @@ VARIABLE _VSA-VN
     THEN
     VFS-IF-DIRTY _VSA-IN @ IN.FLAGS DUP @ ROT OR SWAP !
     VFS-F-DIRTY _VSA-V @ V.FLAGS DUP @ ROT OR SWAP !
-    0 _VSA-V @ _VFS-RESULT ;
+    0 ;
 
 VARIABLE _VSL-TA
 VARIABLE _VSL-TU

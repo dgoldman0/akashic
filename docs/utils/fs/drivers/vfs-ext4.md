@@ -118,6 +118,10 @@ transfers one parent link, and rewrites the child's `..` entry and checksum
 under exact `4/0/0` through `6/0/0` credit. Its canonical `5/0/0` homes are
 283, 275, 1299, 1377, and 1364. Neither form allocates storage or creates
 orphan state. Same-parent directories and replacement remain gated.
+The current worktree also provides focused-qualified, staged-only scalar
+`SETATTR` for a linked regular file. A nonempty request can select `MODE`,
+`UID`, `GID`, `ATIME`, `MTIME`, and `CTIME` under one exact `1/0/0`
+inode-table transaction.
 Regular-file CREATE also admits existing depth-zero HTree parents when an
 authenticated hash interval already contains insertion slack, and it can
 insert into slack below the exact singleton depth-one HTree produced by root
@@ -3079,8 +3083,8 @@ same-parent directory moves, indexed leaf splitting or growth, HTree-key
 mutation, and deeper or multi-node HTree shapes remain gated. Indexed
 insertion, UNLINK, RMDIR, and this RENAME extension now draft-close the
 namespace/deletion vertical. The indexed-parent retained-block TRUNCATE
-composition below is complete; metadata and xattr forms are the next Stage 6
-handoff.
+composition below is complete. The linked-regular-file scalar SETATTR slice is
+now focused-qualified; xattr mutation remains the next Stage 6 handoff.
 
 ### Same-retained-block shrink TRUNCATE
 
@@ -3290,6 +3294,60 @@ seconds, with the separately run saturated public case passing in 121.85.
 At this generalized-TRUNCATE milestone, cold source mode measured
 1,317,793,564 of 1.35 billion steps across 3,266 packed ext4 lines. No
 checked-in limit was raised for that slice.
+
+### Linked-regular-file scalar SETATTR
+
+The current staged descriptor advertises `VFS-CAP-SETATTR` and installs
+`_EXT4-SETATTR` in ABI slot 16; the ordinary binding remains read-only with a
+null slot. Its focused promotion gate has passed, making only the documented
+linked-regular scalar slice production-closed; this is not a broader metadata
+or xattr promotion.
+
+An admitted request names a still-linked regular dentry and selects a nonempty
+subset of exactly six scalars: `MODE`, `UID`, `GID`, `ATIME`, `MTIME`, and
+`CTIME`. Selecting `RDEV`, targeting a nonregular or detached inode, or using a
+`MODE` value outside 16 bits refuses. A selected `MODE` is the complete ext4
+mode and must retain the regular-file type field (`0x8000`); MODE mutation also
+refuses while `system.posix_acl_access` exists because this slice does not
+synchronize the ACL mask. UID and GID each admit the full unsigned 32-bit
+range. Every selected timestamp requires seconds from `-2147483648` through
+`15032385535`, inclusive, and nanoseconds from `0` through `999999999`.
+
+This is a raw scalar persistence interface, not a POSIX credential-policy
+layer. It performs no authorization, has no `UTIME_NOW` or `UTIME_OMIT`
+encoding, does not clear set-id bits, and does not synthesize ctime when another
+field changes. The callback samples no trusted clock: every selected time comes
+from the request. Because trusted-clock binding is clean-endpoint-only, a
+caller that will need clock-derived operations later in the same mounted
+session must bind that clock before the first mutation.
+
+Admission and the dry/live transaction stages reauthenticate the dentry/vnode,
+inode generation and locator, complete current mapping, inode-table record,
+cache projection, and inline plus external xattrs. The owner proof establishes
+that neither the target nor any other inode aliases the inode-table home as
+data, extent-map metadata, or external-xattr storage. An accepted edit commits
+one checksummed inode-table metadata after-image under exact `1/0/0` credit:
+there is no data payload, revoke, allocation, accounting edit, or orphan state.
+Unselected scalar fields, file bytes, the complete map, links, size, block
+count, generation, and all xattrs remain unchanged.
+
+Generic VFS clears `V.LAST-IOR` immediately before dispatch and publishes no
+requested vnode field when the callback returns an error. Once the journal
+commit is authoritative, a later checkpoint failure instead leaves its
+diagnostic in `V.LAST-IOR` while the callback and public SETATTR return success;
+generic VFS then publishes the selected fields and dirty state. Setting either
+UID or GID nonzero explicitly self-narrows the present staged namespace
+envelope: later `LINK`, `UNLINK`, and `RENAME` paths on that regular inode still
+require UID and GID both zero and will refuse it. That is a documented boundary
+of these raw primitives, not credential-policy composition.
+
+The focused selector
+`local_testing/test_vfs_ext4.py::test_staged_vfs_setattr_commits_all_linked_regular_scalars_exactly`
+passed `1/1` in 97.68 seconds. Through one shared hard-link vnode it publishes
+all six scalars, independently verifies their on-disk timestamp encoding and
+inode checksum, observes the exact one-home `1/0/0` transaction, and preserves
+the file data, complete map, external xattr, and allocation accounting. This
+qualifies only the scalar envelope above; xattr mutation remains next.
 
 ### Regular-file UNLINK lifetimes
 
@@ -3882,8 +3940,9 @@ preserving the still-mounted instance's ready/current authority.
 capability bits and dispatch slots. The current worktree additionally wires
 `RENAME`, `ATOMIC-RENAME`, and `CROSSDIR-RENAME` to the qualified regular-file
 and cross-parent empty-directory no-replacement slices described above; it
-does not wire `RENAME-REPLACE`. Its
-write slot covers the initialized overwrite,
+does not wire `RENAME-REPLACE`. It also advertises the focused-qualified
+linked-regular `SETATTR` slot described above. Its write slot covers the
+initialized overwrite,
 initialized partial-tail append, in-size hole-fill, and aligned-EOF growth
 operations described above.
 `VFS-WRITE-EXACT` composes those same primitives for the qualified tail-to-one-
@@ -3990,7 +4049,8 @@ The ratchet order is:
    regular/canonical-directory moves. Its two-operation positive gate and
    compositional evidence draft-close the namespace/deletion vertical; next
    retain the completed representative indexed-parent retained-block TRUNCATE
-   composition, then admit metadata and xattr forms; and
+   composition and the focused-qualified scalar SETATTR slice, then admit xattr
+   mutation; and
 9. perform the final profile closure audit across every profile-admitted
    operation and recovery state.
 
@@ -4027,10 +4087,11 @@ installs the qualified
 regular-file and cross-parent empty-directory no-replacement RENAME callback
 and advertises `VFS-CAP-RENAME`,
 `VFS-CAP-ATOMIC-RENAME`, and `VFS-CAP-CROSSDIR-RENAME`. It deliberately omits
-`VFS-CAP-RENAME-REPLACE`. The ordinary binding remains `VFS-BF-READ-ONLY` and
-advertises none of these mutations.
-Neither binding yet advertises `SETATTR`, `SYMLINK`, `SETXATTR`, or
-`REMOVEXATTR`. Each later capability or RENAME expansion
+`VFS-CAP-RENAME-REPLACE`. The staged worktree also installs `_EXT4-SETATTR`
+and advertises `VFS-CAP-SETATTR` for the focused-qualified linked-regular scalar
+slice. The ordinary binding remains `VFS-BF-READ-ONLY` and advertises none of
+these mutations. Neither binding yet advertises `SYMLINK`, `SETXATTR`, or
+`REMOVEXATTR`. Each later capability, SETATTR expansion, or RENAME expansion
 still needs its own bounded credit/chunking contract, reachable-state recovery
 closure, namespace/cache behavior where applicable, and interoperability plus
 crash qualification. Full profile completion additionally needs general block
@@ -4113,9 +4174,11 @@ HTree. Same-parent same-leaf and cross-leaf regular moves use three and four
 semantic roles; cross-parent regular and canonical-directory moves use five
 and six. A fitting same-leaf record retains the in-place edit, while other
 selected-leaf edits use aggregate compact-fit without changing HTree topology
-or parent geometry. The
-timestamped mutation paths update clock-derived
-`mtime`/`ctime`; both
+or parent geometry. Linked-regular scalar SETATTR persists any nonempty subset
+of `MODE`, `UID`, `GID`, `ATIME`, `MTIME`, and `CTIME` through one checksummed
+inode-table after-image under exact `1/0/0`, without a clock sample, data,
+revoke, allocation, or orphan mutation. The other clock-derived mutation paths
+update `mtime`/`ctime`; both
 allocation-backed operations change `VN.BLOCKS` and free-space accounting, and
 both append modes change file size. Exact writes compose the qualified
 initialized and hole callbacks across evidenced adjacent blocks and compose the
