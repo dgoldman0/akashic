@@ -4339,10 +4339,10 @@ def build_snapshot():
     # instead of hiding dependency compilation inside a larger cap.
     max_crc_source_steps = 150_000_000
     max_bitset_source_steps = 150_000_000
-    # The closed root-growth vertical measures 1,097,074,756 cold source
-    # steps with the production-like JIT policy across 3,860 packed lines
-    # from 13 source units. Retain the deterministic watchdog without
-    # conflating source compilation with independently bounded journeys.
+    # The indexed-RENAME closure measures 1,174,688,163 cold source steps
+    # with the production-like JIT policy across 4,057 packed lines from
+    # 13 source units. Retain the deterministic watchdog without conflating
+    # source compilation with independently bounded journeys.
     max_ext4_source_steps = 1_600_000_000
     bootstrap_steps = _feed_until_idle(system, bootstrap, max_crc_source_steps)
 
@@ -84570,6 +84570,7 @@ def _staged_rename_attempt_forth(
     prefix: str,
     *,
     epoch_ms: int,
+    epoch_step_ms: int = 0,
     metadata_capacity: int = 2,
     source_path: str = "/fixture/hardlink.txt",
     new_name: str = "renamed.txt",
@@ -84581,11 +84582,17 @@ def _staged_rename_attempt_forth(
     if new_path is None:
         parent_prefix = destination_parent_path.rstrip("/")
         new_path = f"{parent_prefix}/{new_name}"
+    clock_value = str(epoch_ms)
+    if epoch_step_ms:
+        clock_value = (
+            f"{prefix}-CLOCK-CALLS @ 1- {epoch_step_ms} * "
+            f"{epoch_ms} +"
+        )
     return (
         f"VARIABLE {prefix}-CLOCK-CALLS",
         (
             f": {prefix}-NOW ( context -- epoch-ms ior ) DROP "
-            f"1 {prefix}-CLOCK-CALLS +! {epoch_ms} 0 ;"
+            f"1 {prefix}-CLOCK-CALLS +! {clock_value} 0 ;"
         ),
         f"T-ARENA CONSTANT {prefix}-ARENA",
         (
@@ -84679,6 +84686,812 @@ def _staged_rename_attempt_forth(
             f"CONSTANT {prefix}-HOMES"
         ),
     )
+
+
+def test_staged_vfs_rename_between_singleton_depth_one_indexed_leaves(
+    staged_public_indexed_root_growth_live_fixture: dict[str, object],
+    tmp_path: Path,
+) -> None:
+    """RENAME compacts indexed leaves and rebinds an indexed new parent."""
+    case = staged_public_indexed_root_growth_live_fixture
+    path = case["image"]
+    block_size = case["block_size"]
+    parent_number = case["parent_number"]
+    target_number = case["child_number"]
+    root_home = case["root_home"]
+    node_home = case["node_candidate"]
+    source_leaf_home = case["selected_leaf_home"]
+    destination_leaf_home = case["leaf_candidate"]
+    map_node_home = case["map_node_home"]
+    separator = case["separator"]
+    expected_map_entries = case["expected_map_entries"]
+    cross_parent_number = 13
+    cross_target_number = 17
+    cross_name = b"moved-000.txt"
+    assert isinstance(path, Path)
+    assert isinstance(block_size, int)
+    assert isinstance(parent_number, int)
+    assert isinstance(target_number, int)
+    assert isinstance(root_home, int)
+    assert isinstance(node_home, int)
+    assert isinstance(source_leaf_home, int)
+    assert isinstance(destination_leaf_home, int)
+    assert isinstance(map_node_home, int)
+    assert isinstance(separator, int)
+    assert isinstance(expected_map_entries, tuple)
+    assert (
+        block_size,
+        parent_number,
+        target_number,
+        root_home,
+        node_home,
+        source_leaf_home,
+        destination_leaf_home,
+        map_node_home,
+        separator,
+    ) == (
+        1024,
+        27,
+        33,
+        1355,
+        1364,
+        1357,
+        1497,
+        1365,
+        0x1A48_8646,
+    )
+
+    super_before, parent_before, parent_offset = _ext4_inode_record(
+        path, parent_number
+    )
+    _, target_before, target_offset = _ext4_inode_record(path, target_number)
+    _, cross_parent_before, cross_parent_offset = _ext4_inode_record(
+        path, cross_parent_number
+    )
+    _, cross_target_before, cross_target_offset = _ext4_inode_record(
+        path, cross_target_number
+    )
+    inode_size = struct.unpack_from("<H", super_before, 0x58)[0]
+    parent_home, parent_block_offset = divmod(parent_offset, block_size)
+    target_home, target_block_offset = divmod(target_offset, block_size)
+    cross_parent_home, cross_parent_block_offset = divmod(
+        cross_parent_offset, block_size
+    )
+    cross_target_home, cross_target_block_offset = divmod(
+        cross_target_offset, block_size
+    )
+    cross_directory_home = _extent_root_physical(cross_parent_before, 0)
+    cross_parent_generation = struct.unpack_from(
+        "<I", cross_parent_before, 0x64
+    )[0]
+    parent_generation = struct.unpack_from("<I", parent_before, 0x64)[0]
+    assert inode_size == 256
+    assert (
+        struct.unpack_from("<I", cross_parent_before, 0x68)[0],
+        struct.unpack_from("<H", cross_parent_before, 0x76)[0],
+    ) == (0, 0)
+    assert struct.unpack_from("<I", cross_parent_before, 160)[0] == 0xEA02_0000
+    assert any(cross_parent_before[160:inode_size])
+    prepared_cross_parent = bytearray(cross_parent_before)
+    prepared_cross_parent[160:inode_size] = bytes(inode_size - 160)
+    prepared_cross_parent = bytearray(
+        _inode_with_checksum(
+            super_before, cross_parent_number, prepared_cross_parent
+        )
+    )
+    assert not any(prepared_cross_parent[160:inode_size])
+    assert bytes(prepared_cross_parent) == _inode_with_checksum(
+        super_before, cross_parent_number, prepared_cross_parent
+    )
+    assert (target_home, target_block_offset) == (283, 0)
+    assert (parent_home, parent_block_offset) == (281, 512)
+    assert (cross_target_home, cross_target_block_offset) == (279, 0)
+    assert (cross_parent_home, cross_parent_block_offset) == (278, 0)
+    assert cross_directory_home == 1345
+    assert parent_generation == 0
+    assert cross_parent_generation == 0
+    assert struct.unpack_from("<H", cross_parent_before, 0x1A)[0] == 3
+    assert (
+        struct.unpack_from("<H", cross_target_before, 0x00)[0],
+        struct.unpack_from("<I", cross_target_before, 0x04)[0],
+        struct.unpack_from("<H", cross_target_before, 0x1A)[0],
+        struct.unpack_from("<I", cross_target_before, 0x1C)[0],
+        struct.unpack_from("<I", cross_target_before, 0x20)[0],
+        struct.unpack_from("<I", cross_target_before, 0x68)[0],
+        struct.unpack_from("<H", cross_target_before, 0x76)[0],
+    ) == (0x81B4, 3072, 1, 4, 0x80000, 0, 0)
+    assert struct.unpack_from("<HHHHI", cross_target_before, 0x28) == (
+        0xF30A,
+        2,
+        4,
+        0,
+        0,
+    )
+    assert struct.unpack_from("<IHHI", cross_target_before, 0x34) == (
+        0,
+        1,
+        0,
+        1348,
+    )
+    assert struct.unpack_from("<IHHI", cross_target_before, 0x40) == (
+        2,
+        1,
+        0,
+        1350,
+    )
+    assert (
+        struct.unpack_from("<H", target_before, 0x00)[0],
+        struct.unpack_from("<I", target_before, 0x04)[0],
+        struct.unpack_from("<H", target_before, 0x1A)[0],
+        struct.unpack_from("<I", target_before, 0x1C)[0],
+    ) == (0x81B6, 0, 1, 0)
+    assert (
+        struct.unpack_from("<I", parent_before, 0x04)[0],
+        struct.unpack_from("<H", parent_before, 0x1A)[0],
+        struct.unpack_from("<I", parent_before, 0x1C)[0],
+        struct.unpack_from("<I", parent_before, 0x20)[0],
+    ) == (129024, 2, 254, 0x81000)
+
+    root_before = _read_ext4_home(path, root_home, block_size=block_size)
+    node_before = _read_ext4_home(path, node_home, block_size=block_size)
+    assert struct.unpack_from("<IBBBB", root_before, 24) == (0, 1, 8, 1, 0)
+    assert struct.unpack_from("<HHI", root_before, 32) == (123, 1, 124)
+    assert struct.unpack_from("<HH", node_before, 8) == (126, 124)
+    assert struct.unpack_from("<I", node_before, 12)[0] == 1
+    assert struct.unpack_from("<II", node_before, 16) == (separator, 125)
+    assert struct.unpack_from("<II", node_before, 24) == (
+        0x40B1_F581,
+        2,
+    )
+    old_hash = _indexed_split_half_md4_hash(super_before, b"new.txt")
+    new_hash = _indexed_split_half_md4_hash(super_before, b"mkdir-depth1")
+    cross_hash = _indexed_split_half_md4_hash(super_before, cross_name)
+    assert old_hash == (0x1248_5C58, 0x772B_2796)
+    assert new_hash == (0x2FC9_38F8, 0x77DC_91BC)
+    assert cross_hash == (0x2D01_C7A2, 0x28EA_606A)
+    assert old_hash[0] < separator <= new_hash[0] < 0x40B1_F581
+    assert separator <= cross_hash[0] < 0x40B1_F581
+
+    logical_homes: dict[int, int] = {}
+    for logical, length, high, low in expected_map_entries:
+        assert isinstance(logical, int)
+        assert isinstance(length, int)
+        assert isinstance(high, int)
+        assert isinstance(low, int)
+        physical = (high << 32) | low
+        for delta in range(length):
+            assert logical + delta not in logical_homes
+            logical_homes[logical + delta] = physical + delta
+    assert set(logical_homes) == set(range(126))
+    assert logical_homes[0] == root_home
+    assert logical_homes[1] == source_leaf_home
+    assert logical_homes[124] == node_home
+    assert logical_homes[125] == destination_leaf_home
+    immutable_homes = tuple(
+        home
+        for logical, home in sorted(logical_homes.items())
+        if logical not in {1, 125}
+    ) + (map_node_home,)
+    assert len(immutable_homes) == len(set(immutable_homes)) == 125
+    immutable_before = {
+        home: _read_ext4_home(path, home, block_size=block_size)
+        for home in immutable_homes
+    }
+
+    source_leaf_before = _read_ext4_home(
+        path, source_leaf_home, block_size=block_size
+    )
+    destination_leaf_before = _read_ext4_home(
+        path, destination_leaf_home, block_size=block_size
+    )
+    cross_directory_before = _read_ext4_home(
+        path, cross_directory_home, block_size=block_size
+    )
+    source_entries = _checked_linear_directory_entries(
+        super_before,
+        parent_number,
+        parent_generation,
+        source_leaf_before,
+    )
+    destination_entries = _checked_linear_directory_entries(
+        super_before,
+        parent_number,
+        parent_generation,
+        destination_leaf_before,
+    )
+    assert [entry for entry in source_entries if entry[4] == b"new.txt"] == [
+        (216, target_number, 16, 1, b"new.txt")
+    ]
+    assert all(entry[4] != b"mkdir-depth1" for entry in source_entries)
+    assert all(entry[4] != b"new.txt" for entry in destination_entries)
+    assert all(entry[4] != b"mkdir-depth1" for entry in destination_entries)
+    expected_source_leaf, remove_offset = (
+        _linear_directory_compact_remove_afterimage(
+            super_before,
+            parent_inode=parent_number,
+            parent_generation=parent_generation,
+            original=source_leaf_before,
+            target_inode=target_number,
+            name=b"new.txt",
+        )
+    )
+    expected_destination_leaf, insert_offset = (
+        _linear_directory_compact_append_afterimage(
+            super_before,
+            parent_inode=parent_number,
+            parent_generation=parent_generation,
+            original=destination_leaf_before,
+            target_inode=target_number,
+            name=b"mkdir-depth1",
+        )
+    )
+    assert remove_offset == 216
+    assert insert_offset == 408
+    assert [
+        entry
+        for entry in _checked_linear_directory_entries(
+            super_before,
+            parent_number,
+            parent_generation,
+            expected_destination_leaf,
+        )
+        if entry[4] == b"mkdir-depth1"
+    ] == [(408, target_number, 604, 1, b"mkdir-depth1")]
+    cross_entries = _checked_linear_directory_entries(
+        super_before,
+        cross_parent_number,
+        cross_parent_generation,
+        cross_directory_before,
+    )
+    assert [entry for entry in cross_entries if entry[4] == b"sparse.bin"] == [
+        (104, cross_target_number, 20, 1, b"sparse.bin")
+    ]
+    expected_cross_directory, cross_remove_offset = (
+        _linear_directory_compact_remove_afterimage(
+            super_before,
+            parent_inode=cross_parent_number,
+            parent_generation=cross_parent_generation,
+            original=cross_directory_before,
+            target_inode=cross_target_number,
+            name=b"sparse.bin",
+        )
+    )
+    expected_destination_final, cross_insert_offset = (
+        _linear_directory_compact_append_afterimage(
+            super_before,
+            parent_inode=parent_number,
+            parent_generation=parent_generation,
+            original=expected_destination_leaf,
+            target_inode=cross_target_number,
+            name=cross_name,
+        )
+    )
+    assert cross_remove_offset == 104
+    expected_cross_entries = _checked_linear_directory_entries(
+        super_before,
+        cross_parent_number,
+        cross_parent_generation,
+        expected_cross_directory,
+    )
+    assert all(entry[4] != b"sparse.bin" for entry in expected_cross_entries)
+    assert expected_cross_entries[6] == (
+        104,
+        18,
+        24,
+        7,
+        b"absolute-link",
+    )
+    assert expected_cross_entries[-1] == (364, 32, 648, 5, b"fifo")
+    assert cross_insert_offset == 428
+    assert [
+        entry
+        for entry in _checked_linear_directory_entries(
+            super_before,
+            parent_number,
+            parent_generation,
+            expected_destination_final,
+        )
+        if entry[4] == cross_name
+    ] == [(428, cross_target_number, 584, 1, cross_name)]
+
+    rename_epoch_ms = _STAGED_APPEND_EPOCH_MS + 4_000
+    cross_epoch_ms = rename_epoch_ms + 1_000
+    seconds, milliseconds = divmod(rename_epoch_ms, 1000)
+    nanoseconds = milliseconds * 1_000_000
+    low_seconds = seconds & 0xFFFF_FFFF
+    signed_low = (
+        low_seconds
+        if low_seconds < 0x8000_0000
+        else low_seconds - 0x1_0000_0000
+    )
+    epoch = (seconds - signed_low) >> 32
+    assert 0 <= epoch <= 3
+    extra_time = (nanoseconds << 2) | epoch
+    cross_seconds, cross_milliseconds = divmod(cross_epoch_ms, 1000)
+    cross_nanoseconds = cross_milliseconds * 1_000_000
+    cross_low_seconds = cross_seconds & 0xFFFF_FFFF
+    cross_signed_low = (
+        cross_low_seconds
+        if cross_low_seconds < 0x8000_0000
+        else cross_low_seconds - 0x1_0000_0000
+    )
+    cross_epoch = (cross_seconds - cross_signed_low) >> 32
+    assert 0 <= cross_epoch <= 3
+    cross_extra_time = (cross_nanoseconds << 2) | cross_epoch
+
+    expected_target = bytearray(target_before)
+    struct.pack_into("<I", expected_target, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_target, 0x84, extra_time)
+    expected_target = bytearray(
+        _inode_with_checksum(super_before, target_number, expected_target)
+    )
+    expected_parent = bytearray(parent_before)
+    struct.pack_into("<I", expected_parent, 0x0C, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x10, low_seconds)
+    struct.pack_into("<I", expected_parent, 0x84, extra_time)
+    struct.pack_into("<I", expected_parent, 0x88, extra_time)
+    expected_parent = bytearray(
+        _inode_with_checksum(super_before, parent_number, expected_parent)
+    )
+    expected_cross_target = bytearray(cross_target_before)
+    struct.pack_into("<I", expected_cross_target, 0x0C, cross_low_seconds)
+    struct.pack_into("<I", expected_cross_target, 0x84, cross_extra_time)
+    expected_cross_target = bytearray(
+        _inode_with_checksum(
+            super_before, cross_target_number, expected_cross_target
+        )
+    )
+    expected_cross_parent = bytearray(prepared_cross_parent)
+    struct.pack_into("<I", expected_cross_parent, 0x0C, cross_low_seconds)
+    struct.pack_into("<I", expected_cross_parent, 0x10, cross_low_seconds)
+    struct.pack_into("<I", expected_cross_parent, 0x84, cross_extra_time)
+    struct.pack_into("<I", expected_cross_parent, 0x88, cross_extra_time)
+    expected_cross_parent = bytearray(
+        _inode_with_checksum(
+            super_before, cross_parent_number, expected_cross_parent
+        )
+    )
+    expected_parent_final = bytearray(parent_before)
+    struct.pack_into("<I", expected_parent_final, 0x0C, cross_low_seconds)
+    struct.pack_into("<I", expected_parent_final, 0x10, cross_low_seconds)
+    struct.pack_into("<I", expected_parent_final, 0x84, cross_extra_time)
+    struct.pack_into("<I", expected_parent_final, 0x88, cross_extra_time)
+    expected_parent_final = bytearray(
+        _inode_with_checksum(super_before, parent_number, expected_parent_final)
+    )
+    original_target_home = _read_ext4_home(
+        path, target_home, block_size=block_size
+    )
+    original_parent_home = _read_ext4_home(
+        path, parent_home, block_size=block_size
+    )
+    original_cross_target_home = _read_ext4_home(
+        path, cross_target_home, block_size=block_size
+    )
+    raw_cross_parent_home = _read_ext4_home(
+        path, cross_parent_home, block_size=block_size
+    )
+    assert raw_cross_parent_home[
+        cross_parent_block_offset : cross_parent_block_offset + inode_size
+    ] == cross_parent_before
+    original_cross_parent_home = bytearray(raw_cross_parent_home)
+    original_cross_parent_home[
+        cross_parent_block_offset : cross_parent_block_offset + inode_size
+    ] = prepared_cross_parent
+    expected_target_home = bytearray(original_target_home)
+    expected_target_home[
+        target_block_offset : target_block_offset + inode_size
+    ] = expected_target
+    expected_parent_home = bytearray(original_parent_home)
+    expected_parent_home[
+        parent_block_offset : parent_block_offset + inode_size
+    ] = expected_parent
+    expected_parent_home_final = bytearray(original_parent_home)
+    expected_parent_home_final[
+        parent_block_offset : parent_block_offset + inode_size
+    ] = expected_parent_final
+    expected_cross_target_home = bytearray(original_cross_target_home)
+    expected_cross_target_home[
+        cross_target_block_offset : cross_target_block_offset + inode_size
+    ] = expected_cross_target
+    expected_cross_parent_home = bytearray(original_cross_parent_home)
+    expected_cross_parent_home[
+        cross_parent_block_offset : cross_parent_block_offset + inode_size
+    ] = expected_cross_parent
+    expected_home_order = (
+        target_home,
+        parent_home,
+        source_leaf_home,
+        destination_leaf_home,
+    )
+    expected_homes = (
+        bytes(expected_target_home),
+        bytes(expected_parent_home),
+        expected_source_leaf,
+        expected_destination_leaf,
+    )
+    assert expected_home_order == (283, 281, 1357, 1497)
+    cross_expected_home_order = (
+        cross_target_home,
+        cross_parent_home,
+        parent_home,
+        cross_directory_home,
+        destination_leaf_home,
+    )
+    assert cross_expected_home_order == (279, 278, 281, 1345, 1497)
+    final_home_images = {
+        target_home: bytes(expected_target_home),
+        parent_home: bytes(expected_parent_home_final),
+        source_leaf_home: expected_source_leaf,
+        destination_leaf_home: expected_destination_final,
+        cross_target_home: bytes(expected_cross_target_home),
+        cross_parent_home: bytes(expected_cross_parent_home),
+        cross_directory_home: expected_cross_directory,
+    }
+    assert len(final_home_images) == 7
+    assert all(
+        original != expected
+        for original, expected in zip(
+            (
+                original_target_home,
+                original_parent_home,
+                source_leaf_before,
+                destination_leaf_before,
+            ),
+            expected_homes,
+            strict=True,
+        )
+    )
+
+    free_blocks_before = struct.unpack_from("<I", super_before, 0x0C)[0] | (
+        struct.unpack_from("<I", super_before, 0x158)[0] << 32
+    )
+    free_inodes_before = struct.unpack_from("<I", super_before, 0x10)[0] | (
+        struct.unpack_from("<I", super_before, 0x15C)[0] << 32
+    )
+    group_counts_before = _ext4_group_counts(path, 0)
+    activation_trace = _jbd2_writer_activation_trace(path)
+    backing = tmp_path / "indexed-rename-depth-one-cross-leaf.img"
+    output, trace, _ = run_recovery_forth(
+        path,
+        backing,
+        [
+            *_staged_rename_attempt_forth(
+                "_IR",
+                epoch_ms=rename_epoch_ms,
+                epoch_step_ms=1_000,
+                metadata_capacity=5,
+                source_path="/fixture/indexed/new.txt",
+                new_name="mkdir-depth1",
+                source_parent_path="/fixture/indexed",
+                destination_parent_path="/fixture/indexed",
+            ),
+            _forth_xc_plan_scrubbed("_IR-PLAN-SCRUBBED", "_IR-CTX"),
+            (
+                "_IR-S D.NAME @ _VFS-STR-GET "
+                "CONSTANT _IR-NLEN CONSTANT _IR-NAME"
+            ),
+            *_forth_accumulated_conjunction(
+                "_IR-OK",
+                [
+                    "_IR-MOUNT-IOR 0=",
+                    "_IR-CLOCK-IOR 0=",
+                    "_IR-PROFILE-SIZE-IOR 0=",
+                    "_IR-PROFILE-BIND-IOR 0=",
+                    "_IR-PROFILE-USED _IR-PROFILE-SIZE =",
+                    "_IR-P-IOR 0=",
+                    "_IR-S-IOR 0=",
+                    "_IR-OP-IOR 0=",
+                    "_IR-D-IOR 0=",
+                    "_IR-OP _IR-D =",
+                    "_IR-OP-VN _IR-D-VN =",
+                    f"_IR-VN VN.BID @ {target_number} =",
+                    f"_IR-OP-VN VN.BID @ {parent_number} =",
+                    "_IR-OLD-NLINK 1 =",
+                    "_IR-OLD-OP-NLINK 2 =",
+                    "_IR-OPEN-IOR 0=",
+                    "_IR-FD FD.INODE @ _IR-S =",
+                    "_IR-IOR 0=",
+                    "_IR-LAST-IOR 0=",
+                    "_IR-OLD 0=",
+                    "_IR-OLD-IOR VFS-IOR-REASON VFS-R-NOENT =",
+                    "_IR-NEW-IOR 0=",
+                    "_IR-NEW _IR-S =",
+                    "_IR-NEW D.VNODE @ _IR-VN =",
+                    "_IR-S IN.PARENT @ _IR-D =",
+                    "_IR-NLEN 12 =",
+                    '_IR-NAME S" mkdir-depth1" DROP 12 _EXT4-BYTES=?',
+                    "_IR-VN VN.NLINK @ _IR-OLD-NLINK =",
+                    "_IR-VN VN.DREFS @ _IR-OLD-DREFS =",
+                    "_IR-VN VN.OPEN-REFS @ 1 =",
+                    "_IR-VN VN.SIZE-LO @ 0=",
+                    "_IR-VN VN.SIZE-HI @ 0=",
+                    "_IR-VN VN.BLOCKS @ 0=",
+                    "_IR-VN VN.MTIME @ _IR-OLD-MTIME =",
+                    "_IR-VN VN.MTIME-NS @ _IR-OLD-MTIME-NS =",
+                    f"_IR-VN VN.CTIME @ {seconds} =",
+                    f"_IR-VN VN.CTIME-NS @ {nanoseconds} =",
+                    "_IR-OP-VN VN.NLINK @ _IR-OLD-OP-NLINK =",
+                    "_IR-OP-VN VN.SIZE-LO @ 129024 =",
+                    "_IR-OP-VN VN.SIZE-HI @ 0=",
+                    "_IR-OP-VN VN.BLOCKS @ 254 =",
+                    f"_IR-OP-VN VN.MTIME @ {seconds} =",
+                    f"_IR-OP-VN VN.MTIME-NS @ {nanoseconds} =",
+                    f"_IR-OP-VN VN.CTIME @ {seconds} =",
+                    f"_IR-OP-VN VN.CTIME-NS @ {nanoseconds} =",
+                    "_IR-V V.ICOUNT @ _IR-OLD-ICOUNT =",
+                    "_IR-V V.VCOUNT @ _IR-OLD-VCOUNT =",
+                    "_IR-CLOCK-CALLS @ 1 =",
+                    "_IR-HOMES 4 =",
+                    "_IR-PLAN-SCRUBBED 0<>",
+                    "_IR-WRITER _IR-PROFILE-BASE =",
+                    "_IR-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                    "_IR-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                    "_IR-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                    "_IR-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                    "_IR-CTX _EXT4-C.J.COMMITTED + @ 0=",
+                    "_IR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                    "_IR-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_IR-V V.FLAGS @ VFS-F-RO AND 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            (
+                '_IR-OK @ IF ." EXT4-INDEXED-RENAME-DEPTH-ONE" '
+                'ELSE ." EXT4-INDEXED-RENAME-DEPTH-ONE-FAIL " '
+                "_IR-OK-FIRST-FAILURE @ . THEN"
+            ),
+            (
+                'S" /fixture/sparse.bin" _IR-V VFS-RESOLVE? '
+                "CONSTANT _IX-S-IOR CONSTANT _IX-S"
+            ),
+            (
+                'S" /fixture" _IR-V VFS-RESOLVE? '
+                "CONSTANT _IX-OP-IOR CONSTANT _IX-OP"
+            ),
+            (
+                'S" /fixture/indexed" _IR-V VFS-RESOLVE? '
+                "CONSTANT _IX-D-IOR CONSTANT _IX-D"
+            ),
+            "_IX-S D.VNODE @ CONSTANT _IX-VN",
+            "_IX-OP D.VNODE @ CONSTANT _IX-OP-VN",
+            "_IX-D D.VNODE @ CONSTANT _IX-D-VN",
+            "_IX-VN VN.NLINK @ CONSTANT _IX-OLD-NLINK",
+            "_IX-VN VN.DREFS @ CONSTANT _IX-OLD-DREFS",
+            "_IX-VN VN.MTIME @ CONSTANT _IX-OLD-MTIME",
+            "_IX-VN VN.MTIME-NS @ CONSTANT _IX-OLD-MTIME-NS",
+            "_IX-OP-VN VN.NLINK @ CONSTANT _IX-OLD-OP-NLINK",
+            "_IX-D-VN VN.NLINK @ CONSTANT _IX-OLD-D-NLINK",
+            "_IR-V V.ICOUNT @ CONSTANT _IX-OLD-ICOUNT",
+            "_IR-V V.VCOUNT @ CONSTANT _IX-OLD-VCOUNT",
+            (
+                'S" /fixture/sparse.bin" VFS-FF-READ _IR-V '
+                "VFS-OPEN? CONSTANT _IX-OPEN-IOR CONSTANT _IX-FD"
+            ),
+            (
+                'S" moved-000.txt" _IX-S _IX-D '
+                "VFS-RN-NOREPLACE _IR-V VFS-RENAME-AT "
+                "CONSTANT _IX-IOR"
+            ),
+            "_IR-V V.LAST-IOR @ CONSTANT _IX-LAST-IOR",
+            (
+                'S" /fixture/sparse.bin" _IR-V VFS-RESOLVE? '
+                "CONSTANT _IX-OLD-IOR CONSTANT _IX-OLD"
+            ),
+            (
+                'S" /fixture/indexed/moved-000.txt" _IR-V VFS-RESOLVE? '
+                "CONSTANT _IX-NEW-IOR CONSTANT _IX-NEW"
+            ),
+            "_IR-CTX _EXT4-C.J.WRITER + @ CONSTANT _IX-WRITER",
+            (
+                "_IR-CTX _EXT4-C.J.HOME-WRITES + @ "
+                "CONSTANT _IX-HOMES"
+            ),
+            _forth_xc_plan_scrubbed("_IX-PLAN-SCRUBBED", "_IR-CTX"),
+            (
+                "_IX-S D.NAME @ _VFS-STR-GET "
+                "CONSTANT _IX-NLEN CONSTANT _IX-NAME"
+            ),
+            *_forth_accumulated_conjunction(
+                "_IX-OK",
+                [
+                    "_IX-S-IOR 0=",
+                    "_IX-OP-IOR 0=",
+                    "_IX-D-IOR 0=",
+                    "_IX-OP _IX-D <>",
+                    f"_IX-VN VN.BID @ {cross_target_number} =",
+                    f"_IX-OP-VN VN.BID @ {cross_parent_number} =",
+                    f"_IX-D-VN VN.BID @ {parent_number} =",
+                    "_IX-OLD-NLINK 1 =",
+                    "_IX-OLD-DREFS 1 =",
+                    "_IX-OLD-OP-NLINK 3 =",
+                    "_IX-OLD-D-NLINK 2 =",
+                    "_IX-OPEN-IOR 0=",
+                    "_IX-FD FD.INODE @ _IX-S =",
+                    "_IX-IOR 0=",
+                    "_IX-LAST-IOR 0=",
+                    "_IX-OLD 0=",
+                    "_IX-OLD-IOR VFS-IOR-REASON VFS-R-NOENT =",
+                    "_IX-NEW-IOR 0=",
+                    "_IX-NEW _IX-S =",
+                    "_IX-NEW D.VNODE @ _IX-VN =",
+                    "_IX-S IN.PARENT @ _IX-D =",
+                    "_IX-NLEN 13 =",
+                    '_IX-NAME S" moved-000.txt" DROP 13 _EXT4-BYTES=?',
+                    "_IX-VN VN.NLINK @ _IX-OLD-NLINK =",
+                    "_IX-VN VN.DREFS @ _IX-OLD-DREFS =",
+                    "_IX-VN VN.OPEN-REFS @ 1 =",
+                    "_IX-VN VN.MODE @ 0x81B4 =",
+                    "_IX-VN VN.SIZE-LO @ 3072 =",
+                    "_IX-VN VN.SIZE-HI @ 0=",
+                    "_IX-VN VN.BLOCKS @ 4 =",
+                    "_IX-VN VN.MTIME @ _IX-OLD-MTIME =",
+                    "_IX-VN VN.MTIME-NS @ _IX-OLD-MTIME-NS =",
+                    f"_IX-VN VN.CTIME @ {cross_seconds} =",
+                    f"_IX-VN VN.CTIME-NS @ {cross_nanoseconds} =",
+                    "_IX-OP-VN VN.NLINK @ _IX-OLD-OP-NLINK =",
+                    f"_IX-OP-VN VN.MTIME @ {cross_seconds} =",
+                    f"_IX-OP-VN VN.MTIME-NS @ {cross_nanoseconds} =",
+                    f"_IX-OP-VN VN.CTIME @ {cross_seconds} =",
+                    f"_IX-OP-VN VN.CTIME-NS @ {cross_nanoseconds} =",
+                    "_IX-D-VN VN.NLINK @ _IX-OLD-D-NLINK =",
+                    f"_IX-D-VN VN.MTIME @ {cross_seconds} =",
+                    f"_IX-D-VN VN.MTIME-NS @ {cross_nanoseconds} =",
+                    f"_IX-D-VN VN.CTIME @ {cross_seconds} =",
+                    f"_IX-D-VN VN.CTIME-NS @ {cross_nanoseconds} =",
+                    "_IR-V V.ICOUNT @ _IX-OLD-ICOUNT =",
+                    "_IR-V V.VCOUNT @ _IX-OLD-VCOUNT =",
+                    "_IR-CLOCK-CALLS @ 2 =",
+                    "_IX-HOMES 5 =",
+                    "_IX-PLAN-SCRUBBED 0<>",
+                    "_IX-WRITER _IR-PROFILE-BASE =",
+                    "_IX-WRITER _EXT4-JWR-IDLE-CLEAN?",
+                    "_IX-WRITER _EXT4-JWR.META-ACTIVE + @ 0=",
+                    "_IX-WRITER _EXT4-JWR.DATA-ACTIVE + @ 0=",
+                    "_IX-WRITER _EXT4-JWR.REVOKE-ACTIVE + @ 0=",
+                    "_IR-CTX _EXT4-C.J.COMMITTED + @ 0=",
+                    "_IR-CTX _EXT4-C.J.WRITE-ACTIVE + @ 0<>",
+                    "_IR-V V.FLAGS @ VFS-F-DIRTY AND 0<>",
+                    "_IR-V V.FLAGS @ VFS-F-RO AND 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            (
+                '_IX-OK @ 0= IF ." EXT4-INDEXED-RENAME-CROSS-PARENT-IOR " '
+                "_IX-IOR . _IX-IOR VFS-IOR-DOMAIN . "
+                "_IX-IOR VFS-IOR-REASON . _IX-IOR VFS-IOR-FLAGS . "
+                "_IX-IOR VFS-IOR-DETAIL . THEN"
+            ),
+            (
+                '_IX-OK @ IF ." EXT4-INDEXED-RENAME-CROSS-PARENT" '
+                'ELSE ." EXT4-INDEXED-RENAME-CROSS-PARENT-FAIL " '
+                "_IX-OK-FIRST-FAILURE @ . THEN"
+            ),
+            "_IX-FD VFS-CLOSE? CONSTANT _IX-CLOSE-IOR",
+            "_IR-FD VFS-CLOSE? CONSTANT _IR-CLOSE-IOR",
+            "0 _IR-V VFS-UNMOUNT CONSTANT _IR-UNMOUNT-IOR",
+            (
+                "_IX-CLOSE-IOR 0= _IR-CLOSE-IOR 0= AND "
+                "_IR-UNMOUNT-IOR 0= AND "
+                "_IR-V V.LIFECYCLE @ VFS-L-UNMOUNTED = AND "
+                "_IR-PROFILE-ARENA ARENA-USED 0= AND "
+                'IF ." EXT4-INDEXED-RENAME-DEPTH-ONE-UNMOUNTED" THEN'
+            ),
+        ],
+        patches=((cross_parent_offset, bytes(prepared_cross_parent)),),
+        capture_media=backing,
+        # This sole indexed-RENAME selector composes two complementary happy
+        # operations under one source load: the depth-one same-parent leaf hop
+        # and a linear-to-indexed cross-parent hop. Crash, external, and stable
+        # evidence remains compositional at this draft closure. The completed
+        # combined path measures 2,869,457,042 steps under this 3.6B watchdog.
+        max_steps=3_600_000_000,
+    )
+    _assert_emitted(output, "EXT4-INDEXED-RENAME-DEPTH-ONE")
+    _assert_emitted(output, "EXT4-INDEXED-RENAME-CROSS-PARENT")
+    _assert_emitted(output, "EXT4-INDEXED-RENAME-DEPTH-ONE-UNMOUNTED")
+    assert trace[: len(activation_trace)] == activation_trace
+
+    relevant_homes = tuple(
+        dict.fromkeys(expected_home_order + cross_expected_home_order)
+    )
+    home_ordinals = {
+        home: _write_ordinals_for_ext4_home(
+            trace, home, block_size=block_size
+        )
+        for home in relevant_homes
+    }
+    assert {
+        home: len(ordinals) for home, ordinals in home_ordinals.items()
+    } == {
+        target_home: 1,
+        parent_home: 2,
+        source_leaf_home: 1,
+        destination_leaf_home: 2,
+        cross_target_home: 1,
+        cross_parent_home: 1,
+        cross_directory_home: 1,
+    }
+    first_ordinals = tuple(
+        home_ordinals[home][0] for home in expected_home_order
+    )
+    cross_ordinals = tuple(
+        home_ordinals[home][
+            1 if home in {parent_home, destination_leaf_home} else 0
+        ]
+        for home in cross_expected_home_order
+    )
+    assert first_ordinals == tuple(
+        range(first_ordinals[0], first_ordinals[0] + 4)
+    )
+    assert cross_ordinals == tuple(
+        range(cross_ordinals[0], cross_ordinals[0] + 5)
+    )
+    assert tuple(
+        event
+        for event in trace
+        if event
+        in {
+            ("write", home * (block_size // 512), block_size // 512)
+            for home in relevant_homes
+        }
+    ) == tuple(
+        ("write", home * (block_size // 512), block_size // 512)
+        for home in expected_home_order + cross_expected_home_order
+    )
+    for home, expected in final_home_images.items():
+        assert _read_ext4_home(
+            backing, home, block_size=block_size
+        ) == expected
+    assert all(
+        _read_ext4_home(backing, home, block_size=block_size) == original
+        for home, original in immutable_before.items()
+    )
+
+    final_super, final_parent, _ = _ext4_inode_record(backing, parent_number)
+    _, final_target, _ = _ext4_inode_record(backing, target_number)
+    _, final_cross_parent, _ = _ext4_inode_record(
+        backing, cross_parent_number
+    )
+    _, final_cross_target, _ = _ext4_inode_record(
+        backing, cross_target_number
+    )
+    assert final_super == _ext4_super_with_checksum(final_super)
+    assert final_target == bytes(expected_target)
+    assert final_parent == bytes(expected_parent_final)
+    assert final_cross_parent == bytes(expected_cross_parent)
+    assert final_cross_target == bytes(expected_cross_target)
+    assert (
+        struct.unpack_from("<I", final_super, 0x0C)[0]
+        | (struct.unpack_from("<I", final_super, 0x158)[0] << 32)
+    ) == free_blocks_before
+    assert (
+        struct.unpack_from("<I", final_super, 0x10)[0]
+        | (struct.unpack_from("<I", final_super, 0x15C)[0] << 32)
+    ) == free_inodes_before
+    assert _ext4_group_counts(backing, 0) == group_counts_before
+    assert _ext4_inode_allocation_state(
+        backing, (target_number, cross_target_number)
+    ) == {
+        target_number: True,
+        cross_target_number: True,
+    }
+    assert _ext4_block_allocation_state(
+        backing,
+        (
+            root_home,
+            node_home,
+            source_leaf_home,
+            destination_leaf_home,
+            map_node_home,
+        ),
+    ) == {
+        root_home: True,
+        node_home: True,
+        source_leaf_home: True,
+        destination_leaf_home: True,
+        map_node_home: True,
+    }
 
 
 @pytest.fixture(scope="session")
@@ -90356,7 +91169,18 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
         r"(?m)^\s*(?:VARIABLE|CREATE)\s+_XC-P(?:[.\-]|\s|$)", facade
     ) is None
 
-    assert 47 * 8 + 24 + 4 * 1024 + 256 == 4752
+    # RENAME extends the same mount-owned plan with 21 scalar bindings,
+    # three immutable block snapshots, and one destination-parent inode.
+    assert (
+        47 * 8
+        + 24
+        + 4 * 1024
+        + 256
+        + 21 * 8
+        + 3 * 1024
+        + 256
+        == 8248
+    )
     for layout_fragment in (
         "39 CELLS CONSTANT _XC-P.INDEX-ROOT-GROWTH-ADMISSION",
         "40 CELLS CONSTANT _XC-P.INDEX-BASE-ROOT-GROWING",
@@ -90369,6 +91193,12 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
         "CONSTANT _XC-P.NODE-SNAPSHOT",
         "CONSTANT _XC-P.INDEX-MAP-SNAPSHOT",
         "CONSTANT _XC-P.PARENT-SNAPSHOT",
+        "CONSTANT _XC-P.RENAME-BASELINE",
+        "CONSTANT _XC-P.RENAME-HASH-BASELINE",
+        "CONSTANT _XC-P.RENAME-DEST-DIR-SNAPSHOT",
+        "CONSTANT _XC-P.RENAME-NP-ROOT-SNAPSHOT",
+        "CONSTANT _XC-P.RENAME-NP-NODE-SNAPSHOT",
+        "CONSTANT _XC-P.RENAME-NP-PARENT-SNAPSHOT",
         "CONSTANT _XC-P.OP",
         "_XC-P.OP CELL+ CONSTANT _XC-P.OWNER-CTX",
         "_XC-P.OWNER-CTX CELL+ CONSTANT _XC-P.HOME-COUNT",
@@ -90438,7 +91268,7 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
     assert tuple(value for value, _ in role_constants) == tuple(range(1, 32))
     assert role_constants[-1] == (31, "_XC-HR-LIMIT")
     assert "3 CONSTANT _XC-HP-ENTRY-CELLS" in facade
-    assert 4752 + 2 * 8 + 8 + 30 * 3 * 8 == 5496
+    assert 8248 + 2 * 8 + 8 + 30 * 3 * 8 == 8992
     assert (
         "_XC-P.HOME-COUNT CELL+ CONSTANT _XC-P.HOME-ENTRIES" in facade
     )
@@ -90583,7 +91413,10 @@ def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
 
     xr_expected = word_body("_XR-HP-EXPECTED-ROLES")
     xr_homes = word_body("_XR-HP-PLAN-HOMES")
-    assert "_XR-CROSSDIR @ 0= IF 3 EXIT THEN" in xr_expected
+    assert (
+        "_XR-CROSSDIR @ 0= IF\n"
+        "        _XR-DEST-SEPARATE @ IF 4 ELSE 3 THEN EXIT"
+    ) in xr_expected
     assert "_XU-DIRECTORY @ IF 6 ELSE 5 THEN" in xr_expected
     assert tuple(re.findall(r"_XC-HR-[A-Z0-9-]+", xr_homes)) == (
         "_XC-HR-INODE",
@@ -90654,8 +91487,9 @@ def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
     )
     xr_positions = tuple(xr_remove.index(name) for name in xr_lifecycle)
     assert xr_positions == tuple(sorted(xr_positions))
-    assert xr_plan.index("_XC-P-BIND-SHAPE") < xr_plan.index(
-        "_EXT4-STAGED-WRITE-FS-QUALIFY"
+    assert "_XC-P-BIND-SHAPE" not in xr_plan
+    assert xr_plan.index("_EXT4-STAGED-WRITE-FS-QUALIFY") < xr_plan.index(
+        "_XR-CROSSDIR @ IF"
     )
     assert xr_remove.count("_XC-HP-BEGIN-TX") == 2
     assert xr_remove.count("_EXT4-JTX-STAGE-RENAME") == 2
@@ -90730,12 +91564,15 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
     assert (
         "DUP _XC-P.OP + @ DUP _XC-PO-INSERT =\n"
         "        OVER _XC-PO-UNLINK = OR\n"
+        "        OVER _XC-PO-RENAME = OR\n"
         "        SWAP _XC-PO-RMDIR = OR 0= IF FALSE EXIT THEN"
     ) in shape
     assert (
         "_XU-SHARED-PLAN _XC-P.OP + @\n"
-        "        _XU-DIRECTORY @ IF _XC-PO-RMDIR ELSE "
+        "        _XU-RENAME-SCAN @ IF _XC-PO-RENAME ELSE\n"
+        "            _XU-DIRECTORY @ IF _XC-PO-RMDIR ELSE "
         "_XC-PO-UNLINK THEN\n"
+        "        THEN\n"
         "        <> IF"
     ) in parent_stage
     assert "_EXT4-EXTENTS-FL _EXT4-INDEX-FL OR <> IF" in parent_stage
@@ -90818,6 +91655,7 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
     ):
         assert selected_field in bind_leaf
 
+    rename_predecessor_gate = leaf_scan.index("_XU-RENAME-SCAN @ 0= IF")
     predecessor_refusal = leaf_scan.index(
         "_XU-PREV-OFF @ 0< _XU-PREV-INODE @ 0= OR IF"
     )
@@ -90828,7 +91666,12 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
         "_XU-SHARED-PLAN _XU-INDEX-BIND-SELECTED-LEAF",
         predecessor_capture,
     )
-    assert predecessor_refusal < predecessor_capture < selected_bind
+    assert (
+        rename_predecessor_gate
+        < predecessor_refusal
+        < predecessor_capture
+        < selected_bind
+    )
 
     capture = word_body("_XU-CAPTURE-PARENT-DIRECTORY")
     parent_auth = word_body("_XU-AUTH-PARENT-DIRECTORY")
@@ -90968,6 +91811,336 @@ def test_ext4_indexed_unlink_and_rmdir_reuse_authenticated_selected_leaf_plan(
         stage.index(name) for name in sealed_stage_order
     )
     assert sealed_stage_positions == tuple(sorted(sealed_stage_positions))
+
+
+def test_ext4_indexed_rename_seals_independent_selected_leaf_banks() -> None:
+    """Pin full RENAME scope to sealed old/destination authority banks."""
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            facade,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    def require_order(body: str, names: tuple[str, ...]) -> None:
+        start = 0
+        for name in names:
+            position = body.index(name, start)
+            start = position + len(name)
+
+    layout_start = facade.index(
+        "_XC-P.PARENT-SNAPSHOT _EXT4-STAGED-WRITE-INODE-SIZE +"
+    )
+    layout_end = facade.index("_XC-P.OP CELL+", layout_start)
+    rename_layout = facade[layout_start:layout_end]
+    assert tuple(
+        re.findall(r"CONSTANT\s+(_XC-P\.RENAME-[A-Z0-9-]+)", rename_layout)
+    ) == (
+        "_XC-P.RENAME-BASELINE",
+        "_XC-P.RENAME-CROSS-PARENT",
+        "_XC-P.RENAME-DEST-SEPARATE",
+        "_XC-P.RENAME-EDIT-KIND",
+        "_XC-P.RENAME-DEST-ROUTE",
+        "_XC-P.RENAME-DEST-ROUTE-LOGICAL",
+        "_XC-P.RENAME-DEST-ENTRY",
+        "_XC-P.RENAME-DEST-LOGICAL",
+        "_XC-P.RENAME-DEST-HOME",
+        "_XC-P.RENAME-DEST-HASH",
+        "_XC-P.RENAME-DEST-MINOR",
+        "_XC-P.RENAME-NP-BASELINE",
+        "_XC-P.RENAME-NP-INDEXED",
+        "_XC-P.RENAME-NP-INDEX-BASELINE",
+        "_XC-P.RENAME-NP-ROOT-HOME",
+        "_XC-P.RENAME-NP-DEPTH",
+        "_XC-P.RENAME-NP-ROUTE-NODE-HOME",
+        "_XC-P.RENAME-NP-PARENT-GROUP",
+        "_XC-P.RENAME-NP-PARENT-HOME",
+        "_XC-P.RENAME-NP-PARENT-OFF",
+        "_XC-P.RENAME-HASH-BASELINE",
+        "_XC-P.RENAME-DEST-DIR-SNAPSHOT",
+        "_XC-P.RENAME-NP-ROOT-SNAPSHOT",
+        "_XC-P.RENAME-NP-NODE-SNAPSHOT",
+        "_XC-P.RENAME-NP-PARENT-SNAPSHOT",
+    )
+    accessors = {
+        "_XR-NP-DIR-SNAPSHOT": "_XC-P.RENAME-DEST-DIR-SNAPSHOT +",
+        "_XR-NP-PARENT-SNAPSHOT": "_XC-P.RENAME-NP-PARENT-SNAPSHOT +",
+        "_XR-NP-ROOT-SNAPSHOT": "_XC-P.RENAME-NP-ROOT-SNAPSHOT +",
+        "_XR-NP-NODE-SNAPSHOT": "_XC-P.RENAME-NP-NODE-SNAPSHOT +",
+    }
+    for name, ending in accessors.items():
+        assert word_body(name).rstrip().endswith(
+            f"_XU-SHARED-PLAN {ending}"
+        )
+        assert re.search(
+            rf"(?m)^\s*(?:CREATE|VARIABLE)\s+{re.escape(name)}\b",
+            facade,
+        ) is None
+
+    rename_clear = word_body("_XC-P-RENAME-CLEAR?")
+    assert tuple(
+        re.findall(r"_XC-P\.RENAME-[A-Z0-9-]+", rename_clear)
+    ) == (
+        "_XC-P.RENAME-BASELINE",
+        "_XC-P.RENAME-CROSS-PARENT",
+        "_XC-P.RENAME-DEST-SEPARATE",
+        "_XC-P.RENAME-EDIT-KIND",
+        "_XC-P.RENAME-DEST-ROUTE",
+        "_XC-P.RENAME-DEST-ROUTE-LOGICAL",
+        "_XC-P.RENAME-DEST-ENTRY",
+        "_XC-P.RENAME-DEST-LOGICAL",
+        "_XC-P.RENAME-DEST-HOME",
+        "_XC-P.RENAME-DEST-HASH",
+        "_XC-P.RENAME-DEST-MINOR",
+        "_XC-P.RENAME-NP-BASELINE",
+        "_XC-P.RENAME-NP-INDEXED",
+        "_XC-P.RENAME-NP-INDEX-BASELINE",
+        "_XC-P.RENAME-NP-ROOT-HOME",
+        "_XC-P.RENAME-NP-DEPTH",
+        "_XC-P.RENAME-NP-ROUTE-NODE-HOME",
+        "_XC-P.RENAME-NP-PARENT-GROUP",
+        "_XC-P.RENAME-NP-PARENT-HOME",
+        "_XC-P.RENAME-NP-PARENT-OFF",
+        "_XC-P.RENAME-HASH-BASELINE",
+    )
+    shape = word_body("_XC-P-SHAPE?")
+    rename_shape = word_body("_XC-P-RENAME-SHAPE?")
+    np_index_shape = word_body("_XC-P-RENAME-NP-INDEX-SHAPE?")
+    assert (
+        "DUP _XC-P.OP + @ DUP _XC-PO-INSERT =\n"
+        "        OVER _XC-PO-UNLINK = OR\n"
+        "        OVER _XC-PO-RENAME = OR\n"
+        "        SWAP _XC-PO-RMDIR = OR 0= IF FALSE EXIT THEN"
+    ) in shape
+    assert shape.rstrip().endswith(
+        "_XC-P-RENAME-SHAPE?\n    ELSE\n        _XC-P-RENAME-CLEAR?\n    THEN"
+    )
+    assert "_XC-P.RENAME-NP-ROOT-HOME + @ 0= IF FALSE EXIT THEN" in (
+        np_index_shape
+    )
+    assert (
+        "_XC-P.RENAME-NP-DEPTH + @ DUP 0=\n"
+        "        SWAP 1 = OR 0= IF FALSE EXIT THEN"
+    ) in np_index_shape
+    assert (
+        "_XC-P.RENAME-NP-DEPTH + @ IF\n"
+        "            DUP _XC-P.RENAME-NP-ROUTE-NODE-HOME + @ 0<>\n"
+        "        ELSE\n"
+        "            DUP _XC-P.RENAME-NP-ROUTE-NODE-HOME + @ 0="
+    ) in np_index_shape
+    for form_gate in (
+        "_XC-P.RENAME-CROSS-PARENT + @ _XC-P-FLAG?",
+        "_XC-P.RENAME-DEST-SEPARATE + @ _XC-P-FLAG?",
+        "_XC-P.RENAME-EDIT-KIND + @ DUP _XR-EK-INPLACE U<",
+        "SWAP _XR-EK-TWO-LEAF U> OR",
+        "_XC-P.RENAME-NP-BASELINE + @ -1 <>",
+        "_XC-P-RENAME-NP-INDEX-SHAPE?",
+        "_XC-P.INDEXED + @ 0= IF FALSE EXIT THEN",
+        "_XC-P.RENAME-EDIT-KIND + @ _XR-EK-TWO-LEAF <>",
+        "_XC-P.RENAME-HASH-BASELINE + @ -1 =",
+    ):
+        assert form_gate in rename_shape
+
+    entry = word_body("_XR-ENTRY")
+    assert "_XR-FLAGS @ VFS-RN-NOREPLACE INVERT AND IF" in entry
+    assert "_XR-VICTIM @ IF" in entry
+    directory_gate = entry.index("VFS-T-DIR <> IF")
+    assert entry.index("_XR-CROSSDIR @ 0= IF", directory_gate) < entry.index(
+        "_XR-SOURCE @ IN.CHILD @ IF VFS-E-NOTEMPTY EXIT THEN",
+        directory_gate,
+    )
+
+    source_scan = word_body("_XU-INDEXED-LEAF-SCAN")
+    source_auth = word_body("_XU-AUTH-INDEXED-PARENT")
+    assert source_scan.count("_XU-RENAME-SCAN @ 0= IF") == 2
+    assert (
+        "_XU-RENAME-SCAN @ 0= IF\n"
+        "        _XU-FINAL @ IF"
+    ) in source_auth
+
+    dest_scan = word_body("_XR-SCAN-INDEXED-DEST-LEAF")
+    dest_auth = word_body("_XR-AUTH-INDEXED-DESTINATION")
+    require_order(
+        dest_auth,
+        (
+            "_XU-REQUIRE-HASH-AUTHORITY",
+            "_XU-BIND-HASH-AUTHORITY",
+            "_EXT4-HALF-MD4-DIRHASH?",
+            "_EXT4-DD-SELECT-ROUTE",
+            "_EXT4-DD.ACTIVE-COUNT + @ U<",
+            "_EXT4-DD-SET-INTERVAL",
+            "_EXT4-DD-LOAD-LOGICAL",
+            "_EXT4-VALIDATE-DIR-BLOCK",
+            "_XR-SCAN-INDEXED-DEST-LEAF",
+            "_XR-DEST-DUPLICATE @ IF",
+            "_XR-DEST-FOUND @ 0= IF",
+        ),
+    )
+    for aggregate_gate in (
+        "_XR-DEST-TOTAL @ _XR-COMPACT-MIN @ _EXT4-UADD?",
+        "_XR-DEST-SOURCE-MIN @ IF VFS-E-CONFLICT EXIT THEN",
+        "_XR-DEST-TOTAL @ _XR-DEST-SOURCE-MIN @ -",
+        "_XR-NEEDED @ _EXT4-UADD?",
+        "1012 U> 0= IF",
+        "_XR-BIND-DEST-LEAF",
+    ):
+        assert aggregate_gate in dest_scan
+
+    same_dest = word_body("_XR-AUTH-SAMEPARENT-INDEXED-DESTINATION")
+    np_dest = word_body("_XR-AUTH-NP-INDEXED-PARENT")
+    require_order(
+        same_dest,
+        (
+            "_XU-DIRECTORY-DESC _XR-DEST-DESC !",
+            "_XU-PARENT-INO @ _XR-DEST-PARENT-INO !",
+            "_XU-PARENT-GEN @ _XR-DEST-PARENT-GEN !",
+            "-1 _XR-DEST-SAMEPARENT !",
+            "_XR-AUTH-INDEXED-DESTINATION",
+        ),
+    )
+    for independent_binding in (
+        "_XR-NP-ROOT-CURRENT _XR-NP-DIRECTORY-DESC _EXT4-DD-INIT",
+        "_XR-NP-DIRECTORY-DESC _EXT4-DD.PARENT + @ _XR-PARENT @ <>",
+        "_XR-NP-DIRECTORY-DESC _EXT4-DD.INO + @ _XR-NP-INO @ <>",
+        "_XR-NP-DIRECTORY-DESC _EXT4-DD.GEN + @ _XR-NP-GEN @ <>",
+        "_XR-AUTH-NP-INDEX-ACTIVE-TABLE",
+        "_XR-NP-DIRECTORY-DESC _XR-DEST-DESC !",
+        "_XR-NP-INO @ _XR-DEST-PARENT-INO !",
+        "0 _XR-DEST-SAMEPARENT !",
+        "_XR-AUTH-INDEXED-DESTINATION",
+        "_XC-P.RENAME-NP-INDEX-BASELINE",
+    ):
+        assert independent_binding in np_dest
+    np_table = word_body("_XR-AUTH-NP-INDEX-ACTIVE-TABLE")
+    assert "_EXT4-DD-REQUIRE-DEPTH0 EXIT" in np_table
+    require_order(
+        np_table,
+        (
+            "_EXT4-DD-REQUIRE-MUTABLE-HASH",
+            "_EXT4-DD.DX-COUNT + @ 1 <>",
+            "_EXT4-DD-LOAD-LOGICAL",
+            "_EXT4-VALIDATE-DX-NODE",
+            "_XR-NP-NODE-SNAPSHOT",
+            "_EXT4-DD-REQUIRE-ACTIVE-HASHES",
+        ),
+    )
+
+    same_plan = word_body("_XR-PLAN-SAMEPARENT")
+    cross_plan = word_body("_XR-PLAN-CROSSDIR")
+    capture_np = word_body("_XR-CAPTURE-NP-DIRECTORY")
+    require_old = word_body("_XR-REQUIRE-OLD-DIRECTORY")
+    require_np = word_body("_XR-REQUIRE-NP-DIRECTORY")
+    require_order(
+        same_plan,
+        (
+            "_XU-CAPTURE-PARENT-DIRECTORY",
+            "_XR-AUTH-SAMEPARENT-INDEXED-DESTINATION",
+            "_XR-PROVE-SAMEPARENT-OWNERS",
+            "_XU-CAPTURE-PARENT-DIRECTORY",
+            "_XR-AUTH-SAMEPARENT-INDEXED-DESTINATION",
+            "_XR-BUILD-INDEXED-OLD-DIR-AFTERIMAGE",
+            "_XR-BUILD-INDEXED-DEST-AFTERIMAGE",
+            "_XR-SCAN-NEW-NAME",
+            "_XR-BIND-LINEAR-DESTINATION",
+            "_XR-BIND-RENAME-FORM",
+        ),
+    )
+    require_order(
+        cross_plan,
+        (
+            "_XU-CAPTURE-PARENT-DIRECTORY",
+            "_XR-AUTH-NP-DIRECTORY",
+            "_XR-BIND-RENAME-FORM",
+            "_XU-AUTH-CHILD-DIRECTORY",
+            "_XR-PROVE-CROSSDIR-OWNERS",
+            "_XR-PROVE-CHILD-OWNER",
+            "_XU-REQUIRE-TARGET",
+            "_XU-REQUIRE-PARENT",
+            "_XR-REQUIRE-NP",
+            "_XR-REQUIRE-OLD-DIRECTORY",
+            "_XR-REQUIRE-NP-DIRECTORY",
+            "_XU-REQUIRE-CHILD-DIRECTORY",
+            "_XR-BUILD-CHILD-DIR-AFTERIMAGE",
+        ),
+    )
+    assert "_XR-NP-INDEXED @ IF" in capture_np
+    assert "_XR-AUTH-NP-INDEXED-PARENT" in capture_np
+    assert "_XR-BIND-LINEAR-DESTINATION" in capture_np
+    assert "_XU-INDEXED @ IF" in require_old
+    assert "_XR-BUILD-INDEXED-OLD-DIR-AFTERIMAGE" in require_old
+    assert "_XR-BUILD-OLD-DIR-AFTERIMAGE" in require_old
+    assert "_XR-NP-INDEXED @ IF" in require_np
+    assert "_XR-BUILD-INDEXED-DEST-AFTERIMAGE" in require_np
+
+    same_owners = " ".join(
+        word_body("_XR-PROVE-SAMEPARENT-OWNERS").split()
+    )
+    cross_owners = " ".join(word_body("_XR-PROVE-CROSSDIR-OWNERS").split())
+    child_owner = " ".join(word_body("_XR-PROVE-CHILD-OWNER").split())
+    for audit in (
+        "_XU-DIRECTORY-DESC _XU-DIR-HOME @ 1 _XR-REQUIRE-DESC-MAP-HITS",
+        "_XU-DIRECTORY-DESC _XR-DEST-HOME @ 1 _XR-REQUIRE-DESC-MAP-HITS",
+        "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR",
+    ):
+        assert audit in same_owners
+    for audit in (
+        "_XU-DIRECTORY-DESC _XU-DIR-HOME @ 1 _XR-REQUIRE-DESC-MAP-HITS",
+        "_XU-DIRECTORY-DESC _XR-NP-DIR-HOME @ 0 _XR-REQUIRE-DESC-MAP-HITS",
+        "_XR-NP-DIRECTORY-DESC _XR-NP-DIR-HOME @ 1 _XR-REQUIRE-DESC-MAP-HITS",
+        "_XR-NP-DIRECTORY-DESC _XU-DIR-HOME @ 0 _XR-REQUIRE-DESC-MAP-HITS",
+        "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNERS-PAIR",
+    ):
+        assert audit in cross_owners
+    for audit in (
+        "_XU-DIRECTORY-DESC _XU-DATA-BLOCK @ 0 _XR-REQUIRE-DESC-MAP-HITS",
+        "_XR-NP-DIRECTORY-DESC _XU-DATA-BLOCK @ 0 _XR-REQUIRE-DESC-MAP-HITS",
+        "_EXT4-REQUIRE-UNIQUE-BLOCK-OWNER",
+    ):
+        assert audit in child_owner
+
+    expected_roles = word_body("_XR-HP-EXPECTED-ROLES")
+    plan_homes = word_body("_XR-HP-PLAN-HOMES")
+    assert "_XR-DEST-SEPARATE @ IF 4 ELSE 3 THEN EXIT" in expected_roles
+    assert "_XU-DIRECTORY @ IF 6 ELSE 5 THEN" in expected_roles
+    assert tuple(re.findall(r"_XC-HR-[A-Z0-9-]+", plan_homes)) == (
+        "_XC-HR-INODE",
+        "_XC-HR-PARENT-INODE",
+        "_XC-HR-RENAME-NEW-PARENT-INODE",
+        "_XC-HR-PARENT-DIRECTORY",
+        "_XC-HR-RENAME-NEW-PARENT-DIRECTORY",
+        "_XC-HR-RENAME-CHILD-DIRECTORY",
+    )
+    same_stage = word_body("_XR-STAGE-DIRECTORY")
+    cross_stage = word_body("_XR-STAGE-CROSSDIR")
+    require_order(
+        same_stage,
+        (
+            "_XR-REQUIRE-SAMEPARENT-DIRECTORIES",
+            "_XU-DIR-HOME @",
+            "_XR-STAGE-CROSS-DIRECTORY",
+            "_XR-DEST-HOME @",
+            "_XR-STAGE-CROSS-DIRECTORY",
+        ),
+    )
+    require_order(
+        cross_stage,
+        (
+            "_XR-STAGE-SOURCE-INODE",
+            "_XU-STAGE-PARENT-INODE",
+            "_XR-STAGE-NP-INODE",
+            "_XR-REQUIRE-OLD-DIRECTORY",
+            "_XR-REQUIRE-NP-DIRECTORY",
+            "_XU-REQUIRE-CHILD-DIRECTORY",
+            "_XR-BUILD-CHILD-DIR-AFTERIMAGE",
+            "_XU-DIR-HOME @",
+            "_XR-NP-DIR-HOME @",
+            "_XU-DATA-BLOCK @",
+        ),
+    )
 
 
 def test_ext4_indexed_link_and_mkdir_reuse_only_authenticated_leaf_slack(

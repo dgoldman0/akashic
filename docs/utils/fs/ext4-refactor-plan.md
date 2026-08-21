@@ -245,7 +245,15 @@ lifetimes and home roles. That slice has one representative success and a
 compositional recovery argument. Canonical empty-directory RMDIR now reuses the
 same parent authority without changing its child shape or nine semantic roles;
 one same-session singleton-depth-one MKDIR-to-RMDIR journey closes that next
-happy-path step compositionally. Indexed RENAME remains gated and next.
+happy-path step compositionally. Bounded no-victim RENAME now admits each old
+and new parent independently as linear, depth-zero HTree, or singleton
+depth-one HTree. It covers same-parent same- and cross-leaf regular moves,
+cross-parent regular moves, and the existing canonical empty-directory
+cross-parent move without HTree split, growth, or key mutation. A single
+source-built two-operation positive gate plus the prior linear RENAME recovery
+and indexed-authority evidence closes that step compositionally. Namespace
+insertion and deletion are therefore at draft vertical closure; indexed-parent
+truncation, metadata, and xattr forms are next.
 
 The objective is to establish one authoritative implementation for each of
 these recurring mechanisms:
@@ -473,14 +481,21 @@ hash-authority snapshot, three 1,024-byte block snapshots, and one 256-byte
 inode snapshot. Stage 5 appended its original 488-byte home-plan tail. The
 root-growth probe added six evidence cells and three enum-derived home roles.
 Singleton depth-one mutation subsequently added two evidence cells and one
-1,024-byte DX-node snapshot. The later XU/XR collector migration adds
+1,024-byte DX-node snapshot. The later XU/XR collector migration added
 operation and owner-context cells to that authority/evidence body and extends
-the enum-derived role universe from 23 to 30 entries. The current record is
-therefore 5,496 bytes: a 4,768-byte authority/evidence body containing the
+the enum-derived role universe from 23 to 30 entries. At the indexed-XU/RMDIR
+checkpoint the record was therefore 5,496 bytes: a 4,768-byte
+authority/evidence body containing the
 existing 47 insertion cells and snapshots plus `OP` and `OWNER-CTX`, followed
 by a 728-byte tail containing one count cell and 30
 `{ role, journal kind, home }` entries. With the unchanged 15,568-byte base
-context, the contiguous base-context-plus-record reservation is 21,064 bytes.
+context, that historical contiguous reservation was 21,064 bytes.
+Indexed RENAME subsequently adds exactly 3,496 bytes: 21 scalar authority
+cells, one 1,024-byte destination-leaf snapshot, independent 1,024-byte
+new-parent root and DX-node snapshots, and one 256-byte new-parent inode
+snapshot. The current authority/evidence body is 8,264 bytes; the unchanged
+728-byte home-plan tail makes the record 8,992 bytes and the contiguous
+base-context-plus-record reservation 24,560 bytes.
 Admission does not interpret that record. Its
 base context owns only the opaque
 `_EXT4-C.XC-PLAN` pointer and `_EXT4-C.XC-PLAN-SPAN`; the common base context
@@ -663,8 +678,9 @@ RMDIR binds the common first three metadata roles, then metadata
 `PRIMARY-SUPER=primary-super-home`, revoke
 `RELEASE-DIRECTORY=child-directory-block`, metadata
 `INODE-GDT=inode-gdt-home`, and metadata
-`INODE-BITMAP=inode-bitmap-home`. Same-parent RENAME uses the common first
-three metadata roles. Cross-parent regular-file RENAME binds metadata
+`INODE-BITMAP=inode-bitmap-home`. At that collector-only checkpoint,
+same-parent linear RENAME used the common first three metadata roles.
+Cross-parent linear regular-file RENAME bound metadata
 `INODE=source-home`, `PARENT-INODE=old-parent-home`,
 `RENAME-NEW-PARENT-INODE=new-parent-home`,
 `PARENT-DIRECTORY=old-directory-home`, and
@@ -687,15 +703,17 @@ neither admitted indexed UNLINK/RMDIR/RENAME nor changed any existing
 transaction, recovery, or persistence behavior. XH retains its private
 collector for future migration.
 
-Regular-file UNLINK now admits authenticated depth-zero and singleton
+Regular-file UNLINK then admitted authenticated depth-zero and singleton
 depth-one indexed parents for all three existing lifetimes: nonfinal,
 allocation-free direct final, and orphan-backed closed/open final. The shared
 record owns the parent-inode and selected-directory snapshots for linear XU/XR
 as well as indexed UNLINK/RMDIR; the old private `_XU-PARENT-SNAPSHOT` and
-`_XU-DIR-SNAPSHOT` are gone without changing the 5,496-byte record geometry.
-An indexed XU shape requires the exact operation tag implied by ambient mode:
-`UNLINK` for a regular target and `RMDIR` for a directory. Cross-family state
-and indexed RENAME remain fail-closed.
+`_XU-DIR-SNAPSHOT` were gone without changing the then-5,496-byte record
+geometry. At that checkpoint an indexed XU shape required the exact operation
+tag implied by ambient mode: `UNLINK` for a regular target and `RMDIR` for a
+directory; cross-family state and indexed RENAME remained fail-closed. The
+subsequent indexed-RENAME slice enlarges the same record while retaining those
+operation/context seals and exact XU gates.
 
 The indexed path authenticates the complete parent map, root, mutable hash
 authority, active depth-zero table or singleton depth-one DX node, and every
@@ -735,7 +753,56 @@ source-load/plan-core checks pass. No new indexed crash, refusal, external-tool,
 or stable-remount clone is claimed: existing linear RMDIR lifetime/recovery and
 indexed topology evidence compose because the role vector and recovery protocol
 did not change.
-Indexed RENAME is the next Stage 6 namespace work; indexed-parent truncation,
+
+Indexed RENAME now seals old and new parent shape and authority independently.
+Each parent may be linear, depth-zero HTree, or singleton depth-one HTree.
+Same-parent regular moves admit the same selected leaf or two distinct leaves;
+cross-parent regular and canonical empty-directory moves admit every mixture of
+those parent shapes. When a same-leaf new name fits the authenticated source
+record, the exact-record in-place path is retained. Otherwise the source and
+destination leaf edits use an aggregate compact-fit rebuild. Source removal
+therefore supports the first or only live entry, and destination selection
+walks continuation-eligible hash leaves in order to choose the first aggregate
+fit, including a leaf with no live names. No path splits or grows an indexed
+directory, edits an HTree interval boundary, or changes a root, DX node,
+extent map, sibling leaf, size, or sector count.
+
+The sealed role vectors remain exact. Same-parent same-leaf regular RENAME uses
+the source-inode, parent-inode, and selected-leaf roles; same-parent cross-leaf
+adds the destination-leaf role, for three and four roles respectively.
+Cross-parent regular RENAME uses source inode, both parent inodes, source leaf,
+and destination leaf for five roles. The canonical directory move adds the
+child-directory role for six. Cold, dry, and live planning compare the
+independent old/new route, root, optional node, inode locator, selected leaf,
+and parent-shape evidence, plus each name's computed hash, before generic home
+deduplication establishes credit and order. The filesystem hash parameters
+remain one shared authenticated baseline rather than two authorities.
+
+The map/owner proof is the exact 2x2 topology proof. A same-parent same-leaf
+move requires one map hit and the leaf's single-owner proof. A same-parent
+cross-leaf move requires one hit for each selected leaf followed by their
+paired owner proof. Across parents, an indexed old map must prove old leaf
+one/new leaf zero and an indexed new map new leaf one/old leaf zero. Two
+indexed parents therefore form the exact 2x2 proof; a mixed move applies the
+corresponding row to its indexed participant, and every shape then runs the
+filesystem-wide paired owner scan. A canonical directory child must also have
+zero hits in each applicable indexed parent map before its separate child-owner
+proof; its existing `..` rewrite and parent-link transfer are unchanged.
+
+Evidence stays intentionally lean. One source-built session first renames
+`/fixture/indexed/new.txt` to `mkdir-depth1` between two singleton-depth-one
+leaves with exact four-home vector `[283, 281, 1357, 1497]` under `4/0/0`.
+It then moves `/fixture/sparse.bin` from a linear parent to
+`/fixture/indexed/moved-000.txt` with exact five-home vector
+`[279, 278, 281, 1345, 1497]` under `5/0/0`. This runs both independent
+authority banks under one cold source build. The selector passed as
+`1 passed in 774.00s`: cold source loaded the ext4 closure in 1,174,688,163 of
+1,600,000,000 steps across 4,057 packed lines from 13 source units, and the
+composed indexed-RENAME journey used 2,869,457,042 of 3,600,000,000 steps.
+Existing linear RENAME recovery and indexed topology evidence compose through
+the unchanged sealed-home replay; no new crash, refusal, external-tool, or
+stable-remount matrix is claimed.
+This draft-closes the namespace/deletion vertical. Indexed-parent truncation,
 metadata, and xattr forms follow.
 
 ## Verification cadence
@@ -834,5 +901,10 @@ selected-directory snapshots for depth-zero and singleton-depth-one parents,
 with one representative runtime success and compositional prior recovery
 evidence. Indexed RMDIR now consumes that same authority for the canonical
 empty child, retains the exact nine roles, and has one same-session singleton-
-depth-one success plus compositional prior recovery evidence. Indexed RENAME is
-next; indexed-parent truncation, metadata, and xattr forms remain ahead.
+depth-one success plus compositional prior recovery evidence. Indexed RENAME
+now seals independent old/new linear, depth-zero, or singleton-depth-one
+authority and admits the bounded same-parent regular, cross-parent regular,
+and cross-parent canonical-directory forms without topology mutation. Its one
+source-built two-operation positive gate plus compositional prior recovery
+evidence draft-closes the namespace/deletion vertical. Indexed-parent
+truncation, metadata, and xattr forms remain ahead.

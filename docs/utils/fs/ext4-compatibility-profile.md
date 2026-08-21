@@ -167,8 +167,8 @@ targets remain readable and drain on the last staged `RELEASE`. Staged
 `SYNCFS` returns `BUSY` while that orphan is live. All three lifetimes admit an
 authenticated linear, depth-zero HTree, or singleton depth-one HTree parent.
 Indexed UNLINK mutates only the selected leaf; the root, optional DX node,
-extent map, other leaves, and parent geometry remain immutable. Indexed RENAME
-remains gated. The first bounded `MKDIR`
+extent map, other leaves, and parent geometry remain immutable. The first
+bounded `MKDIR`
 slice is now public too. It allocates one inode and one data block, constructs a
 checksummed one-block `.`/`..` directory, and inserts its typed name in an
 authenticated linear parent or existing slack in a depth-zero or singleton
@@ -205,7 +205,13 @@ orphan state. The directory form adds its canonical child block, transfers one
 parent link, and rewrites the child's `..` entry and checksum under exact
 `4/0/0` through `6/0/0` credit. It retains the same dentry/vnode, open
 descriptors, and current-working-directory object. Same-parent directories,
-victims, and replacement remain unsupported. Singleton-modern-orphan final-
+victims, and replacement remain unsupported. RENAME parents may now be
+independently linear, depth-zero HTree, or singleton depth-one HTree.
+Same-parent regular moves admit one selected leaf or two, while cross-parent
+regular and canonical-directory moves admit mixed parent shapes. A fitting
+same-leaf record uses the in-place path; other selected leaves use an aggregate
+compact-fit rebuild without allocation, split, growth, HTree-key edits, or
+parent-geometry changes. Singleton-modern-orphan final-
 link removal is operation-admitted for both closed and descriptor-retained
 targets. Existing depth-zero HTree CREATE, atomic one-block linear-to-HTree
 growth, and full-leaf splitting under a depth-zero root with entry capacity are
@@ -2169,7 +2175,7 @@ retain open references. Cross-parent remaining-link proof, directories through
 `UNLINK`, indexed shapes beyond those two depths, first-live-entry removal, and
 directory growth remain gated rather than approximated. Canonical empty
 directories use the separate bounded `RMDIR` contract below; indexed RENAME
-also remains gated.
+uses its own independently sealed old/new parent authority described below.
 
 Admission reauthenticates the target's complete current map, inode locator and
 generation, cache projection, external xattrs, link count, and mutable flags.
@@ -2481,8 +2487,8 @@ descriptor journey measures 4,549,770 steps.
 The first staged RENAME implementation installs `_EXT4-RENAME` in ABI slot 13
 and advertises `VFS-CAP-RENAME` with the `VFS-CAP-ATOMIC-RENAME` and
 `VFS-CAP-CROSSDIR-RENAME` semantic bits. It deliberately omits
-`VFS-CAP-RENAME-REPLACE`; the ordinary binding remains read-only. The
-same-parent request has one root-owned mutable regular source and the same
+`VFS-CAP-RENAME-REPLACE`; the ordinary binding remains read-only. The original
+same-parent linear request has one root-owned mutable regular source and the same
 authenticated, root-owned, non-setgid, checksummed one-block linear directory
 as old and new parent. The destination name is absent and no victim is
 admitted. If
@@ -2520,10 +2526,11 @@ continuity, independent after-image and external-tool checks, and a stable
 write-free remount. Aggregate-full zero-write refusal passes in 46.93 seconds,
 and the in-place regression passes in 105.09 seconds.
 
-The cross-parent request retains the regular-file, absent-destination, and
-no-victim boundary but admits distinct authenticated old and new one-block
-linear parents. Before activation it performs a paired owner proof for both
-directory blocks, then fully reauthenticates the target, both parent inodes,
+The original cross-parent linear request retains the regular-file,
+absent-destination, and no-victim boundary but admits distinct authenticated
+old and new one-block linear parents. Before activation it performs a paired
+owner proof for both directory blocks, then fully reauthenticates the target,
+both parent inodes,
 both complete directory blocks, maps, xattrs, identities, generations, and
 cache projections after that walk. Its old-parent after-image discards unused
 records and the exact source, emits other live records in original order at
@@ -2554,9 +2561,9 @@ and preservation of the old namespace. A committed W21 final-home tear
 publishes the new namespace after three completed home checkpoints; recovery
 replays all four committed homes before the stable remount.
 
-The cross-parent empty-directory slice admits a source with exact
-`VN.DREFS = 1`, canonical media link count two, two distinct admitted one-block
-linear parents, an absent destination, and no victim. The public path may
+The original cross-parent empty-directory linear slice admits a source with
+exact `VN.DREFS = 1`, canonical media link count two, two distinct admitted
+one-block linear parents, an absent destination, and no victim. The public path may
 present an unloaded source-child cache; the callback requires no cached child
 and proves the exact empty media shape itself, so callers need no private
 preload. Open directory descriptors and a
@@ -2585,24 +2592,54 @@ measured 2,000,000,000-step composition watchdog, in 260.07 seconds. Cold source
 1,224,225,598 of 1,250,000,000 steps across 3,095 packed lines, and the
 descriptor journey measures 4,549,770 steps.
 
-`VFS-CAP-RENAME-REPLACE` remains absent. Victims, replacement, and same-parent
-directory moves remain gated. Qualified singleton-modern-orphan final-link
-lifetime closure is complete. One-block linear-to-HTree growth is complete;
-full-leaf mutation in an existing depth-zero indexed parent is complete while
-the root retains an entry slot. Public regular CREATE now completes the exact
-singleton root-growth transition, and stable singleton depth-one CREATE is
-qualified. Representative committed root-growth replay and a write-free stable
-remount are also complete, as are focused credit and reverse-owner boundaries.
-Existing-slack indexed `LINK` and `MKDIR` are admitted for depth-zero and
-singleton depth-one parents, with happy-path qualification at both depths.
-Their shared full-leaf refusal and compositional recovery boundary draft-close
-the namespace-insertion tranche. Indexed LINK/MKDIR splitting and growth remain
-gated. Regular-file UNLINK now admits authenticated depth-zero and singleton
-depth-one parents for all existing lifetimes, with one representative direct-
-final success and compositional prior recovery evidence. RMDIR now admits those
-same parent depths while preserving its canonical child
-and nine-role transaction, with one compositional singleton-depth-one success.
-Indexed RENAME remains gated and is the next namespace work; indexed-parent
+The indexed-parent RENAME extension independently admits each old and new
+parent as a one-block linear directory, depth-zero HTree, or singleton
+depth-one HTree. Same-parent regular moves may use one leaf or cross to a
+second leaf; cross-parent regular and canonical empty-directory moves may mix
+the three admitted parent shapes. An encoded name that fits its existing
+same-leaf source record retains the exact in-place edit. Otherwise the source
+and destination selected-leaf edits rebuild under aggregate compact-fit:
+source removal admits the first or only live record, and destination selection
+chooses the first continuation-eligible hash leaf with sufficient aggregate
+space, including an empty leaf. The operation does not allocate, split, grow,
+repair an HTree interval key, or change any root, DX node, extent map,
+unselected leaf, size, or sector count.
+
+The enlarged sealed namespace plan is 8,992 bytes; with the unchanged
+15,568-byte base context, the staged caller arena reserves 24,560 contiguous
+bytes. It holds independent old/new shape, route, root, optional-node, parent
+inode, and selected-leaf authority plus each name's computed hash. The
+authenticated filesystem hash parameters remain one shared baseline.
+Same-parent same-leaf and cross-leaf regular moves bind exactly three and four
+semantic roles. Cross-parent regular
+and canonical-directory moves bind five and six. Home deduplication remains
+responsible for exact credit and checkpoint order.
+
+Ownership proof covers both candidate leaves against both parent maps. A
+same-parent same-leaf move requires one map hit and one leaf owner; a
+same-parent cross-leaf move requires one hit apiece followed by their paired
+owner proof. Across parents, an indexed old map must prove old leaf one/new
+leaf zero and an indexed new map new leaf one/old leaf zero. Two indexed
+parents form the exact 2x2 proof; a mixed move applies the corresponding row
+to its indexed participant, and every shape then runs the filesystem-wide
+paired owner scan. For the directory form, the child block must have zero hits
+in every applicable indexed parent map before its separate child-owner proof;
+the existing parent-link transfer and checksummed `..` rewrite are retained.
+
+The lean positive evidence is one source-built session with two regular moves,
+not a cloned matrix. Singleton-depth-one same-parent
+`new.txt` to `mkdir-depth1` crosses leaves through exact homes
+`[283, 281, 1357, 1497]` under `4/0/0`. Linear-to-indexed cross-parent
+`sparse.bin` to `moved-000.txt` uses exact homes
+`[279, 278, 281, 1345, 1497]` under `5/0/0`. Existing linear RENAME
+crash/replay, refusal, external-tool, and stable-remount evidence composes with
+the indexed topology and unchanged sealed-home replay; no new copy of those
+matrices is claimed.
+
+`VFS-CAP-RENAME-REPLACE` remains absent. Victims, replacement, same-parent
+directory moves, indexed split/growth, HTree-key mutation, and deeper or
+multi-node HTree shapes remain gated. Indexed insertion, UNLINK, RMDIR, and
+RENAME now draft-close the namespace/deletion vertical. Indexed-parent
 truncation, metadata, and xattr coverage follow.
 
 Profile completion does not waive the larger bidirectional matrix: externally

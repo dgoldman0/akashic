@@ -139,8 +139,21 @@ directory block, decrements parent links and `used_dirs`, and revokes the
 unchanged freed child block under the unchanged nine semantic roles and exact
 `6/0/1` through `8/0/1` transaction; the canonical topology is 7 META + 1
 REVOKE. Depth-positive truncation and indexed LINK/MKDIR splitting or growth
-remain outside those envelopes; indexed RENAME remains gated. Public
-regular CREATE carries the first HTree root-depth transition through the
+remain outside those envelopes. Bounded no-victim `RENAME` now admits a
+regular file in one parent, a regular file across parents, and the existing
+canonical empty-directory cross-parent move when each participating parent is
+independently linear, depth-zero HTree, or singleton depth-one HTree. An
+indexed same-parent move may edit one selected leaf or move between two
+selected leaves; a cross-parent move may mix the admitted parent shapes. A
+same-leaf name that fits its authenticated record is rewritten in place;
+otherwise the selected leaf or leaves are rebuilt from authenticated snapshots
+under an aggregate compact-fit proof. They do not split or grow a leaf, edit
+an HTree interval key, or change a root, DX node, extent map, sibling leaf, or
+parent geometry. Same-parent regular moves bind three semantic roles when both names
+use one leaf and four when they use two; cross-parent regular and directory
+moves bind five and six respectively. Destination victims, replacement,
+same-parent directory moves, and deeper or multi-node HTree shapes remain
+gated. Public regular CREATE carries the first HTree root-depth transition through the
 operation-owned sealed plan, exact home certificate, emission, and checkpoint.
 Ordinary staged CREATE can then mutate authenticated slack after a fresh mount
 of the resulting singleton depth-one tree. A committed tear in the new DX-node
@@ -175,8 +188,17 @@ paired parent-leaf/child-block owner scan. One same-session singleton-depth-one
 `MKDIR` followed by `RMDIR` passed in 625.48 host seconds; structural and
 source-load/plan-core checks also pass. Existing linear RMDIR recovery and
 indexed topology evidence compose, so no new indexed crash, refusal, external-
-tool, or stable-remount clone is claimed. Indexed LINK/MKDIR splitting and
-growth remain gated; indexed RENAME is the next namespace step.
+tool, or stable-remount clone is claimed. Indexed RENAME follows the same lean
+qualification rule. One source-built session covers a singleton-depth-one
+same-parent cross-leaf regular move with exact homes
+`[283, 281, 1357, 1497]` under `4/0/0`, then a linear-to-indexed cross-parent
+regular move with exact homes `[279, 278, 281, 1345, 1497]` under `5/0/0`.
+Existing linear RENAME recovery and indexed-parent authority evidence compose;
+no new crash, refusal, external-tool, or stable-remount matrix is claimed for
+this extension. Together with indexed insertion, UNLINK, and RMDIR, this
+draft-closes the namespace/deletion vertical. Indexed LINK/MKDIR splitting and
+growth remain gated; indexed-parent truncation, metadata, and xattr work is the
+next vertical handoff.
 HTree depth grows independently when an operation or a pinned corpus requires
 it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate
