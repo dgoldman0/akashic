@@ -177,6 +177,28 @@ redirected.
   lines, and +9,952 packed bytes even after collector deletion. The cold source
   build passed at 1,049,876,551 of 1,600,000,000 steps, 20,249,749 steps above
   Stage 4. Stage 5 centralizes authorization; it does not claim a LOC payback.
+- The root-growth probe is the first direct consumer of both checkpoints. It
+  extends the record by six cells—one explicit probe admission, one derived
+  root-growing shape flag, and the new DX node's home/group/bitmap/GDT tuple—
+  and extends the enum-sized home tail by three roles for the node image,
+  allocation bitmap, and descriptor. The current record is therefore 4,272
+  bytes: a 3,712-byte evidence body and a 560-byte, 23-role home tail. It adds
+  no snapshot, topology maximum, ambient home collector, or independent credit
+  counter. A saturated 123-entry root with a full selected leaf plans the new
+  DX node at logical EOF and the split leaf at EOF+1, rebinds both exact
+  candidates after seal, and composes the two extent-map/allocation edits. The
+  external-map same-group probe has 14 semantic roles and 11 first-seen homes.
+  This is deliberately nonpublishing: ordinary CREATE leaves probe admission
+  clear and retains the old early `VFS-E-NOSPC`; the probe dry-stages then
+  aborts before writer activation. Live emission, recovery, stable depth-one
+  mutation, and the broader qualification matrix remain the next feature
+  boundary. The exact source-mode qualification passed with the 13-unit ext4
+  closure loading in 1,073,526,553 of 1,600,000,000 steps across 3,842 packed
+  lines. Its saturated-root journey completed in 1,545,877,690 of
+  1,600,000,000 steps while the harness observed zero storage writes and zero
+  flushes; it checked the complete seven-entry extent vector, checksum
+  idempotence of every staged structural image, and immediate cache, writer,
+  plan, private-buffer, and owner-range cleanup after abort.
 
 ## Baseline and objective
 
@@ -184,8 +206,9 @@ The frozen semantic comparison point is the clean `ext4-recovery` tree at
 `abb3f9462d379b0adb2f09d1009831dd2f85afdb`. Documentation and refactor commits
 advance `HEAD`, but that commit remains the behavior, ordering, persistent-byte,
 and crash comparison baseline. It includes bounded depth-zero HTree full-leaf
-CREATE and its recovery qualification. The next feature boundary remains HTree
-root-depth growth or a separately chosen indexed-directory mutation.
+CREATE and its recovery qualification. The next public feature boundary
+remains HTree root-depth activation/recovery or a separately chosen indexed-
+directory mutation.
 Refactoring must not silently cross that boundary or admit indexed LINK/MKDIR,
 broader map shapes, or another previously gated filesystem behavior.
 
@@ -410,10 +433,11 @@ global, to move.
 At the Stage 4 checkpoint the staged binding allocated one facade-defined
 3,664-byte record from its caller-provided VFS arena: 39 cells, a 24-byte
 hash-authority snapshot, three 1,024-byte block snapshots, and one 256-byte
-inode snapshot. Stage 5 appends a 488-byte home-plan tail, making the current
-record 4,152 bytes and the contiguous base-context-plus-record reservation
-19,720 bytes. Admission does not interpret that record. Its base context owns
-only the opaque
+inode snapshot. Stage 5 appended its original 488-byte home-plan tail. The
+root-growth probe now adds six evidence cells and three enum-derived home roles,
+making the current record 4,272 bytes and the contiguous base-context-plus-
+record reservation 19,840 bytes. Admission does not interpret that record. Its
+base context owns only the opaque
 `_EXT4-C.XC-PLAN` pointer and `_EXT4-C.XC-PLAN-SPAN`; the common base context
 is 15,568 bytes. The record must be the exact next allocation after that base
 context and wholly inside the arena's allocated prefix. Ordinary bindings keep

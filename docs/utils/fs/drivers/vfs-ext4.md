@@ -108,10 +108,11 @@ may instead allocate one globally unowned block, repack the selected records
 and pending name across two checksummed leaves, insert a separator into the
 depth-zero HTree root, and extend either an inline depth-zero extent map or the
 external leaf named by a singleton resident depth-one root. The HTree root and
-governing extent node must each retain any entry slot the edit needs. HTree
-root-depth growth, indexed LINK and MKDIR, inheritance beyond the explicit
-root-owned non-setgid envelope, and broader directory shapes remain gated. The
-driver also implements
+governing extent node must each retain any entry slot the edit needs. Public
+HTree root-depth growth, indexed LINK and MKDIR, inheritance beyond the
+explicit root-owned non-setgid envelope, and broader directory shapes remain
+gated. An internal no-I/O probe can plan and dry-stage the first root-depth
+transition, but it cannot publish that transition. The driver also implements
 bounded mount-time recovery and
 durable transaction emission for an internal checksum-v3 JBD2 journal. It never
 uses the ambient filesystem volume: reads and all recovery, activation,
@@ -183,13 +184,16 @@ recovery, transaction, mutation, and VFS-operation policy. Consumers should
 not require these internal units directly.
 
 For CREATE/HTree cross-phase evidence and home preplanning, the facade defines
-one 4,152-byte binding-owned record. Its 3,664-byte evidence body contains 39
+one 4,272-byte binding-owned record. Its 3,712-byte evidence body contains 45
 cells, a 24-byte hash-authority snapshot, three 1,024-byte block snapshots,
-and one 256-byte inode snapshot. Its 488-byte tail contains one entry-count
-cell and 20 enum-derived `{ role, journal kind, home }` entries; storage is
+and one 256-byte inode snapshot. Its 560-byte tail contains one entry-count
+cell and 23 enum-derived `{ role, journal kind, home }` entries; storage is
 derived from the complete semantic role universe rather than a fixed maximum
-for one current topology. Namespace planning and staging receive the record
-address explicitly; there is no ambient alias. Seal performs the complete
+for one current topology. The extra root-growth evidence is one explicit
+probe-admission cell plus a derived topology flag and the new DX node's exact
+home, group, bitmap home, and descriptor home. It adds no snapshot or second
+home collection. Namespace planning and staging receive the record address
+explicitly; there is no ambient alias. Seal performs the complete
 bounds, journal-exclusion, uniqueness, and intentional-alias audit. Dry and
 live replanning then reauthenticate and resolve every expected role, kind,
 home, and exact role count before staging, and the final audit reconciles
@@ -417,8 +421,8 @@ writer-arena 8 1 0 fs EXT4-BIND-WRITER-ARENA? THROW
 ```
 
 The common base binding context is 15,568 bytes. The staged constructor also
-reserves the facade's 4,152-byte namespace-plan record from `fs-arena`, not the
-dedicated writer arena. The base-context-plus-record reservation is 19,720
+reserves the facade's 4,272-byte namespace-plan record from `fs-arena`, not the
+dedicated writer arena. The base-context-plus-record reservation is 19,840
 contiguous bytes; other VFS and mount allocations remain separate. The record
 is the exact allocation immediately following the base context and must remain
 inside the arena's allocated prefix. Allocation occurs only after authenticated
@@ -2304,9 +2308,22 @@ DX root and two packed leaves. Regular-file CREATE also admits an existing
 depth-zero HTree whose complete logical map and DX leaf permutation
 authenticate. It inserts into authenticated slack or splits a full selected
 leaf while the root retains an entry slot and the qualified parent map can
-attach one new EOF block. Indexed LINK and MKDIR, HTree root-depth growth,
-default-ACL inheritance, and non-root credential policy remain typed refusals;
-none is silently approximated.
+attach one new EOF block. Indexed LINK and MKDIR, public HTree root-depth
+growth, default-ACL inheritance, and non-root credential policy remain typed
+refusals; none is silently approximated.
+
+The focused root-growth probe crosses that last edge only after setting an
+explicit admission cell in the operation-owned record; ordinary CREATE leaves
+the cell zero and returns the previous `VFS-E-NOSPC` at root-full topology
+detection. The probe freezes the full root, selected leaf, parent inode, and
+extent-map preimages; selects the new DX node first and the split leaf second;
+plans logical EOF blocks in that order; and derives 13 semantic roles for an
+inline map or 14 for an external map. The same-group external-map fixture
+deduplicates those 14 roles to 11 exact metadata homes. A sealed replan must
+rebind both allocation candidates and every role before it may build the new
+DX node, packed leaf, depth-one root, extent-map edit, and two-block accounting
+afterimages. The probe aborts that transaction before activation, so it is
+architecture evidence rather than a newly advertised filesystem capability.
 
 Indexed admission binds the checksummed live primary hash seed, default hash
 version, and full `s_flags` to the mounted superblock cache. It hashes and
@@ -2827,8 +2844,9 @@ replacement, same-parent directory moves, multi-block or indexed parents, and
 directory growth remain gated for this RENAME slice. Qualified singleton-
 modern-orphan final-link lifetime closure and one-block linear-to-HTree CREATE
 growth are now complete. Existing depth-zero indexed full-leaf CREATE mutation
-is also complete while the root retains an entry slot; HTree root-depth growth
-and indexed `LINK`/`MKDIR` remain later directory delivery phases.
+is also complete while the root retains an entry slot. Root-depth planning and
+dry staging now have an internal bounded probe; activation, recovery, stable
+depth-one mutation, and indexed `LINK`/`MKDIR` remain later delivery phases.
 
 ### Same-retained-block shrink TRUNCATE
 
@@ -3672,9 +3690,10 @@ The ratchet order is:
    remove/append mutation, and canonical cross-parent empty-directory link
    transfer plus `..` rewrite (completed in the current worktree);
 8. retain atomic one-block linear-to-HTree conversion and indexed full-leaf
-   mutation under a depth-zero root with entry capacity; add HTree root-depth
-   growth and indexed `LINK`/`MKDIR`, then remaining deletion, truncation,
-   metadata, and xattr forms; and
+   mutation under a depth-zero root with entry capacity; use the completed
+   bounded planning/dry-stage probe to qualify HTree root-depth activation,
+   recovery, and stable depth-one mutation, then add indexed `LINK`/`MKDIR`
+   and the remaining deletion, truncation, metadata, and xattr forms; and
 9. perform the final profile closure audit across every profile-admitted
    operation and recovery state.
 
@@ -3897,8 +3916,9 @@ journey measures 4,549,770 steps. Replacement, victims, and same-parent
 directory moves remain outside this envelope. Qualified singleton-modern-
 orphan final-link lifetime closure now covers closed and descriptor-retained
 targets, including last-close failure recovery. Depth-zero indexed CREATE now
-splits a full selected leaf while its root retains entry capacity. The next
-directory phases are HTree root-depth growth and indexed `LINK`/`MKDIR`.
+splits a full selected leaf while its root retains entry capacity. The bounded
+root-growth planner/dry stager is present but not public; the next directory
+phases are its activation/recovery qualification and indexed `LINK`/`MKDIR`.
 Replacement, victims, broader
 concurrent orphan unions, general sparse/gap
 growth, unwritten conversion, growth beyond a

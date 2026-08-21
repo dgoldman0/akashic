@@ -64243,6 +64243,246 @@ def staged_public_indexed_leaf_split_prestate(
 
 
 @pytest.fixture(scope="session")
+def staged_public_indexed_root_growth_probe_prestate(
+    staged_public_indexed_leaf_split_prestate: dict[str, object],
+) -> dict[str, object]:
+    """Saturate the depth-zero root without changing the selected full leaf."""
+    case = staged_public_indexed_leaf_split_prestate
+    path = case["source"]
+    source_patches = case["source_patches"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+
+    parent_number = 27
+    root_home = 1355
+    selected_leaf_home = 1357
+    map_node_home = 1365
+    first_extra_logical = 4
+    extra_blocks = 120
+    final_logical_blocks = first_extra_logical + extra_blocks
+    layout = _ext4_recovery_layout(path)
+    superblock, parent_inode, parent_offset = _ext4_inode_record(
+        path, parent_number
+    )
+    block_size = layout["block_size"]
+    assert block_size == 1024
+    assert final_logical_blocks == 124
+    assert len(dict(source_patches)) == len(source_patches)
+    assert 1024 not in dict(source_patches)
+    assert parent_offset not in dict(source_patches)
+
+    allocated_patches, physical_ranges = _allocate_unlinked_extent_ranges(
+        path,
+        protocol="modern",
+        extent_specs=((first_extra_logical, extra_blocks, False),),
+        inode_number=parent_number,
+        data_group=0,
+        physical_gap=0,
+        base_patches=(
+            *source_patches,
+            (1024, superblock),
+            (parent_offset, parent_inode),
+        ),
+    )
+    assert len(physical_ranges) == 1
+    extra_first, allocated_count = physical_ranges[0]
+    assert allocated_count == extra_blocks
+    patch_map = dict(allocated_patches)
+    assert len(patch_map) == len(allocated_patches)
+    prepared_super = patch_map[1024]
+    parent_generation = struct.unpack_from("<I", parent_inode, 0x64)[0]
+    assert parent_generation == 0
+
+    original_map = _patched_ext4_home(
+        path, source_patches, map_node_home, block_size=block_size
+    )
+    map_generation = struct.unpack_from("<I", original_map, 8)[0]
+    map_entries = _extent_leaf_entries(original_map)
+    assert map_entries == (
+        (0, 1, 0, 1355),
+        (1, 1, 0, 1357),
+        (2, 1, 0, 1359),
+        (3, 1, 0, 1361),
+    )
+    prepared_map = _extent_leaf_with_entries(
+        prepared_super,
+        parent_number,
+        parent_generation,
+        map_generation,
+        map_entries
+        + (
+            (
+                first_extra_logical,
+                extra_blocks,
+                extra_first >> 32,
+                extra_first & 0xFFFF_FFFF,
+            ),
+        ),
+    )
+    patch_map[map_node_home * block_size] = prepared_map
+
+    prepared_parent = bytearray(parent_inode)
+    struct.pack_into("<I", prepared_parent, 0x04, final_logical_blocks * block_size)
+    struct.pack_into("<I", prepared_parent, 0x1C, 250)
+    struct.pack_into("<I", prepared_parent, 0x6C, 0)
+    prepared_parent = _inode_with_checksum(
+        prepared_super, parent_number, prepared_parent
+    )
+    patch_map[parent_offset] = prepared_parent
+
+    original_root = _patched_ext4_home(
+        path, source_patches, root_home, block_size=block_size
+    )
+    prepared_root = bytearray(original_root)
+    assert struct.unpack_from("<IBBBB", prepared_root, 24) == (0, 1, 8, 0, 0)
+    assert struct.unpack_from("<HH", prepared_root, 32) == (123, 3)
+    live_hashes = tuple(
+        _indexed_split_half_md4_hash(prepared_super, entry[4])[0]
+        for leaf_home in (1357, 1359, 1361)
+        for entry in _checked_linear_directory_entries(
+            prepared_super,
+            parent_number,
+            parent_generation,
+            _patched_ext4_home(
+                path, source_patches, leaf_home, block_size=block_size
+            ),
+        )
+    )
+    first_boundary = (max(live_hashes) & 0xFFFF_FFFE) + 2
+    final_boundary = first_boundary + 2 * (extra_blocks - 1)
+    assert first_boundary > struct.unpack_from("<I", prepared_root, 48)[0]
+    assert final_boundary <= 0xFFFF_FFFC
+    struct.pack_into("<H", prepared_root, 34, 123)
+    for ordinal in range(extra_blocks):
+        struct.pack_into(
+            "<II",
+            prepared_root,
+            32 + (3 + ordinal) * 8,
+            first_boundary + ordinal * 2,
+            first_extra_logical + ordinal,
+        )
+    struct.pack_into("<II", prepared_root, block_size - 8, 0, 0)
+    checksum_seed = struct.unpack_from("<I", prepared_super, 0x270)[0]
+    root_checksum = _crc32c_raw(
+        struct.pack("<II", parent_number, parent_generation), checksum_seed
+    )
+    root_checksum = _crc32c_raw(prepared_root[: block_size - 8], root_checksum)
+    root_checksum = _crc32c_raw(bytes(8), root_checksum)
+    struct.pack_into(
+        "<II", prepared_root, block_size - 8, 0, root_checksum
+    )
+    patch_map[root_home * block_size] = bytes(prepared_root)
+
+    empty_leaf = bytearray(block_size)
+    struct.pack_into("<IHBB", empty_leaf, 0, 0, block_size - 12, 0, 0)
+    struct.pack_into(
+        "<IHBB", empty_leaf, block_size - 12, 0, 12, 0, 0xDE
+    )
+    empty_leaf = _linear_directory_block_with_checksum(
+        prepared_super,
+        parent_number,
+        parent_generation,
+        empty_leaf,
+    )
+    _checked_linear_directory_entries(
+        prepared_super,
+        parent_number,
+        parent_generation,
+        empty_leaf,
+    )
+    for physical in range(extra_first, extra_first + extra_blocks):
+        offset = physical * block_size
+        assert offset not in patch_map
+        patch_map[offset] = empty_leaf
+
+    block_bitmap_home = layout["block_bitmap"]
+    block_bitmap = patch_map[block_bitmap_home * block_size]
+    group_first = layout["first"]
+    group_limit = min(
+        layout["blocks"], group_first + layout["blocks_per_group"]
+    )
+    free_candidates = tuple(
+        physical
+        for physical in range(group_first, group_limit)
+        if block_bitmap[(physical - group_first) // 8]
+        & (1 << ((physical - group_first) % 8))
+        == 0
+    )
+    node_candidate, leaf_candidate = free_candidates[:2]
+    assert node_candidate != leaf_candidate
+    assert all(
+        not (extra_first <= candidate < extra_first + extra_blocks)
+        for candidate in (node_candidate, leaf_candidate)
+    )
+
+    expected_map_entries = [
+        *map_entries,
+        (first_extra_logical, extra_blocks, extra_first >> 32, extra_first),
+    ]
+    for logical, physical in (
+        (final_logical_blocks, node_candidate),
+        (final_logical_blocks + 1, leaf_candidate),
+    ):
+        last_logical, last_length, last_high, last_low = expected_map_entries[-1]
+        last_physical = (last_high << 32) | last_low
+        if last_physical + last_length == physical and last_length < 0x8000:
+            expected_map_entries[-1] = (
+                last_logical,
+                last_length + 1,
+                last_high,
+                last_low,
+            )
+        else:
+            expected_map_entries.append(
+                (logical, 1, physical >> 32, physical & 0xFFFF_FFFF)
+            )
+    assert sum(entry[1] for entry in expected_map_entries) == 126
+
+    child_number = case["child_number"]
+    assert isinstance(child_number, int)
+    _, _, child_offset = _ext4_inode_record(path, child_number)
+    parent_home = parent_offset // block_size
+    child_home = child_offset // block_size
+    expected_meta_homes = (
+        child_home,
+        parent_home,
+        selected_leaf_home,
+        node_candidate,
+        leaf_candidate,
+        root_home,
+        map_node_home,
+        block_bitmap_home,
+        layout["primary_gdt"],
+        layout["primary_super"],
+        layout["inode_bitmap"],
+    )
+    assert len(expected_meta_homes) == 11
+    assert len(set(expected_meta_homes)) == len(expected_meta_homes)
+
+    return {
+        "source": path,
+        "source_patches": tuple(patch_map.items()),
+        "block_size": block_size,
+        "parent_number": parent_number,
+        "parent_generation": parent_generation,
+        "child_number": child_number,
+        "root_home": root_home,
+        "selected_leaf_home": selected_leaf_home,
+        "map_node_home": map_node_home,
+        "old_logical_blocks": final_logical_blocks,
+        "node_logical": final_logical_blocks,
+        "leaf_logical": final_logical_blocks + 1,
+        "node_candidate": node_candidate,
+        "leaf_candidate": leaf_candidate,
+        "separator": case["separator"],
+        "expected_map_entries": tuple(expected_map_entries),
+        "expected_map_count": len(expected_map_entries),
+        "expected_role_count": 14,
+        "expected_meta_homes": expected_meta_homes,
+    }
+
+
+@pytest.fixture(scope="session")
 def staged_public_indexed_leaf_split_fixture(
     staged_public_indexed_leaf_split_prestate: dict[str, object],
     jbd2_toolchain: dict[str, object],
@@ -65941,6 +66181,473 @@ def _run_staged_indexed_create_refusal(
     assert trace == ()
     assert media_sha256 == expected_sha256
     assert _sha256(backing) == expected_sha256
+
+
+def test_staged_vfs_indexed_root_growth_uses_sealed_plan_without_io(
+    staged_public_indexed_root_growth_probe_prestate: dict[str, object],
+) -> None:
+    """Dry-stage and abort the depth-one transition without storage I/O."""
+    case = staged_public_indexed_root_growth_probe_prestate
+    path = case["source"]
+    patches = case["source_patches"]
+    child_number = case["child_number"]
+    parent_number = case["parent_number"]
+    parent_generation = case["parent_generation"]
+    root_home = case["root_home"]
+    map_node_home = case["map_node_home"]
+    node_logical = case["node_logical"]
+    leaf_logical = case["leaf_logical"]
+    node_candidate = case["node_candidate"]
+    leaf_candidate = case["leaf_candidate"]
+    separator = case["separator"]
+    expected_map_entries = case["expected_map_entries"]
+    expected_map_count = case["expected_map_count"]
+    expected_role_count = case["expected_role_count"]
+    expected_meta_homes = case["expected_meta_homes"]
+    assert isinstance(path, Path)
+    assert isinstance(patches, tuple)
+    assert isinstance(child_number, int)
+    assert isinstance(parent_number, int)
+    assert isinstance(parent_generation, int)
+    assert isinstance(root_home, int)
+    assert isinstance(map_node_home, int)
+    assert isinstance(node_logical, int)
+    assert isinstance(leaf_logical, int)
+    assert isinstance(node_candidate, int)
+    assert isinstance(leaf_candidate, int)
+    assert isinstance(separator, int)
+    assert isinstance(expected_map_entries, tuple)
+    assert isinstance(expected_map_count, int)
+    assert isinstance(expected_role_count, int)
+    assert isinstance(expected_meta_homes, tuple)
+    assert len(expected_map_entries) == expected_map_count
+    assert all(
+        isinstance(entry, tuple)
+        and len(entry) == 4
+        and all(isinstance(value, int) for value in entry)
+        for entry in expected_map_entries
+    )
+    assert len(expected_meta_homes) == 11
+    parent_home = expected_meta_homes[1]
+
+    order_checks = [
+        "_XC-WRITER @ _EXT4-JWR.META-CREDIT + @ 11 =",
+        "_XC-WRITER @ _EXT4-JWR.META-USED + @ 11 =",
+        "_XC-WRITER @ _EXT4-JWR.META-ACTIVE + @ 11 =",
+        *(
+            f"{index} _XC-WRITER @ _EXT4-JWR-META-ENTRY @ {home} ="
+            for index, home in enumerate(expected_meta_homes)
+        ),
+    ]
+    map_shape_checks = [
+        "_RGP-MAP-IMAGE @ 0<>",
+        "_RGP-MAP-IMAGE @ W@ 0xF30A =",
+        f"_RGP-MAP-IMAGE @ 2 + W@ {expected_map_count} =",
+    ]
+    for index, (logical, length, high, low) in enumerate(
+        expected_map_entries
+    ):
+        offset = 12 + index * 12
+        map_shape_checks.extend(
+            (
+                f"_RGP-MAP-IMAGE @ {offset} + L@ {logical} =",
+                f"_RGP-MAP-IMAGE @ {offset + 4} + W@ {length} =",
+                f"_RGP-MAP-IMAGE @ {offset + 6} + W@ {high} =",
+                f"_RGP-MAP-IMAGE @ {offset + 8} + L@ {low} =",
+            )
+        )
+
+    output = run_forth(
+        path,
+        [
+            "VARIABLE _RGP-CLOCK-CALLS",
+            (
+                ": _RGP-NOW ( context -- epoch-ms ior ) DROP "
+                "1 _RGP-CLOCK-CALLS +! 3000000123456 0 ;"
+            ),
+            "VARIABLE _RGP-COLD-OK",
+            "VARIABLE _RGP-SEALED-STATE",
+            "VARIABLE _RGP-PREFLIGHT-IOR",
+            "VARIABLE _RGP-STAGED",
+            "VARIABLE _RGP-ABORTED",
+            "VARIABLE _RGP-ROLE-COUNT",
+            "VARIABLE _RGP-META-CREDIT",
+            "VARIABLE _RGP-DATA-CREDIT",
+            "VARIABLE _RGP-REVOKE-CREDIT",
+            "VARIABLE _RGP-CREDIT-IOR",
+            "VARIABLE _RGP-SELECTED-ENTRY",
+            "VARIABLE _RGP-ORDER-OK",
+            "VARIABLE _RGP-NODE-FIND-IOR",
+            "VARIABLE _RGP-NODE-FOUND",
+            "VARIABLE _RGP-NODE-IMAGE",
+            "VARIABLE _RGP-NODE-CHECK-IOR",
+            "VARIABLE _RGP-NODE-CHECK-EXACT",
+            "VARIABLE _RGP-NODE-SHAPE",
+            "CREATE _RGP-NODE-CHECK 1024 ALLOT",
+            "VARIABLE _RGP-ROOT-FIND-IOR",
+            "VARIABLE _RGP-ROOT-FOUND",
+            "VARIABLE _RGP-ROOT-IMAGE",
+            "VARIABLE _RGP-ROOT-CHECK-IOR",
+            "VARIABLE _RGP-ROOT-CHECK-EXACT",
+            "VARIABLE _RGP-ROOT-SHAPE",
+            "CREATE _RGP-ROOT-CHECK 1024 ALLOT",
+            "VARIABLE _RGP-MAP-FIND-IOR",
+            "VARIABLE _RGP-MAP-FOUND",
+            "VARIABLE _RGP-MAP-IMAGE",
+            "VARIABLE _RGP-MAP-CHECK-IOR",
+            "VARIABLE _RGP-MAP-CHECK-EXACT",
+            "VARIABLE _RGP-MAP-SHAPE",
+            "CREATE _RGP-MAP-CHECK 1024 ALLOT",
+            "VARIABLE _RGP-PARENT-FIND-IOR",
+            "VARIABLE _RGP-PARENT-FOUND",
+            "VARIABLE _RGP-PARENT-IMAGE",
+            "VARIABLE _RGP-PARENT-SHAPE",
+            ": _RGP-CREATE ( dentry vfs -- ior )",
+            "_XC-V ! _XC-D !",
+            "0 _XC-TARGET ! 0 _XC-LINKING ! 0 _XC-DIRECTORY !",
+            "0 _XC-WRITER ! 0 _XC-TX ! 0 _XC-CTX ! 0 _EXT4-MOW-CTX !",
+            "0 _XC-INDEX-SPLITTING ! 0 _XC-INDEX-ROOT-GROWING !",
+            "0 _XC-INDEX-NODE-HOME ! 0 _XC-INDEX-NODE-GROUP !",
+            "0 _XC-INDEX-NODE-BITMAP-HOME ! 0 _XC-INDEX-NODE-GDT-HOME !",
+            "0 _XC-CONVERTING !",
+            "_XC-ENTRY ?DUP IF _XC-REFUSE-ENTRY EXIT THEN",
+            "_XC-CTX @ _XC-V @ _XC-P-CONTEXT?",
+            "DUP IF NIP _XC-REFUSE-ENTRY EXIT THEN DROP",
+            "_XC-P-BEGIN ?DUP IF _XC-REFUSE EXIT THEN",
+            "-1 OVER _XC-P.INDEX-ROOT-GROWTH-ADMISSION + !",
+            "_XC-NOW ?DUP IF _XC-REFUSE EXIT THEN",
+            "_XC-PLAN ?DUP IF _XC-REFUSE EXIT THEN",
+            (
+                f"_XC-INDEX-SPLITTING @ 0<> "
+                "_XC-INDEX-ROOT-GROWING @ 0<> AND "
+                f"_XC-INDEX-NODE-LOGICAL @ {node_logical} = AND "
+                f"_XC-INDEX-NEW-LOGICAL @ {leaf_logical} = AND"
+            ),
+            (
+                f"_XC-INDEX-NODE-HOME @ {node_candidate} = AND "
+                f"_XC-INDEX-NEW-HOME @ {leaf_candidate} = AND "
+                "_RGP-COLD-OK !"
+            ),
+            "DUP _XC-P.INDEX-BASE-ENTRY + @ _RGP-SELECTED-ENTRY !",
+            "_XC-P-SEAL ?DUP IF _XC-REFUSE EXIT THEN",
+            "DUP _XC-P.STATE + @ _RGP-SEALED-STATE !",
+            "_XC-HP-PREFLIGHT DUP _RGP-PREFLIGHT-IOR !",
+            "?DUP IF _XC-REFUSE EXIT THEN",
+            "_XC-HP-ENSURE",
+            "DUP IF NIP _XC-FAIL EXIT THEN DROP _XC-WRITER !",
+            "_XC-HP-BEGIN-TX",
+            "DUP IF NIP _XC-FAIL EXIT THEN DROP _XC-TX !",
+            "_XC-TX @ _EXT4-JTX-STAGE-INSERT",
+            "?DUP IF _XC-FAIL EXIT THEN",
+            "-1 _RGP-STAGED !",
+            "DUP _XC-P.HOME-COUNT + @ _RGP-ROLE-COUNT !",
+            "_XC-HP-CREDITS@",
+            "_RGP-CREDIT-IOR ! _RGP-REVOKE-CREDIT !",
+            "_RGP-DATA-CREDIT ! _RGP-META-CREDIT !",
+            "-1 _RGP-ORDER-OK !",
+            *(
+                f"{check} _RGP-ORDER-OK @ AND _RGP-ORDER-OK !"
+                for check in order_checks
+            ),
+            (
+                f"{node_candidate} _XC-WRITER @ _EXT4-JFC-FIND-META "
+                "_RGP-NODE-FIND-IOR !"
+            ),
+            "_EXT4-JFC-FOUND @ _RGP-NODE-FOUND !",
+            "_EXT4-JFC-IMAGE @ _RGP-NODE-IMAGE !",
+            (
+                "_RGP-NODE-FIND-IOR @ 0= _RGP-NODE-FOUND @ 0<> "
+                "AND IF"
+            ),
+            "_RGP-NODE-IMAGE @ _RGP-NODE-CHECK 1024 CMOVE",
+            (
+                f"_RGP-NODE-CHECK {parent_number} {parent_generation} "
+                f"{leaf_logical + 1} _XC-CTX @ _EXT4-RESTAMP-DX-NODE "
+                "_RGP-NODE-CHECK-IOR !"
+            ),
+            (
+                "_RGP-NODE-CHECK _RGP-NODE-IMAGE @ 1024 "
+                "_EXT4-BYTES=? _RGP-NODE-CHECK-EXACT !"
+            ),
+            "_RGP-NODE-IMAGE @ 0<> _RGP-NODE-IMAGE @ L@ 0= AND",
+            "_RGP-NODE-IMAGE @ 4 + W@ 1024 = AND",
+            "_RGP-NODE-IMAGE @ 8 + W@ 126 = AND",
+            "_RGP-NODE-IMAGE @ 10 + W@ 124 = AND",
+            "_RGP-NODE-IMAGE @ 12 + L@ 1 = AND",
+            (
+                "_RGP-SELECTED-ENTRY @ 1+ 8 * 8 + "
+                "_RGP-NODE-IMAGE @ + DUP L@ "
+                f"{separator} = SWAP 4 + L@ {leaf_logical} = AND AND "
+                "_RGP-NODE-SHAPE !"
+            ),
+            (
+                "ELSE VFS-E-CORRUPT _RGP-NODE-CHECK-IOR ! "
+                "0 _RGP-NODE-CHECK-EXACT ! 0 _RGP-NODE-SHAPE ! THEN"
+            ),
+            (
+                f"{root_home} _XC-WRITER @ _EXT4-JFC-FIND-META "
+                "_RGP-ROOT-FIND-IOR !"
+            ),
+            "_EXT4-JFC-FOUND @ _RGP-ROOT-FOUND !",
+            "_EXT4-JFC-IMAGE @ _RGP-ROOT-IMAGE !",
+            (
+                "_RGP-ROOT-FIND-IOR @ 0= _RGP-ROOT-FOUND @ 0<> "
+                "AND IF"
+            ),
+            "_RGP-ROOT-IMAGE @ _RGP-ROOT-CHECK 1024 CMOVE",
+            (
+                f"_RGP-ROOT-CHECK {parent_number} "
+                "_XC-PARENT-PARENT-INO @ "
+                f"{parent_generation} {leaf_logical + 1} _XC-CTX @ "
+                "_EXT4-RESTAMP-DX-ROOT _RGP-ROOT-CHECK-IOR !"
+            ),
+            (
+                "_RGP-ROOT-CHECK _RGP-ROOT-IMAGE @ 1024 "
+                "_EXT4-BYTES=? _RGP-ROOT-CHECK-EXACT !"
+            ),
+            "_RGP-ROOT-IMAGE @ 0<> _RGP-ROOT-IMAGE @ 30 + C@ 1 = AND",
+            "_RGP-ROOT-IMAGE @ 34 + W@ 1 = AND",
+            "_RGP-ROOT-IMAGE @ 40 + 976 _EXT4-BYTES-ZERO? AND",
+            (
+                f"_RGP-ROOT-IMAGE @ 36 + L@ {node_logical} = AND "
+                "_RGP-ROOT-SHAPE !"
+            ),
+            (
+                "ELSE VFS-E-CORRUPT _RGP-ROOT-CHECK-IOR ! "
+                "0 _RGP-ROOT-CHECK-EXACT ! 0 _RGP-ROOT-SHAPE ! THEN"
+            ),
+            (
+                f"{map_node_home} _XC-WRITER @ _EXT4-JFC-FIND-META "
+                "_RGP-MAP-FIND-IOR !"
+            ),
+            "_EXT4-JFC-FOUND @ _RGP-MAP-FOUND !",
+            "_EXT4-JFC-IMAGE @ _RGP-MAP-IMAGE !",
+            (
+                "_RGP-MAP-FIND-IOR @ 0= _RGP-MAP-FOUND @ 0<> "
+                "AND IF"
+            ),
+            "_RGP-MAP-IMAGE @ _RGP-MAP-CHECK 1024 CMOVE",
+            (
+                f"_RGP-MAP-CHECK {parent_number} {parent_generation} "
+                "_XC-CTX @ _EXT4-RESTAMP-EXTENT-LEAF "
+                "_RGP-MAP-CHECK-IOR !"
+            ),
+            (
+                "_RGP-MAP-CHECK _RGP-MAP-IMAGE @ 1024 "
+                "_EXT4-BYTES=? _RGP-MAP-CHECK-EXACT !"
+            ),
+            "-1 _RGP-MAP-SHAPE !",
+            *(
+                f"{check} _RGP-MAP-SHAPE @ AND _RGP-MAP-SHAPE !"
+                for check in map_shape_checks
+            ),
+            (
+                "ELSE VFS-E-CORRUPT _RGP-MAP-CHECK-IOR ! "
+                "0 _RGP-MAP-CHECK-EXACT ! 0 _RGP-MAP-SHAPE ! THEN"
+            ),
+            (
+                f"{parent_home} _XC-WRITER @ _EXT4-JFC-FIND-META "
+                "_RGP-PARENT-FIND-IOR !"
+            ),
+            "_EXT4-JFC-FOUND @ _RGP-PARENT-FOUND !",
+            "_EXT4-JFC-IMAGE @ _RGP-PARENT-IMAGE !",
+            (
+                "_RGP-PARENT-FIND-IOR @ 0= _RGP-PARENT-FOUND @ 0<> "
+                "AND IF"
+            ),
+            "_RGP-PARENT-IMAGE @ 0<> _RGP-PARENT-IMAGE @ 512 +",
+            f"DUP 4 + L@ {(leaf_logical + 1) * 1024} =",
+            "SWAP 0x1C + L@ 254 = AND AND _RGP-PARENT-SHAPE !",
+            "ELSE 0 _RGP-PARENT-SHAPE ! THEN",
+            "_XC-TX @ _EXT4-JTX-ABORT ?DUP IF _XC-FAIL EXIT THEN",
+            "-1 _RGP-ABORTED !",
+            "VFS-E-NOSPC _XC-FAIL ;",
+            "CREATE _RGP-OPS VFS-OPS-SIZE ALLOT",
+            "EXT4-STAGED-WRITE-OPS _RGP-OPS VFS-OPS-SIZE CMOVE",
+            "' _RGP-CREATE _RGP-OPS VFS-OP-CREATE CELLS + !",
+            "CREATE _RGP-BINDING VFS-BINDING-DESC-SIZE ALLOT",
+            (
+                "EXT4-STAGED-WRITE-BINDING _RGP-BINDING "
+                "VFS-BINDING-DESC-SIZE CMOVE"
+            ),
+            "_RGP-OPS _RGP-BINDING VB.OPS !",
+            ": _RGP-NEW _RGP-BINDING SWAP VFS-NEW ;",
+            (
+                "T-ARENA T-VOLUME _RGP-NEW "
+                "CONSTANT _RGP-MOUNT-IOR CONSTANT _RGP-V"
+            ),
+            "_RGP-V _EXT4-CTX CONSTANT _RGP-CTX",
+            (
+                "' _RGP-NOW 0 _RGP-V EXT4-BIND-WRITE-CLOCK? "
+                "CONSTANT _RGP-CLOCK-IOR"
+            ),
+            *_ext4_dedicated_writer_profile_forth(
+                "_RGP-PROFILE",
+                "_RGP-V",
+                metadata_capacity=11,
+                data_capacity=0,
+            ),
+            (
+                'S" /fixture/indexed" _RGP-V VFS-CD? '
+                "CONSTANT _RGP-CD-IOR"
+            ),
+            (
+                "_RGP-V V.CWD @ _RGP-V _VFS-ENSURE-CHILDREN? "
+                "CONSTANT _RGP-LOAD-IOR"
+            ),
+            "_RGP-V V.CWD @ D.VNODE @ CONSTANT _RGP-PARENT-VN",
+            "_RGP-V V.ICOUNT @ CONSTANT _RGP-ICOUNT-BEFORE",
+            "_RGP-V V.VCOUNT @ CONSTANT _RGP-VCOUNT-BEFORE",
+            "_RGP-V V.STR-PTR @ CONSTANT _RGP-STR-BEFORE",
+            "_RGP-V V.IFREE @ CONSTANT _RGP-IFREE-BEFORE",
+            "_RGP-PARENT-VN VN.NLINK @ CONSTANT _RGP-NLINK-BEFORE",
+            "_RGP-PARENT-VN VN.SIZE-LO @ CONSTANT _RGP-SIZE-BEFORE",
+            "_RGP-PARENT-VN VN.BLOCKS @ CONSTANT _RGP-BLOCKS-BEFORE",
+            (
+                'S" new.txt" _RGP-V VFS-MKFILE? '
+                "CONSTANT _RGP-DRY-IOR CONSTANT _RGP-DRY-D"
+            ),
+            (
+                'S" new.txt" _RGP-V V.CWD @ _VFS-FIND-CHILD '
+                "CONSTANT _RGP-DRY-CHILD"
+            ),
+            "_RGP-V V.LAST-IOR @ CONSTANT _RGP-DRY-LAST-IOR",
+            "_RGP-V V.ICOUNT @ CONSTANT _RGP-ICOUNT-AFTER-DRY",
+            "_RGP-V V.VCOUNT @ CONSTANT _RGP-VCOUNT-AFTER-DRY",
+            "_RGP-V V.STR-PTR @ CONSTANT _RGP-STR-AFTER-DRY",
+            "_RGP-V V.IFREE @ CONSTANT _RGP-IFREE-AFTER-DRY",
+            (
+                "_RGP-PARENT-VN VN.NLINK @ "
+                "CONSTANT _RGP-NLINK-AFTER-DRY"
+            ),
+            (
+                "_RGP-PARENT-VN VN.SIZE-LO @ "
+                "CONSTANT _RGP-SIZE-AFTER-DRY"
+            ),
+            (
+                "_RGP-PARENT-VN VN.BLOCKS @ "
+                "CONSTANT _RGP-BLOCKS-AFTER-DRY"
+            ),
+            "_RGP-CTX _EXT4-C.J.WRITER + @ CONSTANT _RGP-DRY-WRITER",
+            (
+                "_RGP-DRY-WRITER _EXT4-JWR-IDLE-CLEAN? "
+                "CONSTANT _RGP-DRY-WRITER-CLEAN"
+            ),
+            (
+                "_RGP-CTX _EXT4-C.J.HOME-WRITES + @ "
+                "CONSTANT _RGP-DRY-HOME-WRITES"
+            ),
+            (
+                "_RGP-CTX _EXT4-C.J.WRITE-ACTIVE + @ "
+                "CONSTANT _RGP-DRY-WRITE-ACTIVE"
+            ),
+            (
+                "_RGP-V V.FLAGS @ VFS-F-DIRTY AND "
+                "CONSTANT _RGP-DRY-DIRTY"
+            ),
+            _forth_xc_plan_scrubbed(
+                "_RGP-DRY-PLAN-SCRUBBED", "_RGP-CTX"
+            ),
+            *_forth_accumulated_conjunction(
+                "_RGP-DRY-PRIVATE-CLEAN",
+                [
+                    "_XC-NAME-SNAPSHOT 256 _EXT4-BYTES-ZERO?",
+                    (
+                        "_XC-ROOT-CURRENT "
+                        "_EXT4-STAGED-WRITE-BLOCK-SIZE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    (
+                        "_XC-DIRECTORY-DESC _EXT4-DD-SIZE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    (
+                        "_XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    (
+                        "_XC-CONVERT-PLAN _XC-CONVERT-PLAN-MAX "
+                        "_XC-CONVERT-PLAN-CELLS * CELLS "
+                        "_EXT4-BYTES-ZERO?"
+                    ),
+                    "_XC-INDEX-SPLITTING @ 0=",
+                    "_XC-INDEX-ROOT-GROWING @ 0=",
+                    "_XC-INDEX-NODE-HOME @ 0=",
+                    "_XC-INDEX-NEW-HOME @ 0=",
+                    *_EXT4_MUTATION_OWNER_RANGES_CLEAN_FORTH,
+                ],
+            ),
+            "0 _RGP-V VFS-UNMOUNT CONSTANT _RGP-UNMOUNT-IOR",
+            *_forth_accumulated_conjunction(
+                "_RGP-OK",
+                [
+                    "_RGP-MOUNT-IOR 0=",
+                    "_RGP-CLOCK-IOR 0=",
+                    "_RGP-PROFILE-SIZE-IOR 0=",
+                    "_RGP-PROFILE-BIND-IOR 0=",
+                    "_RGP-CD-IOR 0=",
+                    "_RGP-LOAD-IOR 0=",
+                    "_RGP-DRY-IOR VFS-E-NOSPC =",
+                    "_RGP-DRY-D 0=",
+                    "_RGP-COLD-OK @ 0<>",
+                    "_RGP-SEALED-STATE @ _XC-PS-SEALED =",
+                    "_RGP-PREFLIGHT-IOR @ 0=",
+                    "_RGP-STAGED @ 0<>",
+                    "_RGP-ABORTED @ 0<>",
+                    f"_RGP-ROLE-COUNT @ {expected_role_count} =",
+                    "_RGP-CREDIT-IOR @ 0=",
+                    "_RGP-META-CREDIT @ 11 =",
+                    "_RGP-DATA-CREDIT @ 0=",
+                    "_RGP-REVOKE-CREDIT @ 0=",
+                    "_RGP-ORDER-OK @ 0<>",
+                    "_RGP-NODE-FIND-IOR @ 0=",
+                    "_RGP-NODE-FOUND @ 0<>",
+                    "_RGP-NODE-CHECK-IOR @ 0=",
+                    "_RGP-NODE-CHECK-EXACT @ 0<>",
+                    "_RGP-NODE-SHAPE @ 0<>",
+                    "_RGP-ROOT-FIND-IOR @ 0=",
+                    "_RGP-ROOT-FOUND @ 0<>",
+                    "_RGP-ROOT-CHECK-IOR @ 0=",
+                    "_RGP-ROOT-CHECK-EXACT @ 0<>",
+                    "_RGP-ROOT-SHAPE @ 0<>",
+                    "_RGP-MAP-FIND-IOR @ 0=",
+                    "_RGP-MAP-FOUND @ 0<>",
+                    "_RGP-MAP-CHECK-IOR @ 0=",
+                    "_RGP-MAP-CHECK-EXACT @ 0<>",
+                    "_RGP-MAP-SHAPE @ 0<>",
+                    "_RGP-PARENT-FIND-IOR @ 0=",
+                    "_RGP-PARENT-FOUND @ 0<>",
+                    "_RGP-PARENT-SHAPE @ 0<>",
+                    "_RGP-DRY-CHILD 0=",
+                    "_RGP-DRY-LAST-IOR _RGP-DRY-IOR =",
+                    "_RGP-ICOUNT-AFTER-DRY _RGP-ICOUNT-BEFORE =",
+                    "_RGP-VCOUNT-AFTER-DRY _RGP-VCOUNT-BEFORE =",
+                    "_RGP-STR-AFTER-DRY _RGP-STR-BEFORE =",
+                    "_RGP-IFREE-AFTER-DRY _RGP-IFREE-BEFORE =",
+                    "_RGP-NLINK-AFTER-DRY _RGP-NLINK-BEFORE =",
+                    "_RGP-SIZE-AFTER-DRY _RGP-SIZE-BEFORE =",
+                    "_RGP-BLOCKS-AFTER-DRY _RGP-BLOCKS-BEFORE =",
+                    "_RGP-DRY-WRITER _RGP-PROFILE-BASE =",
+                    "_RGP-DRY-WRITER-CLEAN 0<>",
+                    "_RGP-DRY-HOME-WRITES 0=",
+                    "_RGP-DRY-WRITE-ACTIVE 0=",
+                    "_RGP-DRY-DIRTY 0=",
+                    "_RGP-DRY-PLAN-SCRUBBED 0<>",
+                    "_RGP-DRY-PRIVATE-CLEAN @ 0<>",
+                    "_RGP-CLOCK-CALLS @ 1 =",
+                    "_RGP-UNMOUNT-IOR 0=",
+                ],
+            ),
+            (
+                '_RGP-OK @ IF ." EXT4-INDEX-ROOT-GROWTH-PLAN-OK" '
+                'ELSE ." EXT4-INDEX-ROOT-GROWTH-PLAN-FAIL " '
+                "_RGP-OK-FIRST-FAILURE @ . THEN"
+            ),
+        ],
+        patches=patches,
+        max_steps=1_600_000_000,
+    )
+    _assert_emitted(output, "EXT4-INDEX-ROOT-GROWTH-PLAN-OK")
 
 
 def test_staged_vfs_indexed_create_rejects_checksummed_misbucketed_names(
@@ -86444,9 +87151,9 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
             r"(?m)^\s*(\d+) CELLS CONSTANT (_XC-P\.[A-Z0-9-]+)$",
             facade,
         )
-        if int(index) < 39
-    )
-    assert tuple(index for index, _ in offset_pairs) == tuple(range(39))
+            if int(index) < 45
+        )
+    assert tuple(index for index, _ in offset_pairs) == tuple(range(45))
     assert offset_pairs[0][1] == "_XC-P.STATE"
     old_cells = (
         "_XC-SHAPE-SET",
@@ -86462,7 +87169,7 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
             "_XC-P.PARENT-SNAPSHOT",
         )
     )
-    assert len(set(old_cells)) == 39
+    assert len(set(old_cells)) == 45
     assert len(set(old_buffers)) == 5
     for old_name in (*old_cells, *old_buffers):
         declaration = rf"(?m)^\s*(?:VARIABLE|CREATE)\s+{re.escape(old_name)}\b"
@@ -86471,10 +87178,13 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
         r"(?m)^\s*(?:VARIABLE|CREATE)\s+_XC-P(?:[.\-]|\s|$)", facade
     ) is None
 
-    assert 39 * 8 + 24 + 3 * 1024 + 256 == 3664
+    assert 45 * 8 + 24 + 3 * 1024 + 256 == 3712
     for layout_fragment in (
-        "39 CELLS CONSTANT _XC-P.CONVERT-HASH-BASE",
-        "39 CELLS 24 + CONSTANT _XC-P.DIR-SNAPSHOT",
+        "39 CELLS CONSTANT _XC-P.INDEX-ROOT-GROWTH-ADMISSION",
+        "40 CELLS CONSTANT _XC-P.INDEX-BASE-ROOT-GROWING",
+        "44 CELLS CONSTANT _XC-P.INDEX-BASE-NODE-GDT-HOME",
+        "45 CELLS CONSTANT _XC-P.CONVERT-HASH-BASE",
+        "45 CELLS 24 + CONSTANT _XC-P.DIR-SNAPSHOT",
         "CONSTANT _XC-P.ROOT-SNAPSHOT",
         "CONSTANT _XC-P.INDEX-MAP-SNAPSHOT",
         "CONSTANT _XC-P.PARENT-SNAPSHOT",
@@ -86537,10 +87247,10 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
             r"(?m)^\s*(\d+) CONSTANT (_XC-HR-[A-Z0-9-]+)$", facade
         )
     )
-    assert tuple(value for value, _ in role_constants) == tuple(range(1, 22))
-    assert role_constants[-1] == (21, "_XC-HR-LIMIT")
+    assert tuple(value for value, _ in role_constants) == tuple(range(1, 25))
+    assert role_constants[-1] == (24, "_XC-HR-LIMIT")
     assert "3 CONSTANT _XC-HP-ENTRY-CELLS" in facade
-    assert 3664 + 8 + 20 * 3 * 8 == 4152
+    assert 3712 + 8 + 23 * 3 * 8 == 4272
     assert (
         "_XC-P.HOME-COUNT CELL+ CONSTANT _XC-P.HOME-ENTRIES" in facade
     )
@@ -86583,6 +87293,118 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
         "_XC-STAGE-NEW-INODE"
     )
     assert stage.rstrip().endswith("_XC-WRITER @ _XC-HP-REQUIRE-STAGED")
+
+
+def test_ext4_indexed_root_growth_probe_extends_the_sealed_certificate() -> None:
+    """Ratchet the probe to the XC record instead of another collector."""
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            facade,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    for offset, name in (
+        (39, "_XC-P.INDEX-ROOT-GROWTH-ADMISSION"),
+        (40, "_XC-P.INDEX-BASE-ROOT-GROWING"),
+        (41, "_XC-P.INDEX-BASE-NODE-HOME"),
+        (42, "_XC-P.INDEX-BASE-NODE-GROUP"),
+        (43, "_XC-P.INDEX-BASE-NODE-BITMAP-HOME"),
+        (44, "_XC-P.INDEX-BASE-NODE-GDT-HOME"),
+    ):
+        assert f"{offset} CELLS CONSTANT {name}" in facade
+    for value, name in (
+        (21, "_XC-HR-INDEX-NEW-NODE"),
+        (22, "_XC-HR-INDEX-NODE-BITMAP"),
+        (23, "_XC-HR-INDEX-NODE-GDT"),
+        (24, "_XC-HR-LIMIT"),
+    ):
+        assert f"{value} CONSTANT {name}" in facade
+    assert re.search(
+        r"(?m)^\s*(?:VARIABLE|CREATE)\s+"
+        r"_XC-INDEX-(?:META-)?HOMES?\b",
+        facade,
+    ) is None
+    assert "_XC-INDEX-HOME-MAX" not in facade
+
+    shape = word_body("_XC-P-SHAPE?")
+    auth = word_body("_XC-AUTH-INDEXED-PARENT")
+    bind = word_body("_XC-INDEX-BIND-CANDIDATE-BASELINE")
+    select = word_body("_XC-SELECT-INDEX-BLOCK")
+    same = word_body("_XC-REQUIRE-SAME-INDEX-BLOCK")
+    ranges = word_body("_XC-INDEX-PREPARE-RANGES")
+    map_plan = word_body("_XC-INDEX-PLAN-MAP-EDIT")
+    plan_homes = word_body("_XC-HP-PLAN-HOMES")
+    stage_directory = word_body("_XC-STAGE-INDEX-SPLIT-DIRECTORY")
+    stage_insert = word_body("_EXT4-JTX-STAGE-INSERT")
+    insert = word_body("_XC-INSERT-COMMON")
+
+    assert "_XC-P.INDEX-BASE-ROOT-GROWING + @ _XC-P-FLAG?" in shape
+    assert "_XC-P.INDEX-ROOT-GROWTH-ADMISSION + @ _XC-P-FLAG?" in shape
+    assert "_XC-P.INDEX-BASE-NODE-HOME + @" in shape
+    assert "-1 _XC-INDEX-ROOT-GROWING !" in auth
+    assert "_XC-P.INDEX-BASE-ROOT-GROWING + @ <> OR" in auth
+    assert auth.index("_XC-P.INDEX-BASE-ROOT-GROWING + !") < auth.index(
+        "-1 OVER _XC-P.INDEX-BASELINE + !"
+    )
+    assert bind.index("_XC-P.INDEX-BASE-NODE-GDT-HOME + !") < bind.index(
+        "-1 OVER _XC-P.INDEX-CANDIDATE-BASELINE + !"
+    )
+    assert select.index("_EXT4-FIND-FREE-BLOCK") < select.index(
+        "_EXT4-FIND-FREE-BLOCK-EXCLUDING"
+    )
+    assert "_XC-INDEX-LOCATE-NODE-HOME" in select
+    assert "_XC-INDEX-BIND-CANDIDATE-BASELINE" in select
+    assert "_XC-INDEX-NODE-HOME @ <>" in same
+    assert "_XC-INDEX-NODE-HOME @ 2 _XC-CONVERT-RANGE!" in ranges
+    assert map_plan.index("_XC-INDEX-NODE-HOME @") < map_plan.index(
+        "_XC-INDEX-NEW-HOME @"
+    )
+
+    image_roles = (
+        "_XC-HR-INDEX-NEW-NODE",
+        "_XC-HR-INDEX-NEW-LEAF",
+        "_XC-HR-INDEX-ROOT",
+        "_XC-HR-INDEX-MAP",
+        "_XC-HR-INDEX-NODE-BITMAP",
+        "_XC-HR-INDEX-NODE-GDT",
+        "_XC-HR-PRIMARY-SUPER",
+        "_XC-HR-INDEX-BITMAP",
+        "_XC-HR-INDEX-GDT",
+    )
+    indexed_homes = plan_homes[
+        plan_homes.index("ELSE _XC-INDEX-SPLITTING @ IF") :
+    ]
+    role_positions = tuple(indexed_homes.index(role) for role in image_roles)
+    assert role_positions == tuple(sorted(role_positions))
+    first_leaf = stage_directory.index("_XC-BUILD-CONVERTED-LEAF")
+    grown_node = stage_directory.index("_XC-BUILD-INDEX-GROWN-NODE")
+    second_leaf = stage_directory.index(
+        "_XC-BUILD-CONVERTED-LEAF", first_leaf + 1
+    )
+    assert first_leaf < grown_node < second_leaf
+    assert stage_directory.index("_XC-INDEX-NODE-HOME @") < (
+        stage_directory.index("_XC-INDEX-NEW-HOME @")
+    )
+    node_allocate = stage_insert.index(
+        "_XC-INDEX-NODE-HOME @ _XC-WRITER @"
+    )
+    leaf_allocate = stage_insert.index(
+        "_XC-INDEX-NEW-HOME @ _XC-WRITER @"
+    )
+    assert node_allocate < leaf_allocate
+    assert "_XC-REQUIRE-STAGED-INDEX-NODE" in stage_insert[
+        node_allocate:leaf_allocate
+    ]
+    admission = auth.index("_XC-P.INDEX-ROOT-GROWTH-ADMISSION + @ 0=")
+    refusal = auth.index("VFS-E-NOSPC EXIT", admission)
+    publication = auth.index("-1 _XC-INDEX-ROOT-GROWING !", admission)
+    assert admission < refusal < publication
+    assert "_XC-INDEX-ROOT-GROWING @ IF VFS-E-NOSPC" not in insert
 
 
 def test_ext4_create_home_plan_checks_roles_credits_and_order(
