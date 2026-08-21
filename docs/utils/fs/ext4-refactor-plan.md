@@ -166,8 +166,8 @@ redirected.
   dry/live planning rebinds every expected role, kind, home, and exact
   role count; preflight and writer construction derive per-kind first-seen
   credits; and the final staging boundary reconciles first-seen home order
-  against the transaction tables. The six private collector artifacts and the
-  collector-derived credit path are gone. CREATE's four admitted shapes,
+  against the transaction tables. The six private XC collector artifacts and
+  its collector-derived credit path are gone. CREATE's four admitted shapes,
   canonical MKDIR, and LINK's two- and three-distinct-home cases passed the
   sequential focused gate without changing their checked-in journey caps.
   Relative to Stage 4, the 13-unit closure grew from 30,203 to 30,616 physical
@@ -193,10 +193,10 @@ redirected.
   dry-staged then aborted before writer activation. The later live
   qualification activates, emits, checkpoints, and externally validates the
   exact 11-home transition. Stage 6 then added two locator cells
-  and one operation-owned DX-node snapshot, making the current record 5,312
-  bytes with a 4,752-byte evidence body. An ordinary staged CREATE on a fresh
-  mount of that produced singleton depth-one tree now authenticates all 124
-  leaves and updates one slack leaf through the unchanged exact six-home
+  and one operation-owned DX-node snapshot, making the record 5,312 bytes with
+  a 4,752-byte evidence body at that checkpoint. An ordinary staged CREATE on
+  a fresh mount of that produced singleton depth-one tree now authenticates
+  all 124 leaves and updates one slack leaf through the unchanged exact six-home
   transaction. The production CREATE wrapper now supplies that root-growth
   admission and passes the same exact public journey. A committed W28 tear in
   the new DX-node home leaves the first three checkpoint homes landed, replays
@@ -246,7 +246,7 @@ these recurring mechanisms:
 - validated half-open integer-range algebra;
 - checked LSB0 bitmap operations over caller-described storage;
 - the production source closure and its semantic module boundaries;
-- the CREATE/HTree cross-phase evidence lifetime; and
+- the CREATE/HTree evidence and namespace-operation plan lifetimes; and
 - ordered, role-aware transaction-home preplanning.
 
 Success is fewer independent implementations of the same invariant, not fewer
@@ -466,9 +466,15 @@ hash-authority snapshot, three 1,024-byte block snapshots, and one 256-byte
 inode snapshot. Stage 5 appended its original 488-byte home-plan tail. The
 root-growth probe added six evidence cells and three enum-derived home roles.
 Singleton depth-one mutation subsequently added two evidence cells and one
-1,024-byte DX-node snapshot, making the current record 5,312 bytes and the
-contiguous base-context-plus-record reservation 20,880 bytes. Admission does
-not interpret that record. Its
+1,024-byte DX-node snapshot. The later XU/XR collector migration adds
+operation and owner-context cells to that authority/evidence body and extends
+the enum-derived role universe from 23 to 30 entries. The current record is
+therefore 5,496 bytes: a 4,768-byte authority/evidence body containing the
+existing 47 insertion cells and snapshots plus `OP` and `OWNER-CTX`, followed
+by a 728-byte tail containing one count cell and 30
+`{ role, journal kind, home }` entries. With the unchanged 15,568-byte base
+context, the contiguous base-context-plus-record reservation is 21,064 bytes.
+Admission does not interpret that record. Its
 base context owns only the opaque
 `_EXT4-C.XC-PLAN` pointer and `_EXT4-C.XC-PLAN-SPAN`; the common base context
 is 15,568 bytes. The record must be the exact next allocation after that base
@@ -479,12 +485,13 @@ arena. A retained certificate that fails ownership validation returns a typed
 failure without dereferencing or clearing its untrusted span.
 
 The allocation may remain for the binding lifetime, but its evidence is valid
-for exactly one guarded namespace operation. Each insertion resolves the
-record once, clears it, advances it through building-without-shape,
-building-with-shape, and sealed states, and passes its address explicitly
-through planning and staging. Indexed and linear-to-HTree conversion baselines
-and snapshots become immutable once sealed and are compared during dry and
-live replanning. The ordinary nonconversion linear branch intentionally
+for exactly one guarded namespace operation. Each operation resolves the
+record once, clears it, binds its exact operation and owner context, advances
+it through building-without-shape, building-with-shape, and sealed states, and
+passes its address explicitly through planning and staging. Indexed and
+linear-to-HTree conversion baselines and snapshots become immutable once
+sealed and are compared during dry and live replanning. The ordinary
+nonconversion linear branch intentionally
 refreshes its parent-inode and directory buffers after each phase's
 reauthentication; those buffers remain bounded per-pass workspace so this
 refactor preserves existing refusal behavior rather than turning them into
@@ -498,9 +505,9 @@ scratch after any required committed cache projection. An ownership failure
 never attempts to scrub an untrusted address. No ambient alias to the plan
 record may substitute for an explicit argument, and no callee may retain that
 argument beyond its call. Shared CREATE/MKDIR/LINK threading through
-`_XC-INSERT-COMMON` is an implementation consequence of this lifetime
-boundary; it does not admit indexed MKDIR/LINK or implement Stage 5 home
-planning.
+`_XC-INSERT-COMMON` was the first implementation consequence of this lifetime
+boundary; at the Stage 4 checkpoint it did not admit indexed MKDIR/LINK or
+implement Stage 5 home planning.
 
 The existing public mutation guard remains authoritative. Independent plan
 records must prove isolation and reset behavior, but this stage neither claims
@@ -555,22 +562,23 @@ CREATE shapes above plus canonical MKDIR and LINK, including LINK's two- and
 three-distinct-home cases; each must preserve homes, first-seen order, credit,
 refusal timing, persistent result, and cache projection.
 
-This stage is now complete. The record tail contains one count and 20
-enum-derived triple entries, so capacity follows the declared semantic role
-universe instead of the largest current role vector. Seal checks the complete
+This stage is now complete. At this historical checkpoint the record tail
+contained one count and 20 enum-derived triple entries, so capacity follows
+the declared semantic role universe instead of the largest current role
+vector. Seal checks the complete
 table and the explicit inode/parent, conversion-bitmap, and operation-local GDT
 alias policy. Every exposed plan operation has a production consumer. The old
 collector declarations, reset/add helper, scratch home, count, and credit path
 were deleted together. The focused sequential gate passed the direct plan
 contract, all four CREATE shapes, both one-short credit refusals, MKDIR, and
-both LINK home topologies from a real cold source build. XH and XU retain their
-existing private collectors until feature work reaches those families; no
-compatibility copy of the XC collector remains.
+both LINK home topologies from a real cold source build. At that checkpoint XH
+and XU still retained their private collectors; no compatibility copy of the
+XC collector remained.
 
 XH allocation/hole-fill, XU unlink/rename, recovery, orphan cleanup, and every
-other mutation family remain outside this critical-path pilot. They may
-migrate when later feature work actually needs their seam, but they are not a
-prerequisite to Stage 6 and no new private collector may be added.
+other mutation family were outside that critical-path pilot. No new private
+collector may be added. XU/XR has since migrated at the indexed-deletion seam;
+XH remains future work.
 
 The modern-orphan cleanup walk is not converted to a home list. Its geometry-
 driven constant-space measurement is the correct representation for an
@@ -627,6 +635,50 @@ gated; the next Stage 6 work is the remaining indexed deletion, truncation,
 metadata, and xattr forms. The focused static-contract, combined-refusal, and
 singleton-depth-one MKDIR gate passed sequentially as three tests in 554.75
 host seconds.
+
+Before indexed deletion changes admission, the existing linear UNLINK, RMDIR,
+and RENAME paths now share the binding-owned sealed namespace plan. This is a
+collector-only checkpoint and adds no filesystem behavior. The record binds
+one of the exact `INSERT`, `UNLINK`, `RMDIR`, or `RENAME` operation tags plus
+the owning ext4 context at begin; seal carries both values with the ordered
+role/kind/home vector, and every dry/live stage requires the same operation and
+context before rebinding the exact vector and reconciling first-seen homes
+against the transaction tables.
+
+The linear XU vectors are exact. Nonfinal UNLINK binds metadata roles
+`INODE=target-home`, `PARENT-INODE=parent-home`, and
+`PARENT-DIRECTORY=directory-home`. Direct final UNLINK appends metadata roles
+`INODE-GDT=inode-gdt-home`, `INODE-BITMAP=inode-bitmap-home`, and
+`PRIMARY-SUPER=primary-super-home`. Orphan-backed final UNLINK instead appends
+metadata roles `ORPHAN=orphan-home` and `PRIMARY-SUPER=primary-super-home`.
+RMDIR binds the common first three metadata roles, then metadata
+`RELEASE-BLOCK-GDT=child-block-gdt-home`, metadata
+`RELEASE-BLOCK-BITMAP=child-block-bitmap-home`, metadata
+`PRIMARY-SUPER=primary-super-home`, revoke
+`RELEASE-DIRECTORY=child-directory-block`, metadata
+`INODE-GDT=inode-gdt-home`, and metadata
+`INODE-BITMAP=inode-bitmap-home`. Same-parent RENAME uses the common first
+three metadata roles. Cross-parent regular-file RENAME binds metadata
+`INODE=source-home`, `PARENT-INODE=old-parent-home`,
+`RENAME-NEW-PARENT-INODE=new-parent-home`,
+`PARENT-DIRECTORY=old-directory-home`, and
+`RENAME-NEW-PARENT-DIRECTORY=new-directory-home`; the admitted directory move
+adds metadata `RENAME-CHILD-DIRECTORY=child-directory-home`.
+
+Accordingly, `_XU-META-HOME-MAX`, `_XU-META-HOMES`, `_XU-META-COUNT`,
+`_XU-META-HOME`, `_XU-META-RESET`, and `_XU-ADD-META-HOME` are gone, as is
+credit derived from that collector. Namespace credits now come from
+first-seen distinct homes in the sealed plan. Orphan cleanup is deliberately
+not represented as a bounded role list: its authenticated geometry still
+derives the cleanup credit/revoke requirement, and the XU writer's containing
+capacity is the maximum of that requirement and the sealed namespace plan.
+`_XU-META-CAP` and `_XU-REVOKE-CAP` are therefore containing writer
+capacities, not collector outputs. The linear XU/XR media snapshots remain
+facade-private at this collector-only checkpoint. Indexed UNLINK will move
+their cross-phase authority into the plan
+when it consumes that evidence; this migration itself neither admits indexed
+UNLINK/RMDIR/RENAME nor changes any existing transaction, recovery, or
+persistence behavior. XH retains its private collector for future migration.
 
 ## Verification cadence
 
@@ -711,13 +763,14 @@ derived from caller storage or authenticated geometry, or if source loading
 cannot be qualified within measured system resources without weakening the
 implementation.
 
-The current critical-path cleanup is complete: the namespace-insertion family
-uses one ordered role/kind/home preplan; its cross-phase CREATE/HTree
-evidence has an explicit operation lifetime; scalar range and bitmap contracts
-have one checked Akashic implementation with filesystem wrappers retaining
-their policies; the production facade loads an explicit acyclic source
-closure; the replaced paths are gone; and the accumulated focused regression
-set passes from a real cold source build. XH and XU collector migrations remain
-future cleanup when feature work reaches those families; they do not block the
-transition to the selected indexed-directory vertical and its full
-feature-development qualification cadence.
+The current critical-path cleanup is complete: namespace insertion and the
+linear XU/XR family use one ordered role/kind/home preplan; its cross-phase
+operation and context are sealed alongside CREATE/HTree evidence; scalar range
+and bitmap contracts have one checked Akashic implementation with filesystem
+wrappers retaining their policies; the production facade loads an explicit
+acyclic source closure; and the replaced XC and XU collectors are gone. The
+latest recorded cold-source accumulated gate remains the earlier indexed checkpoint; this
+collector-only migration adds no new measurement claim. XH remains future
+collector cleanup. Indexed UNLINK is the next consumer that must move XU's
+private cross-phase snapshots into the shared record before broadening
+directory admission.

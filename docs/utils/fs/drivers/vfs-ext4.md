@@ -197,23 +197,27 @@ initialized-bitmap policy and retains all later filesystem authority,
 recovery, transaction, mutation, and VFS-operation policy. Consumers should
 not require these internal units directly.
 
-For CREATE/HTree cross-phase evidence and home preplanning, the facade defines
-one 5,312-byte binding-owned record. Its 4,752-byte evidence body contains 47
-cells, a 24-byte hash-authority snapshot, four 1,024-byte block snapshots,
-and one 256-byte inode snapshot. Its 560-byte tail contains one entry-count
-cell and 23 enum-derived `{ role, journal kind, home }` entries; storage is
-derived from the complete semantic role universe rather than a fixed maximum
-for one current topology. The extra root-growth evidence is one explicit
-admission cell plus a derived topology flag and the new DX node's exact home,
+For namespace cross-phase evidence and home preplanning, the facade defines one
+5,496-byte binding-owned record. Its 4,768-byte authority/evidence body contains
+the existing 47 insertion cells, a 24-byte hash-authority snapshot, four
+1,024-byte block snapshots, and one 256-byte inode snapshot, followed by the
+record-scoped `OP` and `OWNER-CTX` cells. Its 728-byte tail contains one
+entry-count cell and 30 enum-derived `{ role, journal kind, home }` entries;
+storage is derived from the complete semantic role universe rather than a
+fixed maximum for one current topology. The extra root-growth evidence is one
+explicit admission cell plus a derived topology flag and the new DX node's exact home,
 group, bitmap home, and descriptor home. Singleton depth-one mutation adds the
 base depth, route-node home, and exact DX-node snapshot; neither path adds a
-second home collection. Namespace planning and staging receive the record
-address explicitly; there is no ambient alias. Seal performs the complete
-bounds, journal-exclusion, uniqueness, and intentional-alias audit. Dry and
-live replanning then reauthenticate and resolve every expected role, kind,
-home, and exact role count before staging, and the final audit reconciles
-first-seen distinct-home order against the transaction tables. Indexed and
-linear-to-HTree conversion evidence becomes immutable after sealing. Ordinary
+second home collection. At begin the record binds exactly one of `INSERT`,
+`UNLINK`, `RMDIR`, or `RENAME` and the owning ext4 context. Namespace planning
+and staging receive the record address explicitly; there is no ambient alias.
+Seal carries that operation and context with the ordered vector and performs
+the complete bounds, journal-exclusion, uniqueness, and intentional-alias
+audit. Dry and live replanning require the same operation and owner context,
+then reauthenticate and resolve every expected role, kind, home, and exact role
+count before staging; the final audit reconciles first-seen distinct-home order
+against the transaction tables. Indexed and linear-to-HTree conversion
+evidence becomes immutable after sealing. Ordinary
 nonconversion linear insertion may refresh its bounded parent-inode and
 directory work buffers after each phase's reauthentication, preserving the
 established refusal behavior, but a sealed ordinary plan cannot become indexed
@@ -221,6 +225,54 @@ or acquire new conversion authority. Each return after record ownership is
 established clears the complete record after any required committed cache
 projection. A failed ownership check does not dereference or clear an untrusted
 pointer; it returns a typed failure without touching that storage.
+
+The linear XU/XR paths use the following exact sealed vectors in transaction
+first-publication order; every unmarked entry has journal kind
+`_XC-HK-META`, and the named home is rebound from authenticated operation
+state in cold, dry, and live planning:
+
+- Nonfinal UNLINK:
+  `_XC-HR-INODE=target-inode-table-home`,
+  `_XC-HR-PARENT-INODE=parent-inode-table-home`,
+  `_XC-HR-PARENT-DIRECTORY=parent-directory-home`.
+- Direct final UNLINK: the same first three entries, followed by
+  `_XC-HR-INODE-GDT=inode-gdt-home`,
+  `_XC-HR-INODE-BITMAP=inode-bitmap-home`, and
+  `_XC-HR-PRIMARY-SUPER=primary-super-home`.
+- Orphan-backed final UNLINK: the common first three entries, followed by
+  `_XC-HR-ORPHAN=orphan-home` and
+  `_XC-HR-PRIMARY-SUPER=primary-super-home`.
+- RMDIR: the common first three entries, followed by
+  `_XC-HR-RELEASE-BLOCK-GDT=child-block-gdt-home`,
+  `_XC-HR-RELEASE-BLOCK-BITMAP=child-block-bitmap-home`,
+  `_XC-HR-PRIMARY-SUPER=primary-super-home`,
+  `_XC-HR-RELEASE-DIRECTORY=child-directory-block` with journal kind
+  `_XC-HK-REVOKE`, `_XC-HR-INODE-GDT=inode-gdt-home`, and
+  `_XC-HR-INODE-BITMAP=inode-bitmap-home`.
+- Same-parent RENAME: the common three metadata entries. Cross-parent
+  regular-file RENAME instead binds `_XC-HR-INODE=source-inode-table-home`,
+  `_XC-HR-PARENT-INODE=old-parent-inode-table-home`,
+  `_XC-HR-RENAME-NEW-PARENT-INODE=new-parent-inode-table-home`,
+  `_XC-HR-PARENT-DIRECTORY=old-parent-directory-home`, and
+  `_XC-HR-RENAME-NEW-PARENT-DIRECTORY=new-parent-directory-home`. The admitted
+  directory move appends
+  `_XC-HR-RENAME-CHILD-DIRECTORY=child-directory-home`.
+
+This collector-only migration deletes `_XU-META-HOME-MAX`,
+`_XU-META-HOMES`, `_XU-META-COUNT`, `_XU-META-HOME`, `_XU-META-RESET`, and
+`_XU-ADD-META-HOME`; UNLINK, RMDIR, and RENAME no longer derive namespace
+credit from that private collection. Credit instead comes from first-seen
+distinct homes in the sealed plan. An orphan-backed UNLINK still sizes its
+containing writer from the larger of those namespace credits and the
+authenticated geometry-derived orphan-cleanup credit/revoke requirement; that
+unbounded cleanup union is deliberately not copied into the bounded role
+vector. `_XU-META-CAP` and `_XU-REVOKE-CAP` are consequently containing
+writer capacities, not remnants of the deleted collector. The linear XU/XR
+media snapshots remain facade-private at this
+collector-only checkpoint. Indexed UNLINK will move their cross-phase
+authority into the shared record when it consumes them. No indexed deletion
+or rename shape, transaction, recovery rule, or persistent result is added by
+this migration. XH retains its private collector for future work.
 
 The post-`abb3f94` implementation sequence is fixed in the
 [ext4 recovery refactor plan](../ext4-refactor-plan.md). That plan records the
@@ -257,7 +309,7 @@ lines, 1,177,113 raw bytes, 27,537 loader-executable lines, and 889,803 packed
 bytes. Relative to Stage 4, Stage 5 adds 413 physical lines, 14,020 raw bytes,
 374 executable lines, 43 packed lines, 9,952 packed bytes, and 20,249,749 cold
 source steps (1.97 percent). This remains net source growth after deleting the
-six private collector artifacts: the payoff is one ordered authorization and
+six private XC collector artifacts: the payoff is one ordered authorization and
 audit path, not an immediate LOC reduction.
 
 At the Stage 4 context checkpoint, a real cold source build loaded CRC in
@@ -436,8 +488,8 @@ writer-arena 8 1 0 fs EXT4-BIND-WRITER-ARENA? THROW
 ```
 
 The common base binding context is 15,568 bytes. The staged constructor also
-reserves the facade's 5,312-byte namespace-plan record from `fs-arena`, not the
-dedicated writer arena. The base-context-plus-record reservation is 20,880
+reserves the facade's 5,496-byte namespace-plan record from `fs-arena`, not the
+dedicated writer arena. The base-context-plus-record reservation is 21,064
 contiguous bytes; other VFS and mount allocations remain separate. The record
 is the exact allocation immediately following the base context and must remain
 inside the arena's allocated prefix. Allocation occurs only after authenticated

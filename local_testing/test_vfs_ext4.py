@@ -4732,7 +4732,7 @@ def _forth_accumulated_conjunction(
 
 
 def _forth_xc_plan_scrubbed(name: str, ctx: str) -> str:
-    """Capture complete binding-owned CREATE-plan withdrawal before unmount."""
+    """Capture complete binding-owned mutation-plan withdrawal before unmount."""
     line = (
         f"{ctx} _EXT4-C.XC-PLAN + @ DUP 0= IF DROP 0 ELSE "
         f"{ctx} _EXT4-C.XC-PLAN-SPAN + @ _XC-P-SIZE = "
@@ -66634,7 +66634,10 @@ def test_staged_vfs_indexed_root_growth_uses_sealed_plan_without_io(
             "_XC-ENTRY ?DUP IF _XC-REFUSE-ENTRY EXIT THEN",
             "_XC-CTX @ _XC-V @ _XC-P-CONTEXT?",
             "DUP IF NIP _XC-REFUSE-ENTRY EXIT THEN DROP",
-            "_XC-P-BEGIN ?DUP IF _XC-REFUSE EXIT THEN",
+            (
+                "_XC-CTX @ _XC-PO-INSERT _XC-P-BEGIN "
+                "?DUP IF _XC-REFUSE EXIT THEN"
+            ),
             "-1 OVER _XC-P.INDEX-ROOT-GROWTH-ADMISSION + !",
             "_XC-NOW ?DUP IF _XC-REFUSE EXIT THEN",
             "_XC-PLAN ?DUP IF _XC-REFUSE EXIT THEN",
@@ -66656,7 +66659,7 @@ def test_staged_vfs_indexed_root_growth_uses_sealed_plan_without_io(
             "?DUP IF _XC-REFUSE EXIT THEN",
             "_XC-HP-ENSURE",
             "DUP IF NIP _XC-FAIL EXIT THEN DROP _XC-WRITER !",
-            "_XC-HP-BEGIN-TX",
+            "_XC-WRITER @ _XC-HP-BEGIN-TX",
             "DUP IF NIP _XC-FAIL EXIT THEN DROP _XC-TX !",
             "_XC-TX @ _EXT4-JTX-STAGE-INSERT",
             "?DUP IF _XC-FAIL EXIT THEN",
@@ -84320,6 +84323,7 @@ def staged_public_rename_fixture(
             "CREATE _RN-BUF 54 ALLOT",
             *expected_forth,
             *_staged_rename_attempt_forth("_RN", epoch_ms=epoch_ms),
+            _forth_xc_plan_scrubbed("_RN-XC-PLAN-SCRUBBED", "_RN-CTX"),
             (
                 "_RN-BUF 54 _RN-FD VFS-READ? "
                 "CONSTANT _RN-READ-IOR CONSTANT _RN-ACTUAL"
@@ -84382,7 +84386,7 @@ def staged_public_rename_fixture(
                         f"_XU-TARGET-HOME @ {inode_home} =",
                         f"_XU-PARENT-HOME @ {parent_home} =",
                         f"_XU-DIR-HOME @ {directory_home} =",
-                        "_XU-META-COUNT @ 0=",
+                        "_RN-XC-PLAN-SCRUBBED",
                         "_RN-HOMES 2 =",
                         "_RN-WRITER _RN-PROFILE-BASE =",
                         "_RN-WRITER _EXT4-JWR-IDLE-CLEAN?",
@@ -84771,6 +84775,7 @@ def test_staged_vfs_rename_compacts_fragmented_one_block_directory(
                 metadata_capacity=2,
                 new_name=new_name,
             ),
+            _forth_xc_plan_scrubbed("_RC-XC-PLAN-SCRUBBED", "_RC-CTX"),
             (
                 f"_RC-BUF {old_size} _RC-FD VFS-READ? "
                 "CONSTANT _RC-READ-IOR CONSTANT _RC-ACTUAL"
@@ -84842,7 +84847,7 @@ def test_staged_vfs_rename_compacts_fragmented_one_block_directory(
                         f"_XU-TARGET-HOME @ {inode_home} =",
                         f"_XU-PARENT-HOME @ {parent_home} =",
                         f"_XU-DIR-HOME @ {directory_home} =",
-                        "_XU-META-COUNT @ 0=",
+                        "_RC-XC-PLAN-SCRUBBED",
                         "_RC-HOMES 2 =",
                         "_RC-WRITER _RC-PROFILE-BASE =",
                         "_RC-WRITER _EXT4-JWR-IDLE-CLEAN?",
@@ -85231,6 +85236,7 @@ def test_staged_vfs_rename_nlink_one_sparse_file_after_unused_dirent(
                 source_path="/fixture/sparse.bin",
                 new_name="renamed.bin",
             ),
+            _forth_xc_plan_scrubbed("_R1-XC-PLAN-SCRUBBED", "_R1-CTX"),
             (
                 f"_R1-BUF {old_size} _R1-FD VFS-READ? "
                 "CONSTANT _R1-READ-IOR CONSTANT _R1-ACTUAL"
@@ -85301,7 +85307,7 @@ def test_staged_vfs_rename_nlink_one_sparse_file_after_unused_dirent(
                         f"_XU-TARGET-HOME @ {inode_home} =",
                         f"_XU-PARENT-HOME @ {parent_home} =",
                         f"_XU-DIR-HOME @ {directory_home} =",
-                        "_XU-META-COUNT @ 0=",
+                        "_R1-XC-PLAN-SCRUBBED",
                         "_R1-HOMES 3 =",
                         "_R1-WRITER _R1-PROFILE-BASE =",
                         "_R1-WRITER _EXT4-JWR-IDLE-CLEAN?",
@@ -86493,6 +86499,7 @@ def staged_cross_parent_rename_fixture(
                 new_name="moved.txt",
                 new_path="/moved.txt",
             ),
+            _forth_xc_plan_scrubbed("_RX-XC-PLAN-SCRUBBED", "_RX-CTX"),
             "_RX-S D.NAME @ _VFS-STR-GET CONSTANT _RX-NLEN CONSTANT _RX-NAME",
             (
                 f"_RX-BUF {old_size} _RX-FD VFS-READ? "
@@ -86575,7 +86582,7 @@ def staged_cross_parent_rename_fixture(
                 _forth_conjunction(
                     [
                         "_RX-CLOCK-CALLS @ 1 =",
-                        "_XU-META-COUNT @ 0=",
+                        "_RX-XC-PLAN-SCRUBBED",
                         "_RX-HOMES 4 =",
                         "_RX-WRITER _RX-PROFILE-BASE =",
                         "_RX-WRITER _EXT4-JWR-IDLE-CLEAN?",
@@ -88435,6 +88442,7 @@ def staged_cross_parent_directory_rename_fixture(
             *_staged_directory_rename_attempt_forth(
                 "_DR", epoch_ms=rename_epoch_ms
             ),
+            _forth_xc_plan_scrubbed("_DR-XC-PLAN-SCRUBBED", "_DR-CTX"),
             (
                 "_DR-S D.NAME @ _VFS-STR-GET "
                 "CONSTANT _DR-NLEN CONSTANT _DR-NAME"
@@ -88519,7 +88527,7 @@ def staged_cross_parent_directory_rename_fixture(
                 _forth_conjunction(
                     [
                         "_DR-CLOCK-CALLS @ 1 =",
-                        "_XU-META-COUNT @ 0=",
+                        "_DR-XC-PLAN-SCRUBBED",
                         "_DR-HOMES 5 =",
                         "_DR-WRITER _DR-PROFILE-BASE =",
                         "_DR-WRITER _EXT4-JWR-IDLE-CLEAN?",
@@ -89849,8 +89857,15 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
         "CONSTANT _XC-P.NODE-SNAPSHOT",
         "CONSTANT _XC-P.INDEX-MAP-SNAPSHOT",
         "CONSTANT _XC-P.PARENT-SNAPSHOT",
+        "CONSTANT _XC-P.OP",
+        "_XC-P.OP CELL+ CONSTANT _XC-P.OWNER-CTX",
+        "_XC-P.OWNER-CTX CELL+ CONSTANT _XC-P.HOME-COUNT",
         "CONSTANT _XC-P-SIZE",
         "3 CONSTANT _XC-PS-SEALED",
+        "1 CONSTANT _XC-PO-INSERT",
+        "2 CONSTANT _XC-PO-UNLINK",
+        "3 CONSTANT _XC-PO-RENAME",
+        "4 CONSTANT _XC-PO-RMDIR",
     ):
         assert layout_fragment in facade
     for admission_fragment in (
@@ -89908,10 +89923,10 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
             r"(?m)^\s*(\d+) CONSTANT (_XC-HR-[A-Z0-9-]+)$", facade
         )
     )
-    assert tuple(value for value, _ in role_constants) == tuple(range(1, 25))
-    assert role_constants[-1] == (24, "_XC-HR-LIMIT")
+    assert tuple(value for value, _ in role_constants) == tuple(range(1, 32))
+    assert role_constants[-1] == (31, "_XC-HR-LIMIT")
     assert "3 CONSTANT _XC-HP-ENTRY-CELLS" in facade
-    assert 4752 + 8 + 23 * 3 * 8 == 5312
+    assert 4752 + 2 * 8 + 8 + 30 * 3 * 8 == 5496
     assert (
         "_XC-P.HOME-COUNT CELL+ CONSTANT _XC-P.HOME-ENTRIES" in facade
     )
@@ -89954,6 +89969,225 @@ def test_ext4_create_cross_phase_context_is_explicit_and_bounded() -> None:
         "_XC-STAGE-NEW-INODE"
     )
     assert stage.rstrip().endswith("_XC-WRITER @ _XC-HP-REQUIRE-STAGED")
+
+
+def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
+    """Pin XU/XR roles, lifecycle, credits, and complete plan withdrawal."""
+    facade = (AKASHIC_ROOT / EXT4_MODULE).read_text(encoding="utf-8")
+
+    def word_body(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^:[ \t]+{re.escape(name)}(?=[ \t\r\n(])"
+            rf"(?P<body>.*?)[ \t]+;",
+            facade,
+        )
+        assert match is not None, f"missing Forth word {name}"
+        return match.group("body")
+
+    for removed in (
+        "_XU-META-HOME-MAX",
+        "_XU-META-HOMES",
+        "_XU-META-COUNT",
+        "_XU-META-HOME",
+        "_XU-META-RESET",
+        "_XU-ADD-META-HOME",
+    ):
+        assert removed not in facade
+
+    begin = word_body("_XC-P-BEGIN")
+    require_sealed = word_body("_XC-P-REQUIRE-SEALED")
+    hp_add = word_body("_XC-HP-ADD")
+    hp_table = word_body("_XC-HP-TABLE?")
+    hp_preflight = word_body("_XC-HP-PREFLIGHT")
+    hp_ensure = word_body("_XC-HP-ENSURE")
+    assert begin.index("_XC-P.OP + !") < begin.index("_XC-P.STATE + !")
+    assert begin.index("_XC-P.OWNER-CTX + !") < begin.index(
+        "_XC-P.STATE + !"
+    )
+    assert "_XC-P.OWNER-CTX + @ 2 PICK <>" in require_sealed
+    assert "_XC-P.OP + @ 2 PICK <> OR" in require_sealed
+    assert "_XC-P-SHAPE? NIP 0=" in require_sealed
+    for owner_consumer in (hp_add, hp_table, hp_preflight, hp_ensure):
+        assert "_XC-P.OWNER-CTX + @" in owner_consumer
+        assert "_XC-CTX @" not in owner_consumer
+
+    inode_alias_roles = tuple(
+        re.findall(r"_XC-HR-[A-Z0-9-]+", word_body("_XC-HP-INODE-TABLE-ROLE?"))
+    )
+    assert inode_alias_roles == (
+        "_XC-HR-INODE",
+        "_XC-HR-PARENT-INODE",
+        "_XC-HR-RENAME-NEW-PARENT-INODE",
+    )
+    gdt_alias_roles = tuple(
+        re.findall(r"_XC-HR-[A-Z0-9-]+", word_body("_XC-HP-GDT-ROLE?"))
+    )
+    assert gdt_alias_roles == (
+        "_XC-HR-INODE-GDT",
+        "_XC-HR-MKDIR-GDT",
+        "_XC-HR-CONVERT-A-GDT",
+        "_XC-HR-CONVERT-B-GDT",
+        "_XC-HR-INDEX-GDT",
+        "_XC-HR-INDEX-NODE-GDT",
+        "_XC-HR-RELEASE-BLOCK-GDT",
+    )
+    alias_policy = word_body("_XC-HP-ALIAS-ALLOWED?")
+    for forbidden_alias_role in (
+        "_XC-HR-ORPHAN",
+        "_XC-HR-RENAME-NEW-PARENT-DIRECTORY",
+        "_XC-HR-RENAME-CHILD-DIRECTORY",
+        "_XC-HR-RELEASE-BLOCK-BITMAP",
+        "_XC-HR-RELEASE-DIRECTORY",
+    ):
+        assert forbidden_alias_role not in alias_policy
+
+    xu_expected = word_body("_XU-HP-EXPECTED-ROLES")
+    xu_homes = word_body("_XU-HP-PLAN-HOMES")
+    assert "_XU-DIRECTORY @ IF 9 EXIT THEN" in xu_expected
+    assert "_XU-ORPHAN @ IF 5 EXIT THEN" in xu_expected
+    assert "_XU-FINAL @ IF 6 ELSE 3 THEN" in xu_expected
+    assert tuple(re.findall(r"_XC-HR-[A-Z0-9-]+", xu_homes)) == (
+        "_XC-HR-INODE",
+        "_XC-HR-PARENT-INODE",
+        "_XC-HR-PARENT-DIRECTORY",
+        "_XC-HR-RELEASE-BLOCK-GDT",
+        "_XC-HR-RELEASE-BLOCK-BITMAP",
+        "_XC-HR-PRIMARY-SUPER",
+        "_XC-HR-RELEASE-DIRECTORY",
+        "_XC-HR-INODE-GDT",
+        "_XC-HR-INODE-BITMAP",
+        "_XC-HR-ORPHAN",
+        "_XC-HR-PRIMARY-SUPER",
+        "_XC-HR-INODE-GDT",
+        "_XC-HR-INODE-BITMAP",
+        "_XC-HR-PRIMARY-SUPER",
+    )
+    assert (
+        "_XC-HR-RELEASE-DIRECTORY _XC-HK-REVOKE "
+        "_XU-DATA-BLOCK @"
+    ) in xu_homes
+    assert xu_homes.count("_XC-HP-BIND-META") == 13
+    assert "_XU-DATA-SUPER-HOME @ _XU-SUPER-HOME @ <>" in xu_homes
+
+    xr_expected = word_body("_XR-HP-EXPECTED-ROLES")
+    xr_homes = word_body("_XR-HP-PLAN-HOMES")
+    assert "_XR-CROSSDIR @ 0= IF 3 EXIT THEN" in xr_expected
+    assert "_XU-DIRECTORY @ IF 6 ELSE 5 THEN" in xr_expected
+    assert tuple(re.findall(r"_XC-HR-[A-Z0-9-]+", xr_homes)) == (
+        "_XC-HR-INODE",
+        "_XC-HR-PARENT-INODE",
+        "_XC-HR-RENAME-NEW-PARENT-INODE",
+        "_XC-HR-PARENT-DIRECTORY",
+        "_XC-HR-RENAME-NEW-PARENT-DIRECTORY",
+        "_XC-HR-RENAME-CHILD-DIRECTORY",
+    )
+    assert xr_homes.count("_XC-HP-BIND-META") == 6
+
+    xu_plan = word_body("_XU-PLAN")
+    xu_caps = word_body("_XU-PLAN-CAPS")
+    xu_stage = word_body("_EXT4-JTX-STAGE-UNLINK-CLOSED")
+    xu_remove = word_body("_XU-REMOVE-COMMON")
+    orphan_stage = word_body("_XU-STAGE-ORPHAN-ADD")
+    xu_lifecycle = (
+        "_XC-P-CONTEXT?",
+        "_XC-P-BEGIN",
+        "_XU-PLAN",
+        "_XC-P-SEAL",
+        "_XU-PLAN-CAPS",
+        "_EXT4-JTX-PREFLIGHT-CAPACITY",
+        "_EXT4-JWR-ENSURE",
+    )
+    xu_positions = tuple(xu_remove.index(name) for name in xu_lifecycle)
+    assert xu_positions == tuple(sorted(xu_positions))
+    assert xu_plan.index("_XC-P-BIND-SHAPE") < xu_plan.index(
+        "_EXT4-STAGED-WRITE-FS-QUALIFY"
+    )
+    assert xu_remove.count("_XC-HP-BEGIN-TX") == 2
+    assert xu_remove.count("_EXT4-JTX-STAGE-UNLINK-CLOSED") == 2
+    assert "_XC-HP-CREDITS@" in xu_caps
+    assert "_XU-CLEANUP-CREDIT @ _XU-META-CAP @ U>" in xu_caps
+    assert "_XU-CLEANUP-REVOKE @ _XU-REVOKE-CAP @ U>" in xu_caps
+    assert "_XU-WRITER @ _EXT4-JWR.META-CREDIT + @ _EXT4-JUA-META !" in (
+        orphan_stage
+    )
+    for exact_credit_consumer in (xu_caps, xu_stage, xu_remove, orphan_stage):
+        assert "_XC-P.HOME-COUNT" not in exact_credit_consumer
+
+    xu_stage_order = (
+        "_XC-P-REQUIRE-SEALED",
+        "_XU-PLAN",
+        "_XC-HP-REQUIRE-CREDITS",
+        "_XU-STAGE-TARGET-INODE",
+        "_XU-STAGE-PARENT-INODE",
+        "_XU-STAGE-DIRECTORY",
+        "_XU-STAGE-ORPHAN-ADD",
+        "_XU-STAGE-DIRECTORY-BLOCK-RELEASE",
+        "_XU-STAGE-FINAL-ACCOUNTING",
+        "_XC-HP-REQUIRE-STAGED",
+    )
+    xu_stage_positions = tuple(xu_stage.index(name) for name in xu_stage_order)
+    assert xu_stage_positions == tuple(sorted(xu_stage_positions))
+    assert "_XC-PO-RMDIR ELSE\n        _XC-PO-UNLINK" in xu_stage
+    assert xu_stage.rstrip().endswith("_XU-WRITER @ _XC-HP-REQUIRE-STAGED")
+
+    xr_plan = word_body("_XR-PLAN")
+    xr_stage = word_body("_EXT4-JTX-STAGE-RENAME")
+    xr_remove = word_body("_XR-RENAME-COMMON")
+    xr_lifecycle = (
+        "_XC-P-CONTEXT?",
+        "_XC-P-BEGIN",
+        "_XU-NOW",
+        "_XR-PLAN",
+        "_XC-P-SEAL",
+        "_XC-HP-PREFLIGHT",
+        "_XC-HP-ENSURE",
+    )
+    xr_positions = tuple(xr_remove.index(name) for name in xr_lifecycle)
+    assert xr_positions == tuple(sorted(xr_positions))
+    assert xr_plan.index("_XC-P-BIND-SHAPE") < xr_plan.index(
+        "_EXT4-STAGED-WRITE-FS-QUALIFY"
+    )
+    assert xr_remove.count("_XC-HP-BEGIN-TX") == 2
+    assert xr_remove.count("_EXT4-JTX-STAGE-RENAME") == 2
+    xr_stage_order = (
+        "_XC-P-REQUIRE-SEALED",
+        "_XR-PLAN",
+        "_XC-HP-REQUIRE-CREDITS",
+        "_XC-HP-REQUIRE-STAGED",
+    )
+    xr_stage_positions = tuple(xr_stage.index(name) for name in xr_stage_order)
+    assert xr_stage_positions == tuple(sorted(xr_stage_positions))
+    assert "_XU-CTX @ _XC-PO-RENAME _XC-P-REQUIRE-SEALED" in xr_stage
+    assert xr_stage.rstrip().endswith("_XU-WRITER @ _XC-HP-REQUIRE-STAGED")
+    assert "_XC-P.HOME-COUNT" not in xr_stage
+    assert "_XC-P.HOME-COUNT" not in xr_remove
+
+    xr_cross_stage = word_body("_XR-STAGE-CROSSDIR")
+    cross_order = (
+        "_XR-STAGE-SOURCE-INODE",
+        "_XU-STAGE-PARENT-INODE",
+        "_XR-STAGE-NP-INODE",
+        "_XU-DIR-HOME @",
+        "_XR-NP-DIR-HOME @",
+        "_XU-DATA-BLOCK @",
+    )
+    cross_positions = tuple(xr_cross_stage.index(name) for name in cross_order)
+    assert cross_positions == tuple(sorted(cross_positions))
+
+    assert "_XC-P-SCRUB _XU-SCRUB-PRIVATE" in word_body("_XU-SCRUB")
+    assert "_XC-P-SCRUB _XR-SCRUB-PRIVATE" in word_body("_XR-SCRUB")
+    for cleanup_word, scrub_word in (
+        ("_XU-REFUSE", "_XU-SCRUB"),
+        ("_XU-P-FAIL", "_XU-SCRUB"),
+        ("_XU-POSTCOMMIT-FAIL", "_XU-SCRUB"),
+        ("_XU-DURABLE-FAIL", "_XU-SCRUB"),
+        ("_XR-REFUSE", "_XR-SCRUB"),
+        ("_XR-FAIL", "_XR-SCRUB"),
+        ("_XR-POSTCOMMIT-FAIL", "_XR-SCRUB"),
+    ):
+        assert scrub_word in word_body(cleanup_word)
+    assert xu_remove.rstrip().endswith("0 _XU-V @ V.LAST-IOR ! _XU-SCRUB\n    0")
+    assert xr_remove.rstrip().endswith("0 _XU-V @ V.LAST-IOR ! _XR-SCRUB\n    0")
 
 
 def test_ext4_indexed_link_and_mkdir_reuse_only_authenticated_leaf_slack(
@@ -90154,7 +90388,14 @@ def test_ext4_indexed_root_growth_probe_extends_the_sealed_certificate() -> None
         (21, "_XC-HR-INDEX-NEW-NODE"),
         (22, "_XC-HR-INDEX-NODE-BITMAP"),
         (23, "_XC-HR-INDEX-NODE-GDT"),
-        (24, "_XC-HR-LIMIT"),
+        (24, "_XC-HR-ORPHAN"),
+        (25, "_XC-HR-RENAME-NEW-PARENT-INODE"),
+        (26, "_XC-HR-RENAME-NEW-PARENT-DIRECTORY"),
+        (27, "_XC-HR-RENAME-CHILD-DIRECTORY"),
+        (28, "_XC-HR-RELEASE-BLOCK-GDT"),
+        (29, "_XC-HR-RELEASE-BLOCK-BITMAP"),
+        (30, "_XC-HR-RELEASE-DIRECTORY"),
+        (31, "_XC-HR-LIMIT"),
     ):
         assert f"{value} CONSTANT {name}" in facade
     assert re.search(
@@ -90273,7 +90514,10 @@ def test_ext4_create_home_plan_checks_roles_credits_and_order(
             "_HP-V _EXT4-CTX CONSTANT _HP-CTX",
             "_HP-CTX _XC-CTX !",
             "CREATE _HP-P _XC-P-SIZE ALLOT",
-            "_HP-P _XC-P-BEGIN NIP CONSTANT _HP-BEGIN-IOR",
+            (
+                "_HP-P _HP-CTX _XC-PO-INSERT _XC-P-BEGIN "
+                "NIP CONSTANT _HP-BEGIN-IOR"
+            ),
             "_HP-P 0 _XC-P-BIND-SHAPE NIP CONSTANT _HP-SHAPE-IOR",
             (
                 "_HP-P _XC-HR-INODE _XC-HK-META 279 _XC-HP-ADD "
@@ -90312,6 +90556,10 @@ def test_ext4_create_home_plan_checks_roles_credits_and_order(
                 "_XC-HP-ADD NIP CONSTANT _HP-SUPER-IOR"
             ),
             "_HP-P _XC-P-SEAL NIP CONSTANT _HP-SEAL-IOR",
+            (
+                "_HP-P _HP-CTX _XC-PO-INSERT _XC-P-REQUIRE-SEALED "
+                "NIP CONSTANT _HP-REQUIRE-IOR"
+            ),
             "_HP-P _XC-P.HOME-COUNT + @ CONSTANT _HP-SEALED-COUNT",
             "_HP-P _XC-HP-CREDITS@",
             "CONSTANT _HP-CREDITS-IOR",
@@ -90377,7 +90625,10 @@ def test_ext4_create_home_plan_checks_roles_credits_and_order(
                 "NIP CONSTANT _HP-ORDERED-IOR"
             ),
             "CREATE _HP-Q _XC-P-SIZE ALLOT",
-            "_HP-Q _XC-P-BEGIN NIP CONSTANT _HP-Q-BEGIN-IOR",
+            (
+                "_HP-Q _HP-CTX _XC-PO-INSERT _XC-P-BEGIN "
+                "NIP CONSTANT _HP-Q-BEGIN-IOR"
+            ),
             "_HP-Q 0 _XC-P-BIND-SHAPE NIP CONSTANT _HP-Q-SHAPE-IOR",
             (
                 "_HP-Q _XC-HR-INODE _XC-HK-META 279 _XC-HP-ADD "
@@ -90409,6 +90660,7 @@ def test_ext4_create_home_plan_checks_roles_credits_and_order(
                     "_HP-GDT-IOR 0=",
                     "_HP-SUPER-IOR 0=",
                     "_HP-SEAL-IOR 0=",
+                    "_HP-REQUIRE-IOR 0=",
                     "_HP-SEALED-COUNT 5 =",
                     "_HP-CREDITS-IOR 0=",
                     "_HP-META-CREDIT 2 =",
