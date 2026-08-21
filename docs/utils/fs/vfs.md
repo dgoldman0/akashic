@@ -131,12 +131,15 @@ extent map, other leaves, and parent geometry immutable. MKDIR may likewise
 insert into a linear parent or authenticated existing slack in either admitted
 HTree depth; its indexed form retains its exact nine roles, allocates only the
 child inode/block, and leaves the HTree topology and parent map/size/sector
-accounting immutable. RMDIR remains linear-parent-only; it releases the inode
-and directory block, decrements parent links
-and `used_dirs`, and revokes the unchanged freed child block in an exact
-`6/0/1` through `8/0/1` transaction. Depth-positive truncation and indexed
-LINK/MKDIR splitting or growth remain outside those envelopes; indexed RMDIR
-and RENAME remain gated. Public
+accounting immutable. RMDIR admits a linear, depth-zero HTree, or singleton
+depth-one HTree parent while retaining the exact canonical empty one-block
+child contract. The indexed form mutates only its selected leaf; root, optional
+DX node, extent map, and siblings remain immutable. It releases the inode and
+directory block, decrements parent links and `used_dirs`, and revokes the
+unchanged freed child block under the unchanged nine semantic roles and exact
+`6/0/1` through `8/0/1` transaction; the canonical topology is 7 META + 1
+REVOKE. Depth-positive truncation and indexed LINK/MKDIR splitting or growth
+remain outside those envelopes; indexed RENAME remains gated. Public
 regular CREATE carries the first HTree root-depth transition through the
 operation-owned sealed plan, exact home certificate, emission, and checkpoint.
 Ordinary staged CREATE can then mutate authenticated slack after a fresh mount
@@ -166,8 +169,14 @@ and singleton depth-one parent authority for all existing lifetimes. Its
 selected-leaf substitution adds no home role or recovery branch, so prior
 linear UNLINK lifetime/recovery evidence composes with the indexed authority;
 only one representative singleton-depth-one direct-final success is newly
-claimed. Indexed LINK/MKDIR splitting and growth plus indexed RMDIR/RENAME
-remain gated.
+claimed. Indexed RMDIR first proves the canonical child block has zero hits in
+the complete parent map, then proves the selected leaf has one hit before the
+paired parent-leaf/child-block owner scan. One same-session singleton-depth-one
+`MKDIR` followed by `RMDIR` passed in 625.48 host seconds; structural and
+source-load/plan-core checks also pass. Existing linear RMDIR recovery and
+indexed topology evidence compose, so no new indexed crash, refusal, external-
+tool, or stable-remount clone is claimed. Indexed LINK/MKDIR splitting and
+growth remain gated; indexed RENAME is the next namespace step.
 HTree depth grows independently when an operation or a pinned corpus requires
 it. The
 ordinary operation-specific cuts retain their earlier contract: W7 candidate

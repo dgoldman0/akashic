@@ -242,8 +242,10 @@ growth, broader map shapes, or another previously gated filesystem behavior.
 Regular-file UNLINK has since reused the same authenticated HTree authority for
 depth-zero and singleton depth-one parents while preserving all existing
 lifetimes and home roles. That slice has one representative success and a
-compositional recovery argument; it does not close indexed deletion or admit
-indexed RMDIR/RENAME.
+compositional recovery argument. Canonical empty-directory RMDIR now reuses the
+same parent authority without changing its child shape or nine semantic roles;
+one same-session singleton-depth-one MKDIR-to-RMDIR journey closes that next
+happy-path step compositionally. Indexed RENAME remains gated and next.
 
 The objective is to establish one authoritative implementation for each of
 these recurring mechanisms:
@@ -649,7 +651,7 @@ with the ordered role/kind/home vector, and every dry/live stage requires the
 same operation and context before rebinding the exact vector and reconciling
 first-seen homes against the transaction tables.
 
-The linear XU vectors are exact. Nonfinal UNLINK binds metadata roles
+The XU vectors are exact. Nonfinal UNLINK binds metadata roles
 `INODE=target-home`, `PARENT-INODE=parent-home`, and
 `PARENT-DIRECTORY=directory-home`. Direct final UNLINK appends metadata roles
 `INODE-GDT=inode-gdt-home`, `INODE-BITMAP=inode-bitmap-home`, and
@@ -689,22 +691,27 @@ Regular-file UNLINK now admits authenticated depth-zero and singleton
 depth-one indexed parents for all three existing lifetimes: nonfinal,
 allocation-free direct final, and orphan-backed closed/open final. The shared
 record owns the parent-inode and selected-directory snapshots for linear XU/XR
-as well as indexed UNLINK; the old private `_XU-PARENT-SNAPSHOT` and
+as well as indexed UNLINK/RMDIR; the old private `_XU-PARENT-SNAPSHOT` and
 `_XU-DIR-SNAPSHOT` are gone without changing the 5,496-byte record geometry.
-Only the `UNLINK` operation tag may bind indexed XU shape, so indexed RMDIR and
-RENAME remain gated.
+An indexed XU shape requires the exact operation tag implied by ambient mode:
+`UNLINK` for a regular target and `RMDIR` for a directory. Cross-family state
+and indexed RENAME remain fail-closed.
 
 The indexed path authenticates the complete parent map, root, mutable hash
 authority, active depth-zero table or singleton depth-one DX node, and every
 checksummed leaf. It binds the selected leaf, route/hash result, root, optional
 node, and parent locator across cold, dry, and live passes. Target-name
-uniqueness and target-inode reference cardinality are global, a complete map
-audit requires the selected leaf exactly once, and the existing unique-owner
-proof follows. The selected leaf substitutes for the linear parent block under
-the unchanged `PARENT-DIRECTORY` role. The root, optional node, extent map, and
-other leaves are immutable. The target must retain a live predecessor in the
-same leaf, preserving the established predecessor-splice recovery schema and
-leaving first-live-entry removal gated.
+uniqueness and target-inode reference cardinality are global. Regular UNLINK
+requires the selected leaf exactly once in the complete parent map before its
+unique-owner proof. Indexed RMDIR first requires zero parent-map hits on the
+canonical child block, then exactly one hit on the selected leaf, before the
+existing paired parent-leaf/child-block owner proof excludes those two owners.
+An external extent-node alias is rejected by the same map hook. The selected
+leaf substitutes for the linear parent block under the unchanged
+`PARENT-DIRECTORY` role. The root, optional node, extent map, and other leaves
+are immutable. The target must retain a live predecessor in the same leaf,
+preserving the established predecessor-splice recovery schema and leaving
+first-live-entry removal gated.
 
 Evidence remains deliberately compositional. One representative public
 singleton-depth-one direct-final removal commits the exact six homes
@@ -714,9 +721,22 @@ other leaf 1497 byte-immutable. The existing indexed topology authority and
 linear UNLINK lifetime/recovery evidence remain applicable because the
 selected-leaf substitution adds no home role or recovery branch. This
 checkpoint claims no new indexed crash, refusal, external-tool, or stable-
-remount evidence and does not close the deletion vertical. The next Stage 6
-work is indexed RMDIR and RENAME; indexed-parent truncation, metadata, and
-xattr forms follow.
+remount evidence.
+
+Indexed RMDIR retains the canonical exact-empty one-block child and unchanged
+nine-role plan: seven distinct META homes plus one REVOKE in the canonical
+same-group topology. A same-session singleton-depth-one `MKDIR` followed by
+`RMDIR` passed in 625.48 host seconds, restored the pre-MKDIR namespace, free
+inode/block counts, parent link, and `used_dirs` while leaving
+`bg_itable_unused` at its advanced high-water mark, and left the root, sole DX
+node, external extent-map node, and sibling leaves byte-immutable while only
+the selected leaf was eligible for mutation. The structural contract and
+source-load/plan-core checks pass. No new indexed crash, refusal, external-tool,
+or stable-remount clone is claimed: existing linear RMDIR lifetime/recovery and
+indexed topology evidence compose because the role vector and recovery protocol
+did not change.
+Indexed RENAME is the next Stage 6 namespace work; indexed-parent truncation,
+metadata, and xattr forms follow.
 
 ## Verification cadence
 
@@ -812,5 +832,7 @@ checkpoint; this collector-only migration adds no new measurement claim. XH
 remains future collector cleanup. Indexed UNLINK now consumes the shared parent-inode and
 selected-directory snapshots for depth-zero and singleton-depth-one parents,
 with one representative runtime success and compositional prior recovery
-evidence. It does not complete indexed deletion: indexed RMDIR/RENAME are next,
-and indexed-parent truncation, metadata, and xattr forms remain ahead.
+evidence. Indexed RMDIR now consumes that same authority for the canonical
+empty child, retains the exact nine roles, and has one same-session singleton-
+depth-one success plus compositional prior recovery evidence. Indexed RENAME is
+next; indexed-parent truncation, metadata, and xattr forms remain ahead.

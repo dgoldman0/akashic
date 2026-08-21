@@ -21948,7 +21948,8 @@ CREATE _XC-OLD-INODE _EXT4-STAGED-WRITE-INODE-SIZE ALLOT
     DUP _XC-P.INDEXED + @ _XC-P-FLAG? 0= IF FALSE EXIT THEN
     DUP _XC-P.INDEXED + @ IF
         DUP _XC-P.OP + @ DUP _XC-PO-INSERT =
-        SWAP _XC-PO-UNLINK = OR 0= IF FALSE EXIT THEN
+        OVER _XC-PO-UNLINK = OR
+        SWAP _XC-PO-RMDIR = OR 0= IF FALSE EXIT THEN
     THEN
     DUP _XC-P.INDEX-BASELINE + @ _XC-P-FLAG? 0= IF FALSE EXIT THEN
     DUP _XC-P.INDEX-CANDIDATE-BASELINE + @ _XC-P-FLAG? 0= IF
@@ -26236,10 +26237,12 @@ CREATE _XT-ZERO _EXT4-MAX-BLOCK ALLOT
 \ UNLINK accepts an authenticated linear parent or a depth-zero/singleton
 \ depth-one HTree parent; the indexed form mutates only its sealed selected
 \ leaf and leaves the root, optional DX node, map, and other leaves immutable.
-\ RMDIR and RENAME remain linear-parent operations.  RMDIR admits only the
-\ exact one-block empty-directory shape produced by this binding's MKDIR
-\ callback.  It releases the directory block and inode together, with a revoke
-\ for the former metadata home and exact used-directory accounting.
+\ RMDIR admits the same authenticated linear, depth-zero, or singleton
+\ depth-one parent shapes as regular-file UNLINK while retaining the exact
+\ one-block empty child shape produced by this binding's MKDIR callback.  It
+\ mutates only the selected parent leaf, releases the child directory block and
+\ inode together, revokes the former metadata home, and applies exact
+\ used-directory accounting.  RENAME remains a linear-parent operation.
 
 VARIABLE _XU-D
 VARIABLE _XU-V
@@ -26344,6 +26347,7 @@ VARIABLE _XU-INDEX-SCAN-HASH
 VARIABLE _XU-INDEX-SCAN-MINOR
 VARIABLE _XU-INDEX-NODE-CHECK-I
 VARIABLE _XU-INDEX-MAP-LIMIT
+VARIABLE _XU-INDEX-MAP-EXPECTED
 VARIABLE _XU-HASH-SUPER
 
 CREATE _XU-NAME-SNAPSHOT 256 ALLOT
@@ -26576,7 +26580,9 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     _XU-CTX @ _EXT4-C.INODE + DUP _EXT4-I.FLAGS + L@ DUP
     _EXT4-INDEX-FL AND 0<> _XU-INDEXED !
     _XU-INDEXED @ IF
-        _XU-SHARED-PLAN _XC-P.OP + @ _XC-PO-UNLINK <> IF
+        _XU-SHARED-PLAN _XC-P.OP + @
+        _XU-DIRECTORY @ IF _XC-PO-RMDIR ELSE _XC-PO-UNLINK THEN
+        <> IF
             2DROP EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
         THEN
         _EXT4-EXTENTS-FL _EXT4-INDEX-FL OR <> IF
@@ -26890,11 +26896,17 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
                 _XU-DIR-INODE @ _XU-INO @ <> IF
                     VFS-E-CONFLICT EXIT
                 THEN
-                _XU-DIR-DTYPE @ DUP IF
-                    1 <> IF
+                _XU-DIRECTORY @ IF
+                    _XU-DIR-DTYPE @ 2 <> IF
                         EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
                     THEN
-                ELSE DROP THEN
+                ELSE
+                    _XU-DIR-DTYPE @ DUP IF
+                        1 <> IF
+                            EXT4-D-DIRECTORY _EXT4-CORRUPT EXIT
+                        THEN
+                    ELSE DROP THEN
+                THEN
                 _XU-PREV-OFF @ 0< _XU-PREV-INODE @ 0= OR IF
                     EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
                 THEN
@@ -27048,12 +27060,18 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     THEN
     0 ;
 
-: _XU-REQUIRE-DIRECTORY-MAP-AUDIT  ( -- ior )
+\ Audit the complete indexed-parent map against one physical block.  A selected
+\ leaf must occur exactly once as data.  A child block about to be released by
+\ RMDIR must occur zero times; the generic map hook also rejects it immediately
+\ if it aliases an external extent node rather than data.
+: _XU-REQUIRE-PARENT-MAP-HITS  ( physical expected-hits -- ior )
     _EXT4-MUTATION-MAP-TARGET @
     _EXT4-MUTATION-MAP-ACTIVE @ OR
-    _EXT4-MUTATION-MAP-HITS @ OR IF VFS-E-BUSY EXIT THEN
+    _EXT4-MUTATION-MAP-HITS @ OR
+    _XU-INDEX-MAP-EXPECTED @ OR IF 2DROP VFS-E-BUSY EXIT THEN
+    _XU-INDEX-MAP-EXPECTED !
     _EXT4-MAP-VALIDATION-LIMIT @ _XU-INDEX-MAP-LIMIT !
-    _XU-DIR-HOME @ _EXT4-MUTATION-MAP-TARGET !
+    _EXT4-MUTATION-MAP-TARGET !
     0 _EXT4-MUTATION-MAP-HITS !
     _XU-DIRECTORY-DESC _EXT4-DD.LOGICAL-BLOCKS + @
     _EXT4-MAP-VALIDATION-LIMIT !
@@ -27062,11 +27080,19 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     0 _EXT4-MUTATION-MAP-ACTIVE !
     0 _EXT4-MUTATION-MAP-TARGET !
     _XU-INDEX-MAP-LIMIT @ _EXT4-MAP-VALIDATION-LIMIT !
-    _XU-IOR @ 0= _EXT4-MUTATION-MAP-HITS @ 1 <> AND IF
+    _XU-IOR @ 0= _EXT4-MUTATION-MAP-HITS @
+        _XU-INDEX-MAP-EXPECTED @ <> AND IF
         EXT4-D-DATA-MAP _EXT4-CORRUPT _XU-IOR !
     THEN
     0 _EXT4-MUTATION-MAP-HITS !
+    0 _XU-INDEX-MAP-EXPECTED !
     _XU-IOR @ ;
+
+: _XU-REQUIRE-DIRECTORY-MAP-AUDIT  ( -- ior )
+    _XU-DIR-HOME @ 1 _XU-REQUIRE-PARENT-MAP-HITS ;
+
+: _XU-REQUIRE-CHILD-ABSENT-FROM-PARENT-MAP  ( -- ior )
+    _XU-DATA-BLOCK @ 0 _XU-REQUIRE-PARENT-MAP-HITS ;
 
 : _XU-DIR-SCAN  ( -- ior )
     0 _XU-DIR-DOT ! 0 _XU-DIR-DOTDOT ! 0 _XU-DIR-FOUND !
@@ -27271,6 +27297,14 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     0 ;
 
 : _XU-PROVE-DIRECTORY-OWNERS  ( -- ior )
+    _XU-INDEXED @ IF
+        \ The paired global scan excludes the authenticated parent and child.
+        \ First prove the child release block is wholly absent from the parent,
+        \ then prove the selected leaf occurs exactly once in its complete map,
+        \ so neither exclusion can hide an internal parent alias.
+        _XU-REQUIRE-CHILD-ABSENT-FROM-PARENT-MAP ?DUP IF EXIT THEN
+        _XU-REQUIRE-DIRECTORY-MAP-AUDIT ?DUP IF EXIT THEN
+    THEN
     _XU-PARENT-INO @ _XU-DIR-HOME @ 1
     _XU-INO @ _XU-DATA-BLOCK @ 1 _XU-CTX @
     _EXT4-REQUIRE-UNIQUE-BLOCK-OWNERS-PAIR ?DUP IF EXIT THEN
@@ -27736,6 +27770,7 @@ CREATE _XU-DIRECTORY-DESC _EXT4-DD-SIZE ALLOT
     0 _XU-INDEX-HASH ! 0 _XU-INDEX-MINOR !
     0 _XU-INDEX-SCAN-HASH ! 0 _XU-INDEX-SCAN-MINOR !
     0 _XU-INDEX-NODE-CHECK-I ! 0 _XU-INDEX-MAP-LIMIT !
+    0 _XU-INDEX-MAP-EXPECTED !
     0 _XU-HASH-SUPER ! ;
 
 : _XU-SCRUB  ( plan -- )

@@ -72,8 +72,8 @@ readable through its detached descriptors and drains on the last staged
 parent or an authenticated depth-zero or singleton depth-one HTree parent. The
 indexed form substitutes its selected checksummed leaf for the linear parent
 block while leaving the HTree root, optional DX node, extent map, other leaves,
-parent size, and parent sector count immutable. Indexed RMDIR and RENAME remain
-gated. The same surface now provides a bounded atomic `MKDIR`: it allocates
+parent size, and parent sector count immutable. Indexed RENAME remains gated.
+The same surface now provides a bounded atomic `MKDIR`: it allocates
 one inode and one globally unowned block, builds a canonical checksummed one-
 block `.`/`..` directory, and inserts its typed name into an authenticated one-
 block linear parent or existing slack in a depth-zero or singleton depth-one
@@ -82,7 +82,10 @@ exact `7/0/0` through `9/0/0` transaction. The indexed form mutates only the
 selected leaf; its HTree root, optional DX node, extent map, other leaves,
 parent size, and parent sector count remain immutable. It also provides bounded
 empty-directory `RMDIR` for that exact canonical child shape. Removal atomically
-splices the typed parent entry,
+splices the typed parent entry from an authenticated linear, depth-zero HTree,
+or singleton depth-one HTree parent. The indexed form mutates only the selected
+leaf and leaves the root, optional DX node, extent map, other leaves, parent
+size, and parent sector count immutable. Removal
 decrements the parent link and group `used_dirs` count, frees the child inode
 and data block, and revokes the freed directory-block home under exact
 `6/0/1` through `8/0/1` credit; the canonical fixture uses `7/0/1`.
@@ -231,7 +234,7 @@ established clears the complete record after any required committed cache
 projection. A failed ownership check does not dereference or clear an untrusted
 pointer; it returns a typed failure without touching that storage.
 
-The linear XU/XR paths use the following exact sealed vectors in transaction
+The XU/XR paths use the following exact sealed vectors in transaction
 first-publication order; every unmarked entry has journal kind
 `_XC-HK-META`, and the named home is rebound from authenticated operation
 state in cold, dry, and live planning:
@@ -274,12 +277,13 @@ unbounded cleanup union is deliberately not copied into the bounded role
 vector. `_XU-META-CAP` and `_XU-REVOKE-CAP` are consequently containing
 writer capacities, not remnants of the deleted collector. The subsequent
 indexed-UNLINK slice removes the private `_XU-DIR-SNAPSHOT` and
-`_XU-PARENT-SNAPSHOT`: linear XU/XR and indexed UNLINK now use the record's
-existing directory and parent-inode snapshots across cold, dry, and live
-planning. Target-inode, child-directory, and RENAME-specific evidence remains
-facade-private. The record geometry is unchanged. Only the `UNLINK` operation
-tag may bind an indexed XU shape; indexed RMDIR and RENAME remain gated. XH
-retains its private collector for future work.
+`_XU-PARENT-SNAPSHOT`: linear XU/XR plus indexed UNLINK and RMDIR now use the
+record's existing directory and parent-inode snapshots across cold, dry, and
+live planning. Target-inode, child-directory, and RENAME-specific evidence
+remains facade-private. The record geometry is unchanged. The exact `UNLINK`
+or `RMDIR` operation tag must agree with ambient removal mode before an indexed
+XU shape can bind; indexed RENAME remains gated. XH retains its private
+collector for future work.
 
 The post-`abb3f94` implementation sequence is fixed in the
 [ext4 recovery refactor plan](../ext4-refactor-plan.md). That plan records the
@@ -2692,14 +2696,22 @@ open references, exactly one dentry reference, and the target outside the
 active CWD. Other valid empty encodings remain typed write-policy refusals;
 loaded children return `NOTEMPTY`.
 
-The parent remains inside the authenticated one-block linear-directory
-envelope and must contain one exact file-type-2 target entry. Its link count
-must be at least three. The parent and child inode maps are independently
-authenticated, then one two-owner reverse-map walk publishes both distinct
-directory ranges and excludes only their two legitimate inode owners. Every
-other allocated inode is checked against both ranges in that single walk.
-Dry and live staging each repeat the proof and recapture the target, child
-block, parent inode, and parent directory before retaining an after-image.
+The parent may use the authenticated one-block linear-directory envelope, a
+depth-zero HTree, or the singleton depth-one HTree emitted by root growth, and
+must contain one exact file-type-2 target entry. Its link count must be at least
+three. Indexed admission authenticates the complete parent map, HTree root,
+primary-super hash authority, active table or sole DX node, and every active
+checksummed leaf. It binds the route/hash and selected leaf across cold, dry,
+and live passes. Before excluding the parent and child from the paired owner
+walk, one complete parent-map pass proves the child release block has zero
+references and a second proves the selected leaf has exactly one. The generic
+map hook also rejects a child-block alias with the parent's external extent
+node. One two-owner reverse-map walk then publishes both distinct directory
+ranges and excludes only their two legitimate inode owners. Every other
+allocated inode is checked against both ranges in that single walk. Dry and
+live staging each repeat the proof and recapture the target, canonical child
+block, parent inode, complete HTree authority, and selected leaf before
+retaining an after-image.
 
 Removal zeroes the complete child inode, decrements and restamps the parent
 inode, splices and restamps the parent directory, clears the child block bit,
@@ -2710,25 +2722,46 @@ superblock after-images. `bg_itable_unused` is deliberately not restored. The
 deduplicated transaction admits exact `6/0/1` through `8/0/1` credit; the
 canonical same-group fixture uses seven metadata homes and one revoke. The
 freed child block is revoke-only and is never written as a checkpoint home.
+The semantic plan remains the unchanged nine roles in canonical order: child
+inode, parent inode, selected parent directory, released-block GDT, released-
+block bitmap, primary super, child-directory revoke, inode GDT, and inode
+bitmap. For an indexed parent the selected leaf occupies the parent-directory
+role; the root, optional DX node, extent map, and sibling leaves are immutable
+authenticated inputs rather than transaction homes.
 
-Clean qualification removes inode 33, restores both allocation counts, the
-parent link count, and `used_dirs`, preserves every other parent-directory
-byte under an independently reconstructed exact splice, and preserves the
-freed child-block bytes. Pinned e2fsprogs 1.47.4 `debugfs` and read-only
-`e2fsck` accept the result, and the following ordinary remount is byte-stable
-and write-free. The canonical checkpoint homes are target inode W22, parent
-inode W23, parent directory W24, GDT W25, block bitmap W26, superblock W27,
-and inode bitmap W28.
+The established linear-parent clean qualification removes inode 33, restores
+both allocation counts, the parent link count, and `used_dirs`, preserves every
+other parent-directory byte under an independently reconstructed exact splice,
+and preserves the freed child-block bytes. Pinned e2fsprogs 1.47.4 `debugfs`
+and read-only `e2fsck` accept the result, and the following ordinary remount is
+byte-stable and write-free. The canonical checkpoint homes are target inode
+W22, parent inode W23, parent directory W24, GDT W25, block bitmap W26,
+superblock W27, and inode bitmap W28.
 
-A W7 descriptor tear retains the directory and both allocations with zero
-home replay. A committed W25 GDT tear leaves the first three complete homes
-plus a torn descriptor; recovery replays all seven after-images while honoring
-the child-block revoke, then reaches a write-free stable remount. Zero-write
-refusal evidence covers a missing clock, missing revoke capacity, six rather
-than seven metadata slots, `used_dirs == 0`, a noncanonical empty child, an
-open reference, and hostile third-inode aliases of either the parent or child
-directory home. The clean RMDIR journey measures 1,016,967,358 steps and its
-stable remount 42,878,737 under the unchanged 1.20-billion runtime watchdog.
+The indexed tranche adds one deliberately compositional runtime result: a
+same-session singleton-depth-one `MKDIR` followed by `RMDIR` passed in 625.48
+host seconds. It exercised the unchanged canonical 7 META + 1 REVOKE
+removal, restored the namespace, free inode/block counts, parent link, and
+`used_dirs` while leaving `bg_itable_unused` at its advanced high-water mark,
+and left the HTree root, sole DX node, external extent-map node, and sibling
+leaves byte-immutable; only the selected leaf was eligible for the RMDIR
+splice. Structural contracts and the source-load/plan-core check also pass. No
+new indexed crash,
+refusal, external-tool, or stable-remount clone is claimed: the established
+linear RMDIR lifetime/recovery evidence and indexed topology evidence compose
+because the selected-leaf substitution adds no semantic role, write-order, or
+recovery branch.
+
+The established linear-parent W7 descriptor tear retains the directory and
+both allocations with zero home replay. A committed W25 GDT tear leaves the
+first three complete homes plus a torn descriptor; recovery replays all seven
+after-images while honoring the child-block revoke, then reaches a write-free
+stable remount. Zero-write refusal evidence covers a missing clock, missing
+revoke capacity, six rather than seven metadata slots, `used_dirs == 0`, a
+noncanonical empty child, an open reference, and hostile third-inode aliases of
+either the parent or child directory home. The clean linear RMDIR journey
+measures 1,016,967,358 steps and its stable remount 42,878,737 under the
+unchanged 1.20-billion runtime watchdog.
 
 ### Bounded hard LINK
 
@@ -2979,8 +3012,10 @@ boundary and compositional recovery argument are qualified, draft-closing the
 namespace-insertion tranche. Indexed LINK/MKDIR splitting and growth remain
 gated. Regular-file UNLINK now admits depth-zero and singleton depth-one
 indexed parents without changing its existing lifetime or transaction shapes.
-Indexed RMDIR and RENAME remain gated and are the next namespace work;
-indexed-parent truncation, metadata, and xattr forms follow later in Stage 6.
+RMDIR now admits the same depth-zero and singleton depth-one parent authority
+without changing its canonical child or nine-role release transaction. Indexed
+RENAME remains gated and is the next namespace work; indexed-parent
+truncation, metadata, and xattr forms follow later in Stage 6.
 
 ### Same-retained-block shrink TRUNCATE
 
@@ -3200,7 +3235,8 @@ proof remain explicit later boundaries. The bounded empty-directory `RMDIR`
 path is a separate operation with its own admission and revoke contract.
 The indexed-parent extension applies to all three existing regular-file
 lifetimes; it does not narrow nonfinal, direct-final, or orphan-backed
-closed/open handling, and it does not admit indexed RMDIR or RENAME.
+closed/open handling. Directory removal remains the separate RMDIR operation,
+and indexed RENAME remains gated.
 
 The target and parent must be root-owned objects on the qualified 1 KiB/
 256-byte-inode staged geometry. The target inode, its complete current extent
@@ -3867,8 +3903,10 @@ The ratchet order is:
    regular-file UNLINK now retains all three existing lifetimes in authenticated
    depth-zero and singleton depth-one parents, with one representative
    singleton-depth-one direct-final success and compositional prior recovery
-   evidence; next admit indexed RMDIR and RENAME before indexed-parent
-   truncation, metadata, and xattr forms; and
+   evidence; canonical empty-directory RMDIR now admits those same parent
+   depths with one same-session singleton-depth-one MKDIR-to-RMDIR success and
+   compositional prior recovery evidence; next admit indexed RENAME before
+   indexed-parent truncation, metadata, and xattr forms; and
 9. perform the final profile closure audit across every profile-admitted
    operation and recovery state.
 
@@ -3897,7 +3935,8 @@ no broader geometry or operation inherits that status.
 `TRUNCATE`, and bounded regular-file
 `UNLINK`—including nonfinal, direct empty-final, and orphan-backed closed/open
 final removal from admitted linear, depth-zero HTree, or singleton depth-one
-HTree parents—and bounded linear-parent canonical empty-directory `RMDIR` plus
+HTree parents—and bounded canonical empty-directory `RMDIR` from those same
+admitted parent shapes plus
 bounded regular-file `LINK` dispatch slots to its copy of the ordinary table. It also
 installs staged `RELEASE` and `SYNCFS` lifetime handling. The current worktree
 installs the qualified
@@ -3955,9 +3994,11 @@ allocation state while atomically publishing link zero, parent/target times,
 the directory splice, a singleton modern orphan, and `ORPHAN_PRESENT`. Closed
 targets drain immediately; open targets remain readable until the last staged
 `RELEASE`, which reauthenticates and drains that same inode/generation. Staged
-`SYNCFS` returns `BUSY` while the singleton is live. Bounded `RMDIR` remains
-limited to an authenticated linear parent and accepts only the canonical
-one-block empty directory produced by MKDIR. It
+`SYNCFS` returns `BUSY` while the singleton is live. Bounded `RMDIR` accepts an
+authenticated linear, depth-zero HTree, or singleton depth-one HTree parent and
+only the canonical one-block empty directory produced by MKDIR. The indexed
+form mutates only the selected leaf; root, optional DX node, map, and siblings
+remain immutable. It
 uses exact `6/0/1` through `8/0/1` credit to remove the typed parent entry,
 decrement parent links and `used_dirs`, free the inode and directory block,
 and revoke the unchanged freed block; the canonical path is `7/0/1`. Bounded
@@ -4056,10 +4097,11 @@ CREATE/TRUNCATE/UNLINK capstone passes all 11 selected tests sequentially in
 canonical `.`/`..` construction, parent-link and `used_dirs` accounting,
 four zero-write refusal gates, W7 precommit rollback, and W25 committed
 eight-home replay, with pinned external-tool and stable-remount acceptance.
-Bounded RMDIR adds a single-walk two-owner proof, exact parent namespace and
-inode after-image oracles, inode/block release with parent-link and
-`used_dirs` decrement, a revoke-only freed child block, six zero-write refusal
-gates plus hostile aliases of each protected owner range, W7 rollback, and W25
+The established linear-parent RMDIR qualification adds a single-walk two-owner
+proof, exact parent namespace and inode after-image oracles, inode/block release
+with parent-link and `used_dirs` decrement, a revoke-only freed child block, six
+zero-write refusal gates plus hostile aliases of each protected owner range, W7
+rollback, and W25
 committed seven-home replay. Pinned external tools and the write-free stable
 remount accept the result. Bounded hard LINK adds exact shared-home and
 distinct-parent transaction topologies, shared-vnode and open-FD publication,
