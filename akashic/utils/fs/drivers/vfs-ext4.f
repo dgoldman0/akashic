@@ -20212,8 +20212,9 @@ EXT4-OPS ,
 \ measured topology.  CREATE additionally allocates one initialized-group
 \ inode and inserts it into authenticated slack in a one-block linear
 \ directory through an at-most-six-metadata-home transaction.  MKDIR extends
-\ that authority with one initialized checksummed directory block, exact link
-\ accounting, and an at-most-nine-metadata-home transaction.  TRUNCATE first
+\ that insertion authority across admitted linear or existing indexed slack
+\ with one initialized checksummed directory block, exact link accounting, and
+\ an at-most-nine-metadata-home transaction.  TRUNCATE first
 \ admits strict shrink inside the current retained initialized block.  Its
 \ zeroed tail and inode record are committed together as exact 2/0/0 metadata
 \ payloads.  Zero-size TRUNCATE releases every allocation in a valid zero-
@@ -21706,9 +21707,12 @@ CREATE _XB _EXT4-MAX-BLOCK ALLOT
 \ canonical depth-zero HTree root plus two packed leaves.  A full depth-zero
 \ leaf may split while its root retains an entry slot; a saturated root may grow
 \ through one new DX node and one new leaf.  LINK reuses the linear or indexed
-\ slack-insertion authority without allocating; indexed LINK leaf splitting,
-\ indexed MKDIR, depth-one leaf splitting, ACL inheritance, non-root credential
-\ policy, and other directory growth remain explicit unsupported edges.
+\ slack-insertion authority without allocating.  MKDIR reuses the same
+\ authenticated indexed slack while retaining its existing child-directory
+\ allocation transaction.  Indexed LINK/MKDIR leaf splitting remains an
+\ explicit no-growth `NOSPC` edge; depth-one CREATE leaf splitting, ACL
+\ inheritance, non-root credential policy, and other directory growth remain
+\ explicit unsupported edges.
 \ Each admitted edit is one complete metadata-only journal transaction.
 
 \ The binding record above carries the ordered role/kind/home certificate.
@@ -23268,7 +23272,8 @@ VARIABLE _XC-HASH-SUPER
         _XC-INDEX-SPLIT-SEEN @ 0= IF VFS-E-NOSPC EXIT THEN
         -1 _XC-INDEX-SPLITTING !
     THEN
-    _XC-INDEX-SPLITTING @ _XC-LINKING @ 0= AND IF
+    _XC-INDEX-SPLITTING @ _XC-LINKING @ 0= AND
+    _XC-DIRECTORY @ 0= AND IF
         _XC-INDEX-DEPTH @ 0= IF
             _XC-DIRECTORY-DESC _EXT4-DD.DX-COUNT + @
             _XC-DIRECTORY-DESC _EXT4-DD.DX-LIMIT + @ U< 0= IF
@@ -23291,6 +23296,7 @@ VARIABLE _XC-HASH-SUPER
             OVER _XC-P.INDEX-BASE-ROOT-GROWING + !
     THEN
     _XC-INDEX-SPLITTING @ _XC-LINKING @ AND IF VFS-E-NOSPC EXIT THEN
+    _XC-INDEX-SPLITTING @ _XC-DIRECTORY @ AND IF VFS-E-NOSPC EXIT THEN
     _XC-INDEX-SPLITTING @ _XC-INDEX-DEPTH @ AND IF
         EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
     THEN
@@ -23784,9 +23790,6 @@ VARIABLE _XC-NEW-DIR-IMAGE
         _EXT4-EXTENTS-FL _EXT4-INDEX-FL OR <> IF
             EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
         THEN
-        _XC-DIRECTORY @ IF
-            EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
-        THEN
     ELSE
         _XC-PARENT-FLAGS @ _EXT4-EXTENTS-FL <> IF
             EXT4-D-WRITE-POLICY _EXT4-UNSUPPORTED EXIT
@@ -23982,8 +23985,8 @@ VARIABLE _XC-NEW-DIR-IMAGE
         _XC-PARENT-INO @ _XC-DIR-HOME @ 1
         _XC-DATA-BLOCK @ 1 _XC-CTX @
         _EXT4-REQUIRE-UNIQUE-BLOCK-OWNER-PAIR ?DUP IF EXIT THEN
-        \ The parent's complete one-block map proves that its exclusion from
-        \ the scan cannot hide ownership of the distinct free candidate.
+        \ The parent's complete authenticated map proves that its exclusion
+        \ from the scan cannot hide ownership of the distinct free candidate.
         \ Restore both namespace and allocation authority after each dry/live
         \ proof before any afterimage is retained.
         _XC-CAPTURE-PARENT-DIRECTORY ?DUP IF EXIT THEN

@@ -126,8 +126,8 @@ allocation candidates in one filesystem-wide range scope. The credential and
 inheritance envelope remains explicit:
 root-owned, non-setgid parents without inline or external xattrs/default ACLs
 create root-owned mode-0666 files. Depth-one CREATE leaf splitting, indexed
-LINK leaf splitting/growth, indexed MKDIR, wider indexed-map policy, and lazy
-inode-table initialization remain unsupported. The first shrink `TRUNCATE`
+LINK/MKDIR leaf splitting/growth, wider indexed-map policy, and lazy inode-table
+initialization remain unsupported. The first shrink `TRUNCATE`
 slice is now public as well:
 it accepts a strict new EOF inside the old final initialized block, journals
 the zeroed retained-block tail and checksummed inode together as exact `2/0/0`
@@ -164,12 +164,16 @@ removal is also operation-admitted. Its exact `4/0/0` or `5/0/0` namespace ADD
 publishes link zero and a singleton modern orphan while retaining the complete
 map/allocation state. Closed targets drain immediately; descriptor-retained
 targets remain readable and drain on the last staged `RELEASE`. Staged
-`SYNCFS` returns `BUSY` while that orphan is live. The first bounded `MKDIR` slice is
-now public too. It allocates one inode and one data block, constructs a
-checksummed one-block `.`/`..` directory, inserts its typed name in the
-authenticated linear parent, increments the parent link count and group
-`used_dirs`, and commits all namespace, allocation, and accounting state in one
-exact `7/0/0` through `9/0/0` transaction. A precommit descriptor tear rolls
+`SYNCFS` returns `BUSY` while that orphan is live. The first bounded `MKDIR`
+slice is now public too. It allocates one inode and one data block, constructs a
+checksummed one-block `.`/`..` directory, and inserts its typed name in an
+authenticated linear parent or existing slack in a depth-zero or singleton
+depth-one HTree. The indexed form mutates only the selected leaf and leaves the
+HTree topology plus parent map/size/sector accounting unchanged. It increments
+the parent link count and group `used_dirs`, and commits all namespace,
+allocation, and accounting state in one exact `7/0/0` through `9/0/0`
+transaction. In the established linear-parent crash qualification, a precommit
+descriptor tear rolls
 the provisional directory back without allocation, while a committed child-
 directory-home tear retains the public directory and replays all eight
 canonical homes. Bounded empty-directory `RMDIR` is now public for that exact
@@ -201,10 +205,11 @@ growth, and full-leaf splitting under a depth-zero root with entry capacity are
 operation-admitted. Public indexed root-depth growth and stable singleton
 depth-one CREATE are qualified, including representative committed root-growth
 replay, a byte-stable remount, exact one-short credit refusal, and unrelated-
-owner rejection. Existing-slack indexed LINK is qualified for admitted depth-
-zero and singleton depth-one parents. Its remaining refusal/recovery boundary
-qualification and indexed MKDIR are later directory work; indexed LINK
-splitting/growth remains gated.
+owner rejection. Existing-slack indexed LINK and MKDIR are admitted for depth-
+zero and singleton depth-one parents. LINK has happy-path qualification at both
+depths; MKDIR has one representative depth-zero qualification, with its depth-
+one and accumulated boundary/recovery checks deferred to draft closure.
+Indexed LINK/MKDIR splitting and growth remain gated.
 Extent-tree
 depth and indexed-directory HTree depth are
 independent ratchets. Broaden either only when the next operation or a pinned
@@ -2239,21 +2244,25 @@ takes 1,397,480,707, and the stable mount takes 47,211,173 under a scoped
 sequentially in 673.75 host seconds, and the separate four-home qualification
 passes in 371.80 seconds.
 
-The first public `MKDIR` slice uses the same provisional-object VFS contract as
-CREATE, but admits only a root-owned, non-setgid parent in the authenticated
-one-block linear-directory envelope. The parent must have no inline or external
-xattrs, no HTree index, exactly one initialized extent, a complete valid dirent
-chain and checksum tail, insertion slack, and an on-disk link count from 2
-through 64999. Indexed or multi-block parents, directory growth, inherited ACL
-or setgid policy, non-root ownership, lazy inode-table initialization, and an
-exhausted parent link count refuse without approximation.
+The public `MKDIR` slice uses the same provisional-object VFS contract as
+CREATE. Its root-owned, non-setgid, no-xattr parent may be an authenticated one-
+block linear directory, a depth-zero HTree, or the singleton depth-one HTree
+emitted by root growth. Indexed insertion requires existing slack in the hash-
+selected checksummed leaf and binds the complete leaf permutation, root, route,
+and optional sole DX node across cold, dry, and live passes. The HTree topology,
+parent map, size, and sector count remain immutable. The parent link count must
+be from 2 through 64999. A full selected indexed leaf returns `VFS-E-NOSPC`;
+MKDIR never converts, splits, or grows the parent. Inherited ACL or setgid
+policy, non-root ownership, broader maps, lazy inode-table initialization, and
+an exhausted parent link count refuse without approximation.
 
 Selection authenticates one initialized inode-bitmap slot and one clear data-
-bitmap bit. The complete parent map and the candidate block are checked in a
-paired owner proof: the parent owns its sole directory block exactly once and
-the distinct candidate has no filesystem owner. Dry staging occurs before
-journal activation, and live staging repeats the ownership proof and all
-locators from current media. The child is a root-owned mode-0755 directory with
+bitmap bit. A complete parent-map audit proves that the selected linear block
+or indexed leaf occurs exactly once in that parent. A paired whole-filesystem
+owner proof then excludes every other inode from both that selected block and
+the distinct child candidate. Dry staging occurs before journal activation,
+and live staging repeats the ownership proof plus complete parent and candidate
+authority from current media. The child is a root-owned mode-0755 directory with
 link count two, size one filesystem block, one depth-zero initialized extent,
 and exact sector accounting. Its checksummed data block contains canonical
 `.` and `..` entries followed by the checksum tail. The parent receives the
@@ -2264,17 +2273,24 @@ affected metadata checksums.
 
 The transaction contains no ordered data and no revoke. Its deduplicated
 metadata credit is exactly `7/0/0` through `9/0/0`, depending on inode-table
-and primary-GDT page sharing. The canonical fixture consumes `8/0/0` across
-the child and parent inode-table blocks, parent and child directory blocks,
-inode and block bitmaps, primary GDT block, and primary superblock. Clean
+and primary-GDT page sharing. For indexed MKDIR, the parent-directory role is
+the selected leaf; the root, optional DX node, map, and other leaves are
+authenticated immutable inputs rather than transaction homes. The canonical
+linear fixture consumes `8/0/0` across the child and parent inode-table blocks,
+parent and child directory blocks,
+inode and block bitmaps, primary GDT block, and primary superblock. The linear
 qualification creates `/newdir`, validates the raw inode, extent, bitmaps,
 dirent chains, link/free/used-directory accounts and cache projection, then
 passes pinned e2fsprogs 1.47.4 `debugfs` and read-only `e2fsck` plus a zero-write
-byte-stable ordinary remount. Missing-clock, seven-home-profile, indexed-parent,
-and checksum-valid `used_dirs`-over-allocated-inodes refusals leave both media
-and cache unchanged.
+byte-stable ordinary remount. A representative depth-zero indexed success also
+qualifies the unchanged nine-role/eight-home transaction, selected-leaf edit,
+immutable root/node/map topology, and accounting. The production path
+admits the same operation through singleton depth one; its shape-specific happy
+test and the indexed refusal/recovery matrix remain for draft closure. Missing-
+clock, seven-home-profile, and checksum-valid `used_dirs`-over-allocated-inodes
+refusals leave both media and cache unchanged.
 
-Crash qualification covers both sides of commit authority. A W7 descriptor
+Linear-parent crash qualification covers both sides of commit authority. A W7 descriptor
 tear returns the precommit volume error, removes the provisional VFS object,
 retains both allocation bits and every ext4 home, and requires zero home replay.
 A committed W25 child-directory checkpoint tear has already published the
@@ -2513,10 +2529,11 @@ the root retains an entry slot. Public regular CREATE now completes the exact
 singleton root-growth transition, and stable singleton depth-one CREATE is
 qualified. Representative committed root-growth replay and a write-free stable
 remount are also complete, as are focused credit and reverse-owner boundaries.
-Existing-slack indexed `LINK` is qualified for admitted depth-zero and singleton
-depth-one parents. Its remaining refusal/recovery boundary qualification and
-indexed `MKDIR` are later directory work; indexed LINK splitting/growth remains
-gated.
+Existing-slack indexed `LINK` and `MKDIR` are admitted for depth-zero and
+singleton depth-one parents. LINK has happy-path qualification at both depths;
+MKDIR has one representative depth-zero qualification. Their accumulated
+boundary/recovery and MKDIR depth-one checks remain for draft closure; indexed
+LINK/MKDIR splitting and growth remain gated.
 
 Profile completion does not waive the larger bidirectional matrix: externally
 created and journaled images, Akashic mutations inspected by external tools,

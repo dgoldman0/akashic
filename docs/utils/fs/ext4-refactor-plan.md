@@ -207,8 +207,8 @@ redirected.
   exact ten-versus-eleven-home profile refusal then completed in 346,405,702 of
   1,600,000,000 steps; the unrelated-inode root-owner refusal completed in
   564,354,763 of 1,600,000,000. Both observed zero writes and flushes and an
-  identical pre/post image SHA-256. This closes the focused root-growth vertical;
-  indexed LINK/MKDIR is the next directory feature boundary. The original
+  identical pre/post image SHA-256. This closed the focused root-growth vertical
+  and handed off to the indexed LINK/MKDIR directory boundary. The original
   exact source-mode qualification
   passed with the 13-unit ext4 closure loading in 1,073,526,553 of
   1,600,000,000 steps across 3,842 packed
@@ -226,12 +226,15 @@ advance `HEAD`, but that commit remains the behavior, ordering, persistent-byte,
 and crash comparison baseline. It includes bounded depth-zero HTree full-leaf
 CREATE and its recovery qualification. Stage 6 has now crossed positive HTree
 root-depth activation, representative committed replay, stable-remount
-boundaries, and the first existing-slack indexed LINK happy-path slice. Exact
+boundaries, and the first existing-slack indexed LINK and MKDIR happy-path
+slices. Exact
 one-short credit and unrelated-owner refusal close the focused root-growth
-vertical. The LINK slice admits only depth-zero and singleton depth-one parents
-without growth. Refactoring must not silently broaden it to LINK leaf splitting
-or growth, indexed MKDIR, broader map shapes, or another previously gated
-filesystem behavior.
+vertical. Both namespace slices admit only existing slack in depth-zero and
+singleton depth-one parents without parent growth. LINK has happy-path evidence
+at both depths; MKDIR has one representative depth-zero qualification while its
+depth-one and accumulated boundary/recovery checks wait for draft closure.
+Refactoring must not silently broaden either operation to leaf splitting or
+growth, broader map shapes, or another previously gated filesystem behavior.
 
 The objective is to establish one authoritative implementation for each of
 these recurring mechanisms:
@@ -602,13 +605,16 @@ byte-stable remount. Its exact-credit and unrelated-owner boundaries refuse
 without writes or flushes and retain byte-identical media. The broader refusal
 matrix does not interrupt the next indexed-directory feature sequence.
 
-The next positive slice reuses that authenticated HTree authority for hard LINK
-without adding roles or allocation. Its happy paths cover existing slack in
-depth-zero and singleton depth-one parents; the exact three roles remain target
-inode, parent inode, and selected leaf, while the root, optional DX node, extent
-map, other leaves, and accounting remain immutable. This is a positive
-milestone only: indexed LINK splitting/growth and its focused refusal/recovery
-boundary gate remain open, and indexed MKDIR remains gated.
+The indexed namespace slices reuse that authenticated HTree authority without
+adding plan machinery. LINK keeps its exact three roles and no allocation;
+MKDIR keeps its exact nine roles and child inode/block allocation. Both admit
+existing slack in depth-zero and singleton depth-one parents while the root,
+optional DX node, extent map, other leaves, parent size, and parent sector count
+remain immutable. MKDIR currently has one representative depth-zero happy-path
+test;
+its depth-one check and the accumulated LINK/MKDIR refusal/recovery gate are
+reserved for draft closure. Indexed LINK/MKDIR splitting and growth remain
+gated.
 
 ## Verification cadence
 
