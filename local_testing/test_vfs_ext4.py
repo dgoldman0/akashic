@@ -11176,6 +11176,8 @@ def test_jbd2_writer_deactivation_faults_quarantine_and_remount(
         failed_deactivation_trace = deactivation_trace[:trace_cut]
 
     source_sequence = struct.unpack_from(">I", standard, 0x18)[0]
+    old_head = struct.unpack_from(">I", standard, 0x58)[0]
+    assert old_head == guard_logical
     clean_journal = bytearray(standard)
     struct.pack_into(
         ">I", clean_journal, 0x18, (source_sequence + 1) & 0xFFFF_FFFF
