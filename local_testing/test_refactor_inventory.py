@@ -123,9 +123,9 @@ def test_live_graph_matches_the_reviewed_l0_ratchet() -> None:
     report = build_report(policy)
     assert check_report(report, policy) == []
     expected_summary = {
-        "module_count": 510,
-        "resolved_require_occurrence_count": 1774,
-        "unique_resolved_edge_count": 1774,
+        "module_count": 550,
+        "resolved_require_occurrence_count": 1945,
+        "unique_resolved_edge_count": 1945,
         "unresolved_require_count": 78,
         "cycle_count": 0,
         "layer_violation_count": 0,
@@ -166,6 +166,9 @@ def test_every_module_has_a_reviewed_responsibility_class() -> None:
         if module["path"].startswith("tui/applets/library/")
     }
     assert {path.rsplit("/", 1)[-1] for path in library_modules} == {
+        "capabilities.f",
+        "capability-work.f",
+        "collection-values.f",
         "controller.f",
         "document-values.f",
         "index-keys.f",
@@ -261,6 +264,14 @@ def test_public_applet_seams_are_exact_and_private_imports_still_fail() -> None:
     policy = _policy()
     assert policy["public_applet_seams"] == [
         {
+            "from": "tui/applets/desk/agent-cap-catalog.f",
+            "to": "tui/applets/agent/access-profile.f",
+            "purpose": (
+                "Desk-owned capability selection policy uses Agent's public "
+                "access-profile selector contract."
+            ),
+        },
+        {
             "from": "tui/applets/desk/agent-access-policy.f",
             "to": "tui/applets/agent/service.f",
             "purpose": (
@@ -280,6 +291,12 @@ def test_public_applet_seams_are_exact_and_private_imports_still_fail() -> None:
     desk_policy = classify_module(
         "tui/applets/desk/agent-access-policy.f", policy
     )
+    desk_catalog = classify_module(
+        "tui/applets/desk/agent-cap-catalog.f", policy
+    )
+    agent_access = classify_module(
+        "tui/applets/agent/access-profile.f", policy
+    )
     agent_service = classify_module("tui/applets/agent/service.f", policy)
     agent_runtime = classify_module("tui/applets/agent/runtime.f", policy)
     desk = classify_module("tui/applets/desk/desk.f", policy)
@@ -289,6 +306,20 @@ def test_public_applet_seams_are_exact_and_private_imports_still_fail() -> None:
     daybook_private = classify_module(
         "tui/applets/daybook/daybook.f", policy
     )
+    assert _dependency_violation(
+        "tui/applets/desk/agent-cap-catalog.f",
+        "tui/applets/agent/access-profile.f",
+        desk_catalog,
+        agent_access,
+        policy,
+    ) is None
+    assert _dependency_violation(
+        "tui/applets/desk/agent-cap-catalog.f",
+        "tui/applets/agent/runtime.f",
+        desk_catalog,
+        agent_runtime,
+        policy,
+    ) == "applet-imports-sibling"
     assert _dependency_violation(
         "tui/applets/desk/agent-access-policy.f",
         "tui/applets/agent/service.f",

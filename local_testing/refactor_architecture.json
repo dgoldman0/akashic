@@ -1,12 +1,13 @@
 {
   "schema": "akashic.refactor.l0",
   "baseline": {
-    "name": "sandbox-stage4-main-integration-20260731",
-    "commit": "85d54e31d6d44651af25067506b73e7ff28a8572",
+    "name": "desk-library-burrow-checkpoint5-candidate-20260812",
+    "commit": "5800bd5542175700a4e356ba67482c2038c49f05",
+    "measurement": "Checkpoint-4 commit plus the current uncommitted Checkpoint-5 candidate",
     "expected": {
-      "module_count": 510,
-      "resolved_require_occurrence_count": 1774,
-      "unique_resolved_edge_count": 1774,
+      "module_count": 550,
+      "resolved_require_occurrence_count": 1945,
+      "unique_resolved_edge_count": 1945,
       "unresolved_require_count": 78,
       "cycle_count": 0,
       "layer_violation_count": 0,
@@ -14,8 +15,8 @@
       "provided_issue_count": 2,
       "addressability_issue_count": 1,
       "marker_issue_count": 0,
-      "graph_sha256": "da2573ede7cc9f0d35f5b0f91c8eafde3630553402c249e80c516dabc4fca86e",
-      "state_sha256": "20f6588f03e80b32018a1e11f2f6a656624b26d7e34ccf1171b7ae33e2ca5797",
+      "graph_sha256": "c89f78e2c56a1b75fa02da5bead4cfc48316f5b8e695db7c40b580199cdfb41d",
+      "state_sha256": "a7c83fd3734fb92eef0d038ff39deb8b721f76ef8bd899077421a95c07c07a8f",
       "placement_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "unresolved_sha256": "98fad31ab92dd0633ed32bc95f3c387e9d222001a4080f7e6926edaec16f21cb",
       "cycles": [],
@@ -238,6 +239,11 @@
     ]
   },
   "public_applet_seams": [
+    {
+      "from": "tui/applets/desk/agent-cap-catalog.f",
+      "to": "tui/applets/agent/access-profile.f",
+      "purpose": "Desk-owned capability selection policy uses Agent's public access-profile selector contract."
+    },
     {
       "from": "tui/applets/desk/agent-access-policy.f",
       "to": "tui/applets/agent/service.f",
@@ -1029,22 +1035,6 @@
       "value": 512,
       "scope": "aggregate-document",
       "scale_axis": "model-complexity"
-    },
-    {
-      "id": "tui.contexts-per-arena",
-      "module": "tui/uidl-tui.f",
-      "symbol": "_UCTX-PER-ARENA",
-      "value": 4,
-      "scope": "instance-pool",
-      "scale_axis": "simultaneous-instances"
-    },
-    {
-      "id": "tui.context-arenas",
-      "module": "tui/uidl-tui.f",
-      "symbol": "_UCTX-MAX-ARENAS",
-      "value": 4,
-      "scope": "instance-pool",
-      "scale_axis": "simultaneous-instances"
     },
     {
       "id": "tui.deferred-actions",

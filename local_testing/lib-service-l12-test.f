@@ -198,6 +198,8 @@ LIBRARY-COMPACTION-BIND-REQUEST-SIZE XBUF _LS12-compaction-request
     _LS12-create-request _LS12-service _LS12-work
         LIBRARY-SERVICE-CREATE-MANAGED
         LIBRARY-SERVICE-S-OK _LS12-status
+    _LS12-create-request LSDCR.CHANGED @ -1 = _LS12-assert
+    _LS12-create-request LSDCR.LOGICAL-GENERATION @ 1 = _LS12-assert
     _LS12-result-entry LIB-ENTRY-VALID? _LS12-assert
     _LS12-result-entry LIBE.ID _LS12-entry LIBE.ID
         RID= _LS12-assert
@@ -214,6 +216,8 @@ LIBRARY-COMPACTION-BIND-REQUEST-SIZE XBUF _LS12-compaction-request
     _LS12-create-request _LS12-service _LS12-work
         LIBRARY-SERVICE-CREATE-MANAGED
         LIBRARY-SERVICE-S-OK _LS12-status
+    _LS12-create-request LSDCR.CHANGED @ 0= _LS12-assert
+    _LS12-create-request LSDCR.LOGICAL-GENERATION @ 1 = _LS12-assert
     _LS12-result-entry LIB-ENTRY-VALID? _LS12-assert
     _LS12-result-entry LIBE.ID _LS12-entry LIBE.ID
         RID= _LS12-assert
@@ -893,8 +897,8 @@ LIBRARY-COMPACTION-BIND-REQUEST-SIZE XBUF _LS12-compaction-request
         _LS12-many-collection LIBC.TITLE
         _LS12-many-collection LIBC.TITLE-U _LS12-text!
     _LS12-many-collection _LS12-many-rids 2
-        LIBPA-COLLECTION-REQUEST-SEAL!
-        LIBPA-S-OK _LS12-status
+        LIBRARY-COLLECTION-REQUEST-SEAL!
+        _LIBCV-S-OK _LS12-status
     _LS12-many-collection LIBPA-COLLECTION-VALID? _LS12-assert
 
     _LS12-collection-request LIBRARY-COLLECTION-WRITE-REQUEST-INIT
@@ -915,6 +919,8 @@ LIBRARY-COMPACTION-BIND-REQUEST-SIZE XBUF _LS12-compaction-request
     _LS12-collection-request _LS12-service _LS12-work
         LIBRARY-SERVICE-CREATE-COLLECTION
         LIBRARY-SERVICE-S-OK _LS12-status
+    _LS12-collection-request LSCWR.CHANGED @ -1 = _LS12-assert
+    _LS12-collection-request LSCWR.LOGICAL-GENERATION @ 6 = _LS12-assert
     _LS12-collection-result _LS12-many-collection
         _LS12-collection= _LS12-assert
     _LS12-collection-result LIBC.REVISION @ 1 = _LS12-assert
@@ -936,6 +942,8 @@ LIBRARY-COMPACTION-BIND-REQUEST-SIZE XBUF _LS12-compaction-request
     _LS12-collection-request _LS12-service _LS12-work
         LIBRARY-SERVICE-CREATE-COLLECTION
         LIBRARY-SERVICE-S-OK _LS12-status
+    _LS12-collection-request LSCWR.CHANGED @ 0= _LS12-assert
+    _LS12-collection-request LSCWR.LOGICAL-GENERATION @ 6 = _LS12-assert
     _LS12-collection-result _LS12-many-collection
         _LS12-collection= _LS12-assert
     _LR12-repository-a LIBRARY-REPOSITORY-GENERATION@

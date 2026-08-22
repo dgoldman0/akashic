@@ -301,8 +301,8 @@ CREATE _laf-inspection-after LIBRARY-REPOSITORY-INSPECTION-SIZE ALLOT
     S" Functional collection"
         DUP _laf-collection LIBPAC.TITLE-U !
         _laf-collection LIBPAC.TITLE SWAP CMOVE
-    _laf-collection _laf-member 1 LIBPA-COLLECTION-REQUEST-SEAL!
-        LIBPA-S-OK = _laf-assert
+    _laf-collection _laf-member 1 LIBRARY-COLLECTION-REQUEST-SEAL!
+        _LIBCV-S-OK = _laf-assert
 
     _laf-collection-request LIBRARY-COLLECTION-WRITE-REQUEST-INIT
     _laf-collection _laf-collection-request LSCWR.COLLECTION !
@@ -364,9 +364,13 @@ CREATE _laf-inspection-after LIBRARY-REPOSITORY-INSPECTION-SIZE ALLOT
     _LAPP-CREATE-REQUEST _LAPP-SERVICE _LAPP-SERVICE-WORK
         LIBRARY-SERVICE-CREATE-MANAGED
         LIBRARY-SERVICE-S-OK = _laf-assert
-    _LAPP-CREATE-REQUEST LIBRARY-DOCUMENT-CREATE-REQUEST-SIZE
-        _laf-create-before LIBRARY-DOCUMENT-CREATE-REQUEST-SIZE
+    _LAPP-CREATE-REQUEST _LSDCR-CHANGED
+        _laf-create-before _LSDCR-CHANGED
         COMPARE 0= _laf-assert
+    _LAPP-CREATE-REQUEST LSDCR.CHANGED @ -1 = _laf-assert
+    _LAPP-CREATE-REQUEST LSDCR.LOGICAL-GENERATION @
+        _LAPP-SERVICE-WORK LIBRARY-SERVICE-LOGICAL-GENERATION@ =
+        _laf-assert
     _LAPP-CREATE-DISPATCHED _LAPP-PENDING-CREATE !
     _LAPP-CALL-PENDING-CREATE
         LIBRARY-SERVICE-S-OK = _laf-assert

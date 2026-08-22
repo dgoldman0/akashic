@@ -78,6 +78,17 @@ local_testing/*
 !local_testing/rabbit-landing3-test.f
 !local_testing/rabbit-l3-mux-test.f
 !local_testing/test_streams_rabbit_landing3.py
+!local_testing/test_streams_burrow_manager.py
+!local_testing/test_streams_burrow_caps.py
+!local_testing/test_streams_burrow_lifecycle.py
+!local_testing/desk-library-burrow.f
+!local_testing/test_desk_library_burrow.py
+!local_testing/streams-library-rabbit-provider.f
+!local_testing/test_streams_library_rabbit_provider_load.py
+!local_testing/desk-library-burrow-capstone.f
+!local_testing/test_desk_library_burrow_capstone.py
+!local_testing/cold-source-loader.f
+!local_testing/test_cold_source_loader.py
 # Refactor architecture inventory and ratchet
 !local_testing/forth_dependencies.py
 !local_testing/refactor_inventory.py
@@ -133,6 +144,14 @@ local_testing/*
 !local_testing/lib-rpath-l12-test.f
 !local_testing/library-model-l12.f
 !local_testing/lib-document-values-l12-test.f
+!local_testing/lib-collval-l1.f
+!local_testing/test_library_collection_values_l1.py
+!local_testing/lib-ui-l1.f
+!local_testing/test_library_ui_l1.py
+!local_testing/lib-cap-l1.f
+!local_testing/test_library_capability_l1.py
+!local_testing/test_library_capability_boundaries_l1.py
+!local_testing/test_library_capability_create_boundary_l1.py
 !local_testing/lib-metadata-l12-test.f
 !local_testing/lib-persist-l12-test.f
 !local_testing/lib-coll-l12-test.f
@@ -188,6 +207,12 @@ local_testing/*
 !local_testing/test_vfs_ext4.py
 !local_testing/test_gap_buf.py
 !local_testing/test_textarea.py
+!local_testing/test_kdos_tls_inbound_vertical.py
+!local_testing/test_kdos_tls_inbound_failures.py
+!local_testing/kdos_tls_memory_peer.py
+!local_testing/kdos_tls_vertical_harness.py
+!local_testing/tls-inbound-vertical.f
+!local_testing/tls-inbound-failures.f
 !local_testing/evidence/
 local_testing/evidence/*
 !local_testing/evidence/*.md

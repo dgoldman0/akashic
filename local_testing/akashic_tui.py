@@ -13,9 +13,11 @@ import argparse
 import json
 import os
 import re
+import struct
 import sys
 import time
-from dataclasses import dataclass
+import zlib
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
@@ -201,6 +203,14 @@ FORTH_CONDITIONAL_TOKENS = frozenset(("[IF]", "[ELSE]", "[THEN]"))
 # transfers.  This bounds source prescan/evaluation work and leaves room for
 # profile growth without changing the generated chunk topology on every edit.
 LINK_CHUNK_BYTES = 120 * 1024
+COLD_SOURCE_MAGIC = b"AKLZSS01"
+COLD_SOURCE_VERSION = 1
+COLD_SOURCE_FLAGS = 0
+COLD_SOURCE_HEADER_BYTES = 40
+COLD_SOURCE_RAW_MAX_BYTES = LINK_CHUNK_BYTES
+COLD_SOURCE_LOADER_PATH = "c5-coldsrc.f"
+COLD_SOURCE_CHUNK_TEMPLATE = "csrc-{index:02d}.lz"
+COLD_SOURCE_HEADER = struct.Struct("<8sHHIQQII")
 MEGAPAD_EVALUATE_SOURCE_MAX_BYTES = 255
 FORTH_LINE_COALESCE_BARRIERS = frozenset(
     ("(", 'S"', 'C"', '."', 'ABORT"', ".(", "[IF]", "[ELSE]", "[THEN]")
@@ -245,6 +255,7 @@ sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from diskutil import (  # noqa: E402
     FLAG_SYSTEM,
+    FTYPE_DATA,
     FTYPE_FORTH,
     FTYPE_TEXT,
     MAX_FILES,
@@ -266,9 +277,19 @@ class Profile:
     requires_tap: bool = False
     failure_markers: tuple[str, ...] = ()
     initial_files: tuple[tuple[str, bytes], ...] = ()
+    # Raw Forth sources deployed as checked AKLZSS01 data containers.  Each
+    # tuple names the on-image container, not the host source.  This keeps
+    # qualification leaves on the same checked cold-compile path as linked
+    # production modules instead of routing them through KDOS's unchecked
+    # line walker.
+    cold_source_initial_files: tuple[tuple[str, bytes], ...] = ()
     include_large_sample: bool = True
     total_sectors: int = 4096
     link_chunk_bytes: int = LINK_CHUNK_BYTES
+    # Cold-source packing is an opt-in filesystem representation.  The guest
+    # expands each linked source chunk and compiles it through the checked
+    # source evaluator; this is not a compiled dictionary cache.
+    cold_source_packed: bool = False
     # Physical-line joining is safe only for a source closure audited for
     # line-sensitive custom parsing words.  It is never a default transform.
     audited_link_line_bytes: int | None = None
@@ -286,6 +307,8 @@ MEGAPAD_NETWORKING_CONSUMERS = frozenset(
         "net/http.f",
         "net/tls-trust-registry.f",
         "net/transports/kdos-tls.f",
+        "net/transports/kdos-tls-inbound.f",
+        "net/transports/kdos-tls-port.f",
         "net/ws.f",
         "web/response.f",
         "web/server.f",
@@ -431,8 +454,16 @@ VARIABLE _cx-context
 VARIABLE _cx-item
 VARIABLE _cx-provider
 VARIABLE _cx-queue
+VARIABLE _cx-request
+VARIABLE _cx-boundary-context
+VARIABLE _cx-members
+VARIABLE _cx-before
+VARIABLE _cx-scripted-context
 CREATE _cx-turn AGENT-TURN-REQUEST-SIZE ALLOT
 CREATE _cx-value CV-SIZE ALLOT
+CREATE _cx-large 65535 ALLOT
+CREATE _cx-json CBR-ARGS-CANONICAL-MAX ALLOT
+CREATE _cx-event AGENT-EVENT-SIZE ALLOT
 
 : _cx-assert  ( flag -- )
     1 _cx-checks +!
@@ -442,6 +473,171 @@ CREATE _cx-value CV-SIZE ALLOT
         ." STACK " _cx-depth @ . ." -> " DUP . CR .S CR
     THEN
     _cx-depth @ = _cx-assert ;
+: _cx-zero?  ( addr len -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP DROP -1 ;
+
+: _cx-slot  ( key-a key-u index map -- child )
+    CV-MAP-SLOT! DUP 0= _cx-assert DROP ;
+
+: _cx-library-collection-value  ( -- )
+    _cx-value CV-FREE
+    3 _cx-value CV-MAP! 0= _cx-assert
+    S" expected_logical_generation" 0 _cx-value _cx-slot
+        0x7FFFFFFFFFFFFFFF SWAP CV-INT!
+    S" title" 1 _cx-value _cx-slot
+        _cx-large 64 ROT CV-STRING! 0= _cx-assert
+    S" members" 2 _cx-value _cx-slot DUP _cx-members !
+    64 SWAP CV-LIST! 0= _cx-assert
+    64 0 DO
+        _cx-large 110 I _cx-members @ CV-LIST-NTH CV-RESOURCE!
+        0= _cx-assert
+    LOOP ;
+
+: _cx-canonical-boundaries  ( -- )
+    CBR-ARGS-CANONICAL-MAX 65536 = _cx-assert
+    _cx-large 65524 [CHAR] A FILL
+    _cx-value CV-FREE
+    _cx-large 65523 _cx-value CV-STRING! 0= _cx-assert
+    _cx-value _cx-json CBR-ARGS-CANONICAL-MAX IVJSON-TYPED-ENCODE
+    DUP 0= _cx-assert DROP 65536 = _cx-assert
+    0xA5 _cx-json 65535 + C!
+    _cx-value _cx-json 65535 IVJSON-TYPED-ENCODE
+    DUP IVJSON-E-CAPACITY = _cx-assert DROP 0= _cx-assert
+    _cx-json 65535 + C@ 0xA5 = _cx-assert
+
+    CBR-NEW DUP 0= _cx-assert DROP DUP _cx-request ! DROP
+    _cx-large 65523 _cx-request @ CBR.ARGS CV-STRING! 0= _cx-assert
+    _cx-request @ CBR-ARGS-SEAL! CBUS-S-OK = _cx-assert
+    _cx-request @ CBR.ARGS-LEN @ 65536 = _cx-assert
+    _cx-request @ CBR-ARGS-SEAL-MATCH? _cx-assert
+
+    _cx-large 65524 _cx-request @ CBR.ARGS CV-STRING! 0= _cx-assert
+    _cx-request @ CBR-ARGS-SEAL! CBUS-S-INVALID = _cx-assert
+    _cx-request @ CBR.ARGS-LEN @ 0= _cx-assert
+    _cx-request @ CBR.ARGS-SEAL-FLAGS @ 0= _cx-assert
+    _cx-request @ CBR.ARGS-DIGEST SHA3-256-LEN _cx-zero?
+        _cx-assert
+    _cx-request @ CBR-FREE 0 _cx-request !
+    _cx-stack ;
+
+: _cx-model-context-exact-boundaries  ( -- )
+    ACTX-CALL-JSON-CAPACITY CBR-ARGS-CANONICAL-MAX = _cx-assert
+    ACTX-RESULT-JSON-CAPACITY 32768 = _cx-assert
+    ACTX-NEW DUP ACTX-S-OK = _cx-assert DROP
+        DUP _cx-boundary-context ! DROP
+    _cx-large 65535 [CHAR] A FILL
+
+    _cx-value CV-FREE
+    _cx-large 65534 _cx-value CV-STRING! 0= _cx-assert
+    41 S" org.akashic.boundary" S" boundary.call"
+        S" call-exact" _cx-value _cx-boundary-context @
+        ACTX-APPEND-TOOL-CALL-VALUE
+    DUP ACTX-S-OK = _cx-assert DROP DUP 0<> _cx-assert
+    DUP ACTXI-DATA-TEXT NIP 65536 = _cx-assert DROP
+    _cx-boundary-context @ ACTX.COUNT @ DUP 1 = _cx-assert
+        _cx-before !
+
+    _cx-value CV-FREE
+    _cx-large 65535 _cx-value CV-STRING! 0= _cx-assert
+    41 S" org.akashic.boundary" S" boundary.call"
+        S" call-one-over" _cx-value _cx-boundary-context @
+        ACTX-APPEND-TOOL-CALL-VALUE
+    DUP ACTX-S-CODEC = _cx-assert DROP 0= _cx-assert
+    _cx-boundary-context @ ACTX.COUNT @ _cx-before @ = _cx-assert
+
+    _cx-value CV-FREE
+    _cx-large 32766 _cx-value CV-STRING! 0= _cx-assert
+    41 S" org.akashic.boundary" S" boundary.result"
+        S" result-exact" _cx-value CBUS-S-OK _cx-boundary-context @
+        ACTX-APPEND-TOOL-RESULT-VALUE
+    DUP ACTX-S-OK = _cx-assert DROP DUP 0<> _cx-assert
+    DUP ACTXI-DATA-TEXT NIP 32768 = _cx-assert DROP
+    _cx-boundary-context @ ACTX.COUNT @ DUP 2 = _cx-assert
+        _cx-before !
+
+    _cx-value CV-FREE
+    _cx-large 32767 _cx-value CV-STRING! 0= _cx-assert
+    41 S" org.akashic.boundary" S" boundary.result"
+        S" result-one-over" _cx-value CBUS-S-OK _cx-boundary-context @
+        ACTX-APPEND-TOOL-RESULT-VALUE
+    DUP ACTX-S-CODEC = _cx-assert DROP 0= _cx-assert
+    _cx-boundary-context @ ACTX.COUNT @ _cx-before @ = _cx-assert
+    _cx-boundary-context @ ACTX-FREE 0 _cx-boundary-context !
+    _cx-value CV-FREE
+    _cx-stack ;
+
+: _cx-model-context-schema-boundary  ( -- )
+    _cx-large 110 1 FILL
+    _cx-library-collection-value
+    _cx-value _cx-json CBR-ARGS-CANONICAL-MAX IVJSON-ENCODE
+    DUP 0= _cx-assert DROP 42890 = _cx-assert
+
+    ACTX-NEW DUP ACTX-S-OK = _cx-assert DROP
+        DUP _cx-boundary-context ! DROP
+    41 S" org.akashic.library.applet" S" library.collection.create"
+        S" call-library-max" _cx-value _cx-boundary-context @
+        ACTX-APPEND-TOOL-CALL-VALUE
+    DUP ACTX-S-OK = _cx-assert DROP DUP 0<> _cx-assert
+    DUP ACTXI-DATA-TEXT NIP 42890 = _cx-assert DROP
+    _cx-boundary-context @ ACTX.COUNT @ DUP 1 = _cx-assert
+        _cx-before !
+
+    \ The same value is intentionally too large for provider-visible
+    \ results: broadening review/call input must not broaden output.
+    41 S" org.akashic.library.applet" S" library.collection.create"
+        S" call-library-max" _cx-value CBUS-S-OK _cx-boundary-context @
+        ACTX-APPEND-TOOL-RESULT-VALUE
+    DUP ACTX-S-CODEC = _cx-assert DROP 0= _cx-assert
+    _cx-boundary-context @ ACTX.COUNT @ _cx-before @ = _cx-assert
+    _cx-boundary-context @ ACTX-FREE 0 _cx-boundary-context !
+    _cx-value CV-FREE
+    _cx-stack ;
+
+: _cx-scripted-result-boundaries  ( -- )
+    SCRIPTED-TOOL-OUTPUT-CAPACITY 32768 = _cx-assert
+    SCRIPTED-PROVIDER-NEW DUP 0= _cx-assert DROP
+        DUP _cx-provider ! DROP
+    AEQ-NEW DUP 0= _cx-assert DROP DUP _cx-queue ! DROP
+    _cx-provider @ APROV.CONTEXT @ _cx-scripted-context !
+    73 _cx-scripted-context @ _SPC.RUN-ID !
+    1 _cx-scripted-context @ _SPC.SEQUENCE !
+    _SP-WAITING _cx-scripted-context @ _SPC.STATE !
+    _cx-large 32767 [CHAR] B FILL
+
+    \ One-byte-over fails atomically and releases transient storage.
+    _cx-value CV-FREE
+    _cx-large 32767 _cx-value CV-STRING! 0= _cx-assert
+    73 S" boundary.result" _cx-value CBUS-S-OK
+        _cx-queue @ _cx-provider @ APROV-TOOL-RESULT 1 = _cx-assert
+    _cx-queue @ AEQ.COUNT @ 0= _cx-assert
+    _SPT-BUF @ 0= _cx-assert
+
+    \ Exact 32 KiB is copied before transient storage is erased.
+    _cx-value CV-FREE
+    _cx-large 32766 _cx-value CV-STRING! 0= _cx-assert
+    73 S" boundary.result" _cx-value CBUS-S-NO-EFFECT
+        _cx-queue @ _cx-provider @ APROV-TOOL-RESULT 0= _cx-assert
+    _cx-queue @ AEQ.COUNT @ 3 = _cx-assert
+    _SPT-BUF @ 0= _cx-assert
+    _cx-event AEV-INIT
+    _cx-event _cx-queue @ AEQ-POP _cx-assert
+    _cx-event AEV.KIND @ AEV-TOOL-RESULT = _cx-assert
+    _cx-event AEV.DATA DUP CV-TYPE@ CV-T-STRING = _cx-assert
+    DUP CV-LEN@ 32768 = _cx-assert
+    DUP CV-DATA@ C@ [CHAR] " = _cx-assert
+    DUP CV-DATA@ SWAP CV-LEN@ 1- + C@ [CHAR] " = _cx-assert
+    _cx-event AEV-FREE
+    _cx-provider @ APROV-FREE 0 _cx-provider !
+    _cx-queue @ AEQ-FREE 0 _cx-queue !
+    _cx-value CV-FREE
+    _cx-stack ;
+
+: _cx-model-context-boundaries  ( -- )
+    _cx-model-context-exact-boundaries
+    _cx-model-context-schema-boundary
+    _cx-scripted-result-boundaries ;
 
 : _cx-run  ( -- )
     0 _cx-fails ! 0 _cx-checks ! DEPTH _cx-depth !
@@ -480,6 +676,9 @@ CREATE _cx-value CV-SIZE ALLOT
     _cx-provider @ SCRIPTED-LAST-CONTEXT-N 3 = _cx-assert
     _cx-stack
     _cx-provider @ APROV-FREE _cx-queue @ AEQ-FREE
+
+    _cx-canonical-boundaries
+    _cx-model-context-boundaries
 
     2 _cx-context @ ACTX-DROP-RUN
     _cx-context @ ACTX.COUNT @ 1 = _cx-assert
@@ -1672,6 +1871,8 @@ VARIABLE _xi-starts
 VARIABLE _xi-polls
 VARIABLE _xi-cancels
 VARIABLE _xi-wipes
+VARIABLE _xi-cleanup-mode
+VARIABLE _xi-cleanup-polls
 VARIABLE _xi-cb-op
 VARIABLE _xi-config-deadline
 VARIABLE _xi-config-op
@@ -1689,6 +1890,10 @@ VARIABLE _xi-config-op
     _xi-mode @ 4 = IF 99 EXIT THEN
     _xi-mode @ 5 = IF
         -1 _xi-cb-op @ XIOO.CANCEL-REQUESTED !
+    THEN
+    _xi-mode @ 8 = IF
+        -1 _xi-cb-op @ XIOO.CANCEL-REQUESTED !
+        MS@ _xi-cb-op @ XIOO.DEADLINE-MS !
     THEN
     XIO-STEP-PENDING ;
 
@@ -1708,14 +1913,48 @@ VARIABLE _xi-config-op
     2DROP 1 _xi-wipes +!
     _xi-mode @ 7 = IF -779 THROW THEN ;
 
+: _xi-cleanup-poll  ( operation context -- step-status )
+    DROP _xi-cb-op ! 1 _xi-cleanup-polls +!
+    _xi-cleanup-mode @ 1 = IF
+        _xi-cleanup-polls @ 1 = IF
+            XIO-STEP-PENDING
+        ELSE
+            XIO-STEP-SUCCEEDED
+        THEN
+        EXIT
+    THEN
+    _xi-cleanup-mode @ 2 = IF
+        _xi-cleanup-polls @ 1 = IF -780 THROW THEN
+        XIO-STEP-SUCCEEDED EXIT
+    THEN
+    _xi-cleanup-mode @ 3 = IF
+        _xi-cleanup-polls @ 1 = IF
+            -92 _xi-cb-op @ XIOO.CLEANUP-ERROR !
+            XIO-STEP-FAILED
+        ELSE
+            XIO-STEP-SUCCEEDED
+        THEN
+        EXIT
+    THEN
+    _xi-cleanup-mode @ 4 = IF
+        _xi-cleanup-polls @ 1 = IF 99 ELSE XIO-STEP-SUCCEEDED THEN
+        EXIT
+    THEN
+    XIO-STEP-SUCCEEDED ;
+
 : _xi-counts-clear  ( -- )
-    0 _xi-starts ! 0 _xi-polls ! 0 _xi-cancels ! 0 _xi-wipes ! ;
+    0 _xi-starts ! 0 _xi-polls ! 0 _xi-cancels ! 0 _xi-wipes !
+    0 _xi-cleanup-mode ! 0 _xi-cleanup-polls ! ;
 
 : _xi-config  ( deadline operation -- status )
     _xi-config-op ! _xi-config-deadline !
     _xi-service 101 7 1 _xi-config-deadline @ 0
     ['] _xi-start ['] _xi-poll ['] _xi-cancel ['] _xi-wipe
     _xi-config-op @ XIO-OP-CONFIGURE ;
+
+: _xi-config-cleanup  ( operation -- status )
+    >R _xi-service 101 7 1 ['] _xi-cleanup-poll R>
+    XIO-OP-CONFIGURE-CLEANUP ;
 
 : _xi-fresh  ( -- )
     _xi-service XIO-SERVICE-INIT XIO-S-OK = _xi-assert
@@ -1759,8 +1998,10 @@ VARIABLE _xi-config-op
     _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
     _xi-service _xi-op-b XIO-SUBMIT XIO-S-BUSY = _xi-assert
     _xi-op-b XIOO.STATE @ XIO-STATE-RESET = _xi-assert
+    _xi-op-a XIOO.CLEANUP-POLL-XT @ 0= _xi-assert
     _xi-service _xi-op-a XIO-CANCEL XIO-S-OK = _xi-assert
     _xi-op-a XIOO.STATE @ XIO-STATE-CANCELLED = _xi-assert
+    _xi-op-a XIO-CLEANUP-PENDING? 0= _xi-assert
     _xi-service XIO-ACTIVE? 0= _xi-assert
     _xi-cancels @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
     _xi-service _xi-op-a XIO-CANCEL XIO-S-OK = _xi-assert
@@ -1769,6 +2010,288 @@ VARIABLE _xi-config-op
     _xi-wipes @ 1 = _xi-assert
     _xi-service _xi-op-b XIO-SUBMIT XIO-S-OK = _xi-assert
     _xi-service _xi-op-b XIO-CANCEL XIO-S-OK = _xi-assert ;
+
+: _xi-test-cooperative-cleanup  ( -- )
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-service 101 7 2 ['] _xi-cleanup-poll _xi-op-a
+        XIO-OP-CONFIGURE-CLEANUP XIO-S-INVALID = _xi-assert
+    _xi-op-a XIOO.CLEANUP-POLL-XT @ 0= _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    1 _xi-cleanup-mode !
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK
+    _xi-starts @ 1 = _xi-assert _xi-polls @ 0= _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-PENDING = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-STATE-CANCELLED = _xi-assert
+    _xi-service XIO-ACTIVE-OP _xi-op-a = _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-wipes @ 0= _xi-assert
+    _xi-cleanup-polls @ 0= _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-PENDING = _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-cleanup-polls @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-cleanup-polls @ 1 = _xi-assert
+    _xi-op-a XIO-CLEANUP-PENDING? _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-wipes @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-cleanup-polls @ 2 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-CANCELLED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ 0= _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+    _xi-wipes @ 1 = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-OK = _xi-assert
+    _xi-cancels @ 1 = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert
+    _xi-op-a XIOO.CLEANUP-POLL-XT @ 0= _xi-assert ;
+
+: _xi-test-cooperative-success-reset  ( -- )
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    0 _xi-op-b _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK _xi-service XIO-TICK _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-SUCCEEDED = _xi-assert
+    _xi-op-a XIOO.RESULT @ 42 = _xi-assert
+    _xi-service XIOS.RETAINED @ _xi-op-a = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-PENDING = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-SUCCEEDED = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-PENDING-RESET = _xi-assert
+    _xi-service XIO-ACTIVE-OP _xi-op-a = _xi-assert
+    _xi-service XIOS.RETAINED @ _xi-op-a = _xi-assert
+    _xi-op-a XIOO.RESULT @ 42 = _xi-assert
+    _xi-cleanup-polls @ 0= _xi-assert _xi-wipes @ 0= _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-PENDING = _xi-assert
+    _xi-service _xi-op-b XIO-SUBMIT XIO-S-BUSY = _xi-assert
+    _xi-service XIO-TICK
+    _xi-cleanup-polls @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-RESET = _xi-assert
+    _xi-op-a XIOO.RESULT @ 0= _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+    _xi-service XIOS.RETAINED @ 0= _xi-assert
+
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    2 _xi-cleanup-mode !
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK _xi-service XIO-TICK _xi-service XIO-TICK
+    _xi-service _xi-op-a XIO-RESET XIO-S-PENDING = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-SUCCEEDED = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-PENDING-RESET = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -780 = _xi-assert
+    _xi-op-a XIOO.RESULT @ 42 = _xi-assert
+    _xi-service XIO-ACTIVE? _xi-assert
+    _xi-service XIOS.RETAINED @ _xi-op-a = _xi-assert
+    _xi-wipes @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ 0= _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -780 = _xi-assert
+    _xi-op-a XIOO.RESULT @ 42 = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+    _xi-service XIOS.RETAINED @ _xi-op-a = _xi-assert
+    _xi-wipes @ 0= _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-RESET = _xi-assert
+    _xi-op-a XIOO.RESULT @ 0= _xi-assert
+    _xi-service XIOS.RETAINED @ 0= _xi-assert
+    _xi-wipes @ 1 = _xi-assert ;
+
+: _xi-test-retained-take  ( -- )
+    \ TAKE consumes an exact retained success without entering the provider's
+    \ discard cleanup path.  The ordinary transient-state wipe remains exact
+    \ once, and the service is immediately reusable.
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    0 _xi-op-b _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK _xi-service XIO-TICK _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-SUCCEEDED = _xi-assert
+    _xi-service XIOS.RETAINED @ _xi-op-a = _xi-assert
+    _xi-service 101 8 1 _xi-op-a XIO-TAKE
+        XIO-S-NOT-OWNER = _xi-assert 0= _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-SUCCEEDED = _xi-assert
+    _xi-wipes @ 0= _xi-assert _xi-cleanup-polls @ 0= _xi-assert
+    _xi-service 101 7 1 _xi-op-a XIO-TAKE
+        XIO-S-OK = _xi-assert 42 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-RESET = _xi-assert
+    _xi-op-a XIOO.RESULT @ 0= _xi-assert
+    _xi-service XIOS.RETAINED @ 0= _xi-assert
+    _xi-wipes @ 1 = _xi-assert _xi-cleanup-polls @ 0= _xi-assert
+    _xi-service _xi-op-b XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-b XIO-CANCEL XIO-S-OK = _xi-assert
+
+    \ A wipe fault does not falsely publish a taken result.  The retained
+    \ descriptor and original result remain available for ordinary reset.
+    _xi-fresh 7 _xi-mode !
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK _xi-service XIO-TICK _xi-service XIO-TICK
+    _xi-service 101 7 1 _xi-op-a XIO-TAKE
+        XIO-S-CALLBACK = _xi-assert 0= _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.RESULT @ 42 = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -779 = _xi-assert
+    _xi-service XIOS.RETAINED @ _xi-op-a = _xi-assert
+    _xi-wipes @ 1 = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert
+    _xi-service XIOS.RETAINED @ 0= _xi-assert
+    _xi-wipes @ 1 = _xi-assert ;
+
+: _xi-test-cleanup-recovery  ( -- )
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    2 _xi-cleanup-mode !
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-PENDING = _xi-assert
+    _xi-service XIO-TICK
+    _xi-cleanup-polls @ 1 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -780 = _xi-assert
+    _xi-service XIO-ACTIVE? _xi-assert _xi-wipes @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-cleanup-polls @ 2 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -780 = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert _xi-wipes @ 1 = _xi-assert
+
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    3 _xi-cleanup-mode !
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-PENDING = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -92 = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -92 = _xi-assert
+    _xi-cleanup-polls @ 2 = _xi-assert _xi-wipes @ 1 = _xi-assert ;
+
+: _xi-test-cooperative-callback-faults  ( -- )
+    \ A throwing cancel callback records cleanup failure but does not bypass
+    \ the cooperative proof that lower authority has settled.
+    _xi-fresh 6 _xi-mode !
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-PENDING = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -778 = _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-wipes @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -778 = _xi-assert
+    _xi-cleanup-polls @ 1 = _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+
+    \ Once the cleanup poll proves authority settled, a terminal wipe fault
+    \ is local: it publishes FAILED and releases the active service exactly once.
+    _xi-fresh 7 _xi-mode !
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-PENDING = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -779 = _xi-assert
+    _xi-cleanup-polls @ 1 = _xi-assert
+    _xi-cancels @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert
+    _xi-wipes @ 1 = _xi-assert
+
+    \ A retained-success wipe fault keeps the result and first fault observable
+    \ until a second reset clears them without invoking wipe again.
+    _xi-fresh 7 _xi-mode !
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK _xi-service XIO-TICK _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-SUCCEEDED = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-PENDING = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ -779 = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ -779 = _xi-assert
+    _xi-op-a XIOO.RESULT @ 42 = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+    _xi-service XIOS.RETAINED @ _xi-op-a = _xi-assert
+    _xi-cleanup-polls @ 1 = _xi-assert _xi-wipes @ 1 = _xi-assert
+    _xi-service _xi-op-a XIO-RESET XIO-S-OK = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-RESET = _xi-assert
+    _xi-op-a XIOO.RESULT @ 0= _xi-assert
+    _xi-service XIOS.RETAINED @ 0= _xi-assert
+    _xi-wipes @ 1 = _xi-assert ;
+
+: _xi-test-invalid-cleanup-step  ( -- )
+    _xi-fresh
+    0 _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    4 _xi-cleanup-mode !
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-CANCEL XIO-S-PENDING = _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ XIO-E-STEP = _xi-assert
+    _xi-service XIO-ACTIVE? _xi-assert
+    _xi-cleanup-polls @ 1 = _xi-assert _xi-wipes @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-FAILED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-op-a XIOO.CLEANUP-ERROR @ XIO-E-STEP = _xi-assert
+    _xi-service XIO-ACTIVE? 0= _xi-assert
+    _xi-cleanup-polls @ 2 = _xi-assert _xi-wipes @ 1 = _xi-assert ;
+
+: _xi-test-cleanup-precedence  ( -- )
+    _xi-fresh
+    MS@ _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK
+    _xi-starts @ 0= _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-STATE-TIMED-OUT = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-DEADLINE = _xi-assert
+    _xi-cleanup-polls @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-TIMED-OUT = _xi-assert
+    _xi-cleanup-polls @ 1 = _xi-assert
+
+    _xi-fresh 8 _xi-mode !
+    MS@ 100000 + _xi-op-a _xi-config XIO-S-OK = _xi-assert
+    _xi-op-a _xi-config-cleanup XIO-S-OK = _xi-assert
+    _xi-service _xi-op-a XIO-SUBMIT XIO-S-OK = _xi-assert
+    _xi-service XIO-TICK
+    _xi-starts @ 1 = _xi-assert
+    _xi-op-a XIOO.STATE @ XIO-STATE-ACTIVE = _xi-assert
+    _xi-op-a XIOO.PENDING-TERMINAL @ XIO-STATE-CANCELLED = _xi-assert
+    _xi-op-a XIOO.ERROR @ XIO-E-CANCELLED = _xi-assert
+    _xi-cleanup-polls @ 0= _xi-assert
+    _xi-service XIO-TICK
+    _xi-op-a XIOO.STATE @ XIO-STATE-CANCELLED = _xi-assert
+    _xi-cleanup-polls @ 1 = _xi-assert ;
 
 : _xi-test-deadlines  ( -- )
     _xi-fresh
@@ -1895,6 +2418,13 @@ VARIABLE _xi-config-op
     0 _xi-fails ! 0 _xi-checks ! DEPTH _xi-depth !
     _xi-test-progress
     _xi-test-busy-cancel
+    _xi-test-cooperative-cleanup
+    _xi-test-cooperative-success-reset
+    _xi-test-retained-take
+    _xi-test-cleanup-recovery
+    _xi-test-cooperative-callback-faults
+    _xi-test-invalid-cleanup-step
+    _xi-test-cleanup-precedence
     _xi-test-deadlines
     _xi-test-failures
     _xi-test-cleanup-faults
@@ -3277,1008 +3807,1252 @@ _rt-run
         ready_markers=("HTTP REQUEST PASS",),
         stable_markers=("HTTP REQUEST PASS",),
     ),
-    "tls-port": Profile(
-        roots=("net/transports/kdos-tls.f", "utils/string.f"),
+    "kdos-network-owner": Profile(
+        roots=("net/kdos-network-owner.f",),
         resources=(),
-        autoexec=r"""\ autoexec.f - KDOS TLS NIO adapter tests
+        autoexec=r"""\ autoexec.f - scoped KDOS network-owner tests
 ENTER-USERLAND
-." [akashic] loading KDOS TLS transport" CR
-REQUIRE net/transports/kdos-tls.f
-REQUIRE utils/string.f
+." [akashic] loading KDOS network owner" CR
+REQUIRE net/kdos-network-owner.f
 
-VARIABLE _mt-fails
-VARIABLE _mt-checks
-VARIABLE _mt-depth
-: _mt-assert  ( flag -- )
-    1 _mt-checks +!
-    0= IF 1 _mt-fails +! ." ASSERT " _mt-checks @ . CR THEN ;
-: _mt-stack  ( -- )
-    DEPTH DUP _mt-depth @ <> IF
-        ." STACK " _mt-depth @ . ." -> " DUP . CR .S CR
+VARIABLE _knw-fails
+VARIABLE _knw-checks
+VARIABLE _knw-depth
+VARIABLE _knw-hits
+VARIABLE _knw-claim
+VARIABLE _knw-throw
+VARIABLE _knw-release
+
+CREATE _knw-token-a 8 ALLOT
+CREATE _knw-token-b 8 ALLOT
+
+: _knw-assert  ( flag -- )
+    1 _knw-checks +!
+    0= IF 1 _knw-fails +! ." ASSERT " _knw-checks @ . CR THEN ;
+
+: _knw-stack  ( -- )
+    DEPTH DUP _knw-depth @ <> IF
+        ." STACK " _knw-depth @ . ." -> " DUP . CR .S CR
     THEN
-    _mt-depth @ = _mt-assert ;
-
-CREATE _mt-a KDOSTLS-SIZE ALLOT
-CREATE _mt-b KDOSTLS-SIZE ALLOT
-CREATE _mt-recv 32 ALLOT
-CREATE _mt-sent 256 ALLOT
-VARIABLE _mt-native-ctx
-VARIABLE _mt-native-tcb
-CREATE _mt-ip 4 ALLOT
-VARIABLE _mt-sent-u
-VARIABLE _mt-in-pos
-VARIABLE _mt-dns-hits
-VARIABLE _mt-connect-hits
-VARIABLE _mt-close-hits
-VARIABLE _mt-poll-hits
-VARIABLE _mt-link
-VARIABLE _mt-old-trust
-VARIABLE _mt-old-trust-generation
-VARIABLE _mt-op-a
-VARIABLE _mt-op-b
-VARIABLE _mt-op-u
-VARIABLE _mt-op-n
-
-: _mt-dns  ( host-a host-u adapter -- ip )
-    DROP 1 _mt-dns-hits +!
-    S" api.openai.com" STR-STR= _mt-assert
-    0x01020304 ;
-
-: _mt-dns-zero  ( host-a host-u adapter -- ip )
-    DROP 2DROP 0 ;
-
-: _mt-dns-throw  ( host-a host-u adapter -- ip )
-    DROP 2DROP -777 THROW ;
-
-: _mt-connect  ( ip remote-port local-port adapter -- ctx )
-    _mt-op-a ! _mt-op-n ! _mt-op-u ! _mt-op-b !
-    1 _mt-connect-hits +!
-    _mt-op-b @ 0x01020304 = _mt-assert
-    _mt-op-u @ 443 = _mt-assert
-    _mt-op-n @ 49152 >= _mt-assert
-    _mt-op-n @ 65535 <= _mt-assert
-    _mt-op-a @ ;
-
-: _mt-connect-zero  ( ip remote-port local-port adapter -- 0 )
-    2DROP 2DROP
-    TLS-CONNECT-E-TCP-OPEN TLS-CONNECT-LAST-ERROR !
-    0 ;
-
-: _mt-status  ( ctx adapter -- link-status )
-    2DROP _mt-link @ ;
-
-: _mt-send  ( ctx buffer length adapter -- count )
-    DROP _mt-op-u ! _mt-op-b ! DROP
-    _mt-op-u @ 17 MIN _mt-op-n !
-    _mt-sent-u @ _mt-op-n @ + 256 > IF 0 EXIT THEN
-    _mt-op-b @ _mt-sent _mt-sent-u @ + _mt-op-n @ CMOVE
-    _mt-op-n @ _mt-sent-u +!
-    _mt-op-n @ ;
-
-: _mt-send-bad  ( ctx buffer length adapter -- count )
-    DROP >R 2DROP R> 1+ ;
-
-: _mt-send-zero  ( ctx buffer length adapter -- count )
-    2DROP 2DROP 0 ;
-
-: _mt-recv-op  ( ctx buffer capacity adapter -- count )
-    DROP _mt-op-u ! _mt-op-b ! DROP
-    5 _mt-in-pos @ - DUP 0> 0= IF DROP 0 EXIT THEN
-    _mt-op-u @ MIN 3 MIN _mt-op-n !
-    S" hello" DROP _mt-in-pos @ + _mt-op-b @ _mt-op-n @ CMOVE
-    _mt-op-n @ _mt-in-pos +!
-    _mt-op-n @ ;
-
-: _mt-recv-bad  ( ctx buffer capacity adapter -- count )
-    2DROP 2DROP -1 ;
-
-: _mt-close  ( ctx adapter -- )
-    2DROP 1 _mt-close-hits +! ;
-
-: _mt-close-throw  ( ctx adapter -- )
-    2DROP -778 THROW ;
-
-: _mt-poll  ( adapter -- )
-    DROP 1 _mt-poll-hits +! ;
-
-VARIABLE _mt-bind-a
-
-: _mt-bind  ( adapter -- )
-    _mt-bind-a !
-    _mt-bind-a @ KDOSTLS-INIT
-    S" api.openai.com" 443 _mt-bind-a @ KDOSTLS-CONFIGURE
-    KDOSTLS-E-OK = _mt-assert
-    ['] _mt-dns _mt-bind-a @ KDOSTLS.DNS-XT !
-    ['] _mt-connect _mt-bind-a @ KDOSTLS.CONNECT-XT !
-    ['] _mt-send _mt-bind-a @ KDOSTLS.SEND-XT !
-    ['] _mt-recv-op _mt-bind-a @ KDOSTLS.RECV-XT !
-    ['] _mt-close _mt-bind-a @ KDOSTLS.CLOSE-XT !
-    ['] _mt-poll _mt-bind-a @ KDOSTLS.POLL-XT !
-    ['] _mt-status _mt-bind-a @ KDOSTLS.STATUS-XT ! ;
-
-: _mt-test-clear  ( -- )
-    1 2 3 4 _mt-ip IP!
-    0 _mt-close-hits ! ;
-
-: _mt-test-config  ( -- )
-    _mt-b KDOSTLS-INIT
-    S" bad host" 443 _mt-b KDOSTLS-CONFIGURE KDOSTLS-E-INVALID = _mt-assert
-    S" api.openai.com" 0 _mt-b KDOSTLS-CONFIGURE
-    KDOSTLS-E-INVALID = _mt-assert
-    S" api.openai.com" 443 KDOSTLS-NEW
-    DUP KDOSTLS-E-OK = _mt-assert DROP
-    DUP KDOSTLS-HOST S" api.openai.com" STR-STR= _mt-assert
-    DUP KDOSTLS.REMOTE-PORT @ 443 = _mt-assert
-    KDOSTLS-FREE ;
-
-: _mt-test-open-and-io  ( -- )
-    _mt-a _mt-bind _mt-b _mt-bind
-    1 TLS-TRUST-COUNT ! KDOSTLS-LINK-OPEN _mt-link !
-    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
-    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-OPEN = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-OK = _mt-assert
-    TLS-SNI-HOST TLS-SNI-LEN @ S" api.openai.com" STR-STR= _mt-assert
-    _mt-dns-hits @ 1 = _mt-assert
-    _mt-connect-hits @ 1 = _mt-assert
-
-    _mt-b KDOSTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
-    _mt-b KDOSTLS.LAST-ERROR @ KDOSTLS-E-BUSY = _mt-assert
-
-    S" 0123456789abcdefghijkl" _mt-a KDOSTLS.PORT NIO-SEND
-    NIO-S-OK = _mt-assert 17 = _mt-assert
-    _mt-sent _mt-sent-u @ S" 0123456789abcdefg" STR-STR= _mt-assert
-
-    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
-    NIO-S-OK = _mt-assert 3 = _mt-assert
-    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
-    NIO-S-OK = _mt-assert 2 = _mt-assert
-    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
-    NIO-S-OK = _mt-assert 0= _mt-assert
-    KDOSTLS-LINK-CLOSED _mt-link !
-    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
-    NIO-S-EOF = _mt-assert 0= _mt-assert
-    _mt-a KDOSTLS.PORT NIO-CLOSE
-    _mt-close-hits @ 1 = _mt-assert
-
-    KDOSTLS-LINK-OPEN _mt-link !
-    _mt-b KDOSTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
-    _mt-b KDOSTLS.PORT NIO-POLL
-    _mt-poll-hits @ 1 = _mt-assert
-    ['] _mt-close-throw _mt-b KDOSTLS.CLOSE-XT !
-    \ The current compatibility adapter catches and drops native close errors.
-    \ Record that behavior truthfully; cooperative cleanup is not qualified.
-    _mt-b KDOSTLS.PORT NIO-CLOSE-STATUS NIO-S-OK = _mt-assert
-    _mt-b KDOSTLS.PORT NIO.CLOSE-ERROR @ 0= _mt-assert
-    _mt-b KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
-    _mt-b KDOSTLS.CONTEXT @ 0= _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-    ['] _mt-close _mt-b KDOSTLS.CLOSE-XT !
-    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
-    _mt-a KDOSTLS.PORT NIO-CLOSE ;
-
-: _mt-test-errors  ( -- )
-    _mt-a _mt-bind _mt-test-clear
-    0 TLS-TRUST-COUNT !
-    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-NO-TRUST = _mt-assert
-    1 TLS-TRUST-COUNT !
-    ['] _mt-dns-zero _mt-a KDOSTLS.DNS-XT !
-    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-DNS = _mt-assert
-    ['] _mt-dns-throw _mt-a KDOSTLS.DNS-XT !
-    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-FAULT = _mt-assert
-
-    _mt-a _mt-bind _mt-test-clear 1 TLS-TRUST-COUNT !
-    ['] _mt-connect-zero _mt-a KDOSTLS.CONNECT-XT !
-    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-CONNECT = _mt-assert
-    _mt-a KDOSTLS.NATIVE-ERROR @ TLS-CONNECT-E-TCP-OPEN = _mt-assert
-
-    _mt-a _mt-bind 1 TLS-TRUST-COUNT !
-    ['] _mt-dns _mt-a KDOSTLS.DNS-XT !
-    KDOSTLS-LINK-OPEN _mt-link !
-    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
-    ['] _mt-send-bad _mt-a KDOSTLS.SEND-XT !
-    S" bad" _mt-a KDOSTLS.PORT NIO-SEND
-    NIO-S-FAILED = _mt-assert 0= _mt-assert
-    _mt-a KDOSTLS.PORT NIO-CLOSE
-
-    _mt-a _mt-bind 1 TLS-TRUST-COUNT ! KDOSTLS-LINK-OPEN _mt-link !
-    _mt-a KDOSTLS.PORT NIO-OPEN NIO-S-OK = _mt-assert
-    ['] _mt-recv-bad _mt-a KDOSTLS.RECV-XT !
-    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
-    NIO-S-FAILED = _mt-assert 0= _mt-assert
-    _mt-a KDOSTLS.PORT NIO-CLOSE ;
-
-: _mt-test-native-link-close  ( -- )
-    0 TLS-CTX@ DUP _mt-native-ctx ! /TLS-CTX 0 FILL
-    0 TCB-N DUP _mt-native-tcb ! /TCB 0 FILL
-    TLSS-ESTABLISHED _mt-native-ctx @ TLS-CTX.STATE !
-    1 _mt-native-ctx @ TLS-CTX.PEER-AUTH !
-    _mt-native-tcb @ _mt-native-ctx @ TLS-CTX.TCB !
-    TCPS-ESTABLISHED _mt-native-tcb @ TCB.STATE !
-    _mt-native-ctx @ 0 _KDOSTLS-STATUS-DEFAULT
-    KDOSTLS-LINK-OPEN = _mt-assert
-    TCPS-CLOSED _mt-native-tcb @ TCB.STATE !
-    _mt-native-ctx @ 0 _KDOSTLS-STATUS-DEFAULT
-    KDOSTLS-LINK-CLOSED = _mt-assert
-
-    _mt-a KDOSTLS-INIT
-    KDOSTLS-STATE-OPEN _mt-a KDOSTLS.STATE !
-    _mt-native-ctx @ _mt-a KDOSTLS.CONTEXT !
-    ['] _mt-send-zero _mt-a KDOSTLS.SEND-XT !
-    S" stalled" _mt-a KDOSTLS.PORT NIO-SEND
-    NIO-S-FAILED = _mt-assert 0= _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-IO = _mt-assert
-    0 _mt-a KDOSTLS.CONTEXT !
-    _mt-a KDOSTLS.PORT NIO-CLOSE ;
-
-CREATE _mt-phase-log 32 CELLS ALLOT
-CREATE _mt-prep-mac 6 ALLOT
-VARIABLE _mt-phase-log-u
-VARIABLE _mt-prep-now
-VARIABLE _mt-prep-adapter
-VARIABLE _mt-prep-throw
-VARIABLE _mt-prep-early-ready
-VARIABLE _mt-prep-ctx
-CREATE _mt-address-seen 4 ALLOT
-VARIABLE _mt-address-hits
-VARIABLE _mt-address-context-seen
-VARIABLE _mt-address-result
-
-: _mt-address-policy  ( ip-a context -- flag )
-    _mt-address-context-seen !
-    1 _mt-address-hits +!
-    _mt-address-seen 4 CMOVE
-    _mt-address-result @ ;
-
-: _mt-address-throw  ( ip-a context -- flag )
-    2DROP -781 THROW ;
-
-: _mt-address-mutate  ( ip-a context -- flag )
-    DROP DUP 10 SWAP C! DROP -1 ;
-
-: _mt-zeroed?  ( addr len -- flag )
-    0 ?DO
-        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
-    LOOP DROP -1 ;
-
-: _mt-prep-now@  ( adapter -- ms )
-    DROP _mt-prep-now @ ;
-
-: _mt-prep-step  ( phase adapter -- prep-status )
-    _mt-prep-adapter !
-    _mt-prep-throw @ IF DROP -779 THROW THEN
-    _mt-phase-log-u @ 16 < IF
-        DUP _mt-phase-log _mt-phase-log-u @ CELLS + !
-        1 _mt-phase-log-u +!
-    THEN
-    _mt-prep-early-ready @ IF DROP KDOSTLS-PREP-S-READY EXIT THEN
-    DUP KDOSTLS-PHASE-REMOTE-ARP-READY = IF
-        DROP KDOSTLS-PREP-S-READY EXIT
-    THEN
-    1+ _mt-prep-adapter @ KDOSTLS.PHASE !
-    KDOSTLS-PREP-S-PENDING ;
-
-: _mt-prep-bind  ( adapter -- )
-    DUP KDOSTLS-INIT
-    DUP >R S" api.openai.com" 443 R> KDOSTLS-CONFIGURE
-        KDOSTLS-E-OK = _mt-assert
-    ['] _mt-prep-now@ OVER KDOSTLS.NOW-XT !
-    ['] _mt-prep-step SWAP KDOSTLS.COOP-STEP-XT ! ;
-
-: _mt-prep-fixture  ( -- )
-    1000 _mt-prep-now !
-    0 _mt-phase-log-u ! 0 _mt-prep-throw ! 0 _mt-prep-early-ready !
-    1 TLS-TRUST-COUNT ! 17 TLS-TRUST-GENERATION ! ;
-
-: _mt-test-prep-phases  ( -- )
-    _mt-prep-fixture _mt-a _mt-prep-bind
-    _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-PENDING = _mt-assert
-    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-OPENING = _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-TLS-PREP = _mt-assert
-    _mt-a KDOSTLS.TRUST-GENERATION @ 17 = _mt-assert
-    KDOSNET-OWNER@ _mt-a = _mt-assert
-    _mt-a KDOSTLS.PORT NIO.OPEN-START-XT @ 0= _mt-assert
-    _mt-a KDOSTLS.PORT NIO.OPEN-POLL-XT @ 0= _mt-assert
-    _mt-a KDOSTLS.PORT NIO.CANCEL-XT @ 0= _mt-assert
-    KDOSTLS-PHASE-REMOTE-ARP-READY 1- 0 DO
-        _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-PENDING = _mt-assert
-    LOOP
-    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-READY = _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-REMOTE-ARP-READY = _mt-assert
-    _mt-phase-log-u @ KDOSTLS-PHASE-REMOTE-ARP-READY = _mt-assert
-    KDOSTLS-PHASE-REMOTE-ARP-READY 0 DO
-        _mt-phase-log I CELLS + @ I 1+ = _mt-assert
-    LOOP
-    _mt-a KDOSTLS.STEP-COUNT @
-        KDOSTLS-PHASE-REMOTE-ARP-READY = _mt-assert
-    _mt-a KDOSTLS.MAX-STEP-CYCLES @
-        _mt-a KDOSTLS.LAST-STEP-CYCLES @ >= _mt-assert
-    _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
-    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-CANCELLED = _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-    _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert ;
-
-: _mt-test-prep-failures  ( -- )
-    _mt-a KDOSTLS-INIT
-    S" api.openai.com" 443 _mt-a KDOSTLS-CONFIGURE DROP
-    0 TLS-TRUST-COUNT !
-    _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-NO-TRUST = _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-prep-bind
-    _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-PENDING = _mt-assert
-    18 TLS-TRUST-GENERATION !
-    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-TRUST-CHANGED = _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-FAILED = _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-prep-bind
-    _mt-a KDOSTLS-PREP-START DROP
-    _mt-a KDOSTLS.DEADLINE-MS @ _mt-prep-now !
-    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-TIMEOUT = _mt-assert
-    _mt-a KDOSTLS.STEP-COUNT @ 0= _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-prep-bind
-    -1 _mt-prep-throw !
-    _mt-a KDOSTLS-PREP-START DROP
-    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-FAULT = _mt-assert
-    _mt-a KDOSTLS.STEP-COUNT @ 1 = _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-prep-bind
-    -1 _mt-prep-early-ready !
-    _mt-a KDOSTLS-PREP-START DROP
-    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-INVALID = _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-prep-bind _mt-b _mt-prep-bind
-    _mt-a KDOSTLS-PREP-START DROP
-    _mt-b KDOSTLS-PREP-START KDOSTLS-PREP-S-FAILED = _mt-assert
-    _mt-b KDOSTLS.LAST-ERROR @ KDOSTLS-E-BUSY = _mt-assert
-    KDOSNET-OWNER@ _mt-a = _mt-assert
-    _mt-a KDOSTLS-PREP-CANCEL DROP ;
-
-: _mt-test-prep-cancel-phases  ( -- )
-    KDOSTLS-PHASE-REMOTE-ARP-READY 1 DO
-        _mt-prep-fixture _mt-a _mt-prep-bind
-        _mt-a KDOSTLS-PREP-START DROP
-        I _mt-a KDOSTLS.PHASE !
-        _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
-        _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-        KDOSNET-OWNER@ 0= _mt-assert
-    LOOP ;
-
-: _mt-test-prep-default-prefix  ( -- )
-    _mt-a KDOSTLS-INIT
-    S" api.openai.com" 443 _mt-a KDOSTLS-CONFIGURE
-        KDOSTLS-E-OK = _mt-assert
-    1 TLS-TRUST-COUNT ! 23 TLS-TRUST-GENERATION ! ARP-CLEAR
-    _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-PENDING = _mt-assert
-    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-PENDING = _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-DNS-ARP-CHECK = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ DUP 0<> _mt-assert _mt-prep-ctx !
-    _mt-prep-ctx @ TLS-CTX.TCB @ 0= _mt-assert
-    _mt-a KDOSTLS.CLIENT-HELLO-A @ 0<> _mt-assert
-    _mt-a KDOSTLS.CLIENT-HELLO-U @ 0> _mt-assert
-    2 _mt-prep-mac C! 3 _mt-prep-mac 1+ C!
-    4 _mt-prep-mac 2 + C! 5 _mt-prep-mac 3 + C!
-    6 _mt-prep-mac 4 + C! 7 _mt-prep-mac 5 + C!
-    DNS-SERVER-IP NEXT-HOP _mt-prep-mac ARP-INSERT
-    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-PENDING = _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-DNS-BUILD = _mt-assert
-    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-PENDING = _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-DNS-SEND = _mt-assert
-    _mt-a KDOSTLS.DNS-QUERY-U @ /DNS-HDR > _mt-assert
-    _mt-a KDOSTLS.DNS-PORT @ 49152 >= _mt-assert
-    _mt-a KDOSTLS.STEP-COUNT @ 3 = _mt-assert
-    _mt-a KDOSTLS.MAX-STEP-CYCLES @ 0> _mt-assert
-    _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    _mt-prep-ctx @ /TLS-CTX _mt-zeroed? _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-    ARP-CLEAR ;
-
-VARIABLE _mt-alert-hits
-
-: _mt-attach-authenticated  ( adapter -- )
-    _mt-prep-adapter !
-    0 TLS-CTX@ DUP _mt-native-ctx ! /TLS-CTX 0 FILL
-    0 TCB-N DUP _mt-native-tcb ! /TCB 0 FILL
-    1 2 3 4 _mt-ip IP!
-    _mt-ip _mt-prep-adapter @ KDOSTLS.REMOTE-IP 4 CMOVE
-    _mt-ip _mt-native-tcb @ TCB.REMOTE-IP 4 CMOVE
-    443 _mt-native-tcb @ TCB.REMOTE-PORT !
-    50000 DUP _mt-native-tcb @ TCB.LOCAL-PORT !
-        _mt-prep-adapter @ KDOSTLS.LOCAL-PORT !
-    12345 DUP _mt-native-tcb @ TCB.ISS !
-        _mt-prep-adapter @ KDOSTLS.TCB-ISS !
-    100 DUP _mt-native-tcb @ TCB.SND-NXT !
-        _mt-native-tcb @ TCB.SND-UNA !
-    200 _mt-native-tcb @ TCB.RCV-NXT !
-    4096 _mt-native-tcb @ TCB.RCV-WND !
-    TCPS-ESTABLISHED _mt-native-tcb @ TCB.STATE !
-    _mt-native-tcb @ _mt-native-ctx @ TLS-CTX.TCB !
-    TLSS-ESTABLISHED _mt-native-ctx @ TLS-CTX.STATE !
-    1 _mt-native-ctx @ TLS-CTX.PEER-AUTH !
-    TLS-E-OK _mt-native-ctx @ TLS-CTX.ERROR !
-    _mt-native-ctx @ _mt-prep-adapter @ KDOSTLS.CONTEXT ! ;
-
-: _mt-coop-step  ( phase adapter -- prep-status )
-    _mt-prep-adapter !
-    _mt-prep-throw @ IF DROP -779 THROW THEN
-    _mt-phase-log-u @ 32 < IF
-        DUP _mt-phase-log _mt-phase-log-u @ CELLS + !
-        1 _mt-phase-log-u +!
-    THEN
-    _mt-prep-early-ready @ IF DROP KDOSTLS-PREP-S-READY EXIT THEN
-    DUP KDOSTLS-PHASE-CLIENT-FINISHED-SEND = IF
-        DROP _mt-prep-adapter @ _mt-attach-authenticated
-        KDOSTLS-PHASE-OPEN _mt-prep-adapter @ KDOSTLS.PHASE !
-        KDOSTLS-PREP-S-PENDING EXIT
-    THEN
-    DUP KDOSTLS-PHASE-OPEN = IF
-        DROP KDOSTLS-PREP-S-READY EXIT
-    THEN
-    1+ _mt-prep-adapter @ KDOSTLS.PHASE !
-    KDOSTLS-PREP-S-PENDING ;
-
-: _mt-coop-cancel  ( phase adapter -- prep-status )
-    2DROP KDOSTLS-PREP-S-CANCELLED ;
-
-: _mt-prep-bind2  ( adapter -- )
-    DUP KDOSTLS-INIT
-    DUP >R S" api.openai.com" 443 R> KDOSTLS-CONFIGURE
-        KDOSTLS-E-OK = _mt-assert
-    ['] _mt-prep-now@ OVER KDOSTLS.NOW-XT !
-    ['] _mt-coop-step SWAP KDOSTLS.COOP-STEP-XT ! ;
-
-: _mt-test-address-admission  ( -- )
-    \ The production default rejects a private answer in its own phase,
-    \ before a remote route or TCP continuation is selected.
-    _mt-prep-fixture _mt-a _mt-prep-bind2
-    _mt-a KDOSTLS.ADDRESS-XT @
-        ['] _KDOSTLS-ADDRESS-DEFAULT = _mt-assert
-    _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-PENDING = _mt-assert
-    10 0 0 1 _mt-ip IP!
-    _mt-ip _mt-a KDOSTLS.REMOTE-IP 4 CMOVE
-    KDOSTLS-PHASE-DNS-ADMIT _mt-a KDOSTLS.PHASE !
-    ['] _KDOSTLS-COOP-STEP-DEFAULT _mt-a KDOSTLS.COOP-STEP-XT !
-    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-ADDRESS = _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-FAILED = _mt-assert
-    _mt-a KDOSTLS.REMOTE-IP 4 _mt-zeroed? _mt-assert
-    _mt-a KDOSTLS.AFTER-ARP-PHASE @ 0= _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-prep-bind2
-    _mt-a KDOSTLS-PREP-START DROP
-    8 8 8 8 _mt-ip IP!
-    _mt-ip _mt-a KDOSTLS.REMOTE-IP 4 CMOVE
-    KDOSTLS-PHASE-DNS-ADMIT _mt-a KDOSTLS.PHASE !
-    ['] _KDOSTLS-COOP-STEP-DEFAULT _mt-a KDOSTLS.COOP-STEP-XT !
-    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-PENDING = _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-REMOTE-ARP-CHECK = _mt-assert
-    _mt-a KDOSTLS.REMOTE-IP C@ 8 = _mt-assert
-    _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-prep-bind2
-    0 _mt-address-hits ! -1 _mt-address-result !
-    12 ['] _mt-address-policy _mt-a KDOSTLS-ADDRESS-POLICY! DROP
-    _mt-a KDOSTLS-PREP-START DROP
-    8 8 4 4 _mt-ip IP!
-    _mt-ip _mt-a KDOSTLS.REMOTE-IP 4 CMOVE
-    KDOSTLS-PHASE-DNS-ADMIT _mt-a KDOSTLS.PHASE !
-    _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
-    _mt-address-hits @ 0= _mt-assert
-    _mt-a KDOSTLS.REMOTE-IP 8 _mt-zeroed? _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-
-    \ A reviewed override receives the owned bytes and its exact context.
-    \ Changing the borrowed source after the copy cannot change admission.
-    _mt-prep-fixture _mt-a _mt-prep-bind2
-    0 _mt-address-hits ! 0 _mt-address-context-seen !
-    _mt-address-seen 4 0 FILL -1 _mt-address-result !
-    77 ['] _mt-address-policy _mt-a KDOSTLS-ADDRESS-POLICY!
-        KDOSTLS-E-OK = _mt-assert
-    _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-PENDING = _mt-assert
-    88 ['] _mt-address-throw _mt-a KDOSTLS-ADDRESS-POLICY!
-        KDOSTLS-E-BUSY = _mt-assert
-    1 2 3 4 _mt-ip IP!
-    _mt-ip _mt-a KDOSTLS.REMOTE-IP 4 CMOVE
-    9 _mt-ip C!
-    KDOSTLS-PHASE-DNS-ADMIT _mt-a KDOSTLS.PHASE !
-    ['] _KDOSTLS-COOP-STEP-DEFAULT _mt-a KDOSTLS.COOP-STEP-XT !
-    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-PENDING = _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-REMOTE-ARP-CHECK = _mt-assert
-    _mt-a KDOSTLS.AFTER-ARP-PHASE @
-        KDOSTLS-PHASE-TCP-OPEN = _mt-assert
-    _mt-address-hits @ 1 = _mt-assert
-    _mt-address-context-seen @ 77 = _mt-assert
-    _mt-address-seen _mt-a KDOSTLS.REMOTE-IP 4 SAMESTR? _mt-assert
-    _mt-address-seen C@ 1 = _mt-assert
-    _mt-a KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-CANCELLED = _mt-assert
-    _mt-a KDOSTLS.ADDRESS-XT @ ['] _mt-address-policy = _mt-assert
-    _mt-a KDOSTLS.ADDRESS-CONTEXT @ 77 = _mt-assert
-
-    \ A throwing policy is a connector fault and still wipes ownership.
-    _mt-prep-fixture _mt-a _mt-prep-bind2
-    99 ['] _mt-address-throw _mt-a KDOSTLS-ADDRESS-POLICY!
-        KDOSTLS-E-OK = _mt-assert
-    _mt-a KDOSTLS-PREP-START DROP
-    8 8 8 8 _mt-ip IP!
-    _mt-ip _mt-a KDOSTLS.REMOTE-IP 4 CMOVE
-    KDOSTLS-PHASE-DNS-ADMIT _mt-a KDOSTLS.PHASE !
-    ['] _KDOSTLS-COOP-STEP-DEFAULT _mt-a KDOSTLS.COOP-STEP-XT !
-    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-FAULT = _mt-assert
-    _mt-a KDOSTLS.REMOTE-IP 4 _mt-zeroed? _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-
-    \ A policy cannot mutate its inspected copy and redirect TCP afterward.
-    _mt-prep-fixture _mt-a _mt-prep-bind2
-    0 ['] _mt-address-mutate _mt-a KDOSTLS-ADDRESS-POLICY!
-        KDOSTLS-E-OK = _mt-assert
-    _mt-a KDOSTLS-PREP-START DROP
-    8 8 4 4 _mt-ip IP!
-    _mt-ip _mt-a KDOSTLS.REMOTE-IP 4 CMOVE
-    KDOSTLS-PHASE-DNS-ADMIT _mt-a KDOSTLS.PHASE !
-    ['] _KDOSTLS-COOP-STEP-DEFAULT _mt-a KDOSTLS.COOP-STEP-XT !
-    _mt-a KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-ADDRESS = _mt-assert
-    _mt-a KDOSTLS.REMOTE-IP 8 _mt-zeroed? _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert ;
-
-: _mt-init-b-inner  ( -- )
-    _mt-b KDOSTLS-INIT ;
-
-: _mt-init-a-inner  ( -- )
-    _mt-a KDOSTLS-INIT ;
-
-: _mt-test-shared-network-owner  ( -- )
-    \ An owned descriptor cannot be erased by reinitialization.  The exact
-    \ foreign token remains installed until its holder explicitly releases it.
-    _mt-b KDOSTLS-SIZE 165 FILL
-    _mt-b KDOSNET-CLAIM KDOSNET-S-OK = _mt-assert
-    ['] _mt-init-b-inner CATCH
-        KDOSTLS-E-CLEANUP NEGATE = _mt-assert
-    _mt-b C@ 165 = _mt-assert
-    KDOSNET-OWNER@ _mt-b = _mt-assert
-
-    \ A foreign raw-network owner excludes TLS start and NIO polling without
-    \ invoking the adapter's lower callback.
-    _mt-a _mt-prep-bind2
-    _mt-a KDOSTLS-PREP-START KDOSTLS-PREP-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-BUSY = _mt-assert
-    0 _mt-poll-hits !
-    ['] _mt-poll _mt-a KDOSTLS.POLL-XT !
-    _mt-a KDOSTLS.PORT NIO-POLL
-    _mt-poll-hits @ 0= _mt-assert
-    KDOSNET-OWNER@ _mt-b = _mt-assert
-    _mt-b KDOSNET-RELEASE KDOSNET-S-OK = _mt-assert
-
-    \ Close ownership mismatch must not abort or scrub another transport's
-    \ machine-global TCP/TLS state.  Its quarantine survives owner release
-    \ and refuses descriptor reinitialization.
-    _mt-prep-fixture _mt-a _mt-prep-bind2
-    _mt-a _mt-attach-authenticated
-    KDOSTLS-PHASE-OPEN _mt-a KDOSTLS.PHASE !
-    KDOSTLS-STATE-OPEN _mt-a KDOSTLS.STATE !
-    _mt-b KDOSNET-CLAIM KDOSNET-S-OK = _mt-assert
-    _mt-a _KDOSTLS-NIO-CLOSE-START NIO-S-FAILED = _mt-assert
-    _mt-a _KDOSTLS-NIO-CLOSE-POLL NIO-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-CLEANUP = _mt-assert
-    _mt-a KDOSTLS.CLEANUP-ERROR @ KDOSTLS-E-CLEANUP = _mt-assert
-    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-ERROR = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ _mt-native-ctx @ = _mt-assert
-    _mt-native-tcb @ TCB.STATE @ TCPS-ESTABLISHED = _mt-assert
-    KDOSNET-OWNER@ _mt-b = _mt-assert
-    _mt-b KDOSNET-RELEASE KDOSNET-S-OK = _mt-assert
-    ['] _mt-init-a-inner CATCH
-        KDOSTLS-E-CLEANUP NEGATE = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ _mt-native-ctx @ = _mt-assert
-    _mt-native-tcb @ TCB.STATE @ TCPS-ESTABLISHED = _mt-assert
-
-    \ Losing ownership during preparation quarantines the second descriptor.
-    \ Poll and cancel leave the foreign token and retained state untouched.
-    _mt-prep-fixture _mt-b _mt-prep-bind2
-    _mt-b KDOSTLS-PREP-START KDOSTLS-PREP-S-PENDING = _mt-assert
-    _mt-b KDOSNET-RELEASE KDOSNET-S-OK = _mt-assert
-    _mt-a KDOSNET-CLAIM KDOSNET-S-OK = _mt-assert
-    _mt-b KDOSTLS-PREP-POLL KDOSTLS-PREP-S-FAILED = _mt-assert
-    _mt-b KDOSTLS-PREP-CANCEL KDOSTLS-PREP-S-FAILED = _mt-assert
-    _mt-b KDOSTLS.LAST-ERROR @ KDOSTLS-E-CLEANUP = _mt-assert
-    _mt-b KDOSTLS.CLEANUP-ERROR @ KDOSTLS-E-CLEANUP = _mt-assert
-    _mt-b KDOSTLS.STATE @ KDOSTLS-STATE-ERROR = _mt-assert
-    KDOSNET-OWNER@ _mt-a = _mt-assert
-    _mt-a KDOSNET-RELEASE KDOSNET-S-OK = _mt-assert
-    ['] _mt-init-b-inner CATCH
-        KDOSTLS-E-CLEANUP NEGATE = _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert ;
-
-: _mt-force-open  ( adapter -- )
-    DUP _mt-prep-bind2 DUP _mt-attach-authenticated
-    DUP KDOSNET-CLAIM KDOSNET-S-OK = _mt-assert
-    DUP KDOSTLS-PHASE-OPEN SWAP KDOSTLS.PHASE !
-    DUP KDOSTLS-STATE-OPEN SWAP KDOSTLS.STATE !
-    DUP KDOSTLS.PORT NIO-OPEN-STATE-OPEN SWAP NIO.OPEN-STATE !
-    DUP KDOSTLS.PORT NIO-S-OK SWAP NIO.OPEN-STATUS !
-    KDOSTLS.PORT NIO-CLOSE-STATE-IDLE SWAP NIO.CLOSE-STATE ! ;
-
-: _mt-route-warm  ( -- )
-    2 _mt-prep-mac C! 3 _mt-prep-mac 1+ C!
-    4 _mt-prep-mac 2 + C! 5 _mt-prep-mac 3 + C!
-    6 _mt-prep-mac 4 + C! 7 _mt-prep-mac 5 + C!
-    _mt-ip NEXT-HOP _mt-prep-mac ARP-INSERT ;
-
-: _mt-close-notify  ( ctx adapter -- sent? )
-    DROP TLS-CTX.TCB @ DUP 0= IF DROP 0 EXIT THEN
-    5 OVER TCB.SND-NXT +! DROP
-    1 _mt-alert-hits +! -1 ;
-
-: _mt-close-notify-fail  ( ctx adapter -- sent? )
-    2DROP 0 ;
-
-: _mt-close-notify-throw  ( ctx adapter -- sent? )
-    2DROP -780 THROW ;
-
-: _mt-test-cooperative-open  ( -- )
-    _mt-prep-fixture _mt-a _mt-prep-bind2
-    _mt-a KDOSTLS.PORT NIO.OPEN-START-XT @ 0<> _mt-assert
-    _mt-a KDOSTLS.PORT NIO.OPEN-POLL-XT @ 0<> _mt-assert
-    _mt-a KDOSTLS.PORT NIO.CANCEL-XT @ 0<> _mt-assert
-    _mt-a KDOSTLS.PORT NIO.CLOSE-START-XT @ 0<> _mt-assert
-    _mt-a KDOSTLS.PORT NIO.CLOSE-POLL-XT @ 0<> _mt-assert
-    _mt-a KDOSTLS.PORT NIO-OPEN-START NIO-S-PENDING = _mt-assert
-    _mt-a KDOSTLS.PORT NIO.OPEN-STATE @
-        NIO-OPEN-STATE-OPENING = _mt-assert
-    KDOSTLS-PHASE-OPEN 1- 0 DO
-        _mt-a KDOSTLS.PORT NIO-OPEN-POLL
-            NIO-S-PENDING = _mt-assert
-    LOOP
-    _mt-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-OK = _mt-assert
-    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-OPEN = _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-OPEN = _mt-assert
-    _mt-a _KDOSTLS-OPEN-VALID? _mt-assert
-    _mt-phase-log-u @ KDOSTLS-PHASE-OPEN = _mt-assert
-    KDOSTLS-PHASE-OPEN 0 DO
-        _mt-phase-log I CELLS + @ I 1+ = _mt-assert
-    LOOP
-    _mt-a KDOSTLS.STEP-COUNT @ KDOSTLS-PHASE-OPEN = _mt-assert
-    _mt-a KDOSTLS.MAX-STEP-CYCLES @
-        _mt-a KDOSTLS.LAST-STEP-CYCLES @ >= _mt-assert
-    KDOSNET-OWNER@ _mt-a = _mt-assert
-    ARP-CLEAR
-    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert ;
-
-: _mt-test-prep-failures2  ( -- )
-    1000 _mt-prep-now ! 0 _mt-prep-throw ! 0 _mt-prep-early-ready !
-    17 TLS-TRUST-GENERATION !
-    _mt-a _mt-prep-bind2 0 TLS-TRUST-COUNT !
-    _mt-a KDOSTLS.PORT NIO-OPEN-START NIO-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-NO-TRUST = _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-prep-bind2
-    _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
-    18 TLS-TRUST-GENERATION !
-    _mt-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-TRUST-CHANGED = _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-prep-bind2
-    _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
-    _mt-a KDOSTLS.DEADLINE-MS @ _mt-prep-now !
-    _mt-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-TIMEOUT = _mt-assert
-    _mt-a KDOSTLS.STEP-COUNT @ 0= _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-prep-bind2 -1 _mt-prep-throw !
-    _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
-    _mt-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-FAULT = _mt-assert
-    _mt-a KDOSTLS.STEP-COUNT @ 1 = _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-prep-bind2 -1 _mt-prep-early-ready !
-    _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
-    _mt-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-INVALID = _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-prep-bind2
-    ['] _mt-coop-cancel _mt-a KDOSTLS.COOP-STEP-XT !
-    _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
-    _mt-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-CANCELLED = _mt-assert
-    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-prep-bind2 _mt-b _mt-prep-bind2
-    _mt-a KDOSTLS.PORT NIO-OPEN-START DROP
-    _mt-b KDOSTLS.PORT NIO-OPEN-START NIO-S-FAILED = _mt-assert
-    _mt-b KDOSTLS.LAST-ERROR @ KDOSTLS-E-BUSY = _mt-assert
-    KDOSNET-OWNER@ _mt-a = _mt-assert
-    _mt-a KDOSTLS.PORT NIO-CANCEL DROP
-
-    KDOSTLS-PHASE-OPEN 1+ 1 DO
-        _mt-prep-fixture _mt-a _mt-prep-bind2
-        _mt-a KDOSTLS-PREP-START DROP
-        I _mt-a KDOSTLS.PHASE !
-        _mt-a KDOSTLS-PREP-CANCEL
-            KDOSTLS-PREP-S-CANCELLED = _mt-assert
-        _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-        KDOSNET-OWNER@ 0= _mt-assert
-    LOOP ;
-
-: _mt-test-io-and-peer-eof  ( -- )
-    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
-    0 _mt-sent-u ! 0 _mt-in-pos !
-    ['] _mt-send _mt-a KDOSTLS.SEND-XT !
-    ['] _mt-recv-op _mt-a KDOSTLS.RECV-XT !
-    S" 0123456789abcdefghijkl" _mt-a KDOSTLS.PORT NIO-SEND
-    NIO-S-OK = _mt-assert 17 = _mt-assert
-    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
-    NIO-S-OK = _mt-assert 3 = _mt-assert
-    TCPS-CLOSE-WAIT _mt-native-tcb @ TCB.STATE !
-    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
-    NIO-S-OK = _mt-assert 2 = _mt-assert
-    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
-    NIO-S-FAILED = _mt-assert 0= _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-IO = _mt-assert
-    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
-    TCPS-CLOSE-WAIT _mt-native-tcb @ TCB.STATE !
-    TLSS-CLOSING _mt-native-ctx @ TLS-CTX.STATE !
-    0 _mt-native-ctx @ TLS-CTX.PEER-AUTH !
-    TLS-E-OK _mt-native-ctx @ TLS-CTX.ERROR !
-    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
-    NIO-S-EOF = _mt-assert 0= _mt-assert
-    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-OPEN = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ _mt-native-ctx @ = _mt-assert
-    KDOSNET-OWNER@ _mt-a = _mt-assert
-    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert ;
-
-: _mt-test-graceful-close  ( -- )
-    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
-    0 _mt-alert-hits !
-    ['] _mt-close-notify _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
-    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-PENDING = _mt-assert
-    _mt-alert-hits @ 1 = _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-CLOSE-FIN = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ _mt-native-ctx @ = _mt-assert
-    KDOSNET-OWNER@ _mt-a = _mt-assert
-    _mt-native-tcb @ TCB.SND-NXT @ _mt-native-tcb @ TCB.SND-UNA !
-    _mt-a KDOSTLS.PORT NIO-CLOSE-POLL NIO-S-PENDING = _mt-assert
-    _mt-native-tcb @ TCB.STATE @ TCPS-FIN-WAIT-1 = _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-CLOSE-WAIT = _mt-assert
-    TCPS-TIME-WAIT _mt-native-tcb @ TCB.STATE !
-    _mt-a KDOSTLS.PORT NIO-CLOSE-POLL NIO-S-OK = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-    _mt-native-tcb @ TCB.STATE @ TCPS-TIME-WAIT = _mt-assert
-    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 0= _mt-assert
-    ARP-CLEAR ;
-
-: _mt-test-close-backpressure-and-peer  ( -- )
-    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
-    0 _mt-alert-hits !
-    101 _mt-native-tcb @ TCB.SND-NXT !
-    100 _mt-native-tcb @ TCB.SND-UNA !
-    ['] _mt-close-notify _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
-    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-PENDING = _mt-assert
-    _mt-alert-hits @ 0= _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-CLOSE-NOTIFY = _mt-assert
-    101 _mt-native-tcb @ TCB.SND-UNA !
-    _mt-a KDOSTLS.PORT NIO-CLOSE-POLL NIO-S-PENDING = _mt-assert
-    _mt-alert-hits @ 1 = _mt-assert
-    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
-    0 _mt-alert-hits !
-    ['] _mt-close-notify _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
-    TCPS-CLOSE-WAIT _mt-native-tcb @ TCB.STATE !
-    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-PENDING = _mt-assert
-    _mt-alert-hits @ 1 = _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-CLOSE-FIN = _mt-assert
-    _mt-native-tcb @ TCB.STATE @ TCPS-CLOSE-WAIT = _mt-assert
-    _mt-native-tcb @ TCB.SND-NXT @ _mt-native-tcb @ TCB.SND-UNA !
-    _mt-a KDOSTLS.PORT NIO-CLOSE-POLL NIO-S-PENDING = _mt-assert
-    _mt-native-tcb @ TCB.STATE @ TCPS-LAST-ACK = _mt-assert
-    _mt-a _KDCL-A ! TCPS-LAST-ACK _KDCL-PRE-STATE !
-    _mt-native-tcb @ TCB-INIT
-    _KDOSTLS-CLOSE-POST-RECEIVE NIO-S-OK = _mt-assert
-    _mt-native-tcb @ TCB.LOCAL-PORT @ 0= _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 0= _mt-assert
-    ARP-CLEAR ;
-
-: _mt-test-close-fallbacks  ( -- )
-    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
-    ['] _mt-close-notify _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
-    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-PENDING = _mt-assert
-    _mt-a KDOSTLS.DEADLINE-MS @ _mt-prep-now !
-    _mt-a KDOSTLS.PORT NIO-CLOSE-POLL NIO-S-OK = _mt-assert
-    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
-    ['] _mt-close-notify _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
-    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-PENDING = _mt-assert
-    _mt-a KDOSTLS.RETRIES @ 1 = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ _mt-native-ctx @ = _mt-assert
-    _mt-a KDOSTLS.DEADLINE-MS @ _mt-prep-now !
-    _mt-a KDOSTLS.PORT NIO-CLOSE-POLL NIO-S-OK = _mt-assert
-    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
-    ['] _mt-close-notify-fail _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
-    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-OK = _mt-assert
-    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
-    ['] _mt-close-notify-throw _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
-    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-FAILED = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ _mt-native-ctx @ = _mt-assert
-    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-    ARP-CLEAR ;
-
-: _mt-test-default-route-guards  ( -- )
-    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
-    _mt-a KDOSTLS.POLL-XT @ ['] _KDOSTLS-POLL-DEFAULT = _mt-assert
-    _mt-a KDOSTLS.PORT NIO-POLL
-    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-OPEN = _mt-assert
-    S" cold" _mt-a KDOSTLS.PORT NIO-SEND
-    NIO-S-FAILED = _mt-assert 0= _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-IO = _mt-assert
-    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
-    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
-    NIO-S-FAILED = _mt-assert 0= _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-IO = _mt-assert
-    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
-
-    \ Preserve an authenticated record-layer failure before cancellation
-    \ aborts and wipes the native TLS context.
-    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
-    TLS-RBUF-RESET
-    TLS-E-POST-HANDSHAKE _mt-native-ctx @ TLS-CTX.ERROR !
-    _mt-recv 32 _mt-a KDOSTLS.PORT NIO-RECV
-    NIO-S-FAILED = _mt-assert 0= _mt-assert
-    _mt-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-IO = _mt-assert
-    _mt-a KDOSTLS.NATIVE-ERROR @ TLS-E-POST-HANDSHAKE = _mt-assert
-    _mt-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _mt-assert
-    _mt-a KDOSTLS.NATIVE-ERROR @ TLS-E-POST-HANDSHAKE = _mt-assert
-    _mt-native-ctx @ /TLS-CTX _mt-zeroed? _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-    ARP-CLEAR ;
-
-: _mt-test-blocking-close-bound  ( -- )
-    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR _mt-route-warm
-    ['] _mt-close-notify _mt-a KDOSTLS.CLOSE-NOTIFY-XT !
-    _mt-a 2 _KDOSTLS-NIO-CLOSE-BOUNDED
-    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    _mt-a KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-    ARP-CLEAR ;
-
-: _mt-test-tcb-reuse-guard  ( -- )
-    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
-    99999 _mt-native-tcb @ TCB.ISS !
-    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-OK = _mt-assert
-    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert
-    _mt-native-tcb @ TCB.STATE @ TCPS-ESTABLISHED = _mt-assert
-
-    _mt-prep-fixture _mt-a _mt-force-open ARP-CLEAR
-    _mt-recv _mt-native-ctx @ TLS-CTX.TCB !
-    _mt-a KDOSTLS.PORT NIO-CLOSE-START NIO-S-OK = _mt-assert
-    _mt-a KDOSTLS.CLOSE-FALLBACKS @ 1 = _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ 0= _mt-assert
-    KDOSNET-OWNER@ 0= _mt-assert ;
-
-VARIABLE _mt-default-depth
-CREATE _mt-peer-ip 4 ALLOT
-
-: _mt-test-default-open-stack  ( -- )
-    192 168 1 100 IP-SET
-    255 255 255 0 NET-MASK IP!
-    TCP-INIT-ALL ARP-CLEAR
-    192 168 1 1 _mt-peer-ip IP!
-    2 _mt-prep-mac C! 3 _mt-prep-mac 1+ C!
-    4 _mt-prep-mac 2 + C! 5 _mt-prep-mac 3 + C!
-    6 _mt-prep-mac 4 + C! 7 _mt-prep-mac 5 + C!
-    _mt-peer-ip _mt-prep-mac ARP-INSERT
-    _mt-a KDOSTLS-INIT
-    _mt-peer-ip _mt-a KDOSTLS.REMOTE-IP 4 CMOVE
-    443 _mt-a KDOSTLS.REMOTE-PORT !
-    0 TLS-CTX@ DUP /TLS-CTX 0 FILL _mt-a KDOSTLS.CONTEXT !
-    _mt-a _KDCP-A !
-    DEPTH _mt-default-depth !
-    _KDOSTLS-STEP-TCP-OPEN KDOSTLS-PREP-S-PENDING = _mt-assert
-    DEPTH _mt-default-depth @ = _mt-assert
-    _mt-a KDOSTLS.PHASE @ KDOSTLS-PHASE-TCP-WAIT = _mt-assert
-    _mt-a KDOSTLS.LOCAL-PORT @ 49152 >= _mt-assert
-    _mt-a KDOSTLS.CONTEXT @ TLS-CTX.TCB @ 0<> _mt-assert
-    0 _mt-a KDOSTLS.CONTEXT !
-    TCP-INIT-ALL ARP-CLEAR ;
-
-: _mt-test-handshake-buffer-stack  ( -- )
-    0 TLS-CTX@ DUP /TLS-CTX 0 FILL _mt-native-ctx !
-    TLSS-HANDSHAKE _mt-native-ctx @ TLS-CTX.STATE !
-    TLSH-SERVER-HELLO-RCVD _mt-native-ctx @ TLS-CTX.HS-STATE !
-    TLS-ALPN-NONE _mt-native-ctx @ TLS-CTX.ALPN-PROFILE !
-    TLS-TR-RESET
-    TLS-HS-RBUF 6 0 FILL
-    TLSHT-ENCRYPTED-EXT TLS-HS-RBUF C!
-    2 TLS-HS-RBUF 3 + C!
-    6 TLS-HS-RBUF-LEN ! 0 TLS-HS-RBUF-ERROR !
-    DEPTH _mt-default-depth !
-    _mt-native-ctx @ _KDOSTLS-HS-PROCESS-ONE
-        _KDOSTLS-HS-S-PROCESSED = _mt-assert
-    DEPTH _mt-default-depth @ = _mt-assert
-    TLS-HS-RBUF-LEN @ 0= _mt-assert
-    _mt-native-ctx @ TLS-CTX.HS-STATE @ TLSH-EE-RCVD = _mt-assert ;
-
-: _mt-run  ( -- )
-    0 _mt-fails ! 0 _mt-checks ! DEPTH _mt-depth !
-    PERF-RESET
-    TLS-TRUST-COUNT @ _mt-old-trust !
-    TLS-TRUST-GENERATION @ _mt-old-trust-generation !
-    0 _mt-sent-u ! 0 _mt-in-pos ! 0 _mt-dns-hits !
-    0 _mt-connect-hits ! 0 _mt-close-hits ! 0 _mt-poll-hits !
-    _mt-test-default-open-stack
-    _mt-test-handshake-buffer-stack
-    _mt-test-config
-    _mt-test-address-admission
-    _mt-test-cooperative-open
-    _mt-test-prep-failures2
-    _mt-test-io-and-peer-eof
-    _mt-test-graceful-close
-    _mt-test-close-backpressure-and-peer
-    _mt-test-close-fallbacks
-    _mt-test-default-route-guards
-    _mt-test-blocking-close-bound
-    _mt-test-tcb-reuse-guard
-    _mt-test-prep-default-prefix
-    ." TLS PREP MAX-CYCLES " _mt-a KDOSTLS.MAX-STEP-CYCLES @ . CR
-    _mt-test-shared-network-owner
-    _mt-old-trust @ TLS-TRUST-COUNT !
-    _mt-old-trust-generation @ TLS-TRUST-GENERATION !
-    _mt-stack
-    _mt-fails @ 0= IF
-        ." TLS PORT PASS " _mt-checks @ .
+    _knw-depth @ = _knw-assert ;
+
+: _knw-results!  ( claim-status throw release-status -- )
+    _knw-release ! _knw-throw ! _knw-claim ! ;
+
+: _knw-check-result  ( claim-status throw release-status -- )
+    _knw-results!
+    _knw-claim @ KDOSNET-S-OK = _knw-assert
+    _knw-throw @ 0= _knw-assert
+    _knw-release @ KDOSNET-S-OK = _knw-assert ;
+
+: _knw-operate  ( -- )
+    DEPTH _knw-depth @ = _knw-assert
+    _knw-token-a KDOSNET-OPERATE? _knw-assert
+    1 _knw-hits +! ;
+
+: _knw-operate-throw  ( -- )
+    DEPTH _knw-depth @ = _knw-assert
+    _knw-token-a KDOSNET-OPERATE? _knw-assert
+    1 _knw-hits +!
+    111 222 -7331 THROW ;
+
+: _knw-release-own  ( -- )
+    _knw-token-a KDOSNET-RELEASE KDOSNET-S-OK = _knw-assert ;
+
+: _knw-install-foreign  ( -- )
+    _knw-token-a KDOSNET-RELEASE KDOSNET-S-OK = _knw-assert
+    _knw-token-b KDOSNET-CLAIM KDOSNET-S-OK = _knw-assert ;
+
+: _knw-install-foreign-throw  ( -- )
+    _knw-install-foreign
+    -7332 THROW ;
+
+: _knw-run  ( -- )
+    0 _knw-fails ! 0 _knw-checks ! 0 _knw-hits !
+    DEPTH _knw-depth !
+    KDOSNET-OWNER@ 0= _knw-assert
+
+    _knw-token-a ['] _knw-operate KDOSNET-WITH
+        _knw-check-result
+    _knw-hits @ 1 = _knw-assert
+    KDOSNET-OWNER@ 0= _knw-assert
+
+    _knw-token-a ['] _knw-operate-throw KDOSNET-WITH
+        _knw-results!
+    _knw-claim @ KDOSNET-S-OK = _knw-assert
+    _knw-throw @ -7331 = _knw-assert
+    _knw-release @ KDOSNET-S-OK = _knw-assert
+    _knw-hits @ 2 = _knw-assert
+    KDOSNET-OWNER@ 0= _knw-assert
+
+    0 ['] _knw-operate KDOSNET-WITH _knw-results!
+    _knw-claim @ KDOSNET-S-INVALID = _knw-assert
+    _knw-throw @ 0= _knw-assert
+    _knw-release @ 0= _knw-assert
+    _knw-hits @ 2 = _knw-assert
+    KDOSNET-OWNER@ 0= _knw-assert
+
+    _knw-token-b KDOSNET-CLAIM KDOSNET-S-OK = _knw-assert
+    _knw-token-a 0 KDOSNET-WITH _knw-results!
+    _knw-claim @ KDOSNET-S-INVALID = _knw-assert
+    _knw-throw @ 0= _knw-assert
+    _knw-release @ 0= _knw-assert
+    KDOSNET-OWNER@ _knw-token-b = _knw-assert
+
+    _knw-token-a ['] _knw-operate KDOSNET-WITH _knw-results!
+    _knw-claim @ KDOSNET-S-BUSY = _knw-assert
+    _knw-throw @ 0= _knw-assert
+    _knw-release @ 0= _knw-assert
+    _knw-hits @ 2 = _knw-assert
+    KDOSNET-OWNER@ _knw-token-b = _knw-assert
+    _knw-token-b KDOSNET-RELEASE KDOSNET-S-OK = _knw-assert
+
+    _knw-token-a ['] _knw-release-own KDOSNET-WITH _knw-results!
+    _knw-claim @ KDOSNET-S-OK = _knw-assert
+    _knw-throw @ 0= _knw-assert
+    _knw-release @ KDOSNET-S-NOT-OWNER = _knw-assert
+    KDOSNET-OWNER@ 0= _knw-assert
+
+    _knw-token-a ['] _knw-install-foreign KDOSNET-WITH _knw-results!
+    _knw-claim @ KDOSNET-S-OK = _knw-assert
+    _knw-throw @ 0= _knw-assert
+    _knw-release @ KDOSNET-S-NOT-OWNER = _knw-assert
+    KDOSNET-OWNER@ _knw-token-b = _knw-assert
+    _knw-token-b KDOSNET-RELEASE KDOSNET-S-OK = _knw-assert
+
+    _knw-token-a ['] _knw-install-foreign-throw KDOSNET-WITH
+        _knw-results!
+    _knw-claim @ KDOSNET-S-OK = _knw-assert
+    _knw-throw @ -7332 = _knw-assert
+    _knw-release @ KDOSNET-S-NOT-OWNER = _knw-assert
+    KDOSNET-OWNER@ _knw-token-b = _knw-assert
+    _knw-token-b KDOSNET-RELEASE KDOSNET-S-OK = _knw-assert
+    KDOSNET-OWNER@ 0= _knw-assert
+
+    _knw-stack
+    _knw-fails @ 0= IF
+        ." KDOS NET WITH PASS " _knw-checks @ .
     ELSE
-        ." TLS PORT FAIL " _mt-fails @ . ." / " _mt-checks @ .
+        ." KDOS NET WITH FAIL " _knw-fails @ .
+        ." / " _knw-checks @ .
     THEN CR ;
 
-_mt-run
+_knw-run
 """,
-        ready_markers=("TLS PORT PASS",),
-        stable_markers=("TLS PORT PASS",),
-        failure_markers=("TLS PORT FAIL",),
+        ready_markers=("KDOS NET WITH PASS",),
+        stable_markers=("KDOS NET WITH PASS",),
+        failure_markers=("KDOS NET WITH FAIL",),
+        include_large_sample=False,
+        total_sectors=1024,
+    ),
+    "tls-established-port": Profile(
+        roots=("net/transports/kdos-tls-port.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - shared established KDOS TLS port tests
+ENTER-USERLAND
+." [akashic] loading shared KDOS TLS port" CR
+REQUIRE net/transports/kdos-tls-port.f
+
+VARIABLE _kp-fails
+VARIABLE _kp-checks
+VARIABLE _kp-depth
+: _kp-assert  ( flag -- )
+    1 _kp-checks +!
+    0= IF 1 _kp-fails +! ." ASSERT " _kp-checks @ . CR THEN ;
+: _kp-stack  ( -- )
+    DEPTH DUP _kp-depth @ <> IF
+        ." STACK " _kp-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _kp-depth @ = _kp-assert ;
+
+CREATE _kp-a KDOSTLSP-SIZE ALLOT
+CREATE _kp-b KDOSTLSP-SIZE ALLOT
+CREATE _kp-foreign 8 ALLOT
+CREATE _kp-buffer 32 ALLOT
+
+VARIABLE _kp-send-mode
+VARIABLE _kp-send-hits
+VARIABLE _kp-recv-n
+VARIABLE _kp-recv-hits
+VARIABLE _kp-status-ior
+VARIABLE _kp-status-hits
+VARIABLE _kp-ready-flag
+VARIABLE _kp-ready-hits
+VARIABLE _kp-poll-hits
+VARIABLE _kp-close-ior
+VARIABLE _kp-close-hits
+VARIABLE _kp-abort-ior
+VARIABLE _kp-abort-status
+VARIABLE _kp-abort-hits
+VARIABLE _kp-now
+VARIABLE _kp-nesting
+VARIABLE _kp-bind-timeout
+
+VARIABLE _kp-cb-sd
+VARIABLE _kp-cb-b
+VARIABLE _kp-cb-u
+VARIABLE _kp-cb-r
+
+: _kp-owner  ( record -- )
+    DUP KDOSNET-OPERATE? _kp-assert
+    KDOSNET-OWNER@ = _kp-assert ;
+
+: _kp-check-sd  ( socket-sd record -- )
+    2DUP KDOSTLSP.SOCKET-SD @ = _kp-assert
+    NIP 0<> _kp-assert ;
+
+: _kp-status  ( socket-sd record -- ior )
+    DUP _kp-owner 2DUP _kp-check-sd 2DROP
+    1 _kp-status-hits +! _kp-status-ior @ ;
+
+: _kp-status-throw  ( socket-sd record -- ior )
+    DUP _kp-owner 2DUP _kp-check-sd 2DROP -7441 THROW 0 ;
+
+: _kp-status-release  ( socket-sd record -- ior )
+    DUP _kp-owner
+    DUP KDOSNET-RELEASE KDOSNET-S-OK = _kp-assert
+    2DROP 0 ;
+
+: _kp-send  ( socket-sd buffer length record -- count )
+    _kp-cb-r ! _kp-cb-u ! _kp-cb-b ! _kp-cb-sd !
+    _kp-cb-r @ _kp-owner
+    _kp-cb-sd @ _kp-cb-r @ _kp-check-sd
+    1 _kp-send-hits +!
+    _kp-send-mode @ 3 = IF -7442 THROW THEN
+    _kp-send-mode @ 4 = IF
+        _kp-cb-r @ KDOSNET-RELEASE KDOSNET-S-OK = _kp-assert
+    THEN
+    _kp-send-mode @ 5 = _kp-nesting @ 0= AND IF
+        -1 _kp-nesting !
+        S" n" _kp-b KDOSTLSP.PORT NIO-SEND
+        NIO-S-OK = _kp-assert 0= _kp-assert
+        0 _kp-nesting !
+    THEN
+    _kp-send-mode @ 1 = IF 0 EXIT THEN
+    _kp-send-mode @ 2 = IF _kp-cb-u @ 1+ EXIT THEN
+    _kp-cb-u @ 3 MIN ;
+
+: _kp-recv  ( socket-sd buffer capacity record -- count )
+    _kp-cb-r ! _kp-cb-u ! _kp-cb-b ! _kp-cb-sd !
+    _kp-cb-r @ _kp-owner
+    _kp-cb-sd @ _kp-cb-r @ _kp-check-sd
+    1 _kp-recv-hits +! _kp-recv-n @ ;
+
+: _kp-ready  ( socket-sd record -- flag )
+    DUP _kp-owner 2DUP _kp-check-sd 2DROP
+    1 _kp-ready-hits +! _kp-ready-flag @ ;
+
+: _kp-poll  ( record -- )
+    DUP _kp-owner DROP 1 _kp-poll-hits +! ;
+
+: _kp-close-try  ( socket-sd record -- ior )
+    DUP _kp-owner 2DUP _kp-check-sd 2DROP
+    1 _kp-close-hits +! _kp-close-ior @ ;
+
+: _kp-abort  ( socket-sd record -- abort-status ior )
+    DUP _kp-owner 2DUP _kp-check-sd 2DROP
+    1 _kp-abort-hits +!
+    _kp-abort-status @ _kp-abort-ior @ ;
+
+: _kp-abort-throw  ( socket-sd record -- abort-status ior )
+    DUP _kp-owner 2DUP _kp-check-sd 2DROP -7443 THROW 0 0 ;
+
+: _kp-now@  ( record -- ms ) DROP _kp-now @ ;
+
+: _kp-fixture-reset  ( -- )
+    0 _kp-send-mode ! 0 _kp-send-hits !
+    0 _kp-recv-n ! 0 _kp-recv-hits !
+    0 _kp-status-ior ! 0 _kp-status-hits !
+    0 _kp-ready-flag ! 0 _kp-ready-hits ! 0 _kp-poll-hits !
+    TLS-E-WOULD-BLOCK _kp-close-ior ! 0 _kp-close-hits !
+    0 _kp-abort-ior ! TLS-ABORT-S-LOCAL _kp-abort-status !
+    0 _kp-abort-hits ! 0 _kp-now ! 0 _kp-nesting !
+    KDOSTLSP-CLOSE-TIMEOUT-MS _kp-bind-timeout ! ;
+
+VARIABLE _kp-bind-sd
+VARIABLE _kp-bind-r
+: _kp-bind  ( socket-sd record -- )
+    _kp-bind-r ! _kp-bind-sd !
+    _kp-bind-r @ KDOSTLSP-INIT KDOSTLSP-S-OK = _kp-assert
+    ['] _kp-now@ _kp-bind-r @ KDOSTLSP.NOW-XT !
+    ['] _kp-send _kp-bind-r @ KDOSTLSP.SEND-XT !
+    ['] _kp-recv _kp-bind-r @ KDOSTLSP.RECV-XT !
+    ['] _kp-status _kp-bind-r @ KDOSTLSP.STATUS-XT !
+    ['] _kp-ready _kp-bind-r @ KDOSTLSP.READY-XT !
+    ['] _kp-poll _kp-bind-r @ KDOSTLSP.POLL-XT !
+    ['] _kp-close-try _kp-bind-r @ KDOSTLSP.CLOSE-TRY-XT !
+    ['] _kp-abort _kp-bind-r @ KDOSTLSP.ABORT-XT !
+    _kp-bind-r @ KDOSTLSP-RESERVE KDOSTLSP-S-OK = _kp-assert
+    _kp-bind-timeout @ _kp-bind-r @ KDOSTLSP-CLOSE-TIMEOUT!
+        KDOSTLSP-S-OK = _kp-assert
+    _kp-bind-sd @ _kp-bind-r @ KDOSTLSP-PUBLISH
+        KDOSTLSP-S-OK = _kp-assert ;
+
+: _kp-adopt  ( record -- )
+    DUP >R KDOSTLSP-ADOPT-OPEN
+    KDOSTLSP-S-OK = _kp-assert
+    R> KDOSTLSP.PORT = _kp-assert ;
+
+: _kp-open  ( socket-sd record -- )
+    DUP >R _kp-bind R> _kp-adopt ;
+
+: _kp-test-publication-and-io  ( -- )
+    _kp-fixture-reset
+    101 _kp-a _kp-bind
+    _kp-a KDOSTLSP.PORT _kp-a = _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-PUBLISHED = _kp-assert
+    S" inert" _kp-a KDOSTLSP.PORT NIO-SEND
+    NIO-S-FAILED = _kp-assert 0= _kp-assert
+    _kp-send-hits @ 0= _kp-assert KDOSNET-OWNER@ 0= _kp-assert
+    _kp-a _kp-adopt
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-OPEN = _kp-assert
+    _kp-a KDOSTLSP.PORT NIO.OPEN-STATE @
+        NIO-OPEN-STATE-OPEN = _kp-assert
+    _kp-status-hits @ 1 = _kp-assert KDOSNET-OWNER@ 0= _kp-assert
+
+    S" abcdef" _kp-a KDOSTLSP.PORT NIO-SEND
+    NIO-S-OK = _kp-assert 3 = _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert
+
+    _kp-foreign KDOSNET-CLAIM KDOSNET-S-OK = _kp-assert
+    S" busy" _kp-a KDOSTLSP.PORT NIO-SEND
+    NIO-S-OK = _kp-assert 0= _kp-assert
+    KDOSNET-OWNER@ _kp-foreign = _kp-assert
+    _kp-foreign KDOSNET-RELEASE KDOSNET-S-OK = _kp-assert
+
+    1 _kp-send-mode ! TLS-E-BUSY _kp-status-ior !
+    S" lower-busy" _kp-a KDOSTLSP.PORT NIO-SEND
+    NIO-S-OK = _kp-assert 0= _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-OPEN = _kp-assert
+    0 _kp-status-ior ! TLS-E-TRANSPORT _kp-status-ior !
+    S" lower-fail" _kp-a KDOSTLSP.PORT NIO-SEND
+    NIO-S-FAILED = _kp-assert 0= _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-ERROR = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 101 = _kp-assert
+    0 _kp-abort-ior !
+    _kp-a KDOSTLSP-DISCARD-STEP KDOSTLSP-S-OK = _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-RESET = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert ;
+
+: _kp-test-receive-and-interleave  ( -- )
+    _kp-fixture-reset 201 _kp-a _kp-open 202 _kp-b _kp-open
+    2 _kp-recv-n !
+    _kp-buffer 8 _kp-a KDOSTLSP.PORT NIO-RECV
+    NIO-S-OK = _kp-assert 2 = _kp-assert
+    0 _kp-recv-n ! 0 _kp-ready-flag !
+    _kp-buffer 8 _kp-a KDOSTLSP.PORT NIO-RECV
+    NIO-S-OK = _kp-assert 0= _kp-assert
+    -1 _kp-ready-flag !
+    _kp-buffer 8 _kp-a KDOSTLSP.PORT NIO-RECV
+    NIO-S-EOF = _kp-assert 0= _kp-assert
+
+    5 _kp-send-mode !
+    S" outer" _kp-a KDOSTLSP.PORT NIO-SEND
+    NIO-S-OK = _kp-assert 3 = _kp-assert
+    _kp-send-hits @ 1 = _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-OPEN = _kp-assert
+    _kp-b KDOSTLSP.STATE @ KDOSTLSP-STATE-OPEN = _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert
+    0 _kp-send-mode !
+    S" peer" _kp-b KDOSTLSP.PORT NIO-SEND
+    NIO-S-OK = _kp-assert 3 = _kp-assert
+    _kp-a KDOSTLSP.PORT NIO-POLL
+    _kp-b KDOSTLSP.PORT NIO-POLL
+    _kp-poll-hits @ 2 = _kp-assert KDOSNET-OWNER@ 0= _kp-assert
+
+    _kp-a KDOSTLSP.PORT NIO-CANCEL NIO-S-CANCELLED = _kp-assert
+    _kp-b KDOSTLSP.PORT NIO-CANCEL NIO-S-CANCELLED = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+    _kp-b KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert ;
+
+: _kp-test-close-and-recovery  ( -- )
+    _kp-fixture-reset 301 _kp-a _kp-open
+    _kp-a KDOSTLSP.PORT NIO-CLOSE-START NIO-S-PENDING = _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-CLOSE-POLL = _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert
+    _kp-foreign KDOSNET-CLAIM KDOSNET-S-OK = _kp-assert
+    _kp-a KDOSTLSP.PORT NIO-CLOSE-POLL NIO-S-PENDING = _kp-assert
+    _kp-poll-hits @ 0= _kp-assert
+    _kp-foreign KDOSNET-RELEASE KDOSNET-S-OK = _kp-assert
+    _kp-a KDOSTLSP.PORT NIO-CLOSE-POLL NIO-S-PENDING = _kp-assert
+    _kp-poll-hits @ 1 = _kp-assert
+    0 _kp-close-ior !
+    _kp-a KDOSTLSP.PORT NIO-CLOSE-POLL NIO-S-OK = _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-CLOSED = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert
+
+    _kp-fixture-reset 1 _kp-bind-timeout ! 302 _kp-a _kp-bind
+    _kp-a _kp-adopt
+    _kp-a KDOSTLSP.PORT NIO-CLOSE-START NIO-S-PENDING = _kp-assert
+    2 _kp-now !
+    _kp-a KDOSTLSP.PORT NIO-CLOSE-POLL NIO-S-PENDING = _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-CLOSE-ABORT = _kp-assert
+    _kp-a KDOSTLSP.PORT NIO-CLOSE-POLL NIO-S-FAILED = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+    _kp-a KDOSTLSP.CLOSE-FALLBACKS @ 1 = _kp-assert
+    _kp-a KDOSTLSP.LAST-ERROR @ KDOSTLSP-E-TIMEOUT = _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert
+
+    _kp-fixture-reset 303 _kp-b _kp-open
+    _kp-foreign KDOSNET-CLAIM KDOSNET-S-OK = _kp-assert
+    _kp-b KDOSTLSP.PORT NIO-CANCEL NIO-S-FAILED = _kp-assert
+    _kp-b KDOSTLSP.STATE @ KDOSTLSP-STATE-QUARANTINED = _kp-assert
+    _kp-b KDOSTLSP.SOCKET-SD @ 303 = _kp-assert
+    _kp-foreign KDOSNET-RELEASE KDOSNET-S-OK = _kp-assert
+    _kp-b KDOSTLSP-RECOVER-STEP KDOSTLSP-S-OK = _kp-assert
+    _kp-b KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert
+
+    _kp-fixture-reset 304 _kp-a _kp-bind
+    _kp-foreign KDOSNET-CLAIM KDOSNET-S-OK = _kp-assert
+    _kp-a KDOSTLSP-DISCARD-STEP KDOSTLSP-S-PENDING = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 304 = _kp-assert
+    _kp-foreign KDOSNET-RELEASE KDOSNET-S-OK = _kp-assert
+    _kp-a KDOSTLSP-DISCARD-STEP KDOSTLSP-S-OK = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+    ;
+
+: _kp-test-fault-containment  ( -- )
+    _kp-fixture-reset 401 _kp-a _kp-bind
+    ['] _kp-status-throw _kp-a KDOSTLSP.STATUS-XT !
+    _kp-a KDOSTLSP-ADOPT-OPEN
+    KDOSTLSP-S-LOWER = _kp-assert 0= _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-ERROR = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 401 = _kp-assert
+    ['] _kp-abort _kp-a KDOSTLSP.ABORT-XT !
+    _kp-a KDOSTLSP-DISCARD-STEP KDOSTLSP-S-OK = _kp-assert
+
+    _kp-fixture-reset 402 _kp-a _kp-bind
+    ['] _kp-status-release _kp-a KDOSTLSP.STATUS-XT !
+    _kp-a KDOSTLSP-ADOPT-OPEN
+    KDOSTLSP-S-LOWER = _kp-assert 0= _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-QUARANTINED = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 402 = _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert
+    ['] _kp-abort _kp-a KDOSTLSP.ABORT-XT !
+    _kp-a KDOSTLSP-RECOVER-STEP KDOSTLSP-S-OK = _kp-assert
+    _kp-a KDOSTLSP.SOCKET-SD @ 0= _kp-assert
+
+    _kp-fixture-reset 403 _kp-b _kp-bind
+    ['] _kp-abort-throw _kp-b KDOSTLSP.ABORT-XT !
+    _kp-b KDOSTLSP-DISCARD-STEP KDOSTLSP-S-LOWER = _kp-assert
+    _kp-b KDOSTLSP.STATE @ KDOSTLSP-STATE-QUARANTINED = _kp-assert
+    _kp-b KDOSTLSP.SOCKET-SD @ 403 = _kp-assert
+    ['] _kp-abort _kp-b KDOSTLSP.ABORT-XT !
+    _kp-b KDOSTLSP-RECOVER-STEP KDOSTLSP-S-OK = _kp-assert
+
+    _kp-fixture-reset 404 _kp-a _kp-open
+    _kp-a 1 _kp-a KDOSTLSP.PORT NIO-SEND
+    NIO-S-FAILED = _kp-assert 0= _kp-assert
+    _kp-a KDOSTLSP.STATE @ KDOSTLSP-STATE-ERROR = _kp-assert
+    _kp-a KDOSTLSP-DISCARD-STEP KDOSTLSP-S-OK = _kp-assert
+    KDOSNET-OWNER@ 0= _kp-assert ;
+
+: _kp-run  ( -- )
+    0 _kp-fails ! 0 _kp-checks ! DEPTH _kp-depth !
+    _kp-test-publication-and-io
+    _kp-test-receive-and-interleave
+    _kp-test-close-and-recovery
+    _kp-test-fault-containment
+    _kp-stack
+    _kp-fails @ 0= IF
+        ." TLS ESTABLISHED PORT PASS " _kp-checks @ .
+    ELSE
+        ." TLS ESTABLISHED PORT FAIL " _kp-fails @ .
+        ." / " _kp-checks @ .
+    THEN CR ;
+
+_kp-run
+""",
+        ready_markers=("TLS ESTABLISHED PORT PASS",),
+        stable_markers=("TLS ESTABLISHED PORT PASS",),
+        failure_markers=("TLS ESTABLISHED PORT FAIL",),
+        include_large_sample=False,
+        total_sectors=2048,
+    ),
+    "tls-port": Profile(
+        roots=("net/transports/kdos-tls.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - outbound KDOS TLS shared-port tests
+ENTER-USERLAND
+." [akashic] loading outbound KDOS TLS transport" CR
+
+\ Interpose only the final lower publication calls.  The ordinary path
+\ delegates to the captured production words; one-shot BUSY/throw modes prove
+\ that the connector retains exact staging and always releases TLS ownership.
+' TLS-HANDSHAKE-PUBLISH CONSTANT _ko-real-handshake-publish
+' SOCK-TLS-PUBLISH-TRY CONSTANT _ko-real-socket-publish
+VARIABLE _ko-handshake-mode
+VARIABLE _ko-handshake-hits
+VARIABLE _ko-publish-mode
+VARIABLE _ko-publish-hits
+VARIABLE _ko-publish-sd
+
+: TLS-HANDSHAKE-PUBLISH  ( ctx -- ior )
+    1 _ko-handshake-hits +!
+    _ko-handshake-mode @ IF
+        0 _ko-handshake-mode ! DROP
+        TLS-OWNER-TRY ?DUP IF EXIT THEN
+        -7981 THROW
+    THEN
+    _ko-real-handshake-publish EXECUTE ;
+
+: SOCK-TLS-PUBLISH-TRY  ( sd ctx -- published? ior )
+    OVER _ko-publish-sd !
+    1 _ko-publish-hits +!
+    _ko-publish-mode @ DUP 1 = IF
+        DROP 0 _ko-publish-mode ! 2DROP 0 TLS-E-BUSY EXIT
+    THEN
+    2 = IF
+        0 _ko-publish-mode ! 2DROP -7982 THROW
+    THEN
+    _ko-real-socket-publish EXECUTE ;
+
+REQUIRE net/transports/kdos-tls.f
+
+VARIABLE _ko-fails
+VARIABLE _ko-checks
+VARIABLE _ko-depth
+: _ko-assert  ( flag -- )
+    1 _ko-checks +!
+    0= IF 1 _ko-fails +! ." ASSERT " _ko-checks @ . CR THEN ;
+: _ko-stack  ( -- )
+    DEPTH DUP _ko-depth @ <> IF
+        ." STACK " _ko-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _ko-depth @ = _ko-assert ;
+
+CREATE _ko-a KDOSTLS-SIZE ALLOT
+CREATE _ko-b KDOSTLS-SIZE ALLOT
+CREATE _ko-foreign 8 ALLOT
+CREATE _ko-ip 4 ALLOT
+
+VARIABLE _ko-now
+VARIABLE _ko-current
+VARIABLE _ko-handshake-fixture
+VARIABLE _ko-ctx
+VARIABLE _ko-ctx-gen
+VARIABLE _ko-tcb
+VARIABLE _ko-tcb-gen
+VARIABLE _ko-ior
+VARIABLE _ko-last-ctx
+VARIABLE _ko-last-tcb
+VARIABLE _ko-a-sd
+VARIABLE _ko-b-sd
+
+: _ko-now@  ( adapter -- ms ) DROP _ko-now @ ;
+: _ko-status  ( socket-sd record -- ior ) 2DROP 0 ;
+
+: _ko-install-authority  ( adapter -- )
+    _ko-current !
+    TLS-CTX-ALLOC DUP 0= IF DROP -7983 THROW THEN
+    DUP _ko-ctx ! TLS-CTX.GENERATION @ DUP 0= IF
+        DROP -7984 THROW
+    THEN _ko-ctx-gen !
+    TLS-ROLE-CLIENT _ko-ctx @ TLS-CTX.ROLE !
+    _ko-handshake-fixture @ IF
+        TLSS-HANDSHAKE _ko-ctx @ TLS-CTX.STATE !
+        TLSH-APPLICATION-READY _ko-ctx @ TLS-CTX.HS-STATE !
+    ELSE
+        TLSS-ESTABLISHED _ko-ctx @ TLS-CTX.STATE !
+        TLSH-CONNECTED _ko-ctx @ TLS-CTX.HS-STATE !
+    THEN
+    1 _ko-ctx @ TLS-CTX.PEER-AUTH !
+    TLS-E-OK _ko-ctx @ TLS-CTX.ERROR !
+
+    TCB-ALLOC DUP -1 = IF DROP -7985 THROW THEN
+    TCB-N DUP _ko-tcb !
+    TCPS-ESTABLISHED OVER TCB.STATE !
+    50000 OVER TCB.LOCAL-PORT ! DROP
+    _ko-tcb @ _ko-ctx @ TCP-ATTACH _ko-ior ! _ko-tcb-gen !
+    _ko-ior @ ?DUP IF THROW THEN
+    _ko-tcb @ _ko-ctx @ TLS-CTX.TCB !
+    _ko-tcb-gen @ _ko-ctx @ TLS-CTX.TCB-GENERATION !
+
+    _ko-ctx @ _ko-current @ KDOSTLS.CONTEXT !
+    _ko-ctx-gen @ _ko-current @ KDOSTLS.CTX-GENERATION !
+    _ko-tcb-gen @ _ko-current @ KDOSTLS.TCB-GENERATION !
+    50000 _ko-current @ KDOSTLS.LOCAL-PORT !
+    KDOSTLS-PHASE-OPEN _ko-current @ KDOSTLS.PHASE !
+    _ko-ctx @ _ko-last-ctx ! _ko-tcb @ _ko-last-tcb ! ;
+
+: _ko-coop  ( phase adapter -- prep-status )
+    _ko-current !
+    DUP KDOSTLS-PHASE-TLS-PREP = IF
+        DROP _ko-current @ _ko-install-authority
+        KDOSTLS-PREP-S-PENDING EXIT
+    THEN
+    _ko-current @ _KDOSTLS-COOP-STEP-DEFAULT ;
+
+: _ko-coop-throw  ( phase adapter -- prep-status )
+    2DROP -7986 THROW ;
+
+: _ko-bind  ( adapter -- )
+    DUP _ko-current ! KDOSTLS-INIT
+    S" api.openai.com" 443 _ko-current @ KDOSTLS-CONFIGURE
+        KDOSTLS-E-OK = _ko-assert
+    ['] _ko-now@ _ko-current @ KDOSTLS.NOW-XT !
+    ['] _ko-coop _ko-current @ KDOSTLS.COOP-STEP-XT !
+    ['] _ko-status _ko-current @ KDOSTLSP.STATUS-XT ! ;
+
+: _ko-fixture  ( -- )
+    TCP-INIT-ALL
+    1 TLS-TRUST-COUNT ! 41 TLS-TRUST-GENERATION !
+    1000 _ko-now !
+    0 _ko-handshake-mode ! 0 _ko-handshake-hits !
+    0 _ko-publish-mode ! 0 _ko-publish-hits ! 0 _ko-publish-sd !
+    0 _ko-handshake-fixture !
+    0 _ko-last-ctx ! 0 _ko-last-tcb !
+    0 _ko-a-sd ! 0 _ko-b-sd ! ;
+
+: _ko-test-config  ( -- )
+    _ko-a KDOSTLS-INIT
+    S" bad host" 443 _ko-a KDOSTLS-CONFIGURE
+        KDOSTLS-E-INVALID = _ko-assert
+    S" api.openai.com" 0 _ko-a KDOSTLS-CONFIGURE
+        KDOSTLS-E-INVALID = _ko-assert
+    S" api.openai.com" 65536 _ko-a KDOSTLS-CONFIGURE
+        KDOSTLS-E-INVALID = _ko-assert
+    S" api.openai.com" 443 _ko-a KDOSTLS-CONFIGURE
+        KDOSTLS-E-OK = _ko-assert
+    _ko-a KDOSTLS-HOST DUP 14 = _ko-assert DROP
+        S" api.openai.com" DROP 14 SAMESTR? _ko-assert
+    _ko-a KDOSTLS.REMOTE-PORT @ 443 = _ko-assert
+    8 8 8 8 _ko-ip IP!
+    _ko-ip 0 _KDOSTLS-ADDRESS-DEFAULT _ko-assert
+    10 0 0 1 _ko-ip IP!
+    _ko-ip 0 _KDOSTLS-ADDRESS-DEFAULT 0= _ko-assert ;
+
+: _ko-test-start-terminals  ( -- )
+    _ko-fixture
+    _ko-foreign KDOSNET-CLAIM KDOSNET-S-OK = _ko-assert
+    _ko-a _ko-bind
+    _ko-a KDOSTLS.PORT NIO-OPEN-START NIO-S-FAILED = _ko-assert
+    _ko-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-BUSY = _ko-assert
+    KDOSNET-OWNER@ _ko-foreign = _ko-assert
+    _ko-foreign KDOSNET-RELEASE KDOSNET-S-OK = _ko-assert
+
+    _ko-a _ko-bind
+    _ko-a KDOSTLS.PORT NIO-OPEN-START NIO-S-PENDING = _ko-assert
+    KDOSNET-OWNER@ _ko-a = _ko-assert
+    _ko-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _ko-assert
+    _ko-a KDOSTLS.STATE @ KDOSTLS-STATE-CLOSED = _ko-assert
+    KDOSNET-OWNER@ 0= _ko-assert
+
+    _ko-a _ko-bind
+    _ko-a KDOSTLS.PORT NIO-OPEN-START DROP
+    _ko-a KDOSTLS.DEADLINE-MS @ _ko-now !
+    _ko-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-FAILED = _ko-assert
+    _ko-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-TIMEOUT = _ko-assert
+    _ko-a KDOSTLS.STEP-COUNT @ 0= _ko-assert
+    KDOSNET-OWNER@ 0= _ko-assert
+
+    _ko-fixture _ko-a _ko-bind
+    _ko-a KDOSTLS.PORT NIO-OPEN-START DROP
+    42 TLS-TRUST-GENERATION !
+    _ko-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-FAILED = _ko-assert
+    _ko-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-TRUST-CHANGED = _ko-assert
+    KDOSNET-OWNER@ 0= _ko-assert
+
+    _ko-fixture _ko-a _ko-bind
+    ['] _ko-coop-throw _ko-a KDOSTLS.COOP-STEP-XT !
+    _ko-a KDOSTLS.PORT NIO-OPEN-START DROP
+    _ko-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-FAILED = _ko-assert
+    _ko-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-FAULT = _ko-assert
+    _ko-a KDOSTLS.STEP-COUNT @ 1 = _ko-assert
+    KDOSNET-OWNER@ 0= _ko-assert ;
+
+: _ko-test-open-shared  ( -- )
+    _ko-fixture _ko-a _ko-bind
+    1 _ko-publish-mode !
+    _ko-a KDOSTLS.PORT NIO-OPEN-START NIO-S-PENDING = _ko-assert
+    _ko-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-PENDING = _ko-assert
+    _ko-a KDOSTLS.PHASE @ KDOSTLS-PHASE-OPEN = _ko-assert
+    _ko-a KDOSTLS.CTX-GENERATION @ 0<> _ko-assert
+    _ko-a KDOSTLS.TCB-GENERATION @ 0<> _ko-assert
+    _ko-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-PENDING = _ko-assert
+    _ko-publish-hits @ 1 = _ko-assert
+    _ko-a KDOSTLS.STAGING-SOCKET @ DUP 0<> _ko-assert DROP
+    _ko-a KDOSTLS.STAGING-ORIGINAL-STATE @ SOCKST-TLS = _ko-assert
+    TLS-OWNER-DEPTH @ 0= _ko-assert
+    KDOSNET-OWNER@ _ko-a = _ko-assert
+    _ko-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-OK = _ko-assert
+    _ko-publish-hits @ 2 = _ko-assert
+    _ko-a KDOSTLS.STATE @ KDOSTLS-STATE-OPEN = _ko-assert
+    _ko-a KDOSTLSP.SOCKET-SD @ DUP _ko-a-sd ! 0<> _ko-assert
+    _ko-a KDOSTLS.CONTEXT @ 0= _ko-assert
+    _ko-a KDOSTLS.CTX-GENERATION @ 0= _ko-assert
+    _ko-a KDOSTLS.TCB-GENERATION @ 0= _ko-assert
+    _ko-a KDOSTLS.STAGING-SOCKET @ 0= _ko-assert
+    KDOSNET-OWNER@ 0= _ko-assert
+
+    \ A second connector can own its opening lease while the first shared
+    \ established port remains live; the connection itself owns no KDOSNET.
+    _ko-b _ko-bind
+    _ko-b KDOSTLS.PORT NIO-OPEN-START NIO-S-PENDING = _ko-assert
+    KDOSNET-OWNER@ _ko-b = _ko-assert
+    _ko-b KDOSTLS.PORT NIO-OPEN-POLL NIO-S-PENDING = _ko-assert
+    _ko-b KDOSTLS.PORT NIO-OPEN-POLL NIO-S-OK = _ko-assert
+    _ko-b KDOSTLSP.SOCKET-SD @ DUP _ko-b-sd ! 0<> _ko-assert
+    _ko-a-sd @ _ko-b-sd @ <> _ko-assert
+    KDOSNET-OWNER@ 0= _ko-assert
+    _ko-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _ko-assert
+    _ko-b KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _ko-assert
+    _ko-a-sd @ SOCK.STATE @ SOCKST-FREE = _ko-assert
+    _ko-b-sd @ SOCK.STATE @ SOCKST-FREE = _ko-assert
+    KDOSNET-OWNER@ 0= _ko-assert ;
+
+: _ko-test-publication-throws  ( -- )
+    \ The mocked public handshake entry deliberately leaks one nested owner
+    \ depth before THROW.  The adapter must unwind both nested and outer depth.
+    _ko-fixture _ko-a _ko-bind
+    -1 _ko-handshake-fixture ! -1 _ko-handshake-mode !
+    _ko-a KDOSTLS.PORT NIO-OPEN-START DROP
+    _ko-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-PENDING = _ko-assert
+    _ko-last-ctx @ TLS-CTX-CLAIMED? _ko-assert
+    _ko-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-FAILED = _ko-assert
+    _ko-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-FAULT = _ko-assert
+    _ko-handshake-hits @ 1 = _ko-assert
+    TLS-OWNER-DEPTH @ 0= _ko-assert
+    NET-TX-OWNER-DEPTH @ 0= _ko-assert
+    KDOSNET-OWNER@ 0= _ko-assert
+    _ko-last-ctx @ TLS-CTX-CLAIMED? 0= _ko-assert
+    _ko-last-tcb @ TCB.STATE @ TCPS-CLOSED = _ko-assert
+
+    \ A later socket-publication throw leaves an exact private descriptor;
+    \ cleanup replays its original state and retires it without false success.
+    _ko-fixture _ko-a _ko-bind
+    2 _ko-publish-mode !
+    _ko-a KDOSTLS.PORT NIO-OPEN-START DROP
+    _ko-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-PENDING = _ko-assert
+    _ko-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-FAILED = _ko-assert
+    _ko-a KDOSTLS.LAST-ERROR @ KDOSTLS-E-FAULT = _ko-assert
+    _ko-publish-hits @ 1 = _ko-assert
+    TLS-OWNER-DEPTH @ 0= _ko-assert
+    NET-TX-OWNER-DEPTH @ 0= _ko-assert
+    KDOSNET-OWNER@ 0= _ko-assert
+    _ko-last-ctx @ TLS-CTX-CLAIMED? 0= _ko-assert
+    _ko-last-tcb @ TCB.STATE @ TCPS-CLOSED = _ko-assert
+    _ko-publish-sd @ SOCK.STATE @ SOCKST-FREE = _ko-assert
+    _ko-a KDOSTLS.STAGING-ORIGINAL-STATE @ 0= _ko-assert ;
+
+: _ko-test-default-prefix  ( -- )
+    _ko-fixture _ko-a _ko-bind
+    ['] _KDOSTLS-COOP-STEP-DEFAULT _ko-a KDOSTLS.COOP-STEP-XT !
+    _ko-a KDOSTLS.PORT NIO-OPEN-START NIO-S-PENDING = _ko-assert
+    _ko-a KDOSTLS.PORT NIO-OPEN-POLL NIO-S-PENDING = _ko-assert
+    _ko-a KDOSTLS.PHASE @ KDOSTLS-PHASE-DNS-ARP-CHECK = _ko-assert
+    _ko-a KDOSTLS.CONTEXT @ DUP 0<> _ko-assert
+        DUP TLS-CTX.GENERATION @ _ko-a KDOSTLS.CTX-GENERATION @ = _ko-assert
+        DROP
+    _ko-a KDOSTLS.CLIENT-HELLO-A @ 0<> _ko-assert
+    _ko-a KDOSTLS.CLIENT-HELLO-U @ 0> _ko-assert
+    _ko-a KDOSTLS.PORT NIO-CANCEL NIO-S-CANCELLED = _ko-assert
+    _ko-a KDOSTLS.CONTEXT @ 0= _ko-assert
+    KDOSNET-OWNER@ 0= _ko-assert ;
+
+: _ko-run  ( -- )
+    DEPTH _ko-depth !
+    _ko-test-config
+    _ko-test-start-terminals
+    _ko-test-open-shared
+    _ko-test-publication-throws
+    _ko-test-default-prefix
+    _ko-stack
+    _ko-fails @ 0= IF
+        ." TLS OUTBOUND SHARED PASS " _ko-checks @ .
+    ELSE
+        ." TLS OUTBOUND SHARED FAIL " _ko-fails @ .
+        ." / " _ko-checks @ .
+    THEN CR ;
+
+_ko-run
+""",
+        ready_markers=("TLS OUTBOUND SHARED PASS",),
+        stable_markers=("TLS OUTBOUND SHARED PASS",),
+        failure_markers=("TLS OUTBOUND SHARED FAIL",),
+        include_large_sample=False,
+        total_sectors=2048,
+    ),
+    "tls-inbound": Profile(
+        roots=("net/transports/kdos-tls-inbound.f",),
+        resources=(),
+        autoexec=r"""\ autoexec.f - persistent XIO-driven inbound KDOS TLS owner tests
+ENTER-USERLAND
+." [akashic] loading inbound KDOS TLS transport" CR
+
+\ Bind direct production calls to deterministic lower fixtures before the
+\ owner and shared port are compiled. networking.f supplies the lower ABI.
+0 CONSTANT _KI-SC-EMPTY
+1 CONSTANT _KI-SC-SUCCESS
+2 CONSTANT _KI-SC-HOLD
+3 CONSTANT _KI-SC-EARLY-ALERT
+4 CONSTANT _KI-SC-MALFORMED-TERMINAL
+5 CONSTANT _KI-SC-CLAIM-BUSY
+6 CONSTANT _KI-SC-BAD-PUBLISH
+
+VARIABLE _ki-now
+VARIABLE _ki-scenario
+VARIABLE _ki-polls
+VARIABLE _ki-claim-hits
+VARIABLE _ki-ch-hits
+VARIABLE _ki-prepare-hello-hits
+VARIABLE _ki-flight-hits
+VARIABLE _ki-client-flight-hits
+VARIABLE _ki-disposition-hits
+VARIABLE _ki-terminal-close-hits
+VARIABLE _ki-publish-hits
+VARIABLE _ki-next-sd
+VARIABLE _ki-abort-busy
+VARIABLE _ki-abort-hits
+VARIABLE _ki-sock-close-hits
+VARIABLE _ki-sock-abort-busy
+VARIABLE _ki-sock-abort-hits
+VARIABLE _ki-send-hits
+
+: MS@  ( -- ms ) _ki-now @ ;
+
+: TCP-POLL  ( -- )
+    1 _ki-polls +! ;
+
+: TLS-SERVER-ACCEPT-CLAIM  ( sd h1 gen -- ctx ctx-gen ior )
+    2DROP DROP 1 _ki-claim-hits +!
+    _ki-scenario @ _KI-SC-EMPTY = IF
+        0 0 TLS-E-WOULD-BLOCK EXIT
+    THEN
+    _ki-scenario @ _KI-SC-CLAIM-BUSY = IF
+        0 0 TLS-E-BUSY EXIT
+    THEN
+    4096 7 0 ;
+
+: TLS-SERVER-CLIENT-HELLO-STEP  ( ctx gen -- progress alert ior )
+    2DROP 1 _ki-ch-hits +!
+    _ki-scenario @ _KI-SC-EARLY-ALERT = IF
+        TLS-SERVER-CLIENT-HELLO-NONE 47 0 EXIT
+    THEN
+    _ki-scenario @ _KI-SC-HOLD = IF
+        TLS-SERVER-CLIENT-HELLO-NONE 0 TLS-E-WOULD-BLOCK EXIT
+    THEN
+    _ki-scenario @ _KI-SC-SUCCESS =
+    _ki-ch-hits @ 1 = AND IF
+        TLS-SERVER-CLIENT-HELLO-NONE 0 TLS-E-WOULD-BLOCK EXIT
+    THEN
+    TLS-SERVER-CLIENT-HELLO-COMPLETE 0 0 ;
+
+: TLS-SERVER-PREPARE-HELLO-EXACT  ( ctx gen -- alert ior )
+    2DROP 1 _ki-prepare-hello-hits +! 0 0 ;
+
+: TLS-SERVER-PREPARE-FLIGHT-EXACT  ( ctx gen -- ior )
+    2DROP 0 ;
+
+: TLS-SERVER-FLIGHT-STEP  ( ctx gen -- progress ior )
+    2DROP 1 _ki-flight-hits +!
+    _ki-scenario @ _KI-SC-SUCCESS =
+    _ki-flight-hits @ 1 = AND IF
+        TLS-SERVER-EMIT-RECORD 0 EXIT
+    THEN
+    TLS-SERVER-EMIT-COMPLETE 0 ;
+
+: TLS-SERVER-CLIENT-FLIGHT-BEGIN-ATTACHED  ( ctx gen budget -- ior )
+    2DROP DROP 0 ;
+
+: TLS-SERVER-CLIENT-FLIGHT-STEP  ( ctx gen -- progress alert ior )
+    2DROP 1 _ki-client-flight-hits +!
+    _ki-scenario @ _KI-SC-MALFORMED-TERMINAL = IF
+        TLS-SERVER-INGRESS-SEND-FATAL 40 -4999 EXIT
+    THEN
+    _ki-scenario @ _KI-SC-SUCCESS =
+    _ki-client-flight-hits @ 1 = AND IF
+        TLS-SERVER-INGRESS-RECORD 0 0 EXIT
+    THEN
+    TLS-SERVER-INGRESS-FINISHED 0 0 ;
+
+: TLS-SERVER-INGRESS-DISPOSITION-STEP  ( ctx gen -- progress ior )
+    2DROP 1 _ki-disposition-hits +!
+    _ki-disposition-hits @ 1 = IF
+        TLS-SERVER-DISPOSITION-NONE TLS-E-WOULD-BLOCK EXIT
+    THEN
+    TLS-SERVER-DISPOSITION-COMPLETE 0 ;
+
+: TLS-SERVER-CLOSE-EXACT-TRY  ( ctx gen -- retired? ior )
+    2DROP 1 _ki-terminal-close-hits +!
+    _ki-terminal-close-hits @ 1 = IF
+        0 TLS-E-WOULD-BLOCK EXIT
+    THEN
+    -1 0 ;
+
+: TLS-SERVER-SOCKET-PUBLISH  ( ctx gen -- sd ior )
+    2DROP 1 _ki-publish-hits +!
+    _ki-next-sd @ 1+ DUP _ki-next-sd !
+    _ki-scenario @ _KI-SC-BAD-PUBLISH = IF -4880 ELSE 0 THEN ;
+
+: TLS-ABORT-EXACT  ( ctx gen -- retired? ior )
+    2DROP 1 _ki-abort-hits +!
+    _ki-abort-busy @ IF
+        -1 _ki-abort-busy +! 0 TLS-E-BUSY EXIT
+    THEN
+    -1 0 ;
+
+: SOCK-TLS-CLOSE-EXACT-TRY  ( sd -- ior )
+    DROP 1 _ki-sock-close-hits +! 0 ;
+
+: SOCK-TLS-ABORT-EXACT-TRY  ( sd -- abort-status ior )
+    DROP 1 _ki-sock-abort-hits +!
+    _ki-sock-abort-busy @ IF
+        -1 _ki-sock-abort-busy +!
+        TLS-ABORT-S-BUSY TLS-E-BUSY EXIT
+    THEN
+    TLS-ABORT-S-LOCAL 0 ;
+
+: SEND  ( sd buffer length -- actual )
+    1 _ki-send-hits +! NIP NIP ;
+
+: RECV  ( sd buffer capacity -- actual )
+    2DROP DROP 0 ;
+
+: SOCK-TLS-IO-STATUS  ( sd -- ior ) DROP 0 ;
+: SOCKET-READY?  ( sd -- flag ) DROP 0 ;
+
+REQUIRE net/transports/kdos-tls-inbound.f
+
+VARIABLE _ki-fails
+VARIABLE _ki-checks
+VARIABLE _ki-depth
+VARIABLE _ki-step-port
+VARIABLE _ki-step-status
+VARIABLE _ki-nio-a
+VARIABLE _ki-nio-b
+VARIABLE _ki-port-a-sd
+
+: _ki-assert  ( flag -- )
+    1 _ki-checks +!
+    0= IF 1 _ki-fails +! ." ASSERT " _ki-checks @ . CR THEN ;
+
+: _ki-stack  ( -- )
+    DEPTH DUP _ki-depth @ <> IF
+        ." STACK " _ki-depth @ . ." -> " DUP . CR .S CR
+    THEN
+    _ki-depth @ = _ki-assert ;
+
+CREATE _ki-service XIO-SERVICE-SIZE ALLOT
+CREATE _ki-owner KDOSTLSL-SIZE ALLOT
+CREATE _ki-port-a KDOSTLSP-SIZE ALLOT
+CREATE _ki-port-b KDOSTLSP-SIZE ALLOT
+CREATE _ki-uninitialized-port KDOSTLSP-SIZE ALLOT
+CREATE _ki-foreign 8 ALLOT
+CREATE _ki-buffer 32 ALLOT
+
+: _ki-counts-clear  ( -- )
+    0 _ki-polls !
+    0 _ki-claim-hits !
+    0 _ki-ch-hits !
+    0 _ki-prepare-hello-hits !
+    0 _ki-flight-hits !
+    0 _ki-client-flight-hits !
+    0 _ki-disposition-hits !
+    0 _ki-terminal-close-hits !
+    0 _ki-publish-hits !
+    0 _ki-abort-busy !
+    0 _ki-abort-hits !
+    0 _ki-sock-close-hits !
+    0 _ki-sock-abort-busy !
+    0 _ki-sock-abort-hits !
+    0 _ki-send-hits ! ;
+
+: _ki-prepare  ( scenario -- )
+    _ki-counts-clear _ki-scenario ! ;
+
+: _ki-op  ( -- operation )
+    _ki-owner _KDOSTLSL.XIO-OP ;
+
+: _ki-accept  ( shared-port -- )
+    _ki-owner KDOSTLSL-ACCEPT KDOSTLSL-S-OK = _ki-assert ;
+
+: _ki-step!  ( -- )
+    _ki-owner KDOSTLSL-STEP
+    _ki-step-status ! _ki-step-port ! ;
+
+: _ki-pending-step  ( -- )
+    _ki-step!
+    _ki-step-port @ 0= _ki-assert
+    _ki-step-status @ KDOSTLSL-S-PENDING = _ki-assert ;
+
+: _ki-drive  ( max-steps -- )
+    KDOSTLSL-S-PENDING _ki-step-status !
+    0 DO
+        _ki-step!
+        _ki-step-status @ KDOSTLSL-S-PENDING <> IF UNLOOP EXIT THEN
+    LOOP ;
+
+: _ki-drive-to-retained  ( max-steps -- )
+    0 DO
+        _ki-op XIOO.STATE @ XIO-STATE-SUCCEEDED = IF UNLOOP EXIT THEN
+        _ki-pending-step
+    LOOP
+    _ki-op XIOO.STATE @ XIO-STATE-SUCCEEDED = _ki-assert ;
+
+: _ki-assert-owner-idle  ( -- )
+    _ki-owner _KDOSTLSL.PHASE @ _KDOSTLSL-PHASE-IDLE = _ki-assert
+    _ki-owner _KDOSTLSL.CTX @ 0= _ki-assert
+    _ki-owner _KDOSTLSL.CTX-GEN @ 0= _ki-assert
+    _ki-owner _KDOSTLSL.BORROWED-PORT @ 0= _ki-assert
+    _ki-owner _KDOSTLSL.TERMINAL @ 0= _ki-assert
+    _ki-owner _KDOSTLSL.STAGING-SOCKET @ 0= _ki-assert
+    _ki-op XIOO.STATE @ XIO-STATE-RESET = _ki-assert
+    _ki-service XIOS.ACTIVE @ 0= _ki-assert
+    _ki-service XIOS.RETAINED @ 0= _ki-assert
+    KDOSNET-OWNER@ 0= _ki-assert ;
+
+: _ki-assert-port-reset  ( shared-port -- )
+    DUP KDOSTLSP.STATE @ KDOSTLSP-STATE-RESET = _ki-assert
+    DUP KDOSTLSP.SOCKET-SD @ 0= _ki-assert
+    DROP ;
+
+: _ki-test-init-geometry  ( -- )
+    _ki-service XIO-SERVICE-INIT XIO-S-OK = _ki-assert
+    _ki-owner KDOSTLSL-SIZE 0 FILL
+    _ki-service 11 2 3 0 0 _ki-owner KDOSTLSL-INIT
+        KDOSTLSL-S-INVALID = _ki-assert
+    _ki-service 11 2 3 5 0 _ki-owner KDOSTLSL-INIT
+        KDOSTLSL-S-OK = _ki-assert
+
+    _ki-owner _KDOSTLSL.XIO-SERVICE @ _ki-service = _ki-assert
+    _ki-owner _KDOSTLSL.LISTENER-SD @ 11 = _ki-assert
+    _ki-owner _KDOSTLSL.LISTENER-H1 @ 2 = _ki-assert
+    _ki-owner _KDOSTLSL.LISTENER-GEN @ 3 = _ki-assert
+    _ki-owner _KDOSTLSL.TIMEOUT-MS @ 5 = _ki-assert
+    _ki-owner _KDOSTLSL.EARLY-BUDGET @ 0= _ki-assert
+    _ki-owner _KDOSTLSL.OWNER-GEN @ 1 = _ki-assert
+    _ki-owner _KDOSTLSL.REQUEST-GEN @ 0= _ki-assert
+    KDOSTLSL-SIZE 120 XIO-OP-SIZE + = _ki-assert
+
+    _ki-owner _ki-owner KDOSTLSL-ACCEPT
+        KDOSTLSL-S-INVALID = _ki-assert
+    _ki-service _ki-owner KDOSTLSL-ACCEPT
+        KDOSTLSL-S-INVALID = _ki-assert
+    _ki-uninitialized-port KDOSTLSP-SIZE 0 FILL
+    _ki-uninitialized-port _ki-owner KDOSTLSL-ACCEPT
+        KDOSTLSL-S-INVALID = _ki-assert
+
+    _ki-port-a KDOSTLSP-INIT KDOSTLSP-S-OK = _ki-assert
+    _ki-port-b KDOSTLSP-INIT KDOSTLSP-S-OK = _ki-assert
+    _ki-assert-owner-idle ;
+
+: _ki-test-empty-reuse-retained-cancel  ( -- )
+    _KI-SC-EMPTY _ki-prepare
+    _ki-port-a _ki-accept
+    _ki-owner _KDOSTLSL.REQUEST-GEN @ 1 = _ki-assert
+    _ki-owner _KDOSTLSL-XIO-EXACT? _ki-assert
+    _ki-port-a KDOSTLSP.STATE @
+        KDOSTLSP-STATE-RESERVED = _ki-assert
+    12 _ki-drive
+    _ki-step-port @ 0= _ki-assert
+    _ki-step-status @ KDOSTLSL-S-RETRY = _ki-assert
+    _ki-claim-hits @ 1 = _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-assert-owner-idle
+
+    \ Reuse the exact port after RETRY, stop at retained success, then make
+    \ XIO discard it cooperatively rather than exposing the staged socket.
+    _KI-SC-SUCCESS _ki-prepare
+    _ki-port-a _ki-accept
+    _ki-owner _KDOSTLSL.REQUEST-GEN @ 2 = _ki-assert
+    40 _ki-drive-to-retained
+    _ki-owner _KDOSTLSL-XIO-EXACT? _ki-assert
+    _ki-op XIOO.RESULT @ _ki-port-a = _ki-assert
+    _ki-owner _KDOSTLSL.PHASE @
+        _KDOSTLSL-PHASE-PUBLISHED = _ki-assert
+    _ki-port-a KDOSTLSP.STATE @
+        KDOSTLSP-STATE-PUBLISHED = _ki-assert
+    1 _ki-sock-abort-busy !
+    _ki-owner KDOSTLSL-CANCEL
+        KDOSTLSL-S-PENDING = _ki-assert
+    _ki-op XIO-CLEANUP-PENDING? _ki-assert
+    20 _ki-drive
+    _ki-step-status @ KDOSTLSL-S-CANCELLED = _ki-assert
+    _ki-sock-abort-hits @ 2 = _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-assert-owner-idle ;
+
+: _ki-test-preclaim-contention  ( -- )
+    _KI-SC-SUCCESS _ki-prepare
+    _ki-foreign KDOSNET-CLAIM KDOSNET-S-OK = _ki-assert
+    _ki-port-a _ki-accept
+    12 _ki-drive
+    _ki-step-port @ 0= _ki-assert
+    _ki-step-status @ KDOSTLSL-S-RETRY = _ki-assert
+    _ki-claim-hits @ 0= _ki-assert
+    _ki-foreign KDOSNET-OWNER? _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-foreign KDOSNET-RELEASE KDOSNET-S-OK = _ki-assert
+    _ki-assert-owner-idle ;
+
+: _ki-test-cancel-retrying-cleanup  ( -- )
+    0 _ki-now !
+    _KI-SC-HOLD _ki-prepare
+    _ki-port-a _ki-accept
+    _ki-pending-step
+    _ki-op XIOO.DEADLINE-MS @ 0= _ki-assert
+    _ki-pending-step
+    _ki-owner _KDOSTLSL.CTX @ 4096 = _ki-assert
+    _ki-owner _KDOSTLSL.CTX-GEN @ 7 = _ki-assert
+    _ki-op XIOO.DEADLINE-MS @ 5 = _ki-assert
+    _ki-owner _KDOSTLSL-XIO-EXACT? _ki-assert
+    1 _ki-abort-busy !
+    _ki-owner KDOSTLSL-CANCEL
+        KDOSTLSL-S-PENDING = _ki-assert
+    20 _ki-drive
+    _ki-step-port @ 0= _ki-assert
+    _ki-step-status @ KDOSTLSL-S-CANCELLED = _ki-assert
+    _ki-abort-hits @ 2 = _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-assert-owner-idle ;
+
+: _ki-test-postclaim-deadline  ( -- )
+    100 _ki-now !
+    _KI-SC-HOLD _ki-prepare
+    _ki-port-a _ki-accept
+    _ki-pending-step
+    _ki-op XIOO.DEADLINE-MS @ 0= _ki-assert
+    _ki-pending-step
+    _ki-owner _KDOSTLSL.CTX @ 4096 = _ki-assert
+    _ki-op XIOO.DEADLINE-MS @ 105 = _ki-assert
+    106 _ki-now !
+    _ki-pending-step
+    _ki-op XIO-CLEANUP-PENDING? _ki-assert
+    20 _ki-drive
+    _ki-step-port @ 0= _ki-assert
+    _ki-step-status @ KDOSTLSL-S-TIMED-OUT = _ki-assert
+    _ki-abort-hits @ 1 = _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-assert-owner-idle
+    0 _ki-now ! ;
+
+: _ki-test-malformed-handshakes  ( -- )
+    \ An early alert is terminal lower failure and retires raw context.
+    _KI-SC-EARLY-ALERT _ki-prepare
+    _ki-port-a _ki-accept
+    _ki-pending-step
+    _ki-pending-step
+    _ki-pending-step
+    _ki-op XIO-CLEANUP-PENDING? _ki-assert
+    _ki-op XIOO.ERROR @
+        KDOSTLSL-E-HANDSHAKE-ALERT = _ki-assert
+    _ki-op XIOO.RESULT @ 47 = _ki-assert
+    20 _ki-drive
+    _ki-step-status @ KDOSTLSL-S-LOWER = _ki-assert
+    _ki-abort-hits @ 1 = _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-assert-owner-idle
+
+    \ A terminal client-flight error is disposed, closed exactly, and never
+    \ falls back to abort after the raw authority reports itself retired.
+    _KI-SC-MALFORMED-TERMINAL _ki-prepare
+    _ki-port-a _ki-accept
+    64 _ki-drive
+    _ki-step-port @ 0= _ki-assert
+    _ki-step-status @ KDOSTLSL-S-LOWER = _ki-assert
+    _ki-disposition-hits @ 2 = _ki-assert
+    _ki-terminal-close-hits @ 2 = _ki-assert
+    _ki-abort-hits @ 0= _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-assert-owner-idle ;
+
+: _ki-test-malformed-publish  ( -- )
+    \ A contradictory nonzero socket plus ior is staged before failure so
+    \ cleanup retires that exact socket rather than losing its authority.
+    _KI-SC-BAD-PUBLISH _ki-prepare
+    _ki-port-a _ki-accept
+    64 _ki-drive
+    _ki-step-port @ 0= _ki-assert
+    _ki-step-status @ KDOSTLSL-S-LOWER = _ki-assert
+    _ki-publish-hits @ 1 = _ki-assert
+    _ki-sock-abort-hits @ 1 = _ki-assert
+    _ki-owner _KDOSTLSL.STAGING-SOCKET @ 0= _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-assert-owner-idle ;
+
+: _ki-test-success-fresh-port  ( -- )
+    _KI-SC-SUCCESS _ki-prepare
+    _ki-port-a _ki-accept
+    64 _ki-drive
+    _ki-step-status @ KDOSTLSL-S-OK = _ki-assert
+    _ki-step-port @ DUP
+        _ki-port-a KDOSTLSP.PORT = _ki-assert
+        _ki-nio-a !
+    _ki-port-a KDOSTLSP.STATE @
+        KDOSTLSP-STATE-OPEN = _ki-assert
+    _ki-nio-a @ NIO.OPEN-STATE @
+        NIO-OPEN-STATE-OPEN = _ki-assert
+    _ki-port-a KDOSTLSP.SOCKET-SD @ DUP 0<> _ki-assert
+        _ki-port-a-sd !
+    _ki-buffer 7 _ki-nio-a @ NIO-SEND
+        NIO-S-OK = _ki-assert
+        7 = _ki-assert
+    _ki-send-hits @ 1 = _ki-assert
+    _ki-assert-owner-idle
+
+    \ The persistent listener owner accepts again with a fresh result record;
+    \ the first established port remains independently open.
+    _KI-SC-SUCCESS _ki-prepare
+    _ki-port-b _ki-accept
+    64 _ki-drive
+    _ki-step-status @ KDOSTLSL-S-OK = _ki-assert
+    _ki-step-port @ DUP
+        _ki-port-b KDOSTLSP.PORT = _ki-assert
+        _ki-nio-b !
+    _ki-port-b KDOSTLSP.STATE @
+        KDOSTLSP-STATE-OPEN = _ki-assert
+    _ki-port-a KDOSTLSP.STATE @
+        KDOSTLSP-STATE-OPEN = _ki-assert
+    _ki-port-b KDOSTLSP.SOCKET-SD @
+        _ki-port-a-sd @ <> _ki-assert
+    _ki-assert-owner-idle
+
+    \ Established-port behavior has its own profile; retain only a compact
+    \ cleanup assertion here so this fixture stays about accept composition.
+    _ki-nio-a @ NIO-CANCEL NIO-S-CANCELLED = _ki-assert
+    _ki-nio-b @ NIO-CANCEL NIO-S-CANCELLED = _ki-assert
+    _ki-port-a KDOSTLSP-RESET KDOSTLSP-S-OK = _ki-assert
+    _ki-port-b KDOSTLSP-RESET KDOSTLSP-S-OK = _ki-assert
+    _ki-port-a _ki-assert-port-reset
+    _ki-port-b _ki-assert-port-reset
+    _ki-assert-owner-idle ;
+
+: _ki-run  ( -- )
+    0 _ki-fails !
+    0 _ki-checks !
+    DEPTH _ki-depth !
+    0 _ki-now !
+    100 _ki-next-sd !
+
+    _ki-test-init-geometry
+    _ki-test-empty-reuse-retained-cancel
+    _ki-test-preclaim-contention
+    _ki-test-cancel-retrying-cleanup
+    _ki-test-postclaim-deadline
+    _ki-test-malformed-handshakes
+    _ki-test-malformed-publish
+    _ki-test-success-fresh-port
+
+    _ki-owner KDOSTLSL-FINI KDOSTLSL-S-OK = _ki-assert
+    _ki-service XIO-SERVICE-FINI XIO-S-OK = _ki-assert
+    KDOSNET-OWNER@ 0= _ki-assert
+    _ki-stack
+    _ki-fails @ 0= IF
+        ." TLS INBOUND PASS " _ki-checks @ .
+    ELSE
+        ." TLS INBOUND FAIL " _ki-fails @ . ." / " _ki-checks @ .
+    THEN CR ;
+
+_ki-run
+""",
+        ready_markers=("TLS INBOUND PASS",),
+        stable_markers=("TLS INBOUND PASS",),
+        failure_markers=("TLS INBOUND FAIL",),
     ),
     "openai-codec": Profile(
         roots=(
@@ -4758,7 +5532,9 @@ VARIABLE _op-runtime
 VARIABLE _op-vfs
 VARIABLE _op-store
 VARIABLE _op-handler-hits
+VARIABLE _op-handler-status
 VARIABLE _op-found-text
+VARIABLE _op-tool-result
 VARIABLE _op-refreshes
 VARIABLE _op-auth-polls
 VARIABLE _op-auth-cb
@@ -4995,7 +5771,17 @@ CREATE _op-header-turn AGENT-TURN-REQUEST-SIZE ALLOT
     S" captured" 2 PICK CBR.RESULT CV-STRING! IF
         DROP CBUS-S-FAILED EXIT
     THEN
-    DROP CBUS-S-OK ;
+    DROP _op-handler-status @ ;
+
+: _op-last-tool-result  ( -- item | 0 )
+    0 _op-tool-result !
+    _op-runtime @ ARUNTIME-MODEL-CONTEXT DUP ACTX.COUNT @ 0 ?DO
+        I OVER ACTX-NTH DUP ACTXI.KIND @ ACTX-K-TOOL-RESULT = IF
+            _op-tool-result !
+        ELSE
+            DROP
+        THEN
+    LOOP DROP _op-tool-result @ ;
 
 : _op-setup  ( -- )
     0 _op-opens ! 0 _op-closes ! 0 _op-polls ! 0 _op-handler-hits !
@@ -5004,6 +5790,7 @@ CREATE _op-header-turn AGENT-TURN-REQUEST-SIZE ALLOT
     0 _op-cancels ! 0 _op-cancel-throw !
     0 _op-legacy-opens ! 0 _op-legacy-closes !
     0 _op-response-mode ! 0 _op-retry-request-u !
+    CBUS-S-NO-EFFECT _op-handler-status !
     0 _op-send-fail-once ! 0 _op-send-failures !
     0 _op-refreshes ! 0 _op-auth-polls !
     _op-turn-state 1024 65 FILL
@@ -5208,6 +5995,13 @@ VARIABLE _op-old-cancels
     LOOP
     DROP _op-found-text @ _op-assert
     _op-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 5 = _op-assert
+    _op-last-tool-result DUP 0<> _op-assert
+    DUP ACTXI.STATUS @ CBUS-S-NO-EFFECT = _op-assert
+    DUP ACTXI-DATA-TEXT DUP 10 = _op-assert
+        S" captured" STR-STR-CONTAINS _op-assert
+    DROP
+    _op-request _op-request-u @ S" captured"
+        STR-STR-CONTAINS _op-assert
 
     S" cancel now" _op-runtime @ ARUNTIME-SEND 0= _op-assert
     _op-provider @ APROV.CONTEXT @ OAIR-C.SESSION @ DUP 0<> _op-assert
@@ -7281,6 +8075,10 @@ CREATE _ct-bad-list-schema CS-SIZE ALLOT
 CREATE _ct-open-list-schema CS-SIZE ALLOT
 CREATE _ct-open-map-schema CS-SIZE ALLOT
 CREATE _ct-mixed-text-schema CS-SIZE ALLOT
+CREATE _ct-wide-map-schema CS-SIZE ALLOT
+CREATE _ct-wide-map-fields 18 CS-FIELD-SIZE * ALLOT
+CREATE _ct-wide-map-keys 18 ALLOT
+VARIABLE _ct-wide-map-field
 
 : _ct-schema-projection-setup  ( -- )
     _ct-f32-schema CS-INIT
@@ -7302,7 +8100,21 @@ CREATE _ct-mixed-text-schema CS-SIZE ALLOT
     _ct-mixed-text-schema CS-INIT
     CV-T-STRING CS-TYPE-BIT CV-T-RESOURCE CS-TYPE-BIT OR
         _ct-mixed-text-schema CS-ALLOW-MASK!
-    48 _ct-mixed-text-schema CS-MAX-LEN! ;
+    48 _ct-mixed-text-schema CS-MAX-LEN!
+    _ct-wide-map-schema CS-INIT
+    CV-T-MAP _ct-wide-map-schema CS-ALLOW!
+    18 _ct-wide-map-schema CS-MAX-LEN!
+    _ct-wide-map-fields _ct-wide-map-schema CS.FIELDS !
+    18 _ct-wide-map-schema CS.FIELD-N !
+    18 0 ?DO
+        [CHAR] a I + _ct-wide-map-keys I + C!
+        _ct-wide-map-fields I CS-FIELD-SIZE * + DUP
+            _ct-wide-map-field ! CS-FIELD-SIZE 0 FILL
+        _ct-wide-map-keys I + _ct-wide-map-field @ CSF.KEY-A !
+        1 _ct-wide-map-field @ CSF.KEY-U !
+        _ct-resource-schema _ct-wide-map-field @ CSF.SCHEMA !
+        CSF-F-REQUIRED _ct-wide-map-field @ CSF.FLAGS !
+    LOOP ;
 
 : _ct-reset  ( -- ) 0 _ct-json-u ! ;
 : _ct-c  ( c -- ) _ct-json _ct-json-u @ + C! 1 _ct-json-u +! ;
@@ -7539,6 +8351,10 @@ CREATE _ct-mixed-text-schema CS-SIZE ALLOT
     0 CS-SCHEMA-VALIDATE CS-E-SCHEMA = _ct-assert
     _ct-resource-schema CS-SCHEMA-VALIDATE 0= _ct-assert
     _ct-resource-schema IVJSON-SCHEMA-COMPATIBLE? _ct-assert
+    \ A wide flat map is one schema level, regardless of its field ordinal.
+    \ This catches accidentally reading a DO-loop index as recursion depth.
+    _ct-wide-map-schema CS-SCHEMA-VALIDATE 0= _ct-assert
+    _ct-wide-map-schema IVJSON-SCHEMA-COMPATIBLE? _ct-assert
     _ct-bad-schema CS-SCHEMA-VALIDATE CS-E-SCHEMA = _ct-assert
     _ct-bad-list-schema CS-SCHEMA-VALIDATE CS-E-SCHEMA = _ct-assert
     _ct-bad-list-schema IVJSON-SCHEMA-COMPATIBLE? 0= _ct-assert
@@ -8295,7 +9111,7 @@ CREATE _at-store AGENT-CONVERSATION-STORE-SIZE ALLOT
     _at-runtime @ ARUNTIME.CONVERSATION @ DUP _at-conv !
     ACONV.COUNT @ 0> _at-assert
     _at-conv @ ACONV.COUNT @ 1- _at-conv @ ACONV-NTH AMSG-TEXT
-    S" Daybook task captured." STR-STR-CONTAINS _at-assert
+    S" 1" STR-STR= _at-assert
     _at-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @ 8 = _at-assert
 
     _at-provider-protocol-rejection
@@ -12435,7 +13251,8 @@ CREATE _lac-desc APP-DESC ALLOT
     _lac-uidl-file? _lac-assert
     _lac-comp COMP.STATE-SIZE @ _LAPP-STATE-SIZE = _lac-assert
     _LAPP-RUNTIME-SIZE LIBRARY-REPOSITORY-SIZE > _lac-assert
-    _lac-comp COMP.CAPS-N @ 0= _lac-assert
+    _lac-comp COMP.CAPS-A @ LIBRARY-APPLET-CAPABILITIES = _lac-assert
+    _lac-comp COMP.CAPS-N @ LIBRARY-APPLET-CAPABILITY-COUNT = _lac-assert
     _lac-comp COMP.INTENTS-N @ 0= _lac-assert
     _lac-desc APP.INIT-XT @ 0<> _lac-assert
     _lac-desc APP.EVENT-XT @ 0<> _lac-assert
@@ -18006,6 +18823,7 @@ VARIABLE _ahs-mf-parent VARIABLE _ahs-mf-child VARIABLE _ahs-mf-run
 VARIABLE _ahs-mf-status
 VARIABLE _ahs-unsupported-req
 VARIABLE _ahs-result-mode VARIABLE _ahs-disclosure-before
+VARIABLE _ahs-no-effect-context-n VARIABLE _ahs-no-effect-revision
 VARIABLE _ahs-race-g1 VARIABLE _ahs-race-g2 VARIABLE _ahs-race-run
 VARIABLE _ahs-race-entry VARIABLE _ahs-race-outer VARIABLE _ahs-race-old-handler
 VARIABLE _ahs-race-entered VARIABLE _ahs-race-prepared
@@ -18063,19 +18881,21 @@ CREATE _ahs-race-expected RID-SIZE ALLOT
 
 : _ahs-tool-handler  ( request instance -- status )
     DROP DUP CBR.ARGS CV-LEN@ _ahs-tool-value !
-    _ahs-result-mode @ IF
+    _ahs-result-mode @ 1 = IF
         S" oversized" 2 PICK CBR.RESULT CV-STRING! IF
             DROP CBUS-S-FAILED EXIT
         THEN
     ELSE
-        1 OVER CBR.RESULT CV-INT!
+        _ahs-result-mode @ 2 = IF 41 ELSE 1 THEN
+        OVER CBR.RESULT CV-INT!
     THEN
-    DROP CBUS-S-OK ;
+    DROP
+    _ahs-result-mode @ 2 = IF CBUS-S-NO-EFFECT ELSE CBUS-S-OK THEN ;
 
 : _ahs-tool-setup  ( -- )
     0 _ahs-result-mode !
     _ahs-in-schema CS-INIT CV-T-STRING _ahs-in-schema CS-ALLOW!
-    4096 _ahs-in-schema CS-MAX-LEN!
+    CBR-ARGS-CANONICAL-MAX _ahs-in-schema CS-MAX-LEN!
     _ahs-out-schema CS-INIT
     CV-T-INT CS-TYPE-BIT CV-T-STRING CS-TYPE-BIT OR
         _ahs-out-schema CS-ALLOW-MASK!
@@ -18264,6 +19084,49 @@ CREATE _ahs-race-expected RID-SIZE ALLOT
     _ahs-tool-value @ 0> _ahs-assert
     0 _ahs-result-mode ! _ahs-finish ;
 
+: _ahs-no-effect-result  ( -- )
+    2 _ahs-result-mode ! 0 _ahs-tool-value !
+    _ahs-inst @ CINST.REVISION @ _ahs-no-effect-revision !
+    S" task no effect result" _ahs-queued
+    _ahs-runtime @ ARUNTIME.MANDATE-RUN @ DUP _ahs-live-run !
+        AMRUN.DISCLOSURE-USED @ _ahs-disclosure-before !
+    _ahs-gateway @ ATOOLG.RESULT-RESERVED @ 8 = _ahs-assert
+    _ahs-review
+    _ahs-runtime @ ARUNTIME.APPROVAL-MSG @ _ahs-message !
+    _ahs-runtime @ ARUNTIME-MODEL-CONTEXT ACTX.COUNT @
+        _ahs-no-effect-context-n !
+    _ahs-audit-n _ahs-before !
+    -1 _ahs-runtime @ ARUNTIME-RESOLVE 0= _ahs-assert
+    8 _ahs-bus @ CBUS-PUMP 1 = _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-COMPLETE = _ahs-assert
+    _ahs-gateway @ ATOOLG.REQUEST @ DUP CBR.STATUS @
+        CBUS-S-NO-EFFECT = _ahs-assert
+    CBR.RESULT DUP CV-TYPE@ CV-T-INT = _ahs-assert
+        CV-DATA@ 41 = _ahs-assert
+    _ahs-inst @ CINST.REVISION @
+        _ahs-no-effect-revision @ = _ahs-assert
+    _ahs-gateway @ ATOOLG.RESULT-RESERVED @ 0= _ahs-assert
+    _ahs-live-run @ AMRUN.DISCLOSURE-USED @
+        _ahs-disclosure-before @ 6 - = _ahs-assert
+    _ahs-finish
+    _ahs-message @ AMSG.STATE @ AMSG-S-COMPLETE = _ahs-assert
+    _ahs-audit-n _ahs-before @ 1+ = _ahs-assert
+    _ahs-last-audit DUP 0<> _ahs-assert
+        AMSG.FLAGS @ AMSG-F-APPROVED AND 0<> _ahs-assert
+    _ahs-no-effect-context-n @
+        _ahs-runtime @ ARUNTIME-MODEL-CONTEXT ACTX-NTH
+    DUP 0<> _ahs-assert
+    DUP ACTXI.KIND @ ACTX-K-TOOL-RESULT = _ahs-assert
+    DUP ACTXI.STATUS @ CBUS-S-NO-EFFECT = _ahs-assert
+    ACTXI-DATA-TEXT S" 41" STR-STR= _ahs-assert
+    _ahs-runtime @ ARUNTIME.CONVERSATION @ DUP ACONV.COUNT @ 1-
+        SWAP ACONV-NTH
+    DUP AMSG.ROLE @ AROLE-TOOL = _ahs-assert
+    DUP AMSG.STATE @ AMSG-S-COMPLETE = _ahs-assert
+    AMSG-TEXT S" 41" STR-STR= _ahs-assert
+    _ahs-tool-value @ 21 = _ahs-assert
+    0 _ahs-result-mode ! ;
+
 : _ahs-quiesce  ( -- )
     0 _ahs-tool-value !
     S" task quiesce queued" _ahs-queued
@@ -18398,20 +19261,45 @@ CREATE _ahs-race-expected RID-SIZE ALLOT
     _ahs-unsupported-req @ CBR-FREE 0 _ahs-unsupported-req ! ;
 
 : _ahs-review-ceiling  ( -- )
-    _ahs-large ATOOLG-ARGS-REVIEW-MAX 88 FILL
-    S" task " _ahs-large SWAP CMOVE
-    0 _ahs-tool-value ! _ahs-audit-n _ahs-before !
-    _ahs-large ATOOLG-ARGS-REVIEW-MAX _ahs-queued
-    _ahs-gateway @ ATOOLG.ARGS-LEN @ ATOOLG-ARGS-REVIEW-MAX > _ahs-assert
-    _ahs-gateway @ ATOOLG-ARGS-REVIEWABLE? 0= _ahs-assert
-    _ahs-review
-    -1 _ahs-runtime @ ARUNTIME-RESOLVE CBUS-S-DENIED = _ahs-assert
-    _ahs-tool-value @ 0= _ahs-assert
-    _ahs-audit-n _ahs-before @ 1+ = _ahs-assert
-    _ahs-last-audit DUP AMSG.FLAGS @ AMSG-F-DENIED AND 0<> _ahs-assert
-        AMSG.FLAGS @ AMSG-F-APPROVED AND 0= _ahs-assert
-    S" <omitted: canonical args exceed inline audit limit>"
-        _ahs-audit-has _ahs-assert _ahs-finish ;
+    ATOOLG-ARGS-CANONICAL-MAX CBR-ARGS-CANONICAL-MAX = _ahs-assert
+    ATOOLG-ARGS-REVIEW-MAX ATOOLG-ARGS-CANONICAL-MAX = _ahs-assert
+    _ahs-large 65523 [CHAR] A FILL
+    _ahs-container CV-FREE
+    _ahs-large 65523 _ahs-container CV-STRING! 0= _ahs-assert
+
+    900 _ahs-parent @ _ahs-mandate-factory
+    DUP 0= _ahs-assert DROP DUP 0<> _ahs-assert
+    DUP _ahs-live-run !
+    DUP _ahs-gateway @ ATOOLG-MANDATE! 0= _ahs-assert DROP
+    S" daybook.task.capture" _ahs-container 900 _ahs-gateway @
+        ATOOLG-CALL CBUS-S-OK = _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-QUEUED = _ahs-assert
+    _ahs-gateway @ ATOOLG.REQUEST @ DUP CBR.ARGS-LEN @
+        CBR-ARGS-CANONICAL-MAX = _ahs-assert
+    CBR-ARGS-SEAL-MATCH? _ahs-assert
+    _ahs-gateway @ ATOOLG-ARGS-REVIEWABLE? _ahs-assert
+
+    _ahs-large CBR-ARGS-CANONICAL-MAX _ahs-gateway @
+        ATOOLG-ARGS-CANONICAL
+    DUP 0= _ahs-assert DROP
+        CBR-ARGS-CANONICAL-MAX = _ahs-assert
+    0xA5 _ahs-large CBR-ARGS-CANONICAL-MAX 1- + C!
+    _ahs-large CBR-ARGS-CANONICAL-MAX 1- _ahs-gateway @
+        ATOOLG-ARGS-CANONICAL
+    DUP IVJSON-E-CAPACITY = _ahs-assert DROP 0= _ahs-assert
+    _ahs-large CBR-ARGS-CANONICAL-MAX 1- + C@
+        0xA5 = _ahs-assert
+
+    8 _ahs-bus @ CBUS-PUMP 1 = _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-APPROVAL = _ahs-assert
+    _ahs-gateway @ ATOOLG-ARGS-REVIEWABLE? _ahs-assert
+    0 _ahs-gateway @ ATOOLG-RESOLVE CBUS-S-OK = _ahs-assert
+    _ahs-gateway @ ATOOLG.STATE @ ATOOLG-S-COMPLETE = _ahs-assert
+    _ahs-gateway @ ATOOLG-CLEAR CBUS-S-OK = _ahs-assert
+    _ahs-gateway @ ATOOLG-MANDATE-CLEAR CBUS-S-OK = _ahs-assert
+    _ahs-live-run @ AMRUN-FREE 0 _ahs-live-run !
+    _ahs-container CV-FREE
+    _ahs-stack ;
 
 : _ahs-capacity  ( -- )
     _ahs-runtime @ ARUNTIME.CONVERSATION @ ACONV.COUNT @
@@ -18699,12 +19587,25 @@ CREATE _ahs-race-expected RID-SIZE ALLOT
     _ahs-reg @ CREG-FREE _ahs-inst @ CINST-FREE
     _ahs-parent @ CTX-FREE ;
 
+: _ahs-control-plane-run  ( -- )
+    0 _ahs-fails ! 0 _ahs-checks ! DEPTH _ahs-depth !
+    _ahs-setup _ahs-stack
+    _ahs-review-ceiling _ahs-stack
+    _ahs-no-effect-result _ahs-stack
+    _ahs-cleanup _ahs-stack
+    _ahs-fails @ 0= IF
+        ." AGENT CONTROL PLANE PASS " _ahs-checks @ .
+    ELSE
+        ." AGENT CONTROL PLANE FAIL " _ahs-fails @ . ." / " _ahs-checks @ .
+    THEN CR ;
+
 : _ahs-run  ( -- )
     0 _ahs-fails ! 0 _ahs-checks ! DEPTH _ahs-depth !
     _ahs-setup _ahs-stack
     _ahs-adversarial-concurrency _ahs-stack
     _ahs-audit-envelope _ahs-stack
     _ahs-result-bound _ahs-stack
+    _ahs-no-effect-result _ahs-stack
     _ahs-quiesce _ahs-stack
     _ahs-cancel-poll-race _ahs-stack
     _ahs-audit-save-failure _ahs-stack
@@ -18729,6 +19630,21 @@ _ahs-run
     stable_markers=("AGENT SECURITY PASS",),
     failure_markers=("AGENT SECURITY FAIL",),
     linked=True,
+)
+
+# These review/result paths have no concurrency contract.  Reuse the security
+# fixture's setup and helpers, but keep the focused profile on the ordinary
+# single-core scheduler; the full two-core profile remains for lock/race cases.
+_AGENT_CONTROL_PLANE_AUTOEXEC = (
+    PROFILES["agent-security"].autoexec.rsplit("\n_ahs-run\n", 1)[0]
+    + "\n_ahs-control-plane-run\n"
+)
+PROFILES["agent-control-plane"] = replace(
+    PROFILES["agent-security"],
+    autoexec=_AGENT_CONTROL_PLANE_AUTOEXEC,
+    ready_markers=("AGENT CONTROL PLANE PASS",),
+    stable_markers=("AGENT CONTROL PLANE PASS",),
+    failure_markers=("AGENT CONTROL PLANE FAIL",),
 )
 
 PROFILES["agent-provider-ui-commands"] = Profile(
@@ -19050,6 +19966,7 @@ PROFILES["agent-access"] = Profile(
         "tui/applets/agent/access-profile.f",
         "tui/applets/agent/tool-gateway.f",
         "tui/applets/desk/agent-access-policy.f",
+        "tui/applets/desk/agent-cap-catalog.f",
     ),
     resources=(),
     autoexec=r"""\ autoexec.f - access preset and exact target-pin contracts
@@ -19058,12 +19975,14 @@ ENTER-USERLAND
 REQUIRE tui/applets/agent/access-profile.f
 REQUIRE tui/applets/agent/tool-gateway.f
 REQUIRE tui/applets/desk/agent-access-policy.f
+REQUIRE tui/applets/desk/agent-cap-catalog.f
 
 VARIABLE _ac-fails VARIABLE _ac-checks VARIABLE _ac-depth
 VARIABLE _ac-reg VARIABLE _ac-foreign VARIABLE _ac-legit
 VARIABLE _ac-bus VARIABLE _ac-gateway VARIABLE _ac-parent
 VARIABLE _ac-child VARIABLE _ac-run VARIABLE _ac-found-inst
 VARIABLE _ac-found-cap VARIABLE _ac-run-entry
+VARIABLE _ac-fill-byte
 CREATE _ac-profile AGENT-ACCESS-PROFILE-SIZE ALLOT
 CREATE _ac-head PHEAD-SIZE ALLOT
 CREATE _ac-mandate MAND-SIZE ALLOT
@@ -19075,11 +19994,20 @@ CREATE _ac-out-schema CS-SIZE ALLOT
 CREATE _ac-spoof-desc COMP-DESC ALLOT
 CREATE _ac-spoof-cap CAP-DESC ALLOT
 CREATE _ac-policy CPOLICY-SIZE ALLOT
+CREATE _ac-capacity-store 8 CFACET-SIZE + 8 + ALLOT
+CREATE _ac-capacity-copy CFACET-SIZE ALLOT
+
+: _ac-capacity-facet  ( -- facet ) _ac-capacity-store 8 + ;
 
 : _ac-assert  ( flag -- )
     1 _ac-checks +! 0= IF 1 _ac-fails +! ." ASSERT " _ac-checks @ . CR THEN ;
 : _ac-rid!  ( value rid -- ) DUP RID-CLEAR ! ;
 : _ac-handler  ( request instance -- status ) 2DROP CBUS-S-OK ;
+: _ac-filled?  ( a u byte -- flag )
+    _ac-fill-byte ! OVER + SWAP ?DO
+        I C@ _ac-fill-byte @ <> IF 0 UNLOOP EXIT THEN
+    LOOP
+    -1 ;
 : _ac-common-budgets?  ( profile -- flag )
     DUP AAP.HISTORY-ITEMS @ 12 =
     OVER AAP.HISTORY-BYTES @ 4096 = AND
@@ -19129,6 +20057,23 @@ CREATE _ac-policy CPOLICY-SIZE ALLOT
     _ac-profile AAP.TOOL-BUDGET @ 8 = _ac-assert
     _ac-profile AAP.DISCLOSURE-BUDGET @ 49152 = _ac-assert
 
+    AAP-PRESET-PRACTICE-LIBRARY-BURROW
+        _ac-profile DAP-PRESET! AAP-S-OK = _ac-assert
+    _ac-profile AAP-VALID? _ac-assert
+    _ac-profile DAP-PROFILE-VALID? _ac-assert
+    _ac-profile AAP-ID$ S" desk.practice-library-burrow" STR-STR= _ac-assert
+    _ac-profile AAP-LABEL$ S" Practice Library Burrow" STR-STR= _ac-assert
+    _ac-profile AAP.FLAGS @ AAP-F-CHAT-HISTORY
+        AAP-F-CONTEXT-OBSERVE OR AAP-F-REVIEW-CHANGES OR = _ac-assert
+    _ac-profile AAP.EFFECTS @ CAP-E-OBSERVE CAP-E-NAVIGATE OR
+        CAP-E-MUTATE OR CAP-E-PERSIST OR = _ac-assert
+    _ac-profile AAP.EFFECTS @ CAP-E-DESTRUCTIVE CAP-E-EXTERNAL OR AND
+        0= _ac-assert
+    _ac-profile AAP.DISPOSITION @ MAND-D-COMMIT = _ac-assert
+    _ac-profile _ac-common-budgets? _ac-assert
+    _ac-profile AAP.TOOL-BUDGET @ 12 = _ac-assert
+    _ac-profile AAP.DISCLOSURE-BUDGET @ 49152 = _ac-assert
+
     \ A structurally coherent mutation must not smuggle Assist authority
     \ under the trusted Chat-only preset identity.
     AAP-PRESET-CHAT-ONLY _ac-profile DAP-PRESET! AAP-S-OK = _ac-assert
@@ -19148,6 +20093,150 @@ CREATE _ac-policy CPOLICY-SIZE ALLOT
     _ac-profile AAP-VALID? _ac-assert
     _ac-profile DAP-PROFILE-VALID? _ac-assert
     _ac-profile AAP-ID$ S" desk.practice-read" STR-STR= _ac-assert ;
+
+VARIABLE _ac-ca VARIABLE _ac-cu VARIABLE _ac-oa VARIABLE _ac-ou
+VARIABLE _ac-effects VARIABLE _ac-flags VARIABLE _ac-max
+VARIABLE _ac-expected-presets
+VARIABLE _ac-preset
+
+: _ac-candidate-find  ( component-a component-u op-a op-u -- candidate|0 )
+    _ac-ou ! _ac-oa ! _ac-cu ! _ac-ca !
+    DESK-AGENT-CANDIDATE-N 0 ?DO
+        I DESK-AGENT-CANDIDATE-NTH DUP DACAND-COMPONENT$
+        _ac-ca @ _ac-cu @ STR-STR= IF
+            DUP DACAND-OP$ _ac-oa @ _ac-ou @ STR-STR= IF
+                UNLOOP EXIT
+            THEN
+        THEN
+        DROP
+    LOOP
+    0 ;
+
+: _ac-candidate-exact?
+  ( component-a component-u op-a op-u effects flags max presets -- flag )
+    _ac-expected-presets ! _ac-max ! _ac-flags ! _ac-effects !
+    _ac-candidate-find DUP 0= IF EXIT THEN
+    DUP DACAND.EFFECTS @ _ac-effects @ =
+    OVER DACAND.FLAGS @ _ac-flags @ = AND
+    OVER DACAND.MAX-RESULT @ _ac-max @ = AND
+    SWAP DACAND.PRESETS @ _ac-expected-presets @ = AND ;
+
+: _ac-allowed-count  ( preset -- count )
+    _ac-preset ! 0
+    DESK-AGENT-CANDIDATE-N 0 ?DO
+        I DESK-AGENT-CANDIDATE-NTH _ac-preset @ DACAND-ALLOWED? IF 1+ THEN
+    LOOP ;
+
+: _ac-catalog  ( -- )
+    DESK-AGENT-CANDIDATE-N 23 = _ac-assert
+    DESK-AGENT-CANDIDATES-VALID? _ac-assert
+    AAP-PRESET-CHAT-ONLY _ac-allowed-count 0= _ac-assert
+    AAP-PRESET-PRACTICE-READ _ac-allowed-count 13 = _ac-assert
+    AAP-PRESET-PRACTICE-ASSIST _ac-allowed-count 20 = _ac-assert
+    AAP-PRESET-PRACTICE-LIBRARY-BURROW _ac-allowed-count 23 = _ac-assert
+
+    S" org.akashic.library.applet" S" library.status"
+        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 56
+        DACAND-P-READ DACAND-P-ASSIST OR DACAND-P-LIBRARY-BURROW OR
+        _ac-candidate-exact? _ac-assert
+    S" org.akashic.library.applet" S" library.document.create"
+        CAP-E-MUTATE CAP-E-PERSIST OR DACAND-REVIEW-FLAGS 357
+        DACAND-P-ASSIST DACAND-P-LIBRARY-BURROW OR
+        _ac-candidate-exact? _ac-assert
+    S" org.akashic.library.applet" S" library.collection.create"
+        CAP-E-MUTATE CAP-E-PERSIST OR DACAND-REVIEW-FLAGS 270
+        DACAND-P-ASSIST DACAND-P-LIBRARY-BURROW OR
+        _ac-candidate-exact? _ac-assert
+    S" org.akashic.streams" S" streams.burrow.create"
+        CAP-E-MUTATE DACAND-REVIEW-FLAGS 806 DACAND-P-LIBRARY-BURROW
+        _ac-candidate-exact? _ac-assert
+    S" org.akashic.streams" S" streams.burrow.status"
+        CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 744
+        DACAND-P-READ DACAND-P-ASSIST OR DACAND-P-LIBRARY-BURROW OR
+        _ac-candidate-exact? _ac-assert
+    S" org.akashic.streams" S" streams.burrow.start"
+        CAP-E-MUTATE DACAND-REVIEW-FLAGS 806 DACAND-P-LIBRARY-BURROW
+        _ac-candidate-exact? _ac-assert
+    S" org.akashic.streams" S" streams.burrow.stop"
+        CAP-E-MUTATE DACAND-REVIEW-FLAGS 806 DACAND-P-LIBRARY-BURROW
+        _ac-candidate-exact? _ac-assert
+    S" org.akashic.library.applet" S" library.document.query"
+        _ac-candidate-find 0= _ac-assert
+    S" org.akashic.library.applet" S" library.document.read"
+        _ac-candidate-find 0= _ac-assert ;
+
+: _ac-capacity  ( -- )
+    CFENTRY-SIZE 112 = _ac-assert
+    CFACET-SIZE 2824 = _ac-assert
+    AGENT-MANDATE-RUN-SIZE 3176 = _ac-assert
+    _ac-capacity-store 8 CFACET-SIZE + 8 + 0xA5 FILL
+    _ac-capacity-facet CFACET-INIT
+    101 _ac-capacity-facet CFACET.ID _ac-rid!
+    102 _ac-capacity-facet CFACET.PRACTICE-ID _ac-rid!
+    103 _ac-capacity-facet CFACET.EPOCH !
+    104 _ac-capacity-facet CFACET.CONTEXT-ID !
+    105 _ac-capacity-facet CFACET.CONTEXT-GEN !
+    106 _ac-capacity-facet CFACET.REVISION !
+    DESK-AGENT-CANDIDATE-N 0 ?DO
+        107 108 CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 8
+        I DESK-AGENT-CANDIDATE-NTH DACAND-OP$
+        _ac-capacity-facet CFACET-ADD CFACET-S-OK = _ac-assert
+    LOOP
+    107 108 CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 8 S" capacity.spare"
+        _ac-capacity-facet CFACET-ADD CFACET-S-OK = _ac-assert
+    _ac-capacity-facet CFACET.COUNT @ CFACET-MAX-ENTRIES = _ac-assert
+    _ac-capacity-facet CFACET-VALID? _ac-assert
+    _ac-capacity-facet _ac-capacity-copy CFACET-SIZE MOVE
+    107 108 CAP-E-OBSERVE DACAND-OBSERVE-FLAGS 8 S" capacity.overflow"
+        _ac-capacity-facet CFACET-ADD CFACET-S-FULL = _ac-assert
+    _ac-capacity-facet CFACET-SIZE _ac-capacity-copy CFACET-SIZE COMPARE
+        0= _ac-assert
+    _ac-capacity-store 8 0xA5 _ac-filled? _ac-assert
+    _ac-capacity-facet CFACET-SIZE + 8 0xA5 _ac-filled? _ac-assert
+    23 _ac-capacity-facet CFACET-NTH CFENTRY-OP@
+        S" capacity.spare" STR-STR= _ac-assert
+    24 _ac-capacity-facet CFACET-NTH 0= _ac-assert
+
+    _ac-head PHEAD-INIT
+    101 _ac-head PHEAD.ID _ac-rid!
+    102 _ac-head PHEAD.CURRENT-ROOT _ac-rid!
+    103 CTX-NEW DUP 0= _ac-assert DROP _ac-parent !
+    _ac-head _ac-parent @ CTX.PRACTICE !
+    _ac-parent @ CTX-CHILD-NEW DUP 0= _ac-assert DROP _ac-child !
+    _ac-head PHEAD.ID _ac-capacity-facet CFACET.PRACTICE-ID RID-COPY
+    103 _ac-capacity-facet CFACET.EPOCH !
+    _ac-child @ CTX.ID @ _ac-capacity-facet CFACET.CONTEXT-ID !
+    _ac-child @ CTX.GENERATION @ _ac-capacity-facet CFACET.CONTEXT-GEN !
+
+    _ac-mandate MAND-INIT
+    109 _ac-mandate MAND.ID _ac-rid!
+    103 _ac-mandate MAND.ACTIVATION-EPOCH !
+    CPRINC-AGENT _ac-mandate MAND.PRINCIPAL !
+    _ac-child @ CTX.ID @ _ac-mandate MAND.CONTEXT-ID !
+    _ac-child @ CTX.GENERATION @
+        _ac-mandate MAND.CONTEXT-GENERATION !
+    CAP-E-OBSERVE _ac-mandate MAND.EFFECTS !
+    MAND-D-READ-ONLY _ac-mandate MAND.DISPOSITION !
+    24 _ac-mandate MAND.TOOL-BUDGET !
+    192 _ac-mandate MAND.DISCLOSURE-BUDGET !
+    _ac-head PHEAD.ID _ac-mandate MAND.PRACTICE-ID RID-COPY
+    _ac-capacity-facet CFACET.ID
+        _ac-mandate MAND.INPUT-FACET-ID RID-COPY
+    _ac-capacity-facet CFACET.ID
+        _ac-mandate MAND.DISCLOSURE-FACET-ID RID-COPY
+
+    _ac-head _ac-child @ _ac-mandate _ac-capacity-facet AMRUN-NEW
+    DUP AMRUN-S-OK = _ac-assert DROP _ac-run !
+    _ac-run @ AMRUN.ABI @ AMRUN-ABI-VERSION = _ac-assert
+    _ac-run @ AMRUN.SIZE @ AGENT-MANDATE-RUN-SIZE = _ac-assert
+    _ac-run @ AMRUN.FACET CFACET.COUNT @
+        CFACET-MAX-ENTRIES = _ac-assert
+    _ac-capacity-facet CFACET-SIZE _ac-run @ AMRUN.FACET CFACET-SIZE
+        COMPARE 0= _ac-assert
+    23 _ac-run @ AMRUN.FACET CFACET-NTH CFENTRY-OP@
+        S" capacity.spare" STR-STR= _ac-assert
+    _ac-run @ AMRUN-FREE 0 _ac-run !
+    _ac-parent @ CTX-FREE 0 _ac-parent ! ;
 
 : _ac-collision  ( -- )
     _ac-in-schema CS-INIT CV-T-NULL _ac-in-schema CS-ALLOW!
@@ -19307,6 +20396,8 @@ CREATE _ac-policy CPOLICY-SIZE ALLOT
 : _ac-run-all  ( -- )
     0 _ac-fails ! 0 _ac-checks ! DEPTH _ac-depth !
     _ac-presets
+    _ac-catalog
+    _ac-capacity
     _ac-collision
     DEPTH DUP _ac-depth @ <> IF
         ." STACK DEPTH " _ac-depth @ . ." -> " DUP . CR
@@ -19423,60 +20514,60 @@ VARIABLE _dah-hrun
 : _dah-observe-set?  ( facet -- flag )
     _dah-eft !
     S" daybook.agenda.markdown" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" daybook.source" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" pad.document.active" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" pad.document.text" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" fexplorer.resource.selected" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" fexplorer.preview.text" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" grid.cell.selected" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 40 _dah-eft @ _dah-entry-exact?
+        DACAND-OBSERVE-FLAGS 40 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" grid.workbook.csv" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" grid.source" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-OBSERVE-FLAGS 516 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" streams.source.query" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" streams.source.read" CAP-E-OBSERVE
-        _DESK-AGENT-OBSERVE-FLAGS _DESK-AGENT-TEXT-MAX
+        DACAND-OBSERVE-FLAGS DACAND-TEXT-RESULT-MAX
         _dah-eft @ _dah-entry-exact? ;
 
 : _dah-review-set?  ( facet -- flag )
     _dah-eft !
     S" daybook.task.capture" CAP-E-MUTATE CAP-E-PERSIST OR
-        _DESK-AGENT-REVIEW-FLAGS 8 _dah-eft @ _dah-entry-exact?
+        DACAND-REVIEW-FLAGS 8 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" pad.document.open" CAP-E-NAVIGATE
-        _DESK-AGENT-REVIEW-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-REVIEW-FLAGS 516 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" fexplorer.resource.reveal" CAP-E-NAVIGATE
-        _DESK-AGENT-REVIEW-FLAGS 516 _dah-eft @ _dah-entry-exact?
+        DACAND-REVIEW-FLAGS 516 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" grid.cell.set-selected" CAP-E-MUTATE
-        _DESK-AGENT-REVIEW-FLAGS 40 _dah-eft @ _dah-entry-exact?
+        DACAND-REVIEW-FLAGS 40 _dah-eft @ _dah-entry-exact?
         0= IF 0 EXIT THEN
     S" grid.workbook.save" CAP-E-PERSIST
-        _DESK-AGENT-REVIEW-FLAGS 8 _dah-eft @ _dah-entry-exact? ;
+        DACAND-REVIEW-FLAGS 8 _dah-eft @ _dah-entry-exact? ;
 
 : _dah-safe-effects?  ( facet -- flag )
     DUP CFACET.COUNT @ 0 ?DO
@@ -19717,6 +20808,208 @@ THEN
     ready_markers=("Streams", "[Agent: offline]"),
     stable_markers=("STREAMS", "Desk ☂ café"),
     linked=True,
+    include_large_sample=False,
+    total_sectors=PROFILES["desktop"].total_sectors,
+)
+
+PROFILES["desktop-library-burrow"] = Profile(
+    roots=(
+        "tui/applets/desk/desk.f",
+        "tui/applets/library/library.f",
+        # This root and its boot REQUIRE must precede streams.f.  Streams
+        # deliberately selects the 19-capability extension build only when
+        # the Rabbit capability count is already present at load time.
+        "tui/applets/streams/rabbit-capabilities.f",
+        "tui/applets/streams/streams.f",
+        "tui/applets/agent/agent.f",
+        "tui/applets/agent/providers/devtools/scripted.f",
+    ),
+    resources=(
+        "tui/applets/desk/desk.toml",
+        "tui/applets/library/library.uidl",
+        "tui/applets/streams/streams.uidl",
+        "tui/applets/agent/agent.uidl",
+    ),
+    autoexec=r"""\ autoexec.f - focused Desk/Library/Rabbit Burrow product
+ENTER-USERLAND
+." [akashic] loading Desk Library Burrow product" CR
+REQUIRE tui/applets/desk/desk.f
+REQUIRE tui/applets/library/library.f
+REQUIRE tui/applets/streams/rabbit-capabilities.f
+REQUIRE tui/applets/streams/streams.f
+REQUIRE tui/applets/agent/agent.f
+REQUIRE tui/applets/agent/providers/devtools/scripted.f
+REQUIRE local_testing/streams-burrow-prov.f
+REQUIRE local_testing/desk-library-burrow.f
+
+\ Provision a normal Practice head only on genuinely blank qualification
+\ media.  Invalid existing slots remain Desk recovery work, as in the
+\ canonical Desktop profile.
+CREATE _boot-practice-head PHEAD-SIZE ALLOT
+CREATE _boot-practice-out PHEAD-SIZE ALLOT
+CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
+: _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
+: _boot-practice-slot?  ( path-a path-u -- flag )
+    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+: _boot-practice-present?  ( -- flag )
+    S" /practice-head-a.bin" _boot-practice-slot?
+    S" /practice-head-b.bin" _boot-practice-slot? OR ;
+: _boot-practice-provision  ( -- )
+    _boot-practice-present? IF EXIT THEN
+    VFS-CUR _boot-practice-store PHEADVFS-INIT
+        PHEADVFS-S-OK <> ABORT" Practice store init failed"
+    _boot-practice-out _boot-practice-store PHEADVFS-LOAD
+        PHEADVFS-S-RECOVERY <> ABORT" blank Practice did not enter recovery"
+    _boot-practice-head PHEAD-INIT
+    1 _boot-practice-head PHEAD.ID _boot-practice-id!
+    2 _boot-practice-head PHEAD.CURRENT-ROOT _boot-practice-id!
+    _boot-practice-head _boot-practice-store PHEADVFS-REINITIALIZE
+        PHEADVFS-S-OK <> ABORT" Practice provision failed" ;
+_boot-practice-provision
+
+DESK-LIBRARY-BURROW-CONFIGURE
+." [akashic] starting Desk Library Burrow product" CR
+DESK-LIBRARY-BURROW-RUN
+." [akashic] Desk Library Burrow product exited" CR
+""",
+    ready_markers=("Library", "Streams", "Agent"),
+    stable_markers=("LIBRARY", "STREAMS", "Agent"),
+    failure_markers=(
+        "DESK LIBRARY BURROW FAIL",
+        "DESK LIBRARY BURROW ASSERT",
+        "DESK LIBRARY BURROW STACK",
+        "desktop exception",
+    ),
+    initial_files=(
+        (
+            "local_testing/streams-burrow-prov.f",
+            (
+                AKASHIC_ROOT / "local_testing" / "streams-burrow-prov.f"
+            ).read_bytes(),
+        ),
+        (
+            "local_testing/desk-library-burrow.f",
+            (
+                AKASHIC_ROOT / "local_testing" / "desk-library-burrow.f"
+            ).read_bytes(),
+        ),
+    ),
+    linked=True,
+    include_large_sample=False,
+    total_sectors=PROFILES["desktop"].total_sectors,
+)
+
+PROFILES["desktop-library-burrow-capstone"] = Profile(
+    roots=(
+        "tui/applets/desk/desk.f",
+        "tui/applets/library/library.f",
+        "tui/applets/streams/rabbit-capabilities.f",
+        "tui/applets/streams/streams.f",
+        "tui/applets/agent/agent.f",
+        "tui/applets/agent/providers/devtools/scripted.f",
+        "tui/applets/streams/rabbit-library-profile.f",
+        "net/transports/memory-duplex.f",
+        "tui/applets/streams/rabbit-connector.f",
+    ),
+    resources=(
+        "tui/applets/desk/desk.toml",
+        "tui/applets/library/library.uidl",
+        "tui/applets/streams/streams.uidl",
+        "tui/applets/agent/agent.uidl",
+    ),
+    autoexec=r"""\ autoexec.f - Desk/Library framed Rabbit capstone
+ENTER-USERLAND
+." [akashic] loading Desk Library Rabbit capstone" CR TX-FLUSH
+REQUIRE tui/applets/desk/desk.f
+REQUIRE tui/applets/library/library.f
+REQUIRE tui/applets/streams/rabbit-capabilities.f
+REQUIRE tui/applets/streams/streams.f
+REQUIRE tui/applets/agent/agent.f
+REQUIRE tui/applets/agent/providers/devtools/scripted.f
+REQUIRE tui/applets/streams/rabbit-library-profile.f
+REQUIRE net/transports/memory-duplex.f
+REQUIRE tui/applets/streams/rabbit-connector.f
+_C5-BOOT-SOURCE c5-srbprov.f.lz
+." DESK LIBRARY RABBIT LOAD C4 PROVIDER PASS" CR TX-FLUSH
+_C5-BOOT-SOURCE c5-dlburrow.f.lz
+." DESK LIBRARY RABBIT LOAD C4 PRODUCT PASS" CR TX-FLUSH
+_C5-BOOT-SOURCE c5-slrabbit.f.lz
+." DESK LIBRARY RABBIT LOAD C5 PROVIDER PASS" CR TX-FLUSH
+_C5-BOOT-SOURCE c5-dlcap.f.lz
+." DESK LIBRARY RABBIT LOAD C5 CAPSTONE PASS" CR TX-FLUSH
+
+CREATE _boot-practice-head PHEAD-SIZE ALLOT
+CREATE _boot-practice-out PHEAD-SIZE ALLOT
+CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
+: _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
+: _boot-practice-slot?  ( path-a path-u -- flag )
+    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+: _boot-practice-present?  ( -- flag )
+    S" /practice-head-a.bin" _boot-practice-slot?
+    S" /practice-head-b.bin" _boot-practice-slot? OR ;
+: _boot-practice-provision  ( -- )
+    _boot-practice-present? IF EXIT THEN
+    VFS-CUR _boot-practice-store PHEADVFS-INIT
+        PHEADVFS-S-OK <> ABORT" Practice store init failed"
+    _boot-practice-out _boot-practice-store PHEADVFS-LOAD
+        PHEADVFS-S-RECOVERY <> ABORT" blank Practice did not enter recovery"
+    _boot-practice-head PHEAD-INIT
+    1 _boot-practice-head PHEAD.ID _boot-practice-id!
+    2 _boot-practice-head PHEAD.CURRENT-ROOT _boot-practice-id!
+    _boot-practice-head _boot-practice-store PHEADVFS-REINITIALIZE
+        PHEADVFS-S-OK <> ABORT" Practice provision failed" ;
+_boot-practice-provision
+." DESK LIBRARY RABBIT PRACTICE PASS" CR TX-FLUSH
+
+DESK-LIBRARY-BURROW-CONFIGURE
+." [akashic] starting Desk Library Rabbit capstone" CR
+DESK-LIBRARY-BURROW-RUN
+." [akashic] Desk Library Rabbit capstone exited" CR
+""",
+    ready_markers=("Library", "Streams", "Agent"),
+    stable_markers=("LIBRARY", "STREAMS", "Agent"),
+    failure_markers=(
+        "DESK LIBRARY BURROW FAIL",
+        "DESK LIBRARY BURROW ASSERT",
+        "DESK LIBRARY BURROW STACK",
+        "DESK LIBRARY RABBIT FAIL",
+        "DESK LIBRARY RABBIT ASSERT",
+        "DESK LIBRARY RABBIT STACK",
+        "COLD SOURCE LOAD FAIL",
+        "desktop exception",
+    ),
+    cold_source_initial_files=(
+        (
+            "c5-srbprov.f.lz",
+            (
+                AKASHIC_ROOT / "local_testing" / "streams-burrow-prov.f"
+            ).read_bytes(),
+        ),
+        (
+            "c5-dlburrow.f.lz",
+            (
+                AKASHIC_ROOT / "local_testing" / "desk-library-burrow.f"
+            ).read_bytes(),
+        ),
+        (
+            "c5-slrabbit.f.lz",
+            (
+                AKASHIC_ROOT
+                / "local_testing"
+                / "streams-library-rabbit-provider.f"
+            ).read_bytes(),
+        ),
+        (
+            "c5-dlcap.f.lz",
+            (
+                AKASHIC_ROOT
+                / "local_testing"
+                / "desk-library-burrow-capstone.f"
+            ).read_bytes(),
+        ),
+    ),
+    linked=True,
+    cold_source_packed=True,
     include_large_sample=False,
     total_sectors=PROFILES["desktop"].total_sectors,
 )
@@ -23355,14 +24648,52 @@ def _requires_megapad_networking(modules: tuple[str, ...]) -> bool:
 
 
 def _forth_line_tokens(line: str) -> tuple[str, ...]:
-    """Return executable words using MegaPad's ASCII-space token rules."""
+    """Return executable words using MegaPad's ASCII-space token rules.
+
+    The linked-source packer uses this stream to keep a colon definition in
+    one MP64FS chunk.  Parser-word payloads are data, not executable tokens:
+    in particular, a semicolon inside ``S\" ; detail`` must not look like the
+    end of the surrounding definition.
+    """
     tokens: list[str] = []
-    for token in line.split(" "):
-        if not token:
-            continue
+    quoted_next = False
+    index = 0
+    while index < len(line):
+        while index < len(line) and line[index] == " ":
+            index += 1
+        if index >= len(line):
+            break
+        start = index
+        while index < len(line) and line[index] != " ":
+            index += 1
+        token = line[start:index]
+        upper = token.upper()
         if token.startswith("\\"):
             break
+        if quoted_next:
+            quoted_next = False
+            continue
         tokens.append(token)
+        if upper in {
+            "'",
+            "[']",
+            "CHAR",
+            "[CHAR]",
+            "POSTPONE",
+            "[COMPILE]",
+            "[DEFINED]",
+            "[UNDEFINED]",
+        }:
+            quoted_next = True
+            continue
+        if upper in {'S"', 'C"', '."', 'ABORT"'}:
+            close = line.find('"', index)
+            index = len(line) if close < 0 else close + 1
+            continue
+        if token == "(" or upper == ".(":
+            close = line.find(")", index)
+            index = len(line) if close < 0 else close + 1
+            continue
     return tuple(tokens)
 
 
@@ -23652,7 +24983,7 @@ def _linked_chunks(
                 for index, token in enumerate(tokens)
             ):
                 definition_depth = 0
-            for token in text.split(" "):
+            for token in tokens:
                 upper = token.upper()
                 if upper == "[IF]":
                     conditional_depth += 1
@@ -23687,12 +25018,233 @@ def _linked_chunks(
     return linked_chunks
 
 
+def _cold_source_lzss_encode(source: bytes) -> bytes:
+    """Encode one bounded source chunk with deterministic LZSS tokens.
+
+    Control groups describe at most eight tokens, least-significant bit
+    first.  A set bit is one literal.  A clear bit is a two-byte little-endian
+    ``((distance - 1) << 4) | (length - 3)`` match with a 4 KiB window and a
+    3..18 byte length.  Greedy longest-match selection prefers the nearest
+    equal-length match and does not impose a candidate-count heuristic.
+    """
+    if not source:
+        raise ValueError("Cold source chunks must not be empty")
+
+    encoded = bytearray()
+    cursor = 0
+    while cursor < len(source):
+        control_offset = len(encoded)
+        encoded.append(0)
+        control = 0
+        for bit in range(8):
+            if cursor == len(source):
+                break
+
+            best_length = 0
+            best_distance = 0
+            maximum_length = min(18, len(source) - cursor)
+            if maximum_length >= 3:
+                window_start = max(0, cursor - 4096)
+                for distance in range(1, min(2, cursor) + 1):
+                    length = 0
+                    while (
+                        length < maximum_length
+                        and source[cursor + length - distance]
+                        == source[cursor + length]
+                    ):
+                        length += 1
+                    if length >= 3 and length > best_length:
+                        best_length = length
+                        best_distance = distance
+                        if length == maximum_length:
+                            break
+
+                needle = source[cursor : cursor + 3]
+                candidate = (
+                    -1
+                    if best_length == maximum_length
+                    else source.rfind(needle, window_start, cursor)
+                )
+                while candidate >= window_start:
+                    distance = cursor - candidate
+                    length = 3
+                    while (
+                        length < maximum_length
+                        and source[cursor + length - distance]
+                        == source[cursor + length]
+                    ):
+                        length += 1
+                    if length >= 3 and length > best_length:
+                        best_length = length
+                        best_distance = distance
+                        if length == maximum_length:
+                            break
+                    candidate = source.rfind(
+                        needle, window_start, candidate
+                    )
+
+            if best_length >= 3:
+                code = ((best_distance - 1) << 4) | (best_length - 3)
+                encoded.extend(struct.pack("<H", code))
+                cursor += best_length
+            else:
+                control |= 1 << bit
+                encoded.append(source[cursor])
+                cursor += 1
+        encoded[control_offset] = control
+    return bytes(encoded)
+
+
+def _cold_source_lzss_decode(payload: bytes, raw_bytes: int) -> bytes:
+    """Host-side exact decoder used to validate every generated payload."""
+    if raw_bytes <= 0:
+        raise ValueError("Cold source raw size must be positive")
+
+    decoded = bytearray()
+    cursor = 0
+    while len(decoded) < raw_bytes:
+        if cursor >= len(payload):
+            raise ValueError("Truncated cold source control group")
+        control = payload[cursor]
+        cursor += 1
+        for _ in range(8):
+            if len(decoded) == raw_bytes:
+                if control:
+                    raise ValueError("Non-canonical cold source control bits")
+                if cursor != len(payload):
+                    raise ValueError("Trailing cold source payload")
+                return bytes(decoded)
+
+            if control & 1:
+                if cursor >= len(payload):
+                    raise ValueError("Truncated cold source literal")
+                decoded.append(payload[cursor])
+                cursor += 1
+            else:
+                if cursor + 2 > len(payload):
+                    raise ValueError("Truncated cold source match")
+                code = payload[cursor] | (payload[cursor + 1] << 8)
+                cursor += 2
+                distance = (code >> 4) + 1
+                length = (code & 0x0F) + 3
+                if distance > 4096 or distance > len(decoded):
+                    raise ValueError("Invalid cold source match distance")
+                if length > raw_bytes - len(decoded):
+                    raise ValueError("Cold source match overruns output")
+                for _ in range(length):
+                    decoded.append(decoded[-distance])
+            control >>= 1
+
+    if cursor != len(payload):
+        raise ValueError("Trailing cold source payload")
+    return bytes(decoded)
+
+
+def _pack_cold_source(
+    source: bytes,
+    maximum_raw_bytes: int = COLD_SOURCE_RAW_MAX_BYTES,
+) -> bytes:
+    """Wrap one linked source chunk in the checked AKLZSS01 container."""
+    if not 0 < len(source) <= maximum_raw_bytes:
+        raise ValueError(
+            "Cold source raw size must be between 1 and "
+            f"{maximum_raw_bytes} bytes"
+        )
+    payload = _cold_source_lzss_encode(source)
+    header = COLD_SOURCE_HEADER.pack(
+        COLD_SOURCE_MAGIC,
+        COLD_SOURCE_VERSION,
+        COLD_SOURCE_FLAGS,
+        COLD_SOURCE_HEADER_BYTES,
+        len(source),
+        len(payload),
+        zlib.crc32(source) & 0xFFFFFFFF,
+        0,
+    )
+    packed = header + payload
+    if _unpack_cold_source(packed, maximum_raw_bytes) != source:
+        raise RuntimeError("Cold source packer failed its exact round trip")
+    return packed
+
+
+def _unpack_cold_source(
+    packed: bytes,
+    maximum_raw_bytes: int = COLD_SOURCE_RAW_MAX_BYTES,
+) -> bytes:
+    """Validate and expand one AKLZSS01 container on the host."""
+    if len(packed) < COLD_SOURCE_HEADER_BYTES:
+        raise ValueError("Truncated cold source header")
+    (
+        magic,
+        version,
+        flags,
+        header_bytes,
+        raw_bytes,
+        payload_bytes,
+        raw_crc32,
+        reserved,
+    ) = COLD_SOURCE_HEADER.unpack_from(packed)
+    if magic != COLD_SOURCE_MAGIC:
+        raise ValueError("Invalid cold source magic")
+    if version != COLD_SOURCE_VERSION:
+        raise ValueError("Unsupported cold source version")
+    if flags != COLD_SOURCE_FLAGS or reserved != 0:
+        raise ValueError("Unsupported cold source flags")
+    if header_bytes != COLD_SOURCE_HEADER_BYTES:
+        raise ValueError("Invalid cold source header size")
+    if not 0 < raw_bytes <= maximum_raw_bytes:
+        raise ValueError("Invalid cold source raw size")
+    if payload_bytes <= 0 or payload_bytes != len(packed) - header_bytes:
+        raise ValueError("Invalid cold source payload size")
+    source = _cold_source_lzss_decode(
+        packed[header_bytes:], raw_bytes
+    )
+    if zlib.crc32(source) & 0xFFFFFFFF != raw_crc32:
+        raise ValueError("Cold source CRC mismatch")
+    return source
+
+
+def _packed_linked_chunks(
+    linked_chunks: dict[str, bytes],
+    maximum_raw_bytes: int = COLD_SOURCE_RAW_MAX_BYTES,
+) -> dict[str, bytes]:
+    """Replace linked source files with short, root-level containers."""
+    return {
+        COLD_SOURCE_CHUNK_TEMPLATE.format(index=index): _pack_cold_source(
+            source, maximum_raw_bytes
+        )
+        for index, source in enumerate(linked_chunks.values())
+    }
+
+
 def _linked_autoexec(
     autoexec: str,
     chunk_names: tuple[str, ...],
     modules: tuple[str, ...],
+    *,
+    cold_source_packed: bool = False,
 ) -> str:
     """Replace linked source REQUIREs while retaining injected test leaves."""
+    load_lines = [f"REQUIRE {name}" for name in chunk_names]
+    if cold_source_packed:
+        load_lines = [
+            f"REQUIRE {COLD_SOURCE_LOADER_PATH}",
+            "VARIABLE _C5-BOOT-SOURCE-STATUS",
+            ': _C5-BOOT-SOURCE  ( "filename" -- )',
+            "    C5-COLD-SOURCE DUP _C5-BOOT-SOURCE-STATUS ! ?DUP IF",
+            '        ." COLD SOURCE LOAD FAIL status=" .',
+            '        ." eval=" CSL-LAST-EVAL@ .',
+            '        ." line=" EVAL-LINE @ .',
+            '        ." column=" EVAL-COLUMN @ .',
+            '        ." throw=" CSL-LAST-THROW@ .',
+            '        ." token=" EVAL-TOKEN TYPE CR TX-FLUSH ABORT',
+            "    THEN ;",
+        ] + [
+            (
+                f"_C5-BOOT-SOURCE {name}"
+            )
+            for name in chunk_names
+        ]
     lines: list[str] = []
     inserted = False
     linked_modules = set(modules)
@@ -23700,13 +25252,26 @@ def _linked_autoexec(
         match = REQUIRE_RE.match(line)
         if match and match.group(1) in linked_modules:
             if not inserted:
-                lines.extend(f"REQUIRE {name}" for name in chunk_names)
+                lines.extend(load_lines)
                 inserted = True
             continue
         lines.append(line)
     if not inserted:
-        lines[0:0] = [f"REQUIRE {name}" for name in chunk_names]
-    return _minify_forth("\n".join(lines) + "\n")
+        if cold_source_packed:
+            raise RuntimeError(
+                "Cold source profile autoexec has no linked REQUIRE insertion "
+                "point"
+            )
+        lines[0:0] = load_lines
+    linked_autoexec = _minify_forth("\n".join(lines) + "\n")
+    if cold_source_packed:
+        enter = linked_autoexec.find("ENTER-USERLAND")
+        loader = linked_autoexec.find(f"REQUIRE {COLD_SOURCE_LOADER_PATH}")
+        if enter < 0 or loader < enter:
+            raise RuntimeError(
+                "Cold source loader must run after ENTER-USERLAND"
+            )
+    return linked_autoexec
 
 
 def _directories(paths: set[str]) -> list[str]:
@@ -23724,6 +25289,12 @@ def _validate_image_paths(
     *,
     include_networking: bool = False,
 ):
+    file_directory_aliases = paths & set(directories)
+    if file_directory_aliases:
+        raise RuntimeError(
+            "Image paths collide as both files and directories: "
+            + ", ".join(sorted(file_directory_aliases))
+        )
     # Include kdos/autoexec, optional networking, and two temporary
     # fragmentation fixtures.
     entries = (
@@ -23746,24 +25317,43 @@ def _validate_image_paths(
             )
 
 
-def _validate_module_ids(modules: tuple[str, ...]):
-    """Reject PROVIDED names that alias in KDOS's bounded module table."""
+def _validate_module_ids(
+    modules: tuple[str, ...],
+    initial_files: tuple[tuple[str, bytes], ...] = (),
+):
+    """Reject PROVIDED names that alias in KDOS's bounded module table.
+
+    Injected Forth leaves participate in the same runtime module table as the
+    linked Akashic closure, so validating only ``SOURCE_ROOT`` modules would
+    miss collisions that make a later REQUIRE silently skip its fixture.
+    """
     keys: dict[bytes, tuple[str, str]] = {}
-    for module in modules:
-        text = (SOURCE_ROOT / module).read_text(encoding="utf-8")
-        match = PROVIDED_RE.search(text)
-        if not match:
-            continue
-        module_id = match.group(1)
-        key = module_key(module_id)
-        previous = keys.get(key)
-        if previous and previous != (module, module_id):
-            other_module, other_id = previous
-            raise RuntimeError(
-                "KDOS PROVIDED key collision: "
-                f"{other_id!r} ({other_module}) and {module_id!r} ({module})"
-            )
-        keys[key] = (module, module_id)
+    sources = [
+        (
+            module,
+            (SOURCE_ROOT / module).read_text(encoding="utf-8"),
+        )
+        for module in modules
+    ]
+    sources.extend(
+        (path, content.decode("utf-8"))
+        for path, content in initial_files
+        if path.lower().endswith((".f", ".f.lz"))
+    )
+    for source_path, text in sources:
+        for match in PROVIDED_RE.finditer(text):
+            module_id = match.group(1)
+            key = module_key(module_id)
+            previous = keys.get(key)
+            identity = (source_path, module_id)
+            if previous and previous != identity:
+                other_path, other_id = previous
+                raise RuntimeError(
+                    "KDOS PROVIDED key collision: "
+                    f"{other_id!r} ({other_path}) and "
+                    f"{module_id!r} ({source_path})"
+                )
+            keys[key] = identity
 
 
 def default_image_path(profile: str) -> Path:
@@ -23885,17 +25475,119 @@ def build_image(
         if profile.linked
         else {}
     )
+    deployed_chunks = linked_chunks
+    generated_files: dict[str, bytes] = dict(linked_chunks)
+    generated_validation_files: tuple[tuple[str, bytes], ...] = ()
+    cold_source_initial_files: dict[str, bytes] = {}
+    cold_source_raw_bytes = 0
+    cold_source_container_bytes = 0
+    if profile.cold_source_packed:
+        if not profile.linked:
+            raise RuntimeError("Cold source packing requires a linked profile")
+        if profile.link_chunk_bytes > COLD_SOURCE_RAW_MAX_BYTES:
+            raise RuntimeError(
+                "Cold source chunk limit exceeds the audited guest decoder "
+                f"bound of {COLD_SOURCE_RAW_MAX_BYTES} bytes"
+            )
+        deployed_chunks = _packed_linked_chunks(
+            linked_chunks,
+            COLD_SOURCE_RAW_MAX_BYTES,
+        )
+        cold_source_raw_bytes = sum(map(len, linked_chunks.values()))
+        cold_source_container_bytes = sum(map(len, deployed_chunks.values()))
+        loader_source = (
+            AKASHIC_ROOT / "local_testing" / "cold-source-loader.f"
+        )
+        if not loader_source.is_file():
+            raise FileNotFoundError(
+                f"Missing cold source loader: {loader_source}"
+            )
+        generated_files = dict(deployed_chunks)
+        loader_content = loader_source.read_bytes()
+        generated_files[COLD_SOURCE_LOADER_PATH] = loader_content
+        generated_validation_files = (
+            (COLD_SOURCE_LOADER_PATH, loader_content),
+        )
+    if profile.cold_source_initial_files:
+        if not profile.cold_source_packed:
+            raise RuntimeError(
+                "Checked cold-source leaves require cold source packing"
+            )
+        for path, source in profile.cold_source_initial_files:
+            if not path.endswith(".f.lz"):
+                raise RuntimeError(
+                    "Checked cold-source leaf names must end in .f.lz: "
+                    f"{path}"
+                )
+            if path in cold_source_initial_files:
+                raise RuntimeError(
+                    f"Duplicate checked cold-source leaf path: {path}"
+                )
+            cold_source_initial_files[path] = _pack_cold_source(
+                source,
+                COLD_SOURCE_RAW_MAX_BYTES,
+            )
+        cold_source_raw_bytes += sum(
+            len(source) for _, source in profile.cold_source_initial_files
+        )
+        cold_source_container_bytes += sum(
+            map(len, cold_source_initial_files.values())
+        )
     if profile.linked:
         autoexec = _linked_autoexec(
-            autoexec, tuple(linked_chunks), modules
+            autoexec,
+            tuple(deployed_chunks),
+            modules,
+            cold_source_packed=profile.cold_source_packed,
         )
     if requires_networking:
         autoexec = _with_megapad_networking(autoexec)
-    paths = set(linked_chunks) | resources if profile.linked else set(modules) | resources
-    initial_paths = {path for path, _ in profile.initial_files}
+    paths = (
+        set(generated_files) | resources
+        if profile.linked
+        else set(modules) | resources
+    )
+    regular_initial_paths = {path for path, _ in profile.initial_files}
+    cold_initial_paths = set(cold_source_initial_files)
+    initial_aliases = regular_initial_paths & cold_initial_paths
+    if initial_aliases:
+        raise RuntimeError(
+            "Regular and checked cold-source leaves collide: "
+            + ", ".join(sorted(initial_aliases))
+        )
+    initial_paths = regular_initial_paths | cold_initial_paths
+    overlap = set(generated_files) & (resources | initial_paths)
+    if overlap:
+        raise RuntimeError(
+            "Generated image paths collide with profile files: "
+            + ", ".join(sorted(overlap))
+        )
+    if profile.cold_source_packed:
+        reserved_root_paths = set(SAMPLE_FILES) | {
+            "autoexec.f",
+            "kdos.f",
+        }
+        if requires_networking:
+            reserved_root_paths.add("networking.f")
+        root_generated = {
+            path
+            for path in set(generated_files) | cold_initial_paths
+            if PurePosixPath(path).parent == PurePosixPath(".")
+        }
+        reserved_overlap = root_generated & reserved_root_paths
+        if reserved_overlap:
+            raise RuntimeError(
+                "Cold source paths collide with image boot/sample files: "
+                + ", ".join(sorted(reserved_overlap))
+            )
     image_paths = paths | initial_paths
     directories = _directories(image_paths)
-    _validate_module_ids(modules)
+    _validate_module_ids(
+        modules,
+        profile.initial_files
+        + profile.cold_source_initial_files
+        + generated_validation_files,
+    )
     _validate_image_paths(
         image_paths,
         directories,
@@ -23927,21 +25619,34 @@ def build_image(
 
     for path in sorted(paths):
         source = SOURCE_ROOT / path
-        if path in linked_chunks:
-            content = linked_chunks[path]
+        if path in generated_files:
+            content = generated_files[path]
         else:
             if not source.is_file():
                 raise FileNotFoundError(f"Missing Akashic resource: {path}")
             content = source.read_bytes()
         disk_path = PurePosixPath(path)
-        file_type = FTYPE_FORTH if disk_path.suffix == ".f" else FTYPE_TEXT
+        is_cold_source_chunk = (
+            profile.cold_source_packed and path in deployed_chunks
+        )
+        if is_cold_source_chunk:
+            file_type = FTYPE_DATA
+        else:
+            file_type = (
+                FTYPE_FORTH if disk_path.suffix == ".f" else FTYPE_TEXT
+            )
         parent = "/" if str(disk_path.parent) == "." else "/" + str(disk_path.parent)
-        fs.inject_file(
+        entry = fs.inject_file(
             disk_path.name,
             content,
             ftype=file_type,
             path=parent,
         )
+        if is_cold_source_chunk and entry.ext1_count:
+            raise RuntimeError(
+                "Cold source payload must occupy one MP64FS extent for "
+                f"checked guest FREAD: {path}"
+            )
 
     for path, content in profile.initial_files:
         disk_path = PurePosixPath(path)
@@ -23955,6 +25660,21 @@ def build_image(
             )
         parent = "/" if str(disk_path.parent) == "." else "/" + str(disk_path.parent)
         fs.inject_file(disk_path.name, content, path=parent)
+
+    for path, content in cold_source_initial_files.items():
+        disk_path = PurePosixPath(path)
+        parent = "/" if str(disk_path.parent) == "." else "/" + str(disk_path.parent)
+        entry = fs.inject_file(
+            disk_path.name,
+            content,
+            ftype=FTYPE_DATA,
+            path=parent,
+        )
+        if entry.ext1_count:
+            raise RuntimeError(
+                "Checked cold-source leaf must occupy one MP64FS extent: "
+                f"{path}"
+            )
 
     if profile.include_large_sample:
         fs.inject_file("large.txt", LARGE_SAMPLE, ftype=FTYPE_TEXT)
@@ -23992,9 +25712,21 @@ def build_image(
         f"Built {profile_name} image: {target}\n"
         f"  {len(modules)} modules"
         f"{f' linked in {len(linked_chunks)} chunks' if profile.linked else ''}, "
+        f"{'cold-source packed, ' if profile.cold_source_packed else ''}"
         f"{'MegaPad networking, ' if requires_networking else ''}"
         f"{len(resources)} resources, "
         f"{len(directories)} directories\n"
+        + (
+            "  cold source: "
+            f"{cold_source_raw_bytes:,} raw bytes -> "
+            f"{cold_source_container_bytes:,} container bytes "
+            f"({cold_source_container_bytes / cold_source_raw_bytes:.1%}, "
+            f"{cold_source_raw_bytes - cold_source_container_bytes:,} "
+            "bytes saved)\n"
+            if profile.cold_source_packed
+            else ""
+        )
+        +
         f"  {info['files']} MP64FS entries, {target.stat().st_size:,} bytes, "
         f"{info['free_sectors']} free sectors"
     )
@@ -25165,17 +26897,17 @@ def smoke(
                     if resolved:
                         outcome = wait_screen_any(
                             (
-                                "Daybook task captured.",
                                 "Daybook persistence failed",
                                 "Capability handler threw",
                                 "Capability output schema rejected",
                                 "Capability returned the wrong value type",
+                                "[Agent: ready]",
                             ),
                             "approved capability did not return a tool result",
                             step_budget=2_000_000_000,
                             wall_timeout=60.0,
                         )
-                    if outcome == "Daybook task captured.":
+                    if outcome == "[Agent: ready]":
                         live_fs = MP64FS(
                             bytearray(session.system.storage._image_data)
                         )
@@ -25201,15 +26933,22 @@ def smoke(
                 session.send_text("source smoke")
                 session.send_key("enter")
                 if wait_screen(
-                    "Daybook task captured.",
-                    "the allowed Daybook source observation did not complete",
+                    "daybook.source",
+                    "the allowed Daybook source observation was not dispatched",
                     step_budget=1_000_000_000,
                     wall_timeout=25.0,
                 ):
-                    wait_screen(
-                        "Ready",
-                        "Agent did not finish the allowed source observation",
+                    source_result = wait_screen_any(
+                        ("vfs:/daybook.md", "akashic:resource:"),
+                        "the Daybook source result was not delivered to Agent",
+                        step_budget=1_000_000_000,
+                        wall_timeout=25.0,
                     )
+                    if source_result:
+                        wait_screen(
+                            "[Agent: ready]",
+                            "Agent did not finish the allowed source observation",
+                        )
 
             session.send_key("alt+2")
             session.send_key("ctrl+space")
@@ -25412,7 +27151,7 @@ def smoke(
                     wall_timeout=20.0,
                 ):
                     wait_screen(
-                        "Daybook task captured.",
+                        "[Agent: ready]",
                         "approved scoped write did not return its tool result",
                         step_budget=2_000_000_000,
                         wall_timeout=60.0,
@@ -29258,6 +30997,38 @@ REQUIRE local_testing/library-app-func.f
         ),
     ),
 )
+
+# These product profiles are declared beside the focused Desktop
+# compositions, before the shared linker compactor is defined.  Hydrate their
+# test-only guest leaves here so qualification media carries the same
+# conservative source minification as the newer focused profiles.
+for _burrow_profile_name in (
+    "desktop-library-burrow",
+    "desktop-library-burrow-capstone",
+):
+    PROFILES[_burrow_profile_name] = replace(
+        PROFILES[_burrow_profile_name],
+        initial_files=tuple(
+            (
+                path,
+                _minify_forth(
+                    content.decode("utf-8")
+                ).encode("utf-8"),
+            )
+            for path, content in PROFILES[_burrow_profile_name].initial_files
+        ),
+        cold_source_initial_files=tuple(
+            (
+                path,
+                _minify_forth(
+                    content.decode("utf-8")
+                ).encode("utf-8"),
+            )
+            for path, content in PROFILES[
+                _burrow_profile_name
+            ].cold_source_initial_files
+        ),
+    )
 
 
 def _positive_mib(value: str) -> int:

@@ -105,15 +105,32 @@ and one live instance, while the capability bus still checks and consumes its
 sealed grant. Changing the visible profile during a run or review is rejected,
 and a scoped run fails closed if Desk's Mandate factory is unavailable.
 
+`tui/applets/desk/agent-cap-catalog.f` is Desk's closed, declarative policy
+input for that compilation. Applets and packages cannot register Agent rows.
+Each catalog row fixes the component identity, operation identity, effects,
+review/disclosure flags, result bound, and allowed presets. Desk still omits a
+row unless the exact trusted built-in descriptor has a live instance whose
+capability effects match the row, so the table neither discovers components nor
+creates authority. The facet ABI holds 24 entries: the current closed catalog
+uses 23 and retains one checked boundary entry rather than truncating a complete
+Desk authority set to the former 16-entry implementation limit.
+
 Desk starts in **Chat only**. The built-in profiles are deliberately exact:
 
-| Profile | Agent-visible authority |
-|---|---|
-| Chat only | Bounded prior user/assistant turns; no applet capabilities |
-| Practice read only | Chat history plus the fixed, bounded observation facet; no mutation |
-| Practice assist | The read facet plus fixed navigation, mutation, and persistence operations, each requiring one visible local review |
+| Profile | Full-Desk rows | Tool calls | Disclosure bytes | Agent-visible authority |
+|---|---:|---:|---:|---|
+| Chat only | 0 | 0 | 8192 | Bounded prior user/assistant turns; no applet capabilities |
+| Practice read only | 13 | 4 | 32768 | Chat history plus bounded Daybook, Pad, Files, Grid, Streams and Library status observations; no mutation |
+| Practice assist | 20 | 8 | 49152 | The read facet plus fixed local navigation, ordinary applet changes, and reviewed Library document/collection creation |
+| Practice Library Burrow | 23 | 12 | 49152 | The assist facet plus reviewed Streams burrow create, start, and stop operations |
 
-Destructive and external effects are not present in any built-in profile.
+The row counts are maxima for a complete Desk composition; a run omits rows for
+trusted applets or operations that are not live. Library document query/read is
+intentionally absent because those potentially large values are staged through
+Desk context rather than exposed as ambient Agent tools. Every non-observation
+row requires one visible local review. Destructive and external effects are not
+present in any built-in profile.
+
 Observation results are capped per facet entry (text results currently at 4096 raw
 bytes), prompts at 512 bytes, and prior history at 12 messages and 4096 bytes.
 Each run also receives a ten-minute wall-time budget, a profile-specific tool
@@ -138,6 +155,12 @@ terminal failure and pre-dispatch rollback refund the outstanding reservation.
 An unencodable or over-limit handler result is replaced with bounded JSON
 `null` after a successful effect rather than inviting a duplicate retry. The
 entire measurement buffer is erased on success, codec failure, and exception.
+Both `CBUS-S-OK` and `CBUS-S-NO-EFFECT` are result-bearing completions. The
+gateway measures and charges either result, the model context and provider keep
+the actual typed receipt, and the transcript marks the reviewed operation
+complete while retaining the raw bus status. `NO-EFFECT` is therefore visible
+as successful convergence, not rewritten to `OK`; only the owner decides that
+no new revision or component touch occurred.
 
 Gateway state is held only while preparing or transitioning an owned request.
 The resulting request/bus continuation is carried per call, and the state guard
@@ -159,6 +182,17 @@ seal before entering the applet handler; mutation after review is denied and
 the consumed grant cannot be replayed. Canonical encoding and seal operations
 are guarded, while allocated audit bytes remain caller-owned rather than a
 borrowed global buffer.
+
+Review capacity is the existing 65,536-byte canonical-argument contract, not a
+second 4 KiB product limit. The gateway and Agent review JSON capacities derive
+from that one bound; the UI's 262,144-byte visible scratch is the exact 4x
+worst-case escaping allowance. Model context uses a separate 65,536-byte tool
+call arena while retaining the independent 32,768-byte tool-result ceiling.
+Focused exact-full and one-byte-short checks guard canonical encoding, gateway
+review, and both model-context arenas; the Scripted provider separately accepts
+an exact 32 KiB result and atomically rejects a value requiring one byte more.
+The review renderer fills its exact 262,144-byte worst-case visible arena while
+an adjacent digest sentinel proves that expansion stays in bounds.
 
 ## Conversation Store
 

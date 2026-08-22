@@ -49,6 +49,31 @@ prototype corpus. It is not a user, account, synchronization, or migration
 identity. The current prototype has one storage layout and no compatibility or
 legacy reader.
 
+## Public capability surface
+
+The live `org.akashic.library.applet` component owns five typed capabilities:
+status, managed-document create, collection create, exact collection-scoped
+document query, and exact collection-scoped document read. They execute over
+the same activation-local service and repository as this lens. There is no
+headless duplicate Library, capability-only catalog, raw service-pointer
+escape, or ambient selected-row authority.
+
+Status does not provision an absent Library. The two creates derive resource
+and operation identities independently from the invocation, preserve Library's
+logical-generation and domain-revision rules, and distinguish a fresh write
+from exact no-effect replay. Query and read verify the supplied collection RID,
+current collection revision, existing request seal, and membership inside the
+Library owner before publishing a result. They are suitable for a separately
+attenuated read-only projection; they are not automatically exposed to an
+ordinary Agent facet.
+
+Capability create accepts the complete existing 4 KiB managed-text authoring
+window. Capability read materializes up to the existing 65,536-byte Library
+content window and returns precise output-capacity failure above it. Larger
+Library values remain available through the service's bounded range/stream
+interfaces; neither capability bound limits durable corpus population or
+removes those service operations.
+
 ## Commands
 
 | Key | Action |

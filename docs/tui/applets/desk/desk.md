@@ -68,8 +68,9 @@ repaint.  The flag ensures: fill runs → all elements are dirty (from
 relayout) → full repaint over the fill.  Normal paint cycles skip
 the fill entirely.
 
-Sub-apps are isolated via per-app **UIDL context** buffers (~97 KiB each),
-which save/restore the 15 UIDL scalar variables and 10 pool arrays.
+Sub-apps are isolated via per-app **UIDL context** buffers (103,544 bytes,
+approximately 101 KiB, each), which save/restore the 15 UIDL scalar variables
+and 10 pool arrays.
 
 ## Tiling Algorithm
 
@@ -81,8 +82,10 @@ Given **N** visible apps and usable area **W × H** (H = SCR-H − 1 for taskbar
 - Last column/row absorbs remainder pixels
 - 1-cell dividers drawn between adjacent tiles
 
-Toggle with `DESK-TOGGLE-VH`.  Full-frame mode (`DESK-FULLFRAME!`) shows
-only the focused app and hides dividers.
+Toggle with `DESK-TOGGLE-VH`. Full-frame mode (`DESK-FULLFRAME!`) gives the
+focused app the entire usable Desk area and hides its live peers from paint;
+the peers retain their ordinary regions and continue ticking. Changing focus
+while full-frame is active transfers the expanded region to the new focus.
 
 ## Slot Structure
 
@@ -236,8 +239,19 @@ Desk owns the host lifecycle and policy composition, not those records. The
 composition starts with the exact `Chat only` preset. `Practice read only`
 adds bounded observations from trusted built-in applet instances, while
 `Practice assist` also adds fixed local operations that always require review.
+`Practice Library Burrow` extends Assist with reviewed Streams burrow create,
+start, and stop operations and raises the per-run tool budget from 8 to 12.
 Each scoped run receives a freshly compiled Practice Mandate; the selected
 profile is policy input and is not itself authority.
+
+Desk compiles those facets from its closed
+`agent-cap-catalog.f` table, not from component registration or registry
+enumeration. The complete authority matrix is 0 rows for Chat, 13 bounded
+observations for Read, 20 rows for Assist, and 23 rows for Library Burrow.
+Compilation still requires each row's exact trusted built-in descriptor, a live
+instance and matching operation effects, so a smaller Desk composition receives
+only its live subset. Library query/read and all destructive or external effects
+remain outside every Agent profile.
 
 Children can borrow the composition through the Desk interoperability endpoint:
 
@@ -348,8 +362,8 @@ A sample config template is provided in
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `DESK-RELAYOUT` | `( -- )` | Recompute tile grid.  Called automatically on launch/close/minimize and minimized-slot focus/restore. |
-| `DESK-FULLFRAME!` | `( flag -- )` | Toggle full-frame mode (show only focused app). |
+| `DESK-RELAYOUT` | `( -- )` | Recompute tile grid. Called automatically on launch/close/minimize, minimized-slot focus/restore, and a focus change in full-frame mode. |
+| `DESK-FULLFRAME!` | `( flag -- )` | Toggle full-frame mode, expanding the focused child to the full usable area. |
 | `DESK-TOGGLE-VH` | `( -- )` | Toggle V-pref / H-pref tiling. |
 
 ### Queries
@@ -440,8 +454,8 @@ dropped.
 
 ## UIDL Context System
 
-Each sub-app with a UIDL document gets a ~97 KiB context buffer that
-captures:
+Each sub-app with a UIDL document gets a 103,544-byte (approximately 101 KiB)
+context buffer that captures:
 
 - **15 scalar variables**: element count, attribute count, string position,
   root pointer, subscription count, elem base, doc-loaded flag, state,
@@ -449,12 +463,13 @@ captures:
   skip-children flag, region handle.
 - **10 pool arrays**: elements (32 KiB), attributes (20 KiB), strings
   (12 KiB), hash (2 KiB), hash-IDs (4 KiB), subscriptions (3 KiB),
-  sidecars (20 KiB), actions (1.5 KiB), shortcuts (2 KiB), overlay
+  sidecars (24 KiB), actions (1.5 KiB), shortcuts (2 KiB), overlay
   buffer (0.5 KiB).
 
 The UCTX system (`UCTX-ALLOC`, `UCTX-FREE`, `UCTX-SAVE`, `UCTX-RESTORE`,
 `UCTX-CLEAR`, `UCTX-TOTAL`) is defined in `uidl-tui.f` §18b, which owns
-the private variables being serialised.
+the private variables being serialised. Context storage uses the platform
+`ALLOCATE`/`FREE` path, so there is no separate context-pool ceiling.
 
 Context switch (`_DESK-CTX-SWITCH`) is a compatibility view of the embedded
 host operation. Only one sub-app's context is live at a time. The host uses

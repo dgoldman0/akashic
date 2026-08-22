@@ -41,7 +41,7 @@ REQUIRE tui/screen.f
 | **Double-buffered** | Front buffer = screen state, back buffer = pending state. Flush diffs. |
 | **Differential flush** | Only changed cells emit ANSI — keeps serial-link updates fast. |
 | **One current screen** | `SCR-USE` selects the target. All drawing words use `_SCR-CUR`. |
-| **XMEM buffers** | Cell buffers allocate from external memory when available. |
+| **Owned allocation** | Descriptor and buffers use the platform `ALLOCATE`/`FREE` path. |
 | **Prefix convention** | Public: `SCR-`. Internal: `_SCR-`. |
 | **Not reentrant** | Scratch `VARIABLE`s are shared; call from one task only. |
 
@@ -49,8 +49,9 @@ REQUIRE tui/screen.f
 
 ## Screen Descriptor
 
-Each screen is an 8-cell (64-byte) descriptor allocated on the
-internal heap, plus two cell buffers in XMEM.
+Each screen is an 8-cell (64-byte) descriptor plus two cell buffers. All three
+allocations use the platform allocator, which selects reclaiming XMEM when it
+is available and the Bank 0 heap otherwise.
 
 | Offset | Field | Description |
 |--------|-------|-------------|
@@ -73,10 +74,10 @@ internal heap, plus two cell buffers in XMEM.
 ( w h -- scr )
 ```
 
-Allocate a screen descriptor and two cell buffers (front + back).
-Both buffers are initialized with `CELL-BLANK`.  The descriptor
-is heap-allocated; buffers use `XMEM-ALLOT` when extended memory
-is available, falling back to `ALLOCATE`.
+Allocate a screen descriptor and two cell buffers (front + back) through
+`ALLOCATE`. Both buffers are initialized with `CELL-BLANK`. Partial
+construction releases every allocation already acquired before reporting
+failure.
 
 ```forth
 80 24 SCR-NEW   \ standard 80×24 terminal
@@ -88,8 +89,8 @@ is available, falling back to `ALLOCATE`.
 ( scr -- )
 ```
 
-Free the screen descriptor.  Note: XMEM buffers are bump-allocated
-and cannot be individually freed.
+Detach the screen if it is current, then return both cell buffers and the
+descriptor through `FREE`.
 
 ---
 
@@ -270,8 +271,9 @@ overlapping region from the old back buffer to the new back buffer,
 and replaces the descriptor fields.  Calls `SCR-FORCE` so the next
 flush repaints everything.
 
-Old buffers are abandoned (XMEM bump allocator cannot free
-individual allocations).
+Both replacement buffers are acquired before the descriptor changes. If the
+second allocation fails, the first replacement is released; after a successful
+copy, both superseded buffers are returned to the platform allocator.
 
 ```forth
 132 50 SCR-RESIZE   \ switch to 132-column mode
@@ -289,8 +291,9 @@ Each cell is 8 bytes.  Two buffers per screen:
 | 132×50 | 6,600 | 52,800 | **105,600** (~103 KiB) |
 | 200×60 | 12,000 | 96,000 | **192,000** (~188 KiB) |
 
-All fit comfortably in XMEM (16 MiB available).  The 64-byte
-descriptor is always on the internal heap.
+All screen storage is acquired through the platform `ALLOCATE` path and
+returned by `FREE`. With XMEM enabled, the descriptor and buffers use its
+reclaiming free list; otherwise they use the Bank 0 heap.
 
 ---
 

@@ -5,11 +5,17 @@
 PROVIDED akashic-agent-scripted-provider
 
 REQUIRE ../../provider-source.f
+REQUIRE ../../../../../interop/request-bus.f
+REQUIRE ../../../../../interop/codecs/json-value.f
 REQUIRE ../../../../../utils/string.f
 
 0 CONSTANT _SP-IDLE
 1 CONSTANT _SP-STREAMING
 2 CONSTANT _SP-WAITING
+
+\ Provider output is independent of the larger request/review envelope and
+\ matches the production provider result boundary.
+32768 CONSTANT SCRIPTED-TOOL-OUTPUT-CAPACITY
 
  0 CONSTANT _SP-STATE
  8 CONSTANT _SP-STEP
@@ -181,6 +187,10 @@ VARIABLE _SPR-RUN
     _SP-IDLE _SPP-C @ _SPC.STATE ! ;
 
 VARIABLE _SPT-STATUS
+VARIABLE _SPT-V
+VARIABLE _SPT-BUF
+VARIABLE _SPT-U
+VARIABLE _SPT-IOR
 
 : _SCRIPTED-TOOL-ERROR-TEXT  ( status -- addr len )
     CASE
@@ -198,16 +208,39 @@ VARIABLE _SPT-STATUS
         DROP S" Tool request was not completed."
     ENDCASE ;
 
+: _SCRIPTED-TOOL-BUFFER-FREE  ( -- )
+    _SPT-BUF @ ?DUP IF
+        DUP SCRIPTED-TOOL-OUTPUT-CAPACITY 0 FILL FREE
+        0 _SPT-BUF !
+    THEN ;
+
+: _SCRIPTED-TOOL-VALUE  ( -- ior )
+    0 _SPT-BUF !
+    SCRIPTED-TOOL-OUTPUT-CAPACITY ALLOCATE DUP IF
+        2DROP 1 EXIT
+    THEN
+    DROP _SPT-BUF !
+    _SPT-V @ _SPT-BUF @ SCRIPTED-TOOL-OUTPUT-CAPACITY IVJSON-ENCODE
+    _SPT-IOR ! _SPT-U !
+    _SPT-IOR @ IF
+        _SCRIPTED-TOOL-BUFFER-FREE 1 EXIT
+    THEN
+    AEV-TOOL-RESULT 0 0 _SPT-BUF @ _SPT-U @
+        _SPP-Q @ _SPP-C @ _SCRIPTED-EMIT _SPT-IOR !
+    _SCRIPTED-TOOL-BUFFER-FREE
+    _SPT-IOR @ ;
+
 : _SCRIPTED-TOOL-RESULT  ( run-id name-a name-u value status queue context -- ior )
-    _SPP-C ! _SPP-Q ! _SPT-STATUS ! DROP 2DROP
+    _SPP-C ! _SPP-Q ! _SPT-STATUS ! _SPT-V ! 2DROP
     _SPP-C @ _SPC.RUN-ID @ <> IF 1 EXIT THEN
     _SPP-C @ _SPC.STATE @ _SP-WAITING <> IF 1 EXIT THEN
-    _SPT-STATUS @ 0= IF
-        AEV-TOOL-RESULT 0 0 S" Daybook task captured."
+    _SPT-STATUS @ CBUS-RESULT-BEARING? IF
+        _SCRIPTED-TOOL-VALUE
     ELSE
         AEV-TOOL-RESULT 0 0 _SPT-STATUS @ _SCRIPTED-TOOL-ERROR-TEXT
+        _SPP-Q @ _SPP-C @ _SCRIPTED-EMIT
     THEN
-    _SPP-Q @ _SPP-C @ _SCRIPTED-EMIT ?DUP IF EXIT THEN
+    ?DUP IF EXIT THEN
     _SPP-Q @ _SPP-C @ _SCRIPTED-FINISH-MESSAGE
     _SP-IDLE _SPP-C @ _SPC.STATE ! ;
 

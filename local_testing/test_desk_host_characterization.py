@@ -72,6 +72,9 @@ VARIABLE _dh-regn
 VARIABLE _dh-next
 VARIABLE _dh-xfree
 VARIABLE _dh-xwalk
+VARIABLE _dh-shell-depth
+VARIABLE _dh-shell-heap
+VARIABLE _dh-shell-xmem
 
 : _dh-xmem-available  ( -- u )
     0 _dh-xfree ! 0 _dh-xwalk ! XMEM-FL @
@@ -128,12 +131,10 @@ CREATE _dh-app APP-DESC ALLOT
 
 : _dh-state-fail  ( state -- ior ) DROP 77 ;
 
-VARIABLE _dh-save-arena
-VARIABLE _dh-save-free
-VARIABLE _dh-save-arena-n
 VARIABLE _dh-save-xfl
 VARIABLE _dh-save-xhere
 VARIABLE _dh-probe
+VARIABLE _dh-probe2
 VARIABLE _dh-injected-throw
 
 : _dh-call-app-try  ( -- ) _dh-app _dh-try ;
@@ -146,8 +147,11 @@ VARIABLE _dh-injected-throw
     XMEM-LIMIT @ XMEM-HERE !
     _dh-call-app-try ;
 : _dh-uctx-fault  ( -- )
-    0 _UCTX-ARENA ! 0 _UCTX-FREELIST !
-    _UCTX-MAX-ARENAS _UCTX-ARENA-N !
+    0 XMEM-FL !
+    80 ALLOCATE DUP 0= _dh-assert DROP _dh-probe !
+    88 ALLOCATE DUP 0= _dh-assert DROP _dh-probe2 !
+    _dh-probe @ FREE _dh-probe2 @ FREE
+    XMEM-LIMIT @ XMEM-HERE !
     _dh-call-app-try ;
 
 VARIABLE _dh-fi
@@ -201,26 +205,24 @@ VARIABLE _dh-fi-shutdowns
     _DESK-NEXT-ID @ _dh-next @ = _dh-assert _dh-memory-clean
     _dh-retry
 
-    \ Exhausting the UCTX arena is canonicalized by Desk.  Slot IDs are
-    \ assigned immediately before this boundary and therefore advance once.
+    \ Exhausting direct UCTX allocation is canonicalized by Desk.  Two
+    \ isolated small free blocks admit the component instance and slot; the
+    \ following 103,544-byte context cannot fit.  Slot IDs are assigned
+    \ immediately before this boundary and therefore advance once.
     _dh-base-fill
     S" <uidl><region><label id=context-marker text=C/></region></uidl>"
         _dh-app APP.UIDL-U ! _dh-app APP.UIDL-A !
     _dh-snapshot
-    _UCTX-ARENA @ _dh-save-arena !
-    _UCTX-FREELIST @ _dh-save-free !
-    _UCTX-ARENA-N @ _dh-save-arena-n !
+    XMEM-FL @ _dh-save-xfl ! XMEM-HERE @ _dh-save-xhere !
     ['] _dh-uctx-fault CATCH _dh-injected-throw !
-    _dh-save-arena @ _UCTX-ARENA !
-    _dh-save-free @ _UCTX-FREELIST !
-    _dh-save-arena-n @ _UCTX-ARENA-N !
+    _dh-save-xhere @ XMEM-HERE ! _dh-save-xfl @ XMEM-FL !
     _dh-injected-throw @ ?DUP IF THROW THEN
     _dh-id @ -1 = _dh-assert _dh-ior @ DESK-LAUNCH-E-CONTEXT = _dh-assert
     _DESK-NEXT-ID @ _dh-next @ 1+ = _dh-assert _dh-memory-clean
     _dh-retry
 
     \ Malformed inline UIDL and a missing UIDL file share the current public
-    \ Desk UIDL outcome.  Each rollback recycles its exact UCTX.
+    \ Desk UIDL outcome.  Each rollback releases its exact UCTX.
     _dh-base-fill
     \ This incomplete root tag is the existing terminating bad-XML fixture;
     \ nested truncated tags exercise markup recovery rather than host rollback.
@@ -229,17 +231,16 @@ VARIABLE _dh-fi-shutdowns
     _dh-snapshot _dh-app _dh-try
     _dh-id @ -1 = _dh-assert _dh-ior @ DESK-LAUNCH-E-UIDL = _dh-assert
     _DESK-NEXT-ID @ _dh-next @ 1+ = _dh-assert
-    _UCTX-FREELIST @ 0<> _dh-assert _dh-structural-clean
+    _dh-memory-clean
     _dh-retry
 
     _dh-base-fill
     S" /definitely-missing-desk-host.uidl"
         _dh-app APP.UIDL-FILE-U ! _dh-app APP.UIDL-FILE-A !
-    _dh-snapshot _UCTX-FREELIST @ _dh-save-free !
-    _dh-app _dh-try
+    _dh-snapshot _dh-app _dh-try
     _dh-id @ -1 = _dh-assert _dh-ior @ DESK-LAUNCH-E-UIDL = _dh-assert
     _DESK-NEXT-ID @ _dh-next @ 1+ = _dh-assert
-    _UCTX-FREELIST @ _dh-save-free @ = _dh-assert _dh-structural-clean
+    _dh-memory-clean
     _dh-retry
 
     \ An INIT throw is retained, shutdown runs once in the same UIDL context,
@@ -251,15 +252,13 @@ VARIABLE _dh-fi-shutdowns
     ['] _dh-fi-shutdown _dh-app APP.SHUTDOWN-XT !
     S" <uidl><region><label id=failed-init-marker text=F/></region></uidl>"
         _dh-app APP.UIDL-U ! _dh-app APP.UIDL-A !
-    _dh-snapshot _UCTX-FREELIST @ _dh-save-free !
-    _dh-app _dh-try
+    _dh-snapshot _dh-app _dh-try
     _dh-id @ -1 = _dh-assert _dh-ior @ -1709 = _dh-assert
     _DESK-NEXT-ID @ _dh-next @ 1+ = _dh-assert
     _dh-fi-inits @ 1 = _dh-assert
     _dh-fi-activates @ 3 = _dh-assert
     _dh-fi-shutdowns @ 1 = _dh-assert
-    _UCTX-FREELIST @ _dh-save-free @ = _dh-assert
-    _dh-structural-clean
+    _dh-memory-clean
     _dh-retry
     ;
 
@@ -389,12 +388,24 @@ VARIABLE _dh-er VARIABLE _dh-ec VARIABLE _dh-eh VARIABLE _dh-ew
     _dh-bid @ DESK-FOCUS-ID
     -1 DESK-FULLFRAME!
     _DESK-FULLFRAME @ -1 = _dh-assert DESK-VCOUNT 2 = _dh-assert
+    _dh-as @ 0 0 31 49 _dh-region= _dh-assert
+    _dh-bs @ 0 0 31 100 _dh-region= _dh-assert
+    1 1 _DESK-TILE-AT _dh-bs @ = _dh-assert
+    _dh-aid @ DESK-FOCUS-ID
+    _dh-as @ 0 0 31 100 _dh-region= _dh-assert
+    _dh-bs @ 0 50 31 50 _dh-region= _dh-assert
+    30 99 _DESK-TILE-AT _dh-as @ = _dh-assert
+    _dh-bid @ DESK-FOCUS-ID
+    _dh-as @ 0 0 31 49 _dh-region= _dh-assert
+    _dh-bs @ 0 0 31 100 _dh-region= _dh-assert
     _dh-desk @ DESK-PAINT-CB
     _dh-as @ _SL-DIRTY @ -1 = _dh-assert
     _dh-bs @ _SL-DIRTY @ 0= _dh-assert
     0 DESK-FULLFRAME!
     _dh-desk @ DESK-PAINT-CB
     _DESK-FULLFRAME @ 0= _dh-assert
+    _dh-as @ 0 0 31 49 _dh-region= _dh-assert
+    _dh-bs @ 0 50 31 50 _dh-region= _dh-assert
     _dh-as @ _SL-DIRTY @ 0= _dh-assert
     _dh-bs @ _SL-DIRTY @ 0= _dh-assert
     _dh-sentinels-stable? _dh-assert _dh-isolation
@@ -432,9 +443,24 @@ VARIABLE _dh-er VARIABLE _dh-ec VARIABLE _dh-eh VARIABLE _dh-ew
 _DESK-FILL-DESC
 ' _dh-desk-init DESK-DESC APP.INIT-XT !
 : _dh-shell-run  ( -- ) DESK-DESC ASHELL-RUN ;
+DEPTH _dh-shell-depth !
+HEAP-FREE-BYTES _dh-shell-heap !
+_dh-xmem-available _dh-shell-xmem !
 ' _dh-shell-run CATCH ?DUP IF
     1 _dh-fails +! ." DESK HOST SHELL THROW " . CR
 THEN
+DEPTH DUP _dh-shell-depth @ <> IF
+    ." DESK HOST SHELL STACK " _dh-shell-depth @ . ." -> " DUP . CR .S CR
+THEN
+_dh-shell-depth @ = _dh-assert
+HEAP-FREE-BYTES DUP _dh-shell-heap @ <> IF
+    ." DESK HOST SHELL HEAP " DUP . ." expected " _dh-shell-heap @ . CR
+THEN
+_dh-shell-heap @ = _dh-assert
+_dh-xmem-available DUP _dh-shell-xmem @ <> IF
+    ." DESK HOST SHELL XMEM " DUP . ." expected " _dh-shell-xmem @ . CR
+THEN
+_dh-shell-xmem @ = _dh-assert
 
 _dh-fails @ 0= IF
     ." DESK HOST CHARACTERIZATION PASS " _dh-checks @ .

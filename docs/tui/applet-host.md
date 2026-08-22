@@ -74,10 +74,15 @@ Desk's injected callbacks during cleanup without importing Desk.
 | `AHOST-MINIMIZE-ID` | `( id host -- )` | Minimize one child and select another visible child |
 | `AHOST-RESTORE` | `( host -- )` | Restore the last minimized child |
 | `AHOST-DISPATCH-KEY` | `( event host -- handled? )` | Route a key to the focused child |
-| `AHOST-DISPATCH-MOUSE` | `( event host -- handled? )` | Hit-test and route a child mouse event |
+| `AHOST-DISPATCH-MOUSE` | `( event host -- handled? )` | Hit-test and route a child mouse event; focused child wins overlapping regions |
 | `AHOST-TICK` | `( host -- )` | Tick eligible live children |
 | `AHOST-PAINT` | `( paint-all fullframe host -- )` | Paint eligible visible children |
 
 `AHS.*` words expose slot fields needed by a concrete layout/chrome owner.
 They do not transfer ownership. Host lifecycle operations remain owner-core
 work because app callbacks can throw, yield, or request close.
+
+Ordinary layouts keep child regions disjoint. A concrete owner may overlap
+them for presentation, as Desk does in full-frame mode. In that case pointer
+hit-testing tries the focused visible child first, matching key routing and
+paint ownership; otherwise list order determines the first containing slot.

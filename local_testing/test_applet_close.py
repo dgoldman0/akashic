@@ -546,6 +546,14 @@ _dc-shutdowns @ 1 = _lc-assert
 VARIABLE _dc-top-inst
 VARIABLE _dc-top-ior
 VARIABLE _dc-top-slots
+VARIABLE _dc-queue-depth
+VARIABLE _dc-builtin-before
+VARIABLE _dc-full-last-desc
+VARIABLE _dc-full-last-flags
+CREATE _dc-full-probe APP-DESC ALLOT
+: _dc-builtin-row?  ( desc flags index -- flag )
+    _DESK-BUILTIN-ENTRY >R
+    SWAP R@ @ = SWAP R> 8 + @ = AND ;
 : _dc-call-desk-shutdown  ( -- )
     _dc-top-inst @ DESK-SHUTDOWN-CB ;
 : _dc-desk-shutdown-wrap  ( instance -- )
@@ -560,8 +568,36 @@ _dc-fill _dc-fill-b
 0 _dc-activate-throws ! -1 _dc-shutdown-throws !
 APP-CLOSE-D-ALLOW _dc-decision !
 APP-CLOSE-R-HOST-SHUTDOWN _dc-expected-reason !
+_DESK-BUILTIN-N @ _dc-builtin-before !
+DEPTH _dc-queue-depth !
 _dc-desc DESK-QUEUE-LAUNCH
+DEPTH _dc-queue-depth @ = _lc-assert
+_DESK-PEND-N @ 1 = _lc-assert
+_DESK-PEND-BUF @ _dc-desc = _lc-assert
+_DESK-BUILTIN-N @ _dc-builtin-before @ = _lc-assert
+_dc-desc _DESK-BUILTIN-DEFAULT-FLAGS 0
+    _dc-builtin-row? _lc-assert
+DEPTH _dc-queue-depth !
 _dc-desc-b DESK-QUEUE-LAUNCH
+DEPTH _dc-queue-depth @ = _lc-assert
+_DESK-PEND-N @ 2 = _lc-assert
+_DESK-PEND-BUF CELL+ @ _dc-desc-b = _lc-assert
+_DESK-BUILTIN-N @ _dc-builtin-before @ 1+ = _lc-assert
+_dc-desc-b _DESK-BUILTIN-DEFAULT-FLAGS _dc-builtin-before @
+    _dc-builtin-row? _lc-assert
+
+\ The public built-in API must also remain stack-neutral and preserve the
+\ final row when its bounded constructor table is already full.
+_DESK-BUILTIN-MAX 1- _DESK-BUILTIN-ENTRY
+DUP @ _dc-full-last-desc ! 8 + @ _dc-full-last-flags !
+_DESK-BUILTIN-MAX _DESK-BUILTIN-N !
+DEPTH _dc-queue-depth !
+_dc-full-probe 123 DESK-QUEUE-BUILTIN
+DEPTH _dc-queue-depth @ = _lc-assert
+_DESK-BUILTIN-N @ _DESK-BUILTIN-MAX = _lc-assert
+_dc-full-last-desc @ _dc-full-last-flags @ _DESK-BUILTIN-MAX 1-
+    _dc-builtin-row? _lc-assert
+_dc-builtin-before @ 1+ _DESK-BUILTIN-N !
 _DESK-FILL-DESC
 ' _dc-desk-shutdown-wrap DESK-DESC APP.SHUTDOWN-XT !
 ' _dc-run-fault-desk CATCH -91 = _lc-assert

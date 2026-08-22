@@ -651,7 +651,7 @@ _LQ12E-collection-rid-one _LQ12E-collection LIBPAC.ID RID-COPY
 S" Alpha collection" _LQ12E-collection LIBPAC.TITLE
     _LQ12E-collection LIBPAC.TITLE-U _LQ12E-text!
 _LQ12E-collection _LQ12E-member-rids 2
-    LIBPA-COLLECTION-REQUEST-SEAL! LIBPA-S-OK _LQ12E-status
+    LIBRARY-COLLECTION-REQUEST-SEAL! _LIBCV-S-OK _LQ12E-status
 _LQ12E-collection _LQ12E-member-rids 2 4 _LQ12E-collection-out
 _LQ12E-adapter _LQ12E-index-work
     LIBPA-COLLECTION-CREATE-EXACT LIBPA-S-OK _LQ12E-status
@@ -666,7 +666,7 @@ _LQ12E-collection-rid-two _LQ12E-collection LIBPAC.ID RID-COPY
 S" Beta collection" _LQ12E-collection LIBPAC.TITLE
     _LQ12E-collection LIBPAC.TITLE-U _LQ12E-text!
 _LQ12E-collection 0 0
-    LIBPA-COLLECTION-REQUEST-SEAL! LIBPA-S-OK _LQ12E-status
+    LIBRARY-COLLECTION-REQUEST-SEAL! _LIBCV-S-OK _LQ12E-status
 _LQ12E-collection 0 0 5 _LQ12E-collection-out
 _LQ12E-adapter _LQ12E-index-work
     LIBPA-COLLECTION-CREATE-EXACT LIBPA-S-OK _LQ12E-status
@@ -681,7 +681,7 @@ _LQ12E-collection-rid-three _LQ12E-collection LIBPAC.ID RID-COPY
 S" Gamma collection" _LQ12E-collection LIBPAC.TITLE
     _LQ12E-collection LIBPAC.TITLE-U _LQ12E-text!
 _LQ12E-collection 0 0
-    LIBPA-COLLECTION-REQUEST-SEAL! LIBPA-S-OK _LQ12E-status
+    LIBRARY-COLLECTION-REQUEST-SEAL! _LIBCV-S-OK _LQ12E-status
 _LQ12E-collection 0 0 6 _LQ12E-collection-out
 _LQ12E-adapter _LQ12E-index-work
     LIBPA-COLLECTION-CREATE-EXACT LIBPA-S-OK _LQ12E-status

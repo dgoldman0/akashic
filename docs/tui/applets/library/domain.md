@@ -1,6 +1,7 @@
 # Library applet product boundary
 
-Library is the Desk-owned corpus of material a user deliberately keeps. It owns
+Library is the Library-owned corpus of material a user deliberately keeps,
+hosted and composed by Desk. It owns
 managed documents, immutable captures, metadata, provenance, retained history,
 collections, lifecycle, query policy, and resource projections. Its domain and
 service can run without a renderer in focused tests; that does not make Library
@@ -183,6 +184,23 @@ Every consequential mutation names a stable RID and expected exact state.
 Caller-owned outputs are published only after complete validation, durable
 reconciliation, and cleanup. Service APIs expose no VFS path, tree key, page
 identifier, or storage cursor.
+
+The Desk-hosted applet component also owns a five-operation typed capability
+facade over this service: readiness status, managed-document create,
+collection create, exact collection-scoped document query, and exact
+collection-scoped document read. Capability handlers borrow the one live
+activation owner and publish only sealed caller-owned value graphs. They do not
+provision during status, discover filesystem paths, copy domain state into a
+parallel catalog, or expose raw service pointers.
+
+The scoped query/read service operations atomically verify the collection RID,
+positive domain revision, and existing collection request seal before query or
+membership work. Exact read additionally verifies member identity, requested
+document revision, active managed-text state, descriptor size/digest, and UTF-8
+content before publishing any bytes. Its 65,536-byte materialization window is
+the existing interaction bound; larger values retain the range/stream service
+path. The capability's 64-member create request is likewise an IVJSON child
+bound, not a fixed durable collection size.
 
 ## Failure and maintenance policy
 

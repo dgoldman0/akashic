@@ -148,7 +148,7 @@ def restore_cpu_state(cpu, state):
 
 
 def build_snapshot():
-    """Boot BIOS + KDOS + full dep chain + test helpers.  ~97 KiB ctx per UIDL."""
+    """Boot BIOS + KDOS + full dep chain + test helpers. ~101 KiB per UIDL context."""
     global _snapshot
     if _snapshot is not None:
         return _snapshot

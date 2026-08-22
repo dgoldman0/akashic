@@ -21,6 +21,7 @@
 <item text=Chat do=access-chat/>
 <item text=Read-only do=access-read/>
 <item text=Assist do=access-assist/>
+<item text=Library-Burrow do=access-library-burrow/>
 </menu>
 <menu label=Review>
 <item text=Approve do=approve key=F6/>

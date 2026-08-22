@@ -18,6 +18,11 @@
 <item text=Toggle_Selected_Source do=source-toggle/>
 <item text=Remove_Selected_Source do=source-remove/>
 </menu>
+<menu label=Burrow>
+<item text=Burrow_Status do=burrows key=Ctrl+B/>
+<item text=Start_Burrow do=burrow-start/>
+<item text=Stop_or_Retry_Burrow do=burrow-stop/>
+</menu>
 <menu label=Post>
 <item text=Open_Thread do=thread/>
 <item text=Create_Local_Draft do=compose key=Ctrl+N/>
@@ -32,11 +37,13 @@
 <label id=sbar-account text=Signed_out/>
 <label id=sbar-view text=Timeline/>
 <label id=sbar-state text=No_feed_loaded/>
+<label id=sbar-burrow text=No_Burrows_configured/>
 </status>
 <action do=search key=Ctrl+F/>
 <action do=compose key=Ctrl+N/>
 <action do=thread key=Ctrl+T/>
 <action do=timeline key=Ctrl+L/>
 <action do=sources key=Ctrl+S/>
+<action do=burrows key=Ctrl+B/>
 <action do=quit key=Ctrl+Q/>
 </uidl>

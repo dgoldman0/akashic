@@ -41,46 +41,48 @@ CONSTANT IVJSON-SUPPORTED-TYPE-MASK
 \ that a particular destination buffer is large enough.
 : _IVJSON-SCHEMA-COMPATIBLE-R?  ( schema depth -- flag )
     DUP IVJSON-MAX-DEPTH >= IF 2DROP 0 EXIT THEN
-    >R
+    \ Keep depth below the schema on the data stack.  A map walk is a DO
+    \ loop, so R@ there is the loop counter rather than caller scratch.
+    SWAP
     DUP CS.TYPE-MASK @ IVJSON-SUPPORTED-TYPE-MASK INVERT AND IF
-        DROP R> DROP 0 EXIT
+        2DROP 0 EXIT
     THEN
     DUP CS.TYPE-MASK @ CV-T-LIST CS-TYPE-BIT AND IF
         DUP CS.FLAGS @ CS-F-MAX-LEN AND 0= IF
-            DROP R> DROP 0 EXIT
+            2DROP 0 EXIT
         THEN
         DUP CS.MAX-LEN @ IVJSON-MAX-CHILDREN > IF
-            DROP R> DROP 0 EXIT
+            2DROP 0 EXIT
         THEN
         DUP CS.ITEM @ ?DUP IF
-            R@ 1+ RECURSE 0= IF DROP R> DROP 0 EXIT THEN
+            2 PICK 1+ RECURSE 0= IF 2DROP 0 EXIT THEN
         ELSE
-            DUP CS.MAX-LEN @ IF DROP R> DROP 0 EXIT THEN
+            DUP CS.MAX-LEN @ IF 2DROP 0 EXIT THEN
         THEN
     THEN
     DUP CS.TYPE-MASK @ CV-T-MAP CS-TYPE-BIT AND IF
         DUP CS.FIELD-N @ 0= IF
             DUP CS.FLAGS @ CS-F-MAX-LEN AND 0= IF
-                DROP R> DROP 0 EXIT
+                2DROP 0 EXIT
             THEN
-            DUP CS.MAX-LEN @ IF DROP R> DROP 0 EXIT THEN
+            DUP CS.MAX-LEN @ IF 2DROP 0 EXIT THEN
         THEN
         DUP CS.FIELD-N @ IVJSON-MAX-CHILDREN > IF
             DUP CS.FLAGS @ CS-F-MAX-LEN AND 0= IF
-                DROP R> DROP 0 EXIT
+                2DROP 0 EXIT
             THEN
             DUP CS.MAX-LEN @ IVJSON-MAX-CHILDREN > IF
-                DROP R> DROP 0 EXIT
+                2DROP 0 EXIT
             THEN
         THEN
         DUP CS.FIELD-N @ 0 ?DO
             DUP CS.FIELDS @ I CS-FIELD-SIZE * + CSF.SCHEMA @
-            R@ 1+ RECURSE 0= IF
-                DROP R> DROP 0 UNLOOP EXIT
+            2 PICK 1+ RECURSE 0= IF
+                2DROP 0 UNLOOP EXIT
             THEN
         LOOP
     THEN
-    DROP R> DROP -1 ;
+    2DROP -1 ;
 
 : IVJSON-SCHEMA-COMPATIBLE?  ( schema -- flag )
     DUP 0= IF DROP 0 EXIT THEN
@@ -323,6 +325,7 @@ DEFER _IVJD-VALUE
 ' _IVJD-VALUE-R IS _IVJD-VALUE
 
 VARIABLE _IVJD-TOP-V
+VARIABLE _IVJD-TOP-LIMIT
 CREATE _IVJD-TEMP CV-SIZE ALLOT
 _IVJD-TEMP CV-INIT
 
@@ -330,11 +333,13 @@ _IVJD-TEMP CV-INIT
     DUP >R CV-FREE
     R> CV-SIZE CMOVE ;
 
-: IVJSON-DECODE  ( json-a json-u value -- ior )
-    _IVJD-TOP-V !
+: _IVJSON-DECODE-LIMIT  ( json-a json-u max-len value -- ior )
+    _IVJD-TOP-V ! _IVJD-TOP-LIMIT !
     _IVJD-TOP-V @ 0= IF 2DROP IVJSON-E-TYPE EXIT THEN
     _IVJD-TEMP CV-FREE
-    2DUP JSON-VALID? 0= IF 2DROP IVJSON-E-INVALID EXIT THEN
+    2DUP _IVJD-TOP-LIMIT @ JSON-VALID-LIMIT? 0= IF
+        2DROP IVJSON-E-INVALID EXIT
+    THEN
     -1 _IVJD-DEPTH !
     _IVJD-TEMP _IVJD-VALUE DUP IF
         _IVJD-TEMP CV-FREE EXIT
@@ -342,6 +347,9 @@ _IVJD-TEMP CV-INIT
     DROP
     _IVJD-TEMP _IVJD-TOP-V @ _IVJSON-REPLACE
     _IVJD-TEMP CV-INIT 0 ;
+
+: IVJSON-DECODE  ( json-a json-u value -- ior )
+    JSON-MAX-DOCUMENT SWAP _IVJSON-DECODE-LIMIT ;
 
 \ Schema coercion is deliberately narrow. A JSON string can become a
 \ resource URI when the schema requires that native type; no other type is
@@ -405,6 +413,7 @@ DEFER _IVJC-VALUE
 
 VARIABLE _IVJC-TOP-S
 VARIABLE _IVJC-TOP-V
+VARIABLE _IVJC-TOP-LIMIT
 CREATE _IVJC-TEMP CV-SIZE ALLOT
 _IVJC-TEMP CV-INIT
 
@@ -427,14 +436,16 @@ _IVJC-TEMP CV-INIT
         0
     THEN ;
 
-: IVJSON-DECODE-AS  ( json-a json-u schema value -- ior )
-    _IVJC-TOP-V ! _IVJC-TOP-S !
+: IVJSON-DECODE-AS-LIMIT
+  ( json-a json-u max-len schema value -- ior )
+    _IVJC-TOP-V ! _IVJC-TOP-S ! _IVJC-TOP-LIMIT !
     _IVJC-TOP-V @ 0= IF 2DROP IVJSON-E-TYPE EXIT THEN
     _IVJC-TOP-S @ _IVJSON-DECODE-PREFLIGHT ?DUP IF
         >R 2DROP R> EXIT
     THEN
     _IVJC-TEMP CV-FREE
-    _IVJC-TEMP IVJSON-DECODE ?DUP IF EXIT THEN
+    _IVJC-TOP-LIMIT @ _IVJC-TEMP _IVJSON-DECODE-LIMIT
+        ?DUP IF EXIT THEN
     _IVJC-TOP-S @ 0= IF
         _IVJC-TEMP _IVJC-TOP-V @ _IVJSON-REPLACE
         _IVJC-TEMP CV-INIT 0 EXIT
@@ -447,14 +458,23 @@ _IVJC-TEMP CV-INIT
     _IVJC-TEMP _IVJC-TOP-V @ _IVJSON-REPLACE
     _IVJC-TEMP CV-INIT 0 ;
 
+\ Preserve the established process-wide default while allowing protocol
+\ owners with a larger, independently bounded receive arena to opt into the
+\ explicit limit above.
+: IVJSON-DECODE-AS  ( json-a json-u schema value -- ior )
+    2>R JSON-MAX-DOCUMENT 2R> IVJSON-DECODE-AS-LIMIT ;
+
 \ Decode frames and coercion state are module-owned scratch.  Hold one guard
-\ for the complete transaction; the raw DECODE-AS body is already bound to
-\ the raw DECODE word, so it does not release the guard between phases.
+\ for the complete transaction; both raw DECODE-AS bodies are already bound
+\ to the raw bounded decoder, so they do not release the guard between phases.
 GUARD _ivjson-decode-guard
 ' IVJSON-DECODE CONSTANT _ivjson-decode-xt
+' IVJSON-DECODE-AS-LIMIT CONSTANT _ivjson-decode-as-limit-xt
 ' IVJSON-DECODE-AS CONSTANT _ivjson-decode-as-xt
 : IVJSON-DECODE
     _ivjson-decode-xt _ivjson-decode-guard WITH-GUARD ;
+: IVJSON-DECODE-AS-LIMIT
+    _ivjson-decode-as-limit-xt _ivjson-decode-guard WITH-GUARD ;
 : IVJSON-DECODE-AS
     _ivjson-decode-as-xt _ivjson-decode-guard WITH-GUARD ;
 

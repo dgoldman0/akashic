@@ -345,7 +345,7 @@ app-compositor.f  _COMP-LOOP         (deleted — no second loop)
    cooperatively inside the DESK's own callbacks, which themselves
    run inside the shell's single Task 0 loop.
 6. **No artificial slot limit** — heap-allocated linked list.
-   Practical limits: memory (~97 KiB per UIDL context) and usable
+   Practical limits: memory (~101 KiB per UIDL context) and usable
    screen space.
 
 #### Screen Budget
@@ -412,7 +412,7 @@ Heap-allocated via `ALLOCATE`.  Prefix: `_DESK-` (was `_COMP-`).
  0 CONSTANT _SL-O-DESC        \ sub-app APP-DESC pointer
  8 CONSTANT _SL-O-RGN         \ sub-region (0 if minimized)
 16 CONSTANT _SL-O-STATE       \ 0=empty 1=running 2=min 3=focused
-24 CONSTANT _SL-O-UCTX        \ UIDL context buffer (~97 KiB)
+24 CONSTANT _SL-O-UCTX        \ UIDL context buffer (~101 KiB)
 32 CONSTANT _SL-O-HAS-UIDL    \ flag
 40 CONSTANT _SL-O-NEXT        \ → next slot or 0
 48 CONSTANT _SL-O-ID          \ unique monotonic ID
@@ -442,14 +442,14 @@ internally and returns `consumed = true` to the shell.
 
 #### UIDL Multi-Instance (Context Swap)
 
-Each sub-app with a UIDL document gets a context buffer (~97 KiB)
+Each sub-app with a UIDL document gets a context buffer (~101 KiB)
 holding all UIDL/UTUI scalar globals + pool arrays.
 `UCTX-SAVE` / `UCTX-RESTORE` copy between live globals and the
 buffer.  `_DESK-CTX-SWITCH ( slot -- )` saves the outgoing context
 and restores the incoming one.
 
 Since everything runs in Task 0 (the shell's single loop) there
-are no races.  Memory cost: ~97 KiB × N sub-apps.
+are no races.  Memory cost: ~101 KiB × N sub-apps.
 
 #### App Descriptor (DESK itself)
 
@@ -626,7 +626,7 @@ eventually `tui/app-config.f`.
 - **Single screen buffer.** One `SCR-USE`. Software compositing only.
 - **Dynamic screen size.** Use `SCR-W` / `SCR-H`; never hardcode 80×24.
 - **UIDL single-instance.** One document per `UTUI-LOAD`. Multi-app
-  solved by per-app UIDL context swap (~97 KiB each).
+  solved by per-app UIDL context swap (~101 KiB each).
 - **No artificial app limit.** DESK uses heap-allocated linked list.
   Practical limits: memory and usable tile size.
 - **One event loop.** The shell owns the only `BEGIN...REPEAT` loop.
