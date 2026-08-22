@@ -92227,6 +92227,16 @@ def test_ext4_unlink_and_rename_share_the_sealed_home_plan() -> None:
         assert match is not None, f"missing Forth word {name}"
         return match.group("body")
 
+    assert "0x0400 CONSTANT _EXT4-S-ISGID" in facade
+    for parent_gate in (
+        "_XC-LOAD-PARENT",
+        "_XU-STAGE-CURRENT-PARENT",
+        "_XR-STAGE-CURRENT-NP",
+    ):
+        body = word_body(parent_gate)
+        assert "_EXT4-C.R.MODE + @ _EXT4-S-ISGID AND IF" in body
+        assert "_EXT4-C.R.MODE + @ 0x0800 AND IF" not in body
+
     for removed in (
         "_XU-META-HOME-MAX",
         "_XU-META-HOMES",
