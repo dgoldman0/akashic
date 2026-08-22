@@ -20752,9 +20752,11 @@ def _run_singleton_unlinked_cleanup(
     data_block: int | None = None,
     data_count: int | None = None,
     retained_xattr_block: int | None = None,
+    expected_revoke_count: int = 0,
     max_steps: int = 1_200_000_000,
 ) -> dict[str, object]:
     assert protocol in {"modern", "legacy"}
+    assert expected_revoke_count >= 0
     if data_block is None:
         assert data_count in (None, 0)
         data_count = 0
@@ -21335,6 +21337,7 @@ def _run_singleton_unlinked_cleanup(
         "expected_super_free_blocks": expected_super_free_blocks,
         "expected_super_free": expected_super_free,
         "expected_home_writes": expected_home_writes,
+        "expected_revoke_count": expected_revoke_count,
     }
 
 
@@ -27038,14 +27041,18 @@ def _assert_singleton_unlinked_cleanup_result(
     clean_image = result["clean_image"]
     clean_sha256 = result["clean_sha256"]
     data_block = result["data_block"]
+    block_size = result["block_size"]
     expected_home_writes = result["expected_home_writes"]
+    expected_revoke_count = result["expected_revoke_count"]
     assert isinstance(protocol, str)
     assert isinstance(output, str)
     assert isinstance(trace, tuple)
     assert isinstance(clean_image, Path)
     assert isinstance(clean_sha256, str)
     assert data_block is None or isinstance(data_block, int)
+    assert isinstance(block_size, int)
     assert isinstance(expected_home_writes, int)
+    assert isinstance(expected_revoke_count, int)
 
     _assert_emitted(
         output,
@@ -27057,6 +27064,11 @@ def _assert_singleton_unlinked_cleanup_result(
     expected_writes = (34 if protocol == "modern" else 32) + 2 * (
         expected_home_writes - base_homes
     )
+    revokes_per_block = (block_size - 20) // 8
+    assert revokes_per_block > 0
+    expected_writes += (
+        expected_revoke_count + revokes_per_block - 1
+    ) // revokes_per_block
     assert sum(kind == "write" for kind, _, _ in trace) == expected_writes
     assert sum(kind == "flush" for kind, _, _ in trace) == 24
 
@@ -27761,6 +27773,7 @@ def test_mount_reclaims_unlinked_orphan_with_unique_external_xattr(
         patches=patches,
         data_block=release_first,
         data_count=data_blocks + 1,
+        expected_revoke_count=1,
         max_steps=_EXTERNAL_XATTR_RECOVERY_MAX_STEPS,
     )
     _assert_singleton_unlinked_cleanup_result(result)
