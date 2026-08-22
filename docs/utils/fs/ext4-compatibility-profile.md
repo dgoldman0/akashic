@@ -6,6 +6,21 @@ implementation status. The checksummed reader, ordinary read-only binding, and
 explicit staged-write binding live in `utils/fs/drivers/vfs-ext4.f`; their
 implemented structures and remaining limits are tracked in
 [the binding documentation](drivers/vfs-ext4.md).
+
+The staged writable binding's overall deployment status is
+**controlled/trusted-local preview**. It is not a general-purpose, multi-user,
+or drop-in writable ext4 filesystem. In this profile, `production contract`
+names the final target and `production-closed` names a per-operation
+qualification state inside an exact envelope; neither term promotes the staged
+binding to general production readiness. The ordinary ext4 binding remains
+read-only.
+
+For every currently staged namespace mutation, each participating parent must
+be root-owned and have ext4 `S_ISGID` (`0x0400`) clear. This includes `CREATE`,
+`MKDIR`, `LINK`, `UNLINK`, `RMDIR`, the sole parent of same-parent `RENAME`,
+and both the old and destination parents of cross-parent `RENAME`. `S_ISUID`
+(`0x0800`) is distinct and is not the setgid-inheritance gate.
+
 The bounded checksum-v3 JBD2 replay slice now includes committed revoke
 records, and the journal writer can establish a crash-resolvable empty
 checksum-v3 journal plus ext4 `RECOVER` state, emit one durable ordered

@@ -154,6 +154,13 @@ for explicit qualification budgets.
 
 ## Ext4 compatibility profile
 
+The writable ext4 qualification described here targets the explicitly staged
+**controlled/trusted-local preview**. It does not qualify a general-purpose,
+multi-user, or drop-in production filesystem. References below to a production
+path or production-closed operation mean the real driver path and its exact
+per-operation envelope; the ordinary ext4 binding remains read-only and the
+profile's general release gates remain open.
+
 The ext4 format contract is pinned in
 `docs/utils/fs/ext4-compatibility-profile.md` and mirrored by the
 machine-readable `fixtures/ext4-profile/manifest.json`.  It requires one

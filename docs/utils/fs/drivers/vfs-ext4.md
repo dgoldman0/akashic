@@ -2,6 +2,22 @@
 
 IMPORTANT: STEP CEILINGS ARE NOT CRITICAL COMPARED TO CRITICAL PROPER FUNCTIONING. DO NOT SCRUB PROPER FUNCTIONALITY FOR ARBITRARILY SET STEP LIMITS. STEP AND OTHER LIMITS DETERMINED BY IDENTIFIED SYSTEM RESOURCES AND MONITORING.
 
+> **Deployment status:** `EXT4-STAGED-WRITE-BINDING` is a
+> **controlled/trusted-local preview**, not a general-purpose, multi-user, or
+> drop-in writable ext4 filesystem. Per-operation `production-closed` language
+> in this document means that the real implementation is qualified inside its
+> exact advertised envelope; it does not make the staged binding generally
+> production-ready. Mutation requires exclusive volume ownership, and generic
+> permission/ACL enforcement and the documented external/hardware release gates
+> remain open. `EXT4-BINDING` remains the ordinary read-only surface.
+
+Every currently staged namespace mutation requires each participating parent
+directory to be root-owned and to have ext4 `S_ISGID` (`0x0400`) clear. This
+applies to `CREATE`, `MKDIR`, `LINK`, `UNLINK`, `RMDIR`, the sole parent of
+same-parent `RENAME`, and both the old and destination parents of cross-parent
+`RENAME`; `S_ISUID` (`0x0800`) is a distinct bit and is not the
+setgid-inheritance gate.
+
 This VFS ABI 1 driver reads filesystems in the pinned
 `akashic-ext4-rw-v1` profile from one explicit KDOS volume. It publishes two
 different descriptors. `EXT4-BINDING` is the ordinary read-only surface.

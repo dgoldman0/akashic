@@ -17,6 +17,13 @@ or callback-streamed reads should use the policy-neutral
 [`vfs-access.f` layer](vfs-access.md). Replacement protocols, fixed record
 envelopes, and domain stores remain separate higher-level concerns.
 
+The writable ext4 deployment status is **controlled/trusted-local preview**.
+The explicitly staged binding is not a general-purpose, multi-user, or drop-in
+writable ext4 filesystem. Its per-operation `production-closed` descriptions
+below name qualification of the real implementation inside exact envelopes,
+not general production readiness. The ordinary ext4 binding remains the
+read-only interoperability surface.
+
 The ext4 implementation provides an ordinary checksummed read-only binding and
 an explicit staged-write binding with production-closed durable paths for:
 initialized overwrite, strict append inside an initialized partial EOF block,
