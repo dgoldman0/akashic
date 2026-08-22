@@ -18967,10 +18967,7 @@ def test_mount_cleanup_rejects_target_xattr_alias_without_writes(
             ),
             "_OX-V _EXT4-CTX CONSTANT _OX-CTX",
             "_OX-ARENA ARENA-USED CONSTANT _OX-USED-BEFORE",
-            (
-                "_OX-CTX _OX-V _EXT4-COMPLETE-ORPHAN-PLAN "
-                "CONSTANT _OX-RETRY-IOR"
-            ),
+            "_OX-V _EXT4-MOUNT CONSTANT _OX-RETRY-IOR",
             "_OX-ARENA ARENA-USED CONSTANT _OX-USED-AFTER",
             (
                 _forth_conjunction(
@@ -19010,6 +19007,9 @@ def test_mount_cleanup_rejects_target_xattr_alias_without_writes(
                         "_OX-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
                         "_OX-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
                         "_OX-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_OX-CTX _EXT4-C.O.SLOTS + @ 0=",
+                        "_OX-CTX _EXT4-C.O.TABLE + @ 0=",
+                        "_OX-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ 0=",
                         "_OX-CTX _EXT4-C.ARENA + @ _OX-ARENA =",
                         "_EXT4-MOC-MARK-VALID @ 0=",
                         (
@@ -20378,10 +20378,7 @@ def test_mount_rejects_unlinked_reclaim_with_unreleased_ownership(
             ),
             "_UJ-V _EXT4-CTX CONSTANT _UJ-CTX",
             "_UJ-ARENA ARENA-USED CONSTANT _UJ-USED-BEFORE",
-            (
-                "_UJ-CTX _UJ-V _EXT4-COMPLETE-ORPHAN-PLAN "
-                "CONSTANT _UJ-RETRY-IOR"
-            ),
+            "_UJ-V _EXT4-MOUNT CONSTANT _UJ-RETRY-IOR",
             "_UJ-ARENA ARENA-USED CONSTANT _UJ-USED-AFTER",
             (
                 _forth_conjunction(
@@ -20430,6 +20427,9 @@ def test_mount_rejects_unlinked_reclaim_with_unreleased_ownership(
                             f"{expected_legacy} ="
                         ),
                         "_UJ-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_UJ-CTX _EXT4-C.O.SLOTS + @ 0=",
+                        "_UJ-CTX _EXT4-C.O.TABLE + @ 0=",
+                        "_UJ-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ 0=",
                         "_UJ-CTX _EXT4-C.ARENA + @ _UJ-ARENA =",
                         "_EXT4-MOC-MARK-VALID @ 0=",
                         (
@@ -33510,10 +33510,7 @@ def test_mount_cleanup_rejects_orphan_storage_alias_without_writes(
             ),
             "_OO-V _EXT4-CTX CONSTANT _OO-CTX",
             "_OO-ARENA ARENA-USED CONSTANT _OO-USED-BEFORE",
-            (
-                "_OO-CTX _OO-V _EXT4-COMPLETE-ORPHAN-PLAN "
-                "CONSTANT _OO-RETRY-IOR"
-            ),
+            "_OO-V _EXT4-MOUNT CONSTANT _OO-RETRY-IOR",
             "_OO-ARENA ARENA-USED CONSTANT _OO-USED-AFTER",
             (
                 _forth_conjunction(
@@ -33553,6 +33550,9 @@ def test_mount_cleanup_rejects_orphan_storage_alias_without_writes(
                         "_OO-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
                         "_OO-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
                         "_OO-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_OO-CTX _EXT4-C.O.SLOTS + @ 0=",
+                        "_OO-CTX _EXT4-C.O.TABLE + @ 0=",
+                        "_OO-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ 0=",
                         "_OO-CTX _EXT4-C.ARENA + @ _OO-ARENA =",
                         "_EXT4-MOC-MARK-VALID @ 0=",
                         (
@@ -33635,10 +33635,7 @@ def test_mount_cleanup_rejects_xattr_orphan_preallocation_without_writes(
             ),
             "_OP-V _EXT4-CTX CONSTANT _OP-CTX",
             "_OP-ARENA ARENA-USED CONSTANT _OP-USED-BEFORE",
-            (
-                "_OP-CTX _OP-V _EXT4-COMPLETE-ORPHAN-PLAN "
-                "CONSTANT _OP-RETRY-IOR"
-            ),
+            "_OP-V _EXT4-MOUNT CONSTANT _OP-RETRY-IOR",
             "_OP-ARENA ARENA-USED CONSTANT _OP-USED-AFTER",
             (
                 _forth_conjunction(
@@ -33678,6 +33675,9 @@ def test_mount_cleanup_rejects_xattr_orphan_preallocation_without_writes(
                         "_OP-CTX _EXT4-C.O.MODERN-ACTIVE + @ 1 =",
                         "_OP-CTX _EXT4-C.O.LEGACY-ACTIVE + @ 0=",
                         "_OP-CTX _EXT4-C.O.CLEAR-PENDING + @ 0=",
+                        "_OP-CTX _EXT4-C.O.SLOTS + @ 0=",
+                        "_OP-CTX _EXT4-C.O.TABLE + @ 0=",
+                        "_OP-CTX _EXT4-C.O.MOUNT-TAIL-MARK + @ 0=",
                         "_OP-CTX _EXT4-C.ARENA + @ _OP-ARENA =",
                         "_EXT4-MOC-MARK-VALID @ 0=",
                         (
