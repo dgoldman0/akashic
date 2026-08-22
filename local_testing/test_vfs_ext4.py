@@ -25377,6 +25377,7 @@ def _run_multi_empty_unlinked_cleanup(
     modern_entries: tuple[int, ...],
     max_credit: int,
     final_credit: int,
+    max_revoke: int = 0,
     head_extent_specs: tuple[tuple[int, int, bool], ...] = (),
     patches_override: tuple[tuple[int, bytes], ...] | None = None,
     shared_xattr_block: int | None = None,
@@ -25559,7 +25560,8 @@ def _run_multi_empty_unlinked_cleanup(
             *data_probe_forth,
             "0 _MU-CTX _EXT4-LOAD-DESC CONSTANT _MU-DESC-IOR",
             (
-                f"{max_credit} 0 0 {block_size} _EXT4-JWR-MEASURE "
+                f"{max_credit} 0 {max_revoke} {block_size} "
+                "_EXT4-JWR-MEASURE "
                 "CONSTANT _MU-MEASURE-IOR CONSTANT _MU-WRITER-BYTES"
             ),
             (
@@ -25871,6 +25873,7 @@ def _run_multi_empty_unlinked_cleanup(
         "expected_itable_unused": expected_itable_unused,
         "expected_gdt": bytes(expected_gdt),
         "max_credit": max_credit,
+        "max_revoke": max_revoke,
         "modern_count": len(modern_entries),
         "data_block": data_block,
         "data_ranges": data_ranges,
@@ -26454,6 +26457,7 @@ def modern_multi_shared_xattr_unlinked_cleanup_fixture(
         modern_entries=(18, 21),
         max_credit=7,
         final_credit=6,
+        max_revoke=1,
         patches_override=patches,
         shared_xattr_block=xattr_block,
     )
@@ -27122,8 +27126,9 @@ def test_mount_decrements_then_releases_multi_orphan_shared_xattr(
     assert isinstance(trace, tuple)
     assert result["case"] == "modern"
     assert result["max_credit"] == 7
+    assert result["max_revoke"] == 1
     assert isinstance(result["shared_xattr_block"], int)
-    assert sum(kind == "write" for kind, _, _ in trace) == 60
+    assert sum(kind == "write" for kind, _, _ in trace) == 61
     assert sum(kind == "flush" for kind, _, _ in trace) == 35
     assert result["stable_trace"] == ()
     assert result["stable_sha256"] == result["clean_sha256"]
