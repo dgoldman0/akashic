@@ -20585,16 +20585,16 @@ def test_mount_refuses_unauthorized_external_xattr_release_shape(
             id="physical-high-word",
         ),
         pytest.param(
-            "depth-one",
+            "malformed-depth-one",
             "1 _XS-INODE _EXT4-I.BLOCK + 6 + W!",
-            "VFS-R-UNSUPPORTED",
-            "0",
-            "EXT4-D-RECOVERY",
-            id="depth-one",
+            "VFS-R-CORRUPT",
+            "VFS-IOR-F-CORRUPT",
+            "EXT4-D-BOUNDS",
+            id="malformed-depth-one",
         ),
     ),
 )
-def test_unlinked_data_preflight_refuses_outside_inline_depth0_authority(
+def test_unlinked_data_preflight_rejects_malformed_inline_extent_authority(
     canonical_images: dict[str, Path],
     case: str,
     mutation: str,
