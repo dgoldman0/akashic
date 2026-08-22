@@ -2,7 +2,7 @@
 \  cold-source-loader.f - bounded AKLZSS01 cold source loader
 \ =====================================================================
 \  Public API:
-\    C5-COLD-SOURCE  ( i*x "filename" -- j*x status )
+\    COLD-SOURCE-LOAD  ( i*x "filename" -- j*x status )
 \
 \  The filename is parsed by OPEN, so this leaf is for short files in the
 \  current MegaPad directory.  It is synchronous, non-reentrant, and must
@@ -17,7 +17,7 @@
 \  CRC32-IEEE-BUF, and SOURCE-EVALUATE-CHECKED.  FREE is void.
 \ =====================================================================
 
-PROVIDED akashic-test-cold-source-loader
+PROVIDED akashic-cold-source-loader
 
    0 CONSTANT CSL-S-OK
    1 CONSTANT CSL-S-OPEN
@@ -307,7 +307,7 @@ _CSL-RESET 0 _CSL-BUSY !
 
 : _CSL-DROP-NAME  ( -- ) PARSE-NAME 2DROP ;
 
-: C5-COLD-SOURCE  ( i*x "filename" -- j*x status )
+: COLD-SOURCE-LOAD  ( i*x "filename" -- j*x status )
     _CSL-BUSY @ IF _CSL-DROP-NAME CSL-S-BUSY EXIT THEN
     _CSL-OWNED? IF
         0 _CSL-CLEAN-THROW ! _CSL-CLEANUP

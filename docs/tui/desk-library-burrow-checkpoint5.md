@@ -85,10 +85,10 @@ Each root-level data container has a fixed 40-byte `AKLZSS01` header, positive
 raw and payload lengths, an at-most-122,880-byte raw bound, and mandatory raw
 CRC32-IEEE. The canonical LSB-first LZSS stream has a 4 KiB back-reference
 window, 3 through 18 byte matches, exact input/output exhaustion, and zero
-unused final control bits. The uncompressed root alias `c5-coldsrc.f`
+unused final control bits. The uncompressed root alias `coldsrc.f`
 validates the single-extent file, decodes into format-bounded allocations,
 verifies CRC, and compiles each raw source through
-`SOURCE-EVALUATE-CHECKED`. A generated `_C5-BOOT-SOURCE` wrapper reports the
+`SOURCE-EVALUATE-CHECKED`. A generated `_BOOT-COLD-SOURCE` wrapper reports the
 checked evaluator status, line, column, throw, and token before aborting a
 failed boot load. Read-only descriptors are released without rewriting
 MP64FS metadata.

@@ -117,15 +117,15 @@ _cslc-resources-recovered? _cslc-assert
 ." COLD SOURCE LOADER VALID PASS" CR TX-FLUSH
 
 \ Decode failures must release their descriptor and both bounded allocations.
-C5-COLD-SOURCE csl-dist.lz CSL-S-DISTANCE = _cslc-assert
+COLD-SOURCE-LOAD csl-dist.lz CSL-S-DISTANCE = _cslc-assert
 _cslc-resources-recovered? _cslc-assert
 ." COLD SOURCE LOADER DISTANCE PASS" CR TX-FLUSH
-C5-COLD-SOURCE csl-canon.lz CSL-S-CANONICAL = _cslc-assert
+COLD-SOURCE-LOAD csl-canon.lz CSL-S-CANONICAL = _cslc-assert
 _cslc-resources-recovered? _cslc-assert
 ." COLD SOURCE LOADER CANONICAL PASS" CR TX-FLUSH
 
 \ A complete decode with the wrong raw checksum must fail before evaluation.
-C5-COLD-SOURCE csl-crc.lz CSL-S-CHECKSUM = _cslc-assert
+COLD-SOURCE-LOAD csl-crc.lz CSL-S-CHECKSUM = _cslc-assert
 _cslc-resources-recovered? _cslc-assert
 ." COLD SOURCE LOADER CHECKSUM PASS" CR TX-FLUSH
 
@@ -162,8 +162,8 @@ def _assert_static_contracts() -> None:
         line.split("\\", 1)[0] for line in source.splitlines()
     )
     tokens = set(executable.split())
-    assert "PROVIDED akashic-test-cold-source-loader" in source
-    assert "C5-COLD-SOURCE" in tokens
+    assert "PROVIDED akashic-cold-source-loader" in source
+    assert "COLD-SOURCE-LOAD" in tokens
     assert "(FCLOSE-NOFS)" in tokens
     assert "FCLOSE" not in tokens
     assert "CRC32-IEEE-BUF" in tokens
@@ -254,7 +254,7 @@ def _run(timeout: float) -> int:
         transcript.append(machine.raw_text())
         machine.clear_output()
 
-        _send_line(machine, "C5-COLD-SOURCE csl-eval.lz")
+        _send_line(machine, "COLD-SOURCE-LOAD csl-eval.lz")
         if not run_until("evaluation failure", "> "):
             transcript.append(machine.raw_text())
             return _report(False, reports, transcript, machine, profile)
@@ -284,7 +284,7 @@ def _run(timeout: float) -> int:
         # allocation ownership is reusable in the same machine.
         _send_line(
             machine,
-            "C5-COLD-SOURCE csl-retry.lz CSL-S-OK = _cslc-assert "
+            "COLD-SOURCE-LOAD csl-retry.lz CSL-S-OK = _cslc-assert "
             "_CSLC-RETRY-WORD 37 = _cslc-assert",
         )
         _send_line(

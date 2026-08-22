@@ -124,7 +124,7 @@ def _assert_static_contracts() -> None:
     assert "IVJSON-E-OK" not in fixture
     assert "U<=" not in fixture
     assert fixture.count("IVJSON-DECODE-AS-LIMIT 0=") == 2
-    assert profile.autoexec.count("_C5-BOOT-SOURCE c5-") == 4
+    assert profile.autoexec.count("_BOOT-COLD-SOURCE c5-") == 4
     load_positions = tuple(profile.autoexec.index(marker) for marker in LOAD_MARKERS)
     assert load_positions == tuple(sorted(load_positions))
     assert load_positions[-1] < profile.autoexec.index(

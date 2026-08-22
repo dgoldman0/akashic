@@ -758,7 +758,12 @@ MP64FS test images support 15 through 8192 sectors. The guest derives a one- or
 two-sector allocation bitmap from media capacity, and the directory and data
 starts follow that bitmap uniformly. Profiles declare their required media
 capacity; the complete Desktop family uses 8192 sectors while smaller focused
-profiles retain the 4096-sector default. Focused profiles may omit unrelated
+profiles retain the 4096-sector default. The complete Desktop family stores
+its linked Akashic source in checked `AKLZSS01` containers so the substantially
+larger secure MegaPad networking source does not consume the fixed 2,048-sector
+mutable reserve. This remains a cold build: `coldsrc.f` validates, expands,
+checksums, and compiles every source chunk through `SOURCE-EVALUATE-CHECKED`.
+It is not a compiled dictionary cache. Focused profiles may omit unrelated
 large-file fixtures, but they must not omit production modules or resources in
 their declared scope. Generated images also omit non-executable blank/comment
 lines; production source and the declared component set remain unchanged.

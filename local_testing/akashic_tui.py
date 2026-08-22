@@ -208,8 +208,8 @@ COLD_SOURCE_VERSION = 1
 COLD_SOURCE_FLAGS = 0
 COLD_SOURCE_HEADER_BYTES = 40
 COLD_SOURCE_RAW_MAX_BYTES = LINK_CHUNK_BYTES
-COLD_SOURCE_LOADER_PATH = "c5-coldsrc.f"
-COLD_SOURCE_CHUNK_TEMPLATE = "csrc-{index:02d}.lz"
+COLD_SOURCE_LOADER_PATH = "coldsrc.f"
+COLD_SOURCE_CHUNK_TEMPLATE = "source-{index:02d}.lz"
 COLD_SOURCE_HEADER = struct.Struct("<8sHHIQQII")
 MEGAPAD_EVALUATE_SOURCE_MAX_BYTES = 255
 FORTH_LINE_COALESCE_BARRIERS = frozenset(
@@ -10930,6 +10930,7 @@ THEN
             "Agent",
         ),
         linked=True,
+        cold_source_packed=True,
         total_sectors=8192,
     ),
     "agent-widgets": Profile(
@@ -20746,6 +20747,7 @@ DESK-QUEUE-BUILTIN
         if marker != "Entry"
     ),
     linked=PROFILES["desktop"].linked,
+    cold_source_packed=PROFILES["desktop"].cold_source_packed,
     include_large_sample=False,
     total_sectors=PROFILES["desktop"].total_sectors,
 )
@@ -20929,13 +20931,13 @@ REQUIRE tui/applets/agent/providers/devtools/scripted.f
 REQUIRE tui/applets/streams/rabbit-library-profile.f
 REQUIRE net/transports/memory-duplex.f
 REQUIRE tui/applets/streams/rabbit-connector.f
-_C5-BOOT-SOURCE c5-srbprov.f.lz
+_BOOT-COLD-SOURCE c5-srbprov.f.lz
 ." DESK LIBRARY RABBIT LOAD C4 PROVIDER PASS" CR TX-FLUSH
-_C5-BOOT-SOURCE c5-dlburrow.f.lz
+_BOOT-COLD-SOURCE c5-dlburrow.f.lz
 ." DESK LIBRARY RABBIT LOAD C4 PRODUCT PASS" CR TX-FLUSH
-_C5-BOOT-SOURCE c5-slrabbit.f.lz
+_BOOT-COLD-SOURCE c5-slrabbit.f.lz
 ." DESK LIBRARY RABBIT LOAD C5 PROVIDER PASS" CR TX-FLUSH
-_C5-BOOT-SOURCE c5-dlcap.f.lz
+_BOOT-COLD-SOURCE c5-dlcap.f.lz
 ." DESK LIBRARY RABBIT LOAD C5 CAPSTONE PASS" CR TX-FLUSH
 
 CREATE _boot-practice-head PHEAD-SIZE ALLOT
@@ -21210,6 +21212,7 @@ PROFILES["desktop-local-applet"] = Profile(
     ready_markers=PROFILES["desktop"].ready_markers,
     stable_markers=PROFILES["desktop"].stable_markers,
     linked=PROFILES["desktop"].linked,
+    cold_source_packed=PROFILES["desktop"].cold_source_packed,
     initial_files=(
         (
             "hello.toml",
@@ -21232,6 +21235,7 @@ PROFILES["desktop-recovery"] = Profile(
     ready_markers=("[Practice: recovery]",),
     stable_markers=("[Practice: recovery]",),
     linked=True,
+    cold_source_packed=PROFILES["desktop"].cold_source_packed,
     initial_files=(
         ("practice-head-a.bin", b"corrupt-a"),
         ("practice-head-b.bin", b"corrupt-b"),
@@ -21248,6 +21252,7 @@ PROFILES["desktop-fallback"] = Profile(
     ready_markers=PROFILES["desktop"].ready_markers + ("[Practice: fallback]",),
     stable_markers=PROFILES["desktop"].stable_markers + ("[Practice: fallback]",),
     linked=True,
+    cold_source_packed=PROFILES["desktop"].cold_source_packed,
     initial_files=(
         ("practice-head-a.bin", _practice_head_snapshot(1)),
         ("practice-head-b.bin", b"corrupt-newest"),
@@ -21276,6 +21281,7 @@ PROFILES["desktop-codex"] = Profile(
     ready_markers=PROFILES["desktop"].ready_markers,
     stable_markers=PROFILES["desktop"].stable_markers,
     linked=True,
+    cold_source_packed=PROFILES["desktop"].cold_source_packed,
     total_sectors=PROFILES["desktop"].total_sectors,
 )
 PROFILES["desktop-codex-live"] = Profile(
@@ -21293,6 +21299,7 @@ PROFILES["desktop-codex-live"] = Profile(
     ready_markers=PROFILES["desktop-codex"].ready_markers,
     stable_markers=PROFILES["desktop-codex"].stable_markers,
     linked=True,
+    cold_source_packed=PROFILES["desktop-codex"].cold_source_packed,
     requires_tap=True,
     total_sectors=PROFILES["desktop-codex"].total_sectors,
 )
@@ -25229,9 +25236,9 @@ def _linked_autoexec(
     if cold_source_packed:
         load_lines = [
             f"REQUIRE {COLD_SOURCE_LOADER_PATH}",
-            "VARIABLE _C5-BOOT-SOURCE-STATUS",
-            ': _C5-BOOT-SOURCE  ( "filename" -- )',
-            "    C5-COLD-SOURCE DUP _C5-BOOT-SOURCE-STATUS ! ?DUP IF",
+            "VARIABLE _BOOT-COLD-SOURCE-STATUS",
+            ': _BOOT-COLD-SOURCE  ( "filename" -- )',
+            "    COLD-SOURCE-LOAD DUP _BOOT-COLD-SOURCE-STATUS ! ?DUP IF",
             '        ." COLD SOURCE LOAD FAIL status=" .',
             '        ." eval=" CSL-LAST-EVAL@ .',
             '        ." line=" EVAL-LINE @ .',
@@ -25241,7 +25248,7 @@ def _linked_autoexec(
             "    THEN ;",
         ] + [
             (
-                f"_C5-BOOT-SOURCE {name}"
+                f"_BOOT-COLD-SOURCE {name}"
             )
             for name in chunk_names
         ]

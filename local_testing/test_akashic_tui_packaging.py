@@ -230,13 +230,13 @@ def test_cold_source_autoexec_is_opt_in_and_preserves_source_order() -> None:
     )
     assert packed.count(f"REQUIRE {COLD_SOURCE_LOADER_PATH}") == 1
     assert "COLD SOURCE LOAD FAIL status=" in packed
-    assert f"_C5-BOOT-SOURCE {chunk}" in packed
+    assert f"_BOOT-COLD-SOURCE {chunk}" in packed
     assert packed.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}") < packed.index(
-        f"_C5-BOOT-SOURCE {chunk}"
+        f"_BOOT-COLD-SOURCE {chunk}"
     ) < packed.index("REQUIRE local_testing/fixture.f")
     assert PROFILES["desktop-library-burrow-capstone"].cold_source_packed
     assert not PROFILES["desktop-library-burrow"].cold_source_packed
-    assert not PROFILES["desktop"].cold_source_packed
+    assert PROFILES["desktop"].cold_source_packed
     with pytest.raises(RuntimeError, match="no linked REQUIRE"):
         _linked_autoexec(
             "ENTER-USERLAND\nREQUIRE local_testing/fixture.f\n",
@@ -313,8 +313,8 @@ def test_cp5_cold_source_image_roundtrips_the_real_linked_closure(
         for line in loader_source.splitlines()
         for token in line.split("\\", 1)[0].split()
     }
-    assert "PROVIDED akashic-test-cold-source-loader" in loader_source
-    assert "C5-COLD-SOURCE" in executable_tokens
+    assert "PROVIDED akashic-cold-source-loader" in loader_source
+    assert "COLD-SOURCE-LOAD" in executable_tokens
     assert "(FCLOSE-NOFS)" in executable_tokens
     assert "FCLOSE" not in executable_tokens
     assert "CRC32-IEEE-BUF" in executable_tokens
@@ -325,13 +325,13 @@ def test_cp5_cold_source_image_roundtrips_the_real_linked_closure(
     assert "REQUIRE .akashic/link-" not in autoexec
     assert autoexec.index("ENTER-USERLAND") < autoexec.index(
         f"REQUIRE {COLD_SOURCE_LOADER_PATH}"
-    ) < autoexec.index(f"_C5-BOOT-SOURCE {packed_names[0]}")
+    ) < autoexec.index(f"_BOOT-COLD-SOURCE {packed_names[0]}")
     positions = [
-        autoexec.index(f"_C5-BOOT-SOURCE {name}") for name in packed_names
+        autoexec.index(f"_BOOT-COLD-SOURCE {name}") for name in packed_names
     ]
     assert positions == sorted(positions)
     leaf_positions = [
-        autoexec.index(f"_C5-BOOT-SOURCE {name}") for name in leaf_names
+        autoexec.index(f"_BOOT-COLD-SOURCE {name}") for name in leaf_names
     ]
     assert leaf_positions == sorted(leaf_positions)
     assert positions[-1] < leaf_positions[0]
@@ -1641,21 +1641,23 @@ def test_complete_desktop_fits_fixed_mp64fs_with_reserve(
     autoexec = filesystem.read_file("autoexec.f").decode("utf-8")
     assert "ENTER-USERLAND\nREQUIRE networking.f\n" in autoexec
     assert "FSLOAD networking.f" not in autoexec
+    first_chunk = COLD_SOURCE_CHUNK_TEMPLATE.format(index=0)
     assert autoexec.index("REQUIRE networking.f") < autoexec.index(
-        "REQUIRE .akashic/link-"
+        f"REQUIRE {COLD_SOURCE_LOADER_PATH}"
     )
-    assert autoexec.index("REQUIRE .akashic/link-") < autoexec.index(
+    assert autoexec.index(f"_BOOT-COLD-SOURCE {first_chunk}") < autoexec.index(
         "_boot-practice-provision"
     ) < autoexec.index("DESK-RUN")
 
-    linked_parent = filesystem.resolve_path("/.akashic")
+    packed_names = sorted(
+        entry.name
+        for entry in filesystem.list_files()
+        if re.fullmatch(r"source-[0-9]{2}\.lz", entry.name)
+    )
+    assert packed_names and packed_names[0] == first_chunk
     linked_source = b"".join(
-        filesystem.read_file(entry.name, parent=linked_parent)
-        for entry in sorted(
-            filesystem.list_files(parent=linked_parent),
-            key=lambda entry: entry.name,
-        )
-        if entry.name.startswith("link-")
+        _unpack_cold_source(filesystem.read_file(name))
+        for name in packed_names
     ).decode("utf-8")
     assert linked_source.index("PROVIDED akashic-tui-mp64fs-vfs") < (
         linked_source.index("PROVIDED akashic-tui-app-shell")
@@ -1668,7 +1670,8 @@ def test_codex_desktop_profiles_inherit_capacity_and_build(
     for profile_name in ("desktop-codex", "desktop-codex-live"):
         profile = PROFILES[profile_name]
         assert profile.total_sectors == PROFILES["desktop"].total_sectors
+        assert profile.cold_source_packed
         image = build_image(profile_name, tmp_path / f"{profile_name}.img")
         assert image.stat().st_size == 8192 * 512
         filesystem = MP64FS(bytearray(image.read_bytes()))
-        assert filesystem.info()["free_sectors"] > 0
+        assert filesystem.info()["free_sectors"] * 512 >= 1 << 20
