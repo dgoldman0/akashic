@@ -18955,7 +18955,12 @@ VARIABLE _EXT4-JDE-IOR
 : _EXT4-JDE-FAULT  ( ior -- ior )
     _EXT4-JDE-IOR !
     _EXT4-JDE-IOR @ _EXT4-JDE-WRITER @ _EXT4-JWR-LATCH-FAULT
-    VFS-L-STALE _EXT4-JDE-V @ V.LIFECYCLE ! ;
+    \ A constructor-side orphan cleanup uses the same landing protocol while
+    \ the inspectable VFS is still NEW.  Quarantine the writer and media in
+    \ either case, but only an already-live instance becomes terminal STALE.
+    _EXT4-JDE-V @ V.LIFECYCLE @ VFS-L-NEW <> IF
+        VFS-L-STALE _EXT4-JDE-V @ V.LIFECYCLE !
+    THEN ;
 
 \ Gracefully close one write-active mount only from the checkpointed IDLE
 \ boundary.  The common AKR1 landing supplies the durable clean transition;
