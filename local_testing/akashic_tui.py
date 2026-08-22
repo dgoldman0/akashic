@@ -244,13 +244,15 @@ def _megapad_root() -> Path:
 
 MEGAPAD_ROOT = _megapad_root()
 DEFAULT_EXT_MEM_MIB = 128
-# This is a qualification-instruction ceiling, not a product capacity limit.
-# The complete Desktop closure, including scoped VFS access, reaches its ready
-# markers at about 8.41 billion guest steps on the reference emulator.  Keep a
-# narrow deterministic margin so the supported no-override smoke command can
-# finish without making the ceiling stand in for a scalability claim.
+# These are general focused-profile watchdogs, not product capacity limits.
 DEFAULT_SMOKE_MAX_STEPS = 9_000_000_000
 DEFAULT_SMOKE_TIMEOUT = 120.0
+# The complete checked-cold-source Desktop plus its supported interaction
+# journey measures 13.244 billion guest steps on the paired integration tree.
+# Keep the profile-specific margin separate so smaller focused profiles retain
+# their established watchdogs.
+DESKTOP_SMOKE_MAX_STEPS = 15_000_000_000
+DESKTOP_SMOKE_TIMEOUT = 420.0
 sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from diskutil import (  # noqa: E402
@@ -286,6 +288,8 @@ class Profile:
     include_large_sample: bool = True
     total_sectors: int = 4096
     link_chunk_bytes: int = LINK_CHUNK_BYTES
+    smoke_max_steps: int | None = None
+    smoke_timeout: float | None = None
     # Cold-source packing is an opt-in filesystem representation.  The guest
     # expands each linked source chunk and compiles it through the checked
     # source evaluator; this is not a compiled dictionary cache.
@@ -10931,6 +10935,8 @@ THEN
         ),
         linked=True,
         cold_source_packed=True,
+        smoke_max_steps=DESKTOP_SMOKE_MAX_STEPS,
+        smoke_timeout=DESKTOP_SMOKE_TIMEOUT,
         total_sectors=8192,
     ),
     "agent-widgets": Profile(
@@ -20748,6 +20754,8 @@ DESK-QUEUE-BUILTIN
     ),
     linked=PROFILES["desktop"].linked,
     cold_source_packed=PROFILES["desktop"].cold_source_packed,
+    smoke_max_steps=PROFILES["desktop"].smoke_max_steps,
+    smoke_timeout=PROFILES["desktop"].smoke_timeout,
     include_large_sample=False,
     total_sectors=PROFILES["desktop"].total_sectors,
 )
@@ -21213,6 +21221,8 @@ PROFILES["desktop-local-applet"] = Profile(
     stable_markers=PROFILES["desktop"].stable_markers,
     linked=PROFILES["desktop"].linked,
     cold_source_packed=PROFILES["desktop"].cold_source_packed,
+    smoke_max_steps=PROFILES["desktop"].smoke_max_steps,
+    smoke_timeout=PROFILES["desktop"].smoke_timeout,
     initial_files=(
         (
             "hello.toml",
@@ -21236,6 +21246,8 @@ PROFILES["desktop-recovery"] = Profile(
     stable_markers=("[Practice: recovery]",),
     linked=True,
     cold_source_packed=PROFILES["desktop"].cold_source_packed,
+    smoke_max_steps=PROFILES["desktop"].smoke_max_steps,
+    smoke_timeout=PROFILES["desktop"].smoke_timeout,
     initial_files=(
         ("practice-head-a.bin", b"corrupt-a"),
         ("practice-head-b.bin", b"corrupt-b"),
@@ -21253,6 +21265,8 @@ PROFILES["desktop-fallback"] = Profile(
     stable_markers=PROFILES["desktop"].stable_markers + ("[Practice: fallback]",),
     linked=True,
     cold_source_packed=PROFILES["desktop"].cold_source_packed,
+    smoke_max_steps=PROFILES["desktop"].smoke_max_steps,
+    smoke_timeout=PROFILES["desktop"].smoke_timeout,
     initial_files=(
         ("practice-head-a.bin", _practice_head_snapshot(1)),
         ("practice-head-b.bin", b"corrupt-newest"),
@@ -21282,6 +21296,8 @@ PROFILES["desktop-codex"] = Profile(
     stable_markers=PROFILES["desktop"].stable_markers,
     linked=True,
     cold_source_packed=PROFILES["desktop"].cold_source_packed,
+    smoke_max_steps=PROFILES["desktop"].smoke_max_steps,
+    smoke_timeout=PROFILES["desktop"].smoke_timeout,
     total_sectors=PROFILES["desktop"].total_sectors,
 )
 PROFILES["desktop-codex-live"] = Profile(
@@ -21300,6 +21316,8 @@ PROFILES["desktop-codex-live"] = Profile(
     stable_markers=PROFILES["desktop-codex"].stable_markers,
     linked=True,
     cold_source_packed=PROFILES["desktop-codex"].cold_source_packed,
+    smoke_max_steps=PROFILES["desktop-codex"].smoke_max_steps,
+    smoke_timeout=PROFILES["desktop-codex"].smoke_timeout,
     requires_tap=True,
     total_sectors=PROFILES["desktop-codex"].total_sectors,
 )
@@ -31080,10 +31098,10 @@ def _parser() -> argparse.ArgumentParser:
             )
         if name == "smoke":
             command.add_argument(
-                "--max-steps", type=int, default=DEFAULT_SMOKE_MAX_STEPS
+                "--max-steps", type=int
             )
             command.add_argument(
-                "--timeout", type=float, default=DEFAULT_SMOKE_TIMEOUT
+                "--timeout", type=float
             )
         if name == "serve":
             command.add_argument("--socket", default="/tmp/akashic-tui.sock")
@@ -31096,6 +31114,22 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _smoke_limits(
+    profile_name: str,
+    max_steps: int | None,
+    timeout: float | None,
+) -> tuple[int, float]:
+    profile = PROFILES[profile_name]
+    return (
+        max_steps
+        if max_steps is not None
+        else profile.smoke_max_steps or DEFAULT_SMOKE_MAX_STEPS,
+        timeout
+        if timeout is not None
+        else profile.smoke_timeout or DEFAULT_SMOKE_TIMEOUT,
+    )
+
+
 def main() -> int:
     args = _parser().parse_args()
     image_path = build_image(
@@ -31104,13 +31138,16 @@ def main() -> int:
     if args.command == "build":
         return 0
     if args.command == "smoke":
+        max_steps, timeout = _smoke_limits(
+            args.profile, args.max_steps, args.timeout
+        )
         return 0 if smoke(
             args.profile,
             image_path,
             cols=args.cols,
             rows=args.rows,
-            max_steps=args.max_steps,
-            timeout=args.timeout,
+            max_steps=max_steps,
+            timeout=timeout,
             ext_mem_mib=args.ext_mem_mib,
             nic_tap=args.nic_tap,
         ) else 1

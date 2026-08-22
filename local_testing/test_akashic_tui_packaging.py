@@ -49,6 +49,7 @@ from akashic_tui import (  # noqa: E402
     _pack_cold_source,
     _packed_linked_chunks,
     _parser,
+    _smoke_limits,
     _requires_megapad_networking,
     _unpack_cold_source,
     _validate_image_paths,
@@ -1189,8 +1190,28 @@ def test_ext4_binding_has_a_bounded_headless_dependency_closure() -> None:
 
 def test_supported_desktop_smoke_defaults_cover_linked_network_boot() -> None:
     args = _parser().parse_args(["smoke", "--profile", "desktop"])
-    assert args.max_steps == DEFAULT_SMOKE_MAX_STEPS == 9_000_000_000
-    assert args.timeout == DEFAULT_SMOKE_TIMEOUT == 120.0
+    assert args.max_steps is None
+    assert args.timeout is None
+    assert _smoke_limits(args.profile, args.max_steps, args.timeout) == (
+        15_000_000_000,
+        420.0,
+    )
+    assert DEFAULT_SMOKE_MAX_STEPS == 9_000_000_000
+    assert DEFAULT_SMOKE_TIMEOUT == 120.0
+    explicit = _parser().parse_args(
+        [
+            "smoke",
+            "--profile",
+            "desktop",
+            "--max-steps",
+            "123",
+            "--timeout",
+            "4.5",
+        ]
+    )
+    assert _smoke_limits(
+        explicit.profile, explicit.max_steps, explicit.timeout
+    ) == (123, 4.5)
 
 
 def test_live_streams_pump_does_not_idle_between_connector_steps() -> None:

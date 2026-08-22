@@ -50,3 +50,10 @@ def test_build_into_uses_checked_range_geometry_with_typed_failures() -> None:
     assert body.index(capacity_check) < body.index(destination_check)
     assert body.index(destination_check) < body.index(live_check)
     assert body.index(live_check) < body.index(overlap_check)
+
+
+def test_loaded_provided_identity_uses_public_exact_span_registration() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    body = _word_body(source, "_IMG-REGISTER-PROVIDED")
+    assert "NAMEBUF _img-request-len @ PROVIDED-SPAN" in body
+    assert "_MOD-MARK" not in source

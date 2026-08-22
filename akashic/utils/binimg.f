@@ -936,8 +936,8 @@ VARIABLE _img-load-entry
     NAMEBUF 24 0 FILL
     _img-load-base @ _imv-prov @ + DUP
     _imv-seg @ _imv-prov @ - 23 MIN _IMG-STRLEN
-    NAMEBUF SWAP CMOVE
-    _MOD-MARK ;
+    DUP _img-request-len ! NAMEBUF SWAP CMOVE
+    NAMEBUF _img-request-len @ PROVIDED-SPAN ;
 
 : _IMG-LOAD-VERIFIED  ( -- base ior )
     _imv-flags @ _IMG-FLAG-XMEM AND IF

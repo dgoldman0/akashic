@@ -54,7 +54,7 @@ Calling `IMG-MARK` again without first calling `IMG-DISCARD` preserves the histo
 
 `IMG-ENTRY-NAMED` performs the same exact registration and also makes that export the default executable entry. Version-2 executable entries must be named exports. `IMG-ENTRY` is a compatibility form that derives the word's dictionary name and latches any error rather than returning it.
 
-`IMG-PROVIDED` copies a parsed 1--23 byte token into the segment and records it for `_MOD-MARK` registration after loading. `IMG-XMEM` requests extended-memory allocation at load time. Both words, and compatibility `IMG-ENTRY`, have no status result; misuse is latched into build state and surfaces from a later sizing, build, or save operation.
+`IMG-PROVIDED` copies a parsed 1--23 byte token into the segment and records it for exact `PROVIDED-SPAN` registration after loading. `IMG-XMEM` requests extended-memory allocation at load time. Both words, and compatibility `IMG-ENTRY`, have no status result; misuse is latched into build state and surfaces from a later sizing, build, or save operation.
 
 The first build error is sticky. Once an operation latches an error, subsequent preparation reports it until `IMG-DISCARD` or a new `IMG-MARK` resets the state.
 

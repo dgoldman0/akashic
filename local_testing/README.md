@@ -143,14 +143,15 @@ python3 local_testing/akashic_tui.py smoke --profile desktop
 Smoke and served sessions use 128 MiB of emulated external memory by default.
 This leaves realistic headroom for the userland dictionary and applet working
 sets as the Desk image grows; pass `--ext-mem-mib N` to test another budget.
-The default smoke gate permits 9 billion guest steps and 120 seconds so the
-complete linked Desktop can compile its canonical loadable networking and
-scoped VFS-access modules and still reach its ready markers. This guest-step
-ceiling is emulator qualification headroom, not a product capacity or
-scalability parameter. The exact no-override command passed at 8.41 billion
-guest steps in 101.27 seconds on 2026-07-21. Focused profiles stop as soon as
-their own markers stabilize; `--max-steps` and `--timeout` remain available
-for explicit qualification budgets.
+Focused smoke profiles retain the general 9-billion-step/120-second watchdog.
+The checked-cold-source complete Desktop has its own measured
+15-billion-step/420-second gate so it can compile canonical networking and
+scoped VFS-access modules and finish the supported interaction journey. These
+ceilings are emulator qualification headroom, not product capacity or
+scalability parameters. Against the paired integration tree, the exact
+no-override Desktop workload measured 13.207 billion guest steps in 331.77
+seconds on 2026-08-22. `--max-steps` and `--timeout` remain available for
+explicit qualification budgets and override the profile defaults exactly.
 
 ## Ext4 compatibility profile
 
