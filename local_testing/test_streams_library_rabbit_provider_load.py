@@ -61,20 +61,31 @@ VARIABLE _slrp-slab-a
 VARIABLE _slrp-slab-u
 VARIABLE _slrp-slab-status
 VARIABLE _slrp-init-status
+VARIABLE _slrp-preflight-status
+VARIABLE _slrp-preflight-detail
+VARIABLE _slrp-preflight-depth
 VARIABLE _slrp-slab-fails
 VARIABLE _slrp-caller
 VARIABLE _slrp-target
 CREATE _slrp-storage-raw SLRGP-STORAGE-SIZE 7 + ALLOT
 CREATE _slrp-context-raw SLRGP-SIZE 7 + ALLOT
+CREATE _slrp-spec-raw SRBPROV-GRAPH-SPEC-SIZE 7 + ALLOT
 CREATE _slrp-caller-desc-raw COMP-DESC 7 + ALLOT
 CREATE _slrp-target-desc-raw COMP-DESC 7 + ALLOT
 CREATE _slrp-facet RID-SIZE ALLOT
 CREATE _slrp-practice RID-SIZE ALLOT
 : _slrp-storage  ( -- storage ) _slrp-storage-raw 7 + -8 AND ;
 : _slrp-context  ( -- context ) _slrp-context-raw 7 + -8 AND ;
+: _slrp-spec  ( -- spec ) _slrp-spec-raw 7 + -8 AND ;
 : _slrp-caller-desc  ( -- desc ) _slrp-caller-desc-raw 7 + -8 AND ;
 : _slrp-target-desc  ( -- desc ) _slrp-target-desc-raw 7 + -8 AND ;
 : _slrp-auth  ( -- decision ) 0 ;
+: _slrp-spec-init  ( -- )
+    _slrp-spec SRBPROV-GRAPH-SPEC-INIT
+    1 _slrp-spec SRBPROV-SPEC.COLLECTION !
+    1 _slrp-spec SRBPROV-SPEC.COLLECTION-REVISION !
+    1 _slrp-spec SRBPROV-SPEC.REQUEST-DIGEST !
+    1 _slrp-spec SRBPROV-SPEC.PEER-CAPACITY ! ;
 : _slrp-slab-assert  ( flag -- )
     0= IF 1 _slrp-slab-fails +! THEN ;
 : _slrp-slab-test  ( -- )
@@ -108,6 +119,14 @@ CREATE _slrp-practice RID-SIZE ALLOT
     DUP _slrp-init-status ! SRBPROV-S-NONE =
     DUP _slrp-slab-assert IF
         _slrp-context SLRGP-VALID? _slrp-slab-assert
+        _slrp-spec-init
+        _slrp-spec SRBPROV-GRAPH-SPEC-VALID? _slrp-slab-assert
+        DEPTH _slrp-preflight-depth !
+        _slrp-spec _slrp-context _SLRGBLD-PREFLIGHT
+        _slrp-preflight-detail ! _slrp-preflight-status !
+        _slrp-preflight-status @ SRBPROV-S-NONE = _slrp-slab-assert
+        _slrp-preflight-detail @ SRBPROV-D-NONE = _slrp-slab-assert
+        DEPTH _slrp-preflight-depth @ = _slrp-slab-assert
         _slrp-context SLRGP-FINI SRBPROV-S-NONE = _slrp-slab-assert
     THEN
     _slrp-storage SLRGP-STORAGE-FINI
@@ -119,11 +138,15 @@ CREATE _slrp-practice RID-SIZE ALLOT
     DEPTH _slrp-depth @ = _slrp-slab-assert ;
 : _slrp-slab-run  ( -- )
     0 _slrp-slab-fails ! 0 _slrp-slab-status ! 0 _slrp-init-status !
+    0 _slrp-preflight-status ! 0 _slrp-preflight-detail !
     0 _slrp-caller ! 0 _slrp-target !
     _slrp-slab-test
     ." STREAMS LIBRARY RABBIT PROVIDER SLAB status="
         _slrp-slab-status @ . ." fails=" _slrp-slab-fails @ .
-        ." init=" _slrp-init-status @ . ." depth=" DEPTH . CR TX-FLUSH
+        ." init=" _slrp-init-status @ .
+        ." preflight=" _slrp-preflight-status @ .
+        ." detail=" _slrp-preflight-detail @ .
+        ." depth=" DEPTH . CR TX-FLUSH
     _slrp-slab-fails @ 0= IF
         ." STREAMS LIBRARY RABBIT PROVIDER LOAD PASS"
     ELSE
@@ -210,6 +233,12 @@ def _assert_static_contracts() -> None:
     assert queue_binder.count("_SLRSL-QUEUE @") == 3
     assert "DUP 1 <> IF" not in acquire_preflight
     assert "1 <> IF" in acquire_preflight
+    assert (
+        "_SLRGBLD-PEERS @\n"
+        "    _SLRGBLD-STORAGE @ SLRGS.BURROW-ROWS SLRGB.U @ U>"
+    ) in acquire_preflight
+    assert "_SLRGBLD-PREFLIGHT" in AUTOEXEC
+    assert "DEPTH _slrp-preflight-depth @ = _slrp-slab-assert" in AUTOEXEC
     assert "STREAMS-RABBIT-CONNECTOR-S-OK = AND NIP" in lease_validator
     assert tuple(
         line.removeprefix("REQUIRE ")
