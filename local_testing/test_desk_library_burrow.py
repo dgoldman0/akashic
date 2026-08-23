@@ -312,6 +312,12 @@ def _assert_static_contracts() -> None:
     assert AGENT_PASS_MARKER in fixture
     assert OUTER_QUIT_MARKER in fixture
     assert PASS_MARKER in fixture
+    assert ": _C4-DEFER!" in fixture_code
+    assert "( action-xt defer-xt -- ) >BODY !" in " ".join(
+        fixture_code.split()
+    )
+    assert "['] _C4-DEFAULT-GRAPH-CONFIGURE IS" not in fixture_code
+    assert fixture_code.count("_C4-DEFER!") == 11
 
     candidates = _candidates(catalog)
     assert len(candidates) == 23
