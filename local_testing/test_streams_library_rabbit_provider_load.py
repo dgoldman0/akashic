@@ -51,12 +51,51 @@ VARIABLE _slrp-depth-ok
         ." throw=" EVAL-THROW @ . ." token=" EVAL-TOKEN TYPE
         CR TX-FLUSH
     _slrp-status @ 0= STATE @ 0= AND _slrp-depth-ok @ AND IF
-        ." STREAMS LIBRARY RABBIT PROVIDER LOAD PASS"
+        ." STREAMS LIBRARY RABBIT PROVIDER SOURCE PASS"
     ELSE
         ." STREAMS LIBRARY RABBIT PROVIDER LOAD FAIL"
     THEN
     CR ." STREAMS LIBRARY RABBIT PROVIDER LOAD DONE" CR TX-FLUSH ;
 _slrp-load
+VARIABLE _slrp-slab-a
+VARIABLE _slrp-slab-u
+VARIABLE _slrp-slab-status
+VARIABLE _slrp-slab-fails
+CREATE _slrp-storage-raw SLRGP-STORAGE-SIZE 7 + ALLOT
+: _slrp-storage  ( -- storage ) _slrp-storage-raw 7 + -8 AND ;
+: _slrp-slab-assert  ( flag -- )
+    0= IF 1 _slrp-slab-fails +! THEN ;
+: _slrp-slab-test  ( -- )
+    DEPTH _slrp-depth !
+    _slrp-storage SLRGP-STORAGE-INIT
+    1 1 1 1 1 SLRGP-GRAPH-SLAB-BYTES
+    DUP 0> DUP _slrp-slab-assert 0= IF DROP EXIT THEN
+    DUP _slrp-slab-u ! ALLOCATE DUP IF
+        2DROP 1 _slrp-slab-fails +! EXIT
+    THEN
+    DROP DUP _slrp-slab-a ! _slrp-slab-u @ 0 FILL
+    _slrp-slab-a @ _slrp-slab-u @ 1 1 1 1 1 _slrp-storage
+        SLRGP-STORAGE-BIND-SLAB
+    DUP _slrp-slab-status ! SRBPROV-S-NONE = _slrp-slab-assert
+    _slrp-storage SLRGP-STORAGE-BOUND? _slrp-slab-assert
+    _slrp-storage SLRGP-GRAPH-BASELINE? _slrp-slab-assert
+    _slrp-storage SLRGP-STORAGE-INIT
+    _slrp-slab-a @ FREE
+    0 _slrp-slab-a ! 0 _slrp-slab-u !
+    DEPTH _slrp-depth @ = _slrp-slab-assert ;
+: _slrp-slab-run  ( -- )
+    0 _slrp-slab-fails ! 0 _slrp-slab-status !
+    _slrp-slab-test
+    ." STREAMS LIBRARY RABBIT PROVIDER SLAB status="
+        _slrp-slab-status @ . ." fails=" _slrp-slab-fails @ .
+        ." depth=" DEPTH . CR TX-FLUSH
+    _slrp-slab-fails @ 0= IF
+        ." STREAMS LIBRARY RABBIT PROVIDER LOAD PASS"
+    ELSE
+        ." STREAMS LIBRARY RABBIT PROVIDER SLAB FAIL"
+    THEN
+    CR ." STREAMS LIBRARY RABBIT PROVIDER SLAB DONE" CR TX-FLUSH ;
+_slrp-slab-run
 """
 
 
@@ -98,6 +137,16 @@ def _assert_static_contracts() -> None:
     deployed_provider = dict(capstone.cold_source_initial_files)[
         "c5-slrabbit.f.lz"
     ]
+    provider_source = PROVIDER.read_text(encoding="utf-8")
+    queue_planner = provider_source.split(": _SLRSL-ADD-QUEUE", 1)[1].split(
+        ";", 1
+    )[0]
+    queue_binder = provider_source.split(": _SLRSL-BIND-QUEUE", 1)[1].split(
+        ";", 1
+    )[0]
+    acquire_preflight = provider_source.split(
+        ": _SLRGBLD-PREFLIGHT", 1
+    )[1].split(";", 1)[0]
 
     assert profile.roots == ROOTS
     assert profile.linked is True
@@ -112,6 +161,14 @@ def _assert_static_contracts() -> None:
     assert "SOURCE-EVALUATE-CHECKED" in AUTOEXEC
     assert "returned-status=" in AUTOEXEC
     assert "EVAL-TOKEN TYPE" in AUTOEXEC
+    assert "SLRGP-GRAPH-SLAB-BYTES" in AUTOEXEC
+    assert "SLRGP-STORAGE-BIND-SLAB" in AUTOEXEC
+    assert "DUP _SLRSL-WIRE !" not in queue_planner
+    assert "_SLRSL-WIRE !" in queue_planner
+    assert "_SLRSL-QUEUE ! _SLRSL-WIRE !" in queue_binder
+    assert queue_binder.count("_SLRSL-QUEUE @") == 3
+    assert "DUP 1 <> IF" not in acquire_preflight
+    assert "1 <> IF" in acquire_preflight
     assert tuple(
         line.removeprefix("REQUIRE ")
         for line in AUTOEXEC.splitlines()
