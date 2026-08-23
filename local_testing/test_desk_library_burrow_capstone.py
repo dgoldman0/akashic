@@ -126,6 +126,10 @@ def _assert_static_contracts() -> None:
     assert fixture.count("IVJSON-DECODE-AS-LIMIT 0=") == 2
     assert "['] _C5-GRAPH-CONFIGURE IS" not in fixture
     assert fixture.count("_C4-DEFER!") == 10
+    assert (
+        "_C4-LIBRARY-DESC APP.COMP-DESC @\n"
+        "        _DESK-REGISTRY @ CREG-INST-BY-DESC"
+    ) in fixture
     assert profile.autoexec.count("_BOOT-COLD-SOURCE c5-") == 4
     load_positions = tuple(profile.autoexec.index(marker) for marker in LOAD_MARKERS)
     assert load_positions == tuple(sorted(load_positions))
