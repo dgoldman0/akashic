@@ -12,27 +12,24 @@ LOCAL_TESTING = Path(__file__).resolve().parent
 
 PROFILE_NAME = "tls-port-staged"
 IMAGE = Path("/tmp/akashic-tls-port-staged.img")
-PASS_MARKER = "TLS PORT PASS"
 PHASE_MAX_STEPS = 180_000_000
 NETWORKING_CHUNK_BYTES = 48 * 1024
 
 LOAD_STAGES = (
     ("networking", "TLS PORT NETWORKING READY"),
     ("transport", "TLS PORT TRANSPORT READY"),
-    ("string", "TLS PORT STRING READY"),
     ("fixture", "TLS PORT FIXTURE READY"),
 )
 RUN_BREAKS = (
-    ("_mt-test-config", "configuration", "TLS PORT CONFIG READY"),
-    ("_mt-test-prep-failures2", "preparation", "TLS PORT PREP READY"),
-    ("_mt-test-graceful-close", "io", "TLS PORT IO READY"),
-    ("_mt-test-close-fallbacks", "close", "TLS PORT CLOSE READY"),
-    ("_mt-test-tcb-reuse-guard", "guards", "TLS PORT GUARDS READY"),
+    ("_ko-test-config", "configuration", "TLS PORT CONFIG READY"),
+    ("_ko-test-start-terminals", "terminals", "TLS PORT TERMINALS READY"),
+    ("_ko-test-open-shared", "shared-open", "TLS PORT SHARED OPEN READY"),
     (
-        "_mt-test-shared-network-owner",
-        "shared-owner",
-        "TLS PORT SHARED OWNER READY",
+        "_ko-test-publication-throws",
+        "publication",
+        "TLS PORT PUBLICATION READY",
     ),
+    ("_ko-test-default-prefix", "default-prefix", "TLS PORT PREFIX READY"),
 )
 
 
@@ -42,52 +39,100 @@ def _stage_line(marker: str, *, indent: str = "") -> str:
 
 def _staged_autoexec(harness: object) -> str:
     base = harness.PROFILES["tls-port"].autoexec
-    fixture_start = base.index("VARIABLE _mt-fails")
-    invocation = "\n_mt-run\n"
+    userland_entry = "ENTER-USERLAND\n"
+    assert base.count(userland_entry) == 1
+    base = base.replace(
+        userland_entry,
+        "".join(
+            (
+                userland_entry,
+                (
+                    'DEPTH IF ." TLS PORT LOAD STACK FAIL networking" '
+                    "CR TX-FLUSH THEN\n"
+                ),
+                _stage_line(LOAD_STAGES[0][1]),
+            )
+        ),
+        1,
+    )
+
+    transport_load = "REQUIRE net/transports/kdos-tls.f\n"
+    assert base.count(transport_load) == 1
+    base = base.replace(
+        transport_load,
+        "".join(
+            (
+                transport_load,
+                (
+                    'DEPTH IF ." TLS PORT LOAD STACK FAIL transport" '
+                    "CR TX-FLUSH THEN\n"
+                ),
+                _stage_line(LOAD_STAGES[1][1]),
+            )
+        ),
+        1,
+    )
+
+    invocation = "\n_ko-run\n"
     assert base.count(invocation) == 1
-    fixture_end = base.index(invocation)
-    fixture = base[fixture_start:fixture_end]
 
     for word, _, marker in RUN_BREAKS:
         call = f"    {word}\n"
-        assert fixture.count(call) == 1, f"ambiguous TLS fixture call: {word}"
-        fixture = fixture.replace(
+        assert base.count(call) == 1, f"ambiguous TLS fixture call: {word}"
+        base = base.replace(
             call,
             call + _stage_line(marker, indent="    "),
             1,
         )
 
-    return "".join(
-        (
-            "\\ autoexec.f - staged KDOS TLS port contracts\n",
-            "ENTER-USERLAND\n",
+    return base.replace(
+        invocation,
+        "".join(
             (
-                'DEPTH IF ." TLS PORT LOAD STACK FAIL networking" '
-                "CR TX-FLUSH THEN\n"
-            ),
-            _stage_line(LOAD_STAGES[0][1]),
-            "REQUIRE net/transports/kdos-tls.f\n",
-            (
-                'DEPTH IF ." TLS PORT LOAD STACK FAIL transport" '
-                "CR TX-FLUSH THEN\n"
-            ),
-            _stage_line(LOAD_STAGES[1][1]),
-            "REQUIRE utils/string.f\n",
-            (
-                'DEPTH IF ." TLS PORT LOAD STACK FAIL string" '
-                "CR TX-FLUSH THEN\n"
-            ),
-            _stage_line(LOAD_STAGES[2][1]),
-            fixture,
-            (
-                'DEPTH IF ." TLS PORT LOAD STACK FAIL fixture" '
-                "CR TX-FLUSH THEN\n"
-            ),
-            _stage_line(LOAD_STAGES[3][1]),
-            "_mt-run\n",
-            "TX-FLUSH\n",
-        )
+                (
+                    '\nDEPTH IF ." TLS PORT LOAD STACK FAIL fixture" '
+                    "CR TX-FLUSH THEN\n"
+                ),
+                _stage_line(LOAD_STAGES[2][1]),
+                invocation,
+                "TX-FLUSH\n",
+            )
+        ),
+        1,
     )
+
+
+def _load_harness() -> object:
+    local_testing = str(LOCAL_TESTING)
+    if local_testing not in sys.path:
+        sys.path.insert(0, local_testing)
+    import akashic_tui as harness
+
+    return harness
+
+
+def test_staged_autoexec_tracks_outbound_profile() -> None:
+    """The staged runner must preserve the current outbound fixture."""
+    harness = _load_harness()
+    base = harness.PROFILES["tls-port"]
+    staged = _staged_autoexec(harness)
+    deployed = harness._with_megapad_networking(staged)
+
+    networking_load = deployed.index("REQUIRE networking.f")
+    networking_ready = deployed.index(LOAD_STAGES[0][1])
+    handshake_interpose = deployed.index(
+        "' TLS-HANDSHAKE-PUBLISH CONSTANT _ko-real-handshake-publish"
+    )
+    transport_load = deployed.index("REQUIRE net/transports/kdos-tls.f")
+    assert networking_load < networking_ready
+    assert networking_ready < handshake_interpose < transport_load
+    for _, marker in LOAD_STAGES:
+        assert deployed.count(marker) == 1
+    for word, _, marker in RUN_BREAKS:
+        assert deployed.count(f"    {word}\n") == 1
+        assert deployed.count(marker) == 1
+    for marker in (*base.ready_markers, *base.failure_markers):
+        assert marker in deployed
 
 
 def _networking_chunks(harness: object, source: str) -> tuple[bytes, ...]:
@@ -218,18 +263,19 @@ def _run_stage(
 
 
 def _run_lifecycle(timeout: float) -> int:
-    sys.path.insert(0, str(LOCAL_TESTING))
-    import akashic_tui as harness
+    harness = _load_harness()
 
     base = harness.PROFILES["tls-port"]
+    assert len(base.ready_markers) == 1
+    pass_marker = base.ready_markers[0]
     harness.PROFILES[PROFILE_NAME] = harness.Profile(
         roots=base.roots,
         resources=base.resources,
         autoexec=_staged_autoexec(harness),
-        ready_markers=(PASS_MARKER,),
-        stable_markers=(PASS_MARKER,),
+        ready_markers=base.ready_markers,
+        stable_markers=base.stable_markers,
         failure_markers=(
-            "TLS PORT FAIL",
+            *base.failure_markers,
             "TLS PORT LOAD STACK FAIL",
             "ASSERT ",
             "STACK ",
@@ -300,7 +346,7 @@ def _run_lifecycle(timeout: float) -> int:
             profile,
             machine,
             "finish",
-            PASS_MARKER,
+            pass_marker,
             timeout,
         )
         reports.append(("finish", report))
