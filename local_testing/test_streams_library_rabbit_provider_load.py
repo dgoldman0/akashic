@@ -60,9 +60,21 @@ _slrp-load
 VARIABLE _slrp-slab-a
 VARIABLE _slrp-slab-u
 VARIABLE _slrp-slab-status
+VARIABLE _slrp-init-status
 VARIABLE _slrp-slab-fails
+VARIABLE _slrp-caller
+VARIABLE _slrp-target
 CREATE _slrp-storage-raw SLRGP-STORAGE-SIZE 7 + ALLOT
+CREATE _slrp-context-raw SLRGP-SIZE 7 + ALLOT
+CREATE _slrp-caller-desc-raw COMP-DESC 7 + ALLOT
+CREATE _slrp-target-desc-raw COMP-DESC 7 + ALLOT
+CREATE _slrp-facet RID-SIZE ALLOT
+CREATE _slrp-practice RID-SIZE ALLOT
 : _slrp-storage  ( -- storage ) _slrp-storage-raw 7 + -8 AND ;
+: _slrp-context  ( -- context ) _slrp-context-raw 7 + -8 AND ;
+: _slrp-caller-desc  ( -- desc ) _slrp-caller-desc-raw 7 + -8 AND ;
+: _slrp-target-desc  ( -- desc ) _slrp-target-desc-raw 7 + -8 AND ;
+: _slrp-auth  ( -- decision ) 0 ;
 : _slrp-slab-assert  ( flag -- )
     0= IF 1 _slrp-slab-fails +! THEN ;
 : _slrp-slab-test  ( -- )
@@ -79,16 +91,39 @@ CREATE _slrp-storage-raw SLRGP-STORAGE-SIZE 7 + ALLOT
     DUP _slrp-slab-status ! SRBPROV-S-NONE = _slrp-slab-assert
     _slrp-storage SLRGP-STORAGE-BOUND? _slrp-slab-assert
     _slrp-storage SLRGP-GRAPH-BASELINE? _slrp-slab-assert
-    _slrp-storage SLRGP-STORAGE-INIT
+
+    _slrp-caller-desc COMP-DESC-INIT
+    _slrp-target-desc COMP-DESC-INIT
+    _slrp-caller-desc CINST-NEW DUP 0= _slrp-slab-assert
+    DUP IF 2DROP EXIT THEN DROP _slrp-caller !
+    _slrp-target-desc CINST-NEW DUP 0= _slrp-slab-assert
+    DUP IF 2DROP _slrp-caller @ CINST-FREE 0 _slrp-caller ! EXIT THEN
+    DROP _slrp-target !
+    _slrp-facet RID-SIZE 0 FILL 1 _slrp-facet !
+    _slrp-practice RID-SIZE 0 FILL 1 _slrp-practice !
+    _slrp-context SLRGP-SIZE 0 FILL
+    _slrp-storage _slrp-caller @ _slrp-target @ 1 2 3
+    _slrp-facet _slrp-practice 1 1 1 ['] _slrp-auth _slrp-context
+    4 5 6 _slrp-context SLRGP-INIT
+    DUP _slrp-init-status ! SRBPROV-S-NONE =
+    DUP _slrp-slab-assert IF
+        _slrp-context SLRGP-VALID? _slrp-slab-assert
+        _slrp-context SLRGP-FINI SRBPROV-S-NONE = _slrp-slab-assert
+    THEN
+    _slrp-storage SLRGP-STORAGE-FINI
+        SRBPROV-S-NONE = _slrp-slab-assert
+    _slrp-target @ CINST-FREE 0 _slrp-target !
+    _slrp-caller @ CINST-FREE 0 _slrp-caller !
     _slrp-slab-a @ FREE
     0 _slrp-slab-a ! 0 _slrp-slab-u !
     DEPTH _slrp-depth @ = _slrp-slab-assert ;
 : _slrp-slab-run  ( -- )
-    0 _slrp-slab-fails ! 0 _slrp-slab-status !
+    0 _slrp-slab-fails ! 0 _slrp-slab-status ! 0 _slrp-init-status !
+    0 _slrp-caller ! 0 _slrp-target !
     _slrp-slab-test
     ." STREAMS LIBRARY RABBIT PROVIDER SLAB status="
         _slrp-slab-status @ . ." fails=" _slrp-slab-fails @ .
-        ." depth=" DEPTH . CR TX-FLUSH
+        ." init=" _slrp-init-status @ . ." depth=" DEPTH . CR TX-FLUSH
     _slrp-slab-fails @ 0= IF
         ." STREAMS LIBRARY RABBIT PROVIDER LOAD PASS"
     ELSE
@@ -147,6 +182,9 @@ def _assert_static_contracts() -> None:
     acquire_preflight = provider_source.split(
         ": _SLRGBLD-PREFLIGHT", 1
     )[1].split(";", 1)[0]
+    lease_validator = provider_source.split(
+        ": _SLRGP-LEASE-STATIC?", 1
+    )[1].split(";", 1)[0]
 
     assert profile.roots == ROOTS
     assert profile.linked is True
@@ -163,12 +201,16 @@ def _assert_static_contracts() -> None:
     assert "EVAL-TOKEN TYPE" in AUTOEXEC
     assert "SLRGP-GRAPH-SLAB-BYTES" in AUTOEXEC
     assert "SLRGP-STORAGE-BIND-SLAB" in AUTOEXEC
+    assert "SLRGP-INIT" in AUTOEXEC
+    assert "SLRGP-FINI" in AUTOEXEC
+    assert "SLRGP-STORAGE-FINI" in AUTOEXEC
     assert "DUP _SLRSL-WIRE !" not in queue_planner
     assert "_SLRSL-WIRE !" in queue_planner
     assert "_SLRSL-QUEUE ! _SLRSL-WIRE !" in queue_binder
     assert queue_binder.count("_SLRSL-QUEUE @") == 3
     assert "DUP 1 <> IF" not in acquire_preflight
     assert "1 <> IF" in acquire_preflight
+    assert "STREAMS-RABBIT-CONNECTOR-S-OK = AND NIP" in lease_validator
     assert tuple(
         line.removeprefix("REQUIRE ")
         for line in AUTOEXEC.splitlines()
