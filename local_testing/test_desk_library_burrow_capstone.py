@@ -126,6 +126,11 @@ def _assert_static_contracts() -> None:
     assert fixture.count("IVJSON-DECODE-AS-LIMIT 0=") == 2
     assert "['] _C5-GRAPH-CONFIGURE IS" not in fixture
     assert fixture.count("_C4-DEFER!") == 10
+    assert fixture.count("_C5-CAPTURE-START ?DUP") == 1
+    assert "_C5-CAPTURE-RUNNING-REPLAY ?DUP" in fixture
+    assert (
+        "_C5-START-ARG-REVISION @ 2 + = _C4-ASSERT"
+    ) in fixture
     assert (
         "_C4-LIBRARY-DESC APP.COMP-DESC @\n"
         "        _DESK-REGISTRY @ CREG-INST-BY-DESC"

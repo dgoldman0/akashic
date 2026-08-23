@@ -204,6 +204,11 @@ def _assert_static_contracts() -> None:
 
     for _, word, _ in CONTRACT_STAGES:
         assert f": {word}" in fixture
+    lifecycle = _word_body(fixture, "_SBC-PHASE-LIFECYCLE-STATUS")
+    assert lifecycle.count("_SBC-INV-START _SBC-INVOCATION!") == 3
+    assert lifecycle.count("_SBC-START-RECEIPT _SBC-RECEIPT=") == 2
+    assert 'S" peer_count" _SBC-RESULT-INT 0= _SBC-ASSERT' in lifecycle
+    assert "SRBMGR.REPLAY-COUNT @ 2 = _SBC-ASSERT" in lifecycle
     for symbol in (
         "STREAMS-BURROW-CREATE-REQUEST-SEMANTIC-PLAIN-MAX",
         "STREAMS-BURROW-CREATE-REQUEST-SCHEMA-TYPED-MAX",

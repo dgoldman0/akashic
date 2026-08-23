@@ -55,6 +55,22 @@ CREATE _C5-CONTENT-DIGEST SHA3-256-HEX-LEN ALLOT
     _C4-CAPTURE-RESULT
     _C4-FAILS @ _C5-RESULT-FAILS @ <> IF 91 ELSE 0 THEN ;
 
+: _C5-CAPTURE-RUNNING-REPLAY  ( -- ior )
+    \ Exact manager replay returns the current truthful public snapshot with
+    \ the historical operation receipt.  A human review can therefore let
+    \ STARTING advance to RUNNING before the duplicate invocation arrives.
+    _C4-FAILS @ _C5-RESULT-FAILS !
+    _C4-RESULT-VALUE @ DUP 0<> DUP _C4-ASSERT 0= IF DROP 91 EXIT THEN
+    CV-TYPE@ CV-T-MAP = DUP _C4-ASSERT 0= IF 91 EXIT THEN
+    S" burrow" _C4-TEMP-REF _C4-RESOURCE-FIELD _C4-ASSERT
+    _C4-TEMP-REF RREF.ID _C4-BURROW-REF RREF.ID RID= _C4-ASSERT
+    S" state" S" running" _C4-STRING-FIELD= _C4-ASSERT
+    S" domain_revision" _C4-INT-FIELD DUP
+        _C5-START-ARG-REVISION @ 2 + = _C4-ASSERT
+        _C4-BURROW-REVISION !
+    S" peer_count" _C4-INT-FIELD 1 = _C4-ASSERT
+    _C4-FAILS @ _C5-RESULT-FAILS @ <> IF 91 ELSE 0 THEN ;
+
 : _C5-RESULT-OVERRIDE  ( -- ior handled? )
     _C4-CALL @ 4 <> IF 0 0 EXIT THEN
     _C5-START-RESULTS @ 0= IF
@@ -84,9 +100,9 @@ CREATE _C5-CONTENT-DIGEST SHA3-256-HEX-LEN ALLOT
         94 -1 EXIT
     THEN
     _C4-BURROW-REVISION @ _C5-START-ARG-REVISION @ = _C4-ASSERT
-    _C5-CAPTURE-START ?DUP IF -1 EXIT THEN
+    _C5-CAPTURE-RUNNING-REPLAY ?DUP IF -1 EXIT THEN
     _C4-BURROW-REVISION @
-        _C5-START-ARG-REVISION @ 1+ = _C4-ASSERT
+        _C5-START-ARG-REVISION @ 2 + = _C4-ASSERT
     2 _C5-START-RESULTS !
     ." DESK LIBRARY RABBIT START NO EFFECT PASS" CR TX-FLUSH
     _C4-RESULT-ADVANCE -1 ;

@@ -723,6 +723,19 @@ VARIABLE _SBC-CALL-CAP
     _SBC-DECL SRBMGR-DECL.STATE @ SRBMGR-STATE-RUNNING = _SBC-ASSERT
     _SBC-DECL SRBMGR-DECL.DOMAIN-REVISION @ 3 = _SBC-ASSERT
 
+    \ The exact START invocation remains a replay after lifecycle progress.
+    \ Replay publishes the truthful RUNNING snapshot with the historical
+    \ receipt and does not mutate component, manager, row, or replay counts.
+    _SBC-BURROW 1 _SBC-MUTATE-ARGS
+    _SBC-INV-START _SBC-INVOCATION!
+    STREAMS-BURROW-CAP-START _SBC-CALL _SBC-EXPECT-NO-EFFECT
+    _SBC-START-RECEIPT _SBC-RECEIPT= _SBC-ASSERT
+    S" running" _SBC-CHECK-MUTATION-RESULT
+    S" domain_revision" _SBC-RESULT-INT 3 = _SBC-ASSERT
+    S" peer_count" _SBC-RESULT-INT 0= _SBC-ASSERT
+    _SBC-MANAGER SRBMGR.ROW-COUNT @ 1 = _SBC-ASSERT
+    _SBC-MANAGER SRBMGR.REPLAY-COUNT @ 2 = _SBC-ASSERT
+
     _SBC-BURROW _SBC-STATUS-ARGS
     _SBC-INV-CREATE-BAD _SBC-INVOCATION!
     STREAMS-BURROW-CAP-STATUS _SBC-CALL DUP CBUS-S-OK = _SBC-ASSERT
