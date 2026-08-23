@@ -66518,6 +66518,66 @@ def _run_staged_indexed_create_refusal(
     assert _sha256(backing) == expected_sha256
 
 
+@pytest.mark.parametrize(
+    ("mode_bit", "policy_refusal"),
+    ((0x0400, True), (0x0800, False)),
+    ids=("setgid-refuses", "setuid-reaches-capacity"),
+)
+def test_staged_namespace_parent_mode_policy_distinguishes_setgid_from_setuid(
+    extent_writer_activation_fixture: dict[str, object],
+    tmp_path: Path,
+    mode_bit: int,
+    policy_refusal: bool,
+) -> None:
+    """S_ISGID is gated while an otherwise identical S_ISUID parent is not."""
+    path = extent_writer_activation_fixture["image"]
+    source_patches = extent_writer_activation_fixture["source_patches"]
+    assert isinstance(path, Path)
+    assert isinstance(source_patches, tuple)
+
+    superblock, raw_parent, parent_offset = _ext4_inode_record(path, 27)
+    parent = bytearray(raw_parent)
+    old_mode = struct.unpack_from("<H", parent, 0)[0]
+    assert old_mode == 0x41ED
+    assert old_mode & 0x0C00 == 0
+    patched_mode = old_mode | mode_bit
+    struct.pack_into("<H", parent, 0, patched_mode)
+    parent_after = _inode_with_checksum(superblock, 27, parent)
+    assert parent_after == _inode_with_checksum(
+        superblock, 27, parent_after
+    )
+
+    if policy_refusal:
+        expected_ior_checks = (
+            "_IR-CREATE-IOR VFS-IOR-DOMAIN VFS-IOR-D-FORMAT =",
+            "_IR-CREATE-IOR VFS-IOR-REASON VFS-R-UNSUPPORTED =",
+            "_IR-CREATE-IOR VFS-IOR-FLAGS 0=",
+            (
+                "_IR-CREATE-IOR VFS-IOR-DETAIL "
+                "EXT4-D-WRITE-POLICY ="
+            ),
+        )
+        marker = "EXT4-INDEXED-CREATE-SETGID-REFUSAL"
+    else:
+        expected_ior_checks = ("_IR-CREATE-IOR VFS-E-NOSPC =",)
+        marker = "EXT4-INDEXED-CREATE-SETUID-CAPACITY"
+
+    _run_staged_indexed_create_refusal(
+        path=path,
+        source_patches=source_patches,
+        extra_patches=((parent_offset, parent_after),),
+        backing=tmp_path / f"indexed-create-mode-{patched_mode:04x}.img",
+        target_name="new.txt",
+        expected_ior_checks=expected_ior_checks,
+        before_baseline=(
+            "_IR-PARENT-VN VN.MODE @ CONSTANT _IR-PARENT-MODE",
+        ),
+        setup_checks=(f"_IR-PARENT-MODE 0x{patched_mode:04X} =",),
+        metadata_capacity=5,
+        marker=marker,
+    )
+
+
 def test_staged_vfs_indexed_root_growth_uses_sealed_plan_without_io(
     staged_public_indexed_root_growth_probe_prestate: dict[str, object],
 ) -> None:

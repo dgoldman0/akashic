@@ -26,9 +26,22 @@ import os, sys, time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
-if not os.path.isdir(EMU_DIR):
-    EMU_DIR = os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
+configured_megapad = os.environ.get("MEGAPAD_ROOT")
+if configured_megapad:
+    EMU_DIR = os.path.abspath(os.path.expanduser(configured_megapad))
+else:
+    EMU_DIR = os.path.join(ROOT_DIR, "local_testing", "emu")
+    if not os.path.isdir(EMU_DIR):
+        EMU_DIR = os.path.abspath(os.path.join(ROOT_DIR, "..", "megapad"))
+missing_megapad = [
+    name for name in ("asm.py", "bios.asm", "kdos.f", "system.py")
+    if not os.path.isfile(os.path.join(EMU_DIR, name))
+]
+if missing_megapad:
+    raise RuntimeError(
+        f"MegaPad checkout not found at {EMU_DIR} "
+        f"(missing: {', '.join(missing_megapad)}). Set MEGAPAD_ROOT."
+    )
 TEST_STORAGE = "/tmp/akashic-vfs-contract-volume.img"
 
 # Dependency file paths (in topological load order)
