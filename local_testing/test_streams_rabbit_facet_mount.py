@@ -218,6 +218,17 @@ def _assert_static_contracts() -> None:
     assert "CBUS-DISPATCH" in mount
     assert "RABBIT-SERVER-POLL" not in mount
     assert "RABBIT-SERVER-SUBSCRIPTIONS-SERVICE" not in mount
+    assert (
+        "2048 CFACET-SIZE MAX CONSTANT _RBT-FM-JSON-CAPACITY"
+        in fixture
+    )
+    assert "_RBT-FM-FACET-COPY" not in fixture
+    assert (
+        "_RBT-BUR-FACET-A _RBT-FM-JSON CFACET-SIZE MOVE" in fixture
+    )
+    assert (
+        "_RBT-FM-JSON _RBT-BUR-PEER-A @ SRBURP.FACET !" in fixture
+    )
 
 
 def _initial_files(harness) -> tuple[tuple[str, bytes], ...]:
