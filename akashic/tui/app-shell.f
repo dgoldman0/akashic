@@ -22,18 +22,20 @@
 \
 \  Lifecycle:
 \    1. Terminal init (APP-INIT)
-\    2. Root region created
-\    3. UIDL document loaded (if provided)
-\    4. App init callback
-\    5. Initial paint + flush
-\    6. Non-blocking event loop:
-\       a. KEY-POLL → app event → UIDL dispatch
+\    2. Optional terminal owner negotiation
+\    3. Root region created
+\    4. UIDL document loaded (if provided)
+\    5. App init callback
+\    6. Initial paint + flush
+\    7. Non-blocking event loop:
+\       a. Service the optional owner, then poll its normalized input or
+\          fall back to KEY-POLL
 \       b. Drain deferred actions
 \       c. Timer tick → app tick
 \       d. Paint: UTUI-PAINT + app paint → SCR-FLUSH
 \       e. YIELD?
-\    7. App shutdown callback
-\    8. UIDL detach + APP-SHUTDOWN
+\    8. Synchronized optional-owner close
+\    9. App shutdown, UIDL detach, and terminal release
 \
 \  Public API:
 \    ASHELL-RUN       ( desc -- )      Main entry (blocks until quit)
@@ -48,8 +50,17 @@
 \    ASHELL-CTX-FORGET ( uctx -- )     Forget a matching active context
 \    ASHELL-FREE-UIDL-BUF ( buf -- )   Release ASHELL-LOAD-UIDL storage
 \    ASHELL-REQUEST-CLOSE ( reason -- decision )  Negotiate a close
+\    ASHELL-TERMINAL-INIT ( context preflight-xt acquire-xt service-xt
+\                            poll-xt close-xt owner -- status )
+\    ASHELL-TERMINAL! ( owner -- status )  Configure optional ownership
+\    ASHELL-TERMINAL-RELEASE-CHECK ( owner -- status )
+\                                             Read-only release eligibility
+\    ASHELL-TERMINAL-RELEASE ( owner -- status )  Exact idle release
+\    ASHELL-TERMINAL-QUARANTINED? ( -- flag )  Unsafe instance retained
 \
-\  The shell guarantees APP-SHUTDOWN runs even on THROW.
+\  The shell guarantees local terminal resources are released on THROW.
+\  It emits APP-SHUTDOWN's ANSI restoration only when the owner has proved
+\  the byte stream safe; otherwise APP-SHUTDOWN-QUIET is mandatory.
 \ =================================================================
 
 PROVIDED akashic-tui-app-shell
@@ -126,6 +137,81 @@ VARIABLE _ASPC-INST
     THEN ;
 
 \ =====================================================================
+\  §1b — Optional Terminal Owner ABI
+\ =====================================================================
+\
+\  app-shell has no dependency on any enhanced terminal.  A separately
+\  loaded integration may configure this caller-owned descriptor before
+\  ASHELL-RUN.  Callback contracts are:
+\
+\    preflight ( context -- status ansi-safe )
+\    acquire   ( context -- status owns-stream )
+\    service   ( context -- status owns-stream )
+\    poll      ( event context -- status has-event )
+\    close     ( reason context -- status owns-stream )
+\
+\  Acquire and close are bounded synchronous ownership boundaries.  Acquire
+\  does not return while a negotiation byte could race application output;
+\  close returns OK/FALSE only after ANSI is safe.  A lost owner returns
+\  SESSION-LOST/TRUE and retains binary ownership until an external reset.
+
+ 0 CONSTANT _ASHT-O-CONTEXT
+ 8 CONSTANT _ASHT-O-PREFLIGHT-XT
+16 CONSTANT _ASHT-O-ACQUIRE-XT
+24 CONSTANT _ASHT-O-SERVICE-XT
+32 CONSTANT _ASHT-O-POLL-XT
+40 CONSTANT _ASHT-O-CLOSE-XT
+48 CONSTANT _ASHT-O-MAGIC
+56 CONSTANT ASHELL-TERMINAL-DESC-SIZE
+
+HEX 4153485445524D01 CONSTANT _ASHT-MAGIC DECIMAL
+
+: _ASHT.CONTEXT      ( owner -- field ) _ASHT-O-CONTEXT + ;
+: _ASHT.PREFLIGHT-XT ( owner -- field ) _ASHT-O-PREFLIGHT-XT + ;
+: _ASHT.ACQUIRE-XT   ( owner -- field ) _ASHT-O-ACQUIRE-XT + ;
+: _ASHT.SERVICE-XT   ( owner -- field ) _ASHT-O-SERVICE-XT + ;
+: _ASHT.POLL-XT      ( owner -- field ) _ASHT-O-POLL-XT + ;
+: _ASHT.CLOSE-XT     ( owner -- field ) _ASHT-O-CLOSE-XT + ;
+: _ASHT.MAGIC        ( owner -- field ) _ASHT-O-MAGIC + ;
+
+: ASHELL-TERMINAL-VALID?  ( owner -- flag )
+    DUP 0= IF DROP FALSE EXIT THEN
+    DUP _ASHT.PREFLIGHT-XT @ 0<>
+    OVER _ASHT.ACQUIRE-XT @ 0<> AND
+    OVER _ASHT.SERVICE-XT @ 0<> AND
+    OVER _ASHT.POLL-XT @ 0<> AND
+    OVER _ASHT.CLOSE-XT @ 0<> AND
+    SWAP _ASHT.MAGIC @ _ASHT-MAGIC = AND ;
+
+VARIABLE _ASHTI-OWNER
+VARIABLE _ASHTI-CONTEXT
+VARIABLE _ASHTI-PREFLIGHT
+VARIABLE _ASHTI-ACQUIRE
+VARIABLE _ASHTI-SERVICE
+VARIABLE _ASHTI-POLL
+VARIABLE _ASHTI-CLOSE
+
+\ ASHELL-TERMINAL-INIT
+\   ( context preflight-xt acquire-xt service-xt poll-xt close-xt owner
+\     -- status )
+: ASHELL-TERMINAL-INIT
+    _ASHTI-OWNER !
+    _ASHTI-CLOSE ! _ASHTI-POLL ! _ASHTI-SERVICE !
+    _ASHTI-ACQUIRE ! _ASHTI-PREFLIGHT ! _ASHTI-CONTEXT !
+    _ASHTI-OWNER @ 0=
+    _ASHTI-PREFLIGHT @ 0= OR _ASHTI-ACQUIRE @ 0= OR
+    _ASHTI-SERVICE @ 0= OR _ASHTI-POLL @ 0= OR
+    _ASHTI-CLOSE @ 0= OR IF SCB-S-INVALID EXIT THEN
+    _ASHTI-CONTEXT @   _ASHTI-OWNER @ _ASHT.CONTEXT !
+    _ASHTI-PREFLIGHT @ _ASHTI-OWNER @ _ASHT.PREFLIGHT-XT !
+    _ASHTI-ACQUIRE @   _ASHTI-OWNER @ _ASHT.ACQUIRE-XT !
+    _ASHTI-SERVICE @   _ASHTI-OWNER @ _ASHT.SERVICE-XT !
+    _ASHTI-POLL @      _ASHTI-OWNER @ _ASHT.POLL-XT !
+    _ASHTI-CLOSE @     _ASHTI-OWNER @ _ASHT.CLOSE-XT !
+    _ASHT-MAGIC        _ASHTI-OWNER @ _ASHT.MAGIC !
+    SCB-S-OK ;
+
+\ =====================================================================
 \  §2 — Shell State
 \ =====================================================================
 
@@ -143,6 +229,36 @@ VARIABLE _ASHELL-RUNNING      \ Event loop active flag
 
 VARIABLE _ASHELL-DIRTY        \ Repaint requested flag
 0 _ASHELL-DIRTY !
+
+VARIABLE _ASHELL-PRESENTATION-PENDING
+0 _ASHELL-PRESENTATION-PENDING !
+
+VARIABLE _ASHELL-TERM-OWNER
+0 _ASHELL-TERM-OWNER !
+
+VARIABLE _ASHELL-TERM-OWNS
+0 _ASHELL-TERM-OWNS !
+
+\ APP-SHUTDOWN is valid only after APP-INIT has begun.  In particular, an
+\ optional-owner preflight collision must unwind without emitting terminal
+\ bytes into the other owner's binary stream.
+VARIABLE _ASHELL-TERM-STARTED
+FALSE _ASHELL-TERM-STARTED !
+
+\ This latch survives teardown.  Once false, a new APP-INIT must not emit
+\ ANSI until the environment has hard-reset/drained the attachment and
+\ reloaded the owner state.
+VARIABLE _ASHELL-TERM-ANSI-SAFE
+TRUE _ASHELL-TERM-ANSI-SAFE !
+
+VARIABLE _ASHELL-TERM-STATUS
+VARIABLE _ASHELL-TERM-FLAG
+
+\ A post-OPEN loss can make every arbitrary cleanup callback unsafe.  One
+\ top-level instance is retained until the whole external reset/reload boundary;
+\ the sticky ANSI-unsafe latch prevents a second run in the same loss epoch.
+VARIABLE _ASHELL-QUARANTINED-INST
+0 _ASHELL-QUARANTINED-INST !
 
 VARIABLE _ASHELL-HAS-UIDL     \ UIDL document loaded flag
 0 _ASHELL-HAS-UIDL !
@@ -223,6 +339,107 @@ VARIABLE _ASHELL-POST-TAIL
 \ =====================================================================
 \  §4 — Public Accessors
 \ =====================================================================
+
+: ASHELL-TERMINAL@  ( -- owner|0 )
+    _ASHELL-TERM-OWNER @ ;
+
+: ASHELL-TERMINAL-OWNS?  ( -- flag )
+    _ASHELL-TERM-OWNS @ 0<> ;
+
+: ASHELL-TERMINAL-QUARANTINED?  ( -- flag )
+    _ASHELL-QUARANTINED-INST @ 0<> ;
+
+\ ASHELL-TERMINAL! ( owner -- status )
+\   Configure an optional owner only while the shell and stream are idle.
+\   Reinstalling the identical owner is idempotent; replacing or anonymously
+\   clearing a configured owner is forbidden because it may retain an exact
+\   key-source lease.  Use ASHELL-TERMINAL-RELEASE with that owner instead.
+: ASHELL-TERMINAL!  ( owner -- status )
+    _ASHELL-RUNNING @ _ASHELL-TERM-OWNS @ OR
+    _ASHELL-TERM-ANSI-SAFE @ 0= OR IF DROP SCB-S-INVALID EXIT THEN
+    DUP 0= IF DROP SCB-S-INVALID EXIT THEN
+    DUP ASHELL-TERMINAL-VALID? 0= IF DROP SCB-S-INVALID EXIT THEN
+    _ASHELL-TERM-OWNER @ ?DUP IF
+        OVER <> IF DROP SCB-S-INVALID EXIT THEN
+    THEN
+    _ASHELL-TERM-OWNER !
+    SCB-S-OK ;
+
+\ ASHELL-TERMINAL-RELEASE-CHECK ( owner -- status )
+\   Read-only form of the exact synchronized-idle predicate.  Composite
+\   owners use this before releasing subordinate identities so every failure
+\   precedes mutation.  The cooperative foreground-owner contract keeps the
+\   predicate stable through their non-yielding release sequence.
+: ASHELL-TERMINAL-RELEASE-CHECK  ( owner -- status )
+    _ASHELL-RUNNING @ _ASHELL-TERM-OWNS @ OR
+    _ASHELL-TERM-ANSI-SAFE @ 0= OR IF DROP SCB-S-INVALID EXIT THEN
+    DUP 0= IF DROP SCB-S-INVALID EXIT THEN
+    _ASHELL-TERM-OWNER @ = IF SCB-S-OK ELSE SCB-S-INVALID THEN ;
+
+\ ASHELL-TERMINAL-RELEASE ( owner -- status )
+\   Remove only the exact configured owner at a synchronized idle boundary.
+\   An unsafe-loss latch cannot be cleared by forgetting the descriptor;
+\   only an external attachment reset plus module reinitialisation may do so.
+: ASHELL-TERMINAL-RELEASE  ( owner -- status )
+    ASHELL-TERMINAL-RELEASE-CHECK
+    DUP SCB-S-OK <> IF EXIT THEN DROP
+    0 _ASHELL-TERM-OWNER !
+    SCB-S-OK ;
+
+: _ASHELL-TERM-THROW  ( status -- )
+    -3200 SWAP - THROW ;
+
+: _ASHELL-TERM-RESULT!  ( status owns-stream -- status )
+    0<> _ASHELL-TERM-FLAG !
+    _ASHELL-TERM-STATUS !
+    _ASHELL-TERM-STATUS @ SCB-S-OK = IF
+        _ASHELL-TERM-FLAG @ DUP _ASHELL-TERM-OWNS !
+        0= _ASHELL-TERM-ANSI-SAFE !
+    ELSE
+        \ A failed callback cannot authorize raw bytes, even if its tuple says
+        \ it no longer owns the stream.  Teardown must retry close or retain
+        \ quiet ownership until an external reset proves the boundary safe.
+        TRUE _ASHELL-TERM-OWNS !
+        FALSE _ASHELL-TERM-ANSI-SAFE !
+    THEN
+    _ASHELL-TERM-STATUS @ ;
+
+: _ASHELL-TERM-PREFLIGHT  ( -- )
+    _ASHELL-TERM-ANSI-SAFE @ 0= IF
+        SCB-S-SESSION-LOST _ASHELL-TERM-THROW
+    THEN
+    _ASHELL-TERM-OWNER @ ?DUP 0= IF EXIT THEN
+    DUP _ASHT.CONTEXT @ SWAP _ASHT.PREFLIGHT-XT @ EXECUTE
+    0<> DUP _ASHELL-TERM-FLAG ! _ASHELL-TERM-ANSI-SAFE !
+    _ASHELL-TERM-STATUS !
+    _ASHELL-TERM-STATUS @ SCB-S-OK <> IF
+        _ASHELL-TERM-STATUS @ _ASHELL-TERM-THROW
+    THEN
+    _ASHELL-TERM-FLAG @ 0= IF
+        SCB-S-SESSION-LOST _ASHELL-TERM-THROW
+    THEN ;
+
+: _ASHELL-TERM-ACQUIRE  ( -- )
+    _ASHELL-TERM-OWNER @ ?DUP 0= IF
+        FALSE _ASHELL-TERM-OWNS ! EXIT
+    THEN
+    \ Pessimistically cover the whole callback.  If it THROWs after emitting
+    \ a probe or claiming input, teardown must attempt close and must never
+    \ select raw ANSI merely because no result tuple was returned.
+    TRUE _ASHELL-TERM-OWNS !
+    FALSE _ASHELL-TERM-ANSI-SAFE !
+    DUP _ASHT.CONTEXT @ SWAP _ASHT.ACQUIRE-XT @ EXECUTE
+    _ASHELL-TERM-RESULT!
+    DUP SCB-S-OK <> IF _ASHELL-TERM-THROW THEN
+    DROP ;
+
+: _ASHELL-TERM-SERVICE  ( -- )
+    _ASHELL-TERM-OWNS @ 0= IF EXIT THEN
+    _ASHELL-TERM-OWNER @ DUP _ASHT.CONTEXT @
+    SWAP _ASHT.SERVICE-XT @ EXECUTE
+    _ASHELL-TERM-RESULT!
+    DUP SCB-S-OK = OVER SCB-S-WOULD-BLOCK = OR IF DROP EXIT THEN
+    _ASHELL-TERM-THROW ;
 
 \ ASHELL-QUIT ( -- )
 \   Idempotent aligned stop signal.  It does not provide a general
@@ -419,6 +636,24 @@ VARIABLE _ALUF-TOTAL
 \ =====================================================================
 
 CREATE _ASHELL-EV  24 ALLOT     \ 3-cell key event descriptor
+
+: _ASHELL-POLL-INPUT  ( -- has-event )
+    _ASHELL-TERM-OWNS @ IF
+        _ASHELL-EV
+        _ASHELL-TERM-OWNER @ DUP _ASHT.CONTEXT @
+        SWAP _ASHT.POLL-XT @ EXECUTE
+        0<> _ASHELL-TERM-FLAG !
+        _ASHELL-TERM-STATUS !
+        _ASHELL-TERM-STATUS @ SCB-S-OK = IF
+            _ASHELL-TERM-FLAG @ EXIT
+        THEN
+        _ASHELL-TERM-STATUS @ SCB-S-WOULD-BLOCK = IF FALSE EXIT THEN
+        \ The owner still holds the stream; a polling fault cannot silently
+        \ route subsequent binary bytes into the legacy decoder.
+        FALSE _ASHELL-TERM-ANSI-SAFE !
+        _ASHELL-TERM-STATUS @ _ASHELL-TERM-THROW
+    THEN
+    _ASHELL-EV KEY-POLL ;
 
 \ =====================================================================
 \  §5b — Shell Cursor (keyboard-driven pointer)
@@ -647,30 +882,39 @@ VARIABLE _ASHELL-TICK-TMP
         0 _UTUI-NEEDS-PAINT !
         ASHELL-DIRTY!
     THEN
-    _ASHELL-DIRTY @ 0= IF EXIT THEN
-    0 _ASHELL-DIRTY !
-    \ Restore the cell that the cursor glyph overwrote last frame
-    _ASHELL-CUR-RESTORE
-    _ASHELL-ACTIVATE
-    RGN-ROOT
-    \ UIDL elements first (they own the background/structure)
-    _ASHELL-HAS-UIDL @ IF
-        UTUI-PAINT
+    _ASHELL-DIRTY @ IF
+        0 _ASHELL-DIRTY !
+        \ Restore the cell that the cursor glyph overwrote last frame
+        _ASHELL-CUR-RESTORE
+        _ASHELL-ACTIVATE
+        RGN-ROOT
+        \ UIDL elements first (they own the background/structure)
+        _ASHELL-HAS-UIDL @ IF
+            UTUI-PAINT
+        THEN
+        \ App's custom widget painting (on top of UIDL)
+        _ASHELL-DESC @ APP.PAINT-XT @ ?DUP IF
+            _ASHELL-INST @ SWAP EXECUTE
+        THEN
+        \ Toast overlay (drawn last, on top of everything)
+        ASHELL-TOAST-VISIBLE? IF
+            _ASHELL-DRAW-TOAST
+        THEN
+        \ Shell cursor (drawn above toast)
+        _ASHELL-CUR-VIS @ IF
+            _ASHELL-DRAW-CURSOR
+        THEN
+        RGN-ROOT
+        -1 _ASHELL-PRESENTATION-PENDING !
     THEN
-    \ App's custom widget painting (on top of UIDL)
-    _ASHELL-DESC @ APP.PAINT-XT @ ?DUP IF
-        _ASHELL-INST @ SWAP EXECUTE
-    THEN
-    \ Toast overlay (drawn last, on top of everything)
-    ASHELL-TOAST-VISIBLE? IF
-        _ASHELL-DRAW-TOAST
-    THEN
-    \ Shell cursor (drawn above toast)
-    _ASHELL-CUR-VIS @ IF
-        _ASHELL-DRAW-CURSOR
-    THEN
-    RGN-ROOT
-    SCR-FLUSH ;
+
+    \ A refused backend transaction retries the latest back buffer without
+    \ rerunning application paint.  Session loss remains pending until the
+    \ stream owner proves a synchronized ANSI handoff; never emit a raw
+    \ fallback transaction from the paint path itself.
+    _ASHELL-PRESENTATION-PENDING @ SCR-DIRTY? OR 0= IF EXIT THEN
+    SCR-FLUSH?
+    SCB-S-OK = IF 0 _ASHELL-PRESENTATION-PENDING ! THEN ;
 
 \ =====================================================================
 \  §10 — Lifecycle: Init
@@ -685,6 +929,8 @@ VARIABLE _ASHELL-TICK-TMP
     0<> ;
 
 : _ASHELL-SETUP  ( desc -- )
+    \ Refuse all raw terminal setup after an unsynchronized owner loss.
+    _ASHELL-TERM-PREFLIGHT
     DUP APP-DESC-VALID? 0= ABORT" ashell: invalid app descriptor"
     DUP _ASHELL-DESC !
     DUP APP.COMP-DESC @ CINST-NEW
@@ -692,16 +938,21 @@ VARIABLE _ASHELL-TICK-TMP
     _ASHELL-INST !
     \ 1. Terminal init.  Filesystem composition is supplied by the host;
     \    app-shell consumes only the active abstract VFS.
+    TRUE _ASHELL-TERM-STARTED !
     DUP APP.WIDTH @ OVER APP.HEIGHT @  APP-INIT
     \ 2. Terminal title
     DUP APP.TITLE-A @ ?DUP IF
         OVER APP.TITLE-U @  APP-TITLE!
     THEN
-    \ 3. Root region (full screen)
+    \ 3. Complete optional negotiation and bind its screen backend.  This
+    \    boundary returns only after the stream is either exclusively owned
+    \    or safely back in ANSI mode.
+    _ASHELL-TERM-ACQUIRE
+    \ 4. Root region (full screen)
     0 0 SCR-H SCR-W RGN-NEW _ASHELL-RGN !
-    \ 3b. Centre shell cursor
+    \ 4b. Centre shell cursor
     _ASHELL-CUR-INIT
-    \ 4. UIDL document
+    \ 5. UIDL document
     \   Priority: inline UIDL-A > file UIDL-FILE-A > none
     DUP APP.UIDL-A @ ?DUP IF
         \ --- inline UIDL (existing path) ---
@@ -718,17 +969,18 @@ VARIABLE _ASHELL-TICK-TMP
             _ASHELL-HAS-UIDL !
         ELSE 0 _ASHELL-HAS-UIDL ! THEN
     THEN
-    \ 5. Prepare runtime state (BEFORE init callback so quit-from-init works)
+    \ 6. Prepare runtime state (BEFORE init callback so quit-from-init works)
     -1 _ASHELL-RUNNING !
+    0 _ASHELL-PRESENTATION-PENDING !
     MS@ _ASHELL-LAST-TICK !
-    \ 6. App init callback
+    \ 7. App init callback
     _ASHELL-ACTIVATE
     DUP APP.INIT-XT @ ?DUP IF
         _ASHELL-INST @ SWAP EXECUTE
     THEN
-    \ 7. Escape sequence timeout
+    \ 8. Escape sequence timeout
     1 KEY-TIMEOUT!
-    \ 8. Initial paint
+    \ 9. Initial paint
     ASHELL-DIRTY!
     \ Init may immediately request close.  Reach negotiation before
     \ invoking another app callback or touching the terminal surface.
@@ -749,6 +1001,9 @@ VARIABLE _ASHELL-TD-IOR
     THEN ;
 
 : _ASHELL-TD-APP  ( -- )
+    \ Arbitrary app cleanup is not trusted to avoid EMIT/TYPE/ANSI.  Run it
+    \ only after the terminal close stage proves raw output safe.
+    _ASHELL-TERM-ANSI-SAFE @ 0= IF EXIT THEN
     \ A descriptor may have been stored before CINST-NEW failed.  Never
     \ invoke an app callback without the live instance required by its ABI.
     _ASHELL-INST @ 0= IF EXIT THEN
@@ -774,10 +1029,44 @@ VARIABLE _ASHELL-TD-IOR
         RGN-FREE
     THEN ;
 
-: _ASHELL-TD-TERM  ( -- )
-    APP-SHUTDOWN ;
+: _ASHELL-TD-TERM-CLOSE  ( -- )
+    _ASHELL-TERM-OWNS @ 0= IF EXIT THEN
+    \ Fail closed before invoking owner code.  A THROW or any result other
+    \ than OK/FALSE therefore selects quiet local cleanup.
+    FALSE _ASHELL-TERM-ANSI-SAFE !
+    0
+    _ASHELL-TERM-OWNER @ DUP _ASHT.CONTEXT @
+    SWAP _ASHT.CLOSE-XT @ EXECUTE
+    _ASHELL-TERM-RESULT!
+    DUP SCB-S-OK <> IF _ASHELL-TERM-THROW THEN
+    DROP
+    _ASHELL-TERM-OWNS @ IF
+        SCB-S-SESSION-LOST _ASHELL-TERM-THROW
+    THEN ;
+
+: _ASHELL-TD-TERM-RELEASE  ( -- )
+    _ASHELL-TERM-STARTED @ 0= IF EXIT THEN
+    _ASHELL-TERM-ANSI-SAFE @ IF
+        APP-SHUTDOWN
+    ELSE
+        APP-SHUTDOWN-QUIET
+    THEN ;
 
 : _ASHELL-TD-INST  ( -- )
+    \ CINST-FREE invokes the component's arbitrary state finalizer.  Once the
+    \ binary stream is lost, retain the live instance and its nested resources
+    \ for the same outer reset/reload boundary instead of risking terminal I/O
+    \ or silently freeing state without its owner cleanup.
+    _ASHELL-TERM-ANSI-SAFE @ 0= IF
+        _ASHELL-QUARANTINED-INST @ 0= IF
+            _ASHELL-INST @ ?DUP IF
+                DUP _ASHELL-QUARANTINED-INST !
+                0 _ASHELL-INST !
+                DROP
+            THEN
+        THEN
+        EXIT
+    THEN
     _ASHELL-INST DUP @ SWAP 0 SWAP ! ?DUP IF CINST-FREE THEN ;
 
 \ _ASHELL-TEARDOWN ( -- ior )
@@ -787,23 +1076,29 @@ VARIABLE _ASHELL-TD-IOR
 \   precedence over this result.
 : _ASHELL-TEARDOWN  ( -- ior )
     0 _ASHELL-TD-IOR !
+    ['] _ASHELL-TD-TERM-CLOSE CATCH _ASHELL-TD-REMEMBER
     ['] _ASHELL-TD-APP      CATCH _ASHELL-TD-REMEMBER
     ['] _ASHELL-TD-UIDL     CATCH _ASHELL-TD-REMEMBER
     ['] _ASHELL-TD-UIDL-BUF CATCH _ASHELL-TD-REMEMBER
     ['] _ASHELL-TD-REGION   CATCH _ASHELL-TD-REMEMBER
-    ['] _ASHELL-TD-TERM     CATCH _ASHELL-TD-REMEMBER
+    ['] _ASHELL-TD-TERM-RELEASE CATCH _ASHELL-TD-REMEMBER
     ['] _ASHELL-TD-INST     CATCH _ASHELL-TD-REMEMBER
     \ Reset shell state even when a cleanup stage failed.  Ownership fields
     \ are cleared before their release attempt, so no stale handle can be
     \ reused or released twice by a later run.
+    \ Unsafe teardown moved the exact instance into its persistent quarantine
+    \ before clearing the active slot.  Its borrowed descriptor remains live
+    \ in the loaded image until the required whole-environment reset.
     0 _ASHELL-DESC !
-    0 _ASHELL-INST !
+    _ASHELL-TERM-ANSI-SAFE @ IF 0 _ASHELL-INST ! THEN
     0 _ASHELL-RGN !
     0 _ASHELL-HAS-UIDL !
     0 _ASHELL-UIDL-BUF !
     0 _ASHELL-ACTIVE-CTX !
     0 _ASHELL-RUNNING !
     0 _ASHELL-DIRTY !
+    0 _ASHELL-PRESENTATION-PENDING !
+    FALSE _ASHELL-TERM-STARTED !
     0 _ASHELL-POST-HEAD !
     0 _ASHELL-POST-TAIL !
     0 _ASHELL-CUR-VIS !
@@ -818,30 +1113,36 @@ VARIABLE _ASHELL-TD-IOR
     BEGIN
         _ASHELL-RUNNING @
     WHILE
-        \ 1. Non-blocking input poll
-        _ASHELL-EV KEY-POLL IF
+        \ 1. Advance the exclusive owner before any application callback.
+        \    A safe remote close may clear ownership and resume KEY-POLL;
+        \    an unsafe loss THROWs directly to quiet teardown.
+        _ASHELL-TERM-SERVICE
+        \ 2. Non-blocking normalized or legacy input poll
+        _ASHELL-POLL-INPUT IF
             \ 1a. Resize events
             _ASHELL-EV _ASHELL-CHECK-RESIZE
-            \ 1b. Dispatch key/mouse
-            _ASHELL-EV @ KEY-T-RESIZE <> IF
-                _ASHELL-EV _ASHELL-DISPATCH-KEY
+            \ 1b. Dispatch through the established event-specific path.
+            _ASHELL-EV @ DUP KEY-T-MOUSE = IF
+                DROP _ASHELL-EV _ASHELL-DISPATCH-MOUSE
+            ELSE
+                KEY-T-RESIZE <> IF _ASHELL-EV _ASHELL-DISPATCH-KEY THEN
             THEN
         THEN
-        \ 2. Hardware resize poll
-        _ASHELL-CHECK-HW-RESIZE
-        \ 3. Deferred actions
+        \ 3. Enhanced resize is authoritative while its owner is live.
+        _ASHELL-TERM-OWNS @ 0= IF _ASHELL-CHECK-HW-RESIZE THEN
+        \ 4. Deferred actions
         _ASHELL-DRAIN-POSTED
         \ A deferred action may request close.  Return to the negotiation
         \ boundary before any further app callback, paint, or scheduler hop.
         _ASHELL-RUNNING @ IF
-            \ 4. Timer tick
+            \ 5. Timer tick
             _ASHELL-CHECK-TICK
             \ A tick may request close.  Treat that as another hard
             \ lifecycle boundary before paint or a scheduler hop.
             _ASHELL-RUNNING @ IF
-                \ 5. Paint (only if dirty)
+                \ 6. Paint (only if dirty)
                 _ASHELL-PAINT
-                \ 6. Cooperative yield.
+                \ 7. Cooperative yield.
                 _ASHELL-RUNNING @ IF YIELD? THEN
             THEN
         THEN
