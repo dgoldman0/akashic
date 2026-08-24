@@ -53,11 +53,11 @@ IMAGE = Path("/tmp/akashic-desk-library-burrow-capstone.img")
 # The 24-billion Checkpoint-4 ceiling was measured against its 17.249-billion
 # complete journey.  The integrated Checkpoint-5 cold configuration alone now
 # reaches 17.420 billion steps, and the unchanged 24-billion ceiling was
-# exhausted while settling an ordinary PageDown in the final stop review after
-# the replay, LIST/FETCH data plane, status result, and RUNNING UI had all
-# completed.  Keep every local wait/input bound unchanged and give only this
-# larger, source-built vertical a finite whole-journey ceiling that includes its
-# additional framed data-plane and replay work.
+# exhausted while settling ordinary UI input as the final Stop review was
+# presented, after the replay, LIST/FETCH data plane, status result, and RUNNING
+# UI had all completed.  Keep every local wait/input bound unchanged and give
+# only this larger, source-built vertical a finite whole-journey ceiling that
+# includes its additional framed data-plane and replay work.
 CAPSTONE_TOTAL_MAX_STEPS: Final = 30_000_000_000
 
 REPLAY_DROP_MARKER: Final = (
