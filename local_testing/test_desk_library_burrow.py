@@ -431,6 +431,7 @@ def _assert_static_contracts() -> None:
 
 
 class ProductJourney:
+    total_step_budget: int = TOTAL_MAX_STEPS
     configure_step_budget: int = CONFIGURE_MAX_STEPS
 
     def __init__(
@@ -475,7 +476,7 @@ class ProductJourney:
         return None
 
     def _run_slice(self, step_budget: int) -> None:
-        if self.total_steps >= TOTAL_MAX_STEPS:
+        if self.total_steps >= self.total_step_budget:
             raise JourneyFailure(
                 "product journey exhausted its checked-in ceiling while "
                 f"waiting for {self.activity}"
@@ -487,7 +488,7 @@ class ProductJourney:
             )
         remaining = min(
             step_budget,
-            TOTAL_MAX_STEPS - self.total_steps,
+            self.total_step_budget - self.total_steps,
         )
         report = self.session.run(
             max_steps=min(50_000_000, remaining),
@@ -515,7 +516,7 @@ class ProductJourney:
         self.activity = f"raw marker {marker!r}"
         local_remaining = min(
             step_budget,
-            TOTAL_MAX_STEPS - self.total_steps,
+            self.total_step_budget - self.total_steps,
         )
         while marker not in self.session.raw_text() and local_remaining > 0:
             before = self.total_steps
@@ -532,7 +533,7 @@ class ProductJourney:
         self.activity = f"screen markers {markers!r}"
         local_remaining = min(
             step_budget,
-            TOTAL_MAX_STEPS - self.total_steps,
+            self.total_step_budget - self.total_steps,
         )
         while local_remaining > 0:
             text = self.session.snapshot().text()
@@ -549,7 +550,7 @@ class ProductJourney:
     def settle_input(self) -> None:
         remaining = min(
             INPUT_MAX_STEPS,
-            TOTAL_MAX_STEPS - self.total_steps,
+            self.total_step_budget - self.total_steps,
         )
         target_revision = self.session.revision + 1
         while remaining > 0:
@@ -561,6 +562,11 @@ class ProductJourney:
                 and self.session.revision >= target_revision
             ):
                 return
+        if self.total_steps >= self.total_step_budget:
+            raise JourneyFailure(
+                "product journey exhausted its checked-in ceiling while "
+                "waiting for Desk to consume and repaint after input"
+            )
         raise JourneyFailure("Desk did not consume and repaint after input")
 
     def type_text(self, text: str) -> None:

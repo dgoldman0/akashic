@@ -50,6 +50,16 @@ STREAMS_SOURCE = (
 )
 IMAGE = Path("/tmp/akashic-desk-library-burrow-capstone.img")
 
+# The 24-billion Checkpoint-4 ceiling was measured against its 17.249-billion
+# complete journey.  The integrated Checkpoint-5 cold configuration alone now
+# reaches 17.420 billion steps, and the unchanged 24-billion ceiling was
+# exhausted while settling an ordinary PageDown in the final stop review after
+# the replay, LIST/FETCH data plane, status result, and RUNNING UI had all
+# completed.  Keep every local wait/input bound unchanged and give only this
+# larger, source-built vertical a finite whole-journey ceiling that includes its
+# additional framed data-plane and replay work.
+CAPSTONE_TOTAL_MAX_STEPS: Final = 30_000_000_000
+
 REPLAY_DROP_MARKER: Final = (
     "DESK LIBRARY RABBIT START PROVIDER RECEIPT DROP PASS"
 )
@@ -105,6 +115,11 @@ def _assert_static_contracts() -> None:
     assert checkpoint4.NUM_CORES == 1
     assert checkpoint4.EXT_MEMORY_BYTES == 128 << 20
     assert checkpoint4.TOTAL_MAX_STEPS == 24_000_000_000
+    assert checkpoint4.ProductJourney.total_step_budget == 24_000_000_000
+    assert (
+        CapstoneProductJourney.total_step_budget
+        == CAPSTONE_TOTAL_MAX_STEPS
+    )
     assert (
         checkpoint4.ProductJourney.configure_step_budget
         == checkpoint4.CONFIGURE_MAX_STEPS
@@ -195,8 +210,9 @@ class CapstoneProductJourney(checkpoint4.ProductJourney):
 
     # The packed Checkpoint-5 closure must decode and source-compile before its
     # first flushed marker. Let that finite startup draw from the existing
-    # whole-journey ceiling; ProductJourney._run_slice retains the absolute
-    # 24-billion-step and wall-time bounds.
+    # whole-journey ceiling.  ProductJourney._run_slice retains the checked
+    # CP5-specific absolute step bound and the caller-selected wall timeout.
+    total_step_budget = CAPSTONE_TOTAL_MAX_STEPS
     configure_step_budget = checkpoint4.TOTAL_MAX_STEPS
 
     def __init__(
@@ -225,7 +241,7 @@ class CapstoneProductJourney(checkpoint4.ProductJourney):
         self.activity = f"fresh review for call {call_number}"
         local_remaining = min(
             step_budget,
-            checkpoint4.TOTAL_MAX_STEPS - self.total_steps,
+            self.total_step_budget - self.total_steps,
         )
         while local_remaining > 0:
             text = self.session.snapshot().text()
@@ -251,7 +267,7 @@ class CapstoneProductJourney(checkpoint4.ProductJourney):
         self.activity = f"raw marker {marker!r} occurrence {count}"
         local_remaining = min(
             step_budget,
-            checkpoint4.TOTAL_MAX_STEPS - self.total_steps,
+            self.total_step_budget - self.total_steps,
         )
         while (
             self.session.raw_text().count(marker) < count
