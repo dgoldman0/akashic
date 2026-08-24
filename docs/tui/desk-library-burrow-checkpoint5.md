@@ -1,10 +1,19 @@
 # Desk Library Burrow Checkpoint 5
 
-**Status:** implementation, isolated wire bounds, focused provider compile,
-and expanded facet qualification green; product qualification blocked during
-cold source boot
+**Status:** complete integrated product qualification green
 
-**Base:** `b04461c5ec9263842a497ac7e5dafda2e8beae91`
+**Qualified executable code:** `4b8680568a229b1bd114d3a05fa4e73f745157ab`
+
+**Evidence-wording descendant:** `503c09109e7a677e89ffbcc7e174cf35d4ada795`
+(comment-only; executable behavior is unchanged)
+
+**Paired MegaPad code:** `ca02a40c04840791c731dbb7c77ecd7e85eb4909`
+
+**Feature base:** `b04461c5ec9263842a497ac7e5dafda2e8beae91`
+
+**Integration ancestry:** merge `5753ffd` contains ext4 head `e213334` and
+Burrow/TLS head `386a8a5`
+
 **Scope:** fixed read-only Library Rabbit profile and product capstone
 
 ## Contract freeze
@@ -12,8 +21,8 @@ cold source boot
 Checkpoint 5 adds the framed data plane deliberately excluded from
 Checkpoint 4. It does not change the eight-call Agent lifecycle, place Library
 read operations in an Agent mandate, or claim a physical listener, TLS,
-durable Burrow configuration, remote mutation, subscriptions, ranged reads,
-or canonical Desktop admission.
+Public Rabbit transport, durable Burrow configuration, remote mutation,
+subscriptions, ranged reads, ext4 coupling, or canonical Desktop admission.
 
 The first profile has exactly two routes on one exact versioned selector:
 
@@ -73,25 +82,25 @@ module-key namespace.
 
 ## Cold-source image representation
 
-The complete Checkpoint-5 source closure did not fit the fixed 8,192-sector
-qualification image in ordinary linked form: the initial build needed 239
-sectors with only 236 free. The filesystem geometry and canonical Desktop
-reserve were not weakened, and source comments were not squeezed merely to
-meet an arbitrary byte target.
+The generic complete-Desktop packaging path now owns the bounded
+compressed-at-rest source representation; it is not a Checkpoint-5-only
+facility. Checkpoint 5 uses that ordinary path for the linked Akashic source
+chunks and adds only its four qualification leaves. This promotion followed
+the earlier CP5 image-pressure finding that an ordinary linked build needed
+239 sectors when only 236 remained. The filesystem geometry and canonical
+Desktop mutable reserve were not weakened, and no CP5-only generic loader API
+remains.
 
-Checkpoint 5 alone therefore stores its ordinary linked source chunks and all
-four qualification leaves in a bounded compressed-at-rest representation.
 Each root-level data container has a fixed 40-byte `AKLZSS01` header, positive
 raw and payload lengths, an at-most-122,880-byte raw bound, and mandatory raw
 CRC32-IEEE. The canonical LSB-first LZSS stream has a 4 KiB back-reference
 window, 3 through 18 byte matches, exact input/output exhaustion, and zero
-unused final control bits. The uncompressed root alias `coldsrc.f`
-validates the single-extent file, decodes into format-bounded allocations,
-verifies CRC, and compiles each raw source through
-`SOURCE-EVALUATE-CHECKED`. A generated `_BOOT-COLD-SOURCE` wrapper reports the
-checked evaluator status, line, column, throw, and token before aborting a
-failed boot load. Read-only descriptors are released without rewriting
-MP64FS metadata.
+unused final control bits. The uncompressed root alias `coldsrc.f` validates
+the single-extent file, decodes into format-bounded allocations, verifies CRC,
+and compiles each raw source through `SOURCE-EVALUATE-CHECKED`. A generated
+`_BOOT-COLD-SOURCE` wrapper reports the checked evaluator status, line, column,
+throw, and token before aborting a failed boot load. Read-only descriptors are
+released without rewriting MP64FS metadata.
 
 This remains a cold source build. It is not a compiled Forth shard, warm
 dictionary cache, or source-timing substitute: every module is decoded and
@@ -124,10 +133,10 @@ turn this one profile's disclosure envelope into an unrelated system limit.
 
 ## Capstone exit
 
-The product-composed capstone must start the declaration through the Agent
-Tool Gateway, connect the independent memory-duplex client, LIST the
-Agent-created frozen collection, FETCH its member, decode the plain IVJSON
-result, and compare the exact original UTF-8 bytes and digest. It then stops
+The qualified product-composed capstone starts the declaration through the
+Agent Tool Gateway, connects the independent memory-duplex client, LISTs the
+Agent-created frozen collection, FETCHes its member, decodes the plain IVJSON
+result, and compares the exact original UTF-8 bytes and digest. It then stops
 through the Agent path and uses ordinary Desk close.
 
 Qualification also proves frozen-scope and nonmember/stale-revision rejection,
@@ -139,79 +148,91 @@ baselines after teardown.
 
 ## Current qualification evidence
 
-The host image gate currently composes 203 modules into 32 ordinary source
-chunks. Including the four checked leaves, 3,965,045 raw bytes produce
-988,790 container bytes. The image has 54 MP64FS entries and 5,435 free
-sectors. The gate expands every container back to its exact source, checks
-DATA type and single-extent layout, verifies loader ordering, validates all
-four leaf aliases, and proves isolation from ordinary Checkpoint-4/Desktop
-linking.
+The exact qualified 8,192-sector image composes 205 modules into 32 checked
+cold-source chunks. Across the linked chunks and four qualification leaves,
+3,976,822 raw bytes produce 991,083 container bytes. The image has 54 MP64FS
+entries and 4,731 free sectors at build completion. The gate expands every
+container back to its exact source, checks DATA type and single-extent layout,
+verifies loader ordering, validates all four leaf aliases, and keeps the CP5
+leaves isolated from ordinary Checkpoint-4/Desktop linking.
 
-The expanded focused guest loader contract passed in source mode at
-101,907,938 guest steps (2.97 seconds across the measured run stages) on one
-core with 128 MiB external memory. It verified a real packed source compile,
-stack neutrality, invalid-distance and noncanonical-tail rejection, checksum
-rejection before evaluation, dictionary/evaluator rollback after unfinished
-source, exact allocator and descriptor recovery on every path, and a valid
-same-machine retry. The complete packaging suite is 74/74 green (13.43 s on
-the final review pass),
-including generic image-leaf alias rejection. The architecture inventory is
-17/17 green (12.18 s on the final review pass), and the Checkpoint-4,
-facet-mount, cold-loader, and
-Checkpoint-5 static contracts all pass. Python compilation and formatting
-checks are also clean.
+The final product command was:
 
-These are packaging and focused-loader results, not the product capstone. A
-second focused cold-source gate compiles the exact Checkpoint-5 provider after
-its 47-module dependency closure: seven chunks compress 818,076 raw bytes to
-193,895 bytes, leaving 3,130 sectors free in the 4,096-sector image. It passed
-at 1,514,247,710 guest steps in 47.95 seconds. The expanded facet-mount ABI run
-is green with 1,082 assertions across 31 source-load stages, 143 contract
-stages, and its final marker, under the checked-in 120-million-step phase
-ceiling (21 billion theoretical aggregate, one core, 64 MiB).
+```bash
+MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
+  python3 local_testing/test_desk_library_burrow_capstone.py \
+    --product --timeout 1200
+```
 
-The first Library qualification attempt incorrectly placed the pre-existing
-storage/read boundary and the new wire-maxima workload under one inherited
-10-billion-step/330-second aggregate. The storage/read phase reached its exact
-`PASS 147` marker, but the process reached 9,994,500,000 steps and the wall
-limit before the wire phase's terminal marker. Historical qualified evidence
-puts the storage/read phase alone at 9,135,051,648 steps. Static inspection
-found only finite bounded work in the new phase; the fixture already described
-it as a separate focused runner. The orchestration now restores the original
-boundary-only command and exposes the IVJSON maxima/decode work through an
-isolated `--wire` mode with explicit phase markers. That correction changes no
-Library, IVJSON, or product behavior.
+It passed against the exact MegaPad code named above on one timing-correct
+core with 128 MiB external memory. The complete cold-source journey used
+27,100,000,000 guest steps in 811.14 seconds; the cold configuration marker
+arrived at 17,410,000,000 steps. CP5 now has a checked, measured
+30-billion-step whole-journey ceiling. Checkpoint 4 retains its independently
+qualified 24-billion-step ceiling, and no local wait, input-settlement,
+scheduler, source-loading, filesystem-reserve, or emulator-timing contract was
+weakened. The command widens only the host wall timeout to 1,200 seconds.
 
-The isolated wire-bound run is now green: its exact PASS marker arrived after
-5,501,875,046 guest steps in 154.05 seconds on the timing-correct single-core
-source path. It proves exact-size success, one-byte-short nonpublication, all
-semantic/schema plain and typed maxima, and caller-bounded read-result decode.
+The MP64FS ledger recorded a 4,292-sector minimum, 439-sector peak
+consumption, 155-sector largest stable persistence increment, and 4,452-sector
+final image with 279 sectors retained relative to the build. It accepted 1,521
+valid completed-write samples and ignored zero transient parse views. Thus the
+minimum remaining capacity exceeded the largest observed stable increment;
+the journey did not manufacture headroom by relaxing the Desktop reserve.
 
-The product journey is not green. The latest 8,192-sector source image booted
-the 203-module closure and printed the first leaf marker,
-`DESK LIBRARY RABBIT LOAD C4 PROVIDER PASS`, then returned to the Forth prompt
-before starting the second leaf. It reached 14,719,559,469 guest steps and the
-600.16-second wall limit. The compiled checked-loader failure reporter did not
-fire. Dependency-aware scans find no unresolved token or unbalanced control
-structure in any leaf, and a separate audit found no CP5 word, defining-word,
-immediate, or `PROVIDED` key that shadows the Checkpoint-4 closure or leaves.
+The transcript contains exactly nine physical Tool Gateway calls, eight
+logical results, and six review approvals. It proves the deliberate first
+START receipt drop, replay from the stable RUNNING owner revision, typed
+`NO_EFFECT` convergence, ordered LIST and FETCH success, frozen-scope,
+nonmember, and stale-revision rejection, and the complete framed data plane.
+The RUNNING and STOPPED Desk views, exact Library UTF-8/digest readback, outer
+Agent completion, ordinary Desk close, and final ownership/allocator teardown
+all occur exactly once.
 
-The strongest remaining diagnosis is a userland dictionary/XMEM boundary,
-not a Rabbit profile failure: current MegaPad reserves a fixed 32 MiB
-`U-ZONE-SIZE`, places XMEM allocations immediately above that floor, and has
-no extmem dictionary guard comparable to the Bank0 guard. This larger source
-closure can therefore cross into live XMEM storage while compiling. That is
-an evidence-backed inference, not yet a direct measurement. Independently,
-KDOS has a 128-slot module table while this image has roughly 205 module
-identities; full-table insertion is silently declined. Neither MegaPad issue
-has been patched in this worktree.
+Supporting qualifications remain independently green. The public provider
+lifecycle gate acquired, opened, boundedly cancelled, finalized, released,
+and tore down the lower owner through the real component registry, request
+bus, capability descriptors, and public graph ABI at
+8,085,169,445 steps in 209.61 seconds (`fc7def5`). The isolated wire-bound run
+passed at 5,501,875,046 steps in 154.05 seconds. The expanded facet-mount ABI
+run has 1,082 assertions, and delayed replay has 589 checks. The current
+compact post-integration matrix is 87/87 green in 61.84 seconds.
 
-Do not rerun the unchanged 600-second product gate. The next session should
-first choose and qualify the proper MegaPad dictionary/module-capacity design
-or reduce the exact production closure without weakening it. After that, the
-product wall allowance also needs an explicit decision: the current packed
-boot executes only about 14.72 billion steps in 600 seconds, while the green
-Checkpoint-4 journey historically required 17.25 billion steps. The checked
-24-billion-step ceiling has not been raised. Exact LIST/FETCH/replay
-assertions, persistence `M > L` evidence, product runtime counts, and the
-Checkpoint-5 commit remain intentionally blank.
+## Resolved qualification history
+
+The following were staged integration failures, not current blockers:
+
+- Compiled `IS` calls in the CP4/CP5 installer words attempted to parse an
+  exhausted runtime input line. The fixtures now install deferred actions by
+  captured XT and deferred body.
+- The caller-owned graph slab planner retained queue wire ceilings and allowed
+  nested binding helpers to overwrite the queue base. The planner now has its
+  declared stack effect and preserves the binding base independently.
+- The inactive-lease validation path lacked its final `NIP`, leaking the
+  provider context beneath the flag and contaminating graph readiness.
+- Live Library lookup used the enclosing `APP-DESC` where the component
+  registry requires `APP.COMP-DESC`; it now resolves the exact live component
+  instance.
+- Acquire preflight consumed the saved peer capacity before its comparison.
+  The value is explicitly reloaded and the focused gate pins the bounded
+  caller geometry.
+- Receipt replay initially raced the STARTING-to-RUNNING owner revision. The
+  duplicate is now released only from the stable RUNNING revision, without
+  weakening request-bus revision validation.
+- The Library capability descriptor array was not guaranteed eight-byte
+  alignment, and provider queue teardown passed a queue-root slot rather than
+  the stored queue pointer. Both public lifecycle defects are closed and
+  exercised by the focused gate.
+- The real Streams and Library component descriptors were bare `CREATE`
+  bodies even though the profile admits them as aligned borrowed spans. Both
+  now use padded backing with stable aligned public accessors, and CP5 checks
+  their exact identities at runtime.
+- The inherited 24-billion-step CP4 ceiling was exhausted while ordinary UI
+  input was settling with the final Stop review presented, after replay,
+  LIST/FETCH, status, and RUNNING evidence had completed. CP5 alone now uses
+  the measured 30-billion-step ceiling; CP4 remains unchanged.
+
+The green result qualifies this in-memory, read-only Library Rabbit vertical.
+It does not add evidence for a public network Rabbit endpoint, TLS behavior,
+ext4/Rabbit coupling, durable remote configuration, remote mutation, or any
+other exclusion in the contract freeze.

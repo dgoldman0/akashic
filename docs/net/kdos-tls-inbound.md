@@ -228,9 +228,9 @@ Python peer; the established TLS NIO implementation remains the production
 shared port.
 
 ```text
-MEGAPAD_ROOT=/path/to/megapad-secure-server-transport \
+MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
   python3 -m unittest local_testing.test_kdos_tls_inbound_vertical
-MEGAPAD_ROOT=/path/to/megapad-secure-server-transport \
+MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
   python3 -m unittest local_testing.test_kdos_tls_inbound_failures
 ```
 
@@ -239,12 +239,26 @@ temporary lower coordinator, completed in 1,169,609,877 guest steps (29.41 s)
 for the two-client HCONN path and 951,435,597 guest steps (24.67 s) for
 failure/recovery.
 
-Final closure reran that unchanged Akashic code against MegaPad `c1d4f32`,
-where the coordinator, listener lease cell, lock/scratch state, compatibility
-alias, and redundant tests are absent. The two-client HCONN path passed in
-1,119,547,893 guest steps (27.92 s), and failure/recovery passed in 905,769,707
-steps (23.14 s). The shared established-port, outbound, inbound, and HCONN
-source profiles also passed in 724,722,756, 780,124,067, 780,424,304, and
-1,043,866,636 steps respectively. All final runs used one core, 128 MiB
-external memory, and the unchanged 1.5-billion-step/180-second capstone
-ceiling. This is the qualified cross-repository handback pair.
+The original closure commit `386a8a5171390db5cdb4d436fc4d892a3ddc11ca`
+reran that unchanged Akashic TLS code against MegaPad `c1d4f32`, where the
+coordinator, listener lease cell, lock/scratch state, compatibility alias, and
+redundant tests are absent. The two-client HCONN path passed in 1,119,547,893
+guest steps (27.92 s), and failure/recovery passed in 905,769,707 steps
+(23.14 s). The shared established-port, outbound, inbound, and HCONN source
+profiles also passed in 724,722,756, 780,124,067, 780,424,304, and
+1,043,866,636 steps respectively. All of those historical final runs used one
+core, 128 MiB external memory, and the unchanged
+1.5-billion-step/180-second capstone ceiling. They remain the pre-integration
+secure-accept handback evidence rather than the current repository pair.
+
+The integrated closure was requalified with executable Akashic code
+`4b8680568a229b1bd114d3a05fa4e73f745157ab` against exact MegaPad code
+`ca02a40c04840791c731dbb7c77ecd7e85eb4909`. The shared established-port and
+inbound profiles passed at 736,487,794 and 791,511,814 guest steps. The
+two-client listener/HCONN vertical passed at 1,126,636,722 steps (28.97 s), and
+the cancellation/deadline/malformed-record recovery vertical passed at
+915,416,913 steps (24.00 s). The outbound source profile remained 18/18 green
+after packed `networking.f` shrank from 695,048 to 457,830 bytes in 10 chunks,
+and the focused listener-owner terminal contract passed at 75,908 guest steps.
+Later comment-only and documentation heads record that evidence but were not
+substituted for the tested executable Akashic code checkpoint.

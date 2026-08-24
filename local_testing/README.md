@@ -148,10 +148,58 @@ The checked-cold-source complete Desktop has its own measured
 15-billion-step/420-second gate so it can compile canonical networking and
 scoped VFS-access modules and finish the supported interaction journey. These
 ceilings are emulator qualification headroom, not product capacity or
-scalability parameters. Against the paired integration tree, the exact
-no-override Desktop workload measured 13.207 billion guest steps in 331.77
-seconds on 2026-08-22. `--max-steps` and `--timeout` remain available for
+scalability parameters. Against the paired integration tree, the current
+exact no-override Desktop workload composes 187 modules in 22 linked chunks,
+compresses 2,693,092 raw source bytes to 721,606 container bytes, occupies 51
+MP64FS entries with 5,240 free sectors, and passed at 13,288,000,000 guest
+steps in 332.51 seconds. `--max-steps` and `--timeout` remain available for
 explicit qualification budgets and override the profile defaults exactly.
+
+## Integrated Library Rabbit/Burrow qualification
+
+The integrated executable closure was qualified at Akashic
+`4b8680568a229b1bd114d3a05fa4e73f745157ab` against exact MegaPad code
+`ca02a40c04840791c731dbb7c77ecd7e85eb4909`. Later comment-only and
+documentation commits record the result; they are not replacements for the
+tested executable checkpoint. The current compact host/static integration
+matrix completed with 87 passed in 61.84 seconds.
+
+Run the provider's static contract and its real public lifecycle gate with:
+
+```bash
+MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
+  python3 local_testing/test_streams_library_rabbit_provider_load.py \
+  --static-only
+MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
+  python3 local_testing/test_streams_library_rabbit_provider_load.py \
+  --timeout 300
+```
+
+The runtime gate source-builds the provider and exercises its public
+acquire/open, bounded cancellation, finalization, release, and lower-owner
+teardown path through the live registry, capability bus, and production
+capabilities. It passed at 8,085,169,445 guest steps in 209.61 seconds.
+
+Run the complete Checkpoint-5 static contract and product journey with:
+
+```bash
+MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
+  python3 local_testing/test_desk_library_burrow_capstone.py --static-only
+MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
+  python3 local_testing/test_desk_library_burrow_capstone.py \
+  --product --timeout 1200
+```
+
+The exact product run passed at 27.1 billion guest steps in 811.14 seconds on
+one core with 128 MiB external memory. Its 8,192-sector source-built image
+contains 205 modules in 32 linked chunks; the free-space ledger was 4,731
+sectors after build, 4,292 at its minimum, and 4,452 after final teardown. The
+30-billion-step whole-journey ceiling is a checked Checkpoint-5-only bound;
+Checkpoint 4 retains its separate 24-billion-step contract. This product run
+is heavyweight: run it sequentially, never concurrently with the provider
+runtime gate or another smoke, integration, or persistence test. The exact
+call/replay/data-plane/teardown assertion and space ledger is recorded in
+[`docs/tui/desk-library-burrow-checkpoint5.md`](../docs/tui/desk-library-burrow-checkpoint5.md).
 
 ## Ext4 compatibility profile
 
@@ -650,9 +698,9 @@ machine-global KDOS TLS/cryptographic scratch buffer has been sanitized.
 Run the inbound secure-server capstone against the matching MegaPad worktree:
 
 ```text
-MEGAPAD_ROOT=/path/to/megapad-secure-server-transport \
+MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
   python3 -m unittest local_testing.test_kdos_tls_inbound_vertical
-MEGAPAD_ROOT=/path/to/megapad-secure-server-transport \
+MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
   python3 -m unittest local_testing.test_kdos_tls_inbound_failures
 ```
 
