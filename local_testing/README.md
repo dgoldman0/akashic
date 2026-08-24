@@ -164,6 +164,17 @@ documentation commits record the result; they are not replacements for the
 tested executable checkpoint. The current compact host/static integration
 matrix completed with 87 passed in 61.84 seconds.
 
+Immediately before the documentation-only landing record that contains this
+disposition, local Akashic `main` had been fast-forwarded to A* closure head
+`c69fbe57cb6169c80560033e94d3d9a640ad9def` and local MegaPad `main` to M*
+closure head `a8cb7995363ebd5177e7e94375abd068e322329f`. Their cached
+`origin/main` refs remained respectively
+`d2e9551ffc37e324bb83acf51108f506599edfd5` and
+`f4b8144786001e423291b9458f24e0efa7ab70ce`; neither landing had been pushed.
+This disposition record descends from those closure heads but is documentation
+only, not a newly tested code checkpoint. The executable qualification remains
+the Akashic/MegaPad pair named above.
+
 Run the provider's static contract and its real public lifecycle gate with:
 
 ```bash

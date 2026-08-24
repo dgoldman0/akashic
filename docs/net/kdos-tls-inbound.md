@@ -262,3 +262,15 @@ after packed `networking.f` shrank from 695,048 to 457,830 bytes in 10 chunks,
 and the focused listener-owner terminal contract passed at 75,908 guest steps.
 Later comment-only and documentation heads record that evidence but were not
 substituted for the tested executable Akashic code checkpoint.
+
+Immediately before the documentation-only landing record that contains this
+disposition, local Akashic `main` had been fast-forwarded to A* closure head
+`c69fbe57cb6169c80560033e94d3d9a640ad9def` and local MegaPad `main` to M*
+closure head `a8cb7995363ebd5177e7e94375abd068e322329f`. Their cached
+`origin/main` refs remained respectively
+`d2e9551ffc37e324bb83acf51108f506599edfd5` and
+`f4b8144786001e423291b9458f24e0efa7ab70ce`; neither landing had been pushed.
+This disposition record descends from those closure heads but is documentation
+only. It is not a newly tested code checkpoint: the executable evidence above
+remains anchored at Akashic `4b8680568a229b1bd114d3a05fa4e73f745157ab`
+against MegaPad `ca02a40c04840791c731dbb7c77ecd7e85eb4909`.

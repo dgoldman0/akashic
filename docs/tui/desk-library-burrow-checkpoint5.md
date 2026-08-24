@@ -16,6 +16,19 @@ Burrow/TLS head `386a8a5`
 
 **Scope:** fixed read-only Library Rabbit profile and product capstone
 
+Immediately before the documentation-only landing record that contains this
+disposition, local Akashic `main` had been fast-forwarded to A* closure head
+`c69fbe57cb6169c80560033e94d3d9a640ad9def` and local MegaPad `main` to M*
+closure head `a8cb7995363ebd5177e7e94375abd068e322329f`. Their cached
+`origin/main` refs remained respectively
+`d2e9551ffc37e324bb83acf51108f506599edfd5` and
+`f4b8144786001e423291b9458f24e0efa7ab70ce`; neither landing had been pushed.
+This disposition record descends from those closure heads but is documentation
+only. It is not a newly tested code checkpoint: the qualified executable
+anchors above remain Akashic
+`4b8680568a229b1bd114d3a05fa4e73f745157ab` against MegaPad
+`ca02a40c04840791c731dbb7c77ecd7e85eb4909`.
+
 ## Contract freeze
 
 Checkpoint 5 adds the framed data plane deliberately excluded from
