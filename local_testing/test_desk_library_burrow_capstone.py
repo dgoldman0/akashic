@@ -37,6 +37,9 @@ IMAGE = Path("/tmp/akashic-desk-library-burrow-capstone.img")
 REPLAY_DROP_MARKER: Final = (
     "DESK LIBRARY RABBIT START PROVIDER RECEIPT DROP PASS"
 )
+REPLAY_RUNNING_MARKER: Final = (
+    "DESK LIBRARY RABBIT START REPLAY RUNNING PASS"
+)
 REPLAY_NO_EFFECT_MARKER: Final = (
     "DESK LIBRARY RABBIT START NO EFFECT PASS"
 )
@@ -58,6 +61,7 @@ DATA_PLANE_MARKERS: Final = (
 )
 CAPSTONE_MARKERS: Final = (
     REPLAY_DROP_MARKER,
+    REPLAY_RUNNING_MARKER,
     REPLAY_NO_EFFECT_MARKER,
     *DATA_PLANE_MARKERS,
 )
@@ -130,6 +134,20 @@ def _assert_static_contracts() -> None:
     assert "_C5-CAPTURE-RUNNING-REPLAY ?DUP" in fixture
     assert (
         "_C5-START-ARG-REVISION @ 2 + = _C4-ASSERT"
+    ) in fixture
+    assert (
+        "_C4-CALL @ 4 <> IF -1 EXIT THEN\n"
+        "    _C5-START-RESULTS @ 1 <> IF -1 EXIT THEN"
+    ) in fixture
+    assert (
+        "_C4-DECLARATION-STATE@ DUP SRBMGR-STATE-RUNNING = IF"
+    ) in fixture
+    assert "SRBMGR-STATE-STARTING = _C4-ASSERT" in fixture
+    assert "_C4-WAIT @ _C4-STATE-WAIT-MAX <= _C4-ASSERT" in fixture
+    assert "_C5-START-REPLAY-READY? 0= IF 0 EXIT THEN" in fixture
+    assert (
+        "0 _C4-WAIT !\n"
+        "        _SP-STREAMING _C4-CONTEXT @ _SPC.STATE !"
     ) in fixture
     assert (
         "_C4-LIBRARY-DESC APP.COMP-DESC @\n"
@@ -327,11 +345,17 @@ class CapstoneProductJourney(checkpoint4.ProductJourney):
         status_after_start = call_matches[6]
         start_result = result_matches[4]
         replay_drop = raw.index(REPLAY_DROP_MARKER)
+        replay_running = raw.index(REPLAY_RUNNING_MARKER)
         no_effect = raw.index(REPLAY_NO_EFFECT_MARKER)
         data_positions = tuple(raw.index(marker) for marker in DATA_PLANE_MARKERS)
-        if not first_start.end() < replay_drop < second_start.start():
+        if not (
+            first_start.end()
+            < replay_drop
+            < replay_running
+            < second_start.start()
+        ):
             raise checkpoint4.JourneyFailure(
-                "provider receipt drop did not separate the two start calls"
+                "provider replay was not created from the RUNNING revision"
             )
         if not second_start.end() < no_effect < status_after_start.start():
             raise checkpoint4.JourneyFailure(

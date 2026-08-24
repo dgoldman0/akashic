@@ -91,6 +91,7 @@ CREATE _C5-CONTENT-DIGEST SHA3-256-HEX-LEN ALLOT
         \ Agent has already appended this authoritative result to its model
         \ context.  Withhold only the scripted provider's receipt and make it
         \ re-emit the identical call id and arguments through Tool Gateway.
+        0 _C4-WAIT !
         _SP-STREAMING _C4-CONTEXT @ _SPC.STATE !
         ." DESK LIBRARY RABBIT START PROVIDER RECEIPT DROP PASS" CR
         TX-FLUSH 0 -1 EXIT
@@ -641,7 +642,24 @@ VARIABLE _C5-FIELD-EXPECTED-REF
         _C5-DATA-FAIL
     ENDCASE ;
 
+: _C5-START-REPLAY-READY?  ( -- ready? )
+    \ Construct the reviewed duplicate only after START has published its
+    \ stable RUNNING owner revision.  Otherwise the OPEN tick legitimately
+    \ makes Tool Gateway's already-pinned expected revision stale before the
+    \ human approval reaches request-bus dispatch.
+    _C4-CALL @ 4 <> IF -1 EXIT THEN
+    _C5-START-RESULTS @ 1 <> IF -1 EXIT THEN
+    _C4-DECLARATION-STATE@ DUP SRBMGR-STATE-RUNNING = IF
+        DROP ." DESK LIBRARY RABBIT START REPLAY RUNNING PASS" CR
+        TX-FLUSH -1 EXIT
+    THEN
+    SRBMGR-STATE-STARTING = _C4-ASSERT
+    1 _C4-WAIT +!
+    _C4-WAIT @ _C4-STATE-WAIT-MAX <= _C4-ASSERT
+    0 ;
+
 : _C5-PROGRESS-READY?  ( -- ready? )
+    _C5-START-REPLAY-READY? 0= IF 0 EXIT THEN
     _C4-CALL @ 5 <> IF -1 EXIT THEN
     _C5-DATA-DONE @ 0= IF
         _C5-DATA-TICK
