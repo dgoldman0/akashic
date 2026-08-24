@@ -23,8 +23,10 @@
 \   KEY-HAS-ALT?      ( ev -- flag )       Alt present?
 \   KEY-HAS-SHIFT?    ( ev -- flag )       Shift present?
 \   KEY-TIMEOUT!      ( ms -- )            Set escape timeout
-\   KEY-SOURCE!       ( context poll-xt -- flag )  Bind a raw-byte source
-\   KEY-SOURCE-RESET  ( -- )               Restore the BIOS UART source
+\   KEY-SOURCE-ACQUIRE ( owner raw-xt event-xt -- lease status )
+\   KEY-SOURCE-RELEASE ( owner lease -- status )
+\   KEY-SOURCE-HELD?   ( owner lease -- flag )
+\   KEY-SOURCE-RAW-POLL ( ev owner lease -- flag )
 \   KEY-MOUSE-X       ( -- addr )          VARIABLE: last mouse column
 \   KEY-MOUSE-Y       ( -- addr )          VARIABLE: last mouse row
 \
@@ -208,6 +210,15 @@ VARIABLE _KEY-HAS-PENDING
 
 VARIABLE _KEY-SOURCE-CONTEXT
 VARIABLE _KEY-SOURCE-POLL-XT
+VARIABLE _KEY-SOURCE-EVENT-XT
+VARIABLE _KEY-SOURCE-OWNER
+VARIABLE _KEY-SOURCE-LEASE
+VARIABLE _KEY-SOURCE-NEXT-LEASE
+
+0 CONSTANT KEY-SOURCE-S-OK
+1 CONSTANT KEY-SOURCE-S-BUSY
+2 CONSTANT KEY-SOURCE-S-INVALID
+3 CONSTANT KEY-SOURCE-S-STALE
 
 0 _KEY-HAS-PENDING !
 
@@ -221,19 +232,54 @@ VARIABLE _KEY-SOURCE-POLL-XT
 
 0 _KEY-SOURCE-CONTEXT !
 ' _KEY-UART-POLL _KEY-SOURCE-POLL-XT !
+0 _KEY-SOURCE-EVENT-XT !
+0 _KEY-SOURCE-OWNER !
+0 _KEY-SOURCE-LEASE !
+0 _KEY-SOURCE-NEXT-LEASE !
 
-: KEY-SOURCE!  ( context poll-xt -- flag )
-    DUP 0= IF 2DROP FALSE EXIT THEN
-    _KEY-HAS-PENDING @ IF 2DROP FALSE EXIT THEN
-    _KEY-SOURCE-POLL-XT !
-    _KEY-SOURCE-CONTEXT !
-    TRUE ;
+VARIABLE _KEY-SA-OWNER
+VARIABLE _KEY-SA-RAW-XT
+VARIABLE _KEY-SA-EVENT-XT
 
-: KEY-SOURCE-RESET  ( -- )
-    0 _KEY-HAS-PENDING !
-    0 _KEY-BLEN !
+\ KEY-SOURCE-ACQUIRE ( owner raw-poll-xt event-poll-xt -- lease status )
+\   Acquire the decoder's sole source lease.  raw-poll-xt receives owner and
+\   returns ( byte has-byte ).  A nonzero event-poll-xt receives ( ev owner )
+\   and returns has-event; it may THROW to fail a containing modal loop.
+: KEY-SOURCE-ACQUIRE  ( owner raw-poll-xt event-poll-xt -- lease status )
+    _KEY-SA-EVENT-XT ! _KEY-SA-RAW-XT ! _KEY-SA-OWNER !
+    _KEY-SA-OWNER @ 0= _KEY-SA-RAW-XT @ 0= OR IF
+        0 KEY-SOURCE-S-INVALID EXIT
+    THEN
+    _KEY-SOURCE-OWNER @ _KEY-HAS-PENDING @ OR IF
+        0 KEY-SOURCE-S-BUSY EXIT
+    THEN
+    _KEY-SOURCE-NEXT-LEASE @ 1+ DUP 0= IF DROP 1 THEN
+    DUP _KEY-SOURCE-NEXT-LEASE !
+    DUP _KEY-SOURCE-LEASE !
+    _KEY-SA-OWNER @ _KEY-SOURCE-OWNER !
+    _KEY-SA-OWNER @ _KEY-SOURCE-CONTEXT !
+    _KEY-SA-RAW-XT @ _KEY-SOURCE-POLL-XT !
+    _KEY-SA-EVENT-XT @ _KEY-SOURCE-EVENT-XT !
+    KEY-SOURCE-S-OK ;
+
+: KEY-SOURCE-HELD?  ( owner lease -- flag )
+    _KEY-SOURCE-LEASE @ =
+    SWAP _KEY-SOURCE-OWNER @ = AND ;
+
+VARIABLE _KEY-SR-OWNER
+VARIABLE _KEY-SR-LEASE
+: KEY-SOURCE-RELEASE  ( owner lease -- status )
+    _KEY-SR-LEASE ! _KEY-SR-OWNER !
+    _KEY-SR-OWNER @ _KEY-SR-LEASE @ KEY-SOURCE-HELD? 0= IF
+        KEY-SOURCE-S-STALE EXIT
+    THEN
+    _KEY-HAS-PENDING @ IF KEY-SOURCE-S-BUSY EXIT THEN
+    0 _KEY-SOURCE-OWNER !
+    0 _KEY-SOURCE-LEASE !
     0 _KEY-SOURCE-CONTEXT !
-    ' _KEY-UART-POLL _KEY-SOURCE-POLL-XT ! ;
+    ' _KEY-UART-POLL _KEY-SOURCE-POLL-XT !
+    0 _KEY-SOURCE-EVENT-XT !
+    KEY-SOURCE-S-OK ;
 
 : _KEY-SOURCE-POLL  ( -- flag )
     _KEY-SOURCE-CONTEXT @ _KEY-SOURCE-POLL-XT @ EXECUTE
@@ -253,8 +299,7 @@ VARIABLE _KEY-SOURCE-POLL-XT
 
 : _KEY-RAW-BLOCK  ( -- char )
     _KEY-HAS-PENDING @ IF _KEY-RAW@ EXIT THEN
-    _KEY-SOURCE-CONTEXT @ 0=
-    _KEY-SOURCE-POLL-XT @ ['] _KEY-UART-POLL = AND IF KEY EXIT THEN
+    _KEY-SOURCE-OWNER @ 0= IF KEY EXIT THEN
     BEGIN _KEY-RAW? 0= WHILE YIELD? REPEAT
     _KEY-RAW@ ;
 
@@ -656,6 +701,20 @@ VARIABLE _KEY-B0             \ first raw byte
     _KEY-RAW@ _KEY-B0 !
     _KEY-DECODE-B0 ;
 
+VARIABLE _KEY-RP-EV
+VARIABLE _KEY-RP-OWNER
+VARIABLE _KEY-RP-LEASE
+
+\ KEY-SOURCE-RAW-POLL ( ev owner lease -- flag )
+\   Let the exact lease holder run retained ordinary bytes through the legacy
+\   parser without recursively invoking its normalized event callback.
+: KEY-SOURCE-RAW-POLL  ( ev owner lease -- flag )
+    _KEY-RP-LEASE ! _KEY-RP-OWNER ! _KEY-RP-EV !
+    _KEY-RP-OWNER @ _KEY-RP-LEASE @ KEY-SOURCE-HELD? 0= IF
+        FALSE EXIT
+    THEN
+    _KEY-RP-EV @ _KEY-READ-RAW ;
+
 \ =====================================================================
 \ 17. Public API: KEY-READ, KEY-POLL, KEY-WAIT
 \ =====================================================================
@@ -665,14 +724,23 @@ VARIABLE _KEY-B0             \ first raw byte
 \   with FALSE if no first byte is pending, but may wait to finish a sequence
 \   after consuming that byte.  Returns TRUE if an event was filled.
 : KEY-POLL  ( ev -- flag )
-    _KEY-READ-RAW ;
+    _KEY-SOURCE-EVENT-XT @ ?DUP IF
+        _KEY-SOURCE-OWNER @ SWAP EXECUTE
+    ELSE
+        _KEY-READ-RAW
+    THEN ;
 
 \ KEY-READ ( ev -- flag )
 \   Blocking read: wait for one complete key event.
-\   Uses blocking KEY for the first byte (triggers IDL on the CPU,
-\   allowing the host / emulator to yield properly), then decodes.
+\   The BIOS source uses blocking KEY for the first byte.  A structured
+\   owner is polled cooperatively so it can service framed input and make
+\   modal KEY-READ callers observe the same normalized stream as app-shell.
 \   Returns TRUE always.
 : KEY-READ  ( ev -- flag )
+    _KEY-SOURCE-EVENT-XT @ IF
+        BEGIN DUP KEY-POLL 0= WHILE YIELD? REPEAT
+        DROP TRUE EXIT
+    THEN
     _KEY-RAW-BLOCK _KEY-B0 !
     _KEY-DECODE-B0 ;
 
@@ -714,8 +782,9 @@ GUARD _keys-guard
 ' KEY-HAS-ALT?        CONSTANT _keys-halt-xt
 ' KEY-HAS-SHIFT?      CONSTANT _keys-hshift-xt
 ' KEY-TIMEOUT!        CONSTANT _keys-timeout-xt
-' KEY-SOURCE!         CONSTANT _keys-source-set-xt
-' KEY-SOURCE-RESET    CONSTANT _keys-source-reset-xt
+' KEY-SOURCE-ACQUIRE  CONSTANT _keys-source-acquire-xt
+' KEY-SOURCE-RELEASE  CONSTANT _keys-source-release-xt
+' KEY-SOURCE-HELD?    CONSTANT _keys-source-held-xt
 
 \ Input-consuming entries own the shared decoder state.  All three can wait:
 \ KEY-READ blocks, KEY-WAIT polls to a deadline, and KEY-POLL may wait after
@@ -734,6 +803,10 @@ GUARD _keys-guard
 : KEY-HAS-ALT?        _keys-halt-xt _keys-guard WITH-GUARD ;
 : KEY-HAS-SHIFT?      _keys-hshift-xt _keys-guard WITH-GUARD ;
 : KEY-TIMEOUT!        _keys-timeout-xt _keys-guard WITH-GUARD ;
-: KEY-SOURCE!         _keys-source-set-xt _keys-guard WITH-GUARD ;
-: KEY-SOURCE-RESET    _keys-source-reset-xt _keys-guard WITH-GUARD ;
+: KEY-SOURCE-ACQUIRE
+    _keys-source-acquire-xt _keys-guard WITH-GUARD ;
+: KEY-SOURCE-RELEASE
+    _keys-source-release-xt _keys-guard WITH-GUARD ;
+: KEY-SOURCE-HELD?
+    _keys-source-held-xt _keys-guard WITH-GUARD ;
 [THEN] [THEN]
