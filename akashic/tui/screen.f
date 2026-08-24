@@ -3,10 +3,11 @@
 \ =====================================================================
 \
 \  Double-buffered character-cell screen.  Widgets write to the back
-\  buffer.  SCR-FLUSH diffs front vs. back and emits only changed
-\  cells via ANSI escape sequences.
+\  buffer.  SCR-FLUSH diffs front vs. back and projects changed cells
+\  through a transactional backend.  ANSI is the constructed default;
+\  optional presentation modules bind another backend explicitly.
 \
-\  Screen Descriptor (8 cells = 64 bytes):
+\  Screen Descriptor (10 cells = 80 bytes):
 \    +0   width         Columns
 \    +8   height        Rows
 \    +16  front         Address of front buffer (w×h cells)
@@ -15,6 +16,8 @@
 \    +40  cursor-col    Current cursor column (0-based)
 \    +48  cursor-vis    Cursor visible flag (0 = hidden)
 \    +56  dirty         Global dirty flag (0 = clean)
+\    +64  force         Next accepted flush is a replace-all snapshot
+\    +72  backend       Borrowed transactional backend descriptor
 \
 \  Each cell is 8 bytes (one CELL-MAKE value), so a buffer for
 \  80×24 is 15,360 bytes × 2 = 30,720 bytes (~30 KiB).
@@ -44,11 +47,78 @@ REQUIRE ../utils/term.f
 40 CONSTANT _SCR-O-CCOL
 48 CONSTANT _SCR-O-CVIS
 56 CONSTANT _SCR-O-DIRTY
+64 CONSTANT _SCR-O-FORCE
+72 CONSTANT _SCR-O-BACKEND
 
-64 CONSTANT _SCR-DESC-SIZE
+80 CONSTANT _SCR-DESC-SIZE
 
 \ =====================================================================
-\ 2. Current screen pointer
+\ 2. Transactional backend ABI
+\ =====================================================================
+
+0 CONSTANT SCB-S-OK
+1 CONSTANT SCB-S-WOULD-BLOCK
+2 CONSTANT SCB-S-SESSION-LOST
+3 CONSTANT SCB-S-INVALID
+
+0 CONSTANT SCB-M-DELTA
+1 CONSTANT SCB-M-SNAPSHOT
+
+ 0 CONSTANT _SCB-O-CONTEXT
+ 8 CONSTANT _SCB-O-BEGIN-XT
+16 CONSTANT _SCB-O-SPAN-XT
+24 CONSTANT _SCB-O-CURSOR-XT
+32 CONSTANT _SCB-O-COMMIT-XT
+40 CONSTANT _SCB-O-ABORT-XT
+48 CONSTANT SCB-DESC-SIZE
+
+: SCB.CONTEXT    ( backend -- field ) _SCB-O-CONTEXT + ;
+: SCB.BEGIN-XT   ( backend -- field ) _SCB-O-BEGIN-XT + ;
+: SCB.SPAN-XT    ( backend -- field ) _SCB-O-SPAN-XT + ;
+: SCB.CURSOR-XT  ( backend -- field ) _SCB-O-CURSOR-XT + ;
+: SCB.COMMIT-XT  ( backend -- field ) _SCB-O-COMMIT-XT + ;
+: SCB.ABORT-XT   ( backend -- field ) _SCB-O-ABORT-XT + ;
+
+VARIABLE _SCBI-BACKEND
+VARIABLE _SCBI-CONTEXT
+VARIABLE _SCBI-BEGIN
+VARIABLE _SCBI-SPAN
+VARIABLE _SCBI-CURSOR
+VARIABLE _SCBI-COMMIT
+VARIABLE _SCBI-ABORT
+
+\ SCB-INIT ( context begin-xt span-xt cursor-xt commit-xt abort-xt backend
+\            -- status )
+\   Initialise a caller-owned backend descriptor.  The screen borrows the
+\   descriptor and context; both must outlive the binding.
+: SCB-INIT
+    _SCBI-BACKEND !
+    _SCBI-ABORT ! _SCBI-COMMIT ! _SCBI-CURSOR !
+    _SCBI-SPAN ! _SCBI-BEGIN ! _SCBI-CONTEXT !
+    _SCBI-BACKEND @ 0=
+    _SCBI-BEGIN @ 0= OR _SCBI-SPAN @ 0= OR
+    _SCBI-CURSOR @ 0= OR _SCBI-COMMIT @ 0= OR
+    _SCBI-ABORT @ 0= OR IF SCB-S-INVALID EXIT THEN
+    _SCBI-CONTEXT @ _SCBI-BACKEND @ SCB.CONTEXT !
+    _SCBI-BEGIN @   _SCBI-BACKEND @ SCB.BEGIN-XT !
+    _SCBI-SPAN @    _SCBI-BACKEND @ SCB.SPAN-XT !
+    _SCBI-CURSOR @  _SCBI-BACKEND @ SCB.CURSOR-XT !
+    _SCBI-COMMIT @  _SCBI-BACKEND @ SCB.COMMIT-XT !
+    _SCBI-ABORT @   _SCBI-BACKEND @ SCB.ABORT-XT !
+    SCB-S-OK ;
+
+: SCB-VALID?  ( backend -- flag )
+    DUP 0= IF DROP 0 EXIT THEN
+    DUP SCB.BEGIN-XT @ 0<>
+    OVER SCB.SPAN-XT @ 0<> AND
+    OVER SCB.CURSOR-XT @ 0<> AND
+    OVER SCB.COMMIT-XT @ 0<> AND
+    SWAP SCB.ABORT-XT @ 0<> AND ;
+
+CREATE _SCR-ANSI-BACKEND SCB-DESC-SIZE ALLOT
+
+\ =====================================================================
+\ 3. Current screen pointer
 \ =====================================================================
 
 VARIABLE _SCR-CUR   0 _SCR-CUR !
@@ -65,7 +135,7 @@ VARIABLE _SCR-LAST-BG     \ last emitted bg color
 VARIABLE _SCR-LAST-ATTRS  \ last emitted attribute set
 
 \ =====================================================================
-\ 3. Internal helpers
+\ 4. Internal helpers
 \ =====================================================================
 
 \ _SCR-CELLS ( scr -- n )   Total number of cells in one buffer.
@@ -82,6 +152,22 @@ VARIABLE _SCR-LAST-ATTRS  \ last emitted attribute set
     SWAP _SCR-CUR @ _SCR-O-W + @ * + 8 * ;
 
 VARIABLE _SCR-FILL-VAL
+VARIABLE _SCR-SIZE-W
+VARIABLE _SCR-SIZE-H
+
+-1 1 RSHIFT CONSTANT _SCR-SIZE-MAX
+
+\ _SCR-DIMS-BYTES? ( w h -- bytes flag )
+\   Validate positive signed dimensions and both multiplications needed by
+\   the native cell buffers.  Capacity comes from the allocator, not a
+\   hard-coded screen bound.
+: _SCR-DIMS-BYTES?  ( w h -- bytes flag )
+    _SCR-SIZE-H ! _SCR-SIZE-W !
+    _SCR-SIZE-W @ 0> _SCR-SIZE-H @ 0> AND 0= IF 0 0 EXIT THEN
+    _SCR-SIZE-W @ _SCR-SIZE-MAX _SCR-SIZE-H @ / U> IF 0 0 EXIT THEN
+    _SCR-SIZE-W @ _SCR-SIZE-H @ *
+    DUP _SCR-SIZE-MAX 8 / U> IF DROP 0 0 EXIT THEN
+    8 * -1 ;
 
 \ _SCR-CELL-FILL ( addr n cell -- )
 \   Fill n consecutive cell slots (each 8 bytes) at addr with cell.
@@ -95,24 +181,25 @@ VARIABLE _SCR-FILL-VAL
     DROP ;
 
 \ =====================================================================
-\ 4. Constructor / destructor
+\ 5. Constructor / destructor
 \ =====================================================================
 
 \ SCR-NEW ( w h -- scr )
 \   Allocate screen descriptor + two cell buffers.
 \   Front buffer is filled with CELL-BLANK, back buffer matches.
 : SCR-NEW  ( w h -- scr )
+    2DUP _SCR-DIMS-BYTES? 0= IF
+        DROP 2DROP -1 ABORT" SCR-NEW: invalid dimensions"
+    THEN
+    _SCR-BUF-BYTES !
     OVER _SCR-TMP !                    \ save w
     DUP  _SCR-TMP2 !                   \ save h
     2DROP                              \ consume w h from caller
 
-    \ Allocate descriptor (64 bytes)
+    \ Allocate descriptor (80 bytes)
     _SCR-DESC-SIZE ALLOCATE
     0<> ABORT" SCR-NEW: descriptor alloc failed"
     _SCR-TMP3 !                        \ scr → TMP3
-
-    \ Compute buffer size: w × h × 8
-    _SCR-TMP @ _SCR-TMP2 @ * 8 * _SCR-BUF-BYTES !
 
     \ Allocate front buffer
     _SCR-BUF-BYTES @ ALLOCATE DUP IF
@@ -148,6 +235,9 @@ VARIABLE _SCR-FILL-VAL
     0           _SCR-TMP3 @ _SCR-O-CCOL   + !
     0           _SCR-TMP3 @ _SCR-O-CVIS   + !
     0           _SCR-TMP3 @ _SCR-O-DIRTY  + !
+    0           _SCR-TMP3 @ _SCR-O-FORCE  + !
+    _SCR-ANSI-BACKEND
+                _SCR-TMP3 @ _SCR-O-BACKEND + !
 
     _SCR-TMP3 @ ;
 
@@ -162,7 +252,7 @@ VARIABLE _SCR-FILL-VAL
     FREE ;
 
 \ =====================================================================
-\ 5. Current screen selection
+\ 6. Current screen selection
 \ =====================================================================
 
 \ SCR-USE ( scr -- )   Set as current screen for drawing words.
@@ -170,19 +260,20 @@ VARIABLE _SCR-FILL-VAL
     _SCR-CUR ! ;
 
 \ =====================================================================
-\ 6. Accessors (operate on current screen)
+\ 7. Accessors (operate on current screen)
 \ =====================================================================
 
 : SCR-W   ( -- w )    _SCR-CUR @ _SCR-O-W + @ ;
 : SCR-H   ( -- h )    _SCR-CUR @ _SCR-O-H + @ ;
 
 \ =====================================================================
-\ 7. Cell read/write
+\ 8. Cell read/write
 \ =====================================================================
 
 \ SCR-SET ( cell row col -- )   Write cell to back buffer.
 : SCR-SET  ( cell row col -- )
-    _SCR-IDX _SCR-CUR @ _SCR-O-BACK + @ + ! ;
+    _SCR-IDX _SCR-CUR @ _SCR-O-BACK + @ + !
+    -1 _SCR-CUR @ _SCR-O-DIRTY + ! ;
 
 \ SCR-GET ( row col -- cell )   Read cell from back buffer.
 : SCR-GET  ( row col -- cell )
@@ -196,44 +287,69 @@ VARIABLE _SCR-FILL-VAL
 : SCR-FILL  ( cell -- )
     _SCR-CUR @ _SCR-O-BACK + @
     _SCR-CUR @ _SCR-CELLS
-    ROT _SCR-CELL-FILL ;
+    ROT _SCR-CELL-FILL
+    -1 _SCR-CUR @ _SCR-O-DIRTY + ! ;
 
 \ SCR-CLEAR ( -- )   Fill back buffer with CELL-BLANK.
 : SCR-CLEAR  ( -- )
     CELL-BLANK SCR-FILL ;
 
 \ =====================================================================
-\ 8. Cursor management
+\ 9. Cursor management
 \ =====================================================================
 
 \ SCR-CURSOR-AT ( row col -- )   Set logical cursor position.
 : SCR-CURSOR-AT  ( row col -- )
+    0 MAX SCR-W 1- MIN
     _SCR-CUR @ _SCR-O-CCOL + !
-    _SCR-CUR @ _SCR-O-CROW + ! ;
+    0 MAX SCR-H 1- MIN
+    _SCR-CUR @ _SCR-O-CROW + !
+    -1 _SCR-CUR @ _SCR-O-DIRTY + ! ;
 
 \ SCR-CURSOR-ON ( -- )   Show cursor on next flush.
 : SCR-CURSOR-ON  ( -- )
-    -1 _SCR-CUR @ _SCR-O-CVIS + ! ;
+    -1 _SCR-CUR @ _SCR-O-CVIS + !
+    -1 _SCR-CUR @ _SCR-O-DIRTY + ! ;
 
 \ SCR-CURSOR-OFF ( -- )  Hide cursor on next flush.
 : SCR-CURSOR-OFF  ( -- )
-    0 _SCR-CUR @ _SCR-O-CVIS + ! ;
-
-\ =====================================================================
-\ 9. Dirty / force
-\ =====================================================================
-
-\ SCR-FORCE ( -- )
-\   Force full redraw by clearing the front buffer to an impossible
-\   value so every cell differs.
-: SCR-FORCE  ( -- )
-    _SCR-CUR @ _SCR-O-FRONT + @
-    _SCR-CUR @ _SCR-CELLS
-    -1 _SCR-CELL-FILL                 \ fill front with -1 (never matches)
+    0 _SCR-CUR @ _SCR-O-CVIS + !
     -1 _SCR-CUR @ _SCR-O-DIRTY + ! ;
 
 \ =====================================================================
-\ 10. Internal: emit a single cell via ANSI
+\ 10. Dirty / force
+\ =====================================================================
+
+\ SCR-FORCE ( -- )
+\   Force a replace-all snapshot without poisoning the front buffer.  Every
+\   packed native value is legal, so no sentinel can be collision-free.
+: SCR-FORCE  ( -- )
+    -1 _SCR-CUR @ _SCR-O-FORCE + !
+    -1 _SCR-CUR @ _SCR-O-DIRTY + ! ;
+
+: SCR-DIRTY?  ( -- flag )
+    _SCR-CUR @ ?DUP IF _SCR-O-DIRTY + @ 0<> ELSE 0 THEN ;
+
+: SCR-BACKEND@  ( -- backend | 0 )
+    _SCR-CUR @ ?DUP IF _SCR-O-BACKEND + @ ELSE 0 THEN ;
+
+\ SCR-BACKEND! ( backend -- status )
+\   Bind a validated caller-owned descriptor and force its first accepted
+\   transaction to be a complete snapshot.
+: SCR-BACKEND!  ( backend -- status )
+    _SCR-CUR @ 0= IF DROP SCB-S-INVALID EXIT THEN
+    DUP SCB-VALID? 0= IF DROP SCB-S-INVALID EXIT THEN
+    _SCR-CUR @ _SCR-O-BACKEND + !
+    SCR-FORCE
+    SCB-S-OK ;
+
+: SCR-ANSI  ( -- )
+    _SCR-CUR @ 0= IF EXIT THEN
+    _SCR-ANSI-BACKEND _SCR-CUR @ _SCR-O-BACKEND + !
+    SCR-FORCE ;
+
+\ =====================================================================
+\ 11. Internal: emit a single cell via ANSI
 \ =====================================================================
 
 \ _SCR-MOVE-TO ( row col -- )
@@ -305,73 +421,269 @@ CREATE _SCR-UTF8-BUF 4 ALLOT
     THEN ;
 
 \ =====================================================================
-\ 11. SCR-FLUSH — differential screen update
+\ 12. ANSI transactional backend
 \ =====================================================================
-\
-\  Iterates every cell.  Where front[i] ≠ back[i]:
-\    1. Position cursor (skip if consecutive)
-\    2. Emit attribute/color changes
-\    3. Emit character (UTF-8)
-\  After flushing, copy back → front cell by cell.
-\
-\  An equal row is rejected first with COMPARE, which maps to MegaPad's
-\  native BCOMP instruction.  Stable UI rows therefore avoid the much more
-\  expensive interpreted cell loop entirely.
 
-VARIABLE _SCR-ROW-BYTES
+VARIABLE _SCBA-A
+VARIABLE _SCBA-N
+VARIABLE _SCBA-ROW
+VARIABLE _SCBA-COL
+VARIABLE _SCBA-CROW
+VARIABLE _SCBA-CCOL
+VARIABLE _SCBA-CVIS
 
-: SCR-FLUSH  ( -- )
-    ANSI-CURSOR-OFF                    \ hide cursor during update
-
-    \ Reset tracking state
+: _SCBA-BEGIN  ( mode cols rows span-count cell-count context -- status )
+    2DROP 2DROP 2DROP
+    ANSI-CURSOR-OFF
     -1 _SCR-LAST-ROW !
     -1 _SCR-LAST-COL !
     -1 _SCR-LAST-FG !
     -1 _SCR-LAST-BG !
      0 _SCR-LAST-ATTRS !
+    SCB-S-OK ;
 
-    _SCR-CUR @ _SCR-O-FRONT + @ _SCR-TMP  !   \ front
-    _SCR-CUR @ _SCR-O-BACK  + @ _SCR-TMP2 !   \ back
-    _SCR-CUR @ _SCR-O-W + @ 8 * _SCR-ROW-BYTES !
-
-    _SCR-CUR @ _SCR-O-H + @ 0 DO              \ for each row
-        _SCR-TMP @ _SCR-ROW-BYTES @
-        _SCR-TMP2 @ _SCR-ROW-BYTES @ COMPARE 0= IF
-            \ Native whole-row equality: nothing to emit or copy.
-            _SCR-ROW-BYTES @ _SCR-TMP +!
-            _SCR-ROW-BYTES @ _SCR-TMP2 +!
-        ELSE
-            _SCR-CUR @ _SCR-O-W + @ 0 DO        \ for each col
-                _SCR-TMP2 @ @                    ( back-cell )
-                _SCR-TMP @ @ OVER = 0= IF        \ front ≠ back?
-                    J I _SCR-MOVE-TO              \ J=row, I=col
-                    DUP _SCR-EMIT-ATTRS
-                    DUP _SCR-EMIT-CHAR
-                    _SCR-LAST-COL @ 1+ _SCR-LAST-COL !
-                THEN
-                \ Copy back → front
-                _SCR-TMP2 @ @ _SCR-TMP @ !
-                8 _SCR-TMP +!
-                8 _SCR-TMP2 +!
-                DROP
-            LOOP
-        THEN
+: _SCBA-SPAN  ( cells count row col context -- status )
+    DROP _SCBA-COL ! _SCBA-ROW ! _SCBA-N ! _SCBA-A !
+    _SCBA-N @ 0 ?DO
+        _SCBA-ROW @ _SCBA-COL @ I + _SCR-MOVE-TO
+        _SCBA-A @ I 8 * + @
+        DUP _SCR-EMIT-ATTRS
+        _SCR-EMIT-CHAR
+        1 _SCR-LAST-COL +!
     LOOP
+    SCB-S-OK ;
 
-    \ Restore cursor
-    _SCR-CUR @ _SCR-O-CVIS + @ IF
-        _SCR-CUR @ _SCR-O-CROW + @ 1+
-        _SCR-CUR @ _SCR-O-CCOL + @ 1+
-        ANSI-AT
+: _SCBA-CURSOR  ( row col visible context -- status )
+    DROP _SCBA-CVIS ! _SCBA-CCOL ! _SCBA-CROW !
+    SCB-S-OK ;
+
+: _SCBA-COMMIT  ( context -- status )
+    DROP
+    _SCBA-CVIS @ IF
+        _SCBA-CROW @ 1+ _SCBA-CCOL @ 1+ ANSI-AT
         ANSI-CURSOR-ON
     THEN
+    ANSI-RESET
+    TERM-FLUSH
+    SCB-S-OK ;
 
-    ANSI-RESET                         \ clean up attribute state
-    0 _SCR-CUR @ _SCR-O-DIRTY + !     \ clear dirty flag
-    TERM-FLUSH ;                       \ publish the final partial TX batch
+: _SCBA-ABORT  ( context -- )
+    DROP
+    ANSI-RESET
+    ANSI-CURSOR-ON
+    TERM-FLUSH ;
+
+0
+' _SCBA-BEGIN ' _SCBA-SPAN ' _SCBA-CURSOR
+' _SCBA-COMMIT ' _SCBA-ABORT
+_SCR-ANSI-BACKEND SCB-INIT
+SCB-S-OK <> ABORT" screen: ANSI backend init failed"
 
 \ =====================================================================
-\ 12. SCR-RESIZE
+\ 13. Transactional differential flush
+\ =====================================================================
+\
+\  Three bounded passes avoid a fixed change-list capacity: first count
+\  maximal spans, then emit them, then advance complete accepted rows.
+\  COMPARE remains the unchanged-row fast path in every applicable pass.
+
+VARIABLE _SCR-ROW-BYTES
+VARIABLE _SCR-SCAN-FRONT
+VARIABLE _SCR-SCAN-BACK
+VARIABLE _SCR-SCAN-W
+VARIABLE _SCR-SCAN-H
+VARIABLE _SCR-SCAN-ROW
+VARIABLE _SCR-SCAN-COL
+VARIABLE _SCR-SCAN-START
+VARIABLE _SCR-SCAN-MORE
+VARIABLE _SCR-SPAN-COUNT
+VARIABLE _SCR-CELL-COUNT
+VARIABLE _SCR-FLUSH-MODE
+VARIABLE _SCR-FLUSH-BACKEND
+VARIABLE _SCR-FLUSH-STATUS
+
+: _SCR-SCAN-RESET  ( -- )
+    _SCR-CUR @ _SCR-O-FRONT + @ _SCR-SCAN-FRONT !
+    _SCR-CUR @ _SCR-O-BACK  + @ _SCR-SCAN-BACK !
+    SCR-W DUP _SCR-SCAN-W ! 8 * _SCR-ROW-BYTES !
+    SCR-H _SCR-SCAN-H ! ;
+
+: _SCR-SCAN-NEXT-ROW  ( -- )
+    _SCR-ROW-BYTES @ _SCR-SCAN-FRONT +!
+    _SCR-ROW-BYTES @ _SCR-SCAN-BACK +! ;
+
+: _SCR-SCAN-CELL-DIFF?  ( -- flag )
+    _SCR-SCAN-FRONT @ _SCR-SCAN-COL @ 8 * + @
+    _SCR-SCAN-BACK  @ _SCR-SCAN-COL @ 8 * + @ <> ;
+
+: _SCR-COUNT-DELTA-ROW  ( -- )
+    0 _SCR-SCAN-COL !
+    BEGIN _SCR-SCAN-COL @ _SCR-SCAN-W @ < WHILE
+        _SCR-SCAN-CELL-DIFF? IF
+            1 _SCR-SPAN-COUNT +!
+            -1 _SCR-SCAN-MORE !
+            BEGIN
+                _SCR-SCAN-COL @ _SCR-SCAN-W @ <
+                _SCR-SCAN-MORE @ AND
+            WHILE
+                _SCR-SCAN-CELL-DIFF? IF
+                    1 _SCR-CELL-COUNT +!
+                    1 _SCR-SCAN-COL +!
+                ELSE
+                    0 _SCR-SCAN-MORE !
+                THEN
+            REPEAT
+        ELSE
+            1 _SCR-SCAN-COL +!
+        THEN
+    REPEAT ;
+
+: _SCR-COUNT-CHANGES  ( -- )
+    0 _SCR-SPAN-COUNT !
+    0 _SCR-CELL-COUNT !
+    _SCR-SCAN-RESET
+    _SCR-CUR @ _SCR-O-FORCE + @ IF
+        SCB-M-SNAPSHOT
+    ELSE
+        SCB-M-DELTA
+    THEN _SCR-FLUSH-MODE !
+    _SCR-SCAN-H @ 0 ?DO
+        _SCR-FLUSH-MODE @ SCB-M-SNAPSHOT = IF
+            1 _SCR-SPAN-COUNT +!
+            _SCR-SCAN-W @ _SCR-CELL-COUNT +!
+        ELSE
+            _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @
+            _SCR-SCAN-BACK @ _SCR-ROW-BYTES @ COMPARE 0<> IF
+                _SCR-COUNT-DELTA-ROW
+            THEN
+        THEN
+        _SCR-SCAN-NEXT-ROW
+    LOOP ;
+
+: _SCR-CALL-BEGIN  ( -- status )
+    _SCR-FLUSH-MODE @
+    SCR-W SCR-H
+    _SCR-SPAN-COUNT @ _SCR-CELL-COUNT @
+    _SCR-FLUSH-BACKEND @ SCB.CONTEXT @
+    _SCR-FLUSH-BACKEND @ SCB.BEGIN-XT @ EXECUTE ;
+
+: _SCR-CALL-SPAN  ( cells count row col -- status )
+    _SCR-FLUSH-BACKEND @ SCB.CONTEXT @
+    _SCR-FLUSH-BACKEND @ SCB.SPAN-XT @ EXECUTE ;
+
+: _SCR-EMIT-DELTA-ROW  ( -- )
+    0 _SCR-SCAN-COL !
+    BEGIN
+        _SCR-SCAN-COL @ _SCR-SCAN-W @ <
+        _SCR-FLUSH-STATUS @ SCB-S-OK = AND
+    WHILE
+        _SCR-SCAN-CELL-DIFF? IF
+            _SCR-SCAN-COL @ _SCR-SCAN-START !
+            -1 _SCR-SCAN-MORE !
+            BEGIN
+                _SCR-SCAN-COL @ _SCR-SCAN-W @ <
+                _SCR-SCAN-MORE @ AND
+            WHILE
+                _SCR-SCAN-CELL-DIFF? IF
+                    1 _SCR-SCAN-COL +!
+                ELSE
+                    0 _SCR-SCAN-MORE !
+                THEN
+            REPEAT
+            _SCR-SCAN-BACK @ _SCR-SCAN-START @ 8 * +
+            _SCR-SCAN-COL @ _SCR-SCAN-START @ -
+            _SCR-SCAN-ROW @ _SCR-SCAN-START @
+            _SCR-CALL-SPAN _SCR-FLUSH-STATUS !
+        ELSE
+            1 _SCR-SCAN-COL +!
+        THEN
+    REPEAT ;
+
+: _SCR-EMIT-SPANS  ( -- status )
+    _SCR-SCAN-RESET
+    0 _SCR-SCAN-ROW !
+    SCB-S-OK _SCR-FLUSH-STATUS !
+    _SCR-SCAN-H @ 0 ?DO
+        _SCR-FLUSH-STATUS @ SCB-S-OK = IF
+            _SCR-FLUSH-MODE @ SCB-M-SNAPSHOT = IF
+                _SCR-SCAN-BACK @ _SCR-SCAN-W @ I 0
+                _SCR-CALL-SPAN _SCR-FLUSH-STATUS !
+            ELSE
+                _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @
+                _SCR-SCAN-BACK @ _SCR-ROW-BYTES @ COMPARE 0<> IF
+                    I _SCR-SCAN-ROW !
+                    _SCR-EMIT-DELTA-ROW
+                THEN
+            THEN
+        THEN
+        _SCR-SCAN-NEXT-ROW
+    LOOP
+    _SCR-FLUSH-STATUS @ ;
+
+: _SCR-CALL-CURSOR  ( -- status )
+    _SCR-CUR @ _SCR-O-CROW + @
+    _SCR-CUR @ _SCR-O-CCOL + @
+    _SCR-CUR @ _SCR-O-CVIS + @ IF 1 ELSE 0 THEN
+    _SCR-FLUSH-BACKEND @ SCB.CONTEXT @
+    _SCR-FLUSH-BACKEND @ SCB.CURSOR-XT @ EXECUTE ;
+
+: _SCR-CALL-COMMIT  ( -- status )
+    _SCR-FLUSH-BACKEND @ SCB.CONTEXT @
+    _SCR-FLUSH-BACKEND @ SCB.COMMIT-XT @ EXECUTE ;
+
+: _SCR-CALL-ABORT  ( -- )
+    _SCR-FLUSH-BACKEND @ SCB.CONTEXT @
+    _SCR-FLUSH-BACKEND @ SCB.ABORT-XT @ EXECUTE ;
+
+: _SCR-FAIL  ( status -- status )
+    \ Backend failures do not prove that raw ANSI is safe.  The terminal
+    \ owner performs an explicit synchronized close or hard-reset handoff
+    \ before calling SCR-ANSI.
+    ;
+
+: _SCR-ADVANCE-FRONT  ( -- )
+    _SCR-SCAN-RESET
+    _SCR-SCAN-H @ 0 ?DO
+        _SCR-FLUSH-MODE @ SCB-M-SNAPSHOT = IF
+            _SCR-SCAN-BACK @ _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @ CMOVE
+        ELSE
+            _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @
+            _SCR-SCAN-BACK @ _SCR-ROW-BYTES @ COMPARE 0<> IF
+                _SCR-SCAN-BACK @ _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @ CMOVE
+            THEN
+        THEN
+        _SCR-SCAN-NEXT-ROW
+    LOOP
+    0 _SCR-CUR @ _SCR-O-DIRTY + !
+    0 _SCR-CUR @ _SCR-O-FORCE + ! ;
+
+\ SCR-FLUSH? ( -- status )
+\   Attempt one transaction.  A refusal never advances front.  In particular,
+\   SESSION-LOST leaves the current backend bound: only the stream owner knows
+\   whether a synchronized close has made ANSI emission safe again.
+: SCR-FLUSH?  ( -- status )
+    _SCR-CUR @ 0= IF SCB-S-INVALID EXIT THEN
+    SCR-BACKEND@ DUP SCB-VALID? 0= IF DROP SCB-S-INVALID EXIT THEN
+    _SCR-FLUSH-BACKEND !
+    _SCR-COUNT-CHANGES
+    _SCR-CALL-BEGIN DUP SCB-S-OK <> IF _SCR-FAIL EXIT THEN DROP
+    _SCR-EMIT-SPANS DUP SCB-S-OK <> IF
+        _SCR-CALL-ABORT _SCR-FAIL EXIT
+    THEN DROP
+    _SCR-CALL-CURSOR DUP SCB-S-OK <> IF
+        _SCR-CALL-ABORT _SCR-FAIL EXIT
+    THEN DROP
+    _SCR-CALL-COMMIT DUP SCB-S-OK <> IF _SCR-FAIL EXIT THEN DROP
+    _SCR-ADVANCE-FRONT
+    SCB-S-OK ;
+
+\ Preserve the established no-result convenience API.  Status-aware owners
+\ such as app-shell use SCR-FLUSH? so backpressure remains observable.
+: SCR-FLUSH  ( -- )
+    SCR-FLUSH? DROP ;
+
+\ =====================================================================
+\ 14. SCR-RESIZE
 \ =====================================================================
 \
 \   Resize the screen.  This creates new buffers, copies the
@@ -388,6 +700,10 @@ VARIABLE _SCR-COPY-W
 VARIABLE _SCR-COPY-H
 
 : SCR-RESIZE  ( w h -- )
+    2DUP _SCR-DIMS-BYTES? 0= IF
+        DROP 2DROP -1 ABORT" SCR-RESIZE: invalid dimensions"
+    THEN
+    _SCR-BUF-BYTES !
     _SCR-CUR @ _SCR-O-W + @ _SCR-OLD-W !
     _SCR-CUR @ _SCR-O-H + @ _SCR-OLD-H !
     _SCR-CUR @ _SCR-O-FRONT + @ _SCR-OLD-FRONT !
@@ -398,7 +714,6 @@ VARIABLE _SCR-COPY-H
     2DROP                              \ consume w h from caller
 
     \ Allocate new buffers
-    _SCR-TMP @ _SCR-TMP2 @ * 8 * _SCR-BUF-BYTES !
     _SCR-BUF-BYTES @ ALLOCATE DUP IF
         2DROP -1 ABORT" SCR-RESIZE: front alloc failed"
     THEN
@@ -441,6 +756,10 @@ VARIABLE _SCR-COPY-H
     _SCR-NEW-FRONT @ _SCR-CUR @ _SCR-O-FRONT + !
     _SCR-NEW-BACK  @ _SCR-CUR @ _SCR-O-BACK  + !
 
+    \ Keep the logical cursor valid for the replacement geometry.
+    _SCR-CUR @ _SCR-O-CROW + DUP @ 0 MAX SCR-H 1- MIN SWAP !
+    _SCR-CUR @ _SCR-O-CCOL + DUP @ 0 MAX SCR-W 1- MIN SWAP !
+
     \ Force full redraw
     SCR-FORCE
 
@@ -448,7 +767,7 @@ VARIABLE _SCR-COPY-H
     _SCR-OLD-BACK @ FREE ;
 
 \ =====================================================================
-\ 13. Guard
+\ 15. Guard
 \ =====================================================================
 
 [DEFINED] GUARDED [IF] GUARDED [IF]
@@ -464,8 +783,13 @@ GUARD _scr-guard
 ' SCR-GET             CONSTANT _scr-get-xt
 ' SCR-FILL            CONSTANT _scr-fill-xt
 ' SCR-CLEAR           CONSTANT _scr-clear-xt
+' SCR-FLUSH?          CONSTANT _scr-flush-status-xt
 ' SCR-FLUSH           CONSTANT _scr-flush-xt
 ' SCR-FORCE           CONSTANT _scr-force-xt
+' SCR-DIRTY?          CONSTANT _scr-dirty-xt
+' SCR-BACKEND@        CONSTANT _scr-backend-get-xt
+' SCR-BACKEND!        CONSTANT _scr-backend-set-xt
+' SCR-ANSI            CONSTANT _scr-ansi-xt
 ' SCR-RESIZE          CONSTANT _scr-resize-xt
 ' SCR-CURSOR-AT       CONSTANT _scr-curat-xt
 ' SCR-CURSOR-ON       CONSTANT _scr-curon-xt
@@ -480,8 +804,13 @@ GUARD _scr-guard
 : SCR-GET             _scr-get-xt    _scr-guard WITH-GUARD ;
 : SCR-FILL            _scr-fill-xt   _scr-guard WITH-GUARD ;
 : SCR-CLEAR           _scr-clear-xt  _scr-guard WITH-GUARD ;
+: SCR-FLUSH?          _scr-flush-status-xt _scr-guard WITH-GUARD ;
 : SCR-FLUSH           _scr-flush-xt  _scr-guard WITH-GUARD ;
 : SCR-FORCE           _scr-force-xt  _scr-guard WITH-GUARD ;
+: SCR-DIRTY?          _scr-dirty-xt _scr-guard WITH-GUARD ;
+: SCR-BACKEND@        _scr-backend-get-xt _scr-guard WITH-GUARD ;
+: SCR-BACKEND!        _scr-backend-set-xt _scr-guard WITH-GUARD ;
+: SCR-ANSI            _scr-ansi-xt _scr-guard WITH-GUARD ;
 : SCR-RESIZE          _scr-resize-xt _scr-guard WITH-GUARD ;
 : SCR-CURSOR-AT       _scr-curat-xt  _scr-guard WITH-GUARD ;
 : SCR-CURSOR-ON       _scr-curon-xt  _scr-guard WITH-GUARD ;
