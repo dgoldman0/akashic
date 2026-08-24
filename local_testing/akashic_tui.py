@@ -265,7 +265,7 @@ from diskutil import (  # noqa: E402
     MP64FS,
     pack_forth_source,
 )
-from presentation_terminal import TerminalState  # noqa: E402
+from presentation_terminal import DriverStatus, TerminalState  # noqa: E402
 from session import (  # noqa: E402
     MachineSession,
     PresentationSessionPolicy,
@@ -29169,6 +29169,29 @@ def smoke(
                     "Authorized Agent did not complete a conversation",
                     step_budget=600_000_000,
                     wall_timeout=15.0,
+                )
+
+        if initial_ready and profile_name == "desktop-apt1":
+            before_revision = session.revision
+            admission = session.send_key("alt+h")
+            if admission is not DriverStatus.PROGRESS:
+                journey_errors.append(
+                    "APT Desk did not admit the normalized Alt+H event"
+                )
+            elif wait_screen(
+                "Applets", "APT Desk did not repaint the catalog launcher"
+            ):
+                if session.revision <= before_revision:
+                    journey_errors.append(
+                        "APT Desk launcher did not publish a new immutable view"
+                    )
+                if not _presentation_smoke_ready(profile, session):
+                    journey_errors.append(
+                        "APT Desk lost its framed session after normalized input"
+                    )
+                session.send_key("escape")
+                wait_screen_gone(
+                    "Applets", "APT Desk did not close the catalog launcher"
                 )
 
         if initial_ready and profile_name not in ("interop", "resource-contracts"):
