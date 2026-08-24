@@ -26,7 +26,7 @@ The interface uses these stable values:
 | Value | Name | Meaning |
 | ---: | --- | --- |
 | 0 | `SCB-S-OK` | The operation was accepted. |
-| 1 | `SCB-S-WOULD-BLOCK` | No state changed; retry after capacity changes. |
+| 1 | `SCB-S-WOULD-BLOCK` | No state changed; retry after capacity or transient owner contention changes. |
 | 2 | `SCB-S-SESSION-LOST` | The binding is stale or the enhanced session ended. |
 | 3 | `SCB-S-INVALID` | Caller arguments or backend state violate the contract. |
 
@@ -134,6 +134,9 @@ negotiation.
 The enhanced backend is bound only after successful negotiation. `begin`
 checks the current session epoch and reserves sufficient transport and remote
 transaction budget for the declared counts. A refusal has no wire effect.
+Binding and non-ANSI service require `PT-OWNS?` for the adapter's exact
+borrowed session. An ANSI-state adapter may rebind the ANSI backend only when
+`PT-STREAM-OWNED?` also proves that no other session owns the global stream.
 
 Each `span` applies `CW-CELL-CP` and serializes the CELL-1 codepoint, foreground
 index, background index, and named wire attributes. Wide and continuation
@@ -148,10 +151,17 @@ The module permits only one locally committed transaction awaiting
 `SCB-S-WOULD-BLOCK`. A failed result maps to `SCB-S-SESSION-LOST` before any
 later application event; no optimistic pipeline or rollback is permitted.
 
-Session loss binds ANSI before the next application event is delivered,
-forces a complete ANSI redraw, and retires partial enhanced output by epoch.
-Negotiation refusal, timeout, or an ANSI-only physical terminal follows the
-same path and is not an application error.
+Negotiation refusal, a pre-`OPEN` timeout, or an ANSI-only physical terminal
+keeps or restores the ANSI backend and is not an application error. Once
+`OPEN` has crossed the binary switch boundary, session loss retains the APT
+backend and input owner, suppresses application callbacks and raw terminal
+output, and requires either an acknowledged framed close or an external hard
+attachment reset and drain before ANSI may be rebound. A competing live APT
+session is a transient `WOULD-BLOCK`, not proof that this idle adapter lost a
+session. Because app shutdown and component state finalizers are arbitrary
+callbacks, unsafe teardown does not invoke them: it retains the exact live
+top-level component instance until the same whole-environment reset/reload
+boundary. Raw-freeing that state without its finalizer is not permitted.
 
 ## 8. Cursor and geometry
 
