@@ -303,6 +303,15 @@ VARIABLE _KEY-SR-LEASE
     BEGIN _KEY-RAW? 0= WHILE YIELD? REPEAT
     _KEY-RAW@ ;
 
+\ _KEY-UTF8-NEXT ( -- byte has-byte )
+\   BIOS input preserves the historical blocking continuation read.  A custom
+\   source may expose only a finite retained prefix while framed ownership is
+\   live, so it must be allowed to stop a partial sequence without trapping a
+\   modal KEY-READ below the owner's service boundary.
+: _KEY-UTF8-NEXT  ( -- byte has-byte )
+    _KEY-SOURCE-OWNER @ 0= IF _KEY-RAW-BLOCK TRUE EXIT THEN
+    _KEY-RAW? IF _KEY-RAW@ TRUE ELSE 0 FALSE THEN ;
+
 : _KEY-TIMED?  ( ms -- char flag )
     MS@ +                              \ absolute deadline in ms
     _KEY-DEADLINE !
@@ -674,13 +683,23 @@ VARIABLE _KEY-B0             \ first raw byte
         THEN
         \ Read remaining bytes
         DUP 1 DO
-            _KEY-RAW-BLOCK DUP 0x80 AND 0= IF
-                \ Not a continuation — bad sequence
-                DROP UNLOOP
+            _KEY-UTF8-NEXT IF
+                DUP 0xC0 AND 0x80 <> IF
+                    \ Preserve the first non-continuation for the next event.
+                    _KEY-PENDING-BYTE !
+                    TRUE _KEY-HAS-PENDING !
+                    DROP UNLOOP
+                    KEY-T-CHAR 0xFFFD 0 _KEY-SET-EV
+                    -1 EXIT
+                THEN
+                _KEY-UTF8 I + C!
+            ELSE
+                \ A finite custom prefix ended mid-sequence.  Drop both the
+                \ sentinel byte and retained sequence length, leaving ev.
+                2DROP UNLOOP
                 KEY-T-CHAR 0xFFFD 0 _KEY-SET-EV
                 -1 EXIT
             THEN
-            _KEY-UTF8 I + C!
         LOOP
         \ Decode UTF-8
         _KEY-UTF8 SWAP UTF8-DECODE     ( cp addr' len' )
