@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import re
 import struct
 import sys
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -24,12 +27,15 @@ from akashic_tui import (  # noqa: E402
     COLD_SOURCE_MAGIC,
     COLD_SOURCE_RAW_MAX_BYTES,
     COLD_SOURCE_VERSION,
+    DESKTOP_APT1_PRESENTATION,
     DEFAULT_SMOKE_MAX_STEPS,
     DEFAULT_SMOKE_TIMEOUT,
     FORTH_LINE_COALESCE_BARRIERS,
     LINK_CHUNK_BYTES,
     MEGAPAD_EVALUATE_SOURCE_MAX_BYTES,
     MEGAPAD_NETWORKING_BOOT_LINE,
+    MEGAPAD_PRESENTATION_TERMINAL_BOOT_LINE,
+    MEGAPAD_PRESENTATION_TERMINAL_MODULE,
     MEGAPAD_ROOT,
     MP64FS_VFS_PLATFORM_BOOT_LINE,
     MP64FS_VFS_PLATFORM_MODULE,
@@ -49,16 +55,21 @@ from akashic_tui import (  # noqa: E402
     _pack_cold_source,
     _packed_linked_chunks,
     _parser,
+    _presentation_server_arguments,
+    _presentation_smoke_ready,
     _smoke_limits,
     _requires_megapad_networking,
+    _requires_megapad_presentation_terminal,
     _unpack_cold_source,
     _validate_image_paths,
     _validate_module_ids,
     _with_megapad_networking,
+    _with_megapad_presentation_terminal,
     _with_mp64fs_vfs_platform,
     build_image,
     dependency_closure,
     dependency_order,
+    smoke,
 )
 from diskutil import (  # noqa: E402
     FTYPE_DATA,
@@ -68,6 +79,7 @@ from diskutil import (  # noqa: E402
     pack_forth_source,
 )
 from forth_dependencies import module_key  # noqa: E402
+from presentation_terminal import TerminalState  # noqa: E402
 
 
 LIBRARY_RENDERER_FREE_PROFILES = (
@@ -1633,6 +1645,144 @@ def test_networking_boot_load_rejects_unsafe_placement(autoexec: str) -> None:
 def test_direct_web_response_requires_native_networking() -> None:
     closure = dependency_closure(("web/response.f",))
     assert _requires_megapad_networking(closure)
+
+
+def test_presentation_boot_load_follows_networking_and_owns_capacities() -> None:
+    autoexec = (
+        "ENTER-USERLAND\n"
+        f"{MEGAPAD_NETWORKING_BOOT_LINE}\n"
+        "REQUIRE coldsrc.f\n"
+    )
+    integrated = _with_megapad_presentation_terminal(
+        autoexec, DESKTOP_APT1_PRESENTATION
+    )
+    expected_prefix = (
+        "ENTER-USERLAND\n"
+        f"{MEGAPAD_NETWORKING_BOOT_LINE}\n"
+        f"{MEGAPAD_PRESENTATION_TERMINAL_BOOT_LINE}\n"
+        "8192 CONSTANT APT1-DESK-RX-CAPACITY\n"
+        "8192 CONSTANT APT1-DESK-TX-CAPACITY\n"
+    )
+    assert integrated.startswith(expected_prefix)
+    assert integrated.endswith("REQUIRE coldsrc.f\n")
+    assert (
+        _with_megapad_presentation_terminal(
+            integrated, DESKTOP_APT1_PRESENTATION
+        )
+        == integrated
+    )
+
+
+def test_desktop_apt1_build_is_an_external_additive_composition(
+    tmp_path: Path,
+) -> None:
+    baseline = PROFILES["desktop"]
+    profile = PROFILES["desktop-apt1"]
+    assert baseline.presentation is None
+    assert "tui/applets/desk/desk.f" in baseline.roots
+    assert "tui/desk-apt1.f" not in baseline.roots
+    assert profile.presentation is DESKTOP_APT1_PRESENTATION
+    assert "tui/desk-apt1.f" in profile.roots
+
+    closure = dependency_order(profile.roots)
+    assert _requires_megapad_presentation_terminal(closure)
+    assert MEGAPAD_PRESENTATION_TERMINAL_MODULE in closure
+    assert "tui/screen-backend-apt1.f" in closure
+    assert "tui/app-shell-apt1.f" in closure
+
+    image = build_image(
+        "desktop-apt1", tmp_path / "akashic-desktop-apt1.img"
+    )
+    filesystem = MP64FS(bytearray(image.read_bytes()))
+    assert filesystem.read_file(MEGAPAD_PRESENTATION_TERMINAL_MODULE) == (
+        pack_forth_source(
+            (MEGAPAD_ROOT / MEGAPAD_PRESENTATION_TERMINAL_MODULE).read_bytes()
+        )
+    )
+    assert filesystem.info()["free_sectors"] * 512 >= profile.minimum_free_bytes
+
+    autoexec = filesystem.read_file("autoexec.f").decode("utf-8")
+    ordered_boot = (
+        autoexec.index(MEGAPAD_NETWORKING_BOOT_LINE),
+        autoexec.index(MEGAPAD_PRESENTATION_TERMINAL_BOOT_LINE),
+        autoexec.index("8192 CONSTANT APT1-DESK-RX-CAPACITY"),
+        autoexec.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}"),
+    )
+    assert ordered_boot == tuple(sorted(ordered_boot))
+    assert "BEGIN IDLE AGAIN" in autoexec
+    assert "PT-STREAM-OWNED? IF DROP _boot-rich-quarantine THEN" in autoexec
+    assert "PT-STREAM-OWNED? IF BYE" not in autoexec
+
+    packed_names = sorted(
+        entry.name
+        for entry in filesystem.list_files()
+        if re.fullmatch(r"source-[0-9]{2}\.lz", entry.name)
+    )
+    linked_source = b"".join(
+        _unpack_cold_source(filesystem.read_file(name))
+        for name in packed_names
+    ).decode("utf-8")
+    assert "PROVIDED akashic-tui-desk-apt1" in linked_source
+    assert "PROVIDED akashic-tui-screen-backend-apt1" in linked_source
+    assert "PROVIDED presentation-terminal.f" not in linked_source
+
+
+def test_desktop_apt1_launchers_transfer_the_same_host_policy() -> None:
+    baseline = PROFILES["desktop"]
+    profile = PROFILES["desktop-apt1"]
+    assert _presentation_server_arguments(baseline) == []
+    server_arguments = _presentation_server_arguments(profile)
+    assert server_arguments[0] == "--presentation-terminal-policy"
+    assert json.loads(server_arguments[1]) == (
+        profile.presentation.host_policy.to_dict()
+    )
+
+    with patch(
+        "akashic_tui.MachineSession.from_bios",
+        side_effect=RuntimeError("stop after configuration"),
+    ) as from_bios:
+        with pytest.raises(RuntimeError, match="stop after configuration"):
+            smoke(
+                "desktop-apt1",
+                Path("unused.img"),
+                cols=100,
+                rows=32,
+                max_steps=1,
+                timeout=1.0,
+            )
+    assert from_bios.call_args.kwargs["presentation"] == (
+        profile.presentation.configuration(100, 32)
+    )
+
+
+def test_desktop_apt1_smoke_rejects_fallback_and_terminal_loss() -> None:
+    baseline = PROFILES["desktop"]
+    profile = PROFILES["desktop-apt1"]
+    assert _presentation_smoke_ready(baseline, SimpleNamespace())
+
+    def terminal(
+        state: TerminalState,
+        *,
+        failure: str | None = None,
+        lost: bool = False,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            presentation_state=state,
+            presentation_failure=failure,
+            presentation_lost=lost,
+        )
+
+    assert _presentation_smoke_ready(
+        profile, terminal(TerminalState.ACTIVE)
+    )
+    for rejected in (
+        terminal(TerminalState.ANSI),
+        terminal(TerminalState.PROBING),
+        terminal(TerminalState.FAILED),
+        terminal(TerminalState.ACTIVE, failure="host failure"),
+        terminal(TerminalState.ACTIVE, lost=True),
+    ):
+        assert not _presentation_smoke_ready(profile, rejected)
 
 
 def test_abstract_http_profile_omits_native_networking(

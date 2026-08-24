@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,7 +61,23 @@ def module_key(module_id: str) -> bytes:
     )
 
 
-def dependency_closure(source_root: Path, roots: tuple[str, ...]) -> tuple[str, ...]:
+def _module_source_path(
+    source_root: Path,
+    module: str,
+    external_modules: Mapping[str, Path] | None,
+) -> Path:
+    """Resolve one virtual module path without copying external sources."""
+    if external_modules is not None and module in external_modules:
+        return Path(external_modules[module])
+    return source_root / module
+
+
+def dependency_closure(
+    source_root: Path,
+    roots: tuple[str, ...],
+    *,
+    external_modules: Mapping[str, Path] | None = None,
+) -> tuple[str, ...]:
     """Return the deterministic transitive REQUIRE closure for *roots*."""
     pending = [normalize_module(root) for root in reversed(roots)]
     seen: set[str] = set()
@@ -69,7 +86,7 @@ def dependency_closure(source_root: Path, roots: tuple[str, ...]) -> tuple[str, 
         module = pending.pop()
         if module in seen:
             continue
-        host_path = source_root / module
+        host_path = _module_source_path(source_root, module, external_modules)
         if not host_path.is_file():
             raise FileNotFoundError(f"Missing Akashic module: {module}")
         seen.add(module)
@@ -82,7 +99,12 @@ def dependency_closure(source_root: Path, roots: tuple[str, ...]) -> tuple[str, 
     return tuple(sorted(seen))
 
 
-def dependency_order(source_root: Path, roots: tuple[str, ...]) -> tuple[str, ...]:
+def dependency_order(
+    source_root: Path,
+    roots: tuple[str, ...],
+    *,
+    external_modules: Mapping[str, Path] | None = None,
+) -> tuple[str, ...]:
     """Return dependencies before their requiring modules."""
     ordered: list[str] = []
     visited: set[str] = set()
@@ -94,7 +116,9 @@ def dependency_order(source_root: Path, roots: tuple[str, ...]) -> tuple[str, ..
             return
         if normalized in visiting:
             raise RuntimeError(f"Cyclic linked REQUIRE dependency: {normalized}")
-        host_path = source_root / normalized
+        host_path = _module_source_path(
+            source_root, normalized, external_modules
+        )
         if not host_path.is_file():
             raise FileNotFoundError(f"Missing Akashic module: {normalized}")
         visiting.add(normalized)

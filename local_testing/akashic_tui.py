@@ -265,7 +265,36 @@ from diskutil import (  # noqa: E402
     MP64FS,
     pack_forth_source,
 )
-from session import MachineSession  # noqa: E402
+from presentation_terminal import TerminalState  # noqa: E402
+from session import (  # noqa: E402
+    MachineSession,
+    PresentationSessionPolicy,
+)
+
+
+@dataclass(frozen=True)
+class PresentationProfile:
+    """Product bounds for one explicitly presentation-enabled profile."""
+
+    guest_rx_bytes: int
+    guest_tx_bytes: int
+    host_policy: PresentationSessionPolicy
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.host_policy, PresentationSessionPolicy):
+            raise TypeError("host_policy must be a PresentationSessionPolicy")
+        for name in ("guest_rx_bytes", "guest_tx_bytes"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{name} must be an integer")
+        if self.guest_rx_bytes < 4_168:
+            raise ValueError("guest_rx_bytes must admit the control reserve")
+        maximum_row_frame = 40 + 12 + 8 * self.host_policy.max_cols
+        if self.guest_tx_bytes < max(73, maximum_row_frame):
+            raise ValueError("guest_tx_bytes cannot admit a maximum row frame")
+
+    def configuration(self, cols: int, rows: int):
+        return self.host_policy.configuration(cols, rows)
 
 
 @dataclass(frozen=True)
@@ -298,6 +327,8 @@ class Profile:
     # line-sensitive custom parsing words.  It is never a default transform.
     audited_link_line_bytes: int | None = None
     audited_initial_forth_line_bytes: int | None = None
+    presentation: PresentationProfile | None = None
+    minimum_free_bytes: int = 0
 
 
 # Akashic modules that bind directly to the networking surface exported by
@@ -319,6 +350,10 @@ MEGAPAD_NETWORKING_CONSUMERS = frozenset(
     }
 )
 MEGAPAD_NETWORKING_BOOT_LINE = "REQUIRE networking.f"
+MEGAPAD_PRESENTATION_TERMINAL_MODULE = "presentation-terminal.f"
+MEGAPAD_PRESENTATION_TERMINAL_BOOT_LINE = (
+    f"REQUIRE {MEGAPAD_PRESENTATION_TERMINAL_MODULE}"
+)
 APP_SHELL_MODULE = "tui/app-shell.f"
 MP64FS_VFS_PLATFORM_MODULE = "tui/platform/mp64fs-vfs.f"
 MP64FS_VFS_PLATFORM_BOOT_LINE = f"REQUIRE {MP64FS_VFS_PLATFORM_MODULE}"
@@ -10938,6 +10973,7 @@ THEN
         smoke_max_steps=DESKTOP_SMOKE_MAX_STEPS,
         smoke_timeout=DESKTOP_SMOKE_TIMEOUT,
         total_sectors=8192,
+        minimum_free_bytes=1 << 20,
     ),
     "agent-widgets": Profile(
         roots=(
@@ -13154,6 +13190,72 @@ SOUNDLAB-RUN
         include_large_sample=False,
     ),
 }
+
+
+DESKTOP_APT1_PRESENTATION = PresentationProfile(
+    guest_rx_bytes=8_192,
+    guest_tx_bytes=8_192,
+    host_policy=PresentationSessionPolicy(
+        max_cols=400,
+        max_rows=200,
+        egress_high_publications=2,
+        egress_high_batches=32,
+        egress_low_batches=4,
+        ingress_bytes=128 * 1024,
+        ingress_events=256,
+        ingress_control_bytes=4_096,
+        ingress_control_events=32,
+        geometry_events=8,
+        pending_outbound_bytes=128 * 1024,
+        pending_outbound_events=256,
+        ansi_history_bytes=256 * 1024,
+        service_batches=4,
+    ),
+)
+
+
+def _desktop_apt1_autoexec(autoexec: str) -> str:
+    """Replace only Desktop's terminal owner and fail-closed run wrapper."""
+    desk_require = "REQUIRE tui/applets/desk/desk.f"
+    if autoexec.count(desk_require) != 1:
+        raise RuntimeError("Desktop profile must load Desk exactly once")
+    result = autoexec.replace(
+        desk_require,
+        "REQUIRE tui/desk-apt1.f",
+        1,
+    )
+    ansi_runner = """: _boot-run-desktop  ( -- ) DESK-RUN ;
+' _boot-run-desktop CATCH ?DUP IF
+    .\" [akashic] desktop exception \" . CR
+THEN
+.\" [akashic] desktop exited\" CR"""
+    apt_runner = """: _boot-rich-quarantine  ( -- ) BEGIN IDLE AGAIN ;
+: _boot-run-desktop  ( -- ) APT1-DESK-RUN ;
+: _boot-report-desktop-apt1-error  ( ior -- )
+    PT-STREAM-OWNED? IF DROP _boot-rich-quarantine THEN
+    .\" [akashic] desktop exception \" . CR ;
+' _boot-run-desktop CATCH ?DUP IF
+    _boot-report-desktop-apt1-error
+THEN
+PT-STREAM-OWNED? IF _boot-rich-quarantine THEN
+.\" [akashic] desktop exited\" CR"""
+    if result.count(ansi_runner) != 1:
+        raise RuntimeError("Desktop profile run wrapper changed unexpectedly")
+    return result.replace(ansi_runner, apt_runner, 1)
+
+
+PROFILES["desktop-apt1"] = replace(
+    PROFILES["desktop"],
+    roots=tuple(
+        "tui/desk-apt1.f"
+        if root == "tui/applets/desk/desk.f"
+        else root
+        for root in PROFILES["desktop"].roots
+    ),
+    autoexec=_desktop_apt1_autoexec(PROFILES["desktop"].autoexec),
+    presentation=DESKTOP_APT1_PRESENTATION,
+)
+
 
 PROFILES["library"] = Profile(
     roots=("tui/applets/library/library.f",),
@@ -24657,19 +24759,47 @@ def _normalize_module(module: str, requiring: str | None = None) -> str:
     return _shared_normalize_module(module, requiring)
 
 
+def _external_module_sources() -> dict[str, Path]:
+    """Map virtual image modules to their canonical external source files."""
+    return {
+        MEGAPAD_PRESENTATION_TERMINAL_MODULE: (
+            MEGAPAD_ROOT / MEGAPAD_PRESENTATION_TERMINAL_MODULE
+        )
+    }
+
+
+def _module_source_path(module: str) -> Path:
+    return _external_module_sources().get(module, SOURCE_ROOT / module)
+
+
 def dependency_closure(roots: tuple[str, ...]) -> tuple[str, ...]:
     """Return the deterministic transitive REQUIRE closure for *roots*."""
-    return _shared_dependency_closure(SOURCE_ROOT, roots)
+    return _shared_dependency_closure(
+        SOURCE_ROOT,
+        roots,
+        external_modules=_external_module_sources(),
+    )
 
 
 def dependency_order(roots: tuple[str, ...]) -> tuple[str, ...]:
     """Return dependencies before their requiring modules."""
-    return _shared_dependency_order(SOURCE_ROOT, roots)
+    return _shared_dependency_order(
+        SOURCE_ROOT,
+        roots,
+        external_modules=_external_module_sources(),
+    )
 
 
 def _requires_megapad_networking(modules: tuple[str, ...]) -> bool:
     """Return whether an Akashic module closure consumes KDOS networking."""
     return not MEGAPAD_NETWORKING_CONSUMERS.isdisjoint(modules)
+
+
+def _requires_megapad_presentation_terminal(
+    modules: tuple[str, ...],
+) -> bool:
+    """Return whether the closure names the external APT guest module."""
+    return MEGAPAD_PRESENTATION_TERMINAL_MODULE in modules
 
 
 def _forth_line_tokens(line: str) -> tuple[str, ...]:
@@ -24722,15 +24852,21 @@ def _forth_line_tokens(line: str) -> tuple[str, ...]:
     return tuple(tokens)
 
 
+def _forth_line_contains_module_load(
+    tokens: tuple[str, ...], command: str, module: str
+) -> bool:
+    """Find one module load using the guest's token and filename rules."""
+    return any(
+        tokens[index].upper() == command
+        and tokens[index + 1].lower() == module.lower()
+        for index in range(len(tokens) - 1)
+    )
+
+
 def _forth_line_contains_networking_load(
     tokens: tuple[str, ...], command: str
 ) -> bool:
-    """Find a networking load while preserving MP64FS filename case."""
-    return any(
-        tokens[index].upper() == command
-        and tokens[index + 1].lower() == "networking.f"
-        for index in range(len(tokens) - 1)
-    )
+    return _forth_line_contains_module_load(tokens, command, "networking.f")
 
 
 def _with_mp64fs_vfs_platform(autoexec: str) -> str:
@@ -24822,6 +24958,77 @@ def _with_megapad_networking(autoexec: str) -> str:
             )
         return autoexec
     lines.insert(expected_index, MEGAPAD_NETWORKING_BOOT_LINE)
+    suffix = "\n" if autoexec.endswith("\n") else ""
+    return "\n".join(lines) + suffix
+
+
+def _with_megapad_presentation_terminal(
+    autoexec: str,
+    presentation: PresentationProfile,
+) -> str:
+    """Load and configure the external APT module before Akashic sources."""
+    if not isinstance(presentation, PresentationProfile):
+        raise TypeError("presentation must be a PresentationProfile")
+    lines = autoexec.splitlines()
+    token_lines = [_forth_line_tokens(line) for line in lines]
+    if any(
+        _forth_line_contains_module_load(
+            tokens, "FSLOAD", MEGAPAD_PRESENTATION_TERMINAL_MODULE
+        )
+        for tokens in token_lines
+    ):
+        raise RuntimeError(
+            "FSLOAD presentation-terminal.f is unsafe during KDOS autoboot; "
+            "use the KDOS module loader"
+        )
+    userland_lines = [
+        index
+        for index, tokens in enumerate(token_lines)
+        if len(tokens) == 1 and tokens[0].upper() == "ENTER-USERLAND"
+    ]
+    if len(userland_lines) != 1:
+        raise RuntimeError(
+            "Presentation profiles must enter userland exactly once before "
+            "loading presentation-terminal.f"
+        )
+    expected_index = userland_lines[0] + 1
+    if (
+        expected_index < len(token_lines)
+        and len(token_lines[expected_index]) == 2
+        and token_lines[expected_index][0].upper() == "REQUIRE"
+        and token_lines[expected_index][1] == "networking.f"
+    ):
+        expected_index += 1
+    canonical_block = [
+        MEGAPAD_PRESENTATION_TERMINAL_BOOT_LINE,
+        (
+            f"{presentation.guest_rx_bytes} CONSTANT "
+            "APT1-DESK-RX-CAPACITY"
+        ),
+        (
+            f"{presentation.guest_tx_bytes} CONSTANT "
+            "APT1-DESK-TX-CAPACITY"
+        ),
+    ]
+    presentation_lines = [
+        index
+        for index, tokens in enumerate(token_lines)
+        if _forth_line_contains_module_load(
+            tokens, "REQUIRE", MEGAPAD_PRESENTATION_TERMINAL_MODULE
+        )
+    ]
+    if presentation_lines:
+        if (
+            presentation_lines != [expected_index]
+            or lines[expected_index : expected_index + len(canonical_block)]
+            != canonical_block
+        ):
+            raise RuntimeError(
+                "Presentation profiles must load and configure "
+                "presentation-terminal.f exactly once after networking"
+            )
+        return autoexec
+    lines[expected_index:expected_index] = canonical_block
     suffix = "\n" if autoexec.endswith("\n") else ""
     return "\n".join(lines) + suffix
 
@@ -25313,28 +25520,38 @@ def _validate_image_paths(
     directories: list[str],
     *,
     include_networking: bool = False,
+    external_system_files: frozenset[str] = frozenset(),
 ):
-    file_directory_aliases = paths & set(directories)
+    system_files = set(external_system_files)
+    if include_networking:
+        system_files.add("networking.f")
+    system_aliases = paths & system_files
+    if system_aliases:
+        raise RuntimeError(
+            "Profile files collide with separately injected system modules: "
+            + ", ".join(sorted(system_aliases))
+        )
+    all_paths = paths | system_files
+    file_directory_aliases = all_paths & set(directories)
     if file_directory_aliases:
         raise RuntimeError(
             "Image paths collide as both files and directories: "
             + ", ".join(sorted(file_directory_aliases))
         )
-    # Include kdos/autoexec, optional networking, and two temporary
-    # fragmentation fixtures.
+    # Include kdos/autoexec and two temporary fragmentation fixtures.  The
+    # separately injected system modules participate as ordinary file entries.
     entries = (
-        len(paths)
+        len(all_paths)
         + len(directories)
         + len(SAMPLE_FILES)
         + 4
-        + int(include_networking)
     )
     if entries > MAX_FILES:
         raise RuntimeError(
             f"Profile needs {entries} MP64FS entries; filesystem limit is "
             f"{MAX_FILES}."
         )
-    for path in paths | set(directories) | set(SAMPLE_FILES):
+    for path in all_paths | set(directories) | set(SAMPLE_FILES):
         name = PurePosixPath(path).name
         if len(name.encode("utf-8")) > MAX_NAME_LEN:
             raise RuntimeError(
@@ -25356,7 +25573,7 @@ def _validate_module_ids(
     sources = [
         (
             module,
-            (SOURCE_ROOT / module).read_text(encoding="utf-8"),
+            _module_source_path(module).read_text(encoding="utf-8"),
         )
         for module in modules
     ]
@@ -25489,11 +25706,24 @@ def build_image(
         if profile.linked
         else dependency_closure(composition_roots)
     )
+    external_module_names = frozenset(_external_module_sources())
+    external_modules = tuple(
+        module for module in modules if module in external_module_names
+    )
+    akashic_modules = tuple(
+        module for module in modules if module not in external_module_names
+    )
     requires_networking = _requires_megapad_networking(modules)
+    requires_presentation = _requires_megapad_presentation_terminal(modules)
+    if requires_presentation != (profile.presentation is not None):
+        raise RuntimeError(
+            "Presentation module closure and profile-owned host bounds must "
+            "be enabled together"
+        )
     resources = set(profile.resources)
     linked_chunks = (
         _linked_chunks(
-            modules,
+            akashic_modules,
             profile.link_chunk_bytes,
             profile.audited_link_line_bytes,
         )
@@ -25562,15 +25792,19 @@ def build_image(
         autoexec = _linked_autoexec(
             autoexec,
             tuple(deployed_chunks),
-            modules,
+            akashic_modules,
             cold_source_packed=profile.cold_source_packed,
         )
     if requires_networking:
         autoexec = _with_megapad_networking(autoexec)
+    if requires_presentation:
+        autoexec = _with_megapad_presentation_terminal(
+            autoexec, profile.presentation
+        )
     paths = (
         set(generated_files) | resources
         if profile.linked
-        else set(modules) | resources
+        else set(akashic_modules) | resources
     )
     regular_initial_paths = {path for path, _ in profile.initial_files}
     cold_initial_paths = set(cold_source_initial_files)
@@ -25594,6 +25828,7 @@ def build_image(
         }
         if requires_networking:
             reserved_root_paths.add("networking.f")
+        reserved_root_paths.update(external_modules)
         root_generated = {
             path
             for path in set(generated_files) | cold_initial_paths
@@ -25617,6 +25852,7 @@ def build_image(
         image_paths,
         directories,
         include_networking=requires_networking,
+        external_system_files=frozenset(external_modules),
     )
 
     target = (output or default_image_path(profile_name)).resolve()
@@ -25636,6 +25872,12 @@ def build_image(
         fs.inject_file(
             "networking.f",
             pack_forth_source((MEGAPAD_ROOT / "networking.f").read_bytes()),
+            ftype=FTYPE_FORTH,
+        )
+    for module in external_modules:
+        fs.inject_file(
+            module,
+            pack_forth_source(_module_source_path(module).read_bytes()),
             ftype=FTYPE_FORTH,
         )
 
@@ -25728,10 +25970,11 @@ def build_image(
         target.chmod(0o600)
 
     info = fs.info()
-    if profile_name == "desktop" and info["free_sectors"] * 512 < 1024 * 1024:
+    if info["free_sectors"] * 512 < profile.minimum_free_bytes:
         raise RuntimeError(
-            "Canonical desktop image must retain at least 1 MiB of mutable "
-            f"MP64FS space; only {info['free_sectors'] * 512:,} bytes remain"
+            f"Profile {profile_name!r} must retain at least "
+            f"{profile.minimum_free_bytes:,} bytes of mutable MP64FS space; "
+            f"only {info['free_sectors'] * 512:,} bytes remain"
         )
     print(
         f"Built {profile_name} image: {target}\n"
@@ -25739,6 +25982,7 @@ def build_image(
         f"{f' linked in {len(linked_chunks)} chunks' if profile.linked else ''}, "
         f"{'cold-source packed, ' if profile.cold_source_packed else ''}"
         f"{'MegaPad networking, ' if requires_networking else ''}"
+        f"{'MegaPad presentation terminal, ' if requires_presentation else ''}"
         f"{len(resources)} resources, "
         f"{len(directories)} directories\n"
         + (
@@ -26272,6 +26516,20 @@ def _qualify_audio_contracts(
     return AudioHostQualification(tuple(errors), tuple(notes))
 
 
+def _presentation_smoke_ready(
+    profile: Profile,
+    session: MachineSession,
+) -> bool:
+    """Require a healthy active framed session for an opted-in smoke."""
+    if profile.presentation is None:
+        return True
+    return (
+        session.presentation_failure is None
+        and not session.presentation_lost
+        and session.presentation_state is TerminalState.ACTIVE
+    )
+
+
 def smoke(
     profile_name: str,
     image_path: Path,
@@ -26318,6 +26576,11 @@ def smoke(
         else 1,
         nic_backend=nic_backend,
         realtime_clock=bool(nic_tap),
+        presentation=(
+            profile.presentation.configuration(cols, rows)
+            if profile.presentation is not None
+            else None
+        ),
     ) as session:
         if profile_name == "audio-contracts":
             audio_device = session.system.audio
@@ -26358,15 +26621,33 @@ def smoke(
             if any(marker in screen_text for marker in profile.failure_markers):
                 stop_reason = "failed"
                 break
-            if all(marker in screen_text for marker in profile.ready_markers):
+            markers_ready = all(
+                marker in screen_text for marker in profile.ready_markers
+            )
+            if profile.presentation is not None:
+                if (
+                    session.presentation_failure is not None
+                    or session.presentation_lost
+                    or session.presentation_state is TerminalState.FAILED
+                ):
+                    stop_reason = "terminal_failure"
+                    break
+                if (
+                    markers_ready
+                    and session.presentation_state is TerminalState.ANSI
+                ):
+                    stop_reason = "terminal_fallback"
+                    break
+            if markers_ready and _presentation_smoke_ready(profile, session):
                 stop_reason = "ready"
                 break
             if report.reason in ("halted", "stalled"):
                 break
 
         initial_text = screen.text()
-        initial_ready = all(
-            marker in initial_text for marker in profile.ready_markers
+        initial_ready = (
+            all(marker in initial_text for marker in profile.ready_markers)
+            and _presentation_smoke_ready(profile, session)
         )
 
         def wait_screen(
@@ -29360,8 +29641,23 @@ def smoke(
         final_screen_text = screen.text()
         missing = [m for m in profile.stable_markers if m not in final_screen_text]
         failure_hits = _matched_failure_markers(profile, raw, final_screen_text)
+        presentation_ready = _presentation_smoke_ready(profile, session)
+        if profile.presentation is not None and not presentation_ready:
+            state = session.presentation_state
+            journey_errors.append(
+                "presentation terminal did not remain ACTIVE "
+                f"(state={None if state is None else state.value}, "
+                f"lost={session.presentation_lost}, "
+                f"failure={session.presentation_failure!r})"
+            )
         elapsed = time.perf_counter() - started
-        ok = not errors and not missing and not failure_hits and not journey_errors
+        ok = (
+            not errors
+            and not missing
+            and not failure_hits
+            and not journey_errors
+            and presentation_ready
+        )
 
         print(
             f"Smoke {profile_name}: {'PASS' if ok else 'FAIL'}\n"
@@ -29418,6 +29714,20 @@ def smoke(
         return ok
 
 
+def _presentation_server_arguments(profile: Profile) -> list[str]:
+    presentation = profile.presentation
+    if presentation is None:
+        return []
+    return [
+        "--presentation-terminal-policy",
+        json.dumps(
+            presentation.host_policy.to_dict(),
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    ]
+
+
 def serve(
     profile_name: str,
     image_path: Path,
@@ -29451,6 +29761,7 @@ def serve(
         "--ext-mem-mib",
         str(ext_mem_mib),
     ]
+    command.extend(_presentation_server_arguments(PROFILES[profile_name]))
     if nic_tap:
         command.extend(("--nic-tap", nic_tap))
     if audio:

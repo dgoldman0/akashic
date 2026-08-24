@@ -88,8 +88,9 @@ def test_shared_dependency_grammar_matches_kdos_ascii_space_rules() -> None:
 def test_packaging_harness_uses_the_shared_dependency_core() -> None:
     harness = (LOCAL_TESTING / "akashic_tui.py").read_text(encoding="utf-8")
     assert "from forth_dependencies import (" in harness
-    assert "return _shared_dependency_closure(SOURCE_ROOT, roots)" in harness
-    assert "return _shared_dependency_order(SOURCE_ROOT, roots)" in harness
+    assert "external_modules=_external_module_sources()" in harness
+    assert "return _shared_dependency_closure(" in harness
+    assert "return _shared_dependency_order(" in harness
     assert "return _shared_normalize_module(module, requiring)" in harness
     assert "key = module_key(module_id)" in harness
 

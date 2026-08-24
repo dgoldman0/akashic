@@ -163,6 +163,26 @@ callbacks, unsafe teardown does not invoke them: it retains the exact live
 top-level component instance until the same whole-environment reset/reload
 boundary. Raw-freeing that state without its finalizer is not permitted.
 
+### Production opt-in composition
+
+The `desktop-apt1` profile is the production composition boundary. It deploys
+MegaPad's canonical root `presentation-terminal.f` as a separate system module,
+then source-loads Akashic's `desk-apt1.f` owner with the linked Desktop closure.
+The baseline `desktop` profile does neither and remains ANSI-only.
+
+The profile owns one immutable host policy with a declared 400 by 200 maximum
+geometry, geometry-derived payload/transaction/credit/publication bytes, and
+explicit queue-event, input-byte, history, and service bounds. Both the smoke
+runner and shared-session launcher consume that same policy; selecting the
+profile may not silently fall back to an ANSI-only host configuration. The
+guest's independent 8192-byte RX and TX streaming buffers admit the control
+reserve and a complete maximum-width CELL span without buffering a whole
+snapshot.
+
+If Desk exits or throws after the binary switch but synchronized release is
+not proven, the profile emits no diagnostic bytes. It remains in a silent
+`IDLE` quarantine until the host performs the required attachment reset.
+
 ## 8. Cursor and geometry
 
 Coordinates are zero-based. `visible` is zero or true. When visible, row and
