@@ -171,8 +171,12 @@ leaves isolated from ordinary Checkpoint-4/Desktop linking.
 
 The final product command was:
 
+For a current rerun, use the landed MegaPad `main` checkout at documentation
+head `b399bd0`; the qualified executable dependency remains code ancestor
+`ca02a40`.
+
 ```bash
-MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
+MEGAPAD_ROOT=/path/to/megapad \
   python3 local_testing/test_desk_library_burrow_capstone.py \
     --product --timeout 1200
 ```

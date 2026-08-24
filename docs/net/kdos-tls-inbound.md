@@ -227,10 +227,14 @@ locks. Both capstones share only fixture/image/emulator helpers and the raw
 Python peer; the established TLS NIO implementation remains the production
 shared port.
 
+For current reruns, `MEGAPAD_ROOT` names the landed MegaPad `main` checkout at
+documentation head `b399bd0`; executable evidence remains anchored at the
+qualified `ca02a40` code ancestor.
+
 ```text
-MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
+MEGAPAD_ROOT=/path/to/megapad \
   python3 -m unittest local_testing.test_kdos_tls_inbound_vertical
-MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
+MEGAPAD_ROOT=/path/to/megapad \
   python3 -m unittest local_testing.test_kdos_tls_inbound_failures
 ```
 

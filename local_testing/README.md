@@ -164,6 +164,10 @@ documentation commits record the result; they are not replacements for the
 tested executable checkpoint. The current compact host/static integration
 matrix completed with 87 passed in 61.84 seconds.
 
+Current rerun commands use the landed MegaPad `main` checkout at documentation
+head `b399bd0`; executable evidence remains anchored at its qualified
+`ca02a40` code ancestor.
+
 Immediately before the documentation-only landing record that contains this
 disposition, local Akashic `main` had been fast-forwarded to A* closure head
 `c69fbe57cb6169c80560033e94d3d9a640ad9def` and local MegaPad `main` to M*
@@ -178,10 +182,10 @@ the Akashic/MegaPad pair named above.
 Run the provider's static contract and its real public lifecycle gate with:
 
 ```bash
-MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
+MEGAPAD_ROOT=/path/to/megapad \
   python3 local_testing/test_streams_library_rabbit_provider_load.py \
   --static-only
-MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
+MEGAPAD_ROOT=/path/to/megapad \
   python3 local_testing/test_streams_library_rabbit_provider_load.py \
   --timeout 300
 ```
@@ -194,9 +198,9 @@ capabilities. It passed at 8,085,169,445 guest steps in 209.61 seconds.
 Run the complete Checkpoint-5 static contract and product journey with:
 
 ```bash
-MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
+MEGAPAD_ROOT=/path/to/megapad \
   python3 local_testing/test_desk_library_burrow_capstone.py --static-only
-MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
+MEGAPAD_ROOT=/path/to/megapad \
   python3 local_testing/test_desk_library_burrow_capstone.py \
   --product --timeout 1200
 ```
@@ -706,12 +710,13 @@ but the complete live certificate-chain and signature phases do not yet have a
 measured per-poll CPU ceiling. Context cleanup also does not prove that every
 machine-global KDOS TLS/cryptographic scratch buffer has been sanitized.
 
-Run the inbound secure-server capstone against the matching MegaPad worktree:
+Run the inbound secure-server capstone against the landed MegaPad `main`
+checkout:
 
 ```text
-MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
+MEGAPAD_ROOT=/path/to/megapad \
   python3 -m unittest local_testing.test_kdos_tls_inbound_vertical
-MEGAPAD_ROOT=/path/to/megapad-secure-registry-integration \
+MEGAPAD_ROOT=/path/to/megapad \
   python3 -m unittest local_testing.test_kdos_tls_inbound_failures
 ```
 
