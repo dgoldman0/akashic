@@ -32,6 +32,22 @@ PROFILE_SOURCE = (
     / "streams"
     / "rabbit-library-profile.f"
 )
+LIBRARY_SOURCE = (
+    Path(__file__).resolve().parents[1]
+    / "akashic"
+    / "tui"
+    / "applets"
+    / "library"
+    / "library.f"
+)
+STREAMS_SOURCE = (
+    Path(__file__).resolve().parents[1]
+    / "akashic"
+    / "tui"
+    / "applets"
+    / "streams"
+    / "streams.f"
+)
 IMAGE = Path("/tmp/akashic-desk-library-burrow-capstone.img")
 
 REPLAY_DROP_MARKER: Final = (
@@ -79,6 +95,8 @@ def _assert_static_contracts() -> None:
     fixture = FIXTURE.read_text(encoding="utf-8")
     provider = PROVIDER.read_text(encoding="utf-8")
     production = PROFILE_SOURCE.read_text(encoding="utf-8")
+    library = LIBRARY_SOURCE.read_text(encoding="utf-8")
+    streams = STREAMS_SOURCE.read_text(encoding="utf-8")
 
     assert profile.linked is True
     assert profile.cold_source_packed is True
@@ -117,6 +135,15 @@ def _assert_static_contracts() -> None:
     assert "PROVIDED akashic-streams-rabbit-library-profile" in production
     assert "PROVIDED akashic-test-streams-library-rabbit-provider" in provider
     assert "PROVIDED akashic-test-c5-dlb" in fixture
+    assert (
+        "CREATE _LIBRARY-APPLET-COMP-DESC-RAW COMP-DESC 7 + ALLOT"
+        in library
+    )
+    assert "_LIBRARY-APPLET-COMP-DESC-RAW 7 + -8 AND" in library
+    assert "CREATE _STREAMS-COMP-DESC-RAW COMP-DESC 7 + ALLOT" in streams
+    assert "_STREAMS-COMP-DESC-RAW 7 + -8 AND" in streams
+    assert "DUP STREAMS-COMP-DESC = _C4-ASSERT" in fixture
+    assert "DUP LIBRARY-APPLET-COMP-DESC = _C4-ASSERT" in fixture
     assert "library/service.f" not in production
     assert "library/controller.f" not in production
     assert "library/vfs" not in production
