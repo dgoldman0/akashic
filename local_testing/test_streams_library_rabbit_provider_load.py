@@ -17,19 +17,24 @@ import akashic_tui as harness  # noqa: E402
 PROFILE = "streams-library-rabbit-provider-load"
 IMAGE = Path("/tmp/akashic-streams-library-rabbit-provider-load.img")
 PROVIDER = LOCAL_TESTING / "streams-library-rabbit-provider.f"
+LIBRARY_CAPABILITIES = (
+    LOCAL_TESTING.parent / "akashic/tui/applets/library/capabilities.f"
+)
 PROVIDER_IMAGE_PATH = "local_testing/streams-lib-rabbit.f"
 ROOTS = (
+    "tui/applets/library/capabilities.f",
     "tui/applets/streams/rabbit-capabilities.f",
     "tui/applets/streams/rabbit-library-profile.f",
     "net/transports/memory-duplex.f",
     "tui/applets/streams/rabbit-connector.f",
 )
 MAX_STEPS = harness.DEFAULT_SMOKE_MAX_STEPS
-DEFAULT_TIMEOUT = 180.0
+DEFAULT_TIMEOUT = 300.0
 PASS_MARKER = "STREAMS LIBRARY RABBIT PROVIDER LOAD PASS"
 
 AUTOEXEC = r"""\ autoexec.f - checked Checkpoint-5 provider compile
 ENTER-USERLAND
+REQUIRE tui/applets/library/capabilities.f
 REQUIRE tui/applets/streams/rabbit-capabilities.f
 REQUIRE tui/applets/streams/rabbit-library-profile.f
 REQUIRE net/transports/memory-duplex.f
@@ -64,9 +69,25 @@ VARIABLE _slrp-init-status
 VARIABLE _slrp-preflight-status
 VARIABLE _slrp-preflight-detail
 VARIABLE _slrp-preflight-depth
+VARIABLE _slrp-lease
+VARIABLE _slrp-acquire-status
+VARIABLE _slrp-acquire-detail
+VARIABLE _slrp-open-status
+VARIABLE _slrp-open-detail
+VARIABLE _slrp-cleanup-status
+VARIABLE _slrp-cleanup-detail
+VARIABLE _slrp-profile-binding
+VARIABLE _slrp-query-cap-ok
+VARIABLE _slrp-read-cap-ok
+VARIABLE _slrp-query-common
+VARIABLE _slrp-read-common
+VARIABLE _slrp-query-fields
+VARIABLE _slrp-read-fields
 VARIABLE _slrp-slab-fails
 VARIABLE _slrp-caller
 VARIABLE _slrp-target
+VARIABLE _slrp-registry
+VARIABLE _slrp-bus
 CREATE _slrp-storage-raw SLRGP-STORAGE-SIZE 7 + ALLOT
 CREATE _slrp-context-raw SLRGP-SIZE 7 + ALLOT
 CREATE _slrp-spec-raw SRBPROV-GRAPH-SPEC-SIZE 7 + ALLOT
@@ -79,7 +100,22 @@ CREATE _slrp-practice RID-SIZE ALLOT
 : _slrp-spec  ( -- spec ) _slrp-spec-raw 7 + -8 AND ;
 : _slrp-caller-desc  ( -- desc ) _slrp-caller-desc-raw 7 + -8 AND ;
 : _slrp-target-desc  ( -- desc ) _slrp-target-desc-raw 7 + -8 AND ;
-: _slrp-auth  ( -- decision ) 0 ;
+: _slrp-auth  ( frame owner evidence facet entry mount context -- decision )
+    2DROP 2DROP 2DROP DROP 0 ;
+: _slrp-field-mask  ( schema query? -- mask )
+    >R 0
+    S" collection" 3 PICK _SRLP-REQUIRED-FIELD IF 1 OR THEN
+    S" collection_domain_revision" 3 PICK _SRLP-REQUIRED-FIELD IF 2 OR THEN
+    S" request_digest" 3 PICK _SRLP-REQUIRED-FIELD IF 4 OR THEN
+    R@ IF S" after" ELSE S" resource" THEN
+        3 PICK _SRLP-REQUIRED-FIELD IF 8 OR THEN
+    R> IF S" limit" ELSE S" domain_revision" THEN
+        3 PICK _SRLP-REQUIRED-FIELD IF 16 OR THEN
+    NIP ;
+: _slrp-desc-init  ( id-a id-u desc -- )
+    >R R@ COMP-DESC-INIT
+    R@ COMP.ID-U ! R@ COMP.ID-A !
+    S" 1.0.0" R@ COMP.VERSION-U ! R> COMP.VERSION-A ! ;
 : _slrp-spec-init  ( -- )
     _slrp-spec SRBPROV-GRAPH-SPEC-INIT
     1 _slrp-spec SRBPROV-SPEC.COLLECTION !
@@ -88,6 +124,40 @@ CREATE _slrp-practice RID-SIZE ALLOT
     1 _slrp-spec SRBPROV-SPEC.PEER-CAPACITY ! ;
 : _slrp-slab-assert  ( flag -- )
     0= IF 1 _slrp-slab-fails +! THEN ;
+64 CONSTANT _SLRP-CLEANUP-POLL-MAX
+: _slrp-cleanup-ok?  ( -- flag )
+    _slrp-cleanup-status @ SRBPROV-S-NONE =
+    _slrp-cleanup-detail @ SRBPROV-D-NONE = AND ;
+: _slrp-cancel-retained  ( -- flag )
+    _SLRP-CLEANUP-POLL-MAX 0 ?DO
+        _slrp-lease @ _slrp-context SLRGP-PROVIDER SRBPROV-CANCEL
+        _slrp-cleanup-detail ! _slrp-cleanup-status !
+        _slrp-cleanup-status @ SRBPROV-S-PENDING <> IF
+            _slrp-cleanup-ok? UNLOOP EXIT
+        THEN
+    LOOP 0 ;
+: _slrp-finalize-retained  ( -- flag )
+    _SLRP-CLEANUP-POLL-MAX 0 ?DO
+        _slrp-lease @ _slrp-context SLRGP-PROVIDER SRBPROV-FINALIZE
+        _slrp-cleanup-detail ! _slrp-cleanup-status !
+        _slrp-cleanup-status @ SRBPROV-S-PENDING <> IF
+            _slrp-cleanup-ok? UNLOOP EXIT
+        THEN
+    LOOP 0 ;
+: _slrp-release-only-retained  ( -- flag )
+    _SLRP-CLEANUP-POLL-MAX 0 ?DO
+        _slrp-lease @ _slrp-context SLRGP-PROVIDER SRBPROV-RELEASE
+        _slrp-cleanup-detail ! _slrp-cleanup-status !
+        _slrp-cleanup-status @ SRBPROV-S-PENDING <> IF
+            _slrp-cleanup-ok? DUP IF 0 _slrp-lease ! THEN
+            UNLOOP EXIT
+        THEN
+    LOOP 0 ;
+: _slrp-release-retained  ( -- flag )
+    _slrp-lease @ 0= IF -1 EXIT THEN
+    _slrp-cancel-retained 0= IF 0 EXIT THEN
+    _slrp-finalize-retained 0= IF 0 EXIT THEN
+    _slrp-release-only-retained ;
 : _slrp-slab-test  ( -- )
     DEPTH _slrp-depth !
     _slrp-storage SLRGP-STORAGE-INIT
@@ -103,17 +173,54 @@ CREATE _slrp-practice RID-SIZE ALLOT
     _slrp-storage SLRGP-STORAGE-BOUND? _slrp-slab-assert
     _slrp-storage SLRGP-GRAPH-BASELINE? _slrp-slab-assert
 
-    _slrp-caller-desc COMP-DESC-INIT
-    _slrp-target-desc COMP-DESC-INIT
+    S" org.akashic.test.rabbit-caller" _slrp-caller-desc _slrp-desc-init
+    S" org.akashic.test.rabbit-library" _slrp-target-desc _slrp-desc-init
+    LIBRARY-APPLET-CAPABILITIES-SETUP
+    LIBRARY-APPLET-CAPABILITIES 7 AND 0= _slrp-slab-assert
+    LIBRARY-READ-V1-QUERY-CAPABILITY$
+        LIBRARY-CAP-DOCUMENT-QUERY _SRLP-CAP-COMMON?
+        _slrp-query-common !
+    LIBRARY-CAP-DOCUMENT-QUERY CAP.IN-SCHEMA @ -1
+        _slrp-field-mask _slrp-query-fields !
+    LIBRARY-READ-V1-READ-CAPABILITY$
+        LIBRARY-CAP-DOCUMENT-READ _SRLP-CAP-COMMON?
+        _slrp-read-common !
+    LIBRARY-CAP-DOCUMENT-READ CAP.IN-SCHEMA @ 0
+        _slrp-field-mask _slrp-read-fields !
+    LIBRARY-CAP-DOCUMENT-QUERY _SRLP-QUERY-CAP?
+        _slrp-query-cap-ok !
+    LIBRARY-CAP-DOCUMENT-READ _SRLP-READ-CAP?
+        _slrp-read-cap-ok !
+    _slrp-query-common @ _slrp-slab-assert
+    _slrp-read-common @ _slrp-slab-assert
+    _slrp-query-fields @ 31 = _slrp-slab-assert
+    _slrp-read-fields @ 31 = _slrp-slab-assert
+    _slrp-query-cap-ok @ _slrp-slab-assert
+    _slrp-read-cap-ok @ _slrp-slab-assert
+    LIBRARY-APPLET-CAPABILITIES _slrp-target-desc COMP.CAPS-A !
+    LIBRARY-APPLET-CAPABILITY-COUNT _slrp-target-desc COMP.CAPS-N !
     _slrp-caller-desc CINST-NEW DUP 0= _slrp-slab-assert
     DUP IF 2DROP EXIT THEN DROP _slrp-caller !
     _slrp-target-desc CINST-NEW DUP 0= _slrp-slab-assert
     DUP IF 2DROP _slrp-caller @ CINST-FREE 0 _slrp-caller ! EXIT THEN
     DROP _slrp-target !
+    CREG-NEW DUP IF
+        2DROP 1 _slrp-slab-fails +!
+        _slrp-target @ CINST-FREE _slrp-caller @ CINST-FREE
+        0 _slrp-target ! 0 _slrp-caller ! EXIT
+    THEN DROP _slrp-registry !
+    _slrp-caller-desc _slrp-registry @ CREG-TYPE+ 0= _slrp-slab-assert
+    _slrp-target-desc _slrp-registry @ CREG-TYPE+ 0= _slrp-slab-assert
+    _slrp-caller @ _slrp-registry @ CREG-INST+ 0= _slrp-slab-assert
+    _slrp-target @ _slrp-registry @ CREG-INST+ 0= _slrp-slab-assert
+    _slrp-registry @ 0 CBUS-NEW DUP IF
+        2DROP 1 _slrp-slab-fails +! EXIT
+    THEN DROP _slrp-bus !
     _slrp-facet RID-SIZE 0 FILL 1 _slrp-facet !
     _slrp-practice RID-SIZE 0 FILL 1 _slrp-practice !
     _slrp-context SLRGP-SIZE 0 FILL
-    _slrp-storage _slrp-caller @ _slrp-target @ 1 2 3
+    _slrp-storage _slrp-caller @ _slrp-target @ _slrp-bus @
+    LIBRARY-CAP-DOCUMENT-QUERY LIBRARY-CAP-DOCUMENT-READ
     _slrp-facet _slrp-practice 1 1 1 ['] _slrp-auth _slrp-context
     4 5 6 _slrp-context SLRGP-INIT
     DUP _slrp-init-status ! SRBPROV-S-NONE =
@@ -127,25 +234,77 @@ CREATE _slrp-practice RID-SIZE ALLOT
         _slrp-preflight-status @ SRBPROV-S-NONE = _slrp-slab-assert
         _slrp-preflight-detail @ SRBPROV-D-NONE = _slrp-slab-assert
         DEPTH _slrp-preflight-depth @ = _slrp-slab-assert
-        _slrp-context SLRGP-FINI SRBPROV-S-NONE = _slrp-slab-assert
+
+        DEPTH _slrp-preflight-depth !
+        _slrp-spec _slrp-context SLRGP-PROVIDER SRBPROV-ACQUIRE
+        _slrp-acquire-detail ! _slrp-acquire-status ! _slrp-lease !
+        _slrp-lease @ 0<> _slrp-slab-assert
+        _slrp-acquire-status @ SRBPROV-S-NONE = _slrp-slab-assert
+        _slrp-acquire-detail @ SRBPROV-D-NONE = _slrp-slab-assert
+        DEPTH _slrp-preflight-depth @ = _slrp-slab-assert
+        _slrp-context SLRGP.STORAGE @ SLRGS.PROFILE @
+            STREAMS-RABBIT-LIBRARY-PROFILE-BINDING-VALID?
+            _slrp-profile-binding !
+        _slrp-profile-binding @ _slrp-slab-assert
+        _slrp-acquire-status @ SRBPROV-S-NONE =
+        _slrp-acquire-detail @ SRBPROV-D-NONE = AND
+        _slrp-lease @ 0<> AND IF
+            _slrp-lease @ _slrp-context SLRGP-PROVIDER SRBPROV-OPEN
+            _slrp-open-detail ! _slrp-open-status !
+            _slrp-open-status @ SRBPROV-S-NONE = _slrp-slab-assert
+            _slrp-open-detail @ SRBPROV-D-NONE = _slrp-slab-assert
+        THEN
+        _slrp-release-retained DUP _slrp-slab-assert 0= IF EXIT THEN
+        _slrp-context SLRGP-FINI DUP SRBPROV-S-NONE =
+            _slrp-slab-assert
+        SRBPROV-S-NONE <> IF EXIT THEN
     THEN
-    _slrp-storage SLRGP-STORAGE-FINI
-        SRBPROV-S-NONE = _slrp-slab-assert
+    _slrp-storage SLRGP-STORAGE-FINI DUP SRBPROV-S-NONE =
+        _slrp-slab-assert
+    SRBPROV-S-NONE <> IF EXIT THEN
+    _slrp-bus @ CBUS.COUNT @ DUP 0= _slrp-slab-assert IF EXIT THEN
+    _slrp-bus @ CBUS-FREE 0 _slrp-bus !
+    _slrp-target @ _slrp-registry @ CREG-INST-
+        DUP 0= _slrp-slab-assert IF EXIT THEN
     _slrp-target @ CINST-FREE 0 _slrp-target !
+    _slrp-caller @ _slrp-registry @ CREG-INST-
+        DUP 0= _slrp-slab-assert IF EXIT THEN
     _slrp-caller @ CINST-FREE 0 _slrp-caller !
+    _slrp-registry @ CREG-FREE 0 _slrp-registry !
     _slrp-slab-a @ FREE
     0 _slrp-slab-a ! 0 _slrp-slab-u !
     DEPTH _slrp-depth @ = _slrp-slab-assert ;
 : _slrp-slab-run  ( -- )
     0 _slrp-slab-fails ! 0 _slrp-slab-status ! 0 _slrp-init-status !
     0 _slrp-preflight-status ! 0 _slrp-preflight-detail !
+    0 _slrp-lease ! 0 _slrp-acquire-status ! 0 _slrp-acquire-detail !
+    0 _slrp-open-status ! 0 _slrp-open-detail !
+    0 _slrp-cleanup-status ! 0 _slrp-cleanup-detail !
+    0 _slrp-profile-binding !
+    0 _slrp-query-cap-ok ! 0 _slrp-read-cap-ok !
+    0 _slrp-query-common ! 0 _slrp-read-common !
+    0 _slrp-query-fields ! 0 _slrp-read-fields !
     0 _slrp-caller ! 0 _slrp-target !
+    0 _slrp-registry ! 0 _slrp-bus !
     _slrp-slab-test
     ." STREAMS LIBRARY RABBIT PROVIDER SLAB status="
         _slrp-slab-status @ . ." fails=" _slrp-slab-fails @ .
         ." init=" _slrp-init-status @ .
         ." preflight=" _slrp-preflight-status @ .
         ." detail=" _slrp-preflight-detail @ .
+        ." acquire=" _slrp-acquire-status @ .
+        ." acquire-detail=" _slrp-acquire-detail @ .
+        ." open=" _slrp-open-status @ .
+        ." open-detail=" _slrp-open-detail @ .
+        ." query-cap=" _slrp-query-cap-ok @ .
+        ." read-cap=" _slrp-read-cap-ok @ .
+        ." query-common=" _slrp-query-common @ .
+        ." read-common=" _slrp-read-common @ .
+        ." query-fields=" _slrp-query-fields @ .
+        ." read-fields=" _slrp-read-fields @ .
+        ." profile-binding=" _slrp-profile-binding @ .
+        ." cleanup=" _slrp-cleanup-status @ .
+        ." cleanup-detail=" _slrp-cleanup-detail @ .
         ." depth=" DEPTH . CR TX-FLUSH
     _slrp-slab-fails @ 0= IF
         ." STREAMS LIBRARY RABBIT PROVIDER LOAD PASS"
@@ -172,6 +331,7 @@ def _profile() -> harness.Profile:
         stable_markers=(PASS_MARKER,),
         failure_markers=(
             "STREAMS LIBRARY RABBIT PROVIDER LOAD FAIL",
+            "STREAMS LIBRARY RABBIT PROVIDER SLAB FAIL",
             "COLD SOURCE LOAD FAIL",
             "Module not found",
             "Path component not found",
@@ -196,10 +356,14 @@ def _assert_static_contracts() -> None:
         "c5-slrabbit.f.lz"
     ]
     provider_source = PROVIDER.read_text(encoding="utf-8")
+    library_capabilities = LIBRARY_CAPABILITIES.read_text(encoding="utf-8")
     queue_planner = provider_source.split(": _SLRSL-ADD-QUEUE", 1)[1].split(
         ";", 1
     )[0]
     queue_binder = provider_source.split(": _SLRSL-BIND-QUEUE", 1)[1].split(
+        ";", 1
+    )[0]
+    queue_finalizer = provider_source.split(": _SLRGP-FINI-QUEUE", 1)[1].split(
         ";", 1
     )[0]
     acquire_preflight = provider_source.split(
@@ -223,6 +387,12 @@ def _assert_static_contracts() -> None:
     assert "returned-status=" in AUTOEXEC
     assert "EVAL-TOKEN TYPE" in AUTOEXEC
     assert "SLRGP-GRAPH-SLAB-BYTES" in AUTOEXEC
+    assert "CREATE _LIBRARY-APPLET-CAPABILITIES-RAW" in library_capabilities
+    assert "CAP-DESC * 7 + ALLOT" in library_capabilities
+    assert "_LIBRARY-APPLET-CAPABILITIES-RAW 7 + -8 AND" in (
+        library_capabilities
+    )
+    assert "LIBRARY-APPLET-CAPABILITIES 7 AND 0=" in AUTOEXEC
     assert "SLRGP-STORAGE-BIND-SLAB" in AUTOEXEC
     assert "SLRGP-INIT" in AUTOEXEC
     assert "SLRGP-FINI" in AUTOEXEC
@@ -231,6 +401,9 @@ def _assert_static_contracts() -> None:
     assert "_SLRSL-WIRE !" in queue_planner
     assert "_SLRSL-QUEUE ! _SLRSL-WIRE !" in queue_binder
     assert queue_binder.count("_SLRSL-QUEUE @") == 3
+    assert "_SLRGFIN-QB @ SLRGQ.QUEUE @ RCONN-TXQ-FINI" in (
+        queue_finalizer
+    )
     assert "DUP 1 <> IF" not in acquire_preflight
     assert "1 <> IF" in acquire_preflight
     assert (
@@ -239,6 +412,11 @@ def _assert_static_contracts() -> None:
     ) in acquire_preflight
     assert "_SLRGBLD-PREFLIGHT" in AUTOEXEC
     assert "DEPTH _slrp-preflight-depth @ = _slrp-slab-assert" in AUTOEXEC
+    assert "SRBPROV-ACQUIRE" in AUTOEXEC
+    assert "SRBPROV-OPEN" in AUTOEXEC
+    assert "SRBPROV-CANCEL" in AUTOEXEC
+    assert "SRBPROV-FINALIZE" in AUTOEXEC
+    assert "SRBPROV-RELEASE" in AUTOEXEC
     assert "STREAMS-RABBIT-CONNECTOR-S-OK = AND NIP" in lease_validator
     assert tuple(
         line.removeprefix("REQUIRE ")
