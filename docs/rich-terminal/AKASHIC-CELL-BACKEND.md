@@ -6,6 +6,10 @@ This document defines the boundary between Akashic's double-buffered screen
 and a presentation backend. It does not define APT-1 byte encoding; that is
 specified by the mirrored `APT-1-WIRE.md`.
 
+The additive retained object plane is specified separately by
+`AKASHIC-RETAINED-SERVICE.md`. It composes beside this cell backend and never
+replaces the cell screen or ANSI fallback.
+
 ## 1. Goal
 
 Application and widget painting continues to target the existing Akashic back
