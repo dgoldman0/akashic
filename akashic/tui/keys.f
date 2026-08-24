@@ -23,6 +23,8 @@
 \   KEY-HAS-ALT?      ( ev -- flag )       Alt present?
 \   KEY-HAS-SHIFT?    ( ev -- flag )       Shift present?
 \   KEY-TIMEOUT!      ( ms -- )            Set escape timeout
+\   KEY-SOURCE!       ( context poll-xt -- flag )  Bind a raw-byte source
+\   KEY-SOURCE-RESET  ( -- )               Restore the BIOS UART source
 \   KEY-MOUSE-X       ( -- addr )          VARIABLE: last mouse column
 \   KEY-MOUSE-Y       ( -- addr )          VARIABLE: last mouse row
 \
@@ -44,6 +46,9 @@ REQUIRE ../text/utf8.f
 2 CONSTANT KEY-T-MOUSE        \ mouse button/motion event
 3 CONSTANT KEY-T-PASTE        \ bracketed paste start/end
 4 CONSTANT KEY-T-RESIZE       \ terminal size changed
+
+0 CONSTANT KEY-PASTE-END
+1 CONSTANT KEY-PASTE-START
 
 \ =====================================================================
 \  2. Special Key Constants
@@ -201,17 +206,57 @@ VARIABLE _KEY-DEADLINE
 VARIABLE _KEY-PENDING-BYTE
 VARIABLE _KEY-HAS-PENDING
 
+VARIABLE _KEY-SOURCE-CONTEXT
+VARIABLE _KEY-SOURCE-POLL-XT
+
 0 _KEY-HAS-PENDING !
 
+\ Raw sources use one non-consuming public shape at the decoder boundary:
+\   poll-xt ( context -- byte has-byte )
+\ The decoder owns the returned byte immediately.  This permits an optional
+\ terminal module to drain probe-retained ANSI bytes through the established
+\ decoder without letting framed input reach KEY-POLL.
+: _KEY-UART-POLL  ( context -- byte has-byte )
+    DROP KEY? IF KEY TRUE ELSE 0 FALSE THEN ;
+
+0 _KEY-SOURCE-CONTEXT !
+' _KEY-UART-POLL _KEY-SOURCE-POLL-XT !
+
+: KEY-SOURCE!  ( context poll-xt -- flag )
+    DUP 0= IF 2DROP FALSE EXIT THEN
+    _KEY-HAS-PENDING @ IF 2DROP FALSE EXIT THEN
+    _KEY-SOURCE-POLL-XT !
+    _KEY-SOURCE-CONTEXT !
+    TRUE ;
+
+: KEY-SOURCE-RESET  ( -- )
+    0 _KEY-HAS-PENDING !
+    0 _KEY-BLEN !
+    0 _KEY-SOURCE-CONTEXT !
+    ' _KEY-UART-POLL _KEY-SOURCE-POLL-XT ! ;
+
+: _KEY-SOURCE-POLL  ( -- flag )
+    _KEY-SOURCE-CONTEXT @ _KEY-SOURCE-POLL-XT @ EXECUTE
+    IF
+        _KEY-PENDING-BYTE !
+        TRUE _KEY-HAS-PENDING !
+        TRUE
+    ELSE
+        DROP FALSE
+    THEN ;
+
 : _KEY-RAW?  ( -- flag )
-    _KEY-HAS-PENDING @ IF -1 ELSE KEY? THEN ;
+    _KEY-HAS-PENDING @ IF TRUE ELSE _KEY-SOURCE-POLL THEN ;
 
 : _KEY-RAW@  ( -- char )
-    _KEY-HAS-PENDING @ IF
-        0 _KEY-HAS-PENDING ! _KEY-PENDING-BYTE @
-    ELSE
-        KEY
-    THEN ;
+    FALSE _KEY-HAS-PENDING ! _KEY-PENDING-BYTE @ ;
+
+: _KEY-RAW-BLOCK  ( -- char )
+    _KEY-HAS-PENDING @ IF _KEY-RAW@ EXIT THEN
+    _KEY-SOURCE-CONTEXT @ 0=
+    _KEY-SOURCE-POLL-XT @ ['] _KEY-UART-POLL = AND IF KEY EXIT THEN
+    BEGIN _KEY-RAW? 0= WHILE YIELD? REPEAT
+    _KEY-RAW@ ;
 
 : _KEY-TIMED?  ( ms -- char flag )
     MS@ +                              \ absolute deadline in ms
@@ -353,6 +398,8 @@ VARIABLE _KEY-CSI-FINAL    \ final (terminator) byte
                 21 OF KEY-T-SPECIAL KEY-F10  R> _KEY-SET-EV EXIT ENDOF
                 23 OF KEY-T-SPECIAL KEY-F11  R> _KEY-SET-EV EXIT ENDOF
                 24 OF KEY-T-SPECIAL KEY-F12  R> _KEY-SET-EV EXIT ENDOF
+                200 OF KEY-T-PASTE KEY-PASTE-START R> _KEY-SET-EV EXIT ENDOF
+                201 OF KEY-T-PASTE KEY-PASTE-END   R> _KEY-SET-EV EXIT ENDOF
                 \ Unknown tilde sequence — return as char event
                 KEY-T-CHAR _KEY-CSI-P1 @ R> _KEY-SET-EV EXIT
             ENDCASE
@@ -582,7 +629,7 @@ VARIABLE _KEY-B0             \ first raw byte
         THEN
         \ Read remaining bytes
         DUP 1 DO
-            KEY DUP 0x80 AND 0= IF
+            _KEY-RAW-BLOCK DUP 0x80 AND 0= IF
                 \ Not a continuation — bad sequence
                 DROP UNLOOP
                 KEY-T-CHAR 0xFFFD 0 _KEY-SET-EV
@@ -626,7 +673,7 @@ VARIABLE _KEY-B0             \ first raw byte
 \   allowing the host / emulator to yield properly), then decodes.
 \   Returns TRUE always.
 : KEY-READ  ( ev -- flag )
-    _KEY-RAW? IF _KEY-RAW@ ELSE KEY THEN _KEY-B0 !
+    _KEY-RAW-BLOCK _KEY-B0 !
     _KEY-DECODE-B0 ;
 
 \ KEY-WAIT ( ev ms -- flag )
@@ -667,6 +714,8 @@ GUARD _keys-guard
 ' KEY-HAS-ALT?        CONSTANT _keys-halt-xt
 ' KEY-HAS-SHIFT?      CONSTANT _keys-hshift-xt
 ' KEY-TIMEOUT!        CONSTANT _keys-timeout-xt
+' KEY-SOURCE!         CONSTANT _keys-source-set-xt
+' KEY-SOURCE-RESET    CONSTANT _keys-source-reset-xt
 
 \ Input-consuming entries own the shared decoder state.  All three can wait:
 \ KEY-READ blocks, KEY-WAIT polls to a deadline, and KEY-POLL may wait after
@@ -685,4 +734,6 @@ GUARD _keys-guard
 : KEY-HAS-ALT?        _keys-halt-xt _keys-guard WITH-GUARD ;
 : KEY-HAS-SHIFT?      _keys-hshift-xt _keys-guard WITH-GUARD ;
 : KEY-TIMEOUT!        _keys-timeout-xt _keys-guard WITH-GUARD ;
+: KEY-SOURCE!         _keys-source-set-xt _keys-guard WITH-GUARD ;
+: KEY-SOURCE-RESET    _keys-source-reset-xt _keys-guard WITH-GUARD ;
 [THEN] [THEN]

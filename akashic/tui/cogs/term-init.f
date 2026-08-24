@@ -16,6 +16,7 @@
 \  Public API:
 \   APP-INIT       ( w h -- )       Set up terminal + screen buffer
 \   APP-SHUTDOWN   ( -- )           Teardown + restore terminal
+\   APP-SHUTDOWN-QUIET ( -- )       Teardown without terminal bytes
 \   APP-SCREEN     ( -- scr )       Application screen descriptor
 \   APP-SIZE       ( -- w h )       Current screen dimensions
 \   APP-TITLE!     ( addr len -- )  Set terminal title
@@ -93,6 +94,20 @@ VARIABLE _APP-INITED       \ TRUE after APP-INIT, FALSE after SHUTDOWN
     ANSI-ALT-OFF
     0 _APP-INITED ! ;
 
+\ APP-SHUTDOWN-QUIET ( -- )
+\   Release Akashic-owned memory and focus state without emitting a byte.
+\   A presentation owner uses this after an unsynchronized binary-session
+\   loss, where ANSI reset or alternate-screen sequences would corrupt the
+\   stream.  Only an external attachment reset may make that stream safe.
+: APP-SHUTDOWN-QUIET  ( -- )
+    _APP-INITED @ 0= IF EXIT THEN
+    _APP-SCR @ ?DUP IF
+        SCR-FREE
+        0 _APP-SCR !
+    THEN
+    FOC-CLEAR
+    0 _APP-INITED ! ;
+
 \ =====================================================================
 \  §4 — Accessors
 \ =====================================================================
@@ -120,12 +135,15 @@ GUARD _tinit-guard
 
 ' APP-INIT      CONSTANT _tinit-init-xt
 ' APP-SHUTDOWN  CONSTANT _tinit-shutdown-xt
+' APP-SHUTDOWN-QUIET CONSTANT _tinit-shutdown-quiet-xt
 ' APP-SCREEN    CONSTANT _tinit-screen-xt
 ' APP-SIZE      CONSTANT _tinit-size-xt
 ' APP-TITLE!    CONSTANT _tinit-title-xt
 
 : APP-INIT      _tinit-init-xt      _tinit-guard WITH-GUARD ;
 : APP-SHUTDOWN  _tinit-shutdown-xt  _tinit-guard WITH-GUARD ;
+: APP-SHUTDOWN-QUIET
+    _tinit-shutdown-quiet-xt _tinit-guard WITH-GUARD ;
 : APP-SCREEN    _tinit-screen-xt    _tinit-guard WITH-GUARD ;
 : APP-SIZE      _tinit-size-xt      _tinit-guard WITH-GUARD ;
 : APP-TITLE!    _tinit-title-xt     _tinit-guard WITH-GUARD ;
