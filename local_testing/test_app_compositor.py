@@ -322,7 +322,7 @@ def test_uctx_total():
     """UCTX-TOTAL should cover every current scalar and pool byte."""
     check("uctx-total", [
         'UCTX-TOTAL .',
-    ], expected='103544')
+    ], expected='103592')
 
 def test_slot_sz():
     """_SLOT-SZ should be 56."""

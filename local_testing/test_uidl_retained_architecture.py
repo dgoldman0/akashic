@@ -1,6 +1,7 @@
-"""Structural guard for the UIDL-first rich-presentation architecture."""
+"""Structural guards for the UIDL-first rich-terminal architecture."""
 
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -9,6 +10,12 @@ AKASHIC = ROOT / "akashic"
 
 def _text(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def _word(source: str, name: str) -> str:
+    match = re.search(rf"(?ms)^: {re.escape(name)}\b.*?;\s*$", source)
+    assert match is not None, name
+    return match.group(0)
 
 
 def test_rich_terminal_is_not_an_applet_facing_scene_service() -> None:
@@ -45,6 +52,63 @@ def test_uidl_context_remains_the_hosted_application_ui_authority() -> None:
     assert "REQUIRE ../uidl-tui.f" in host
     assert "UCTX-ALLOC" in host
     assert "AHS.UCTX" in host
+
+
+def test_uidl_rich_terminal_lifecycle_is_ordered_and_context_local() -> None:
+    tui = _text("akashic/tui/uidl-tui.f")
+
+    for word in (
+        "UTUI-RICH-TERM-ATTACH",
+        "UTUI-RICH-TERM-VISIBLE!",
+        "UTUI-RICH-TERM-STATUS",
+        "UTUI-RICH-TERM-QUIESCE",
+        "UTUI-RICH-TERM-DETACH",
+    ):
+        assert f": {word}" in tui
+
+    # Composition installs one exact callback table; applications cannot
+    # discover or replace it and the no-driver path remains unavailable.
+    assert ": _UTUI-RICH-TERM-DRIVER!" in tui
+    assert "_UTUI-RT-DRIVER-INSTALLED @ IF" in tui
+    assert "_UTUI-RT-S-UNAVAILABLE DUP _UTUI-RT-STATUS !" in tui
+    assert "CINST-SERVICE" not in tui
+    assert "PRES-BROKER" not in tui
+
+    # Only the backend token and lifecycle scalars enter UCTX.  The attach
+    # descriptor is call-borrowed and every callback scratch cell is scrubbed.
+    assert "_UTUI-RT-TOKEN      _UCTX-VARS 15 CELLS + !" in tui
+    assert "_UTUI-RT-STATUS     _UCTX-VARS 16 CELLS + !" in tui
+    assert "_UTUI-RT-VISIBLE    _UCTX-VARS 17 CELLS + !" in tui
+    assert "_UTUI-RT-ATTACHED   _UCTX-VARS 18 CELLS + !" in tui
+    assert "_UTUI-RT-QUIESCING  _UCTX-VARS 19 CELLS + !" in tui
+    assert "_UTUI-RT-QUIESCED   _UCTX-VARS 20 CELLS + !" in tui
+    assert "0 _UTUI-RTA-BINDING !" in tui
+    assert "0 _UTUI-RT-ARG0 ! 0 _UTUI-RT-ARG1 ! 0 _UTUI-RT-ARG2 !" in tui
+
+    # Rich projection observes UIDL dirt before the CELL renderer clears it.
+    paint = _word(tui, "UTUI-PAINT")
+    assert paint.index("_UTUI-RICH-TERM-PROJECT") < paint.index(
+        "_UTUI-PAINT-ELEM"
+    )
+
+    # Relayout publishes only resolved geometry; hidden documents explicitly
+    # carry region zero so a freed Desk tile can never be retained.
+    relayout = _word(tui, "UTUI-RELAYOUT")
+    assert relayout.index("_UTUI-DO-LAYOUT-REC") < relayout.index(
+        "_UTUI-RICH-TERM-RELAYOUT"
+    )
+    assert "FALSE 0" in _word(tui, "_UTUI-RICH-TERM-RELAYOUT")
+
+    # Quiesce erects the teardown barrier before invoking the backend.  Final
+    # detach is independently retryable and gates every ordinary UIDL free.
+    quiesce = _word(tui, "UTUI-RICH-TERM-QUIESCE")
+    assert quiesce.index("-1 _UTUI-RT-QUIESCING !") < quiesce.index(
+        "_UTUI-RT-CALL-QUIESCE"
+    )
+    detach = _word(tui, "UTUI-DETACH")
+    assert detach.index("UTUI-RICH-TERM-DETACH ?DUP IF THROW THEN") < detach.index(
+        "_UTUI-DEMATERIALIZE"
+    )
 
 
 def test_retained_contract_requires_internal_uidl_projection_now() -> None:
