@@ -188,11 +188,12 @@ The bridge maps every provider field and feature bit into the caller's neutral
 record, then scrubs all borrowed raw-record, provider-snapshot, engine, and
 destination pointers.
 
-This capability slice still does not claim semantic-projector readiness.
-Region replacement and checked semantic snapshot/object operations arrive
-with their projector slices. Until then `RTERM-UCTX-PROJECT` remains explicitly
-`RTERM-S-UNAVAILABLE` and invokes none of the facade operations, including the
-limits callback.
+The renderer-neutral candidate projector can now measure and copy supported
+UIDL semantics into caller-owned banks. It does not yet capture the complete
+layout/style input or publish a candidate through the lifecycle driver, so
+`RTERM-UCTX-PROJECT` remains explicitly `RTERM-S-UNAVAILABLE` and invokes none
+of the facade operations, including the limits callback. Region replacement
+and checked semantic object materialization remain later slices.
 
 The lower UIDL layer now supplies the first neutral semantic snapshot
 substrate independently of this adapter. `ED.SEMANTICS` selects a per-element
@@ -202,13 +203,16 @@ provider identity. The initial LABEL record contains the resolved text plus
 its explicit `text-capacity` reservation. CELL label paint consumes the same
 `UIDL-TEXT@` value rule but never enforces snapshot eligibility or capacity.
 Thus string/integer/boolean binding semantics are shared below either output
-path, while admission remains the responsibility of the later projector.
+path, while optional presentation admission remains above UIDL semantics.
 
-This substrate does not change the current wire-inert state. No shipped UIDL
-has been bulk-annotated for retained eligibility, and no snapshot is consumed
-by the driver in this slice. Projector admission must still compare each LABEL
-declaration and the checked per-owner sum against `RTE-LIMITS-LABEL-BYTES@`
-and `RTE-LIMITS-UTF8-BYTES@` before opening an owner or publishing an object.
+The candidate projector walks the active root tree under one compound semantic
+observation and copies eligible LABEL records into bounded item/snapshot
+banks. This does not change the current wire-inert state: no shipped UIDL has
+been bulk-annotated for optional presentation eligibility, and no candidate is
+yet consumed by the driver. Later negotiated admission must compare each LABEL
+declaration and the checked per-owner sum against
+`RTE-LIMITS-LABEL-BYTES@` and `RTE-LIMITS-UTF8-BYTES@` before opening an owner
+or publishing an object.
 
 `config` names the exact borrowed PT session, output policy, and caller-owned
 spans and capacities for:
@@ -412,6 +416,14 @@ RTERM-UCTX-QUIESCE   ( binding-token backend -- status )
 RTERM-UCTX-DETACH    ( binding-token backend -- status )
 ```
 
+The renderer-neutral desired-scene input is defined separately in
+[UIDL-PROJECTION-CANDIDATE.md](UIDL-PROJECTION-CANDIDATE.md). Its caller-owned
+candidate items use stable UIDL element indices and copied semantic snapshots;
+they contain no engine, protocol, screen, Desk, or applet identity. Candidate
+construction is deliberately wire-inert. The next lifecycle slice will publish
+one of two per-binding candidate banks only after a complete build; later
+materialization may compare its declared quotas with a discovered engine.
+
 The first lifecycle foundation is the optional
 `akashic/tui/rich-terminal/uidl-driver.f` module. It constructs the private,
 caller-bounded binding registry separately from the retained engine:
@@ -435,10 +447,10 @@ This foundation has no `RTAPT-*`, screen-publisher, MegaPad, Desk, or applet
 dependency. It borrows one immutable `RTE` facade, and its immutable UIDL
 callback installation through `_UTUI-PROJECTION-ADAPTER!` carries the exact
 driver backend as explicit composition context; neither context is stored in a
-UCTX. Until the backend-neutral
-semantic projector exists, attach and geometry tracking are local-only,
-project returns `RTERM-S-UNAVAILABLE`, quiesce proves the empty source set, and
-detach creates no wire owner or tombstone. In
+UCTX. Until the driver owns and atomically admits caller-bounded candidate
+banks, attach and geometry tracking are local-only, project returns
+`RTERM-S-UNAVAILABLE`, quiesce proves the empty source set, and detach creates
+no wire owner or tombstone. In
 particular, the foundation must not open a default or root-region-only owner:
 owner quotas can be admitted only from one complete supported semantic tree.
 The neutral limits surface now makes that later comparison possible without
@@ -789,11 +801,11 @@ tuple, while a later plain Desk constructor cannot resurrect a partial rich
 composition after the outer storage was released.
 
 That construction does not itself claim retained semantic support. Until the
-backend-neutral projector couples admitted UIDL semantics through `RTE`, the
-driver remains wire-inert and the production host advertises no retained
-policy. CELL output still traverses the unified publisher, while attach,
-geometry, quiesce, and detach exercise the exact private UCTX lifetime without
-opening a root-region-only wire owner.
+lifecycle driver owns admitted candidates and a materializer couples them
+through `RTE`, the driver remains wire-inert and the production host advertises
+no retained policy. CELL output still traverses the unified publisher, while
+attach, geometry, quiesce, and detach exercise the exact private UCTX lifetime
+without opening a root-region-only wire owner.
 
 Retained discovery is not a hosted-UCTX launch gate. The mandatory initial CELL
 snapshot is produced only after Desk initialization, so host composition,

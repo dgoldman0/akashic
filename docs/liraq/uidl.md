@@ -82,6 +82,23 @@ UIDL-ELEM-COUNT ( -- n )
 ```
 Total number of allocated element nodes.
 
+#### UIDL-ELEM-INDEX?
+```forth
+UIDL-ELEM-INDEX? ( elem -- index flag )
+```
+Return the zero-based element-pool index and true when `elem` is a live,
+record-aligned element address in the currently used pool prefix. A null,
+out-of-pool, misaligned, removed, or pre-reset address returns `0 0` whenever
+that address has not since been reused for a current element. Indices are
+append-only and therefore stable for the lifetime of the current document;
+removing another element does not renumber them. `UIDL-RESET` starts a new
+document lifetime, so consumers must discard indices retained across reset.
+
+This accessor is the public identity boundary for neutral derived projections.
+Consumers do not depend on private pool addresses, record sizes, or arithmetic.
+Guarded builds validate the pointer and read its record under the recursive UIDL
+document guard, including when called from `UIDL-OBSERVE`.
+
 #### UIDL-ERR
 ```forth
 UIDL-ERR ( -- code )

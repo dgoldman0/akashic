@@ -10,6 +10,7 @@
 \   UIDL-ROOT          ( -- elem | 0 )
 \   UIDL-BY-ID         ( id-a id-l -- elem | 0 )
 \   UIDL-ELEM-COUNT    ( -- n )
+\   UIDL-ELEM-INDEX?   ( elem -- index flag )
 \   UIDL-ERR           ( -- code )
 \
 \   UIDL-TYPE          ( elem -- type )
@@ -688,6 +689,21 @@ VARIABLE _UPA-VA  VARIABLE _UPA-VL
 : UIDL-ROOT        ( -- elem | 0 )  _UDL-ROOT @ ;
 : UIDL-ELEM-COUNT  ( -- n )         _UDL-ECNT @ ;
 
+\ Return the stable zero-based pool index of a live element record.  Prove
+\ the complete pointer geometry before reading the record, then reject the
+\ zero type left by removal.  Allocation is append-only within a document,
+\ so later mutations cannot renumber an admitted element.
+: UIDL-ELEM-INDEX?  ( elem -- index flag )
+    DUP 0= IF DROP 0 0 EXIT THEN
+    DUP _UDL-ELEMS U< IF DROP 0 0 EXIT THEN
+    _UDL-ELEMS -
+    DUP _UDL-ECNT @ _UDL-ELEMSZ * U< 0= IF
+        DROP 0 0 EXIT
+    THEN
+    DUP _UDL-ELEMSZ MOD 0<> IF DROP 0 0 EXIT THEN
+    DUP _UDL-ELEMS + UE.TYPE @ 0= IF DROP 0 0 EXIT THEN
+    _UDL-ELEMSZ / -1 ;
+
 : UIDL-TYPE        ( elem -- type )    UE.TYPE @ ;
 : UIDL-ID          ( elem -- a l )     DUP UE.ID-A @ SWAP UE.ID-L @ ;
 : UIDL-ROLE        ( elem -- a l )     DUP UE.ROLE-A @ SWAP UE.ROLE-L @ ;
@@ -1263,6 +1279,7 @@ GUARD _uidl-guard
 ' UIDL-PARSE      CONSTANT _uidl-parse-xt
 ' UIDL-ROOT       CONSTANT _uidl-root-xt
 ' UIDL-ELEM-COUNT CONSTANT _uidl-elem-count-xt
+' UIDL-ELEM-INDEX? CONSTANT _uidl-elem-index-q-xt
 ' UIDL-TYPE       CONSTANT _uidl-type-xt
 ' UIDL-ID         CONSTANT _uidl-id-xt
 ' UIDL-ROLE       CONSTANT _uidl-role-xt
@@ -1358,6 +1375,7 @@ GUARD _uidl-guard
 : UIDL-PARSE      _uidl-parse-xt _uidl-guard WITH-GUARD ;
 : UIDL-ROOT       _uidl-root-xt _uidl-guard WITH-GUARD ;
 : UIDL-ELEM-COUNT _uidl-elem-count-xt _uidl-guard WITH-GUARD ;
+: UIDL-ELEM-INDEX? _uidl-elem-index-q-xt _uidl-guard WITH-GUARD ;
 : UIDL-TYPE       _uidl-type-xt _uidl-guard WITH-GUARD ;
 : UIDL-ID         _uidl-id-xt _uidl-guard WITH-GUARD ;
 : UIDL-ROLE       _uidl-role-xt _uidl-guard WITH-GUARD ;

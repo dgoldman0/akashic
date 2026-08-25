@@ -43,6 +43,18 @@ before destination mutation. A caught late execution fault may have cleared or
 partially filled caller memory, but LABEL publishes its magic last, so such a
 record is not valid. A type with no installed hook returns `UNSUPPORTED`.
 
+Callers which derive more than one record can hold one coherent source view:
+
+```forth
+UIDL-SEMANTIC-OBSERVE  ( i*x xt -- j*x )
+```
+
+The supplied execution token runs while the UIDL document, semantic scratch,
+LEL evaluator, and state tree are all observed in that order. Public snapshot
+operations may be called recursively inside the scope. This prevents a tree
+walk from combining element identities or values from different source
+moments; it does not publish or allocate any destination storage.
+
 ## Shared text value
 
 ```forth
@@ -116,8 +128,9 @@ UIDL-LABEL-SNAPSHOT-TEXT@           ( snapshot -- text-a text-u )
 ```
 
 Capture resolves and validates every source fact, destination bound, overlap
-with the current text, and disjointness from all persistent UIDL model storage
-before modifying caller memory. It zeroes the complete reserved record, copies
+with the current text, and disjointness from persistent UIDL and active
+state-tree storage before modifying caller memory. It zeroes the complete
+reserved record, copies
 the current value, and publishes magic last. The caller must still own and
 serialize independent writes to the destination; source-state serialization is
 part of the neutral capture operation.

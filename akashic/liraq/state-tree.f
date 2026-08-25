@@ -11,10 +11,15 @@
 \ Prefix: ST-   (public API)
 \         _ST-  (internal helpers)
 \
+\ Source-observation helpers:
+\   ST-STORAGE-DISJOINT?  ( a u -- flag )
+\   ST-OBSERVE             ( i*x xt -- j*x )
+\
 \ Load with:   REQUIRE state-tree.f
 
 REQUIRE ../utils/string.f
 REQUIRE ../math/fp32.f
+REQUIRE ../utils/memory-span.f
 
 PROVIDED akashic-state-tree
 
@@ -1029,6 +1034,92 @@ VARIABLE _ST-SUB-CNT
     LOOP
     DROP 2DROP ;
 
+\ Prove that caller-owned destination storage cannot overwrite the active
+\ state document before or during a compound semantic read.  Every node,
+\ journal entry, and copied string lives in the arena backing span.  The
+\ separately placed arena descriptor, current-document cell, and global
+\ subscription registry are covered explicitly.
+32 CONSTANT _ST-ARENA-DESCRIPTOR-SIZE
+
+VARIABLE _STSD-A
+VARIABLE _STSD-U
+VARIABLE _STSD-DOC
+VARIABLE _STSD-ARENA
+VARIABLE _STSD-BASE
+VARIABLE _STSD-SIZE
+VARIABLE _STSD-END
+VARIABLE _STSD-P-A
+VARIABLE _STSD-P-U
+
+: _STSD-CLEAR  ( flag -- flag )
+    0 _STSD-A ! 0 _STSD-U ! 0 _STSD-DOC ! 0 _STSD-ARENA !
+    0 _STSD-BASE ! 0 _STSD-SIZE ! 0 _STSD-END ! ;
+
+: _ST-STORAGE-DISJOINT-BODY?  ( a u -- flag )
+    _STSD-U ! _STSD-A !
+    _STSD-A @ 0<> _STSD-U @ 0> AND 0= IF 0 _STSD-CLEAR EXIT THEN
+    _STSD-A @ _STSD-U @ MSPAN-NONWRAPPING? 0= IF
+        0 _STSD-CLEAR EXIT
+    THEN
+    _STSD-A @ _STSD-U @ _ST-CUR 8 MSPAN-OVERLAP? IF
+        0 _STSD-CLEAR EXIT
+    THEN
+    _STSD-A @ _STSD-U @ _ST-SUB-TABLE _ST-SUB-MAX 24 *
+        MSPAN-OVERLAP? IF 0 _STSD-CLEAR EXIT THEN
+    _STSD-A @ _STSD-U @ _ST-SUB-CNT 8 MSPAN-OVERLAP? IF
+        0 _STSD-CLEAR EXIT
+    THEN
+    ST-DOC DUP 0= IF DROP -1 _STSD-CLEAR EXIT THEN
+    DUP 7 AND IF DROP 0 _STSD-CLEAR EXIT THEN
+    DUP _ST-DESCSZ MSPAN-NONWRAPPING? 0= IF
+        DROP 0 _STSD-CLEAR EXIT
+    THEN
+    DUP _STSD-DOC ! SD.ARENA @ DUP 0= IF
+        DROP 0 _STSD-CLEAR EXIT
+    THEN
+    DUP 7 AND IF DROP 0 _STSD-CLEAR EXIT THEN
+    DUP _ST-ARENA-DESCRIPTOR-SIZE MSPAN-NONWRAPPING? 0= IF
+        DROP 0 _STSD-CLEAR EXIT
+    THEN
+    DUP _STSD-ARENA !
+    DUP A.SOURCE @ 3 U< 0= IF DROP 0 _STSD-CLEAR EXIT THEN
+    DUP A.BASE @ DUP 0= IF 2DROP 0 _STSD-CLEAR EXIT THEN
+    _STSD-BASE !
+    A.SIZE @ DUP 0> 0= IF DROP 0 _STSD-CLEAR EXIT THEN
+    DUP _STSD-SIZE !
+    _STSD-BASE @ SWAP MSPAN-NONWRAPPING? 0= IF
+        0 _STSD-CLEAR EXIT
+    THEN
+    _STSD-BASE @ _STSD-SIZE @ + _STSD-END !
+    _STSD-ARENA @ A.PTR @ DUP _STSD-BASE @ U< IF
+        DROP 0 _STSD-CLEAR EXIT
+    THEN
+    _STSD-END @ U> IF 0 _STSD-CLEAR EXIT THEN
+    _STSD-DOC @ _STSD-BASE @ U< IF 0 _STSD-CLEAR EXIT THEN
+    _STSD-DOC @ _ST-DESCSZ + _STSD-END @ U> IF
+        0 _STSD-CLEAR EXIT
+    THEN
+    _STSD-A @ _STSD-U @ _STSD-ARENA @
+        _ST-ARENA-DESCRIPTOR-SIZE MSPAN-OVERLAP? IF
+        0 _STSD-CLEAR EXIT
+    THEN
+    _STSD-A @ _STSD-U @ _STSD-BASE @ _STSD-SIZE @
+        MSPAN-OVERLAP? IF 0 _STSD-CLEAR EXIT THEN
+    -1 _STSD-CLEAR ;
+
+: _STSD-CALL  ( -- flag )
+    _STSD-P-A @ _STSD-P-U @ _ST-STORAGE-DISJOINT-BODY? ;
+
+: _STSD-P-CLEAR  ( flag -- flag )
+    0 _STSD-P-A ! 0 _STSD-P-U ! ;
+
+: ST-STORAGE-DISJOINT?  ( a u -- flag )
+    _STSD-P-U ! _STSD-P-A !
+    ['] _STSD-CALL CATCH ?DUP IF
+        DROP 0 _STSD-CLEAR
+    THEN
+    _STSD-P-CLEAR ;
+
 \ Execute a compound state observation under the state-tree guard.  This is
 \ the neutral composition seam for callers which must keep borrowed strings
 \ and the nodes which own them coherent through a synchronous copy.
@@ -1120,6 +1211,7 @@ GUARD _ltree-guard
 ' ST-COMPUTED!    CONSTANT _st-computed-s-xt
 ' ST-SUBSCRIBE    CONSTANT _st-subscribe-xt
 ' ST-UNSUBSCRIBE  CONSTANT _st-unsubscribe-xt
+' ST-STORAGE-DISJOINT? CONSTANT _st-storage-disjoint-q-xt
 ' ST-OBSERVE      CONSTANT _st-observe-xt
 
 : SN.TYPE         _sn-dottype-xt _ltree-guard WITH-GUARD ;
@@ -1203,5 +1295,7 @@ GUARD _ltree-guard
 : ST-COMPUTED!    _st-computed-s-xt _ltree-guard WITH-GUARD ;
 : ST-SUBSCRIBE    _st-subscribe-xt _ltree-guard WITH-GUARD ;
 : ST-UNSUBSCRIBE  _st-unsubscribe-xt _ltree-guard WITH-GUARD ;
+: ST-STORAGE-DISJOINT?
+    _st-storage-disjoint-q-xt _ltree-guard WITH-GUARD ;
 : ST-OBSERVE      _st-observe-xt _ltree-guard WITH-GUARD ;
 [THEN] [THEN]

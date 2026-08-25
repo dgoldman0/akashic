@@ -15,6 +15,9 @@
 \
 \  Prefix: UIDL- (public), _UIDLS- (private)
 \  Provider: akashic-uidl-semantic
+\
+\  Public compound seam:
+\    UIDL-SEMANTIC-OBSERVE  ( i*x xt -- j*x )
 
 PROVIDED akashic-uidl-semantic
 
@@ -34,6 +37,12 @@ REQUIRE ../utils/memory-span.f
 : UIDL-SNAP-STATUS-VALID?  ( status -- flag )  4 U< ;
 
 1 CONSTANT UIDL-SNAPSHOT-K-LABEL
+
+\ In an unguarded build this is simply a scoped execution seam.  Guarded
+\ builds redefine it below so one caller can hold the complete canonical
+\ UIDL -> semantic scratch -> LEL -> state observation while deriving more
+\ than one snapshot.
+: UIDL-SEMANTIC-OBSERVE  ( i*x xt -- j*x )  EXECUTE ;
 
 \ =====================================================================
 \  Shared text-value semantics
@@ -311,6 +320,10 @@ VARIABLE _UIDLS-LABEL-P-CAP
         UIDL-STORAGE-DISJOINT? 0= IF
         0 UIDL-SNAP-S-INVALID EXIT
     THEN
+    _UIDLS-LABEL-DST @ _UIDLS-LABEL-TOTAL @
+        ST-STORAGE-DISJOINT? 0= IF
+        0 UIDL-SNAP-S-INVALID EXIT
+    THEN
     _UIDLS-LABEL-TEXT-A @ _UIDLS-LABEL-TEXT-U @
     _UIDLS-LABEL-DST @ _UIDLS-LABEL-TOTAL @ MSPAN-OVERLAP? IF
         0 UIDL-SNAP-S-INVALID EXIT
@@ -502,6 +515,18 @@ GUARD _uidls-guard
 ' UIDL-SNAPSHOT-SIZE          CONSTANT _uidls-snapshot-size-xt
 ' UIDL-LABEL-SNAPSHOT-VALID?  CONSTANT _uidls-label-valid-q-xt
 
+\ The caller's xt stays on the data stack until the innermost observation.
+\ Each helper adds exactly one guard around the next helper, preserving body
+\ results and exceptions through the generic observation/guard seams.
+: _UIDLS-OBSERVE-IN-STATE  ( i*x xt -- j*x )
+    ST-OBSERVE ;
+
+: _UIDLS-OBSERVE-IN-LEL  ( i*x xt -- j*x )
+    ['] _UIDLS-OBSERVE-IN-STATE LEL-OBSERVE ;
+
+: _UIDLS-OBSERVE-WITH-SEMANTIC  ( i*x xt -- j*x )
+    ['] _UIDLS-OBSERVE-IN-LEL _uidls-guard WITH-GUARD ;
+
 \ UIDL is always acquired before semantic scratch.  A caller may already own
 \ the document guard while invoking a neutral semantic operation; preserving
 \ that global order prevents an AB/BA cycle with a concurrent snapshot caller.
@@ -527,4 +552,7 @@ GUARD _uidls-guard
     ['] _UIDLS-SNAPSHOT-SIZE-GUARDED UIDL-OBSERVE ;
 
 : UIDL-LABEL-SNAPSHOT-VALID?  _uidls-label-valid-q-xt _uidls-guard WITH-GUARD ;
+
+: UIDL-SEMANTIC-OBSERVE  ( i*x xt -- j*x )
+    ['] _UIDLS-OBSERVE-WITH-SEMANTIC UIDL-OBSERVE ;
 [THEN] [THEN]

@@ -63,8 +63,9 @@ REQUIRE state-tree.f
 
 ```
 state-tree.f
-├── ../utils/string.f   (akashic-string)
-└── ../math/fp32.f      (akashic-fp32)
+├── ../utils/string.f       (akashic-string)
+├── ../math/fp32.f          (akashic-fp32)
+└── ../utils/memory-span.f  (akashic-memory-span)
 ```
 
 All dependencies are loaded automatically via `REQUIRE` with relative
@@ -137,6 +138,7 @@ once (nodes, strings, journal, descriptor).
 
 ```forth
 ST-OBSERVE ( i*x xt -- j*x )
+ST-STORAGE-DISJOINT? ( a u -- flag )
 ```
 
 Execute `xt` while holding the recursive state-tree guard. Results and
@@ -144,6 +146,14 @@ exceptions pass through unchanged. This lets a higher-level neutral operation
 keep node identity and borrowed state strings coherent through a synchronous
 copy. It does not extend the lifetime of a borrowed result after the callback
 returns.
+
+`ST-STORAGE-DISJOINT?` validates a nonempty, nonwrapping caller span and
+returns true only when it cannot overlap the current state arena backing, its
+32-byte arena descriptor, the current-document cell, or the global
+subscription registry. With no current document it still protects the global
+cells and otherwise returns true. Neutral snapshot writers use this predicate
+before modifying a destination, so a caller cannot erase authoritative bound
+state before its value is copied.
 
 ---
 
@@ -693,6 +703,7 @@ S" user.settings" _ST-NOTIFY   \ (silence)
 | `ST-DOC` | `( -- st )` |
 | `ST-ROOT` | `( -- node )` |
 | `ST-NODE-COUNT` | `( -- n )` |
+| `ST-STORAGE-DISJOINT?` | `( a u -- flag )` |
 | `ST-OBSERVE` | `( i*x xt -- j*x )` |
 
 ### Error Handling

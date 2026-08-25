@@ -31,6 +31,8 @@ EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
 STR_F      = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
 FP32_F     = os.path.join(ROOT_DIR, "akashic", "math", "fp32.f")
 FIXED_F    = os.path.join(ROOT_DIR, "akashic", "math", "fixed.f")
+UINT_RANGE_F = os.path.join(ROOT_DIR, "akashic", "utils", "uint-range.f")
+MSPAN_F    = os.path.join(ROOT_DIR, "akashic", "utils", "memory-span.f")
 STREE_F    = os.path.join(ROOT_DIR, "akashic", "liraq", "state-tree.f")
 LEL_F      = os.path.join(ROOT_DIR, "akashic", "liraq", "lel.f")
 
@@ -124,6 +126,8 @@ def build_snapshot():
     str_lines   = _load_forth_lines(STR_F)
     fp32_lines  = _load_forth_lines(FP32_F)
     fixed_lines = _load_forth_lines(FIXED_F)
+    uint_range_lines = _load_forth_lines(UINT_RANGE_F)
+    mspan_lines = _load_forth_lines(MSPAN_F)
     stree_lines = _load_forth_lines(STREE_F)
     lel_lines   = _load_forth_lines(LEL_F)
 
@@ -154,6 +158,7 @@ def build_snapshot():
 
     all_lines = (kdos_lines + ["ENTER-USERLAND"]
                  + str_lines + fp32_lines + fixed_lines
+                 + uint_range_lines + mspan_lines
                  + stree_lines + lel_lines + test_helpers)
     payload = "\n".join(all_lines) + "\n"
     data = payload.encode()

@@ -132,6 +132,73 @@ def test_uidl_storage_disjoint_covers_every_persistent_document_store() -> None:
     assert "_uidl-storage-disjoint-q-xt _uidl-guard WITH-GUARD" in wrapper
 
 
+def test_state_storage_disjoint_covers_active_arena_before_semantic_writes() -> None:
+    source = STATE_TREE.read_text(encoding="utf-8")
+    semantic = SEMANTIC.read_text(encoding="utf-8")
+
+    assert "REQUIRE ../utils/memory-span.f" in source
+    predicate = _definition(source, "_ST-STORAGE-DISJOINT-BODY?")
+    assert "( a u -- flag )" in predicate.splitlines()[0]
+    assert "_STSD-A @ 0<> _STSD-U @ 0> AND 0=" in predicate
+    assert "MSPAN-NONWRAPPING?" in predicate
+    assert "ST-DOC DUP 0= IF DROP -1" in predicate
+    assert "_ST-ARENA-DESCRIPTOR-SIZE" in predicate
+    assert "A.SOURCE @ 3 U<" in predicate
+    assert "A.BASE @" in predicate
+    assert "A.SIZE @" in predicate
+    assert "A.PTR @" in predicate
+    assert "_ST-DESCSZ + _STSD-END @ U>" in predicate
+    for protected in (
+        "_STSD-ARENA @\n        _ST-ARENA-DESCRIPTOR-SIZE MSPAN-OVERLAP?",
+        "_STSD-BASE @ _STSD-SIZE @\n        MSPAN-OVERLAP?",
+        "_ST-CUR 8 MSPAN-OVERLAP?",
+        "_ST-SUB-TABLE _ST-SUB-MAX 24 *\n        MSPAN-OVERLAP?",
+        "_ST-SUB-CNT 8 MSPAN-OVERLAP?",
+    ):
+        assert protected in predicate
+    assert predicate.count("MSPAN-OVERLAP?") == 5
+    assert "_STSD-CLEAR" in predicate
+
+    public = _definition(source, "ST-STORAGE-DISJOINT?")
+    assert "['] _STSD-CALL CATCH ?DUP IF" in public
+    assert "DROP 0 _STSD-CLEAR" in public
+    assert "_STSD-P-CLEAR" in public
+
+    assert (
+        "' ST-STORAGE-DISJOINT? CONSTANT _st-storage-disjoint-q-xt"
+        in source
+    )
+    wrapper = _last_definition(source, "ST-STORAGE-DISJOINT?")
+    assert "_st-storage-disjoint-q-xt _ltree-guard WITH-GUARD" in wrapper
+
+    capture = _definition(semantic, "_UIDLS-LABEL-CAPTURE-BODY")
+    uidl_disjoint = capture.index("UIDL-STORAGE-DISJOINT?")
+    state_disjoint = capture.index("ST-STORAGE-DISJOINT?", uidl_disjoint)
+    text_overlap = capture.index("MSPAN-OVERLAP?", state_disjoint)
+    first_fill = capture.index("0 FILL", text_overlap)
+    assert uidl_disjoint < state_disjoint < text_overlap < first_fill
+
+
+def test_uidl_exposes_guarded_stable_live_element_indices() -> None:
+    source = UIDL.read_text(encoding="utf-8")
+
+    accessor = _definition(source, "UIDL-ELEM-INDEX?")
+    assert "( elem -- index flag )" in accessor.splitlines()[0]
+    assert "DUP 0= IF DROP 0 0 EXIT THEN" in accessor
+    assert "DUP _UDL-ELEMS U< IF DROP 0 0 EXIT THEN" in accessor
+    assert "DUP _UDL-ECNT @ _UDL-ELEMSZ * U< 0=" in accessor
+    assert "DUP _UDL-ELEMSZ MOD 0<> IF DROP 0 0 EXIT THEN" in accessor
+    assert "DUP _UDL-ELEMS + UE.TYPE @ 0=" in accessor
+    assert "_UDL-ELEMSZ / -1" in accessor
+
+    # Rich/projector code gets only the neutral public identity seam.  The
+    # private pool calculation stays in uidl.f and executes under the same
+    # recursive document guard as the ordinary element accessors.
+    assert "' UIDL-ELEM-INDEX? CONSTANT _uidl-elem-index-q-xt" in source
+    wrapper = _last_definition(source, "UIDL-ELEM-INDEX?")
+    assert "_uidl-elem-index-q-xt _uidl-guard WITH-GUARD" in wrapper
+
+
 def test_semantic_module_is_neutral_allocation_free_and_label_only() -> None:
     source = SEMANTIC.read_text(encoding="utf-8")
     code = _code_without_comments(source)
@@ -361,6 +428,19 @@ def test_observation_order_is_uidl_then_lel_then_state() -> None:
         )
         wrapper = _last_definition(source, public)
         assert f"{captured} {guard} WITH-GUARD" in wrapper
+
+    # A multi-record derivation can hold the same complete source view once.
+    # The execution token reaches ST-OBSERVE only after UIDL, semantic scratch,
+    # and LEL have established the canonical outer-to-inner order.
+    semantic_observe = _last_definition(semantic, "UIDL-SEMANTIC-OBSERVE")
+    assert "['] _UIDLS-OBSERVE-WITH-SEMANTIC UIDL-OBSERVE" in semantic_observe
+    assert "['] _UIDLS-OBSERVE-IN-LEL _uidls-guard WITH-GUARD" in _definition(
+        semantic, "_UIDLS-OBSERVE-WITH-SEMANTIC"
+    )
+    assert "['] _UIDLS-OBSERVE-IN-STATE LEL-OBSERVE" in _definition(
+        semantic, "_UIDLS-OBSERVE-IN-LEL"
+    )
+    assert "ST-OBSERVE" in _definition(semantic, "_UIDLS-OBSERVE-IN-STATE")
 
 
 def test_caught_public_paths_scrub_every_borrowed_argument() -> None:
