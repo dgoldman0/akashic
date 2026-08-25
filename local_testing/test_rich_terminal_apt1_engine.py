@@ -22,12 +22,22 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     provider = "akashic-tui-rtapt1"
     assert f"PROVIDED {provider}" in source
     assert len(provider.encode("ascii")) <= 23
-    assert not re.search(r"(?m)^REQUIRE\s+.*presentation-terminal\.f\s*$", source)
+    assert not re.search(
+        r"(?m)^REQUIRE\s+.*(?:presentation-terminal|rich-terminal)\.f\s*$",
+        source,
+    )
     assert "REQUIRE ../../utils/memory-span.f" in source
     assert " CONSTANT APTR-" not in source
     assert "\n: APTR-" not in source
-    assert "104 CONSTANT RTAPT-OWNER-SIZE" in source
+    assert "144 CONSTANT RTAPT-OWNER-SIZE" in source
     assert ": _RTAPT-O.PRIOR-GENERATION" in source
+    assert ": _RTAPT-O.ACTIVE-REGIONS" in source
+    assert ": _RTAPT-O.HIDDEN-REGIONS" in source
+    assert ": _RTAPT-O.REGION-HIGH" in source
+    assert ": _RTAPT-O.PENDING-REGIONS" in source
+    assert ": _RTAPT-O.PENDING-REGION-HIGH" in source
+    assert "72 CONSTANT _RTAPT-REGION-DEFINE-COPY-SIZE" in source
+    assert "88 CONSTANT _RTAPT-REGION-DEFINE-FRAME-BYTES" in source
 
     config = _definition(source, "RTAPT-CONFIG-INIT")
     init = _definition(source, "RTAPT-INIT")
@@ -140,6 +150,100 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-ACTIVE-QUARANTINED" in step
     assert "_RTAPT-QUARANTINE-ALL" in reconcile_open
     assert "PT-SERVICE" not in step
+
+    captured = _definition(source, "_RTAPT-CAPTURED-BANKS?")
+    ledgers = _definition(source, "_RTAPT-OWNER-LEDGERS?")
+    rich_begin = _definition(source, "RTAPT-RICH-BEGIN")
+    region_define = _definition(source, "RTAPT-REGION-DEFINE")
+    rich_seal = _definition(source, "RTAPT-RICH-SEAL")
+    rich_cancel = _definition(source, "RTAPT-RICH-CANCEL")
+    candidate_preflight = _definition(source, "_RTAPT-CANDIDATE-PREFLIGHT?")
+    cell_begin = _definition(source, "RTAPT-CELL-BEGIN")
+    cell_span = _definition(source, "RTAPT-CELL-SPAN-BEGIN")
+    cell_write = _definition(source, "RTAPT-CELL-WRITE")
+    cell_cursor = _definition(source, "RTAPT-CELL-CURSOR")
+    cell_abort = _definition(source, "RTAPT-CELL-ABORT")
+    abort_open = _definition(source, "_RTAPT-ABORT-OPEN")
+    cell_commit = _definition(source, "RTAPT-CELL-COMMIT")
+    commit_failed = _definition(source, "_RTAPT-COMMIT-FAILED")
+    reconcile_output = _definition(source, "_RTAPT-RECONCILE-OUTPUT")
+    apply_output = _definition(source, "_RTAPT-APPLY-OUTPUT")
+    output_identity = _definition(source, "_RTAPT-OUTPUT-COMPLETION?")
+    poll_completion = _definition(source, "_RTAPT-POLL-COMPLETION")
+    storage_disjoint = _definition(source, "RTAPT-STORAGE-DISJOINT?")
+
+    assert "_RTAPT-E.OP-CAP" in captured
+    assert "_RTAPT-E.OP-COUNT @ _RTAPT-U32?" in captured
+    assert "_RTAPT-E.COPY-U" in captured
+    assert "_RTAPT-REGION-DEFINE-COPY-SIZE" in captured
+    assert "_RTAPT-REGION-DEFINE-FRAME-BYTES" in captured
+    assert "_RTAPT-E.RET-BYTES" in captured
+    assert "PT-RET-DELTA" in ledgers
+    assert "PT-RET-REPLACE-START" in ledgers
+    assert "PT-RET-LAYOUT-START" in ledgers
+    assert "_RTAPT-O.ACTIVE-REGIONS" in ledgers
+    assert "_RTAPT-O.HIDDEN-REGIONS" in ledgers
+
+    assert "PT-PRESENT-BEGIN" not in rich_begin
+    assert "RTAPT-UPDATE-CAPTURING" in rich_begin
+    assert "_RTAPT-E.OP-CAP" in region_define
+    assert "_RTAPT-E.OP-COUNT @ 0xFFFFFFFF U<" in region_define
+    assert "_RTAPT-E.COPY-U" in region_define
+    assert "_RTAPT-O.REGION-HIGH" in region_define
+    assert "_RTAPT-O.PENDING-REGION-HIGH" in region_define
+    assert "_RTAPT-O.PENDING-REGIONS" in region_define
+    assert not re.search(r"(?<!R)\bPT-REGION-DEFINE\b", region_define)
+    assert "_RTAPT-MODE-DISPOSITION?" in rich_seal
+    assert "RTAPT-UPDATE-SEALED" in rich_seal
+    assert "_RTAPT-CANDIDATE-DISCARD" in rich_cancel
+
+    assert "_RTAPT-REGION-COPY-SHAPE?" in candidate_preflight
+    assert "_RTAPT-O.REGION-HIGH" in candidate_preflight
+    assert "_RTAPT-O.PENDING-REGIONS" in candidate_preflight
+    assert cell_begin.count("PT-PRESENT-BEGIN") == 2
+    assert cell_begin.index("_RTAPT-CANDIDATE-PREFLIGHT?") < cell_begin.index(
+        "PT-PRESENT-BEGIN"
+    )
+    assert "PT-RET-NONE" in cell_begin
+    assert "RTAPT-COUPLING-CELL" in cell_begin
+    assert "RTAPT-COUPLING-RETAINED" in cell_begin
+    assert "RTAPT-UPDATE-CELL-OPEN" in cell_begin
+    assert "PT-SPAN-BEGIN" in cell_span
+    assert "PT-CELL" in cell_write
+    assert "PT-CURSOR" in cell_cursor
+    assert "_RTAPT-ABORT-OPEN" in cell_abort
+
+    assert "_RTAPT-SEND-CAPTURED" in cell_commit
+    assert cell_commit.index("_RTAPT-CANDIDATE-PREFLIGHT?") < cell_commit.index(
+        "_RTAPT-SEND-CAPTURED"
+    )
+    assert "PT-PRESENT-COMMIT" in cell_commit
+    assert "_RTAPT-COMMIT-FAILED" in cell_commit
+    assert "RTAPT-UPDATE-AWAITING" in cell_commit
+    assert "_RTAPT-ACTIVE-OUTPUT" in cell_commit
+    assert "PT-TX-ABORT" in abort_open
+    assert "_RTAPT-WIRE-REWIND" in abort_open
+    assert "_RTAPT-ABORT-OPEN" in commit_failed
+    assert "_RTAPT-CANDIDATE-DISCARD" in reconcile_output
+    assert "_RTAPT-WIRE-REWIND" in reconcile_output
+    assert "RTAPT-COUPLING-RETAINED" in reconcile_output
+    assert "_RTAPT-QUARANTINE-ALL" in reconcile_output
+    assert "PT-REQUEST-PRESENT-COMMIT" in output_identity
+    assert "PT-COMPLETION-TXID@ 0<>" in output_identity
+    assert "PT-COMPLETION-DETAIL@ 0=" in output_identity
+    assert "_RTAPT-APPLY-OUTPUT" in reconcile_output
+    assert "PT-RET-REPLACE-START" in apply_output
+    assert "PT-RET-LAYOUT-START" in apply_output
+    assert "PT-COMMIT-AND-REVEAL" in apply_output
+    assert "_RTAPT-ACTIVE-OUTPUT" in poll_completion
+
+    assert "RTAPT-USES-SESSION?" in source
+    assert "RTAPT-SESSION@" not in source
+    assert "PT-STORAGE-DISJOINT?" in storage_disjoint
+    assert storage_disjoint.count("MSPAN-OVERLAP?") == 4
+    assert "PT-SERVICE" not in source.replace(
+        "It never calls PT-SERVICE and cannot consume input events.", ""
+    )
 
     # PT's public surface is the engine's lower boundary.  Depending on a PT
     # private word would duplicate or bypass its wire/session authority.
