@@ -476,6 +476,52 @@ drop is acknowledged or a confirmed epoch/session destruction proves that the
 retained terminal state cannot survive. A UCTX that never materialized a retained owner
 creates no wire tombstone.
 
+### 6.6 Generic applet-host composition seam
+
+The generic applet host names no rich-terminal engine or wire protocol. An
+explicit product composition may configure one neutral `AHOST` callback plus
+an opaque, separately owned context:
+
+```forth
+AHOST-UIDL-READY!  ( xt context host -- )
+\ xt                ( host slot context -- ior )
+AHOST-QUIESCE-ALL  ( host -- ior )
+```
+
+The host invokes the callback exactly once for a launch after ordinary UIDL
+load and initial region assignment have succeeded, while the exact UCTX is
+active, and before crossing the application-initialization boundary. A zero
+callback is the baseline configuration. The callback may capture the exact
+binding and attach an optional driver, but the host neither allocates backend
+state nor learns the callback context's type. A callback refusal enters normal
+transactional launch rollback.
+
+Each linked slot records an independent retirement phase: `LIVE`, `QUIESCING`,
+`QUIESCED`, `SHUTDOWN-CLAIMED`, or `DETACHED`. `AHS.STATE` remains the ordinary
+running/minimized/focused state so authority validation sees the original live
+tuple through final detach. On the first close attempt the host stores
+`QUIESCING` before calling the rich quiesce barrier. A refusal preserves the
+linked slot, ID, CINST, UCTX, region, UIDL buffer, driver attachment, and exact
+activation tuple. The slot becomes noncallable: focus, input, tick, paint, and
+application close callbacks must not reach it, while a later host
+quiesce/drain attempt may retry the barrier.
+
+After quiesce succeeds, the host stores `SHUTDOWN-CLAIMED` before activation or
+`APP.SHUTDOWN`, so a thrown shutdown callback is never repeated. It then runs
+final UIDL/driver detach with the exact UCTX restored. `AHS.HAS-UIDL` remains
+true until that detach succeeds. A detach refusal preserves every child
+resource and returns a not-closed result; it cannot trigger relayout or a drain
+spin. Only `DETACHED` authorizes owner-resource release, unlink, callback
+notification, and freeing the UIDL buffer, UCTX, region, CINST, and slot.
+
+Aggregate close negotiation treats a slot already past `LIVE` as previously
+approved, without invoking application code. The outer lifecycle owner then
+retries `AHOST-QUIESCE-ALL` and maps an actual barrier refusal to its own defer
+or quarantine state. Any relayout implementation that walks `AHS` directly
+must skip noncallable slots completely; in particular it must not activate the
+slot, replace or free its retained region, or run ordinary UIDL relayout while
+retirement is unresolved.
+
 ## 7. Frame projection and atomic publication
 
 UIDL-TUI CELL painting remains the universal path. In the rich composition,

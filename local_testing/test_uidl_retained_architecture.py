@@ -127,6 +127,247 @@ def test_uidl_rich_terminal_lifecycle_is_ordered_and_context_local() -> None:
     )
 
 
+def test_generic_host_uidl_ready_hook_is_neutral_and_exactly_placed() -> None:
+    host = _text("akashic/tui/applet-host/host.f")
+
+    # The composition seam is exactly an xt plus an opaque caller context.
+    # The generic host neither allocates backend state nor names a backend.
+    assert "80 CONSTANT _AH-O-UIDL-READY-XT" in host
+    assert "88 CONSTANT _AH-O-UIDL-READY-CONTEXT" in host
+    assert "96 CONSTANT AHOST-SIZE" in host
+    setter = _word(host, "AHOST-UIDL-READY!")
+    body = _word(host, "_AHUR-BODY")
+    invoke = _word(host, "_AHOST-UIDL-READY")
+    assert "DUP >R AHOST.UIDL-READY-CONTEXT !" in setter
+    assert "R> AHOST.UIDL-READY-XT !" in setter
+    assert body.index("_AHUR-HOST @ _AHUR-SLOT @") < body.index(
+        "_AHUR-HOST @ AHOST.UIDL-READY-CONTEXT @"
+    ) < body.index("R> EXECUTE _AHUR-RESULT !")
+    assert "['] _AHUR-BODY CATCH ?DUP IF _AHUR-RESULT ! THEN" in invoke
+    for hook_word in (setter, body, invoke):
+        for forbidden in (
+            "APTSCB",
+            "RTAPT",
+            "RTERM-",
+            "ALLOCATE",
+            "UCTX-ALLOC",
+            "RGN-NEW",
+        ):
+            assert forbidden not in hook_word
+
+    # A successful region and loaded UIDL exist before composition is
+    # notified.  Notification completes before APP.INIT is even looked up.
+    launch = _word(host, "_AHL-BODY")
+    ready_at = launch.index("_AHOST-UIDL-READY")
+    assert launch.count("_AHOST-UIDL-READY") == 1
+    assert launch.index("_AHOST-RELAYOUT") < launch.index(
+        "AHS.RGN @ 0="
+    ) < ready_at
+    assert launch.index("UTUI-LOAD") < ready_at
+    assert launch.index("ASHELL-LOAD-UIDL") < ready_at
+    assert "\n    THEN\n    -1 _AHL-INIT-STARTED !" in launch[ready_at:]
+    assert ready_at < launch.index("-1 _AHL-SLOT @ AHS.INIT-STARTED !")
+    assert ready_at < launch.index("APP.INIT-XT @")
+
+
+def test_generic_host_close_phases_and_init_boundary_are_persistent() -> None:
+    host = _text("akashic/tui/applet-host/host.f")
+
+    for declaration in (
+        "0 CONSTANT AHS-CLOSE-S-LIVE",
+        "1 CONSTANT AHS-CLOSE-S-QUIESCING",
+        "2 CONSTANT AHS-CLOSE-S-QUIESCED",
+        "3 CONSTANT AHS-CLOSE-S-SHUTDOWN-CLAIMED",
+        "4 CONSTANT AHS-CLOSE-S-DETACHED",
+    ):
+        assert declaration in host
+    assert "88 CONSTANT _AHS-O-CLOSE-PHASE" in host
+    assert "96 CONSTANT _AHS-O-INIT-STARTED" in host
+    assert "104 CONSTANT AHS-SIZE" in host
+    assert "5 U<" in _word(host, "AHS-CLOSE-PHASE-VALID?")
+    assert (
+        "AHS.CLOSE-PHASE @ AHS-CLOSE-S-LIVE ="
+        in _word(host, "AHS-CALLABLE?")
+    )
+
+    # INIT-STARTED is slot lifetime state, not only launch scratch.  Store it
+    # before looking up the optional callback so a zero xt still counts as a
+    # successfully crossed application-init boundary.
+    launch = _word(host, "_AHL-BODY")
+    init_started_at = launch.index("-1 _AHL-SLOT @ AHS.INIT-STARTED !")
+    assert launch.index("-1 _AHL-INIT-STARTED !") < init_started_at
+    assert init_started_at < launch.index("APP.INIT-XT @")
+
+    # Shutdown ownership is claimed before inspecting INIT-STARTED.  A false
+    # field skips both application callbacks, but leaves the phase claimed so
+    # the force path can still perform the independent UIDL detach.
+    shutdown = _word(host, "_AHC-SHUTDOWN")
+    claim_at = shutdown.index(
+        "AHS-CLOSE-S-SHUTDOWN-CLAIMED _AHC-SLOT @ AHS.CLOSE-PHASE !"
+    )
+    init_guard_at = shutdown.index("AHS.INIT-STARTED @ 0= OR IF EXIT THEN")
+    assert claim_at < init_guard_at < shutdown.index("AHS-ACTIVATE")
+    assert init_guard_at < shutdown.index("APP.SHUTDOWN-XT @")
+
+    force = _word(host, "_AHOST-CLOSE-SLOT-FORCE")
+    assert force.index("['] _AHC-SHUTDOWN CATCH") < force.index(
+        "AHS-CLOSE-S-SHUTDOWN-CLAIMED = IF"
+    ) < force.index("['] _AHC-DETACH CATCH")
+    assert "INIT-STARTED" not in _word(host, "_AHC-DETACH")
+
+
+def test_generic_host_quiesces_and_detaches_before_releasing_children() -> None:
+    host = _text("akashic/tui/applet-host/host.f")
+
+    quiesce = _word(host, "_AHQS-BODY")
+    assert quiesce.index(
+        "AHS-CLOSE-S-QUIESCING _AHQS-SLOT @ AHS.CLOSE-PHASE !"
+    ) < quiesce.index("UTUI-RICH-TERM-QUIESCE")
+    assert quiesce.index("UTUI-RICH-TERM-QUIESCE") < quiesce.index(
+        "_AHQS-SLOT @ AHS-CTX-SAVE"
+    ) < quiesce.index(
+        "AHS-CLOSE-S-QUIESCED _AHQS-SLOT @ AHS.CLOSE-PHASE !"
+    )
+
+    # Restore the caller's original context even if traversal or an individual
+    # quiesce throws; preserve the first error from either operation.
+    quiesce_all = _word(host, "AHOST-QUIESCE-ALL")
+    quiesce_all_body = _word(host, "_AHQA-BODY")
+    assert "_AHQA-HOST @ AHOST.HEAD @" in quiesce_all_body
+    assert "DUP _AHOST-QUIESCE-SLOT ?DUP IF THROW THEN" in quiesce_all_body
+    assert quiesce_all_body.index("_AHOST-QUIESCE-SLOT") < quiesce_all_body.index(
+        "AHS.NEXT @"
+    )
+    assert quiesce_all.index(
+        "ASHELL-ACTIVE-CTX _AHQA-ORIGINAL-CTX !"
+    ) < quiesce_all.index("['] _AHQA-BODY CATCH _AHQA-REMEMBER")
+    assert quiesce_all.index(
+        "['] _AHQA-BODY CATCH _AHQA-REMEMBER"
+    ) < quiesce_all.index("['] _AHQA-RESTORE CATCH _AHQA-REMEMBER")
+    assert (
+        "_AHQA-ORIGINAL-CTX @ ASHELL-CTX-SWITCH"
+        in _word(host, "_AHQA-RESTORE")
+    )
+
+    detach = _word(host, "_AHC-DETACH")
+    assert detach.index("AHS-CLOSE-S-SHUTDOWN-CLAIMED <>") < detach.index(
+        "UTUI-DETACH"
+    )
+    assert detach.index("AHS-CTX-RESTORE") < detach.index(
+        "UTUI-DETACH"
+    ) < detach.index("AHS-CTX-SAVE")
+    assert detach.index("UTUI-DETACH") < detach.index(
+        "AHS-CLOSE-S-DETACHED _AHC-SLOT @ AHS.CLOSE-PHASE !"
+    ) < detach.index("0 _AHC-SLOT @ AHS.HAS-UIDL !")
+
+    # The force path realizes the cross-word ordering: quiesce, shutdown
+    # (which claims before APP.SHUTDOWN), detach, HAS clear, then destruction.
+    shutdown = _word(host, "_AHC-SHUTDOWN")
+    assert shutdown.index("AHS-CLOSE-S-SHUTDOWN-CLAIMED") < shutdown.index(
+        "APP.SHUTDOWN-XT @"
+    )
+    force = _word(host, "_AHOST-CLOSE-SLOT-FORCE")
+    ordered = (
+        "_AHOST-QUIESCE-SLOT",
+        "['] _AHC-SHUTDOWN CATCH",
+        "['] _AHC-DETACH CATCH",
+        "AHS-CLOSE-S-DETACHED <> IF",
+        "['] _AHC-RELEASE CATCH",
+        "['] _AHC-CLOSED CATCH",
+        "_AHOST-UNLINK",
+        "['] _AHC-FREE-UIDL-BUF CATCH",
+        "['] _AHC-FREE-UCTX CATCH",
+        "['] _AHC-FREE-REGION CATCH",
+        "['] _AHC-UNREGISTER CATCH",
+        "['] _AHC-FREE-INST CATCH",
+        "['] _AHC-FREE-SLOT CATCH",
+    )
+    assert [force.index(token) for token in ordered] == sorted(
+        force.index(token) for token in ordered
+    )
+
+
+def test_preserved_close_drain_and_launch_rollback_do_not_relayout_early() -> None:
+    host = _text("akashic/tui/applet-host/host.f")
+
+    request = _word(host, "AHOST-REQUEST-CLOSE-ID")
+    closed_at = request.index("_AHI-CLOSED @ IF")
+    preserved_at = request.index("ELSE", closed_at)
+    assert request.count("_AHI-RELAYOUT") == 1
+    assert "_AHI-RELAYOUT" in request[closed_at:preserved_at]
+    assert "APP-CLOSE-D-DEFER _AHI-DECISION !" in request[preserved_at:]
+    assert "_AHI-RELAYOUT" not in request[preserved_at:]
+    assert "_AHI-HOST @ _AHOST-RELAYOUT" in _word(host, "_AHI-RELAYOUT")
+
+    drain = _word(host, "AHOST-DRAIN")
+    assert drain.count("_AHOST-CLOSE-SLOT-FORCE") == 1
+    assert drain.index("_AHOST-CLOSE-SLOT-FORCE") < drain.index(
+        "_AHD-REMEMBER"
+    ) < drain.index("0= IF _AHD-IOR @ EXIT THEN")
+
+    rollback = _word(host, "_AHL-ROLLBACK")
+    assert "_AHL-SLOT @ _AHL-HOST @ _AHOST-CLOSE-SLOT-FORCE" in rollback
+    assert "_AHR-REMEMBER _AHR-CLOSED !" in rollback
+    assert rollback.count("_AHR-RELAYOUT") == 1
+    assert (
+        "_AHR-CLOSED @ IF\n"
+        "        ['] _AHR-RELAYOUT CATCH _AHR-REMEMBER\n"
+        "    THEN"
+    ) in rollback
+    assert "_AHL-HOST @ _AHOST-RELAYOUT" in _word(host, "_AHR-RELAYOUT")
+
+
+def test_non_live_host_slots_are_gated_from_callbacks_and_dispatch() -> None:
+    host = _text("akashic/tui/applet-host/host.f")
+
+    for word in ("AHOST-VCOUNT", "_AHOST-AUTOFOCUS", "AHOST-PAINT"):
+        assert (
+            "DUP AHS-CALLABLE? OVER AHS-VISIBLE? AND IF"
+            in _word(host, word)
+        )
+    assert (
+        "DUP AHS-CALLABLE? IF AHS.INST @ ELSE DROP 0 THEN"
+        in _word(host, "AHOST-FOCUSED-INSTANCE")
+    )
+    for word in ("AHOST-FOCUS-ID", "AHOST-MINIMIZE-ID", "AHOST-RESTORE"):
+        source = _word(host, word)
+        assert source.index("AHS-CALLABLE? 0= IF") < source.index("AHS.STATE !")
+
+    contains = _word(host, "_AHT-SLOT-CONTAINS?")
+    assert contains.index("AHS-CALLABLE? 0= IF") < contains.index("AHS.RGN @")
+    tile_at = _word(host, "AHOST-TILE-AT")
+    assert tile_at.count("_AHT-SLOT-CONTAINS?") == 2
+    mouse = _word(host, "AHOST-DISPATCH-MOUSE")
+    assert mouse.index("AHOST-TILE-AT") < mouse.index("UTUI-DISPATCH-MOUSE")
+
+    key = _word(host, "AHOST-DISPATCH-KEY")
+    key_gate = key.index("AHS-CALLABLE? 0= IF 0 EXIT THEN")
+    assert key_gate < key.index("APP.EVENT-XT @")
+    assert key_gate < key.index("UTUI-DISPATCH-KEY")
+
+    tick = _word(host, "AHOST-TICK")
+    tick_gate = tick.index("OVER AHS-CALLABLE? AND IF")
+    assert tick_gate < tick.index("AHS-ACTIVATE")
+    assert tick_gate < tick.index("APP.TICK-XT @")
+    paint = _word(host, "AHOST-PAINT")
+    assert paint.index("AHS-CALLABLE?") < paint.index("ASHELL-PAINT-CHILD")
+
+    close_one = _word(host, "AHOST-REQUEST-CLOSE-ID")
+    assert re.search(
+        r"AHS-CALLABLE\? IF\s+"
+        r"_AHI-SLOT @ _AHI-REASON @ _AHOST-REQUEST-CLOSE-SLOT\s+"
+        r"ELSE\s+APP-CLOSE-D-ALLOW",
+        close_one,
+    )
+    close_all = _word(host, "AHOST-REQUEST-CLOSE-ALL")
+    assert re.search(
+        r"DUP AHS-CALLABLE\? IF\s+"
+        r"DUP _AHALL-REASON @ _AHOST-REQUEST-CLOSE-SLOT\s+"
+        r"ELSE\s+APP-CLOSE-D-ALLOW",
+        close_all,
+    )
+
+
 def test_retained_contract_requires_internal_uidl_projection_now() -> None:
     contract = _text("docs/rich-terminal/AKASHIC-RICH-TERMINAL.md")
     cell_contract = _text("docs/rich-terminal/AKASHIC-CELL-BACKEND.md")
