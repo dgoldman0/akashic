@@ -9,6 +9,7 @@
 \    LEL-EVAL           ( expr-a expr-l -- type v1 v2 )
 \    LEL-SET-CONTEXT    ( item-node index -- )
 \    LEL-CLEAR-CONTEXT  ( -- )
+\    LEL-OBSERVE        ( i*x xt -- j*x )
 \
 \  Types returned match ST-T-* constants from state-tree.f:
 \    ST-T-STRING(1) ST-T-INTEGER(2) ST-T-BOOLEAN(3) ST-T-NULL(4)
@@ -1637,6 +1638,11 @@ VARIABLE _LEL-LED-TOK   \ save operator token
 
 ' _ST-LEL-COMPUTE _ST-COMPUTE-XT !
 
+\ Execute a compound expression observation under the LEL guard.  Callers
+\ use this when a borrowed evaluation result must remain stable until it has
+\ been consumed or copied synchronously.
+: LEL-OBSERVE  ( i*x xt -- j*x )  EXECUTE ;
+
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
@@ -1645,8 +1651,10 @@ GUARD _lel-guard
 ' LEL-EVAL        CONSTANT _lel-eval-xt
 ' LEL-SET-CONTEXT CONSTANT _lel-set-context-xt
 ' LEL-CLEAR-CONTEXT CONSTANT _lel-clear-context-xt
+' LEL-OBSERVE     CONSTANT _lel-observe-xt
 
 : LEL-EVAL        _lel-eval-xt _lel-guard WITH-GUARD ;
 : LEL-SET-CONTEXT _lel-set-context-xt _lel-guard WITH-GUARD ;
 : LEL-CLEAR-CONTEXT _lel-clear-context-xt _lel-guard WITH-GUARD ;
+: LEL-OBSERVE     _lel-observe-xt _lel-guard WITH-GUARD ;
 [THEN] [THEN]

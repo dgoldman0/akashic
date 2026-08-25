@@ -194,6 +194,22 @@ with their projector slices. Until then `RTERM-UCTX-PROJECT` remains explicitly
 `RTERM-S-UNAVAILABLE` and invokes none of the facade operations, including the
 limits callback.
 
+The lower UIDL layer now supplies the first neutral semantic snapshot
+substrate independently of this adapter. `ED.SEMANTICS` selects a per-element
+caller-bounded snapshot hook, and `UIDL-SNAPSHOT-SIZE` /
+`UIDL-SNAPSHOT-CAPTURE` measure and copy typed records without terminal or
+provider identity. The initial LABEL record contains the resolved text plus
+its explicit `text-capacity` reservation. CELL label paint consumes the same
+`UIDL-TEXT@` value rule but never enforces snapshot eligibility or capacity.
+Thus string/integer/boolean binding semantics are shared below either output
+path, while admission remains the responsibility of the later projector.
+
+This substrate does not change the current wire-inert state. No shipped UIDL
+has been bulk-annotated for retained eligibility, and no snapshot is consumed
+by the driver in this slice. Projector admission must still compare each LABEL
+declaration and the checked per-owner sum against `RTE-LIMITS-LABEL-BYTES@`
+and `RTE-LIMITS-UTF8-BYTES@` before opening an owner or publishing an object.
+
 `config` names the exact borrowed PT session, output policy, and caller-owned
 spans and capacities for:
 

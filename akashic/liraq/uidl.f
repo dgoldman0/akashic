@@ -42,6 +42,11 @@
 \   UIDL-REP-BY-MOD    ( media mod-a mod-l -- rep | 0 )
 \   UIDL-REP-COUNT     ( media -- n )
 \
+\   EL-SET-SEMANTICS  ( xt type-id -- )
+\   ED.SEMANTICS      ( def -- field-a )
+\   UIDL-OBSERVE      ( i*x xt -- j*x )
+\   UIDL-STORAGE-DISJOINT? ( a u -- flag )
+\
 \ Prefix: UIDL-  (public)   _UDL-  (internal)
 \
 \ Load with:   REQUIRE uidl.f
@@ -49,6 +54,7 @@
 REQUIRE ../markup/core.f
 REQUIRE ../markup/xml.f
 REQUIRE ../utils/string.f
+REQUIRE ../utils/memory-span.f
 REQUIRE lel.f
 REQUIRE state-tree.f
 
@@ -79,8 +85,8 @@ VARIABLE _UDL-ERR
 \
 \ Replaces the old fixed type-enum with an open hash-table registry.
 \ Any code can call DEFINE-ELEMENT to register a new element type
-\ with its tag name, render/event/layout execution tokens, content
-\ model, and category — making the UIDL markup language extensible
+\ with its tag name, render/event/layout execution tokens, neutral semantic
+\ snapshot hook, content model, and category — making the UIDL markup language extensible
 \ in the Forth tradition.
 
 \ --- Element Definition Flag Constants ---
@@ -124,7 +130,7 @@ VARIABLE _UDL-ERR
 : ED.RENDER-XT ( def -- a ) 32 + ;     \ +32 ( elem -- ) rendering hook
 : ED.EVENT-XT  ( def -- a ) 40 + ;     \ +40 ( elem evt -- handled? )
 : ED.LAYOUT-XT ( def -- a ) 48 + ;     \ +48 ( elem -- ) layout hook
-: ED.NEXT      ( def -- a ) 56 + ;     \ +56 reserved / hash chain
+: ED.SEMANTICS ( def -- a ) 56 + ;     \ +56 neutral semantic snapshot hook
 
 \ --- Registry Storage ---
 64 CONSTANT _EL-REG-SZ
@@ -209,7 +215,7 @@ VARIABLE _ER-NA   VARIABLE _ER-NL   VARIABLE _ER-TID
             _ER-RXT @   OVER ED.RENDER-XT !
             _ER-EXT @   OVER ED.EVENT-XT !
             _ER-LXT @   OVER ED.LAYOUT-XT !
-            0           OVER ED.NEXT !
+            0           OVER ED.SEMANTICS !
             \ Update by-type index
             DUP _ER-TID @ CELLS _EL-DEFS + !
             DROP DROP                  \ drop def, idx
@@ -226,13 +232,16 @@ VARIABLE _ER-NA   VARIABLE _ER-NL   VARIABLE _ER-TID
 : DEFINE-ELEMENT  ( render-xt event-xt layout-xt flags "name" -- type-id )
     PARSE-NAME NAMEBUF PN-LEN @ _UDL-REG-ELEM ;
 
-\ --- Public XT Setters (post-registration) ---
-\ Allow external code to set render/event/layout XTs on any registered
+\ --- Public Hook Setters (post-registration) ---
+\ Allow external code to set render/event/layout XTs or a neutral semantic
+\ snapshot hook on any registered
 \ element type, by type-id.  This is the extensibility API: applets and
 \ backends call these instead of modifying library registration tables.
 : EL-SET-RENDER  ( xt type-id -- )  EL-DEF-BY-TYPE ?DUP IF ED.RENDER-XT ! ELSE DROP THEN ;
 : EL-SET-EVENT   ( xt type-id -- )  EL-DEF-BY-TYPE ?DUP IF ED.EVENT-XT  ! ELSE DROP THEN ;
 : EL-SET-LAYOUT  ( xt type-id -- )  EL-DEF-BY-TYPE ?DUP IF ED.LAYOUT-XT ! ELSE DROP THEN ;
+: EL-SET-SEMANTICS  ( xt type-id -- )
+    EL-DEF-BY-TYPE ?DUP IF ED.SEMANTICS ! ELSE DROP THEN ;
 
 \ =====================================================================
 \  Built-in Element Registrations (20 core + option)
@@ -1181,6 +1190,47 @@ VARIABLE _UDL-DIRTY-HOOK   \ ( -- ) optional hook called after UIDL-DIRTY!
 
 : UIDL-CLEAN!  ( elem -- )  DUP UE.FLAGS @ UIDL-F-DIRTY INVERT AND SWAP UE.FLAGS ! ;
 
+\ =====================================================================
+\  Compound observation and owned-storage boundary
+\ =====================================================================
+\
+\ UIDL-OBSERVE provides one serialization point for compound neutral reads.
+\ In guarded builds the redefinition below holds the document guard across
+\ the complete callback, including nested UIDL accessors.  The guard is
+\ recursive, so those accessors remain valid inside the callback.
+: UIDL-OBSERVE  ( i*x xt -- j*x )  EXECUTE ;
+
+\ Reject overlap with every persistent UIDL-owned table.  The supplied span
+\ remains caller-owned; this predicate proves only that a derived-output copy
+\ cannot erase or rewrite the authoritative UIDL document/registry storage.
+: UIDL-STORAGE-DISJOINT?  ( a u -- flag )
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    2DUP _EL-REGISTRY _EL-REG-SZ 64 * MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _EL-DEFS _EL-REG-SZ CELLS MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _EL-REG-STRS 512 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-ELEMS _UDL-MAX-ELEMS _UDL-ELEMSZ *
+        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-ATTRS _UDL-MAX-ATTRS _UDL-ATTRSZ *
+        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-STRS _UDL-STR-SZ MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-HASH _UDL-HASH-SZ CELLS MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-HIDS _UDL-HASH-SZ 2 * CELLS
+        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-SUBS _UDL-MAX-SUBS 24 *
+        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-VERR 256 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-ERR 8 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _EL-REG-CNT 8 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _EL-REG-SPOS 8 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-ECNT 8 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-ACNT 8 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-SPOS 8 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-ROOT 8 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-SUB-CNT 8 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-VCNT 8 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DUP _UDL-DIRTY-HOOK 8 MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    2DROP -1 ;
+
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
@@ -1251,6 +1301,8 @@ GUARD _uidl-guard
 ' UIDL-DISPATCH   CONSTANT _uidl-dispatch-xt
 ' UIDL-HAS-ACTION? CONSTANT _uidl-has-action-q-xt
 ' UIDL-ACTION-VALUE CONSTANT _uidl-action-value-xt
+' UIDL-OBSERVE     CONSTANT _uidl-observe-xt
+' UIDL-STORAGE-DISJOINT? CONSTANT _uidl-storage-disjoint-q-xt
 \ --- registry / subscription / dirty guards ---
 ' DEFINE-ELEMENT   CONSTANT _define-element-xt
 ' EL-LOOKUP        CONSTANT _el-lookup-xt
@@ -1262,9 +1314,11 @@ GUARD _uidl-guard
 ' ED.RENDER-XT     CONSTANT _ed-dotrender-xt-xt
 ' ED.EVENT-XT      CONSTANT _ed-dotevent-xt-xt
 ' ED.LAYOUT-XT     CONSTANT _ed-dotlayout-xt-xt
+' ED.SEMANTICS     CONSTANT _ed-dotsemantics-xt
 ' EL-SET-RENDER    CONSTANT _el-set-render-xt
 ' EL-SET-EVENT     CONSTANT _el-set-event-xt
 ' EL-SET-LAYOUT    CONSTANT _el-set-layout-xt
+' EL-SET-SEMANTICS CONSTANT _el-set-semantics-xt
 ' EL-CONTENT-MODEL CONSTANT _el-content-model-xt
 ' EL-CATEGORY      CONSTANT _el-category-xt
 ' EL-FOCUSABLE?    CONSTANT _el-focusable-q-xt
@@ -1342,6 +1396,9 @@ GUARD _uidl-guard
 : UIDL-DISPATCH   _uidl-dispatch-xt _uidl-guard WITH-GUARD ;
 : UIDL-HAS-ACTION? _uidl-has-action-q-xt _uidl-guard WITH-GUARD ;
 : UIDL-ACTION-VALUE _uidl-action-value-xt _uidl-guard WITH-GUARD ;
+: UIDL-OBSERVE     _uidl-observe-xt _uidl-guard WITH-GUARD ;
+: UIDL-STORAGE-DISJOINT?
+    _uidl-storage-disjoint-q-xt _uidl-guard WITH-GUARD ;
 \ --- registry / subscription / dirty guarded ---
 : DEFINE-ELEMENT   _define-element-xt _uidl-guard WITH-GUARD ;
 : EL-LOOKUP        _el-lookup-xt _uidl-guard WITH-GUARD ;
@@ -1353,9 +1410,11 @@ GUARD _uidl-guard
 : ED.RENDER-XT     _ed-dotrender-xt-xt _uidl-guard WITH-GUARD ;
 : ED.EVENT-XT      _ed-dotevent-xt-xt _uidl-guard WITH-GUARD ;
 : ED.LAYOUT-XT     _ed-dotlayout-xt-xt _uidl-guard WITH-GUARD ;
+: ED.SEMANTICS     _ed-dotsemantics-xt _uidl-guard WITH-GUARD ;
 : EL-SET-RENDER    _el-set-render-xt _uidl-guard WITH-GUARD ;
 : EL-SET-EVENT     _el-set-event-xt _uidl-guard WITH-GUARD ;
 : EL-SET-LAYOUT    _el-set-layout-xt _uidl-guard WITH-GUARD ;
+: EL-SET-SEMANTICS _el-set-semantics-xt _uidl-guard WITH-GUARD ;
 : EL-CONTENT-MODEL _el-content-model-xt _uidl-guard WITH-GUARD ;
 : EL-CATEGORY      _el-category-xt _uidl-guard WITH-GUARD ;
 : EL-FOCUSABLE?    _el-focusable-q-xt _uidl-guard WITH-GUARD ;

@@ -2,8 +2,11 @@
 
 **Module:** `akashic-uidl`  
 **File:** `akashic/liraq/uidl.f`  
-**Companion:** `akashic/liraq/uidl-chrome.f` (chrome element registrations)  
-**Requires:** `akashic-string`, `akashic-markup-core`, `akashic-xml`, `akashic-lel`, `akashic-state-tree`
+**Companions:** `akashic/liraq/uidl-semantic.f` (neutral semantic snapshots),
+`akashic/liraq/uidl-chrome.f` (chrome element registrations)
+
+**Requires:** `akashic-string`, `akashic-memory-span`, `akashic-markup-core`,
+`akashic-xml`, `akashic-lel`, `akashic-state-tree`
 
 ## Overview
 
@@ -18,7 +21,8 @@ in-memory tree of element nodes with:
 - **Extensible Element Registry** — open hash-table of element definitions;
   any code can register new element types at load time via `DEFINE-ELEMENT`,
   and patch render/event/layout hooks via `EL-SET-RENDER` / `EL-SET-EVENT` /
-  `EL-SET-LAYOUT` — no library modification needed
+  `EL-SET-LAYOUT`, or install a neutral semantic snapshot hook via
+  `EL-SET-SEMANTICS` — no library modification needed
 - **21 built-in element types** — structural, content, interactive,
   collection, and pseudo-type primitives (type-ids 1–21)
 - **21 chrome elements** registered by `uidl-chrome.f` — menubar, tabs,
@@ -434,6 +438,18 @@ EL-SET-LAYOUT ( xt type-id -- )
 Replace the layout hook for a registered element type.  The `xt`
 must conform to `( elem -- )`.  Same guard semantics.
 
+#### EL-SET-SEMANTICS
+```forth
+EL-SET-SEMANTICS ( xt type-id -- )
+```
+Install the renderer-independent semantic snapshot hook for a registered
+element type. The hook conforms to
+`( elem destination capacity -- bytes status )`; exact `(0,0)` destination
+geometry is its measure call. The base registry does not interpret the
+snapshot. `uidl-semantic.f` owns the generic dispatch and the built-in LABEL
+contract. An invalid type-id is a silent no-op, with the same guard semantics
+as the other setters.
+
 **Usage (external code):**
 ```forth
 : my-fancy-render  ( elem -- )  ... ;
@@ -455,7 +471,26 @@ Each definition record is 64 bytes with these field accessors:
 | `ED.RENDER-XT` | +32 | `( elem -- )` rendering hook |
 | `ED.EVENT-XT` | +40 | `( elem evt -- handled? )` event hook |
 | `ED.LAYOUT-XT` | +48 | `( elem -- )` layout hook |
-| `ED.NEXT` | +56 | Reserved / hash chain |
+| `ED.SEMANTICS` | +56 | Neutral semantic snapshot hook, or zero |
+
+#### UIDL-OBSERVE
+```forth
+UIDL-OBSERVE ( i*x xt -- j*x )
+```
+Execute a compound document observation at one serialization point. Guarded
+builds hold the recursive UIDL document guard across the complete callback;
+unguarded builds execute it directly. Results and exceptions pass through.
+Neutral snapshot dispatch uses this seam so hook lookup, attribute resolution,
+and copying cannot interleave with UIDL reset or mutation.
+
+#### UIDL-STORAGE-DISJOINT?
+```forth
+UIDL-STORAGE-DISJOINT? ( a u -- flag )
+```
+Validate a nonwrapping caller span and prove that it does not overlap the
+persistent element-definition, element, attribute, string, ID, subscription,
+validation, or document-scalar storage owned by UIDL. This is a model-storage
+boundary, not a claim that the caller owns arbitrary memory outside it.
 
 ### Element Definition Flags
 
@@ -807,4 +842,5 @@ See the Chrome Types table above for the full list.
 ## See Also
 
 - [uidl-tui.md](../tui/uidl-tui.md) — UIDL-TUI backend (renders UIDL to character cells)
+- [uidl-semantic.md](uidl-semantic.md) — neutral semantic value and snapshot contract
 - [dom-tui.md](../tui/dom-tui.md) — DOM-TUI backend (alternative rendering path via DOM)

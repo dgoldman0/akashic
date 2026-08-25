@@ -44,6 +44,8 @@ _DEP_PATHS = [
     os.path.join(AK, "concurrency", "semaphore.f"),
     os.path.join(AK, "concurrency", "guard.f"),
     # utils
+    os.path.join(AK, "utils",       "uint-range.f"),
+    os.path.join(AK, "utils",       "memory-span.f"),
     os.path.join(AK, "utils",       "string.f"),
     os.path.join(AK, "utils",       "term.f"),
     # math
@@ -59,6 +61,7 @@ _DEP_PATHS = [
     os.path.join(AK, "liraq",       "state-tree.f"),
     os.path.join(AK, "liraq",       "lel.f"),
     os.path.join(AK, "liraq",       "uidl.f"),
+    os.path.join(AK, "liraq",       "uidl-semantic.f"),
     os.path.join(AK, "liraq",       "uidl-chrome.f"),
     # TUI core
     os.path.join(AK, "tui",         "cell.f"),
@@ -87,9 +90,7 @@ _DEP_PATHS = [
     os.path.join(AK, "tui",         "cogs", "term-init.f"),
     os.path.join(AK, "tui",         "app-desc.f"),
     # VFS (app-shell.f requires vfs-mp64fs.f for VFS init)
-    os.path.join(AK, "utils",       "uint-range.f"),
     os.path.join(AK, "utils",       "bitset.f"),
-    os.path.join(AK, "utils",       "memory-span.f"),
     os.path.join(AK, "utils",       "fs", "vfs.f"),
     os.path.join(AK, "utils",       "fs", "drivers", "vfs-mp64fs.f"),
     os.path.join(AK, "tui",         "app-shell.f"),

@@ -34,6 +34,7 @@
 \
 \  Dependencies:
 \    REQUIRE liraq/uidl.f
+\    REQUIRE liraq/uidl-semantic.f
 \    REQUIRE liraq/uidl-chrome.f
 \    REQUIRE liraq/state-tree.f
 \    REQUIRE liraq/lel.f
@@ -47,6 +48,7 @@
 PROVIDED akashic-tui-uidl-tui
 
 REQUIRE ../liraq/uidl.f
+REQUIRE ../liraq/uidl-semantic.f
 REQUIRE ../liraq/uidl-chrome.f
 REQUIRE ../liraq/state-tree.f
 REQUIRE ../liraq/lel.f
@@ -822,11 +824,11 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
         ROT                            ( v1 v2 type )
         DUP ST-T-STRING  = IF DROP EXIT THEN
         DUP ST-T-INTEGER = IF
-            DROP NIP                   ( n )
+            DROP DROP                  ( n )
             NUM>STR EXIT
         THEN
         DUP ST-T-BOOLEAN = IF
-            DROP NIP
+            DROP DROP
             IF S" true" ELSE S" false" THEN EXIT
         THEN
         DROP 2DROP S" "
@@ -834,26 +836,9 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
         2DROP S" "                     \ no bind — UIDL-BIND returned (0 0 0)
     THEN ;
 
-\ --- Get display text: bind= first, then text= attr, then empty ---
+\ --- Get display text from renderer-neutral UIDL value semantics ---
 : _UTUI-DISPLAY-TEXT  ( elem -- a l )
-    DUP UIDL-BIND IF                   ( elem ba bl )
-        ROT DROP                        \ drop elem, keep bind str
-        LEL-EVAL                        ( type v1 v2 )
-        ROT                            ( v1 v2 type )
-        DUP ST-T-STRING  = IF DROP EXIT THEN
-        DUP ST-T-INTEGER = IF
-            DROP NIP
-            NUM>STR EXIT
-        THEN
-        DUP ST-T-BOOLEAN = IF
-            DROP NIP
-            IF S" true" ELSE S" false" THEN EXIT
-        THEN
-        DROP 2DROP S" "
-    ELSE 2DROP                          \ UIDL-BIND returned (0 0 0), elem still on stack
-        S" text" UIDL-ATTR IF EXIT THEN
-        2DROP 0 0
-    THEN ;
+    UIDL-TEXT@ ;
 
 \ --- Label ---
 : _UTUI-RENDER-LABEL  ( elem -- )

@@ -38,6 +38,16 @@ LEL-CLEAR-CONTEXT ( -- )
 ```
 Clear context variables (sets both to 0/null).
 
+### LEL-OBSERVE
+```forth
+LEL-OBSERVE ( i*x xt -- j*x )
+```
+Execute `xt` while holding LEL's recursive evaluator guard. Results and
+exceptions pass through unchanged. This is the composition seam for a caller
+which must consume or copy a borrowed evaluation result before another
+evaluation can reuse LEL scratch. When an observation also reads state, enter
+`LEL-OBSERVE` outside `ST-OBSERVE`, matching ordinary evaluation lock order.
+
 ## Expression Syntax
 
 ### Literals

@@ -2127,7 +2127,7 @@ from 1121 to ~1220 lines.
 | +32 | render-xt | `ED.RENDER-XT` | `( elem -- )` — rendering hook |
 | +40 | event-xt | `ED.EVENT-XT` | `( elem evt -- handled? )` — input hook |
 | +48 | layout-xt | `ED.LAYOUT-XT` | `( elem -- )` — child-positioning hook |
-| +56 | next | `ED.NEXT` | Hash chain link |
+| +56 | semantics | `ED.SEMANTICS` | Neutral semantic snapshot hook, or zero |
 
 #### Element Flags Word
 

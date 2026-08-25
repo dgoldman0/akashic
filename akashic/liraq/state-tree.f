@@ -1029,6 +1029,11 @@ VARIABLE _ST-SUB-CNT
     LOOP
     DROP 2DROP ;
 
+\ Execute a compound state observation under the state-tree guard.  This is
+\ the neutral composition seam for callers which must keep borrowed strings
+\ and the nodes which own them coherent through a synchronous copy.
+: ST-OBSERVE  ( i*x xt -- j*x )  EXECUTE ;
+
 \ ── guard ────────────────────────────────────────────────
 [DEFINED] GUARDED [IF] GUARDED [IF]
 REQUIRE ../concurrency/guard.f
@@ -1115,6 +1120,7 @@ GUARD _ltree-guard
 ' ST-COMPUTED!    CONSTANT _st-computed-s-xt
 ' ST-SUBSCRIBE    CONSTANT _st-subscribe-xt
 ' ST-UNSUBSCRIBE  CONSTANT _st-unsubscribe-xt
+' ST-OBSERVE      CONSTANT _st-observe-xt
 
 : SN.TYPE         _sn-dottype-xt _ltree-guard WITH-GUARD ;
 : SN.FLAGS        _sn-dotflags-xt _ltree-guard WITH-GUARD ;
@@ -1197,4 +1203,5 @@ GUARD _ltree-guard
 : ST-COMPUTED!    _st-computed-s-xt _ltree-guard WITH-GUARD ;
 : ST-SUBSCRIBE    _st-subscribe-xt _ltree-guard WITH-GUARD ;
 : ST-UNSUBSCRIBE  _st-unsubscribe-xt _ltree-guard WITH-GUARD ;
+: ST-OBSERVE      _st-observe-xt _ltree-guard WITH-GUARD ;
 [THEN] [THEN]

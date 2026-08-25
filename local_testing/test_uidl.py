@@ -29,6 +29,8 @@ ROOT_DIR   = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 EMU_DIR    = os.path.join(ROOT_DIR, "local_testing", "emu")
 
 STRING_F   = os.path.join(ROOT_DIR, "akashic", "utils", "string.f")
+URANGE_F   = os.path.join(ROOT_DIR, "akashic", "utils", "uint-range.f")
+MSPAN_F    = os.path.join(ROOT_DIR, "akashic", "utils", "memory-span.f")
 FP32_F     = os.path.join(ROOT_DIR, "akashic", "math", "fp32.f")
 FIXED_F    = os.path.join(ROOT_DIR, "akashic", "math", "fixed.f")
 ST_F       = os.path.join(ROOT_DIR, "akashic", "liraq", "state-tree.f")
@@ -96,6 +98,8 @@ def build_snapshot():
     if _snapshot:
         return _snapshot
     libs = [
+        ("uint-range.f", URANGE_F),
+        ("memory-span.f", MSPAN_F),
         ("string.f",     STRING_F),
         ("fp32.f",       FP32_F),
         ("fixed.f",      FIXED_F),

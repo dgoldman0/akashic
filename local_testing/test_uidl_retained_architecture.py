@@ -57,6 +57,7 @@ def test_rich_terminal_is_not_an_applet_facing_scene_service() -> None:
 def test_lower_uidl_lifecycle_has_no_renderer_vocabulary() -> None:
     lower_paths = (
         "akashic/tui/uidl-tui.f",
+        "akashic/liraq/uidl-semantic.f",
         "akashic/tui/app-shell.f",
         "akashic/tui/applet-host/host.f",
         "akashic/tui/applets/desk/desk.f",

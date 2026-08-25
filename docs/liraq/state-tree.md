@@ -133,6 +133,18 @@ my-tree ST-USE
 Teardown: call `ARENA-DESTROY` on the arena to free all memory at
 once (nodes, strings, journal, descriptor).
 
+### Compound observation
+
+```forth
+ST-OBSERVE ( i*x xt -- j*x )
+```
+
+Execute `xt` while holding the recursive state-tree guard. Results and
+exceptions pass through unchanged. This lets a higher-level neutral operation
+keep node identity and borrowed state strings coherent through a synchronous
+copy. It does not extend the lifetime of a borrowed result after the callback
+returns.
+
 ---
 
 ## Node Types & Constants
@@ -681,6 +693,7 @@ S" user.settings" _ST-NOTIFY   \ (silence)
 | `ST-DOC` | `( -- st )` |
 | `ST-ROOT` | `( -- node )` |
 | `ST-NODE-COUNT` | `( -- n )` |
+| `ST-OBSERVE` | `( i*x xt -- j*x )` |
 
 ### Error Handling
 
