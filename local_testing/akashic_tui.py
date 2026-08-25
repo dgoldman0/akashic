@@ -265,26 +265,26 @@ from diskutil import (  # noqa: E402
     MP64FS,
     pack_forth_source,
 )
-from presentation_terminal import DriverStatus, TerminalState  # noqa: E402
-from presentation_terminal.retained_model import RetainedPolicy  # noqa: E402
+from rich_terminal import DriverStatus, TerminalState  # noqa: E402
+from rich_terminal.retained_model import RetainedPolicy  # noqa: E402
 from session import (  # noqa: E402
     MachineSession,
-    PresentationSessionPolicy,
+    RichTerminalSessionPolicy,
 )
 
 
 @dataclass(frozen=True)
-class PresentationProfile:
-    """Product bounds for one explicitly presentation-enabled profile."""
+class RichTerminalProfile:
+    """Product bounds for one explicitly rich-terminal-enabled profile."""
 
     guest_rx_bytes: int
     guest_tx_bytes: int
-    host_policy: PresentationSessionPolicy
+    host_policy: RichTerminalSessionPolicy
     retained_policy: RetainedPolicy | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.host_policy, PresentationSessionPolicy):
-            raise TypeError("host_policy must be a PresentationSessionPolicy")
+        if not isinstance(self.host_policy, RichTerminalSessionPolicy):
+            raise TypeError("host_policy must be a RichTerminalSessionPolicy")
         if self.retained_policy is not None and not isinstance(
             self.retained_policy, RetainedPolicy
         ):
@@ -337,7 +337,7 @@ class Profile:
     # line-sensitive custom parsing words.  It is never a default transform.
     audited_link_line_bytes: int | None = None
     audited_initial_forth_line_bytes: int | None = None
-    presentation: PresentationProfile | None = None
+    rich_terminal: RichTerminalProfile | None = None
     minimum_free_bytes: int = 0
 
 
@@ -360,14 +360,14 @@ MEGAPAD_NETWORKING_CONSUMERS = frozenset(
     }
 )
 MEGAPAD_NETWORKING_BOOT_LINE = "REQUIRE networking.f"
-MEGAPAD_PRESENTATION_TERMINAL_MODULE = "presentation-terminal.f"
-MEGAPAD_PRESENTATION_TERMINAL_BOOT_LINE = (
-    f"REQUIRE {MEGAPAD_PRESENTATION_TERMINAL_MODULE}"
+MEGAPAD_RICH_TERMINAL_MODULE = "rich-terminal.f"
+MEGAPAD_RICH_TERMINAL_BOOT_LINE = (
+    f"REQUIRE {MEGAPAD_RICH_TERMINAL_MODULE}"
 )
 # Like the native networking consumers above, these Akashic modules compile
 # against an already-loaded MegaPad system ABI.  They must never REQUIRE or
 # copy the MegaPad source into the Akashic dependency graph.
-MEGAPAD_PRESENTATION_TERMINAL_CONSUMERS = frozenset(
+MEGAPAD_RICH_TERMINAL_CONSUMERS = frozenset(
     {
         "tui/app-shell-apt1.f",
         "tui/desk-apt1.f",
@@ -13213,10 +13213,10 @@ SOUNDLAB-RUN
 }
 
 
-DESKTOP_APT1_PRESENTATION = PresentationProfile(
+DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
     guest_rx_bytes=8_192,
     guest_tx_bytes=8_192,
-    host_policy=PresentationSessionPolicy(
+    host_policy=RichTerminalSessionPolicy(
         max_cols=400,
         max_rows=200,
         egress_high_publications=2,
@@ -13274,7 +13274,7 @@ PROFILES["desktop-apt1"] = replace(
         for root in PROFILES["desktop"].roots
     ),
     autoexec=_desktop_apt1_autoexec(PROFILES["desktop"].autoexec),
-    presentation=DESKTOP_APT1_PRESENTATION,
+    rich_terminal=DESKTOP_APT1_RICH_TERMINAL,
 )
 
 
@@ -24795,11 +24795,11 @@ def _requires_megapad_networking(modules: tuple[str, ...]) -> bool:
     return not MEGAPAD_NETWORKING_CONSUMERS.isdisjoint(modules)
 
 
-def _requires_megapad_presentation_terminal(
+def _requires_megapad_rich_terminal(
     modules: tuple[str, ...],
 ) -> bool:
     """Return whether an Akashic closure consumes the boot-loaded PT ABI."""
-    return not MEGAPAD_PRESENTATION_TERMINAL_CONSUMERS.isdisjoint(modules)
+    return not MEGAPAD_RICH_TERMINAL_CONSUMERS.isdisjoint(modules)
 
 
 def _forth_line_tokens(line: str) -> tuple[str, ...]:
@@ -24962,23 +24962,23 @@ def _with_megapad_networking(autoexec: str) -> str:
     return "\n".join(lines) + suffix
 
 
-def _with_megapad_presentation_terminal(
+def _with_megapad_rich_terminal(
     autoexec: str,
-    presentation: PresentationProfile,
+    rich_terminal: RichTerminalProfile,
 ) -> str:
     """Load and configure the external APT module before Akashic sources."""
-    if not isinstance(presentation, PresentationProfile):
-        raise TypeError("presentation must be a PresentationProfile")
+    if not isinstance(rich_terminal, RichTerminalProfile):
+        raise TypeError("rich_terminal must be a RichTerminalProfile")
     lines = autoexec.splitlines()
     token_lines = [_forth_line_tokens(line) for line in lines]
     if any(
         _forth_line_contains_module_load(
-            tokens, "FSLOAD", MEGAPAD_PRESENTATION_TERMINAL_MODULE
+            tokens, "FSLOAD", MEGAPAD_RICH_TERMINAL_MODULE
         )
         for tokens in token_lines
     ):
         raise RuntimeError(
-            "FSLOAD presentation-terminal.f is unsafe during KDOS autoboot; "
+            "FSLOAD rich-terminal.f is unsafe during KDOS autoboot; "
             "use the KDOS module loader"
         )
     userland_lines = [
@@ -24988,8 +24988,8 @@ def _with_megapad_presentation_terminal(
     ]
     if len(userland_lines) != 1:
         raise RuntimeError(
-            "Presentation profiles must enter userland exactly once before "
-            "loading presentation-terminal.f"
+            "Rich-terminal profiles must enter userland exactly once before "
+            "loading rich-terminal.f"
         )
     expected_index = userland_lines[0] + 1
     if (
@@ -25000,32 +25000,32 @@ def _with_megapad_presentation_terminal(
     ):
         expected_index += 1
     canonical_block = [
-        MEGAPAD_PRESENTATION_TERMINAL_BOOT_LINE,
+        MEGAPAD_RICH_TERMINAL_BOOT_LINE,
         (
-            f"{presentation.guest_rx_bytes} CONSTANT "
+            f"{rich_terminal.guest_rx_bytes} CONSTANT "
             "APT1-DESK-RX-CAPACITY"
         ),
         (
-            f"{presentation.guest_tx_bytes} CONSTANT "
+            f"{rich_terminal.guest_tx_bytes} CONSTANT "
             "APT1-DESK-TX-CAPACITY"
         ),
     ]
-    presentation_lines = [
+    rich_terminal_lines = [
         index
         for index, tokens in enumerate(token_lines)
         if _forth_line_contains_module_load(
-            tokens, "REQUIRE", MEGAPAD_PRESENTATION_TERMINAL_MODULE
+            tokens, "REQUIRE", MEGAPAD_RICH_TERMINAL_MODULE
         )
     ]
-    if presentation_lines:
+    if rich_terminal_lines:
         if (
-            presentation_lines != [expected_index]
+            rich_terminal_lines != [expected_index]
             or lines[expected_index : expected_index + len(canonical_block)]
             != canonical_block
         ):
             raise RuntimeError(
-                "Presentation profiles must load and configure "
-                "presentation-terminal.f exactly once after networking"
+                "Rich-terminal profiles must load and configure "
+                "rich-terminal.f exactly once after networking"
             )
         return autoexec
     lines[expected_index:expected_index] = canonical_block
@@ -25708,10 +25708,10 @@ def build_image(
     )
     akashic_modules = modules
     requires_networking = _requires_megapad_networking(modules)
-    requires_presentation = _requires_megapad_presentation_terminal(modules)
-    if requires_presentation != (profile.presentation is not None):
+    requires_rich_terminal = _requires_megapad_rich_terminal(modules)
+    if requires_rich_terminal != (profile.rich_terminal is not None):
         raise RuntimeError(
-            "Presentation module closure and profile-owned host bounds must "
+            "Rich-terminal module closure and profile-owned host bounds must "
             "be enabled together"
         )
     resources = set(profile.resources)
@@ -25791,9 +25791,9 @@ def build_image(
         )
     if requires_networking:
         autoexec = _with_megapad_networking(autoexec)
-    if requires_presentation:
-        autoexec = _with_megapad_presentation_terminal(
-            autoexec, profile.presentation
+    if requires_rich_terminal:
+        autoexec = _with_megapad_rich_terminal(
+            autoexec, profile.rich_terminal
         )
     paths = (
         set(generated_files) | resources
@@ -25822,8 +25822,8 @@ def build_image(
         }
         if requires_networking:
             reserved_root_paths.add("networking.f")
-        if requires_presentation:
-            reserved_root_paths.add(MEGAPAD_PRESENTATION_TERMINAL_MODULE)
+        if requires_rich_terminal:
+            reserved_root_paths.add(MEGAPAD_RICH_TERMINAL_MODULE)
         root_generated = {
             path
             for path in set(generated_files) | cold_initial_paths
@@ -25848,8 +25848,8 @@ def build_image(
         directories,
         include_networking=requires_networking,
         external_system_files=(
-            frozenset({MEGAPAD_PRESENTATION_TERMINAL_MODULE})
-            if requires_presentation
+            frozenset({MEGAPAD_RICH_TERMINAL_MODULE})
+            if requires_rich_terminal
             else frozenset()
         ),
     )
@@ -25873,12 +25873,12 @@ def build_image(
             pack_forth_source((MEGAPAD_ROOT / "networking.f").read_bytes()),
             ftype=FTYPE_FORTH,
         )
-    if requires_presentation:
+    if requires_rich_terminal:
         fs.inject_file(
-            MEGAPAD_PRESENTATION_TERMINAL_MODULE,
+            MEGAPAD_RICH_TERMINAL_MODULE,
             pack_forth_source(
                 (
-                    MEGAPAD_ROOT / MEGAPAD_PRESENTATION_TERMINAL_MODULE
+                    MEGAPAD_ROOT / MEGAPAD_RICH_TERMINAL_MODULE
                 ).read_bytes()
             ),
             ftype=FTYPE_FORTH,
@@ -25985,7 +25985,7 @@ def build_image(
         f"{f' linked in {len(linked_chunks)} chunks' if profile.linked else ''}, "
         f"{'cold-source packed, ' if profile.cold_source_packed else ''}"
         f"{'MegaPad networking, ' if requires_networking else ''}"
-        f"{'MegaPad presentation terminal, ' if requires_presentation else ''}"
+        f"{'MegaPad rich terminal, ' if requires_rich_terminal else ''}"
         f"{len(resources)} resources, "
         f"{len(directories)} directories\n"
         + (
@@ -26519,17 +26519,17 @@ def _qualify_audio_contracts(
     return AudioHostQualification(tuple(errors), tuple(notes))
 
 
-def _presentation_smoke_ready(
+def _rich_terminal_smoke_ready(
     profile: Profile,
     session: MachineSession,
 ) -> bool:
     """Require a healthy active framed session for an opted-in smoke."""
-    if profile.presentation is None:
+    if profile.rich_terminal is None:
         return True
     return (
-        session.presentation_failure is None
-        and not session.presentation_lost
-        and session.presentation_state is TerminalState.ACTIVE
+        session.rich_terminal_failure is None
+        and not session.rich_terminal_lost
+        and session.rich_terminal_state is TerminalState.ACTIVE
     )
 
 
@@ -26579,9 +26579,9 @@ def smoke(
         else 1,
         nic_backend=nic_backend,
         realtime_clock=bool(nic_tap),
-        presentation=(
-            profile.presentation.configuration(cols, rows)
-            if profile.presentation is not None
+        rich_terminal=(
+            profile.rich_terminal.configuration(cols, rows)
+            if profile.rich_terminal is not None
             else None
         ),
     ) as session:
@@ -26627,21 +26627,21 @@ def smoke(
             markers_ready = all(
                 marker in screen_text for marker in profile.ready_markers
             )
-            if profile.presentation is not None:
+            if profile.rich_terminal is not None:
                 if (
-                    session.presentation_failure is not None
-                    or session.presentation_lost
-                    or session.presentation_state is TerminalState.FAILED
+                    session.rich_terminal_failure is not None
+                    or session.rich_terminal_lost
+                    or session.rich_terminal_state is TerminalState.FAILED
                 ):
                     stop_reason = "terminal_failure"
                     break
                 if (
                     markers_ready
-                    and session.presentation_state is TerminalState.ANSI
+                    and session.rich_terminal_state is TerminalState.ANSI
                 ):
                     stop_reason = "terminal_fallback"
                     break
-            if markers_ready and _presentation_smoke_ready(profile, session):
+            if markers_ready and _rich_terminal_smoke_ready(profile, session):
                 stop_reason = "ready"
                 break
             if report.reason in ("halted", "stalled"):
@@ -26650,7 +26650,7 @@ def smoke(
         initial_text = screen.text()
         initial_ready = (
             all(marker in initial_text for marker in profile.ready_markers)
-            and _presentation_smoke_ready(profile, session)
+            and _rich_terminal_smoke_ready(profile, session)
         )
 
         def wait_screen(
@@ -29188,7 +29188,7 @@ def smoke(
                     journey_errors.append(
                         "APT Desk launcher did not publish a new immutable view"
                     )
-                if not _presentation_smoke_ready(profile, session):
+                if not _rich_terminal_smoke_ready(profile, session):
                     journey_errors.append(
                         "APT Desk lost its framed session after normalized input"
                     )
@@ -29667,14 +29667,14 @@ def smoke(
         final_screen_text = screen.text()
         missing = [m for m in profile.stable_markers if m not in final_screen_text]
         failure_hits = _matched_failure_markers(profile, raw, final_screen_text)
-        presentation_ready = _presentation_smoke_ready(profile, session)
-        if profile.presentation is not None and not presentation_ready:
-            state = session.presentation_state
+        rich_terminal_ready = _rich_terminal_smoke_ready(profile, session)
+        if profile.rich_terminal is not None and not rich_terminal_ready:
+            state = session.rich_terminal_state
             journey_errors.append(
-                "presentation terminal did not remain ACTIVE "
+                "rich terminal did not remain ACTIVE "
                 f"(state={None if state is None else state.value}, "
-                f"lost={session.presentation_lost}, "
-                f"failure={session.presentation_failure!r})"
+                f"lost={session.rich_terminal_lost}, "
+                f"failure={session.rich_terminal_failure!r})"
             )
         elapsed = time.perf_counter() - started
         ok = (
@@ -29682,7 +29682,7 @@ def smoke(
             and not missing
             and not failure_hits
             and not journey_errors
-            and presentation_ready
+            and rich_terminal_ready
         )
 
         print(
@@ -29740,24 +29740,24 @@ def smoke(
         return ok
 
 
-def _presentation_server_arguments(profile: Profile) -> list[str]:
-    presentation = profile.presentation
-    if presentation is None:
+def _rich_terminal_server_arguments(profile: Profile) -> list[str]:
+    rich_terminal = profile.rich_terminal
+    if rich_terminal is None:
         return []
     arguments = [
-        "--presentation-terminal-policy",
+        "--rich-terminal-policy",
         json.dumps(
-            presentation.host_policy.to_dict(),
+            rich_terminal.host_policy.to_dict(),
             sort_keys=True,
             separators=(",", ":"),
         ),
     ]
-    if presentation.retained_policy is not None:
+    if rich_terminal.retained_policy is not None:
         arguments.extend(
             (
                 "--retained-terminal-policy",
                 json.dumps(
-                    presentation.retained_policy.to_dict(),
+                    rich_terminal.retained_policy.to_dict(),
                     sort_keys=True,
                     separators=(",", ":"),
                 ),
@@ -29799,7 +29799,7 @@ def serve(
         "--ext-mem-mib",
         str(ext_mem_mib),
     ]
-    command.extend(_presentation_server_arguments(PROFILES[profile_name]))
+    command.extend(_rich_terminal_server_arguments(PROFILES[profile_name]))
     if nic_tap:
         command.extend(("--nic-tap", nic_tap))
     if audio:

@@ -4,7 +4,7 @@
 \
 \  This module is deliberately not a dependency of screen.f, term-init.f,
 \  app-shell.f, or KDOS.  Loading it requires MegaPad's separately supplied
-\  presentation-terminal.f service.  A caller creates and starts PT-SESSION
+\  rich-terminal.f client.  A caller creates and starts PT-SESSION
 \  storage, then constructs this caller-owned adapter from that live session.
 \
 \  Prefix: APTSCB- (public), _APTSCB- (internal)
@@ -12,7 +12,7 @@
 PROVIDED akashic-tui-screen-backend-apt1
 
 \ The selected system composition loads MegaPad's optional root
-\ presentation-terminal.f module before this Akashic consumer.  This source
+\ rich-terminal.f module before this Akashic consumer.  This source
 \ consumes that public PT-* ABI but never imports or copies the MegaPad source.
 REQUIRE screen.f
 REQUIRE ../utils/memory-span.f
@@ -59,7 +59,7 @@ VARIABLE _APTSCB-CELL
 VARIABLE _APTSCB-ATTRS
 VARIABLE _APTSCB-STATUS
 
-\ Collapse the presentation service's negotiation-only UNSUPPORTED status,
+\ Collapse the rich-terminal client's negotiation-only UNSUPPORTED status,
 \ and any future status unknown to this frozen adapter ABI, into a lost
 \ backend.  No PT status outside 0..3 may escape through the SCB interface.
 : _APTSCB-MAP-STATUS  ( pt-status -- scb-status )

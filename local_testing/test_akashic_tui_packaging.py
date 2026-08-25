@@ -28,16 +28,16 @@ from akashic_tui import (  # noqa: E402
     COLD_SOURCE_MAGIC,
     COLD_SOURCE_RAW_MAX_BYTES,
     COLD_SOURCE_VERSION,
-    DESKTOP_APT1_PRESENTATION,
+    DESKTOP_APT1_RICH_TERMINAL,
     DEFAULT_SMOKE_MAX_STEPS,
     DEFAULT_SMOKE_TIMEOUT,
     FORTH_LINE_COALESCE_BARRIERS,
     LINK_CHUNK_BYTES,
     MEGAPAD_EVALUATE_SOURCE_MAX_BYTES,
     MEGAPAD_NETWORKING_BOOT_LINE,
-    MEGAPAD_PRESENTATION_TERMINAL_BOOT_LINE,
-    MEGAPAD_PRESENTATION_TERMINAL_CONSUMERS,
-    MEGAPAD_PRESENTATION_TERMINAL_MODULE,
+    MEGAPAD_RICH_TERMINAL_BOOT_LINE,
+    MEGAPAD_RICH_TERMINAL_CONSUMERS,
+    MEGAPAD_RICH_TERMINAL_MODULE,
     MEGAPAD_ROOT,
     MP64FS_VFS_PLATFORM_BOOT_LINE,
     MP64FS_VFS_PLATFORM_MODULE,
@@ -57,16 +57,16 @@ from akashic_tui import (  # noqa: E402
     _pack_cold_source,
     _packed_linked_chunks,
     _parser,
-    _presentation_server_arguments,
-    _presentation_smoke_ready,
+    _rich_terminal_server_arguments,
+    _rich_terminal_smoke_ready,
     _smoke_limits,
     _requires_megapad_networking,
-    _requires_megapad_presentation_terminal,
+    _requires_megapad_rich_terminal,
     _unpack_cold_source,
     _validate_image_paths,
     _validate_module_ids,
     _with_megapad_networking,
-    _with_megapad_presentation_terminal,
+    _with_megapad_rich_terminal,
     _with_mp64fs_vfs_platform,
     build_image,
     dependency_closure,
@@ -81,8 +81,8 @@ from diskutil import (  # noqa: E402
     pack_forth_source,
 )
 from forth_dependencies import module_key  # noqa: E402
-from presentation_terminal import TerminalState  # noqa: E402
-from presentation_terminal.retained_model import (  # noqa: E402
+from rich_terminal import TerminalState  # noqa: E402
+from rich_terminal.retained_model import (  # noqa: E402
     RetainedFeature,
     RetainedPolicy,
 )
@@ -1653,27 +1653,27 @@ def test_direct_web_response_requires_native_networking() -> None:
     assert _requires_megapad_networking(closure)
 
 
-def test_presentation_boot_load_follows_networking_and_owns_capacities() -> None:
+def test_rich_terminal_boot_load_follows_networking_and_owns_capacities() -> None:
     autoexec = (
         "ENTER-USERLAND\n"
         f"{MEGAPAD_NETWORKING_BOOT_LINE}\n"
         "REQUIRE coldsrc.f\n"
     )
-    integrated = _with_megapad_presentation_terminal(
-        autoexec, DESKTOP_APT1_PRESENTATION
+    integrated = _with_megapad_rich_terminal(
+        autoexec, DESKTOP_APT1_RICH_TERMINAL
     )
     expected_prefix = (
         "ENTER-USERLAND\n"
         f"{MEGAPAD_NETWORKING_BOOT_LINE}\n"
-        f"{MEGAPAD_PRESENTATION_TERMINAL_BOOT_LINE}\n"
+        f"{MEGAPAD_RICH_TERMINAL_BOOT_LINE}\n"
         "8192 CONSTANT APT1-DESK-RX-CAPACITY\n"
         "8192 CONSTANT APT1-DESK-TX-CAPACITY\n"
     )
     assert integrated.startswith(expected_prefix)
     assert integrated.endswith("REQUIRE coldsrc.f\n")
     assert (
-        _with_megapad_presentation_terminal(
-            integrated, DESKTOP_APT1_PRESENTATION
+        _with_megapad_rich_terminal(
+            integrated, DESKTOP_APT1_RICH_TERMINAL
         )
         == integrated
     )
@@ -1684,15 +1684,15 @@ def test_desktop_apt1_build_is_an_external_additive_composition(
 ) -> None:
     baseline = PROFILES["desktop"]
     profile = PROFILES["desktop-apt1"]
-    assert baseline.presentation is None
+    assert baseline.rich_terminal is None
     assert "tui/applets/desk/desk.f" in baseline.roots
     assert "tui/desk-apt1.f" not in baseline.roots
-    assert profile.presentation is DESKTOP_APT1_PRESENTATION
+    assert profile.rich_terminal is DESKTOP_APT1_RICH_TERMINAL
     assert "tui/desk-apt1.f" in profile.roots
 
     closure = dependency_order(profile.roots)
-    assert _requires_megapad_presentation_terminal(closure)
-    assert MEGAPAD_PRESENTATION_TERMINAL_MODULE not in closure
+    assert _requires_megapad_rich_terminal(closure)
+    assert MEGAPAD_RICH_TERMINAL_MODULE not in closure
     assert "tui/screen-backend-apt1.f" in closure
     assert "tui/app-shell-apt1.f" in closure
 
@@ -1700,9 +1700,9 @@ def test_desktop_apt1_build_is_an_external_additive_composition(
         "desktop-apt1", tmp_path / "akashic-desktop-apt1.img"
     )
     filesystem = MP64FS(bytearray(image.read_bytes()))
-    assert filesystem.read_file(MEGAPAD_PRESENTATION_TERMINAL_MODULE) == (
+    assert filesystem.read_file(MEGAPAD_RICH_TERMINAL_MODULE) == (
         pack_forth_source(
-            (MEGAPAD_ROOT / MEGAPAD_PRESENTATION_TERMINAL_MODULE).read_bytes()
+            (MEGAPAD_ROOT / MEGAPAD_RICH_TERMINAL_MODULE).read_bytes()
         )
     )
     assert filesystem.info()["free_sectors"] * 512 >= profile.minimum_free_bytes
@@ -1710,7 +1710,7 @@ def test_desktop_apt1_build_is_an_external_additive_composition(
     autoexec = filesystem.read_file("autoexec.f").decode("utf-8")
     ordered_boot = (
         autoexec.index(MEGAPAD_NETWORKING_BOOT_LINE),
-        autoexec.index(MEGAPAD_PRESENTATION_TERMINAL_BOOT_LINE),
+        autoexec.index(MEGAPAD_RICH_TERMINAL_BOOT_LINE),
         autoexec.index("8192 CONSTANT APT1-DESK-RX-CAPACITY"),
         autoexec.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}"),
     )
@@ -1730,20 +1730,20 @@ def test_desktop_apt1_build_is_an_external_additive_composition(
     ).decode("utf-8")
     assert "PROVIDED akashic-tui-desk-apt1" in linked_source
     assert "PROVIDED akashic-tui-screen-backend-apt1" in linked_source
-    assert "PROVIDED presentation-terminal.f" not in linked_source
+    assert "PROVIDED rich-terminal.f" not in linked_source
 
 
-def test_presentation_consumers_select_a_boot_module_not_a_source_dependency() -> None:
+def test_rich_terminal_consumers_select_boot_module_not_source_dependency() -> None:
     profile = PROFILES["desktop-apt1"]
     closure = dependency_order(profile.roots)
 
-    assert _requires_megapad_presentation_terminal(closure)
-    assert MEGAPAD_PRESENTATION_TERMINAL_MODULE not in closure
-    assert MEGAPAD_PRESENTATION_TERMINAL_CONSUMERS & set(closure)
-    for module in MEGAPAD_PRESENTATION_TERMINAL_CONSUMERS & set(closure):
+    assert _requires_megapad_rich_terminal(closure)
+    assert MEGAPAD_RICH_TERMINAL_MODULE not in closure
+    assert MEGAPAD_RICH_TERMINAL_CONSUMERS & set(closure)
+    for module in MEGAPAD_RICH_TERMINAL_CONSUMERS & set(closure):
         source = (SOURCE_ROOT / module).read_text(encoding="utf-8")
         assert not re.search(
-            r"^\s*REQUIRE\s+\S*presentation-terminal\.f\s*$",
+            r"^\s*REQUIRE\s+\S*rich-terminal\.f\s*$",
             source,
             re.MULTILINE,
         )
@@ -1752,11 +1752,11 @@ def test_presentation_consumers_select_a_boot_module_not_a_source_dependency() -
 def test_desktop_apt1_launchers_transfer_the_same_host_policy() -> None:
     baseline = PROFILES["desktop"]
     profile = PROFILES["desktop-apt1"]
-    assert _presentation_server_arguments(baseline) == []
-    server_arguments = _presentation_server_arguments(profile)
-    assert server_arguments[0] == "--presentation-terminal-policy"
+    assert _rich_terminal_server_arguments(baseline) == []
+    server_arguments = _rich_terminal_server_arguments(profile)
+    assert server_arguments[0] == "--rich-terminal-policy"
     assert json.loads(server_arguments[1]) == (
-        profile.presentation.host_policy.to_dict()
+        profile.rich_terminal.host_policy.to_dict()
     )
 
     with patch(
@@ -1772,15 +1772,15 @@ def test_desktop_apt1_launchers_transfer_the_same_host_policy() -> None:
                 max_steps=1,
                 timeout=1.0,
             )
-    assert from_bios.call_args.kwargs["presentation"] == (
-        profile.presentation.configuration(100, 32)
+    assert from_bios.call_args.kwargs["rich_terminal"] == (
+        profile.rich_terminal.configuration(100, 32)
     )
 
 
-def test_presentation_launchers_carry_an_explicit_retained_policy() -> None:
+def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     profile = PROFILES["desktop-apt1"]
-    assert profile.presentation is not None
-    host = profile.presentation.host_policy
+    assert profile.rich_terminal is not None
+    host = profile.rich_terminal.host_policy
     retained = RetainedPolicy(
         features=RetainedFeature.CORE | RetainedFeature.CADENCE,
         max_owner_records=1,
@@ -1809,19 +1809,22 @@ def test_presentation_launchers_carry_an_explicit_retained_policy() -> None:
     )
     enabled = replace(
         profile,
-        presentation=replace(profile.presentation, retained_policy=retained),
+        rich_terminal=replace(
+            profile.rich_terminal,
+            retained_policy=retained,
+        ),
     )
 
-    arguments = _presentation_server_arguments(enabled)
+    arguments = _rich_terminal_server_arguments(enabled)
     assert arguments[2] == "--retained-terminal-policy"
     assert json.loads(arguments[3]) == retained.to_dict()
-    assert enabled.presentation.configuration(100, 32).retained_policy == retained
+    assert enabled.rich_terminal.configuration(100, 32).retained_policy == retained
 
 
 def test_desktop_apt1_smoke_rejects_fallback_and_terminal_loss() -> None:
     baseline = PROFILES["desktop"]
     profile = PROFILES["desktop-apt1"]
-    assert _presentation_smoke_ready(baseline, SimpleNamespace())
+    assert _rich_terminal_smoke_ready(baseline, SimpleNamespace())
 
     def terminal(
         state: TerminalState,
@@ -1830,12 +1833,12 @@ def test_desktop_apt1_smoke_rejects_fallback_and_terminal_loss() -> None:
         lost: bool = False,
     ) -> SimpleNamespace:
         return SimpleNamespace(
-            presentation_state=state,
-            presentation_failure=failure,
-            presentation_lost=lost,
+            rich_terminal_state=state,
+            rich_terminal_failure=failure,
+            rich_terminal_lost=lost,
         )
 
-    assert _presentation_smoke_ready(
+    assert _rich_terminal_smoke_ready(
         profile, terminal(TerminalState.ACTIVE)
     )
     for rejected in (
@@ -1845,7 +1848,7 @@ def test_desktop_apt1_smoke_rejects_fallback_and_terminal_loss() -> None:
         terminal(TerminalState.ACTIVE, failure="host failure"),
         terminal(TerminalState.ACTIVE, lost=True),
     ):
-        assert not _presentation_smoke_ready(profile, rejected)
+        assert not _rich_terminal_smoke_ready(profile, rejected)
 
 
 def test_abstract_http_profile_omits_native_networking(

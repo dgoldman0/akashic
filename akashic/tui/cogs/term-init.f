@@ -96,7 +96,7 @@ VARIABLE _APP-INITED       \ TRUE after APP-INIT, FALSE after SHUTDOWN
 
 \ APP-SHUTDOWN-QUIET ( -- )
 \   Release Akashic-owned memory and focus state without emitting a byte.
-\   A presentation owner uses this after an unsynchronized binary-session
+\   A rich-terminal owner uses this after an unsynchronized binary-session
 \   loss, where ANSI reset or alternate-screen sequences would corrupt the
 \   stream.  Only an external attachment reset may make that stream safe.
 : APP-SHUTDOWN-QUIET  ( -- )

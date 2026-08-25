@@ -6,7 +6,7 @@ This document defines the boundary between Akashic's double-buffered screen
 and an output backend. It does not define APT-1 byte encoding; that is
 specified by the mirrored `APT-1-WIRE.md`.
 
-The additive retained object plane is specified separately by
+The additive retained rich-terminal output path is specified separately by
 `AKASHIC-RICH-TERMINAL.md`. It projects the same UIDL state, never replaces
 the cell screen or ANSI fallback, and shares one atomic publisher with CELL
 once retained discovery succeeds.
@@ -21,8 +21,8 @@ ANSI is the constructed default and is a complete supported mode. The generic
 backend seam does not require APT-1, and loading Akashic does not imply that an
 enhanced terminal exists.
 
-Serialization is not presentation. The screen front buffer records only state
-accepted by a backend commit.
+Serialization does not create a second UI model. The screen front buffer
+records only state accepted by a backend commit.
 
 ## 2. Status values
 
@@ -102,7 +102,7 @@ is called, front remains unchanged, and the dirty flag remains set.
 If `span` or `cursor` returns anything other than `OK`, `SCR-FLUSH` calls
 `abort` exactly once. Front remains unchanged and dirty remains set.
 
-If `commit` returns `OK`, the whole transaction is presented atomically and
+If `commit` returns `OK`, the whole transaction is displayed atomically and
 front advances. If it returns another status, the backend has discarded all
 staged mutations, front remains unchanged, and dirty remains set. `abort` is
 not called after `commit`, because commit terminates the transaction for every
@@ -131,7 +131,7 @@ exercise that path.
 ## 7. APT-1 backend
 
 The reusable APT session/framing implementation lives in MegaPad's optional,
-boot-loaded root-level `presentation-terminal.f` userland module, not in KDOS
+boot-loaded root-level `rich-terminal.f` userland module, not in KDOS
 or Akashic. Akashic's APT backend is a small adapter over that already-loaded
 public ABI. No Akashic source may `REQUIRE` the module or copy it into the
 Akashic tree. The adapter is available only when the product profile loaded the
@@ -173,9 +173,9 @@ publishes a CELL-only, retained-only, or mixed change under the shared
 transaction ID and revision. Accepted resize recovery uses `CELL_REPLACE` in
 that envelope.
 
-The screen front buffer and retained materialization advance together only
+The screen front buffer and retained terminal state advance together only
 after the complete unified commit has been accepted locally. Backpressure or a
-semantic failure leaves both prior planes authoritative, leaves screen dirty,
+semantic failure leaves both prior states authoritative, leaves screen dirty,
 and discards all staging. The one post-commit `TX_RESULT` gate blocks both CELL
 and retained publication. Clearing the screen force-snapshot latch cannot clear
 retained replay, and clearing retained dirtiness cannot advance the screen
@@ -196,7 +196,7 @@ boundary. Raw-freeing that state without its finalizer is not permitted.
 ### Production opt-in composition
 
 The `desktop-apt1` profile is one production composition boundary. MegaPad
-boot-loads its canonical optional root `presentation-terminal.f` as a separate
+boot-loads its canonical optional root `rich-terminal.f` as a separate
 system module before Akashic's `desk-apt1.f` owner and linked Desktop closure
 are loaded. Akashic consumes only the public PT ABI; it neither source-loads
 nor vendors the module. The baseline `desktop` profile does neither and remains

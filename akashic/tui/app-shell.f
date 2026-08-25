@@ -230,8 +230,8 @@ VARIABLE _ASHELL-RUNNING      \ Event loop active flag
 VARIABLE _ASHELL-DIRTY        \ Repaint requested flag
 0 _ASHELL-DIRTY !
 
-VARIABLE _ASHELL-PRESENTATION-PENDING
-0 _ASHELL-PRESENTATION-PENDING !
+VARIABLE _ASHELL-OUTPUT-PENDING
+0 _ASHELL-OUTPUT-PENDING !
 
 VARIABLE _ASHELL-TERM-OWNER
 0 _ASHELL-TERM-OWNER !
@@ -905,16 +905,16 @@ VARIABLE _ASHELL-TICK-TMP
             _ASHELL-DRAW-CURSOR
         THEN
         RGN-ROOT
-        -1 _ASHELL-PRESENTATION-PENDING !
+        -1 _ASHELL-OUTPUT-PENDING !
     THEN
 
     \ A refused backend transaction retries the latest back buffer without
     \ rerunning application paint.  Session loss remains pending until the
     \ stream owner proves a synchronized ANSI handoff; never emit a raw
     \ fallback transaction from the paint path itself.
-    _ASHELL-PRESENTATION-PENDING @ SCR-DIRTY? OR 0= IF EXIT THEN
+    _ASHELL-OUTPUT-PENDING @ SCR-DIRTY? OR 0= IF EXIT THEN
     SCR-FLUSH?
-    SCB-S-OK = IF 0 _ASHELL-PRESENTATION-PENDING ! THEN ;
+    SCB-S-OK = IF 0 _ASHELL-OUTPUT-PENDING ! THEN ;
 
 \ =====================================================================
 \  §10 — Lifecycle: Init
@@ -971,7 +971,7 @@ VARIABLE _ASHELL-TICK-TMP
     THEN
     \ 6. Prepare runtime state (BEFORE init callback so quit-from-init works)
     -1 _ASHELL-RUNNING !
-    0 _ASHELL-PRESENTATION-PENDING !
+    0 _ASHELL-OUTPUT-PENDING !
     MS@ _ASHELL-LAST-TICK !
     \ 7. App init callback
     _ASHELL-ACTIVATE
@@ -1097,7 +1097,7 @@ VARIABLE _ASHELL-TD-IOR
     0 _ASHELL-ACTIVE-CTX !
     0 _ASHELL-RUNNING !
     0 _ASHELL-DIRTY !
-    0 _ASHELL-PRESENTATION-PENDING !
+    0 _ASHELL-OUTPUT-PENDING !
     FALSE _ASHELL-TERM-STARTED !
     0 _ASHELL-POST-HEAD !
     0 _ASHELL-POST-TAIL !

@@ -9,7 +9,7 @@ APT-1 byte encoding. The mirrored `APT-1-WIRE.md`, `APT-1-RETAINED-1.md`, and
 ownership ledgers define terminal protocol identity, transactions, reset, and
 retirement.
 
-The transactional cell plane remains independently specified by
+The transactional CELL output path remains independently specified by
 `AKASHIC-CELL-BACKEND.md`. Rich-terminal mode adds an optional retained
 projection of the same UIDL/UCTX interface already rendered into cells. It does
 not create a second application UI model, replace the cell screen, or weaken
@@ -52,7 +52,7 @@ contract means only that one internal backend serializes one terminal session.
 It is held by the explicit composition and UIDL host, not published as
 application authority.
 
-The retained model is a derived terminal materialization. The UIDL tree,
+Retained terminal state is a derived output materialization. The UIDL tree,
 semantic widget state, and bound application state remain authoritative. The
 backend may keep a bounded copied projection recipe, dirty state, mappings, and
 wire tombstones so that transport is incremental and reset is replayable. That
@@ -62,7 +62,7 @@ API.
 ## 2. Authority and identity
 
 The generic engine is the sole Akashic component allowed to emit retained wire
-frames. It owns discovery state, the shared presentation transaction and
+frames. It owns discovery state, the shared rich-terminal update transaction and
 revision domain, resource-upload serialization, wire-owner lifecycle, replay,
 and retirement. The APT shell remains the sole owner of the PT session and
 terminal input; the engine consumes that session's public ABI and never creates
@@ -93,7 +93,8 @@ identity.
 
 Terminal reset, replay, resize, or loss of terminal cache must not mutate UIDL,
 widget state, application state, documents, media, samples, or any other domain
-state. Conversely, a terminal model is never authoritative input to an applet.
+state. Conversely, retained terminal state is never authoritative input to an
+applet.
 
 ## 3. Internal status values
 
@@ -187,7 +188,7 @@ engine owners before finalization.
 
 ## 5. UIDL semantic projection contract
 
-### 5.1 One semantic tree, multiple output planes
+### 5.1 One semantic tree, multiple output paths
 
 UIDL element semantics are backend-neutral. The existing UIDL-TUI renderer
 continues to paint the CELL/ANSI representation. The rich integration adds
@@ -354,7 +355,7 @@ bounds must all fit local storage and negotiated terminal maxima before
 The owner reservation is frozen for that UCTX materialization. Dynamic values
 may vary within declared semantic capacities but cannot silently enlarge them.
 If the tree later changes structurally beyond admission, retained projection
-reports capacity and keeps the prior coherent terminal model; CELL rendering
+reports capacity and keeps the prior coherent retained terminal state; CELL rendering
 continues from the authoritative UIDL tree.
 
 Unavailable retained discovery or an unsupported optional semantic family
@@ -371,12 +372,12 @@ the resulting graph, and stages desired retained changes. It never asks an
 applet to enumerate a second scene.
 
 Local projection admission is atomic. A failure leaves the previous copied
-projection recipe and terminal model authoritative while UIDL and CELL state
+projection recipe and retained terminal state authoritative while UIDL and CELL state
 remain untouched. A successful projection records the newest desired state for
 bounded later publication. No protocol byte is emitted from an element or
 widget callback.
 
-One ordinary projected UIDL update must fit one admitted APT presentation
+One ordinary projected UIDL update must fit one admitted APT output
 transaction. Initial construction, reset replay, and relayout reconstruction
 may use the wire profile's hidden bounded multi-transaction build followed by
 one reveal. The backend never exposes a partially rebuilt UCTX merely to evade
@@ -441,7 +442,7 @@ progress; it contains no pointer back into those freed objects.
 
 Detach is idempotent. A binding record becomes reusable only after exact owner
 drop is acknowledged or a confirmed epoch/session destruction proves that the
-terminal model cannot survive. A UCTX that never materialized a retained owner
+retained terminal state cannot survive. A UCTX that never materialized a retained owner
 creates no wire tombstone.
 
 ## 7. Frame projection and atomic publication
@@ -467,7 +468,8 @@ ordinary semantic update into terminal-visible partial state.
 The CELL representation remains complete even when a retained counterpart is
 visible. Retained projection may enrich, overlay, or replace physical treatment
 inside its owned region according to the renderer contract, but loss or absence
-of the optional plane leaves a usable UI rather than a blank reserved area.
+of the optional rich-terminal path leaves a usable UI rather than a blank
+reserved area.
 
 ## 8. Bounded backend service and cadence
 
@@ -489,10 +491,10 @@ resource upload is open, it completes or aborts before another upload,
 transaction, or lifecycle request begins. A large image or series cannot
 permanently starve current scalar/readout changes in other UCTXs.
 
-Physical presentation cadence is a renderer policy over committed global
+Physical display cadence is a renderer policy over committed global
 revisions, not an application API. UIDL/widget updates retain their own domain
 timestamps; cadence never invents sample timing. Input is delivered only
-against a physically presented revision as required by RETAINED-1.
+against a physically displayed revision as required by RETAINED-1.
 
 ## 9. Composition and host order
 
@@ -505,7 +507,7 @@ loading Desk or UIDL-TUI. The baseline `desktop` profile does not load the
 APT-1 engine or construct rich-terminal state.
 
 The deployment boundary is strict. MegaPad owns the optional boot-loaded
-`presentation-terminal.f`; a rich product profile loads it before any Akashic
+`rich-terminal.f`; a rich product profile loads it before any Akashic
 rich module. Akashic never source-`REQUIRE`s or copies that module. Its rich
 modules consume only the already-loaded public PT ABI. Baseline profiles load
 neither the optional PT module nor the Akashic rich modules, so their source
@@ -539,8 +541,9 @@ saved snapshot through UCTX-owned accessors.
 
 ## 10. Reset, replay, and loss
 
-The backend privately tracks session identity and presentation epoch. A
-successful soft reset invalidates terminal materialization and private wire
+The backend privately tracks session identity and the wire
+`presentation_epoch`. A successful soft reset invalidates terminal
+materialization and private wire
 identities, not live UCTX attachments.
 
 On an accepted reset boundary, the backend:
@@ -548,7 +551,7 @@ On an accepted reset boundary, the backend:
 1. abandons old-epoch transmission and chunk progress;
 2. marks every live region, resource, definition, layout property, and dynamic
    property as not materialized;
-3. clears only tombstones whose old terminal model is now proven absent;
+3. clears only tombstones whose old retained terminal state is now proven absent;
 4. obtains or retains a complete current semantic snapshot for each visible
    live UCTX; and
 5. schedules hidden reconstruction and atomic reveal through new private wire
@@ -562,7 +565,7 @@ epoch.
 
 Copied static and latest dynamic recipes may be used when their UCTX and source
 revisions are still exact. Otherwise the generic projector regenerates them
-from the authoritative live UCTX. No terminal model or raw frame archive is
+from the authoritative live UCTX. No retained terminal state or raw frame archive is
 authoritative. Hidden UCTXs defer replay until restore; detached UCTXs are
 never replayed.
 
@@ -655,7 +658,7 @@ The lightweight contract suite must prove:
    allocation-free exact-owner tombstone; failure prevents `APP.SHUTDOWN` and
    state free, while successful final detach scrubs all host pointers before
    UCTX, CINST, widget state, region, or slot free; and
-16. no production applet imports APT/presentation modules, discovers a retained
+16. no production applet imports APT/rich-terminal modules, discovers a retained
     service, stores a scope, or issues a scene operation.
 
 Full Desktop, reset, renderer, and sustained-cadence journeys are later
