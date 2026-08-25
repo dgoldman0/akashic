@@ -8,7 +8,7 @@
 
 ## Overview
 
-Pure data-layout file defining the 160-byte **APP-DESC** application
+Pure data-layout file defining the 168-byte **APP-DESC** application
 descriptor struct.  It binds a generic `COMP-DESC`/`CINST` to TUI
 lifecycle callbacks; it has no terminal or UIDL runtime dependency.
 
@@ -26,7 +26,7 @@ REQUIRE tui/app-desc.f
 
 ## Struct Layout
 
-160 bytes (20 cells).  Allocate with `CREATE my-desc APP-DESC ALLOT`,
+168 bytes (21 cells).  Allocate with `CREATE my-desc APP-DESC ALLOT`,
 zero-fill with `APP-DESC-INIT`.
 
 | Offset | Constant | Accessor | Stack | Description |
@@ -51,6 +51,7 @@ zero-fill with `APP-DESC-INIT`.
 | +136 | `_AD-UIDL-FILE-U` | `APP.UIDL-FILE-U` | u | VFS UIDL path length |
 | +144 | `_AD-ACTIVATE` | `APP.ACTIVATE-XT` | `( instance -- )` | Bind instance-relative state |
 | +152 | `_AD-REQUEST-CLOSE` | `APP.REQUEST-CLOSE-XT` | `( reason instance -- decision )` | Negotiate normal close |
+| +160 | `_AD-QUIESCE` | `APP.QUIESCE-XT` | `( instance -- ior )` | Bounded pre-terminal-close source barrier |
 
 Each accessor takes `( desc -- addr )` and returns the field address,
 suitable for `@` or `!`.
@@ -59,7 +60,7 @@ suitable for `@` or `!`.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `APP-DESC` | `( -- 160 )` | Descriptor size constant |
+| `APP-DESC` | `( -- 168 )` | Descriptor size constant |
 | `APP-DESC-INIT` | `( desc -- )` | Zero-fill a descriptor |
 | `APP-DESC-VALID?` | `( desc -- flag )` | Validate app header and component descriptor |
 | `APP-CLOSE-DECISION-VALID?` | `( decision -- flag )` | Validate ALLOW/CANCEL/DEFER |
@@ -69,6 +70,18 @@ Close reasons are `APP-CLOSE-R-QUIT`, `APP-CLOSE-R-WINDOW`, and
 `APP-CLOSE-D-ALLOW`, `APP-CLOSE-D-CANCEL`, or `APP-CLOSE-D-DEFER`.
 Missing callbacks allow.  Hosts treat a callback `THROW` or unknown decision
 as CANCEL.  Only ALLOW authorizes `APP.SHUTDOWN-XT` and resource teardown.
+
+After close approval, the lifecycle owner calls `APP.QUIESCE-XT` before
+closing an optional terminal owner or invoking `APP.SHUTDOWN-XT`. A missing
+callback or zero result succeeds. A nonzero result or `THROW` is a hard
+barrier: terminal close and every dependent destructor are forbidden. The
+callback is bounded and idempotent, may detach callback-bearing sources, and
+must not free application state or emit arbitrary terminal output.
+
+When the application also has a retained UIDL attachment, its host first
+quiesces that generic attachment and only then invokes `APP.QUIESCE-XT`.
+Crossing the descriptor barrier therefore certifies both host-owned semantic
+sources and application-declared sources are detached before shutdown.
 
 ## Usage
 
@@ -83,6 +96,7 @@ my-comp         my-desc APP.COMP-DESC !
 ['] my-init   my-desc APP.INIT-XT !
 ['] my-event  my-desc APP.EVENT-XT !
 ['] my-close  my-desc APP.REQUEST-CLOSE-XT !
+['] my-quiesce my-desc APP.QUIESCE-XT !
 ```
 
 ## See Also

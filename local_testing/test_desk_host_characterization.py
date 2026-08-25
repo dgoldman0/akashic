@@ -149,7 +149,7 @@ VARIABLE _dh-injected-throw
 : _dh-uctx-fault  ( -- )
     0 XMEM-FL !
     80 ALLOCATE DUP 0= _dh-assert DROP _dh-probe !
-    88 ALLOCATE DUP 0= _dh-assert DROP _dh-probe2 !
+    AHS-SIZE ALLOCATE DUP 0= _dh-assert DROP _dh-probe2 !
     _dh-probe @ FREE _dh-probe2 @ FREE
     XMEM-LIMIT @ XMEM-HERE !
     _dh-call-app-try ;
@@ -194,7 +194,7 @@ VARIABLE _dh-fi-shutdowns
     _dh-retry
 
     \ Isolate one exact 80-byte instance block, exhaust the bump tail, and
-    \ let the following 88-byte slot allocation fail naturally.  Restoring
+    \ let the following AHS-SIZE slot allocation fail naturally.  Restoring
     \ both allocator roots discards the temporary probe after rollback.
     _dh-base-fill _dh-snapshot
     XMEM-FL @ _dh-save-xfl ! XMEM-HERE @ _dh-save-xhere !
@@ -207,7 +207,7 @@ VARIABLE _dh-fi-shutdowns
 
     \ Exhausting direct UCTX allocation is canonicalized by Desk.  Two
     \ isolated small free blocks admit the component instance and slot; the
-    \ following 103,544-byte context cannot fit.  Slot IDs are assigned
+    \ following 103,592-byte context cannot fit.  Slot IDs are assigned
     \ immediately before this boundary and therefore advance once.
     _dh-base-fill
     S" <uidl><region><label id=context-marker text=C/></region></uidl>"

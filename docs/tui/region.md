@@ -90,6 +90,11 @@ Free region descriptor memory.
 | `RGN-COL` | `( rgn -- col )` | Absolute top-left column |
 | `RGN-H`   | `( rgn -- h )`   | Height in rows |
 | `RGN-W`   | `( rgn -- w )`   | Width in columns |
+| `RGN-BOUNDS!` | `( row col h w rgn -- )` | Update bounds without changing descriptor identity or parent |
+
+`RGN-BOUNDS!` also refreshes the drawing clip when the updated descriptor is
+currently active. Lifecycle owners use it when a UIDL/output binding borrows a
+region identity across resize or tile relayout.
 
 ---
 
@@ -176,6 +181,7 @@ Translate region-relative `(row, col)` to screen-absolute
 | `RGN-COL` | `( rgn -- col )` | Get absolute column |
 | `RGN-H` | `( rgn -- h )` | Get height |
 | `RGN-W` | `( rgn -- w )` | Get width |
+| `RGN-BOUNDS!` | `( row col h w rgn -- )` | Update bounds in place |
 | `RGN-USE` | `( rgn -- )` | Set as current drawing region |
 | `RGN-ROOT` | `( -- )` | Reset to full-screen |
 | `RGN-SUB` | `( parent r c h w -- rgn )` | Create clipped sub-region |

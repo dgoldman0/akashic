@@ -34,8 +34,9 @@
 \       c. Timer tick → app tick
 \       d. Paint: UTUI-PAINT + app paint → SCR-FLUSH
 \       e. YIELD?
-\    8. Synchronized optional-owner close
-\    9. App shutdown, UIDL detach, and terminal release
+\    8. Retained UIDL and bounded descriptor quiesce
+\    9. Synchronized optional-owner close
+\   10. App shutdown, UIDL detach, and terminal release
 \
 \  Public API:
 \    ASHELL-RUN       ( desc -- )      Main entry (blocks until quit)
@@ -56,11 +57,13 @@
 \    ASHELL-TERMINAL-RELEASE-CHECK ( owner -- status )
 \                                             Read-only release eligibility
 \    ASHELL-TERMINAL-RELEASE ( owner -- status )  Exact idle release
-\    ASHELL-TERMINAL-QUARANTINED? ( -- flag )  Unsafe instance retained
+\    ASHELL-TERMINAL-QUARANTINED? ( -- flag )  Live shell quarantined
 \
-\  The shell guarantees local terminal resources are released on THROW.
-\  It emits APP-SHUTDOWN's ANSI restoration only when the owner has proved
-\  the byte stream safe; otherwise APP-SHUTDOWN-QUIET is mandatory.
+\  Hard-gate failure preserves the whole live shell for an externally proven
+\  attachment hard-reset/drain plus fresh module/image initialization.  No
+\  in-process shell retry or owner release clears that quarantine.  When the
+\  dependent gates succeed, APP-SHUTDOWN's ANSI restoration runs only after
+\  the optional owner has proved the byte stream safe.
 \ =================================================================
 
 PROVIDED akashic-tui-app-shell
@@ -245,6 +248,18 @@ VARIABLE _ASHELL-TERM-OWNS
 VARIABLE _ASHELL-TERM-STARTED
 FALSE _ASHELL-TERM-STARTED !
 
+\ Descriptor lifecycle boundaries are separate from terminal initialization.
+\ They remain set through a quarantined unwind so no later cleanup path can
+\ invent quiesce or repeat a claimed application shutdown.
+VARIABLE _ASHELL-APP-INIT-STARTED
+FALSE _ASHELL-APP-INIT-STARTED !
+
+VARIABLE _ASHELL-APP-QUIESCED
+FALSE _ASHELL-APP-QUIESCED !
+
+VARIABLE _ASHELL-APP-SHUTDOWN-CLAIMED
+FALSE _ASHELL-APP-SHUTDOWN-CLAIMED !
+
 \ This latch survives teardown.  Once false, a new APP-INIT must not emit
 \ ANSI until the environment has hard-reset/drained the attachment and
 \ reloaded the owner state.
@@ -259,6 +274,9 @@ VARIABLE _ASHELL-TERM-FLAG
 \ the sticky ANSI-unsafe latch prevents a second run in the same loss epoch.
 VARIABLE _ASHELL-QUARANTINED-INST
 0 _ASHELL-QUARANTINED-INST !
+
+VARIABLE _ASHELL-QUARANTINE-IOR
+0 _ASHELL-QUARANTINE-IOR !
 
 VARIABLE _ASHELL-HAS-UIDL     \ UIDL document loaded flag
 0 _ASHELL-HAS-UIDL !
@@ -347,7 +365,8 @@ VARIABLE _ASHELL-POST-TAIL
     _ASHELL-TERM-OWNS @ 0<> ;
 
 : ASHELL-TERMINAL-QUARANTINED?  ( -- flag )
-    _ASHELL-QUARANTINED-INST @ 0<> ;
+    _ASHELL-QUARANTINED-INST @ 0<>
+    _ASHELL-QUARANTINE-IOR @ 0<> OR ;
 
 \ ASHELL-TERMINAL! ( owner -- status )
 \   Configure an optional owner only while the shell and stream are idle.
@@ -356,7 +375,8 @@ VARIABLE _ASHELL-POST-TAIL
 \   key-source lease.  Use ASHELL-TERMINAL-RELEASE with that owner instead.
 : ASHELL-TERMINAL!  ( owner -- status )
     _ASHELL-RUNNING @ _ASHELL-TERM-OWNS @ OR
-    _ASHELL-TERM-ANSI-SAFE @ 0= OR IF DROP SCB-S-INVALID EXIT THEN
+    _ASHELL-TERM-ANSI-SAFE @ 0= OR
+    ASHELL-TERMINAL-QUARANTINED? OR IF DROP SCB-S-INVALID EXIT THEN
     DUP 0= IF DROP SCB-S-INVALID EXIT THEN
     DUP ASHELL-TERMINAL-VALID? 0= IF DROP SCB-S-INVALID EXIT THEN
     _ASHELL-TERM-OWNER @ ?DUP IF
@@ -372,7 +392,8 @@ VARIABLE _ASHELL-POST-TAIL
 \   predicate stable through their non-yielding release sequence.
 : ASHELL-TERMINAL-RELEASE-CHECK  ( owner -- status )
     _ASHELL-RUNNING @ _ASHELL-TERM-OWNS @ OR
-    _ASHELL-TERM-ANSI-SAFE @ 0= OR IF DROP SCB-S-INVALID EXIT THEN
+    _ASHELL-TERM-ANSI-SAFE @ 0= OR
+    ASHELL-TERMINAL-QUARANTINED? OR IF DROP SCB-S-INVALID EXIT THEN
     DUP 0= IF DROP SCB-S-INVALID EXIT THEN
     _ASHELL-TERM-OWNER @ = IF SCB-S-OK ELSE SCB-S-INVALID THEN ;
 
@@ -405,6 +426,9 @@ VARIABLE _ASHELL-POST-TAIL
     _ASHELL-TERM-STATUS @ ;
 
 : _ASHELL-TERM-PREFLIGHT  ( -- )
+    ASHELL-TERMINAL-QUARANTINED? IF
+        SCB-S-SESSION-LOST _ASHELL-TERM-THROW
+    THEN
     _ASHELL-TERM-ANSI-SAFE @ 0= IF
         SCB-S-SESSION-LOST _ASHELL-TERM-THROW
     THEN
@@ -766,9 +790,13 @@ VARIABLE _ACK-CODE    VARIABLE _ACK-MODS
 
 : _ASHELL-ON-RESIZE  ( w h -- )
     SCR-RESIZE
-    \ Rebuild root region from new screen dimensions
-    _ASHELL-RGN @ ?DUP IF RGN-FREE THEN
-    0 0 SCR-H SCR-W RGN-NEW _ASHELL-RGN !
+    \ Preserve the root descriptor identity borrowed by UIDL and any optional
+    \ output binding.  Setup is the only allocating boundary.
+    _ASHELL-RGN @ ?DUP IF
+        DROP 0 0 SCR-H SCR-W _ASHELL-RGN @ RGN-BOUNDS!
+    ELSE
+        0 0 SCR-H SCR-W RGN-NEW _ASHELL-RGN !
+    THEN
     \ Clamp cursor to new dimensions
     _ASHELL-CUR-CLAMP
     \ Re-layout UIDL tree if loaded
@@ -931,6 +959,9 @@ VARIABLE _ASHELL-TICK-TMP
 : _ASHELL-SETUP  ( desc -- )
     \ Refuse all raw terminal setup after an unsynchronized owner loss.
     _ASHELL-TERM-PREFLIGHT
+    FALSE _ASHELL-APP-INIT-STARTED !
+    FALSE _ASHELL-APP-QUIESCED !
+    FALSE _ASHELL-APP-SHUTDOWN-CLAIMED !
     DUP APP-DESC-VALID? 0= ABORT" ashell: invalid app descriptor"
     DUP _ASHELL-DESC !
     DUP APP.COMP-DESC @ CINST-NEW
@@ -975,6 +1006,7 @@ VARIABLE _ASHELL-TICK-TMP
     MS@ _ASHELL-LAST-TICK !
     \ 7. App init callback
     _ASHELL-ACTIVATE
+    TRUE _ASHELL-APP-INIT-STARTED !
     DUP APP.INIT-XT @ ?DUP IF
         _ASHELL-INST @ SWAP EXECUTE
     THEN
@@ -993,30 +1025,60 @@ VARIABLE _ASHELL-TICK-TMP
 
 VARIABLE _ASHELL-TD-IOR
 
-\ Keep the first teardown failure.  Every teardown stage is caught so
-\ later host-owned resources are still released.
+-3210 CONSTANT ASHELL-TEARDOWN-E-STATE
+
+\ Keep the first teardown failure.  Dependent lifecycle gates quarantine and
+\ return immediately; only later local releases remain best-effort.
 : _ASHELL-TD-REMEMBER  ( ior -- )
     ?DUP IF
         _ASHELL-TD-IOR @ 0= IF _ASHELL-TD-IOR ! ELSE DROP THEN
     THEN ;
 
+: _ASHELL-TD-QUARANTINE  ( -- )
+    _ASHELL-TD-IOR @ _ASHELL-QUARANTINE-IOR !
+    _ASHELL-QUARANTINED-INST @ 0= IF
+        _ASHELL-INST @ _ASHELL-QUARANTINED-INST !
+    THEN
+    0 _ASHELL-RUNNING ! ;
+
+: _ASHELL-TD-QUIESCE  ( -- )
+    \ Retained UIDL sources are a host-owned barrier and may exist even when
+    \ setup did not reach the application-init callback boundary.
+    _ASHELL-HAS-UIDL @ IF
+        UTUI-RICH-TERM-QUIESCE ?DUP IF THROW THEN
+    THEN
+    _ASHELL-APP-INIT-STARTED @ 0= IF
+        TRUE _ASHELL-APP-QUIESCED ! EXIT
+    THEN
+    _ASHELL-APP-QUIESCED @ IF EXIT THEN
+    _ASHELL-INST @ 0= IF ASHELL-TEARDOWN-E-STATE THROW THEN
+    _ASHELL-DESC @ 0= IF ASHELL-TEARDOWN-E-STATE THROW THEN
+    _ASHELL-DESC @ APP.QUIESCE-XT @ ?DUP IF
+        _ASHELL-ACTIVATE
+        _ASHELL-INST @ SWAP EXECUTE ?DUP IF THROW THEN
+    THEN
+    TRUE _ASHELL-APP-QUIESCED ! ;
+
 : _ASHELL-TD-APP  ( -- )
     \ Arbitrary app cleanup is not trusted to avoid EMIT/TYPE/ANSI.  Run it
     \ only after the terminal close stage proves raw output safe.
     _ASHELL-TERM-ANSI-SAFE @ 0= IF EXIT THEN
+    _ASHELL-APP-INIT-STARTED @ 0= IF EXIT THEN
+    _ASHELL-APP-SHUTDOWN-CLAIMED @ IF EXIT THEN
     \ A descriptor may have been stored before CINST-NEW failed.  Never
     \ invoke an app callback without the live instance required by its ABI.
-    _ASHELL-INST @ 0= IF EXIT THEN
-    _ASHELL-DESC @ ?DUP IF
-        APP.SHUTDOWN-XT @ ?DUP IF
-            _ASHELL-INST @ SWAP EXECUTE
-        THEN
+    _ASHELL-INST @ 0= IF ASHELL-TEARDOWN-E-STATE THROW THEN
+    _ASHELL-DESC @ 0= IF ASHELL-TEARDOWN-E-STATE THROW THEN
+    TRUE _ASHELL-APP-SHUTDOWN-CLAIMED !
+    _ASHELL-ACTIVATE
+    _ASHELL-DESC @ APP.SHUTDOWN-XT @ ?DUP IF
+        _ASHELL-INST @ SWAP EXECUTE
     THEN ;
 
 : _ASHELL-TD-UIDL  ( -- )
     _ASHELL-HAS-UIDL @ IF
-        0 _ASHELL-HAS-UIDL !
         UTUI-DETACH
+        0 _ASHELL-HAS-UIDL !
     THEN ;
 
 : _ASHELL-TD-UIDL-BUF  ( -- )
@@ -1032,7 +1094,7 @@ VARIABLE _ASHELL-TD-IOR
 : _ASHELL-TD-TERM-CLOSE  ( -- )
     _ASHELL-TERM-OWNS @ 0= IF EXIT THEN
     \ Fail closed before invoking owner code.  A THROW or any result other
-    \ than OK/FALSE therefore selects quiet local cleanup.
+    \ than OK/FALSE therefore leaves the complete shell in quarantine.
     FALSE _ASHELL-TERM-ANSI-SAFE !
     0
     _ASHELL-TERM-OWNER @ DUP _ASHT.CONTEXT @
@@ -1070,25 +1132,40 @@ VARIABLE _ASHELL-TD-IOR
     _ASHELL-INST DUP @ SWAP 0 SWAP ! ?DUP IF CINST-FREE THEN ;
 
 \ _ASHELL-TEARDOWN ( -- ior )
-\   Nonthrowing best-effort teardown.  The first cleanup error is returned
-\   only after every independent stage has run and shell ownership has been
-\   reset.  ASHELL-RUN decides whether a primary execution error takes
-\   precedence over this result.
+\   Nonthrowing ordered teardown.  Quiesce, terminal close, app shutdown, and
+\   UIDL detach are hard gates: failure preserves every later resource and
+\   latches quarantine.  After those gates, local releases are best-effort.
+\   ASHELL-RUN decides whether a primary execution error takes precedence.
 : _ASHELL-TEARDOWN  ( -- ior )
+    ASHELL-TERMINAL-QUARANTINED? IF
+        _ASHELL-QUARANTINE-IOR @ DUP 0= IF
+            DROP ASHELL-TEARDOWN-E-STATE
+        THEN
+        EXIT
+    THEN
     0 _ASHELL-TD-IOR !
+    ['] _ASHELL-TD-QUIESCE CATCH _ASHELL-TD-REMEMBER
+    _ASHELL-TD-IOR @ IF
+        _ASHELL-TD-QUARANTINE _ASHELL-TD-IOR @ EXIT
+    THEN
     ['] _ASHELL-TD-TERM-CLOSE CATCH _ASHELL-TD-REMEMBER
+    _ASHELL-TD-IOR @ IF
+        _ASHELL-TD-QUARANTINE _ASHELL-TD-IOR @ EXIT
+    THEN
     ['] _ASHELL-TD-APP      CATCH _ASHELL-TD-REMEMBER
+    _ASHELL-TD-IOR @ IF
+        _ASHELL-TD-QUARANTINE _ASHELL-TD-IOR @ EXIT
+    THEN
     ['] _ASHELL-TD-UIDL     CATCH _ASHELL-TD-REMEMBER
+    _ASHELL-TD-IOR @ IF
+        _ASHELL-TD-QUARANTINE _ASHELL-TD-IOR @ EXIT
+    THEN
     ['] _ASHELL-TD-UIDL-BUF CATCH _ASHELL-TD-REMEMBER
     ['] _ASHELL-TD-REGION   CATCH _ASHELL-TD-REMEMBER
     ['] _ASHELL-TD-TERM-RELEASE CATCH _ASHELL-TD-REMEMBER
     ['] _ASHELL-TD-INST     CATCH _ASHELL-TD-REMEMBER
-    \ Reset shell state even when a cleanup stage failed.  Ownership fields
-    \ are cleared before their release attempt, so no stale handle can be
-    \ reused or released twice by a later run.
-    \ Unsafe teardown moved the exact instance into its persistent quarantine
-    \ before clearing the active slot.  Its borrowed descriptor remains live
-    \ in the loaded image until the required whole-environment reset.
+    \ Every dependent gate succeeded.  Reset shell state after the remaining
+    \ best-effort local releases so no stale handle can reach a later run.
     0 _ASHELL-DESC !
     _ASHELL-TERM-ANSI-SAFE @ IF 0 _ASHELL-INST ! THEN
     0 _ASHELL-RGN !
@@ -1099,6 +1176,10 @@ VARIABLE _ASHELL-TD-IOR
     0 _ASHELL-DIRTY !
     0 _ASHELL-OUTPUT-PENDING !
     FALSE _ASHELL-TERM-STARTED !
+    FALSE _ASHELL-APP-INIT-STARTED !
+    FALSE _ASHELL-APP-QUIESCED !
+    FALSE _ASHELL-APP-SHUTDOWN-CLAIMED !
+    0 _ASHELL-QUARANTINE-IOR !
     0 _ASHELL-POST-HEAD !
     0 _ASHELL-POST-TAIL !
     0 _ASHELL-CUR-VIS !
@@ -1166,8 +1247,9 @@ VARIABLE _ASHELL-TD-IOR
 
 \ ASHELL-RUN ( desc -- )
 \   Run an application.  Blocks until ASHELL-QUIT is called or the
-\   app's init/event/tick/paint callback THROWs.  Terminal is always
-\   restored on exit.
+\   app's init/event/tick/paint callback THROWs.  Ordered teardown either
+\   completes or preserves the whole live shell at its first hard-gate
+\   failure for external attachment hard-reset/drain and reinitialization.
 VARIABLE _ASHELL-RUN-IOR
 
 : _ASHELL-RUN-FINISH  ( primary-ior -- )

@@ -119,6 +119,10 @@ CREATE DESK-DESC      APP-DESC ALLOT
 
 : _SL-VISIBLE?  ( sa -- flag ) AHS-VISIBLE? ;
 : _SL-ALIVE?    ( sa -- flag ) AHS-ALIVE? ;
+: _SL-CALLABLE? ( sa -- flag ) AHS-CALLABLE? ;
+
+: _SL-LAYOUT?  ( sa -- flag )
+    DUP _SL-CALLABLE? SWAP _SL-VISIBLE? AND ;
 
 \ =====================================================================
 \  §2 — DESK Global State
@@ -698,7 +702,7 @@ VARIABLE _DESK-VIS-N
     0 _DESK-VIS-N !
     _DESK-HEAD @
     BEGIN ?DUP WHILE
-        DUP _SL-VISIBLE? IF
+        DUP _SL-LAYOUT? IF
             _DESK-VIS-N @ _DESK-MAX-VIS < IF
                 DUP  _DESK-VIS-N @ CELLS _DESK-VIS-BUF +  !
                 1 _DESK-VIS-N +!
@@ -736,15 +740,6 @@ VARIABLE _DL-COLS  VARIABLE _DL-ROWS
 VARIABLE _DL-TW    VARIABLE _DL-TH
 VARIABLE _DL-LW    VARIABLE _DL-LH
 
-\ Free all sub-app regions.
-: _DESK-FREE-REGIONS  ( -- )
-    _DESK-HEAD @
-    BEGIN ?DUP WHILE
-        DUP _SL-RGN @ ?DUP IF RGN-FREE THEN
-        0 OVER _SL-RGN !
-        _SL-NEXT @
-    REPEAT ;
-
 : _DESK-MARK-ALL-CHILDREN  ( -- )
     _DESK-HOST AHOST-MARK-ALL ;
 
@@ -778,12 +773,12 @@ VARIABLE _DL-LW    VARIABLE _DL-LH
 \ Assign region to i-th visible slot.
 VARIABLE _DA-R   VARIABLE _DA-C
 VARIABLE _DA-TW  VARIABLE _DA-TH
+VARIABLE _DA-SA
 
 : _DESK-ASSIGN-TILE  ( idx -- )
-    DUP CELLS _DESK-VIS-BUF + @      ( idx sa )
-    SWAP                              ( sa idx )
-    DUP _DL-COLS @ /                  ( sa idx grow )
-    SWAP _DL-COLS @ MOD               ( sa grow gcol )
+    DUP CELLS _DESK-VIS-BUF + @ _DA-SA !
+    DUP _DL-COLS @ /                  ( idx grow )
+    SWAP _DL-COLS @ MOD               ( grow gcol )
     \ pixel-col = gcol * (tile-w + 1)
     DUP _DL-TW @ 1+ * _DA-C !
     \ width: last col? use last-w, else tile-w
@@ -792,7 +787,7 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     ELSE
         _DL-TW @
     THEN _DA-TW !
-    DROP                              ( sa grow )
+    DROP                              ( grow )
     \ pixel-row = grow * (tile-h + 1)
     DUP _DL-TH @ 1+ * _DA-R !
     \ height: last row? use last-h, else tile-h
@@ -801,8 +796,12 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     ELSE
         _DL-TH @
     THEN _DA-TH !
-    _DA-R @ _DA-C @ _DA-TH @ _DA-TW @ RGN-NEW
-    SWAP _SL-RGN ! ;
+    _DA-R @ _DA-C @ _DA-TH @ _DA-TW @
+    _DA-SA @ _SL-RGN @ ?DUP IF
+        RGN-BOUNDS!
+    ELSE
+        RGN-NEW _DA-SA @ _SL-RGN !
+    THEN ;
 
 \ Draw dividers between tiles.
 : _DESK-DRAW-DIVIDERS  ( -- )
@@ -837,17 +836,39 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
 : _DESK-CTX-SWITCH  ( sa -- )
     AHS-CTX-SWITCH ;
 
+: _DESK-SYNC-HIDDEN  ( -- )
+    _DESK-HEAD @
+    BEGIN ?DUP WHILE
+        DUP _SL-CALLABLE?
+        OVER _SL-STATE @ _ST-MINIMIZED = AND IF
+            DUP _SL-HAS-UIDL @ IF
+                DUP _DESK-CTX-SWITCH
+                FALSE UTUI-RICH-TERM-VISIBLE! DROP
+                DUP _DESK-CTX-SAVE
+            THEN
+        THEN
+        _SL-NEXT @
+    REPEAT ;
+
+VARIABLE _DFF-RGN
+
+: _DESK-FULLFRAME-ACTIVE?  ( -- flag )
+    _DESK-FULLFRAME @ 0= IF FALSE EXIT THEN
+    _DESK-FOCUS-SA @ ?DUP IF _SL-LAYOUT? ELSE FALSE THEN ;
+
 : _DESK-EXPAND-FULLFRAME  ( -- )
-    _DESK-FULLFRAME @ 0= IF EXIT THEN
-    _DESK-FOCUS-SA @ ?DUP 0= IF EXIT THEN
-    DUP _SL-RGN @ ?DUP IF RGN-FREE THEN
-    0 0 _DL-H @ _DL-W @ RGN-NEW SWAP _SL-RGN ! ;
+    _DESK-FULLFRAME-ACTIVE? 0= IF EXIT THEN
+    _DESK-FOCUS-SA @
+    _SL-RGN @ DUP 0= IF DROP EXIT THEN _DFF-RGN !
+    0 0 _DL-H @ _DL-W @ _DFF-RGN @ RGN-BOUNDS! ;
 
 \ Master relayout.
 : DESK-RELAYOUT  ( -- )
+    _DESK-SYNC-HIDDEN
     _DESK-COLLECT-VISIBLE
-    _DESK-FREE-REGIONS
-    _DESK-VIS-N @ DUP 0= IF DROP ASHELL-DIRTY! EXIT THEN
+    _DESK-VIS-N @ DUP 0= IF
+        DROP -1 _DESK-BG-DIRTY ! ASHELL-DIRTY! EXIT
+    THEN
     DUP _DESK-GRID
     _DESK-TILE-SIZES
     0 DO I _DESK-ASSIGN-TILE LOOP
@@ -856,7 +877,7 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     \ Retaining hidden regions keeps their UIDL and tick contexts valid; the
     \ generic host gives the overlapping focused region pointer priority.
     _DESK-EXPAND-FULLFRAME
-    \ Re-load UIDL for visible sub-apps into their new regions
+    \ Publish each stable region's updated bounds to its visible UIDL.
     _DESK-VIS-N @ 0 DO
         I CELLS _DESK-VIS-BUF + @          ( sa )
         -1 OVER _SL-DIRTY !
@@ -864,6 +885,8 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
             DUP _DESK-CTX-SWITCH
             DUP _SL-RGN @ UTUI-RGN!
             UTUI-RELAYOUT
+            TRUE UTUI-RICH-TERM-VISIBLE! DROP
+            DUP _DESK-CTX-SAVE
         THEN
         DROP
     LOOP
@@ -2014,14 +2037,14 @@ CREATE _DESK-EV  24 ALLOT
     _DESK-FOCUS-SA @ 0= IF EXIT THEN
     _DESK-FOCUS-SA @ _SL-NEXT @
     BEGIN ?DUP WHILE
-        DUP _SL-VISIBLE? IF
+        DUP _SL-LAYOUT? IF
             _SL-ID @ DESK-FOCUS-ID EXIT
         THEN
         _SL-NEXT @
     REPEAT
     _DESK-HEAD @
     BEGIN ?DUP WHILE
-        DUP _SL-VISIBLE? IF
+        DUP _SL-LAYOUT? IF
             _SL-ID @ DESK-FOCUS-ID EXIT
         THEN
         _SL-NEXT @
@@ -2334,9 +2357,10 @@ VARIABLE _DPC-PAINT-ALL
         32 0 0 SCR-H 1- SCR-W DRW-FILL-RECT
         DRW-STYLE-RESTORE
     THEN
-    _DPC-PAINT-ALL @ _DESK-FULLFRAME @ _DESK-HOST AHOST-PAINT
+    _DPC-PAINT-ALL @ _DESK-FULLFRAME-ACTIVE?
+        _DESK-HOST AHOST-PAINT
     RGN-ROOT
-    _DESK-FULLFRAME @ 0= IF _DESK-DRAW-DIVIDERS THEN
+    _DESK-FULLFRAME-ACTIVE? 0= IF _DESK-DRAW-DIVIDERS THEN
     _DESK-PAINT-TASKBAR
     _DESK-PAINT-LAUNCHER
     _DESK-AGENT-PROMPT @ ?DUP IF
@@ -2350,6 +2374,10 @@ VARIABLE _DPC-PAINT-ALL
 : DESK-REQUEST-CLOSE-CB  ( reason instance -- decision )
     SWAP DROP _DESK-USE-STATE
     APP-CLOSE-R-HOST-SHUTDOWN _DESK-HOST AHOST-REQUEST-CLOSE-ALL ;
+
+: DESK-QUIESCE-CB  ( instance -- ior )
+    _DESK-USE-STATE
+    _DESK-HOST AHOST-QUIESCE-ALL ;
 
 VARIABLE _DSD-IOR
 
@@ -2367,7 +2395,7 @@ VARIABLE _DSD-IOR
 : DESK-SHUTDOWN-CB  ( instance -- )
     _DESK-USE-STATE
     0 _DSD-IOR !
-    _DESK-HOST AHOST-DRAIN _DSD-REMEMBER
+    _DESK-HOST AHOST-DRAIN ?DUP IF THROW THEN
     ['] _DSD-INTEROP-FINI CATCH DUP _DSD-REMEMBER
     0= IF
         ['] _DSD-PRACTICE-FINI CATCH _DSD-REMEMBER
@@ -2395,6 +2423,7 @@ VARIABLE _DSD-IOR
     ['] DESK-TICK-CB     DESK-DESC APP.TICK-XT !
     ['] DESK-PAINT-CB    DESK-DESC APP.PAINT-XT !
     ['] DESK-SHUTDOWN-CB DESK-DESC APP.SHUTDOWN-XT !
+    ['] DESK-QUIESCE-CB  DESK-DESC APP.QUIESCE-XT !
     ['] _DESK-USE-STATE  DESK-DESC APP.ACTIVATE-XT !
     ['] DESK-REQUEST-CLOSE-CB DESK-DESC APP.REQUEST-CLOSE-XT !
     0                    DESK-DESC APP.UIDL-A !

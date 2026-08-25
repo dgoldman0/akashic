@@ -963,7 +963,7 @@ events) pending future implementation.
 ## UIDL Context (UCTX) System
 
 Defined in §18b of `uidl-tui.f`.  Provides per-app serialisation of
-the 15 global UIDL/UTUI variables and 10 pool arrays (103,544 bytes,
+the 21 global UIDL/UTUI variables and 10 pool arrays (103,592 bytes,
 approximately 101 KiB, per context).  This lives in `uidl-tui.f` because it
 must enumerate every private `_UDL-*` and `_UTUI-*` variable.
 
@@ -971,10 +971,10 @@ must enumerate every private `_UDL-*` and `_UTUI-*` variable.
 |------|-------|-------------|
 | `UCTX-ALLOC` | `( -- ctx \| 0 )` | Allocate one context through the platform allocator. Returns 0 on failure. |
 | `UCTX-FREE` | `( ctx -- )` | Return a context to the platform allocator. |
-| `UCTX-SAVE` | `( ctx -- )` | Copy all 15 globals + 10 pools into `ctx`. |
-| `UCTX-RESTORE` | `( ctx -- )` | Restore all 15 globals + 10 pools from `ctx`. |
+| `UCTX-SAVE` | `( ctx -- )` | Copy all 21 globals + 10 pools into `ctx`. |
+| `UCTX-RESTORE` | `( ctx -- )` | Restore all 21 globals + 10 pools from `ctx`. |
 | `UCTX-CLEAR` | `( ctx -- )` | Zero-fill entire context buffer. |
-| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (103,544). |
+| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (103,592). |
 
 Used by `app-shell.f` (§1: `ASHELL-CTX-SWITCH`, `ASHELL-CTX-SAVE`)
 and by `desk.f` (`UCTX-ALLOC`, `UCTX-FREE`, `UCTX-CLEAR`).
@@ -1053,12 +1053,12 @@ UTUI-HIDE-DIALOG       ( id-a id-l -- )              Hide dialog by ID (legacy w
 UTUI-SC-FG@            ( elem -- fg )                Computed foreground colour
 UTUI-SC-BG@            ( elem -- bg )                Computed background colour
 UTUI-SC-ATTRS@         ( elem -- attrs )             Computed attributes
-UCTX-ALLOC             ( -- ctx | 0 )               Allocate context buffer (103,544 bytes)
+UCTX-ALLOC             ( -- ctx | 0 )               Allocate context buffer (103,592 bytes)
 UCTX-FREE              ( ctx -- )                    Free context buffer
 UCTX-SAVE              ( ctx -- )                    Save globals + pools into ctx
 UCTX-RESTORE           ( ctx -- )                    Restore globals + pools from ctx
 UCTX-CLEAR             ( ctx -- )                    Zero-fill context buffer
-UCTX-TOTAL             ( -- n )                      Context buffer byte size (103544)
+UCTX-TOTAL             ( -- n )                      Context buffer byte size (103592)
 ```
 
 ---

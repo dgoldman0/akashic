@@ -116,22 +116,24 @@ Apps export callbacks. The runtime owns the loop.
 **Goal**: Define a standard app contract so the runtime can manage any app
 uniformly.
 
-**Delivered**: `tui/app-shell.f` (411 lines, 16/16 tests passing).
+**Delivered**: `tui/app-desc.f` plus `tui/app-shell.f`; the contract has
+continued to evolve in place before release.
 
 **The contract**:
-- App provides an `APP-DESC` (96-byte struct, 12 fields) with callback XTs
-- `ASHELL-RUN ( desc -- )` — blocks until quit or throw;
-  terminal always restored
+- App provides a 168-byte `APP-DESC` with component identity and callback XTs
+- `ASHELL-RUN ( desc -- )` blocks until quit or throw, then performs ordered
+  teardown or preserves the complete live shell at a hard-gate failure
 - Runtime calls `APP.INIT-XT` once during setup
 - Runtime calls `APP.EVENT-XT` when input arrives (app gets first crack,
   then UIDL dispatch)
 - Runtime calls `APP.TICK-XT` at configurable interval (default 50 ms)
 - Runtime calls `APP.PAINT-XT` when dirty flag is set
-- Runtime calls `APP.SHUTDOWN-XT` on quit or crash
+- Runtime crosses retained and descriptor quiesce barriers before terminal
+  close, then claims `APP.SHUTDOWN-XT` exactly once
 
 **Key features**:
 - Non-blocking event loop (`KEY-POLL`), cooperative yield (`YIELD?`)
-- `CATCH`-guarded teardown — terminal always restored on throw
+- `CATCH`-guarded teardown with fail-closed quarantine at dependent barriers
 - UIDL integration: optional `APP.UIDL-A/U` to auto-load document
 - Deferred action queue (`ASHELL-POST`, 16-slot FIFO)
 - Root region auto-created, resize handling built in
@@ -523,23 +525,24 @@ The 5 callbacks:
 
 #### Resize Handling
 
-The shell's `_ASHELL-ON-RESIZE` rebuilds the root region and calls
+The shell's `_ASHELL-ON-RESIZE` updates the stable root-region bounds and calls
 `UTUI-RELAYOUT`.  Since the DESK has no UIDL document, the shell's
 resize is a no-op for the DESK's own layout.  The DESK detects the
 new dimensions in its next `PAINT-XT` call (or via a resize
 pseudo-event forwarded by the shell) and calls `DESK-RELAYOUT`
-which recomputes the grid, reassigns sub-regions, and for each
+which recomputes the grid, updates stable child-region bounds, and for each
 UIDL-bearing sub-app ctx-switches and calls `UTUI-RELAYOUT`.
 
 #### What replaces `app-compositor.f`
 
-`tui/desk.f` — Prefix: `DESK-` / `_DESK-`.  Requires: `app-desc.f`
+`tui/applets/desk/desk.f` — Prefix: `DESK-` / `_DESK-`. Requires: `app-desc.f`
 (Phase 0), `app-shell.f` (for `ASHELL-REGION`, `ASHELL-QUIT`).
 **No** `KEY-POLL`, **no** `YIELD?`, **no** `SCR-FLUSH`, **no**
 `BEGIN...REPEAT` loop.
 
-**Files**: `tui/desk.f` (slot list, tiling, taskbar, context swap,
-5 APP-DESC callbacks).  The old `tui/app-compositor.f` is retired.
+**Files**: `tui/applets/desk/desk.f` (policy, tiling, taskbar, context swap,
+APP-DESC callbacks) plus `tui/applet-host/host.f` (generic child lifecycle).
+The old `tui/app-compositor.f` is retired.
 
 ### Stage 5 — Shared Services & Environment
 

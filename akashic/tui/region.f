@@ -83,6 +83,28 @@ VARIABLE _RGN-CUR      0 _RGN-CUR !   \ 0 = no region (full screen)
 : RGN-H    ( rgn -- h )      _RGN-O-H   + @ ;
 : RGN-W    ( rgn -- w )      _RGN-O-W   + @ ;
 
+VARIABLE _RGNB-RGN
+VARIABLE _RGNB-ROW
+VARIABLE _RGNB-COL
+VARIABLE _RGNB-H
+VARIABLE _RGNB-W
+
+\ RGN-BOUNDS! ( row col h w rgn -- )
+\   Update a region descriptor in place.  Its identity and parent remain
+\   stable, which lets lifecycle owners retain the descriptor across layout.
+: RGN-BOUNDS!  ( row col h w rgn -- )
+    _RGNB-RGN ! _RGNB-W ! _RGNB-H ! _RGNB-COL ! _RGNB-ROW !
+    _RGNB-ROW @ _RGNB-RGN @ _RGN-O-ROW + !
+    _RGNB-COL @ _RGNB-RGN @ _RGN-O-COL + !
+    _RGNB-H   @ _RGNB-RGN @ _RGN-O-H   + !
+    _RGNB-W   @ _RGNB-RGN @ _RGN-O-W   + !
+    _RGNB-RGN @ _RGN-CUR @ = IF
+        _RGNB-ROW @ _DRW-CLIP-ROW !
+        _RGNB-COL @ _DRW-CLIP-COL !
+        _RGNB-H   @ _DRW-CLIP-H !
+        _RGNB-W   @ _DRW-CLIP-W !
+    THEN ;
+
 \ =====================================================================
 \ 5. RGN-USE / RGN-ROOT — activate a region
 \ =====================================================================
@@ -195,6 +217,7 @@ GUARD _rgn-guard
 ' RGN-COL         CONSTANT _rgn-col-xt
 ' RGN-H           CONSTANT _rgn-h-xt
 ' RGN-W           CONSTANT _rgn-w-xt
+' RGN-BOUNDS!     CONSTANT _rgn-bounds-s-xt
 ' RGN-CONTAINS?   CONSTANT _rgn-contains-xt
 ' RGN-CLIP        CONSTANT _rgn-clip-xt
 
@@ -207,6 +230,7 @@ GUARD _rgn-guard
 : RGN-COL         _rgn-col-xt       _rgn-guard WITH-GUARD ;
 : RGN-H           _rgn-h-xt         _rgn-guard WITH-GUARD ;
 : RGN-W           _rgn-w-xt         _rgn-guard WITH-GUARD ;
+: RGN-BOUNDS!     _rgn-bounds-s-xt  _rgn-guard WITH-GUARD ;
 : RGN-CONTAINS?   _rgn-contains-xt  _rgn-guard WITH-GUARD ;
 : RGN-CLIP        _rgn-clip-xt      _rgn-guard WITH-GUARD ;
 [THEN] [THEN]

@@ -68,8 +68,8 @@ repaint.  The flag ensures: fill runs → all elements are dirty (from
 relayout) → full repaint over the fill.  Normal paint cycles skip
 the fill entirely.
 
-Sub-apps are isolated via per-app **UIDL context** buffers (103,544 bytes,
-approximately 101 KiB, each), which save/restore the 15 UIDL scalar variables
+Sub-apps are isolated via per-app **UIDL context** buffers (103,592 bytes,
+approximately 101 KiB, each), which save/restore the 21 UIDL scalar variables
 and 10 pool arrays.
 
 ## Tiling Algorithm
@@ -86,10 +86,12 @@ Toggle with `DESK-TOGGLE-VH`. Full-frame mode (`DESK-FULLFRAME!`) gives the
 focused app the entire usable Desk area and hides its live peers from paint;
 the peers retain their ordinary regions and continue ticking. Changing focus
 while full-frame is active transfers the expanded region to the new focus.
+Each linked child keeps one stable region descriptor; relayout and full-frame
+changes update its bounds in place.
 
 ## Slot Structure
 
-The embedded applet host owns one heap-allocated 88-byte `AHS` slot per
+The embedded applet host owns one heap-allocated 104-byte `AHS` slot per
 sub-app, linked in a singly linked list. Slot IDs are monotonic
 (1, 2, 3, …). Desk reads these public fields to assign regions and paint
 chrome; it does not implement a second slot lifecycle.
@@ -107,6 +109,8 @@ chrome; it does not implement a second slot lifecycle.
 | +64 | `UIDL-BUF` | Shell-loaded UIDL file buffer (0 = none) |
 | +72 | `DIRTY` | Child surface needs repaint |
 | +80 | `SEEN-REV` | Last painted component revision |
+| +88 | `CLOSE-PHASE` | LIVE, QUIESCING, QUIESCED, SHUTDOWN-CLAIMED, or DETACHED |
+| +96 | `INIT-STARTED` | Persistent application-init lifecycle boundary |
 
 ## ASHELL-QUIT Interception
 
@@ -128,18 +132,21 @@ context before returning.
 Closing Desk itself is two-phase.  `DESK-REQUEST-CLOSE-CB` queries every
 child with `APP-CLOSE-R-HOST-SHUTDOWN` without destroying any of them.  CANCEL
 wins over DEFER, and DEFER wins over ALLOW.  Only an all-ALLOW pass lets the
-shell enter `DESK-SHUTDOWN-CB`; shutdown then force-cleans those approved
-children without prompting again, so it cannot loop forever on a refusal.
-Host force-close catches shutdown, UIDL detach, context-exit, and resource-release
-faults independently.  It unlinks the slot and attempts every known release
-before returning its first cleanup error.  Top-level Desk shutdown drains all
-children before Desk completes its own cleanup and surfaces the first error to
-the shell.  If context entry/activation itself fails, Desk suppresses the
-child-owned shutdown callback rather than invoke it against an uncertain
-context.  UIDL detach has a stricter identity check of its own: it runs only
-when the active UCTX is exactly the child's, allowing cleanup after an
-activation failure without touching a wrong context.  Desk still unlinks the
-slot and releases every host-owned handle it can identify.
+shell enter its pre-close `DESK-QUIESCE-CB`. That callback delegates only to
+`AHOST-QUIESCE-ALL`; it must succeed before app-shell closes an optional
+terminal owner or calls Desk shutdown. For each initialized child, the generic
+host quiesces its retained UIDL attachment first and then invokes its optional
+`APP.QUIESCE-XT`; only both barriers and the final context save succeeding
+advance the slot to `QUIESCED`.
+
+A child quiesce refusal stores a noncallable retirement phase and preserves
+the exact linked slot, CINST, UCTX, region, UIDL buffer, and driver attachment.
+Desk excludes such a slot from tiling, full-frame selection, activation,
+relayout, event, tick, and paint paths, and does not mutate its region. After
+terminal close succeeds, `DESK-SHUTDOWN-CB` drains the already-quiesced slots.
+Final detach must succeed before host unlink or any child release; a refusal is
+a hard gate before Desk interoperability or Practice teardown. App-shell then
+quarantines the complete Desk instance and runs no later destructor.
 
 ## Theme System
 
@@ -454,13 +461,14 @@ dropped.
 
 ## UIDL Context System
 
-Each sub-app with a UIDL document gets a 103,544-byte (approximately 101 KiB)
+Each sub-app with a UIDL document gets a 103,592-byte (approximately 101 KiB)
 context buffer that captures:
 
-- **15 scalar variables**: element count, attribute count, string position,
+- **21 scalar variables**: element count, attribute count, string position,
   root pointer, subscription count, elem base, doc-loaded flag, state,
   focus pointer, action count, shortcut count, overlay count, saved focus,
-  skip-children flag, region handle.
+  skip-children flag, region handle, and six retained-terminal lifecycle values
+  (token, status, visibility, attached, quiescing, quiesced).
 - **10 pool arrays**: elements (32 KiB), attributes (20 KiB), strings
   (12 KiB), hash (2 KiB), hash-IDs (4 KiB), subscriptions (3 KiB),
   sidecars (24 KiB), actions (1.5 KiB), shortcuts (2 KiB), overlay
@@ -492,7 +500,7 @@ shell-private context state or calls `UCTX-SAVE`/`UCTX-RESTORE` directly.
 | 7 | Launch & Close | Desk install/catalog policy around host transactions |
 | 8 | Focus/Minimize/Restore | Delegation to embedded host state transitions |
 | 9 | Taskbar Painter | Shared live-label geometry, per-item styled painting, hotbar + divider |
-| 10 | APP-DESC Callbacks | Init, event, tick, paint, shutdown |
+| 10 | APP-DESC Callbacks | Init, activate, event, tick, paint, close, quiesce, shutdown |
 | 10b | Mouse Dispatch | Live-taskbar activation + focus-before-forward tile routing |
 | 11 | Descriptor & Entry | `DESK-DESC`, `_DESK-FILL-DESC`, `DESK-RUN` |
 | 12 | Guard | `WITH-GUARD` wrappers for concurrency safety |

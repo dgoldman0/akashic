@@ -484,7 +484,7 @@ VARIABLE _ah-ew
     _ah-stack
     ." AH-M8-CLOSE" CR
 
-    \ Drain is force-clean, callback-exact, idempotent, and registry-clean.
+    \ A fully successful drain is callback-exact, idempotent, and registry-clean.
     _ah-host AHOST-DRAIN 0= _ah-assert
     _ah-shutdowns-b @ 1 = _ah-assert
     _ah-releases-b @ 1 = _ah-assert

@@ -36,12 +36,15 @@ VARIABLE _lc-checks
     1 _lc-checks +!
     0= IF 1 _lc-fails +! ." CLOSE ASSERT " _lc-checks @ . CR THEN ;
 
-\ Descriptor ABI: offset 152 is now close negotiation, size remains 160.
-APP-DESC 160 = _lc-assert
+\ Descriptor ABI: close negotiation remains at 152; quiesce extends the
+\ unreleased v1 descriptor at 160.
+APP-DESC 168 = _lc-assert
 CREATE _lc-abi APP-DESC ALLOT
 _lc-abi APP-DESC-INIT
 _lc-abi APP.REQUEST-CLOSE-XT _lc-abi - 152 = _lc-assert
 _lc-abi APP.REQUEST-CLOSE-XT @ 0= _lc-assert
+_lc-abi APP.QUIESCE-XT _lc-abi - 160 = _lc-assert
+_lc-abi APP.QUIESCE-XT @ 0= _lc-assert
 APP-CLOSE-D-ALLOW APP-CLOSE-DECISION-VALID? _lc-assert
 APP-CLOSE-D-CANCEL APP-CLOSE-DECISION-VALID? _lc-assert
 APP-CLOSE-D-DEFER APP-CLOSE-DECISION-VALID? _lc-assert
@@ -130,8 +133,8 @@ _lc-requests @ 1 = _lc-assert
 0 _ASHELL-POST-HEAD ! 0 _ASHELL-POST-TAIL !
 _lc-instance @ CINST-FREE
 
-\ Teardown containment: cleanup-only faults surface after all shell-owned
-\ state is reset, while setup/loop faults retain precedence.
+\ Teardown containment: a dependent shutdown fault quarantines the live shell,
+\ while a primary loop fault retains error precedence.
 CREATE _lf-comp COMP-DESC ALLOT
 _lf-comp COMP-DESC-INIT
 S" test.close.fault" _lf-comp COMP.ID-U ! _lf-comp COMP.ID-A !
@@ -156,28 +159,18 @@ VARIABLE _lf-shutdowns
     ['] _lf-init _lf-desc APP.INIT-XT !
     ['] _lf-shutdown _lf-desc APP.SHUTDOWN-XT ! ;
 : _lf-run  ( -- ) _lf-fill _lf-desc ASHELL-RUN ;
-: _lf-structural-clean?  ( -- flag )
-    _ASHELL-DESC @ 0=
-    _ASHELL-INST @ 0= AND
-    _ASHELL-RGN @ 0= AND
-    _ASHELL-UIDL-BUF @ 0= AND
-    _ASHELL-HAS-UIDL @ 0= AND
-    ASHELL-ACTIVE-CTX 0= AND
+: _lf-quarantined?  ( -- flag )
+    _ASHELL-DESC @ 0<>
+    _ASHELL-INST @ 0<> AND
+    _ASHELL-RGN @ 0<> AND
+    ASHELL-TERMINAL-QUARANTINED? AND
     _ASHELL-RUNNING @ 0= AND
-    APP-SCREEN 0= AND ;
-: _lf-case  ( mode expected-ior -- )
-    >R _lf-mode ! 0 _lf-shutdowns !
-    ['] _lf-run CATCH R> = _lc-assert
+    APP-SCREEN 0<> AND ;
+: _lf-quarantine-case  ( -- )
+    1 _lf-mode ! 0 _lf-shutdowns !
+    ['] _lf-run CATCH -81 = _lc-assert
     _lf-shutdowns @ 1 = _lc-assert
-    _lf-structural-clean? _lc-assert ;
-
-: _lf-run-cases  ( -- )
-    _LC-FULL-PROFILE 0= IF
-        0 -82 _lf-case             \ no primary: cleanup error surfaces
-        1 -81 _lf-case             \ loop primary beats cleanup error
-        2 -83 _lf-case             \ setup primary beats cleanup error
-    THEN ;
-_lf-run-cases
+    _lf-quarantined? _lc-assert ;
 
 \ Deferred actions stop at a close boundary.  The second action remains
 \ queued across CANCEL and runs only after the owner loop is re-armed.
@@ -232,6 +225,10 @@ VARIABLE _lt-paints
         50 ASHELL-TICK-MS!
     THEN ;
 _lt-run-case
+
+\ Quarantine is permanent for this loaded image, so exercise it only after
+\ every ordinary shell case has completed.
+_LC-FULL-PROFILE 0= IF _lf-quarantine-case THEN
 
 \ Provision the blank Practice store required by a real Desk instance.
 CREATE _lc-practice-head PHEAD-SIZE ALLOT
@@ -505,9 +502,8 @@ VARIABLE _mx-shutdowns-a VARIABLE _mx-shutdowns-b
         APP-CLOSE-D-ALLOW = _lc-assert
     DESK-SLOT-COUNT 0= _lc-assert _dc-shutdowns @ 1 = _lc-assert
     _dc-requests @ 5 = _lc-assert
-    \ Force-finalization after activation entry fails must not call a child
-    \ shutdown callback in an uncertain context, but must still unlink and
-    \ release the host-owned slot.
+    \ Once shutdown is claimed, activation-entry failure must not repeat the
+    \ child callback; final detach still unlinks and releases the owned slot.
     _dc-desc DESK-LAUNCH _dc-id !
     -1 _dc-activate-throws !
     _DESK-HOST AHOST-DRAIN -90 = _lc-assert
@@ -528,7 +524,7 @@ DESK-DESC ASHELL-RUN
 
 \ Top-level Desk close negotiates every child first.  The first child
 \ CANCEL keeps Desk alive; the second pass ALLOW is remembered by the
-\ shell, and Desk shutdown force-cleans without a third prompt.
+\ shell, and Desk shutdown drains the approved child without a third prompt.
 _dc-fill
 1 _dc-mode ! -1 _dc-quit-init ! 0 _dc-requests ! 0 _dc-shutdowns !
 0 _dc-activate-throws ! 0 _dc-shutdown-throws !
@@ -540,9 +536,9 @@ DESK-RUN
 _dc-requests @ 2 = _lc-assert
 _dc-shutdowns @ 1 = _lc-assert
 
-\ Top-level fault containment: the first child shutdown throws, but Desk
-\ still unlinks/frees it, closes the second child, drains the list, and only
-\ then surfaces the first cleanup error through ASHELL-RUN.
+\ A claimed child shutdown that throws is never repeated; successful final
+\ detach still releases that child and lets Desk drain its peer. Desk surfaces
+\ the first error, so the outer app-shell quarantines the live Desk lifecycle.
 VARIABLE _dc-top-inst
 VARIABLE _dc-top-ior
 VARIABLE _dc-top-slots
@@ -606,7 +602,7 @@ _dc-top-slots @ 0= _lc-assert
 _dc-requests @ 2 = _lc-assert
 _dc-shutdowns @ 2 = _lc-assert
 ASHELL-ACTIVE-CTX 0= _lc-assert
-_lf-structural-clean? _lc-assert
+_lf-quarantined? _lc-assert
 
 _lc-fails @ 0= IF
     ." APPLET CLOSE PASS " _lc-checks @ .

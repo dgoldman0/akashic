@@ -20,9 +20,11 @@ depend on `app.f`; the standalone and applet paths are fully
 independent.
 
 `ASHELL-RUN` blocks until a normal `ASHELL-QUIT` is approved or a callback
-throws.  Teardown catches each independent cleanup stage, attempts all
-host-owned releases, and resets shell ownership even if an app shutdown
-callback throws.
+throws. Teardown first quiesces any retained UIDL attachment, then runs the
+descriptor's bounded quiesce barrier. Only after both succeed does it close the
+optional terminal owner and enter arbitrary application shutdown. A barrier,
+terminal-close, application-shutdown, or UIDL-detach failure preserves the
+complete active shell state in quarantine and skips all later destructors.
 
 Not reentrant.  One app at a time.
 
@@ -39,18 +41,19 @@ loading applet modules; other hosts may supply a different active VFS.
 
 ## APP-DESC — Application Descriptor
 
-The 160-byte APP-DESC struct is defined in
+The 168-byte APP-DESC struct is defined in
 [app-desc.f](app-desc.md) and pulled in via `REQUIRE app-desc.f`.
 
-160 bytes (20 cells).  Allocate with `CREATE my-desc APP-DESC ALLOT`,
+168 bytes (21 cells).  Allocate with `CREATE my-desc APP-DESC ALLOT`,
 zero-fill with `APP-DESC-INIT`.  Unused callback fields must be 0
 (the shell skips them).
 
 | Offset | Field | Stack | Description |
 |--------|-------|-------|-------------|
 The descriptor begins with its ABI header and required `APP.COMP-DESC`.
-Lifecycle callbacks receive the live component instance.  The final field,
-`APP.REQUEST-CLOSE-XT`, is `( reason instance -- decision )`; see
+Lifecycle callbacks receive the live component instance.
+`APP.REQUEST-CLOSE-XT` is `( reason instance -- decision )`, and the final
+`APP.QUIESCE-XT` field is `( instance -- ior )`; see
 [app-desc.md](app-desc.md) for the complete offset table.
 
 Each field accessor takes `( desc -- addr )` and returns the address of
@@ -62,7 +65,7 @@ that field within the descriptor, suitable for `@` or `!`.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `ASHELL-RUN` | `( desc -- )` | Owner-core lifecycle driver. Blocks until an approved quit or throw and always restores the terminal. |
+| `ASHELL-RUN` | `( desc -- )` | Owner-core lifecycle driver. Blocks until an approved quit or throw, then either completes ordered teardown or preserves the complete live shell in quarantine at the first dependent-gate failure. |
 | `ASHELL-QUIT` | `( -- )` | Lock-free, idempotent normal-close signal. Safe from callbacks, including init. |
 | `ASHELL-QUIT-PENDING?` | `( -- flag )` | True if a sub-app has called `ASHELL-QUIT` but the host hasn't processed it yet. |
 | `ASHELL-CANCEL-QUIT` | `( -- )` | Owner-lifecycle re-arm signal used by Desk and close negotiation. |
@@ -117,7 +120,7 @@ that field within the descriptor, suitable for `@` or `!`.
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `APP-DESC` | `( -- 160 )` | Descriptor size constant. |
+| `APP-DESC` | `( -- 168 )` | Descriptor size constant. |
 | `APP-DESC-INIT` | `( desc -- )` | Zero-fill a descriptor. |
 
 ## Lifecycle Sequence
@@ -152,22 +155,37 @@ ASHELL-RUN
   │       DEFER  → re-arm loop; app may issue quit when ready
   │
   └── _ASHELL-TEARDOWN (always runs)
-        1. APP.SHUTDOWN-XT callback
-        2. UTUI-DETACH (if UIDL loaded)
-        3. Free shell-loaded UIDL buffer
-        4. RGN-FREE root region
-        5. APP-SHUTDOWN (terminal restore, from term-init.f)
-        6. CINST-FREE component instance
-        7. Reset all shell ownership/state
+        1. Quiesce the retained UIDL attachment, then APP.QUIESCE-XT
+        2. Close the optional terminal owner and prove ANSI safety
+        3. Claim and call APP.SHUTDOWN-XT
+        4. UTUI-DETACH (if UIDL loaded)
+        5. Free shell-loaded UIDL buffer
+        6. RGN-FREE root region
+        7. APP-SHUTDOWN (terminal restore, from term-init.f)
+        8. CINST-FREE component instance
+        9. Reset all shell ownership/state
 ```
 
-Every teardown stage is individually caught, so a throwing shutdown callback
-cannot strand UIDL, region, terminal, or component-instance cleanup.  If setup
-or the event loop threw, that primary error is re-raised after teardown; it
-takes precedence over a cleanup error.  With no primary error, the first
-cleanup error is raised after all stages have run.  A setup failure before
-component-instance allocation skips the app shutdown callback because its
-required callback instance does not exist.
+Retained UIDL quiesce, descriptor quiesce, terminal close, application
+shutdown, and UIDL detach are dependent gates. The retained barrier runs even
+if setup loaded UIDL but did not reach application init. If any gate refuses or
+throws, teardown records the exact first error,
+marks the live instance quarantined, and returns immediately without clearing
+the descriptor, instance, root region, UIDL ownership, active UCTX, terminal
+owner, posted work, or screen state. A quarantined shell rejects another run,
+terminal-owner replacement, or owner release until the required external
+recovery boundary. This is not the retained backend's APT soft reset: no
+in-process shell retry, terminal-owner release, or soft-reset operation clears
+the latch, and there is no public clear API. Recovery requires an externally
+confirmed attachment hard-reset/drain followed by fresh module or image
+initialization. The shell deliberately does not retry an arbitrary shutdown
+callback after it has been claimed.
+
+After those gates succeed, local host-owned releases remain best-effort and the
+first cleanup error is reported after reset. If setup or the event loop threw,
+that primary error still takes precedence. A distinct application-init-started
+latch is set immediately before looking up `APP.INIT-XT`, so setup failure
+before that boundary calls neither `APP.QUIESCE-XT` nor `APP.SHUTDOWN-XT`.
 
 ### Event Dispatch Order
 
@@ -209,8 +227,9 @@ Two resize detection paths:
 - **Hardware poll** via `TERM-RESIZED?` — catches SIGWINCH-style
   resizes that don't arrive as key events.
 
-Both call `_ASHELL-ON-RESIZE`, which: resizes the screen buffer,
-recreates the root region, relayouts UIDL (if loaded), marks dirty.
+Both call `_ASHELL-ON-RESIZE`, which resizes the screen buffer, updates the
+root region bounds in place, relayouts UIDL (if loaded), and marks dirty. The
+stable descriptor identity remains valid for UIDL and optional output bindings.
 
 ### Automatic Dirty Propagation
 
@@ -383,12 +402,14 @@ call applet lifecycle callbacks directly.
 ```forth
 REQUIRE tui/app-shell.f
 
-: my-event  ( ev -- flag )
-    @ 113 = IF          \ 'q' pressed
+: my-event  ( ev instance -- flag )
+    DROP @ 113 = IF     \ 'q' pressed
         ASHELL-QUIT -1
     ELSE 0 THEN ;
 
+CREATE my-comp COMP-DESC ALLOT  my-comp COMP-DESC-INIT
 CREATE my-desc APP-DESC ALLOT  my-desc APP-DESC-INIT
+my-comp   my-desc APP.COMP-DESC !
 ' my-event  my-desc APP.EVENT-XT !
 
 my-desc ASHELL-RUN
@@ -403,15 +424,18 @@ CREATE my-uidl 256 ALLOT
 S" <uidl><region><label text=Hello/></region></uidl>"
 my-uidl SWAP MOVE
 
-: my-init  ( -- )
+: my-init  ( instance -- )
+    DROP
     S" lbl" UTUI-BY-ID  ( elem )
     \ ... wire up widgets ...
     ;
 
-: my-event  ( ev -- flag )
-    @ 27 = IF ASHELL-QUIT -1 ELSE 0 THEN ;
+: my-event  ( ev instance -- flag )
+    DROP @ 27 = IF ASHELL-QUIT -1 ELSE 0 THEN ;
 
+CREATE my-comp COMP-DESC ALLOT  my-comp COMP-DESC-INIT
 CREATE my-desc APP-DESC ALLOT  my-desc APP-DESC-INIT
+my-comp   my-desc APP.COMP-DESC !
 ' my-init   my-desc APP.INIT-XT !
 ' my-event  my-desc APP.EVENT-XT !
 my-uidl     my-desc APP.UIDL-A !
@@ -423,7 +447,8 @@ my-desc ASHELL-RUN
 ### Quit From Init
 
 ```forth
-: my-init  ( -- )
+: my-init  ( instance -- )
+    DROP
     \ do setup, decide to bail
     ASHELL-QUIT ;
 ```
@@ -455,4 +480,6 @@ This works because the RUNNING flag is set *before* the init callback.
 | `_ASHELL-CUR-SCOL` | 0 | Col of saved cell |
 | `_ASHELL-CUR-ACTIVE` | 0 | -1 if a saved cell needs restoring |
 
-All state is reset to defaults by `_ASHELL-TEARDOWN`.
+After every dependent gate succeeds, `_ASHELL-TEARDOWN` resets state to its
+defaults. At a hard-gate failure it instead preserves the complete live state
+and latches the quarantine described above.

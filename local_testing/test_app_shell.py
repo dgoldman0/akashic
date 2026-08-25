@@ -301,10 +301,10 @@ def check(name, forth_lines, expected=None, check_fn=None, not_expected=None):
 # ═══════════════════════════════════════════════════════════════════
 
 def test_desc_size():
-    """APP-DESC constant should be 112 (14 cells)."""
+    """APP-DESC constant should include every v1 lifecycle field."""
     check("desc-size", [
         'APP-DESC .',
-    ], expected='112')
+    ], expected='168')
 
 def test_desc_init():
     """APP-DESC-INIT should zero-fill the descriptor."""

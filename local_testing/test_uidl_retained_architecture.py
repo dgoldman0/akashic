@@ -86,6 +86,10 @@ def test_uidl_rich_terminal_lifecycle_is_ordered_and_context_local() -> None:
     assert "_UTUI-RT-ATTACHED   _UCTX-VARS 18 CELLS + !" in tui
     assert "_UTUI-RT-QUIESCING  _UCTX-VARS 19 CELLS + !" in tui
     assert "_UTUI-RT-QUIESCED   _UCTX-VARS 20 CELLS + !" in tui
+    assert "21 CONSTANT _UCTX-NVAR" in tui
+    assert "168 CONSTANT _UCTX-VAR-SZ" in tui
+    assert "Total 103,592 bytes" in tui
+    assert "103,592" in _text("docs/tui/uidl-tui.md")
     assert "0 _UTUI-RTA-BINDING !" in tui
     assert "0 _UTUI-RT-ARG0 ! 0 _UTUI-RT-ARG1 ! 0 _UTUI-RT-ARG2 !" in tui
 
@@ -223,11 +227,25 @@ def test_generic_host_quiesces_and_detaches_before_releasing_children() -> None:
     assert quiesce.index(
         "AHS-CLOSE-S-QUIESCING _AHQS-SLOT @ AHS.CLOSE-PHASE !"
     ) < quiesce.index("UTUI-RICH-TERM-QUIESCE")
-    assert quiesce.index("UTUI-RICH-TERM-QUIESCE") < quiesce.index(
-        "_AHQS-SLOT @ AHS-CTX-SAVE"
-    ) < quiesce.index(
+    rich_at = quiesce.index("UTUI-RICH-TERM-QUIESCE")
+    save_at = quiesce.index("_AHQS-SLOT @ AHS-CTX-SAVE")
+    init_at = quiesce.index("AHS.INIT-STARTED @ IF")
+    activate_at = quiesce.index("_AHQS-SLOT @ AHS-ACTIVATE")
+    app_at = quiesce.index("APP.QUIESCE-XT @")
+    assert rich_at < save_at < init_at < app_at < activate_at
+    assert "SWAP EXECUTE ?DUP IF THROW THEN" in quiesce[app_at:]
+    assert "AHS-CLOSE-S-QUIESCED _AHQS-SLOT @ AHS.CLOSE-PHASE !" not in quiesce
+
+    publish = _word(host, "_AHQS-PUBLISH")
+    assert publish.index("_AHQS-IOR @ IF EXIT THEN") < publish.index(
+        "AHS-CLOSE-PHASE-VALID?"
+    ) < publish.index("AHS-CLOSE-S-QUIESCING = IF") < publish.index(
         "AHS-CLOSE-S-QUIESCED _AHQS-SLOT @ AHS.CLOSE-PHASE !"
     )
+    quiesce_slot = _word(host, "_AHOST-QUIESCE-SLOT")
+    assert quiesce_slot.index("['] _AHQS-BODY CATCH") < quiesce_slot.index(
+        "['] _AHQS-SAVE CATCH"
+    ) < quiesce_slot.index("_AHQS-PUBLISH")
 
     # Restore the caller's original context even if traversal or an individual
     # quiesce throws; preserve the first error from either operation.
@@ -267,6 +285,11 @@ def test_generic_host_quiesces_and_detaches_before_releasing_children() -> None:
         "APP.SHUTDOWN-XT @"
     )
     force = _word(host, "_AHOST-CLOSE-SLOT-FORCE")
+    shutdown_guard_at = force.index("AHS-CLOSE-S-QUIESCED = IF")
+    shutdown_call_at = force.index("['] _AHC-SHUTDOWN CATCH")
+    detach_guard_at = force.index("AHS-CLOSE-S-SHUTDOWN-CLAIMED = IF")
+    detach_call_at = force.index("['] _AHC-DETACH CATCH")
+    assert shutdown_guard_at < shutdown_call_at < detach_guard_at < detach_call_at
     ordered = (
         "_AHOST-QUIESCE-SLOT",
         "['] _AHC-SHUTDOWN CATCH",
@@ -366,6 +389,230 @@ def test_non_live_host_slots_are_gated_from_callbacks_and_dispatch() -> None:
         r"ELSE\s+APP-CLOSE-D-ALLOW",
         close_all,
     )
+
+
+def test_app_quiesce_is_a_public_pre_shutdown_descriptor_phase() -> None:
+    desc = _text("akashic/tui/app-desc.f")
+    shell = _text("akashic/tui/app-shell.f")
+    game = _text("akashic/tui/game/game-applet.f")
+
+    assert "160 CONSTANT _AD-QUIESCE" in desc
+    assert "168 CONSTANT APP-DESC" in desc
+    assert ": APP.QUIESCE-XT" in desc
+    assert "DUP APP-DESC 0 FILL" in _word(desc, "APP-DESC-INIT")
+    assert "APP.SIZE @ APP-DESC >=" in _word(desc, "APP-DESC-VALID?")
+
+    setup = shell[
+        shell.index(": _ASHELL-SETUP") : shell.index(
+            "\\  §11 — Lifecycle: Shutdown"
+        )
+    ]
+    init_at = setup.index("TRUE _ASHELL-APP-INIT-STARTED !")
+    assert setup.index("_ASHELL-ACTIVATE") < init_at < setup.index("APP.INIT-XT @")
+
+    quiesce = _word(shell, "_ASHELL-TD-QUIESCE")
+    rich_at = quiesce.index("UTUI-RICH-TERM-QUIESCE")
+    init_guard_at = quiesce.index("_ASHELL-APP-INIT-STARTED @ 0=")
+    repeat_guard_at = quiesce.index("_ASHELL-APP-QUIESCED @ IF EXIT THEN")
+    activate_at = quiesce.index("_ASHELL-ACTIVATE")
+    callback_at = quiesce.index("APP.QUIESCE-XT @")
+    success_at = quiesce.index("TRUE _ASHELL-APP-QUIESCED !", callback_at)
+    assert quiesce.index("_ASHELL-HAS-UIDL @ IF") < rich_at < quiesce.index(
+        "THEN", rich_at
+    ) < init_guard_at
+    assert rich_at < init_guard_at < repeat_guard_at < callback_at < activate_at
+    assert callback_at < success_at
+    shutdown = _word(shell, "_ASHELL-TD-APP")
+    shutdown_init_at = shutdown.index("_ASHELL-APP-INIT-STARTED @ 0=")
+    shutdown_repeat_at = shutdown.index(
+        "_ASHELL-APP-SHUTDOWN-CLAIMED @ IF EXIT THEN"
+    )
+    shutdown_claim_at = shutdown.index("TRUE _ASHELL-APP-SHUTDOWN-CLAIMED !")
+    shutdown_callback_at = shutdown.index("APP.SHUTDOWN-XT @")
+    assert (
+        shutdown_init_at
+        < shutdown_repeat_at
+        < shutdown_claim_at
+        < shutdown_callback_at
+    )
+
+    # Game descriptors extend the complete current ABI instead of aliasing a
+    # newly appended standard lifecycle cell.
+    assert "APP-DESC      CONSTANT _GAPP-O-USER-INIT" in game
+    assert "APP-DESC 48 + CONSTANT _GAPP-O-GV" in game
+    assert "APP-DESC 56 + CONSTANT _GAPP-DESC-SZ" in game
+    assert "160 CONSTANT _GAPP-O-GV" not in game
+
+
+def test_app_shell_dependent_failures_quarantine_before_the_next_stage() -> None:
+    shell = _text("akashic/tui/app-shell.f")
+    shell_doc = _text("docs/tui/app-shell.md")
+    rich_contract = _text("docs/rich-terminal/AKASHIC-RICH-TERMINAL.md")
+    teardown = _word(shell, "_ASHELL-TEARDOWN")
+
+    quiesce_call = "['] _ASHELL-TD-QUIESCE CATCH _ASHELL-TD-REMEMBER"
+    close_call = "['] _ASHELL-TD-TERM-CLOSE CATCH _ASHELL-TD-REMEMBER"
+    shutdown_call = "['] _ASHELL-TD-APP      CATCH _ASHELL-TD-REMEMBER"
+    uidl_call = "['] _ASHELL-TD-UIDL     CATCH _ASHELL-TD-REMEMBER"
+    ordered = (
+        quiesce_call,
+        close_call,
+        shutdown_call,
+        uidl_call,
+        "['] _ASHELL-TD-REGION   CATCH",
+        "['] _ASHELL-TD-INST     CATCH",
+    )
+    assert [teardown.index(token) for token in ordered] == sorted(
+        teardown.index(token) for token in ordered
+    )
+
+    dependent_calls = (quiesce_call, close_call, shutdown_call, uidl_call)
+    next_calls = (
+        close_call,
+        shutdown_call,
+        uidl_call,
+        "['] _ASHELL-TD-UIDL-BUF CATCH",
+    )
+    for call, next_call in zip(dependent_calls, next_calls):
+        refusal = teardown[teardown.index(call) : teardown.index(next_call)]
+        assert "_ASHELL-TD-IOR @ IF" in refusal
+        assert "_ASHELL-TD-QUARANTINE _ASHELL-TD-IOR @ EXIT" in refusal
+
+    quarantine = _word(shell, "_ASHELL-TD-QUARANTINE")
+    assert "_ASHELL-INST @ _ASHELL-QUARANTINED-INST !" in quarantine
+    for cleared in (
+        "_ASHELL-DESC !",
+        "_ASHELL-INST !",
+        "_ASHELL-RGN !",
+        "_ASHELL-HAS-UIDL !",
+        "_ASHELL-UIDL-BUF !",
+        "_ASHELL-ACTIVE-CTX !",
+        "_ASHELL-APP-INIT-STARTED !",
+        "_ASHELL-APP-QUIESCED !",
+        "_ASHELL-APP-SHUTDOWN-CLAIMED !",
+        "_ASHELL-TERM-OWNER !",
+        "_ASHELL-TERM-OWNS !",
+        "_ASHELL-TERM-STARTED !",
+        "_ASHELL-TERM-ANSI-SAFE !",
+        "_ASHELL-POST-HEAD !",
+        "_ASHELL-POST-TAIL !",
+        "_ASHELL-OUTPUT-PENDING !",
+    ):
+        assert cleared not in quarantine
+
+    uidl = _word(shell, "_ASHELL-TD-UIDL")
+    assert uidl.index("UTUI-DETACH") < uidl.index("0 _ASHELL-HAS-UIDL !")
+    for gated_word in ("ASHELL-TERMINAL!", "ASHELL-TERMINAL-RELEASE-CHECK"):
+        assert "ASHELL-TERMINAL-QUARANTINED? OR" in _word(shell, gated_word)
+    preflight = _word(shell, "_ASHELL-TERM-PREFLIGHT")
+    assert "ASHELL-TERMINAL-QUARANTINED? IF" in preflight
+    setup = shell[
+        shell.index(": _ASHELL-SETUP") : shell.index(
+            "\\  §11 — Lifecycle: Shutdown"
+        )
+    ]
+    assert setup.index("_ASHELL-TERM-PREFLIGHT") < setup.index(
+        "FALSE _ASHELL-APP-INIT-STARTED !"
+    )
+    assert "_ASHELL-TD-IOR @ _ASHELL-QUARANTINE-IOR !" in quarantine
+    assert teardown.index("ASHELL-TERMINAL-QUARANTINED? IF") < teardown.index(
+        quiesce_call
+    )
+    assert shell.count("0 _ASHELL-QUARANTINED-INST !") == 1
+
+    normalized_shell_doc = " ".join(shell_doc.split())
+    normalized_contract = " ".join(rich_contract.split())
+    for prose in (normalized_shell_doc, normalized_contract):
+        assert "APT soft reset" in prose
+        assert (
+            "attachment hard-reset/drain" in prose
+            or "attachment hard reset/drain" in prose
+        )
+        assert "fresh module or image initialization" in prose
+        assert "terminal-owner release" in prose
+        assert "clear API" in prose
+    assert "in-process shell retry" in normalized_shell_doc
+    assert "`ASHELL-RUN` retry" in normalized_contract
+    assert "always restores" not in shell.lower()
+    assert "all state is reset to defaults" not in shell_doc.lower()
+
+
+def test_desk_quiesce_and_layout_preserve_retiring_slot_authority() -> None:
+    desk = _text("akashic/tui/applets/desk/desk.f")
+
+    assert "DUP _SL-CALLABLE? SWAP _SL-VISIBLE? AND" in _word(
+        desk, "_SL-LAYOUT?"
+    )
+    assert "DUP _SL-LAYOUT? IF" in _word(desk, "_DESK-COLLECT-VISIBLE")
+
+    hidden = _word(desk, "_DESK-SYNC-HIDDEN")
+    assert hidden.index("_SL-CALLABLE?") < hidden.index(
+        "_DESK-CTX-SWITCH"
+    ) < hidden.index("FALSE UTUI-RICH-TERM-VISIBLE!") < hidden.index(
+        "_DESK-CTX-SAVE"
+    )
+    assign = _word(desk, "_DESK-ASSIGN-TILE")
+    region_at = assign.index("_SL-RGN @ ?DUP IF")
+    bounds_at = assign.index("RGN-BOUNDS!", region_at)
+    else_at = assign.index("ELSE", bounds_at)
+    assert region_at < bounds_at < else_at < assign.index("RGN-NEW", else_at)
+    assert "RGN-FREE" not in assign
+
+    fullframe = _word(desk, "_DESK-EXPAND-FULLFRAME")
+    assert fullframe.index("_DESK-FULLFRAME-ACTIVE? 0=") < fullframe.index(
+        "_SL-RGN @"
+    ) < fullframe.index("RGN-BOUNDS!")
+    assert "RGN-FREE" not in fullframe
+    assert "RGN-NEW" not in fullframe
+    assert "_DESK-FREE-REGIONS" not in desk
+
+    relayout = _word(desk, "DESK-RELAYOUT")
+    ordered = (
+        "_DESK-SYNC-HIDDEN",
+        "_DESK-COLLECT-VISIBLE",
+        "_DESK-ASSIGN-TILE",
+        "_DESK-EXPAND-FULLFRAME",
+        "UTUI-RGN!",
+        "UTUI-RELAYOUT",
+        "TRUE UTUI-RICH-TERM-VISIBLE!",
+        "_DESK-CTX-SAVE",
+    )
+    assert [relayout.index(token) for token in ordered] == sorted(
+        relayout.index(token) for token in ordered
+    )
+
+    effective = _word(desk, "_DESK-FULLFRAME-ACTIVE?")
+    assert "_DESK-FOCUS-SA @ ?DUP IF _SL-LAYOUT?" in effective
+    assert _word(desk, "DESK-PAINT-CB").count("_DESK-FULLFRAME-ACTIVE?") == 2
+
+    quiesce = _word(desk, "DESK-QUIESCE-CB")
+    assert "_DESK-USE-STATE" in quiesce
+    assert "_DESK-HOST AHOST-QUIESCE-ALL" in quiesce
+    for forbidden in ("APT", "RTERM", "TERMINAL", "PT-"):
+        assert forbidden not in quiesce
+    fill = _word(desk, "_DESK-FILL-DESC")
+    assert "['] DESK-QUIESCE-CB  DESK-DESC APP.QUIESCE-XT !" in fill
+    shutdown = _word(desk, "DESK-SHUTDOWN-CB")
+    assert shutdown.index("AHOST-DRAIN ?DUP IF THROW THEN") < shutdown.index(
+        "_DSD-INTEROP-FINI"
+    ) < shutdown.index("_DSD-PRACTICE-FINI")
+
+
+def test_region_identity_is_stable_across_shell_and_desk_relayout() -> None:
+    region = _text("akashic/tui/region.f")
+    shell = _text("akashic/tui/app-shell.f")
+
+    bounds = _word(region, "RGN-BOUNDS!")
+    for field in ("_RGN-O-ROW", "_RGN-O-COL", "_RGN-O-H", "_RGN-O-W"):
+        assert field in bounds
+    assert "_RGN-O-PARENT" not in bounds
+    assert "_RGNB-RGN @ _RGN-CUR @ = IF" in bounds
+    assert "RGN-FREE" not in bounds
+    assert "ALLOCATE" not in bounds
+
+    resize = _word(shell, "_ASHELL-ON-RESIZE")
+    assert resize.index("RGN-BOUNDS!") < resize.index("UTUI-RELAYOUT")
+    assert "RGN-FREE" not in resize
 
 
 def test_retained_contract_requires_internal_uidl_projection_now() -> None:

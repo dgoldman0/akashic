@@ -11,6 +11,10 @@
 \  REQUEST-CLOSE is advisory and fail-closed.  A host asks before a
 \  normal user/host close, then calls SHUTDOWN only after ALLOW.  The
 \  callback may update UI state while returning CANCEL or DEFER.
+\
+\  QUIESCE is the host-owned pre-shutdown barrier.  It may detach bounded
+\  callback sources but must not free application state or emit arbitrary
+\  terminal output.  A nonzero result forbids terminal close and SHUTDOWN.
 \ =====================================================================
 
 PROVIDED akashic-tui-app-desc
@@ -52,8 +56,9 @@ REQUIRE ../runtime/instance.f
 136 CONSTANT _AD-UIDL-FILE-U
 144 CONSTANT _AD-ACTIVATE          \ ( instance -- ), bind dynamic state
 152 CONSTANT _AD-REQUEST-CLOSE     \ ( reason instance -- decision )
+160 CONSTANT _AD-QUIESCE           \ ( instance -- ior )
 
-160 CONSTANT APP-DESC
+168 CONSTANT APP-DESC
 
 : APP.MAGIC        ( desc -- a ) _AD-MAGIC + ;
 : APP.ABI          ( desc -- a ) _AD-ABI + ;
@@ -75,6 +80,7 @@ REQUIRE ../runtime/instance.f
 : APP.UIDL-FILE-U  ( desc -- a ) _AD-UIDL-FILE-U + ;
 : APP.ACTIVATE-XT  ( desc -- a ) _AD-ACTIVATE + ;
 : APP.REQUEST-CLOSE-XT ( desc -- a ) _AD-REQUEST-CLOSE + ;
+: APP.QUIESCE-XT   ( desc -- a ) _AD-QUIESCE + ;
 
 : APP-CLOSE-DECISION-VALID?  ( decision -- flag )
     DUP APP-CLOSE-D-ALLOW =

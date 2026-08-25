@@ -3,7 +3,7 @@
 \ =====================================================================
 \
 \  Owns live child slots, descriptor instances, UIDL contexts, transactional
-\  launch/rollback, fail-closed close negotiation, force-clean teardown,
+\  launch/rollback, fail-closed close negotiation, ordered retirement,
 \  focus/minimize/restore, and child event/tick/paint dispatch.
 \
 \  It owns no product catalog, chrome, tiling policy, service namespace, or
@@ -254,7 +254,7 @@ VARIABLE _AHA-HOST
     THEN ;
 
 \ =====================================================================
-\  Fail-closed close negotiation and force-clean teardown
+\  Fail-closed close negotiation and ordered retirement
 \ =====================================================================
 
 VARIABLE _AHQ-SLOT
@@ -346,12 +346,34 @@ VARIABLE _AHQS-IOR
         THEN
         _AHQS-SLOT @ AHS-CTX-SAVE
     THEN
-    AHS-CLOSE-S-QUIESCED _AHQS-SLOT @ AHS.CLOSE-PHASE ! ;
+    \ The descriptor barrier is independent of retained UIDL output.  Cross
+    \ it only after every retained semantic source is detached, and never for
+    \ a launch which did not reach the application-init boundary.
+    _AHQS-SLOT @ AHS.INIT-STARTED @ IF
+        _AHQS-SLOT @ AHS.DESC @ APP.QUIESCE-XT @ ?DUP IF
+            _AHQS-SLOT @ AHS-ACTIVATE
+            _AHQS-SLOT @ AHS.INST @ SWAP EXECUTE ?DUP IF THROW THEN
+        THEN
+    THEN ;
+
+: _AHQS-PUBLISH  ( -- )
+    _AHQS-IOR @ IF EXIT THEN
+    _AHQS-SLOT @ AHS.CLOSE-PHASE @
+    DUP AHS-CLOSE-PHASE-VALID? 0= IF
+        DROP AHOST-CLOSE-E-PHASE _AHQS-IOR ! EXIT
+    THEN
+    DUP AHS-CLOSE-S-QUIESCING = IF
+        DROP AHS-CLOSE-S-QUIESCED _AHQS-SLOT @ AHS.CLOSE-PHASE ! EXIT
+    THEN
+    AHS-CLOSE-S-QUIESCED U< IF
+        AHOST-CLOSE-E-PHASE _AHQS-IOR !
+    THEN ;
 
 : _AHOST-QUIESCE-SLOT  ( slot -- ior )
     _AHQS-SLOT ! 0 _AHQS-IOR !
     ['] _AHQS-BODY CATCH _AHQS-REMEMBER
     ['] _AHQS-SAVE CATCH _AHQS-REMEMBER
+    _AHQS-PUBLISH
     _AHQS-IOR @ 0 _AHQS-SLOT ! 0 _AHQS-IOR ! ;
 
 VARIABLE _AHQA-HOST

@@ -421,6 +421,13 @@ current root Akashic region and `visible` is the host's actual minimize/restore
 state. Moving or resizing a tile updates the owner region and derived layout
 without changing semantic element or resource identities.
 
+Desk keeps one region descriptor for each linked child slot and updates its
+bounds in place. Minimize publishes hidden visibility before any later layout,
+and restore performs ordinary UIDL layout before publishing visible geometry.
+A slot already past its callable `LIVE` phase is excluded from collection,
+full-frame selection, activation, relayout, and region mutation; its exact
+descriptor and bounds remain unchanged through retirement resolution.
+
 A hidden UCTX needs no fabricated geometry. While hidden, the backend sends no
 ordinary scalar, series, or resource updates for it. UIDL/widget changes still
 advance the copied desired state; scalars coalesce and series retain the newest
@@ -500,7 +507,10 @@ Each linked slot records an independent retirement phase: `LIVE`, `QUIESCING`,
 `QUIESCED`, `SHUTDOWN-CLAIMED`, or `DETACHED`. `AHS.STATE` remains the ordinary
 running/minimized/focused state so authority validation sees the original live
 tuple through final detach. On the first close attempt the host stores
-`QUIESCING` before calling the rich quiesce barrier. A refusal preserves the
+`QUIESCING` before quiescing the retained UIDL attachment and, for a child
+which crossed application init, invoking its optional `APP.QUIESCE-XT`. Only
+both barriers plus the final UCTX save succeeding store `QUIESCED`. A refusal
+preserves the
 linked slot, ID, CINST, UCTX, region, UIDL buffer, driver attachment, and exact
 activation tuple. The slot becomes noncallable: focus, input, tick, paint, and
 application close callbacks must not reach it, while a later host
@@ -605,11 +615,29 @@ The host lifecycle order is:
 5. paint CELL and project retained semantics from the same active UCTX;
 6. publish through the shared frame transaction;
 7. on geometry change, run UIDL relayout then retained relayout;
-8. before `APP.SHUTDOWN`, quiesce retained sources and record retryable
-   retirement, refusing shutdown if callback detachment is not proven;
-9. run application shutdown, then final retained detach while the exact host
-   tuple is still live; and
-10. detach/free UIDL, UCTX, activation, region, and host slot.
+8. before `APP.SHUTDOWN`, quiesce retained sources, then the application's
+   declared `APP.QUIESCE-XT`, and record retryable retirement, refusing
+   shutdown if either callback-detachment barrier is not proven;
+9. after all hosted UCTXs are source-free, close the optional terminal owner
+   and prove ANSI safety;
+10. run application shutdown, then final retained detach while the exact host
+    tuple is still live; and
+11. detach/free UIDL, UCTX, activation, region, and host slot.
+
+The top-level shell performs step 8 as a two-part barrier: it first quiesces
+its own retained UIDL attachment, if present, then invokes the neutral
+`APP.QUIESCE-XT ( instance -- ior )` descriptor callback. Desk implements that
+callback only by calling `AHOST-QUIESCE-ALL`, which applies the same ordering
+to every child. A refusal or throw is a hard pre-terminal close gate. The shell
+preserves its descriptor, instance, UIDL, active UCTX,
+root region, terminal owner, posted work, and screen state in quarantine and
+runs no later destructor. The same quarantine rule applies if terminal close,
+application shutdown, or final UIDL detach fails. A quarantined top-level
+lifecycle is not repaired by the retained backend's APT soft reset, an
+`ASHELL-RUN` retry, or terminal-owner release, and the shell exposes no
+in-process clear API. It requires an externally confirmed attachment hard
+reset/drain followed by fresh module or image initialization. The shell never
+repeats an arbitrary shutdown callback after claiming it.
 
 The host must save a mutated active UCTX before switching away. Retained
 projection cannot depend on unsaved global UIDL pools belonging to some other

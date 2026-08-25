@@ -2,10 +2,10 @@
 \  akashic/tui/game/game-applet.f — Game Applet Builder
 \ =====================================================================
 \
-\  Convenience words for creating desk-compatible game applets.
-\  Stamps out a complete APP-DESC whose init-xt creates a Game-View
-\  (or Canvas Game-View) filling the applet's root region, wires
-\  tick → fixed-step update, and wires paint → game draw.
+\  Pre-admission game callback builder.  Its extension begins after the
+\  complete current APP-DESC layout, but host admission remains a separate
+\  game slice: component identity, instance-relative widget/callback state,
+\  and an exact hosted-region contract are not yet supplied here.
 \
 \  Usage:
 \    : my-init     ( -- )         ... ;
@@ -23,10 +23,10 @@
 \    ' my-input        my-desc GAPP-ON-INPUT!
 \    ' my-shutdown     my-desc GAPP-ON-SHUTDOWN!
 \
-\    my-desc DESK-LAUNCH   \ launch as desk applet
+\    \ Host launch remains unavailable until admission is repaired.
 \
 \  The builder allocates an extended descriptor that holds both the
-\  standard APP-DESC (112 bytes) and game-specific callback slots.
+\  standard APP-DESC and game-specific callback slots.
 \  The internal init-xt creates a Game-View widget, wires everything
 \  up, and calls the user's init callback.
 \
@@ -44,17 +44,17 @@ REQUIRE ../region.f
 \  §1 — Extended Descriptor Layout
 \ =====================================================================
 \
-\  Extends APP-DESC with game-specific fields after the standard
-\  112 bytes.
+\  Extends APP-DESC with game-specific fields after the complete current
+\  descriptor.  No extension field aliases a standard lifecycle slot.
 
-112 CONSTANT _GAPP-O-USER-INIT      \ ( -- )
-120 CONSTANT _GAPP-O-USER-UPDATE    \ ( dt -- )
-128 CONSTANT _GAPP-O-USER-DRAW      \ ( rgn -- )
-136 CONSTANT _GAPP-O-USER-INPUT     \ ( ev -- )
-144 CONSTANT _GAPP-O-USER-SHUTDOWN  \ ( -- )
-152 CONSTANT _GAPP-O-FPS            \ target FPS
-160 CONSTANT _GAPP-O-GV             \ Game-View widget ptr
-168 CONSTANT _GAPP-DESC-SZ
+APP-DESC      CONSTANT _GAPP-O-USER-INIT      \ ( -- )
+APP-DESC  8 + CONSTANT _GAPP-O-USER-UPDATE    \ ( dt -- )
+APP-DESC 16 + CONSTANT _GAPP-O-USER-DRAW      \ ( rgn -- )
+APP-DESC 24 + CONSTANT _GAPP-O-USER-INPUT     \ ( ev -- )
+APP-DESC 32 + CONSTANT _GAPP-O-USER-SHUTDOWN  \ ( -- )
+APP-DESC 40 + CONSTANT _GAPP-O-FPS            \ target FPS
+APP-DESC 48 + CONSTANT _GAPP-O-GV             \ Game-View widget ptr
+APP-DESC 56 + CONSTANT _GAPP-DESC-SZ
 
 \ =====================================================================
 \  §2 — Internal Callbacks
