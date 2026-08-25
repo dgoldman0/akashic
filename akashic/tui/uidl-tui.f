@@ -347,12 +347,15 @@ VARIABLE _UTUI-RT-QUIESCING
 VARIABLE _UTUI-RT-QUIESCED
 
 \ Driver callback table (installed atomically and immutable thereafter):
-\   attach-xt   ( document-binding -- token status )
-\   project-xt  ( token -- status )
-\   relayout-xt ( visible region token -- status )
-\   quiesce-xt  ( token -- status )
-\   detach-xt   ( token -- status )
+\   attach-xt   ( document-binding context -- token status )
+\   project-xt  ( token context -- status )
+\   relayout-xt ( visible region token context -- status )
+\   quiesce-xt  ( token context -- status )
+\   detach-xt   ( token context -- status )
 \ All callbacks run synchronously on the UI owner with the exact UCTX active.
+\ CONTEXT is immutable composition authority and deliberately does not enter a
+\ UCTX; only the opaque token and lifecycle scalars are context-local.
+VARIABLE _UTUI-RT-DRIVER-CONTEXT
 VARIABLE _UTUI-RT-ATTACH-XT
 VARIABLE _UTUI-RT-PROJECT-XT
 VARIABLE _UTUI-RT-RELAYOUT-XT
@@ -372,6 +375,7 @@ VARIABLE _UTUI-RT-CALLING
 0 _UTUI-RT-ATTACHED !
 0 _UTUI-RT-QUIESCING !
 0 _UTUI-RT-QUIESCED !
+0 _UTUI-RT-DRIVER-CONTEXT !
 0 _UTUI-RT-ATTACH-XT !
 0 _UTUI-RT-PROJECT-XT !
 0 _UTUI-RT-RELAYOUT-XT !
@@ -385,31 +389,36 @@ VARIABLE _UTUI-RTI-PROJECT
 VARIABLE _UTUI-RTI-RELAYOUT
 VARIABLE _UTUI-RTI-QUIESCE
 VARIABLE _UTUI-RTI-DETACH
+VARIABLE _UTUI-RTI-CONTEXT
 
 \ _UTUI-RICH-TERM-DRIVER!
-\   ( attach project relayout quiesce detach -- flag )
+\   ( context attach project relayout quiesce detach -- flag )
 \ Composition-only, one-way installation.  An exact repeated installation is
 \ idempotent; a partial or different driver is refused without mutation.
 : _UTUI-RICH-TERM-DRIVER!
-    ( attach project relayout quiesce detach -- flag )
+    ( context attach project relayout quiesce detach -- flag )
     _UTUI-RTI-DETACH !
     _UTUI-RTI-QUIESCE !
     _UTUI-RTI-RELAYOUT !
     _UTUI-RTI-PROJECT !
     _UTUI-RTI-ATTACH !
+    _UTUI-RTI-CONTEXT !
     _UTUI-RT-DRIVER-INSTALLED @ IF
-        _UTUI-RT-ATTACH-XT  @ _UTUI-RTI-ATTACH  @ =
+        _UTUI-RT-DRIVER-CONTEXT @ _UTUI-RTI-CONTEXT @ =
+        _UTUI-RT-ATTACH-XT  @ _UTUI-RTI-ATTACH  @ = AND
         _UTUI-RT-PROJECT-XT @ _UTUI-RTI-PROJECT @ = AND
         _UTUI-RT-RELAYOUT-XT @ _UTUI-RTI-RELAYOUT @ = AND
         _UTUI-RT-QUIESCE-XT @ _UTUI-RTI-QUIESCE @ = AND
         _UTUI-RT-DETACH-XT  @ _UTUI-RTI-DETACH  @ = AND
         EXIT
     THEN
-    _UTUI-RTI-ATTACH @ 0<>
+    _UTUI-RTI-CONTEXT @ 0<>
+    _UTUI-RTI-ATTACH @ 0<> AND
     _UTUI-RTI-PROJECT @ 0<> AND
     _UTUI-RTI-RELAYOUT @ 0<> AND
     _UTUI-RTI-QUIESCE @ 0<> AND
     _UTUI-RTI-DETACH @ 0<> AND 0= IF 0 EXIT THEN
+    _UTUI-RTI-CONTEXT @ _UTUI-RT-DRIVER-CONTEXT !
     _UTUI-RTI-ATTACH  @ _UTUI-RT-ATTACH-XT !
     _UTUI-RTI-PROJECT @ _UTUI-RT-PROJECT-XT !
     _UTUI-RTI-RELAYOUT @ _UTUI-RT-RELAYOUT-XT !
@@ -426,7 +435,8 @@ VARIABLE _UTUI-RT-ARG1
 VARIABLE _UTUI-RT-ARG2
 
 : _UTUI-RT-DO-ATTACH  ( -- token status )
-    _UTUI-RT-ARG0 @ _UTUI-RT-ATTACH-XT @ EXECUTE ;
+    _UTUI-RT-ARG0 @ _UTUI-RT-DRIVER-CONTEXT @
+    _UTUI-RT-ATTACH-XT @ EXECUTE ;
 
 : _UTUI-RT-CALL-ATTACH  ( document-binding -- token status )
     _UTUI-RT-CALLING @ IF DROP 0 _UTUI-RT-S-INVALID EXIT THEN
@@ -438,7 +448,8 @@ VARIABLE _UTUI-RT-ARG2
     ?DUP IF DROP 0 _UTUI-RT-S-INVALID THEN ;
 
 : _UTUI-RT-DO-PROJECT  ( -- status )
-    _UTUI-RT-ARG0 @ _UTUI-RT-PROJECT-XT @ EXECUTE ;
+    _UTUI-RT-ARG0 @ _UTUI-RT-DRIVER-CONTEXT @
+    _UTUI-RT-PROJECT-XT @ EXECUTE ;
 
 : _UTUI-RT-CALL-PROJECT  ( token -- status )
     _UTUI-RT-CALLING @ IF DROP _UTUI-RT-S-INVALID EXIT THEN
@@ -451,6 +462,7 @@ VARIABLE _UTUI-RT-ARG2
 
 : _UTUI-RT-DO-RELAYOUT  ( -- status )
     _UTUI-RT-ARG0 @ _UTUI-RT-ARG1 @ _UTUI-RT-ARG2 @
+    _UTUI-RT-DRIVER-CONTEXT @
     _UTUI-RT-RELAYOUT-XT @ EXECUTE ;
 
 : _UTUI-RT-CALL-RELAYOUT  ( visible region token -- status )
@@ -463,7 +475,8 @@ VARIABLE _UTUI-RT-ARG2
     ?DUP IF DROP _UTUI-RT-S-INVALID THEN ;
 
 : _UTUI-RT-DO-QUIESCE  ( -- status )
-    _UTUI-RT-ARG0 @ _UTUI-RT-QUIESCE-XT @ EXECUTE ;
+    _UTUI-RT-ARG0 @ _UTUI-RT-DRIVER-CONTEXT @
+    _UTUI-RT-QUIESCE-XT @ EXECUTE ;
 
 : _UTUI-RT-CALL-QUIESCE  ( token -- status )
     _UTUI-RT-CALLING @ IF DROP _UTUI-RT-S-INVALID EXIT THEN
@@ -475,7 +488,8 @@ VARIABLE _UTUI-RT-ARG2
     ?DUP IF DROP _UTUI-RT-S-INVALID THEN ;
 
 : _UTUI-RT-DO-DETACH  ( -- status )
-    _UTUI-RT-ARG0 @ _UTUI-RT-DETACH-XT @ EXECUTE ;
+    _UTUI-RT-ARG0 @ _UTUI-RT-DRIVER-CONTEXT @
+    _UTUI-RT-DETACH-XT @ EXECUTE ;
 
 : _UTUI-RT-CALL-DETACH  ( token -- status )
     _UTUI-RT-CALLING @ IF DROP _UTUI-RT-S-INVALID EXIT THEN

@@ -13,7 +13,7 @@ def _text(relative: str) -> str:
 
 
 def _word(source: str, name: str) -> str:
-    match = re.search(rf"(?ms)^: {re.escape(name)}\b.*?;\s*$", source)
+    match = re.search(rf"(?ms)^: {re.escape(name)}(?=\s).*?;\s*$", source)
     assert match is not None, name
     return match.group(0)
 
@@ -70,6 +70,10 @@ def test_uidl_rich_terminal_lifecycle_is_ordered_and_context_local() -> None:
     # discover or replace it and the no-driver path remains unavailable.
     assert ": _UTUI-RICH-TERM-DRIVER!" in tui
     assert "_UTUI-RT-DRIVER-INSTALLED @ IF" in tui
+    install = _word(tui, "_UTUI-RICH-TERM-DRIVER!")
+    assert "context attach project relayout quiesce detach -- flag" in install
+    assert "_UTUI-RT-DRIVER-CONTEXT @ _UTUI-RTI-CONTEXT @ =" in install
+    assert "_UTUI-RTI-CONTEXT @ 0<>" in install
     assert "_UTUI-RT-S-UNAVAILABLE DUP _UTUI-RT-STATUS !" in tui
     assert "CINST-SERVICE" not in tui
     assert "PRES-BROKER" not in tui
@@ -84,6 +88,18 @@ def test_uidl_rich_terminal_lifecycle_is_ordered_and_context_local() -> None:
     assert "_UTUI-RT-QUIESCED   _UCTX-VARS 20 CELLS + !" in tui
     assert "0 _UTUI-RTA-BINDING !" in tui
     assert "0 _UTUI-RT-ARG0 ! 0 _UTUI-RT-ARG1 ! 0 _UTUI-RT-ARG2 !" in tui
+
+    # Every callback receives the same explicit composition context.  It is
+    # immutable driver authority, not a singleton closure or UCTX field.
+    for word in (
+        "_UTUI-RT-DO-ATTACH",
+        "_UTUI-RT-DO-PROJECT",
+        "_UTUI-RT-DO-RELAYOUT",
+        "_UTUI-RT-DO-QUIESCE",
+        "_UTUI-RT-DO-DETACH",
+    ):
+        assert "_UTUI-RT-DRIVER-CONTEXT @" in _word(tui, word)
+    assert "_UTUI-RT-DRIVER-CONTEXT" not in _word(tui, "_UTUI-RICH-TERM-CLEAR")
 
     # Rich projection observes UIDL dirt before the CELL renderer clears it.
     paint = _word(tui, "UTUI-PAINT")
