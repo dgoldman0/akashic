@@ -1,724 +1,618 @@
-# Akashic retained-presentation service contract
+# Akashic UIDL retained-presentation backend contract
 
-Status: normative for the Phase 3 Akashic retained-presentation service.
+Status: normative for the Phase 3 Akashic retained-presentation integration.
 
-This document defines the high-level Akashic API, storage, ownership, and
-lifecycle contract for retained presentation. It does not define APT-1 byte
-encoding. The mirrored `APT-1-WIRE.md` and `APT-1-OWNERSHIP.md` define the
-terminal protocol identity, transaction, reset, and retirement rules.
+This document defines the Akashic architecture, storage, ownership, projection,
+and lifecycle contract for retained presentation. It does not define APT-1 byte
+encoding. The mirrored `APT-1-WIRE.md`, `APT-1-RETAINED-1.md`, and ownership
+ledgers define terminal protocol identity, transactions, reset, and retirement.
 
 The transactional cell plane remains independently specified by
-`AKASHIC-CELL-BACKEND.md`. Retained presentation is an additive object plane;
-it does not replace the cell screen or the ANSI fallback.
+`AKASHIC-CELL-BACKEND.md`. Retained presentation is an optional projection of
+the same UIDL/UCTX interface already rendered into cells. It does not create a
+second application UI model, replace the cell screen, or weaken ANSI fallback.
 
-## 1. Scope and authority
+## 1. Non-negotiable architecture
 
-Desk owns one presentation service, called the broker, for one live Desk
-activation. The broker is a high-level Akashic service over the optional APT
-session. It is not part of KDOS, does not exist merely because Akashic was
-loaded, and is installed only by the explicit rich Desktop composition.
+UIDL is the sole application-facing UI description. A hosted component owns its
+ordinary domain state and uses the existing UIDL element tree, bindings,
+subscriptions, semantic widgets, dirtying, layout, focus, and event mechanisms.
+The same `UCTX` owns that UI for the complete activation lifetime.
 
-The broker is global to Desk and is discoverable through Desk's existing
-global `IEND.SERVICE-XT` service endpoint under the exact identifier:
+One internal retained backend exists for one live enhanced terminal session.
+The explicit rich composition constructs it and gives it to the UIDL host. Desk
+and the applet host attach, project, relayout, and detach UCTXs through generic
+host operations. A Desk-owned UIDL context, when present, follows the same path
+as a child UCTX; Desk UI code does not author a retained scene manually.
 
-```text
-org.akashic.tui.presentation.v1
-```
+The following are forbidden application interfaces:
 
-There is no endpoint per applet. In the `desktop-apt1` composition, discovery
-returns the same broker to every eligible caller whether the attached terminal
-accepted or declined the retained feature query. Discovery alone grants no
-presentation owner and no object mutation authority. A child must acquire an
-opaque activation-scoped scope as defined below.
+* retained-backend or APT discovery through `IEND.SERVICE-XT`;
+* applet acquisition of a presentation broker, scope, owner, or lease;
+* applet calls that begin, define, update, commit, abort, step, replay, or retire
+  a terminal scene;
+* applet-visible session, epoch, owner, region, object, resource, series,
+  revision, transaction, opcode, frame, or terminal-capacity identities; and
+* a handwritten projection controller maintained beside an applet's UIDL.
 
-The broker and terminal tree are projections of Akashic application state.
-They are not durable application data. A terminal reset, broker replay, or
-lost terminal cache must not change SoundLab PCM, metrics, documents, resource
-owners, UIDL state, or any other domain state.
+There is therefore no presentation service identifier and no presentation
+endpoint per Desk or per applet. "Global" in this contract means only that one
+internal backend serializes one terminal session. It is held by the explicit
+composition and UIDL host, not published as application authority.
 
-The public child API never exposes or accepts:
+The retained model is a derived terminal materialization. The UIDL tree,
+semantic widget state, and bound application state remain authoritative. The
+backend may keep a bounded copied projection recipe, dirty state, mappings, and
+wire tombstones so that transport is incremental and reset is replayable. That
+cache is not a second application-owned scene and has no independent mutation
+API.
 
-* a `PT-SESSION` pointer;
-* a session ID or presentation epoch;
-* a terminal owner ID or owner generation;
-* a terminal region, object, or resource ID;
-* a raw protocol opcode, frame, or transaction buffer; or
-* another applet's scope.
+## 2. Authority and identity
 
-Applications use activation-local scene keys inside an opaque scope. The
-broker maps those keys to terminal identities internally.
+The internal backend is the sole Akashic component allowed to emit retained
+wire frames. It owns discovery state, the shared presentation transaction and
+revision domain, resource-upload serialization, owner mappings, replay, and
+retirement. The APT shell remains the sole owner of the PT session and terminal
+input; the retained backend uses the shell's internal adapter and never creates
+another UART reader, writer, or service loop.
 
-## 2. Status values
+Each attached UCTX is represented privately by one bounded projection binding.
+The binding contains:
 
-The service uses these stable ordinary status values:
+* the exact live `AHOST` and `AHS` slot addresses and captured `AHS.ID`;
+* the exact CINST address, `CINST.ID`, and `CINST.GENERATION`;
+* the exact UCTX identity and current Akashic region/visibility;
+* a backend-issued nonzero internal binding token and generation;
+* one private retained wire owner ID and generation when materialized;
+* stable mappings from `(UCTX, element-index, semantic-subkey)` to wire item
+  identities; and
+* admitted quotas, copied projection state, progress, and retirement state.
+
+The complete host/slot/CINST/UCTX tuple is the Akashic authority binding. Focus,
+current tile position, an `id=` string, a region pointer, or possession of a
+UIDL element pointer alone grants no authority. The backend validates the exact
+live tuple at attach and revalidates it through the private binding token before
+project, relayout, quiesce, and detach.
+
+The wire ownership ledger's guest-side owner binding is this private projection
+binding. It is not handed to application code. Wire owner and item identities
+may rotate after reset without changing the live UCTX or any UIDL element
+identity.
+
+Terminal reset, replay, resize, or loss of terminal cache must not mutate UIDL,
+widget state, application state, documents, media, samples, or any other domain
+state. Conversely, a terminal model is never authoritative input to an applet.
+
+## 3. Internal status values
+
+The host/backend boundary uses these stable ordinary status values:
 
 | Value | Name | Meaning |
 | ---: | --- | --- |
-| 0 | `PRES-S-OK` | The operation was accepted. |
-| 1 | `PRES-S-WOULD-BLOCK` | No downstream progress is currently possible; retry after advancing the owning service. |
-| 2 | `PRES-S-UNAVAILABLE` | No usable negotiated retained-presentation backend exists. |
-| 3 | `PRES-S-CAPACITY` | Caller-owned or negotiated capacity cannot admit the operation. |
-| 4 | `PRES-S-STALE` | The scope, source revision, or activation binding is no longer current. |
-| 5 | `PRES-S-INVALID` | An argument, descriptor, alias, state transition, or callback result is invalid. |
+| 0 | `PRES-S-OK` | The host operation or projection was accepted. |
+| 1 | `PRES-S-WOULD-BLOCK` | No downstream progress is currently possible; retry from the host loop. |
+| 2 | `PRES-S-UNAVAILABLE` | No usable negotiated retained backend or required semantic family exists. |
+| 3 | `PRES-S-CAPACITY` | Caller-owned or negotiated capacity cannot admit the projection. |
+| 4 | `PRES-S-STALE` | The UCTX, activation binding, source revision, or terminal materialization is no longer current. |
+| 5 | `PRES-S-INVALID` | An argument, semantic snapshot, storage configuration, state transition, or callback result is invalid. |
 | 6 | `PRES-S-SESSION-LOST` | The enhanced session crossed a structural loss boundary. |
-| 7 | `PRES-S-SOURCE` | A retained resource or series provider failed. |
+| 7 | `PRES-S-SOURCE` | A semantic resource or series source failed. |
 
-Status returns do not throw through an applet callback. A broker keeps a
-sticky first non-transient service error for host inspection. One failed
-scope or provider does not authorize mutation of another scope and does not
-make raw ANSI output safe after a post-`OPEN` session loss.
+These statuses do not throw through an applet callback and are not returned to
+application presentation code, because no such code exists. The UIDL host
+records the first non-transient backend error for inspection while leaving
+application state intact. One failed projection cannot authorize mutation of
+another binding, and a post-`OPEN` structural loss never makes raw ANSI output
+safe.
 
-`PRES-S-WOULD-BLOCK` is transport progress state, not local scene-capacity
-failure. A committed local update remains committed while downstream work is
-blocked. `PRES-S-CAPACITY` is fail-before-mutation.
+`PRES-S-WOULD-BLOCK` is transport progress, not local projection-capacity
+failure. Already accepted desired state remains accepted while egress is
+blocked. `PRES-S-CAPACITY` and `PRES-S-INVALID` are fail-before-mutation at
+each local admission boundary.
 
-## 3. Discovery and caller-aware acquisition
+## 4. Backend construction and caller-owned storage
 
-An applet obtains the global broker through its own live `CINST`:
-
-```forth
-S" org.akashic.tui.presentation.v1" instance CINST-SERVICE
-    ( -- broker | 0 )
-```
-
-Zero means that the composition has no retained broker, as on the baseline
-ANSI Desktop. It does not mean that a rich composition's attached hardware
-declined retained features: `desktop-apt1` still returns its broker in that
-case, and acquisition returns `PRES-S-UNAVAILABLE`.
-
-The only child acquisition operation is:
+The optional composition constructs the one internal backend with:
 
 ```forth
-PRES-SCOPE-ACQUIRE  ( caller-instance broker -- scope status )
+PRES-BACKEND-INIT     ( config backend -- status )
+PRES-BACKEND-FINI     ( backend -- status )
+PRES-BACKEND-STATUS@  ( backend -- status )
 ```
 
-Acquisition returns zero and `PRES-S-UNAVAILABLE` without consuming an owner
-record when the settled discovery result did not enable RETAINED-1. A
-supporting terminal may advertise only a subset of the optional retained
-families; acquisition then succeeds, while a batch requiring an absent
-high-level kind fails before local mutation with `PRES-S-UNAVAILABLE`.
+`config` names the internal APT adapter, the exact owning `AHOST`, and
+caller-owned spans and capacities for:
 
-Acquisition is caller-aware even though broker discovery is global. Desk must
-atomically verify all of the following before returning a nonzero scope:
-
-1. `caller-instance` is a valid live `CINST` registered in this exact Desk;
-2. its endpoint is this Desk's endpoint;
-3. it maps to one live `AHOST` child slot;
-4. the slot still names the exact `CINST.ID` and `CINST.GENERATION`;
-5. an exact existing scope can be returned idempotently, otherwise no scope
-   already owns that activation; and
-6. for a new scope, one preallocated owner record is available.
-
-The returned scope is a borrowed opaque handle. Internally it is bound to the
-exact `CINST.ID`, `CINST.GENERATION`, broker, and stable Desk presentation
-region. None of those fields has a public child accessor. Repeating acquire
-for the same live caller returns the same scope and `PRES-S-OK`; it does not
-allocate a second terminal owner.
-
-The CINST tuple is the Akashic authority binding. The broker separately maps
-it to private wire owner/generation values and may rotate those projection
-values when the wire ownership/reset contract requires it. Rotation never
-changes the child scope or grants a second Akashic activation authority.
-
-The scope is valid only until Desk begins exact-owner retirement. An applet
-may store it only in that activation's component state. It must not persist
-the handle, copy its representation into domain data, or use it after its
-shutdown callback returns.
-
-No scene operation accepts a caller instance, owner pair, sibling selector,
-or region identifier. Possession of a valid scope is the whole child-side
-authority. The normal applet API therefore has no operation with which to
-name a sibling's presentation namespace.
-
-## 4. Service construction and caller-owned storage
-
-The optional composition constructs the broker with:
-
-```forth
-PRES-SERVICE-INIT  ( config broker -- status )
-PRES-SERVICE-FINI  ( broker -- status )
-PRES-SERVICE-STATUS@ ( broker -- status )
-```
-
-`PRES-SERVICE-STATUS@` is the host-side accessor for the broker's sticky first
-non-transient service error. It does not clear the error or advance transport.
-
-`config` names the APT adapter and the following caller-owned spans and
-capacities:
-
-* activation owner records;
-* retained item records;
-* retained resource records;
-* copied definition, style, label/unit text, and polyline-point bytes;
-* copied dynamic value/update records;
+* live UCTX projection bindings and owner tombstones;
+* projected region, object, resource, and series records;
+* stable element/subobject-to-wire mappings;
+* copied definitions, styles, labels, unit text, vector points, and latest
+  dynamic values;
 * transaction operation records and copied transaction bytes; and
 * one resource-or-series chunk staging span.
 
-The implementation publishes exact record sizes and a configuration record
-size. Counts and byte lengths are independent. A product profile selects them
-from its intended concurrent rich applets and negotiated remote budgets; the
-generic service contains no hidden object-per-child, string, history, image,
-or resend-queue limit.
+The implementation publishes exact record and configuration sizes. Counts and
+byte lengths are independent. A product profile chooses capacity from its
+supported concurrent UCTXs and negotiated remote budgets. The generic backend
+contains no hidden objects-per-applet, strings, history, image, or resend-queue
+limit.
 
 Initialization performs a complete preflight before writing any caller byte.
 It checks:
 
-* nonzero required capacities and the validity of zero optional capacities;
+* nonzero required capacities and valid zero capacities for disabled optional
+  semantic families;
 * checked multiplication of record size by record count;
-* non-null, nonwrapping spans;
-* required alignment;
-* pairwise disjointness of the broker, configuration, every owned span, the
-  borrowed PT session, its RX/TX/event buffers, and the APT shell adapter; and
-* compatibility with the negotiated object, resource, frame, transaction,
-  history, and chunk budgets.
+* non-null, nonwrapping spans and required alignment;
+* pairwise disjointness of the backend, configuration, every owned span, the
+  borrowed PT session and its buffers, and the APT adapter; and
+* compatibility with negotiated object, resource, frame, transaction, history,
+  and chunk budgets.
 
-Any failure returns `PRES-S-CAPACITY` or `PRES-S-INVALID` without clearing,
-partially initializing, or retaining a supplied span. After successful init,
-the broker performs no heap or XMEM allocation. `STEP`, reset replay, owner
-retirement, and finalization use only these admitted spans.
+Failure returns `PRES-S-CAPACITY` or `PRES-S-INVALID` without partially
+initializing, clearing, or retaining a supplied span. After successful init,
+attach, project, relayout, detach, service, reset replay, and finalization use
+only admitted storage and perform no hidden heap or XMEM allocation.
 
-The service never archives raw frames or an unbounded change history. Retained
-item records hold the latest committed projection recipe. Pending scalar state
-coalesces in those records. A resource or sample chunk is copied into the one
-staging span only for the duration required by the transport contract.
+The backend stores the latest authoritative projection recipe, not raw frames
+or an unbounded revision history. Scalar and visibility state coalesces in the
+corresponding records. Resource and sample bytes are copied into bounded
+staging only for the synchronous interval required by their source and wire
+contracts.
 
-`PRES-SERVICE-FINI` succeeds only when no live scope remains and either every
-retirement obligation is acknowledged or the underlying session has been
-safely retired/reset such that its terminal model cannot survive. Refusal
-leaves the complete broker and storage valid for retry. It never clears an
-uncertain owner tombstone.
+`PRES-BACKEND-FINI` succeeds only when no live UCTX binding remains and every
+retirement obligation is acknowledged, or the underlying session is proven
+destroyed. Refusal leaves the complete backend and its storage valid for retry.
+It never clears an uncertain owner tombstone.
 
-## 5. Descriptor ABI
+## 5. UIDL semantic projection contract
 
-Scene mutation is descriptor based. Every public descriptor begins with an
-ABI version, exact descriptor size, descriptor kind, and zero-reserved fields.
-Each record family has a public `*-SIZE` constant and `*-INIT` word:
+### 5.1 One semantic tree, multiple output planes
 
-```text
-PRES-BATCH-DESC-SIZE       PRES-BATCH-DESC-INIT
-PRES-ITEM-DESC-SIZE        PRES-ITEM-DESC-INIT
-PRES-RESOURCE-DESC-SIZE    PRES-RESOURCE-DESC-INIT
-PRES-SERIES-DEF-DESC-SIZE  PRES-SERIES-DEF-DESC-INIT
-PRES-SCALAR-DESC-SIZE      PRES-SCALAR-DESC-INIT
-PRES-SERIES-SOURCE-DESC-SIZE PRES-SERIES-SOURCE-DESC-INIT
-PRES-VISIBILITY-DESC-SIZE  PRES-VISIBILITY-DESC-INIT
-PRES-DROP-DESC-SIZE        PRES-DROP-DESC-INIT
-```
+UIDL element semantics are backend-neutral. The existing UIDL-TUI renderer
+continues to paint the CELL/ANSI representation. The retained integration adds
+an optional projector registry keyed by UIDL element type; it does not replace
+the element's CELL render XT or introduce a second document.
 
-Unknown ABI versions, undersized records, nonzero reserved fields, unknown
-kinds, invalid enum values, arithmetic overflow, and overlapping source and
-service storage return `PRES-S-INVALID` before mutation.
+Every retained-capable semantic element or widget has:
 
-Except for an explicitly declared resource or series provider context, every
-descriptor is call-borrowed. The broker validates and copies every retained
-field before the operation returns. It never retains caller pointers to
-labels, styles, polyline points, unit text, scalar values, or update
-descriptors.
+1. a complete CELL rendering usable on baseline ANSI and CELL-1 terminals;
+2. one backend-neutral semantic snapshot contract;
+3. an optional retained projector supplied by the rich integration; and
+4. the ordinary UIDL binding, subscription, dirty, layout, focus, and event
+   behavior appropriate to that element.
 
-### 5.1 Batch descriptor
+Existing semantic elements such as containers, labels, `media`, `canvas`,
+`range`, `indicator`, and `status` may gain retained projectors where their
+meaning is sufficiently defined. New readout, meter, plot, waveform, image, or
+other rich types are added as semantic UIDL elements/widgets, with real CELL
+fallbacks. They are not raw aliases for APT opcodes or wire object families.
 
-A batch descriptor declares exact counts for item, resource, and series
-definitions; scalar, series-source, and visibility updates; and drops, plus
-the exact number of descriptor-owned bytes that must be copied. These
-declarations let `BEGIN` reserve the complete local transaction before
-accepting its first operation. A valid operation matching an admitted batch
-cannot later fail merely because a hidden staging array filled up.
+There is no generic `<presentation>` escape hatch, raw scene element, owner
+attribute, terminal ID attribute, or transaction element. A generic canvas
+does not become an arbitrary retained command stream. A richer projector is
+valid only when a semantic element defines enough backend-neutral meaning for
+both CELL and retained renderers.
 
-The first batch for a new scope also declares that owner's lifetime quotas for
-items, resources, series, immutable resource bytes, sample slots, UTF-8 bytes,
-operations per terminal transaction, and terminal transaction bytes. The
-scope has exactly one Desk-owned region, so the broker adds that required
-region reservation; the child cannot create or enlarge a region quota. The
-broker validates the complete reservation against its caller-owned remaining
-capacity and the negotiated terminal maxima. Successful first commit freezes
-it for that scope and later work may consume but not silently enlarge it. This
-lets the application select an honest product capacity without adding a
-hard-coded broker default. Scope acquisition itself has no wire side effect;
-the broker opens the private wire owner from this admitted first-scene quota.
+### 5.2 Stable identity and geometry
 
-### 5.2 Item definition descriptor
+Within one attached UCTX, the backend derives stable projection identity from
+the element's pool index and an explicit semantic subkey when one element owns
+several retained items. `id=` remains the human-facing UIDL identity and must
+be unique when supplied, but it is not hashed into wire authority.
 
-An item definition contains:
+An unchanged semantic element retains its private wire identities across value
+updates, minimize/restore, tile movement, full-frame transitions, and relayout.
+UIDL document teardown ends that identity. A new UCTX never inherits it even if
+the new document reuses every `id=` string.
 
-* a nonzero activation-local `scene-key`;
-* a zero root or existing group `parent-key`;
-* a semantic kind;
-* region-relative bounds;
-* presentation-only flags and style; and
-* kind-specific copied definition data.
+Bounds come from resolved UIDL layout relative to the owning UCTX region. The
+projector converts checked geometry to the retained profile's full `UNORM32`
+precision; it must not truncate through an incidental narrower normalized
+format. Region movement changes the private owner region. Layout changes may
+replace derived object geometry while preserving element and wire identities.
+Applications do not maintain parallel coordinates.
 
-Initial Phase 3 kinds are group, polyline, image, label, readout, meter,
-status, plot, and waveform. Closed polylines express the first vector outline
-shapes. These are high-level scene kinds, not wire opcodes.
+### 5.3 Static and dynamic state
 
-Geometry is relative to the owning Desk region or parent group. Descriptor
-coordinates use unsigned `UNORM32`: `0` is the left/top edge and
-`0xffffffff` is the right/bottom edge. Bounds are stored as left, top, right,
-and bottom with `left < right` and `top < bottom`. Polyline points are UNORM32
-relative to their object's bounds. This preserves the complete retained wire
-precision; the broker must not truncate through a narrower intermediate
-format. Desk relayout changes only the owning region's physical bounds; it
-does not rewrite item geometry or keys.
+The projector classifies semantic snapshots into:
 
-`PRES-ITEM-DEFINE` creates a missing key or replaces the complete static
-definition of an existing key of the same semantic kind. Replacing an item
-with a different kind requires an explicit drop in an earlier committed
-batch. A parent must be the root or a group in the resulting committed scene,
-and grouping must remain acyclic.
+* static definition state: kind, relationships, formatting, style, labels,
+  units, axes, immutable vector geometry, and declared capacities;
+* layout state: resolved bounds, clipping, stacking, and visibility inherited
+  from UIDL layout; and
+* dynamic state: current scalar values, status, media revision, series source
+  revision/history, and ordinary element visibility.
 
-### 5.3 Resource definition descriptor
+These revisions are tracked separately. A scalar, status, or sample-only UIDL
+update cannot mark an unchanged static definition dirty. Relayout cannot mint
+new item identities. Reset invalidates terminal materialization, not the
+classification or UCTX identity.
 
-A resource definition contains a nonzero activation-local resource key,
-resource format, width, height, exact byte length, SHA3-256 content digest,
-source revision, and a bounded pull provider. Retained-1 format 1 is raw
-row-major sRGB straight-alpha RGBA8 with no row padding, and byte length is
-checked `width * height * 4`. Items refer to the activation-local resource key;
-they never receive a terminal resource ID.
+UIDL dirtying is the only ordinary projection trigger. Applets update bound
+state or semantic widget state and use the existing `UIDL-DIRTY!` path. They do
+not separately notify the retained backend. The projector must still compare
+semantic revisions so a conservatively dirtied ancestor cannot cause unchanged
+definitions to be retransmitted.
 
-The resource provider contract is:
+### 5.4 Semantic resources and series
 
-```forth
-read  ( offset max-bytes destination destination-u expected-revision context
-        -- produced status )
-```
+Image/media and series data belong to their semantic UIDL widget models. Their
+snapshot APIs are backend-neutral and usable by CELL renderers, retained
+projectors, tests, or future output backends. Application code may populate
+those ordinary models; it never implements an APT callback or passes a terminal
+descriptor.
 
-The provider writes at most `max-bytes` contiguous bytes beginning at the
-exact requested offset into broker-owned staging. It is bounded,
-nonallocating, nonreentrant, and returns stale without output when the
-requested revision is no longer authoritative. The broker retains no returned
-resource pointer. A successful callback must make progress: `produced` is
-positive unless the exact requested offset is already the declared byte
-length, and zero before that point is `PRES-S-SOURCE`. During ordinary
-operation the application keeps the exact resource bytes reproducible until
-it commits a replacement, drops the resource, or enters the synchronous
-shutdown/retirement interval described for series providers below.
+A resource snapshot contains semantic format, dimensions, exact byte length,
+content digest, monotonically increasing source revision, and a bounded pull
+source. The first retained image format is raw row-major sRGB straight-alpha
+RGBA8 with no row padding; byte length is checked `width * height * 4`. The
+backend calls the source only into its owned staging span, copies or consumes
+output before return, and retains no returned byte pointer.
 
-The image format and dimensions must fit the negotiated terminal
-profile and the local chunk/storage configuration. Replacing a resource is
-atomic at its resource key. A failed or interrupted transfer leaves the last
-committed terminal resource usable until replacement commits, or causes a
-new-epoch replay after reset.
+A series snapshot declares semantic sample format, timestamp mode, capacity,
+current count, time-axis metadata, monotonically increasing source revision,
+and a bounded pull source. The source writes complete records into backend-owned
+staging, makes positive progress until the declared count is exhausted, returns
+stale without output for an obsolete revision, performs no allocation or
+blocking work, and never calls back into UIDL or the backend.
 
-That high-level replacement never reuses or replaces a wire resource ID. The
-broker allocates a fresh strictly increasing wire ID in the same private owner
-generation, uploads the complete candidate, and first obtains its successful
-digest-checked `RESOURCE_COMMIT`. It then atomically `OBJECT_REPLACE`s every
-surviving image reference from the old ID to the new ID in one presentation
-transaction. Only after that transaction succeeds does it `RESOURCE_DROP` the
-now-unreferenced old ID. The broker retains the old materialized mapping and
-model throughout a failed provider read, upload, digest commit, or object
-transaction, so the previous image remains visible. The scope's frozen
-resource-count and byte quotas must cover the declared peak old/new overlap;
-insufficient overlap capacity rejects the replacement before local mutation.
+The semantic widget must keep the exact current revision reproducible while its
+UCTX is live and that revision remains current. A newer widget revision
+supersedes incomplete old work at a transaction-safe boundary. The backend may
+pull a source in bounded chunks, but terminal publication of one semantic
+history remains atomic under the admitted transaction bounds.
 
-### 5.4 Scalar descriptor
+Resource replacement uses a fresh increasing private wire resource ID, uploads
+and digest-commits the candidate, atomically replaces surviving references,
+then drops the old unreferenced resource. The previous terminal resource remains
+authoritative through any failed read, upload, digest, or replacement. Admitted
+capacity includes the required old/new overlap.
 
-A scalar update contains an existing readout, meter, or status item key and
-one signed 64-bit value. Readout formatting/scale/unit, meter range, and status
-shape/colors are static definition fields. The scalar record and value are
-copied before return and retain no applet scratch pointer. Meter values outside
-the statically declared range are rejected before commit.
+The backend quiesces every retained source context synchronously before the
+host calls arbitrary application shutdown or frees application state. No source
+callback is permitted after quiesce succeeds.
 
-The newest committed scalar for an item property is authoritative. The broker
-may coalesce an older unsent value with a newer committed value, but it may not
-cross an owner generation or reorder around an item definition/drop.
+## 6. Generic UCTX lifecycle
 
-### 5.5 Series definition, source, and provider
-
-A series definition contains a nonzero activation-local series key, positive
-history capacity, timestamp mode, and uniform interval where applicable. A
-plot or waveform item definition names that series key. The broker maps it to
-a terminal series identity internally. Definition capacity must fit both the
-caller's reserved sample policy and the negotiated terminal history bound.
-
-A series-source update installs the current complete replayable history for an
-existing series. It contains the series key, a nonzero monotonically
-increasing source revision, exact current sample count, matching timestamp
-mode/time-axis metadata, and one provider XT/context pair.
-
-The provider contract is:
+Only the UIDL host calls the retained lifecycle surface:
 
 ```forth
-read  ( first max-count destination destination-u expected-revision context
-        -- produced status )
+PRES-HOST-BINDING-SIZE  ( -- bytes )
+PRES-HOST-BINDING-INIT  ( host-binding -- )
+
+PRES-UCTX-ATTACH    ( host-binding backend -- binding-token status )
+PRES-UCTX-PROJECT   ( binding-token backend -- status )
+PRES-UCTX-RELAYOUT  ( visible region binding-token backend -- status )
+PRES-UCTX-QUIESCE   ( binding-token backend -- status )
+PRES-UCTX-DETACH    ( binding-token backend -- status )
 ```
 
-The broker owns `destination` and calls the provider only from bounded
-`PRES-SERVICE-STEP`. `max-count` is derived from the caller-owned staging span
-and the negotiated message limit. Samples are signed 64-bit values; explicit
-timestamp mode writes complete timestamp/value records and uniform mode writes
-values for the declared first timestamp and interval. `first` is the
-zero-based index into the descriptor's complete current history. The provider
-must:
+`host-binding` is an immutable, call-borrowed descriptor containing ABI
+version, exact size, zero-reserved fields, the exact `AHOST` and `AHS` slot
+addresses, captured nonzero `AHS.ID`, exact CINST address and captured nonzero
+`CINST.ID`/`CINST.GENERATION`, exact UCTX address, and exact current region.
+The backend never retains the descriptor address. It validates and copies the
+complete authority tuple, then returns one opaque nonzero internal token.
 
-* perform bounded, nonblocking work without allocation;
-* write exactly `produced` complete samples into `destination`;
-* return `produced <= max-count`;
-* return a positive `produced` until the declared sample count is exhausted;
-* return `PRES-S-STALE` without output if `expected-revision` is no longer
-  authoritative; and
-* never call back into the broker.
+The token names a backend-owned record and an exact nonreusable binding
+generation; it is not a naked binding-record address. It is valid only with the
+backend that issued it and is stored only in host-private slot state. Every
+later call validates the token/backend/generation and revalidates that the host
+still contains the exact live slot, `AHS.ID`, CINST pointer and generation, and
+UCTX before dereferencing UCTX or application-owned state. A foreign backend,
+unlinked or reused slot, changed activation generation, changed UCTX, or stale
+token returns `PRES-S-STALE` without mutation.
 
-The broker copies the produced samples before the callback returns and retains
-no sample pointer. It may retain the provider XT/context only while the exact
-scope is serviceable. During ordinary operation the application must keep the
-source capable of reproducing the descriptor's complete declared history
-until it commits a newer revision or the scope is retired. This is what makes
-reset replay possible without a shadow raw-frame archive. Applet shutdown is
-a synchronous quiescent interval: Desk performs no broker `STEP` during the
-callback and immediately retires the exact scope afterward, so a shutdown may
-destroy its source before returning without creating a callback race.
+A composition-owned root UCTX, if present, must have a real composition-owned
+host slot and activation satisfying the same descriptor and validation; zero
+or invented host authority is not a special case. There is no
+application-callable variant and no returned application scope.
 
-A newer committed series-source descriptor supersedes an incomplete older
-transfer. The broker aborts the obsolete terminal replacement at a transaction
-boundary and starts the newest revision. It does not retransmit the plot's
-static axes, style, label, or bounds merely because samples changed.
+### 6.1 Attach
 
-The broker may pull one source in several bounded local chunks, but it stages
-the complete series mutation before emitting `PRESENT_BEGIN`. A history larger
-than one wire sample payload becomes one `SERIES_REPLACE` followed by ordered
-`SERIES_APPEND` operations inside the same presentation transaction. The
-declared sample count must therefore fit the scope's frozen operation/byte
-quota and the negotiated maxima for one atomic transaction; otherwise the
-batch fails before local mutation with `PRES-S-CAPACITY`. No terminal-visible
-partial history is published.
+Attach occurs after the UCTX document is loaded and its host slot and region
+exist. The backend verifies that its configured host is the descriptor host;
+the slot is linked exactly once, live, and has the captured `AHS.ID`; the slot's
+instance is the exact CINST pointer with matching live ID/generation; and its
+UCTX and region are the exact descriptor values. Repeating attach with the
+complete exact tuple returns the same live binding token idempotently. Reusing
+a UCTX, slot, or CINST component with a different tuple is stale or invalid.
 
-### 5.6 Visibility and drop descriptors
+Attach reserves one preallocated binding record but has no wire side effect.
+The first projection, after normal application initialization and binding,
+walks the complete semantic tree, validates all retained-capable snapshots,
+derives exact quotas, and admits the owner atomically. Required counts, byte
+capacities, resource overlap, series history, and transaction operation/byte
+bounds must all fit local storage and negotiated terminal maxima before
+`OWNER_OPEN` is emitted.
 
-A visibility update changes only an existing item's visible property. An item
-drop removes the named item and, for a group, its complete descendant subtree.
-A resource or series drop is admitted only when the resulting committed scene
-has no reference to it. The drop descriptor names its high-level namespace
-(item, resource, or series) and activation-local key.
+The owner reservation is frozen for that UCTX materialization. Dynamic values
+may vary within declared semantic capacities but cannot silently enlarge them.
+If the tree later changes structurally beyond admission, retained projection
+reports capacity and keeps the prior coherent terminal model; CELL rendering
+continues from the authoritative UIDL tree.
 
-Owner retirement is not expressed with a child-created drop descriptor. It is
-a Desk host operation over the exact acquired scope.
+Unavailable retained discovery or an unsupported optional semantic family
+does not prevent attach or application initialization. The binding remains a
+CELL-fallback binding with no wire owner until a complete supported projection
+can be admitted.
 
-## 6. Local transaction API
+### 6.2 Project
 
-The child-side mutation surface is exactly:
+Project runs with the token's exact UCTX active after normal UIDL binding updates and
+layout. It walks dirty semantic elements through the retained projector
+registry, captures complete snapshots into admitted backend storage, validates
+the resulting graph, and stages desired retained changes. It never asks an
+applet to enumerate a second scene.
+
+Local projection admission is atomic. A failure leaves the previous copied
+projection recipe and terminal model authoritative while UIDL and CELL state
+remain untouched. A successful projection records the newest desired state for
+bounded later publication. No protocol byte is emitted from an element or
+widget callback.
+
+One ordinary projected UIDL update must fit one admitted presentation
+transaction. Initial construction, reset replay, and relayout reconstruction
+may use the wire profile's hidden bounded multi-transaction build followed by
+one reveal. The backend never exposes a partially rebuilt UCTX merely to evade
+an admitted bound.
+
+### 6.3 Relayout and visibility
+
+Relayout runs after ordinary UIDL layout has resolved the UCTX. `region` is the
+current root Akashic region and `visible` is the host's actual minimize/restore
+state. Moving or resizing a tile updates the owner region and derived layout
+without changing semantic element or resource identities.
+
+A hidden UCTX needs no fabricated geometry. While hidden, the backend sends no
+ordinary scalar, series, or resource updates for it. UIDL/widget changes still
+advance the copied desired state; scalars coalesce and series retain the newest
+complete reproducible revision. Restore publishes one coherent latest view,
+reusing static definitions unless they changed or terminal materialization was
+lost.
+
+For a UCTX whose retained projection is unavailable, relayout is an idempotent
+successful no-op. A transient refusal is retained as a backend diagnostic and
+retried from the newest UIDL geometry. It does not roll back Desk layout or
+force an unsafe transport fallback.
+
+### 6.4 Pre-shutdown quiesce
+
+Quiesce is host-owned and must run before arbitrary `APP.SHUTDOWN` for every
+successfully attached binding. It makes the token unavailable to project and
+relayout, synchronously detaches every semantic resource/series source XT and
+context, aborts or converts dependent local staging into source-free state, and
+records the exact allocation-free retryable owner-drop obligation. It retains
+no callback or application-state pointer that shutdown may free.
+
+Quiesce may return `PRES-S-OK` while terminal egress or an owner-drop result is
+pending because the bounded tombstone is independent of the UCTX. It may not
+return OK unless local callback detachment is proven. On any other status the
+host must not call `APP.SHUTDOWN` or free application/widget/source state; it
+must preserve the live tuple and retry or enter coordinated terminal teardown.
+Repeated quiesce for the exact token is idempotent.
+
+### 6.5 Detach
+
+Final detach is host-owned and runs after application shutdown, but before
+`UTUI-DETACH`, `UCTX-FREE`, `CINST-FREE`, region free, or host-slot reuse. It
+uses only the exact token and quiesced source-free binding; it never calls
+application code or a semantic source.
+
+Detach is allocation-free and atomically:
+
+1. makes the binding stale for project and relayout;
+2. verifies quiesce removed every source XT/context, then removes all borrowed
+   UCTX, widget, CINST, host-slot, and region pointers from pending state;
+3. aborts local staging and obsolete in-flight replacement work;
+4. records the exact owner-wide terminal drop obligation in the binding record;
+   and
+5. releases projection storage the tombstone no longer needs.
+
+Once that local transition succeeds, detach returns `PRES-S-OK` even if egress
+is blocked. The host may then detach/free the UCTX, CINST, region, and slot. The
+backend retains only the private wire owner/generation and bounded drop
+progress; it contains no pointer back into those freed objects.
+
+Detach is idempotent. A binding record becomes reusable only after exact owner
+drop is acknowledged or a confirmed epoch/session destruction proves that the
+terminal model cannot survive. A UCTX that never materialized a retained owner
+creates no wire tombstone.
+
+## 7. Frame projection and atomic publication
+
+UIDL-TUI CELL painting remains the universal path. In the rich composition,
+painting a dirty attached UCTX also stages its retained projection. The global
+screen flush and internal retained backend then serialize through the one APT
+presentation publisher and the one shared transaction-ID/revision clock.
+
+When one logical UI frame changes both CELL and retained state, the rich
+publisher commits the applicable CELL spans/cursor and retained operations in
+one atomic `PRESENT` transaction. A failed combined commit cannot advance the
+screen front buffer or the retained materialization independently. A frame
+with no retained changes remains an ordinary valid CELL transaction; a
+retained-only update may use `CELL_NONE` under the wire recovery rules.
+
+The backend serializes dependencies before references and preserves static
+definition/drop ordering. It may coalesce superseded scalar, visibility, and
+complete source revisions before publication. It may not coalesce across owner
+generation, reorder around definition/drop, invent series samples, or split an
+ordinary semantic update into terminal-visible partial state.
+
+The CELL representation remains complete even when a retained counterpart is
+visible. Retained projection may enrich, overlay, or replace physical treatment
+inside its owned region according to the renderer contract, but loss or absence
+of the optional plane leaves a usable UI rather than a blank reserved area.
+
+## 8. Bounded backend service and cadence
+
+Only the terminal/Desk owner loop advances publication:
 
 ```forth
-PRES-BATCH-BEGIN     ( batch-desc scope -- status )
-PRES-ITEM-DEFINE     ( item-desc scope -- status )
-PRES-RESOURCE-DEFINE ( resource-desc scope -- status )
-PRES-SERIES-DEFINE   ( series-def-desc scope -- status )
-PRES-SCALAR-SET      ( scalar-desc scope -- status )
-PRES-SERIES-SET      ( series-source-desc scope -- status )
-PRES-VISIBILITY-SET  ( visibility-desc scope -- status )
-PRES-DROP            ( drop-desc scope -- status )
-PRES-BATCH-COMMIT    ( scope -- status )
-PRES-BATCH-ABORT     ( scope -- status )
-PRES-SCOPE-STATUS@   ( scope -- status )
+PRES-BACKEND-STEP  ( work-budget backend -- status more-work? )
 ```
 
-Only one batch may be open per scope. Calls are not reentrant. `BEGIN`
-validates the batch declaration and reserves its complete local staging.
-Operations must match the declared counts and copied-byte total exactly.
+`work-budget` is a positive host-selected number of logical operations or
+source chunks. The backend performs at most that work, services live UCTX
+bindings fairly, and returns truthful quiescent, more-work, backpressure, or
+structural status. It never spins until credit appears, waits for a response,
+allocates a resend buffer, recursively pumps Desk, or calls `PT-SERVICE` as a
+second session owner.
 
-No operation emits protocol bytes. `COMMIT` first validates the complete
-resulting owner scene and then atomically replaces the broker's local retained
-state. On success it marks the affected definitions/properties/sources dirty
-for later `STEP` and returns without waiting for terminal capacity or an ACK.
-On failure the previously committed scene is unchanged.
+Fairness applies at protocol-safe boundaries. Once the session-global immutable
+resource upload is open, it completes or aborts before another upload,
+transaction, or lifecycle request begins. A large image or series cannot
+permanently starve current scalar/readout changes in other UCTXs.
 
-Except for immutable resource uploads that are staged while still
-unreferenced, one ordinary committed batch must serialize into one atomic
-presentation transaction under the frozen per-scope and negotiated
-operation/byte bounds. Initial, reset, and resize reconstruction may use the
-wire protocol's hidden bounded multi-transaction rebuild followed by one
-reveal. An ordinary child update is never split into terminal-visible partial
-commits merely to evade a declared bound.
+Physical presentation cadence is a renderer policy over committed global
+revisions, not an application API. UIDL/widget updates retain their own domain
+timestamps; cadence never invents sample timing. Input is delivered only
+against a physically presented revision as required by RETAINED-1.
 
-`ABORT` discards the local staged batch and is idempotent. A non-OK result from
-an operation leaves the batch open but poisoned; only `ABORT` may follow. A
-call after scope retirement returns `PRES-S-STALE` without dereferencing an
-applet-owned provider context.
+## 9. Composition and host order
 
-Static item/resource/series definitions and dynamic scalar/series-source/
-visibility state are tracked separately. A scalar or sample-only commit cannot
-mark an unchanged static definition dirty. This separation is a functional
-contract, not merely a transport optimization.
+`tui/desk-apt1.f` is the sole production rich composition root. It constructs
+the PT session, CELL adapter, and caller-owned retained backend, then injects
+the backend only into the generic UIDL host integration. The baseline
+`desktop` profile does not load the APT retained implementation or construct
+this backend.
 
-## 7. Bounded broker service
+The composition settles retained discovery before launching hosted UCTXs. A
+negative or partial result selects stable CELL-only projection for unsupported
+semantics; applet initialization does not poll terminal features and sees no
+different service table.
 
-Only the Desk owner loop advances the global broker:
+The host lifecycle order is:
 
-```forth
-PRES-SERVICE-STEP  ( work-budget broker -- status more-work? )
-```
+1. allocate/register the activation, UCTX, and region;
+2. load UIDL and perform initial layout;
+3. build the immutable exact host-binding descriptor, attach internally, and
+   store the returned token only in host-private slot state;
+4. run ordinary application initialization and state/widget binding;
+5. paint CELL and project retained semantics from the same active UCTX;
+6. publish through the shared frame transaction;
+7. on geometry change, run UIDL relayout then retained relayout;
+8. before `APP.SHUTDOWN`, quiesce retained sources and record retryable
+   retirement, refusing shutdown if callback detachment is not proven;
+9. run application shutdown, then final retained detach while the exact host
+   tuple is still live; and
+10. detach/free UIDL, UCTX, activation, region, and host slot.
 
-`work-budget` is a positive caller-selected number of logical operations or
-provider chunks. The broker performs at most that much work, services scopes
-fairly, and returns:
+The host must save a mutated active UCTX before switching away. Retained
+projection cannot depend on unsaved global UIDL pools belonging to some other
+active child. It either runs while the exact UCTX is active or reads a validated
+saved snapshot through UCTX-owned accessors.
 
-* `PRES-S-OK false` when quiescent;
-* `PRES-S-OK true` when the budget ended with more admissible work;
-* `PRES-S-WOULD-BLOCK true` when downstream capacity prevented progress; or
-* a structural status and a truthful `more-work?` for inspection/recovery.
+## 10. Reset, replay, and loss
 
-`STEP` never spins until credit appears, waits for a terminal response,
-allocates a resend buffer, or recursively pumps Desk. It attempts at most one
-bounded staged resource/series chunk at a time. Protocol bytes remain ordered
-and lossless within the negotiated PT transport bounds.
+The backend privately tracks session identity and presentation epoch. A
+successful soft reset invalidates terminal materialization and private wire
+identities, not live UCTX attachments.
 
-The broker retains latest state, not every submitted renderer revision.
-Scalar and visibility updates may coalesce. Definition/drop ordering and
-series history may not be weakened. Round-robin service prevents one large
-image or waveform from permanently starving other live readouts.
+On an accepted reset boundary, the backend:
 
-Fairness applies at protocol-safe boundaries. Once the broker opens the one
-session-wide immutable-resource upload, it completes or explicitly aborts that
-upload before starting a transaction, lifecycle request, or another upload;
-it does not interleave chunks from another scope.
+1. abandons old-epoch transmission and chunk progress;
+2. marks every live region, resource, definition, layout property, and dynamic
+   property as not materialized;
+3. clears only tombstones whose old terminal model is now proven absent;
+4. obtains or retains a complete current semantic snapshot for each visible
+   live UCTX; and
+5. schedules hidden reconstruction and atomic reveal through new private wire
+   owners.
 
-The APT shell owner remains the sole component that services the underlying
-PT session and owns terminal input. `PRES-SERVICE-STEP` consumes the already
-owned session through its internal adapter; it does not call `PT-SERVICE` a
-second time and does not compete for UART bytes.
+Replay order per UCTX is region, immutable resources, series definitions,
+static groups/objects, layout, current scalars/status/visibility, current
+complete series history, then reveal. Dependencies precede references. A reset
+during resource or series transfer restarts that transfer from zero in the new
+epoch.
 
-## 8. Desk composition, geometry, and visibility
+Copied static and latest dynamic recipes may be used when their UCTX and source
+revisions are still exact. Otherwise the generic projector regenerates them
+from the authoritative live UCTX. No terminal model or raw frame archive is
+authoritative. Hidden UCTXs defer replay until restore; detached UCTXs are
+never replayed.
 
-`tui/desk-apt1.f` is the only production composition root. It constructs the
-PT session and cell adapter, initializes the caller-owned broker, injects the
-broker into Desk's existing global service table, and runs the ordinary Desk.
-The baseline `desktop` profile does not load `presentation-terminal.f`, the
-APT broker implementation, or `desk-apt1.f`.
+CELL snapshot reconstruction and retained reconstruction are separate dirty
+obligations sharing one session epoch. Clearing the CELL snapshot latch cannot
+clear retained replay. A structural loss after binary `OPEN` freezes ordinary
+publication and follows APT quarantine; it never selects raw ANSI on the same
+uncertain attachment.
 
-The service identifier, opaque broker/scope ABI, status values, descriptor
-builders, and application-facing wrappers live in a backend-neutral interface
-module with no PT, UART, or APT implementation dependency. SoundLab may depend
-on that interface in every composition. Only `desktop-apt1` loads and
-constructs the APT-backed broker behind it.
+## 11. Phase boundary and completion
 
-The APT owner completes the deterministic retained capability query before
-Desk invokes any hosted applet `INIT-XT`. The broker is therefore already in
-one of two stable acquisition states when SoundLab initializes: supported, or
-`PRES-S-UNAVAILABLE`. Production applets do not poll acquisition or impose an
-arbitrary retry count. A lower-level query-in-progress state may return
-`PRES-S-WOULD-BLOCK`, but the composition must settle it before launching a
-retained consumer.
+UIDL/UCTX integration is Phase 3, not deferred work. Phase 3 does not ship an
+application-facing retained broker as a bridge and does not require any applet
+to maintain terminal-specific presentation state.
 
-Desk performs caller-aware scope acquisition after the child `CINST` is
-registered and its first `RGN` exists. The presentation region identity is
-stable for the acquired scope's lifetime and is independent of `AHS.ID` and
-the `RGN` pointer.
+The first complete vertical uses the same UIDL document and ordinary semantic
+widget APIs in baseline ANSI and rich Desktop compositions. Without applet APT
+imports or direct scene calls, it must demonstrate:
 
-After every tile, full-frame, terminal-resize, minimize, and restore relayout,
-Desk invokes the host-only broker operation:
+* complete CELL fallback;
+* automatic UCTX attach and exact owner admission;
+* retained semantic definitions derived from UIDL;
+* dynamic bound-state updates without retransmitting unchanged definitions;
+* stable element/object identities across relayout and minimize/restore;
+* atomic CELL plus retained publication where both change;
+* reset reconstruction from live UCTX semantics; and
+* allocation-free detach and exact owner retirement before UCTX free.
 
-```forth
-PRES-HOST-BOUNDS!  ( row col height width visible caller-instance broker
-                     -- status )
-```
+Qualification may use focused semantic fixtures while the backend is being
+built, but closure requires an unchanged production UIDL path rather than a
+handwritten applet projection. No particular applet is built into this
+architecture or protocol contract.
 
-Visible bounds are the current Akashic `RGN` bounds. A minimized or otherwise
-hidden live child is published with `visible = false`; no fabricated geometry
-is required. This operation changes only the owner's region bounds/visibility.
-Every retained item and resource key remains stable.
+Image/resource lifecycle remains part of Phase 3 closure when the composition
+advertises that semantic family. A stock image can qualify codec mechanics but
+cannot replace the generic UIDL media lifecycle, fallback, reset, and detach
+journey.
 
-For a live child that has not acquired a scope, `PRES-HOST-BOUNDS!` is an
-idempotent `PRES-S-OK` no-op. Later acquisition reads that slot's current Desk
-region and visibility before admitting the first scene.
-
-While a scope is hidden, the broker sends no ordinary scalar, sample, or
-resource updates for it. Committed application changes still update the local
-retained descriptors. Scalars coalesce to the newest value. A series retains
-only its newest complete replayable source revision/history. On restore, the
-broker publishes the newest coherent dynamic state; it retransmits static
-definitions only if the terminal lost them or they actually changed.
-
-Relayout refusal is retained as a broker diagnostic and retried from the
-latest Desk geometry. It does not roll back the cell layout or force an ANSI
-fallback.
-
-Desk calls `PRES-SERVICE-STEP` after child ticks, so a same-tick committed
-applet update is eligible for bounded publication. The ordinary APT shell
-service still runs first to advance acknowledgements, input, and reset state.
-
-## 9. Exact owner retirement
-
-Applet shutdown remains application-owned. Presentation retirement is
-Desk-owned and is attempted even if the applet shutdown callback throws. Desk
-invokes this host-only operation before freeing the `CINST`, its state, UIDL
-context, or region:
-
-```forth
-PRES-HOST-RETIRE  ( caller-instance broker -- status )
-```
-
-For a live child that never acquired a scope, retirement is an idempotent
-`PRES-S-OK` no-op. It does not create a tombstone.
-
-Scope acquisition reserves an owner record that can become its own retirement
-tombstone. Therefore retirement of a valid live owner requires no allocation
-and cannot fail for lack of queue capacity. It atomically:
-
-1. marks the scope stale for every child operation;
-2. detaches all resource and series provider XT/context pairs so no later
-   callback can touch applet state;
-3. aborts any open local batch and obsolete in-flight owner replacement;
-4. records an exact owner-wide terminal drop obligation in the same owner
-   record; and
-5. releases item, resource, copied-value, and definition storage that the
-   tombstone no longer needs.
-
-Once this local transition succeeds, `PRES-HOST-RETIRE` returns
-`PRES-S-OK` even if terminal egress is currently blocked. Desk may then free
-the child. The broker retains only the exact internal owner/generation and
-drop progress required to finish remotely; it retains no `CINST`, `RGN`, PCM,
-or UIDL pointer.
-
-Retirement is idempotent. An exact repeated call returns `PRES-S-OK`. A stale
-or different activation cannot adopt, clear, or replace the tombstone. The
-owner record becomes reusable only after the exact owner-wide drop is
-acknowledged or a confirmed epoch/session reset proves that the old terminal
-model was destroyed.
-
-During complete Desk teardown all children undergo the same transition. The
-broker storage remains live through APT session close. Only a synchronized
-successful close or external hard attachment reset permits final tombstone
-clear and `PRES-SERVICE-FINI`. A refused or structurally lost close retains
-the broker beside the quarantined APT owner for retry; it is never raw-freed.
-
-## 10. Global reset and replay
-
-The broker privately tracks the PT session identity and presentation epoch.
-A terminal soft reset does not invalidate live child scopes. It invalidates
-only their terminal materialization.
-
-On any accepted epoch/session reset, the broker:
-
-1. abandons old-epoch transmission and resource/series chunk progress;
-2. marks every live region, resource, static definition, and dynamic property
-   as not materialized;
-3. clears tombstones whose exact old terminal model is now proven absent; and
-4. schedules a complete replay of every visible live scope.
-
-Replay order for each scope is region, immutable resources, series definitions,
-static groups/objects, current scalar and visibility state, current complete
-series history, then an atomic terminal commit. Dependencies are satisfied
-before references. A reset during a resource or series transfer restarts that
-transfer from offset or sample zero in the new epoch.
-
-Static definitions are replayed from the broker's copied Akashic-side scene
-recipe. Scalars are replayed from copied latest values. Series are replayed by
-bounded pulls from the still-live current provider revision. No terminal model
-or raw wire archive is authoritative.
-
-Hidden scopes defer replay until restore. Retired scopes are never replayed.
-A session loss after the binary switch returns `PRES-S-SESSION-LOST`, freezes
-ordinary broker publication, and follows the existing APT quarantine rule; it
-does not select raw ANSI output.
-
-Cell snapshot reconstruction and retained-scene reconstruction are separate
-dirty/replay obligations. Clearing the CELL-1 snapshot latch cannot clear or
-satisfy retained replay.
-
-## 11. First production consumer: SoundLab
-
-SoundLab is the first Phase 3 consumer because its displayed signal is the
-same bounded PCM used by its analyzer, WAV publication, and AudioOut path. It
-is not demonstration-only graph data.
-
-SoundLab retains its existing UIDL and cell painting unchanged. During
-`SOUNDLAB-INIT-CB` it performs ordinary domain initialization and initial PCM
-render, discovers the global broker from its own instance, and attempts
-`PRES-SCOPE-ACQUIRE`. Broker absence on baseline Desktop, or
-`PRES-S-UNAVAILABLE` from the rich broker after a declined feature query,
-leaves the scope zero and the existing cell UI fully functional. SoundLab does
-not poll because `desktop-apt1` settles the query before applet init. A
-successful acquisition followed by `PRES-S-UNAVAILABLE` for a missing VECTOR,
-INSTRUMENT, or SERIES family likewise aborts only the retained-scene batch and
-keeps the cell UI. A capacity or invalid result is an observable rich-profile
-composition error but must not corrupt PCM or disable the cell fallback.
-
-Its first committed retained scene contains:
-
-* one root group;
-* a static polyline frame, axes, labels, and frequency landmarks;
-* frequency, amplitude, duration, peak, RMS, pitch, centroid, and playback
-  readouts;
-* peak/RMS meter state; and
-* one waveform whose source reads the current committed PCM.
-
-Static keys and definitions are committed once. A parameter edit updates
-parameter/status values and waveform visibility. Only a successful
-SoundLab render commit installs a new waveform source revision and the
-matching peak/RMS/pitch/centroid values. A failed candidate render cannot
-publish partial metrics or samples. Playback changes update only the playback
-status/readout.
-
-The waveform provider reads SoundLab's current authoritative bounded PCM into
-the broker's staging span. It returns stale if the requested revision no
-longer matches. It does not expose or lend the PCM pointer. When the admitted
-series history is smaller than the PCM, SoundLab supplies a deterministic
-full-span min/max envelope projection that preserves sample order and extrema;
-this changes only the presentation series, never the authoritative PCM used by
-save/play/analyze. Reset replay regenerates that exact current projection.
-
-SoundLab does not retire its own owner. Its shutdown callback may free normal
-application resources because the Desk owner loop is nonreentrant; Desk then
-immediately executes allocation-free `PRES-HOST-RETIRE` before any later
-broker step or `CINST` free. No provider callback is permitted after that
-retirement transition.
-
-The first vertical is complete when a real Desk-hosted SoundLab can update its
-readouts and waveform without retransmitting unchanged axes, labels, styles,
-or geometry. Image support remains part of Phase 3 closure, but a stock image
-or synthetic documentation fixture is not a substitute for a real app-owned
-resource.
-
-## 12. Phase boundary: UIDL remains Phase 4
-
-Phase 3 uses a handwritten SoundLab projection controller over this service.
-It does not add a UIDL element, bind a scope to `UCTX`, or make UIDL lifecycle
-the presentation owner.
-
-The generic `<presentation>` host widget, reactive state bindings, UCTX-owned
-scene teardown/replay, and semantic `<readout>`, `<meter>`, `<plot>`, `<image>`,
-and `<status>` widgets are Phase 4. Existing `<canvas>`, `<media>`, `<indicator>`,
-`bind=`, subscription, and dirty mechanisms do not become retained terminal
-objects merely because the broker exists.
-
-Raw UIDL elements that mirror wire primitives or opcodes are not introduced.
-Phase 4 must consume this same high-level scope/descriptor API rather than
-creating a parallel terminal ownership model.
-
-## 13. Initial conformance cases
+## 12. Initial conformance cases
 
 The lightweight contract suite must prove:
 
-1. baseline Desktop has no broker while `desktop-apt1` exposes exactly one
-   global broker through the existing endpoint even when retained discovery is
-   negative; negative acquisition is `PRES-S-UNAVAILABLE` and consumes no owner
-   record;
-2. on a supporting terminal, two live child instances discover that same
-   broker but acquire distinct opaque scopes bound to their exact
-   `CINST.ID`/`CINST.GENERATION`;
-3. an unregistered, closed, foreign-Desk, or stale caller is rejected without
-   consuming an owner record;
-4. configuration overflow, wrap, misalignment, overlap, and negotiated-budget
-   mismatch fail before changing any supplied storage;
-5. descriptors, labels, unit text, styles, points, and scalar values are
-   copied, so caller mutation after return cannot alter committed state;
-6. one static definition batch followed by scalar and series updates emits no
-   duplicate unchanged definitions;
-7. a series provider is pulled only in bounded chunks, rejects a stale
-   revision, and is never called after retirement;
-8. an exact `STEP` budget is honored and downstream `WOULD-BLOCK` causes no
-   spin, loss, reordering, or hidden allocation;
-9. minimize suppresses ordinary output, coalesces latest state, and restore
-   publishes one coherent current state;
-10. relayout changes region bounds while item/resource identities remain
-    stable;
-11. reset during an incomplete series/resource transfer rebuilds the complete
-    visible scene from current Akashic state;
-12. shutdown failure still creates an allocation-free exact-owner tombstone
-    before `CINST` free, and retry/ACK/reset releases only that tombstone; and
-13. SoundLab remains fully usable through ANSI when broker discovery or
-    retained negotiation is unavailable.
+1. baseline Desktop constructs no retained backend, while rich Desktop owns
+   exactly one internal session backend that is absent from every application
+   service lookup;
+2. negative retained discovery leaves the same UIDL documents fully usable
+   through CELL/ANSI and creates no wire owner;
+3. two live UCTXs attach to the same backend through immutable exact
+   host/slot/CINST/UCTX descriptors but receive distinct generation-checked
+   private tokens and wire bindings;
+4. an unregistered, unlinked, reused, detached, foreign-host, mismatched CINST
+   generation or UCTX, foreign-backend token, or stale token is rejected without
+   consuming an owner record or mutating wire state;
+5. configuration overflow, wrap, misalignment, overlap, and negotiated-budget
+   mismatch fail before changing supplied storage;
+6. a complete semantic-tree admission derives exact quotas and rejects
+   insufficient object, resource, series, operation, or byte capacity before
+   `OWNER_OPEN`;
+7. UIDL labels, units, styles, points, scalar values, and semantic snapshots are
+   copied or revision-bound so later scratch mutation cannot change committed
+   projection;
+8. one static UIDL projection followed by scalar and series dirty updates emits
+   no duplicate unchanged definitions;
+9. resource and series sources are pulled only in bounded chunks, reject stale
+   revisions, and are never called after detach begins;
+10. an exact `STEP` budget is honored and downstream backpressure causes no
+    spin, loss, reordering, or hidden allocation;
+11. minimize suppresses ordinary retained output, coalesces latest semantic
+    state, and restore publishes one coherent current projection;
+12. relayout changes region/layout geometry while semantic and wire item
+    identities remain stable;
+13. reset during an incomplete source transfer rebuilds the complete visible
+    projection from current UCTX semantics;
+14. a frame changing CELL and retained state advances both atomically or
+    neither, including screen front-buffer bookkeeping;
+15. pre-shutdown quiesce synchronously detaches every source and creates an
+   allocation-free exact-owner tombstone; failure prevents `APP.SHUTDOWN` and
+   state free, while successful final detach scrubs all host pointers before
+   UCTX, CINST, widget state, region, or slot free; and
+16. no production applet imports APT/presentation modules, discovers a retained
+    service, stores a scope, or issues a scene operation.
 
-Full Desktop, reset, renderer, and two-hertz presentation journeys are later
-sequential qualification. They do not replace these bounded headless service
-contracts and may not justify larger hidden capacities or weakened teardown.
+Full Desktop, reset, renderer, and sustained-cadence journeys are later
+sequential qualification. They complement these bounded headless contracts and
+may not justify larger hidden capacities, weakened teardown, or an application-
+specific presentation path.

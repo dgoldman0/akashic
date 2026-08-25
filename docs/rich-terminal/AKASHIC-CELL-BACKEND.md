@@ -7,8 +7,9 @@ and a presentation backend. It does not define APT-1 byte encoding; that is
 specified by the mirrored `APT-1-WIRE.md`.
 
 The additive retained object plane is specified separately by
-`AKASHIC-RETAINED-SERVICE.md`. It composes beside this cell backend and never
-replaces the cell screen or ANSI fallback.
+`AKASHIC-RETAINED-SERVICE.md`. It projects the same UIDL state, never replaces
+the cell screen or ANSI fallback, and shares one atomic publisher with CELL
+once retained discovery succeeds.
 
 ## 1. Goal
 
@@ -154,6 +155,28 @@ The module permits only one locally committed transaction awaiting
 `TX_RESULT`. Until it succeeds, the next backend `begin` returns
 `SCB-S-WOULD-BLOCK`. A failed result maps to `SCB-S-SESSION-LOST` before any
 later application event; no optimistic pipeline or rollback is permitted.
+
+### Retained-mode publication
+
+The descriptor and flush algorithm above remain the complete ANSI and CELL-only
+contract. Before RETAINED-1 is enabled, the APT adapter uses the legacy CELL
+transaction and initial snapshot forms exactly as described.
+
+After RETAINED-1 discovery succeeds, the adapter must not independently emit a
+legacy CELL transaction or replacement snapshot. Its `begin`, `span`, and
+`cursor` calls instead stage the exact CELL enumeration in the one internal
+presentation coordinator. The UIDL retained backend stages semantic operations
+in that same coordinator. One `PRESENT_BEGIN`/`PRESENT_COMMIT` then publishes a
+CELL-only, retained-only, or mixed change under the shared transaction ID and
+revision. Accepted resize recovery uses `CELL_REPLACE` in that envelope.
+
+The screen front buffer and retained materialization advance together only
+after the complete unified commit has been accepted locally. Backpressure or a
+semantic failure leaves both prior planes authoritative, leaves screen dirty,
+and discards all staging. The one post-commit `TX_RESULT` gate blocks both CELL
+and retained publication. Clearing the screen force-snapshot latch cannot clear
+retained replay, and clearing retained dirtiness cannot advance the screen
+front buffer.
 
 Negotiation refusal, a pre-`OPEN` timeout, or an ANSI-only physical terminal
 keeps or restores the ANSI backend and is not an application error. Once
