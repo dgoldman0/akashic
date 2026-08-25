@@ -279,6 +279,10 @@ class RichTerminalProfile:
 
     guest_rx_bytes: int
     guest_tx_bytes: int
+    guest_owner_records: int
+    guest_operation_records: int
+    guest_operation_copy_bytes: int
+    guest_uidl_binding_records: int
     host_policy: RichTerminalSessionPolicy
     retained_policy: RetainedPolicy | None = None
 
@@ -289,10 +293,22 @@ class RichTerminalProfile:
             self.retained_policy, RetainedPolicy
         ):
             raise TypeError("retained_policy must be a RetainedPolicy or None")
-        for name in ("guest_rx_bytes", "guest_tx_bytes"):
+        guest_storage_fields = (
+            "guest_rx_bytes",
+            "guest_tx_bytes",
+            "guest_owner_records",
+            "guest_operation_records",
+            "guest_operation_copy_bytes",
+            "guest_uidl_binding_records",
+        )
+        for name in guest_storage_fields:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TypeError(f"{name} must be an integer")
+        for name in guest_storage_fields[2:]:
+            value = getattr(self, name)
+            if not 0 < value <= 0xFFFFFFFF:
+                raise ValueError(f"{name} must be a positive u32")
         if self.guest_rx_bytes < 4_168:
             raise ValueError("guest_rx_bytes must admit the control reserve")
         maximum_row_frame = 40 + 12 + 8 * self.host_policy.max_cols
@@ -372,6 +388,7 @@ MEGAPAD_RICH_TERMINAL_CONSUMERS = frozenset(
         "tui/app-shell-apt1.f",
         "tui/desk-apt1.f",
         "tui/rich-terminal/apt1-engine.f",
+        "tui/rich-terminal/screen-adapter-apt1.f",
         "tui/screen-backend-apt1.f",
     }
 )
@@ -13216,6 +13233,14 @@ SOUNDLAB-RUN
 DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
     guest_rx_bytes=8_192,
     guest_tx_bytes=8_192,
+    # Match the Desktop catalog's supported 32 concurrently installed app
+    # types. Retained advertisement remains disabled until the semantic
+    # projector can derive complete per-tree admission rather than opening a
+    # root-region-only owner.
+    guest_owner_records=32,
+    guest_operation_records=32,
+    guest_operation_copy_bytes=32 * 72,
+    guest_uidl_binding_records=32,
     host_policy=RichTerminalSessionPolicy(
         max_cols=400,
         max_rows=200,
@@ -13232,6 +13257,7 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
         ansi_history_bytes=256 * 1024,
         service_batches=4,
     ),
+    retained_policy=None,
 )
 
 
@@ -25008,6 +25034,22 @@ def _with_megapad_rich_terminal(
         (
             f"{rich_terminal.guest_tx_bytes} CONSTANT "
             "APT1-DESK-TX-CAPACITY"
+        ),
+        (
+            f"{rich_terminal.guest_owner_records} CONSTANT "
+            "APT1-DESK-RTAPT-OWNER-RECORDS"
+        ),
+        (
+            f"{rich_terminal.guest_operation_records} CONSTANT "
+            "APT1-DESK-RTAPT-OP-RECORDS"
+        ),
+        (
+            f"{rich_terminal.guest_operation_copy_bytes} CONSTANT "
+            "APT1-DESK-RTAPT-COPY-BYTES"
+        ),
+        (
+            f"{rich_terminal.guest_uidl_binding_records} CONSTANT "
+            "APT1-DESK-RTERM-BINDING-RECORDS"
         ),
     ]
     rich_terminal_lines = [

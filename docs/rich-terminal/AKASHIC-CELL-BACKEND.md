@@ -240,6 +240,19 @@ guest's independent 8192-byte RX and TX streaming buffers admit the control
 reserve and a complete maximum-width CELL span without buffering a whole
 snapshot.
 
+The same product profile independently owns 32 RTAPT owner records (4,608
+bytes), 32 atomic operation records (768 bytes), 2,304 copied-operation bytes,
+and 32 UIDL binding records (4,608 bytes). The record counts inherit Desktop's
+32-entry catalog concurrency boundary. The operation/copy pair is only the
+current `REGION_DEFINE` staging shape of 32 records at 72 copied bytes each;
+the semantic projector must replace that bound with its worst-case complete-
+tree transaction admission before retained support is enabled. These are local
+caller-bounded storage dimensions, not terminal feature claims. The current
+production profile deliberately carries `retained_policy=None`: it opts into
+the external APT session and complete CELL publisher while truthfully
+advertising no retained semantic family until the UIDL projector can admit a
+complete supported tree.
+
 If Desk exits or throws after the binary switch but synchronized release is
 not proven, the profile emits no diagnostic bytes. It remains in a silent
 `IDLE` quarantine until the host performs the required attachment reset.

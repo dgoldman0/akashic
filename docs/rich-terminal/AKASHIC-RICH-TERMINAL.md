@@ -631,6 +631,28 @@ modules consume only the already-loaded public PT ABI. Baseline profiles load
 neither the optional PT module nor the Akashic rich modules, so their source
 closure, startup, storage, and output behavior remain unaffected.
 
+The Desktop leaf constructs its current concrete layers in dependency order:
+PT session, neutral `APTSCB`, caller-bounded `RTAPT`, unified `RTAPTSCB`
+publisher attachment, and finally the `APTAS` shell owner. The product profile
+supplies independent owner-record, operation-record, copied-operation-byte,
+and UIDL-binding-record capacities before the leaf is sourced; fixed one-per-
+composition records remain leaf-owned. Desk's neutral host lifecycle then
+initializes the UIDL driver against the exact live `AHOST`, installs the one
+post-UIDL callback, and finalizes it after child drain. Setup and release
+publish explicit phases, so a constructor or destructor refusal retains the
+smallest exact retry authority rather than clearing uncertain storage.
+The leaf disarms Desk's pending constructor tuple after each `DESK-RUN`
+attempt, including a throw; a quarantined instance keeps its already-copied
+tuple, while a later plain Desk constructor cannot resurrect a partial rich
+composition after the outer storage was released.
+
+That construction does not itself claim retained semantic support. Until the
+backend-neutral projector facade couples admitted UIDL semantics to RTAPT, the
+driver remains wire-inert and the production host advertises no retained
+policy. CELL output still traverses the unified publisher, while attach,
+geometry, quiesce, and detach exercise the exact private UCTX lifetime without
+opening a root-region-only wire owner.
+
 The composition settles retained discovery before launching hosted UCTXs. A
 negative or partial result selects stable CELL-only projection for unsupported
 semantics; applet initialization does not poll terminal features and sees no

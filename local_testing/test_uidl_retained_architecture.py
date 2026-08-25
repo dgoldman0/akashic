@@ -273,6 +273,122 @@ def test_desk_wraps_child_hosting_in_a_neutral_composition_lifecycle() -> None:
         assert forbidden not in decompose
 
 
+def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
+    composition = _text("akashic/tui/desk-apt1.f")
+    code = _forth_code(composition)
+
+    assert re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code) == [
+        "app-shell-apt1.f",
+        "rich-terminal/screen-adapter-apt1.f",
+        "rich-terminal/uidl-driver.f",
+        "applets/desk/desk.f",
+    ]
+    assert "REQUIRE rich-terminal.f" not in code
+
+    for capacity in (
+        "APT1-DESK-RTAPT-OWNER-RECORDS",
+        "APT1-DESK-RTAPT-OP-RECORDS",
+        "APT1-DESK-RTAPT-COPY-BYTES",
+        "APT1-DESK-RTERM-BINDING-RECORDS",
+    ):
+        assert f"[UNDEFINED] {capacity} [IF]" in code
+    for size in (
+        "RTAPT-CONFIG-SIZE",
+        "RTAPT-ENGINE-SIZE",
+        "RTAPTSCB-SIZE",
+        "RTERM-UIDL-BACKEND-SIZE",
+        "RTERM-HOST-BINDING-SIZE",
+    ):
+        assert f"{size} 7 + XBUF" in code
+    assert "RTAPT-OWNER-SIZE _A1D-CAPACITY*" in code
+    assert "RTAPT-OP-SIZE _A1D-CAPACITY*" in code
+    assert "RTERM-UIDL-BINDING-SIZE _A1D-CAPACITY*" in code
+
+    setup = _word(composition, "_A1D-SETUP")
+    setup_order = (
+        "PT-INIT",
+        "APTSCB-INIT",
+        "RTAPT-CONFIG-INIT",
+        "RTAPT-INIT",
+        "RTAPTSCB-INIT",
+        "RTAPTSCB-ATTACH",
+        "APTAS-INIT",
+        "APTAS-INSTALL",
+    )
+    assert [setup.index(token) for token in setup_order] == sorted(
+        setup.index(token) for token in setup_order
+    )
+    phase_after = (
+        ("PT-INIT", "_A1D-PHASE-SESSION _A1D-PHASE !"),
+        ("RTAPT-INIT", "_A1D-PHASE-ENGINE _A1D-PHASE !"),
+        ("RTAPTSCB-ATTACH", "_A1D-PHASE-PUBLISHER _A1D-PHASE !"),
+        ("APTAS-INIT", "_A1D-PHASE-OWNER _A1D-PHASE !"),
+        ("APTAS-INSTALL", "_A1D-PHASE-INSTALLED _A1D-PHASE !"),
+    )
+    for constructor, publication in phase_after:
+        assert setup.index(constructor) < setup.index(publication)
+
+    init = _word(composition, "_A1D-HOST-INIT-BODY")
+    assert "_A1D-PHASE @ _A1D-PHASE-INSTALLED <> IF" in init
+    init_order = (
+        "_A1D-UIDL-BOUND _A1D-UIDL-PHASE !",
+        "RTERM-HOST-BINDING-INIT",
+        "RTERM-UIDL-INIT",
+        "RTERM-UIDL-INSTALL",
+        "AHOST-UIDL-READY!",
+    )
+    assert [init.index(token) for token in init_order] == sorted(
+        init.index(token) for token in init_order
+    )
+
+    fini = _word(composition, "_A1D-HOST-FINI-BODY")
+    assert "_A1D-PHASE @ _A1D-PHASE-INSTALLED <> IF" in fini
+    fini_order = (
+        "RTERM-UIDL-FINI",
+        "0 0 _A1D-HOST-CB-HOST @ AHOST-UIDL-READY!",
+        "RTERM-HOST-BINDING-INIT",
+        "_A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !",
+    )
+    assert [fini.index(token) for token in fini_order] == sorted(
+        fini.index(token) for token in fini_order
+    )
+
+    for callback, body in (
+        ("_A1D-HOST-INIT", "_A1D-HOST-INIT-BODY"),
+        ("_A1D-HOST-FINI", "_A1D-HOST-FINI-BODY"),
+    ):
+        wrapper = _word(composition, callback)
+        caught = wrapper.index(f"['] {body} CATCH")
+        result = wrapper.index("_A1D-HOST-CB-RESULT @", caught)
+        assert caught < result < wrapper.index("0 _A1D-HOST-CB-HOST !")
+        assert result < wrapper.index("0 _A1D-HOST-CB-CONTEXT !")
+
+    uninstall = _word(composition, "_A1D-UNINSTALL")
+    uidl_gate = uninstall.index(
+        "_A1D-UIDL-PHASE @ _A1D-UIDL-UNBOUND <> IF"
+    )
+    aptas = uninstall.index("APTAS-UNINSTALL")
+    rtapt = uninstall.index("RTAPT-FINI")
+    assert uidl_gate < aptas < rtapt < uninstall.index("_A1D-CLEAR-INERT")
+    assert uninstall.index("DUP SCB-S-OK <> IF EXIT THEN", aptas) < (
+        uninstall.index("_A1D-PHASE-OWNER _A1D-PHASE !")
+    )
+    assert uninstall.index("DUP RTAPT-S-OK <> IF EXIT THEN", rtapt) < (
+        uninstall.index("_A1D-PHASE-SESSION _A1D-PHASE !")
+    )
+
+    run = _word(composition, "_A1D-RUN-BODY")
+    assert run.index("_A1D-SETUP") < run.index(
+        "DESK-HOST-LIFECYCLE!"
+    ) < run.index("DESK-RUN")
+    caught = run.index("['] DESK-RUN CATCH _A1D-DESK-IOR !")
+    disarmed = run.index("0 0 0 DESK-HOST-LIFECYCLE!", caught)
+    loaded = run.index("_A1D-DESK-IOR @", disarmed)
+    scrubbed = run.index("0 _A1D-DESK-IOR !", loaded)
+    rethrown = run.index("?DUP IF THROW THEN", scrubbed)
+    assert caught < disarmed < loaded < scrubbed < rethrown
+
+
 def test_generic_host_close_phases_and_init_boundary_are_persistent() -> None:
     host = _text("akashic/tui/applet-host/host.f")
 

@@ -1668,15 +1668,91 @@ def test_rich_terminal_boot_load_follows_networking_and_owns_capacities() -> Non
         f"{MEGAPAD_RICH_TERMINAL_BOOT_LINE}\n"
         "8192 CONSTANT APT1-DESK-RX-CAPACITY\n"
         "8192 CONSTANT APT1-DESK-TX-CAPACITY\n"
+        "32 CONSTANT APT1-DESK-RTAPT-OWNER-RECORDS\n"
+        "32 CONSTANT APT1-DESK-RTAPT-OP-RECORDS\n"
+        "2304 CONSTANT APT1-DESK-RTAPT-COPY-BYTES\n"
+        "32 CONSTANT APT1-DESK-RTERM-BINDING-RECORDS\n"
     )
     assert integrated.startswith(expected_prefix)
     assert integrated.endswith("REQUIRE coldsrc.f\n")
+    for line in expected_prefix.splitlines()[2:]:
+        assert integrated.count(line) == 1
     assert (
         _with_megapad_rich_terminal(
             integrated, DESKTOP_APT1_RICH_TERMINAL
         )
         == integrated
     )
+
+    changed = integrated.replace(
+        "32 CONSTANT APT1-DESK-RTAPT-OP-RECORDS",
+        "31 CONSTANT APT1-DESK-RTAPT-OP-RECORDS",
+    )
+    with pytest.raises(RuntimeError, match="exactly once after networking"):
+        _with_megapad_rich_terminal(changed, DESKTOP_APT1_RICH_TERMINAL)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    tuple(
+        (field, value, error)
+        for field in (
+            "guest_owner_records",
+            "guest_operation_records",
+            "guest_operation_copy_bytes",
+            "guest_uidl_binding_records",
+        )
+        for value, error in (
+            (0, ValueError),
+            (-1, ValueError),
+            (0x1_0000_0000, ValueError),
+            (True, TypeError),
+            ("1", TypeError),
+        )
+    ),
+)
+def test_rich_terminal_profile_rejects_invalid_guest_storage_capacities(
+    field: str,
+    value: object,
+    error: type[Exception],
+) -> None:
+    with pytest.raises(error):
+        replace(DESKTOP_APT1_RICH_TERMINAL, **{field: value})
+
+
+def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
+    baseline = PROFILES["desktop"]
+    profile = PROFILES["desktop-apt1"]
+    assert baseline.rich_terminal is None
+    assert profile.rich_terminal is DESKTOP_APT1_RICH_TERMINAL
+    expected_roots = tuple(
+        "tui/desk-apt1.f"
+        if root == "tui/applets/desk/desk.f"
+        else root
+        for root in baseline.roots
+    )
+    assert profile.roots == expected_roots
+    assert profile.rich_terminal is not None
+    assert profile.rich_terminal.retained_policy is None
+    assert "--retained-terminal-policy" not in (
+        _rich_terminal_server_arguments(profile)
+    )
+
+    rich_modules = {
+        "tui/desk-apt1.f",
+        "tui/app-shell-apt1.f",
+        "tui/screen-backend-apt1.f",
+        "tui/rich-terminal/apt1-engine.f",
+        "tui/rich-terminal/screen-adapter-apt1.f",
+        "tui/rich-terminal/uidl-driver.f",
+    }
+    baseline_closure = set(dependency_order(baseline.roots))
+    rich_closure = set(dependency_order(profile.roots))
+    assert rich_modules.isdisjoint(baseline_closure)
+    assert rich_modules <= rich_closure
+    assert rich_closure - baseline_closure == rich_modules
+    assert MEGAPAD_RICH_TERMINAL_MODULE not in baseline_closure
+    assert MEGAPAD_RICH_TERMINAL_MODULE not in rich_closure
 
 
 def test_desktop_apt1_build_is_an_external_additive_composition(
@@ -1712,6 +1788,8 @@ def test_desktop_apt1_build_is_an_external_additive_composition(
         autoexec.index(MEGAPAD_NETWORKING_BOOT_LINE),
         autoexec.index(MEGAPAD_RICH_TERMINAL_BOOT_LINE),
         autoexec.index("8192 CONSTANT APT1-DESK-RX-CAPACITY"),
+        autoexec.index("32 CONSTANT APT1-DESK-RTAPT-OWNER-RECORDS"),
+        autoexec.index("32 CONSTANT APT1-DESK-RTERM-BINDING-RECORDS"),
         autoexec.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}"),
     )
     assert ordered_boot == tuple(sorted(ordered_boot))
@@ -1739,8 +1817,14 @@ def test_rich_terminal_consumers_select_boot_module_not_source_dependency() -> N
 
     assert _requires_megapad_rich_terminal(closure)
     assert MEGAPAD_RICH_TERMINAL_MODULE not in closure
-    assert MEGAPAD_RICH_TERMINAL_CONSUMERS & set(closure)
-    for module in MEGAPAD_RICH_TERMINAL_CONSUMERS & set(closure):
+    assert "tui/rich-terminal/screen-adapter-apt1.f" in (
+        MEGAPAD_RICH_TERMINAL_CONSUMERS
+    )
+    assert "tui/rich-terminal/uidl-driver.f" not in (
+        MEGAPAD_RICH_TERMINAL_CONSUMERS
+    )
+    assert MEGAPAD_RICH_TERMINAL_CONSUMERS <= set(closure)
+    for module in MEGAPAD_RICH_TERMINAL_CONSUMERS:
         source = (SOURCE_ROOT / module).read_text(encoding="utf-8")
         assert not re.search(
             r"^\s*REQUIRE\s+\S*rich-terminal\.f\s*$",
