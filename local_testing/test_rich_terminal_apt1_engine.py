@@ -30,6 +30,9 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert " CONSTANT APTR-" not in source
     assert "\n: APTR-" not in source
     assert "144 CONSTANT RTAPT-OWNER-SIZE" in source
+    assert "496 CONSTANT RTAPT-ENGINE-SIZE" in source
+    assert "160 CONSTANT RTAPT-LIMITS-SIZE" in source
+    assert ": _RTAPT-E.LIMITS" in source
     assert ": _RTAPT-O.PRIOR-GENERATION" in source
     assert ": _RTAPT-O.ACTIVE-REGIONS" in source
     assert ": _RTAPT-O.HIDDEN-REGIONS" in source
@@ -262,3 +265,94 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     # PT's public surface is the engine's lower boundary.  Depending on a PT
     # private word would duplicate or bypass its wire/session authority.
     assert not re.search(r"(?<!RTAPT)\b_PT-", source)
+
+
+def test_rich_terminal_engine_copies_one_typed_negotiated_limits_snapshot() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    expected_fields = {
+        "FEATURES": 0,
+        "OWNER-RECORDS": 8,
+        "LIVE-OWNERS": 16,
+        "REGIONS": 24,
+        "RESOURCES": 32,
+        "OBJECTS": 40,
+        "SERIES": 48,
+        "OPS": 56,
+        "UPDATE-BYTES": 64,
+        "CHUNK-BYTES": 72,
+        "RESOURCE-BYTES": 80,
+        "IMAGE-WIDTH": 88,
+        "IMAGE-HEIGHT": 96,
+        "PATH-POINTS": 104,
+        "LABEL-BYTES": 112,
+        "UTF8-BYTES": 120,
+        "SAMPLES-APPEND": 128,
+        "SERIES-HISTORY": 136,
+        "SAMPLE-SLOTS": 144,
+        "MIN-INTERVAL-US": 152,
+    }
+    for field, offset in expected_fields.items():
+        definition = _definition(source, f"_RTAPT-L.{field}")
+        if offset == 0:
+            assert "+" not in definition
+        else:
+            assert f"{offset} +" in definition
+
+    limits = _definition(source, "RTAPT-LIMITS@")
+    ready = limits.index("_RTAPT-READY-STATUS")
+    caps = limits.index("PT-RETAINED-CAPS@", ready)
+    formats = limits.index("PT-RETAINED-FORMATS@", caps)
+    sizes = limits.index("_RTAPT-LS-CAPS-U @ 64 <>", formats)
+    copy = limits.index("_RTAPT-LIMITS-COPY", sizes)
+    validate = limits.index("RTAPT-LIMITS-VALID?", copy)
+    scrub = limits.rindex("_RTAPT-LIMITS-SCRUB")
+    assert ready < caps < formats < sizes < copy < validate < scrub
+    assert "DUP RTAPT-S-OK <> IF" in limits
+    assert "0 SWAP _RTAPT-LIMITS-SCRUB EXIT" in limits
+    assert "RTAPT-LIMITS-SIZE 0 FILL" in limits
+
+    copied = _definition(source, "_RTAPT-LIMITS-COPY")
+    assert "_RTAPT-E.LIMITS" in copied
+    assert "RTAPT-LIMITS-SIZE 0 FILL" in copied
+    for field in expected_fields:
+        assert f"_RTAPT-L.{field} !" in copied
+    for caps_offset in (8, 16, 20, 24, 28, 32, 36, 40, 44, 48, 56):
+        assert f"_RTAPT-LS-CAPS-A @ {caps_offset} +" in copied
+    for formats_offset in (12, 16, 20, 24, 28, 32, 36, 40, 48):
+        assert f"_RTAPT-LS-FORMATS-A @ {formats_offset} +" in copied
+    assert copied.count("_RTAPT-LE64@") == 5
+
+    valid = _definition(source, "_RTAPT-LIMITS-VALID-BODY")
+    for relationship in (
+        "_RTAPT-FEATURE-MASK INVERT AND",
+        "RTAPT-F-CORE AND 0=",
+        "RTAPT-F-SERIES AND SWAP RTAPT-F-INSTRUMENT",
+        "_RTAPT-L.LIVE-OWNERS @",
+        "_RTAPT-L.OWNER-RECORDS @ U>",
+        "_RTAPT-L.UTF8-BYTES @",
+        "_RTAPT-L.LABEL-BYTES @ U<",
+        "_RTAPT-L.SAMPLES-APPEND @",
+        "_RTAPT-L.SERIES-HISTORY @ U>",
+        "_RTAPT-L.SAMPLE-SLOTS @ U>",
+        "_RTAPT-L.IMAGE-HEIGHT @ _RTAPT-UMUL?",
+        "_RTAPT-L.RESOURCE-BYTES @ U>",
+        "_RTAPT-L.PATH-POINTS @ 8 _RTAPT-UMUL?",
+        "_RTAPT-L.LABEL-BYTES @ 304 _RTAPT-UADD?",
+        "_RTAPT-L.SAMPLES-APPEND @ 16 _RTAPT-UMUL?",
+        "_RTAPT-LIMIT-FLOOR?",
+    ):
+        assert relationship in valid
+    assert "_RTAPT-L.UPDATE-BYTES @ U> 0=" in _definition(
+        source, "_RTAPT-LIMIT-FLOOR?"
+    )
+
+    pointer_scrub = _definition(source, "_RTAPT-LIMITS-SCRUB")
+    for pointer in (
+        "_RTAPT-LS-E",
+        "_RTAPT-LS-CAPS-A",
+        "_RTAPT-LS-CAPS-U",
+        "_RTAPT-LS-FORMATS-A",
+        "_RTAPT-LS-FORMATS-U",
+    ):
+        assert f"0 {pointer} !" in pointer_scrub

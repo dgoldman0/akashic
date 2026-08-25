@@ -142,6 +142,10 @@ RTE-VALID?             ( facade -- flag )
 RTE-STORAGE-DISJOINT?  ( a u facade -- flag )
 RTE-STATUS@            ( facade -- status )
 
+RTE-LIMITS-BYTES       ( -- bytes )
+RTE-LIMITS-VALID?      ( limits -- flag )
+RTE-LIMITS@            ( limits facade -- status )
+
 RTE-OWNER-OPEN         ( owner generation quotas... facade -- status )
 RTE-OWNER-STATE@       ( owner generation facade -- owner-state status )
 RTE-RICH-BEGIN         ( retained-mode facade -- status )
@@ -158,12 +162,37 @@ mapping and proves that the facade descriptor is disjoint from all concrete
 provider storage before publishing it. The UIDL-TUI adapter depends only on
 `RTE`.
 
-This first facade revision is the neutral boundary for RTAPT's currently
-implemented owner, transaction, region, status, and alias operations. It does
-not claim semantic-projector readiness: negotiated-limit snapshots, region
-replacement, and checked semantic snapshot/object operations arrive with the
-projector slice. Until then `RTERM-UCTX-PROJECT` remains explicitly
-`RTERM-S-UNAVAILABLE` and invokes none of the facade operations.
+The facade is the neutral boundary for RTAPT's currently implemented owner,
+transaction, region, status, and alias operations. It also exposes one
+160-byte immutable negotiated-limits snapshot. The fixed record shape contains
+neutral feature-family bits and the terminal-supplied maxima for owner records,
+live owners, regions, resources, objects, series, operations per update, update
+bytes, resource chunks and total resource bytes, image dimensions, vector
+points, label and total UTF-8 bytes, series append/history/sample slots, and
+minimum presentation interval. Coordinate precision, color representation, and
+the first image representation are invariants of this facade revision rather
+than copied provider enum values.
+
+`RTE-LIMITS@` validates that its caller-owned destination is aligned,
+nonwrapping, and disjoint from both facade and provider storage. Pending
+discovery returns `RTE-S-WOULD-BLOCK`, a deterministic CELL-only result returns
+`RTE-S-UNAVAILABLE`, and structural loss returns
+`RTE-S-SESSION-LOST`. A non-OK result leaves the destination unchanged. On
+success the facade validates CORE presence, feature dependencies, exact
+feature-dependent zero/positive fields, cross-field totals, and transaction
+floors. These are negotiated admission bounds, not compiled product limits.
+The current provider obtains them through
+`RTAPT-LIMITS@ ( engine -- limits status )`, which synchronously copies the
+already validated PT CAPS/FORMATS pair into one engine-owned typed snapshot.
+The bridge maps every provider field and feature bit into the caller's neutral
+record, then scrubs all borrowed raw-record, provider-snapshot, engine, and
+destination pointers.
+
+This capability slice still does not claim semantic-projector readiness.
+Region replacement and checked semantic snapshot/object operations arrive
+with their projector slices. Until then `RTERM-UCTX-PROJECT` remains explicitly
+`RTERM-S-UNAVAILABLE` and invokes none of the facade operations, including the
+limits callback.
 
 `config` names the exact borrowed PT session, output policy, and caller-owned
 spans and capacities for:
@@ -396,6 +425,9 @@ project returns `RTERM-S-UNAVAILABLE`, quiesce proves the empty source set, and
 detach creates no wire owner or tombstone. In
 particular, the foundation must not open a default or root-region-only owner:
 owner quotas can be admitted only from one complete supported semantic tree.
+The neutral limits surface now makes that later comparison possible without
+exposing PT reply records or provider vocabulary to the UIDL driver, but the
+wire-inert foundation does not query it before a semantic tree can be measured.
 Construction and attach admit the exact declared application descriptor,
 component descriptor, and live component-state spans as well as the fixed host
 objects, and reject every alias with driver storage. Every public stateful

@@ -3,10 +3,11 @@
 \ =====================================================================
 \
 \  This internal composition ABI keeps UIDL lifecycle/projector code above
-\  concrete terminal engines.  This first revision exposes the provider
-\  operations already implemented by RTAPT; semantic snapshots, negotiated
-\  limits, and semantic object operations are added with their projector
-\  slice.  The descriptor is caller-owned, immutable after provider
+\  concrete terminal engines.  This revision exposes the provider
+\  operations already implemented by RTAPT plus one immutable negotiated-
+\  limits snapshot.  Semantic snapshots and semantic object operations arrive
+\  with their projector slices.  The descriptor is caller-owned, immutable
+\  after provider
 \  construction, and carries one explicit provider context.  It owns no
 \  storage, transport, host, UCTX, Desk, or application authority.
 \
@@ -40,6 +41,65 @@ REQUIRE ../../utils/memory-span.f
 : RTE-OWNER-STATE-VALID?  ( owner-state -- flag )
     6 U< ;
 
+\ Neutral retained feature families.  These are Akashic capability bits, not
+\ provider or wire values.  CORE is required; SERIES depends on INSTRUMENT.
+1  CONSTANT RTE-F-CORE
+2  CONSTANT RTE-F-VECTOR
+4  CONSTANT RTE-F-IMAGE
+8  CONSTANT RTE-F-INSTRUMENT
+16 CONSTANT RTE-F-SERIES
+32 CONSTANT RTE-F-CADENCE
+0x3F CONSTANT _RTE-FEATURE-MASK
+
+\ One fixed ABI record captures negotiated admission bounds.  Its size is a
+\ record shape, never a product capacity.  Every count and byte maximum comes
+\ from the provider's coherent current-epoch capability snapshot.
+: _RTE-L.FEATURES        ( l -- a )       ;
+: _RTE-L.OWNER-RECORDS   ( l -- a )   8 + ;
+: _RTE-L.LIVE-OWNERS     ( l -- a )  16 + ;
+: _RTE-L.REGIONS         ( l -- a )  24 + ;
+: _RTE-L.RESOURCES       ( l -- a )  32 + ;
+: _RTE-L.OBJECTS         ( l -- a )  40 + ;
+: _RTE-L.SERIES          ( l -- a )  48 + ;
+: _RTE-L.OPS             ( l -- a )  56 + ;
+: _RTE-L.UPDATE-BYTES    ( l -- a )  64 + ;
+: _RTE-L.CHUNK-BYTES     ( l -- a )  72 + ;
+: _RTE-L.RESOURCE-BYTES  ( l -- a )  80 + ;
+: _RTE-L.IMAGE-WIDTH     ( l -- a )  88 + ;
+: _RTE-L.IMAGE-HEIGHT    ( l -- a )  96 + ;
+: _RTE-L.PATH-POINTS     ( l -- a ) 104 + ;
+: _RTE-L.LABEL-BYTES     ( l -- a ) 112 + ;
+: _RTE-L.UTF8-BYTES      ( l -- a ) 120 + ;
+: _RTE-L.SAMPLES-APPEND  ( l -- a ) 128 + ;
+: _RTE-L.SERIES-HISTORY  ( l -- a ) 136 + ;
+: _RTE-L.SAMPLE-SLOTS    ( l -- a ) 144 + ;
+: _RTE-L.MIN-INTERVAL-US ( l -- a ) 152 + ;
+
+160 CONSTANT RTE-LIMITS-SIZE
+
+: RTE-LIMITS-BYTES  ( -- bytes )  RTE-LIMITS-SIZE ;
+
+: RTE-LIMITS-FEATURES@        ( l -- u )  _RTE-L.FEATURES @ ;
+: RTE-LIMITS-OWNER-RECORDS@   ( l -- u )  _RTE-L.OWNER-RECORDS @ ;
+: RTE-LIMITS-LIVE-OWNERS@     ( l -- u )  _RTE-L.LIVE-OWNERS @ ;
+: RTE-LIMITS-REGIONS@         ( l -- u )  _RTE-L.REGIONS @ ;
+: RTE-LIMITS-RESOURCES@       ( l -- u )  _RTE-L.RESOURCES @ ;
+: RTE-LIMITS-OBJECTS@         ( l -- u )  _RTE-L.OBJECTS @ ;
+: RTE-LIMITS-SERIES@          ( l -- u )  _RTE-L.SERIES @ ;
+: RTE-LIMITS-OPS@             ( l -- u )  _RTE-L.OPS @ ;
+: RTE-LIMITS-UPDATE-BYTES@    ( l -- u )  _RTE-L.UPDATE-BYTES @ ;
+: RTE-LIMITS-CHUNK-BYTES@     ( l -- u )  _RTE-L.CHUNK-BYTES @ ;
+: RTE-LIMITS-RESOURCE-BYTES@  ( l -- u )  _RTE-L.RESOURCE-BYTES @ ;
+: RTE-LIMITS-IMAGE-WIDTH@     ( l -- u )  _RTE-L.IMAGE-WIDTH @ ;
+: RTE-LIMITS-IMAGE-HEIGHT@    ( l -- u )  _RTE-L.IMAGE-HEIGHT @ ;
+: RTE-LIMITS-PATH-POINTS@     ( l -- u )  _RTE-L.PATH-POINTS @ ;
+: RTE-LIMITS-LABEL-BYTES@     ( l -- u )  _RTE-L.LABEL-BYTES @ ;
+: RTE-LIMITS-UTF8-BYTES@      ( l -- u )  _RTE-L.UTF8-BYTES @ ;
+: RTE-LIMITS-SAMPLES-APPEND@  ( l -- u )  _RTE-L.SAMPLES-APPEND @ ;
+: RTE-LIMITS-SERIES-HISTORY@  ( l -- u )  _RTE-L.SERIES-HISTORY @ ;
+: RTE-LIMITS-SAMPLE-SLOTS@    ( l -- u )  _RTE-L.SAMPLE-SLOTS @ ;
+: RTE-LIMITS-MIN-INTERVAL-US@ ( l -- u )  _RTE-L.MIN-INTERVAL-US @ ;
+
 \ Neutral retained update vocabulary.  Values need not equal any provider's.
 1 CONSTANT RTE-RICH-DELTA
 2 CONSTANT RTE-RICH-REPLACE-START
@@ -50,8 +110,8 @@ REQUIRE ../../utils/memory-span.f
 0 CONSTANT RTE-COMMIT
 1 CONSTANT RTE-COMMIT-AND-REVEAL
 
-1 CONSTANT _RTE-ABI
-0x5254454641434131 CONSTANT _RTE-MAGIC  \ "RTEFACA1"
+2 CONSTANT _RTE-ABI
+0x5254454641434132 CONSTANT _RTE-MAGIC  \ "RTEFACA2"
 
 : _RTE-F.MAGIC          ( f -- a )       ;
 : _RTE-F.ABI            ( f -- a )   8 + ;
@@ -67,9 +127,10 @@ REQUIRE ../../utils/memory-span.f
 : _RTE-F.RICH-SEAL-XT   ( f -- a )  88 + ;
 : _RTE-F.RICH-CANCEL-XT ( f -- a )  96 + ;
 : _RTE-F.OWNER-DROP-XT  ( f -- a ) 104 + ;
-: _RTE-F.RESERVED       ( f -- a ) 112 + ;
+: _RTE-F.LIMITS-XT      ( f -- a ) 112 + ;
+: _RTE-F.RESERVED       ( f -- a ) 120 + ;
 
-120 CONSTANT RTE-FACADE-SIZE
+128 CONSTANT RTE-FACADE-SIZE
 
 : RTE-FACADE-BYTES  ( -- bytes )  RTE-FACADE-SIZE ;
 
@@ -80,6 +141,143 @@ REQUIRE ../../utils/memory-span.f
 
 : _RTE-BOOL?  ( x -- flag )
     DUP 0= SWAP -1 = OR ;
+
+: _RTE-UADD?  ( a b -- sum flag )
+    OVER + DUP ROT U< 0= ;
+
+: _RTE-UMUL?  ( a b -- product flag )
+    UM* DUP IF 2DROP 0 0 EXIT THEN DROP -1 ;
+
+: _RTE-POSITIVE-EXACT?  ( value feature-present? -- flag )
+    IF 0<> ELSE 0= THEN ;
+
+VARIABLE _RTE-LV-L
+VARIABLE _RTE-LV-FEATURES
+
+: _RTE-LIMIT-FLOOR?  ( required limits -- flag )
+    _RTE-L.UPDATE-BYTES @ U> 0= ;
+
+: _RTE-LIMITS-VALID-BODY  ( limits -- flag )
+    DUP RTE-LIMITS-SIZE _RTE-SPAN? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LV-L !
+    _RTE-L.FEATURES @ DUP _RTE-LV-FEATURES !
+    DUP _RTE-FEATURE-MASK INVERT AND IF DROP 0 EXIT THEN
+    DUP RTE-F-CORE AND 0= IF DROP 0 EXIT THEN
+    DUP RTE-F-SERIES AND SWAP RTE-F-INSTRUMENT AND 0= AND IF 0 EXIT THEN
+
+    _RTE-LV-L @ _RTE-L.OWNER-RECORDS @ 0=
+    _RTE-LV-L @ _RTE-L.LIVE-OWNERS @ 0= OR
+    _RTE-LV-L @ _RTE-L.REGIONS @ 0= OR
+    _RTE-LV-L @ _RTE-L.OPS @ 0= OR IF 0 EXIT THEN
+    _RTE-LV-L @ _RTE-L.LIVE-OWNERS @
+    _RTE-LV-L @ _RTE-L.OWNER-RECORDS @ U> IF 0 EXIT THEN
+    248 _RTE-LV-L @ _RTE-LIMIT-FLOOR? 0= IF 0 EXIT THEN
+
+    _RTE-LV-L @ _RTE-L.RESOURCES @
+    _RTE-LV-FEATURES @ RTE-F-IMAGE AND 0<> _RTE-POSITIVE-EXACT? 0= IF
+        0 EXIT
+    THEN
+    _RTE-LV-L @ _RTE-L.CHUNK-BYTES @
+    _RTE-LV-FEATURES @ RTE-F-IMAGE AND 0<> _RTE-POSITIVE-EXACT? 0= IF
+        0 EXIT
+    THEN
+    _RTE-LV-L @ _RTE-L.RESOURCE-BYTES @
+    _RTE-LV-FEATURES @ RTE-F-IMAGE AND 0<> _RTE-POSITIVE-EXACT? 0= IF
+        0 EXIT
+    THEN
+    _RTE-LV-L @ _RTE-L.IMAGE-WIDTH @
+    _RTE-LV-FEATURES @ RTE-F-IMAGE AND 0<> _RTE-POSITIVE-EXACT? 0= IF
+        0 EXIT
+    THEN
+    _RTE-LV-L @ _RTE-L.IMAGE-HEIGHT @
+    _RTE-LV-FEATURES @ RTE-F-IMAGE AND 0<> _RTE-POSITIVE-EXACT? 0= IF
+        0 EXIT
+    THEN
+
+    _RTE-LV-L @ _RTE-L.OBJECTS @
+    _RTE-LV-FEATURES @
+        RTE-F-VECTOR RTE-F-IMAGE OR RTE-F-INSTRUMENT OR RTE-F-SERIES OR
+        AND 0<> _RTE-POSITIVE-EXACT? 0= IF 0 EXIT THEN
+    _RTE-LV-L @ _RTE-L.PATH-POINTS @
+    _RTE-LV-FEATURES @ RTE-F-VECTOR AND 0<> _RTE-POSITIVE-EXACT? 0= IF
+        0 EXIT
+    THEN
+    _RTE-LV-L @ _RTE-L.LABEL-BYTES @
+    _RTE-LV-FEATURES @ RTE-F-INSTRUMENT AND 0<> _RTE-POSITIVE-EXACT? 0= IF
+        0 EXIT
+    THEN
+    _RTE-LV-L @ _RTE-L.UTF8-BYTES @
+    _RTE-LV-FEATURES @ RTE-F-INSTRUMENT AND 0<> _RTE-POSITIVE-EXACT? 0= IF
+        0 EXIT
+    THEN
+    _RTE-LV-FEATURES @ RTE-F-INSTRUMENT AND IF
+        _RTE-LV-L @ _RTE-L.UTF8-BYTES @
+        _RTE-LV-L @ _RTE-L.LABEL-BYTES @ U< IF 0 EXIT THEN
+    THEN
+
+    _RTE-LV-L @ _RTE-L.SERIES @
+    _RTE-LV-FEATURES @ RTE-F-SERIES AND 0<> _RTE-POSITIVE-EXACT? 0= IF
+        0 EXIT
+    THEN
+    _RTE-LV-L @ _RTE-L.SAMPLES-APPEND @
+    _RTE-LV-FEATURES @ RTE-F-SERIES AND 0<> _RTE-POSITIVE-EXACT? 0= IF
+        0 EXIT
+    THEN
+    _RTE-LV-L @ _RTE-L.SERIES-HISTORY @
+    _RTE-LV-FEATURES @ RTE-F-SERIES AND 0<> _RTE-POSITIVE-EXACT? 0= IF
+        0 EXIT
+    THEN
+    _RTE-LV-L @ _RTE-L.SAMPLE-SLOTS @
+    _RTE-LV-FEATURES @ RTE-F-SERIES AND 0<> _RTE-POSITIVE-EXACT? 0= IF
+        0 EXIT
+    THEN
+    _RTE-LV-FEATURES @ RTE-F-SERIES AND IF
+        _RTE-LV-L @ _RTE-L.SAMPLES-APPEND @
+        _RTE-LV-L @ _RTE-L.SERIES-HISTORY @ U> IF 0 EXIT THEN
+        _RTE-LV-L @ _RTE-L.SERIES-HISTORY @
+        _RTE-LV-L @ _RTE-L.SAMPLE-SLOTS @ U> IF 0 EXIT THEN
+    THEN
+    _RTE-LV-L @ _RTE-L.MIN-INTERVAL-US @
+    _RTE-LV-FEATURES @ RTE-F-CADENCE AND 0<> _RTE-POSITIVE-EXACT? 0= IF
+        0 EXIT
+    THEN
+
+    _RTE-LV-FEATURES @ RTE-F-IMAGE AND IF
+        _RTE-LV-L @ _RTE-L.IMAGE-WIDTH @
+        _RTE-LV-L @ _RTE-L.IMAGE-HEIGHT @ _RTE-UMUL? 0= IF
+            DROP 0 EXIT
+        THEN
+        4 _RTE-UMUL? 0= IF DROP 0 EXIT THEN
+        _RTE-LV-L @ _RTE-L.RESOURCE-BYTES @ U> IF 0 EXIT THEN
+        280 _RTE-LV-L @ _RTE-LIMIT-FLOOR? 0= IF 0 EXIT THEN
+    THEN
+    _RTE-LV-FEATURES @ RTE-F-VECTOR AND IF
+        _RTE-LV-L @ _RTE-L.PATH-POINTS @ 8 _RTE-UMUL? 0= IF
+            DROP 0 EXIT
+        THEN
+        280 _RTE-UADD? 0= IF DROP 0 EXIT THEN
+        _RTE-LV-L @ _RTE-LIMIT-FLOOR? 0= IF 0 EXIT THEN
+    THEN
+    _RTE-LV-FEATURES @ RTE-F-INSTRUMENT AND IF
+        _RTE-LV-L @ _RTE-L.LABEL-BYTES @ 304 _RTE-UADD? 0= IF
+            DROP 0 EXIT
+        THEN
+        312 MAX _RTE-LV-L @ _RTE-LIMIT-FLOOR? 0= IF 0 EXIT THEN
+    THEN
+    _RTE-LV-FEATURES @ RTE-F-SERIES AND IF
+        _RTE-LV-L @ _RTE-L.SAMPLES-APPEND @ 16 _RTE-UMUL? 0= IF
+            DROP 0 EXIT
+        THEN
+        240 _RTE-UADD? 0= IF DROP 0 EXIT THEN
+        312 MAX _RTE-LV-L @ _RTE-LIMIT-FLOOR? 0= IF 0 EXIT THEN
+    THEN
+    -1 ;
+
+: RTE-LIMITS-VALID?  ( limits -- flag )
+    DUP _RTE-LV-L !
+    _RTE-LIMITS-VALID-BODY
+    0 _RTE-LV-L !
+    0 _RTE-LV-FEATURES ! ;
 
 : _RTE-DROP3  ( x1 x2 x3 -- )
     2DROP DROP ;
@@ -110,6 +308,7 @@ REQUIRE ../../utils/memory-span.f
     OVER _RTE-F.RICH-SEAL-XT @ 0= OR
     OVER _RTE-F.RICH-CANCEL-XT @ 0= OR
     OVER _RTE-F.OWNER-DROP-XT @ 0= OR IF DROP 0 EXIT THEN
+    DUP _RTE-F.LIMITS-XT @ 0= IF DROP 0 EXIT THEN
     _RTE-F.RESERVED @ 0= ;
 
 : RTE-STORAGE-DISJOINT?  ( a u facade -- flag )
@@ -126,6 +325,20 @@ REQUIRE ../../utils/memory-span.f
     DUP RTE-VALID? 0= IF DROP RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.STATUS-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+: RTE-LIMITS@  ( limits facade -- status )
+    DUP RTE-VALID? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    OVER RTE-LIMITS-SIZE _RTE-SPAN? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    OVER RTE-LIMITS-SIZE 2 PICK RTE-STORAGE-DISJOINT? 0= IF
+        2DROP RTE-S-INVALID EXIT
+    THEN
+    OVER >R
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.LIMITS-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN
+    DUP RTE-S-OK = IF
+        R@ RTE-LIMITS-VALID? 0= IF DROP RTE-S-INVALID THEN
+    THEN
+    R> DROP ;
 
 : RTE-OWNER-OPEN
     ( owner generation region-q resource-q object-q series-q

@@ -52,7 +52,8 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         code,
     )
 
-    assert "120 CONSTANT RTE-FACADE-SIZE" in code
+    assert "128 CONSTANT RTE-FACADE-SIZE" in code
+    assert "160 CONSTANT RTE-LIMITS-SIZE" in code
     assert "_RTE-F.CONTEXT" in _definition(source, "RTE-VALID?")
     valid = _definition(source, "RTE-VALID?")
     for callback in (
@@ -65,6 +66,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "RICH-SEAL",
         "RICH-CANCEL",
         "OWNER-DROP",
+        "LIMITS",
     ):
         assert f"_RTE-F.{callback}-XT @ 0=" in valid
     assert "_RTE-F.RESERVED @ 0=" in valid
@@ -88,6 +90,9 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-VALID?": "( facade -- flag )",
         "RTE-STORAGE-DISJOINT?": "( a u facade -- flag )",
         "RTE-STATUS@": "( facade -- status )",
+        "RTE-LIMITS-BYTES": "( -- bytes )",
+        "RTE-LIMITS-VALID?": "( limits -- flag )",
+        "RTE-LIMITS@": "( limits facade -- status )",
         "RTE-RICH-BEGIN": "( retained-mode facade -- status )",
         "RTE-RICH-SEAL": "( disposition facade -- status )",
         "RTE-RICH-CANCEL": "( facade -- status )",
@@ -105,6 +110,7 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
 
     for name in (
         "RTE-STATUS@",
+        "RTE-LIMITS@",
         "RTE-OWNER-OPEN",
         "RTE-OWNER-STATE@",
         "RTE-RICH-BEGIN",
@@ -169,6 +175,7 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
         "_RTE-F.RICH-SEAL-XT !",
         "_RTE-F.RICH-CANCEL-XT !",
         "_RTE-F.OWNER-DROP-XT !",
+        "_RTE-F.LIMITS-XT !",
     ):
         assert fill < init.index(field) < magic
 
@@ -197,6 +204,7 @@ def test_apt1_bridge_finalization_is_blank_idempotent_and_scrubs_authority() -> 
         "RICH-SEAL",
         "RICH-CANCEL",
         "OWNER-DROP",
+        "LIMITS",
     ):
         assert f"_RTE-F.{callback}-XT @ ['] _RTAPTE-" in exact
 
@@ -210,3 +218,98 @@ def test_apt1_bridge_finalization_is_blank_idempotent_and_scrubs_authority() -> 
     scrub = _definition(source, "_RTAPTE-SCRUB-BORROWED")
     assert "0 _RTAPTE-I-ENGINE !" in scrub
     assert "0 _RTAPTE-I-FACADE !" in scrub
+
+
+def test_limits_snapshot_is_complete_neutral_and_fail_before_dispatch() -> None:
+    source = FACADE.read_text(encoding="utf-8")
+    bridge = BRIDGE.read_text(encoding="utf-8")
+
+    assert "160 CONSTANT RTE-LIMITS-SIZE" in source
+    expected_fields = {
+        "FEATURES": 0,
+        "OWNER-RECORDS": 8,
+        "LIVE-OWNERS": 16,
+        "REGIONS": 24,
+        "RESOURCES": 32,
+        "OBJECTS": 40,
+        "SERIES": 48,
+        "OPS": 56,
+        "UPDATE-BYTES": 64,
+        "CHUNK-BYTES": 72,
+        "RESOURCE-BYTES": 80,
+        "IMAGE-WIDTH": 88,
+        "IMAGE-HEIGHT": 96,
+        "PATH-POINTS": 104,
+        "LABEL-BYTES": 112,
+        "UTF8-BYTES": 120,
+        "SAMPLES-APPEND": 128,
+        "SERIES-HISTORY": 136,
+        "SAMPLE-SLOTS": 144,
+        "MIN-INTERVAL-US": 152,
+    }
+    for field, offset in expected_fields.items():
+        definition = _definition(source, f"_RTE-L.{field}")
+        if offset == 0:
+            assert "+" not in definition
+        else:
+            assert f"{offset} +" in definition
+
+    for feature in ("CORE", "VECTOR", "IMAGE", "INSTRUMENT", "SERIES", "CADENCE"):
+        assert re.search(rf"(?m)^\d+\s+CONSTANT RTE-F-{feature}$", source)
+
+    valid = _definition(source, "_RTE-LIMITS-VALID-BODY")
+    for relationship in (
+        "_RTE-FEATURE-MASK INVERT AND",
+        "RTE-F-CORE AND 0=",
+        "RTE-F-SERIES AND SWAP RTE-F-INSTRUMENT",
+        "_RTE-L.LIVE-OWNERS @",
+        "_RTE-L.OWNER-RECORDS @ U>",
+        "_RTE-L.UTF8-BYTES @",
+        "_RTE-L.LABEL-BYTES @ U<",
+        "_RTE-L.SAMPLES-APPEND @",
+        "_RTE-L.SERIES-HISTORY @ U>",
+        "_RTE-L.SAMPLE-SLOTS @ U>",
+        "_RTE-L.IMAGE-WIDTH @",
+        "_RTE-L.IMAGE-HEIGHT @ _RTE-UMUL?",
+        "_RTE-L.RESOURCE-BYTES @ U>",
+    ):
+        assert relationship in valid
+    assert "_RTE-L.UPDATE-BYTES @ U> 0=" in _definition(
+        source, "_RTE-LIMIT-FLOOR?"
+    )
+    public_valid = _definition(source, "RTE-LIMITS-VALID?")
+    assert "0 _RTE-LV-L !" in public_valid
+    assert "0 _RTE-LV-FEATURES !" in public_valid
+
+    dispatch = _definition(source, "RTE-LIMITS@")
+    span = dispatch.index("RTE-LIMITS-SIZE _RTE-SPAN?")
+    disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", span)
+    execute = dispatch.index("_RTE-F.LIMITS-XT @ EXECUTE", disjoint)
+    validate = dispatch.index("RTE-LIMITS-VALID?", execute)
+    assert span < disjoint < execute < validate
+    assert "DUP RTE-S-OK = IF" in dispatch
+
+    callback = _definition(bridge, "_RTAPTE-LIMITS@")
+    provider = callback.index("RTAPT-LIMITS@")
+    provider_valid = callback.index("RTAPT-LIMITS-VALID?", provider)
+    neutral_valid = callback.index("RTE-LIMITS-VALID?", provider_valid)
+    copied = callback.index("_RTAPTE-LIMITS-COPY", neutral_valid)
+    assert provider < provider_valid < neutral_valid < copied
+    assert "RTAPT-S-OK <> IF" in callback
+    assert "_RTAPTE-FEATURES>RTE <> IF" in callback
+    bridge_scrub = _definition(bridge, "_RTAPTE-LIMITS-SCRUB")
+    for pointer in (
+        "_RTAPTE-LS-DST",
+        "_RTAPTE-LS-SRC",
+        "_RTAPTE-LS-ENGINE",
+        "_RTAPTE-LS-STATUS",
+    ):
+        assert f"0 {pointer} !" in bridge_scrub
+    copy = _definition(bridge, "_RTAPTE-LIMITS-COPY")
+    for field in expected_fields:
+        assert f"_RTAPT-L.{field} @" in copy
+        assert f"_RTE-L.{field} !" in copy
+    feature_map = _definition(bridge, "_RTAPTE-FEATURES>RTE")
+    for feature in ("CORE", "VECTOR", "IMAGE", "INSTRUMENT", "SERIES", "CADENCE"):
+        assert f"RTAPT-F-{feature}" in feature_map
+        assert f"RTE-F-{feature}" in feature_map
