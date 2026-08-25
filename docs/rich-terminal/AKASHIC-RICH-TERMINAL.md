@@ -495,6 +495,12 @@ AHOST-UIDL-READY!  ( xt context host -- )
 AHOST-QUIESCE-ALL  ( host -- ior )
 ```
 
+Desk exposes only the constructor pass-through
+`DESK-UIDL-READY! ( xt context -- )`. During `DESK-INIT-CB`, immediately after
+initializing its generic host and before launching any child, Desk copies that
+exact callback pair into `AHOST-UIDL-READY!`. It does not inspect the context,
+name an output backend, or allocate composition storage.
+
 The host invokes the callback exactly once for a launch after ordinary UIDL
 load and initial region assignment have succeeded, while the exact UCTX is
 active, and before crossing the application-initialization boundary. A zero

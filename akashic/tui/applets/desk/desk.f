@@ -45,6 +45,7 @@
 \    DESK-TRY-LAUNCH   ( desc -- id ior ) Transactional sub-app launch
 \    DESK-QUEUE-BUILTIN ( desc flags -- ) Bind built-in before run
 \    DESK-QUEUE-LAUNCH ( desc -- )     Set startup applet (before DESK-RUN)
+\    DESK-UIDL-READY! ( xt context -- ) Set neutral hosted-UIDL hook
 \    DESK-PACKAGE-RESOLVER! ( xt context -- ) Set lazy package resolver
 \    DESK-PACKAGE-RELEASER! ( xt context -- ) Set descriptor releaser
 \    DESK-RUN          ( -- )          Fill desc, call ASHELL-RUN
@@ -178,10 +179,14 @@ VARIABLE _DESK-PENDING-RESOLVER-XT
 VARIABLE _DESK-PENDING-RESOLVER-CTX
 VARIABLE _DESK-PENDING-RELEASER-XT
 VARIABLE _DESK-PENDING-RELEASER-CTX
+VARIABLE _DESK-PENDING-UIDL-READY-XT
+VARIABLE _DESK-PENDING-UIDL-READY-CTX
 0 _DESK-PENDING-RESOLVER-XT !
 0 _DESK-PENDING-RESOLVER-CTX !
 0 _DESK-PENDING-RELEASER-XT !
 0 _DESK-PENDING-RELEASER-CTX !
+0 _DESK-PENDING-UIDL-READY-XT !
+0 _DESK-PENDING-UIDL-READY-CTX !
 
 : _DESK-BUILTIN-ENTRY  ( index -- a )
     _DESK-BUILTIN-SZ * _DESK-BUILTIN-BUF + ;
@@ -484,6 +489,13 @@ VARIABLE _DXIO-RESET-STATUS
     _DESK-CURRENT-STATE @ IF 2DROP EXIT THEN
     _DESK-PENDING-RELEASER-CTX !
     _DESK-PENDING-RELEASER-XT ! ;
+
+\ Constructor-only pass-through for the generic applet-host UIDL-ready seam.
+\ Desk stores no backend state and does not interpret the opaque context.
+: DESK-UIDL-READY!  ( xt context -- )
+    _DESK-CURRENT-STATE @ IF 2DROP EXIT THEN
+    _DESK-PENDING-UIDL-READY-CTX !
+    _DESK-PENDING-UIDL-READY-XT ! ;
 
 ' _DESK-PACKAGE-RESOLVER 0 DESK-PACKAGE-RESOLVER!
 ' _DESK-PACKAGE-RELEASER 0 DESK-PACKAGE-RELEASER!
@@ -1983,6 +1995,9 @@ VARIABLE _DTS-END
     ['] _DESK-HOST-RELAYOUT _DESK-HOST AHOST-RELAYOUT!
     ['] _DESK-HOST-RELEASE _DESK-HOST AHOST-RELEASE!
     ['] _DESK-HOST-CLOSED _DESK-HOST AHOST-CLOSED!
+    _DESK-PENDING-UIDL-READY-XT @
+    _DESK-PENDING-UIDL-READY-CTX @
+    _DESK-HOST AHOST-UIDL-READY!
     0 _DESK-VH !
     0 _DESK-FULLFRAME !
     0 _DESK-CATALOG !
@@ -2542,6 +2557,7 @@ GUARD _desk-guard
 ' DESK-QUEUE-BUILTIN CONSTANT _desk-queuebuiltin-xt
 ' DESK-PACKAGE-RESOLVER! CONSTANT _desk-package-resolver-xt
 ' DESK-PACKAGE-RELEASER! CONSTANT _desk-package-releaser-xt
+' DESK-UIDL-READY! CONSTANT _desk-uidl-ready-xt
 ' DESK-RUN          CONSTANT _desk-run-xt
 
 \ Launch and close can invoke arbitrary app code.  These are owner-core
@@ -2572,6 +2588,7 @@ GUARD _desk-guard
 : DESK-QUEUE-BUILTIN _desk-queuebuiltin-xt _desk-guard WITH-GUARD ;
 : DESK-PACKAGE-RESOLVER! _desk-package-resolver-xt _desk-guard WITH-GUARD ;
 : DESK-PACKAGE-RELEASER! _desk-package-releaser-xt _desk-guard WITH-GUARD ;
+: DESK-UIDL-READY! _desk-uidl-ready-xt _desk-guard WITH-GUARD ;
 \ Like ASHELL-RUN, DESK-RUN is the owner-core yielding lifecycle driver.
 \ Task-aware CATCH may span the loop; a lifetime metadata guard may not,
 \ because it would exclude bounded control operations while this task yields.

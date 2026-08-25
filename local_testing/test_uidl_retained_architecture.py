@@ -174,6 +174,37 @@ def test_generic_host_uidl_ready_hook_is_neutral_and_exactly_placed() -> None:
     assert ready_at < launch.index("APP.INIT-XT @")
 
 
+def test_desk_passes_constructor_uidl_hook_to_its_generic_host() -> None:
+    desk = _text("akashic/tui/applets/desk/desk.f")
+
+    setter = _word(desk, "DESK-UIDL-READY!")
+    assert "_DESK-CURRENT-STATE @ IF 2DROP EXIT THEN" in setter
+    assert setter.index("_DESK-PENDING-UIDL-READY-CTX !") < setter.index(
+        "_DESK-PENDING-UIDL-READY-XT !"
+    )
+
+    init = _word(desk, "DESK-INIT-CB")
+    host_init = init.index("_DESK-HOST AHOST-INIT")
+    hook = init.index("_DESK-HOST AHOST-UIDL-READY!")
+    autostart = init.index("_DESK-AUTOSTART-CATALOG")
+    assert host_init < hook < autostart
+    assert (
+        "_DESK-PENDING-UIDL-READY-XT @\n"
+        "    _DESK-PENDING-UIDL-READY-CTX @\n"
+        "    _DESK-HOST AHOST-UIDL-READY!"
+    ) in init
+
+    for forbidden in (
+        "APTSCB",
+        "RTAPT",
+        "RTERM-",
+        "PT-RETAINED",
+        "rich-terminal/",
+    ):
+        assert forbidden not in setter
+        assert forbidden not in init
+
+
 def test_generic_host_close_phases_and_init_boundary_are_persistent() -> None:
     host = _text("akashic/tui/applet-host/host.f")
 

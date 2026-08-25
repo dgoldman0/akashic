@@ -396,11 +396,14 @@ A sample config template is provided in
 |------|-------|-------------|
 | `DESK-QUEUE-LAUNCH` | `( desc -- )` | Compatibly register a pinned/autostart built-in.  Call before `DESK-RUN`. |
 | `DESK-QUEUE-BUILTIN` | `( desc flags -- )` | Queue an exact-ID built-in binding with caller-selected catalog defaults. |
+| `DESK-UIDL-READY!` | `( xt context -- )` | Before run, set the neutral hosted-UIDL callback `( host slot context -- ior )`; zero selects the baseline path. |
 | `DESK-PACKAGE-RESOLVER!` | `( xt context -- )` | Replace the lazy package resolver; hook is `( entry context -- desc status )`. |
 | `DESK-PACKAGE-RELEASER!` | `( xt context -- )` | Before run, set the companion descriptor hook `( desc context -- )`. |
 | `DESK-RUN` | `( -- )` | Fill `DESK-DESC`, call `ASHELL-RUN`.  Blocks until shell exits. |
 
-The package hook setters are constructor-only.  Replacing the resolver clears
+The UIDL-ready and package hook setters are constructor-only. Desk passes the
+UIDL callback and opaque context directly to its generic `AHOST`; it owns no
+output-backend state and names no terminal protocol. Replacing the resolver clears
 the pending releaser, so a custom resolver that allocates descriptors must then
 install its matching releaser before `DESK-RUN`.
 
