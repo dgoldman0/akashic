@@ -729,6 +729,9 @@ VARIABLE _RTAPT-QV-OK
     DUP _RTAPT-ENGINE-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN
     _RTAPT-E.LAST-STATUS @ ;
 
+: RTAPT-VALID?  ( engine -- flag )
+    _RTAPT-ENGINE-VALID? ;
+
 VARIABLE _RTAPT-QA-E
 VARIABLE _RTAPT-QA-STATUS
 VARIABLE _RTAPT-QA-O
@@ -1831,6 +1834,12 @@ VARIABLE _RTAPT-PR-PENDING
         _RTAPT-E.LAST-STATUS @ EXIT
     THEN
     _RTAPT-ST-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <> IF
+        \ PT-COMPLETION-POLL has no completion to return after a synchronized
+        \ close.  Detect that boundary here so an unconsumed output cannot
+        \ remain WOULD_BLOCK forever while shutdown waits on this engine.
+        _RTAPT-ST-E @ _RTAPT-SESSION-ENDED? IF
+            RTAPT-S-SESSION-LOST _RTAPT-ST-E @ _RTAPT-QUARANTINE-ALL EXIT
+        THEN
         _RTAPT-ST-E @ _RTAPT-POLL-COMPLETION
         IF DUP _RTAPT-ST-E @ _RTAPT-E.LAST-STATUS ! EXIT THEN
         DUP RTAPT-S-OK <> IF
@@ -1876,3 +1885,31 @@ VARIABLE _RTAPT-PR-PENDING
         THEN
     THEN
     DUP _RTAPT-ST-E @ _RTAPT-E.LAST-STATUS ! ;
+
+VARIABLE _RTAPT-SE-E
+
+\ RTAPT-SETTLE ( engine -- status pending? )
+\   Reconcile only an already-admitted owner/output completion.  Local rich
+\ candidates, an open CELL transaction, and queued lifecycle requests carry
+\ no emitted-result authority and neither block nor become published here.
+\ This operation never services PT and never starts ordinary queue work.
+: RTAPT-SETTLE  ( engine -- status pending? )
+    DUP _RTAPT-SE-E ! _RTAPT-ENGINE-VALID? 0= IF
+        RTAPT-S-INVALID 0 EXIT
+    THEN
+    _RTAPT-SE-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-QUARANTINED = IF
+        _RTAPT-SE-E @ _RTAPT-E.LAST-STATUS @ 0 EXIT
+    THEN
+    _RTAPT-SE-E @ _RTAPT-SESSION-ENDED? IF
+        RTAPT-S-SESSION-LOST _RTAPT-SE-E @ _RTAPT-QUARANTINE-ALL 0 EXIT
+    THEN
+    _RTAPT-SE-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE = IF
+        RTAPT-S-OK 0 EXIT
+    THEN
+    _RTAPT-SE-E @ _RTAPT-POLL-COMPLETION IF
+        DUP _RTAPT-SE-E @ _RTAPT-E.LAST-STATUS ! 0 EXIT
+    THEN
+    DUP RTAPT-S-OK <> IF
+        DUP _RTAPT-SE-E @ _RTAPT-E.LAST-STATUS ! 0 EXIT
+    THEN DROP
+    RTAPT-S-WOULD-BLOCK DUP _RTAPT-SE-E @ _RTAPT-E.LAST-STATUS ! -1 ;

@@ -173,6 +173,35 @@ publishes a CELL-only, retained-only, or mixed change under the shared
 transaction ID and revision. Accepted resize recovery uses `CELL_REPLACE` in
 that envelope.
 
+The APT screen adapter exposes this coordinator through one optional borrowed
+publisher descriptor. The descriptor carries the exact PT session, callback
+context, normalized CELL transaction callbacks, an ordinary scheduler step,
+and a distinct close-settlement callback. The baseline adapter does not depend
+on a concrete rich engine. At each `begin` it selects the publisher only when
+retained discovery is currently available; otherwise it selects the legacy
+CELL path. That decision is latched through span, cursor, commit, or abort, so
+discovery and reset transitions cannot split one transaction across paths.
+
+`PT-SERVICE` remains owned by the APT screen adapter. Ordinary service calls it
+before the publisher scheduler, which may reconcile a completion or admit one
+queued lifecycle request. Synchronized close uses a separate operation: it
+calls `PT-CLOSE` first to latch MegaPad's finite settlement/publication
+deadline and writer barrier, then services PT's pending path and asks the
+publisher to settle only an already-admitted result. Later service calls may
+reconcile that result, complete a crossed reset, or publish CLOSE, but cannot
+restart the bound. Settlement must not submit queued lifecycle work.
+Captured or sealed local candidates and an open uncommitted CELL transaction
+carry no emitted-result authority and do not block close; the synchronized
+session retirement discards them. Once PT is `CLOSING`, only `PT-SERVICE` may
+run until ANSI ownership is restored. At that proven boundary, one final
+settlement call quarantines any remaining engine-local candidate or lifecycle
+state before the adapter restores ANSI.
+Every ANSI observation follows the same retirement path, including a
+peer-initiated close reached through ordinary service: settlement is invoked
+once as a best-effort local quarantine, the latched publisher route is cleared,
+and only then is the ANSI screen backend restored. PT has already released wire
+ownership at this point, so that callback cannot emit protocol work.
+
 The screen front buffer and retained terminal state advance together only
 after the complete unified commit has been accepted locally. Backpressure or a
 semantic failure leaves both prior states authoritative, leaves screen dirty,
