@@ -266,6 +266,7 @@ from diskutil import (  # noqa: E402
     pack_forth_source,
 )
 from presentation_terminal import DriverStatus, TerminalState  # noqa: E402
+from presentation_terminal.retained_model import RetainedPolicy  # noqa: E402
 from session import (  # noqa: E402
     MachineSession,
     PresentationSessionPolicy,
@@ -279,10 +280,15 @@ class PresentationProfile:
     guest_rx_bytes: int
     guest_tx_bytes: int
     host_policy: PresentationSessionPolicy
+    retained_policy: RetainedPolicy | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.host_policy, PresentationSessionPolicy):
             raise TypeError("host_policy must be a PresentationSessionPolicy")
+        if self.retained_policy is not None and not isinstance(
+            self.retained_policy, RetainedPolicy
+        ):
+            raise TypeError("retained_policy must be a RetainedPolicy or None")
         for name in ("guest_rx_bytes", "guest_tx_bytes"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
@@ -294,7 +300,11 @@ class PresentationProfile:
             raise ValueError("guest_tx_bytes cannot admit a maximum row frame")
 
     def configuration(self, cols: int, rows: int):
-        return self.host_policy.configuration(cols, rows)
+        return self.host_policy.configuration(
+            cols,
+            rows,
+            retained_policy=self.retained_policy,
+        )
 
 
 @dataclass(frozen=True)
@@ -29741,7 +29751,7 @@ def _presentation_server_arguments(profile: Profile) -> list[str]:
     presentation = profile.presentation
     if presentation is None:
         return []
-    return [
+    arguments = [
         "--presentation-terminal-policy",
         json.dumps(
             presentation.host_policy.to_dict(),
@@ -29749,6 +29759,18 @@ def _presentation_server_arguments(profile: Profile) -> list[str]:
             separators=(",", ":"),
         ),
     ]
+    if presentation.retained_policy is not None:
+        arguments.extend(
+            (
+                "--retained-terminal-policy",
+                json.dumps(
+                    presentation.retained_policy.to_dict(),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            )
+        )
+    return arguments
 
 
 def serve(

@@ -6,6 +6,7 @@ import json
 import re
 import struct
 import sys
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -80,6 +81,10 @@ from diskutil import (  # noqa: E402
 )
 from forth_dependencies import module_key  # noqa: E402
 from presentation_terminal import TerminalState  # noqa: E402
+from presentation_terminal.retained_model import (  # noqa: E402
+    RetainedFeature,
+    RetainedPolicy,
+)
 
 
 LIBRARY_RENDERER_FREE_PROFILES = (
@@ -1753,6 +1758,47 @@ def test_desktop_apt1_launchers_transfer_the_same_host_policy() -> None:
     assert from_bios.call_args.kwargs["presentation"] == (
         profile.presentation.configuration(100, 32)
     )
+
+
+def test_presentation_launchers_carry_an_explicit_retained_policy() -> None:
+    profile = PROFILES["desktop-apt1"]
+    assert profile.presentation is not None
+    host = profile.presentation.host_policy
+    retained = RetainedPolicy(
+        features=RetainedFeature.CORE | RetainedFeature.CADENCE,
+        max_owner_records=1,
+        max_live_owners=1,
+        max_regions=1,
+        max_resources=0,
+        max_objects=0,
+        max_series=0,
+        max_operations_per_transaction=1,
+        max_resource_chunk_bytes=0,
+        max_retained_transaction_bytes=host.maximum_transaction_bytes,
+        total_resource_bytes=0,
+        image_format=0,
+        max_image_width=0,
+        max_image_height=0,
+        max_path_points=0,
+        max_label_bytes=0,
+        max_samples_per_append=0,
+        max_history_per_series=0,
+        minimum_presentation_interval_us=500_000,
+        total_sample_slots=0,
+        total_utf8_bytes=0,
+        client_to_terminal_max_payload=3_212,
+        terminal_to_client_max_payload=3_212,
+        base_max_transaction_bytes=host.maximum_transaction_bytes,
+    )
+    enabled = replace(
+        profile,
+        presentation=replace(profile.presentation, retained_policy=retained),
+    )
+
+    arguments = _presentation_server_arguments(enabled)
+    assert arguments[2] == "--retained-terminal-policy"
+    assert json.loads(arguments[3]) == retained.to_dict()
+    assert enabled.presentation.configuration(100, 32).retained_policy == retained
 
 
 def test_desktop_apt1_smoke_rejects_fallback_and_terminal_loss() -> None:
