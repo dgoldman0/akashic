@@ -157,53 +157,6 @@ VARIABLE _DESK-PENDING-SBOX-OWNER
 VARIABLE _DESK-PENDING-SBOX-CAPACITY
 0 _DESK-PENDING-SBOX-CAPACITY !
 
-\ The baseline Desk owns no presentation broker.  An explicit composition
-\ may inject one borrowed global service plus its host-only geometry and
-\ retirement callbacks before DESK-RUN.  All four constructor cells remain
-\ zero in the ANSI profile and are consumed by the next Desk activation.
-VARIABLE _DESK-PENDING-PRES-SERVICE
-VARIABLE _DESK-PENDING-PRES-BOUNDS-XT
-VARIABLE _DESK-PENDING-PRES-RETIRE-XT
-VARIABLE _DESK-PENDING-PRES-CONTEXT
-0 _DESK-PENDING-PRES-SERVICE !
-0 _DESK-PENDING-PRES-BOUNDS-XT !
-0 _DESK-PENDING-PRES-RETIRE-XT !
-0 _DESK-PENDING-PRES-CONTEXT !
-
-0 CONSTANT DESK-PRES-INJECT-S-OK
-1 CONSTANT DESK-PRES-INJECT-S-INVALID
-2 CONSTANT DESK-PRES-INJECT-S-STATE
-
-: _DESK-PRES-PENDING-CLEAR  ( -- )
-    0 _DESK-PENDING-PRES-SERVICE !
-    0 _DESK-PENDING-PRES-BOUNDS-XT !
-    0 _DESK-PENDING-PRES-RETIRE-XT !
-    0 _DESK-PENDING-PRES-CONTEXT ! ;
-
-VARIABLE _DPIC-SERVICE
-VARIABLE _DPIC-BOUNDS-XT
-VARIABLE _DPIC-RETIRE-XT
-VARIABLE _DPIC-CONTEXT
-
-\ DESK-PRESENTATION-INJECT
-\   Trusted composition-only constructor seam.  Desk borrows every supplied
-\   cell for one activation; it allocates no presentation storage and exports
-\   no terminal or backend handle beyond the existing service endpoint.
-: DESK-PRESENTATION-INJECT
-  ( service bounds-xt retire-xt context -- status )
-    _DPIC-CONTEXT ! _DPIC-RETIRE-XT ! _DPIC-BOUNDS-XT ! _DPIC-SERVICE !
-    _DESK-CURRENT-STATE @ IF DESK-PRES-INJECT-S-STATE EXIT THEN
-    _DESK-PENDING-PRES-SERVICE @ IF DESK-PRES-INJECT-S-STATE EXIT THEN
-    _DPIC-SERVICE @ 0= _DPIC-BOUNDS-XT @ 0= OR
-    _DPIC-RETIRE-XT @ 0= OR IF
-        DESK-PRES-INJECT-S-INVALID EXIT
-    THEN
-    _DPIC-SERVICE @ _DESK-PENDING-PRES-SERVICE !
-    _DPIC-BOUNDS-XT @ _DESK-PENDING-PRES-BOUNDS-XT !
-    _DPIC-RETIRE-XT @ _DESK-PENDING-PRES-RETIRE-XT !
-    _DPIC-CONTEXT @ _DESK-PENDING-PRES-CONTEXT !
-    DESK-PRES-INJECT-S-OK ;
-
 \ Built-ins are constructor inputs, like the startup queue.  Each entry is
 \ (APP-DESC, default catalog flags).  DESK-QUEUE-LAUNCH also registers its
 \ descriptor here so existing boot profiles acquire catalog entries without
@@ -362,11 +315,6 @@ _DESK-CURRENT-STATE CMP-CELL: _DESK-SBOX-CAPACITY
 _DESK-CURRENT-STATE SBOX-VALUE-LIMITS-SIZE CMP-FIELD: _DESK-SBOX-LIMITS
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SANDBOX
 _DESK-CURRENT-STATE CMP-CELL: _DESK-SANDBOX-U
-_DESK-CURRENT-STATE CMP-CELL: _DESK-PRES-SERVICE
-_DESK-CURRENT-STATE CMP-CELL: _DESK-PRES-BOUNDS-XT
-_DESK-CURRENT-STATE CMP-CELL: _DESK-PRES-RETIRE-XT
-_DESK-CURRENT-STATE CMP-CELL: _DESK-PRES-CONTEXT
-_DESK-CURRENT-STATE CMP-CELL: _DESK-PRES-STATUS
 _DESK-CURRENT-STATE XIO-SERVICE-SIZE CMP-FIELD: _DESK-EXTERNAL-IO
 _DESK-CURRENT-STATE RID-SIZE CMP-FIELD: _DESK-DAYBOOK-RID
 _DESK-CURRENT-STATE CMP-CELL: _DESK-DAYBOOK-OWNER
@@ -895,35 +843,11 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
     DUP _SL-RGN @ ?DUP IF RGN-FREE THEN
     0 0 _DL-H @ _DL-W @ RGN-NEW SWAP _SL-RGN ! ;
 
-\ Presentation hook failures are diagnostics, not cell-layout rollback.
-\ Preserve the first nonzero backend status for host inspection while every
-\ later relayout continues publishing the newest complete Desk geometry.
-: _DESK-PRES-REMEMBER  ( status -- )
-    ?DUP IF
-        _DESK-PRES-STATUS @ 0= IF _DESK-PRES-STATUS ! ELSE DROP THEN
-    THEN ;
-
-: DESK-PRESENTATION-STATUS@  ( -- status )
-    _DESK-CURRENT-STATE @ IF _DESK-PRES-STATUS @ ELSE 0 THEN ;
-
-: _DESK-PRES-RELAYOUT  ( -- )
-    _DESK-PRES-BOUNDS-XT @ 0= IF EXIT THEN
-    _DESK-HEAD @
-    BEGIN ?DUP WHILE
-        DUP _SL-INST @ ?DUP IF
-            _DESK-PRES-CONTEXT @
-            _DESK-PRES-BOUNDS-XT @ EXECUTE _DESK-PRES-REMEMBER
-        THEN
-        _SL-NEXT @
-    REPEAT ;
-
 \ Master relayout.
 : DESK-RELAYOUT  ( -- )
     _DESK-COLLECT-VISIBLE
     _DESK-FREE-REGIONS
-    _DESK-VIS-N @ DUP 0= IF
-        DROP _DESK-PRES-RELAYOUT ASHELL-DIRTY! EXIT
-    THEN
+    _DESK-VIS-N @ DUP 0= IF DROP ASHELL-DIRTY! EXIT THEN
     DUP _DESK-GRID
     _DESK-TILE-SIZES
     0 DO I _DESK-ASSIGN-TILE LOOP
@@ -943,7 +867,6 @@ VARIABLE _DA-TW  VARIABLE _DA-TH
         THEN
         DROP
     LOOP
-    _DESK-PRES-RELAYOUT
     -1 _DESK-BG-DIRTY !
     ASHELL-DIRTY! ;
 
@@ -985,14 +908,6 @@ VARIABLE _DHR-FIRST
 : _DESK-HOST-RELEASE  ( child-instance desk-instance -- ior )
     _DESK-USE-STATE _DHR-INST !
     0 _DHR-FIRST !
-    \ Detach every presentation provider while the exact CINST and its
-    \ component state are still live.  The generic host invokes this release
-    \ after application shutdown even when shutdown threw, and before freeing
-    \ the region, registry entry, instance state, or instance itself.
-    _DESK-PRES-RETIRE-XT @ ?DUP IF
-        _DHR-INST @ _DESK-PRES-CONTEXT @ ROT EXECUTE
-        DUP _DESK-PRES-REMEMBER _DHR-REMEMBER
-    THEN
     _DESK-SBOX-LIVE? IF
         _DHR-INST @ _DESK-SANDBOX @
             DESK-SBOX-JOB-OWNER-DRAIN _DHR-REMEMBER
@@ -1235,9 +1150,6 @@ VARIABLE _DSSA-ENTRY
 : _DESK-SERVICE-ENDPOINT@  ( -- service )
     _DESK-ENDPOINT ;
 
-: _DESK-SERVICE-PRESENTATION@  ( -- service | 0 )
-    _DESK-PRES-SERVICE @ ;
-
 : _DESK-SERVICE-TABLE-SETUP  ( -- status )
     _DESK-SERVICE-TABLE-INIT
     S" org.akashic.net.external-io" ['] _DESK-SERVICE-XIO@
@@ -1264,13 +1176,7 @@ VARIABLE _DSSA-ENTRY
     S" org.akashic.resource.daybook" ['] _DESK-SERVICE-DAYBOOK@
         _DESK-SERVICE+ DUP IF EXIT THEN DROP
     S" org.akashic.interop.endpoint" ['] _DESK-SERVICE-ENDPOINT@
-        _DESK-SERVICE+ DUP IF EXIT THEN DROP
-    _DESK-PRES-SERVICE @ IF
-        S" org.akashic.tui.presentation.v1"
-        ['] _DESK-SERVICE-PRESENTATION@ _DESK-SERVICE+
-    ELSE
-        _DSS-S-OK
-    THEN ;
+        _DESK-SERVICE+ ;
 
 : _DESK-ENDPOINT-SERVICE  ( id-a id-u desk-instance -- service | 0 )
     _DESK-USE-STATE _DESK-SERVICE@ ;
@@ -2049,12 +1955,6 @@ VARIABLE _DTS-END
     _DESK-PENDING-SBOX-CAPACITY @ _DESK-SBOX-CAPACITY !
     0 _DESK-PENDING-SBOX-OWNER !
     0 _DESK-PENDING-SBOX-CAPACITY !
-    _DESK-PENDING-PRES-SERVICE @ _DESK-PRES-SERVICE !
-    _DESK-PENDING-PRES-BOUNDS-XT @ _DESK-PRES-BOUNDS-XT !
-    _DESK-PENDING-PRES-RETIRE-XT @ _DESK-PRES-RETIRE-XT !
-    _DESK-PENDING-PRES-CONTEXT @ _DESK-PRES-CONTEXT !
-    0 _DESK-PRES-STATUS !
-    _DESK-PRES-PENDING-CLEAR
     _DESK-HOST AHOST-INIT
     _DINI-INST @ _DESK-HOST AHOST-CONTEXT!
     ['] _DESK-HOST-RELAYOUT _DESK-HOST AHOST-RELAYOUT!
@@ -2573,7 +2473,6 @@ VARIABLE _DRUN-IOR
     ['] _DESK-RUN-BODY CATCH _DRUN-IOR !
     0 _DESK-PENDING-SBOX-OWNER !
     0 _DESK-PENDING-SBOX-CAPACITY !
-    _DESK-PRES-PENDING-CLEAR
     0 _DSBI-OWNER !
     0 _DSBI-CAPACITY !
     0 _DSBI-SERVICE !
