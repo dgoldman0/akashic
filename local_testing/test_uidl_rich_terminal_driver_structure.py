@@ -33,6 +33,7 @@ def test_driver_is_optional_neutral_and_caller_bounded() -> None:
     assert re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code) == [
         "../applet-host/host.f",
         "../../utils/memory-span.f",
+        "engine.f",
     ]
 
     # This driver is a host/UIDL lifecycle boundary, not another terminal
@@ -46,6 +47,7 @@ def test_driver_is_optional_neutral_and_caller_bounded() -> None:
         "UART-",
         "rich-terminal.f",
         "apt1-engine.f",
+        "engine-apt1.f",
         "screen-adapter-apt1.f",
     ):
         assert forbidden not in code
@@ -67,22 +69,23 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
     region = REGION.read_text(encoding="utf-8")
 
     assert re.findall(
-        r"(?m)^(\d+) CONSTANT (RTERM-S-[A-Z-]+)\s*$", source
+        r"(?m)^(RTE-S-[A-Z-]+)\s+CONSTANT (RTERM-S-[A-Z-]+)\s*$",
+        source,
     ) == [
-        ("0", "RTERM-S-OK"),
-        ("1", "RTERM-S-WOULD-BLOCK"),
-        ("2", "RTERM-S-UNAVAILABLE"),
-        ("3", "RTERM-S-CAPACITY"),
-        ("4", "RTERM-S-STALE"),
-        ("5", "RTERM-S-INVALID"),
-        ("6", "RTERM-S-SESSION-LOST"),
-        ("7", "RTERM-S-SOURCE"),
+        ("RTE-S-OK", "RTERM-S-OK"),
+        ("RTE-S-WOULD-BLOCK", "RTERM-S-WOULD-BLOCK"),
+        ("RTE-S-UNAVAILABLE", "RTERM-S-UNAVAILABLE"),
+        ("RTE-S-CAPACITY", "RTERM-S-CAPACITY"),
+        ("RTE-S-STALE", "RTERM-S-STALE"),
+        ("RTE-S-INVALID", "RTERM-S-INVALID"),
+        ("RTE-S-SESSION-LOST", "RTERM-S-SESSION-LOST"),
+        ("RTE-S-SOURCE", "RTERM-S-SOURCE"),
     ]
     assert "8 U<" in _definition(source, "RTERM-STATUS-VALID?")
 
     assert "96 CONSTANT RTERM-HOST-BINDING-SIZE" in source
     assert "144 CONSTANT RTERM-UIDL-BINDING-SIZE" in source
-    assert "96 CONSTANT RTERM-UIDL-BACKEND-SIZE" in source
+    assert "104 CONSTANT RTERM-UIDL-BACKEND-SIZE" in source
     assert "_RGN-DESC-SIZE CONSTANT RGN-SIZE" in region
     assert "RTERM-UIDL-BINDING-SIZE" in _definition(
         source, "RTERM-UIDL-BINDING-BYTES"
@@ -95,7 +98,9 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
         "RTERM-STATUS-VALID?": "( status -- flag )",
         "RTERM-UIDL-BINDING-BYTES": "( -- bytes )",
         "RTERM-UIDL-BACKEND-BYTES": "( -- bytes )",
-        "RTERM-UIDL-INIT": "( host records-a records-u backend -- status )",
+        "RTERM-UIDL-INIT": (
+            "( host engine records-a records-u backend -- status )"
+        ),
         "RTERM-UIDL-FINI": "( backend -- status )",
         "RTERM-UIDL-VALID?": "( backend -- flag )",
         "RTERM-UIDL-STORAGE-DISJOINT?": "( a u backend -- flag )",
@@ -228,9 +233,11 @@ def test_init_preflights_all_ranges_before_publishing_mutation() -> None:
     init = _definition(source, "_RTERM-UIDL-INIT-BODY")
 
     assert ranges.count("_RTERM-SPAN?") == 3
+    assert "_RTERM-I-ENGINE @ RTE-VALID?" in ranges
     assert "RTERM-UIDL-BINDING-SIZE MOD" in ranges
     assert "RTERM-UIDL-BINDING-SIZE / 0=" in ranges
-    assert ranges.count("_RTERM-DISJOINT?") == 3
+    assert ranges.count("_RTERM-DISJOINT?") == 6
+    assert ranges.count("RTE-STORAGE-DISJOINT?") == 3
     assert "!" not in ranges
 
     preflight = init.index("_RTERM-UIDL-RANGES? 0= IF")
@@ -244,6 +251,7 @@ def test_init_preflights_all_ranges_before_publishing_mutation() -> None:
         "_RTERM-B.SIZE !",
         "_RTERM-B.SELF !",
         "_RTERM-B.HOST !",
+        "_RTERM-B.ENGINE !",
         "_RTERM-B.RECORDS-A !",
         "_RTERM-B.RECORDS-U !",
         "_RTERM-B.CAPACITY !",

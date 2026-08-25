@@ -22,18 +22,24 @@ ordinary domain state and uses the existing UIDL element tree, bindings,
 subscriptions, semantic widgets, dirtying, layout, focus, and event mechanisms.
 The same `UCTX` owns that UI for the complete activation lifetime.
 
-The implementation has two layers. One generic, consumer-neutral Akashic
-`RTAPT`/`RTERM` engine owns retained wire lifecycle for one live enhanced
-terminal session. It uses caller-bounded storage and has no knowledge of
-`AHOST`, `AHS`, CINST, UCTX, Desk, or any applet. An explicit composition may
-use that engine outside Desk and UIDL-TUI without acquiring a second protocol
-or session implementation.
+The implementation has three layers. One generic, consumer-neutral Akashic
+engine contract owns retained lifecycle for one live enhanced terminal
+session. The current `RTAPT` provider implements that contract over APT-1 with
+caller-bounded storage and has no knowledge of `AHOST`, `AHS`, CINST, UCTX,
+Desk, or any applet. An explicit composition may use that engine outside Desk
+and UIDL-TUI without acquiring a second protocol or session implementation.
+
+An immutable caller-owned `RTE` facade is the operation boundary above a
+concrete provider. It exposes neutral status, owner, transaction, region, and
+storage-disjoint operations plus one opaque provider context. Only the
+provider bridge names both vocabularies; generic UIDL code neither names nor
+loads `RTAPT`.
 
 Above it, the optional UIDL-TUI rich-terminal driver adapts UIDL semantics to
-the generic engine. Desk and the applet host attach, project, relayout, and
-detach UCTXs through private driver operations. A Desk-owned UIDL context, when
-present, follows the same path as a child UCTX; Desk UI code does not author a
-retained scene manually.
+the generic engine facade. Desk and the applet host attach, project, relayout,
+and detach UCTXs through private driver operations. A Desk-owned UIDL context,
+when present, follows the same path as a child UCTX; Desk UI code does not
+author a retained scene manually.
 
 The following are forbidden application interfaces:
 
@@ -125,17 +131,37 @@ each local admission boundary.
 
 ## 4. Generic engine construction and caller-owned storage
 
-An optional composition constructs the consumer-neutral engine with:
+An optional composition constructs a concrete engine and publishes its
+consumer-neutral operation boundary with:
 
 ```forth
-RTERM-BACKEND-INIT     ( config backend -- status )
-RTERM-BACKEND-FINI     ( backend -- status )
-RTERM-BACKEND-STATUS@  ( backend -- status )
+RTE-FACADE-BYTES       ( -- bytes )
+RTE-VALID?             ( facade -- flag )
+RTE-STORAGE-DISJOINT?  ( a u facade -- flag )
+RTE-STATUS@            ( facade -- status )
+
+RTE-OWNER-OPEN         ( owner generation quotas... facade -- status )
+RTE-OWNER-STATE@       ( owner generation facade -- owner-state status )
+RTE-RICH-BEGIN         ( retained-mode facade -- status )
+RTE-REGION-DEFINE      ( owner generation region geometry... facade -- status )
+RTE-RICH-SEAL          ( disposition facade -- status )
+RTE-RICH-CANCEL        ( facade -- status )
+RTE-OWNER-DROP         ( owner generation facade -- status )
 ```
 
-`RTERM-*` names the consumer-neutral Akashic contract. The APT-1
-implementation uses the collision-free `RTAPT-*` prefix and is only one engine
-implementation; the UIDL-TUI adapter does not depend on that concrete prefix.
+`RTE-*` names the backend-neutral Akashic contract. The APT-1 implementation
+uses the collision-free `RTAPT-*` prefix and is only one engine implementation.
+Its `RTAPTE-INIT ( rtapt-engine facade -- status )` bridge performs the sole
+mapping and proves that the facade descriptor is disjoint from all concrete
+provider storage before publishing it. The UIDL-TUI adapter depends only on
+`RTE`.
+
+This first facade revision is the neutral boundary for RTAPT's currently
+implemented owner, transaction, region, status, and alias operations. It does
+not claim semantic-projector readiness: negotiated-limit snapshots, region
+replacement, and checked semantic snapshot/object operations arrive with the
+projector slice. Until then `RTERM-UCTX-PROJECT` remains explicitly
+`RTERM-S-UNAVAILABLE` and invokes none of the facade operations.
 
 `config` names the exact borrowed PT session, output policy, and caller-owned
 spans and capacities for:
@@ -319,7 +345,7 @@ RTERM-HOST-BINDING-CAPTURE  ( host slot host-binding -- status )
 
 RTERM-UIDL-BINDING-BYTES    ( -- bytes )
 RTERM-UIDL-BACKEND-BYTES    ( -- bytes )
-RTERM-UIDL-INIT             ( host records-a records-u backend -- status )
+RTERM-UIDL-INIT             ( host engine records-a records-u backend -- status )
 RTERM-UIDL-FINI             ( backend -- status )
 RTERM-UIDL-VALID?           ( backend -- flag )
 RTERM-UIDL-STORAGE-DISJOINT? ( a u backend -- flag )
@@ -330,11 +356,12 @@ RTERM-AHOST-UIDL-READY      ( host slot host-binding -- ior )
 ```
 
 This foundation has no `RTAPT-*`, screen-publisher, MegaPad, Desk, or applet
-dependency. Its immutable UIDL callback installation carries the exact backend
-as explicit composition context; the context is not stored in a UCTX. Until a
-separate backend-neutral semantic projector facade exists, attach and geometry
-tracking are local-only, project returns `RTERM-S-UNAVAILABLE`, quiesce proves
-the empty source set, and detach creates no wire owner or tombstone. In
+dependency. It borrows one immutable `RTE` facade, and its immutable UIDL
+callback installation carries the exact driver backend as explicit composition
+context; neither context is stored in a UCTX. Until the backend-neutral
+semantic projector exists, attach and geometry tracking are local-only,
+project returns `RTERM-S-UNAVAILABLE`, quiesce proves the empty source set, and
+detach creates no wire owner or tombstone. In
 particular, the foundation must not open a default or root-region-only owner:
 owner quotas can be admitted only from one complete supported semantic tree.
 Construction and attach admit the exact declared application descriptor,
@@ -396,9 +423,14 @@ a UCTX, slot, or CINST component with a different tuple is stale or invalid.
 Attach reserves one preallocated binding record but has no wire side effect.
 The first projection, after normal application initialization and binding,
 walks the complete semantic tree, validates all retained-capable snapshots,
-derives exact quotas, and admits the owner atomically. Required counts, byte
-capacities, resource overlap, series history, and transaction operation/byte
-bounds must all fit local storage and negotiated terminal maxima before
+derives exact requested quotas, and atomically admits the complete desired
+snapshot to caller-bounded storage. Required counts, byte capacities, resource
+overlap, series history, and transaction operation/byte bounds must fit local
+storage before that snapshot is accepted. Local attach and this first complete
+desired snapshot may occur while retained discovery is still pending. The
+accepted snapshot is kept as bounded backend state; pending discovery does not
+authorize a wire owner or discard the snapshot. Once discovery is available,
+the requested quotas must also fit the negotiated terminal maxima before
 `OWNER_OPEN` is emitted.
 
 The owner reservation is frozen for that UCTX materialization. Dynamic values
@@ -425,6 +457,14 @@ projection recipe and retained terminal state authoritative while UIDL and CELL 
 remain untouched. A successful projection records the newest desired state for
 bounded later publication. No protocol byte is emitted from an element or
 widget callback.
+
+The first materialization in an epoch is a complete projection obligation, not
+an ordinary dirty-element update. Transition to retained availability, and
+rediscovery after reset, must materialize or replay every eligible live binding
+from its accepted complete desired snapshot, or force a complete current
+projection with that binding's exact UCTX active. This work must not depend on
+a later incidental UIDL dirty event: the CELL paint which supplied the initial
+snapshot may already have consumed the document's dirty flags.
 
 One ordinary projected UIDL update must fit one admitted APT output
 transaction. Initial construction, reset replay, and relayout reconstruction
@@ -604,6 +644,13 @@ structural status. It never spins until credit appears, waits for a response,
 allocates a resend buffer, recursively pumps Desk, or calls `PT-SERVICE` as a
 second session owner.
 
+The service owns the discovery-transition obligation. On `AVAILABLE`, it
+schedules complete initial materialization for each eligible visible binding;
+after reset it schedules the same complete replay in the new epoch. Hidden
+bindings retain their newest accepted desired state and defer materialization
+until restore. A terminal `CELL-ONLY` answer leaves local attachments and
+application lifecycle intact but never schedules `OWNER_OPEN`.
+
 Fairness applies at protocol-safe boundaries. Once the session-global immutable
 resource upload is open, it completes or aborts before another upload,
 transaction, or lifecycle request begins. A large image or series cannot
@@ -632,30 +679,50 @@ neither the optional PT module nor the Akashic rich modules, so their source
 closure, startup, storage, and output behavior remain unaffected.
 
 The Desktop leaf constructs its current concrete layers in dependency order:
-PT session, neutral `APTSCB`, caller-bounded `RTAPT`, unified `RTAPTSCB`
-publisher attachment, and finally the `APTAS` shell owner. The product profile
-supplies independent owner-record, operation-record, copied-operation-byte,
-and UIDL-binding-record capacities before the leaf is sourced; fixed one-per-
-composition records remain leaf-owned. Desk's neutral host lifecycle then
-initializes the UIDL driver against the exact live `AHOST`, installs the one
-post-UIDL callback, and finalizes it after child drain. Setup and release
-publish explicit phases, so a constructor or destructor refusal retains the
-smallest exact retry authority rather than clearing uncertain storage.
+PT session, neutral `APTSCB`, caller-bounded `RTAPT`, immutable `RTE` facade,
+unified `RTAPTSCB` publisher attachment, and finally the `APTAS` shell owner.
+The product profile supplies independent owner-record, operation-record,
+copied-operation-byte, and UIDL-binding-record capacities before the leaf is
+sourced; fixed one-per-composition records remain leaf-owned. Desk's neutral
+host lifecycle then initializes the UIDL driver against the exact live `AHOST`,
+installs the one post-UIDL callback, and finalizes it after child drain. Setup
+and release publish explicit phases, so a constructor or destructor refusal
+retains the smallest exact retry authority rather than clearing uncertain
+storage.
+
+The name `desk-apt1.f` identifies that opt-in product composition, not a second
+Desk implementation or a rich Desk behavior. Both baseline and APT-1 products
+load the same `applets/desk/desk.f`; Desk supplies only neutral host-lifecycle
+hooks. App descriptors, UCTX, UIDL trees, and Desk layout behavior do not
+branch on regular versus rich rendering.
+
+The current `UTUI-RICH-TERM-*` names in Desk, app-shell, and applet-host are a
+remaining output-lifecycle seam, not permission for those layers to select a
+renderer. They are invoked unconditionally and resolve inside UIDL-TUI, but
+their rendering-specific naming and direct call sites must be folded into a
+neutral UIDL projection lifecycle before vertical acceptance. Backend choice
+must remain solely in the outer product composition.
 The leaf disarms Desk's pending constructor tuple after each `DESK-RUN`
 attempt, including a throw; a quarantined instance keeps its already-copied
 tuple, while a later plain Desk constructor cannot resurrect a partial rich
 composition after the outer storage was released.
 
 That construction does not itself claim retained semantic support. Until the
-backend-neutral projector facade couples admitted UIDL semantics to RTAPT, the
+backend-neutral projector couples admitted UIDL semantics through `RTE`, the
 driver remains wire-inert and the production host advertises no retained
 policy. CELL output still traverses the unified publisher, while attach,
 geometry, quiesce, and detach exercise the exact private UCTX lifetime without
 opening a root-region-only wire owner.
 
-The composition settles retained discovery before launching hosted UCTXs. A
-negative or partial result selects stable CELL-only projection for unsupported
-semantics; applet initialization does not poll terminal features and sees no
+Retained discovery is not a hosted-UCTX launch gate. The mandatory initial CELL
+snapshot is produced only after Desk initialization, so host composition,
+autostart, local UIDL attach, ordinary application initialization, and the
+first complete desired semantic snapshot may all precede discovery settlement.
+Attach and project remain locally bounded and wire-inert at that boundary.
+The owner-loop service later responds to `AVAILABLE` with complete
+materialization rather than waiting for another UIDL dirty event. A final
+`CELL-ONLY` answer selects stable CELL fallback and never opens a retained
+owner; applet initialization does not poll terminal features and sees no
 different service table.
 
 The host lifecycle order is:

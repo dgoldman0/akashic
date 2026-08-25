@@ -280,6 +280,7 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
     assert re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code) == [
         "app-shell-apt1.f",
         "rich-terminal/screen-adapter-apt1.f",
+        "rich-terminal/engine-apt1.f",
         "rich-terminal/uidl-driver.f",
         "applets/desk/desk.f",
     ]
@@ -295,6 +296,7 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
     for size in (
         "RTAPT-CONFIG-SIZE",
         "RTAPT-ENGINE-SIZE",
+        "RTE-FACADE-SIZE",
         "RTAPTSCB-SIZE",
         "RTERM-UIDL-BACKEND-SIZE",
         "RTERM-HOST-BINDING-SIZE",
@@ -310,6 +312,7 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
         "APTSCB-INIT",
         "RTAPT-CONFIG-INIT",
         "RTAPT-INIT",
+        "RTAPTE-INIT",
         "RTAPTSCB-INIT",
         "RTAPTSCB-ATTACH",
         "APTAS-INIT",
@@ -321,6 +324,7 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
     phase_after = (
         ("PT-INIT", "_A1D-PHASE-SESSION _A1D-PHASE !"),
         ("RTAPT-INIT", "_A1D-PHASE-ENGINE _A1D-PHASE !"),
+        ("RTAPTE-INIT", "_A1D-PHASE-FACADE _A1D-PHASE !"),
         ("RTAPTSCB-ATTACH", "_A1D-PHASE-PUBLISHER _A1D-PHASE !"),
         ("APTAS-INIT", "_A1D-PHASE-OWNER _A1D-PHASE !"),
         ("APTAS-INSTALL", "_A1D-PHASE-INSTALLED _A1D-PHASE !"),
@@ -368,10 +372,16 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
         "_A1D-UIDL-PHASE @ _A1D-UIDL-UNBOUND <> IF"
     )
     aptas = uninstall.index("APTAS-UNINSTALL")
+    facade = uninstall.index("RTAPTE-FINI")
     rtapt = uninstall.index("RTAPT-FINI")
-    assert uidl_gate < aptas < rtapt < uninstall.index("_A1D-CLEAR-INERT")
+    assert uidl_gate < aptas < facade < rtapt < uninstall.index(
+        "_A1D-CLEAR-INERT"
+    )
     assert uninstall.index("DUP SCB-S-OK <> IF EXIT THEN", aptas) < (
         uninstall.index("_A1D-PHASE-OWNER _A1D-PHASE !")
+    )
+    assert uninstall.index("DUP RTE-S-OK <> IF EXIT THEN", facade) < (
+        uninstall.index("_A1D-PHASE-ENGINE _A1D-PHASE !", facade)
     )
     assert uninstall.index("DUP RTAPT-S-OK <> IF EXIT THEN", rtapt) < (
         uninstall.index("_A1D-PHASE-SESSION _A1D-PHASE !")

@@ -38,6 +38,20 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert ": _RTAPT-O.PENDING-REGION-HIGH" in source
     assert "72 CONSTANT _RTAPT-REGION-DEFINE-COPY-SIZE" in source
     assert "88 CONSTANT _RTAPT-REGION-DEFINE-FRAME-BYTES" in source
+    for pt_name, rtapt_name in (
+        ("PT-RET-DELTA", "RTAPT-RICH-DELTA"),
+        ("PT-RET-REPLACE-START", "RTAPT-RICH-REPLACE-START"),
+        ("PT-RET-REPLACE-CONTINUE", "RTAPT-RICH-REPLACE-CONTINUE"),
+        ("PT-RET-LAYOUT-START", "RTAPT-RICH-LAYOUT-START"),
+        ("PT-RET-LAYOUT-CONTINUE", "RTAPT-RICH-LAYOUT-CONTINUE"),
+        ("PT-COMMIT", "RTAPT-COMMIT"),
+        ("PT-COMMIT-AND-REVEAL", "RTAPT-COMMIT-AND-REVEAL"),
+    ):
+        assert re.search(
+            rf"(?m)^{re.escape(pt_name)}\s+CONSTANT "
+            rf"{re.escape(rtapt_name)}\s*$",
+            source,
+        )
 
     config = _definition(source, "RTAPT-CONFIG-INIT")
     init = _definition(source, "RTAPT-INIT")

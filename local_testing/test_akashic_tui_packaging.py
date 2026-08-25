@@ -1743,6 +1743,8 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/app-shell-apt1.f",
         "tui/screen-backend-apt1.f",
         "tui/rich-terminal/apt1-engine.f",
+        "tui/rich-terminal/engine.f",
+        "tui/rich-terminal/engine-apt1.f",
         "tui/rich-terminal/screen-adapter-apt1.f",
         "tui/rich-terminal/uidl-driver.f",
     }
