@@ -283,6 +283,22 @@ def test_shared_text_value_semantics_drive_cell_rendering_independently() -> Non
     assert "DROP NIP" not in bind_text
     assert bind_text.count("DROP DROP") == 2
 
+    render_body = _definition(tui, "_UTUI-RENDER-ONE-BODY")
+    execute_at = render_body.index("EXECUTE")
+    clean_at = render_body.index("UIDL-CLEAN!", execute_at)
+    assert execute_at < clean_at
+    assert "_UTUI-RENDER-ONE-BODY" in _definition(
+        tui, "_UTUI-RENDER-ONE-IN-STATE"
+    )
+    assert "['] _UTUI-RENDER-ONE-IN-STATE ST-OBSERVE" in _definition(
+        tui, "_UTUI-RENDER-ONE-IN-LEL"
+    )
+    assert "['] _UTUI-RENDER-ONE-IN-LEL LEL-OBSERVE" in _definition(
+        tui, "_UTUI-RENDER-ONE-IN-UIDL"
+    )
+    render_one = _definition(tui, "_UTUI-RENDER-ONE")
+    assert "['] _UTUI-RENDER-ONE-IN-UIDL UIDL-OBSERVE" in render_one
+
 
 def test_observation_order_is_uidl_then_lel_then_state() -> None:
     semantic = SEMANTIC.read_text(encoding="utf-8")

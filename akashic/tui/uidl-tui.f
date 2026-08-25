@@ -2343,14 +2343,29 @@ VARIABLE _UTUI-OVERLAY-CNT
     !                                  \ store elem at +0
     1 _UTUI-OVERLAY-CNT +! ;
 
-\ Paint a single element (calls its render-xt)
-: _UTUI-RENDER-ONE  ( elem -- )
+\ Paint a single element (calls its render-xt).  Neutral UIDL, LEL, and state
+\ observations stay held until the hook has consumed every borrowed span and
+\ the same element has been marked clean.  Semantic scratch writers enter
+\ through UIDL first, so the outer UIDL observation also pins that scratch.
+: _UTUI-RENDER-ONE-BODY  ( elem -- )
     DUP UIDL-TYPE EL-DEF-BY-TYPE ?DUP IF
         ED.RENDER-XT @ DUP ['] NOOP <> IF
             OVER SWAP EXECUTE
         ELSE DROP THEN
     THEN
     UIDL-CLEAN! ;
+
+: _UTUI-RENDER-ONE-IN-STATE  ( elem -- )
+    _UTUI-RENDER-ONE-BODY ;
+
+: _UTUI-RENDER-ONE-IN-LEL  ( elem -- )
+    ['] _UTUI-RENDER-ONE-IN-STATE ST-OBSERVE ;
+
+: _UTUI-RENDER-ONE-IN-UIDL  ( elem -- )
+    ['] _UTUI-RENDER-ONE-IN-LEL LEL-OBSERVE ;
+
+: _UTUI-RENDER-ONE  ( elem -- )
+    ['] _UTUI-RENDER-ONE-IN-UIDL UIDL-OBSERVE ;
 
 \ Parent renderers own and clear their full rectangles.  Ensure their
 \ direct children repaint later in the same DFS pass so clean child
