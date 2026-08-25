@@ -37,6 +37,7 @@ REQUIRE draw.f
 32 CONSTANT _RGN-O-PARENT
 
 40 CONSTANT _RGN-DESC-SIZE
+_RGN-DESC-SIZE CONSTANT RGN-SIZE
 
 \ =====================================================================
 \ 2. Current region state

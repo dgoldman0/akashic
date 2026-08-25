@@ -310,6 +310,37 @@ RTERM-UCTX-QUIESCE   ( binding-token backend -- status )
 RTERM-UCTX-DETACH    ( binding-token backend -- status )
 ```
 
+The first lifecycle foundation is the optional
+`akashic/tui/rich-terminal/uidl-driver.f` module. It constructs the private,
+caller-bounded binding registry separately from the retained engine:
+
+```forth
+RTERM-HOST-BINDING-CAPTURE  ( host slot host-binding -- status )
+
+RTERM-UIDL-BINDING-BYTES    ( -- bytes )
+RTERM-UIDL-BACKEND-BYTES    ( -- bytes )
+RTERM-UIDL-INIT             ( host records-a records-u backend -- status )
+RTERM-UIDL-VALID?           ( backend -- flag )
+RTERM-UIDL-STORAGE-DISJOINT? ( a u backend -- flag )
+RTERM-UIDL-STATUS@          ( backend -- status )
+RTERM-UIDL-ACTIVE@          ( backend -- count status )
+RTERM-UIDL-INSTALL          ( backend -- status )
+```
+
+This foundation has no `RTAPT-*`, screen-publisher, MegaPad, Desk, or applet
+dependency. Its immutable UIDL callback installation carries the exact backend
+as explicit composition context; the context is not stored in a UCTX. Until a
+separate backend-neutral semantic projector facade exists, attach and geometry
+tracking are local-only, project returns `RTERM-S-UNAVAILABLE`, quiesce proves
+the empty source set, and detach creates no wire owner or tombstone. In
+particular, the foundation must not open a default or root-region-only owner:
+owner quotas can be admitted only from one complete supported semantic tree.
+Construction and attach admit the exact declared application descriptor,
+component descriptor, and live component-state spans as well as the fixed host
+objects, and reject every alias with driver storage. Every public driver entry
+also catches internal throws and scrubs its transient descriptor, slot, CINST,
+UCTX, region, and application pointers before returning.
+
 `host-binding` is an immutable, call-borrowed descriptor containing ABI
 version, exact size, zero-reserved fields, the exact `AHOST` and `AHS` slot
 addresses, captured nonzero `AHS.ID`, exact CINST address and captured nonzero
