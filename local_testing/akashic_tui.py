@@ -364,6 +364,17 @@ MEGAPAD_PRESENTATION_TERMINAL_MODULE = "presentation-terminal.f"
 MEGAPAD_PRESENTATION_TERMINAL_BOOT_LINE = (
     f"REQUIRE {MEGAPAD_PRESENTATION_TERMINAL_MODULE}"
 )
+# Like the native networking consumers above, these Akashic modules compile
+# against an already-loaded MegaPad system ABI.  They must never REQUIRE or
+# copy the MegaPad source into the Akashic dependency graph.
+MEGAPAD_PRESENTATION_TERMINAL_CONSUMERS = frozenset(
+    {
+        "tui/app-shell-apt1.f",
+        "tui/desk-apt1.f",
+        "tui/rich-terminal/apt1-engine.f",
+        "tui/screen-backend-apt1.f",
+    }
+)
 APP_SHELL_MODULE = "tui/app-shell.f"
 MP64FS_VFS_PLATFORM_MODULE = "tui/platform/mp64fs-vfs.f"
 MP64FS_VFS_PLATFORM_BOOT_LINE = f"REQUIRE {MP64FS_VFS_PLATFORM_MODULE}"
@@ -24769,35 +24780,14 @@ def _normalize_module(module: str, requiring: str | None = None) -> str:
     return _shared_normalize_module(module, requiring)
 
 
-def _external_module_sources() -> dict[str, Path]:
-    """Map virtual image modules to their canonical external source files."""
-    return {
-        MEGAPAD_PRESENTATION_TERMINAL_MODULE: (
-            MEGAPAD_ROOT / MEGAPAD_PRESENTATION_TERMINAL_MODULE
-        )
-    }
-
-
-def _module_source_path(module: str) -> Path:
-    return _external_module_sources().get(module, SOURCE_ROOT / module)
-
-
 def dependency_closure(roots: tuple[str, ...]) -> tuple[str, ...]:
     """Return the deterministic transitive REQUIRE closure for *roots*."""
-    return _shared_dependency_closure(
-        SOURCE_ROOT,
-        roots,
-        external_modules=_external_module_sources(),
-    )
+    return _shared_dependency_closure(SOURCE_ROOT, roots)
 
 
 def dependency_order(roots: tuple[str, ...]) -> tuple[str, ...]:
     """Return dependencies before their requiring modules."""
-    return _shared_dependency_order(
-        SOURCE_ROOT,
-        roots,
-        external_modules=_external_module_sources(),
-    )
+    return _shared_dependency_order(SOURCE_ROOT, roots)
 
 
 def _requires_megapad_networking(modules: tuple[str, ...]) -> bool:
@@ -24808,8 +24798,8 @@ def _requires_megapad_networking(modules: tuple[str, ...]) -> bool:
 def _requires_megapad_presentation_terminal(
     modules: tuple[str, ...],
 ) -> bool:
-    """Return whether the closure names the external APT guest module."""
-    return MEGAPAD_PRESENTATION_TERMINAL_MODULE in modules
+    """Return whether an Akashic closure consumes the boot-loaded PT ABI."""
+    return not MEGAPAD_PRESENTATION_TERMINAL_CONSUMERS.isdisjoint(modules)
 
 
 def _forth_line_tokens(line: str) -> tuple[str, ...]:
@@ -25583,7 +25573,7 @@ def _validate_module_ids(
     sources = [
         (
             module,
-            _module_source_path(module).read_text(encoding="utf-8"),
+            (SOURCE_ROOT / module).read_text(encoding="utf-8"),
         )
         for module in modules
     ]
@@ -25716,13 +25706,7 @@ def build_image(
         if profile.linked
         else dependency_closure(composition_roots)
     )
-    external_module_names = frozenset(_external_module_sources())
-    external_modules = tuple(
-        module for module in modules if module in external_module_names
-    )
-    akashic_modules = tuple(
-        module for module in modules if module not in external_module_names
-    )
+    akashic_modules = modules
     requires_networking = _requires_megapad_networking(modules)
     requires_presentation = _requires_megapad_presentation_terminal(modules)
     if requires_presentation != (profile.presentation is not None):
@@ -25838,7 +25822,8 @@ def build_image(
         }
         if requires_networking:
             reserved_root_paths.add("networking.f")
-        reserved_root_paths.update(external_modules)
+        if requires_presentation:
+            reserved_root_paths.add(MEGAPAD_PRESENTATION_TERMINAL_MODULE)
         root_generated = {
             path
             for path in set(generated_files) | cold_initial_paths
@@ -25862,7 +25847,11 @@ def build_image(
         image_paths,
         directories,
         include_networking=requires_networking,
-        external_system_files=frozenset(external_modules),
+        external_system_files=(
+            frozenset({MEGAPAD_PRESENTATION_TERMINAL_MODULE})
+            if requires_presentation
+            else frozenset()
+        ),
     )
 
     target = (output or default_image_path(profile_name)).resolve()
@@ -25884,10 +25873,14 @@ def build_image(
             pack_forth_source((MEGAPAD_ROOT / "networking.f").read_bytes()),
             ftype=FTYPE_FORTH,
         )
-    for module in external_modules:
+    if requires_presentation:
         fs.inject_file(
-            module,
-            pack_forth_source(_module_source_path(module).read_bytes()),
+            MEGAPAD_PRESENTATION_TERMINAL_MODULE,
+            pack_forth_source(
+                (
+                    MEGAPAD_ROOT / MEGAPAD_PRESENTATION_TERMINAL_MODULE
+                ).read_bytes()
+            ),
             ftype=FTYPE_FORTH,
         )
 

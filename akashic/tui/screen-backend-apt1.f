@@ -11,7 +11,9 @@
 
 PROVIDED akashic-tui-screen-backend-apt1
 
-REQUIRE ../presentation-terminal.f
+\ The selected system composition loads MegaPad's optional root
+\ presentation-terminal.f module before this Akashic consumer.  This source
+\ consumes that public PT-* ABI but never imports or copies the MegaPad source.
 REQUIRE screen.f
 REQUIRE ../utils/memory-span.f
 

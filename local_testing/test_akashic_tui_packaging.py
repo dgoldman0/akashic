@@ -36,6 +36,7 @@ from akashic_tui import (  # noqa: E402
     MEGAPAD_EVALUATE_SOURCE_MAX_BYTES,
     MEGAPAD_NETWORKING_BOOT_LINE,
     MEGAPAD_PRESENTATION_TERMINAL_BOOT_LINE,
+    MEGAPAD_PRESENTATION_TERMINAL_CONSUMERS,
     MEGAPAD_PRESENTATION_TERMINAL_MODULE,
     MEGAPAD_ROOT,
     MP64FS_VFS_PLATFORM_BOOT_LINE,
@@ -1691,7 +1692,7 @@ def test_desktop_apt1_build_is_an_external_additive_composition(
 
     closure = dependency_order(profile.roots)
     assert _requires_megapad_presentation_terminal(closure)
-    assert MEGAPAD_PRESENTATION_TERMINAL_MODULE in closure
+    assert MEGAPAD_PRESENTATION_TERMINAL_MODULE not in closure
     assert "tui/screen-backend-apt1.f" in closure
     assert "tui/app-shell-apt1.f" in closure
 
@@ -1730,6 +1731,22 @@ def test_desktop_apt1_build_is_an_external_additive_composition(
     assert "PROVIDED akashic-tui-desk-apt1" in linked_source
     assert "PROVIDED akashic-tui-screen-backend-apt1" in linked_source
     assert "PROVIDED presentation-terminal.f" not in linked_source
+
+
+def test_presentation_consumers_select_a_boot_module_not_a_source_dependency() -> None:
+    profile = PROFILES["desktop-apt1"]
+    closure = dependency_order(profile.roots)
+
+    assert _requires_megapad_presentation_terminal(closure)
+    assert MEGAPAD_PRESENTATION_TERMINAL_MODULE not in closure
+    assert MEGAPAD_PRESENTATION_TERMINAL_CONSUMERS & set(closure)
+    for module in MEGAPAD_PRESENTATION_TERMINAL_CONSUMERS & set(closure):
+        source = (SOURCE_ROOT / module).read_text(encoding="utf-8")
+        assert not re.search(
+            r"^\s*REQUIRE\s+\S*presentation-terminal\.f\s*$",
+            source,
+            re.MULTILINE,
+        )
 
 
 def test_desktop_apt1_launchers_transfer_the_same_host_policy() -> None:
