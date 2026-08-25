@@ -25,11 +25,8 @@
 \    UTUI-SHOW-DIALOG ( id-a id-l -- )
 \    UTUI-HIDE-DIALOG ( id-a id-l -- )
 \    UTUI-HIT-TEST    ( row col -- elem | 0 )
-\    UTUI-RICH-TERM-ATTACH    ( document-binding visible -- status )
-\    UTUI-RICH-TERM-VISIBLE!  ( visible -- status )
-\    UTUI-RICH-TERM-STATUS    ( -- status )
-\    UTUI-RICH-TERM-QUIESCE   ( -- status )
-\    UTUI-RICH-TERM-DETACH    ( -- status )
+\    UTUI-VISIBLE!    ( visible -- )
+\    UTUI-QUIESCE     ( -- status )
 \    UTUI-DETACH      ( -- )
 \
 \  Prefix: UTUI- (public), _UTUI- (internal)
@@ -328,25 +325,26 @@ VARIABLE _UTUI-STATE      \ bound state-tree
 VARIABLE _UTUI-FOCUS-P    \ currently focused element (0 = none)
 VARIABLE _UTUI-NEEDS-PAINT \ global: any UIDL/widget change needs repaint
 
-\ Optional rich-terminal output state.  This is a UIDL adapter boundary, not
-\ an application scene service and not the APT transport engine.  Composition
-\ installs one immutable callback table.  A generic host calls ATTACH only
-\ after UTUI-LOAD has produced a coherent document.  The call-borrowed
-\ document-binding is consumed synchronously; only the backend-issued token is
-\ stored in the active UCTX.
-0 CONSTANT _UTUI-RT-S-OK
-2 CONSTANT _UTUI-RT-S-UNAVAILABLE
-4 CONSTANT _UTUI-RT-S-STALE
-5 CONSTANT _UTUI-RT-S-INVALID
+\ Optional derived-projection state.  UIDL owns this lifecycle; applications
+\ see neither a renderer nor a provider-specific scene service.  Composition
+\ installs one immutable adapter table and attaches it only after UTUI-LOAD has
+\ produced a coherent document.  The call-borrowed document binding is
+\ consumed synchronously; only the adapter-issued token is stored in the
+\ active UCTX.
+0 CONSTANT _UTUI-PROJ-S-OK
+2 CONSTANT _UTUI-PROJ-S-UNAVAILABLE
+4 CONSTANT _UTUI-PROJ-S-STALE
+5 CONSTANT _UTUI-PROJ-S-INVALID
 
-VARIABLE _UTUI-RT-TOKEN
-VARIABLE _UTUI-RT-STATUS
-VARIABLE _UTUI-RT-VISIBLE
-VARIABLE _UTUI-RT-ATTACHED
-VARIABLE _UTUI-RT-QUIESCING
-VARIABLE _UTUI-RT-QUIESCED
+VARIABLE _UTUI-PROJ-TOKEN
+VARIABLE _UTUI-PROJ-STATUS
+VARIABLE _UTUI-VISIBLE
+VARIABLE _UTUI-PROJ-ATTACHED
+VARIABLE _UTUI-QUIESCING
+VARIABLE _UTUI-QUIESCED
 
-\ Driver callback table (installed atomically and immutable thereafter):
+\ Projection-adapter callback table (installed atomically and immutable
+\ thereafter):
 \   attach-xt   ( document-binding context -- token status )
 \   project-xt  ( token context -- status )
 \   relayout-xt ( visible region token context -- status )
@@ -355,272 +353,269 @@ VARIABLE _UTUI-RT-QUIESCED
 \ All callbacks run synchronously on the UI owner with the exact UCTX active.
 \ CONTEXT is immutable composition authority and deliberately does not enter a
 \ UCTX; only the opaque token and lifecycle scalars are context-local.
-VARIABLE _UTUI-RT-DRIVER-CONTEXT
-VARIABLE _UTUI-RT-ATTACH-XT
-VARIABLE _UTUI-RT-PROJECT-XT
-VARIABLE _UTUI-RT-RELAYOUT-XT
-VARIABLE _UTUI-RT-QUIESCE-XT
-VARIABLE _UTUI-RT-DETACH-XT
-VARIABLE _UTUI-RT-DRIVER-INSTALLED
-VARIABLE _UTUI-RT-CALLING
+VARIABLE _UTUI-PROJ-ADAPTER-CONTEXT
+VARIABLE _UTUI-PROJ-ATTACH-XT
+VARIABLE _UTUI-PROJ-PROJECT-XT
+VARIABLE _UTUI-PROJ-RELAYOUT-XT
+VARIABLE _UTUI-PROJ-QUIESCE-XT
+VARIABLE _UTUI-PROJ-DETACH-XT
+VARIABLE _UTUI-PROJ-ADAPTER-INSTALLED
+VARIABLE _UTUI-PROJ-CALLING
 
 0 _UTUI-RGN !
 0 _UTUI-DOC-LOADED !
 0 _UTUI-STATE !
 0 _UTUI-FOCUS-P !
 0 _UTUI-NEEDS-PAINT !
-0 _UTUI-RT-TOKEN !
-0 _UTUI-RT-STATUS !
-0 _UTUI-RT-VISIBLE !
-0 _UTUI-RT-ATTACHED !
-0 _UTUI-RT-QUIESCING !
-0 _UTUI-RT-QUIESCED !
-0 _UTUI-RT-DRIVER-CONTEXT !
-0 _UTUI-RT-ATTACH-XT !
-0 _UTUI-RT-PROJECT-XT !
-0 _UTUI-RT-RELAYOUT-XT !
-0 _UTUI-RT-QUIESCE-XT !
-0 _UTUI-RT-DETACH-XT !
-0 _UTUI-RT-DRIVER-INSTALLED !
-0 _UTUI-RT-CALLING !
+0 _UTUI-PROJ-TOKEN !
+0 _UTUI-PROJ-STATUS !
+0 _UTUI-VISIBLE !
+0 _UTUI-PROJ-ATTACHED !
+0 _UTUI-QUIESCING !
+0 _UTUI-QUIESCED !
+0 _UTUI-PROJ-ADAPTER-CONTEXT !
+0 _UTUI-PROJ-ATTACH-XT !
+0 _UTUI-PROJ-PROJECT-XT !
+0 _UTUI-PROJ-RELAYOUT-XT !
+0 _UTUI-PROJ-QUIESCE-XT !
+0 _UTUI-PROJ-DETACH-XT !
+0 _UTUI-PROJ-ADAPTER-INSTALLED !
+0 _UTUI-PROJ-CALLING !
 
-VARIABLE _UTUI-RTI-ATTACH
-VARIABLE _UTUI-RTI-PROJECT
-VARIABLE _UTUI-RTI-RELAYOUT
-VARIABLE _UTUI-RTI-QUIESCE
-VARIABLE _UTUI-RTI-DETACH
-VARIABLE _UTUI-RTI-CONTEXT
+VARIABLE _UTUI-PAI-ATTACH
+VARIABLE _UTUI-PAI-PROJECT
+VARIABLE _UTUI-PAI-RELAYOUT
+VARIABLE _UTUI-PAI-QUIESCE
+VARIABLE _UTUI-PAI-DETACH
+VARIABLE _UTUI-PAI-CONTEXT
 
-\ _UTUI-RICH-TERM-DRIVER!
+\ _UTUI-PROJECTION-ADAPTER!
 \   ( context attach project relayout quiesce detach -- flag )
 \ Composition-only, one-way installation.  An exact repeated installation is
-\ idempotent; a partial or different driver is refused without mutation.
-: _UTUI-RICH-TERM-DRIVER!
+\ idempotent; a partial or different adapter is refused without mutation.
+: _UTUI-PROJECTION-ADAPTER!
     ( context attach project relayout quiesce detach -- flag )
-    _UTUI-RTI-DETACH !
-    _UTUI-RTI-QUIESCE !
-    _UTUI-RTI-RELAYOUT !
-    _UTUI-RTI-PROJECT !
-    _UTUI-RTI-ATTACH !
-    _UTUI-RTI-CONTEXT !
-    _UTUI-RT-DRIVER-INSTALLED @ IF
-        _UTUI-RT-DRIVER-CONTEXT @ _UTUI-RTI-CONTEXT @ =
-        _UTUI-RT-ATTACH-XT  @ _UTUI-RTI-ATTACH  @ = AND
-        _UTUI-RT-PROJECT-XT @ _UTUI-RTI-PROJECT @ = AND
-        _UTUI-RT-RELAYOUT-XT @ _UTUI-RTI-RELAYOUT @ = AND
-        _UTUI-RT-QUIESCE-XT @ _UTUI-RTI-QUIESCE @ = AND
-        _UTUI-RT-DETACH-XT  @ _UTUI-RTI-DETACH  @ = AND
+    _UTUI-PAI-DETACH !
+    _UTUI-PAI-QUIESCE !
+    _UTUI-PAI-RELAYOUT !
+    _UTUI-PAI-PROJECT !
+    _UTUI-PAI-ATTACH !
+    _UTUI-PAI-CONTEXT !
+    _UTUI-PROJ-ADAPTER-INSTALLED @ IF
+        _UTUI-PROJ-ADAPTER-CONTEXT @ _UTUI-PAI-CONTEXT @ =
+        _UTUI-PROJ-ATTACH-XT  @ _UTUI-PAI-ATTACH  @ = AND
+        _UTUI-PROJ-PROJECT-XT @ _UTUI-PAI-PROJECT @ = AND
+        _UTUI-PROJ-RELAYOUT-XT @ _UTUI-PAI-RELAYOUT @ = AND
+        _UTUI-PROJ-QUIESCE-XT @ _UTUI-PAI-QUIESCE @ = AND
+        _UTUI-PROJ-DETACH-XT  @ _UTUI-PAI-DETACH  @ = AND
         EXIT
     THEN
-    _UTUI-RTI-CONTEXT @ 0<>
-    _UTUI-RTI-ATTACH @ 0<> AND
-    _UTUI-RTI-PROJECT @ 0<> AND
-    _UTUI-RTI-RELAYOUT @ 0<> AND
-    _UTUI-RTI-QUIESCE @ 0<> AND
-    _UTUI-RTI-DETACH @ 0<> AND 0= IF 0 EXIT THEN
-    _UTUI-RTI-CONTEXT @ _UTUI-RT-DRIVER-CONTEXT !
-    _UTUI-RTI-ATTACH  @ _UTUI-RT-ATTACH-XT !
-    _UTUI-RTI-PROJECT @ _UTUI-RT-PROJECT-XT !
-    _UTUI-RTI-RELAYOUT @ _UTUI-RT-RELAYOUT-XT !
-    _UTUI-RTI-QUIESCE @ _UTUI-RT-QUIESCE-XT !
-    _UTUI-RTI-DETACH  @ _UTUI-RT-DETACH-XT !
-    -1 _UTUI-RT-DRIVER-INSTALLED !
+    _UTUI-PAI-CONTEXT @ 0<>
+    _UTUI-PAI-ATTACH @ 0<> AND
+    _UTUI-PAI-PROJECT @ 0<> AND
+    _UTUI-PAI-RELAYOUT @ 0<> AND
+    _UTUI-PAI-QUIESCE @ 0<> AND
+    _UTUI-PAI-DETACH @ 0<> AND 0= IF 0 EXIT THEN
+    _UTUI-PAI-CONTEXT @ _UTUI-PROJ-ADAPTER-CONTEXT !
+    _UTUI-PAI-ATTACH  @ _UTUI-PROJ-ATTACH-XT !
+    _UTUI-PAI-PROJECT @ _UTUI-PROJ-PROJECT-XT !
+    _UTUI-PAI-RELAYOUT @ _UTUI-PROJ-RELAYOUT-XT !
+    _UTUI-PAI-QUIESCE @ _UTUI-PROJ-QUIESCE-XT !
+    _UTUI-PAI-DETACH  @ _UTUI-PROJ-DETACH-XT !
+    -1 _UTUI-PROJ-ADAPTER-INSTALLED !
     -1 ;
 
-: _UTUI-RT-STATUS?  ( status -- flag )
+: _UTUI-PROJ-STATUS?  ( status -- flag )
     8 U< ;
 
-VARIABLE _UTUI-RT-ARG0
-VARIABLE _UTUI-RT-ARG1
-VARIABLE _UTUI-RT-ARG2
+VARIABLE _UTUI-PROJ-ARG0
+VARIABLE _UTUI-PROJ-ARG1
+VARIABLE _UTUI-PROJ-ARG2
 
-: _UTUI-RT-DO-ATTACH  ( -- token status )
-    _UTUI-RT-ARG0 @ _UTUI-RT-DRIVER-CONTEXT @
-    _UTUI-RT-ATTACH-XT @ EXECUTE ;
+: _UTUI-PROJ-DO-ATTACH  ( -- token status )
+    _UTUI-PROJ-ARG0 @ _UTUI-PROJ-ADAPTER-CONTEXT @
+    _UTUI-PROJ-ATTACH-XT @ EXECUTE ;
 
-: _UTUI-RT-CALL-ATTACH  ( document-binding -- token status )
-    _UTUI-RT-CALLING @ IF DROP 0 _UTUI-RT-S-INVALID EXIT THEN
-    _UTUI-RT-ARG0 !
-    -1 _UTUI-RT-CALLING !
-    ['] _UTUI-RT-DO-ATTACH CATCH
-    0 _UTUI-RT-CALLING !
-    0 _UTUI-RT-ARG0 !
-    ?DUP IF DROP 0 _UTUI-RT-S-INVALID THEN ;
+: _UTUI-PROJ-CALL-ATTACH  ( document-binding -- token status )
+    _UTUI-PROJ-CALLING @ IF DROP 0 _UTUI-PROJ-S-INVALID EXIT THEN
+    _UTUI-PROJ-ARG0 !
+    -1 _UTUI-PROJ-CALLING !
+    ['] _UTUI-PROJ-DO-ATTACH CATCH
+    0 _UTUI-PROJ-CALLING !
+    0 _UTUI-PROJ-ARG0 !
+    ?DUP IF DROP 0 _UTUI-PROJ-S-INVALID THEN ;
 
-: _UTUI-RT-DO-PROJECT  ( -- status )
-    _UTUI-RT-ARG0 @ _UTUI-RT-DRIVER-CONTEXT @
-    _UTUI-RT-PROJECT-XT @ EXECUTE ;
+: _UTUI-PROJ-DO-PROJECT  ( -- status )
+    _UTUI-PROJ-ARG0 @ _UTUI-PROJ-ADAPTER-CONTEXT @
+    _UTUI-PROJ-PROJECT-XT @ EXECUTE ;
 
-: _UTUI-RT-CALL-PROJECT  ( token -- status )
-    _UTUI-RT-CALLING @ IF DROP _UTUI-RT-S-INVALID EXIT THEN
-    _UTUI-RT-ARG0 !
-    -1 _UTUI-RT-CALLING !
-    ['] _UTUI-RT-DO-PROJECT CATCH
-    0 _UTUI-RT-CALLING !
-    0 _UTUI-RT-ARG0 !
-    ?DUP IF DROP _UTUI-RT-S-INVALID THEN ;
+: _UTUI-PROJ-CALL-PROJECT  ( token -- status )
+    _UTUI-PROJ-CALLING @ IF DROP _UTUI-PROJ-S-INVALID EXIT THEN
+    _UTUI-PROJ-ARG0 !
+    -1 _UTUI-PROJ-CALLING !
+    ['] _UTUI-PROJ-DO-PROJECT CATCH
+    0 _UTUI-PROJ-CALLING !
+    0 _UTUI-PROJ-ARG0 !
+    ?DUP IF DROP _UTUI-PROJ-S-INVALID THEN ;
 
-: _UTUI-RT-DO-RELAYOUT  ( -- status )
-    _UTUI-RT-ARG0 @ _UTUI-RT-ARG1 @ _UTUI-RT-ARG2 @
-    _UTUI-RT-DRIVER-CONTEXT @
-    _UTUI-RT-RELAYOUT-XT @ EXECUTE ;
+: _UTUI-PROJ-DO-RELAYOUT  ( -- status )
+    _UTUI-PROJ-ARG0 @ _UTUI-PROJ-ARG1 @ _UTUI-PROJ-ARG2 @
+    _UTUI-PROJ-ADAPTER-CONTEXT @
+    _UTUI-PROJ-RELAYOUT-XT @ EXECUTE ;
 
-: _UTUI-RT-CALL-RELAYOUT  ( visible region token -- status )
-    _UTUI-RT-CALLING @ IF 3DROP _UTUI-RT-S-INVALID EXIT THEN
-    _UTUI-RT-ARG2 ! _UTUI-RT-ARG1 ! _UTUI-RT-ARG0 !
-    -1 _UTUI-RT-CALLING !
-    ['] _UTUI-RT-DO-RELAYOUT CATCH
-    0 _UTUI-RT-CALLING !
-    0 _UTUI-RT-ARG0 ! 0 _UTUI-RT-ARG1 ! 0 _UTUI-RT-ARG2 !
-    ?DUP IF DROP _UTUI-RT-S-INVALID THEN ;
+: _UTUI-PROJ-CALL-RELAYOUT  ( visible region token -- status )
+    _UTUI-PROJ-CALLING @ IF 3DROP _UTUI-PROJ-S-INVALID EXIT THEN
+    _UTUI-PROJ-ARG2 ! _UTUI-PROJ-ARG1 ! _UTUI-PROJ-ARG0 !
+    -1 _UTUI-PROJ-CALLING !
+    ['] _UTUI-PROJ-DO-RELAYOUT CATCH
+    0 _UTUI-PROJ-CALLING !
+    0 _UTUI-PROJ-ARG0 ! 0 _UTUI-PROJ-ARG1 ! 0 _UTUI-PROJ-ARG2 !
+    ?DUP IF DROP _UTUI-PROJ-S-INVALID THEN ;
 
-: _UTUI-RT-DO-QUIESCE  ( -- status )
-    _UTUI-RT-ARG0 @ _UTUI-RT-DRIVER-CONTEXT @
-    _UTUI-RT-QUIESCE-XT @ EXECUTE ;
+: _UTUI-PROJ-DO-QUIESCE  ( -- status )
+    _UTUI-PROJ-ARG0 @ _UTUI-PROJ-ADAPTER-CONTEXT @
+    _UTUI-PROJ-QUIESCE-XT @ EXECUTE ;
 
-: _UTUI-RT-CALL-QUIESCE  ( token -- status )
-    _UTUI-RT-CALLING @ IF DROP _UTUI-RT-S-INVALID EXIT THEN
-    _UTUI-RT-ARG0 !
-    -1 _UTUI-RT-CALLING !
-    ['] _UTUI-RT-DO-QUIESCE CATCH
-    0 _UTUI-RT-CALLING !
-    0 _UTUI-RT-ARG0 !
-    ?DUP IF DROP _UTUI-RT-S-INVALID THEN ;
+: _UTUI-PROJ-CALL-QUIESCE  ( token -- status )
+    _UTUI-PROJ-CALLING @ IF DROP _UTUI-PROJ-S-INVALID EXIT THEN
+    _UTUI-PROJ-ARG0 !
+    -1 _UTUI-PROJ-CALLING !
+    ['] _UTUI-PROJ-DO-QUIESCE CATCH
+    0 _UTUI-PROJ-CALLING !
+    0 _UTUI-PROJ-ARG0 !
+    ?DUP IF DROP _UTUI-PROJ-S-INVALID THEN ;
 
-: _UTUI-RT-DO-DETACH  ( -- status )
-    _UTUI-RT-ARG0 @ _UTUI-RT-DRIVER-CONTEXT @
-    _UTUI-RT-DETACH-XT @ EXECUTE ;
+: _UTUI-PROJ-DO-DETACH  ( -- status )
+    _UTUI-PROJ-ARG0 @ _UTUI-PROJ-ADAPTER-CONTEXT @
+    _UTUI-PROJ-DETACH-XT @ EXECUTE ;
 
-: _UTUI-RT-CALL-DETACH  ( token -- status )
-    _UTUI-RT-CALLING @ IF DROP _UTUI-RT-S-INVALID EXIT THEN
-    _UTUI-RT-ARG0 !
-    -1 _UTUI-RT-CALLING !
-    ['] _UTUI-RT-DO-DETACH CATCH
-    0 _UTUI-RT-CALLING !
-    0 _UTUI-RT-ARG0 !
-    ?DUP IF DROP _UTUI-RT-S-INVALID THEN ;
+: _UTUI-PROJ-CALL-DETACH  ( token -- status )
+    _UTUI-PROJ-CALLING @ IF DROP _UTUI-PROJ-S-INVALID EXIT THEN
+    _UTUI-PROJ-ARG0 !
+    -1 _UTUI-PROJ-CALLING !
+    ['] _UTUI-PROJ-DO-DETACH CATCH
+    0 _UTUI-PROJ-CALLING !
+    0 _UTUI-PROJ-ARG0 !
+    ?DUP IF DROP _UTUI-PROJ-S-INVALID THEN ;
 
-VARIABLE _UTUI-RTA-BINDING
-VARIABLE _UTUI-RTA-VISIBLE
-VARIABLE _UTUI-RTA-TOKEN
-VARIABLE _UTUI-RTA-STATUS
+VARIABLE _UTUI-PAA-BINDING
+VARIABLE _UTUI-PAA-VISIBLE
+VARIABLE _UTUI-PAA-TOKEN
+VARIABLE _UTUI-PAA-STATUS
 
-: _UTUI-RTA-CLEAR  ( -- )
-    0 _UTUI-RTA-BINDING !
-    0 _UTUI-RTA-VISIBLE !
-    0 _UTUI-RTA-TOKEN !
-    0 _UTUI-RTA-STATUS ! ;
+: _UTUI-PAA-CLEAR  ( -- )
+    0 _UTUI-PAA-BINDING !
+    0 _UTUI-PAA-VISIBLE !
+    0 _UTUI-PAA-TOKEN !
+    0 _UTUI-PAA-STATUS ! ;
 
-: _UTUI-RICH-TERM-RELAYOUT  ( -- status )
-    _UTUI-RT-ATTACHED @ 0= IF _UTUI-RT-S-OK EXIT THEN
-    _UTUI-RT-QUIESCING @ IF _UTUI-RT-S-STALE EXIT THEN
-    _UTUI-RT-VISIBLE @ IF
-        _UTUI-RGN @ DUP 0= IF DROP _UTUI-RT-S-INVALID EXIT THEN
+: _UTUI-PROJECTION-RELAYOUT  ( -- status )
+    _UTUI-PROJ-ATTACHED @ 0= IF _UTUI-PROJ-S-OK EXIT THEN
+    _UTUI-QUIESCING @ IF _UTUI-PROJ-S-STALE EXIT THEN
+    _UTUI-VISIBLE @ IF
+        _UTUI-RGN @ DUP 0= IF DROP _UTUI-PROJ-S-INVALID EXIT THEN
         TRUE SWAP
     ELSE
         FALSE 0
     THEN
-    _UTUI-RT-TOKEN @ _UTUI-RT-CALL-RELAYOUT
-    DUP _UTUI-RT-STATUS? 0= IF DROP _UTUI-RT-S-INVALID THEN
-    DUP _UTUI-RT-STATUS ! ;
+    _UTUI-PROJ-TOKEN @ _UTUI-PROJ-CALL-RELAYOUT
+    DUP _UTUI-PROJ-STATUS? 0= IF DROP _UTUI-PROJ-S-INVALID THEN
+    DUP _UTUI-PROJ-STATUS ! ;
 
-\ UTUI-RICH-TERM-ATTACH ( document-binding visible -- status )
-\ Called after a successful UTUI-LOAD.  The binding is borrowed for this call
-\ only and is never stored in UIDL globals or a UCTX.
-: UTUI-RICH-TERM-ATTACH  ( document-binding visible -- status )
-    _UTUI-RTA-VISIBLE ! _UTUI-RTA-BINDING !
-    _UTUI-RT-DRIVER-INSTALLED @ 0= IF
-        _UTUI-RT-S-UNAVAILABLE DUP _UTUI-RT-STATUS !
-        _UTUI-RTA-CLEAR EXIT
+\ Composition-private attach.  Called after a successful UTUI-LOAD.  The
+\ binding is borrowed for this call only and is never stored in UIDL globals
+\ or a UCTX.
+: _UTUI-PROJECTION-ATTACH  ( document-binding visible -- status )
+    _UTUI-PAA-VISIBLE ! _UTUI-PAA-BINDING !
+    _UTUI-PROJ-ADAPTER-INSTALLED @ 0= IF
+        _UTUI-PROJ-S-UNAVAILABLE DUP _UTUI-PROJ-STATUS !
+        _UTUI-PAA-CLEAR EXIT
     THEN
-    _UTUI-RTA-BINDING @ 0= _UTUI-DOC-LOADED @ 0= OR
-    _UTUI-RT-ATTACHED @ OR _UTUI-RT-QUIESCING @ OR
-    _UTUI-RT-QUIESCED @ OR IF
-        _UTUI-RT-S-INVALID DUP _UTUI-RT-STATUS !
-        _UTUI-RTA-CLEAR EXIT
+    _UTUI-PAA-BINDING @ 0= _UTUI-DOC-LOADED @ 0= OR
+    _UTUI-PROJ-ATTACHED @ OR _UTUI-QUIESCING @ OR
+    _UTUI-QUIESCED @ OR IF
+        _UTUI-PROJ-S-INVALID DUP _UTUI-PROJ-STATUS !
+        _UTUI-PAA-CLEAR EXIT
     THEN
-    _UTUI-RTA-BINDING @ _UTUI-RT-CALL-ATTACH
-    0 _UTUI-RTA-BINDING !
-    _UTUI-RTA-STATUS ! _UTUI-RTA-TOKEN !
-    _UTUI-RTA-STATUS @ _UTUI-RT-STATUS? 0= IF
-        _UTUI-RT-S-INVALID _UTUI-RTA-STATUS !
+    _UTUI-PAA-BINDING @ _UTUI-PROJ-CALL-ATTACH
+    0 _UTUI-PAA-BINDING !
+    _UTUI-PAA-STATUS ! _UTUI-PAA-TOKEN !
+    _UTUI-PAA-STATUS @ _UTUI-PROJ-STATUS? 0= IF
+        _UTUI-PROJ-S-INVALID _UTUI-PAA-STATUS !
     THEN
-    _UTUI-RTA-STATUS @ _UTUI-RT-S-OK = IF
-        _UTUI-RTA-TOKEN @ 0= IF
-            _UTUI-RT-S-INVALID DUP _UTUI-RT-STATUS !
-            _UTUI-RTA-CLEAR EXIT
+    _UTUI-PAA-STATUS @ _UTUI-PROJ-S-OK = IF
+        _UTUI-PAA-TOKEN @ 0= IF
+            _UTUI-PROJ-S-INVALID DUP _UTUI-PROJ-STATUS !
+            _UTUI-PAA-CLEAR EXIT
         THEN
     ELSE
-        _UTUI-RTA-TOKEN @ IF
-            _UTUI-RT-S-INVALID _UTUI-RTA-STATUS !
+        _UTUI-PAA-TOKEN @ IF
+            _UTUI-PROJ-S-INVALID _UTUI-PAA-STATUS !
         THEN
-        _UTUI-RTA-STATUS @ DUP _UTUI-RT-STATUS !
-        _UTUI-RTA-CLEAR EXIT
+        _UTUI-PAA-STATUS @ DUP _UTUI-PROJ-STATUS !
+        _UTUI-PAA-CLEAR EXIT
     THEN
-    _UTUI-RTA-TOKEN @ _UTUI-RT-TOKEN !
-    _UTUI-RTA-VISIBLE @ 0<> _UTUI-RT-VISIBLE !
-    -1 _UTUI-RT-ATTACHED !
-    0 _UTUI-RT-QUIESCING !
-    0 _UTUI-RT-QUIESCED !
-    _UTUI-RTA-CLEAR
-    _UTUI-RICH-TERM-RELAYOUT ;
+    _UTUI-PAA-TOKEN @ _UTUI-PROJ-TOKEN !
+    _UTUI-PAA-VISIBLE @ 0<> _UTUI-VISIBLE !
+    -1 _UTUI-PROJ-ATTACHED !
+    0 _UTUI-QUIESCING !
+    0 _UTUI-QUIESCED !
+    _UTUI-PAA-CLEAR
+    _UTUI-PROJECTION-RELAYOUT ;
 
 \ Visibility changes are synchronized immediately.  Hidden documents pass a
 \ zero region so a freed tile region can never be retained or dereferenced.
-: UTUI-RICH-TERM-VISIBLE!  ( visible -- status )
-    0<> _UTUI-RT-VISIBLE !
-    _UTUI-RICH-TERM-RELAYOUT ;
+: UTUI-VISIBLE!  ( visible -- )
+    0<> _UTUI-VISIBLE !
+    _UTUI-PROJECTION-RELAYOUT DROP ;
 
-: UTUI-RICH-TERM-STATUS  ( -- status )
-    _UTUI-RT-STATUS @ ;
-
-: _UTUI-RICH-TERM-PROJECT  ( -- )
-    _UTUI-RT-ATTACHED @ 0= IF EXIT THEN
-    _UTUI-RT-QUIESCING @ IF EXIT THEN
-    _UTUI-RT-TOKEN @ _UTUI-RT-CALL-PROJECT
-    DUP _UTUI-RT-STATUS? 0= IF DROP _UTUI-RT-S-INVALID THEN
-    _UTUI-RT-STATUS ! ;
+: _UTUI-PROJECTION-PUBLISH  ( -- )
+    _UTUI-PROJ-ATTACHED @ 0= IF EXIT THEN
+    _UTUI-QUIESCING @ IF EXIT THEN
+    _UTUI-PROJ-TOKEN @ _UTUI-PROJ-CALL-PROJECT
+    DUP _UTUI-PROJ-STATUS? 0= IF DROP _UTUI-PROJ-S-INVALID THEN
+    _UTUI-PROJ-STATUS ! ;
 
 \ Quiesce is the retryable pre-shutdown barrier.  A failed callback leaves the
 \ token live and projection state intact.  Success stops project/relayout but
 \ retains the source-free token for final detach.
-: UTUI-RICH-TERM-QUIESCE  ( -- status )
-    _UTUI-RT-QUIESCED @ IF _UTUI-RT-S-OK EXIT THEN
-    -1 _UTUI-RT-QUIESCING !
-    _UTUI-RT-ATTACHED @ 0= IF
-        -1 _UTUI-RT-QUIESCED !
-        _UTUI-RT-S-OK DUP _UTUI-RT-STATUS ! EXIT
+: UTUI-QUIESCE  ( -- status )
+    _UTUI-QUIESCED @ IF _UTUI-PROJ-S-OK EXIT THEN
+    -1 _UTUI-QUIESCING !
+    _UTUI-PROJ-ATTACHED @ 0= IF
+        -1 _UTUI-QUIESCED !
+        _UTUI-PROJ-S-OK DUP _UTUI-PROJ-STATUS ! EXIT
     THEN
-    _UTUI-RT-TOKEN @ _UTUI-RT-CALL-QUIESCE
-    DUP _UTUI-RT-STATUS? 0= IF DROP _UTUI-RT-S-INVALID THEN
-    DUP _UTUI-RT-STATUS !
-    DUP _UTUI-RT-S-OK = IF -1 _UTUI-RT-QUIESCED ! THEN ;
+    _UTUI-PROJ-TOKEN @ _UTUI-PROJ-CALL-QUIESCE
+    DUP _UTUI-PROJ-STATUS? 0= IF DROP _UTUI-PROJ-S-INVALID THEN
+    DUP _UTUI-PROJ-STATUS !
+    DUP _UTUI-PROJ-S-OK = IF -1 _UTUI-QUIESCED ! THEN ;
 
 \ Final detach is distinct from source quiescence.  Failure preserves the
 \ complete source-free token for retry and forbids ordinary UIDL teardown.
-: UTUI-RICH-TERM-DETACH  ( -- status )
-    _UTUI-RT-ATTACHED @ 0= IF _UTUI-RT-S-OK EXIT THEN
-    _UTUI-RT-QUIESCED @ 0= IF
-        UTUI-RICH-TERM-QUIESCE DUP IF EXIT THEN DROP
+: _UTUI-PROJECTION-DETACH  ( -- status )
+    _UTUI-PROJ-ATTACHED @ 0= IF _UTUI-PROJ-S-OK EXIT THEN
+    _UTUI-QUIESCED @ 0= IF
+        UTUI-QUIESCE DUP IF EXIT THEN DROP
     THEN
-    _UTUI-RT-TOKEN @ _UTUI-RT-CALL-DETACH
-    DUP _UTUI-RT-STATUS? 0= IF DROP _UTUI-RT-S-INVALID THEN
-    DUP _UTUI-RT-STATUS !
-    DUP _UTUI-RT-S-OK = IF
-        0 _UTUI-RT-TOKEN !
-        0 _UTUI-RT-ATTACHED !
+    _UTUI-PROJ-TOKEN @ _UTUI-PROJ-CALL-DETACH
+    DUP _UTUI-PROJ-STATUS? 0= IF DROP _UTUI-PROJ-S-INVALID THEN
+    DUP _UTUI-PROJ-STATUS !
+    DUP _UTUI-PROJ-S-OK = IF
+        0 _UTUI-PROJ-TOKEN !
+        0 _UTUI-PROJ-ATTACHED !
     THEN ;
 
-: _UTUI-RICH-TERM-CLEAR  ( -- )
-    0 _UTUI-RT-TOKEN !
-    0 _UTUI-RT-STATUS !
-    0 _UTUI-RT-VISIBLE !
-    0 _UTUI-RT-ATTACHED !
-    0 _UTUI-RT-QUIESCING !
-    0 _UTUI-RT-QUIESCED !
-    0 _UTUI-RT-CALLING !
-    0 _UTUI-RT-ARG0 ! 0 _UTUI-RT-ARG1 ! 0 _UTUI-RT-ARG2 !
-    _UTUI-RTA-CLEAR ;
+: _UTUI-PROJECTION-CLEAR  ( -- )
+    0 _UTUI-PROJ-TOKEN !
+    0 _UTUI-PROJ-STATUS !
+    0 _UTUI-VISIBLE !
+    0 _UTUI-PROJ-ATTACHED !
+    0 _UTUI-QUIESCING !
+    0 _UTUI-QUIESCED !
+    0 _UTUI-PROJ-CALLING !
+    0 _UTUI-PROJ-ARG0 ! 0 _UTUI-PROJ-ARG1 ! 0 _UTUI-PROJ-ARG2 !
+    _UTUI-PAA-CLEAR ;
 
 \ Public setter for the root region (used by desk to re-assign tiles)
 : UTUI-RGN!  ( rgn -- )  _UTUI-RGN ! ;
@@ -2306,8 +2301,8 @@ VARIABLE _UHT-SC
     _UTUI-SCF-HAS _UTUI-SCF-VIS OR SWAP _UTUI-SC-FLAGS!
 
     UIDL-ROOT _UTUI-DO-LAYOUT-REC
-    \ A rich-terminal backend observes only fully resolved UIDL geometry.
-    _UTUI-RICH-TERM-RELAYOUT DROP ;
+    \ Optional projections observe only fully resolved UIDL geometry.
+    _UTUI-PROJECTION-RELAYOUT DROP ;
 
 \ =====================================================================
 \ Resolve forward references that need _UTUI-DO-LAYOUT-REC
@@ -2506,10 +2501,10 @@ VARIABLE _UTUI-SKIP-CHILDREN
 
 : UTUI-PAINT  ( -- )
     _UTUI-DOC-LOADED @ 0= IF EXIT THEN
-    \ Capture rich-terminal semantics while UIDL dirty flags still describe the
-    \ same authoritative update that CELL rendering is about to consume.
+    \ Publish the derived view while UIDL dirty flags still describe the same
+    \ authoritative update that CELL rendering is about to consume.
     \ Projection failure is diagnostic-only here; CELL remains universal.
-    _UTUI-RICH-TERM-PROJECT
+    _UTUI-PROJECTION-PUBLISH
     \ Reset to full-screen clip — render words use absolute sidecar
     \ coordinates, so there must be no region offset active.
     RGN-ROOT
@@ -3569,8 +3564,8 @@ VARIABLE _USA-VL
     UTUI-FOCUS-NEXT
 
     -1 _UTUI-DOC-LOADED !
-    \ The generic host may now synchronously attach a rich-terminal backend.
-    \ UTUI-LOAD itself never borrows or retains a host binding.
+    \ Composition may now synchronously attach an optional projection adapter.
+    \ UTUI-LOAD itself never borrows or retains that adapter's binding.
     -1 ;
 
 \ =====================================================================
@@ -3581,7 +3576,7 @@ VARIABLE _USA-VL
     \ Generic hosts call quiesce before APP.SHUTDOWN and final detach after it.
     \ This fail-closed fallback prevents semantic storage from being cleared
     \ when either barrier was omitted or refused.
-    UTUI-RICH-TERM-DETACH ?DUP IF THROW THEN
+    _UTUI-PROJECTION-DETACH ?DUP IF THROW THEN
     _UTUI-DEMATERIALIZE
     _UTUI-SC-CLEAR-ALL
     _UTUI-ACT-CLEAR
@@ -3590,7 +3585,7 @@ VARIABLE _USA-VL
     0 _UTUI-FOCUS-P !
     0 _UTUI-DOC-LOADED !
     0 _UTUI-RGN !
-    _UTUI-RICH-TERM-CLEAR ;
+    _UTUI-PROJECTION-CLEAR ;
 
 \ =====================================================================
 \  §18b — UIDL Context Save / Restore  (UCTX)
@@ -3651,12 +3646,12 @@ CREATE _UCTX-VARS  _UCTX-NVAR CELLS ALLOT
     _UTUI-SAVED-FOCUS   _UCTX-VARS 12 CELLS + !
     _UTUI-SKIP-CHILDREN _UCTX-VARS 13 CELLS + !
     _UTUI-RGN           _UCTX-VARS 14 CELLS + !
-    _UTUI-RT-TOKEN      _UCTX-VARS 15 CELLS + !
-    _UTUI-RT-STATUS     _UCTX-VARS 16 CELLS + !
-    _UTUI-RT-VISIBLE    _UCTX-VARS 17 CELLS + !
-    _UTUI-RT-ATTACHED   _UCTX-VARS 18 CELLS + !
-    _UTUI-RT-QUIESCING  _UCTX-VARS 19 CELLS + !
-    _UTUI-RT-QUIESCED   _UCTX-VARS 20 CELLS + ! ;
+    _UTUI-PROJ-TOKEN     _UCTX-VARS 15 CELLS + !
+    _UTUI-PROJ-STATUS    _UCTX-VARS 16 CELLS + !
+    _UTUI-VISIBLE        _UCTX-VARS 17 CELLS + !
+    _UTUI-PROJ-ATTACHED   _UCTX-VARS 18 CELLS + !
+    _UTUI-QUIESCING       _UCTX-VARS 19 CELLS + !
+    _UTUI-QUIESCED        _UCTX-VARS 20 CELLS + ! ;
 _UCTX-INIT-VARS
 
 \ --- Pool table: maps index → (global-addr, ctx-offset, size) ---
@@ -3768,11 +3763,8 @@ GUARD _utui-guard
 ' UTUI-HIDE-DIALOG    CONSTANT _utui-hide-dialog-xt
 ' UTUI-HIT-TEST       CONSTANT _utui-hit-test-xt
 ' UTUI-DETACH         CONSTANT _utui-detach-xt
-' UTUI-RICH-TERM-ATTACH   CONSTANT _utui-rich-term-attach-xt
-' UTUI-RICH-TERM-VISIBLE! CONSTANT _utui-rich-term-visible-s-xt
-' UTUI-RICH-TERM-STATUS   CONSTANT _utui-rich-term-status-xt
-' UTUI-RICH-TERM-QUIESCE  CONSTANT _utui-rich-term-quiesce-xt
-' UTUI-RICH-TERM-DETACH   CONSTANT _utui-rich-term-detach-xt
+' UTUI-VISIBLE! CONSTANT _utui-visible-s-xt
+' UTUI-QUIESCE  CONSTANT _utui-quiesce-xt
 ' UTUI-INSTALL-XTS    CONSTANT _utui-install-xts-xt
 ' UTUI-ADD-ELEM       CONSTANT _utui-add-elem-xt
 ' UTUI-REMOVE-ELEM    CONSTANT _utui-remove-elem-xt
@@ -3792,7 +3784,7 @@ GUARD _utui-guard
 : UTUI-HIDE-DIALOG    _utui-hide-dialog-xt    _utui-guard WITH-GUARD ;
 : UTUI-HIT-TEST       _utui-hit-test-xt       _utui-guard WITH-GUARD ;
 : UTUI-DETACH
-    _UTUI-RT-DRIVER-INSTALLED @ IF
+    _UTUI-PROJ-ADAPTER-INSTALLED @ IF
         _utui-detach-xt EXECUTE
     ELSE
         _utui-detach-xt _utui-guard WITH-GUARD
@@ -3805,18 +3797,15 @@ GUARD _utui-guard
 : UTUI-ELEM-RGN       _utui-elem-rgn-xt       _utui-guard WITH-GUARD ;
 
 \ These entries own the current UIDL context and may execute registered
-\ layout, render, widget, app action, or rich-terminal callbacks.  They run
+\ layout, render, widget, app action, or projection callbacks.  They run
 \ only on the UI owner core and deliberately do not retain _utui-guard across
 \ callback code.
 \ Cross-core callers must post a lifecycle/render/input request to that owner.
 : UTUI-LOAD           _utui-load-xt EXECUTE ;
 : UTUI-PAINT          _utui-paint-xt EXECUTE ;
 : UTUI-RELAYOUT       _utui-relayout-xt EXECUTE ;
-: UTUI-RICH-TERM-ATTACH   _utui-rich-term-attach-xt EXECUTE ;
-: UTUI-RICH-TERM-VISIBLE! _utui-rich-term-visible-s-xt EXECUTE ;
-: UTUI-RICH-TERM-STATUS   _utui-rich-term-status-xt EXECUTE ;
-: UTUI-RICH-TERM-QUIESCE  _utui-rich-term-quiesce-xt EXECUTE ;
-: UTUI-RICH-TERM-DETACH   _utui-rich-term-detach-xt EXECUTE ;
+: UTUI-VISIBLE! _utui-visible-s-xt EXECUTE ;
+: UTUI-QUIESCE  _utui-quiesce-xt EXECUTE ;
 : UTUI-DISPATCH-KEY   _utui-dispatch-key-xt EXECUTE ;
 : UTUI-DISPATCH-MOUSE _utui-dispatch-mouse-xt EXECUTE ;
 : UTUI-TAB-SELECT     _utui-tab-select-xt EXECUTE ;

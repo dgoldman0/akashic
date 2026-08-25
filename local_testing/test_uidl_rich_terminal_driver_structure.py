@@ -288,7 +288,7 @@ def test_ahost_adapter_captures_attaches_and_scrubs_call_borrowed_binding() -> N
     assert preflight < capture < refusal < caught < success_scrub
     assert "RTERM-HOST-BINDING-INIT" not in adapter[capture:refusal]
     assert "AHS-VISIBLE?" in attach_body
-    assert "UTUI-RICH-TERM-ATTACH" in attach_body
+    assert "_UTUI-PROJECTION-ATTACH" in attach_body
     assert "CATCH" not in attach_body
     assert "RTERM-UCTX-ATTACH" not in adapter
     assert "VARIABLE" not in adapter
@@ -612,7 +612,7 @@ def test_quiesce_detach_scrub_and_install_one_immutable_context() -> None:
     quiesce = _definition(source, "_RTERM-UCTX-QUIESCE-BODY")
     detach = _definition(source, "_RTERM-UCTX-DETACH-BODY")
     install = _definition(source, "_RTERM-UIDL-INSTALL-BODY")
-    context_install = _definition(uidl, "_UTUI-RICH-TERM-DRIVER!")
+    context_install = _definition(uidl, "_UTUI-PROJECTION-ADAPTER!")
 
     q_lookup = quiesce.index("_RTERM-CALL-LOOKUP")
     q_detached = quiesce.index("_RTERM-BINDING-ST-DETACHED = IF", q_lookup)
@@ -652,38 +652,38 @@ def test_quiesce_detach_scrub_and_install_one_immutable_context() -> None:
         "RTERM-UCTX-DETACH",
     )
     callback_positions = [install.index(f"['] {name}") for name in callbacks]
-    driver_call = install.index("_UTUI-RICH-TERM-DRIVER!")
-    installed = install.index("_RTERM-B.INSTALLED !", driver_call)
+    adapter_call = install.index("_UTUI-PROJECTION-ADAPTER!")
+    installed = install.index("_RTERM-B.INSTALLED !", adapter_call)
     assert callback_positions == sorted(callback_positions)
-    assert callback_positions[-1] < driver_call < installed
+    assert callback_positions[-1] < adapter_call < installed
     assert "DUP\n    ['] RTERM-UCTX-ATTACH" in install
-    assert install.count("_UTUI-RICH-TERM-DRIVER!") == 1
+    assert install.count("_UTUI-PROJECTION-ADAPTER!") == 1
 
-    repeat_guard = context_install.index("_UTUI-RT-DRIVER-INSTALLED @ IF")
+    repeat_guard = context_install.index("_UTUI-PROJ-ADAPTER-INSTALLED @ IF")
     first_store = context_install.index(
-        "_UTUI-RTI-CONTEXT @ _UTUI-RT-DRIVER-CONTEXT !"
+        "_UTUI-PAI-CONTEXT @ _UTUI-PROJ-ADAPTER-CONTEXT !"
     )
     repeat_branch = context_install[repeat_guard:first_store]
     for field in (
-        "_UTUI-RT-DRIVER-CONTEXT @ _UTUI-RTI-CONTEXT @ =",
-        "_UTUI-RT-ATTACH-XT  @ _UTUI-RTI-ATTACH  @ =",
-        "_UTUI-RT-PROJECT-XT @ _UTUI-RTI-PROJECT @ =",
-        "_UTUI-RT-RELAYOUT-XT @ _UTUI-RTI-RELAYOUT @ =",
-        "_UTUI-RT-QUIESCE-XT @ _UTUI-RTI-QUIESCE @ =",
-        "_UTUI-RT-DETACH-XT  @ _UTUI-RTI-DETACH  @ =",
+        "_UTUI-PROJ-ADAPTER-CONTEXT @ _UTUI-PAI-CONTEXT @ =",
+        "_UTUI-PROJ-ATTACH-XT  @ _UTUI-PAI-ATTACH  @ =",
+        "_UTUI-PROJ-PROJECT-XT @ _UTUI-PAI-PROJECT @ =",
+        "_UTUI-PROJ-RELAYOUT-XT @ _UTUI-PAI-RELAYOUT @ =",
+        "_UTUI-PROJ-QUIESCE-XT @ _UTUI-PAI-QUIESCE @ =",
+        "_UTUI-PROJ-DETACH-XT  @ _UTUI-PAI-DETACH  @ =",
     ):
         assert field in repeat_branch
     assert "EXIT" in repeat_branch
     for incoming in (
-        "_UTUI-RTI-CONTEXT @ 0<>",
-        "_UTUI-RTI-ATTACH @ 0<>",
-        "_UTUI-RTI-PROJECT @ 0<>",
-        "_UTUI-RTI-RELAYOUT @ 0<>",
-        "_UTUI-RTI-QUIESCE @ 0<>",
-        "_UTUI-RTI-DETACH @ 0<>",
+        "_UTUI-PAI-CONTEXT @ 0<>",
+        "_UTUI-PAI-ATTACH @ 0<>",
+        "_UTUI-PAI-PROJECT @ 0<>",
+        "_UTUI-PAI-RELAYOUT @ 0<>",
+        "_UTUI-PAI-QUIESCE @ 0<>",
+        "_UTUI-PAI-DETACH @ 0<>",
     ):
         assert context_install.index(incoming, repeat_guard) < first_store
-    installed_last = context_install.index("_UTUI-RT-DRIVER-INSTALLED !")
+    installed_last = context_install.index("_UTUI-PROJ-ADAPTER-INSTALLED !")
     assert first_store < installed_last
-    assert context_install.count("_UTUI-RT-DRIVER-CONTEXT !") == 1
-    assert context_install.count("_UTUI-RT-DRIVER-INSTALLED !") == 1
+    assert context_install.count("_UTUI-PROJ-ADAPTER-CONTEXT !") == 1
+    assert context_install.count("_UTUI-PROJ-ADAPTER-INSTALLED !") == 1

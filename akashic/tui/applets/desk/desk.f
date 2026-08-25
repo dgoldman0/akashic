@@ -884,7 +884,7 @@ VARIABLE _DA-SA
         OVER _SL-STATE @ _ST-MINIMIZED = AND IF
             DUP _SL-HAS-UIDL @ IF
                 DUP _DESK-CTX-SWITCH
-                FALSE UTUI-RICH-TERM-VISIBLE! DROP
+                FALSE UTUI-VISIBLE!
                 DUP _DESK-CTX-SAVE
             THEN
         THEN
@@ -926,7 +926,7 @@ VARIABLE _DFF-RGN
             DUP _DESK-CTX-SWITCH
             DUP _SL-RGN @ UTUI-RGN!
             UTUI-RELAYOUT
-            TRUE UTUI-RICH-TERM-VISIBLE! DROP
+            TRUE UTUI-VISIBLE!
             DUP _DESK-CTX-SAVE
         THEN
         DROP

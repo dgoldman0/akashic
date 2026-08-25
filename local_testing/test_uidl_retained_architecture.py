@@ -54,6 +54,35 @@ def test_rich_terminal_is_not_an_applet_facing_scene_service() -> None:
         assert protocol_word.search(code) is None, applet
 
 
+def test_lower_uidl_lifecycle_has_no_renderer_vocabulary() -> None:
+    lower_paths = (
+        "akashic/tui/uidl-tui.f",
+        "akashic/tui/app-shell.f",
+        "akashic/tui/applet-host/host.f",
+        "akashic/tui/applets/desk/desk.f",
+    )
+    neutral_docs = (
+        "docs/tui/uidl-tui.md",
+        "docs/tui/app-shell.md",
+        "docs/tui/applet-host.md",
+        "docs/tui/applets/desk/desk.md",
+    )
+    renderer_vocabulary = re.compile(
+        r"(?i)(?:rich[- ]terminal|"
+        r"(?<![A-Z0-9_])_?(?:RTERM|RTAPT|APTSCB|APTAS)(?:-|\b)|"
+        r"(?<![A-Z0-9_])_?PT-|\bAPT(?:-?1)?\b)"
+    )
+    for relative in lower_paths + neutral_docs:
+        assert renderer_vocabulary.search(_text(relative)) is None, relative
+
+    # Ordinary consumers know only the generic UIDL lifecycle.  Composition
+    # and provider attachment stay below uidl-tui's private projection seam.
+    for relative in lower_paths[1:]:
+        source = _text(relative)
+        assert "UTUI-PROJECTION" not in source, relative
+        assert "_UTUI-PROJ" not in source, relative
+
+
 def test_uidl_context_remains_the_hosted_application_ui_authority() -> None:
     uidl = _text("akashic/liraq/uidl.f")
     tui = _text("akashic/tui/uidl-tui.f")
@@ -72,60 +101,80 @@ def test_uidl_context_remains_the_hosted_application_ui_authority() -> None:
     assert "AHS.UCTX" in host
 
 
-def test_uidl_rich_terminal_lifecycle_is_ordered_and_context_local() -> None:
+def test_uidl_projection_lifecycle_is_ordered_and_context_local() -> None:
     tui = _text("akashic/tui/uidl-tui.f")
 
-    for word in (
+    for word in ("UTUI-VISIBLE!", "UTUI-QUIESCE", "UTUI-DETACH"):
+        assert f": {word}" in tui
+    for private_word in (
+        "_UTUI-PROJECTION-ATTACH",
+        "_UTUI-PROJECTION-ADAPTER!",
+        "_UTUI-PROJECTION-DETACH",
+    ):
+        assert f": {private_word}" in tui
+    assert ": UTUI-PROJECTION-STATUS" not in tui
+    for legacy_name in (
         "UTUI-RICH-TERM-ATTACH",
         "UTUI-RICH-TERM-VISIBLE!",
         "UTUI-RICH-TERM-STATUS",
         "UTUI-RICH-TERM-QUIESCE",
         "UTUI-RICH-TERM-DETACH",
+        "_UTUI-RICH-TERM-DRIVER!",
+        "_UTUI-RT-",
+        "_UTUI-RTA-",
     ):
-        assert f": {word}" in tui
+        assert legacy_name not in tui
 
     # Composition installs one exact callback table; applications cannot
     # discover or replace it and the no-driver path remains unavailable.
-    assert ": _UTUI-RICH-TERM-DRIVER!" in tui
-    assert "_UTUI-RT-DRIVER-INSTALLED @ IF" in tui
-    install = _word(tui, "_UTUI-RICH-TERM-DRIVER!")
+    assert ": _UTUI-PROJECTION-ADAPTER!" in tui
+    assert "_UTUI-PROJ-ADAPTER-INSTALLED @ IF" in tui
+    install = _word(tui, "_UTUI-PROJECTION-ADAPTER!")
     assert "context attach project relayout quiesce detach -- flag" in install
-    assert "_UTUI-RT-DRIVER-CONTEXT @ _UTUI-RTI-CONTEXT @ =" in install
-    assert "_UTUI-RTI-CONTEXT @ 0<>" in install
-    assert "_UTUI-RT-S-UNAVAILABLE DUP _UTUI-RT-STATUS !" in tui
+    assert "_UTUI-PROJ-ADAPTER-CONTEXT @ _UTUI-PAI-CONTEXT @ =" in install
+    assert "_UTUI-PAI-CONTEXT @ 0<>" in install
+    assert "_UTUI-PROJ-S-UNAVAILABLE DUP _UTUI-PROJ-STATUS !" in tui
     assert "CINST-SERVICE" not in tui
     assert "PRES-BROKER" not in tui
 
-    # Only the backend token and lifecycle scalars enter UCTX.  The attach
+    # Only the adapter token and lifecycle scalars enter UCTX.  The attach
     # descriptor is call-borrowed and every callback scratch cell is scrubbed.
-    assert "_UTUI-RT-TOKEN      _UCTX-VARS 15 CELLS + !" in tui
-    assert "_UTUI-RT-STATUS     _UCTX-VARS 16 CELLS + !" in tui
-    assert "_UTUI-RT-VISIBLE    _UCTX-VARS 17 CELLS + !" in tui
-    assert "_UTUI-RT-ATTACHED   _UCTX-VARS 18 CELLS + !" in tui
-    assert "_UTUI-RT-QUIESCING  _UCTX-VARS 19 CELLS + !" in tui
-    assert "_UTUI-RT-QUIESCED   _UCTX-VARS 20 CELLS + !" in tui
+    context_init = _word(tui, "_UCTX-INIT-VARS")
+    context_fields = (
+        ("_UTUI-PROJ-TOKEN", 15),
+        ("_UTUI-PROJ-STATUS", 16),
+        ("_UTUI-VISIBLE", 17),
+        ("_UTUI-PROJ-ATTACHED", 18),
+        ("_UTUI-QUIESCING", 19),
+        ("_UTUI-QUIESCED", 20),
+    )
+    for field, slot in context_fields:
+        assert re.search(
+            rf"(?m)^\s*{re.escape(field)}\s+_UCTX-VARS {slot} CELLS \+ !",
+            context_init,
+        )
     assert "21 CONSTANT _UCTX-NVAR" in tui
     assert "168 CONSTANT _UCTX-VAR-SZ" in tui
     assert "Total 103,592 bytes" in tui
     assert "103,592" in _text("docs/tui/uidl-tui.md")
-    assert "0 _UTUI-RTA-BINDING !" in tui
-    assert "0 _UTUI-RT-ARG0 ! 0 _UTUI-RT-ARG1 ! 0 _UTUI-RT-ARG2 !" in tui
+    assert "0 _UTUI-PAA-BINDING !" in tui
+    assert "0 _UTUI-PROJ-ARG0 ! 0 _UTUI-PROJ-ARG1 ! 0 _UTUI-PROJ-ARG2 !" in tui
 
     # Every callback receives the same explicit composition context.  It is
-    # immutable driver authority, not a singleton closure or UCTX field.
+    # immutable adapter authority, not a singleton closure or UCTX field.
     for word in (
-        "_UTUI-RT-DO-ATTACH",
-        "_UTUI-RT-DO-PROJECT",
-        "_UTUI-RT-DO-RELAYOUT",
-        "_UTUI-RT-DO-QUIESCE",
-        "_UTUI-RT-DO-DETACH",
+        "_UTUI-PROJ-DO-ATTACH",
+        "_UTUI-PROJ-DO-PROJECT",
+        "_UTUI-PROJ-DO-RELAYOUT",
+        "_UTUI-PROJ-DO-QUIESCE",
+        "_UTUI-PROJ-DO-DETACH",
     ):
-        assert "_UTUI-RT-DRIVER-CONTEXT @" in _word(tui, word)
-    assert "_UTUI-RT-DRIVER-CONTEXT" not in _word(tui, "_UTUI-RICH-TERM-CLEAR")
+        assert "_UTUI-PROJ-ADAPTER-CONTEXT @" in _word(tui, word)
+    assert "_UTUI-PROJ-ADAPTER-CONTEXT" not in _word(tui, "_UTUI-PROJECTION-CLEAR")
 
-    # Rich projection observes UIDL dirt before the CELL renderer clears it.
+    # A derived projection observes UIDL dirt before CELL rendering clears it.
     paint = _word(tui, "UTUI-PAINT")
-    assert paint.index("_UTUI-RICH-TERM-PROJECT") < paint.index(
+    assert paint.index("_UTUI-PROJECTION-PUBLISH") < paint.index(
         "_UTUI-PAINT-ELEM"
     )
 
@@ -133,18 +182,18 @@ def test_uidl_rich_terminal_lifecycle_is_ordered_and_context_local() -> None:
     # carry region zero so a freed Desk tile can never be retained.
     relayout = _word(tui, "UTUI-RELAYOUT")
     assert relayout.index("_UTUI-DO-LAYOUT-REC") < relayout.index(
-        "_UTUI-RICH-TERM-RELAYOUT"
+        "_UTUI-PROJECTION-RELAYOUT"
     )
-    assert "FALSE 0" in _word(tui, "_UTUI-RICH-TERM-RELAYOUT")
+    assert "FALSE 0" in _word(tui, "_UTUI-PROJECTION-RELAYOUT")
 
-    # Quiesce erects the teardown barrier before invoking the backend.  Final
+    # Quiesce erects the teardown barrier before invoking the adapter.  Final
     # detach is independently retryable and gates every ordinary UIDL free.
-    quiesce = _word(tui, "UTUI-RICH-TERM-QUIESCE")
-    assert quiesce.index("-1 _UTUI-RT-QUIESCING !") < quiesce.index(
-        "_UTUI-RT-CALL-QUIESCE"
+    quiesce = _word(tui, "UTUI-QUIESCE")
+    assert quiesce.index("-1 _UTUI-QUIESCING !") < quiesce.index(
+        "_UTUI-PROJ-CALL-QUIESCE"
     )
     detach = _word(tui, "UTUI-DETACH")
-    assert detach.index("UTUI-RICH-TERM-DETACH ?DUP IF THROW THEN") < detach.index(
+    assert detach.index("_UTUI-PROJECTION-DETACH ?DUP IF THROW THEN") < detach.index(
         "_UTUI-DEMATERIALIZE"
     )
 
@@ -451,13 +500,13 @@ def test_generic_host_quiesces_and_detaches_before_releasing_children() -> None:
     quiesce = _word(host, "_AHQS-BODY")
     assert quiesce.index(
         "AHS-CLOSE-S-QUIESCING _AHQS-SLOT @ AHS.CLOSE-PHASE !"
-    ) < quiesce.index("UTUI-RICH-TERM-QUIESCE")
-    rich_at = quiesce.index("UTUI-RICH-TERM-QUIESCE")
+    ) < quiesce.index("UTUI-QUIESCE")
+    uidl_at = quiesce.index("UTUI-QUIESCE")
     save_at = quiesce.index("_AHQS-SLOT @ AHS-CTX-SAVE")
     init_at = quiesce.index("AHS.INIT-STARTED @ IF")
     activate_at = quiesce.index("_AHQS-SLOT @ AHS-ACTIVATE")
     app_at = quiesce.index("APP.QUIESCE-XT @")
-    assert rich_at < save_at < init_at < app_at < activate_at
+    assert uidl_at < save_at < init_at < app_at < activate_at
     assert "SWAP EXECUTE ?DUP IF THROW THEN" in quiesce[app_at:]
     assert "AHS-CLOSE-S-QUIESCED _AHQS-SLOT @ AHS.CLOSE-PHASE !" not in quiesce
 
@@ -636,16 +685,16 @@ def test_app_quiesce_is_a_public_pre_shutdown_descriptor_phase() -> None:
     assert setup.index("_ASHELL-ACTIVATE") < init_at < setup.index("APP.INIT-XT @")
 
     quiesce = _word(shell, "_ASHELL-TD-QUIESCE")
-    rich_at = quiesce.index("UTUI-RICH-TERM-QUIESCE")
+    uidl_at = quiesce.index("UTUI-QUIESCE")
     init_guard_at = quiesce.index("_ASHELL-APP-INIT-STARTED @ 0=")
     repeat_guard_at = quiesce.index("_ASHELL-APP-QUIESCED @ IF EXIT THEN")
     activate_at = quiesce.index("_ASHELL-ACTIVATE")
     callback_at = quiesce.index("APP.QUIESCE-XT @")
     success_at = quiesce.index("TRUE _ASHELL-APP-QUIESCED !", callback_at)
-    assert quiesce.index("_ASHELL-HAS-UIDL @ IF") < rich_at < quiesce.index(
-        "THEN", rich_at
+    assert quiesce.index("_ASHELL-HAS-UIDL @ IF") < uidl_at < quiesce.index(
+        "THEN", uidl_at
     ) < init_guard_at
-    assert rich_at < init_guard_at < repeat_guard_at < callback_at < activate_at
+    assert uidl_at < init_guard_at < repeat_guard_at < callback_at < activate_at
     assert callback_at < success_at
     shutdown = _word(shell, "_ASHELL-TD-APP")
     shutdown_init_at = shutdown.index("_ASHELL-APP-INIT-STARTED @ 0=")
@@ -747,8 +796,10 @@ def test_app_shell_dependent_failures_quarantine_before_the_next_stage() -> None
 
     normalized_shell_doc = " ".join(shell_doc.split())
     normalized_contract = " ".join(rich_contract.split())
+    assert "projection-provider soft reset" in normalized_shell_doc
+    assert "APT soft reset" not in normalized_shell_doc
+    assert "APT soft reset" in normalized_contract
     for prose in (normalized_shell_doc, normalized_contract):
-        assert "APT soft reset" in prose
         assert (
             "attachment hard-reset/drain" in prose
             or "attachment hard reset/drain" in prose
@@ -773,9 +824,10 @@ def test_desk_quiesce_and_layout_preserve_retiring_slot_authority() -> None:
     hidden = _word(desk, "_DESK-SYNC-HIDDEN")
     assert hidden.index("_SL-CALLABLE?") < hidden.index(
         "_DESK-CTX-SWITCH"
-    ) < hidden.index("FALSE UTUI-RICH-TERM-VISIBLE!") < hidden.index(
+    ) < hidden.index("FALSE UTUI-VISIBLE!") < hidden.index(
         "_DESK-CTX-SAVE"
     )
+    assert "FALSE UTUI-VISIBLE! DROP" not in hidden
     assign = _word(desk, "_DESK-ASSIGN-TILE")
     region_at = assign.index("_SL-RGN @ ?DUP IF")
     bounds_at = assign.index("RGN-BOUNDS!", region_at)
@@ -799,12 +851,13 @@ def test_desk_quiesce_and_layout_preserve_retiring_slot_authority() -> None:
         "_DESK-EXPAND-FULLFRAME",
         "UTUI-RGN!",
         "UTUI-RELAYOUT",
-        "TRUE UTUI-RICH-TERM-VISIBLE!",
+        "TRUE UTUI-VISIBLE!",
         "_DESK-CTX-SAVE",
     )
     assert [relayout.index(token) for token in ordered] == sorted(
         relayout.index(token) for token in ordered
     )
+    assert "TRUE UTUI-VISIBLE! DROP" not in relayout
 
     effective = _word(desk, "_DESK-FULLFRAME-ACTIVE?")
     assert "_DESK-FOCUS-SA @ ?DUP IF _SL-LAYOUT?" in effective

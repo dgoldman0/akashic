@@ -67,6 +67,7 @@ REQUIRE tui/uidl-tui.f
 | **Proxy region** | A single static 40-byte region (`_UTUI-PROXY-RGN`) is synced from sidecar geometry before calling widget `_*-DRAW` / `_*-HANDLE`. Safe because the TUI is single-threaded. |
 | **Dynamic DOM** | `UTUI-ADD-ELEM` and `UTUI-REMOVE-ELEM` wrap the base UIDL tree operations with sidecar allocation, style resolution, materialization, and dirty propagation. Apps manipulate the tree like JavaScript's `appendChild` / `removeChild`. |
 | **Auto-dirty** | `_UTUI-NEEDS-PAINT` flag is set by any DOM / widget mutation. The shell converts this to `ASHELL-DIRTY!` at tick and paint time — apps never call `ASHELL-DIRTY!`. |
+| **Derived projection** | An optional composition-installed adapter observes the same UIDL/UCTX lifecycle. UIDL-TUI owns visibility, publish, quiesce, and final detach; applications and hosts do not select or name a renderer. |
 | **Packed style** | FG (8 bits) + BG (8 bits) + attrs (8 bits) + text-align (2 bits) + position (2 bits) + z-index (8 bits) packed into one cell at `+32`. |
 | **CSS inheritance** | `_UTUI-RESOLVE-STYLES-REC` propagates inheritable properties (fg, bg, attrs, text-align — bits 0-25) from parent to child before resolving the child's `style=`. Non-inheritable properties (position, z-index) are preserved from prelayout. |
 | **Registry patching** | `UTUI-INSTALL-XTS` sets render/event/layout XTs via the public `EL-SET-RENDER` / `EL-SET-EVENT` / `EL-SET-LAYOUT` API and `UIDL-T-*` type-id constants. Each chrome element type gets its own adapter. External code uses the same API — no library modification needed. |
@@ -326,15 +327,40 @@ Parse a UIDL XML document and prepare the TUI backend:
 
 Returns `-1` on success, `0` on parse failure.
 
+A successful load establishes only the authoritative UIDL document. An outer
+composition may then call the private `_UTUI-PROJECTION-ATTACH` with a
+call-borrowed document binding; `UTUI-LOAD` neither selects an adapter nor
+retains that binding.
+
+### Optional projection lifecycle
+
+The ordinary lower-layer lifecycle is renderer-neutral:
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `UTUI-VISIBLE!` | `( visible -- )` | Store document visibility and immediately synchronize projection geometry. A false value supplies no region to the adapter. |
+| `UTUI-QUIESCE` | `( -- status )` | Cross the retryable pre-shutdown source barrier. Success prevents later publish or relayout callbacks while preserving the token needed for final detach. |
+| `UTUI-DETACH` | `( -- )` | Sole public final-detach entry. It requires projection detach to succeed before clearing any UIDL-owned state. |
+
+Composition alone installs and enters the adapter through
+`_UTUI-PROJECTION-ADAPTER! ( context attach project relayout quiesce detach -- flag )`
+and `_UTUI-PROJECTION-ATTACH ( document-binding visible -- status )`. Both are
+private `_UTUI-` words: Desk, app-shell, applet-host, and applications do not
+call them. There are no renderer-named compatibility aliases and no public
+projection-status getter; hosts act on the status returned by the lifecycle
+operation they invoke.
+
 ### UTUI-DETACH — `( -- )`
 
 Tear down the TUI backend:
 
-1. Run `_UTUI-DEMATERIALIZE` (free UIDL-owned state and detach borrowed widgets)
-2. Clear sidecars
-3. Clear action table and shortcut table
-4. Reset subscriptions
-5. Zero focus, loaded flag, root region
+1. Quiesce if necessary and complete the private projection-adapter detach;
+   any refusal throws before UIDL state changes
+2. Run `_UTUI-DEMATERIALIZE` (free UIDL-owned state and detach borrowed widgets)
+3. Clear sidecars
+4. Clear action table and shortcut table
+5. Reset subscriptions
+6. Zero focus, loaded flag, root region, and projection lifecycle state
 
 ### UTUI-BIND-STATE — `( st -- )`
 
@@ -964,8 +990,11 @@ events) pending future implementation.
 
 Defined in §18b of `uidl-tui.f`.  Provides per-app serialisation of
 the 21 global UIDL/UTUI variables and 10 pool arrays (103,592 bytes,
-approximately 101 KiB, per context).  This lives in `uidl-tui.f` because it
-must enumerate every private `_UDL-*` and `_UTUI-*` variable.
+approximately 101 KiB, per context). The scalars include six neutral
+projection-lifecycle values: token, status, visibility, attached, quiescing,
+and quiesced. Adapter context and callback XTs are composition authority and
+never enter a UCTX. This lives in `uidl-tui.f` because it must enumerate every
+private `_UDL-*` and `_UTUI-*` variable.
 
 | Word | Stack | Description |
 |------|-------|-------------|
@@ -1003,12 +1032,14 @@ single `_utui-guard`:
 `UTUI-INSTALL-XTS`.
 
 The callback-driving lifecycle entries `UTUI-LOAD`, `UTUI-PAINT`,
-`UTUI-RELAYOUT`, `UTUI-DISPATCH-KEY`, `UTUI-DISPATCH-MOUSE`, and
-`UTUI-TAB-SELECT` deliberately run unwrapped on the current UI owner core.
-They can execute registered layout, render, widget, or app action code; an
-outer `_utui-guard` would otherwise remain held if that code opened a modal
-dialog or yielded. Cross-core callers must post lifecycle, render, and input
-requests to the owner instead of invoking these entries concurrently.
+`UTUI-RELAYOUT`, `UTUI-VISIBLE!`, `UTUI-QUIESCE`,
+`UTUI-DISPATCH-KEY`, `UTUI-DISPATCH-MOUSE`, and `UTUI-TAB-SELECT`
+deliberately run unwrapped on the current UI owner core. `UTUI-DETACH` does the
+same when an adapter is installed. These entries can execute registered
+layout, render, widget, app action, or projection code; an outer `_utui-guard`
+would otherwise remain held if that code opened a modal dialog or yielded.
+Cross-core callers must post lifecycle, render, and input requests to the
+owner instead of invoking these entries concurrently.
 
 Desk/App Shell dispatch is UIDL-direct and has no DOM-event or `FOC-DISPATCH`
 intermediary. Those alternate dispatch stacks are outside this ownership
@@ -1024,7 +1055,9 @@ wrappers that delegate to the guarded `UTUI-SHOW-DIALOG` and
 
 ```
 UTUI-LOAD              ( xml-a xml-u rgn -- flag )   Parse UIDL, build sidecars + widgets
-UTUI-DETACH            ( -- )                        Free UIDL state, detach borrowed widgets, clear sidecars
+UTUI-VISIBLE!          ( visible -- )                 Synchronize document visibility and projection geometry
+UTUI-QUIESCE           ( -- status )                  Cross the retryable pre-shutdown projection barrier
+UTUI-DETACH            ( -- )                        Final projection detach, then free UIDL state and sidecars
 UTUI-BIND-STATE        ( st -- )                     Bind state-tree for expressions
 UTUI-INSTALL-XTS       ( -- )                        Patch Element Registry with TUI adapters
 UTUI-PAINT             ( -- )                        Full repaint

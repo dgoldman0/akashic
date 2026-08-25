@@ -1180,7 +1180,7 @@ VARIABLE _RTERM-INSTALL-BACKEND
 
 \ Keep the post-capture path separate so the protected call restores its inputs.
 : _RTERM-AHOST-UIDL-ATTACH-BODY  ( slot host-binding -- ior )
-    SWAP AHS-VISIBLE? UTUI-RICH-TERM-ATTACH ;
+    SWAP AHS-VISIBLE? _UTUI-PROJECTION-ATTACH ;
 
 \ Generic AHOST UIDL-ready adapter.  The descriptor is caller-owned scratch
 \ initialized by composition before installation.  CAPTURE owns the complete
@@ -1268,7 +1268,7 @@ VARIABLE _RTERM-INSTALL-BACKEND
     ['] RTERM-UCTX-RELAYOUT
     ['] RTERM-UCTX-QUIESCE
     ['] RTERM-UCTX-DETACH
-    _UTUI-RICH-TERM-DRIVER! 0= IF
+    _UTUI-PROJECTION-ADAPTER! 0= IF
         DROP RTERM-S-INVALID _RTERM-INSTALL-BACKEND @ _RTERM-NOTE EXIT
     THEN
     -1 SWAP _RTERM-B.INSTALLED !

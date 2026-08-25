@@ -35,11 +35,13 @@ storage-disjoint operations plus one opaque provider context. Only the
 provider bridge names both vocabularies; generic UIDL code neither names nor
 loads `RTAPT`.
 
-Above it, the optional UIDL-TUI rich-terminal driver adapts UIDL semantics to
-the generic engine facade. Desk and the applet host attach, project, relayout,
-and detach UCTXs through private driver operations. A Desk-owned UIDL context,
-when present, follows the same path as a child UCTX; Desk UI code does not
-author a retained scene manually.
+Above it, UIDL-TUI owns a renderer-neutral optional-projection lifecycle. The
+rich-terminal driver implements that lifecycle's private adapter table and
+adapts UIDL semantics to the generic engine facade. Desk and the applet host
+express only document visibility, quiesce, and final detach through ordinary
+UIDL-TUI words; they neither select the adapter nor name its provider. A
+Desk-owned UIDL context, when present, follows the same lifecycle as a child
+UCTX; Desk UI code does not author a retained scene manually.
 
 The following are forbidden application interfaces:
 
@@ -320,10 +322,39 @@ The backend quiesces every retained source context synchronously before the
 host calls arbitrary application shutdown or frees application state. No source
 callback is permitted after quiesce succeeds.
 
-## 6. UIDL-TUI rich-terminal adapter lifecycle
+## 6. UIDL-TUI projection lifecycle and rich-terminal adapter
 
-This is the private host/driver ABI above the generic engine, not an engine
-interface and not an application service. Only the UIDL host calls it:
+The public host-facing UIDL lifecycle is neutral:
+
+```forth
+UTUI-VISIBLE!  ( visible -- )
+UTUI-QUIESCE   ( -- status )
+UTUI-DETACH    ( -- )
+```
+
+`UTUI-VISIBLE!` synchronizes optional projection geometry, and
+`UTUI-QUIESCE` is the retryable pre-application-shutdown source barrier.
+`UTUI-DETACH` is the sole public final-detach entry and refuses to clear the
+UIDL document unless the adapter's final detach succeeds. Desk, app-shell, and
+applet-host use only these generic words.
+
+Outer composition alone installs and enters the private adapter seam:
+
+```forth
+_UTUI-PROJECTION-ADAPTER!
+    ( context attach project relayout quiesce detach -- flag )
+_UTUI-PROJECTION-ATTACH
+    ( document-binding visible -- status )
+```
+
+Installation is immutable and one-way; attach borrows the document binding
+only for the synchronous call and stores only the returned opaque token in the
+active UCTX. There are no provider-named compatibility aliases and no public
+projection-status getter. Backend choice therefore remains entirely in outer
+composition.
+
+The rich-terminal adapter uses the following private ABI above the generic
+engine. It is not an engine interface or application service:
 
 ```forth
 RTERM-HOST-BINDING-SIZE  ( -- bytes )
@@ -357,8 +388,9 @@ RTERM-AHOST-UIDL-READY      ( host slot host-binding -- ior )
 
 This foundation has no `RTAPT-*`, screen-publisher, MegaPad, Desk, or applet
 dependency. It borrows one immutable `RTE` facade, and its immutable UIDL
-callback installation carries the exact driver backend as explicit composition
-context; neither context is stored in a UCTX. Until the backend-neutral
+callback installation through `_UTUI-PROJECTION-ADAPTER!` carries the exact
+driver backend as explicit composition context; neither context is stored in a
+UCTX. Until the backend-neutral
 semantic projector exists, attach and geometry tracking are local-only,
 project returns `RTERM-S-UNAVAILABLE`, quiesce proves the empty source set, and
 detach creates no wire owner or tombstone. In
@@ -374,7 +406,7 @@ slot, CINST, UCTX, region, and application pointers before returning.
 one caller-owned `RTERM-HOST-BINDING-SIZE` scratch span initialized once by
 composition before callback installation. Capture performs the complete alias
 preflight without first mutating that span. After a successful capture, the
-adapter calls `UTUI-RICH-TERM-ATTACH` under a cleanup boundary so only the
+adapter calls `_UTUI-PROJECTION-ATTACH` under a cleanup boundary so only the
 active UCTX receives the opaque token, then unconditionally reinitializes the
 now-proven-disjoint descriptor even if attach throws. A capture refusal leaves
 the already pointer-free scratch unchanged.
@@ -516,12 +548,13 @@ Repeated quiesce for the exact token is idempotent.
 
 ### 6.5 Detach
 
-Final detach is host-owned and runs after application shutdown, but before
-`UTUI-DETACH`, `UCTX-FREE`, `CINST-FREE`, region free, or host-slot reuse. It
-uses only the exact token and quiesced source-free binding; it never calls
-application code or a semantic source.
+Final `UTUI-DETACH` is host-owned and runs after application shutdown, but
+before `UCTX-FREE`, `CINST-FREE`, region free, or host-slot reuse. Before it
+dematerializes or clears the UIDL document, UIDL-TUI invokes the adapter's
+private detach callback with only the exact token and quiesced source-free
+binding. That callback never calls application code or a semantic source.
 
-Detach is allocation-free and atomically:
+The adapter callback is allocation-free and atomically:
 
 1. makes the binding stale for project and relayout;
 2. verifies quiesce removed every source XT/context, then removes all borrowed
@@ -531,13 +564,14 @@ Detach is allocation-free and atomically:
    and
 5. releases projection storage the tombstone no longer needs.
 
-Once that local transition succeeds, detach returns `RTERM-S-OK` even if egress
-is blocked. The host may then detach/free the UCTX, CINST, region, and slot. The
-backend retains only the private wire owner/generation and bounded drop
-progress; it contains no pointer back into those freed objects.
+Once that local transition succeeds, the adapter returns `RTERM-S-OK` even if
+egress is blocked. `UTUI-DETACH` then clears ordinary UIDL state, after which
+the host may free the UCTX, CINST, region, and slot. The backend retains only
+the private wire owner/generation and bounded drop progress; it contains no
+pointer back into those freed objects.
 
-Detach is idempotent. A binding record becomes reusable only after exact owner
-drop is acknowledged or a confirmed epoch/session destruction proves that the
+Adapter detach is idempotent. A binding record becomes reusable only after
+exact owner drop is acknowledged or a confirmed epoch/session destruction proves that the
 retained terminal state cannot survive. A UCTX that never materialized a retained owner
 creates no wire tombstone.
 
@@ -570,27 +604,27 @@ The host invokes the callback exactly once for a launch after ordinary UIDL
 load and initial region assignment have succeeded, while the exact UCTX is
 active, and before crossing the application-initialization boundary. A zero
 callback is the baseline configuration. The callback may capture the exact
-binding and attach an optional driver, but the host neither allocates backend
-state nor learns the callback context's type. A callback refusal enters normal
-transactional launch rollback.
+binding and enter UIDL-TUI's private projection attach, but the host neither
+allocates adapter state nor learns the callback context's type. A callback
+refusal enters normal transactional launch rollback.
 
 Each linked slot records an independent retirement phase: `LIVE`, `QUIESCING`,
 `QUIESCED`, `SHUTDOWN-CLAIMED`, or `DETACHED`. `AHS.STATE` remains the ordinary
 running/minimized/focused state so authority validation sees the original live
 tuple through final detach. On the first close attempt the host stores
-`QUIESCING` before quiescing the retained UIDL attachment and, for a child
-which crossed application init, invoking its optional `APP.QUIESCE-XT`. Only
-both barriers plus the final UCTX save succeeding store `QUIESCED`. A refusal
-preserves the
-linked slot, ID, CINST, UCTX, region, UIDL buffer, driver attachment, and exact
-activation tuple. The slot becomes noncallable: focus, input, tick, paint, and
+`QUIESCING` before calling `UTUI-QUIESCE` and, for a child which crossed
+application init, invoking its optional `APP.QUIESCE-XT`. Only both barriers
+plus the final UCTX save succeeding store `QUIESCED`. A refusal preserves the
+linked slot, ID, CINST, UCTX, region, UIDL buffer, projection attachment, and
+exact activation tuple. The slot becomes noncallable: focus, input, tick, paint, and
 application close callbacks must not reach it, while a later host
 quiesce/drain attempt may retry the barrier.
 
 After quiesce succeeds, the host stores `SHUTDOWN-CLAIMED` before activation or
 `APP.SHUTDOWN`, so a thrown shutdown callback is never repeated. It then runs
-final UIDL/driver detach with the exact UCTX restored. `AHS.HAS-UIDL` remains
-true until that detach succeeds. A detach refusal preserves every child
+`UTUI-DETACH`, the sole public final detach for both projection and document,
+with the exact UCTX restored. `AHS.HAS-UIDL` remains true until that detach
+succeeds. A detach refusal preserves every child
 resource and returns a not-closed result; it cannot trigger relayout or a drain
 spin. Only `DETACHED` authorizes owner-resource release, unlink, callback
 notification, and freeing the UIDL buffer, UCTX, region, CINST, and slot.
@@ -696,12 +730,11 @@ load the same `applets/desk/desk.f`; Desk supplies only neutral host-lifecycle
 hooks. App descriptors, UCTX, UIDL trees, and Desk layout behavior do not
 branch on regular versus rich rendering.
 
-The current `UTUI-RICH-TERM-*` names in Desk, app-shell, and applet-host are a
-remaining output-lifecycle seam, not permission for those layers to select a
-renderer. They are invoked unconditionally and resolve inside UIDL-TUI, but
-their rendering-specific naming and direct call sites must be folded into a
-neutral UIDL projection lifecycle before vertical acceptance. Backend choice
-must remain solely in the outer product composition.
+UIDL-TUI now presents `UTUI-VISIBLE!`, `UTUI-QUIESCE`, and `UTUI-DETACH` to
+Desk, app-shell, and applet-host. Those layers contain no adapter or provider
+choice. The `_UTUI-PROJECTION-*` attach/install seam is private to outer
+composition, where backend choice remains; no compatibility aliases preserve
+the former renderer-specific lower-layer surface.
 The leaf disarms Desk's pending constructor tuple after each `DESK-RUN`
 attempt, including a throw; a quarantined instance keeps its already-copied
 tuple, while a later plain Desk constructor cannot resurrect a partial rich
@@ -735,24 +768,24 @@ The host lifecycle order is:
 5. paint CELL and project retained semantics from the same active UCTX;
 6. publish through the shared frame transaction;
 7. on geometry change, run UIDL relayout then retained relayout;
-8. before `APP.SHUTDOWN`, quiesce retained sources, then the application's
-   declared `APP.QUIESCE-XT`, and record retryable retirement, refusing
-   shutdown if either callback-detachment barrier is not proven;
+8. before `APP.SHUTDOWN`, call `UTUI-QUIESCE`, then the application's declared
+   `APP.QUIESCE-XT`, and record retryable retirement, refusing shutdown if
+   either callback-detachment barrier is not proven;
 9. after all hosted UCTXs are source-free, close the optional terminal owner
    and prove ANSI safety;
-10. run application shutdown, then final retained detach while the exact host
-    tuple is still live; and
-11. detach/free UIDL, UCTX, activation, region, and host slot.
+10. run application shutdown, then `UTUI-DETACH` while the exact host tuple is
+    still live; and
+11. free UCTX, activation, region, and host slot.
 
-The top-level shell performs step 8 as a two-part barrier: it first quiesces
-its own retained UIDL attachment, if present, then invokes the neutral
+The top-level shell performs step 8 as a two-part barrier: it first calls
+`UTUI-QUIESCE` for its own UIDL document, if present, then invokes the neutral
 `APP.QUIESCE-XT ( instance -- ior )` descriptor callback. Desk implements that
 callback only by calling `AHOST-QUIESCE-ALL`, which applies the same ordering
 to every child. A refusal or throw is a hard pre-terminal close gate. The shell
 preserves its descriptor, instance, UIDL, active UCTX,
 root region, terminal owner, posted work, and screen state in quarantine and
 runs no later destructor. The same quarantine rule applies if terminal close,
-application shutdown, or final UIDL detach fails. A quarantined top-level
+application shutdown, or `UTUI-DETACH` fails. A quarantined top-level
 lifecycle is not repaired by the retained backend's APT soft reset, an
 `ASHELL-RUN` retry, or terminal-owner release, and the shell exposes no
 in-process clear API. It requires an externally confirmed attachment hard

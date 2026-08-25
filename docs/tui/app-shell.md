@@ -20,11 +20,12 @@ depend on `app.f`; the standalone and applet paths are fully
 independent.
 
 `ASHELL-RUN` blocks until a normal `ASHELL-QUIT` is approved or a callback
-throws. Teardown first quiesces any retained UIDL attachment, then runs the
-descriptor's bounded quiesce barrier. Only after both succeed does it close the
-optional terminal owner and enter arbitrary application shutdown. A barrier,
-terminal-close, application-shutdown, or UIDL-detach failure preserves the
-complete active shell state in quarantine and skips all later destructors.
+throws. Teardown first calls `UTUI-QUIESCE` for the optional projection owned
+by the active UIDL context, then runs the descriptor's bounded quiesce barrier.
+Only after both succeed does it close the optional terminal owner and enter
+arbitrary application shutdown. A barrier, terminal-close,
+application-shutdown, or `UTUI-DETACH` failure preserves the complete active
+shell state in quarantine and skips all later destructors.
 
 Not reentrant.  One app at a time.
 
@@ -155,7 +156,7 @@ ASHELL-RUN
   │       DEFER  → re-arm loop; app may issue quit when ready
   │
   └── _ASHELL-TEARDOWN (always runs)
-        1. Quiesce the retained UIDL attachment, then APP.QUIESCE-XT
+        1. UTUI-QUIESCE, then APP.QUIESCE-XT
         2. Close the optional terminal owner and prove ANSI safety
         3. Claim and call APP.SHUTDOWN-XT
         4. UTUI-DETACH (if UIDL loaded)
@@ -166,18 +167,19 @@ ASHELL-RUN
         9. Reset all shell ownership/state
 ```
 
-Retained UIDL quiesce, descriptor quiesce, terminal close, application
-shutdown, and UIDL detach are dependent gates. The retained barrier runs even
-if setup loaded UIDL but did not reach application init. If any gate refuses or
-throws, teardown records the exact first error,
+UIDL projection quiesce, descriptor quiesce, terminal close, application
+shutdown, and `UTUI-DETACH` are dependent gates. The projection barrier runs
+even if setup loaded UIDL but did not reach application init. If any gate
+refuses or throws, teardown records the exact first error,
 marks the live instance quarantined, and returns immediately without clearing
 the descriptor, instance, root region, UIDL ownership, active UCTX, terminal
 owner, posted work, or screen state. A quarantined shell rejects another run,
 terminal-owner replacement, or owner release until the required external
-recovery boundary. This is not the retained backend's APT soft reset: no
-in-process shell retry, terminal-owner release, or soft-reset operation clears
-the latch, and there is no public clear API. Recovery requires an externally
-confirmed attachment hard-reset/drain followed by fresh module or image
+recovery boundary. No projection-provider soft reset repairs that host
+lifecycle: no in-process shell retry, terminal-owner release, or provider
+soft-reset operation clears the latch, and there is no public clear API.
+Recovery requires an externally confirmed attachment hard-reset/drain followed
+by fresh module or image
 initialization. The shell deliberately does not retry an arbitrary shutdown
 callback after it has been claimed.
 

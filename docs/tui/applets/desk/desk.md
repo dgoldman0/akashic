@@ -89,6 +89,12 @@ while full-frame is active transfers the expanded region to the new focus.
 Each linked child keeps one stable region descriptor; relayout and full-frame
 changes update its bounds in place.
 
+Desk communicates only document lifecycle to UIDL-TUI. Before a minimized
+child's region may become irrelevant it restores that child's UCTX and calls
+`FALSE UTUI-VISIBLE!`. For each visible child, relayout preserves the order
+`UTUI-RGN!`, `UTUI-RELAYOUT`, then `TRUE UTUI-VISIBLE!`. Desk does not know
+whether an optional projection adapter is installed.
+
 ## Slot Structure
 
 The embedded applet host owns one heap-allocated 104-byte `AHS` slot per
@@ -135,18 +141,19 @@ wins over DEFER, and DEFER wins over ALLOW.  Only an all-ALLOW pass lets the
 shell enter its pre-close `DESK-QUIESCE-CB`. That callback delegates only to
 `AHOST-QUIESCE-ALL`; it must succeed before app-shell closes an optional
 terminal owner or calls Desk shutdown. For each initialized child, the generic
-host quiesces its retained UIDL attachment first and then invokes its optional
+host calls `UTUI-QUIESCE` first and then invokes its optional
 `APP.QUIESCE-XT`; only both barriers and the final context save succeeding
 advance the slot to `QUIESCED`.
 
 A child quiesce refusal stores a noncallable retirement phase and preserves
-the exact linked slot, CINST, UCTX, region, UIDL buffer, and driver attachment.
-Desk excludes such a slot from tiling, full-frame selection, activation,
-relayout, event, tick, and paint paths, and does not mutate its region. After
+the exact linked slot, CINST, UCTX, region, UIDL buffer, and projection
+attachment. Desk excludes such a slot from tiling, full-frame selection,
+activation, relayout, event, tick, and paint paths, and does not mutate its region. After
 terminal close succeeds, `DESK-SHUTDOWN-CB` drains the already-quiesced slots.
-Final detach must succeed before host unlink or any child release; a refusal is
-a hard gate before Desk interoperability or Practice teardown. App-shell then
-quarantines the complete Desk instance and runs no later destructor.
+`UTUI-DETACH`, the sole public final detach for both projection and document,
+must succeed before host unlink or any child release; a refusal is a hard gate
+before Desk interoperability or Practice teardown. App-shell then quarantines
+the complete Desk instance and runs no later destructor.
 
 ## Theme System
 
@@ -474,7 +481,7 @@ context buffer that captures:
 - **21 scalar variables**: element count, attribute count, string position,
   root pointer, subscription count, elem base, doc-loaded flag, state,
   focus pointer, action count, shortcut count, overlay count, saved focus,
-  skip-children flag, region handle, and six retained-terminal lifecycle values
+  skip-children flag, region handle, and six neutral projection-lifecycle values
   (token, status, visibility, attached, quiescing, quiesced).
 - **10 pool arrays**: elements (32 KiB), attributes (20 KiB), strings
   (12 KiB), hash (2 KiB), hash-IDs (4 KiB), subscriptions (3 KiB),

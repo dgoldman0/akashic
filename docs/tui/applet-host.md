@@ -12,9 +12,10 @@ The caller embeds one `AHOST-SIZE` state block and supplies:
 - a closed-slot projection callback.
 
 An optional `AHOST-UIDL-READY!` callback plus opaque composition context may
-attach generic services after UIDL load and initial region assignment, before
-application init. A zero callback is the baseline configuration; the host
-does not know the service or context type.
+attach an optional derived projection after UIDL load and initial region
+assignment, before application init. This is an outer-composition hook into
+UIDL-TUI's private attach seam; the host neither selects nor names the adapter.
+A zero callback is the baseline configuration.
 
 Those callbacks carry the caller context stored by `AHOST-CONTEXT!`. The host
 imports no applet and knows no service ID, catalog entry, package format,
@@ -77,7 +78,7 @@ Desk's injected callbacks during cleanup without importing Desk.
 | `AHOST-TRY-LAUNCH` | `( desc host -- id ior )` | Launch one already-installed descriptor transactionally |
 | `AHOST-REQUEST-CLOSE-ID` | `( id reason host -- decision )` | Negotiate and, on ALLOW, finalize one child |
 | `AHOST-REQUEST-CLOSE-ALL` | `( reason host -- decision )` | Negotiate every child without partial teardown |
-| `AHOST-QUIESCE-ALL` | `( host -- ior )` | Quiesce each child's retained UIDL and descriptor barriers |
+| `AHOST-QUIESCE-ALL` | `( host -- ior )` | Run `UTUI-QUIESCE` and then the descriptor barrier for each child |
 | `AHOST-DRAIN` | `( host -- ior )` | Retire children in order, stopping when no safe progress is possible |
 | `AHOST-FOCUS-ID` | `( id host -- )` | Focus or restore one child |
 | `AHOST-MINIMIZE-ID` | `( id host -- )` | Minimize one child and select another visible child |
@@ -93,12 +94,12 @@ work because app callbacks can throw, yield, or request close.
 
 Each slot advances independently through `LIVE`, `QUIESCING`, `QUIESCED`,
 `SHUTDOWN-CLAIMED`, and `DETACHED`. Quiesce first makes the slot noncallable,
-then crosses its retained UIDL barrier and optional `APP.QUIESCE-XT` in that
-order. `QUIESCED` is published only after the final UCTX save also succeeds.
-Refusal leaves the complete linked slot and exact borrowed graph intact.
-Shutdown is claimed before arbitrary application code and is never repeated;
-final UIDL/driver detach must succeed before unlink, notification, or any
-owned-resource release.
+then calls `UTUI-QUIESCE` and optional `APP.QUIESCE-XT` in that order.
+`QUIESCED` is published only after the final UCTX save also succeeds. Refusal
+leaves the complete linked slot and exact borrowed graph intact. Shutdown is
+claimed before arbitrary application code and is never repeated;
+`UTUI-DETACH`, the sole public final detach for both projection and document,
+must succeed before unlink, notification, or any owned-resource release.
 
 Ordinary layouts keep child regions disjoint. A concrete owner may overlap
 them for presentation, as Desk does in full-frame mode. In that case pointer

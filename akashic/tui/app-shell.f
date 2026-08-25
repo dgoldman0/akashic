@@ -1045,7 +1045,7 @@ VARIABLE _ASHELL-TD-IOR
     \ Retained UIDL sources are a host-owned barrier and may exist even when
     \ setup did not reach the application-init callback boundary.
     _ASHELL-HAS-UIDL @ IF
-        UTUI-RICH-TERM-QUIESCE ?DUP IF THROW THEN
+        UTUI-QUIESCE ?DUP IF THROW THEN
     THEN
     _ASHELL-APP-INIT-STARTED @ 0= IF
         TRUE _ASHELL-APP-QUIESCED ! EXIT
