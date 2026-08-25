@@ -320,11 +320,13 @@ RTERM-HOST-BINDING-CAPTURE  ( host slot host-binding -- status )
 RTERM-UIDL-BINDING-BYTES    ( -- bytes )
 RTERM-UIDL-BACKEND-BYTES    ( -- bytes )
 RTERM-UIDL-INIT             ( host records-a records-u backend -- status )
+RTERM-UIDL-FINI             ( backend -- status )
 RTERM-UIDL-VALID?           ( backend -- flag )
 RTERM-UIDL-STORAGE-DISJOINT? ( a u backend -- flag )
 RTERM-UIDL-STATUS@          ( backend -- status )
 RTERM-UIDL-ACTIVE@          ( backend -- count status )
 RTERM-UIDL-INSTALL          ( backend -- status )
+RTERM-AHOST-UIDL-READY      ( host slot host-binding -- ior )
 ```
 
 This foundation has no `RTAPT-*`, screen-publisher, MegaPad, Desk, or applet
@@ -337,9 +339,25 @@ particular, the foundation must not open a default or root-region-only owner:
 owner quotas can be admitted only from one complete supported semantic tree.
 Construction and attach admit the exact declared application descriptor,
 component descriptor, and live component-state spans as well as the fixed host
-objects, and reject every alias with driver storage. Every public driver entry
-also catches internal throws and scrubs its transient descriptor, slot, CINST,
-UCTX, region, and application pointers before returning.
+objects, and reject every alias with driver storage. Every public stateful
+driver operation catches internal throws and scrubs its transient descriptor,
+slot, CINST, UCTX, region, and application pointers before returning.
+
+`RTERM-AHOST-UIDL-READY` is the reusable neutral host adapter. Its context is
+one caller-owned `RTERM-HOST-BINDING-SIZE` scratch span initialized once by
+composition before callback installation. Capture performs the complete alias
+preflight without first mutating that span. After a successful capture, the
+adapter calls `UTUI-RICH-TERM-ATTACH` under a cleanup boundary so only the
+active UCTX receives the opaque token, then unconditionally reinitializes the
+now-proven-disjoint descriptor even if attach throws. A capture refusal leaves
+the already pointer-free scratch unchanged.
+
+`RTERM-UIDL-FINI` is the matching host-unbind boundary. It succeeds only when
+the backend has no live bindings, clears the binding records and backend, and
+therefore removes the borrowed AHOST pointer before that host can be freed. A
+live-binding refusal leaves every byte intact for quarantine. The immutable
+UIDL callback table may retain the same stable backend address; a later exact
+host may reinitialize and reinstall that address idempotently.
 
 `host-binding` is an immutable, call-borrowed descriptor containing ABI
 version, exact size, zero-reserved fields, the exact `AHOST` and `AHS` slot

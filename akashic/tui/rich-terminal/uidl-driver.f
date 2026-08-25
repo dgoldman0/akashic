@@ -350,6 +350,23 @@ VARIABLE _RTERM-SD-B
     DUP _RTERM-UIDL-VALID-BODY? 0= IF DROP 0 RTERM-S-INVALID EXIT THEN
     _RTERM-B.ACTIVE @ RTERM-S-OK ;
 
+\ Finalization is a local host-unbind boundary.  The immutable callback table
+\ may continue naming this stable backend address, but a zeroed backend carries
+\ no borrowed AHOST authority and may be initialized again for a later exact
+\ host.  The all-zero case makes cleanup of an unstarted composition idempotent.
+: _RTERM-UIDL-FINI-BODY  ( backend -- status )
+    DUP RTERM-UIDL-BACKEND-SIZE _RTERM-SPAN? 0= IF
+        DROP RTERM-S-INVALID EXIT
+    THEN
+    DUP RTERM-UIDL-BACKEND-SIZE _RTERM-ZERO? IF
+        DROP RTERM-S-OK EXIT
+    THEN
+    DUP _RTERM-UIDL-VALID-BODY? 0= IF DROP RTERM-S-INVALID EXIT THEN
+    DUP _RTERM-B.ACTIVE @ IF DROP RTERM-S-WOULD-BLOCK EXIT THEN
+    DUP _RTERM-B.RECORDS-A @ OVER _RTERM-B.RECORDS-U @ 0 FILL
+    RTERM-UIDL-BACKEND-SIZE 0 FILL
+    RTERM-S-OK ;
+
 \ =====================================================================
 \  Exact host membership and live authority
 \ =====================================================================
@@ -1067,6 +1084,16 @@ VARIABLE _RTERM-INSTALL-BACKEND
     THEN
     _RTERM-SCRUB-BORROWED ;
 
+: _RTERM-P-DO-UIDL-FINI  ( -- status )
+    _RTERM-P-A0 @ _RTERM-UIDL-FINI-BODY ;
+
+: RTERM-UIDL-FINI  ( backend -- status )
+    _RTERM-P-A0 !
+    ['] _RTERM-P-DO-UIDL-FINI CATCH ?DUP IF
+        DROP RTERM-S-INVALID
+    THEN
+    _RTERM-SCRUB-BORROWED ;
+
 : _RTERM-P-DO-UIDL-VALID  ( -- flag )
     _RTERM-P-A0 @ _RTERM-UIDL-VALID-BODY? ;
 
@@ -1122,6 +1149,32 @@ VARIABLE _RTERM-INSTALL-BACKEND
         DROP RTERM-S-INVALID
     THEN
     _RTERM-SCRUB-BORROWED ;
+
+\ Keep the post-capture path separate so the protected call restores its inputs.
+: _RTERM-AHOST-UIDL-ATTACH-BODY  ( slot host-binding -- ior )
+    SWAP AHS-VISIBLE? UTUI-RICH-TERM-ATTACH ;
+
+\ Generic AHOST UIDL-ready adapter.  The descriptor is caller-owned scratch
+\ initialized by composition before installation.  CAPTURE owns the complete
+\ fail-before-mutation alias preflight; only after it succeeds is the proven-
+\ disjoint descriptor unconditionally reset by this callback.  UTUI performs
+\ the actual attach so the opaque token and lifecycle state enter only the
+\ exact active UCTX.
+: RTERM-AHOST-UIDL-READY  ( host slot host-binding -- ior )
+    DUP RTERM-HOST-BINDING-SIZE _RTERM-SPAN? 0= IF
+        3DROP RTERM-S-INVALID EXIT
+    THEN
+    >R
+    2DUP R@ RTERM-HOST-BINDING-CAPTURE
+    DUP RTERM-S-OK <> IF
+        NIP NIP R> DROP EXIT
+    THEN DROP
+    NIP R@
+    ['] _RTERM-AHOST-UIDL-ATTACH-BODY CATCH ?DUP IF
+        >R 2DROP R>
+    THEN
+    R@ RTERM-HOST-BINDING-INIT
+    R> DROP ;
 
 : _RTERM-P-DO-ATTACH  ( -- binding-token status )
     _RTERM-P-A0 @ _RTERM-P-A1 @ _RTERM-UCTX-ATTACH-BODY ;

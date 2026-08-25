@@ -96,6 +96,7 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
         "RTERM-UIDL-BINDING-BYTES": "( -- bytes )",
         "RTERM-UIDL-BACKEND-BYTES": "( -- bytes )",
         "RTERM-UIDL-INIT": "( host records-a records-u backend -- status )",
+        "RTERM-UIDL-FINI": "( backend -- status )",
         "RTERM-UIDL-VALID?": "( backend -- flag )",
         "RTERM-UIDL-STORAGE-DISJOINT?": "( a u backend -- flag )",
         "RTERM-UIDL-STATUS@": "( backend -- status )",
@@ -104,6 +105,9 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
         "RTERM-HOST-BINDING-VALID?": "( host-binding -- flag )",
         "RTERM-HOST-BINDING-CAPTURE": (
             "( host slot host-binding -- status )"
+        ),
+        "RTERM-AHOST-UIDL-READY": (
+            "( host slot host-binding -- ior )"
         ),
         "RTERM-UCTX-ATTACH": "( host-binding backend -- binding-token status )",
         "RTERM-UCTX-PROJECT": "( binding-token backend -- status )",
@@ -127,6 +131,10 @@ def test_public_scratch_entries_catch_bodies_then_scrub_every_borrowed_cell() ->
         "RTERM-UIDL-INIT": (
             "_RTERM-P-DO-UIDL-INIT",
             "_RTERM-UIDL-INIT-BODY",
+        ),
+        "RTERM-UIDL-FINI": (
+            "_RTERM-P-DO-UIDL-FINI",
+            "_RTERM-UIDL-FINI-BODY",
         ),
         "RTERM-UIDL-VALID?": (
             "_RTERM-P-DO-UIDL-VALID",
@@ -242,6 +250,40 @@ def test_init_preflights_all_ranges_before_publishing_mutation() -> None:
     ):
         assert backend_fill < init.index(field) < magic
     assert "RTERM-UIDL-BINDING-SIZE /" in init
+
+
+def test_fini_unbinds_only_a_zero_active_backend_and_is_blank_idempotent() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+    fini = _definition(source, "_RTERM-UIDL-FINI-BODY")
+
+    span = fini.index("RTERM-UIDL-BACKEND-SIZE _RTERM-SPAN? 0= IF")
+    blank = fini.index("RTERM-UIDL-BACKEND-SIZE _RTERM-ZERO? IF")
+    valid = fini.index("_RTERM-UIDL-VALID-BODY? 0= IF")
+    active = fini.index("_RTERM-B.ACTIVE @ IF")
+    records = fini.index("_RTERM-B.RECORDS-U @ 0 FILL")
+    backend = fini.index("RTERM-UIDL-BACKEND-SIZE 0 FILL", records)
+    assert span < blank < valid < active < records < backend
+    assert "DROP RTERM-S-WOULD-BLOCK EXIT" in fini[active:records]
+    assert fini.count("0 FILL") == 2
+
+
+def test_ahost_adapter_captures_attaches_and_scrubs_call_borrowed_binding() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+    adapter = _definition(source, "RTERM-AHOST-UIDL-READY")
+    attach_body = _definition(source, "_RTERM-AHOST-UIDL-ATTACH-BODY")
+
+    preflight = adapter.index("RTERM-HOST-BINDING-SIZE _RTERM-SPAN? 0= IF")
+    capture = adapter.index("RTERM-HOST-BINDING-CAPTURE")
+    refusal = adapter.index("NIP NIP R> DROP EXIT", capture)
+    caught = adapter.index("['] _RTERM-AHOST-UIDL-ATTACH-BODY CATCH", refusal)
+    success_scrub = adapter.index("R@ RTERM-HOST-BINDING-INIT", caught)
+    assert preflight < capture < refusal < caught < success_scrub
+    assert "RTERM-HOST-BINDING-INIT" not in adapter[capture:refusal]
+    assert "AHS-VISIBLE?" in attach_body
+    assert "UTUI-RICH-TERM-ATTACH" in attach_body
+    assert "CATCH" not in attach_body
+    assert "RTERM-UCTX-ATTACH" not in adapter
+    assert "VARIABLE" not in adapter
 
 
 def test_binding_tokens_are_global_nonpointer_monotonic_and_never_reused() -> None:
