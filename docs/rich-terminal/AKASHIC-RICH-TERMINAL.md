@@ -1,16 +1,19 @@
-# Akashic UIDL retained-presentation backend contract
+# Akashic rich-terminal engine and UIDL output contract
 
-Status: normative for the Phase 3 Akashic retained-presentation integration.
+Status: normative pre-vertical contract for the Phase 3 Akashic rich-terminal
+mode and its UIDL output integration.
 
 This document defines the Akashic architecture, storage, ownership, projection,
-and lifecycle contract for retained presentation. It does not define APT-1 byte
-encoding. The mirrored `APT-1-WIRE.md`, `APT-1-RETAINED-1.md`, and ownership
-ledgers define terminal protocol identity, transactions, reset, and retirement.
+and lifecycle contract for optional rich-terminal output. It does not define
+APT-1 byte encoding. The mirrored `APT-1-WIRE.md`, `APT-1-RETAINED-1.md`, and
+ownership ledgers define terminal protocol identity, transactions, reset, and
+retirement.
 
 The transactional cell plane remains independently specified by
-`AKASHIC-CELL-BACKEND.md`. Retained presentation is an optional projection of
-the same UIDL/UCTX interface already rendered into cells. It does not create a
-second application UI model, replace the cell screen, or weaken ANSI fallback.
+`AKASHIC-CELL-BACKEND.md`. Rich-terminal mode adds an optional retained
+projection of the same UIDL/UCTX interface already rendered into cells. It does
+not create a second application UI model, replace the cell screen, or weaken
+ANSI fallback.
 
 ## 1. Non-negotiable architecture
 
@@ -19,26 +22,35 @@ ordinary domain state and uses the existing UIDL element tree, bindings,
 subscriptions, semantic widgets, dirtying, layout, focus, and event mechanisms.
 The same `UCTX` owns that UI for the complete activation lifetime.
 
-One internal retained backend exists for one live enhanced terminal session.
-The explicit rich composition constructs it and gives it to the UIDL host. Desk
-and the applet host attach, project, relayout, and detach UCTXs through generic
-host operations. A Desk-owned UIDL context, when present, follows the same path
-as a child UCTX; Desk UI code does not author a retained scene manually.
+The implementation has two layers. One generic, consumer-neutral Akashic
+`RTAPT`/`RTERM` engine owns retained wire lifecycle for one live enhanced
+terminal session. It uses caller-bounded storage and has no knowledge of
+`AHOST`, `AHS`, CINST, UCTX, Desk, or any applet. An explicit composition may
+use that engine outside Desk and UIDL-TUI without acquiring a second protocol
+or session implementation.
+
+Above it, the optional UIDL-TUI rich-terminal driver adapts UIDL semantics to
+the generic engine. Desk and the applet host attach, project, relayout, and
+detach UCTXs through private driver operations. A Desk-owned UIDL context, when
+present, follows the same path as a child UCTX; Desk UI code does not author a
+retained scene manually.
 
 The following are forbidden application interfaces:
 
 * retained-backend or APT discovery through `IEND.SERVICE-XT`;
-* applet acquisition of a presentation broker, scope, owner, or lease;
+* applet acquisition of a rich-terminal broker, scope, owner, or lease;
 * applet calls that begin, define, update, commit, abort, step, replay, or retire
   a terminal scene;
 * applet-visible session, epoch, owner, region, object, resource, series,
   revision, transaction, opcode, frame, or terminal-capacity identities; and
 * a handwritten projection controller maintained beside an applet's UIDL.
 
-There is therefore no presentation service identifier and no presentation
-endpoint per Desk or per applet. "Global" in this contract means only that one
-internal backend serializes one terminal session. It is held by the explicit
-composition and UIDL host, not published as application authority.
+There is therefore no rich-terminal service identifier and no rich-terminal
+endpoint per Desk or per applet. The mode/output backend is an internal
+composition capability, not an application-visible object. "Global" in this
+contract means only that one internal backend serializes one terminal session.
+It is held by the explicit composition and UIDL host, not published as
+application authority.
 
 The retained model is a derived terminal materialization. The UIDL tree,
 semantic widget state, and bound application state remain authoritative. The
@@ -49,15 +61,15 @@ API.
 
 ## 2. Authority and identity
 
-The internal backend is the sole Akashic component allowed to emit retained
-wire frames. It owns discovery state, the shared presentation transaction and
-revision domain, resource-upload serialization, owner mappings, replay, and
-retirement. The APT shell remains the sole owner of the PT session and terminal
-input; the retained backend uses the shell's internal adapter and never creates
+The generic engine is the sole Akashic component allowed to emit retained wire
+frames. It owns discovery state, the shared presentation transaction and
+revision domain, resource-upload serialization, wire-owner lifecycle, replay,
+and retirement. The APT shell remains the sole owner of the PT session and
+terminal input; the engine consumes that session's public ABI and never creates
 another UART reader, writer, or service loop.
 
-Each attached UCTX is represented privately by one bounded projection binding.
-The binding contains:
+The UIDL-TUI driver represents each attached UCTX privately with one bounded
+projection binding. The binding contains:
 
 * the exact live `AHOST` and `AHS` slot addresses and captured `AHS.ID`;
 * the exact CINST address, `CINST.ID`, and `CINST.GENERATION`;
@@ -89,43 +101,47 @@ The host/backend boundary uses these stable ordinary status values:
 
 | Value | Name | Meaning |
 | ---: | --- | --- |
-| 0 | `PRES-S-OK` | The host operation or projection was accepted. |
-| 1 | `PRES-S-WOULD-BLOCK` | No downstream progress is currently possible; retry from the host loop. |
-| 2 | `PRES-S-UNAVAILABLE` | No usable negotiated retained backend or required semantic family exists. |
-| 3 | `PRES-S-CAPACITY` | Caller-owned or negotiated capacity cannot admit the projection. |
-| 4 | `PRES-S-STALE` | The UCTX, activation binding, source revision, or terminal materialization is no longer current. |
-| 5 | `PRES-S-INVALID` | An argument, semantic snapshot, storage configuration, state transition, or callback result is invalid. |
-| 6 | `PRES-S-SESSION-LOST` | The enhanced session crossed a structural loss boundary. |
-| 7 | `PRES-S-SOURCE` | A semantic resource or series source failed. |
+| 0 | `RTERM-S-OK` | The host operation or projection was accepted. |
+| 1 | `RTERM-S-WOULD-BLOCK` | No downstream progress is currently possible; retry from the host loop. |
+| 2 | `RTERM-S-UNAVAILABLE` | No usable negotiated retained backend or required semantic family exists. |
+| 3 | `RTERM-S-CAPACITY` | Caller-owned or negotiated capacity cannot admit the projection. |
+| 4 | `RTERM-S-STALE` | The UCTX, activation binding, source revision, or terminal materialization is no longer current. |
+| 5 | `RTERM-S-INVALID` | An argument, semantic snapshot, storage configuration, state transition, or callback result is invalid. |
+| 6 | `RTERM-S-SESSION-LOST` | The enhanced session crossed a structural loss boundary. |
+| 7 | `RTERM-S-SOURCE` | A semantic resource or series source failed. |
 
 These statuses do not throw through an applet callback and are not returned to
-application presentation code, because no such code exists. The UIDL host
+application rich-terminal code, because no such code exists. The UIDL host
 records the first non-transient backend error for inspection while leaving
 application state intact. One failed projection cannot authorize mutation of
 another binding, and a post-`OPEN` structural loss never makes raw ANSI output
 safe.
 
-`PRES-S-WOULD-BLOCK` is transport progress, not local projection-capacity
+`RTERM-S-WOULD-BLOCK` is transport progress, not local projection-capacity
 failure. Already accepted desired state remains accepted while egress is
-blocked. `PRES-S-CAPACITY` and `PRES-S-INVALID` are fail-before-mutation at
+blocked. `RTERM-S-CAPACITY` and `RTERM-S-INVALID` are fail-before-mutation at
 each local admission boundary.
 
-## 4. Backend construction and caller-owned storage
+## 4. Generic engine construction and caller-owned storage
 
-The optional composition constructs the one internal backend with:
+An optional composition constructs the consumer-neutral engine with:
 
 ```forth
-PRES-BACKEND-INIT     ( config backend -- status )
-PRES-BACKEND-FINI     ( backend -- status )
-PRES-BACKEND-STATUS@  ( backend -- status )
+RTERM-BACKEND-INIT     ( config backend -- status )
+RTERM-BACKEND-FINI     ( backend -- status )
+RTERM-BACKEND-STATUS@  ( backend -- status )
 ```
 
-`config` names the internal APT adapter, the exact owning `AHOST`, and
-caller-owned spans and capacities for:
+`RTERM-*` names the consumer-neutral Akashic contract. The APT-1
+implementation uses the collision-free `RTAPT-*` prefix and is only one engine
+implementation; the UIDL-TUI adapter does not depend on that concrete prefix.
 
-* live UCTX projection bindings and owner tombstones;
-* projected region, object, resource, and series records;
-* stable element/subobject-to-wire mappings;
+`config` names the exact borrowed PT session, output policy, and caller-owned
+spans and capacities for:
+
+* wire-owner lifecycle records and owner tombstones;
+* retained region, object, resource, and series records;
+* consumer-supplied stable keys and their wire mappings;
 * copied definitions, styles, labels, unit text, vector points, and latest
   dynamic values;
 * transaction operation records and copied transaction bytes; and
@@ -144,33 +160,37 @@ It checks:
   semantic families;
 * checked multiplication of record size by record count;
 * non-null, nonwrapping spans and required alignment;
-* pairwise disjointness of the backend, configuration, every owned span, the
-  borrowed PT session and its buffers, and the APT adapter; and
+* pairwise disjointness of the backend, configuration, every owned span, and
+  the borrowed PT session and its buffers; and
 * compatibility with negotiated object, resource, frame, transaction, history,
   and chunk budgets.
 
-Failure returns `PRES-S-CAPACITY` or `PRES-S-INVALID` without partially
+Failure returns `RTERM-S-CAPACITY` or `RTERM-S-INVALID` without partially
 initializing, clearing, or retaining a supplied span. After successful init,
 attach, project, relayout, detach, service, reset replay, and finalization use
 only admitted storage and perform no hidden heap or XMEM allocation.
 
-The backend stores the latest authoritative projection recipe, not raw frames
-or an unbounded revision history. Scalar and visibility state coalesces in the
-corresponding records. Resource and sample bytes are copied into bounded
-staging only for the synchronous interval required by their source and wire
-contracts.
+The engine stores accepted retained state, not raw frames or an unbounded
+revision history. Consumer-specific semantic recipes and host bindings remain
+outside the engine. The UIDL-TUI driver supplies separate caller-owned storage
+for those bindings, copied semantic snapshots, and projection mappings; it
+also performs no hidden allocation. Resource and sample bytes are copied into
+bounded staging only for the synchronous interval required by their source and
+wire contracts.
 
-`PRES-BACKEND-FINI` succeeds only when no live UCTX binding remains and every
+`RTERM-BACKEND-FINI` succeeds only when no live engine owner remains and every
 retirement obligation is acknowledged, or the underlying session is proven
-destroyed. Refusal leaves the complete backend and its storage valid for retry.
-It never clears an uncertain owner tombstone.
+destroyed. Refusal leaves the complete engine and its storage valid for retry.
+It never clears an uncertain owner tombstone. Consumer-specific bindings,
+including UIDL UCTX bindings, must already have quiesced and released their
+engine owners before finalization.
 
 ## 5. UIDL semantic projection contract
 
 ### 5.1 One semantic tree, multiple output planes
 
 UIDL element semantics are backend-neutral. The existing UIDL-TUI renderer
-continues to paint the CELL/ANSI representation. The retained integration adds
+continues to paint the CELL/ANSI representation. The rich integration adds
 an optional projector registry keyed by UIDL element type; it does not replace
 the element's CELL render XT or introduce a second document.
 
@@ -188,11 +208,11 @@ meaning is sufficiently defined. New readout, meter, plot, waveform, image, or
 other rich types are added as semantic UIDL elements/widgets, with real CELL
 fallbacks. They are not raw aliases for APT opcodes or wire object families.
 
-There is no generic `<presentation>` escape hatch, raw scene element, owner
-attribute, terminal ID attribute, or transaction element. A generic canvas
-does not become an arbitrary retained command stream. A richer projector is
-valid only when a semantic element defines enough backend-neutral meaning for
-both CELL and retained renderers.
+There is no generic `<rich-terminal>` or `<apt>` escape hatch, raw scene
+element, owner attribute, terminal ID attribute, or transaction element. A
+generic canvas does not become an arbitrary retained command stream. A richer
+projector is valid only when a semantic element defines enough backend-neutral
+meaning for both CELL and retained renderers.
 
 ### 5.2 Stable identity and geometry
 
@@ -273,27 +293,31 @@ The backend quiesces every retained source context synchronously before the
 host calls arbitrary application shutdown or frees application state. No source
 callback is permitted after quiesce succeeds.
 
-## 6. Generic UCTX lifecycle
+## 6. UIDL-TUI rich-terminal adapter lifecycle
 
-Only the UIDL host calls the retained lifecycle surface:
+This is the private host/driver ABI above the generic engine, not an engine
+interface and not an application service. Only the UIDL host calls it:
 
 ```forth
-PRES-HOST-BINDING-SIZE  ( -- bytes )
-PRES-HOST-BINDING-INIT  ( host-binding -- )
+RTERM-HOST-BINDING-SIZE  ( -- bytes )
+RTERM-HOST-BINDING-INIT  ( host-binding -- )
 
-PRES-UCTX-ATTACH    ( host-binding backend -- binding-token status )
-PRES-UCTX-PROJECT   ( binding-token backend -- status )
-PRES-UCTX-RELAYOUT  ( visible region binding-token backend -- status )
-PRES-UCTX-QUIESCE   ( binding-token backend -- status )
-PRES-UCTX-DETACH    ( binding-token backend -- status )
+RTERM-UCTX-ATTACH    ( host-binding backend -- binding-token status )
+RTERM-UCTX-PROJECT   ( binding-token backend -- status )
+RTERM-UCTX-RELAYOUT  ( visible region binding-token backend -- status )
+RTERM-UCTX-QUIESCE   ( binding-token backend -- status )
+RTERM-UCTX-DETACH    ( binding-token backend -- status )
 ```
 
 `host-binding` is an immutable, call-borrowed descriptor containing ABI
 version, exact size, zero-reserved fields, the exact `AHOST` and `AHS` slot
 addresses, captured nonzero `AHS.ID`, exact CINST address and captured nonzero
 `CINST.ID`/`CINST.GENERATION`, exact UCTX address, and exact current region.
-The backend never retains the descriptor address. It validates and copies the
-complete authority tuple, then returns one opaque nonzero internal token.
+The UIDL-TUI driver never retains the descriptor address. It validates and
+copies the complete authority tuple, then returns one opaque nonzero internal
+token. The generic engine never receives the descriptor or learns any
+`AHOST`/`AHS`/CINST/UCTX identity; the private adapter translates a validated
+binding into engine owner and output operations.
 
 The token names a backend-owned record and an exact nonreusable binding
 generation; it is not a naked binding-record address. It is valid only with the
@@ -302,7 +326,7 @@ later call validates the token/backend/generation and revalidates that the host
 still contains the exact live slot, `AHS.ID`, CINST pointer and generation, and
 UCTX before dereferencing UCTX or application-owned state. A foreign backend,
 unlinked or reused slot, changed activation generation, changed UCTX, or stale
-token returns `PRES-S-STALE` without mutation.
+token returns `RTERM-S-STALE` without mutation.
 
 A composition-owned root UCTX, if present, must have a real composition-owned
 host slot and activation satisfying the same descriptor and validation; zero
@@ -312,7 +336,7 @@ application-callable variant and no returned application scope.
 ### 6.1 Attach
 
 Attach occurs after the UCTX document is loaded and its host slot and region
-exist. The backend verifies that its configured host is the descriptor host;
+exist. The UIDL-TUI driver verifies that its configured host is the descriptor host;
 the slot is linked exactly once, live, and has the captured `AHS.ID`; the slot's
 instance is the exact CINST pointer with matching live ID/generation; and its
 UCTX and region are the exact descriptor values. Repeating attach with the
@@ -352,7 +376,7 @@ remain untouched. A successful projection records the newest desired state for
 bounded later publication. No protocol byte is emitted from an element or
 widget callback.
 
-One ordinary projected UIDL update must fit one admitted presentation
+One ordinary projected UIDL update must fit one admitted APT presentation
 transaction. Initial construction, reset replay, and relayout reconstruction
 may use the wire profile's hidden bounded multi-transaction build followed by
 one reveal. The backend never exposes a partially rebuilt UCTX merely to evade
@@ -386,7 +410,7 @@ context, aborts or converts dependent local staging into source-free state, and
 records the exact allocation-free retryable owner-drop obligation. It retains
 no callback or application-state pointer that shutdown may free.
 
-Quiesce may return `PRES-S-OK` while terminal egress or an owner-drop result is
+Quiesce may return `RTERM-S-OK` while terminal egress or an owner-drop result is
 pending because the bounded tombstone is independent of the UCTX. It may not
 return OK unless local callback detachment is proven. On any other status the
 host must not call `APP.SHUTDOWN` or free application/widget/source state; it
@@ -410,7 +434,7 @@ Detach is allocation-free and atomically:
    and
 5. releases projection storage the tombstone no longer needs.
 
-Once that local transition succeeds, detach returns `PRES-S-OK` even if egress
+Once that local transition succeeds, detach returns `RTERM-S-OK` even if egress
 is blocked. The host may then detach/free the UCTX, CINST, region, and slot. The
 backend retains only the private wire owner/generation and bounded drop
 progress; it contains no pointer back into those freed objects.
@@ -425,7 +449,7 @@ creates no wire tombstone.
 UIDL-TUI CELL painting remains the universal path. In the rich composition,
 painting a dirty attached UCTX also stages its retained projection. The global
 screen flush and internal retained backend then serialize through the one APT
-presentation publisher and the one shared transaction-ID/revision clock.
+output publisher and the one shared transaction-ID/revision clock.
 
 When one logical UI frame changes both CELL and retained state, the rich
 publisher commits the applicable CELL spans/cursor and retained operations in
@@ -450,7 +474,7 @@ of the optional plane leaves a usable UI rather than a blank reserved area.
 Only the terminal/Desk owner loop advances publication:
 
 ```forth
-PRES-BACKEND-STEP  ( work-budget backend -- status more-work? )
+RTERM-BACKEND-STEP  ( work-budget backend -- status more-work? )
 ```
 
 `work-budget` is a positive host-selected number of logical operations or
@@ -472,11 +496,20 @@ against a physically presented revision as required by RETAINED-1.
 
 ## 9. Composition and host order
 
-`tui/desk-apt1.f` is the sole production rich composition root. It constructs
-the PT session, CELL adapter, and caller-owned retained backend, then injects
-the backend only into the generic UIDL host integration. The baseline
-`desktop` profile does not load the APT retained implementation or construct
-this backend.
+Any explicit rich product composition may construct the generic engine and
+bind an appropriate consumer adapter. The Desktop APT-1 profile does so from
+`tui/desk-apt1.f` and supplies the engine only to the generic UIDL-TUI driver;
+that is a product composition, not engine ownership by Desk. A standalone
+shell or another non-UIDL Akashic consumer may compose the same engine without
+loading Desk or UIDL-TUI. The baseline `desktop` profile does not load the
+APT-1 engine or construct rich-terminal state.
+
+The deployment boundary is strict. MegaPad owns the optional boot-loaded
+`presentation-terminal.f`; a rich product profile loads it before any Akashic
+rich module. Akashic never source-`REQUIRE`s or copies that module. Its rich
+modules consume only the already-loaded public PT ABI. Baseline profiles load
+neither the optional PT module nor the Akashic rich modules, so their source
+closure, startup, storage, and output behavior remain unaffected.
 
 The composition settles retained discovery before launching hosted UCTXs. A
 negative or partial result selects stable CELL-only projection for unsupported
@@ -542,8 +575,8 @@ uncertain attachment.
 ## 11. Phase boundary and completion
 
 UIDL/UCTX integration is Phase 3, not deferred work. Phase 3 does not ship an
-application-facing retained broker as a bridge and does not require any applet
-to maintain terminal-specific presentation state.
+application-facing rich-terminal broker as a bridge and does not require any
+applet to maintain terminal-specific output state.
 
 The first complete vertical uses the same UIDL document and ordinary semantic
 widget APIs in baseline ANSI and rich Desktop compositions. Without applet APT
@@ -567,6 +600,19 @@ Image/resource lifecycle remains part of Phase 3 closure when the composition
 advertises that semantic family. A stock image can qualify codec mechanics but
 cannot replace the generic UIDL media lifecycle, fallback, reset, and detach
 journey.
+
+### 11.1 Pre-vertical qualification gate
+
+Before vertical closure, each bounded implementation slice is qualified only
+with seconds-scale structural tests, byte-oracle tests, and focused unit tests
+appropriate to that slice. Each coherent slice receives its own progress
+commit after those lightweight checks pass.
+
+Cold source qualification, exact-single-full-core runs, Desktop smoke,
+end-to-end integration, persistence, sustained-cadence, and renderer checks are
+deferred until the vertical is closed. At that boundary they run sequentially,
+never concurrently, before production handoff. A lightweight pre-closure result
+must not be represented as qualification of the complete vertical.
 
 ## 12. Initial conformance cases
 
@@ -615,4 +661,4 @@ The lightweight contract suite must prove:
 Full Desktop, reset, renderer, and sustained-cadence journeys are later
 sequential qualification. They complement these bounded headless contracts and
 may not justify larger hidden capacities, weakened teardown, or an application-
-specific presentation path.
+specific rich-terminal path.

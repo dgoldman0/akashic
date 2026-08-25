@@ -112,21 +112,25 @@ def test_uidl_rich_terminal_lifecycle_is_ordered_and_context_local() -> None:
 
 
 def test_retained_contract_requires_internal_uidl_projection_now() -> None:
-    contract = _text("docs/rich-terminal/AKASHIC-RETAINED-SERVICE.md")
+    contract = _text("docs/rich-terminal/AKASHIC-RICH-TERMINAL.md")
     cell_contract = _text("docs/rich-terminal/AKASHIC-CELL-BACKEND.md")
     ownership = _text(
         "docs/rich-terminal/APT-1-RETAINED-1-OWNERSHIP.md"
     )
 
     assert "UIDL is the sole application-facing UI description" in contract
-    assert "There is therefore no presentation service identifier" in contract
+    assert "There is therefore no rich-terminal service identifier" in contract
     assert "UIDL/UCTX integration is Phase 3, not deferred work" in contract
-    assert "PRES-HOST-BINDING-SIZE" in contract
-    assert "PRES-UCTX-QUIESCE" in contract
+    assert "RTERM-HOST-BINDING-SIZE" in contract
+    assert "RTERM-UCTX-QUIESCE" in contract
+    assert "generic, consumer-neutral Akashic" in contract
+    assert "may compose the same engine without" in contract
+    assert "never source-`REQUIRE`s or copies" in contract
+    assert "Pre-vertical qualification gate" in contract
     assert "before arbitrary `APP.SHUTDOWN`" in contract
     assert "Applications receive no" in ownership
     assert "private per-UCTX projection" in ownership
-    assert "presentation coordinator" in cell_contract
+    assert "rich-terminal output coordinator" in cell_contract
     assert "PRESENT_BEGIN" in cell_contract
     assert "Phase 3 uses a handwritten SoundLab projection" not in contract
     assert "First production consumer: SoundLab" not in contract

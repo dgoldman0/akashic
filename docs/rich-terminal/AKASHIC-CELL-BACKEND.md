@@ -3,11 +3,11 @@
 Status: normative for the APT-1 CELL-1 Akashic implementation.
 
 This document defines the boundary between Akashic's double-buffered screen
-and a presentation backend. It does not define APT-1 byte encoding; that is
+and an output backend. It does not define APT-1 byte encoding; that is
 specified by the mirrored `APT-1-WIRE.md`.
 
 The additive retained object plane is specified separately by
-`AKASHIC-RETAINED-SERVICE.md`. It projects the same UIDL state, never replaces
+`AKASHIC-RICH-TERMINAL.md`. It projects the same UIDL state, never replaces
 the cell screen or ANSI fallback, and shares one atomic publisher with CELL
 once retained discovery succeeds.
 
@@ -110,7 +110,7 @@ status.
 
 Repeated flush after refusal derives a fresh diff from the latest back buffer.
 Application paint callbacks need not run again. The shell therefore tracks
-application-paint dirty state separately from pending screen presentation.
+application-paint dirty state separately from pending screen output.
 
 ## 6. ANSI backend
 
@@ -130,11 +130,13 @@ exercise that path.
 
 ## 7. APT-1 backend
 
-The reusable APT session/framing implementation lives in MegaPad's optional
-root-level `presentation-terminal.f` userland module, not in KDOS. Akashic's
-APT backend is a small adapter over that loaded service. It is available only
-when the module was explicitly loaded and a caller requested presentation
-negotiation.
+The reusable APT session/framing implementation lives in MegaPad's optional,
+boot-loaded root-level `presentation-terminal.f` userland module, not in KDOS
+or Akashic. Akashic's APT backend is a small adapter over that already-loaded
+public ABI. No Akashic source may `REQUIRE` the module or copy it into the
+Akashic tree. The adapter is available only when the product profile loaded the
+module explicitly and requested rich-terminal negotiation; baseline profiles
+remain unaffected.
 
 The enhanced backend is bound only after successful negotiation. `begin`
 checks the current session epoch and reserves sufficient transport and remote
@@ -156,7 +158,7 @@ The module permits only one locally committed transaction awaiting
 `SCB-S-WOULD-BLOCK`. A failed result maps to `SCB-S-SESSION-LOST` before any
 later application event; no optimistic pipeline or rollback is permitted.
 
-### Retained-mode publication
+### Rich-terminal publication
 
 The descriptor and flush algorithm above remain the complete ANSI and CELL-only
 contract. Before RETAINED-1 is enabled, the APT adapter uses the legacy CELL
@@ -165,10 +167,11 @@ transaction and initial snapshot forms exactly as described.
 After RETAINED-1 discovery succeeds, the adapter must not independently emit a
 legacy CELL transaction or replacement snapshot. Its `begin`, `span`, and
 `cursor` calls instead stage the exact CELL enumeration in the one internal
-presentation coordinator. The UIDL retained backend stages semantic operations
-in that same coordinator. One `PRESENT_BEGIN`/`PRESENT_COMMIT` then publishes a
-CELL-only, retained-only, or mixed change under the shared transaction ID and
-revision. Accepted resize recovery uses `CELL_REPLACE` in that envelope.
+rich-terminal output coordinator. The UIDL retained backend stages semantic
+operations in that same coordinator. One `PRESENT_BEGIN`/`PRESENT_COMMIT` then
+publishes a CELL-only, retained-only, or mixed change under the shared
+transaction ID and revision. Accepted resize recovery uses `CELL_REPLACE` in
+that envelope.
 
 The screen front buffer and retained materialization advance together only
 after the complete unified commit has been accepted locally. Backpressure or a
@@ -192,10 +195,12 @@ boundary. Raw-freeing that state without its finalizer is not permitted.
 
 ### Production opt-in composition
 
-The `desktop-apt1` profile is the production composition boundary. It deploys
-MegaPad's canonical root `presentation-terminal.f` as a separate system module,
-then source-loads Akashic's `desk-apt1.f` owner with the linked Desktop closure.
-The baseline `desktop` profile does neither and remains ANSI-only.
+The `desktop-apt1` profile is one production composition boundary. MegaPad
+boot-loads its canonical optional root `presentation-terminal.f` as a separate
+system module before Akashic's `desk-apt1.f` owner and linked Desktop closure
+are loaded. Akashic consumes only the public PT ABI; it neither source-loads
+nor vendors the module. The baseline `desktop` profile does neither and remains
+ANSI-only.
 
 The profile owns one immutable host policy with a declared 400 by 200 maximum
 geometry, geometry-derived payload/transaction/credit/publication bytes, and
@@ -221,11 +226,11 @@ transaction. A resize cannot interleave with an open transaction.
 
 ## 9. Shell retry contract
 
-Application dirty state means the back buffer needs repainting. Presentation
-pending means front differs from back or a previous flush was refused.
+Application dirty state means the back buffer needs repainting. Output pending
+means front differs from back or a previous flush was refused.
 
 The shell clears application dirty only after completing application paint.
-It keeps presentation pending until `SCR-FLUSH` returns `SCB-S-OK`. A retry
+It keeps output pending until `SCR-FLUSH` returns `SCB-S-OK`. A retry
 calls `SCR-FLUSH` directly and does not rerun application paint unless the
 application became dirty again.
 
