@@ -45,7 +45,7 @@
 \    DESK-TRY-LAUNCH   ( desc -- id ior ) Transactional sub-app launch
 \    DESK-QUEUE-BUILTIN ( desc flags -- ) Bind built-in before run
 \    DESK-QUEUE-LAUNCH ( desc -- )     Set startup applet (before DESK-RUN)
-\    DESK-UIDL-READY! ( xt context -- ) Set neutral hosted-UIDL hook
+\    DESK-HOST-LIFECYCLE! ( init fini context -- ) Set host composition hooks
 \    DESK-PACKAGE-RESOLVER! ( xt context -- ) Set lazy package resolver
 \    DESK-PACKAGE-RELEASER! ( xt context -- ) Set descriptor releaser
 \    DESK-RUN          ( -- )          Fill desc, call ASHELL-RUN
@@ -138,6 +138,11 @@ CMP-LAYOUT-BEGIN
 
 _DESK-CURRENT-STATE AHOST-SIZE CMP-FIELD: _DESK-HOST
 
+_DESK-CURRENT-STATE CMP-CELL: _DESK-HOST-INIT-XT
+_DESK-CURRENT-STATE CMP-CELL: _DESK-HOST-FINI-XT
+_DESK-CURRENT-STATE CMP-CELL: _DESK-HOST-LIFECYCLE-CTX
+_DESK-CURRENT-STATE CMP-CELL: _DESK-HOST-LIFECYCLE-PHASE
+
 : _DESK-HEAD        ( -- a ) _DESK-HOST AHOST.HEAD ;
 : _DESK-FOCUS-SA    ( -- a ) _DESK-HOST AHOST.FOCUS ;
 : _DESK-NEXT-ID     ( -- a ) _DESK-HOST AHOST.NEXT-ID ;
@@ -179,14 +184,16 @@ VARIABLE _DESK-PENDING-RESOLVER-XT
 VARIABLE _DESK-PENDING-RESOLVER-CTX
 VARIABLE _DESK-PENDING-RELEASER-XT
 VARIABLE _DESK-PENDING-RELEASER-CTX
-VARIABLE _DESK-PENDING-UIDL-READY-XT
-VARIABLE _DESK-PENDING-UIDL-READY-CTX
+VARIABLE _DESK-PENDING-HOST-INIT-XT
+VARIABLE _DESK-PENDING-HOST-FINI-XT
+VARIABLE _DESK-PENDING-HOST-LIFECYCLE-CTX
 0 _DESK-PENDING-RESOLVER-XT !
 0 _DESK-PENDING-RESOLVER-CTX !
 0 _DESK-PENDING-RELEASER-XT !
 0 _DESK-PENDING-RELEASER-CTX !
-0 _DESK-PENDING-UIDL-READY-XT !
-0 _DESK-PENDING-UIDL-READY-CTX !
+0 _DESK-PENDING-HOST-INIT-XT !
+0 _DESK-PENDING-HOST-FINI-XT !
+0 _DESK-PENDING-HOST-LIFECYCLE-CTX !
 
 : _DESK-BUILTIN-ENTRY  ( index -- a )
     _DESK-BUILTIN-SZ * _DESK-BUILTIN-BUF + ;
@@ -490,12 +497,34 @@ VARIABLE _DXIO-RESET-STATUS
     _DESK-PENDING-RELEASER-CTX !
     _DESK-PENDING-RELEASER-XT ! ;
 
-\ Constructor-only pass-through for the generic applet-host UIDL-ready seam.
-\ Desk stores no backend state and does not interpret the opaque context.
-: DESK-UIDL-READY!  ( xt context -- )
-    _DESK-CURRENT-STATE @ IF 2DROP EXIT THEN
-    _DESK-PENDING-UIDL-READY-CTX !
-    _DESK-PENDING-UIDL-READY-XT ! ;
+\ Constructor-only lifecycle around the generic host.  INIT and FINI both use
+\ ( host context -- ior ); Desk stores no backend state and does not
+\ interpret the opaque context.  A zero pair selects the baseline path.
+: DESK-HOST-LIFECYCLE!  ( init-xt fini-xt context -- )
+    _DESK-CURRENT-STATE @ IF 3DROP EXIT THEN
+    _DESK-PENDING-HOST-LIFECYCLE-CTX !
+    _DESK-PENDING-HOST-FINI-XT !
+    _DESK-PENDING-HOST-INIT-XT ! ;
+
+: _DESK-HOST-COMPOSE  ( -- )
+    _DESK-HOST-INIT-XT @ 0= IF
+        _DESK-HOST-FINI-XT @
+        ABORT" desk: incomplete host lifecycle hooks"
+        EXIT
+    THEN
+    _DESK-HOST-FINI-XT @ 0=
+    ABORT" desk: incomplete host lifecycle hooks"
+    1 _DESK-HOST-LIFECYCLE-PHASE !
+    _DESK-HOST _DESK-HOST-LIFECYCLE-CTX @
+    _DESK-HOST-INIT-XT @ EXECUTE ?DUP IF THROW THEN ;
+
+: _DESK-HOST-DECOMPOSE  ( -- )
+    _DESK-HOST-LIFECYCLE-PHASE @ DUP 0= SWAP 2 = OR IF EXIT THEN
+    _DESK-HOST-LIFECYCLE-PHASE @ 1 <>
+    ABORT" desk: invalid host lifecycle phase"
+    _DESK-HOST _DESK-HOST-LIFECYCLE-CTX @
+    _DESK-HOST-FINI-XT @ EXECUTE ?DUP IF THROW THEN
+    2 _DESK-HOST-LIFECYCLE-PHASE ! ;
 
 ' _DESK-PACKAGE-RESOLVER 0 DESK-PACKAGE-RESOLVER!
 ' _DESK-PACKAGE-RELEASER 0 DESK-PACKAGE-RELEASER!
@@ -1986,6 +2015,11 @@ VARIABLE _DTS-END
 \ --- Init ---
 : DESK-INIT-CB  ( instance -- )
     DUP _DINI-INST ! _DESK-USE-STATE
+    _DESK-PENDING-HOST-INIT-XT @ _DESK-HOST-INIT-XT !
+    _DESK-PENDING-HOST-FINI-XT @ _DESK-HOST-FINI-XT !
+    _DESK-PENDING-HOST-LIFECYCLE-CTX @
+        _DESK-HOST-LIFECYCLE-CTX !
+    0 _DESK-HOST-LIFECYCLE-PHASE !
     _DESK-PENDING-SBOX-OWNER @ _DESK-SBOX-OWNER !
     _DESK-PENDING-SBOX-CAPACITY @ _DESK-SBOX-CAPACITY !
     0 _DESK-PENDING-SBOX-OWNER !
@@ -1995,9 +2029,6 @@ VARIABLE _DTS-END
     ['] _DESK-HOST-RELAYOUT _DESK-HOST AHOST-RELAYOUT!
     ['] _DESK-HOST-RELEASE _DESK-HOST AHOST-RELEASE!
     ['] _DESK-HOST-CLOSED _DESK-HOST AHOST-CLOSED!
-    _DESK-PENDING-UIDL-READY-XT @
-    _DESK-PENDING-UIDL-READY-CTX @
-    _DESK-HOST AHOST-UIDL-READY!
     0 _DESK-VH !
     0 _DESK-FULLFRAME !
     0 _DESK-CATALOG !
@@ -2029,6 +2060,7 @@ VARIABLE _DTS-END
     _DINI-INST @ _DESK-INTEROP-INIT
     _DESK-REGISTRY @ _DESK-HOST AHOST-REGISTRY!
     _DESK-ENDPOINT _DESK-HOST AHOST-ENDPOINT!
+    _DESK-HOST-COMPOSE
     \ DESK-QUEUE-LAUNCH rows were migrated by _DESK-CATALOG-INIT.
     \ Autostart now honors their persisted enabled/quarantine flags.
     _DESK-AUTOSTART-CATALOG
@@ -2407,13 +2439,19 @@ VARIABLE _DSD-IOR
 : _DSD-PRACTICE-FINI  ( -- )
     _DESK-PRACTICE-ACTIVATION PACT-DEACTIVATE ;
 
+: _DSD-HOST-FINI  ( -- )
+    _DESK-HOST-DECOMPOSE ;
+
 : DESK-SHUTDOWN-CB  ( instance -- )
     _DESK-USE-STATE
     0 _DSD-IOR !
     _DESK-HOST AHOST-DRAIN ?DUP IF THROW THEN
-    ['] _DSD-INTEROP-FINI CATCH DUP _DSD-REMEMBER
+    ['] _DSD-HOST-FINI CATCH DUP _DSD-REMEMBER
     0= IF
-        ['] _DSD-PRACTICE-FINI CATCH _DSD-REMEMBER
+        ['] _DSD-INTEROP-FINI CATCH DUP _DSD-REMEMBER
+        0= IF
+            ['] _DSD-PRACTICE-FINI CATCH _DSD-REMEMBER
+        THEN
     THEN
     _DSD-IOR @ ?DUP IF THROW THEN ;
 
@@ -2557,7 +2595,7 @@ GUARD _desk-guard
 ' DESK-QUEUE-BUILTIN CONSTANT _desk-queuebuiltin-xt
 ' DESK-PACKAGE-RESOLVER! CONSTANT _desk-package-resolver-xt
 ' DESK-PACKAGE-RELEASER! CONSTANT _desk-package-releaser-xt
-' DESK-UIDL-READY! CONSTANT _desk-uidl-ready-xt
+' DESK-HOST-LIFECYCLE! CONSTANT _desk-host-lifecycle-xt
 ' DESK-RUN          CONSTANT _desk-run-xt
 
 \ Launch and close can invoke arbitrary app code.  These are owner-core
@@ -2588,7 +2626,8 @@ GUARD _desk-guard
 : DESK-QUEUE-BUILTIN _desk-queuebuiltin-xt _desk-guard WITH-GUARD ;
 : DESK-PACKAGE-RESOLVER! _desk-package-resolver-xt _desk-guard WITH-GUARD ;
 : DESK-PACKAGE-RELEASER! _desk-package-releaser-xt _desk-guard WITH-GUARD ;
-: DESK-UIDL-READY! _desk-uidl-ready-xt _desk-guard WITH-GUARD ;
+: DESK-HOST-LIFECYCLE!
+    _desk-host-lifecycle-xt _desk-guard WITH-GUARD ;
 \ Like ASHELL-RUN, DESK-RUN is the owner-core yielding lifecycle driver.
 \ Task-aware CATCH may span the loop; a lifetime metadata guard may not,
 \ because it would exclude bounded control operations while this task yields.

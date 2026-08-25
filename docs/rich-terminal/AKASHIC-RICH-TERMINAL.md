@@ -513,11 +513,18 @@ AHOST-UIDL-READY!  ( xt context host -- )
 AHOST-QUIESCE-ALL  ( host -- ior )
 ```
 
-Desk exposes only the constructor pass-through
-`DESK-UIDL-READY! ( xt context -- )`. During `DESK-INIT-CB`, immediately after
-initializing its generic host and before launching any child, Desk copies that
-exact callback pair into `AHOST-UIDL-READY!`. It does not inspect the context,
-name an output backend, or allocate composition storage.
+Desk exposes only the constructor boundary
+`DESK-HOST-LIFECYCLE! ( init-xt fini-xt context -- )`; both callbacks use
+`( host context -- ior )`. After its generic host and runtime services are
+initialized but before launching any child, Desk invokes composition init,
+which may install the exact `AHOST-UIDL-READY!` callback pair. Immediately
+after `AHOST-DRAIN` succeeds and before freeing any Desk runtime state, it
+invokes composition fini so the callback and every borrowed host pointer can
+be removed. It does not inspect the context, name an output backend, or
+allocate composition storage. A fini refusal hard-gates every later Desk
+destructor. Desk claims the init phase before entering the callback, so the
+matching fini is also invoked after an init refusal or throw; composition fini
+must therefore be safe and idempotent for every partially initialized state.
 
 The host invokes the callback exactly once for a launch after ordinary UIDL
 load and initial region assignment have succeeded, while the exact UCTX is

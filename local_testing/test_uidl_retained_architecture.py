@@ -18,6 +18,10 @@ def _word(source: str, name: str) -> str:
     return match.group(0)
 
 
+def _forth_code(source: str) -> str:
+    return "\n".join(line.split("\\", 1)[0] for line in source.splitlines())
+
+
 def test_rich_terminal_is_not_an_applet_facing_scene_service() -> None:
     assert not (AKASHIC / "tui/presentation/api.f").exists()
     assert not (AKASHIC / "tui/presentation/broker.f").exists()
@@ -29,11 +33,25 @@ def test_rich_terminal_is_not_an_applet_facing_scene_service() -> None:
     assert "presentation/broker.f" not in composition
     assert "PRES-BROKER-DISCOVER" not in composition
 
+    forbidden_require = re.compile(
+        r"(?m)^\s*REQUIRE\s+\S*(?:"
+        r"rich-terminal\.f|rich-terminal/|desk-apt1\.f|"
+        r"app-shell-apt1\.f|screen-backend-apt1\.f|"
+        r"apt1-engine\.f|screen-adapter-apt1\.f)\s*$"
+    )
+    protocol_word = re.compile(
+        r"(?<![A-Z0-9_])(?:PT|_PT|APTSCB|_APTSCB|APTAS|_APTAS|"
+        r"RTAPT|_RTAPT|RTAPTSCB|_RTAPTSCB|RTERM|_RTERM)-"
+    )
+
     for applet in (AKASHIC / "tui/applets").rglob("*.f"):
         source = applet.read_text(encoding="utf-8")
+        code = _forth_code(source)
         assert "presentation/" not in source, applet
         assert "PRES-BROKER-DISCOVER" not in source, applet
         assert "PT-RETAINED" not in source, applet
+        assert forbidden_require.search(code) is None, applet
+        assert protocol_word.search(code) is None, applet
 
 
 def test_uidl_context_remains_the_hosted_application_ui_authority() -> None:
@@ -174,25 +192,72 @@ def test_generic_host_uidl_ready_hook_is_neutral_and_exactly_placed() -> None:
     assert ready_at < launch.index("APP.INIT-XT @")
 
 
-def test_desk_passes_constructor_uidl_hook_to_its_generic_host() -> None:
+def test_desk_wraps_child_hosting_in_a_neutral_composition_lifecycle() -> None:
     desk = _text("akashic/tui/applets/desk/desk.f")
 
-    setter = _word(desk, "DESK-UIDL-READY!")
-    assert "_DESK-CURRENT-STATE @ IF 2DROP EXIT THEN" in setter
-    assert setter.index("_DESK-PENDING-UIDL-READY-CTX !") < setter.index(
-        "_DESK-PENDING-UIDL-READY-XT !"
+    setter = _word(desk, "DESK-HOST-LIFECYCLE!")
+    assert "_DESK-CURRENT-STATE @ IF 3DROP EXIT THEN" in setter
+    ordered_stores = (
+        "_DESK-PENDING-HOST-LIFECYCLE-CTX !",
+        "_DESK-PENDING-HOST-FINI-XT !",
+        "_DESK-PENDING-HOST-INIT-XT !",
+    )
+    assert [setter.index(token) for token in ordered_stores] == sorted(
+        setter.index(token) for token in ordered_stores
     )
 
     init = _word(desk, "DESK-INIT-CB")
     host_init = init.index("_DESK-HOST AHOST-INIT")
-    hook = init.index("_DESK-HOST AHOST-UIDL-READY!")
+    compose = init.index("_DESK-HOST-COMPOSE")
     autostart = init.index("_DESK-AUTOSTART-CATALOG")
-    assert host_init < hook < autostart
+    assert host_init < compose < autostart
+    pending_copies = (
+        "_DESK-PENDING-HOST-INIT-XT @ _DESK-HOST-INIT-XT !",
+        "_DESK-PENDING-HOST-FINI-XT @ _DESK-HOST-FINI-XT !",
+        "_DESK-PENDING-HOST-LIFECYCLE-CTX @",
+        "0 _DESK-HOST-LIFECYCLE-PHASE !",
+    )
+    assert all(init.index(token) < host_init for token in pending_copies)
+
+    compose_word = _word(desk, "_DESK-HOST-COMPOSE")
+    phase = compose_word.index("1 _DESK-HOST-LIFECYCLE-PHASE !")
+    execute = compose_word.index("_DESK-HOST-INIT-XT @ EXECUTE")
+    assert phase < execute
+    zero_pair = compose_word.index("_DESK-HOST-INIT-XT @ 0= IF")
+    partial_fini = compose_word.index("_DESK-HOST-FINI-XT @", zero_pair)
+    zero_exit = compose_word.index("EXIT", partial_fini)
+    partial_init = compose_word.index("_DESK-HOST-FINI-XT @ 0=", zero_exit)
+    assert zero_pair < partial_fini < zero_exit < partial_init < phase
+    assert compose_word.count('ABORT" desk: incomplete host lifecycle hooks"') == 2
     assert (
-        "_DESK-PENDING-UIDL-READY-XT @\n"
-        "    _DESK-PENDING-UIDL-READY-CTX @\n"
-        "    _DESK-HOST AHOST-UIDL-READY!"
-    ) in init
+        "_DESK-HOST _DESK-HOST-LIFECYCLE-CTX @\n"
+        "    _DESK-HOST-INIT-XT @ EXECUTE ?DUP IF THROW THEN"
+    ) in compose_word
+
+    decompose = _word(desk, "_DESK-HOST-DECOMPOSE")
+    fini_execute = decompose.index("_DESK-HOST-FINI-XT @ EXECUTE")
+    finalized = decompose.index("2 _DESK-HOST-LIFECYCLE-PHASE !")
+    assert fini_execute < finalized
+    assert (
+        "_DESK-HOST _DESK-HOST-LIFECYCLE-CTX @\n"
+        "    _DESK-HOST-FINI-XT @ EXECUTE ?DUP IF THROW THEN"
+    ) in decompose
+
+    shutdown = _word(desk, "DESK-SHUTDOWN-CB")
+    drain = shutdown.index("_DESK-HOST AHOST-DRAIN")
+    fini = shutdown.index("['] _DSD-HOST-FINI CATCH")
+    interop = shutdown.index("['] _DSD-INTEROP-FINI CATCH")
+    practice = shutdown.index("['] _DSD-PRACTICE-FINI CATCH")
+    assert drain < fini < interop < practice
+    assert (
+        "['] _DSD-HOST-FINI CATCH DUP _DSD-REMEMBER\n"
+        "    0= IF\n"
+        "        ['] _DSD-INTEROP-FINI CATCH DUP _DSD-REMEMBER\n"
+        "        0= IF\n"
+        "            ['] _DSD-PRACTICE-FINI CATCH _DSD-REMEMBER\n"
+        "        THEN\n"
+        "    THEN"
+    ) in shutdown
 
     for forbidden in (
         "APTSCB",
@@ -203,6 +268,9 @@ def test_desk_passes_constructor_uidl_hook_to_its_generic_host() -> None:
     ):
         assert forbidden not in setter
         assert forbidden not in init
+        assert forbidden not in shutdown
+        assert forbidden not in compose_word
+        assert forbidden not in decompose
 
 
 def test_generic_host_close_phases_and_init_boundary_are_persistent() -> None:

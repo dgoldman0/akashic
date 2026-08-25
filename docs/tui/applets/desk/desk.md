@@ -396,14 +396,18 @@ A sample config template is provided in
 |------|-------|-------------|
 | `DESK-QUEUE-LAUNCH` | `( desc -- )` | Compatibly register a pinned/autostart built-in.  Call before `DESK-RUN`. |
 | `DESK-QUEUE-BUILTIN` | `( desc flags -- )` | Queue an exact-ID built-in binding with caller-selected catalog defaults. |
-| `DESK-UIDL-READY!` | `( xt context -- )` | Before run, set the neutral hosted-UIDL callback `( host slot context -- ior )`; zero selects the baseline path. |
+| `DESK-HOST-LIFECYCLE!` | `( init-xt fini-xt context -- )` | Before run, set neutral `( host context -- ior )` composition hooks around child hosting; a zero pair selects baseline. |
 | `DESK-PACKAGE-RESOLVER!` | `( xt context -- )` | Replace the lazy package resolver; hook is `( entry context -- desc status )`. |
 | `DESK-PACKAGE-RELEASER!` | `( xt context -- )` | Before run, set the companion descriptor hook `( desc context -- )`. |
 | `DESK-RUN` | `( -- )` | Fill `DESK-DESC`, call `ASHELL-RUN`.  Blocks until shell exits. |
 
-The UIDL-ready and package hook setters are constructor-only. Desk passes the
-UIDL callback and opaque context directly to its generic `AHOST`; it owns no
-output-backend state and names no terminal protocol. Replacing the resolver clears
+The host-lifecycle and package hook setters are constructor-only. Desk invokes
+host composition init after its runtime services and generic `AHOST` are ready
+but before child autostart. After a successful `AHOST-DRAIN`, it invokes the
+matching fini before freeing any Desk-owned runtime state. The hooks receive
+only the exact host and opaque context; Desk owns no output-backend state and
+names no terminal protocol. Init is claimed before callback entry, so fini must
+also safely clean a partial init that returned an error or threw. Replacing the resolver clears
 the pending releaser, so a custom resolver that allocates descriptors must then
 install its matching releaser before `DESK-RUN`.
 
