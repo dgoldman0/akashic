@@ -28,7 +28,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     source = FACADE.read_text(encoding="utf-8")
     code = _code_without_comments(source)
 
-    assert "PROVIDED akashic-tui-rte1" in code
+    assert "PROVIDED akashic-tui-rte" in code
     assert re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code) == [
         "../../utils/memory-span.f"
     ]
@@ -52,8 +52,11 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         code,
     )
 
-    assert "5 CONSTANT _RTE-ABI" in code
-    assert '0x5254454641434135 CONSTANT _RTE-MAGIC' in code
+    assert "_RTE-ABI" not in code
+    assert '0x5254454641434144 CONSTANT _RTE-MAGIC' in code
+    assert "_RTE-F.RESERVED @ IF DROP 0 EXIT THEN" in _definition(
+        source, "RTE-VALID?"
+    )
     assert "144 CONSTANT RTE-FACADE-SIZE" in code
     assert "160 CONSTANT RTE-LIMITS-SIZE" in code
     assert "_RTE-F.CONTEXT" in _definition(source, "RTE-VALID?")
@@ -69,8 +72,8 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "RETAINED-CANCEL",
         "OWNER-DROP",
         "LIMITS",
-        "LABEL-DEF",
-        "LABEL-PREFLIGHT",
+        "GLYPH-RUN-DEF",
+        "GLYPH-RUN-PREFLIGHT",
         "UPDATE-STATE",
     ):
         assert f"_RTE-F.{callback}-XT @ 0=" in valid
@@ -99,13 +102,13 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-LIMITS-BYTES": "( -- bytes )",
         "RTE-LIMITS-VALID?": "( limits -- flag )",
         "RTE-LIMITS@": "( limits facade -- status )",
-        "RTE-LABEL-BYTES": "( -- bytes )",
-        "RTE-LABEL-VALID?": "( label -- flag )",
-        "RTE-LABEL-DEFINE": "( label facade -- status )",
-        "RTE-LABEL-PLAN-BYTES": "( -- bytes )",
-        "RTE-LABEL-PLAN-ITEM-BYTES": "( -- bytes )",
-        "RTE-LABEL-PLAN-VALID?": "( plan -- flag )",
-        "RTE-LABEL-PREFLIGHT": "( plan facade -- status )",
+        "RTE-GLYPH-RUN-BYTES": "( -- bytes )",
+        "RTE-GLYPH-RUN-VALID?": "( run -- flag )",
+        "RTE-GLYPH-RUN-DEFINE": "( run facade -- status )",
+        "RTE-GLYPH-RUN-PLAN-BYTES": "( -- bytes )",
+        "RTE-GLYPH-RUN-PLAN-ITEM-BYTES": "( -- bytes )",
+        "RTE-GLYPH-RUN-PLAN-VALID?": "( plan -- flag )",
+        "RTE-GLYPH-RUN-PREFLIGHT": "( plan facade -- status )",
         "RTE-RETAINED-BEGIN": "( retained-mode facade -- status )",
         "RTE-RETAINED-SEAL": "( disposition facade -- status )",
         "RTE-RETAINED-CANCEL": "( facade -- status )",
@@ -133,8 +136,8 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-OWNER-STATE@",
         "RTE-RETAINED-BEGIN",
         "RTE-REGION-DEFINE",
-        "RTE-LABEL-DEFINE",
-        "RTE-LABEL-PREFLIGHT",
+        "RTE-GLYPH-RUN-DEFINE",
+        "RTE-GLYPH-RUN-PREFLIGHT",
         "RTE-RETAINED-SEAL",
         "RTE-RETAINED-CANCEL",
         "RTE-OWNER-DROP",
@@ -150,7 +153,7 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
     source = BRIDGE.read_text(encoding="utf-8")
     code = _code_without_comments(source)
 
-    assert "PROVIDED akashic-tui-rtapte1" in code
+    assert "PROVIDED akashic-tui-rtapte" in code
     assert re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code) == [
         "engine.f",
         "apt1-engine.f",
@@ -187,9 +190,9 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
     assert "_RTAPTE-STATUS>RTE" in update_callback
 
     init = _definition(source, "_RTAPTE-INIT-BODY")
-    assert "RTE-LABEL-PLAN-SIZE RTAPT-LABEL-PLAN-SIZE <>" in init
+    assert "RTE-GLYPH-RUN-PLAN-SIZE RTAPT-GLYPH-RUN-PLAN-SIZE <>" in init
     assert (
-        "RTE-LABEL-PLAN-ITEM-SIZE RTAPT-LABEL-PLAN-ITEM-SIZE <>"
+        "RTE-GLYPH-RUN-PLAN-ITEM-SIZE RTAPT-GLYPH-RUN-PLAN-ITEM-SIZE <>"
         in init
     )
     span = init.index("RTE-FACADE-SIZE _RTE-SPAN?")
@@ -199,7 +202,7 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
     magic = init.index("_RTE-F.MAGIC !", fill)
     assert span < engine < disjoint < fill < magic
     for field in (
-        "_RTE-F.ABI !",
+        "_RTE-F.RESERVED !",
         "_RTE-F.SIZE !",
         "_RTE-F.SELF !",
         "_RTE-F.CONTEXT !",
@@ -213,18 +216,18 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
         "_RTE-F.RETAINED-CANCEL-XT !",
         "_RTE-F.OWNER-DROP-XT !",
         "_RTE-F.LIMITS-XT !",
-        "_RTE-F.LABEL-DEF-XT !",
-        "_RTE-F.LABEL-PREFLIGHT-XT !",
+        "_RTE-F.GLYPH-RUN-DEF-XT !",
+        "_RTE-F.GLYPH-RUN-PREFLIGHT-XT !",
         "_RTE-F.UPDATE-STATE-XT !",
     ):
         assert fill < init.index(field) < magic
 
 
-def test_label_definition_is_neutral_validated_borrowed_and_exactly_bridged() -> None:
+def test_glyph_run_definition_is_neutral_validated_borrowed_and_exactly_bridged() -> None:
     source = FACADE.read_text(encoding="utf-8")
     bridge = BRIDGE.read_text(encoding="utf-8")
 
-    assert "160 CONSTANT RTE-LABEL-SIZE" in source
+    assert "152 CONSTANT RTE-GLYPH-RUN-SIZE" in source
     expected_fields = {
         "OWNER": 0,
         "GENERATION": 8,
@@ -239,64 +242,63 @@ def test_label_definition_is_neutral_validated_borrowed_and_exactly_bridged() ->
         "ROOT-WIDTH": 80,
         "Z": 88,
         "VISIBLE": 96,
-        "RGBA": 104,
-        "H-ALIGN": 112,
-        "V-ALIGN": 120,
-        "ELLIPSIZE": 128,
-        "TEXT-A": 136,
-        "TEXT-U": 144,
-        "RESERVED": 152,
+        "FG-RGBA": 104,
+        "BG-RGBA": 112,
+        "ATTRS": 120,
+        "TEXT-A": 128,
+        "TEXT-U": 136,
+        "RESERVED": 144,
     }
     for field, offset in expected_fields.items():
-        definition = _definition(source, f"_RTE-LABEL.{field}")
+        definition = _definition(source, f"_RTE-GLYPH-RUN.{field}")
         if offset == 0:
             assert "+" not in definition
         else:
             assert f"{offset} +" in definition
 
-    valid = _definition(source, "RTE-LABEL-VALID?")
-    fields = _definition(source, "_RTE-LABEL-FIELDS?")
-    assert "_RTE-LABEL-FIELDS?" in valid
-    assert "_RTE-LABEL-TEXT?" in valid
+    valid = _definition(source, "RTE-GLYPH-RUN-VALID?")
+    fields = _definition(source, "_RTE-GLYPH-RUN-FIELDS?")
+    assert "_RTE-GLYPH-RUN-FIELDS?" in valid
+    assert "_RTE-GLYPH-RUN-TEXT?" in valid
     for identity in ("OWNER", "GENERATION", "OBJECT", "REGION"):
-        assert f"_RTE-LABEL.{identity} @ 0=" in fields
+        assert f"_RTE-GLYPH-RUN.{identity} @ 0=" in fields
     assert (
-        "_RTE-LABEL.PARENT @ OVER _RTE-LABEL.OBJECT @ ="
+        "_RTE-GLYPH-RUN.PARENT @ OVER _RTE-GLYPH-RUN.OBJECT @ ="
         in fields
     )
-    for boolean in ("VISIBLE", "ELLIPSIZE"):
-        assert f"_RTE-LABEL.{boolean} @ _RTE-BOOL?" in fields
-    assert "_RTE-LABEL.RGBA @ 0xFFFFFFFF U>" in fields
-    assert "_RTE-LABEL.H-ALIGN @ 3 U<" in fields
-    assert "_RTE-LABEL.V-ALIGN @ 3 U<" in fields
-    assert "_RTE-LABEL.RESERVED @ IF" in fields
-    assert "_RTE-LABEL-GEOMETRY?" in fields
+    assert "_RTE-GLYPH-RUN.VISIBLE @ _RTE-BOOL?" in fields
+    assert "_RTE-GLYPH-RUN.FG-RGBA @ 0xFFFFFFFF U>" in fields
+    assert "_RTE-GLYPH-RUN.BG-RGBA @ 0xFFFFFFFF U>" in fields
+    assert "_RTE-GLYPH-RUN.ATTRS @" in fields
+    assert "_RTE-GLYPH-RUN-ATTRS? 0=" in fields
+    assert "_RTE-GLYPH-RUN.RESERVED @ IF" in fields
+    assert "_RTE-GLYPH-RUN-GEOMETRY?" in fields
 
-    geometry = _definition(source, "_RTE-LABEL-GEOMETRY?")
+    geometry = _definition(source, "_RTE-GLYPH-RUN-GEOMETRY?")
     for nonnegative in ("HEIGHT", "WIDTH"):
-        assert f"_RTE-LABEL.{nonnegative} @ 0<" in geometry
+        assert f"_RTE-GLYPH-RUN.{nonnegative} @ 0<" in geometry
     for positive in ("ROOT-HEIGHT", "ROOT-WIDTH"):
-        assert f"_RTE-LABEL.{positive} @ 0> 0=" in geometry
+        assert f"_RTE-GLYPH-RUN.{positive} @ 0> 0=" in geometry
     assert geometry.count("_RTE-SADD?") == 2
     assert "_RTE-LG-ROW-END !" in geometry
     assert "_RTE-LG-COL-END !" in geometry
-    visible = geometry.index("_RTE-LABEL.VISIBLE @ IF")
+    visible = geometry.index("_RTE-GLYPH-RUN.VISIBLE @ IF")
     for visible_only in (
-        "_RTE-LABEL.HEIGHT @ 0=",
-        "_RTE-LABEL.WIDTH @ 0=",
-        "_RTE-LABEL.ROOT-HEIGHT @ < 0= OR",
+        "_RTE-GLYPH-RUN.HEIGHT @ 0=",
+        "_RTE-GLYPH-RUN.WIDTH @ 0=",
+        "_RTE-GLYPH-RUN.ROOT-HEIGHT @ < 0= OR",
         "_RTE-LG-ROW-END @ 0> 0= OR",
-        "_RTE-LABEL.ROOT-WIDTH @ < 0= OR",
+        "_RTE-GLYPH-RUN.ROOT-WIDTH @ < 0= OR",
         "_RTE-LG-COL-END @ 0> 0= OR",
     ):
         assert geometry.index(visible_only) > visible
 
-    text_span = _definition(source, "_RTE-LABEL-TEXT-SPAN?")
+    text_span = _definition(source, "_RTE-GLYPH-RUN-TEXT-SPAN?")
     assert "DUP 0= IF DROP 0= EXIT THEN" in text_span
     assert "MSPAN-NONWRAPPING?" in text_span
-    text = _definition(source, "_RTE-LABEL-TEXT?")
-    assert "_RTE-LABEL-UTF8-ONE" in text
-    scalar = _definition(source, "_RTE-LABEL-UTF8-ONE")
+    text = _definition(source, "_RTE-GLYPH-RUN-TEXT?")
+    assert "_RTE-GLYPH-RUN-UTF8-ONE" in text
+    scalar = _definition(source, "_RTE-GLYPH-RUN-UTF8-ONE")
     for excluded in ("DUP 0=", "OVER 10 =", "SWAP 13 ="):
         assert excluded in scalar
     assert (
@@ -309,14 +311,14 @@ def test_label_definition_is_neutral_validated_borrowed_and_exactly_bridged() ->
     for lead in ("0xC2 0xE0", "0xE0 0xF0", "0xF0 0xF5"):
         assert lead in scalar
 
-    dispatch = _definition(source, "RTE-LABEL-DEFINE")
+    dispatch = _definition(source, "RTE-GLYPH-RUN-DEFINE")
     facade_valid = dispatch.index("RTE-VALID?")
-    record_span = dispatch.index("RTE-LABEL-SIZE _RTE-SPAN?", facade_valid)
+    record_span = dispatch.index("RTE-GLYPH-RUN-SIZE _RTE-SPAN?", facade_valid)
     record_disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", record_span)
-    text_span_check = dispatch.index("_RTE-LABEL-TEXT-SPAN?", record_disjoint)
+    text_span_check = dispatch.index("_RTE-GLYPH-RUN-TEXT-SPAN?", record_disjoint)
     text_disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", record_disjoint + 1)
-    record_valid = dispatch.index("_RTE-LABEL-FIELDS?", text_disjoint)
-    execute = dispatch.index("_RTE-F.LABEL-DEF-XT @ EXECUTE", record_valid)
+    record_valid = dispatch.index("_RTE-GLYPH-RUN-FIELDS?", text_disjoint)
+    execute = dispatch.index("_RTE-F.GLYPH-RUN-DEF-XT @ EXECUTE", record_valid)
     assert (
         facade_valid
         < record_span
@@ -326,18 +328,18 @@ def test_label_definition_is_neutral_validated_borrowed_and_exactly_bridged() ->
         < record_valid
         < execute
     )
-    assert "RTE-LABEL-VALID?" not in dispatch
-    assert "_RTE-LABEL-TEXT?" not in dispatch
+    assert "RTE-GLYPH-RUN-VALID?" not in dispatch
+    assert "_RTE-GLYPH-RUN-TEXT?" not in dispatch
     assert "DUP RTE-STATUS-VALID? 0=" in dispatch
 
-    callback = _definition(bridge, "_RTAPTE-LABEL-DEFINE")
+    callback = _definition(bridge, "_RTAPTE-GLYPH-RUN-DEFINE")
     ordered_fields = [
-        callback.index(f"_RTE-LABEL.{field} @")
+        callback.index(f"_RTE-GLYPH-RUN.{field} @")
         for field in expected_fields
         if field != "RESERVED"
     ]
     assert ordered_fields == sorted(ordered_fields)
-    provider = callback.index("RTAPT-LABEL-DEFINE")
+    provider = callback.index("RTAPT-GLYPH-RUN-DEFINE")
     assert ordered_fields[-1] < provider
     assert "R> DROP R>" in callback
     assert "_RTAPTE-STATUS>RTE" in callback[provider:]
@@ -345,12 +347,12 @@ def test_label_definition_is_neutral_validated_borrowed_and_exactly_bridged() ->
         assert forbidden not in callback
 
 
-def test_label_plan_preflight_is_neutral_complete_and_mutation_free() -> None:
+def test_glyph_run_plan_preflight_is_neutral_complete_and_mutation_free() -> None:
     source = FACADE.read_text(encoding="utf-8")
     bridge = BRIDGE.read_text(encoding="utf-8")
 
-    assert "112 CONSTANT RTE-LABEL-PLAN-SIZE" in source
-    assert "128 CONSTANT RTE-LABEL-PLAN-ITEM-SIZE" in source
+    assert "112 CONSTANT RTE-GLYPH-RUN-PLAN-SIZE" in source
+    assert "120 CONSTANT RTE-GLYPH-RUN-PLAN-ITEM-SIZE" in source
     plan_fields = {
         "OWNER": 0,
         "GENERATION": 8,
@@ -378,12 +380,11 @@ def test_label_plan_preflight_is_neutral_complete_and_mutation_free() -> None:
         "ROOT-WIDTH": 56,
         "Z": 64,
         "VISIBLE": 72,
-        "RGBA": 80,
-        "H-ALIGN": 88,
-        "V-ALIGN": 96,
-        "ELLIPSIZE": 104,
-        "TEXT-CAPACITY": 112,
-        "RESERVED": 120,
+        "FG-RGBA": 80,
+        "BG-RGBA": 88,
+        "ATTRS": 96,
+        "TEXT-CAPACITY": 104,
+        "RESERVED": 112,
     }
     for prefix, fields in (("_RTE-LP", plan_fields), ("_RTE-LPI", item_fields)):
         for field, offset in fields.items():
@@ -393,16 +394,16 @@ def test_label_plan_preflight_is_neutral_complete_and_mutation_free() -> None:
             else:
                 assert f"{offset} +" in definition
 
-    valid = _definition(source, "_RTE-LABEL-PLAN-VALID-BODY")
-    assert "RTE-LABEL-PLAN-SIZE _RTE-SPAN?" in valid
+    valid = _definition(source, "_RTE-GLYPH-RUN-PLAN-VALID-BODY")
+    assert "RTE-GLYPH-RUN-PLAN-SIZE _RTE-SPAN?" in valid
     assert "_RTE-LPV-ITEMS-U @ 0= IF 0 EXIT THEN" in valid
-    assert "RTE-LABEL-PLAN-ITEM-SIZE MOD" in valid
+    assert "RTE-GLYPH-RUN-PLAN-ITEM-SIZE MOD" in valid
     assert "MSPAN-OVERLAP?" in valid
     assert "_RTE-UADD?" in valid
     assert "_RTE-LP.SURFACE-COLS @ U>" in valid
     assert "_RTE-LP.SURFACE-ROWS @ U>" in valid
-    assert "_RTE-LABEL-PLAN-ITEM?" in valid
-    item = _definition(source, "_RTE-LABEL-PLAN-ITEM?")
+    assert "_RTE-GLYPH-RUN-PLAN-ITEM?" in valid
+    item = _definition(source, "_RTE-GLYPH-RUN-PLAN-ITEM?")
     assert "_RTE-LPV-PRIOR-OBJECT @ U>" in item
     assert "_RTE-LPI.PARENT @ IF" in item
     assert "_RTE-LPI.TEXT-CAPACITY @ 0<" in item
@@ -411,30 +412,30 @@ def test_label_plan_preflight_is_neutral_complete_and_mutation_free() -> None:
     assert monotone < publish_high
     assert "strictly increasing but may be sparse" in source
     assert "exact owner object quota is item" in source
-    geometry = _definition(source, "_RTE-LABEL-PLAN-ITEM-GEOMETRY?")
+    geometry = _definition(source, "_RTE-GLYPH-RUN-PLAN-ITEM-GEOMETRY?")
     assert geometry.count("_RTE-SADD?") == 2
     assert "_RTE-LP.REGION-ROWS @ <>" in geometry
     assert "_RTE-LP.REGION-COLS @ <>" in geometry
     signed_add = _definition(source, "_RTE-SADD?")
     assert all(word not in signed_add for word in (">R", "R@", "R>"))
 
-    dispatch = _definition(source, "RTE-LABEL-PREFLIGHT")
-    plan_span = dispatch.index("RTE-LABEL-PLAN-SIZE _RTE-SPAN?")
+    dispatch = _definition(source, "RTE-GLYPH-RUN-PREFLIGHT")
+    plan_span = dispatch.index("RTE-GLYPH-RUN-PLAN-SIZE _RTE-SPAN?")
     plan_disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", plan_span)
     items_span = dispatch.index("_RTE-SPAN?", plan_disjoint)
     items_disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", items_span)
-    validate = dispatch.index("RTE-LABEL-PLAN-VALID?", items_disjoint)
-    execute = dispatch.index("_RTE-F.LABEL-PREFLIGHT-XT @ EXECUTE", validate)
+    validate = dispatch.index("RTE-GLYPH-RUN-PLAN-VALID?", items_disjoint)
+    execute = dispatch.index("_RTE-F.GLYPH-RUN-PREFLIGHT-XT @ EXECUTE", validate)
     assert plan_span < plan_disjoint < items_span < items_disjoint < validate < execute
     assert "DUP RTE-STATUS-VALID? 0=" in dispatch
 
-    callback = _definition(bridge, "_RTAPTE-LABEL-PREFLIGHT")
-    assert "RTAPT-LABEL-PREFLIGHT" in callback
+    callback = _definition(bridge, "_RTAPTE-GLYPH-RUN-PREFLIGHT")
+    assert "RTAPT-GLYPH-RUN-PREFLIGHT" in callback
     assert "_RTAPTE-STATUS>RTE" in callback
     assert "_RTE-LP.ITEMS-U" not in callback
-    assert "RTE-LABEL-PLAN-ITEM-SIZE" not in callback
+    assert "RTE-GLYPH-RUN-PLAN-ITEM-SIZE" not in callback
     assert re.search(r"(?<![A-Z])PT-", callback) is None
-    for forbidden in ("OWNER-OPEN", "REGION-DEFINE", "LABEL-DEFINE"):
+    for forbidden in ("OWNER-OPEN", "REGION-DEFINE", "GLYPH-RUN-DEFINE"):
         assert forbidden not in callback
 
 
@@ -463,8 +464,8 @@ def test_apt1_bridge_finalization_is_blank_idempotent_and_scrubs_authority() -> 
         "RETAINED-CANCEL",
         "OWNER-DROP",
         "LIMITS",
-        "LABEL-DEF",
-        "LABEL-PREFLIGHT",
+        "GLYPH-RUN-DEF",
+        "GLYPH-RUN-PREFLIGHT",
         "UPDATE-STATE",
     ):
         assert f"_RTE-F.{callback}-XT @ ['] _RTAPTE-" in exact
@@ -501,7 +502,7 @@ def test_limits_snapshot_is_complete_neutral_and_fail_before_dispatch() -> None:
         "IMAGE-WIDTH": 88,
         "IMAGE-HEIGHT": 96,
         "PATH-POINTS": 104,
-        "LABEL-BYTES": 112,
+        "GLYPH-RUN-BYTES": 112,
         "UTF8-BYTES": 120,
         "SAMPLES-APPEND": 128,
         "SERIES-HISTORY": 136,
@@ -526,7 +527,9 @@ def test_limits_snapshot_is_complete_neutral_and_fail_before_dispatch() -> None:
         "_RTE-L.LIVE-OWNERS @",
         "_RTE-L.OWNER-RECORDS @ U>",
         "_RTE-L.UTF8-BYTES @",
-        "_RTE-L.LABEL-BYTES @ U<",
+        "_RTE-L.GLYPH-RUN-BYTES @ ?DUP IF",
+        "_RTE-L.OBJECTS @ 0=",
+        "_RTE-L.UTF8-BYTES @ U>",
         "_RTE-L.SAMPLES-APPEND @",
         "_RTE-L.SERIES-HISTORY @ U>",
         "_RTE-L.SAMPLE-SLOTS @ U>",

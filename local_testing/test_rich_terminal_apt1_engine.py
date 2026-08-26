@@ -8,13 +8,13 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "akashic" / "tui" / "rich-terminal" / "apt1-engine.f"
 
 U32_MAX = 0xFFFFFFFF
-LABEL_COPY_FIXED = 128
-LABEL_FRAME_FIXED = 120
+GLYPH_RUN_COPY_FIXED = 120
+GLYPH_RUN_FRAME_FIXED = 120
 REGION_COPY_BYTES = 72
 REGION_FRAME_BYTES = 88
 UPDATE_ENVELOPE_BYTES = 160
-LABEL_PLAN_HEADER_BYTES = 112
-LABEL_PLAN_ITEM_BYTES = 128
+GLYPH_RUN_PLAN_HEADER_BYTES = 112
+GLYPH_RUN_PLAN_ITEM_BYTES = 120
 
 
 def _definition(source: str, name: str) -> str:
@@ -35,7 +35,7 @@ def _unorm32(boundary: int, root: int) -> int:
     return boundary * U32_MAX // root
 
 
-def _project_label(
+def _project_glyph_run(
     row: int,
     col: int,
     height: int,
@@ -81,17 +81,17 @@ def _project_label(
     )
 
 
-def _label_retry_copy(text: bytes) -> bytes:
-    copied = bytearray(_align8(LABEL_COPY_FIXED + len(text)))
-    copied[LABEL_COPY_FIXED : LABEL_COPY_FIXED + len(text)] = text
+def _glyph_run_retry_copy(text: bytes) -> bytes:
+    copied = bytearray(_align8(GLYPH_RUN_COPY_FIXED + len(text)))
+    copied[GLYPH_RUN_COPY_FIXED : GLYPH_RUN_COPY_FIXED + len(text)] = text
     return bytes(copied)
 
 
-def _label_frame_bytes(text: bytes) -> int:
-    return LABEL_FRAME_FIXED + len(text)
+def _glyph_run_frame_bytes(text: bytes) -> int:
+    return GLYPH_RUN_FRAME_FIXED + len(text)
 
 
-def _initial_label_plan_requirements(
+def _initial_glyph_run_plan_requirements(
     capacities: list[int],
 ) -> tuple[int, int, int]:
     """Return exact operation, retry-copy, and complete START frame bytes."""
@@ -100,12 +100,12 @@ def _initial_label_plan_requirements(
     assert all(0 <= capacity <= U32_MAX for capacity in capacities)
     operations = 1 + len(capacities)
     retry_copy = REGION_COPY_BYTES + sum(
-        _align8(LABEL_COPY_FIXED + capacity) for capacity in capacities
+        _align8(GLYPH_RUN_COPY_FIXED + capacity) for capacity in capacities
     )
     transaction = (
         UPDATE_ENVELOPE_BYTES
         + REGION_FRAME_BYTES
-        + sum(LABEL_FRAME_FIXED + capacity for capacity in capacities)
+        + sum(GLYPH_RUN_FRAME_FIXED + capacity for capacity in capacities)
     )
     return operations, retry_copy, transaction
 
@@ -129,7 +129,7 @@ def _has_prior_region(
 def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     source = SOURCE.read_text(encoding="utf-8")
 
-    provider = "akashic-tui-rtapt1"
+    provider = "akashic-tui-rtapt"
     assert f"PROVIDED {provider}" in source
     assert len(provider.encode("ascii")) <= 23
     assert not re.search(
@@ -179,9 +179,9 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
             assert f"{offset} +" in definition
     assert "72 CONSTANT _RTAPT-REGION-DEFINE-COPY-SIZE" in source
     assert "88 CONSTANT _RTAPT-REGION-DEFINE-FRAME-BYTES" in source
-    assert "128 CONSTANT _RTAPT-LABEL-DEFINE-COPY-FIXED" in source
-    assert "120 CONSTANT _RTAPT-LABEL-DEFINE-FRAME-FIXED" in source
-    label_copy_fields = {
+    assert "120 CONSTANT _RTAPT-GLYPH-RUN-DEFINE-COPY-FIXED" in source
+    assert "120 CONSTANT _RTAPT-GLYPH-RUN-DEFINE-FRAME-FIXED" in source
+    glyph_run_copy_fields = {
         "OWNER": 0,
         "GENERATION": 8,
         "OBJECT": 16,
@@ -193,14 +193,13 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "BOTTOM": 64,
         "Z": 72,
         "VISIBLE": 80,
-        "RGBA": 88,
-        "H-ALIGN": 96,
-        "V-ALIGN": 104,
-        "ELLIPSIZE": 112,
-        "TEXT-U": 120,
-        "TEXT": 128,
+        "FG-RGBA": 88,
+        "BG-RGBA": 96,
+        "ATTRS": 104,
+        "TEXT-U": 112,
+        "TEXT": 120,
     }
-    for field, offset in label_copy_fields.items():
+    for field, offset in glyph_run_copy_fields.items():
         definition = _definition(source, f"_RTAPT-LD.{field}")
         if offset == 0:
             assert "+" not in definition
@@ -339,20 +338,20 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     target_base = _definition(source, "_RTAPT-TARGET-BASE")
     rich_begin = _definition(source, "RTAPT-RICH-BEGIN")
     region_define = _definition(source, "RTAPT-REGION-DEFINE")
-    label_define = _definition(source, "RTAPT-LABEL-DEFINE")
-    label_body = _definition(source, "_RTAPT-LABEL-DEFINE-BODY")
-    label_geometry = _definition(source, "_RTAPT-LABEL-GEOMETRY?")
+    glyph_run_define = _definition(source, "RTAPT-GLYPH-RUN-DEFINE")
+    glyph_run_body = _definition(source, "_RTAPT-GLYPH-RUN-DEFINE-BODY")
+    glyph_run_geometry = _definition(source, "_RTAPT-GLYPH-RUN-GEOMETRY?")
     unorm32 = _definition(source, "_RTAPT-UNORM32")
-    label_text_span = _definition(source, "_RTAPT-LABEL-TEXT-SPAN?")
-    label_utf8 = _definition(source, "_RTAPT-LABEL-UTF8?")
-    forbidden_byte = _definition(source, "_RTAPT-LABEL-FORBIDDEN-BYTE?")
-    label_scrub = _definition(source, "_RTAPT-LABEL-SCRUB")
-    pending_region = _definition(source, "_RTAPT-LABEL-REGION-PENDING?")
+    glyph_run_text_span = _definition(source, "_RTAPT-GLYPH-RUN-TEXT-SPAN?")
+    glyph_run_utf8 = _definition(source, "_RTAPT-GLYPH-RUN-UTF8?")
+    forbidden_byte = _definition(source, "_RTAPT-GLYPH-RUN-FORBIDDEN-BYTE?")
+    glyph_run_scrub = _definition(source, "_RTAPT-GLYPH-RUN-SCRUB")
+    pending_region = _definition(source, "_RTAPT-GLYPH-RUN-REGION-PENDING?")
     rich_seal = _definition(source, "RTAPT-RICH-SEAL")
     rich_cancel = _definition(source, "RTAPT-RICH-CANCEL")
     candidate_preflight = _definition(source, "_RTAPT-CANDIDATE-PREFLIGHT?")
     prior_region = _definition(source, "_RTAPT-PRIOR-REGION?")
-    label_shape = _definition(source, "_RTAPT-LABEL-COPY-SHAPE?")
+    glyph_run_shape = _definition(source, "_RTAPT-GLYPH-RUN-COPY-SHAPE?")
     cell_begin = _definition(source, "RTAPT-CELL-BEGIN")
     cell_span = _definition(source, "RTAPT-CELL-SPAN-BEGIN")
     cell_write = _definition(source, "RTAPT-CELL-WRITE")
@@ -367,7 +366,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     poll_completion = _definition(source, "_RTAPT-POLL-COMPLETION")
     storage_disjoint = _definition(source, "RTAPT-STORAGE-DISJOINT?")
     pending_clear = _definition(source, "_RTAPT-PENDING-CLEAR")
-    send_label = _definition(source, "_RTAPT-SEND-LABEL")
+    send_glyph_run = _definition(source, "_RTAPT-SEND-GLYPH-RUN")
     send_captured = _definition(source, "_RTAPT-SEND-CAPTURED")
 
     assert "_RTAPT-E.OP-CAP" in captured
@@ -376,9 +375,9 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-REGION-DEFINE-COPY-SIZE" in captured
     assert "_RTAPT-REGION-DEFINE-FRAME-BYTES" in captured
     assert "_RTAPT-OP-REGION-DEFINE" in captured
-    assert "_RTAPT-OP-LABEL-DEFINE" in captured
-    assert "_RTAPT-LABEL-DEFINE-COPY-FIXED" in captured
-    assert "_RTAPT-LABEL-DEFINE-FRAME-FIXED" in captured
+    assert "_RTAPT-OP-GLYPH-RUN-DEFINE" in captured
+    assert "_RTAPT-GLYPH-RUN-DEFINE-COPY-FIXED" in captured
+    assert "_RTAPT-GLYPH-RUN-DEFINE-FRAME-FIXED" in captured
     assert "_RTAPT-ALIGN8?" in captured
     assert "_RTAPT-ZERO-SPAN?" in captured
     assert "_RTAPT-LD.TEXT-U" in captured
@@ -429,64 +428,70 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-O.PENDING-REGIONS" in region_define
     assert not re.search(r"(?<!R)\bPT-REGION-DEFINE\b", region_define)
 
-    # LABEL capture accepts neutral cell geometry, owns a padded retry copy,
+    # GLYPH-RUN capture accepts neutral cell geometry, owns a padded retry copy,
     # and accounts only the exact typed PT frame bytes.  No PT call occurs
     # until the already-sealed candidate is serialized.
-    assert "root-height root-width z visible rgba" in label_define
-    assert "['] _RTAPT-LABEL-DEFINE-BODY CATCH" in label_define
-    assert label_define.index("CATCH") < label_define.index(
-        "_RTAPT-LABEL-SCRUB"
+    assert (
+        "root-height root-width z visible fg-rgba bg-rgba attrs"
+        in glyph_run_define
     )
-    assert not re.search(r"\bPT-LABEL-DEFINE\b", label_define)
-    assert not re.search(r"\bPT-LABEL-DEFINE\b", label_body)
-    assert "_RTAPT-LABEL-FIELDS?" in label_body
-    assert "_RTAPT-LABEL-TEXT-SPAN?" in label_body
-    assert "_RTAPT-LABEL-REGION-PENDING?" in label_body
-    assert "_RTAPT-OBJECT-BASE" in label_body
-    assert "_RTAPT-UTF8-BASE" in label_body
-    assert "_RTAPT-O.PENDING-OBJECTS" in label_body
-    assert "_RTAPT-O.PENDING-OBJECT-HIGH" in label_body
-    assert "_RTAPT-O.PENDING-UTF8" in label_body
-    assert "_RTAPT-LABEL-DEFINE-COPY-FIXED _RTAPT-UADD?" in label_body
-    assert "_RTAPT-ALIGN8?" in label_body
-    assert "_RTAPT-LABEL-DEFINE-FRAME-FIXED _RTAPT-UADD?" in label_body
-    assert "_RTAPT-LD-COPY @ _RTAPT-LD-COPY-U @ 0 FILL" in label_body
-    assert "_RTAPT-LD-TEXT-U @ IF" in label_body
-    assert "_RTAPT-LD-TEXT-U @ MOVE" in label_body
-    fields = label_body.index("_RTAPT-LABEL-FIELDS?")
-    text_span = label_body.index("_RTAPT-LABEL-TEXT-SPAN?")
-    ready = label_body.index("_RTAPT-READY-STATUS")
-    limits = label_body.index("_RTAPT-LABEL-LIMITS")
-    utf8 = label_body.index("_RTAPT-LABEL-UTF8?")
-    capture = label_body.index("_RTAPT-OP-LABEL-DEFINE")
+    assert "['] _RTAPT-GLYPH-RUN-DEFINE-BODY CATCH" in glyph_run_define
+    assert glyph_run_define.index("CATCH") < glyph_run_define.index(
+        "_RTAPT-GLYPH-RUN-SCRUB"
+    )
+    assert not re.search(r"\bPT-GLYPH-RUN-DEFINE\b", glyph_run_define)
+    assert not re.search(r"\bPT-GLYPH-RUN-DEFINE\b", glyph_run_body)
+    assert "_RTAPT-GLYPH-RUN-FIELDS?" in glyph_run_body
+    assert "_RTAPT-LD-FG-RGBA" in glyph_run_body
+    assert "_RTAPT-LD-BG-RGBA" in glyph_run_body
+    assert "_RTAPT-LD-ATTRS" in glyph_run_body
+    assert "_RTAPT-GLYPH-RUN-TEXT-SPAN?" in glyph_run_body
+    assert "_RTAPT-GLYPH-RUN-REGION-PENDING?" in glyph_run_body
+    assert "_RTAPT-OBJECT-BASE" in glyph_run_body
+    assert "_RTAPT-UTF8-BASE" in glyph_run_body
+    assert "_RTAPT-O.PENDING-OBJECTS" in glyph_run_body
+    assert "_RTAPT-O.PENDING-OBJECT-HIGH" in glyph_run_body
+    assert "_RTAPT-O.PENDING-UTF8" in glyph_run_body
+    assert "_RTAPT-GLYPH-RUN-DEFINE-COPY-FIXED _RTAPT-UADD?" in glyph_run_body
+    assert "_RTAPT-ALIGN8?" in glyph_run_body
+    assert "_RTAPT-GLYPH-RUN-DEFINE-FRAME-FIXED _RTAPT-UADD?" in glyph_run_body
+    assert "_RTAPT-LD-COPY @ _RTAPT-LD-COPY-U @ 0 FILL" in glyph_run_body
+    assert "_RTAPT-LD-TEXT-U @ IF" in glyph_run_body
+    assert "_RTAPT-LD-TEXT-U @ MOVE" in glyph_run_body
+    fields = glyph_run_body.index("_RTAPT-GLYPH-RUN-FIELDS?")
+    text_span = glyph_run_body.index("_RTAPT-GLYPH-RUN-TEXT-SPAN?")
+    ready = glyph_run_body.index("_RTAPT-READY-STATUS")
+    limits = glyph_run_body.index("_RTAPT-GLYPH-RUN-LIMITS")
+    utf8 = glyph_run_body.index("_RTAPT-GLYPH-RUN-UTF8?")
+    capture = glyph_run_body.index("_RTAPT-OP-GLYPH-RUN-DEFINE")
     assert fields < text_span < ready < limits < utf8 < capture
-    assert label_body.index("_RTAPT-LD-NEXT-RET !") < label_body.index(
-        "_RTAPT-OP-LABEL-DEFINE"
+    assert glyph_run_body.index("_RTAPT-LD-NEXT-RET !") < glyph_run_body.index(
+        "_RTAPT-OP-GLYPH-RUN-DEFINE"
     )
-    assert label_body.index("0 FILL") < label_body.index("MOVE")
+    assert glyph_run_body.index("0 FILL") < glyph_run_body.index("MOVE")
 
-    # Projection is rooted in integer UIDL geometry.  Visible zero-area or
-    # fully off-root labels fail, while invisible labels are still given a
+    # Projection is rooted in integer cell geometry.  Visible zero-area or
+    # fully off-root glyph_runs fail, while invisible glyph_runs are still given a
     # legal nearest-cell APT rectangle.
-    assert "_RTAPT-LD-ROOT-H" in label_geometry
-    assert "_RTAPT-LD-ROOT-W" in label_geometry
-    assert "_RTAPT-LD-VISIBLE @ IF" in label_geometry
-    visible_guard = label_geometry.index("_RTAPT-LD-VISIBLE @ IF")
-    clamp = label_geometry.index("_RTAPT-LD-COL @ 0 MAX")
+    assert "_RTAPT-LD-ROOT-H" in glyph_run_geometry
+    assert "_RTAPT-LD-ROOT-W" in glyph_run_geometry
+    assert "_RTAPT-LD-VISIBLE @ IF" in glyph_run_geometry
+    visible_guard = glyph_run_geometry.index("_RTAPT-LD-VISIBLE @ IF")
+    clamp = glyph_run_geometry.index("_RTAPT-LD-COL @ 0 MAX")
     assert visible_guard < clamp
-    assert "_RTAPT-LD-HEIGHT @ 0=" in label_geometry
-    assert "_RTAPT-LD-WIDTH @ 0=" in label_geometry
-    assert "_RTAPT-LD-LEFT @ 1+ MAX" in label_geometry
-    assert "_RTAPT-LD-TOP @ 1+ MAX" in label_geometry
-    assert label_geometry.count("_RTAPT-UNORM32") == 4
-    assert "_RTAPT-LD-LEFT @ _RTAPT-LD-RIGHT @ U<" in label_geometry
-    assert "_RTAPT-LD-TOP @ _RTAPT-LD-BOTTOM @ U<" in label_geometry
+    assert "_RTAPT-LD-HEIGHT @ 0=" in glyph_run_geometry
+    assert "_RTAPT-LD-WIDTH @ 0=" in glyph_run_geometry
+    assert "_RTAPT-LD-LEFT @ 1+ MAX" in glyph_run_geometry
+    assert "_RTAPT-LD-TOP @ 1+ MAX" in glyph_run_geometry
+    assert glyph_run_geometry.count("_RTAPT-UNORM32") == 4
+    assert "_RTAPT-LD-LEFT @ _RTAPT-LD-RIGHT @ U<" in glyph_run_geometry
+    assert "_RTAPT-LD-TOP @ _RTAPT-LD-BOTTOM @ U<" in glyph_run_geometry
     assert "_RTAPT-UN-B @ 0= IF 0 EXIT THEN" in unorm32
     assert "_RTAPT-UN-B @ _RTAPT-UN-R @ = IF 0xFFFFFFFF EXIT THEN" in unorm32
     assert "0xFFFFFFFF _RTAPT-UN-R @ /MOD" in unorm32
 
     # UTF-8 is validated locally before the source is copied: scalar-only,
-    # with the APT LABEL NUL/LF/CR exclusions and no borrowed-pointer residue.
+    # with the APT GLYPH-RUN NUL/LF/CR exclusions and no borrowed-pointer residue.
     assert "DUP 0=" in forbidden_byte
     assert "OVER 10 =" in forbidden_byte
     assert "SWAP 13 =" in forbidden_byte
@@ -499,15 +504,15 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "0xF4 =",
         "_RTAPT-LUTF8-CONT?",
     ):
-        assert fragment in label_utf8
-    assert "_RTAPT-BYTE-SPAN-DISJOINT?" in label_text_span
-    assert "_RTAPT-LABEL-UTF8?" not in label_text_span
+        assert fragment in glyph_run_utf8
+    assert "_RTAPT-BYTE-SPAN-DISJOINT?" in glyph_run_text_span
+    assert "_RTAPT-GLYPH-RUN-UTF8?" not in glyph_run_text_span
     assert (
         "_RTAPT-LD-TEXT-U @ 0= IF _RTAPT-LD-TEXT-A @ 0= EXIT THEN"
-        in label_text_span
+        in glyph_run_text_span
     )
-    assert "_RTAPT-LABEL-FORBIDDEN-BYTE?" in label_utf8
-    assert "_RTAPT-LABEL-UTF8?" in label_shape
+    assert "_RTAPT-GLYPH-RUN-FORBIDDEN-BYTE?" in glyph_run_utf8
+    assert "_RTAPT-GLYPH-RUN-UTF8?" in glyph_run_shape
     for scratch in (
         "_RTAPT-LD-TEXT-A",
         "_RTAPT-LD-TEXT-U",
@@ -517,16 +522,16 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "_RTAPT-BSD-U",
         "_RTAPT-BSD-E",
     ):
-        assert f"0 {scratch} !" in label_scrub
+        assert f"0 {scratch} !" in glyph_run_scrub
 
     assert "_RTAPT-MODE-DISPOSITION?" in rich_seal
     assert "RTAPT-UPDATE-SEALED" in rich_seal
     assert "_RTAPT-CANDIDATE-DISCARD" in rich_cancel
 
     assert "_RTAPT-REGION-COPY-SHAPE?" in candidate_preflight
-    assert "_RTAPT-LABEL-COPY-SHAPE?" in candidate_preflight
+    assert "_RTAPT-GLYPH-RUN-COPY-SHAPE?" in candidate_preflight
     assert "_RTAPT-OP-REGION-DEFINE" in candidate_preflight
-    assert "_RTAPT-OP-LABEL-DEFINE" in candidate_preflight
+    assert "_RTAPT-OP-GLYPH-RUN-DEFINE" in candidate_preflight
     assert "_RTAPT-O.REGION-HIGH" in candidate_preflight
     assert "_RTAPT-O.PENDING-REGIONS" in candidate_preflight
     assert "_RTAPT-O.PENDING-OBJECTS" in candidate_preflight
@@ -539,9 +544,10 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-REGION-TARGET-HIGH" not in source
     assert "_RTAPT-OBJECT-TARGET-HIGH" not in source
 
-    fields_validator = _definition(source, "_RTAPT-LABEL-FIELDS?")
+    fields_validator = _definition(source, "_RTAPT-GLYPH-RUN-FIELDS?")
+    assert "_RTAPT-GLYPH-RUN-ATTRS?" in fields_validator
     assert "_RTAPT-LD-PARENT @ IF 0 EXIT THEN" in fields_validator
-    assert "_RTAPT-LD.PARENT @ IF 0 EXIT THEN" in label_shape
+    assert "_RTAPT-LD.PARENT @ IF 0 EXIT THEN" in glyph_run_shape
     assert "_RTAPT-E.OP-COUNT @ 0 ?DO" in pending_region
     assert "_RTAPT-OP-REGION-DEFINE" in pending_region
     for identity in ("OWNER", "GENERATION", "REGION"):
@@ -572,17 +578,18 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-COMMIT-FAILED" in cell_commit
     assert "RTAPT-UPDATE-AWAITING" in cell_commit
     assert "_RTAPT-ACTIVE-OUTPUT" in cell_commit
-    for field in label_copy_fields:
-        assert f"_RTAPT-LD.{field}" in send_label
-    assert "24 RSHIFT 0xFF AND" in send_label
-    assert "16 RSHIFT 0xFF AND" in send_label
-    assert "8 RSHIFT 0xFF AND" in send_label
-    assert "ELSE 0 0 THEN" in send_label
-    assert "PT-LABEL-DEFINE _RTAPT-PT>STATUS" in send_label
+    for field in glyph_run_copy_fields:
+        assert f"_RTAPT-LD.{field}" in send_glyph_run
+    assert send_glyph_run.count("24 RSHIFT 0xFF AND") == 2
+    assert send_glyph_run.count("16 RSHIFT 0xFF AND") == 2
+    assert send_glyph_run.count("8 RSHIFT 0xFF AND") == 2
+    assert "_RTAPT-LD.ATTRS @" in send_glyph_run
+    assert "ELSE 0 0 THEN" in send_glyph_run
+    assert "PT-GLYPH-RUN-DEFINE _RTAPT-PT>STATUS" in send_glyph_run
     assert "_RTAPT-OP-REGION-DEFINE" in send_captured
     assert "_RTAPT-SEND-REGION" in send_captured
-    assert "_RTAPT-OP-LABEL-DEFINE" in send_captured
-    assert "_RTAPT-SEND-LABEL" in send_captured
+    assert "_RTAPT-OP-GLYPH-RUN-DEFINE" in send_captured
+    assert "_RTAPT-SEND-GLYPH-RUN" in send_captured
     assert "PT-TX-ABORT" in abort_open
     assert "_RTAPT-WIRE-REWIND" in abort_open
     assert "_RTAPT-ABORT-OPEN" in commit_failed
@@ -648,7 +655,7 @@ def test_rich_terminal_engine_copies_one_typed_negotiated_limits_snapshot() -> N
         "IMAGE-WIDTH": 88,
         "IMAGE-HEIGHT": 96,
         "PATH-POINTS": 104,
-        "LABEL-BYTES": 112,
+        "GLYPH-RUN-BYTES": 112,
         "UTF8-BYTES": 120,
         "SAMPLES-APPEND": 128,
         "SERIES-HISTORY": 136,
@@ -694,14 +701,16 @@ def test_rich_terminal_engine_copies_one_typed_negotiated_limits_snapshot() -> N
         "_RTAPT-L.LIVE-OWNERS @",
         "_RTAPT-L.OWNER-RECORDS @ U>",
         "_RTAPT-L.UTF8-BYTES @",
-        "_RTAPT-L.LABEL-BYTES @ U<",
+            "_RTAPT-L.GLYPH-RUN-BYTES @ ?DUP IF",
+            "_RTAPT-L.OBJECTS @ 0=",
+            "_RTAPT-L.UTF8-BYTES @ U>",
         "_RTAPT-L.SAMPLES-APPEND @",
         "_RTAPT-L.SERIES-HISTORY @ U>",
         "_RTAPT-L.SAMPLE-SLOTS @ U>",
         "_RTAPT-L.IMAGE-HEIGHT @ _RTAPT-UMUL?",
         "_RTAPT-L.RESOURCE-BYTES @ U>",
         "_RTAPT-L.PATH-POINTS @ 8 _RTAPT-UMUL?",
-        "_RTAPT-L.LABEL-BYTES @ 304 _RTAPT-UADD?",
+        "_RTAPT-L.GLYPH-RUN-BYTES @ 304 _RTAPT-UADD?",
         "_RTAPT-L.SAMPLES-APPEND @ 16 _RTAPT-UMUL?",
         "_RTAPT-LIMIT-FLOOR?",
     ):
@@ -721,11 +730,11 @@ def test_rich_terminal_engine_copies_one_typed_negotiated_limits_snapshot() -> N
         assert f"0 {pointer} !" in pointer_scrub
 
 
-def test_initial_label_plan_preflight_is_exact_and_admission_mutation_free() -> None:
+def test_initial_glyph_run_plan_preflight_is_exact_and_admission_mutation_free() -> None:
     source = SOURCE.read_text(encoding="utf-8")
 
-    assert "112 CONSTANT RTAPT-LABEL-PLAN-SIZE" in source
-    assert "128 CONSTANT RTAPT-LABEL-PLAN-ITEM-SIZE" in source
+    assert "112 CONSTANT RTAPT-GLYPH-RUN-PLAN-SIZE" in source
+    assert "120 CONSTANT RTAPT-GLYPH-RUN-PLAN-ITEM-SIZE" in source
     assert "160 CONSTANT _RTAPT-UPDATE-ENVELOPE-FRAME-BYTES" in source
 
     plan_fields = {
@@ -755,12 +764,11 @@ def test_initial_label_plan_preflight_is_exact_and_admission_mutation_free() -> 
         "ROOT-WIDTH": 56,
         "Z": 64,
         "VISIBLE": 72,
-        "RGBA": 80,
-        "H-ALIGN": 88,
-        "V-ALIGN": 96,
-        "ELLIPSIZE": 104,
-        "TEXT-CAPACITY": 112,
-        "RESERVED": 120,
+        "FG-RGBA": 80,
+        "BG-RGBA": 88,
+        "ATTRS": 96,
+        "TEXT-CAPACITY": 104,
+        "RESERVED": 112,
     }
     for prefix, fields in (("_RTAPT-LP", plan_fields), ("_RTAPT-LPI", item_fields)):
         for field, offset in fields.items():
@@ -771,8 +779,8 @@ def test_initial_label_plan_preflight_is_exact_and_admission_mutation_free() -> 
                 assert f"{offset} +" in definition
 
     header = _definition(source, "_RTAPT-LPF-HEADER?")
-    assert "RTAPT-LABEL-PLAN-SIZE _RTAPT-SPAN?" in header
-    assert "RTAPT-LABEL-PLAN-ITEM-SIZE MOD" in header
+    assert "RTAPT-GLYPH-RUN-PLAN-SIZE _RTAPT-SPAN?" in header
+    assert "RTAPT-GLYPH-RUN-PLAN-ITEM-SIZE MOD" in header
     assert "DUP 0= SWAP _RTAPT-U32? 0= OR" in header
     assert "MSPAN-OVERLAP?" in header
     assert header.count("RTAPT-STORAGE-DISJOINT?") == 2
@@ -786,7 +794,10 @@ def test_initial_label_plan_preflight_is_exact_and_admission_mutation_free() -> 
         "_RTAPT-LPI.HEIGHT @ _RTAPT-U32?",
         "_RTAPT-LPI.WIDTH @ _RTAPT-U32?",
         "_RTAPT-LPI.Z @ _RTAPT-I32?",
-        "_RTAPT-LPI.RGBA @ _RTAPT-U32?",
+        "_RTAPT-LPI.FG-RGBA @ _RTAPT-U32?",
+        "_RTAPT-LPI.BG-RGBA @ _RTAPT-U32?",
+        "_RTAPT-LPI.ATTRS @",
+        "_RTAPT-GLYPH-RUN-ATTRS?",
         "_RTAPT-LPI.TEXT-CAPACITY @ DUP",
         "_RTAPT-LPF-SADD?",
         "_RTAPT-ALIGN8?",
@@ -799,7 +810,7 @@ def test_initial_label_plan_preflight_is_exact_and_admission_mutation_free() -> 
     arithmetic = _definition(source, "_RTAPT-LPF-ARITHMETIC?")
     assert "_RTAPT-REGION-DEFINE-COPY-SIZE _RTAPT-LPF-COPY-BYTES !" in arithmetic
     assert "_RTAPT-LPF-COUNT @ 1 _RTAPT-UADD?" in arithmetic
-    assert "_RTAPT-LABEL-DEFINE-FRAME-FIXED" in arithmetic
+    assert "_RTAPT-GLYPH-RUN-DEFINE-FRAME-FIXED" in arithmetic
     assert "_RTAPT-UPDATE-ENVELOPE-FRAME-BYTES" in arithmetic
     assert "_RTAPT-REGION-DEFINE-FRAME-BYTES +" in arithmetic
 
@@ -849,14 +860,14 @@ def test_initial_label_plan_preflight_is_exact_and_admission_mutation_free() -> 
     object_limit = owner.index("_RTAPT-L.OBJECTS @ U>", object_admission)
     assert "_RTAPT-LPF-LAST-OBJECT @" not in owner[object_admission:object_limit]
 
-    body = _definition(source, "_RTAPT-LABEL-PREFLIGHT-BODY")
+    body = _definition(source, "_RTAPT-GLYPH-RUN-PREFLIGHT-BODY")
     ordered_checks = (
         "_RTAPT-ENGINE-VALID?",
         "_RTAPT-LPF-HEADER?",
         "_RTAPT-LPF-ARITHMETIC?",
         "RTAPT-LIMITS@",
-        "RTAPT-F-INSTRUMENT",
-        "_RTAPT-L.LABEL-BYTES @ U>",
+        "_RTAPT-L.GLYPH-RUN-BYTES @ 0=",
+        "_RTAPT-L.GLYPH-RUN-BYTES @ U>",
         "_RTAPT-L.OPS @ U>",
         "_RTAPT-E.OP-CAP @ U>",
         "_RTAPT-E.COPY-U @ U>",
@@ -868,11 +879,11 @@ def test_initial_label_plan_preflight_is_exact_and_admission_mutation_free() -> 
     positions = [body.index(check) for check in ordered_checks]
     assert positions == sorted(positions)
 
-    public = _definition(source, "RTAPT-LABEL-PREFLIGHT")
-    assert "['] _RTAPT-LABEL-PREFLIGHT-BODY CATCH" in public
+    public = _definition(source, "RTAPT-GLYPH-RUN-PREFLIGHT")
+    assert "['] _RTAPT-GLYPH-RUN-PREFLIGHT-BODY CATCH" in public
     assert "_RTAPT-LPF-SCRUB" in public
 
-    start = source.index("\\  Mutation-free initial LABEL-plan admission")
+    start = source.index("\\  Mutation-free initial GLYPH-RUN-plan admission")
     end = source.index(": RTAPT-UPDATE-STATE@", start)
     preflight = source[start:end]
     for mutation in (
@@ -883,18 +894,18 @@ def test_initial_label_plan_preflight_is_exact_and_admission_mutation_free() -> 
         r"(?m)^\s+RTAPT-OWNER-OPEN\b",
         r"(?m)^\s+RTAPT-RICH-BEGIN\b",
         r"(?m)^\s+RTAPT-REGION-DEFINE\b",
-        r"(?m)^\s+RTAPT-LABEL-DEFINE\b",
+        r"(?m)^\s+RTAPT-GLYPH-RUN-DEFINE\b",
     ):
         assert not re.search(mutation, preflight)
 
 
-def test_label_geometry_projects_integer_cell_edges_exactly() -> None:
-    assert _project_label(
+def test_glyph_run_geometry_projects_integer_cell_edges_exactly() -> None:
+    assert _project_glyph_run(
         2, 10, 3, 20, 24, 80, visible=True
     ) == (0x1FFFFFFF, 0x15555555, 0x5FFFFFFF, 0x35555555)
 
-    # A partially off-root visible label is clipped before normalization.
-    assert _project_label(
+    # A partially off-root visible glyph_run is clipped before normalization.
+    assert _project_glyph_run(
         -2, -3, 4, 7, 24, 80, visible=True
     ) == (0, 0, 0x0CCCCCCC, 0x15555555)
 
@@ -904,23 +915,23 @@ def test_label_geometry_projects_integer_cell_edges_exactly() -> None:
 
 def test_invisible_empty_and_offroot_geometry_stays_wire_legal() -> None:
     first_cell = (0, 0, 0x03333333, 0x0AAAAAAA)
-    assert _project_label(0, 0, 0, 0, 24, 80, visible=False) == first_cell
-    assert _project_label(-999, -999, 0, 0, 24, 80, visible=False) == first_cell
-    assert _project_label(
+    assert _project_glyph_run(0, 0, 0, 0, 24, 80, visible=False) == first_cell
+    assert _project_glyph_run(-999, -999, 0, 0, 24, 80, visible=False) == first_cell
+    assert _project_glyph_run(
         999, 999, 0, 0, 24, 80, visible=False
     ) == (0xFCCCCCCB, 0xF5555554, U32_MAX, U32_MAX)
 
     # The same degenerate/off-root inputs cannot truthfully be made visible.
-    assert _project_label(0, 0, 0, 1, 24, 80, visible=True) is None
-    assert _project_label(24, 0, 1, 1, 24, 80, visible=True) is None
-    assert _project_label(0, 80, 1, 1, 24, 80, visible=True) is None
+    assert _project_glyph_run(0, 0, 0, 1, 24, 80, visible=True) is None
+    assert _project_glyph_run(24, 0, 1, 1, 24, 80, visible=True) is None
+    assert _project_glyph_run(0, 80, 1, 1, 24, 80, visible=True) is None
 
 
-def test_label_region_reference_requires_an_exact_earlier_candidate_region() -> None:
+def test_glyph_run_region_reference_requires_an_exact_earlier_candidate_region() -> None:
     operations = [
         ("region", 7, 3, 2),
         ("region", 7, 3, 100),
-        ("label", 7, 3, 100),
+        ("glyph_run", 7, 3, 100),
     ]
 
     # Sparse IDs stay legal, but high-water membership is not fabricated.
@@ -932,50 +943,50 @@ def test_label_region_reference_requires_an_exact_earlier_candidate_region() -> 
     # Replacement and delta candidates can both use a region they define in
     # that candidate.  A committed-only region remains conservatively
     # unsupported until an exact persistent identity/type ledger exists.
-    replacement = [("region", 7, 3, 42), ("label", 7, 3, 42)]
-    delta = [("region", 7, 3, 101), ("label", 7, 3, 101)]
+    replacement = [("region", 7, 3, 42), ("glyph_run", 7, 3, 42)]
+    delta = [("region", 7, 3, 101), ("glyph_run", 7, 3, 101)]
     assert _has_prior_region(replacement, 1, 7, 3, 42)
     assert _has_prior_region(delta, 1, 7, 3, 101)
-    assert not _has_prior_region([("label", 7, 3, 10)], 0, 7, 3, 10)
+    assert not _has_prior_region([("glyph_run", 7, 3, 10)], 0, 7, 3, 10)
 
 
 def test_mixed_retry_copy_stride_and_frame_accounting_are_exact() -> None:
     ascii_text = b"abc"
     scalar_text = "☃".encode("utf-8")
-    ascii_copy = _label_retry_copy(ascii_text)
-    scalar_copy = _label_retry_copy(scalar_text)
+    ascii_copy = _glyph_run_retry_copy(ascii_text)
+    scalar_copy = _glyph_run_retry_copy(scalar_text)
 
-    assert len(ascii_copy) == 136
-    assert ascii_copy[LABEL_COPY_FIXED : LABEL_COPY_FIXED + 3] == ascii_text
-    assert ascii_copy[LABEL_COPY_FIXED + 3 :] == b"\x00" * 5
-    assert len(scalar_copy) == 136
-    assert scalar_copy[LABEL_COPY_FIXED : LABEL_COPY_FIXED + 3] == scalar_text
-    assert scalar_copy[LABEL_COPY_FIXED + 3 :] == b"\x00" * 5
+    assert len(ascii_copy) == 128
+    assert ascii_copy[GLYPH_RUN_COPY_FIXED : GLYPH_RUN_COPY_FIXED + 3] == ascii_text
+    assert ascii_copy[GLYPH_RUN_COPY_FIXED + 3 :] == b"\x00" * 5
+    assert len(scalar_copy) == 128
+    assert scalar_copy[GLYPH_RUN_COPY_FIXED : GLYPH_RUN_COPY_FIXED + 3] == scalar_text
+    assert scalar_copy[GLYPH_RUN_COPY_FIXED + 3 :] == b"\x00" * 5
 
-    # REGION followed by two LABEL records uses each record's aligned retry
+    # REGION followed by two GLYPH-RUN records uses each record's aligned retry
     # stride, while PRESENT_BEGIN accounts the unpadded typed wire frames.
     offsets = (0, REGION_COPY_BYTES, REGION_COPY_BYTES + len(ascii_copy))
-    assert offsets == (0, 72, 208)
-    assert REGION_COPY_BYTES + len(ascii_copy) + len(scalar_copy) == 344
-    assert _label_frame_bytes(ascii_text) == 123
-    assert _label_frame_bytes(scalar_text) == 123
+    assert offsets == (0, 72, 200)
+    assert REGION_COPY_BYTES + len(ascii_copy) + len(scalar_copy) == 328
+    assert _glyph_run_frame_bytes(ascii_text) == 123
+    assert _glyph_run_frame_bytes(scalar_text) == 123
     assert (
         REGION_FRAME_BYTES
-        + _label_frame_bytes(ascii_text)
-        + _label_frame_bytes(scalar_text)
+        + _glyph_run_frame_bytes(ascii_text)
+        + _glyph_run_frame_bytes(scalar_text)
         == 334
     )
 
-    assert len(_label_retry_copy(b"")) == LABEL_COPY_FIXED
-    assert _label_frame_bytes(b"") == LABEL_FRAME_FIXED
+    assert len(_glyph_run_retry_copy(b"")) == GLYPH_RUN_COPY_FIXED
+    assert _glyph_run_frame_bytes(b"") == GLYPH_RUN_FRAME_FIXED
 
 
-def test_initial_label_plan_accounts_exact_apt1_admission_bytes() -> None:
-    # One empty-capacity LABEL is BEGIN(104) + REGION(88) + LABEL(120)
+def test_initial_glyph_run_plan_accounts_exact_apt1_admission_bytes() -> None:
+    # One empty-capacity GLYPH-RUN is BEGIN(104) + REGION(88) + GLYPH-RUN(120)
     # + COMMIT(56).  The former 288-based formula counted one nonexistent
     # additional 40-byte frame header.
-    assert _initial_label_plan_requirements([0]) == (2, 200, 368)
-    assert _initial_label_plan_requirements([3, 5]) == (3, 344, 496)
+    assert _initial_glyph_run_plan_requirements([0]) == (2, 192, 368)
+    assert _initial_glyph_run_plan_requirements([3, 5]) == (3, 328, 496)
 
     # The reveal is a later empty CONTINUE transaction.  It consumes only its
     # BEGIN/COMMIT envelope and is never summed with the hidden START.
@@ -983,8 +994,8 @@ def test_initial_label_plan_accounts_exact_apt1_admission_bytes() -> None:
     assert UPDATE_ENVELOPE_BYTES < 368
 
     # Terminal eligibility alone cannot prove the caller-owned retry bank.
-    # This concrete Desk profile has 32 op slots and 2304 copy bytes: eighteen
-    # empty LABEL declarations fit the op bank but not the copy bank.
-    operations, retry_copy, _ = _initial_label_plan_requirements([0] * 18)
-    assert operations == 19 <= 32
-    assert retry_copy == 2376 > 2304
+    # This concrete Desk profile has 32 op slots and 2304 copy bytes: nineteen
+    # empty GLYPH_RUN declarations fit the op bank but not the copy bank.
+    operations, retry_copy, _ = _initial_glyph_run_plan_requirements([0] * 19)
+    assert operations == 20 <= 32
+    assert retry_copy == 2352 > 2304

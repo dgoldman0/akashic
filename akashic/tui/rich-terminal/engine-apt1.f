@@ -2,14 +2,14 @@
 \  engine-apt1.f -- RTAPT provider bridge for the neutral RTE facade
 \ =====================================================================
 \
-\  This is the sole mapping between the generic retained-engine ABI and the
+\  This is the sole mapping between the generic retained-engine interface and
 \  concrete APT-1 engine.  It is loaded only by an outer product composition;
 \  UIDL lifecycle code depends on engine.f and never names RTAPT or PT.
 \
 \  Prefix:   RTAPTE- (public), _RTAPTE- (private)
-\  Provider: akashic-tui-rtapte1
+\  Provider: akashic-tui-rtapte
 
-PROVIDED akashic-tui-rtapte1
+PROVIDED akashic-tui-rtapte
 
 REQUIRE engine.f
 REQUIRE apt1-engine.f
@@ -142,8 +142,8 @@ VARIABLE _RTAPTE-LS-STATUS
         _RTAPTE-LS-DST @ _RTE-L.IMAGE-HEIGHT !
     _RTAPTE-LS-SRC @ _RTAPT-L.PATH-POINTS @
         _RTAPTE-LS-DST @ _RTE-L.PATH-POINTS !
-    _RTAPTE-LS-SRC @ _RTAPT-L.LABEL-BYTES @
-        _RTAPTE-LS-DST @ _RTE-L.LABEL-BYTES !
+    _RTAPTE-LS-SRC @ _RTAPT-L.GLYPH-RUN-BYTES @
+        _RTAPTE-LS-DST @ _RTE-L.GLYPH-RUN-BYTES !
     _RTAPTE-LS-SRC @ _RTAPT-L.UTF8-BYTES @
         _RTAPTE-LS-DST @ _RTE-L.UTF8-BYTES !
     _RTAPTE-LS-SRC @ _RTAPT-L.SAMPLES-APPEND @
@@ -169,8 +169,8 @@ VARIABLE _RTAPTE-LS-STATUS
     _RTAPTE-LS-SRC @ RTAPT-LIMITS-VALID? 0= IF
         RTE-S-INVALID _RTAPTE-LIMITS-SCRUB EXIT
     THEN
-    \ This provider revision deliberately uses the neutral record's field
-    \ offsets.  Prove that its feature mapping is identity-compatible, then
+    \ This provider deliberately uses the neutral record's field offsets.
+    \ Prove that its feature mapping is identity-compatible, then
     \ run the complete neutral validator before touching the caller record.
     _RTAPTE-LS-SRC @ _RTAPT-L.FEATURES @ DUP _RTAPTE-FEATURES>RTE <> IF
         RTE-S-INVALID _RTAPTE-LIMITS-SCRUB EXIT
@@ -198,34 +198,33 @@ VARIABLE _RTAPTE-LS-STATUS
     ( owner generation region x y cols rows z flags engine -- status )
     RTAPT-REGION-DEFINE _RTAPTE-STATUS>RTE ;
 
-: _RTAPTE-LABEL-PREFLIGHT  ( plan engine -- status )
+: _RTAPTE-GLYPH-RUN-PREFLIGHT  ( plan engine -- status )
     \ Neutral validation admits sparse monotone object IDs.  Pass the plan
     \ intact so RTAPT keeps ID high-water separate from count-based quota.
-    RTAPT-LABEL-PREFLIGHT _RTAPTE-STATUS>RTE ;
+    RTAPT-GLYPH-RUN-PREFLIGHT _RTAPTE-STATUS>RTE ;
 
-: _RTAPTE-LABEL-DEFINE  ( label engine -- status )
+: _RTAPTE-GLYPH-RUN-DEFINE  ( run engine -- status )
     >R >R
-    R@ _RTE-LABEL.OWNER @
-    R@ _RTE-LABEL.GENERATION @
-    R@ _RTE-LABEL.OBJECT @
-    R@ _RTE-LABEL.REGION @
-    R@ _RTE-LABEL.PARENT @
-    R@ _RTE-LABEL.ROW @
-    R@ _RTE-LABEL.COL @
-    R@ _RTE-LABEL.HEIGHT @
-    R@ _RTE-LABEL.WIDTH @
-    R@ _RTE-LABEL.ROOT-HEIGHT @
-    R@ _RTE-LABEL.ROOT-WIDTH @
-    R@ _RTE-LABEL.Z @
-    R@ _RTE-LABEL.VISIBLE @
-    R@ _RTE-LABEL.RGBA @
-    R@ _RTE-LABEL.H-ALIGN @
-    R@ _RTE-LABEL.V-ALIGN @
-    R@ _RTE-LABEL.ELLIPSIZE @
-    R@ _RTE-LABEL.TEXT-A @
-    R@ _RTE-LABEL.TEXT-U @
+    R@ _RTE-GLYPH-RUN.OWNER @
+    R@ _RTE-GLYPH-RUN.GENERATION @
+    R@ _RTE-GLYPH-RUN.OBJECT @
+    R@ _RTE-GLYPH-RUN.REGION @
+    R@ _RTE-GLYPH-RUN.PARENT @
+    R@ _RTE-GLYPH-RUN.ROW @
+    R@ _RTE-GLYPH-RUN.COL @
+    R@ _RTE-GLYPH-RUN.HEIGHT @
+    R@ _RTE-GLYPH-RUN.WIDTH @
+    R@ _RTE-GLYPH-RUN.ROOT-HEIGHT @
+    R@ _RTE-GLYPH-RUN.ROOT-WIDTH @
+    R@ _RTE-GLYPH-RUN.Z @
+    R@ _RTE-GLYPH-RUN.VISIBLE @
+    R@ _RTE-GLYPH-RUN.FG-RGBA @
+    R@ _RTE-GLYPH-RUN.BG-RGBA @
+    R@ _RTE-GLYPH-RUN.ATTRS @
+    R@ _RTE-GLYPH-RUN.TEXT-A @
+    R@ _RTE-GLYPH-RUN.TEXT-U @
     R> DROP R>
-    RTAPT-LABEL-DEFINE _RTAPTE-STATUS>RTE ;
+    RTAPT-GLYPH-RUN-DEFINE _RTAPTE-STATUS>RTE ;
 
 : _RTAPTE-RETAINED-SEAL  ( rte-disposition engine -- status )
     SWAP _RTAPTE-DISPOSITION>RTAPT 0= IF
@@ -258,8 +257,8 @@ VARIABLE _RTAPTE-LS-STATUS
     OVER _RTE-F.RETAINED-CANCEL-XT @ ['] _RTAPTE-RETAINED-CANCEL = AND
     OVER _RTE-F.OWNER-DROP-XT @ ['] _RTAPTE-OWNER-DROP = AND
     OVER _RTE-F.LIMITS-XT @ ['] _RTAPTE-LIMITS@ = AND
-    OVER _RTE-F.LABEL-DEF-XT @ ['] _RTAPTE-LABEL-DEFINE = AND
-    OVER _RTE-F.LABEL-PREFLIGHT-XT @ ['] _RTAPTE-LABEL-PREFLIGHT = AND
+    OVER _RTE-F.GLYPH-RUN-DEF-XT @ ['] _RTAPTE-GLYPH-RUN-DEFINE = AND
+    OVER _RTE-F.GLYPH-RUN-PREFLIGHT-XT @ ['] _RTAPTE-GLYPH-RUN-PREFLIGHT = AND
     OVER _RTE-F.UPDATE-STATE-XT @ ['] _RTAPTE-UPDATE-STATE@ = AND
     NIP ;
 
@@ -272,8 +271,8 @@ VARIABLE _RTAPTE-I-FACADE
 
 : _RTAPTE-INIT-BODY  ( engine facade -- status )
     _RTAPTE-I-FACADE ! _RTAPTE-I-ENGINE !
-    RTE-LABEL-PLAN-SIZE RTAPT-LABEL-PLAN-SIZE <>
-    RTE-LABEL-PLAN-ITEM-SIZE RTAPT-LABEL-PLAN-ITEM-SIZE <> OR IF
+    RTE-GLYPH-RUN-PLAN-SIZE RTAPT-GLYPH-RUN-PLAN-SIZE <>
+    RTE-GLYPH-RUN-PLAN-ITEM-SIZE RTAPT-GLYPH-RUN-PLAN-ITEM-SIZE <> OR IF
         RTE-S-INVALID EXIT
     THEN
     _RTAPTE-I-FACADE @ RTE-FACADE-SIZE _RTE-SPAN? 0= IF
@@ -287,7 +286,7 @@ VARIABLE _RTAPTE-I-FACADE
     THEN
 
     _RTAPTE-I-FACADE @ RTE-FACADE-SIZE 0 FILL
-    _RTE-ABI _RTAPTE-I-FACADE @ _RTE-F.ABI !
+    0 _RTAPTE-I-FACADE @ _RTE-F.RESERVED !
     RTE-FACADE-SIZE _RTAPTE-I-FACADE @ _RTE-F.SIZE !
     _RTAPTE-I-FACADE @ DUP _RTE-F.SELF !
     _RTAPTE-I-ENGINE @ _RTAPTE-I-FACADE @ _RTE-F.CONTEXT !
@@ -304,9 +303,9 @@ VARIABLE _RTAPTE-I-FACADE
         _RTAPTE-I-FACADE @ _RTE-F.RETAINED-CANCEL-XT !
     ['] _RTAPTE-OWNER-DROP _RTAPTE-I-FACADE @ _RTE-F.OWNER-DROP-XT !
     ['] _RTAPTE-LIMITS@ _RTAPTE-I-FACADE @ _RTE-F.LIMITS-XT !
-    ['] _RTAPTE-LABEL-DEFINE _RTAPTE-I-FACADE @ _RTE-F.LABEL-DEF-XT !
-    ['] _RTAPTE-LABEL-PREFLIGHT
-        _RTAPTE-I-FACADE @ _RTE-F.LABEL-PREFLIGHT-XT !
+    ['] _RTAPTE-GLYPH-RUN-DEFINE _RTAPTE-I-FACADE @ _RTE-F.GLYPH-RUN-DEF-XT !
+    ['] _RTAPTE-GLYPH-RUN-PREFLIGHT
+        _RTAPTE-I-FACADE @ _RTE-F.GLYPH-RUN-PREFLIGHT-XT !
     ['] _RTAPTE-UPDATE-STATE@
         _RTAPTE-I-FACADE @ _RTE-F.UPDATE-STATE-XT !
     _RTE-MAGIC _RTAPTE-I-FACADE @ _RTE-F.MAGIC !
