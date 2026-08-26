@@ -438,6 +438,19 @@ desired generations. Promotion stores each record `LIVE` and publishes the
 backend live epoch last. This is output bookkeeping over neutral UIDL—not a
 second scene API or an application recovery layer.
 
+A rejected retained-only output follows RETAINED-1's authoritative retry
+exception. RTAPT rewinds it to `SEALED` plus `STALE` without discarding the
+candidate; hidden and reveal settlement therefore re-offer that exact output and
+do not quarantine. If a defensive observation instead finds `IDLE` plus
+`STALE`, the sealed retry authority is gone. Hidden settlement records `STALE`
+without clearing the desired candidate, identity mapping, or negotiated
+eligibility, then retires the exact admitted owner before re-admission. Reveal
+settlement never promotes that result `LIVE`: it restarts at cohort record zero,
+retires every staged owner through the ordinary tombstone-proven drop path, and
+rebuilds from authoritative desired state. `INVALID` and `SESSION_LOST` remain
+terminal. This recovery does not yet change local `CAPACITY`, `SOURCE`, or other
+per-binding refusal policy.
+
 The lower UIDL layer now supplies the first neutral semantic snapshot
 substrate independently of this adapter. `ED.SEMANTICS` selects a per-element
 caller-bounded snapshot hook, and `UIDL-SNAPSHOT-SIZE` /
@@ -1216,7 +1229,10 @@ quotas, and complete START arithmetic before `OWNER_OPEN`. The lifecycle driver
 selects a complete deep-valid candidate together with private, retry-stable
 identities before negotiation, and separately records terminal-negotiated
 eligibility when the current limits permit it. A refusal preserves the selected
-candidate and mapping. The unified `RTAPTSCB` bridge admits one optional
+candidate and mapping. A retained-only wire rejection also preserves eligibility
+and either re-offers the provider-retained sealed candidate or retires admitted
+owners before rebuilding it; this does not yet cover settled local capacity or
+source refusal. The unified `RTAPTSCB` bridge admits one optional
 immutable, caller-bounded neutral output producer, and the APT-1 composition now
 binds the UIDL driver to that seam. Its callbacks receive only the exact observed
 screen columns, rows, monotone geometry generation, and a composition-selected
@@ -1386,6 +1402,10 @@ The blocking Akashic correctness conditions for that journey are:
 4. per-binding source, representation, or capacity refusal disables or retries
    only that retained materialization while the complete CELL path remains
    usable. Only structural/session loss may poison the unified publisher.
+
+The current lifecycle contains the bounded transitions for conditions 1 through
+3. Condition 4 and the real guest-to-compositor journey below remain blocking;
+rejection recovery alone does not enable the production retained policy.
 
 After those conditions hold, a focused development composition must execute the
 real initial CELL transaction, discovery, owner admission, hidden

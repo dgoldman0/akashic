@@ -330,11 +330,13 @@ aligned, pointer-free retry record, maintains exact active/hidden/pending object
 and UTF-8 ledgers, and commits it through the typed PT LABEL writer.
 
 The lifecycle driver now retains the admitted pointer-free attempt through
-capture and settlement and correlates owner retirement. The next blocking slice
-is not another candidate or semantic family: it is the first visible checkpoint
-defined by `AKASHIC-RICH-TERMINAL.md`. That checkpoint must correct count quota
-versus sparse-ID high-water, late-discovery renegotiation, recoverable
-retained-only rejection, and CELL-preserving per-binding refusal, then prove the
-root-region-plus-LABEL composite reaches physical pixels. None of that moves
-scene ownership, output choice, or renderer-specific state into UIDL, UIDL-TUI,
-Desk, or applets.
+capture and settlement and correlates owner retirement. Rejected retained-only
+output is now recovered from the provider's retained `SEALED` candidate, or—if
+that retry authority is defensively observed gone—from authoritative desired
+state after exact owner retirement. Count quota versus sparse-ID high-water and
+late-discovery renegotiation are likewise corrected. The remaining blocking
+slice is not another candidate or semantic family: it is CELL-preserving
+per-binding refusal followed by the first visible checkpoint defined by
+`AKASHIC-RICH-TERMINAL.md`, where the root-region-plus-LABEL composite reaches
+physical pixels. None of that moves scene ownership, output choice, or
+renderer-specific state into UIDL, UIDL-TUI, Desk, or applets.

@@ -3536,6 +3536,25 @@ VARIABLE _RTERM-MS-DISCOVERY-STATUS
         _RTERM-MS-BACKEND @ _RTERM-B.CAPACITY @ U<
     0 _RTERM-MS-RESULT! ;
 
+: _RTERM-MS-SEALED-STALE?  ( -- flag )
+    _RTERM-MS-UPDATE-STATE @ RTE-UPDATE-SEALED =
+    _RTERM-MS-UPDATE-STATUS @ RTERM-S-STALE = AND ;
+
+: _RTERM-MS-IDLE-STALE?  ( -- flag )
+    _RTERM-MS-UPDATE-STATE @ RTE-UPDATE-IDLE =
+    _RTERM-MS-UPDATE-STATUS @ RTERM-S-STALE = AND ;
+
+: _RTERM-MS-HIDDEN-OUTPUT  ( -- )
+    _RTERM-MAT-PHASE-HIDDEN-SEALED _RTERM-MS-MAT @ _RTERM-M.PHASE !
+    RTERM-S-OK 0 -1 _RTERM-MS-RESULT! ;
+
+: _RTERM-MS-HIDDEN-REJECTED  ( -- )
+    \ IDLE+STALE no longer owns the sealed provider candidate.  Preserve the
+    \ desired selector, mapping, and eligibility, but retire the exact admitted
+    \ owner before the cohort can admit that desired generation again.
+    RTERM-S-STALE _RTERM-MS-RECORD @ _RTERM-R.LAST-STATUS !
+    _RTERM-MS-BEGIN-RESTART-DROP ;
+
 : _RTERM-MS-HIDDEN-STEP  ( -- )
     _RTERM-MS-ASSOCIATION-LOAD? 0= IF
         RTERM-S-INVALID _RTERM-MS-DROP-FAIL EXIT
@@ -3550,14 +3569,23 @@ VARIABLE _RTERM-MS-DISCOVERY-STATUS
             THEN DROP
             _RTERM-MS-BEGIN-RESTART-DROP EXIT
         THEN
-        _RTERM-MAT-PHASE-HIDDEN-SEALED _RTERM-MS-MAT @ _RTERM-M.PHASE !
-        RTERM-S-OK 0 -1 _RTERM-MS-RESULT! EXIT
+        \ A rejected retained-only output is reported as SEALED+STALE while
+        \ the provider retains its exact candidate.  Record the refusal and
+        \ re-offer it; no cancel, rebuild, or quarantine is authorized.
+        _RTERM-MS-SEALED-STALE? IF
+            RTERM-S-STALE _RTERM-MS-RECORD @ _RTERM-R.LAST-STATUS !
+            _RTERM-MS-HIDDEN-OUTPUT EXIT
+        THEN
+        _RTERM-MS-HIDDEN-OUTPUT EXIT
     THEN
     _RTERM-MS-UPDATE-STATE @ DUP RTE-UPDATE-PUBLISHING =
     SWAP RTE-UPDATE-AWAITING = OR IF
         _RTERM-MAT-PHASE-HIDDEN-AWAITING
             _RTERM-MS-MAT @ _RTERM-M.PHASE !
         RTERM-S-OK -1 0 _RTERM-MS-RESULT! EXIT
+    THEN
+    _RTERM-MS-IDLE-STALE? IF
+        _RTERM-MS-HIDDEN-REJECTED EXIT
     THEN
     _RTERM-MS-UPDATE-STATE @ RTE-UPDATE-IDLE =
     _RTERM-MS-UPDATE-STATUS @ RTERM-S-OK = AND IF
@@ -3612,6 +3640,27 @@ VARIABLE _RTERM-MS-DISCOVERY-STATUS
     LOOP
     _RTERM-MV-OPEN-COUNT @ 0> ;
 
+: _RTERM-MS-NOTE-STAGED-STALE  ( -- )
+    _RTERM-MS-BACKEND @ _RTERM-B.CAPACITY @ 0 ?DO
+        I _RTERM-MS-BACKEND @ _RTERM-RECORD-AT
+        DUP _RTERM-R.MAT-STATE @ _RTERM-MAT-ST-STAGED = IF
+            RTERM-S-STALE SWAP _RTERM-R.LAST-STATUS !
+        ELSE DROP THEN
+    LOOP ;
+
+: _RTERM-MS-REVEAL-OUTPUT  ( -- )
+    _RTERM-MAT-PHASE-REVEAL-SEALED _RTERM-MS-MAT @ _RTERM-M.PHASE !
+    RTERM-S-OK 0 -1 _RTERM-MS-RESULT! ;
+
+: _RTERM-MS-REVEAL-REJECTED  ( -- )
+    \ An IDLE provider has discarded the reveal candidate, so promotion is
+    \ forbidden.  Start at record zero with persistent restart authority; the
+    \ ordinary cohort path retires every staged owner before rebuilding them.
+    _RTERM-MS-NOTE-STAGED-STALE
+    _RTERM-MS-START-EPOCH
+    _RTERM-MS-REQUEST-RESTART
+    RTERM-S-OK -1 0 _RTERM-MS-RESULT! ;
+
 : _RTERM-MS-PROMOTE-REVEAL  ( -- )
     _RTERM-MS-REVEAL-PROMOTABLE? 0= IF
         RTERM-S-INVALID _RTERM-MS-DROP-FAIL EXIT
@@ -3646,14 +3695,22 @@ VARIABLE _RTERM-MS-DISCOVERY-STATUS
             _RTERM-MS-REQUEST-RESTART
             RTERM-S-OK -1 0 _RTERM-MS-RESULT! EXIT
         THEN
-        _RTERM-MAT-PHASE-REVEAL-SEALED _RTERM-MS-MAT @ _RTERM-M.PHASE !
-        RTERM-S-OK 0 -1 _RTERM-MS-RESULT! EXIT
+        \ A retained-only rejection leaves this exact sealed reveal candidate
+        \ retryable.  Re-offer it and keep every staged owner non-LIVE.
+        _RTERM-MS-SEALED-STALE? IF
+            _RTERM-MS-NOTE-STAGED-STALE
+            _RTERM-MS-REVEAL-OUTPUT EXIT
+        THEN
+        _RTERM-MS-REVEAL-OUTPUT EXIT
     THEN
     _RTERM-MS-UPDATE-STATE @ DUP RTE-UPDATE-PUBLISHING =
     SWAP RTE-UPDATE-AWAITING = OR IF
         _RTERM-MAT-PHASE-REVEAL-AWAITING
             _RTERM-MS-MAT @ _RTERM-M.PHASE !
         RTERM-S-OK -1 0 _RTERM-MS-RESULT! EXIT
+    THEN
+    _RTERM-MS-IDLE-STALE? IF
+        _RTERM-MS-REVEAL-REJECTED EXIT
     THEN
     _RTERM-MS-UPDATE-STATE @ RTE-UPDATE-IDLE =
     _RTERM-MS-UPDATE-STATUS @ RTERM-S-OK = AND IF

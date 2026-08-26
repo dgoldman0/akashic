@@ -1137,6 +1137,10 @@ def test_materializer_captures_and_settles_hidden_work_with_rescan() -> None:
     prepare = _definition(source, "_RTERM-MS-PREPARE-OPEN")
     hidden = _definition(source, "_RTERM-MS-HIDDEN-STEP")
     staged = _definition(source, "_RTERM-MS-STAGE-HIDDEN")
+    sealed_stale = _definition(source, "_RTERM-MS-SEALED-STALE?")
+    idle_stale = _definition(source, "_RTERM-MS-IDLE-STALE?")
+    hidden_output = _definition(source, "_RTERM-MS-HIDDEN-OUTPUT")
+    rejected = _definition(source, "_RTERM-MS-HIDDEN-REJECTED")
 
     for gate in (
         "_RTERM-MAT-PHASE-OPEN <>",
@@ -1189,19 +1193,47 @@ def test_materializer_captures_and_settles_hidden_work_with_rescan() -> None:
     sealed = prepare.index("_RTERM-MAT-PHASE-HIDDEN-SEALED", payload_clear)
     assert inner_catch < recover_call < attempt_clean < payload_clear < sealed
 
+    assert "RTE-UPDATE-SEALED =" in sealed_stale
+    assert "RTERM-S-STALE = AND" in sealed_stale
+    assert "RTE-UPDATE-IDLE =" in idle_stale
+    assert "RTERM-S-STALE = AND" in idle_stale
+    assert "_RTERM-MAT-PHASE-HIDDEN-SEALED" in hidden_output
+    assert "RTERM-S-OK 0 -1 _RTERM-MS-RESULT!" in hidden_output
+
+    rejected_status = rejected.index(
+        "RTERM-S-STALE _RTERM-MS-RECORD @ _RTERM-R.LAST-STATUS !"
+    )
+    rejected_drop = rejected.index(
+        "_RTERM-MS-BEGIN-RESTART-DROP", rejected_status
+    )
+    assert rejected_status < rejected_drop
+    for preserved in (
+        "_RTERM-ELIGIBILITY-CLEAR",
+        "_RTERM-R.CANDIDATE !",
+        "_RTERM-R.ELIGIBLE !",
+        "_RTERM-R.OBJECT-HIGH !",
+        "_RTERM-R.DISCOVERY-RETRY",
+    ):
+        assert preserved not in rejected
+    assert "_RTERM-MS-DROP-FAIL" not in rejected
+
     sealed_state = hidden.index("RTE-UPDATE-SEALED =")
     cancel = hidden.index("_RTERM-MS-TRY-CANCEL", sealed_state)
     restart_drop = hidden.index("_RTERM-MS-BEGIN-RESTART-DROP", cancel)
-    stable_output = hidden.index(
-        "_RTERM-MAT-PHASE-HIDDEN-SEALED", restart_drop
-    )
+    retryable = hidden.index("_RTERM-MS-SEALED-STALE?", restart_drop)
+    retry_status = hidden.index("_RTERM-R.LAST-STATUS !", retryable)
+    stable_output = hidden.index("_RTERM-MS-HIDDEN-OUTPUT", retry_status)
     publishing = hidden.index("RTE-UPDATE-PUBLISHING", stable_output)
     awaiting = hidden.index("_RTERM-MAT-PHASE-HIDDEN-AWAITING", publishing)
-    idle = hidden.index("RTE-UPDATE-IDLE =", awaiting)
+    retry_lost = hidden.index("_RTERM-MS-IDLE-STALE?", awaiting)
+    rejected_call = hidden.index("_RTERM-MS-HIDDEN-REJECTED", retry_lost)
+    idle = hidden.index("RTE-UPDATE-IDLE =", rejected_call)
     request_restart = hidden.index("_RTERM-MS-REQUEST-RESTART", idle)
     settle = hidden.index("_RTERM-MS-STAGE-HIDDEN", request_restart)
-    assert sealed_state < cancel < restart_drop < stable_output
-    assert stable_output < publishing < awaiting < idle < request_restart < settle
+    assert sealed_state < cancel < restart_drop < retryable < retry_status
+    assert retry_status < stable_output < publishing < awaiting < retry_lost
+    assert retry_lost < rejected_call < idle < request_restart < settle
+    assert "_RTERM-MS-DROP-FAIL" not in hidden[retryable:publishing]
     for drift in (
         "_RTERM-MS-RESTART?",
         "_RTERM-MS-SURFACE=? 0= OR",
@@ -1227,6 +1259,9 @@ def test_materializer_reveals_zero_op_cohort_and_promotes_live_last() -> None:
     prepare = _definition(source, "_RTERM-MS-PREPARE-REVEAL")
     reveal = _definition(source, "_RTERM-MS-REVEAL-STEP")
     promote = _definition(source, "_RTERM-MS-PROMOTE-REVEAL")
+    note_staged = _definition(source, "_RTERM-MS-NOTE-STAGED-STALE")
+    reveal_output = _definition(source, "_RTERM-MS-REVEAL-OUTPUT")
+    rejected = _definition(source, "_RTERM-MS-REVEAL-REJECTED")
 
     complete = cohort.rindex("_RTERM-B.CAPACITY @ U< IF")
     started = cohort.index("_RTERM-MAT-F-STARTED AND IF", complete)
@@ -1275,13 +1310,43 @@ def test_materializer_reveals_zero_op_cohort_and_promotes_live_last() -> None:
     cancel = reveal.index("_RTERM-MS-TRY-CANCEL", current)
     rescan = reveal.index("0 _RTERM-MS-CLEAR-ASSOCIATION", cancel)
     restart = reveal.index("_RTERM-MS-REQUEST-RESTART", rescan)
-    stable_output = reveal.index("_RTERM-MAT-PHASE-REVEAL-SEALED", restart)
+    retryable = reveal.index("_RTERM-MS-SEALED-STALE?", restart)
+    noted = reveal.index("_RTERM-MS-NOTE-STAGED-STALE", retryable)
+    stable_output = reveal.index("_RTERM-MS-REVEAL-OUTPUT", noted)
     publishing = reveal.index("RTE-UPDATE-PUBLISHING", stable_output)
     awaiting = reveal.index("_RTERM-MAT-PHASE-REVEAL-AWAITING", publishing)
-    idle = reveal.index("RTE-UPDATE-IDLE =", awaiting)
+    retry_lost = reveal.index("_RTERM-MS-IDLE-STALE?", awaiting)
+    rejected_call = reveal.index("_RTERM-MS-REVEAL-REJECTED", retry_lost)
+    idle = reveal.index("RTE-UPDATE-IDLE =", rejected_call)
     promotion = reveal.index("_RTERM-MS-PROMOTE-REVEAL", idle)
     assert sealed_state < current < cancel < rescan < restart < stable_output
-    assert stable_output < publishing < awaiting < idle < promotion
+    assert restart < retryable < noted < stable_output
+    assert stable_output < publishing < awaiting < retry_lost
+    assert retry_lost < rejected_call < idle < promotion
+    assert "_RTERM-MS-DROP-FAIL" not in reveal[retryable:publishing]
+
+    assert "_RTERM-B.CAPACITY @ 0 ?DO" in note_staged
+    staged_state = note_staged.index("_RTERM-MAT-ST-STAGED = IF")
+    stale_status = note_staged.index("RTERM-S-STALE", staged_state)
+    status_store = note_staged.index("_RTERM-R.LAST-STATUS !", stale_status)
+    assert staged_state < stale_status < status_store
+    assert "_RTERM-MAT-PHASE-REVEAL-SEALED" in reveal_output
+    assert "RTERM-S-OK 0 -1 _RTERM-MS-RESULT!" in reveal_output
+
+    note = rejected.index("_RTERM-MS-NOTE-STAGED-STALE")
+    restart_zero = rejected.index("_RTERM-MS-START-EPOCH", note)
+    persist_restart = rejected.index("_RTERM-MS-REQUEST-RESTART", restart_zero)
+    more_work = rejected.index("RTERM-S-OK -1 0 _RTERM-MS-RESULT!", persist_restart)
+    assert note < restart_zero < persist_restart < more_work
+    for forbidden in (
+        "_RTERM-MS-PROMOTE-REVEAL",
+        "_RTERM-MS-QUARANTINE",
+        "_RTERM-ELIGIBILITY-CLEAR",
+    ):
+        assert forbidden not in rejected
+    staged_in_cohort = cohort.index("_RTERM-MAT-ST-STAGED = IF")
+    retired = cohort.index("_RTERM-MS-ASSOCIATE-DROP", staged_in_cohort)
+    assert staged_in_cohort < retired
 
     # PROMOTABLE is a complete validation pass before the mutation loop.
     validated = promote.index("_RTERM-MS-REVEAL-PROMOTABLE?")
@@ -1305,11 +1370,16 @@ def test_materializer_dispatches_each_persistent_phase_without_global_surface_ga
     dispatch = _definition(source, "_RTERM-MS-DISPATCH")
 
     observed = step.index("RTE-UPDATE-STATE@")
+    session_lost = step.index("RTERM-S-SESSION-LOST =", observed)
+    invalid = step.index("RTERM-S-INVALID = OR", session_lost)
+    quarantine = step.index("_RTERM-MS-QUARANTINE", invalid)
+    recoverable_stale = step.index("RTERM-S-STALE = OR 0= IF", quarantine)
     cold = step.index("_RTERM-EPOCH-COLD = IF", observed)
     live = step.index("_RTERM-EPOCH-LIVE = IF", cold)
     mat = step.index("_RTERM-B.MAT _RTERM-MS-MAT !", live)
     dispatched = step.index("_RTERM-MS-DISPATCH", mat)
-    assert observed < cold < live < mat < dispatched
+    assert observed < session_lost < invalid < quarantine < recoverable_stale
+    assert recoverable_stale < cold < live < mat < dispatched
     assert "_RTERM-MS-SURFACE=?" not in step
 
     phase_handlers = (
