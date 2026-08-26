@@ -8,7 +8,7 @@ import struct
 import sys
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -65,6 +65,7 @@ from akashic_tui import (  # noqa: E402
     _parser,
     _rich_terminal_server_arguments,
     _rich_terminal_smoke_ready,
+    _session_server_command,
     _smoke_limits,
     _requires_megapad_networking,
     _requires_megapad_rich_terminal,
@@ -74,9 +75,11 @@ from akashic_tui import (  # noqa: E402
     _with_megapad_networking,
     _with_megapad_rich_terminal,
     _with_mp64fs_vfs_platform,
+    accept_physical_desktop,
     build_image,
     dependency_closure,
     dependency_order,
+    serve,
     smoke,
 )
 from diskutil import (  # noqa: E402
@@ -1750,6 +1753,111 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
     assert MEGAPAD_RICH_TERMINAL_MODULE not in rich_closure
 
 
+def test_desktop_apt1_inherits_canonical_pad_and_daybook_launches() -> None:
+    pad_launch = """CREATE _boot-pad-desc APP-DESC ALLOT
+_boot-pad-desc PAD-ENTRY
+_boot-pad-desc DESK-QUEUE-LAUNCH"""
+    daybook_launch = """CREATE _boot-daybook-desc APP-DESC ALLOT
+_boot-daybook-desc DAYBOOK-ENTRY
+_boot-daybook-desc DESK-QUEUE-LAUNCH"""
+
+    baseline = PROFILES["desktop"].autoexec
+    apt1 = PROFILES["desktop-apt1"].autoexec
+    for autoexec in (baseline, apt1):
+        assert autoexec.count(pad_launch) == 1
+        assert autoexec.count(daybook_launch) == 1
+
+
+def test_session_server_command_is_the_serve_policy_source() -> None:
+    profile_name = "desktop-apt1"
+    image = Path("desktop-apt1.img")
+    socket_path = "/tmp/desktop-apt1.sock"
+    baseline_autoexec = PROFILES["desktop"].autoexec
+    expected = [
+        sys.executable,
+        str(MEGAPAD_ROOT / "session_server.py"),
+        "--bios",
+        str(MEGAPAD_ROOT / "bios.asm"),
+        "--storage",
+        str(image),
+        "--socket",
+        socket_path,
+        "--cols",
+        "100",
+        "--rows",
+        "32",
+        "--batch-steps",
+        "500000",
+        "--ext-mem-mib",
+        "128",
+        *_rich_terminal_server_arguments(PROFILES[profile_name]),
+    ]
+    assert _session_server_command(
+        profile_name,
+        image,
+        socket_path=socket_path,
+        cols=100,
+        rows=32,
+    ) == expected
+
+    with patch(
+        "akashic_tui._session_server_command", return_value=expected
+    ) as command_builder, patch("akashic_tui.os.execv") as execv:
+        serve(
+            profile_name,
+            image,
+            socket_path=socket_path,
+            cols=100,
+            rows=32,
+        )
+    command_builder.assert_called_once_with(
+        profile_name,
+        image,
+        socket_path=socket_path,
+        cols=100,
+        rows=32,
+        ext_mem_mib=128,
+        nic_tap=None,
+        audio=False,
+    )
+    execv.assert_called_once_with(sys.executable, expected)
+    assert PROFILES["desktop"].autoexec == baseline_autoexec
+
+
+def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
+    tmp_path: Path,
+) -> None:
+    artifact_root = tmp_path / "physical-evidence"
+    font = tmp_path / "font.ttf"
+    args = _parser().parse_args(
+        [
+            "accept",
+            "--profile",
+            "desktop-apt1",
+            "--socket",
+            "/tmp/physical.sock",
+            "--artifact-root",
+            str(artifact_root),
+            "--timeout",
+            "37.5",
+            "--font",
+            str(font),
+            "--font-size",
+            "21",
+        ]
+    )
+    assert args.command == "accept"
+    assert args.profile == "desktop-apt1"
+    assert args.socket == "/tmp/physical.sock"
+    assert args.artifact_root == artifact_root
+    assert args.timeout == 37.5
+    assert args.font == font
+    assert args.font_size == 21
+
+    with pytest.raises(SystemExit):
+        _parser().parse_args(["accept", "--profile", "desktop"])
+
+
 def test_desktop_apt1_build_is_an_external_additive_composition(
     tmp_path: Path,
 ) -> None:
@@ -1832,7 +1940,7 @@ def test_rich_terminal_consumers_select_boot_module_not_source_dependency() -> N
         )
 
 
-def test_desktop_apt1_launchers_transfer_the_same_host_policy() -> None:
+def test_desktop_apt1_server_command_transfers_the_host_policy() -> None:
     baseline = PROFILES["desktop"]
     profile = PROFILES["desktop-apt1"]
     assert _rich_terminal_server_arguments(baseline) == []
@@ -1841,23 +1949,14 @@ def test_desktop_apt1_launchers_transfer_the_same_host_policy() -> None:
     assert json.loads(server_arguments[1]) == (
         profile.rich_terminal.host_policy.to_dict()
     )
-
-    with patch(
-        "akashic_tui.MachineSession.from_bios",
-        side_effect=RuntimeError("stop after configuration"),
-    ) as from_bios:
-        with pytest.raises(RuntimeError, match="stop after configuration"):
-            smoke(
-                "desktop-apt1",
-                Path("unused.img"),
-                cols=100,
-                rows=32,
-                max_steps=1,
-                timeout=1.0,
-            )
-    assert from_bios.call_args.kwargs["rich_terminal"] == (
-        profile.rich_terminal.configuration(100, 32)
+    command = _session_server_command(
+        "desktop-apt1",
+        Path("desktop-apt1.img"),
+        socket_path="/tmp/desktop-apt1.sock",
+        cols=100,
+        rows=32,
     )
+    assert command[-len(server_arguments) :] == server_arguments
 
 
 def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
@@ -1937,6 +2036,130 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     )
     assert configuration.host_limits.egress.high_bytes == 2 * publication_bytes
     assert configuration.host_limits.egress.low_bytes == publication_bytes
+
+
+def test_retained_smoke_refuses_before_constructing_a_machine(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with patch("akashic_tui.MachineSession.from_bios") as from_bios:
+        assert not smoke(
+            "desktop-apt1",
+            Path("unused.img"),
+            cols=100,
+            rows=32,
+            max_steps=1,
+            timeout=1.0,
+        )
+    from_bios.assert_not_called()
+    output = capsys.readouterr().out
+    assert "retained output requires the physical acceptance viewer" in output
+    assert "use the accept command" in output
+
+
+@pytest.mark.parametrize("runner_fails", (False, True))
+def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    runner_fails: bool,
+) -> None:
+    class AcceptanceError(RuntimeError):
+        pass
+
+    runner_calls = []
+
+    def run_acceptance(*args, **kwargs):
+        runner_calls.append((args, kwargs))
+        if runner_fails:
+            raise AcceptanceError("viewer journey failed")
+        return SimpleNamespace(manifest_path=tmp_path / "manifest.json")
+
+    acceptance_module = ModuleType("rich_terminal_desktop_acceptance")
+    acceptance_module.PhysicalDesktopAcceptanceError = AcceptanceError
+    acceptance_module.run_physical_desktop_acceptance = run_acceptance
+    monkeypatch.setitem(
+        sys.modules,
+        "rich_terminal_desktop_acceptance",
+        acceptance_module,
+    )
+
+    server_events = []
+
+    class Server:
+        pid = 4242
+
+        def poll(self):
+            server_events.append("poll")
+            return None
+
+        def terminate(self):
+            server_events.append("terminate")
+
+        def wait(self, *, timeout):
+            server_events.append(("wait", timeout))
+            return 0
+
+    image = tmp_path / "desktop-apt1.img"
+    socket_path = "/tmp/desktop-accept.sock"
+    command = ["session-server", "--desktop-apt1"]
+    command_calls = []
+
+    def server_command(*args, **kwargs):
+        command_calls.append((args, kwargs))
+        return command
+
+    popen_calls = []
+    monkeypatch.setattr("akashic_tui._session_server_command", server_command)
+    monkeypatch.setattr(
+        "akashic_tui.subprocess.Popen",
+        lambda actual: popen_calls.append(actual) or Server(),
+    )
+
+    accepted = accept_physical_desktop(
+        image,
+        socket_path=socket_path,
+        cols=100,
+        rows=32,
+        ext_mem_mib=128,
+        artifact_root=tmp_path / "evidence",
+        timeout=45.0,
+        font_path=tmp_path / "font.ttf",
+        font_size=19,
+    )
+
+    assert accepted is not runner_fails
+    assert command_calls == [
+        (
+            ("desktop-apt1", image),
+            {
+                "socket_path": socket_path,
+                "cols": 100,
+                "rows": 32,
+                "ext_mem_mib": 128,
+            },
+        )
+    ]
+    assert popen_calls == [command]
+    assert runner_calls == [
+        (
+            (socket_path, tmp_path / "evidence"),
+            {
+                "expected_server_pid": 4242,
+                "ready_markers": PROFILES["desktop-apt1"].ready_markers,
+                "timeout": 45.0,
+                "font_path": tmp_path / "font.ttf",
+                "font_size": 19,
+            },
+        )
+    ]
+    assert server_events == ["poll", "terminate", ("wait", 10.0)]
+    output = capsys.readouterr().out
+    assert ("Physical desktop acceptance: FAIL" in output) is runner_fails
+    assert ("Physical desktop acceptance: PASS" in output) is not runner_fails
+    if runner_fails:
+        assert "viewer journey failed" in output
+    else:
+        assert str(tmp_path / "manifest.json") in output
 
 
 def test_desktop_apt1_smoke_rejects_fallback_and_terminal_loss() -> None:

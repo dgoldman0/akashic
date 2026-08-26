@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build, smoke-test, and serve bootable Akashic TUI environments.
+"""Build, smoke-test, serve, and physically accept Akashic TUI environments.
 
 This is the supported cross-repository harness.  It imports the sibling
 MegaPad checkout (or ``MEGAPAD_ROOT``), computes the transitive REQUIRE
@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import struct
 import sys
 import time
@@ -26614,6 +26615,16 @@ def smoke(
     nic_tap: str | None = None,
 ) -> bool:
     profile = PROFILES[profile_name]
+    if (
+        profile.rich_terminal is not None
+        and profile.rich_terminal.retained_policy is not None
+    ):
+        print(
+            f"Smoke {profile_name}: FAIL\n"
+            "  retained output requires the physical acceptance viewer; "
+            "use the accept command"
+        )
+        return False
     if profile.requires_tap and not nic_tap:
         print(
             f"Smoke {profile_name}: FAIL\n"
@@ -29243,29 +29254,6 @@ def smoke(
                     wall_timeout=15.0,
                 )
 
-        if initial_ready and profile_name == "desktop-apt1":
-            before_revision = session.revision
-            admission = session.send_key("alt+h")
-            if admission is not DriverStatus.PROGRESS:
-                journey_errors.append(
-                    "APT Desk did not admit the normalized Alt+H event"
-                )
-            elif wait_screen(
-                "Applets", "APT Desk did not repaint the catalog launcher"
-            ):
-                if session.revision <= before_revision:
-                    journey_errors.append(
-                        "APT Desk launcher did not publish a new immutable view"
-                    )
-                if not _rich_terminal_smoke_ready(profile, session):
-                    journey_errors.append(
-                        "APT Desk lost its framed session after normalized input"
-                    )
-                session.send_key("escape")
-                wait_screen_gone(
-                    "Applets", "APT Desk did not close the catalog launcher"
-                )
-
         if initial_ready and profile_name not in ("interop", "resource-contracts"):
             session.resize(cols + 8, rows + 2)
             resize_budget = min(250_000_000, max_steps - total_steps)
@@ -29835,7 +29823,7 @@ def _rich_terminal_server_arguments(profile: Profile) -> list[str]:
     return arguments
 
 
-def serve(
+def _session_server_command(
     profile_name: str,
     image_path: Path,
     *,
@@ -29845,7 +29833,7 @@ def serve(
     ext_mem_mib: int = DEFAULT_EXT_MEM_MIB,
     nic_tap: str | None = None,
     audio: bool = False,
-):
+) -> list[str]:
     if PROFILES[profile_name].requires_tap and not nic_tap:
         raise SystemExit(
             f"profile {profile_name!r} requires --nic-tap[=IFNAME]"
@@ -29873,7 +29861,85 @@ def serve(
         command.extend(("--nic-tap", nic_tap))
     if audio:
         command.append("--audio")
+    return command
+
+
+def serve(
+    profile_name: str,
+    image_path: Path,
+    *,
+    socket_path: str,
+    cols: int,
+    rows: int,
+    ext_mem_mib: int = DEFAULT_EXT_MEM_MIB,
+    nic_tap: str | None = None,
+    audio: bool = False,
+):
+    command = _session_server_command(
+        profile_name,
+        image_path,
+        socket_path=socket_path,
+        cols=cols,
+        rows=rows,
+        ext_mem_mib=ext_mem_mib,
+        nic_tap=nic_tap,
+        audio=audio,
+    )
     os.execv(sys.executable, command)
+
+
+def accept_physical_desktop(
+    image_path: Path,
+    *,
+    socket_path: str,
+    cols: int,
+    rows: int,
+    ext_mem_mib: int,
+    artifact_root: Path,
+    timeout: float,
+    font_path: Path | None,
+    font_size: int,
+) -> bool:
+    """Run the real viewer-owned Desk/Pad/Daybook acceptance journey."""
+
+    from rich_terminal_desktop_acceptance import (
+        PhysicalDesktopAcceptanceError,
+        run_physical_desktop_acceptance,
+    )
+
+    command = _session_server_command(
+        "desktop-apt1",
+        image_path,
+        socket_path=socket_path,
+        cols=cols,
+        rows=rows,
+        ext_mem_mib=ext_mem_mib,
+    )
+    server = subprocess.Popen(command)
+    try:
+        evidence = run_physical_desktop_acceptance(
+            socket_path,
+            artifact_root,
+            expected_server_pid=server.pid,
+            ready_markers=PROFILES["desktop-apt1"].ready_markers,
+            timeout=timeout,
+            font_path=font_path,
+            font_size=font_size,
+        )
+    except PhysicalDesktopAcceptanceError as exc:
+        print(f"Physical desktop acceptance: FAIL\n  {exc}")
+        return False
+    finally:
+        if server.poll() is None:
+            server.terminate()
+            try:
+                server.wait(timeout=10.0)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                server.wait(timeout=10.0)
+    print("Physical desktop acceptance: PASS")
+    print(f"  evidence: {evidence.manifest_path}")
+    return True
 
 
 PROFILES["streams-source-ui-contracts"] = Profile(
@@ -31474,7 +31540,7 @@ for _burrow_profile_name in (
     )
 
 
-def _positive_mib(value: str) -> int:
+def _positive_integer(value: str) -> int:
     try:
         parsed = int(value)
     except ValueError as exc:
@@ -31484,14 +31550,26 @@ def _positive_mib(value: str) -> int:
     return parsed
 
 
+def _positive_seconds(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
 
-    for name in ("build", "smoke", "serve"):
+    for name in ("build", "smoke", "serve", "accept"):
         command = commands.add_parser(name)
         command.add_argument(
-            "--profile", choices=tuple(PROFILES), default="desktop"
+            "--profile",
+            choices=("desktop-apt1",) if name == "accept" else tuple(PROFILES),
+            default="desktop-apt1" if name == "accept" else "desktop",
         )
         command.add_argument("--output", type=Path)
         command.add_argument(
@@ -31499,15 +31577,16 @@ def _parser() -> argparse.ArgumentParser:
             type=Path,
             help="seed a private local Codex Desk image from a mode-0600 checkpoint",
         )
-        if name in ("smoke", "serve"):
+        if name in ("smoke", "serve", "accept"):
             command.add_argument("--cols", type=int, default=100)
             command.add_argument("--rows", type=int, default=32)
             command.add_argument(
                 "--ext-mem-mib",
-                type=_positive_mib,
+                type=_positive_integer,
                 default=DEFAULT_EXT_MEM_MIB,
                 help="emulated external memory in MiB (default: 128)",
             )
+        if name in ("smoke", "serve"):
             command.add_argument(
                 "--nic-tap",
                 nargs="?",
@@ -31527,6 +31606,22 @@ def _parser() -> argparse.ArgumentParser:
                 "--audio",
                 action="store_true",
                 help="attach MegaPad's optional pygame PCM16 playback sink",
+            )
+        if name == "accept":
+            command.add_argument(
+                "--socket", default="/tmp/akashic-tui-acceptance.sock"
+            )
+            command.add_argument(
+                "--artifact-root",
+                type=Path,
+                default=OUTPUT_ROOT / "desktop-apt1-physical-acceptance",
+            )
+            command.add_argument(
+                "--timeout", type=_positive_seconds, default=420.0
+            )
+            command.add_argument("--font", type=Path)
+            command.add_argument(
+                "--font-size", type=_positive_integer, default=18
             )
 
     return parser
@@ -31568,6 +31663,18 @@ def main() -> int:
             timeout=timeout,
             ext_mem_mib=args.ext_mem_mib,
             nic_tap=args.nic_tap,
+        ) else 1
+    if args.command == "accept":
+        return 0 if accept_physical_desktop(
+            image_path,
+            socket_path=args.socket,
+            cols=args.cols,
+            rows=args.rows,
+            ext_mem_mib=args.ext_mem_mib,
+            artifact_root=args.artifact_root,
+            timeout=args.timeout,
+            font_path=args.font,
+            font_size=args.font_size,
         ) else 1
     serve(
         args.profile,
