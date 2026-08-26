@@ -178,7 +178,7 @@ def test_concrete_bridge_is_caller_bounded_and_one_to_one() -> None:
         "_RTAPTSCB-CURSOR": "RTAPT-CELL-CURSOR",
         "_RTAPTSCB-COMMIT": "RTAPT-CELL-COMMIT",
         "_RTAPTSCB-ABORT": "RTAPT-CELL-ABORT",
-        "_RTAPTSCB-STEP": "RTAPT-STEP",
+        "_RTAPTSCB-ENGINE-STEP": "RTAPT-STEP",
         "_RTAPTSCB-SETTLE": "RTAPT-SETTLE",
     }
     for word, target in callbacks.items():
@@ -209,6 +209,164 @@ def test_concrete_bridge_is_caller_bounded_and_one_to_one() -> None:
     assert "RTAPT-S-BUSY" in mapper
     assert "RTAPT-S-SESSION-LOST" in mapper
     assert "DROP SCB-S-INVALID" in mapper
+
+
+def test_output_producer_hook_is_optional_immutable_and_caller_bounded() -> None:
+    source = BRIDGE.read_text(encoding="utf-8")
+
+    assert "APTSCB-PUBLISHER-SIZE 104 + CONSTANT RTAPTSCB-SIZE" in source
+    for suffix, offset in {
+        "PRODUCER-CONTEXT": 16,
+        "PRODUCER-U": 24,
+        "PRODUCER-BUDGET": 32,
+        "PRODUCER-STEP-XT": 40,
+        "PRODUCER-PREPARE-XT": 48,
+        "ADAPTER": 56,
+        "SURFACE-COLS": 64,
+        "SURFACE-ROWS": 72,
+        "SURFACE-GENERATION": 80,
+        "MORE-WORK": 88,
+        "OUTPUT-NEEDED": 96,
+    }.items():
+        assert (
+            f"APTSCB-PUBLISHER-SIZE {offset} + CONSTANT "
+            f"_RTAPTSCB-O-{suffix}"
+        ) in source
+
+    producer_valid = _definition(source, "_RTAPTSCB-PRODUCER-VALID?")
+    for token in (
+        "_RTAPTSCB-SPAN?",
+        "_RTAPTSCB.PRODUCER-BUDGET @",
+        "_RTAPTSCB.PRODUCER-STEP-XT @",
+        "_RTAPTSCB.PRODUCER-PREPARE-XT @",
+        "_RTAPTSCB-BOOL?",
+        "MSPAN-OVERLAP?",
+        "RTAPT-STORAGE-DISJOINT?",
+        "APTSCB-STORAGE-DISJOINT?",
+    ):
+        assert token in producer_valid
+    assert "_RTAPTSCB-VALID-CONTEXT @ 0= IF" in producer_valid
+
+    binder = _definition(source, "RTAPTSCB-OUTPUT-PRODUCER!")
+    first_store = binder.index("_RTAPTSCB.PRODUCER-CONTEXT !")
+    for preflight in (
+        "RTAPTSCB-VALID?",
+        "_RTAPTSCB-SPAN?",
+        "0> 0= IF",
+        "MSPAN-OVERLAP?",
+        "RTAPT-STORAGE-DISJOINT?",
+        "APTSCB-STORAGE-DISJOINT?",
+    ):
+        assert binder.index(preflight) < first_store
+    assert "_RTAPTSCB.PRODUCER-CONTEXT @ IF" in binder
+    assert "IF SCB-S-OK ELSE SCB-S-INVALID THEN EXIT" in binder
+    assert binder.count("_RTAPTSCB.PRODUCER-CONTEXT !") == 1
+    assert "_RTAPTSCB.SURFACE-GENERATION @ IF" in binder
+    context_publish = binder.index("_RTAPTSCB.PRODUCER-CONTEXT !")
+    for field in (
+        "_RTAPTSCB.PRODUCER-U !",
+        "_RTAPTSCB.PRODUCER-BUDGET !",
+        "_RTAPTSCB.PRODUCER-STEP-XT !",
+        "_RTAPTSCB.PRODUCER-PREPARE-XT !",
+    ):
+        assert binder.index(field) < context_publish
+
+    attach = _definition(source, "RTAPTSCB-ATTACH")
+    assert "_RTAPTSCB.ADAPTER @ ?DUP IF" in attach
+    assert "APTSCB-STORAGE-DISJOINT?" in attach
+    first_attach_store = attach.index("_RTAPTSCB.ADAPTER !")
+    assert attach.index("APTSCB-PUBLISHER!") < first_attach_store
+    assert attach.count("_RTAPTSCB.ADAPTER !") == 1
+
+
+def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
+    source = BRIDGE.read_text(encoding="utf-8")
+    code = "\n".join(line.split("\\", 1)[0] for line in source.splitlines())
+
+    step = _definition(source, "_RTAPTSCB-STEP")
+    assert step.index("_RTAPTSCB-ENGINE-STEP") < step.index(
+        "_RTAPTSCB-PRODUCER-STEP"
+    )
+    producer_step = _definition(source, "_RTAPTSCB-PRODUCER-STEP")
+    call_order = (
+        "_RTAPTSCB.SURFACE-COLS @",
+        "_RTAPTSCB.SURFACE-ROWS @",
+        "_RTAPTSCB.SURFACE-GENERATION @",
+        "_RTAPTSCB.PRODUCER-BUDGET @",
+        "_RTAPTSCB.PRODUCER-CONTEXT @",
+        "_RTAPTSCB.PRODUCER-STEP-XT @ EXECUTE",
+    )
+    callback_tuple = producer_step.index("_RTAPTSCB-EXACT-SCREEN?")
+    positions = [producer_step.index(token, callback_tuple) for token in call_order]
+    assert positions == sorted(positions)
+    producer_save = producer_step.index("_RTAPTSCB-R @ >R", callback_tuple)
+    producer_execute = producer_step.index(
+        "_RTAPTSCB.PRODUCER-STEP-XT @ EXECUTE", producer_save
+    )
+    producer_restore = producer_step.index("R> _RTAPTSCB-R !", producer_execute)
+    assert producer_save < producer_execute < producer_restore
+    status_gate = producer_step.index("_RTAPTSCB-SCB-STATUS? 0= IF")
+    bool_gate = producer_step.index("_RTAPTSCB-BOOL? 0=", status_gate)
+    fatal_gate = producer_step.index(
+        "_RTAPTSCB-PRODUCER-STATUS @ DUP SCB-S-SESSION-LOST =", bool_gate
+    )
+    fatal_more = producer_step.index(
+        "0 _RTAPTSCB-R @ _RTAPTSCB.MORE-WORK !", fatal_gate
+    )
+    fatal_output = producer_step.index(
+        "0 _RTAPTSCB-R @ _RTAPTSCB.OUTPUT-NEEDED !", fatal_more
+    )
+    latch = producer_step.rindex("_RTAPTSCB.MORE-WORK !")
+    output_latch = producer_step.rindex("_RTAPTSCB.OUTPUT-NEEDED !")
+    assert status_gate < bool_gate < fatal_gate < fatal_more < fatal_output
+    assert fatal_output < latch < output_latch
+
+    observe = _definition(source, "_RTAPTSCB-SURFACE-OBSERVE")
+    assert "_RTAPTSCB-DIMENSION?" in observe
+    assert "_RTAPTSCB.SURFACE-GENERATION @ 0= IF" in observe
+    assert "1 _RTAPTSCB-SURFACE-PUBLISHER @" in observe
+    assert "1+ DUP 0= IF DROP SCB-S-INVALID EXIT THEN" in observe
+    assert observe.index("_RTAPTSCB-SURFACE-NEXT !") < observe.index(
+        "_RTAPTSCB.SURFACE-COLS !", observe.index("_RTAPTSCB-SURFACE-NEXT !")
+    )
+
+    begin = _definition(source, "_RTAPTSCB-BEGIN")
+    producer_guard = begin.index("_RTAPTSCB-PRODUCER-BOUND? IF")
+    surface_observe = begin.index("_RTAPTSCB-SURFACE-OBSERVE", producer_guard)
+    assert producer_guard < surface_observe < begin.index(
+        "_RTAPTSCB-PRODUCER-PREPARE"
+    ) < begin.index("RTAPT-CELL-BEGIN")
+    clear_latch = begin.index("_RTAPTSCB.OUTPUT-NEEDED !")
+    assert begin.index("SCB-S-OK = IF") < clear_latch
+
+    prepare = _definition(source, "_RTAPTSCB-PRODUCER-PREPARE")
+    assert "_RTAPTSCB-EXACT-SCREEN?" in prepare
+    assert prepare.index("_RTAPTSCB.SURFACE-COLS @") < prepare.index(
+        "_RTAPTSCB.PRODUCER-PREPARE-XT @ EXECUTE"
+    )
+    prepare_save = prepare.index("_RTAPTSCB-R @ >R")
+    prepare_execute = prepare.index(
+        "_RTAPTSCB.PRODUCER-PREPARE-XT @ EXECUTE", prepare_save
+    )
+    prepare_restore = prepare.index("R> _RTAPTSCB-R !", prepare_execute)
+    assert prepare_save < prepare_execute < prepare_restore
+
+    engine_step = _definition(source, "_RTAPTSCB-ENGINE-STEP")
+    rejected = engine_step.index("RTAPT-S-REJECTED = IF SCB-S-OK EXIT THEN")
+    mapped = engine_step.index("_RTAPTSCB-MAP-STATUS", rejected)
+    assert rejected < mapped
+    output_query = _definition(source, "RTAPTSCB-OUTPUT-NEEDED?")
+    assert "RTAPTSCB-VALID?" in output_query
+    assert "_RTAPTSCB-EXACT-SCREEN?" in output_query
+
+    for forbidden in (
+        "RTE-LABEL-PREFLIGHT",
+        "RTERM-",
+        "PRESENT-",
+        "PRESENT_",
+        "SCR-FORCE",
+    ):
+        assert forbidden not in code
 
 
 def test_engine_settlement_only_reconciles_active_wire_authority() -> None:

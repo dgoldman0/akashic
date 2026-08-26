@@ -90,12 +90,12 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
     assert "96 CONSTANT RTERM-HOST-BINDING-SIZE" in source
     assert "32 CONSTANT RTERM-SURFACE-SNAPSHOT-SIZE" in source
     assert "104 CONSTANT RTERM-UIDL-CONFIG-SIZE" in source
-    assert "6 CONSTANT _RTERM-UIDL-ABI" in source
-    assert "5 CONSTANT _RTERM-UIDL-CONFIG-ABI" in source
+    assert "7 CONSTANT _RTERM-UIDL-ABI" in source
+    assert "6 CONSTANT _RTERM-UIDL-CONFIG-ABI" in source
     assert "64 CONSTANT _RTERM-CANDIDATE-META-SIZE" in source
     assert "32 CONSTANT _RTERM-IDENTITY-SIZE" in source
-    assert "352 CONSTANT RTERM-UIDL-BINDING-SIZE" in source
-    assert "328 CONSTANT RTERM-UIDL-BACKEND-SIZE" in source
+    assert "384 CONSTANT RTERM-UIDL-BINDING-SIZE" in source
+    assert "496 CONSTANT RTERM-UIDL-BACKEND-SIZE" in source
     assert "_RGN-DESC-SIZE CONSTANT RGN-SIZE" in region
     assert "RTERM-SURFACE-SNAPSHOT-SIZE" in _definition(
         source, "RTERM-SURFACE-SNAPSHOT-BYTES"
@@ -132,7 +132,11 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
         "_RTERM-R.ELIGIBLE-REGIONS": 320,
         "_RTERM-R.ELIGIBLE-OBJECTS": 328,
         "_RTERM-R.ELIGIBLE-UTF8": 336,
-        "_RTERM-R.RESERVED": 344,
+        "_RTERM-R.MAT-STATE": 344,
+        "_RTERM-R.STAGED-GEN": 352,
+        "_RTERM-R.MATERIALIZED-GEN": 360,
+        "_RTERM-R.MATERIALIZED-SURFACE-GEN": 368,
+        "_RTERM-R.RESERVED": 376,
     }
     for field, offset in binding_fields.items():
         assert f": {field}" in source
@@ -203,6 +207,152 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
     assert len(public_words) == len(signatures)
     for name, signature in signatures.items():
         assert signature in _definition(source, name)
+
+
+def test_materializer_schema_is_persistent_neutral_and_initially_inert() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+
+    for field, offset in {
+        "_RTERM-B.LIMITS": 160,
+        "_RTERM-B.EPOCH": 320,
+        "_RTERM-B.MAT": 328,
+        "_RTERM-B.RESERVED": 488,
+    }.items():
+        assert f"{offset} +" in _definition(source, field)
+
+    assert "+" not in _definition(source, "_RTERM-M.PHASE")
+    for field, offset in {
+        "_RTERM-M.FLAGS": 8,
+        "_RTERM-M.SURFACE-COLS": 16,
+        "_RTERM-M.SURFACE-ROWS": 24,
+        "_RTERM-M.SURFACE-GEN": 32,
+        "_RTERM-M.TOKEN": 40,
+        "_RTERM-M.RECORD-INDEX": 48,
+        "_RTERM-M.SELECTOR": 56,
+        "_RTERM-M.CANDIDATE-GEN": 64,
+        "_RTERM-M.OWNER": 72,
+        "_RTERM-M.OWNER-GEN": 80,
+        "_RTERM-M.ITEMS": 88,
+        "_RTERM-M.SNAPSHOTS": 96,
+        "_RTERM-M.REGIONS": 104,
+        "_RTERM-M.OBJECTS": 112,
+        "_RTERM-M.UTF8": 120,
+        "_RTERM-M.ROOT-H": 128,
+        "_RTERM-M.ROOT-W": 136,
+        "_RTERM-M.OBJECT-HIGH": 144,
+        "_RTERM-M.RESERVED": 152,
+    }.items():
+        assert f"{offset} +" in _definition(source, field)
+    assert "160 CONSTANT _RTERM-MAT-SIZE" in source
+
+    assert re.findall(
+        r"(?m)^(\d+) CONSTANT (_RTERM-EPOCH-[A-Z-]+)$", source
+    ) == [
+        ("0", "_RTERM-EPOCH-COLD"),
+        ("1", "_RTERM-EPOCH-REBUILD"),
+        ("2", "_RTERM-EPOCH-LIVE"),
+        ("3", "_RTERM-EPOCH-QUARANTINED"),
+    ]
+    assert re.findall(
+        r"(?m)^(\d+) CONSTANT (_RTERM-MAT-ST-[A-Z-]+)$", source
+    ) == [
+        ("0", "_RTERM-MAT-ST-NONE"),
+        ("1", "_RTERM-MAT-ST-OPENING"),
+        ("2", "_RTERM-MAT-ST-OPEN"),
+        ("3", "_RTERM-MAT-ST-STAGED"),
+        ("4", "_RTERM-MAT-ST-LIVE"),
+        ("5", "_RTERM-MAT-ST-DROP-PENDING"),
+        ("6", "_RTERM-MAT-ST-DROPPING"),
+        ("7", "_RTERM-MAT-ST-QUARANTINED"),
+    ]
+    assert re.findall(
+        r"(?m)^(\d+) CONSTANT (_RTERM-MAT-PHASE-[A-Z-]+)$", source
+    ) == [
+        ("0", "_RTERM-MAT-PHASE-IDLE"),
+        ("1", "_RTERM-MAT-PHASE-COHORT"),
+        ("2", "_RTERM-MAT-PHASE-OPENING"),
+        ("3", "_RTERM-MAT-PHASE-OPEN"),
+        ("4", "_RTERM-MAT-PHASE-HIDDEN-SEALED"),
+        ("5", "_RTERM-MAT-PHASE-HIDDEN-AWAITING"),
+        ("6", "_RTERM-MAT-PHASE-REVEAL-SEALED"),
+        ("7", "_RTERM-MAT-PHASE-REVEAL-AWAITING"),
+        ("8", "_RTERM-MAT-PHASE-DROP-PENDING"),
+        ("9", "_RTERM-MAT-PHASE-DROPPING"),
+        ("10", "_RTERM-MAT-PHASE-QUARANTINED"),
+    ]
+    for validator, bound in {
+        "_RTERM-EPOCH-VALID?": "4 U<",
+        "_RTERM-MAT-ST-VALID?": "8 U<",
+        "_RTERM-MAT-PHASE-VALID?": "11 U<",
+    }.items():
+        assert bound in _definition(source, validator)
+    assert "1 CONSTANT _RTERM-MAT-F-STARTED" in source
+    assert "1 CONSTANT _RTERM-MAT-F-MASK" in source
+
+    mat_inert = _definition(source, "_RTERM-MAT-INERT?")
+    mat_phase_valid = mat_inert.index("_RTERM-MAT-PHASE-VALID?")
+    mat_idle = mat_inert.index("_RTERM-MAT-PHASE-IDLE <>", mat_phase_valid)
+    mat_zero = mat_inert.index("_RTERM-MAT-SIZE _RTERM-ZERO?", mat_idle)
+    assert mat_phase_valid < mat_idle < mat_zero
+
+    record_inert = _definition(source, "_RTERM-RECORD-MATERIALIZATION-INERT?")
+    for field in (
+        "_RTERM-R.MAT-STATE",
+        "_RTERM-R.STAGED-GEN",
+        "_RTERM-R.MATERIALIZED-GEN",
+        "_RTERM-R.MATERIALIZED-SURFACE-GEN",
+        "_RTERM-R.RESERVED",
+    ):
+        assert field in record_inert
+    record_state_valid = record_inert.index("_RTERM-MAT-ST-VALID?")
+    record_none = record_inert.index("_RTERM-MAT-ST-NONE <>", record_state_valid)
+    assert record_state_valid < record_none
+    for field in (
+        "_RTERM-R.STAGED-GEN",
+        "_RTERM-R.MATERIALIZED-GEN",
+        "_RTERM-R.MATERIALIZED-SURFACE-GEN",
+        "_RTERM-R.RESERVED",
+    ):
+        assert f"{field} @ 0=" in record_inert
+
+    record_live = _definition(source, "_RTERM-RECORD-LIVE?")
+    materialization = record_live.index(
+        "_RTERM-RECORD-MATERIALIZATION-INERT?"
+    )
+    candidates = record_live.index("_RTERM-RECORD-CANDIDATES-VALID?")
+    eligibility = record_live.index("_RTERM-RECORD-ELIGIBILITY-VALID?")
+    assert materialization < candidates < eligibility
+    record_valid = _definition(source, "_RTERM-RECORD-VALID?")
+    assert "RTERM-UIDL-BINDING-SIZE\n            _RTERM-ZERO?" in record_valid
+
+    backend_inert = _definition(source, "_RTERM-BACKEND-MATERIALIZATION-INERT?")
+    epoch_valid = backend_inert.index("_RTERM-EPOCH-VALID?")
+    epoch_cold = backend_inert.index("_RTERM-EPOCH-COLD <>", epoch_valid)
+    backend_mat = backend_inert.index("_RTERM-B.MAT _RTERM-MAT-INERT?", epoch_cold)
+    backend_reserved = backend_inert.index("_RTERM-B.RESERVED @ 0=", backend_mat)
+    assert epoch_valid < epoch_cold < backend_mat < backend_reserved
+    valid = _definition(source, "_RTERM-UIDL-VALID-BODY?")
+    backend_gate = valid.index("_RTERM-BACKEND-MATERIALIZATION-INERT?")
+    geometry = valid.index("_RTERM-UIDL-GEOMETRY?", backend_gate)
+    attempt_zero = valid.index("_RTERM-ATTEMPT-BANK-ZERO?", geometry)
+    record_loop = valid.index("_RTERM-B.CAPACITY @ 0 ?DO", attempt_zero)
+    assert backend_gate < geometry < attempt_zero < record_loop
+
+    code = _code_without_comments(source)
+    new_state_fields = (
+        "_RTERM-R.MAT-STATE",
+        "_RTERM-R.STAGED-GEN",
+        "_RTERM-R.MATERIALIZED-GEN",
+        "_RTERM-R.MATERIALIZED-SURFACE-GEN",
+        "_RTERM-R.RESERVED",
+        "_RTERM-B.EPOCH",
+        "_RTERM-B.RESERVED",
+    )
+    new_state_fields += tuple(
+        re.findall(r"(?m)^:\s+(_RTERM-M\.[A-Z-]+)(?=\s)", code)
+    )
+    for field in new_state_fields:
+        assert not re.search(rf"{re.escape(field)}\s+(?:!|\+!)", code)
 
 
 def test_public_scratch_entries_catch_bodies_then_scrub_every_borrowed_cell() -> None:
@@ -1453,7 +1603,7 @@ def test_quiesce_detach_scrub_and_install_one_immutable_context() -> None:
     assert "RTERM-S-INVALID _RTERM-CALL-FAIL EXIT" in detach
     assert "RTERM-S-SOURCE" not in detach
     assert "_RTERM-R.HOST 104 _RTERM-ZERO?" in detached_valid
-    assert "_RTERM-R.CANDIDATE 216 _RTERM-ZERO?" in detached_valid
+    assert "_RTERM-R.CANDIDATE 248 _RTERM-ZERO?" in detached_valid
     assert "_RTERM-R.TOKEN @ 0<>" in detached_valid
     assert "_RTERM-R.ISSUER @ _RTERM-RV-BACKEND @ =" in detached_valid
     assert "_RTERM-R.LAST-STATUS @" in detached_valid

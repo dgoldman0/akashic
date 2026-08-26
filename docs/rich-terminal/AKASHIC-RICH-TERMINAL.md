@@ -673,8 +673,8 @@ RTERM-HOST-BINDING-CAPTURE  ( host slot host-binding -- status )
 
 RTERM-UIDL-CONFIG-BYTES     ( -- bytes )  \ 104
 RTERM-UIDL-BINDING-BYTES    ( -- bytes )
-                                            \ 352 per binding
-RTERM-UIDL-BACKEND-BYTES    ( -- bytes )  \ 328
+                                            \ 384 per binding
+RTERM-UIDL-BACKEND-BYTES    ( -- bytes )  \ 496
 RTERM-UIDL-CANDIDATE-ITEM-BYTES ( -- bytes )  \ 128
 RTERM-UIDL-CANDIDATE-IDENTITY-BYTES ( -- bytes )  \ 32
 RTERM-UIDL-CONFIG-INIT
@@ -695,12 +695,13 @@ dependency. It borrows one immutable `RTE` facade, and its immutable UIDL
 callback installation through `_UTUI-PROJECTION-ADAPTER!` carries the exact
 driver backend as explicit composition context; neither context is stored in a
 UCTX. The 104-byte initialization descriptor supplies the exact host, engine,
-352-byte binding-record slab, and caller-owned candidate storage geometry. Its
+384-byte binding-record slab, and caller-owned candidate storage geometry. Its
 record capacity determines exactly two item, two positional identity, and two
 snapshot banks per binding. Identity extent is derived from the existing item
-geometry, not from a compiled or additional product capacity. The 328-byte
-backend copies that geometry, contains one fixed-shape 160-byte limits scratch,
-and does not retain the descriptor or a provider limits pointer. Product
+geometry, not from a compiled or additional product capacity. The 496-byte
+backend copies that geometry, contains one fixed-shape 160-byte limits scratch
+and one 160-byte neutral materialization-correlation record, and does not retain
+the descriptor or a provider limits pointer. Product
 composition may therefore clear the descriptor immediately after initialization.
 
 Each candidate item is 128 bytes: its stable semantic key and snapshot slice
@@ -709,12 +710,16 @@ are followed by flags at offset 40, a copied 72-byte resolved record at offsets
 `EFFECTIVE_VISIBLE=2` are the only valid flag bits, and effective visibility
 implies a resolved record. Resolved coordinates are normalized relative to
 the candidate root. Each bank's 64-byte metadata adds the positive root height
-and width after its generation/count/quota fields. In the 352-byte binding,
+and width after its generation/count/quota fields. In the 384-byte binding,
 candidate metadata A begins at 144 and B at 208. Offsets 272 through 343 retain
 the private owner tuple, region/object allocation state, eligible selector and
-generation, and terminal-checked region/object/UTF-8 quotas; offset 344 is the
-final reserved cell. Those eligibility fields are not an owner reservation or
-proof that the caller-owned provider capture banks can admit the candidate.
+generation, and terminal-checked region/object/UTF-8 quotas. Offsets 344 through
+375 retain neutral per-binding materialization state and exact staged/live
+generation correlations; offset 376 is reserved. The backend-global epoch and
+materialization attempt record retain only scalar correlation, never borrowed
+candidate pointers. This preparatory revision validates all of those new fields
+as cold/idle/none/zero, so they are not yet an owner reservation or proof that
+the caller-owned provider capture banks can admit the candidate.
 
 Attach and geometry tracking remain local-only. Attach derives a bounded wire
 owner ID from the binding-record ordinal and uses the globally nonreused opaque
@@ -1166,7 +1171,16 @@ quotas, and complete START arithmetic before `OWNER_OPEN`. The lifecycle driver
 selects a complete deep-valid candidate together with private, retry-stable
 identities before negotiation, and separately records terminal-negotiated
 eligibility when the current limits permit it. A refusal preserves the selected
-candidate and mapping. The explicit advisory operation now freezes that
+candidate and mapping. The unified `RTAPTSCB` bridge now also admits one
+optional immutable, caller-bounded output producer. Its callbacks receive only
+the exact observed screen columns, rows, monotone geometry generation, and a
+composition-selected work budget. Engine reconciliation precedes each producer
+step, and a prepare callback runs immediately before an offered CELL begin.
+The bridge retains only canonical `more-work` and `output-needed` observations;
+it neither forces a screen snapshot nor schedules another service loop. The
+UIDL driver is not bound to that seam in this preparatory slice.
+
+The explicit advisory operation now freezes that
 candidate, constructs the sorted neutral plan from the supplied surface, invokes
 the landed preflight exactly once, and scrubs all attempt and plan scratch. It
 does not queue `OWNER_OPEN`, materialize a LABEL, or schedule through unified

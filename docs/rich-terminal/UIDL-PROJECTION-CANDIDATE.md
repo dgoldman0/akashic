@@ -115,12 +115,15 @@ metadata are never authoritative on their own.
 Each published bank has a 64-byte metadata record containing generation, item
 count, snapshot bytes, region/object/UTF-8 quotas, and the positive root height
 and width used for capture and validation. The two records occupy offsets 144
-and 208 in the 352-byte private binding record. The root dimensions travel with
+and 208 in the 384-byte private binding record. The root dimensions travel with
 the selected candidate rather than being recovered from later mutable layout.
 Private owner/terminal-eligibility fields begin at offset 272; they are not part
 of the neutral candidate or projector ABI and do not reserve an owner or
-provider capture-bank space. The 352-byte binding record ends with one reserved
-cell at offset 344.
+provider capture-bank space. Neutral retained-materialization state and exact
+desired/staged/live generation correlations occupy offsets 344 through 375;
+the record ends with one reserved cell at offset 376. Those lifecycle fields
+are validated as `NONE`/zero in this preparatory slice and grant no mutation
+authority yet.
 
 An accepted empty candidate is still selector-published so it supersedes any
 older desired scene, but `RTERM-UCTX-PROJECT` returns
