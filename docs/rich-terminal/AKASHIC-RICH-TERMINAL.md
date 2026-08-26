@@ -31,9 +31,9 @@ and UIDL-TUI without acquiring a second protocol or session implementation.
 
 An immutable caller-owned `RTE` facade is the operation boundary above a
 concrete provider. It exposes neutral status, owner, transaction, region,
-LABEL-definition, and storage-disjoint operations plus one opaque provider
-context. Only the provider bridge names both vocabularies; generic UIDL code
-neither names nor loads `RTAPT`.
+LABEL-definition, LABEL-plan preflight, and storage-disjoint operations plus
+one opaque provider context. Only the provider bridge names both vocabularies;
+generic UIDL code neither names nor loads `RTAPT`.
 
 Above it, UIDL-TUI owns a renderer-neutral optional-projection lifecycle. The
 rich-terminal driver implements that lifecycle's private adapter table and
@@ -147,6 +147,11 @@ RTE-LIMITS-BYTES       ( -- bytes )
 RTE-LIMITS-VALID?      ( limits -- flag )
 RTE-LIMITS@            ( limits facade -- status )
 
+RTE-LABEL-PLAN-BYTES       ( -- bytes )
+RTE-LABEL-PLAN-ITEM-BYTES  ( -- bytes )
+RTE-LABEL-PLAN-VALID?      ( plan -- flag )
+RTE-LABEL-PREFLIGHT        ( plan facade -- status )
+
 RTE-OWNER-OPEN         ( owner generation quotas... facade -- status )
 RTE-OWNER-STATE@       ( owner generation facade -- owner-state status )
 RTE-RETAINED-BEGIN     ( retained-mode facade -- status )
@@ -167,15 +172,17 @@ provider storage before publishing it. The UIDL-TUI adapter depends only on
 `RTE`.
 
 The facade is the neutral boundary for RTAPT's currently implemented owner,
-transaction, region, LABEL, status, and alias operations. It also exposes one
-160-byte immutable negotiated-limits snapshot. The fixed record shape contains
-neutral feature-family bits and the terminal-supplied maxima for owner records,
-live owners, regions, resources, objects, series, operations per update, update
+transaction, region, LABEL, plan-preflight, status, and alias operations. Its
+ABI-4 descriptor remains 136 bytes; the callback at offset 128 performs the
+neutral LABEL-plan preflight. It also exposes one 160-byte immutable
+negotiated-limits snapshot. The fixed record shape contains neutral
+feature-family bits and the terminal-supplied maxima for owner records, live
+owners, regions, resources, objects, series, operations per update, update
 bytes, resource chunks and total resource bytes, image dimensions, vector
 points, label and total UTF-8 bytes, series append/history/sample slots, and
-minimum update interval. Coordinate precision, color representation, and
-the first image representation are invariants of this facade revision rather
-than copied provider enum values.
+minimum update interval. Coordinate precision, color representation, and the
+first image representation are invariants of this facade revision rather than
+copied provider enum values.
 
 `RTE-LIMITS@` validates that its caller-owned destination is aligned,
 nonwrapping, and disjoint from both facade and provider storage. Pending
@@ -192,6 +199,111 @@ already validated PT CAPS/FORMATS pair into one engine-owned typed snapshot.
 The bridge maps every provider field and feature bit into the caller's neutral
 record, then scrubs all borrowed raw-record, provider-snapshot, engine, and
 destination pointers.
+
+`RTE-LABEL-PREFLIGHT` accepts an aligned, call-borrowed 112-byte neutral plan
+header. It describes exactly one root `REGION_DEFINE` followed by `N` root
+`LABEL_DEFINE` operations; it contains declarations only, never borrowed text
+or a provider payload:
+
+| Offset | Header field | Contract |
+| ---: | --- | --- |
+| 0 | owner | nonzero private owner identity |
+| 8 | generation | nonzero proposed owner generation |
+| 16 | surface columns | positive native-cell surface width |
+| 24 | surface rows | positive native-cell surface height |
+| 32 | region ID | nonzero private root-region identity |
+| 40 | region x | nonnegative root origin column |
+| 48 | region y | nonnegative root origin row |
+| 56 | region columns | positive root width |
+| 64 | region rows | positive root height |
+| 72 | region z | signed root paint order |
+| 80 | region flags | only the current region bits 0 and 1 |
+| 88 | items address | aligned borrowed item-array address |
+| 96 | items bytes | positive exact multiple of 128 |
+| 104 | reserved | zero |
+
+The root bounds use checked addition and must fit inside the declared positive
+surface. The header and item array must be nonwrapping, mutually disjoint, and
+individually disjoint from facade and provider storage. `N = items-bytes / 128`;
+there is no compiled item-count ceiling.
+
+Each item has this exact 128-byte neutral shape:
+
+| Offset | Item field | Contract |
+| ---: | --- | --- |
+| 0 | object | nonzero; strictly increasing in capture order |
+| 8 | parent | zero for the current root-LABEL provider slice |
+| 16 | row | signed row relative to the root |
+| 24 | column | signed column relative to the root |
+| 32 | height | nonnegative declared height |
+| 40 | width | nonnegative declared width |
+| 48 | root height | positive and exactly equal to header region rows |
+| 56 | root width | positive and exactly equal to header region columns |
+| 64 | z | signed LABEL paint order |
+| 72 | visible | canonical Forth boolean `0` or `-1` |
+| 80 | RGBA | packed numeric `0xRRGGBBAA` |
+| 88 | horizontal alignment | `0` start, `1` center, `2` end |
+| 96 | vertical alignment | `0` top, `1` middle, `2` bottom |
+| 104 | ellipsize | canonical Forth boolean `0` or `-1` |
+| 112 | text capacity | nonnegative maximum UTF-8 bytes for the later LABEL |
+| 120 | reserved | zero |
+
+Neutral validation proves the complete native-cell shape, object order,
+canonical scalar fields, checked row/column edge arithmetic, and the same
+visible-intersection rule as `RTE-LABEL-VALID?`. It deliberately does not
+import APT-1 scalar widths. The installed provider owns exact representability:
+the current RTAPT bridge requires u32 surfaces, region geometry, LABEL extents,
+root dimensions, and text capacities; i32 row, column, and z values; and exact
+provider geometry conversion. A native-cell plan that cannot cross that
+boundary is rejected before owner admission.
+
+The current RTAPT provider then proves all admission arithmetic against one
+coherent current limits snapshot and its caller-owned banks. For capacities
+`c_i`, `declared_utf8 = sum(c_i)`, it requires:
+
+* owner quotas of one region, `N` objects, and `declared_utf8` bytes, including
+  checked aggregate reservations already held by other owner records;
+* `1 + N` operation records and local copied bytes
+  `72 + sum(ALIGN8(128 + c_i))`;
+* every `c_i` within the negotiated per-LABEL maximum and the aggregate within
+  negotiated UTF-8 and object bounds; and
+* an op-bearing hidden `REPLACE_START` wire transaction of exactly
+  `248 + 120 * N + declared_utf8` bytes within the negotiated update maximum.
+
+The immediately following `OWNER_OPEN` must use exactly
+`(regions=1, resources=0, objects=N, series=0, resource-bytes=0,
+utf8-bytes=declared_utf8, sample-slots=0)`. Preflight returns no token which
+could authorize different quotas or a different selected generation.
+
+That START total is the frozen 160-byte wire transaction envelope, one 88-byte
+region definition, and `N` LABEL definitions of `120 + c_i` bytes. The later
+empty reveal transaction is exactly 160 bytes. The build and reveal are serial
+transactions which reuse bounded staging; their byte budgets are checked
+individually and are never added into one fictitious simultaneous requirement.
+
+Owner availability is dynamic. A matching owner can be reused only from a
+stable tombstone with a strictly newer generation; any other matching live or
+in-flight state is transiently busy. Otherwise a free local owner record must
+exist. The provider also requires idle capture/queue state and accounts for
+live-owner and aggregate terminal quotas. These checks derive solely from
+caller-supplied storage and negotiated limits, not an arbitrary compiled
+owner, operation, copy-byte, or LABEL-count limit.
+
+Preflight is advisory and admission-mutation-free. `RTE-S-OK` reserves neither
+the observed owner record nor terminal quota and does not authorize a later
+call to skip revalidation. Neutral or representation errors return
+`RTE-S-INVALID`; unsupported INSTRUMENT capability returns
+`RTE-S-UNAVAILABLE`; local or negotiated exhaustion returns
+`RTE-S-CAPACITY`; and a currently occupied engine or owner maps to
+`RTE-S-WOULD-BLOCK`. Discovery and structural statuses propagate normally.
+The plan and item bytes, operation bank, copy bank, and wire are unchanged on
+every result. Ordinary success or refusal also leaves the owner ledger,
+lifecycle queue, and PT session unchanged; limits discovery may refresh only
+the provider's designated negotiated-limits observation scratch. Discovering
+an already-lost session may invoke the engine's pre-existing quarantine and
+capture-clear transition, but that is structural-loss containment rather than
+plan admission and emits no wire. Preflight itself produces no `OWNER_OPEN`,
+tombstone, retained capture, owner reservation, or wire frame.
 
 `RTE-LABEL-DEFINE` accepts one aligned, call-borrowed 160-byte neutral record:
 
@@ -286,10 +398,11 @@ not. The projector invokes no facade operation. The driver invokes only the
 read-only `RTE-LIMITS@` after assigning private owner/region/object identities,
 then records terminal-negotiated eligibility before selector publication. This
 reserves neither an owner nor capture-bank space. The neutral RTE/RTAPT boundary
-can validate, capture, retry, and typed-dispatch one complete LABEL definition,
-but local capture admission, lifecycle materialization, and unified publication
-scheduling remain. The current lifecycle driver is therefore still
-output-inert.
+can now preflight one complete root-and-LABEL recipe and can validate, capture,
+retry, and typed-dispatch each complete LABEL definition. The lifecycle driver
+does not yet construct that plan; owner opening, candidate capture,
+materialization, and unified publication scheduling remain. It is therefore
+still output-inert.
 
 The lower UIDL layer now supplies the first neutral semantic snapshot
 substrate independently of this adapter. `ED.SEMANTICS` selects a per-element
@@ -313,10 +426,12 @@ so a new complete candidate can replace the selected candidate atomically
 without allocating. This does not change the current wire-inert state: no
 shipped UIDL has been bulk-annotated for optional rich-output eligibility, and
 the terminal-eligible candidate is not yet materialized. The eligibility check
-already compares each LABEL declaration, the checked per-owner sum, counts,
-operations, and complete worst-case transaction bytes. A later materializer must
-still revalidate terminal limits, local capture-bank fit, and dynamic owner
-availability before any owner may open or object may publish.
+compares each LABEL declaration and the neutral semantic region, object, and
+UTF-8 bounds. It deliberately does not infer provider operation, retry-copy, or
+encoded-update costs. A later materializer must build the landed neutral plan
+and call `RTE-LABEL-PREFLIGHT` to prove those representation details, local
+capture-bank fit, and dynamic owner/tombstone availability before any owner may
+open or object may publish.
 
 `config` names the exact borrowed PT session, output policy, and caller-owned
 spans and capacities for:
@@ -545,7 +660,7 @@ RTERM-HOST-BINDING-CAPTURE  ( host slot host-binding -- status )
 
 RTERM-UIDL-CONFIG-BYTES     ( -- bytes )  \ 104
 RTERM-UIDL-BINDING-BYTES    ( -- bytes )
-                                            \ 360 per binding
+                                            \ 352 per binding
 RTERM-UIDL-BACKEND-BYTES    ( -- bytes )  \ 328
 RTERM-UIDL-CANDIDATE-ITEM-BYTES ( -- bytes )  \ 128
 RTERM-UIDL-CANDIDATE-IDENTITY-BYTES ( -- bytes )  \ 32
@@ -567,7 +682,7 @@ dependency. It borrows one immutable `RTE` facade, and its immutable UIDL
 callback installation through `_UTUI-PROJECTION-ADAPTER!` carries the exact
 driver backend as explicit composition context; neither context is stored in a
 UCTX. The 104-byte initialization descriptor supplies the exact host, engine,
-360-byte binding-record slab, and caller-owned candidate storage geometry. Its
+352-byte binding-record slab, and caller-owned candidate storage geometry. Its
 record capacity determines exactly two item, two positional identity, and two
 snapshot banks per binding. Identity extent is derived from the existing item
 geometry, not from a compiled or additional product capacity. The 328-byte
@@ -581,13 +696,12 @@ are followed by flags at offset 40, a copied 72-byte resolved record at offsets
 `EFFECTIVE_VISIBLE=2` are the only valid flag bits, and effective visibility
 implies a resolved record. Resolved coordinates are normalized relative to
 the candidate root. Each bank's 64-byte metadata adds the positive root height
-and width after its generation/count/quota fields. In the 360-byte binding,
-candidate metadata A begins at 144 and B at 208. Offsets 272 through 351 retain
+and width after its generation/count/quota fields. In the 352-byte binding,
+candidate metadata A begins at 144 and B at 208. Offsets 272 through 343 retain
 the private owner tuple, region/object allocation state, eligible selector and
-generation, terminal-checked region/object/UTF-8 quotas, and worst-case
-transaction bytes; offset 352 is reserved. Those eligibility fields are not an
-owner reservation or proof that the caller-owned RTAPT capture banks can admit
-the candidate.
+generation, and terminal-checked region/object/UTF-8 quotas; offset 344 is the
+final reserved cell. Those eligibility fields are not an owner reservation or
+proof that the caller-owned provider capture banks can admit the candidate.
 
 Attach and geometry tracking remain local-only. Attach derives a bounded wire
 owner ID from the binding-record ordinal and uses the globally nonreused opaque
@@ -599,11 +713,10 @@ Project constructs and deep-validates the inactive neutral candidate, maps its
 private identities, and then performs its only facade operation,
 `RTE-LIMITS@`. Terminal-negotiated eligibility requires a resolved LABEL-only
 tree, zero currently unsupported resolved attributes, INSTRUMENT support, one
-region, one object per item, `1 + item-count` operations, each declared text
-capacity within `max_label_bytes`, aggregate declared UTF-8 within the
-owner/global bound, and exact worst-case complete transaction bytes
-`288 + 120 * item-count + declared_utf8` within the negotiated update maximum.
-Every addition and multiplication is checked.
+region, one object per item, each declared text capacity within
+`max_label_bytes`, and aggregate declared UTF-8 within the owner/global bound.
+It makes no provider-specific operation-count, retry-copy, or encoded-update
+estimate; the neutral plan preflight owns those exact checks.
 
 One caller-owned 32-byte positional identity record copies the exact
 `(element-index, semantic-subkey, kind)` and its nonzero object ID. Exact keys
@@ -612,18 +725,20 @@ high-water and may leave legal gaps. Deep validation rejects duplicate object
 IDs and never treats `id <= high-water` as existence. Mapping completes before
 negotiation, so pending discovery or another negotiation refusal cannot remint
 an unchanged semantic key. A successful limits check additionally records the
-exact eligible generation, quotas, and worst-case bytes. A deep-valid nonempty
+exact eligible generation and neutral semantic quotas. A deep-valid nonempty
 candidate is selector-published with its mapping whether negotiation succeeds or
 returns a stable refusal; refusal clears only eligibility/materialization
 readiness and its exact status is returned. An empty candidate has no mapping. A
 build, deep-validation, or identity-mapping failure leaves the prior selector
 untouched.
 
-Before any later `OWNER_OPEN` or retained capture, the materializer must
-revalidate current terminal limits, dynamic owner availability, and the exact
-caller-owned RTAPT owner, operation, and copied-byte capacity needed by the
-candidate. Only that later preflight can turn eligibility into an admitted
-materialization attempt.
+Before any later `OWNER_OPEN` or retained capture, the materializer must derive
+the exact neutral plan from the selected candidate and call
+`RTE-LABEL-PREFLIGHT`. That landed boundary revalidates current terminal
+limits, wire representability and arithmetic, dynamic owner/tombstone
+availability, and the exact caller-owned RTAPT owner, operation, and copied-byte
+capacity. Success remains advisory; only the immediately following checked
+materialization attempt can turn it into an owner and retained candidate.
 
 The driver still creates no wire owner or tombstone and calls no mutating facade
 operation. In particular it must not open a default or root-region-only owner:
@@ -690,8 +805,9 @@ The first projection, after normal application initialization and binding,
 walks the complete semantic tree, validates all retained-capable snapshots,
 derives exact requested quotas, maps stable private identities, and atomically
 selects the complete desired snapshot in caller-bounded storage. Required local
-counts, byte capacities, resource overlap, series history, and transaction
-operation/byte arithmetic must be valid before that snapshot is selected. Local
+item/snapshot counts, byte capacities, and storage overlap must be valid before
+that snapshot is selected. Provider operation, retry-copy, and encoded-update
+arithmetic is deliberately deferred to the later neutral preflight. Local
 attach and this first complete desired snapshot may occur while retained
 discovery is still pending. Pending discovery returns `RTERM-S-WOULD-BLOCK` and
 leaves the selected snapshot and mapping intact but grants no materialization
@@ -703,10 +819,11 @@ terminal maxima before `OWNER_OPEN` is emitted.
 Terminal-negotiated eligibility freezes the declared semantic capacities for a
 later materializer preflight; it is not an owner reservation. Dynamic values may
 vary within those declarations but cannot silently enlarge them. The
-materializer must still prove local RTAPT capture-bank fit and dynamic owner
-availability. If the tree later changes structurally beyond eligibility,
-retained projection reports capacity and keeps the prior coherent retained
-terminal state; CELL rendering continues from the authoritative UIDL tree.
+materializer must construct the exact plan and call `RTE-LABEL-PREFLIGHT` to
+prove local provider capture-bank fit and dynamic owner availability. If the tree
+later changes structurally beyond eligibility, retained projection reports
+capacity and keeps the prior coherent retained terminal state; CELL rendering
+continues from the authoritative UIDL tree.
 
 Unavailable retained discovery or an unsupported optional semantic family
 does not prevent attach or application initialization. The binding retains its
@@ -908,6 +1025,11 @@ advance the screen front buffer or the retained materialization independently.
 A frame with no retained changes remains an ordinary valid CELL transaction; a
 retained-only update may use `CELL_NONE` under the wire recovery rules.
 
+`PRESENT_BEGIN`, `PRESENT_COMMIT`, and `presentation_epoch` are frozen APT-1
+wire names only. There is no protocol object or Akashic architectural layer
+called a Presentation; the Akashic concepts here are retained materialization,
+transactions, and unified publication.
+
 The backend serializes dependencies before references and preserves static
 definition/drop ordering. It may coalesce superseded scalar, visibility, and
 complete source revisions before publication. It may not coalesce across owner
@@ -1005,17 +1127,23 @@ composition after the outer storage was released.
 That construction does not itself claim retained semantic support. The
 provider side now accepts a neutral LABEL through `RTE`, captures a
 pointer-free RTAPT retry record with exact object/UTF-8 ledgers, and dispatches
-it through the typed PT writer. The lifecycle driver now selects a complete
-deep-valid candidate together with private, retry-stable identities before
-negotiation, and separately records terminal-negotiated eligibility when the
-current limits permit it. A refusal preserves the selected candidate and
-mapping. It still queues no `OWNER_OPEN`, materializes no LABEL, and schedules
-nothing through unified publication. The driver therefore remains output-inert
-and the production host advertises no retained policy.
+it through the typed PT writer. The neutral facade and provider now also accept
+the exact mutation-free LABEL plan and can preflight its representation,
+caller-owned capture banks, current owner/tombstone availability, terminal
+quotas, and complete START arithmetic before `OWNER_OPEN`. The lifecycle driver
+selects a complete deep-valid candidate together with private, retry-stable
+identities before negotiation, and separately records terminal-negotiated
+eligibility when the current limits permit it. A refusal preserves the selected
+candidate and mapping. It does not yet construct or invoke the landed plan,
+queue `OWNER_OPEN`, materialize a LABEL, or schedule through unified
+publication. The driver therefore remains output-inert and the production host
+advertises no retained policy.
 CELL output still traverses the unified publisher, while attach, project,
 geometry, quiesce, and detach exercise the exact private UCTX lifetime without
-opening a root-region-only wire owner. The next critical slice is candidate
-materialization and unified CELL/retained publication scheduling.
+opening a root-region-only wire owner. The next critical slice is materializer
+construction of the neutral plan, advisory preflight immediately before
+`OWNER_OPEN`, exact candidate capture, and unified CELL/retained publication
+scheduling.
 
 Retained discovery is not a hosted-UCTX launch gate. The mandatory initial CELL
 snapshot is produced only after Desk initialization, so host composition,
@@ -1070,10 +1198,10 @@ saved snapshot through UCTX-owned accessors.
 
 ## 10. Reset, replay, and loss
 
-The backend privately tracks session identity and the wire
-`presentation_epoch`. A successful soft reset invalidates terminal
-materialization and private wire
-identities, not live UCTX attachments.
+The backend privately tracks session identity and the frozen wire field
+`presentation_epoch`; that field name does not introduce a Presentation object
+or layer. A successful soft reset invalidates terminal materialization and
+private wire identities, not live UCTX attachments.
 
 On an accepted reset boundary, the backend:
 
@@ -1166,8 +1294,10 @@ The lightweight contract suite must prove:
    deep-valid candidate and stable mapping but grants no materialization
    readiness;
 6. a complete semantic-tree candidate maps exact stable IDs before negotiation,
-   derives exact quotas, and requires a later local capture-bank and dynamic
-   owner preflight before `OWNER_OPEN`;
+   derives exact quotas, and its neutral plan preflight rejects malformed or
+   unrepresentable geometry, insufficient local capture banks, unavailable
+   dynamic owner/tombstone state, or excessive exact START bytes before
+   `OWNER_OPEN` and without owner or wire mutation;
 7. UIDL labels, units, styles, points, scalar values, and semantic snapshots are
    copied or revision-bound so later scratch mutation cannot change committed
    projection;

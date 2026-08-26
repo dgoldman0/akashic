@@ -45,6 +45,8 @@ def test_driver_is_optional_neutral_and_caller_bounded() -> None:
         "RTAPT-",
         "_RTAPT-",
         "APTSCB-",
+        "PRESENT-",
+        "PRESENT_",
         "UART-",
         "rich-terminal.f",
         "apt1-engine.f",
@@ -63,6 +65,7 @@ def test_driver_is_optional_neutral_and_caller_bounded() -> None:
     assert "RTERM-UIDL-BINDING-SIZE /" in code
     assert "RTERM-UIDL-BACKEND-SIZE 0 FILL" in code
     assert "RTERM-UIDL-BINDING-SIZE 0 FILL" in code
+    assert "ELIGIBLE-BYTES" not in code
 
 
 def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
@@ -86,11 +89,11 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
 
     assert "96 CONSTANT RTERM-HOST-BINDING-SIZE" in source
     assert "104 CONSTANT RTERM-UIDL-CONFIG-SIZE" in source
-    assert "4 CONSTANT _RTERM-UIDL-ABI" in source
-    assert "3 CONSTANT _RTERM-UIDL-CONFIG-ABI" in source
+    assert "5 CONSTANT _RTERM-UIDL-ABI" in source
+    assert "4 CONSTANT _RTERM-UIDL-CONFIG-ABI" in source
     assert "64 CONSTANT _RTERM-CANDIDATE-META-SIZE" in source
     assert "32 CONSTANT _RTERM-IDENTITY-SIZE" in source
-    assert "360 CONSTANT RTERM-UIDL-BINDING-SIZE" in source
+    assert "352 CONSTANT RTERM-UIDL-BINDING-SIZE" in source
     assert "328 CONSTANT RTERM-UIDL-BACKEND-SIZE" in source
     assert "_RGN-DESC-SIZE CONSTANT RGN-SIZE" in region
     assert "RTERM-UIDL-CONFIG-SIZE" in _definition(
@@ -125,8 +128,7 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
         "_RTERM-R.ELIGIBLE-REGIONS": 320,
         "_RTERM-R.ELIGIBLE-OBJECTS": 328,
         "_RTERM-R.ELIGIBLE-UTF8": 336,
-        "_RTERM-R.ELIGIBLE-BYTES": 344,
-        "_RTERM-R.RESERVED": 352,
+        "_RTERM-R.RESERVED": 344,
     }
     for field, offset in binding_fields.items():
         assert f": {field}" in source
@@ -810,7 +812,6 @@ def test_project_maps_inactive_bank_and_publishes_selector_last() -> None:
             "ELIGIBLE-REGIONS",
             "ELIGIBLE-OBJECTS",
             "ELIGIBLE-UTF8",
-            "ELIGIBLE-BYTES",
         )
     ]
     last_status = publish.index("_RTERM-R.LAST-STATUS !", max(frozen))
@@ -962,6 +963,7 @@ def test_private_identity_mapping_is_exact_monotonic_and_wire_inert() -> None:
         "RTE-OWNER-STATE@",
         "RTE-RETAINED-BEGIN",
         "RTE-REGION-DEFINE",
+        "RTE-LABEL-PREFLIGHT",
         "RTE-LABEL-DEFINE",
         "RTE-RETAINED-SEAL",
         "RTE-RETAINED-CANCEL",
@@ -985,16 +987,20 @@ def test_stable_mapping_precedes_terminal_negotiated_eligibility() -> None:
         "RTE-LIMITS-REGIONS@",
         "RTE-LIMITS-OBJECTS@",
         "RTE-LIMITS-UTF8-BYTES@",
-        "RTE-LIMITS-OPS@",
-        "RTE-LIMITS-UPDATE-BYTES@",
         "RTE-LIMITS-LABEL-BYTES@",
     ):
         assert accessor in limits
-    assert "_RTERM-PJ-ITEMS @ 1 _RTERM-UADD?" in limits
-    assert "_RTERM-PJ-OBJECTS @ 120 _RTERM-UMUL?" in limits
-    assert "_RTERM-PJ-UTF8 @ _RTERM-UADD?" in limits
-    assert "288 _RTERM-UADD?" in limits
-    assert "_RTERM-PJ-ELIGIBILITY-BYTES !" in limits
+    for provider_detail in (
+        "RTE-LIMITS-OPS@",
+        "RTE-LIMITS-UPDATE-BYTES@",
+        "_RTERM-PJ-ELIGIBILITY-BYTES",
+        "120 _RTERM-UMUL?",
+        "248 _RTERM-UADD?",
+        "288 _RTERM-UADD?",
+        "PRESENT",
+        "PT-",
+    ):
+        assert provider_detail not in limits
     for compatibility in (
         "RUPJ-ITEM-HAS-RESOLVED?",
         "UIDL-SNAPSHOT-K-LABEL <>",
@@ -1019,9 +1025,6 @@ def test_stable_mapping_precedes_terminal_negotiated_eligibility() -> None:
     assert "_RTERM-R.OBJECT-HIGH !" not in eligibility
     assert "_RTERM-R.ELIGIBLE" not in eligibility
     assert publish.index("_RTERM-R.OBJECT-HIGH !") < publish.index(
-        "_RTERM-R.CANDIDATE !"
-    )
-    assert publish.index("_RTERM-R.ELIGIBLE-BYTES !") < publish.index(
         "_RTERM-R.CANDIDATE !"
     )
     assert publish.index("_RTERM-R.OBJECT-HIGH !") < publish.index(
@@ -1126,7 +1129,7 @@ def test_quiesce_detach_scrub_and_install_one_immutable_context() -> None:
     assert "RTERM-S-INVALID _RTERM-CALL-FAIL EXIT" in detach
     assert "RTERM-S-SOURCE" not in detach
     assert "_RTERM-R.HOST 104 _RTERM-ZERO?" in detached_valid
-    assert "_RTERM-R.CANDIDATE 224 _RTERM-ZERO?" in detached_valid
+    assert "_RTERM-R.CANDIDATE 216 _RTERM-ZERO?" in detached_valid
     assert "_RTERM-R.TOKEN @ 0<>" in detached_valid
     assert "_RTERM-R.ISSUER @ _RTERM-RV-BACKEND @ =" in detached_valid
     assert "_RTERM-R.LAST-STATUS @" in detached_valid

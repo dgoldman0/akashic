@@ -12,6 +12,9 @@ LABEL_COPY_FIXED = 128
 LABEL_FRAME_FIXED = 120
 REGION_COPY_BYTES = 72
 REGION_FRAME_BYTES = 88
+UPDATE_ENVELOPE_BYTES = 160
+LABEL_PLAN_HEADER_BYTES = 112
+LABEL_PLAN_ITEM_BYTES = 128
 
 
 def _definition(source: str, name: str) -> str:
@@ -86,6 +89,25 @@ def _label_retry_copy(text: bytes) -> bytes:
 
 def _label_frame_bytes(text: bytes) -> int:
     return LABEL_FRAME_FIXED + len(text)
+
+
+def _initial_label_plan_requirements(
+    capacities: list[int],
+) -> tuple[int, int, int]:
+    """Return exact operation, retry-copy, and complete START frame bytes."""
+
+    assert capacities
+    assert all(0 <= capacity <= U32_MAX for capacity in capacities)
+    operations = 1 + len(capacities)
+    retry_copy = REGION_COPY_BYTES + sum(
+        _align8(LABEL_COPY_FIXED + capacity) for capacity in capacities
+    )
+    transaction = (
+        UPDATE_ENVELOPE_BYTES
+        + REGION_FRAME_BYTES
+        + sum(LABEL_FRAME_FIXED + capacity for capacity in capacities)
+    )
+    return operations, retry_copy, transaction
 
 
 def _has_prior_region(
@@ -699,6 +721,165 @@ def test_rich_terminal_engine_copies_one_typed_negotiated_limits_snapshot() -> N
         assert f"0 {pointer} !" in pointer_scrub
 
 
+def test_initial_label_plan_preflight_is_exact_and_admission_mutation_free() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    assert "112 CONSTANT RTAPT-LABEL-PLAN-SIZE" in source
+    assert "128 CONSTANT RTAPT-LABEL-PLAN-ITEM-SIZE" in source
+    assert "160 CONSTANT _RTAPT-UPDATE-ENVELOPE-FRAME-BYTES" in source
+
+    plan_fields = {
+        "OWNER": 0,
+        "GENERATION": 8,
+        "SURFACE-COLS": 16,
+        "SURFACE-ROWS": 24,
+        "REGION-ID": 32,
+        "REGION-X": 40,
+        "REGION-Y": 48,
+        "REGION-COLS": 56,
+        "REGION-ROWS": 64,
+        "REGION-Z": 72,
+        "REGION-FLAGS": 80,
+        "ITEMS-A": 88,
+        "ITEMS-U": 96,
+        "RESERVED": 104,
+    }
+    item_fields = {
+        "OBJECT": 0,
+        "PARENT": 8,
+        "ROW": 16,
+        "COL": 24,
+        "HEIGHT": 32,
+        "WIDTH": 40,
+        "ROOT-HEIGHT": 48,
+        "ROOT-WIDTH": 56,
+        "Z": 64,
+        "VISIBLE": 72,
+        "RGBA": 80,
+        "H-ALIGN": 88,
+        "V-ALIGN": 96,
+        "ELLIPSIZE": 104,
+        "TEXT-CAPACITY": 112,
+        "RESERVED": 120,
+    }
+    for prefix, fields in (("_RTAPT-LP", plan_fields), ("_RTAPT-LPI", item_fields)):
+        for field, offset in fields.items():
+            definition = _definition(source, f"{prefix}.{field}")
+            if offset == 0:
+                assert "+" not in definition
+            else:
+                assert f"{offset} +" in definition
+
+    header = _definition(source, "_RTAPT-LPF-HEADER?")
+    assert "RTAPT-LABEL-PLAN-SIZE _RTAPT-SPAN?" in header
+    assert "RTAPT-LABEL-PLAN-ITEM-SIZE MOD" in header
+    assert "DUP 0= SWAP _RTAPT-U32? 0= OR" in header
+    assert "MSPAN-OVERLAP?" in header
+    assert header.count("RTAPT-STORAGE-DISJOINT?") == 2
+
+    item = _definition(source, "_RTAPT-LPF-ITEM?")
+    for check in (
+        "_RTAPT-LPF-LAST-OBJECT @ U>",
+        "_RTAPT-LPI.PARENT @ IF",
+        "_RTAPT-LPI.ROW @ _RTAPT-I32?",
+        "_RTAPT-LPI.COL @ _RTAPT-I32?",
+        "_RTAPT-LPI.HEIGHT @ _RTAPT-U32?",
+        "_RTAPT-LPI.WIDTH @ _RTAPT-U32?",
+        "_RTAPT-LPI.Z @ _RTAPT-I32?",
+        "_RTAPT-LPI.RGBA @ _RTAPT-U32?",
+        "_RTAPT-LPI.TEXT-CAPACITY @ DUP",
+        "_RTAPT-LPF-SADD?",
+        "_RTAPT-ALIGN8?",
+    ):
+        assert check in item
+
+    arithmetic = _definition(source, "_RTAPT-LPF-ARITHMETIC?")
+    assert "_RTAPT-REGION-DEFINE-COPY-SIZE _RTAPT-LPF-COPY-BYTES !" in arithmetic
+    assert "_RTAPT-LPF-COUNT @ 1 _RTAPT-UADD?" in arithmetic
+    assert "_RTAPT-LABEL-DEFINE-FRAME-FIXED" in arithmetic
+    assert "_RTAPT-UPDATE-ENVELOPE-FRAME-BYTES" in arithmetic
+    assert "_RTAPT-REGION-DEFINE-FRAME-BYTES +" in arithmetic
+
+    owner = _definition(source, "_RTAPT-LPF-OWNER-ADMISSION")
+    assert "_RTAPT-LPF-OCCUPIED @" in owner
+    assert "_RTAPT-E.OWNER-USED @ <>" in owner
+    assert "_RTAPT-O.STATE @ RTAPT-OWNER-ST-TOMBSTONE <>" in owner
+    assert "_RTAPT-O.GENERATION @ _RTAPT-LPF-GEN @ U<" in owner
+    assert "_RTAPT-LPF-FREE @ 0=" in owner
+    for field in (
+        "OWNER-RECORDS",
+        "LIVE-OWNERS",
+        "REGIONS",
+        "RESOURCES",
+        "OBJECTS",
+        "SERIES",
+        "RESOURCE-BYTES",
+        "UTF8-BYTES",
+        "SAMPLE-SLOTS",
+    ):
+        assert f"_RTAPT-L.{field} @ U>" in owner
+    reservation = _definition(source, "_RTAPT-LPF-RESERVATION?")
+    for state in (
+        "OPEN-QUEUED",
+        "OPENING",
+        "OPEN",
+        "DROP-QUEUED",
+        "DROPPING",
+        "DROP-RETRY-QUEUED",
+        "DROP-RETRY-DROPPING",
+        "TOMBSTONE-OPEN-QUEUED",
+        "TOMBSTONE-OPENING",
+        "QUARANTINED",
+    ):
+        assert f"RTAPT-OWNER-ST-{state}" in reservation
+    admission_state = _definition(source, "_RTAPT-LPF-ADMISSION-STATE?")
+    for state in ("FREE", "OPEN", "TOMBSTONE"):
+        assert f"RTAPT-OWNER-ST-{state}" in admission_state
+    assert "_RTAPT-LPF-ADMISSION-STATE? 0=" in owner
+    owner_state = _definition(source, "_RTAPT-LPF-OWNER-STATE?")
+    assert "RTAPT-OWNER-ST-TOMBSTONE-OPENING U> 0=" in owner_state
+    assert "_RTAPT-LPF-OWNER-QUOTAS? 0=" in owner
+    assert "_RTAPT-LPF-OWNER-QUOTAS-ZERO? 0=" in owner
+
+    body = _definition(source, "_RTAPT-LABEL-PREFLIGHT-BODY")
+    ordered_checks = (
+        "_RTAPT-ENGINE-VALID?",
+        "_RTAPT-LPF-HEADER?",
+        "_RTAPT-LPF-ARITHMETIC?",
+        "RTAPT-LIMITS@",
+        "RTAPT-F-INSTRUMENT",
+        "_RTAPT-L.LABEL-BYTES @ U>",
+        "_RTAPT-L.OPS @ U>",
+        "_RTAPT-E.OP-CAP @ U>",
+        "_RTAPT-E.COPY-U @ U>",
+        "_RTAPT-L.UPDATE-BYTES @ U>",
+        "_RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-IDLE <>",
+        "_RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <>",
+        "_RTAPT-LPF-OWNER-ADMISSION",
+    )
+    positions = [body.index(check) for check in ordered_checks]
+    assert positions == sorted(positions)
+
+    public = _definition(source, "RTAPT-LABEL-PREFLIGHT")
+    assert "['] _RTAPT-LABEL-PREFLIGHT-BODY CATCH" in public
+    assert "_RTAPT-LPF-SCRUB" in public
+
+    start = source.index("\\  Mutation-free initial LABEL-plan admission")
+    end = source.index(": RTAPT-UPDATE-STATE@", start)
+    preflight = source[start:end]
+    for mutation in (
+        r"_RTAPT-E\.[A-Z0-9-]+\s+!",
+        r"_RTAPT-O\.[A-Z0-9-]+\s+!",
+        r"_RTAPT-P\.[A-Z0-9-]+\s+!",
+        r"(?m)^\s+PT-[A-Z0-9-]+",
+        r"(?m)^\s+RTAPT-OWNER-OPEN\b",
+        r"(?m)^\s+RTAPT-RICH-BEGIN\b",
+        r"(?m)^\s+RTAPT-REGION-DEFINE\b",
+        r"(?m)^\s+RTAPT-LABEL-DEFINE\b",
+    ):
+        assert not re.search(mutation, preflight)
+
+
 def test_label_geometry_projects_integer_cell_edges_exactly() -> None:
     assert _project_label(
         2, 10, 3, 20, 24, 80, visible=True
@@ -779,3 +960,23 @@ def test_mixed_retry_copy_stride_and_frame_accounting_are_exact() -> None:
 
     assert len(_label_retry_copy(b"")) == LABEL_COPY_FIXED
     assert _label_frame_bytes(b"") == LABEL_FRAME_FIXED
+
+
+def test_initial_label_plan_accounts_exact_apt1_admission_bytes() -> None:
+    # One empty-capacity LABEL is BEGIN(104) + REGION(88) + LABEL(120)
+    # + COMMIT(56).  The former 288-based formula counted one nonexistent
+    # additional 40-byte frame header.
+    assert _initial_label_plan_requirements([0]) == (2, 200, 368)
+    assert _initial_label_plan_requirements([3, 5]) == (3, 344, 496)
+
+    # The reveal is a later empty CONTINUE transaction.  It consumes only its
+    # BEGIN/COMMIT envelope and is never summed with the hidden START.
+    assert UPDATE_ENVELOPE_BYTES == 104 + 56
+    assert UPDATE_ENVELOPE_BYTES < 368
+
+    # Terminal eligibility alone cannot prove the caller-owned retry bank.
+    # This concrete Desk profile has 32 op slots and 2304 copy bytes: eighteen
+    # empty LABEL declarations fit the op bank but not the copy bank.
+    operations, retry_copy, _ = _initial_label_plan_requirements([0] * 18)
+    assert operations == 19 <= 32
+    assert retry_copy == 2376 > 2304

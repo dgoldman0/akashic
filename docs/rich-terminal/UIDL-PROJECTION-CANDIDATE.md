@@ -111,11 +111,12 @@ are never authoritative on their own.
 Each published bank has a 64-byte metadata record containing generation, item
 count, snapshot bytes, region/object/UTF-8 quotas, and the positive root height
 and width used for capture and validation. The two records occupy offsets 144
-and 208 in the 360-byte private binding record. The root dimensions travel with
+and 208 in the 352-byte private binding record. The root dimensions travel with
 the selected candidate rather than being recovered from later mutable layout.
 Private owner/terminal-eligibility fields begin at offset 272; they are not part
-of the neutral candidate or projector ABI and do not reserve an owner or RTAPT
-capture-bank space.
+of the neutral candidate or projector ABI and do not reserve an owner or
+provider capture-bank space. The 352-byte binding record ends with one reserved
+cell at offset 344.
 
 An accepted empty candidate is still selector-published so it supersedes any
 older desired scene, but `RTERM-UCTX-PROJECT` returns
@@ -130,11 +131,11 @@ and returns the exact non-OK status. A terminal-eligible candidate returns
 `RTERM-S-OK`.
 
 Terminal-negotiated eligibility requires INSTRUMENT support, one region, one
-object per item,
-`1 + item-count` operations, each declared LABEL capacity within the per-label
-maximum, the aggregate declaration within total UTF-8, and checked worst-case
-complete transaction bytes `288 + 120 * item-count + declared_utf8` within the
-negotiated update maximum. Identity mapping is independent of that result: it
+object per item, each declared LABEL capacity within the per-label maximum, and
+the aggregate declaration within total UTF-8. It deliberately does not infer a
+provider operation count, copied retry bytes, or encoded update bytes. Those
+representation-dependent facts belong exclusively to the later neutral plan
+preflight. Identity mapping is independent of the eligibility result: it
 copies each exact semantic key into the positional identity bank, reuses an
 exact prior mapped key's object ID, and mints new IDs from a monotone per-owner
 high-water. Duplicate IDs are invalid; a high-water never proves that a sparse
@@ -143,32 +144,122 @@ materialization readiness but do not discard this mapping or remint unchanged
 keys. The binding selector remains the final publication store after metadata,
 identities, eligibility state, status, and any sticky diagnostic are complete.
 
+## Neutral materialization preflight
+
+The downstream `RTE-LABEL-PREFLIGHT ( plan facade -- status )` boundary is now
+landed. The materializer derives its call-borrowed plan from one exact selected
+candidate generation and the already assigned private identities. The aligned
+112-byte header is:
+
+| Offset | Field | Candidate mapping |
+|---:|---|---|
+| 0 | owner | nonzero private binding owner ID |
+| 8 | generation | nonzero private binding owner generation |
+| 16 | surface columns | positive surface width for the attempted publication |
+| 24 | surface rows | positive surface height for the attempted publication |
+| 32 | region ID | nonzero private root-region ID |
+| 40 | region x | nonnegative root origin column |
+| 48 | region y | nonnegative root origin row |
+| 56 | region columns | positive selected root width |
+| 64 | region rows | positive selected root height |
+| 72 | region z | signed root paint order |
+| 80 | region flags | only current bits 0 and 1 |
+| 88 | items address | aligned borrowed preflight-item array |
+| 96 | items bytes | positive exact multiple of 128 |
+| 104 | reserved | zero |
+
+The checked root rectangle must fit the declared positive surface. The plan and
+item spans are nonwrapping, mutually disjoint, and independently disjoint from
+the facade and provider. `N = items-bytes / 128`; no unrelated fixed candidate
+or LABEL count is introduced.
+
+Each selected LABEL maps to one exact 128-byte item in capture order:
+
+| Offset | Field | Candidate mapping |
+|---:|---|---|
+| 0 | object | mapped nonzero object ID, strictly increasing |
+| 8 | parent | zero for this root-LABEL slice |
+| 16 | row | signed resolved row relative to the root |
+| 24 | column | signed resolved column relative to the root |
+| 32 | height | nonnegative resolved height |
+| 40 | width | nonnegative resolved width |
+| 48 | root height | exactly the header region rows |
+| 56 | root width | exactly the header region columns |
+| 64 | z | signed resolved LABEL paint order |
+| 72 | visible | canonical `0` or `-1` |
+| 80 | RGBA | packed numeric `0xRRGGBBAA` |
+| 88 | horizontal alignment | `0` start, `1` center, `2` end |
+| 96 | vertical alignment | `0` top, `1` middle, `2` bottom |
+| 104 | ellipsize | canonical `0` or `-1` |
+| 112 | text capacity | snapshot's nonnegative declared UTF-8 capacity |
+| 120 | reserved | zero |
+
+The neutral facade validates native-cell geometry, canonical fields, strict
+object order, exact root dimensions, checked edges, and visible intersection.
+It does not assume APT-1 numeric widths. RTAPT owns the subsequent exact u32/i32
+representability and geometry-conversion proof, current negotiated terminal
+caps, local owner/op/copy-bank fit, dynamic owner and tombstone availability,
+and complete wire arithmetic.
+
+For item capacities `c_i`, RTAPT proves the exact owner-open quotas
+`(regions=1, resources=0, objects=N, series=0, resource-bytes=0,
+utf8=sum(c_i), sample-slots=0)`, `1 + N` local operation records, and copied
+bytes `72 + sum(ALIGN8(128 + c_i))`. The first op-bearing hidden
+`REPLACE_START` transaction is exactly:
+
+```text
+START = 248 + 120 * N + declared_utf8
+declared_utf8 = sum(c_i)
+```
+
+The 248-byte base is the frozen 160-byte APT-1 wire transaction envelope plus
+the 88-byte root-region definition. A later empty reveal transaction is exactly
+160 bytes. They are serial bounded transactions, not one combined staging
+requirement, so their budgets are never summed.
+
+Preflight is mutation-free admission advice, not a reservation. Malformed
+neutral input fails before the provider preflight operation callback is
+dispatched, and an ordinary provider refusal causes no owner or wire mutation.
+It never writes the plan, selected candidate, operation bank, copy bank, or
+wire. Ordinary results also leave the owner ledger, lifecycle queue, and PT
+session unchanged; limits observation may refresh only the provider's
+designated limits scratch.
+Discovering an already-lost session may invoke the engine's existing
+quarantine/capture-clear transition, which is structural-loss containment, not
+plan admission, and emits no wire. `OK` can become stale immediately, so the
+materializer must use the same selected generation and exact derived quotas in
+the immediately following checked `OWNER_OPEN`/capture sequence; neither a
+prior eligibility result nor an earlier preflight is an admission token.
+
 If discovery is pending, the selected candidate and mapping remain sufficient
 for the owner-loop service to repeat negotiation in place when discovery
 settles. That transition must not depend on another UIDL dirty event or rebuild
 the semantic recipe merely to recover the same identities. Before any
-`OWNER_OPEN` or retained capture, the materializer must separately prove current
-terminal limits, dynamic owner availability, and exact caller-owned RTAPT owner,
-operation, and copied-byte capacity. Eligibility alone admits nothing.
+`OWNER_OPEN` or retained capture, the materializer must build this exact plan
+and call `RTE-LABEL-PREFLIGHT` to recheck current terminal limits, dynamic owner
+availability, representation, encoded-update arithmetic, and caller-owned
+provider owner, operation, and copied-byte capacity. Eligibility and advisory
+success alone admit nothing.
 
 This slice remains output-inert. Its only facade call is `RTE-LIMITS@`; it does
 not open an owner, begin or seal retained work, choose CELL versus retained
 output, or materialize terminal objects.
 
-The downstream neutral boundary can now accept an aligned 160-byte LABEL value
-whose height and width are nonnegative and whose borrowed UTF-8 may begin at
-any byte address. Visible geometry must have positive extent and intersect the
-positive root. Invisible zero-extent or wholly off-root geometry is valid;
-RTAPT canonicalizes it to deterministic nonempty provider bounds while
-preserving invisibility and converts the clipped boundaries at full
-`UNORM32` precision. The borrowed text must be nonwrapping and disjoint from
-facade/provider storage. RTAPT copies it into an aligned, pointer-free retry
-record, maintains exact active/hidden/pending object and UTF-8 ledgers, and
-commits it through the typed PT LABEL writer.
+The downstream neutral boundary can now preflight the complete declared
+root-and-LABEL recipe and accept each aligned 160-byte LABEL value. LABEL height
+and width are nonnegative and borrowed UTF-8 may begin at any byte address.
+Visible geometry must have positive extent and intersect the positive root.
+Invisible zero-extent or wholly off-root geometry is valid; RTAPT canonicalizes
+it to deterministic nonempty provider bounds while preserving invisibility and
+converts clipped boundaries at full `UNORM32` precision. Borrowed text must be
+nonwrapping and disjoint from facade/provider storage. RTAPT copies it into an
+aligned, pointer-free retry record, maintains exact active/hidden/pending object
+and UTF-8 ledgers, and commits it through the typed PT LABEL writer.
 
-The lifecycle driver does not yet exercise that downstream mutation path. The
-next slice preflights and opens an eligible private owner, materializes the exact
-selected generation, and schedules it through the unified CELL/retained
-publication lifecycle with completion and retirement correlation. None of that
-moves scene ownership, output choice, or renderer-specific state into UIDL,
-UIDL-TUI, Desk, or applets.
+The lifecycle driver does not yet construct the plan or exercise the downstream
+mutation path. The next slice invokes advisory preflight immediately before it
+opens an eligible private owner, materializes the exact selected generation,
+and schedules it through the unified CELL/retained publication lifecycle with
+completion and retirement correlation. None of that moves scene ownership,
+output choice, or renderer-specific state into UIDL, UIDL-TUI, Desk, or
+applets.

@@ -52,8 +52,8 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         code,
     )
 
-    assert "3 CONSTANT _RTE-ABI" in code
-    assert '0x5254454641434133 CONSTANT _RTE-MAGIC' in code
+    assert "4 CONSTANT _RTE-ABI" in code
+    assert '0x5254454641434134 CONSTANT _RTE-MAGIC' in code
     assert "136 CONSTANT RTE-FACADE-SIZE" in code
     assert "160 CONSTANT RTE-LIMITS-SIZE" in code
     assert "_RTE-F.CONTEXT" in _definition(source, "RTE-VALID?")
@@ -72,7 +72,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "LABEL-DEF",
     ):
         assert f"_RTE-F.{callback}-XT @ 0=" in valid
-    assert "_RTE-F.RESERVED @ 0=" in valid
+    assert "_RTE-F.LABEL-PREFLIGHT-XT @ 0<>" in valid
 
     disjoint = _definition(source, "RTE-STORAGE-DISJOINT?")
     assert disjoint.index("RTE-VALID?") < disjoint.index("MSPAN-OVERLAP?")
@@ -99,6 +99,10 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-LABEL-BYTES": "( -- bytes )",
         "RTE-LABEL-VALID?": "( label -- flag )",
         "RTE-LABEL-DEFINE": "( label facade -- status )",
+        "RTE-LABEL-PLAN-BYTES": "( -- bytes )",
+        "RTE-LABEL-PLAN-ITEM-BYTES": "( -- bytes )",
+        "RTE-LABEL-PLAN-VALID?": "( plan -- flag )",
+        "RTE-LABEL-PREFLIGHT": "( plan facade -- status )",
         "RTE-RETAINED-BEGIN": "( retained-mode facade -- status )",
         "RTE-RETAINED-SEAL": "( disposition facade -- status )",
         "RTE-RETAINED-CANCEL": "( facade -- status )",
@@ -122,6 +126,7 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-RETAINED-BEGIN",
         "RTE-REGION-DEFINE",
         "RTE-LABEL-DEFINE",
+        "RTE-LABEL-PREFLIGHT",
         "RTE-RETAINED-SEAL",
         "RTE-RETAINED-CANCEL",
         "RTE-OWNER-DROP",
@@ -162,6 +167,11 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
     assert len(set(re.findall(r"RTAPT-OWNER-ST-[A-Z-]+", owner_map))) == 14
 
     init = _definition(source, "_RTAPTE-INIT-BODY")
+    assert "RTE-LABEL-PLAN-SIZE RTAPT-LABEL-PLAN-SIZE <>" in init
+    assert (
+        "RTE-LABEL-PLAN-ITEM-SIZE RTAPT-LABEL-PLAN-ITEM-SIZE <>"
+        in init
+    )
     span = init.index("RTE-FACADE-SIZE _RTE-SPAN?")
     engine = init.index("RTAPT-VALID?", span)
     disjoint = init.index("RTAPT-STORAGE-DISJOINT?", engine)
@@ -184,6 +194,7 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
         "_RTE-F.OWNER-DROP-XT !",
         "_RTE-F.LIMITS-XT !",
         "_RTE-F.LABEL-DEF-XT !",
+        "_RTE-F.LABEL-PREFLIGHT-XT !",
     ):
         assert fill < init.index(field) < magic
 
@@ -313,6 +324,92 @@ def test_label_definition_is_neutral_validated_borrowed_and_exactly_bridged() ->
         assert forbidden not in callback
 
 
+def test_label_plan_preflight_is_neutral_complete_and_mutation_free() -> None:
+    source = FACADE.read_text(encoding="utf-8")
+    bridge = BRIDGE.read_text(encoding="utf-8")
+
+    assert "112 CONSTANT RTE-LABEL-PLAN-SIZE" in source
+    assert "128 CONSTANT RTE-LABEL-PLAN-ITEM-SIZE" in source
+    plan_fields = {
+        "OWNER": 0,
+        "GENERATION": 8,
+        "SURFACE-COLS": 16,
+        "SURFACE-ROWS": 24,
+        "REGION-ID": 32,
+        "REGION-X": 40,
+        "REGION-Y": 48,
+        "REGION-COLS": 56,
+        "REGION-ROWS": 64,
+        "REGION-Z": 72,
+        "REGION-FLAGS": 80,
+        "ITEMS-A": 88,
+        "ITEMS-U": 96,
+        "RESERVED": 104,
+    }
+    item_fields = {
+        "OBJECT": 0,
+        "PARENT": 8,
+        "ROW": 16,
+        "COL": 24,
+        "HEIGHT": 32,
+        "WIDTH": 40,
+        "ROOT-HEIGHT": 48,
+        "ROOT-WIDTH": 56,
+        "Z": 64,
+        "VISIBLE": 72,
+        "RGBA": 80,
+        "H-ALIGN": 88,
+        "V-ALIGN": 96,
+        "ELLIPSIZE": 104,
+        "TEXT-CAPACITY": 112,
+        "RESERVED": 120,
+    }
+    for prefix, fields in (("_RTE-LP", plan_fields), ("_RTE-LPI", item_fields)):
+        for field, offset in fields.items():
+            definition = _definition(source, f"{prefix}.{field}")
+            if offset == 0:
+                assert "+" not in definition
+            else:
+                assert f"{offset} +" in definition
+
+    valid = _definition(source, "_RTE-LABEL-PLAN-VALID-BODY")
+    assert "RTE-LABEL-PLAN-SIZE _RTE-SPAN?" in valid
+    assert "_RTE-LPV-ITEMS-U @ 0= IF 0 EXIT THEN" in valid
+    assert "RTE-LABEL-PLAN-ITEM-SIZE MOD" in valid
+    assert "MSPAN-OVERLAP?" in valid
+    assert "_RTE-UADD?" in valid
+    assert "_RTE-LP.SURFACE-COLS @ U>" in valid
+    assert "_RTE-LP.SURFACE-ROWS @ U>" in valid
+    assert "_RTE-LABEL-PLAN-ITEM?" in valid
+    item = _definition(source, "_RTE-LABEL-PLAN-ITEM?")
+    assert "_RTE-LPV-PRIOR-OBJECT @ U>" in item
+    assert "_RTE-LPI.PARENT @ IF" in item
+    assert "_RTE-LPI.TEXT-CAPACITY @ 0<" in item
+    geometry = _definition(source, "_RTE-LABEL-PLAN-ITEM-GEOMETRY?")
+    assert geometry.count("_RTE-SADD?") == 2
+    assert "_RTE-LP.REGION-ROWS @ <>" in geometry
+    assert "_RTE-LP.REGION-COLS @ <>" in geometry
+    signed_add = _definition(source, "_RTE-SADD?")
+    assert all(word not in signed_add for word in (">R", "R@", "R>"))
+
+    dispatch = _definition(source, "RTE-LABEL-PREFLIGHT")
+    plan_span = dispatch.index("RTE-LABEL-PLAN-SIZE _RTE-SPAN?")
+    plan_disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", plan_span)
+    items_span = dispatch.index("_RTE-SPAN?", plan_disjoint)
+    items_disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", items_span)
+    validate = dispatch.index("RTE-LABEL-PLAN-VALID?", items_disjoint)
+    execute = dispatch.index("_RTE-F.LABEL-PREFLIGHT-XT @ EXECUTE", validate)
+    assert plan_span < plan_disjoint < items_span < items_disjoint < validate < execute
+    assert "DUP RTE-STATUS-VALID? 0=" in dispatch
+
+    callback = _definition(bridge, "_RTAPTE-LABEL-PREFLIGHT")
+    assert "RTAPT-LABEL-PREFLIGHT" in callback
+    assert "_RTAPTE-STATUS>RTE" in callback
+    assert re.search(r"(?<![A-Z])PT-", callback) is None
+    for forbidden in ("OWNER-OPEN", "REGION-DEFINE", "LABEL-DEFINE"):
+        assert forbidden not in callback
+
+
 def test_apt1_bridge_finalization_is_blank_idempotent_and_scrubs_authority() -> None:
     source = BRIDGE.read_text(encoding="utf-8")
     fini = _definition(source, "_RTAPTE-FINI-BODY")
@@ -339,6 +436,7 @@ def test_apt1_bridge_finalization_is_blank_idempotent_and_scrubs_authority() -> 
         "OWNER-DROP",
         "LIMITS",
         "LABEL-DEF",
+        "LABEL-PREFLIGHT",
     ):
         assert f"_RTE-F.{callback}-XT @ ['] _RTAPTE-" in exact
 

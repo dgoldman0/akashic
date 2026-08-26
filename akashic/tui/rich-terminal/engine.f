@@ -5,10 +5,10 @@
 \  This internal composition ABI keeps UIDL lifecycle/projector code above
 \  concrete terminal engines.  This revision exposes the bound provider's
 \  owner and transaction operations, one immutable negotiated-limits snapshot,
-\  and one call-borrowed neutral LABEL definition.  The descriptor
-\  is caller-owned, immutable after provider construction, and carries one
-\  explicit provider context.  It owns no storage, transport, host, UCTX,
-\  Desk, or application authority.
+\  one call-borrowed neutral LABEL definition, and one mutation-free LABEL
+\  admission plan.  The descriptor is caller-owned, immutable after provider
+\  construction, and carries one explicit provider context.  It owns no
+\  storage, transport, host, UCTX, Desk, or application authority.
 \
 \  Prefix: RTE- (public), _RTE- (private)
 \  Provider: akashic-tui-rte1
@@ -109,8 +109,8 @@ REQUIRE ../../utils/memory-span.f
 0 CONSTANT RTE-COMMIT
 1 CONSTANT RTE-COMMIT-AND-REVEAL
 
-3 CONSTANT _RTE-ABI
-0x5254454641434133 CONSTANT _RTE-MAGIC  \ "RTEFACA3"
+4 CONSTANT _RTE-ABI
+0x5254454641434134 CONSTANT _RTE-MAGIC  \ "RTEFACA4"
 
 : _RTE-F.MAGIC          ( f -- a )       ;
 : _RTE-F.ABI            ( f -- a )   8 + ;
@@ -128,11 +128,57 @@ REQUIRE ../../utils/memory-span.f
 : _RTE-F.OWNER-DROP-XT  ( f -- a ) 104 + ;
 : _RTE-F.LIMITS-XT      ( f -- a ) 112 + ;
 : _RTE-F.LABEL-DEF-XT   ( f -- a ) 120 + ;
-: _RTE-F.RESERVED       ( f -- a ) 128 + ;
+: _RTE-F.LABEL-PREFLIGHT-XT ( f -- a ) 128 + ;
 
 136 CONSTANT RTE-FACADE-SIZE
 
 : RTE-FACADE-BYTES  ( -- bytes )  RTE-FACADE-SIZE ;
+
+\ A LABEL plan describes one root REGION_DEFINE followed by a positive,
+\ caller-bounded sequence of LABEL_DEFINE operations.  Each item declares
+\ the maximum text bytes which its later definition may consume.  The plan
+\ carries no renderer or provider representation and is borrowed only for
+\ RTE-LABEL-PREFLIGHT's dynamic extent.
+: _RTE-LP.OWNER         ( plan -- a )        ;
+: _RTE-LP.GENERATION    ( plan -- a )    8 + ;
+: _RTE-LP.SURFACE-COLS  ( plan -- a )   16 + ;
+: _RTE-LP.SURFACE-ROWS  ( plan -- a )   24 + ;
+: _RTE-LP.REGION-ID     ( plan -- a )   32 + ;
+: _RTE-LP.REGION-X      ( plan -- a )   40 + ;
+: _RTE-LP.REGION-Y      ( plan -- a )   48 + ;
+: _RTE-LP.REGION-COLS   ( plan -- a )   56 + ;
+: _RTE-LP.REGION-ROWS   ( plan -- a )   64 + ;
+: _RTE-LP.REGION-Z      ( plan -- a )   72 + ;
+: _RTE-LP.REGION-FLAGS  ( plan -- a )   80 + ;
+: _RTE-LP.ITEMS-A       ( plan -- a )   88 + ;
+: _RTE-LP.ITEMS-U       ( plan -- a )   96 + ;
+: _RTE-LP.RESERVED      ( plan -- a )  104 + ;
+
+112 CONSTANT RTE-LABEL-PLAN-SIZE
+
+: RTE-LABEL-PLAN-BYTES  ( -- bytes )  RTE-LABEL-PLAN-SIZE ;
+
+: _RTE-LPI.OBJECT        ( item -- a )        ;
+: _RTE-LPI.PARENT        ( item -- a )    8 + ;
+: _RTE-LPI.ROW           ( item -- a )   16 + ;
+: _RTE-LPI.COL           ( item -- a )   24 + ;
+: _RTE-LPI.HEIGHT        ( item -- a )   32 + ;
+: _RTE-LPI.WIDTH         ( item -- a )   40 + ;
+: _RTE-LPI.ROOT-HEIGHT   ( item -- a )   48 + ;
+: _RTE-LPI.ROOT-WIDTH    ( item -- a )   56 + ;
+: _RTE-LPI.Z             ( item -- a )   64 + ;
+: _RTE-LPI.VISIBLE       ( item -- a )   72 + ;
+: _RTE-LPI.RGBA          ( item -- a )   80 + ;
+: _RTE-LPI.H-ALIGN       ( item -- a )   88 + ;
+: _RTE-LPI.V-ALIGN       ( item -- a )   96 + ;
+: _RTE-LPI.ELLIPSIZE     ( item -- a )  104 + ;
+: _RTE-LPI.TEXT-CAPACITY ( item -- a )  112 + ;
+: _RTE-LPI.RESERVED      ( item -- a )  120 + ;
+
+128 CONSTANT RTE-LABEL-PLAN-ITEM-SIZE
+
+: RTE-LABEL-PLAN-ITEM-BYTES  ( -- bytes )
+    RTE-LABEL-PLAN-ITEM-SIZE ;
 
 \ A LABEL definition is a call-borrowed renderer-neutral value record.  Its
 \ geometry is expressed in integer cells relative to the projection root;
@@ -184,15 +230,125 @@ REQUIRE ../../utils/memory-span.f
 : _RTE-POSITIVE-EXACT?  ( value feature-present? -- flag )
     IF 0<> ELSE 0= THEN ;
 
-\ Return the signed sum only when native-cell addition is exact.  Geometry
-\ validation uses this before deciding whether a partially clipped rectangle
-\ intersects its root.
+VARIABLE _RTE-SADD-A
+VARIABLE _RTE-SADD-B
+VARIABLE _RTE-SADD-SUM
+
+\ Return the signed sum only when native-cell addition is exact.  Keep the
+\ scratch off the return stack because plan validation calls this from a DO
+\ loop, whose return-stack state belongs to the loop counter.
 : _RTE-SADD?  ( a b -- sum flag )
-    2DUP + >R
-    R@ XOR SWAP R@ XOR AND 0< IF
-        R> DROP 0 0 EXIT
+    _RTE-SADD-B ! _RTE-SADD-A !
+    _RTE-SADD-A @ _RTE-SADD-B @ + _RTE-SADD-SUM !
+    _RTE-SADD-A @ _RTE-SADD-SUM @ XOR
+    _RTE-SADD-B @ _RTE-SADD-SUM @ XOR AND 0< IF
+        0 0 EXIT
     THEN
-    R> -1 ;
+    _RTE-SADD-SUM @ -1 ;
+
+VARIABLE _RTE-LPV-PLAN
+VARIABLE _RTE-LPV-ITEM
+VARIABLE _RTE-LPV-ITEMS-A
+VARIABLE _RTE-LPV-ITEMS-U
+VARIABLE _RTE-LPV-PRIOR-OBJECT
+VARIABLE _RTE-LPV-ROW-END
+VARIABLE _RTE-LPV-COL-END
+
+: _RTE-LABEL-PLAN-VALID-FINISH  ( flag -- flag )
+    0 _RTE-LPV-PLAN !
+    0 _RTE-LPV-ITEM !
+    0 _RTE-LPV-ITEMS-A !
+    0 _RTE-LPV-ITEMS-U !
+    0 _RTE-LPV-PRIOR-OBJECT !
+    0 _RTE-LPV-ROW-END !
+    0 _RTE-LPV-COL-END ! ;
+
+: _RTE-LABEL-PLAN-ITEM-GEOMETRY?  ( -- flag )
+    _RTE-LPV-ITEM @ _RTE-LPI.HEIGHT @ 0<
+    _RTE-LPV-ITEM @ _RTE-LPI.WIDTH @ 0< OR IF 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.ROOT-HEIGHT @ 0> 0=
+    _RTE-LPV-ITEM @ _RTE-LPI.ROOT-WIDTH @ 0> 0= OR IF 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.ROOT-HEIGHT @
+        _RTE-LPV-PLAN @ _RTE-LP.REGION-ROWS @ <> IF 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.ROOT-WIDTH @
+        _RTE-LPV-PLAN @ _RTE-LP.REGION-COLS @ <> IF 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.ROW @
+    _RTE-LPV-ITEM @ _RTE-LPI.HEIGHT @ _RTE-SADD? 0= IF
+        DROP 0 EXIT
+    THEN _RTE-LPV-ROW-END !
+    _RTE-LPV-ITEM @ _RTE-LPI.COL @
+    _RTE-LPV-ITEM @ _RTE-LPI.WIDTH @ _RTE-SADD? 0= IF
+        DROP 0 EXIT
+    THEN _RTE-LPV-COL-END !
+    _RTE-LPV-ITEM @ _RTE-LPI.VISIBLE @ IF
+        _RTE-LPV-ITEM @ _RTE-LPI.HEIGHT @ 0=
+        _RTE-LPV-ITEM @ _RTE-LPI.WIDTH @ 0= OR
+        _RTE-LPV-ITEM @ _RTE-LPI.ROW @
+            _RTE-LPV-ITEM @ _RTE-LPI.ROOT-HEIGHT @ < 0= OR
+        _RTE-LPV-ROW-END @ 0> 0= OR
+        _RTE-LPV-ITEM @ _RTE-LPI.COL @
+            _RTE-LPV-ITEM @ _RTE-LPI.ROOT-WIDTH @ < 0= OR
+        _RTE-LPV-COL-END @ 0> 0= OR IF 0 EXIT THEN
+    THEN
+    -1 ;
+
+: _RTE-LABEL-PLAN-ITEM?  ( -- flag )
+    _RTE-LPV-ITEM @ _RTE-LPI.OBJECT @ DUP 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LPV-PRIOR-OBJECT @ U> 0= IF DROP 0 EXIT THEN
+    _RTE-LPV-PRIOR-OBJECT !
+    _RTE-LPV-ITEM @ _RTE-LPI.PARENT @ IF 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.VISIBLE @ _RTE-BOOL? 0= IF 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.RGBA @ 0xFFFFFFFF U> IF 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.H-ALIGN @ 3 U< 0= IF 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.V-ALIGN @ 3 U< 0= IF 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.ELLIPSIZE @ _RTE-BOOL? 0= IF 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.TEXT-CAPACITY @ 0< IF 0 EXIT THEN
+    _RTE-LPV-ITEM @ _RTE-LPI.RESERVED @ IF 0 EXIT THEN
+    _RTE-LABEL-PLAN-ITEM-GEOMETRY? ;
+
+: _RTE-LABEL-PLAN-VALID-BODY  ( -- flag )
+    _RTE-LPV-PLAN @ DUP RTE-LABEL-PLAN-SIZE _RTE-SPAN? 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _RTE-LP.OWNER @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LP.GENERATION @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LP.SURFACE-COLS @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LP.SURFACE-ROWS @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LP.REGION-ID @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LP.REGION-X @ 0< IF DROP 0 EXIT THEN
+    DUP _RTE-LP.REGION-Y @ 0< IF DROP 0 EXIT THEN
+    DUP _RTE-LP.REGION-COLS @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LP.REGION-ROWS @ 0> 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LP.REGION-FLAGS @ 3 INVERT AND IF DROP 0 EXIT THEN
+    DUP _RTE-LP.RESERVED @ IF DROP 0 EXIT THEN
+    DUP _RTE-LP.REGION-X @ OVER _RTE-LP.REGION-COLS @
+        _RTE-UADD? 0= IF DROP DROP 0 EXIT THEN
+    OVER _RTE-LP.SURFACE-COLS @ U> IF DROP 0 EXIT THEN
+    DUP _RTE-LP.REGION-Y @ OVER _RTE-LP.REGION-ROWS @
+        _RTE-UADD? 0= IF DROP DROP 0 EXIT THEN
+    OVER _RTE-LP.SURFACE-ROWS @ U> IF DROP 0 EXIT THEN
+    DUP _RTE-LP.ITEMS-A @ _RTE-LPV-ITEMS-A !
+    DUP _RTE-LP.ITEMS-U @ _RTE-LPV-ITEMS-U !
+    DROP
+    _RTE-LPV-ITEMS-A @ _RTE-LPV-ITEMS-U @ _RTE-SPAN? 0= IF 0 EXIT THEN
+    _RTE-LPV-ITEMS-U @ 0= IF 0 EXIT THEN
+    _RTE-LPV-ITEMS-U @ RTE-LABEL-PLAN-ITEM-SIZE MOD IF 0 EXIT THEN
+    _RTE-LPV-PLAN @ RTE-LABEL-PLAN-SIZE
+        _RTE-LPV-ITEMS-A @ _RTE-LPV-ITEMS-U @ MSPAN-OVERLAP? IF
+        0 EXIT
+    THEN
+    0 _RTE-LPV-PRIOR-OBJECT !
+    _RTE-LPV-ITEMS-A @ _RTE-LPV-ITEM !
+    _RTE-LPV-ITEMS-U @ RTE-LABEL-PLAN-ITEM-SIZE / 0 ?DO
+        _RTE-LABEL-PLAN-ITEM? 0= IF 0 UNLOOP EXIT THEN
+        RTE-LABEL-PLAN-ITEM-SIZE _RTE-LPV-ITEM +!
+    LOOP
+    -1 ;
+
+: RTE-LABEL-PLAN-VALID?  ( plan -- flag )
+    _RTE-LPV-PLAN !
+    _RTE-LABEL-PLAN-VALID-BODY
+    _RTE-LABEL-PLAN-VALID-FINISH ;
 
 : _RTE-UTF8-CONT?  ( byte -- flag )
     0xC0 AND 0x80 = ;
@@ -485,7 +641,7 @@ VARIABLE _RTE-LV-FEATURES
     OVER _RTE-F.OWNER-DROP-XT @ 0= OR IF DROP 0 EXIT THEN
     DUP _RTE-F.LIMITS-XT @ 0=
     OVER _RTE-F.LABEL-DEF-XT @ 0= OR IF DROP 0 EXIT THEN
-    _RTE-F.RESERVED @ 0= ;
+    _RTE-F.LABEL-PREFLIGHT-XT @ 0<> ;
 
 : RTE-STORAGE-DISJOINT?  ( a u facade -- flag )
     DUP RTE-VALID? 0= IF _RTE-DROP3 0 EXIT THEN
@@ -546,6 +702,25 @@ VARIABLE _RTE-LV-FEATURES
     ( owner generation region x y cols rows z flags facade -- status )
     DUP RTE-VALID? 0= IF 2DROP 2DROP 2DROP 2DROP 2DROP RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.REGION-DEF-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+: RTE-LABEL-PREFLIGHT  ( plan facade -- status )
+    DUP RTE-VALID? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    OVER RTE-LABEL-PLAN-SIZE _RTE-SPAN? 0= IF
+        2DROP RTE-S-INVALID EXIT
+    THEN
+    OVER RTE-LABEL-PLAN-SIZE 2 PICK RTE-STORAGE-DISJOINT? 0= IF
+        2DROP RTE-S-INVALID EXIT
+    THEN
+    OVER _RTE-LP.ITEMS-A @ 2 PICK _RTE-LP.ITEMS-U @ _RTE-SPAN? 0= IF
+        2DROP RTE-S-INVALID EXIT
+    THEN
+    OVER _RTE-LP.ITEMS-A @ 2 PICK _RTE-LP.ITEMS-U @
+        2 PICK RTE-STORAGE-DISJOINT? 0= IF
+            2DROP RTE-S-INVALID EXIT
+        THEN
+    OVER RTE-LABEL-PLAN-VALID? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.LABEL-PREFLIGHT-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
 
 : RTE-LABEL-DEFINE  ( label facade -- status )
