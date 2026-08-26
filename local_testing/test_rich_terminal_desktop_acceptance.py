@@ -257,6 +257,21 @@ def test_connect_rejects_a_socket_owned_by_another_server_process(
     assert clients[0].closed
 
 
+def test_guest_boot_failures_are_reported_from_the_cell_screen() -> None:
+    normal = "KDOS loaded\nRunning autoexec.f...\n"
+    assert acceptance_runner._guest_boot_failure(normal) is None
+
+    failure = (
+        normal
+        + "  line 66: _UTUI-RGN ? (not found)\n"
+        + "COLD SOURCE LOAD FAIL status=12 eval=1 line=488 token=_UTUI-RGN\n"
+    )
+    excerpt = acceptance_runner._guest_boot_failure(failure)
+    assert excerpt is not None
+    assert "_UTUI-RGN ? (not found)" in excerpt
+    assert "COLD SOURCE LOAD FAIL" in excerpt
+
+
 def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
     tmp_path: Path,
 ) -> None:

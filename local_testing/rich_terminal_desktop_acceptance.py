@@ -356,6 +356,31 @@ def _surface_rgba(pygame_module, surface) -> bytes:
     return pygame_module.image.tostring(surface, "RGBA")
 
 
+def _terminal_text(terminal: VirtualTerminal) -> str:
+    with terminal._lock:
+        return "\n".join(
+            "".join(cell[0] for cell in row).rstrip()
+            for row in terminal.grid
+        )
+
+
+def _guest_boot_failure(text: str) -> str | None:
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    failure_indexes = [
+        index
+        for index, line in enumerate(lines)
+        if (
+            "COLD SOURCE LOAD FAIL" in line
+            or "[akashic] desktop exception" in line
+            or ("line " in line and "? (not found)" in line)
+        )
+    ]
+    if not failure_indexes:
+        return None
+    index = failure_indexes[-1]
+    return "\n".join(lines[max(0, index - 2) : index + 1])
+
+
 def _fit_viewer_font(
     pygame_module,
     font_path: Path | None,
@@ -713,6 +738,12 @@ def run_physical_desktop_acceptance(
                 display_state=display_state,
                 revision=revision,
             )
+            guest_failure = _guest_boot_failure(_terminal_text(terminal))
+            if guest_failure is not None:
+                raise PhysicalDesktopAcceptanceError(
+                    "guest failed before physical Desktop acceptance:\n"
+                    f"{guest_failure}"
+                )
             if resized:
                 font, cell_width, cell_height, fitted_font_size = (
                     _fit_viewer_font(
