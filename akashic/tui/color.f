@@ -1,7 +1,8 @@
-\ color.f — RGB → xterm-256 Palette Color Resolution
+\ color.f — xterm-256 Palette Color Conversion
 \
 \ Shared TUI color utilities: maps 24-bit RGB to the nearest xterm-256
-\ palette index.  Used by both dom-tui.f and uidl-tui.f.
+\ palette index and expands an index to packed 0xRRGGBBAA.  Used by both
+\ dom-tui.f and uidl-tui.f.
 \
 \ Strategy:
 \   1. Try the 6×6×6 color cube (indices 16–231).
@@ -10,6 +11,7 @@
 \
 \ Public words:
 \   TUI-RESOLVE-COLOR   ( r g b -- index )
+\   TUI-PALETTE>RGBA    ( index -- rgba )
 \   TUI-PARSE-COLOR     ( val-a val-u -- index found? )
 \
 \ Prefix: TUI-  (public)
@@ -30,6 +32,13 @@ REQUIRE ../utils/string.f
 \ Cube levels: 0, 95, 135, 175, 215, 255.
 
 CREATE _TC-CUBE-LEVELS  0 C, 95 C, 135 C, 175 C, 215 C, 255 C,
+
+\ MegaPad VirtualTerminal base palette, packed as 0xRRGGBBAA.
+CREATE _TC-BASE16-RGBA
+    0x000000FF ,  0xAA0000FF ,  0x00AA00FF ,  0xAA5500FF ,
+    0x0000AAFF ,  0xAA00AAFF ,  0x00AAAAFF ,  0xAAAAAAFF ,
+    0x555555FF ,  0xFF5555FF ,  0x55FF55FF ,  0xFFFF55FF ,
+    0x5555FFFF ,  0xFF55FFFF ,  0x55FFFFFF ,  0xFFFFFFFF ,
 
 VARIABLE _TC-R   VARIABLE _TC-G   VARIABLE _TC-B
 VARIABLE _TC-BEST-IDX   VARIABLE _TC-BEST-DIST
@@ -105,7 +114,37 @@ VARIABLE _TGD-AVG   VARIABLE _TGD-BEST   VARIABLE _TGD-BD
     THEN ;
 
 \ =====================================================================
-\  §2 — CSS Color String → Palette Index
+\  §2 — 256-Palette Index → RGBA8888
+\ =====================================================================
+
+: _TC-PACK-RGBA  ( r g b -- rgba )
+    8 LSHIFT 0xFF OR
+    SWAP 16 LSHIFT OR
+    SWAP 24 LSHIFT OR ;
+
+: _TC-BASE16>RGBA  ( index -- rgba )
+    CELLS _TC-BASE16-RGBA + @ ;
+
+VARIABLE _TCPI-Q
+VARIABLE _TCPI-RI   VARIABLE _TCPI-GI   VARIABLE _TCPI-BI
+
+: _TC-PALETTE-CUBE>RGBA  ( index -- rgba )
+    16 - 6 /MOD  _TCPI-Q !  _TCPI-BI !
+    _TCPI-Q @ 6 /MOD  _TCPI-RI !  _TCPI-GI !
+    _TC-CUBE-LEVELS _TCPI-RI @ + C@
+    _TC-CUBE-LEVELS _TCPI-GI @ + C@
+    _TC-CUBE-LEVELS _TCPI-BI @ + C@
+    _TC-PACK-RGBA ;
+
+\ TUI-PALETTE>RGBA ( index -- rgba )
+\   Expand an already-validated xterm-256 palette index to 0xRRGGBBAA.
+: TUI-PALETTE>RGBA  ( index -- rgba )
+    DUP 16 U< IF _TC-BASE16>RGBA EXIT THEN
+    DUP 232 U< IF _TC-PALETTE-CUBE>RGBA EXIT THEN
+    232 - 10 * 8 +  DUP DUP  _TC-PACK-RGBA ;
+
+\ =====================================================================
+\  §3 — CSS Color String → Palette Index
 \ =====================================================================
 
 VARIABLE _TPC-R   VARIABLE _TPC-G   VARIABLE _TPC-B
@@ -155,4 +194,3 @@ VARIABLE _TPC-VA  VARIABLE _TPC-VU  \ saved input for integer fallback
         DROP 2DROP                       \ CSS-PARSE-INT failure cleanup
     THEN
     0 0 ;
-

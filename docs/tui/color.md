@@ -1,10 +1,11 @@
-# akashic-tui-color — RGB → xterm-256 Color Resolution
+# akashic-tui-color — xterm-256 Color Conversion
 
 Shared TUI color utilities: maps 24-bit RGB values to the nearest
 xterm-256 palette index using Euclidean distance across the 6×6×6
 colour cube (indices 16–231) and the 24-step grayscale ramp
-(indices 232–255).  Also parses CSS colour strings (hex and named)
-directly to palette indices.
+(indices 232–255). It also expands palette indices to fully opaque
+RGBA8888 and parses CSS colour strings (hex and named) directly to
+palette indices.
 
 ```forth
 REQUIRE tui/color.f
@@ -33,6 +34,7 @@ REQUIRE tui/color.f
 |-----------|---------------|
 | **Shared module** | Used by both `dom-tui.f` and `uidl-tui.f` — extracted to avoid duplication. |
 | **Pure computation** | No allocation, no I/O, no global state beyond scratch variables. |
+| **Terminal-compatible** | Palette expansion exactly matches MegaPad's `VirtualTerminal`: its base 16 colours, the xterm cube, and the xterm grayscale ramp. |
 | **CSS-aware** | Accepts `#RRGGBB` / `#RGB` hex colours, all 148 CSS named colours, and raw integer palette indices (0-255). |
 | **Prefix convention** | Public: `TUI-`. Internal: `_TC-`. |
 
@@ -53,6 +55,30 @@ palette entry in two steps:
 
 The index with the smaller distance² wins.  Ties favour grayscale.
 
+`TUI-PALETTE>RGBA` performs the exact reverse palette expansion:
+
+1. **Base colours** (indices 0–15) use MegaPad's terminal palette:
+
+   | Index | RGB | Index | RGB |
+   |------:|:----|------:|:----|
+   | 0 | `000000` | 8 | `555555` |
+   | 1 | `AA0000` | 9 | `FF5555` |
+   | 2 | `00AA00` | 10 | `55FF55` |
+   | 3 | `AA5500` | 11 | `FFFF55` |
+   | 4 | `0000AA` | 12 | `5555FF` |
+   | 5 | `AA00AA` | 13 | `FF55FF` |
+   | 6 | `00AAAA` | 14 | `55FFFF` |
+   | 7 | `AAAAAA` | 15 | `FFFFFF` |
+
+2. **Colour cube** (indices 16–231) uses component levels
+   0, 95, 135, 175, 215, and 255, with blue varying fastest.
+
+3. **Grayscale ramp** (indices 232–255) uses
+   `gray = 8 + 10 × (index - 232)`.
+
+The result is the numeric packed value `0xRRGGBBAA`; alpha is always
+`0xFF`. This is a value layout, independent of byte order in memory.
+
 ---
 
 ## Public API
@@ -67,6 +93,20 @@ xterm-256 palette index.
 0   0   0   TUI-RESOLVE-COLOR  .  \ 16  (black in cube)
 95  135 175 TUI-RESOLVE-COLOR  .  \ 67  (steel blue area)
 128 128 128 TUI-RESOLVE-COLOR  .  \ 244 (mid-gray in ramp)
+```
+
+### `TUI-PALETTE>RGBA` — `( index -- rgba )`
+
+Expand an already-validated xterm-256 palette index to packed
+`0xRRGGBBAA`, matching the foreground and background fields in a TUI
+`CELL`. The conversion does not clamp, mask, or wrap its input; callers
+own the existing `0..255` palette-index invariant. It has no provider
+dependency and performs no allocation.
+
+```forth
+1   TUI-PALETTE>RGBA  .  \ 0xAA0000FF (base red)
+67  TUI-PALETTE>RGBA  .  \ 0x5F87AFFF (cube colour)
+244 TUI-PALETTE>RGBA  .  \ 0x808080FF (grayscale)
 ```
 
 ### `TUI-PARSE-COLOR` — `( val-a val-u -- index found? )`
@@ -100,6 +140,7 @@ S" bogus"   TUI-PARSE-COLOR  . .   \ 0 0    (not found)
 
 ```
 TUI-RESOLVE-COLOR   ( r g b -- index )              RGB → xterm-256 palette index
+TUI-PALETTE>RGBA    ( index -- rgba )                Palette index → opaque 0xRRGGBBAA
 TUI-PARSE-COLOR     ( val-a val-u -- idx flag )      CSS color string → palette index
                                                      Hex (#RGB, #RRGGBB), named, or integer 0-255
 ```
@@ -126,6 +167,12 @@ THEN
 S" cornflowerblue" TUI-PARSE-COLOR IF
     .  \ prints the palette index
 THEN
+```
+
+### Expand a cell colour for a rich label
+
+```forth
+cell CELL-FG@ TUI-PALETTE>RGBA  \ opaque RGBA for the neutral label record
 ```
 
 ---
