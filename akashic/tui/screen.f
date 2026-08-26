@@ -5,7 +5,7 @@
 \  Double-buffered character-cell screen.  Widgets write to the back
 \  buffer.  SCR-FLUSH diffs front vs. back and projects changed cells
 \  through a transactional backend.  ANSI is the constructed default;
-\  optional presentation modules bind another backend explicitly.
+\  outer composition may bind another transactional backend explicitly.
 \
 \  Screen Descriptor (10 cells = 80 bytes):
 \    +0   width         Columns

@@ -5,7 +5,7 @@
 **File:** `akashic/tui/rich-terminal/uidl-projector.f`
 
 The projector is the renderer-neutral desired-scene boundary between an active
-UIDL document and optional presentation backends. It captures supported UIDL
+UIDL document and optional output adapters. It captures supported UIDL
 semantic snapshots into caller-owned storage. It does not query an engine,
 open an owner, emit terminal bytes, select CELL versus retained output, or
 change UIDL dirty state. Desk and applets do not load or call it.
@@ -87,3 +87,6 @@ not change the selector, so the previously selected candidate remains
 authoritative. Admission is the only place the driver performs the full RUPJ
 bank validation. This slice remains wire-inert: it neither calls the `RTE`
 facade nor assigns retained identities or materializes terminal objects.
+UIDL-TUI now provides a validated copied 72-byte resolved geometry/style
+record; the next candidate revision will append that neutral state without
+exposing sidecar storage or a renderer identity.

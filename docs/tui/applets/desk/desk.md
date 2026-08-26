@@ -68,8 +68,8 @@ repaint.  The flag ensures: fill runs → all elements are dirty (from
 relayout) → full repaint over the fill.  Normal paint cycles skip
 the fill entirely.
 
-Sub-apps are isolated via per-app **UIDL context** buffers (103,592 bytes,
-approximately 101 KiB, each), which save/restore the 21 UIDL scalar variables
+Sub-apps are isolated via per-app **UIDL context** buffers (103,640 bytes,
+approximately 101 KiB, each), which save/restore the 27 UIDL scalar variables
 and 10 pool arrays.
 
 ## Tiling Algorithm
@@ -392,7 +392,7 @@ A sample config template is provided in
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `DESK-LOAD-CONFIG` | `( addr len -- )` | Load presentation/theme TOML. |
+| `DESK-LOAD-CONFIG` | `( addr len -- )` | Load appearance/theme TOML. |
 | `DESK-AGENT-SOURCE!` | `( source -- )` | Transfer a provider source to Desk before run. Replacing a pending source frees the old one. |
 | `DESK-AGENT-ACCESS-PRESET!` | `( preset -- status )` | Select one exact built-in Agent access preset; active runs and reviews reject changes. |
 | `DESK-AGENT-ACCESS` | `( -- profile\|0 )` | Borrow the current Desk-owned immutable access profile. |
@@ -475,14 +475,15 @@ dropped.
 
 ## UIDL Context System
 
-Each sub-app with a UIDL document gets a 103,592-byte (approximately 101 KiB)
+Each sub-app with a UIDL document gets a 103,640-byte (approximately 101 KiB)
 context buffer that captures:
 
-- **21 scalar variables**: element count, attribute count, string position,
+- **27 scalar variables**: element count, attribute count, string position,
   root pointer, subscription count, elem base, doc-loaded flag, state,
   focus pointer, action count, shortcut count, overlay count, saved focus,
-  skip-children flag, region handle, and six neutral projection-lifecycle values
-  (token, status, visibility, attached, quiescing, quiesced).
+  skip-children flag, region handle, six neutral projection-lifecycle values
+  (token, status, visibility, attached, quiescing, quiesced), and six menu
+  lifecycle values (open menu, saved focus, compact row/height/width/z).
 - **10 pool arrays**: elements (32 KiB), attributes (20 KiB), strings
   (12 KiB), hash (2 KiB), hash-IDs (4 KiB), subscriptions (3 KiB),
   sidecars (24 KiB), actions (1.5 KiB), shortcuts (2 KiB), overlay

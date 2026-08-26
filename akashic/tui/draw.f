@@ -80,26 +80,40 @@ VARIABLE _DRW-SAVED-FG  VARIABLE _DRW-SAVED-BG  VARIABLE _DRW-SAVED-A
 \ 2. Clipping helpers (region-aware)
 \ =====================================================================
 \
-\  The clip variables define the current drawing bounds and origin.
-\  When no region is active, offset is (0,0) and h/w are 0, meaning
-\  "use the full screen".  region.f sets these when RGN-USE is called.
+\  The origin variables translate caller coordinates.  The clip variables
+\  describe an independent screen-absolute rectangle.  Keeping the two
+\  separate lets a child retain its local (0,0) while a parent clips any
+\  edge of the child's drawing.  region.f sets both when RGN-USE is called.
 
-VARIABLE _DRW-CLIP-ROW  0 _DRW-CLIP-ROW !   \ origin row offset
-VARIABLE _DRW-CLIP-COL  0 _DRW-CLIP-COL !   \ origin col offset
-VARIABLE _DRW-CLIP-H    0 _DRW-CLIP-H !     \ clip height (0 = SCR-H)
-VARIABLE _DRW-CLIP-W    0 _DRW-CLIP-W !     \ clip width  (0 = SCR-W)
-VARIABLE _DRW-CLIP-ON   0 _DRW-CLIP-ON !    \ 0 = no clip, non-0 = clip active
+VARIABLE _DRW-ORIGIN-ROW  0 _DRW-ORIGIN-ROW ! \ coordinate origin row
+VARIABLE _DRW-ORIGIN-COL  0 _DRW-ORIGIN-COL ! \ coordinate origin column
+VARIABLE _DRW-CLIP-ROW    0 _DRW-CLIP-ROW !   \ absolute clip top
+VARIABLE _DRW-CLIP-COL    0 _DRW-CLIP-COL !   \ absolute clip left
+VARIABLE _DRW-CLIP-H      0 _DRW-CLIP-H !     \ clip height (0 = SCR-H)
+VARIABLE _DRW-CLIP-W      0 _DRW-CLIP-W !     \ clip width  (0 = SCR-W)
+VARIABLE _DRW-CLIP-ON     0 _DRW-CLIP-ON !    \ 0 = no clip, non-0 = clip active
 
 \ Effective clip dimensions — when clip is off, use screen size.
 : _DRW-CLIP-ROWS  ( -- n )  _DRW-CLIP-ON @ IF _DRW-CLIP-H @ ELSE SCR-H THEN ;
 : _DRW-CLIP-COLS  ( -- n )  _DRW-CLIP-ON @ IF _DRW-CLIP-W @ ELSE SCR-W THEN ;
 
 \ _DRW-IN-BOUNDS? ( row col -- flag )
-\   True if (row, col) is within the current clip region.
+\   Translate (row, col) through the current origin, then test the resulting
+\   screen position against the independent effective clip rectangle.
 : _DRW-IN-BOUNDS?  ( row col -- flag )
-    SWAP 0 _DRW-CLIP-ROWS WITHIN       \ 0 <= row < clip-h ?
-    SWAP 0 _DRW-CLIP-COLS WITHIN       \ 0 <= col < clip-w ?
-    AND ;
+    _DRW-CLIP-ON @ IF
+        SWAP _DRW-ORIGIN-ROW @ +
+        SWAP _DRW-ORIGIN-COL @ +       ( abs-row abs-col )
+        SWAP _DRW-CLIP-ROW @
+             _DRW-CLIP-ROW @ _DRW-CLIP-H @ + WITHIN
+        SWAP _DRW-CLIP-COL @
+             _DRW-CLIP-COL @ _DRW-CLIP-W @ + WITHIN
+        AND
+    ELSE
+        SWAP 0 SCR-H WITHIN
+        SWAP 0 SCR-W WITHIN
+        AND
+    THEN ;
 
 \ WITHIN ( n lo hi -- flag ) is standard: true if lo <= n < hi.
 \ If not available, fall back to manual check.  Megapad-64 KDOS has it.
@@ -115,7 +129,7 @@ VARIABLE _DRW-CLIP-ON   0 _DRW-CLIP-ON !    \ 0 = no clip, non-0 = clip active
 : DRW-CHAR  ( cp row col -- )
     2DUP _DRW-IN-BOUNDS? IF
         _DRW-CLIP-ON @ IF
-            SWAP _DRW-CLIP-ROW @ + SWAP _DRW-CLIP-COL @ +
+            SWAP _DRW-ORIGIN-ROW @ + SWAP _DRW-ORIGIN-COL @ +
         THEN
         ROT _DRW-MAKE-CELL -ROT SCR-SET
     ELSE

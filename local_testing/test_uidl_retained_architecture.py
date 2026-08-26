@@ -138,8 +138,9 @@ def test_uidl_projection_lifecycle_is_ordered_and_context_local() -> None:
     assert "CINST-SERVICE" not in tui
     assert "PRES-BROKER" not in tui
 
-    # Only the adapter token and lifecycle scalars enter UCTX.  The attach
-    # descriptor is call-borrowed and every callback scratch cell is scrubbed.
+    # Only the adapter token and lifecycle scalars from projection authority
+    # enter UCTX.  Menu lifecycle is also document-local; the attach descriptor
+    # remains call-borrowed and every callback scratch cell is scrubbed.
     context_init = _word(tui, "_UCTX-INIT-VARS")
     context_fields = (
         ("_UTUI-PROJ-TOKEN", 15),
@@ -154,10 +155,23 @@ def test_uidl_projection_lifecycle_is_ordered_and_context_local() -> None:
             rf"(?m)^\s*{re.escape(field)}\s+_UCTX-VARS {slot} CELLS \+ !",
             context_init,
         )
-    assert "21 CONSTANT _UCTX-NVAR" in tui
-    assert "168 CONSTANT _UCTX-VAR-SZ" in tui
-    assert "Total 103,592 bytes" in tui
-    assert "103,592" in _text("docs/tui/uidl-tui.md")
+    menu_fields = (
+        ("_UTUI-MENU-OPEN", 21),
+        ("_UTUI-MENU-SAVED-FOC", 22),
+        ("_UTUI-MENU-SAVE-ROW", 23),
+        ("_UTUI-MENU-SAVE-H", 24),
+        ("_UTUI-MENU-SAVE-W", 25),
+        ("_UTUI-MENU-SAVE-Z", 26),
+    )
+    for field, slot in menu_fields:
+        assert re.search(
+            rf"(?m)^\s*{re.escape(field)}\s+_UCTX-VARS {slot} CELLS \+ !",
+            context_init,
+        )
+    assert "27 CONSTANT _UCTX-NVAR" in tui
+    assert "216 CONSTANT _UCTX-VAR-SZ" in tui
+    assert "Total 103,640 bytes" in tui
+    assert "103,640" in _text("docs/tui/uidl-tui.md")
     assert "0 _UTUI-PAA-BINDING !" in tui
     assert "0 _UTUI-PROJ-ARG0 ! 0 _UTUI-PROJ-ARG1 ! 0 _UTUI-PROJ-ARG2 !" in tui
 
@@ -963,7 +977,8 @@ def test_region_identity_is_stable_across_shell_and_desk_relayout() -> None:
     for field in ("_RGN-O-ROW", "_RGN-O-COL", "_RGN-O-H", "_RGN-O-W"):
         assert field in bounds
     assert "_RGN-O-PARENT" not in bounds
-    assert "_RGNB-RGN @ _RGN-CUR @ = IF" in bounds
+    assert "_RGNB-RGN @ _RGN-ACTIVE-DEPENDS? IF" in bounds
+    assert "_RGN-CUR @ _RGN-ACTIVATE" in bounds
     assert "RGN-FREE" not in bounds
     assert "ALLOCATE" not in bounds
 

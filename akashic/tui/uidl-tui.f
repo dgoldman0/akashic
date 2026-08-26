@@ -28,6 +28,13 @@
 \    UTUI-VISIBLE!    ( visible -- )
 \    UTUI-QUIESCE     ( -- status )
 \    UTUI-DETACH      ( -- )
+\    UTUI-RESOLVED-BYTES  ( -- bytes )
+\    UTUI-ELEM-RESOLVED-STATE@  ( elem -- effective-visible status )
+\    UTUI-ELEM-RESOLVED-CAPTURE ( elem destination available
+\                                      -- effective-visible status )
+\    UTUI-RESOLVED-VALID?  ( record available -- flag )
+\    UTUI-RESOLVED-OBSERVE ( i*x xt -- j*x )
+\    UTUI-STORAGE-DISJOINT?    ( address length -- flag )
 \
 \  Prefix: UTUI- (public), _UTUI- (internal)
 \  Provider: akashic-tui-uidl-tui
@@ -83,6 +90,7 @@ REQUIRE color.f
 \    AUX3 (+64)  = offsets    4×16-bit signed
 \    AUX4 (+72)  = margin     Packed TRBL
 \    AUX5 (+80)  = wowner     0 = UIDL-owned, 1 = caller-owned
+\    AUX6 (+88)  = runtime    UIDL-TUI runtime visibility state
 
 TSC-SIZE CONSTANT _UTUI-SC-SZ
 256 CONSTANT _UTUI-MAX-ELEMS
@@ -100,6 +108,7 @@ TSC-O-AUX2  CONSTANT _UTUI-SC-O-PAD
 TSC-O-AUX3  CONSTANT _UTUI-SC-O-OFFS
 TSC-O-AUX4  CONSTANT _UTUI-SC-O-MARGIN
 TSC-O-AUX5  CONSTANT _UTUI-SC-O-WOWNER
+TSC-O-AUX6  CONSTANT _UTUI-SC-O-RUNTIME
 
 0 CONSTANT _UTUI-WOWNER-UIDL
 1 CONSTANT _UTUI-WOWNER-CALLER
@@ -109,6 +118,14 @@ TSC-F-HAS       CONSTANT _UTUI-SCF-HAS
 TSC-F-VISIBLE   CONSTANT _UTUI-SCF-VIS
 TSC-F-FOCUSABLE CONSTANT _UTUI-SCF-FOC
 TSC-F-HIDE      CONSTANT _UTUI-SCF-HIDE
+
+1 CONSTANT _UTUI-RUNTIME-F-HIDDEN
+
+\ Layout owns HAS/VIS but must not erase durable style/focus state while it
+\ assigns a child's rectangle.  Runtime show/hide lives in AUX6 and therefore
+\ remains independent of both CSS display:none and the packed flag word.
+_UTUI-SCF-FOC TSC-F-HIDDEN OR _UTUI-SCF-HIDE OR
+    CONSTANT _UTUI-SCF-DURABLE
 
 \ =====================================================================
 \  §1a — Element → Sidecar mapping
@@ -140,6 +157,12 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 : _UTUI-SC-WPTR!  ( p sc -- ) TSC-AUX1! ;
 : _UTUI-SC-WOWNER@ ( sc -- n ) _UTUI-SC-O-WOWNER + @ ;
 : _UTUI-SC-WOWNER! ( n sc -- ) _UTUI-SC-O-WOWNER + ! ;
+: _UTUI-SC-RUNTIME@ ( sc -- n ) _UTUI-SC-O-RUNTIME + @ ;
+: _UTUI-SC-RUNTIME! ( n sc -- ) _UTUI-SC-O-RUNTIME + ! ;
+
+: _UTUI-SC-LAYOUT-FLAGS!  ( layout-flags sc -- )
+    DUP _UTUI-SC-FLAGS@ _UTUI-SCF-DURABLE AND
+    ROT OR SWAP _UTUI-SC-FLAGS! ;
 
 \ Padding, offsets, margin accessors (via TSC AUX slots)
 : _UTUI-SC-PAD@    ( sc -- n ) TSC-AUX2@ ;
@@ -151,7 +174,8 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
 
 \ Visibility predicate — delegates to TSC-VIS?
 : _UTUI-SC-VIS?  ( sc -- flag )
-    TSC-VIS? ;
+    DUP TSC-VIS?
+    SWAP _UTUI-SC-RUNTIME@ _UTUI-RUNTIME-F-HIDDEN AND 0= AND ;
 
 \ Style-field extended accessors (delegates to TSC-UNPACK-*)
 : _UTUI-SC-TALIGN@ ( sc -- align )
@@ -207,7 +231,34 @@ VARIABLE _UTUI-ELEM-BASE   \ set at load time to _UDL-ELEMS
     R> _UTUI-SC-W@ ;
 
 \ =====================================================================
-\  §1b — Dynamic Sidecar Helpers
+\  §1b — Renderer-neutral resolved projection record
+\ =====================================================================
+\
+\ Optional projections receive an explicit copy of resolved geometry and
+\ style.  No sidecar address and no packed TSC word crosses this seam.
+
+0 CONSTANT UTUI-RESOLVED-S-OK
+1 CONSTANT UTUI-RESOLVED-S-UNAVAILABLE
+2 CONSTANT UTUI-RESOLVED-S-INVALID
+
+: UTUI-RESOLVED-STATUS-VALID?  ( status -- flag )  3 U< ;
+
+: _UTUI-RS.ROW    ( record -- address )       ;
+: _UTUI-RS.COL    ( record -- address )   8 + ;
+: _UTUI-RS.H      ( record -- address )  16 + ;
+: _UTUI-RS.W      ( record -- address )  24 + ;
+: _UTUI-RS.FG     ( record -- address )  32 + ;
+: _UTUI-RS.BG     ( record -- address )  40 + ;
+: _UTUI-RS.ATTRS  ( record -- address )  48 + ;
+: _UTUI-RS.ALIGN  ( record -- address )  56 + ;
+: _UTUI-RS.Z      ( record -- address )  64 + ;
+
+72 CONSTANT UTUI-RESOLVED-SIZE
+
+: UTUI-RESOLVED-BYTES  ( -- bytes )  UTUI-RESOLVED-SIZE ;
+
+\ =====================================================================
+\  §1c — Dynamic Sidecar Helpers
 \ =====================================================================
 
 \ _UTUI-SC-ALLOC ( elem -- )
@@ -271,7 +322,8 @@ CREATE _UTUI-PROXY-RGN  _RGN-DESC-SIZE ALLOT
     DUP _UTUI-SC-ROW@ _UTUI-PROXY-RGN _RGN-O-ROW + !
     DUP _UTUI-SC-COL@ _UTUI-PROXY-RGN _RGN-O-COL + !
     DUP _UTUI-SC-H@   _UTUI-PROXY-RGN _RGN-O-H   + !
-        _UTUI-SC-W@   _UTUI-PROXY-RGN _RGN-O-W   + ! ;
+        _UTUI-SC-W@   _UTUI-PROXY-RGN _RGN-O-W   + !
+    _UTUI-RGN @ _UTUI-PROXY-RGN _RGN-O-PARENT + ! ;
 
 \ =====================================================================
 \  §1d — UIDL ↔ Widget Callbacks
@@ -295,15 +347,17 @@ CREATE _UTUI-PROXY-RGN  _RGN-DESC-SIZE ALLOT
 \ (Must be declared before _UTUI-PROXY-FROM-UR which references them.)
 VARIABLE _UR-ROW   VARIABLE _UR-COL
 VARIABLE _UR-W     VARIABLE _UR-H
+VARIABLE _UR-ABS-ROW VARIABLE _UR-ABS-COL
 VARIABLE _UR-TMP   VARIABLE _UR-ELEM
 VARIABLE _UR-EV    \ saved event pointer
 
 \ Write _UR-* temp vars into the shared proxy region.
 : _UTUI-PROXY-FROM-UR  ( -- )
-    _UR-ROW @ _UTUI-PROXY-RGN _RGN-O-ROW + !
-    _UR-COL @ _UTUI-PROXY-RGN _RGN-O-COL + !
+    _UR-ABS-ROW @ _UTUI-PROXY-RGN _RGN-O-ROW + !
+    _UR-ABS-COL @ _UTUI-PROXY-RGN _RGN-O-COL + !
     _UR-H @   _UTUI-PROXY-RGN _RGN-O-H   + !
-    _UR-W @   _UTUI-PROXY-RGN _RGN-O-W   + ! ;
+    _UR-W @   _UTUI-PROXY-RGN _RGN-O-W   + !
+    _UTUI-RGN @ _UTUI-PROXY-RGN _RGN-O-PARENT + ! ;
 
 \ Sync sidecar focus state into a widget's WDG-F-FOCUSED flag.
 : _UTUI-SYNC-WFOCUS  ( sc wptr -- )
@@ -622,6 +676,12 @@ VARIABLE _UTUI-PAA-STATUS
 \ Public setter for the root region (used by desk to re-assign tiles)
 : UTUI-RGN!  ( rgn -- )  _UTUI-RGN ! ;
 
+\ UIDL render words use document-relative coordinates while ordinary widget
+\ regions remain screen-absolute.  Restore the document clip after every
+\ nested widget draw; callers leave the paint cycle at RGN-ROOT.
+: _UTUI-RESTORE-DOC-RGN  ( -- )
+    _UTUI-RGN @ ?DUP IF RGN-USE ELSE RGN-ROOT THEN ;
+
 \ Wire UIDL-DIRTY! hook so any element dirtying auto-signals repaint
 : _UTUI-DIRTY-HOOK  ( -- ) _UTUI-NEEDS-PAINT ON ;
 ' _UTUI-DIRTY-HOOK  _UDL-DIRTY-HOOK !
@@ -805,8 +865,10 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
     DUP _UTUI-SC-VIS? 0= IF DROP 0 EXIT THEN
     DUP _UTUI-APPLY-STYLE
     DRW-STYLE-SAVE                     \ widgets use DRW-STYLE-RESTORE
-    DUP _UTUI-SC-ROW@ _UR-ROW !
-    DUP _UTUI-SC-COL@ _UR-COL !
+    DUP _UTUI-SC-ROW@ DUP _UR-ABS-ROW !
+    _UTUI-RGN @ ?DUP IF RGN-ROW - THEN _UR-ROW !
+    DUP _UTUI-SC-COL@ DUP _UR-ABS-COL !
+    _UTUI-RGN @ ?DUP IF RGN-COL - THEN _UR-COL !
     DUP _UTUI-SC-W@   _UR-W !
     _UTUI-SC-H@        _UR-H !
     -1 ;
@@ -871,7 +933,7 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
     _UTUI-PROXY-FROM-UR
     _UTUI-PROXY-RGN RGN-USE
     _INP-DRAW
-    RGN-ROOT ;
+    _UTUI-RESTORE-DOC-RGN ;
 
 \ --- Separator ---
 : _UTUI-RENDER-SEP  ( elem -- )
@@ -893,13 +955,14 @@ VARIABLE _UKP-A  VARIABLE _UKP-L  VARIABLE _UKP-MOD
         _UTUI-PROXY-FROM-UR
         \ Sync the widget's own region from current sidecar (handles resize)
         DUP _WDG-O-REGION + @
-        _UR-ROW @ OVER _RGN-O-ROW + !
-        _UR-COL @ OVER _RGN-O-COL + !
+        _UR-ABS-ROW @ OVER _RGN-O-ROW + !
+        _UR-ABS-COL @ OVER _RGN-O-COL + !
         _UR-H @   OVER _RGN-O-H   + !
-        _UR-W @   SWAP _RGN-O-W   + !
+        _UR-W @   OVER _RGN-O-W   + !
+        _UTUI-RGN @ SWAP _RGN-O-PARENT + !
         _UTUI-PROXY-RGN RGN-USE
         DUP _WDG-O-DRAW-XT + @ EXECUTE
-        RGN-ROOT
+        _UTUI-RESTORE-DOC-RGN
     ELSE
         2DROP
     THEN ;
@@ -943,23 +1006,46 @@ VARIABLE _UTUI-MENU-SAVED-FOC  \ focus before menu opened
 \  Each element renders itself.  <menu> draws the border box when
 \  open; each <item> draws its own background + text + highlight.
 \  Opening a menu sets z-index > 0 so the paint walker defers it
-\  to the Pass 2 overlay buffer, and _UTUI-PAINT-SUBTREE walks
-\  the entire subtree unconditionally.
+\  to the Pass 2 overlay buffer, and _UTUI-PAINT-SUBTREE walks its
+\  admitted visible descendants without re-deferring nested nodes.
 
 VARIABLE _UMD-COL      \ dropdown left column
 VARIABLE _UMD-MAXW     \ widest item text length
 VARIABLE _UMD-ICNT     \ item count
 VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
 
-\ Measure: count items + find widest text= label
+\ Menu rows follow the same semantic/layout admission rule as ordinary flow.
+\ Only items and separators are valid rows; when=false, display:none, and
+\ positioned children do not consume space.  Runtime hiding and
+\ visibility:hidden retain a row but still suppress paint and hit-testing.
+: _UTUI-MENU-ROW?  ( child -- flag )
+    DUP UIDL-EVAL-WHEN 0= IF DROP 0 EXIT THEN
+    DUP UIDL-TYPE DUP UIDL-T-ITEM = SWAP UIDL-T-SEPARATOR = OR 0= IF
+        DROP 0 EXIT
+    THEN
+    DUP _UTUI-SIDECAR _UTUI-SC-FLAGS@ _UTUI-SCF-HIDE AND IF
+        DROP 0 EXIT
+    THEN
+    _UTUI-SIDECAR _UTUI-SC-POS@ 0= ;
+
+: _UTUI-MENU-NAVIGABLE?  ( child -- flag )
+    DUP UIDL-TYPE UIDL-T-ITEM <> IF DROP 0 EXIT THEN
+    DUP _UTUI-MENU-ROW? 0= IF DROP 0 EXIT THEN
+    _UTUI-SIDECAR _UTUI-SC-VIS? ;
+
+\ Measure admitted items and find the widest text= label.
 : _UTUI-MENU-MEASURE  ( menu-elem -- )
     0 _UMD-MAXW !   0 _UMD-ICNT !
     UIDL-FIRST-CHILD
     BEGIN DUP 0<> WHILE
-        1 _UMD-ICNT +!
-        DUP S" text" UIDL-ATTR IF
-            NIP _UMD-MAXW @ MAX _UMD-MAXW !
-        ELSE 2DROP THEN
+        DUP _UTUI-MENU-ROW? IF
+            1 _UMD-ICNT +!
+            DUP UIDL-TYPE UIDL-T-ITEM = IF
+                DUP S" text" UIDL-ATTR IF
+                    NIP _UMD-MAXW @ MAX _UMD-MAXW !
+                ELSE 2DROP THEN
+            THEN
+        THEN
         UIDL-NEXT-SIB
     REPEAT DROP ;
 
@@ -1096,14 +1182,12 @@ VARIABLE _UT-TAB-COL
     DUP _UTUI-SIDECAR _UTUI-SC-WPTR@  ( elem wptr )
     DUP 0= IF 2DROP EXIT THEN
     NIP                                ( wptr )
-    \ Sync proxy region from cached sidecar geometry
-    _UR-ROW @ _UTUI-PROXY-RGN _RGN-O-ROW + !
-    _UR-COL @ _UTUI-PROXY-RGN _RGN-O-COL + !
-    _UR-H @   _UTUI-PROXY-RGN _RGN-O-H   + !
-    _UR-W @   _UTUI-PROXY-RGN _RGN-O-W   + !
+    \ Widget proxy regions remain screen-absolute even though direct UIDL
+    \ drawing is relative to the document clip.
+    _UTUI-PROXY-FROM-UR
     _UTUI-PROXY-RGN RGN-USE
     _TREE-DRAW
-    RGN-ROOT ;
+    _UTUI-RESTORE-DOC-RGN ;
 
 \ --- Textarea: delegate to materialized TXTA widget ---
 : _UTUI-RENDER-TEXTAREA  ( elem -- )
@@ -1117,7 +1201,7 @@ VARIABLE _UT-TAB-COL
     _UTUI-PROXY-FROM-UR
     _UTUI-PROXY-RGN RGN-USE
     _TXTA-DRAW
-    RGN-ROOT ;
+    _UTUI-RESTORE-DOC-RGN ;
 
 \ --- Canvas: fill background (actual CVS-* drawing is app-level) ---
 : _UTUI-RENDER-CANVAS  ( elem -- )
@@ -1257,8 +1341,8 @@ VARIABLE _USCR-SC    \ saved sidecar during scroll mouse dispatch
 \ --- Menu event handler ---
 \
 \ Forward-declared words from later sections needed by the menu impl.
-DEFER _UTUI-LAYOUT-MENU-D  ( elem -- )
-' DROP IS _UTUI-LAYOUT-MENU-D
+DEFER _UTUI-FINALIZE-MENU-D  ( elem -- )
+' DROP IS _UTUI-FINALIZE-MENU-D
 
 DEFER _UTUI-FOCUS-D  ( -- elem | 0 )
 ' NOOP IS _UTUI-FOCUS-D
@@ -1286,11 +1370,19 @@ DEFER _UTUI-DO-LAYOUT-REC-D  ( elem -- )
 VARIABLE _UTUI-MENU-SAVE-ROW
 VARIABLE _UTUI-MENU-SAVE-H
 VARIABLE _UTUI-MENU-SAVE-W
+VARIABLE _UTUI-MENU-SAVE-Z
+
+: _UTUI-MENU-STATE-CLEAR  ( -- )
+    0 _UTUI-MENU-OPEN !
+    0 _UTUI-MENU-SAVED-FOC !
+    0 _UTUI-MENU-SAVE-ROW !
+    0 _UTUI-MENU-SAVE-H !
+    0 _UTUI-MENU-SAVE-W !
+    0 _UTUI-MENU-SAVE-Z ! ;
 
 \ Close the currently-open menu dropdown.
 : _UTUI-MENU-CLOSE  ( -- )
     _UTUI-MENU-OPEN @ DUP 0= IF DROP EXIT THEN
-    DUP _UTUI-MENU-MEASURE
     \ Hide item sidecars (clear VIS before dirty-rect walk)
     DUP UIDL-FIRST-CHILD
     BEGIN DUP 0<> WHILE
@@ -1298,20 +1390,21 @@ VARIABLE _UTUI-MENU-SAVE-W
         DUP _UTUI-SC-FLAGS@ _UTUI-SCF-VIS INVERT AND SWAP _UTUI-SC-FLAGS!
         UIDL-NEXT-SIB
     REPEAT DROP
-    \ Dirty the dropdown rectangle — overlapping elements will repaint
-    \ themselves (every container fills its own bg, per DOM model).
-    _UMD-ICNT @ 0<> IF
-        DUP _UTUI-SIDECAR _UTUI-SC-ROW@
-        OVER _UTUI-SIDECAR _UTUI-SC-COL@
-        _UMD-ICNT @ 2 +  _UMD-MAXW @ 4 +
-        _UTUI-DIRTY-RECT-D
-    THEN
-    \ Restore original 1-row geometry + clear z-index
+    \ Dirty the actual open rectangle.  Item text may have changed since the
+    \ menu opened, so remeasurement would not necessarily describe the cells
+    \ that must be repainted.
+    DUP _UTUI-SIDECAR >R
+    R@ _UTUI-SC-ROW@
+    R@ _UTUI-SC-COL@
+    R@ _UTUI-SC-H@
+    R> _UTUI-SC-W@
+    _UTUI-DIRTY-RECT-D
+    \ Restore original 1-row geometry and its authored/base z-index.
     DUP _UTUI-SIDECAR
     _UTUI-MENU-SAVE-ROW @ OVER _UTUI-SC-ROW!
     _UTUI-MENU-SAVE-H @   OVER _UTUI-SC-H!
     _UTUI-MENU-SAVE-W @   OVER _UTUI-SC-W!
-    0 SWAP TSC-SET-ZIDX!
+    _UTUI-MENU-SAVE-Z @ SWAP TSC-SET-ZIDX!
     \ Dirty the menubar so the highlight updates
     UIDL-PARENT ?DUP IF UIDL-DIRTY! THEN
     0 _UTUI-MENU-OPEN !
@@ -1327,29 +1420,9 @@ VARIABLE _UTUI-MENU-SAVE-W
     _UTUI-MENU-OPEN @ IF _UTUI-MENU-CLOSE THEN
     _UTUI-FOCUS-D _UTUI-MENU-SAVED-FOC !
     DUP _UTUI-MENU-OPEN !
-    \ Save original sidecar geometry (1-row label from menubar layout)
-    DUP _UTUI-SIDECAR _UTUI-SC-ROW@ _UTUI-MENU-SAVE-ROW !
-    DUP _UTUI-SIDECAR _UTUI-SC-H@   _UTUI-MENU-SAVE-H !
-    DUP _UTUI-SIDECAR _UTUI-SC-W@   _UTUI-MENU-SAVE-W !
-    \ Measure to get item count + max width
-    DUP _UTUI-MENU-MEASURE
-    \ Expand menu sidecar geometry to cover the entire dropdown box
-    \ (row stays from menubar; col stays; h = items+2; w = maxw+4)
-    DUP _UTUI-SIDECAR _UTUI-SC-ROW@ 1+ OVER _UTUI-SIDECAR _UTUI-SC-ROW!
-    _UMD-ICNT @ 2 + OVER _UTUI-SIDECAR _UTUI-SC-H!
-    _UMD-MAXW @ 4 + OVER _UTUI-SIDECAR _UTUI-SC-W!
-    \ Set z-index so Pass 1 defers this to the overlay buffer
-    200 OVER _UTUI-SIDECAR TSC-SET-ZIDX!
-    \ Set VIS on item children
-    DUP UIDL-FIRST-CHILD
-    BEGIN DUP 0<> WHILE
-        DUP _UTUI-SIDECAR
-        DUP _UTUI-SC-FLAGS@ _UTUI-SCF-HAS OR _UTUI-SCF-VIS OR
-        SWAP _UTUI-SC-FLAGS!
-        UIDL-NEXT-SIB
-    REPEAT DROP
-    \ Run layout for the open menu (assigns item positions)
-    DUP _UTUI-LAYOUT-MENU-D
+    \ Finalization is separate from the installed flow-layout XT.  At event
+    \ time the menu still has its fully resolved compact label rectangle.
+    DUP _UTUI-FINALIZE-MENU-D
     \ Dirty everything so the dropdown paints
     DUP _UTUI-DIRTY-SUBTREE-D
     DUP UIDL-DIRTY!
@@ -1365,39 +1438,63 @@ VARIABLE _UTUI-MENU-SAVE-W
 
 \ Find first <item> child of an open menu
 : _UTUI-MENU-FIRST-ITEM  ( -- item | 0 )
-    _UTUI-MENU-OPEN @ ?DUP IF UIDL-FIRST-CHILD ELSE 0 THEN ;
+    _UTUI-MENU-OPEN @ ?DUP 0= IF 0 EXIT THEN
+    UIDL-FIRST-CHILD
+    BEGIN DUP 0<> WHILE
+        DUP _UTUI-MENU-NAVIGABLE? IF EXIT THEN
+        UIDL-NEXT-SIB
+    REPEAT ;
 
 \ Find last <item> child of an open menu
 : _UTUI-MENU-LAST-ITEM  ( -- item | 0 )
-    _UTUI-MENU-OPEN @ ?DUP IF UIDL-LAST-CHILD ELSE 0 THEN ;
+    _UTUI-MENU-OPEN @ ?DUP 0= IF 0 EXIT THEN
+    UIDL-LAST-CHILD
+    BEGIN DUP 0<> WHILE
+        DUP _UTUI-MENU-NAVIGABLE? IF EXIT THEN
+        UIDL-PREV-SIB
+    REPEAT ;
 
 \ Move to next/prev sibling within the open dropdown
 : _UTUI-MENU-ITEM-NEXT  ( -- )
     _UTUI-FOCUS-D DUP 0= IF DROP EXIT THEN
-    UIDL-NEXT-SIB ?DUP IF _UTUI-FOCUS!-D EXIT THEN
+    BEGIN UIDL-NEXT-SIB DUP 0<> WHILE
+        DUP _UTUI-MENU-NAVIGABLE? IF _UTUI-FOCUS!-D EXIT THEN
+    REPEAT DROP
     \ Wrap to first item
     _UTUI-MENU-FIRST-ITEM ?DUP IF _UTUI-FOCUS!-D THEN ;
 
 : _UTUI-MENU-ITEM-PREV  ( -- )
     _UTUI-FOCUS-D DUP 0= IF DROP EXIT THEN
-    UIDL-PREV-SIB ?DUP IF _UTUI-FOCUS!-D EXIT THEN
+    BEGIN UIDL-PREV-SIB DUP 0<> WHILE
+        DUP _UTUI-MENU-NAVIGABLE? IF _UTUI-FOCUS!-D EXIT THEN
+    REPEAT DROP
     \ Wrap to last item
     _UTUI-MENU-LAST-ITEM ?DUP IF _UTUI-FOCUS!-D THEN ;
+
+: _UTUI-MENU-AVAILABLE?  ( menu -- flag )
+    DUP UIDL-TYPE UIDL-T-MENU <> IF DROP 0 EXIT THEN
+    _UTUI-SIDECAR _UTUI-SC-VIS? ;
 
 \ Switch to the next/prev <menu> in the bar
 : _UTUI-MENU-SWITCH-NEXT  ( -- )
     _UTUI-MENU-OPEN @ ?DUP 0= IF EXIT THEN
-    UIDL-NEXT-SIB ?DUP IF
-        _UTUI-MENU-OPEN!
-        _UTUI-MENU-FIRST-ITEM ?DUP IF _UTUI-FOCUS!-D THEN
-    THEN ;
+    BEGIN UIDL-NEXT-SIB DUP 0<> WHILE
+        DUP _UTUI-MENU-AVAILABLE? IF
+            _UTUI-MENU-OPEN!
+            _UTUI-MENU-FIRST-ITEM ?DUP IF _UTUI-FOCUS!-D THEN
+            EXIT
+        THEN
+    REPEAT DROP ;
 
 : _UTUI-MENU-SWITCH-PREV  ( -- )
     _UTUI-MENU-OPEN @ ?DUP 0= IF EXIT THEN
-    UIDL-PREV-SIB ?DUP IF
-        _UTUI-MENU-OPEN!
-        _UTUI-MENU-FIRST-ITEM ?DUP IF _UTUI-FOCUS!-D THEN
-    THEN ;
+    BEGIN UIDL-PREV-SIB DUP 0<> WHILE
+        DUP _UTUI-MENU-AVAILABLE? IF
+            _UTUI-MENU-OPEN!
+            _UTUI-MENU-FIRST-ITEM ?DUP IF _UTUI-FOCUS!-D THEN
+            EXIT
+        THEN
+    REPEAT DROP ;
 
 \ <menu> key handler: Enter/Space/Down opens; Esc closes; arrows navigate
 : _UTUI-H-MENU  ( elem key-ev -- handled? )
@@ -1644,7 +1741,7 @@ VARIABLE _ULM-T  VARIABLE _ULM-R  VARIABLE _ULM-B  VARIABLE _ULM-L
         OVER UIDL-EVAL-WHEN IF
             OVER _UL-SKIP-LAYOUT? IF
                 \ Action/positioned: give it sidecar flags but 0 height
-                _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
+                _UTUI-SCF-HAS OVER _UTUI-SC-LAYOUT-FLAGS!
                 _UL-POS @ OVER _UTUI-SC-ROW!
                 _UL-COL @ OVER _UTUI-SC-COL!
                 0 OVER _UTUI-SC-W!
@@ -1654,7 +1751,8 @@ VARIABLE _ULM-T  VARIABLE _ULM-R  VARIABLE _ULM-B  VARIABLE _ULM-L
                 DUP _UL-READ-CHILD-MARGIN
                 _ULM-T @ _UL-POS +!       \ advance pos by margin-top
 
-                _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-FLAGS!
+                _UTUI-SCF-HAS _UTUI-SCF-VIS OR
+                    OVER _UTUI-SC-LAYOUT-FLAGS!
                 _UL-POS @ OVER _UTUI-SC-ROW!
                 _UL-COL @ _ULM-L @ + OVER _UTUI-SC-COL!
                 _UL-W @ _ULM-L @ - _ULM-R @ -
@@ -1674,7 +1772,7 @@ VARIABLE _ULM-T  VARIABLE _ULM-R  VARIABLE _ULM-B  VARIABLE _ULM-L
                 _ULM-B @ _UL-POS +!       \ advance pos by margin-bottom
             THEN
         ELSE
-            _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
+            _UTUI-SCF-HAS OVER _UTUI-SC-LAYOUT-FLAGS!
             DROP                       ( child )
         THEN
         UIDL-NEXT-SIB
@@ -1710,7 +1808,8 @@ VARIABLE _UL-CW   \ child width for flex
             DUP _UL-READ-CHILD-MARGIN
             _ULM-L @ _UL-POS +!       \ advance pos by margin-left
 
-            _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-FLAGS!
+            _UTUI-SCF-HAS _UTUI-SCF-VIS OR
+                OVER _UTUI-SC-LAYOUT-FLAGS!
             _UL-ROW @ _ULM-T @ + OVER _UTUI-SC-ROW!
             _UL-POS @ OVER _UTUI-SC-COL!
             _UL-CW @ _ULM-L @ - _ULM-R @ -
@@ -1722,7 +1821,7 @@ VARIABLE _UL-CW   \ child width for flex
             DROP                       ( child )
             _UL-CW @ _ULM-R @ + _UL-POS +!  \ advance by width + margin-right
         ELSE
-            _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
+            _UTUI-SCF-HAS OVER _UTUI-SC-LAYOUT-FLAGS!
             DROP                       ( child )
         THEN
         UIDL-NEXT-SIB
@@ -1743,7 +1842,8 @@ VARIABLE _UL-CW   \ child width for flex
         DUP _UTUI-SIDECAR             ( child csc )
         OVER S" label" UIDL-ATTR IF   ( child csc la ll )
             NIP _UL-CW !              ( child csc )
-            _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-FLAGS!
+            _UTUI-SCF-HAS _UTUI-SCF-VIS OR
+                OVER _UTUI-SC-LAYOUT-FLAGS!
             _UL-ROW @ OVER _UTUI-SC-ROW!
             _UL-POS @ OVER _UTUI-SC-COL!
             _UL-CW @ 2 + OVER _UTUI-SC-W!
@@ -1751,41 +1851,76 @@ VARIABLE _UL-CW   \ child width for flex
             _UL-CW @ 2 + _UL-POS +!
             DROP                       ( child )
         ELSE                           ( child csc )
-            _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
+            _UTUI-SCF-HAS OVER _UTUI-SC-LAYOUT-FLAGS!
             DROP                       ( child )
         THEN
         UIDL-NEXT-SIB
     REPEAT
     DROP ;
 
-\ --- Menu layout: assign sidecar coords to <item> children ---
-\ When the menu is NOT open, bail out — the paint walker skips
-\ children of closed menus.  When open, assign item positions.
-: _UTUI-LAYOUT-MENU  ( elem -- )
+\ --- Menu layout and final resolved dropdown pass ---
+\ Flow layout leaves every menu in its compact menubar-label rectangle.  The
+\ canonical post-style pass finalizes the one open menu only after authored
+\ width/height/z and positioned geometry have all been resolved.
+: _UTUI-LAYOUT-MENU  ( elem -- )  DROP ;
+
+: _UTUI-FINALIZE-MENU  ( elem -- )
     DUP _UTUI-MENU-OPEN @ <> IF DROP EXIT THEN
+    \ Preserve the fully resolved compact rectangle for close, then derive the
+    \ overlay rectangle exactly once.
+    DUP _UTUI-SIDECAR _UTUI-SC-ROW@ _UTUI-MENU-SAVE-ROW !
+    DUP _UTUI-SIDECAR _UTUI-SC-H@   _UTUI-MENU-SAVE-H !
+    DUP _UTUI-SIDECAR _UTUI-SC-W@   _UTUI-MENU-SAVE-W !
+    DUP _UTUI-SIDECAR _UTUI-SC-ZIDX@ _UTUI-MENU-SAVE-Z !
+    DUP _UTUI-MENU-MEASURE
+    DUP _UTUI-SIDECAR _UTUI-SC-ROW@ 1+ OVER _UTUI-SIDECAR _UTUI-SC-ROW!
+    _UMD-ICNT @ 2 + OVER _UTUI-SIDECAR _UTUI-SC-H!
+    _UMD-MAXW @ 4 + OVER _UTUI-SIDECAR _UTUI-SC-W!
+    200 OVER _UTUI-SIDECAR TSC-SET-ZIDX!
     DUP _UTUI-SIDECAR _UTUI-SC-COL@ _UMD-COL !
     DUP _UTUI-SIDECAR _UTUI-SC-ROW@ _UMD-ROW !
-    DUP _UTUI-MENU-MEASURE
     _UMD-MAXW @ 2 +                    ( elem item-w )
     0                                  ( elem item-w idx )
     2 PICK UIDL-FIRST-CHILD            ( elem item-w idx child )
     BEGIN DUP 0<> WHILE
-        DUP _UTUI-SIDECAR             ( ... child sc )
-        _UTUI-SCF-HAS _UTUI-SCF-VIS OR _UTUI-SCF-FOC OR
-            OVER _UTUI-SC-FLAGS!
-        _UMD-ROW @ 3 PICK 1+ +
-            OVER _UTUI-SC-ROW!         \ row = dropdown_top+1+idx
-        _UMD-COL @ 1+
-            OVER _UTUI-SC-COL!         \ col = dropdown_col+1
-        3 PICK OVER _UTUI-SC-W!        \ w = item-w
-        1 OVER _UTUI-SC-H!             \ h = 1
-        DROP                           ( elem item-w idx child )
-        UIDL-NEXT-SIB  SWAP 1+ SWAP   ( elem item-w idx+1 next )
+        DUP _UTUI-MENU-ROW? IF
+            DUP _UTUI-MENU-NAVIGABLE? 0= IF
+                DUP _UTUI-FOCUS-D = IF 0 _UTUI-FOCUS!-D THEN
+            THEN
+            DUP _UTUI-SIDECAR         ( ... child sc )
+            _UTUI-SCF-HAS _UTUI-SCF-VIS OR
+                OVER _UTUI-SC-LAYOUT-FLAGS!
+            _UMD-ROW @ 3 PICK 1+ +
+                OVER _UTUI-SC-ROW!     \ row = dropdown_top+1+idx
+            _UMD-COL @ 1+
+                OVER _UTUI-SC-COL!     \ col = dropdown_col+1
+            3 PICK OVER _UTUI-SC-W!    \ w = item-w
+            1 OVER _UTUI-SC-H!         \ h = 1
+            DROP                       ( elem item-w idx child )
+            UIDL-NEXT-SIB SWAP 1+ SWAP
+                                        ( elem item-w idx+1 next )
+        ELSE
+            \ Fail closed if admission changed since the previous layout.
+            DUP _UTUI-FOCUS-D = IF 0 _UTUI-FOCUS!-D THEN
+            DUP _UTUI-SIDECAR         ( ... child sc )
+            _UTUI-SCF-HAS OVER _UTUI-SC-LAYOUT-FLAGS!
+            0 OVER _UTUI-SC-ROW!
+            0 OVER _UTUI-SC-COL!
+            0 OVER _UTUI-SC-W!
+            0 OVER _UTUI-SC-H!
+            DROP UIDL-NEXT-SIB        ( elem item-w idx next )
+        THEN
     REPEAT
-    DROP DROP DROP DROP ;
+    DROP DROP DROP DROP
+    \ If relayout removed the focused row, keep keyboard authority inside the
+    \ open menu only by choosing its first still-admitted item.
+    _UTUI-FOCUS-D 0= IF
+        _UTUI-MENU-FIRST-ITEM ?DUP IF _UTUI-FOCUS!-D THEN
+    THEN ;
 
-\ Resolve forward-declared deferred word
-' _UTUI-LAYOUT-MENU IS _UTUI-LAYOUT-MENU-D
+\ Resolve the event-handler forward declaration.  The same finalizer is called
+\ directly by canonical relayout after the positioned pass.
+' _UTUI-FINALIZE-MENU IS _UTUI-FINALIZE-MENU-D
 
 \ --- Status / toolbar: lay out children horizontally ---
 : _UTUI-LAYOUT-STATUS  ( elem -- ) _UTUI-LAYOUT-FLEX ;
@@ -1810,7 +1945,8 @@ VARIABLE _UL-CW   \ child width for flex
     BEGIN DUP 0<> WHILE
         DUP _UTUI-SIDECAR             ( idx child csc )
         OVER UIDL-EVAL-WHEN IF
-            _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-FLAGS!
+            _UTUI-SCF-HAS _UTUI-SCF-VIS OR
+                OVER _UTUI-SC-LAYOUT-FLAGS!
             2 PICK _UL-POS @ = IF
                 \ Active tab: content area below header (row+2, col, w, h-2)
                 _UL-ROW @ 2 + OVER _UTUI-SC-ROW!
@@ -1825,7 +1961,7 @@ VARIABLE _UL-CW   \ child width for flex
                 0 OVER _UTUI-SC-H!
             THEN
         ELSE
-            _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
+            _UTUI-SCF-HAS OVER _UTUI-SC-LAYOUT-FLAGS!
         THEN
         DROP                           ( idx child )
         UIDL-NEXT-SIB
@@ -1876,13 +2012,14 @@ VARIABLE _USP-ROW   VARIABLE _USP-COL  VARIABLE _USP-SW  VARIABLE _USP-SH
     DUP 0= IF DROP EXIT THEN
     DUP _UTUI-SIDECAR                 ( child1 sc1 )
     OVER UIDL-EVAL-WHEN IF            \ OVER gets child1 (elem), not sc1
-        _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-FLAGS!
+        _UTUI-SCF-HAS _UTUI-SCF-VIS OR
+            OVER _UTUI-SC-LAYOUT-FLAGS!
         _USP-ROW @ OVER _UTUI-SC-ROW!
         _USP-COL @ OVER _UTUI-SC-COL!
         _USP-LW @              OVER _UTUI-SC-W!
         _USP-SH @              OVER _UTUI-SC-H!
     ELSE
-        _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
+        _UTUI-SCF-HAS OVER _UTUI-SC-LAYOUT-FLAGS!
     THEN
     DROP                               ( child1 )
 
@@ -1891,13 +2028,14 @@ VARIABLE _USP-ROW   VARIABLE _USP-COL  VARIABLE _USP-SW  VARIABLE _USP-SH
     DUP 0= IF DROP EXIT THEN
     DUP _UTUI-SIDECAR                 ( child2 sc2 )
     OVER UIDL-EVAL-WHEN IF
-        _UTUI-SCF-HAS _UTUI-SCF-VIS OR OVER _UTUI-SC-FLAGS!
+        _UTUI-SCF-HAS _UTUI-SCF-VIS OR
+            OVER _UTUI-SC-LAYOUT-FLAGS!
         _USP-ROW @                                    OVER _UTUI-SC-ROW!
         _USP-COL @ _USP-LW @ + 1 +                   OVER _UTUI-SC-COL!
         _USP-RW @                                     OVER _UTUI-SC-W!
         _USP-SH @                                     OVER _UTUI-SC-H!
     ELSE
-        _UTUI-SCF-HAS OVER _UTUI-SC-FLAGS!
+        _UTUI-SCF-HAS OVER _UTUI-SC-LAYOUT-FLAGS!
     THEN
     2DROP ;
 
@@ -1964,10 +2102,10 @@ VARIABLE _UPO-OT  VARIABLE _UPO-OR  VARIABLE _UPO-OB  VARIABLE _UPO-OL
     DUP 0= IF 2DROP DROP EXIT THEN            \ static → skip
     _UPO-POS !  _UPO-SC !                     ( elem )
 
-    \ Mark as visible (positioned elements were skipped in flow layout)
-    _UPO-SC @ _UTUI-SC-FLAGS@
-    _UTUI-SCF-HAS _UTUI-SCF-VIS OR OR
-    _UPO-SC @ _UTUI-SC-FLAGS!
+    \ Mark as layout-visible (positioned elements were skipped in flow).
+    \ Runtime hiding remains an independent AUX6 predicate.
+    _UTUI-SCF-HAS _UTUI-SCF-VIS OR
+    _UPO-SC @ _UTUI-SC-LAYOUT-FLAGS!
 
     \ Determine reference frame
     _UPO-POS @ 2 = IF                         \ fixed → root region
@@ -2249,11 +2387,11 @@ VARIABLE _UHT-SC
 
     DUP UIDL-EVAL-WHEN IF
         DUP _UTUI-SIDECAR
-        DUP _UTUI-SC-FLAGS@ _UTUI-SCF-HAS OR _UTUI-SCF-VIS OR
-        SWAP _UTUI-SC-FLAGS!
+        _UTUI-SCF-HAS _UTUI-SCF-VIS OR SWAP
+        _UTUI-SC-LAYOUT-FLAGS!
     ELSE
         DUP _UTUI-SIDECAR
-        _UTUI-SCF-HAS SWAP _UTUI-SC-FLAGS!
+        _UTUI-SCF-HAS SWAP _UTUI-SC-LAYOUT-FLAGS!
         DROP EXIT
     THEN
 
@@ -2274,8 +2412,57 @@ VARIABLE _UHT-SC
 
     UIDL-DIRTY! ;
 
+\ Reset every derived field that the canonical relayout pipeline recomputes.
+\ Widget pointers, ownership, runtime visibility, focus, and explicit-hidden
+\ state remain mounted.  display:none, geometry, box data, offsets, and packed
+\ style are rebuilt from the current UIDL attributes.
+: _UTUI-RESET-RESOLVED-ELEM  ( elem -- )
+    _UTUI-SIDECAR >R
+    0 R@ _UTUI-SC-ROW!
+    0 R@ _UTUI-SC-COL!
+    0 R@ _UTUI-SC-H!
+    0 R@ _UTUI-SC-W!
+    0 R@ _UTUI-SC-STYLE!
+    0 R@ _UTUI-SC-PAD!
+    0 R@ _UTUI-SC-OFFS!
+    0 R@ _UTUI-SC-MARGIN!
+    R@ _UTUI-SC-FLAGS@
+    _UTUI-SCF-HAS _UTUI-SCF-FOC OR TSC-F-HIDDEN OR AND
+    R> _UTUI-SC-FLAGS! ;
+
+: _UTUI-RESET-RESOLVED  ( -- )
+    UIDL-ROOT ?DUP 0= IF EXIT THEN
+    BEGIN
+        DUP _UTUI-RESET-RESOLVED-ELEM
+        DUP UIDL-FIRST-CHILD ?DUP IF NIP
+        ELSE
+            BEGIN
+                DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
+                ELSE
+                    UIDL-PARENT DUP IF FALSE
+                    ELSE DROP 0 TRUE THEN
+                THEN
+            UNTIL
+            DUP 0= IF DROP EXIT THEN
+        THEN
+    AGAIN ;
+
+\ The style passes are defined after the layout engine because they depend on
+\ its helpers.  Deferred entry points let every relayout run one canonical
+\ pipeline without moving those sections or duplicating the initial-load path.
+DEFER _UTUI-PRELAYOUT-STYLES-D  ( -- )
+' NOOP IS _UTUI-PRELAYOUT-STYLES-D
+DEFER _UTUI-RESOLVE-STYLES-D  ( -- )
+' NOOP IS _UTUI-RESOLVE-STYLES-D
+
 : UTUI-RELAYOUT  ( -- )
     UIDL-ROOT ?DUP 0= IF EXIT THEN
+
+    \ Resolve layout-affecting declarations before reseeding the root and
+    \ walking flow layout.  Derived projection state never observes the
+    \ stale pre-layout or pre-positioned sidecars of a later relayout.
+    _UTUI-RESET-RESOLVED
+    _UTUI-PRELAYOUT-STYLES-D
 
     _UTUI-SIDECAR
     _UTUI-RGN @ RGN-ROW OVER _UTUI-SC-ROW!
@@ -2283,9 +2470,12 @@ VARIABLE _UHT-SC
     _UTUI-RGN @ RGN-W   OVER _UTUI-SC-W!
     _UTUI-RGN @ RGN-H   OVER _UTUI-SC-H!
     _UTUI-DEFAULT-STYLE  OVER _UTUI-SC-STYLE!
-    _UTUI-SCF-HAS _UTUI-SCF-VIS OR SWAP _UTUI-SC-FLAGS!
+    _UTUI-SCF-HAS _UTUI-SCF-VIS OR SWAP _UTUI-SC-LAYOUT-FLAGS!
 
     UIDL-ROOT _UTUI-DO-LAYOUT-REC
+    _UTUI-RESOLVE-STYLES-D
+    _UTUI-RESOLVE-POSITIONED
+    _UTUI-MENU-OPEN @ ?DUP IF _UTUI-FINALIZE-MENU THEN
     \ Optional projections observe only fully resolved UIDL geometry.
     _UTUI-PROJECTION-RELAYOUT DROP ;
 
@@ -2383,28 +2573,30 @@ VARIABLE _UTUI-OVERLAY-CNT
 \ Does NOT re-defer elements — all descendants paint unconditionally.
 VARIABLE _UPST-ROOT
 
+: _UTUI-PAINT-SUBTREE-NEXT  ( elem -- next | 0 )
+    BEGIN
+        DUP _UPST-ROOT @ = IF DROP 0 EXIT THEN
+        DUP UIDL-NEXT-SIB ?DUP IF NIP EXIT THEN
+        UIDL-PARENT DUP 0= IF EXIT THEN
+    AGAIN ;
+
 : _UTUI-PAINT-SUBTREE  ( elem -- )
     DUP _UPST-ROOT !
     BEGIN
-        DUP _UTUI-SIDECAR _UTUI-SC-VIS? IF
-            DUP _UTUI-RENDER-ONE
-        ELSE DUP UIDL-CLEAN! THEN
-        DUP UIDL-FIRST-CHILD ?DUP IF NIP
+        DUP _UTUI-SIDECAR _UTUI-SC-VIS? 0= IF
+            DUP UIDL-CLEAN!
+            _UTUI-PAINT-SUBTREE-NEXT
         ELSE
-            BEGIN
-                DUP _UPST-ROOT @ = IF DROP 0 TRUE
-                ELSE
-                    DUP UIDL-NEXT-SIB ?DUP IF NIP TRUE
-                    ELSE
-                        UIDL-PARENT
-                        DUP _UPST-ROOT @ = IF DROP 0 TRUE
-                        ELSE DUP 0= IF TRUE ELSE FALSE THEN
-                        THEN
-                    THEN
-                THEN
-            UNTIL
-            DUP 0= IF DROP EXIT THEN
+            DUP _UTUI-RENDER-ONE
+            DUP UIDL-TYPE UIDL-T-MENU =
+            OVER _UTUI-MENU-OPEN @ <> AND IF
+                _UTUI-PAINT-SUBTREE-NEXT
+            ELSE
+                DUP UIDL-FIRST-CHILD ?DUP IF NIP
+                ELSE _UTUI-PAINT-SUBTREE-NEXT THEN
+            THEN
         THEN
+        DUP 0= IF DROP EXIT THEN
     AGAIN ;
 
 \ --- Skip-children flag ---
@@ -2422,10 +2614,11 @@ VARIABLE _UTUI-SKIP-CHILDREN
             -1 _UTUI-SKIP-CHILDREN !
         THEN
     THEN
-    DUP UIDL-DIRTY? 0= IF DROP EXIT THEN
     DUP _UTUI-SIDECAR _UTUI-SC-VIS? 0= IF
+        -1 _UTUI-SKIP-CHILDREN !
         UIDL-CLEAN! EXIT
     THEN
+    DUP UIDL-DIRTY? 0= IF DROP EXIT THEN
     \ Defer dialogs (always painted on top)
     DUP UIDL-TYPE UIDL-T-DIALOG = IF
         DUP _UTUI-SIDECAR _UTUI-SC-ZIDX@
@@ -2487,6 +2680,10 @@ VARIABLE _UTUI-SKIP-CHILDREN
         LOOP
     THEN ;
 
+: _UTUI-PAINT-FINISH  ( -- )
+    _UTUI-PAINT-PASS2
+    RGN-ROOT ;
+
 \ Helper: walk up from elem to the next sibling of an ancestor.
 \ Returns the next DFS node, or 0 if the tree is exhausted.
 : _UTUI-PAINT-WALK-UP  ( elem -- next|0 )
@@ -2505,23 +2702,24 @@ VARIABLE _UTUI-SKIP-CHILDREN
     \ authoritative update that CELL rendering is about to consume.
     \ Projection failure is diagnostic-only here; CELL remains universal.
     _UTUI-PROJECTION-PUBLISH
-    \ Reset to full-screen clip — render words use absolute sidecar
-    \ coordinates, so there must be no region offset active.
-    RGN-ROOT
+    \ Direct UIDL rendering uses document-relative coordinates under the
+    \ document clip.  Widget proxies temporarily switch to their own absolute
+    \ regions and restore this clip before the DFS continues.
+    _UTUI-RESTORE-DOC-RGN
     0 _UTUI-OVERLAY-CNT !
-    UIDL-ROOT ?DUP 0= IF EXIT THEN
+    UIDL-ROOT ?DUP 0= IF RGN-ROOT EXIT THEN
     \ Pass 1: normal flow elements (skip subtrees of deferred overlays)
     BEGIN
         DUP _UTUI-PAINT-ELEM
         _UTUI-SKIP-CHILDREN @ IF
             \ Deferred element — skip its entire subtree
             _UTUI-SKIP-SUBTREE
-            DUP 0= IF DROP _UTUI-PAINT-PASS2 EXIT THEN
+            DUP 0= IF DROP _UTUI-PAINT-FINISH EXIT THEN
         ELSE
             DUP UIDL-FIRST-CHILD ?DUP IF NIP
             ELSE
                 _UTUI-PAINT-WALK-UP
-                DUP 0= IF DROP _UTUI-PAINT-PASS2 EXIT THEN
+                DUP 0= IF DROP _UTUI-PAINT-FINISH EXIT THEN
             THEN
         THEN
     AGAIN ;
@@ -2820,7 +3018,9 @@ VARIABLE _UTUI-SAVED-FOCUS     \ stashed focus elem for overlay hide
 \ --- Show / hide by element pointer ---
 
 : _UTUI-VIS-SUBTREE!  ( flag elem -- )
-    \ Set or clear VIS on elem + all descendants.
+    \ Set or clear immediate VIS and the durable runtime-hidden bit on elem +
+    \ descendants.  AUX6 survives canonical relayout without masquerading as
+    \ CSS display:none or changing layout participation.
     SWAP >R
     DUP _UDST-ROOT !
     BEGIN
@@ -2828,6 +3028,14 @@ VARIABLE _UTUI-SAVED-FOCUS     \ stashed focus elem for overlay hide
         DUP _UTUI-SC-FLAGS@
         R@ IF _UTUI-SCF-VIS OR ELSE _UTUI-SCF-VIS INVERT AND THEN
         SWAP _UTUI-SC-FLAGS!
+        DUP _UTUI-SIDECAR
+        DUP _UTUI-SC-RUNTIME@
+        R@ IF
+            _UTUI-RUNTIME-F-HIDDEN INVERT AND
+        ELSE
+            _UTUI-RUNTIME-F-HIDDEN OR
+        THEN
+        SWAP _UTUI-SC-RUNTIME!
         DUP UIDL-FIRST-CHILD ?DUP IF NIP
         ELSE
             BEGIN
@@ -3157,6 +3365,8 @@ VARIABLE _UPRE-VA  VARIABLE _UPRE-VL  VARIABLE _UPRE-SC  VARIABLE _UPRE-STY
         THEN
     AGAIN ;
 
+' _UTUI-PRELAYOUT-STYLES IS _UTUI-PRELAYOUT-STYLES-D
+
 \ =====================================================================
 \  §16b — CSS style= Attribute Resolution (Post-Layout)
 \ =====================================================================
@@ -3440,6 +3650,8 @@ VARIABLE _UCD-OFF   VARIABLE _UCD-PDIM
     UIDL-ROOT ?DUP 0= IF EXIT THEN
     _UTUI-RESOLVE-STYLES-REC ;
 
+' _UTUI-RESOLVE-STYLES IS _UTUI-RESOLVE-STYLES-D
+
 \ =====================================================================
 \  §17 — UTUI-LOAD
 \ =====================================================================
@@ -3486,10 +3698,20 @@ VARIABLE _UTS-INDEX
     DUP UIDL-PARENT ?DUP IF UIDL-DIRTY! THEN
     _UTUI-NEEDS-PAINT ON ;
 
+: _UTUI-ANCESTOR-OF?  ( ancestor elem -- flag )
+    BEGIN
+        2DUP = IF 2DROP -1 EXIT THEN
+        UIDL-PARENT DUP 0=
+    UNTIL
+    2DROP 0 ;
+
 \ UTUI-REMOVE-ELEM ( elem -- )
 \   Dematerialize, free sidecar, unlink from tree.  Marks parent
 \   dirty + signals repaint.
 : UTUI-REMOVE-ELEM  ( elem -- )
+    _UTUI-MENU-OPEN @ ?DUP IF
+        OVER SWAP _UTUI-ANCESTOR-OF? IF _UTUI-MENU-CLOSE THEN
+    THEN
     DUP _UTUI-DEMATERIALIZE-ONE
     DUP UIDL-PARENT ?DUP IF UIDL-DIRTY! THEN
     DUP _UTUI-SC-FREE
@@ -3539,6 +3761,7 @@ VARIABLE _USA-VL
     ST-USE ;
 
 : UTUI-LOAD  ( xml-a xml-u rgn -- flag )
+    _UTUI-MENU-STATE-CLEAR
     _UTUI-RGN !
 
     UIDL-PARSE                         ( flag )
@@ -3553,10 +3776,7 @@ VARIABLE _USA-VL
     _UTUI-SC-CLEAR-ALL
     _UTUI-ACT-CLEAR
 
-    _UTUI-PRELAYOUT-STYLES             \ §16c: position, display, padding, margin
     UTUI-RELAYOUT
-    _UTUI-RESOLVE-STYLES               \ §16b: colors, text-align, z-index, dims, offsets
-    _UTUI-RESOLVE-POSITIONED           \ §7b: place absolute/fixed elements
     _UTUI-MATERIALIZE
     _UTUI-WIRE-SUBS
 
@@ -3578,6 +3798,7 @@ VARIABLE _USA-VL
     \ when either barrier was omitted or refused.
     _UTUI-PROJECTION-DETACH ?DUP IF THROW THEN
     _UTUI-DEMATERIALIZE
+    _UTUI-MENU-STATE-CLEAR
     _UTUI-SC-CLEAR-ALL
     _UTUI-ACT-CLEAR
     _UTUI-SHORT-CLEAR
@@ -3591,16 +3812,16 @@ VARIABLE _USA-VL
 \  §18b — UIDL Context Save / Restore  (UCTX)
 \ =====================================================================
 \
-\  Per sub-app UIDL context buffer holding 21 scalar variables and
-\  10 pool arrays.  Total 103,592 bytes (~101 KiB).
+\  Per sub-app UIDL context buffer holding 27 scalar variables and
+\  10 pool arrays.  Total 103,640 bytes (~101 KiB).
 \
 \  This section lives in uidl-tui.f because it must enumerate every
 \  private _UDL-* and _UTUI-* variable and pool.  The shell (browser)
 \  calls only the public API: UCTX-ALLOC, UCTX-FREE, UCTX-SAVE,
 \  UCTX-RESTORE, UCTX-CLEAR, UCTX-TOTAL.
 
-21 CONSTANT _UCTX-NVAR
-168 CONSTANT _UCTX-VAR-SZ       \ 21 × 8
+27 CONSTANT _UCTX-NVAR
+216 CONSTANT _UCTX-VAR-SZ       \ 27 × 8
 
 \ Pool sizes (must match module declarations)
 32768 CONSTANT _UCTX-ELEMS-SZ   \ 256 × 128
@@ -3651,7 +3872,13 @@ CREATE _UCTX-VARS  _UCTX-NVAR CELLS ALLOT
     _UTUI-VISIBLE        _UCTX-VARS 17 CELLS + !
     _UTUI-PROJ-ATTACHED   _UCTX-VARS 18 CELLS + !
     _UTUI-QUIESCING       _UCTX-VARS 19 CELLS + !
-    _UTUI-QUIESCED        _UCTX-VARS 20 CELLS + ! ;
+    _UTUI-QUIESCED        _UCTX-VARS 20 CELLS + !
+    _UTUI-MENU-OPEN       _UCTX-VARS 21 CELLS + !
+    _UTUI-MENU-SAVED-FOC  _UCTX-VARS 22 CELLS + !
+    _UTUI-MENU-SAVE-ROW   _UCTX-VARS 23 CELLS + !
+    _UTUI-MENU-SAVE-H     _UCTX-VARS 24 CELLS + !
+    _UTUI-MENU-SAVE-W     _UCTX-VARS 25 CELLS + !
+    _UTUI-MENU-SAVE-Z     _UCTX-VARS 26 CELLS + ! ;
 _UCTX-INIT-VARS
 
 \ --- Pool table: maps index → (global-addr, ctx-offset, size) ---
@@ -3738,6 +3965,303 @@ VARIABLE _UCP-SRC   VARIABLE _UCP-DST   VARIABLE _UCP-SZ
     UCTX-TOTAL 0 FILL ;
 
 \ =====================================================================
+\  §18c — Coherent resolved projection observation
+\ =====================================================================
+\
+\ The record is assembled in private scalar scratch and copied only after the
+\ complete element, ancestor, geometry, style, and destination checks pass.
+\ This makes every ordinary failure destination-preserving and prevents a TSC
+\ address or packed style word from escaping UIDL-TUI.
+
+-1 1 RSHIFT CONSTANT _UTUI-RS-SIGNED-MAX
+127 CONSTANT _UTUI-RS-ATTR-MASK
+
+VARIABLE _UTUI-RS-P-ELEM
+VARIABLE _UTUI-RS-ELEM
+VARIABLE _UTUI-RS-NODE
+VARIABLE _UTUI-RS-SC
+VARIABLE _UTUI-RS-ROOT
+VARIABLE _UTUI-RS-DEPTH
+VARIABLE _UTUI-RS-TOTAL
+VARIABLE _UTUI-RS-VISIBLE
+VARIABLE _UTUI-RS-STYLE
+VARIABLE _UTUI-RS-ROW
+VARIABLE _UTUI-RS-COL
+VARIABLE _UTUI-RS-H
+VARIABLE _UTUI-RS-W
+VARIABLE _UTUI-RS-ROW-END
+VARIABLE _UTUI-RS-COL-END
+VARIABLE _UTUI-RS-FG
+VARIABLE _UTUI-RS-BG
+VARIABLE _UTUI-RS-ATTRS
+VARIABLE _UTUI-RS-ALIGN
+VARIABLE _UTUI-RS-Z
+VARIABLE _UTUI-RS-ROOT-ROW
+VARIABLE _UTUI-RS-ROOT-COL
+VARIABLE _UTUI-RS-ROOT-H
+VARIABLE _UTUI-RS-ROOT-W
+VARIABLE _UTUI-RS-ROOT-ROW-END
+VARIABLE _UTUI-RS-ROOT-COL-END
+VARIABLE _UTUI-RS-DST
+VARIABLE _UTUI-OWNED-LIMIT
+
+0 _UTUI-OWNED-LIMIT !
+
+: _UTUI-RS-AXIS-END?  ( start length -- end flag )
+    DUP 0< IF 2DROP 0 0 EXIT THEN
+    >R
+    DUP _UTUI-RS-SIGNED-MAX R@ - > IF
+        DROP R> DROP 0 0 EXIT
+    THEN
+    R> + -1 ;
+
+: _UTUI-RESOLVED-SPAN?  ( address available -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP UTUI-RESOLVED-SIZE U< IF 2DROP 0 EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    OVER 7 AND IF 2DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING? ;
+
+: _UTUI-RS-ATTRS-VALID?  ( attrs -- flag )
+    DUP 65535 U> IF DROP 0 EXIT THEN
+    DUP CELL-A-WIDE CELL-A-CONT OR AND 0=
+    SWAP _UTUI-RS-ATTR-MASK INVERT AND 0= AND ;
+
+\ Reject every authoritative storage range read by a combined resolved-state
+\ and semantic projection.  The current root-region descriptor is borrowed by
+\ UIDL-TUI, so it is protected explicitly in addition to provider-owned,
+\ neutral UIDL, and state-tree storage.
+: _UTUI-STORAGE-DISJOINT-BODY?  ( address length -- flag )
+    OVER 0= OVER 0> 0= OR IF 2DROP 0 EXIT THEN
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    _UTUI-OWNED-LIMIT @ DUP _UTUI-SIDECARS U< IF
+        DROP 2DROP 0 EXIT
+    THEN
+    _UTUI-SIDECARS - DUP 0> 0= IF DROP 2DROP 0 EXIT THEN
+    >R 2DUP _UTUI-SIDECARS R>
+        MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    _UTUI-RGN @ DUP IF
+        DUP RGN-SIZE MSPAN-NONWRAPPING? 0= IF 3DROP 0 EXIT THEN
+        >R
+        2DUP R> RGN-SIZE MSPAN-OVERLAP? IF 2DROP 0 EXIT THEN
+    ELSE
+        DROP
+    THEN
+    2DUP UIDL-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP ST-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DROP -1 ;
+
+: UTUI-STORAGE-DISJOINT?  ( address length -- flag )
+    ['] _UTUI-STORAGE-DISJOINT-BODY? CATCH ?DUP IF
+        DROP 2DROP 0
+    THEN ;
+
+: _UTUI-RESOLVED-VALID-BODY?  ( record available -- flag )
+    2DUP _UTUI-RESOLVED-SPAN? 0= IF 2DROP 0 EXIT THEN
+    DROP
+    DUP _UTUI-RS.ROW @ OVER _UTUI-RS.H @ _UTUI-RS-AXIS-END?
+        0= IF 2DROP 0 EXIT THEN DROP
+    DUP _UTUI-RS.COL @ OVER _UTUI-RS.W @ _UTUI-RS-AXIS-END?
+        0= IF 2DROP 0 EXIT THEN DROP
+    DUP _UTUI-RS.FG @ 255 U> IF DROP 0 EXIT THEN
+    DUP _UTUI-RS.BG @ 255 U> IF DROP 0 EXIT THEN
+    DUP _UTUI-RS.ATTRS @ _UTUI-RS-ATTRS-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _UTUI-RS.ALIGN @ 2 U> IF DROP 0 EXIT THEN
+    _UTUI-RS.Z @ 255 U> 0= ;
+
+: UTUI-RESOLVED-VALID?  ( record available -- flag )
+    ['] _UTUI-RESOLVED-VALID-BODY? CATCH ?DUP IF
+        DROP 2DROP 0
+    THEN ;
+
+: _UTUI-RS-CLEAR  ( -- )
+    0 _UTUI-RS-P-ELEM ! 0 _UTUI-RS-ELEM ! 0 _UTUI-RS-NODE !
+    0 _UTUI-RS-SC ! 0 _UTUI-RS-ROOT ! 0 _UTUI-RS-DEPTH !
+    0 _UTUI-RS-TOTAL ! 0 _UTUI-RS-VISIBLE ! 0 _UTUI-RS-STYLE !
+    0 _UTUI-RS-ROW ! 0 _UTUI-RS-COL ! 0 _UTUI-RS-H ! 0 _UTUI-RS-W !
+    0 _UTUI-RS-ROW-END ! 0 _UTUI-RS-COL-END !
+    0 _UTUI-RS-FG ! 0 _UTUI-RS-BG ! 0 _UTUI-RS-ATTRS !
+    0 _UTUI-RS-ALIGN ! 0 _UTUI-RS-Z !
+    0 _UTUI-RS-ROOT-ROW ! 0 _UTUI-RS-ROOT-COL !
+    0 _UTUI-RS-ROOT-H ! 0 _UTUI-RS-ROOT-W !
+    0 _UTUI-RS-ROOT-ROW-END ! 0 _UTUI-RS-ROOT-COL-END !
+    0 _UTUI-RS-DST ! ;
+
+: _UTUI-RS-TARGET-VALID?  ( -- flag )
+    _UTUI-RS-ROW @ _UTUI-RS-H @ _UTUI-RS-AXIS-END?
+        0= IF DROP 0 EXIT THEN _UTUI-RS-ROW-END !
+    _UTUI-RS-COL @ _UTUI-RS-W @ _UTUI-RS-AXIS-END?
+        0= IF DROP 0 EXIT THEN _UTUI-RS-COL-END !
+    _UTUI-RS-FG @ 255 U> IF 0 EXIT THEN
+    _UTUI-RS-BG @ 255 U> IF 0 EXIT THEN
+    _UTUI-RS-ATTRS @ _UTUI-RS-ATTRS-VALID? 0= IF 0 EXIT THEN
+    _UTUI-RS-ALIGN @ 2 U> IF 0 EXIT THEN
+    _UTUI-RS-Z @ 255 U> IF 0 EXIT THEN
+    _UTUI-RS-STYLE @ TSC-UNPACK-POS 2 U> IF 0 EXIT THEN
+    _UTUI-RS-STYLE @ 52 RSHIFT IF 0 EXIT THEN
+    -1 ;
+
+: _UTUI-RS-ROOT-GEOMETRY?  ( -- flag )
+    _UTUI-RS-ROOT @ _UTUI-SIDECAR _UTUI-RS-SC !
+    _UTUI-RS-SC @ _UTUI-SC-ROW@ _UTUI-RS-ROOT-ROW !
+    _UTUI-RS-SC @ _UTUI-SC-COL@ _UTUI-RS-ROOT-COL !
+    _UTUI-RS-SC @ _UTUI-SC-H@ _UTUI-RS-ROOT-H !
+    _UTUI-RS-SC @ _UTUI-SC-W@ _UTUI-RS-ROOT-W !
+    _UTUI-RS-ROOT-ROW @ _UTUI-RS-ROOT-H @ _UTUI-RS-AXIS-END?
+        0= IF DROP 0 EXIT THEN _UTUI-RS-ROOT-ROW-END !
+    _UTUI-RS-ROOT-COL @ _UTUI-RS-ROOT-W @ _UTUI-RS-AXIS-END?
+        0= IF DROP 0 EXIT THEN _UTUI-RS-ROOT-COL-END !
+    -1 ;
+
+: _UTUI-RS-INTERSECTS-ROOT?  ( -- flag )
+    _UTUI-RS-H @ 0> _UTUI-RS-W @ 0> AND
+    _UTUI-RS-ROOT-H @ 0> AND _UTUI-RS-ROOT-W @ 0> AND
+        0= IF 0 EXIT THEN
+    _UTUI-RS-ROW @ _UTUI-RS-ROOT-ROW-END @ <
+    _UTUI-RS-ROOT-ROW @ _UTUI-RS-ROW-END @ < AND
+    _UTUI-RS-COL @ _UTUI-RS-ROOT-COL-END @ < AND
+    _UTUI-RS-ROOT-COL @ _UTUI-RS-COL-END @ < AND ;
+
+: _UTUI-RS-RESOLVE  ( elem -- status )
+    _UTUI-RS-CLEAR
+    _UTUI-DOC-LOADED @ 0= IF DROP UTUI-RESOLVED-S-INVALID EXIT THEN
+    _UTUI-ELEM-BASE @ _UDL-ELEMS <> IF
+        DROP UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    DUP UIDL-ELEM-INDEX? 0= IF
+        2DROP UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    DROP DUP _UTUI-RS-ELEM !
+    DUP _UTUI-SIDECAR DUP _UTUI-RS-SC !
+    _UTUI-SC-FLAGS@ _UTUI-SCF-HAS AND 0= IF
+        DROP UTUI-RESOLVED-S-UNAVAILABLE EXIT
+    THEN
+
+    _UTUI-RS-SC @ _UTUI-SC-ROW@ _UTUI-RS-ROW !
+    _UTUI-RS-SC @ _UTUI-SC-COL@ _UTUI-RS-COL !
+    _UTUI-RS-SC @ _UTUI-SC-H@ _UTUI-RS-H !
+    _UTUI-RS-SC @ _UTUI-SC-W@ _UTUI-RS-W !
+    _UTUI-RS-SC @ _UTUI-SC-STYLE@ DUP _UTUI-RS-STYLE !
+    DUP TSC-UNPACK-FG _UTUI-RS-FG !
+    DUP TSC-UNPACK-BG _UTUI-RS-BG !
+    DUP TSC-UNPACK-ATTRS _UTUI-RS-ATTRS !
+    DROP
+    _UTUI-RS-SC @ _UTUI-SC-TALIGN@ _UTUI-RS-ALIGN !
+    0 _UTUI-RS-Z !
+    _UTUI-RS-TARGET-VALID? 0= IF
+        DROP UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    DROP
+
+    -1 _UTUI-RS-VISIBLE !
+    UIDL-ELEM-COUNT DUP 0> 0= IF
+        DROP UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    _UTUI-RS-TOTAL !
+    _UTUI-RS-ELEM @ _UTUI-RS-NODE !
+    BEGIN
+        _UTUI-RS-NODE @ UIDL-ELEM-INDEX? 0= IF
+            DROP UTUI-RESOLVED-S-INVALID EXIT
+        THEN
+        DROP
+        _UTUI-RS-NODE @ _UTUI-SIDECAR DUP _UTUI-RS-SC !
+        DUP _UTUI-SC-FLAGS@ _UTUI-SCF-HAS AND 0= IF
+            DROP UTUI-RESOLVED-S-UNAVAILABLE EXIT
+        THEN
+        _UTUI-SC-VIS? 0= IF 0 _UTUI-RS-VISIBLE ! THEN
+
+        \ Closed menus suppress their descendants.  The menu element itself
+        \ remains a coherent node; only a target below it is suppressed.
+        _UTUI-RS-NODE @ _UTUI-RS-ELEM @ <> IF
+            _UTUI-RS-NODE @ UIDL-TYPE UIDL-T-MENU =
+            _UTUI-RS-NODE @ _UTUI-MENU-OPEN @ <> AND IF
+                0 _UTUI-RS-VISIBLE !
+            THEN
+        THEN
+
+        \ Pass 1 defers the outermost dialog or positive-z ancestor and then
+        \ paints its complete subtree.  Walking target-to-root and overwriting
+        \ on each deferred node therefore yields that group's actual z.
+        _UTUI-RS-NODE @ UIDL-TYPE UIDL-T-DIALOG = IF
+            _UTUI-RS-SC @ _UTUI-SC-ZIDX@ DUP 0= IF DROP 255 THEN
+        ELSE
+            _UTUI-RS-SC @ _UTUI-SC-ZIDX@
+        THEN
+        ?DUP IF _UTUI-RS-Z ! THEN
+
+        _UTUI-RS-NODE @ UIDL-PARENT DUP 0= IF
+            DROP _UTUI-RS-NODE @ _UTUI-RS-ROOT ! -1
+        ELSE
+            _UTUI-RS-NODE !
+            1 _UTUI-RS-DEPTH +!
+            _UTUI-RS-DEPTH @ _UTUI-RS-TOTAL @ U< 0= IF
+                UTUI-RESOLVED-S-INVALID EXIT
+            THEN
+            0
+        THEN
+    UNTIL
+    _UTUI-RS-ROOT @ UIDL-ROOT <> IF UTUI-RESOLVED-S-INVALID EXIT THEN
+    _UTUI-RS-ROOT-GEOMETRY? 0= IF UTUI-RESOLVED-S-INVALID EXIT THEN
+    _UTUI-RS-INTERSECTS-ROOT? 0= IF 0 _UTUI-RS-VISIBLE ! THEN
+    UTUI-RESOLVED-S-OK ;
+
+: _UTUI-RS-RESOLVE-CALL  ( -- status )
+    _UTUI-RS-P-ELEM @ _UTUI-RS-RESOLVE ;
+
+: _UTUI-RS-CALL  ( elem -- status )
+    _UTUI-RS-P-ELEM !
+    ['] _UTUI-RS-RESOLVE-CALL CATCH ?DUP IF
+        DROP UTUI-RESOLVED-S-INVALID
+    THEN ;
+
+: _UTUI-RS-RESULT  ( status -- effective-visible status )
+    DUP UTUI-RESOLVED-S-OK = IF _UTUI-RS-VISIBLE @ 0<> ELSE 0 THEN
+    SWAP _UTUI-RS-CLEAR ;
+
+: UTUI-ELEM-RESOLVED-STATE@
+    ( elem -- effective-visible status )
+    _UTUI-RS-CALL _UTUI-RS-RESULT ;
+
+: _UTUI-RS-WRITE  ( -- )
+    _UTUI-RS-ROW @ _UTUI-RS-DST @ _UTUI-RS.ROW !
+    _UTUI-RS-COL @ _UTUI-RS-DST @ _UTUI-RS.COL !
+    _UTUI-RS-H @ _UTUI-RS-DST @ _UTUI-RS.H !
+    _UTUI-RS-W @ _UTUI-RS-DST @ _UTUI-RS.W !
+    _UTUI-RS-FG @ _UTUI-RS-DST @ _UTUI-RS.FG !
+    _UTUI-RS-BG @ _UTUI-RS-DST @ _UTUI-RS.BG !
+    _UTUI-RS-ATTRS @ _UTUI-RS-DST @ _UTUI-RS.ATTRS !
+    _UTUI-RS-ALIGN @ _UTUI-RS-DST @ _UTUI-RS.ALIGN !
+    _UTUI-RS-Z @ _UTUI-RS-DST @ _UTUI-RS.Z ! ;
+
+: _UTUI-ELEM-RESOLVED-CAPTURE-BODY
+    ( elem destination available -- effective-visible status )
+    2DUP _UTUI-RESOLVED-SPAN? 0= IF
+        3DROP 0 UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    OVER UTUI-RESOLVED-SIZE UTUI-STORAGE-DISJOINT? 0= IF
+        3DROP 0 UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    DROP _UTUI-RS-DST !
+    _UTUI-RS-CALL
+    DUP UTUI-RESOLVED-S-OK <> IF
+        0 SWAP _UTUI-RS-CLEAR 0 _UTUI-RS-DST ! EXIT
+    THEN
+    DROP _UTUI-RS-WRITE
+    UTUI-RESOLVED-S-OK _UTUI-RS-RESULT
+    0 _UTUI-RS-DST ! ;
+
+: UTUI-ELEM-RESOLVED-CAPTURE
+    ( elem destination available -- effective-visible status )
+    ['] _UTUI-ELEM-RESOLVED-CAPTURE-BODY CATCH ?DUP IF
+        DROP 3DROP 0 UTUI-RESOLVED-S-INVALID
+    THEN
+    _UTUI-RS-CLEAR 0 _UTUI-RS-DST ! ;
+
+\ In unguarded builds this is a direct synchronous callback.  The guarded
+\ redefinition below acquires UIDL-TUI before UIDL for one coherent snapshot.
+: UTUI-RESOLVED-OBSERVE  ( i*x xt -- j*x )  EXECUTE ;
+
+\ =====================================================================
 \  §19 — Guard Section
 \ =====================================================================
 
@@ -3771,6 +4295,11 @@ GUARD _utui-guard
 ' UTUI-SET-ATTR       CONSTANT _utui-set-attr-xt
 ' UTUI-WIDGET-SET     CONSTANT _utui-widget-set-xt
 ' UTUI-ELEM-RGN       CONSTANT _utui-elem-rgn-xt
+' UTUI-ELEM-RESOLVED-STATE@
+    CONSTANT _utui-elem-resolved-state-at-xt
+' UTUI-ELEM-RESOLVED-CAPTURE
+    CONSTANT _utui-elem-resolved-capture-xt
+' UTUI-STORAGE-DISJOINT? CONSTANT _utui-storage-disjoint-q-xt
 
 : UTUI-BIND-STATE     _utui-bind-state-xt     _utui-guard WITH-GUARD ;
 : UTUI-FOCUS          _utui-focus-xt          _utui-guard WITH-GUARD ;
@@ -3796,6 +4325,25 @@ GUARD _utui-guard
 : UTUI-WIDGET-SET     _utui-widget-set-xt     _utui-guard WITH-GUARD ;
 : UTUI-ELEM-RGN       _utui-elem-rgn-xt       _utui-guard WITH-GUARD ;
 
+\ Observation lock order is deliberately UTUI -> UIDL.  A later projection
+\ may acquire its own guard and the semantic/LEL/state observation seams only
+\ while these two authoritative resolved sources remain coherent.
+: _UTUI-RESOLVED-IN-UIDL  ( i*x xt -- j*x )  UIDL-OBSERVE ;
+
+: UTUI-RESOLVED-OBSERVE  ( i*x xt -- j*x )
+    ['] _UTUI-RESOLVED-IN-UIDL _utui-guard WITH-GUARD ;
+
+: UTUI-ELEM-RESOLVED-STATE@
+    ( elem -- effective-visible status )
+    _utui-elem-resolved-state-at-xt UTUI-RESOLVED-OBSERVE ;
+
+: UTUI-ELEM-RESOLVED-CAPTURE
+    ( elem destination available -- effective-visible status )
+    _utui-elem-resolved-capture-xt UTUI-RESOLVED-OBSERVE ;
+
+: UTUI-STORAGE-DISJOINT?  ( address length -- flag )
+    _utui-storage-disjoint-q-xt UTUI-RESOLVED-OBSERVE ;
+
 \ These entries own the current UIDL context and may execute registered
 \ layout, render, widget, app action, or projection callbacks.  They run
 \ only on the UI owner core and deliberately do not retain _utui-guard across
@@ -3810,3 +4358,9 @@ GUARD _utui-guard
 : UTUI-DISPATCH-MOUSE _utui-dispatch-mouse-xt EXECUTE ;
 : UTUI-TAB-SELECT     _utui-tab-select-xt EXECUTE ;
 [THEN] [THEN]
+
+\ Finalize the conservative provider-owned span only after optional guard
+\ storage and captured XTs have been created.  Public calls occur after the
+\ module has loaded, so a zero or backwards limit always fails closed.
+CREATE _UTUI-OWNED-END
+_UTUI-OWNED-END _UTUI-OWNED-LIMIT !

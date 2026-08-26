@@ -27,7 +27,7 @@ clock-bg     = "#000057"
 # The hotbar is now the pinned projection of /app-catalog.bin.  Applet
 # identity, installed-manifest paths, enabled/pinned/autostart/quarantine
 # policy, and runtime status live in that durable catalog rather than this
-# presentation config.  Alt+H opens the non-blocking catalog launcher.
+# appearance config.  Alt+H opens the non-blocking catalog launcher.
 #
 # Older [[desk.hotbar]] tables are still parsed for source compatibility,
 # but Desk never evaluates their file or descriptor strings and they do not

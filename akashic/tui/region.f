@@ -47,8 +47,9 @@ _RGN-DESC-SIZE CONSTANT RGN-SIZE
 \  for all DRW-* words.  When no region is active (or after RGN-ROOT),
 \  drawing uses raw screen coordinates with no offset.
 \
-\  The actual clip state lives in draw.f (_DRW-CLIP-ROW/COL/H/W).
-\  region.f just sets those variables.
+\  The actual origin and clip state lives in draw.f
+\  (_DRW-ORIGIN-ROW/COL and _DRW-CLIP-ROW/COL/H/W).  region.f derives
+\  those values from the active descriptor and its parent chain.
 
 VARIABLE _RGN-CUR      0 _RGN-CUR !   \ 0 = no region (full screen)
 
@@ -83,6 +84,46 @@ VARIABLE _RGN-CUR      0 _RGN-CUR !   \ 0 = no region (full screen)
 : RGN-H    ( rgn -- h )      _RGN-O-H   + @ ;
 : RGN-W    ( rgn -- w )      _RGN-O-W   + @ ;
 
+\ Activate a descriptor while intersecting its drawing bounds with every
+\ parent.  The descriptor's own row/column remain the coordinate origin;
+\ only the effective clip rectangle is intersected.  This distinction is
+\ required for a child that overlaps its parent on the top or left.
+VARIABLE _RGN-ACT-TOP
+VARIABLE _RGN-ACT-LEFT
+VARIABLE _RGN-ACT-BOTTOM
+VARIABLE _RGN-ACT-RIGHT
+
+: _RGN-ACTIVATE  ( rgn -- )
+    DUP _RGN-CUR !
+    DUP RGN-ROW DUP _DRW-ORIGIN-ROW ! _RGN-ACT-TOP !
+    DUP RGN-COL DUP _DRW-ORIGIN-COL ! _RGN-ACT-LEFT !
+    DUP RGN-ROW OVER RGN-H + _RGN-ACT-BOTTOM !
+    DUP RGN-COL OVER RGN-W + _RGN-ACT-RIGHT !
+    _RGN-O-PARENT + @
+    BEGIN DUP WHILE
+        DUP RGN-ROW _RGN-ACT-TOP @ MAX _RGN-ACT-TOP !
+        DUP RGN-COL _RGN-ACT-LEFT @ MAX _RGN-ACT-LEFT !
+        DUP RGN-ROW OVER RGN-H +
+            _RGN-ACT-BOTTOM @ MIN _RGN-ACT-BOTTOM !
+        DUP RGN-COL OVER RGN-W +
+            _RGN-ACT-RIGHT @ MIN _RGN-ACT-RIGHT !
+        _RGN-O-PARENT + @
+    REPEAT
+    DROP
+    _RGN-ACT-TOP @ _DRW-CLIP-ROW !
+    _RGN-ACT-LEFT @ _DRW-CLIP-COL !
+    _RGN-ACT-BOTTOM @ _RGN-ACT-TOP @ - 0 MAX _DRW-CLIP-H !
+    _RGN-ACT-RIGHT @ _RGN-ACT-LEFT @ - 0 MAX _DRW-CLIP-W !
+    -1 _DRW-CLIP-ON ! ;
+
+: _RGN-ACTIVE-DEPENDS?  ( rgn -- flag )
+    _RGN-CUR @
+    BEGIN DUP WHILE
+        2DUP = IF 2DROP -1 EXIT THEN
+        _RGN-O-PARENT + @
+    REPEAT
+    2DROP 0 ;
+
 VARIABLE _RGNB-RGN
 VARIABLE _RGNB-ROW
 VARIABLE _RGNB-COL
@@ -98,11 +139,8 @@ VARIABLE _RGNB-W
     _RGNB-COL @ _RGNB-RGN @ _RGN-O-COL + !
     _RGNB-H   @ _RGNB-RGN @ _RGN-O-H   + !
     _RGNB-W   @ _RGNB-RGN @ _RGN-O-W   + !
-    _RGNB-RGN @ _RGN-CUR @ = IF
-        _RGNB-ROW @ _DRW-CLIP-ROW !
-        _RGNB-COL @ _DRW-CLIP-COL !
-        _RGNB-H   @ _DRW-CLIP-H !
-        _RGNB-W   @ _DRW-CLIP-W !
+    _RGNB-RGN @ _RGN-ACTIVE-DEPENDS? IF
+        _RGN-CUR @ _RGN-ACTIVATE
     THEN ;
 
 \ =====================================================================
@@ -113,17 +151,14 @@ VARIABLE _RGNB-W
 \   Set as current drawing region.  All DRW-* words will translate
 \   coordinates relative to this region and clip to its bounds.
 : RGN-USE  ( rgn -- )
-    DUP _RGN-CUR !
-    DUP RGN-ROW _DRW-CLIP-ROW !
-    DUP RGN-COL _DRW-CLIP-COL !
-    DUP RGN-H   _DRW-CLIP-H !
-        RGN-W   _DRW-CLIP-W !
-    -1 _DRW-CLIP-ON ! ;
+    _RGN-ACTIVATE ;
 
 \ RGN-ROOT ( -- )
 \   Reset to full-screen drawing (no clipping region).
 : RGN-ROOT  ( -- )
     0   _RGN-CUR !
+    0   _DRW-ORIGIN-ROW !
+    0   _DRW-ORIGIN-COL !
     0   _DRW-CLIP-ROW !
     0   _DRW-CLIP-COL !
     0   _DRW-CLIP-H !
@@ -185,9 +220,7 @@ VARIABLE _RGN-SUB-W
 \   Is point (row, col) inside the current region?
 \   Coordinates are region-relative.
 : RGN-CONTAINS?  ( row col -- flag )
-    SWAP 0 _DRW-CLIP-ROWS WITHIN       \ 0 <= row < h ?
-    SWAP 0 _DRW-CLIP-COLS WITHIN       \ 0 <= col < w ?
-    AND ;
+    _DRW-IN-BOUNDS? ;
 
 \ RGN-CLIP ( row col -- row' col' flag )
 \   Translate to absolute coordinates and test if inside.
@@ -196,8 +229,8 @@ VARIABLE _RGN-SUB-W
 : RGN-CLIP  ( row col -- row' col' flag )
     2DUP RGN-CONTAINS?                \ ( row col flag )
     >R
-    SWAP _DRW-CLIP-ROW @ +            \ abs-row
-    SWAP _DRW-CLIP-COL @ +            \ abs-col
+    SWAP _DRW-ORIGIN-ROW @ +          \ abs-row
+    SWAP _DRW-ORIGIN-COL @ +          \ abs-col
     R> ;
 
 \ =====================================================================

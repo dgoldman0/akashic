@@ -36,9 +36,11 @@ REQUIRE tui/region.f
 | Principle | Implementation |
 |-----------|---------------|
 | **Coordinate translation** | `RGN-USE` sets an origin offset; `DRW-CHAR` translates (row,col) by the region's top-left before hitting `SCR-SET`. |
-| **Clip-safe** | `_DRW-IN-BOUNDS?` checks against the active region's height and width. Out-of-region writes are silently dropped. |
+| **Independent clipping** | The coordinate origin remains the active region's top-left while a separate screen-absolute clip is intersected with every parent. This preserves child-local coordinates when any edge lies outside a parent. |
+| **Clip-safe** | `_DRW-IN-BOUNDS?` translates a point and checks it against the effective screen-absolute clip. Out-of-region writes are silently dropped. |
 | **Per-region scope** | Only one region is active at a time.  Switching regions is a single `RGN-USE` call. |
-| **Nested clipping** | `RGN-SUB` clips the sub-region to its parent's bounds at creation time.  No runtime parent-chain walk. |
+| **Nested clipping** | `RGN-SUB` records its parent, and `RGN-USE` walks the complete parent chain to derive the current effective clip. |
+| **Borrowed ancestry** | A descriptor does not own its parent. The parent chain must remain live and acyclic until every descendant is inactive and freed. |
 | **Heap-allocated** | Descriptors are `ALLOCATE`d; caller frees with `RGN-FREE`. |
 | **Prefix convention** | Public: `RGN-`. Internal: `_RGN-`. |
 
@@ -93,8 +95,8 @@ Free region descriptor memory.
 | `RGN-BOUNDS!` | `( row col h w rgn -- )` | Update bounds without changing descriptor identity or parent |
 
 `RGN-BOUNDS!` also refreshes the drawing clip when the updated descriptor is
-currently active. Lifecycle owners use it when a UIDL/output binding borrows a
-region identity across resize or tile relayout.
+the active region or one of its ancestors. Lifecycle owners use it when a
+UIDL/output binding borrows a region identity across resize or tile relayout.
 
 ---
 
@@ -106,9 +108,10 @@ region identity across resize or tile relayout.
 RGN-USE  ( rgn -- )
 ```
 
-Set as the current drawing region.  All subsequent `DRW-*` calls
-will translate coordinates relative to this region's origin and
-clip to its bounds.
+Set as the current drawing region. All subsequent `DRW-*` calls translate
+coordinates relative to this region's own origin. Its effective clip is the
+screen-absolute intersection of its rectangle and every ancestor rectangle,
+so parent clipping does not move local `(0,0)`.
 
 ```forth
 my-region RGN-USE
@@ -134,9 +137,9 @@ Clip bounds revert to `SCR-H × SCR-W`.
 RGN-SUB  ( parent r c h w -- rgn )
 ```
 
-Create a sub-region at position *(r, c)* relative to the parent's
-top-left.  The sub-region is automatically clipped to the parent's
-bounds:
+Create a sub-region at position *(r, c)* relative to the parent's top-left.
+The descriptor records that parent for activation-time clipping. Its stored
+height and width retain the existing construction-time bottom/right clamp:
 
 - If `r + h > parent-h`, height is reduced.
 - If `c + w > parent-w`, width is reduced.
@@ -156,8 +159,9 @@ parent 2 4 10 20 RGN-SUB   \ 10×20 sub at parent-relative (2,4)
 RGN-CONTAINS?  ( row col -- flag )
 ```
 
-Test whether a region-relative point is inside the current region.
-Returns `TRUE` (-1) if `0 ≤ row < h` and `0 ≤ col < w`.
+Test whether a region-relative point lands inside the current effective clip.
+For a parent-clipped child this can exclude a nonzero prefix of local rows or
+columns while leaving the child's coordinate origin unchanged.
 
 ### RGN-CLIP
 

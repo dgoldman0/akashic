@@ -198,12 +198,14 @@ An accepted empty candidate is published and returns
 `RTERM-S-OK`. Any build, validation, capacity, or caught-exception failure
 leaves the prior selector and therefore the prior desired scene authoritative.
 
-This admitted candidate does not yet capture complete neutral layout/style
-input and invokes no facade operation, including the limits callback. The
-remaining vertical blocker is to add that neutral layout/style projection and
-then materialize admitted LABEL candidates through the generic engine. Region
-replacement, retained identity, negotiated admission, and wire publication
-remain later work; the current lifecycle slice is still wire-inert.
+UIDL-TUI now exposes complete neutral resolved geometry/style as a copied
+72-byte record with effective visibility and paint-group z, but the admitted
+candidate does not yet include that record and invokes no facade operation,
+including the limits callback. The next blocker is to copy the resolved record
+into each admitted LABEL candidate and then materialize it through the generic
+engine. Region replacement, retained identity, negotiated admission, and wire
+publication remain later work; the current lifecycle slice is still
+wire-inert.
 
 The lower UIDL layer now supplies the first neutral semantic snapshot
 substrate independently of this adapter. `ED.SEMANTICS` selects a per-element
@@ -213,14 +215,14 @@ provider identity. The initial LABEL record contains the resolved text plus
 its explicit `text-capacity` reservation. CELL label paint consumes the same
 `UIDL-TEXT@` value rule but never enforces snapshot eligibility or capacity.
 Thus string/integer/boolean binding semantics are shared below either output
-path, while optional presentation admission remains above UIDL semantics.
+path, while optional rich-output admission remains above UIDL semantics.
 
 The candidate projector walks the active root tree under one compound semantic
 observation and copies eligible LABEL records into bounded item/snapshot
 banks. Each binding has two caller-owned item banks and two caller-owned
 snapshot banks, so a new complete candidate can replace the selected candidate
 atomically without allocating. This does not change the current wire-inert
-state: no shipped UIDL has been bulk-annotated for optional presentation
+state: no shipped UIDL has been bulk-annotated for optional rich-output
 eligibility, and the admitted candidate is not yet materialized. Later
 negotiated admission must compare each LABEL declaration and the checked
 per-owner sum against
@@ -840,8 +842,9 @@ materializer yet couples them through `RTE`; the driver therefore remains
 wire-inert and the production host advertises no retained policy. CELL output
 still traverses the unified publisher, while attach, project, geometry,
 quiesce, and detach exercise the exact private UCTX lifetime without opening a
-root-region-only wire owner. The next critical slice is neutral layout/style
-projection followed by generic-engine LABEL materialization.
+root-region-only wire owner. The next critical slice copies UIDL-TUI's neutral
+resolved record into the admitted candidate, followed by generic-engine LABEL
+materialization.
 
 Retained discovery is not a hosted-UCTX launch gate. The mandatory initial CELL
 snapshot is produced only after Desk initialization, so host composition,

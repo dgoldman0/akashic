@@ -38,6 +38,7 @@ REQUIRE tui/uidl-tui.f
 - [Hit Testing](#hit-testing)
 - [Paint & Layout](#paint--layout)
 - [Positioned Element Resolution](#positioned-element-resolution)
+- [Resolved Projection State](#resolved-projection-state)
 - [Subscription Wiring](#subscription-wiring)
 - [Event Dispatch](#event-dispatch)
 - [Dialog Management](#dialog-management)
@@ -68,9 +69,10 @@ REQUIRE tui/uidl-tui.f
 | **Dynamic DOM** | `UTUI-ADD-ELEM` and `UTUI-REMOVE-ELEM` wrap the base UIDL tree operations with sidecar allocation, style resolution, materialization, and dirty propagation. Apps manipulate the tree like JavaScript's `appendChild` / `removeChild`. |
 | **Auto-dirty** | `_UTUI-NEEDS-PAINT` flag is set by any DOM / widget mutation. The shell converts this to `ASHELL-DIRTY!` at tick and paint time — apps never call `ASHELL-DIRTY!`. |
 | **Derived projection** | An optional composition-installed adapter observes the same UIDL/UCTX lifecycle. UIDL-TUI owns visibility, publish, quiesce, and final detach; applications and hosts do not select or name a renderer. |
+| **Neutral resolved state** | Projection code reads resolved geometry and explicit style through a copied 72-byte public record. The record contains no sidecar pointer, widget state, renderer identity, or packed TSC word. |
 | **Shared label value** | CELL label paint calls `UIDL-TEXT@`, the same neutral value resolver used by UIDL semantic snapshots. Each render hook remains inside nested UIDL, LEL, and state observations through borrowed-value consumption and the clean mark; the outer UIDL observation also excludes semantic scratch writers. Binding precedence and string/integer/boolean coercion therefore do not vary by output path, while snapshot-only capacity declarations never truncate or reject CELL output. |
-| **Packed style** | FG (8 bits) + BG (8 bits) + attrs (8 bits) + text-align (2 bits) + position (2 bits) + z-index (8 bits) packed into one cell at `+32`. |
-| **CSS inheritance** | `_UTUI-RESOLVE-STYLES-REC` propagates inheritable properties (fg, bg, attrs, text-align — bits 0-25) from parent to child before resolving the child's `style=`. Non-inheritable properties (position, z-index) are preserved from prelayout. |
+| **Packed style is internal** | FG (8 bits) + BG (8 bits) + attrs (16 bits) + text-align (2 bits) + position (2 bits) + z-index (8 bits) are packed into one sidecar cell at `+40`. Public resolved-state capture decodes the relevant values into explicit fields instead of making this encoding part of another ABI. |
+| **CSS inheritance** | `_UTUI-RESOLVE-STYLES-REC` propagates inheritable properties (fg, bg, attrs, text-align — bits 0-33) from parent to child before resolving the child's `style=`. Non-inheritable properties (position, z-index) are preserved from prelayout. |
 | **Registry patching** | `UTUI-INSTALL-XTS` sets render/event/layout XTs via the public `EL-SET-RENDER` / `EL-SET-EVENT` / `EL-SET-LAYOUT` API and `UIDL-T-*` type-id constants. Each chrome element type gets its own adapter. External code uses the same API — no library modification needed. |
 | **Guard safety** | When `GUARDED` is defined, all public words are serialized through `_utui-guard`. |
 
@@ -94,7 +96,7 @@ Each sidecar is 96 bytes (12 cells), stored in the parallel array
 | +64 | `offsets` | packed | top(16s), right(16s), bottom(16s), left(16s) |
 | +72 | `margin` | packed | MT(8), MR(8), MB(8), ML(8) in bits 0-31 |
 | +80 | `wowner` | enum | 0 = UIDL-owned allocation, 1 = caller-owned attachment |
-| +88 | reserved | cell | Reserved |
+| +88 | `runtime` | bitfield | UIDL-TUI runtime state; bit 0 persistently suppresses paint without changing layout participation |
 
 ### Sidecar Flag Bits
 
@@ -109,7 +111,7 @@ Each sidecar is 96 bytes (12 cells), stored in the parallel array
 
 ```forth
 _UTUI-SC-IDX   ( elem -- idx )   \ (elem - _UDL-ELEMS) / _UDL-ELEMSZ
-_UTUI-SIDECAR  ( elem -- sc )    \ idx * 80 + _UTUI-SIDECARS
+_UTUI-SIDECAR  ( elem -- sc )    \ idx * 96 + _UTUI-SIDECARS
 ```
 
 `_UTUI-ELEM-BASE` is set to `_UDL-ELEMS` during `UTUI-LOAD`.
@@ -160,18 +162,20 @@ layout-affecting properties:
 ```
 bits  0– 7:  FG colour index   (0–255)
 bits  8–15:  BG colour index   (0–255)
-bits 16–23:  Cell attributes    (bold, italic, etc.)
-bits 24–25:  text-align         (0=left, 1=center, 2=right)
-bits 26–27:  position           (0=static, 1=absolute, 2=fixed)
-bits 28–35:  z-index            (unsigned 0–255)
+bits 16–31:  Cell attributes    (bold, italic, etc.)
+bits 32–33:  text-align         (0=left, 1=center, 2=right)
+bits 34–35:  position           (0=static, 1=absolute, 2=fixed)
+bits 36–43:  z-index            (unsigned 0–255)
+bits 44–51:  shared border index
+bits 52–63:  reserved
 ```
 
 | Word | Stack | Description |
 |------|-------|-------------|
-| `_UTUI-PACK-STYLE` | `( fg bg attrs -- packed )` | Pack three values (bits 0-23) |
+| `_UTUI-PACK-STYLE` | `( fg bg attrs -- packed )` | Pack three values (bits 0-31) |
 | `_UTUI-UNPACK-STYLE` | `( packed -- fg bg attrs )` | Extract fg, bg, attrs |
 | `_UTUI-APPLY-STYLE` | `( sc -- )` | Read sidecar style and call `DRW-STYLE!` |
-| `_UTUI-INHERIT-MASK` | `( -- mask )` | Constant `0x03FFFFFF` — inheritable bits |
+| `_UTUI-INHERIT-MASK` | `( -- mask )` | Constant `0x3FFFFFFFF` — inheritable bits |
 
 Default style: `253 236 0` (light gray on dark gray, no attributes).
 
@@ -179,9 +183,9 @@ Default style: `253 236 0` (light gray on dark gray, no attributes).
 
 `_UTUI-RESOLVE-STYLES-REC` performs a preorder depth-first walk.
 After resolving a parent's own `style=`, the inheritable bits
-(fg, bg, attrs, text-align — bits 0-25) are copied into each
+(fg, bg, attrs, text-align — bits 0-33) are copied into each
 child's sidecar *before* resolving the child's `style=`.
-Non-inheritable properties (position bits 26-27, z-index bits 28-35)
+Non-inheritable properties (position bits 34-35 and z-index bits 36-43)
 are preserved from the prelayout pass.
 
 This means:
@@ -225,8 +229,10 @@ _UTUI-SYNC-PROXY  ( sc -- )
 ```
 
 Copies row, col, height, width from the sidecar into
-`_UTUI-PROXY-RGN`.  The proxy is then passed to `RGN-USE` so
-widget draw code operates in region-relative coordinates.
+`_UTUI-PROXY-RGN` and parents the proxy to the UIDL document region. The
+proxy is then passed to `RGN-USE`, so widget draw code keeps its own
+region-relative coordinate origin while the region layer intersects its
+screen-absolute clip with the document on all four edges.
 
 Tree and other materialized widgets store `_UTUI-PROXY-RGN` as
 their `WDG-REGION` (+8).
@@ -349,7 +355,9 @@ and `_UTUI-PROJECTION-ATTACH ( document-binding visible -- status )`. Both are
 private `_UTUI-` words: Desk, app-shell, applet-host, and applications do not
 call them. There are no renderer-named compatibility aliases and no public
 projection-status getter; hosts act on the status returned by the lifecycle
-operation they invoke.
+operation they invoke. A relayout callback occurs only after prelayout,
+ordinary layout, resolved styles, positioned-element resolution, and final
+open-menu geometry have all completed.
 
 ### UTUI-DETACH — `( -- )`
 
@@ -426,18 +434,40 @@ if no element is hit.
 
 Full repaint cycle:
 
-1. Walk UIDL tree in DFS order
-2. For each visible element with a sidecar, apply style and call
-   the element's `render-xt` from the registry
-3. Elements with `when=` conditions are re-evaluated; hidden
-   elements are skipped
+1. Publish the optional derived projection from the same authoritative dirty
+   state that CELL will consume.
+2. Activate the document region and render with document-relative coordinates.
+   Materialized widgets retain their own local coordinate origin through a
+   document-parented proxy, while partially off-tile output is clipped to the
+   UIDL root on the top, left, bottom, and right rather than the full screen.
+3. Walk UIDL in two passes: normal flow first, then sorted overlay groups.
+   Invisible ancestors and closed menus prune their complete subtrees in both
+   passes.
+4. Restore `RGN-ROOT` after the complete paint cycle.
 
 ### UTUI-RELAYOUT — `( -- )`
 
-Recompute sidecar geometry for all elements based on the root region
-and arrangement modes (`dock`, `flex`, `stack`, `flow`, `grid`).
-Layout-specific handlers are called for elements with custom layout
-words:
+Recompute the complete resolved layout/style state for all elements. Every
+relayout uses this order:
+
+1. Clear the previously derived geometry/style fields while preserving mounted
+   widget ownership, focus, explicit hidden state, and AUX6 runtime visibility
+2. Prelayout style resolution (`display`, `position`, box model, and other
+   layout inputs)
+3. Normal layout against the root region (`dock`, `flex`, `stack`, `flow`,
+   `grid`, and custom layout words)
+4. Resolved styles (palette colours, attributes, alignment, and
+   z-index)
+5. Absolute and fixed positioning
+6. Final open-menu overlay geometry, admitted row placement, and effective
+   z-index. Items and separators may occupy rows; only items enter keyboard
+   navigation. `when=false`, `display:none`, positioned, and unsupported
+   children gain neither dropdown rows nor visibility.
+7. Projection geometry notification
+
+The projection callback therefore never observes a mixture of new flow
+geometry and stale resolved style or positioned geometry. Layout-specific
+handlers include:
 
 | Handler | Element | Behaviour |
 |---------|---------|-----------|
@@ -448,11 +478,11 @@ words:
 
 ## Positioned Element Resolution
 
-After flow layout (§7/§11) and style resolution (§16b), positioned
-elements are resolved in a second pass by `_UTUI-RESOLVE-POSITIONED`
-(§7b).  During flow layout, elements with `position: absolute` or
-`position: fixed` are skipped — they don't participate in normal
-flow.  This pass places them after all static geometry is known.
+After flow layout (§7/§11) and style resolution (§16b), positioned elements
+are resolved by `_UTUI-RESOLVE-POSITIONED` (§7b). During flow layout,
+elements with `position: absolute` or `position: fixed` are skipped — they
+don't participate in normal flow. This pass places them after all static
+geometry is known and before projection receives its geometry notification.
 
 ### Coordinate Frames
 
@@ -479,8 +509,99 @@ determining the reference frame:
 | `_UTUI-RESOLVE-POS-ELEM` | `( elem -- )` | Resolve one element.  No-op for `position: static`. |
 | `_UTUI-RESOLVE-POSITIONED` | `( -- )` | DFS walk; call `_UTUI-RESOLVE-POS-ELEM` on every element. |
 
-Called once during `UTUI-LOAD`, after `_UTUI-RESOLVE-STYLES` and
-before `_UTUI-MATERIALIZE`.
+This is part of every `UTUI-RELAYOUT`, including the initial relayout during
+`UTUI-LOAD`; materialization follows the complete initial pipeline.
+
+---
+
+## Resolved Projection State
+
+UIDL-TUI publishes resolved layout and style through a renderer-neutral,
+copied record. Optional projection adapters consume this seam; they do not
+read `_UTUI-SIDECAR`, retain a TSC address, or copy the packed TSC style cell.
+Consequently the candidate ABI is independent of the internal sidecar layout
+and of any CELL-versus-rich rendering choice.
+
+### Status
+
+| Constant | Value | Meaning |
+|----------|------:|---------|
+| `UTUI-RESOLVED-S-OK` | 0 | The element has a complete resolved layout/style state. |
+| `UTUI-RESOLVED-S-UNAVAILABLE` | 1 | The element is valid and live but currently has no resolved `HAS` sidecar. This is normal for a descendant of an unlaid-out hidden subtree. |
+| `UTUI-RESOLVED-S-INVALID` | 2 | Element identity, resolved style, destination span, capacity, or storage aliasing is invalid. |
+
+`UTUI-RESOLVED-STATUS-VALID? ( status -- flag )` recognizes exactly these three
+values. On a non-OK capture, the returned visibility flag is zero. Validation
+and resolution failures detected before publication leave the destination
+unchanged. A trapped memory fault during the record's sequential stores also
+returns `INVALID`, but cannot promise that an already completed store is
+rolled back; callers must supply valid writable storage.
+
+### Copied record
+
+`UTUI-RESOLVED-BYTES ( -- bytes )` returns 72. The record consists of
+nine explicit cells:
+
+| Offset | Field | Meaning |
+|-------:|-------|---------|
+| +0 | `row` | Absolute screen row |
+| +8 | `column` | Absolute screen column |
+| +16 | `height` | Resolved height in cells |
+| +24 | `width` | Resolved width in cells |
+| +32 | `foreground` | Resolved foreground palette index |
+| +40 | `background` | Resolved background palette index |
+| +48 | `attributes` | Explicit non-glyph style attributes |
+| +56 | `horizontal alignment` | Left, centre, or right alignment |
+| +64 | `z-index` | Effective paint-group z-index |
+
+The record contains no pointer or borrowed string. In particular, the TSC
+widget pointer, ownership state, padding/offset packing, position bits, and
+glyph-only CELL state cannot escape through this API. Palette indices are the
+resolved UIDL-TUI palette values; renderer-specific colour conversion is
+a later materialization concern.
+
+The rectangle is always the full absolute sidecar rectangle. It is never
+clipped to the root region: a partially clipped, fully offscreen, zero-width,
+or zero-height element retains its truthful geometry whenever capture returns
+`UTUI-RESOLVED-S-OK`.
+
+### Capture and validation
+
+| Word | Stack | Description |
+|------|-------|-------------|
+| `UTUI-ELEM-RESOLVED-STATE@` | `( elem -- visible status )` | Return effective paintability without copying the record. |
+| `UTUI-ELEM-RESOLVED-CAPTURE` | `( elem destination available -- visible status )` | Copy one complete record when status is OK. |
+| `UTUI-RESOLVED-VALID?` | `( record available -- flag )` | Validate a copied record and its available byte count. |
+| `UTUI-RESOLVED-OBSERVE` | `( i*x xt -- j*x )` | Run a compound reader under one UIDL-TUI observation. |
+| `UTUI-STORAGE-DISJOINT?` | `( a u -- flag )` | Validate that a caller span is nonempty, nonwrapping, and disjoint from UIDL-TUI, UIDL, state-tree, and active root-region storage. |
+
+The destination passed to capture must provide at least
+`UTUI-RESOLVED-BYTES` bytes and satisfy `UTUI-STORAGE-DISJOINT?`. Validation,
+storage preflight, source resolution, and the final copy are exception-contained:
+a fault returns false or `UTUI-RESOLVED-S-INVALID` and scrubs provider scratch.
+Ordinary validation failures occur before any destination store.
+Compound projection reads use `UTUI-RESOLVED-OBSERVE`, so resolved projection
+state and all copied records come from one serialized UIDL-TUI state rather
+than separate sidecar observations.
+
+The returned `visible` flag means effective paintability, not merely the
+element's local VIS bit. It requires all of the following:
+
+- the element and every ancestor are visible;
+- the element is not a suppressed descendant of a closed menu; and
+- its full rectangle has a positive-area intersection with the root region.
+
+Partial clipping therefore preserves `visible`, while zero-area and wholly
+offscreen rectangles do not. This visibility result is separate from record
+availability: an OK record can truthfully describe geometry that is not
+currently paintable.
+
+The recorded z-index is also effective. Descendants inherit the outermost
+ancestor whose dialog or positive z causes Pass 1 to defer that subtree; this
+is paint-group order, not the numeric maximum of descendant z values. Document
+minimize/restore remains a projection-lifecycle state controlled by
+`UTUI-VISIBLE!`; it is not baked into per-element visibility or the copied
+resolved record.
 
 ---
 
@@ -601,7 +722,7 @@ This ensures:
 |------|-------|---------|
 | `_UTUI-SHOW-ELEM` | `( elem -- )` | Show by element pointer |
 | `_UTUI-HIDE-ELEM` | `( elem -- )` | Hide by element pointer |
-| `_UTUI-VIS-SUBTREE!` | `( flag elem -- )` | Set/clear VIS on elem + descendants |
+| `_UTUI-VIS-SUBTREE!` | `( flag elem -- )` | Set/clear immediate VIS and durable AUX6 runtime visibility on elem + descendants |
 | `_UTUI-DIRTY-SUBTREE` | `( elem -- )` | Mark elem + descendants dirty |
 | `_UTUI-DIRTY-RECT` | `( row col h w -- )` | Dirty all visible elements overlapping rect |
 | `_UTUI-PAINT-SUBTREE` | `( elem -- )` | DFS paint of elem + descendants (Pass 2) |
@@ -737,7 +858,8 @@ wptr, it:
 2. Syncs `_UTUI-PROXY-RGN` from the `_UR-*` temp vars
 3. Calls `RGN-USE` on the proxy
 4. Calls the widget's `draw-xt` (via `_WDG-O-DRAW-XT`)
-5. Resets to `RGN-ROOT`
+5. Restores the document region so later UIDL siblings remain clipped to the
+   same tile; the enclosing paint cycle resets to `RGN-ROOT`
 
 The app never needs a `PAINT-XT` callback.  Widget state changes
 propagate automatically through `UIDL-DIRTY!` → `_UTUI-NEEDS-PAINT`
@@ -756,6 +878,10 @@ to a UIDL element without reaching into sidecar internals.
 ```forth
 S" sidebar" UTUI-BY-ID UTUI-ELEM-RGN   \ ( row col h w )
 ```
+
+This convenience accessor exposes geometry only. Projection adapters use the
+resolved-state API, which copies geometry, explicit style,
+effective visibility, and effective z under one observation.
 
 ---
 
@@ -835,9 +961,17 @@ element that declares them.
 UTUI-LOAD
   ├── Parse UIDL markup
   ├── Allocate sidecars
-  ├── _UTUI-PRELAYOUT-STYLES  ← position, display, padding, margin
-  ├── UTUI-RELAYOUT           ← geometry pass (row/col/w/h)
-  └── _UTUI-RESOLVE-STYLES    ← CSS style= pass (post-layout, with inheritance)
+  ├── UTUI-RELAYOUT
+  │     ├── _UTUI-RESET-RESOLVED
+  │     ├── _UTUI-PRELAYOUT-STYLES  ← position, display, padding, margin
+  │     ├── _UTUI-DO-LAYOUT-REC     ← geometry pass (row/col/w/h)
+  │     ├── _UTUI-RESOLVE-STYLES    ← post-layout CSS with inheritance
+  │     ├── _UTUI-RESOLVE-POSITIONED
+  │     ├── _UTUI-FINALIZE-MENU     ← open dropdown geometry/items/z, if any
+  │     └── _UTUI-PROJECTION-RELAYOUT
+  └── Materialize widgets and wire subscriptions
+
+_UTUI-RESOLVE-STYLES
         └── _UTUI-RESOLVE-STYLES-REC (preorder DFS)
               ├── _UTUI-RESOLVE-ELEM-STYLE on parent
               │     ├── CSS-DECL-FIND "color"            → TUI-PARSE-COLOR → fg
@@ -846,7 +980,7 @@ UTUI-LOAD
               │     ├── CSS-DECL-FIND "text-align"       → align bits
               │     ├── CSS-DECL-FIND "width"            → CSS-PARSE-NUMBER → sidecar W
               │     └── CSS-DECL-FIND "height"           → CSS-PARSE-NUMBER → sidecar H
-              ├── Extract inheritable bits (mask 0x03FFFFFF)
+              ├── Extract inheritable bits (mask 0x3FFFFFFFF)
               └── For each child:
                     ├── Seed child sidecar with parent's inheritable bits
                     └── Recurse (_UTUI-RESOLVE-STYLES-REC on child)
@@ -882,9 +1016,9 @@ to white (231) — BG and bold are still inherited from the parent.
 | `_UTUI-CSS-SET-FG` | `( val-a val-u -- )` | Parse colour → FG bits |
 | `_UTUI-CSS-SET-BG` | `( val-a val-u -- )` | Parse colour → BG bits |
 | `_UTUI-CSS-SET-BOLD` | `( val-a val-u -- )` | Check for `bold` → attrs bit 16 |
-| `_UTUI-CSS-SET-ALIGN` | `( val-a val-u -- )` | Parse text-align → bits 24-25 |
-| `_UTUI-CSS-SET-POSITION` | `( val-a val-u -- )` | Parse position → bits 26-27 |
-| `_UTUI-CSS-SET-ZINDEX` | `( val-a val-u -- )` | Parse z-index → bits 28-35 |
+| `_UTUI-CSS-SET-ALIGN` | `( val-a val-u -- )` | Parse text-align → bits 32-33 |
+| `_UTUI-CSS-SET-POSITION` | `( val-a val-u -- )` | Parse position → bits 34-35 |
+| `_UTUI-CSS-SET-ZINDEX` | `( val-a val-u -- )` | Parse z-index → bits 36-43 |
 | `_UTUI-CSS-SET-DISPLAY` | `( val-a val-u -- )` | Parse display:none → HIDE flag |
 | `_UTUI-CSS-SET-DIM` | `( val-a val-u pdim off -- )` | Parse number+unit → sidecar W or H |
 | `_UTUI-CSS-SET-PAD` | `( val-a val-u -- )` | Parse padding shorthand → sidecar |
@@ -990,21 +1124,22 @@ events) pending future implementation.
 ## UIDL Context (UCTX) System
 
 Defined in §18b of `uidl-tui.f`.  Provides per-app serialisation of
-the 21 global UIDL/UTUI variables and 10 pool arrays (103,592 bytes,
+the 27 global UIDL/UTUI variables and 10 pool arrays (103,640 bytes,
 approximately 101 KiB, per context). The scalars include six neutral
 projection-lifecycle values: token, status, visibility, attached, quiescing,
-and quiesced. Adapter context and callback XTs are composition authority and
-never enter a UCTX. This lives in `uidl-tui.f` because it must enumerate every
-private `_UDL-*` and `_UTUI-*` variable.
+and quiesced, plus the open-menu pointer, saved focus, and compact rectangle/z
+needed to keep menu state context-local. Adapter context and callback XTs are
+composition authority and never enter a UCTX. This lives in `uidl-tui.f`
+because it must enumerate every private `_UDL-*` and `_UTUI-*` variable.
 
 | Word | Stack | Description |
 |------|-------|-------------|
 | `UCTX-ALLOC` | `( -- ctx \| 0 )` | Allocate one context through the platform allocator. Returns 0 on failure. |
 | `UCTX-FREE` | `( ctx -- )` | Return a context to the platform allocator. |
-| `UCTX-SAVE` | `( ctx -- )` | Copy all 21 globals + 10 pools into `ctx`. |
-| `UCTX-RESTORE` | `( ctx -- )` | Restore all 21 globals + 10 pools from `ctx`. |
+| `UCTX-SAVE` | `( ctx -- )` | Copy all 27 globals + 10 pools into `ctx`. |
+| `UCTX-RESTORE` | `( ctx -- )` | Restore all 27 globals + 10 pools from `ctx`. |
 | `UCTX-CLEAR` | `( ctx -- )` | Zero-fill entire context buffer. |
-| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (103,592). |
+| `UCTX-TOTAL` | `( -- n )` | Exact byte size of one context (103,640). |
 
 Used by `app-shell.f` (§1: `ASHELL-CTX-SWITCH`, `ASHELL-CTX-SAVE`)
 and by `desk.f` (`UCTX-ALLOC`, `UCTX-FREE`, `UCTX-CLEAR`).
@@ -1031,6 +1166,11 @@ single `_utui-guard`:
 `UTUI-ADD-ELEM`, `UTUI-REMOVE-ELEM`, `UTUI-SET-ATTR`,
 `UTUI-WIDGET-SET`, `UTUI-ELEM-RGN`, `UTUI-WIDGET@`,
 `UTUI-INSTALL-XTS`.
+
+The resolved-state readers use the same ownership boundary.
+`UTUI-RESOLVED-OBSERVE` intentionally holds the UIDL-TUI observation
+while its supplied XT performs any number of state queries and captures;
+callers must not yield or invoke mutating lifecycle operations from that XT.
 
 The callback-driving lifecycle entries `UTUI-LOAD`, `UTUI-PAINT`,
 `UTUI-RELAYOUT`, `UTUI-VISIBLE!`, `UTUI-QUIESCE`,
@@ -1079,6 +1219,13 @@ UTUI-REMOVE-ELEM       ( elem -- )                    Dematerialize + free sidec
 UTUI-SET-ATTR          ( elem na nl va vl -- )         Set attribute with auto-dirty
 UTUI-WIDGET-SET        ( wptr elem -- )                Attach/detach caller-owned widget to region element
 UTUI-ELEM-RGN          ( elem -- row col h w )         Computed screen geometry from sidecar
+UTUI-RESOLVED-BYTES ( -- bytes )                   Exact copied resolved-record size (72)
+UTUI-RESOLVED-STATUS-VALID? ( status -- flag )             Validate a resolved-state status
+UTUI-ELEM-RESOLVED-STATE@ ( elem -- visible status ) Query effective paintability and availability
+UTUI-ELEM-RESOLVED-CAPTURE ( elem dst avail -- visible status ) Copy a resolved projection state
+UTUI-RESOLVED-VALID? ( record avail -- flag )       Validate a copied resolved record
+UTUI-RESOLVED-OBSERVE ( i*x xt -- j*x )            Run compound resolved reads in one observation
+UTUI-STORAGE-DISJOINT? ( a u -- flag )                 Check caller storage against UIDL-TUI storage
 UTUI-DO!               ( do-a do-l xt -- )           Register named action
 UTUI-SHOW              ( id-a id-l -- )              Show overlay (set VIS, dirty, focus)
 UTUI-HIDE              ( id-a id-l -- )              Hide overlay (clear VIS, dirty-rect, restore focus)
@@ -1087,12 +1234,12 @@ UTUI-HIDE-DIALOG       ( id-a id-l -- )              Hide dialog by ID (legacy w
 UTUI-SC-FG@            ( elem -- fg )                Computed foreground colour
 UTUI-SC-BG@            ( elem -- bg )                Computed background colour
 UTUI-SC-ATTRS@         ( elem -- attrs )             Computed attributes
-UCTX-ALLOC             ( -- ctx | 0 )               Allocate context buffer (103,592 bytes)
+UCTX-ALLOC             ( -- ctx | 0 )               Allocate context buffer (103,640 bytes)
 UCTX-FREE              ( ctx -- )                    Free context buffer
 UCTX-SAVE              ( ctx -- )                    Save globals + pools into ctx
 UCTX-RESTORE           ( ctx -- )                    Restore globals + pools from ctx
 UCTX-CLEAR             ( ctx -- )                    Zero-fill context buffer
-UCTX-TOTAL             ( -- n )                      Context buffer byte size (103592)
+UCTX-TOTAL             ( -- n )                      Context buffer byte size (103640)
 ```
 
 ---
