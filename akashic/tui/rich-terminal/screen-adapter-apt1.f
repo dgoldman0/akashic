@@ -254,9 +254,10 @@ VARIABLE _RTAPTSCB-SURFACE-NEXT
     _RTAPTSCB-V3 @ _RTAPTSCB-V4 @
     _RTAPTSCB-R @ RTAPTSCB.ENGINE @ RTAPT-CELL-BEGIN
     _RTAPTSCB-MAP-STATUS DUP SCB-S-OK = IF
-        \ BEGIN transfers retry authority to SCR-FLUSH?: front/dirty state is
-        \ unchanged until COMMIT succeeds, while an abort rewinds a sealed
-        \ retained candidate.  The producer latch is no longer the owner.
+        \ BEGIN transfers retry authority to the persistent screen request.
+        \ It remains set until SCR-FLUSH? accepts COMMIT, while an abort
+        \ rewinds a sealed retained candidate.  The producer latch is no
+        \ longer an additional owner of this admitted observation.
         0 _RTAPTSCB-R @ _RTAPTSCB.OUTPUT-NEEDED !
     THEN ;
 
@@ -345,21 +346,36 @@ VARIABLE _RTAPTSCB-PRODUCER-OUTPUT
     THEN
     _RTAPTSCB-PRODUCER-MORE @
         _RTAPTSCB-R @ _RTAPTSCB.MORE-WORK !
+    \ These are latest level-triggered observations, not sticky ownership.
+    \ Once OUTPUT-NEEDED is scheduled, SCR-REQUEST-FLUSH persists through
+    \ later false observations and every refusal until an accepted COMMIT.
     _RTAPTSCB-PRODUCER-OUTPUT @
         _RTAPTSCB-R @ _RTAPTSCB.OUTPUT-NEEDED !
     _RTAPTSCB-PRODUCER-STATUS @ ;
+
+\ RTAPTSCB owns the producer-to-screen scheduling edge because only this
+\ layer can re-prove that its attached adapter is the exact current backend.
+\ MORE-WORK never enters this path and remains an outer scheduler hint.
+: _RTAPTSCB-SCHEDULE-OUTPUT  ( publisher -- )
+    DUP _RTAPTSCB-EXACT-SCREEN? 0= IF DROP EXIT THEN
+    _RTAPTSCB.OUTPUT-NEEDED @ IF SCR-REQUEST-FLUSH THEN ;
 
 \ Normal scheduling is deliberately distinct from close settlement.  During
 \ discovery or a reset boundary there is no available publisher route, but an
 \ already-active completion is still polled by RTAPT-STEP on every service.
 \ A bound output producer receives one bounded call only after that engine
-\ step.  Its flags are observations for outer scheduling; this bridge does not
-\ start another service loop or force a CELL snapshot.
+\ step.  A valid nonfatal OUTPUT-NEEDED observation schedules one neutral,
+\ persistent screen request after exact-backend proof.  This bridge neither
+\ starts another service loop nor forces or retransmits a CELL snapshot.
 : _RTAPTSCB-STEP  ( context -- status )
     DUP _RTAPTSCB-R ! RTAPTSCB-VALID? 0= IF SCB-S-INVALID EXIT THEN
     _RTAPTSCB-R @ _RTAPTSCB-ENGINE-STEP
     DUP SCB-S-OK <> IF EXIT THEN DROP
-    _RTAPTSCB-R @ _RTAPTSCB-PRODUCER-STEP ;
+    _RTAPTSCB-R @ _RTAPTSCB-PRODUCER-STEP DUP _RTAPTSCB-STATUS !
+    DUP SCB-S-OK = SWAP SCB-S-WOULD-BLOCK = OR IF
+        _RTAPTSCB-R @ _RTAPTSCB-SCHEDULE-OUTPUT
+    THEN
+    _RTAPTSCB-STATUS @ ;
 
 \ RTAPT-SETTLE never schedules queued lifecycle work.  Once no completion is
 \ pending, every engine outcome is diagnostic state rather than PT wire
@@ -373,8 +389,8 @@ VARIABLE _RTAPTSCB-PRODUCER-OUTPUT
 
 \ These queries expose only validated scheduler observations.  In particular,
 \ OUTPUT-NEEDED? is false unless this publisher's immutable attached APTSCB is
-\ also the exact current screen backend.  Scheduling that neutral flush is an
-\ outer screen concern; this adapter never turns the flag into a snapshot.
+\ also the exact current screen backend.  Normal STEP consumes that observation
+\ into SCR-REQUEST-FLUSH; it never turns the flag into a CELL snapshot.
 : RTAPTSCB-MORE-WORK?  ( publisher -- flag )
     DUP RTAPTSCB-VALID? 0= IF DROP 0 EXIT THEN
     _RTAPTSCB.MORE-WORK @ ;

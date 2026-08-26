@@ -7,7 +7,7 @@
 \  through a transactional backend.  ANSI is the constructed default;
 \  outer composition may bind another transactional backend explicitly.
 \
-\  Screen Descriptor (10 cells = 80 bytes):
+\  Screen Descriptor (11 cells = 88 bytes):
 \    +0   width         Columns
 \    +8   height        Rows
 \    +16  front         Address of front buffer (w×h cells)
@@ -18,6 +18,7 @@
 \    +56  dirty         Global dirty flag (0 = clean)
 \    +64  force         Next accepted flush is a replace-all snapshot
 \    +72  backend       Borrowed transactional backend descriptor
+\    +80  flush-request Retained-only work needs a neutral transaction
 \
 \  Each cell is 8 bytes (one CELL-MAKE value), so a buffer for
 \  80×24 is 15,360 bytes × 2 = 30,720 bytes (~30 KiB).
@@ -49,8 +50,9 @@ REQUIRE ../utils/term.f
 56 CONSTANT _SCR-O-DIRTY
 64 CONSTANT _SCR-O-FORCE
 72 CONSTANT _SCR-O-BACKEND
+80 CONSTANT _SCR-O-FLUSH-REQUEST
 
-80 CONSTANT _SCR-DESC-SIZE
+88 CONSTANT _SCR-DESC-SIZE
 
 \ =====================================================================
 \ 2. Transactional backend ABI
@@ -63,6 +65,9 @@ REQUIRE ../utils/term.f
 
 0 CONSTANT SCB-M-DELTA
 1 CONSTANT SCB-M-SNAPSHOT
+\ NONE carries zero CELL spans and deliberately omits the cursor callback;
+\ BEGIN/COMMIT still delimit one backend transaction.
+2 CONSTANT SCB-M-NONE
 
  0 CONSTANT _SCB-O-CONTEXT
  8 CONSTANT _SCB-O-BEGIN-XT
@@ -196,7 +201,7 @@ VARIABLE _SCR-SIZE-H
     DUP  _SCR-TMP2 !                   \ save h
     2DROP                              \ consume w h from caller
 
-    \ Allocate descriptor (80 bytes)
+    \ Allocate descriptor (88 bytes)
     _SCR-DESC-SIZE ALLOCATE
     0<> ABORT" SCR-NEW: descriptor alloc failed"
     _SCR-TMP3 !                        \ scr → TMP3
@@ -236,6 +241,7 @@ VARIABLE _SCR-SIZE-H
     0           _SCR-TMP3 @ _SCR-O-CVIS   + !
     0           _SCR-TMP3 @ _SCR-O-DIRTY  + !
     0           _SCR-TMP3 @ _SCR-O-FORCE  + !
+    0           _SCR-TMP3 @ _SCR-O-FLUSH-REQUEST + !
     _SCR-ANSI-BACKEND
                 _SCR-TMP3 @ _SCR-O-BACKEND + !
 
@@ -317,7 +323,7 @@ VARIABLE _SCR-SIZE-H
     -1 _SCR-CUR @ _SCR-O-DIRTY + ! ;
 
 \ =====================================================================
-\ 10. Dirty / force
+\ 10. Dirty / force / neutral flush request
 \ =====================================================================
 
 \ SCR-FORCE ( -- )
@@ -327,8 +333,18 @@ VARIABLE _SCR-SIZE-H
     -1 _SCR-CUR @ _SCR-O-FORCE + !
     -1 _SCR-CUR @ _SCR-O-DIRTY + ! ;
 
+\ SCR-REQUEST-FLUSH ( -- )
+\   Schedule a transaction without claiming that CELL or cursor state has
+\   changed.  The request remains set through every refusal and is cleared
+\   only after the backend accepts COMMIT.
+: SCR-REQUEST-FLUSH  ( -- )
+    _SCR-CUR @ ?DUP IF -1 SWAP _SCR-O-FLUSH-REQUEST + ! THEN ;
+
 : SCR-DIRTY?  ( -- flag )
-    _SCR-CUR @ ?DUP IF _SCR-O-DIRTY + @ 0<> ELSE 0 THEN ;
+    _SCR-CUR @ ?DUP IF
+        DUP _SCR-O-DIRTY + @
+        SWAP _SCR-O-FLUSH-REQUEST + @ OR 0<>
+    ELSE 0 THEN ;
 
 : SCR-BACKEND@  ( -- backend | 0 )
     _SCR-CUR @ ?DUP IF _SCR-O-BACKEND + @ ELSE 0 THEN ;
@@ -431,9 +447,11 @@ VARIABLE _SCBA-COL
 VARIABLE _SCBA-CROW
 VARIABLE _SCBA-CCOL
 VARIABLE _SCBA-CVIS
+VARIABLE _SCBA-MODE
 
 : _SCBA-BEGIN  ( mode cols rows span-count cell-count context -- status )
-    2DROP 2DROP 2DROP
+    DROP 2DROP 2DROP _SCBA-MODE !
+    _SCBA-MODE @ SCB-M-NONE = IF SCB-S-OK EXIT THEN
     ANSI-CURSOR-OFF
     -1 _SCR-LAST-ROW !
     -1 _SCR-LAST-COL !
@@ -459,6 +477,10 @@ VARIABLE _SCBA-CVIS
 
 : _SCBA-COMMIT  ( context -- status )
     DROP
+    _SCBA-MODE @ SCB-M-NONE = IF
+        TERM-FLUSH
+        SCB-S-OK EXIT
+    THEN
     _SCBA-CVIS @ IF
         _SCBA-CROW @ 1+ _SCBA-CCOL @ 1+ ANSI-AT
         ANSI-CURSOR-ON
@@ -469,6 +491,7 @@ VARIABLE _SCBA-CVIS
 
 : _SCBA-ABORT  ( context -- )
     DROP
+    _SCBA-MODE @ SCB-M-NONE = IF EXIT THEN
     ANSI-RESET
     ANSI-CURSOR-ON
     TERM-FLUSH ;
@@ -541,12 +564,19 @@ VARIABLE _SCR-FLUSH-STATUS
 : _SCR-COUNT-CHANGES  ( -- )
     0 _SCR-SPAN-COUNT !
     0 _SCR-CELL-COUNT !
-    _SCR-SCAN-RESET
+    \ A real CELL or cursor mutation subsumes a retained-only request.  This
+    \ priority prevents NONE from hiding cursor state that still needs commit.
     _SCR-CUR @ _SCR-O-FORCE + @ IF
         SCB-M-SNAPSHOT
+    ELSE _SCR-CUR @ _SCR-O-DIRTY + @ IF
+        SCB-M-DELTA
+    ELSE _SCR-CUR @ _SCR-O-FLUSH-REQUEST + @ IF
+        SCB-M-NONE
     ELSE
         SCB-M-DELTA
-    THEN _SCR-FLUSH-MODE !
+    THEN THEN THEN _SCR-FLUSH-MODE !
+    _SCR-FLUSH-MODE @ SCB-M-NONE = IF EXIT THEN
+    _SCR-SCAN-RESET
     _SCR-SCAN-H @ 0 ?DO
         _SCR-FLUSH-MODE @ SCB-M-SNAPSHOT = IF
             1 _SCR-SPAN-COUNT +!
@@ -600,6 +630,7 @@ VARIABLE _SCR-FLUSH-STATUS
     REPEAT ;
 
 : _SCR-EMIT-SPANS  ( -- status )
+    _SCR-FLUSH-MODE @ SCB-M-NONE = IF SCB-S-OK EXIT THEN
     _SCR-SCAN-RESET
     0 _SCR-SCAN-ROW !
     SCB-S-OK _SCR-FLUSH-STATUS !
@@ -642,20 +673,24 @@ VARIABLE _SCR-FLUSH-STATUS
     ;
 
 : _SCR-ADVANCE-FRONT  ( -- )
-    _SCR-SCAN-RESET
-    _SCR-SCAN-H @ 0 ?DO
-        _SCR-FLUSH-MODE @ SCB-M-SNAPSHOT = IF
-            _SCR-SCAN-BACK @ _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @ CMOVE
-        ELSE
-            _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @
-            _SCR-SCAN-BACK @ _SCR-ROW-BYTES @ COMPARE 0<> IF
+    _SCR-FLUSH-MODE @ SCB-M-NONE <> IF
+        _SCR-SCAN-RESET
+        _SCR-SCAN-H @ 0 ?DO
+            _SCR-FLUSH-MODE @ SCB-M-SNAPSHOT = IF
                 _SCR-SCAN-BACK @ _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @ CMOVE
+            ELSE
+                _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @
+                _SCR-SCAN-BACK @ _SCR-ROW-BYTES @ COMPARE 0<> IF
+                    _SCR-SCAN-BACK @ _SCR-SCAN-FRONT @ _SCR-ROW-BYTES @ CMOVE
+                THEN
             THEN
-        THEN
-        _SCR-SCAN-NEXT-ROW
-    LOOP
+            _SCR-SCAN-NEXT-ROW
+        LOOP
+    THEN
     0 _SCR-CUR @ _SCR-O-DIRTY + !
-    0 _SCR-CUR @ _SCR-O-FORCE + ! ;
+    0 _SCR-CUR @ _SCR-O-FORCE + !
+    \ This is the sole runtime retirement point for a neutral request.
+    0 _SCR-CUR @ _SCR-O-FLUSH-REQUEST + ! ;
 
 \ SCR-FLUSH? ( -- status )
 \   Attempt one transaction.  A refusal never advances front.  In particular,
@@ -670,9 +705,11 @@ VARIABLE _SCR-FLUSH-STATUS
     _SCR-EMIT-SPANS DUP SCB-S-OK <> IF
         _SCR-CALL-ABORT _SCR-FAIL EXIT
     THEN DROP
-    _SCR-CALL-CURSOR DUP SCB-S-OK <> IF
-        _SCR-CALL-ABORT _SCR-FAIL EXIT
-    THEN DROP
+    _SCR-FLUSH-MODE @ SCB-M-NONE <> IF
+        _SCR-CALL-CURSOR DUP SCB-S-OK <> IF
+            _SCR-CALL-ABORT _SCR-FAIL EXIT
+        THEN DROP
+    THEN
     _SCR-CALL-COMMIT DUP SCB-S-OK <> IF _SCR-FAIL EXIT THEN DROP
     _SCR-ADVANCE-FRONT
     SCB-S-OK ;
@@ -786,6 +823,7 @@ GUARD _scr-guard
 ' SCR-FLUSH?          CONSTANT _scr-flush-status-xt
 ' SCR-FLUSH           CONSTANT _scr-flush-xt
 ' SCR-FORCE           CONSTANT _scr-force-xt
+' SCR-REQUEST-FLUSH   CONSTANT _scr-request-flush-xt
 ' SCR-DIRTY?          CONSTANT _scr-dirty-xt
 ' SCR-BACKEND@        CONSTANT _scr-backend-get-xt
 ' SCR-BACKEND!        CONSTANT _scr-backend-set-xt
@@ -807,6 +845,7 @@ GUARD _scr-guard
 : SCR-FLUSH?          _scr-flush-status-xt _scr-guard WITH-GUARD ;
 : SCR-FLUSH           _scr-flush-xt  _scr-guard WITH-GUARD ;
 : SCR-FORCE           _scr-force-xt  _scr-guard WITH-GUARD ;
+: SCR-REQUEST-FLUSH   _scr-request-flush-xt _scr-guard WITH-GUARD ;
 : SCR-DIRTY?          _scr-dirty-xt _scr-guard WITH-GUARD ;
 : SCR-BACKEND@        _scr-backend-get-xt _scr-guard WITH-GUARD ;
 : SCR-BACKEND!        _scr-backend-set-xt _scr-guard WITH-GUARD ;

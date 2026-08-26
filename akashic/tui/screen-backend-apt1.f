@@ -275,6 +275,17 @@ VARIABLE _APTSCB-VISIBLE
 : _APTSCB-CELL-CP  ( cell -- cp )
     CELL-CP@ DUP 0= IF DROP 32 THEN CW-CELL-CP ;
 
+: _APTSCB-MODE?  ( mode -- flag )
+    DUP SCB-M-DELTA =
+    OVER SCB-M-SNAPSHOT = OR
+    SWAP SCB-M-NONE = OR ;
+
+: _APTSCB-PUBLISHER-CELL-MODE  ( -- pt-cell-mode )
+    _APTSCB-MODE @ DUP SCB-M-NONE = IF
+        DROP PT-CELL-NONE EXIT
+    THEN
+    SCB-M-SNAPSHOT = IF PT-CELL-REPLACE ELSE PT-CELL-DELTA THEN ;
+
 : _APTSCB-BEGIN  ( mode cols rows span-count cell-count context -- status )
     _APTSCB-ADAPTER !
     _APTSCB-CELLS ! _APTSCB-SPANS !
@@ -282,8 +293,7 @@ VARIABLE _APTSCB-VISIBLE
     _APTSCB-ADAPTER @ _APTSCB-CONTEXT-VALID? 0= IF
         SCB-S-INVALID EXIT
     THEN
-    _APTSCB-MODE @ DUP SCB-M-SNAPSHOT =
-    SWAP SCB-M-DELTA = OR 0= IF SCB-S-INVALID EXIT THEN
+    _APTSCB-MODE @ _APTSCB-MODE? 0= IF SCB-S-INVALID EXIT THEN
     _APTSCB-ADAPTER @ _APTSCB.ROUTE @ _APTSCB-ROUTE-IDLE <> IF
         SCB-S-WOULD-BLOCK EXIT
     THEN
@@ -294,13 +304,17 @@ VARIABLE _APTSCB-VISIBLE
         _APTSCB-ROUTE-OUTPUT _APTSCB-ADAPTER @ _APTSCB.ROUTE !
         _APTSCB-COLS @ _APTSCB-ROWS @
         _APTSCB-SPANS @ _APTSCB-CELLS @
-        _APTSCB-MODE @ SCB-M-SNAPSHOT = IF
-            PT-CELL-REPLACE
-        ELSE PT-CELL-DELTA THEN
+        _APTSCB-PUBLISHER-CELL-MODE
         _APTSCB-PUBLISHER @ APTSCBP.CONTEXT @
         _APTSCB-PUBLISHER @ APTSCBP.BEGIN-XT @ EXECUTE
         _APTSCB-NORMALIZE-STATUS
     ELSE
+        \ A retained-only request has no direct PT transaction equivalent.
+        \ Refuse before pinning a route so the screen can retry the same
+        \ persistent request when retained publication becomes available.
+        _APTSCB-MODE @ SCB-M-NONE = IF
+            SCB-S-WOULD-BLOCK EXIT
+        THEN
         _APTSCB-MODE @ SCB-M-DELTA = IF
             _APTSCB-SESSION @ PT-SNAPSHOT-NEEDED? IF
                 SCB-S-WOULD-BLOCK EXIT

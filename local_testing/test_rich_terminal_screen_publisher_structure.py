@@ -5,6 +5,7 @@ import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CORE_SCREEN = ROOT / "akashic" / "tui" / "screen.f"
 SCREEN = ROOT / "akashic" / "tui" / "screen-backend-apt1.f"
 ENGINE = ROOT / "akashic" / "tui" / "rich-terminal" / "apt1-engine.f"
 BRIDGE = ROOT / "akashic" / "tui" / "rich-terminal" / "screen-adapter-apt1.f"
@@ -65,6 +66,8 @@ def test_baseline_publisher_is_neutral_exact_and_immutable() -> None:
 
 def test_screen_transaction_pins_one_route_and_normalizes_cells_once() -> None:
     source = SCREEN.read_text(encoding="utf-8")
+    mode_valid = _definition(source, "_APTSCB-MODE?")
+    publisher_mode = _definition(source, "_APTSCB-PUBLISHER-CELL-MODE")
     begin = _definition(source, "_APTSCB-BEGIN")
     span_begin = _definition(source, "_APTSCB-SPAN-BEGIN")
     write_cell = _definition(source, "_APTSCB-WRITE-CELL")
@@ -77,11 +80,23 @@ def test_screen_transaction_pins_one_route_and_normalizes_cells_once() -> None:
     assert begin.count("_APTSCB.ROUTE !") == 3
     assert "_APTSCB-ROUTE-DIRECT" in begin
     assert "_APTSCB-ROUTE-OUTPUT" in begin
-    assert "PT-CELL-REPLACE" in begin
-    assert "PT-CELL-DELTA" in begin
+    for mode in ("SCB-M-DELTA", "SCB-M-SNAPSHOT", "SCB-M-NONE"):
+        assert mode in mode_valid
+    assert "_APTSCB-MODE? 0= IF SCB-S-INVALID EXIT THEN" in begin
+    assert "_APTSCB-PUBLISHER-CELL-MODE" in begin
+    for mode in ("PT-CELL-NONE", "PT-CELL-REPLACE", "PT-CELL-DELTA"):
+        assert mode in publisher_mode
     assert begin.index("PT-RETAINED-AVAILABLE?") < begin.index(
         "APTSCBP.BEGIN-XT"
     )
+    none_refusal = begin.index("_APTSCB-MODE @ SCB-M-NONE = IF")
+    direct_route = begin.index(
+        "_APTSCB-ROUTE-DIRECT _APTSCB-ADAPTER @ _APTSCB.ROUTE !"
+    )
+    assert "SCB-S-WOULD-BLOCK EXIT" in begin[none_refusal:direct_route]
+    assert none_refusal < direct_route
+    assert none_refusal < begin.index("PT-SNAPSHOT-BEGIN")
+    assert none_refusal < begin.index("PT-TX-BEGIN")
 
     assert "APTSCBP.SPAN-XT" in span_begin
     assert "APTSCBP.CELL-XT" in write_cell
@@ -96,6 +111,71 @@ def test_screen_transaction_pins_one_route_and_normalizes_cells_once() -> None:
         assert "_APTSCB-ROUTE-DIRECT" in finalizer
         assert "_APTSCB-ROUTE-OUTPUT" in finalizer
         assert "_APTSCB-ROUTE-IDLE" in finalizer
+
+
+def test_neutral_screen_request_is_independent_and_commit_persistent() -> None:
+    source = CORE_SCREEN.read_text(encoding="utf-8")
+
+    assert "80 CONSTANT _SCR-O-FLUSH-REQUEST" in source
+    assert "88 CONSTANT _SCR-DESC-SIZE" in source
+    assert "2 CONSTANT SCB-M-NONE" in source
+
+    request = _definition(source, "SCR-REQUEST-FLUSH")
+    assert "_SCR-O-FLUSH-REQUEST + !" in request
+    assert "_SCR-O-DIRTY" not in request
+    assert "_SCR-O-FORCE" not in request
+    assert "SCR-FORCE" not in request
+
+    dirty = _definition(source, "SCR-DIRTY?")
+    assert "_SCR-O-DIRTY + @" in dirty
+    assert "_SCR-O-FLUSH-REQUEST + @ OR" in dirty
+
+    count = _definition(source, "_SCR-COUNT-CHANGES")
+    force = count.index("_SCR-O-FORCE + @ IF")
+    cell_or_cursor_dirty = count.index("_SCR-O-DIRTY + @ IF", force)
+    retained_only = count.index("_SCR-O-FLUSH-REQUEST + @ IF", cell_or_cursor_dirty)
+    none = count.index("SCB-M-NONE", retained_only)
+    assert force < cell_or_cursor_dirty < retained_only < none
+    assert count.index("SCB-M-NONE = IF EXIT THEN", none) < count.index(
+        "_SCR-SCAN-RESET"
+    )
+
+    for cursor_word in ("SCR-CURSOR-AT", "SCR-CURSOR-ON", "SCR-CURSOR-OFF"):
+        cursor = _definition(source, cursor_word)
+        assert "_SCR-O-DIRTY + !" in cursor
+        assert "_SCR-O-FLUSH-REQUEST" not in cursor
+
+    emit = _definition(source, "_SCR-EMIT-SPANS")
+    assert "SCB-M-NONE = IF SCB-S-OK EXIT THEN" in emit
+
+    flush = _definition(source, "SCR-FLUSH?")
+    cursor_gate = flush.index("_SCR-FLUSH-MODE @ SCB-M-NONE <> IF")
+    cursor_call = flush.index("_SCR-CALL-CURSOR", cursor_gate)
+    commit = flush.index("_SCR-CALL-COMMIT", cursor_call)
+    advance = flush.index("_SCR-ADVANCE-FRONT", commit)
+    assert cursor_gate < cursor_call < commit < advance
+    assert "_SCR-O-FLUSH-REQUEST + !" not in flush
+
+    advance_front = _definition(source, "_SCR-ADVANCE-FRONT")
+    assert "_SCR-FLUSH-MODE @ SCB-M-NONE <> IF" in advance_front
+    request_clear = advance_front.index(
+        "0 _SCR-CUR @ _SCR-O-FLUSH-REQUEST + !"
+    )
+    assert advance_front.index("_SCR-O-DIRTY + !") < request_clear
+    assert advance_front.index("_SCR-O-FORCE + !") < request_clear
+
+    ansi_begin = _definition(source, "_SCBA-BEGIN")
+    ansi_commit = _definition(source, "_SCBA-COMMIT")
+    assert ansi_begin.index("SCB-M-NONE = IF") < ansi_begin.index(
+        "ANSI-CURSOR-OFF"
+    )
+    assert ansi_commit.index("SCB-M-NONE = IF") < ansi_commit.index(
+        "_SCBA-CVIS @ IF"
+    )
+    assert "TERM-FLUSH" in ansi_commit
+
+    assert "' SCR-REQUEST-FLUSH" in source
+    assert ": SCR-REQUEST-FLUSH   _scr-request-flush-xt" in source
 
 
 def test_normal_service_and_close_settlement_have_disjoint_schedulers() -> None:
@@ -287,6 +367,28 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
     assert step.index("_RTAPTSCB-ENGINE-STEP") < step.index(
         "_RTAPTSCB-PRODUCER-STEP"
     )
+    producer_call = step.index("_RTAPTSCB-PRODUCER-STEP")
+    nonfatal_gate = step.index(
+        "DUP SCB-S-OK = SWAP SCB-S-WOULD-BLOCK = OR IF", producer_call
+    )
+    scheduled = step.index("_RTAPTSCB-SCHEDULE-OUTPUT", nonfatal_gate)
+    assert producer_call < nonfatal_gate < scheduled
+    assert "SCR-FORCE" not in step
+    assert "SCR-FLUSH?" not in step
+
+    schedule_output = _definition(source, "_RTAPTSCB-SCHEDULE-OUTPUT")
+    exact_screen = schedule_output.index("_RTAPTSCB-EXACT-SCREEN?")
+    output_observation = schedule_output.index(
+        "_RTAPTSCB.OUTPUT-NEEDED @", exact_screen
+    )
+    neutral_request = schedule_output.index(
+        "SCR-REQUEST-FLUSH", output_observation
+    )
+    assert exact_screen < output_observation < neutral_request
+    assert "_RTAPTSCB.MORE-WORK" not in schedule_output
+    assert "SCR-FORCE" not in schedule_output
+    assert "SCR-FLUSH?" not in schedule_output
+
     producer_step = _definition(source, "_RTAPTSCB-PRODUCER-STEP")
     call_order = (
         "_RTAPTSCB.SURFACE-COLS @",
@@ -320,6 +422,13 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
     output_latch = producer_step.rindex("_RTAPTSCB.OUTPUT-NEEDED !")
     assert status_gate < bool_gate < fatal_gate < fatal_more < fatal_output
     assert fatal_output < latch < output_latch
+    latest_output = (
+        "_RTAPTSCB-PRODUCER-OUTPUT @\n"
+        "        _RTAPTSCB-R @ _RTAPTSCB.OUTPUT-NEEDED !"
+    )
+    assert latest_output in producer_step
+    assert "latest level-triggered observations, not sticky ownership" in source
+    assert "SCR-REQUEST-FLUSH persists" in source
 
     observe = _definition(source, "_RTAPTSCB-SURFACE-OBSERVE")
     assert "_RTAPTSCB-DIMENSION?" in observe
@@ -359,6 +468,10 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
     assert "RTAPTSCB-VALID?" in output_query
     assert "_RTAPTSCB-EXACT-SCREEN?" in output_query
 
+    settle = _definition(source, "_RTAPTSCB-SETTLE")
+    assert "_RTAPTSCB-SCHEDULE-OUTPUT" not in settle
+    assert "SCR-REQUEST-FLUSH" not in settle
+
     for forbidden in (
         "RTE-LABEL-PREFLIGHT",
         "RTERM-",
@@ -367,6 +480,7 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
         "SCR-FORCE",
     ):
         assert forbidden not in code
+    assert "SCR-REQUEST-FLUSH" in code
 
 
 def test_engine_settlement_only_reconciles_active_wire_authority() -> None:
