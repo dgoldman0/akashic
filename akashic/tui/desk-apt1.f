@@ -152,6 +152,24 @@ VARIABLE _A1D-PHASE
 VARIABLE _A1D-RUN-IOR
 VARIABLE _A1D-UNINSTALL-S
 
+\ A failed Desk run is torn down to ANSI before its exception escapes.  Keep
+\ fixed-length snapshots of the three rich records that identify the failing
+\ composition phase.  Their top-level addresses survive cleanup, which may
+\ then erase the live components without erasing the attached host's evidence.
+CREATE _A1D-FAILURE-PUBLISHER RTAPTSCB-SIZE ALLOT
+CREATE _A1D-FAILURE-SCREEN RTSCREEN-SIZE ALLOT
+CREATE _A1D-FAILURE-ENGINE RTAPT-ENGINE-SIZE ALLOT
+VARIABLE _A1D-FAILURE-VALID
+VARIABLE _A1D-FAILURE-IOR
+VARIABLE _A1D-FAILURE-PHASE
+VARIABLE _A1D-FAILURE-PUBLISHER-A
+VARIABLE _A1D-FAILURE-SCREEN-A
+VARIABLE _A1D-FAILURE-ENGINE-A
+
+_A1D-FAILURE-PUBLISHER _A1D-FAILURE-PUBLISHER-A !
+_A1D-FAILURE-SCREEN _A1D-FAILURE-SCREEN-A !
+_A1D-FAILURE-ENGINE _A1D-FAILURE-ENGINE-A !
+
 _A1D-PHASE-COLD _A1D-PHASE !
 
 : _A1D-PHASE-VALID?  ( phase -- flag )
@@ -178,6 +196,9 @@ _A1D-PHASE-COLD _A1D-PHASE !
 \ release path can retry without clearing uncertain live state.
 : _A1D-SETUP  ( -- status )
     _A1D-PHASE @ _A1D-PHASE-COLD <> IF SCB-S-INVALID EXIT THEN
+    0 _A1D-FAILURE-VALID !
+    0 _A1D-FAILURE-IOR !
+    _A1D-PHASE-COLD _A1D-FAILURE-PHASE !
     _A1D-CLEAR-INERT
 
     _A1D-RX APT1-DESK-RX-CAPACITY
@@ -267,6 +288,15 @@ _A1D-PHASE-COLD _A1D-PHASE !
     DUP SCB-S-OK <> IF _A1D-STATUS-THROW THEN DROP
     DESK-RUN ;
 
+: _A1D-CAPTURE-FAILURE  ( -- )
+    _A1D-RUN-IOR @ DUP _A1D-FAILURE-IOR !
+    0= IF EXIT THEN
+    _A1D-PHASE @ _A1D-FAILURE-PHASE !
+    _A1D-RTAPTSCB _A1D-FAILURE-PUBLISHER RTAPTSCB-SIZE MOVE
+    _A1D-SCREEN _A1D-FAILURE-SCREEN RTSCREEN-SIZE MOVE
+    _A1D-RTAPT-ENGINE _A1D-FAILURE-ENGINE RTAPT-ENGINE-SIZE MOVE
+    -1 _A1D-FAILURE-VALID ! ;
+
 \ APT1-DESK-RUN ( -- )
 \   Construct the session, unified CELL/rich publisher, final-screen producer,
 \   and exact terminal owner, then run the ordinary Desk lifecycle.  Cleanup
@@ -276,6 +306,7 @@ _A1D-PHASE-COLD _A1D-PHASE !
 \   suppress terminal diagnostics while PT-STREAM-OWNED? remains true.
 : APT1-DESK-RUN  ( -- )
     ['] _A1D-RUN-BODY CATCH _A1D-RUN-IOR !
+    _A1D-CAPTURE-FAILURE
     _A1D-UNINSTALL _A1D-UNINSTALL-S !
     _A1D-RUN-IOR @ ?DUP IF THROW THEN
     _A1D-UNINSTALL-S @ DUP SCB-S-OK <> IF

@@ -48,6 +48,12 @@ RETAINED_PENDING_MODE = "RICH RETAINED: pending physical acknowledgment"
 RETAINED_ACKNOWLEDGED_MODE = "RICH RETAINED: physically acknowledged"
 
 _GUEST_FAILURE_VARIABLES = (
+    "_A1D-FAILURE-VALID",
+    "_A1D-FAILURE-IOR",
+    "_A1D-FAILURE-PHASE",
+    "_A1D-FAILURE-PUBLISHER-A",
+    "_A1D-FAILURE-SCREEN-A",
+    "_A1D-FAILURE-ENGINE-A",
     "_ASHELL-TERM-STATUS",
     "_ASHELL-TERM-FLAG",
     "_ASHELL-TERM-OWNS",
@@ -76,7 +82,7 @@ _GUEST_FAILURE_VARIABLES = (
 
 _GUEST_FAILURE_RECORDS = {
     "publisher": (
-        "_RTAPTSCB-R",
+        "_A1D-FAILURE-PUBLISHER-A",
         26,
         {
             "engine": 11,
@@ -94,7 +100,7 @@ _GUEST_FAILURE_RECORDS = {
         },
     ),
     "screen_plane": (
-        "_RTSCREEN-S-P",
+        "_A1D-FAILURE-SCREEN-A",
         71,
         {
             "size": 1,
@@ -116,7 +122,7 @@ _GUEST_FAILURE_RECORDS = {
         },
     ),
     "engine": (
-        "_RTAPT-ST-E",
+        "_A1D-FAILURE-ENGINE-A",
         62,
         {
             "session": 1,

@@ -276,11 +276,14 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     tmp_path: Path,
 ) -> None:
     values = {
+        "_A1D-FAILURE-VALID": (0x0FD0, -1),
+        "_A1D-FAILURE-IOR": (0x0FD8, -3203),
+        "_A1D-FAILURE-PHASE": (0x0FE0, 6),
+        "_A1D-FAILURE-PUBLISHER-A": (0x0FE8, 0x2000),
+        "_A1D-FAILURE-SCREEN-A": (0x0FF0, 0x3000),
+        "_A1D-FAILURE-ENGINE-A": (0x0FF8, 0x4000),
         "_ASHELL-TERM-STATUS": (0x1000, 3),
         "_APTSCB-STATUS": (0x1008, 0),
-        "_RTAPTSCB-R": (0x1010, 0x2000),
-        "_RTSCREEN-S-P": (0x1018, 0x3000),
-        "_RTAPT-ST-E": (0x1020, 0x4000),
     }
     record_cells = {
         0x2000: list(range(26)),
@@ -318,6 +321,7 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["failure"].endswith("-3203")
+    assert payload["variables"]["_A1D-FAILURE-VALID"]["value"] == -1
     assert payload["variables"]["_ASHELL-TERM-STATUS"]["value"] == 3
     assert payload["records"]["publisher"]["fields"] == {
         "adapter": 18,

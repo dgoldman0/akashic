@@ -433,7 +433,22 @@ def test_desktop_apt1_leaf_composes_final_screen_publisher() -> None:
     assert "DESK-HOST-LIFECYCLE!" not in run_body
     public_run = _word(composition, "APT1-DESK-RUN")
     assert "['] _A1D-RUN-BODY CATCH _A1D-RUN-IOR !" in public_run
+    assert public_run.index("_A1D-CAPTURE-FAILURE") < public_run.index(
+        "_A1D-UNINSTALL"
+    )
     assert public_run.index("CATCH") < public_run.index("_A1D-UNINSTALL")
+
+    failure_capture = _word(composition, "_A1D-CAPTURE-FAILURE")
+    for live, snapshot, size in (
+        ("_A1D-RTAPTSCB", "_A1D-FAILURE-PUBLISHER", "RTAPTSCB-SIZE"),
+        ("_A1D-SCREEN", "_A1D-FAILURE-SCREEN", "RTSCREEN-SIZE"),
+        (
+            "_A1D-RTAPT-ENGINE",
+            "_A1D-FAILURE-ENGINE",
+            "RTAPT-ENGINE-SIZE",
+        ),
+    ):
+        assert f"{live} {snapshot} {size} MOVE" in failure_capture
 
     for forbidden in (
         "UIDL",
