@@ -390,6 +390,8 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
 
     assert "_RTAPT-E.OP-CAP" in captured
     assert "_RTAPT-E.OP-COUNT @ _RTAPT-U32?" in captured
+    assert "I _RTAPT-BV-E @ _RTAPT-OP-NTH _RTAPT-BV-P !" in captured
+    assert "_RTAPT-OP-NTH DUP _RTAPT-BV-P !" not in captured
     assert "_RTAPT-E.COPY-U" in captured
     assert "_RTAPT-REGION-DEFINE-COPY-SIZE" in captured
     assert "_RTAPT-REGION-DEFINE-FRAME-BYTES" in captured

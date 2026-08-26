@@ -524,7 +524,9 @@ VARIABLE _RTAPT-BV-RAW-U
     DROP
     0 _RTAPT-BV-OFF ! 0 _RTAPT-BV-RET !
     _RTAPT-BV-E @ _RTAPT-E.OP-COUNT @ 0 ?DO
-        I _RTAPT-BV-E @ _RTAPT-OP-NTH DUP _RTAPT-BV-P !
+        \ Store the loop-local record outright.  Every read below reloads it,
+        \ because retaining it leaks one pointer per captured operation.
+        I _RTAPT-BV-E @ _RTAPT-OP-NTH _RTAPT-BV-P !
         _RTAPT-BV-P @ _RTAPT-P.COPY-OFF @ _RTAPT-BV-OFF @ <>
             IF 0 UNLOOP EXIT THEN
         _RTAPT-BV-P @ _RTAPT-P.COPY-U @ DUP 0= IF
