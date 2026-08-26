@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import socket
 import struct
 import time
@@ -41,6 +42,7 @@ DAYBOOK_ACCEPTANCE_TASK = "Rich terminal acceptance"
 PAD_FOCUS_MARKER = "[1:Akashic Pa*]"
 DAYBOOK_FOCUS_MARKER = "[3:Daybook*]"
 DAYBOOK_PROMPT_MARKER = "New task:"
+MIN_READABLE_FONT_SIZE = 12
 
 
 class PhysicalDesktopAcceptanceError(RuntimeError):
@@ -354,6 +356,54 @@ def _surface_rgba(pygame_module, surface) -> bytes:
     return pygame_module.image.tostring(surface, "RGBA")
 
 
+def _fit_viewer_font(
+    pygame_module,
+    font_path: Path | None,
+    requested_size: int,
+    cols: int,
+    rows: int,
+):
+    """Choose the largest requested font that fits the physical display."""
+
+    display = pygame_module.display.Info()
+    max_width = max(1, int(display.current_w * 0.92))
+    max_height = max(1, int(display.current_h * 0.86))
+    smallest = min(MIN_READABLE_FONT_SIZE, requested_size)
+    for size in range(requested_size, smallest - 1, -1):
+        font = (
+            pygame_module.font.Font(str(font_path), size)
+            if font_path is not None
+            else pygame_module.font.SysFont("monospace", size)
+        )
+        cell_width = max(1, font.size("M")[0])
+        cell_height = font.get_linesize()
+        if cols * cell_width <= max_width and rows * cell_height <= max_height:
+            return font, cell_width, cell_height, size
+    raise PhysicalDesktopAcceptanceError(
+        f"{cols}x{rows} terminal does not fit the {display.current_w}x"
+        f"{display.current_h} physical display at readable font size "
+        f"{smallest}"
+    )
+
+
+def _keep_window_visible(
+    pygame_module,
+    seconds: float,
+    *,
+    closing_is_error: bool,
+) -> None:
+    until = time.monotonic() + seconds
+    while time.monotonic() < until:
+        for event in pygame_module.event.get():
+            if event.type == pygame_module.QUIT:
+                if closing_is_error:
+                    raise PhysicalDesktopAcceptanceError(
+                        "physical acceptance window was closed"
+                    )
+                return
+        time.sleep(min(0.02, max(0.0, until - time.monotonic())))
+
+
 def _record_frame(
     pygame_module,
     font,
@@ -493,17 +543,27 @@ def run_physical_desktop_acceptance(
     artifact_root: Path,
     *,
     expected_server_pid: int,
+    cols: int,
+    rows: int,
     ready_markers: tuple[str, ...],
     timeout: float = 180.0,
     font_path: Path | None = None,
     font_size: int = 18,
+    action_delay: float = 0.75,
+    hold_seconds: float = 10.0,
 ) -> PhysicalDesktopAcceptanceEvidence:
     """Run and record the real Desk/Pad/Daybook physical-view journey."""
 
     if timeout <= 0:
         raise ValueError("timeout must be positive")
+    if cols <= 0 or rows <= 0:
+        raise ValueError("terminal dimensions must be positive")
     if font_size <= 0:
         raise ValueError("font_size must be positive")
+    if action_delay < 0:
+        raise ValueError("action_delay must not be negative")
+    if hold_seconds < 0:
+        raise ValueError("hold_seconds must not be negative")
     artifact_root = Path(artifact_root).resolve()
     artifact_root.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + timeout
@@ -524,7 +584,7 @@ def run_physical_desktop_acceptance(
         status = client.request("status", detailed=False)
         generation = int(status["generation"])
         display_required = bool(status["rich_terminal"]["display_required"])
-        terminal = VirtualTerminal(cols=80, rows=30)
+        terminal = VirtualTerminal(cols=cols, rows=rows)
         revision = -1
         display_state = _RetainedDisplayState()
         keyboard = _GuestKeyboardForwarder(
@@ -535,6 +595,7 @@ def run_physical_desktop_acceptance(
             display_required=display_required,
         )
 
+        os.environ.setdefault("SDL_VIDEO_CENTERED", "1")
         pygame.display.init()
         pygame_initialized = True
         pygame.font.init()
@@ -543,17 +604,27 @@ def run_physical_desktop_acceptance(
             raise PhysicalDesktopAcceptanceError(
                 f"SDL video driver {driver!r} is not a physical display sink"
             )
-        font = (
-            pygame.font.Font(str(font_path), font_size)
-            if font_path is not None
-            else pygame.font.SysFont("monospace", font_size)
+        font, cell_width, cell_height, fitted_font_size = _fit_viewer_font(
+            pygame,
+            font_path,
+            font_size,
+            terminal.cols,
+            terminal.rows,
         )
-        cell_width = max(1, font.size("M")[0])
-        cell_height = font.get_linesize()
         window = pygame.display.set_mode(
             (terminal.cols * cell_width, terminal.rows * cell_height)
         )
-        pygame.display.set_caption("Akashic rich-terminal physical acceptance")
+        print(
+            "Physical viewer: "
+            f"{terminal.cols}x{terminal.rows} cells, "
+            f"{terminal.cols * cell_width}x"
+            f"{terminal.rows * cell_height} pixels, "
+            f"{fitted_font_size}px font, {driver} driver"
+        )
+        pygame.display.set_caption(
+            "Akashic rich-terminal acceptance — starting "
+            f"({fitted_font_size}px)"
+        )
         glyph_cache: dict = {}
         journey = DesktopAcceptanceJourney(tuple(ready_markers))
         frames: list[PresentedFrameEvidence] = []
@@ -567,6 +638,11 @@ def run_physical_desktop_acceptance(
             offer: TerminalDisplayOffer,
             input_generation: int,
         ) -> str:
+            _keep_window_visible(
+                pygame,
+                action_delay,
+                closing_is_error=True,
+            )
             params: dict[str, object] = {
                 "generation": input_generation,
                 "display_offer_id": offer.offer_id,
@@ -638,8 +714,29 @@ def run_physical_desktop_acceptance(
                 revision=revision,
             )
             if resized:
+                font, cell_width, cell_height, fitted_font_size = (
+                    _fit_viewer_font(
+                        pygame,
+                        font_path,
+                        font_size,
+                        terminal.cols,
+                        terminal.rows,
+                    )
+                )
+                glyph_cache.clear()
                 window = pygame.display.set_mode(
                     (terminal.cols * cell_width, terminal.rows * cell_height)
+                )
+                print(
+                    "Physical viewer resized: "
+                    f"{terminal.cols}x{terminal.rows} cells, "
+                    f"{terminal.cols * cell_width}x"
+                    f"{terminal.rows * cell_height} pixels, "
+                    f"{fitted_font_size}px font"
+                )
+                pygame.display.set_caption(
+                    "Akashic rich-terminal acceptance — running "
+                    f"({fitted_font_size}px)"
                 )
 
             frame_offer = display_state.pending_offer
@@ -714,6 +811,10 @@ def run_physical_desktop_acceptance(
                 frame_projection,
                 send_input,
             )
+            pygame.display.set_caption(
+                "Akashic rich-terminal acceptance — "
+                f"stage {journey.stage}/6 ({fitted_font_size}px)"
+            )
             if progress.milestone is not None:
                 if composed_surface is None:
                     raise PhysicalDesktopAcceptanceError(
@@ -739,6 +840,15 @@ def run_physical_desktop_acceptance(
                     driver,
                     tuple(frames),
                     tuple(inputs),
+                )
+                pygame.display.set_caption(
+                    "Akashic rich-terminal acceptance — PASS "
+                    f"({fitted_font_size}px)"
+                )
+                _keep_window_visible(
+                    pygame,
+                    hold_seconds,
+                    closing_is_error=False,
                 )
                 return PhysicalDesktopAcceptanceEvidence(
                     manifest,

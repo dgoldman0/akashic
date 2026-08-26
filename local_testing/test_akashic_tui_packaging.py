@@ -1844,15 +1844,23 @@ def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
             str(font),
             "--font-size",
             "21",
+            "--action-delay",
+            "0.8",
+            "--hold-seconds",
+            "12",
         ]
     )
     assert args.command == "accept"
     assert args.profile == "desktop-apt1"
+    assert args.cols == 280
+    assert args.rows == 84
     assert args.socket == "/tmp/physical.sock"
     assert args.artifact_root == artifact_root
     assert args.timeout == 37.5
     assert args.font == font
     assert args.font_size == 21
+    assert args.action_delay == 0.8
+    assert args.hold_seconds == 12.0
 
     with pytest.raises(SystemExit):
         _parser().parse_args(["accept", "--profile", "desktop"])
@@ -2125,6 +2133,8 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
         timeout=45.0,
         font_path=tmp_path / "font.ttf",
         font_size=19,
+        action_delay=0.6,
+        hold_seconds=8.0,
     )
 
     assert accepted is not runner_fails
@@ -2145,10 +2155,14 @@ def test_physical_acceptance_uses_server_policy_and_always_reaps_server(
             (socket_path, tmp_path / "evidence"),
             {
                 "expected_server_pid": 4242,
+                "cols": 100,
+                "rows": 32,
                 "ready_markers": PROFILES["desktop-apt1"].ready_markers,
                 "timeout": 45.0,
                 "font_path": tmp_path / "font.ttf",
                 "font_size": 19,
+                "action_delay": 0.6,
+                "hold_seconds": 8.0,
             },
         )
     ]

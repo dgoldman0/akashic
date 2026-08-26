@@ -29899,6 +29899,8 @@ def accept_physical_desktop(
     timeout: float,
     font_path: Path | None,
     font_size: int,
+    action_delay: float,
+    hold_seconds: float,
 ) -> bool:
     """Run the real viewer-owned Desk/Pad/Daybook acceptance journey."""
 
@@ -29921,10 +29923,14 @@ def accept_physical_desktop(
             socket_path,
             artifact_root,
             expected_server_pid=server.pid,
+            cols=cols,
+            rows=rows,
             ready_markers=PROFILES["desktop-apt1"].ready_markers,
             timeout=timeout,
             font_path=font_path,
             font_size=font_size,
+            action_delay=action_delay,
+            hold_seconds=hold_seconds,
         )
     except PhysicalDesktopAcceptanceError as exc:
         print(f"Physical desktop acceptance: FAIL\n  {exc}")
@@ -31560,6 +31566,16 @@ def _positive_seconds(value: str) -> float:
     return parsed
 
 
+def _nonnegative_seconds(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must not be negative")
+    return parsed
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -31578,8 +31594,12 @@ def _parser() -> argparse.ArgumentParser:
             help="seed a private local Codex Desk image from a mode-0600 checkpoint",
         )
         if name in ("smoke", "serve", "accept"):
-            command.add_argument("--cols", type=int, default=100)
-            command.add_argument("--rows", type=int, default=32)
+            command.add_argument(
+                "--cols", type=int, default=280 if name == "accept" else 100
+            )
+            command.add_argument(
+                "--rows", type=int, default=84 if name == "accept" else 32
+            )
             command.add_argument(
                 "--ext-mem-mib",
                 type=_positive_integer,
@@ -31622,6 +31642,12 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--font", type=Path)
             command.add_argument(
                 "--font-size", type=_positive_integer, default=18
+            )
+            command.add_argument(
+                "--action-delay", type=_nonnegative_seconds, default=0.75
+            )
+            command.add_argument(
+                "--hold-seconds", type=_nonnegative_seconds, default=10.0
             )
 
     return parser
@@ -31675,6 +31701,8 @@ def main() -> int:
             timeout=args.timeout,
             font_path=args.font,
             font_size=args.font_size,
+            action_delay=args.action_delay,
+            hold_seconds=args.hold_seconds,
         ) else 1
     serve(
         args.profile,
