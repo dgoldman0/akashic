@@ -333,6 +333,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "PT-SERVICE" not in step
 
     captured = _definition(source, "_RTAPT-CAPTURED-BANKS?")
+    glyph_run_op = _definition(source, "_RTAPT-GLYPH-RUN-OP?")
     ledgers = _definition(source, "_RTAPT-OWNER-LEDGERS?")
     target_count = _definition(source, "_RTAPT-TARGET-COUNT?")
     target_base = _definition(source, "_RTAPT-TARGET-BASE")
@@ -340,6 +341,11 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     region_define = _definition(source, "RTAPT-REGION-DEFINE")
     glyph_run_define = _definition(source, "RTAPT-GLYPH-RUN-DEFINE")
     glyph_run_body = _definition(source, "_RTAPT-GLYPH-RUN-DEFINE-BODY")
+    glyph_run_replace = _definition(source, "RTAPT-GLYPH-RUN-REPLACE")
+    glyph_run_replace_body = _definition(
+        source, "_RTAPT-GLYPH-RUN-REPLACE-BODY"
+    )
+    glyph_run_target = _definition(source, "_RTAPT-GLYPH-RUN-TARGET?")
     glyph_run_geometry = _definition(source, "_RTAPT-GLYPH-RUN-GEOMETRY?")
     unorm32 = _definition(source, "_RTAPT-UNORM32")
     glyph_run_text_span = _definition(source, "_RTAPT-GLYPH-RUN-TEXT-SPAN?")
@@ -375,7 +381,9 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-REGION-DEFINE-COPY-SIZE" in captured
     assert "_RTAPT-REGION-DEFINE-FRAME-BYTES" in captured
     assert "_RTAPT-OP-REGION-DEFINE" in captured
-    assert "_RTAPT-OP-GLYPH-RUN-DEFINE" in captured
+    assert "_RTAPT-GLYPH-RUN-OP?" in captured
+    assert "_RTAPT-OP-GLYPH-RUN-DEFINE" in glyph_run_op
+    assert "_RTAPT-OP-GLYPH-RUN-REPLACE" in glyph_run_op
     assert "_RTAPT-GLYPH-RUN-DEFINE-COPY-FIXED" in captured
     assert "_RTAPT-GLYPH-RUN-DEFINE-FRAME-FIXED" in captured
     assert "_RTAPT-ALIGN8?" in captured
@@ -383,6 +391,8 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-LD.TEXT-U" in captured
     assert "_RTAPT-E.RET-BYTES" in captured
     assert "_RTAPT-TARGET-COUNT?" in ledgers
+    assert "_RTAPT-LV-E ! 0 _RTAPT-LV-PENDING !" in ledgers
+    assert "DUP _RTAPT-LV-E !" not in ledgers
     assert "_RTAPT-TARGET-BASE" in target_count
     assert "PT-RET-DELTA" in target_base
     assert "PT-RET-REPLACE-START" in target_base
@@ -397,6 +407,11 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-O.PENDING-OBJECT-HIGH" in ledgers
     assert "_RTAPT-O.PENDING-UTF8" in ledgers
     assert ledgers.count("_RTAPT-TARGET-COUNT?") == 3
+    assert "_RTAPT-E.OP-COUNT @ 0 ?DO" in ledgers
+    assert "_RTAPT-OP-GLYPH-RUN-REPLACE = IF" in ledgers
+    assert ledgers.index("_RTAPT-OP-GLYPH-RUN-REPLACE = IF") < ledgers.index(
+        "_RTAPT-E.OWNER-CAP @ 0 ?DO"
+    )
     for region_target, object_target in (
         ("ACTIVE-REGIONS", "ACTIVE-OBJECTS"),
         ("HIDDEN-REGIONS", "HIDDEN-OBJECTS"),
@@ -470,6 +485,65 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     )
     assert glyph_run_body.index("0 FILL") < glyph_run_body.index("MOVE")
 
+    # Replacement reuses the exact neutral record and retry shape, but it is
+    # admitted only against the selected committed target and never mutates
+    # the definition-addition ledgers. Sparse identity remains authoritative
+    # in the physical retained model, which can reject the transaction.
+    assert (
+        "root-height root-width z visible fg-rgba bg-rgba attrs"
+        in glyph_run_replace
+    )
+    assert "['] _RTAPT-GLYPH-RUN-REPLACE-BODY CATCH" in glyph_run_replace
+    assert glyph_run_replace.index("CATCH") < glyph_run_replace.index(
+        "_RTAPT-GLYPH-RUN-SCRUB"
+    )
+    assert not re.search(r"\bPT-GLYPH-RUN-REPLACE\b", glyph_run_replace)
+    assert not re.search(r"\bPT-GLYPH-RUN-REPLACE\b", glyph_run_replace_body)
+    for check in (
+        "_RTAPT-GLYPH-RUN-FIELDS?",
+        "_RTAPT-GLYPH-RUN-TEXT-SPAN?",
+        "_RTAPT-READY-STATUS",
+        "_RTAPT-GLYPH-RUN-LIMITS",
+        "_RTAPT-GLYPH-RUN-UTF8?",
+        "_RTAPT-GLYPH-RUN-TARGET?",
+        "_RTAPT-OP-GLYPH-RUN-REPLACE",
+        "_RTAPT-GLYPH-RUN-DEFINE-COPY-FIXED",
+        "_RTAPT-GLYPH-RUN-DEFINE-FRAME-FIXED",
+    ):
+        assert check in glyph_run_replace_body
+    for forbidden_ledger_mutation in (
+        "_RTAPT-O.PENDING-OBJECTS +!",
+        "_RTAPT-O.PENDING-OBJECT-HIGH !",
+        "_RTAPT-O.PENDING-UTF8 +!",
+    ):
+        assert forbidden_ledger_mutation not in glyph_run_replace_body
+    assert "_RTAPT-TARGET-BASE 0= IF 0 EXIT THEN" in glyph_run_target
+    assert glyph_run_target.count("_RTAPT-TARGET-BASE") == 2
+    assert "_RTAPT-O.OBJECT-HIGH @ U>" in glyph_run_target
+    assert "_RTAPT-O.REGION-HIGH @ U> 0=" in glyph_run_target
+    replace_target = glyph_run_replace_body.index(
+        "_RTAPT-GLYPH-RUN-TARGET?"
+    )
+    replace_op_capacity = glyph_run_replace_body.index(
+        "_RTAPT-E.OP-COUNT @ 0xFFFFFFFF U<", replace_target
+    )
+    replace_copy_capacity = glyph_run_replace_body.index(
+        "_RTAPT-E.COPY-U @", replace_op_capacity
+    )
+    replace_wire_capacity = glyph_run_replace_body.index(
+        "_RTAPT-E.RET-BYTES @", replace_copy_capacity
+    )
+    replace_first_capture = glyph_run_replace_body.index(
+        "_RTAPT-OP-GLYPH-RUN-REPLACE", replace_wire_capacity
+    )
+    assert (
+        replace_target
+        < replace_op_capacity
+        < replace_copy_capacity
+        < replace_wire_capacity
+        < replace_first_capture
+    )
+
     # Projection is rooted in integer cell geometry.  Visible zero-area or
     # fully off-root glyph_runs fail, while invisible glyph_runs are still given a
     # legal nearest-cell APT rectangle.
@@ -532,6 +606,8 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-GLYPH-RUN-COPY-SHAPE?" in candidate_preflight
     assert "_RTAPT-OP-REGION-DEFINE" in candidate_preflight
     assert "_RTAPT-OP-GLYPH-RUN-DEFINE" in candidate_preflight
+    assert "_RTAPT-GLYPH-RUN-OP?" in candidate_preflight
+    assert "_RTAPT-GLYPH-RUN-TARGET?" in candidate_preflight
     assert "_RTAPT-O.REGION-HIGH" in candidate_preflight
     assert "_RTAPT-O.PENDING-REGIONS" in candidate_preflight
     assert "_RTAPT-O.PENDING-OBJECTS" in candidate_preflight
@@ -585,10 +661,15 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert send_glyph_run.count("8 RSHIFT 0xFF AND") == 2
     assert "_RTAPT-LD.ATTRS @" in send_glyph_run
     assert "ELSE 0 0 THEN" in send_glyph_run
-    assert "PT-GLYPH-RUN-DEFINE _RTAPT-PT>STATUS" in send_glyph_run
+    assert "PT-GLYPH-RUN-DEFINE" in send_glyph_run
+    assert "PT-GLYPH-RUN-REPLACE" in send_glyph_run
+    assert "THEN _RTAPT-PT>STATUS" in send_glyph_run
     assert "_RTAPT-OP-REGION-DEFINE" in send_captured
     assert "_RTAPT-SEND-REGION" in send_captured
     assert "_RTAPT-OP-GLYPH-RUN-DEFINE" in send_captured
+    assert "_RTAPT-OP-GLYPH-RUN-REPLACE" in send_captured
+    assert "0 _RTAPT-SEND-GLYPH-RUN EXIT" in send_captured
+    assert "-1 _RTAPT-SEND-GLYPH-RUN EXIT" in send_captured
     assert "_RTAPT-SEND-GLYPH-RUN" in send_captured
     assert "PT-TX-ABORT" in abort_open
     assert "_RTAPT-WIRE-REWIND" in abort_open
@@ -911,6 +992,36 @@ def test_glyph_run_geometry_projects_integer_cell_edges_exactly() -> None:
 
     assert _unorm32(0, 80) == 0
     assert _unorm32(80, 80) == U32_MAX
+
+
+def test_sealed_presentation_query_is_read_only_and_state_gated() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    query = _definition(source, "RTAPT-SEALED-PRESENTATION@")
+
+    engine_gate = query.index("_RTAPT-ENGINE-VALID?")
+    state_read = query.index("_RTAPT-E.UPDATE-STATE @", engine_gate)
+    sealed_gate = query.index("RTAPT-UPDATE-SEALED <>", state_read)
+    mode_read = query.index("_RTAPT-E.RET-MODE @", sealed_gate)
+    disposition_read = query.index("_RTAPT-E.DISPOSITION @", mode_read)
+    mode_gate = query.index("_RTAPT-MODE? 0= IF", disposition_read)
+    tuple_gate = query.index("_RTAPT-MODE-DISPOSITION? 0= IF", mode_gate)
+    success = query.rindex("RTAPT-S-OK")
+    assert engine_gate < state_read < sealed_gate < mode_read
+    assert mode_read < disposition_read < mode_gate < tuple_gate < success
+
+    assert "DROP 0 0 RTAPT-S-INVALID EXIT" in query
+    assert "DROP 0 0 RTAPT-S-BUSY EXIT" in query
+    assert query.count("2DROP 0 0 RTAPT-S-INVALID EXIT") == 2
+    assert not re.search(r"(?m)^\s+.*\s!\s*(?:\\.*)?$", query)
+    for mutator in (
+        "RTAPT-RICH-BEGIN",
+        "RTAPT-RICH-SEAL",
+        "RTAPT-CELL-BEGIN",
+        "RTAPT-CELL-COMMIT",
+        "PT-PRESENT-",
+        "PT-TX-",
+    ):
+        assert mutator not in query
 
 
 def test_invisible_empty_and_offroot_geometry_stays_wire_legal() -> None:

@@ -241,7 +241,8 @@ def test_normal_service_and_close_settlement_have_disjoint_schedulers() -> None:
 def test_concrete_bridge_is_caller_bounded_and_one_to_one() -> None:
     source = BRIDGE.read_text(encoding="utf-8")
 
-    assert "PROVIDED akashic-tui-rtaptscb1" in source
+    assert "PROVIDED akashic-tui-rtaptscb" in source
+    assert "rtaptscb1" not in source.lower()
     assert "REQUIRE ../screen-backend-apt1.f" in source
     assert "REQUIRE apt1-engine.f" in source
     assert not re.search(r"(?m)^REQUIRE\s+.*(?:MegaPad|rich-terminal)\.f\s*$", source)
@@ -294,7 +295,10 @@ def test_concrete_bridge_is_caller_bounded_and_one_to_one() -> None:
 def test_output_producer_hook_is_optional_immutable_and_caller_bounded() -> None:
     source = BRIDGE.read_text(encoding="utf-8")
 
-    assert "APTSCB-PUBLISHER-SIZE 112 + CONSTANT RTAPTSCB-SIZE" in source
+    assert "APTSCB-PUBLISHER-SIZE 120 + CONSTANT RTAPTSCB-SIZE" in source
+    assert "0 CONSTANT _RTAPTSCB-PHASE-CELL" in source
+    assert "1 CONSTANT _RTAPTSCB-PHASE-HIDDEN" in source
+    assert "2 CONSTANT _RTAPTSCB-PHASE-REVEAL-AWAITING" in source
     for suffix, offset in {
         "PRODUCER-CONTEXT": 16,
         "PRODUCER-U": 24,
@@ -308,6 +312,7 @@ def test_output_producer_hook_is_optional_immutable_and_caller_bounded() -> None
         "MORE-WORK": 88,
         "OUTPUT-NEEDED": 96,
         "FAULT-STATUS": 104,
+        "PHASE": 112,
     }.items():
         assert (
             f"APTSCB-PUBLISHER-SIZE {offset} + CONSTANT "
@@ -327,6 +332,11 @@ def test_output_producer_hook_is_optional_immutable_and_caller_bounded() -> None
     ):
         assert token in producer_valid
     assert "_RTAPTSCB-VALID-CONTEXT @ 0= IF" in producer_valid
+    assert "_RTAPTSCB.PHASE @" in producer_valid
+    assert "_RTAPTSCB-PHASE-CELL = AND" in producer_valid
+
+    phase_valid = _definition(source, "_RTAPTSCB-PHASE?")
+    assert "_RTAPTSCB-PHASE-REVEAL-AWAITING U> 0=" in phase_valid
 
     fault_valid = _definition(source, "_RTAPTSCB-FAULT-VALID?")
     assert "_RTAPTSCB-FAULT-STATUS?" in fault_valid
@@ -334,10 +344,11 @@ def test_output_producer_hook_is_optional_immutable_and_caller_bounded() -> None
     assert "_RTAPTSCB.OUTPUT-NEEDED @ 0=" in fault_valid
     valid = _definition(source, "RTAPTSCB-VALID?")
     surface = valid.index("_RTAPTSCB-SURFACE-VALID?")
-    fault = valid.index("_RTAPTSCB-FAULT-VALID?", surface)
+    phase = valid.index("_RTAPTSCB-PHASE?", surface)
+    fault = valid.index("_RTAPTSCB-FAULT-VALID?", phase)
     adapter = valid.index("_RTAPTSCB-ADAPTER-VALID?", fault)
     producer = valid.index("_RTAPTSCB-PRODUCER-VALID?", adapter)
-    assert surface < fault < adapter < producer
+    assert surface < phase < fault < adapter < producer
 
     binder = _definition(source, "RTAPTSCB-OUTPUT-PRODUCER!")
     first_store = binder.index("_RTAPTSCB.PRODUCER-CONTEXT !")
@@ -459,14 +470,84 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
     begin = _definition(source, "_RTAPTSCB-BEGIN")
     surface_observe = begin.index("_RTAPTSCB-SURFACE-OBSERVE")
     fault_gate = begin.index("_RTAPTSCB.FAULT-STATUS @ ?DUP IF", surface_observe)
-    producer_guard = begin.index("_RTAPTSCB-PRODUCER-BOUND?", fault_gate)
-    output_guard = begin.index("_RTAPTSCB.OUTPUT-NEEDED @ AND IF", producer_guard)
-    prepare_call = begin.index("_RTAPTSCB-PRODUCER-PREPARE", output_guard)
+    none_gate = begin.index("_RTAPTSCB-BEGIN-CELL-MODE @ PT-CELL-NONE = IF")
+    promote_none = begin.index("_RTAPTSCB-PROMOTE-NONE", none_gate)
+    producer_guard = begin.index("_RTAPTSCB-PRODUCER-BOUND?", promote_none)
+    prepare_call = begin.index("_RTAPTSCB-AUTHORITATIVE-PREPARE", producer_guard)
     engine_begin = begin.index("RTAPT-CELL-BEGIN", prepare_call)
-    assert surface_observe < fault_gate < producer_guard < output_guard
-    assert output_guard < prepare_call < engine_begin
+    assert surface_observe < fault_gate < none_gate < promote_none
+    assert promote_none < producer_guard < prepare_call < engine_begin
+    assert "_RTAPTSCB.OUTPUT-NEEDED @ AND IF" not in begin
     clear_latch = begin.index("_RTAPTSCB.OUTPUT-NEEDED !")
     assert engine_begin < begin.index("SCB-S-OK = IF", engine_begin) < clear_latch
+
+    authoritative = _definition(source, "_RTAPTSCB-AUTHORITATIVE-PREPARE")
+    producer_prepare = authoritative.index("_RTAPTSCB-PRODUCER-PREPARE")
+    prepare_refusal = authoritative.index(
+        "DUP SCB-S-OK <> IF EXIT THEN DROP", producer_prepare
+    )
+    sealed_read = authoritative.index("_RTAPTSCB-SEALED-READ", prepare_refusal)
+    cell_phase = authoritative.index("_RTAPTSCB-PHASE-CELL", sealed_read)
+    delta_shape = authoritative.index("_RTAPTSCB-DELTA-PRESENTATION?", cell_phase)
+    hidden_shape = authoritative.index(
+        "_RTAPTSCB-HIDDEN-PRESENTATION?", delta_shape
+    )
+    hidden_publish = authoritative.index("_RTAPTSCB-PUBLISH-HIDDEN", hidden_shape)
+    hidden_phase = authoritative.index("_RTAPTSCB-PHASE-HIDDEN", hidden_publish)
+    reveal_shape = authoritative.index(
+        "_RTAPTSCB-REVEAL-PRESENTATION?", hidden_phase
+    )
+    repeated_hidden_shape = authoritative.index(
+        "_RTAPTSCB-HIDDEN-PRESENTATION?", reveal_shape
+    )
+    repeated_hidden_publish = authoritative.index(
+        "_RTAPTSCB-PUBLISH-HIDDEN", repeated_hidden_shape
+    )
+    assert producer_prepare < prepare_refusal < sealed_read < cell_phase
+    assert cell_phase < delta_shape < hidden_shape
+    assert hidden_shape < hidden_publish < hidden_phase < reveal_shape
+    assert reveal_shape < repeated_hidden_shape < repeated_hidden_publish
+    assert authoritative.count("_RTAPTSCB-DELTA-PRESENTATION?") == 1
+    assert "_RTAPTSCB-DELTA-PRESENTATION?" not in authoritative[hidden_phase:]
+
+    hidden = _definition(source, "_RTAPTSCB-PUBLISH-HIDDEN")
+    hidden_begin = hidden.index("0 0 PT-CELL-NONE")
+    hidden_commit = hidden.index("RTAPT-CELL-COMMIT", hidden_begin)
+    hidden_phase_store = hidden.index("_RTAPTSCB-PHASE-HIDDEN", hidden_commit)
+    refuse_outer = hidden.index("DROP SCB-S-WOULD-BLOCK", hidden_phase_store)
+    assert hidden_begin < hidden_commit < hidden_phase_store < refuse_outer
+    for forbidden in (
+        "RTAPT-CELL-SPAN-BEGIN",
+        "RTAPT-CELL-WRITE",
+        "RTAPT-CELL-CURSOR",
+        "RTAPT-COMMIT-AND-REVEAL",
+    ):
+        assert forbidden not in hidden
+
+    hidden_shape_body = _definition(source, "_RTAPTSCB-HIDDEN-PRESENTATION?")
+    assert "RTAPT-RICH-REPLACE-START" in hidden_shape_body
+    assert "RTAPT-RICH-REPLACE-CONTINUE" in hidden_shape_body
+    assert "RTAPT-COMMIT = AND" in hidden_shape_body
+    reveal_shape_body = _definition(source, "_RTAPTSCB-REVEAL-PRESENTATION?")
+    assert "RTAPT-RICH-REPLACE-CONTINUE" in reveal_shape_body
+    assert "RTAPT-COMMIT-AND-REVEAL = AND" in reveal_shape_body
+    delta_shape_body = _definition(source, "_RTAPTSCB-DELTA-PRESENTATION?")
+    assert "RTAPT-RICH-DELTA" in delta_shape_body
+    assert "RTAPT-COMMIT = AND" in delta_shape_body
+    for forbidden in (
+        "RTAPT-RICH-REPLACE-START",
+        "RTAPT-RICH-REPLACE-CONTINUE",
+        "RTAPT-COMMIT-AND-REVEAL",
+    ):
+        assert forbidden not in delta_shape_body
+
+    promote = _definition(source, "_RTAPTSCB-PROMOTE-NONE")
+    exact = promote.index("_RTAPTSCB-EXACT-SCREEN?")
+    force = promote.index("SCR-FORCE", exact)
+    refusal = promote.index("SCB-S-WOULD-BLOCK", force)
+    assert exact < force < refusal
+    assert "_RTAPTSCB-PRODUCER-PREPARE" not in promote
+    assert "RTAPT-CELL-BEGIN" not in promote
 
     prepare = _definition(source, "_RTAPTSCB-PRODUCER-PREPARE")
     assert "_RTAPTSCB-EXACT-SCREEN?" in prepare
@@ -484,11 +565,28 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
     )
 
     engine_step = _definition(source, "_RTAPTSCB-ENGINE-STEP")
-    rejected = engine_step.index("RTAPT-S-REJECTED = IF SCB-S-OK EXIT THEN")
+    phase_reconcile = engine_step.index("_RTAPTSCB-RECONCILE-PHASE")
+    rejected = engine_step.index(
+        "RTAPT-S-REJECTED = IF SCB-S-OK EXIT THEN", phase_reconcile
+    )
     mapped = engine_step.index("_RTAPTSCB-MAP-STATUS", rejected)
     fatal = engine_step.index("_RTAPTSCB-FATAL-STATUS?", mapped)
     faulted = engine_step.index("_RTAPTSCB-FAULT-LATCH", fatal)
-    assert rejected < mapped < fatal < faulted
+    assert phase_reconcile < rejected < mapped < fatal < faulted
+
+    reconcile = _definition(source, "_RTAPTSCB-RECONCILE-PHASE")
+    assert "RTAPT-S-REJECTED" in reconcile
+    assert "_RTAPTSCB-SEALED-READ" in reconcile
+    assert "_RTAPTSCB-REVEAL-PRESENTATION?" in reconcile
+    assert "_RTAPTSCB-PHASE-HIDDEN" in reconcile
+    assert "_RTAPTSCB-PHASE-REVEAL-AWAITING" in reconcile
+    assert "_RTAPTSCB-PHASE-CELL" in reconcile
+    commit_callback = _definition(source, "_RTAPTSCB-COMMIT")
+    commit_call = commit_callback.index("RTAPT-CELL-COMMIT")
+    reveal_awaiting = commit_callback.index(
+        "_RTAPTSCB-PHASE-REVEAL-AWAITING", commit_call
+    )
+    assert commit_call < reveal_awaiting
     output_query = _definition(source, "RTAPTSCB-OUTPUT-NEEDED?")
     assert "RTAPTSCB-VALID?" in output_query
     assert "_RTAPTSCB-EXACT-SCREEN?" in output_query
@@ -510,10 +608,10 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
         "RTERM-",
         "PRESENT-",
         "PRESENT_",
-        "SCR-FORCE",
     ):
         assert forbidden not in code
     assert "SCR-REQUEST-FLUSH" in code
+    assert code.count("SCR-FORCE") == 1
 
 
 def test_engine_settlement_only_reconciles_active_wire_authority() -> None:

@@ -26561,18 +26561,34 @@ def _qualify_audio_contracts(
     return AudioHostQualification(tuple(errors), tuple(notes))
 
 
+def _retained_physical_output_ready(session: MachineSession) -> bool:
+    """Use the runtime's exact physical-frame input gate."""
+    try:
+        return bool(
+            session.retained_display_required
+            and session._output_revision_ready()
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
 def _rich_terminal_smoke_ready(
     profile: Profile,
     session: MachineSession,
 ) -> bool:
-    """Require a healthy active framed session for an opted-in smoke."""
-    if profile.rich_terminal is None:
+    """Require the configured output path to be physically ready for input."""
+    rich_terminal = profile.rich_terminal
+    if rich_terminal is None:
         return True
-    return (
+    if not (
         session.rich_terminal_failure is None
         and not session.rich_terminal_lost
         and session.rich_terminal_state is TerminalState.ACTIVE
-    )
+    ):
+        return False
+    if rich_terminal.retained_policy is None:
+        return True
+    return _retained_physical_output_ready(session)
 
 
 def smoke(

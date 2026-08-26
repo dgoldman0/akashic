@@ -1884,7 +1884,7 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         max_image_width=0,
         max_image_height=0,
         max_path_points=0,
-        max_label_bytes=0,
+        max_glyph_run_bytes=0,
         max_samples_per_append=0,
         max_history_per_series=0,
         minimum_presentation_interval_us=500_000,
@@ -1936,6 +1936,41 @@ def test_desktop_apt1_smoke_rejects_fallback_and_terminal_loss() -> None:
         terminal(TerminalState.ACTIVE, lost=True),
     ):
         assert not _rich_terminal_smoke_ready(profile, rejected)
+
+
+def test_retained_smoke_delegates_to_runtime_physical_gate() -> None:
+    configured = SimpleNamespace(
+        rich_terminal=SimpleNamespace(retained_policy=object()),
+    )
+    calls = []
+
+    def session(*, retained_required: bool, ready: bool) -> SimpleNamespace:
+        def output_revision_ready() -> bool:
+            calls.append(ready)
+            return ready
+
+        return SimpleNamespace(
+            rich_terminal_state=TerminalState.ACTIVE,
+            rich_terminal_failure=None,
+            rich_terminal_lost=False,
+            retained_display_required=retained_required,
+            _output_revision_ready=output_revision_ready,
+        )
+
+    assert not _rich_terminal_smoke_ready(
+        configured,
+        session(retained_required=False, ready=True),
+    )
+    assert calls == []
+    assert not _rich_terminal_smoke_ready(
+        configured,
+        session(retained_required=True, ready=False),
+    )
+    assert _rich_terminal_smoke_ready(
+        configured,
+        session(retained_required=True, ready=True),
+    )
+    assert calls == [False, True]
 
 
 def test_abstract_http_profile_omits_native_networking(

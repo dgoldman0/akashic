@@ -57,7 +57,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     assert "_RTE-F.RESERVED @ IF DROP 0 EXIT THEN" in _definition(
         source, "RTE-VALID?"
     )
-    assert "144 CONSTANT RTE-FACADE-SIZE" in code
+    assert "152 CONSTANT RTE-FACADE-SIZE" in code
     assert "160 CONSTANT RTE-LIMITS-SIZE" in code
     assert "_RTE-F.CONTEXT" in _definition(source, "RTE-VALID?")
     valid = _definition(source, "RTE-VALID?")
@@ -75,6 +75,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "GLYPH-RUN-DEF",
         "GLYPH-RUN-PREFLIGHT",
         "UPDATE-STATE",
+        "GLYPH-RUN-REPLACE",
     ):
         assert f"_RTE-F.{callback}-XT @ 0=" in valid
 
@@ -105,6 +106,7 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-GLYPH-RUN-BYTES": "( -- bytes )",
         "RTE-GLYPH-RUN-VALID?": "( run -- flag )",
         "RTE-GLYPH-RUN-DEFINE": "( run facade -- status )",
+        "RTE-GLYPH-RUN-REPLACE": "( run facade -- status )",
         "RTE-GLYPH-RUN-PLAN-BYTES": "( -- bytes )",
         "RTE-GLYPH-RUN-PLAN-ITEM-BYTES": "( -- bytes )",
         "RTE-GLYPH-RUN-PLAN-VALID?": "( plan -- flag )",
@@ -137,6 +139,7 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-RETAINED-BEGIN",
         "RTE-REGION-DEFINE",
         "RTE-GLYPH-RUN-DEFINE",
+        "RTE-GLYPH-RUN-REPLACE",
         "RTE-GLYPH-RUN-PREFLIGHT",
         "RTE-RETAINED-SEAL",
         "RTE-RETAINED-CANCEL",
@@ -219,6 +222,7 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
         "_RTE-F.GLYPH-RUN-DEF-XT !",
         "_RTE-F.GLYPH-RUN-PREFLIGHT-XT !",
         "_RTE-F.UPDATE-STATE-XT !",
+        "_RTE-F.GLYPH-RUN-REPLACE-XT !",
     ):
         assert fill < init.index(field) < magic
 
@@ -311,40 +315,60 @@ def test_glyph_run_definition_is_neutral_validated_borrowed_and_exactly_bridged(
     for lead in ("0xC2 0xE0", "0xE0 0xF0", "0xF0 0xF5"):
         assert lead in scalar
 
-    dispatch = _definition(source, "RTE-GLYPH-RUN-DEFINE")
-    facade_valid = dispatch.index("RTE-VALID?")
-    record_span = dispatch.index("RTE-GLYPH-RUN-SIZE _RTE-SPAN?", facade_valid)
-    record_disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", record_span)
-    text_span_check = dispatch.index("_RTE-GLYPH-RUN-TEXT-SPAN?", record_disjoint)
-    text_disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", record_disjoint + 1)
-    record_valid = dispatch.index("_RTE-GLYPH-RUN-FIELDS?", text_disjoint)
-    execute = dispatch.index("_RTE-F.GLYPH-RUN-DEF-XT @ EXECUTE", record_valid)
-    assert (
-        facade_valid
-        < record_span
-        < record_disjoint
-        < text_span_check
-        < text_disjoint
-        < record_valid
-        < execute
-    )
-    assert "RTE-GLYPH-RUN-VALID?" not in dispatch
-    assert "_RTE-GLYPH-RUN-TEXT?" not in dispatch
-    assert "DUP RTE-STATUS-VALID? 0=" in dispatch
+    for public, callback_name, callback_field, provider_name in (
+        (
+            "RTE-GLYPH-RUN-DEFINE",
+            "_RTAPTE-GLYPH-RUN-DEFINE",
+            "_RTE-F.GLYPH-RUN-DEF-XT @ EXECUTE",
+            "RTAPT-GLYPH-RUN-DEFINE",
+        ),
+        (
+            "RTE-GLYPH-RUN-REPLACE",
+            "_RTAPTE-GLYPH-RUN-REPLACE",
+            "_RTE-F.GLYPH-RUN-REPLACE-XT @ EXECUTE",
+            "RTAPT-GLYPH-RUN-REPLACE",
+        ),
+    ):
+        dispatch = _definition(source, public)
+        facade_valid = dispatch.index("RTE-VALID?")
+        record_span = dispatch.index(
+            "RTE-GLYPH-RUN-SIZE _RTE-SPAN?", facade_valid
+        )
+        record_disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", record_span)
+        text_span_check = dispatch.index(
+            "_RTE-GLYPH-RUN-TEXT-SPAN?", record_disjoint
+        )
+        text_disjoint = dispatch.index(
+            "RTE-STORAGE-DISJOINT?", record_disjoint + 1
+        )
+        record_valid = dispatch.index("_RTE-GLYPH-RUN-FIELDS?", text_disjoint)
+        execute = dispatch.index(callback_field, record_valid)
+        assert (
+            facade_valid
+            < record_span
+            < record_disjoint
+            < text_span_check
+            < text_disjoint
+            < record_valid
+            < execute
+        )
+        assert "RTE-GLYPH-RUN-VALID?" not in dispatch
+        assert "_RTE-GLYPH-RUN-TEXT?" not in dispatch
+        assert "DUP RTE-STATUS-VALID? 0=" in dispatch
 
-    callback = _definition(bridge, "_RTAPTE-GLYPH-RUN-DEFINE")
-    ordered_fields = [
-        callback.index(f"_RTE-GLYPH-RUN.{field} @")
-        for field in expected_fields
-        if field != "RESERVED"
-    ]
-    assert ordered_fields == sorted(ordered_fields)
-    provider = callback.index("RTAPT-GLYPH-RUN-DEFINE")
-    assert ordered_fields[-1] < provider
-    assert "R> DROP R>" in callback
-    assert "_RTAPTE-STATUS>RTE" in callback[provider:]
-    for forbidden in ("PT-PRESENT-OP", "L!", "W!", "C!", "MOVE"):
-        assert forbidden not in callback
+        callback = _definition(bridge, callback_name)
+        ordered_fields = [
+            callback.index(f"_RTE-GLYPH-RUN.{field} @")
+            for field in expected_fields
+            if field != "RESERVED"
+        ]
+        assert ordered_fields == sorted(ordered_fields)
+        provider = callback.index(provider_name)
+        assert ordered_fields[-1] < provider
+        assert "R> DROP R>" in callback
+        assert "_RTAPTE-STATUS>RTE" in callback[provider:]
+        for forbidden in ("PT-PRESENT-OP", "L!", "W!", "C!", "MOVE"):
+            assert forbidden not in callback
 
 
 def test_glyph_run_plan_preflight_is_neutral_complete_and_mutation_free() -> None:
@@ -467,6 +491,7 @@ def test_apt1_bridge_finalization_is_blank_idempotent_and_scrubs_authority() -> 
         "GLYPH-RUN-DEF",
         "GLYPH-RUN-PREFLIGHT",
         "UPDATE-STATE",
+        "GLYPH-RUN-REPLACE",
     ):
         assert f"_RTE-F.{callback}-XT @ ['] _RTAPTE-" in exact
 

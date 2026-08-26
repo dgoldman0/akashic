@@ -103,11 +103,16 @@ PT-COMMIT-AND-REVEAL CONSTANT RTAPT-COMMIT-AND-REVEAL
 
 1 CONSTANT _RTAPT-OP-REGION-DEFINE
 2 CONSTANT _RTAPT-OP-GLYPH-RUN-DEFINE
+3 CONSTANT _RTAPT-OP-GLYPH-RUN-REPLACE
 72 CONSTANT _RTAPT-REGION-DEFINE-COPY-SIZE
 88 CONSTANT _RTAPT-REGION-DEFINE-FRAME-BYTES
 120 CONSTANT _RTAPT-GLYPH-RUN-DEFINE-COPY-FIXED
 120 CONSTANT _RTAPT-GLYPH-RUN-DEFINE-FRAME-FIXED
 160 CONSTANT _RTAPT-UPDATE-ENVELOPE-FRAME-BYTES
+
+: _RTAPT-GLYPH-RUN-OP?  ( kind -- flag )
+    DUP _RTAPT-OP-GLYPH-RUN-DEFINE =
+    SWAP _RTAPT-OP-GLYPH-RUN-REPLACE = OR ;
 
 \ One call-borrowed GLYPH-RUN plan describes one complete initial retained root.
 \ These are record shapes, never product capacities.
@@ -538,7 +543,7 @@ VARIABLE _RTAPT-BV-RAW-U
                 IF 0 UNLOOP EXIT THEN
             _RTAPT-REGION-DEFINE-FRAME-BYTES _RTAPT-BV-FRAME !
         ELSE
-            _RTAPT-BV-P @ _RTAPT-P.KIND @ _RTAPT-OP-GLYPH-RUN-DEFINE <>
+            _RTAPT-BV-P @ _RTAPT-P.KIND @ _RTAPT-GLYPH-RUN-OP? 0=
                 IF 0 UNLOOP EXIT THEN
             _RTAPT-BV-COPY-U @ _RTAPT-GLYPH-RUN-DEFINE-COPY-FIXED U<
                 IF 0 UNLOOP EXIT THEN
@@ -736,7 +741,16 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
     _RTAPT-LH-PENDING-HIGH @ _RTAPT-LH-HIGH @ U> ;
 
 : _RTAPT-OWNER-LEDGERS?  ( engine -- flag )
-    DUP _RTAPT-LV-E ! 0 _RTAPT-LV-PENDING !
+    _RTAPT-LV-E ! 0 _RTAPT-LV-PENDING !
+    \ Replacement operations consume transaction capacity but add no retained
+    \ identities.  Count those typed records directly; definition additions
+    \ remain cross-checked against their per-owner pending ledgers below.
+    _RTAPT-LV-E @ _RTAPT-E.OP-COUNT @ 0 ?DO
+        I _RTAPT-LV-E @ _RTAPT-OP-NTH _RTAPT-P.KIND @
+            _RTAPT-OP-GLYPH-RUN-REPLACE = IF
+            1 _RTAPT-LV-PENDING +!
+        THEN
+    LOOP
     _RTAPT-LV-E @ _RTAPT-E.OWNER-CAP @ 0 ?DO
         _RTAPT-LV-E @ _RTAPT-E.OWNERS-A @ I RTAPT-OWNER-SIZE * +
         DUP _RTAPT-LV-O ! _RTAPT-O.STATE @ RTAPT-OWNER-ST-FREE = IF
@@ -2026,6 +2040,26 @@ VARIABLE _RTAPT-LPF-AGG-SAMPLES
     THEN
     DUP _RTAPT-E.UPDATE-STATE @ SWAP _RTAPT-E.LAST-STATUS @ ;
 
+\ Return the immutable presentation tuple only while the caller-owned
+\ retained candidate is sealed.  This query exposes no capture storage and
+\ cannot advance, cancel, or publish the candidate.
+: RTAPT-SEALED-PRESENTATION@
+  ( engine -- retained-mode disposition status )
+    DUP _RTAPT-ENGINE-VALID? 0= IF
+        DROP 0 0 RTAPT-S-INVALID EXIT
+    THEN
+    DUP _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-SEALED <> IF
+        DROP 0 0 RTAPT-S-BUSY EXIT
+    THEN
+    DUP _RTAPT-E.RET-MODE @ SWAP _RTAPT-E.DISPOSITION @
+    OVER _RTAPT-MODE? 0= IF
+        2DROP 0 0 RTAPT-S-INVALID EXIT
+    THEN
+    2DUP _RTAPT-MODE-DISPOSITION? 0= IF
+        2DROP 0 0 RTAPT-S-INVALID EXIT
+    THEN
+    RTAPT-S-OK ;
+
 VARIABLE _RTAPT-RB-E
 VARIABLE _RTAPT-RB-MODE
 
@@ -2337,12 +2371,35 @@ VARIABLE _RTAPT-LU-U
     >R DUP _RTAPT-O.ACTIVE-UTF8 @ SWAP _RTAPT-O.HIDDEN-UTF8 @
     R> _RTAPT-TARGET-BASE ;
 
+VARIABLE _RTAPT-GT-OBJECT
+VARIABLE _RTAPT-GT-REGION
+VARIABLE _RTAPT-GT-O
+VARIABLE _RTAPT-GT-E
 
-\ The first GLYPH-RUN slice deliberately has no persistent typed identity ledger.
-\ A region high-water cannot prove existence because APT IDs may contain gaps,
-\ so a GLYPH-RUN may name only an exact REGION_DEFINE captured earlier in this
-\ candidate.  Root parenting is the only truthful parent form until GROUP and
-\ exact object-type identity are added together.
+\ Replacement is not an addition: it must name the already-selected active
+\ or hidden target.  The compact engine deliberately keeps aggregate ledgers,
+\ not a product-sized identity table.  Counts and global high-water marks can
+\ reject an impossible target here; the physical retained model remains the
+\ exact authority for sparse-ID existence and object kind.
+: _RTAPT-GLYPH-RUN-TARGET?  ( object region owner-record engine -- flag )
+    _RTAPT-GT-E ! _RTAPT-GT-O !
+    _RTAPT-GT-REGION ! _RTAPT-GT-OBJECT !
+    _RTAPT-GT-O @ _RTAPT-O.ACTIVE-OBJECTS @
+    _RTAPT-GT-O @ _RTAPT-O.HIDDEN-OBJECTS @
+    _RTAPT-GT-E @ _RTAPT-TARGET-BASE 0= IF 0 EXIT THEN
+    _RTAPT-GT-OBJECT @ _RTAPT-GT-O @ _RTAPT-O.OBJECT-HIGH @ U> IF
+        0 EXIT
+    THEN
+    _RTAPT-GT-O @ _RTAPT-O.ACTIVE-REGIONS @
+    _RTAPT-GT-O @ _RTAPT-O.HIDDEN-REGIONS @
+    _RTAPT-GT-E @ _RTAPT-TARGET-BASE 0= IF 0 EXIT THEN
+    _RTAPT-GT-REGION @ _RTAPT-GT-O @ _RTAPT-O.REGION-HIGH @ U> 0= ;
+
+
+\ Definitions name only an exact REGION_DEFINE captured earlier in this
+\ candidate.  A region high-water cannot prove sparse-ID existence.  Root
+\ parenting is the only truthful parent form until GROUP and exact object-type
+\ identity are added together.
 : _RTAPT-GLYPH-RUN-REGION-PENDING?  ( -- flag )
     _RTAPT-LD-E @ _RTAPT-E.OP-COUNT @ 0 ?DO
         I _RTAPT-LD-E @ _RTAPT-OP-NTH
@@ -2479,6 +2536,87 @@ VARIABLE _RTAPT-LU-U
     1 _RTAPT-LD-E @ _RTAPT-E.OP-COUNT +!
     RTAPT-S-OK DUP _RTAPT-LD-E @ _RTAPT-E.LAST-STATUS ! ;
 
+: _RTAPT-GLYPH-RUN-REPLACE-BODY  ( -- status )
+    _RTAPT-LD-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
+    \ The borrowed record is proved before discovery/state reads may mutate
+    \ engine-local snapshots.  Replacement uses the same neutral geometry,
+    \ style, text, retry-copy, and exact wire-byte rules as definition.
+    _RTAPT-GLYPH-RUN-FIELDS? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-GLYPH-RUN-TEXT-SPAN? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-LD-E @ _RTAPT-READY-STATUS DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    _RTAPT-LD-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-CAPTURING <>
+        IF RTAPT-S-BUSY EXIT THEN
+    _RTAPT-GLYPH-RUN-LIMITS DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    _RTAPT-LD-TEXT-A @ _RTAPT-LD-TEXT-U @ _RTAPT-GLYPH-RUN-UTF8? 0= IF
+        RTAPT-S-INVALID EXIT
+    THEN
+    _RTAPT-LD-OWNER @ _RTAPT-LD-GEN @ _RTAPT-LD-E @
+        _RTAPT-OWNER-FIND DUP 0= IF DROP RTAPT-S-INVALID EXIT THEN
+    DUP _RTAPT-LD-O ! _RTAPT-O.STATE @ RTAPT-OWNER-ST-OPEN <>
+        IF RTAPT-S-BUSY EXIT THEN
+    _RTAPT-LD-OBJECT @ _RTAPT-LD-REGION @
+    _RTAPT-LD-O @ _RTAPT-LD-E @ _RTAPT-GLYPH-RUN-TARGET? 0= IF
+        RTAPT-S-INVALID EXIT
+    THEN
+
+    _RTAPT-LD-E @ _RTAPT-E.OP-COUNT @ 0xFFFFFFFF U< 0=
+        IF RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-LD-E @ _RTAPT-E.OP-COUNT @
+        _RTAPT-LD-E @ _RTAPT-E.OP-CAP @ U< 0= IF RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-LD-TEXT-U @ _RTAPT-GLYPH-RUN-DEFINE-COPY-FIXED _RTAPT-UADD? 0= IF
+        DROP RTAPT-S-CAPACITY EXIT
+    THEN _RTAPT-ALIGN8? 0= IF DROP RTAPT-S-CAPACITY EXIT THEN
+    DUP _RTAPT-LD-COPY-U !
+    _RTAPT-LD-E @ _RTAPT-E.COPY-U @
+        _RTAPT-LD-E @ _RTAPT-E.COPY-USED @ - U> IF
+        RTAPT-S-CAPACITY EXIT
+    THEN
+    _RTAPT-LD-E @ _RTAPT-E.COPY-USED @ _RTAPT-LD-COPY-U @
+        _RTAPT-UADD? 0= IF DROP RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-LD-NEXT-COPY !
+    _RTAPT-LD-E @ _RTAPT-E.RET-BYTES @ _RTAPT-LD-TEXT-U @
+        _RTAPT-GLYPH-RUN-DEFINE-FRAME-FIXED _RTAPT-UADD? 0= IF
+        DROP RTAPT-S-CAPACITY EXIT
+    THEN _RTAPT-UADD? 0= IF DROP RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-LD-NEXT-RET !
+
+    _RTAPT-LD-E @ _RTAPT-E.OP-COUNT @ _RTAPT-LD-E @ _RTAPT-OP-NTH
+        _RTAPT-LD-P !
+    _RTAPT-LD-E @ _RTAPT-E.COPY-A @
+        _RTAPT-LD-E @ _RTAPT-E.COPY-USED @ + _RTAPT-LD-COPY !
+    _RTAPT-LD-COPY @ _RTAPT-LD-COPY-U @ 0 FILL
+    _RTAPT-OP-GLYPH-RUN-REPLACE _RTAPT-LD-P @ _RTAPT-P.KIND !
+    _RTAPT-LD-E @ _RTAPT-E.COPY-USED @
+        _RTAPT-LD-P @ _RTAPT-P.COPY-OFF !
+    _RTAPT-LD-COPY-U @ _RTAPT-LD-P @ _RTAPT-P.COPY-U !
+    _RTAPT-LD-OWNER @ _RTAPT-LD-COPY @ _RTAPT-LD.OWNER !
+    _RTAPT-LD-GEN @ _RTAPT-LD-COPY @ _RTAPT-LD.GENERATION !
+    _RTAPT-LD-OBJECT @ _RTAPT-LD-COPY @ _RTAPT-LD.OBJECT !
+    _RTAPT-LD-REGION @ _RTAPT-LD-COPY @ _RTAPT-LD.REGION !
+    _RTAPT-LD-PARENT @ _RTAPT-LD-COPY @ _RTAPT-LD.PARENT !
+    _RTAPT-LD-LEFT @ _RTAPT-LD-COPY @ _RTAPT-LD.LEFT !
+    _RTAPT-LD-TOP @ _RTAPT-LD-COPY @ _RTAPT-LD.TOP !
+    _RTAPT-LD-RIGHT @ _RTAPT-LD-COPY @ _RTAPT-LD.RIGHT !
+    _RTAPT-LD-BOTTOM @ _RTAPT-LD-COPY @ _RTAPT-LD.BOTTOM !
+    _RTAPT-LD-Z @ _RTAPT-LD-COPY @ _RTAPT-LD.Z !
+    _RTAPT-LD-VISIBLE @ IF 1 ELSE 0 THEN
+        _RTAPT-LD-COPY @ _RTAPT-LD.VISIBLE !
+    _RTAPT-LD-FG-RGBA @ _RTAPT-LD-COPY @ _RTAPT-LD.FG-RGBA !
+    _RTAPT-LD-BG-RGBA @ _RTAPT-LD-COPY @ _RTAPT-LD.BG-RGBA !
+    _RTAPT-LD-ATTRS @ _RTAPT-LD-COPY @ _RTAPT-LD.ATTRS !
+    _RTAPT-LD-TEXT-U @ _RTAPT-LD-COPY @ _RTAPT-LD.TEXT-U !
+    _RTAPT-LD-TEXT-U @ IF
+        _RTAPT-LD-TEXT-A @ _RTAPT-LD-COPY @ _RTAPT-LD.TEXT
+        _RTAPT-LD-TEXT-U @ MOVE
+    THEN
+    \ Replacement consumes operation/copy/wire capacity but does not add an
+    \ object or UTF-8 reservation.  The physical model validates exact sparse
+    \ identity and recomputes the candidate's actual UTF-8 usage atomically.
+    _RTAPT-LD-NEXT-COPY @ _RTAPT-LD-E @ _RTAPT-E.COPY-USED !
+    _RTAPT-LD-NEXT-RET @ _RTAPT-LD-E @ _RTAPT-E.RET-BYTES !
+    1 _RTAPT-LD-E @ _RTAPT-E.OP-COUNT +!
+    RTAPT-S-OK DUP _RTAPT-LD-E @ _RTAPT-E.LAST-STATUS ! ;
+
 : _RTAPT-GLYPH-RUN-SCRUB  ( -- )
     0 _RTAPT-LD-E ! 0 _RTAPT-LD-O ! 0 _RTAPT-LD-P ! 0 _RTAPT-LD-COPY !
     0 _RTAPT-LD-OWNER ! 0 _RTAPT-LD-GEN ! 0 _RTAPT-LD-OBJECT !
@@ -2513,6 +2651,23 @@ VARIABLE _RTAPT-LU-U
     _RTAPT-LD-REGION ! _RTAPT-LD-OBJECT ! _RTAPT-LD-GEN !
     _RTAPT-LD-OWNER !
     ['] _RTAPT-GLYPH-RUN-DEFINE-BODY CATCH ?DUP IF
+        DROP RTAPT-S-INVALID
+    THEN
+    _RTAPT-GLYPH-RUN-SCRUB ;
+
+: RTAPT-GLYPH-RUN-REPLACE
+    ( owner generation object region parent row col height width
+      root-height root-width z visible fg-rgba bg-rgba attrs
+      text-a text-u engine -- status )
+    _RTAPT-LD-E ! _RTAPT-LD-TEXT-U ! _RTAPT-LD-TEXT-A !
+    _RTAPT-LD-ATTRS ! _RTAPT-LD-BG-RGBA ! _RTAPT-LD-FG-RGBA !
+    _RTAPT-LD-VISIBLE ! _RTAPT-LD-Z !
+    _RTAPT-LD-ROOT-W ! _RTAPT-LD-ROOT-H !
+    _RTAPT-LD-WIDTH ! _RTAPT-LD-HEIGHT !
+    _RTAPT-LD-COL ! _RTAPT-LD-ROW ! _RTAPT-LD-PARENT !
+    _RTAPT-LD-REGION ! _RTAPT-LD-OBJECT ! _RTAPT-LD-GEN !
+    _RTAPT-LD-OWNER !
+    ['] _RTAPT-GLYPH-RUN-REPLACE-BODY CATCH ?DUP IF
         DROP RTAPT-S-INVALID
     THEN
     _RTAPT-GLYPH-RUN-SCRUB ;
@@ -2684,28 +2839,39 @@ VARIABLE _RTAPT-PRR-REGION
                     1 _RTAPT-PF-RCOUNT +!
                 ELSE
                     _RTAPT-PF-P @ _RTAPT-P.KIND @
-                        _RTAPT-OP-GLYPH-RUN-DEFINE <> IF
+                        _RTAPT-GLYPH-RUN-OP? 0= IF
                         0 UNLOOP UNLOOP EXIT
                     THEN
                     _RTAPT-PF-COPY @ _RTAPT-PF-P @ _RTAPT-P.COPY-U @
                         _RTAPT-GLYPH-RUN-COPY-SHAPE? 0= IF
                         0 UNLOOP UNLOOP EXIT
                     THEN
-                    I _RTAPT-PF-COPY @ _RTAPT-PF-E @
-                        _RTAPT-PRIOR-REGION? 0= IF
-                        0 UNLOOP UNLOOP EXIT
+                    _RTAPT-PF-P @ _RTAPT-P.KIND @
+                        _RTAPT-OP-GLYPH-RUN-DEFINE = IF
+                        I _RTAPT-PF-COPY @ _RTAPT-PF-E @
+                            _RTAPT-PRIOR-REGION? 0= IF
+                            0 UNLOOP UNLOOP EXIT
+                        THEN
+                        _RTAPT-PF-COPY @ _RTAPT-LD.OBJECT @
+                            _RTAPT-PF-OHIGH @ U> 0= IF
+                            0 UNLOOP UNLOOP EXIT
+                        THEN
+                        _RTAPT-PF-COPY @ _RTAPT-LD.OBJECT @
+                            _RTAPT-PF-OHIGH !
+                        _RTAPT-PF-UTF8 @
+                        _RTAPT-PF-COPY @ _RTAPT-LD.TEXT-U @
+                            _RTAPT-UADD? 0= IF
+                            DROP 0 UNLOOP UNLOOP EXIT
+                        THEN _RTAPT-PF-UTF8 !
+                        1 _RTAPT-PF-OCOUNT +!
+                    ELSE
+                        _RTAPT-PF-COPY @ _RTAPT-LD.OBJECT @
+                        _RTAPT-PF-COPY @ _RTAPT-LD.REGION @
+                        _RTAPT-PF-O @ _RTAPT-PF-E @
+                            _RTAPT-GLYPH-RUN-TARGET? 0= IF
+                            0 UNLOOP UNLOOP EXIT
+                        THEN
                     THEN
-                    _RTAPT-PF-COPY @ _RTAPT-LD.OBJECT @
-                        _RTAPT-PF-OHIGH @ U> 0= IF
-                        0 UNLOOP UNLOOP EXIT
-                    THEN
-                    _RTAPT-PF-COPY @ _RTAPT-LD.OBJECT @ _RTAPT-PF-OHIGH !
-                    _RTAPT-PF-UTF8 @
-                    _RTAPT-PF-COPY @ _RTAPT-LD.TEXT-U @
-                        _RTAPT-UADD? 0= IF
-                        DROP 0 UNLOOP UNLOOP EXIT
-                    THEN _RTAPT-PF-UTF8 !
-                    1 _RTAPT-PF-OCOUNT +!
                 THEN
                 1 _RTAPT-PF-TOTAL +!
             THEN
@@ -2891,6 +3057,7 @@ VARIABLE _RTAPT-CA-STATUS
 VARIABLE _RTAPT-CS-E
 VARIABLE _RTAPT-CS-P
 VARIABLE _RTAPT-CS-COPY
+VARIABLE _RTAPT-CS-REPLACE
 
 : _RTAPT-SEND-REGION  ( -- status )
     _RTAPT-CS-COPY @ _RTAPT-RD.OWNER @
@@ -2904,7 +3071,8 @@ VARIABLE _RTAPT-CS-COPY
     _RTAPT-CS-COPY @ _RTAPT-RD.FLAGS @
     _RTAPT-CS-E @ _RTAPT-E.SESSION @ PT-REGION-DEFINE _RTAPT-PT>STATUS ;
 
-: _RTAPT-SEND-GLYPH-RUN  ( -- status )
+: _RTAPT-SEND-GLYPH-RUN  ( replace? -- status )
+    _RTAPT-CS-REPLACE !
     _RTAPT-CS-COPY @ _RTAPT-LD.OWNER @
     _RTAPT-CS-COPY @ _RTAPT-LD.GENERATION @
     _RTAPT-CS-COPY @ _RTAPT-LD.OBJECT @
@@ -2930,7 +3098,12 @@ VARIABLE _RTAPT-CS-COPY
         _RTAPT-CS-COPY @ _RTAPT-LD.TEXT-U @
     ELSE 0 0 THEN
     _RTAPT-CS-E @ _RTAPT-E.SESSION @
-        PT-GLYPH-RUN-DEFINE _RTAPT-PT>STATUS ;
+    _RTAPT-CS-REPLACE @ IF
+        PT-GLYPH-RUN-REPLACE
+    ELSE
+        PT-GLYPH-RUN-DEFINE
+    THEN _RTAPT-PT>STATUS
+    0 _RTAPT-CS-REPLACE ! ;
 
 : _RTAPT-SEND-CAPTURED  ( op-record engine -- status )
     _RTAPT-CS-E ! DUP _RTAPT-CS-P !
@@ -2940,7 +3113,10 @@ VARIABLE _RTAPT-CS-COPY
         _RTAPT-SEND-REGION EXIT
     THEN
     _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-OP-GLYPH-RUN-DEFINE = IF
-        _RTAPT-SEND-GLYPH-RUN EXIT
+        0 _RTAPT-SEND-GLYPH-RUN EXIT
+    THEN
+    _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-OP-GLYPH-RUN-REPLACE = IF
+        -1 _RTAPT-SEND-GLYPH-RUN EXIT
     THEN
     RTAPT-S-INVALID ;
 
