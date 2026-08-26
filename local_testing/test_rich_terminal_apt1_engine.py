@@ -792,6 +792,9 @@ def test_initial_label_plan_preflight_is_exact_and_admission_mutation_free() -> 
         "_RTAPT-ALIGN8?",
     ):
         assert check in item
+    monotone = item.index("_RTAPT-LPF-LAST-OBJECT @ U>")
+    publish_high = item.index("_RTAPT-LPF-OBJECT @ _RTAPT-LPF-LAST-OBJECT !")
+    assert monotone < publish_high
 
     arithmetic = _definition(source, "_RTAPT-LPF-ARITHMETIC?")
     assert "_RTAPT-REGION-DEFINE-COPY-SIZE _RTAPT-LPF-COPY-BYTES !" in arithmetic
@@ -840,6 +843,11 @@ def test_initial_label_plan_preflight_is_exact_and_admission_mutation_free() -> 
     assert "RTAPT-OWNER-ST-TOMBSTONE-OPENING U> 0=" in owner_state
     assert "_RTAPT-LPF-OWNER-QUOTAS? 0=" in owner
     assert "_RTAPT-LPF-OWNER-QUOTAS-ZERO? 0=" in owner
+    object_admission = owner.index(
+        "_RTAPT-LPF-AGG-OBJECTS @ _RTAPT-LPF-LAST-OBJECT @"
+    )
+    object_limit = owner.index("_RTAPT-L.OBJECTS @ U>", object_admission)
+    assert "_RTAPT-LPF-COUNT @" not in owner[object_admission:object_limit]
 
     body = _definition(source, "_RTAPT-LABEL-PREFLIGHT-BODY")
     ordered_checks = (

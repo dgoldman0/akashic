@@ -199,6 +199,8 @@ VARIABLE _RTAPTE-LS-STATUS
     RTAPT-REGION-DEFINE _RTAPTE-STATUS>RTE ;
 
 : _RTAPTE-LABEL-PREFLIGHT  ( plan engine -- status )
+    \ Neutral validation admits sparse monotone object IDs.  Pass the plan
+    \ intact so RTAPT derives owner quota from the exact final ID, never count.
     RTAPT-LABEL-PREFLIGHT _RTAPTE-STATUS>RTE ;
 
 : _RTAPTE-LABEL-DEFINE  ( label engine -- status )

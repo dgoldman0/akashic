@@ -406,6 +406,10 @@ def test_label_plan_preflight_is_neutral_complete_and_mutation_free() -> None:
     assert "_RTE-LPV-PRIOR-OBJECT @ U>" in item
     assert "_RTE-LPI.PARENT @ IF" in item
     assert "_RTE-LPI.TEXT-CAPACITY @ 0<" in item
+    monotone = item.index("_RTE-LPV-PRIOR-OBJECT @ U>")
+    publish_high = item.index("_RTE-LPV-PRIOR-OBJECT !", monotone)
+    assert monotone < publish_high
+    assert "strictly increasing but may be sparse" in source
     geometry = _definition(source, "_RTE-LABEL-PLAN-ITEM-GEOMETRY?")
     assert geometry.count("_RTE-SADD?") == 2
     assert "_RTE-LP.REGION-ROWS @ <>" in geometry
@@ -426,6 +430,8 @@ def test_label_plan_preflight_is_neutral_complete_and_mutation_free() -> None:
     callback = _definition(bridge, "_RTAPTE-LABEL-PREFLIGHT")
     assert "RTAPT-LABEL-PREFLIGHT" in callback
     assert "_RTAPTE-STATUS>RTE" in callback
+    assert "_RTE-LP.ITEMS-U" not in callback
+    assert "RTE-LABEL-PLAN-ITEM-SIZE" not in callback
     assert re.search(r"(?<![A-Z])PT-", callback) is None
     for forbidden in ("OWNER-OPEN", "REGION-DEFINE", "LABEL-DEFINE"):
         assert forbidden not in callback

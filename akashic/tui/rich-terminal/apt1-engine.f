@@ -1545,7 +1545,9 @@ VARIABLE _RTAPT-BSD-E
 \ It borrows the plan and item span, but neither reserves an owner nor touches
 \ the operation/copy banks.  RTAPT-LIMITS@ may refresh only the engine's
 \ designated negotiated-limits scratch; ordinary structural loss retains the
-\ engine's existing quarantine semantics.
+\ engine's existing quarantine semantics.  The strictly monotone item walk
+\ leaves LAST-OBJECT as the exact prospective owner object high-water; COUNT
+\ remains the number of operations and must not substitute for that quota.
 
 VARIABLE _RTAPT-LPF-PLAN
 VARIABLE _RTAPT-LPF-E
@@ -1945,7 +1947,9 @@ VARIABLE _RTAPT-LPF-AGG-SAMPLES
     _RTAPT-LPF-LIMITS @ _RTAPT-L.REGIONS @ U> IF
         RTAPT-S-CAPACITY EXIT
     THEN
-    _RTAPT-LPF-AGG-OBJECTS @ _RTAPT-LPF-COUNT @
+    \ OWNER_OPEN receives the exact object high-water.  Sparse IDs therefore
+    \ reserve through the final sorted ID rather than only the number of items.
+    _RTAPT-LPF-AGG-OBJECTS @ _RTAPT-LPF-LAST-OBJECT @
         _RTAPT-UADD? 0= IF DROP RTAPT-S-CAPACITY EXIT THEN
     _RTAPT-LPF-LIMITS @ _RTAPT-L.OBJECTS @ U> IF
         RTAPT-S-CAPACITY EXIT
