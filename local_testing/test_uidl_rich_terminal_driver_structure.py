@@ -90,12 +90,12 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
     assert "96 CONSTANT RTERM-HOST-BINDING-SIZE" in source
     assert "32 CONSTANT RTERM-SURFACE-SNAPSHOT-SIZE" in source
     assert "104 CONSTANT RTERM-UIDL-CONFIG-SIZE" in source
-    assert "7 CONSTANT _RTERM-UIDL-ABI" in source
-    assert "6 CONSTANT _RTERM-UIDL-CONFIG-ABI" in source
+    assert "8 CONSTANT _RTERM-UIDL-ABI" in source
+    assert "7 CONSTANT _RTERM-UIDL-CONFIG-ABI" in source
     assert "64 CONSTANT _RTERM-CANDIDATE-META-SIZE" in source
     assert "32 CONSTANT _RTERM-IDENTITY-SIZE" in source
     assert "384 CONSTANT RTERM-UIDL-BINDING-SIZE" in source
-    assert "496 CONSTANT RTERM-UIDL-BACKEND-SIZE" in source
+    assert "512 CONSTANT RTERM-UIDL-BACKEND-SIZE" in source
     assert "_RGN-DESC-SIZE CONSTANT RGN-SIZE" in region
     assert "RTERM-SURFACE-SNAPSHOT-SIZE" in _definition(
         source, "RTERM-SURFACE-SNAPSHOT-BYTES"
@@ -182,6 +182,13 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
         "RTERM-UIDL-STORAGE-DISJOINT?": "( a u backend -- flag )",
         "RTERM-UIDL-STATUS@": "( backend -- status )",
         "RTERM-UIDL-ACTIVE@": "( backend -- count status )",
+        "RTERM-BACKEND-STEP": (
+            "( cols rows generation budget backend -- status more? "
+            "output-needed? )"
+        ),
+        "RTERM-BACKEND-PREPARE": (
+            "( cols rows generation backend -- status )"
+        ),
         "RTERM-HOST-BINDING-INIT": "( host-binding -- )",
         "RTERM-HOST-BINDING-VALID?": "( host-binding -- flag )",
         "RTERM-HOST-BINDING-CAPTURE": (
@@ -209,14 +216,14 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
         assert signature in _definition(source, name)
 
 
-def test_materializer_schema_is_persistent_neutral_and_initially_inert() -> None:
+def test_materializer_schema_is_persistent_neutral_and_lifecycle_validated() -> None:
     source = DRIVER.read_text(encoding="utf-8")
 
     for field, offset in {
         "_RTERM-B.LIMITS": 160,
         "_RTERM-B.EPOCH": 320,
         "_RTERM-B.MAT": 328,
-        "_RTERM-B.RESERVED": 488,
+        "_RTERM-B.RESERVED": 504,
     }.items():
         assert f"{offset} +" in _definition(source, field)
 
@@ -240,10 +247,12 @@ def test_materializer_schema_is_persistent_neutral_and_initially_inert() -> None
         "_RTERM-M.ROOT-H": 128,
         "_RTERM-M.ROOT-W": 136,
         "_RTERM-M.OBJECT-HIGH": 144,
-        "_RTERM-M.RESERVED": 152,
+        "_RTERM-M.REGION-X": 152,
+        "_RTERM-M.REGION-Y": 160,
+        "_RTERM-M.RESERVED": 168,
     }.items():
         assert f"{offset} +" in _definition(source, field)
-    assert "160 CONSTANT _RTERM-MAT-SIZE" in source
+    assert "176 CONSTANT _RTERM-MAT-SIZE" in source
 
     assert re.findall(
         r"(?m)^(\d+) CONSTANT (_RTERM-EPOCH-[A-Z-]+)$", source
@@ -287,15 +296,108 @@ def test_materializer_schema_is_persistent_neutral_and_initially_inert() -> None
     }.items():
         assert bound in _definition(source, validator)
     assert "1 CONSTANT _RTERM-MAT-F-STARTED" in source
-    assert "1 CONSTANT _RTERM-MAT-F-MASK" in source
+    assert "2 CONSTANT _RTERM-MAT-F-RESTART" in source
+    assert "3 CONSTANT _RTERM-MAT-F-MASK" in source
 
-    mat_inert = _definition(source, "_RTERM-MAT-INERT?")
-    mat_phase_valid = mat_inert.index("_RTERM-MAT-PHASE-VALID?")
-    mat_idle = mat_inert.index("_RTERM-MAT-PHASE-IDLE <>", mat_phase_valid)
-    mat_zero = mat_inert.index("_RTERM-MAT-SIZE _RTERM-ZERO?", mat_idle)
-    assert mat_phase_valid < mat_idle < mat_zero
+    mat_valid = _definition(source, "_RTERM-MAT-VALID?")
+    assert "_RTERM-MAT-PHASE-VALID?" in mat_valid
+    assert "_RTERM-MAT-F-MASK INVERT AND" in mat_valid
+    assert "_RTERM-MAT-PHASE-IDLE = IF" in mat_valid
+    assert "_RTERM-MAT-SIZE _RTERM-ZERO?" in mat_valid
+    assert "_RTERM-MAT-PHASE-COHORT = IF" in mat_valid
+    for phase_shape in (
+        ("DUP _RTERM-MAT-PHASE-COHORT = IF", "_RTERM-MAT-COHORT-SCALARS?"),
+        ("DUP _RTERM-MAT-PHASE-OPENING =", "_RTERM-MAT-ACTIVE-SCALARS?"),
+        ("OVER _RTERM-MAT-PHASE-OPEN = OR IF", "_RTERM-MAT-ACTIVE-SCALARS?"),
+        (
+            "DUP _RTERM-MAT-PHASE-HIDDEN-SEALED =",
+            "_RTERM-MAT-HIDDEN-SCALARS?",
+        ),
+        (
+            "OVER _RTERM-MAT-PHASE-HIDDEN-AWAITING = OR IF",
+            "_RTERM-MAT-HIDDEN-SCALARS?",
+        ),
+        (
+            "DUP _RTERM-MAT-PHASE-REVEAL-SEALED =",
+            "_RTERM-MAT-REVEAL-SCALARS?",
+        ),
+        (
+            "OVER _RTERM-MAT-PHASE-REVEAL-AWAITING = OR IF",
+            "_RTERM-MAT-REVEAL-SCALARS?",
+        ),
+        (
+            "DUP _RTERM-MAT-PHASE-DROP-PENDING =",
+            "_RTERM-MAT-DROP-SCALARS?",
+        ),
+        (
+            "SWAP _RTERM-MAT-PHASE-DROPPING = OR IF",
+            "_RTERM-MAT-DROP-SCALARS?",
+        ),
+    ):
+        phase_pattern, shape = phase_shape
+        phase_at = mat_valid.index(phase_pattern)
+        assert mat_valid.index(shape, phase_at) > phase_at
+    assert "_RTERM-MAT-QUARANTINED?" in mat_valid
 
-    record_inert = _definition(source, "_RTERM-RECORD-MATERIALIZATION-INERT?")
+    active_scalars = _definition(source, "_RTERM-MAT-ACTIVE-SCALARS?")
+    for field in (
+        "TOKEN",
+        "RECORD-INDEX",
+        "SELECTOR",
+        "CANDIDATE-GEN",
+        "OWNER",
+        "OWNER-GEN",
+        "ITEMS",
+        "SNAPSHOTS",
+        "REGIONS",
+        "OBJECTS",
+        "UTF8",
+        "ROOT-H",
+        "ROOT-W",
+        "OBJECT-HIGH",
+        "REGION-X",
+        "REGION-Y",
+    ):
+        assert f"_RTERM-M.{field}" in active_scalars
+    assert "_RTERM-M.SNAPSHOTS @ 7 AND" in active_scalars
+    assert active_scalars.count("_RTERM-LENGTH-MAX U>") == 3
+    assert active_scalars.count("_RTERM-UADD?") == 2
+
+    hidden_scalars = _definition(source, "_RTERM-MAT-HIDDEN-SCALARS?")
+    for field in (
+        "TOKEN",
+        "RECORD-INDEX",
+        "SELECTOR",
+        "CANDIDATE-GEN",
+        "OWNER",
+        "OWNER-GEN",
+    ):
+        assert f"_RTERM-M.{field}" in hidden_scalars
+    assert "_RTERM-M.ITEMS 80 _RTERM-ZERO?" in hidden_scalars
+
+    drop_scalars = _definition(source, "_RTERM-MAT-DROP-SCALARS?")
+    for field in ("TOKEN", "RECORD-INDEX", "OWNER", "OWNER-GEN"):
+        assert f"_RTERM-M.{field}" in drop_scalars
+    assert "_RTERM-M.SELECTOR 16 _RTERM-ZERO?" in drop_scalars
+    assert "_RTERM-M.ITEMS 80 _RTERM-ZERO?" in drop_scalars
+
+    cohort_scalars = _definition(source, "_RTERM-MAT-COHORT-SCALARS?")
+    assert "_RTERM-M.TOKEN @ IF" in cohort_scalars
+    assert "_RTERM-M.RECORD-INDEX @ 0<" in cohort_scalars
+    assert "_RTERM-M.SELECTOR 112 _RTERM-ZERO?" in cohort_scalars
+
+    reveal_scalars = _definition(source, "_RTERM-MAT-REVEAL-SCALARS?")
+    assert "_RTERM-MAT-F-STARTED <>" in reveal_scalars
+    assert "_RTERM-M.TOKEN @ IF" in reveal_scalars
+    assert "_RTERM-B.CAPACITY @ <>" in reveal_scalars
+    assert "_RTERM-M.SELECTOR 112 _RTERM-ZERO?" in reveal_scalars
+    assert "8 + 168 _RTERM-ZERO?" in _definition(
+        source, "_RTERM-MAT-QUARANTINED?"
+    )
+
+    record_validated = _definition(
+        source, "_RTERM-RECORD-MATERIALIZATION-VALID?"
+    )
     for field in (
         "_RTERM-R.MAT-STATE",
         "_RTERM-R.STAGED-GEN",
@@ -303,21 +405,23 @@ def test_materializer_schema_is_persistent_neutral_and_initially_inert() -> None
         "_RTERM-R.MATERIALIZED-SURFACE-GEN",
         "_RTERM-R.RESERVED",
     ):
-        assert field in record_inert
-    record_state_valid = record_inert.index("_RTERM-MAT-ST-VALID?")
-    record_none = record_inert.index("_RTERM-MAT-ST-NONE <>", record_state_valid)
-    assert record_state_valid < record_none
-    for field in (
-        "_RTERM-R.STAGED-GEN",
-        "_RTERM-R.MATERIALIZED-GEN",
-        "_RTERM-R.MATERIALIZED-SURFACE-GEN",
-        "_RTERM-R.RESERVED",
+        assert field in record_validated
+    for state in (
+        "NONE",
+        "OPENING",
+        "OPEN",
+        "STAGED",
+        "LIVE",
+        "DROP-PENDING",
+        "DROPPING",
+        "QUARANTINED",
     ):
-        assert f"{field} @ 0=" in record_inert
+        assert f"_RTERM-MAT-ST-{state}" in record_validated
+    assert "_RTERM-RECORD-GENERATIONS-VALID?" in record_validated
 
     record_live = _definition(source, "_RTERM-RECORD-LIVE?")
     materialization = record_live.index(
-        "_RTERM-RECORD-MATERIALIZATION-INERT?"
+        "_RTERM-RECORD-MATERIALIZATION-VALID?"
     )
     candidates = record_live.index("_RTERM-RECORD-CANDIDATES-VALID?")
     eligibility = record_live.index("_RTERM-RECORD-ELIGIBILITY-VALID?")
@@ -325,34 +429,81 @@ def test_materializer_schema_is_persistent_neutral_and_initially_inert() -> None
     record_valid = _definition(source, "_RTERM-RECORD-VALID?")
     assert "RTERM-UIDL-BINDING-SIZE\n            _RTERM-ZERO?" in record_valid
 
-    backend_inert = _definition(source, "_RTERM-BACKEND-MATERIALIZATION-INERT?")
-    epoch_valid = backend_inert.index("_RTERM-EPOCH-VALID?")
-    epoch_cold = backend_inert.index("_RTERM-EPOCH-COLD <>", epoch_valid)
-    backend_mat = backend_inert.index("_RTERM-B.MAT _RTERM-MAT-INERT?", epoch_cold)
-    backend_reserved = backend_inert.index("_RTERM-B.RESERVED @ 0=", backend_mat)
-    assert epoch_valid < epoch_cold < backend_mat < backend_reserved
+    backend_validated = _definition(
+        source, "_RTERM-BACKEND-MATERIALIZATION-VALID?"
+    )
+    assert "_RTERM-EPOCH-VALID?" in backend_validated
+    assert "_RTERM-EPOCH-COLD = IF" in backend_validated
+    assert "_RTERM-EPOCH-REBUILD <> IF" in backend_validated
+    assert backend_validated.count("_RTERM-MAT-VALID?") == 4
+    correlation = _definition(source, "_RTERM-MAT-CORRELATION?")
+    for field in (
+        "TOKEN",
+        "OWNER",
+        "OWNER-GEN",
+        "ROOT-REGION",
+        "COL",
+        "ROW",
+        "HEIGHT",
+        "WIDTH",
+    ):
+        assert f"_RTERM-R.{field}" in correlation
     valid = _definition(source, "_RTERM-UIDL-VALID-BODY?")
-    backend_gate = valid.index("_RTERM-BACKEND-MATERIALIZATION-INERT?")
+    backend_gate = valid.index("_RTERM-BACKEND-MATERIALIZATION-VALID?")
     geometry = valid.index("_RTERM-UIDL-GEOMETRY?", backend_gate)
-    attempt_zero = valid.index("_RTERM-ATTEMPT-BANK-ZERO?", geometry)
-    record_loop = valid.index("_RTERM-B.CAPACITY @ 0 ?DO", attempt_zero)
-    assert backend_gate < geometry < attempt_zero < record_loop
+    phase = valid.index("_RTERM-B.MAT _RTERM-M.PHASE @", geometry)
+    deep_attempt = valid.index("_RTERM-MAT-ATTEMPT-DEEP?", phase)
+    attempt = valid.index("_RTERM-ATTEMPT-BANK-ZERO?", deep_attempt)
+    record_loop = valid.index("_RTERM-B.CAPACITY @ 0 ?DO", attempt)
+    final_correlation = valid.index("_RTERM-MAT-CORRELATION?", record_loop)
+    assert (
+        backend_gate
+        < geometry
+        < phase
+        < deep_attempt
+        < attempt
+        < record_loop
+        < final_correlation
+    )
+    assert "_RTERM-MAT-PHASE-OPENING =" in valid[phase:deep_attempt]
+    assert "_RTERM-MAT-PHASE-OPEN = OR" in valid[phase:deep_attempt]
 
-    code = _code_without_comments(source)
-    new_state_fields = (
-        "_RTERM-R.MAT-STATE",
-        "_RTERM-R.STAGED-GEN",
-        "_RTERM-R.MATERIALIZED-GEN",
-        "_RTERM-R.MATERIALIZED-SURFACE-GEN",
-        "_RTERM-R.RESERVED",
-        "_RTERM-B.EPOCH",
-        "_RTERM-B.RESERVED",
+    deep = _definition(source, "_RTERM-MAT-ATTEMPT-DEEP?")
+    attempt_load = deep.index("_RTERM-ATTEMPT-BANK-LOAD")
+    candidate_deep = deep.index("RUPJ-CANDIDATE-VALID?", attempt_load)
+    identity_deep = deep.index("_RTERM-IDENTITY-BANK-VALID?", candidate_deep)
+    exact_max = deep.index("_RTERM-MAT-ATTEMPT-MAX?", identity_deep)
+    assert attempt_load < candidate_deep < identity_deep < exact_max
+    for field in (
+        "ITEMS",
+        "SNAPSHOTS",
+        "REGIONS",
+        "OBJECTS",
+        "UTF8",
+        "ROOT-H",
+        "ROOT-W",
+        "OBJECT-HIGH",
+    ):
+        assert f"_RTERM-M.{field} @" in deep
+    attempt_max = _definition(source, "_RTERM-MAT-ATTEMPT-MAX?")
+    assert "_RTERM-X.OBJECT @" in attempt_max
+    assert "_RTERM-MV-OBJECT-MAX @ U>" in attempt_max
+    assert "_RTERM-M.OBJECT-HIGH @ =" in attempt_max
+
+    start = _definition(source, "_RTERM-MS-START-EPOCH")
+    assert start.index("_RTERM-MAT-PHASE-COHORT") < start.index(
+        "_RTERM-EPOCH-REBUILD"
     )
-    new_state_fields += tuple(
-        re.findall(r"(?m)^:\s+(_RTERM-M\.[A-Z-]+)(?=\s)", code)
+    opening = _definition(source, "_RTERM-MS-PUBLISH-OPENING")
+    assert opening.index("_RTERM-MAT-ST-OPENING") < opening.index(
+        "_RTERM-MAT-PHASE-OPENING"
     )
-    for field in new_state_fields:
-        assert not re.search(rf"{re.escape(field)}\s+(?:!|\+!)", code)
+    staged = _definition(source, "_RTERM-MS-STAGE-HIDDEN")
+    assert staged.index("_RTERM-R.STAGED-GEN !") < staged.index(
+        "_RTERM-MAT-ST-STAGED"
+    )
+    assert "_RTERM-MAT-F-STARTED OR" in staged
+    assert "0 _RTERM-MS-CLEAR-ASSOCIATION" in staged
 
 
 def test_public_scratch_entries_catch_bodies_then_scrub_every_borrowed_cell() -> None:
@@ -385,6 +536,14 @@ def test_public_scratch_entries_catch_bodies_then_scrub_every_borrowed_cell() ->
         "RTERM-UIDL-ACTIVE@": (
             "_RTERM-P-DO-UIDL-ACTIVE",
             "_RTERM-UIDL-ACTIVE-BODY@",
+        ),
+        "RTERM-BACKEND-STEP": (
+            "_RTERM-P-DO-BACKEND-STEP",
+            "_RTERM-BACKEND-STEP-BODY",
+        ),
+        "RTERM-BACKEND-PREPARE": (
+            "_RTERM-P-DO-BACKEND-PREPARE",
+            "_RTERM-BACKEND-PREPARE-BODY",
         ),
         "RTERM-HOST-BINDING-VALID?": (
             "_RTERM-P-DO-HB-VALID",
@@ -423,6 +582,16 @@ def test_public_scratch_entries_catch_bodies_then_scrub_every_borrowed_cell() ->
             "_RTERM-UIDL-INSTALL-BODY",
         ),
     }
+    nested_recovery = {
+        "RTERM-BACKEND-STEP": (
+            "_RTERM-P-DO-BACKEND-STEP-RECOVER",
+            "_RTERM-MS-QUARANTINE",
+        ),
+        "RTERM-BACKEND-PREPARE": (
+            "_RTERM-P-DO-BACKEND-PREPARE-RECOVER",
+            "_RTERM-MS-CAPTURE-RECOVER",
+        ),
+    }
 
     public_words = re.findall(r"(?m)^:\s+(RTERM-[^\s]+)(?=\s)", source)
     scrubbed_public = {
@@ -431,16 +600,30 @@ def test_public_scratch_entries_catch_bodies_then_scrub_every_borrowed_cell() ->
         if "_RTERM-SCRUB-BORROWED" in _definition(source, name)
     }
     assert scrubbed_public == set(wrappers)
-    assert set(re.findall(r"(?m)^:\s+(_RTERM-P-DO-[^\s]+)", source)) == {
-        do_name for do_name, _ in wrappers.values()
-    }
+    expected_do_words = {do_name for do_name, _ in wrappers.values()}
+    expected_do_words.update(
+        recovery_name for recovery_name, _ in nested_recovery.values()
+    )
+    assert set(re.findall(r"(?m)^:\s+(_RTERM-P-DO-[^\s]+)", source)) == (
+        expected_do_words
+    )
 
     for public_name, (do_name, body_name) in wrappers.items():
         wrapper = _definition(source, public_name)
         caught = wrapper.index(f"['] {do_name} CATCH")
-        scrubbed = wrapper.index("_RTERM-SCRUB-BORROWED")
-        assert caught < scrubbed
-        assert wrapper.count("CATCH") == 1
+        if public_name in nested_recovery:
+            recovery_name, _ = nested_recovery[public_name]
+            recovered = wrapper.index(f"['] {recovery_name} CATCH", caught)
+            scrubbed = wrapper.index("_RTERM-SCRUB-BORROWED", recovered)
+            assert caught < recovered < scrubbed
+            assert wrapper.count("CATCH") == 2
+            assert "RTERM-S-INVALID 0 0" in wrapper[recovered:] or (
+                "RTERM-S-INVALID" in wrapper[recovered:]
+            )
+        else:
+            scrubbed = wrapper.index("_RTERM-SCRUB-BORROWED", caught)
+            assert caught < scrubbed
+            assert wrapper.count("CATCH") == 1
         assert wrapper.count("_RTERM-SCRUB-BORROWED") == 1
         assert body_name not in wrapper
 
@@ -448,6 +631,74 @@ def test_public_scratch_entries_catch_bodies_then_scrub_every_borrowed_cell() ->
         assert do_definition.count(body_name) == 1
         assert "CATCH" not in do_definition
         assert "_RTERM-SCRUB-BORROWED" not in do_definition
+
+    step_recovery = _definition(
+        source, "_RTERM-P-DO-BACKEND-STEP-RECOVER"
+    )
+    envelope = step_recovery.index("_RTERM-UIDL-RECOVERY-STORAGE?")
+    backend = step_recovery.index("_RTERM-MS-BACKEND !", envelope)
+    quarantine = step_recovery.index("_RTERM-MS-QUARANTINE", backend)
+    assert envelope < backend < quarantine
+    assert "RTERM-S-INVALID 0 0 EXIT" in step_recovery
+    assert "_RTERM-UIDL-VALID-BODY?" not in step_recovery
+
+    recovery_storage = _definition(source, "_RTERM-UIDL-RECOVERY-STORAGE?")
+    span = recovery_storage.index("RTERM-UIDL-BACKEND-SIZE _RTERM-SPAN?")
+    magic = recovery_storage.index("_RTERM-B.MAGIC @", span)
+    abi = recovery_storage.index("_RTERM-B.ABI @", magic)
+    size = recovery_storage.index("_RTERM-B.SIZE @", abi)
+    self_pointer = recovery_storage.index("_RTERM-B.SELF @", size)
+    reserved = recovery_storage.index("_RTERM-B.RESERVED @", self_pointer)
+    geometry = recovery_storage.index("_RTERM-UIDL-GEOMETRY?", reserved)
+    ranges = recovery_storage.index("_RTERM-BACKEND-RANGES?", geometry)
+    assert span < magic < abi < size < self_pointer < reserved < geometry < ranges
+    for field, scratch in (
+        ("HOST", "HOST"),
+        ("ENGINE", "ENGINE"),
+        ("RECORDS-A", "RECORDS-A"),
+        ("RECORDS-U", "RECORDS-U"),
+        ("ITEMS-A", "ITEMS-A"),
+        ("ITEMS-PER-BANK", "ITEMS-PER-BANK"),
+        ("IDENTITIES-A", "IDENTITIES-A"),
+        ("SNAPSHOTS-A", "SNAPSHOTS-A"),
+        ("SNAPSHOT-BANK-U", "SNAPSHOT-BANK-U"),
+    ):
+        assert f"_RTERM-B.{field} @ _RTERM-I-{scratch} !" in recovery_storage
+    for derived, stored in (
+        ("CAPACITY", "CAPACITY"),
+        ("ITEMS-U", "ITEMS-U"),
+        ("IDENTITIES-U", "IDENTITIES-U"),
+        ("SNAPSHOTS-U", "SNAPSHOTS-U"),
+    ):
+        assert f"_RTERM-I-{derived} @ OVER _RTERM-B.{stored} @" in recovery_storage
+    for semantic_state in (
+        "_RTERM-B.STATUS",
+        "_RTERM-B.INSTALLED",
+        "_RTERM-B.ACTIVE",
+        "_RTERM-B.EPOCH",
+        "_RTERM-B.MAT",
+        "_RTERM-UIDL-VALID-BODY?",
+        "_RTERM-BACKEND-MATERIALIZATION-VALID?",
+        "_RTERM-RECORD-VALID?",
+        "_RTERM-MAT-CORRELATION?",
+        "_RTERM-ATTEMPT-BANK",
+    ):
+        assert semantic_state not in recovery_storage
+    assert not re.search(r"_RTERM-B\.[A-Z-]+\s+!", recovery_storage)
+
+    prepare_recovery = _definition(
+        source, "_RTERM-P-DO-BACKEND-PREPARE-RECOVER"
+    )
+    assert prepare_recovery.index("_RTERM-MS-BACKEND !") < (
+        prepare_recovery.index("_RTERM-MS-CAPTURE-RECOVER")
+    )
+    prepare_public = _definition(source, "RTERM-BACKEND-PREPARE")
+    second_catch = prepare_public.index(
+        "['] _RTERM-P-DO-BACKEND-PREPARE-RECOVER CATCH"
+    )
+    finish = prepare_public.index("_RTERM-MS-PREPARE-FINISH", second_catch)
+    scrub = prepare_public.index("_RTERM-SCRUB-BORROWED", finish)
+    assert second_catch < finish < scrub
 
     variables = re.findall(r"(?m)^VARIABLE\s+(_RTERM-[^\s]+)", source)
     assert len(variables) == len(set(variables))
@@ -526,6 +777,8 @@ def test_materialization_preflight_freezes_validates_maps_and_cleans() -> None:
     plan = _definition(source, "_RTERM-MP-PLAN-BUILD?")
     body = _definition(source, "_RTERM-UCTX-MATERIALIZATION-PREFLIGHT-BODY")
     clean = _definition(source, "_RTERM-MP-CLEAN-STORAGE")
+    clean_attempt = _definition(source, "_RTERM-MP-CLEAN-ATTEMPT")
+    clean_plan = _definition(source, "_RTERM-MP-CLEAN-PLAN")
     finish = _definition(source, "_RTERM-MP-FINISH")
     wrapper = _definition(source, "RTERM-UCTX-MATERIALIZATION-PREFLIGHT")
 
@@ -536,13 +789,15 @@ def test_materialization_preflight_freezes_validates_maps_and_cleans() -> None:
         "_RTERM-UIDL-VALID-BODY?",
         "RTERM-SURFACE-SNAPSHOT-VALID?",
         "_RTERM-UIDL-STORAGE-DISJOINT-BODY?",
-        "_RTERM-MP-CAN-SCRUB !",
         "_RTERM-CALL-LOOKUP",
         "_RTERM-R.STATE @",
         "_RTERM-CALL-LIVE?",
         "_RTERM-R.VISIBLE @",
         "_RTERM-R.ELIGIBLE @",
+        "_RTERM-R.MAT-STATE @",
+        "_RTERM-B.MAT _RTERM-M.PHASE @",
         "_RTERM-RECORD-INDEX?",
+        "_RTERM-MP-CAN-SCRUB !",
         "_RTERM-MP-LOAD-SELECTED?",
         "_RTERM-MP-FREEZE?",
         "_RTERM-MP-FROZEN-VALID?",
@@ -552,6 +807,11 @@ def test_materialization_preflight_freezes_validates_maps_and_cleans() -> None:
     positions = [body.index(token) for token in ordered_checks]
     assert positions == sorted(positions)
     assert body.count("RTE-LABEL-PREFLIGHT") == 1
+    grant = body.index("_RTERM-MP-CAN-SCRUB !")
+    assert "RTERM-S-WOULD-BLOCK EXIT" in body[:grant]
+    assert "_RTERM-MAT-ST-NONE <>" in body[:grant]
+    assert "_RTERM-MAT-PHASE-IDLE =" in body[:grant]
+    assert "_RTERM-MAT-PHASE-COHORT = OR" in body[:grant]
 
     for meta_field, frozen_cell in (
         ("GENERATION", "_RTERM-MP-GENERATION"),
@@ -650,8 +910,10 @@ def test_materialization_preflight_freezes_validates_maps_and_cleans() -> None:
     )
 
     for mapping in (
-        "_RTERM-S.COLS @\n        _RTERM-MP-PLAN @ _RTE-LP.SURFACE-COLS !",
-        "_RTERM-S.ROWS @\n        _RTERM-MP-PLAN @ _RTE-LP.SURFACE-ROWS !",
+        "_RTERM-MP-SURFACE-COLS @\n"
+        "        _RTERM-MP-PLAN @ _RTE-LP.SURFACE-COLS !",
+        "_RTERM-MP-SURFACE-ROWS @\n"
+        "        _RTERM-MP-PLAN @ _RTE-LP.SURFACE-ROWS !",
         "_RTERM-R.COL @\n        _RTERM-MP-PLAN @ _RTE-LP.REGION-X !",
         "_RTERM-R.ROW @\n        _RTERM-MP-PLAN @ _RTE-LP.REGION-Y !",
         "_RTERM-R.ROOT-REGION @\n        _RTERM-MP-PLAN @ _RTE-LP.REGION-ID !",
@@ -670,15 +932,23 @@ def test_materialization_preflight_freezes_validates_maps_and_cleans() -> None:
 
     # Every temporary payload is scrubbed before status diagnostics are
     # published; the public wrapper then clears its generic borrowed cells.
-    assert clean.count("0 FILL") == 5
+    assert "_RTERM-MP-CLEAN-ATTEMPT" in clean
+    assert "_RTERM-MP-CLEAN-PLAN" in clean
+    assert "_RTERM-MP-CAN-SCRUB @ 0= IF EXIT" in clean_attempt
+    assert "_RTERM-MP-CAN-SCRUB @ 0= IF EXIT" in clean_plan
+    assert clean_attempt.count("0 FILL") == 3
+    assert clean_plan.count("0 FILL") == 2
     for extent in (
         "_RTERM-BK-ITEM-A @ _RTERM-BK-ITEM-U @ 0 FILL",
         "_RTERM-BK-IDENTITY-A @ _RTERM-BK-IDENTITY-U @ 0 FILL",
         "_RTERM-BK-SNAPSHOT-A @ _RTERM-BK-SNAPSHOT-U @ 0 FILL",
+    ):
+        assert extent in clean_attempt
+    for extent in (
         "_RTERM-I-ITEM-BANK-U @ 0 FILL",
         "_RTERM-B.LIMITS RTE-LIMITS-SIZE 0 FILL",
     ):
-        assert extent in clean
+        assert extent in clean_plan
     cleaned = finish.index("_RTERM-MP-CLEAN-STORAGE")
     record_status = finish.index("_RTERM-R.LAST-STATUS !", cleaned)
     sticky_status = finish.index("_RTERM-NOTE", record_status)
@@ -715,6 +985,384 @@ def test_materialization_preflight_freezes_validates_maps_and_cleans() -> None:
         assert forbidden not in preflight_section
     assert "_RTERM-B.ATTEMPT" not in code
     assert "_RTERM-R.ATTEMPT" not in code
+
+
+def test_materializer_persists_admission_and_drops_before_mutation() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+    admit = _definition(source, "_RTERM-MS-ADMIT")
+    owner_open = _definition(source, "_RTERM-MS-OWNER-OPEN")
+    publish = _definition(source, "_RTERM-MS-PUBLISH-OPENING")
+    opening = _definition(source, "_RTERM-MS-OPENING-STEP")
+    open_step = _definition(source, "_RTERM-MS-OPEN-STEP")
+    associate_drop = _definition(source, "_RTERM-MS-ASSOCIATE-DROP")
+    publish_drop = _definition(source, "_RTERM-MS-PUBLISH-DROP-PENDING")
+    drop_pending = _definition(source, "_RTERM-MS-DROP-PENDING-STEP")
+    owner_drop = _definition(source, "_RTERM-MS-OWNER-DROP-CALL")
+    dropping = _definition(source, "_RTERM-MS-DROPPING-STEP")
+    settled = _definition(source, "_RTERM-MS-DROP-SETTLED")
+    cohort = _definition(source, "_RTERM-MS-COHORT-STEP")
+
+    # The exact OPENING tuple is durable before the sole mutating admission
+    # call.  A throw records restart uncertainty but retains the frozen
+    # attempt; deterministic refusal alone rolls the association back.
+    preflight = admit.index("_RTERM-MS-ADMISSION-PREFLIGHT-CALL")
+    published = admit.index("_RTERM-MS-PUBLISH-OPENING", preflight)
+    opened = admit.index("['] _RTERM-MS-OWNER-OPEN-CALL CATCH", published)
+    restart = admit.index("_RTERM-MAT-F-RESTART OR", opened)
+    clean_plan = admit.index("_RTERM-MP-CLEAN-PLAN", restart)
+    rollback = admit.index("_RTERM-MS-ROLLBACK-OPENING", clean_plan)
+    assert preflight < published < opened < restart < clean_plan < rollback
+    assert "_RTERM-MP-CLEAN-ATTEMPT" not in admit[published:clean_plan]
+    assert "_RTERM-MP-PRIOR-OBJECT @" in owner_open
+    assert "_RTERM-MP-COUNT @" not in owner_open
+    assert "1 0" in owner_open
+    assert "0 0 _RTERM-MP-CANDIDATE-UTF8 @ 0" in owner_open
+
+    stores = [
+        publish.index(f"_RTERM-M.{field} !")
+        for field in (
+            "TOKEN",
+            "RECORD-INDEX",
+            "SELECTOR",
+            "CANDIDATE-GEN",
+            "OWNER",
+            "OWNER-GEN",
+            "ITEMS",
+            "SNAPSHOTS",
+            "REGIONS",
+            "OBJECTS",
+            "UTF8",
+            "ROOT-H",
+            "ROOT-W",
+            "OBJECT-HIGH",
+            "REGION-X",
+            "REGION-Y",
+        )
+    ]
+    binding_opening = publish.index("_RTERM-R.MAT-STATE !", max(stores))
+    global_opening = publish.index("_RTERM-M.PHASE !", binding_opening)
+    assert stores == sorted(stores)
+    assert max(stores) < binding_opening < global_opening
+
+    surface_restart = opening.index("_RTERM-MS-SURFACE=? 0=")
+    queried = opening.index("RTE-OWNER-STATE@", surface_restart)
+    binding_open = opening.index("_RTERM-MAT-ST-OPEN", queried)
+    phase_open = opening.index("_RTERM-MAT-PHASE-OPEN", binding_open)
+    retire = opening.index("_RTERM-MS-BEGIN-RESTART-DROP", phase_open)
+    assert surface_restart < queried < binding_open < phase_open < retire
+    assert "_RTERM-MS-REQUEST-RESTART" in opening[:queried]
+    assert "_RTERM-MS-SURFACE=? 0= IF _RTERM-MS-REQUEST-RESTART" in open_step
+    assert "_RTERM-MS-BEGIN-RESTART-DROP" in open_step
+
+    # Staged/live owners first become a pointer-free DROP-PENDING tuple.
+    cleared = associate_drop.index("_RTERM-M.TOKEN 128 0 FILL")
+    copied = [
+        associate_drop.index(f"_RTERM-M.{field} !", cleared)
+        for field in ("TOKEN", "RECORD-INDEX", "OWNER", "OWNER-GEN")
+    ]
+    record_pending = associate_drop.index("_RTERM-MAT-ST-DROP-PENDING")
+    phase_pending = associate_drop.index(
+        "_RTERM-MAT-PHASE-DROP-PENDING", record_pending
+    )
+    assert cleared < min(copied) <= max(copied) < record_pending < phase_pending
+    assert "RTE-OWNER-DROP" not in associate_drop
+
+    attempt_clean = publish_drop.index("_RTERM-MS-CLEAN-ATTEMPT")
+    selector_zero = publish_drop.index("_RTERM-M.SELECTOR 16 0 FILL")
+    payload_zero = publish_drop.index("_RTERM-M.ITEMS 80 0 FILL")
+    record_pending = publish_drop.index("_RTERM-MAT-ST-DROP-PENDING")
+    phase_pending = publish_drop.index(
+        "_RTERM-MAT-PHASE-DROP-PENDING", record_pending
+    )
+    assert attempt_clean < selector_zero < payload_zero < record_pending
+    assert record_pending < phase_pending
+
+    # Uncertainty is published before OWNER-DROP.  Subsequent retries poll
+    # exact owner state and never blindly replay a possibly accepted drop.
+    exact_load = drop_pending.index("_RTERM-MS-DROP-LOAD?")
+    idle = drop_pending.index("RTE-UPDATE-IDLE <>", exact_load)
+    record_dropping = drop_pending.index("_RTERM-MAT-ST-DROPPING", idle)
+    phase_dropping = drop_pending.index(
+        "_RTERM-MAT-PHASE-DROPPING", record_dropping
+    )
+    mutate = drop_pending.index("_RTERM-MS-TRY-OWNER-DROP", phase_dropping)
+    assert exact_load < idle < record_dropping < phase_dropping < mutate
+    assert "RTE-OWNER-DROP" not in drop_pending
+    assert "RTE-OWNER-DROP" in owner_drop
+    assert "CATCH" in _definition(source, "_RTERM-MS-TRY-OWNER-DROP")
+    poll = dropping.index("RTE-OWNER-STATE@")
+    tombstone = dropping.index("RTE-OWNER-ST-TOMBSTONE", poll)
+    open_again = dropping.index("RTE-OWNER-ST-OPEN", tombstone)
+    still_dropping = dropping.index("RTE-OWNER-ST-DROPPING", open_again)
+    stale = dropping.index(
+        "_RTERM-MS-UPDATE-STATUS @ RTERM-S-STALE = IF", still_dropping
+    )
+    republished = dropping.index("_RTERM-MS-PUBLISH-DROP-PENDING", stale)
+    result = dropping.index("RTERM-S-OK -1 0 _RTERM-MS-RESULT!", republished)
+    assert poll < tombstone < open_again < still_dropping
+    assert still_dropping < stale < republished < result
+
+    minted = settled.index("_RTERM-TAKE-TOKEN")
+    generation = settled.index("_RTERM-R.OWNER-GEN !", minted)
+    record_clear = settled.index("_RTERM-R.MAT-STATE 32 0 FILL", generation)
+    rescan = settled.index("0 _RTERM-MS-CLEAR-ASSOCIATION", record_clear)
+    assert minted < generation < record_clear < rescan
+
+    # A restart is persistent across budget slices.  Staged and live owners
+    # are retired before any fresh admission, and restart begins at index zero.
+    staged = cohort.index("_RTERM-MAT-ST-STAGED")
+    request = cohort.index("_RTERM-MS-REQUEST-RESTART", staged)
+    staged_drop = cohort.index("_RTERM-MS-ASSOCIATE-DROP", request)
+    live = cohort.index("_RTERM-MAT-ST-LIVE", staged_drop)
+    live_request = cohort.index("_RTERM-MS-REQUEST-RESTART", live)
+    live_drop = cohort.index("_RTERM-MS-ASSOCIATE-DROP", live_request)
+    admit_call = cohort.index("_RTERM-MS-ADMIT", live_drop)
+    assert staged < request < staged_drop < live < live_request < live_drop
+    assert live_drop < admit_call
+    start = _definition(source, "_RTERM-MS-START-EPOCH")
+    assert "0 _RTERM-MS-MAT @ _RTERM-M.RECORD-INDEX !" in start
+
+
+def test_materializer_captures_and_settles_hidden_work_with_rescan() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+    ready = _definition(source, "_RTERM-MS-CAPTURE-READY?")
+    load = _definition(source, "_RTERM-MS-LOAD-FROZEN?")
+    label = _definition(source, "_RTERM-MS-LABEL-BUILD?")
+    capture = _definition(source, "_RTERM-MS-CAPTURE-TRANSACTION")
+    recover = _definition(source, "_RTERM-MS-CAPTURE-RECOVER")
+    prepare = _definition(source, "_RTERM-MS-PREPARE-OPEN")
+    hidden = _definition(source, "_RTERM-MS-HIDDEN-STEP")
+    staged = _definition(source, "_RTERM-MS-STAGE-HIDDEN")
+
+    for gate in (
+        "_RTERM-MAT-PHASE-OPEN <>",
+        "_RTERM-MS-ACTIVE-LOAD?",
+        "_RTERM-MAT-ST-OPEN <>",
+        "_RTERM-MAT-F-RESTART AND",
+        "_RTERM-MS-SURFACE=?",
+        "_RTERM-MS-CURRENT-DESIRED?",
+    ):
+        assert gate in ready
+    assert "_RTERM-MP-FROZEN-VALID?" in load
+    assert "_RTERM-ATTEMPT-BANK-LOAD" in load
+    for getter, field in (
+        ("RUPJ-ITEM-RESOLVED-ROW@", "ROW"),
+        ("RUPJ-ITEM-RESOLVED-COL@", "COL"),
+        ("RUPJ-ITEM-RESOLVED-HEIGHT@", "HEIGHT"),
+        ("RUPJ-ITEM-RESOLVED-WIDTH@", "WIDTH"),
+        ("RUPJ-ITEM-RESOLVED-Z@", "Z"),
+        ("RUPJ-ITEM-EFFECTIVE-VISIBLE?", "VISIBLE"),
+        ("RUPJ-ITEM-RESOLVED-FG@", "RGBA"),
+        ("RUPJ-ITEM-RESOLVED-ALIGN@", "H-ALIGN"),
+    ):
+        assert label.index(getter) < label.index(f"_RTE-LABEL.{field} !")
+    assert "UIDL-LABEL-SNAPSHOT-TEXT@" in label
+    assert label.index("_RTE-LABEL.TEXT-U !") < label.index(
+        "_RTE-LABEL.TEXT-A !"
+    )
+
+    begin_owned = capture.index("-1 _RTERM-MS-BEGIN-OWNED !")
+    begin = capture.index("RTE-RETAINED-BEGIN", begin_owned)
+    region = capture.index("RTE-REGION-DEFINE", begin_owned)
+    labels = capture.index("_RTERM-MS-LABEL-EMIT", region)
+    exact_high = capture.index("_RTERM-M.OBJECT-HIGH @ <>", labels)
+    seal = capture.index("RTE-RETAINED-SEAL", exact_high)
+    assert begin_owned < begin < region < labels < exact_high < seal
+    assert capture.count("-1 _RTERM-MS-BEGIN-OWNED !") == 1
+    assert "RTE-RETAINED-REPLACE-START" in capture
+    assert "RTE-RETAINED-REPLACE-CONTINUE" in capture
+    assert "RTE-COMMIT" in capture
+
+    assert "_RTERM-MS-TRY-CANCEL" in recover
+    assert recover.index("_RTERM-MS-TRY-CANCEL") < recover.index(
+        "_RTERM-MS-BEGIN-OWNED !"
+    )
+    assert recover.count("_RTERM-MS-QUARANTINE") == 2
+    inner_catch = prepare.index("['] _RTERM-MS-CAPTURE-TRANSACTION CATCH")
+    recover_call = prepare.index("_RTERM-MS-CAPTURE-RECOVER", inner_catch)
+    attempt_clean = prepare.index("_RTERM-MS-CLEAN-ATTEMPT", recover_call)
+    payload_clear = prepare.index("_RTERM-M.ITEMS 80 0 FILL", attempt_clean)
+    sealed = prepare.index("_RTERM-MAT-PHASE-HIDDEN-SEALED", payload_clear)
+    assert inner_catch < recover_call < attempt_clean < payload_clear < sealed
+
+    sealed_state = hidden.index("RTE-UPDATE-SEALED =")
+    cancel = hidden.index("_RTERM-MS-TRY-CANCEL", sealed_state)
+    restart_drop = hidden.index("_RTERM-MS-BEGIN-RESTART-DROP", cancel)
+    stable_output = hidden.index(
+        "_RTERM-MAT-PHASE-HIDDEN-SEALED", restart_drop
+    )
+    publishing = hidden.index("RTE-UPDATE-PUBLISHING", stable_output)
+    awaiting = hidden.index("_RTERM-MAT-PHASE-HIDDEN-AWAITING", publishing)
+    idle = hidden.index("RTE-UPDATE-IDLE =", awaiting)
+    request_restart = hidden.index("_RTERM-MS-REQUEST-RESTART", idle)
+    settle = hidden.index("_RTERM-MS-STAGE-HIDDEN", request_restart)
+    assert sealed_state < cancel < restart_drop < stable_output
+    assert stable_output < publishing < awaiting < idle < request_restart < settle
+    for drift in (
+        "_RTERM-MS-RESTART?",
+        "_RTERM-MS-SURFACE=? 0= OR",
+        "_RTERM-MS-RECORD-LIVE? 0= OR",
+        "_RTERM-MS-CURRENT-DESIRED? 0= OR",
+    ):
+        assert drift in hidden[sealed_state:cancel]
+        assert drift in hidden[idle:settle]
+
+    generation = staged.index("_RTERM-R.STAGED-GEN !")
+    state = staged.index("_RTERM-MAT-ST-STAGED", generation)
+    started = staged.index("_RTERM-MAT-F-STARTED OR", state)
+    rescan = staged.index("0 _RTERM-MS-CLEAR-ASSOCIATION", started)
+    assert generation < state < started < rescan
+
+
+def test_materializer_reveals_zero_op_cohort_and_promotes_live_last() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+    cohort = _definition(source, "_RTERM-MS-COHORT-STEP")
+    ready = _definition(source, "_RTERM-MS-REVEAL-READY?")
+    promotable = _definition(source, "_RTERM-MS-REVEAL-PROMOTABLE?")
+    transact = _definition(source, "_RTERM-MS-REVEAL-TRANSACTION")
+    prepare = _definition(source, "_RTERM-MS-PREPARE-REVEAL")
+    reveal = _definition(source, "_RTERM-MS-REVEAL-STEP")
+    promote = _definition(source, "_RTERM-MS-PROMOTE-REVEAL")
+
+    complete = cohort.rindex("_RTERM-B.CAPACITY @ U< IF")
+    started = cohort.index("_RTERM-MAT-F-STARTED AND IF", complete)
+    output = cohort.index("RTERM-S-OK 0 -1", started)
+    assert complete < started < output
+    assert "_RTERM-MAT-PHASE-COHORT <>" in ready
+    surface_ready = ready.index("_RTERM-MS-SURFACE=?")
+    cohort_shape = ready.index("_RTERM-MS-REVEAL-PROMOTABLE?", surface_ready)
+    cohort_current = ready.index("_RTERM-MS-REVEAL-CURRENT?", cohort_shape)
+    assert surface_ready < cohort_shape < cohort_current
+
+    assert "_RTERM-MAT-F-STARTED <>" in promotable
+    assert "_RTERM-B.CAPACITY @ <>" in promotable
+    assert "_RTERM-ATTEMPT-BANK-ZERO?" in promotable
+    assert "_RTERM-MAT-ST-STAGED" in promotable
+    assert "_RTERM-MAT-ST-NONE <>" in promotable
+    assert "_RTERM-MV-OPEN-COUNT @ 0>" in promotable
+
+    current = _definition(source, "_RTERM-MS-REVEAL-CURRENT?")
+    staged_state = current.index("_RTERM-MAT-ST-STAGED = IF")
+    staged_current = current.index("_RTERM-MS-STAGED-CURRENT?", staged_state)
+    staged_live = current.index("_RTERM-MS-RECORD-LIVE?", staged_current)
+    none_state = current.index("_RTERM-MAT-ST-NONE = IF", staged_live)
+    newly_eligible = current.index("_RTERM-MS-COHORT-CANDIDATE?", none_state)
+    reject = current.index("0 UNLOOP EXIT", newly_eligible)
+    assert staged_state < staged_current < staged_live < none_state
+    assert none_state < newly_eligible < reject
+
+    mode = transact.index("RTE-RETAINED-REPLACE-CONTINUE")
+    owned = transact.index("-1 _RTERM-MS-BEGIN-OWNED !", mode)
+    begin = transact.index("RTE-RETAINED-BEGIN", owned)
+    reveal_seal = transact.index("RTE-COMMIT-AND-REVEAL", owned)
+    seal = transact.index("RTE-RETAINED-SEAL", reveal_seal)
+    assert mode < owned < begin < reveal_seal < seal
+    assert transact.count("-1 _RTERM-MS-BEGIN-OWNED !") == 1
+    for content_op in ("RTE-REGION-DEFINE", "RTE-LABEL-DEFINE"):
+        assert content_op not in transact
+
+    caught = prepare.index("['] _RTERM-MS-REVEAL-TRANSACTION CATCH")
+    recovered = prepare.index("_RTERM-MS-CAPTURE-RECOVER", caught)
+    sealed_phase = prepare.index("_RTERM-MAT-PHASE-REVEAL-SEALED", recovered)
+    assert caught < recovered < sealed_phase
+
+    sealed_state = reveal.index("RTE-UPDATE-SEALED =")
+    current = reveal.index("_RTERM-MS-REVEAL-CURRENT?", sealed_state)
+    cancel = reveal.index("_RTERM-MS-TRY-CANCEL", current)
+    rescan = reveal.index("0 _RTERM-MS-CLEAR-ASSOCIATION", cancel)
+    restart = reveal.index("_RTERM-MS-REQUEST-RESTART", rescan)
+    stable_output = reveal.index("_RTERM-MAT-PHASE-REVEAL-SEALED", restart)
+    publishing = reveal.index("RTE-UPDATE-PUBLISHING", stable_output)
+    awaiting = reveal.index("_RTERM-MAT-PHASE-REVEAL-AWAITING", publishing)
+    idle = reveal.index("RTE-UPDATE-IDLE =", awaiting)
+    promotion = reveal.index("_RTERM-MS-PROMOTE-REVEAL", idle)
+    assert sealed_state < current < cancel < rescan < restart < stable_output
+    assert stable_output < publishing < awaiting < idle < promotion
+
+    # PROMOTABLE is a complete validation pass before the mutation loop.
+    validated = promote.index("_RTERM-MS-REVEAL-PROMOTABLE?")
+    mutation_loop = promote.index("_RTERM-B.CAPACITY @ 0 ?DO", validated)
+    materialized = promote.index("_RTERM-R.MATERIALIZED-GEN !", mutation_loop)
+    surface = promote.index(
+        "_RTERM-R.MATERIALIZED-SURFACE-GEN !", materialized
+    )
+    staged_clear = promote.index("_RTERM-R.STAGED-GEN !", surface)
+    status = promote.index("_RTERM-R.LAST-STATUS !", staged_clear)
+    live = promote.index("_RTERM-MAT-ST-LIVE", status)
+    mat_clear = promote.index("_RTERM-MAT-SIZE 0 FILL", live)
+    epoch_live = promote.index("_RTERM-EPOCH-LIVE", mat_clear)
+    assert validated < mutation_loop < materialized < surface < staged_clear
+    assert staged_clear < status < live < mat_clear < epoch_live
+
+
+def test_materializer_dispatches_each_persistent_phase_without_global_surface_gate() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+    step = _definition(source, "_RTERM-BACKEND-STEP-BODY")
+    dispatch = _definition(source, "_RTERM-MS-DISPATCH")
+
+    observed = step.index("RTE-UPDATE-STATE@")
+    cold = step.index("_RTERM-EPOCH-COLD = IF", observed)
+    live = step.index("_RTERM-EPOCH-LIVE = IF", cold)
+    mat = step.index("_RTERM-B.MAT _RTERM-MS-MAT !", live)
+    dispatched = step.index("_RTERM-MS-DISPATCH", mat)
+    assert observed < cold < live < mat < dispatched
+    assert "_RTERM-MS-SURFACE=?" not in step
+
+    phase_handlers = (
+        ("COHORT", "_RTERM-MS-COHORT-STEP"),
+        ("OPENING", "_RTERM-MS-OPENING-STEP"),
+        ("OPEN", "_RTERM-MS-OPEN-STEP"),
+        ("HIDDEN-SEALED", "_RTERM-MS-HIDDEN-STEP"),
+        ("REVEAL-SEALED", "_RTERM-MS-REVEAL-STEP"),
+        ("DROP-PENDING", "_RTERM-MS-DROP-PENDING-STEP"),
+        ("DROPPING", "_RTERM-MS-DROPPING-STEP"),
+    )
+    handler_positions = []
+    for phase, handler in phase_handlers:
+        phase_at = dispatch.index(f"_RTERM-MAT-PHASE-{phase}")
+        handler_at = dispatch.index(handler, phase_at)
+        assert phase_at < handler_at
+        handler_positions.append(handler_at)
+    assert handler_positions == sorted(handler_positions)
+    assert "_RTERM-MAT-PHASE-HIDDEN-AWAITING = OR" in dispatch
+    assert "_RTERM-MAT-PHASE-REVEAL-AWAITING = OR" in dispatch
+
+    cohort = dispatch.index("_RTERM-MAT-PHASE-COHORT")
+    surface = dispatch.index("_RTERM-MS-SURFACE=? 0=", cohort)
+    restart = dispatch.index("_RTERM-MS-REQUEST-RESTART", surface)
+    idle = dispatch.index("RTE-UPDATE-IDLE <>", restart)
+    cohort_step = dispatch.index("_RTERM-MS-COHORT-STEP", idle)
+    assert cohort < surface < restart < idle < cohort_step
+
+    lifecycle_start = source.index("VARIABLE _RTERM-MS-COLS")
+    lifecycle_end = source.index("VARIABLE _RTERM-P-A0")
+    lifecycle = _code_without_comments(source[lifecycle_start:lifecycle_end])
+    assert not re.search(r"(?<![A-Z0-9_-])_?PT-", lifecycle)
+    for forbidden in ("RTAPT-", "_RTAPT-", "PRESENT"):
+        assert forbidden not in lifecycle
+
+
+def test_materializer_quarantine_publishes_normalized_terminal_status() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+    quarantine = _definition(source, "_RTERM-MS-QUARANTINE")
+
+    normalized = quarantine.index("RTERM-S-SESSION-LOST <>")
+    cause = quarantine.index("_RTERM-MS-CALL-STATUS !", normalized)
+    attempt = quarantine.index("_RTERM-MS-CLEAN-ATTEMPT", cause)
+    records = quarantine.index("_RTERM-B.CAPACITY @ 0 ?DO", attempt)
+    suffix = quarantine.index("_RTERM-R.MAT-STATE 40 0 FILL", records)
+    record_status = quarantine.index("_RTERM-R.LAST-STATUS !", suffix)
+    record_state = quarantine.index("_RTERM-MAT-ST-QUARANTINED", record_status)
+    limits = quarantine.index("_RTERM-B.LIMITS RTE-LIMITS-SIZE 0 FILL")
+    mat_phase = quarantine.index("_RTERM-MAT-PHASE-QUARANTINED", limits)
+    backend_status = quarantine.index("_RTERM-B.STATUS !", mat_phase)
+    epoch = quarantine.index("_RTERM-EPOCH-QUARANTINED", backend_status)
+    returned = quarantine.rindex("_RTERM-MS-CALL-STATUS @")
+    assert normalized < cause < attempt < records < suffix < record_status
+    assert record_status < record_state < limits < mat_phase
+    assert mat_phase < backend_status < epoch < returned
+    assert quarantine.count("_RTERM-R.MAT-STATE 40 0 FILL") == 2
+    assert "_RTERM-NOTE" not in quarantine
 
 
 def test_config_and_init_preflight_all_caller_owned_banks_before_mutation() -> None:
@@ -1235,7 +1883,9 @@ def test_project_maps_inactive_bank_and_publishes_selector_last() -> None:
     invalid_clear = project.index("_RTERM-PROJECT-CLEAR-INACTIVE", validated)
     invalid_fail = project.index("RTERM-S-INVALID _RTERM-PROJECT-FAIL", invalid_clear)
     assert validated < invalid_clear < invalid_fail < published
-    assert source.count("RUPJ-CANDIDATE-VALID?") == 3
+    # Projection, old-bank reuse, advisory freezing, and the persistent
+    # OPENING/OPEN attempt validator each deep-check candidate bytes.
+    assert source.count("RUPJ-CANDIDATE-VALID?") == 4
     assert source.count("RUPJ-BUILD") == 1
     assert "RUPJ-S-CAPACITY = IF" in project
     assert "RTERM-S-CAPACITY" in project
@@ -1312,7 +1962,7 @@ def test_project_maps_inactive_bank_and_publishes_selector_last() -> None:
         assert forbidden not in project
 
 
-def test_ordinary_validation_checks_selected_metadata_without_deep_scanning() -> None:
+def test_ordinary_record_validation_is_shallow_but_open_attempts_are_deep() -> None:
     source = DRIVER.read_text(encoding="utf-8")
     candidates = _definition(source, "_RTERM-RECORD-CANDIDATES-VALID?")
     metadata = _definition(source, "_RTERM-CANDIDATE-META-VALID?")
@@ -1337,7 +1987,7 @@ def test_ordinary_validation_checks_selected_metadata_without_deep_scanning() ->
     assert "_RTERM-K.UTF8 @ _RTERM-UADD?" in metadata
     assert "_RTERM-K.ROOT-H @ DUP 0> 0= IF" in metadata
     assert "_RTERM-K.ROOT-W @ DUP 0> 0= IF" in metadata
-    assert metadata.count("_RTERM-LENGTH-MAX U> IF") == 2
+    assert metadata.count("_RTERM-LENGTH-MAX U> IF") == 3
     empty = metadata.index("_RTERM-K.ITEMS @ 0= IF")
     assert metadata.index("_RTERM-K.ROOT-H @") < empty
     assert metadata.index("_RTERM-K.ROOT-W @") < empty
@@ -1353,12 +2003,16 @@ def test_ordinary_validation_checks_selected_metadata_without_deep_scanning() ->
         "_RTERM-RECORD-CANDIDATES-VALID?",
         "_RTERM-RECORD-LIVE?",
         "_RTERM-RECORD-VALID?",
-        "_RTERM-UIDL-VALID-BODY?",
         "_RTERM-CALL-LOOKUP",
     ):
         body = _definition(source, hot_path)
         assert "RUPJ-CANDIDATE-VALID?" not in body
         assert "RUPJ-BUILD" not in body
+
+    backend = _definition(source, "_RTERM-UIDL-VALID-BODY?")
+    assert "_RTERM-MAT-ATTEMPT-DEEP?" in backend
+    assert "RUPJ-CANDIDATE-VALID?" not in backend
+    assert "RUPJ-BUILD" not in backend
 
 
 def test_private_identity_mapping_is_exact_monotonic_and_wire_inert() -> None:
@@ -1423,13 +2077,13 @@ def test_private_identity_mapping_is_exact_monotonic_and_wire_inert() -> None:
         "_RTERM-IDENTITY-BANK-VALID?"
     )
 
-    # The advisory slice reads limits and performs exactly one neutral label
-    # preflight.  It never opens or mutates retained state and never names a
-    # concrete provider or output scheduler.
+    # Projection remains wire-inert.  The separate owner service repeats the
+    # neutral preflight before it opens or captures anything.
     code = _code_without_comments(source)
     assert code.count("RTE-LIMITS@") == 1
-    assert code.count("RTE-LABEL-PREFLIGHT") == 1
+    assert code.count("RTE-LABEL-PREFLIGHT") == 2
     assert not re.search(r"(?<![A-Z0-9_-])_?PT-", code)
+    project = _definition(source, "_RTERM-UCTX-PROJECT-BODY")
     for forbidden in (
         "RTE-OWNER-OPEN",
         "RTE-OWNER-STATE@",
@@ -1443,7 +2097,7 @@ def test_private_identity_mapping_is_exact_monotonic_and_wire_inert() -> None:
         "_RTAPT-",
         "PRESENT",
     ):
-        assert forbidden not in code
+        assert forbidden not in project
 
 
 def test_stable_mapping_precedes_terminal_negotiated_eligibility() -> None:
