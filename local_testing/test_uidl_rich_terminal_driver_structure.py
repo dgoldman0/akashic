@@ -136,7 +136,7 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
         "_RTERM-R.STAGED-GEN": 352,
         "_RTERM-R.MATERIALIZED-GEN": 360,
         "_RTERM-R.MATERIALIZED-SURFACE-GEN": 368,
-        "_RTERM-R.RESERVED": 376,
+        "_RTERM-R.DISCOVERY-RETRY": 376,
     }
     for field, offset in binding_fields.items():
         assert f": {field}" in source
@@ -403,7 +403,7 @@ def test_materializer_schema_is_persistent_neutral_and_lifecycle_validated() -> 
         "_RTERM-R.STAGED-GEN",
         "_RTERM-R.MATERIALIZED-GEN",
         "_RTERM-R.MATERIALIZED-SURFACE-GEN",
-        "_RTERM-R.RESERVED",
+        "_RTERM-R.DISCOVERY-RETRY",
     ):
         assert field in record_validated
     for state in (
@@ -418,6 +418,9 @@ def test_materializer_schema_is_persistent_neutral_and_lifecycle_validated() -> 
     ):
         assert f"_RTERM-MAT-ST-{state}" in record_validated
     assert "_RTERM-RECORD-GENERATIONS-VALID?" in record_validated
+    assert "_RTERM-BOOL? 0=" in record_validated
+    assert "_RTERM-R.CANDIDATE @ 0=" in record_validated
+    assert "_RTERM-R.ELIGIBLE @ 0<> OR" in record_validated
 
     record_live = _definition(source, "_RTERM-RECORD-LIVE?")
     materialization = record_live.index(
@@ -2078,10 +2081,11 @@ def test_private_identity_mapping_is_exact_monotonic_and_wire_inert() -> None:
         "_RTERM-IDENTITY-BANK-VALID?"
     )
 
-    # Projection remains wire-inert.  The separate owner service repeats the
-    # neutral preflight before it opens or captures anything.
+    # Projection and the late-discovery service path are the only neutral
+    # limit-read call sites.  The separate owner service repeats preflight
+    # before it opens or captures anything.
     code = _code_without_comments(source)
-    assert code.count("RTE-LIMITS@") == 1
+    assert code.count("RTE-LIMITS@") == 2
     assert code.count("RTE-LABEL-PREFLIGHT") == 2
     assert not re.search(r"(?<![A-Z0-9_-])_?PT-", code)
     project = _definition(source, "_RTERM-UCTX-PROJECT-BODY")
@@ -2160,6 +2164,108 @@ def test_stable_mapping_precedes_terminal_negotiated_eligibility() -> None:
         "_RTERM-ELIGIBILITY-CLEAR"
     )
     assert "_RTERM-PJ-IDENTITY-U @ 0 FILL" not in publish
+
+
+def test_late_discovery_retries_selected_candidate_without_reprojection() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+    clear = _definition(source, "_RTERM-ELIGIBILITY-CLEAR")
+    publish = _definition(source, "_RTERM-PROJECT-PUBLISH")
+    marked = _definition(source, "_RTERM-MS-DISCOVERY-MARKED?")
+    fatal = _definition(source, "_RTERM-MS-DISCOVERY-FATAL?")
+    pending = _definition(source, "_RTERM-MS-DISCOVERY-PENDING?")
+    limits = _definition(source, "_RTERM-MS-DISCOVERY-LIMITS-BODY")
+    load = _definition(source, "_RTERM-MS-RETRY-CANDIDATE?")
+    record_status = _definition(source, "_RTERM-MS-DISCOVERY-RECORD-STATUS")
+    prevalidate = _definition(source, "_RTERM-MS-DISCOVERY-PREVALIDATE")
+    settle = _definition(source, "_RTERM-MS-DISCOVERY-SETTLE-ALL")
+    late = _definition(source, "_RTERM-MS-LATE-DISCOVERY")
+    surface_guard = _definition(
+        source, "_RTERM-MS-LIVE-PENDING-SURFACE-STALE?"
+    )
+    live = _definition(source, "_RTERM-MS-LIVE-RECORD-CURRENT?")
+    live_step = _definition(source, "_RTERM-MS-LIVE-STEP")
+    step = _definition(source, "_RTERM-BACKEND-STEP-BODY")
+
+    # WOULD_BLOCK is the sole retry grant.  Every ordinary eligibility clear
+    # revokes it, so geometry/lifecycle changes cannot promote stale metadata.
+    assert "_RTERM-R.DISCOVERY-RETRY OFF" in clear
+    retry = publish.index("RTERM-S-WOULD-BLOCK =")
+    retry_store = publish.index("_RTERM-R.DISCOVERY-RETRY !", retry)
+    last_status = publish.index("_RTERM-R.LAST-STATUS !", retry_store)
+    selector = publish.index("_RTERM-R.CANDIDATE !", last_status)
+    assert retry < retry_store < last_status < selector
+
+    # STEP polls limits once per external call only while an attached record
+    # owns the marker.  Pending discovery returns without requesting another
+    # immediate STEP, while a completed transition settles every marker once.
+    assert "_RTERM-BINDING-ST-ATTACHED =" in marked
+    assert "_RTERM-R.DISCOVERY-RETRY @ AND" in marked
+    assert "_RTERM-MS-DISCOVERY-MARKED?" in pending
+    assert limits.count("RTE-LIMITS@") == 1
+    assert late.count("_RTERM-MS-DISCOVERY-LIMITS-BODY") == 1
+    queried = late.index("['] _RTERM-MS-DISCOVERY-LIMITS-BODY CATCH")
+    blocked = late.index("RTERM-S-WOULD-BLOCK = IF", queried)
+    prevalidation_call = late.index("_RTERM-MS-DISCOVERY-PREVALIDATE", blocked)
+    assert queried < blocked < prevalidation_call
+    blocked_path = late[blocked:prevalidation_call]
+    assert "RTE-LIMITS-SIZE 0 FILL EXIT" in blocked_path
+    assert "_RTERM-PROJECT-SCHEDULE" not in blocked_path
+    assert "BEGIN" not in late
+
+    # The accepted A/B bank and its stable identities are deep-loaded again.
+    # Every marked bank/status is checked in one bounded pass before the
+    # second bounded pass publishes anything, so a fatal record cannot leave a
+    # partially settled cohort.
+    assert "_RTERM-OLD-CANDIDATE-LOAD?" in load
+    loaded = record_status.index("_RTERM-MS-RETRY-CANDIDATE?")
+    shared_status = record_status.index("_RTERM-MS-DISCOVERY-STATUS @", loaded)
+    checked = record_status.index("_RTERM-PROJECT-LIMITS?", shared_status)
+    assert loaded < shared_status < checked
+    assert "_RTERM-B.CAPACITY @ 0 ?DO" in prevalidate
+    assert "_RTERM-MS-DISCOVERY-RECORD-STATUS" in prevalidate
+    assert "_RTERM-MS-DISCOVERY-FATAL?" in prevalidate
+    assert "_RTERM-MS-DISCOVERY-PUBLISH" not in prevalidate
+    assert "_RTERM-B.CAPACITY @ 0 ?DO" in settle
+    assert "_RTERM-MS-DISCOVERY-PUBLISH" in settle
+    prevalidated = late.index("_RTERM-MS-DISCOVERY-PREVALIDATE")
+    settled = late.index("_RTERM-MS-DISCOVERY-SETTLE-ALL", prevalidated)
+    assert prevalidated < settled
+
+    # Fatal discovery and deep-candidate outcomes reach quarantine before the
+    # ordinary provider update poll or materializer dispatch.  A still-pending
+    # LIVE record preserves only its exact physical surface generation.
+    assert "RTERM-S-INVALID =" in fatal
+    assert "RTERM-S-SESSION-LOST =" in fatal
+    assert "RTERM-S-INVALID EXIT" in record_status
+    retry_live = live.index("_RTERM-R.DISCOVERY-RETRY @ IF")
+    surface_live = live.index("_RTERM-R.MATERIALIZED-SURFACE-GEN @", retry_live)
+    generation_live = live.index("_RTERM-MS-GENERATION @ = EXIT", surface_live)
+    ordinary_live = live.index("_RTERM-R.CANDIDATE @", generation_live)
+    assert retry_live < surface_live < generation_live < ordinary_live
+    assert "_RTERM-MAT-ST-LIVE =" in surface_guard
+    assert "_RTERM-BINDING-ST-ATTACHED = AND" in surface_guard
+    assert "_RTERM-R.DISCOVERY-RETRY @ AND" in surface_guard
+    assert "_RTERM-R.MATERIALIZED-SURFACE-GEN @" in surface_guard
+    assert "_RTERM-MS-GENERATION @ <>" in surface_guard
+    guarded = live_step.index("_RTERM-MS-LIVE-PENDING-SURFACE-STALE?")
+    restarted = live_step.index("_RTERM-MS-START-EPOCH", guarded)
+    update_gate = live_step.index("_RTERM-MS-UPDATE-STATE @", restarted)
+    assert guarded < restarted < update_gate
+
+    # No UIDL build/projection or CELL invalidation is synthesized.
+    for forbidden in (
+        "RUPJ-BUILD",
+        "_RTERM-PROJECT-SELECT",
+        "_RTERM-UCTX-PROJECT-BODY",
+        "_UTUI-",
+    ):
+        assert forbidden not in late + load + settle
+    validated = step.index("_RTERM-UIDL-VALID-BODY?")
+    retried = step.index("_RTERM-MS-LATE-DISCOVERY", validated)
+    fatal_checked = step.index("_RTERM-MS-DISCOVERY-FATAL?", retried)
+    quarantined = step.index("_RTERM-MS-QUARANTINE", fatal_checked)
+    update = step.index("RTE-UPDATE-STATE@", quarantined)
+    assert validated < retried < fatal_checked < quarantined < update
 
 
 def test_relayout_separates_visible_geometry_from_hidden_scrub() -> None:

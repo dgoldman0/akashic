@@ -740,12 +740,13 @@ candidate metadata A begins at 144 and B at 208. Offsets 272 through 343 retain
 the private owner tuple, region/object allocation state, eligible selector and
 generation, and terminal-checked region/object/UTF-8 quotas. Offsets 344 through
 375 retain neutral per-binding materialization state and exact staged/live
-generation correlations; offset 376 is reserved. The backend-global epoch and
-materialization attempt record retain only scalar correlation, never borrowed
-candidate pointers. Exact phases cover cold, cohort admission, opening, hidden
-settlement, reveal settlement, live output, finite drop, and terminal
-quarantine. Deep validation correlates every active phase with its one binding
-record and frozen attempt before provider mutation is trusted.
+generation correlations; offset 376 is the boolean late-discovery retry marker.
+The backend-global epoch and materialization attempt record retain only scalar
+correlation, never borrowed candidate pointers. Exact phases cover cold, cohort
+admission, opening, hidden settlement, reveal settlement, live output, finite
+drop, and terminal quarantine. Deep validation correlates every active phase
+with its one binding record and frozen attempt before provider mutation is
+trusted.
 
 Attach and geometry tracking remain local-only. Attach derives a bounded wire
 owner ID from the binding-record ordinal and uses the globally nonreused opaque
@@ -871,7 +872,12 @@ leaves the selected snapshot and mapping intact but grants no materialization
 readiness and authorizes no wire owner. When discovery becomes available, the
 owner-loop service renegotiates that selected candidate in place; it does not
 wait for another UIDL dirty event. The requested quotas must fit the current
-terminal maxima before `OWNER_OPEN` is emitted.
+terminal maxima before `OWNER_OPEN` is emitted. Each bounded owner-loop step
+performs at most one shared limits read. Continued `WOULD_BLOCK` preserves an
+already-live coherent retained presentation only for its exact current surface
+generation. A completed read deep-validates every marked selected bank before
+publishing any settlement; `INVALID` or `SESSION_LOST` quarantines before the
+ordinary update-state poll and materializer dispatch.
 
 Terminal-negotiated eligibility freezes the declared semantic capacities for
 the explicit advisory materialization preflight; it is not an owner
@@ -881,8 +887,12 @@ silently enlarge them. That operation constructs the exact plan and calls
 availability, then scrubs the frozen attempt and plan. The materializer repeats
 the proof against the then-current generation immediately before owner
 admission. If the tree later changes structurally beyond eligibility, retained
-projection reports capacity and keeps the prior coherent retained terminal
-state; CELL rendering continues from the authoritative UIDL tree.
+projection reports capacity and CELL rendering continues from the authoritative
+UIDL tree. Keeping the prior coherent retained presentation after discovery has
+settled to local `CAPACITY`, `SOURCE`, or another per-binding refusal is not part
+of the pending-discovery retry slice and remains required before vertical
+acceptance; the current lifecycle revokes eligibility and follows its ordinary
+replacement/fallback path for that settled refusal.
 
 Unavailable retained discovery or an unsupported optional semantic family
 does not prevent attach or application initialization. The binding retains its

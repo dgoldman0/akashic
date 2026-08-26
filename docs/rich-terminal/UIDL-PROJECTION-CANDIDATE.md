@@ -121,9 +121,16 @@ Private owner/terminal-eligibility fields begin at offset 272; they are not part
 of the neutral candidate or projector ABI and do not reserve an owner or
 provider capture-bank space. Neutral retained-materialization state and exact
 desired/staged/live generation correlations occupy offsets 344 through 375;
-the record ends with one reserved cell at offset 376. Those lifecycle fields
-are validated as `NONE`/zero in this preparatory slice and grant no mutation
-authority yet.
+offset 376 is a boolean late-discovery retry marker. It is set only when the
+selected nonempty candidate's neutral limits read returns `WOULD_BLOCK`, and is
+cleared by every ordinary eligibility revocation or settled retry. It grants no
+owner or mutation authority. While any attached record owns the marker, one
+owner-loop step performs at most one shared limits read. `WOULD_BLOCK` leaves
+all markers and every already-live presentation intact for the exact current
+surface generation. A completed read deep-validates every marked selected bank
+before a bounded second pass publishes any per-binding eligibility result;
+`INVALID` or `SESSION_LOST` instead quarantines before update-state polling or
+normal materializer dispatch.
 
 An accepted empty candidate is still selector-published so it supersedes any
 older desired scene, but `RTERM-UCTX-PROJECT` returns
@@ -294,6 +301,13 @@ and call `RTE-LABEL-PREFLIGHT` to recheck current terminal limits, dynamic owner
 availability, representation, encoded-update arithmetic, and caller-owned
 provider owner, operation, and copied-byte capacity. Eligibility and advisory
 success alone admit nothing.
+
+The retry slice preserves an already-live prior presentation only while the
+shared discovery result remains `WOULD_BLOCK` and its materialized surface
+generation is still exact. Preservation after discovery settles to a local
+`CAPACITY`, `SOURCE`, or other per-binding refusal remains a separate acceptance
+slice; the current driver revokes eligibility and follows its ordinary
+replacement/fallback lifecycle for such a settled refusal.
 
 The projector itself remains output-inert. Projection calls the read-only
 `RTE-LIMITS@` and publishes only the neutral candidate, identity mapping, and
