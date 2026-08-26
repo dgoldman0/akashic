@@ -198,12 +198,13 @@ An accepted empty candidate is published and returns
 `RTERM-S-OK`. Any build, validation, capacity, or caught-exception failure
 leaves the prior selector and therefore the prior desired scene authoritative.
 
-UIDL-TUI now exposes complete neutral resolved geometry/style as a copied
-72-byte record with effective visibility and paint-group z, but the admitted
-candidate does not yet include that record and invokes no facade operation,
-including the limits callback. The next blocker is to copy the resolved record
-into each admitted LABEL candidate and then materialize it through the generic
-engine. Region replacement, retained identity, negotiated admission, and wire
+UIDL-TUI exposes complete neutral resolved geometry/style as a copied 72-byte
+record with effective visibility and paint-group z. Each admitted 128-byte
+RUPJ item now carries that record root-relative when it is available, while
+preserving semantic LABEL membership with a zero resolved payload when it is
+not. The projector and driver still invoke no facade operation, including the
+limits callback. The next blocker is generic-engine LABEL materialization.
+Region replacement, retained identity, negotiated admission, and wire
 publication remain later work; the current lifecycle slice is still
 wire-inert.
 
@@ -217,15 +218,18 @@ its explicit `text-capacity` reservation. CELL label paint consumes the same
 Thus string/integer/boolean binding semantics are shared below either output
 path, while optional rich-output admission remains above UIDL semantics.
 
-The candidate projector walks the active root tree under one compound semantic
-observation and copies eligible LABEL records into bounded item/snapshot
-banks. Each binding has two caller-owned item banks and two caller-owned
-snapshot banks, so a new complete candidate can replace the selected candidate
-atomically without allocating. This does not change the current wire-inert
-state: no shipped UIDL has been bulk-annotated for optional rich-output
-eligibility, and the admitted candidate is not yet materialized. Later
-negotiated admission must compare each LABEL declaration and the checked
-per-owner sum against
+The candidate projector walks the active root tree under one compound
+UIDL-TUI, UIDL, projector, and semantic observation and copies eligible LABEL
+records plus any available neutral resolved state into bounded item/snapshot
+banks. Semantic eligibility does not depend on resolved-state availability:
+an unavailable resolved record leaves a zero payload and flags, while invalid
+resolved state rejects the complete build. Each binding has two caller-owned
+item banks and two caller-owned snapshot banks, so a new complete candidate can
+replace the selected candidate atomically without allocating. This does not
+change the current wire-inert state: no shipped UIDL has been bulk-annotated
+for optional rich-output eligibility, and the admitted candidate is not yet
+materialized. Later negotiated admission must compare each LABEL declaration
+and the checked per-owner sum against
 `RTE-LIMITS-LABEL-BYTES@` and `RTE-LIMITS-UTF8-BYTES@` before opening an owner
 or publishing an object.
 
@@ -319,12 +323,14 @@ updates, minimize/restore, tile movement, full-frame transitions, and relayout.
 UIDL document teardown ends that identity. A new UCTX never inherits it even if
 the new document reuses every `id=` string.
 
-Bounds come from resolved UIDL layout relative to the owning UCTX region. The
-projector converts checked geometry to the retained profile's full `UNORM32`
-precision; it must not truncate through an incidental narrower normalized
-format. Region movement changes the private owner region. Layout changes may
-replace derived object geometry while preserving element and wire identities.
-Applications do not maintain parallel coordinates.
+Bounds come from resolved UIDL layout and are copied into the candidate
+relative to its root. The selected candidate metadata carries the positive
+root height and width used to normalize and validate those bounds. The later
+materializer converts checked geometry to the retained profile's full
+`UNORM32` precision; it must not truncate through an incidental narrower
+normalized format. Region movement changes the private owner region. Layout
+changes may replace derived object geometry while preserving element and wire
+identities. Applications do not maintain parallel coordinates.
 
 ### 5.3 Static and dynamic state
 
@@ -449,9 +455,9 @@ RTERM-HOST-BINDING-CAPTURE  ( host slot host-binding -- status )
 
 RTERM-UIDL-CONFIG-BYTES     ( -- bytes )  \ 96
 RTERM-UIDL-BINDING-BYTES    ( -- bytes )
-                                            \ 248 per binding
+                                            \ 280 per binding
 RTERM-UIDL-BACKEND-BYTES    ( -- bytes )  \ 152
-RTERM-UIDL-CANDIDATE-ITEM-BYTES ( -- bytes )  \ 48
+RTERM-UIDL-CANDIDATE-ITEM-BYTES ( -- bytes )  \ 128
 RTERM-UIDL-CONFIG-INIT
   ( host engine records-a records-u items-a items-per-bank
     snapshots-a snapshot-bank-u config -- status )
@@ -470,11 +476,20 @@ dependency. It borrows one immutable `RTE` facade, and its immutable UIDL
 callback installation through `_UTUI-PROJECTION-ADAPTER!` carries the exact
 driver backend as explicit composition context; neither context is stored in a
 UCTX. The 96-byte initialization descriptor supplies the exact host, engine,
-248-byte binding-record slab, and caller-owned candidate storage geometry. Its
+280-byte binding-record slab, and caller-owned candidate storage geometry. Its
 record capacity determines exactly two item banks and two snapshot banks per
 binding; the 152-byte backend copies that geometry and does not retain the
 descriptor. Product composition may therefore clear the descriptor immediately
 after initialization.
+
+Each candidate item is 128 bytes: its stable semantic key and snapshot slice
+are followed by flags at offset 40, a copied 72-byte resolved record at offsets
+48 through 119, and a zero reserved cell at offset 120. `HAS_RESOLVED=1` and
+`EFFECTIVE_VISIBLE=2` are the only valid flag bits, and effective visibility
+implies a resolved record. Resolved coordinates are normalized relative to
+the candidate root. Each bank's 64-byte metadata adds the positive root height
+and width after its generation/count/quota fields. In the 280-byte binding,
+candidate metadata A begins at 144, B at 208, and the reserved cell is at 272.
 
 Attach and geometry tracking remain local-only. Project now constructs and
 atomically admits the inactive candidate bank, returning
@@ -569,19 +584,26 @@ can be admitted.
 
 ### 6.2 Project
 
-Project runs with the token's exact UCTX active after normal UIDL binding updates and
-layout. The current projector walks the complete active tree, captures every
-eligible neutral LABEL snapshot into the binding's inactive bank, validates
-that bank with `RUPJ-CANDIDATE-VALID?`, and writes the selector only after its
-metadata is complete. It never asks an applet to enumerate a second scene.
+Project runs with the token's exact UCTX active after normal UIDL binding
+updates and layout. The current projector walks the complete active tree under
+the fixed observation order UIDL-TUI, UIDL, RUPJ, then semantic state. It
+captures every eligible neutral LABEL snapshot into the binding's inactive
+bank and asks UIDL-TUI for the corresponding resolved record. `OK` copies and
+validates the record root-relative and sets the resolved flags;
+`UNAVAILABLE` preserves semantic membership with zero resolved payload and
+flags; `INVALID` fails the complete projection. It validates the finished bank
+with `RUPJ-CANDIDATE-VALID?`, using the same positive root height and width,
+and writes the selector only after its 64-byte metadata is complete. It never
+asks an applet to enumerate a second scene.
 
 Local projection admission is atomic. A failure leaves the selected copied
 projection recipe authoritative while UIDL and CELL state remain untouched.
 An accepted empty recipe supersedes the former candidate but reports
 `RTERM-S-UNAVAILABLE`; an accepted nonempty recipe reports `RTERM-S-OK`.
 No protocol byte is emitted from an element or widget callback. Layout/style
-completion and generic-engine LABEL materialization remain necessary before
-this locally accepted desired state can become retained terminal state.
+state is now part of the locally accepted desired recipe; generic-engine LABEL
+materialization remains necessary before it can become retained terminal
+state.
 
 The first materialization in an epoch is a complete projection obligation, not
 an ordinary dirty-element update. Transition to retained availability, and
@@ -842,9 +864,8 @@ materializer yet couples them through `RTE`; the driver therefore remains
 wire-inert and the production host advertises no retained policy. CELL output
 still traverses the unified publisher, while attach, project, geometry,
 quiesce, and detach exercise the exact private UCTX lifetime without opening a
-root-region-only wire owner. The next critical slice copies UIDL-TUI's neutral
-resolved record into the admitted candidate, followed by generic-engine LABEL
-materialization.
+root-region-only wire owner. The next critical slice is generic-engine LABEL
+materialization from the admitted semantic and resolved candidate state.
 
 Retained discovery is not a hosted-UCTX launch gate. The mandatory initial CELL
 snapshot is produced only after Desk initialization, so host composition,

@@ -38,7 +38,7 @@ def test_driver_is_optional_neutral_and_caller_bounded() -> None:
     ]
 
     # This driver is a host/UIDL lifecycle boundary, not another terminal
-    # transport or presentation engine and not part of their source closure.
+    # transport or output engine and not part of their source closure.
     for forbidden in (
         "PT-",
         "_PT-",
@@ -86,8 +86,10 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
 
     assert "96 CONSTANT RTERM-HOST-BINDING-SIZE" in source
     assert "96 CONSTANT RTERM-UIDL-CONFIG-SIZE" in source
-    assert "48 CONSTANT _RTERM-CANDIDATE-META-SIZE" in source
-    assert "248 CONSTANT RTERM-UIDL-BINDING-SIZE" in source
+    assert "3 CONSTANT _RTERM-UIDL-ABI" in source
+    assert "2 CONSTANT _RTERM-UIDL-CONFIG-ABI" in source
+    assert "64 CONSTANT _RTERM-CANDIDATE-META-SIZE" in source
+    assert "280 CONSTANT RTERM-UIDL-BINDING-SIZE" in source
     assert "152 CONSTANT RTERM-UIDL-BACKEND-SIZE" in source
     assert "_RGN-DESC-SIZE CONSTANT RGN-SIZE" in region
     assert "RTERM-UIDL-CONFIG-SIZE" in _definition(
@@ -109,8 +111,8 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
         "_RTERM-R.LAST-STATUS": 128,
         "_RTERM-R.CANDIDATE": 136,
         "_RTERM-R.CANDIDATE-A": 144,
-        "_RTERM-R.CANDIDATE-B": 192,
-        "_RTERM-R.RESERVED": 240,
+        "_RTERM-R.CANDIDATE-B": 208,
+        "_RTERM-R.RESERVED": 272,
     }
     for field, offset in binding_fields.items():
         assert f": {field}" in source
@@ -121,6 +123,8 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
         "_RTERM-K.REGIONS": 24,
         "_RTERM-K.OBJECTS": 32,
         "_RTERM-K.UTF8": 40,
+        "_RTERM-K.ROOT-H": 48,
+        "_RTERM-K.ROOT-W": 56,
     }.items():
         assert f"{offset} +" in _definition(source, field)
 
@@ -285,8 +289,16 @@ def test_config_and_init_preflight_all_caller_owned_banks_before_mutation() -> N
     assert "_RTERM-I-BANK-COUNT @ _RTERM-I-SNAPSHOT-BANK-U @" in geometry
     assert geometry.count("_RTERM-DISJOINT?") == 10
     assert geometry.count("RTE-STORAGE-DISJOINT?") == 4
+    assert geometry.count("UTUI-STORAGE-DISJOINT?") == 3
     assert geometry.count("UIDL-STORAGE-DISJOINT?") == 3
     assert geometry.count("ST-STORAGE-DISJOINT?") == 3
+
+    for address, extent in (
+        ("_RTERM-I-RECORDS-A @", "_RTERM-I-RECORDS-U @"),
+        ("_RTERM-I-ITEMS-A @", "_RTERM-I-ITEMS-U @"),
+        ("_RTERM-I-SNAPSHOTS-A @", "_RTERM-I-SNAPSHOTS-U @"),
+    ):
+        assert f"{address} {extent}\n        UTUI-STORAGE-DISJOINT?" in geometry
 
     # The call-borrowed config and long-lived backend are also disjoint from
     # every authority and payload range before either construction mutates it.
@@ -294,8 +306,18 @@ def test_config_and_init_preflight_all_caller_owned_banks_before_mutation() -> N
         assert ranges.count("_RTERM-SPAN?") == 1
         assert ranges.count("_RTERM-DISJOINT?") == 5
         assert ranges.count("RTE-STORAGE-DISJOINT?") == 1
+        assert ranges.count("UTUI-STORAGE-DISJOINT?") == 1
         assert ranges.count("UIDL-STORAGE-DISJOINT?") == 1
         assert ranges.count("ST-STORAGE-DISJOINT?") == 1
+
+    assert (
+        "_RTERM-I-CONFIG @ RTERM-UIDL-CONFIG-SIZE\n"
+        "        UTUI-STORAGE-DISJOINT?"
+    ) in config_ranges
+    assert (
+        "_RTERM-I-BACKEND @ RTERM-UIDL-BACKEND-SIZE\n"
+        "        UTUI-STORAGE-DISJOINT?"
+    ) in backend_ranges
 
     geometry_at = config_init.index("_RTERM-UIDL-GEOMETRY? 0= IF")
     config_ranges_at = config_init.index("_RTERM-CONFIG-RANGES? 0= IF")
@@ -697,6 +719,11 @@ def test_project_admits_into_the_inactive_bank_and_publishes_selector_last() -> 
     assert "_RTERM-BANK-LOAD" in select
 
     assert "RUPJ-CANDIDATE-VALID?" in validate
+    root_h = validate.index("_RTERM-PJ-ROOT-H @ _RTERM-C-RECORD @ _RTERM-R.HEIGHT @")
+    root_w = validate.index("_RTERM-PJ-ROOT-W @ _RTERM-C-RECORD @ _RTERM-R.WIDTH @")
+    deep = validate.index("RUPJ-CANDIDATE-VALID?", root_w)
+    assert root_h < root_w < deep
+    assert "_RTERM-PJ-ROOT-H @ _RTERM-PJ-ROOT-W @" in validate
     assert clear_inactive.count("0 FILL") == 3
     invalid_clear = project.index("_RTERM-PROJECT-CLEAR-INACTIVE", admitted)
     invalid_fail = project.index("RTERM-S-INVALID _RTERM-PROJECT-FAIL", invalid_clear)
@@ -706,6 +733,15 @@ def test_project_admits_into_the_inactive_bank_and_publishes_selector_last() -> 
     assert "RUPJ-S-CAPACITY = IF" in project
     assert "RTERM-S-CAPACITY" in project
     assert "RTERM-S-INVALID" in project
+
+    # RUPJ returns ROOT-H/ROOT-W immediately below status.  The driver unpacks
+    # the entire tuple before checking status, then admits those exact extents.
+    normalized_project = re.sub(r"\s+", " ", project)
+    assert (
+        "RUPJ-BUILD _RTERM-PJ-BUILD-STATUS ! _RTERM-PJ-ROOT-W ! "
+        "_RTERM-PJ-ROOT-H ! _RTERM-PJ-UTF8 ! _RTERM-PJ-OBJECTS ! "
+        "_RTERM-PJ-REGIONS ! _RTERM-PJ-SNAPSHOT-USED ! _RTERM-PJ-ITEMS !"
+    ) in normalized_project
 
     # Metadata and LAST-STATUS are complete before the selector is the final
     # publication store.  A valid empty projection is published but reports
@@ -719,6 +755,8 @@ def test_project_admits_into_the_inactive_bank_and_publishes_selector_last() -> 
             "REGIONS",
             "OBJECTS",
             "UTF8",
+            "ROOT-H",
+            "ROOT-W",
         )
     ]
     empty = publish.index("_RTERM-PJ-ITEMS @ 0= IF")
@@ -771,6 +809,12 @@ def test_ordinary_validation_checks_selected_metadata_without_deep_scanning() ->
     assert "_RTERM-K.SNAPSHOTS @ 0=" in metadata
     assert "UIDL-LABEL-SNAPSHOT-HEADER-SIZE _RTERM-UMUL?" in metadata
     assert "_RTERM-K.UTF8 @ _RTERM-UADD?" in metadata
+    assert "_RTERM-K.ROOT-H @ DUP 0> 0= IF" in metadata
+    assert "_RTERM-K.ROOT-W @ DUP 0> 0= IF" in metadata
+    assert metadata.count("_RTERM-LENGTH-MAX U> IF") == 2
+    empty = metadata.index("_RTERM-K.ITEMS @ 0= IF")
+    assert metadata.index("_RTERM-K.ROOT-H @") < empty
+    assert metadata.index("_RTERM-K.ROOT-W @") < empty
     normalized_metadata = re.sub(r"\s+", " ", metadata)
     assert (
         "_RTERM-K.ITEMS @ _RTERM-RV-META @ _RTERM-K.UTF8 @ MIN"
@@ -879,6 +923,7 @@ def test_quiesce_detach_scrub_and_install_one_immutable_context() -> None:
     assert "RTERM-S-INVALID _RTERM-CALL-FAIL EXIT" in detach
     assert "RTERM-S-SOURCE" not in detach
     assert "_RTERM-R.HOST 104 _RTERM-ZERO?" in detached_valid
+    assert "_RTERM-R.CANDIDATE 144 _RTERM-ZERO?" in detached_valid
     assert "_RTERM-R.TOKEN @ 0<>" in detached_valid
     assert "_RTERM-R.ISSUER @ _RTERM-RV-BACKEND @ =" in detached_valid
     assert "_RTERM-R.LAST-STATUS @" in detached_valid
