@@ -272,6 +272,74 @@ def test_guest_boot_failures_are_reported_from_the_cell_screen() -> None:
     assert "COLD SOURCE LOAD FAIL" in excerpt
 
 
+def test_acceptance_diagnostic_state_reports_exact_display_boundary() -> None:
+    ready, missing = acceptance_runner._marker_status(
+        "Desk Selection and Tools",
+        ("Selection", "Tools", "Daybook"),
+    )
+    assert not ready
+    assert missing == ("Daybook",)
+
+    state = acceptance_runner.AcceptanceDiagnosticState(
+        acceptance_runner.RETAINED_PENDING_MODE,
+        True,
+        offer_id=9,
+        scope={"model_revision": 12},
+        draw_count=3_200,
+        retained_text_sha256="a" * 64,
+        missing_ready_markers=missing,
+    )
+    summary = state.summary()
+    assert acceptance_runner.RETAINED_PENDING_MODE in summary
+    assert "CELL-ready=True" in summary
+    assert "offer=9" in summary
+    assert "draws=3200" in summary
+    assert 'scope={"model_revision": 12}' in summary
+    assert f"retained-text={'a' * 64}" in summary
+    assert "missing=Daybook" in summary
+
+
+def test_timeout_diagnostics_persist_cell_and_latest_retained_text(
+    tmp_path: Path,
+) -> None:
+    detail = acceptance_runner._write_timeout_diagnostics(
+        tmp_path,
+        cell_text="CELL Desk",
+        retained_text="retained Desk",
+        stage=0,
+        cell_ready=True,
+        offers_seen=2,
+        since_offer=7,
+        cell_missing_markers=(),
+        retained_missing_markers=("Daybook",),
+        frame_barrier=0,
+        pending_input=False,
+    )
+    assert (tmp_path / "timeout-cell.txt").read_text() == "CELL Desk"
+    assert (tmp_path / "timeout-retained.txt").read_text() == "retained Desk"
+    assert detail == (
+        "stage=0 CELL-ready=True offers-seen=2 since-offer=7 "
+        "cell-missing=none retained-missing=Daybook "
+        "frame-barrier=0 pending-input=False"
+    )
+
+    acceptance_runner._write_timeout_diagnostics(
+        tmp_path,
+        cell_text="new CELL",
+        retained_text=None,
+        stage=0,
+        cell_ready=False,
+        offers_seen=0,
+        since_offer=0,
+        cell_missing_markers=("Selection",),
+        retained_missing_markers=None,
+        frame_barrier=0,
+        pending_input=False,
+    )
+    assert (tmp_path / "timeout-cell.txt").read_text() == "new CELL"
+    assert not (tmp_path / "timeout-retained.txt").exists()
+
+
 def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
     tmp_path: Path,
 ) -> None:
@@ -308,5 +376,10 @@ def test_manifest_records_physical_pixels_scopes_and_bound_inputs(
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     assert payload["video_driver"] == "x11"
     assert payload["physical_boundary"] == "pygame.display.flip"
+    assert payload["acknowledged_evidence_viewport"] == {
+        "origin": [0, 0],
+        "extent": "recorded frame PNG dimensions",
+        "host_mode_bar": "excluded",
+    }
     assert payload["frames"] == [frame.to_dict()]
     assert payload["inputs"] == [event.to_dict()]

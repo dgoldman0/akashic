@@ -43,6 +43,9 @@ PAD_FOCUS_MARKER = "[1:Akashic Pa*]"
 DAYBOOK_FOCUS_MARKER = "[3:Daybook*]"
 DAYBOOK_PROMPT_MARKER = "New task:"
 MIN_READABLE_FONT_SIZE = 12
+CELL_FALLBACK_MODE = "CELL FALLBACK: waiting for retained frame"
+RETAINED_PENDING_MODE = "RICH RETAINED: pending physical acknowledgment"
+RETAINED_ACKNOWLEDGED_MODE = "RICH RETAINED: physically acknowledged"
 
 
 class PhysicalDesktopAcceptanceError(RuntimeError):
@@ -121,6 +124,83 @@ class PhysicalDesktopAcceptanceEvidence:
     video_driver: str
     frames: tuple[PresentedFrameEvidence, ...]
     inputs: tuple[AcceptedInputEvidence, ...]
+
+
+@dataclass(frozen=True)
+class AcceptanceDiagnosticState:
+    """One truthful host-only description of the current display boundary."""
+
+    mode: str
+    cell_ready: bool
+    offer_id: int | None = None
+    scope: dict[str, object] | None = None
+    draw_count: int = 0
+    retained_text_sha256: str | None = None
+    missing_ready_markers: tuple[str, ...] = ()
+
+    def summary(self) -> str:
+        detail = [self.mode, f"CELL-ready={self.cell_ready}"]
+        if self.offer_id is not None:
+            detail.extend(
+                (
+                    f"offer={self.offer_id}",
+                    f"draws={self.draw_count}",
+                    f"scope={json.dumps(self.scope, sort_keys=True)}",
+                )
+            )
+        if self.retained_text_sha256 is not None:
+            detail.append(f"retained-text={self.retained_text_sha256}")
+        if self.missing_ready_markers:
+            detail.append(
+                "missing=" + ",".join(self.missing_ready_markers)
+            )
+        return " | ".join(detail)
+
+
+def _marker_status(
+    text: str,
+    ready_markers: tuple[str, ...],
+) -> tuple[bool, tuple[str, ...]]:
+    missing = tuple(marker for marker in ready_markers if marker not in text)
+    return not missing, missing
+
+
+def _write_timeout_diagnostics(
+    artifact_root: Path,
+    *,
+    cell_text: str,
+    retained_text: str | None,
+    stage: int,
+    cell_ready: bool,
+    offers_seen: int,
+    since_offer: int,
+    cell_missing_markers: tuple[str, ...],
+    retained_missing_markers: tuple[str, ...] | None,
+    frame_barrier: int,
+    pending_input: bool,
+) -> str:
+    """Persist exact last-seen text planes and return the timeout detail."""
+
+    root = Path(artifact_root).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "timeout-cell.txt").write_text(cell_text, encoding="utf-8")
+    retained_path = root / "timeout-retained.txt"
+    if retained_text is not None:
+        retained_path.write_text(retained_text, encoding="utf-8")
+    else:
+        retained_path.unlink(missing_ok=True)
+    cell_missing = ",".join(cell_missing_markers) or "none"
+    retained_missing = (
+        "not-seen"
+        if retained_missing_markers is None
+        else ",".join(retained_missing_markers) or "none"
+    )
+    return (
+        f"stage={stage} CELL-ready={cell_ready} offers-seen={offers_seen} "
+        f"since-offer={since_offer} cell-missing={cell_missing} "
+        f"retained-missing={retained_missing} "
+        f"frame-barrier={frame_barrier} pending-input={pending_input}"
+    )
 
 
 def reconstruct_full_screen_glyphs(
@@ -500,6 +580,11 @@ def write_acceptance_manifest(
     payload = {
         "video_driver": video_driver,
         "physical_boundary": "pygame.display.flip",
+        "acknowledged_evidence_viewport": {
+            "origin": [0, 0],
+            "extent": "recorded frame PNG dimensions",
+            "host_mode_bar": "excluded",
+        },
         "frames": [frame.to_dict() for frame in frames],
         "inputs": [event.to_dict() for event in inputs],
     }
@@ -636,14 +721,21 @@ def run_physical_desktop_acceptance(
             terminal.cols,
             terminal.rows,
         )
+        chrome_font = pygame.font.SysFont("monospace", 16, bold=True)
+        chrome_height = chrome_font.get_linesize() + 6
         window = pygame.display.set_mode(
-            (terminal.cols * cell_width, terminal.rows * cell_height)
+            (
+                terminal.cols * cell_width,
+                terminal.rows * cell_height + chrome_height,
+            )
         )
         print(
             "Physical viewer: "
             f"{terminal.cols}x{terminal.rows} cells, "
             f"{terminal.cols * cell_width}x"
-            f"{terminal.rows * cell_height} pixels, "
+            f"{terminal.rows * cell_height} terminal pixels, "
+            f"{terminal.cols * cell_width}x"
+            f"{terminal.rows * cell_height + chrome_height} window pixels, "
             f"{fitted_font_size}px font, {driver} driver"
         )
         pygame.display.set_caption(
@@ -656,6 +748,48 @@ def run_physical_desktop_acceptance(
         inputs: list[AcceptedInputEvidence] = []
         last_accepted_offer: TerminalDisplayOffer | None = None
         last_accepted_generation: int | None = None
+        latest_cell_text = ""
+        latest_retained_text: str | None = None
+        latest_retained_draw_count = 0
+        cell_missing_markers = tuple(ready_markers)
+        retained_missing_markers: tuple[str, ...] | None = None
+        cell_ready = False
+        offers_seen = 0
+        last_seen_offer_id = 0
+        diagnostic_state: AcceptanceDiagnosticState | None = None
+        chrome_text = CELL_FALLBACK_MODE
+        chrome_background = (96, 28, 28)
+        chrome_foreground = (255, 238, 238)
+
+        def announce(state: AcceptanceDiagnosticState) -> None:
+            nonlocal diagnostic_state, chrome_text
+            nonlocal chrome_background, chrome_foreground
+            chrome_text = (
+                f"{state.mode} | stage={journey.stage}/6 | "
+                f"CELL-ready={state.cell_ready}"
+                + (
+                    ""
+                    if state.offer_id is None
+                    else f" | offer={state.offer_id} draws={state.draw_count}"
+                )
+                + f" | missing={len(state.missing_ready_markers)}"
+            )
+            if state.mode == RETAINED_ACKNOWLEDGED_MODE:
+                chrome_background = (0, 82, 68)
+                chrome_foreground = (225, 255, 248)
+            elif state.mode == RETAINED_PENDING_MODE:
+                chrome_background = (103, 73, 0)
+                chrome_foreground = (255, 247, 214)
+            else:
+                chrome_background = (96, 28, 28)
+                chrome_foreground = (255, 238, 238)
+            if state != diagnostic_state:
+                print(f"Physical viewer state: {state.summary()}")
+                pygame.display.set_caption(
+                    f"Akashic acceptance — {state.mode} "
+                    f"({fitted_font_size}px)"
+                )
+                diagnostic_state = state
 
         def send_input(
             method: str,
@@ -744,6 +878,11 @@ def run_physical_desktop_acceptance(
                     "guest failed before physical Desktop acceptance:\n"
                     f"{guest_failure}"
                 )
+            latest_cell_text = _terminal_text(terminal)
+            cell_ready, cell_missing_markers = _marker_status(
+                latest_cell_text,
+                tuple(ready_markers),
+            )
             if resized:
                 font, cell_width, cell_height, fitted_font_size = (
                     _fit_viewer_font(
@@ -756,13 +895,19 @@ def run_physical_desktop_acceptance(
                 )
                 glyph_cache.clear()
                 window = pygame.display.set_mode(
-                    (terminal.cols * cell_width, terminal.rows * cell_height)
+                    (
+                        terminal.cols * cell_width,
+                        terminal.rows * cell_height + chrome_height,
+                    )
                 )
                 print(
                     "Physical viewer resized: "
                     f"{terminal.cols}x{terminal.rows} cells, "
                     f"{terminal.cols * cell_width}x"
-                    f"{terminal.rows * cell_height} pixels, "
+                    f"{terminal.rows * cell_height} terminal pixels, "
+                    f"{terminal.cols * cell_width}x"
+                    f"{terminal.rows * cell_height + chrome_height} "
+                    "window pixels, "
                     f"{fitted_font_size}px font"
                 )
                 pygame.display.set_caption(
@@ -781,7 +926,80 @@ def run_physical_desktop_acceptance(
                 if frame_offer is None
                 else reconstruct_full_screen_glyphs(frame_offer)
             )
+            if frame_offer is None and display_state.retained_plane is None:
+                announce(
+                    AcceptanceDiagnosticState(
+                        CELL_FALLBACK_MODE,
+                        cell_ready,
+                        missing_ready_markers=cell_missing_markers,
+                    )
+                )
+            elif frame_offer is None:
+                assert last_accepted_offer is not None
+                announce(
+                    AcceptanceDiagnosticState(
+                        RETAINED_ACKNOWLEDGED_MODE,
+                        cell_ready,
+                        offer_id=last_accepted_offer.offer_id,
+                        scope=display_scope_to_wire(last_accepted_offer.scope),
+                        draw_count=latest_retained_draw_count,
+                        retained_text_sha256=(
+                            None
+                            if latest_retained_text is None
+                            else hashlib.sha256(
+                                latest_retained_text.encode("utf-8")
+                            ).hexdigest()
+                        ),
+                        missing_ready_markers=(
+                            ()
+                            if retained_missing_markers is None
+                            else retained_missing_markers
+                        ),
+                    )
+                )
+            else:
+                if frame_offer.offer_id != last_seen_offer_id:
+                    offers_seen += 1
+                    last_seen_offer_id = frame_offer.offer_id
+                assert frame_projection is not None
+                latest_retained_text = frame_projection.text
+                latest_retained_draw_count = frame_projection.draw_count
+                retained_sha = hashlib.sha256(
+                    latest_retained_text.encode("utf-8")
+                ).hexdigest()
+                _retained_ready, retained_missing_markers = _marker_status(
+                    latest_retained_text,
+                    tuple(ready_markers),
+                )
+                announce(
+                    AcceptanceDiagnosticState(
+                        RETAINED_PENDING_MODE,
+                        cell_ready,
+                        offer_id=frame_offer.offer_id,
+                        scope=display_scope_to_wire(frame_offer.scope),
+                        draw_count=frame_projection.draw_count,
+                        retained_text_sha256=retained_sha,
+                        missing_ready_markers=retained_missing_markers,
+                    )
+                )
             composed_surface = None
+
+            def draw_host_chrome() -> tuple[int, int, int, int]:
+                terminal_height = terminal.rows * cell_height
+                chrome_rect = (
+                    0,
+                    terminal_height,
+                    window.get_width(),
+                    chrome_height,
+                )
+                pygame.draw.rect(window, chrome_background, chrome_rect)
+                chrome_surface = chrome_font.render(
+                    chrome_text,
+                    True,
+                    chrome_foreground,
+                )
+                window.blit(chrome_surface, (4, terminal_height + 3))
+                return chrome_rect
 
             def draw_frame() -> None:
                 nonlocal composed_surface
@@ -797,6 +1015,9 @@ def run_physical_desktop_acceptance(
                     glyph_cache=glyph_cache,
                 )
                 window.blit(composed_surface, (0, 0))
+                # Host diagnostics occupy separate window rows.  The composed
+                # terminal surface recorded as acceptance evidence stays exact.
+                draw_host_chrome()
 
             presentation = draw_flip_and_present(
                 pygame,
@@ -836,6 +1057,24 @@ def run_physical_desktop_acceptance(
                 )
             last_accepted_offer = frame_offer
             last_accepted_generation = frame_generation
+            announce(
+                AcceptanceDiagnosticState(
+                    RETAINED_ACKNOWLEDGED_MODE,
+                    cell_ready,
+                    offer_id=frame_offer.offer_id,
+                    scope=display_scope_to_wire(frame_offer.scope),
+                    draw_count=frame_projection.draw_count,
+                    retained_text_sha256=hashlib.sha256(
+                        frame_projection.text.encode("utf-8")
+                    ).hexdigest(),
+                    missing_ready_markers=(
+                        ()
+                        if retained_missing_markers is None
+                        else retained_missing_markers
+                    ),
+                )
+            )
+            pygame.display.update(draw_host_chrome())
             progress = journey.after_present(
                 frame_offer,
                 frame_generation,
@@ -843,7 +1082,7 @@ def run_physical_desktop_acceptance(
                 send_input,
             )
             pygame.display.set_caption(
-                "Akashic rich-terminal acceptance — "
+                f"Akashic acceptance — {diagnostic_state.mode} | "
                 f"stage {journey.stage}/6 ({fitted_font_size}px)"
             )
             if progress.milestone is not None:
@@ -888,8 +1127,21 @@ def run_physical_desktop_acceptance(
                     tuple(inputs),
                 )
             time.sleep(0.01)
+        timeout_detail = _write_timeout_diagnostics(
+            artifact_root,
+            cell_text=latest_cell_text,
+            retained_text=latest_retained_text,
+            stage=journey.stage,
+            cell_ready=cell_ready,
+            offers_seen=offers_seen,
+            since_offer=display_state.since_offer,
+            cell_missing_markers=cell_missing_markers,
+            retained_missing_markers=retained_missing_markers,
+            frame_barrier=journey.frame_barrier,
+            pending_input=journey.has_pending_input,
+        )
         raise PhysicalDesktopAcceptanceError(
-            f"physical Desktop journey timed out at stage {journey.stage}"
+            f"physical Desktop journey timed out: {timeout_detail}"
         )
     except PhysicalDesktopAcceptanceError:
         raise
