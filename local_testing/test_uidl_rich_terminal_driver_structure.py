@@ -85,12 +85,13 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
     assert "8 U<" in _definition(source, "RTERM-STATUS-VALID?")
 
     assert "96 CONSTANT RTERM-HOST-BINDING-SIZE" in source
-    assert "96 CONSTANT RTERM-UIDL-CONFIG-SIZE" in source
-    assert "3 CONSTANT _RTERM-UIDL-ABI" in source
-    assert "2 CONSTANT _RTERM-UIDL-CONFIG-ABI" in source
+    assert "104 CONSTANT RTERM-UIDL-CONFIG-SIZE" in source
+    assert "4 CONSTANT _RTERM-UIDL-ABI" in source
+    assert "3 CONSTANT _RTERM-UIDL-CONFIG-ABI" in source
     assert "64 CONSTANT _RTERM-CANDIDATE-META-SIZE" in source
-    assert "280 CONSTANT RTERM-UIDL-BINDING-SIZE" in source
-    assert "152 CONSTANT RTERM-UIDL-BACKEND-SIZE" in source
+    assert "32 CONSTANT _RTERM-IDENTITY-SIZE" in source
+    assert "360 CONSTANT RTERM-UIDL-BINDING-SIZE" in source
+    assert "328 CONSTANT RTERM-UIDL-BACKEND-SIZE" in source
     assert "_RGN-DESC-SIZE CONSTANT RGN-SIZE" in region
     assert "RTERM-UIDL-CONFIG-SIZE" in _definition(
         source, "RTERM-UIDL-CONFIG-BYTES"
@@ -104,6 +105,9 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
     assert "RUPJ-ITEM-BYTES" in _definition(
         source, "RTERM-UIDL-CANDIDATE-ITEM-BYTES"
     )
+    assert "_RTERM-IDENTITY-SIZE" in _definition(
+        source, "RTERM-UIDL-CANDIDATE-IDENTITY-BYTES"
+    )
 
     # Candidate authority is positional in the caller-owned A/B banks.  A
     # binding stores only one selector and two fixed metadata records.
@@ -112,7 +116,17 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
         "_RTERM-R.CANDIDATE": 136,
         "_RTERM-R.CANDIDATE-A": 144,
         "_RTERM-R.CANDIDATE-B": 208,
-        "_RTERM-R.RESERVED": 272,
+        "_RTERM-R.OWNER": 272,
+        "_RTERM-R.OWNER-GEN": 280,
+        "_RTERM-R.ROOT-REGION": 288,
+        "_RTERM-R.OBJECT-HIGH": 296,
+        "_RTERM-R.ELIGIBLE": 304,
+        "_RTERM-R.ELIGIBLE-GEN": 312,
+        "_RTERM-R.ELIGIBLE-REGIONS": 320,
+        "_RTERM-R.ELIGIBLE-OBJECTS": 328,
+        "_RTERM-R.ELIGIBLE-UTF8": 336,
+        "_RTERM-R.ELIGIBLE-BYTES": 344,
+        "_RTERM-R.RESERVED": 352,
     }
     for field, offset in binding_fields.items():
         assert f": {field}" in source
@@ -134,9 +148,10 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
         "RTERM-UIDL-BINDING-BYTES": "( -- bytes )",
         "RTERM-UIDL-BACKEND-BYTES": "( -- bytes )",
         "RTERM-UIDL-CANDIDATE-ITEM-BYTES": "( -- bytes )",
+        "RTERM-UIDL-CANDIDATE-IDENTITY-BYTES": "( -- bytes )",
         "RTERM-UIDL-CONFIG-INIT": (
             "( host engine records-a records-u items-a items-per-bank\n"
-            "    snapshots-a snapshot-bank-u config -- status )"
+            "    identities-a snapshots-a snapshot-bank-u config -- status )"
         ),
         "RTERM-UIDL-INIT": "( config backend -- status )",
         "RTERM-UIDL-FINI": "( backend -- status )",
@@ -279,23 +294,27 @@ def test_config_and_init_preflight_all_caller_owned_banks_before_mutation() -> N
 
     # Binding count determines exactly two positional banks per binding.  The
     # two product capacities remain caller supplied; checked multiplication
-    # derives the exact item and snapshot spans without a driver-side cap.
+    # derives the exact item, positional identity, and snapshot spans without
+    # a driver-side cap.
     assert "_RTERM-I-ENGINE @ RTE-VALID?" in geometry
     assert "RTERM-UIDL-BINDING-SIZE MOD" in geometry
     assert "RTERM-UIDL-BINDING-SIZE /" in geometry
     assert "_RTERM-I-CAPACITY @ 2 _RTERM-UMUL?" in geometry
     assert "_RTERM-I-ITEMS-PER-BANK @ RUPJ-ITEM-BYTES" in geometry
     assert "_RTERM-I-BANK-COUNT @ _RTERM-I-ITEM-BANK-U @" in geometry
+    assert "_RTERM-I-ITEMS-PER-BANK @ _RTERM-IDENTITY-SIZE" in geometry
+    assert "_RTERM-I-BANK-COUNT @ _RTERM-I-IDENTITY-BANK-U @" in geometry
     assert "_RTERM-I-BANK-COUNT @ _RTERM-I-SNAPSHOT-BANK-U @" in geometry
-    assert geometry.count("_RTERM-DISJOINT?") == 10
-    assert geometry.count("RTE-STORAGE-DISJOINT?") == 4
-    assert geometry.count("UTUI-STORAGE-DISJOINT?") == 3
-    assert geometry.count("UIDL-STORAGE-DISJOINT?") == 3
-    assert geometry.count("ST-STORAGE-DISJOINT?") == 3
+    assert geometry.count("_RTERM-DISJOINT?") == 15
+    assert geometry.count("RTE-STORAGE-DISJOINT?") == 5
+    assert geometry.count("UTUI-STORAGE-DISJOINT?") == 4
+    assert geometry.count("UIDL-STORAGE-DISJOINT?") == 4
+    assert geometry.count("ST-STORAGE-DISJOINT?") == 4
 
     for address, extent in (
         ("_RTERM-I-RECORDS-A @", "_RTERM-I-RECORDS-U @"),
         ("_RTERM-I-ITEMS-A @", "_RTERM-I-ITEMS-U @"),
+        ("_RTERM-I-IDENTITIES-A @", "_RTERM-I-IDENTITIES-U @"),
         ("_RTERM-I-SNAPSHOTS-A @", "_RTERM-I-SNAPSHOTS-U @"),
     ):
         assert f"{address} {extent}\n        UTUI-STORAGE-DISJOINT?" in geometry
@@ -304,7 +323,7 @@ def test_config_and_init_preflight_all_caller_owned_banks_before_mutation() -> N
     # every authority and payload range before either construction mutates it.
     for ranges in (config_ranges, backend_ranges):
         assert ranges.count("_RTERM-SPAN?") == 1
-        assert ranges.count("_RTERM-DISJOINT?") == 5
+        assert ranges.count("_RTERM-DISJOINT?") == 6
         assert ranges.count("RTE-STORAGE-DISJOINT?") == 1
         assert ranges.count("UTUI-STORAGE-DISJOINT?") == 1
         assert ranges.count("UIDL-STORAGE-DISJOINT?") == 1
@@ -334,6 +353,7 @@ def test_config_and_init_preflight_all_caller_owned_banks_before_mutation() -> N
         "_RTERM-C.RECORDS-U !",
         "_RTERM-C.ITEMS-A !",
         "_RTERM-C.ITEMS-PER-BANK !",
+        "_RTERM-C.IDENTITIES-A !",
         "_RTERM-C.SNAPSHOTS-A !",
         "_RTERM-C.SNAPSHOT-BANK-U !",
     ):
@@ -344,13 +364,19 @@ def test_config_and_init_preflight_all_caller_owned_banks_before_mutation() -> N
     config_disjoint = init.index("_RTERM-DISJOINT? 0= IF", backend_valid)
     records_fill = init.index("_RTERM-I-RECORDS-U @ 0 FILL")
     items_fill = init.index("_RTERM-I-ITEMS-U @ 0 FILL", records_fill)
-    snapshots_fill = init.index("_RTERM-I-SNAPSHOTS-U @ 0 FILL", items_fill)
+    identities_fill = init.index(
+        "_RTERM-I-IDENTITIES-U @ 0 FILL", items_fill
+    )
+    snapshots_fill = init.index(
+        "_RTERM-I-SNAPSHOTS-U @ 0 FILL", identities_fill
+    )
     backend_fill = init.index("RTERM-UIDL-BACKEND-SIZE 0 FILL")
     magic = init.index("_RTERM-B.MAGIC !")
     assert config_valid < backend_valid < config_disjoint
-    assert config_disjoint < records_fill < items_fill < snapshots_fill
+    assert config_disjoint < records_fill < items_fill < identities_fill
+    assert identities_fill < snapshots_fill
     assert snapshots_fill < backend_fill < magic
-    assert init.count("0 FILL") == 4
+    assert init.count("0 FILL") == 5
     for field in (
         "_RTERM-B.ABI !",
         "_RTERM-B.SIZE !",
@@ -363,6 +389,8 @@ def test_config_and_init_preflight_all_caller_owned_banks_before_mutation() -> N
         "_RTERM-B.ITEMS-A !",
         "_RTERM-B.ITEMS-U !",
         "_RTERM-B.ITEMS-PER-BANK !",
+        "_RTERM-B.IDENTITIES-A !",
+        "_RTERM-B.IDENTITIES-U !",
         "_RTERM-B.SNAPSHOTS-A !",
         "_RTERM-B.SNAPSHOTS-U !",
         "_RTERM-B.SNAPSHOT-BANK-U !",
@@ -381,11 +409,13 @@ def test_fini_unbinds_only_a_zero_active_backend_and_is_blank_idempotent() -> No
     active = fini.index("_RTERM-B.ACTIVE @ IF")
     records = fini.index("_RTERM-B.RECORDS-U @ 0 FILL")
     items = fini.index("_RTERM-B.ITEMS-U @ 0 FILL", records)
-    snapshots = fini.index("_RTERM-B.SNAPSHOTS-U @ 0 FILL", items)
+    identities = fini.index("_RTERM-B.IDENTITIES-U @ 0 FILL", items)
+    snapshots = fini.index("_RTERM-B.SNAPSHOTS-U @ 0 FILL", identities)
     backend = fini.index("RTERM-UIDL-BACKEND-SIZE 0 FILL", snapshots)
-    assert span < blank < valid < active < records < items < snapshots < backend
+    assert span < blank < valid < active < records < items < identities
+    assert identities < snapshots < backend
     assert "DROP RTERM-S-WOULD-BLOCK EXIT" in fini[active:records]
-    assert fini.count("0 FILL") == 4
+    assert fini.count("0 FILL") == 5
 
 
 def test_candidate_bank_addresses_are_rederived_from_record_position() -> None:
@@ -402,13 +432,15 @@ def test_candidate_bank_addresses_are_rederived_from_record_position() -> None:
     assert "_RTERM-BK-INDEX @ 2 * _RTERM-BK-BANK @ +" in load
     assert "_RTERM-B.ITEMS-PER-BANK @ RUPJ-ITEM-BYTES" in load
     assert "_RTERM-B.ITEMS-A @" in load
+    assert "_RTERM-B.ITEMS-PER-BANK @\n        _RTERM-IDENTITY-SIZE" in load
+    assert "_RTERM-B.IDENTITIES-A @" in load
     assert "_RTERM-B.SNAPSHOTS-A @" in load
     assert "_RTERM-B.SNAPSHOT-BANK-U @" in load
 
     # Both banks are scrubbed as one record-local ownership action.  No bank
     # pointer is retained in the binding record itself.
     assert clear.count("_RTERM-BANK-LOAD") == 2
-    assert clear.count("0 FILL") == 4
+    assert clear.count("0 FILL") == 6
     assert "_RTERM-CL-RECORD @ 0 _RTERM-CL-BACKEND @" in clear
     assert "_RTERM-CL-RECORD @ 1 _RTERM-CL-BACKEND @" in clear
     for forbidden_field in (
@@ -678,7 +710,7 @@ def test_attach_is_idempotent_and_rejects_collisions_before_claiming_storage() -
     ]
 
 
-def test_project_admits_into_the_inactive_bank_and_publishes_selector_last() -> None:
+def test_project_maps_inactive_bank_and_publishes_selector_last() -> None:
     source = DRIVER.read_text(encoding="utf-8")
     project = _definition(source, "_RTERM-UCTX-PROJECT-BODY")
     select = _definition(source, "_RTERM-PROJECT-SELECT")
@@ -692,12 +724,16 @@ def test_project_admits_into_the_inactive_bank_and_publishes_selector_last() -> 
     live = project.index("_RTERM-CALL-LIVE?", attached)
     choose = project.index("_RTERM-PROJECT-SELECT", live)
     revoke = project.index("_RTERM-CANDIDATE-META-SIZE 0 FILL", choose)
-    build = project.index("RUPJ-BUILD", revoke)
+    identity_revoke = project.index("_RTERM-PJ-IDENTITY-U @ 0 FILL", revoke)
+    build = project.index("RUPJ-BUILD", identity_revoke)
     build_status = project.index("RUPJ-S-OK <>", build)
-    admitted = project.index("_RTERM-PROJECT-CANDIDATE-VALID?", build_status)
-    published = project.index("_RTERM-PROJECT-PUBLISH", admitted)
+    validated = project.index("_RTERM-PROJECT-CANDIDATE-VALID?", build_status)
+    mapped = project.index("_RTERM-PROJECT-MAP-IDENTITIES", validated)
+    negotiated = project.index("_RTERM-PROJECT-ELIGIBILITY", mapped)
+    published = project.index("_RTERM-PROJECT-PUBLISH", negotiated)
     assert lookup < attached < live < choose < revoke < build
-    assert build < build_status < admitted < published
+    assert revoke < identity_revoke < build < build_status
+    assert build_status < validated < mapped < negotiated < published
 
     # Selector zero starts at A/generation one; later construction always uses
     # the opposite bank and derives a monotonic generation from the selected
@@ -724,18 +760,21 @@ def test_project_admits_into_the_inactive_bank_and_publishes_selector_last() -> 
     deep = validate.index("RUPJ-CANDIDATE-VALID?", root_w)
     assert root_h < root_w < deep
     assert "_RTERM-PJ-ROOT-H @ _RTERM-PJ-ROOT-W @" in validate
-    assert clear_inactive.count("0 FILL") == 3
-    invalid_clear = project.index("_RTERM-PROJECT-CLEAR-INACTIVE", admitted)
+    assert clear_inactive.count("0 FILL") == 4
+    invalid_clear = project.index("_RTERM-PROJECT-CLEAR-INACTIVE", validated)
     invalid_fail = project.index("RTERM-S-INVALID _RTERM-PROJECT-FAIL", invalid_clear)
-    assert admitted < invalid_clear < invalid_fail < published
-    assert source.count("RUPJ-CANDIDATE-VALID?") == 1
+    assert validated < invalid_clear < invalid_fail < published
+    assert source.count("RUPJ-CANDIDATE-VALID?") == 2
     assert source.count("RUPJ-BUILD") == 1
     assert "RUPJ-S-CAPACITY = IF" in project
     assert "RTERM-S-CAPACITY" in project
     assert "RTERM-S-INVALID" in project
+    mapping_clear = project.index("_RTERM-PROJECT-CLEAR-INACTIVE", mapped)
+    mapping_fail = project.index("_RTERM-PROJECT-FAIL EXIT", mapping_clear)
+    assert mapped < mapping_clear < mapping_fail < negotiated
 
     # RUPJ returns ROOT-H/ROOT-W immediately below status.  The driver unpacks
-    # the entire tuple before checking status, then admits those exact extents.
+    # the entire tuple before checking status, then checks those exact extents.
     normalized_project = re.sub(r"\s+", " ", project)
     assert (
         "RUPJ-BUILD _RTERM-PJ-BUILD-STATUS ! _RTERM-PJ-ROOT-W ! "
@@ -743,9 +782,10 @@ def test_project_admits_into_the_inactive_bank_and_publishes_selector_last() -> 
         "_RTERM-PJ-REGIONS ! _RTERM-PJ-SNAPSHOT-USED ! _RTERM-PJ-ITEMS !"
     ) in normalized_project
 
-    # Metadata and LAST-STATUS are complete before the selector is the final
-    # publication store.  A valid empty projection is published but reports
-    # UNAVAILABLE; a nonempty candidate reports OK.
+    # Metadata, stable identity high-water, frozen eligibility, LAST-STATUS, and
+    # sticky status are complete before the selector is the final publication
+    # store.  A negotiation refusal withholds only eligibility authority; the
+    # selected desired candidate retains its exact private identity mapping.
     metadata_stores = [
         publish.index(f"_RTERM-K.{field} !")
         for field in (
@@ -759,15 +799,31 @@ def test_project_admits_into_the_inactive_bank_and_publishes_selector_last() -> 
             "ROOT-W",
         )
     ]
-    empty = publish.index("_RTERM-PJ-ITEMS @ 0= IF")
-    unavailable = publish.index("RTERM-S-UNAVAILABLE", empty)
-    nonempty_ok = publish.index("RTERM-S-OK", unavailable)
-    last_status = publish.index("_RTERM-R.LAST-STATUS !", nonempty_ok)
+    object_high = publish.index("_RTERM-R.OBJECT-HIGH !")
+    eligibility_clear = publish.index("_RTERM-ELIGIBILITY-CLEAR", object_high)
+    eligible_branch = publish.index("_RTERM-PJ-ELIGIBILITY-STATUS @ RTERM-S-OK = IF")
+    frozen = [
+        publish.index(f"_RTERM-R.{field} !", eligible_branch)
+        for field in (
+            "ELIGIBLE",
+            "ELIGIBLE-GEN",
+            "ELIGIBLE-REGIONS",
+            "ELIGIBLE-OBJECTS",
+            "ELIGIBLE-UTF8",
+            "ELIGIBLE-BYTES",
+        )
+    ]
+    last_status = publish.index("_RTERM-R.LAST-STATUS !", max(frozen))
+    sticky = publish.index("_RTERM-NOTE", last_status)
     selector = publish.index("_RTERM-R.CANDIDATE !", last_status)
     assert metadata_stores == sorted(metadata_stores)
-    assert metadata_stores[-1] < empty < unavailable < nonempty_ok
-    assert nonempty_ok < last_status < selector
+    assert metadata_stores[-1] < object_high < eligibility_clear < eligible_branch
+    assert eligible_branch < min(frozen) <= max(frozen) < last_status
+    assert last_status < sticky < selector
+    assert "_RTERM-PJ-IDENTITY-U @ 0 FILL" not in publish
     assert publish.index("!", selector) == publish.rindex("!")
+    eligibility = _definition(source, "_RTERM-PROJECT-ELIGIBILITY")
+    assert "_RTERM-PJ-ITEMS @ 0= IF RTERM-S-UNAVAILABLE EXIT" in eligibility
 
     # All failure exits record status without touching the selected metadata or
     # selector.  The partially written inactive bank therefore has no authority.
@@ -800,7 +856,7 @@ def test_ordinary_validation_checks_selected_metadata_without_deep_scanning() ->
     assert "_RTERM-CANDIDATE-META-BLANK?" not in candidates
     assert "GENERATION @" not in candidates
 
-    # Shallow validation still rejects quota combinations that no admitted
+    # Shallow validation still rejects quota combinations that no eligible
     # LABEL candidate can produce.  Snapshot strides are ALIGN8(64+capacity),
     # so their checked total lies between the exact header+UTF8 sum and at
     # most seven alignment bytes per positive-capacity item above it.  There
@@ -833,6 +889,145 @@ def test_ordinary_validation_checks_selected_metadata_without_deep_scanning() ->
         body = _definition(source, hot_path)
         assert "RUPJ-CANDIDATE-VALID?" not in body
         assert "RUPJ-BUILD" not in body
+
+
+def test_private_identity_mapping_is_exact_monotonic_and_wire_inert() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+    populate = _definition(source, "_RTERM-ATTACH-POPULATE")
+    validate = _definition(source, "_RTERM-IDENTITY-BANK-VALID?")
+    old = _definition(source, "_RTERM-OLD-CANDIDATE-LOAD?")
+    lookup = _definition(source, "_RTERM-MAP-OLD-ID")
+    mint = _definition(source, "_RTERM-MAP-NEW-ID")
+    map_all = _definition(source, "_RTERM-PROJECT-MAP-IDENTITIES")
+
+    for field, offset in {
+        "_RTERM-X.SUBKEY": 8,
+        "_RTERM-X.KIND": 16,
+        "_RTERM-X.OBJECT": 24,
+    }.items():
+        assert f"{offset} +" in _definition(source, field)
+
+    # The bounded record ordinal is the reusable owner ID; the globally fresh
+    # opaque token is its strictly newer owner generation.  Neither is a
+    # pointer, markup ID, or hash-derived authority.
+    ordinal = populate.index("_RTERM-RECORD-INDEX?")
+    owner = populate.index("1+", ordinal)
+    fill = populate.index("RTERM-UIDL-BINDING-SIZE 0 FILL", owner)
+    owner_store = populate.index("_RTERM-R.OWNER !", fill)
+    generation_store = populate.index("_RTERM-R.OWNER-GEN !", owner_store)
+    region_store = populate.index("_RTERM-R.ROOT-REGION !", generation_store)
+    assert ordinal < owner < fill < owner_store < generation_store < region_store
+    assert "_RTERM-A-TOKEN @ OVER _RTERM-R.OWNER-GEN !" in populate
+    assert "1 OVER _RTERM-R.ROOT-REGION !" in populate
+    for forbidden in ("HERE", "XOR", "UIDL-ATTR", "HASH"):
+        assert forbidden not in populate
+
+    # Exact semantic keys and exact prior object IDs are checked positionally.
+    # A high-water bounds minted IDs but is never treated as existence proof.
+    for accessor in (
+        "RUPJ-ITEM-ELEMENT-INDEX@",
+        "RUPJ-ITEM-SUBKEY@",
+        "RUPJ-ITEM-KIND@",
+    ):
+        assert accessor in validate
+        assert accessor in lookup
+    assert "_RTERM-X.OBJECT @" in validate
+    assert "_RTERM-IV-HIGH @ U>" in validate
+    assert "J _RTERM-IV-IDENTITY-AT _RTERM-X.OBJECT @" in validate
+    assert "_RTERM-X.OBJECT @ _RTERM-MAP-OBJECT !" in lookup
+    assert "_RTERM-LENGTH-MAX = IF 0 0 EXIT" in mint
+    assert "1 _RTERM-PJ-NEXT-HIGH +!" in mint
+    assert "_RTERM-R.OBJECT-HIGH @ _RTERM-PJ-NEXT-HIGH !" in map_all
+    assert "_RTERM-MAP-OLD-ID" in map_all
+    assert "_RTERM-MAP-NEW-ID" in map_all
+
+    # Caller mutation cannot forge a reusable mapping: the old selected recipe
+    # and its identity bank are both deep-validated before key reuse.
+    assert "RUPJ-CANDIDATE-VALID?" in old
+    assert "_RTERM-IDENTITY-BANK-VALID?" in old
+    assert "_RTERM-R.CANDIDATE @" in old
+    assert "_RTERM-R.ELIGIBLE" not in old
+    assert "_RTERM-OLD-BANK @" in old
+    assert "_RTERM-PJ-BANK" not in old
+    assert old.index("RUPJ-CANDIDATE-VALID?") < old.index(
+        "_RTERM-IDENTITY-BANK-VALID?"
+    )
+
+    # This slice reads limits only.  Owner lifecycle, retained capture, and
+    # output scheduling remain absent until the coherent materializer slice.
+    code = _code_without_comments(source)
+    assert code.count("RTE-LIMITS@") == 1
+    for forbidden in (
+        "RTE-OWNER-OPEN",
+        "RTE-OWNER-STATE@",
+        "RTE-RETAINED-BEGIN",
+        "RTE-REGION-DEFINE",
+        "RTE-LABEL-DEFINE",
+        "RTE-RETAINED-SEAL",
+        "RTE-RETAINED-CANCEL",
+        "RTE-OWNER-DROP",
+    ):
+        assert forbidden not in code
+
+
+def test_stable_mapping_precedes_terminal_negotiated_eligibility() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+    limits = _definition(source, "_RTERM-PROJECT-LIMITS?")
+    negotiate_body = _definition(source, "_RTERM-PROJECT-NEGOTIATE-BODY")
+    negotiate = _definition(source, "_RTERM-PROJECT-NEGOTIATE")
+    eligibility = _definition(source, "_RTERM-PROJECT-ELIGIBILITY")
+    publish = _definition(source, "_RTERM-PROJECT-PUBLISH")
+    project = _definition(source, "_RTERM-UCTX-PROJECT-BODY")
+
+    assert "RTE-LIMITS-FEATURES@" in limits
+    assert "RTE-F-INSTRUMENT AND 0=" in limits
+    for accessor in (
+        "RTE-LIMITS-REGIONS@",
+        "RTE-LIMITS-OBJECTS@",
+        "RTE-LIMITS-UTF8-BYTES@",
+        "RTE-LIMITS-OPS@",
+        "RTE-LIMITS-UPDATE-BYTES@",
+        "RTE-LIMITS-LABEL-BYTES@",
+    ):
+        assert accessor in limits
+    assert "_RTERM-PJ-ITEMS @ 1 _RTERM-UADD?" in limits
+    assert "_RTERM-PJ-OBJECTS @ 120 _RTERM-UMUL?" in limits
+    assert "_RTERM-PJ-UTF8 @ _RTERM-UADD?" in limits
+    assert "288 _RTERM-UADD?" in limits
+    assert "_RTERM-PJ-ELIGIBILITY-BYTES !" in limits
+    for compatibility in (
+        "RUPJ-ITEM-HAS-RESOLVED?",
+        "UIDL-SNAPSHOT-K-LABEL <>",
+        "RUPJ-ITEM-SUBKEY@ IF",
+        "RUPJ-ITEM-RESOLVED-ATTRS@ IF",
+        "UIDL-LABEL-SNAPSHOT-TEXT-CAPACITY@",
+    ):
+        assert compatibility in limits
+
+    # The embedded fixed-record scratch is always cleared, even if the facade
+    # or validation throws; no provider-owned limits pointer survives.
+    assert "RTE-LIMITS@" in negotiate_body
+    assert "['] _RTERM-PROJECT-NEGOTIATE-BODY CATCH" in negotiate
+    assert negotiate.count("RTE-LIMITS-SIZE 0 FILL") == 2
+    assert negotiate.index("CATCH") < negotiate.rindex("RTE-LIMITS-SIZE 0 FILL")
+
+    mapping = project.index("_RTERM-PROJECT-MAP-IDENTITIES")
+    eligibility_call = project.index("_RTERM-PROJECT-ELIGIBILITY", mapping)
+    assert mapping < eligibility_call
+    assert "_RTERM-PROJECT-MAP-IDENTITIES" not in eligibility
+    assert "_RTERM-PROJECT-NEGOTIATE" in eligibility
+    assert "_RTERM-R.OBJECT-HIGH !" not in eligibility
+    assert "_RTERM-R.ELIGIBLE" not in eligibility
+    assert publish.index("_RTERM-R.OBJECT-HIGH !") < publish.index(
+        "_RTERM-R.CANDIDATE !"
+    )
+    assert publish.index("_RTERM-R.ELIGIBLE-BYTES !") < publish.index(
+        "_RTERM-R.CANDIDATE !"
+    )
+    assert publish.index("_RTERM-R.OBJECT-HIGH !") < publish.index(
+        "_RTERM-ELIGIBILITY-CLEAR"
+    )
+    assert "_RTERM-PJ-IDENTITY-U @ 0 FILL" not in publish
 
 
 def test_relayout_separates_visible_geometry_from_hidden_scrub() -> None:
@@ -879,6 +1074,14 @@ def test_relayout_separates_visible_geometry_from_hidden_scrub() -> None:
     ):
         assert visible_branch < commit.index(field) < hidden_scrub
     assert commit.count("_RTERM-R.VISIBLE !") == 1
+    assert commit.count("_RTERM-ELIGIBILITY-CLEAR") == 2
+    for persistent_mapping_authority in (
+        "_RTERM-R.CANDIDATE",
+        "_RTERM-R.OBJECT-HIGH",
+        "_RTERM-PJ-IDENTITY",
+        "_RTERM-CLEAR-RECORD-BANKS",
+    ):
+        assert persistent_mapping_authority not in commit
     for successful_path in (relayout, visible, hidden, commit):
         assert "_RTERM-R.LAST-STATUS" not in successful_path
     assert "0<=" not in source
@@ -923,7 +1126,7 @@ def test_quiesce_detach_scrub_and_install_one_immutable_context() -> None:
     assert "RTERM-S-INVALID _RTERM-CALL-FAIL EXIT" in detach
     assert "RTERM-S-SOURCE" not in detach
     assert "_RTERM-R.HOST 104 _RTERM-ZERO?" in detached_valid
-    assert "_RTERM-R.CANDIDATE 144 _RTERM-ZERO?" in detached_valid
+    assert "_RTERM-R.CANDIDATE 224 _RTERM-ZERO?" in detached_valid
     assert "_RTERM-R.TOKEN @ 0<>" in detached_valid
     assert "_RTERM-R.ISSUER @ _RTERM-RV-BACKEND @ =" in detached_valid
     assert "_RTERM-R.LAST-STATUS @" in detached_valid

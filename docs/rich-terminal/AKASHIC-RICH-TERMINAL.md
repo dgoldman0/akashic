@@ -86,7 +86,8 @@ projection binding. The binding contains:
 * one private retained wire owner ID and generation when materialized;
 * stable mappings from `(UCTX, element-index, semantic-subkey)` to wire item
   identities; and
-* admitted quotas, copied projection state, progress, and retirement state.
+* terminal-eligibility quotas, copied projection state, progress, and retirement
+  state.
 
 The complete host/slot/CINST/UCTX tuple is the Akashic authority binding. Focus,
 current tile position, an `id=` string, a region pointer, or possession of a
@@ -113,7 +114,7 @@ The host/backend boundary uses these stable ordinary status values:
 | 0 | `RTERM-S-OK` | The host operation or projection was accepted. |
 | 1 | `RTERM-S-WOULD-BLOCK` | No downstream progress is currently possible; retry from the host loop. |
 | 2 | `RTERM-S-UNAVAILABLE` | No usable negotiated retained backend or required semantic family exists. |
-| 3 | `RTERM-S-CAPACITY` | Caller-owned or negotiated capacity cannot admit the projection. |
+| 3 | `RTERM-S-CAPACITY` | Caller-owned capacity cannot store the candidate or a checked limit cannot establish eligibility/admit materialization. |
 | 4 | `RTERM-S-STALE` | The UCTX, activation binding, source revision, or terminal materialization is no longer current. |
 | 5 | `RTERM-S-INVALID` | An argument, semantic snapshot, storage configuration, state transition, or callback result is invalid. |
 | 6 | `RTERM-S-SESSION-LOST` | The enhanced session crossed a structural loss boundary. |
@@ -129,7 +130,7 @@ safe.
 `RTERM-S-WOULD-BLOCK` is transport progress, not local projection-capacity
 failure. Already accepted desired state remains accepted while egress is
 blocked. `RTERM-S-CAPACITY` and `RTERM-S-INVALID` are fail-before-mutation at
-each local admission boundary.
+each local validation or materialization-admission boundary.
 
 ## 4. Generic engine construction and caller-owned storage
 
@@ -183,7 +184,8 @@ discovery returns `RTE-S-WOULD-BLOCK`, a deterministic CELL-only result returns
 `RTE-S-SESSION-LOST`. A non-OK result leaves the destination unchanged. On
 success the facade validates CORE presence, feature dependencies, exact
 feature-dependent zero/positive fields, cross-field totals, and transaction
-floors. These are negotiated admission bounds, not compiled product limits.
+floors. These are negotiated eligibility bounds, not compiled product limits or
+resource reservations.
 The current provider obtains them through
 `RTAPT-LIMITS@ ( engine -- limits status )`, which synchronously copies the
 already validated PT CAPS/FORMATS pair into one engine-owned typed snapshot.
@@ -265,25 +267,29 @@ active/hidden identity-and-type ledgers. The neutral RTE LABEL record keeps its
 provider-admission restriction, not a contraction of the facade schema.
 
 The renderer-neutral candidate projector can now measure and copy supported
-UIDL semantics into caller-owned banks, and the lifecycle driver now admits a
-complete build into one of two banks belonging to the exact private binding.
-It builds the inactive bank, applies `RUPJ-CANDIDATE-VALID?` at that admission
-boundary, completes its metadata, and changes the authoritative selector last.
-An accepted empty candidate is published and returns
-`RTERM-S-UNAVAILABLE`; an accepted nonempty candidate returns
-`RTERM-S-OK`. Any build, validation, capacity, or caught-exception failure
-leaves the prior selector and therefore the prior desired scene authoritative.
+UIDL semantics into caller-owned banks, and the lifecycle driver now selects a
+complete build in one of two banks belonging to the exact private binding. It
+builds the inactive bank, applies `RUPJ-CANDIDATE-VALID?`, maps retry-stable
+private identities for a nonempty recipe, completes its metadata, and changes
+the authoritative selector last. An accepted empty candidate is published and
+returns `RTERM-S-UNAVAILABLE`. A deep-valid nonempty candidate then undergoes a
+terminal-eligibility check; its exact success or refusal status is returned,
+while either result preserves the candidate and mapping. A construction,
+deep-validation, or identity-mapping failure leaves the prior selector and
+therefore the prior desired scene authoritative.
 
 UIDL-TUI exposes complete neutral resolved geometry/style as a copied 72-byte
-record with effective visibility and paint-group z. Each admitted 128-byte
-RUPJ item now carries that record root-relative when it is available, while
+record with effective visibility and paint-group z. Each selected 128-byte RUPJ
+item now carries that record root-relative when it is available, while
 preserving semantic LABEL membership with a zero resolved payload when it is
-not. The projector and driver still invoke no facade operation, including the
-limits or LABEL callbacks. The neutral RTE/RTAPT boundary can now validate,
-capture, retry, and typed-dispatch one complete LABEL definition, but candidate
-identity, negotiated admission, lifecycle materialization, and unified
-publication scheduling remain. The current lifecycle driver is therefore
-still output-inert.
+not. The projector invokes no facade operation. The driver invokes only the
+read-only `RTE-LIMITS@` after assigning private owner/region/object identities,
+then records terminal-negotiated eligibility before selector publication. This
+reserves neither an owner nor capture-bank space. The neutral RTE/RTAPT boundary
+can validate, capture, retry, and typed-dispatch one complete LABEL definition,
+but local capture admission, lifecycle materialization, and unified publication
+scheduling remain. The current lifecycle driver is therefore still
+output-inert.
 
 The lower UIDL layer now supplies the first neutral semantic snapshot
 substrate independently of this adapter. `ED.SEMANTICS` selects a per-element
@@ -293,7 +299,8 @@ provider identity. The initial LABEL record contains the resolved text plus
 its explicit `text-capacity` reservation. CELL label paint consumes the same
 `UIDL-TEXT@` value rule but never enforces snapshot eligibility or capacity.
 Thus string/integer/boolean binding semantics are shared below either output
-path, while optional rich-output admission remains above UIDL semantics.
+path, while optional rich-output eligibility and materialization remain above
+UIDL semantics.
 
 The candidate projector walks the active root tree under one compound
 UIDL-TUI, UIDL, projector, and semantic observation and copies eligible LABEL
@@ -301,14 +308,15 @@ records plus any available neutral resolved state into bounded item/snapshot
 banks. Semantic eligibility does not depend on resolved-state availability:
 an unavailable resolved record leaves a zero payload and flags, while invalid
 resolved state rejects the complete build. Each binding has two caller-owned
-item banks and two caller-owned snapshot banks, so a new complete candidate can
-replace the selected candidate atomically without allocating. This does not
-change the current wire-inert state: no shipped UIDL has been bulk-annotated
-for optional rich-output eligibility, and the admitted candidate is not yet
-materialized. Later negotiated admission must compare each LABEL declaration
-and the checked per-owner sum against
-`RTE-LIMITS-LABEL-BYTES@` and `RTE-LIMITS-UTF8-BYTES@` before opening an owner
-or publishing an object.
+item banks, two positional identity banks, and two caller-owned snapshot banks,
+so a new complete candidate can replace the selected candidate atomically
+without allocating. This does not change the current wire-inert state: no
+shipped UIDL has been bulk-annotated for optional rich-output eligibility, and
+the terminal-eligible candidate is not yet materialized. The eligibility check
+already compares each LABEL declaration, the checked per-owner sum, counts,
+operations, and complete worst-case transaction bytes. A later materializer must
+still revalidate terminal limits, local capture-bank fit, and dynamic owner
+availability before any owner may open or object may publish.
 
 `config` names the exact borrowed PT session, output policy, and caller-owned
 spans and capacities for:
@@ -519,10 +527,14 @@ The renderer-neutral desired-scene input is defined separately in
 [UIDL-PROJECTION-CANDIDATE.md](UIDL-PROJECTION-CANDIDATE.md). Its caller-owned
 candidate items use stable UIDL element indices and copied semantic snapshots;
 they contain no engine, protocol, screen, Desk, or applet identity. Candidate
-construction and lifecycle admission are deliberately wire-inert. The driver
-publishes one of two per-binding candidate banks only after a complete build
-and RUPJ admission validation; later materialization may compare its declared
-quotas with a discovered engine.
+construction, private identity mapping, and terminal-eligibility checks are
+deliberately wire-inert. After a complete build and RUPJ validation, the driver
+maps every nonempty candidate's exact semantic keys to retry-stable private
+object IDs. It then reads one coherent neutral `RTE` limits snapshot and either
+records terminal-negotiated eligibility or publishes the desired candidate and
+its mapping without materialization readiness. Eligibility is not owner or
+capture-bank admission and reserves no resource. Neither outcome opens an owner,
+captures an operation, chooses an output path, or emits bytes.
 
 The first lifecycle foundation is the optional
 `akashic/tui/rich-terminal/uidl-driver.f` module. It constructs the private,
@@ -531,14 +543,15 @@ caller-bounded binding registry separately from the retained engine:
 ```forth
 RTERM-HOST-BINDING-CAPTURE  ( host slot host-binding -- status )
 
-RTERM-UIDL-CONFIG-BYTES     ( -- bytes )  \ 96
+RTERM-UIDL-CONFIG-BYTES     ( -- bytes )  \ 104
 RTERM-UIDL-BINDING-BYTES    ( -- bytes )
-                                            \ 280 per binding
-RTERM-UIDL-BACKEND-BYTES    ( -- bytes )  \ 152
+                                            \ 360 per binding
+RTERM-UIDL-BACKEND-BYTES    ( -- bytes )  \ 328
 RTERM-UIDL-CANDIDATE-ITEM-BYTES ( -- bytes )  \ 128
+RTERM-UIDL-CANDIDATE-IDENTITY-BYTES ( -- bytes )  \ 32
 RTERM-UIDL-CONFIG-INIT
   ( host engine records-a records-u items-a items-per-bank
-    snapshots-a snapshot-bank-u config -- status )
+    identities-a snapshots-a snapshot-bank-u config -- status )
 RTERM-UIDL-INIT             ( config backend -- status )
 RTERM-UIDL-FINI             ( backend -- status )
 RTERM-UIDL-VALID?           ( backend -- flag )
@@ -553,12 +566,14 @@ This foundation has no `RTAPT-*`, screen-publisher, MegaPad, Desk, or applet
 dependency. It borrows one immutable `RTE` facade, and its immutable UIDL
 callback installation through `_UTUI-PROJECTION-ADAPTER!` carries the exact
 driver backend as explicit composition context; neither context is stored in a
-UCTX. The 96-byte initialization descriptor supplies the exact host, engine,
-280-byte binding-record slab, and caller-owned candidate storage geometry. Its
-record capacity determines exactly two item banks and two snapshot banks per
-binding; the 152-byte backend copies that geometry and does not retain the
-descriptor. Product composition may therefore clear the descriptor immediately
-after initialization.
+UCTX. The 104-byte initialization descriptor supplies the exact host, engine,
+360-byte binding-record slab, and caller-owned candidate storage geometry. Its
+record capacity determines exactly two item, two positional identity, and two
+snapshot banks per binding. Identity extent is derived from the existing item
+geometry, not from a compiled or additional product capacity. The 328-byte
+backend copies that geometry, contains one fixed-shape 160-byte limits scratch,
+and does not retain the descriptor or a provider limits pointer. Product
+composition may therefore clear the descriptor immediately after initialization.
 
 Each candidate item is 128 bytes: its stable semantic key and snapshot slice
 are followed by flags at offset 40, a copied 72-byte resolved record at offsets
@@ -566,19 +581,53 @@ are followed by flags at offset 40, a copied 72-byte resolved record at offsets
 `EFFECTIVE_VISIBLE=2` are the only valid flag bits, and effective visibility
 implies a resolved record. Resolved coordinates are normalized relative to
 the candidate root. Each bank's 64-byte metadata adds the positive root height
-and width after its generation/count/quota fields. In the 280-byte binding,
-candidate metadata A begins at 144, B at 208, and the reserved cell is at 272.
+and width after its generation/count/quota fields. In the 360-byte binding,
+candidate metadata A begins at 144 and B at 208. Offsets 272 through 351 retain
+the private owner tuple, region/object allocation state, eligible selector and
+generation, terminal-checked region/object/UTF-8 quotas, and worst-case
+transaction bytes; offset 352 is reserved. Those eligibility fields are not an
+owner reservation or proof that the caller-owned RTAPT capture banks can admit
+the candidate.
 
-Attach and geometry tracking remain local-only. Project now constructs and
-atomically admits the inactive candidate bank, returning
-`RTERM-S-UNAVAILABLE` only for an accepted empty candidate and
-`RTERM-S-OK` for an accepted nonempty candidate. It still creates no wire
-owner or tombstone and calls no facade operation. In particular, the driver
-must not open a default or root-region-only owner: owner quotas can be admitted
-only from one complete supported semantic tree. The neutral limits surface
-makes that later comparison possible without exposing PT reply records or
-provider vocabulary to the UIDL driver, but this wire-inert slice does not
-query it.
+Attach and geometry tracking remain local-only. Attach derives a bounded wire
+owner ID from the binding-record ordinal and uses the globally nonreused opaque
+binding token as that owner's strictly newer generation. Each generation starts
+with private root region ID 1 and object high-water zero. No pointer, markup
+`id=`, hash, candidate selector, or current focus becomes wire authority.
+
+Project constructs and deep-validates the inactive neutral candidate, maps its
+private identities, and then performs its only facade operation,
+`RTE-LIMITS@`. Terminal-negotiated eligibility requires a resolved LABEL-only
+tree, zero currently unsupported resolved attributes, INSTRUMENT support, one
+region, one object per item, `1 + item-count` operations, each declared text
+capacity within `max_label_bytes`, aggregate declared UTF-8 within the
+owner/global bound, and exact worst-case complete transaction bytes
+`288 + 120 * item-count + declared_utf8` within the negotiated update maximum.
+Every addition and multiplication is checked.
+
+One caller-owned 32-byte positional identity record copies the exact
+`(element-index, semantic-subkey, kind)` and its nonzero object ID. Exact keys
+reuse IDs from the previously mapped bank; new keys consume a checked monotone
+high-water and may leave legal gaps. Deep validation rejects duplicate object
+IDs and never treats `id <= high-water` as existence. Mapping completes before
+negotiation, so pending discovery or another negotiation refusal cannot remint
+an unchanged semantic key. A successful limits check additionally records the
+exact eligible generation, quotas, and worst-case bytes. A deep-valid nonempty
+candidate is selector-published with its mapping whether negotiation succeeds or
+returns a stable refusal; refusal clears only eligibility/materialization
+readiness and its exact status is returned. An empty candidate has no mapping. A
+build, deep-validation, or identity-mapping failure leaves the prior selector
+untouched.
+
+Before any later `OWNER_OPEN` or retained capture, the materializer must
+revalidate current terminal limits, dynamic owner availability, and the exact
+caller-owned RTAPT owner, operation, and copied-byte capacity needed by the
+candidate. Only that later preflight can turn eligibility into an admitted
+materialization attempt.
+
+The driver still creates no wire owner or tombstone and calls no mutating facade
+operation. In particular it must not open a default or root-region-only owner:
+`OWNER_OPEN` belongs to the later complete materialization/service slice.
 Construction and attach admit the exact declared application descriptor,
 component descriptor, and live component-state spans as well as the fixed host
 objects, and reject every alias with driver storage. Every public stateful
@@ -595,12 +644,12 @@ now-proven-disjoint descriptor even if attach throws. A capture refusal leaves
 the already pointer-free scratch unchanged.
 
 `RTERM-UIDL-FINI` is the matching host-unbind boundary. It succeeds only when
-the backend has no live bindings, clears the binding records, both candidate
-bank slabs, and the backend, and therefore removes the borrowed AHOST pointer
-before that host can be freed. A live-binding refusal leaves every byte intact
-for quarantine. The immutable UIDL callback table may retain the same stable
-backend address; a later exact host may reinitialize and reinstall that address
-idempotently.
+the backend has no live bindings, clears the binding records and all item,
+identity, and snapshot bank slabs, then clears the backend. It therefore removes
+the borrowed AHOST pointer before that host can be freed. A live-binding refusal
+leaves every byte intact for quarantine. The immutable UIDL callback table may
+retain the same stable backend address; a later exact host may reinitialize and
+reinstall that address idempotently.
 
 `host-binding` is an immutable, call-borrowed descriptor containing ABI
 version, exact size, zero-reserved fields, the exact `AHOST` and `AHS` slot
@@ -639,26 +688,30 @@ a UCTX, slot, or CINST component with a different tuple is stale or invalid.
 Attach reserves one preallocated binding record but has no wire side effect.
 The first projection, after normal application initialization and binding,
 walks the complete semantic tree, validates all retained-capable snapshots,
-derives exact requested quotas, and atomically admits the complete desired
-snapshot to caller-bounded storage. Required counts, byte capacities, resource
-overlap, series history, and transaction operation/byte bounds must fit local
-storage before that snapshot is accepted. Local attach and this first complete
-desired snapshot may occur while retained discovery is still pending. The
-accepted snapshot is kept as bounded backend state; pending discovery does not
-authorize a wire owner or discard the snapshot. Once discovery is available,
-the requested quotas must also fit the negotiated terminal maxima before
-`OWNER_OPEN` is emitted.
+derives exact requested quotas, maps stable private identities, and atomically
+selects the complete desired snapshot in caller-bounded storage. Required local
+counts, byte capacities, resource overlap, series history, and transaction
+operation/byte arithmetic must be valid before that snapshot is selected. Local
+attach and this first complete desired snapshot may occur while retained
+discovery is still pending. Pending discovery returns `RTERM-S-WOULD-BLOCK` and
+leaves the selected snapshot and mapping intact but grants no materialization
+readiness and authorizes no wire owner. When discovery becomes available, the
+owner-loop service renegotiates that selected candidate in place; it does not
+wait for another UIDL dirty event. The requested quotas must fit the current
+terminal maxima before `OWNER_OPEN` is emitted.
 
-The owner reservation is frozen for that UCTX materialization. Dynamic values
-may vary within declared semantic capacities but cannot silently enlarge them.
-If the tree later changes structurally beyond admission, retained projection
-reports capacity and keeps the prior coherent retained terminal state; CELL rendering
-continues from the authoritative UIDL tree.
+Terminal-negotiated eligibility freezes the declared semantic capacities for a
+later materializer preflight; it is not an owner reservation. Dynamic values may
+vary within those declarations but cannot silently enlarge them. The
+materializer must still prove local RTAPT capture-bank fit and dynamic owner
+availability. If the tree later changes structurally beyond eligibility,
+retained projection reports capacity and keeps the prior coherent retained
+terminal state; CELL rendering continues from the authoritative UIDL tree.
 
 Unavailable retained discovery or an unsupported optional semantic family
-does not prevent attach or application initialization. The binding remains a
-CELL-fallback binding with no wire owner until a complete supported projection
-can be admitted.
+does not prevent attach or application initialization. The binding retains its
+newest deep-valid desired snapshot and stable mapping but remains a CELL-fallback
+binding with no wire owner until a materializer can admit that snapshot.
 
 ### 6.2 Project
 
@@ -674,15 +727,21 @@ with `RUPJ-CANDIDATE-VALID?`, using the same positive root height and width,
 and writes the selector only after its 64-byte metadata is complete. It never
 asks an applet to enumerate a second scene.
 
-Local projection admission is atomic. A failure leaves the selected copied
-projection recipe authoritative while UIDL and CELL state remain untouched.
-An accepted empty recipe supersedes the former candidate but reports
-`RTERM-S-UNAVAILABLE`; an accepted nonempty recipe reports `RTERM-S-OK`.
-No protocol byte is emitted from an element or widget callback. Layout/style
-state is now part of the locally accepted desired recipe. The neutral
-RTE/RTAPT LABEL path exists below it, but candidate-to-engine materialization
-and scheduling through the unified publisher remain necessary before the
-recipe can become retained terminal state.
+Candidate selection, identity mapping, and terminal-negotiated eligibility are
+separate atomic facts. A build, deep-validation, or identity-mapping failure
+leaves the prior selected copied recipe authoritative while UIDL and CELL state
+remain untouched. An accepted empty recipe supersedes the former candidate but
+reports `RTERM-S-UNAVAILABLE`. Every deep-valid nonempty recipe maps its stable
+private IDs and supersedes the former candidate; `RTERM-UCTX-PROJECT` then
+returns the exact limits result, including `RTERM-S-OK`,
+`RTERM-S-WOULD-BLOCK`, `RTERM-S-UNAVAILABLE`, or `RTERM-S-CAPACITY`. A non-OK
+negotiation result clears only eligibility/materialization readiness, not the
+selected candidate, its mapping, or the monotone identity high-water. No
+protocol byte is emitted from an element or widget callback. Layout/style state
+is now part of the locally accepted desired recipe. The neutral RTE/RTAPT LABEL
+path exists below it, but local capture admission, candidate-to-engine
+materialization, and scheduling through the unified publisher remain necessary
+before the recipe can become retained terminal state.
 
 The first materialization in an epoch is a complete projection obligation, not
 an ordinary dirty-element update. Transition to retained availability, and
@@ -703,7 +762,10 @@ an admitted bound.
 Relayout runs after ordinary UIDL layout has resolved the UCTX. `region` is the
 current root Akashic region and `visible` is the host's actual minimize/restore
 state. Moving or resizing a tile updates the owner region and derived layout
-without changing semantic element or resource identities.
+without changing semantic element, private object, or resource identities.
+Geometry change or hiding may revoke terminal eligibility/materialization
+readiness for a stale resolved recipe, but it preserves the exact key-to-object
+mapping and monotone high-water needed by the next projection or restore.
 
 Desk keeps one region descriptor for each linked child slot and updates its
 bounds in place. Minimize publishes hidden visibility before any later layout,
@@ -840,7 +902,8 @@ output publisher and the one shared transaction-ID/revision clock.
 
 When one logical UI frame changes both CELL and retained state, the unified
 output publisher commits the applicable CELL spans/cursor and retained
-operations in one atomic `PRESENT` transaction. A failed combined commit cannot
+operations in one atomic terminal update transaction, delimited on the APT-1
+wire by `PRESENT_BEGIN` and `PRESENT_COMMIT`. A failed combined commit cannot
 advance the screen front buffer or the retained materialization independently.
 A frame with no retained changes remains an ordinary valid CELL transaction; a
 retained-only update may use `CELL_NONE` under the wire recovery rules.
@@ -913,13 +976,15 @@ The product profile supplies independent owner-record, operation-record,
 copied-operation-byte, UIDL-binding-record, per-candidate item, and
 per-candidate snapshot-byte capacities before the leaf is sourced. The APT-1
 Desk product supplies overrideable defaults for those product capacities and
-allocates two candidate banks of each kind per binding; fixed
-one-per-composition records remain leaf-owned. Desk's neutral host lifecycle
-then initializes the UIDL driver against the exact live `AHOST`, clears the
-temporary UIDL configuration descriptor, installs the one post-UIDL callback,
-and finalizes it after child drain. Setup and release publish explicit phases,
-so a constructor or destructor refusal retains the smallest exact retry
-authority rather than clearing uncertain storage.
+allocates two candidate banks of each kind per binding. Its caller-owned
+identity bank has one fixed-size identity record per candidate item, so its
+extent derives from that existing item/bank geometry and introduces no new
+product capacity; fixed one-per-composition records remain leaf-owned. Desk's
+neutral host lifecycle then initializes the UIDL driver against the exact live
+`AHOST`, clears the temporary UIDL configuration descriptor, installs the one
+post-UIDL callback, and finalizes it after child drain. Setup and release
+publish explicit phases, so a constructor or destructor refusal retains the
+smallest exact retry authority rather than clearing uncertain storage.
 
 The name `desk-apt1.f` identifies that opt-in product composition, not a second
 Desk implementation or a rich Desk behavior. Both baseline and APT-1 products
@@ -940,10 +1005,13 @@ composition after the outer storage was released.
 That construction does not itself claim retained semantic support. The
 provider side now accepts a neutral LABEL through `RTE`, captures a
 pointer-free RTAPT retry record with exact object/UTF-8 ledgers, and dispatches
-it through the typed PT writer. No lifecycle materializer yet assigns retained
-identity and couples a selected candidate through that path, and no service
-schedules the result through unified publication. The driver therefore
-remains output-inert and the production host advertises no retained policy.
+it through the typed PT writer. The lifecycle driver now selects a complete
+deep-valid candidate together with private, retry-stable identities before
+negotiation, and separately records terminal-negotiated eligibility when the
+current limits permit it. A refusal preserves the selected candidate and
+mapping. It still queues no `OWNER_OPEN`, materializes no LABEL, and schedules
+nothing through unified publication. The driver therefore remains output-inert
+and the production host advertises no retained policy.
 CELL output still traverses the unified publisher, while attach, project,
 geometry, quiesce, and detach exercise the exact private UCTX lifetime without
 opening a root-region-only wire owner. The next critical slice is candidate
@@ -954,11 +1022,12 @@ snapshot is produced only after Desk initialization, so host composition,
 autostart, local UIDL attach, ordinary application initialization, and the
 first complete desired semantic snapshot may all precede discovery settlement.
 Attach and project remain locally bounded and wire-inert at that boundary.
-The owner-loop service later responds to `AVAILABLE` with complete
-materialization rather than waiting for another UIDL dirty event. A final
-`CELL-ONLY` answer selects stable CELL fallback and never opens a retained
-owner; applet initialization does not poll terminal features and sees no
-different service table.
+The owner-loop service later responds to `AVAILABLE` by renegotiating the newest
+selected candidate in place, proving local capture-bank and owner availability,
+and scheduling complete materialization rather than waiting for another UIDL
+dirty event. A final `CELL-ONLY` answer selects stable CELL fallback and never
+opens a retained owner; applet initialization does not poll terminal features
+and sees no different service table.
 
 The host lifecycle order is:
 
@@ -1092,11 +1161,13 @@ The lightweight contract suite must prove:
 4. an unregistered, unlinked, reused, detached, foreign-host, mismatched CINST
    generation or UCTX, foreign-backend token, or stale token is rejected without
    consuming an owner record or mutating wire state;
-5. configuration overflow, wrap, misalignment, overlap, and negotiated-budget
-   mismatch fail before changing supplied storage;
-6. a complete semantic-tree admission derives exact quotas and rejects
-   insufficient object, resource, series, operation, or byte capacity before
-   `OWNER_OPEN`;
+5. configuration overflow, wrap, misalignment, and overlap fail before changing
+   supplied storage, while a negotiated-budget refusal preserves the newest
+   deep-valid candidate and stable mapping but grants no materialization
+   readiness;
+6. a complete semantic-tree candidate maps exact stable IDs before negotiation,
+   derives exact quotas, and requires a later local capture-bank and dynamic
+   owner preflight before `OWNER_OPEN`;
 7. UIDL labels, units, styles, points, scalar values, and semantic snapshots are
    copied or revision-bound so later scratch mutation cannot change committed
    projection;
@@ -1107,9 +1178,10 @@ The lightweight contract suite must prove:
 10. an exact `STEP` budget is honored and downstream backpressure causes no
     spin, loss, reordering, or hidden allocation;
 11. minimize suppresses ordinary retained output, coalesces latest semantic
-    state, and restore publishes one coherent current projection;
-12. relayout changes region/layout geometry while semantic and wire item
-    identities remain stable;
+    state, preserves private identity mappings, and restore publishes one
+    coherent current projection;
+12. relayout changes region/layout geometry and may revoke materialization
+    readiness while semantic and wire item identities remain stable;
 13. reset during an incomplete source transfer rebuilds the complete visible
     projection from current UCTX semantics;
 14. a frame changing CELL and retained state advances both atomically or

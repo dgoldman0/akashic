@@ -386,6 +386,17 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
         in code
     )
     assert (
+        "APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK\n"
+        "    RTERM-UIDL-CANDIDATE-IDENTITY-BYTES _A1D-CAPACITY*"
+        in code
+    )
+    assert (
+        "_A1D-UIDL-CANDIDATE-BANKS "
+        "_A1D-UIDL-CANDIDATE-IDENTITY-BANK-U\n"
+        "    _A1D-CAPACITY*"
+        in code
+    )
+    assert (
         "APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK 7 AND"
         in code
     )
@@ -397,6 +408,7 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
     )
     for payload in (
         "_A1D-UIDL-CANDIDATE-ITEMS-U",
+        "_A1D-UIDL-CANDIDATE-IDENTITIES-U",
         "_A1D-UIDL-CANDIDATE-SNAPSHOTS-U",
         "RTERM-UIDL-CONFIG-BYTES",
     ):
@@ -407,6 +419,7 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
     # Profile-sized banks are initialized and finalized by the checked driver,
     # not redundantly cleared by Desk's scalar cold-state reset.
     assert "_A1D-UIDL-CANDIDATE-ITEMS" not in clear_inert
+    assert "_A1D-UIDL-CANDIDATE-IDENTITIES" not in clear_inert
     assert "_A1D-UIDL-CANDIDATE-SNAPSHOTS" not in clear_inert
 
     setup = _word(composition, "_A1D-SETUP")
@@ -454,6 +467,7 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
         "_A1D-UIDL-RECORDS _A1D-UIDL-RECORDS-U "
         "_A1D-UIDL-CANDIDATE-ITEMS "
         "APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK "
+        "_A1D-UIDL-CANDIDATE-IDENTITIES "
         "_A1D-UIDL-CANDIDATE-SNAPSHOTS "
         "APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK "
         "_A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-INIT"

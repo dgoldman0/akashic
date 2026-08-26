@@ -99,8 +99,11 @@ and `region-quota` is one exactly when the candidate is nonempty.
 Construction clears the complete destination before writing. Any ordinary
 failure or caught exception clears it again and returns five zero values plus a
 stable status. The UIDL lifecycle driver assigns each private binding two
-caller-owned item banks and two caller-owned snapshot banks. A projection
-builds only the inactive pair, revalidates it with
+caller-owned item banks, two positional identity banks, and two caller-owned
+snapshot banks. Identity extent is exactly one 32-byte record per candidate
+item and therefore derives from the existing item/bank geometry rather than a
+new fixed capacity. A projection builds the inactive item/snapshot pair and its
+positional identity bank, revalidates the neutral recipe with
 `RUPJ-CANDIDATE-VALID?`, completes its bounded metadata, and publishes the new
 bank by writing the binding selector last. Written bytes and inactive metadata
 are never authoritative on their own.
@@ -108,18 +111,49 @@ are never authoritative on their own.
 Each published bank has a 64-byte metadata record containing generation, item
 count, snapshot bytes, region/object/UTF-8 quotas, and the positive root height
 and width used for capture and validation. The two records occupy offsets 144
-and 208 in the 280-byte private binding record; offset 272 remains reserved.
-The root dimensions travel with the selected candidate rather than being
-recovered from later mutable layout.
+and 208 in the 360-byte private binding record. The root dimensions travel with
+the selected candidate rather than being recovered from later mutable layout.
+Private owner/terminal-eligibility fields begin at offset 272; they are not part
+of the neutral candidate or projector ABI and do not reserve an owner or RTAPT
+capture-bank space.
 
 An accepted empty candidate is still selector-published so it supersedes any
 older desired scene, but `RTERM-UCTX-PROJECT` returns
-`RTERM-S-UNAVAILABLE`; an accepted nonempty candidate returns
-`RTERM-S-OK`. A build, validation, capacity, or caught-exception failure does
-not change the selector, so the previously selected candidate remains
-authoritative. Admission is the only place the driver performs the full RUPJ
-bank validation. This slice remains output-inert: it neither calls the `RTE`
-facade nor assigns retained identities or materializes terminal objects.
+`RTERM-S-UNAVAILABLE`. A build or deep-validation failure does not change the
+selector, so the previously selected candidate remains authoritative. After a
+valid nonempty build, the driver first maps every exact semantic key to a stable
+private object ID and then reads one coherent neutral `RTE` limits snapshot.
+Backpressure, missing feature support, unresolved state, unsupported resolved
+attributes, or negotiated capacity refusal still publishes the newer desired
+bank and its mapping, but clears terminal eligibility/materialization readiness
+and returns the exact non-OK status. A terminal-eligible candidate returns
+`RTERM-S-OK`.
+
+Terminal-negotiated eligibility requires INSTRUMENT support, one region, one
+object per item,
+`1 + item-count` operations, each declared LABEL capacity within the per-label
+maximum, the aggregate declaration within total UTF-8, and checked worst-case
+complete transaction bytes `288 + 120 * item-count + declared_utf8` within the
+negotiated update maximum. Identity mapping is independent of that result: it
+copies each exact semantic key into the positional identity bank, reuses an
+exact prior mapped key's object ID, and mints new IDs from a monotone per-owner
+high-water. Duplicate IDs are invalid; a high-water never proves that a sparse
+ID exists. Negotiation refusal, relayout, and hide may revoke eligibility or
+materialization readiness but do not discard this mapping or remint unchanged
+keys. The binding selector remains the final publication store after metadata,
+identities, eligibility state, status, and any sticky diagnostic are complete.
+
+If discovery is pending, the selected candidate and mapping remain sufficient
+for the owner-loop service to repeat negotiation in place when discovery
+settles. That transition must not depend on another UIDL dirty event or rebuild
+the semantic recipe merely to recover the same identities. Before any
+`OWNER_OPEN` or retained capture, the materializer must separately prove current
+terminal limits, dynamic owner availability, and exact caller-owned RTAPT owner,
+operation, and copied-byte capacity. Eligibility alone admits nothing.
+
+This slice remains output-inert. Its only facade call is `RTE-LIMITS@`; it does
+not open an owner, begin or seal retained work, choose CELL versus retained
+output, or materialize terminal objects.
 
 The downstream neutral boundary can now accept an aligned 160-byte LABEL value
 whose height and width are nonnegative and whose borrowed UTF-8 may begin at
@@ -132,8 +166,9 @@ facade/provider storage. RTAPT copies it into an aligned, pointer-free retry
 record, maintains exact active/hidden/pending object and UTF-8 ledgers, and
 commits it through the typed PT LABEL writer.
 
-The lifecycle driver does not yet exercise that downstream path. The next
-slice assigns retained identities, applies negotiated admission, materializes
-the selected candidate, and schedules it through the unified CELL/retained
-publication lifecycle. None of that moves scene ownership, output choice, or
-renderer-specific state into UIDL, UIDL-TUI, Desk, or applets.
+The lifecycle driver does not yet exercise that downstream mutation path. The
+next slice preflights and opens an eligible private owner, materializes the exact
+selected generation, and schedules it through the unified CELL/retained
+publication lifecycle with completion and retirement correlation. None of that
+moves scene ownership, output choice, or renderer-specific state into UIDL,
+UIDL-TUI, Desk, or applets.

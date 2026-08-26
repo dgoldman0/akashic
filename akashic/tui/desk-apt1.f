@@ -9,9 +9,11 @@
 \
 \  Product profiles override the eight capacities before REQUIRE.  Owner
 \  tombstones, one atomic retained candidate, live UIDL bindings, and the two
-\  per-binding neutral projection banks exhaust independently.  The defaults
-\  are only this product profile's current boundary; the generic driver and
-\  lower Desk/applet layers do not acquire fixed candidate capacities.
+\  per-binding neutral projection banks exhaust independently.  Candidate
+\  identity storage is derived from the existing bank/item geometry, not a
+\  ninth product capacity.  The defaults are only this product profile's
+\  current boundary; the generic driver and lower Desk/applet layers do not
+\  acquire fixed candidate capacities.
 \
 \  This leaf owns XMEM allocations made while it is sourced.  Keep it on the
 \  source path unless a compiled shard has separately proved those external
@@ -85,6 +87,12 @@ APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK
 _A1D-UIDL-CANDIDATE-BANKS _A1D-UIDL-CANDIDATE-ITEM-BANK-U
     _A1D-CAPACITY*
     CONSTANT _A1D-UIDL-CANDIDATE-ITEMS-U
+APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK
+    RTERM-UIDL-CANDIDATE-IDENTITY-BYTES _A1D-CAPACITY*
+    CONSTANT _A1D-UIDL-CANDIDATE-IDENTITY-BANK-U
+_A1D-UIDL-CANDIDATE-BANKS _A1D-UIDL-CANDIDATE-IDENTITY-BANK-U
+    _A1D-CAPACITY*
+    CONSTANT _A1D-UIDL-CANDIDATE-IDENTITIES-U
 
 APT1-DESK-RTAPT-COPY-BYTES _A1D-U32-POSITIVE? 0=
     ABORT" desk-apt1: invalid retained copy capacity"
@@ -113,7 +121,8 @@ APTAS-SIZE 7 + XBUF _A1D-OWNER-MEM
 _A1D-OWNER-MEM 7 + -8 AND CONSTANT _A1D-OWNER
 
 \ The concrete RTAPT engine, its neutral facade, unified screen publisher,
-\ UIDL binding registry, and neutral candidate banks are source-owned,
+\ UIDL binding registry, and neutral candidate item/identity/snapshot banks
+\ are source-owned,
 \ aligned, pairwise separate spans.  The driver clears the registry and banks
 \ at its init/fini ownership boundaries; Desk only owns their XMEM lifetime.
 \ Configuration and the one host-binding descriptor are call-borrowed only.
@@ -148,6 +157,11 @@ _A1D-UIDL-CANDIDATE-ITEMS-U _A1D-ALIGNMENT-SLOP+
     XBUF _A1D-UIDL-CANDIDATE-ITEMS-MEM
 _A1D-UIDL-CANDIDATE-ITEMS-MEM 7 + -8 AND
     CONSTANT _A1D-UIDL-CANDIDATE-ITEMS
+
+_A1D-UIDL-CANDIDATE-IDENTITIES-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-UIDL-CANDIDATE-IDENTITIES-MEM
+_A1D-UIDL-CANDIDATE-IDENTITIES-MEM 7 + -8 AND
+    CONSTANT _A1D-UIDL-CANDIDATE-IDENTITIES
 
 _A1D-UIDL-CANDIDATE-SNAPSHOTS-U _A1D-ALIGNMENT-SLOP+
     XBUF _A1D-UIDL-CANDIDATE-SNAPSHOTS-MEM
@@ -278,6 +292,7 @@ _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
     _A1D-UIDL-RECORDS _A1D-UIDL-RECORDS-U
     _A1D-UIDL-CANDIDATE-ITEMS
     APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK
+    _A1D-UIDL-CANDIDATE-IDENTITIES
     _A1D-UIDL-CANDIDATE-SNAPSHOTS
     APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK
     _A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-INIT
