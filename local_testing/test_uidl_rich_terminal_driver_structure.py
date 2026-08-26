@@ -32,6 +32,7 @@ def test_driver_is_optional_neutral_and_caller_bounded() -> None:
     assert "PROVIDED akashic-tui-rterm-uidl1" in code
     assert re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code) == [
         "../applet-host/host.f",
+        "../color.f",
         "../../utils/memory-span.f",
         "engine.f",
         "uidl-projector.f",
@@ -39,9 +40,8 @@ def test_driver_is_optional_neutral_and_caller_bounded() -> None:
 
     # This driver is a host/UIDL lifecycle boundary, not another terminal
     # transport or output engine and not part of their source closure.
+    assert not re.search(r"(?<![A-Z0-9_-])_?PT-", code)
     for forbidden in (
-        "PT-",
-        "_PT-",
         "RTAPT-",
         "_RTAPT-",
         "APTSCB-",
@@ -88,14 +88,18 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
     assert "8 U<" in _definition(source, "RTERM-STATUS-VALID?")
 
     assert "96 CONSTANT RTERM-HOST-BINDING-SIZE" in source
+    assert "32 CONSTANT RTERM-SURFACE-SNAPSHOT-SIZE" in source
     assert "104 CONSTANT RTERM-UIDL-CONFIG-SIZE" in source
-    assert "5 CONSTANT _RTERM-UIDL-ABI" in source
-    assert "4 CONSTANT _RTERM-UIDL-CONFIG-ABI" in source
+    assert "6 CONSTANT _RTERM-UIDL-ABI" in source
+    assert "5 CONSTANT _RTERM-UIDL-CONFIG-ABI" in source
     assert "64 CONSTANT _RTERM-CANDIDATE-META-SIZE" in source
     assert "32 CONSTANT _RTERM-IDENTITY-SIZE" in source
     assert "352 CONSTANT RTERM-UIDL-BINDING-SIZE" in source
     assert "328 CONSTANT RTERM-UIDL-BACKEND-SIZE" in source
     assert "_RGN-DESC-SIZE CONSTANT RGN-SIZE" in region
+    assert "RTERM-SURFACE-SNAPSHOT-SIZE" in _definition(
+        source, "RTERM-SURFACE-SNAPSHOT-BYTES"
+    )
     assert "RTERM-UIDL-CONFIG-SIZE" in _definition(
         source, "RTERM-UIDL-CONFIG-BYTES"
     )
@@ -144,8 +148,21 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
     }.items():
         assert f"{offset} +" in _definition(source, field)
 
+    assert "+" not in _definition(source, "_RTERM-S.COLS")
+    for field, offset in {
+        "_RTERM-S.ROWS": 8,
+        "_RTERM-S.GENERATION": 16,
+        "_RTERM-S.RESERVED": 24,
+    }.items():
+        assert f"{offset} +" in _definition(source, field)
+
     signatures = {
         "RTERM-STATUS-VALID?": "( status -- flag )",
+        "RTERM-SURFACE-SNAPSHOT-BYTES": "( -- bytes )",
+        "RTERM-SURFACE-SNAPSHOT-VALID?": "( surface -- flag )",
+        "RTERM-SURFACE-SNAPSHOT-INIT": (
+            "( cols rows generation surface -- status )"
+        ),
         "RTERM-UIDL-CONFIG-BYTES": "( -- bytes )",
         "RTERM-UIDL-BINDING-BYTES": "( -- bytes )",
         "RTERM-UIDL-BACKEND-BYTES": "( -- bytes )",
@@ -171,6 +188,9 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
         ),
         "RTERM-UCTX-ATTACH": "( host-binding backend -- binding-token status )",
         "RTERM-UCTX-PROJECT": "( binding-token backend -- status )",
+        "RTERM-UCTX-MATERIALIZATION-PREFLIGHT": (
+            "( surface binding-token backend -- status )"
+        ),
         "RTERM-UCTX-RELAYOUT": (
             "( visible region binding-token backend -- status )"
         ),
@@ -232,6 +252,10 @@ def test_public_scratch_entries_catch_bodies_then_scrub_every_borrowed_cell() ->
             "_RTERM-P-DO-PROJECT",
             "_RTERM-UCTX-PROJECT-BODY",
         ),
+        "RTERM-UCTX-MATERIALIZATION-PREFLIGHT": (
+            "_RTERM-P-DO-MATERIALIZATION-PREFLIGHT",
+            "_RTERM-UCTX-MATERIALIZATION-PREFLIGHT-BODY",
+        ),
         "RTERM-UCTX-RELAYOUT": (
             "_RTERM-P-DO-RELAYOUT",
             "_RTERM-UCTX-RELAYOUT-BODY",
@@ -277,13 +301,270 @@ def test_public_scratch_entries_catch_bodies_then_scrub_every_borrowed_cell() ->
 
     variables = re.findall(r"(?m)^VARIABLE\s+(_RTERM-[^\s]+)", source)
     assert len(variables) == len(set(variables))
-    scrub = _definition(source, "_RTERM-SCRUB-BORROWED")
-    scrubbed_variables = re.findall(
-        r"(?<!\S)0\s+(_RTERM-[A-Z0-9-]+)\s+!", scrub
-    )
+    definitions = re.findall(r"(?m)^:\s+(_RTERM-[^\s]+)", source)
+    assert set(variables).isdisjoint(definitions)
+    scrubbed_variables: list[str] = []
+    for scrub_name in (
+        "_RTERM-SCRUB-BORROWED",
+        "_RTERM-SURFACE-INIT-SCRUB",
+        "_RTERM-MP-SCRUB",
+    ):
+        scrub = _definition(source, scrub_name)
+        scrubbed_here = re.findall(
+            r"(?<!\S)0\s+(_RTERM-[A-Z0-9-]+)\s+!", scrub
+        )
+        assert len(scrubbed_here) == len(set(scrubbed_here))
+        scrubbed_variables.extend(scrubbed_here)
+        assert "_RTERM-NEXT-TOKEN" not in scrub
     assert len(scrubbed_variables) == len(set(scrubbed_variables))
     assert set(scrubbed_variables) == set(variables) - {"_RTERM-NEXT-TOKEN"}
-    assert "_RTERM-NEXT-TOKEN" not in scrub
+
+
+def test_surface_snapshot_is_small_checked_and_call_borrowed() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+    fields = _definition(source, "_RTERM-SURFACE-FIELDS?")
+    valid = _definition(source, "RTERM-SURFACE-SNAPSHOT-VALID?")
+    body = _definition(source, "_RTERM-SURFACE-SNAPSHOT-INIT-BODY")
+    public = _definition(source, "RTERM-SURFACE-SNAPSHOT-INIT")
+    scrub = _definition(source, "_RTERM-SURFACE-INIT-SCRUB")
+
+    assert "_RTERM-S.COLS @ 0> 0=" in fields
+    assert "_RTERM-S.ROWS @ 0> 0=" in fields
+    assert "_RTERM-S.GENERATION @ 0=" in fields
+    assert "_RTERM-S.RESERVED @ 0=" in fields
+    assert "RTERM-SURFACE-SNAPSHOT-SIZE _RTERM-SPAN? 0=" in valid
+    assert valid.index("_RTERM-SPAN? 0=") < valid.index(
+        "_RTERM-SURFACE-FIELDS?"
+    )
+
+    span = body.index("RTERM-SURFACE-SNAPSHOT-SIZE\n        _RTERM-SPAN? 0=")
+    cols = body.index("_RTERM-SI-COLS @ 0> 0=", span)
+    rows = body.index("_RTERM-SI-ROWS @ 0> 0=", cols)
+    generation = body.index("_RTERM-SI-GENERATION @ 0=", rows)
+    fill = body.index("RTERM-SURFACE-SNAPSHOT-SIZE 0 FILL", generation)
+    stores = [
+        body.index("_RTERM-S.COLS !", fill),
+        body.index("_RTERM-S.ROWS !", fill),
+        body.index("_RTERM-S.GENERATION !", fill),
+    ]
+    assert span < cols < rows < generation < fill < min(stores)
+    assert stores == sorted(stores)
+    assert "_RTERM-S.RESERVED !" not in body
+
+    caught = public.index("['] _RTERM-SURFACE-SNAPSHOT-INIT-BODY CATCH")
+    cleaned = public.index("_RTERM-SURFACE-INIT-SCRUB", caught)
+    assert caught < cleaned
+    assert public.count("CATCH") == 1
+    assert public.count("_RTERM-SURFACE-INIT-SCRUB") == 1
+    for variable in (
+        "_RTERM-SI-COLS",
+        "_RTERM-SI-ROWS",
+        "_RTERM-SI-GENERATION",
+        "_RTERM-SI-SURFACE",
+    ):
+        assert f"0 {variable} !" in scrub
+
+
+def test_materialization_preflight_freezes_validates_maps_and_cleans() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+    code = _code_without_comments(source)
+    load = _definition(source, "_RTERM-MP-LOAD-SELECTED?")
+    freeze = _definition(source, "_RTERM-MP-FREEZE?")
+    frozen_valid = _definition(source, "_RTERM-MP-FROZEN-VALID?")
+    next_item = _definition(source, "_RTERM-MP-NEXT?")
+    plan_one = _definition(source, "_RTERM-MP-PLAN-ONE")
+    plan = _definition(source, "_RTERM-MP-PLAN-BUILD?")
+    body = _definition(source, "_RTERM-UCTX-MATERIALIZATION-PREFLIGHT-BODY")
+    clean = _definition(source, "_RTERM-MP-CLEAN-STORAGE")
+    finish = _definition(source, "_RTERM-MP-FINISH")
+    wrapper = _definition(source, "RTERM-UCTX-MATERIALIZATION-PREFLIGHT")
+
+    # Admission is ordered after neutral authority, liveness, visibility, and
+    # frozen eligibility checks.  Deep validation sees the frozen attempt,
+    # never concurrently mutable desired-bank bytes.
+    ordered_checks = (
+        "_RTERM-UIDL-VALID-BODY?",
+        "RTERM-SURFACE-SNAPSHOT-VALID?",
+        "_RTERM-UIDL-STORAGE-DISJOINT-BODY?",
+        "_RTERM-MP-CAN-SCRUB !",
+        "_RTERM-CALL-LOOKUP",
+        "_RTERM-R.STATE @",
+        "_RTERM-CALL-LIVE?",
+        "_RTERM-R.VISIBLE @",
+        "_RTERM-R.ELIGIBLE @",
+        "_RTERM-RECORD-INDEX?",
+        "_RTERM-MP-LOAD-SELECTED?",
+        "_RTERM-MP-FREEZE?",
+        "_RTERM-MP-FROZEN-VALID?",
+        "_RTERM-MP-PLAN-BUILD?",
+        "RTE-LABEL-PREFLIGHT",
+    )
+    positions = [body.index(token) for token in ordered_checks]
+    assert positions == sorted(positions)
+    assert body.count("RTE-LABEL-PREFLIGHT") == 1
+
+    for meta_field, frozen_cell in (
+        ("GENERATION", "_RTERM-MP-GENERATION"),
+        ("ITEMS", "_RTERM-MP-COUNT"),
+        ("SNAPSHOTS", "_RTERM-MP-SNAPSHOT-USED"),
+        ("REGIONS", "_RTERM-MP-REGIONS"),
+        ("OBJECTS", "_RTERM-MP-OBJECTS"),
+        ("UTF8", "_RTERM-MP-CANDIDATE-UTF8"),
+        ("ROOT-H", "_RTERM-MP-ROOT-H"),
+        ("ROOT-W", "_RTERM-MP-ROOT-W"),
+    ):
+        assert f"_RTERM-K.{meta_field} @" in load
+        assert f"{frozen_cell} !" in load
+
+    attempt = freeze.index("_RTERM-ATTEMPT-BANK-LOAD")
+    copy_items = freeze.index(
+        "_RTERM-MP-SOURCE-ITEMS @ _RTERM-MP-ITEMS @", attempt
+    )
+    copy_identities = freeze.index(
+        "_RTERM-MP-SOURCE-IDENTITIES @ _RTERM-MP-IDENTITIES @",
+        copy_items,
+    )
+    copy_snapshots = freeze.index(
+        "_RTERM-MP-SOURCE-SNAPSHOTS @ _RTERM-MP-SNAPSHOTS @",
+        copy_identities,
+    )
+    item_shape = freeze.index(
+        "RUPJ-ITEM-BYTES RTE-LABEL-PLAN-ITEM-SIZE <>", copy_snapshots
+    )
+    inactive = freeze.index(
+        "_RTERM-MP-SELECTOR @ 1 = IF 1 ELSE 0 THEN", item_shape
+    )
+    plan_scratch = freeze.index("_RTERM-BANK-LOAD", inactive)
+    assert attempt < copy_items < copy_identities < copy_snapshots
+    assert copy_snapshots < item_shape < inactive < plan_scratch
+    assert freeze.count("MOVE") == 3
+    assert "_RTERM-BK-ITEM-U @ _RTERM-I-ITEM-BANK-U @ <>" in freeze
+    assert "_RTERM-BK-ITEM-A @ _RTERM-MP-PLAN-ITEMS !" in freeze
+
+    deep_candidate = frozen_valid.index("RUPJ-CANDIDATE-VALID?")
+    deep_identity = frozen_valid.index(
+        "_RTERM-IDENTITY-BANK-VALID?", deep_candidate
+    )
+    assert deep_candidate < deep_identity
+    assert "_RTERM-MP-ITEMS @" in frozen_valid
+    assert "_RTERM-MP-IDENTITIES @" in frozen_valid
+    assert "_RTERM-MP-SNAPSHOTS @" in frozen_valid
+
+    # Stable private object IDs determine deterministic ascending plan order.
+    prior = next_item.index("_RTERM-MP-PRIOR-OBJECT @ U>")
+    best = next_item.index("_RTERM-MP-BEST-OBJECT @ U<", prior)
+    assert prior < best
+    assert "_RTERM-MP-BEST-INDEX !" in next_item
+    assert "_RTERM-MP-BEST-OBJECT @ _RTERM-MP-PRIOR-OBJECT !" in plan_one
+
+    for getter, target in (
+        ("RUPJ-ITEM-RESOLVED-ROW@", "_RTE-LPI.ROW !"),
+        ("RUPJ-ITEM-RESOLVED-COL@", "_RTE-LPI.COL !"),
+        ("RUPJ-ITEM-RESOLVED-HEIGHT@", "_RTE-LPI.HEIGHT !"),
+        ("RUPJ-ITEM-RESOLVED-WIDTH@", "_RTE-LPI.WIDTH !"),
+        ("RUPJ-ITEM-RESOLVED-Z@", "_RTE-LPI.Z !"),
+        ("RUPJ-ITEM-EFFECTIVE-VISIBLE?", "_RTE-LPI.VISIBLE !"),
+        ("RUPJ-ITEM-RESOLVED-FG@", "_RTE-LPI.RGBA !"),
+        ("RUPJ-ITEM-RESOLVED-ALIGN@", "_RTE-LPI.H-ALIGN !"),
+        (
+            "UIDL-LABEL-SNAPSHOT-TEXT-CAPACITY@",
+            "_RTE-LPI.TEXT-CAPACITY !",
+        ),
+    ):
+        getter_at = plan_one.index(getter)
+        assert getter_at < plan_one.index(target, getter_at)
+    assert "TUI-PALETTE>RGBA" in plan_one
+    assert (
+        "_RTERM-MP-BEST-OBJECT @\n"
+        "        _RTERM-MP-CURRENT-PLAN-ITEM @ _RTE-LPI.OBJECT !"
+        in plan_one
+    )
+    assert (
+        "0 _RTERM-MP-CURRENT-PLAN-ITEM @ _RTE-LPI.PARENT !" in plan_one
+    )
+    assert (
+        "_RTERM-MP-ROOT-H @\n"
+        "        _RTERM-MP-CURRENT-PLAN-ITEM @ _RTE-LPI.ROOT-HEIGHT !"
+        in plan_one
+    )
+    assert (
+        "_RTERM-MP-ROOT-W @\n"
+        "        _RTERM-MP-CURRENT-PLAN-ITEM @ _RTE-LPI.ROOT-WIDTH !"
+        in plan_one
+    )
+    assert (
+        "0 _RTERM-MP-CURRENT-PLAN-ITEM @ _RTE-LPI.V-ALIGN !" in plan_one
+    )
+    assert (
+        "0 _RTERM-MP-CURRENT-PLAN-ITEM @ _RTE-LPI.ELLIPSIZE !" in plan_one
+    )
+
+    for mapping in (
+        "_RTERM-S.COLS @\n        _RTERM-MP-PLAN @ _RTE-LP.SURFACE-COLS !",
+        "_RTERM-S.ROWS @\n        _RTERM-MP-PLAN @ _RTE-LP.SURFACE-ROWS !",
+        "_RTERM-R.COL @\n        _RTERM-MP-PLAN @ _RTE-LP.REGION-X !",
+        "_RTERM-R.ROW @\n        _RTERM-MP-PLAN @ _RTE-LP.REGION-Y !",
+        "_RTERM-R.ROOT-REGION @\n        _RTERM-MP-PLAN @ _RTE-LP.REGION-ID !",
+        "_RTERM-MP-ROOT-W @\n        _RTERM-MP-PLAN @ _RTE-LP.REGION-COLS !",
+        "_RTERM-MP-ROOT-H @\n        _RTERM-MP-PLAN @ _RTE-LP.REGION-ROWS !",
+        "0 _RTERM-MP-PLAN @ _RTE-LP.REGION-Z !",
+        "3 _RTERM-MP-PLAN @ _RTE-LP.REGION-FLAGS !",
+        "_RTERM-MP-PLAN-ITEMS @ _RTERM-MP-PLAN @ _RTE-LP.ITEMS-A !",
+    ):
+        assert mapping in plan
+    assert "_RTERM-R.OWNER @\n        _RTERM-MP-PLAN @ _RTE-LP.OWNER !" in plan
+    assert "_RTERM-R.OWNER-GEN @" in plan
+    assert "_RTERM-S.GENERATION @" not in plan
+    assert "RTE-LABEL-PLAN-ITEM-SIZE\n        _RTERM-UMUL?" in plan
+    assert "RTE-LABEL-PLAN-VALID?" in plan
+
+    # Every temporary payload is scrubbed before status diagnostics are
+    # published; the public wrapper then clears its generic borrowed cells.
+    assert clean.count("0 FILL") == 5
+    for extent in (
+        "_RTERM-BK-ITEM-A @ _RTERM-BK-ITEM-U @ 0 FILL",
+        "_RTERM-BK-IDENTITY-A @ _RTERM-BK-IDENTITY-U @ 0 FILL",
+        "_RTERM-BK-SNAPSHOT-A @ _RTERM-BK-SNAPSHOT-U @ 0 FILL",
+        "_RTERM-I-ITEM-BANK-U @ 0 FILL",
+        "_RTERM-B.LIMITS RTE-LIMITS-SIZE 0 FILL",
+    ):
+        assert extent in clean
+    cleaned = finish.index("_RTERM-MP-CLEAN-STORAGE")
+    record_status = finish.index("_RTERM-R.LAST-STATUS !", cleaned)
+    sticky_status = finish.index("_RTERM-NOTE", record_status)
+    scratch_scrub = finish.index("_RTERM-MP-SCRUB", sticky_status)
+    assert cleaned < record_status < sticky_status < scratch_scrub
+    caught = wrapper.index("['] _RTERM-P-DO-MATERIALIZATION-PREFLIGHT CATCH")
+    finished = wrapper.index("_RTERM-MP-FINISH", caught)
+    borrowed_scrub = wrapper.index("_RTERM-SCRUB-BORROWED", finished)
+    assert caught < finished < borrowed_scrub
+    assert wrapper.count("CATCH") == 1
+
+    preflight_start = source.index("VARIABLE _RTERM-MP-SURFACE")
+    preflight_end = source.index("VARIABLE _RTERM-RL-VISIBLE")
+    preflight_section = _code_without_comments(
+        source[preflight_start:preflight_end]
+    )
+    assert preflight_section.count("RTE-LABEL-PREFLIGHT") == 1
+    assert not re.search(r"(?<![A-Z0-9_-])_?PT-", preflight_section)
+    for forbidden in (
+        "RTE-OWNER-OPEN",
+        "RTE-RETAINED-BEGIN",
+        "RTE-REGION-DEFINE",
+        "RTE-LABEL-DEFINE",
+        "RTE-RETAINED-SEAL",
+        "RTE-RETAINED-CANCEL",
+        "RTE-OWNER-DROP",
+        "RTAPT-",
+        "_RTAPT-",
+        "PRESENT",
+        "_RTERM-R.CANDIDATE !",
+        "_RTERM-R.ELIGIBLE !",
+        "_RTERM-R.OBJECT-HIGH !",
+    ):
+        assert forbidden not in preflight_section
+    assert "_RTERM-B.ATTEMPT" not in code
+    assert "_RTERM-R.ATTEMPT" not in code
 
 
 def test_config_and_init_preflight_all_caller_owned_banks_before_mutation() -> None:
@@ -294,14 +575,16 @@ def test_config_and_init_preflight_all_caller_owned_banks_before_mutation() -> N
     config_init = _definition(source, "_RTERM-CONFIG-INIT-BODY")
     init = _definition(source, "_RTERM-UIDL-INIT-BODY")
 
-    # Binding count determines exactly two positional banks per binding.  The
-    # two product capacities remain caller supplied; checked multiplication
-    # derives the exact item, positional identity, and snapshot spans without
-    # a driver-side cap.
+    # Binding count determines two positional desired banks per binding plus
+    # one backend-global frozen-attempt bank.  Checked arithmetic derives all
+    # item, identity, and snapshot spans without adding a driver-side cap.
     assert "_RTERM-I-ENGINE @ RTE-VALID?" in geometry
     assert "RTERM-UIDL-BINDING-SIZE MOD" in geometry
     assert "RTERM-UIDL-BINDING-SIZE /" in geometry
-    assert "_RTERM-I-CAPACITY @ 2 _RTERM-UMUL?" in geometry
+    doubled = geometry.index("_RTERM-I-CAPACITY @ 2 _RTERM-UMUL?")
+    global_attempt = geometry.index("1 _RTERM-UADD?", doubled)
+    bank_count = geometry.index("_RTERM-I-BANK-COUNT !", global_attempt)
+    assert doubled < global_attempt < bank_count
     assert "_RTERM-I-ITEMS-PER-BANK @ RUPJ-ITEM-BYTES" in geometry
     assert "_RTERM-I-BANK-COUNT @ _RTERM-I-ITEM-BANK-U @" in geometry
     assert "_RTERM-I-ITEMS-PER-BANK @ _RTERM-IDENTITY-SIZE" in geometry
@@ -423,21 +706,57 @@ def test_fini_unbinds_only_a_zero_active_backend_and_is_blank_idempotent() -> No
 def test_candidate_bank_addresses_are_rederived_from_record_position() -> None:
     source = DRIVER.read_text(encoding="utf-8")
     index = _definition(source, "_RTERM-RECORD-INDEX?")
+    slot = _definition(source, "_RTERM-SLOT-LOAD")
     load = _definition(source, "_RTERM-BANK-LOAD")
+    attempt = _definition(source, "_RTERM-ATTEMPT-BANK-LOAD")
+    attempt_zero = _definition(source, "_RTERM-ATTEMPT-BANK-ZERO?")
+    valid = _definition(source, "_RTERM-UIDL-VALID-BODY?")
     clear = _definition(source, "_RTERM-CLEAR-RECORD-BANKS")
 
     assert "_RTERM-B.RECORDS-A @ -" in index
     assert "RTERM-UIDL-BINDING-SIZE MOD" in index
     assert "RTERM-UIDL-BINDING-SIZE /" in index
     assert "_RTERM-B.CAPACITY @ U< 0=" in index
+
+    # Every physical address is derived through one checked slot loader.  Its
+    # upper bound is exactly 2C+1, while record-local callers remain restricted
+    # to A/B and the attempt caller selects only physical slot 2C.
+    doubled = slot.index("_RTERM-B.CAPACITY @ 2")
+    multiplied = slot.index("_RTERM-UMUL?", doubled)
+    added = slot.index("1 _RTERM-UADD?", multiplied)
+    bounded = slot.index("_RTERM-BK-SLOT @ U> 0= IF", added)
+    assert doubled < multiplied < added < bounded
+    assert slot.count("_RTERM-UMUL?") == 6
+    assert slot.count("_RTERM-UADD?") == 7
+    for geometry_token in (
+        "_RTERM-B.ITEMS-PER-BANK @ RUPJ-ITEM-BYTES",
+        "_RTERM-B.ITEMS-A @",
+        "_RTERM-B.ITEMS-PER-BANK @\n        _RTERM-IDENTITY-SIZE",
+        "_RTERM-B.IDENTITIES-A @",
+        "_RTERM-B.SNAPSHOTS-A @",
+        "_RTERM-B.SNAPSHOT-BANK-U @",
+    ):
+        assert geometry_token in slot
     assert "_RTERM-BK-BANK @ 2 U< 0=" in load
-    assert "_RTERM-BK-INDEX @ 2 * _RTERM-BK-BANK @ +" in load
-    assert "_RTERM-B.ITEMS-PER-BANK @ RUPJ-ITEM-BYTES" in load
-    assert "_RTERM-B.ITEMS-A @" in load
-    assert "_RTERM-B.ITEMS-PER-BANK @\n        _RTERM-IDENTITY-SIZE" in load
-    assert "_RTERM-B.IDENTITIES-A @" in load
-    assert "_RTERM-B.SNAPSHOTS-A @" in load
-    assert "_RTERM-B.SNAPSHOT-BANK-U @" in load
+    assert "2 * _RTERM-BK-BANK @ +" in load
+    assert load.count("_RTERM-SLOT-LOAD") == 1
+    assert "_RTERM-B.CAPACITY @ 2" in attempt
+    assert "_RTERM-UMUL?" in attempt
+    assert attempt.count("_RTERM-SLOT-LOAD") == 1
+
+    for extent in (
+        "_RTERM-BK-ITEM-A @ _RTERM-BK-ITEM-U @",
+        "_RTERM-BK-IDENTITY-A @ _RTERM-BK-IDENTITY-U @",
+        "_RTERM-BK-SNAPSHOT-A @ _RTERM-BK-SNAPSHOT-U @",
+    ):
+        assert extent in attempt_zero
+    assert attempt_zero.count("_RTERM-ZERO?") == 3
+    limits_zero = valid.index(
+        "_RTERM-B.LIMITS RTE-LIMITS-SIZE\n        _RTERM-ZERO?"
+    )
+    attempt_is_zero = valid.index("_RTERM-ATTEMPT-BANK-ZERO?", limits_zero)
+    record_scan = valid.index("0 ?DO", attempt_is_zero)
+    assert limits_zero < attempt_is_zero < record_scan
 
     # Both banks are scrubbed as one record-local ownership action.  No bank
     # pointer is retained in the binding record itself.
@@ -766,7 +1085,7 @@ def test_project_maps_inactive_bank_and_publishes_selector_last() -> None:
     invalid_clear = project.index("_RTERM-PROJECT-CLEAR-INACTIVE", validated)
     invalid_fail = project.index("RTERM-S-INVALID _RTERM-PROJECT-FAIL", invalid_clear)
     assert validated < invalid_clear < invalid_fail < published
-    assert source.count("RUPJ-CANDIDATE-VALID?") == 2
+    assert source.count("RUPJ-CANDIDATE-VALID?") == 3
     assert source.count("RUPJ-BUILD") == 1
     assert "RUPJ-S-CAPACITY = IF" in project
     assert "RTERM-S-CAPACITY" in project
@@ -954,20 +1273,25 @@ def test_private_identity_mapping_is_exact_monotonic_and_wire_inert() -> None:
         "_RTERM-IDENTITY-BANK-VALID?"
     )
 
-    # This slice reads limits only.  Owner lifecycle, retained capture, and
-    # output scheduling remain absent until the coherent materializer slice.
+    # The advisory slice reads limits and performs exactly one neutral label
+    # preflight.  It never opens or mutates retained state and never names a
+    # concrete provider or output scheduler.
     code = _code_without_comments(source)
     assert code.count("RTE-LIMITS@") == 1
+    assert code.count("RTE-LABEL-PREFLIGHT") == 1
+    assert not re.search(r"(?<![A-Z0-9_-])_?PT-", code)
     for forbidden in (
         "RTE-OWNER-OPEN",
         "RTE-OWNER-STATE@",
         "RTE-RETAINED-BEGIN",
         "RTE-REGION-DEFINE",
-        "RTE-LABEL-PREFLIGHT",
         "RTE-LABEL-DEFINE",
         "RTE-RETAINED-SEAL",
         "RTE-RETAINED-CANCEL",
         "RTE-OWNER-DROP",
+        "RTAPT-",
+        "_RTAPT-",
+        "PRESENT",
     ):
         assert forbidden not in code
 

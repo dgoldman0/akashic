@@ -98,15 +98,19 @@ and `region-quota` is one exactly when the candidate is nonempty.
 
 Construction clears the complete destination before writing. Any ordinary
 failure or caught exception clears it again and returns five zero values plus a
-stable status. The UIDL lifecycle driver assigns each private binding two
-caller-owned item banks, two positional identity banks, and two caller-owned
-snapshot banks. Identity extent is exactly one 32-byte record per candidate
-item and therefore derives from the existing item/bank geometry rather than a
-new fixed capacity. A projection builds the inactive item/snapshot pair and its
-positional identity bank, revalidates the neutral recipe with
-`RUPJ-CANDIDATE-VALID?`, completes its bounded metadata, and publishes the new
-bank by writing the binding selector last. Written bytes and inactive metadata
-are never authoritative on their own.
+stable status. For `C` private bindings, each caller-owned item, positional
+identity, and snapshot slab contains `2*C + 1` equal banks. Slots `2*i` and
+`2*i+1` are binding `i`'s desired A/B banks; the final slot `2*C` is the one
+backend-global frozen-attempt bank. It is not a third desired bank per binding.
+The backend serializes the one synchronous attempt, so one final slot preserves
+the exact selected input without multiplying scratch by binding capacity.
+Identity extent remains exactly one 32-byte record per candidate item and
+therefore derives from the existing item/bank geometry rather than a new fixed
+capacity. A projection uses only its A/B pair: it builds the inactive
+item/snapshot pair and positional identity bank, revalidates the neutral recipe
+with `RUPJ-CANDIDATE-VALID?`, completes its bounded metadata, and publishes the
+new bank by writing the binding selector last. Written bytes and inactive
+metadata are never authoritative on their own.
 
 Each published bank has a 64-byte metadata record containing generation, item
 count, snapshot bytes, region/object/UTF-8 quotas, and the positive root height
@@ -134,7 +138,7 @@ Terminal-negotiated eligibility requires INSTRUMENT support, one region, one
 object per item, each declared LABEL capacity within the per-label maximum, and
 the aggregate declaration within total UTF-8. It deliberately does not infer a
 provider operation count, copied retry bytes, or encoded update bytes. Those
-representation-dependent facts belong exclusively to the later neutral plan
+representation-dependent facts belong exclusively to the separate neutral plan
 preflight. Identity mapping is independent of the eligibility result: it
 copies each exact semantic key into the positional identity bank, reuses an
 exact prior mapped key's object ID, and mints new IDs from a monotone per-owner
@@ -146,10 +150,37 @@ identities, eligibility state, status, and any sticky diagnostic are complete.
 
 ## Neutral materialization preflight
 
-The downstream `RTE-LABEL-PREFLIGHT ( plan facade -- status )` boundary is now
-landed. The materializer derives its call-borrowed plan from one exact selected
-candidate generation and the already assigned private identities. The aligned
-112-byte header is:
+The terminal owner or unified publisher supplies an exact call-borrowed surface
+snapshot rather than asking UIDL to infer the complete output surface from its
+root rectangle:
+
+```forth
+RTERM-SURFACE-SNAPSHOT-BYTES
+( -- bytes )
+
+RTERM-SURFACE-SNAPSHOT-INIT
+( cols rows generation surface -- status )
+
+RTERM-SURFACE-SNAPSHOT-VALID?
+( surface -- flag )
+
+RTERM-UCTX-MATERIALIZATION-PREFLIGHT
+( surface binding-token backend -- status )
+```
+
+The aligned 32-byte surface snapshot contains positive native-cell columns at
+offset 0, positive rows at offset 8, a nonzero geometry generation at offset
+16, and a zero reserved cell at offset 24. Its generation correlates the
+geometry observation only; it is neither UIDL identity nor retained or wire
+authority. The snapshot must be nonwrapping and disjoint from driver, facade,
+and provider storage, and the driver retains no pointer to it.
+
+The public materialization-preflight operation resolves one exact visible,
+terminal-eligible selected generation and its already assigned private
+identities. It copies the complete selected item, identity, and snapshot banks
+into the backend-global final attempt slot, copies the selected metadata into
+scalar scratch, and then deep-validates the frozen copy. Only after those checks
+does it derive the aligned, call-borrowed 112-byte neutral plan header below:
 
 | Offset | Field | Candidate mapping |
 |---:|---|---|
@@ -162,18 +193,21 @@ candidate generation and the already assigned private identities. The aligned
 | 48 | region y | nonnegative root origin row |
 | 56 | region columns | positive selected root width |
 | 64 | region rows | positive selected root height |
-| 72 | region z | signed root paint order |
-| 80 | region flags | only current bits 0 and 1 |
+| 72 | region z | zero for this root-LABEL slice |
+| 80 | region flags | exactly `3` (`VISIBLE | CLIP`) |
 | 88 | items address | aligned borrowed preflight-item array |
 | 96 | items bytes | positive exact multiple of 128 |
 | 104 | reserved | zero |
 
-The checked root rectangle must fit the declared positive surface. The plan and
-item spans are nonwrapping, mutually disjoint, and independently disjoint from
-the facade and provider. `N = items-bytes / 128`; no unrelated fixed candidate
-or LABEL count is introduced.
+The checked root rectangle must fit the supplied positive surface. Surface
+columns and rows come only from that snapshot; selected root dimensions do not
+stand in for the full surface. The plan and item spans are nonwrapping, mutually
+disjoint, and independently disjoint from the facade and provider.
+`N = items-bytes / 128`; no unrelated fixed candidate or LABEL count is
+introduced.
 
-Each selected LABEL maps to one exact 128-byte item in capture order:
+Each selected LABEL maps to one exact 128-byte item in strict ascending mapped
+object-ID order:
 
 | Offset | Field | Candidate mapping |
 |---:|---|---|
@@ -187,12 +221,21 @@ Each selected LABEL maps to one exact 128-byte item in capture order:
 | 56 | root width | exactly the header region columns |
 | 64 | z | signed resolved LABEL paint order |
 | 72 | visible | canonical `0` or `-1` |
-| 80 | RGBA | packed numeric `0xRRGGBBAA` |
-| 88 | horizontal alignment | `0` start, `1` center, `2` end |
-| 96 | vertical alignment | `0` top, `1` middle, `2` bottom |
-| 104 | ellipsize | canonical `0` or `-1` |
+| 80 | RGBA | foreground palette index expanded to packed numeric `0xRRGGBBAA` |
+| 88 | horizontal alignment | resolved `0` start, `1` center, or `2` end |
+| 96 | vertical alignment | `0` top |
+| 104 | ellipsize | `0` |
 | 112 | text capacity | snapshot's nonnegative declared UTF-8 capacity |
 | 120 | reserved | zero |
+
+RUPJ candidate items and neutral plan items are both exactly 128 bytes. The
+driver therefore borrows only the inactive desired bank's item span as
+synchronous plan scratch; it does not modify that bank's positional identities,
+snapshots, or metadata. A bounded repeated-minimum scan over the frozen identity
+copy chooses the next object ID greater than the previous one. This produces the
+facade's strict order without reordering or rewriting either authoritative A/B
+candidate or its identity mapping. Palette indices are expanded through the
+neutral TUI palette mapping while the plan is built.
 
 The neutral facade validates native-cell geometry, canonical fields, strict
 object order, exact root dimensions, checked edges, and visible intersection.
@@ -220,16 +263,24 @@ requirement, so their budgets are never summed.
 Preflight is mutation-free admission advice, not a reservation. Malformed
 neutral input fails before the provider preflight operation callback is
 dispatched, and an ordinary provider refusal causes no owner or wire mutation.
-It never writes the plan, selected candidate, operation bank, copy bank, or
-wire. Ordinary results also leave the owner ledger, lifecycle queue, and PT
-session unchanged; limits observation may refresh only the provider's
-designated limits scratch.
+The facade never writes the supplied plan, selected candidate, operation bank,
+copy bank, or wire. Ordinary results also leave the owner ledger, lifecycle
+queue, and PT session unchanged; limits observation may refresh only the
+provider's designated limits scratch.
 Discovering an already-lost session may invoke the engine's existing
 quarantine/capture-clear transition, which is structural-loss containment, not
 plan admission, and emits no wire. `OK` can become stale immediately, so the
-materializer must use the same selected generation and exact derived quotas in
-the immediately following checked `OWNER_OPEN`/capture sequence; neither a
-prior eligibility result nor an earlier preflight is an admission token.
+next mutating slice must freeze the then-current selected generation, rebuild
+this exact plan, and repeat preflight immediately before its checked
+`OWNER_OPEN`/capture sequence. Neither eligibility nor this earlier advisory
+result is an admission token.
+
+Every return and caught throw clears the full global attempt item, identity, and
+snapshot banks, the borrowed inactive item span, the complete header/limits
+scratch, and all borrowed scalar and pointer cells. Selector-published desired
+state, metadata, eligibility, stable identity mappings, and object high-water
+remain intact. The operation may record its diagnostic status, but it caches no
+successful preflight authority or surface generation.
 
 If discovery is pending, the selected candidate and mapping remain sufficient
 for the owner-loop service to repeat negotiation in place when discovery
@@ -241,9 +292,11 @@ availability, representation, encoded-update arithmetic, and caller-owned
 provider owner, operation, and copied-byte capacity. Eligibility and advisory
 success alone admit nothing.
 
-This slice remains output-inert. Its only facade call is `RTE-LIMITS@`; it does
-not open an owner, begin or seal retained work, choose CELL versus retained
-output, or materialize terminal objects.
+This slice remains output-inert. Projection calls the read-only `RTE-LIMITS@`;
+the explicit materialization-preflight operation makes exactly one advisory
+`RTE-LABEL-PREFLIGHT` call after local freezing, validation, and plan
+construction. It does not open an owner, begin or seal retained work, choose
+CELL versus retained output, or materialize terminal objects.
 
 The downstream neutral boundary can now preflight the complete declared
 root-and-LABEL recipe and accept each aligned 160-byte LABEL value. LABEL height
@@ -256,10 +309,11 @@ nonwrapping and disjoint from facade/provider storage. RTAPT copies it into an
 aligned, pointer-free retry record, maintains exact active/hidden/pending object
 and UTF-8 ledgers, and commits it through the typed PT LABEL writer.
 
-The lifecycle driver does not yet construct the plan or exercise the downstream
-mutation path. The next slice invokes advisory preflight immediately before it
-opens an eligible private owner, materializes the exact selected generation,
-and schedules it through the unified CELL/retained publication lifecycle with
-completion and retirement correlation. None of that moves scene ownership,
-output choice, or renderer-specific state into UIDL, UIDL-TUI, Desk, or
-applets.
+The lifecycle driver can now freeze and deep-validate an exact selected
+generation, construct its sorted neutral plan, and exercise the advisory
+boundary. It still exercises no downstream mutation path. The next slice must
+repeat that work immediately before it opens an eligible private owner, retain
+the admitted attempt through capture and settlement, and schedule it through
+the unified CELL/retained publication lifecycle with completion and retirement
+correlation. None of that moves scene ownership, output choice, or
+renderer-specific state into UIDL, UIDL-TUI, Desk, or applets.

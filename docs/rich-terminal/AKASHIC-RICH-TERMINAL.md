@@ -389,29 +389,31 @@ provider-admission restriction, not a contraction of the facade schema.
 
 The renderer-neutral candidate projector can now measure and copy supported
 UIDL semantics into caller-owned banks, and the lifecycle driver now selects a
-complete build in one of two banks belonging to the exact private binding. It
-builds the inactive bank, applies `RUPJ-CANDIDATE-VALID?`, maps retry-stable
-private identities for a nonempty recipe, completes its metadata, and changes
-the authoritative selector last. An accepted empty candidate is published and
-returns `RTERM-S-UNAVAILABLE`. A deep-valid nonempty candidate then undergoes a
-terminal-eligibility check; its exact success or refusal status is returned,
-while either result preserves the candidate and mapping. A construction,
-deep-validation, or identity-mapping failure leaves the prior selector and
-therefore the prior desired scene authoritative.
+complete build in one of two desired banks belonging to the exact private
+binding. It builds the inactive bank, applies `RUPJ-CANDIDATE-VALID?`, maps
+retry-stable private identities for a nonempty recipe, completes its metadata,
+and changes the authoritative selector last. An accepted empty candidate is
+published and returns `RTERM-S-UNAVAILABLE`. A deep-valid nonempty candidate
+then undergoes a terminal-eligibility check; its exact success or refusal status
+is returned, while either result preserves the candidate and mapping. A
+construction, deep-validation, or identity-mapping failure leaves the prior
+selector and therefore the prior desired scene authoritative.
 
 UIDL-TUI exposes complete neutral resolved geometry/style as a copied 72-byte
 record with effective visibility and paint-group z. Each selected 128-byte RUPJ
 item now carries that record root-relative when it is available, while
 preserving semantic LABEL membership with a zero resolved payload when it is
-not. The projector invokes no facade operation. The driver invokes only the
+not. The projector invokes no facade operation. Project invokes only the
 read-only `RTE-LIMITS@` after assigning private owner/region/object identities,
 then records terminal-negotiated eligibility before selector publication. This
-reserves neither an owner nor capture-bank space. The neutral RTE/RTAPT boundary
-can now preflight one complete root-and-LABEL recipe and can validate, capture,
-retry, and typed-dispatch each complete LABEL definition. The lifecycle driver
-does not yet construct that plan; owner opening, candidate capture,
-materialization, and unified publication scheduling remain. It is therefore
-still output-inert.
+reserves neither an owner nor capture-bank space. A separate explicit driver
+operation now accepts the terminal owner's call-borrowed neutral surface
+snapshot, freezes the exact selected candidate in one backend-global attempt
+slot, deep-validates that copy, constructs a sorted neutral LABEL plan, and
+makes exactly one advisory `RTE-LABEL-PREFLIGHT` call. It unconditionally
+scrubs the attempt, plan, header, and pointer scratch and retains no success
+token. Owner opening, candidate capture, materialization, and unified
+publication scheduling remain, so the driver is still output-inert.
 
 The lower UIDL layer now supplies the first neutral semantic snapshot
 substrate independently of this adapter. `ED.SEMANTICS` selects a per-element
@@ -430,17 +432,19 @@ records plus any available neutral resolved state into bounded item/snapshot
 banks. Semantic eligibility does not depend on resolved-state availability:
 an unavailable resolved record leaves a zero payload and flags, while invalid
 resolved state rejects the complete build. Each binding has two caller-owned
-item banks, two positional identity banks, and two caller-owned snapshot banks,
-so a new complete candidate can replace the selected candidate atomically
-without allocating. This does not change the current wire-inert state: no
-shipped UIDL has been bulk-annotated for optional rich-output eligibility, and
-the terminal-eligible candidate is not yet materialized. The eligibility check
-compares each LABEL declaration and the neutral semantic region, object, and
-UTF-8 bounds. It deliberately does not infer provider operation, retry-copy, or
-encoded-update costs. A later materializer must build the landed neutral plan
-and call `RTE-LABEL-PREFLIGHT` to prove those representation details, local
-capture-bank fit, and dynamic owner/tombstone availability before any owner may
-open or object may publish.
+desired item banks, two positional identity banks, and two caller-owned
+snapshot banks, so a new complete candidate can replace the selected candidate
+atomically without allocating. Each combined slab has one additional final bank
+shared by the backend as its sole frozen-attempt slot: for binding capacity `C`,
+the physical bank count is checked `2*C + 1`, not three banks per binding. This
+does not change the current wire-inert state: no shipped UIDL has been
+bulk-annotated for optional rich-output eligibility, and the terminal-eligible
+candidate is not yet materialized. The eligibility check compares each LABEL
+declaration and the neutral semantic region, object, and UTF-8 bounds. It
+deliberately does not infer provider operation, retry-copy, or encoded-update
+costs. The explicit advisory materialization preflight now proves those
+representation details, local capture-bank fit, and dynamic owner/tombstone
+availability, but its success grants no owner or publication authority.
 
 `config` names the exact borrowed PT session, output policy, and caller-owned
 spans and capacities for:
@@ -741,13 +745,29 @@ readiness and its exact status is returned. An empty candidate has no mapping. A
 build, deep-validation, or identity-mapping failure leaves the prior selector
 untouched.
 
-Before any later `OWNER_OPEN` or retained capture, the materializer must derive
-the exact neutral plan from the selected candidate and call
-`RTE-LABEL-PREFLIGHT`. That landed boundary revalidates current terminal
-limits, wire representability and arithmetic, dynamic owner/tombstone
-availability, and the exact caller-owned RTAPT owner, operation, and copied-byte
-capacity. Success remains advisory; only the immediately following checked
-materialization attempt can turn it into an owner and retained candidate.
+`RTERM-SURFACE-SNAPSHOT-INIT` constructs the aligned, call-borrowed neutral
+surface observation used by `RTERM-UCTX-MATERIALIZATION-PREFLIGHT`. It contains
+positive columns and rows, a nonzero geometry generation, and one zero reserved
+cell. The terminal owner or unified publisher supplies that exact surface;
+neither the driver nor UIDL infers it from the selected root dimensions, and the
+driver retains no pointer or generation from the call.
+
+The materialization-preflight operation copies the complete selected A-or-B
+item, identity, and snapshot banks into the global final attempt slot before deep
+validation. It borrows only the inactive desired item span for the equal-sized
+128-byte neutral plan items. A bounded repeated-minimum scan of the frozen
+identity copy produces strict ascending object order without rewriting desired
+state or identity mappings. The operation then calls `RTE-LABEL-PREFLIGHT`
+exactly once. That boundary revalidates current terminal limits, wire
+representability and arithmetic, dynamic owner/tombstone availability, and the
+exact caller-owned RTAPT owner, operation, and copied-byte capacity.
+
+Every ordinary result and caught throw scrubs the global attempt slot, borrowed
+inactive item scratch, header/limits scratch, and borrowed scalar and pointer
+cells. Success remains advisory and is not cached. Before any later
+`OWNER_OPEN` or retained capture, the mutating slice must freeze the then-current
+selected generation, rebuild the plan, and repeat preflight immediately before
+admission.
 
 The driver still creates no wire owner or tombstone and calls no mutating facade
 operation. In particular it must not open a default or root-region-only owner:
@@ -816,7 +836,7 @@ derives exact requested quotas, maps stable private identities, and atomically
 selects the complete desired snapshot in caller-bounded storage. Required local
 item/snapshot counts, byte capacities, and storage overlap must be valid before
 that snapshot is selected. Provider operation, retry-copy, and encoded-update
-arithmetic is deliberately deferred to the later neutral preflight. Local
+arithmetic is deliberately deferred to the separate neutral preflight. Local
 attach and this first complete desired snapshot may occur while retained
 discovery is still pending. Pending discovery returns `RTERM-S-WOULD-BLOCK` and
 leaves the selected snapshot and mapping intact but grants no materialization
@@ -825,14 +845,16 @@ owner-loop service renegotiates that selected candidate in place; it does not
 wait for another UIDL dirty event. The requested quotas must fit the current
 terminal maxima before `OWNER_OPEN` is emitted.
 
-Terminal-negotiated eligibility freezes the declared semantic capacities for a
-later materializer preflight; it is not an owner reservation. Dynamic values may
-vary within those declarations but cannot silently enlarge them. The
-materializer must construct the exact plan and call `RTE-LABEL-PREFLIGHT` to
-prove local provider capture-bank fit and dynamic owner availability. If the tree
-later changes structurally beyond eligibility, retained projection reports
-capacity and keeps the prior coherent retained terminal state; CELL rendering
-continues from the authoritative UIDL tree.
+Terminal-negotiated eligibility freezes the declared semantic capacities for
+the explicit advisory materialization preflight; it is not an owner
+reservation. Dynamic values may vary within those declarations but cannot
+silently enlarge them. That operation constructs the exact plan and calls
+`RTE-LABEL-PREFLIGHT` to prove local provider capture-bank fit and dynamic owner
+availability, then scrubs the frozen attempt and plan. The mutating slice must
+repeat the proof against the then-current generation immediately before owner
+admission. If the tree later changes structurally beyond eligibility, retained
+projection reports capacity and keeps the prior coherent retained terminal
+state; CELL rendering continues from the authoritative UIDL tree.
 
 Unavailable retained discovery or an unsupported optional semantic family
 does not prevent attach or application initialization. The binding retains its
@@ -1107,10 +1129,11 @@ The product profile supplies independent owner-record, operation-record,
 copied-operation-byte, UIDL-binding-record, per-candidate item, and
 per-candidate snapshot-byte capacities before the leaf is sourced. The APT-1
 Desk product supplies overrideable defaults for those product capacities and
-allocates two candidate banks of each kind per binding. Its caller-owned
-identity bank has one fixed-size identity record per candidate item, so its
-extent derives from that existing item/bank geometry and introduces no new
-product capacity; fixed one-per-composition records remain leaf-owned. Desk's
+allocates two desired candidate banks of each kind per binding plus one final
+backend-global attempt bank in each combined slab. Its caller-owned identity
+bank has one fixed-size identity record per candidate item, so both desired and
+attempt extents derive from that existing item/bank geometry and introduce no
+new product capacity; fixed one-per-composition records remain leaf-owned. Desk's
 neutral host lifecycle then initializes the UIDL driver against the exact live
 `AHOST`, clears the temporary UIDL configuration descriptor, installs the one
 post-UIDL callback, and finalizes it after child drain. Setup and release
@@ -1143,15 +1166,18 @@ quotas, and complete START arithmetic before `OWNER_OPEN`. The lifecycle driver
 selects a complete deep-valid candidate together with private, retry-stable
 identities before negotiation, and separately records terminal-negotiated
 eligibility when the current limits permit it. A refusal preserves the selected
-candidate and mapping. It does not yet construct or invoke the landed plan,
-queue `OWNER_OPEN`, materialize a LABEL, or schedule through unified
+candidate and mapping. The explicit advisory operation now freezes that
+candidate, constructs the sorted neutral plan from the supplied surface, invokes
+the landed preflight exactly once, and scrubs all attempt and plan scratch. It
+does not queue `OWNER_OPEN`, materialize a LABEL, or schedule through unified
 publication. The driver therefore remains output-inert and the production host
 advertises no retained policy.
 CELL output still traverses the unified publisher, while attach, project,
 geometry, quiesce, and detach exercise the exact private UCTX lifetime without
-opening a root-region-only wire owner. The next critical slice is materializer
-construction of the neutral plan, advisory preflight immediately before
-`OWNER_OPEN`, exact candidate capture, and unified CELL/retained publication
+opening a root-region-only wire owner. The next critical slice repeats the exact
+freeze, plan construction, and advisory preflight immediately before
+`OWNER_OPEN`, then retains the admitted attempt through candidate capture,
+settlement correlation, retirement, and unified CELL/retained publication
 scheduling.
 
 Retained discovery is not a hosted-UCTX launch gate. The mandatory initial CELL

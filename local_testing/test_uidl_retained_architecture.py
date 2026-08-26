@@ -372,9 +372,14 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
     assert "RTAPT-OP-SIZE _A1D-CAPACITY*" in code
     assert "RTERM-UIDL-BINDING-SIZE _A1D-CAPACITY*" in code
     assert (
-        "APT1-DESK-RTERM-BINDING-RECORDS 2 _A1D-CAPACITY*"
+        "APT1-DESK-RTERM-BINDING-RECORDS 2 _A1D-CAPACITY*\n"
+        "    1 _A1D-CAPACITY+\n"
+        "    CONSTANT _A1D-UIDL-CANDIDATE-BANKS"
         in code
     )
+    capacity_add = _word(composition, "_A1D-CAPACITY+")
+    assert "OVER + DUP ROT U<" in capacity_add
+    assert "_A1D-U32-POSITIVE? 0=" in capacity_add
     assert (
         "APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK\n"
         "    RTERM-UIDL-CANDIDATE-ITEM-BYTES _A1D-CAPACITY*"
@@ -413,6 +418,19 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
         "RTERM-UIDL-CONFIG-BYTES",
     ):
         assert f"{payload} _A1D-ALIGNMENT-SLOP+" in code
+
+    # The final 2C+1 slot in each existing slab is the one global frozen
+    # attempt.  A preflight borrows an inactive desired item bank for its plan,
+    # so the product leaf owns no parallel attempt/plan allocation or service.
+    for forbidden_storage in (
+        "_A1D-UIDL-ATTEMPT",
+        "_A1D-UIDL-PLAN",
+        "APT1-DESK-RTERM-ATTEMPT",
+        "APT1-DESK-RTERM-PLAN",
+    ):
+        assert forbidden_storage not in code
+    assert "RTERM-SURFACE-SNAPSHOT-INIT" not in code
+    assert "RTERM-UCTX-MATERIALIZATION-PREFLIGHT" not in code
 
     clear_inert = _word(composition, "_A1D-CLEAR-INERT")
     assert "_A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL" in clear_inert

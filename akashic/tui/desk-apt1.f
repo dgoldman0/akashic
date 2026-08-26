@@ -8,10 +8,11 @@
 \  bytes.  A profile opts in by calling APT1-DESK-RUN instead of DESK-RUN.
 \
 \  Product profiles override the eight capacities before REQUIRE.  Owner
-\  tombstones, one atomic retained candidate, live UIDL bindings, and the two
-\  per-binding neutral projection banks exhaust independently.  Candidate
-\  identity storage is derived from the existing bank/item geometry, not a
-\  ninth product capacity.  The defaults are only this product profile's
+\  tombstones, one atomic retained candidate, live UIDL bindings, two desired
+\  projection banks per binding, and one backend-global frozen-attempt bank
+\  exhaust independently.  Candidate identity storage is derived from the
+\  existing bank/item geometry, not a ninth product capacity.  The defaults
+\  are only this product profile's
 \  current boundary; the generic driver and lower Desk/applet layers do not
 \  acquire fixed candidate capacities.
 \
@@ -68,6 +69,11 @@ REQUIRE applets/desk/desk.f
     OVER _A1D-U32-POSITIVE? 0= ABORT" desk-apt1: invalid capacity"
     UM* DUP 0<> ABORT" desk-apt1: storage size overflow" DROP ;
 
+: _A1D-CAPACITY+  ( a b -- total-u )
+    OVER + DUP ROT U< ABORT" desk-apt1: storage size overflow"
+    DUP _A1D-U32-POSITIVE? 0=
+        ABORT" desk-apt1: invalid storage size" ;
+
 : _A1D-ALIGNMENT-SLOP+  ( payload-u -- allocation-u )
     DUP 0> 0= ABORT" desk-apt1: invalid storage size"
     DUP -8 U> ABORT" desk-apt1: aligned storage overflow"
@@ -80,6 +86,7 @@ APT1-DESK-RTAPT-OP-RECORDS RTAPT-OP-SIZE _A1D-CAPACITY*
 APT1-DESK-RTERM-BINDING-RECORDS RTERM-UIDL-BINDING-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-UIDL-RECORDS-U
 APT1-DESK-RTERM-BINDING-RECORDS 2 _A1D-CAPACITY*
+    1 _A1D-CAPACITY+
     CONSTANT _A1D-UIDL-CANDIDATE-BANKS
 APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK
     RTERM-UIDL-CANDIDATE-ITEM-BYTES _A1D-CAPACITY*
@@ -121,8 +128,8 @@ APTAS-SIZE 7 + XBUF _A1D-OWNER-MEM
 _A1D-OWNER-MEM 7 + -8 AND CONSTANT _A1D-OWNER
 
 \ The concrete RTAPT engine, its neutral facade, unified screen publisher,
-\ UIDL binding registry, and neutral candidate item/identity/snapshot banks
-\ are source-owned,
+\ UIDL binding registry, and neutral desired/attempt item, identity, and
+\ snapshot banks are source-owned,
 \ aligned, pairwise separate spans.  The driver clears the registry and banks
 \ at its init/fini ownership boundaries; Desk only owns their XMEM lifetime.
 \ Configuration and the one host-binding descriptor are call-borrowed only.
