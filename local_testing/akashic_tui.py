@@ -266,7 +266,10 @@ from diskutil import (  # noqa: E402
     pack_forth_source,
 )
 from rich_terminal import DriverStatus, TerminalState  # noqa: E402
-from rich_terminal.retained_model import RetainedPolicy  # noqa: E402
+from rich_terminal.retained_model import (  # noqa: E402
+    RetainedFeature,
+    RetainedPolicy,
+)
 from session import (  # noqa: E402
     MachineSession,
     RichTerminalSessionPolicy,
@@ -13261,6 +13264,65 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
 )
 
 
+# Development evidence for the blocking root-region-plus-LABEL checkpoint.
+# This deliberately advertises only enough of RETAINED-1 for that focused
+# journey.  It is not the production Desktop policy: INSTRUMENT also covers
+# READOUT, METER, and STATUS, whose complete path is not yet qualified.  The
+# 128-byte ceiling is Sound Lab's exact _SL-STATUS-BUF extent and _SL-STATUS+
+# clamps every append to that same remaining capacity.
+_SOUNDLAB_LABEL_CHECKPOINT_HOST = DESKTOP_APT1_RICH_TERMINAL.host_policy
+SOUNDLAB_LABEL_CHECKPOINT_DEV_RICH_TERMINAL = RichTerminalProfile(
+    guest_rx_bytes=8_192,
+    guest_tx_bytes=8_192,
+    guest_owner_records=1,
+    guest_operation_records=2,
+    # One 72-byte REGION definition plus one 128-byte LABEL definition and
+    # the LABEL's exact bounded UTF-8 copy.
+    guest_operation_copy_bytes=72 + 128 + 128,
+    guest_uidl_binding_records=1,
+    host_policy=_SOUNDLAB_LABEL_CHECKPOINT_HOST,
+    retained_policy=RetainedPolicy(
+        features=RetainedFeature.CORE | RetainedFeature.INSTRUMENT,
+        max_owner_records=1,
+        max_live_owners=1,
+        max_regions=1,
+        max_resources=0,
+        max_objects=1,
+        max_series=0,
+        max_operations_per_transaction=2,
+        max_resource_chunk_bytes=0,
+        # CELL replacement at the declared maximum geometry still determines
+        # the shared transaction allowance; this focused retained recipe must
+        # not shrink it to the size of one LABEL transaction.
+        max_retained_transaction_bytes=(
+            _SOUNDLAB_LABEL_CHECKPOINT_HOST.maximum_transaction_bytes
+        ),
+        total_resource_bytes=0,
+        image_format=0,
+        max_image_width=0,
+        max_image_height=0,
+        max_path_points=0,
+        max_label_bytes=128,
+        max_samples_per_append=0,
+        max_history_per_series=0,
+        minimum_presentation_interval_us=0,
+        total_sample_slots=0,
+        total_utf8_bytes=128,
+        client_to_terminal_max_payload=max(
+            64,
+            12 + 8 * _SOUNDLAB_LABEL_CHECKPOINT_HOST.max_cols,
+        ),
+        terminal_to_client_max_payload=max(
+            64,
+            12 + 8 * _SOUNDLAB_LABEL_CHECKPOINT_HOST.max_cols,
+        ),
+        base_max_transaction_bytes=(
+            _SOUNDLAB_LABEL_CHECKPOINT_HOST.maximum_transaction_bytes
+        ),
+    ),
+)
+
+
 def _desktop_apt1_autoexec(autoexec: str) -> str:
     """Replace only Desktop's terminal owner and fail-closed run wrapper."""
     desk_require = "REQUIRE tui/applets/desk/desk.f"
@@ -13301,6 +13363,72 @@ PROFILES["desktop-apt1"] = replace(
     ),
     autoexec=_desktop_apt1_autoexec(PROFILES["desktop"].autoexec),
     rich_terminal=DESKTOP_APT1_RICH_TERMINAL,
+)
+
+
+# This source-loading profile exists only to drive the first real UIDL LABEL
+# to the physical compositor.  It intentionally keeps the real Desk APT-1
+# lifecycle and Practice activation while removing unrelated applet roots.
+# Its cold wall time has not yet been qualified as seconds-scale.
+PROFILES["desktop-apt1-soundlab-label-dev"] = Profile(
+    roots=(
+        "tui/desk-apt1.f",
+        "tui/applets/soundlab/soundlab.f",
+    ),
+    resources=("tui/applets/soundlab/soundlab.uidl",),
+    autoexec=_desktop_apt1_autoexec(
+        r"""\ autoexec.f - development-only Sound Lab retained LABEL checkpoint
+ENTER-USERLAND
+." [akashic] loading Sound Lab LABEL checkpoint" CR
+REQUIRE tui/applets/desk/desk.f
+REQUIRE tui/applets/soundlab/soundlab.f
+
+\ Provision the same normal Practice head as the canonical Desktop, and only
+\ on genuinely blank development media.  Invalid slots remain recovery work.
+CREATE _boot-practice-head PHEAD-SIZE ALLOT
+CREATE _boot-practice-out PHEAD-SIZE ALLOT
+CREATE _boot-practice-store PHEADVFS-SIZE ALLOT
+: _boot-practice-id!  ( value id -- ) DUP RID-CLEAR ! ;
+: _boot-practice-slot?  ( path-a path-u -- flag )
+    VFS-OPEN DUP IF VFS-CLOSE -1 ELSE DROP 0 THEN ;
+: _boot-practice-present?  ( -- flag )
+    S" /practice-head-a.bin" _boot-practice-slot?
+    S" /practice-head-b.bin" _boot-practice-slot? OR ;
+: _boot-practice-provision  ( -- )
+    _boot-practice-present? IF EXIT THEN
+    VFS-CUR _boot-practice-store PHEADVFS-INIT
+        PHEADVFS-S-OK <> ABORT" Practice store init failed"
+    _boot-practice-out _boot-practice-store PHEADVFS-LOAD
+        PHEADVFS-S-RECOVERY <> ABORT" blank Practice did not enter recovery"
+    _boot-practice-head PHEAD-INIT
+    1 _boot-practice-head PHEAD.ID _boot-practice-id!
+    2 _boot-practice-head PHEAD.CURRENT-ROOT _boot-practice-id!
+    _boot-practice-head _boot-practice-store PHEADVFS-REINITIALIZE
+        PHEADVFS-S-OK <> ABORT" Practice provision failed" ;
+_boot-practice-provision
+
+CREATE _boot-soundlab-desc APP-DESC ALLOT
+_boot-soundlab-desc SOUNDLAB-ENTRY
+_boot-soundlab-desc DESK-QUEUE-LAUNCH
+
+." [akashic] starting Sound Lab LABEL checkpoint" CR
+: _boot-run-desktop  ( -- ) DESK-RUN ;
+' _boot-run-desktop CATCH ?DUP IF
+    ." [akashic] desktop exception " . CR
+THEN
+." [akashic] desktop exited" CR
+"""
+    ),
+    ready_markers=("SOUND LAB", "Waveform", "Playback"),
+    stable_markers=("SOUND LAB", "Waveform", "Playback"),
+    linked=True,
+    cold_source_packed=True,
+    smoke_max_steps=DESKTOP_SMOKE_MAX_STEPS,
+    smoke_timeout=DESKTOP_SMOKE_TIMEOUT,
+    include_large_sample=False,
+    total_sectors=PROFILES["desktop"].total_sectors,
+    minimum_free_bytes=PROFILES["desktop"].minimum_free_bytes,
+    rich_terminal=SOUNDLAB_LABEL_CHECKPOINT_DEV_RICH_TERMINAL,
 )
 
 

@@ -44,6 +44,7 @@ from akashic_tui import (  # noqa: E402
     PROFILES,
     PROVIDED_RE,
     REQUIRE_RE,
+    SOUNDLAB_LABEL_CHECKPOINT_DEV_RICH_TERMINAL,
     SOURCE_ROOT,
     _coalesce_audited_forth_lines,
     _cold_source_lzss_decode,
@@ -1755,6 +1756,84 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
     assert rich_closure - baseline_closure == rich_modules
     assert MEGAPAD_RICH_TERMINAL_MODULE not in baseline_closure
     assert MEGAPAD_RICH_TERMINAL_MODULE not in rich_closure
+
+
+def test_soundlab_label_checkpoint_is_focused_and_development_only() -> None:
+    production = PROFILES["desktop-apt1"]
+    checkpoint = PROFILES["desktop-apt1-soundlab-label-dev"]
+    rich = SOUNDLAB_LABEL_CHECKPOINT_DEV_RICH_TERMINAL
+    retained = rich.retained_policy
+
+    assert production.rich_terminal is DESKTOP_APT1_RICH_TERMINAL
+    assert production.rich_terminal.retained_policy is None
+    assert checkpoint.rich_terminal is rich
+    assert checkpoint.roots == (
+        "tui/desk-apt1.f",
+        "tui/applets/soundlab/soundlab.f",
+    )
+    assert checkpoint.resources == (
+        "tui/applets/soundlab/soundlab.uidl",
+    )
+    assert checkpoint.include_large_sample is False
+    assert checkpoint.total_sectors == PROFILES["desktop"].total_sectors
+    assert (
+        checkpoint.minimum_free_bytes
+        == PROFILES["desktop"].minimum_free_bytes
+    )
+
+    assert retained is not None
+    assert retained.features == (
+        RetainedFeature.CORE | RetainedFeature.INSTRUMENT
+    )
+    assert retained.max_owner_records == 1
+    assert retained.max_live_owners == 1
+    assert retained.max_regions == 1
+    assert retained.max_resources == 0
+    assert retained.max_objects == 1
+    assert retained.max_series == 0
+    assert retained.max_operations_per_transaction == 2
+    assert retained.max_label_bytes == 128
+    assert retained.total_utf8_bytes == 128
+    assert retained.minimum_presentation_interval_us == 0
+    assert retained.max_retained_transaction_bytes == (
+        rich.host_policy.maximum_transaction_bytes
+    )
+    assert retained.base_max_transaction_bytes == (
+        rich.host_policy.maximum_transaction_bytes
+    )
+    assert rich.guest_owner_records == 1
+    assert rich.guest_operation_records == 2
+    assert rich.guest_operation_copy_bytes == 72 + 128 + 128
+    assert rich.guest_uidl_binding_records == 1
+
+    autoexec = checkpoint.autoexec
+    assert autoexec.count("REQUIRE tui/desk-apt1.f") == 1
+    assert autoexec.count("REQUIRE tui/applets/soundlab/soundlab.f") == 1
+    assert "_boot-practice-provision" in autoexec
+    assert "_boot-soundlab-desc DESK-QUEUE-LAUNCH" in autoexec
+    assert ": _boot-run-desktop  ( -- ) APT1-DESK-RUN ;" in autoexec
+    assert "DESK-QUEUE-BUILTIN" not in autoexec
+
+    uidl = (
+        SOURCE_ROOT / "tui/applets/soundlab/soundlab.uidl"
+    ).read_text(encoding="utf-8")
+    assert (
+        "<label id=sbar-signal text=Sound_Lab text-capacity=128/>" in uidl
+    )
+    assert uidl.count("text-capacity=") == 1
+    soundlab_source = (
+        SOURCE_ROOT / "tui/applets/soundlab/soundlab.f"
+    ).read_text(encoding="utf-8")
+    assert (
+        "_SL-CURRENT-STATE 128 CMP-FIELD: _SL-STATUS-BUF"
+        in soundlab_source
+    )
+    assert "128 _SL-STATUS-U @ - 0 MAX" in soundlab_source
+    assert 'S" sbar-signal" UTUI-BY-ID _SL-E-SBAR-SIGNAL !' in soundlab_source
+    assert (
+        'S" text" _SL-STATUS-BUF _SL-STATUS-U @ UTUI-SET-ATTR'
+        in soundlab_source
+    )
 
 
 def test_desktop_apt1_build_is_an_external_additive_composition(

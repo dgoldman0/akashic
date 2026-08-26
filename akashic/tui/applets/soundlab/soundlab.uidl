@@ -23,7 +23,7 @@
 </menubar>
 <region id=soundlab-body style=color:#eeeeee;background-color:#121212/>
 <status id=sbar style=color:white;background-color:#005f5f>
-<label id=sbar-signal text=Sound_Lab/>
+<label id=sbar-signal text=Sound_Lab text-capacity=128/>
 <label id=sbar-state text=Starting/>
 <label id=sbar-playback text=Audio_starting/>
 </status>
