@@ -319,6 +319,39 @@ def test_lifecycle_is_hidden_start_exact_reveal_then_stable_replacement() -> Non
     assert "_RTSCREEN-P-COUNT @ 0= AND" in capture
 
 
+def test_prepare_retry_preserves_sealed_phase_while_publication_is_in_flight() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+
+    for name, ready_phase, sealed_phase in (
+        (
+            "_RTSCREEN-PREPARE-START",
+            "_RTSCREEN-PH-READY-START",
+            "_RTSCREEN-PH-START-SEALED",
+        ),
+        (
+            "_RTSCREEN-PREPARE-REVEAL",
+            "_RTSCREEN-PH-READY-REVEAL",
+            "_RTSCREEN-PH-REVEAL-SEALED",
+        ),
+        (
+            "_RTSCREEN-PREPARE-DELTA",
+            "_RTSCREEN-PH-READY-DELTA",
+            "_RTSCREEN-PH-DELTA-SEALED",
+        ),
+    ):
+        prepare = _definition(source, name)
+        capture = prepare.index("_RTSCREEN-CAPTURE")
+        seal = prepare.index(sealed_phase, capture)
+        would_block = prepare.index(
+            "DUP SCB-S-WOULD-BLOCK = IF EXIT THEN",
+            seal,
+        )
+        recover = prepare.index(ready_phase, would_block)
+
+        assert capture < seal < would_block < recover
+        assert ready_phase not in prepare[:would_block]
+
+
 def test_committed_snapshot_closes_hidden_start_race() -> None:
     source = SOURCE.read_text(encoding="utf-8")
     different = _definition(source, "_RTSCREEN-DIFFERENT?")
