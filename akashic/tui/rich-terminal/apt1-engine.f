@@ -3511,9 +3511,12 @@ VARIABLE _RTAPT-PR-PENDING
 \ publication.  It never calls PT-SERVICE and cannot consume input events.
 : RTAPT-STEP  ( engine -- status )
     DUP _RTAPT-ENGINE-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN
-    DUP _RTAPT-ST-E !
-    DUP _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-QUARANTINED = IF
-        _RTAPT-E.LAST-STATUS @ EXIT
+    \ This store consumes ENGINE: retaining it below STATUS would leak one
+    \ data-stack cell through every terminal-service turn.
+    _RTAPT-ST-E !
+    _RTAPT-ST-E @ _RTAPT-E.ACTIVE-KIND @
+        _RTAPT-ACTIVE-QUARANTINED = IF
+        _RTAPT-ST-E @ _RTAPT-E.LAST-STATUS @ EXIT
     THEN
     _RTAPT-ST-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <> IF
         \ PT-COMPLETION-POLL has no completion to return after a synchronized

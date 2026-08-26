@@ -314,6 +314,19 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-QUARANTINE-ALL" in reconcile_drop
 
     step = _definition(source, "RTAPT-STEP")
+    # STEP's declared ( engine -- status ) contract is also the service-loop
+    # stack boundary.  Consume the validated input into the private slot;
+    # retaining it beneath STATUS leaks one cell on every Desktop turn.
+    assert "DUP _RTAPT-ST-E !" not in step
+    assert step.count("_RTAPT-ST-E !") == 1
+    assert (
+        step.index(
+            "DUP _RTAPT-ENGINE-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN"
+        )
+        < step.index("_RTAPT-ST-E !")
+        < step.index("_RTAPT-ST-E @ _RTAPT-E.ACTIVE-KIND @")
+    )
+    assert "_RTAPT-ST-E @ _RTAPT-E.LAST-STATUS @ EXIT" in step
     assert "_RTAPT-POLL-COMPLETION" in step
     assert step.count("_RTAPT-QUEUE-POP") == 1
     assert step.count("_RTAPT-OWNER-SEND") == 1
