@@ -844,10 +844,10 @@ def test_initial_label_plan_preflight_is_exact_and_admission_mutation_free() -> 
     assert "_RTAPT-LPF-OWNER-QUOTAS? 0=" in owner
     assert "_RTAPT-LPF-OWNER-QUOTAS-ZERO? 0=" in owner
     object_admission = owner.index(
-        "_RTAPT-LPF-AGG-OBJECTS @ _RTAPT-LPF-LAST-OBJECT @"
+        "_RTAPT-LPF-AGG-OBJECTS @ _RTAPT-LPF-COUNT @"
     )
     object_limit = owner.index("_RTAPT-L.OBJECTS @ U>", object_admission)
-    assert "_RTAPT-LPF-COUNT @" not in owner[object_admission:object_limit]
+    assert "_RTAPT-LPF-LAST-OBJECT @" not in owner[object_admission:object_limit]
 
     body = _definition(source, "_RTAPT-LABEL-PREFLIGHT-BODY")
     ordered_checks = (

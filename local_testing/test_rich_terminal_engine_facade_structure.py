@@ -410,6 +410,7 @@ def test_label_plan_preflight_is_neutral_complete_and_mutation_free() -> None:
     publish_high = item.index("_RTE-LPV-PRIOR-OBJECT !", monotone)
     assert monotone < publish_high
     assert "strictly increasing but may be sparse" in source
+    assert "exact owner object quota is item" in source
     geometry = _definition(source, "_RTE-LABEL-PLAN-ITEM-GEOMETRY?")
     assert geometry.count("_RTE-SADD?") == 2
     assert "_RTE-LP.REGION-ROWS @ <>" in geometry

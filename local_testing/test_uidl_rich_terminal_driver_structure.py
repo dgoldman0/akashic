@@ -1013,7 +1013,8 @@ def test_materializer_persists_admission_and_drops_before_mutation() -> None:
     rollback = admit.index("_RTERM-MS-ROLLBACK-OPENING", clean_plan)
     assert preflight < published < opened < restart < clean_plan < rollback
     assert "_RTERM-MP-CLEAN-ATTEMPT" not in admit[published:clean_plan]
-    assert "_RTERM-MP-PRIOR-OBJECT @" in owner_open
+    assert "_RTERM-MP-OBJECTS @" in owner_open
+    assert "_RTERM-MP-PRIOR-OBJECT @" not in owner_open
     assert "_RTERM-MP-COUNT @" not in owner_open
     assert "1 0" in owner_open
     assert "0 0 _RTERM-MP-CANDIDATE-UTF8 @ 0" in owner_open

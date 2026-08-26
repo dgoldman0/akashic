@@ -3103,9 +3103,9 @@ VARIABLE _RTERM-MS-MODE
     _RTERM-MS-RECORD @ _RTERM-R.OWNER @
     _RTERM-MS-RECORD @ _RTERM-R.OWNER-GEN @
     1 0
-    \ Stable IDs may be sparse.  The final sorted object is the exact owner
-    \ quota admitted by the immediately preceding LABEL preflight.
-    _RTERM-MP-PRIOR-OBJECT @
+    \ Stable IDs may be sparse.  Reserve the exact validated logical object
+    \ count; the final ID remains the separate attempt/capture high-water.
+    _RTERM-MP-OBJECTS @
     0 0 _RTERM-MP-CANDIDATE-UTF8 @ 0
     _RTERM-MS-BACKEND @ _RTERM-B.ENGINE @ RTE-OWNER-OPEN ;
 
