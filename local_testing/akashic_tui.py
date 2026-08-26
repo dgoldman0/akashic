@@ -266,7 +266,10 @@ from diskutil import (  # noqa: E402
     pack_forth_source,
 )
 from rich_terminal import DriverStatus, TerminalState  # noqa: E402
-from rich_terminal.retained_model import RetainedPolicy  # noqa: E402
+from rich_terminal.retained_model import (  # noqa: E402
+    RetainedFeature,
+    RetainedPolicy,
+)
 from session import (  # noqa: E402
     MachineSession,
     RichTerminalSessionPolicy,
@@ -279,10 +282,6 @@ class RichTerminalProfile:
 
     guest_rx_bytes: int
     guest_tx_bytes: int
-    guest_owner_records: int
-    guest_operation_records: int
-    guest_operation_copy_bytes: int
-    guest_uidl_binding_records: int
     host_policy: RichTerminalSessionPolicy
     retained_policy: RetainedPolicy | None = None
 
@@ -293,22 +292,10 @@ class RichTerminalProfile:
             self.retained_policy, RetainedPolicy
         ):
             raise TypeError("retained_policy must be a RetainedPolicy or None")
-        guest_storage_fields = (
-            "guest_rx_bytes",
-            "guest_tx_bytes",
-            "guest_owner_records",
-            "guest_operation_records",
-            "guest_operation_copy_bytes",
-            "guest_uidl_binding_records",
-        )
-        for name in guest_storage_fields:
+        for name in ("guest_rx_bytes", "guest_tx_bytes"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
                 raise TypeError(f"{name} must be an integer")
-        for name in guest_storage_fields[2:]:
-            value = getattr(self, name)
-            if not 0 < value <= 0xFFFFFFFF:
-                raise ValueError(f"{name} must be a positive u32")
         if self.guest_rx_bytes < 4_168:
             raise ValueError("guest_rx_bytes must admit the control reserve")
         maximum_row_frame = 40 + 12 + 8 * self.host_policy.max_cols
@@ -13230,20 +13217,25 @@ SOUNDLAB-RUN
 }
 
 
+DESKTOP_APT1_MAX_COLS = 400
+DESKTOP_APT1_MAX_ROWS = 200
+DESKTOP_APT1_MAX_CELLS = DESKTOP_APT1_MAX_COLS * DESKTOP_APT1_MAX_ROWS
+DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES = 12 + 8 * DESKTOP_APT1_MAX_COLS
+DESKTOP_APT1_HIDDEN_START_BYTES = 160 + 88 + 124 * DESKTOP_APT1_MAX_CELLS
+DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES = (
+    160
+    + 56
+    + DESKTOP_APT1_MAX_ROWS * (40 + DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES)
+    + 124 * DESKTOP_APT1_MAX_CELLS
+)
+
+
 DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
     guest_rx_bytes=8_192,
     guest_tx_bytes=8_192,
-    # Match the Desktop catalog's supported 32 concurrently installed app
-    # types. Retained advertisement remains disabled until the semantic
-    # projector can derive complete per-tree admission rather than opening a
-    # root-region-only owner.
-    guest_owner_records=32,
-    guest_operation_records=32,
-    guest_operation_copy_bytes=32 * 72,
-    guest_uidl_binding_records=32,
     host_policy=RichTerminalSessionPolicy(
-        max_cols=400,
-        max_rows=200,
+        max_cols=DESKTOP_APT1_MAX_COLS,
+        max_rows=DESKTOP_APT1_MAX_ROWS,
         egress_high_publications=2,
         egress_high_batches=32,
         egress_low_batches=4,
@@ -13257,7 +13249,34 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
         ansi_history_bytes=256 * 1024,
         service_batches=4,
     ),
-    retained_policy=None,
+    retained_policy=RetainedPolicy(
+        features=RetainedFeature.CORE,
+        max_owner_records=1,
+        max_live_owners=1,
+        max_regions=1,
+        max_resources=0,
+        max_objects=DESKTOP_APT1_MAX_CELLS,
+        max_series=0,
+        max_operations_per_transaction=DESKTOP_APT1_MAX_CELLS + 1,
+        max_resource_chunk_bytes=0,
+        max_retained_transaction_bytes=(
+            DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES
+        ),
+        total_resource_bytes=0,
+        image_format=0,
+        max_image_width=0,
+        max_image_height=0,
+        max_path_points=0,
+        max_glyph_run_bytes=4,
+        max_samples_per_append=0,
+        max_history_per_series=0,
+        minimum_presentation_interval_us=0,
+        total_sample_slots=0,
+        total_utf8_bytes=4 * DESKTOP_APT1_MAX_CELLS,
+        client_to_terminal_max_payload=DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES,
+        terminal_to_client_max_payload=64,
+        base_max_transaction_bytes=DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES,
+    ),
 )
 
 
@@ -25036,20 +25055,12 @@ def _with_megapad_rich_terminal(
             "APT1-DESK-TX-CAPACITY"
         ),
         (
-            f"{rich_terminal.guest_owner_records} CONSTANT "
-            "APT1-DESK-RTAPT-OWNER-RECORDS"
+            f"{rich_terminal.host_policy.max_cols} CONSTANT "
+            "APT1-DESK-MAX-COLS"
         ),
         (
-            f"{rich_terminal.guest_operation_records} CONSTANT "
-            "APT1-DESK-RTAPT-OP-RECORDS"
-        ),
-        (
-            f"{rich_terminal.guest_operation_copy_bytes} CONSTANT "
-            "APT1-DESK-RTAPT-COPY-BYTES"
-        ),
-        (
-            f"{rich_terminal.guest_uidl_binding_records} CONSTANT "
-            "APT1-DESK-RTERM-BINDING-RECORDS"
+            f"{rich_terminal.host_policy.max_rows} CONSTANT "
+            "APT1-DESK-MAX-ROWS"
         ),
     ]
     rich_terminal_lines = [

@@ -1,4 +1,4 @@
-"""Structural guards for the UIDL-first rich-terminal architecture."""
+"""Structural guards for neutral TUI and rich-terminal composition."""
 
 from pathlib import Path
 import re
@@ -337,7 +337,7 @@ def test_desk_wraps_child_hosting_in_a_neutral_composition_lifecycle() -> None:
         assert forbidden not in decompose
 
 
-def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
+def test_desktop_apt1_leaf_composes_final_screen_publisher() -> None:
     composition = _text("akashic/tui/desk-apt1.f")
     code = _forth_code(composition)
 
@@ -345,100 +345,41 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
         "app-shell-apt1.f",
         "rich-terminal/screen-adapter-apt1.f",
         "rich-terminal/engine-apt1.f",
-        "rich-terminal/uidl-driver.f",
+        "rich-terminal/screen-plane.f",
         "applets/desk/desk.f",
     ]
+    assert "uidl-driver.f" not in code
+    assert "uidl-projector.f" not in code
     assert "REQUIRE rich-terminal.f" not in code
 
-    for capacity in (
-        "APT1-DESK-RTAPT-OWNER-RECORDS",
-        "APT1-DESK-RTAPT-OP-RECORDS",
-        "APT1-DESK-RTAPT-COPY-BYTES",
-        "APT1-DESK-RTERM-BINDING-RECORDS",
-        "APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK",
-        "APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK",
-    ):
-        assert f"[UNDEFINED] {capacity} [IF]" in code
-    for size in (
-        "RTAPT-CONFIG-SIZE",
-        "RTAPT-ENGINE-SIZE",
-        "RTE-FACADE-SIZE",
-        "RTAPTSCB-SIZE",
-        "RTERM-UIDL-BACKEND-SIZE",
-        "RTERM-HOST-BINDING-SIZE",
-    ):
-        assert f"{size} 7 + XBUF" in code
-    assert "RTAPT-OWNER-SIZE _A1D-CAPACITY*" in code
-    assert "RTAPT-OP-SIZE _A1D-CAPACITY*" in code
-    assert "RTERM-UIDL-BINDING-SIZE _A1D-CAPACITY*" in code
-    assert (
-        "APT1-DESK-RTERM-BINDING-RECORDS 2 _A1D-CAPACITY*\n"
-        "    1 _A1D-CAPACITY+\n"
-        "    CONSTANT _A1D-UIDL-CANDIDATE-BANKS"
-        in code
+    public_overrides = re.findall(
+        r"(?m)^\[UNDEFINED\] (APT1-DESK-[A-Z0-9-]+) \[IF\]$", code
     )
-    capacity_add = _word(composition, "_A1D-CAPACITY+")
-    assert "OVER + DUP ROT U<" in capacity_add
-    assert "_A1D-U32-POSITIVE? 0=" in capacity_add
+    assert public_overrides == [
+        "APT1-DESK-RX-CAPACITY",
+        "APT1-DESK-TX-CAPACITY",
+        "APT1-DESK-MAX-COLS",
+        "APT1-DESK-MAX-ROWS",
+    ]
     assert (
-        "APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK\n"
-        "    RTERM-UIDL-CANDIDATE-ITEM-BYTES _A1D-CAPACITY*"
-        in code
-    )
+        "APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS _A1D-CAPACITY*\n"
+        "    CONSTANT _A1D-SCREEN-CELLS"
+    ) in code
+    assert "1 RTAPT-OWNER-SIZE _A1D-CAPACITY*" in code
+    assert "_A1D-SCREEN-CELLS 1 _A1D-CAPACITY+" in code
+    assert "_A1D-SCREEN-CELLS 128 _A1D-CAPACITY*" in code
+    assert "72 _A1D-CAPACITY+" in code
     assert (
-        "_A1D-UIDL-CANDIDATE-BANKS _A1D-UIDL-CANDIDATE-ITEM-BANK-U\n"
-        "    _A1D-CAPACITY*"
-        in code
-    )
-    assert (
-        "APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK\n"
-        "    RTERM-UIDL-CANDIDATE-IDENTITY-BYTES _A1D-CAPACITY*"
-        in code
-    )
-    assert (
-        "_A1D-UIDL-CANDIDATE-BANKS "
-        "_A1D-UIDL-CANDIDATE-IDENTITY-BANK-U\n"
-        "    _A1D-CAPACITY*"
-        in code
-    )
-    assert (
-        "APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK 7 AND"
-        in code
-    )
-    assert (
-        "_A1D-UIDL-CANDIDATE-BANKS\n"
-        "    APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK "
+        "_A1D-SCREEN-CELLS RTE-GLYPH-RUN-PLAN-ITEM-SIZE "
         "_A1D-CAPACITY*"
+    ) in code
+    assert "RTSCREEN-SIZE 7 + XBUF _A1D-SCREEN-MEM" in code
+    assert "_A1D-SCREEN-PLAN-U _A1D-ALIGNMENT-SLOP+" in code
+    assert "_A1D-SCREEN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN" in code
+    assert (
+        "_A1D-SCREEN-PLAN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN-PLAN"
         in code
     )
-    for payload in (
-        "_A1D-UIDL-CANDIDATE-ITEMS-U",
-        "_A1D-UIDL-CANDIDATE-IDENTITIES-U",
-        "_A1D-UIDL-CANDIDATE-SNAPSHOTS-U",
-        "RTERM-UIDL-CONFIG-BYTES",
-    ):
-        assert f"{payload} _A1D-ALIGNMENT-SLOP+" in code
-
-    # The final 2C+1 slot in each existing slab is the one global frozen
-    # attempt.  A preflight borrows an inactive desired item bank for its plan,
-    # so the product leaf owns no parallel attempt/plan allocation or service.
-    for forbidden_storage in (
-        "_A1D-UIDL-ATTEMPT",
-        "_A1D-UIDL-PLAN",
-        "APT1-DESK-RTERM-ATTEMPT",
-        "APT1-DESK-RTERM-PLAN",
-    ):
-        assert forbidden_storage not in code
-    assert "RTERM-SURFACE-SNAPSHOT-INIT" not in code
-    assert "RTERM-UCTX-MATERIALIZATION-PREFLIGHT" not in code
-
-    clear_inert = _word(composition, "_A1D-CLEAR-INERT")
-    assert "_A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL" in clear_inert
-    # Profile-sized banks are initialized and finalized by the checked driver,
-    # not redundantly cleared by Desk's scalar cold-state reset.
-    assert "_A1D-UIDL-CANDIDATE-ITEMS" not in clear_inert
-    assert "_A1D-UIDL-CANDIDATE-IDENTITIES" not in clear_inert
-    assert "_A1D-UIDL-CANDIDATE-SNAPSHOTS" not in clear_inert
 
     setup = _word(composition, "_A1D-SETUP")
     setup_order = (
@@ -449,187 +390,58 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
         "RTAPTE-INIT",
         "RTAPTSCB-INIT",
         "RTAPTSCB-ATTACH",
+        "RTSCREEN-INIT",
+        "RTAPTSCB-OUTPUT-PRODUCER!",
         "APTAS-INIT",
         "APTAS-INSTALL",
     )
     assert [setup.index(token) for token in setup_order] == sorted(
         setup.index(token) for token in setup_order
     )
-    phase_after = (
-        ("PT-INIT", "_A1D-PHASE-SESSION _A1D-PHASE !"),
-        ("RTAPT-INIT", "_A1D-PHASE-ENGINE _A1D-PHASE !"),
-        ("RTAPTE-INIT", "_A1D-PHASE-FACADE _A1D-PHASE !"),
-        ("RTAPTSCB-ATTACH", "_A1D-PHASE-PUBLISHER _A1D-PHASE !"),
-        ("APTAS-INIT", "_A1D-PHASE-OWNER _A1D-PHASE !"),
-        ("APTAS-INSTALL", "_A1D-PHASE-INSTALLED _A1D-PHASE !"),
-    )
-    for constructor, publication in phase_after:
-        assert setup.index(constructor) < setup.index(publication)
-
-    init = _word(composition, "_A1D-HOST-INIT-BODY")
-    assert "_A1D-PHASE @ _A1D-PHASE-INSTALLED <> IF" in init
-    init_order = (
-        "_A1D-UIDL-INITIALIZING _A1D-UIDL-PHASE !",
-        "RTERM-HOST-BINDING-INIT",
-        "RTERM-UIDL-CONFIG-INIT",
-        "RTERM-UIDL-INIT",
-        "RTERM-UIDL-INSTALL",
-        "RTAPTSCB-OUTPUT-PRODUCER!",
-        "AHOST-UIDL-READY!",
-        "_A1D-UIDL-READY _A1D-UIDL-PHASE !",
-    )
-    assert [init.index(token) for token in init_order] == sorted(
-        init.index(token) for token in init_order
-    )
-    normalized_init = re.sub(r"\s+", " ", init)
-    assert (
-        "_A1D-HOST-CB-HOST @ _A1D-RTE-FACADE "
-        "_A1D-UIDL-RECORDS _A1D-UIDL-RECORDS-U "
-        "_A1D-UIDL-CANDIDATE-ITEMS "
-        "APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK "
-        "_A1D-UIDL-CANDIDATE-IDENTITIES "
-        "_A1D-UIDL-CANDIDATE-SNAPSHOTS "
-        "APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK "
-        "_A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-INIT"
-        in normalized_init
-    )
-    assert (
-        "_A1D-UIDL-CONFIG _A1D-UIDL-BACKEND RTERM-UIDL-INIT"
-        in normalized_init
-    )
-    config_init_at = init.index("RTERM-UIDL-CONFIG-INIT")
-    failed_config_scrub = init.index(
-        "_A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL",
-        config_init_at,
-    )
-    uidl_init_at = init.index("RTERM-UIDL-INIT", failed_config_scrub)
-    # Saving CONFIG-INIT's result consumes the duplicate status.  The compare
-    # consumes the remaining status, so success must fall through directly to
-    # UIDL-INIT rather than attempting a second DROP.
-    assert "THEN DROP" not in init[config_init_at:uidl_init_at]
-    consumed_config_scrub = init.index(
-        "_A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL",
-        uidl_init_at,
-    )
-    install_at = init.index("RTERM-UIDL-INSTALL", consumed_config_scrub)
-    assert config_init_at < failed_config_scrub < uidl_init_at
-    assert uidl_init_at < consumed_config_scrub < install_at
-
-    normalized_binding = re.sub(r"\s+", " ", init)
-    assert (
-        "_A1D-UIDL-BACKEND RTERM-UIDL-BACKEND-SIZE "
-        "APT1-DESK-RTERM-BINDING-RECORDS "
-        "['] _A1D-RTERM-STEP ['] _A1D-RTERM-PREPARE "
-        "_A1D-RTAPTSCB RTAPTSCB-OUTPUT-PRODUCER!"
-        in normalized_binding
-    )
-    producer_bind = init.index("RTAPTSCB-OUTPUT-PRODUCER!", install_at)
-    host_ready = init.index("AHOST-UIDL-READY!", producer_bind)
-    ready_phase = init.index("_A1D-UIDL-READY _A1D-UIDL-PHASE !", host_ready)
-    assert install_at < producer_bind < host_ready < ready_phase
-
-    callable_check = _word(composition, "_A1D-RTERM-CALLABLE?")
-    exact_context = callable_check.index("_A1D-UIDL-BACKEND <> IF")
-    outer_ready = callable_check.index("_A1D-PHASE-INSTALLED <>", exact_context)
-    uidl_ready = callable_check.index("_A1D-UIDL-READY <>", outer_ready)
-    deep_valid = callable_check.index("RTERM-UIDL-VALID?", uidl_ready)
-    assert exact_context < outer_ready < uidl_ready < deep_valid
-
-    step_adapter = _word(composition, "_A1D-RTERM-STEP")
-    assert "_A1D-RTERM-CALLABLE? 0= IF" in step_adapter
-    assert "RTERM-BACKEND-STEP _A1D-RTERM-STEP-RESULT" in step_adapter
-    step_result = _word(composition, "_A1D-RTERM-STEP-RESULT")
-    for source_status, mapped in (
-        ("RTERM-S-OK", "SCB-S-OK"),
-        ("RTERM-S-WOULD-BLOCK", "SCB-S-WOULD-BLOCK"),
-        ("RTERM-S-UNAVAILABLE", "SCB-S-OK"),
-        ("RTERM-S-STALE", "SCB-S-OK"),
-        ("RTERM-S-SESSION-LOST", "SCB-S-SESSION-LOST 0 0"),
-        ("RTERM-S-CAPACITY", "ROT DROP SCB-S-OK -ROT EXIT"),
-        ("RTERM-S-INVALID", "SCB-S-INVALID 0 0"),
-        ("RTERM-S-SOURCE", "ROT DROP SCB-S-OK -ROT EXIT"),
+    for identity in (
+        "_A1D-SCREEN-OWNER-ID",
+        "_A1D-SCREEN-OWNER-GENERATION",
+        "_A1D-SCREEN-REGION-ID",
+        "_A1D-SCREEN-FIRST-OBJECT-ID",
     ):
-        branch = step_result.index(source_status)
-        assert step_result.index(mapped, branch) > branch
-    assert step_result.rstrip().endswith("SCB-S-INVALID 0 0 ;")
+        assert f"1 CONSTANT {identity}" in code
+    producer_bind = setup[setup.index("RTSCREEN-INIT") :]
+    assert "APT1-DESK-MAX-COLS" in producer_bind
+    assert "['] RTSCREEN-STEP ['] RTSCREEN-PREPARE" in producer_bind
 
-    prepare_adapter = _word(composition, "_A1D-RTERM-PREPARE")
-    assert "_A1D-RTERM-CALLABLE? 0= IF" in prepare_adapter
-    assert (
-        "RTERM-BACKEND-PREPARE _A1D-RTERM-PREPARE-RESULT"
-        in prepare_adapter
-    )
-    prepare_result = _word(composition, "_A1D-RTERM-PREPARE-RESULT")
-    for retryable in (
-        "RTERM-S-WOULD-BLOCK",
-        "RTERM-S-UNAVAILABLE",
-        "RTERM-S-STALE",
-        "RTERM-S-CAPACITY",
-        "RTERM-S-SOURCE",
+    clear_inert = _word(composition, "_A1D-CLEAR-INERT")
+    for record in (
+        "_A1D-SESSION",
+        "_A1D-ADAPTER",
+        "_A1D-OWNER",
+        "_A1D-RTAPT-CONFIG",
+        "_A1D-RTAPT-ENGINE",
+        "_A1D-RTE-FACADE",
+        "_A1D-RTAPTSCB",
+        "_A1D-SCREEN",
     ):
-        branch = prepare_result.index(retryable)
-        assert prepare_result.index("SCB-S-WOULD-BLOCK", branch) > branch
-    assert "RTERM-S-SESSION-LOST" in prepare_result
-    assert "SCB-S-SESSION-LOST" in prepare_result
-
-    fini = _word(composition, "_A1D-HOST-FINI-BODY")
-    assert "_A1D-PHASE @ _A1D-PHASE-INSTALLED <> IF" in fini
-    fini_order = (
-        "RTERM-UIDL-FINI",
-        "0 0 _A1D-HOST-CB-HOST @ AHOST-UIDL-READY!",
-        "RTERM-HOST-BINDING-INIT",
-        "_A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !",
-    )
-    assert [fini.index(token) for token in fini_order] == sorted(
-        fini.index(token) for token in fini_order
-    )
-
-    for callback, body in (
-        ("_A1D-HOST-INIT", "_A1D-HOST-INIT-BODY"),
-        ("_A1D-HOST-FINI", "_A1D-HOST-FINI-BODY"),
-    ):
-        wrapper = _word(composition, callback)
-        caught = wrapper.index(f"['] {body} CATCH")
-        result = wrapper.index("_A1D-HOST-CB-RESULT @", caught)
-        assert caught < result < wrapper.index("0 _A1D-HOST-CB-HOST !")
-        assert result < wrapper.index("0 _A1D-HOST-CB-CONTEXT !")
-    init_wrapper = _word(composition, "_A1D-HOST-INIT")
-    assert init_wrapper.index("['] _A1D-HOST-INIT-BODY CATCH") < (
-        init_wrapper.index(
-            "_A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL"
-        )
-    ) < init_wrapper.index("_A1D-HOST-CB-RESULT @")
+        assert f"{record} " in clear_inert
+    assert "_A1D-SCREEN-PLAN" not in clear_inert
 
     uninstall = _word(composition, "_A1D-UNINSTALL")
-    uidl_gate = uninstall.index(
-        "_A1D-UIDL-PHASE @ _A1D-UIDL-UNBOUND <> IF"
+    teardown_order = ("APTAS-UNINSTALL", "RTAPTE-FINI", "RTAPT-FINI")
+    assert [uninstall.index(token) for token in teardown_order] == sorted(
+        uninstall.index(token) for token in teardown_order
     )
-    aptas = uninstall.index("APTAS-UNINSTALL")
-    facade = uninstall.index("RTAPTE-FINI")
-    rtapt = uninstall.index("RTAPT-FINI")
-    assert uidl_gate < aptas < facade < rtapt < uninstall.index(
-        "_A1D-CLEAR-INERT"
-    )
-    assert uninstall.index("DUP SCB-S-OK <> IF EXIT THEN", aptas) < (
-        uninstall.index("_A1D-PHASE-OWNER _A1D-PHASE !")
-    )
-    assert uninstall.index("DUP RTE-S-OK <> IF EXIT THEN", facade) < (
-        uninstall.index("_A1D-PHASE-ENGINE _A1D-PHASE !", facade)
-    )
-    assert uninstall.index("DUP RTAPT-S-OK <> IF EXIT THEN", rtapt) < (
-        uninstall.index("_A1D-PHASE-SESSION _A1D-PHASE !")
-    )
+    run_body = _word(composition, "_A1D-RUN-BODY")
+    assert run_body.index("_A1D-SETUP") < run_body.index("DESK-RUN")
+    assert "DESK-HOST-LIFECYCLE!" not in run_body
+    public_run = _word(composition, "APT1-DESK-RUN")
+    assert "['] _A1D-RUN-BODY CATCH _A1D-RUN-IOR !" in public_run
+    assert public_run.index("CATCH") < public_run.index("_A1D-UNINSTALL")
 
-    run = _word(composition, "_A1D-RUN-BODY")
-    assert run.index("_A1D-SETUP") < run.index(
-        "DESK-HOST-LIFECYCLE!"
-    ) < run.index("DESK-RUN")
-    caught = run.index("['] DESK-RUN CATCH _A1D-DESK-IOR !")
-    disarmed = run.index("0 0 0 DESK-HOST-LIFECYCLE!", caught)
-    loaded = run.index("_A1D-DESK-IOR @", disarmed)
-    scrubbed = run.index("0 _A1D-DESK-IOR !", loaded)
-    rethrown = run.index("?DUP IF THROW THEN", scrubbed)
-    assert caught < disarmed < loaded < scrubbed < rethrown
+    for forbidden in (
+        "UIDL",
+        "RTERM",
+        "HOST-LIFECYCLE",
+        "AHOST-UIDL-READY!",
+    ):
+        assert forbidden not in code
 
 
 def test_generic_host_close_phases_and_init_boundary_are_persistent() -> None:

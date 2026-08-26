@@ -29,6 +29,12 @@ from akashic_tui import (  # noqa: E402
     COLD_SOURCE_RAW_MAX_BYTES,
     COLD_SOURCE_VERSION,
     DESKTOP_APT1_RICH_TERMINAL,
+    DESKTOP_APT1_HIDDEN_START_BYTES,
+    DESKTOP_APT1_MAX_CELLS,
+    DESKTOP_APT1_MAX_COLS,
+    DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES,
+    DESKTOP_APT1_MAX_ROWS,
+    DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES,
     DEFAULT_SMOKE_MAX_STEPS,
     DEFAULT_SMOKE_TIMEOUT,
     FORTH_LINE_COALESCE_BARRIERS,
@@ -84,7 +90,6 @@ from forth_dependencies import module_key  # noqa: E402
 from rich_terminal import TerminalState  # noqa: E402
 from rich_terminal.retained_model import (  # noqa: E402
     RetainedFeature,
-    RetainedPolicy,
 )
 
 
@@ -1668,10 +1673,8 @@ def test_rich_terminal_boot_load_follows_networking_and_owns_capacities() -> Non
         f"{MEGAPAD_RICH_TERMINAL_BOOT_LINE}\n"
         "8192 CONSTANT APT1-DESK-RX-CAPACITY\n"
         "8192 CONSTANT APT1-DESK-TX-CAPACITY\n"
-        "32 CONSTANT APT1-DESK-RTAPT-OWNER-RECORDS\n"
-        "32 CONSTANT APT1-DESK-RTAPT-OP-RECORDS\n"
-        "2304 CONSTANT APT1-DESK-RTAPT-COPY-BYTES\n"
-        "32 CONSTANT APT1-DESK-RTERM-BINDING-RECORDS\n"
+        "400 CONSTANT APT1-DESK-MAX-COLS\n"
+        "200 CONSTANT APT1-DESK-MAX-ROWS\n"
     )
     assert integrated.startswith(expected_prefix)
     assert integrated.endswith("REQUIRE coldsrc.f\n")
@@ -1685,8 +1688,8 @@ def test_rich_terminal_boot_load_follows_networking_and_owns_capacities() -> Non
     )
 
     changed = integrated.replace(
-        "32 CONSTANT APT1-DESK-RTAPT-OP-RECORDS",
-        "31 CONSTANT APT1-DESK-RTAPT-OP-RECORDS",
+        "400 CONSTANT APT1-DESK-MAX-COLS",
+        "399 CONSTANT APT1-DESK-MAX-COLS",
     )
     with pytest.raises(RuntimeError, match="exactly once after networking"):
         _with_megapad_rich_terminal(changed, DESKTOP_APT1_RICH_TERMINAL)
@@ -1694,24 +1697,14 @@ def test_rich_terminal_boot_load_follows_networking_and_owns_capacities() -> Non
 
 @pytest.mark.parametrize(
     ("field", "value", "error"),
-    tuple(
-        (field, value, error)
-        for field in (
-            "guest_owner_records",
-            "guest_operation_records",
-            "guest_operation_copy_bytes",
-            "guest_uidl_binding_records",
-        )
-        for value, error in (
-            (0, ValueError),
-            (-1, ValueError),
-            (0x1_0000_0000, ValueError),
-            (True, TypeError),
-            ("1", TypeError),
-        )
+    (
+        ("guest_rx_bytes", 4_167, ValueError),
+        ("guest_tx_bytes", 3_251, ValueError),
+        ("guest_rx_bytes", True, TypeError),
+        ("guest_tx_bytes", "8192", TypeError),
     ),
 )
-def test_rich_terminal_profile_rejects_invalid_guest_storage_capacities(
+def test_rich_terminal_profile_rejects_invalid_guest_frame_storage(
     field: str,
     value: object,
     error: type[Exception],
@@ -1733,8 +1726,8 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
     )
     assert profile.roots == expected_roots
     assert profile.rich_terminal is not None
-    assert profile.rich_terminal.retained_policy is None
-    assert "--retained-terminal-policy" not in (
+    assert profile.rich_terminal.retained_policy is not None
+    assert "--retained-terminal-policy" in (
         _rich_terminal_server_arguments(profile)
     )
 
@@ -1743,12 +1736,11 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
         "tui/app-shell-apt1.f",
         "tui/screen-backend-apt1.f",
         "tui/rich-terminal/apt1-engine.f",
-        "tui/rich-terminal/engine.f",
-        "tui/rich-terminal/engine-apt1.f",
-        "tui/rich-terminal/screen-adapter-apt1.f",
-        "tui/rich-terminal/uidl-driver.f",
-        "tui/rich-terminal/uidl-projector.f",
-    }
+            "tui/rich-terminal/engine.f",
+            "tui/rich-terminal/engine-apt1.f",
+            "tui/rich-terminal/screen-adapter-apt1.f",
+            "tui/rich-terminal/screen-plane.f",
+        }
     baseline_closure = set(dependency_order(baseline.roots))
     rich_closure = set(dependency_order(profile.roots))
     assert rich_modules.isdisjoint(baseline_closure)
@@ -1791,11 +1783,15 @@ def test_desktop_apt1_build_is_an_external_additive_composition(
         autoexec.index(MEGAPAD_NETWORKING_BOOT_LINE),
         autoexec.index(MEGAPAD_RICH_TERMINAL_BOOT_LINE),
         autoexec.index("8192 CONSTANT APT1-DESK-RX-CAPACITY"),
-        autoexec.index("32 CONSTANT APT1-DESK-RTAPT-OWNER-RECORDS"),
-        autoexec.index("32 CONSTANT APT1-DESK-RTERM-BINDING-RECORDS"),
+        autoexec.index("400 CONSTANT APT1-DESK-MAX-COLS"),
+        autoexec.index("200 CONSTANT APT1-DESK-MAX-ROWS"),
         autoexec.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}"),
     )
     assert ordered_boot == tuple(sorted(ordered_boot))
+    assert "APT1-DESK-RTAPT-OWNER-RECORDS" not in autoexec
+    assert "APT1-DESK-RTAPT-OP-RECORDS" not in autoexec
+    assert "APT1-DESK-RTAPT-COPY-BYTES" not in autoexec
+    assert "APT1-DESK-RTERM-BINDING-RECORDS" not in autoexec
     assert "BEGIN IDLE AGAIN" in autoexec
     assert "PT-STREAM-OWNED? IF DROP _boot-rich-quarantine THEN" in autoexec
     assert "PT-STREAM-OWNED? IF BYE" not in autoexec
@@ -1867,45 +1863,80 @@ def test_desktop_apt1_launchers_transfer_the_same_host_policy() -> None:
 def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     profile = PROFILES["desktop-apt1"]
     assert profile.rich_terminal is not None
-    host = profile.rich_terminal.host_policy
-    retained = RetainedPolicy(
-        features=RetainedFeature.CORE | RetainedFeature.CADENCE,
-        max_owner_records=1,
-        max_live_owners=1,
-        max_regions=1,
-        max_resources=0,
-        max_objects=0,
-        max_series=0,
-        max_operations_per_transaction=1,
-        max_resource_chunk_bytes=0,
-        max_retained_transaction_bytes=host.maximum_transaction_bytes,
-        total_resource_bytes=0,
-        image_format=0,
-        max_image_width=0,
-        max_image_height=0,
-        max_path_points=0,
-        max_glyph_run_bytes=0,
-        max_samples_per_append=0,
-        max_history_per_series=0,
-        minimum_presentation_interval_us=500_000,
-        total_sample_slots=0,
-        total_utf8_bytes=0,
-        client_to_terminal_max_payload=3_212,
-        terminal_to_client_max_payload=3_212,
-        base_max_transaction_bytes=host.maximum_transaction_bytes,
+    rich = profile.rich_terminal
+    host = rich.host_policy
+    retained = rich.retained_policy
+    assert retained is not None
+    assert host.max_cols == DESKTOP_APT1_MAX_COLS == 400
+    assert host.max_rows == DESKTOP_APT1_MAX_ROWS == 200
+    assert DESKTOP_APT1_MAX_CELLS == (
+        DESKTOP_APT1_MAX_COLS * DESKTOP_APT1_MAX_ROWS
     )
-    enabled = replace(
-        profile,
-        rich_terminal=replace(
-            profile.rich_terminal,
-            retained_policy=retained,
+    assert DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES == (
+        12 + 8 * DESKTOP_APT1_MAX_COLS
+    )
+    assert DESKTOP_APT1_HIDDEN_START_BYTES == (
+        160 + 88 + 124 * DESKTOP_APT1_MAX_CELLS
+    )
+    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == (
+        160
+        + 56
+        + DESKTOP_APT1_MAX_ROWS
+        * (40 + DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES)
+        + 124 * DESKTOP_APT1_MAX_CELLS
+    )
+    assert DESKTOP_APT1_MAX_CELLS == 80_000
+    assert DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES == 3_212
+    assert DESKTOP_APT1_HIDDEN_START_BYTES == 9_920_248
+    assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 10_570_616
+    assert retained.to_dict() == {
+        "features": int(RetainedFeature.CORE),
+        "max_owner_records": 1,
+        "max_live_owners": 1,
+        "max_regions": 1,
+        "max_resources": 0,
+        "max_objects": DESKTOP_APT1_MAX_CELLS,
+        "max_series": 0,
+        "max_operations_per_transaction": DESKTOP_APT1_MAX_CELLS + 1,
+        "max_resource_chunk_bytes": 0,
+        "max_retained_transaction_bytes": (
+            DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES
         ),
-    )
+        "total_resource_bytes": 0,
+        "image_format": 0,
+        "max_image_width": 0,
+        "max_image_height": 0,
+        "max_path_points": 0,
+        "max_glyph_run_bytes": 4,
+        "max_samples_per_append": 0,
+        "max_history_per_series": 0,
+        "minimum_presentation_interval_us": 0,
+        "total_sample_slots": 0,
+        "total_utf8_bytes": 4 * DESKTOP_APT1_MAX_CELLS,
+        "client_to_terminal_max_payload": (
+            DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES
+        ),
+        "terminal_to_client_max_payload": 64,
+        "base_max_transaction_bytes": (
+            DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES
+        ),
+    }
 
-    arguments = _rich_terminal_server_arguments(enabled)
+    arguments = _rich_terminal_server_arguments(profile)
     assert arguments[2] == "--retained-terminal-policy"
     assert json.loads(arguments[3]) == retained.to_dict()
-    assert enabled.rich_terminal.configuration(100, 32).retained_policy == retained
+    configuration = rich.configuration(100, 32)
+    publication_bytes = DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES + 4_096
+    assert configuration.retained_policy == retained
+    assert configuration.terminal_config.max_payload == 3_212
+    assert configuration.terminal_config.max_transaction_bytes == 10_570_616
+    assert configuration.terminal_config.terminal_receive_credit == 10_570_616
+    assert configuration.terminal_config.max_feed_bytes == publication_bytes
+    assert configuration.host_limits.retained_publication_bytes == (
+        publication_bytes
+    )
+    assert configuration.host_limits.egress.high_bytes == 2 * publication_bytes
+    assert configuration.host_limits.egress.low_bytes == publication_bytes
 
 
 def test_desktop_apt1_smoke_rejects_fallback_and_terminal_loss() -> None:
@@ -1923,6 +1954,8 @@ def test_desktop_apt1_smoke_rejects_fallback_and_terminal_loss() -> None:
             rich_terminal_state=state,
             rich_terminal_failure=failure,
             rich_terminal_lost=lost,
+            retained_display_required=True,
+            _output_revision_ready=lambda: True,
         )
 
     assert _rich_terminal_smoke_ready(

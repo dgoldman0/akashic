@@ -7,14 +7,10 @@
 \  initialize a session, install an owner, negotiate, or emit terminal
 \  bytes.  A profile opts in by calling APT1-DESK-RUN instead of DESK-RUN.
 \
-\  Product profiles override the eight capacities before REQUIRE.  Owner
-\  tombstones, one atomic retained candidate, live UIDL bindings, two desired
-\  projection banks per binding, and one backend-global frozen-attempt bank
-\  exhaust independently.  Candidate identity storage is derived from the
-\  existing bank/item geometry, not a ninth product capacity.  The defaults
-\  are only this product profile's
-\  current boundary; the generic driver and lower Desk/applet layers do not
-\  acquire fixed candidate capacities.
+\  Product profiles may override the four public bounds before REQUIRE.
+\  Maximum screen geometry derives the one retained owner, operation ledger,
+\  copy bank, and final-screen plan exactly; lower layers do not acquire a
+\  second product capacity policy.
 \
 \  This leaf owns XMEM allocations made while it is sourced.  Keep it on the
 \  source path unless a compiled shard has separately proved those external
@@ -27,7 +23,7 @@ PROVIDED akashic-tui-desk-apt1
 REQUIRE app-shell-apt1.f
 REQUIRE rich-terminal/screen-adapter-apt1.f
 REQUIRE rich-terminal/engine-apt1.f
-REQUIRE rich-terminal/uidl-driver.f
+REQUIRE rich-terminal/screen-plane.f
 REQUIRE applets/desk/desk.f
 
 [UNDEFINED] APT1-DESK-RX-CAPACITY [IF]
@@ -38,28 +34,12 @@ REQUIRE applets/desk/desk.f
 8192 CONSTANT APT1-DESK-TX-CAPACITY
 [THEN]
 
-[UNDEFINED] APT1-DESK-RTAPT-OWNER-RECORDS [IF]
-32 CONSTANT APT1-DESK-RTAPT-OWNER-RECORDS
+[UNDEFINED] APT1-DESK-MAX-COLS [IF]
+400 CONSTANT APT1-DESK-MAX-COLS
 [THEN]
 
-[UNDEFINED] APT1-DESK-RTAPT-OP-RECORDS [IF]
-32 CONSTANT APT1-DESK-RTAPT-OP-RECORDS
-[THEN]
-
-[UNDEFINED] APT1-DESK-RTAPT-COPY-BYTES [IF]
-2304 CONSTANT APT1-DESK-RTAPT-COPY-BYTES
-[THEN]
-
-[UNDEFINED] APT1-DESK-RTERM-BINDING-RECORDS [IF]
-32 CONSTANT APT1-DESK-RTERM-BINDING-RECORDS
-[THEN]
-
-[UNDEFINED] APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK [IF]
-32 CONSTANT APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK
-[THEN]
-
-[UNDEFINED] APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK [IF]
-4096 CONSTANT APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK
+[UNDEFINED] APT1-DESK-MAX-ROWS [IF]
+200 CONSTANT APT1-DESK-MAX-ROWS
 [THEN]
 
 : _A1D-U32-POSITIVE?  ( u -- flag )
@@ -67,50 +47,49 @@ REQUIRE applets/desk/desk.f
 
 : _A1D-CAPACITY*  ( count item-u -- total-u )
     OVER _A1D-U32-POSITIVE? 0= ABORT" desk-apt1: invalid capacity"
-    UM* DUP 0<> ABORT" desk-apt1: storage size overflow" DROP ;
+    DUP _A1D-U32-POSITIVE? 0= ABORT" desk-apt1: invalid item size"
+    UM* DUP 0<> ABORT" desk-apt1: storage size overflow" DROP
+    DUP _A1D-U32-POSITIVE? 0=
+        ABORT" desk-apt1: invalid storage size" ;
 
 : _A1D-CAPACITY+  ( a b -- total-u )
+    OVER _A1D-U32-POSITIVE? 0= ABORT" desk-apt1: invalid capacity"
+    DUP _A1D-U32-POSITIVE? 0= ABORT" desk-apt1: invalid item size"
     OVER + DUP ROT U< ABORT" desk-apt1: storage size overflow"
     DUP _A1D-U32-POSITIVE? 0=
         ABORT" desk-apt1: invalid storage size" ;
 
 : _A1D-ALIGNMENT-SLOP+  ( payload-u -- allocation-u )
-    DUP 0> 0= ABORT" desk-apt1: invalid storage size"
-    DUP -8 U> ABORT" desk-apt1: aligned storage overflow"
-    7 + ;
+    DUP _A1D-U32-POSITIVE? 0=
+        ABORT" desk-apt1: invalid storage size"
+    7 _A1D-CAPACITY+ ;
 
-APT1-DESK-RTAPT-OWNER-RECORDS RTAPT-OWNER-SIZE _A1D-CAPACITY*
+\ Resolve every caller-controlled calculation before the first XBUF.  At a
+\ C-cell maximum surface the engine needs one owner, C+1 operations, and a
+\ 72+128C copy span; the producer needs one 120-byte plan item per cell.
+APT1-DESK-RX-CAPACITY _A1D-U32-POSITIVE? 0=
+    ABORT" desk-apt1: invalid receive capacity"
+APT1-DESK-TX-CAPACITY _A1D-U32-POSITIVE? 0=
+    ABORT" desk-apt1: invalid transmit capacity"
+
+APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS _A1D-CAPACITY*
+    CONSTANT _A1D-SCREEN-CELLS
+1 RTAPT-OWNER-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-RTAPT-OWNERS-U
-APT1-DESK-RTAPT-OP-RECORDS RTAPT-OP-SIZE _A1D-CAPACITY*
+_A1D-SCREEN-CELLS 1 _A1D-CAPACITY+
+    CONSTANT _A1D-RTAPT-OP-RECORDS
+_A1D-RTAPT-OP-RECORDS RTAPT-OP-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-RTAPT-OPS-U
-APT1-DESK-RTERM-BINDING-RECORDS RTERM-UIDL-BINDING-SIZE _A1D-CAPACITY*
-    CONSTANT _A1D-UIDL-RECORDS-U
-APT1-DESK-RTERM-BINDING-RECORDS 2 _A1D-CAPACITY*
-    1 _A1D-CAPACITY+
-    CONSTANT _A1D-UIDL-CANDIDATE-BANKS
-APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK
-    RTERM-UIDL-CANDIDATE-ITEM-BYTES _A1D-CAPACITY*
-    CONSTANT _A1D-UIDL-CANDIDATE-ITEM-BANK-U
-_A1D-UIDL-CANDIDATE-BANKS _A1D-UIDL-CANDIDATE-ITEM-BANK-U
-    _A1D-CAPACITY*
-    CONSTANT _A1D-UIDL-CANDIDATE-ITEMS-U
-APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK
-    RTERM-UIDL-CANDIDATE-IDENTITY-BYTES _A1D-CAPACITY*
-    CONSTANT _A1D-UIDL-CANDIDATE-IDENTITY-BANK-U
-_A1D-UIDL-CANDIDATE-BANKS _A1D-UIDL-CANDIDATE-IDENTITY-BANK-U
-    _A1D-CAPACITY*
-    CONSTANT _A1D-UIDL-CANDIDATE-IDENTITIES-U
+_A1D-SCREEN-CELLS 128 _A1D-CAPACITY*
+    72 _A1D-CAPACITY+
+    CONSTANT _A1D-RTAPT-COPY-U
+_A1D-SCREEN-CELLS RTE-GLYPH-RUN-PLAN-ITEM-SIZE _A1D-CAPACITY*
+    CONSTANT _A1D-SCREEN-PLAN-U
 
-APT1-DESK-RTAPT-COPY-BYTES _A1D-U32-POSITIVE? 0=
-    ABORT" desk-apt1: invalid retained copy capacity"
-APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK
-    _A1D-U32-POSITIVE? 0=
-    ABORT" desk-apt1: invalid candidate snapshot capacity"
-APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK 7 AND
-    ABORT" desk-apt1: unaligned candidate snapshot capacity"
-_A1D-UIDL-CANDIDATE-BANKS
-    APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK _A1D-CAPACITY*
-    CONSTANT _A1D-UIDL-CANDIDATE-SNAPSHOTS-U
+1 CONSTANT _A1D-SCREEN-OWNER-ID
+1 CONSTANT _A1D-SCREEN-OWNER-GENERATION
+1 CONSTANT _A1D-SCREEN-REGION-ID
+1 CONSTANT _A1D-SCREEN-FIRST-OBJECT-ID
 
 \ PT-INIT borrows all seven ranges for the lifetime of the session.  The
 \ event scratch is intentionally distinct from APTAS's embedded poll event.
@@ -127,12 +106,9 @@ _A1D-SCB-MEM 7 + -8 AND CONSTANT _A1D-ADAPTER
 APTAS-SIZE 7 + XBUF _A1D-OWNER-MEM
 _A1D-OWNER-MEM 7 + -8 AND CONSTANT _A1D-OWNER
 
-\ The concrete RTAPT engine, its neutral facade, unified screen publisher,
-\ UIDL binding registry, and neutral desired/attempt item, identity, and
-\ snapshot banks are source-owned,
-\ aligned, pairwise separate spans.  The driver clears the registry and banks
-\ at its init/fini ownership boundaries; Desk only owns their XMEM lifetime.
-\ Configuration and the one host-binding descriptor are call-borrowed only.
+\ The concrete engine, neutral facade, unified screen publisher, and screen
+\ producer are source-owned aligned spans.  Constructors own initialization
+\ of their large banks; this leaf owns only their XMEM lifetime.
 RTAPT-CONFIG-SIZE 7 + XBUF _A1D-RTAPT-CONFIG-MEM
 _A1D-RTAPT-CONFIG-MEM 7 + -8 AND CONSTANT _A1D-RTAPT-CONFIG
 
@@ -142,45 +118,27 @@ _A1D-RTAPT-ENGINE-MEM 7 + -8 AND CONSTANT _A1D-RTAPT-ENGINE
 RTE-FACADE-SIZE 7 + XBUF _A1D-RTE-FACADE-MEM
 _A1D-RTE-FACADE-MEM 7 + -8 AND CONSTANT _A1D-RTE-FACADE
 
-_A1D-RTAPT-OWNERS-U 7 + XBUF _A1D-RTAPT-OWNERS-MEM
+_A1D-RTAPT-OWNERS-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RTAPT-OWNERS-MEM
 _A1D-RTAPT-OWNERS-MEM 7 + -8 AND CONSTANT _A1D-RTAPT-OWNERS
 
-_A1D-RTAPT-OPS-U 7 + XBUF _A1D-RTAPT-OPS-MEM
+_A1D-RTAPT-OPS-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RTAPT-OPS-MEM
 _A1D-RTAPT-OPS-MEM 7 + -8 AND CONSTANT _A1D-RTAPT-OPS
 
-APT1-DESK-RTAPT-COPY-BYTES 7 + XBUF _A1D-RTAPT-COPY-MEM
+_A1D-RTAPT-COPY-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RTAPT-COPY-MEM
 _A1D-RTAPT-COPY-MEM 7 + -8 AND CONSTANT _A1D-RTAPT-COPY
 
 RTAPTSCB-SIZE 7 + XBUF _A1D-RTAPTSCB-MEM
 _A1D-RTAPTSCB-MEM 7 + -8 AND CONSTANT _A1D-RTAPTSCB
 
-RTERM-UIDL-BACKEND-SIZE 7 + XBUF _A1D-UIDL-BACKEND-MEM
-_A1D-UIDL-BACKEND-MEM 7 + -8 AND CONSTANT _A1D-UIDL-BACKEND
+RTSCREEN-SIZE 7 + XBUF _A1D-SCREEN-MEM
+_A1D-SCREEN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN
 
-_A1D-UIDL-RECORDS-U 7 + XBUF _A1D-UIDL-RECORDS-MEM
-_A1D-UIDL-RECORDS-MEM 7 + -8 AND CONSTANT _A1D-UIDL-RECORDS
-
-_A1D-UIDL-CANDIDATE-ITEMS-U _A1D-ALIGNMENT-SLOP+
-    XBUF _A1D-UIDL-CANDIDATE-ITEMS-MEM
-_A1D-UIDL-CANDIDATE-ITEMS-MEM 7 + -8 AND
-    CONSTANT _A1D-UIDL-CANDIDATE-ITEMS
-
-_A1D-UIDL-CANDIDATE-IDENTITIES-U _A1D-ALIGNMENT-SLOP+
-    XBUF _A1D-UIDL-CANDIDATE-IDENTITIES-MEM
-_A1D-UIDL-CANDIDATE-IDENTITIES-MEM 7 + -8 AND
-    CONSTANT _A1D-UIDL-CANDIDATE-IDENTITIES
-
-_A1D-UIDL-CANDIDATE-SNAPSHOTS-U _A1D-ALIGNMENT-SLOP+
-    XBUF _A1D-UIDL-CANDIDATE-SNAPSHOTS-MEM
-_A1D-UIDL-CANDIDATE-SNAPSHOTS-MEM 7 + -8 AND
-    CONSTANT _A1D-UIDL-CANDIDATE-SNAPSHOTS
-
-RTERM-UIDL-CONFIG-BYTES _A1D-ALIGNMENT-SLOP+
-    XBUF _A1D-UIDL-CONFIG-MEM
-_A1D-UIDL-CONFIG-MEM 7 + -8 AND CONSTANT _A1D-UIDL-CONFIG
-
-RTERM-HOST-BINDING-SIZE 7 + XBUF _A1D-HOST-BINDING-MEM
-_A1D-HOST-BINDING-MEM 7 + -8 AND CONSTANT _A1D-HOST-BINDING
+_A1D-SCREEN-PLAN-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-SCREEN-PLAN-MEM
+_A1D-SCREEN-PLAN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN-PLAN
 
 0 CONSTANT _A1D-PHASE-COLD
 1 CONSTANT _A1D-PHASE-SESSION
@@ -190,32 +148,19 @@ _A1D-HOST-BINDING-MEM 7 + -8 AND CONSTANT _A1D-HOST-BINDING
 5 CONSTANT _A1D-PHASE-OWNER
 6 CONSTANT _A1D-PHASE-INSTALLED
 
-0 CONSTANT _A1D-UIDL-UNBOUND
-1 CONSTANT _A1D-UIDL-INITIALIZING
-2 CONSTANT _A1D-UIDL-READY
-
 VARIABLE _A1D-PHASE
-VARIABLE _A1D-UIDL-PHASE
 VARIABLE _A1D-RUN-IOR
-VARIABLE _A1D-DESK-IOR
 VARIABLE _A1D-UNINSTALL-S
 
-VARIABLE _A1D-HOST-CB-HOST
-VARIABLE _A1D-HOST-CB-CONTEXT
-VARIABLE _A1D-HOST-CB-RESULT
-
 _A1D-PHASE-COLD _A1D-PHASE !
-_A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
 
 : _A1D-PHASE-VALID?  ( phase -- flag )
     _A1D-PHASE-INSTALLED 1+ U< ;
 
-: _A1D-UIDL-PHASE-VALID?  ( phase -- flag )
-    _A1D-UIDL-READY 1+ U< ;
-
-\ Called only at the proven-cold boundary.  Large record/copy banks are
-\ initialized by their checked constructors after all span preflights pass;
-\ clearing only construction records here avoids redundant profile-sized work.
+\ Called only at the proven-cold boundary.  Large engine banks are initialized
+\ by RTAPT-INIT, and RTSCREEN overwrites every reachable plan item before use;
+\ clearing only fixed construction records avoids redundant surface-sized
+\ work and deliberately leaves the plan bank untouched.
 : _A1D-CLEAR-INERT  ( -- )
     _A1D-SESSION PT-SESSION-SIZE 0 FILL
     _A1D-ADAPTER APTSCB-SIZE 0 FILL
@@ -224,13 +169,7 @@ _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
     _A1D-RTAPT-ENGINE RTAPT-ENGINE-SIZE 0 FILL
     _A1D-RTE-FACADE RTE-FACADE-SIZE 0 FILL
     _A1D-RTAPTSCB RTAPTSCB-SIZE 0 FILL
-    _A1D-UIDL-BACKEND RTERM-UIDL-BACKEND-SIZE 0 FILL
-    _A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL
-    _A1D-HOST-BINDING RTERM-HOST-BINDING-SIZE 0 FILL
-    0 _A1D-HOST-CB-HOST !
-    0 _A1D-HOST-CB-CONTEXT !
-    0 _A1D-HOST-CB-RESULT !
-    _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
+    _A1D-SCREEN RTSCREEN-SIZE 0 FILL
     _A1D-PHASE-COLD _A1D-PHASE ! ;
 
 \ Setup has no negotiation side effect.  ASHELL-RUN invokes the installed
@@ -239,7 +178,6 @@ _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
 \ release path can retry without clearing uncertain live state.
 : _A1D-SETUP  ( -- status )
     _A1D-PHASE @ _A1D-PHASE-COLD <> IF SCB-S-INVALID EXIT THEN
-    _A1D-UIDL-PHASE @ _A1D-UIDL-UNBOUND <> IF SCB-S-INVALID EXIT THEN
     _A1D-CLEAR-INERT
 
     _A1D-RX APT1-DESK-RX-CAPACITY
@@ -254,7 +192,7 @@ _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
     _A1D-SESSION
     _A1D-RTAPT-OWNERS _A1D-RTAPT-OWNERS-U
     _A1D-RTAPT-OPS _A1D-RTAPT-OPS-U
-    _A1D-RTAPT-COPY APT1-DESK-RTAPT-COPY-BYTES
+    _A1D-RTAPT-COPY _A1D-RTAPT-COPY-U
     _A1D-RTAPT-CONFIG RTAPT-CONFIG-INIT
     DUP RTAPT-S-OK <> IF EXIT THEN DROP
 
@@ -270,6 +208,19 @@ _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
     DUP SCB-S-OK <> IF EXIT THEN DROP
     _A1D-RTAPTSCB _A1D-ADAPTER RTAPTSCB-ATTACH
     DUP SCB-S-OK <> IF EXIT THEN DROP
+
+    _A1D-RTE-FACADE
+    _A1D-SCREEN-PLAN _A1D-SCREEN-PLAN-U
+    _A1D-SCREEN-OWNER-ID _A1D-SCREEN-OWNER-GENERATION
+    _A1D-SCREEN-REGION-ID _A1D-SCREEN-FIRST-OBJECT-ID
+    _A1D-SCREEN RTSCREEN-INIT
+    DUP SCB-S-OK <> IF EXIT THEN DROP
+
+    _A1D-SCREEN RTSCREEN-SIZE
+    APT1-DESK-MAX-COLS
+    ['] RTSCREEN-STEP ['] RTSCREEN-PREPARE
+    _A1D-RTAPTSCB RTAPTSCB-OUTPUT-PRODUCER!
+    DUP SCB-S-OK <> IF EXIT THEN DROP
     _A1D-PHASE-PUBLISHER _A1D-PHASE !
 
     _A1D-ADAPTER _A1D-OWNER APTAS-INIT
@@ -279,181 +230,12 @@ _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
     _A1D-OWNER APTAS-INSTALL
     DUP SCB-S-OK = IF _A1D-PHASE-INSTALLED _A1D-PHASE ! THEN ;
 
-\ The unified publisher owns scheduling, while this product leaf owns only
-\ the proof that its immutable neutral producer tuple still names the exact
-\ live composition.  INITIALIZING is deliberately non-callable: installation
-\ cannot expose a partially constructed UIDL backend to a screen step.
-: _A1D-RTERM-CALLABLE?  ( context -- flag )
-    DUP _A1D-UIDL-BACKEND <> IF DROP 0 EXIT THEN
-    _A1D-PHASE @ _A1D-PHASE-INSTALLED <> IF DROP 0 EXIT THEN
-    _A1D-UIDL-PHASE @ _A1D-UIDL-READY <> IF DROP 0 EXIT THEN
-    RTERM-UIDL-VALID? ;
-
-: _A1D-RTERM-STEP-RESULT
-  ( rterm-status more? output-needed? -- scb-status more? output-needed? )
-    2 PICK RTERM-S-OK = IF
-        ROT DROP SCB-S-OK -ROT EXIT
-    THEN
-    2 PICK RTERM-S-WOULD-BLOCK = IF
-        ROT DROP SCB-S-WOULD-BLOCK -ROT EXIT
-    THEN
-    2 PICK RTERM-S-UNAVAILABLE = IF
-        ROT DROP SCB-S-OK -ROT EXIT
-    THEN
-    2 PICK RTERM-S-STALE = IF
-        ROT DROP SCB-S-OK -ROT EXIT
-    THEN
-    2 PICK RTERM-S-SESSION-LOST = IF
-        2DROP DROP SCB-S-SESSION-LOST 0 0 EXIT
-    THEN
-    2 PICK RTERM-S-CAPACITY = IF
-        ROT DROP SCB-S-OK -ROT EXIT
-    THEN
-    2 PICK RTERM-S-INVALID = IF
-        2DROP DROP SCB-S-INVALID 0 0 EXIT
-    THEN
-    2 PICK RTERM-S-SOURCE = IF
-        ROT DROP SCB-S-OK -ROT EXIT
-    THEN
-    2DROP DROP SCB-S-INVALID 0 0 ;
-
-: _A1D-RTERM-PREPARE-RESULT  ( rterm-status -- scb-status )
-    DUP RTERM-S-OK = IF DROP SCB-S-OK EXIT THEN
-    DUP RTERM-S-WOULD-BLOCK = IF DROP SCB-S-WOULD-BLOCK EXIT THEN
-    DUP RTERM-S-UNAVAILABLE = IF DROP SCB-S-WOULD-BLOCK EXIT THEN
-    DUP RTERM-S-STALE = IF DROP SCB-S-WOULD-BLOCK EXIT THEN
-    DUP RTERM-S-SESSION-LOST = IF DROP SCB-S-SESSION-LOST EXIT THEN
-    DUP RTERM-S-CAPACITY = IF DROP SCB-S-WOULD-BLOCK EXIT THEN
-    DUP RTERM-S-INVALID = IF DROP SCB-S-INVALID EXIT THEN
-    DUP RTERM-S-SOURCE = IF DROP SCB-S-WOULD-BLOCK EXIT THEN
-    DROP SCB-S-INVALID ;
-
-: _A1D-RTERM-STEP
-  ( cols rows generation budget context
-    -- scb-status more? output-needed? )
-    DUP _A1D-RTERM-CALLABLE? 0= IF
-        2DROP 2DROP DROP SCB-S-INVALID 0 0 EXIT
-    THEN
-    RTERM-BACKEND-STEP _A1D-RTERM-STEP-RESULT ;
-
-: _A1D-RTERM-PREPARE
-  ( cols rows generation context -- scb-status )
-    DUP _A1D-RTERM-CALLABLE? 0= IF
-        2DROP 2DROP SCB-S-INVALID EXIT
-    THEN
-    RTERM-BACKEND-PREPARE _A1D-RTERM-PREPARE-RESULT ;
-
-\ Desk invokes this after constructing the exact AHOST and before autostart.
-\ Publish the partial-init phase before any fallible work: Desk's paired fini
-\ is then sufficient for every refusal or caught throw.
-: _A1D-HOST-INIT-BODY  ( -- )
-    _A1D-HOST-CB-CONTEXT @ _A1D-UIDL-BACKEND <> IF
-        RTERM-S-INVALID _A1D-HOST-CB-RESULT ! EXIT
-    THEN
-    _A1D-PHASE @ _A1D-PHASE-INSTALLED <> IF
-        RTERM-S-INVALID _A1D-HOST-CB-RESULT ! EXIT
-    THEN
-    _A1D-UIDL-PHASE @ _A1D-UIDL-UNBOUND <> IF
-        RTERM-S-INVALID _A1D-HOST-CB-RESULT ! EXIT
-    THEN
-    _A1D-UIDL-INITIALIZING _A1D-UIDL-PHASE !
-    _A1D-HOST-BINDING RTERM-HOST-BINDING-INIT
-
-    _A1D-HOST-CB-HOST @
-    _A1D-RTE-FACADE
-    _A1D-UIDL-RECORDS _A1D-UIDL-RECORDS-U
-    _A1D-UIDL-CANDIDATE-ITEMS
-    APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK
-    _A1D-UIDL-CANDIDATE-IDENTITIES
-    _A1D-UIDL-CANDIDATE-SNAPSHOTS
-    APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK
-    _A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-INIT
-    DUP _A1D-HOST-CB-RESULT !
-    RTERM-S-OK <> IF
-        _A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL
-        EXIT
-    THEN
-
-    _A1D-UIDL-CONFIG _A1D-UIDL-BACKEND RTERM-UIDL-INIT
-    _A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL
-    DUP _A1D-HOST-CB-RESULT !
-    RTERM-S-OK <> IF EXIT THEN
-
-    _A1D-UIDL-BACKEND RTERM-UIDL-INSTALL
-    DUP _A1D-HOST-CB-RESULT !
-    RTERM-S-OK <> IF EXIT THEN
-
-    _A1D-UIDL-BACKEND RTERM-UIDL-BACKEND-SIZE
-    APT1-DESK-RTERM-BINDING-RECORDS
-    ['] _A1D-RTERM-STEP ['] _A1D-RTERM-PREPARE
-    _A1D-RTAPTSCB RTAPTSCB-OUTPUT-PRODUCER!
-    SCB-S-OK <> IF
-        RTERM-S-INVALID _A1D-HOST-CB-RESULT ! EXIT
-    THEN
-
-    ['] RTERM-AHOST-UIDL-READY _A1D-HOST-BINDING
-    _A1D-HOST-CB-HOST @ AHOST-UIDL-READY!
-    _A1D-UIDL-READY _A1D-UIDL-PHASE !
-    RTERM-S-OK _A1D-HOST-CB-RESULT ! ;
-
-: _A1D-HOST-INIT  ( host context -- ior )
-    _A1D-HOST-CB-CONTEXT ! _A1D-HOST-CB-HOST !
-    RTERM-S-INVALID _A1D-HOST-CB-RESULT !
-    ['] _A1D-HOST-INIT-BODY CATCH ?DUP IF
-        DROP RTERM-S-INVALID _A1D-HOST-CB-RESULT !
-    THEN
-    _A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL
-    _A1D-HOST-CB-RESULT @
-    0 _A1D-HOST-CB-HOST !
-    0 _A1D-HOST-CB-CONTEXT !
-    0 _A1D-HOST-CB-RESULT ! ;
-
-\ RTERM-UIDL-FINI first proves that no binding still borrows this AHOST.
-\ Only then is the host callback cleared and its pointer-free descriptor
-\ restored.  Every refusal leaves the complete retry authority installed.
-: _A1D-HOST-FINI-BODY  ( -- )
-    _A1D-HOST-CB-CONTEXT @ _A1D-UIDL-BACKEND <> IF
-        RTERM-S-INVALID _A1D-HOST-CB-RESULT ! EXIT
-    THEN
-    _A1D-PHASE @ _A1D-PHASE-INSTALLED <> IF
-        RTERM-S-INVALID _A1D-HOST-CB-RESULT ! EXIT
-    THEN
-    _A1D-UIDL-PHASE @ _A1D-UIDL-PHASE-VALID? 0= IF
-        RTERM-S-INVALID _A1D-HOST-CB-RESULT ! EXIT
-    THEN
-    _A1D-UIDL-BACKEND RTERM-UIDL-FINI
-    DUP _A1D-HOST-CB-RESULT !
-    RTERM-S-OK <> IF EXIT THEN
-
-    0 0 _A1D-HOST-CB-HOST @ AHOST-UIDL-READY!
-    _A1D-HOST-BINDING RTERM-HOST-BINDING-INIT
-    _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
-    RTERM-S-OK _A1D-HOST-CB-RESULT ! ;
-
-: _A1D-HOST-FINI  ( host context -- ior )
-    _A1D-HOST-CB-CONTEXT ! _A1D-HOST-CB-HOST !
-    RTERM-S-INVALID _A1D-HOST-CB-RESULT !
-    ['] _A1D-HOST-FINI-BODY CATCH ?DUP IF
-        DROP RTERM-S-INVALID _A1D-HOST-CB-RESULT !
-    THEN
-    _A1D-HOST-CB-RESULT @
-    0 _A1D-HOST-CB-HOST !
-    0 _A1D-HOST-CB-CONTEXT !
-    0 _A1D-HOST-CB-RESULT ! ;
-
-\ This is the only product release path.  A live UIDL composition is a hard
-\ pre-uninstall gate.  APTAS then proves exact-owner, shell-idle, ANSI-safe,
-\ retained-legacy, and key-source state before the facade and RTAPT ledgers
-\ may be erased.
-\ Every refusal preserves its current phase and all remaining storage.
+\ This is the only product release path.  APTAS first proves exact-owner,
+\ shell-idle, ANSI-safe, pending-output, and key-source state before the
+\ facade and engine ledgers may be erased.  Every refusal preserves its
+\ current phase and all remaining storage.
 : _A1D-UNINSTALL  ( -- status )
     _A1D-PHASE @ _A1D-PHASE-VALID? 0= IF SCB-S-INVALID EXIT THEN
-    _A1D-UIDL-PHASE @ _A1D-UIDL-PHASE-VALID? 0= IF
-        SCB-S-INVALID EXIT
-    THEN
-    _A1D-UIDL-PHASE @ _A1D-UIDL-UNBOUND <> IF
-        RTERM-S-WOULD-BLOCK EXIT
-    THEN
     _A1D-PHASE @ _A1D-PHASE-COLD = IF SCB-S-OK EXIT THEN
 
     _A1D-PHASE @ _A1D-PHASE-INSTALLED = IF
@@ -483,23 +265,15 @@ _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
 : _A1D-RUN-BODY  ( -- )
     _A1D-SETUP
     DUP SCB-S-OK <> IF _A1D-STATUS-THROW THEN DROP
-    ['] _A1D-HOST-INIT ['] _A1D-HOST-FINI _A1D-UIDL-BACKEND
-        DESK-HOST-LIFECYCLE!
-    ['] DESK-RUN CATCH _A1D-DESK-IOR !
-    \ The tuple is a constructor input.  A quarantined Desk retains its
-    \ per-instance copy; disarm only future plain DESK-RUN constructors.
-    0 0 0 DESK-HOST-LIFECYCLE!
-    _A1D-DESK-IOR @
-    0 _A1D-DESK-IOR !
-    ?DUP IF THROW THEN ;
+    DESK-RUN ;
 
 \ APT1-DESK-RUN ( -- )
-\   Construct the session, unified CELL/retained publisher, optional UIDL
-\   driver, and exact terminal owner, then run the real Desk lifecycle.
-\   Cleanup preserves a primary Desk exception.  With no primary exception,
-\   setup or release status S throws -3400-S.  A refused release deliberately
-\   leaves the exact phase and storage live.  A caller that catches an error
-\   must suppress terminal diagnostics while PT-STREAM-OWNED? remains true.
+\   Construct the session, unified CELL/rich publisher, final-screen producer,
+\   and exact terminal owner, then run the ordinary Desk lifecycle.  Cleanup
+\   preserves a primary Desk exception.  With no primary exception, setup or
+\   release status S throws -3400-S.  A refused release deliberately leaves
+\   the exact phase and storage live.  A caller that catches an error must
+\   suppress terminal diagnostics while PT-STREAM-OWNED? remains true.
 : APT1-DESK-RUN  ( -- )
     ['] _A1D-RUN-BODY CATCH _A1D-RUN-IOR !
     _A1D-UNINSTALL _A1D-UNINSTALL-S !
