@@ -272,7 +272,7 @@ Each item has this exact 128-byte neutral shape:
 | 88 | horizontal alignment | `0` start, `1` center, `2` end |
 | 96 | vertical alignment | `0` top, `1` middle, `2` bottom |
 | 104 | ellipsize | canonical Forth boolean `0` or `-1` |
-| 112 | text capacity | nonnegative maximum UTF-8 bytes for the later LABEL |
+| 112 | retained text capacity | renderer-derived exact reservation for this desired generation |
 | 120 | reserved | zero |
 
 Neutral validation proves the complete native-cell shape, object order,
@@ -285,21 +285,21 @@ provider geometry conversion. A native-cell plan that cannot cross that
 boundary is rejected before owner admission.
 
 The current RTAPT provider then proves all admission arithmetic against one
-coherent current limits snapshot and its caller-owned banks. For capacities
-`c_i`, `declared_utf8 = sum(c_i)`, it requires:
+coherent current limits snapshot and its caller-owned banks. For current copied
+text lengths `c_i`, `current_utf8 = sum(c_i)`, it requires:
 
-* owner quotas of one region, `N` objects, and `declared_utf8` bytes, including
+* owner quotas of one region, `N` objects, and `current_utf8` bytes, including
   checked aggregate reservations already held by other owner records;
 * `1 + N` operation records and local copied bytes
   `72 + sum(ALIGN8(128 + c_i))`;
-* every `c_i` within the negotiated per-LABEL maximum and the aggregate within
-  negotiated UTF-8 and object bounds; and
+* every current `c_i` within the negotiated per-LABEL maximum and the
+  aggregate within negotiated UTF-8 and object bounds; and
 * an op-bearing hidden `REPLACE_START` wire transaction of exactly
-  `248 + 120 * N + declared_utf8` bytes within the negotiated update maximum.
+  `248 + 120 * N + current_utf8` bytes within the negotiated update maximum.
 
 The immediately following `OWNER_OPEN` must use exactly
 `(regions=1, resources=0, objects=N, series=0, resource-bytes=0,
-utf8-bytes=declared_utf8, sample-slots=0)`. Preflight returns no token which
+utf8-bytes=current_utf8, sample-slots=0)`. Preflight returns no token which
 could authorize different quotas or a different selected generation.
 
 That START total is the frozen 160-byte wire transaction envelope, one 88-byte
@@ -415,7 +415,10 @@ published and returns `RTERM-S-UNAVAILABLE`. A deep-valid nonempty candidate
 then undergoes a terminal-eligibility check; its exact success or refusal status
 is returned, while either result preserves the candidate and mapping. A
 construction, deep-validation, or identity-mapping failure leaves the prior
-selector and therefore the prior desired projection candidate authoritative.
+selector and stable identity mapping available for retry, but revokes its
+terminal eligibility and schedules retirement of any live rich output. The old
+candidate is no longer authoritative for physical display because it may not
+represent current UIDL state.
 
 UIDL-TUI exposes complete neutral resolved geometry/style as a copied 72-byte
 record with effective visibility and paint-group z. Each selected 128-byte RUPJ
@@ -496,8 +499,8 @@ Candidate construction itself remains wire-inert: no shipped UIDL has been
 bulk-annotated for optional rich-output eligibility, and the checked-in Desktop
 policy still advertises no retained family. When a product policy supplies an
 eligible family, the separately bound materializer owns admission and output.
-The eligibility check compares each LABEL
-declaration and the neutral semantic region, object, and UTF-8 bounds. It
+The eligibility check compares each LABEL's current copied text and the neutral
+semantic region, object, and UTF-8 bounds. It
 deliberately does not infer provider operation, retry-copy, or encoded-update
 costs. The explicit advisory materialization preflight now proves those
 representation details, local capture-bank fit, and dynamic owner/tombstone
@@ -608,7 +611,8 @@ maintain parallel coordinates.
 The projector classifies semantic snapshots into:
 
 * static definition state: kind, relationships, formatting, style, labels,
-  units, axes, immutable vector geometry, and declared capacities;
+  units, axes, immutable vector geometry, and renderer-independent semantic
+  bounds;
 * layout state: resolved bounds, clipping, stacking, and visibility inherited
   from UIDL layout; and
 * dynamic state: current scalar values, status, media revision, series source
@@ -811,7 +815,8 @@ candidate is selector-published with its mapping whether negotiation succeeds or
 returns a stable refusal; refusal clears only eligibility/materialization
 readiness and its exact status is returned. An empty candidate has no mapping. A
 build, deep-validation, or identity-mapping failure leaves the prior selector
-untouched.
+and mapping untouched for stable retry but clears their eligibility to remain
+displayed and schedules materializer retirement.
 
 `RTERM-SURFACE-SNAPSHOT-INIT` constructs the aligned, call-borrowed neutral
 surface observation used by `RTERM-UCTX-MATERIALIZATION-PREFLIGHT`. It contains
@@ -915,16 +920,19 @@ generation. A completed read deep-validates every marked selected bank before
 publishing any settlement; `INVALID` or `SESSION_LOST` quarantines before the
 ordinary update-state poll and materializer dispatch.
 
-Terminal-negotiated eligibility freezes the declared semantic capacities for
-the explicit advisory materialization preflight; it is not an owner
-reservation. Dynamic values may vary within those declarations but cannot
-silently enlarge them. That operation constructs the exact plan and calls
+Terminal-negotiated eligibility freezes the exact current semantic bytes for
+one desired generation for explicit advisory materialization preflight; it is
+not an owner reservation or UIDL promise. A text-length change builds another
+complete candidate and the adapter derives a new retained reservation. That
+operation constructs the exact plan and calls
 `RTE-LABEL-PREFLIGHT` to prove local provider capture-bank fit and dynamic owner
 availability, then scrubs the frozen attempt and plan. The materializer repeats
 the proof against the then-current generation immediately before owner
-admission. If the tree later changes structurally beyond eligibility, retained
-projection reports capacity and CELL rendering continues from the authoritative
-UIDL tree. A settled `CAPACITY` or `SOURCE` result is binding-local: admission
+admission. If current content exceeds caller or terminal bounds, projection
+reports capacity, revokes eligibility, retires prior rich output, and CELL
+rendering continues from the authoritative UIDL tree. A later fitting value
+reuses the same semantic key and object identity. A settled `CAPACITY` or
+`SOURCE` result is binding-local: admission
 skips that record, while a post-admission capture refusal cancels and retires its
 exact owner before the cohort advances. Neither result latches a publisher fault
 or invalidates the authoritative CELL tree. Representation failures currently
@@ -952,8 +960,9 @@ asks an applet to enumerate a second scene.
 
 Candidate selection, identity mapping, and terminal-negotiated eligibility are
 separate atomic facts. A build, deep-validation, or identity-mapping failure
-leaves the prior selected copied recipe authoritative while UIDL and CELL state
-remain untouched. An accepted empty recipe supersedes the former candidate but
+preserves the prior selected copied recipe and mapping for retry-stable identity
+while revoking their display eligibility; UIDL and CELL state remain untouched.
+An accepted empty recipe supersedes the former candidate but
 reports `RTERM-S-UNAVAILABLE`. Every deep-valid nonempty recipe maps its stable
 private IDs and supersedes the former candidate; `RTERM-UCTX-PROJECT` then
 returns the exact limits result, including `RTERM-S-OK`,

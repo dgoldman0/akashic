@@ -325,8 +325,8 @@ def test_shared_text_value_semantics_drive_cell_rendering_independently() -> Non
     assert "['] _UIDLS-TEXT-IN-UIDL UIDL-OBSERVE" in text_public
 
     # uidl-tui consumes the generic text value API, not a retained snapshot.
-    # Labels without text-capacity therefore keep their complete CELL path,
-    # as do action and toggle consumers of the same value semantics.
+    # Ordinary labels therefore keep their complete CELL path independently
+    # of rich capture, as do action and toggle consumers of the same value.
     assert _requires(tui)[:3] == [
         "../liraq/uidl.f",
         "../liraq/uidl-semantic.f",
@@ -452,14 +452,12 @@ def test_caught_public_paths_scrub_every_borrowed_argument() -> None:
     assert label_catch < label_scrub
     assert "DROP 0 UIDL-SNAP-S-INVALID" in label
     label_finish = _definition(source, "_UIDLS-LABEL-FINISH")
-    assert "_UIDLS-DEC-CLEAR" in label_finish
     for borrowed in (
         "_UIDLS-LABEL-ELEM",
         "_UIDLS-LABEL-DST",
         "_UIDLS-LABEL-DST-CAP",
         "_UIDLS-LABEL-TEXT-A",
         "_UIDLS-LABEL-TEXT-U",
-        "_UIDLS-LABEL-TEXT-CAP",
         "_UIDLS-LABEL-TOTAL",
         "_UIDLS-LABEL-P-ELEM",
         "_UIDLS-LABEL-P-DST",
@@ -493,15 +491,14 @@ def test_caught_public_paths_scrub_every_borrowed_argument() -> None:
         assert f"0 {borrowed} !" in validator_clear
 
 
-def test_label_snapshot_is_caller_sized_copied_and_fail_before_mutation() -> None:
+def test_label_snapshot_is_exact_current_copied_and_fail_before_mutation() -> None:
     source = SEMANTIC.read_text(encoding="utf-8")
 
     signatures = {
         "UIDL-SNAP-STATUS-VALID?": "( status -- flag )",
         "UIDL-TEXT@": "( elem -- a u )",
-        "UIDL-LABEL-SNAPSHOT-BYTES": "( text-capacity -- bytes | 0 )",
+        "UIDL-LABEL-SNAPSHOT-BYTES": "( text-bytes -- bytes | 0 )",
         "UIDL-LABEL-SNAPSHOT-BYTES@": "( snapshot -- bytes )",
-        "UIDL-LABEL-SNAPSHOT-TEXT-CAPACITY@": "( snapshot -- bytes )",
         "UIDL-LABEL-SNAPSHOT-TEXT@": "( snapshot -- a u )",
         "UIDL-SNAPSHOT-CAPTURE": (
             "( elem destination capacity -- bytes status )"
@@ -514,24 +511,36 @@ def test_label_snapshot_is_caller_sized_copied_and_fail_before_mutation() -> Non
 
     assert "64 CONSTANT UIDL-LABEL-SNAPSHOT-HEADER-SIZE" in source
     assert "1 CONSTANT UIDL-SNAPSHOT-K-LABEL" in source
-    assert "0x31504E534C444955 CONSTANT _UIDLS-SNAPSHOT-MAGIC" in source
-    prepare = _definition(source, "_UIDLS-LABEL-PREPARE")
-    assert 'S" text-capacity" UIDL-ATTR IF' in prepare
-    assert "_UIDLS-CANONICAL-UDECIMAL" in prepare
-    assert "UIDL-SNAP-S-UNSUPPORTED EXIT" in prepare
-    assert "_UIDLS-LABEL-TEXT? 0= IF UIDL-SNAP-S-INVALID EXIT" in prepare
-    assert "_UIDLS-LABEL-TEXT-CAP @ U> IF" in prepare
-    assert "UIDL-SNAP-S-CAPACITY EXIT" in prepare
+    magic_match = re.search(
+        r"(?m)^0x([0-9A-F]+) CONSTANT _UIDLS-SNAPSHOT-MAGIC$", source
+    )
+    assert magic_match is not None
+    assert int(magic_match.group(1), 16).to_bytes(8, "little") == b"UIDLSNAP"
+    assert "_UIDLS-SNAPSHOT-ABI" not in source
+    assert "UIDL-LABEL-SNAPSHOT-TEXT-CAPACITY@" not in source
+    assert "text-capacity" not in source
+    assert "_UIDLS-LABEL-TEXT-CAP" not in source
+    assert "_UIDLS-CANONICAL-UDECIMAL" not in source
 
-    decimal = _definition(source, "_UIDLS-CANONICAL-UDECIMAL")
-    for checked_rule in (
-        "MSPAN-NONWRAPPING?",
-        "OVER C@ [CHAR] 0 =",
-        "DUP 10 U< 0=",
-        "_UIDLS-LENGTH-MAX 10 / U>",
-        "_UIDLS-LENGTH-MAX 10 MOD U>",
-    ):
-        assert checked_rule in decimal
+    offsets = {
+        "_UIDLS-S.MAGIC": ";",
+        "_UIDLS-S.RESERVED": "8 + ;",
+        "_UIDLS-S.KIND": "16 + ;",
+        "_UIDLS-S.BYTES": "24 + ;",
+        "_UIDLS-S.FLAGS": "32 + ;",
+        "_UIDLS-SL.TEXT-U": "40 + ;",
+        "_UIDLS-SL.RESERVED0": "48 + ;",
+        "_UIDLS-SL.RESERVED1": "56 + ;",
+        "_UIDLS-SL.TEXT": "64 + ;",
+    }
+    for field, offset in offsets.items():
+        assert offset in _definition(source, field).splitlines()[0]
+
+    prepare = _definition(source, "_UIDLS-LABEL-PREPARE")
+    assert "_UIDLS-LABEL-ELEM @ _UIDLS-TEXT@" in prepare
+    assert "_UIDLS-LABEL-TEXT? 0= IF UIDL-SNAP-S-INVALID EXIT" in prepare
+    assert "_UIDLS-LABEL-TEXT-U @ UIDL-LABEL-SNAPSHOT-BYTES" in prepare
+    assert "DUP 0= IF DROP UIDL-SNAP-S-CAPACITY EXIT" in prepare
 
     text_valid = _definition(source, "_UIDLS-LABEL-TEXT?")
     assert "MSPAN-NONWRAPPING?" in text_valid
@@ -566,6 +575,11 @@ def test_label_snapshot_is_caller_sized_copied_and_fail_before_mutation() -> Non
     )
     assert capture.count("0 FILL") == 1
     assert capture.count("CMOVE") == 1
+    assert "_UIDLS-S.RESERVED !" not in capture
+    assert "_UIDLS-SL.RESERVED0 !" not in capture
+    assert "_UIDLS-SL.RESERVED1 !" not in capture
+    assert "_UIDLS-LABEL-TEXT-U @ _UIDLS-LABEL-DST @ " \
+        "_UIDLS-SL.TEXT-U !" in capture
 
     # Exact (0, 0) is measurement.  Every other callback failure is
     # canonicalized to zero bytes, so no partial recipe can be admitted.
@@ -578,15 +592,24 @@ def test_label_snapshot_is_caller_sized_copied_and_fail_before_mutation() -> Non
     validator = _definition(source, "_UIDLS-LABEL-SNAPSHOT-VALID-BODY?")
     for required in (
         "_UIDLS-S.MAGIC @",
-        "_UIDLS-S.ABI @",
+        "_UIDLS-S.RESERVED @",
         "_UIDLS-S.KIND @",
         "_UIDLS-S.FLAGS @",
-        "_UIDLS-SL.RESERVED @",
+        "_UIDLS-SL.TEXT-U @",
+        "_UIDLS-SL.RESERVED0 @",
+        "_UIDLS-SL.RESERVED1 @",
         "UIDL-LABEL-SNAPSHOT-BYTES",
         "_UIDLS-LABEL-TEXT?",
-        "_UIDLS-ZERO-BYTES?",
     ):
         assert required in validator
+    assert "_UIDLS-ZERO-BYTES?" not in source
+
+    text_u = validator.index("_UIDLS-SL.TEXT-U @")
+    exact = validator.index("UIDL-LABEL-SNAPSHOT-BYTES", text_u)
+    stored = validator.index("_UIDLS-S.BYTES @ <>", exact)
+    bounded = validator.index("_UIDLS-LV-AVAILABLE @ U>", stored)
+    text = validator.index("_UIDLS-LABEL-TEXT?", bounded)
+    assert text_u < exact < stored < bounded < text
 
 
 def test_source_stripping_harnesses_load_semantics_in_dependency_order() -> None:

@@ -150,9 +150,10 @@ REQUIRE ../../utils/memory-span.f
 : RTE-FACADE-BYTES  ( -- bytes )  RTE-FACADE-SIZE ;
 
 \ A LABEL plan describes one root REGION_DEFINE followed by a positive,
-\ caller-bounded sequence of LABEL_DEFINE operations.  Each item declares
-\ the maximum text bytes which its later definition may consume.  Object IDs
-\ are strictly increasing but may be sparse, so the final item's ID remains
+\ caller-bounded sequence of LABEL_DEFINE operations.  Each item carries the
+\ exact retained reservation derived from current semantic text for this
+\ desired generation.  Object IDs are strictly increasing but may be sparse,
+\ so the final item's ID remains
 \ identity-validation high-water only.  The exact owner object quota is item
 \ count; the operation quota adds the root REGION_DEFINE.  The plan carries
 \ no renderer or provider representation and is borrowed only for

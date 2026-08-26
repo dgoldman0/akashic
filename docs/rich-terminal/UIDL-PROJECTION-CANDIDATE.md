@@ -1,6 +1,6 @@
 # UIDL projection candidates
 
-**Module:** `akashic-tui-rterm-uidl-projector1`
+**Module:** `akashic-tui-rterm-uidl-projector`
 
 **File:** `akashic/tui/rich-terminal/uidl-projector.f`
 
@@ -57,7 +57,7 @@ RUPJ-CANDIDATE-VALID?
 ```
 
 Validation checks exact key uniqueness, item fields, canonical contiguous
-aligned offsets, each complete LABEL record, raw-capacity accounting, zero
+aligned offsets, each complete LABEL record, current-text accounting, zero
 alignment padding, the flag implications, each present resolved record against
 the positive root dimensions, and zero unused bank tails. A missing resolved
 record requires both flags and all 72 payload bytes to be zero. Guarded builds
@@ -104,7 +104,7 @@ binding-local rich-output refusal, never truncation and never a change to CELL
 meaning.
 
 Construction clears the complete destination before writing. Any ordinary
-failure or caught exception clears it again and returns five zero values plus a
+failure or caught exception clears it again and returns seven zero values plus a
 stable status. For `C` private bindings, each caller-owned item, positional
 identity, and snapshot slab contains `2*C + 1` equal banks. Slots `2*i` and
 `2*i+1` are binding `i`'s desired A/B banks; the final slot `2*C` is the one
@@ -148,9 +148,12 @@ and advances the cohort to the following record.
 An accepted empty candidate is still selector-published so it supersedes any
 older desired scene, but `RTERM-UCTX-PROJECT` returns
 `RTERM-S-UNAVAILABLE`. A build or deep-validation failure does not change the
-selector, so the previously selected candidate remains authoritative. After a
-valid nonempty build, the driver first maps every exact semantic key to a stable
-private object ID and then reads one coherent neutral `RTE` limits snapshot.
+selector or stable mapping, but it clears their terminal eligibility and
+schedules retirement of any live rich output so stale pixels cannot mask newer
+CELL state. The prior candidate remains retry/identity authority, not display
+authority. After a valid nonempty build, the driver first maps every exact
+semantic key to a stable private object ID and then reads one coherent neutral
+`RTE` limits snapshot.
 Backpressure, missing feature support, unresolved state, unsupported resolved
 attributes, or negotiated capacity refusal still publishes the newer desired
 bank and its mapping, but clears terminal eligibility/materialization readiness
@@ -158,9 +161,10 @@ and returns the exact non-OK status. A terminal-eligible candidate returns
 `RTERM-S-OK`.
 
 Terminal-negotiated eligibility requires INSTRUMENT support, one region, one
-object per item, each declared LABEL capacity within the per-label maximum, and
-the aggregate declaration within total UTF-8. It deliberately does not infer a
-provider operation count, copied retry bytes, or encoded update bytes. Those
+object per item, each current LABEL byte length within the per-label maximum,
+and the aggregate current byte length within total UTF-8. It deliberately does
+not infer a provider operation count, copied retry bytes, or encoded update
+bytes. Those
 representation-dependent facts belong exclusively to the separate neutral plan
 preflight. Identity mapping is independent of the eligibility result: it
 copies each exact semantic key into the positional identity bank, reuses an
@@ -250,7 +254,7 @@ object-ID order:
 | 88 | horizontal alignment | resolved `0` start, `1` center, or `2` end |
 | 96 | vertical alignment | `0` top |
 | 104 | ellipsize | `0` |
-| 112 | text capacity | snapshot's nonnegative declared UTF-8 capacity |
+| 112 | retained text capacity | current snapshot UTF-8 bytes; renderer-derived |
 | 120 | reserved | zero |
 
 RUPJ candidate items and neutral plan items are both exactly 128 bytes. The
@@ -269,15 +273,17 @@ representability and geometry-conversion proof, current negotiated terminal
 caps, local owner/op/copy-bank fit, dynamic owner and tombstone availability,
 and complete wire arithmetic.
 
-For item capacities `c_i`, RTAPT proves the exact owner-open quotas
+For current renderer-selected text allocations `c_i`, each equal to the
+corresponding snapshot's current UTF-8 byte length, RTAPT proves the exact
+owner-open quotas
 `(regions=1, resources=0, objects=N, series=0, resource-bytes=0,
 utf8=sum(c_i), sample-slots=0)`, `1 + N` local operation records, and copied
 bytes `72 + sum(ALIGN8(128 + c_i))`. The first op-bearing hidden
 `REPLACE_START` transaction is exactly:
 
 ```text
-START = 248 + 120 * N + declared_utf8
-declared_utf8 = sum(c_i)
+START = 248 + 120 * N + current_utf8
+current_utf8 = sum(c_i)
 ```
 
 The 248-byte base is the frozen 160-byte APT-1 wire transaction envelope plus

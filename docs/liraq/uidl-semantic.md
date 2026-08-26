@@ -101,8 +101,8 @@ The record is exactly `64 + current-text-bytes` bytes:
 
 | Offset | Field | Meaning |
 |---:|---|---|
-| 0 | magic | literal bytes `UIDLSNP1`; native little-endian cell, written last |
-| 8 | ABI | `1` |
+| 0 | magic | literal bytes `UIDLSNAP`; native little-endian cell, written last |
+| 8 | reserved | zero |
 | 16 | kind | `UIDL-SNAPSHOT-K-LABEL` |
 | 24 | bytes | exact complete record length |
 | 32 | flags | zero |

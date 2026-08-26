@@ -9,9 +9,9 @@
 \  candidate; the caller owns publication.
 \
 \  Prefix:   RUPJ- (private provider contract), _RUPJ- (implementation)
-\  Provider: akashic-tui-rterm-uidl-projector1
+\  Provider: akashic-tui-rterm-uidl-projector
 
-PROVIDED akashic-tui-rterm-uidl-projector1
+PROVIDED akashic-tui-rterm-uidl-projector
 
 REQUIRE ../uidl-tui.f
 REQUIRE ../../liraq/uidl-semantic.f
@@ -133,7 +133,7 @@ VARIABLE _RUPJ-V-ITEM
 VARIABLE _RUPJ-V-SNAPSHOT
 VARIABLE _RUPJ-V-EXACT
 VARIABLE _RUPJ-V-STRIDE
-VARIABLE _RUPJ-V-TEXT-CAP
+VARIABLE _RUPJ-V-TEXT-U
 VARIABLE _RUPJ-V-KEY
 VARIABLE _RUPJ-V-UPTO
 VARIABLE _RUPJ-V-FLAGS
@@ -240,10 +240,10 @@ VARIABLE _RUPJ-V-R-W
         UIDL-LABEL-SNAPSHOT-VALID? 0= IF 0 EXIT THEN
     _RUPJ-V-SNAPSHOT @ UIDL-LABEL-SNAPSHOT-BYTES@
         _RUPJ-V-EXACT @ <> IF 0 EXIT THEN
-    _RUPJ-V-SNAPSHOT @ UIDL-LABEL-SNAPSHOT-TEXT-CAPACITY@
-        DUP _RUPJ-V-TEXT-CAP !
+    _RUPJ-V-SNAPSHOT @ UIDL-LABEL-SNAPSHOT-TEXT@ NIP
+        DUP _RUPJ-V-TEXT-U !
     UIDL-LABEL-SNAPSHOT-BYTES _RUPJ-V-EXACT @ <> IF 0 EXIT THEN
-    _RUPJ-V-UTF8-SUM @ _RUPJ-V-TEXT-CAP @ _RUPJ-UADD? 0= IF
+    _RUPJ-V-UTF8-SUM @ _RUPJ-V-TEXT-U @ _RUPJ-UADD? 0= IF
         DROP 0 EXIT
     THEN
     DUP _RUPJ-LENGTH-MAX U> IF DROP 0 EXIT THEN
@@ -326,7 +326,7 @@ VARIABLE _RUPJ-C-EXACT
 VARIABLE _RUPJ-C-STRIDE
 VARIABLE _RUPJ-C-SNAPSHOT
 VARIABLE _RUPJ-C-ITEM
-VARIABLE _RUPJ-C-TEXT-CAP
+VARIABLE _RUPJ-C-TEXT-U
 VARIABLE _RUPJ-C-NEXT-SNAPSHOT
 VARIABLE _RUPJ-C-NEXT-UTF8
 VARIABLE _RUPJ-C-RESOLVED-STATUS
@@ -491,12 +491,12 @@ VARIABLE _RUPJ-KEY
         UIDL-LABEL-SNAPSHOT-VALID? 0= IF
         _RUPJ-SET-INVALID EXIT
     THEN
-    _RUPJ-C-SNAPSHOT @ UIDL-LABEL-SNAPSHOT-TEXT-CAPACITY@
-        DUP _RUPJ-C-TEXT-CAP !
+    _RUPJ-C-SNAPSHOT @ UIDL-LABEL-SNAPSHOT-TEXT@ NIP
+        DUP _RUPJ-C-TEXT-U !
     UIDL-LABEL-SNAPSHOT-BYTES _RUPJ-C-EXACT @ <> IF
         _RUPJ-SET-INVALID EXIT
     THEN
-    _RUPJ-UTF8-QUOTA @ _RUPJ-C-TEXT-CAP @ _RUPJ-UADD? 0= IF
+    _RUPJ-UTF8-QUOTA @ _RUPJ-C-TEXT-U @ _RUPJ-UADD? 0= IF
         DROP _RUPJ-SET-CAPACITY EXIT
     THEN
     DUP _RUPJ-LENGTH-MAX U> IF
@@ -613,7 +613,7 @@ VARIABLE _RUPJ-KEY
     0 _RUPJ-V-REGIONS ! 0 _RUPJ-V-OBJECTS ! 0 _RUPJ-V-UTF8 !
     0 _RUPJ-V-EXPECTED-OFF ! 0 _RUPJ-V-UTF8-SUM !
     0 _RUPJ-V-ITEM ! 0 _RUPJ-V-SNAPSHOT ! 0 _RUPJ-V-EXACT !
-    0 _RUPJ-V-STRIDE ! 0 _RUPJ-V-TEXT-CAP !
+    0 _RUPJ-V-STRIDE ! 0 _RUPJ-V-TEXT-U !
     0 _RUPJ-V-KEY ! 0 _RUPJ-V-UPTO ! 0 _RUPJ-V-FLAGS !
     0 _RUPJ-V-ROOT-H ! 0 _RUPJ-V-ROOT-W !
     0 _RUPJ-V-R-ROW ! 0 _RUPJ-V-R-COL !
@@ -626,7 +626,7 @@ VARIABLE _RUPJ-KEY
     0 _RUPJ-UTF8-QUOTA !
     0 _RUPJ-C-ELEM ! 0 _RUPJ-C-INDEX ! 0 _RUPJ-C-EXACT !
     0 _RUPJ-C-STRIDE ! 0 _RUPJ-C-SNAPSHOT ! 0 _RUPJ-C-ITEM !
-    0 _RUPJ-C-TEXT-CAP ! 0 _RUPJ-C-NEXT-SNAPSHOT !
+    0 _RUPJ-C-TEXT-U ! 0 _RUPJ-C-NEXT-SNAPSHOT !
     0 _RUPJ-C-NEXT-UTF8 !
     0 _RUPJ-C-RESOLVED-STATUS ! 0 _RUPJ-C-RESOLVED-VISIBLE !
     0 _RUPJ-C-RESOLVED-FLAGS !
@@ -636,12 +636,13 @@ VARIABLE _RUPJ-KEY
     0 _RUPJ-SUB-A ! 0 _RUPJ-SUB-B ! 0 _RUPJ-KEY ! ;
 
 \ RUPJ-BUILD
-\   Capture all currently supported LABEL semantics in root preorder.  A
-\   LABEL without an explicit neutral capacity is skipped for ordinary CELL
-\   fallback.  On success, item-count/object-quota are equal, region-quota is
-\   one iff any item exists, UTF8 quota is the checked sum of raw declarations,
-\   snapshot-used is the checked sum of aligned record strides, and root-H/W
-\   bind every normalized resolved rectangle to its captured layout extent.
+\   Capture all currently supported LABEL semantics in root preorder.
+\   Unsupported element semantics are skipped and continue through ordinary
+\   CELL fallback.  On success, item-count/object-quota are equal,
+\   region-quota is one iff any item exists, UTF8 quota is the checked sum of
+\   current copied text bytes, snapshot-used is the checked sum of aligned
+\   record strides, and root-H/W bind every normalized resolved rectangle to
+\   its captured layout extent.
 \
 \   The complete destination is cleared before construction.  Any failure or
 \   caught exception clears it again and returns seven zero results plus a

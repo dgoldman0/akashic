@@ -33,17 +33,17 @@ def _code(source: str) -> str:
     return "\n".join(line.split("\\", 1)[0] for line in source.splitlines())
 
 
-def _layout(capacities: list[int]) -> tuple[list[tuple[int, int]], int, int]:
+def _layout(text_lengths: list[int]) -> tuple[list[tuple[int, int]], int, int]:
     """Oracle for physical offset/exact length, high-water, and UTF-8 quota."""
     items: list[tuple[int, int]] = []
     used = 0
     utf8 = 0
-    for capacity in capacities:
-        exact = 64 + capacity
+    for text_length in text_lengths:
+        exact = 64 + text_length
         stride = (exact + 7) & ~7
         items.append((used, exact))
         used += stride
-        utf8 += capacity
+        utf8 += text_length
     return items, used, utf8
 
 
@@ -51,7 +51,10 @@ def test_projector_is_neutral_allocation_free_and_caller_bounded() -> None:
     source = PROJECTOR.read_text(encoding="utf-8")
     code = _code(source)
 
-    assert "PROVIDED akashic-tui-rterm-uidl-projector1" in code
+    assert re.findall(r"(?m)^PROVIDED\s+(\S+)\s*$", code) == [
+        "akashic-tui-rterm-uidl-projector"
+    ]
+    assert "UIDL-LABEL-SNAPSHOT-TEXT-CAPACITY@" not in code
     assert re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code) == [
         "../uidl-tui.f",
         "../../liraq/uidl-semantic.f",
@@ -175,7 +178,7 @@ def test_item_contract_keeps_key_snapshot_and_neutral_resolved_state() -> None:
     assert "_RUPJ-I.RESERVED !" not in capture
 
 
-def test_arena_alignment_is_physical_but_utf8_quota_is_raw() -> None:
+def test_arena_alignment_is_physical_but_utf8_quota_is_current_text() -> None:
     source = PROJECTOR.read_text(encoding="utf-8")
     align = _definition(source, "_RUPJ-ALIGN8?")
     preflight = _definition(source, "_RUPJ-LABEL-PREFLIGHT")
@@ -189,15 +192,15 @@ def test_arena_alignment_is_physical_but_utf8_quota_is_raw() -> None:
     assert "_RUPJ-C-NEXT-SNAPSHOT !" in preflight
 
     # The record stores exact bytes, while the next physical high-water uses
-    # the aligned stride and owner quota uses the raw declared text ceiling.
+    # the aligned stride and owner quota use the current copied text length.
     assert "_RUPJ-C-EXACT @ _RUPJ-C-ITEM @ _RUPJ-I.SNAPSHOT-BYTES !" in capture
     assert "_RUPJ-C-NEXT-SNAPSHOT @ _RUPJ-SNAPSHOT-USED !" in capture
-    assert "UIDL-LABEL-SNAPSHOT-TEXT-CAPACITY@" in capture
-    assert "_RUPJ-UTF8-QUOTA @ _RUPJ-C-TEXT-CAP @ _RUPJ-UADD?" in capture
+    assert "UIDL-LABEL-SNAPSHOT-TEXT@ NIP" in capture
+    assert "_RUPJ-UTF8-QUOTA @ _RUPJ-C-TEXT-U @ _RUPJ-UADD?" in capture
 
-    items, used, utf8 = _layout([4, 9])
-    assert items == [(0, 68), (72, 73)]
-    assert used == 152
+    items, used, utf8 = _layout([0, 4, 9])
+    assert items == [(0, 64), (64, 68), (136, 73)]
+    assert used == 216
     assert utf8 == 13
 
 
@@ -210,15 +213,15 @@ def test_capture_measures_preflights_then_copies_before_item_publication() -> No
     preflight = capture.index("_RUPJ-LABEL-PREFLIGHT", unsupported)
     copied = capture.index("UIDL-SNAPSHOT-CAPTURE", preflight)
     validated = capture.index("UIDL-LABEL-SNAPSHOT-VALID?", copied)
-    cap = capture.index("UIDL-LABEL-SNAPSHOT-TEXT-CAPACITY@", validated)
-    item = capture.index("RUPJ-ITEM-SIZE 0 FILL", cap)
+    text = capture.index("UIDL-LABEL-SNAPSHOT-TEXT@ NIP", validated)
+    item = capture.index("RUPJ-ITEM-SIZE 0 FILL", text)
     resolved = capture.index("_RUPJ-CAPTURE-RESOLVED?", item)
     key = capture.index("_RUPJ-I.ELEMENT-INDEX !", resolved)
     snapshot_commit = capture.index("_RUPJ-SNAPSHOT-USED !", key)
     utf8_commit = capture.index("_RUPJ-UTF8-QUOTA !", snapshot_commit)
     count_commit = capture.index("_RUPJ-ITEM-COUNT +!", utf8_commit)
-    assert measure < unsupported < preflight < copied < validated < cap
-    assert cap < item < resolved < key < snapshot_commit
+    assert measure < unsupported < preflight < copied < validated < text
+    assert text < item < resolved < key < snapshot_commit
     assert snapshot_commit < utf8_commit < count_commit
 
     assert "UIDL-SNAP-S-CAPACITY" in capture
@@ -377,7 +380,7 @@ def test_published_candidate_validation_rechecks_canonical_dense_layout() -> Non
     assert "_RUPJ-V-EXPECTED-OFF @ <>" in one
     assert "_RUPJ-ALIGN8?" in one
     assert "UIDL-LABEL-SNAPSHOT-VALID?" in one
-    assert "UIDL-LABEL-SNAPSHOT-TEXT-CAPACITY@" in one
+    assert "UIDL-LABEL-SNAPSHOT-TEXT@ NIP" in one
     assert "_RUPJ-ZERO?" in one
 
     assert "_RUPJ-V-EXPECTED-OFF @ _RUPJ-V-SNAPSHOT-USED @ <>" in body

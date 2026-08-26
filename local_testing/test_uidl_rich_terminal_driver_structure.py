@@ -595,6 +595,10 @@ def test_public_scratch_entries_catch_bodies_then_scrub_every_borrowed_cell() ->
             "_RTERM-P-DO-BACKEND-PREPARE-RECOVER",
             "_RTERM-MS-CAPTURE-RECOVER",
         ),
+        "RTERM-UCTX-PROJECT": (
+            "_RTERM-P-DO-PROJECT-RECOVER",
+            "_RTERM-PROJECT-FAIL",
+        ),
     }
 
     public_words = re.findall(r"(?m)^:\s+(RTERM-[^\s]+)(?=\s)", source)
@@ -643,6 +647,14 @@ def test_public_scratch_entries_catch_bodies_then_scrub_every_borrowed_cell() ->
     backend = step_recovery.index("_RTERM-MS-BACKEND !", envelope)
     quarantine = step_recovery.index("_RTERM-MS-QUARANTINE", backend)
     assert envelope < backend < quarantine
+
+    project_recovery = _definition(source, "_RTERM-P-DO-PROJECT-RECOVER")
+    lookup = project_recovery.index("_RTERM-CALL-LOOKUP")
+    revoke = project_recovery.index("_RTERM-PROJECT-FAIL", lookup)
+    assert lookup < revoke
+    assert "_RTERM-CALL-LOOKUP IF" in project_recovery
+    assert "RTERM-S-INVALID _RTERM-PROJECT-FAIL EXIT" in project_recovery
+    assert "RTERM-S-INVALID _RTERM-CALL-FAIL" in project_recovery
     assert "RTERM-S-INVALID 0 0 EXIT" in step_recovery
     assert "_RTERM-UIDL-VALID-BODY?" not in step_recovery
 
@@ -880,13 +892,14 @@ def test_materialization_preflight_freezes_validates_maps_and_cleans() -> None:
         ("RUPJ-ITEM-EFFECTIVE-VISIBLE?", "_RTE-LPI.VISIBLE !"),
         ("RUPJ-ITEM-RESOLVED-FG@", "_RTE-LPI.RGBA !"),
         ("RUPJ-ITEM-RESOLVED-ALIGN@", "_RTE-LPI.H-ALIGN !"),
-        (
-            "UIDL-LABEL-SNAPSHOT-TEXT-CAPACITY@",
-            "_RTE-LPI.TEXT-CAPACITY !",
-        ),
     ):
         getter_at = plan_one.index(getter)
         assert getter_at < plan_one.index(target, getter_at)
+    text_at = plan_one.index("UIDL-LABEL-SNAPSHOT-TEXT@")
+    text_length = plan_one.index("NIP", text_at)
+    text_reservation = plan_one.index("_RTE-LPI.TEXT-CAPACITY !", text_length)
+    assert text_at < text_length < text_reservation
+    assert "_RTERM-MP-UTF8 @ SWAP _RTERM-UADD?" in plan_one
     assert "TUI-PALETTE>RGBA" in plan_one
     assert (
         "_RTERM-MP-BEST-OBJECT @\n"
@@ -1278,10 +1291,11 @@ def test_materializer_captures_and_settles_hidden_work_with_rescan() -> None:
         ("RUPJ-ITEM-RESOLVED-ALIGN@", "H-ALIGN"),
     ):
         assert label.index(getter) < label.index(f"_RTE-LABEL.{field} !")
-    assert "UIDL-LABEL-SNAPSHOT-TEXT@" in label
-    assert label.index("_RTE-LABEL.TEXT-U !") < label.index(
-        "_RTE-LABEL.TEXT-A !"
-    )
+    text = label.index("UIDL-LABEL-SNAPSHOT-TEXT@")
+    empty = label.index("DUP 0= IF 2DROP 0 0 THEN", text)
+    text_u = label.index("_RTE-LABEL.TEXT-U !", empty)
+    text_a = label.index("_RTE-LABEL.TEXT-A !", text_u)
+    assert text < empty < text_u < text_a
 
     begin_owned = capture.index("-1 _RTERM-MS-BEGIN-OWNED !")
     begin = capture.index("RTE-RETAINED-BEGIN", begin_owned)
@@ -2133,9 +2147,14 @@ def test_project_maps_inactive_bank_and_publishes_selector_last() -> None:
     eligibility = _definition(source, "_RTERM-PROJECT-ELIGIBILITY")
     assert "_RTERM-PJ-ITEMS @ 0= IF RTERM-S-UNAVAILABLE EXIT" in eligibility
 
-    # All failure exits record status without touching the selected metadata or
-    # selector.  The partially written inactive bank therefore has no authority.
-    assert "_RTERM-R.LAST-STATUS !" in fail
+    # A failed inactive build retains the prior complete candidate and stable
+    # identity mapping, but it must revoke terminal eligibility and schedule
+    # materializer retirement so stale rich pixels cannot mask newer CELL state.
+    last_status = fail.index("_RTERM-R.LAST-STATUS !")
+    eligibility_revoke = fail.index("_RTERM-ELIGIBILITY-CLEAR", last_status)
+    retirement = fail.index("_RTERM-PROJECT-SCHEDULE", eligibility_revoke)
+    normalize = fail.index("_RTERM-CALL-FAIL", retirement)
+    assert last_status < eligibility_revoke < retirement < normalize
     assert "_RTERM-R.CANDIDATE" not in fail
     for forbidden in (
         "EXECUTE",
@@ -2165,9 +2184,9 @@ def test_ordinary_record_validation_is_shallow_but_open_attempts_are_deep() -> N
     assert "GENERATION @" not in candidates
 
     # Shallow validation still rejects quota combinations that no eligible
-    # LABEL candidate can produce.  Snapshot strides are ALIGN8(64+capacity),
+    # LABEL candidate can produce.  Snapshot strides are ALIGN8(64+text-u),
     # so their checked total lies between the exact header+UTF8 sum and at
-    # most seven alignment bytes per positive-capacity item above it.  There
+    # most seven alignment bytes per nonempty-text item above it.  There
     # can be no more of those than min(item count, UTF8 quota).
     assert "_RTERM-K.ITEMS @ 0= IF" in metadata
     assert "_RTERM-K.SNAPSHOTS @ 0=" in metadata
@@ -2323,7 +2342,7 @@ def test_stable_mapping_precedes_terminal_negotiated_eligibility() -> None:
         "UIDL-SNAPSHOT-K-LABEL <>",
         "RUPJ-ITEM-SUBKEY@ IF",
         "RUPJ-ITEM-RESOLVED-ATTRS@ IF",
-        "UIDL-LABEL-SNAPSHOT-TEXT-CAPACITY@",
+        "UIDL-LABEL-SNAPSHOT-TEXT@",
     ):
         assert compatibility in limits
 

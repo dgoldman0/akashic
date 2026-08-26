@@ -7,11 +7,9 @@
 \  identity.  Element definitions publish one neutral capture hook through
 \  ED.SEMANTICS; ( destination=0 capacity=0 ) is the exact measure call.
 \
-\  The first snapshot family is LABEL.  A label remains fully usable without
-\  a snapshot.  Snapshot eligibility additionally requires an explicit
-\  text-capacity= declaration: a canonical unsigned-decimal ceiling on the
-\  resolved UTF-8 payload bytes.  The destination record owns a complete copy
-\  of the current text and reserves the declared tail without allocating.
+\  The first snapshot family is LABEL.  Every label with valid resolved text
+\  is eligible.  The destination record owns an exact copy of the current
+\  text; renderer allocation remains outside UIDL semantics.
 \
 \  Prefix: UIDL- (public), _UIDLS- (private)
 \  Provider: akashic-uidl-semantic
@@ -124,37 +122,36 @@ VARIABLE _UIDLS-NUM-NEG
 \  LABEL snapshot record
 \ =====================================================================
 \
-\  +0   magic             "UIDLSNP1"
-\  +8   ABI               1
+\  +0   magic             "UIDLSNAP"
+\  +8   reserved          0
 \  +16  semantic kind     UIDL-SNAPSHOT-K-LABEL
-\  +24  exact record bytes (64 + text-capacity)
+\  +24  exact record bytes (64 + current text bytes)
 \  +32  flags             0
-\  +40  declared text capacity in UTF-8 bytes
-\  +48  current text bytes
+\  +40  current text bytes
+\  +48  reserved          0
 \  +56  reserved          0
-\  +64  copied current text, then a zero-filled reserved tail
+\  +64  copied current text
 
 \ MegaPad records are native little-endian.  This numeric cell is chosen so
-\ its in-memory bytes are the literal publication tag "UIDLSNP1".
-0x31504E534C444955 CONSTANT _UIDLS-SNAPSHOT-MAGIC
-1 CONSTANT _UIDLS-SNAPSHOT-ABI
+\ its in-memory bytes are the literal publication tag "UIDLSNAP".
+0x50414E534C444955 CONSTANT _UIDLS-SNAPSHOT-MAGIC
 64 CONSTANT UIDL-LABEL-SNAPSHOT-HEADER-SIZE
 -1 1 RSHIFT CONSTANT _UIDLS-LENGTH-MAX
 
 : _UIDLS-S.MAGIC     ( s -- a )       ;
-: _UIDLS-S.ABI       ( s -- a )   8 + ;
+: _UIDLS-S.RESERVED  ( s -- a )   8 + ;
 : _UIDLS-S.KIND      ( s -- a )  16 + ;
 : _UIDLS-S.BYTES     ( s -- a )  24 + ;
 : _UIDLS-S.FLAGS     ( s -- a )  32 + ;
-: _UIDLS-SL.TEXT-CAP ( s -- a )  40 + ;
-: _UIDLS-SL.TEXT-U   ( s -- a )  48 + ;
-: _UIDLS-SL.RESERVED ( s -- a )  56 + ;
+: _UIDLS-SL.TEXT-U   ( s -- a )  40 + ;
+: _UIDLS-SL.RESERVED0 ( s -- a ) 48 + ;
+: _UIDLS-SL.RESERVED1 ( s -- a ) 56 + ;
 : _UIDLS-SL.TEXT     ( s -- a )  64 + ;
 
 : _UIDLS-UADD?  ( a b -- sum flag )
     OVER + DUP ROT U< 0= ;
 
-: UIDL-LABEL-SNAPSHOT-BYTES  ( text-capacity -- bytes | 0 )
+: UIDL-LABEL-SNAPSHOT-BYTES  ( text-bytes -- bytes | 0 )
     DUP 0< IF DROP 0 EXIT THEN
     UIDL-LABEL-SNAPSHOT-HEADER-SIZE SWAP _UIDLS-UADD? 0= IF
         DROP 0 EXIT
@@ -164,64 +161,8 @@ VARIABLE _UIDLS-NUM-NEG
 : UIDL-LABEL-SNAPSHOT-BYTES@  ( snapshot -- bytes )
     _UIDLS-S.BYTES @ ;
 
-: UIDL-LABEL-SNAPSHOT-TEXT-CAPACITY@  ( snapshot -- bytes )
-    _UIDLS-SL.TEXT-CAP @ ;
-
 : UIDL-LABEL-SNAPSHOT-TEXT@  ( snapshot -- a u )
     DUP _UIDLS-SL.TEXT SWAP _UIDLS-SL.TEXT-U @ ;
-
-\ =====================================================================
-\  Checked canonical unsigned-decimal declaration
-\ =====================================================================
-
-VARIABLE _UIDLS-DEC-A
-VARIABLE _UIDLS-DEC-U
-VARIABLE _UIDLS-DEC-N
-VARIABLE _UIDLS-DEC-DIGIT
-
-: _UIDLS-DEC-CLEAR  ( -- )
-    0 _UIDLS-DEC-A ! 0 _UIDLS-DEC-U !
-    0 _UIDLS-DEC-N ! 0 _UIDLS-DEC-DIGIT ! ;
-
-: _UIDLS-DEC-FINISH  ( value status -- value status )
-    _UIDLS-DEC-CLEAR ;
-
-: _UIDLS-CANONICAL-UDECIMAL  ( a u -- value status )
-    DUP 0= IF
-        2DROP 0 UIDL-SNAP-S-INVALID _UIDLS-DEC-FINISH EXIT
-    THEN
-    DUP 0< IF
-        2DROP 0 UIDL-SNAP-S-INVALID _UIDLS-DEC-FINISH EXIT
-    THEN
-    2DUP MSPAN-NONWRAPPING? 0= IF
-        2DROP 0 UIDL-SNAP-S-INVALID _UIDLS-DEC-FINISH EXIT
-    THEN
-    DUP 1 > IF
-        OVER C@ [CHAR] 0 = IF
-            2DROP 0 UIDL-SNAP-S-INVALID _UIDLS-DEC-FINISH EXIT
-        THEN
-    THEN
-    _UIDLS-DEC-U ! _UIDLS-DEC-A !
-    0 _UIDLS-DEC-N !
-    _UIDLS-DEC-U @ 0 DO
-        _UIDLS-DEC-A @ I + C@ [CHAR] 0 -
-        DUP 10 U< 0= IF
-            DROP 0 UIDL-SNAP-S-INVALID _UIDLS-DEC-FINISH
-            UNLOOP EXIT
-        THEN
-        _UIDLS-DEC-DIGIT !
-        _UIDLS-DEC-N @ _UIDLS-LENGTH-MAX 10 / U> IF
-            0 UIDL-SNAP-S-INVALID _UIDLS-DEC-FINISH
-            UNLOOP EXIT
-        THEN
-        _UIDLS-DEC-N @ _UIDLS-LENGTH-MAX 10 / =
-        _UIDLS-DEC-DIGIT @ _UIDLS-LENGTH-MAX 10 MOD U> AND IF
-            0 UIDL-SNAP-S-INVALID _UIDLS-DEC-FINISH
-            UNLOOP EXIT
-        THEN
-        _UIDLS-DEC-N @ 10 * _UIDLS-DEC-DIGIT @ + _UIDLS-DEC-N !
-    LOOP
-    _UIDLS-DEC-N @ UIDL-SNAP-S-OK _UIDLS-DEC-FINISH ;
 
 \ =====================================================================
 \  LABEL text and capture preflight
@@ -248,38 +189,25 @@ VARIABLE _UIDLS-LABEL-DST
 VARIABLE _UIDLS-LABEL-DST-CAP
 VARIABLE _UIDLS-LABEL-TEXT-A
 VARIABLE _UIDLS-LABEL-TEXT-U
-VARIABLE _UIDLS-LABEL-TEXT-CAP
 VARIABLE _UIDLS-LABEL-TOTAL
 VARIABLE _UIDLS-LABEL-P-ELEM
 VARIABLE _UIDLS-LABEL-P-DST
 VARIABLE _UIDLS-LABEL-P-CAP
 
 : _UIDLS-LABEL-FINISH  ( bytes status -- bytes status )
-    _UIDLS-DEC-CLEAR
     0 _UIDLS-LABEL-ELEM !
     0 _UIDLS-LABEL-DST ! 0 _UIDLS-LABEL-DST-CAP !
     0 _UIDLS-LABEL-TEXT-A ! 0 _UIDLS-LABEL-TEXT-U !
-    0 _UIDLS-LABEL-TEXT-CAP ! 0 _UIDLS-LABEL-TOTAL !
+    0 _UIDLS-LABEL-TOTAL !
     0 _UIDLS-LABEL-P-ELEM ! 0 _UIDLS-LABEL-P-DST !
     0 _UIDLS-LABEL-P-CAP ! ;
 
 : _UIDLS-LABEL-PREPARE  ( -- status )
-    _UIDLS-LABEL-ELEM @ S" text-capacity" UIDL-ATTR IF
-        _UIDLS-CANONICAL-UDECIMAL
-        DUP UIDL-SNAP-S-OK <> IF NIP EXIT THEN
-        DROP _UIDLS-LABEL-TEXT-CAP !
-    ELSE
-        2DROP UIDL-SNAP-S-UNSUPPORTED EXIT
-    THEN
-
     _UIDLS-LABEL-ELEM @ _UIDLS-TEXT@
     _UIDLS-LABEL-TEXT-U ! _UIDLS-LABEL-TEXT-A !
     _UIDLS-LABEL-TEXT-A @ _UIDLS-LABEL-TEXT-U @
         _UIDLS-LABEL-TEXT? 0= IF UIDL-SNAP-S-INVALID EXIT THEN
-    _UIDLS-LABEL-TEXT-U @ _UIDLS-LABEL-TEXT-CAP @ U> IF
-        UIDL-SNAP-S-CAPACITY EXIT
-    THEN
-    _UIDLS-LABEL-TEXT-CAP @ UIDL-LABEL-SNAPSHOT-BYTES
+    _UIDLS-LABEL-TEXT-U @ UIDL-LABEL-SNAPSHOT-BYTES
     DUP 0= IF DROP UIDL-SNAP-S-CAPACITY EXIT THEN
     _UIDLS-LABEL-TOTAL !
     UIDL-SNAP-S-OK ;
@@ -330,11 +258,8 @@ VARIABLE _UIDLS-LABEL-P-CAP
     THEN
 
     _UIDLS-LABEL-DST @ _UIDLS-LABEL-TOTAL @ 0 FILL
-    _UIDLS-SNAPSHOT-ABI _UIDLS-LABEL-DST @ _UIDLS-S.ABI !
     UIDL-SNAPSHOT-K-LABEL _UIDLS-LABEL-DST @ _UIDLS-S.KIND !
     _UIDLS-LABEL-TOTAL @ _UIDLS-LABEL-DST @ _UIDLS-S.BYTES !
-    _UIDLS-LABEL-TEXT-CAP @
-        _UIDLS-LABEL-DST @ _UIDLS-SL.TEXT-CAP !
     _UIDLS-LABEL-TEXT-U @ _UIDLS-LABEL-DST @ _UIDLS-SL.TEXT-U !
     _UIDLS-LABEL-TEXT-A @ _UIDLS-LABEL-DST @ _UIDLS-SL.TEXT
         _UIDLS-LABEL-TEXT-U @ CMOVE
@@ -423,7 +348,6 @@ VARIABLE _UIDLS-SNAP-P-CAP
 
 VARIABLE _UIDLS-LV-SNAPSHOT
 VARIABLE _UIDLS-LV-AVAILABLE
-VARIABLE _UIDLS-LV-TEXT-CAP
 VARIABLE _UIDLS-LV-TEXT-U
 VARIABLE _UIDLS-LV-TOTAL
 VARIABLE _UIDLS-LV-P-SNAPSHOT
@@ -431,18 +355,11 @@ VARIABLE _UIDLS-LV-P-AVAILABLE
 
 : _UIDLS-LV-FINISH  ( flag -- flag )
     0 _UIDLS-LV-SNAPSHOT ! 0 _UIDLS-LV-AVAILABLE !
-    0 _UIDLS-LV-TEXT-CAP ! 0 _UIDLS-LV-TEXT-U !
+    0 _UIDLS-LV-TEXT-U !
     0 _UIDLS-LV-TOTAL ! ;
 
 : _UIDLS-LV-P-CLEAR  ( -- )
     0 _UIDLS-LV-P-SNAPSHOT ! 0 _UIDLS-LV-P-AVAILABLE ! ;
-
-: _UIDLS-ZERO-BYTES?  ( a u -- flag )
-    DUP 0< IF 2DROP 0 EXIT THEN
-    0 ?DO
-        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
-    LOOP
-    DROP -1 ;
 
 : _UIDLS-LABEL-SNAPSHOT-VALID-BODY?  ( snapshot available -- flag )
     _UIDLS-LV-AVAILABLE ! _UIDLS-LV-SNAPSHOT !
@@ -456,20 +373,24 @@ VARIABLE _UIDLS-LV-P-AVAILABLE
     THEN
     _UIDLS-LV-SNAPSHOT @ _UIDLS-S.MAGIC @
         _UIDLS-SNAPSHOT-MAGIC <> IF 0 _UIDLS-LV-FINISH EXIT THEN
-    _UIDLS-LV-SNAPSHOT @ _UIDLS-S.ABI @
-        _UIDLS-SNAPSHOT-ABI <> IF 0 _UIDLS-LV-FINISH EXIT THEN
+    _UIDLS-LV-SNAPSHOT @ _UIDLS-S.RESERVED @ IF
+        0 _UIDLS-LV-FINISH EXIT
+    THEN
     _UIDLS-LV-SNAPSHOT @ _UIDLS-S.KIND @
         UIDL-SNAPSHOT-K-LABEL <> IF 0 _UIDLS-LV-FINISH EXIT THEN
     _UIDLS-LV-SNAPSHOT @ _UIDLS-S.FLAGS @ IF
         0 _UIDLS-LV-FINISH EXIT
     THEN
-    _UIDLS-LV-SNAPSHOT @ _UIDLS-SL.RESERVED @ IF
+    _UIDLS-LV-SNAPSHOT @ _UIDLS-SL.RESERVED0 @ IF
+        0 _UIDLS-LV-FINISH EXIT
+    THEN
+    _UIDLS-LV-SNAPSHOT @ _UIDLS-SL.RESERVED1 @ IF
         0 _UIDLS-LV-FINISH EXIT
     THEN
 
-    _UIDLS-LV-SNAPSHOT @ _UIDLS-SL.TEXT-CAP @
+    _UIDLS-LV-SNAPSHOT @ _UIDLS-SL.TEXT-U @
     DUP 0< IF DROP 0 _UIDLS-LV-FINISH EXIT THEN
-    DUP _UIDLS-LV-TEXT-CAP ! UIDL-LABEL-SNAPSHOT-BYTES
+    DUP _UIDLS-LV-TEXT-U ! UIDL-LABEL-SNAPSHOT-BYTES
     DUP 0= IF DROP 0 _UIDLS-LV-FINISH EXIT THEN
     DUP _UIDLS-LV-TOTAL !
     _UIDLS-LV-SNAPSHOT @ _UIDLS-S.BYTES @ <> IF
@@ -478,17 +399,8 @@ VARIABLE _UIDLS-LV-P-AVAILABLE
     _UIDLS-LV-TOTAL @ _UIDLS-LV-AVAILABLE @ U> IF
         0 _UIDLS-LV-FINISH EXIT
     THEN
-
-    _UIDLS-LV-SNAPSHOT @ _UIDLS-SL.TEXT-U @
-    DUP 0< IF DROP 0 _UIDLS-LV-FINISH EXIT THEN
-    DUP _UIDLS-LV-TEXT-U ! _UIDLS-LV-TEXT-CAP @ U> IF
-        0 _UIDLS-LV-FINISH EXIT
-    THEN
     _UIDLS-LV-SNAPSHOT @ _UIDLS-SL.TEXT _UIDLS-LV-TEXT-U @
         _UIDLS-LABEL-TEXT? 0= IF 0 _UIDLS-LV-FINISH EXIT THEN
-    _UIDLS-LV-SNAPSHOT @ _UIDLS-SL.TEXT _UIDLS-LV-TEXT-U @ +
-    _UIDLS-LV-TEXT-CAP @ _UIDLS-LV-TEXT-U @ -
-        _UIDLS-ZERO-BYTES? 0= IF 0 _UIDLS-LV-FINISH EXIT THEN
     -1 _UIDLS-LV-FINISH ;
 
 : _UIDLS-LABEL-SNAPSHOT-VALID-CALL  ( -- flag )
