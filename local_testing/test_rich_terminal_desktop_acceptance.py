@@ -272,6 +272,87 @@ def test_guest_boot_failures_are_reported_from_the_cell_screen() -> None:
     assert "COLD SOURCE LOAD FAIL" in excerpt
 
 
+def test_guest_failure_diagnostics_capture_existing_service_records(
+    tmp_path: Path,
+) -> None:
+    values = {
+        "_ASHELL-TERM-STATUS": (0x1000, 3),
+        "_APTSCB-STATUS": (0x1008, 0),
+        "_RTAPTSCB-R": (0x1010, 0x2000),
+        "_RTSCREEN-S-P": (0x1018, 0x3000),
+        "_RTAPT-ST-E": (0x1020, 0x4000),
+    }
+    record_cells = {
+        0x2000: list(range(26)),
+        0x3000: list(range(71)),
+        0x4000: list(range(62)),
+    }
+
+    class Client:
+        def request(self, method, **params):
+            if method == "status":
+                assert params == {"detailed": True}
+                return {"state": "running", "forth": {"word": None}}
+            if method == "forth":
+                assert set(values) <= set(params["names"])
+                return {
+                    "here": 0x9000,
+                    "words": {
+                        name: {
+                            "data_address": address,
+                            "value": value,
+                        }
+                        for name, (address, value) in values.items()
+                    },
+                }
+            if method == "peek":
+                cells = record_cells[params["address"]]
+                assert params["count"] == len(cells)
+                return {"values": cells}
+            raise AssertionError(method)
+
+    path = acceptance_runner._write_guest_failure_diagnostics(
+        Client(),
+        tmp_path,
+        "[akashic] desktop exception -3203",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["failure"].endswith("-3203")
+    assert payload["variables"]["_ASHELL-TERM-STATUS"]["value"] == 3
+    assert payload["records"]["publisher"]["fields"] == {
+        "adapter": 18,
+        "engine": 11,
+        "fault_status": 24,
+        "more_work": 22,
+        "output_needed": 23,
+        "phase": 25,
+        "producer_budget": 15,
+        "producer_bytes": 14,
+        "producer_context": 13,
+        "surface_cols": 19,
+        "surface_generation": 21,
+        "surface_rows": 20,
+    }
+    assert payload["records"]["screen_plane"]["fields"]["phase"] == 10
+    assert payload["records"]["engine"]["fields"]["last_status"] == 28
+
+
+def test_guest_failure_message_preserves_failure_when_capture_breaks(
+    tmp_path: Path,
+) -> None:
+    class Client:
+        def request(self, method, **params):
+            raise KeyError("missing diagnostic field")
+
+    message = acceptance_runner._guest_failure_message(
+        Client(),
+        tmp_path,
+        "[akashic] desktop exception -3203",
+    )
+    assert "desktop exception -3203" in message
+    assert "diagnostic capture failed" in message
+
+
 def test_acceptance_diagnostic_state_reports_exact_display_boundary() -> None:
     ready, missing = acceptance_runner._marker_status(
         "Desk Selection and Tools",

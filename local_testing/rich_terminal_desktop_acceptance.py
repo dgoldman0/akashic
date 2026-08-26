@@ -47,6 +47,105 @@ CELL_FALLBACK_MODE = "CELL FALLBACK: waiting for retained frame"
 RETAINED_PENDING_MODE = "RICH RETAINED: pending physical acknowledgment"
 RETAINED_ACKNOWLEDGED_MODE = "RICH RETAINED: physically acknowledged"
 
+_GUEST_FAILURE_VARIABLES = (
+    "_ASHELL-TERM-STATUS",
+    "_ASHELL-TERM-FLAG",
+    "_ASHELL-TERM-OWNS",
+    "_APTAS-STATUS",
+    "_APTAS-STATE",
+    "_APTSCB-STATUS",
+    "_RTAPTSCB-STATUS",
+    "_RTAPTSCB-PRODUCER-STATUS",
+    "_RTAPTSCB-PRODUCER-MORE",
+    "_RTAPTSCB-PRODUCER-OUTPUT",
+    "_RTAPTSCB-SEALED-MODE",
+    "_RTAPTSCB-SEALED-DISPOSITION",
+    "_RTAPTSCB-SEALED-STATUS",
+    "_RTSCREEN-S-STATUS",
+    "_RTSCREEN-S-STATE",
+    "_RTSCREEN-P-STATUS",
+    "_RTSCREEN-P-STATE",
+    "_RTSCREEN-P-COUNT",
+    "_RTAPT-ST-PT",
+    "_RTAPT-ST-HAS",
+    "_RTAPT-ST-STATE",
+    "_RTAPTSCB-R",
+    "_RTSCREEN-S-P",
+    "_RTAPT-ST-E",
+)
+
+_GUEST_FAILURE_RECORDS = {
+    "publisher": (
+        "_RTAPTSCB-R",
+        26,
+        {
+            "engine": 11,
+            "producer_context": 13,
+            "producer_bytes": 14,
+            "producer_budget": 15,
+            "adapter": 18,
+            "surface_cols": 19,
+            "surface_rows": 20,
+            "surface_generation": 21,
+            "more_work": 22,
+            "output_needed": 23,
+            "fault_status": 24,
+            "phase": 25,
+        },
+    ),
+    "screen_plane": (
+        "_RTSCREEN-S-P",
+        71,
+        {
+            "size": 1,
+            "self": 2,
+            "facade": 3,
+            "items_address": 4,
+            "items_bytes": 5,
+            "owner": 6,
+            "owner_generation": 7,
+            "region": 8,
+            "first_object": 9,
+            "phase": 10,
+            "cols": 11,
+            "rows": 12,
+            "surface_generation": 13,
+            "cells": 14,
+            "scan": 15,
+            "fault_status": 16,
+        },
+    ),
+    "engine": (
+        "_RTAPT-ST-E",
+        62,
+        {
+            "session": 1,
+            "owner_used": 5,
+            "queue_head": 11,
+            "queue_tail": 12,
+            "active_owner": 13,
+            "active_kind": 14,
+            "update_state": 15,
+            "coupling": 16,
+            "cols": 17,
+            "rows": 18,
+            "cell_spans": 19,
+            "cells": 20,
+            "cell_mode": 21,
+            "retained_mode": 22,
+            "disposition": 23,
+            "operation_count": 24,
+            "copy_used": 25,
+            "retained_bytes": 26,
+            "send_index": 27,
+            "last_status": 28,
+            "last_wire_status": 29,
+            "last_detail": 30,
+            "last_revision": 31,
+        },
+    ),
+}
+
 
 class PhysicalDesktopAcceptanceError(RuntimeError):
     """The physical Desk/Pad/Daybook contract was not completed."""
@@ -200,6 +299,88 @@ def _write_timeout_diagnostics(
         f"since-offer={since_offer} cell-missing={cell_missing} "
         f"retained-missing={retained_missing} "
         f"frame-barrier={frame_barrier} pending-input={pending_input}"
+    )
+
+
+def _write_guest_failure_diagnostics(
+    client: SessionClient,
+    artifact_root: Path,
+    failure: str,
+) -> Path:
+    """Persist best-effort host/Forth state after the guest has stopped."""
+
+    root = Path(artifact_root).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    status = client.request("status", detailed=True)
+    forth = client.request("forth", names=list(_GUEST_FAILURE_VARIABLES))
+    words = forth.get("words", {})
+    variables = {
+        name: {
+            "address": int(word["data_address"]),
+            "value": int(word["value"]),
+        }
+        for name in _GUEST_FAILURE_VARIABLES
+        if (word := words.get(name)) is not None
+        and "data_address" in word
+        and "value" in word
+    }
+    records: dict[str, object] = {}
+    for record_name, (pointer_name, count, fields) in (
+        _GUEST_FAILURE_RECORDS.items()
+    ):
+        pointer = variables.get(pointer_name, {}).get("value", 0)
+        if not isinstance(pointer, int) or pointer <= 0:
+            records[record_name] = {"address": pointer, "unavailable": True}
+            continue
+        response = client.request("peek", address=pointer, count=count)
+        cells = [int(value) for value in response["values"]]
+        records[record_name] = {
+            "address": pointer,
+            "fields": {
+                name: cells[index]
+                for name, index in fields.items()
+                if index < len(cells)
+            },
+            "cells": cells,
+        }
+    path = root / "guest-failure.json"
+    path.write_text(
+        json.dumps(
+            {
+                "failure": failure,
+                "machine": status,
+                "forth_here": forth.get("here"),
+                "variables": variables,
+                "records": records,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _guest_failure_message(
+    client: SessionClient,
+    artifact_root: Path,
+    failure: str,
+) -> str:
+    """Keep optional diagnostic failures subordinate to the guest failure."""
+
+    try:
+        diagnostic_path = _write_guest_failure_diagnostics(
+            client,
+            artifact_root,
+            failure,
+        )
+        diagnostic = f"\ndiagnostic: {diagnostic_path}"
+    except Exception as exc:
+        diagnostic = f"\ndiagnostic capture failed: {exc}"
+    return (
+        "guest failed before physical Desktop acceptance:\n"
+        f"{failure}{diagnostic}"
     )
 
 
@@ -875,8 +1056,11 @@ def run_physical_desktop_acceptance(
             guest_failure = _guest_boot_failure(_terminal_text(terminal))
             if guest_failure is not None:
                 raise PhysicalDesktopAcceptanceError(
-                    "guest failed before physical Desktop acceptance:\n"
-                    f"{guest_failure}"
+                    _guest_failure_message(
+                        client,
+                        artifact_root,
+                        guest_failure,
+                    )
                 )
             latest_cell_text = _terminal_text(terminal)
             cell_ready, cell_missing_markers = _marker_status(
