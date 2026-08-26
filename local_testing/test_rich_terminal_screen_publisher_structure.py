@@ -294,7 +294,7 @@ def test_concrete_bridge_is_caller_bounded_and_one_to_one() -> None:
 def test_output_producer_hook_is_optional_immutable_and_caller_bounded() -> None:
     source = BRIDGE.read_text(encoding="utf-8")
 
-    assert "APTSCB-PUBLISHER-SIZE 104 + CONSTANT RTAPTSCB-SIZE" in source
+    assert "APTSCB-PUBLISHER-SIZE 112 + CONSTANT RTAPTSCB-SIZE" in source
     for suffix, offset in {
         "PRODUCER-CONTEXT": 16,
         "PRODUCER-U": 24,
@@ -307,6 +307,7 @@ def test_output_producer_hook_is_optional_immutable_and_caller_bounded() -> None
         "SURFACE-GENERATION": 80,
         "MORE-WORK": 88,
         "OUTPUT-NEEDED": 96,
+        "FAULT-STATUS": 104,
     }.items():
         assert (
             f"APTSCB-PUBLISHER-SIZE {offset} + CONSTANT "
@@ -327,6 +328,17 @@ def test_output_producer_hook_is_optional_immutable_and_caller_bounded() -> None
         assert token in producer_valid
     assert "_RTAPTSCB-VALID-CONTEXT @ 0= IF" in producer_valid
 
+    fault_valid = _definition(source, "_RTAPTSCB-FAULT-VALID?")
+    assert "_RTAPTSCB-FAULT-STATUS?" in fault_valid
+    assert "_RTAPTSCB.MORE-WORK @ 0=" in fault_valid
+    assert "_RTAPTSCB.OUTPUT-NEEDED @ 0=" in fault_valid
+    valid = _definition(source, "RTAPTSCB-VALID?")
+    surface = valid.index("_RTAPTSCB-SURFACE-VALID?")
+    fault = valid.index("_RTAPTSCB-FAULT-VALID?", surface)
+    adapter = valid.index("_RTAPTSCB-ADAPTER-VALID?", fault)
+    producer = valid.index("_RTAPTSCB-PRODUCER-VALID?", adapter)
+    assert surface < fault < adapter < producer
+
     binder = _definition(source, "RTAPTSCB-OUTPUT-PRODUCER!")
     first_store = binder.index("_RTAPTSCB.PRODUCER-CONTEXT !")
     for preflight in (
@@ -341,6 +353,7 @@ def test_output_producer_hook_is_optional_immutable_and_caller_bounded() -> None
     assert "_RTAPTSCB.PRODUCER-CONTEXT @ IF" in binder
     assert "IF SCB-S-OK ELSE SCB-S-INVALID THEN EXIT" in binder
     assert binder.count("_RTAPTSCB.PRODUCER-CONTEXT !") == 1
+    assert binder.index("_RTAPTSCB.FAULT-STATUS @ IF") < first_store
     assert "_RTAPTSCB.SURFACE-GENERATION @ IF" in binder
     context_publish = binder.index("_RTAPTSCB.PRODUCER-CONTEXT !")
     for field in (
@@ -364,10 +377,16 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
     code = "\n".join(line.split("\\", 1)[0] for line in source.splitlines())
 
     step = _definition(source, "_RTAPTSCB-STEP")
-    assert step.index("_RTAPTSCB-ENGINE-STEP") < step.index(
-        "_RTAPTSCB-PRODUCER-STEP"
+    engine_call = step.index("_RTAPTSCB-ENGINE-STEP")
+    engine_refusal = step.index("DUP SCB-S-OK <> IF", engine_call)
+    fault_override = step.index(
+        "_RTAPTSCB.FAULT-STATUS @ 0= IF EXIT THEN", engine_refusal
     )
-    producer_call = step.index("_RTAPTSCB-PRODUCER-STEP")
+    producer_call = step.index("_RTAPTSCB-PRODUCER-STEP", fault_override)
+    assert engine_call < engine_refusal < fault_override < producer_call
+    assert "_RTAPTSCB.FAULT-STATUS @ ?DUP IF EXIT THEN" not in (
+        step[:engine_call]
+    )
     nonfatal_gate = step.index(
         "DUP SCB-S-OK = SWAP SCB-S-WOULD-BLOCK = OR IF", producer_call
     )
@@ -412,16 +431,14 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
     fatal_gate = producer_step.index(
         "_RTAPTSCB-PRODUCER-STATUS @ DUP SCB-S-SESSION-LOST =", bool_gate
     )
-    fatal_more = producer_step.index(
-        "0 _RTAPTSCB-R @ _RTAPTSCB.MORE-WORK !", fatal_gate
-    )
-    fatal_output = producer_step.index(
-        "0 _RTAPTSCB-R @ _RTAPTSCB.OUTPUT-NEEDED !", fatal_more
+    fatal_latch = producer_step.index("_RTAPTSCB-FAULT-LATCH", fatal_gate)
+    prior_fault = producer_step.index(
+        "_RTAPTSCB.FAULT-STATUS @ ?DUP IF EXIT THEN", fatal_latch
     )
     latch = producer_step.rindex("_RTAPTSCB.MORE-WORK !")
     output_latch = producer_step.rindex("_RTAPTSCB.OUTPUT-NEEDED !")
-    assert status_gate < bool_gate < fatal_gate < fatal_more < fatal_output
-    assert fatal_output < latch < output_latch
+    assert status_gate < bool_gate < fatal_gate < fatal_latch
+    assert fatal_latch < prior_fault < latch < output_latch
     latest_output = (
         "_RTAPTSCB-PRODUCER-OUTPUT @\n"
         "        _RTAPTSCB-R @ _RTAPTSCB.OUTPUT-NEEDED !"
@@ -440,13 +457,16 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
     )
 
     begin = _definition(source, "_RTAPTSCB-BEGIN")
-    producer_guard = begin.index("_RTAPTSCB-PRODUCER-BOUND? IF")
-    surface_observe = begin.index("_RTAPTSCB-SURFACE-OBSERVE", producer_guard)
-    assert producer_guard < surface_observe < begin.index(
-        "_RTAPTSCB-PRODUCER-PREPARE"
-    ) < begin.index("RTAPT-CELL-BEGIN")
+    surface_observe = begin.index("_RTAPTSCB-SURFACE-OBSERVE")
+    fault_gate = begin.index("_RTAPTSCB.FAULT-STATUS @ ?DUP IF", surface_observe)
+    producer_guard = begin.index("_RTAPTSCB-PRODUCER-BOUND?", fault_gate)
+    output_guard = begin.index("_RTAPTSCB.OUTPUT-NEEDED @ AND IF", producer_guard)
+    prepare_call = begin.index("_RTAPTSCB-PRODUCER-PREPARE", output_guard)
+    engine_begin = begin.index("RTAPT-CELL-BEGIN", prepare_call)
+    assert surface_observe < fault_gate < producer_guard < output_guard
+    assert output_guard < prepare_call < engine_begin
     clear_latch = begin.index("_RTAPTSCB.OUTPUT-NEEDED !")
-    assert begin.index("SCB-S-OK = IF") < clear_latch
+    assert engine_begin < begin.index("SCB-S-OK = IF", engine_begin) < clear_latch
 
     prepare = _definition(source, "_RTAPTSCB-PRODUCER-PREPARE")
     assert "_RTAPTSCB-EXACT-SCREEN?" in prepare
@@ -459,11 +479,16 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
     )
     prepare_restore = prepare.index("R> _RTAPTSCB-R !", prepare_execute)
     assert prepare_save < prepare_execute < prepare_restore
+    assert prepare_restore < prepare.index(
+        "_RTAPTSCB-FAULT-LATCH", prepare_restore
+    )
 
     engine_step = _definition(source, "_RTAPTSCB-ENGINE-STEP")
     rejected = engine_step.index("RTAPT-S-REJECTED = IF SCB-S-OK EXIT THEN")
     mapped = engine_step.index("_RTAPTSCB-MAP-STATUS", rejected)
-    assert rejected < mapped
+    fatal = engine_step.index("_RTAPTSCB-FATAL-STATUS?", mapped)
+    faulted = engine_step.index("_RTAPTSCB-FAULT-LATCH", fatal)
+    assert rejected < mapped < fatal < faulted
     output_query = _definition(source, "RTAPTSCB-OUTPUT-NEEDED?")
     assert "RTAPTSCB-VALID?" in output_query
     assert "_RTAPTSCB-EXACT-SCREEN?" in output_query
@@ -471,6 +496,14 @@ def test_output_producer_runs_after_reconciliation_at_exact_surface() -> None:
     settle = _definition(source, "_RTAPTSCB-SETTLE")
     assert "_RTAPTSCB-SCHEDULE-OUTPUT" not in settle
     assert "SCR-REQUEST-FLUSH" not in settle
+
+    fault_latch = _definition(source, "_RTAPTSCB-FAULT-LATCH")
+    clear_more = fault_latch.index("_RTAPTSCB.MORE-WORK !")
+    clear_output = fault_latch.index("_RTAPTSCB.OUTPUT-NEEDED !", clear_more)
+    existing = fault_latch.index("_RTAPTSCB.FAULT-STATUS @ ?DUP IF", clear_output)
+    publish = fault_latch.index("_RTAPTSCB.FAULT-STATUS !", existing)
+    assert clear_more < clear_output < existing < publish
+    assert source.count("_RTAPTSCB.FAULT-STATUS !") == 1
 
     for forbidden in (
         "RTE-LABEL-PREFLIGHT",

@@ -469,12 +469,14 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
     init = _word(composition, "_A1D-HOST-INIT-BODY")
     assert "_A1D-PHASE @ _A1D-PHASE-INSTALLED <> IF" in init
     init_order = (
-        "_A1D-UIDL-BOUND _A1D-UIDL-PHASE !",
+        "_A1D-UIDL-INITIALIZING _A1D-UIDL-PHASE !",
         "RTERM-HOST-BINDING-INIT",
         "RTERM-UIDL-CONFIG-INIT",
         "RTERM-UIDL-INIT",
         "RTERM-UIDL-INSTALL",
+        "RTAPTSCB-OUTPUT-PRODUCER!",
         "AHOST-UIDL-READY!",
+        "_A1D-UIDL-READY _A1D-UIDL-PHASE !",
     )
     assert [init.index(token) for token in init_order] == sorted(
         init.index(token) for token in init_order
@@ -512,6 +514,61 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
     install_at = init.index("RTERM-UIDL-INSTALL", consumed_config_scrub)
     assert config_init_at < failed_config_scrub < uidl_init_at
     assert uidl_init_at < consumed_config_scrub < install_at
+
+    normalized_binding = re.sub(r"\s+", " ", init)
+    assert (
+        "_A1D-UIDL-BACKEND RTERM-UIDL-BACKEND-SIZE "
+        "APT1-DESK-RTERM-BINDING-RECORDS "
+        "['] _A1D-RTERM-STEP ['] _A1D-RTERM-PREPARE "
+        "_A1D-RTAPTSCB RTAPTSCB-OUTPUT-PRODUCER!"
+        in normalized_binding
+    )
+    producer_bind = init.index("RTAPTSCB-OUTPUT-PRODUCER!", install_at)
+    host_ready = init.index("AHOST-UIDL-READY!", producer_bind)
+    ready_phase = init.index("_A1D-UIDL-READY _A1D-UIDL-PHASE !", host_ready)
+    assert install_at < producer_bind < host_ready < ready_phase
+
+    callable_check = _word(composition, "_A1D-RTERM-CALLABLE?")
+    exact_context = callable_check.index("_A1D-UIDL-BACKEND <> IF")
+    outer_ready = callable_check.index("_A1D-PHASE-INSTALLED <>", exact_context)
+    uidl_ready = callable_check.index("_A1D-UIDL-READY <>", outer_ready)
+    deep_valid = callable_check.index("RTERM-UIDL-VALID?", uidl_ready)
+    assert exact_context < outer_ready < uidl_ready < deep_valid
+
+    step_adapter = _word(composition, "_A1D-RTERM-STEP")
+    assert "_A1D-RTERM-CALLABLE? 0= IF" in step_adapter
+    assert "RTERM-BACKEND-STEP _A1D-RTERM-STEP-RESULT" in step_adapter
+    step_result = _word(composition, "_A1D-RTERM-STEP-RESULT")
+    for source_status, mapped in (
+        ("RTERM-S-OK", "SCB-S-OK"),
+        ("RTERM-S-WOULD-BLOCK", "SCB-S-WOULD-BLOCK"),
+        ("RTERM-S-UNAVAILABLE", "SCB-S-OK"),
+        ("RTERM-S-STALE", "SCB-S-OK"),
+        ("RTERM-S-SESSION-LOST", "SCB-S-SESSION-LOST 0 0"),
+        ("RTERM-S-CAPACITY", "SCB-S-INVALID 0 0"),
+        ("RTERM-S-INVALID", "SCB-S-INVALID 0 0"),
+        ("RTERM-S-SOURCE", "SCB-S-INVALID 0 0"),
+    ):
+        branch = step_result.index(source_status)
+        assert step_result.index(mapped, branch) > branch
+    assert step_result.rstrip().endswith("SCB-S-INVALID 0 0 ;")
+
+    prepare_adapter = _word(composition, "_A1D-RTERM-PREPARE")
+    assert "_A1D-RTERM-CALLABLE? 0= IF" in prepare_adapter
+    assert (
+        "RTERM-BACKEND-PREPARE _A1D-RTERM-PREPARE-RESULT"
+        in prepare_adapter
+    )
+    prepare_result = _word(composition, "_A1D-RTERM-PREPARE-RESULT")
+    for retryable in (
+        "RTERM-S-WOULD-BLOCK",
+        "RTERM-S-UNAVAILABLE",
+        "RTERM-S-STALE",
+    ):
+        branch = prepare_result.index(retryable)
+        assert prepare_result.index("SCB-S-WOULD-BLOCK", branch) > branch
+    assert "RTERM-S-SESSION-LOST" in prepare_result
+    assert "SCB-S-SESSION-LOST" in prepare_result
 
     fini = _word(composition, "_A1D-HOST-FINI-BODY")
     assert "_A1D-PHASE @ _A1D-PHASE-INSTALLED <> IF" in fini

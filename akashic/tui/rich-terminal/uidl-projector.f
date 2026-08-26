@@ -5,7 +5,7 @@
 \  This rich-driver-private layer copies supported UIDL semantic snapshots
 \  and neutral resolved layout/style state into storage selected by its
 \  caller.  It knows no retained engine, wire protocol, screen, host, Desk,
-\  or applet API.  A successful build is only a local desired-scene
+\  or applet API.  A successful build is only a local desired-projection
 \  candidate; the caller owns publication.
 \
 \  Prefix:   RUPJ- (private provider contract), _RUPJ- (implementation)

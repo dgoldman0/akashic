@@ -191,7 +191,8 @@ _A1D-HOST-BINDING-MEM 7 + -8 AND CONSTANT _A1D-HOST-BINDING
 6 CONSTANT _A1D-PHASE-INSTALLED
 
 0 CONSTANT _A1D-UIDL-UNBOUND
-1 CONSTANT _A1D-UIDL-BOUND
+1 CONSTANT _A1D-UIDL-INITIALIZING
+2 CONSTANT _A1D-UIDL-READY
 
 VARIABLE _A1D-PHASE
 VARIABLE _A1D-UIDL-PHASE
@@ -210,7 +211,7 @@ _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
     _A1D-PHASE-INSTALLED 1+ U< ;
 
 : _A1D-UIDL-PHASE-VALID?  ( phase -- flag )
-    _A1D-UIDL-BOUND 1+ U< ;
+    _A1D-UIDL-READY 1+ U< ;
 
 \ Called only at the proven-cold boundary.  Large record/copy banks are
 \ initialized by their checked constructors after all span preflights pass;
@@ -278,6 +279,70 @@ _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
     _A1D-OWNER APTAS-INSTALL
     DUP SCB-S-OK = IF _A1D-PHASE-INSTALLED _A1D-PHASE ! THEN ;
 
+\ The unified publisher owns scheduling, while this product leaf owns only
+\ the proof that its immutable neutral producer tuple still names the exact
+\ live composition.  INITIALIZING is deliberately non-callable: installation
+\ cannot expose a partially constructed UIDL backend to a screen step.
+: _A1D-RTERM-CALLABLE?  ( context -- flag )
+    DUP _A1D-UIDL-BACKEND <> IF DROP 0 EXIT THEN
+    _A1D-PHASE @ _A1D-PHASE-INSTALLED <> IF DROP 0 EXIT THEN
+    _A1D-UIDL-PHASE @ _A1D-UIDL-READY <> IF DROP 0 EXIT THEN
+    RTERM-UIDL-VALID? ;
+
+: _A1D-RTERM-STEP-RESULT
+  ( rterm-status more? output-needed? -- scb-status more? output-needed? )
+    2 PICK RTERM-S-OK = IF
+        ROT DROP SCB-S-OK -ROT EXIT
+    THEN
+    2 PICK RTERM-S-WOULD-BLOCK = IF
+        ROT DROP SCB-S-WOULD-BLOCK -ROT EXIT
+    THEN
+    2 PICK RTERM-S-UNAVAILABLE = IF
+        ROT DROP SCB-S-OK -ROT EXIT
+    THEN
+    2 PICK RTERM-S-STALE = IF
+        ROT DROP SCB-S-OK -ROT EXIT
+    THEN
+    2 PICK RTERM-S-SESSION-LOST = IF
+        2DROP DROP SCB-S-SESSION-LOST 0 0 EXIT
+    THEN
+    2 PICK RTERM-S-CAPACITY = IF
+        2DROP DROP SCB-S-INVALID 0 0 EXIT
+    THEN
+    2 PICK RTERM-S-INVALID = IF
+        2DROP DROP SCB-S-INVALID 0 0 EXIT
+    THEN
+    2 PICK RTERM-S-SOURCE = IF
+        2DROP DROP SCB-S-INVALID 0 0 EXIT
+    THEN
+    2DROP DROP SCB-S-INVALID 0 0 ;
+
+: _A1D-RTERM-PREPARE-RESULT  ( rterm-status -- scb-status )
+    DUP RTERM-S-OK = IF DROP SCB-S-OK EXIT THEN
+    DUP RTERM-S-WOULD-BLOCK = IF DROP SCB-S-WOULD-BLOCK EXIT THEN
+    DUP RTERM-S-UNAVAILABLE = IF DROP SCB-S-WOULD-BLOCK EXIT THEN
+    DUP RTERM-S-STALE = IF DROP SCB-S-WOULD-BLOCK EXIT THEN
+    DUP RTERM-S-SESSION-LOST = IF DROP SCB-S-SESSION-LOST EXIT THEN
+    DUP RTERM-S-CAPACITY = IF DROP SCB-S-INVALID EXIT THEN
+    DUP RTERM-S-INVALID = IF DROP SCB-S-INVALID EXIT THEN
+    DUP RTERM-S-SOURCE = IF DROP SCB-S-INVALID EXIT THEN
+    DROP SCB-S-INVALID ;
+
+: _A1D-RTERM-STEP
+  ( cols rows generation budget context
+    -- scb-status more? output-needed? )
+    DUP _A1D-RTERM-CALLABLE? 0= IF
+        2DROP 2DROP DROP SCB-S-INVALID 0 0 EXIT
+    THEN
+    RTERM-BACKEND-STEP _A1D-RTERM-STEP-RESULT ;
+
+: _A1D-RTERM-PREPARE
+  ( cols rows generation context -- scb-status )
+    DUP _A1D-RTERM-CALLABLE? 0= IF
+        2DROP 2DROP SCB-S-INVALID EXIT
+    THEN
+    RTERM-BACKEND-PREPARE _A1D-RTERM-PREPARE-RESULT ;
+
 \ Desk invokes this after constructing the exact AHOST and before autostart.
 \ Publish the partial-init phase before any fallible work: Desk's paired fini
 \ is then sufficient for every refusal or caught throw.
@@ -291,7 +356,7 @@ _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
     _A1D-UIDL-PHASE @ _A1D-UIDL-UNBOUND <> IF
         RTERM-S-INVALID _A1D-HOST-CB-RESULT ! EXIT
     THEN
-    _A1D-UIDL-BOUND _A1D-UIDL-PHASE !
+    _A1D-UIDL-INITIALIZING _A1D-UIDL-PHASE !
     _A1D-HOST-BINDING RTERM-HOST-BINDING-INIT
 
     _A1D-HOST-CB-HOST @
@@ -318,8 +383,17 @@ _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
     DUP _A1D-HOST-CB-RESULT !
     RTERM-S-OK <> IF EXIT THEN
 
+    _A1D-UIDL-BACKEND RTERM-UIDL-BACKEND-SIZE
+    APT1-DESK-RTERM-BINDING-RECORDS
+    ['] _A1D-RTERM-STEP ['] _A1D-RTERM-PREPARE
+    _A1D-RTAPTSCB RTAPTSCB-OUTPUT-PRODUCER!
+    SCB-S-OK <> IF
+        RTERM-S-INVALID _A1D-HOST-CB-RESULT ! EXIT
+    THEN
+
     ['] RTERM-AHOST-UIDL-READY _A1D-HOST-BINDING
     _A1D-HOST-CB-HOST @ AHOST-UIDL-READY!
+    _A1D-UIDL-READY _A1D-UIDL-PHASE !
     RTERM-S-OK _A1D-HOST-CB-RESULT ! ;
 
 : _A1D-HOST-INIT  ( host context -- ior )

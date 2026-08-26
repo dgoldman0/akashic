@@ -2934,9 +2934,22 @@ VARIABLE _RTERM-RL-OLD-WIDTH
     _RTERM-CALL-LIVE? 0= IF RTERM-S-STALE _RTERM-CALL-FAIL EXIT THEN
     _RTERM-C-RECORD @ _RTERM-R.MAT-STATE @
         _RTERM-MAT-ST-NONE <> IF
-        _RTERM-C-RECORD @ _RTERM-ELIGIBILITY-CLEAR
-        _RTERM-PROJECT-SCHEDULE
-        RTERM-S-WOULD-BLOCK _RTERM-CALL-FAIL EXIT
+        \ Once the backend is terminally quarantined, provider owner
+        \ authority cannot be polled or reused.  Quiesce may therefore
+        \ abandon only the exact local QUARANTINED suffix and continue to the
+        \ ordinary detached lifetime; every nonterminal state still requires
+        \ finite owner retirement through the materializer service.
+        _RTERM-C-BACKEND @ _RTERM-B.EPOCH @
+            _RTERM-EPOCH-QUARANTINED =
+        _RTERM-C-RECORD @ _RTERM-R.MAT-STATE @
+            _RTERM-MAT-ST-QUARANTINED = AND IF
+            _RTERM-C-RECORD @ _RTERM-ELIGIBILITY-CLEAR
+            _RTERM-C-RECORD @ _RTERM-R.MAT-STATE 40 0 FILL
+        ELSE
+            _RTERM-C-RECORD @ _RTERM-ELIGIBILITY-CLEAR
+            _RTERM-PROJECT-SCHEDULE
+            RTERM-S-WOULD-BLOCK _RTERM-CALL-FAIL EXIT
+        THEN
     THEN
     RTERM-S-OK _RTERM-C-RECORD @ _RTERM-R.LAST-STATUS !
     _RTERM-BINDING-ST-QUIESCED _RTERM-C-RECORD @ _RTERM-R.STATE !

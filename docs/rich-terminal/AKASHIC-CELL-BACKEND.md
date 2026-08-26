@@ -173,6 +173,11 @@ publishes a CELL-only, retained-only, or mixed change under the shared
 transaction ID and revision. Accepted resize recovery uses `CELL_REPLACE` in
 that envelope.
 
+`PRESENT_BEGIN`, `PRESENT_COMMIT`, and `presentation_epoch` are frozen APT-1
+wire-protocol spellings. They do not name a Presentation object, service,
+application layer, or UIDL concept. Above the wire bridge the operations are
+neutral staging, reveal, settlement, reconstruction, and retirement.
+
 The APT screen adapter exposes this coordinator through one optional borrowed
 publisher descriptor. The descriptor carries the exact PT session, callback
 context, normalized CELL transaction callbacks, an ordinary scheduler step,
@@ -181,6 +186,14 @@ on a concrete rich engine. At each `begin` it selects the publisher only when
 retained discovery is currently available; otherwise it selects the legacy
 CELL path. That decision is latched through span, cursor, commit, or abort, so
 discovery and reset transitions cannot split one transaction across paths.
+
+The APT-1 product composition also installs the UIDL materializer as the
+publisher's neutral output producer. Desk and applets remain ordinary UIDL
+producers and contain no APT-1, retained-scene, or renderer branch. The adapter
+observes exact screen geometry on every offered begin, but calls the
+materializer's `PREPARE` callback only when its preceding bounded `STEP`
+reported canonical `OUTPUT_NEEDED`. A CELL flush by itself therefore does not
+start retained work.
 
 `PT-SERVICE` remains owned by the APT screen adapter. Ordinary service calls it
 before the publisher scheduler, which may reconcile a completion or admit one
@@ -201,6 +214,15 @@ peer-initiated close reached through ordinary service: settlement is invoked
 once as a best-effort local quarantine, the latched publisher route is cleared,
 and only then is the ANSI screen backend restored. PT has already released wire
 ownership at this point, so that callback cannot emit protocol work.
+
+The publisher carries the first fatal neutral engine, producer, or preparation
+result across ordinary scheduler calls. This is a volatile status latch, not
+application persistence or a second state store: it owns no UIDL, widget, or
+document data. Only whole-publisher reconstruction or final retirement clears
+it, preventing a later ordinary step from masking a failed output lifecycle.
+Close settlement
+remains callable while the latch is set so already-admitted protocol work can
+reach a finite terminal state; it cannot use settlement to admit new work.
 
 The screen front buffer and retained terminal state advance together only
 after the complete unified commit has been accepted locally. Backpressure or a
@@ -240,18 +262,21 @@ guest's independent 8192-byte RX and TX streaming buffers admit the control
 reserve and a complete maximum-width CELL span without buffering a whole
 snapshot.
 
-The same product profile independently owns 32 RTAPT owner records (4,608
+The same product profile independently owns 32 RTAPT owner records (6,656
 bytes), 32 atomic operation records (768 bytes), 2,304 copied-operation bytes,
-and 32 UIDL binding records (4,608 bytes). The record counts inherit Desktop's
+and 32 UIDL binding records (12,288 bytes). Its `2*C+1` candidate geometry also
+owns 65 volatile banks: 266,240 item bytes, 66,560 positional-identity bytes,
+and 266,240 semantic-snapshot bytes. The record counts inherit Desktop's
 32-entry catalog concurrency boundary. The operation/copy pair is only the
-current `REGION_DEFINE` staging shape of 32 records at 72 copied bytes each;
-the semantic projector must replace that bound with its worst-case complete-
-tree transaction admission before retained support is enabled. These are local
-caller-bounded storage dimensions, not terminal feature claims. The current
-production profile deliberately carries `retained_policy=None`: it opts into
-the external APT session and complete CELL publisher while truthfully
-advertising no retained semantic family until the UIDL projector can admit a
-complete supported tree.
+current admitted retained-operation storage shape; complete-tree projection is
+accepted only when the neutral UIDL materializer's exact preflight fits both
+these caller-selected capacities and the negotiated terminal limits. These are
+volatile local output dimensions, not terminal feature claims or application
+storage. The APT-1 composition binds that materializer to the unified
+publisher, but the checked-in Desktop host policy still advertises no retained
+semantic family (`retained_policy=None`). The path remains dormant until a
+product supplies an explicit supported retained policy; unsupported families
+remain ordinary CELL output rather than being falsely advertised.
 
 If Desk exits or throws after the binary switch but synchronized release is
 not proven, the profile emits no diagnostic bytes. It remains in a silent

@@ -68,6 +68,12 @@ wire tombstones so that transport is incremental and reset is replayable. That
 cache is not a second application-owned scene and has no independent mutation
 API.
 
+"Storage" in this contract means only caller-provided volatile memory for that
+derived output cache and its finite wire-owner lifecycle. It is not document or
+application persistence, a recovery database, or a second application layer.
+Reconstruction after terminal reset, resize, or loss re-derives output from
+authoritative UIDL; it never reconstructs application state from terminal data.
+
 ## 2. Authority and identity
 
 The generic engine is the sole Akashic component allowed to emit retained wire
@@ -127,6 +133,15 @@ records the first non-transient backend error for inspection while leaving
 application state intact. One failed projection cannot authorize mutation of
 another binding, and a post-`OPEN` structural loss never makes raw ANSI output
 safe.
+
+In the APT-1 composition, that first non-transient result is also a neutral
+publisher fault latch. It survives ordinary scheduler calls so a later call
+cannot silently turn a failed output lifecycle back into apparent success.
+This persistence is only an in-memory status latch: it owns no UIDL or
+application data, and it is cleared only by whole-publisher reconstruction or
+final retirement. Synchronized teardown may still poll and settle work that
+was already admitted; the latch grants no authority to start new publication
+during teardown.
 
 `RTERM-S-WOULD-BLOCK` is transport progress, not local projection-capacity
 failure. Already accepted desired state remains accepted while egress is
@@ -397,7 +412,7 @@ published and returns `RTERM-S-UNAVAILABLE`. A deep-valid nonempty candidate
 then undergoes a terminal-eligibility check; its exact success or refusal status
 is returned, while either result preserves the candidate and mapping. A
 construction, deep-validation, or identity-mapping failure leaves the prior
-selector and therefore the prior desired scene authoritative.
+selector and therefore the prior desired projection candidate authoritative.
 
 UIDL-TUI exposes complete neutral resolved geometry/style as a copied 72-byte
 record with effective visibility and paint-group z. Each selected 128-byte RUPJ
@@ -406,14 +421,22 @@ preserving semantic LABEL membership with a zero resolved payload when it is
 not. The projector invokes no facade operation. Project invokes only the
 read-only `RTE-LIMITS@` after assigning private owner/region/object identities,
 then records terminal-negotiated eligibility before selector publication. This
-reserves neither an owner nor capture-bank space. A separate explicit driver
-operation now accepts the terminal owner's call-borrowed neutral surface
-snapshot, freezes the exact selected candidate in one backend-global attempt
-slot, deep-validates that copy, constructs a sorted neutral LABEL plan, and
-makes exactly one advisory `RTE-LABEL-PREFLIGHT` call. It unconditionally
-scrubs the attempt, plan, header, and pointer scratch and retains no success
-token. Owner opening, candidate capture, materialization, and unified
-publication scheduling remain, so the driver is still output-inert.
+reserves neither an owner nor capture-bank space. The bound neutral driver later
+accepts the output adapter's call-borrowed surface snapshot, freezes the exact
+selected candidate in one backend-global attempt slot, deep-validates that
+copy, constructs a sorted neutral LABEL plan, and performs
+`RTE-LABEL-PREFLIGHT` immediately before owner admission. After admission it
+keeps only the pointer-free attempt and exact owner lifecycle needed to capture,
+settle, reveal, supersede, or retire that derived output. A rejected or stale
+attempt cannot erase a newer desired candidate, and an uncertain owner is
+dropped to a proven tombstone before its record or generation is reused.
+
+Materialization first commits the complete candidate hidden. A separate
+zero-operation shared transaction performs the final reveal only after every
+record in the cohort is staged and revalidated against the current surface and
+desired generations. Promotion stores each record `LIVE` and publishes the
+backend live epoch last. This is output bookkeeping over neutral UIDL—not a
+second scene API or an application recovery layer.
 
 The lower UIDL layer now supplies the first neutral semantic snapshot
 substrate independently of this adapter. `ED.SEMANTICS` selects a per-element
@@ -436,10 +459,12 @@ desired item banks, two positional identity banks, and two caller-owned
 snapshot banks, so a new complete candidate can replace the selected candidate
 atomically without allocating. Each combined slab has one additional final bank
 shared by the backend as its sole frozen-attempt slot: for binding capacity `C`,
-the physical bank count is checked `2*C + 1`, not three banks per binding. This
-does not change the current wire-inert state: no shipped UIDL has been
-bulk-annotated for optional rich-output eligibility, and the terminal-eligible
-candidate is not yet materialized. The eligibility check compares each LABEL
+the physical bank count is checked `2*C + 1`, not three banks per binding.
+Candidate construction itself remains wire-inert: no shipped UIDL has been
+bulk-annotated for optional rich-output eligibility, and the checked-in Desktop
+policy still advertises no retained family. When a product policy supplies an
+eligible family, the separately bound materializer owns admission and output.
+The eligibility check compares each LABEL
 declaration and the neutral semantic region, object, and UTF-8 bounds. It
 deliberately does not infer provider operation, retry-copy, or encoded-update
 costs. The explicit advisory materialization preflight now proves those
@@ -651,7 +676,7 @@ RTERM-UCTX-QUIESCE   ( binding-token backend -- status )
 RTERM-UCTX-DETACH    ( binding-token backend -- status )
 ```
 
-The renderer-neutral desired-scene input is defined separately in
+The renderer-neutral desired-projection input is defined separately in
 [UIDL-PROJECTION-CANDIDATE.md](UIDL-PROJECTION-CANDIDATE.md). Its caller-owned
 candidate items use stable UIDL element indices and copied semantic snapshots;
 they contain no engine, protocol, screen, Desk, or applet identity. Candidate
@@ -674,7 +699,7 @@ RTERM-HOST-BINDING-CAPTURE  ( host slot host-binding -- status )
 RTERM-UIDL-CONFIG-BYTES     ( -- bytes )  \ 104
 RTERM-UIDL-BINDING-BYTES    ( -- bytes )
                                             \ 384 per binding
-RTERM-UIDL-BACKEND-BYTES    ( -- bytes )  \ 496
+RTERM-UIDL-BACKEND-BYTES    ( -- bytes )  \ 512
 RTERM-UIDL-CANDIDATE-ITEM-BYTES ( -- bytes )  \ 128
 RTERM-UIDL-CANDIDATE-IDENTITY-BYTES ( -- bytes )  \ 32
 RTERM-UIDL-CONFIG-INIT
@@ -698,9 +723,9 @@ UCTX. The 104-byte initialization descriptor supplies the exact host, engine,
 384-byte binding-record slab, and caller-owned candidate storage geometry. Its
 record capacity determines exactly two item, two positional identity, and two
 snapshot banks per binding. Identity extent is derived from the existing item
-geometry, not from a compiled or additional product capacity. The 496-byte
+geometry, not from a compiled or additional product capacity. The 512-byte
 backend copies that geometry, contains one fixed-shape 160-byte limits scratch
-and one 160-byte neutral materialization-correlation record, and does not retain
+and one 176-byte neutral materialization-correlation record, and does not retain
 the descriptor or a provider limits pointer. Product
 composition may therefore clear the descriptor immediately after initialization.
 
@@ -717,9 +742,10 @@ generation, and terminal-checked region/object/UTF-8 quotas. Offsets 344 through
 375 retain neutral per-binding materialization state and exact staged/live
 generation correlations; offset 376 is reserved. The backend-global epoch and
 materialization attempt record retain only scalar correlation, never borrowed
-candidate pointers. This preparatory revision validates all of those new fields
-as cold/idle/none/zero, so they are not yet an owner reservation or proof that
-the caller-owned provider capture banks can admit the candidate.
+candidate pointers. Exact phases cover cold, cohort admission, opening, hidden
+settlement, reveal settlement, live output, finite drop, and terminal
+quarantine. Deep validation correlates every active phase with its one binding
+record and frozen attempt before provider mutation is trusted.
 
 Attach and geometry tracking remain local-only. Attach derives a bounded wire
 owner ID from the binding-record ordinal and uses the globally nonreused opaque
@@ -767,16 +793,13 @@ exactly once. That boundary revalidates current terminal limits, wire
 representability and arithmetic, dynamic owner/tombstone availability, and the
 exact caller-owned RTAPT owner, operation, and copied-byte capacity.
 
-Every ordinary result and caught throw scrubs the global attempt slot, borrowed
-inactive item scratch, header/limits scratch, and borrowed scalar and pointer
-cells. Success remains advisory and is not cached. Before any later
-`OWNER_OPEN` or retained capture, the mutating slice must freeze the then-current
-selected generation, rebuild the plan, and repeat preflight immediately before
-admission.
-
-The driver still creates no wire owner or tombstone and calls no mutating facade
-operation. In particular it must not open a default or root-region-only owner:
-`OWNER_OPEN` belongs to the later complete materialization/service slice.
+The explicit advisory entry scrubs the global attempt slot, borrowed inactive
+item scratch, header/limits scratch, and borrowed scalar and pointer cells; its
+success is not cached. The bound materializer independently freezes the
+then-current selected generation, rebuilds and revalidates the plan, and repeats
+preflight immediately before `OWNER_OPEN`. It retains exact pointer-free
+correlation across capture, hidden settlement, atomic reveal, supersession, and
+tombstone-proven retirement. It never opens a default or root-region-only owner.
 Construction and attach admit the exact declared application descriptor,
 component descriptor, and live component-state spans as well as the fixed host
 objects, and reject every alias with driver storage. Every public stateful
@@ -1140,16 +1163,27 @@ bank has one fixed-size identity record per candidate item, so both desired and
 attempt extents derive from that existing item/bank geometry and introduce no
 new product capacity; fixed one-per-composition records remain leaf-owned. Desk's
 neutral host lifecycle then initializes the UIDL driver against the exact live
-`AHOST`, clears the temporary UIDL configuration descriptor, installs the one
-post-UIDL callback, and finalizes it after child drain. Setup and release
-publish explicit phases, so a constructor or destructor refusal retains the
-smallest exact retry authority rather than clearing uncertain storage.
+`AHOST`, clears the temporary UIDL configuration descriptor, installs the
+driver's neutral `STEP` and `PREPARE` callbacks into the already-constructed
+output adapter, and installs the one post-UIDL callback. Child drain finalizes
+and zeros the UIDL backend; the immutable producer tuple remains bound to that
+stable allocation until the whole publisher is retired. The UIDL composition
+publishes `READY` only after both adapter and host callbacks are installed.
+Setup and release publish explicit phases, so a
+constructor or destructor refusal retains the smallest exact retry authority
+rather than clearing an uncertain terminal-output lifecycle.
 
 The name `desk-apt1.f` identifies that opt-in product composition, not a second
 Desk implementation or a rich Desk behavior. Both baseline and APT-1 products
 load the same `applets/desk/desk.f`; Desk supplies only neutral host-lifecycle
 hooks. App descriptors, UCTX, UIDL trees, and Desk layout behavior do not
 branch on regular versus rich rendering.
+
+Desk and applets remain ordinary, renderer-neutral UIDL producers. They do not
+call the APT-1 adapter, select a terminal renderer, or own the output
+materializer. `desk-apt1.f` is the outer product leaf that binds the neutral
+UIDL lifecycle callbacks to the APT-1 output adapter; that binding does not add
+a rich variant to Desk or any lower-level component.
 
 UIDL-TUI now presents `UTUI-VISIBLE!`, `UTUI-QUIESCE`, and `UTUI-DETACH` to
 Desk, app-shell, and applet-host. Those layers contain no adapter or provider
@@ -1171,28 +1205,25 @@ quotas, and complete START arithmetic before `OWNER_OPEN`. The lifecycle driver
 selects a complete deep-valid candidate together with private, retry-stable
 identities before negotiation, and separately records terminal-negotiated
 eligibility when the current limits permit it. A refusal preserves the selected
-candidate and mapping. The unified `RTAPTSCB` bridge now also admits one
-optional immutable, caller-bounded output producer. Its callbacks receive only
-the exact observed screen columns, rows, monotone geometry generation, and a
-composition-selected work budget. Engine reconciliation precedes each producer
-step, and a prepare callback runs immediately before an offered CELL begin.
-The bridge retains only canonical `more-work` and `output-needed` observations;
-it neither forces a screen snapshot nor schedules another service loop. The
-UIDL driver is not bound to that seam in this preparatory slice.
+candidate and mapping. The unified `RTAPTSCB` bridge admits one optional
+immutable, caller-bounded neutral output producer, and the APT-1 composition now
+binds the UIDL driver to that seam. Its callbacks receive only the exact observed
+screen columns, rows, monotone geometry generation, and a composition-selected
+work budget. Engine reconciliation precedes each producer `STEP`. The adapter
+always observes the current screen surface, but invokes `PREPARE` only when the
+producer has returned canonical `OUTPUT_NEEDED` and an output attempt is
+actually being offered. Thus an unrelated CELL flush does not manufacture a
+retained materialization attempt.
 
-The explicit advisory operation now freezes that
-candidate, constructs the sorted neutral plan from the supplied surface, invokes
-the landed preflight exactly once, and scrubs all attempt and plan scratch. It
-does not queue `OWNER_OPEN`, materialize a LABEL, or schedule through unified
-publication. The driver therefore remains output-inert and the production host
-advertises no retained policy.
-CELL output still traverses the unified publisher, while attach, project,
-geometry, quiesce, and detach exercise the exact private UCTX lifetime without
-opening a root-region-only wire owner. The next critical slice repeats the exact
-freeze, plan construction, and advisory preflight immediately before
-`OWNER_OPEN`, then retains the admitted attempt through candidate capture,
-settlement correlation, retirement, and unified CELL/retained publication
-scheduling.
+`STEP` may preflight and admit the newest complete candidate, retire a
+superseded owner, or advance hidden materialization within its caller-selected
+budget. `PREPARE` only freezes the already-scheduled output contribution for
+the shared transaction. The bridge carries canonical `more-work` and
+`output-needed` observations, schedules no recursive service loop, and latches
+the first fatal neutral producer or engine result across ordinary scheduling.
+Reconstruction or retirement clears that latch; synchronized teardown remains
+able to settle an already-admitted completion without scheduling new lifecycle
+work. None of these callbacks executes applet code or stores application state.
 
 Retained discovery is not a hosted-UCTX launch gate. The mandatory initial CELL
 snapshot is produced only after Desk initialization, so host composition,

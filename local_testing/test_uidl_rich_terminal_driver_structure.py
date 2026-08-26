@@ -2233,9 +2233,20 @@ def test_quiesce_detach_scrub_and_install_one_immutable_context() -> None:
     q_detached = quiesce.index("_RTERM-BINDING-ST-DETACHED = IF", q_lookup)
     q_states = quiesce.index("_RTERM-BINDING-ST-ATTACHED = SWAP", q_detached)
     q_live = quiesce.index("_RTERM-CALL-LIVE?", q_states)
-    q_status = quiesce.index("_RTERM-R.LAST-STATUS !", q_live)
+    q_materialized = quiesce.index("_RTERM-MAT-ST-NONE <> IF", q_live)
+    q_terminal = quiesce.index("_RTERM-EPOCH-QUARANTINED =", q_materialized)
+    q_quarantined = quiesce.index(
+        "_RTERM-MAT-ST-QUARANTINED = AND IF", q_terminal
+    )
+    q_local_release = quiesce.index(
+        "_RTERM-R.MAT-STATE 40 0 FILL", q_quarantined
+    )
+    q_retry = quiesce.index("_RTERM-PROJECT-SCHEDULE", q_local_release)
+    q_status = quiesce.index("_RTERM-R.LAST-STATUS !", q_retry)
     q_state = quiesce.index("_RTERM-R.STATE !", q_status)
-    assert q_lookup < q_detached < q_states < q_live < q_status < q_state
+    assert q_lookup < q_detached < q_states < q_live < q_materialized
+    assert q_materialized < q_terminal < q_quarantined < q_local_release
+    assert q_local_release < q_retry < q_status < q_state
     assert "_RTERM-BINDING-ST-QUIESCED = OR" in quiesce
 
     d_lookup = detach.index("_RTERM-CALL-LOOKUP")
