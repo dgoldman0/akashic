@@ -118,8 +118,22 @@ older desired scene, but `RTERM-UCTX-PROJECT` returns
 `RTERM-S-OK`. A build, validation, capacity, or caught-exception failure does
 not change the selector, so the previously selected candidate remains
 authoritative. Admission is the only place the driver performs the full RUPJ
-bank validation. This slice remains wire-inert: it neither calls the `RTE`
+bank validation. This slice remains output-inert: it neither calls the `RTE`
 facade nor assigns retained identities or materializes terminal objects.
-The next slice consumes this complete neutral LABEL recipe through the generic
-engine. It does not move scene ownership, output choice, or renderer-specific
-state into UIDL, UIDL-TUI, Desk, or applets.
+
+The downstream neutral boundary can now accept an aligned 160-byte LABEL value
+whose height and width are nonnegative and whose borrowed UTF-8 may begin at
+any byte address. Visible geometry must have positive extent and intersect the
+positive root. Invisible zero-extent or wholly off-root geometry is valid;
+RTAPT canonicalizes it to deterministic nonempty provider bounds while
+preserving invisibility and converts the clipped boundaries at full
+`UNORM32` precision. The borrowed text must be nonwrapping and disjoint from
+facade/provider storage. RTAPT copies it into an aligned, pointer-free retry
+record, maintains exact active/hidden/pending object and UTF-8 ledgers, and
+commits it through the typed PT LABEL writer.
+
+The lifecycle driver does not yet exercise that downstream path. The next
+slice assigns retained identities, applies negotiated admission, materializes
+the selected candidate, and schedules it through the unified CELL/retained
+publication lifecycle. None of that moves scene ownership, output choice, or
+renderer-specific state into UIDL, UIDL-TUI, Desk, or applets.

@@ -3,13 +3,12 @@
 \ =====================================================================
 \
 \  This internal composition ABI keeps UIDL lifecycle/projector code above
-\  concrete terminal engines.  This revision exposes the provider
-\  operations already implemented by RTAPT plus one immutable negotiated-
-\  limits snapshot.  Semantic snapshots and semantic object operations arrive
-\  with their projector slices.  The descriptor is caller-owned, immutable
-\  after provider
-\  construction, and carries one explicit provider context.  It owns no
-\  storage, transport, host, UCTX, Desk, or application authority.
+\  concrete terminal engines.  This revision exposes the bound provider's
+\  owner and transaction operations, one immutable negotiated-limits snapshot,
+\  and one call-borrowed neutral LABEL definition.  The descriptor
+\  is caller-owned, immutable after provider construction, and carries one
+\  explicit provider context.  It owns no storage, transport, host, UCTX,
+\  Desk, or application authority.
 \
 \  Prefix: RTE- (public), _RTE- (private)
 \  Provider: akashic-tui-rte1
@@ -42,7 +41,7 @@ REQUIRE ../../utils/memory-span.f
     6 U< ;
 
 \ Neutral retained feature families.  These are Akashic capability bits, not
-\ provider or wire values.  CORE is required; SERIES depends on INSTRUMENT.
+\ provider-specific values.  CORE is required; SERIES depends on INSTRUMENT.
 1  CONSTANT RTE-F-CORE
 2  CONSTANT RTE-F-VECTOR
 4  CONSTANT RTE-F-IMAGE
@@ -101,17 +100,17 @@ REQUIRE ../../utils/memory-span.f
 : RTE-LIMITS-MIN-INTERVAL-US@ ( l -- u )  _RTE-L.MIN-INTERVAL-US @ ;
 
 \ Neutral retained update vocabulary.  Values need not equal any provider's.
-1 CONSTANT RTE-RICH-DELTA
-2 CONSTANT RTE-RICH-REPLACE-START
-3 CONSTANT RTE-RICH-REPLACE-CONTINUE
-4 CONSTANT RTE-RICH-LAYOUT-START
-5 CONSTANT RTE-RICH-LAYOUT-CONTINUE
+1 CONSTANT RTE-RETAINED-DELTA
+2 CONSTANT RTE-RETAINED-REPLACE-START
+3 CONSTANT RTE-RETAINED-REPLACE-CONTINUE
+4 CONSTANT RTE-RETAINED-LAYOUT-START
+5 CONSTANT RTE-RETAINED-LAYOUT-CONTINUE
 
 0 CONSTANT RTE-COMMIT
 1 CONSTANT RTE-COMMIT-AND-REVEAL
 
-2 CONSTANT _RTE-ABI
-0x5254454641434132 CONSTANT _RTE-MAGIC  \ "RTEFACA2"
+3 CONSTANT _RTE-ABI
+0x5254454641434133 CONSTANT _RTE-MAGIC  \ "RTEFACA3"
 
 : _RTE-F.MAGIC          ( f -- a )       ;
 : _RTE-F.ABI            ( f -- a )   8 + ;
@@ -122,21 +121,55 @@ REQUIRE ../../utils/memory-span.f
 : _RTE-F.STATUS-XT      ( f -- a )  48 + ;
 : _RTE-F.OWNER-OPEN-XT  ( f -- a )  56 + ;
 : _RTE-F.OWNER-STATE-XT ( f -- a )  64 + ;
-: _RTE-F.RICH-BEGIN-XT  ( f -- a )  72 + ;
+: _RTE-F.RETAINED-BEGIN-XT  ( f -- a )  72 + ;
 : _RTE-F.REGION-DEF-XT  ( f -- a )  80 + ;
-: _RTE-F.RICH-SEAL-XT   ( f -- a )  88 + ;
-: _RTE-F.RICH-CANCEL-XT ( f -- a )  96 + ;
+: _RTE-F.RETAINED-SEAL-XT   ( f -- a )  88 + ;
+: _RTE-F.RETAINED-CANCEL-XT ( f -- a )  96 + ;
 : _RTE-F.OWNER-DROP-XT  ( f -- a ) 104 + ;
 : _RTE-F.LIMITS-XT      ( f -- a ) 112 + ;
-: _RTE-F.RESERVED       ( f -- a ) 120 + ;
+: _RTE-F.LABEL-DEF-XT   ( f -- a ) 120 + ;
+: _RTE-F.RESERVED       ( f -- a ) 128 + ;
 
-128 CONSTANT RTE-FACADE-SIZE
+136 CONSTANT RTE-FACADE-SIZE
 
 : RTE-FACADE-BYTES  ( -- bytes )  RTE-FACADE-SIZE ;
+
+\ A LABEL definition is a call-borrowed renderer-neutral value record.  Its
+\ geometry is expressed in integer cells relative to the projection root;
+\ providers perform any representation-specific conversion below this ABI.
+\ The text bytes are borrowed only for RTE-LABEL-DEFINE's dynamic extent.
+: _RTE-LABEL.OWNER       ( label -- a )        ;
+: _RTE-LABEL.GENERATION  ( label -- a )    8 + ;
+: _RTE-LABEL.OBJECT      ( label -- a )   16 + ;
+: _RTE-LABEL.REGION      ( label -- a )   24 + ;
+: _RTE-LABEL.PARENT      ( label -- a )   32 + ;
+: _RTE-LABEL.ROW         ( label -- a )   40 + ;
+: _RTE-LABEL.COL         ( label -- a )   48 + ;
+: _RTE-LABEL.HEIGHT      ( label -- a )   56 + ;
+: _RTE-LABEL.WIDTH       ( label -- a )   64 + ;
+: _RTE-LABEL.ROOT-HEIGHT ( label -- a )   72 + ;
+: _RTE-LABEL.ROOT-WIDTH  ( label -- a )   80 + ;
+: _RTE-LABEL.Z           ( label -- a )   88 + ;
+: _RTE-LABEL.VISIBLE     ( label -- a )   96 + ;
+: _RTE-LABEL.RGBA        ( label -- a )  104 + ;
+: _RTE-LABEL.H-ALIGN     ( label -- a )  112 + ;
+: _RTE-LABEL.V-ALIGN     ( label -- a )  120 + ;
+: _RTE-LABEL.ELLIPSIZE   ( label -- a )  128 + ;
+: _RTE-LABEL.TEXT-A      ( label -- a )  136 + ;
+: _RTE-LABEL.TEXT-U      ( label -- a )  144 + ;
+: _RTE-LABEL.RESERVED    ( label -- a )  152 + ;
+
+160 CONSTANT RTE-LABEL-SIZE
+
+: RTE-LABEL-BYTES  ( -- bytes )  RTE-LABEL-SIZE ;
 
 : _RTE-SPAN?  ( a u -- flag )
     OVER 0<> OVER 0> AND 0= IF 2DROP 0 EXIT THEN
     OVER 7 AND IF 2DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING? ;
+
+: _RTE-BYTE-SPAN?  ( a u -- flag )
+    OVER 0<> OVER 0> AND 0= IF 2DROP 0 EXIT THEN
     MSPAN-NONWRAPPING? ;
 
 : _RTE-BOOL?  ( x -- flag )
@@ -150,6 +183,148 @@ REQUIRE ../../utils/memory-span.f
 
 : _RTE-POSITIVE-EXACT?  ( value feature-present? -- flag )
     IF 0<> ELSE 0= THEN ;
+
+\ Return the signed sum only when native-cell addition is exact.  Geometry
+\ validation uses this before deciding whether a partially clipped rectangle
+\ intersects its root.
+: _RTE-SADD?  ( a b -- sum flag )
+    2DUP + >R
+    R@ XOR SWAP R@ XOR AND 0< IF
+        R> DROP 0 0 EXIT
+    THEN
+    R> -1 ;
+
+: _RTE-UTF8-CONT?  ( byte -- flag )
+    0xC0 AND 0x80 = ;
+
+\ Return the exact byte length of one admitted scalar, or zero.  LABEL text
+\ additionally excludes the three structural control bytes NUL, LF, and CR.
+: _RTE-LABEL-UTF8-ONE  ( a u -- bytes|0 )
+    DUP 0= IF 2DROP 0 EXIT THEN
+    OVER C@ DUP 0x80 < IF
+        DUP 0= OVER 10 = OR SWAP 13 = OR IF
+            2DROP 0 EXIT
+        THEN
+        2DROP 1 EXIT
+    THEN
+    DUP 0xC2 0xE0 WITHIN IF
+        DROP
+        DUP 2 < IF 2DROP 0 EXIT THEN
+        OVER 1+ C@ _RTE-UTF8-CONT? IF 2DROP 2 ELSE 2DROP 0 THEN
+        EXIT
+    THEN
+    DUP 0xE0 0xF0 WITHIN IF
+        >R
+        DUP 3 < IF 2DROP R> DROP 0 EXIT THEN
+        OVER 1+ C@
+        R@ 0xE0 = IF
+            0xA0 0xC0 WITHIN
+        ELSE
+            R@ 0xED = IF
+                0x80 0xA0 WITHIN
+            ELSE
+                _RTE-UTF8-CONT?
+            THEN
+        THEN
+        2 PICK 2 + C@ _RTE-UTF8-CONT? AND 0= IF
+            2DROP R> DROP 0 EXIT
+        THEN
+        2DROP R> DROP 3 EXIT
+    THEN
+    DUP 0xF0 0xF5 WITHIN IF
+        >R
+        DUP 4 < IF 2DROP R> DROP 0 EXIT THEN
+        OVER 1+ C@
+        R@ 0xF0 = IF
+            0x90 0xC0 WITHIN
+        ELSE
+            R@ 0xF4 = IF
+                0x80 0x90 WITHIN
+            ELSE
+                _RTE-UTF8-CONT?
+            THEN
+        THEN
+        2 PICK 2 + C@ _RTE-UTF8-CONT? AND
+        2 PICK 3 + C@ _RTE-UTF8-CONT? AND 0= IF
+            2DROP R> DROP 0 EXIT
+        THEN
+        2DROP R> DROP 4 EXIT
+    THEN
+    2DROP DROP 0 ;
+
+: _RTE-LABEL-TEXT-SPAN?  ( a u -- flag )
+    DUP 0= IF DROP 0= EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING? ;
+
+: _RTE-LABEL-TEXT?  ( a u -- flag )
+    2DUP _RTE-LABEL-TEXT-SPAN? 0= IF 2DROP 0 EXIT THEN
+    BEGIN DUP 0> WHILE
+        2DUP _RTE-LABEL-UTF8-ONE DUP 0= IF
+            DROP 2DROP 0 EXIT
+        THEN
+        /STRING
+    REPEAT
+    2DROP -1 ;
+
+VARIABLE _RTE-LG-LABEL
+VARIABLE _RTE-LG-ROW-END
+VARIABLE _RTE-LG-COL-END
+
+: _RTE-LG-FINISH  ( flag -- flag )
+    0 _RTE-LG-LABEL ! 0 _RTE-LG-ROW-END ! 0 _RTE-LG-COL-END ! ;
+
+: _RTE-LABEL-GEOMETRY?  ( label -- flag )
+    _RTE-LG-LABEL !
+    _RTE-LG-LABEL @ _RTE-LABEL.HEIGHT @ 0<
+    _RTE-LG-LABEL @ _RTE-LABEL.WIDTH @ 0< OR IF
+        0 _RTE-LG-FINISH EXIT
+    THEN
+    _RTE-LG-LABEL @ _RTE-LABEL.ROOT-HEIGHT @ 0> 0=
+    _RTE-LG-LABEL @ _RTE-LABEL.ROOT-WIDTH @ 0> 0= OR IF
+        0 _RTE-LG-FINISH EXIT
+    THEN
+    _RTE-LG-LABEL @ _RTE-LABEL.ROW @
+    _RTE-LG-LABEL @ _RTE-LABEL.HEIGHT @ _RTE-SADD? 0= IF
+        DROP 0 _RTE-LG-FINISH EXIT
+    THEN _RTE-LG-ROW-END !
+    _RTE-LG-LABEL @ _RTE-LABEL.COL @
+    _RTE-LG-LABEL @ _RTE-LABEL.WIDTH @ _RTE-SADD? 0= IF
+        DROP 0 _RTE-LG-FINISH EXIT
+    THEN _RTE-LG-COL-END !
+    _RTE-LG-LABEL @ _RTE-LABEL.VISIBLE @ IF
+        _RTE-LG-LABEL @ _RTE-LABEL.HEIGHT @ 0=
+        _RTE-LG-LABEL @ _RTE-LABEL.WIDTH @ 0= OR
+        _RTE-LG-LABEL @ _RTE-LABEL.ROW @
+            _RTE-LG-LABEL @ _RTE-LABEL.ROOT-HEIGHT @ < 0= OR
+        _RTE-LG-ROW-END @ 0> 0= OR
+        _RTE-LG-LABEL @ _RTE-LABEL.COL @
+            _RTE-LG-LABEL @ _RTE-LABEL.ROOT-WIDTH @ < 0= OR
+        _RTE-LG-COL-END @ 0> 0= OR IF
+            0 _RTE-LG-FINISH EXIT
+        THEN
+    THEN
+    -1 _RTE-LG-FINISH ;
+
+: _RTE-LABEL-FIELDS?  ( label -- flag )
+    DUP _RTE-LABEL.OWNER @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LABEL.GENERATION @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LABEL.OBJECT @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LABEL.REGION @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LABEL.PARENT @ OVER _RTE-LABEL.OBJECT @ = IF DROP 0 EXIT THEN
+    DUP _RTE-LABEL.VISIBLE @ _RTE-BOOL? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LABEL.RGBA @ 0xFFFFFFFF U> IF DROP 0 EXIT THEN
+    DUP _RTE-LABEL.H-ALIGN @ 3 U< 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LABEL.V-ALIGN @ 3 U< 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LABEL.ELLIPSIZE @ _RTE-BOOL? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LABEL.RESERVED @ IF DROP 0 EXIT THEN
+    _RTE-LABEL-GEOMETRY? ;
+
+: RTE-LABEL-VALID?  ( label -- flag )
+    DUP RTE-LABEL-SIZE _RTE-SPAN? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LABEL-FIELDS? 0= IF DROP 0 EXIT THEN
+    DUP _RTE-LABEL.TEXT-A @ SWAP _RTE-LABEL.TEXT-U @
+        _RTE-LABEL-TEXT? ;
 
 VARIABLE _RTE-LV-L
 VARIABLE _RTE-LV-FEATURES
@@ -283,11 +458,11 @@ VARIABLE _RTE-LV-FEATURES
     2DROP DROP ;
 
 : _RTE-MODE?  ( mode -- flag )
-    DUP RTE-RICH-DELTA =
-    OVER RTE-RICH-REPLACE-START = OR
-    OVER RTE-RICH-REPLACE-CONTINUE = OR
-    OVER RTE-RICH-LAYOUT-START = OR
-    SWAP RTE-RICH-LAYOUT-CONTINUE = OR ;
+    DUP RTE-RETAINED-DELTA =
+    OVER RTE-RETAINED-REPLACE-START = OR
+    OVER RTE-RETAINED-REPLACE-CONTINUE = OR
+    OVER RTE-RETAINED-LAYOUT-START = OR
+    SWAP RTE-RETAINED-LAYOUT-CONTINUE = OR ;
 
 : _RTE-DISPOSITION?  ( disposition -- flag )
     DUP RTE-COMMIT = SWAP RTE-COMMIT-AND-REVEAL = OR ;
@@ -303,18 +478,19 @@ VARIABLE _RTE-LV-FEATURES
     OVER _RTE-F.STATUS-XT @ 0= OR
     OVER _RTE-F.OWNER-OPEN-XT @ 0= OR
     OVER _RTE-F.OWNER-STATE-XT @ 0= OR
-    OVER _RTE-F.RICH-BEGIN-XT @ 0= OR
+    OVER _RTE-F.RETAINED-BEGIN-XT @ 0= OR
     OVER _RTE-F.REGION-DEF-XT @ 0= OR
-    OVER _RTE-F.RICH-SEAL-XT @ 0= OR
-    OVER _RTE-F.RICH-CANCEL-XT @ 0= OR
+    OVER _RTE-F.RETAINED-SEAL-XT @ 0= OR
+    OVER _RTE-F.RETAINED-CANCEL-XT @ 0= OR
     OVER _RTE-F.OWNER-DROP-XT @ 0= OR IF DROP 0 EXIT THEN
-    DUP _RTE-F.LIMITS-XT @ 0= IF DROP 0 EXIT THEN
+    DUP _RTE-F.LIMITS-XT @ 0=
+    OVER _RTE-F.LABEL-DEF-XT @ 0= OR IF DROP 0 EXIT THEN
     _RTE-F.RESERVED @ 0= ;
 
 : RTE-STORAGE-DISJOINT?  ( a u facade -- flag )
     DUP RTE-VALID? 0= IF _RTE-DROP3 0 EXIT THEN
     >R
-    2DUP _RTE-SPAN? 0= IF 2DROP R> DROP 0 EXIT THEN
+    2DUP _RTE-BYTE-SPAN? 0= IF 2DROP R> DROP 0 EXIT THEN
     2DUP R@ RTE-FACADE-SIZE MSPAN-OVERLAP? IF
         2DROP R> DROP 0 EXIT
     THEN
@@ -360,10 +536,10 @@ VARIABLE _RTE-LV-FEATURES
         2DROP RTE-OWNER-ST-FREE RTE-S-INVALID
     THEN ;
 
-: RTE-RICH-BEGIN  ( retained-mode facade -- status )
+: RTE-RETAINED-BEGIN  ( retained-mode facade -- status )
     OVER _RTE-MODE? 0= IF 2DROP RTE-S-INVALID EXIT THEN
     DUP RTE-VALID? 0= IF 2DROP RTE-S-INVALID EXIT THEN
-    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.RICH-BEGIN-XT @ EXECUTE
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.RETAINED-BEGIN-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
 
 : RTE-REGION-DEFINE
@@ -372,15 +548,36 @@ VARIABLE _RTE-LV-FEATURES
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.REGION-DEF-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
 
-: RTE-RICH-SEAL  ( disposition facade -- status )
-    OVER _RTE-DISPOSITION? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+: RTE-LABEL-DEFINE  ( label facade -- status )
     DUP RTE-VALID? 0= IF 2DROP RTE-S-INVALID EXIT THEN
-    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.RICH-SEAL-XT @ EXECUTE
+    OVER RTE-LABEL-SIZE _RTE-SPAN? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    OVER RTE-LABEL-SIZE 2 PICK RTE-STORAGE-DISJOINT? 0= IF
+        2DROP RTE-S-INVALID EXIT
+    THEN
+    OVER _RTE-LABEL.TEXT-A @ 2 PICK _RTE-LABEL.TEXT-U @
+        _RTE-LABEL-TEXT-SPAN? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    OVER _RTE-LABEL.TEXT-U @ IF
+        OVER _RTE-LABEL.TEXT-A @ 2 PICK _RTE-LABEL.TEXT-U @
+            2 PICK RTE-STORAGE-DISJOINT? 0= IF
+                2DROP RTE-S-INVALID EXIT
+            THEN
+    THEN
+    \ Dispatch proves bounded-span and scalar structure only.  The installed
+    \ provider owns negotiated length admission before its linear UTF-8 scan.
+    \ Imposing a facade-local text ceiling would violate caller-bounded design.
+    OVER _RTE-LABEL-FIELDS? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.LABEL-DEF-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
 
-: RTE-RICH-CANCEL  ( facade -- status )
+: RTE-RETAINED-SEAL  ( disposition facade -- status )
+    OVER _RTE-DISPOSITION? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    DUP RTE-VALID? 0= IF 2DROP RTE-S-INVALID EXIT THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.RETAINED-SEAL-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+: RTE-RETAINED-CANCEL  ( facade -- status )
     DUP RTE-VALID? 0= IF DROP RTE-S-INVALID EXIT THEN
-    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.RICH-CANCEL-XT @ EXECUTE
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.RETAINED-CANCEL-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
 
 : RTE-OWNER-DROP  ( owner generation facade -- status )

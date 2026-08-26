@@ -30,10 +30,10 @@ Desk, or any applet. An explicit composition may use that engine outside Desk
 and UIDL-TUI without acquiring a second protocol or session implementation.
 
 An immutable caller-owned `RTE` facade is the operation boundary above a
-concrete provider. It exposes neutral status, owner, transaction, region, and
-storage-disjoint operations plus one opaque provider context. Only the
-provider bridge names both vocabularies; generic UIDL code neither names nor
-loads `RTAPT`.
+concrete provider. It exposes neutral status, owner, transaction, region,
+LABEL-definition, and storage-disjoint operations plus one opaque provider
+context. Only the provider bridge names both vocabularies; generic UIDL code
+neither names nor loads `RTAPT`.
 
 Above it, UIDL-TUI owns a renderer-neutral optional-projection lifecycle. The
 rich-terminal driver implements that lifecycle's private adapter table and
@@ -148,10 +148,13 @@ RTE-LIMITS@            ( limits facade -- status )
 
 RTE-OWNER-OPEN         ( owner generation quotas... facade -- status )
 RTE-OWNER-STATE@       ( owner generation facade -- owner-state status )
-RTE-RICH-BEGIN         ( retained-mode facade -- status )
+RTE-RETAINED-BEGIN     ( retained-mode facade -- status )
 RTE-REGION-DEFINE      ( owner generation region geometry... facade -- status )
-RTE-RICH-SEAL          ( disposition facade -- status )
-RTE-RICH-CANCEL        ( facade -- status )
+RTE-LABEL-BYTES        ( -- bytes )
+RTE-LABEL-VALID?       ( label -- flag )
+RTE-LABEL-DEFINE       ( label facade -- status )
+RTE-RETAINED-SEAL      ( disposition facade -- status )
+RTE-RETAINED-CANCEL    ( facade -- status )
 RTE-OWNER-DROP         ( owner generation facade -- status )
 ```
 
@@ -163,13 +166,13 @@ provider storage before publishing it. The UIDL-TUI adapter depends only on
 `RTE`.
 
 The facade is the neutral boundary for RTAPT's currently implemented owner,
-transaction, region, status, and alias operations. It also exposes one
+transaction, region, LABEL, status, and alias operations. It also exposes one
 160-byte immutable negotiated-limits snapshot. The fixed record shape contains
 neutral feature-family bits and the terminal-supplied maxima for owner records,
 live owners, regions, resources, objects, series, operations per update, update
 bytes, resource chunks and total resource bytes, image dimensions, vector
 points, label and total UTF-8 bytes, series append/history/sample slots, and
-minimum presentation interval. Coordinate precision, color representation, and
+minimum update interval. Coordinate precision, color representation, and
 the first image representation are invariants of this facade revision rather
 than copied provider enum values.
 
@@ -188,6 +191,79 @@ The bridge maps every provider field and feature bit into the caller's neutral
 record, then scrubs all borrowed raw-record, provider-snapshot, engine, and
 destination pointers.
 
+`RTE-LABEL-DEFINE` accepts one aligned, call-borrowed 160-byte neutral record:
+
+| Offset | Field | Contract |
+| ---: | --- | --- |
+| 0 | owner | nonzero internal owner identity |
+| 8 | generation | nonzero owner generation |
+| 16 | object | nonzero object identity |
+| 24 | region | nonzero region identity |
+| 32 | parent | parent object identity, or zero |
+| 40 | row | signed integer row relative to the root |
+| 48 | column | signed integer column relative to the root |
+| 56 | height | nonnegative integer height |
+| 64 | width | nonnegative integer width |
+| 72 | root height | positive integer root height |
+| 80 | root width | positive integer root width |
+| 88 | z | signed paint-group order |
+| 96 | visible | canonical Forth boolean `0` or `-1` |
+| 104 | RGBA | packed numeric `0xRRGGBBAA` |
+| 112 | horizontal alignment | `0` start, `1` center, `2` end |
+| 120 | vertical alignment | `0` top, `1` middle, `2` bottom |
+| 128 | ellipsize | canonical Forth boolean `0` or `-1` |
+| 136 | text address | borrowed UTF-8 address |
+| 144 | text bytes | exact borrowed UTF-8 byte count |
+| 152 | reserved | zero |
+
+The coordinates are integer/root-relative semantic geometry, not a concrete
+provider's coordinate representation. Checked signed addition must prove the
+bottom and right edges. A visible LABEL must have positive height and width and
+a positive intersection with the root; negative row or column therefore
+remains valid for partial clipping. An invisible LABEL may have zero extent or
+lie completely outside the root. RTAPT deterministically canonicalizes that
+case to nonempty clipped provider bounds inside the root while preserving
+invisibility, then converts all clipped boundaries directly at full
+`UNORM32` precision.
+
+Text is well-formed UTF-8 scalar text without NUL, CR, or LF. Empty text has
+the single canonical representation `0 0`. A nonempty borrowed text span may
+begin at any byte address; it has no native-cell alignment requirement.
+`RTE-LABEL-VALID?` is the full pure value validator: when explicitly called, it
+checks every scalar and intrinsic span rule and scans the exact declared text
+bytes for scalar UTF-8 and the control-byte exclusions without mutating facade
+or provider state.
+
+`RTE-LABEL-DEFINE` deliberately performs bounded dispatch validation instead.
+It validates the aligned, nonwrapping, storage-disjoint record, all scalar and
+canonical fields, and the canonical nonwrapping text span, including its
+disjointness from facade and provider storage. It does not scan the borrowed
+content before dispatch, because its declared length has not yet been bounded
+by negotiated provider limits. The installed provider must first apply its
+negotiated per-LABEL length bound, then validate the admitted bytes for scalar
+UTF-8 and NUL/CR/LF exclusions. Those checks finish before text copy, captured
+operation mutation, or owner-ledger mutation; failure leaves all three
+unchanged. The facade and bridge retain neither borrowed pointer after the
+synchronous call.
+
+RTAPT captures an accepted definition into its aligned caller-owned copy bank
+as a fixed native header followed by the exact copied text and zero
+alignment padding. That retry authority is pointer-free. Its owner ledger
+tracks exact active, hidden, and pending object counts and UTF-8 byte totals,
+along with monotone object identity, across retained build modes and reveal.
+Commit revalidates the captured shape and sends it only through the typed
+`PT-LABEL-DEFINE` writer; no raw provider operation payload crosses the neutral
+facade.
+
+The safe first APT-1 provider slice accepts only a LABEL with `parent=0` and
+only a region identity defined earlier in the same captured candidate. Region
+and object identities may remain sparse; neither capture nor preflight infers
+existence from a dense count or high-water range. References to an already
+committed region and nonroot GROUP parents wait for caller-bounded exact
+active/hidden identity-and-type ledgers. The neutral RTE LABEL record keeps its
+`parent` field and general region identity unchanged; this is a current
+provider-admission restriction, not a contraction of the facade schema.
+
 The renderer-neutral candidate projector can now measure and copy supported
 UIDL semantics into caller-owned banks, and the lifecycle driver now admits a
 complete build into one of two banks belonging to the exact private binding.
@@ -203,10 +279,11 @@ record with effective visibility and paint-group z. Each admitted 128-byte
 RUPJ item now carries that record root-relative when it is available, while
 preserving semantic LABEL membership with a zero resolved payload when it is
 not. The projector and driver still invoke no facade operation, including the
-limits callback. The next blocker is generic-engine LABEL materialization.
-Region replacement, retained identity, negotiated admission, and wire
-publication remain later work; the current lifecycle slice is still
-wire-inert.
+limits or LABEL callbacks. The neutral RTE/RTAPT boundary can now validate,
+capture, retry, and typed-dispatch one complete LABEL definition, but candidate
+identity, negotiated admission, lifecycle materialization, and unified
+publication scheduling remain. The current lifecycle driver is therefore
+still output-inert.
 
 The lower UIDL layer now supplies the first neutral semantic snapshot
 substrate independently of this adapter. `ED.SEMANTICS` selects a per-element
@@ -325,12 +402,13 @@ the new document reuses every `id=` string.
 
 Bounds come from resolved UIDL layout and are copied into the candidate
 relative to its root. The selected candidate metadata carries the positive
-root height and width used to normalize and validate those bounds. The later
-materializer converts checked geometry to the retained profile's full
-`UNORM32` precision; it must not truncate through an incidental narrower
-normalized format. Region movement changes the private owner region. Layout
-changes may replace derived object geometry while preserving element and wire
-identities. Applications do not maintain parallel coordinates.
+root height and width used to normalize and validate those bounds. When a
+materializer submits that neutral geometry, the RTAPT provider converts it
+directly to the retained profile's full `UNORM32` precision; it does not
+truncate through an incidental narrower normalized format. Region movement
+changes the private owner region. Layout changes may replace derived object
+geometry while preserving element and wire identities. Applications do not
+maintain parallel coordinates.
 
 ### 5.3 Static and dynamic state
 
@@ -601,9 +679,10 @@ projection recipe authoritative while UIDL and CELL state remain untouched.
 An accepted empty recipe supersedes the former candidate but reports
 `RTERM-S-UNAVAILABLE`; an accepted nonempty recipe reports `RTERM-S-OK`.
 No protocol byte is emitted from an element or widget callback. Layout/style
-state is now part of the locally accepted desired recipe; generic-engine LABEL
-materialization remains necessary before it can become retained terminal
-state.
+state is now part of the locally accepted desired recipe. The neutral
+RTE/RTAPT LABEL path exists below it, but candidate-to-engine materialization
+and scheduling through the unified publisher remain necessary before the
+recipe can become retained terminal state.
 
 The first materialization in an epoch is a complete projection obligation, not
 an ordinary dirty-element update. Transition to retained availability, and
@@ -759,11 +838,11 @@ painting a dirty attached UCTX also stages its retained projection. The global
 screen flush and internal retained backend then serialize through the one APT
 output publisher and the one shared transaction-ID/revision clock.
 
-When one logical UI frame changes both CELL and retained state, the rich
-publisher commits the applicable CELL spans/cursor and retained operations in
-one atomic `PRESENT` transaction. A failed combined commit cannot advance the
-screen front buffer or the retained materialization independently. A frame
-with no retained changes remains an ordinary valid CELL transaction; a
+When one logical UI frame changes both CELL and retained state, the unified
+output publisher commits the applicable CELL spans/cursor and retained
+operations in one atomic `PRESENT` transaction. A failed combined commit cannot
+advance the screen front buffer or the retained materialization independently.
+A frame with no retained changes remains an ordinary valid CELL transaction; a
 retained-only update may use `CELL_NONE` under the wire recovery rules.
 
 The backend serializes dependencies before references and preserves static
@@ -859,13 +938,16 @@ tuple, while a later plain Desk constructor cannot resurrect a partial rich
 composition after the outer storage was released.
 
 That construction does not itself claim retained semantic support. The
-lifecycle driver now owns and atomically admits neutral candidates, but no
-materializer yet couples them through `RTE`; the driver therefore remains
-wire-inert and the production host advertises no retained policy. CELL output
-still traverses the unified publisher, while attach, project, geometry,
-quiesce, and detach exercise the exact private UCTX lifetime without opening a
-root-region-only wire owner. The next critical slice is generic-engine LABEL
-materialization from the admitted semantic and resolved candidate state.
+provider side now accepts a neutral LABEL through `RTE`, captures a
+pointer-free RTAPT retry record with exact object/UTF-8 ledgers, and dispatches
+it through the typed PT writer. No lifecycle materializer yet assigns retained
+identity and couples a selected candidate through that path, and no service
+schedules the result through unified publication. The driver therefore
+remains output-inert and the production host advertises no retained policy.
+CELL output still traverses the unified publisher, while attach, project,
+geometry, quiesce, and detach exercise the exact private UCTX lifetime without
+opening a root-region-only wire owner. The next critical slice is candidate
+materialization and unified CELL/retained publication scheduling.
 
 Retained discovery is not a hosted-UCTX launch gate. The mandatory initial CELL
 snapshot is produced only after Desk initialization, so host composition,

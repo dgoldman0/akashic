@@ -102,14 +102,17 @@ PT-COMMIT-AND-REVEAL CONSTANT RTAPT-COMMIT-AND-REVEAL
 : RTAPT-LIMITS-BYTES  ( -- bytes )  RTAPT-LIMITS-SIZE ;
 
 1 CONSTANT _RTAPT-OP-REGION-DEFINE
+2 CONSTANT _RTAPT-OP-LABEL-DEFINE
 72 CONSTANT _RTAPT-REGION-DEFINE-COPY-SIZE
 88 CONSTANT _RTAPT-REGION-DEFINE-FRAME-BYTES
+128 CONSTANT _RTAPT-LABEL-DEFINE-COPY-FIXED
+120 CONSTANT _RTAPT-LABEL-DEFINE-FRAME-FIXED
 
 \ The operation record stores a typed operation kind and an offset/length into
 \ the separately bounded copy span.  No operation or copy capacity is compiled
 \ into the engine.
 24 CONSTANT RTAPT-OP-SIZE
-144 CONSTANT RTAPT-OWNER-SIZE
+208 CONSTANT RTAPT-OWNER-SIZE
 64 CONSTANT RTAPT-CONFIG-SIZE
 496 CONSTANT RTAPT-ENGINE-SIZE
 
@@ -160,6 +163,14 @@ PT-COMMIT-AND-REVEAL CONSTANT RTAPT-COMMIT-AND-REVEAL
 : _RTAPT-O.REGION-HIGH ( o -- a ) 120 + ;
 : _RTAPT-O.PENDING-REGIONS ( o -- a ) 128 + ;
 : _RTAPT-O.PENDING-REGION-HIGH ( o -- a ) 136 + ;
+: _RTAPT-O.ACTIVE-OBJECTS ( o -- a ) 144 + ;
+: _RTAPT-O.HIDDEN-OBJECTS ( o -- a ) 152 + ;
+: _RTAPT-O.OBJECT-HIGH ( o -- a ) 160 + ;
+: _RTAPT-O.ACTIVE-UTF8 ( o -- a ) 168 + ;
+: _RTAPT-O.HIDDEN-UTF8 ( o -- a ) 176 + ;
+: _RTAPT-O.PENDING-OBJECTS ( o -- a ) 184 + ;
+: _RTAPT-O.PENDING-OBJECT-HIGH ( o -- a ) 192 + ;
+: _RTAPT-O.PENDING-UTF8 ( o -- a ) 200 + ;
 
 \ Captured operation records contain no borrowed caller pointer.  COPY-OFF is
 \ relative to the engine's caller-owned copy bank and COPY-U is exact for the
@@ -179,6 +190,27 @@ PT-COMMIT-AND-REVEAL CONSTANT RTAPT-COMMIT-AND-REVEAL
 : _RTAPT-RD.ROWS       ( r -- a )  48 + ;
 : _RTAPT-RD.Z          ( r -- a )  56 + ;
 : _RTAPT-RD.FLAGS      ( r -- a )  64 + ;
+
+\ LABEL_DEFINE retry authority stores PT-ready normalized geometry and one
+\ packed neutral RGBA value.  The exact copied text follows the fixed header;
+\ no captured operation retains the caller's source pointer.
+: _RTAPT-LD.OWNER      ( l -- a )       ;
+: _RTAPT-LD.GENERATION ( l -- a )   8 + ;
+: _RTAPT-LD.OBJECT     ( l -- a )  16 + ;
+: _RTAPT-LD.REGION     ( l -- a )  24 + ;
+: _RTAPT-LD.PARENT     ( l -- a )  32 + ;
+: _RTAPT-LD.LEFT       ( l -- a )  40 + ;
+: _RTAPT-LD.TOP        ( l -- a )  48 + ;
+: _RTAPT-LD.RIGHT      ( l -- a )  56 + ;
+: _RTAPT-LD.BOTTOM     ( l -- a )  64 + ;
+: _RTAPT-LD.Z          ( l -- a )  72 + ;
+: _RTAPT-LD.VISIBLE    ( l -- a )  80 + ;
+: _RTAPT-LD.RGBA       ( l -- a )  88 + ;
+: _RTAPT-LD.H-ALIGN    ( l -- a )  96 + ;
+: _RTAPT-LD.V-ALIGN    ( l -- a ) 104 + ;
+: _RTAPT-LD.ELLIPSIZE  ( l -- a ) 112 + ;
+: _RTAPT-LD.TEXT-U     ( l -- a ) 120 + ;
+: _RTAPT-LD.TEXT       ( l -- a ) 128 + ;
 
 \ Fixed engine metadata is followed by one PT completion descriptor and one
 \ typed limits snapshot.  Both are part of the engine span; neither exposes PT
@@ -409,6 +441,16 @@ VARIABLE _RTAPT-EV-P
 : _RTAPT-UADD?  ( a b -- sum flag )
     OVER + DUP ROT U< 0= ;
 
+: _RTAPT-ALIGN8?  ( u -- aligned-u flag )
+    7 _RTAPT-UADD? 0= IF DROP 0 0 EXIT THEN
+    -8 AND -1 ;
+
+: _RTAPT-ZERO-SPAN?  ( a u -- flag )
+    0 ?DO
+        DUP I + C@ IF DROP 0 UNLOOP EXIT THEN
+    LOOP
+    DROP -1 ;
+
 : _RTAPT-UMUL?  ( a b -- product flag )
     UM* DUP IF 2DROP 0 0 EXIT THEN DROP -1 ;
 
@@ -421,6 +463,10 @@ VARIABLE _RTAPT-BV-OFF
 VARIABLE _RTAPT-BV-NEXT
 VARIABLE _RTAPT-BV-RET
 VARIABLE _RTAPT-BV-P
+VARIABLE _RTAPT-BV-COPY
+VARIABLE _RTAPT-BV-COPY-U
+VARIABLE _RTAPT-BV-FRAME
+VARIABLE _RTAPT-BV-RAW-U
 
 : _RTAPT-CAPTURED-BANKS?  ( engine -- flag )
     DUP _RTAPT-BV-E !
@@ -432,18 +478,45 @@ VARIABLE _RTAPT-BV-P
     0 _RTAPT-BV-OFF ! 0 _RTAPT-BV-RET !
     _RTAPT-BV-E @ _RTAPT-E.OP-COUNT @ 0 ?DO
         I _RTAPT-BV-E @ _RTAPT-OP-NTH DUP _RTAPT-BV-P !
-        _RTAPT-P.KIND @ _RTAPT-OP-REGION-DEFINE <> IF 0 UNLOOP EXIT THEN
         _RTAPT-BV-P @ _RTAPT-P.COPY-OFF @ _RTAPT-BV-OFF @ <>
             IF 0 UNLOOP EXIT THEN
-        _RTAPT-BV-P @ _RTAPT-P.COPY-U @
-            _RTAPT-REGION-DEFINE-COPY-SIZE <> IF 0 UNLOOP EXIT THEN
-        _RTAPT-BV-OFF @ _RTAPT-REGION-DEFINE-COPY-SIZE _RTAPT-UADD?
+        _RTAPT-BV-P @ _RTAPT-P.COPY-U @ DUP 0= IF
+            DROP 0 UNLOOP EXIT
+        THEN _RTAPT-BV-COPY-U !
+        _RTAPT-BV-OFF @ _RTAPT-BV-COPY-U @ _RTAPT-UADD?
             0= IF DROP 0 UNLOOP EXIT THEN DUP _RTAPT-BV-NEXT !
         _RTAPT-BV-E @ _RTAPT-E.COPY-USED @ U> IF 0 UNLOOP EXIT THEN
         _RTAPT-BV-NEXT @ _RTAPT-BV-E @ _RTAPT-E.COPY-U @ U>
             IF 0 UNLOOP EXIT THEN
+        _RTAPT-BV-E @ _RTAPT-E.COPY-A @ _RTAPT-BV-OFF @ +
+            _RTAPT-BV-COPY !
+        _RTAPT-BV-P @ _RTAPT-P.KIND @ _RTAPT-OP-REGION-DEFINE = IF
+            _RTAPT-BV-COPY-U @ _RTAPT-REGION-DEFINE-COPY-SIZE <>
+                IF 0 UNLOOP EXIT THEN
+            _RTAPT-REGION-DEFINE-FRAME-BYTES _RTAPT-BV-FRAME !
+        ELSE
+            _RTAPT-BV-P @ _RTAPT-P.KIND @ _RTAPT-OP-LABEL-DEFINE <>
+                IF 0 UNLOOP EXIT THEN
+            _RTAPT-BV-COPY-U @ _RTAPT-LABEL-DEFINE-COPY-FIXED U<
+                IF 0 UNLOOP EXIT THEN
+            _RTAPT-BV-COPY @ _RTAPT-LD.TEXT-U @ _RTAPT-U32? 0=
+                IF 0 UNLOOP EXIT THEN
+            _RTAPT-BV-COPY @ _RTAPT-LD.TEXT-U @
+                _RTAPT-LABEL-DEFINE-COPY-FIXED _RTAPT-UADD? 0= IF
+                DROP 0 UNLOOP EXIT
+            THEN DUP _RTAPT-BV-RAW-U ! _RTAPT-ALIGN8? 0= IF
+                DROP 0 UNLOOP EXIT
+            THEN _RTAPT-BV-COPY-U @ <> IF 0 UNLOOP EXIT THEN
+            _RTAPT-BV-COPY @ _RTAPT-BV-RAW-U @ +
+            _RTAPT-BV-COPY-U @ _RTAPT-BV-RAW-U @ -
+                _RTAPT-ZERO-SPAN? 0= IF 0 UNLOOP EXIT THEN
+            _RTAPT-BV-COPY @ _RTAPT-LD.TEXT-U @
+                _RTAPT-LABEL-DEFINE-FRAME-FIXED _RTAPT-UADD? 0= IF
+                DROP 0 UNLOOP EXIT
+            THEN _RTAPT-BV-FRAME !
+        THEN
         _RTAPT-BV-NEXT @ _RTAPT-BV-OFF !
-        _RTAPT-BV-RET @ _RTAPT-REGION-DEFINE-FRAME-BYTES _RTAPT-UADD?
+        _RTAPT-BV-RET @ _RTAPT-BV-FRAME @ _RTAPT-UADD?
             0= IF DROP 0 UNLOOP EXIT THEN _RTAPT-BV-RET !
     LOOP
     _RTAPT-BV-OFF @ _RTAPT-BV-E @ _RTAPT-E.COPY-USED @ =
@@ -584,6 +657,41 @@ VARIABLE _RTAPT-LV-E
 VARIABLE _RTAPT-LV-PENDING
 VARIABLE _RTAPT-LV-O
 
+VARIABLE _RTAPT-TB-ACTIVE
+VARIABLE _RTAPT-TB-HIDDEN
+VARIABLE _RTAPT-TB-PENDING
+VARIABLE _RTAPT-TB-QUOTA
+VARIABLE _RTAPT-TB-E
+
+: _RTAPT-TARGET-BASE  ( active hidden engine -- count )
+    _RTAPT-TB-E ! _RTAPT-TB-HIDDEN ! _RTAPT-TB-ACTIVE !
+    _RTAPT-TB-E @ _RTAPT-E.RET-MODE @ DUP PT-RET-DELTA =
+    OVER PT-RET-LAYOUT-START = OR IF
+        DROP _RTAPT-TB-ACTIVE @ EXIT
+    THEN
+    PT-RET-REPLACE-START = IF 0 EXIT THEN
+    _RTAPT-TB-HIDDEN @ ;
+
+: _RTAPT-TARGET-COUNT?  ( active hidden pending quota engine -- flag )
+    _RTAPT-TB-E ! _RTAPT-TB-QUOTA ! _RTAPT-TB-PENDING !
+    _RTAPT-TB-HIDDEN ! _RTAPT-TB-ACTIVE !
+    _RTAPT-TB-ACTIVE @ _RTAPT-TB-QUOTA @ U>
+    _RTAPT-TB-HIDDEN @ _RTAPT-TB-QUOTA @ U> OR
+    _RTAPT-TB-PENDING @ _RTAPT-TB-QUOTA @ U> OR IF 0 EXIT THEN
+    _RTAPT-TB-ACTIVE @ _RTAPT-TB-HIDDEN @ _RTAPT-TB-E @
+        _RTAPT-TARGET-BASE
+    _RTAPT-TB-PENDING @ _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
+    _RTAPT-TB-QUOTA @ U> 0= ;
+
+VARIABLE _RTAPT-LH-HIGH
+VARIABLE _RTAPT-LH-PENDING
+VARIABLE _RTAPT-LH-PENDING-HIGH
+
+: _RTAPT-PENDING-HIGH?  ( high pending pending-high -- flag )
+    _RTAPT-LH-PENDING-HIGH ! _RTAPT-LH-PENDING ! _RTAPT-LH-HIGH !
+    _RTAPT-LH-PENDING @ 0= IF _RTAPT-LH-PENDING-HIGH @ 0= EXIT THEN
+    _RTAPT-LH-PENDING-HIGH @ _RTAPT-LH-HIGH @ U> ;
+
 : _RTAPT-OWNER-LEDGERS?  ( engine -- flag )
     DUP _RTAPT-LV-E ! 0 _RTAPT-LV-PENDING !
     _RTAPT-LV-E @ _RTAPT-E.OWNER-CAP @ 0 ?DO
@@ -593,39 +701,78 @@ VARIABLE _RTAPT-LV-O
             _RTAPT-LV-O @ _RTAPT-O.HIDDEN-REGIONS @ OR
             _RTAPT-LV-O @ _RTAPT-O.REGION-HIGH @ OR
             _RTAPT-LV-O @ _RTAPT-O.PENDING-REGIONS @ OR
-            _RTAPT-LV-O @ _RTAPT-O.PENDING-REGION-HIGH @ OR IF
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-REGION-HIGH @ OR
+            _RTAPT-LV-O @ _RTAPT-O.ACTIVE-OBJECTS @ OR
+            _RTAPT-LV-O @ _RTAPT-O.HIDDEN-OBJECTS @ OR
+            _RTAPT-LV-O @ _RTAPT-O.OBJECT-HIGH @ OR
+            _RTAPT-LV-O @ _RTAPT-O.ACTIVE-UTF8 @ OR
+            _RTAPT-LV-O @ _RTAPT-O.HIDDEN-UTF8 @ OR
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-OBJECTS @ OR
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-OBJECT-HIGH @ OR
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-UTF8 @ OR IF
                 0 UNLOOP EXIT
             THEN
         ELSE
             _RTAPT-LV-O @ _RTAPT-O.ACTIVE-REGIONS @
-                _RTAPT-LV-O @ _RTAPT-O.REGIONS @ U> IF 0 UNLOOP EXIT THEN
             _RTAPT-LV-O @ _RTAPT-O.HIDDEN-REGIONS @
-                _RTAPT-LV-O @ _RTAPT-O.REGIONS @ U> IF 0 UNLOOP EXIT THEN
-            _RTAPT-LV-O @ _RTAPT-O.PENDING-REGIONS @ DUP
-                _RTAPT-LV-O @ _RTAPT-O.REGIONS @ U> IF DROP 0 UNLOOP EXIT THEN
-            _RTAPT-LV-E @ _RTAPT-E.RET-MODE @ DUP PT-RET-DELTA =
-            OVER PT-RET-LAYOUT-START = OR IF
-                DROP _RTAPT-LV-O @ _RTAPT-O.ACTIVE-REGIONS @
-            ELSE PT-RET-REPLACE-START = IF
-                0
-            ELSE
-                _RTAPT-LV-O @ _RTAPT-O.HIDDEN-REGIONS @
-            THEN THEN
-            OVER _RTAPT-UADD? 0= IF 2DROP 0 UNLOOP EXIT THEN
-            _RTAPT-LV-O @ _RTAPT-O.REGIONS @ U> IF DROP 0 UNLOOP EXIT THEN
-            DUP 0= IF
-                DROP _RTAPT-LV-O @ _RTAPT-O.PENDING-REGION-HIGH @ IF
-                    0 UNLOOP EXIT
-                THEN
-            ELSE
-                _RTAPT-LV-O @ _RTAPT-O.PENDING-REGION-HIGH @
-                _RTAPT-LV-O @ _RTAPT-O.REGION-HIGH @ U< 0= IF
-                    DROP 0 UNLOOP EXIT
-                THEN
-                _RTAPT-LV-PENDING @ SWAP _RTAPT-UADD? 0= IF
-                    DROP 0 UNLOOP EXIT
-                THEN _RTAPT-LV-PENDING !
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-REGIONS @
+            _RTAPT-LV-O @ _RTAPT-O.REGIONS @ _RTAPT-LV-E @
+                _RTAPT-TARGET-COUNT? 0= IF 0 UNLOOP EXIT THEN
+            _RTAPT-LV-O @ _RTAPT-O.REGION-HIGH @
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-REGIONS @
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-REGION-HIGH @
+                _RTAPT-PENDING-HIGH? 0= IF 0 UNLOOP EXIT THEN
+
+            _RTAPT-LV-O @ _RTAPT-O.ACTIVE-OBJECTS @
+            _RTAPT-LV-O @ _RTAPT-O.HIDDEN-OBJECTS @
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-OBJECTS @
+            _RTAPT-LV-O @ _RTAPT-O.OBJECTS @ _RTAPT-LV-E @
+                _RTAPT-TARGET-COUNT? 0= IF 0 UNLOOP EXIT THEN
+            _RTAPT-LV-O @ _RTAPT-O.OBJECT-HIGH @
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-OBJECTS @
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-OBJECT-HIGH @
+                _RTAPT-PENDING-HIGH? 0= IF 0 UNLOOP EXIT THEN
+
+            \ Every retained object belongs to a region.  This first object
+            \ slice captures LABEL only, and each staged LABEL has already
+            \ proved an exact staged REGION, so the same implication holds
+            \ independently for active, hidden, and pending targets.
+            _RTAPT-LV-O @ _RTAPT-O.ACTIVE-REGIONS @ 0=
+            _RTAPT-LV-O @ _RTAPT-O.ACTIVE-OBJECTS @ 0<> AND
+                IF 0 UNLOOP EXIT THEN
+            _RTAPT-LV-O @ _RTAPT-O.HIDDEN-REGIONS @ 0=
+            _RTAPT-LV-O @ _RTAPT-O.HIDDEN-OBJECTS @ 0<> AND
+                IF 0 UNLOOP EXIT THEN
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-REGIONS @ 0=
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-OBJECTS @ 0<> AND
+                IF 0 UNLOOP EXIT THEN
+
+            \ A zero-text LABEL contributes an object but no UTF-8 bytes.
+            \ The reverse state is impossible.
+            _RTAPT-LV-O @ _RTAPT-O.ACTIVE-OBJECTS @ 0=
+            _RTAPT-LV-O @ _RTAPT-O.ACTIVE-UTF8 @ 0<> AND
+                IF 0 UNLOOP EXIT THEN
+            _RTAPT-LV-O @ _RTAPT-O.HIDDEN-OBJECTS @ 0=
+            _RTAPT-LV-O @ _RTAPT-O.HIDDEN-UTF8 @ 0<> AND
+                IF 0 UNLOOP EXIT THEN
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-OBJECTS @ 0=
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-UTF8 @ 0<> AND IF
+                0 UNLOOP EXIT
             THEN
+
+            _RTAPT-LV-O @ _RTAPT-O.ACTIVE-UTF8 @
+            _RTAPT-LV-O @ _RTAPT-O.HIDDEN-UTF8 @
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-UTF8 @
+            _RTAPT-LV-O @ _RTAPT-O.UTF8-BYTES @ _RTAPT-LV-E @
+                _RTAPT-TARGET-COUNT? 0= IF 0 UNLOOP EXIT THEN
+
+            _RTAPT-LV-PENDING @
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-REGIONS @ _RTAPT-UADD? 0= IF
+                DROP 0 UNLOOP EXIT
+            THEN
+            _RTAPT-LV-O @ _RTAPT-O.PENDING-OBJECTS @ _RTAPT-UADD? 0= IF
+                DROP 0 UNLOOP EXIT
+            THEN _RTAPT-LV-PENDING !
         THEN
     LOOP
     _RTAPT-LV-PENDING @ _RTAPT-LV-E @ _RTAPT-E.OP-COUNT @ = ;
@@ -800,6 +947,9 @@ VARIABLE _RTAPT-QA-O
             0 _RTAPT-QA-O @ _RTAPT-O.NEXT !
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-REGIONS !
             0 _RTAPT-QA-O @ _RTAPT-O.PENDING-REGION-HIGH !
+            0 _RTAPT-QA-O @ _RTAPT-O.PENDING-OBJECTS !
+            0 _RTAPT-QA-O @ _RTAPT-O.PENDING-OBJECT-HIGH !
+            0 _RTAPT-QA-O @ _RTAPT-O.PENDING-UTF8 !
         THEN
     LOOP
     0 _RTAPT-QA-E @ _RTAPT-E.QUEUE-HEAD !
@@ -1251,7 +1401,10 @@ VARIABLE _RTAPT-BC-E
     _RTAPT-BC-E @ _RTAPT-E.OWNER-CAP @ 0 ?DO
         _RTAPT-BC-E @ _RTAPT-E.OWNERS-A @ I RTAPT-OWNER-SIZE * +
         DUP _RTAPT-O.PENDING-REGIONS OFF
-        _RTAPT-O.PENDING-REGION-HIGH OFF
+        DUP _RTAPT-O.PENDING-REGION-HIGH OFF
+        DUP _RTAPT-O.PENDING-OBJECTS OFF
+        DUP _RTAPT-O.PENDING-OBJECT-HIGH OFF
+        _RTAPT-O.PENDING-UTF8 OFF
     LOOP DROP ;
 
 : _RTAPT-UPDATE-METADATA-CLEAR  ( engine -- )
@@ -1301,7 +1454,8 @@ VARIABLE _RTAPT-SD-E
 : RTAPT-STORAGE-DISJOINT?  ( a u engine -- flag )
     _RTAPT-SD-E ! _RTAPT-SD-U ! _RTAPT-SD-A !
     _RTAPT-SD-E @ _RTAPT-ENGINE-VALID? 0= IF 0 EXIT THEN
-    _RTAPT-SD-A @ _RTAPT-SD-U @ _RTAPT-SPAN? 0= IF 0 EXIT THEN
+    _RTAPT-SD-A @ 0= _RTAPT-SD-U @ 0= OR IF 0 EXIT THEN
+    _RTAPT-SD-A @ _RTAPT-SD-U @ MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
     _RTAPT-SD-A @ _RTAPT-SD-U @ _RTAPT-SD-E @ _RTAPT-E.SESSION @
         PT-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
     _RTAPT-SD-A @ _RTAPT-SD-U @ _RTAPT-SD-E @ RTAPT-ENGINE-SIZE
@@ -1315,6 +1469,30 @@ VARIABLE _RTAPT-SD-E
     _RTAPT-SD-A @ _RTAPT-SD-U @
         _RTAPT-SD-E @ _RTAPT-E.COPY-A @
         _RTAPT-SD-E @ _RTAPT-E.COPY-U @ MSPAN-OVERLAP? 0= ;
+
+VARIABLE _RTAPT-BSD-A
+VARIABLE _RTAPT-BSD-U
+VARIABLE _RTAPT-BSD-E
+
+\ Borrowed text is a byte span, not a construction record.  The caller has
+\ already proved ENGINE valid before entering this private nonalias check.
+: _RTAPT-BYTE-SPAN-DISJOINT?  ( a u engine -- flag )
+    _RTAPT-BSD-E ! _RTAPT-BSD-U ! _RTAPT-BSD-A !
+    _RTAPT-BSD-A @ 0= _RTAPT-BSD-U @ 0= OR IF 0 EXIT THEN
+    _RTAPT-BSD-A @ _RTAPT-BSD-U @ MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _RTAPT-BSD-A @ _RTAPT-BSD-U @ _RTAPT-BSD-E @ _RTAPT-E.SESSION @
+        PT-STORAGE-DISJOINT? 0= IF 0 EXIT THEN
+    _RTAPT-BSD-A @ _RTAPT-BSD-U @ _RTAPT-BSD-E @ RTAPT-ENGINE-SIZE
+        MSPAN-OVERLAP? IF 0 EXIT THEN
+    _RTAPT-BSD-A @ _RTAPT-BSD-U @
+        _RTAPT-BSD-E @ _RTAPT-E.OWNERS-A @
+        _RTAPT-BSD-E @ _RTAPT-E.OWNERS-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
+    _RTAPT-BSD-A @ _RTAPT-BSD-U @
+        _RTAPT-BSD-E @ _RTAPT-E.OPS-A @
+        _RTAPT-BSD-E @ _RTAPT-E.OPS-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
+    _RTAPT-BSD-A @ _RTAPT-BSD-U @
+        _RTAPT-BSD-E @ _RTAPT-E.COPY-A @
+        _RTAPT-BSD-E @ _RTAPT-E.COPY-U @ MSPAN-OVERLAP? 0= ;
 
 : RTAPT-UPDATE-STATE@  ( engine -- update-state status )
     DUP _RTAPT-ENGINE-VALID? 0= IF
@@ -1440,10 +1618,381 @@ VARIABLE _RTAPT-RD-BASE
     _RTAPT-RD-O @ _RTAPT-O.PENDING-REGIONS @ 1+
         _RTAPT-RD-O @ _RTAPT-O.PENDING-REGIONS !
     _RTAPT-RD-ID @ _RTAPT-RD-O @ _RTAPT-O.PENDING-REGION-HIGH !
-    1 _RTAPT-RD-E @ _RTAPT-E.OP-COUNT +!
     _RTAPT-RD-NEXT-COPY @ _RTAPT-RD-E @ _RTAPT-E.COPY-USED !
     _RTAPT-RD-NEXT-RET @ _RTAPT-RD-E @ _RTAPT-E.RET-BYTES !
+    1 _RTAPT-RD-E @ _RTAPT-E.OP-COUNT +!
     RTAPT-S-OK DUP _RTAPT-RD-E @ _RTAPT-E.LAST-STATUS ! ;
+
+\ =====================================================================
+\  Neutral LABEL capture
+\ =====================================================================
+
+VARIABLE _RTAPT-LD-E
+VARIABLE _RTAPT-LD-O
+VARIABLE _RTAPT-LD-P
+VARIABLE _RTAPT-LD-COPY
+VARIABLE _RTAPT-LD-OWNER
+VARIABLE _RTAPT-LD-GEN
+VARIABLE _RTAPT-LD-OBJECT
+VARIABLE _RTAPT-LD-REGION
+VARIABLE _RTAPT-LD-PARENT
+VARIABLE _RTAPT-LD-ROW
+VARIABLE _RTAPT-LD-COL
+VARIABLE _RTAPT-LD-HEIGHT
+VARIABLE _RTAPT-LD-WIDTH
+VARIABLE _RTAPT-LD-ROOT-H
+VARIABLE _RTAPT-LD-ROOT-W
+VARIABLE _RTAPT-LD-Z
+VARIABLE _RTAPT-LD-VISIBLE
+VARIABLE _RTAPT-LD-RGBA
+VARIABLE _RTAPT-LD-H-ALIGN
+VARIABLE _RTAPT-LD-V-ALIGN
+VARIABLE _RTAPT-LD-ELLIPSIZE
+VARIABLE _RTAPT-LD-TEXT-A
+VARIABLE _RTAPT-LD-TEXT-U
+VARIABLE _RTAPT-LD-LEFT
+VARIABLE _RTAPT-LD-TOP
+VARIABLE _RTAPT-LD-RIGHT
+VARIABLE _RTAPT-LD-BOTTOM
+VARIABLE _RTAPT-LD-ROW-END
+VARIABLE _RTAPT-LD-COL-END
+VARIABLE _RTAPT-LD-NEXT-COPY
+VARIABLE _RTAPT-LD-NEXT-RET
+VARIABLE _RTAPT-LD-NEXT-OBJECTS
+VARIABLE _RTAPT-LD-NEXT-UTF8
+VARIABLE _RTAPT-LD-COPY-U
+
+VARIABLE _RTAPT-UN-B
+VARIABLE _RTAPT-UN-R
+VARIABLE _RTAPT-UN-Q
+VARIABLE _RTAPT-UN-REM
+
+: _RTAPT-UNORM32  ( boundary root -- u32 )
+    _RTAPT-UN-R ! _RTAPT-UN-B !
+    _RTAPT-UN-B @ 0= IF 0 EXIT THEN
+    _RTAPT-UN-B @ _RTAPT-UN-R @ = IF 0xFFFFFFFF EXIT THEN
+    0xFFFFFFFF _RTAPT-UN-R @ /MOD _RTAPT-UN-Q ! _RTAPT-UN-REM !
+    _RTAPT-UN-B @ _RTAPT-UN-Q @ *
+    _RTAPT-UN-B @ _RTAPT-UN-REM @ * _RTAPT-UN-R @ / + ;
+
+: _RTAPT-CANONICAL-FLAG?  ( flag -- valid? )
+    DUP 0= SWAP -1 = OR ;
+
+: _RTAPT-LABEL-GEOMETRY?  ( -- flag )
+    _RTAPT-LD-ROW @ _RTAPT-I32? 0=
+    _RTAPT-LD-COL @ _RTAPT-I32? 0= OR IF 0 EXIT THEN
+    _RTAPT-LD-HEIGHT @ _RTAPT-U32? 0=
+    _RTAPT-LD-WIDTH @ _RTAPT-U32? 0= OR IF 0 EXIT THEN
+    _RTAPT-LD-ROOT-H @ DUP 0= SWAP _RTAPT-U32? 0= OR
+    _RTAPT-LD-ROOT-W @ DUP 0= SWAP _RTAPT-U32? 0= OR OR IF 0 EXIT THEN
+    _RTAPT-LD-ROW @ _RTAPT-LD-HEIGHT @ + _RTAPT-LD-ROW-END !
+    _RTAPT-LD-COL @ _RTAPT-LD-WIDTH @ + _RTAPT-LD-COL-END !
+    _RTAPT-LD-VISIBLE @ IF
+        _RTAPT-LD-HEIGHT @ 0= _RTAPT-LD-WIDTH @ 0= OR
+        _RTAPT-LD-ROW @ _RTAPT-LD-ROOT-H @ < 0= OR
+        _RTAPT-LD-ROW-END @ 0> 0= OR
+        _RTAPT-LD-COL @ _RTAPT-LD-ROOT-W @ < 0= OR
+        _RTAPT-LD-COL-END @ 0> 0= OR IF 0 EXIT THEN
+    THEN
+    _RTAPT-LD-COL @ 0 MAX _RTAPT-LD-ROOT-W @ 1- MIN _RTAPT-LD-LEFT !
+    _RTAPT-LD-COL-END @ 0 MAX _RTAPT-LD-ROOT-W @ MIN
+    _RTAPT-LD-LEFT @ 1+ MAX _RTAPT-LD-ROOT-W @ MIN _RTAPT-LD-RIGHT !
+    _RTAPT-LD-ROW @ 0 MAX _RTAPT-LD-ROOT-H @ 1- MIN _RTAPT-LD-TOP !
+    _RTAPT-LD-ROW-END @ 0 MAX _RTAPT-LD-ROOT-H @ MIN
+    _RTAPT-LD-TOP @ 1+ MAX _RTAPT-LD-ROOT-H @ MIN _RTAPT-LD-BOTTOM !
+    _RTAPT-LD-LEFT @ _RTAPT-LD-ROOT-W @ _RTAPT-UNORM32 _RTAPT-LD-LEFT !
+    _RTAPT-LD-TOP @ _RTAPT-LD-ROOT-H @ _RTAPT-UNORM32 _RTAPT-LD-TOP !
+    _RTAPT-LD-RIGHT @ _RTAPT-LD-ROOT-W @ _RTAPT-UNORM32 _RTAPT-LD-RIGHT !
+    _RTAPT-LD-BOTTOM @ _RTAPT-LD-ROOT-H @
+        _RTAPT-UNORM32 _RTAPT-LD-BOTTOM !
+    _RTAPT-LD-LEFT @ _RTAPT-LD-RIGHT @ U<
+    _RTAPT-LD-TOP @ _RTAPT-LD-BOTTOM @ U< AND ;
+
+: _RTAPT-LABEL-FORBIDDEN-BYTE?  ( byte -- flag )
+    DUP 0= OVER 10 = OR SWAP 13 = OR ;
+
+VARIABLE _RTAPT-LU-I
+VARIABLE _RTAPT-LU-B0
+VARIABLE _RTAPT-LU-B1
+VARIABLE _RTAPT-LU-A
+VARIABLE _RTAPT-LU-U
+
+: _RTAPT-LUTF8-FINISH  ( flag -- flag )
+    0 _RTAPT-LU-I ! 0 _RTAPT-LU-B0 ! 0 _RTAPT-LU-B1 !
+    0 _RTAPT-LU-A ! 0 _RTAPT-LU-U ! ;
+
+: _RTAPT-LUTF8-CONT?  ( relative-index -- flag )
+    _RTAPT-LU-I @ + DUP _RTAPT-LU-U @ U< 0= IF DROP 0 EXIT THEN
+    _RTAPT-LU-A @ + C@ 0xC0 AND 0x80 = ;
+
+\ Validate scalar UTF-8 and the APT LABEL control exclusions without leaving
+\ the borrowed source in another module's validator scratch.
+: _RTAPT-LABEL-UTF8?  ( a u -- flag )
+    _RTAPT-LU-U ! _RTAPT-LU-A !
+    0 _RTAPT-LU-I !
+    BEGIN _RTAPT-LU-I @ _RTAPT-LU-U @ U< WHILE
+        _RTAPT-LU-A @ _RTAPT-LU-I @ + C@ DUP _RTAPT-LU-B0 !
+        DUP _RTAPT-LABEL-FORBIDDEN-BYTE? IF
+            DROP 0 _RTAPT-LUTF8-FINISH EXIT
+        THEN
+        0x80 U< IF
+            1 _RTAPT-LU-I +!
+        ELSE
+            _RTAPT-LU-B0 @ 0xC2 >= _RTAPT-LU-B0 @ 0xDF <= AND IF
+                1 _RTAPT-LUTF8-CONT? 0= IF
+                    0 _RTAPT-LUTF8-FINISH EXIT
+                THEN
+                2 _RTAPT-LU-I +!
+            ELSE
+                _RTAPT-LU-B0 @ 0xE0 >= _RTAPT-LU-B0 @ 0xEF <= AND IF
+                    _RTAPT-LU-U @ _RTAPT-LU-I @ - 3 U< IF
+                        0 _RTAPT-LUTF8-FINISH EXIT
+                    THEN
+                    _RTAPT-LU-A @ _RTAPT-LU-I @ + 1+ C@
+                        _RTAPT-LU-B1 !
+                    _RTAPT-LU-B0 @ 0xE0 = IF
+                        _RTAPT-LU-B1 @ 0xA0 >=
+                        _RTAPT-LU-B1 @ 0xBF <= AND
+                    ELSE
+                        _RTAPT-LU-B0 @ 0xED = IF
+                            _RTAPT-LU-B1 @ 0x80 >=
+                            _RTAPT-LU-B1 @ 0x9F <= AND
+                        ELSE
+                            _RTAPT-LU-B1 @ 0xC0 AND 0x80 =
+                        THEN
+                    THEN
+                    2 _RTAPT-LUTF8-CONT? AND 0= IF
+                        0 _RTAPT-LUTF8-FINISH EXIT
+                    THEN
+                    3 _RTAPT-LU-I +!
+                ELSE
+                    _RTAPT-LU-B0 @ 0xF0 >=
+                    _RTAPT-LU-B0 @ 0xF4 <= AND IF
+                        _RTAPT-LU-U @ _RTAPT-LU-I @ - 4 U< IF
+                            0 _RTAPT-LUTF8-FINISH EXIT
+                        THEN
+                        _RTAPT-LU-A @ _RTAPT-LU-I @ + 1+ C@
+                            _RTAPT-LU-B1 !
+                        _RTAPT-LU-B0 @ 0xF0 = IF
+                            _RTAPT-LU-B1 @ 0x90 >=
+                            _RTAPT-LU-B1 @ 0xBF <= AND
+                        ELSE
+                            _RTAPT-LU-B0 @ 0xF4 = IF
+                                _RTAPT-LU-B1 @ 0x80 >=
+                                _RTAPT-LU-B1 @ 0x8F <= AND
+                            ELSE
+                                _RTAPT-LU-B1 @ 0xC0 AND 0x80 =
+                            THEN
+                        THEN
+                        2 _RTAPT-LUTF8-CONT? AND
+                        3 _RTAPT-LUTF8-CONT? AND 0= IF
+                            0 _RTAPT-LUTF8-FINISH EXIT
+                        THEN
+                        4 _RTAPT-LU-I +!
+                    ELSE
+                        0 _RTAPT-LUTF8-FINISH EXIT
+                    THEN
+                THEN
+            THEN
+        THEN
+    REPEAT
+    -1 _RTAPT-LUTF8-FINISH ;
+
+: _RTAPT-LABEL-TEXT-SPAN?  ( -- flag )
+    _RTAPT-LD-TEXT-U @ _RTAPT-U32? 0= IF 0 EXIT THEN
+    _RTAPT-LD-TEXT-U @ 0= IF _RTAPT-LD-TEXT-A @ 0= EXIT THEN
+    _RTAPT-LD-TEXT-A @ _RTAPT-LD-TEXT-U @ _RTAPT-LD-E @
+        _RTAPT-BYTE-SPAN-DISJOINT? ;
+
+: _RTAPT-OBJECT-BASE  ( owner-record engine -- count )
+    >R DUP _RTAPT-O.ACTIVE-OBJECTS @ SWAP _RTAPT-O.HIDDEN-OBJECTS @
+    R> _RTAPT-TARGET-BASE ;
+
+: _RTAPT-UTF8-BASE  ( owner-record engine -- bytes )
+    >R DUP _RTAPT-O.ACTIVE-UTF8 @ SWAP _RTAPT-O.HIDDEN-UTF8 @
+    R> _RTAPT-TARGET-BASE ;
+
+
+\ The first LABEL slice deliberately has no persistent typed identity ledger.
+\ A region high-water cannot prove existence because APT IDs may contain gaps,
+\ so a LABEL may name only an exact REGION_DEFINE captured earlier in this
+\ candidate.  Root parenting is the only truthful parent form until GROUP and
+\ exact object-type identity are added together.
+: _RTAPT-LABEL-REGION-PENDING?  ( -- flag )
+    _RTAPT-LD-E @ _RTAPT-E.OP-COUNT @ 0 ?DO
+        I _RTAPT-LD-E @ _RTAPT-OP-NTH
+        DUP _RTAPT-P.KIND @ _RTAPT-OP-REGION-DEFINE = IF
+            _RTAPT-P.COPY-OFF @ _RTAPT-LD-E @ _RTAPT-E.COPY-A @ +
+            DUP _RTAPT-RD.OWNER @ _RTAPT-LD-OWNER @ =
+            OVER _RTAPT-RD.GENERATION @ _RTAPT-LD-GEN @ = AND
+            OVER _RTAPT-RD.REGION @ _RTAPT-LD-REGION @ = AND
+            SWAP DROP IF -1 UNLOOP EXIT THEN
+        ELSE
+            DROP
+        THEN
+    LOOP
+    0 ;
+
+: _RTAPT-LABEL-FIELDS?  ( -- flag )
+    _RTAPT-LD-OWNER @ 0= _RTAPT-LD-GEN @ 0= OR
+    _RTAPT-LD-OBJECT @ 0= OR _RTAPT-LD-REGION @ 0= OR IF 0 EXIT THEN
+    _RTAPT-LD-PARENT @ IF 0 EXIT THEN
+    _RTAPT-LD-Z @ _RTAPT-I32? 0= IF 0 EXIT THEN
+    _RTAPT-LD-VISIBLE @ _RTAPT-CANONICAL-FLAG? 0= IF 0 EXIT THEN
+    _RTAPT-LD-RGBA @ _RTAPT-U32? 0= IF 0 EXIT THEN
+    _RTAPT-LD-H-ALIGN @ 2 U> _RTAPT-LD-V-ALIGN @ 2 U> OR IF 0 EXIT THEN
+    _RTAPT-LD-ELLIPSIZE @ _RTAPT-CANONICAL-FLAG? 0= IF 0 EXIT THEN
+    _RTAPT-LABEL-GEOMETRY? ;
+
+: _RTAPT-LABEL-LIMITS  ( -- status )
+    _RTAPT-LD-E @ RTAPT-LIMITS@ DUP RTAPT-S-OK <> IF NIP EXIT THEN DROP
+    DUP _RTAPT-L.FEATURES @ RTAPT-F-INSTRUMENT AND 0= IF
+        DROP RTAPT-S-UNSUPPORTED EXIT
+    THEN
+    _RTAPT-LD-TEXT-U @ SWAP _RTAPT-L.LABEL-BYTES @ U> IF
+        RTAPT-S-CAPACITY EXIT
+    THEN
+    RTAPT-S-OK ;
+
+: _RTAPT-LABEL-DEFINE-BODY  ( -- status )
+    _RTAPT-LD-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
+    \ Prove the borrowed span before READY or limits discovery may mutate the
+    \ engine (including its retained-limits snapshot).  Bound text length from
+    \ negotiated limits before doing the linear UTF-8/control-byte scan.
+    _RTAPT-LABEL-FIELDS? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-LABEL-TEXT-SPAN? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-LD-E @ _RTAPT-READY-STATUS DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    _RTAPT-LD-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-CAPTURING <>
+        IF RTAPT-S-BUSY EXIT THEN
+    _RTAPT-LABEL-LIMITS DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    _RTAPT-LD-TEXT-A @ _RTAPT-LD-TEXT-U @ _RTAPT-LABEL-UTF8? 0= IF
+        RTAPT-S-INVALID EXIT
+    THEN
+    _RTAPT-LD-OWNER @ _RTAPT-LD-GEN @ _RTAPT-LD-E @
+        _RTAPT-OWNER-FIND DUP 0= IF DROP RTAPT-S-INVALID EXIT THEN
+    DUP _RTAPT-LD-O ! _RTAPT-O.STATE @ RTAPT-OWNER-ST-OPEN <>
+        IF RTAPT-S-BUSY EXIT THEN
+    _RTAPT-LABEL-REGION-PENDING? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-LD-OBJECT @ _RTAPT-LD-O @ _RTAPT-O.OBJECT-HIGH @ U> 0=
+        IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-LD-OBJECT @ _RTAPT-LD-O @ _RTAPT-O.PENDING-OBJECT-HIGH @ U> 0=
+        IF RTAPT-S-INVALID EXIT THEN
+
+    _RTAPT-LD-O @ _RTAPT-LD-E @ _RTAPT-OBJECT-BASE
+    _RTAPT-LD-O @ _RTAPT-O.PENDING-OBJECTS @ _RTAPT-UADD? 0= IF
+        DROP RTAPT-S-CAPACITY EXIT
+    THEN
+    1 _RTAPT-UADD? 0= IF DROP RTAPT-S-CAPACITY EXIT THEN
+    DUP _RTAPT-LD-NEXT-OBJECTS !
+    _RTAPT-LD-O @ _RTAPT-O.OBJECTS @ U> IF RTAPT-S-CAPACITY EXIT THEN
+
+    _RTAPT-LD-O @ _RTAPT-LD-E @ _RTAPT-UTF8-BASE
+    _RTAPT-LD-O @ _RTAPT-O.PENDING-UTF8 @ _RTAPT-UADD? 0= IF
+        DROP RTAPT-S-CAPACITY EXIT
+    THEN
+    _RTAPT-LD-TEXT-U @ _RTAPT-UADD? 0= IF
+        DROP RTAPT-S-CAPACITY EXIT
+    THEN
+    DUP _RTAPT-LD-NEXT-UTF8 !
+    _RTAPT-LD-O @ _RTAPT-O.UTF8-BYTES @ U> IF RTAPT-S-CAPACITY EXIT THEN
+
+    _RTAPT-LD-E @ _RTAPT-E.OP-COUNT @ 0xFFFFFFFF U< 0=
+        IF RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-LD-E @ _RTAPT-E.OP-COUNT @
+        _RTAPT-LD-E @ _RTAPT-E.OP-CAP @ U< 0= IF RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-LD-TEXT-U @ _RTAPT-LABEL-DEFINE-COPY-FIXED _RTAPT-UADD? 0= IF
+        DROP RTAPT-S-CAPACITY EXIT
+    THEN _RTAPT-ALIGN8? 0= IF DROP RTAPT-S-CAPACITY EXIT THEN
+    DUP _RTAPT-LD-COPY-U !
+    _RTAPT-LD-E @ _RTAPT-E.COPY-U @
+        _RTAPT-LD-E @ _RTAPT-E.COPY-USED @ - U> IF
+        RTAPT-S-CAPACITY EXIT
+    THEN
+    _RTAPT-LD-E @ _RTAPT-E.COPY-USED @ _RTAPT-LD-COPY-U @
+        _RTAPT-UADD? 0= IF DROP RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-LD-NEXT-COPY !
+    _RTAPT-LD-E @ _RTAPT-E.RET-BYTES @ _RTAPT-LD-TEXT-U @
+        _RTAPT-LABEL-DEFINE-FRAME-FIXED _RTAPT-UADD? 0= IF
+        DROP RTAPT-S-CAPACITY EXIT
+    THEN _RTAPT-UADD? 0= IF DROP RTAPT-S-CAPACITY EXIT THEN
+    _RTAPT-LD-NEXT-RET !
+
+    _RTAPT-LD-E @ _RTAPT-E.OP-COUNT @ _RTAPT-LD-E @ _RTAPT-OP-NTH
+        _RTAPT-LD-P !
+    _RTAPT-LD-E @ _RTAPT-E.COPY-A @
+        _RTAPT-LD-E @ _RTAPT-E.COPY-USED @ + _RTAPT-LD-COPY !
+    _RTAPT-LD-COPY @ _RTAPT-LD-COPY-U @ 0 FILL
+    _RTAPT-OP-LABEL-DEFINE _RTAPT-LD-P @ _RTAPT-P.KIND !
+    _RTAPT-LD-E @ _RTAPT-E.COPY-USED @
+        _RTAPT-LD-P @ _RTAPT-P.COPY-OFF !
+    _RTAPT-LD-COPY-U @ _RTAPT-LD-P @ _RTAPT-P.COPY-U !
+    _RTAPT-LD-OWNER @ _RTAPT-LD-COPY @ _RTAPT-LD.OWNER !
+    _RTAPT-LD-GEN @ _RTAPT-LD-COPY @ _RTAPT-LD.GENERATION !
+    _RTAPT-LD-OBJECT @ _RTAPT-LD-COPY @ _RTAPT-LD.OBJECT !
+    _RTAPT-LD-REGION @ _RTAPT-LD-COPY @ _RTAPT-LD.REGION !
+    _RTAPT-LD-PARENT @ _RTAPT-LD-COPY @ _RTAPT-LD.PARENT !
+    _RTAPT-LD-LEFT @ _RTAPT-LD-COPY @ _RTAPT-LD.LEFT !
+    _RTAPT-LD-TOP @ _RTAPT-LD-COPY @ _RTAPT-LD.TOP !
+    _RTAPT-LD-RIGHT @ _RTAPT-LD-COPY @ _RTAPT-LD.RIGHT !
+    _RTAPT-LD-BOTTOM @ _RTAPT-LD-COPY @ _RTAPT-LD.BOTTOM !
+    _RTAPT-LD-Z @ _RTAPT-LD-COPY @ _RTAPT-LD.Z !
+    _RTAPT-LD-VISIBLE @ IF 1 ELSE 0 THEN
+        _RTAPT-LD-COPY @ _RTAPT-LD.VISIBLE !
+    _RTAPT-LD-RGBA @ _RTAPT-LD-COPY @ _RTAPT-LD.RGBA !
+    _RTAPT-LD-H-ALIGN @ _RTAPT-LD-COPY @ _RTAPT-LD.H-ALIGN !
+    _RTAPT-LD-V-ALIGN @ _RTAPT-LD-COPY @ _RTAPT-LD.V-ALIGN !
+    _RTAPT-LD-ELLIPSIZE @ IF 1 ELSE 0 THEN
+        _RTAPT-LD-COPY @ _RTAPT-LD.ELLIPSIZE !
+    _RTAPT-LD-TEXT-U @ _RTAPT-LD-COPY @ _RTAPT-LD.TEXT-U !
+    _RTAPT-LD-TEXT-U @ IF
+        _RTAPT-LD-TEXT-A @ _RTAPT-LD-COPY @ _RTAPT-LD.TEXT
+        _RTAPT-LD-TEXT-U @ MOVE
+    THEN
+    1 _RTAPT-LD-O @ _RTAPT-O.PENDING-OBJECTS +!
+    _RTAPT-LD-OBJECT @ _RTAPT-LD-O @ _RTAPT-O.PENDING-OBJECT-HIGH !
+    _RTAPT-LD-TEXT-U @ _RTAPT-LD-O @ _RTAPT-O.PENDING-UTF8 +!
+    _RTAPT-LD-NEXT-COPY @ _RTAPT-LD-E @ _RTAPT-E.COPY-USED !
+    _RTAPT-LD-NEXT-RET @ _RTAPT-LD-E @ _RTAPT-E.RET-BYTES !
+    1 _RTAPT-LD-E @ _RTAPT-E.OP-COUNT +!
+    RTAPT-S-OK DUP _RTAPT-LD-E @ _RTAPT-E.LAST-STATUS ! ;
+
+: _RTAPT-LABEL-SCRUB  ( -- )
+    0 _RTAPT-LD-E ! 0 _RTAPT-LD-O ! 0 _RTAPT-LD-P ! 0 _RTAPT-LD-COPY !
+    0 _RTAPT-LD-OWNER ! 0 _RTAPT-LD-GEN ! 0 _RTAPT-LD-OBJECT !
+    0 _RTAPT-LD-REGION ! 0 _RTAPT-LD-PARENT !
+    0 _RTAPT-LD-ROW ! 0 _RTAPT-LD-COL !
+    0 _RTAPT-LD-HEIGHT ! 0 _RTAPT-LD-WIDTH !
+    0 _RTAPT-LD-ROOT-H ! 0 _RTAPT-LD-ROOT-W ! 0 _RTAPT-LD-Z !
+    0 _RTAPT-LD-VISIBLE ! 0 _RTAPT-LD-RGBA !
+    0 _RTAPT-LD-H-ALIGN ! 0 _RTAPT-LD-V-ALIGN ! 0 _RTAPT-LD-ELLIPSIZE !
+    0 _RTAPT-LD-TEXT-A ! 0 _RTAPT-LD-TEXT-U !
+    0 _RTAPT-LD-LEFT ! 0 _RTAPT-LD-TOP !
+    0 _RTAPT-LD-RIGHT ! 0 _RTAPT-LD-BOTTOM !
+    0 _RTAPT-LD-ROW-END ! 0 _RTAPT-LD-COL-END !
+    0 _RTAPT-LD-NEXT-COPY ! 0 _RTAPT-LD-NEXT-RET !
+    0 _RTAPT-LD-NEXT-OBJECTS ! 0 _RTAPT-LD-NEXT-UTF8 !
+    0 _RTAPT-LD-COPY-U ! 0 _RTAPT-UN-B ! 0 _RTAPT-UN-R !
+    0 _RTAPT-UN-Q ! 0 _RTAPT-UN-REM !
+    0 _RTAPT-LU-I ! 0 _RTAPT-LU-B0 ! 0 _RTAPT-LU-B1 !
+    0 _RTAPT-LU-A ! 0 _RTAPT-LU-U !
+    0 _RTAPT-BSD-A ! 0 _RTAPT-BSD-U ! 0 _RTAPT-BSD-E ! ;
+
+: RTAPT-LABEL-DEFINE
+    ( owner generation object region parent row col height width
+      root-height root-width z visible rgba h-align v-align ellipsize
+      text-a text-u engine -- status )
+    _RTAPT-LD-E ! _RTAPT-LD-TEXT-U ! _RTAPT-LD-TEXT-A !
+    _RTAPT-LD-ELLIPSIZE ! _RTAPT-LD-V-ALIGN ! _RTAPT-LD-H-ALIGN !
+    _RTAPT-LD-RGBA ! _RTAPT-LD-VISIBLE ! _RTAPT-LD-Z !
+    _RTAPT-LD-ROOT-W ! _RTAPT-LD-ROOT-H !
+    _RTAPT-LD-WIDTH ! _RTAPT-LD-HEIGHT !
+    _RTAPT-LD-COL ! _RTAPT-LD-ROW ! _RTAPT-LD-PARENT !
+    _RTAPT-LD-REGION ! _RTAPT-LD-OBJECT ! _RTAPT-LD-GEN !
+    _RTAPT-LD-OWNER !
+    ['] _RTAPT-LABEL-DEFINE-BODY CATCH ?DUP IF
+        DROP RTAPT-S-INVALID
+    THEN
+    _RTAPT-LABEL-SCRUB ;
 
 VARIABLE _RTAPT-RS-E
 VARIABLE _RTAPT-RS-DISPOSITION
@@ -1482,9 +2031,46 @@ VARIABLE _RTAPT-PF-ROWS
 VARIABLE _RTAPT-PF-O
 VARIABLE _RTAPT-PF-P
 VARIABLE _RTAPT-PF-COPY
-VARIABLE _RTAPT-PF-COUNT
+VARIABLE _RTAPT-PF-COPY-U
+VARIABLE _RTAPT-PF-RCOUNT
+VARIABLE _RTAPT-PF-OCOUNT
+VARIABLE _RTAPT-PF-UTF8
 VARIABLE _RTAPT-PF-TOTAL
-VARIABLE _RTAPT-PF-HIGH
+VARIABLE _RTAPT-PF-RHIGH
+VARIABLE _RTAPT-PF-OHIGH
+
+VARIABLE _RTAPT-PRR-I
+VARIABLE _RTAPT-PRR-E
+VARIABLE _RTAPT-PRR-LABEL
+VARIABLE _RTAPT-PRR-P
+VARIABLE _RTAPT-PRR-REGION
+
+: _RTAPT-PRIOR-REGION-FINISH  ( flag -- flag )
+    0 _RTAPT-PRR-I ! 0 _RTAPT-PRR-E ! 0 _RTAPT-PRR-LABEL !
+    0 _RTAPT-PRR-P ! 0 _RTAPT-PRR-REGION ! ;
+
+\ Prove that LABEL-COPY names an exact REGION_DEFINE earlier than INDEX.
+\ The retry banks are caller-owned and mutable, so sealed preflight repeats
+\ this proof independently of capture-time admission.
+: _RTAPT-PRIOR-REGION?  ( index label-copy engine -- flag )
+    _RTAPT-PRR-E ! _RTAPT-PRR-LABEL ! _RTAPT-PRR-I !
+    _RTAPT-PRR-I @ 0 ?DO
+        I _RTAPT-PRR-E @ _RTAPT-OP-NTH DUP _RTAPT-PRR-P !
+        _RTAPT-P.KIND @ _RTAPT-OP-REGION-DEFINE = IF
+            _RTAPT-PRR-P @ _RTAPT-P.COPY-OFF @
+                _RTAPT-PRR-E @ _RTAPT-E.COPY-A @ +
+                DUP _RTAPT-PRR-REGION !
+            _RTAPT-RD.OWNER @
+                _RTAPT-PRR-LABEL @ _RTAPT-LD.OWNER @ =
+            _RTAPT-PRR-REGION @ _RTAPT-RD.GENERATION @
+                _RTAPT-PRR-LABEL @ _RTAPT-LD.GENERATION @ = AND
+            _RTAPT-PRR-REGION @ _RTAPT-RD.REGION @
+                _RTAPT-PRR-LABEL @ _RTAPT-LD.REGION @ = AND IF
+                -1 _RTAPT-PRIOR-REGION-FINISH UNLOOP EXIT
+            THEN
+        THEN
+    LOOP
+    0 _RTAPT-PRIOR-REGION-FINISH ;
 
 : _RTAPT-REGION-COPY-SHAPE?  ( copy cols rows -- flag )
     _RTAPT-PF-ROWS ! _RTAPT-PF-COLS ! _RTAPT-PF-COPY !
@@ -1508,40 +2094,118 @@ VARIABLE _RTAPT-PF-HIGH
     _RTAPT-PF-COPY @ _RTAPT-RD.Z @ _RTAPT-I32? 0= IF 0 EXIT THEN
     _RTAPT-PF-COPY @ _RTAPT-RD.FLAGS @ 3 INVERT AND 0= ;
 
+: _RTAPT-WIRE-BOOL?  ( value -- flag )
+    DUP 0= SWAP 1 = OR ;
+
+: _RTAPT-LABEL-COPY-SHAPE?  ( copy copy-u -- flag )
+    _RTAPT-PF-COPY-U ! _RTAPT-PF-COPY !
+    _RTAPT-PF-COPY-U @ _RTAPT-LABEL-DEFINE-COPY-FIXED U< IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-LD.TEXT-U @ _RTAPT-U32? 0= IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-LD.TEXT-U @
+        _RTAPT-LABEL-DEFINE-COPY-FIXED _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-BV-RAW-U ! _RTAPT-ALIGN8? 0= IF DROP 0 EXIT THEN
+    _RTAPT-PF-COPY-U @ <> IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-BV-RAW-U @ +
+    _RTAPT-PF-COPY-U @ _RTAPT-BV-RAW-U @ -
+        _RTAPT-ZERO-SPAN? 0= IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-LD.OWNER @ 0=
+    _RTAPT-PF-COPY @ _RTAPT-LD.GENERATION @ 0= OR
+    _RTAPT-PF-COPY @ _RTAPT-LD.OBJECT @ 0= OR
+    _RTAPT-PF-COPY @ _RTAPT-LD.REGION @ 0= OR IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-LD.PARENT @ IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-LD.LEFT @ _RTAPT-U32? 0=
+    _RTAPT-PF-COPY @ _RTAPT-LD.TOP @ _RTAPT-U32? 0= OR
+    _RTAPT-PF-COPY @ _RTAPT-LD.RIGHT @ _RTAPT-U32? 0= OR
+    _RTAPT-PF-COPY @ _RTAPT-LD.BOTTOM @ _RTAPT-U32? 0= OR IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-LD.LEFT @
+    _RTAPT-PF-COPY @ _RTAPT-LD.RIGHT @ U< 0=
+    _RTAPT-PF-COPY @ _RTAPT-LD.TOP @
+    _RTAPT-PF-COPY @ _RTAPT-LD.BOTTOM @ U< 0= OR IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-LD.Z @ _RTAPT-I32? 0= IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-LD.VISIBLE @ _RTAPT-WIRE-BOOL? 0= IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-LD.RGBA @ _RTAPT-U32? 0= IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-LD.H-ALIGN @ 2 U>
+    _RTAPT-PF-COPY @ _RTAPT-LD.V-ALIGN @ 2 U> OR IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-LD.ELLIPSIZE @ _RTAPT-WIRE-BOOL? 0=
+        IF 0 EXIT THEN
+    _RTAPT-PF-COPY @ _RTAPT-LD.TEXT
+    _RTAPT-PF-COPY @ _RTAPT-LD.TEXT-U @ _RTAPT-LABEL-UTF8? ;
+
 : _RTAPT-CANDIDATE-PREFLIGHT?  ( cols rows engine -- flag )
     _RTAPT-PF-E ! _RTAPT-PF-ROWS ! _RTAPT-PF-COLS !
     0 _RTAPT-PF-TOTAL !
     _RTAPT-PF-E @ _RTAPT-E.OWNER-CAP @ 0 ?DO
         _RTAPT-PF-E @ _RTAPT-E.OWNERS-A @ I RTAPT-OWNER-SIZE * +
-        DUP _RTAPT-PF-O ! _RTAPT-O.REGION-HIGH @ _RTAPT-PF-HIGH !
-        0 _RTAPT-PF-COUNT !
+        DUP _RTAPT-PF-O ! _RTAPT-O.REGION-HIGH @ _RTAPT-PF-RHIGH !
+        _RTAPT-PF-O @ _RTAPT-O.OBJECT-HIGH @ _RTAPT-PF-OHIGH !
+        0 _RTAPT-PF-RCOUNT ! 0 _RTAPT-PF-OCOUNT ! 0 _RTAPT-PF-UTF8 !
         _RTAPT-PF-E @ _RTAPT-E.OP-COUNT @ 0 ?DO
             I _RTAPT-PF-E @ _RTAPT-OP-NTH DUP _RTAPT-PF-P !
             _RTAPT-P.COPY-OFF @ _RTAPT-PF-E @ _RTAPT-E.COPY-A @ +
                 DUP _RTAPT-PF-COPY !
-            DUP _RTAPT-RD.OWNER @ _RTAPT-PF-O @ _RTAPT-O.OWNER @ =
-            SWAP _RTAPT-RD.GENERATION @
+            DUP _RTAPT-LD.OWNER @ _RTAPT-PF-O @ _RTAPT-O.OWNER @ =
+            SWAP _RTAPT-LD.GENERATION @
                 _RTAPT-PF-O @ _RTAPT-O.GENERATION @ = AND IF
                 _RTAPT-PF-O @ _RTAPT-O.STATE @ RTAPT-OWNER-ST-OPEN <>
                     IF 0 UNLOOP UNLOOP EXIT THEN
-                _RTAPT-PF-COPY @ _RTAPT-PF-COLS @ _RTAPT-PF-ROWS @
-                    _RTAPT-REGION-COPY-SHAPE? 0= IF
-                    0 UNLOOP UNLOOP EXIT
+                _RTAPT-PF-P @ _RTAPT-P.KIND @
+                    _RTAPT-OP-REGION-DEFINE = IF
+                    _RTAPT-PF-COPY @ _RTAPT-PF-COLS @ _RTAPT-PF-ROWS @
+                        _RTAPT-REGION-COPY-SHAPE? 0= IF
+                        0 UNLOOP UNLOOP EXIT
+                    THEN
+                    _RTAPT-PF-COPY @ _RTAPT-RD.REGION @
+                        _RTAPT-PF-RHIGH @ U> 0= IF
+                        0 UNLOOP UNLOOP EXIT
+                    THEN
+                    _RTAPT-PF-COPY @ _RTAPT-RD.REGION @ _RTAPT-PF-RHIGH !
+                    1 _RTAPT-PF-RCOUNT +!
+                ELSE
+                    _RTAPT-PF-P @ _RTAPT-P.KIND @
+                        _RTAPT-OP-LABEL-DEFINE <> IF
+                        0 UNLOOP UNLOOP EXIT
+                    THEN
+                    _RTAPT-PF-COPY @ _RTAPT-PF-P @ _RTAPT-P.COPY-U @
+                        _RTAPT-LABEL-COPY-SHAPE? 0= IF
+                        0 UNLOOP UNLOOP EXIT
+                    THEN
+                    I _RTAPT-PF-COPY @ _RTAPT-PF-E @
+                        _RTAPT-PRIOR-REGION? 0= IF
+                        0 UNLOOP UNLOOP EXIT
+                    THEN
+                    _RTAPT-PF-COPY @ _RTAPT-LD.OBJECT @
+                        _RTAPT-PF-OHIGH @ U> 0= IF
+                        0 UNLOOP UNLOOP EXIT
+                    THEN
+                    _RTAPT-PF-COPY @ _RTAPT-LD.OBJECT @ _RTAPT-PF-OHIGH !
+                    _RTAPT-PF-UTF8 @
+                    _RTAPT-PF-COPY @ _RTAPT-LD.TEXT-U @
+                        _RTAPT-UADD? 0= IF
+                        DROP 0 UNLOOP UNLOOP EXIT
+                    THEN _RTAPT-PF-UTF8 !
+                    1 _RTAPT-PF-OCOUNT +!
                 THEN
-                _RTAPT-PF-COPY @ _RTAPT-RD.REGION @
-                    _RTAPT-PF-HIGH @ U> 0= IF 0 UNLOOP UNLOOP EXIT THEN
-                _RTAPT-PF-COPY @ _RTAPT-RD.REGION @ _RTAPT-PF-HIGH !
-                1 _RTAPT-PF-COUNT +! 1 _RTAPT-PF-TOTAL +!
+                1 _RTAPT-PF-TOTAL +!
             THEN
         LOOP
-        _RTAPT-PF-COUNT @ _RTAPT-PF-O @ _RTAPT-O.PENDING-REGIONS @ <>
+        _RTAPT-PF-RCOUNT @ _RTAPT-PF-O @ _RTAPT-O.PENDING-REGIONS @ <>
             IF 0 UNLOOP EXIT THEN
-        _RTAPT-PF-COUNT @ IF
-            _RTAPT-PF-HIGH @
+        _RTAPT-PF-RCOUNT @ IF
+            _RTAPT-PF-RHIGH @
             _RTAPT-PF-O @ _RTAPT-O.PENDING-REGION-HIGH @ <> IF
                 0 UNLOOP EXIT
             THEN
         THEN
+        _RTAPT-PF-OCOUNT @ _RTAPT-PF-O @ _RTAPT-O.PENDING-OBJECTS @ <>
+            IF 0 UNLOOP EXIT THEN
+        _RTAPT-PF-OCOUNT @ IF
+            _RTAPT-PF-OHIGH @
+            _RTAPT-PF-O @ _RTAPT-O.PENDING-OBJECT-HIGH @ <> IF
+                0 UNLOOP EXIT
+            THEN
+        THEN
+        _RTAPT-PF-UTF8 @ _RTAPT-PF-O @ _RTAPT-O.PENDING-UTF8 @ <>
+            IF 0 UNLOOP EXIT THEN
     LOOP
     _RTAPT-PF-TOTAL @ _RTAPT-PF-E @ _RTAPT-E.OP-COUNT @ = ;
 
@@ -1696,10 +2360,7 @@ VARIABLE _RTAPT-CS-E
 VARIABLE _RTAPT-CS-P
 VARIABLE _RTAPT-CS-COPY
 
-: _RTAPT-SEND-CAPTURED  ( op-record engine -- status )
-    _RTAPT-CS-E ! DUP _RTAPT-CS-P !
-    _RTAPT-P.COPY-OFF @ _RTAPT-CS-E @ _RTAPT-E.COPY-A @ +
-        _RTAPT-CS-COPY !
+: _RTAPT-SEND-REGION  ( -- status )
     _RTAPT-CS-COPY @ _RTAPT-RD.OWNER @
     _RTAPT-CS-COPY @ _RTAPT-RD.GENERATION @
     _RTAPT-CS-COPY @ _RTAPT-RD.REGION @
@@ -1710,6 +2371,43 @@ VARIABLE _RTAPT-CS-COPY
     _RTAPT-CS-COPY @ _RTAPT-RD.Z @
     _RTAPT-CS-COPY @ _RTAPT-RD.FLAGS @
     _RTAPT-CS-E @ _RTAPT-E.SESSION @ PT-REGION-DEFINE _RTAPT-PT>STATUS ;
+
+: _RTAPT-SEND-LABEL  ( -- status )
+    _RTAPT-CS-COPY @ _RTAPT-LD.OWNER @
+    _RTAPT-CS-COPY @ _RTAPT-LD.GENERATION @
+    _RTAPT-CS-COPY @ _RTAPT-LD.OBJECT @
+    _RTAPT-CS-COPY @ _RTAPT-LD.REGION @
+    _RTAPT-CS-COPY @ _RTAPT-LD.PARENT @
+    _RTAPT-CS-COPY @ _RTAPT-LD.LEFT @
+    _RTAPT-CS-COPY @ _RTAPT-LD.TOP @
+    _RTAPT-CS-COPY @ _RTAPT-LD.RIGHT @
+    _RTAPT-CS-COPY @ _RTAPT-LD.BOTTOM @
+    _RTAPT-CS-COPY @ _RTAPT-LD.Z @
+    _RTAPT-CS-COPY @ _RTAPT-LD.VISIBLE @
+    _RTAPT-CS-COPY @ _RTAPT-LD.RGBA @ 24 RSHIFT 0xFF AND
+    _RTAPT-CS-COPY @ _RTAPT-LD.RGBA @ 16 RSHIFT 0xFF AND
+    _RTAPT-CS-COPY @ _RTAPT-LD.RGBA @ 8 RSHIFT 0xFF AND
+    _RTAPT-CS-COPY @ _RTAPT-LD.RGBA @ 0xFF AND
+    _RTAPT-CS-COPY @ _RTAPT-LD.H-ALIGN @
+    _RTAPT-CS-COPY @ _RTAPT-LD.V-ALIGN @
+    _RTAPT-CS-COPY @ _RTAPT-LD.ELLIPSIZE @
+    _RTAPT-CS-COPY @ _RTAPT-LD.TEXT-U @ IF
+        _RTAPT-CS-COPY @ _RTAPT-LD.TEXT
+        _RTAPT-CS-COPY @ _RTAPT-LD.TEXT-U @
+    ELSE 0 0 THEN
+    _RTAPT-CS-E @ _RTAPT-E.SESSION @ PT-LABEL-DEFINE _RTAPT-PT>STATUS ;
+
+: _RTAPT-SEND-CAPTURED  ( op-record engine -- status )
+    _RTAPT-CS-E ! DUP _RTAPT-CS-P !
+    _RTAPT-P.COPY-OFF @ _RTAPT-CS-E @ _RTAPT-E.COPY-A @ +
+        _RTAPT-CS-COPY !
+    _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-OP-REGION-DEFINE = IF
+        _RTAPT-SEND-REGION EXIT
+    THEN
+    _RTAPT-CS-P @ _RTAPT-P.KIND @ _RTAPT-OP-LABEL-DEFINE = IF
+        _RTAPT-SEND-LABEL EXIT
+    THEN
+    RTAPT-S-INVALID ;
 
 1 CONSTANT _RTAPT-ABORT-SERIALIZATION
 VARIABLE _RTAPT-CM-E
@@ -1904,10 +2602,16 @@ VARIABLE _RTAPT-PR-PENDING
         DUP _RTAPT-PR-O ! _RTAPT-LIVE-OWNER? IF
             _RTAPT-PR-MODE @ PT-RET-REPLACE-START = IF
                 0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-REGIONS !
+                0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-OBJECTS !
+                0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-UTF8 !
             THEN
             _RTAPT-PR-MODE @ PT-RET-LAYOUT-START = IF
                 _RTAPT-PR-O @ _RTAPT-O.ACTIVE-REGIONS @
                     _RTAPT-PR-O @ _RTAPT-O.HIDDEN-REGIONS !
+                _RTAPT-PR-O @ _RTAPT-O.ACTIVE-OBJECTS @
+                    _RTAPT-PR-O @ _RTAPT-O.HIDDEN-OBJECTS !
+                _RTAPT-PR-O @ _RTAPT-O.ACTIVE-UTF8 @
+                    _RTAPT-PR-O @ _RTAPT-O.HIDDEN-UTF8 !
             THEN
         THEN
     LOOP
@@ -1927,8 +2631,30 @@ VARIABLE _RTAPT-PR-PENDING
                 _RTAPT-PR-O @ _RTAPT-O.PENDING-REGION-HIGH @
                     _RTAPT-PR-O @ _RTAPT-O.REGION-HIGH !
             THEN
+            _RTAPT-PR-O @ _RTAPT-O.PENDING-OBJECTS @
+                DUP _RTAPT-PR-PENDING ! IF
+                _RTAPT-PR-MODE @ PT-RET-DELTA = IF
+                    _RTAPT-PR-PENDING @
+                        _RTAPT-PR-O @ _RTAPT-O.ACTIVE-OBJECTS +!
+                ELSE
+                    _RTAPT-PR-PENDING @
+                        _RTAPT-PR-O @ _RTAPT-O.HIDDEN-OBJECTS +!
+                THEN
+                _RTAPT-PR-O @ _RTAPT-O.PENDING-OBJECT-HIGH @
+                    _RTAPT-PR-O @ _RTAPT-O.OBJECT-HIGH !
+            THEN
+            _RTAPT-PR-MODE @ PT-RET-DELTA = IF
+                _RTAPT-PR-O @ _RTAPT-O.PENDING-UTF8 @
+                    _RTAPT-PR-O @ _RTAPT-O.ACTIVE-UTF8 +!
+            ELSE
+                _RTAPT-PR-O @ _RTAPT-O.PENDING-UTF8 @
+                    _RTAPT-PR-O @ _RTAPT-O.HIDDEN-UTF8 +!
+            THEN
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-REGIONS !
             0 _RTAPT-PR-O @ _RTAPT-O.PENDING-REGION-HIGH !
+            0 _RTAPT-PR-O @ _RTAPT-O.PENDING-OBJECTS !
+            0 _RTAPT-PR-O @ _RTAPT-O.PENDING-OBJECT-HIGH !
+            0 _RTAPT-PR-O @ _RTAPT-O.PENDING-UTF8 !
         THEN
     LOOP
     \ A successful reveal is likewise global: every live owner's complete
@@ -1939,7 +2665,13 @@ VARIABLE _RTAPT-PR-PENDING
             DUP _RTAPT-PR-O ! _RTAPT-LIVE-OWNER? IF
                 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-REGIONS @
                     _RTAPT-PR-O @ _RTAPT-O.ACTIVE-REGIONS !
+                _RTAPT-PR-O @ _RTAPT-O.HIDDEN-OBJECTS @
+                    _RTAPT-PR-O @ _RTAPT-O.ACTIVE-OBJECTS !
+                _RTAPT-PR-O @ _RTAPT-O.HIDDEN-UTF8 @
+                    _RTAPT-PR-O @ _RTAPT-O.ACTIVE-UTF8 !
                 0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-REGIONS !
+                0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-OBJECTS !
+                0 _RTAPT-PR-O @ _RTAPT-O.HIDDEN-UTF8 !
             THEN
         LOOP
     THEN ;
