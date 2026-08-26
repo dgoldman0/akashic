@@ -341,6 +341,8 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
         "APT1-DESK-RTAPT-OP-RECORDS",
         "APT1-DESK-RTAPT-COPY-BYTES",
         "APT1-DESK-RTERM-BINDING-RECORDS",
+        "APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK",
+        "APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK",
     ):
         assert f"[UNDEFINED] {capacity} [IF]" in code
     for size in (
@@ -355,6 +357,43 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
     assert "RTAPT-OWNER-SIZE _A1D-CAPACITY*" in code
     assert "RTAPT-OP-SIZE _A1D-CAPACITY*" in code
     assert "RTERM-UIDL-BINDING-SIZE _A1D-CAPACITY*" in code
+    assert (
+        "APT1-DESK-RTERM-BINDING-RECORDS 2 _A1D-CAPACITY*"
+        in code
+    )
+    assert (
+        "APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK\n"
+        "    RTERM-UIDL-CANDIDATE-ITEM-BYTES _A1D-CAPACITY*"
+        in code
+    )
+    assert (
+        "_A1D-UIDL-CANDIDATE-BANKS _A1D-UIDL-CANDIDATE-ITEM-BANK-U\n"
+        "    _A1D-CAPACITY*"
+        in code
+    )
+    assert (
+        "APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK 7 AND"
+        in code
+    )
+    assert (
+        "_A1D-UIDL-CANDIDATE-BANKS\n"
+        "    APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK "
+        "_A1D-CAPACITY*"
+        in code
+    )
+    for payload in (
+        "_A1D-UIDL-CANDIDATE-ITEMS-U",
+        "_A1D-UIDL-CANDIDATE-SNAPSHOTS-U",
+        "RTERM-UIDL-CONFIG-BYTES",
+    ):
+        assert f"{payload} _A1D-ALIGNMENT-SLOP+" in code
+
+    clear_inert = _word(composition, "_A1D-CLEAR-INERT")
+    assert "_A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL" in clear_inert
+    # Profile-sized banks are initialized and finalized by the checked driver,
+    # not redundantly cleared by Desk's scalar cold-state reset.
+    assert "_A1D-UIDL-CANDIDATE-ITEMS" not in clear_inert
+    assert "_A1D-UIDL-CANDIDATE-SNAPSHOTS" not in clear_inert
 
     setup = _word(composition, "_A1D-SETUP")
     setup_order = (
@@ -387,6 +426,7 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
     init_order = (
         "_A1D-UIDL-BOUND _A1D-UIDL-PHASE !",
         "RTERM-HOST-BINDING-INIT",
+        "RTERM-UIDL-CONFIG-INIT",
         "RTERM-UIDL-INIT",
         "RTERM-UIDL-INSTALL",
         "AHOST-UIDL-READY!",
@@ -394,6 +434,38 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
     assert [init.index(token) for token in init_order] == sorted(
         init.index(token) for token in init_order
     )
+    normalized_init = re.sub(r"\s+", " ", init)
+    assert (
+        "_A1D-HOST-CB-HOST @ _A1D-RTE-FACADE "
+        "_A1D-UIDL-RECORDS _A1D-UIDL-RECORDS-U "
+        "_A1D-UIDL-CANDIDATE-ITEMS "
+        "APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK "
+        "_A1D-UIDL-CANDIDATE-SNAPSHOTS "
+        "APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK "
+        "_A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-INIT"
+        in normalized_init
+    )
+    assert (
+        "_A1D-UIDL-CONFIG _A1D-UIDL-BACKEND RTERM-UIDL-INIT"
+        in normalized_init
+    )
+    config_init_at = init.index("RTERM-UIDL-CONFIG-INIT")
+    failed_config_scrub = init.index(
+        "_A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL",
+        config_init_at,
+    )
+    uidl_init_at = init.index("RTERM-UIDL-INIT", failed_config_scrub)
+    # Saving CONFIG-INIT's result consumes the duplicate status.  The compare
+    # consumes the remaining status, so success must fall through directly to
+    # UIDL-INIT rather than attempting a second DROP.
+    assert "THEN DROP" not in init[config_init_at:uidl_init_at]
+    consumed_config_scrub = init.index(
+        "_A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL",
+        uidl_init_at,
+    )
+    install_at = init.index("RTERM-UIDL-INSTALL", consumed_config_scrub)
+    assert config_init_at < failed_config_scrub < uidl_init_at
+    assert uidl_init_at < consumed_config_scrub < install_at
 
     fini = _word(composition, "_A1D-HOST-FINI-BODY")
     assert "_A1D-PHASE @ _A1D-PHASE-INSTALLED <> IF" in fini
@@ -416,6 +488,12 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
         result = wrapper.index("_A1D-HOST-CB-RESULT @", caught)
         assert caught < result < wrapper.index("0 _A1D-HOST-CB-HOST !")
         assert result < wrapper.index("0 _A1D-HOST-CB-CONTEXT !")
+    init_wrapper = _word(composition, "_A1D-HOST-INIT")
+    assert init_wrapper.index("['] _A1D-HOST-INIT-BODY CATCH") < (
+        init_wrapper.index(
+            "_A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL"
+        )
+    ) < init_wrapper.index("_A1D-HOST-CB-RESULT @")
 
     uninstall = _word(composition, "_A1D-UNINSTALL")
     uidl_gate = uninstall.index(

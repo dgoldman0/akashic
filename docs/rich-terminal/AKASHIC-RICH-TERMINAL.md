@@ -189,11 +189,21 @@ record, then scrubs all borrowed raw-record, provider-snapshot, engine, and
 destination pointers.
 
 The renderer-neutral candidate projector can now measure and copy supported
-UIDL semantics into caller-owned banks. It does not yet capture the complete
-layout/style input or publish a candidate through the lifecycle driver, so
-`RTERM-UCTX-PROJECT` remains explicitly `RTERM-S-UNAVAILABLE` and invokes none
-of the facade operations, including the limits callback. Region replacement
-and checked semantic object materialization remain later slices.
+UIDL semantics into caller-owned banks, and the lifecycle driver now admits a
+complete build into one of two banks belonging to the exact private binding.
+It builds the inactive bank, applies `RUPJ-CANDIDATE-VALID?` at that admission
+boundary, completes its metadata, and changes the authoritative selector last.
+An accepted empty candidate is published and returns
+`RTERM-S-UNAVAILABLE`; an accepted nonempty candidate returns
+`RTERM-S-OK`. Any build, validation, capacity, or caught-exception failure
+leaves the prior selector and therefore the prior desired scene authoritative.
+
+This admitted candidate does not yet capture complete neutral layout/style
+input and invokes no facade operation, including the limits callback. The
+remaining vertical blocker is to add that neutral layout/style projection and
+then materialize admitted LABEL candidates through the generic engine. Region
+replacement, retained identity, negotiated admission, and wire publication
+remain later work; the current lifecycle slice is still wire-inert.
 
 The lower UIDL layer now supplies the first neutral semantic snapshot
 substrate independently of this adapter. `ED.SEMANTICS` selects a per-element
@@ -207,10 +217,13 @@ path, while optional presentation admission remains above UIDL semantics.
 
 The candidate projector walks the active root tree under one compound semantic
 observation and copies eligible LABEL records into bounded item/snapshot
-banks. This does not change the current wire-inert state: no shipped UIDL has
-been bulk-annotated for optional presentation eligibility, and no candidate is
-yet consumed by the driver. Later negotiated admission must compare each LABEL
-declaration and the checked per-owner sum against
+banks. Each binding has two caller-owned item banks and two caller-owned
+snapshot banks, so a new complete candidate can replace the selected candidate
+atomically without allocating. This does not change the current wire-inert
+state: no shipped UIDL has been bulk-annotated for optional presentation
+eligibility, and the admitted candidate is not yet materialized. Later
+negotiated admission must compare each LABEL declaration and the checked
+per-owner sum against
 `RTE-LIMITS-LABEL-BYTES@` and `RTE-LIMITS-UTF8-BYTES@` before opening an owner
 or publishing an object.
 
@@ -420,9 +433,10 @@ The renderer-neutral desired-scene input is defined separately in
 [UIDL-PROJECTION-CANDIDATE.md](UIDL-PROJECTION-CANDIDATE.md). Its caller-owned
 candidate items use stable UIDL element indices and copied semantic snapshots;
 they contain no engine, protocol, screen, Desk, or applet identity. Candidate
-construction is deliberately wire-inert. The next lifecycle slice will publish
-one of two per-binding candidate banks only after a complete build; later
-materialization may compare its declared quotas with a discovered engine.
+construction and lifecycle admission are deliberately wire-inert. The driver
+publishes one of two per-binding candidate banks only after a complete build
+and RUPJ admission validation; later materialization may compare its declared
+quotas with a discovered engine.
 
 The first lifecycle foundation is the optional
 `akashic/tui/rich-terminal/uidl-driver.f` module. It constructs the private,
@@ -431,9 +445,15 @@ caller-bounded binding registry separately from the retained engine:
 ```forth
 RTERM-HOST-BINDING-CAPTURE  ( host slot host-binding -- status )
 
+RTERM-UIDL-CONFIG-BYTES     ( -- bytes )  \ 96
 RTERM-UIDL-BINDING-BYTES    ( -- bytes )
-RTERM-UIDL-BACKEND-BYTES    ( -- bytes )
-RTERM-UIDL-INIT             ( host engine records-a records-u backend -- status )
+                                            \ 248 per binding
+RTERM-UIDL-BACKEND-BYTES    ( -- bytes )  \ 152
+RTERM-UIDL-CANDIDATE-ITEM-BYTES ( -- bytes )  \ 48
+RTERM-UIDL-CONFIG-INIT
+  ( host engine records-a records-u items-a items-per-bank
+    snapshots-a snapshot-bank-u config -- status )
+RTERM-UIDL-INIT             ( config backend -- status )
 RTERM-UIDL-FINI             ( backend -- status )
 RTERM-UIDL-VALID?           ( backend -- flag )
 RTERM-UIDL-STORAGE-DISJOINT? ( a u backend -- flag )
@@ -447,15 +467,23 @@ This foundation has no `RTAPT-*`, screen-publisher, MegaPad, Desk, or applet
 dependency. It borrows one immutable `RTE` facade, and its immutable UIDL
 callback installation through `_UTUI-PROJECTION-ADAPTER!` carries the exact
 driver backend as explicit composition context; neither context is stored in a
-UCTX. Until the driver owns and atomically admits caller-bounded candidate
-banks, attach and geometry tracking are local-only, project returns
-`RTERM-S-UNAVAILABLE`, quiesce proves the empty source set, and detach creates
-no wire owner or tombstone. In
-particular, the foundation must not open a default or root-region-only owner:
-owner quotas can be admitted only from one complete supported semantic tree.
-The neutral limits surface now makes that later comparison possible without
-exposing PT reply records or provider vocabulary to the UIDL driver, but the
-wire-inert foundation does not query it before a semantic tree can be measured.
+UCTX. The 96-byte initialization descriptor supplies the exact host, engine,
+248-byte binding-record slab, and caller-owned candidate storage geometry. Its
+record capacity determines exactly two item banks and two snapshot banks per
+binding; the 152-byte backend copies that geometry and does not retain the
+descriptor. Product composition may therefore clear the descriptor immediately
+after initialization.
+
+Attach and geometry tracking remain local-only. Project now constructs and
+atomically admits the inactive candidate bank, returning
+`RTERM-S-UNAVAILABLE` only for an accepted empty candidate and
+`RTERM-S-OK` for an accepted nonempty candidate. It still creates no wire
+owner or tombstone and calls no facade operation. In particular, the driver
+must not open a default or root-region-only owner: owner quotas can be admitted
+only from one complete supported semantic tree. The neutral limits surface
+makes that later comparison possible without exposing PT reply records or
+provider vocabulary to the UIDL driver, but this wire-inert slice does not
+query it.
 Construction and attach admit the exact declared application descriptor,
 component descriptor, and live component-state spans as well as the fixed host
 objects, and reject every alias with driver storage. Every public stateful
@@ -472,11 +500,12 @@ now-proven-disjoint descriptor even if attach throws. A capture refusal leaves
 the already pointer-free scratch unchanged.
 
 `RTERM-UIDL-FINI` is the matching host-unbind boundary. It succeeds only when
-the backend has no live bindings, clears the binding records and backend, and
-therefore removes the borrowed AHOST pointer before that host can be freed. A
-live-binding refusal leaves every byte intact for quarantine. The immutable
-UIDL callback table may retain the same stable backend address; a later exact
-host may reinitialize and reinstall that address idempotently.
+the backend has no live bindings, clears the binding records, both candidate
+bank slabs, and the backend, and therefore removes the borrowed AHOST pointer
+before that host can be freed. A live-binding refusal leaves every byte intact
+for quarantine. The immutable UIDL callback table may retain the same stable
+backend address; a later exact host may reinitialize and reinstall that address
+idempotently.
 
 `host-binding` is an immutable, call-borrowed descriptor containing ABI
 version, exact size, zero-reserved fields, the exact `AHOST` and `AHS` slot
@@ -539,16 +568,18 @@ can be admitted.
 ### 6.2 Project
 
 Project runs with the token's exact UCTX active after normal UIDL binding updates and
-layout. It walks dirty semantic elements through the retained projector
-registry, captures complete snapshots into admitted backend storage, validates
-the resulting graph, and stages desired retained changes. It never asks an
-applet to enumerate a second scene.
+layout. The current projector walks the complete active tree, captures every
+eligible neutral LABEL snapshot into the binding's inactive bank, validates
+that bank with `RUPJ-CANDIDATE-VALID?`, and writes the selector only after its
+metadata is complete. It never asks an applet to enumerate a second scene.
 
-Local projection admission is atomic. A failure leaves the previous copied
-projection recipe and retained terminal state authoritative while UIDL and CELL state
-remain untouched. A successful projection records the newest desired state for
-bounded later publication. No protocol byte is emitted from an element or
-widget callback.
+Local projection admission is atomic. A failure leaves the selected copied
+projection recipe authoritative while UIDL and CELL state remain untouched.
+An accepted empty recipe supersedes the former candidate but reports
+`RTERM-S-UNAVAILABLE`; an accepted nonempty recipe reports `RTERM-S-OK`.
+No protocol byte is emitted from an element or widget callback. Layout/style
+completion and generic-engine LABEL materialization remain necessary before
+this locally accepted desired state can become retained terminal state.
 
 The first materialization in an epoch is a complete projection obligation, not
 an ordinary dirty-element update. Transition to retained availability, and
@@ -776,13 +807,16 @@ The Desktop leaf constructs its current concrete layers in dependency order:
 PT session, neutral `APTSCB`, caller-bounded `RTAPT`, immutable `RTE` facade,
 unified `RTAPTSCB` publisher attachment, and finally the `APTAS` shell owner.
 The product profile supplies independent owner-record, operation-record,
-copied-operation-byte, and UIDL-binding-record capacities before the leaf is
-sourced; fixed one-per-composition records remain leaf-owned. Desk's neutral
-host lifecycle then initializes the UIDL driver against the exact live `AHOST`,
-installs the one post-UIDL callback, and finalizes it after child drain. Setup
-and release publish explicit phases, so a constructor or destructor refusal
-retains the smallest exact retry authority rather than clearing uncertain
-storage.
+copied-operation-byte, UIDL-binding-record, per-candidate item, and
+per-candidate snapshot-byte capacities before the leaf is sourced. The APT-1
+Desk product supplies overrideable defaults for those product capacities and
+allocates two candidate banks of each kind per binding; fixed
+one-per-composition records remain leaf-owned. Desk's neutral host lifecycle
+then initializes the UIDL driver against the exact live `AHOST`, clears the
+temporary UIDL configuration descriptor, installs the one post-UIDL callback,
+and finalizes it after child drain. Setup and release publish explicit phases,
+so a constructor or destructor refusal retains the smallest exact retry
+authority rather than clearing uncertain storage.
 
 The name `desk-apt1.f` identifies that opt-in product composition, not a second
 Desk implementation or a rich Desk behavior. Both baseline and APT-1 products
@@ -800,12 +834,14 @@ attempt, including a throw; a quarantined instance keeps its already-copied
 tuple, while a later plain Desk constructor cannot resurrect a partial rich
 composition after the outer storage was released.
 
-That construction does not itself claim retained semantic support. Until the
-lifecycle driver owns admitted candidates and a materializer couples them
-through `RTE`, the driver remains wire-inert and the production host advertises
-no retained policy. CELL output still traverses the unified publisher, while
-attach, geometry, quiesce, and detach exercise the exact private UCTX lifetime
-without opening a root-region-only wire owner.
+That construction does not itself claim retained semantic support. The
+lifecycle driver now owns and atomically admits neutral candidates, but no
+materializer yet couples them through `RTE`; the driver therefore remains
+wire-inert and the production host advertises no retained policy. CELL output
+still traverses the unified publisher, while attach, project, geometry,
+quiesce, and detach exercise the exact private UCTX lifetime without opening a
+root-region-only wire owner. The next critical slice is neutral layout/style
+projection followed by generic-engine LABEL materialization.
 
 Retained discovery is not a hosted-UCTX launch gate. The mandatory initial CELL
 snapshot is produced only after Desk initialization, so host composition,

@@ -34,6 +34,7 @@ def test_driver_is_optional_neutral_and_caller_bounded() -> None:
         "../applet-host/host.f",
         "../../utils/memory-span.f",
         "engine.f",
+        "uidl-projector.f",
     ]
 
     # This driver is a host/UIDL lifecycle boundary, not another terminal
@@ -84,23 +85,56 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
     assert "8 U<" in _definition(source, "RTERM-STATUS-VALID?")
 
     assert "96 CONSTANT RTERM-HOST-BINDING-SIZE" in source
-    assert "144 CONSTANT RTERM-UIDL-BINDING-SIZE" in source
-    assert "104 CONSTANT RTERM-UIDL-BACKEND-SIZE" in source
+    assert "96 CONSTANT RTERM-UIDL-CONFIG-SIZE" in source
+    assert "48 CONSTANT _RTERM-CANDIDATE-META-SIZE" in source
+    assert "248 CONSTANT RTERM-UIDL-BINDING-SIZE" in source
+    assert "152 CONSTANT RTERM-UIDL-BACKEND-SIZE" in source
     assert "_RGN-DESC-SIZE CONSTANT RGN-SIZE" in region
+    assert "RTERM-UIDL-CONFIG-SIZE" in _definition(
+        source, "RTERM-UIDL-CONFIG-BYTES"
+    )
     assert "RTERM-UIDL-BINDING-SIZE" in _definition(
         source, "RTERM-UIDL-BINDING-BYTES"
     )
     assert "RTERM-UIDL-BACKEND-SIZE" in _definition(
         source, "RTERM-UIDL-BACKEND-BYTES"
     )
+    assert "RUPJ-ITEM-BYTES" in _definition(
+        source, "RTERM-UIDL-CANDIDATE-ITEM-BYTES"
+    )
+
+    # Candidate authority is positional in the caller-owned A/B banks.  A
+    # binding stores only one selector and two fixed metadata records.
+    binding_fields = {
+        "_RTERM-R.LAST-STATUS": 128,
+        "_RTERM-R.CANDIDATE": 136,
+        "_RTERM-R.CANDIDATE-A": 144,
+        "_RTERM-R.CANDIDATE-B": 192,
+        "_RTERM-R.RESERVED": 240,
+    }
+    for field, offset in binding_fields.items():
+        assert f": {field}" in source
+        assert f"{offset} +" in _definition(source, field)
+    for field, offset in {
+        "_RTERM-K.ITEMS": 8,
+        "_RTERM-K.SNAPSHOTS": 16,
+        "_RTERM-K.REGIONS": 24,
+        "_RTERM-K.OBJECTS": 32,
+        "_RTERM-K.UTF8": 40,
+    }.items():
+        assert f"{offset} +" in _definition(source, field)
 
     signatures = {
         "RTERM-STATUS-VALID?": "( status -- flag )",
+        "RTERM-UIDL-CONFIG-BYTES": "( -- bytes )",
         "RTERM-UIDL-BINDING-BYTES": "( -- bytes )",
         "RTERM-UIDL-BACKEND-BYTES": "( -- bytes )",
-        "RTERM-UIDL-INIT": (
-            "( host engine records-a records-u backend -- status )"
+        "RTERM-UIDL-CANDIDATE-ITEM-BYTES": "( -- bytes )",
+        "RTERM-UIDL-CONFIG-INIT": (
+            "( host engine records-a records-u items-a items-per-bank\n"
+            "    snapshots-a snapshot-bank-u config -- status )"
         ),
+        "RTERM-UIDL-INIT": "( config backend -- status )",
         "RTERM-UIDL-FINI": "( backend -- status )",
         "RTERM-UIDL-VALID?": "( backend -- flag )",
         "RTERM-UIDL-STORAGE-DISJOINT?": "( a u backend -- flag )",
@@ -127,12 +161,16 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
     assert set(public_words) == set(signatures)
     assert len(public_words) == len(signatures)
     for name, signature in signatures.items():
-        assert signature in _definition(source, name).splitlines()[0]
+        assert signature in _definition(source, name)
 
 
 def test_public_scratch_entries_catch_bodies_then_scrub_every_borrowed_cell() -> None:
     source = DRIVER.read_text(encoding="utf-8")
     wrappers = {
+        "RTERM-UIDL-CONFIG-INIT": (
+            "_RTERM-P-DO-CONFIG-INIT",
+            "_RTERM-CONFIG-INIT-BODY",
+        ),
         "RTERM-UIDL-INIT": (
             "_RTERM-P-DO-UIDL-INIT",
             "_RTERM-UIDL-INIT-BODY",
@@ -227,25 +265,70 @@ def test_public_scratch_entries_catch_bodies_then_scrub_every_borrowed_cell() ->
     assert "_RTERM-NEXT-TOKEN" not in scrub
 
 
-def test_init_preflights_all_ranges_before_publishing_mutation() -> None:
+def test_config_and_init_preflight_all_caller_owned_banks_before_mutation() -> None:
     source = DRIVER.read_text(encoding="utf-8")
-    ranges = _definition(source, "_RTERM-UIDL-RANGES?")
+    geometry = _definition(source, "_RTERM-UIDL-GEOMETRY?")
+    config_ranges = _definition(source, "_RTERM-CONFIG-RANGES?")
+    backend_ranges = _definition(source, "_RTERM-BACKEND-RANGES?")
+    config_init = _definition(source, "_RTERM-CONFIG-INIT-BODY")
     init = _definition(source, "_RTERM-UIDL-INIT-BODY")
 
-    assert ranges.count("_RTERM-SPAN?") == 3
-    assert "_RTERM-I-ENGINE @ RTE-VALID?" in ranges
-    assert "RTERM-UIDL-BINDING-SIZE MOD" in ranges
-    assert "RTERM-UIDL-BINDING-SIZE / 0=" in ranges
-    assert ranges.count("_RTERM-DISJOINT?") == 6
-    assert ranges.count("RTE-STORAGE-DISJOINT?") == 3
-    assert "!" not in ranges
+    # Binding count determines exactly two positional banks per binding.  The
+    # two product capacities remain caller supplied; checked multiplication
+    # derives the exact item and snapshot spans without a driver-side cap.
+    assert "_RTERM-I-ENGINE @ RTE-VALID?" in geometry
+    assert "RTERM-UIDL-BINDING-SIZE MOD" in geometry
+    assert "RTERM-UIDL-BINDING-SIZE /" in geometry
+    assert "_RTERM-I-CAPACITY @ 2 _RTERM-UMUL?" in geometry
+    assert "_RTERM-I-ITEMS-PER-BANK @ RUPJ-ITEM-BYTES" in geometry
+    assert "_RTERM-I-BANK-COUNT @ _RTERM-I-ITEM-BANK-U @" in geometry
+    assert "_RTERM-I-BANK-COUNT @ _RTERM-I-SNAPSHOT-BANK-U @" in geometry
+    assert geometry.count("_RTERM-DISJOINT?") == 10
+    assert geometry.count("RTE-STORAGE-DISJOINT?") == 4
+    assert geometry.count("UIDL-STORAGE-DISJOINT?") == 3
+    assert geometry.count("ST-STORAGE-DISJOINT?") == 3
 
-    preflight = init.index("_RTERM-UIDL-RANGES? 0= IF")
+    # The call-borrowed config and long-lived backend are also disjoint from
+    # every authority and payload range before either construction mutates it.
+    for ranges in (config_ranges, backend_ranges):
+        assert ranges.count("_RTERM-SPAN?") == 1
+        assert ranges.count("_RTERM-DISJOINT?") == 5
+        assert ranges.count("RTE-STORAGE-DISJOINT?") == 1
+        assert ranges.count("UIDL-STORAGE-DISJOINT?") == 1
+        assert ranges.count("ST-STORAGE-DISJOINT?") == 1
+
+    geometry_at = config_init.index("_RTERM-UIDL-GEOMETRY? 0= IF")
+    config_ranges_at = config_init.index("_RTERM-CONFIG-RANGES? 0= IF")
+    config_fill = config_init.index("RTERM-UIDL-CONFIG-SIZE 0 FILL")
+    config_magic = config_init.index("_RTERM-C.MAGIC !")
+    assert geometry_at < config_ranges_at < config_fill < config_magic
+    assert config_init.count("0 FILL") == 1
+    for field in (
+        "_RTERM-C.ABI !",
+        "_RTERM-C.SIZE !",
+        "_RTERM-C.HOST !",
+        "_RTERM-C.ENGINE !",
+        "_RTERM-C.RECORDS-A !",
+        "_RTERM-C.RECORDS-U !",
+        "_RTERM-C.ITEMS-A !",
+        "_RTERM-C.ITEMS-PER-BANK !",
+        "_RTERM-C.SNAPSHOTS-A !",
+        "_RTERM-C.SNAPSHOT-BANK-U !",
+    ):
+        assert config_fill < config_init.index(field) < config_magic
+
+    config_valid = init.index("_RTERM-CONFIG-VALID? 0= IF")
+    backend_valid = init.index("_RTERM-BACKEND-RANGES? 0= IF", config_valid)
+    config_disjoint = init.index("_RTERM-DISJOINT? 0= IF", backend_valid)
     records_fill = init.index("_RTERM-I-RECORDS-U @ 0 FILL")
+    items_fill = init.index("_RTERM-I-ITEMS-U @ 0 FILL", records_fill)
+    snapshots_fill = init.index("_RTERM-I-SNAPSHOTS-U @ 0 FILL", items_fill)
     backend_fill = init.index("RTERM-UIDL-BACKEND-SIZE 0 FILL")
     magic = init.index("_RTERM-B.MAGIC !")
-    assert preflight < records_fill < backend_fill < magic
-    assert init.count("0 FILL") == 2
+    assert config_valid < backend_valid < config_disjoint
+    assert config_disjoint < records_fill < items_fill < snapshots_fill
+    assert snapshots_fill < backend_fill < magic
+    assert init.count("0 FILL") == 4
     for field in (
         "_RTERM-B.ABI !",
         "_RTERM-B.SIZE !",
@@ -255,6 +338,12 @@ def test_init_preflights_all_ranges_before_publishing_mutation() -> None:
         "_RTERM-B.RECORDS-A !",
         "_RTERM-B.RECORDS-U !",
         "_RTERM-B.CAPACITY !",
+        "_RTERM-B.ITEMS-A !",
+        "_RTERM-B.ITEMS-U !",
+        "_RTERM-B.ITEMS-PER-BANK !",
+        "_RTERM-B.SNAPSHOTS-A !",
+        "_RTERM-B.SNAPSHOTS-U !",
+        "_RTERM-B.SNAPSHOT-BANK-U !",
     ):
         assert backend_fill < init.index(field) < magic
     assert "RTERM-UIDL-BINDING-SIZE /" in init
@@ -269,10 +358,44 @@ def test_fini_unbinds_only_a_zero_active_backend_and_is_blank_idempotent() -> No
     valid = fini.index("_RTERM-UIDL-VALID-BODY? 0= IF")
     active = fini.index("_RTERM-B.ACTIVE @ IF")
     records = fini.index("_RTERM-B.RECORDS-U @ 0 FILL")
-    backend = fini.index("RTERM-UIDL-BACKEND-SIZE 0 FILL", records)
-    assert span < blank < valid < active < records < backend
+    items = fini.index("_RTERM-B.ITEMS-U @ 0 FILL", records)
+    snapshots = fini.index("_RTERM-B.SNAPSHOTS-U @ 0 FILL", items)
+    backend = fini.index("RTERM-UIDL-BACKEND-SIZE 0 FILL", snapshots)
+    assert span < blank < valid < active < records < items < snapshots < backend
     assert "DROP RTERM-S-WOULD-BLOCK EXIT" in fini[active:records]
-    assert fini.count("0 FILL") == 2
+    assert fini.count("0 FILL") == 4
+
+
+def test_candidate_bank_addresses_are_rederived_from_record_position() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+    index = _definition(source, "_RTERM-RECORD-INDEX?")
+    load = _definition(source, "_RTERM-BANK-LOAD")
+    clear = _definition(source, "_RTERM-CLEAR-RECORD-BANKS")
+
+    assert "_RTERM-B.RECORDS-A @ -" in index
+    assert "RTERM-UIDL-BINDING-SIZE MOD" in index
+    assert "RTERM-UIDL-BINDING-SIZE /" in index
+    assert "_RTERM-B.CAPACITY @ U< 0=" in index
+    assert "_RTERM-BK-BANK @ 2 U< 0=" in load
+    assert "_RTERM-BK-INDEX @ 2 * _RTERM-BK-BANK @ +" in load
+    assert "_RTERM-B.ITEMS-PER-BANK @ RUPJ-ITEM-BYTES" in load
+    assert "_RTERM-B.ITEMS-A @" in load
+    assert "_RTERM-B.SNAPSHOTS-A @" in load
+    assert "_RTERM-B.SNAPSHOT-BANK-U @" in load
+
+    # Both banks are scrubbed as one record-local ownership action.  No bank
+    # pointer is retained in the binding record itself.
+    assert clear.count("_RTERM-BANK-LOAD") == 2
+    assert clear.count("0 FILL") == 4
+    assert "_RTERM-CL-RECORD @ 0 _RTERM-CL-BACKEND @" in clear
+    assert "_RTERM-CL-RECORD @ 1 _RTERM-CL-BACKEND @" in clear
+    for forbidden_field in (
+        "_RTERM-R.ITEMS-A",
+        "_RTERM-R.SNAPSHOTS-A",
+        "_RTERM-R.ITEM-U",
+        "_RTERM-R.SNAPSHOT-U",
+    ):
+        assert forbidden_field not in source
 
 
 def test_ahost_adapter_captures_attaches_and_scrubs_call_borrowed_binding() -> None:
@@ -522,25 +645,96 @@ def test_attach_is_idempotent_and_rejects_collisions_before_claiming_storage() -
     assert "RTERM-S-STALE _RTERM-ATTACH-FAIL EXIT" in attach
     assert "RTERM-S-CAPACITY _RTERM-ATTACH-FAIL EXIT" in attach
 
-    fill = populate.index("RTERM-UIDL-BINDING-SIZE 0 FILL")
+    bank_clear = populate.index("_RTERM-CLEAR-RECORD-BANKS")
+    fill = populate.index("RTERM-UIDL-BINDING-SIZE 0 FILL", bank_clear)
     token = populate.index("_RTERM-R.TOKEN !", fill)
     state = populate.index("_RTERM-R.STATE !", token)
     active = populate.index("_RTERM-B.ACTIVE +!", state)
-    assert fill < token < state < active
+    assert bank_clear < fill < token < state < active
+    assert "RTERM-S-INVALID _RTERM-ATTACH-FAIL EXIT" in populate[
+        bank_clear:fill
+    ]
 
 
-def test_project_is_explicitly_unavailable_and_wire_inert() -> None:
+def test_project_admits_into_the_inactive_bank_and_publishes_selector_last() -> None:
     source = DRIVER.read_text(encoding="utf-8")
     project = _definition(source, "_RTERM-UCTX-PROJECT-BODY")
+    select = _definition(source, "_RTERM-PROJECT-SELECT")
+    validate = _definition(source, "_RTERM-PROJECT-CANDIDATE-VALID?")
+    clear_inactive = _definition(source, "_RTERM-PROJECT-CLEAR-INACTIVE")
+    publish = _definition(source, "_RTERM-PROJECT-PUBLISH")
+    fail = _definition(source, "_RTERM-PROJECT-FAIL")
 
     lookup = project.index("_RTERM-CALL-LOOKUP")
     attached = project.index("_RTERM-BINDING-ST-ATTACHED <>", lookup)
     live = project.index("_RTERM-CALL-LIVE?", attached)
-    note = project.index("RTERM-S-UNAVAILABLE _RTERM-C-RECORD @", live)
-    returned = project.rindex("RTERM-S-UNAVAILABLE")
-    assert lookup < attached < live < note < returned
-    assert project.count("RTERM-S-UNAVAILABLE") == 2
-    assert project.count("!") == 1
+    choose = project.index("_RTERM-PROJECT-SELECT", live)
+    revoke = project.index("_RTERM-CANDIDATE-META-SIZE 0 FILL", choose)
+    build = project.index("RUPJ-BUILD", revoke)
+    build_status = project.index("RUPJ-S-OK <>", build)
+    admitted = project.index("_RTERM-PROJECT-CANDIDATE-VALID?", build_status)
+    published = project.index("_RTERM-PROJECT-PUBLISH", admitted)
+    assert lookup < attached < live < choose < revoke < build
+    assert build < build_status < admitted < published
+
+    # Selector zero starts at A/generation one; later construction always uses
+    # the opposite bank and derives a monotonic generation from the selected
+    # metadata.  Capacity exhaustion cannot wrap and publish an ABA generation.
+    normalized_select = re.sub(r"\s+", " ", select)
+    assert "_RTERM-PJ-ACTIVE @ 0= IF 1 _RTERM-PJ-GENERATION !" in normalized_select
+    assert "_RTERM-LENGTH-MAX = IF" in select
+    assert "RTERM-S-CAPACITY EXIT" in select
+    generation_exhausted = select.index("_RTERM-LENGTH-MAX = IF")
+    assert (
+        "_RTERM-PJ-META @ _RTERM-CANDIDATE-META-SIZE 0 FILL"
+        in select[generation_exhausted:]
+    )
+    assert "_RTERM-PJ-ACTIVE @ 1 = IF" in select
+    assert "1 _RTERM-PJ-BANK !" in select
+    assert "2 _RTERM-PJ-PUBLISH !" in select
+    assert "0 _RTERM-PJ-BANK !" in select
+    assert "1 _RTERM-PJ-PUBLISH !" in select
+    assert "_RTERM-BANK-LOAD" in select
+
+    assert "RUPJ-CANDIDATE-VALID?" in validate
+    assert clear_inactive.count("0 FILL") == 3
+    invalid_clear = project.index("_RTERM-PROJECT-CLEAR-INACTIVE", admitted)
+    invalid_fail = project.index("RTERM-S-INVALID _RTERM-PROJECT-FAIL", invalid_clear)
+    assert admitted < invalid_clear < invalid_fail < published
+    assert source.count("RUPJ-CANDIDATE-VALID?") == 1
+    assert source.count("RUPJ-BUILD") == 1
+    assert "RUPJ-S-CAPACITY = IF" in project
+    assert "RTERM-S-CAPACITY" in project
+    assert "RTERM-S-INVALID" in project
+
+    # Metadata and LAST-STATUS are complete before the selector is the final
+    # publication store.  A valid empty projection is published but reports
+    # UNAVAILABLE; a nonempty candidate reports OK.
+    metadata_stores = [
+        publish.index(f"_RTERM-K.{field} !")
+        for field in (
+            "GENERATION",
+            "ITEMS",
+            "SNAPSHOTS",
+            "REGIONS",
+            "OBJECTS",
+            "UTF8",
+        )
+    ]
+    empty = publish.index("_RTERM-PJ-ITEMS @ 0= IF")
+    unavailable = publish.index("RTERM-S-UNAVAILABLE", empty)
+    nonempty_ok = publish.index("RTERM-S-OK", unavailable)
+    last_status = publish.index("_RTERM-R.LAST-STATUS !", nonempty_ok)
+    selector = publish.index("_RTERM-R.CANDIDATE !", last_status)
+    assert metadata_stores == sorted(metadata_stores)
+    assert metadata_stores[-1] < empty < unavailable < nonempty_ok
+    assert nonempty_ok < last_status < selector
+    assert publish.index("!", selector) == publish.rindex("!")
+
+    # All failure exits record status without touching the selected metadata or
+    # selector.  The partially written inactive bank therefore has no authority.
+    assert "_RTERM-R.LAST-STATUS !" in fail
+    assert "_RTERM-R.CANDIDATE" not in fail
     for forbidden in (
         "EXECUTE",
         "PT-",
@@ -552,6 +746,49 @@ def test_project_is_explicitly_unavailable_and_wire_inert() -> None:
         "_RTERM-B.ACTIVE",
     ):
         assert forbidden not in project
+
+
+def test_ordinary_validation_checks_selected_metadata_without_deep_scanning() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+    candidates = _definition(source, "_RTERM-RECORD-CANDIDATES-VALID?")
+    metadata = _definition(source, "_RTERM-CANDIDATE-META-VALID?")
+
+    # Inactive metadata is build scratch and may be partial after a caught
+    # exception.  Selector zero authorizes neither bank; otherwise only the
+    # selected fixed-size metadata is relevant to ordinary backend validity.
+    normalized = re.sub(r"\s+", " ", candidates)
+    assert "_RTERM-RV-SELECTOR @ 0= IF -1 EXIT THEN" in normalized
+    assert candidates.count("_RTERM-CANDIDATE-META-VALID?") == 2
+    assert "_RTERM-CANDIDATE-META-BLANK?" not in candidates
+    assert "GENERATION @" not in candidates
+
+    # Shallow validation still rejects quota combinations that no admitted
+    # LABEL candidate can produce.  Snapshot strides are ALIGN8(64+capacity),
+    # so their checked total lies between the exact header+UTF8 sum and at
+    # most seven alignment bytes per positive-capacity item above it.  There
+    # can be no more of those than min(item count, UTF8 quota).
+    assert "_RTERM-K.ITEMS @ 0= IF" in metadata
+    assert "_RTERM-K.SNAPSHOTS @ 0=" in metadata
+    assert "UIDL-LABEL-SNAPSHOT-HEADER-SIZE _RTERM-UMUL?" in metadata
+    assert "_RTERM-K.UTF8 @ _RTERM-UADD?" in metadata
+    normalized_metadata = re.sub(r"\s+", " ", metadata)
+    assert (
+        "_RTERM-K.ITEMS @ _RTERM-RV-META @ _RTERM-K.UTF8 @ MIN"
+        in normalized_metadata
+    )
+    assert "7 _RTERM-UMUL?" in metadata
+    assert "_RTERM-RV-SNAPSHOT-MIN @ SWAP _RTERM-UADD?" in metadata
+
+    for hot_path in (
+        "_RTERM-RECORD-CANDIDATES-VALID?",
+        "_RTERM-RECORD-LIVE?",
+        "_RTERM-RECORD-VALID?",
+        "_RTERM-UIDL-VALID-BODY?",
+        "_RTERM-CALL-LOOKUP",
+    ):
+        body = _definition(source, hot_path)
+        assert "RUPJ-CANDIDATE-VALID?" not in body
+        assert "RUPJ-BUILD" not in body
 
 
 def test_relayout_separates_visible_geometry_from_hidden_scrub() -> None:
@@ -628,14 +865,16 @@ def test_quiesce_detach_scrub_and_install_one_immutable_context() -> None:
     d_quiesced = detach.index("_RTERM-BINDING-ST-QUIESCED <>", d_detached)
     d_live = detach.index("_RTERM-CALL-LIVE?", d_quiesced)
     d_active = detach.index("_RTERM-B.ACTIVE @ 0= IF", d_live)
-    d_save = detach.index("_RTERM-R.TOKEN @ _RTERM-D-TOKEN !", d_active)
+    d_banks = detach.index("_RTERM-CLEAR-RECORD-BANKS", d_active)
+    d_save = detach.index("_RTERM-R.TOKEN @ _RTERM-D-TOKEN !", d_banks)
     d_scrub = detach.index("RTERM-UIDL-BINDING-SIZE 0 FILL", d_save)
     d_token = detach.index("_RTERM-R.TOKEN !", d_scrub)
     d_issuer = detach.index("_RTERM-R.ISSUER !", d_token)
     d_status = detach.index("_RTERM-R.LAST-STATUS !", d_issuer)
     d_state = detach.index("_RTERM-R.STATE !", d_status)
     d_count = detach.index("-1 _RTERM-C-BACKEND @ _RTERM-B.ACTIVE +!", d_state)
-    assert d_lookup < d_detached < d_quiesced < d_live < d_active < d_save
+    assert d_lookup < d_detached < d_quiesced < d_live < d_active < d_banks
+    assert d_banks < d_save
     assert d_save < d_scrub < d_token < d_issuer < d_status < d_state < d_count
     assert "RTERM-S-INVALID _RTERM-CALL-FAIL EXIT" in detach
     assert "RTERM-S-SOURCE" not in detach

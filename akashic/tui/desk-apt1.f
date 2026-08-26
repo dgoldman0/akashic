@@ -7,12 +7,11 @@
 \  initialize a session, install an owner, negotiate, or emit terminal
 \  bytes.  A profile opts in by calling APT1-DESK-RUN instead of DESK-RUN.
 \
-\  Product profiles override the six capacities before REQUIRE.  The four
-\  record/copy dimensions are independent: owner tombstones, one atomic
-\  retained candidate, and live UIDL bindings exhaust separately.  These
-\  defaults match the current Desktop catalog's 32-entry product boundary;
-\  they do not advertise retained semantics.  The host retained policy stays
-\  disabled until semantic projection can admit a complete UIDL tree.
+\  Product profiles override the eight capacities before REQUIRE.  Owner
+\  tombstones, one atomic retained candidate, live UIDL bindings, and the two
+\  per-binding neutral projection banks exhaust independently.  The defaults
+\  are only this product profile's current boundary; the generic driver and
+\  lower Desk/applet layers do not acquire fixed candidate capacities.
 \
 \  This leaf owns XMEM allocations made while it is sourced.  Keep it on the
 \  source path unless a compiled shard has separately proved those external
@@ -52,12 +51,25 @@ REQUIRE applets/desk/desk.f
 32 CONSTANT APT1-DESK-RTERM-BINDING-RECORDS
 [THEN]
 
+[UNDEFINED] APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK [IF]
+32 CONSTANT APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK
+[THEN]
+
+[UNDEFINED] APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK [IF]
+4096 CONSTANT APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK
+[THEN]
+
 : _A1D-U32-POSITIVE?  ( u -- flag )
     DUP 0> SWAP 0xFFFFFFFF U> 0= AND ;
 
 : _A1D-CAPACITY*  ( count item-u -- total-u )
-    OVER _A1D-U32-POSITIVE? 0= ABORT" desk-apt1: invalid record count"
-    UM* DUP 0<> ABORT" desk-apt1: record storage overflow" DROP ;
+    OVER _A1D-U32-POSITIVE? 0= ABORT" desk-apt1: invalid capacity"
+    UM* DUP 0<> ABORT" desk-apt1: storage size overflow" DROP ;
+
+: _A1D-ALIGNMENT-SLOP+  ( payload-u -- allocation-u )
+    DUP 0> 0= ABORT" desk-apt1: invalid storage size"
+    DUP -8 U> ABORT" desk-apt1: aligned storage overflow"
+    7 + ;
 
 APT1-DESK-RTAPT-OWNER-RECORDS RTAPT-OWNER-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-RTAPT-OWNERS-U
@@ -65,9 +77,25 @@ APT1-DESK-RTAPT-OP-RECORDS RTAPT-OP-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-RTAPT-OPS-U
 APT1-DESK-RTERM-BINDING-RECORDS RTERM-UIDL-BINDING-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-UIDL-RECORDS-U
+APT1-DESK-RTERM-BINDING-RECORDS 2 _A1D-CAPACITY*
+    CONSTANT _A1D-UIDL-CANDIDATE-BANKS
+APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK
+    RTERM-UIDL-CANDIDATE-ITEM-BYTES _A1D-CAPACITY*
+    CONSTANT _A1D-UIDL-CANDIDATE-ITEM-BANK-U
+_A1D-UIDL-CANDIDATE-BANKS _A1D-UIDL-CANDIDATE-ITEM-BANK-U
+    _A1D-CAPACITY*
+    CONSTANT _A1D-UIDL-CANDIDATE-ITEMS-U
 
 APT1-DESK-RTAPT-COPY-BYTES _A1D-U32-POSITIVE? 0=
     ABORT" desk-apt1: invalid retained copy capacity"
+APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK
+    _A1D-U32-POSITIVE? 0=
+    ABORT" desk-apt1: invalid candidate snapshot capacity"
+APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK 7 AND
+    ABORT" desk-apt1: unaligned candidate snapshot capacity"
+_A1D-UIDL-CANDIDATE-BANKS
+    APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK _A1D-CAPACITY*
+    CONSTANT _A1D-UIDL-CANDIDATE-SNAPSHOTS-U
 
 \ PT-INIT borrows all seven ranges for the lifetime of the session.  The
 \ event scratch is intentionally distinct from APTAS's embedded poll event.
@@ -84,8 +112,10 @@ _A1D-SCB-MEM 7 + -8 AND CONSTANT _A1D-ADAPTER
 APTAS-SIZE 7 + XBUF _A1D-OWNER-MEM
 _A1D-OWNER-MEM 7 + -8 AND CONSTANT _A1D-OWNER
 
-\ The concrete RTAPT engine, its neutral facade, unified screen publisher, and
-\ UIDL binding registry are source-owned, aligned, pairwise separate spans.
+\ The concrete RTAPT engine, its neutral facade, unified screen publisher,
+\ UIDL binding registry, and neutral candidate banks are source-owned,
+\ aligned, pairwise separate spans.  The driver clears the registry and banks
+\ at its init/fini ownership boundaries; Desk only owns their XMEM lifetime.
 \ Configuration and the one host-binding descriptor are call-borrowed only.
 RTAPT-CONFIG-SIZE 7 + XBUF _A1D-RTAPT-CONFIG-MEM
 _A1D-RTAPT-CONFIG-MEM 7 + -8 AND CONSTANT _A1D-RTAPT-CONFIG
@@ -113,6 +143,20 @@ _A1D-UIDL-BACKEND-MEM 7 + -8 AND CONSTANT _A1D-UIDL-BACKEND
 
 _A1D-UIDL-RECORDS-U 7 + XBUF _A1D-UIDL-RECORDS-MEM
 _A1D-UIDL-RECORDS-MEM 7 + -8 AND CONSTANT _A1D-UIDL-RECORDS
+
+_A1D-UIDL-CANDIDATE-ITEMS-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-UIDL-CANDIDATE-ITEMS-MEM
+_A1D-UIDL-CANDIDATE-ITEMS-MEM 7 + -8 AND
+    CONSTANT _A1D-UIDL-CANDIDATE-ITEMS
+
+_A1D-UIDL-CANDIDATE-SNAPSHOTS-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-UIDL-CANDIDATE-SNAPSHOTS-MEM
+_A1D-UIDL-CANDIDATE-SNAPSHOTS-MEM 7 + -8 AND
+    CONSTANT _A1D-UIDL-CANDIDATE-SNAPSHOTS
+
+RTERM-UIDL-CONFIG-BYTES _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-UIDL-CONFIG-MEM
+_A1D-UIDL-CONFIG-MEM 7 + -8 AND CONSTANT _A1D-UIDL-CONFIG
 
 RTERM-HOST-BINDING-SIZE 7 + XBUF _A1D-HOST-BINDING-MEM
 _A1D-HOST-BINDING-MEM 7 + -8 AND CONSTANT _A1D-HOST-BINDING
@@ -159,6 +203,7 @@ _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
     _A1D-RTE-FACADE RTE-FACADE-SIZE 0 FILL
     _A1D-RTAPTSCB RTAPTSCB-SIZE 0 FILL
     _A1D-UIDL-BACKEND RTERM-UIDL-BACKEND-SIZE 0 FILL
+    _A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL
     _A1D-HOST-BINDING RTERM-HOST-BINDING-SIZE 0 FILL
     0 _A1D-HOST-CB-HOST !
     0 _A1D-HOST-CB-CONTEXT !
@@ -231,7 +276,19 @@ _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
     _A1D-HOST-CB-HOST @
     _A1D-RTE-FACADE
     _A1D-UIDL-RECORDS _A1D-UIDL-RECORDS-U
-    _A1D-UIDL-BACKEND RTERM-UIDL-INIT
+    _A1D-UIDL-CANDIDATE-ITEMS
+    APT1-DESK-RTERM-CANDIDATE-ITEMS-PER-BANK
+    _A1D-UIDL-CANDIDATE-SNAPSHOTS
+    APT1-DESK-RTERM-CANDIDATE-SNAPSHOT-BYTES-PER-BANK
+    _A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-INIT
+    DUP _A1D-HOST-CB-RESULT !
+    RTERM-S-OK <> IF
+        _A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL
+        EXIT
+    THEN
+
+    _A1D-UIDL-CONFIG _A1D-UIDL-BACKEND RTERM-UIDL-INIT
+    _A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL
     DUP _A1D-HOST-CB-RESULT !
     RTERM-S-OK <> IF EXIT THEN
 
@@ -249,6 +306,7 @@ _A1D-UIDL-UNBOUND _A1D-UIDL-PHASE !
     ['] _A1D-HOST-INIT-BODY CATCH ?DUP IF
         DROP RTERM-S-INVALID _A1D-HOST-CB-RESULT !
     THEN
+    _A1D-UIDL-CONFIG RTERM-UIDL-CONFIG-BYTES 0 FILL
     _A1D-HOST-CB-RESULT @
     0 _A1D-HOST-CB-HOST !
     0 _A1D-HOST-CB-CONTEXT !

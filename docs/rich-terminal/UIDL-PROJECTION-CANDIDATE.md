@@ -72,6 +72,18 @@ and `region-quota` is one exactly when the candidate is nonempty.
 
 Construction clears the complete destination before writing. Any ordinary
 failure or caught exception clears it again and returns five zero values plus a
-stable status. The caller publishes a successful candidate separately; bytes
-in the construction spans are never authoritative merely because they were
-written.
+stable status. The UIDL lifecycle driver assigns each private binding two
+caller-owned item banks and two caller-owned snapshot banks. A projection
+builds only the inactive pair, revalidates it with
+`RUPJ-CANDIDATE-VALID?`, completes its bounded metadata, and publishes the new
+bank by writing the binding selector last. Written bytes and inactive metadata
+are never authoritative on their own.
+
+An accepted empty candidate is still selector-published so it supersedes any
+older desired scene, but `RTERM-UCTX-PROJECT` returns
+`RTERM-S-UNAVAILABLE`; an accepted nonempty candidate returns
+`RTERM-S-OK`. A build, validation, capacity, or caught-exception failure does
+not change the selector, so the previously selected candidate remains
+authoritative. Admission is the only place the driver performs the full RUPJ
+bank validation. This slice remains wire-inert: it neither calls the `RTE`
+facade nor assigns retained identities or materializes terminal objects.
