@@ -710,9 +710,7 @@ VARIABLE _RTE-LV-FEATURES
     THEN
     R> DROP ;
 
-: RTE-OWNER-OPEN
-    ( owner generation region-q resource-q object-q series-q
-      resource-bytes utf8-bytes sample-slots facade -- status )
+: RTE-OWNER-OPEN  ( owner generation region-q resource-q object-q series-q resource-bytes utf8-bytes sample-slots facade -- status )
     DUP RTE-VALID? 0= IF 2DROP 2DROP 2DROP 2DROP 2DROP RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.OWNER-OPEN-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;

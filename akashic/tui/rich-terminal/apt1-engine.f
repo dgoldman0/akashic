@@ -362,8 +362,7 @@ VARIABLE _RTAPT-CI-CU
     _RTAPT-CI-PA @ _RTAPT-CI-PU @ _RTAPT-CI-CA @ _RTAPT-CI-CU @
         MSPAN-OVERLAP? 0= ;
 
-: RTAPT-CONFIG-INIT  ( session owners-a owners-u ops-a ops-u copy-a copy-u
-                        config -- status )
+: RTAPT-CONFIG-INIT  ( session owners-a owners-u ops-a ops-u copy-a copy-u config -- status )
     _RTAPT-CI-C ! _RTAPT-CI-CU ! _RTAPT-CI-CA !
     _RTAPT-CI-PU ! _RTAPT-CI-PA ! _RTAPT-CI-OU ! _RTAPT-CI-OA ! _RTAPT-CI-S !
     _RTAPT-CONFIG-RANGES? 0= IF RTAPT-S-INVALID EXIT THEN
@@ -1350,9 +1349,7 @@ VARIABLE _RTAPT-OO-SLQ
 VARIABLE _RTAPT-OO-REUSED
 VARIABLE _RTAPT-OO-PRIOR-GEN
 
-: RTAPT-OWNER-OPEN  ( owner generation region-q resource-q object-q series-q
-                       resource-byte-q utf8-byte-q sample-slot-q engine
-                       -- status )
+: RTAPT-OWNER-OPEN  ( owner generation region-q resource-q object-q series-q resource-byte-q utf8-byte-q sample-slot-q engine -- status )
     _RTAPT-OO-E ! _RTAPT-OO-SLQ ! _RTAPT-OO-UQ ! _RTAPT-OO-RBQ !
     _RTAPT-OO-SQ ! _RTAPT-OO-OQ ! _RTAPT-OO-XQ ! _RTAPT-OO-RQ !
     _RTAPT-OO-GEN ! _RTAPT-OO-OWNER !
@@ -2105,8 +2102,7 @@ VARIABLE _RTAPT-RD-BASE
     PT-RET-REPLACE-START = IF 0 EXIT THEN
     _RTAPT-RD-O @ _RTAPT-O.HIDDEN-REGIONS @ ;
 
-: RTAPT-REGION-DEFINE  ( owner generation region x y cols rows z flags engine
-                           -- status )
+: RTAPT-REGION-DEFINE  ( owner generation region x y cols rows z flags engine -- status )
     _RTAPT-RD-E ! _RTAPT-RD-FLAGS ! _RTAPT-RD-Z ! _RTAPT-RD-ROWS !
     _RTAPT-RD-COLS ! _RTAPT-RD-Y ! _RTAPT-RD-X ! _RTAPT-RD-ID !
     _RTAPT-RD-GEN ! _RTAPT-RD-OWNER !
@@ -2638,10 +2634,7 @@ VARIABLE _RTAPT-GT-E
     0 _RTAPT-LU-A ! 0 _RTAPT-LU-U !
     0 _RTAPT-BSD-A ! 0 _RTAPT-BSD-U ! 0 _RTAPT-BSD-E ! ;
 
-: RTAPT-GLYPH-RUN-DEFINE
-    ( owner generation object region parent row col height width
-      root-height root-width z visible fg-rgba bg-rgba attrs
-      text-a text-u engine -- status )
+: RTAPT-GLYPH-RUN-DEFINE  ( owner generation object region parent row col height width root-height root-width z visible fg-rgba bg-rgba attrs text-a text-u engine -- status )
     _RTAPT-LD-E ! _RTAPT-LD-TEXT-U ! _RTAPT-LD-TEXT-A !
     _RTAPT-LD-ATTRS ! _RTAPT-LD-BG-RGBA ! _RTAPT-LD-FG-RGBA !
     _RTAPT-LD-VISIBLE ! _RTAPT-LD-Z !
@@ -2655,10 +2648,7 @@ VARIABLE _RTAPT-GT-E
     THEN
     _RTAPT-GLYPH-RUN-SCRUB ;
 
-: RTAPT-GLYPH-RUN-REPLACE
-    ( owner generation object region parent row col height width
-      root-height root-width z visible fg-rgba bg-rgba attrs
-      text-a text-u engine -- status )
+: RTAPT-GLYPH-RUN-REPLACE  ( owner generation object region parent row col height width root-height root-width z visible fg-rgba bg-rgba attrs text-a text-u engine -- status )
     _RTAPT-LD-E ! _RTAPT-LD-TEXT-U ! _RTAPT-LD-TEXT-A !
     _RTAPT-LD-ATTRS ! _RTAPT-LD-BG-RGBA ! _RTAPT-LD-FG-RGBA !
     _RTAPT-LD-VISIBLE ! _RTAPT-LD-Z !
@@ -2906,8 +2896,7 @@ VARIABLE _RTAPT-CB-MODE
 VARIABLE _RTAPT-CB-STATE
 VARIABLE _RTAPT-CB-STATUS
 
-: RTAPT-CELL-BEGIN  ( cols rows span-count cell-count cell-mode engine
-                        -- status )
+: RTAPT-CELL-BEGIN  ( cols rows span-count cell-count cell-mode engine -- status )
     _RTAPT-CB-E ! _RTAPT-CB-MODE ! _RTAPT-CB-CELLS ! _RTAPT-CB-SPANS !
     _RTAPT-CB-ROWS ! _RTAPT-CB-COLS !
     _RTAPT-CB-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN

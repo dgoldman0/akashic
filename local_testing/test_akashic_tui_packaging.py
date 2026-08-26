@@ -1753,6 +1753,33 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
     assert MEGAPAD_RICH_TERMINAL_MODULE not in rich_closure
 
 
+def test_desktop_apt1_parenthetical_comments_close_on_physical_lines() -> None:
+    profile = PROFILES["desktop-apt1"]
+    modules = dependency_order(profile.roots)
+
+    for module in modules:
+        source = (SOURCE_ROOT / module).read_text(encoding="utf-8")
+        for line_number, line in enumerate(source.splitlines(), start=1):
+            if "(" not in _forth_line_tokens(line):
+                continue
+            opening = line.find("(")
+            assert opening >= 0 and ")" in line[opening + 1 :], (
+                "cold-linked parenthetical comments must close on their "
+                f"physical line: {module}:{line_number}"
+            )
+
+    linked = _linked_chunks(
+        modules,
+        profile.link_chunk_bytes,
+        profile.audited_link_line_bytes,
+    )
+    assert all(
+        len(line) <= MEGAPAD_EVALUATE_SOURCE_MAX_BYTES
+        for source in linked.values()
+        for line in source.splitlines()
+    )
+
+
 def test_desktop_apt1_inherits_canonical_pad_and_daybook_launches() -> None:
     pad_launch = """CREATE _boot-pad-desc APP-DESC ALLOT
 _boot-pad-desc PAD-ENTRY

@@ -172,9 +172,7 @@ VARIABLE _RTSCREEN-I-P
 \
 \ ITEMS is a borrowed plan-item bank.  Its capacity is the only local screen
 \ bound; exact surface demand and provider admission are proved later by STEP.
-: RTSCREEN-INIT
-  ( facade items-a items-u owner owner-generation region first-object
-    producer -- scb-status )
+: RTSCREEN-INIT  ( facade items-a items-u owner owner-generation region first-object producer -- scb-status )
     _RTSCREEN-I-P ! _RTSCREEN-I-FIRST ! _RTSCREEN-I-REGION !
     _RTSCREEN-I-GEN ! _RTSCREEN-I-OWNER ! _RTSCREEN-I-ITEMS-U !
     _RTSCREEN-I-ITEMS-A ! _RTSCREEN-I-FACADE !
@@ -525,9 +523,7 @@ VARIABLE _RTSCREEN-S-STATE
     THEN
     SCB-S-INVALID SWAP _RTSCREEN-FAULT-RESULT ;
 
-: _RTSCREEN-STEP-SEALED
-  ( accepted-phase rejected-phase producer
-    -- scb-status more? output-needed? )
+: _RTSCREEN-STEP-SEALED  ( accepted-phase rejected-phase producer -- scb-status more? output-needed? )
     >R
     R@ _RTSCREEN.FACADE @ RTE-UPDATE-STATE@
     _RTSCREEN-S-STATUS ! _RTSCREEN-S-STATE !
@@ -614,9 +610,7 @@ VARIABLE _RTSCREEN-A-OUTPUT
 \ RTSCREEN-STEP
 \   ( cols rows generation budget producer
 \     -- scb-status more? output-needed? )
-: RTSCREEN-STEP
-  ( cols rows generation budget producer
-    -- scb-status more? output-needed? )
+: RTSCREEN-STEP  ( cols rows generation budget producer -- scb-status more? output-needed? )
     _RTSCREEN-S-P ! _RTSCREEN-S-BUDGET ! _RTSCREEN-S-GEN !
     _RTSCREEN-S-ROWS ! _RTSCREEN-S-COLS !
     _RTSCREEN-S-P @ RTSCREEN-VALID? 0= IF SCB-S-INVALID 0 0 EXIT THEN

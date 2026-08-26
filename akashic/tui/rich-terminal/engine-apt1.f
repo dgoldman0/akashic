@@ -181,9 +181,7 @@ VARIABLE _RTAPTE-LS-STATUS
     _RTAPTE-LIMITS-COPY
     RTE-S-OK _RTAPTE-LIMITS-SCRUB ;
 
-: _RTAPTE-OWNER-OPEN
-    ( owner generation region-q resource-q object-q series-q
-      resource-bytes utf8-bytes sample-slots engine -- status )
+: _RTAPTE-OWNER-OPEN  ( owner generation region-q resource-q object-q series-q resource-bytes utf8-bytes sample-slots engine -- status )
     RTAPT-OWNER-OPEN _RTAPTE-STATUS>RTE ;
 
 : _RTAPTE-OWNER-STATE@  ( owner generation engine -- owner-state status )
