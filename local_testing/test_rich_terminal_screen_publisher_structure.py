@@ -266,6 +266,25 @@ def test_concrete_bridge_is_caller_bounded_and_one_to_one() -> None:
         body = _definition(source, word)
         assert body.count(target) == 1
 
+    feed_valid = _definition(source, "_RTAPTSCB-FEED-VALID?")
+    assert "RTAPTSCB-SIZE _RTAPTSCB-SPAN?" in feed_valid
+    assert feed_valid.index("RTAPTSCB-SIZE _RTAPTSCB-SPAN?") < feed_valid.index(
+        "_RTAPTSCB.MAGIC"
+    )
+    assert "APTSCB-PUBLISHER-VALID?" in feed_valid
+    assert "APTSCBP.CONTEXT @ OVER <>" in feed_valid
+    assert "_RTAPTSCB-MAGIC" in feed_valid
+    assert "RTAPT-ENGINE-BYTES _RTAPTSCB-SPAN?" in feed_valid
+    assert "RTAPTSCB-VALID?" not in feed_valid
+    assert "RTAPT-VALID?" not in feed_valid
+    assert "RTAPT-STORAGE-DISJOINT?" not in feed_valid
+    for callback in ("_RTAPTSCB-SPAN", "_RTAPTSCB-CELL", "_RTAPTSCB-CURSOR"):
+        body = _definition(source, callback)
+        assert "_RTAPTSCB-FEED-VALID?" in body
+        assert "RTAPTSCB-VALID?" not in body
+    for boundary in ("_RTAPTSCB-BEGIN", "_RTAPTSCB-COMMIT", "_RTAPTSCB-ABORT"):
+        assert "RTAPTSCB-VALID?" in _definition(source, boundary)
+
     init = _definition(source, "RTAPTSCB-INIT")
     assert "RTAPT-VALID?" in init
     assert "RTAPT-USES-SESSION?" in init

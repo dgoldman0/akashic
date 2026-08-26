@@ -245,13 +245,33 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "RTAPT-OP-SIZE MOD" in ranges
     assert "_RTAPT-CI-CU @ 7 AND" not in ranges
 
+    storage = _definition(source, "_RTAPT-ENGINE-STORAGE?")
     validate = _definition(source, "_RTAPT-ENGINE-VALID?")
     quarantine_coherent = _definition(source, "_RTAPT-QUARANTINE-COHERENT?")
     stored_ranges = _definition(source, "_RTAPT-ENGINE-RANGES?")
-    assert "_RTAPT-ENGINE-RANGES?" in validate
-    assert validate.index("_RTAPT-ENGINE-MAGIC <>") < validate.index(
+    assert "_RTAPT-ENGINE-RANGES?" in storage
+    assert storage.index("_RTAPT-ENGINE-MAGIC <>") < storage.index(
         "_RTAPT-ENGINE-RANGES?"
     )
+    for tail_bound in (
+        "_RTAPT-E.OP-COUNT @ _RTAPT-U32?",
+        "_RTAPT-E.OP-CAP @ U>",
+        "_RTAPT-E.COPY-U @ U>",
+        "_RTAPT-E.SEND-INDEX @ OVER _RTAPT-E.OP-COUNT @ U>",
+    ):
+        assert tail_bound in storage
+    for linear_scan in (
+        "?DO",
+        "DO",
+        "LOOP",
+        "_RTAPT-CAPTURED-BANKS?",
+        "_RTAPT-OWNER-LEDGERS?",
+        "_RTAPT-ENGINE-VALID?",
+    ):
+        assert linear_scan not in storage
+    assert "_RTAPT-ENGINE-STORAGE?" in validate
+    assert "_RTAPT-UPDATE-COHERENT?" in validate
+    assert "_RTAPT-OWNER-LEDGERS?" in validate
     assert stored_ranges.count("PT-STORAGE-DISJOINT?") == 4
     assert stored_ranges.count("MSPAN-OVERLAP?") == 6
     assert "_RTAPT-OWNER-POINTER-OR-ZERO?" in validate
@@ -366,6 +386,11 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     forbidden_byte = _definition(source, "_RTAPT-GLYPH-RUN-FORBIDDEN-BYTE?")
     glyph_run_scrub = _definition(source, "_RTAPT-GLYPH-RUN-SCRUB")
     pending_region = _definition(source, "_RTAPT-GLYPH-RUN-REGION-PENDING?")
+    pending_region_copy = _definition(
+        source, "_RTAPT-GLYPH-RUN-REGION-COPY"
+    )
+    glyph_run_limits = _definition(source, "_RTAPT-GLYPH-RUN-LIMITS")
+    capture_ready = _definition(source, "_RTAPT-CAPTURE-READY?")
     rich_seal = _definition(source, "RTAPT-RICH-SEAL")
     rich_cancel = _definition(source, "RTAPT-RICH-CANCEL")
     candidate_preflight = _definition(source, "_RTAPT-CANDIDATE-PREFLIGHT?")
@@ -375,6 +400,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     cell_span = _definition(source, "RTAPT-CELL-SPAN-BEGIN")
     cell_write = _definition(source, "RTAPT-CELL-WRITE")
     cell_cursor = _definition(source, "RTAPT-CELL-CURSOR")
+    cell_feed_ready = _definition(source, "_RTAPT-CELL-FEED-READY?")
     cell_abort = _definition(source, "RTAPT-CELL-ABORT")
     abort_open = _definition(source, "_RTAPT-ABORT-OPEN")
     cell_commit = _definition(source, "RTAPT-CELL-COMMIT")
@@ -450,6 +476,13 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
 
     assert "PT-PRESENT-BEGIN" not in rich_begin
     assert "RTAPT-UPDATE-CAPTURING" in rich_begin
+    assert "RTAPT-LIMITS@" in rich_begin
+    assert rich_begin.index("RTAPT-LIMITS@") < rich_begin.index(
+        "RTAPT-UPDATE-CAPTURING"
+    )
+    assert "_RTAPT-ENGINE-STORAGE?" in region_define
+    assert "_RTAPT-CAPTURE-READY?" in region_define
+    assert "_RTAPT-ENGINE-VALID?" not in region_define
     assert "_RTAPT-E.OP-CAP" in region_define
     assert "_RTAPT-E.OP-COUNT @ 0xFFFFFFFF U<" in region_define
     assert "_RTAPT-E.COPY-U" in region_define
@@ -471,6 +504,9 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     )
     assert not re.search(r"\bPT-GLYPH-RUN-DEFINE\b", glyph_run_define)
     assert not re.search(r"\bPT-GLYPH-RUN-DEFINE\b", glyph_run_body)
+    assert "_RTAPT-ENGINE-STORAGE?" in glyph_run_body
+    assert "_RTAPT-CAPTURE-READY?" in glyph_run_body
+    assert "_RTAPT-ENGINE-VALID?" not in glyph_run_body
     assert "_RTAPT-GLYPH-RUN-FIELDS?" in glyph_run_body
     assert "_RTAPT-LD-FG-RGBA" in glyph_run_body
     assert "_RTAPT-LD-BG-RGBA" in glyph_run_body
@@ -602,6 +638,17 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     )
     assert "_RTAPT-GLYPH-RUN-FORBIDDEN-BYTE?" in glyph_run_utf8
     assert "_RTAPT-GLYPH-RUN-UTF8?" in glyph_run_shape
+    assert "_RTAPT-E.LIMITS" in glyph_run_limits
+    assert "RTAPT-LIMITS-VALID?" in glyph_run_limits
+    assert "RTAPT-LIMITS@" not in glyph_run_limits
+    assert "_RTAPT-GLYPH-RUN-REGION-COPY" in pending_region
+    assert "_RTAPT-P.COPY-U" in pending_region_copy
+    assert (
+        "_RTAPT-GRP-OFF !\n    DUP 7 AND IF DROP 0 EXIT THEN"
+        in pending_region_copy
+    )
+    assert "_RTAPT-E.COPY-USED" in pending_region_copy
+    assert "_RTAPT-E.COPY-U" in pending_region_copy
     for scratch in (
         "_RTAPT-LD-TEXT-A",
         "_RTAPT-LD-TEXT-U",
@@ -614,10 +661,43 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         assert f"0 {scratch} !" in glyph_run_scrub
 
     assert "_RTAPT-MODE-DISPOSITION?" in rich_seal
+    assert "_RTAPT-ENGINE-VALID?" in rich_seal
     assert "RTAPT-UPDATE-SEALED" in rich_seal
     assert "_RTAPT-CANDIDATE-DISCARD" in rich_cancel
 
     assert "_RTAPT-REGION-COPY-SHAPE?" in candidate_preflight
+    for shallow in (capture_ready, cell_feed_ready):
+        for forbidden_scan in (
+            "?DO",
+            " DO",
+            "LOOP",
+            "_RTAPT-ENGINE-VALID?",
+            "_RTAPT-CAPTURED-BANKS?",
+            "_RTAPT-OWNER-LEDGERS?",
+        ):
+            assert forbidden_scan not in shallow
+    assert "_RTAPT-ENGINE-STORAGE?" in capture_ready
+    assert "RTAPT-UPDATE-CAPTURING" in capture_ready
+    assert "_RTAPT-ENGINE-STORAGE?" in cell_feed_ready
+    assert "RTAPT-UPDATE-CELL-OPEN" in cell_feed_ready
+    assert "_RTAPT-CELL-COUNTS?" in cell_feed_ready
+
+    assert "_RTAPT-ENGINE-STORAGE?" in storage_disjoint
+    assert "_RTAPT-ENGINE-VALID?" not in storage_disjoint
+    for feed in (cell_span, cell_write, cell_cursor):
+        assert "_RTAPT-ENGINE-STORAGE?" in feed
+        assert "_RTAPT-CELL-FEED-READY?" in feed
+        assert "_RTAPT-ENGINE-VALID?" not in feed
+    assert "_RTAPT-ENGINE-VALID?" in cell_begin
+    assert "_RTAPT-CANDIDATE-PREFLIGHT?" in cell_begin
+    assert cell_begin.index("_RTAPT-ENGINE-VALID?") < cell_begin.index(
+        "_RTAPT-CANDIDATE-PREFLIGHT?"
+    )
+    assert "_RTAPT-ENGINE-VALID?" in cell_commit
+    assert "_RTAPT-CANDIDATE-PREFLIGHT?" in cell_commit
+    assert cell_commit.index("_RTAPT-ENGINE-VALID?") < cell_commit.index(
+        "_RTAPT-CANDIDATE-PREFLIGHT?"
+    )
     assert "_RTAPT-GLYPH-RUN-COPY-SHAPE?" in candidate_preflight
     assert "_RTAPT-OP-REGION-DEFINE" in candidate_preflight
     assert "_RTAPT-OP-GLYPH-RUN-DEFINE" in candidate_preflight

@@ -855,7 +855,11 @@ VARIABLE _RTAPT-QV-OK
     LOOP
     _RTAPT-QV-OK @ ;
 
-: _RTAPT-ENGINE-VALID?  ( e -- flag )
+\ Validate only the fixed engine geometry and the bounded mutable tails.  This
+\ predicate is deliberately loop-free: capture/feed calls use it to prove that
+\ their next write is safe, while the full validator below audits every
+\ already-captured operation and owner ledger at lifecycle boundaries.
+: _RTAPT-ENGINE-STORAGE?  ( e -- flag )
     DUP RTAPT-ENGINE-SIZE _RTAPT-SPAN? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-E.MAGIC @ _RTAPT-ENGINE-MAGIC <> IF DROP 0 EXIT THEN
     DUP _RTAPT-ENGINE-RANGES? 0= IF DROP 0 EXIT THEN
@@ -866,6 +870,33 @@ VARIABLE _RTAPT-QV-OK
     DUP _RTAPT-E.OP-CAP @ OVER _RTAPT-E.OPS-U @ RTAPT-OP-SIZE / <>
         IF DROP 0 EXIT THEN
     DUP _RTAPT-E.OWNER-USED @ OVER _RTAPT-E.OWNER-CAP @ U> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.OP-COUNT @ _RTAPT-U32? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.OP-COUNT @ OVER _RTAPT-E.OP-CAP @ U> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.COPY-USED @ OVER _RTAPT-E.COPY-U @ U> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.SEND-INDEX @ OVER _RTAPT-E.OP-COUNT @ U> IF DROP 0 EXIT THEN
+    DROP -1 ;
+
+\ RICH-BEGIN establishes this exact quiescent construction phase.  Appenders
+\ recheck its fixed state and bounded tails without rescanning the immutable
+\ prefix; RICH-SEAL performs that exhaustive prefix audit before sealing.
+: _RTAPT-CAPTURE-READY?  ( e -- flag )
+    DUP _RTAPT-ENGINE-STORAGE? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-CAPTURING <>
+        IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.COUPLING @ RTAPT-COUPLING-NONE <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.SEND-INDEX @ IF DROP 0 EXIT THEN
+    DUP _RTAPT-ZERO-CELL-GEOMETRY? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.RET-MODE @ _RTAPT-MODE? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.RET-MODE @ OVER _RTAPT-E.DISPOSITION @
+        _RTAPT-MODE-DISPOSITION? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.ACTIVE-O @
+    OVER _RTAPT-E.QUEUE-HEAD @ OR
+    OVER _RTAPT-E.QUEUE-TAIL @ OR IF DROP 0 EXIT THEN
+    DROP -1 ;
+
+: _RTAPT-ENGINE-VALID?  ( e -- flag )
+    DUP _RTAPT-ENGINE-STORAGE? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-UPDATE-COHERENT? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-OWNER-LEDGERS? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-QUARANTINE-COHERENT? 0= IF DROP 0 EXIT THEN
@@ -1507,7 +1538,10 @@ VARIABLE _RTAPT-SD-E
 
 : RTAPT-STORAGE-DISJOINT?  ( a u engine -- flag )
     _RTAPT-SD-E ! _RTAPT-SD-U ! _RTAPT-SD-A !
-    _RTAPT-SD-E @ _RTAPT-ENGINE-VALID? 0= IF 0 EXIT THEN
+    \ Disjointness depends on fixed storage geometry, not on the contents of
+    \ every captured record.  Callers that require semantic validity perform
+    \ the full audit at their lifecycle boundary.
+    _RTAPT-SD-E @ _RTAPT-ENGINE-STORAGE? 0= IF 0 EXIT THEN
     _RTAPT-SD-A @ 0= _RTAPT-SD-U @ 0= OR IF 0 EXIT THEN
     _RTAPT-SD-A @ _RTAPT-SD-U @ MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
     _RTAPT-SD-A @ _RTAPT-SD-U @ _RTAPT-SD-E @ _RTAPT-E.SESSION @
@@ -1529,7 +1563,7 @@ VARIABLE _RTAPT-BSD-U
 VARIABLE _RTAPT-BSD-E
 
 \ Borrowed text is a byte span, not a construction record.  The caller has
-\ already proved ENGINE valid before entering this private nonalias check.
+\ already proved ENGINE storage geometry before this private nonalias check.
 : _RTAPT-BYTE-SPAN-DISJOINT?  ( a u engine -- flag )
     _RTAPT-BSD-E ! _RTAPT-BSD-U ! _RTAPT-BSD-A !
     _RTAPT-BSD-A @ 0= _RTAPT-BSD-U @ 0= OR IF 0 EXIT THEN
@@ -2072,6 +2106,10 @@ VARIABLE _RTAPT-RB-MODE
     _RTAPT-RB-E @ _RTAPT-E.QUEUE-HEAD @ OR
     _RTAPT-RB-E @ _RTAPT-E.QUEUE-TAIL @ OR IF RTAPT-S-BUSY EXIT THEN
     _RTAPT-RB-MODE @ _RTAPT-MODE? 0= IF RTAPT-S-INVALID EXIT THEN
+    \ Discovery is immutable for this session.  Refresh its engine-owned
+    \ snapshot once per candidate instead of rediscovering and fully auditing
+    \ the growing captured prefix for every GLYPH-RUN.
+    _RTAPT-RB-E @ RTAPT-LIMITS@ DUP RTAPT-S-OK <> IF NIP EXIT THEN 2DROP
     _RTAPT-RB-MODE @ _RTAPT-RB-E @ _RTAPT-E.RET-MODE !
     PT-COMMIT _RTAPT-RB-E @ _RTAPT-E.DISPOSITION !
     RTAPT-UPDATE-CAPTURING _RTAPT-RB-E @ _RTAPT-E.UPDATE-STATE !
@@ -2108,10 +2146,11 @@ VARIABLE _RTAPT-RD-BASE
     _RTAPT-RD-E ! _RTAPT-RD-FLAGS ! _RTAPT-RD-Z ! _RTAPT-RD-ROWS !
     _RTAPT-RD-COLS ! _RTAPT-RD-Y ! _RTAPT-RD-X ! _RTAPT-RD-ID !
     _RTAPT-RD-GEN ! _RTAPT-RD-OWNER !
-    _RTAPT-RD-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-RD-E @ _RTAPT-ENGINE-STORAGE? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-RD-E @ _RTAPT-READY-STATUS DUP RTAPT-S-OK <> IF EXIT THEN DROP
     _RTAPT-RD-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-CAPTURING <>
         IF RTAPT-S-BUSY EXIT THEN
+    _RTAPT-RD-E @ _RTAPT-CAPTURE-READY? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-RD-OWNER @ 0= _RTAPT-RD-GEN @ 0= OR
     _RTAPT-RD-ID @ 0= OR IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-RD-X @ _RTAPT-U32? 0= _RTAPT-RD-Y @ _RTAPT-U32? 0= OR
@@ -2373,6 +2412,9 @@ VARIABLE _RTAPT-GT-OBJECT
 VARIABLE _RTAPT-GT-REGION
 VARIABLE _RTAPT-GT-O
 VARIABLE _RTAPT-GT-E
+VARIABLE _RTAPT-GRP-P
+VARIABLE _RTAPT-GRP-OFF
+VARIABLE _RTAPT-GRP-NEXT
 
 \ Replacement is not an addition: it must name the already-selected active
 \ or hidden target.  The compact engine deliberately keeps aggregate ledgers,
@@ -2398,11 +2440,25 @@ VARIABLE _RTAPT-GT-E
 \ candidate.  A region high-water cannot prove sparse-ID existence.  Root
 \ parenting is the only truthful parent form until GROUP and exact object-type
 \ identity are added together.
+: _RTAPT-GLYPH-RUN-REGION-COPY  ( op-record -- copy-record|0 )
+    _RTAPT-GRP-P !
+    _RTAPT-GRP-P @ _RTAPT-P.COPY-U @
+        _RTAPT-REGION-DEFINE-COPY-SIZE <> IF 0 EXIT THEN
+    _RTAPT-GRP-P @ _RTAPT-P.COPY-OFF @ DUP _RTAPT-GRP-OFF !
+    DUP 7 AND IF DROP 0 EXIT THEN
+    _RTAPT-REGION-DEFINE-COPY-SIZE _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-GRP-NEXT !
+    _RTAPT-LD-E @ _RTAPT-E.COPY-USED @ U> IF 0 EXIT THEN
+    _RTAPT-GRP-NEXT @ _RTAPT-LD-E @ _RTAPT-E.COPY-U @ U> IF 0 EXIT THEN
+    _RTAPT-LD-E @ _RTAPT-E.COPY-A @ _RTAPT-GRP-OFF @ + ;
+
 : _RTAPT-GLYPH-RUN-REGION-PENDING?  ( -- flag )
     _RTAPT-LD-E @ _RTAPT-E.OP-COUNT @ 0 ?DO
         I _RTAPT-LD-E @ _RTAPT-OP-NTH
         DUP _RTAPT-P.KIND @ _RTAPT-OP-REGION-DEFINE = IF
-            _RTAPT-P.COPY-OFF @ _RTAPT-LD-E @ _RTAPT-E.COPY-A @ +
+            _RTAPT-GLYPH-RUN-REGION-COPY ?DUP 0= IF
+                0 UNLOOP EXIT
+            THEN
             DUP _RTAPT-RD.OWNER @ _RTAPT-LD-OWNER @ =
             OVER _RTAPT-RD.GENERATION @ _RTAPT-LD-GEN @ = AND
             OVER _RTAPT-RD.REGION @ _RTAPT-LD-REGION @ = AND
@@ -2425,7 +2481,8 @@ VARIABLE _RTAPT-GT-E
     _RTAPT-GLYPH-RUN-GEOMETRY? ;
 
 : _RTAPT-GLYPH-RUN-LIMITS  ( -- status )
-    _RTAPT-LD-E @ RTAPT-LIMITS@ DUP RTAPT-S-OK <> IF NIP EXIT THEN DROP
+    _RTAPT-LD-E @ _RTAPT-E.LIMITS
+    DUP RTAPT-LIMITS-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN
     DUP _RTAPT-L.GLYPH-RUN-BYTES @ 0= IF
         DROP RTAPT-S-UNSUPPORTED EXIT
     THEN
@@ -2435,15 +2492,16 @@ VARIABLE _RTAPT-GT-E
     RTAPT-S-OK ;
 
 : _RTAPT-GLYPH-RUN-DEFINE-BODY  ( -- status )
-    _RTAPT-LD-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
-    \ Prove the borrowed span before READY or limits discovery may mutate the
-    \ engine (including its retained-limits snapshot).  Bound text length from
-    \ negotiated limits before doing the linear UTF-8/control-byte scan.
+    _RTAPT-LD-E @ _RTAPT-ENGINE-STORAGE? 0= IF RTAPT-S-INVALID EXIT THEN
+    \ Prove the borrowed span before READY may mutate engine state.  The
+    \ candidate's immutable negotiated-limit snapshot was established once by
+    \ RICH-BEGIN.
     _RTAPT-GLYPH-RUN-FIELDS? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-GLYPH-RUN-TEXT-SPAN? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-LD-E @ _RTAPT-READY-STATUS DUP RTAPT-S-OK <> IF EXIT THEN DROP
     _RTAPT-LD-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-CAPTURING <>
         IF RTAPT-S-BUSY EXIT THEN
+    _RTAPT-LD-E @ _RTAPT-CAPTURE-READY? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-GLYPH-RUN-LIMITS DUP RTAPT-S-OK <> IF EXIT THEN DROP
     _RTAPT-LD-TEXT-A @ _RTAPT-LD-TEXT-U @ _RTAPT-GLYPH-RUN-UTF8? 0= IF
         RTAPT-S-INVALID EXIT
@@ -2535,7 +2593,7 @@ VARIABLE _RTAPT-GT-E
     RTAPT-S-OK DUP _RTAPT-LD-E @ _RTAPT-E.LAST-STATUS ! ;
 
 : _RTAPT-GLYPH-RUN-REPLACE-BODY  ( -- status )
-    _RTAPT-LD-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-LD-E @ _RTAPT-ENGINE-STORAGE? 0= IF RTAPT-S-INVALID EXIT THEN
     \ The borrowed record is proved before discovery/state reads may mutate
     \ engine-local snapshots.  Replacement uses the same neutral geometry,
     \ style, text, retry-copy, and exact wire-byte rules as definition.
@@ -2544,6 +2602,7 @@ VARIABLE _RTAPT-GT-E
     _RTAPT-LD-E @ _RTAPT-READY-STATUS DUP RTAPT-S-OK <> IF EXIT THEN DROP
     _RTAPT-LD-E @ _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-CAPTURING <>
         IF RTAPT-S-BUSY EXIT THEN
+    _RTAPT-LD-E @ _RTAPT-CAPTURE-READY? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-GLYPH-RUN-LIMITS DUP RTAPT-S-OK <> IF EXIT THEN DROP
     _RTAPT-LD-TEXT-A @ _RTAPT-LD-TEXT-U @ _RTAPT-GLYPH-RUN-UTF8? 0= IF
         RTAPT-S-INVALID EXIT
@@ -2634,6 +2693,7 @@ VARIABLE _RTAPT-GT-E
     0 _RTAPT-UN-Q ! 0 _RTAPT-UN-REM !
     0 _RTAPT-LU-I ! 0 _RTAPT-LU-B0 ! 0 _RTAPT-LU-B1 !
     0 _RTAPT-LU-A ! 0 _RTAPT-LU-U !
+    0 _RTAPT-GRP-P ! 0 _RTAPT-GRP-OFF ! 0 _RTAPT-GRP-NEXT !
     0 _RTAPT-BSD-A ! 0 _RTAPT-BSD-U ! 0 _RTAPT-BSD-E ! ;
 
 : RTAPT-GLYPH-RUN-DEFINE  ( owner generation object region parent row col height width root-height root-width z visible fg-rgba bg-rgba attrs text-a text-u engine -- status )
@@ -2967,8 +3027,34 @@ VARIABLE _RTAPT-CW-CURSOR-COL
 VARIABLE _RTAPT-CW-CURSOR-VISIBLE
 
 : _RTAPT-CELL-FEED-READY?  ( engine -- flag )
-    DUP _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-CELL-OPEN =
-    SWAP _RTAPT-E.COUPLING @ RTAPT-COUPLING-CELL = AND ;
+    DUP _RTAPT-ENGINE-STORAGE? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-CELL-OPEN <>
+        IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.COUPLING @ RTAPT-COUPLING-CELL <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.ACTIVE-O @
+    OVER _RTAPT-E.QUEUE-HEAD @ OR
+    OVER _RTAPT-E.QUEUE-TAIL @ OR IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.SEND-INDEX @ IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.CELL-MODE @ _RTAPT-CELL-MODE? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.COLS @
+    OVER _RTAPT-E.ROWS @
+    2 PICK _RTAPT-E.CELL-SPANS @
+    3 PICK _RTAPT-E.CELLS @
+    4 PICK _RTAPT-E.CELL-MODE @ _RTAPT-CELL-COUNTS? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.RET-MODE @ PT-RET-NONE = IF
+        DUP _RTAPT-E.OP-COUNT @
+        OVER _RTAPT-E.COPY-USED @ OR
+        OVER _RTAPT-E.RET-BYTES @ OR IF DROP 0 EXIT THEN
+        DUP _RTAPT-E.DISPOSITION @ PT-COMMIT <> IF DROP 0 EXIT THEN
+    ELSE
+        DUP _RTAPT-E.RET-MODE @ _RTAPT-MODE? 0= IF DROP 0 EXIT THEN
+        DUP _RTAPT-E.RET-MODE @ OVER _RTAPT-E.DISPOSITION @
+            _RTAPT-MODE-DISPOSITION? 0= IF DROP 0 EXIT THEN
+        DUP _RTAPT-E.RET-MODE @ PT-RET-DELTA =
+        OVER _RTAPT-E.OP-COUNT @ 0= AND IF DROP 0 EXIT THEN
+    THEN
+    DROP -1 ;
 
 : _RTAPT-FEED-RESULT  ( status engine -- status )
     _RTAPT-CW-E ! DUP _RTAPT-CW-STATUS !
@@ -2980,7 +3066,7 @@ VARIABLE _RTAPT-CW-CURSOR-VISIBLE
 : RTAPT-CELL-SPAN-BEGIN  ( row col count engine -- status )
     _RTAPT-CW-E ! _RTAPT-CW-SPAN-COUNT !
     _RTAPT-CW-SPAN-COL ! _RTAPT-CW-SPAN-ROW !
-    _RTAPT-CW-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-CW-E @ _RTAPT-ENGINE-STORAGE? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-CW-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-QUARANTINED = IF
         _RTAPT-CW-E @ _RTAPT-E.LAST-STATUS @ EXIT
     THEN
@@ -2992,7 +3078,7 @@ VARIABLE _RTAPT-CW-CURSOR-VISIBLE
 : RTAPT-CELL-WRITE  ( codepoint fg bg attrs engine -- status )
     _RTAPT-CW-E ! _RTAPT-CW-ATTRS ! _RTAPT-CW-BG !
     _RTAPT-CW-FG ! _RTAPT-CW-CODEPOINT !
-    _RTAPT-CW-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-CW-E @ _RTAPT-ENGINE-STORAGE? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-CW-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-QUARANTINED = IF
         _RTAPT-CW-E @ _RTAPT-E.LAST-STATUS @ EXIT
     THEN
@@ -3005,7 +3091,7 @@ VARIABLE _RTAPT-CW-CURSOR-VISIBLE
 : RTAPT-CELL-CURSOR  ( row col visible engine -- status )
     _RTAPT-CW-E ! _RTAPT-CW-CURSOR-VISIBLE !
     _RTAPT-CW-CURSOR-COL ! _RTAPT-CW-CURSOR-ROW !
-    _RTAPT-CW-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
+    _RTAPT-CW-E @ _RTAPT-ENGINE-STORAGE? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-CW-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-QUARANTINED = IF
         _RTAPT-CW-E @ _RTAPT-E.LAST-STATUS @ EXIT
     THEN
