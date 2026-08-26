@@ -297,7 +297,8 @@ def test_materializer_schema_is_persistent_neutral_and_lifecycle_validated() -> 
         assert bound in _definition(source, validator)
     assert "1 CONSTANT _RTERM-MAT-F-STARTED" in source
     assert "2 CONSTANT _RTERM-MAT-F-RESTART" in source
-    assert "3 CONSTANT _RTERM-MAT-F-MASK" in source
+    assert "4 CONSTANT _RTERM-MAT-F-LOCAL-REFUSAL" in source
+    assert "7 CONSTANT _RTERM-MAT-F-MASK" in source
 
     mat_valid = _definition(source, "_RTERM-MAT-VALID?")
     assert "_RTERM-MAT-PHASE-VALID?" in mat_valid
@@ -1109,8 +1110,13 @@ def test_materializer_persists_admission_and_drops_before_mutation() -> None:
     minted = settled.index("_RTERM-TAKE-TOKEN")
     generation = settled.index("_RTERM-R.OWNER-GEN !", minted)
     record_clear = settled.index("_RTERM-R.MAT-STATE 32 0 FILL", generation)
-    rescan = settled.index("0 _RTERM-MS-CLEAR-ASSOCIATION", record_clear)
-    assert minted < generation < record_clear < rescan
+    local_refusal = settled.index(
+        "_RTERM-MAT-F-LOCAL-REFUSAL AND IF", record_clear
+    )
+    normal_status = settled.index("_RTERM-R.LAST-STATUS !", local_refusal)
+    rescan = settled.index("_RTERM-MS-CLEAR-ASSOCIATION", normal_status)
+    assert minted < generation < record_clear < local_refusal
+    assert local_refusal < normal_status < rescan
 
     # A restart is persistent across budget slices.  Staged and live owners
     # are retired before any fresh admission, and restart begins at index zero.
@@ -1125,6 +1131,114 @@ def test_materializer_persists_admission_and_drops_before_mutation() -> None:
     assert live_drop < admit_call
     start = _definition(source, "_RTERM-MS-START-EPOCH")
     assert "0 _RTERM-MS-MAT @ _RTERM-M.RECORD-INDEX !" in start
+
+
+def test_materializer_local_refusal_preserves_cell_and_retires_exact_owner() -> None:
+    source = DRIVER.read_text(encoding="utf-8")
+    local_refusal = _definition(source, "_RTERM-LOCAL-REFUSAL?")
+    fatal = _definition(source, "_RTERM-FATAL?")
+    note = _definition(source, "_RTERM-NOTE")
+    cohort = _definition(source, "_RTERM-MS-COHORT-STEP")
+    recover = _definition(source, "_RTERM-MS-CAPTURE-RECOVER")
+    capture_refusal = _definition(source, "_RTERM-MS-CAPTURE-REFUSAL")
+    prepare = _definition(source, "_RTERM-MS-PREPARE-OPEN")
+    prepare_reveal = _definition(source, "_RTERM-MS-PREPARE-REVEAL")
+    publish_drop = _definition(source, "_RTERM-MS-PUBLISH-DROP-PENDING")
+    dropping = _definition(source, "_RTERM-MS-DROPPING-STEP")
+    settled = _definition(source, "_RTERM-MS-DROP-SETTLED")
+
+    # Only per-binding capacity/source refusal is recoverable.  INVALID and
+    # SESSION_LOST remain the only backend-global sticky failures.
+    for status in ("RTERM-S-CAPACITY", "RTERM-S-SOURCE"):
+        assert status in local_refusal
+        assert status not in fatal
+    for status in ("RTERM-S-INVALID", "RTERM-S-SESSION-LOST"):
+        assert status in fatal
+        assert status not in local_refusal
+    assert "_RTERM-FATAL?" in note
+    assert "_RTERM-LOCAL-REFUSAL?" not in note
+    assert "RTERM-S-CAPACITY" not in note
+    assert "RTERM-S-SOURCE" not in note
+
+    # Admission backpressure keeps the cursor for retry.  A deterministic local
+    # refusal records its per-binding diagnostic, revokes only eligibility and
+    # then reaches the ordinary cursor/budget advance with call status cleared.
+    admitted = cohort.index("_RTERM-MS-ADMIT")
+    recorded = cohort.index("_RTERM-R.LAST-STATUS !", admitted)
+    noted = cohort.index("_RTERM-NOTE", recorded)
+    retry = cohort.index("RTERM-S-WOULD-BLOCK =", noted)
+    unavailable = cohort.index("RTERM-S-UNAVAILABLE = OR", retry)
+    fatal_branch = cohort.index("_RTERM-FATAL?", unavailable)
+    local_branch = cohort.index("_RTERM-LOCAL-REFUSAL?", fatal_branch)
+    eligibility_clear = cohort.index("_RTERM-ELIGIBILITY-CLEAR", local_branch)
+    status_clear = cohort.index("0 _RTERM-MS-CALL-STATUS !", eligibility_clear)
+    cursor = cohort.index("_RTERM-MS-INDEX @ 1+", status_clear)
+    budget = cohort.index("-1 _RTERM-MS-BUDGET +!", cursor)
+    assert admitted < recorded < noted < retry < unavailable < fatal_branch
+    assert fatal_branch < local_branch < eligibility_clear < status_clear
+    assert status_clear < cursor < budget
+    local_path = cohort[local_branch:cursor]
+    for preserved in (
+        "_RTERM-CLEAR-RECORD-BANKS",
+        "_RTERM-R.CANDIDATE !",
+        "_RTERM-R.CANDIDATE-A",
+        "_RTERM-R.CANDIDATE-B",
+        "_RTERM-R.OBJECT-HIGH !",
+    ):
+        assert preserved not in local_path
+
+    # Capture recovery cancels first.  Only after that succeeds does local
+    # refusal revoke readiness, persist the refusal flag and exact DROP tuple,
+    # and normalize the publisher-facing result to retryable WOULD_BLOCK.
+    assert recover.index("_RTERM-MS-TRY-CANCEL") < recover.index(
+        "_RTERM-MS-BEGIN-OWNED !"
+    )
+    recovered = prepare.index("_RTERM-MS-CAPTURE-RECOVER")
+    classified = prepare.index("_RTERM-MS-CAPTURE-REFUSAL", recovered)
+    assert recovered < classified
+    local_checked = capture_refusal.index("_RTERM-LOCAL-REFUSAL?")
+    record_status = capture_refusal.index("_RTERM-R.LAST-STATUS !", local_checked)
+    eligibility_clear = capture_refusal.index(
+        "_RTERM-ELIGIBILITY-CLEAR", record_status
+    )
+    flagged = capture_refusal.index(
+        "_RTERM-MAT-F-LOCAL-REFUSAL OR", eligibility_clear
+    )
+    pending = capture_refusal.index("_RTERM-MS-PUBLISH-DROP-PENDING", flagged)
+    blocked = capture_refusal.index("RTERM-S-WOULD-BLOCK", pending)
+    assert local_checked < record_status < eligibility_clear < flagged < pending < blocked
+    for forbidden in (
+        "_RTERM-MS-QUARANTINE",
+        "_RTERM-R.CANDIDATE !",
+        "_RTERM-R.CANDIDATE-A",
+        "_RTERM-R.CANDIDATE-B",
+        "_RTERM-R.OBJECT-HIGH !",
+    ):
+        assert forbidden not in capture_refusal
+    assert "_RTERM-M.FLAGS" not in publish_drop
+
+    # The local marker is consumed only after exact TOMBSTONE observation.
+    tombstone = dropping.index("RTE-OWNER-ST-TOMBSTONE = IF")
+    settled_call = dropping.index("_RTERM-MS-DROP-SETTLED", tombstone)
+    assert tombstone < settled_call
+    record_clear = settled.index("_RTERM-R.MAT-STATE 32 0 FILL")
+    local_flag = settled.index("_RTERM-MAT-F-LOCAL-REFUSAL AND IF", record_clear)
+    flag_clear = settled.index("_RTERM-MAT-F-LOCAL-REFUSAL INVERT AND", local_flag)
+    advance = settled.index("_RTERM-MS-INDEX @ 1+", flag_clear)
+    otherwise = settled.index("ELSE", advance)
+    association = settled.index("_RTERM-MS-CLEAR-ASSOCIATION", otherwise)
+    assert record_clear < local_flag < flag_clear < advance < otherwise < association
+    assert "_RTERM-R.LAST-STATUS !" not in settled[local_flag:otherwise]
+
+    # Reveal remains one atomic cohort: no single-record refusal/drop path is
+    # introduced there.
+    for forbidden in (
+        "_RTERM-MS-CAPTURE-REFUSAL",
+        "_RTERM-MAT-F-LOCAL-REFUSAL",
+        "_RTERM-ELIGIBILITY-CLEAR",
+        "_RTERM-MS-PUBLISH-DROP-PENDING",
+    ):
+        assert forbidden not in prepare_reveal
 
 
 def test_materializer_captures_and_settles_hidden_work_with_rescan() -> None:
@@ -2304,8 +2418,7 @@ def test_late_discovery_retries_selected_candidate_without_reprojection() -> Non
     # Fatal discovery and deep-candidate outcomes reach quarantine before the
     # ordinary provider update poll or materializer dispatch.  A still-pending
     # LIVE record preserves only its exact physical surface generation.
-    assert "RTERM-S-INVALID =" in fatal
-    assert "RTERM-S-SESSION-LOST =" in fatal
+    assert "_RTERM-FATAL?" in fatal
     assert "RTERM-S-INVALID EXIT" in record_status
     retry_live = live.index("_RTERM-R.DISCOVERY-RETRY @ IF")
     surface_live = live.index("_RTERM-R.MATERIALIZED-SURFACE-GEN @", retry_live)

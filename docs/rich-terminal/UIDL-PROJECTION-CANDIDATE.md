@@ -132,6 +132,12 @@ before a bounded second pass publishes any per-binding eligibility result;
 `INVALID` or `SESSION_LOST` instead quarantines before update-state polling or
 normal materializer dispatch.
 
+The backend-global materialization record also carries a persistent
+local-refusal flag only while an admitted `CAPACITY`/`SOURCE` binding is being
+retired. It cannot be consumed by cancellation or cursor movement: exact
+`OWNER-STATE@ = TOMBSTONE` clears it, preserves the binding's refusal diagnostic,
+and advances the cohort to the following record.
+
 An accepted empty candidate is still selector-published so it supersedes any
 older desired scene, but `RTERM-UCTX-PROJECT` returns
 `RTERM-S-UNAVAILABLE`. A build or deep-validation failure does not change the
@@ -157,6 +163,8 @@ ID exists. Negotiation refusal, relayout, and hide may revoke eligibility or
 materialization readiness but do not discard this mapping or remint unchanged
 keys. The binding selector remains the final publication store after metadata,
 identities, eligibility state, status, and any sticky diagnostic are complete.
+Only `INVALID` and `SESSION_LOST` are sticky backend-global diagnostics;
+`CAPACITY` and `SOURCE` remain per-binding results.
 
 ## Neutral materialization preflight
 
@@ -302,12 +310,18 @@ availability, representation, encoded-update arithmetic, and caller-owned
 provider owner, operation, and copied-byte capacity. Eligibility and advisory
 success alone admit nothing.
 
-The retry slice preserves an already-live prior presentation only while the
-shared discovery result remains `WOULD_BLOCK` and its materialized surface
-generation is still exact. Preservation after discovery settles to a local
-`CAPACITY`, `SOURCE`, or other per-binding refusal remains a separate acceptance
-slice; the current driver revokes eligibility and follows its ordinary
-replacement/fallback lifecycle for such a settled refusal.
+The retry slice preserves an already-live prior presentation while the shared
+discovery result remains `WOULD_BLOCK` and its materialized surface generation
+is still exact. A settled `CAPACITY` or `SOURCE` result remains local to its
+binding: admission records the refusal, revokes only eligibility/readiness, and
+continues the cohort; capture refusal first cancels the partial transaction and
+then retires the exact admitted owner before continuing. Desired banks, selected
+metadata, positional mappings, and object high-water remain authoritative for
+CELL and later reprojection. Reveal stays atomic across the staged cohort; it
+does not use a single-record fallback. Its zero-operation transaction identifies
+only the shared hidden candidate, so a local refusal has no binding operation to
+which it can be attributed safely; `PREPARE-REVEAL` leaves the cohort intact and
+returns retryable backpressure.
 
 The projector itself remains output-inert. Projection calls the read-only
 `RTE-LIMITS@` and publishes only the neutral candidate, identity mapping, and
@@ -334,9 +348,9 @@ capture and settlement and correlates owner retirement. Rejected retained-only
 output is now recovered from the provider's retained `SEALED` candidate, or—if
 that retry authority is defensively observed gone—from authoritative desired
 state after exact owner retirement. Count quota versus sparse-ID high-water and
-late-discovery renegotiation are likewise corrected. The remaining blocking
-slice is not another candidate or semantic family: it is CELL-preserving
-per-binding refusal followed by the first visible checkpoint defined by
+late-discovery renegotiation and CELL-preserving per-binding refusal are likewise
+corrected. The remaining blocking slice is not another candidate or semantic
+family: it is the first visible checkpoint defined by
 `AKASHIC-RICH-TERMINAL.md`, where the root-region-plus-LABEL composite reaches
 physical pixels. None of that moves scene ownership, output choice, or
 renderer-specific state into UIDL, UIDL-TUI, Desk, or applets.

@@ -35,6 +35,12 @@ RTE-S-SOURCE       CONSTANT RTERM-S-SOURCE
 : RTERM-STATUS-VALID?  ( status -- flag )
     8 U< ;
 
+: _RTERM-LOCAL-REFUSAL?  ( status -- flag )
+    DUP RTERM-S-CAPACITY = SWAP RTERM-S-SOURCE = OR ;
+
+: _RTERM-FATAL?  ( status -- flag )
+    DUP RTERM-S-INVALID = SWAP RTERM-S-SESSION-LOST = OR ;
+
 \ One call-borrowed surface snapshot is supplied by the neutral terminal-owner
 \ composition.  UIDL never infers the complete publication surface from its
 \ own root region.  GENERATION changes whenever that authoritative geometry
@@ -267,7 +273,8 @@ RTE-S-SOURCE       CONSTANT RTERM-S-SOURCE
 
 1 CONSTANT _RTERM-MAT-F-STARTED
 2 CONSTANT _RTERM-MAT-F-RESTART
-3 CONSTANT _RTERM-MAT-F-MASK
+4 CONSTANT _RTERM-MAT-F-LOCAL-REFUSAL
+7 CONSTANT _RTERM-MAT-F-MASK
 
 512 CONSTANT RTERM-UIDL-BACKEND-SIZE
 
@@ -1555,10 +1562,7 @@ VARIABLE _RTERM-SD-B
         _RTERM-SD-B @ _RTERM-B.ENGINE @ RTE-STORAGE-DISJOINT? ;
 
 : _RTERM-NOTE  ( status backend -- status )
-    OVER DUP RTERM-S-CAPACITY =
-    OVER RTERM-S-INVALID = OR
-    OVER RTERM-S-SESSION-LOST = OR
-    SWAP RTERM-S-SOURCE = OR IF
+    OVER _RTERM-FATAL? IF
         DUP _RTERM-B.STATUS @ RTERM-S-OK = IF
             OVER OVER _RTERM-B.STATUS !
         THEN
@@ -3260,17 +3264,19 @@ VARIABLE _RTERM-MS-DISCOVERY-STATUS
             SWAP RTERM-S-UNAVAILABLE = OR IF
                 _RTERM-MS-CALL-STATUS @ -1 0 _RTERM-MS-RESULT! EXIT
             THEN
-            _RTERM-MS-CALL-STATUS @ DUP RTERM-S-INVALID =
-            OVER RTERM-S-SESSION-LOST = OR
-            SWAP RTERM-S-SOURCE = OR IF
+            _RTERM-MS-CALL-STATUS @ _RTERM-FATAL? IF
                 _RTERM-MS-CALL-STATUS @ 0 0 _RTERM-MS-RESULT! EXIT
             THEN
-            \ Refusals never satisfy a cohort member.  Preserve its exact
-            \ cursor so a later projection/provider transition can retry it.
-            _RTERM-MS-CALL-STATUS @ DUP RTERM-S-CAPACITY = IF
+            _RTERM-MS-CALL-STATUS @ _RTERM-LOCAL-REFUSAL? IF
+                \ This binding cannot contribute retained output in this
+                \ cohort.  Revoke only its negotiated readiness: the desired
+                \ bank, stable identity map, selector, and ID high-water remain
+                \ authoritative for CELL and a later projection.
+                _RTERM-MS-RECORD @ _RTERM-ELIGIBILITY-CLEAR
+                0 _RTERM-MS-CALL-STATUS !
+            ELSE
                 0 0 _RTERM-MS-RESULT! EXIT
             THEN
-            0 0 _RTERM-MS-RESULT! EXIT
         THEN
         _RTERM-MS-INDEX @ 1+ _RTERM-MS-MAT @ _RTERM-M.RECORD-INDEX !
         -1 _RTERM-MS-BUDGET +!
@@ -3416,8 +3422,19 @@ VARIABLE _RTERM-MS-DISCOVERY-STATUS
     THEN
     _RTERM-MS-RECORD @ _RTERM-R.OWNER-GEN !
     _RTERM-MS-RECORD @ _RTERM-R.MAT-STATE 32 0 FILL
-    RTERM-S-OK _RTERM-MS-RECORD @ _RTERM-R.LAST-STATUS !
-    0 _RTERM-MS-CLEAR-ASSOCIATION
+    _RTERM-MS-MAT @ _RTERM-M.FLAGS @
+        _RTERM-MAT-F-LOCAL-REFUSAL AND IF
+        \ Exact TOMBSTONE is the authority to consume a local refusal.  Keep
+        \ its per-binding diagnostic and skip only this record in the current
+        \ cohort; any already staged bindings remain eligible for reveal.
+        _RTERM-MS-MAT @ _RTERM-M.FLAGS DUP @
+            _RTERM-MAT-F-LOCAL-REFUSAL INVERT AND SWAP !
+        _RTERM-MS-INDEX @ 1+
+    ELSE
+        RTERM-S-OK _RTERM-MS-RECORD @ _RTERM-R.LAST-STATUS !
+        0
+    THEN
+    _RTERM-MS-CLEAR-ASSOCIATION
     RTERM-S-OK -1 0 _RTERM-MS-RESULT! ;
 
 : _RTERM-MS-DROPPING-STEP  ( -- )
@@ -3826,7 +3843,7 @@ VARIABLE _RTERM-MS-DISCOVERY-STATUS
     SWAP _RTERM-R.DISCOVERY-RETRY @ AND ;
 
 : _RTERM-MS-DISCOVERY-FATAL?  ( status -- flag )
-    DUP RTERM-S-INVALID = SWAP RTERM-S-SESSION-LOST = OR ;
+    _RTERM-FATAL? ;
 
 : _RTERM-MS-DISCOVERY-PENDING?  ( -- flag )
     _RTERM-MS-BACKEND @ _RTERM-B.CAPACITY @ 0 ?DO
@@ -4119,6 +4136,19 @@ VARIABLE _RTERM-MS-DISCOVERY-STATUS
     THEN
     _RTERM-MS-QUARANTINE ;
 
+: _RTERM-MS-CAPTURE-REFUSAL  ( status -- status )
+    DUP _RTERM-LOCAL-REFUSAL? 0= IF EXIT THEN
+    \ CAPACITY/SOURCE are local to this binding, not epoch poison.  Recovery
+    \ above has already cancelled any partial retained transaction; now retain
+    \ the desired candidate while revoking only its negotiated readiness and
+    \ persist exact-owner retirement before returning to the publisher.
+    DUP _RTERM-MS-RECORD @ _RTERM-R.LAST-STATUS !
+    _RTERM-MS-RECORD @ _RTERM-ELIGIBILITY-CLEAR
+    _RTERM-MS-MAT @ _RTERM-M.FLAGS @ _RTERM-MAT-F-LOCAL-REFUSAL OR
+        _RTERM-MS-MAT @ _RTERM-M.FLAGS !
+    _RTERM-MS-PUBLISH-DROP-PENDING
+    DROP RTERM-S-WOULD-BLOCK ;
+
 : _RTERM-MS-PREPARE-OPEN  ( -- status )
     _RTERM-MS-LOAD-FROZEN? 0= IF
         RTERM-S-INVALID _RTERM-MS-QUARANTINE EXIT
@@ -4126,7 +4156,9 @@ VARIABLE _RTERM-MS-DISCOVERY-STATUS
     ['] _RTERM-MS-CAPTURE-TRANSACTION CATCH ?DUP IF
         DROP RTERM-S-INVALID
     THEN
-    DUP RTERM-S-OK <> IF _RTERM-MS-CAPTURE-RECOVER EXIT THEN
+    DUP RTERM-S-OK <> IF
+        _RTERM-MS-CAPTURE-RECOVER _RTERM-MS-CAPTURE-REFUSAL EXIT
+    THEN
     DROP
     _RTERM-MS-CLEAN-ATTEMPT
     _RTERM-MS-MAT @ _RTERM-M.ITEMS 80 0 FILL

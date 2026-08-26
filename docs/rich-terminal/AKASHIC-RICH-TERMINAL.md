@@ -128,13 +128,14 @@ The host/backend boundary uses these stable ordinary status values:
 | 7 | `RTERM-S-SOURCE` | A semantic resource or series source failed. |
 
 These statuses do not throw through an applet callback and are not returned to
-application rich-terminal code, because no such code exists. The UIDL host
-records the first non-transient backend error for inspection while leaving
-application state intact. One failed projection cannot authorize mutation of
-another binding, and a post-`OPEN` structural loss never makes raw ANSI output
+application rich-terminal code, because no such code exists. Each binding
+records its latest diagnostic while leaving application state intact. Only
+`INVALID` and `SESSION_LOST` are sticky backend-global failures; `CAPACITY` and
+`SOURCE` are local refusal results and cannot poison another binding or the
+unified publisher. A post-`OPEN` structural loss never makes raw ANSI output
 safe.
 
-In the APT-1 composition, that first non-transient result is also a neutral
+In the APT-1 composition, that first fatal result is also a neutral
 publisher fault latch. It survives ordinary scheduler calls so a later call
 cannot silently turn a failed output lifecycle back into apparent success.
 This persistence is only an in-memory status latch: it owns no UIDL or
@@ -145,8 +146,10 @@ during teardown.
 
 `RTERM-S-WOULD-BLOCK` is transport progress, not local projection-capacity
 failure. Already accepted desired state remains accepted while egress is
-blocked. `RTERM-S-CAPACITY` and `RTERM-S-INVALID` are fail-before-mutation at
-each local validation or materialization-admission boundary.
+blocked. `RTERM-S-CAPACITY` and `RTERM-S-SOURCE` revoke only the refusing
+binding's retained eligibility/readiness. Validation and admission refusal are
+fail-before-owner-mutation; refusal discovered during capture first cancels the
+partial retained transaction and then retires the already-admitted exact owner.
 
 ## 4. Generic engine construction and caller-owned storage
 
@@ -448,8 +451,24 @@ eligibility, then retires the exact admitted owner before re-admission. Reveal
 settlement never promotes that result `LIVE`: it restarts at cohort record zero,
 retires every staged owner through the ordinary tombstone-proven drop path, and
 rebuilds from authoritative desired state. `INVALID` and `SESSION_LOST` remain
-terminal. This recovery does not yet change local `CAPACITY`, `SOURCE`, or other
-per-binding refusal policy.
+terminal.
+
+`CAPACITY` and `SOURCE` are instead CELL-preserving per-binding refusals. At
+cohort admission they record the local diagnostic, clear only negotiated
+eligibility/readiness, and advance to the next binding without clearing the
+candidate bank, positional identity mapping, selected candidate, or object-ID
+high-water. If capture discovers either refusal after owner admission, the
+driver first cancels/reconciles the partial retained transaction, records the
+local diagnostic, revokes only eligibility, and publishes exact owner
+retirement. The refusal marker remains persistent until `OWNER-STATE@` proves
+the exact owner `TOMBSTONE`; only then does the cohort advance to the following
+binding, preserving any earlier staged records for the atomic reveal. Reveal
+itself remains cohort-wide and does not invent a single-record fallback: its
+zero-operation transaction names the shared hidden candidate and contains no
+binding operation from which a `CAPACITY`/`SOURCE` result could be safely
+attributed. `PREPARE-REVEAL` therefore leaves the cohort intact and reports the
+result as retryable publisher backpressure rather than routing it through the
+capture-refusal helper.
 
 The lower UIDL layer now supplies the first neutral semantic snapshot
 substrate independently of this adapter. `ED.SEMANTICS` selects a per-element
@@ -901,11 +920,12 @@ availability, then scrubs the frozen attempt and plan. The materializer repeats
 the proof against the then-current generation immediately before owner
 admission. If the tree later changes structurally beyond eligibility, retained
 projection reports capacity and CELL rendering continues from the authoritative
-UIDL tree. Keeping the prior coherent retained presentation after discovery has
-settled to local `CAPACITY`, `SOURCE`, or another per-binding refusal is not part
-of the pending-discovery retry slice and remains required before vertical
-acceptance; the current lifecycle revokes eligibility and follows its ordinary
-replacement/fallback path for that settled refusal.
+UIDL tree. A settled `CAPACITY` or `SOURCE` result is binding-local: admission
+skips that record, while a post-admission capture refusal cancels and retires its
+exact owner before the cohort advances. Neither result latches a publisher fault
+or invalidates the authoritative CELL tree. Representation failures currently
+map through these same two neutral local-refusal statuses; unclassified and
+structural failures remain fatal rather than being guessed into fallback.
 
 Unavailable retained discovery or an unsupported optional semantic family
 does not prevent attach or application initialization. The binding retains its
@@ -1231,8 +1251,10 @@ identities before negotiation, and separately records terminal-negotiated
 eligibility when the current limits permit it. A refusal preserves the selected
 candidate and mapping. A retained-only wire rejection also preserves eligibility
 and either re-offers the provider-retained sealed candidate or retires admitted
-owners before rebuilding it; this does not yet cover settled local capacity or
-source refusal. The unified `RTAPTSCB` bridge admits one optional
+owners before rebuilding it. Settled local capacity/source refusal preserves
+CELL, revokes only the refusing binding's retained readiness, and skips it only
+after any admitted owner reaches an exact tombstone. The unified `RTAPTSCB`
+bridge admits one optional
 immutable, caller-bounded neutral output producer, and the APT-1 composition now
 binds the UIDL driver to that seam. Its callbacks receive only the exact observed
 screen columns, rows, monotone geometry generation, and a composition-selected
@@ -1404,8 +1426,8 @@ The blocking Akashic correctness conditions for that journey are:
    usable. Only structural/session loss may poison the unified publisher.
 
 The current lifecycle contains the bounded transitions for conditions 1 through
-3. Condition 4 and the real guest-to-compositor journey below remain blocking;
-rejection recovery alone does not enable the production retained policy.
+4. The real guest-to-compositor journey below remains blocking; lifecycle
+correctness alone does not enable the production retained policy.
 
 After those conditions hold, a focused development composition must execute the
 real initial CELL transaction, discovery, owner admission, hidden

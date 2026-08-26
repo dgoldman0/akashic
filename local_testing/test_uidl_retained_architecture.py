@@ -545,9 +545,9 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
         ("RTERM-S-UNAVAILABLE", "SCB-S-OK"),
         ("RTERM-S-STALE", "SCB-S-OK"),
         ("RTERM-S-SESSION-LOST", "SCB-S-SESSION-LOST 0 0"),
-        ("RTERM-S-CAPACITY", "SCB-S-INVALID 0 0"),
+        ("RTERM-S-CAPACITY", "ROT DROP SCB-S-OK -ROT EXIT"),
         ("RTERM-S-INVALID", "SCB-S-INVALID 0 0"),
-        ("RTERM-S-SOURCE", "SCB-S-INVALID 0 0"),
+        ("RTERM-S-SOURCE", "ROT DROP SCB-S-OK -ROT EXIT"),
     ):
         branch = step_result.index(source_status)
         assert step_result.index(mapped, branch) > branch
@@ -564,6 +564,8 @@ def test_desktop_apt1_leaf_composes_exact_host_and_unified_publisher() -> None:
         "RTERM-S-WOULD-BLOCK",
         "RTERM-S-UNAVAILABLE",
         "RTERM-S-STALE",
+        "RTERM-S-CAPACITY",
+        "RTERM-S-SOURCE",
     ):
         branch = prepare_result.index(retryable)
         assert prepare_result.index("SCB-S-WOULD-BLOCK", branch) > branch

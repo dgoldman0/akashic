@@ -193,7 +193,13 @@ producers and contain no APT-1, retained-scene, or renderer branch. The adapter
 observes exact screen geometry on every offered begin, but calls the
 materializer's `PREPARE` callback only when its preceding bounded `STEP`
 reported canonical `OUTPUT_NEEDED`. A CELL flush by itself therefore does not
-start retained work.
+start retained work. Product adaptation maps per-binding retained `CAPACITY` and
+`SOURCE` from `STEP` to `SCB-S-OK` without changing its `more-work` or
+`output-needed` observations, so CELL scheduling remains usable. The same two
+results from `PREPARE` map to `SCB-S-WOULD-BLOCK`; `INVALID` and
+`SESSION_LOST` retain their fatal mappings. The zero-operation reveal names the
+shared staged cohort rather than one binding operation, so its refusal remains
+cohort-wide backpressure and never enters the single-record capture fallback.
 
 `PT-SERVICE` remains owned by the APT screen adapter. Ordinary service calls it
 before the publisher scheduler, which may reconcile a completion or admit one
@@ -279,13 +285,14 @@ product supplies an explicit supported retained policy; unsupported families
 remain ordinary CELL output rather than being falsely advertised.
 
 The immediate development gate is the visible root-region-plus-LABEL checkpoint
-in `AKASHIC-RICH-TERMINAL.md`. A focused composition may exercise that path only
-after per-binding source, representation, and capacity refusal are mapped to a
-retained retry/fallback result rather than `SCB-S-INVALID`; such a refusal must
-not latch a publisher fault or prevent later CELL `begin`. The production policy
-remains disabled until every advertised feature family is complete in both the
-terminal model and physical compositor and the sink preserves both planes of
-the selected global revision.
+in `AKASHIC-RICH-TERMINAL.md`. Per-binding source and capacity refusal now revoke
+only that binding's retained readiness, preserve its authoritative CELL state,
+and avoid the publisher fault latch. If refusal occurs after owner admission,
+the materializer returns retryable status while exact owner retirement settles;
+the cohort skips that record only after observing its tombstone. The production
+policy remains disabled until every advertised feature family is complete in
+both the terminal model and physical compositor and the sink preserves both
+planes of the selected global revision.
 
 If Desk exits or throws after the binary switch but synchronized release is
 not proven, the profile emits no diagnostic bytes. It remains in a silent
