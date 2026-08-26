@@ -52,9 +52,9 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         code,
     )
 
-    assert "4 CONSTANT _RTE-ABI" in code
-    assert '0x5254454641434134 CONSTANT _RTE-MAGIC' in code
-    assert "136 CONSTANT RTE-FACADE-SIZE" in code
+    assert "5 CONSTANT _RTE-ABI" in code
+    assert '0x5254454641434135 CONSTANT _RTE-MAGIC' in code
+    assert "144 CONSTANT RTE-FACADE-SIZE" in code
     assert "160 CONSTANT RTE-LIMITS-SIZE" in code
     assert "_RTE-F.CONTEXT" in _definition(source, "RTE-VALID?")
     valid = _definition(source, "RTE-VALID?")
@@ -70,9 +70,10 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "OWNER-DROP",
         "LIMITS",
         "LABEL-DEF",
+        "LABEL-PREFLIGHT",
+        "UPDATE-STATE",
     ):
         assert f"_RTE-F.{callback}-XT @ 0=" in valid
-    assert "_RTE-F.LABEL-PREFLIGHT-XT @ 0<>" in valid
 
     disjoint = _definition(source, "RTE-STORAGE-DISJOINT?")
     assert disjoint.index("RTE-VALID?") < disjoint.index("MSPAN-OVERLAP?")
@@ -93,6 +94,8 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-VALID?": "( facade -- flag )",
         "RTE-STORAGE-DISJOINT?": "( a u facade -- flag )",
         "RTE-STATUS@": "( facade -- status )",
+        "RTE-UPDATE-STATE-VALID?": "( update-state -- flag )",
+        "RTE-UPDATE-STATE@": "( facade -- update-state status )",
         "RTE-LIMITS-BYTES": "( -- bytes )",
         "RTE-LIMITS-VALID?": "( limits -- flag )",
         "RTE-LIMITS@": "( limits facade -- status )",
@@ -117,9 +120,14 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
     assert "RTE-OWNER-ST-FREE RTE-S-INVALID" in owner_state
     assert "_RTE-MODE?" in _definition(source, "RTE-RETAINED-BEGIN")
     assert "_RTE-DISPOSITION?" in _definition(source, "RTE-RETAINED-SEAL")
+    update_state = _definition(source, "RTE-UPDATE-STATE@")
+    assert "RTE-STATUS-VALID?" in update_state
+    assert "RTE-UPDATE-STATE-VALID?" in update_state
+    assert "RTE-UPDATE-IDLE RTE-S-INVALID" in update_state
 
     for name in (
         "RTE-STATUS@",
+        "RTE-UPDATE-STATE@",
         "RTE-LIMITS@",
         "RTE-OWNER-OPEN",
         "RTE-OWNER-STATE@",
@@ -165,6 +173,18 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
         assert f"RTAPT-S-{status}" in status_map
     owner_map = _definition(source, "_RTAPTE-OWNER-ST>RTE")
     assert len(set(re.findall(r"RTAPT-OWNER-ST-[A-Z-]+", owner_map))) == 14
+    update_map = _definition(source, "_RTAPTE-UPDATE-ST>RTE")
+    assert set(re.findall(r"RTAPT-UPDATE-[A-Z-]+", update_map)) == {
+        "RTAPT-UPDATE-IDLE",
+        "RTAPT-UPDATE-CAPTURING",
+        "RTAPT-UPDATE-SEALED",
+        "RTAPT-UPDATE-CELL-OPEN",
+        "RTAPT-UPDATE-AWAITING",
+    }
+    update_callback = _definition(source, "_RTAPTE-UPDATE-STATE@")
+    assert "RTAPT-UPDATE-STATE@" in update_callback
+    assert "_RTAPTE-UPDATE-ST>RTE" in update_callback
+    assert "_RTAPTE-STATUS>RTE" in update_callback
 
     init = _definition(source, "_RTAPTE-INIT-BODY")
     assert "RTE-LABEL-PLAN-SIZE RTAPT-LABEL-PLAN-SIZE <>" in init
@@ -195,6 +215,7 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
         "_RTE-F.LIMITS-XT !",
         "_RTE-F.LABEL-DEF-XT !",
         "_RTE-F.LABEL-PREFLIGHT-XT !",
+        "_RTE-F.UPDATE-STATE-XT !",
     ):
         assert fill < init.index(field) < magic
 
@@ -437,6 +458,7 @@ def test_apt1_bridge_finalization_is_blank_idempotent_and_scrubs_authority() -> 
         "LIMITS",
         "LABEL-DEF",
         "LABEL-PREFLIGHT",
+        "UPDATE-STATE",
     ):
         assert f"_RTE-F.{callback}-XT @ ['] _RTAPTE-" in exact
 

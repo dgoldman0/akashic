@@ -31,9 +31,10 @@ and UIDL-TUI without acquiring a second protocol or session implementation.
 
 An immutable caller-owned `RTE` facade is the operation boundary above a
 concrete provider. It exposes neutral status, owner, transaction, region,
-LABEL-definition, LABEL-plan preflight, and storage-disjoint operations plus
-one opaque provider context. Only the provider bridge names both vocabularies;
-generic UIDL code neither names nor loads `RTAPT`.
+LABEL-definition, LABEL-plan preflight, update-state observation, and
+storage-disjoint operations plus one opaque provider context. Only the provider
+bridge names both vocabularies; generic UIDL code neither names nor loads
+`RTAPT`.
 
 Above it, UIDL-TUI owns a renderer-neutral optional-projection lifecycle. The
 rich-terminal driver implements that lifecycle's private adapter table and
@@ -154,6 +155,7 @@ RTE-LABEL-PREFLIGHT        ( plan facade -- status )
 
 RTE-OWNER-OPEN         ( owner generation quotas... facade -- status )
 RTE-OWNER-STATE@       ( owner generation facade -- owner-state status )
+RTE-UPDATE-STATE@      ( facade -- update-state status )
 RTE-RETAINED-BEGIN     ( retained-mode facade -- status )
 RTE-REGION-DEFINE      ( owner generation region geometry... facade -- status )
 RTE-LABEL-BYTES        ( -- bytes )
@@ -173,9 +175,16 @@ provider storage before publishing it. The UIDL-TUI adapter depends only on
 
 The facade is the neutral boundary for RTAPT's currently implemented owner,
 transaction, region, LABEL, plan-preflight, status, and alias operations. Its
-ABI-4 descriptor remains 136 bytes; the callback at offset 128 performs the
-neutral LABEL-plan preflight. It also exposes one 160-byte immutable
-negotiated-limits snapshot. The fixed record shape contains neutral
+ABI-5 descriptor is 144 bytes: the callback at offset 128 performs neutral
+LABEL-plan preflight and the callback at offset 136 reports the neutral state
+of the one session-global update slot. `IDLE`, `CAPTURING`, `SEALED`,
+`PUBLISHING`, and `AWAITING` describe lifecycle coordination only; they expose
+no CELL-specific provider state or wire identity. The materializer uses this
+read-only observation together with its sole active-attempt authority to
+correlate publication settlement without reaching through the facade.
+
+The facade also exposes one 160-byte immutable negotiated-limits snapshot. The
+fixed record shape contains neutral
 feature-family bits and the terminal-supplied maxima for owner records, live
 owners, regions, resources, objects, series, operations per update, update
 bytes, resource chunks and total resource bytes, image dimensions, vector

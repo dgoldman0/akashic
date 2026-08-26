@@ -7,8 +7,9 @@
 \  owner and transaction operations, one immutable negotiated-limits snapshot,
 \  one call-borrowed neutral LABEL definition, and one mutation-free LABEL
 \  admission plan.  The descriptor is caller-owned, immutable after provider
-\  construction, and carries one explicit provider context.  It owns no
-\  storage, transport, host, UCTX, Desk, or application authority.
+\  construction, carries one explicit provider context, and reports only the
+\  neutral state of the session-global update slot.  It owns no storage,
+\  transport, host, UCTX, Desk, or application authority.
 \
 \  Prefix: RTE- (public), _RTE- (private)
 \  Provider: akashic-tui-rte1
@@ -109,8 +110,21 @@ REQUIRE ../../utils/memory-span.f
 0 CONSTANT RTE-COMMIT
 1 CONSTANT RTE-COMMIT-AND-REVEAL
 
-4 CONSTANT _RTE-ABI
-0x5254454641434134 CONSTANT _RTE-MAGIC  \ "RTEFACA4"
+\ Neutral state of the one session-global retained/unified update slot.  A
+\ provider may use any private representation; these values let the lifecycle
+\ materializer correlate its sole active attempt without observing a renderer,
+\ wire opcode, or CELL-specific state name.
+0 CONSTANT RTE-UPDATE-IDLE
+1 CONSTANT RTE-UPDATE-CAPTURING
+2 CONSTANT RTE-UPDATE-SEALED
+3 CONSTANT RTE-UPDATE-PUBLISHING
+4 CONSTANT RTE-UPDATE-AWAITING
+
+: RTE-UPDATE-STATE-VALID?  ( update-state -- flag )
+    5 U< ;
+
+5 CONSTANT _RTE-ABI
+0x5254454641434135 CONSTANT _RTE-MAGIC  \ "RTEFACA5"
 
 : _RTE-F.MAGIC          ( f -- a )       ;
 : _RTE-F.ABI            ( f -- a )   8 + ;
@@ -129,8 +143,9 @@ REQUIRE ../../utils/memory-span.f
 : _RTE-F.LIMITS-XT      ( f -- a ) 112 + ;
 : _RTE-F.LABEL-DEF-XT   ( f -- a ) 120 + ;
 : _RTE-F.LABEL-PREFLIGHT-XT ( f -- a ) 128 + ;
+: _RTE-F.UPDATE-STATE-XT ( f -- a ) 136 + ;
 
-136 CONSTANT RTE-FACADE-SIZE
+144 CONSTANT RTE-FACADE-SIZE
 
 : RTE-FACADE-BYTES  ( -- bytes )  RTE-FACADE-SIZE ;
 
@@ -641,7 +656,9 @@ VARIABLE _RTE-LV-FEATURES
     OVER _RTE-F.OWNER-DROP-XT @ 0= OR IF DROP 0 EXIT THEN
     DUP _RTE-F.LIMITS-XT @ 0=
     OVER _RTE-F.LABEL-DEF-XT @ 0= OR IF DROP 0 EXIT THEN
-    _RTE-F.LABEL-PREFLIGHT-XT @ 0<> ;
+    DUP _RTE-F.LABEL-PREFLIGHT-XT @ 0=
+    OVER _RTE-F.UPDATE-STATE-XT @ 0= OR IF DROP 0 EXIT THEN
+    DROP -1 ;
 
 : RTE-STORAGE-DISJOINT?  ( a u facade -- flag )
     DUP RTE-VALID? 0= IF _RTE-DROP3 0 EXIT THEN
@@ -657,6 +674,18 @@ VARIABLE _RTE-LV-FEATURES
     DUP RTE-VALID? 0= IF DROP RTE-S-INVALID EXIT THEN
     DUP _RTE-F.CONTEXT @ SWAP _RTE-F.STATUS-XT @ EXECUTE
     DUP RTE-STATUS-VALID? 0= IF DROP RTE-S-INVALID THEN ;
+
+: RTE-UPDATE-STATE@  ( facade -- update-state status )
+    DUP RTE-VALID? 0= IF
+        DROP RTE-UPDATE-IDLE RTE-S-INVALID EXIT
+    THEN
+    DUP _RTE-F.CONTEXT @ SWAP _RTE-F.UPDATE-STATE-XT @ EXECUTE
+    DUP RTE-STATUS-VALID? 0= IF
+        2DROP RTE-UPDATE-IDLE RTE-S-INVALID EXIT
+    THEN
+    OVER RTE-UPDATE-STATE-VALID? 0= IF
+        2DROP RTE-UPDATE-IDLE RTE-S-INVALID
+    THEN ;
 
 : RTE-LIMITS@  ( limits facade -- status )
     DUP RTE-VALID? 0= IF 2DROP RTE-S-INVALID EXIT THEN
