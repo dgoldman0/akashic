@@ -316,6 +316,7 @@ DEFER _UTUI-DEMATERIALIZE-ONE
 \  before each widget _*-DRAW or _*-HANDLE call.  Safe because the
 \  TUI is single-threaded.
 
+VARIABLE _UTUI-RGN        \ root region; proxy helpers compile this address
 CREATE _UTUI-PROXY-RGN  _RGN-DESC-SIZE ALLOT
 
 : _UTUI-SYNC-PROXY  ( sc -- )
@@ -375,7 +376,6 @@ VARIABLE _UTUI-MAT-W
 \  §2 — Global State
 \ =====================================================================
 
-VARIABLE _UTUI-RGN        \ root region for the document
 VARIABLE _UTUI-DOC-LOADED \ flag: document loaded?
 VARIABLE _UTUI-STATE      \ bound state-tree
 VARIABLE _UTUI-FOCUS-P    \ currently focused element (0 = none)

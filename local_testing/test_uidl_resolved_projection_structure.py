@@ -489,6 +489,10 @@ def test_cell_paint_uses_the_same_effective_subtree_and_root_clip_contract() -> 
     in_bounds = _definition(draw_source, "_DRW-IN-BOUNDS?")
     activate = _definition(region_source, "_RGN-ACTIVATE")
 
+    root_declaration = source.index("VARIABLE _UTUI-RGN")
+    assert root_declaration < source.index(": _UTUI-SYNC-PROXY")
+    assert root_declaration < source.index(": _UTUI-PROXY-FROM-UR")
+
     vis_at = paint_elem.index("_UTUI-SC-VIS? 0=")
     dirty_at = paint_elem.index("UIDL-DIRTY? 0=")
     assert vis_at < dirty_at
