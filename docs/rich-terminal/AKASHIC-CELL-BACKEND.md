@@ -284,15 +284,17 @@ semantic family (`retained_policy=None`). The path remains dormant until a
 product supplies an explicit supported retained policy; unsupported families
 remain ordinary CELL output rather than being falsely advertised.
 
-The immediate development gate is the visible root-region-plus-LABEL checkpoint
-in `AKASHIC-RICH-TERMINAL.md`. Per-binding source and capacity refusal now revoke
-only that binding's retained readiness, preserve its authoritative CELL state,
-and avoid the publisher fault latch. If refusal occurs after owner admission,
+The immediate gate is the live Desk/Pad/Daybook generic rendering journey in
+`AKASHIC-RICH-TERMINAL.md`. Per-binding source and capacity refusal now revokes
+only that binding's retained readiness, preserves its authoritative CELL state,
+and avoids the publisher fault latch. If refusal occurs after owner admission,
 the materializer returns retryable status while exact owner retirement settles;
-the cohort skips that record only after observing its tombstone. The production
-policy remains disabled until every advertised feature family is complete in
-both the terminal model and physical compositor and the sink preserves both
-planes of the selected global revision.
+the cohort skips that record only after observing its tombstone. CELL remains
+complete fallback, but CELL-only Desk/editor/calendar pixels do not qualify the
+rich path. The production policy remains disabled until every advertised
+feature family is complete in the semantic projection, terminal model, and
+physical compositor and the sink preserves every nonempty plane of the selected
+global revision.
 
 If Desk exits or throws after the binary switch but synchronized release is
 not proven, the profile emits no diagnostic bytes. It remains in a silent

@@ -79,31 +79,25 @@ LEL's integer/boolean value cell and rendered the reserved zero cell instead.
 String, integer, and boolean are still the only recognized bound text types;
 other types retain the prior single-space behavior.
 
-## LABEL declaration
+## LABEL text semantics
 
-A LABEL is snapshot-eligible only when it explicitly declares:
+Every LABEL with valid resolved text is snapshot-eligible. UIDL does not carry
+a retained-buffer reservation or require renderer-specific eligibility markup.
+In particular, `text-capacity` is not a UIDL semantic: it describes one
+renderer representation rather than application-visible behavior.
 
-```xml
-<label text="Ready" text-capacity="32" />
-```
-
-`text-capacity` is the maximum byte length of the resolved UTF-8 text. It is
-not a cell, glyph, source-buffer, or pool capacity. Its syntax is canonical
-unsigned decimal: digits only, no sign or whitespace, and no leading zero
-except the single value `0`. Parsing is checked against the native
-nonnegative length range.
-
-Omission returns `UNSUPPORTED`; malformed syntax returns `INVALID`; current
-text longer than the declaration returns `CAPACITY`. None of those outcomes
-changes, truncates, or hides CELL text. A declaration is an admission promise
-about future values, so it must not be inferred from the current literal.
+A future generic content limit is appropriate only when it is independently
+observable application behavior across renderers—for example, an editable
+field's semantic maximum length. Such a limit constrains the value regardless
+of output mode; it is not a retained allocation hint and is not needed for a
+LABEL snapshot.
 
 Resolved text must be well-formed scalar UTF-8 and contain no NUL, CR, or LF.
-Empty text and a zero declaration are valid together.
+Empty text is valid.
 
 ## LABEL record
 
-The record is exactly `64 + text-capacity` bytes:
+The record is exactly `64 + current-text-bytes` bytes:
 
 | Offset | Field | Meaning |
 |---:|---|---|
@@ -112,27 +106,33 @@ The record is exactly `64 + text-capacity` bytes:
 | 16 | kind | `UIDL-SNAPSHOT-K-LABEL` |
 | 24 | bytes | exact complete record length |
 | 32 | flags | zero |
-| 40 | text capacity | declared UTF-8 ceiling |
-| 48 | text bytes | current copied byte count |
+| 40 | text bytes | current copied byte count |
+| 48 | reserved | zero |
 | 56 | reserved | zero |
-| 64 | text/tail | current text followed by a zero-filled reserved tail |
+| 64 | text | exact current text |
 
 Public helpers are:
 
 ```forth
-UIDL-LABEL-SNAPSHOT-BYTES           ( text-capacity -- bytes | 0 )
+UIDL-LABEL-SNAPSHOT-BYTES           ( text-bytes -- bytes | 0 )
 UIDL-LABEL-SNAPSHOT-VALID?          ( snapshot available -- flag )
 UIDL-LABEL-SNAPSHOT-BYTES@          ( snapshot -- bytes )
-UIDL-LABEL-SNAPSHOT-TEXT-CAPACITY@  ( snapshot -- bytes )
 UIDL-LABEL-SNAPSHOT-TEXT@           ( snapshot -- text-a text-u )
 ```
 
 Capture resolves and validates every source fact, destination bound, overlap
 with the current text, and disjointness from persistent UIDL and active
-state-tree storage before modifying caller memory. It zeroes the complete
-reserved record, copies
-the current value, and publishes magic last. The caller must still own and
+state-tree storage before modifying caller memory. It zeroes the exact record,
+copies the current value, and publishes magic last. The caller must still own and
 serialize independent writes to the destination; source-state serialization is
 part of the neutral capture operation.
-Validation rechecks all header invariants, UTF-8/control rules, current length,
-and the zero-filled unused tail.
+Validation rechecks all header invariants and UTF-8/control rules.
+
+When text length changes, the next semantic observation measures and captures a
+new exact record in the caller's inactive bounded bank. The generic downstream
+adapter redefines or rebuilds that object while preserving its semantic
+identity. If the current representation does not fit the caller's or
+terminal's advertised bounds, rich materialization for that binding is refused
+without truncating the value or changing complete CELL fallback. Capacity is
+therefore an output-adapter fact derived from current content, never applet
+markup.

@@ -474,9 +474,9 @@ The lower UIDL layer now supplies the first neutral semantic snapshot
 substrate independently of this adapter. `ED.SEMANTICS` selects a per-element
 caller-bounded snapshot hook, and `UIDL-SNAPSHOT-SIZE` /
 `UIDL-SNAPSHOT-CAPTURE` measure and copy typed records without terminal or
-provider identity. The initial LABEL record contains the resolved text plus
-its explicit `text-capacity` reservation. CELL label paint consumes the same
-`UIDL-TEXT@` value rule but never enforces snapshot eligibility or capacity.
+provider identity. The LABEL record contains an exact copy of the current
+resolved text. It has no renderer reservation and requires no eligibility
+attribute in UIDL. CELL label paint consumes the same `UIDL-TEXT@` value rule.
 Thus string/integer/boolean binding semantics are shared below either output
 path, while optional rich-output eligibility and materialization remain above
 UIDL semantics.
@@ -788,10 +788,14 @@ with private root region ID 1 and object high-water zero. No pointer, markup
 
 Project constructs and deep-validates the inactive neutral candidate, maps its
 private identities, and then performs its only facade operation,
-`RTE-LIMITS@`. Terminal-negotiated eligibility requires a resolved LABEL-only
-tree, zero currently unsupported resolved attributes, INSTRUMENT support, one
-region, one object per item, each declared text capacity within
-`max_label_bytes`, and aggregate declared UTF-8 within the owner/global bound.
+`RTE-LIMITS@`. The current narrow retained candidate contains supported LABEL
+semantics selected from an otherwise ordinary UIDL tree, zero currently
+unsupported resolved attributes, one region, and one object per item.
+Terminal-negotiated eligibility requires the corresponding advertised family,
+each current text value within `max_label_bytes`, and aggregate current UTF-8
+within the owner/global bound. The adapter derives representation capacity from
+the current candidate and rebuilds generically when text grows; UIDL does not
+reserve terminal storage.
 It makes no provider-specific operation-count, retry-copy, or encoded-update
 estimate; the neutral plan preflight owns those exact checks.
 
@@ -959,9 +963,9 @@ selected candidate, its mapping, or the monotone identity high-water. No
 protocol byte is emitted from an element or widget callback. Layout/style state
 is now part of the locally accepted desired recipe. The neutral RTE/RTAPT LABEL
 path, lifecycle materializer, and unified publisher binding exist below it. They
-remain a development path rather than a production capability until the first
-visible checkpoint in Section 11.1 proves late discovery, admission, settlement,
-reveal, and physical display together.
+remain narrow development plumbing rather than a production capability. They
+prove useful lifecycle and physical-sink seams, but do not render the
+substantive Desk, Pad, or Daybook frame required by Section 11.1.
 
 The first materialization in an epoch is a complete projection obligation, not
 an ordinary dirty-element update. Transition to retained availability, and
@@ -1367,42 +1371,49 @@ UIDL/UCTX integration is Phase 3, not deferred work. Phase 3 does not ship an
 application-facing rich-terminal broker as a bridge and does not require any
 applet to maintain terminal-specific output state.
 
-The first complete vertical uses the same UIDL document and ordinary semantic
-widget APIs in baseline ANSI and rich Desktop compositions. Without applet APT
-imports or direct scene calls, it must demonstrate:
+The first complete vertical is the canonical Desk with Pad and Daybook both
+launched and live. It uses the same applet descriptors, ordinary UIDL
+documents, mounted widgets, application state, Desk tiling/focus/input loop,
+and normal TUI draw lifecycle in baseline and rich compositions. Without
+applet APT imports, terminal-mode branches, renderer reservations, or direct
+scene calls, it must demonstrate:
 
 * complete CELL fallback;
 * automatic UCTX attach and exact owner admission;
-* retained semantic definitions derived from UIDL;
+* one renderer-neutral rich projection derived from the ordinary TUI draw
+  lifecycle, covering Desk chrome, UIDL renderers, mounted widgets, and applet
+  painting reached through the normal draw boundary;
 * dynamic bound-state updates without retransmitting unchanged definitions;
 * stable element/object identities across relayout and minimize/restore;
 * atomic CELL plus retained publication where both change;
 * physical display of every nonempty plane in the selected immutable composite
   before its revision becomes input-eligible;
-* reset reconstruction from live UCTX semantics; and
-* allocation-free detach and exact owner retirement before UCTX free.
+* reset reconstruction from live UCTX semantics;
+* allocation-free detach and exact owner retirement before UCTX free;
+* a visible Pad editor whose real edit and caret/state change are supplied by
+  the rich path; and
+* a visible Daybook month/agenda whose real navigation or selection change is
+  supplied by the rich path, followed by the ordinary Daybook-to-Pad shared
+  resource route.
 
-Qualification may use focused semantic fixtures while the backend is being
-built, but closure requires an unchanged production UIDL path rather than a
-handwritten applet projection. No particular applet is built into this
-architecture or protocol contract.
+Focused generic semantic/draw fixtures may qualify bounded implementation
+slices while the backend is being built, but no fixture is the vertical.
+Closure uses unchanged production applet sources rather than a handwritten
+projection. Pad and Daybook are acceptance applications, not protocol object
+types: no particular applet is built into the architecture or protocol.
 
 Image/resource lifecycle remains part of Phase 3 closure when the composition
 advertises that semantic family. A stock image can qualify codec mechanics but
 cannot replace the generic UIDL media lifecycle, fallback, reset, and detach
 journey.
 
-### 11.1 First visible root-LABEL checkpoint
+### 11.1 Desk, Pad, and Daybook acceptance checkpoint
 
-Implementation order is narrower than final Phase 3 qualification. Before
-adding another retained semantic family, resource/series source, generalized
-object graph, or broad reset/resize/minimize journey, the cross-repository path
-must make one real UIDL LABEL physically visible through the actual ownership
-chain:
+The blocking cross-repository path is the real product composition:
 
 ```text
-UIDL/UCTX LABEL semantics
-  -> neutral candidate and stable identity
+Desk + ordinary UIDL renderers + mounted-widget/app draw state
+  -> renderer-neutral candidate and stable identities
   -> RTE/RTAPT materializer
   -> unified CELL/retained publisher
   -> MegaPad PT wire and retained model
@@ -1410,49 +1421,51 @@ UIDL/UCTX LABEL semantics
   -> production compositor/view sink pixels
 ```
 
-The blocking Akashic correctness conditions for that journey are:
+The already-built LABEL path establishes neutral capture, sparse identity,
+late-discovery retry, binding-local fallback, owner settlement, immutable
+offers, and physical-ACK plumbing. It remains lower-stack evidence. It cannot
+stand in for the checkpoint because the present candidate, shared DTO, and
+compositor do not carry Desk chrome, Pad's editor body, or Daybook's
+calendar/agenda.
 
-1. `object_quota` is the count of retained objects; sparse identifier
-   high-water remains a separate monotone identity fact and never consumes
-   count capacity by itself;
-2. a desired candidate selected while discovery is pending is renegotiated by
-   owner-loop service when discovery becomes available, without another UIDL
-   dirty event;
-3. a recoverable retained-only transaction rejection rewinds and retries or
-   rebuilds from authoritative desired state instead of quarantining the
-   session; and
-4. per-binding source, representation, or capacity refusal disables or retries
-   only that retained materialization while the complete CELL path remains
-   usable. Only structural/session loss may poison the unified publisher.
+Acceptance requires the complete visible Desk frame, both applets live through
+their normal descriptors, at least one real Pad edit and one real Daybook
+navigation or selection, and the normal shared-resource handoff from Daybook to
+Pad. Every substantive Desk/editor/calendar plane selected for rich output must
+survive owner admission, publication, the immutable offer boundary, and
+physical composition. The displayed revision and revision-bound input advance
+only after every nonempty selected plane has been flipped and exactly
+acknowledged.
 
-The current lifecycle contains the bounded transitions for conditions 1 through
-4. The real guest-to-compositor journey below remains blocking; lifecycle
-correctness alone does not enable the production retained policy.
+CELL remains complete and authoritative fallback. It may provide fallback for
+an unsupported or refused binding, but a frame whose substantive Desk, editor,
+or calendar pixels came only from CELL does not qualify the rich path. A byte
+transcript, active retained model, promoted composite, one LABEL, or
+applet-specific scene likewise does not complete the checkpoint.
 
-After those conditions hold, a focused development composition must execute the
-real initial CELL transaction, discovery, owner admission, hidden
-root-region-plus-LABEL replacement, separate zero-operation reveal, both
-settlements, and physical composite display. A byte transcript, active retained
-model, or promoted `CompositeTerminalView` is insufficient if the view sink
-still draws only CELL. The displayed revision and revision-bound input advance
-only after all nonempty planes have reached the compositor.
+The renderer-neutral boundary may expose semantic text, layout, state, and
+generic draw operations. Physical font choice, pixel geometry, clipping,
+alpha, rasterization, buffering, and composition remain MegaPad work. A true
+cross-renderer content maximum may be generic UIDL behavior; a retained text
+reservation is not and must be derived below UIDL from current content and
+caller-provided bounds.
 
 This checkpoint does not weaken the capability contract. `RET_INSTRUMENT`
 covers LABEL, READOUT, METER, and STATUS as one family, so the checked-in
 production policy remains `retained_policy=None` until the terminal model and
 renderer truthfully implement every advertised member. A focused LABEL fixture
-is development evidence, not permission for partial production advertisement.
+is lower-stack development evidence, not permission for partial production
+advertisement or a substitute for the Desk/Pad/Daybook journey.
 
 ### 11.2 Pre-vertical qualification gate
 
 Before vertical closure, each bounded implementation slice is qualified only
 with seconds-scale structural tests, byte-oracle tests, focused state-machine
 units, and deterministic off-screen compositor units appropriate to that slice.
-One seconds-scale targeted guest root-LABEL selector is permitted when all
-lower seams are present because it is the evidence that defines the visible
-checkpoint; it is not Desktop or production integration qualification. Each
-coherent slice receives its own progress commit after those lightweight checks
-pass.
+Focused guest selectors are permitted only when they remain seconds-scale and
+exercise a generic seam needed by the acceptance composition; no root-LABEL or
+applet-specific selector defines the vertical. Each coherent slice receives
+its own progress commit after those lightweight checks pass.
 
 Cold source qualification, exact-single-full-core runs, Desktop smoke,
 end-to-end integration, persistence, sustained-cadence, and renderer checks are
@@ -1509,7 +1522,7 @@ The lightweight contract suite must prove:
 16. no production applet imports APT/rich-terminal modules, discovers a retained
     service, stores a scope, or issues a scene operation.
 
-Full Desktop, reset, all-family renderer, and sustained-cadence journeys are
-later sequential qualification. They complement the first visible checkpoint
-and these bounded contracts; they may not justify larger hidden capacities,
-weakened teardown, or an application-specific rich-terminal path.
+The real Desktop/Pad/Daybook journey, reset, all-advertised-family renderer, and
+sustained-cadence cases are deferred sequential acceptance/qualification. They
+may not justify larger hidden capacities, weakened teardown, or an
+application-specific rich-terminal path.

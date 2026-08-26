@@ -72,8 +72,10 @@ item span must be an exact multiple of `RUPJ-ITEM-SIZE`. `root-h` and `root-w`
 must both be positive. No heap, dictionary, XMEM, engine, host, screen, or wire
 storage is acquired.
 
-The complete root tree is walked in preorder under one
-compound observation. A currently supported LABEL produces key
+The complete ordinary root tree is walked in preorder under one compound
+observation. Unsupported element semantics remain in the same UIDL tree and
+continue through ordinary rendering; they do not invalidate or specialize the
+document. A currently supported LABEL produces key
 `(element-index,0)` and a copied LABEL snapshot. Semantic eligibility determines
 candidate membership independently of resolved-state availability. When
 UIDL-TUI returns resolved `OK`, the projector copies and validates the record,
@@ -81,20 +83,25 @@ normalizes its coordinates, and sets `HAS_RESOLVED` plus
 `EFFECTIVE_VISIBLE` when applicable. Resolved `UNAVAILABLE` retains the LABEL
 item with zero resolved flags and payload, preserving an otherwise valid
 semantic candidate for a later projection. The root itself must return `OK`
-because its geometry defines the normalization basis; root `UNAVAILABLE` or
-`INVALID` invalidates the complete build. A LABEL without the neutral
-`text-capacity=` declaration is skipped and retains its ordinary CELL path.
-Malformed source, tree identity,
-or resolved state returns `RUPJ-S-INVALID`; local arithmetic or storage
-exhaustion returns `RUPJ-S-CAPACITY`.
+basis; root `UNAVAILABLE` or `INVALID` invalidates the complete build. Every
+LABEL with valid resolved text is eligible without renderer-specific markup.
+Malformed source, tree identity, or resolved state returns `RUPJ-S-INVALID`;
+local arithmetic or storage exhaustion returns `RUPJ-S-CAPACITY`.
 
-Snapshot records have exact length `64 + text-capacity` but contain native
+Snapshot records have exact length `64 + current-text-bytes` but contain native
 64-bit fields and therefore require aligned starting addresses. The physical
 arena stride is checked `ALIGN8(exact)`. Items store the aligned offset and the
 exact record length; `snapshot-used` is the sum of physical strides. Alignment
 padding is zero. This local padding is not remote quota: `utf8-quota` is the
-checked sum of raw declared text capacities, `object-quota` equals item count,
+checked sum of current copied UTF-8 bytes, `object-quota` equals item count,
 and `region-quota` is one exactly when the candidate is nonempty.
+
+Text growth builds a new complete candidate in the inactive bounded bank. The
+downstream adapter derives any retained allocation from that candidate and
+redefines the same semantic object when necessary; UIDL does not reserve its
+storage. A candidate that does not fit current caller or terminal bounds is a
+binding-local rich-output refusal, never truncation and never a change to CELL
+meaning.
 
 Construction clears the complete destination before writing. Any ordinary
 failure or caught exception clears it again and returns five zero values plus a
@@ -332,8 +339,8 @@ LABEL definitions, settles them, and performs a separate atomic reveal through
 the unified publisher. None of those mutations occurs from an element/widget
 callback or grants protocol authority to the projector.
 
-The downstream neutral boundary can now preflight the complete declared
-root-and-LABEL recipe and accept each aligned 160-byte LABEL value. LABEL height
+The downstream neutral boundary can now preflight the complete current
+root-and-LABEL recipe and accept each aligned LABEL value. LABEL height
 and width are nonnegative and borrowed UTF-8 may begin at any byte address.
 Visible geometry must have positive extent and intersect the positive root.
 Invisible zero-extent or wholly off-root geometry is valid; RTAPT canonicalizes
@@ -349,8 +356,10 @@ output is now recovered from the provider's retained `SEALED` candidate, or—if
 that retry authority is defensively observed gone—from authoritative desired
 state after exact owner retirement. Count quota versus sparse-ID high-water and
 late-discovery renegotiation and CELL-preserving per-binding refusal are likewise
-corrected. The remaining blocking slice is not another candidate or semantic
-family: it is the first visible checkpoint defined by
-`AKASHIC-RICH-TERMINAL.md`, where the root-region-plus-LABEL composite reaches
-physical pixels. None of that moves scene ownership, output choice, or
-renderer-specific state into UIDL, UIDL-TUI, Desk, or applets.
+corrected. This LABEL candidate is a completed narrow foundation, not the
+vertical acceptance target. The next slices evolve this one current
+candidate/materializer boundary to carry the generic TUI draw state needed by
+Desk, Pad, and Daybook, including ordinary UIDL renderers, Desk chrome, mounted
+widgets, and applet painting reached through the normal draw boundary. They do
+not add an applet-specific candidate, a parallel protocol contract, or a second
+scene owned by Desk or an applet.

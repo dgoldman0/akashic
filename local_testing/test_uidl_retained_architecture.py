@@ -1094,6 +1094,10 @@ def test_retained_contract_requires_internal_uidl_projection_now() -> None:
     assert "may compose the same engine without" in contract
     assert "never source-`REQUIRE`s or copies" in contract
     assert "Pre-vertical qualification gate" in contract
+    assert "Desk, Pad, and Daybook acceptance checkpoint" in contract
+    assert "normal TUI draw lifecycle" in contract
+    assert "CELL does not qualify the rich path" in contract
+    assert "First visible root-LABEL checkpoint" not in contract
     assert "before arbitrary `APP.SHUTDOWN`" in contract
     assert "Applications receive no" in ownership
     assert "private per-UCTX projection" in ownership
