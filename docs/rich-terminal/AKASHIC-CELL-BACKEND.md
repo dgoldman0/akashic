@@ -278,6 +278,15 @@ semantic family (`retained_policy=None`). The path remains dormant until a
 product supplies an explicit supported retained policy; unsupported families
 remain ordinary CELL output rather than being falsely advertised.
 
+The immediate development gate is the visible root-region-plus-LABEL checkpoint
+in `AKASHIC-RICH-TERMINAL.md`. A focused composition may exercise that path only
+after per-binding source, representation, and capacity refusal are mapped to a
+retained retry/fallback result rather than `SCB-S-INVALID`; such a refusal must
+not latch a publisher fault or prevent later CELL `begin`. The production policy
+remains disabled until every advertised feature family is complete in both the
+terminal model and physical compositor and the sink preserves both planes of
+the selected global revision.
+
 If Desk exits or throws after the binary switch but synchronized release is
 not proven, the profile emits no diagnostic bytes. It remains in a silent
 `IDLE` quarantine until the host performs the required attachment reset.

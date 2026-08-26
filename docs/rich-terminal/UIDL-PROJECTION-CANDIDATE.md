@@ -273,9 +273,9 @@ provider's designated limits scratch.
 Discovering an already-lost session may invoke the engine's existing
 quarantine/capture-clear transition, which is structural-loss containment, not
 plan admission, and emits no wire. `OK` can become stale immediately, so the
-next mutating slice must freeze the then-current selected generation, rebuild
-this exact plan, and repeat preflight immediately before its checked
-`OWNER_OPEN`/capture sequence. Neither eligibility nor this earlier advisory
+materializer freezes the then-current selected generation, rebuilds this exact
+plan, and repeats preflight immediately before its checked
+`OWNER_OPEN`/capture sequence. Neither eligibility nor an earlier advisory
 result is an admission token.
 
 Every return and caught throw clears the full global attempt item, identity, and
@@ -295,11 +295,14 @@ availability, representation, encoded-update arithmetic, and caller-owned
 provider owner, operation, and copied-byte capacity. Eligibility and advisory
 success alone admit nothing.
 
-This slice remains output-inert. Projection calls the read-only `RTE-LIMITS@`;
-the explicit materialization-preflight operation makes exactly one advisory
-`RTE-LABEL-PREFLIGHT` call after local freezing, validation, and plan
-construction. It does not open an owner, begin or seal retained work, choose
-CELL versus retained output, or materialize terminal objects.
+The projector itself remains output-inert. Projection calls the read-only
+`RTE-LIMITS@` and publishes only the neutral candidate, identity mapping, and
+eligibility facts. The downstream UIDL lifecycle driver now freezes that
+candidate again, rebuilds and validates its plan, repeats
+`RTE-LABEL-PREFLIGHT`, opens the private owner, captures a hidden root region and
+LABEL definitions, settles them, and performs a separate atomic reveal through
+the unified publisher. None of those mutations occurs from an element/widget
+callback or grants protocol authority to the projector.
 
 The downstream neutral boundary can now preflight the complete declared
 root-and-LABEL recipe and accept each aligned 160-byte LABEL value. LABEL height
@@ -312,11 +315,12 @@ nonwrapping and disjoint from facade/provider storage. RTAPT copies it into an
 aligned, pointer-free retry record, maintains exact active/hidden/pending object
 and UTF-8 ledgers, and commits it through the typed PT LABEL writer.
 
-The lifecycle driver can now freeze and deep-validate an exact selected
-generation, construct its sorted neutral plan, and exercise the advisory
-boundary. It still exercises no downstream mutation path. The next slice must
-repeat that work immediately before it opens an eligible private owner, retain
-the admitted attempt through capture and settlement, and schedule it through
-the unified CELL/retained publication lifecycle with completion and retirement
-correlation. None of that moves scene ownership, output choice, or
-renderer-specific state into UIDL, UIDL-TUI, Desk, or applets.
+The lifecycle driver now retains the admitted pointer-free attempt through
+capture and settlement and correlates owner retirement. The next blocking slice
+is not another candidate or semantic family: it is the first visible checkpoint
+defined by `AKASHIC-RICH-TERMINAL.md`. That checkpoint must correct count quota
+versus sparse-ID high-water, late-discovery renegotiation, recoverable
+retained-only rejection, and CELL-preserving per-binding refusal, then prove the
+root-region-plus-LABEL composite reaches physical pixels. None of that moves
+scene ownership, output choice, or renderer-specific state into UIDL, UIDL-TUI,
+Desk, or applets.

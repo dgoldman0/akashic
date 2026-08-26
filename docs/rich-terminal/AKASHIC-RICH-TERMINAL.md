@@ -878,8 +878,8 @@ the explicit advisory materialization preflight; it is not an owner
 reservation. Dynamic values may vary within those declarations but cannot
 silently enlarge them. That operation constructs the exact plan and calls
 `RTE-LABEL-PREFLIGHT` to prove local provider capture-bank fit and dynamic owner
-availability, then scrubs the frozen attempt and plan. The mutating slice must
-repeat the proof against the then-current generation immediately before owner
+availability, then scrubs the frozen attempt and plan. The materializer repeats
+the proof against the then-current generation immediately before owner
 admission. If the tree later changes structurally beyond eligibility, retained
 projection reports capacity and keeps the prior coherent retained terminal
 state; CELL rendering continues from the authoritative UIDL tree.
@@ -915,9 +915,10 @@ negotiation result clears only eligibility/materialization readiness, not the
 selected candidate, its mapping, or the monotone identity high-water. No
 protocol byte is emitted from an element or widget callback. Layout/style state
 is now part of the locally accepted desired recipe. The neutral RTE/RTAPT LABEL
-path exists below it, but local capture admission, candidate-to-engine
-materialization, and scheduling through the unified publisher remain necessary
-before the recipe can become retained terminal state.
+path, lifecycle materializer, and unified publisher binding exist below it. They
+remain a development path rather than a production capability until the first
+visible checkpoint in Section 11.1 proves late discovery, admission, settlement,
+reveal, and physical display together.
 
 The first materialization in an epoch is a complete projection obligation, not
 an ordinary dirty-element update. Transition to retained availability, and
@@ -1328,6 +1329,8 @@ imports or direct scene calls, it must demonstrate:
 * dynamic bound-state updates without retransmitting unchanged definitions;
 * stable element/object identities across relayout and minimize/restore;
 * atomic CELL plus retained publication where both change;
+* physical display of every nonempty plane in the selected immutable composite
+  before its revision becomes input-eligible;
 * reset reconstruction from live UCTX semantics; and
 * allocation-free detach and exact owner retirement before UCTX free.
 
@@ -1341,12 +1344,63 @@ advertises that semantic family. A stock image can qualify codec mechanics but
 cannot replace the generic UIDL media lifecycle, fallback, reset, and detach
 journey.
 
-### 11.1 Pre-vertical qualification gate
+### 11.1 First visible root-LABEL checkpoint
+
+Implementation order is narrower than final Phase 3 qualification. Before
+adding another retained semantic family, resource/series source, generalized
+object graph, or broad reset/resize/minimize journey, the cross-repository path
+must make one real UIDL LABEL physically visible through the actual ownership
+chain:
+
+```text
+UIDL/UCTX LABEL semantics
+  -> neutral candidate and stable identity
+  -> RTE/RTAPT materializer
+  -> unified CELL/retained publisher
+  -> MegaPad PT wire and retained model
+  -> immutable composite
+  -> production compositor/view sink pixels
+```
+
+The blocking Akashic correctness conditions for that journey are:
+
+1. `object_quota` is the count of retained objects; sparse identifier
+   high-water remains a separate monotone identity fact and never consumes
+   count capacity by itself;
+2. a desired candidate selected while discovery is pending is renegotiated by
+   owner-loop service when discovery becomes available, without another UIDL
+   dirty event;
+3. a recoverable retained-only transaction rejection rewinds and retries or
+   rebuilds from authoritative desired state instead of quarantining the
+   session; and
+4. per-binding source, representation, or capacity refusal disables or retries
+   only that retained materialization while the complete CELL path remains
+   usable. Only structural/session loss may poison the unified publisher.
+
+After those conditions hold, a focused development composition must execute the
+real initial CELL transaction, discovery, owner admission, hidden
+root-region-plus-LABEL replacement, separate zero-operation reveal, both
+settlements, and physical composite display. A byte transcript, active retained
+model, or promoted `CompositeTerminalView` is insufficient if the view sink
+still draws only CELL. The displayed revision and revision-bound input advance
+only after all nonempty planes have reached the compositor.
+
+This checkpoint does not weaken the capability contract. `RET_INSTRUMENT`
+covers LABEL, READOUT, METER, and STATUS as one family, so the checked-in
+production policy remains `retained_policy=None` until the terminal model and
+renderer truthfully implement every advertised member. A focused LABEL fixture
+is development evidence, not permission for partial production advertisement.
+
+### 11.2 Pre-vertical qualification gate
 
 Before vertical closure, each bounded implementation slice is qualified only
-with seconds-scale structural tests, byte-oracle tests, and focused unit tests
-appropriate to that slice. Each coherent slice receives its own progress
-commit after those lightweight checks pass.
+with seconds-scale structural tests, byte-oracle tests, focused state-machine
+units, and deterministic off-screen compositor units appropriate to that slice.
+One seconds-scale targeted guest root-LABEL selector is permitted when all
+lower seams are present because it is the evidence that defines the visible
+checkpoint; it is not Desktop or production integration qualification. Each
+coherent slice receives its own progress commit after those lightweight checks
+pass.
 
 Cold source qualification, exact-single-full-core runs, Desktop smoke,
 end-to-end integration, persistence, sustained-cadence, and renderer checks are
@@ -1403,7 +1457,7 @@ The lightweight contract suite must prove:
 16. no production applet imports APT/rich-terminal modules, discovers a retained
     service, stores a scope, or issues a scene operation.
 
-Full Desktop, reset, renderer, and sustained-cadence journeys are later
-sequential qualification. They complement these bounded headless contracts and
-may not justify larger hidden capacities, weakened teardown, or an application-
-specific rich-terminal path.
+Full Desktop, reset, all-family renderer, and sustained-cadence journeys are
+later sequential qualification. They complement the first visible checkpoint
+and these bounded contracts; they may not justify larger hidden capacities,
+weakened teardown, or an application-specific rich-terminal path.
