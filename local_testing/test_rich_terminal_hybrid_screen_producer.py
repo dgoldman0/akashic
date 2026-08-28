@@ -58,10 +58,12 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
         "_RTHP.TARGET1-A",
         "_RTHP.TARGET-ACTIVE",
         "_RTHP.TARGET-PENDING",
+        "_RTHP.NEXT-REGION",
+        "_RTHP.NEXT-OBJECT",
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 1920
+    assert _constant(source, "RTHP-SIZE") == expected == 1936
 
 
 def test_candidate_is_copied_planned_and_admitted_once_before_owner_open() -> None:
@@ -82,6 +84,65 @@ def test_candidate_is_copied_planned_and_admitted_once_before_owner_open() -> No
     assert _source().count("RTE-HYBRID-PREFLIGHT") == 1
     assert "RTE-CONTROL-PREFLIGHT" not in source
     assert "RTE-GLYPH-RUN-PREFLIGHT" not in source
+
+
+def test_owner_open_reserves_one_frame_independently_of_current_content() -> None:
+    source = _source()
+    open_owner = _word(source, "_RTHP-OPEN")
+
+    assert "_RTHP.ADMISSION" not in open_owner
+    for bound in (
+        "_RTHP.MAX-RECORDS",
+        "_RTHP.MAX-COLS",
+        "_RTHP.MAX-ROWS",
+        "_RTHP.MAX-TEXT",
+        "RTE-LIMITS-OBJECTS@",
+        "RTE-LIMITS-UTF8-BYTES@",
+    ):
+        assert bound in open_owner
+    assert open_owner.count("_RTHP-UMIN") == 2
+    assert "1 0 _RTHP-O-OBJECTS @ 0 0 _RTHP-O-TEXT @ 0" in open_owner
+
+
+def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
+    source = _source()
+    init = _word(source, "RTHP-INIT")
+    attempt = _word(source, "_RTHP-TRY-CANDIDATE")
+    fixed = _word(source, "_RTHP-FIXED-BODY?")
+    candidate_last = _word(source, "_RTHP-CANDIDATE-LAST-OBJECT")
+    successors = _word(source, "_RTHP-CANDIDATE-NEXT?")
+    advance = _word(source, "_RTHP-ADVANCE-IDS?")
+    sealed = _word(source, "_RTHP-STEP-SEALED")
+    prepare = _word(source, "RTHP-PREPARE")
+
+    assert "_RTHP.NEXT-REGION !" in init
+    assert "_RTHP.NEXT-OBJECT !" in init
+    assert attempt.index("_RTHP-SELECT-NEXT-IDS?") < attempt.index(
+        "_RTHP-BUILD-CONTROLS?"
+    )
+    assert attempt.index("RTE-HYBRID-PREFLIGHT") < attempt.index(
+        "_RTHP-CANDIDATE-NEXT?"
+    ) < attempt.index("_RTHP-OPEN")
+    assert "_RTHP.NEXT-REGION" in fixed
+    assert "_RTHP.NEXT-OBJECT" in fixed
+    assert successors.count("_RTHP-U+?") == 2
+    assert "_RTHP-U32+?" not in successors
+
+    build_controls = _word(source, "_RTHP-BUILD-CONTROLS?")
+    assert "_RTHP-W-LAST @ 1 _RTHP-U+?" in build_controls
+    assert "_RTHP-W-LAST @ 1 _RTHP-U32+?" not in build_controls
+    assert "_RTE-HA.GLYPH-LAST" in candidate_last
+    assert "_RTE-HA.CONTROL-LAST" in candidate_last
+    assert "_RTHP.NEXT-REGION !" in advance
+    assert "_RTHP.NEXT-OBJECT !" in advance
+    exact_ack = (
+        "_RTHP-S-STATE @ RTE-UPDATE-IDLE =\n"
+        "    _RTHP-S-STATUS @ RTE-S-OK = AND IF"
+    )
+    assert sealed.index(exact_ack) < sealed.index("_RTHP-ADVANCE-IDS?")
+    assert "_RTHP-PH-READY-REVEAL = IF" in sealed
+    assert "_RTHP-ADVANCE-IDS?" not in prepare
+    assert source.count("_RTHP-ADVANCE-IDS?") == 2
 
 
 def test_final_capture_rechecks_fixed_authority_then_traverses_each_family_once() -> None:
