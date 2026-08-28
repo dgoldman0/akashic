@@ -1,7 +1,15 @@
 # Hybrid UIDL projection candidates
 
-Status: normative target contract. The hybrid candidate and semantic control
-families described here are not implemented yet.
+Status: normative target contract. The hybrid candidate is not implemented end
+to end. MegaPad has the terminal-side semantic-control protocol and renderer,
+but Akashic does not yet publish ordinary UIDL controls into that path. The
+first neutral supporting rung, `akashic/tui/uidl-menu-snapshot.f`, now captures
+ordinary UIDL-TUI menu trees through one coherent resolved-tree visit into
+caller-bounded, pointer-free work storage and ascending-key canonical records.
+Local semantic visibility remains distinct from effective paintability, so a
+closed menu can retain truthful row state without proposing claims for rows it
+did not paint. The rung is not yet attached to the projection lifecycle,
+admitted as claims, or materialized by the rich engine.
 
 This document defines the renderer-neutral boundary between the ordinary
 UIDL/TUI draw lifecycle and an optional rich output adapter. The boundary is
@@ -140,10 +148,20 @@ Semantic proposals are written once in canonical ascending key order. Residual
 spans follow in canonical `(row, starting-column)` order after claim
 resolution. Duplicate or descending keys are invalid.
 
-Stable semantic object IDs are assigned by a single merge of the new sorted
-keys with the previous sorted identity map. Unchanged keys reuse their IDs;
-new keys consume a checked monotone high-water; removed keys become bounded
-retirement work. This is `O(new-items + old-items)`.
+Canonical key order is not hierarchy order. A legal UIDL reparent can place an
+older pool index beneath a newer parent. Identity merge therefore consumes the
+ascending key stream, while control publication resolves explicit parent keys
+through caller-bounded lookup storage and emits the fixed-depth menu family in
+MENUBAR, MENU, then ITEM/SEPARATOR passes. New monotone terminal identities are
+assigned in that same parent-first order; retired entries are dropped in
+reverse depth. Authored sibling ordinals remain the renderer-neutral ordering
+authority, so none of these passes sorts by repeated whole-bank search.
+
+Stable semantic keys are reconciled by a single merge of the new sorted stream
+with the previous sorted identity map. Unchanged keys reuse their IDs; new and
+removed keys become bounded creation and retirement work. The parent-first
+passes above assign each new key from a checked monotone high-water. This is
+`O(new-items + old-items + source-high-water)`.
 
 The following algorithms are forbidden on the product path:
 
