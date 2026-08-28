@@ -596,6 +596,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "RUHA-INSTALL",
         "DESK-HOST-LIFECYCLE!",
         "APTAS-INIT",
+        "APTAS-CONTROL-ROUTE!",
         "APTAS-INSTALL",
     )
     assert [setup.index(token) for token in setup_order] == sorted(
@@ -614,6 +615,10 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert (
         "['] RUHA-HOST-INIT ['] RUHA-HOST-FINI _A1D-RUHA\n"
         "        DESK-HOST-LIFECYCLE!"
+    ) in setup
+    assert (
+        "_A1D-SCREEN ['] RTHP-CONTROL-MENU-TARGET@ _A1D-OWNER\n"
+        "        APTAS-CONTROL-ROUTE!"
     ) in setup
 
     clear_inert = _word(composition, "_A1D-CLEAR-INERT")

@@ -238,6 +238,31 @@ def test_normal_service_and_close_settlement_have_disjoint_schedulers() -> None:
     assert "PT-STORAGE-DISJOINT?" in owner_storage
 
 
+def test_native_control_input_is_optional_exact_and_normalized_to_mouse() -> None:
+    shell = SHELL.read_text(encoding="utf-8")
+    poll = _definition(shell, "_APTAS-POLL")
+    control = _definition(shell, "_APTAS-MAP-CONTROL")
+    bind = _definition(shell, "APTAS-CONTROL-ROUTE!")
+
+    assert "PT-EVENT-CONTROL = IF" in poll
+    branch = poll.split("PT-EVENT-CONTROL = IF", 1)[1].split("THEN", 1)[0]
+    assert "_APTAS-MAP-CONTROL SCB-S-OK SWAP EXIT" in branch
+    assert "SCB-S-INVALID" not in branch
+    assert "PT-CONTROL-EVENT-KIND@" in control
+    assert "PT-CONTROL-ACTIVATE" in control
+    for accessor in (
+        "PT-CONTROL-EVENT-OWNER@",
+        "PT-CONTROL-EVENT-GENERATION@",
+        "PT-CONTROL-EVENT-ID@",
+    ):
+        assert accessor in control
+    assert "_APTAS.CONTROL-XT @ EXECUTE" in control
+    assert "KEY-MOUSE-LEFT _APTAS-POINTER-EVENT!" in control
+    assert "SCR-H U<" in control
+    assert "SCR-W U<" in control
+    assert "ASHELL-TERMINAL@ = IF SCB-S-INVALID EXIT" in bind
+
+
 def test_concrete_bridge_is_caller_bounded_and_one_to_one() -> None:
     source = BRIDGE.read_text(encoding="utf-8")
 
