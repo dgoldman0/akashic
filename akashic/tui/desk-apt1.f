@@ -7,18 +7,14 @@
 \  initialize a session, install an owner, negotiate, or emit terminal
 \  bytes.  A profile opts in by calling APT1-DESK-RUN instead of DESK-RUN.
 \
-\  The current final-screen producer is a temporary lower-stack bootstrap.  Its
-\  per-cell plan is not the product projection and is not rich-terminal
-\  vertical evidence.  The forward replacement uses the same ordinary
-\  UIDL/draw lifecycle, semantic controls where meaning exists, and coalesced
-\  residual glyph spans only for unclaimed cells.
+\  The optional rich path observes the same ordinary Desk/UIDL draw lifecycle,
+\  publishes focused menu semantics where they exist, and coalesces residual
+\  glyph spans only for cells not claimed by those controls.
 \
-\  Product profiles may override the four current bootstrap bounds before
-\  REQUIRE.  Maximum screen geometry derives its one retained owner, operation
-\  ledger, copy bank, and final-screen plan exactly; lower layers do not acquire
-\  a second capacity policy.  These per-cell sizes must disappear when this
-\  leaf switches to the hybrid producer rather than becoming permanent product
-\  limits.
+\  Product profiles may override the four transport/surface bounds before
+\  REQUIRE.  The ordinary Desk host and UIDL context provide their canonical
+\  binding, element, and string capacities; this leaf derives every retained
+\  and projection bank from those existing bounds.
 \
 \  This leaf owns XMEM allocations made while it is sourced.  Keep it on the
 \  source path unless a compiled shard has separately proved those external
@@ -31,7 +27,7 @@ PROVIDED akashic-tui-desk-apt1
 REQUIRE app-shell-apt1.f
 REQUIRE rich-terminal/screen-adapter-apt1.f
 REQUIRE rich-terminal/engine-apt1.f
-REQUIRE rich-terminal/screen-plane.f
+REQUIRE rich-terminal/hybrid-screen-producer.f
 REQUIRE applets/desk/desk.f
 
 [UNDEFINED] APT1-DESK-RX-CAPACITY [IF]
@@ -82,17 +78,34 @@ APT1-DESK-TX-CAPACITY _A1D-U32-POSITIVE? 0=
 
 APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS _A1D-CAPACITY*
     CONSTANT _A1D-SCREEN-CELLS
+_DESK-MAX-INSTALLED CONSTANT _A1D-UIDL-BINDINGS
+_UTUI-MAX-ELEMS CONSTANT _A1D-UIDL-RECORDS
+_UCTX-STRS-SZ CONSTANT _A1D-UIDL-TEXT-U
+_A1D-SCREEN-CELLS _A1D-UIDL-RECORDS _A1D-CAPACITY+
+    CONSTANT _A1D-RTAPT-OBJECT-RECORDS
 1 RTAPT-OWNER-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-RTAPT-OWNERS-U
-_A1D-SCREEN-CELLS 1 _A1D-CAPACITY+
+_A1D-RTAPT-OBJECT-RECORDS 1 _A1D-CAPACITY+
     CONSTANT _A1D-RTAPT-OP-RECORDS
 _A1D-RTAPT-OP-RECORDS RTAPT-OP-SIZE _A1D-CAPACITY*
     CONSTANT _A1D-RTAPT-OPS-U
 _A1D-SCREEN-CELLS 128 _A1D-CAPACITY*
+    _A1D-UIDL-RECORDS 127 _A1D-CAPACITY* _A1D-CAPACITY+
+    _A1D-UIDL-TEXT-U _A1D-CAPACITY+
     72 _A1D-CAPACITY+
     CONSTANT _A1D-RTAPT-COPY-U
-_A1D-SCREEN-CELLS RTE-GLYPH-RUN-PLAN-ITEM-SIZE _A1D-CAPACITY*
-    CONSTANT _A1D-SCREEN-PLAN-U
+_A1D-UIDL-BINDINGS RUHA-RECORD-SIZE _A1D-CAPACITY*
+    CONSTANT _A1D-RUHA-RECORDS-U
+_A1D-UIDL-RECORDS UMSN-WORK-ENTRY-SIZE _A1D-CAPACITY*
+    CONSTANT _A1D-RUHA-WORK-U
+_A1D-UIDL-RECORDS UMSN-RECORD-SIZE _A1D-CAPACITY* 2 _A1D-CAPACITY*
+    CONSTANT _A1D-RUHA-SNAPSHOT-RECORDS-U
+_A1D-UIDL-TEXT-U 2 _A1D-CAPACITY*
+    CONSTANT _A1D-RUHA-SNAPSHOT-TEXT-U
+_A1D-UIDL-RECORDS _A1D-UIDL-TEXT-U
+    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES
+    DUP 0= ABORT" desk-apt1: invalid hybrid arena capacity"
+    CONSTANT _A1D-SCREEN-ARENA-U
 
 1 CONSTANT _A1D-SCREEN-OWNER-ID
 1 CONSTANT _A1D-SCREEN-OWNER-GENERATION
@@ -141,12 +154,37 @@ _A1D-RTAPT-COPY-MEM 7 + -8 AND CONSTANT _A1D-RTAPT-COPY
 RTAPTSCB-SIZE 7 + XBUF _A1D-RTAPTSCB-MEM
 _A1D-RTAPTSCB-MEM 7 + -8 AND CONSTANT _A1D-RTAPTSCB
 
-RTSCREEN-SIZE 7 + XBUF _A1D-SCREEN-MEM
+RUHA-SIZE 7 + XBUF _A1D-RUHA-MEM
+_A1D-RUHA-MEM 7 + -8 AND CONSTANT _A1D-RUHA
+
+_A1D-RUHA-RECORDS-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RUHA-RECORDS-MEM
+_A1D-RUHA-RECORDS-MEM 7 + -8 AND CONSTANT _A1D-RUHA-RECORDS
+
+_A1D-RUHA-WORK-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RUHA-WORK-MEM
+_A1D-RUHA-WORK-MEM 7 + -8 AND CONSTANT _A1D-RUHA-WORK
+
+_A1D-UIDL-TEXT-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RUHA-WORK-TEXT-MEM
+_A1D-RUHA-WORK-TEXT-MEM 7 + -8 AND CONSTANT _A1D-RUHA-WORK-TEXT
+
+_A1D-RUHA-SNAPSHOT-RECORDS-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RUHA-SNAPSHOT-RECORDS-MEM
+_A1D-RUHA-SNAPSHOT-RECORDS-MEM 7 + -8 AND
+    CONSTANT _A1D-RUHA-SNAPSHOT-RECORDS
+
+_A1D-RUHA-SNAPSHOT-TEXT-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-RUHA-SNAPSHOT-TEXT-MEM
+_A1D-RUHA-SNAPSHOT-TEXT-MEM 7 + -8 AND
+    CONSTANT _A1D-RUHA-SNAPSHOT-TEXT
+
+RTHP-SIZE 7 + XBUF _A1D-SCREEN-MEM
 _A1D-SCREEN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN
 
-_A1D-SCREEN-PLAN-U _A1D-ALIGNMENT-SLOP+
-    XBUF _A1D-SCREEN-PLAN-MEM
-_A1D-SCREEN-PLAN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN-PLAN
+_A1D-SCREEN-ARENA-U _A1D-ALIGNMENT-SLOP+
+    XBUF _A1D-SCREEN-ARENA-MEM
+_A1D-SCREEN-ARENA-MEM 7 + -8 AND CONSTANT _A1D-SCREEN-ARENA
 
 0 CONSTANT _A1D-PHASE-COLD
 1 CONSTANT _A1D-PHASE-SESSION
@@ -165,7 +203,7 @@ VARIABLE _A1D-UNINSTALL-S
 \ composition phase.  Their top-level addresses survive cleanup, which may
 \ then erase the live components without erasing the attached host's evidence.
 CREATE _A1D-FAILURE-PUBLISHER RTAPTSCB-SIZE ALLOT
-CREATE _A1D-FAILURE-SCREEN RTSCREEN-SIZE ALLOT
+CREATE _A1D-FAILURE-SCREEN RTHP-SIZE ALLOT
 CREATE _A1D-FAILURE-ENGINE RTAPT-ENGINE-SIZE ALLOT
 VARIABLE _A1D-FAILURE-VALID
 VARIABLE _A1D-FAILURE-IOR
@@ -183,10 +221,9 @@ _A1D-PHASE-COLD _A1D-PHASE !
 : _A1D-PHASE-VALID?  ( phase -- flag )
     _A1D-PHASE-INSTALLED 1+ U< ;
 
-\ Called only at the proven-cold boundary.  Large engine banks are initialized
-\ by RTAPT-INIT, and RTSCREEN overwrites every reachable plan item before use;
-\ clearing only fixed construction records avoids redundant surface-sized
-\ work and deliberately leaves the plan bank untouched.
+\ Called only at the proven-cold boundary.  The constructors initialize their
+\ reachable banks before use; clearing only fixed construction records avoids
+\ a redundant full-screen arena pass.
 : _A1D-CLEAR-INERT  ( -- )
     _A1D-SESSION PT-SESSION-SIZE 0 FILL
     _A1D-ADAPTER APTSCB-SIZE 0 FILL
@@ -195,7 +232,8 @@ _A1D-PHASE-COLD _A1D-PHASE !
     _A1D-RTAPT-ENGINE RTAPT-ENGINE-SIZE 0 FILL
     _A1D-RTE-FACADE RTE-FACADE-SIZE 0 FILL
     _A1D-RTAPTSCB RTAPTSCB-SIZE 0 FILL
-    _A1D-SCREEN RTSCREEN-SIZE 0 FILL
+    _A1D-RUHA RUHA-SIZE 0 FILL
+    _A1D-SCREEN RTHP-SIZE 0 FILL
     _A1D-PHASE-COLD _A1D-PHASE ! ;
 
 \ Setup has no negotiation side effect.  ASHELL-RUN invokes the installed
@@ -238,18 +276,32 @@ _A1D-PHASE-COLD _A1D-PHASE !
     _A1D-RTAPTSCB _A1D-ADAPTER RTAPTSCB-ATTACH
     DUP SCB-S-OK <> IF EXIT THEN DROP
 
-    _A1D-RTE-FACADE
-    _A1D-SCREEN-PLAN _A1D-SCREEN-PLAN-U
+    _A1D-RUHA-RECORDS _A1D-RUHA-RECORDS-U
+    _A1D-RUHA-WORK _A1D-RUHA-WORK-U
+    _A1D-RUHA-WORK-TEXT _A1D-UIDL-TEXT-U
+    _A1D-RUHA-SNAPSHOT-RECORDS _A1D-RUHA-SNAPSHOT-RECORDS-U
+    _A1D-RUHA-SNAPSHOT-TEXT _A1D-RUHA-SNAPSHOT-TEXT-U
+    _A1D-RUHA RUHA-INIT
+    DUP RUHA-S-OK <> IF DROP SCB-S-INVALID EXIT THEN DROP
+
+    _A1D-RUHA _A1D-RTE-FACADE
+    _A1D-SCREEN-ARENA _A1D-SCREEN-ARENA-U
+    _A1D-UIDL-RECORDS _A1D-UIDL-TEXT-U
+    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS
     _A1D-SCREEN-OWNER-ID _A1D-SCREEN-OWNER-GENERATION
     _A1D-SCREEN-REGION-ID _A1D-SCREEN-FIRST-OBJECT-ID
-    _A1D-SCREEN RTSCREEN-INIT
+    _A1D-SCREEN RTHP-INIT
     DUP SCB-S-OK <> IF EXIT THEN DROP
 
-    _A1D-SCREEN RTSCREEN-SIZE
-    APT1-DESK-MAX-COLS
-    ['] RTSCREEN-STEP ['] RTSCREEN-PREPARE
+    _A1D-SCREEN RTHP-SIZE 1
+    ['] RTHP-STEP ['] RTHP-PREPARE
     _A1D-RTAPTSCB RTAPTSCB-OUTPUT-PRODUCER!
     DUP SCB-S-OK <> IF EXIT THEN DROP
+
+    _A1D-RUHA RUHA-INSTALL
+    DUP RUHA-S-OK <> IF DROP SCB-S-INVALID EXIT THEN DROP
+    ['] RUHA-HOST-INIT ['] RUHA-HOST-FINI _A1D-RUHA
+        DESK-HOST-LIFECYCLE!
     _A1D-PHASE-PUBLISHER _A1D-PHASE !
 
     _A1D-ADAPTER _A1D-OWNER APTAS-INIT
@@ -301,7 +353,7 @@ _A1D-PHASE-COLD _A1D-PHASE !
     0= IF EXIT THEN
     _A1D-PHASE @ _A1D-FAILURE-PHASE !
     _A1D-RTAPTSCB _A1D-FAILURE-PUBLISHER RTAPTSCB-SIZE MOVE
-    _A1D-SCREEN _A1D-FAILURE-SCREEN RTSCREEN-SIZE MOVE
+    _A1D-SCREEN _A1D-FAILURE-SCREEN RTHP-SIZE MOVE
     _A1D-RTAPT-ENGINE _A1D-FAILURE-ENGINE RTAPT-ENGINE-SIZE MOVE
     -1 _A1D-FAILURE-VALID ! ;
 
@@ -314,6 +366,7 @@ _A1D-PHASE-COLD _A1D-PHASE !
 \   suppress terminal diagnostics while PT-STREAM-OWNED? remains true.
 : APT1-DESK-RUN  ( -- )
     ['] _A1D-RUN-BODY CATCH _A1D-RUN-IOR !
+    0 0 0 DESK-HOST-LIFECYCLE!
     _A1D-CAPTURE-FAILURE
     _A1D-UNINSTALL _A1D-UNINSTALL-S !
     _A1D-RUN-IOR @ ?DUP IF THROW THEN

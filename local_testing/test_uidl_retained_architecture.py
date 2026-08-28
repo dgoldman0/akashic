@@ -513,33 +513,26 @@ def test_desk_wraps_child_hosting_in_a_neutral_composition_lifecycle() -> None:
         assert forbidden not in decompose
 
 
-def test_desktop_apt1_leaf_marks_final_screen_as_temporary_bootstrap() -> None:
+def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None:
     composition = _text("akashic/tui/desk-apt1.f")
     code = _forth_code(composition)
-    screen_plane = _text("akashic/tui/rich-terminal/screen-plane.f")
     normalized_composition = " ".join(composition.split())
-    normalized_screen_plane = " ".join(screen_plane.split())
 
     requirements = re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code)
     for required in (
         "app-shell-apt1.f",
         "rich-terminal/screen-adapter-apt1.f",
         "rich-terminal/engine-apt1.f",
-        "rich-terminal/screen-plane.f",
+        "rich-terminal/hybrid-screen-producer.f",
         "applets/desk/desk.f",
     ):
         assert required in requirements
+    assert "rich-terminal/screen-plane.f" not in requirements
     assert "uidl-driver.f" not in code
     assert "uidl-projector.f" not in code
     assert "REQUIRE rich-terminal.f" not in code
-    assert "temporary lower-stack bootstrap" in normalized_composition
-    assert "per-cell plan is not the product projection" in normalized_composition
-    assert "vertical evidence" in composition
-    assert "TEMPORARY BOOTSTRAP" in screen_plane
-    assert (
-        "cannot qualify the Desk/Pad/Daybook semantic vertical"
-        in normalized_screen_plane
-    )
+    assert "same ordinary Desk/UIDL draw lifecycle" in normalized_composition
+    assert "cells not claimed by those controls" in normalized_composition
 
     public_overrides = re.findall(
         r"(?m)^\[UNDEFINED\] (APT1-DESK-[A-Z0-9-]+) \[IF\]$", code
@@ -554,19 +547,26 @@ def test_desktop_apt1_leaf_marks_final_screen_as_temporary_bootstrap() -> None:
         "APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS _A1D-CAPACITY*\n"
         "    CONSTANT _A1D-SCREEN-CELLS"
     ) in code
+    assert "_DESK-MAX-INSTALLED CONSTANT _A1D-UIDL-BINDINGS" in code
+    assert "_UTUI-MAX-ELEMS CONSTANT _A1D-UIDL-RECORDS" in code
+    assert "_UCTX-STRS-SZ CONSTANT _A1D-UIDL-TEXT-U" in code
+    assert "_A1D-SCREEN-CELLS _A1D-UIDL-RECORDS _A1D-CAPACITY+" in code
     assert "1 RTAPT-OWNER-SIZE _A1D-CAPACITY*" in code
-    assert "_A1D-SCREEN-CELLS 1 _A1D-CAPACITY+" in code
+    assert "_A1D-RTAPT-OBJECT-RECORDS 1 _A1D-CAPACITY+" in code
     assert "_A1D-SCREEN-CELLS 128 _A1D-CAPACITY*" in code
+    assert "_A1D-UIDL-RECORDS 127 _A1D-CAPACITY* _A1D-CAPACITY+" in code
+    assert "_A1D-UIDL-TEXT-U _A1D-CAPACITY+" in code
     assert "72 _A1D-CAPACITY+" in code
     assert (
-        "_A1D-SCREEN-CELLS RTE-GLYPH-RUN-PLAN-ITEM-SIZE "
-        "_A1D-CAPACITY*"
+        "_A1D-UIDL-RECORDS _A1D-UIDL-TEXT-U\n"
+        "    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES"
     ) in code
-    assert "RTSCREEN-SIZE 7 + XBUF _A1D-SCREEN-MEM" in code
-    assert "_A1D-SCREEN-PLAN-U _A1D-ALIGNMENT-SLOP+" in code
+    assert "RUHA-SIZE 7 + XBUF _A1D-RUHA-MEM" in code
+    assert "RTHP-SIZE 7 + XBUF _A1D-SCREEN-MEM" in code
+    assert "_A1D-SCREEN-ARENA-U _A1D-ALIGNMENT-SLOP+" in code
     assert "_A1D-SCREEN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN" in code
     assert (
-        "_A1D-SCREEN-PLAN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN-PLAN"
+        "_A1D-SCREEN-ARENA-MEM 7 + -8 AND CONSTANT _A1D-SCREEN-ARENA"
         in code
     )
 
@@ -579,8 +579,11 @@ def test_desktop_apt1_leaf_marks_final_screen_as_temporary_bootstrap() -> None:
         "RTAPTE-INIT",
         "RTAPTSCB-INIT",
         "RTAPTSCB-ATTACH",
-        "RTSCREEN-INIT",
+        "RUHA-INIT",
+        "RTHP-INIT",
         "RTAPTSCB-OUTPUT-PRODUCER!",
+        "RUHA-INSTALL",
+        "DESK-HOST-LIFECYCLE!",
         "APTAS-INIT",
         "APTAS-INSTALL",
     )
@@ -594,9 +597,13 @@ def test_desktop_apt1_leaf_marks_final_screen_as_temporary_bootstrap() -> None:
         "_A1D-SCREEN-FIRST-OBJECT-ID",
     ):
         assert f"1 CONSTANT {identity}" in code
-    producer_bind = setup[setup.index("RTSCREEN-INIT") :]
-    assert "APT1-DESK-MAX-COLS" in producer_bind
-    assert "['] RTSCREEN-STEP ['] RTSCREEN-PREPARE" in producer_bind
+    producer_bind = setup[setup.index("RTHP-INIT") :]
+    assert "_A1D-UIDL-RECORDS _A1D-UIDL-TEXT-U" in setup
+    assert "['] RTHP-STEP ['] RTHP-PREPARE" in producer_bind
+    assert (
+        "['] RUHA-HOST-INIT ['] RUHA-HOST-FINI _A1D-RUHA\n"
+        "        DESK-HOST-LIFECYCLE!"
+    ) in setup
 
     clear_inert = _word(composition, "_A1D-CLEAR-INERT")
     for record in (
@@ -607,10 +614,11 @@ def test_desktop_apt1_leaf_marks_final_screen_as_temporary_bootstrap() -> None:
         "_A1D-RTAPT-ENGINE",
         "_A1D-RTE-FACADE",
         "_A1D-RTAPTSCB",
+        "_A1D-RUHA",
         "_A1D-SCREEN",
     ):
         assert f"{record} " in clear_inert
-    assert "_A1D-SCREEN-PLAN" not in clear_inert
+    assert "_A1D-SCREEN-ARENA" not in clear_inert
 
     uninstall = _word(composition, "_A1D-UNINSTALL")
     teardown_order = ("APTAS-UNINSTALL", "RTAPTE-FINI", "RTAPT-FINI")
@@ -622,6 +630,9 @@ def test_desktop_apt1_leaf_marks_final_screen_as_temporary_bootstrap() -> None:
     assert "DESK-HOST-LIFECYCLE!" not in run_body
     public_run = _word(composition, "APT1-DESK-RUN")
     assert "['] _A1D-RUN-BODY CATCH _A1D-RUN-IOR !" in public_run
+    assert public_run.index("CATCH") < public_run.index(
+        "0 0 0 DESK-HOST-LIFECYCLE!"
+    ) < public_run.index("_A1D-CAPTURE-FAILURE")
     assert public_run.index("_A1D-CAPTURE-FAILURE") < public_run.index(
         "_A1D-UNINSTALL"
     )
@@ -630,7 +641,7 @@ def test_desktop_apt1_leaf_marks_final_screen_as_temporary_bootstrap() -> None:
     failure_capture = _word(composition, "_A1D-CAPTURE-FAILURE")
     for live, snapshot, size in (
         ("_A1D-RTAPTSCB", "_A1D-FAILURE-PUBLISHER", "RTAPTSCB-SIZE"),
-        ("_A1D-SCREEN", "_A1D-FAILURE-SCREEN", "RTSCREEN-SIZE"),
+        ("_A1D-SCREEN", "_A1D-FAILURE-SCREEN", "RTHP-SIZE"),
         (
             "_A1D-RTAPT-ENGINE",
             "_A1D-FAILURE-ENGINE",
@@ -639,13 +650,9 @@ def test_desktop_apt1_leaf_marks_final_screen_as_temporary_bootstrap() -> None:
     ):
         assert f"{live} {snapshot} {size} MOVE" in failure_capture
 
-    for forbidden in (
-        "UIDL",
-        "RTERM",
-        "HOST-LIFECYCLE",
-        "AHOST-UIDL-READY!",
-    ):
-        assert forbidden not in code
+    lowered = code.lower()
+    for forbidden in ("pad-entry", "daybook-entry", "sha3"):
+        assert forbidden not in lowered
 
 
 def test_generic_host_close_phases_and_init_boundary_are_persistent() -> None:
