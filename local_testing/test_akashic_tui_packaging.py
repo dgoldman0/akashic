@@ -1759,6 +1759,7 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
     assert rich_modules.isdisjoint(baseline_closure)
     assert rich_modules <= rich_closure
     assert rich_closure - baseline_closure == rich_modules
+    _validate_module_ids(dependency_order(profile.roots))
     assert MEGAPAD_RICH_TERMINAL_MODULE not in baseline_closure
     assert MEGAPAD_RICH_TERMINAL_MODULE not in rich_closure
 

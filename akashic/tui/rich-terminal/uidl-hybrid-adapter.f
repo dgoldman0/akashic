@@ -13,7 +13,7 @@
 \
 \  Prefix: RUHA- (public), _RUHA- (private)
 
-PROVIDED akashic-tui-rterm-uidl-hybrid-adapter
+PROVIDED akashic-tui-rterm-ruha
 
 REQUIRE ../applet-host/host.f
 REQUIRE ../uidl-menu-snapshot.f

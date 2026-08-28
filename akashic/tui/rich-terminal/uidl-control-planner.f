@@ -26,7 +26,7 @@
 \
 \  Prefix: RUCP- (contract), _RUCP- (implementation)
 
-PROVIDED akashic-tui-rterm-uidl-control-planner
+PROVIDED akashic-tui-rterm-rucp
 
 REQUIRE ../uidl-menu-snapshot.f
 REQUIRE engine.f

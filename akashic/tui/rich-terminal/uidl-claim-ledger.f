@@ -19,7 +19,7 @@
 \
 \  Prefix: RUCL- (contract), _RUCL- (implementation)
 
-PROVIDED akashic-tui-rterm-uidl-claim-ledger
+PROVIDED akashic-tui-rterm-rucl
 
 REQUIRE ../uidl-menu-snapshot.f
 REQUIRE ../../utils/memory-span.f
