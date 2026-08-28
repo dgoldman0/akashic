@@ -195,7 +195,9 @@ def test_status_boundary_is_caught_and_all_resolve_scratch_is_scrubbed() -> None
     assert "UTUI-RESOLVED-S-INVALID" in capture
 
     scratch = set(re.findall(r"(?m)^VARIABLE\s+(_UTUI-RS-[^\s]+)", source))
-    cleared = _definition(source, "_UTUI-RS-CLEAR")
+    cleared = _definition(source, "_UTUI-RS-TARGET-CLEAR") + _definition(
+        source, "_UTUI-RS-CLEAR"
+    )
     assert scratch
     for variable in scratch:
         assert re.search(rf"(?<!\S)0\s+{re.escape(variable)}\s+!", cleared)
@@ -294,11 +296,11 @@ def test_capture_preflights_then_publishes_nine_fields_without_aliases() -> None
 
     span_at = capture.index("_UTUI-RESOLVED-SPAN? 0=")
     disjoint_at = capture.index("UTUI-STORAGE-DISJOINT? 0=", span_at)
-    retain_at = capture.index("_UTUI-RS-DST !", disjoint_at)
-    resolve_at = capture.index("_UTUI-RS-CALL", retain_at)
+    resolve_at = capture.index("_UTUI-RS-CALL", disjoint_at)
     status_at = capture.index("UTUI-RESOLVED-S-OK <>", resolve_at)
-    write_at = capture.index("_UTUI-RS-WRITE", status_at)
-    assert span_at < disjoint_at < retain_at < resolve_at < status_at < write_at
+    retain_at = capture.index("_UTUI-RS-DST !", status_at)
+    write_at = capture.index("_UTUI-RS-WRITE", retain_at)
+    assert span_at < disjoint_at < resolve_at < status_at < retain_at < write_at
     assert "OVER UTUI-RESOLVED-SIZE UTUI-STORAGE-DISJOINT?" in capture
     assert "_UTUI-RS-CLEAR 0 _UTUI-RS-DST !" in capture[status_at:write_at]
     assert "0 _UTUI-RS-DST !" in capture[write_at:]
