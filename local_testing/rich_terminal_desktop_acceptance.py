@@ -43,11 +43,14 @@ PAD_FOCUS_MARKER = "[1:Akashic Pa*]"
 DAYBOOK_FOCUS_MARKER = "[3:Daybook*]"
 DAYBOOK_PROMPT_MARKER = "New task:"
 MIN_READABLE_FONT_SIZE = 12
+SESSION_REQUEST_TIMEOUT_SECONDS = 15.0
 CELL_FALLBACK_MODE = "CELL FALLBACK: waiting for retained frame"
 RETAINED_PENDING_MODE = "RICH RETAINED: pending physical acknowledgment"
 RETAINED_ACKNOWLEDGED_MODE = "RICH RETAINED: physically acknowledged"
 
-_GUEST_FAILURE_VARIABLES = (
+_GUEST_DIAGNOSTIC_WORDS = (
+    "_A1D-PHASE",
+    "_A1D-RUN-IOR",
     "_A1D-FAILURE-VALID",
     "_A1D-FAILURE-IOR",
     "_A1D-FAILURE-PHASE",
@@ -69,15 +72,47 @@ _GUEST_FAILURE_VARIABLES = (
     "_RTAPTSCB-SEALED-STATUS",
     "_RTSCREEN-S-STATUS",
     "_RTSCREEN-S-STATE",
+    "_RTSCREEN-S-BUDGET",
+    "_RTSCREEN-S-P",
+    "_RTSCREEN-C-INDEX",
+    "_RTSCREEN-P-P",
+    "_RTSCREEN-P-INDEX",
+    "_RTSCREEN-P-MODE",
+    "_RTSCREEN-P-DISPOSITION",
+    "_RTSCREEN-P-START",
     "_RTSCREEN-P-STATUS",
     "_RTSCREEN-P-STATE",
     "_RTSCREEN-P-COUNT",
+    "_RTAPT-RS-E",
+    "_RTAPT-BV-E",
+    "_RTAPT-BV-P",
+    "_RTAPT-BV-OFF",
+    "_RTAPT-LPF-E",
+    "_RTAPT-LPF-PLAN",
+    "_RTAPT-LPF-COUNT",
+    "_RTAPT-LPF-ITEM",
+    "_RTAPT-LPF-LAST-OBJECT",
+    "_RTAPT-LPF-OBJECT",
+    "_RTAPT-LPF-UTF8",
+    "_RTAPT-LPF-COPY-BYTES",
+    "_RTAPT-LD-E",
+    "_RTAPT-LD-OBJECT",
+    "_RTAPT-PF-E",
+    "_RTAPT-PF-P",
+    "_RTAPT-PF-TOTAL",
+    "_RTAPT-PF-RCOUNT",
+    "_RTAPT-PF-OCOUNT",
+    "_RTAPT-CB-E",
+    "_RTAPT-CB-STATE",
+    "_RTAPT-CB-STATUS",
     "_RTAPT-ST-PT",
     "_RTAPT-ST-HAS",
     "_RTAPT-ST-STATE",
     "_RTAPTSCB-R",
-    "_RTSCREEN-S-P",
     "_RTAPT-ST-E",
+    "_RTAPTSCBOP-PUBLISHER",
+    "_RTAPTSCBOP-CONTEXT",
+    "_RTAPTSCBI-ENGINE",
 )
 
 _GUEST_FAILURE_RECORDS = {
@@ -85,7 +120,11 @@ _GUEST_FAILURE_RECORDS = {
         "_A1D-FAILURE-PUBLISHER-A",
         26,
         {
+            "session": 0,
+            "context": 1,
+            "base_magic": 10,
             "engine": 11,
+            "rich_magic": 12,
             "producer_context": 13,
             "producer_bytes": 14,
             "producer_budget": 15,
@@ -103,6 +142,7 @@ _GUEST_FAILURE_RECORDS = {
         "_A1D-FAILURE-SCREEN-A",
         71,
         {
+            "magic": 0,
             "size": 1,
             "self": 2,
             "facade": 3,
@@ -125,6 +165,7 @@ _GUEST_FAILURE_RECORDS = {
         "_A1D-FAILURE-ENGINE-A",
         62,
         {
+            "magic": 0,
             "session": 1,
             "owner_used": 5,
             "queue_head": 11,
@@ -150,6 +191,12 @@ _GUEST_FAILURE_RECORDS = {
             "last_revision": 31,
         },
     ),
+}
+
+_GUEST_LIVE_RECORD_POINTERS = {
+    "publisher": "_RTAPTSCBOP-PUBLISHER",
+    "screen_plane": "_RTAPTSCBOP-CONTEXT",
+    "engine": "_RTAPTSCBI-ENGINE",
 }
 
 
@@ -318,27 +365,80 @@ def _write_guest_failure_diagnostics(
     root = Path(artifact_root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     status = client.request("status", detailed=True)
-    forth = client.request("forth", names=list(_GUEST_FAILURE_VARIABLES))
+    payload = _guest_state_payload(
+        client,
+        status,
+        reason_name="failure",
+        reason=failure,
+    )
+    path = root / "guest-failure.json"
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _guest_state_payload(
+    client: SessionClient,
+    machine: dict,
+    *,
+    reason_name: str,
+    reason: str,
+) -> dict:
+    """Read one stable guest rich-composition state under the caller's lock."""
+
+    forth = client.request("forth", names=list(_GUEST_DIAGNOSTIC_WORDS))
     words = forth.get("words", {})
     variables = {
         name: {
             "address": int(word["data_address"]),
             "value": int(word["value"]),
         }
-        for name in _GUEST_FAILURE_VARIABLES
+        for name in _GUEST_DIAGNOSTIC_WORDS
         if (word := words.get(name)) is not None
         and "data_address" in word
         and "value" in word
     }
+    failure_snapshot = bool(
+        variables.get("_A1D-FAILURE-VALID", {}).get("value", 0) != 0
+        and variables.get("_A1D-FAILURE-IOR", {}).get("value", 0) != 0
+    )
+    if failure_snapshot:
+        record_source = "failure_snapshot"
+        pointers = {
+            record_name: variables.get(pointer_name, {}).get("value", 0)
+            for record_name, (pointer_name, _count, _fields) in (
+                _GUEST_FAILURE_RECORDS.items()
+            )
+        }
+    else:
+        record_source = "live_composition"
+        pointers = {
+            record_name: variables.get(pointer_name, {}).get("value", 0)
+            for record_name, pointer_name in (
+                _GUEST_LIVE_RECORD_POINTERS.items()
+            )
+        }
     records: dict[str, object] = {}
     for record_name, (pointer_name, count, fields) in (
         _GUEST_FAILURE_RECORDS.items()
     ):
-        pointer = variables.get(pointer_name, {}).get("value", 0)
+        pointer = pointers.get(record_name, 0)
         if not isinstance(pointer, int) or pointer <= 0:
             records[record_name] = {"address": pointer, "unavailable": True}
             continue
-        response = client.request("peek", address=pointer, count=count)
+        try:
+            response = client.request("peek", address=pointer, count=count)
+        except (ConnectionError, OSError):
+            raise
+        except Exception as exc:
+            records[record_name] = {
+                "address": pointer,
+                "unavailable": True,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            continue
         cells = [int(value) for value in response["values"]]
         records[record_name] = {
             "address": pointer,
@@ -349,23 +449,128 @@ def _write_guest_failure_diagnostics(
             },
             "cells": cells,
         }
-    path = root / "guest-failure.json"
-    path.write_text(
-        json.dumps(
-            {
-                "failure": failure,
-                "machine": status,
-                "forth_here": forth.get("here"),
-                "variables": variables,
-                "records": records,
-            },
-            indent=2,
-            sort_keys=True,
+    return {
+        reason_name: reason,
+        "machine": machine,
+        "forth_here": forth.get("here"),
+        "record_source": record_source,
+        "variables": variables,
+        "records": records,
+    }
+
+
+def _write_timeout_state_diagnostics(
+    client: SessionClient,
+    artifact_root: Path,
+    timeout_detail: str,
+) -> Path:
+    """Pause once, persist live rich state, and resume when it remains safe."""
+
+    root = Path(artifact_root).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    before_pause = client.request("status", detailed=False)
+    was_paused = before_pause.get("paused")
+    if was_paused is not True and was_paused is not False:
+        raise RuntimeError("pre-pause status has no boolean paused state")
+    payload = None
+    resume_error = None
+    capture_error = None
+    pause_succeeded = False
+    should_resume = False
+    machine = None
+    try:
+        try:
+            machine = client.request("pause")
+            pause_succeeded = True
+            should_resume = was_paused is False
+        except (ConnectionError, OSError):
+            raise
+        except Exception:
+            # A synchronized error response can follow the server-side pause
+            # mutation.  Restore only a previously clean running machine;
+            # transport errors above leave response framing ambiguous and are
+            # contained by the launcher's guaranteed server teardown.
+            pre_rich = before_pause.get("rich_terminal", {})
+            if (
+                was_paused is False
+                and before_pause.get("error") is None
+                and isinstance(pre_rich, dict)
+                and pre_rich.get("failure") is None
+                and not pre_rich.get("lost")
+            ):
+                try:
+                    client.request("resume")
+                except Exception:
+                    pass
+            raise
+        if not isinstance(machine, dict):
+            raise TypeError("pause response must be an object")
+        rich_state = machine.get("rich_terminal", {})
+        if not isinstance(rich_state, dict):
+            raise TypeError("pause response rich_terminal must be an object")
+        should_resume = bool(
+            should_resume
+            and machine.get("error") is None
+            and rich_state.get("failure") is None
+            and not rich_state.get("lost")
         )
-        + "\n",
+        if machine.get("paused") is not True:
+            if machine.get("paused") is False:
+                should_resume = False
+            raise RuntimeError("pause response has no true paused state")
+        payload = _guest_state_payload(
+            client,
+            machine,
+            reason_name="timeout",
+            reason=timeout_detail,
+        )
+    except Exception as exc:
+        capture_error = exc
+        raise
+    finally:
+        transport_failed = isinstance(capture_error, (ConnectionError, OSError))
+        if should_resume and not transport_failed:
+            try:
+                resumed = client.request("resume")
+                if (
+                    not isinstance(resumed, dict)
+                    or resumed.get("paused") is not False
+                ):
+                    resume_error = "resume response has no false paused state"
+            except Exception as exc:
+                resume_error = f"{type(exc).__name__}: {exc}"
+    if payload is None:
+        raise RuntimeError("timeout diagnostic capture produced no payload")
+    payload["pre_pause"] = before_pause
+    payload["resume_attempted"] = bool(
+        pause_succeeded and should_resume and not transport_failed
+    )
+    if resume_error is not None:
+        payload["resume_error"] = resume_error
+    path = root / "timeout-state.json"
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return path
+
+
+def _timeout_state_message(
+    client: SessionClient,
+    artifact_root: Path,
+    timeout_detail: str,
+) -> str:
+    """Keep optional timeout-state failures subordinate to the timeout."""
+
+    try:
+        path = _write_timeout_state_diagnostics(
+            client,
+            artifact_root,
+            timeout_detail,
+        )
+        return f"diagnostic: {path}"
+    except Exception as exc:
+        return f"diagnostic capture failed: {exc}"
 
 
 def _guest_failure_message(
@@ -814,7 +1019,10 @@ def _connect(
         raise ValueError("expected_server_pid must be a positive process id")
     last_error: OSError | None = None
     while time.monotonic() < deadline:
-        client = SessionClient(socket_path, timeout=2.0)
+        client = SessionClient(
+            socket_path,
+            timeout=SESSION_REQUEST_TIMEOUT_SECONDS,
+        )
         try:
             client.connect()
         except OSError as exc:
@@ -1330,8 +1538,14 @@ def run_physical_desktop_acceptance(
             frame_barrier=journey.frame_barrier,
             pending_input=journey.has_pending_input,
         )
+        state_detail = _timeout_state_message(
+            client,
+            artifact_root,
+            timeout_detail,
+        )
         raise PhysicalDesktopAcceptanceError(
-            f"physical Desktop journey timed out: {timeout_detail}"
+            "physical Desktop journey timed out: "
+            f"{timeout_detail}\n  {state_detail}"
         )
     except PhysicalDesktopAcceptanceError:
         raise

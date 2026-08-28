@@ -41,6 +41,7 @@ from rich_terminal_desktop_acceptance import (
 
 
 UINT32_MAX = 0xFFFFFFFF
+UINT64_MAX = 0xFFFFFFFFFFFFFFFF
 
 
 def _low(index: int, extent: int) -> int:
@@ -254,6 +255,7 @@ def test_connect_rejects_a_socket_owned_by_another_server_process(
             222,
         )
     assert len(clients) == 1
+    assert clients[0].timeout == acceptance_runner.SESSION_REQUEST_TIMEOUT_SECONDS
     assert clients[0].closed
 
 
@@ -276,8 +278,8 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     tmp_path: Path,
 ) -> None:
     values = {
-        "_A1D-FAILURE-VALID": (0x0FD0, -1),
-        "_A1D-FAILURE-IOR": (0x0FD8, -3203),
+        "_A1D-FAILURE-VALID": (0x0FD0, UINT64_MAX),
+        "_A1D-FAILURE-IOR": (0x0FD8, (-3203) & UINT64_MAX),
         "_A1D-FAILURE-PHASE": (0x0FE0, 6),
         "_A1D-FAILURE-PUBLISHER-A": (0x0FE8, 0x2000),
         "_A1D-FAILURE-SCREEN-A": (0x0FF0, 0x3000),
@@ -321,10 +323,13 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
     )
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["failure"].endswith("-3203")
-    assert payload["variables"]["_A1D-FAILURE-VALID"]["value"] == -1
+    assert payload["record_source"] == "failure_snapshot"
+    assert payload["variables"]["_A1D-FAILURE-VALID"]["value"] == UINT64_MAX
     assert payload["variables"]["_ASHELL-TERM-STATUS"]["value"] == 3
     assert payload["records"]["publisher"]["fields"] == {
         "adapter": 18,
+        "base_magic": 10,
+        "context": 1,
         "engine": 11,
         "fault_status": 24,
         "more_work": 22,
@@ -333,6 +338,8 @@ def test_guest_failure_diagnostics_capture_existing_service_records(
         "producer_budget": 15,
         "producer_bytes": 14,
         "producer_context": 13,
+        "rich_magic": 12,
+        "session": 0,
         "surface_cols": 19,
         "surface_generation": 21,
         "surface_rows": 20,
@@ -355,6 +362,175 @@ def test_guest_failure_message_preserves_failure_when_capture_breaks(
     )
     assert "desktop exception -3203" in message
     assert "diagnostic capture failed" in message
+
+
+def test_timeout_state_pauses_reads_live_records_and_resumes(
+    tmp_path: Path,
+) -> None:
+    calls = []
+    words = {
+        "_A1D-FAILURE-VALID": {
+            "data_address": 0x1000,
+            "value": 0,
+        },
+        "_A1D-FAILURE-IOR": {
+            "data_address": 0x1008,
+            "value": 0,
+        },
+        "_RTAPTSCBOP-PUBLISHER": {
+            "data_address": 0x1020,
+            "value": 0x2000,
+        },
+        "_RTAPTSCBOP-CONTEXT": {
+            "data_address": 0x1028,
+            "value": 0x3000,
+        },
+        "_RTAPTSCBI-ENGINE": {
+            "data_address": 0x1030,
+            "value": 0x4000,
+        },
+        "_RTSCREEN-P-INDEX": {
+            "data_address": 0x1010,
+            "value": 7_321,
+        },
+    }
+    record_cells = {
+        0x2000: list(range(26)),
+        0x3000: list(range(71)),
+        0x4000: list(range(62)),
+    }
+
+    class Client:
+        def request(self, method, **params):
+            calls.append((method, params))
+            if method == "status":
+                assert params == {"detailed": False}
+                return {"paused": False}
+            if method == "pause":
+                assert params == {}
+                return {
+                    "state": "paused",
+                    "paused": True,
+                    "error": None,
+                    "rich_terminal": {"failure": None, "lost": False},
+                    "forth": {
+                        "word": {"name": "_RTSCREEN-CAPTURE-START-BODY"}
+                    },
+                }
+            if method == "forth":
+                assert set(words) <= set(params["names"])
+                return {"here": 0x9000, "words": words}
+            if method == "peek":
+                cells = record_cells[params["address"]]
+                assert params["count"] == len(cells)
+                return {"values": cells}
+            if method == "resume":
+                assert params == {}
+                return {"paused": False}
+            raise AssertionError(method)
+
+    path = acceptance_runner._write_timeout_state_diagnostics(
+        Client(),
+        tmp_path,
+        "stage=0 offers-seen=0",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert [method for method, _params in calls] == [
+        "status",
+        "pause",
+        "forth",
+        "peek",
+        "peek",
+        "peek",
+        "resume",
+    ]
+    assert [
+        (params["address"], params["count"])
+        for method, params in calls
+        if method == "peek"
+    ] == [(0x2000, 26), (0x3000, 71), (0x4000, 62)]
+    assert payload["timeout"] == "stage=0 offers-seen=0"
+    assert payload["record_source"] == "live_composition"
+    assert payload["machine"]["forth"]["word"]["name"] == (
+        "_RTSCREEN-CAPTURE-START-BODY"
+    )
+    assert payload["variables"]["_RTSCREEN-P-INDEX"]["value"] == 7_321
+    assert payload["records"]["publisher"]["fields"]["phase"] == 25
+    assert payload["records"]["screen_plane"]["fields"]["phase"] == 10
+    assert payload["records"]["screen_plane"]["fields"]["cells"] == 14
+    assert payload["records"]["screen_plane"]["fields"]["scan"] == 15
+    assert payload["records"]["engine"]["fields"]["operation_count"] == 24
+    assert payload["records"]["engine"]["fields"]["send_index"] == 27
+    assert payload["resume_attempted"] is True
+    assert "resume_error" not in payload
+
+
+def test_timeout_state_message_preserves_timeout_and_resumes_after_failure(
+    tmp_path: Path,
+) -> None:
+    calls = []
+
+    class Client:
+        def request(self, method, **params):
+            calls.append(method)
+            if method == "status":
+                return {"paused": False}
+            if method == "pause":
+                return {
+                    "paused": True,
+                    "error": None,
+                    "rich_terminal": {"failure": None, "lost": False},
+                }
+            if method == "forth":
+                raise KeyError("capture broke")
+            if method == "resume":
+                return {"paused": False}
+            raise AssertionError(method)
+
+    message = acceptance_runner._timeout_state_message(
+        Client(),
+        tmp_path,
+        "stage=0",
+    )
+    assert message == "diagnostic capture failed: 'capture broke'"
+    assert calls == ["status", "pause", "forth", "resume"]
+
+
+def test_timeout_state_keeps_capture_when_best_effort_resume_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+
+    class Client:
+        def request(self, method, **params):
+            calls.append(method)
+            if method == "status":
+                return {"paused": False}
+            if method == "pause":
+                return {
+                    "paused": True,
+                    "error": None,
+                    "rich_terminal": {"failure": None, "lost": False},
+                }
+            if method == "resume":
+                raise RuntimeError("resume broke")
+            raise AssertionError(method)
+
+    monkeypatch.setattr(
+        acceptance_runner,
+        "_guest_state_payload",
+        lambda *_args, **_kwargs: {"timeout": "stage=0"},
+    )
+    path = acceptance_runner._write_timeout_state_diagnostics(
+        Client(),
+        tmp_path,
+        "stage=0",
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert calls == ["status", "pause", "resume"]
+    assert payload["resume_attempted"] is True
+    assert payload["resume_error"] == "RuntimeError: resume broke"
 
 
 def test_acceptance_diagnostic_state_reports_exact_display_boundary() -> None:
