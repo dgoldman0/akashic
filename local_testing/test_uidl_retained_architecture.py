@@ -559,7 +559,18 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert "72 _A1D-CAPACITY+" in code
     assert (
         "_A1D-UIDL-RECORDS _A1D-UIDL-TEXT-U\n"
-        "    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES"
+        "    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES\n"
+        "    _A1D-REQUIRE-HYBRID-ARENA"
+    ) in code
+    transport_guard = _word(composition, "_A1D-VALIDATE-TRANSPORT-BOUNDS")
+    assert "APT1-DESK-RX-CAPACITY" in transport_guard
+    assert "APT1-DESK-TX-CAPACITY" in transport_guard
+    assert "ABORT\"" in transport_guard
+    arena_guard = _word(composition, "_A1D-REQUIRE-HYBRID-ARENA")
+    assert 'DUP 0= ABORT" desk-apt1: invalid hybrid arena capacity"' in arena_guard
+    assert (
+        "\n_A1D-VALIDATE-TRANSPORT-BOUNDS\n\n"
+        "APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS"
     ) in code
     assert "RUHA-SIZE 7 + XBUF _A1D-RUHA-MEM" in code
     assert "RTHP-SIZE 7 + XBUF _A1D-SCREEN-MEM" in code

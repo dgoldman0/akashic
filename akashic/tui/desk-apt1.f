@@ -68,13 +68,19 @@ REQUIRE applets/desk/desk.f
         ABORT" desk-apt1: invalid storage size"
     7 _A1D-CAPACITY+ ;
 
+: _A1D-VALIDATE-TRANSPORT-BOUNDS  ( -- )
+    APT1-DESK-RX-CAPACITY _A1D-U32-POSITIVE? 0=
+        ABORT" desk-apt1: invalid receive capacity"
+    APT1-DESK-TX-CAPACITY _A1D-U32-POSITIVE? 0=
+        ABORT" desk-apt1: invalid transmit capacity" ;
+
+: _A1D-REQUIRE-HYBRID-ARENA  ( bytes|0 -- bytes )
+    DUP 0= ABORT" desk-apt1: invalid hybrid arena capacity" ;
+
 \ Resolve every caller-controlled calculation before the first XBUF.  At a
 \ C-cell maximum surface the engine needs one owner, C+1 operations, and a
 \ 72+128C copy span; the producer needs one 120-byte plan item per cell.
-APT1-DESK-RX-CAPACITY _A1D-U32-POSITIVE? 0=
-    ABORT" desk-apt1: invalid receive capacity"
-APT1-DESK-TX-CAPACITY _A1D-U32-POSITIVE? 0=
-    ABORT" desk-apt1: invalid transmit capacity"
+_A1D-VALIDATE-TRANSPORT-BOUNDS
 
 APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS _A1D-CAPACITY*
     CONSTANT _A1D-SCREEN-CELLS
@@ -104,7 +110,7 @@ _A1D-UIDL-TEXT-U 2 _A1D-CAPACITY*
     CONSTANT _A1D-RUHA-SNAPSHOT-TEXT-U
 _A1D-UIDL-RECORDS _A1D-UIDL-TEXT-U
     APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES
-    DUP 0= ABORT" desk-apt1: invalid hybrid arena capacity"
+    _A1D-REQUIRE-HYBRID-ARENA
     CONSTANT _A1D-SCREEN-ARENA-U
 
 1 CONSTANT _A1D-SCREEN-OWNER-ID
