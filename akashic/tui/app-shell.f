@@ -937,6 +937,7 @@ VARIABLE _ASHELL-TICK-TMP
         \ Publish only after the complete top-level draw.  Projection failure
         \ remains diagnostic; CELL is still the universal output.
         _ASHELL-HAS-UIDL @ IF UTUI-DRAW-COMPLETE THEN
+        SCR-DRAW-COMPLETE
         RGN-ROOT
         -1 _ASHELL-OUTPUT-PENDING !
     THEN

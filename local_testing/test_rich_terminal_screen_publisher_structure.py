@@ -10,6 +10,7 @@ SCREEN = ROOT / "akashic" / "tui" / "screen-backend-apt1.f"
 ENGINE = ROOT / "akashic" / "tui" / "rich-terminal" / "apt1-engine.f"
 BRIDGE = ROOT / "akashic" / "tui" / "rich-terminal" / "screen-adapter-apt1.f"
 SHELL = ROOT / "akashic" / "tui" / "app-shell-apt1.f"
+APP_SHELL = ROOT / "akashic" / "tui" / "app-shell.f"
 
 
 def _definition(source: str, name: str) -> str:
@@ -261,6 +262,29 @@ def test_native_control_input_is_optional_exact_and_normalized_to_mouse() -> Non
     assert "SCR-H U<" in control
     assert "SCR-W U<" in control
     assert "ASHELL-TERMINAL@ = IF SCB-S-INVALID EXIT" in bind
+
+
+def test_completed_top_level_draw_has_a_renderer_neutral_generation() -> None:
+    screen = CORE_SCREEN.read_text(encoding="utf-8")
+    shell = APP_SHELL.read_text(encoding="utf-8")
+    complete = _definition(screen, "SCR-DRAW-COMPLETE")
+    generation = _definition(screen, "SCR-DRAW-GENERATION@")
+    paint = _definition(shell, "_ASHELL-PAINT")
+
+    assert "_SCR-O-DRAW-GENERATION" in complete
+    assert "1+" in complete
+    assert "DUP 0= IF DROP 1 THEN" in complete
+    assert "_SCR-O-DRAW-GENERATION" in generation
+    assert "' SCR-DRAW-COMPLETE" in screen
+    assert ": SCR-DRAW-COMPLETE   _scr-draw-complete-xt" in screen
+    assert "' SCR-DRAW-GENERATION@" in screen
+    assert ": SCR-DRAW-GENERATION@" in screen
+    assert paint.index("UTUI-DRAW-COMPLETE") < paint.index(
+        "SCR-DRAW-COMPLETE"
+    )
+    assert paint.index("SCR-DRAW-COMPLETE") < paint.index(
+        "_ASHELL-OUTPUT-PENDING !"
+    )
 
 
 def test_concrete_bridge_is_caller_bounded_and_one_to_one() -> None:

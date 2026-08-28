@@ -7,7 +7,7 @@
 \  through a transactional backend.  ANSI is the constructed default;
 \  outer composition may bind another transactional backend explicitly.
 \
-\  Screen Descriptor (11 cells = 88 bytes):
+\  Screen Descriptor (12 cells = 96 bytes):
 \    +0   width         Columns
 \    +8   height        Rows
 \    +16  front         Address of front buffer (w×h cells)
@@ -19,6 +19,7 @@
 \    +64  force         Next accepted flush is a replace-all snapshot
 \    +72  backend       Borrowed transactional backend descriptor
 \    +80  flush-request Retained-only work needs a neutral transaction
+\    +88  draw-generation Last completed ordinary top-level draw
 \
 \  Each cell is 8 bytes (one CELL-MAKE value), so a buffer for
 \  80×24 is 15,360 bytes × 2 = 30,720 bytes (~30 KiB).
@@ -52,8 +53,9 @@ REQUIRE ../utils/memory-span.f
 64 CONSTANT _SCR-O-FORCE
 72 CONSTANT _SCR-O-BACKEND
 80 CONSTANT _SCR-O-FLUSH-REQUEST
+88 CONSTANT _SCR-O-DRAW-GENERATION
 
-88 CONSTANT _SCR-DESC-SIZE
+96 CONSTANT _SCR-DESC-SIZE
 
 \ =====================================================================
 \ 2. Transactional backend ABI
@@ -214,7 +216,7 @@ VARIABLE _SCR-SIZE-H
     DUP  _SCR-TMP2 !                   \ save h
     2DROP                              \ consume w h from caller
 
-    \ Allocate descriptor (88 bytes)
+    \ Allocate descriptor
     _SCR-DESC-SIZE ALLOCATE
     0<> ABORT" SCR-NEW: descriptor alloc failed"
     _SCR-TMP3 !                        \ scr → TMP3
@@ -255,6 +257,7 @@ VARIABLE _SCR-SIZE-H
     0           _SCR-TMP3 @ _SCR-O-DIRTY  + !
     0           _SCR-TMP3 @ _SCR-O-FORCE  + !
     0           _SCR-TMP3 @ _SCR-O-FLUSH-REQUEST + !
+    0           _SCR-TMP3 @ _SCR-O-DRAW-GENERATION + !
     _SCR-ANSI-BACKEND
                 _SCR-TMP3 @ _SCR-O-BACKEND + !
 
@@ -284,6 +287,19 @@ VARIABLE _SCR-SIZE-H
 
 : SCR-W   ( -- w )    _SCR-CUR @ _SCR-O-W + @ ;
 : SCR-H   ( -- h )    _SCR-CUR @ _SCR-O-H + @ ;
+
+\ SCR-DRAW-COMPLETE ( -- )
+\   Publish one completed ordinary top-level draw.  Retained consumers use
+\   this generation to distinguish a retry of the same back buffer from a
+\   newer frame while an earlier rich replacement is still hidden.
+: SCR-DRAW-COMPLETE  ( -- )
+    _SCR-CUR @ ?DUP IF
+        _SCR-O-DRAW-GENERATION + DUP @ 1+
+        DUP 0= IF DROP 1 THEN SWAP !
+    THEN ;
+
+: SCR-DRAW-GENERATION@  ( -- generation )
+    _SCR-CUR @ ?DUP IF _SCR-O-DRAW-GENERATION + @ ELSE 0 THEN ;
 
 \ =====================================================================
 \ 8. Cell read/write
@@ -908,6 +924,8 @@ GUARD _scr-guard
 ' SCR-USE             CONSTANT _scr-use-xt
 ' SCR-W               CONSTANT _scr-w-xt
 ' SCR-H               CONSTANT _scr-h-xt
+' SCR-DRAW-COMPLETE   CONSTANT _scr-draw-complete-xt
+' SCR-DRAW-GENERATION@ CONSTANT _scr-draw-generation-get-xt
 ' SCR-SET             CONSTANT _scr-set-xt
 ' SCR-GET             CONSTANT _scr-get-xt
 ' SCR-FILL            CONSTANT _scr-fill-xt
@@ -931,6 +949,9 @@ GUARD _scr-guard
 : SCR-USE             _scr-use-xt    _scr-guard WITH-GUARD ;
 : SCR-W               _scr-w-xt      _scr-guard WITH-GUARD ;
 : SCR-H               _scr-h-xt      _scr-guard WITH-GUARD ;
+: SCR-DRAW-COMPLETE   _scr-draw-complete-xt _scr-guard WITH-GUARD ;
+: SCR-DRAW-GENERATION@
+    _scr-draw-generation-get-xt _scr-guard WITH-GUARD ;
 : SCR-SET             _scr-set-xt    _scr-guard WITH-GUARD ;
 : SCR-GET             _scr-get-xt    _scr-guard WITH-GUARD ;
 : SCR-FILL            _scr-fill-xt   _scr-guard WITH-GUARD ;
