@@ -1,4 +1,4 @@
-"""Seconds-only locks for the first complete hybrid screen producer."""
+"""Seconds-only locks for the complete hybrid screen producer."""
 
 from pathlib import Path
 import re
@@ -60,14 +60,16 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
         "_RTHP.TARGET-PENDING",
         "_RTHP.NEXT-REGION",
         "_RTHP.NEXT-OBJECT",
+        "_RTHP.ACTIVE-DRAW",
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 1936
+    assert _constant(source, "RTHP-SIZE") == expected == 1944
 
 
 def test_candidate_is_copied_planned_and_admitted_once_before_owner_open() -> None:
     source = _source()
+    build = _word(source, "_RTHP-BUILD-CANDIDATE")
     attempt = _word(source, "_RTHP-TRY-CANDIDATE")
     ordered = (
         "_RTHP-COPY-SNAPSHOT?",
@@ -76,11 +78,14 @@ def test_candidate_is_copied_planned_and_admitted_once_before_owner_open() -> No
         "_RTHP-BUILD-GLYPHS?",
         "_RTHP-WRAP-HYBRID",
         "RTE-HYBRID-PREFLIGHT",
-        "_RTHP-OPEN",
+        "_RTHP-DRAW-CURRENT?",
     )
-    positions = [attempt.index(item) for item in ordered]
+    positions = [build.index(item) for item in ordered]
     assert positions == sorted(positions)
-    assert attempt.count("RTE-HYBRID-PREFLIGHT") == 1
+    assert build.count("RTE-HYBRID-PREFLIGHT") == 1
+    assert "_RTHP-OPEN" not in build
+    assert "_RTHP.PHASE !" not in build
+    assert attempt.index("_RTHP-BUILD-CANDIDATE") < attempt.index("_RTHP-OPEN")
     assert _source().count("RTE-HYBRID-PREFLIGHT") == 1
     assert "RTE-CONTROL-PREFLIGHT" not in source
     assert "RTE-GLYPH-RUN-PREFLIGHT" not in source
@@ -107,7 +112,7 @@ def test_owner_open_reserves_one_frame_independently_of_current_content() -> Non
 def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     source = _source()
     init = _word(source, "RTHP-INIT")
-    attempt = _word(source, "_RTHP-TRY-CANDIDATE")
+    build = _word(source, "_RTHP-BUILD-CANDIDATE")
     fixed = _word(source, "_RTHP-FIXED-BODY?")
     candidate_last = _word(source, "_RTHP-CANDIDATE-LAST-OBJECT")
     successors = _word(source, "_RTHP-CANDIDATE-NEXT?")
@@ -117,12 +122,12 @@ def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
 
     assert "_RTHP.NEXT-REGION !" in init
     assert "_RTHP.NEXT-OBJECT !" in init
-    assert attempt.index("_RTHP-SELECT-NEXT-IDS?") < attempt.index(
+    assert build.index("_RTHP-SELECT-NEXT-IDS?") < build.index(
         "_RTHP-BUILD-CONTROLS?"
     )
-    assert attempt.index("RTE-HYBRID-PREFLIGHT") < attempt.index(
+    assert build.index("RTE-HYBRID-PREFLIGHT") < build.index(
         "_RTHP-CANDIDATE-NEXT?"
-    ) < attempt.index("_RTHP-OPEN")
+    ) < build.index("_RTHP-DRAW-CURRENT?")
     assert "_RTHP.NEXT-REGION" in fixed
     assert "_RTHP.NEXT-OBJECT" in fixed
     assert successors.count("_RTHP-U+?") == 2
@@ -145,6 +150,64 @@ def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     assert source.count("_RTHP-ADVANCE-IDS?") == 2
 
 
+def test_completed_draws_recapture_only_through_full_hidden_replacement() -> None:
+    source = _source()
+    copy = _word(source, "_RTHP-COPY-SNAPSHOT?")
+    wrap = _word(source, "_RTHP-WRAP-HYBRID")
+    current = _word(source, "_RTHP-DRAW-CURRENT?")
+    candidate_current = _word(source, "_RTHP-CANDIDATE-CURRENT?")
+    build = _word(source, "_RTHP-BUILD-CANDIDATE")
+    rebuild = _word(source, "_RTHP-REBUILD-CANDIDATE")
+    recapture = _word(source, "_RTHP-RECAPTURE-START")
+    step = _word(source, "RTHP-STEP")
+    prepare = _word(source, "RTHP-PREPARE")
+    reveal = _word(source, "_RTHP-PREPARE-REVEAL")
+    valid = _word(source, "_RTHP-VALID-BODY?")
+
+    assert "_RTHP.SURFACE-GEN !" not in copy
+    assert "_RTHP-W-DRAW @" in wrap
+    assert "SCR-DRAW-GENERATION@" in build
+    assert build.index("RTE-HYBRID-PREFLIGHT") < build.index(
+        "_RTHP-DRAW-CURRENT?"
+    ) < build.index("_RTHP.SURFACE-GEN !")
+    assert current.count("SCR-DRAW-GENERATION@") == 1
+    assert current.count("RUHA-SNAPSHOT@") == 1
+    assert "RUHA-SNAPSHOT-GENERATION@" in current
+    assert "RUHA-SNAPSHOT-TOKEN@" in current
+    assert "_RTE-HP.SURFACE-GENERATION" in current
+    assert "_RTHP.SURFACE-GEN" in candidate_current
+
+    assert "_RTHP-BUILD-CANDIDATE" in rebuild
+    assert "SCB-S-WOULD-BLOCK" in rebuild
+    assert "_RTHP-TARGET-ABORT" in recapture
+    assert "_RTHP-PH-READY-START" in recapture
+    assert recapture.index("_RTHP-REBUILD-CANDIDATE") < recapture.index(
+        "_RTHP-PREPARE-START"
+    )
+    assert "_RTHP-RECAPTURE-START" not in step
+    assert prepare.count("_RTHP-RECAPTURE-START") == 4
+    assert prepare.count("_RTHP-CANDIDATE-CURRENT?") == 3
+    assert "_RTHP-ACTIVE-DRAW-CURRENT?" in prepare
+    assert "_RTHP.PHASE @ _RTHP-PH-LIVE = IF" in valid
+    assert "_RTHP.SURFACE-GEN @" in valid
+    assert "_RTHP.ACTIVE-DRAW @ <>" in valid
+    ready_reveal = prepare[prepare.index("_RTHP-PH-READY-REVEAL = IF") :]
+    ready_reveal = ready_reveal[: ready_reveal.index("_RTHP-PH-REVEAL-SEALED")]
+    assert ready_reveal.index("_RTHP-CANDIDATE-CURRENT?") < ready_reveal.index(
+        "_RTHP-PREPARE-REVEAL"
+    ) < ready_reveal.index("_RTHP-RECAPTURE-START")
+    live = prepare[prepare.index("_RTHP-PH-LIVE = IF") :]
+    assert live.index("_RTHP-ACTIVE-DRAW-CURRENT?") < live.index(
+        "SCB-S-OK"
+    ) < live.index("_RTHP-RECAPTURE-START")
+
+    assert "RTE-RETAINED-REPLACE-CONTINUE" in reveal
+    assert "RTE-COMMIT-AND-REVEAL" in reveal
+    assert "_RTHP-EMIT-" not in reveal
+    assert source.count("RTE-RETAINED-REPLACE-START") == 1
+    assert "RTE-RETAINED-DELTA" not in source
+
+
 def test_final_capture_rechecks_fixed_authority_then_traverses_each_family_once() -> None:
     source = _source()
     start = _word(source, "_RTHP-PREPARE-START")
@@ -158,7 +221,7 @@ def test_final_capture_rechecks_fixed_authority_then_traverses_each_family_once(
     assert ">R" not in controls + glyphs
 
 
-def test_sealed_retry_preserves_the_exact_candidate() -> None:
+def test_sealed_retry_preserves_only_a_current_exact_candidate() -> None:
     prepare = _word(_source(), "RTHP-PREPARE")
     start_sealed = prepare.split("_RTHP-PH-START-SEALED = IF", 1)[1].split(
         "THEN", 1
@@ -167,9 +230,12 @@ def test_sealed_retry_preserves_the_exact_candidate() -> None:
         "THEN", 1
     )[0]
     assert "SCB-S-OK EXIT" in start_sealed
-    assert "SCB-S-OK EXIT" in reveal_sealed
     assert "_RTHP-PREPARE-START" not in start_sealed
     assert "_RTHP-PREPARE-REVEAL" not in reveal_sealed
+    assert "_RTHP-RECAPTURE-START" not in start_sealed
+    assert reveal_sealed.index("_RTHP-CANDIDATE-CURRENT?") < reveal_sealed.index(
+        "SCB-S-OK"
+    ) < reveal_sealed.index("_RTHP-RECAPTURE-START")
 
 
 def test_slice_remains_generic_caller_bounded_and_digest_free() -> None:
@@ -208,6 +274,7 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
     prepare = _word(source, "_RTHP-PREPARE-START")
 
     assert sizing.count("_RTHP-TARGET-BANK-HEADER-SIZE _RTHP-B-ADD") == 2
+    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 48
     assert sizing.count(
         "_RTHP-B-RECORDS @ _RTHP-TARGET-ENTRY-SIZE _RTHP-B-MUL-ADD"
     ) == 2
@@ -267,8 +334,10 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
         "_RTHP-TB.COLS",
         "_RTHP-TB.ROWS",
         "_RTHP-TB.COUNT",
+        "_RTHP-TB.DRAW",
     ):
         assert metadata in build
+    assert "_RTHP.SURFACE-GEN @" in build
     for entry in ("_RTHP-TE.ID", "_RTHP-TE.ROW", "_RTHP-TE.COL"):
         assert entry in build
     assert "UMSN-F-PAINTABLE" in build
@@ -298,6 +367,13 @@ def test_only_the_exactly_revealed_target_bank_becomes_input_active() -> None:
     assert publish.index("_RTHP.TARGET-PENDING !") < publish.index(
         "_RTHP.TARGET-ACTIVE !"
     )
+    assert publish.index("_RTHP-TB.DRAW @") < publish.index(
+        "_RTHP.SURFACE-GEN @"
+    ) < publish.index("_RTHP-TARGET-BANK-ENTRIES?")
+    assert publish.rindex("_RTHP-TB.DRAW @") < publish.index(
+        "_RTHP.ACTIVE-DRAW !"
+    ) < publish.index("_RTHP.TARGET-ACTIVE !")
+    assert source.count("_RTHP.ACTIVE-DRAW !") == 2
 
     assert "_RTHP.TARGET-ACTIVE" in lookup
     assert "_RTHP-TARGET-BANK-HEADER?" in lookup
@@ -305,6 +381,7 @@ def test_only_the_exactly_revealed_target_bank_becomes_input_active() -> None:
     assert "_RTHP.PHASE" not in lookup
     assert "_RTHP.OWNER" in lookup
     assert "_RTHP.OWNER-GEN" in lookup
+    assert "_RTHP.ACTIVE-DRAW" in lookup
     assert "_RTHP.TARGET-ACTIVE" in live
     assert "_RTHP.PHASE" not in live
     assert entries.count("0 ?DO") == 1
@@ -323,5 +400,19 @@ def test_only_the_exactly_revealed_target_bank_becomes_input_active() -> None:
         "_RTHP-TB.COLS",
         "_RTHP-TB.ROWS",
         "_RTHP-TB.COUNT",
+        "_RTHP-TB.DRAW",
     ):
         assert metadata in lookup + header + find
+
+
+def test_repeat_capacity_pressure_preserves_the_active_frame_and_backpressures_cell() -> None:
+    rebuild = _word(_source(), "_RTHP-REBUILD-CANDIDATE")
+
+    for temporary_status in (
+        "RTE-S-WOULD-BLOCK",
+        "RTE-S-UNAVAILABLE",
+        "RTE-S-CAPACITY",
+    ):
+        branch = rebuild[rebuild.index(f"DUP {temporary_status} = IF") :]
+        branch = branch[: branch.index("EXIT THEN")]
+        assert "SCB-S-WOULD-BLOCK 0" in branch

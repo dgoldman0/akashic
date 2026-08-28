@@ -1,17 +1,18 @@
 \ =====================================================================
-\  hybrid-screen-producer.f -- first complete semantic screen producer
+\  hybrid-screen-producer.f -- complete semantic screen producer
 \ =====================================================================
 \
 \  This is the narrow production replacement for the temporary per-cell
 \  screen plane.  It copies one completed focused UIDL snapshot, plans its
 \  semantic controls, excludes their claimed cells from one coalesced glyph
 \  projection of the ordinary screen, admits the combined candidate once,
-\  and carries that immutable candidate through hidden START and physical
-\  reveal acknowledgement.
+\  and carries each immutable candidate through hidden START and physical
+\  reveal acknowledgement.  Every later completed ordinary draw follows the
+\  same full replacement path; no retained DELTA bypass exists here.
 \
 \  The caller supplies one bounded arena and the real lifecycle endpoints.
-\  This first vertical slice deliberately has no delta/update path: after the
-\  first acknowledged frame it remains LIVE until composition teardown.
+\  CELL remains authoritative fallback, while a newer CELL frame is refused
+\  until its matching rich replacement can be hidden and revealed exactly.
 \
 \  Prefix: RTHP- (public), _RTHP- (private)
 
@@ -100,8 +101,9 @@ REQUIRE ../../utils/memory-span.f
 : _RTHP.TARGET-PENDING ( p -- a ) 1912 + ;
 : _RTHP.NEXT-REGION    ( p -- a ) 1920 + ;
 : _RTHP.NEXT-OBJECT    ( p -- a ) 1928 + ;
+: _RTHP.ACTIVE-DRAW    ( p -- a ) 1936 + ;
 
-1936 CONSTANT RTHP-SIZE
+1944 CONSTANT RTHP-SIZE
 
 : RTHP-BYTES  ( -- bytes )  RTHP-SIZE ;
 
@@ -120,8 +122,9 @@ REQUIRE ../../utils/memory-span.f
 : _RTHP-TB.COLS        ( bank -- a ) 16 + ;
 : _RTHP-TB.ROWS        ( bank -- a ) 24 + ;
 : _RTHP-TB.COUNT       ( bank -- a ) 32 + ;
+: _RTHP-TB.DRAW        ( bank -- a ) 40 + ;
 
-40 CONSTANT _RTHP-TARGET-BANK-HEADER-SIZE
+48 CONSTANT _RTHP-TARGET-BANK-HEADER-SIZE
 
 : _RTHP-TE.ID          ( entry -- a )      ;
 : _RTHP-TE.ROW         ( entry -- a )  8 + ;
@@ -317,6 +320,12 @@ VARIABLE _RTHP-V-P
     DUP _RTHP.FAULT @ 4 U< 0= IF DROP 0 EXIT THEN
     DUP _RTHP.ADAPTER @ RUHA-VALID? 0= IF DROP 0 EXIT THEN
     DUP _RTHP.FACADE @ RTE-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _RTHP.TARGET-ACTIVE @ 0=
+    OVER _RTHP.ACTIVE-DRAW @ 0= <> IF DROP 0 EXIT THEN
+    DUP _RTHP.PHASE @ _RTHP-PH-LIVE = IF
+        DUP _RTHP.SURFACE-GEN @
+        OVER _RTHP.ACTIVE-DRAW @ <> IF DROP 0 EXIT THEN
+    THEN
     DUP _RTHP.ARENA-A @ OVER _RTHP.ARENA-U @
         MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
     DROP -1 ;
@@ -554,6 +563,7 @@ VARIABLE _RTHP-TG-COUNT
     _RTHP-TG-P @ _RTHP.COLS @ _RTHP-TG-BANK @ _RTHP-TB.COLS !
     _RTHP-TG-P @ _RTHP.ROWS @ _RTHP-TG-BANK @ _RTHP-TB.ROWS !
     0 _RTHP-TG-BANK @ _RTHP-TB.COUNT !
+    _RTHP-TG-P @ _RTHP.SURFACE-GEN @ _RTHP-TG-BANK @ _RTHP-TB.DRAW !
 
     _RTHP-TG-P @ _RTHP-CT-P !
     _RTHP-TG-P @ _RTHP.OWNER @ _RTHP-CT-OWNER !
@@ -607,6 +617,7 @@ VARIABLE _RTHP-TV-COL
         _RTHP-TV-P @ _RTHP.MAX-COLS @ U> 0= AND 0= IF 0 EXIT THEN
     _RTHP-TV-BANK @ _RTHP-TB.ROWS @ DUP 0> SWAP
         _RTHP-TV-P @ _RTHP.MAX-ROWS @ U> 0= AND 0= IF 0 EXIT THEN
+    _RTHP-TV-BANK @ _RTHP-TB.DRAW @ 0= IF 0 EXIT THEN
     _RTHP-TV-BANK @ _RTHP-TB.COUNT @
         _RTHP-TV-P @ _RTHP.MAX-RECORDS @ U> 0= ;
 
@@ -647,8 +658,12 @@ VARIABLE _RTHP-TP-BANK
         _RTHP-TP-P @ _RTHP.COLS @ <> IF 0 EXIT THEN
     _RTHP-TP-BANK @ _RTHP-TB.ROWS @
         _RTHP-TP-P @ _RTHP.ROWS @ <> IF 0 EXIT THEN
+    _RTHP-TP-BANK @ _RTHP-TB.DRAW @
+        _RTHP-TP-P @ _RTHP.SURFACE-GEN @ <> IF 0 EXIT THEN
     _RTHP-TARGET-BANK-ENTRIES? 0= IF 0 EXIT THEN
     0 _RTHP-TP-P @ _RTHP.TARGET-PENDING !
+    _RTHP-TP-BANK @ _RTHP-TB.DRAW @
+        _RTHP-TP-P @ _RTHP.ACTIVE-DRAW !
     _RTHP-TP-BANK @ _RTHP-TP-P @ _RTHP.TARGET-ACTIVE !
     0 _RTHP-TP-P ! 0 _RTHP-TP-BANK ! -1 ;
 
@@ -713,6 +728,8 @@ VARIABLE _RTHP-TL-COL
         _RTHP-TL-P @ _RTHP.OWNER @ <> OR
     _RTHP-TL-BANK @ _RTHP-TB.GENERATION @
         _RTHP-TL-P @ _RTHP.OWNER-GEN @ <> OR
+    _RTHP-TL-BANK @ _RTHP-TB.DRAW @
+        _RTHP-TL-P @ _RTHP.ACTIVE-DRAW @ <> OR
     _RTHP-TL-ID @ 0= OR IF _RTHP-TL-FAIL EXIT THEN
     _RTHP-TARGET-BANK-FIND? 0= IF _RTHP-TL-FAIL EXIT THEN
     _RTHP-TL-ROW @ _RTHP-TL-COL @ -1
@@ -774,6 +791,7 @@ VARIABLE _RTHP-TL-COL
     _RTHP-I-FIRST @ _RTHP-I-P @ _RTHP.FIRST-OBJECT !
     _RTHP-I-REGION @ _RTHP-I-P @ _RTHP.NEXT-REGION !
     _RTHP-I-FIRST @ _RTHP-I-P @ _RTHP.NEXT-OBJECT !
+    0 _RTHP-I-P @ _RTHP.ACTIVE-DRAW !
     _RTHP-PH-WAIT _RTHP-I-P @ _RTHP.PHASE !
     SCB-S-OK _RTHP-I-P @ _RTHP.FAULT !
     _RTHP-I-P @ _RTHP-LAYOUT
@@ -798,6 +816,7 @@ VARIABLE _RTHP-W-MAX
 VARIABLE _RTHP-W-LAST
 VARIABLE _RTHP-W-GLYPH-FIRST
 VARIABLE _RTHP-W-CLAIMS
+VARIABLE _RTHP-W-DRAW
 
 : _RTHP-COPY-SNAPSHOT?  ( snapshot producer -- flag )
     _RTHP-W-P ! _RTHP-W-SNAP !
@@ -814,14 +833,50 @@ VARIABLE _RTHP-W-CLAIMS
     DUP _RTHP-W-P @ _RTHP.SOURCE-TEXT-USED !
     _RTHP-W-P @ _RTHP.SOURCE-TEXT-A @ SWAP MOVE
     _RTHP-W-SNAP @ RUHA-SNAPSHOT-GENERATION@
-        DUP _RTHP-W-P @ _RTHP.SOURCE-GEN !
-        _RTHP-W-P @ _RTHP.SURFACE-GEN !
+        _RTHP-W-P @ _RTHP.SOURCE-GEN !
     _RTHP-W-SNAP @ RUHA-SNAPSHOT-TOKEN@
         _RTHP-W-P @ _RTHP.TOKEN !
     _RTHP-W-P @ _RTHP.ATTEMPT @ 1 _RTHP-U32+?
         0= IF DROP 0 EXIT THEN
         DUP 0= IF DROP 0 EXIT THEN _RTHP-W-P @ _RTHP.ATTEMPT !
     -1 ;
+
+VARIABLE _RTHP-C-P
+VARIABLE _RTHP-C-DRAW
+VARIABLE _RTHP-C-SNAP
+VARIABLE _RTHP-C-STATUS
+VARIABLE _RTHP-C-RESULT
+
+: _RTHP-CURRENT-FINISH  ( flag -- flag )
+    _RTHP-C-RESULT !
+    0 _RTHP-C-P ! 0 _RTHP-C-DRAW ! 0 _RTHP-C-SNAP !
+    0 _RTHP-C-STATUS !
+    _RTHP-C-RESULT @ ;
+
+\ This is an O(1) identity check, not another caller-bank validation.  It
+\ binds the copied semantic source and wrapped projection to the same latest
+\ completed ordinary draw without retaining a borrowed RUHA snapshot.
+: _RTHP-DRAW-CURRENT?  ( draw-generation producer -- flag )
+    _RTHP-C-P ! _RTHP-C-DRAW !
+    _RTHP-C-DRAW @ 0= IF 0 _RTHP-CURRENT-FINISH EXIT THEN
+    SCR-DRAW-GENERATION@ _RTHP-C-DRAW @ <> IF
+        0 _RTHP-CURRENT-FINISH EXIT
+    THEN
+    _RTHP-C-P @ _RTHP.HYBRID _RTE-HP.SURFACE-GENERATION @
+        _RTHP-C-DRAW @ <> IF 0 _RTHP-CURRENT-FINISH EXIT THEN
+    _RTHP-C-P @ _RTHP.ADAPTER @ RUHA-SNAPSHOT@
+    _RTHP-C-STATUS ! _RTHP-C-SNAP !
+    _RTHP-C-STATUS @ RUHA-S-OK <> IF
+        0 _RTHP-CURRENT-FINISH EXIT
+    THEN
+    _RTHP-C-SNAP @ RUHA-SNAPSHOT-GENERATION@
+        _RTHP-C-P @ _RTHP.SOURCE-GEN @ =
+    _RTHP-C-SNAP @ RUHA-SNAPSHOT-TOKEN@
+        _RTHP-C-P @ _RTHP.TOKEN @ = AND
+    _RTHP-CURRENT-FINISH ;
+
+: _RTHP-CANDIDATE-CURRENT?  ( producer -- flag )
+    DUP _RTHP.SURFACE-GEN @ SWAP _RTHP-DRAW-CURRENT? ;
 
 : _RTHP-BUILD-CONTROLS?  ( producer -- flag )
     _RTHP-W-P !
@@ -921,7 +976,7 @@ VARIABLE _RTHP-W-CLAIMS
         _RTHP-W-P @ _RTHP.HYBRID _RTE-HP.ATTEMPT !
     _RTHP-W-P @ _RTHP.SOURCE-GEN @
         _RTHP-W-P @ _RTHP.HYBRID _RTE-HP.SOURCE-GENERATION !
-    _RTHP-W-P @ _RTHP.SURFACE-GEN @
+    _RTHP-W-DRAW @
         _RTHP-W-P @ _RTHP.HYBRID _RTE-HP.SURFACE-GENERATION !
     _RTHP-W-P @ _RTHP.CONTROL-PLAN
         _RTHP-W-P @ _RTHP.HYBRID _RTE-HP.CONTROL-PLAN !
@@ -1022,39 +1077,57 @@ VARIABLE _RTHP-O-TEXT
     1 0 _RTHP-O-OBJECTS @ 0 0 _RTHP-O-TEXT @ 0
     _RTHP-O-P @ _RTHP.FACADE @ RTE-OWNER-OPEN ;
 
-: _RTHP-TRY-CANDIDATE  ( producer -- scb-status started? )
+: _RTHP-BUILD-CANDIDATE  ( producer -- rte-status built? )
     _RTHP-W-P !
+    SCR-DRAW-GENERATION@ DUP 0= IF
+        DROP RTE-S-WOULD-BLOCK 0 EXIT
+    THEN _RTHP-W-DRAW !
     _RTHP-W-P @ _RTHP.ADAPTER @ RUHA-SNAPSHOT@
     _RTHP-W-STATUS ! _RTHP-W-SNAP !
-    _RTHP-W-STATUS @ RUHA-S-UNAVAILABLE = IF SCB-S-OK 0 EXIT THEN
-    _RTHP-W-STATUS @ RUHA-S-OK <> IF SCB-S-INVALID 0 EXIT THEN
+    _RTHP-W-STATUS @ RUHA-S-UNAVAILABLE = IF
+        RTE-S-WOULD-BLOCK 0 EXIT
+    THEN
+    _RTHP-W-STATUS @ RUHA-S-OK <> IF RTE-S-INVALID 0 EXIT THEN
     _RTHP-W-P @ _RTHP.LIMITS _RTHP-W-P @ _RTHP.FACADE @ RTE-LIMITS@
         DUP _RTHP-W-STATUS !
     DUP RTE-S-UNAVAILABLE = OVER RTE-S-WOULD-BLOCK = OR IF
-        DROP SCB-S-OK 0 EXIT
+        DROP RTE-S-WOULD-BLOCK 0 EXIT
     THEN
-    RTE-S-OK <> IF _RTHP-W-STATUS @ _RTHP-RTE>SCB 0 EXIT THEN
+    DUP RTE-S-OK <> IF 0 EXIT THEN DROP
     _RTHP-W-SNAP @ _RTHP-W-P @ _RTHP-COPY-SNAPSHOT?
-        0= IF SCB-S-INVALID 0 EXIT THEN
-    _RTHP-W-P @ _RTHP-SELECT-NEXT-IDS? 0= IF SCB-S-INVALID 0 EXIT THEN
-    _RTHP-W-P @ _RTHP-BUILD-CONTROLS? 0= IF SCB-S-INVALID 0 EXIT THEN
+        0= IF RTE-S-INVALID 0 EXIT THEN
+    _RTHP-W-P @ _RTHP-SELECT-NEXT-IDS? 0= IF RTE-S-INVALID 0 EXIT THEN
+    _RTHP-W-P @ _RTHP-BUILD-CONTROLS? 0= IF RTE-S-INVALID 0 EXIT THEN
     _RTHP-W-SNAP @ _RTHP-W-P @ _RTHP-BUILD-CLAIMS?
-        0= IF SCB-S-INVALID 0 EXIT THEN
-    _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF SCB-S-INVALID 0 EXIT THEN
+        0= IF RTE-S-INVALID 0 EXIT THEN
+    _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF RTE-S-INVALID 0 EXIT THEN
     _RTHP-W-P @ _RTHP-WRAP-HYBRID
     _RTHP-W-P @ _RTHP.ADMISSION RTE-HYBRID-ADMISSION-SIZE 0 FILL
     _RTHP-W-P @ _RTHP.HYBRID _RTHP-W-P @ _RTHP.ADMISSION
     _RTHP-W-P @ _RTHP.FACADE @ RTE-HYBRID-PREFLIGHT
         DUP _RTHP-W-STATUS !
-    DUP RTE-S-UNAVAILABLE = OVER RTE-S-CAPACITY = OR IF
-        DROP _RTHP-PH-DISABLED _RTHP-W-P @ _RTHP.PHASE !
-        SCB-S-OK 0 EXIT
-    THEN
-    DUP RTE-S-WOULD-BLOCK = IF DROP SCB-S-OK 0 EXIT THEN
-    RTE-S-OK <> IF _RTHP-W-STATUS @ _RTHP-RTE>SCB 0 EXIT THEN
+    DUP RTE-S-OK <> IF 0 EXIT THEN DROP
     _RTHP-W-P @ _RTHP-CANDIDATE-NEXT? 0= IF
-        2DROP SCB-S-INVALID 0 EXIT
+        2DROP RTE-S-INVALID 0 EXIT
     THEN 2DROP
+    _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP-DRAW-CURRENT? 0= IF
+        RTE-S-WOULD-BLOCK 0 EXIT
+    THEN
+    _RTHP-W-DRAW @ _RTHP-W-P @ _RTHP.SURFACE-GEN !
+    RTE-S-OK -1 ;
+
+: _RTHP-TRY-CANDIDATE  ( producer -- scb-status started? )
+    _RTHP-W-P !
+    _RTHP-W-P @ _RTHP-BUILD-CANDIDATE IF
+        DUP RTE-S-OK <> IF DROP SCB-S-INVALID 0 EXIT THEN DROP
+    ELSE
+        DUP RTE-S-UNAVAILABLE = OVER RTE-S-CAPACITY = OR IF
+            DROP _RTHP-PH-DISABLED _RTHP-W-P @ _RTHP.PHASE !
+            SCB-S-OK 0 EXIT
+        THEN
+        DUP RTE-S-WOULD-BLOCK = IF DROP SCB-S-OK 0 EXIT THEN
+        _RTHP-RTE>SCB 0 EXIT
+    THEN
     _RTHP-PH-OPENING _RTHP-W-P @ _RTHP.PHASE !
     _RTHP-W-P @ _RTHP-OPEN DUP _RTHP-W-STATUS !
     DUP RTE-S-OK = OVER RTE-S-WOULD-BLOCK = OR IF
@@ -1062,6 +1135,19 @@ VARIABLE _RTHP-O-TEXT
     THEN
     RTE-S-SESSION-LOST = IF SCB-S-SESSION-LOST -1 EXIT THEN
     SCB-S-INVALID -1 ;
+
+: _RTHP-REBUILD-CANDIDATE  ( producer -- scb-status built? )
+    _RTHP-BUILD-CANDIDATE IF
+        DUP RTE-S-OK = IF DROP SCB-S-OK -1 EXIT THEN
+        DROP SCB-S-INVALID 0 EXIT
+    THEN
+    DUP RTE-S-WOULD-BLOCK = IF DROP SCB-S-WOULD-BLOCK 0 EXIT THEN
+    \ An acknowledged rich frame remains authoritative while a later complete
+    \ replacement is temporarily too large or the engine is unavailable.
+    \ Backpressure its newer CELL peer so another completed draw can recover.
+    DUP RTE-S-UNAVAILABLE = IF DROP SCB-S-WOULD-BLOCK 0 EXIT THEN
+    DUP RTE-S-CAPACITY = IF DROP SCB-S-WOULD-BLOCK 0 EXIT THEN
+    _RTHP-RTE>SCB 0 ;
 
 \ =====================================================================
 \  STEP lifecycle
@@ -1224,6 +1310,7 @@ VARIABLE _RTHP-Z-OUTPUT
 VARIABLE _RTHP-X-P
 
 : _RTHP-FIXED-BODY?  ( -- flag )
+    _RTHP-X-P @ _RTHP.SURFACE-GEN @ 0= IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.REGION @
         _RTHP-X-P @ _RTHP.NEXT-REGION @ <> IF 0 EXIT THEN
     _RTHP-X-P @ _RTHP.FIRST-OBJECT @
@@ -1513,6 +1600,22 @@ VARIABLE _RTHP-P-STATE
     THEN DROP
     _RTHP-PH-START-SEALED _RTHP-P-P @ _RTHP.PHASE ! SCB-S-OK ;
 
+: _RTHP-ACTIVE-DRAW-CURRENT?  ( producer -- flag )
+    _RTHP.ACTIVE-DRAW @ DUP 0= IF DROP 0 EXIT THEN
+    SCR-DRAW-GENERATION@ = ;
+
+\ Once a rich frame is active, this word may refuse CELL but may never let a
+\ newer CELL frame pass under the older rich overlay.  Abandon only the
+\ unacknowledged target map, rebuild against the completed draw with the
+\ current ID frontier, and seal another full hidden START before returning OK.
+: _RTHP-RECAPTURE-START  ( producer -- scb-status )
+    DUP _RTHP-P-P ! _RTHP-CAPTURE-SLOT
+    DUP SCB-S-OK <> IF EXIT THEN DROP
+    _RTHP-P-P @ _RTHP-TARGET-ABORT
+    _RTHP-PH-READY-START _RTHP-P-P @ _RTHP.PHASE !
+    _RTHP-P-P @ _RTHP-REBUILD-CANDIDATE 0= IF EXIT THEN DROP
+    _RTHP-P-P @ _RTHP-PREPARE-START ;
+
 : _RTHP-PREPARE-REVEAL  ( producer -- scb-status )
     DUP _RTHP-P-P ! _RTHP-CAPTURE-SLOT DUP SCB-S-OK <> IF EXIT THEN DROP
     RTE-RETAINED-REPLACE-CONTINUE _RTHP-P-P @ _RTHP.FACADE @
@@ -1532,15 +1635,37 @@ VARIABLE _RTHP-P-STATE
         _RTHP-P-P @ _RTHP.FAULT @ EXIT
     THEN
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-READY-START = IF
-        _RTHP-P-P @ _RTHP-PREPARE-START EXIT
+        _RTHP-P-P @ _RTHP-CANDIDATE-CURRENT? IF
+            _RTHP-P-P @ _RTHP-PREPARE-START
+        ELSE
+            _RTHP-P-P @ _RTHP-RECAPTURE-START
+        THEN EXIT
     THEN
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-START-SEALED = IF
         SCB-S-OK EXIT
     THEN
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-READY-REVEAL = IF
-        _RTHP-P-P @ _RTHP-PREPARE-REVEAL EXIT
+        _RTHP-P-P @ _RTHP-CANDIDATE-CURRENT? IF
+            _RTHP-P-P @ _RTHP-PREPARE-REVEAL
+        ELSE
+            _RTHP-P-P @ _RTHP-RECAPTURE-START
+        THEN EXIT
     THEN
     _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-REVEAL-SEALED = IF
-        SCB-S-OK EXIT
+        \ A refused outer CELL offer may let Desk finish another draw before
+        \ this sealed reveal is retried.  Cancel it while still cancellable
+        \ rather than pair that older rich candidate with the newer CELL.
+        _RTHP-P-P @ _RTHP-CANDIDATE-CURRENT? IF
+            SCB-S-OK
+        ELSE
+            _RTHP-P-P @ _RTHP-RECAPTURE-START
+        THEN EXIT
+    THEN
+    _RTHP-P-P @ _RTHP.PHASE @ _RTHP-PH-LIVE = IF
+        _RTHP-P-P @ _RTHP-ACTIVE-DRAW-CURRENT? IF
+            SCB-S-OK
+        ELSE
+            _RTHP-P-P @ _RTHP-RECAPTURE-START
+        THEN EXIT
     THEN
     SCB-S-OK ;
