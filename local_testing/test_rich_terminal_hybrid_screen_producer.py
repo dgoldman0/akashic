@@ -64,7 +64,76 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     ):
         assert _offset(source, name) == expected
         expected += 8
-    assert _constant(source, "RTHP-SIZE") == expected == 1944
+    for name in (
+        "_RTHP.MAX-DOCUMENTS",
+        "_RTHP.SOURCE-DIR-A",
+        "_RTHP.SOURCE-DIR-U",
+        "_RTHP.SOURCE-DIR-USED",
+        "_RTHP.DOCUMENT-COUNT",
+    ):
+        assert _offset(source, name) == expected
+        expected += 8
+    assert _constant(source, "RTHP-SIZE") == expected == 1984
+
+
+def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> None:
+    source = _source()
+    sizing = _word(source, "_RTHP-BYTES-BODY")
+    storage = _word(source, "RTHP-STORAGE-BYTES")
+    layout = _word(source, "_RTHP-LAYOUT")
+    init = _word(source, "RTHP-INIT")
+    snapshot_shape = _word(source, "_RTHP-W-SNAPSHOT-SPANS?")
+    copy = _word(source, "_RTHP-COPY-SNAPSHOT?")
+    controls = _word(source, "_RTHP-BUILD-CONTROLS?")
+    claims = _word(source, "_RTHP-BUILD-CLAIMS?")
+    wrap_control = _word(source, "_RTHP-W-WRAP-CONTROL-PLAN?")
+
+    assert "max-documents max-records" in storage
+    assert "_RTHP-B-DOCUMENTS" in storage
+    assert "_RTHP-B-DOCUMENTS @ RUHA-DOCUMENT-SIZE" in sizing
+    assert "_RTHP.MAX-DOCUMENTS @ RUHA-DOCUMENT-SIZE" in layout
+    assert "_RTHP.SOURCE-DIR-A" in layout
+    assert "RUHA-DOCUMENT-CAPACITY@" in init
+    assert "_RTHP.MAX-DOCUMENTS !" in init
+
+    for aggregate in (
+        "RUHA-SNAPSHOT-DOCUMENT-COUNT@",
+        "RUHA-SNAPSHOT-DIRECTORY@",
+        "RUHA-SNAPSHOT-RECORDS@",
+        "RUHA-SNAPSHOT-TEXT@",
+    ):
+        assert aggregate in snapshot_shape
+    for field in (
+        "RUHA-DOCUMENT-TOKEN@",
+        "RUHA-DOCUMENT-SLOT-ID@",
+        "RUHA-DOCUMENT-ROW@",
+        "RUHA-DOCUMENT-COL@",
+        "RUHA-DOCUMENT-HEIGHT@",
+        "RUHA-DOCUMENT-WIDTH@",
+        "RUHA-DOCUMENT-RECORD-OFFSET@",
+        "RUHA-DOCUMENT-RECORD-BYTES@",
+        "RUHA-DOCUMENT-TEXT-OFFSET@",
+        "RUHA-DOCUMENT-TEXT-BYTES@",
+    ):
+        assert field in source
+    assert snapshot_shape.count("_RTHP-W-DOCUMENT-SHAPE?") == 1
+    assert "_RTHP.SOURCE-DIR-A" in copy
+    assert "_RTHP.SOURCE-DIR-USED" in copy
+    assert "_RTHP.SOURCE-DRAW !" in copy
+    assert "_RTHP.DOCUMENT-COUNT !" in copy
+
+    for build, planner in ((controls, "RUCP-BUILD"), (claims, "RUCL-BUILD")):
+        assert "_RTHP-W-COPIED-DOCUMENT?" in build
+        assert "_RTHP-W-DOC-RECORD-O" in build
+        assert "_RTHP-W-DOC-RECORD-COUNT" in build
+        assert build.count(planner) == 1
+        assert "BEGIN _RTHP-W-DOCUMENT-I @" in build
+        assert "_RTHP-W-COPIED-COMPLETE?" in build
+    assert "_RTHP-W-DOC-TEXT-O" in controls
+    assert "_RTHP-W-NEXT-ID" in controls
+    assert "_RTHP-W-WRAP-CONTROL-PLAN?" in controls
+    assert "RUCP-BUILD" not in wrap_control
+    assert "_RTHP.CONTROLS-A" in wrap_control
 
 
 def test_candidate_is_copied_planned_and_admitted_once_before_owner_open() -> None:
@@ -165,15 +234,17 @@ def test_completed_draws_recapture_only_through_full_hidden_replacement() -> Non
     valid = _word(source, "_RTHP-VALID-BODY?")
 
     assert "_RTHP.SURFACE-GEN !" not in copy
-    assert "_RTHP-W-DRAW @" in wrap
+    assert "_RTHP.SOURCE-DRAW @" in wrap
     assert "SCR-DRAW-GENERATION@" in build
     assert build.index("RTE-HYBRID-PREFLIGHT") < build.index(
         "_RTHP-DRAW-CURRENT?"
     ) < build.index("_RTHP.SURFACE-GEN !")
     assert current.count("SCR-DRAW-GENERATION@") == 1
-    assert current.count("RUHA-SNAPSHOT@") == 1
+    assert current.count("RUHA-SNAPSHOT-FOR@") == 1
     assert "RUHA-SNAPSHOT-GENERATION@" in current
-    assert "RUHA-SNAPSHOT-TOKEN@" in current
+    assert "RUHA-SNAPSHOT-DRAW-GENERATION@" in current
+    assert "RUHA-SNAPSHOT-DOCUMENT-COUNT@" in current
+    assert "_RTHP.SOURCE-DRAW" in current
     assert "_RTE-HP.SURFACE-GENERATION" in current
     assert "_RTHP.SURFACE-GEN" in candidate_current
 
@@ -248,7 +319,7 @@ def test_slice_remains_generic_caller_bounded_and_digest_free() -> None:
     assert "daybook-entry" not in lowered
     for required in (
         "RTHP-STORAGE-BYTES",
-        "RUHA-SNAPSHOT@",
+        "RUHA-SNAPSHOT-FOR@",
         "RUCP-BUILD",
         "RUCL-BUILD",
         "RGRP-BUILD",
@@ -283,7 +354,8 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
     assert "_RTHP-TARGET-INACTIVE" in build
     assert "_RTHP.TARGET-PENDING" in build
     assert "_RTHP-CT-CANDIDATE-SHAPE?" in build
-    assert build.count("0 ?DO") == 1
+    assert "0 ?DO" not in build
+    assert build.count("BEGIN") == 2
     assert "0 ?DO" not in correlation_at
     assert "0 ?DO" not in find_control
     assert "_RTHP.FIRST-OBJECT" in find_control
@@ -291,8 +363,11 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
     assert build.index("_RTHP-CT-CORRELATION-AT?") < build.index(
         "_RTHP-CT-FIND-CONTROL?"
     )
-    assert candidate_shape.count("_RTHP-ARENA-SPAN?") == 3
+    assert candidate_shape.count("_RTHP-ARENA-SPAN?") == 4
+    assert candidate_shape.count("@ 7 AND IF 0 EXIT THEN") == 4
+    assert "DUP 7 AND" not in candidate_shape
     for bounded_bank in (
+        "_RTHP.SOURCE-DIR-A",
         "_RTHP.SOURCE-RECS-A",
         "_RTHP.CONTROLS-A",
         "_RTHP.CORR-A",
@@ -307,15 +382,21 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
         "_RTE-CONTROL.ID",
     ):
         assert exact in control
-    assert "RTE-CONTROL-MENU" in control
-    assert "RTE-CONTROL-MENU-ITEM" in control
-    assert "RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR" in control
+    assert "RTE-CONTROL-MENU-BAR" in control
+    assert "RTE-CONTROL-MENU-SEPARATOR" in control
 
     assert "RUCP-CORRELATION-CONTROL-ID@" in correlation_at
     assert "RUCP-CORRELATION-ATTACHMENT@" in correlation
+    assert "_RTHP-CT-ATTACHMENT" in correlation
     assert "RUCP-CORRELATION-SOURCE@" in correlation
     assert "RUCP-CORRELATION-SUBKEY@" in correlation
-    assert "_RTHP.SOURCE-RECS-A" in correlation
+    record_at = _word(source, "_RTHP-CT-RECORD-AT?")
+    document_shape = _word(source, "_RTHP-CT-DOCUMENT-SHAPE?")
+    assert "_RTHP.SOURCE-RECS-A" in record_at
+    assert "_RTHP-CT-LOCAL" in record_at
+    assert "RUHA-DOCUMENT-TOKEN@" in document_shape
+    assert "RUHA-DOCUMENT-RECORD-OFFSET@" in document_shape
+    assert "RUHA-DOCUMENT-TEXT-OFFSET@" in document_shape
     assert "UMSN-RECORD-GENERATION@" in record
     assert "UMSN-RECORD-SOURCE-INDEX@" in record
     assert "_UMSN-R.SOURCE" in record
@@ -341,6 +422,12 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
     for entry in ("_RTHP-TE.ID", "_RTHP-TE.ROW", "_RTHP-TE.COL"):
         assert entry in build
     assert "UMSN-F-PAINTABLE" in build
+    assert build.index("_RTHP-CT-DOCUMENT-SHAPE?") < build.index(
+        "_RTHP-CT-CORRELATION-AT?"
+    )
+    assert build.index("_RTHP-CT-RECORD-AT?") < build.index(
+        "_RTHP-CT-RECORD?"
+    )
     assert prepare.index("_RTHP-FIXED?") < prepare.index(
         "_RTHP-TARGET-CANDIDATE?"
     ) < prepare.index("RTE-RETAINED-BEGIN")

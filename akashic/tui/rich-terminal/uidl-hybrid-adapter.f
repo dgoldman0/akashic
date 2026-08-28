@@ -1,15 +1,17 @@
 \ =====================================================================
-\  uidl-hybrid-adapter.f -- focused UIDL menu snapshot lifecycle
+\  uidl-hybrid-adapter.f -- visible UIDL aggregate snapshot lifecycle
 \ =====================================================================
 \
 \  This optional composition adapter follows the ordinary AHOST / UCTX
-\  lifecycle and captures the focused visible document's renderer-neutral
-\  menu model into caller-owned A/B banks.  It does not open a terminal
+\  lifecycle and captures every visible document's renderer-neutral menu
+\  model into caller-owned A/B banks at a completed draw boundary.  It does not open a terminal
 \  owner, inspect the final CELL surface, or publish retained objects.
 \
-\  A consumer may borrow RUHA-SNAPSHOT@ only until the next projection
-\  callback.  The hybrid screen producer copies that snapshot into its own
-\  inactive attempt before any asynchronous owner work begins.
+\  Directory entries cover visible documents with nonempty semantic forests;
+\  empty documents contribute no controls or claims.  A consumer may borrow
+\  RUHA-SNAPSHOT-FOR@ only until lifecycle invalidation or the next successful
+\  aggregate publication.  The hybrid screen producer copies that snapshot
+\  into its own attempt before any asynchronous owner work begins.
 \
 \  Prefix: RUHA- (public), _RUHA- (private)
 
@@ -20,6 +22,7 @@ REQUIRE ../uidl-menu-snapshot.f
 REQUIRE ../../utils/memory-span.f
 
 0 CONSTANT RUHA-S-OK
+1 CONSTANT RUHA-S-CAPACITY
 2 CONSTANT RUHA-S-UNAVAILABLE
 4 CONSTANT RUHA-S-STALE
 5 CONSTANT RUHA-S-INVALID
@@ -45,39 +48,62 @@ REQUIRE ../../utils/memory-span.f
 
 : RUHA-RECORD-BYTES  ( -- bytes )  RUHA-RECORD-SIZE ;
 
-\ Snapshot metadata is pointer-bearing and call-borrowed.  RECORDS-U and
-\ TEXT-U are used bytes, not retained capacity.  Geometry is the focused
-\ document's absolute clip within the complete terminal surface.
-: _RUHA-S.GENERATION ( snapshot -- a )       ;
-: _RUHA-S.TOKEN      ( snapshot -- a )   8 + ;
-: _RUHA-S.ROW        ( snapshot -- a )  16 + ;
-: _RUHA-S.COL        ( snapshot -- a )  24 + ;
-: _RUHA-S.HEIGHT     ( snapshot -- a )  32 + ;
-: _RUHA-S.WIDTH      ( snapshot -- a )  40 + ;
-: _RUHA-S.RECORDS-A  ( snapshot -- a )  48 + ;
-: _RUHA-S.RECORDS-U  ( snapshot -- a )  56 + ;
-: _RUHA-S.TEXT-A     ( snapshot -- a )  64 + ;
-: _RUHA-S.TEXT-U     ( snapshot -- a )  72 + ;
-: _RUHA-S.SLOT-ID    ( snapshot -- a )  80 + ;
-: _RUHA-S.RESERVED   ( snapshot -- a )  88 + ;
+\ Aggregate directory entries identify one ordinary visible UIDL document.
+: _RUHA-D.TOKEN       ( entry -- a )       ;
+: _RUHA-D.SLOT-ID     ( entry -- a )   8 + ;
+: _RUHA-D.ROW         ( entry -- a )  16 + ;
+: _RUHA-D.COL         ( entry -- a )  24 + ;
+: _RUHA-D.HEIGHT      ( entry -- a )  32 + ;
+: _RUHA-D.WIDTH       ( entry -- a )  40 + ;
+: _RUHA-D.RECORD-OFF  ( entry -- a )  48 + ;
+: _RUHA-D.RECORD-U    ( entry -- a )  56 + ;
+: _RUHA-D.TEXT-OFF    ( entry -- a )  64 + ;
+: _RUHA-D.TEXT-U      ( entry -- a )  72 + ;
 
-96 CONSTANT RUHA-SNAPSHOT-SIZE
+80 CONSTANT RUHA-DOCUMENT-SIZE
+: RUHA-DOCUMENT-BYTES ( -- bytes ) RUHA-DOCUMENT-SIZE ;
+: RUHA-DOCUMENT-TOKEN@ ( entry -- u ) _RUHA-D.TOKEN @ ;
+: RUHA-DOCUMENT-SLOT-ID@ ( entry -- u ) _RUHA-D.SLOT-ID @ ;
+: RUHA-DOCUMENT-ROW@ ( entry -- u ) _RUHA-D.ROW @ ;
+: RUHA-DOCUMENT-COL@ ( entry -- u ) _RUHA-D.COL @ ;
+: RUHA-DOCUMENT-HEIGHT@ ( entry -- u ) _RUHA-D.HEIGHT @ ;
+: RUHA-DOCUMENT-WIDTH@ ( entry -- u ) _RUHA-D.WIDTH @ ;
+: RUHA-DOCUMENT-RECORD-OFFSET@ ( entry -- u ) _RUHA-D.RECORD-OFF @ ;
+: RUHA-DOCUMENT-RECORD-BYTES@ ( entry -- u ) _RUHA-D.RECORD-U @ ;
+: RUHA-DOCUMENT-TEXT-OFFSET@ ( entry -- u ) _RUHA-D.TEXT-OFF @ ;
+: RUHA-DOCUMENT-TEXT-BYTES@ ( entry -- u ) _RUHA-D.TEXT-U @ ;
+
+\ Snapshot metadata is pointer-bearing and call-borrowed.  Used fields are
+\ byte counts.  Directory geometry is absolute in the complete surface.
+: _RUHA-S.GENERATION ( snapshot -- a )       ;
+: _RUHA-S.DRAW-GENERATION ( snapshot -- a ) 8 + ;
+: _RUHA-S.DIRECTORY-A ( snapshot -- a ) 16 + ;
+: _RUHA-S.DIRECTORY-U ( snapshot -- a ) 24 + ;
+: _RUHA-S.RECORDS-A  ( snapshot -- a ) 32 + ;
+: _RUHA-S.RECORDS-U  ( snapshot -- a ) 40 + ;
+: _RUHA-S.TEXT-A     ( snapshot -- a ) 48 + ;
+: _RUHA-S.TEXT-U     ( snapshot -- a ) 56 + ;
+: _RUHA-S.DOCUMENT-COUNT ( snapshot -- a ) 64 + ;
+: _RUHA-S.RESERVED   ( snapshot -- a ) 72 + ;
+
+80 CONSTANT RUHA-SNAPSHOT-SIZE
 
 : RUHA-SNAPSHOT-BYTES  ( -- bytes )  RUHA-SNAPSHOT-SIZE ;
 : RUHA-SNAPSHOT-GENERATION@  ( snapshot -- generation )
     _RUHA-S.GENERATION @ ;
-: RUHA-SNAPSHOT-TOKEN@  ( snapshot -- token )  _RUHA-S.TOKEN @ ;
-: RUHA-SNAPSHOT-ROW@  ( snapshot -- row )  _RUHA-S.ROW @ ;
-: RUHA-SNAPSHOT-COL@  ( snapshot -- col )  _RUHA-S.COL @ ;
-: RUHA-SNAPSHOT-HEIGHT@  ( snapshot -- rows )  _RUHA-S.HEIGHT @ ;
-: RUHA-SNAPSHOT-WIDTH@  ( snapshot -- cols )  _RUHA-S.WIDTH @ ;
+: RUHA-SNAPSHOT-DRAW-GENERATION@ ( snapshot -- generation )
+    _RUHA-S.DRAW-GENERATION @ ;
+: RUHA-SNAPSHOT-DIRECTORY@ ( snapshot -- a u )
+    DUP _RUHA-S.DIRECTORY-A @ SWAP _RUHA-S.DIRECTORY-U @ ;
 : RUHA-SNAPSHOT-RECORDS@  ( snapshot -- a u )
     DUP _RUHA-S.RECORDS-A @ SWAP _RUHA-S.RECORDS-U @ ;
 : RUHA-SNAPSHOT-TEXT@  ( snapshot -- a u )
     DUP _RUHA-S.TEXT-A @ SWAP _RUHA-S.TEXT-U @ ;
+: RUHA-SNAPSHOT-DOCUMENT-COUNT@ ( snapshot -- u )
+    _RUHA-S.DOCUMENT-COUNT @ ;
 
-1 CONSTANT _RUHA-ABI
-0x3141485544495552 CONSTANT _RUHA-MAGIC  \ "RUIDUHA1"
+2 CONSTANT _RUHA-ABI
+0x3241485544495552 CONSTANT _RUHA-MAGIC  \ "RUIDUHA2"
 
 : _RUHA-A.MAGIC          ( adapter -- a )       ;
 : _RUHA-A.ABI            ( adapter -- a )   8 + ;
@@ -91,20 +117,24 @@ REQUIRE ../../utils/memory-span.f
 : _RUHA-A.WORK-U         ( adapter -- a )  72 + ;
 : _RUHA-A.WORK-TEXT-A    ( adapter -- a )  80 + ;
 : _RUHA-A.WORK-TEXT-U    ( adapter -- a )  88 + ;
-: _RUHA-A.SNAP-RECORDS-A ( adapter -- a )  96 + ;
-: _RUHA-A.SNAP-RECORDS-U ( adapter -- a ) 104 + ;
-: _RUHA-A.SNAP-RECORD-BANK-U ( adapter -- a ) 112 + ;
-: _RUHA-A.SNAP-TEXT-A    ( adapter -- a ) 120 + ;
-: _RUHA-A.SNAP-TEXT-U    ( adapter -- a ) 128 + ;
-: _RUHA-A.SNAP-TEXT-BANK-U ( adapter -- a ) 136 + ;
-: _RUHA-A.ACTIVE-BANK    ( adapter -- a ) 144 + ;
-: _RUHA-A.NEXT-TOKEN     ( adapter -- a ) 152 + ;
-: _RUHA-A.GENERATION     ( adapter -- a ) 160 + ;
-: _RUHA-A.LAST-STATUS    ( adapter -- a ) 168 + ;
-: _RUHA-A.INSTALLED      ( adapter -- a ) 176 + ;
-: _RUHA-A.RESERVED       ( adapter -- a ) 184 + ;
-: _RUHA-A.SNAPSHOT-A     ( adapter -- a ) 192 + ;
-: _RUHA-A.SNAPSHOT-B     ( adapter -- a ) 288 + ;
+: _RUHA-A.SNAP-DIRECTORY-A ( adapter -- a ) 96 + ;
+: _RUHA-A.SNAP-DIRECTORY-U ( adapter -- a ) 104 + ;
+: _RUHA-A.SNAP-DIRECTORY-BANK-U ( adapter -- a ) 112 + ;
+: _RUHA-A.SNAP-RECORDS-A ( adapter -- a ) 120 + ;
+: _RUHA-A.SNAP-RECORDS-U ( adapter -- a ) 128 + ;
+: _RUHA-A.SNAP-RECORD-BANK-U ( adapter -- a ) 136 + ;
+: _RUHA-A.SNAP-TEXT-A    ( adapter -- a ) 144 + ;
+: _RUHA-A.SNAP-TEXT-U    ( adapter -- a ) 152 + ;
+: _RUHA-A.SNAP-TEXT-BANK-U ( adapter -- a ) 160 + ;
+: _RUHA-A.ACTIVE-BANK    ( adapter -- a ) 168 + ;
+: _RUHA-A.NEXT-TOKEN     ( adapter -- a ) 176 + ;
+: _RUHA-A.GENERATION     ( adapter -- a ) 184 + ;
+: _RUHA-A.LAST-STATUS    ( adapter -- a ) 192 + ;
+: _RUHA-A.LAST-DRAW      ( adapter -- a ) 200 + ;
+: _RUHA-A.INSTALLED      ( adapter -- a ) 208 + ;
+: _RUHA-A.RESERVED       ( adapter -- a ) 216 + ;
+: _RUHA-A.SNAPSHOT-A     ( adapter -- a ) 224 + ;
+: _RUHA-A.SNAPSHOT-B     ( adapter -- a ) 304 + ;
 
 384 CONSTANT RUHA-SIZE
 
@@ -142,6 +172,16 @@ REQUIRE ../../utils/memory-span.f
     DUP _RUHA-A.WORK-U @ UMSN-WORK-ENTRY-SIZE MOD IF DROP 0 EXIT THEN
     DUP _RUHA-A.WORK-TEXT-A @ OVER _RUHA-A.WORK-TEXT-U @
         _RUHA-BYTE-SPAN? 0= IF DROP 0 EXIT THEN
+    DUP _RUHA-A.SNAP-DIRECTORY-A @ OVER _RUHA-A.SNAP-DIRECTORY-U @
+        _RUHA-SPAN? 0= IF DROP 0 EXIT THEN
+    DUP _RUHA-A.SNAP-DIRECTORY-U @ 2 MOD IF DROP 0 EXIT THEN
+    DUP _RUHA-A.SNAP-DIRECTORY-BANK-U @ 2 *
+        OVER _RUHA-A.SNAP-DIRECTORY-U @ <> IF DROP 0 EXIT THEN
+    DUP _RUHA-A.SNAP-DIRECTORY-BANK-U @ RUHA-DOCUMENT-SIZE MOD IF
+        DROP 0 EXIT
+    THEN
+    DUP _RUHA-A.SNAP-DIRECTORY-BANK-U @ RUHA-DOCUMENT-SIZE /
+        OVER _RUHA-A.CAPACITY @ <> IF DROP 0 EXIT THEN
     DUP _RUHA-A.SNAP-RECORDS-A @ OVER _RUHA-A.SNAP-RECORDS-U @
         _RUHA-SPAN? 0= IF DROP 0 EXIT THEN
     DUP _RUHA-A.SNAP-RECORDS-U @ 2 MOD IF DROP 0 EXIT THEN
@@ -167,13 +207,17 @@ REQUIRE ../../utils/memory-span.f
 : _RUHA-SNAPSHOT-AT  ( bank adapter -- snapshot )
     SWAP IF _RUHA-A.SNAPSHOT-B ELSE _RUHA-A.SNAPSHOT-A THEN ;
 
+: _RUHA-SNAPSHOT-DIRECTORY-A ( bank adapter -- a )
+    DUP _RUHA-A.SNAP-DIRECTORY-BANK-U @ 2 PICK *
+    SWAP _RUHA-A.SNAP-DIRECTORY-A @ + NIP ;
+
 : _RUHA-SNAPSHOT-RECORD-A  ( bank adapter -- a )
-    DUP _RUHA-A.SNAP-RECORDS-A @ >R
-    _RUHA-A.SNAP-RECORD-BANK-U @ * R> + ;
+    DUP _RUHA-A.SNAP-RECORD-BANK-U @ 2 PICK *
+    SWAP _RUHA-A.SNAP-RECORDS-A @ + NIP ;
 
 : _RUHA-SNAPSHOT-TEXT-A  ( bank adapter -- a )
-    DUP _RUHA-A.SNAP-TEXT-A @ >R
-    _RUHA-A.SNAP-TEXT-BANK-U @ * R> + ;
+    DUP _RUHA-A.SNAP-TEXT-BANK-U @ 2 PICK *
+    SWAP _RUHA-A.SNAP-TEXT-A @ + NIP ;
 
 \ =====================================================================
 \  Construction
@@ -185,6 +229,8 @@ VARIABLE _RUHA-I-WORK-A
 VARIABLE _RUHA-I-WORK-U
 VARIABLE _RUHA-I-WORK-TEXT-A
 VARIABLE _RUHA-I-WORK-TEXT-U
+VARIABLE _RUHA-I-SNAP-DIRECTORY-A
+VARIABLE _RUHA-I-SNAP-DIRECTORY-U
 VARIABLE _RUHA-I-SNAP-RECORDS-A
 VARIABLE _RUHA-I-SNAP-RECORDS-U
 VARIABLE _RUHA-I-SNAP-TEXT-A
@@ -197,6 +243,9 @@ VARIABLE _RUHA-I-ADAPTER
     _RUHA-I-RECORDS-A @ _RUHA-I-RECORDS-U @
     _RUHA-I-WORK-TEXT-A @ _RUHA-I-WORK-TEXT-U @ _RUHA-DISJOINT? AND
     _RUHA-I-RECORDS-A @ _RUHA-I-RECORDS-U @
+    _RUHA-I-SNAP-DIRECTORY-A @ _RUHA-I-SNAP-DIRECTORY-U @
+        _RUHA-DISJOINT? AND
+    _RUHA-I-RECORDS-A @ _RUHA-I-RECORDS-U @
     _RUHA-I-SNAP-RECORDS-A @ _RUHA-I-SNAP-RECORDS-U @
         _RUHA-DISJOINT? AND
     _RUHA-I-RECORDS-A @ _RUHA-I-RECORDS-U @
@@ -204,14 +253,25 @@ VARIABLE _RUHA-I-ADAPTER
     _RUHA-I-WORK-A @ _RUHA-I-WORK-U @
     _RUHA-I-WORK-TEXT-A @ _RUHA-I-WORK-TEXT-U @ _RUHA-DISJOINT? AND
     _RUHA-I-WORK-A @ _RUHA-I-WORK-U @
+    _RUHA-I-SNAP-DIRECTORY-A @ _RUHA-I-SNAP-DIRECTORY-U @
+        _RUHA-DISJOINT? AND
+    _RUHA-I-WORK-A @ _RUHA-I-WORK-U @
     _RUHA-I-SNAP-RECORDS-A @ _RUHA-I-SNAP-RECORDS-U @
         _RUHA-DISJOINT? AND
     _RUHA-I-WORK-A @ _RUHA-I-WORK-U @
     _RUHA-I-SNAP-TEXT-A @ _RUHA-I-SNAP-TEXT-U @ _RUHA-DISJOINT? AND
     _RUHA-I-WORK-TEXT-A @ _RUHA-I-WORK-TEXT-U @
+    _RUHA-I-SNAP-DIRECTORY-A @ _RUHA-I-SNAP-DIRECTORY-U @
+        _RUHA-DISJOINT? AND
+    _RUHA-I-WORK-TEXT-A @ _RUHA-I-WORK-TEXT-U @
     _RUHA-I-SNAP-RECORDS-A @ _RUHA-I-SNAP-RECORDS-U @
         _RUHA-DISJOINT? AND
     _RUHA-I-WORK-TEXT-A @ _RUHA-I-WORK-TEXT-U @
+    _RUHA-I-SNAP-TEXT-A @ _RUHA-I-SNAP-TEXT-U @ _RUHA-DISJOINT? AND
+    _RUHA-I-SNAP-DIRECTORY-A @ _RUHA-I-SNAP-DIRECTORY-U @
+    _RUHA-I-SNAP-RECORDS-A @ _RUHA-I-SNAP-RECORDS-U @
+        _RUHA-DISJOINT? AND
+    _RUHA-I-SNAP-DIRECTORY-A @ _RUHA-I-SNAP-DIRECTORY-U @
     _RUHA-I-SNAP-TEXT-A @ _RUHA-I-SNAP-TEXT-U @ _RUHA-DISJOINT? AND
     _RUHA-I-SNAP-RECORDS-A @ _RUHA-I-SNAP-RECORDS-U @
     _RUHA-I-SNAP-TEXT-A @ _RUHA-I-SNAP-TEXT-U @ _RUHA-DISJOINT? AND ;
@@ -223,6 +283,9 @@ VARIABLE _RUHA-I-ADAPTER
     _RUHA-I-WORK-A @ _RUHA-I-WORK-U @ _RUHA-DISJOINT? AND
     _RUHA-I-ADAPTER @ RUHA-SIZE
     _RUHA-I-WORK-TEXT-A @ _RUHA-I-WORK-TEXT-U @ _RUHA-DISJOINT? AND
+    _RUHA-I-ADAPTER @ RUHA-SIZE
+    _RUHA-I-SNAP-DIRECTORY-A @ _RUHA-I-SNAP-DIRECTORY-U @
+        _RUHA-DISJOINT? AND
     _RUHA-I-ADAPTER @ RUHA-SIZE
     _RUHA-I-SNAP-RECORDS-A @ _RUHA-I-SNAP-RECORDS-U @
         _RUHA-DISJOINT? AND
@@ -239,6 +302,14 @@ VARIABLE _RUHA-I-ADAPTER
     _RUHA-I-WORK-U @ UMSN-WORK-ENTRY-SIZE MOD IF 0 EXIT THEN
     _RUHA-I-WORK-TEXT-A @ _RUHA-I-WORK-TEXT-U @
         _RUHA-BYTE-SPAN? 0= IF 0 EXIT THEN
+    _RUHA-I-SNAP-DIRECTORY-A @ _RUHA-I-SNAP-DIRECTORY-U @
+        _RUHA-SPAN? 0= IF 0 EXIT THEN
+    _RUHA-I-SNAP-DIRECTORY-U @ DUP 2 MOD IF DROP 0 EXIT THEN
+    2 / DUP 0= IF DROP 0 EXIT THEN
+    DUP RUHA-DOCUMENT-SIZE MOD IF DROP 0 EXIT THEN
+    RUHA-DOCUMENT-SIZE / _RUHA-I-RECORDS-U @ RUHA-RECORD-SIZE / <> IF
+        0 EXIT
+    THEN
     _RUHA-I-SNAP-RECORDS-A @ _RUHA-I-SNAP-RECORDS-U @
         _RUHA-SPAN? 0= IF 0 EXIT THEN
     _RUHA-I-SNAP-RECORDS-U @ DUP 2 MOD IF DROP 0 EXIT THEN
@@ -255,15 +326,17 @@ VARIABLE _RUHA-I-ADAPTER
     0 _RUHA-I-RECORDS-A ! 0 _RUHA-I-RECORDS-U !
     0 _RUHA-I-WORK-A ! 0 _RUHA-I-WORK-U !
     0 _RUHA-I-WORK-TEXT-A ! 0 _RUHA-I-WORK-TEXT-U !
+    0 _RUHA-I-SNAP-DIRECTORY-A ! 0 _RUHA-I-SNAP-DIRECTORY-U !
     0 _RUHA-I-SNAP-RECORDS-A ! 0 _RUHA-I-SNAP-RECORDS-U !
     0 _RUHA-I-SNAP-TEXT-A ! 0 _RUHA-I-SNAP-TEXT-U !
     0 _RUHA-I-ADAPTER ! ;
 
 : RUHA-INIT
-    ( records-a records-u work-a work-u work-text-a work-text-u snapshot-records-a snapshot-records-u snapshot-text-a snapshot-text-u adapter -- status )
+    ( records-a records-u work-a work-u work-text-a work-text-u snapshot-directory-a snapshot-directory-u snapshot-records-a snapshot-records-u snapshot-text-a snapshot-text-u adapter -- status )
     _RUHA-I-ADAPTER !
     _RUHA-I-SNAP-TEXT-U ! _RUHA-I-SNAP-TEXT-A !
     _RUHA-I-SNAP-RECORDS-U ! _RUHA-I-SNAP-RECORDS-A !
+    _RUHA-I-SNAP-DIRECTORY-U ! _RUHA-I-SNAP-DIRECTORY-A !
     _RUHA-I-WORK-TEXT-U ! _RUHA-I-WORK-TEXT-A !
     _RUHA-I-WORK-U ! _RUHA-I-WORK-A !
     _RUHA-I-RECORDS-U ! _RUHA-I-RECORDS-A !
@@ -272,6 +345,7 @@ VARIABLE _RUHA-I-ADAPTER
     _RUHA-I-RECORDS-A @ _RUHA-I-RECORDS-U @ 0 FILL
     _RUHA-I-WORK-A @ _RUHA-I-WORK-U @ 0 FILL
     _RUHA-I-WORK-TEXT-A @ _RUHA-I-WORK-TEXT-U @ 0 FILL
+    _RUHA-I-SNAP-DIRECTORY-A @ _RUHA-I-SNAP-DIRECTORY-U @ 0 FILL
     _RUHA-I-SNAP-RECORDS-A @ _RUHA-I-SNAP-RECORDS-U @ 0 FILL
     _RUHA-I-SNAP-TEXT-A @ _RUHA-I-SNAP-TEXT-U @ 0 FILL
     _RUHA-I-ADAPTER @ RUHA-SIZE 0 FILL
@@ -288,6 +362,9 @@ VARIABLE _RUHA-I-ADAPTER
     _RUHA-I-WORK-U @ OVER _RUHA-A.WORK-U !
     _RUHA-I-WORK-TEXT-A @ OVER _RUHA-A.WORK-TEXT-A !
     _RUHA-I-WORK-TEXT-U @ OVER _RUHA-A.WORK-TEXT-U !
+    _RUHA-I-SNAP-DIRECTORY-A @ OVER _RUHA-A.SNAP-DIRECTORY-A !
+    _RUHA-I-SNAP-DIRECTORY-U @ OVER _RUHA-A.SNAP-DIRECTORY-U !
+    _RUHA-I-SNAP-DIRECTORY-U @ 2 / OVER _RUHA-A.SNAP-DIRECTORY-BANK-U !
     _RUHA-I-SNAP-RECORDS-A @ OVER _RUHA-A.SNAP-RECORDS-A !
     _RUHA-I-SNAP-RECORDS-U @ OVER _RUHA-A.SNAP-RECORDS-U !
     _RUHA-I-SNAP-RECORDS-U @ 2 / OVER _RUHA-A.SNAP-RECORD-BANK-U !
@@ -306,6 +383,8 @@ VARIABLE _RUHA-I-ADAPTER
 
 VARIABLE _RUHA-CHECK-SLOT
 VARIABLE _RUHA-CHECK-HOST
+VARIABLE _RUHA-CHECK-RECORD
+VARIABLE _RUHA-CHECK-ADAPTER
 
 : _RUHA-HOST-HAS-SLOT?  ( slot host -- flag )
     _RUHA-CHECK-HOST ! _RUHA-CHECK-SLOT !
@@ -339,36 +418,29 @@ VARIABLE _RUHA-L-MATCHES
     _RUHA-L-RECORD @ RUHA-S-OK ;
 
 : _RUHA-RECORD-IDENTITY?  ( record adapter -- flag )
-    >R
-    DUP _RUHA-R.SLOT @ DUP R@ _RUHA-A.HOST @
-        _RUHA-HOST-HAS-SLOT? 0= IF 2DROP R> DROP 0 EXIT THEN
-    DUP AHS.ID @ 2 PICK _RUHA-R.SLOT-ID @ =
-    OVER AHS.UCTX @ 3 PICK _RUHA-R.UCTX @ = AND
+    _RUHA-CHECK-ADAPTER ! _RUHA-CHECK-RECORD !
+    _RUHA-CHECK-RECORD @ _RUHA-R.SLOT @ DUP
+    _RUHA-CHECK-ADAPTER @ _RUHA-A.HOST @
+        _RUHA-HOST-HAS-SLOT? 0= IF DROP 0 EXIT THEN
+    DUP AHS.ID @ _RUHA-CHECK-RECORD @ _RUHA-R.SLOT-ID @ =
+    OVER AHS.UCTX @ _RUHA-CHECK-RECORD @ _RUHA-R.UCTX @ = AND
     OVER AHS.HAS-UIDL @ 0<> AND
-    OVER AHS-CALLABLE? AND
-    NIP NIP R> DROP ;
+    SWAP AHS-CALLABLE? AND ;
 
-: _RUHA-RECORD-SELECTED?  ( record adapter -- flag )
+: _RUHA-RECORD-VISIBLE?  ( record adapter -- flag )
     2DUP _RUHA-RECORD-IDENTITY? 0= IF 2DROP 0 EXIT THEN
-    >R
+    DROP
     DUP _RUHA-R.STATE @ _RUHA-RECORD-ATTACHED =
     OVER _RUHA-R.VISIBLE @ 0<> AND
     OVER _RUHA-R.SLOT @ AHS-VISIBLE? AND
-    OVER _RUHA-R.SLOT @ R@ _RUHA-A.HOST @ AHOST.FOCUS @ = AND
-    NIP R> DROP ;
+    NIP ;
 
-VARIABLE _RUHA-IT-TOKEN
 VARIABLE _RUHA-IT-ADAPTER
-VARIABLE _RUHA-IT-BANK
 
-: _RUHA-INVALIDATE-TOKEN  ( token adapter -- )
-    _RUHA-IT-ADAPTER ! _RUHA-IT-TOKEN !
-    _RUHA-IT-ADAPTER @ _RUHA-A.ACTIVE-BANK @ DUP 0< IF DROP EXIT THEN
-    _RUHA-IT-BANK !
-    _RUHA-IT-BANK @ _RUHA-IT-ADAPTER @ _RUHA-SNAPSHOT-AT
-        _RUHA-S.TOKEN @ _RUHA-IT-TOKEN @ = IF
-        -1 _RUHA-IT-ADAPTER @ _RUHA-A.ACTIVE-BANK !
-    THEN ;
+: _RUHA-INVALIDATE ( adapter -- )
+    _RUHA-IT-ADAPTER !
+    -1 _RUHA-IT-ADAPTER @ _RUHA-A.ACTIVE-BANK !
+    RUHA-S-STALE _RUHA-IT-ADAPTER @ _RUHA-A.LAST-STATUS ! ;
 
 \ =====================================================================
 \  UCTX projection callbacks
@@ -416,6 +488,7 @@ VARIABLE _RUHA-A-FREE
     _RUHA-A-SLOT @ AHS.ID @ _RUHA-A-FREE @ _RUHA-R.SLOT-ID !
     _RUHA-A-SLOT @ AHS.UCTX @ _RUHA-A-FREE @ _RUHA-R.UCTX !
     _RUHA-RECORD-ATTACHED _RUHA-A-FREE @ _RUHA-R.STATE !
+    _RUHA-A-ADAPTER @ _RUHA-INVALIDATE
     RUHA-S-OK ;
 
 VARIABLE _RUHA-RL-VISIBLE
@@ -437,7 +510,7 @@ VARIABLE _RUHA-RL-WIDTH
         _RUHA-RECORD-ATTACHED <> IF RUHA-S-STALE EXIT THEN
     _RUHA-RL-RECORD @ _RUHA-RL-ADAPTER @
         _RUHA-RECORD-IDENTITY? 0= IF RUHA-S-STALE EXIT THEN
-    _RUHA-RL-TOKEN @ _RUHA-RL-ADAPTER @ _RUHA-INVALIDATE-TOKEN
+    _RUHA-RL-ADAPTER @ _RUHA-INVALIDATE
     _RUHA-RL-VISIBLE @ 0= IF
         0 _RUHA-RL-RECORD @ _RUHA-R.VISIBLE !
         0 _RUHA-RL-RECORD @ _RUHA-R.REGION !
@@ -471,12 +544,6 @@ VARIABLE _RUHA-RL-WIDTH
 VARIABLE _RUHA-P-TOKEN
 VARIABLE _RUHA-P-ADAPTER
 VARIABLE _RUHA-P-RECORD
-VARIABLE _RUHA-P-BANK
-VARIABLE _RUHA-P-GENERATION
-VARIABLE _RUHA-P-COUNT
-VARIABLE _RUHA-P-TEXT-U
-VARIABLE _RUHA-P-STATUS
-
 : _RUHA-NEXT-GENERATION  ( adapter -- generation|0 )
     DUP _RUHA-A.GENERATION @ 1+ DUP 0= IF 2DROP 0 EXIT THEN
     NIP ;
@@ -487,52 +554,8 @@ VARIABLE _RUHA-P-STATUS
     DUP RUHA-S-OK <> IF NIP EXIT THEN DROP _RUHA-P-RECORD !
     _RUHA-P-RECORD @ _RUHA-P-ADAPTER @
         _RUHA-RECORD-IDENTITY? 0= IF RUHA-S-STALE EXIT THEN
-    _RUHA-P-RECORD @ _RUHA-P-ADAPTER @
-        _RUHA-RECORD-SELECTED? 0= IF RUHA-S-OK EXIT THEN
-    _RUHA-P-ADAPTER @ _RUHA-A.ACTIVE-BANK @ 0= IF 1 ELSE 0 THEN
-        _RUHA-P-BANK !
-    _RUHA-P-ADAPTER @ _RUHA-NEXT-GENERATION DUP 0= IF
-        DROP RUHA-S-UNAVAILABLE EXIT
-    THEN _RUHA-P-GENERATION !
-
-    _RUHA-P-GENERATION @
-    _RUHA-P-ADAPTER @ _RUHA-A.WORK-A @
-    _RUHA-P-ADAPTER @ _RUHA-A.WORK-U @
-    _RUHA-P-ADAPTER @ _RUHA-A.WORK-TEXT-A @
-    _RUHA-P-ADAPTER @ _RUHA-A.WORK-TEXT-U @
-    _RUHA-P-BANK @ _RUHA-P-ADAPTER @ _RUHA-SNAPSHOT-RECORD-A
-    _RUHA-P-ADAPTER @ _RUHA-A.SNAP-RECORD-BANK-U @
-    _RUHA-P-BANK @ _RUHA-P-ADAPTER @ _RUHA-SNAPSHOT-TEXT-A
-    _RUHA-P-ADAPTER @ _RUHA-A.SNAP-TEXT-BANK-U @
-    UMSN-CAPTURE
-    _RUHA-P-STATUS ! _RUHA-P-TEXT-U ! _RUHA-P-COUNT !
-    _RUHA-P-STATUS @ UMSN-S-OK <> IF
-        _RUHA-P-STATUS @ UMSN-S-INVALID = IF
-            RUHA-S-INVALID
-        ELSE
-            RUHA-S-UNAVAILABLE
-        THEN
-        DUP _RUHA-P-ADAPTER @ _RUHA-A.LAST-STATUS ! EXIT
-    THEN
-
-    _RUHA-P-BANK @ _RUHA-P-ADAPTER @ _RUHA-SNAPSHOT-AT
-    DUP RUHA-SNAPSHOT-SIZE 0 FILL
-    _RUHA-P-GENERATION @ OVER _RUHA-S.GENERATION !
-    _RUHA-P-TOKEN @ OVER _RUHA-S.TOKEN !
-    _RUHA-P-RECORD @ _RUHA-R.ROW @ OVER _RUHA-S.ROW !
-    _RUHA-P-RECORD @ _RUHA-R.COL @ OVER _RUHA-S.COL !
-    _RUHA-P-RECORD @ _RUHA-R.HEIGHT @ OVER _RUHA-S.HEIGHT !
-    _RUHA-P-RECORD @ _RUHA-R.WIDTH @ OVER _RUHA-S.WIDTH !
-    _RUHA-P-BANK @ _RUHA-P-ADAPTER @ _RUHA-SNAPSHOT-RECORD-A
-        OVER _RUHA-S.RECORDS-A !
-    _RUHA-P-COUNT @ UMSN-RECORD-SIZE * OVER _RUHA-S.RECORDS-U !
-    _RUHA-P-BANK @ _RUHA-P-ADAPTER @ _RUHA-SNAPSHOT-TEXT-A
-        OVER _RUHA-S.TEXT-A !
-    _RUHA-P-TEXT-U @ OVER _RUHA-S.TEXT-U !
-    _RUHA-P-RECORD @ _RUHA-R.SLOT-ID @ SWAP _RUHA-S.SLOT-ID !
-    _RUHA-P-GENERATION @ _RUHA-P-ADAPTER @ _RUHA-A.GENERATION !
-    _RUHA-P-BANK @ _RUHA-P-ADAPTER @ _RUHA-A.ACTIVE-BANK !
-    RUHA-S-OK DUP _RUHA-P-ADAPTER @ _RUHA-A.LAST-STATUS ! ;
+    _RUHA-P-ADAPTER @ _RUHA-INVALIDATE
+    RUHA-S-OK ;
 
 VARIABLE _RUHA-Q-TOKEN
 VARIABLE _RUHA-Q-ADAPTER
@@ -545,7 +568,7 @@ VARIABLE _RUHA-Q-RECORD
     _RUHA-Q-RECORD @ _RUHA-R.STATE @ DUP
         _RUHA-RECORD-QUIESCED = IF DROP RUHA-S-OK EXIT THEN
     _RUHA-RECORD-ATTACHED <> IF RUHA-S-STALE EXIT THEN
-    _RUHA-Q-TOKEN @ _RUHA-Q-ADAPTER @ _RUHA-INVALIDATE-TOKEN
+    _RUHA-Q-ADAPTER @ _RUHA-INVALIDATE
     _RUHA-RECORD-QUIESCED _RUHA-Q-RECORD @ _RUHA-R.STATE !
     RUHA-S-OK ;
 
@@ -555,7 +578,7 @@ VARIABLE _RUHA-Q-RECORD
     DUP RUHA-S-OK <> IF NIP EXIT THEN DROP _RUHA-Q-RECORD !
     _RUHA-Q-RECORD @ _RUHA-R.STATE @
         _RUHA-RECORD-QUIESCED <> IF RUHA-S-STALE EXIT THEN
-    _RUHA-Q-TOKEN @ _RUHA-Q-ADAPTER @ _RUHA-INVALIDATE-TOKEN
+    _RUHA-Q-ADAPTER @ _RUHA-INVALIDATE
     _RUHA-Q-RECORD @ RUHA-RECORD-SIZE 0 FILL
     RUHA-S-OK ;
 
@@ -615,15 +638,183 @@ VARIABLE _RUHA-AF-ADAPTER
     OVER AHOST.UIDL-READY-CONTEXT @
         OVER <> IF 2DROP RUHA-S-STALE EXIT THEN
     0 0 3 PICK AHOST-UIDL-READY!
-    -1 OVER _RUHA-A.ACTIVE-BANK !
+    DUP _RUHA-INVALIDATE
     0 SWAP _RUHA-A.HOST ! DROP
     RUHA-S-OK ;
 
-: RUHA-SNAPSHOT@  ( adapter -- snapshot status )
-    DUP RUHA-VALID? 0= IF DROP 0 RUHA-S-INVALID EXIT THEN
-    DUP _RUHA-A.ACTIVE-BANK @ DUP 0< IF
-        2DROP 0 RUHA-S-UNAVAILABLE EXIT
+\ =====================================================================
+\  Completed-draw aggregate capture
+\ =====================================================================
+
+: RUHA-DOCUMENT-CAPACITY@ ( adapter -- count )
+    _RUHA-A.SNAP-DIRECTORY-BANK-U @ RUHA-DOCUMENT-SIZE / ;
+
+VARIABLE _RUHA-B-ADAPTER
+VARIABLE _RUHA-B-DRAW
+VARIABLE _RUHA-B-BANK
+VARIABLE _RUHA-B-GENERATION
+VARIABLE _RUHA-B-ORIGINAL-CTX
+VARIABLE _RUHA-B-RECORD
+VARIABLE _RUHA-B-DIRECTORY-A
+VARIABLE _RUHA-B-RECORDS-A
+VARIABLE _RUHA-B-TEXT-A
+VARIABLE _RUHA-B-DIRECTORY-U
+VARIABLE _RUHA-B-RECORDS-U
+VARIABLE _RUHA-B-TEXT-U
+VARIABLE _RUHA-B-DOCUMENTS
+VARIABLE _RUHA-B-COUNT
+VARIABLE _RUHA-B-CAPTURE-TEXT-U
+VARIABLE _RUHA-B-STATUS
+VARIABLE _RUHA-B-ENTRY
+
+: _RUHA-B-MAP-STATUS ( umsn-status -- ruha-status )
+    DUP UMSN-S-CAPACITY = IF DROP RUHA-S-CAPACITY EXIT THEN
+    DUP UMSN-S-INVALID = IF DROP RUHA-S-INVALID EXIT THEN
+    DROP RUHA-S-UNAVAILABLE ;
+
+: _RUHA-B-CAPTURE-RECORD ( record -- status )
+    _RUHA-B-RECORD !
+    _RUHA-B-RECORD @ _RUHA-B-ADAPTER @ _RUHA-RECORD-VISIBLE? 0= IF
+        RUHA-S-OK EXIT
     THEN
-    SWAP _RUHA-SNAPSHOT-AT
-    DUP _RUHA-S.GENERATION @ 0= IF DROP 0 RUHA-S-INVALID EXIT THEN
+    _RUHA-B-DIRECTORY-U @ RUHA-DOCUMENT-SIZE +
+        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-DIRECTORY-BANK-U @ > IF
+        RUHA-S-CAPACITY EXIT
+    THEN
+    _RUHA-B-RECORDS-U @
+        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-RECORD-BANK-U @ > IF
+        RUHA-S-INVALID EXIT
+    THEN
+    _RUHA-B-TEXT-U @
+        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-TEXT-BANK-U @ > IF
+        RUHA-S-INVALID EXIT
+    THEN
+    _RUHA-B-RECORD @ _RUHA-R.UCTX @ ASHELL-CTX-SWITCH
+    _RUHA-B-GENERATION @
+    _RUHA-B-ADAPTER @ _RUHA-A.WORK-A @
+    _RUHA-B-ADAPTER @ _RUHA-A.WORK-U @
+    _RUHA-B-ADAPTER @ _RUHA-A.WORK-TEXT-A @
+    _RUHA-B-ADAPTER @ _RUHA-A.WORK-TEXT-U @
+    _RUHA-B-RECORDS-A @ _RUHA-B-RECORDS-U @ +
+    _RUHA-B-ADAPTER @ _RUHA-A.SNAP-RECORD-BANK-U @
+        _RUHA-B-RECORDS-U @ -
+    _RUHA-B-TEXT-A @ _RUHA-B-TEXT-U @ +
+    _RUHA-B-ADAPTER @ _RUHA-A.SNAP-TEXT-BANK-U @
+        _RUHA-B-TEXT-U @ -
+    UMSN-CAPTURE
+    _RUHA-B-STATUS ! _RUHA-B-CAPTURE-TEXT-U ! _RUHA-B-COUNT !
+    _RUHA-B-STATUS @ UMSN-S-OK <> IF
+        _RUHA-B-STATUS @ _RUHA-B-MAP-STATUS EXIT
+    THEN
+    _RUHA-B-COUNT @ 0= IF RUHA-S-OK EXIT THEN
+    _RUHA-B-COUNT @ UMSN-RECORD-SIZE * DUP
+    _RUHA-B-RECORDS-U @ +
+        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-RECORD-BANK-U @ > IF
+        DROP RUHA-S-INVALID EXIT
+    THEN DROP
+    _RUHA-B-CAPTURE-TEXT-U @ _RUHA-B-TEXT-U @ +
+        _RUHA-B-ADAPTER @ _RUHA-A.SNAP-TEXT-BANK-U @ > IF
+        RUHA-S-INVALID EXIT
+    THEN
+    _RUHA-B-DIRECTORY-A @ _RUHA-B-DIRECTORY-U @ + DUP
+        _RUHA-B-ENTRY ! RUHA-DOCUMENT-SIZE 0 FILL
+    _RUHA-B-RECORD @ _RUHA-R.TOKEN @ _RUHA-B-ENTRY @ _RUHA-D.TOKEN !
+    _RUHA-B-RECORD @ _RUHA-R.SLOT-ID @ _RUHA-B-ENTRY @ _RUHA-D.SLOT-ID !
+    _RUHA-B-RECORD @ _RUHA-R.ROW @ _RUHA-B-ENTRY @ _RUHA-D.ROW !
+    _RUHA-B-RECORD @ _RUHA-R.COL @ _RUHA-B-ENTRY @ _RUHA-D.COL !
+    _RUHA-B-RECORD @ _RUHA-R.HEIGHT @ _RUHA-B-ENTRY @ _RUHA-D.HEIGHT !
+    _RUHA-B-RECORD @ _RUHA-R.WIDTH @ _RUHA-B-ENTRY @ _RUHA-D.WIDTH !
+    _RUHA-B-RECORDS-U @ _RUHA-B-ENTRY @ _RUHA-D.RECORD-OFF !
+    _RUHA-B-COUNT @ UMSN-RECORD-SIZE * DUP
+        _RUHA-B-ENTRY @ _RUHA-D.RECORD-U ! _RUHA-B-RECORDS-U +!
+    _RUHA-B-TEXT-U @ _RUHA-B-ENTRY @ _RUHA-D.TEXT-OFF !
+    _RUHA-B-CAPTURE-TEXT-U @ DUP
+        _RUHA-B-ENTRY @ _RUHA-D.TEXT-U ! _RUHA-B-TEXT-U +!
+    RUHA-DOCUMENT-SIZE _RUHA-B-DIRECTORY-U +!
+    1 _RUHA-B-DOCUMENTS +!
     RUHA-S-OK ;
+
+: _RUHA-B-CAPTURE ( -- status )
+    RUHA-S-OK _RUHA-B-STATUS !
+    _RUHA-B-ADAPTER @ _RUHA-A.CAPACITY @ 0 ?DO
+        I _RUHA-B-ADAPTER @ _RUHA-RECORD-AT _RUHA-B-CAPTURE-RECORD
+        DUP RUHA-S-OK <> IF _RUHA-B-STATUS ! LEAVE THEN DROP
+    LOOP
+    _RUHA-B-STATUS @ ;
+
+: _RUHA-B-RESTORE ( -- )
+    _RUHA-B-ORIGINAL-CTX @ ASHELL-CTX-SWITCH ;
+
+: _RUHA-B-PUBLISH ( -- snapshot status )
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-AT
+    DUP RUHA-SNAPSHOT-SIZE 0 FILL
+    _RUHA-B-GENERATION @ OVER _RUHA-S.GENERATION !
+    _RUHA-B-DRAW @ OVER _RUHA-S.DRAW-GENERATION !
+    _RUHA-B-DIRECTORY-A @ OVER _RUHA-S.DIRECTORY-A !
+    _RUHA-B-DIRECTORY-U @ OVER _RUHA-S.DIRECTORY-U !
+    _RUHA-B-RECORDS-A @ OVER _RUHA-S.RECORDS-A !
+    _RUHA-B-RECORDS-U @ OVER _RUHA-S.RECORDS-U !
+    _RUHA-B-TEXT-A @ OVER _RUHA-S.TEXT-A !
+    _RUHA-B-TEXT-U @ OVER _RUHA-S.TEXT-U !
+    _RUHA-B-DOCUMENTS @ OVER _RUHA-S.DOCUMENT-COUNT !
+    _RUHA-B-GENERATION @ _RUHA-B-ADAPTER @ _RUHA-A.GENERATION !
+    RUHA-S-OK _RUHA-B-ADAPTER @ _RUHA-A.LAST-STATUS !
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-A.ACTIVE-BANK !
+    RUHA-S-OK ;
+
+: RUHA-SNAPSHOT-FOR@ ( draw-generation adapter -- snapshot status )
+    _RUHA-B-ADAPTER ! _RUHA-B-DRAW !
+    _RUHA-B-ADAPTER @ RUHA-VALID? 0= IF 0 RUHA-S-INVALID EXIT THEN
+    _RUHA-B-DRAW @ 0= IF 0 RUHA-S-INVALID EXIT THEN
+    _RUHA-B-DRAW @ _RUHA-B-ADAPTER @ _RUHA-A.LAST-DRAW @ = IF
+        _RUHA-B-ADAPTER @ _RUHA-A.LAST-STATUS @ DUP RUHA-S-OK <> IF
+            0 SWAP EXIT
+        THEN DROP
+        _RUHA-B-ADAPTER @ _RUHA-A.ACTIVE-BANK @ DUP 0< IF
+            DROP 0 RUHA-S-STALE EXIT
+        THEN
+        _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-AT
+        DUP _RUHA-S.DRAW-GENERATION @ _RUHA-B-DRAW @ <> IF
+            DROP 0 RUHA-S-STALE EXIT
+        THEN
+        DUP _RUHA-S.GENERATION @
+            _RUHA-B-ADAPTER @ _RUHA-A.GENERATION @ <> IF
+            DROP 0 RUHA-S-STALE EXIT
+        THEN
+        RUHA-S-OK EXIT
+    THEN
+    _RUHA-B-DRAW @ _RUHA-B-ADAPTER @ _RUHA-A.LAST-DRAW !
+    RUHA-S-INVALID _RUHA-B-ADAPTER @ _RUHA-A.LAST-STATUS !
+    _RUHA-B-ADAPTER @ _RUHA-A.ACTIVE-BANK @ 0= IF 1 ELSE 0 THEN
+        _RUHA-B-BANK !
+    _RUHA-B-ADAPTER @ _RUHA-NEXT-GENERATION DUP 0= IF
+        DROP RUHA-S-UNAVAILABLE
+        DUP _RUHA-B-ADAPTER @ _RUHA-A.LAST-STATUS !
+        0 SWAP EXIT
+    THEN _RUHA-B-GENERATION !
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-DIRECTORY-A
+        _RUHA-B-DIRECTORY-A !
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-RECORD-A
+        _RUHA-B-RECORDS-A !
+    _RUHA-B-BANK @ _RUHA-B-ADAPTER @ _RUHA-SNAPSHOT-TEXT-A
+        _RUHA-B-TEXT-A !
+    0 _RUHA-B-DIRECTORY-U ! 0 _RUHA-B-RECORDS-U !
+    0 _RUHA-B-TEXT-U ! 0 _RUHA-B-DOCUMENTS !
+    ASHELL-ACTIVE-CTX _RUHA-B-ORIGINAL-CTX !
+    ['] _RUHA-B-CAPTURE CATCH DUP IF
+        DROP RUHA-S-INVALID _RUHA-B-STATUS !
+    ELSE
+        DROP _RUHA-B-STATUS !
+    THEN
+    ['] _RUHA-B-RESTORE CATCH IF
+        RUHA-S-INVALID _RUHA-B-STATUS !
+    THEN
+    _RUHA-B-STATUS @ RUHA-S-OK <> IF
+        _RUHA-B-STATUS @ DUP _RUHA-B-ADAPTER @ _RUHA-A.LAST-STATUS !
+        0 SWAP EXIT
+    THEN
+    _RUHA-B-DOCUMENTS @ 0= IF
+        RUHA-S-UNAVAILABLE DUP _RUHA-B-ADAPTER @ _RUHA-A.LAST-STATUS !
+        0 SWAP EXIT
+    THEN
+    _RUHA-B-PUBLISH ;

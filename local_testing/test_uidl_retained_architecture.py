@@ -550,15 +550,34 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     assert "_DESK-MAX-INSTALLED CONSTANT _A1D-UIDL-BINDINGS" in code
     assert "_UTUI-MAX-ELEMS CONSTANT _A1D-UIDL-RECORDS" in code
     assert "_UCTX-STRS-SZ CONSTANT _A1D-UIDL-TEXT-U" in code
-    assert "_A1D-SCREEN-CELLS _A1D-UIDL-RECORDS _A1D-CAPACITY+" in code
+    assert (
+        "_A1D-UIDL-BINDINGS _A1D-UIDL-RECORDS _A1D-CAPACITY*\n"
+        "    CONSTANT _A1D-UIDL-AGGREGATE-RECORDS"
+    ) in code
+    assert (
+        "_A1D-UIDL-BINDINGS _A1D-UIDL-TEXT-U _A1D-CAPACITY*\n"
+        "    CONSTANT _A1D-UIDL-AGGREGATE-TEXT-U"
+    ) in code
+    assert (
+        "_A1D-UIDL-BINDINGS RUHA-DOCUMENT-BYTES _A1D-CAPACITY*\n"
+        "    2 _A1D-CAPACITY*"
+    ) in code
+    assert (
+        "_A1D-SCREEN-CELLS _A1D-UIDL-AGGREGATE-RECORDS _A1D-CAPACITY+"
+        in code
+    )
     assert "1 RTAPT-OWNER-SIZE _A1D-CAPACITY*" in code
     assert "_A1D-RTAPT-OBJECT-RECORDS 1 _A1D-CAPACITY+" in code
     assert "_A1D-SCREEN-CELLS 128 _A1D-CAPACITY*" in code
-    assert "_A1D-UIDL-RECORDS 127 _A1D-CAPACITY* _A1D-CAPACITY+" in code
-    assert "_A1D-UIDL-TEXT-U _A1D-CAPACITY+" in code
+    assert (
+        "_A1D-UIDL-AGGREGATE-RECORDS 127 _A1D-CAPACITY* "
+        "_A1D-CAPACITY+"
+    ) in code
+    assert "_A1D-UIDL-AGGREGATE-TEXT-U _A1D-CAPACITY+" in code
     assert "72 _A1D-CAPACITY+" in code
     assert (
-        "_A1D-UIDL-RECORDS _A1D-UIDL-TEXT-U\n"
+        "_A1D-UIDL-BINDINGS\n"
+        "    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U\n"
         "    APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS RTHP-STORAGE-BYTES\n"
         "    _A1D-REQUIRE-HYBRID-ARENA"
     ) in code
@@ -573,6 +592,7 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
         "APT1-DESK-MAX-COLS APT1-DESK-MAX-ROWS"
     ) in code
     assert "RUHA-SIZE 7 + XBUF _A1D-RUHA-MEM" in code
+    assert "_A1D-RUHA-DIRECTORY-U _A1D-ALIGNMENT-SLOP+" in code
     assert "RTHP-SIZE 7 + XBUF _A1D-SCREEN-MEM" in code
     assert "_A1D-SCREEN-ARENA-U _A1D-ALIGNMENT-SLOP+" in code
     assert "_A1D-SCREEN-MEM 7 + -8 AND CONSTANT _A1D-SCREEN" in code
@@ -610,7 +630,14 @@ def test_desktop_apt1_leaf_composes_the_generic_hybrid_screen_producer() -> None
     ):
         assert f"1 CONSTANT {identity}" in code
     producer_bind = setup[setup.index("RTHP-INIT") :]
-    assert "_A1D-UIDL-RECORDS _A1D-UIDL-TEXT-U" in setup
+    assert (
+        "_A1D-RUHA-WORK-TEXT _A1D-UIDL-TEXT-U\n"
+        "    _A1D-RUHA-DIRECTORY _A1D-RUHA-DIRECTORY-U"
+    ) in setup
+    assert (
+        "_A1D-UIDL-BINDINGS\n"
+        "    _A1D-UIDL-AGGREGATE-RECORDS _A1D-UIDL-AGGREGATE-TEXT-U"
+    ) in setup
     assert "['] RTHP-STEP ['] RTHP-PREPARE" in producer_bind
     assert (
         "['] RUHA-HOST-INIT ['] RUHA-HOST-FINI _A1D-RUHA\n"
