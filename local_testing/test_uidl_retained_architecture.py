@@ -255,6 +255,127 @@ def test_uidl_projection_lifecycle_is_ordered_and_context_local() -> None:
     )
 
 
+def test_resolved_tree_observation_is_one_pass_coherent_and_semantic() -> None:
+    tui = _text("akashic/tui/uidl-tui.f")
+    docs = _text("docs/tui/uidl-tui.md")
+    normalized_docs = " ".join(docs.split())
+
+    walk = _word(tui, "_UTUI-RST-WALK")
+    node = _word(tui, "_UTUI-RST-NODE")
+    load = _word(tui, "_UTUI-RST-LOAD-NODE")
+    single_capture = _word(tui, "_UTUI-ELEM-RESOLVED-CAPTURE-BODY")
+    complete = _word(tui, "_UTUI-RST-COMPLETE?")
+    semantic = _word(tui, "_UTUI-RST-EACH-SEMANTIC")
+    public = _word(tui, "UTUI-RESOLVED-TREE-EACH")
+
+    assert walk.count("RECURSE") == 1
+    assert "_UTUI-RST-NODE" in walk
+    assert "_UTUI-RS-RESOLVE" not in walk + node + load
+    assert "_UTUI-RS-TARGET-CLEAR" in load
+    assert "_UTUI-RS-TARGET-VALID?" in load
+    assert "_UTUI-RS-WRITE" in load
+    assert "ALLOCATE" not in walk + node + load
+    assert single_capture.index("_UTUI-RS-CALL") < single_capture.index(
+        "_UTUI-RS-DST !"
+    ) < single_capture.index("_UTUI-RS-WRITE")
+
+    # Stable pool holes are allowed, but a duplicated, cyclic, or unreachable
+    # live entry cannot be silently omitted from an authoritative tree visit.
+    assert "_UTUI-RST-SEEN + DUP C@" in node
+    assert "_UTUI-RST-SEEN + C@" in complete
+    assert "UE.TYPE @" in complete
+    assert "UIDL-PARENT 5 PICK <>" in walk
+    assert walk.index("UIDL-ELEM-INDEX?") < walk.index("UIDL-PARENT")
+    assert walk.index("UIDL-ELEM-INDEX?") < walk.index("UIDL-NEXT-SIB")
+
+    # A missing resolved lineage is a normal per-node condition: the element
+    # is still visited, with no borrowed record, while malformed state aborts.
+    unavailable_at = node.index("UTUI-RESOLVED-S-UNAVAILABLE = IF")
+    assert "0 _UTUI-RST-VISIT" in node[unavailable_at:]
+    assert "UTUI-RESOLVED-SIZE _UTUI-RST-VISIT" in node
+    assert "UIDL-SEMANTIC-OBSERVE" in semantic
+    assert "CATCH" in public
+    assert "_UTUI-RST-CLEAR" in public
+    for single_reader in (
+        "UTUI-ELEM-RESOLVED-STATE@",
+        "UTUI-ELEM-RESOLVED-CAPTURE",
+    ):
+        assert "_UTUI-RST-ACTIVE @ IF" in _word(tui, single_reader)
+
+    # Closing a dropdown owns the raw VIS bit.  Neutral local visibility for
+    # its rows instead retains all durable hiding and admission authorities.
+    local = _word(tui, "_UTUI-MENU-ROW-LOCAL-VISIBLE-BODY?")
+    select_local = _word(tui, "_UTUI-RST-LOCAL-VISIBLE?")
+    assert "_UTUI-MENU-ROW?" in local
+    assert "TSC-F-HIDDEN _UTUI-SCF-HIDE OR" in local
+    assert "_UTUI-RUNTIME-F-HIDDEN" in local
+    assert "_UTUI-SCF-VIS" not in local
+    assert "UIDL-T-ITEM" in select_local
+    assert "UIDL-T-SEPARATOR" in select_local
+    assert "UIDL-PARENT ?DUP IF" in select_local
+    assert "UIDL-TYPE UIDL-T-MENU = IF" in select_local
+    assert "sidecar visibility predicate" in normalized_docs
+    assert "VIS bit cleared merely because its menu is closed" in normalized_docs
+
+    # Focused byte-oracle for the visibility equations.  A closed menu leaves
+    # its row locally visible but not paintable; an offscreen parent does not
+    # clip a positioned child which re-enters the root.
+    root = (0, 0, 20, 40)
+
+    def intersects(rect: tuple[int, int, int, int]) -> bool:
+        row, col, height, width = rect
+        rr, rc, rh, rw = root
+        return (
+            height > 0
+            and width > 0
+            and rh > 0
+            and rw > 0
+            and row < rr + rh
+            and rr < row + height
+            and col < rc + rw
+            and rc < col + width
+        )
+
+    def projected(
+        *,
+        raw_visible: bool,
+        durable_row_visible: bool | None,
+        rect: tuple[int, int, int, int],
+        ancestor_visible: bool,
+        ancestor_available: bool = True,
+        own_available: bool = True,
+    ) -> tuple[bool, bool, bool]:
+        available = ancestor_available and own_available
+        local_visible = (
+            raw_visible if durable_row_visible is None else durable_row_visible
+        )
+        lineage_visible = available and ancestor_visible and raw_visible
+        return local_visible, lineage_visible and intersects(rect), available
+
+    assert projected(
+        raw_visible=False,
+        durable_row_visible=True,
+        rect=(2, 2, 1, 12),
+        ancestor_visible=False,
+    ) == (True, False, True)
+    assert projected(
+        raw_visible=True,
+        durable_row_visible=None,
+        rect=(3, 3, 1, 8),
+        ancestor_visible=True,
+        ancestor_available=False,
+    ) == (True, False, False)
+    parent_rect = (21, 0, 1, 40)
+    child_rect = (1, 1, 1, 8)
+    assert not intersects(parent_rect)
+    assert projected(
+        raw_visible=True,
+        durable_row_visible=None,
+        rect=child_rect,
+        ancestor_visible=True,
+    ) == (True, True, True)
+
+
 def test_generic_host_uidl_ready_hook_is_neutral_and_exactly_placed() -> None:
     host = _text("akashic/tui/applet-host/host.f")
 

@@ -573,6 +573,7 @@ or zero-height element retains its truthful geometry whenever capture returns
 | `UTUI-ELEM-RESOLVED-CAPTURE` | `( elem destination available -- visible status )` | Copy one complete record when status is OK. |
 | `UTUI-RESOLVED-VALID?` | `( record available -- flag )` | Validate a copied record and its available byte count. |
 | `UTUI-RESOLVED-OBSERVE` | `( i*x xt -- j*x )` | Run a compound reader under one UIDL-TUI observation. |
+| `UTUI-RESOLVED-TREE-EACH` | `( visitor-xt -- status )` | Visit the complete live tree once in authored preorder under one coherent resolved/semantic observation. |
 | `UTUI-STORAGE-DISJOINT?` | `( a u -- flag )` | Validate that a caller span is nonempty, nonwrapping, and disjoint from UIDL-TUI, UIDL, state-tree, and active root-region storage. |
 
 The destination passed to capture must provide at least
@@ -583,6 +584,32 @@ Ordinary validation failures occur before any destination store.
 Compound projection reads use `UTUI-RESOLVED-OBSERVE`, so resolved projection
 state and all copied records come from one serialized UIDL-TUI state rather
 than separate sidecar observations.
+
+The tree visitor has this stack effect:
+
+```
+( elem source-index sibling-ordinal local-visible effective-visible
+  resolved available -- )
+```
+
+Each live element is visited exactly once in authored preorder, including
+elements that occupy non-contiguous stable pool indices after mutation. The
+walk rejects duplicate visits, unreachable live entries, invalid parent
+backlinks, cycles, and malformed resolved state. `elem` and `resolved` are
+call-borrowed. The visitor must synchronously copy any value it retains and
+must not yield, mutate UIDL or application state, or invoke lifecycle or action
+callbacks.
+
+Recursive tree observation and the single-element resolved-state readers are
+refused with `UTUI-RESOLVED-S-INVALID` while the visitor is active. This keeps
+the borrowed record and root geometry stable for the complete traversal;
+ordinary neutral UIDL semantic reads remain available inside the callback.
+
+`available` is exactly `UTUI-RESOLVED-BYTES` when the complete resolved lineage
+is available. A live descendant of an unlaid-out subtree is still visited, but
+receives zero `available`, a zeroed borrowed record, and false effective
+visibility. The visitor can therefore validate the whole neutral hierarchy in
+one pass without treating an ordinary unavailable sidecar as malformed.
 
 The returned `visible` flag means effective paintability, not merely the
 element's local VIS bit. It requires all of the following:
@@ -595,6 +622,15 @@ Partial clipping therefore preserves `visible`, while zero-area and wholly
 offscreen rectangles do not. This visibility result is separate from record
 availability: an OK record can truthfully describe geometry that is not
 currently paintable.
+
+The tree visitor reports both meanings. `effective-visible` is the same
+paintability result described above. `local-visible` is renderer-neutral local
+application visibility. For ordinary elements it follows the sidecar
+visibility predicate. For an admitted menu item or separator it deliberately
+ignores the VIS bit cleared merely because its menu is closed, while still
+honouring `when`, `display:none`, `visibility:hidden`, runtime hiding, and menu
+row admission. A retained menu can consequently remain a truthful high-level
+control while its dropdown is not currently painted.
 
 The recorded z-index is also effective. Descendants inherit the outermost
 ancestor whose dialog or positive z causes Pass 1 to defer that subtree; this
@@ -1175,6 +1211,10 @@ The resolved-state readers use the same ownership boundary.
 `UTUI-RESOLVED-OBSERVE` intentionally holds the UIDL-TUI observation
 while its supplied XT performs any number of state queries and captures;
 callers must not yield or invoke mutating lifecycle operations from that XT.
+`UTUI-RESOLVED-TREE-EACH` additionally holds one UIDL semantic, LEL, and state
+observation for the complete walk. Its visitor has the same no-yield and
+no-mutation restriction and must not recursively enter another resolved or
+semantic observation.
 
 The callback-driving lifecycle entries `UTUI-LOAD`, `UTUI-PAINT`,
 `UTUI-RELAYOUT`, `UTUI-VISIBLE!`, `UTUI-QUIESCE`,
@@ -1229,6 +1269,7 @@ UTUI-ELEM-RESOLVED-STATE@ ( elem -- visible status ) Query effective paintabilit
 UTUI-ELEM-RESOLVED-CAPTURE ( elem dst avail -- visible status ) Copy a resolved projection state
 UTUI-RESOLVED-VALID? ( record avail -- flag )       Validate a copied resolved record
 UTUI-RESOLVED-OBSERVE ( i*x xt -- j*x )            Run compound resolved reads in one observation
+UTUI-RESOLVED-TREE-EACH ( visitor-xt -- status )   Visit one coherent resolved tree in authored order
 UTUI-STORAGE-DISJOINT? ( a u -- flag )                 Check caller storage against UIDL-TUI storage
 UTUI-DO!               ( do-a do-l xt -- )           Register named action
 UTUI-SHOW              ( id-a id-l -- )              Show overlay (set VIS, dirty, focus)

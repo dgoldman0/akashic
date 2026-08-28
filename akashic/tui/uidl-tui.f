@@ -34,6 +34,9 @@
 \                                      -- effective-visible status )
 \    UTUI-RESOLVED-VALID?  ( record available -- flag )
 \    UTUI-RESOLVED-OBSERVE ( i*x xt -- j*x )
+\    UTUI-RESOLVED-TREE-EACH ( visitor-xt -- status )
+\      visitor-xt ( elem source-index sibling-ordinal local-visible
+\                   effective-visible resolved available -- )
 \    UTUI-STORAGE-DISJOINT?    ( address length -- flag )
 \
 \  Prefix: UTUI- (public), _UTUI- (internal)
@@ -1115,6 +1118,22 @@ VARIABLE _UMD-ROW      \ dropdown top row (menubar row + 1)
     DUP UIDL-TYPE UIDL-T-ITEM <> IF DROP 0 EXIT THEN
     DUP _UTUI-MENU-ROW? 0= IF DROP 0 EXIT THEN
     _UTUI-SIDECAR _UTUI-SC-VIS? ;
+
+\ Retained menu semantics need the row's own visibility, independently of
+\ whether its MENU ancestor is currently open.  Closing a menu deliberately
+\ clears the layout-owned VIS bit, so this predicate observes admission and
+\ the durable CSS/runtime hiding authorities without treating that close-owned
+\ bit as local application state.
+: _UTUI-MENU-ROW-LOCAL-VISIBLE-BODY?  ( elem -- flag )
+    DUP UIDL-ELEM-INDEX? 0= IF 2DROP 0 EXIT THEN DROP
+    _UTUI-DOC-LOADED @ 0= IF DROP 0 EXIT THEN
+    _UTUI-ELEM-BASE @ _UDL-ELEMS <> IF DROP 0 EXIT THEN
+    DUP _UTUI-MENU-ROW? 0= IF DROP 0 EXIT THEN
+    _UTUI-SIDECAR
+    DUP _UTUI-SC-FLAGS@
+    DUP _UTUI-SCF-HAS AND 0= IF 2DROP 0 EXIT THEN
+    TSC-F-HIDDEN _UTUI-SCF-HIDE OR AND IF DROP 0 EXIT THEN
+    _UTUI-SC-RUNTIME@ _UTUI-RUNTIME-F-HIDDEN AND 0= ;
 
 \ Measure admitted items and find the widest text= label.
 : _UTUI-MENU-MEASURE  ( menu-elem -- )
@@ -4086,6 +4105,7 @@ VARIABLE _UTUI-RS-ROOT-W
 VARIABLE _UTUI-RS-ROOT-ROW-END
 VARIABLE _UTUI-RS-ROOT-COL-END
 VARIABLE _UTUI-RS-DST
+VARIABLE _UTUI-RST-ACTIVE
 VARIABLE _UTUI-OWNED-LIMIT
 
 0 _UTUI-OWNED-LIMIT !
@@ -4157,18 +4177,22 @@ VARIABLE _UTUI-OWNED-LIMIT
         DROP 2DROP 0
     THEN ;
 
-: _UTUI-RS-CLEAR  ( -- )
+: _UTUI-RS-TARGET-CLEAR  ( -- )
     0 _UTUI-RS-P-ELEM ! 0 _UTUI-RS-ELEM ! 0 _UTUI-RS-NODE !
-    0 _UTUI-RS-SC ! 0 _UTUI-RS-ROOT ! 0 _UTUI-RS-DEPTH !
+    0 _UTUI-RS-SC ! 0 _UTUI-RS-DEPTH !
     0 _UTUI-RS-TOTAL ! 0 _UTUI-RS-VISIBLE ! 0 _UTUI-RS-STYLE !
     0 _UTUI-RS-ROW ! 0 _UTUI-RS-COL ! 0 _UTUI-RS-H ! 0 _UTUI-RS-W !
     0 _UTUI-RS-ROW-END ! 0 _UTUI-RS-COL-END !
     0 _UTUI-RS-FG ! 0 _UTUI-RS-BG ! 0 _UTUI-RS-ATTRS !
     0 _UTUI-RS-ALIGN ! 0 _UTUI-RS-Z !
+    0 _UTUI-RS-DST ! ;
+
+: _UTUI-RS-CLEAR  ( -- )
+    _UTUI-RS-TARGET-CLEAR
+    0 _UTUI-RS-ROOT !
     0 _UTUI-RS-ROOT-ROW ! 0 _UTUI-RS-ROOT-COL !
     0 _UTUI-RS-ROOT-H ! 0 _UTUI-RS-ROOT-W !
-    0 _UTUI-RS-ROOT-ROW-END ! 0 _UTUI-RS-ROOT-COL-END !
-    0 _UTUI-RS-DST ! ;
+    0 _UTUI-RS-ROOT-ROW-END ! 0 _UTUI-RS-ROOT-COL-END ! ;
 
 : _UTUI-RS-TARGET-VALID?  ( -- flag )
     _UTUI-RS-ROW @ _UTUI-RS-H @ _UTUI-RS-AXIS-END?
@@ -4303,6 +4327,9 @@ VARIABLE _UTUI-OWNED-LIMIT
 
 : UTUI-ELEM-RESOLVED-STATE@
     ( elem -- effective-visible status )
+    _UTUI-RST-ACTIVE @ IF
+        DROP 0 UTUI-RESOLVED-S-INVALID EXIT
+    THEN
     _UTUI-RS-CALL _UTUI-RS-RESULT ;
 
 : _UTUI-RS-WRITE  ( -- )
@@ -4324,21 +4351,291 @@ VARIABLE _UTUI-OWNED-LIMIT
     OVER UTUI-RESOLVED-SIZE UTUI-STORAGE-DISJOINT? 0= IF
         3DROP 0 UTUI-RESOLVED-S-INVALID EXIT
     THEN
-    DROP _UTUI-RS-DST !
-    _UTUI-RS-CALL
+    DROP SWAP _UTUI-RS-CALL
     DUP UTUI-RESOLVED-S-OK <> IF
-        0 SWAP _UTUI-RS-CLEAR 0 _UTUI-RS-DST ! EXIT
+        NIP 0 SWAP _UTUI-RS-CLEAR 0 _UTUI-RS-DST ! EXIT
     THEN
-    DROP _UTUI-RS-WRITE
+    DROP _UTUI-RS-DST !
+    _UTUI-RS-WRITE
     UTUI-RESOLVED-S-OK _UTUI-RS-RESULT
     0 _UTUI-RS-DST ! ;
 
 : UTUI-ELEM-RESOLVED-CAPTURE
     ( elem destination available -- effective-visible status )
+    _UTUI-RST-ACTIVE @ IF
+        3DROP 0 UTUI-RESOLVED-S-INVALID EXIT
+    THEN
     ['] _UTUI-ELEM-RESOLVED-CAPTURE-BODY CATCH ?DUP IF
         DROP 3DROP 0 UTUI-RESOLVED-S-INVALID
     THEN
     _UTUI-RS-CLEAR 0 _UTUI-RS-DST ! ;
+
+\ =====================================================================
+\  Linear resolved-tree observation
+\ =====================================================================
+\
+\ The visitor receives every live node once in authored preorder.  A complete
+\ resolved record is call-borrowed when AVAILABLE is 72; an unavailable
+\ lineage is reported with AVAILABLE zero.  The visitor must copy anything it
+\ retains and must not yield, mutate UIDL/application state, or invoke
+\ lifecycle/action callbacks.
+\
+\ Local visibility is renderer-neutral application visibility.  For menu rows
+\ it deliberately ignores the close-owned VIS bit while retaining WHEN,
+\ display:none, visibility:hidden, runtime hiding, and layout admission.
+\ Effective visibility additionally carries ordinary VIS, ancestor visibility,
+\ closed-menu suppression, and the node's own root intersection.  Parent
+\ rectangle intersection is not inherited because positioned children may
+\ re-enter the root clip.
+
+1 CONSTANT _UTUI-RST-S-VISIBLE
+2 CONSTANT _UTUI-RST-S-AVAILABLE
+
+VARIABLE _UTUI-RST-VISITOR
+VARIABLE _UTUI-RST-TOTAL
+VARIABLE _UTUI-RST-VISITED
+VARIABLE _UTUI-RST-ELEM
+VARIABLE _UTUI-RST-INDEX
+VARIABLE _UTUI-RST-ORDINAL
+VARIABLE _UTUI-RST-ANCESTOR-STATE
+VARIABLE _UTUI-RST-ANCESTOR-VISIBLE
+VARIABLE _UTUI-RST-ANCESTOR-AVAILABLE
+VARIABLE _UTUI-RST-OUTERMOST-Z
+VARIABLE _UTUI-RST-RAW-VISIBLE
+VARIABLE _UTUI-RST-LOCAL-VISIBLE
+VARIABLE _UTUI-RST-LINEAGE-VISIBLE
+VARIABLE _UTUI-RST-EFFECTIVE-VISIBLE
+VARIABLE _UTUI-RST-NODE-AVAILABLE
+VARIABLE _UTUI-RST-NODE-Z
+VARIABLE _UTUI-RST-AVAILABLE-BYTES
+
+CREATE _UTUI-RST-RESOLVED UTUI-RESOLVED-SIZE ALLOT
+CREATE _UTUI-RST-SEEN _UTUI-MAX-ELEMS ALLOT
+
+: _UTUI-RST-CLEAR  ( -- )
+    0 _UTUI-RST-VISITOR ! 0 _UTUI-RST-ACTIVE !
+    0 _UTUI-RST-TOTAL ! 0 _UTUI-RST-VISITED !
+    0 _UTUI-RST-ELEM ! 0 _UTUI-RST-INDEX ! 0 _UTUI-RST-ORDINAL !
+    0 _UTUI-RST-ANCESTOR-STATE ! 0 _UTUI-RST-ANCESTOR-VISIBLE !
+    0 _UTUI-RST-ANCESTOR-AVAILABLE ! 0 _UTUI-RST-OUTERMOST-Z !
+    0 _UTUI-RST-RAW-VISIBLE !
+    0 _UTUI-RST-LOCAL-VISIBLE ! 0 _UTUI-RST-LINEAGE-VISIBLE !
+    0 _UTUI-RST-EFFECTIVE-VISIBLE ! 0 _UTUI-RST-NODE-AVAILABLE !
+    0 _UTUI-RST-NODE-Z ! 0 _UTUI-RST-AVAILABLE-BYTES !
+    _UTUI-RST-RESOLVED UTUI-RESOLVED-SIZE 0 FILL
+    _UTUI-RST-SEEN _UTUI-MAX-ELEMS 0 FILL
+    _UTUI-RS-CLEAR ;
+
+: _UTUI-RST-LOCAL-VISIBLE?  ( -- flag )
+    _UTUI-RST-ELEM @ UIDL-TYPE
+    DUP UIDL-T-ITEM = SWAP UIDL-T-SEPARATOR = OR IF
+        _UTUI-RST-ELEM @ UIDL-PARENT ?DUP IF
+            UIDL-TYPE UIDL-T-MENU = IF
+                _UTUI-RST-ELEM @
+                    _UTUI-MENU-ROW-LOCAL-VISIBLE-BODY? EXIT
+            THEN
+        THEN
+    THEN
+    _UTUI-RS-SC @ _UTUI-SC-VIS? ;
+
+: _UTUI-RST-LOAD-NODE  ( -- status )
+    \ Preserve the root geometry prepared once by the tree body.
+    _UTUI-RS-TARGET-CLEAR
+    _UTUI-RST-RESOLVED UTUI-RESOLVED-SIZE 0 FILL
+    0 _UTUI-RST-RAW-VISIBLE ! 0 _UTUI-RST-LOCAL-VISIBLE !
+    0 _UTUI-RST-LINEAGE-VISIBLE ! 0 _UTUI-RST-EFFECTIVE-VISIBLE !
+    0 _UTUI-RST-NODE-AVAILABLE ! 0 _UTUI-RST-NODE-Z !
+    _UTUI-RST-ELEM @ DUP _UTUI-RS-ELEM !
+    _UTUI-SIDECAR DUP _UTUI-RS-SC !
+    DUP _UTUI-SC-FLAGS@ _UTUI-SCF-HAS AND 0= IF
+        DROP UTUI-RESOLVED-S-UNAVAILABLE EXIT
+    THEN
+
+    DUP _UTUI-SC-ROW@ _UTUI-RS-ROW !
+    DUP _UTUI-SC-COL@ _UTUI-RS-COL !
+    DUP _UTUI-SC-H@ _UTUI-RS-H !
+    DUP _UTUI-SC-W@ _UTUI-RS-W !
+    DUP _UTUI-SC-STYLE@ DUP _UTUI-RS-STYLE !
+    DUP TSC-UNPACK-FG _UTUI-RS-FG !
+    DUP TSC-UNPACK-BG _UTUI-RS-BG !
+    DUP TSC-UNPACK-ATTRS _UTUI-RS-ATTRS !
+    DROP
+    DUP _UTUI-SC-TALIGN@ _UTUI-RS-ALIGN !
+
+    _UTUI-RST-OUTERMOST-Z @ ?DUP IF
+        _UTUI-RST-NODE-Z !
+    ELSE
+        DUP _UTUI-SC-ZIDX@
+        _UTUI-RST-ELEM @ UIDL-TYPE UIDL-T-DIALOG = IF
+            DUP 0= IF DROP 255 THEN
+        THEN
+        _UTUI-RST-NODE-Z !
+    THEN
+    DROP
+    _UTUI-RST-NODE-Z @ _UTUI-RS-Z !
+    _UTUI-RS-TARGET-VALID? 0= IF UTUI-RESOLVED-S-INVALID EXIT THEN
+
+    _UTUI-RS-SC @ _UTUI-SC-VIS? 0<> _UTUI-RST-RAW-VISIBLE !
+    _UTUI-RST-LOCAL-VISIBLE? 0<> _UTUI-RST-LOCAL-VISIBLE !
+    _UTUI-RST-ANCESTOR-AVAILABLE @ 0= IF
+        UTUI-RESOLVED-S-UNAVAILABLE EXIT
+    THEN
+    -1 _UTUI-RST-NODE-AVAILABLE !
+    _UTUI-RST-ANCESTOR-VISIBLE @ 0<>
+    _UTUI-RST-RAW-VISIBLE @ AND 0<>
+        _UTUI-RST-LINEAGE-VISIBLE !
+    _UTUI-RST-LINEAGE-VISIBLE @
+    _UTUI-RS-INTERSECTS-ROOT? AND 0<>
+        _UTUI-RST-EFFECTIVE-VISIBLE !
+    _UTUI-RST-EFFECTIVE-VISIBLE @ _UTUI-RS-VISIBLE !
+
+    _UTUI-RST-RESOLVED _UTUI-RS-DST !
+    _UTUI-RS-WRITE
+    0 _UTUI-RS-DST !
+    UTUI-RESOLVED-S-OK ;
+
+: _UTUI-RST-VISIT  ( available -- )
+    _UTUI-RST-AVAILABLE-BYTES !
+    _UTUI-RST-ELEM @
+    _UTUI-RST-INDEX @
+    _UTUI-RST-ORDINAL @
+    _UTUI-RST-LOCAL-VISIBLE @
+    _UTUI-RST-EFFECTIVE-VISIBLE @
+    _UTUI-RST-RESOLVED _UTUI-RST-AVAILABLE-BYTES @
+    _UTUI-RST-VISITOR @ EXECUTE ;
+
+: _UTUI-RST-CHILD-STATE  ( -- state )
+    0
+    _UTUI-RST-NODE-AVAILABLE @ IF _UTUI-RST-S-AVAILABLE OR THEN
+    _UTUI-RST-LINEAGE-VISIBLE @ IF _UTUI-RST-S-VISIBLE OR THEN
+    _UTUI-RST-ELEM @ UIDL-TYPE UIDL-T-MENU = IF
+        _UTUI-RST-ELEM @ _UTUI-MENU-OPEN @ <> IF
+            _UTUI-RST-S-VISIBLE INVERT AND
+        THEN
+    THEN ;
+
+: _UTUI-RST-NODE
+    ( elem sibling-ordinal ancestor-state outermost-z
+      -- elem child-state child-outermost-z status )
+    _UTUI-RST-OUTERMOST-Z ! _UTUI-RST-ANCESTOR-STATE !
+    _UTUI-RST-ORDINAL ! _UTUI-RST-ELEM !
+    _UTUI-RST-ANCESTOR-STATE @ _UTUI-RST-S-VISIBLE AND 0<>
+        _UTUI-RST-ANCESTOR-VISIBLE !
+    _UTUI-RST-ANCESTOR-STATE @ _UTUI-RST-S-AVAILABLE AND 0<>
+        _UTUI-RST-ANCESTOR-AVAILABLE !
+    _UTUI-RST-VISITED @ _UTUI-RST-TOTAL @ U< 0= IF
+        0 0 0 UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    1 _UTUI-RST-VISITED +!
+    _UTUI-RST-ELEM @ UIDL-ELEM-INDEX? 0= IF
+        DROP 0 0 0 UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    _UTUI-RST-INDEX !
+    _UTUI-RST-INDEX @ _UTUI-RST-SEEN + DUP C@ IF
+        DROP 0 0 0 UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    1 SWAP C!
+
+    _UTUI-RST-LOAD-NODE
+    DUP UTUI-RESOLVED-S-INVALID = IF
+        >R 0 0 0 R> EXIT
+    THEN
+    DUP UTUI-RESOLVED-S-UNAVAILABLE = IF
+        DROP 0 _UTUI-RST-VISIT
+        _UTUI-RST-ELEM @ 0 0 UTUI-RESOLVED-S-OK EXIT
+    THEN
+    DUP UTUI-RESOLVED-S-OK <> IF
+        DROP 0 0 0 UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    DROP
+    UTUI-RESOLVED-SIZE _UTUI-RST-VISIT
+    _UTUI-RST-ELEM @
+    _UTUI-RST-CHILD-STATE
+    _UTUI-RST-NODE-Z @
+    UTUI-RESOLVED-S-OK ;
+
+: _UTUI-RST-WALK
+    ( elem sibling-ordinal ancestor-state outermost-z -- status )
+    _UTUI-RST-NODE DUP IF
+        >R 3DROP R> EXIT
+    THEN
+    DROP                                      ( elem child-vis child-z )
+    2 PICK UIDL-FIRST-CHILD 0                 ( elem child-vis child-z child ord )
+    BEGIN OVER 0<> WHILE
+        OVER UIDL-ELEM-INDEX? 0= IF
+            DROP 2DROP 3DROP UTUI-RESOLVED-S-INVALID EXIT
+        THEN
+        DROP
+        OVER UIDL-PARENT 5 PICK <> IF
+            2DROP 3DROP UTUI-RESOLVED-S-INVALID EXIT
+        THEN
+        OVER UIDL-NEXT-SIB >R
+        DUP 1+ >R
+        2OVER RECURSE                         ( elem child-vis child-z status )
+        DUP IF
+            R> DROP R> DROP
+            >R 3DROP R> EXIT
+        THEN
+        DROP
+        R> R> SWAP                            ( elem child-vis child-z next ord' )
+    REPEAT
+    2DROP 3DROP UTUI-RESOLVED-S-OK ;
+
+: _UTUI-RST-COMPLETE?  ( -- flag )
+    _UTUI-RST-TOTAL @ 0 ?DO
+        I _UDL-ELEMSZ * _UDL-ELEMS + UE.TYPE @ 0<>
+        I _UTUI-RST-SEEN + C@ 0<> <> IF
+            0 UNLOOP EXIT
+        THEN
+    LOOP
+    -1 ;
+
+: _UTUI-RST-EACH-BODY  ( -- status )
+    _UTUI-DOC-LOADED @ 0= IF UTUI-RESOLVED-S-UNAVAILABLE EXIT THEN
+    _UTUI-ELEM-BASE @ _UDL-ELEMS <> IF UTUI-RESOLVED-S-INVALID EXIT THEN
+    UIDL-ELEM-COUNT DUP 0> 0= IF
+        DROP UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    DUP _UTUI-MAX-ELEMS U> IF
+        DROP UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    _UTUI-RST-TOTAL !
+    0 _UTUI-RST-VISITED !
+
+    UIDL-ROOT DUP 0= IF DROP UTUI-RESOLVED-S-INVALID EXIT THEN
+    DUP UIDL-ELEM-INDEX? 0= IF
+        2DROP UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    DROP
+    DUP UIDL-PARENT IF DROP UTUI-RESOLVED-S-INVALID EXIT THEN
+    DUP _UTUI-SIDECAR _UTUI-SC-FLAGS@ _UTUI-SCF-HAS AND 0= IF
+        DROP UTUI-RESOLVED-S-UNAVAILABLE EXIT
+    THEN
+    DUP _UTUI-RS-ROOT !
+    _UTUI-RS-ROOT-GEOMETRY? 0= IF
+        DROP UTUI-RESOLVED-S-INVALID EXIT
+    THEN
+    0 _UTUI-RST-S-VISIBLE _UTUI-RST-S-AVAILABLE OR 0
+        _UTUI-RST-WALK ?DUP IF EXIT THEN
+    _UTUI-RST-COMPLETE? IF
+        UTUI-RESOLVED-S-OK
+    ELSE
+        UTUI-RESOLVED-S-INVALID
+    THEN ;
+
+: _UTUI-RST-EACH-SEMANTIC  ( -- status )
+    ['] _UTUI-RST-EACH-BODY UIDL-SEMANTIC-OBSERVE ;
+
+: UTUI-RESOLVED-TREE-EACH  ( visitor-xt -- status )
+    _UTUI-RST-ACTIVE @ IF DROP UTUI-RESOLVED-S-INVALID EXIT THEN
+    DUP 0= IF DROP UTUI-RESOLVED-S-INVALID EXIT THEN
+    _UTUI-RST-CLEAR
+    _UTUI-RST-VISITOR !
+    -1 _UTUI-RST-ACTIVE !
+    ['] _UTUI-RST-EACH-SEMANTIC CATCH ?DUP IF
+        >R _UTUI-RST-CLEAR R> THROW
+    THEN
+    _UTUI-RST-CLEAR ;
 
 \ In unguarded builds this is a direct synchronous callback.  The guarded
 \ redefinition below acquires UIDL-TUI before UIDL for one coherent snapshot.
@@ -4382,6 +4679,8 @@ GUARD _utui-guard
     CONSTANT _utui-elem-resolved-state-at-xt
 ' UTUI-ELEM-RESOLVED-CAPTURE
     CONSTANT _utui-elem-resolved-capture-xt
+' UTUI-RESOLVED-TREE-EACH
+    CONSTANT _utui-resolved-tree-each-xt
 ' UTUI-STORAGE-DISJOINT? CONSTANT _utui-storage-disjoint-q-xt
 
 : UTUI-BIND-STATE     _utui-bind-state-xt     _utui-guard WITH-GUARD ;
@@ -4423,6 +4722,11 @@ GUARD _utui-guard
 : UTUI-ELEM-RESOLVED-CAPTURE
     ( elem destination available -- effective-visible status )
     _utui-elem-resolved-capture-xt UTUI-RESOLVED-OBSERVE ;
+
+\ The saved raw words enter one complete UIDL semantic/LEL/state observation;
+\ this wrapper adds UIDL-TUI as the outermost authority.
+: UTUI-RESOLVED-TREE-EACH  ( visitor-xt -- status )
+    _utui-resolved-tree-each-xt _utui-guard WITH-GUARD ;
 
 : UTUI-STORAGE-DISJOINT?  ( address length -- flag )
     _utui-storage-disjoint-q-xt UTUI-RESOLVED-OBSERVE ;
