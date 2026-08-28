@@ -315,7 +315,7 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 
 : RTE-CONTROL-PLAN-ITEM-BYTES  ( -- bytes )  RTE-CONTROL-SIZE ;
 
-\ One initial hybrid plan joins the optional semantic CONTROL family and the
+\ One complete hybrid plan joins the optional semantic CONTROL family and the
 \ optional residual GLYPH-RUN family under one owner, generation, surface, and
 \ root region.  Its positive attempt token, authoritative source generation,
 \ and ordinary painted-surface generation bind this derived projection to the
@@ -324,8 +324,10 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 \ Residual text references are parallel pointer-free (offset,length) records
 \ over one dense copied-text span.  Every source address is borrowed only
 \ through RTE-HYBRID-PREFLIGHT.  On exact success that call copies the
-\ provider-admitted fixed summary into caller-owned admission storage; the
-\ caller must ignore that storage after every other status.
+\ provider-admitted fixed summary into caller-owned admission storage.  The
+\ provider may prove either a future OWNER_OPEN or a full replacement within
+\ that exact open owner's existing reservation; the caller must ignore the
+\ admission storage after every other status.
 : _RTE-HP.ATTEMPT          ( hybrid -- a )      ;
 : _RTE-HP.SOURCE-GENERATION ( hybrid -- a )  8 + ;
 : _RTE-HP.SURFACE-GENERATION ( hybrid -- a ) 16 + ;

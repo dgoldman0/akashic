@@ -2644,7 +2644,8 @@ VARIABLE _RTAPT-CPF-TX
 \
 \ The neutral layer has already made the sole pass over each present caller
 \ bank.  This provider sees only a fixed, pointer-free summary and combines
-\ both representation families before the one owner-quota admission.
+\ both representation families before either initial owner admission or an
+\ exact-open-owner replacement check against the existing reservation.
 
 VARIABLE _RTAPT-HAF-SUMMARY
 VARIABLE _RTAPT-HAF-E
@@ -2827,6 +2828,30 @@ CREATE _RTAPT-HAF-OWNED-END
     THEN _RTAPT-HAF-TX !
     -1 ;
 
+: _RTAPT-HAF-EXISTING-ADMISSION  ( owner-record -- status )
+    DUP _RTAPT-O.STATE @ RTAPT-OWNER-ST-OPEN <> IF
+        DROP RTAPT-S-BUSY EXIT
+    THEN
+    DUP _RTAPT-O.REGIONS @ 1 U< IF DROP RTAPT-S-CAPACITY EXIT THEN
+    DUP _RTAPT-O.OBJECTS @ _RTAPT-HAF-COUNT @ U< IF
+        DROP RTAPT-S-CAPACITY EXIT
+    THEN
+    DUP _RTAPT-O.UTF8-BYTES @ _RTAPT-HAF-UTF8 @ U< IF
+        DROP RTAPT-S-CAPACITY EXIT
+    THEN
+    DROP RTAPT-S-OK ;
+
+\ A complete REPLACE_START consumes one target within quotas already held by
+\ its exact open owner.  It must not reserve the same owner or global quota a
+\ second time.  An absent exact generation retains the initial admission path,
+\ which also preserves owner-ID collision and tombstone-reuse policy.
+: _RTAPT-HAF-OWNER-ADMISSION  ( -- status )
+    _RTAPT-HAF-OWNER @ _RTAPT-HAF-GEN @ _RTAPT-HAF-E @
+        _RTAPT-OWNER-FIND ?DUP IF
+        _RTAPT-HAF-EXISTING-ADMISSION EXIT
+    THEN
+    _RTAPT-LPF-OWNER-ADMISSION ;
+
 : _RTAPT-HYBRID-PREFLIGHT-BODY  ( -- status )
     _RTAPT-HAF-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-HAF-FIELDS? 0= IF RTAPT-S-INVALID EXIT THEN
@@ -2885,7 +2910,7 @@ CREATE _RTAPT-HAF-OWNED-END
     _RTAPT-HAF-COUNT @ _RTAPT-LPF-COUNT !
     _RTAPT-HAF-UTF8 @ _RTAPT-LPF-UTF8 !
     _RTAPT-HAF-E @ _RTAPT-LPF-E !
-    _RTAPT-LPF-OWNER-ADMISSION ;
+    _RTAPT-HAF-OWNER-ADMISSION ;
 
 : _RTAPT-HAF-SCRUB  ( status -- status )
     0 _RTAPT-HAF-SUMMARY ! 0 _RTAPT-HAF-E ! 0 _RTAPT-HAF-LIMITS !

@@ -75,6 +75,8 @@ def test_provider_uses_one_full_validation_and_capability_precedence() -> None:
     source = _text(PROVIDER)
     family = _word(source, "_RTAPT-HAF-FAMILY?")
     arithmetic = _word(source, "_RTAPT-HAF-ARITHMETIC?")
+    existing = _word(source, "_RTAPT-HAF-EXISTING-ADMISSION")
+    owner_admission = _word(source, "_RTAPT-HAF-OWNER-ADMISSION")
     body = _word(source, "_RTAPT-HYBRID-PREFLIGHT-BODY")
     limits = _word(source, "RTAPT-LIMITS@")
     after_valid = _word(source, "_RTAPT-LIMITS-AFTER-VALID@")
@@ -103,7 +105,30 @@ def test_provider_uses_one_full_validation_and_capability_precedence() -> None:
         "_RTAPT-REGION-DEFINE-FRAME-BYTES",
     ):
         assert required in arithmetic
-    assert body.count("_RTAPT-LPF-OWNER-ADMISSION") == 1
+    assert body.count("_RTAPT-HAF-OWNER-ADMISSION") == 1
+    assert "_RTAPT-LPF-OWNER-ADMISSION" not in body
+    assert "_RTAPT-OWNER-FIND ?DUP IF" in owner_admission
+    assert owner_admission.index("_RTAPT-OWNER-FIND ?DUP IF") < owner_admission.index(
+        "_RTAPT-LPF-OWNER-ADMISSION"
+    )
+    for comparison in (
+        "_RTAPT-O.REGIONS @ 1 U<",
+        "_RTAPT-O.OBJECTS @ _RTAPT-HAF-COUNT @ U<",
+        "_RTAPT-O.UTF8-BYTES @ _RTAPT-HAF-UTF8 @ U<",
+    ):
+        assert comparison in existing
+    assert "RTAPT-OWNER-ST-OPEN <>" in existing
+    assert "RTAPT-S-BUSY" in existing
+    assert existing.count("RTAPT-S-CAPACITY") == 3
+    assert "RTAPT-S-OK" in existing
+    for forbidden in (
+        "_RTAPT-LPF-OWNER-ADMISSION",
+        "_RTAPT-LPF-ADD-OWNER-QUOTAS",
+        "_RTAPT-LPF-AGG-",
+    ):
+        assert forbidden not in existing
+    assert "+!" not in existing + owner_admission
+    assert re.search(r"_RTAPT-(?:O|E)\.[A-Z0-9-]+\s+!", existing) is None
     assert "_RTAPT-HAF-CONTROL-LAST" not in arithmetic + body
     assert "_RTAPT-HAF-GLYPH-LAST" not in arithmetic + body
 
