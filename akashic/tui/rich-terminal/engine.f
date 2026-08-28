@@ -317,21 +317,27 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 
 \ One initial hybrid plan joins the optional semantic CONTROL family and the
 \ optional residual GLYPH-RUN family under one owner, generation, surface, and
-\ root region.  A missing family is represented only by its canonical zero
-\ fields; at least one family must be present.  Residual text references are
-\ parallel pointer-free (offset,length) records over one dense copied-text
-\ span.  Every address is borrowed only through RTE-HYBRID-PREFLIGHT.
-: _RTE-HP.CONTROL-PLAN  ( hybrid -- a )      ;
-: _RTE-HP.GLYPH-PLAN    ( hybrid -- a )  8 + ;
-: _RTE-HP.GLYPH-REFS-A  ( hybrid -- a ) 16 + ;
-: _RTE-HP.GLYPH-REFS-U  ( hybrid -- a ) 24 + ;
-: _RTE-HP.GLYPH-TEXT-A  ( hybrid -- a ) 32 + ;
-: _RTE-HP.GLYPH-TEXT-U  ( hybrid -- a ) 40 + ;
-: _RTE-HP.CONTROL-TEXT-A ( hybrid -- a ) 48 + ;
-: _RTE-HP.CONTROL-TEXT-U ( hybrid -- a ) 56 + ;
-: _RTE-HP.RESERVED      ( hybrid -- a ) 64 + ;
+\ root region.  Its positive attempt token, authoritative source generation,
+\ and ordinary painted-surface generation bind this derived projection to the
+\ exact lifecycle selection it represents.  A missing family is represented
+\ only by its canonical zero fields; at least one family must be present.
+\ Residual text references are parallel pointer-free (offset,length) records
+\ over one dense copied-text span.  Every address is borrowed only through
+\ RTE-HYBRID-PREFLIGHT.
+: _RTE-HP.ATTEMPT          ( hybrid -- a )      ;
+: _RTE-HP.SOURCE-GENERATION ( hybrid -- a )  8 + ;
+: _RTE-HP.SURFACE-GENERATION ( hybrid -- a ) 16 + ;
+: _RTE-HP.CONTROL-PLAN     ( hybrid -- a ) 24 + ;
+: _RTE-HP.GLYPH-PLAN       ( hybrid -- a ) 32 + ;
+: _RTE-HP.GLYPH-REFS-A     ( hybrid -- a ) 40 + ;
+: _RTE-HP.GLYPH-REFS-U     ( hybrid -- a ) 48 + ;
+: _RTE-HP.GLYPH-TEXT-A     ( hybrid -- a ) 56 + ;
+: _RTE-HP.GLYPH-TEXT-U     ( hybrid -- a ) 64 + ;
+: _RTE-HP.CONTROL-TEXT-A   ( hybrid -- a ) 72 + ;
+: _RTE-HP.CONTROL-TEXT-U   ( hybrid -- a ) 80 + ;
+: _RTE-HP.RESERVED         ( hybrid -- a ) 88 + ;
 
-72 CONSTANT RTE-HYBRID-PLAN-SIZE
+96 CONSTANT RTE-HYBRID-PLAN-SIZE
 16 CONSTANT RTE-HYBRID-TEXT-REF-SIZE
 
 : RTE-HYBRID-PLAN-BYTES  ( -- bytes )  RTE-HYBRID-PLAN-SIZE ;
@@ -1548,6 +1554,9 @@ CREATE _RTE-HPV-OWNED-END
 : _RTE-HPV-FIXED-WRAPPER?  ( hybrid facade -- flag )
     OVER RTE-HYBRID-PLAN-SIZE 2 PICK
         _RTE-HPV-FIXED-RECORD? 0= IF 2DROP 0 EXIT THEN
+    OVER _RTE-HP.ATTEMPT @ 0= IF 2DROP 0 EXIT THEN
+    OVER _RTE-HP.SOURCE-GENERATION @ 0= IF 2DROP 0 EXIT THEN
+    OVER _RTE-HP.SURFACE-GENERATION @ 0= IF 2DROP 0 EXIT THEN
     OVER _RTE-HP.RESERVED @ IF 2DROP 0 EXIT THEN
     OVER _RTE-HP.CONTROL-PLAN @
     2 PICK _RTE-HP.GLYPH-PLAN @ OR 0= IF 2DROP 0 EXIT THEN

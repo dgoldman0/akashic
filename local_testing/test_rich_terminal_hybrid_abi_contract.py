@@ -35,25 +35,31 @@ def _offset(source: str, name: str) -> int:
 def test_hybrid_wrapper_and_checked_summary_have_exact_fixed_layouts() -> None:
     engine = ENGINE.read_text(encoding="utf-8")
     provider = PROVIDER.read_text(encoding="utf-8")
-    assert _constant(engine, "RTE-HYBRID-PLAN-SIZE") == 72
+    assert _constant(engine, "RTE-HYBRID-PLAN-SIZE") == 96
     assert _constant(engine, "RTE-HYBRID-TEXT-REF-SIZE") == 16
     assert _constant(engine, "RTE-HYBRID-ADMISSION-SIZE") == 176
     assert _constant(provider, "RTAPT-HYBRID-ADMISSION-SIZE") == 176
 
     wrapper = {
-        "CONTROL-PLAN": 0,
-        "GLYPH-PLAN": 8,
-        "GLYPH-REFS-A": 16,
-        "GLYPH-REFS-U": 24,
-        "GLYPH-TEXT-A": 32,
-        "GLYPH-TEXT-U": 40,
-        "CONTROL-TEXT-A": 48,
-        "CONTROL-TEXT-U": 56,
-        "RESERVED": 64,
+        "ATTEMPT": 0,
+        "SOURCE-GENERATION": 8,
+        "SURFACE-GENERATION": 16,
+        "CONTROL-PLAN": 24,
+        "GLYPH-PLAN": 32,
+        "GLYPH-REFS-A": 40,
+        "GLYPH-REFS-U": 48,
+        "GLYPH-TEXT-A": 56,
+        "GLYPH-TEXT-U": 64,
+        "CONTROL-TEXT-A": 72,
+        "CONTROL-TEXT-U": 80,
+        "RESERVED": 88,
     }
     assert {
         field: _offset(engine, f"_RTE-HP.{field}") for field in wrapper
     } == wrapper
+    fixed_wrapper = _word(engine, "_RTE-HPV-FIXED-WRAPPER?")
+    for field in ("ATTEMPT", "SOURCE-GENERATION", "SURFACE-GENERATION"):
+        assert f"OVER _RTE-HP.{field} @ 0=" in fixed_wrapper
 
     fields = (
         "OWNER", "GENERATION", "SURFACE-COLS", "SURFACE-ROWS",
