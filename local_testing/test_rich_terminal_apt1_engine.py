@@ -903,7 +903,11 @@ def test_rich_terminal_engine_copies_one_typed_negotiated_limits_snapshot() -> N
         else:
             assert f"{offset} +" in definition
 
-    limits = _definition(source, "RTAPT-LIMITS@")
+    limits_public = _definition(source, "RTAPT-LIMITS@")
+    limits = _definition(source, "_RTAPT-LIMITS-AFTER-VALID@")
+    assert limits_public.count("_RTAPT-ENGINE-VALID?") == 1
+    assert limits_public.count("_RTAPT-LIMITS-AFTER-VALID@") == 1
+    assert "_RTAPT-ENGINE-VALID?" not in limits
     ready = limits.index("_RTAPT-READY-STATUS")
     caps = limits.index("PT-RETAINED-CAPS@", ready)
     formats = limits.index("PT-RETAINED-FORMATS@", caps)

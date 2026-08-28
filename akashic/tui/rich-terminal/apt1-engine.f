@@ -1545,11 +1545,8 @@ VARIABLE _RTAPT-LS-FORMATS-U
 \ consumed synchronously, copied into the engine, and scrubbed before return.
 \ Pending discovery is WOULD_BLOCK; the deterministic CELL-only result is
 \ UNSUPPORTED; structural loss is SESSION_LOST.
-: RTAPT-LIMITS@  ( engine -- limits status )
+: _RTAPT-LIMITS-AFTER-VALID@  ( engine -- limits status )
     _RTAPT-LS-E !
-    _RTAPT-LS-E @ _RTAPT-ENGINE-VALID? 0= IF
-        0 RTAPT-S-INVALID _RTAPT-LIMITS-SCRUB EXIT
-    THEN
     _RTAPT-LS-E @ _RTAPT-READY-STATUS DUP RTAPT-S-OK <> IF
         0 SWAP _RTAPT-LIMITS-SCRUB EXIT
     THEN DROP
@@ -1569,6 +1566,12 @@ VARIABLE _RTAPT-LS-FORMATS-U
         0 RTAPT-S-INVALID _RTAPT-LIMITS-SCRUB EXIT
     THEN
     RTAPT-S-OK _RTAPT-LIMITS-SCRUB ;
+
+: RTAPT-LIMITS@  ( engine -- limits status )
+    DUP _RTAPT-ENGINE-VALID? 0= IF
+        DROP 0 RTAPT-S-INVALID _RTAPT-LIMITS-SCRUB EXIT
+    THEN
+    _RTAPT-LIMITS-AFTER-VALID@ ;
 
 : RTAPT-FINI  ( engine -- status )
     DUP _RTAPT-ENGINE-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN
