@@ -8,8 +8,12 @@ ordinary UIDL-TUI menu trees through one coherent resolved-tree visit into
 caller-bounded, pointer-free work storage and ascending-key canonical records.
 Local semantic visibility remains distinct from effective paintability, so a
 closed menu can retain truthful row state without proposing claims for rows it
-did not paint. The rung is not yet attached to the projection lifecycle,
-admitted as claims, or materialized by the rich engine.
+did not paint. The next checked-in rung,
+`akashic/tui/rich-terminal/uidl-control-planner.f`, now converts those records
+into one caller-bounded initial RTE CONTROL plan in parent-first wire order and
+a separate canonical, attachment-token-scoped source-key correlation bank. It
+does not call the facade, decide claims, encode residuals, or attach either
+rung to the projection lifecycle; those seams remain incomplete.
 
 This document defines the renderer-neutral boundary between the ordinary
 UIDL/TUI draw lifecycle and an optional rich output adapter. The boundary is
