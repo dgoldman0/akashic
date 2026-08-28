@@ -88,6 +88,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "CONTROL-DEF",
         "CONTROL-REPLACE",
         "CONTROL-DROP",
+        "HYBRID-PREFLIGHT",
     ):
         assert f"_RTE-F.{callback}-XT @ 0=" in valid
 
@@ -252,6 +253,7 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
         "_RTE-F.CONTROL-DEF-XT !",
         "_RTE-F.CONTROL-REPLACE-XT !",
         "_RTE-F.CONTROL-DROP-XT !",
+        "_RTE-F.HYBRID-PREFLIGHT-XT !",
     ):
         assert fill < init.index(field) < magic
 
@@ -525,6 +527,7 @@ def test_apt1_bridge_finalization_is_blank_idempotent_and_scrubs_authority() -> 
         "CONTROL-DEF",
         "CONTROL-REPLACE",
         "CONTROL-DROP",
+        "HYBRID-PREFLIGHT",
     ):
         assert re.search(
             rf"_RTE-F\.{callback}-XT\s+@\s+\[']\s+_RTAPTE-",
