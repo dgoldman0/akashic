@@ -71,8 +71,7 @@ REQUIRE ../../utils/memory-span.f
     R> _RUCL-Q.ATTACHMENT ! ;
 
 : RUCL-REQUEST-GEOMETRY!
-    ( surface-cols surface-rows clip-row clip-col clip-height clip-width
-      request -- )
+    ( surface-cols surface-rows clip-row clip-col clip-height clip-width request -- )
     >R
     R@ _RUCL-Q.CLIP-W !
     R@ _RUCL-Q.CLIP-H !

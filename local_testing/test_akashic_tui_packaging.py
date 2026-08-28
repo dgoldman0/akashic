@@ -33,8 +33,13 @@ from akashic_tui import (  # noqa: E402
     DESKTOP_APT1_MAX_CELLS,
     DESKTOP_APT1_MAX_COLS,
     DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES,
+    DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
+    DESKTOP_APT1_MAX_OBJECTS,
     DESKTOP_APT1_MAX_ROWS,
     DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES,
+    DESKTOP_APT1_TOTAL_UTF8_BYTES,
+    DESKTOP_APT1_UIDL_RECORDS,
+    DESKTOP_APT1_UIDL_TEXT_BYTES,
     DEFAULT_SMOKE_MAX_STEPS,
     DEFAULT_SMOKE_TIMEOUT,
     FORTH_LINE_COALESCE_BARRIERS,
@@ -1742,7 +1747,12 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
             "tui/rich-terminal/engine.f",
             "tui/rich-terminal/engine-apt1.f",
             "tui/rich-terminal/screen-adapter-apt1.f",
-            "tui/rich-terminal/screen-plane.f",
+            "tui/rich-terminal/hybrid-screen-producer.f",
+            "tui/rich-terminal/residual-glyph-planner.f",
+            "tui/rich-terminal/uidl-claim-ledger.f",
+            "tui/rich-terminal/uidl-control-planner.f",
+            "tui/rich-terminal/uidl-hybrid-adapter.f",
+            "tui/uidl-menu-snapshot.f",
         }
     baseline_closure = set(dependency_order(baseline.roots))
     rich_closure = set(dependency_order(profile.roots))
@@ -2006,11 +2016,24 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
     assert DESKTOP_APT1_MAX_CELLS == (
         DESKTOP_APT1_MAX_COLS * DESKTOP_APT1_MAX_ROWS
     )
+    assert DESKTOP_APT1_UIDL_RECORDS == 256
+    assert DESKTOP_APT1_UIDL_TEXT_BYTES == 12_288
+    assert DESKTOP_APT1_MAX_OBJECTS == (
+        DESKTOP_APT1_MAX_CELLS + DESKTOP_APT1_UIDL_RECORDS
+    )
+    assert DESKTOP_APT1_MAX_GLYPH_RUN_BYTES == 4 * DESKTOP_APT1_MAX_COLS
+    assert DESKTOP_APT1_TOTAL_UTF8_BYTES == (
+        4 * DESKTOP_APT1_MAX_CELLS + DESKTOP_APT1_UIDL_TEXT_BYTES
+    )
     assert DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES == (
         12 + 8 * DESKTOP_APT1_MAX_COLS
     )
     assert DESKTOP_APT1_HIDDEN_START_BYTES == (
-        160 + 88 + 124 * DESKTOP_APT1_MAX_CELLS
+        160
+        + 88
+        + 124 * DESKTOP_APT1_MAX_CELLS
+        + 120 * DESKTOP_APT1_UIDL_RECORDS
+        + DESKTOP_APT1_UIDL_TEXT_BYTES
     )
     assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == (
         160
@@ -2020,18 +2043,21 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         + 124 * DESKTOP_APT1_MAX_CELLS
     )
     assert DESKTOP_APT1_MAX_CELLS == 80_000
+    assert DESKTOP_APT1_MAX_OBJECTS == 80_256
+    assert DESKTOP_APT1_MAX_GLYPH_RUN_BYTES == 1_600
+    assert DESKTOP_APT1_TOTAL_UTF8_BYTES == 332_288
     assert DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES == 3_212
-    assert DESKTOP_APT1_HIDDEN_START_BYTES == 9_920_248
+    assert DESKTOP_APT1_HIDDEN_START_BYTES == 9_963_256
     assert DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES == 10_570_616
     assert retained.to_dict() == {
-        "features": int(RetainedFeature.CORE),
+        "features": int(RetainedFeature.CORE | RetainedFeature.CONTROLS),
         "max_owner_records": 1,
         "max_live_owners": 1,
         "max_regions": 1,
         "max_resources": 0,
-        "max_objects": DESKTOP_APT1_MAX_CELLS,
+        "max_objects": DESKTOP_APT1_MAX_OBJECTS,
         "max_series": 0,
-        "max_operations_per_transaction": DESKTOP_APT1_MAX_CELLS + 1,
+        "max_operations_per_transaction": DESKTOP_APT1_MAX_OBJECTS + 1,
         "max_resource_chunk_bytes": 0,
         "max_retained_transaction_bytes": (
             DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES
@@ -2041,12 +2067,12 @@ def test_rich_terminal_launchers_carry_explicit_retained_policy() -> None:
         "max_image_width": 0,
         "max_image_height": 0,
         "max_path_points": 0,
-        "max_glyph_run_bytes": 4,
+        "max_glyph_run_bytes": DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
         "max_samples_per_append": 0,
         "max_history_per_series": 0,
         "minimum_presentation_interval_us": 0,
         "total_sample_slots": 0,
-        "total_utf8_bytes": 4 * DESKTOP_APT1_MAX_CELLS,
+        "total_utf8_bytes": DESKTOP_APT1_TOTAL_UTF8_BYTES,
         "client_to_terminal_max_payload": (
             DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES
         ),

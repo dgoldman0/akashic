@@ -287,8 +287,7 @@ VARIABLE _RTHP-V-P
     _RTHP.PHASE @ _RTHP-PH-LIVE = ;
 
 : RTHP-INIT
-  ( adapter facade arena-a arena-u max-records max-source-text max-cols max-rows
-    owner owner-generation region first-object producer -- scb-status )
+  ( adapter facade arena-a arena-u max-records max-source-text max-cols max-rows owner owner-generation region first-object producer -- scb-status )
     _RTHP-I-P ! _RTHP-I-FIRST ! _RTHP-I-REGION ! _RTHP-I-GEN !
     _RTHP-I-OWNER ! _RTHP-I-ROWS ! _RTHP-I-COLS ! _RTHP-I-TEXT !
     _RTHP-I-RECORDS ! _RTHP-I-ARENA-U ! _RTHP-I-ARENA !
@@ -633,8 +632,7 @@ VARIABLE _RTHP-Z-RETRY
 VARIABLE _RTHP-Z-OUTPUT
 
 : _RTHP-STEP-SEALED
-  ( accepted-phase retry-phase output-after? producer
-    -- scb-status more? output-needed? )
+  ( accepted-phase retry-phase output-after? producer -- scb-status more? output-needed? )
     _RTHP-Z-P ! _RTHP-Z-OUTPUT ! _RTHP-Z-RETRY ! _RTHP-Z-ACCEPT !
     _RTHP-Z-P @ _RTHP.FACADE @ RTE-UPDATE-STATE@
     _RTHP-S-STATUS ! _RTHP-S-STATE !
@@ -667,8 +665,7 @@ VARIABLE _RTHP-Z-OUTPUT
     SCB-S-INVALID _RTHP-Z-P @ _RTHP-FAULT-RESULT ;
 
 : RTHP-STEP
-  ( cols rows generation budget producer
-    -- scb-status more? output-needed? )
+  ( cols rows generation budget producer -- scb-status more? output-needed? )
     _RTHP-S-P ! DROP _RTHP-S-GEN ! _RTHP-S-ROWS ! _RTHP-S-COLS !
     _RTHP-S-P @ RTHP-VALID? 0= IF SCB-S-INVALID 0 0 EXIT THEN
     _RTHP-S-COLS @ _RTHP-S-ROWS @ _RTHP-S-GEN @ _RTHP-S-P @

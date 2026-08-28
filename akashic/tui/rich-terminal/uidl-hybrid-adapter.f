@@ -260,9 +260,7 @@ VARIABLE _RUHA-I-ADAPTER
     0 _RUHA-I-ADAPTER ! ;
 
 : RUHA-INIT
-    ( records-a records-u work-a work-u work-text-a work-text-u
-      snapshot-records-a snapshot-records-u snapshot-text-a snapshot-text-u
-      adapter -- status )
+    ( records-a records-u work-a work-u work-text-a work-text-u snapshot-records-a snapshot-records-u snapshot-text-a snapshot-text-u adapter -- status )
     _RUHA-I-ADAPTER !
     _RUHA-I-SNAP-TEXT-U ! _RUHA-I-SNAP-TEXT-A !
     _RUHA-I-SNAP-RECORDS-U ! _RUHA-I-SNAP-RECORDS-A !

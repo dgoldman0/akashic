@@ -555,8 +555,7 @@ VARIABLE _UMSN-OWNED-LIMIT
     -1 ;
 
 : _UMSN-TREE-VISITOR
-    ( elem source-index sibling-ordinal local-visible effective-visible
-      resolved available -- )
+    ( elem source-index sibling-ordinal local-visible effective-visible resolved available -- )
     _UMSN-V-RESOLVED-U ! _UMSN-V-RESOLVED-A !
     _UMSN-V-EFFECTIVE ! _UMSN-V-LOCAL ! _UMSN-V-ORDINAL !
     _UMSN-V-INDEX ! _UMSN-V-ELEM !
@@ -797,9 +796,7 @@ VARIABLE _UMSN-OWNED-LIMIT
     0 _UMSN-TV-A ! 0 _UMSN-TV-U ! 0 _UMSN-TV-I ! ;
 
 : UMSN-CAPTURE
-    ( generation work-a work-u work-text-a work-text-u
-      records-a records-u text-a text-u
-      -- record-count text-used status )
+    ( generation work-a work-u work-text-a work-text-u records-a records-u text-a text-u -- record-count text-used status )
     _UMSN-TEXT-U ! _UMSN-TEXT-A !
     _UMSN-RECORDS-U ! _UMSN-RECORDS-A !
     _UMSN-WORK-TEXT-U ! _UMSN-WORK-TEXT-A !

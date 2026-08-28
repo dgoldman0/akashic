@@ -13221,8 +13221,21 @@ SOUNDLAB-RUN
 DESKTOP_APT1_MAX_COLS = 400
 DESKTOP_APT1_MAX_ROWS = 200
 DESKTOP_APT1_MAX_CELLS = DESKTOP_APT1_MAX_COLS * DESKTOP_APT1_MAX_ROWS
+DESKTOP_APT1_UIDL_RECORDS = 256
+DESKTOP_APT1_UIDL_TEXT_BYTES = 12_288
+DESKTOP_APT1_MAX_OBJECTS = DESKTOP_APT1_MAX_CELLS + DESKTOP_APT1_UIDL_RECORDS
+DESKTOP_APT1_MAX_GLYPH_RUN_BYTES = 4 * DESKTOP_APT1_MAX_COLS
+DESKTOP_APT1_TOTAL_UTF8_BYTES = (
+    4 * DESKTOP_APT1_MAX_CELLS + DESKTOP_APT1_UIDL_TEXT_BYTES
+)
 DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES = 12 + 8 * DESKTOP_APT1_MAX_COLS
-DESKTOP_APT1_HIDDEN_START_BYTES = 160 + 88 + 124 * DESKTOP_APT1_MAX_CELLS
+DESKTOP_APT1_HIDDEN_START_BYTES = (
+    160
+    + 88
+    + 124 * DESKTOP_APT1_MAX_CELLS
+    + 120 * DESKTOP_APT1_UIDL_RECORDS
+    + DESKTOP_APT1_UIDL_TEXT_BYTES
+)
 DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES = (
     160
     + 56
@@ -13251,14 +13264,14 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
         service_batches=4,
     ),
     retained_policy=RetainedPolicy(
-        features=RetainedFeature.CORE,
+        features=RetainedFeature.CORE | RetainedFeature.CONTROLS,
         max_owner_records=1,
         max_live_owners=1,
         max_regions=1,
         max_resources=0,
-        max_objects=DESKTOP_APT1_MAX_CELLS,
+        max_objects=DESKTOP_APT1_MAX_OBJECTS,
         max_series=0,
-        max_operations_per_transaction=DESKTOP_APT1_MAX_CELLS + 1,
+        max_operations_per_transaction=DESKTOP_APT1_MAX_OBJECTS + 1,
         max_resource_chunk_bytes=0,
         max_retained_transaction_bytes=(
             DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES
@@ -13268,12 +13281,12 @@ DESKTOP_APT1_RICH_TERMINAL = RichTerminalProfile(
         max_image_width=0,
         max_image_height=0,
         max_path_points=0,
-        max_glyph_run_bytes=4,
+        max_glyph_run_bytes=DESKTOP_APT1_MAX_GLYPH_RUN_BYTES,
         max_samples_per_append=0,
         max_history_per_series=0,
         minimum_presentation_interval_us=0,
         total_sample_slots=0,
-        total_utf8_bytes=4 * DESKTOP_APT1_MAX_CELLS,
+        total_utf8_bytes=DESKTOP_APT1_TOTAL_UTF8_BYTES,
         client_to_terminal_max_payload=DESKTOP_APT1_MAX_ROW_PAYLOAD_BYTES,
         terminal_to_client_max_payload=64,
         base_max_transaction_bytes=DESKTOP_APT1_MAX_COUPLED_TRANSACTION_BYTES,

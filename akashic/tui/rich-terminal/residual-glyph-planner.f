@@ -997,8 +997,7 @@ VARIABLE _RGRP-REF
     _RGRP-UTF8 8 0 FILL ;
 
 : RGRP-BUILD
-    ( request -- run-count text-used aligned-text max-run-text
-                 last-object status )
+    ( request -- run-count text-used aligned-text max-run-text last-object status )
     _RGRP-Q !
     _RGRP-Q @ RGRP-REQUEST-SIZE _RGRP-SPAN? 0= IF
         _RGRP-SCRUB 0 0 0 0 0 RGRP-S-INVALID EXIT

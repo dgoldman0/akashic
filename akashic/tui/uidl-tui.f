@@ -4518,8 +4518,7 @@ CREATE _UTUI-RST-SEEN _UTUI-MAX-ELEMS ALLOT
     THEN ;
 
 : _UTUI-RST-NODE
-    ( elem sibling-ordinal ancestor-state outermost-z
-      -- elem child-state child-outermost-z status )
+    ( elem sibling-ordinal ancestor-state outermost-z -- elem child-state child-outermost-z status )
     _UTUI-RST-OUTERMOST-Z ! _UTUI-RST-ANCESTOR-STATE !
     _UTUI-RST-ORDINAL ! _UTUI-RST-ELEM !
     _UTUI-RST-ANCESTOR-STATE @ _UTUI-RST-S-VISIBLE AND 0<>
