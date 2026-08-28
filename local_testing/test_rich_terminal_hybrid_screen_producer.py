@@ -87,6 +87,8 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     controls = _word(source, "_RTHP-BUILD-CONTROLS?")
     claims = _word(source, "_RTHP-BUILD-CLAIMS?")
     wrap_control = _word(source, "_RTHP-W-WRAP-CONTROL-PLAN?")
+    document_at = _word(source, "_RTHP-DOCUMENT-AT")
+    target_build = _word(source, "_RTHP-TARGET-CANDIDATE?")
 
     assert "max-documents max-records" in storage
     assert "_RTHP-B-DOCUMENTS" in storage
@@ -95,6 +97,7 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     assert "_RTHP.SOURCE-DIR-A" in layout
     assert "RUHA-DOCUMENT-CAPACITY@" in init
     assert "_RTHP.MAX-DOCUMENTS !" in init
+    assert source.index(document_at) < source.index(target_build)
 
     for aggregate in (
         "RUHA-SNAPSHOT-DOCUMENT-COUNT@",

@@ -355,6 +355,9 @@ VARIABLE _RTHP-V-P
     DUP RTHP-VALID? 0= IF DROP 0 EXIT THEN
     _RTHP.TARGET-ACTIVE @ 0<> ;
 
+: _RTHP-DOCUMENT-AT  ( index producer -- document )
+    _RTHP.SOURCE-DIR-A @ SWAP RUHA-DOCUMENT-SIZE * + ;
+
 \ =====================================================================
 \  Revision-bound native menu input targets
 \ =====================================================================
@@ -966,9 +969,6 @@ VARIABLE _RTHP-W-OUT-CORR-A
 VARIABLE _RTHP-W-OUT-CORR-U
 VARIABLE _RTHP-W-OUT-CLAIMS-A
 VARIABLE _RTHP-W-OUT-CLAIMS-U
-
-: _RTHP-DOCUMENT-AT  ( index producer -- document )
-    _RTHP.SOURCE-DIR-A @ SWAP RUHA-DOCUMENT-SIZE * + ;
 
 : _RTHP-W-DOCUMENT-GEOMETRY?  ( -- flag )
     _RTHP-W-DOCUMENT @ RUHA-DOCUMENT-ROW@ DUP 0< IF DROP 0 EXIT THEN
