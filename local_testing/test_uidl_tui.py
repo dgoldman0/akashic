@@ -464,10 +464,16 @@ def test_action_register_fire():
     """UTUI-DO! registers an action; _UTUI-FIRE-DO fires it."""
     check("action-fire", _xml_lines(_XML_FOCUS, extra_before=[
         'VARIABLE _ACT-HIT',
+        'CREATE _ACT-NAME 6 ALLOT',
         ': _ON-BTN  DROP 1 _ACT-HIT ! ;',
-        "S\" on-btn\" ['] _ON-BTN UTUI-DO!",
     ], extra_after=[
         'DROP',
+        # UTUI-LOAD clears the per-document action registry.  Register only
+        # after the document that owns the action has loaded.  Overwrite the
+        # caller buffer afterward to prove the registry copied exact bytes.
+        'S" on-btn" _ACT-NAME SWAP MOVE',
+        "_ACT-NAME 6 ['] _ON-BTN UTUI-DO!",
+        '_ACT-NAME 6 120 FILL',
         # Focus is btn1, which has do="on-btn".  Fire it.
         'UTUI-FOCUS _UTUI-FIRE-DO',
         '_ACT-HIT @ . CR',

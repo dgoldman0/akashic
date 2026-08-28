@@ -690,43 +690,124 @@ VARIABLE _UTUI-PAA-STATUS
 \  §3 — Action Dispatch Table
 \ =====================================================================
 \
-\  64 entries, each 24 bytes: +0 hash, +8 xt, +16 used
+\  Exact, context-local action names and their execution tokens share one
+\  bounded arena.  Fixed 24-byte entries grow upward while copied name bytes
+\  grow downward, so registration never retains caller-owned string storage.
+\  Entry layout: +0 name offset, +8 name length, +16 xt.
 
-64 CONSTANT _UTUI-MAX-ACTS
-CREATE _UTUI-ACTS  _UTUI-MAX-ACTS 24 * ALLOT
+24 CONSTANT _UTUI-ACT-ENTRY-SIZE
+1536 CONSTANT _UTUI-ACTS-SZ
+CREATE _UTUI-ACTS  _UTUI-ACTS-SZ ALLOT
 VARIABLE _UTUI-ACT-CNT
 
-: _UTUI-ACT-HASH  ( a l -- h )
-    2166136261
-    SWAP 0 ?DO
-        OVER I + C@ XOR
-        16777619 *
-    LOOP
-    NIP ;
+VARIABLE _UTUI-ACT-REG-A
+VARIABLE _UTUI-ACT-REG-U
+VARIABLE _UTUI-ACT-REG-XT
+VARIABLE _UTUI-ACT-FRONTIER
+VARIABLE _UTUI-ACT-ENTRIES-END
+VARIABLE _UTUI-ACT-ENTRY-P
+VARIABLE _UTUI-ACT-ENTRY-OFF
+VARIABLE _UTUI-ACT-ENTRY-U
+VARIABLE _UTUI-ACT-QA
+VARIABLE _UTUI-ACT-QU
 
-: UTUI-DO!  ( do-a do-l xt -- )
-    >R
-    _UTUI-ACT-CNT @ _UTUI-MAX-ACTS >= IF 2DROP R> DROP EXIT THEN
-    _UTUI-ACT-HASH                     ( hash  R: xt )
-    _UTUI-ACT-CNT @ 24 * _UTUI-ACTS + ( hash entry  R: xt )
-    OVER OVER !                         \ entry+0 = hash
-    R> OVER 8 + !                       \ entry+8 = xt
-    1 OVER 16 + !                       \ entry+16 = used
-    DROP DROP
+: _UTUI-ACT-ENTRY  ( index -- entry )
+    _UTUI-ACT-ENTRY-SIZE * _UTUI-ACTS + ;
+
+: _UTUI-ACT-COUNT-VALID?  ( count -- flag )
+    DUP 0< IF DROP 0 EXIT THEN
+    _UTUI-ACTS-SZ _UTUI-ACT-ENTRY-SIZE / U> 0= ;
+
+: _UTUI-ACT-ENTRY-VALID?  ( entries-end entry -- flag )
+    _UTUI-ACT-ENTRY-P !
+    _UTUI-ACT-ENTRIES-END !
+    _UTUI-ACT-ENTRY-P @ @ _UTUI-ACT-ENTRY-OFF !
+    _UTUI-ACT-ENTRY-P @ 8 + @ _UTUI-ACT-ENTRY-U !
+    _UTUI-ACT-ENTRY-U @ 0> 0= IF 0 EXIT THEN
+    _UTUI-ACT-ENTRY-OFF @ _UTUI-ACT-ENTRIES-END @ U< IF 0 EXIT THEN
+    _UTUI-ACT-ENTRY-OFF @ _UTUI-ACTS-SZ U> IF 0 EXIT THEN
+    _UTUI-ACT-ENTRY-U @
+        _UTUI-ACTS-SZ _UTUI-ACT-ENTRY-OFF @ - U> IF 0 EXIT THEN
+    -1 ;
+
+: _UTUI-ACT-FRONTIER?  ( count -- frontier flag )
+    DUP _UTUI-ACT-COUNT-VALID? 0= IF DROP 0 0 EXIT THEN
+    DUP 0= IF DROP _UTUI-ACTS-SZ -1 EXIT THEN
+    DUP _UTUI-ACT-ENTRY-SIZE * _UTUI-ACT-ENTRIES-END !
+    1- _UTUI-ACT-ENTRY DUP _UTUI-ACT-ENTRY-P !
+    _UTUI-ACT-ENTRIES-END @ SWAP _UTUI-ACT-ENTRY-VALID? 0= IF
+        0 0 EXIT
+    THEN
+    _UTUI-ACT-ENTRY-P @ @ -1 ;
+
+: _UTUI-ACT-REG-CLEAR  ( -- )
+    0 _UTUI-ACT-REG-A !
+    0 _UTUI-ACT-REG-U !
+    0 _UTUI-ACT-REG-XT ! ;
+
+: _UTUI-DO-BODY  ( do-a do-l xt -- )
+    _UTUI-ACT-REG-XT !
+    _UTUI-ACT-REG-U !
+    _UTUI-ACT-REG-A !
+    _UTUI-ACT-REG-U @ 0> 0= IF EXIT THEN
+    _UTUI-ACT-REG-A @ 0= IF EXIT THEN
+    _UTUI-ACT-REG-A @ _UTUI-ACT-REG-U @
+        MSPAN-NONWRAPPING? 0= IF EXIT THEN
+    _UTUI-ACT-REG-A @ _UTUI-ACT-REG-U @
+        _UTUI-ACTS _UTUI-ACTS-SZ MSPAN-OVERLAP? IF EXIT THEN
+    _UTUI-ACT-CNT @ DUP _UTUI-ACT-COUNT-VALID? 0= IF DROP EXIT THEN
+    DUP _UTUI-ACT-FRONTIER? 0= IF 2DROP EXIT THEN
+    _UTUI-ACT-FRONTIER !
+    _UTUI-ACT-ENTRY-SIZE *
+    DUP _UTUI-ACTS-SZ _UTUI-ACT-ENTRY-SIZE - U> IF DROP EXIT THEN
+    _UTUI-ACT-ENTRY-SIZE + _UTUI-ACT-ENTRIES-END !
+    _UTUI-ACT-ENTRIES-END @ _UTUI-ACT-FRONTIER @ U> IF EXIT THEN
+    _UTUI-ACT-REG-U @
+        _UTUI-ACT-FRONTIER @ _UTUI-ACT-ENTRIES-END @ - U> IF EXIT THEN
+    _UTUI-ACT-FRONTIER @ _UTUI-ACT-REG-U @ -
+        _UTUI-ACT-ENTRY-OFF !
+    _UTUI-ACT-REG-A @
+        _UTUI-ACTS _UTUI-ACT-ENTRY-OFF @ +
+        _UTUI-ACT-REG-U @ CMOVE
+    _UTUI-ACT-CNT @ _UTUI-ACT-ENTRY DUP _UTUI-ACT-ENTRY-P !
+    _UTUI-ACT-ENTRY-OFF @ OVER !
+    _UTUI-ACT-REG-U @ OVER 8 + !
+    _UTUI-ACT-REG-XT @ SWAP 16 + !
     1 _UTUI-ACT-CNT +! ;
 
-: _UTUI-ACT-FIND  ( do-a do-l -- xt | 0 )
-    _UTUI-ACT-HASH                     ( hash )
-    _UTUI-ACT-CNT @ 0 ?DO
-        I 24 * _UTUI-ACTS +           ( hash entry )
-        DUP 16 + @ IF                  \ used?
-            DUP @ 2 PICK = IF         \ hash match?
-                8 + @ NIP UNLOOP EXIT
+: UTUI-DO!  ( do-a do-l xt -- )
+    _UTUI-DO-BODY
+    _UTUI-ACT-REG-CLEAR ;
+
+: _UTUI-ACT-QUERY-CLEAR  ( -- )
+    0 _UTUI-ACT-QA !
+    0 _UTUI-ACT-QU ! ;
+
+: _UTUI-ACT-FIND-BODY  ( do-a do-l -- xt | 0 )
+    _UTUI-ACT-QU !
+    _UTUI-ACT-QA !
+    _UTUI-ACT-QU @ 0> 0= IF 0 EXIT THEN
+    _UTUI-ACT-QA @ 0= IF 0 EXIT THEN
+    _UTUI-ACT-QA @ _UTUI-ACT-QU @ MSPAN-NONWRAPPING? 0= IF 0 EXIT THEN
+    _UTUI-ACT-CNT @ DUP _UTUI-ACT-COUNT-VALID? 0= IF DROP 0 EXIT THEN
+    DUP _UTUI-ACT-ENTRY-SIZE * _UTUI-ACT-ENTRIES-END !
+    0 ?DO
+        I _UTUI-ACT-ENTRY
+        _UTUI-ACT-ENTRIES-END @ SWAP _UTUI-ACT-ENTRY-VALID? 0= IF
+            0 UNLOOP EXIT
+        THEN
+        _UTUI-ACT-ENTRY-U @ _UTUI-ACT-QU @ = IF
+            _UTUI-ACTS _UTUI-ACT-ENTRY-OFF @ + _UTUI-ACT-ENTRY-U @
+            _UTUI-ACT-QA @ _UTUI-ACT-QU @ STR-STR= IF
+                I _UTUI-ACT-ENTRY 16 + @ UNLOOP EXIT
             THEN
         THEN
-        DROP
     LOOP
-    DROP 0 ;
+    0 ;
+
+: _UTUI-ACT-FIND  ( do-a do-l -- xt | 0 )
+    _UTUI-ACT-FIND-BODY
+    _UTUI-ACT-QUERY-CLEAR ;
 
 : _UTUI-FIRE-DO  ( elem -- )
     DUP S" do" UIDL-ATTR IF           ( elem da dl )
@@ -738,7 +819,9 @@ VARIABLE _UTUI-ACT-CNT
 
 : _UTUI-ACT-CLEAR  ( -- )
     0 _UTUI-ACT-CNT !
-    _UTUI-ACTS _UTUI-MAX-ACTS 24 * 0 FILL ;
+    _UTUI-ACTS _UTUI-ACTS-SZ 0 FILL
+    _UTUI-ACT-REG-CLEAR
+    _UTUI-ACT-QUERY-CLEAR ;
 
 \ =====================================================================
 \  §4 — Shortcut Table
@@ -3831,7 +3914,7 @@ VARIABLE _USA-VL
  4096 CONSTANT _UCTX-HIDS-SZ    \ 256 × 16
  3072 CONSTANT _UCTX-SUBS-SZ    \ 128 × 24
 24576 CONSTANT _UCTX-SC-SZ      \ 256 × 96  ( TSC-SIZE )
- 1536 CONSTANT _UCTX-ACTS-SZ    \ 64 × 24
+_UTUI-ACTS-SZ CONSTANT _UCTX-ACTS-SZ  \ exact action arena
  2048 CONSTANT _UCTX-SHORTS-SZ  \ 64 × 32
   512 CONSTANT _UCTX-OVBUF-SZ   \ 32 × 16
 

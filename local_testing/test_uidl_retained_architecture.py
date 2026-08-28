@@ -22,6 +22,13 @@ def _forth_code(source: str) -> str:
     return "\n".join(line.split("\\", 1)[0] for line in source.splitlines())
 
 
+def _registered_action_names(relative: str) -> tuple[str, ...]:
+    source = _text(relative)
+    return tuple(
+        re.findall(r'S"\s+([^"\n]+)"\s+\[\'\]\s+\S+\s+UTUI-DO!', source)
+    )
+
+
 def test_rich_terminal_is_not_an_applet_facing_scene_service() -> None:
     assert not (AKASHIC / "tui/presentation/api.f").exists()
     assert not (AKASHIC / "tui/presentation/broker.f").exists()
@@ -82,6 +89,41 @@ def test_lower_uidl_lifecycle_has_no_renderer_vocabulary() -> None:
         source = _text(relative)
         assert "UTUI-PROJECTION" not in source, relative
         assert "_UTUI-PROJ" not in source, relative
+
+
+def test_uidl_action_registry_owns_and_compares_exact_names() -> None:
+    tui = _text("akashic/tui/uidl-tui.f")
+    register = _word(tui, "_UTUI-DO-BODY")
+    public_register = _word(tui, "UTUI-DO!")
+    find = _word(tui, "_UTUI-ACT-FIND-BODY")
+
+    assert "1536 CONSTANT _UTUI-ACTS-SZ" in tui
+    assert "24 CONSTANT _UTUI-ACT-ENTRY-SIZE" in tui
+    assert "_UTUI-MAX-ACTS" not in tui
+    assert "_UTUI-ACT-HASH" not in tui
+    assert "MSPAN-NONWRAPPING?" in register
+    assert "MSPAN-OVERLAP?" in register
+    assert register.index("CMOVE") < register.index("_UTUI-ACT-CNT +!")
+    assert register.index("_UTUI-ACT-ENTRY-OFF @ OVER !") < register.index(
+        "_UTUI-ACT-CNT +!"
+    )
+    assert "_UTUI-ACT-REG-CLEAR" in public_register
+    assert "STR-STR=" in find
+    assert "0 ?DO" in find
+    assert "UNLOOP EXIT" in find
+    assert "_UTUI-ACT-FRONTIER?" in register
+    assert "_UTUI-ACTS-SZ CONSTANT _UCTX-ACTS-SZ" in tui
+
+    expected = {
+        "akashic/tui/applets/pad/pad.f": (32, 1025),
+        "akashic/tui/applets/daybook/daybook.f": (14, 441),
+    }
+    for relative, (count, arena_bytes) in expected.items():
+        names = _registered_action_names(relative)
+        used = count * 24 + sum(len(name.encode("utf-8")) for name in names)
+        assert len(names) == count
+        assert used == arena_bytes
+        assert used <= 1536
 
 
 def test_uidl_context_remains_the_hosted_application_ui_authority() -> None:

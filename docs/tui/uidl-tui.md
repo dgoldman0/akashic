@@ -759,7 +759,11 @@ S" popup" UTUI-HIDE
 ### UTUI-DO! — `( do-a do-l xt -- )`
 
 Register a named action.  When an element with a matching
-`on-activate` attribute is activated, the xt is called.
+`do=` attribute is activated, the xt is called. Registration copies the exact
+action name into the current document context; it never retains the caller's
+string address and hash equality is not treated as identity. Register actions
+after `UTUI-LOAD`, because loading a document clears the previous document's
+action arena.
 
 ---
 
