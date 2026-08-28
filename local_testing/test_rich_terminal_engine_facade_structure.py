@@ -57,8 +57,8 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     assert "_RTE-F.RESERVED @ IF DROP 0 EXIT THEN" in _definition(
         source, "RTE-VALID?"
     )
-    assert "152 CONSTANT RTE-FACADE-SIZE" in code
-    assert "160 CONSTANT RTE-LIMITS-SIZE" in code
+    assert "184 CONSTANT RTE-FACADE-SIZE" in code
+    assert "168 CONSTANT RTE-LIMITS-SIZE" in code
     assert "_RTE-F.CONTEXT" in _definition(source, "RTE-VALID?")
     valid = _definition(source, "RTE-VALID?")
     for callback in (
@@ -76,6 +76,10 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
         "GLYPH-RUN-PREFLIGHT",
         "UPDATE-STATE",
         "GLYPH-RUN-REPLACE",
+        "CONTROL-PREFLIGHT",
+        "CONTROL-DEF",
+        "CONTROL-REPLACE",
+        "CONTROL-DROP",
     ):
         assert f"_RTE-F.{callback}-XT @ 0=" in valid
 
@@ -111,6 +115,15 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-GLYPH-RUN-PLAN-ITEM-BYTES": "( -- bytes )",
         "RTE-GLYPH-RUN-PLAN-VALID?": "( plan -- flag )",
         "RTE-GLYPH-RUN-PREFLIGHT": "( plan facade -- status )",
+        "RTE-CONTROL-BYTES": "( -- bytes )",
+        "RTE-CONTROL-VALID?": "( control -- flag )",
+        "RTE-CONTROL-PLAN-BYTES": "( -- bytes )",
+        "RTE-CONTROL-PLAN-ITEM-BYTES": "( -- bytes )",
+        "RTE-CONTROL-PLAN-VALID?": "( plan -- flag )",
+        "RTE-CONTROL-PREFLIGHT": "( plan facade -- status )",
+        "RTE-CONTROL-DEFINE": "( control facade -- status )",
+        "RTE-CONTROL-REPLACE": "( control facade -- status )",
+        "RTE-CONTROL-DROP": "( owner generation control facade -- status )",
         "RTE-RETAINED-BEGIN": "( retained-mode facade -- status )",
         "RTE-RETAINED-SEAL": "( disposition facade -- status )",
         "RTE-RETAINED-CANCEL": "( facade -- status )",
@@ -223,6 +236,10 @@ def test_apt1_bridge_is_the_only_concrete_mapping_and_is_fail_before_mutation() 
         "_RTE-F.GLYPH-RUN-PREFLIGHT-XT !",
         "_RTE-F.UPDATE-STATE-XT !",
         "_RTE-F.GLYPH-RUN-REPLACE-XT !",
+        "_RTE-F.CONTROL-PREFLIGHT-XT !",
+        "_RTE-F.CONTROL-DEF-XT !",
+        "_RTE-F.CONTROL-REPLACE-XT !",
+        "_RTE-F.CONTROL-DROP-XT !",
     ):
         assert fill < init.index(field) < magic
 
@@ -492,8 +509,15 @@ def test_apt1_bridge_finalization_is_blank_idempotent_and_scrubs_authority() -> 
         "GLYPH-RUN-PREFLIGHT",
         "UPDATE-STATE",
         "GLYPH-RUN-REPLACE",
+        "CONTROL-PREFLIGHT",
+        "CONTROL-DEF",
+        "CONTROL-REPLACE",
+        "CONTROL-DROP",
     ):
-        assert f"_RTE-F.{callback}-XT @ ['] _RTAPTE-" in exact
+        assert re.search(
+            rf"_RTE-F\.{callback}-XT\s+@\s+\[']\s+_RTAPTE-",
+            exact,
+        )
 
     for public, body in (
         ("RTAPTE-INIT", "_RTAPTE-P-DO-INIT"),
@@ -511,7 +535,7 @@ def test_limits_snapshot_is_complete_neutral_and_fail_before_dispatch() -> None:
     source = FACADE.read_text(encoding="utf-8")
     bridge = BRIDGE.read_text(encoding="utf-8")
 
-    assert "160 CONSTANT RTE-LIMITS-SIZE" in source
+    assert "168 CONSTANT RTE-LIMITS-SIZE" in source
     expected_fields = {
         "FEATURES": 0,
         "OWNER-RECORDS": 8,
@@ -533,6 +557,7 @@ def test_limits_snapshot_is_complete_neutral_and_fail_before_dispatch() -> None:
         "SERIES-HISTORY": 136,
         "SAMPLE-SLOTS": 144,
         "MIN-INTERVAL-US": 152,
+        "OUTBOUND-PAYLOAD": 160,
     }
     for field, offset in expected_fields.items():
         definition = _definition(source, f"_RTE-L.{field}")
@@ -541,7 +566,15 @@ def test_limits_snapshot_is_complete_neutral_and_fail_before_dispatch() -> None:
         else:
             assert f"{offset} +" in definition
 
-    for feature in ("CORE", "VECTOR", "IMAGE", "INSTRUMENT", "SERIES", "CADENCE"):
+    for feature in (
+        "CORE",
+        "VECTOR",
+        "IMAGE",
+        "INSTRUMENT",
+        "SERIES",
+        "CADENCE",
+        "CONTROLS",
+    ):
         assert re.search(rf"(?m)^\d+\s+CONSTANT RTE-F-{feature}$", source)
 
     valid = _definition(source, "_RTE-LIMITS-VALID-BODY")
@@ -580,12 +613,12 @@ def test_limits_snapshot_is_complete_neutral_and_fail_before_dispatch() -> None:
 
     callback = _definition(bridge, "_RTAPTE-LIMITS@")
     provider = callback.index("RTAPT-LIMITS@")
-    provider_valid = callback.index("RTAPT-LIMITS-VALID?", provider)
-    neutral_valid = callback.index("RTE-LIMITS-VALID?", provider_valid)
-    copied = callback.index("_RTAPTE-LIMITS-COPY", neutral_valid)
-    assert provider < provider_valid < neutral_valid < copied
+    refusal = callback.index("RTAPT-S-OK <> IF", provider)
+    copied = callback.index("_RTAPTE-LIMITS-COPY", refusal)
+    assert provider < refusal < copied
     assert "RTAPT-S-OK <> IF" in callback
-    assert "_RTAPTE-FEATURES>RTE <> IF" in callback
+    assert "RTAPT-LIMITS-VALID?" not in callback
+    assert "RTE-LIMITS-VALID?" not in callback
     bridge_scrub = _definition(bridge, "_RTAPTE-LIMITS-SCRUB")
     for pointer in (
         "_RTAPTE-LS-DST",
@@ -599,6 +632,14 @@ def test_limits_snapshot_is_complete_neutral_and_fail_before_dispatch() -> None:
         assert f"_RTAPT-L.{field} @" in copy
         assert f"_RTE-L.{field} !" in copy
     feature_map = _definition(bridge, "_RTAPTE-FEATURES>RTE")
-    for feature in ("CORE", "VECTOR", "IMAGE", "INSTRUMENT", "SERIES", "CADENCE"):
+    for feature in (
+        "CORE",
+        "VECTOR",
+        "IMAGE",
+        "INSTRUMENT",
+        "SERIES",
+        "CADENCE",
+        "CONTROLS",
+    ):
         assert f"RTAPT-F-{feature}" in feature_map
         assert f"RTE-F-{feature}" in feature_map

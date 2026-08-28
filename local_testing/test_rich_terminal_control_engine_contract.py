@@ -6,6 +6,8 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 PROVIDER = ROOT / "akashic/tui/rich-terminal/apt1-engine.f"
+ENGINE = ROOT / "akashic/tui/rich-terminal/engine.f"
+BRIDGE = ROOT / "akashic/tui/rich-terminal/engine-apt1.f"
 
 
 def _text(path: Path) -> str:
@@ -21,6 +23,26 @@ def _word(source: str, name: str) -> str:
 def _ordered(source: str, *needles: str) -> None:
     positions = [source.index(needle) for needle in needles]
     assert positions == sorted(positions)
+
+
+def _constant(source: str, name: str) -> int:
+    match = re.search(
+        rf"(?m)^\s*(0x[0-9A-Fa-f]+|[0-9]+)\s+CONSTANT\s+"
+        rf"{re.escape(name)}\s*$",
+        source,
+    )
+    assert match is not None, name
+    return int(match.group(1), 0)
+
+
+def _field_offset(source: str, name: str) -> int:
+    definition = _word(source, name)
+    match = re.search(
+        r"\([^)]*--[^)]*\)\s*(?:(\d+)\s+\+)?\s*;\s*$",
+        definition,
+    )
+    assert match is not None, name
+    return int(match.group(1) or 0)
 
 
 def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
@@ -191,3 +213,290 @@ def test_captured_controls_are_revalidated_and_serialized_explicitly() -> None:
         "_RTAPT-CD.SHORTCUT-U",
         "PT-CONTROL-REPLACE ELSE PT-CONTROL-DEFINE",
     )
+
+
+def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> None:
+    source = _text(ENGINE)
+
+    assert _constant(source, "RTE-F-CONTROLS") == 64
+    assert _constant(source, "_RTE-FEATURE-MASK") == 0x7F
+    assert _constant(source, "RTE-LIMITS-SIZE") == 168
+    assert _field_offset(source, "_RTE-L.OUTBOUND-PAYLOAD") == 160
+
+    control_fields = {
+        "_RTE-CONTROL.OWNER": 0,
+        "_RTE-CONTROL.GENERATION": 8,
+        "_RTE-CONTROL.ID": 16,
+        "_RTE-CONTROL.KIND": 24,
+        "_RTE-CONTROL.STATE": 32,
+        "_RTE-CONTROL.Z": 40,
+        "_RTE-CONTROL.REGION": 48,
+        "_RTE-CONTROL.PARENT": 56,
+        "_RTE-CONTROL.ORDER": 64,
+        "_RTE-CONTROL.ROW": 72,
+        "_RTE-CONTROL.COL": 80,
+        "_RTE-CONTROL.HEIGHT": 88,
+        "_RTE-CONTROL.WIDTH": 96,
+        "_RTE-CONTROL.ROOT-HEIGHT": 104,
+        "_RTE-CONTROL.ROOT-WIDTH": 112,
+        "_RTE-CONTROL.LABEL-A": 120,
+        "_RTE-CONTROL.LABEL-U": 128,
+        "_RTE-CONTROL.SHORTCUT-A": 136,
+        "_RTE-CONTROL.SHORTCUT-U": 144,
+        "_RTE-CONTROL.RESERVED": 152,
+    }
+    assert {
+        name: _field_offset(source, name) for name in control_fields
+    } == control_fields
+    assert _constant(source, "RTE-CONTROL-SIZE") == 160
+
+    plan_fields = {
+        "_RTE-CP.OWNER": 0,
+        "_RTE-CP.GENERATION": 8,
+        "_RTE-CP.SURFACE-COLS": 16,
+        "_RTE-CP.SURFACE-ROWS": 24,
+        "_RTE-CP.REGION-ID": 32,
+        "_RTE-CP.REGION-X": 40,
+        "_RTE-CP.REGION-Y": 48,
+        "_RTE-CP.REGION-COLS": 56,
+        "_RTE-CP.REGION-ROWS": 64,
+        "_RTE-CP.REGION-Z": 72,
+        "_RTE-CP.REGION-FLAGS": 80,
+        "_RTE-CP.ITEMS-A": 88,
+        "_RTE-CP.ITEMS-U": 96,
+        "_RTE-CP.RESERVED": 104,
+    }
+    assert {name: _field_offset(source, name) for name in plan_fields} == plan_fields
+    assert _constant(source, "RTE-CONTROL-PLAN-SIZE") == 112
+
+    callback_fields = {
+        "_RTE-F.CONTROL-PREFLIGHT-XT": 152,
+        "_RTE-F.CONTROL-DEF-XT": 160,
+        "_RTE-F.CONTROL-REPLACE-XT": 168,
+        "_RTE-F.CONTROL-DROP-XT": 176,
+    }
+    assert {
+        name: _field_offset(source, name) for name in callback_fields
+    } == callback_fields
+    assert _constant(source, "RTE-FACADE-SIZE") == 184
+    valid = _word(source, "RTE-VALID?")
+    for field in callback_fields:
+        assert f"{field} @ 0=" in valid
+
+
+def test_neutral_control_plan_checks_authority_before_one_item_pass() -> None:
+    source = _text(ENGINE)
+    header = _word(source, "_RTE-CPV-HEADER?")
+    text_authority = _word(source, "_RTE-CPV-TEXT-AUTHORITY?")
+    item = _word(source, "_RTE-CPV-ITEM?")
+    body = _word(source, "_RTE-CONTROL-PLAN-VALID-BODY")
+    public = _word(source, "RTE-CONTROL-PREFLIGHT")
+
+    _ordered(
+        header,
+        "RTE-CONTROL-PLAN-SIZE _RTE-SPAN?",
+        "RTE-STORAGE-DISJOINT?",
+        "_RTE-CP.OWNER @",
+        "_RTE-CP.ITEMS-A @",
+        "_RTE-CP.ITEMS-U @",
+        "MSPAN-OVERLAP?",
+    )
+    _ordered(
+        text_authority,
+        "RTE-CONTROL-PLAN-SIZE MSPAN-OVERLAP?",
+        "_RTE-CPV-ITEMS-A @ _RTE-CPV-ITEMS-U @ MSPAN-OVERLAP?",
+        "RTE-STORAGE-DISJOINT?",
+    )
+    _ordered(
+        item,
+        "_RTE-CPV-ITEM-STRUCTURAL?",
+        "_RTE-CPV-ITEM-TEXT-AUTHORITY?",
+        "_RTE-CPV-ITEM-TEXT?",
+        "_RTE-CPV-ITEM-CORRELATES?",
+        "_RTE-CPV-GRAPH?",
+        "_RTE-CPV-ITEM-AGGREGATE?",
+    )
+    assert body.count("?DO") == 1
+    assert body.count("_RTE-CPV-ITEM?") == 1
+    assert public.count("_RTE-CONTROL-PLAN-VALID-BODY") == 1
+    callback = public[public.index("_RTE-CONTROL-PLAN-VALID-BODY") :]
+    _ordered(
+        callback,
+        "_RTE-CPV-PLAN @",
+        "_RTE-CPV-COUNT @",
+        "_RTE-CPV-TEXT-BYTES @",
+        "_RTE-CPV-ALIGNED-TEXT-BYTES @",
+        "_RTE-CPV-MAX-ITEM-TEXT @",
+        "_RTE-CPV-LAST-ID @",
+        "_RTE-F.CONTROL-PREFLIGHT-XT @ EXECUTE",
+    )
+
+
+def test_neutral_control_dispatch_proves_borrowed_storage_before_text_scan() -> None:
+    source = _text(ENGINE)
+    dispatch = _word(source, "_RTE-CONTROL-DISPATCH-READY?")
+
+    facade = dispatch.index("RTE-VALID?")
+    record_span = dispatch.index("RTE-CONTROL-SIZE _RTE-SPAN?", facade)
+    record_disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", record_span)
+    label_span = dispatch.index("_RTE-CONTROL-TEXT-SPAN?", record_disjoint)
+    label_disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", label_span)
+    shortcut_span = dispatch.index("_RTE-CONTROL-TEXT-SPAN?", label_span + 1)
+    shortcut_disjoint = dispatch.index("RTE-STORAGE-DISJOINT?", shortcut_span)
+    text_and_fields = dispatch.index("RTE-CONTROL-VALID?", shortcut_disjoint)
+    assert (
+        facade
+        < record_span
+        < record_disjoint
+        < label_span
+        < label_disjoint
+        < shortcut_span
+        < shortcut_disjoint
+        < text_and_fields
+    )
+
+
+def test_neutral_control_plan_proves_the_fixed_depth_menu_graph_in_that_pass() -> None:
+    source = _text(ENGINE)
+    identity = _word(source, "_RTE-CPV-ID?")
+    parent = _word(source, "_RTE-CPV-PARENT-RECORD?")
+    graph = _word(source, "_RTE-CPV-GRAPH?")
+    menu_phase = _word(source, "_RTE-CPV-PHASE-MENU?")
+    row_phase = _word(source, "_RTE-CPV-PHASE-ROW?")
+    group_order = _word(source, "_RTE-CPV-GROUP-ORDER?")
+    group_state = _word(source, "_RTE-CPV-GROUP-STATE?")
+
+    assert "_RTE-CPV-COUNT @ 0= IF" in identity
+    assert "_RTE-CPV-FIRST-ID !" in identity
+    assert "_RTE-CPV-PRIOR-ID @ 1 _RTE-UADD?" in identity
+    assert "_RTE-CONTROL.ID @ <>" in identity
+    _ordered(
+        parent,
+        "_RTE-CPV-PARENT-ID @ _RTE-CPV-FIRST-ID @ -",
+        "_RTE-CPV-COUNT @ U<",
+        "RTE-CONTROL-SIZE _RTE-UMUL?",
+        "_RTE-CPV-ITEMS-A @ SWAP _RTE-UADD?",
+        "_RTE-CONTROL.ID @ _RTE-CPV-PARENT-ID @ =",
+    )
+    assert "RTE-CONTROL-MENU-BAR" in graph
+    assert "_RTE-CPV-PHASE-MENU?" in graph
+    assert "_RTE-CPV-PHASE-ROW?" in graph
+    assert "RTE-CONTROL-MENU-BAR <>" in menu_phase
+    assert "RTE-CONTROL-MENU <>" in row_phase
+    assert "_RTE-CONTROL.ORDER @" in group_order
+    assert "_RTE-CPV-PRIOR-ORDER @ U> 0=" in group_order
+    assert "_RTE-CPV-OPEN-SEEN @ IF" in group_state
+    assert group_state.count("_RTE-CPV-SELECTED-SEEN @ IF") == 2
+
+
+def test_apt1_bridge_maps_limits_explicitly_and_validates_neutral_copy_once() -> None:
+    engine = _text(ENGINE)
+    bridge = _text(BRIDGE)
+    fields = (
+        "FEATURES",
+        "OWNER-RECORDS",
+        "LIVE-OWNERS",
+        "REGIONS",
+        "RESOURCES",
+        "OBJECTS",
+        "SERIES",
+        "OPS",
+        "UPDATE-BYTES",
+        "CHUNK-BYTES",
+        "RESOURCE-BYTES",
+        "IMAGE-WIDTH",
+        "IMAGE-HEIGHT",
+        "PATH-POINTS",
+        "GLYPH-RUN-BYTES",
+        "UTF8-BYTES",
+        "SAMPLES-APPEND",
+        "SERIES-HISTORY",
+        "SAMPLE-SLOTS",
+        "MIN-INTERVAL-US",
+        "OUTBOUND-PAYLOAD",
+    )
+    copy = _word(bridge, "_RTAPTE-LIMITS-COPY")
+    for field in fields:
+        assert f"_RTAPT-L.{field} @" in copy
+        assert f"_RTE-L.{field} !" in copy
+
+    feature_map = _word(bridge, "_RTAPTE-FEATURES>RTE")
+    assert "RTAPT-F-CONTROLS AND" in feature_map
+    assert "RTE-F-CONTROLS OR" in feature_map
+    callback = _word(bridge, "_RTAPTE-LIMITS@")
+    assert callback.count("_RTAPTE-LS-ENGINE @ RTAPT-LIMITS@") == 1
+    assert "RTAPT-LIMITS-VALID?" not in callback
+    assert "RTE-LIMITS-VALID?" not in callback
+    outer = _word(engine, "RTE-LIMITS@")
+    _ordered(outer, "_RTE-F.LIMITS-XT @ EXECUTE", "RTE-LIMITS-VALID?")
+
+
+def test_apt1_control_preflight_bridge_is_header_and_aggregate_only() -> None:
+    source = _text(BRIDGE)
+    preflight = _word(source, "_RTAPTE-CONTROL-PREFLIGHT")
+
+    assert "count text-bytes aligned-text-bytes max-item-text last-id" in preflight
+    for field in (
+        "OWNER",
+        "GENERATION",
+        "SURFACE-COLS",
+        "SURFACE-ROWS",
+        "REGION-ID",
+        "REGION-X",
+        "REGION-Y",
+        "REGION-COLS",
+        "REGION-ROWS",
+        "REGION-Z",
+        "REGION-FLAGS",
+    ):
+        assert f"_RTE-CP.{field} @" in preflight
+    assert "_RTE-CP.ITEMS-A" not in preflight
+    assert "_RTE-CP.ITEMS-U" not in preflight
+    assert "?DO" not in preflight
+    assert "LOOP" not in preflight
+    assert "RTAPT-CONTROL-PREFLIGHT" in preflight
+
+
+def test_apt1_bridge_maps_control_kind_and_state_without_shared_values() -> None:
+    source = _text(BRIDGE)
+    kind = _word(source, "_RTAPTE-CONTROL-KIND>RTAPT")
+    state = _word(source, "_RTAPTE-CONTROL-STATE>RTAPT")
+    convert = _word(source, "_RTAPTE-CONTROL>RTAPT")
+
+    for neutral, provider in (
+        ("MENU-BAR", "MENUBAR"),
+        ("MENU", "MENU"),
+        ("MENU-ITEM", "ITEM"),
+        ("MENU-SEPARATOR", "SEPARATOR"),
+    ):
+        assert f"RTE-CONTROL-{neutral}" in kind
+        assert f"RTAPT-CONTROL-{provider}" in kind
+    for bit in ("VISIBLE", "ENABLED", "OPEN", "SELECTED", "CHECKED"):
+        assert f"RTE-CONTROL-{bit} AND" in state
+        assert f"RTAPT-CONTROL-F-{bit} OR" in state
+    _ordered(
+        convert,
+        "_RTE-CONTROL.KIND @ _RTAPTE-CONTROL-KIND>RTAPT",
+        "_RTE-CONTROL.STATE @ _RTAPTE-CONTROL-STATE>RTAPT",
+        "_RTE-CONTROL.LABEL-A @",
+        "_RTE-CONTROL.SHORTCUT-U @",
+        "R> DROP R>",
+    )
+
+
+def test_apt1_bridge_installs_and_recognizes_every_control_callback() -> None:
+    source = _text(BRIDGE)
+    init = _word(source, "_RTAPTE-INIT-BODY")
+    exact = _word(source, "_RTAPTE-FACADE?")
+    callbacks = {
+        "CONTROL-PREFLIGHT": "CONTROL-PREFLIGHT",
+        "CONTROL-DEF": "CONTROL-DEFINE",
+        "CONTROL-REPLACE": "CONTROL-REPLACE",
+        "CONTROL-DROP": "CONTROL-DROP",
+    }
+
+    for field, callback in callbacks.items():
+        assert f"['] _RTAPTE-{callback}" in init
+        assert f"_RTE-F.{field}-XT !" in init
+        assert f"_RTE-F.{field}-XT @" in exact
+        assert f"['] _RTAPTE-{callback} =" in exact

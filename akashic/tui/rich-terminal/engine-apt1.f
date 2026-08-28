@@ -100,6 +100,7 @@ REQUIRE apt1-engine.f
     DUP RTAPT-F-INSTRUMENT AND IF SWAP RTE-F-INSTRUMENT OR SWAP THEN
     DUP RTAPT-F-SERIES AND IF SWAP RTE-F-SERIES OR SWAP THEN
     DUP RTAPT-F-CADENCE AND IF SWAP RTE-F-CADENCE OR SWAP THEN
+    DUP RTAPT-F-CONTROLS AND IF SWAP RTE-F-CONTROLS OR SWAP THEN
     DROP ;
 
 VARIABLE _RTAPTE-LS-DST
@@ -153,7 +154,9 @@ VARIABLE _RTAPTE-LS-STATUS
     _RTAPTE-LS-SRC @ _RTAPT-L.SAMPLE-SLOTS @
         _RTAPTE-LS-DST @ _RTE-L.SAMPLE-SLOTS !
     _RTAPTE-LS-SRC @ _RTAPT-L.MIN-INTERVAL-US @
-        _RTAPTE-LS-DST @ _RTE-L.MIN-INTERVAL-US ! ;
+        _RTAPTE-LS-DST @ _RTE-L.MIN-INTERVAL-US !
+    _RTAPTE-LS-SRC @ _RTAPT-L.OUTBOUND-PAYLOAD @
+        _RTAPTE-LS-DST @ _RTE-L.OUTBOUND-PAYLOAD ! ;
 
 \ Facade callback.  A provider refusal never writes the caller's neutral
 \ record; a successful call copies every field from the call-borrowed RTAPT
@@ -166,18 +169,9 @@ VARIABLE _RTAPTE-LS-STATUS
         _RTAPTE-LS-STATUS @ _RTAPTE-STATUS>RTE
         _RTAPTE-LIMITS-SCRUB EXIT
     THEN
-    _RTAPTE-LS-SRC @ RTAPT-LIMITS-VALID? 0= IF
-        RTE-S-INVALID _RTAPTE-LIMITS-SCRUB EXIT
-    THEN
-    \ This provider deliberately uses the neutral record's field offsets.
-    \ Prove that its feature mapping is identity-compatible, then
-    \ run the complete neutral validator before touching the caller record.
-    _RTAPTE-LS-SRC @ _RTAPT-L.FEATURES @ DUP _RTAPTE-FEATURES>RTE <> IF
-        RTE-S-INVALID _RTAPTE-LIMITS-SCRUB EXIT
-    THEN
-    _RTAPTE-LS-SRC @ RTE-LIMITS-VALID? 0= IF
-        RTE-S-INVALID _RTAPTE-LIMITS-SCRUB EXIT
-    THEN
+    \ RTAPT-LIMITS@ returns one already provider-validated snapshot.  Map
+    \ each field explicitly; RTE-LIMITS@ performs the sole neutral validation
+    \ on this destination after the callback returns.
     _RTAPTE-LIMITS-COPY
     RTE-S-OK _RTAPTE-LIMITS-SCRUB ;
 
@@ -200,6 +194,26 @@ VARIABLE _RTAPTE-LS-STATUS
     \ Neutral validation admits sparse monotone object IDs.  Pass the plan
     \ intact so RTAPT keeps ID high-water separate from count-based quota.
     RTAPT-GLYPH-RUN-PREFLIGHT _RTAPTE-STATUS>RTE ;
+
+\ The public facade has already made one full pass over the caller's item
+\ bank.  Forward its certified aggregates with O(1) header reads; neither the
+\ bridge nor the provider needs to rescan that bank before the first offer.
+: _RTAPTE-CONTROL-PREFLIGHT
+    ( plan count text-bytes aligned-text-bytes max-item-text last-id engine -- status )
+    >R >R >R >R >R >R
+    DUP _RTE-CP.OWNER @ SWAP
+    DUP _RTE-CP.GENERATION @ SWAP
+    DUP _RTE-CP.SURFACE-COLS @ SWAP
+    DUP _RTE-CP.SURFACE-ROWS @ SWAP
+    DUP _RTE-CP.REGION-ID @ SWAP
+    DUP _RTE-CP.REGION-X @ SWAP
+    DUP _RTE-CP.REGION-Y @ SWAP
+    DUP _RTE-CP.REGION-COLS @ SWAP
+    DUP _RTE-CP.REGION-ROWS @ SWAP
+    DUP _RTE-CP.REGION-Z @ SWAP
+    DUP _RTE-CP.REGION-FLAGS @ SWAP DROP
+    R> R> R> R> R> R>
+    RTAPT-CONTROL-PREFLIGHT _RTAPTE-STATUS>RTE ;
 
 : _RTAPTE-GLYPH-RUN-DEFINE  ( run engine -- status )
     >R >R
@@ -247,6 +261,77 @@ VARIABLE _RTAPTE-LS-STATUS
     R> DROP R>
     RTAPT-GLYPH-RUN-REPLACE _RTAPTE-STATUS>RTE ;
 
+: _RTAPTE-CONTROL-KIND>RTAPT  ( rte-kind -- rtapt-kind )
+    DUP RTE-CONTROL-MENU-BAR = IF
+        DROP RTAPT-CONTROL-MENUBAR EXIT
+    THEN
+    DUP RTE-CONTROL-MENU = IF DROP RTAPT-CONTROL-MENU EXIT THEN
+    DUP RTE-CONTROL-MENU-ITEM = IF
+        DROP RTAPT-CONTROL-ITEM EXIT
+    THEN
+    RTE-CONTROL-MENU-SEPARATOR = IF
+        RTAPT-CONTROL-SEPARATOR EXIT
+    THEN
+    0 ;
+
+: _RTAPTE-CONTROL-STATE>RTAPT  ( rte-state -- rtapt-state )
+    0 SWAP
+    DUP RTE-CONTROL-VISIBLE AND IF
+        SWAP RTAPT-CONTROL-F-VISIBLE OR SWAP
+    THEN
+    DUP RTE-CONTROL-ENABLED AND IF
+        SWAP RTAPT-CONTROL-F-ENABLED OR SWAP
+    THEN
+    DUP RTE-CONTROL-OPEN AND IF
+        SWAP RTAPT-CONTROL-F-OPEN OR SWAP
+    THEN
+    DUP RTE-CONTROL-SELECTED AND IF
+        SWAP RTAPT-CONTROL-F-SELECTED OR SWAP
+    THEN
+    DUP RTE-CONTROL-CHECKED AND IF
+        SWAP RTAPT-CONTROL-F-CHECKED OR SWAP
+    THEN
+    DROP ;
+
+\ Convert one already neutral-validated borrowed record into the provider's
+\ scalar call.  No record layout, kind value, or state bit is shared by
+\ implication across this boundary.
+: _RTAPTE-CONTROL>RTAPT
+    ( control engine -- owner generation control kind state z region parent order row col height width root-height root-width label-a label-u shortcut-a shortcut-u engine )
+    >R >R
+    R@ _RTE-CONTROL.OWNER @
+    R@ _RTE-CONTROL.GENERATION @
+    R@ _RTE-CONTROL.ID @
+    R@ _RTE-CONTROL.KIND @ _RTAPTE-CONTROL-KIND>RTAPT
+    R@ _RTE-CONTROL.STATE @ _RTAPTE-CONTROL-STATE>RTAPT
+    R@ _RTE-CONTROL.Z @
+    R@ _RTE-CONTROL.REGION @
+    R@ _RTE-CONTROL.PARENT @
+    R@ _RTE-CONTROL.ORDER @
+    R@ _RTE-CONTROL.ROW @
+    R@ _RTE-CONTROL.COL @
+    R@ _RTE-CONTROL.HEIGHT @
+    R@ _RTE-CONTROL.WIDTH @
+    R@ _RTE-CONTROL.ROOT-HEIGHT @
+    R@ _RTE-CONTROL.ROOT-WIDTH @
+    R@ _RTE-CONTROL.LABEL-A @
+    R@ _RTE-CONTROL.LABEL-U @
+    R@ _RTE-CONTROL.SHORTCUT-A @
+    R@ _RTE-CONTROL.SHORTCUT-U @
+    R> DROP R> ;
+
+: _RTAPTE-CONTROL-DEFINE  ( control engine -- status )
+    _RTAPTE-CONTROL>RTAPT
+    RTAPT-CONTROL-DEFINE _RTAPTE-STATUS>RTE ;
+
+: _RTAPTE-CONTROL-REPLACE  ( control engine -- status )
+    _RTAPTE-CONTROL>RTAPT
+    RTAPT-CONTROL-REPLACE _RTAPTE-STATUS>RTE ;
+
+: _RTAPTE-CONTROL-DROP
+    ( owner generation control engine -- status )
+    RTAPT-CONTROL-DROP _RTAPTE-STATUS>RTE ;
+
 : _RTAPTE-RETAINED-SEAL  ( rte-disposition engine -- status )
     SWAP _RTAPTE-DISPOSITION>RTAPT 0= IF
         2DROP RTE-S-INVALID EXIT
@@ -282,6 +367,11 @@ VARIABLE _RTAPTE-LS-STATUS
     OVER _RTE-F.GLYPH-RUN-PREFLIGHT-XT @ ['] _RTAPTE-GLYPH-RUN-PREFLIGHT = AND
     OVER _RTE-F.UPDATE-STATE-XT @ ['] _RTAPTE-UPDATE-STATE@ = AND
     OVER _RTE-F.GLYPH-RUN-REPLACE-XT @ ['] _RTAPTE-GLYPH-RUN-REPLACE = AND
+    OVER _RTE-F.CONTROL-PREFLIGHT-XT @
+        ['] _RTAPTE-CONTROL-PREFLIGHT = AND
+    OVER _RTE-F.CONTROL-DEF-XT @ ['] _RTAPTE-CONTROL-DEFINE = AND
+    OVER _RTE-F.CONTROL-REPLACE-XT @ ['] _RTAPTE-CONTROL-REPLACE = AND
+    OVER _RTE-F.CONTROL-DROP-XT @ ['] _RTAPTE-CONTROL-DROP = AND
     NIP ;
 
 VARIABLE _RTAPTE-I-ENGINE
@@ -332,6 +422,14 @@ VARIABLE _RTAPTE-I-FACADE
         _RTAPTE-I-FACADE @ _RTE-F.UPDATE-STATE-XT !
     ['] _RTAPTE-GLYPH-RUN-REPLACE
         _RTAPTE-I-FACADE @ _RTE-F.GLYPH-RUN-REPLACE-XT !
+    ['] _RTAPTE-CONTROL-PREFLIGHT
+        _RTAPTE-I-FACADE @ _RTE-F.CONTROL-PREFLIGHT-XT !
+    ['] _RTAPTE-CONTROL-DEFINE
+        _RTAPTE-I-FACADE @ _RTE-F.CONTROL-DEF-XT !
+    ['] _RTAPTE-CONTROL-REPLACE
+        _RTAPTE-I-FACADE @ _RTE-F.CONTROL-REPLACE-XT !
+    ['] _RTAPTE-CONTROL-DROP
+        _RTAPTE-I-FACADE @ _RTE-F.CONTROL-DROP-XT !
     _RTE-MAGIC _RTAPTE-I-FACADE @ _RTE-F.MAGIC !
     RTE-S-OK ;
 
