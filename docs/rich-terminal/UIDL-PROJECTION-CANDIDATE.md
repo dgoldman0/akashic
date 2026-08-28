@@ -12,8 +12,14 @@ did not paint. The next checked-in rung,
 `akashic/tui/rich-terminal/uidl-control-planner.f`, now converts those records
 into one caller-bounded initial RTE CONTROL plan in parent-first wire order and
 a separate canonical, attachment-token-scoped source-key correlation bank. It
-does not call the facade, decide claims, encode residuals, or attach either
-rung to the projection lifecycle; those seams remain incomplete.
+does not call the facade or decide claims. The next pure rung,
+`akashic/tui/rich-terminal/uidl-claim-ledger.f`, applies an all-or-none
+admission result to the same frozen UMSN family and, in one canonical source
+pass, emits only nonempty PAINTABLE rectangles clipped to the source clip and
+surface. Its pointer-free claims retain the attachment, source key, generation,
+and paint z needed by later residual composition. Neither rung encodes
+residuals or attaches to the projection lifecycle; those seams remain
+incomplete.
 
 This document defines the renderer-neutral boundary between the ordinary
 UIDL/TUI draw lifecycle and an optional rich output adapter. The boundary is
