@@ -12,7 +12,8 @@ REQUIRE tui/screen.f
 
 `PROVIDED akashic-tui-screen` — safe to include multiple times.
 
-**Dependencies:** `cell.f`, `ansi.f`, `../text/utf8.f`, `../utils/term.f`
+**Dependencies:** `cell.f`, `ansi.f`, `../text/utf8.f`,
+`../text/cell-width.f`, `../utils/term.f`, `../utils/memory-span.f`
 
 ---
 
@@ -23,6 +24,7 @@ REQUIRE tui/screen.f
 - [Constructor / Destructor](#constructor--destructor)
 - [Current Screen](#current-screen)
 - [Accessors](#accessors)
+- [Storage Authority](#storage-authority)
 - [Cell Read / Write](#cell-read--write)
 - [Fill / Clear](#fill--clear)
 - [Cursor Management](#cursor-management)
@@ -117,6 +119,17 @@ and cursor words operate on the current screen.
 |------|-------|-------------|
 | `SCR-W` | `( -- w )` | Width of current screen in columns |
 | `SCR-H` | `( -- h )` | Height of current screen in rows |
+
+---
+
+## Storage Authority
+
+`SCR-STORAGE-DISJOINT? ( a u -- flag )` validates the active screen and proves
+that a canonical caller span does not overlap screen-owned module storage, the
+current descriptor, either complete CELL plane, or the bound backend
+descriptor. `(0,0)` is the only accepted empty span and still requires a
+structurally valid active screen. The backend context is opaque; callers must
+also use its owning API when that context is in their storage graph.
 
 ---
 
@@ -306,6 +319,7 @@ reclaiming free list; otherwise they use the Bank 0 heap.
 | `SCR-USE` | `( scr -- )` | Set current |
 | `SCR-W` | `( -- w )` | Get width |
 | `SCR-H` | `( -- h )` | Get height |
+| `SCR-STORAGE-DISJOINT?` | `( a u -- flag )` | Prove caller storage cannot mutate the active screen graph |
 | `SCR-SET` | `( cell row col -- )` | Write back buf |
 | `SCR-GET` | `( row col -- cell )` | Read back buf |
 | `SCR-FRONT@` | `( row col -- cell )` | Read front buf |

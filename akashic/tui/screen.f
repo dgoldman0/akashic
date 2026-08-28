@@ -35,6 +35,7 @@ REQUIRE ansi.f
 REQUIRE ../text/utf8.f
 REQUIRE ../text/cell-width.f
 REQUIRE ../utils/term.f
+REQUIRE ../utils/memory-span.f
 
 \ =====================================================================
 \ 1. Descriptor field offsets
@@ -83,6 +84,11 @@ REQUIRE ../utils/term.f
 : SCB.CURSOR-XT  ( backend -- field ) _SCB-O-CURSOR-XT + ;
 : SCB.COMMIT-XT  ( backend -- field ) _SCB-O-COMMIT-XT + ;
 : SCB.ABORT-XT   ( backend -- field ) _SCB-O-ABORT-XT + ;
+
+\ Bracket every mutable/static byte owned by this module.  The limit is
+\ installed only after the optional guard wrappers have also been compiled.
+CREATE _SCR-OWNED-START
+VARIABLE _SCR-OWNED-LIMIT
 
 VARIABLE _SCBI-BACKEND
 VARIABLE _SCBI-CONTEXT
@@ -138,6 +144,13 @@ VARIABLE _SCR-LAST-COL    \ last physical cursor col during flush
 VARIABLE _SCR-LAST-FG     \ last emitted fg color
 VARIABLE _SCR-LAST-BG     \ last emitted bg color
 VARIABLE _SCR-LAST-ATTRS  \ last emitted attribute set
+VARIABLE _SCR-SD-A
+VARIABLE _SCR-SD-U
+VARIABLE _SCR-SD-SCREEN
+VARIABLE _SCR-SD-BUF-U
+VARIABLE _SCR-SD-FRONT
+VARIABLE _SCR-SD-BACK
+VARIABLE _SCR-SD-BACKEND
 
 \ =====================================================================
 \ 4. Internal helpers
@@ -348,6 +361,85 @@ VARIABLE _SCR-SIZE-H
 
 : SCR-BACKEND@  ( -- backend | 0 )
     _SCR-CUR @ ?DUP IF _SCR-O-BACKEND + @ ELSE 0 THEN ;
+
+\ _SCR-OPTIONAL-BYTE-SPAN? ( a u -- flag )
+\   Admit only the canonical empty span or one nonempty, nonwrapping span.
+: _SCR-OPTIONAL-BYTE-SPAN?  ( a u -- flag )
+    DUP 0< IF 2DROP 0 EXIT THEN
+    DUP 0= IF DROP 0= EXIT THEN
+    OVER 0= IF 2DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING? ;
+
+: _SCR-SD-OVERLAP?  ( other-a other-u -- flag )
+    _SCR-SD-A @ _SCR-SD-U @ 2SWAP MSPAN-OVERLAP? ;
+
+: _SCR-ALIGNED-SPAN?  ( a u -- flag )
+    OVER 0<> OVER 0> AND 0= IF 2DROP 0 EXIT THEN
+    OVER 7 AND IF 2DROP 0 EXIT THEN
+    MSPAN-NONWRAPPING? ;
+
+: _SCR-MODULE-DISJOINT?  ( a u -- flag )
+    _SCR-OWNED-LIMIT @ DUP _SCR-OWNED-START U< IF
+        DROP 2DROP 0 EXIT
+    THEN
+    _SCR-OWNED-START - _SCR-OWNED-START SWAP MSPAN-OVERLAP? 0= ;
+
+: _SCR-ACTIVE-STORAGE-VALID?  ( -- flag )
+    _SCR-CUR @ DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP _SCR-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    _SCR-SD-SCREEN !
+    _SCR-SD-SCREEN @ _SCR-O-W + @
+    _SCR-SD-SCREEN @ _SCR-O-H + @ _SCR-DIMS-BYTES? 0= IF
+        DROP 0 EXIT
+    THEN
+    _SCR-SD-BUF-U !
+    _SCR-SD-SCREEN @ _SCR-O-FRONT + @ _SCR-SD-FRONT !
+    _SCR-SD-SCREEN @ _SCR-O-BACK + @ _SCR-SD-BACK !
+    _SCR-SD-FRONT @ _SCR-SD-BUF-U @ _SCR-ALIGNED-SPAN? 0= IF 0 EXIT THEN
+    _SCR-SD-BACK @ _SCR-SD-BUF-U @ _SCR-ALIGNED-SPAN? 0= IF 0 EXIT THEN
+    _SCR-SD-SCREEN @ _SCR-DESC-SIZE _SCR-MODULE-DISJOINT? 0= IF
+        0 EXIT
+    THEN
+    _SCR-SD-FRONT @ _SCR-SD-BUF-U @ _SCR-MODULE-DISJOINT? 0= IF
+        0 EXIT
+    THEN
+    _SCR-SD-BACK @ _SCR-SD-BUF-U @ _SCR-MODULE-DISJOINT? 0= IF
+        0 EXIT
+    THEN
+    _SCR-SD-SCREEN @ _SCR-DESC-SIZE
+        _SCR-SD-FRONT @ _SCR-SD-BUF-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-SCREEN @ _SCR-DESC-SIZE
+        _SCR-SD-BACK @ _SCR-SD-BUF-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-FRONT @ _SCR-SD-BUF-U @
+        _SCR-SD-BACK @ _SCR-SD-BUF-U @ MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-SCREEN @ _SCR-O-BACKEND + @ DUP 0= IF DROP 0 EXIT THEN
+    DUP 7 AND IF DROP 0 EXIT THEN
+    DUP SCB-DESC-SIZE MSPAN-NONWRAPPING? 0= IF DROP 0 EXIT THEN
+    DUP SCB-VALID? 0= IF DROP 0 EXIT THEN _SCR-SD-BACKEND !
+    _SCR-SD-SCREEN @ _SCR-DESC-SIZE
+        _SCR-SD-BACKEND @ SCB-DESC-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-FRONT @ _SCR-SD-BUF-U @
+        _SCR-SD-BACKEND @ SCB-DESC-SIZE MSPAN-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-BACK @ _SCR-SD-BUF-U @
+        _SCR-SD-BACKEND @ SCB-DESC-SIZE MSPAN-OVERLAP? 0= ;
+
+\ SCR-STORAGE-DISJOINT? ( a u -- flag )
+\   Prove that caller storage cannot mutate the active screen while a
+\   projection reads it.  The protected graph is the complete screen module,
+\   current descriptor, both CELL planes, and the borrowed backend descriptor.
+\   Backend context remains opaque and must be checked by its owning API.
+: SCR-STORAGE-DISJOINT?  ( a u -- flag )
+    _SCR-SD-U ! _SCR-SD-A !
+    _SCR-SD-A @ _SCR-SD-U @ _SCR-OPTIONAL-BYTE-SPAN? 0= IF 0 EXIT THEN
+    _SCR-ACTIVE-STORAGE-VALID? 0= IF 0 EXIT THEN
+    _SCR-SD-A @ _SCR-SD-U @ _SCR-MODULE-DISJOINT? 0= IF 0 EXIT THEN
+    _SCR-SD-U @ 0= IF -1 EXIT THEN
+    _SCR-SD-SCREEN @ _SCR-DESC-SIZE _SCR-SD-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-FRONT @ _SCR-SD-BUF-U @ _SCR-SD-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-BACK @ _SCR-SD-BUF-U @ _SCR-SD-OVERLAP? IF 0 EXIT THEN
+    _SCR-SD-BACKEND @ SCB-DESC-SIZE _SCR-SD-OVERLAP? IF 0 EXIT THEN
+    -1 ;
 
 \ SCR-BACKEND! ( backend -- status )
 \   Bind a validated caller-owned descriptor and force its first accepted
@@ -826,6 +918,7 @@ GUARD _scr-guard
 ' SCR-REQUEST-FLUSH   CONSTANT _scr-request-flush-xt
 ' SCR-DIRTY?          CONSTANT _scr-dirty-xt
 ' SCR-BACKEND@        CONSTANT _scr-backend-get-xt
+' SCR-STORAGE-DISJOINT? CONSTANT _scr-storage-disjoint-xt
 ' SCR-BACKEND!        CONSTANT _scr-backend-set-xt
 ' SCR-ANSI            CONSTANT _scr-ansi-xt
 ' SCR-RESIZE          CONSTANT _scr-resize-xt
@@ -848,6 +941,8 @@ GUARD _scr-guard
 : SCR-REQUEST-FLUSH   _scr-request-flush-xt _scr-guard WITH-GUARD ;
 : SCR-DIRTY?          _scr-dirty-xt _scr-guard WITH-GUARD ;
 : SCR-BACKEND@        _scr-backend-get-xt _scr-guard WITH-GUARD ;
+: SCR-STORAGE-DISJOINT?
+    _scr-storage-disjoint-xt _scr-guard WITH-GUARD ;
 : SCR-BACKEND!        _scr-backend-set-xt _scr-guard WITH-GUARD ;
 : SCR-ANSI            _scr-ansi-xt _scr-guard WITH-GUARD ;
 : SCR-RESIZE          _scr-resize-xt _scr-guard WITH-GUARD ;
@@ -855,3 +950,6 @@ GUARD _scr-guard
 : SCR-CURSOR-ON       _scr-curon-xt  _scr-guard WITH-GUARD ;
 : SCR-CURSOR-OFF      _scr-curoff-xt _scr-guard WITH-GUARD ;
 [THEN] [THEN]
+
+CREATE _SCR-OWNED-END
+_SCR-OWNED-END _SCR-OWNED-LIMIT !
