@@ -52,12 +52,17 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     )
     assert set(re.findall(r"(?m)^CREATE\s+(\S+)", code)) == {
         "_RTE-HPV-OWNED-START",
-        "_RTE-HPV-SUMMARY",
+        "_RTE-HPV-SUMMARY-MEM",
         "_RTE-HPV-OWNED-END",
     }
     assert code.count("ALLOT") == 1
     assert (
-        "CREATE _RTE-HPV-SUMMARY RTE-HYBRID-ADMISSION-SIZE ALLOT" in code
+        "CREATE _RTE-HPV-SUMMARY-MEM "
+        "RTE-HYBRID-ADMISSION-SIZE 7 + ALLOT" in code
+    )
+    assert (
+        "_RTE-HPV-SUMMARY-MEM 7 + -8 AND "
+        "CONSTANT _RTE-HPV-SUMMARY" in code
     )
 
     assert "_RTE-ABI" not in code
