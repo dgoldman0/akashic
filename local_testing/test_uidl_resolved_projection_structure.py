@@ -326,6 +326,7 @@ def test_storage_boundary_covers_the_provider_and_borrowed_authorities() -> None
     assert "RGN-SIZE MSPAN-NONWRAPPING? 0=" in disjoint
     assert "RGN-SIZE MSPAN-OVERLAP?" in disjoint
     assert "UIDL-STORAGE-DISJOINT? 0=" in disjoint
+    assert "UIDL-SEMANTIC-STORAGE-DISJOINT? 0=" in disjoint
     assert "ST-STORAGE-DISJOINT? 0=" in disjoint
     assert "2DROP -1" in disjoint
 

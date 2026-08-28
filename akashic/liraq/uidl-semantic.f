@@ -16,6 +16,7 @@
 \
 \  Public compound seam:
 \    UIDL-SEMANTIC-OBSERVE  ( i*x xt -- j*x )
+\    UIDL-SEMANTIC-STORAGE-DISJOINT?  ( address length -- flag )
 
 PROVIDED akashic-uidl-semantic
 
@@ -50,9 +51,13 @@ REQUIRE ../utils/memory-span.f
 \ scratch is an ABI-derived scalar bound, not an application text capacity.
 \ _uidls-guard protects it across complete snapshot capture; UIDL-TEXT@
 \ exposes it only with the call-borrowed lifetime documented below.
+CREATE _UIDLS-OWNED-START
 CREATE _UIDLS-NUM-TEXT 24 ALLOT
 VARIABLE _UIDLS-NUM-POS
 VARIABLE _UIDLS-NUM-NEG
+VARIABLE _UIDLS-OWNED-LIMIT
+
+0 _UIDLS-OWNED-LIMIT !
 
 : _UIDLS-NUM>TEXT  ( n -- a u )
     DUP 0= IF
@@ -414,6 +419,23 @@ VARIABLE _UIDLS-LV-P-AVAILABLE
     THEN
     _UIDLS-LV-P-CLEAR ;
 
+\ Reject overlap with semantic conversion, capture, validation, and guard
+\ storage.  The conservative provider span also covers the implementation
+\ threaded between those cells; callers never need to place derived output
+\ inside this module's dictionary extent.
+: _UIDLS-STORAGE-DISJOINT-BODY?  ( address length -- flag )
+    2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
+    _UIDLS-OWNED-LIMIT @ DUP _UIDLS-OWNED-START U< IF
+        DROP 2DROP 0 EXIT
+    THEN
+    _UIDLS-OWNED-START - >R
+    2DUP _UIDLS-OWNED-START R> MSPAN-OVERLAP? 0= NIP NIP ;
+
+: UIDL-SEMANTIC-STORAGE-DISJOINT?  ( address length -- flag )
+    ['] _UIDLS-STORAGE-DISJOINT-BODY? CATCH ?DUP IF
+        DROP 2DROP 0
+    THEN ;
+
 \ =====================================================================
 \  Guard public calls which use semantic scratch
 \ =====================================================================
@@ -468,3 +490,6 @@ GUARD _uidls-guard
 : UIDL-SEMANTIC-OBSERVE  ( i*x xt -- j*x )
     ['] _UIDLS-OBSERVE-WITH-SEMANTIC UIDL-OBSERVE ;
 [THEN] [THEN]
+
+CREATE _UIDLS-OWNED-END
+_UIDLS-OWNED-END _UIDLS-OWNED-LIMIT !

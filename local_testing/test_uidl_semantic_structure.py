@@ -179,6 +179,29 @@ def test_state_storage_disjoint_covers_active_arena_before_semantic_writes() -> 
     assert uidl_disjoint < state_disjoint < text_overlap < first_fill
 
 
+def test_semantic_storage_disjoint_covers_conversion_and_guard_scratch() -> None:
+    source = SEMANTIC.read_text(encoding="utf-8")
+
+    assert "CREATE _UIDLS-OWNED-START" in source
+    assert "CREATE _UIDLS-OWNED-END" in source
+    assert "_UIDLS-OWNED-END _UIDLS-OWNED-LIMIT !" in source
+    start_at = source.index("CREATE _UIDLS-OWNED-START")
+    text_at = source.index("CREATE _UIDLS-NUM-TEXT", start_at)
+    guard_at = source.index("GUARD _uidls-guard", text_at)
+    end_at = source.index("CREATE _UIDLS-OWNED-END", guard_at)
+    assert start_at < text_at < guard_at < end_at
+
+    body = _definition(source, "_UIDLS-STORAGE-DISJOINT-BODY?")
+    assert "MSPAN-NONWRAPPING? 0=" in body
+    assert "_UIDLS-OWNED-LIMIT @" in body
+    assert "_UIDLS-OWNED-START -" in body
+    assert "MSPAN-OVERLAP? 0=" in body
+
+    public = _definition(source, "UIDL-SEMANTIC-STORAGE-DISJOINT?")
+    assert "['] _UIDLS-STORAGE-DISJOINT-BODY? CATCH" in public
+    assert "DROP 2DROP 0" in public
+
+
 def test_uidl_exposes_guarded_stable_live_element_indices() -> None:
     source = UIDL.read_text(encoding="utf-8")
 

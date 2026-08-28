@@ -4133,7 +4133,7 @@ VARIABLE _UTUI-OWNED-LIMIT
 \ Reject every authoritative storage range read by a combined resolved-state
 \ and semantic projection.  The current root-region descriptor is borrowed by
 \ UIDL-TUI, so it is protected explicitly in addition to provider-owned,
-\ neutral UIDL, and state-tree storage.
+\ neutral UIDL, semantic scratch, and state-tree storage.
 : _UTUI-STORAGE-DISJOINT-BODY?  ( address length -- flag )
     OVER 0= OVER 0> 0= OR IF 2DROP 0 EXIT THEN
     2DUP MSPAN-NONWRAPPING? 0= IF 2DROP 0 EXIT THEN
@@ -4151,6 +4151,7 @@ VARIABLE _UTUI-OWNED-LIMIT
         DROP
     THEN
     2DUP UIDL-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
+    2DUP UIDL-SEMANTIC-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DUP ST-STORAGE-DISJOINT? 0= IF 2DROP 0 EXIT THEN
     2DROP -1 ;
 
