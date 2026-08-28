@@ -122,7 +122,8 @@ VARIABLE _ASHELL-ACTIVE-CTX   \ currently active UCTX buffer (0 = none)
 \ ASHELL-PAINT-CHILD ( uctx rgn has-uidl desc instance -- )
 \   The browser's per-child paint primitive.  Context-switches to
 \   uctx, sets the region, calls UTUI-PAINT (if has-uidl), then
-\   calls the app descriptor's paint callback (if any).
+\   calls the app descriptor's paint callback (if any).  Projection observes
+\   the same active UCTX only after that ordinary child draw is complete.
 VARIABLE _ASPC-HAS-UIDL
 VARIABLE _ASPC-DESC
 VARIABLE _ASPC-INST
@@ -137,7 +138,8 @@ VARIABLE _ASPC-INST
     _ASPC-HAS-UIDL @ IF UTUI-PAINT THEN
     _ASPC-DESC @ APP.PAINT-XT @ ?DUP IF
         _ASPC-INST @ SWAP EXECUTE
-    THEN ;
+    THEN
+    _ASPC-HAS-UIDL @ IF UTUI-DRAW-COMPLETE THEN ;
 
 \ =====================================================================
 \  §1b — Optional Terminal Owner ABI
@@ -932,6 +934,9 @@ VARIABLE _ASHELL-TICK-TMP
         _ASHELL-CUR-VIS @ IF
             _ASHELL-DRAW-CURSOR
         THEN
+        \ Publish only after the complete top-level draw.  Projection failure
+        \ remains diagnostic; CELL is still the universal output.
+        _ASHELL-HAS-UIDL @ IF UTUI-DRAW-COMPLETE THEN
         RGN-ROOT
         -1 _ASHELL-OUTPUT-PENDING !
     THEN

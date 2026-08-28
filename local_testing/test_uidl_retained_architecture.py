@@ -146,6 +146,7 @@ def test_uidl_context_remains_the_hosted_application_ui_authority() -> None:
 
 def test_uidl_projection_lifecycle_is_ordered_and_context_local() -> None:
     tui = _text("akashic/tui/uidl-tui.f")
+    shell = _text("akashic/tui/app-shell.f")
 
     for word in ("UTUI-VISIBLE!", "UTUI-QUIESCE", "UTUI-DETACH"):
         assert f": {word}" in tui
@@ -229,11 +230,23 @@ def test_uidl_projection_lifecycle_is_ordered_and_context_local() -> None:
         assert "_UTUI-PROJ-ADAPTER-CONTEXT @" in _word(tui, word)
     assert "_UTUI-PROJ-ADAPTER-CONTEXT" not in _word(tui, "_UTUI-PROJECTION-CLEAR")
 
-    # A derived projection observes UIDL dirt before CELL rendering clears it.
+    # A derived projection observes the completed ordinary draw while its
+    # exact UCTX remains active.  UTUI painting itself has one renderer-neutral
+    # job and never publishes a partial pre-app frame.
     paint = _word(tui, "UTUI-PAINT")
-    assert paint.index("_UTUI-PROJECTION-PUBLISH") < paint.index(
-        "_UTUI-PAINT-ELEM"
-    )
+    assert "_UTUI-PROJECTION-PUBLISH" not in paint
+    draw_complete = _word(tui, "UTUI-DRAW-COMPLETE")
+    assert "_UTUI-PROJECTION-PUBLISH" in draw_complete
+    child_paint = _word(shell, "ASHELL-PAINT-CHILD")
+    assert child_paint.index("UTUI-PAINT") < child_paint.index(
+        "APP.PAINT-XT"
+    ) < child_paint.index("UTUI-DRAW-COMPLETE")
+    top_paint = _word(shell, "_ASHELL-PAINT")
+    assert top_paint.index("APP.PAINT-XT") < top_paint.index(
+        "_ASHELL-DRAW-CURSOR"
+    ) < top_paint.index("UTUI-DRAW-COMPLETE")
+    assert child_paint.count("UTUI-DRAW-COMPLETE") == 1
+    assert top_paint.count("UTUI-DRAW-COMPLETE") == 1
 
     # Relayout publishes only resolved geometry; hidden documents explicitly
     # carry region zero so a freed Desk tile can never be retained.

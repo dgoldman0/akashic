@@ -635,6 +635,12 @@ VARIABLE _UTUI-PAA-STATUS
     DUP _UTUI-PROJ-STATUS? 0= IF DROP _UTUI-PROJ-S-INVALID THEN
     _UTUI-PROJ-STATUS ! ;
 
+\ Generic app-shell draw boundary.  The ordinary UIDL and application paint
+\ are already complete when this is called; optional projection remains an
+\ internal UIDL concern and failure remains diagnostic-only.
+: UTUI-DRAW-COMPLETE  ( -- )
+    _UTUI-PROJECTION-PUBLISH ;
+
 \ Quiesce is the retryable pre-shutdown barrier.  A failed callback leaves the
 \ token live and projection state intact.  Success stops project/relayout but
 \ retains the source-free token for final detach.
@@ -2800,10 +2806,6 @@ VARIABLE _UTUI-SKIP-CHILDREN
 
 : UTUI-PAINT  ( -- )
     _UTUI-DOC-LOADED @ 0= IF EXIT THEN
-    \ Publish the derived view while UIDL dirty flags still describe the same
-    \ authoritative update that CELL rendering is about to consume.
-    \ Projection failure is diagnostic-only here; CELL remains universal.
-    _UTUI-PROJECTION-PUBLISH
     \ Direct UIDL rendering uses document-relative coordinates under the
     \ document clip.  Widget proxies temporarily switch to their own absolute
     \ regions and restore this clip before the DFS continues.
