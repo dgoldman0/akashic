@@ -80,6 +80,7 @@ from akashic_tui import (  # noqa: E402
     _with_megapad_networking,
     _with_megapad_rich_terminal,
     _with_mp64fs_vfs_platform,
+    _with_rich_desktop_boot_progress,
     accept_physical_desktop,
     build_image,
     dependency_closure,
@@ -1703,6 +1704,55 @@ def test_rich_terminal_boot_load_follows_networking_and_owns_capacities() -> Non
         _with_megapad_rich_terminal(changed, DESKTOP_APT1_RICH_TERMINAL)
 
 
+def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
+    chunks = ("source-00.lz", "source-01.lz", "source-02.lz")
+    autoexec = (
+        "ENTER-USERLAND\n"
+        f"{MEGAPAD_NETWORKING_BOOT_LINE}\n"
+        f"{MEGAPAD_RICH_TERMINAL_BOOT_LINE}\n"
+        "8192 CONSTANT APT1-DESK-RX-CAPACITY\n"
+        "8192 CONSTANT APT1-DESK-TX-CAPACITY\n"
+        "400 CONSTANT APT1-DESK-MAX-COLS\n"
+        "200 CONSTANT APT1-DESK-MAX-ROWS\n"
+        f"REQUIRE {COLD_SOURCE_LOADER_PATH}\n"
+        "VARIABLE _BOOT-COLD-SOURCE-STATUS\n"
+        + "".join(f"_BOOT-COLD-SOURCE {name}\n" for name in chunks)
+        + '." [akashic] configuring Desk" CR TX-FLUSH\n'
+    )
+
+    instrumented = _with_rich_desktop_boot_progress(
+        autoexec,
+        DESKTOP_APT1_RICH_TERMINAL,
+        chunks,
+    )
+
+    assert instrumented.index(
+        '[akashic boot] loading networking and rich-terminal modules'
+    ) < instrumented.index("ENTER-USERLAND")
+    assert instrumented.index("APT1-DESK-MAX-ROWS") < instrumented.index(
+        "[akashic boot] system modules ready"
+    ) < instrumented.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}")
+    assert instrumented.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}") < (
+        instrumented.index("[akashic boot] checked source loader ready")
+    )
+    for number, chunk in enumerate(chunks, start=1):
+        marker = f"[akashic boot] framework source {number:02d}/03"
+        assert instrumented.count(marker) == 1
+        assert instrumented.index(marker) < instrumented.index(
+            f"_BOOT-COLD-SOURCE {chunk}"
+        )
+    assert instrumented.index(
+        f"_BOOT-COLD-SOURCE {chunks[-1]}"
+    ) < instrumented.index("[akashic boot] framework ready")
+    boot_lines = [
+        line
+        for line in instrumented.splitlines()
+        if "[akashic boot]" in line
+    ]
+    assert len(boot_lines) == len(chunks) + 4
+    assert all(line.endswith("CR TX-FLUSH") for line in boot_lines)
+
+
 @pytest.mark.parametrize(
     ("field", "value", "error"),
     (
@@ -1725,7 +1775,9 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
     baseline = PROFILES["desktop"]
     profile = PROFILES["desktop-apt1"]
     assert baseline.rich_terminal is None
+    assert not baseline.rich_boot_progress
     assert profile.rich_terminal is DESKTOP_APT1_RICH_TERMINAL
+    assert profile.rich_boot_progress
     expected_roots = tuple(
         "tui/desk-apt1.f"
         if root == "tui/applets/desk/desk.f"
@@ -1804,6 +1856,11 @@ _boot-daybook-desc DESK-QUEUE-LAUNCH"""
     for autoexec in (baseline, apt1):
         assert autoexec.count(pad_launch) == 1
         assert autoexec.count(daybook_launch) == 1
+    assert "[akashic boot]" not in baseline
+    assert '[akashic boot] configuring Desk" CR TX-FLUSH' in apt1
+    assert '[akashic boot] Practice ready" CR TX-FLUSH' in apt1
+    assert '[akashic boot] app descriptors ready" CR TX-FLUSH' in apt1
+    assert '[akashic boot] entering Desk" CR TX-FLUSH' in apt1
 
 
 def test_session_server_command_is_the_serve_policy_source() -> None:
@@ -1955,6 +2012,26 @@ def test_desktop_apt1_build_is_an_external_additive_composition(
         for entry in filesystem.list_files()
         if re.fullmatch(r"source-[0-9]{2}\.lz", entry.name)
     )
+    assert packed_names
+    width = max(2, len(str(len(packed_names))))
+    for number, name in enumerate(packed_names, start=1):
+        marker = (
+            "[akashic boot] framework source "
+            f"{number:0{width}d}/{len(packed_names):0{width}d}"
+        )
+        assert autoexec.count(marker) == 1
+        assert autoexec.index(marker) < autoexec.index(
+            f"_BOOT-COLD-SOURCE {name}"
+        )
+    desktop_milestones = (
+        autoexec.index("[akashic boot] framework ready"),
+        autoexec.index("[akashic boot] configuring Desk"),
+        autoexec.index("[akashic boot] Practice ready"),
+        autoexec.index("[akashic boot] app descriptors ready"),
+        autoexec.index("[akashic boot] entering Desk"),
+        autoexec.index("APT1-DESK-RUN"),
+    )
+    assert desktop_milestones == tuple(sorted(desktop_milestones))
     linked_source = b"".join(
         _unpack_cold_source(filesystem.read_file(name))
         for name in packed_names

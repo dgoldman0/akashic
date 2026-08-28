@@ -342,6 +342,7 @@ class Profile:
     audited_link_line_bytes: int | None = None
     audited_initial_forth_line_bytes: int | None = None
     rich_terminal: RichTerminalProfile | None = None
+    rich_boot_progress: bool = False
     minimum_free_bytes: int = 0
 
 
@@ -13321,7 +13322,35 @@ PT-STREAM-OWNED? IF _boot-rich-quarantine THEN
 .\" [akashic] desktop exited\" CR"""
     if result.count(ansi_runner) != 1:
         raise RuntimeError("Desktop profile run wrapper changed unexpectedly")
-    return result.replace(ansi_runner, apt_runner, 1)
+    result = result.replace(ansi_runner, apt_runner, 1)
+
+    progress_replacements = (
+        (
+            '." [akashic] loading desktop" CR',
+            '." [akashic boot] configuring Desk" CR TX-FLUSH',
+        ),
+        (
+            "_boot-practice-provision\n\n"
+            "CREATE _boot-pad-desc APP-DESC ALLOT",
+            "_boot-practice-provision\n"
+            '." [akashic boot] Practice ready" CR TX-FLUSH\n\n'
+            "CREATE _boot-pad-desc APP-DESC ALLOT",
+        ),
+        (
+            "DESK-QUEUE-BUILTIN\n\n"
+            '." [akashic] starting desktop" CR',
+            "DESK-QUEUE-BUILTIN\n"
+            '." [akashic boot] app descriptors ready" CR TX-FLUSH\n\n'
+            '." [akashic boot] entering Desk" CR TX-FLUSH',
+        ),
+    )
+    for old, new in progress_replacements:
+        if result.count(old) != 1:
+            raise RuntimeError(
+                "Desktop profile boot milestone changed unexpectedly"
+            )
+        result = result.replace(old, new, 1)
+    return result
 
 
 PROFILES["desktop-apt1"] = replace(
@@ -13334,6 +13363,7 @@ PROFILES["desktop-apt1"] = replace(
     ),
     autoexec=_desktop_apt1_autoexec(PROFILES["desktop"].autoexec),
     rich_terminal=DESKTOP_APT1_RICH_TERMINAL,
+    rich_boot_progress=True,
 )
 
 
@@ -25100,6 +25130,92 @@ def _with_megapad_rich_terminal(
     return "\n".join(lines) + suffix
 
 
+def _rich_desktop_boot_line(message: str) -> str:
+    """Return one promptly visible pre-ownership Desk boot marker."""
+    return f'." [akashic boot] {message}" CR TX-FLUSH'
+
+
+def _with_rich_desktop_boot_progress(
+    autoexec: str,
+    rich_terminal: RichTerminalProfile,
+    chunk_names: tuple[str, ...],
+) -> str:
+    """Instrument the generated rich Desk cold-load path before PT-START."""
+    if not chunk_names:
+        raise RuntimeError("Rich Desktop boot progress requires source chunks")
+    if "[akashic boot] framework source " in autoexec:
+        raise RuntimeError("Rich Desktop boot progress is already installed")
+
+    lines = autoexec.splitlines()
+    userland_line = "ENTER-USERLAND"
+    rich_bounds_last_line = (
+        f"{rich_terminal.host_policy.max_rows} CONSTANT "
+        "APT1-DESK-MAX-ROWS"
+    )
+    loader_line = f"REQUIRE {COLD_SOURCE_LOADER_PATH}"
+    chunk_lines = tuple(
+        f"_BOOT-COLD-SOURCE {name}" for name in chunk_names
+    )
+    required_lines = (
+        userland_line,
+        MEGAPAD_NETWORKING_BOOT_LINE,
+        MEGAPAD_RICH_TERMINAL_BOOT_LINE,
+        rich_bounds_last_line,
+        loader_line,
+        *chunk_lines,
+    )
+    for required in required_lines:
+        if lines.count(required) != 1:
+            raise RuntimeError(
+                "Rich Desktop boot progress expected exactly one line: "
+                f"{required}"
+            )
+
+    positions = tuple(lines.index(line) for line in required_lines)
+    if positions != tuple(sorted(positions)):
+        raise RuntimeError(
+            "Rich Desktop boot progress requires canonical boot ordering"
+        )
+
+    width = max(2, len(str(len(chunk_names))))
+    output: list[str] = []
+    chunk_number_by_line = {
+        line: number
+        for number, line in enumerate(chunk_lines, start=1)
+    }
+    for line in lines:
+        if line == userland_line:
+            output.append(
+                _rich_desktop_boot_line(
+                    "loading networking and rich-terminal modules"
+                )
+            )
+        if line in chunk_number_by_line:
+            number = chunk_number_by_line[line]
+            output.append(
+                _rich_desktop_boot_line(
+                    "framework source "
+                    f"{number:0{width}d}/{len(chunk_names):0{width}d}"
+                )
+            )
+        output.append(line)
+        if line == rich_bounds_last_line:
+            output.append(
+                _rich_desktop_boot_line("system modules ready")
+            )
+        elif line == loader_line:
+            output.append(
+                _rich_desktop_boot_line("checked source loader ready")
+            )
+        elif line == chunk_lines[-1]:
+            output.append(
+                _rich_desktop_boot_line("framework ready")
+            )
+
+    suffix = "\n" if autoexec.endswith("\n") else ""
+    return "\n".join(output) + suffix
+
+
 def _has_forth_conditional_token(text: str) -> bool:
     """Return whether MegaPad's raw conditional scanner observes a token."""
     return any(
@@ -25861,6 +25977,16 @@ def build_image(
     if requires_rich_terminal:
         autoexec = _with_megapad_rich_terminal(
             autoexec, profile.rich_terminal
+        )
+        if profile.rich_boot_progress:
+            autoexec = _with_rich_desktop_boot_progress(
+                autoexec,
+                profile.rich_terminal,
+                tuple(deployed_chunks),
+            )
+    elif profile.rich_boot_progress:
+        raise RuntimeError(
+            "Rich boot progress requires a rich-terminal profile"
         )
     paths = (
         set(generated_files) | resources
