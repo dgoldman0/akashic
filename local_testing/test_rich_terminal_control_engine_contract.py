@@ -294,7 +294,6 @@ def test_neutral_control_feature_records_and_callbacks_have_exact_layouts() -> N
     assert {
         name: _field_offset(source, name) for name in callback_fields
     } == callback_fields
-    assert _constant(source, "RTE-FACADE-SIZE") == 184
     valid = _word(source, "RTE-VALID?")
     for field in callback_fields:
         assert f"{field} @ 0=" in valid

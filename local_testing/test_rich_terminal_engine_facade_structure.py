@@ -47,9 +47,17 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     ):
         assert forbidden not in code
     assert not re.search(
-        r"(?m)(?:^|[ \t])(?:CREATE|ALLOT|ALLOCATE|FREE|RESIZE|XBUF)"
-        r"(?=[ \t]|$)",
+        r"(?m)(?:^|[ \t])(?:ALLOCATE|FREE|RESIZE|XBUF)(?=[ \t]|$)",
         code,
+    )
+    assert set(re.findall(r"(?m)^CREATE\s+(\S+)", code)) == {
+        "_RTE-HPV-OWNED-START",
+        "_RTE-HPV-SUMMARY",
+        "_RTE-HPV-OWNED-END",
+    }
+    assert code.count("ALLOT") == 1
+    assert (
+        "CREATE _RTE-HPV-SUMMARY RTE-HYBRID-ADMISSION-SIZE ALLOT" in code
     )
 
     assert "_RTE-ABI" not in code
@@ -57,7 +65,7 @@ def test_facade_is_backend_neutral_immutable_and_caller_owned() -> None:
     assert "_RTE-F.RESERVED @ IF DROP 0 EXIT THEN" in _definition(
         source, "RTE-VALID?"
     )
-    assert "184 CONSTANT RTE-FACADE-SIZE" in code
+    assert "192 CONSTANT RTE-FACADE-SIZE" in code
     assert "168 CONSTANT RTE-LIMITS-SIZE" in code
     assert "_RTE-F.CONTEXT" in _definition(source, "RTE-VALID?")
     valid = _definition(source, "RTE-VALID?")
@@ -124,6 +132,10 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-CONTROL-DEFINE": "( control facade -- status )",
         "RTE-CONTROL-REPLACE": "( control facade -- status )",
         "RTE-CONTROL-DROP": "( owner generation control facade -- status )",
+        "RTE-HYBRID-PLAN-BYTES": "( -- bytes )",
+        "RTE-HYBRID-TEXT-REF-BYTES": "( -- bytes )",
+        "RTE-HYBRID-ADMISSION-BYTES": "( -- bytes )",
+        "RTE-HYBRID-PREFLIGHT": "( hybrid facade -- status )",
         "RTE-RETAINED-BEGIN": "( retained-mode facade -- status )",
         "RTE-RETAINED-SEAL": "( disposition facade -- status )",
         "RTE-RETAINED-CANCEL": "( facade -- status )",

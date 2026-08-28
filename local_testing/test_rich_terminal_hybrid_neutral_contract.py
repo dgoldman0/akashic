@@ -42,7 +42,6 @@ def test_neutral_fixed_authority_is_scratch_free_and_precedes_item_walks() -> No
     body = _word(source, "_RTE-HYBRID-PREFLIGHT-BODY")
     control_body = _word(source, "_RTE-CONTROL-PLAN-VALID-BODY")
     glyph = _word(source, "_RTE-HPV-GLYPH?")
-    valid = _word(source, "RTE-VALID?")
     assert "VARIABLE _RTE-HPV-OWNED-LIMIT" not in source
     assert "_RTE-HPV-OWNED-END _RTE-HPV-OWNED-START -" in source
     for forbidden in (
@@ -70,7 +69,6 @@ def test_neutral_fixed_authority_is_scratch_free_and_precedes_item_walks() -> No
     assert control_body.count("?DO") == 1
     assert glyph.count("?DO") == 1
     assert body.count("_RTE-F.HYBRID-PREFLIGHT-XT @ EXECUTE") == 1
-    assert "_RTE-F.HYBRID-PREFLIGHT-XT @ 0=" not in valid
     for old in (
         "_RTE-HPV-ENTRY-AUTHORITY?", "_RTE-HPV-WRAPPER?",
         "_RTE-HPV-ITEM-SPANS?", "RTE-CONTROL-PREFLIGHT",
