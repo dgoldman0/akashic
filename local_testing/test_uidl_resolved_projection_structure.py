@@ -203,6 +203,22 @@ def test_status_boundary_is_caught_and_all_resolve_scratch_is_scrubbed() -> None
         assert re.search(rf"(?<!\S)0\s+{re.escape(variable)}\s+!", cleared)
 
 
+def test_tree_observer_lends_an_aligned_resolved_record() -> None:
+    source = UIDL_TUI.read_text(encoding="utf-8")
+
+    raw = (
+        "CREATE _UTUI-RST-RESOLVED-MEM "
+        "UTUI-RESOLVED-SIZE 7 + ALLOT"
+    )
+    aligned = (
+        "_UTUI-RST-RESOLVED-MEM 7 + -8 AND "
+        "CONSTANT _UTUI-RST-RESOLVED"
+    )
+    assert source.index(raw) < source.index(aligned) < source.index(
+        "CREATE _UTUI-RST-SEEN"
+    )
+
+
 def test_effective_visibility_uses_ancestors_menus_and_root_intersection() -> None:
     source = UIDL_TUI.read_text(encoding="utf-8")
     resolve = _definition(source, "_UTUI-RS-RESOLVE")
