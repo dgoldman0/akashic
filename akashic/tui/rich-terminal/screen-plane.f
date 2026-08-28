@@ -2,12 +2,20 @@
 \  screen-plane.f -- caller-bounded final-screen GLYPH_RUN producer
 \ =====================================================================
 \
-\  This module projects the ordinary final TUI back buffer into one neutral
-\  GLYPH_RUN per cell.  It owns no product-sized storage: the caller supplies
-\  the plan-item span, while the fixed producer record contains only state and
-\  call scratch.  Initial admission is exact and atomic.  STEP incrementally
-\  builds the plan within its callback budget; PREPARE captures the complete
-\  screen into one retained candidate only after preflight and owner opening.
+\  TEMPORARY BOOTSTRAP: this module projects the ordinary final TUI back buffer
+\  into one neutral GLYPH_RUN per cell.  It proves the lower publication,
+\  replacement, acknowledgement, and teardown path; it is not the product
+\  projection and cannot qualify the Desk/Pad/Daybook semantic vertical.  The
+\  target producer captures genuine semantic controls first and emits
+\  coalesced equal-style residual glyph spans only for unclaimed cells.  Do not
+\  build another product path beside this one; replace this bootstrap at the
+\  composition boundary and retire its per-cell topology.
+\
+\  The bootstrap owns no product-sized storage: the caller supplies the
+\  plan-item span, while the fixed producer record contains only state and call
+\  scratch.  Initial admission is exact and atomic.  STEP incrementally builds
+\  the plan within its callback budget; PREPARE captures the complete screen
+\  into one retained candidate only after preflight and owner opening.
 \
 \  The first accepted candidate is a hidden REPLACE_START.  A following
 \  REPLACE_CONTINUE updates any cells that changed in the meantime and reveals

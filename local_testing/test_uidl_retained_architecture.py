@@ -337,20 +337,33 @@ def test_desk_wraps_child_hosting_in_a_neutral_composition_lifecycle() -> None:
         assert forbidden not in decompose
 
 
-def test_desktop_apt1_leaf_composes_final_screen_publisher() -> None:
+def test_desktop_apt1_leaf_marks_final_screen_as_temporary_bootstrap() -> None:
     composition = _text("akashic/tui/desk-apt1.f")
     code = _forth_code(composition)
+    screen_plane = _text("akashic/tui/rich-terminal/screen-plane.f")
+    normalized_composition = " ".join(composition.split())
+    normalized_screen_plane = " ".join(screen_plane.split())
 
-    assert re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code) == [
+    requirements = re.findall(r"(?m)^REQUIRE\s+(\S+)\s*$", code)
+    for required in (
         "app-shell-apt1.f",
         "rich-terminal/screen-adapter-apt1.f",
         "rich-terminal/engine-apt1.f",
         "rich-terminal/screen-plane.f",
         "applets/desk/desk.f",
-    ]
+    ):
+        assert required in requirements
     assert "uidl-driver.f" not in code
     assert "uidl-projector.f" not in code
     assert "REQUIRE rich-terminal.f" not in code
+    assert "temporary lower-stack bootstrap" in normalized_composition
+    assert "per-cell plan is not the product projection" in normalized_composition
+    assert "vertical evidence" in composition
+    assert "TEMPORARY BOOTSTRAP" in screen_plane
+    assert (
+        "cannot qualify the Desk/Pad/Daybook semantic vertical"
+        in normalized_screen_plane
+    )
 
     public_overrides = re.findall(
         r"(?m)^\[UNDEFINED\] (APT1-DESK-[A-Z0-9-]+) \[IF\]$", code
@@ -907,6 +920,11 @@ def test_region_identity_is_stable_across_shell_and_desk_relayout() -> None:
 
 def test_retained_contract_requires_internal_uidl_projection_now() -> None:
     contract = _text("docs/rich-terminal/AKASHIC-RICH-TERMINAL.md")
+    candidate = _text(
+        "docs/rich-terminal/UIDL-PROJECTION-CANDIDATE.md"
+    )
+    normalized_contract = " ".join(contract.split())
+    normalized_candidate = " ".join(candidate.split())
     cell_contract = _text("docs/rich-terminal/AKASHIC-CELL-BACKEND.md")
     ownership = _text(
         "docs/rich-terminal/APT-1-RETAINED-1-OWNERSHIP.md"
@@ -918,12 +936,43 @@ def test_retained_contract_requires_internal_uidl_projection_now() -> None:
     assert "RTERM-HOST-BINDING-SIZE" in contract
     assert "RTERM-UCTX-QUIESCE" in contract
     assert "generic, consumer-neutral Akashic" in contract
-    assert "may compose the same engine without" in contract
+    assert "may compose the same engine without" in normalized_contract
     assert "never source-`REQUIRE`s or copies" in contract
     assert "Pre-vertical qualification gate" in contract
     assert "Desk, Pad, and Daybook acceptance checkpoint" in contract
     assert "normal TUI draw lifecycle" in contract
     assert "CELL does not qualify the rich path" in contract
+    assert (
+        "semantic vertical described here is not implemented yet"
+        in normalized_contract
+    )
+    assert (
+        "A full-screen one-object-per-cell frame is specifically forbidden "
+        "as product proof"
+        in normalized_contract
+    )
+    assert "residual glyph spans only for visible" in normalized_contract
+    assert "one final mutation-safety validation" in normalized_contract
+    assert "must not be revived wholesale" in normalized_contract
+    assert "genuine control semantics" in normalized_candidate
+    assert (
+        "The residual encoder must not emit the claimed cells"
+        in normalized_candidate
+    )
+    assert (
+        "maximal contiguous sequence of unclaimed cells"
+        in normalized_candidate
+    )
+    assert (
+        "product storage must not be derived from `rows * columns`"
+        in normalized_candidate
+    )
+    assert "This is `O(new-items + old-items)`" in normalized_candidate
+    assert "only allowed repeated full traversal" in normalized_candidate
+    assert (
+        "switch `desk-apt1.f` from the per-cell producer"
+        in normalized_candidate
+    )
     assert "First visible root-LABEL checkpoint" not in contract
     assert "before arbitrary `APP.SHUTDOWN`" in contract
     assert "Applications receive no" in ownership

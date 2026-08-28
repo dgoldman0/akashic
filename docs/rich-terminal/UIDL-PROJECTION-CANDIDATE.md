@@ -1,371 +1,242 @@
-# UIDL projection candidates
+# Hybrid UIDL projection candidates
 
-**Module:** `akashic-tui-rterm-uidl-projector`
+Status: normative target contract. The hybrid candidate and semantic control
+families described here are not implemented yet.
 
-**File:** `akashic/tui/rich-terminal/uidl-projector.f`
+This document defines the renderer-neutral boundary between the ordinary
+UIDL/TUI draw lifecycle and an optional rich output adapter. The boundary is
+hybrid: it carries genuine control semantics where those semantics exist and
+coalesced residual glyph spans for the remaining visible draw output. It does
+not create a second application scene, and it is not a transcription of the
+terminal wire protocol.
 
-The projector is the renderer-neutral desired-scene boundary between an active
-UIDL document and optional output adapters. It captures supported UIDL
-semantic snapshots into caller-owned storage. It does not query an engine,
-open an owner, emit terminal bytes, select CELL versus retained output, or
-change UIDL dirty state. Desk and applets do not load or call it.
+The checked-in `akashic/tui/rich-terminal/uidl-projector.f` and
+`uidl-driver.f` are an earlier LABEL-only experiment. Their useful attachment,
+stable-key, copied-snapshot, and retirement ideas inform this contract, but the
+modules are dormant, stale against the current GLYPH_RUN facade, and contain
+repeated or quadratic candidate scans. They are not to be revived as the
+product driver. The implementation proceeds by forward-refactoring their good
+concepts into one new hybrid planner.
 
-## Candidate item
+## 1. Authority and lifecycle
 
-Each 128-byte item contains:
+The candidate is derived from the same ordinary UCTX, UIDL document, mounted
+widgets, resolved layout, focus state, and TUI paint that produce CELL output.
+Desk, Pad, Daybook, and other applets keep their existing descriptors, sources,
+actions, bindings, and draw words. They do not enumerate retained objects,
+reserve terminal storage, add renderer annotations, or call a terminal API.
 
-| Offset | Field | Meaning |
-|---:|---|---|
-| 0 | element index | stable current-document UIDL pool index |
-| 8 | semantic subkey | zero for the primary semantic object |
-| 16 | kind | neutral UIDL snapshot kind |
-| 24 | snapshot offset | aligned offset in the supplied arena |
-| 32 | snapshot bytes | exact semantic record length |
-| 40 | flags | `HAS_RESOLVED=1`, `EFFECTIVE_VISIBLE=2` |
-| 48..119 | resolved state | copied 72-byte UIDL-TUI geometry/style record, normalized root-relative |
-| 120 | reserved | zero |
+Projection is entered only through UIDL-TUI's existing private optional
+projection seam during the normal attach/project/relayout/quiesce/detach
+lifecycle. One exact UCTX revision supplies both semantic observations and the
+ordinary final draw surface. The projector must not call an applet's draw or
+state callbacks a second time to manufacture a rich scene.
 
-The element index comes only from `UIDL-ELEM-INDEX?`; markup `id=` is not
-projection identity and changing or omitting it cannot renumber an element.
-The subkey leaves room for a later semantic family to derive more than one
-object from one element without exposing renderer identities to UIDL.
+The UIDL tree, widget state, focus and selection state, action dispatch, and
+application data remain authoritative. A candidate is copied derived output.
+Terminal materialization may be discarded and rebuilt without changing any of
+that state.
 
-`HAS_RESOLVED` means the 72-byte record is present and valid.
-`EFFECTIVE_VISIBLE` may be set only with `HAS_RESOLVED`; it records the
-effective UIDL visibility after ancestor visibility and clipping have been
-resolved. All other flag bits are invalid. The copied record preserves height,
-width, colors, attributes, alignment, and effective paint-group z while
-converting its row and column from document coordinates to coordinates
-relative to the candidate root. It contains no CELL, engine, protocol, region,
-Desk, or applet identity.
+## 2. Candidate composition
 
-## Construction
+One candidate contains:
 
-```forth
-RUPJ-BUILD
-( items-a items-u snapshots-a snapshots-u
-  -- item-count snapshot-used region-quota object-quota utf8-quota
-     root-h root-w status )
-```
+* exact source and surface generations for the ordinary frame from which it
+  was captured;
+* positive surface dimensions and the root clip;
+* canonical semantic proposals with stable renderer-neutral keys;
+* the accepted semantic claims selected against one coherent neutral
+  capability snapshot;
+* maximal residual glyph spans for visible cells outside the union of those
+  claims; and
+* checked counts, byte extents, quotas, and a seal covering the complete
+  candidate.
 
-An accepted bank can be revalidated independently of the source document:
+Semantic items and residual spans are two representations within one desired
+projection and one publication attempt. They are not separate producers and
+must not advance independently.
 
-```forth
-RUPJ-CANDIDATE-VALID?
-( items-a items-u item-count snapshots-a snapshots-u snapshot-used
-  region-quota object-quota utf8-quota root-h root-w -- flag )
-```
+### 2.1 Semantic proposals
 
-Validation checks exact key uniqueness, item fields, canonical contiguous
-aligned offsets, each complete LABEL record, current-text accounting, zero
-alignment padding, the flag implications, each present resolved record against
-the positive root dimensions, and zero unused bank tails. A missing resolved
-record requires both flags and all 72 payload bytes to be zero. Guarded builds
-serialize the projector's complete borrowed-bank lifetime. The compound
-observation order is UIDL-TUI resolved state, UIDL, projector scratch, then the
-semantic source observation; recursive acquisition remains within those outer
-authorities.
+`ED.SEMANTICS` remains the generic element capture registry. It must grow
+beyond LABEL to cover existing controls whose ordinary model already has real
+renderer-independent meaning, including menubars, menus, items, dialogs, text
+areas, focus, selection, and activation state. A corresponding generic mounted
+widget hook may expose the same kind of copied snapshot for widgets reached
+through `UTUI-WIDGET-SET`; it must not be specific to Pad, Daybook, Desk, or
+APT-1.
 
-Both spans must be nonempty, aligned, nonwrapping, mutually disjoint, and
-disjoint from persistent UIDL, UIDL-TUI, and active state-tree storage. The
-item span must be an exact multiple of `RUPJ-ITEM-SIZE`. `root-h` and `root-w`
-must both be positive. No heap, dictionary, XMEM, engine, host, screen, or wire
-storage is acquired.
+Each semantic proposal contains at least:
 
-The complete ordinary root tree is walked in preorder under one compound
-observation. Unsupported element semantics remain in the same UIDL tree and
-continue through ordinary rendering; they do not invalidate or specialize the
-document. A currently supported LABEL produces key
-`(element-index,0)` and a copied LABEL snapshot. Semantic eligibility determines
-candidate membership independently of resolved-state availability. When
-UIDL-TUI returns resolved `OK`, the projector copies and validates the record,
-normalizes its coordinates, and sets `HAS_RESOLVED` plus
-`EFFECTIVE_VISIBLE` when applicable. Resolved `UNAVAILABLE` retains the LABEL
-item with zero resolved flags and payload, preserving an otherwise valid
-semantic candidate for a later projection. The root itself must return `OK`
-basis; root `UNAVAILABLE` or `INVALID` invalidates the complete build. Every
-LABEL with valid resolved text is eligible without renderer-specific markup.
-Malformed source, tree identity, or resolved state returns `RUPJ-S-INVALID`;
-local arithmetic or storage exhaustion returns `RUPJ-S-CAPACITY`.
+* a stable key `(source-kind, source-index, semantic-subkey)`;
+* a neutral control kind and versioned snapshot extent;
+* resolved bounds, clipping, visibility, and paint order from UIDL-TUI;
+* copied current value and presentation-independent control state; and
+* a source generation sufficient to reject stale input or mutation.
 
-Snapshot records have exact length `64 + current-text-bytes` but contain native
-64-bit fields and therefore require aligned starting addresses. The physical
-arena stride is checked `ALIGN8(exact)`. Items store the aligned offset and the
-exact record length; `snapshot-used` is the sum of physical strides. Alignment
-padding is zero. This local padding is not remote quota: `utf8-quota` is the
-checked sum of current copied UTF-8 bytes, `object-quota` equals item count,
-and `region-quota` is one exactly when the candidate is nonempty.
+The snapshot describes meaning, not how the terminal draws it. It contains no
+wire owner/object identity, APT opcode, font, pixel allocation, retained text
+reservation, terminal capacity, Desk slot, or applet type. A control family is
+added only when its neutral state and event mapping are truthful; a GROUP,
+LABEL, or GLYPH_RUN must not be renamed to pretend that it is a menu, editor,
+or calendar.
 
-Text growth builds a new complete candidate in the inactive bounded bank. The
-downstream adapter derives any retained allocation from that candidate and
-redefines the same semantic object when necessary; UIDL does not reserve its
-storage. A candidate that does not fit current caller or terminal bounds is a
-binding-local rich-output refusal, never truncation and never a change to CELL
-meaning.
+The selected renderer may accept a proposal only when its advertised neutral
+capability and current caller/terminal bounds can represent the complete
+control. Partial semantic materialization is refusal. The proposal then makes
+no claim and ordinary residual coverage supplies its pixels.
 
-Construction clears the complete destination before writing. Any ordinary
-failure or caught exception clears it again and returns seven zero values plus a
-stable status. For `C` private bindings, each caller-owned item, positional
-identity, and snapshot slab contains `2*C + 1` equal banks. Slots `2*i` and
-`2*i+1` are binding `i`'s desired A/B banks; the final slot `2*C` is the one
-backend-global frozen-attempt bank. It is not a third desired bank per binding.
-The backend serializes the one synchronous attempt, so one final slot preserves
-the exact selected input without multiplying scratch by binding capacity.
-Identity extent remains exactly one 32-byte record per candidate item and
-therefore derives from the existing item/bank geometry rather than a new fixed
-capacity. A projection uses only its A/B pair: it builds the inactive
-item/snapshot pair and positional identity bank, revalidates the neutral recipe
-with `RUPJ-CANDIDATE-VALID?`, completes its bounded metadata, and publishes the
-new bank by writing the binding selector last. Written bytes and inactive
-metadata are never authoritative on their own.
+### 2.2 Semantic claims
 
-Each published bank has a 64-byte metadata record containing generation, item
-count, snapshot bytes, region/object/UTF-8 quotas, and the positive root height
-and width used for capture and validation. The two records occupy offsets 144
-and 208 in the 384-byte private binding record. The root dimensions travel with
-the selected candidate rather than being recovered from later mutable layout.
-Private owner/terminal-eligibility fields begin at offset 272; they are not part
-of the neutral candidate or projector ABI and do not reserve an owner or
-provider capture-bank space. Neutral retained-materialization state and exact
-desired/staged/live generation correlations occupy offsets 344 through 375;
-offset 376 is a boolean late-discovery retry marker. It is set only when the
-selected nonempty candidate's neutral limits read returns `WOULD_BLOCK`, and is
-cleared by every ordinary eligibility revocation or settled retry. It grants no
-owner or mutation authority. While any attached record owns the marker, one
-owner-loop step performs at most one shared limits read. `WOULD_BLOCK` leaves
-all markers and every already-live presentation intact for the exact current
-surface generation. A completed read deep-validates every marked selected bank
-before a bounded second pass publishes any per-binding eligibility result;
-`INVALID` or `SESSION_LOST` instead quarantines before update-state polling or
-normal materializer dispatch.
+An accepted visible semantic control claims the cells in its resolved bounds
+after ancestor clipping and surface clipping. Claim resolution observes the
+ordinary final paint order; the residual exclusion mask is the union of final
+accepted visible claims. Overlapping semantic controls retain their normal
+z-order and clip relationships in the semantic plan.
 
-The backend-global materialization record also carries a persistent
-local-refusal flag only while an admitted `CAPACITY`/`SOURCE` binding is being
-retired. It cannot be consumed by cancellation or cursor movement: exact
-`OWNER-STATE@ = TOMBSTONE` clears it, preserves the binding's refusal diagnostic,
-and advances the cohort to the following record.
+A claim is exclusive in the rich plane. The terminal renderer owns rich
+representation and rich hit testing for that control, while Akashic retains
+authoritative focus, actions, and state transitions. The residual encoder must
+not emit the claimed cells, and a second CELL-derived rich object must not be
+laid under or over the same control as a hidden duplicate.
 
-An accepted empty candidate is still selector-published so it supersedes any
-older desired scene, but `RTERM-UCTX-PROJECT` returns
-`RTERM-S-UNAVAILABLE`. A build or deep-validation failure does not change the
-selector or stable mapping, but it clears their terminal eligibility and
-schedules retirement of any live rich output so stale pixels cannot mask newer
-CELL state. The prior candidate remains retry/identity authority, not display
-authority. After a valid nonempty build, the driver first maps every exact
-semantic key to a stable private object ID and then reads one coherent neutral
-`RTE` limits snapshot.
-Backpressure, missing feature support, unresolved state, unsupported resolved
-attributes, or negotiated capacity refusal still publishes the newer desired
-bank and its mapping, but clears terminal eligibility/materialization readiness
-and returns the exact non-OK status. A terminal-eligible candidate returns
-`RTERM-S-OK`.
+CELL remains a complete independent fallback plane. If semantic support is
+unavailable, capture is invalid, or admission refuses a control, no claim is
+published and its ordinary CELL drawing becomes eligible for residual
+encoding. Refusal never reserves a blank rectangle.
 
-Terminal-negotiated eligibility requires INSTRUMENT support, one region, one
-object per item, each current LABEL byte length within the per-label maximum,
-and the aggregate current byte length within total UTF-8. It deliberately does
-not infer a provider operation count, copied retry bytes, or encoded update
-bytes. Those
-representation-dependent facts belong exclusively to the separate neutral plan
-preflight. Identity mapping is independent of the eligibility result: it
-copies each exact semantic key into the positional identity bank, reuses an
-exact prior mapped key's object ID, and mints new IDs from a monotone per-owner
-high-water. Duplicate IDs are invalid; a high-water never proves that a sparse
-ID exists. Negotiation refusal, relayout, and hide may revoke eligibility or
-materialization readiness but do not discard this mapping or remint unchanged
-keys. The binding selector remains the final publication store after metadata,
-identities, eligibility state, status, and any sticky diagnostic are complete.
-Only `INVALID` and `SESSION_LOST` are sticky backend-global diagnostics;
-`CAPACITY` and `SOURCE` remain per-binding results.
+### 2.3 Residual glyph spans
 
-## Neutral materialization preflight
+After semantic claims are final, the planner scans the already-painted ordinary
+surface once in row-major order. It skips claimed cells and emits one residual
+glyph span for each maximal contiguous sequence of unclaimed cells on a row
+with the same foreground, background, and text attributes. The span carries
+the glyph sequence and exact cell width. A claim boundary, row boundary, style
+change, or representability boundary ends a span.
 
-The terminal owner or unified publisher supplies an exact call-borrowed surface
-snapshot rather than asking UIDL to infer the complete output surface from its
-root rectangle:
+Residual spans are the generic coverage path for draw work that has no honest
+semantic snapshot yet. This includes Desk chrome not represented by a semantic
+control, the custom mounted Pad editor surface, and Daybook's drawn calendar
+and agenda until equivalent generic widget semantics exist. Their ordinary
+paint continues unchanged and is therefore covered without an applet-specific
+retained scene.
 
-```forth
-RTERM-SURFACE-SNAPSHOT-BYTES
-( -- bytes )
+A full-screen one-object-per-cell projection is forbidden as product
+architecture and cannot serve as vertical acceptance evidence. Caller capacity
+may bound the number and bytes of actual semantic items and coalesced spans,
+but product storage must not be derived from `rows * columns` retained objects.
+A pathological checkerboard can legitimately approach the caller bound and
+return capacity; it does not justify a permanent object-per-cell policy.
 
-RTERM-SURFACE-SNAPSHOT-INIT
-( cols rows generation surface -- status )
+Residual topology may change when styles or claims change. Stable identity is
+mandatory for semantic keys. The planner may use stable span keys where they
+remain exact, or atomically replace the bounded residual plane when spans
+split/merge; it must not mint one stable object identity per screen cell to
+avoid solving replacement correctly.
 
-RTERM-SURFACE-SNAPSHOT-VALID?
-( surface -- flag )
+## 3. Canonical order and linear identity mapping
 
-RTERM-UCTX-MATERIALIZATION-PREFLIGHT
-( surface binding-token backend -- status )
-```
+Semantic proposals are written once in canonical ascending key order. Residual
+spans follow in canonical `(row, starting-column)` order after claim
+resolution. Duplicate or descending keys are invalid.
 
-The aligned 32-byte surface snapshot contains positive native-cell columns at
-offset 0, positive rows at offset 8, a nonzero geometry generation at offset
-16, and a zero reserved cell at offset 24. Its generation correlates the
-geometry observation only; it is neither UIDL identity nor retained or wire
-authority. The snapshot must be nonwrapping and disjoint from driver, facade,
-and provider storage, and the driver retains no pointer to it.
+Stable semantic object IDs are assigned by a single merge of the new sorted
+keys with the previous sorted identity map. Unchanged keys reuse their IDs;
+new keys consume a checked monotone high-water; removed keys become bounded
+retirement work. This is `O(new-items + old-items)`.
 
-The public materialization-preflight operation resolves one exact visible,
-terminal-eligible selected generation and its already assigned private
-identities. It copies the complete selected item, identity, and snapshot banks
-into the backend-global final attempt slot, copies the selected metadata into
-scalar scratch, and then deep-validates the frozen copy. Only after those checks
-does it derive the aligned, call-borrowed 112-byte neutral plan header below:
+The following algorithms are forbidden on the product path:
 
-| Offset | Field | Candidate mapping |
-|---:|---|---|
-| 0 | owner | nonzero private binding owner ID |
-| 8 | generation | nonzero private binding owner generation |
-| 16 | surface columns | positive surface width for the attempted publication |
-| 24 | surface rows | positive surface height for the attempted publication |
-| 32 | region ID | nonzero private root-region ID |
-| 40 | region x | nonnegative root origin column |
-| 48 | region y | nonnegative root origin row |
-| 56 | region columns | positive selected root width |
-| 64 | region rows | positive selected root height |
-| 72 | region z | zero for this root-LABEL slice |
-| 80 | region flags | exactly `3` (`VISIBLE | CLIP`) |
-| 88 | items address | aligned borrowed preflight-item array |
-| 96 | items bytes | positive exact multiple of 128 |
-| 104 | reserved | zero |
+* scanning all earlier candidate items to prove each new key unique;
+* scanning the complete prior identity bank for every new key;
+* repeatedly selecting the minimum remaining object ID; and
+* sorting by repeated whole-bank search after capture.
 
-The checked root rectangle must fit the supplied positive surface. Surface
-columns and rows come only from that snapshot; selected root dimensions do not
-stand in for the full surface. The plan and item spans are nonwrapping, mutually
-disjoint, and independently disjoint from the facade and provider.
-`N = items-bytes / 128`; no unrelated fixed candidate or LABEL count is
-introduced.
+Canonical construction makes uniqueness, quota accumulation, claim order, and
+identity reuse part of the same linear planning work.
 
-Each selected LABEL maps to one exact 128-byte item in strict ascending mapped
-object-ID order:
+## 4. Construction, validation, and freezing
 
-| Offset | Field | Candidate mapping |
-|---:|---|---|
-| 0 | object | mapped nonzero object ID, strictly increasing |
-| 8 | parent | zero for this root-LABEL slice |
-| 16 | row | signed resolved row relative to the root |
-| 24 | column | signed resolved column relative to the root |
-| 32 | height | nonnegative resolved height |
-| 40 | width | nonnegative resolved width |
-| 48 | root height | exactly the header region rows |
-| 56 | root width | exactly the header region columns |
-| 64 | z | signed resolved LABEL paint order |
-| 72 | visible | canonical `0` or `-1` |
-| 80 | RGBA | foreground palette index expanded to packed numeric `0xRRGGBBAA` |
-| 88 | horizontal alignment | resolved `0` start, `1` center, or `2` end |
-| 96 | vertical alignment | `0` top |
-| 104 | ellipsize | `0` |
-| 112 | retained text capacity | current snapshot UTF-8 bytes; renderer-derived |
-| 120 | reserved | zero |
+Construction is fail-before-publication. It writes an inactive caller-owned
+bank, captures semantic snapshots and the ordinary surface generation, and
+leaves the active selector unchanged on any invalid source, arithmetic failure,
+or capacity refusal. There is no truncation.
 
-RUPJ candidate items and neutral plan items are both exactly 128 bytes. The
-driver therefore borrows only the inactive desired bank's item span as
-synchronous plan scratch; it does not modify that bank's positional identities,
-snapshots, or metadata. A bounded repeated-minimum scan over the frozen identity
-copy chooses the next object ID greater than the previous one. This produces the
-facade's strict order without reordering or rewriting either authoritative A/B
-candidate or its identity mapping. Palette indices are expanded through the
-neutral TUI palette mapping while the plan is built.
+The complete candidate crosses one full validation authority:
 
-The neutral facade validates native-cell geometry, canonical fields, strict
-object order, exact root dimensions, checked edges, and visible intersection.
-It does not assume APT-1 numeric widths. RTAPT owns the subsequent exact u32/i32
-representability and geometry-conversion proof, current negotiated terminal
-caps, local owner/op/copy-bank fit, dynamic owner and tombstone availability,
-and complete wire arithmetic.
+1. construction establishes canonical records and checked running aggregates;
+2. admission performs one full linear traversal, resolves neutral capability,
+   claims, residual spans, quotas, and stable identities, and freezes the exact
+   candidate or copies it to the engine-owned attempt bank; and
+3. downstream adapter query, hidden publication, reveal, and acknowledgement
+   consume the frozen descriptor and checked aggregates without walking the
+   candidate again.
 
-For current renderer-selected text allocations `c_i`, each equal to the
-corresponding snapshot's current UTF-8 byte length, RTAPT proves the exact
-owner-open quotas
-`(regions=1, resources=0, objects=N, series=0, resource-bytes=0,
-utf8=sum(c_i), sample-slots=0)`, `1 + N` local operation records, and copied
-bytes `72 + sum(ALIGN8(128 + c_i))`. The first op-bearing hidden
-`REPLACE_START` transaction is exactly:
+If publication continues to borrow a caller-owned bank that can mutate after
+admission, the publisher performs one final full mutation-safety validation
+immediately before seal/publication. That is the only allowed repeated full
+traversal. It must correlate the exact address, extent, generation, canonical
+order, record validity, text bytes, counts, quotas, and seal. If admission
+copied the candidate into an immutable engine-owned attempt bank, an O(1)
+generation/seal correlation replaces that traversal.
 
-```text
-START = 248 + 120 * N + current_utf8
-current_utf8 = sum(c_i)
-```
+In particular, the seal, adapter capability query, hidden replacement, and
+reveal seams must not each deep-validate the same large candidate. Public
+boundaries may still perform constant-time descriptor, phase, generation, and
+storage-disjoint checks. A validation certificate is private derived state,
+never caller authority, and is invalidated by selector, generation, extent, or
+owner changes.
 
-The 248-byte base is the frozen 160-byte APT-1 wire transaction envelope plus
-the 88-byte root-region definition. A later empty reveal transaction is exactly
-160 bytes. They are serial bounded transactions, not one combined staging
-requirement, so their budgets are never summed.
+All storage remains caller-bounded. Bounds derive from supplied spans, the
+actual candidate, and negotiated neutral limits. UIDL must not carry retained
+buffer reservations, and the product must not introduce an unrelated fixed
+control, span, text, or screen-object limit.
 
-Preflight is mutation-free admission advice, not a reservation. Malformed
-neutral input fails before the provider preflight operation callback is
-dispatched, and an ordinary provider refusal causes no owner or wire mutation.
-The facade never writes the supplied plan, selected candidate, operation bank,
-copy bank, or wire. Ordinary results also leave the owner ledger, lifecycle
-queue, and PT session unchanged; limits observation may refresh only the
-provider's designated limits scratch.
-Discovering an already-lost session may invoke the engine's existing
-quarantine/capture-clear transition, which is structural-loss containment, not
-plan admission, and emits no wire. `OK` can become stale immediately, so the
-materializer freezes the then-current selected generation, rebuilds this exact
-plan, and repeats preflight immediately before its checked
-`OWNER_OPEN`/capture sequence. Neither eligibility nor an earlier advisory
-result is an admission token.
+## 5. Publication and input
 
-Every return and caught throw clears the full global attempt item, identity, and
-snapshot banks, the borrowed inactive item span, the complete header/limits
-scratch, and all borrowed scalar and pointer cells. Selector-published desired
-state, metadata, eligibility, stable identity mappings, and object high-water
-remain intact. The operation may record its diagnostic status, but it caches no
-successful preflight authority or surface generation.
+The accepted semantic operations and residual spans enter the existing unified
+CELL/rich publisher as one immutable contribution. Initial construction and
+topology-changing replacement remain hidden until the exact complete composite
+is committed and physically acknowledged. CELL bookkeeping, semantic rich
+state, and residual rich state advance together or not at all.
 
-If discovery is pending, the selected candidate and mapping remain sufficient
-for the owner-loop service to repeat negotiation in place when discovery
-settles. That transition must not depend on another UIDL dirty event or rebuild
-the semantic recipe merely to recover the same identities. Before any
-`OWNER_OPEN` or retained capture, the materializer must build this exact plan
-and call `RTE-LABEL-PREFLIGHT` to recheck current terminal limits, dynamic owner
-availability, representation, encoded-update arithmetic, and caller-owned
-provider owner, operation, and copied-byte capacity. Eligibility and advisory
-success alone admit nothing.
+Input against a rich semantic control is eligible only after the exact
+composite revision containing that control has been physically displayed and
+acknowledged. Terminal hit results identify the private projected semantic key
+and revision; Akashic revalidates both and routes the event through ordinary
+UIDL/widget focus and action handling. Residual glyph spans do not invent
+semantic hit targets.
 
-The retry slice preserves an already-live prior presentation while the shared
-discovery result remains `WOULD_BLOCK` and its materialized surface generation
-is still exact. A settled `CAPACITY` or `SOURCE` result remains local to its
-binding: admission records the refusal, revokes only eligibility/readiness, and
-continues the cohort; capture refusal first cancels the partial transaction and
-then retires the exact admitted owner before continuing. Desired banks, selected
-metadata, positional mappings, and object high-water remain authoritative for
-CELL and later reprojection. Reveal stays atomic across the staged cohort; it
-does not use a single-record fallback. Its zero-operation transaction identifies
-only the shared hidden candidate, so a local refusal has no binding operation to
-which it can be attributed safely; `PREPARE-REVEAL` leaves the cohort intact and
-returns retryable backpressure.
+Reset, resize, minimize/restore, and terminal loss rebuild derived output from
+the newest authoritative UCTX state. They do not reconstruct application state
+from the candidate or terminal model.
 
-The projector itself remains output-inert. Projection calls the read-only
-`RTE-LIMITS@` and publishes only the neutral candidate, identity mapping, and
-eligibility facts. The downstream UIDL lifecycle driver now freezes that
-candidate again, rebuilds and validates its plan, repeats
-`RTE-LABEL-PREFLIGHT`, opens the private owner, captures a hidden root region and
-LABEL definitions, settles them, and performs a separate atomic reveal through
-the unified publisher. None of those mutations occurs from an element/widget
-callback or grants protocol authority to the projector.
+## 6. Forward-refactor boundary
 
-The downstream neutral boundary can now preflight the complete current
-root-and-LABEL recipe and accept each aligned LABEL value. LABEL height
-and width are nonnegative and borrowed UTF-8 may begin at any byte address.
-Visible geometry must have positive extent and intersect the positive root.
-Invisible zero-extent or wholly off-root geometry is valid; RTAPT canonicalizes
-it to deterministic nonempty provider bounds while preserving invisibility and
-converts clipped boundaries at full `UNORM32` precision. Borrowed text must be
-nonwrapping and disjoint from facade/provider storage. RTAPT copies it into an
-aligned, pointer-free retry record, maintains exact active/hidden/pending object
-and UTF-8 ledgers, and commits it through the typed PT LABEL writer.
+The implementation sequence is intentionally forward-only:
 
-The lifecycle driver now retains the admitted pointer-free attempt through
-capture and settlement and correlates owner retirement. Rejected retained-only
-output is now recovered from the provider's retained `SEALED` candidate, or—if
-that retry authority is defensively observed gone—from authoritative desired
-state after exact owner retirement. Count quota versus sparse-ID high-water and
-late-discovery renegotiation and CELL-preserving per-binding refusal are likewise
-corrected. This LABEL candidate is a completed narrow foundation, not the
-vertical acceptance target. The next slices evolve this one current
-candidate/materializer boundary to carry the generic TUI draw state needed by
-Desk, Pad, and Daybook, including ordinary UIDL renderers, Desk chrome, mounted
-widgets, and applet painting reached through the normal draw boundary. They do
-not add an applet-specific candidate, a parallel protocol contract, or a second
-scene owned by Desk or an applet.
+1. keep `screen-plane.f` temporarily as lower-stack publication evidence while
+   the hybrid interfaces are built;
+2. add the generic semantic control and mounted-widget snapshot seams needed by
+   the real Desk/Pad/Daybook journey;
+3. add a caller-bounded linear claim planner and residual span coalescer with
+   focused structural and off-screen tests;
+4. bind that one producer to the existing UIDL-TUI lifecycle and unified
+   publisher, reusing current owner, hidden replace/reveal, acknowledgement,
+   reset, and teardown machinery;
+5. switch `desk-apt1.f` from the per-cell producer to the hybrid producer; and
+6. delete superseded per-cell product machinery and the dormant LABEL-only
+   driver/projector rather than retaining parallel legacy paths.
+
+This sequence does not revert the working horizontal transport and physical
+sink. It changes the candidate source at a coherent composition boundary. The
+current GLYPH_RUN encoder remains useful for residual spans, style conversion,
+and byte-oracle coverage, but its one-object-per-cell topology is not reused.
+
+The blocking proof remains the ordinary Desk composition with canonical Pad
+and Daybook launched through their real descriptors and UCTX lifecycle. The
+frame must contain genuinely semantic high-level controls plus rich residual
+coverage for unclaimed custom drawing, preserve complete CELL fallback, show a
+real Pad edit and Daybook navigation/selection, and bind input only after exact
+physical acknowledgement. A per-cell screen, one LABEL, an applet-specific
+fixture, or an active retained model without those pixels does not qualify.

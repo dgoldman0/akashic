@@ -7,10 +7,18 @@
 \  initialize a session, install an owner, negotiate, or emit terminal
 \  bytes.  A profile opts in by calling APT1-DESK-RUN instead of DESK-RUN.
 \
-\  Product profiles may override the four public bounds before REQUIRE.
-\  Maximum screen geometry derives the one retained owner, operation ledger,
-\  copy bank, and final-screen plan exactly; lower layers do not acquire a
-\  second product capacity policy.
+\  The current final-screen producer is a temporary lower-stack bootstrap.  Its
+\  per-cell plan is not the product projection and is not rich-terminal
+\  vertical evidence.  The forward replacement uses the same ordinary
+\  UIDL/draw lifecycle, semantic controls where meaning exists, and coalesced
+\  residual glyph spans only for unclaimed cells.
+\
+\  Product profiles may override the four current bootstrap bounds before
+\  REQUIRE.  Maximum screen geometry derives its one retained owner, operation
+\  ledger, copy bank, and final-screen plan exactly; lower layers do not acquire
+\  a second capacity policy.  These per-cell sizes must disappear when this
+\  leaf switches to the hybrid producer rather than becoming permanent product
+\  limits.
 \
 \  This leaf owns XMEM allocations made while it is sourced.  Keep it on the
 \  source path unless a compiled shard has separately proved those external

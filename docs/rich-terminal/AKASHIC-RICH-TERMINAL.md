@@ -1,7 +1,8 @@
 # Akashic rich-terminal engine and UIDL output contract
 
-Status: normative pre-vertical contract for the Phase 3 Akashic rich-terminal
-mode and its UIDL output integration.
+Status: normative pre-vertical contract and course correction for the Phase 3
+Akashic rich-terminal mode and its UIDL output integration. The semantic
+vertical described here is not implemented yet.
 
 This document defines the Akashic architecture, storage, ownership, projection,
 and lifecycle contract for optional rich-terminal output. It does not define
@@ -14,6 +15,72 @@ The transactional CELL output path remains independently specified by
 projection of the same UIDL/UCTX interface already rendered into cells. It does
 not create a second application UI model, replace the cell screen, or weaken
 ANSI fallback.
+
+## 0. Current implementation status and course correction
+
+The checked-in APT-1 Desk composition currently reaches the physical retained
+path through `tui/rich-terminal/screen-plane.f`. That temporary bootstrap
+converts the final CELL back buffer to one `GLYPH_RUN` object per cell. It is
+valuable evidence for owner admission, hidden replacement, unified CELL/rich
+publication, physical acknowledgement, teardown, and failure capture. It is
+not the product projection architecture and it cannot qualify the
+Desk/Pad/Daybook vertical. A full-screen one-object-per-cell frame is
+specifically forbidden as product proof.
+
+The intended product producer is one renderer-neutral **hybrid projection**
+derived from the ordinary UIDL and draw lifecycle:
+
+1. capture real semantic controls wherever the ordinary UIDL element or
+   mounted widget has renderer-independent meaning;
+2. resolve which visible pixels those accepted controls claim, respecting
+   ordinary clipping and paint order;
+3. paint the same ordinary frame through the existing TUI draw boundary; and
+4. emit maximal row-local, equal-style residual glyph spans only for visible
+   cells not claimed by an accepted semantic control.
+
+Menus, menu items, dialogs, text areas, selection/focus state, and other real
+controls must not be flattened to glyphs merely because the horizontal
+GLYPH_RUN path exists. Conversely, a custom draw surface does not acquire
+invented semantics. Until a generic renderer-neutral snapshot exists for that
+widget, its unclaimed final draw output is carried by residual spans. This is
+how the existing mounted Pad editor and Daybook calendar remain visible during
+the semantic expansion without adding applet-specific scenes or branches.
+
+A semantic claim is exclusive for the selected rich renderer. The semantic
+object owns rich representation and rich hit testing inside its final visible
+claim; the residual encoder must skip that area. If the terminal lacks the
+semantic family, capture refuses it, or admission cannot represent it, the area
+remains unclaimed and therefore receives ordinary residual glyph coverage.
+The authoritative UIDL/widget state, focus, action dispatch, and CELL fallback
+remain unchanged in both cases.
+
+`akashic/tui/rich-terminal/uidl-projector.f` and `uidl-driver.f` preserve useful
+experiments in semantic capture, stable keys, attachment authority, and owner
+retirement, but their narrow LABEL ABI is stale relative to the current `RTE`
+facade and their repeated scans are not the path forward. They must not be
+revived wholesale or installed as a parallel product producer. The correction
+is a forward refactor: retain their good lifecycle and identity concepts,
+extend the generic `ED.SEMANTICS`/mounted-widget seams for genuine control
+snapshots, and replace the temporary screen producer with the hybrid candidate
+planner. Once that producer is accepted, remove the superseded per-cell and
+dormant LABEL-only product paths rather than preserving legacy alternatives.
+
+Candidate work is linear and has one validation authority. Construction
+produces one canonical key order and one frozen candidate; admission performs
+one full validation traversal and records the checked counts, extents, quotas,
+and identity correlations consumed by later adapter and publisher stages.
+Those stages must not rescan the same complete candidate. When bytes remain in
+a caller-owned mutable bank, one final mutation-safety validation immediately
+before seal/publication is required. It is the only permitted repeated full
+traversal; copying into an immutable engine-owned attempt bank removes the need
+for it. Uniqueness and stable-ID reuse use a linear merge over canonical keys,
+not prior-item searches, repeated-minimum scans, or other quadratic work.
+
+The detailed hybrid candidate contract is
+[UIDL-PROJECTION-CANDIDATE.md](UIDL-PROJECTION-CANDIDATE.md). If a later section
+of this document describes the earlier LABEL-only driver or the current
+per-cell screen bootstrap as the product projection, this section and that
+candidate contract take precedence.
 
 ## 1. Non-negotiable architecture
 
@@ -30,11 +97,13 @@ Desk, or any applet. An explicit composition may use that engine outside Desk
 and UIDL-TUI without acquiring a second protocol or session implementation.
 
 An immutable caller-owned `RTE` facade is the operation boundary above a
-concrete provider. It exposes neutral status, owner, transaction, region,
-LABEL-definition, LABEL-plan preflight, update-state observation, and
-storage-disjoint operations plus one opaque provider context. Only the provider
-bridge names both vocabularies; generic UIDL code neither names nor loads
-`RTAPT`.
+concrete provider. The landed facade exposes neutral status, owner,
+transaction, region, GLYPH_RUN definition/replacement and plan preflight,
+update-state observation, and storage-disjoint operations plus one opaque
+provider context. Genuine semantic control families extend this neutral
+boundary as their contracts land; UIDL code must not encode a menu or another
+control as a misleading GROUP or GLYPH_RUN. Only the provider bridge names both
+vocabularies; generic UIDL code neither names nor loads `RTAPT`.
 
 Above it, UIDL-TUI owns a renderer-neutral optional-projection lifecycle. The
 rich-terminal driver implements that lifecycle's private adapter table and
@@ -152,6 +221,16 @@ fail-before-owner-mutation; refusal discovered during capture first cancels the
 partial retained transaction and then retires the already-admitted exact owner.
 
 ## 4. Generic engine construction and caller-owned storage
+
+The live facade in `akashic/tui/rich-terminal/engine.f` currently exposes the
+neutral GLYPH_RUN definition, replacement, and plan-preflight operations used
+by the screen bootstrap. The LABEL ABI inventory below records the earlier
+semantic prototype and is **superseded**: those words are no longer the live
+facade, and their record layouts are not implementation instructions for the
+hybrid vertical. It remains here only to identify lower-stack ownership and
+validation decisions that may be forward-refactored. The new semantic-control
+ABI is designed from the candidate contract in Section 0, not by restoring
+these names or offsets.
 
 An optional composition constructs a concrete engine and publishes its
 consumer-neutral operation boundary with:
@@ -557,6 +636,13 @@ engine owners before finalization.
 
 ## 5. UIDL semantic projection contract
 
+This section describes the semantic half of the hybrid candidate, not a
+semantic-only scene. Semantic capture and ordinary drawing happen within the
+same UCTX revision and normal paint lifecycle. The planner first selects
+supported semantic items, then derives their final visible claims, and only
+after ordinary painting derives residual glyph spans from unclaimed cells.
+Neither half may independently enumerate the application UI.
+
 ### 5.1 One semantic tree, multiple output paths
 
 UIDL element semantics are backend-neutral. The existing UIDL-TUI renderer
@@ -578,11 +664,26 @@ meaning is sufficiently defined. New readout, meter, plot, waveform, image, or
 other rich types are added as semantic UIDL elements/widgets, with real CELL
 fallbacks. They are not raw aliases for APT opcodes or wire object families.
 
+The semantic registry is not limited to LABEL and is not limited to elements
+whose ordinary renderer happens to draw text. Existing high-level chrome such
+as menubars, menus, items, dialogs, and text areas is projected as controls once
+the corresponding neutral snapshot and terminal capability are real. Mounted
+widgets may publish through an equivalent generic widget-semantic hook. A
+renderer must never infer a control merely by recognizing glyphs in the final
+screen.
+
 There is no generic `<rich-terminal>` or `<apt>` escape hatch, raw scene
 element, owner attribute, terminal ID attribute, or transaction element. A
 generic canvas does not become an arbitrary retained command stream. A richer
 projector is valid only when a semantic element defines enough backend-neutral
 meaning for both CELL and retained renderers.
+
+Supported and admitted semantic items own their final visible claim in the
+rich plane. Ordinary fallback paint is still produced for CELL, but the hybrid
+residual encoder excludes claimed cells so the rich compositor does not render
+or hit-test two representations of one control. Unsupported or refused
+semantic items make no claim; their normal drawing therefore remains visible
+through the residual path.
 
 ### 5.2 Stable identity and geometry
 
@@ -668,6 +769,14 @@ host calls arbitrary application shutdown or frees application state. No source
 callback is permitted after quiesce succeeds.
 
 ## 6. UIDL-TUI projection lifecycle and rich-terminal adapter
+
+UIDL-TUI's neutral lifecycle seam described first in this section is live and
+is the integration point for the hybrid producer. The later exact
+`RTERM-UIDL-*` records and LABEL materializer describe the dormant prototype,
+not a module to reinstall. They are retained as a design inventory until the
+forward refactor replaces them; where they prescribe LABEL-only membership,
+per-item scans, or repeated deep validation, the hybrid candidate contract
+supersedes them.
 
 The public host-facing UIDL lifecycle is neutral:
 
@@ -1194,11 +1303,12 @@ against a physically displayed revision as required by RETAINED-1.
 
 Any explicit rich product composition may construct the generic engine and
 bind an appropriate consumer adapter. The Desktop APT-1 profile does so from
-`tui/desk-apt1.f` and supplies the engine only to the generic UIDL-TUI driver;
-that is a product composition, not engine ownership by Desk. A standalone
-shell or another non-UIDL Akashic consumer may compose the same engine without
-loading Desk or UIDL-TUI. The baseline `desktop` profile does not load the
-APT-1 engine or construct rich-terminal state.
+`tui/desk-apt1.f`. Today that leaf binds the temporary final-screen producer;
+the required next composition binds the hybrid producer through UIDL-TUI's
+private lifecycle seam. Both are product composition, not engine ownership by
+Desk. A standalone shell or another non-UIDL Akashic consumer may compose the
+same engine without loading Desk or UIDL-TUI. The baseline `desktop` profile
+does not load the APT-1 engine or construct rich-terminal state.
 
 The deployment boundary is strict. MegaPad owns the optional boot-loaded
 `rich-terminal.f`; a rich product profile loads it before any Akashic
@@ -1209,24 +1319,15 @@ closure, startup, storage, and output behavior remain unaffected.
 
 The Desktop leaf constructs its current concrete layers in dependency order:
 PT session, neutral `APTSCB`, caller-bounded `RTAPT`, immutable `RTE` facade,
-unified `RTAPTSCB` publisher attachment, and finally the `APTAS` shell owner.
-The product profile supplies independent owner-record, operation-record,
-copied-operation-byte, UIDL-binding-record, per-candidate item, and
-per-candidate snapshot-byte capacities before the leaf is sourced. The APT-1
-Desk product supplies overrideable defaults for those product capacities and
-allocates two desired candidate banks of each kind per binding plus one final
-backend-global attempt bank in each combined slab. Its caller-owned identity
-bank has one fixed-size identity record per candidate item, so both desired and
-attempt extents derive from that existing item/bank geometry and introduce no
-new product capacity; fixed one-per-composition records remain leaf-owned. Desk's
-neutral host lifecycle then initializes the UIDL driver against the exact live
-`AHOST`, clears the temporary UIDL configuration descriptor, installs the
-driver's neutral `STEP` and `PREPARE` callbacks into the already-constructed
-output adapter, and installs the one post-UIDL callback. Child drain finalizes
-and zeros the UIDL backend; the immutable producer tuple remains bound to that
-stable allocation until the whole publisher is retired. The UIDL composition
-publishes `READY` only after both adapter and host callbacks are installed.
-Setup and release publish explicit phases, so a
+unified `RTAPTSCB` publisher attachment, the temporary `RTSCREEN` producer,
+and finally the `APTAS` shell owner. Its current per-cell operation/copy/plan
+banks derive from the maximum bootstrap surface. That sizing is an exact bound
+for the checked-in bootstrap only; it is not the capacity model of the hybrid
+product. The forward composition supplies caller-owned semantic, identity,
+claim-scratch, residual-span, and frozen-attempt spans based on its actual
+candidate contract, installs one hybrid `STEP`/`PREPARE` producer in the same
+publisher seam, and attaches it through the existing private UIDL-TUI
+lifecycle. Setup and release continue to publish explicit phases so a
 constructor or destructor refusal retains the smallest exact retry authority
 rather than clearing an uncertain terminal-output lifecycle.
 
@@ -1430,11 +1531,13 @@ Desk + ordinary UIDL renderers + mounted-widget/app draw state
   -> production compositor/view sink pixels
 ```
 
-The already-built LABEL path establishes neutral capture, sparse identity,
-late-discovery retry, binding-local fallback, owner settlement, immutable
-offers, and physical-ACK plumbing. It remains lower-stack evidence. It cannot
-stand in for the checkpoint because the present candidate, shared DTO, and
-compositor do not carry Desk chrome, Pad's editor body, or Daybook's
+The current per-cell screen bootstrap establishes owner settlement, immutable
+offers, unified publication, hidden replacement/reveal, and physical-ACK
+plumbing. The dormant LABEL experiment separately establishes useful semantic
+capture, attachment, and stable-identity ideas. Both remain lower-stack design
+evidence; neither is the product candidate. They cannot stand in for the
+checkpoint because neither provides the hybrid semantic-control and unclaimed
+residual coverage required for Desk chrome, Pad's editor body, and Daybook's
 calendar/agenda.
 
 Acceptance requires the complete visible Desk frame, both applets live through
