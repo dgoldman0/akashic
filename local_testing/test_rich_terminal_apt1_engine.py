@@ -139,9 +139,9 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "REQUIRE ../../utils/memory-span.f" in source
     assert " CONSTANT APTR-" not in source
     assert "\n: APTR-" not in source
-    assert "208 CONSTANT RTAPT-OWNER-SIZE" in source
-    assert "496 CONSTANT RTAPT-ENGINE-SIZE" in source
-    assert "160 CONSTANT RTAPT-LIMITS-SIZE" in source
+    assert "248 CONSTANT RTAPT-OWNER-SIZE" in source
+    assert "504 CONSTANT RTAPT-ENGINE-SIZE" in source
+    assert "168 CONSTANT RTAPT-LIMITS-SIZE" in source
     assert ": _RTAPT-E.LIMITS" in source
     owner_fields = {
         "STATE": 0,
@@ -391,6 +391,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     )
     glyph_run_limits = _definition(source, "_RTAPT-GLYPH-RUN-LIMITS")
     capture_ready = _definition(source, "_RTAPT-CAPTURE-READY?")
+    sealed_ready = _definition(source, "_RTAPT-SEALED-READY?")
     rich_seal = _definition(source, "RTAPT-RICH-SEAL")
     rich_cancel = _definition(source, "RTAPT-RICH-CANCEL")
     candidate_preflight = _definition(source, "_RTAPT-CANDIDATE-PREFLIGHT?")
@@ -449,8 +450,10 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-O.PENDING-UTF8" in ledgers
     assert ledgers.count("_RTAPT-TARGET-COUNT?") == 3
     assert "_RTAPT-E.OP-COUNT @ 0 ?DO" in ledgers
-    assert "_RTAPT-OP-GLYPH-RUN-REPLACE = IF" in ledgers
-    assert ledgers.index("_RTAPT-OP-GLYPH-RUN-REPLACE = IF") < ledgers.index(
+    assert "_RTAPT-OP-GLYPH-RUN-REPLACE =" in ledgers
+    assert "_RTAPT-OP-CONTROL-REPLACE = OR" in ledgers
+    assert "_RTAPT-OP-CONTROL-DROP = OR IF" in ledgers
+    assert ledgers.index("_RTAPT-OP-GLYPH-RUN-REPLACE =") < ledgers.index(
         "_RTAPT-E.OWNER-CAP @ 0 ?DO"
     )
     for region_target, object_target in (
@@ -463,12 +466,12 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         assert region_zero in ledgers
         assert object_nonzero in ledgers
         assert ledgers.index(region_zero) < ledgers.index(object_nonzero)
-    for object_target, utf8_target in (
-        ("ACTIVE-OBJECTS", "ACTIVE-UTF8"),
-        ("HIDDEN-OBJECTS", "HIDDEN-UTF8"),
-        ("PENDING-OBJECTS", "PENDING-UTF8"),
+    for shared_target, utf8_target in (
+        ("_RTAPT-LV-ACTIVE-SHARED", "ACTIVE-UTF8"),
+        ("_RTAPT-LV-HIDDEN-SHARED", "HIDDEN-UTF8"),
+        ("_RTAPT-LV-PENDING-SHARED", "PENDING-UTF8"),
     ):
-        object_zero = f"_RTAPT-O.{object_target} @ 0="
+        object_zero = f"{shared_target} @ 0="
         utf8_nonzero = f"_RTAPT-O.{utf8_target} @ 0<> AND"
         assert object_zero in ledgers
         assert utf8_nonzero in ledgers
@@ -513,7 +516,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-LD-ATTRS" in glyph_run_body
     assert "_RTAPT-GLYPH-RUN-TEXT-SPAN?" in glyph_run_body
     assert "_RTAPT-GLYPH-RUN-REGION-PENDING?" in glyph_run_body
-    assert "_RTAPT-OBJECT-BASE" in glyph_run_body
+    assert "_RTAPT-SHARED-OBJECT-BASE?" in glyph_run_body
     assert "_RTAPT-UTF8-BASE" in glyph_run_body
     assert "_RTAPT-O.PENDING-OBJECTS" in glyph_run_body
     assert "_RTAPT-O.PENDING-OBJECT-HIGH" in glyph_run_body
@@ -666,7 +669,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-CANDIDATE-DISCARD" in rich_cancel
 
     assert "_RTAPT-REGION-COPY-SHAPE?" in candidate_preflight
-    for shallow in (capture_ready, cell_feed_ready):
+    for shallow in (capture_ready, sealed_ready, cell_feed_ready):
         for forbidden_scan in (
             "?DO",
             " DO",
@@ -678,6 +681,10 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
             assert forbidden_scan not in shallow
     assert "_RTAPT-ENGINE-STORAGE?" in capture_ready
     assert "RTAPT-UPDATE-CAPTURING" in capture_ready
+    assert "_RTAPT-ENGINE-STORAGE?" in sealed_ready
+    assert "RTAPT-UPDATE-SEALED" in sealed_ready
+    assert "_RTAPT-MODE-DISPOSITION?" in sealed_ready
+    assert "_RTAPT-ACTIVE-NONE" in sealed_ready
     assert "_RTAPT-ENGINE-STORAGE?" in cell_feed_ready
     assert "RTAPT-UPDATE-CELL-OPEN" in cell_feed_ready
     assert "_RTAPT-CELL-COUNTS?" in cell_feed_ready
@@ -688,11 +695,15 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         assert "_RTAPT-ENGINE-STORAGE?" in feed
         assert "_RTAPT-CELL-FEED-READY?" in feed
         assert "_RTAPT-ENGINE-VALID?" not in feed
+    assert "_RTAPT-ENGINE-STORAGE?" in cell_begin
+    assert "_RTAPT-SEALED-READY?" in cell_begin
     assert "_RTAPT-ENGINE-VALID?" in cell_begin
-    assert "_RTAPT-CANDIDATE-PREFLIGHT?" in cell_begin
-    assert cell_begin.index("_RTAPT-ENGINE-VALID?") < cell_begin.index(
-        "_RTAPT-CANDIDATE-PREFLIGHT?"
-    )
+    assert "_RTAPT-CANDIDATE-PREFLIGHT?" not in cell_begin
+    sealed_branch = cell_begin.index("_RTAPT-CB-STATE @ RTAPT-UPDATE-SEALED = IF")
+    sealed_gate = cell_begin.index("_RTAPT-SEALED-READY?", sealed_branch)
+    idle_gate = cell_begin.index("_RTAPT-ENGINE-VALID?", sealed_gate)
+    present_begin = cell_begin.index("PT-PRESENT-BEGIN", idle_gate)
+    assert sealed_branch < sealed_gate < idle_gate < present_begin
     assert "_RTAPT-ENGINE-VALID?" in cell_commit
     assert "_RTAPT-CANDIDATE-PREFLIGHT?" in cell_commit
     assert cell_commit.index("_RTAPT-ENGINE-VALID?") < cell_commit.index(
@@ -729,7 +740,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         assert f"_RTAPT-RD.{identity}" in prior_region
         assert f"_RTAPT-LD.{identity}" in prior_region
     assert cell_begin.count("PT-PRESENT-BEGIN") == 2
-    assert cell_begin.index("_RTAPT-CANDIDATE-PREFLIGHT?") < cell_begin.index(
+    assert cell_begin.index("_RTAPT-SEALED-READY?") < cell_begin.index(
         "PT-PRESENT-BEGIN"
     )
     assert "PT-RET-NONE" in cell_begin
@@ -1092,21 +1103,25 @@ def test_glyph_run_geometry_projects_integer_cell_edges_exactly() -> None:
 def test_sealed_presentation_query_is_read_only_and_state_gated() -> None:
     source = SOURCE.read_text(encoding="utf-8")
     query = _definition(source, "RTAPT-SEALED-PRESENTATION@")
+    sealed_ready = _definition(source, "_RTAPT-SEALED-READY?")
 
-    engine_gate = query.index("_RTAPT-ENGINE-VALID?")
+    engine_gate = query.index("_RTAPT-ENGINE-STORAGE?")
     state_read = query.index("_RTAPT-E.UPDATE-STATE @", engine_gate)
     sealed_gate = query.index("RTAPT-UPDATE-SEALED <>", state_read)
-    mode_read = query.index("_RTAPT-E.RET-MODE @", sealed_gate)
+    descriptor_gate = query.index("_RTAPT-SEALED-READY?", sealed_gate)
+    mode_read = query.index("_RTAPT-E.RET-MODE @", descriptor_gate)
     disposition_read = query.index("_RTAPT-E.DISPOSITION @", mode_read)
-    mode_gate = query.index("_RTAPT-MODE? 0= IF", disposition_read)
-    tuple_gate = query.index("_RTAPT-MODE-DISPOSITION? 0= IF", mode_gate)
     success = query.rindex("RTAPT-S-OK")
-    assert engine_gate < state_read < sealed_gate < mode_read
-    assert mode_read < disposition_read < mode_gate < tuple_gate < success
+    assert engine_gate < state_read < sealed_gate < descriptor_gate
+    assert descriptor_gate < mode_read < disposition_read < success
 
     assert "DROP 0 0 RTAPT-S-INVALID EXIT" in query
     assert "DROP 0 0 RTAPT-S-BUSY EXIT" in query
-    assert query.count("2DROP 0 0 RTAPT-S-INVALID EXIT") == 2
+    assert "_RTAPT-ENGINE-VALID?" not in query
+    assert "_RTAPT-CANDIDATE-PREFLIGHT?" not in query
+    for forbidden_scan in ("?DO", " DO", "LOOP"):
+        assert forbidden_scan not in query
+        assert forbidden_scan not in sealed_ready
     assert not re.search(r"(?m)^\s+.*\s!\s*(?:\\.*)?$", query)
     for mutator in (
         "RTAPT-RICH-BEGIN",
@@ -1117,6 +1132,33 @@ def test_sealed_presentation_query_is_read_only_and_state_gated() -> None:
         "PT-TX-",
     ):
         assert mutator not in query
+
+
+def test_phase_and_binding_observers_do_not_rescan_caller_owned_banks() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    observers = {
+        "RTAPT-STATUS": _definition(source, "RTAPT-STATUS"),
+        "RTAPT-UPDATE-STATE@": _definition(source, "RTAPT-UPDATE-STATE@"),
+        "RTAPT-USES-SESSION?": _definition(source, "RTAPT-USES-SESSION?"),
+    }
+
+    for body in observers.values():
+        assert "_RTAPT-ENGINE-STORAGE?" in body
+        for forbidden in (
+            "_RTAPT-ENGINE-VALID?",
+            "_RTAPT-CAPTURED-BANKS?",
+            "_RTAPT-OWNER-LEDGERS?",
+            "_RTAPT-CANDIDATE-PREFLIGHT?",
+            "?DO",
+            " DO",
+            "LOOP",
+        ):
+            assert forbidden not in body
+
+    update = observers["RTAPT-UPDATE-STATE@"]
+    assert "_RTAPT-E.UPDATE-STATE @" in update
+    assert "RTAPT-UPDATE-AWAITING U>" in update
+    assert "_RTAPT-E.LAST-STATUS @" in update
 
 
 def test_invisible_empty_and_offroot_geometry_stays_wire_legal() -> None:

@@ -198,8 +198,7 @@ VARIABLE _RTAPTSCB-VALID-CONTEXT-U
     _RTAPTSCB-R @ APTSCB-PUBLISHER-VALID? 0= IF 0 EXIT THEN
     _RTAPTSCB-R @ APTSCBP.CONTEXT @ _RTAPTSCB-R @ <> IF 0 EXIT THEN
     _RTAPTSCB-R @ _RTAPTSCB.MAGIC @ _RTAPTSCB-MAGIC <> IF 0 EXIT THEN
-    _RTAPTSCB-R @ RTAPTSCB.ENGINE @ DUP _RTAPTSCB-E !
-        RTAPT-VALID? 0= IF 0 EXIT THEN
+    _RTAPTSCB-R @ RTAPTSCB.ENGINE @ _RTAPTSCB-E !
     _RTAPTSCB-R @ APTSCBP.SESSION @ _RTAPTSCB-E @
         RTAPT-USES-SESSION? 0= IF 0 EXIT THEN
     _RTAPTSCB-R @ RTAPTSCB-SIZE _RTAPTSCB-E @
@@ -210,10 +209,10 @@ VARIABLE _RTAPTSCB-VALID-CONTEXT-U
     _RTAPTSCB-R @ _RTAPTSCB-ADAPTER-VALID? 0= IF 0 EXIT THEN
     _RTAPTSCB-R @ _RTAPTSCB-PRODUCER-VALID? ;
 
-\ BEGIN fully validates the publisher and opens one synchronous CELL feed.
-\ Its private callbacks need only prove the fixed callback record and a safe
-\ engine span; the engine performs constant-time transaction/tail admission,
-\ and COMMIT repeats the full publisher and captured-bank audit.
+\ BEGIN validates the fixed publisher binding and opens one synchronous CELL
+\ feed without rescanning an already sealed candidate.  Its private callbacks
+\ prove only the callback record and safe engine span.  COMMIT retains the
+\ exhaustive caller-owned candidate audit before serialization.
 : _RTAPTSCB-FEED-VALID?  ( publisher -- flag )
     DUP RTAPTSCB-SIZE _RTAPTSCB-SPAN? 0= IF DROP 0 EXIT THEN
     DUP APTSCB-PUBLISHER-VALID? 0= IF DROP 0 EXIT THEN

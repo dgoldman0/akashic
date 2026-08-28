@@ -362,6 +362,8 @@ def test_output_producer_hook_is_optional_immutable_and_caller_bounded() -> None
     assert "_RTAPTSCB.MORE-WORK @ 0=" in fault_valid
     assert "_RTAPTSCB.OUTPUT-NEEDED @ 0=" in fault_valid
     valid = _definition(source, "RTAPTSCB-VALID?")
+    assert "RTAPT-USES-SESSION?" in valid
+    assert "RTAPT-VALID?" not in valid
     surface = valid.index("_RTAPTSCB-SURFACE-VALID?")
     phase = valid.index("_RTAPTSCB-PHASE?", surface)
     fault = valid.index("_RTAPTSCB-FAULT-VALID?", phase)

@@ -1030,6 +1030,28 @@ VARIABLE _RTAPT-QV-OK
     OVER _RTAPT-E.QUEUE-TAIL @ OR IF DROP 0 EXIT THEN
     DROP -1 ;
 
+\ RICH-SEAL has already audited the complete captured prefix.  Queries and
+\ PRESENT-BEGIN need only prove that the fixed descriptor still names that
+\ sealed, quiescent candidate.  The retry banks remain caller-owned, so the
+\ exhaustive mutation-safety audit is deliberately retained at COMMIT.
+: _RTAPT-SEALED-READY?  ( e -- flag )
+    DUP _RTAPT-ENGINE-STORAGE? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-SEALED <>
+        IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.COUPLING @ RTAPT-COUPLING-NONE <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.SEND-INDEX @ IF DROP 0 EXIT THEN
+    DUP _RTAPT-ZERO-CELL-GEOMETRY? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.RET-MODE @ _RTAPT-MODE? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.RET-MODE @ OVER _RTAPT-E.DISPOSITION @
+        _RTAPT-MODE-DISPOSITION? 0= IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.RET-MODE @ PT-RET-DELTA =
+    OVER _RTAPT-E.OP-COUNT @ 0= AND IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <> IF DROP 0 EXIT THEN
+    DUP _RTAPT-E.ACTIVE-O @
+    OVER _RTAPT-E.QUEUE-HEAD @ OR
+    OVER _RTAPT-E.QUEUE-TAIL @ OR IF DROP 0 EXIT THEN
+    DROP -1 ;
+
 : _RTAPT-ENGINE-VALID?  ( e -- flag )
     DUP _RTAPT-ENGINE-STORAGE? 0= IF DROP 0 EXIT THEN
     DUP _RTAPT-UPDATE-COHERENT? 0= IF DROP 0 EXIT THEN
@@ -1148,7 +1170,8 @@ VARIABLE _RTAPT-QV-OK
     RTAPT-S-OK ;
 
 : RTAPT-STATUS  ( engine -- status )
-    DUP _RTAPT-ENGINE-VALID? 0= IF DROP RTAPT-S-INVALID EXIT THEN
+    \ Observing the sticky status must not audit an unrelated captured bank.
+    DUP _RTAPT-ENGINE-STORAGE? 0= IF DROP RTAPT-S-INVALID EXIT THEN
     _RTAPT-E.LAST-STATUS @ ;
 
 : RTAPT-VALID?  ( engine -- flag )
@@ -1680,7 +1703,9 @@ VARIABLE _RTAPT-BC-E
     THEN ;
 
 : RTAPT-USES-SESSION?  ( session engine -- flag )
-    DUP _RTAPT-ENGINE-VALID? 0= IF 2DROP 0 EXIT THEN
+    \ Session identity depends only on checked fixed storage.  It must not
+    \ rescan a sealed caller-owned candidate when an adapter checks binding.
+    DUP _RTAPT-ENGINE-STORAGE? 0= IF 2DROP 0 EXIT THEN
     _RTAPT-E.SESSION @ = ;
 
 VARIABLE _RTAPT-SD-A
@@ -2369,29 +2394,32 @@ VARIABLE _RTAPT-CPF-TX
     _RTAPT-CONTROL-PREFLIGHT-SCRUB ;
 
 : RTAPT-UPDATE-STATE@  ( engine -- update-state status )
-    DUP _RTAPT-ENGINE-VALID? 0= IF
+    \ This is a phase observation, not a publication boundary.  A sealed
+    \ candidate is audited at SEAL and again immediately before serialization.
+    \ Polling its phase in between must remain constant-time.
+    DUP _RTAPT-ENGINE-STORAGE? 0= IF
         DROP RTAPT-UPDATE-IDLE RTAPT-S-INVALID EXIT
     THEN
-    DUP _RTAPT-E.UPDATE-STATE @ SWAP _RTAPT-E.LAST-STATUS @ ;
+    DUP _RTAPT-E.UPDATE-STATE @ DUP RTAPT-UPDATE-AWAITING U> IF
+        2DROP RTAPT-UPDATE-IDLE RTAPT-S-INVALID EXIT
+    THEN
+    SWAP _RTAPT-E.LAST-STATUS @ ;
 
 \ Return the immutable presentation tuple only while the caller-owned
 \ retained candidate is sealed.  This query exposes no capture storage and
 \ cannot advance, cancel, or publish the candidate.
 : RTAPT-SEALED-PRESENTATION@
   ( engine -- retained-mode disposition status )
-    DUP _RTAPT-ENGINE-VALID? 0= IF
+    DUP _RTAPT-ENGINE-STORAGE? 0= IF
         DROP 0 0 RTAPT-S-INVALID EXIT
     THEN
     DUP _RTAPT-E.UPDATE-STATE @ RTAPT-UPDATE-SEALED <> IF
         DROP 0 0 RTAPT-S-BUSY EXIT
     THEN
+    DUP _RTAPT-SEALED-READY? 0= IF
+        DROP 0 0 RTAPT-S-INVALID EXIT
+    THEN
     DUP _RTAPT-E.RET-MODE @ SWAP _RTAPT-E.DISPOSITION @
-    OVER _RTAPT-MODE? 0= IF
-        2DROP 0 0 RTAPT-S-INVALID EXIT
-    THEN
-    2DUP _RTAPT-MODE-DISPOSITION? 0= IF
-        2DROP 0 0 RTAPT-S-INVALID EXIT
-    THEN
     RTAPT-S-OK ;
 
 VARIABLE _RTAPT-RB-E
@@ -4056,15 +4084,26 @@ VARIABLE _RTAPT-CB-STATUS
 : RTAPT-CELL-BEGIN  ( cols rows span-count cell-count cell-mode engine -- status )
     _RTAPT-CB-E ! _RTAPT-CB-MODE ! _RTAPT-CB-CELLS ! _RTAPT-CB-SPANS !
     _RTAPT-CB-ROWS ! _RTAPT-CB-COLS !
-    _RTAPT-CB-E @ _RTAPT-ENGINE-VALID? 0= IF RTAPT-S-INVALID EXIT THEN
-    _RTAPT-CB-E @ _RTAPT-READY-STATUS DUP RTAPT-S-OK <> IF EXIT THEN DROP
-    _RTAPT-CB-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <>
-    _RTAPT-CB-E @ _RTAPT-E.QUEUE-HEAD @ OR
-    _RTAPT-CB-E @ _RTAPT-E.QUEUE-TAIL @ OR IF RTAPT-S-BUSY EXIT THEN
+    _RTAPT-CB-E @ _RTAPT-ENGINE-STORAGE? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-CB-E @ _RTAPT-E.UPDATE-STATE @ DUP _RTAPT-CB-STATE !
     DUP RTAPT-UPDATE-IDLE = SWAP RTAPT-UPDATE-SEALED = OR 0= IF
         RTAPT-S-BUSY EXIT
     THEN
+    _RTAPT-CB-STATE @ RTAPT-UPDATE-SEALED = IF
+        _RTAPT-CB-E @ _RTAPT-SEALED-READY? 0= IF
+            RTAPT-S-INVALID EXIT
+        THEN
+    ELSE
+        \ CELL-only publication has no preceding seal audit, so retain the
+        \ complete engine check on that independent path.
+        _RTAPT-CB-E @ _RTAPT-ENGINE-VALID? 0= IF
+            RTAPT-S-INVALID EXIT
+        THEN
+    THEN
+    _RTAPT-CB-E @ _RTAPT-READY-STATUS DUP RTAPT-S-OK <> IF EXIT THEN DROP
+    _RTAPT-CB-E @ _RTAPT-E.ACTIVE-KIND @ _RTAPT-ACTIVE-NONE <>
+    _RTAPT-CB-E @ _RTAPT-E.QUEUE-HEAD @ OR
+    _RTAPT-CB-E @ _RTAPT-E.QUEUE-TAIL @ OR IF RTAPT-S-BUSY EXIT THEN
     _RTAPT-CB-COLS @ _RTAPT-CB-ROWS @ _RTAPT-CB-SPANS @ _RTAPT-CB-CELLS @
         _RTAPT-CB-MODE @ _RTAPT-CELL-COUNTS? 0= IF RTAPT-S-INVALID EXIT THEN
     _RTAPT-CB-MODE @ PT-CELL-NONE =
@@ -4072,8 +4111,6 @@ VARIABLE _RTAPT-CB-STATUS
         RTAPT-S-INVALID EXIT
     THEN
     _RTAPT-CB-STATE @ RTAPT-UPDATE-SEALED = IF
-        _RTAPT-CB-COLS @ _RTAPT-CB-ROWS @ _RTAPT-CB-E @
-            _RTAPT-CANDIDATE-PREFLIGHT? 0= IF RTAPT-S-INVALID EXIT THEN
         _RTAPT-CB-COLS @ _RTAPT-CB-ROWS @
         _RTAPT-CB-SPANS @ _RTAPT-CB-CELLS @
         _RTAPT-CB-E @ _RTAPT-E.OP-COUNT @
