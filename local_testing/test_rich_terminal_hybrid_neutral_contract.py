@@ -35,6 +35,8 @@ def test_neutral_fixed_authority_is_scratch_free_and_precedes_item_walks() -> No
         "_RTE-HPV-FIXED-WRAPPER?", "_RTE-HPV-FIXED-CONTROL?",
         "_RTE-HPV-FIXED-GLYPH?", "_RTE-HPV-FIXED-HEADERS-SAME?",
         "_RTE-HPV-FIXED-CROSS?", "_RTE-HPV-FIXED-AUTHORITY?",
+        "_RTE-HPV-ADMISSION-GRAPH-DISJOINT?",
+        "_RTE-HPV-ADMISSION-AUTHORITY?",
     )
     fixed = "\n".join(_word(source, name) for name in fixed_names)
     authority = _word(source, "_RTE-HPV-FIXED-AUTHORITY?")
@@ -55,8 +57,10 @@ def test_neutral_fixed_authority_is_scratch_free_and_precedes_item_walks() -> No
     _ordered(
         public,
         "_RTE-HPV-FIXED-AUTHORITY?",
+        "_RTE-HPV-ADMISSION-AUTHORITY?",
         "_RTE-F.HYBRID-PREFLIGHT-XT @ 0=",
         "_RTE-HPV-FACADE !",
+        "_RTE-HPV-ADMISSION !",
         "_RTE-HPV-HYBRID !",
     )
     _ordered(
@@ -69,6 +73,13 @@ def test_neutral_fixed_authority_is_scratch_free_and_precedes_item_walks() -> No
     assert control_body.count("?DO") == 1
     assert glyph.count("?DO") == 1
     assert body.count("_RTE-F.HYBRID-PREFLIGHT-XT @ EXECUTE") == 1
+    _ordered(
+        body,
+        "_RTE-F.HYBRID-PREFLIGHT-XT @ EXECUTE",
+        "DUP RTE-S-OK = IF",
+        "RTE-HYBRID-ADMISSION-SIZE MOVE",
+    )
+    assert body.count(" MOVE") == 1
     for old in (
         "_RTE-HPV-ENTRY-AUTHORITY?", "_RTE-HPV-WRAPPER?",
         "_RTE-HPV-ITEM-SPANS?", "RTE-CONTROL-PREFLIGHT",

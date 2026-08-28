@@ -76,3 +76,33 @@ def test_hybrid_wrapper_and_checked_summary_have_exact_fixed_layouts() -> None:
     assert {
         field: _offset(provider, f"_RTAPT-HA.{field}") for field in fields
     } == expected
+
+
+def test_success_returns_the_exact_provider_admitted_summary() -> None:
+    engine = ENGINE.read_text(encoding="utf-8")
+    public = _word(engine, "RTE-HYBRID-PREFLIGHT")
+    body = _word(engine, "_RTE-HYBRID-PREFLIGHT-BODY")
+    graph = _word(engine, "_RTE-HPV-ADMISSION-GRAPH-DISJOINT?")
+    authority = _word(engine, "_RTE-HPV-ADMISSION-AUTHORITY?")
+
+    assert "( hybrid admission facade -- status )" in public.splitlines()[0]
+    assert public.index("_RTE-HPV-FIXED-AUTHORITY?") < public.index(
+        "_RTE-HPV-ADMISSION-AUTHORITY?"
+    ) < public.index("_RTE-HPV-ADMISSION !")
+    assert "_RTE-HPV-OWNED-DISJOINT?" in authority
+    assert "RTE-STORAGE-DISJOINT?" in authority
+    for source_span in (
+        "RTE-HYBRID-PLAN-SIZE", "_RTE-HPV-CONTROL-PLAN-SPAN",
+        "_RTE-HPV-CONTROL-ITEMS-SPAN", "_RTE-HPV-CONTROL-TEXT-SPAN",
+        "_RTE-HPV-GLYPH-PLAN-SPAN", "_RTE-HPV-GLYPH-ITEMS-SPAN",
+        "_RTE-HPV-GLYPH-REFS-SPAN", "_RTE-HPV-GLYPH-TEXT-SPAN",
+    ):
+        assert source_span in graph
+    assert "?DO" not in graph + authority
+    assert " MOVE" not in graph + authority
+    assert not re.search(r"(?m)(?:^|\s)!(?:\s|$)", graph + authority)
+    assert body.count("_RTE-F.HYBRID-PREFLIGHT-XT @ EXECUTE") == 1
+    assert body.index("_RTE-F.HYBRID-PREFLIGHT-XT @ EXECUTE") < body.index(
+        "DUP RTE-S-OK = IF"
+    ) < body.index("RTE-HYBRID-ADMISSION-SIZE MOVE")
+    assert body.count(" MOVE") == 1

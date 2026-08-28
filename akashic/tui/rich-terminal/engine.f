@@ -322,8 +322,10 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 \ exact lifecycle selection it represents.  A missing family is represented
 \ only by its canonical zero fields; at least one family must be present.
 \ Residual text references are parallel pointer-free (offset,length) records
-\ over one dense copied-text span.  Every address is borrowed only through
-\ RTE-HYBRID-PREFLIGHT.
+\ over one dense copied-text span.  Every source address is borrowed only
+\ through RTE-HYBRID-PREFLIGHT.  On exact success that call copies the
+\ provider-admitted fixed summary into caller-owned admission storage; the
+\ caller must ignore that storage after every other status.
 : _RTE-HP.ATTEMPT          ( hybrid -- a )      ;
 : _RTE-HP.SOURCE-GENERATION ( hybrid -- a )  8 + ;
 : _RTE-HP.SURFACE-GENERATION ( hybrid -- a ) 16 + ;
@@ -1443,6 +1445,7 @@ VARIABLE _RTE-CPV-FIXED-AUTHORITY
 \ reduced to the fixed summary passed to the provider.
 
 VARIABLE _RTE-HPV-HYBRID
+VARIABLE _RTE-HPV-ADMISSION
 VARIABLE _RTE-HPV-FACADE
 VARIABLE _RTE-HPV-CONTROL
 VARIABLE _RTE-HPV-GLYPH
@@ -1740,6 +1743,62 @@ CREATE _RTE-HPV-OWNED-END
     OVER _RTE-HPV-FIXED-CROSS? 0= IF 2DROP 0 EXIT THEN
     2DROP -1 ;
 
+\ The admitted summary is caller output, so prove its authority before any
+\ engine scratch or caller byte is written.  The complete source graph has
+\ already been fixed-authority checked, making these span reads safe.  This
+\ remains a fixed stack-only proof: it never revisits an item or reference.
+: _RTE-HPV-ADMISSION-GRAPH-DISJOINT?  ( hybrid admission -- flag )
+    >R
+    DUP RTE-HYBRID-PLAN-SIZE
+    R@ RTE-HYBRID-ADMISSION-SIZE
+        _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+    DUP _RTE-HP.CONTROL-PLAN @ IF
+        DUP _RTE-HPV-CONTROL-PLAN-SPAN
+        R@ RTE-HYBRID-ADMISSION-SIZE
+            _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+        DUP _RTE-HPV-CONTROL-ITEMS-SPAN
+        R@ RTE-HYBRID-ADMISSION-SIZE
+            _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+        DUP _RTE-HP.CONTROL-TEXT-U @ IF
+            DUP _RTE-HPV-CONTROL-TEXT-SPAN
+            R@ RTE-HYBRID-ADMISSION-SIZE
+                _RTE-HPV-FIXED-DISJOINT? 0= IF
+                    DROP R> DROP 0 EXIT
+                THEN
+        THEN
+    THEN
+    DUP _RTE-HP.GLYPH-PLAN @ IF
+        DUP _RTE-HPV-GLYPH-PLAN-SPAN
+        R@ RTE-HYBRID-ADMISSION-SIZE
+            _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+        DUP _RTE-HPV-GLYPH-ITEMS-SPAN
+        R@ RTE-HYBRID-ADMISSION-SIZE
+            _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+        DUP _RTE-HPV-GLYPH-REFS-SPAN
+        R@ RTE-HYBRID-ADMISSION-SIZE
+            _RTE-HPV-FIXED-DISJOINT? 0= IF DROP R> DROP 0 EXIT THEN
+        DUP _RTE-HP.GLYPH-TEXT-U @ IF
+            DUP _RTE-HPV-GLYPH-TEXT-SPAN
+            R@ RTE-HYBRID-ADMISSION-SIZE
+                _RTE-HPV-FIXED-DISJOINT? 0= IF
+                    DROP R> DROP 0 EXIT
+                THEN
+        THEN
+    THEN
+    DROP R> DROP -1 ;
+
+: _RTE-HPV-ADMISSION-AUTHORITY?  ( hybrid admission facade -- flag )
+    >R
+    DUP RTE-HYBRID-ADMISSION-SIZE _RTE-SPAN? 0= IF
+        2DROP R> DROP 0 EXIT
+    THEN
+    DUP RTE-HYBRID-ADMISSION-SIZE
+        _RTE-HPV-OWNED-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
+    DUP RTE-HYBRID-ADMISSION-SIZE R@
+        RTE-STORAGE-DISJOINT? 0= IF 2DROP R> DROP 0 EXIT THEN
+    _RTE-HPV-ADMISSION-GRAPH-DISJOINT?
+    R> DROP ;
+
 : _RTE-HPV-INIT  ( -- )
     _RTE-HPV-HYBRID @ _RTE-HP.CONTROL-PLAN @ _RTE-HPV-CONTROL !
     _RTE-HPV-HYBRID @ _RTE-HP.GLYPH-PLAN @ _RTE-HPV-GLYPH !
@@ -1856,7 +1915,8 @@ CREATE _RTE-HPV-OWNED-END
 
 : _RTE-HPV-FINISH  ( status -- status )
     _RTE-HPV-SUMMARY RTE-HYBRID-ADMISSION-SIZE 0 FILL
-    0 _RTE-HPV-HYBRID ! 0 _RTE-HPV-FACADE !
+    0 _RTE-HPV-HYBRID ! 0 _RTE-HPV-ADMISSION !
+    0 _RTE-HPV-FACADE !
     0 _RTE-HPV-CONTROL ! 0 _RTE-HPV-GLYPH !
     0 _RTE-HPV-CONTROL-ITEMS-A ! 0 _RTE-HPV-CONTROL-ITEMS-U !
     0 _RTE-HPV-GLYPH-ITEMS-A ! 0 _RTE-HPV-GLYPH-ITEMS-U !
@@ -1878,16 +1938,25 @@ CREATE _RTE-HPV-OWNED-END
     _RTE-HPV-CONTROL? 0= IF RTE-S-INVALID EXIT THEN
     _RTE-HPV-GLYPH? 0= IF RTE-S-INVALID EXIT THEN
     _RTE-HPV-SUMMARY _RTE-HPV-FACADE @ _RTE-F.CONTEXT @
-    _RTE-HPV-FACADE @ _RTE-F.HYBRID-PREFLIGHT-XT @ EXECUTE ;
+    _RTE-HPV-FACADE @ _RTE-F.HYBRID-PREFLIGHT-XT @ EXECUTE
+    DUP RTE-S-OK = IF
+        _RTE-HPV-SUMMARY _RTE-HPV-ADMISSION @
+            RTE-HYBRID-ADMISSION-SIZE MOVE
+    THEN ;
 
-: RTE-HYBRID-PREFLIGHT  ( hybrid facade -- status )
-    2DUP _RTE-HPV-FIXED-AUTHORITY? 0= IF
-        2DROP RTE-S-INVALID EXIT
+: RTE-HYBRID-PREFLIGHT  ( hybrid admission facade -- status )
+    >R
+    OVER R@ _RTE-HPV-FIXED-AUTHORITY? 0= IF
+        2DROP R> DROP RTE-S-INVALID EXIT
     THEN
-    DUP _RTE-F.HYBRID-PREFLIGHT-XT @ 0= IF
-        2DROP RTE-S-INVALID EXIT
+    2DUP R@ _RTE-HPV-ADMISSION-AUTHORITY? 0= IF
+        2DROP R> DROP RTE-S-INVALID EXIT
     THEN
-    _RTE-HPV-FACADE ! _RTE-HPV-HYBRID !
+    R@ _RTE-F.HYBRID-PREFLIGHT-XT @ 0= IF
+        2DROP R> DROP RTE-S-INVALID EXIT
+    THEN
+    R> _RTE-HPV-FACADE !
+    _RTE-HPV-ADMISSION ! _RTE-HPV-HYBRID !
     ['] _RTE-HYBRID-PREFLIGHT-BODY CATCH ?DUP IF
         DROP RTE-S-INVALID
     THEN

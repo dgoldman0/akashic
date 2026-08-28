@@ -136,7 +136,7 @@ def test_facade_dispatch_validates_neutral_arguments_and_provider_results() -> N
         "RTE-HYBRID-PLAN-BYTES": "( -- bytes )",
         "RTE-HYBRID-TEXT-REF-BYTES": "( -- bytes )",
         "RTE-HYBRID-ADMISSION-BYTES": "( -- bytes )",
-        "RTE-HYBRID-PREFLIGHT": "( hybrid facade -- status )",
+        "RTE-HYBRID-PREFLIGHT": "( hybrid admission facade -- status )",
         "RTE-RETAINED-BEGIN": "( retained-mode facade -- status )",
         "RTE-RETAINED-SEAL": "( disposition facade -- status )",
         "RTE-RETAINED-CANCEL": "( facade -- status )",
