@@ -90,12 +90,12 @@ def test_public_contract_has_exact_statuses_sizes_and_entry_points() -> None:
     assert "96 CONSTANT RTERM-HOST-BINDING-SIZE" in source
     assert "32 CONSTANT RTERM-SURFACE-SNAPSHOT-SIZE" in source
     assert "104 CONSTANT RTERM-UIDL-CONFIG-SIZE" in source
-    assert "8 CONSTANT _RTERM-UIDL-ABI" in source
+    assert "9 CONSTANT _RTERM-UIDL-ABI" in source
     assert "7 CONSTANT _RTERM-UIDL-CONFIG-ABI" in source
     assert "64 CONSTANT _RTERM-CANDIDATE-META-SIZE" in source
     assert "32 CONSTANT _RTERM-IDENTITY-SIZE" in source
     assert "384 CONSTANT RTERM-UIDL-BINDING-SIZE" in source
-    assert "512 CONSTANT RTERM-UIDL-BACKEND-SIZE" in source
+    assert "520 CONSTANT RTERM-UIDL-BACKEND-SIZE" in source
     assert "_RGN-DESC-SIZE CONSTANT RGN-SIZE" in region
     assert "RTERM-SURFACE-SNAPSHOT-SIZE" in _definition(
         source, "RTERM-SURFACE-SNAPSHOT-BYTES"
@@ -221,9 +221,9 @@ def test_materializer_schema_is_persistent_neutral_and_lifecycle_validated() -> 
 
     for field, offset in {
         "_RTERM-B.LIMITS": 160,
-        "_RTERM-B.EPOCH": 320,
-        "_RTERM-B.MAT": 328,
-        "_RTERM-B.RESERVED": 504,
+        "_RTERM-B.EPOCH": 328,
+        "_RTERM-B.MAT": 336,
+        "_RTERM-B.RESERVED": 512,
     }.items():
         assert f"{offset} +" in _definition(source, field)
 
