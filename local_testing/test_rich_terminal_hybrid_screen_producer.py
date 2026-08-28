@@ -375,7 +375,11 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
         "_RTHP.CONTROLS-A",
         "_RTHP.CORR-A",
     ):
-        assert bounded_bank in candidate_shape
+        assert candidate_shape.count(bounded_bank) == 2
+        assert (
+            f"_RTHP-CT-P @ {bounded_bank} @\n"
+            "        _RTHP-CT-BYTES @ _RTHP-CT-P @ _RTHP-ARENA-SPAN?"
+        ) in candidate_shape
     assert "RTE-CONTROL-MENU" in target_control
     assert "RTE-CONTROL-MENU-ITEM" in target_control
     assert "RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR" in target_control
