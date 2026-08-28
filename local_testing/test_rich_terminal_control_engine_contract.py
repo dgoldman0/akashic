@@ -52,7 +52,8 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         "64 CONSTANT RTAPT-F-CONTROLS",
         "0x100 CONSTANT _RTAPT-PT-F-CONTROLS",
         "168 CONSTANT RTAPT-LIMITS-SIZE",
-        "248 CONSTANT RTAPT-OWNER-SIZE",
+        "40 CONSTANT RTAPT-OP-SIZE",
+        "392 CONSTANT RTAPT-OWNER-SIZE",
         "504 CONSTANT RTAPT-ENGINE-SIZE",
         ": _RTAPT-L.OUTBOUND-PAYLOAD ( l -- a ) 160 + ;",
         ": _RTAPT-O.ACTIVE-CONTROLS ( o -- a ) 208 + ;",
@@ -60,6 +61,10 @@ def test_apt1_control_capability_extends_fixed_records_explicitly() -> None:
         ": _RTAPT-O.CONTROL-HIGH ( o -- a ) 224 + ;",
         ": _RTAPT-O.PENDING-CONTROLS ( o -- a ) 232 + ;",
         ": _RTAPT-O.PENDING-CONTROL-HIGH ( o -- a ) 240 + ;",
+        ": _RTAPT-O.A-RCOUNT    ( o -- a ) 248 + ;",
+        ": _RTAPT-O.A-OPS       ( o -- a ) 384 + ;",
+        ": _RTAPT-P.OWNER-SLOT ( p -- a )  24 + ;",
+        ": _RTAPT-P.REGION-OP  ( p -- a )  32 + ;",
         ": _RTAPT-E.LIMITS     ( e -- a ) 336 + ;",
     ):
         assert declaration in source
@@ -155,13 +160,15 @@ def test_control_delta_replacement_does_not_fabricate_quota_recovery() -> None:
     assert "_RTAPT-O.ACTIVE-UTF8 !" not in drop
 
 
-def test_final_preflight_rechecks_the_complete_define_graph_once() -> None:
+def test_final_publication_audit_rechecks_the_complete_define_graph_once() -> None:
     source = _text(PROVIDER)
     next_id = _word(source, "_RTAPT-PF-CONTROL-NEXT-ID?")
     menu = _word(source, "_RTAPT-PF-CONTROL-MENU?")
     item = _word(source, "_RTAPT-PF-CONTROL-ITEM?")
     graph = _word(source, "_RTAPT-PF-CONTROL-DEFINE-GRAPH?")
-    candidate = _word(source, "_RTAPT-CANDIDATE-PREFLIGHT?")
+    control = _word(source, "_RTAPT-PUBLICATION-CONTROL?")
+    operations = _word(source, "_RTAPT-PUBLICATION-OPS?")
+    audit = _word(source, "_RTAPT-PUBLICATION-AUDIT-BODY")
 
     assert "_RTAPT-PF-CCOUNT @ 0= IF" in next_id
     assert "_RTAPT-PF-CHIGH @ U> 0=" in next_id
@@ -176,24 +183,33 @@ def test_final_preflight_rechecks_the_complete_define_graph_once() -> None:
     assert "RTAPT-CONTROL-MENUBAR" in graph
     assert "RTAPT-CONTROL-MENU" in graph
     assert "_RTAPT-PF-CONTROL-ITEM?" in graph
-    assert "PT-RET-REPLACE-START <>" in candidate
-    assert "_RTAPT-PF-CONTROL-DEFINE-GRAPH?" in candidate
-    assert "_RTAPT-PF-CBAR-COUNT @ 1 <>" in candidate
-    assert "_RTAPT-O.PENDING-CONTROL-HIGH" in candidate
+    assert "PT-RET-REPLACE-START <>" in control
+    assert "_RTAPT-PF-CONTROL-DEFINE-GRAPH?" in control
+    assert operations.count("?DO") == 1
+    assert operations.count("_RTAPT-PUBLICATION-CONTROL?") == 0
+    assert operations.count("_RTAPT-PUBLICATION-SEMANTICS?") == 1
+    assert audit.count("_RTAPT-PUBLICATION-OPS?") == 1
+    assert "_RTAPT-OWNER-LEDGERS-FROM?" in audit
 
 
 def test_captured_controls_are_revalidated_and_serialized_explicitly() -> None:
     source = _text(PROVIDER)
     banks = _word(source, "_RTAPT-CAPTURED-BANKS?")
-    candidate = _word(source, "_RTAPT-CANDIDATE-PREFLIGHT?")
+    shape = _word(source, "_RTAPT-PUBLICATION-OP-SHAPE?")
+    control = _word(source, "_RTAPT-PUBLICATION-CONTROL?")
+    ledgers = _word(source, "_RTAPT-OWNER-AUDIT-MATCH?")
     sender = _word(source, "_RTAPT-SEND-CONTROL")
 
     assert "_RTAPT-CONTROL-COPY-FIXED" in banks
     assert "_RTAPT-CONTROL-DROP-COPY-SIZE" in banks
-    assert "_RTAPT-CONTROL-COPY-SHAPE?" in candidate
-    assert "_RTAPT-O.PENDING-CONTROLS" in candidate
-    assert "_RTAPT-O.PENDING-CONTROL-HIGH" in candidate
-    assert "_RTAPT-O.PENDING-UTF8" in candidate
+    assert "_RTAPT-CONTROL-COPY-FIXED" in shape
+    assert "_RTAPT-CONTROL-COPY-SHAPE?" in control
+    assert "_RTAPT-PF-CCOUNT" in control
+    assert "_RTAPT-PF-CONTROL-DEFINE-GRAPH?" in control
+    assert "_RTAPT-PF-UTF8" in control
+    assert "_RTAPT-O.PENDING-CONTROLS" in ledgers
+    assert "_RTAPT-O.PENDING-CONTROL-HIGH" in ledgers
+    assert "_RTAPT-O.PENDING-UTF8" in ledgers
     _ordered(
         sender,
         "_RTAPT-CD.OWNER",

@@ -139,7 +139,8 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "REQUIRE ../../utils/memory-span.f" in source
     assert " CONSTANT APTR-" not in source
     assert "\n: APTR-" not in source
-    assert "248 CONSTANT RTAPT-OWNER-SIZE" in source
+    assert "392 CONSTANT RTAPT-OWNER-SIZE" in source
+    assert "40 CONSTANT RTAPT-OP-SIZE" in source
     assert "504 CONSTANT RTAPT-ENGINE-SIZE" in source
     assert "168 CONSTANT RTAPT-LIMITS-SIZE" in source
     assert ": _RTAPT-E.LIMITS" in source
@@ -367,7 +368,8 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
 
     captured = _definition(source, "_RTAPT-CAPTURED-BANKS?")
     glyph_run_op = _definition(source, "_RTAPT-GLYPH-RUN-OP?")
-    ledgers = _definition(source, "_RTAPT-OWNER-LEDGERS?")
+    ledgers = _definition(source, "_RTAPT-OWNER-LEDGERS-FROM?")
+    ledger_wrapper = _definition(source, "_RTAPT-OWNER-LEDGERS?")
     target_count = _definition(source, "_RTAPT-TARGET-COUNT?")
     target_base = _definition(source, "_RTAPT-TARGET-BASE")
     rich_begin = _definition(source, "RTAPT-RICH-BEGIN")
@@ -378,6 +380,8 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     glyph_run_replace_body = _definition(
         source, "_RTAPT-GLYPH-RUN-REPLACE-BODY"
     )
+    control_capture = _definition(source, "_RTAPT-CONTROL-CAPTURE")
+    control_drop_body = _definition(source, "_RTAPT-CONTROL-DROP-BODY")
     glyph_run_target = _definition(source, "_RTAPT-GLYPH-RUN-TARGET?")
     glyph_run_geometry = _definition(source, "_RTAPT-GLYPH-RUN-GEOMETRY?")
     unorm32 = _definition(source, "_RTAPT-UNORM32")
@@ -385,7 +389,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     glyph_run_utf8 = _definition(source, "_RTAPT-GLYPH-RUN-UTF8?")
     forbidden_byte = _definition(source, "_RTAPT-GLYPH-RUN-FORBIDDEN-BYTE?")
     glyph_run_scrub = _definition(source, "_RTAPT-GLYPH-RUN-SCRUB")
-    pending_region = _definition(source, "_RTAPT-GLYPH-RUN-REGION-PENDING?")
+    pending_region = _definition(source, "_RTAPT-GLYPH-RUN-REGION-OP")
     pending_region_copy = _definition(
         source, "_RTAPT-GLYPH-RUN-REGION-COPY"
     )
@@ -394,8 +398,22 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     sealed_ready = _definition(source, "_RTAPT-SEALED-READY?")
     rich_seal = _definition(source, "RTAPT-RICH-SEAL")
     rich_cancel = _definition(source, "RTAPT-RICH-CANCEL")
-    candidate_preflight = _definition(source, "_RTAPT-CANDIDATE-PREFLIGHT?")
-    prior_region = _definition(source, "_RTAPT-PRIOR-REGION?")
+    publication_ops = _definition(source, "_RTAPT-PUBLICATION-OPS?")
+    publication_audit = _definition(source, "_RTAPT-PUBLICATION-AUDIT?")
+    publication_body = _definition(source, "_RTAPT-PUBLICATION-AUDIT-BODY")
+    publication_init = _definition(source, "_RTAPT-PUBLICATION-OWNERS-INIT")
+    publication_finish = _definition(source, "_RTAPT-PUBLICATION-AUDIT-FINISH")
+    candidate_preflight = "\n".join(
+        (
+            _definition(source, "_RTAPT-PUBLICATION-OP-SHAPE?"),
+            _definition(source, "_RTAPT-PUBLICATION-REGION?"),
+            _definition(source, "_RTAPT-PUBLICATION-GLYPH?"),
+            _definition(source, "_RTAPT-PUBLICATION-CONTROL?"),
+            _definition(source, "_RTAPT-PUBLICATION-DROP?"),
+            publication_ops,
+        )
+    )
+    prior_region = _definition(source, "_RTAPT-REGION-BACKLINK?")
     glyph_run_shape = _definition(source, "_RTAPT-GLYPH-RUN-COPY-SHAPE?")
     cell_begin = _definition(source, "RTAPT-CELL-BEGIN")
     cell_span = _definition(source, "RTAPT-CELL-SPAN-BEGIN")
@@ -405,6 +423,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     cell_abort = _definition(source, "RTAPT-CELL-ABORT")
     abort_open = _definition(source, "_RTAPT-ABORT-OPEN")
     cell_commit = _definition(source, "RTAPT-CELL-COMMIT")
+    commit_ready = _definition(source, "_RTAPT-COMMIT-READY?")
     commit_failed = _definition(source, "_RTAPT-COMMIT-FAILED")
     reconcile_output = _definition(source, "_RTAPT-RECONCILE-OUTPUT")
     apply_output = _definition(source, "_RTAPT-APPLY-OUTPUT")
@@ -433,8 +452,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-LD.TEXT-U" in captured
     assert "_RTAPT-E.RET-BYTES" in captured
     assert "_RTAPT-TARGET-COUNT?" in ledgers
-    assert "_RTAPT-LV-E ! 0 _RTAPT-LV-PENDING !" in ledgers
-    assert "DUP _RTAPT-LV-E !" not in ledgers
+    assert "_RTAPT-LV-E ! _RTAPT-LV-AUDIT ! _RTAPT-LV-PENDING !" in ledgers
     assert "_RTAPT-TARGET-BASE" in target_count
     assert "PT-RET-DELTA" in target_base
     assert "PT-RET-REPLACE-START" in target_base
@@ -449,13 +467,11 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-O.PENDING-OBJECT-HIGH" in ledgers
     assert "_RTAPT-O.PENDING-UTF8" in ledgers
     assert ledgers.count("_RTAPT-TARGET-COUNT?") == 3
-    assert "_RTAPT-E.OP-COUNT @ 0 ?DO" in ledgers
-    assert "_RTAPT-OP-GLYPH-RUN-REPLACE =" in ledgers
-    assert "_RTAPT-OP-CONTROL-REPLACE = OR" in ledgers
-    assert "_RTAPT-OP-CONTROL-DROP = OR IF" in ledgers
-    assert ledgers.index("_RTAPT-OP-GLYPH-RUN-REPLACE =") < ledgers.index(
-        "_RTAPT-E.OWNER-CAP @ 0 ?DO"
-    )
+    assert "_RTAPT-E.OP-COUNT @ 0 ?DO" in ledger_wrapper
+    assert "_RTAPT-OP-GLYPH-RUN-REPLACE =" in ledger_wrapper
+    assert "_RTAPT-OP-CONTROL-REPLACE = OR" in ledger_wrapper
+    assert "_RTAPT-OP-CONTROL-DROP = OR IF" in ledger_wrapper
+    assert "_RTAPT-E.OWNER-CAP @ 0 ?DO" in ledgers
     for region_target, object_target in (
         ("ACTIVE-REGIONS", "ACTIVE-OBJECTS"),
         ("HIDDEN-REGIONS", "HIDDEN-OBJECTS"),
@@ -489,6 +505,7 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-E.OP-CAP" in region_define
     assert "_RTAPT-E.OP-COUNT @ 0xFFFFFFFF U<" in region_define
     assert "_RTAPT-E.COPY-U" in region_define
+    assert "_RTAPT-P.OWNER-SLOT !" in region_define
     assert "_RTAPT-O.REGION-HIGH" in region_define
     assert "_RTAPT-O.PENDING-REGION-HIGH" in region_define
     assert "_RTAPT-O.PENDING-REGIONS" in region_define
@@ -515,7 +532,9 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-LD-BG-RGBA" in glyph_run_body
     assert "_RTAPT-LD-ATTRS" in glyph_run_body
     assert "_RTAPT-GLYPH-RUN-TEXT-SPAN?" in glyph_run_body
-    assert "_RTAPT-GLYPH-RUN-REGION-PENDING?" in glyph_run_body
+    assert "_RTAPT-GLYPH-RUN-REGION-OP" in glyph_run_body
+    assert "_RTAPT-P.REGION-OP" in glyph_run_body
+    assert "_RTAPT-P.OWNER-SLOT" in glyph_run_body
     assert "_RTAPT-SHARED-OBJECT-BASE?" in glyph_run_body
     assert "_RTAPT-UTF8-BASE" in glyph_run_body
     assert "_RTAPT-O.PENDING-OBJECTS" in glyph_run_body
@@ -538,6 +557,12 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         "_RTAPT-OP-GLYPH-RUN-DEFINE"
     )
     assert glyph_run_body.index("0 FILL") < glyph_run_body.index("MOVE")
+    for captured_op in (
+        glyph_run_replace_body,
+        control_capture,
+        control_drop_body,
+    ):
+        assert "_RTAPT-P.OWNER-SLOT !" in captured_op
 
     # Replacement reuses the exact neutral record and retry shape, but it is
     # admitted only against the selected committed target and never mutates
@@ -664,7 +689,8 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
         assert f"0 {scratch} !" in glyph_run_scrub
 
     assert "_RTAPT-MODE-DISPOSITION?" in rich_seal
-    assert "_RTAPT-ENGINE-VALID?" in rich_seal
+    assert "_RTAPT-CAPTURE-READY?" in rich_seal
+    assert "_RTAPT-ENGINE-VALID?" not in rich_seal
     assert "RTAPT-UPDATE-SEALED" in rich_seal
     assert "_RTAPT-CANDIDATE-DISCARD" in rich_cancel
 
@@ -704,22 +730,35 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     idle_gate = cell_begin.index("_RTAPT-ENGINE-VALID?", sealed_gate)
     present_begin = cell_begin.index("PT-PRESENT-BEGIN", idle_gate)
     assert sealed_branch < sealed_gate < idle_gate < present_begin
-    assert "_RTAPT-ENGINE-VALID?" in cell_commit
-    assert "_RTAPT-CANDIDATE-PREFLIGHT?" in cell_commit
-    assert cell_commit.index("_RTAPT-ENGINE-VALID?") < cell_commit.index(
-        "_RTAPT-CANDIDATE-PREFLIGHT?"
+    assert "_RTAPT-ENGINE-VALID?" not in cell_commit
+    assert "_RTAPT-CANDIDATE-PREFLIGHT?" not in cell_commit
+    assert "_RTAPT-COMMIT-READY?" in cell_commit
+    assert "_RTAPT-PUBLICATION-AUDIT?" in cell_commit
+    assert cell_commit.index("_RTAPT-COMMIT-READY?") < cell_commit.index(
+        "_RTAPT-PUBLICATION-AUDIT?"
     )
+    assert "_RTAPT-ENGINE-STORAGE?" in commit_ready
+    assert "?DO" not in commit_ready
+    assert " LOOP" not in commit_ready
+    assert "_RTAPT-PUBLICATION-AUDIT-BODY" in publication_audit
+    assert "CATCH" in publication_audit
+    assert publication_body.count("_RTAPT-PUBLICATION-OPS?") == 1
+    assert publication_body.count("_RTAPT-OWNER-LEDGERS-FROM?") == 1
+    assert publication_init.count("0 ?DO") == 1
+    assert "_RTAPT-OWNER-NTH DUP\n        _RTAPT-OWNER-AUDIT-OFF" not in publication_init
+    assert publication_ops.count("0 ?DO") == 1
+    assert ledgers.count("0 ?DO") == 1
+    assert "_RTAPT-OWNER-AUDIT-OFF" in publication_finish
+    assert "_RTAPT-AUDIT-SCRATCH-DIRTY" in publication_finish
+    assert cell_commit.count("_RTAPT-PUBLICATION-AUDIT?") == 1
+    assert "_RTAPT-PRIOR-REGION?" not in source
     assert "_RTAPT-GLYPH-RUN-COPY-SHAPE?" in candidate_preflight
     assert "_RTAPT-OP-REGION-DEFINE" in candidate_preflight
     assert "_RTAPT-OP-GLYPH-RUN-DEFINE" in candidate_preflight
     assert "_RTAPT-GLYPH-RUN-OP?" in candidate_preflight
     assert "_RTAPT-GLYPH-RUN-TARGET?" in candidate_preflight
-    assert "_RTAPT-O.REGION-HIGH" in candidate_preflight
-    assert "_RTAPT-O.PENDING-REGIONS" in candidate_preflight
-    assert "_RTAPT-O.PENDING-OBJECTS" in candidate_preflight
-    assert "_RTAPT-O.PENDING-OBJECT-HIGH" in candidate_preflight
-    assert "_RTAPT-O.PENDING-UTF8" in candidate_preflight
-    assert "_RTAPT-PRIOR-REGION?" in candidate_preflight
+    assert "_RTAPT-PUBLICATION-OWNER-SAVE" in candidate_preflight
+    assert "_RTAPT-REGION-BACKLINK?" in candidate_preflight
     assert "_RTAPT-LD.OBJECT" in candidate_preflight
     assert "_RTAPT-LD.TEXT-U" in candidate_preflight
     assert "_RTAPT-PF-BASE-RHIGH" not in source
@@ -734,7 +773,10 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-OP-REGION-DEFINE" in pending_region
     for identity in ("OWNER", "GENERATION", "REGION"):
         assert f"_RTAPT-RD.{identity}" in pending_region
-    assert "_RTAPT-PRR-I @ 0 ?DO" in prior_region
+    assert "?DO" not in prior_region
+    assert " LOOP" not in prior_region
+    assert "_RTAPT-P.REGION-OP" in prior_region
+    assert "_RTAPT-P.OWNER-SLOT" in prior_region
     assert "_RTAPT-OP-REGION-DEFINE" in prior_region
     for identity in ("OWNER", "GENERATION", "REGION"):
         assert f"_RTAPT-RD.{identity}" in prior_region
@@ -753,9 +795,10 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "_RTAPT-ABORT-OPEN" in cell_abort
 
     assert "_RTAPT-SEND-CAPTURED" in cell_commit
-    assert cell_commit.index("_RTAPT-CANDIDATE-PREFLIGHT?") < cell_commit.index(
+    assert cell_commit.index("_RTAPT-PUBLICATION-AUDIT?") < cell_commit.index(
         "_RTAPT-SEND-CAPTURED"
     )
+    assert "_RTAPT-COMMIT-FAILED" in cell_commit
     assert "PT-PRESENT-COMMIT" in cell_commit
     assert "_RTAPT-COMMIT-FAILED" in cell_commit
     assert "RTAPT-UPDATE-AWAITING" in cell_commit
