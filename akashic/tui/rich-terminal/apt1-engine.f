@@ -155,6 +155,7 @@ PT-COMMIT-AND-REVEAL CONSTANT RTAPT-COMMIT-AND-REVEAL
 \ These are record shapes, never product capacities.
 112 CONSTANT RTAPT-GLYPH-RUN-PLAN-SIZE
 120 CONSTANT RTAPT-GLYPH-RUN-PLAN-ITEM-SIZE
+176 CONSTANT RTAPT-HYBRID-ADMISSION-SIZE
 
 \ The operation record stores a typed operation kind, an offset/length into
 \ the separately bounded copy span, the exact owner slot proved at capture,
@@ -175,6 +176,8 @@ PT-COMMIT-AND-REVEAL CONSTANT RTAPT-COMMIT-AND-REVEAL
 : RTAPT-GLYPH-RUN-PLAN-BYTES  ( -- bytes )  RTAPT-GLYPH-RUN-PLAN-SIZE ;
 : RTAPT-GLYPH-RUN-PLAN-ITEM-BYTES  ( -- bytes )
     RTAPT-GLYPH-RUN-PLAN-ITEM-SIZE ;
+: RTAPT-HYBRID-ADMISSION-BYTES  ( -- bytes )
+    RTAPT-HYBRID-ADMISSION-SIZE ;
 
 0x5254415054434647 CONSTANT _RTAPT-CONFIG-MAGIC  \ "RTAPTCFG"
 0x5254415054454E47 CONSTANT _RTAPT-ENGINE-MAGIC  \ "RTAPTENG"
@@ -228,6 +231,32 @@ PT-COMMIT-AND-REVEAL CONSTANT RTAPT-COMMIT-AND-REVEAL
 : _RTAPT-LPI.ATTRS         ( i -- a )  96 + ;
 : _RTAPT-LPI.TEXT-CAPACITY ( i -- a ) 104 + ;
 : _RTAPT-LPI.RESERVED      ( i -- a ) 112 + ;
+
+\ Fixed neutral-checked hybrid admission summary.  This provider-local shape
+\ is correlated explicitly by engine-apt1.f; it contains no caller bank or
+\ text pointers and therefore cannot authorize a second candidate traversal.
+: _RTAPT-HA.OWNER           ( s -- a )       ;
+: _RTAPT-HA.GENERATION      ( s -- a )   8 + ;
+: _RTAPT-HA.SURFACE-COLS    ( s -- a )  16 + ;
+: _RTAPT-HA.SURFACE-ROWS    ( s -- a )  24 + ;
+: _RTAPT-HA.REGION-ID       ( s -- a )  32 + ;
+: _RTAPT-HA.REGION-X        ( s -- a )  40 + ;
+: _RTAPT-HA.REGION-Y        ( s -- a )  48 + ;
+: _RTAPT-HA.REGION-COLS     ( s -- a )  56 + ;
+: _RTAPT-HA.REGION-ROWS     ( s -- a )  64 + ;
+: _RTAPT-HA.REGION-Z        ( s -- a )  72 + ;
+: _RTAPT-HA.REGION-FLAGS    ( s -- a )  80 + ;
+: _RTAPT-HA.CONTROL-COUNT   ( s -- a )  88 + ;
+: _RTAPT-HA.CONTROL-TEXT    ( s -- a )  96 + ;
+: _RTAPT-HA.CONTROL-ALIGNED ( s -- a ) 104 + ;
+: _RTAPT-HA.CONTROL-MAX     ( s -- a ) 112 + ;
+: _RTAPT-HA.CONTROL-LAST    ( s -- a ) 120 + ;
+: _RTAPT-HA.GLYPH-COUNT     ( s -- a ) 128 + ;
+: _RTAPT-HA.GLYPH-TEXT      ( s -- a ) 136 + ;
+: _RTAPT-HA.GLYPH-ALIGNED   ( s -- a ) 144 + ;
+: _RTAPT-HA.GLYPH-MAX       ( s -- a ) 152 + ;
+: _RTAPT-HA.GLYPH-LAST      ( s -- a ) 160 + ;
+: _RTAPT-HA.RESERVED        ( s -- a ) 168 + ;
 
 \ Owner entries are engine-private after initialization.  NEXT links a
 \ caller-capacity-derived FIFO of exact lifecycle requests.  OWNER-USED counts

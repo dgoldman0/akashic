@@ -314,6 +314,64 @@ RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR
 
 : RTE-CONTROL-PLAN-ITEM-BYTES  ( -- bytes )  RTE-CONTROL-SIZE ;
 
+\ One initial hybrid plan joins the optional semantic CONTROL family and the
+\ optional residual GLYPH-RUN family under one owner, generation, surface, and
+\ root region.  A missing family is represented only by its canonical zero
+\ fields; at least one family must be present.  Residual text references are
+\ parallel pointer-free (offset,length) records over one dense copied-text
+\ span.  Every address is borrowed only through RTE-HYBRID-PREFLIGHT.
+: _RTE-HP.CONTROL-PLAN  ( hybrid -- a )      ;
+: _RTE-HP.GLYPH-PLAN    ( hybrid -- a )  8 + ;
+: _RTE-HP.GLYPH-REFS-A  ( hybrid -- a ) 16 + ;
+: _RTE-HP.GLYPH-REFS-U  ( hybrid -- a ) 24 + ;
+: _RTE-HP.GLYPH-TEXT-A  ( hybrid -- a ) 32 + ;
+: _RTE-HP.GLYPH-TEXT-U  ( hybrid -- a ) 40 + ;
+: _RTE-HP.CONTROL-TEXT-A ( hybrid -- a ) 48 + ;
+: _RTE-HP.CONTROL-TEXT-U ( hybrid -- a ) 56 + ;
+: _RTE-HP.RESERVED      ( hybrid -- a ) 64 + ;
+
+72 CONSTANT RTE-HYBRID-PLAN-SIZE
+16 CONSTANT RTE-HYBRID-TEXT-REF-SIZE
+
+: RTE-HYBRID-PLAN-BYTES  ( -- bytes )  RTE-HYBRID-PLAN-SIZE ;
+: RTE-HYBRID-TEXT-REF-BYTES  ( -- bytes )
+    RTE-HYBRID-TEXT-REF-SIZE ;
+
+: _RTE-HTR.OFFSET  ( ref -- a )      ;
+: _RTE-HTR.BYTES   ( ref -- a )  8 + ;
+
+\ The neutral layer creates this call-borrowed checked summary only after its
+\ sole traversal of every present caller bank.  A provider may validate these
+\ fixed scalars and negotiated arithmetic, but must not revisit a plan, item,
+\ reference, or text bank.  LAST fields are identity high-water, never quota.
+: _RTE-HA.OWNER          ( summary -- a )       ;
+: _RTE-HA.GENERATION     ( summary -- a )   8 + ;
+: _RTE-HA.SURFACE-COLS   ( summary -- a )  16 + ;
+: _RTE-HA.SURFACE-ROWS   ( summary -- a )  24 + ;
+: _RTE-HA.REGION-ID      ( summary -- a )  32 + ;
+: _RTE-HA.REGION-X       ( summary -- a )  40 + ;
+: _RTE-HA.REGION-Y       ( summary -- a )  48 + ;
+: _RTE-HA.REGION-COLS    ( summary -- a )  56 + ;
+: _RTE-HA.REGION-ROWS    ( summary -- a )  64 + ;
+: _RTE-HA.REGION-Z       ( summary -- a )  72 + ;
+: _RTE-HA.REGION-FLAGS   ( summary -- a )  80 + ;
+: _RTE-HA.CONTROL-COUNT  ( summary -- a )  88 + ;
+: _RTE-HA.CONTROL-TEXT   ( summary -- a )  96 + ;
+: _RTE-HA.CONTROL-ALIGNED ( summary -- a ) 104 + ;
+: _RTE-HA.CONTROL-MAX    ( summary -- a ) 112 + ;
+: _RTE-HA.CONTROL-LAST   ( summary -- a ) 120 + ;
+: _RTE-HA.GLYPH-COUNT    ( summary -- a ) 128 + ;
+: _RTE-HA.GLYPH-TEXT     ( summary -- a ) 136 + ;
+: _RTE-HA.GLYPH-ALIGNED  ( summary -- a ) 144 + ;
+: _RTE-HA.GLYPH-MAX      ( summary -- a ) 152 + ;
+: _RTE-HA.GLYPH-LAST     ( summary -- a ) 160 + ;
+: _RTE-HA.RESERVED       ( summary -- a ) 168 + ;
+
+176 CONSTANT RTE-HYBRID-ADMISSION-SIZE
+
+: RTE-HYBRID-ADMISSION-BYTES  ( -- bytes )
+    RTE-HYBRID-ADMISSION-SIZE ;
+
 : _RTE-SPAN?  ( a u -- flag )
     OVER 0<> OVER 0> AND 0= IF 2DROP 0 EXIT THEN
     OVER 7 AND IF 2DROP 0 EXIT THEN
