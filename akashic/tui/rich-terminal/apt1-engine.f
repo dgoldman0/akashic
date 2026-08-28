@@ -949,7 +949,7 @@ VARIABLE _RTAPT-LH-PENDING-HIGH
     _RTAPT-LV-O @ _RTAPT-O.A-CCOUNT @ IF
         _RTAPT-LV-O @ _RTAPT-O.A-CHIGH @
         _RTAPT-LV-O @ _RTAPT-O.PENDING-CONTROL-HIGH @ <> IF 0 EXIT THEN
-        _RTAPT-LV-O @ _RTAPT-O.A-CBAR-COUNT @ 1 <> IF 0 EXIT THEN
+        _RTAPT-LV-O @ _RTAPT-O.A-CBAR-COUNT @ 0= IF 0 EXIT THEN
         _RTAPT-LV-O @ _RTAPT-O.A-CPHASE @
             _RTAPT-PF-CONTROL-PHASE-NONE = IF 0 EXIT THEN
     ELSE
@@ -4411,9 +4411,9 @@ VARIABLE _RTAPT-PRR-REGION
     OVER _RTAPT-CX.GENERATION @ 0= OR
     SWAP _RTAPT-CX.CONTROL @ 0= OR 0= ;
 
-\ The DEFINE graph is proven in one capture-order pass.  Contiguous IDs make
-\ the completed MENU interval sufficient for parent checks; no prior record
-\ lookup or caller-bank rescan is needed.
+\ The DEFINE graph is proven in one capture-order pass.  Complete menu forests
+\ may repeat, with each new bar resetting the current MENU interval.  Global
+\ contiguous IDs still make parent checks independent of a caller-bank rescan.
 : _RTAPT-PF-CONTROL-NEXT-ID?  ( -- flag )
     _RTAPT-PF-CCOUNT @ 0= IF
         _RTAPT-PF-COPY @ _RTAPT-CD.CONTROL @ DUP
@@ -4477,10 +4477,13 @@ VARIABLE _RTAPT-PRR-REGION
 : _RTAPT-PF-CONTROL-DEFINE-GRAPH?  ( -- flag )
     _RTAPT-PF-CONTROL-NEXT-ID? 0= IF 0 EXIT THEN
     _RTAPT-PF-COPY @ _RTAPT-CD.KIND @ RTAPT-CONTROL-MENUBAR = IF
-        _RTAPT-PF-CPHASE @ _RTAPT-PF-CONTROL-PHASE-NONE <>
-            IF 0 EXIT THEN
-        1 _RTAPT-PF-CBAR-COUNT +!
+        _RTAPT-PF-CBAR-COUNT @ 1 _RTAPT-UADD? 0= IF DROP 0 EXIT THEN
+            _RTAPT-PF-CBAR-COUNT !
         _RTAPT-PF-COPY @ _RTAPT-CD.CONTROL @ _RTAPT-PF-CBAR-ID !
+        0 _RTAPT-PF-CMENU-FIRST ! 0 _RTAPT-PF-CMENU-LAST !
+        0 _RTAPT-PF-CPARENT ! 0 _RTAPT-PF-CORDER !
+        0 _RTAPT-PF-COPEN-MENU ! 0 _RTAPT-PF-CSELECTED-MENU !
+        0 _RTAPT-PF-CSELECTED-ITEM-PARENT !
         _RTAPT-PF-CONTROL-PHASE-BAR _RTAPT-PF-CPHASE ! -1 EXIT
     THEN
     _RTAPT-PF-COPY @ _RTAPT-CD.KIND @ RTAPT-CONTROL-MENU = IF

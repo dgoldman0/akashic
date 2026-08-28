@@ -371,8 +371,9 @@ def test_neutral_control_dispatch_proves_borrowed_storage_before_text_scan() -> 
     )
 
 
-def test_neutral_control_plan_proves_the_fixed_depth_menu_graph_in_that_pass() -> None:
+def test_neutral_control_plan_proves_concatenated_fixed_depth_menu_forests() -> None:
     source = _text(ENGINE)
+    finish = _word(source, "_RTE-CPV-FINISH")
     identity = _word(source, "_RTE-CPV-ID?")
     parent = _word(source, "_RTE-CPV-PARENT-RECORD?")
     graph = _word(source, "_RTE-CPV-GRAPH?")
@@ -380,13 +381,17 @@ def test_neutral_control_plan_proves_the_fixed_depth_menu_graph_in_that_pass() -
     row_phase = _word(source, "_RTE-CPV-PHASE-ROW?")
     group_order = _word(source, "_RTE-CPV-GROUP-ORDER?")
     group_state = _word(source, "_RTE-CPV-GROUP-STATE?")
+    body = _word(source, "_RTE-CONTROL-PLAN-VALID-BODY")
 
+    assert "VARIABLE _RTE-CPV-ROOT-ID" in source
+    assert "0 _RTE-CPV-ROOT-ID !" in finish
     assert "_RTE-CPV-COUNT @ 0= IF" in identity
     assert "_RTE-CPV-FIRST-ID !" in identity
     assert "_RTE-CPV-PRIOR-ID @ 1 _RTE-UADD?" in identity
     assert "_RTE-CONTROL.ID @ <>" in identity
     _ordered(
         parent,
+        "_RTE-CPV-ROOT-ID @ U<",
         "_RTE-CPV-PARENT-ID @ _RTE-CPV-FIRST-ID @ -",
         "_RTE-CPV-COUNT @ U<",
         "RTE-CONTROL-SIZE _RTE-UMUL?",
@@ -394,6 +399,10 @@ def test_neutral_control_plan_proves_the_fixed_depth_menu_graph_in_that_pass() -
         "_RTE-CONTROL.ID @ _RTE-CPV-PARENT-ID @ =",
     )
     assert "RTE-CONTROL-MENU-BAR" in graph
+    assert "_RTE-CPV-MENUBARS @ 1 _RTE-UADD?" in graph
+    assert "_RTE-CONTROL.ID @ _RTE-CPV-ROOT-ID !" in graph
+    assert "_RTE-CPV-PHASE-MENUBAR _RTE-CPV-PHASE !" in graph
+    assert "_RTE-CPV-MENUBARS @ IF" not in graph
     assert "_RTE-CPV-PHASE-MENU?" in graph
     assert "_RTE-CPV-PHASE-ROW?" in graph
     assert "RTE-CONTROL-MENU-BAR <>" in menu_phase
@@ -402,6 +411,30 @@ def test_neutral_control_plan_proves_the_fixed_depth_menu_graph_in_that_pass() -
     assert "_RTE-CPV-PRIOR-ORDER @ U> 0=" in group_order
     assert "_RTE-CPV-OPEN-SEEN @ IF" in group_state
     assert group_state.count("_RTE-CPV-SELECTED-SEEN @ IF") == 2
+    assert "0 _RTE-CPV-ROOT-ID !" in body
+    assert "_RTE-CPV-MENUBARS @ 0<>" in body
+
+
+def test_final_publication_audit_resets_each_complete_menu_root() -> None:
+    source = _text(PROVIDER)
+    graph = _word(source, "_RTAPT-PF-CONTROL-DEFINE-GRAPH?")
+    audit = _word(source, "_RTAPT-OWNER-AUDIT-MATCH?")
+
+    assert "_RTAPT-PF-CBAR-COUNT @ 1 _RTAPT-UADD?" in graph
+    assert "_RTAPT-PF-CONTROL-PHASE-NONE <>" not in graph
+    assert "_RTAPT-PF-COPY @ _RTAPT-CD.CONTROL @ _RTAPT-PF-CBAR-ID !" in graph
+    for per_root_state in (
+        "_RTAPT-PF-CMENU-FIRST",
+        "_RTAPT-PF-CMENU-LAST",
+        "_RTAPT-PF-CPARENT",
+        "_RTAPT-PF-CORDER",
+        "_RTAPT-PF-COPEN-MENU",
+        "_RTAPT-PF-CSELECTED-MENU",
+        "_RTAPT-PF-CSELECTED-ITEM-PARENT",
+    ):
+        assert f"0 {per_root_state} !" in graph
+    assert "_RTAPT-O.A-CBAR-COUNT @ 0=" in audit
+    assert "_RTAPT-O.A-CBAR-COUNT @ 1 <>" not in audit
 
 
 def test_apt1_bridge_maps_limits_explicitly_and_validates_neutral_copy_once() -> None:
