@@ -715,8 +715,11 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "RTAPT-UPDATE-CELL-OPEN" in cell_feed_ready
     assert "_RTAPT-CELL-COUNTS?" in cell_feed_ready
 
-    assert "_RTAPT-ENGINE-STORAGE?" in storage_disjoint
+    assert "_RTAPT-ENGINE-STORAGE?" not in storage_disjoint
     assert "_RTAPT-ENGINE-VALID?" not in storage_disjoint
+    assert "VARIABLE _RTAPT-SD-" not in source
+    assert "!" not in storage_disjoint
+    assert "?DO" not in storage_disjoint
     for feed in (cell_span, cell_write, cell_cursor):
         assert "_RTAPT-ENGINE-STORAGE?" in feed
         assert "_RTAPT-CELL-FEED-READY?" in feed
@@ -857,7 +860,8 @@ def test_rich_terminal_engine_owner_lifecycle_structure() -> None:
     assert "RTAPT-USES-SESSION?" in source
     assert "RTAPT-SESSION@" not in source
     assert "PT-STORAGE-DISJOINT?" in storage_disjoint
-    assert storage_disjoint.count("MSPAN-OVERLAP?") == 4
+    assert len(re.findall(r"\bPT-STORAGE-DISJOINT\?", storage_disjoint)) == 5
+    assert storage_disjoint.count("MSPAN-OVERLAP?") == 14
     assert "PT-SERVICE" not in source.replace(
         "It never calls PT-SERVICE and cannot consume input events.", ""
     )
