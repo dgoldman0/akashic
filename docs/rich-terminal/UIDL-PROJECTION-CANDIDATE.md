@@ -17,8 +17,12 @@ does not call the facade or decide claims. The next pure rung,
 admission result to the same frozen UMSN family and, in one canonical source
 pass, emits only nonempty PAINTABLE rectangles clipped to the source clip and
 surface. Its pointer-free claims retain the attachment, source key, generation,
-and paint z needed by later residual composition. Neither rung encodes
-residuals or attaches to the projection lifecycle; those seams remain
+and paint z needed by later residual composition. The claim consumer,
+`akashic/tui/rich-terminal/residual-glyph-planner.f`, now unions concatenated
+claim families through caller-bounded row events and emits maximal equal-style
+GLYPH_RUN plan items plus copied UTF-8 references from one row-major scan of
+only the unclaimed ordinary screen cells. These pure planning rungs still do
+not call the facade or attach to the projection lifecycle; those seams remain
 incomplete.
 
 This document defines the renderer-neutral boundary between the ordinary
