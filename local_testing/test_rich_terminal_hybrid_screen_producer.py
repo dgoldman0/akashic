@@ -52,7 +52,16 @@ def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     for name, size in records:
         assert _offset(source, name) == expected
         expected += size
-    assert _constant(source, "RTHP-SIZE") == expected == 1888
+    assert expected == 1888
+    for name in (
+        "_RTHP.TARGET0-A",
+        "_RTHP.TARGET1-A",
+        "_RTHP.TARGET-ACTIVE",
+        "_RTHP.TARGET-PENDING",
+    ):
+        assert _offset(source, name) == expected
+        expected += 8
+    assert _constant(source, "RTHP-SIZE") == expected == 1920
 
 
 def test_candidate_is_copied_planned_and_admitted_once_before_owner_open() -> None:
@@ -122,30 +131,48 @@ def test_slice_remains_generic_caller_bounded_and_digest_free() -> None:
         assert required in source
 
 
-def test_native_menu_target_is_correlated_to_safe_source_geometry() -> None:
+def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> None:
     source = _source()
-    target = _word(source, "RTHP-CONTROL-MENU-TARGET@")
-    live_shape = _word(source, "_RTHP-CT-LIVE-SHAPE?")
+    sizing = _word(source, "_RTHP-BYTES-BODY")
+    layout = _word(source, "_RTHP-LAYOUT")
+    build = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    candidate_shape = _word(source, "_RTHP-CT-CANDIDATE-SHAPE?")
     find_control = _word(source, "_RTHP-CT-FIND-CONTROL?")
     control = _word(source, "_RTHP-CT-CONTROL?")
-    find_correlation = _word(source, "_RTHP-CT-FIND-CORRELATION?")
+    target_control = _word(source, "_RTHP-CT-TARGET?")
+    correlation_at = _word(source, "_RTHP-CT-CORRELATION-AT?")
     correlation = _word(source, "_RTHP-CT-CORRELATION?")
     record = _word(source, "_RTHP-CT-RECORD?")
     geometry = _word(source, "_RTHP-CT-GEOMETRY?")
+    prepare = _word(source, "_RTHP-PREPARE-START")
 
-    assert "_RTHP-CT-LIVE-SHAPE?" in target
-    assert "_RTHP-FIXED?" not in target
-    assert "_RTHP-PH-LIVE" in live_shape
-    assert "_RTHP.SOURCE-USED" in live_shape
-    assert "_RTHP.CONTROLS-U" in live_shape
-    assert "_RTHP.CORR-U" in live_shape
-    assert "_RTHP-CT-IN-ARENA?" in live_shape
-    assert "0 ?DO" not in live_shape
+    assert sizing.count("_RTHP-TARGET-BANK-HEADER-SIZE _RTHP-B-ADD") == 2
+    assert sizing.count(
+        "_RTHP-B-RECORDS @ _RTHP-TARGET-ENTRY-SIZE _RTHP-B-MUL-ADD"
+    ) == 2
+    assert layout.count("_RTHP.TARGET0-A") == 1
+    assert layout.count("_RTHP.TARGET1-A") == 1
+    assert "_RTHP-TARGET-INACTIVE" in build
+    assert "_RTHP.TARGET-PENDING" in build
+    assert "_RTHP-CT-CANDIDATE-SHAPE?" in build
+    assert build.count("0 ?DO") == 1
+    assert "0 ?DO" not in correlation_at
     assert "0 ?DO" not in find_control
     assert "_RTHP.FIRST-OBJECT" in find_control
-    assert "0 ?DO" in find_correlation
-    for identity in ("_RTHP.OWNER", "_RTHP.OWNER-GEN", "_RTHP-CT-ID"):
-        assert identity in target
+    assert "_RTHP.CONTROLS-A" in find_control
+    assert build.index("_RTHP-CT-CORRELATION-AT?") < build.index(
+        "_RTHP-CT-FIND-CONTROL?"
+    )
+    assert candidate_shape.count("_RTHP-ARENA-SPAN?") == 3
+    for bounded_bank in (
+        "_RTHP.SOURCE-RECS-A",
+        "_RTHP.CONTROLS-A",
+        "_RTHP.CORR-A",
+    ):
+        assert bounded_bank in candidate_shape
+    assert "RTE-CONTROL-MENU" in target_control
+    assert "RTE-CONTROL-MENU-ITEM" in target_control
+    assert "RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR" in target_control
     for exact in (
         "_RTE-CONTROL.OWNER",
         "_RTE-CONTROL.GENERATION",
@@ -156,6 +183,7 @@ def test_native_menu_target_is_correlated_to_safe_source_geometry() -> None:
     assert "RTE-CONTROL-MENU-ITEM" in control
     assert "RTE-CONTROL-VISIBLE RTE-CONTROL-ENABLED OR" in control
 
+    assert "RUCP-CORRELATION-CONTROL-ID@" in correlation_at
     assert "RUCP-CORRELATION-ATTACHMENT@" in correlation
     assert "RUCP-CORRELATION-SOURCE@" in correlation
     assert "RUCP-CORRELATION-SUBKEY@" in correlation
@@ -163,10 +191,76 @@ def test_native_menu_target_is_correlated_to_safe_source_geometry() -> None:
     assert "UMSN-RECORD-GENERATION@" in record
     assert "UMSN-RECORD-SOURCE-INDEX@" in record
     assert "_UMSN-R.SOURCE" in record
-    assert "UMSN-F-PAINTABLE" in record
-    assert "UMSN-RECORD-RESOLVED" in record
-    assert "UTUI-RESOLVED-VALID?" in record
+    assert "UMSN-F-PAINTABLE" not in record
+    assert "UMSN-RECORD-RESOLVED" not in record
+    assert "UTUI-RESOLVED-VALID?" not in record
+    assert "UMSN-RECORD-RESOLVED" in geometry
+    assert "UTUI-RESOLVED-VALID?" in geometry
     assert "_RTE-CONTROL.ROW" not in geometry
     assert "_RTE-CONTROL.COL" not in geometry
     assert "_RTHP.ROWS" in geometry
     assert "_RTHP.COLS" in geometry
+    for metadata in (
+        "_RTHP-TB.OWNER",
+        "_RTHP-TB.GENERATION",
+        "_RTHP-TB.COLS",
+        "_RTHP-TB.ROWS",
+        "_RTHP-TB.COUNT",
+    ):
+        assert metadata in build
+    for entry in ("_RTHP-TE.ID", "_RTHP-TE.ROW", "_RTHP-TE.COL"):
+        assert entry in build
+    assert "UMSN-F-PAINTABLE" in build
+    assert prepare.index("_RTHP-FIXED?") < prepare.index(
+        "_RTHP-TARGET-CANDIDATE?"
+    ) < prepare.index("RTE-RETAINED-BEGIN")
+    assert "_RTHP-TARGET-CONTROL?" not in _word(source, "_RTHP-EMIT-CONTROLS")
+
+
+def test_only_the_exactly_revealed_target_bank_becomes_input_active() -> None:
+    source = _source()
+    sealed = _word(source, "_RTHP-STEP-SEALED")
+    publish = _word(source, "_RTHP-TARGET-PUBLISH?")
+    lookup = _word(source, "RTHP-CONTROL-MENU-TARGET@")
+    header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
+    entries = _word(source, "_RTHP-TARGET-BANK-ENTRIES?")
+    find = _word(source, "_RTHP-TARGET-BANK-FIND?")
+    live = _word(source, "RTHP-LIVE?")
+
+    accepted = "_RTHP-Z-ACCEPT @ _RTHP-Z-P @ _RTHP.PHASE !"
+    assert sealed.index(accepted) < sealed.index("_RTHP-TARGET-PUBLISH?")
+    assert "_RTHP-PH-LIVE = IF" in sealed
+    assert "_RTHP.TARGET-PENDING" in publish
+    assert publish.index("_RTHP-TARGET-BANK-ENTRIES?") < publish.index(
+        "_RTHP.TARGET-ACTIVE !"
+    )
+    assert publish.index("_RTHP.TARGET-PENDING !") < publish.index(
+        "_RTHP.TARGET-ACTIVE !"
+    )
+
+    assert "_RTHP.TARGET-ACTIVE" in lookup
+    assert "_RTHP-TARGET-BANK-HEADER?" in lookup
+    assert "_RTHP-TARGET-BANK-FIND?" in lookup
+    assert "_RTHP.PHASE" not in lookup
+    assert "_RTHP.OWNER" in lookup
+    assert "_RTHP.OWNER-GEN" in lookup
+    assert "_RTHP.TARGET-ACTIVE" in live
+    assert "_RTHP.PHASE" not in live
+    assert entries.count("0 ?DO") == 1
+    assert find.count("0 ?DO") == 1
+    assert "_RTHP-TL-MATCHES @ 1 =" in find
+    for candidate_bank in (
+        "_RTHP.SOURCE-RECS-A",
+        "_RTHP.CONTROLS-A",
+        "_RTHP.CORR-A",
+        "_RTHP.ADMISSION",
+    ):
+        assert candidate_bank not in lookup + header + find
+    for metadata in (
+        "_RTHP-TB.OWNER",
+        "_RTHP-TB.GENERATION",
+        "_RTHP-TB.COLS",
+        "_RTHP-TB.ROWS",
+        "_RTHP-TB.COUNT",
+    ):
+        assert metadata in lookup + header + find
