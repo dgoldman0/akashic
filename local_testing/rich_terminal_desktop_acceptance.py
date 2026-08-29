@@ -699,6 +699,83 @@ def _guest_failure_message(
     )
 
 
+def _menu_popup_source_claim(
+    menu_bar: MenuBarDraw,
+    menu: MenuDraw,
+    *,
+    bar_left: int,
+    bar_right: int,
+    bar_top: int,
+    screen_rows: int,
+) -> set[tuple[int, int]]:
+    """Derive the ordinary UIDL-TUI cell rectangle owned by one popup.
+
+    UIDL-TUI positions menu siblings and measures item labels from the byte
+    lengths returned by ``UIDL-ATTR``.  The retained draw projection omits
+    invisible controls.  Canonical acceptance therefore requires every
+    layout-participating menu and row needed by an open popup to be visible; a
+    gap in either zero-based sibling order is proof that this invariant was
+    broken.  Refuse such a frame instead of silently moving or shrinking its
+    source claim.  (An omitted trailing source sibling is not representable in
+    ``MenuDraw`` and remains an explicit all-visible profile invariant.)
+    """
+
+    menu_orders = tuple(candidate.order for candidate in menu_bar.menus)
+    if menu_orders != tuple(range(len(menu_orders))):
+        raise PhysicalDesktopAcceptanceError(
+            "semantic menu bar omits source-order menus needed to derive "
+            "popup geometry"
+        )
+    entry_orders = tuple(entry.order for entry in menu.entries)
+    if entry_orders != tuple(range(len(entry_orders))):
+        raise PhysicalDesktopAcceptanceError(
+            "open semantic menu omits source-order rows needed to derive "
+            "popup geometry"
+        )
+
+    def uidl_text_width(text: str) -> int:
+        return len(text.encode("utf-8", "strict"))
+
+    title_left = bar_left + 1
+    found = False
+    for candidate in menu_bar.menus:
+        if candidate.control_id == menu.control_id:
+            found = True
+            break
+        title_left += uidl_text_width(candidate.label) + 2
+    if not found:
+        raise PhysicalDesktopAcceptanceError(
+            "open semantic menu is not a child of its retained menu bar"
+        )
+    popup_top = bar_top + 1
+    popup_width = (
+        max(
+            (
+                uidl_text_width(entry.label)
+                for entry in menu.entries
+                if isinstance(entry, MenuItemDraw)
+            ),
+            default=0,
+        )
+        + 4
+    )
+    popup_height = len(menu.entries) + 2
+    if (
+        title_left < bar_left
+        or title_left + popup_width > bar_right
+        or popup_top < 0
+        or popup_top + popup_height > screen_rows
+    ):
+        raise PhysicalDesktopAcceptanceError(
+            "open semantic menu source claim does not fit its viewport"
+        )
+    return {
+        (col, row)
+        for row in range(popup_top, popup_top + popup_height)
+        for col in range(title_left, title_left + popup_width)
+    }
+
+
 def reconstruct_retained_screen(
     offer: TerminalDisplayOffer,
 ) -> RichScreenProjection:
@@ -814,58 +891,21 @@ def reconstruct_retained_screen(
         if (col, row) not in covered
     }
     expected_popup_claim: set[tuple[int, int]] = set()
-    if open_menus:
-        if len(open_menus) != 1:
-            raise PhysicalDesktopAcceptanceError(
-                "retained frame contains multiple open semantic menus"
+    for menu_bar, menu, bar_left, bar_right, bar_top in open_menus:
+        expected_popup_claim.update(
+            _menu_popup_source_claim(
+                menu_bar,
+                menu,
+                bar_left=bar_left,
+                bar_right=bar_right,
+                bar_top=bar_top,
+                screen_rows=cell.rows,
             )
-        menu_bar, menu, bar_left, bar_right, bar_top = open_menus[0]
-        signature = tuple(item.label for item in menu_bar.menus)
-        if (
-            signature != PAD_MENU_SIGNATURE
-            or menu.label != "File"
-            or not menu.entries
-        ):
-            raise PhysicalDesktopAcceptanceError(
-                "renderer-owned claim gap is not the canonical Pad File popup"
-            )
-        _require_canonical_pad_file_entries(menu)
-        popup_left = bar_left + 1
-        popup_top = bar_top + 1
-        popup_width = (
-            max(
-                (
-                    len(entry.label)
-                    for entry in menu.entries
-                    if isinstance(entry, MenuItemDraw)
-                ),
-                default=0,
-            )
-            + 4
         )
-        popup_height = len(menu.entries) + 2
-        if (popup_width, popup_height) != (13, 13):
-            raise PhysicalDesktopAcceptanceError(
-                "canonical Pad File popup does not have its 13x13 source claim"
-            )
-        if (
-            popup_left < bar_left
-            or popup_left + popup_width > bar_right
-            or popup_top < 0
-            or popup_top + popup_height > cell.rows
-        ):
-            raise PhysicalDesktopAcceptanceError(
-                "canonical Pad File popup source claim does not fit its viewport"
-            )
-        expected_popup_claim = {
-            (col, row)
-            for row in range(popup_top, popup_top + popup_height)
-            for col in range(popup_left, popup_left + popup_width)
-        }
     if uncovered != expected_popup_claim:
         raise PhysicalDesktopAcceptanceError(
             "retained rich draws leave logical cells uncovered outside the "
-            "exact canonical Pad File popup claim: "
+            "exact semantic popup source claims: "
             f"actual={len(uncovered)} expected={len(expected_popup_claim)}"
         )
     renderer_owned_gap_cells = len(uncovered)

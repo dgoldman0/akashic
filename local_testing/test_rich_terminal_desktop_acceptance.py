@@ -95,6 +95,39 @@ def _glyph_run(
     )
 
 
+def _glyph_draws_outside(
+    cols: int,
+    rows: int,
+    gaps: set[tuple[int, int]],
+) -> tuple[GlyphRunDraw, ...]:
+    """Build coalesced full-screen fixture glyphs outside exact claim gaps."""
+
+    draws: list[GlyphRunDraw] = []
+    object_id = 1
+    for row in range(rows):
+        col = 0
+        while col < cols:
+            while col < cols and (col, row) in gaps:
+                col += 1
+            start = col
+            while col < cols and (col, row) not in gaps:
+                col += 1
+            if start < col:
+                text = "." * (col - start)
+                draws.append(
+                    _glyph_run(
+                        object_id,
+                        row,
+                        start,
+                        text,
+                        cols=cols,
+                        rows=rows,
+                    )
+                )
+                object_id += 1
+    return tuple(draws)
+
+
 def _canonical_pad_file_entries() -> tuple[
     MenuItemDraw | MenuSeparatorDraw,
     ...,
@@ -434,7 +467,7 @@ def test_open_pad_popup_requires_its_exact_source_claim_gap() -> None:
             ),
         ),
     )
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="exact canonical"):
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="exact semantic popup"):
         reconstruct_retained_screen(extra_gap)
 
     closed_menu = replace(
@@ -462,7 +495,7 @@ def test_open_pad_popup_requires_its_exact_source_claim_gap() -> None:
             ),
         ),
     )
-    with pytest.raises(PhysicalDesktopAcceptanceError, match="exact canonical"):
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="exact semantic popup"):
         reconstruct_retained_screen(closed_gap)
 
     undersized = _offer(
@@ -472,6 +505,187 @@ def test_open_pad_popup_requires_its_exact_source_claim_gap() -> None:
     )
     with pytest.raises(PhysicalDesktopAcceptanceError, match="does not fit"):
         reconstruct_retained_screen(undersized)
+
+
+def test_open_nonfirst_menu_uses_uidl_title_offset_and_byte_width() -> None:
+    cols = 32
+    rows = 10
+    ordinary = ControlState.VISIBLE | ControlState.ENABLED
+    opened = ordinary | ControlState.OPEN | ControlState.SELECTED
+    entries = (
+        MenuItemDraw(10_200, ordinary | ControlState.SELECTED, 0, "É", ""),
+        MenuSeparatorDraw(10_201, ControlState.VISIBLE, 1),
+    )
+    menu_bar = MenuBarDraw(
+        10_000,
+        ordinary,
+        0,
+        0,
+        ObjectBounds(
+            _low(0, cols),
+            _low(0, rows),
+            _high(cols - 1, cols),
+            _high(0, rows),
+        ),
+        (
+            MenuDraw(10_001, ordinary, 0, "Fïle", ()),
+            MenuDraw(10_002, opened, 1, "Edit", entries),
+        ),
+    )
+    # UIDL-TUI advances by the five UTF-8 bytes in "Fïle", then two
+    # padding cells.  The two-byte item label makes a six-cell popup.
+    expected_gap = {
+        (col, row)
+        for row in range(1, 5)
+        for col in range(8, 14)
+    }
+    offer = _offer("\n".join("." * cols for _ in range(rows)))
+    region = offer.retained.regions[0]
+    exact = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=_glyph_draws_outside(cols, rows, expected_gap)
+                    + (menu_bar,),
+                ),
+            ),
+        ),
+    )
+    projection = reconstruct_retained_screen(exact)
+    assert projection.renderer_owned_gap_cells == 6 * 4
+
+    shifted_gap = {(col + 1, row) for col, row in expected_gap}
+    shifted = replace(
+        exact,
+        retained=replace(
+            exact.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=_glyph_draws_outside(cols, rows, shifted_gap)
+                    + (menu_bar,),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="exact semantic popup"):
+        reconstruct_retained_screen(shifted)
+
+
+def test_source_claim_gate_accepts_two_simultaneously_open_menu_bars() -> None:
+    cols = 40
+    rows = 15
+    ordinary = ControlState.VISIBLE | ControlState.ENABLED
+    opened = ordinary | ControlState.OPEN | ControlState.SELECTED
+    bar_one = MenuBarDraw(
+        20_000,
+        ordinary,
+        0,
+        0,
+        ObjectBounds(
+            _low(0, cols),
+            _low(0, rows),
+            _high(19, cols),
+            _high(0, rows),
+        ),
+        (
+            MenuDraw(
+                20_001,
+                opened,
+                0,
+                "File",
+                (MenuItemDraw(20_100, ordinary, 0, "One", ""),),
+            ),
+        ),
+    )
+    bar_two = MenuBarDraw(
+        30_000,
+        ordinary,
+        0,
+        0,
+        ObjectBounds(
+            _low(20, cols),
+            _low(7, rows),
+            _high(39, cols),
+            _high(7, rows),
+        ),
+        (
+            MenuDraw(30_001, ordinary, 0, "A", ()),
+            MenuDraw(
+                30_002,
+                opened,
+                1,
+                "Tools",
+                (MenuItemDraw(30_100, ordinary, 0, "Inspect", ""),),
+            ),
+        ),
+    )
+    first_gap = {
+        (col, row)
+        for row in range(1, 4)
+        for col in range(1, 8)
+    }
+    second_gap = {
+        (col, row)
+        for row in range(8, 11)
+        for col in range(24, 35)
+    }
+    all_gaps = first_gap | second_gap
+    offer = _offer("\n".join("." * cols for _ in range(rows)))
+    region = offer.retained.regions[0]
+    exact = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=_glyph_draws_outside(cols, rows, all_gaps)
+                    + (bar_one, bar_two),
+                ),
+            ),
+        ),
+    )
+    projection = reconstruct_retained_screen(exact)
+    assert projection.renderer_owned_gap_cells == len(all_gaps)
+    assert projection.menu_bar_count == 2
+
+
+@pytest.mark.parametrize("missing", ("menu", "row"))
+def test_popup_source_claim_refuses_detectably_incomplete_visible_order(
+    missing: str,
+) -> None:
+    ordinary = ControlState.VISIBLE | ControlState.ENABLED
+    opened = ordinary | ControlState.OPEN
+    row_order = 1 if missing == "row" else 0
+    menu_order = 1 if missing == "menu" else 0
+    menu = MenuDraw(
+        40_001,
+        opened,
+        menu_order,
+        "File",
+        (MenuItemDraw(40_100, ordinary, row_order, "Open", ""),),
+    )
+    menu_bar = MenuBarDraw(
+        40_000,
+        ordinary,
+        0,
+        0,
+        ObjectBounds(_low(0, 20), _low(0, 8), _high(19, 20), _high(0, 8)),
+        (menu,),
+    )
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="source-order"):
+        acceptance_runner._menu_popup_source_claim(
+            menu_bar,
+            menu,
+            bar_left=0,
+            bar_right=20,
+            bar_top=0,
+            screen_rows=8,
+        )
 
 
 def test_canonical_menu_aggregate_requires_each_visible_applet_once() -> None:
