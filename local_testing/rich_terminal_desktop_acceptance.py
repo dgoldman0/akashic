@@ -32,7 +32,7 @@ from session_viewer import (
     _accept_screen_update,
     _accept_status_update,
     _display_claimed,
-    compose_terminal_frame,
+    compose_terminal_frame_result,
     draw_flip_and_present,
 )
 from shared_session import SessionClient, display_scope_to_wire
@@ -1444,7 +1444,7 @@ def run_physical_desktop_acceptance(
             def draw_frame() -> None:
                 nonlocal composed_surface
                 window.fill((0, 0, 0))
-                composed_surface = compose_terminal_frame(
+                frame_result = compose_terminal_frame_result(
                     pygame,
                     terminal,
                     font,
@@ -1453,11 +1453,18 @@ def run_physical_desktop_acceptance(
                     retained_plane=display_state.frame_plane,
                     show_cursor=True,
                     glyph_cache=glyph_cache,
+                    control_font=chrome_font,
                 )
+                composed_surface = frame_result.surface
                 window.blit(composed_surface, (0, 0))
                 # Host diagnostics occupy separate window rows.  The composed
                 # terminal surface recorded as acceptance evidence stays exact.
                 draw_host_chrome()
+                if frame_offer is not None:
+                    display_state.stage_frame_hit_map(
+                        frame_offer,
+                        frame_result.hit_targets,
+                    )
 
             presentation = draw_flip_and_present(
                 pygame,

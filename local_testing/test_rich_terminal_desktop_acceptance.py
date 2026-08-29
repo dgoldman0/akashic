@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -157,13 +158,13 @@ def test_full_screen_projection_reconstructs_coalesced_glyphs_and_menus() -> Non
         retained=replace(
             offer.retained,
             regions=(
-                    replace(
-                        offer.retained.regions[0],
-                        draws=(
-                            offer.retained.regions[0].draws[0],
-                            offer.retained.regions[0].draws[-1],
-                        ),
+                replace(
+                    offer.retained.regions[0],
+                    draws=(
+                        offer.retained.regions[0].draws[0],
+                        offer.retained.regions[0].draws[-1],
                     ),
+                ),
             ),
         ),
     )
@@ -253,6 +254,19 @@ def test_semantic_menu_bounds_may_complete_glyph_coverage() -> None:
     assert projection.lines == ("  ", "CD")
     assert projection.semantic_lines == ("File",)
     assert projection.glyph_cell_count == 2
+
+
+def test_physical_runner_stages_hits_from_the_exact_composited_frame() -> None:
+    source = inspect.getsource(acceptance_runner.run_physical_desktop_acceptance)
+    draw_index = source.index("def draw_frame()")
+    compose_index = source.index("compose_terminal_frame_result(", draw_index)
+    stage_index = source.index("display_state.stage_frame_hit_map(", compose_index)
+    present_index = source.index("presentation = draw_flip_and_present(", stage_index)
+    finish_index = source.index("display_state.finish_presentation(", present_index)
+
+    assert "control_font=chrome_font" in source[compose_index:stage_index]
+    assert "frame_result.hit_targets" in source[stage_index:present_index]
+    assert compose_index < stage_index < present_index < finish_index
 
 
 def test_journey_advances_only_across_new_physically_presented_frames() -> None:
