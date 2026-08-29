@@ -220,6 +220,88 @@ def _packed_bank_usage(
     return used_bytes, bank_bytes
 
 
+@dataclass(frozen=True)
+class _ReservePlan:
+    """Independent result for the producer's optional empty-slot padding."""
+
+    glyph_slots: int
+    identity_basis: str
+    reserve_applied: bool
+
+
+def _bounded_glyph_reserve(
+    *,
+    max_records: int,
+    control_count: int,
+    actual_glyph_count: int,
+    active_glyph_slots: int,
+    cell_capacity: int,
+    glyph_item_capacity: int,
+    glyph_ref_capacity: int,
+    source_text_bytes: int,
+    glyph_text_bytes: int,
+    object_limit: int,
+    op_limit: int,
+) -> _ReservePlan:
+    """Model empty glyph slots admitted by every relevant runtime bound.
+
+    Empty slots add one object, one operation, one 120-byte wire record, and
+    120+16 bytes to the compact ACK baseline.  They add no UTF-8 bytes.  The
+    target count is not available yet, so the bank proof conservatively gives
+    every control a target entry.  Opaque provider capacity (including its
+    update/copy arenas) is handled by the unpadded preflight retry below.
+    """
+
+    packed_fixed, packed_capacity = _packed_bank_usage(
+        max_records=max_records,
+        target_count=control_count,
+        control_count=control_count,
+        glyph_count=0,
+        source_text_bytes=source_text_bytes,
+        glyph_text_bytes=glyph_text_bytes,
+    )
+    def remaining_slots(limit: int, fixed: int, per_slot: int) -> int:
+        return max(0, limit - fixed) // per_slot
+
+    maximum = min(
+        cell_capacity,
+        glyph_item_capacity,
+        glyph_ref_capacity,
+        max(0, object_limit - control_count),
+        max(0, op_limit - control_count - 1),
+        remaining_slots(packed_capacity, packed_fixed, 120 + 16),
+    )
+
+    if maximum < actual_glyph_count:
+        return _ReservePlan(actual_glyph_count, "actual-only", False)
+    if actual_glyph_count <= active_glyph_slots <= maximum:
+        return _ReservePlan(
+            active_glyph_slots,
+            "active",
+            active_glyph_slots > actual_glyph_count,
+        )
+    return _ReservePlan(
+        maximum,
+        "new-full",
+        maximum > actual_glyph_count,
+    )
+
+
+def _preflight_reserved_candidate(
+    plan: _ReservePlan,
+    *,
+    actual_glyph_count: int,
+    padded_status: str,
+    unpadded_status: str = "OK",
+) -> tuple[_ReservePlan, str, int]:
+    """Model one conservative retry for opaque provider CAPACITY."""
+
+    if padded_status == "CAPACITY" and plan.reserve_applied:
+        unpadded = _ReservePlan(actual_glyph_count, "actual-only", False)
+        return unpadded, unpadded_status, 2
+    return plan, padded_status, 1
+
+
 def _control(
     *,
     object_id: int,
@@ -441,6 +523,177 @@ def test_compact_ack_baseline_fits_the_observed_desktop_without_more_arena() -> 
     assert oversized > same_capacity
 
 
+def test_dynamic_reserve_covers_the_observed_first_menu_growth() -> None:
+    plan = _bounded_glyph_reserve(
+        max_records=8192,
+        control_count=142,
+        actual_glyph_count=776,
+        active_glyph_slots=0,
+        cell_capacity=280 * 84,
+        glyph_item_capacity=280 * 84,
+        glyph_ref_capacity=280 * 84,
+        source_text_bytes=1376,
+        glyph_text_bytes=24526,
+        object_limit=16384,
+        op_limit=16385,
+    )
+
+    # The compact-bank tail is the binding bound for this observed frame.  It
+    # derives 245 empty slots from actual bytes instead of assuming a menu-size
+    # constant, leaving enough identities for the measured +13 open-menu run.
+    assert plan == _ReservePlan(1021, "new-full", True)
+    assert plan.glyph_slots >= 776 + 13
+    assert plan.glyph_slots > 817
+    used, capacity = _packed_bank_usage(
+        max_records=8192,
+        target_count=142,
+        control_count=142,
+        glyph_count=plan.glyph_slots,
+        source_text_bytes=1376,
+        glyph_text_bytes=24526,
+    )
+    assert (used, capacity, capacity - used) == (196688, 196728, 40)
+
+
+def test_dynamic_reserve_obeys_each_runtime_and_storage_bound() -> None:
+    base = dict(
+        max_records=8192,
+        control_count=142,
+        actual_glyph_count=776,
+        active_glyph_slots=0,
+        cell_capacity=280 * 84,
+        glyph_item_capacity=280 * 84,
+        glyph_ref_capacity=280 * 84,
+        source_text_bytes=1376,
+        glyph_text_bytes=24526,
+        object_limit=1 << 20,
+        op_limit=1 << 20,
+    )
+    cases = (
+        ({"cell_capacity": 800}, 800),
+        ({"object_limit": 142 + 801}, 801),
+        ({"op_limit": 1 + 142 + 802}, 802),
+        ({"glyph_item_capacity": 803}, 803),
+        ({"glyph_ref_capacity": 804}, 804),
+        ({"max_records": 7000}, 810),
+    )
+
+    derived_counts = []
+    for overrides, expected in cases:
+        plan = _bounded_glyph_reserve(**{**base, **overrides})
+        assert plan == _ReservePlan(expected, "new-full", True)
+        derived_counts.append(plan.glyph_slots)
+    assert len(set(derived_counts)) == len(cases)
+
+
+def test_reserve_reuses_only_an_acknowledged_slot_bank_that_still_fits() -> None:
+    base = dict(
+        max_records=8192,
+        control_count=142,
+        cell_capacity=280 * 84,
+        glyph_item_capacity=280 * 84,
+        glyph_ref_capacity=280 * 84,
+        source_text_bytes=1376,
+        glyph_text_bytes=24526,
+        object_limit=16384,
+        op_limit=16385,
+    )
+
+    reused = _bounded_glyph_reserve(
+        **base,
+        actual_glyph_count=789,
+        active_glyph_slots=900,
+    )
+    assert reused == _ReservePlan(900, "active", True)
+
+    # A candidate cannot extend the acknowledged object bank through DELTA.
+    # It prepares a newly padded complete replacement whose ACK can establish
+    # the larger identity bank for later ordinary draws.
+    grown = _bounded_glyph_reserve(
+        **base,
+        actual_glyph_count=901,
+        active_glyph_slots=900,
+    )
+    assert grown == _ReservePlan(1021, "new-full", True)
+
+    no_longer_fits = _bounded_glyph_reserve(
+        **{**base, "cell_capacity": 850},
+        actual_glyph_count=800,
+        active_glyph_slots=900,
+    )
+    assert no_longer_fits == _ReservePlan(850, "new-full", True)
+
+
+def test_reserve_pressure_never_removes_an_actual_glyph_or_rejects_padding() -> None:
+    base = dict(
+        max_records=8192,
+        control_count=142,
+        actual_glyph_count=776,
+        active_glyph_slots=0,
+        cell_capacity=280 * 84,
+        glyph_item_capacity=280 * 84,
+        glyph_ref_capacity=280 * 84,
+        source_text_bytes=1376,
+        glyph_text_bytes=24526,
+        object_limit=16384,
+        op_limit=16385,
+    )
+    exact_actual_bounds = (
+        {"cell_capacity": 776},
+        {"glyph_item_capacity": 776},
+        {"glyph_ref_capacity": 776},
+        {"object_limit": 142 + 776},
+        {"op_limit": 1 + 142 + 776},
+        {"max_records": 6802},
+    )
+    for overrides in exact_actual_bounds:
+        plan = _bounded_glyph_reserve(**{**base, **overrides})
+        assert plan == _ReservePlan(776, "new-full", False)
+
+    # Even when the opportunistic compact baseline itself is too small, the
+    # reserve disappears and the existing complete-frame path remains intact.
+    packed_too_small = _bounded_glyph_reserve(
+        **{**base, "max_records": 6801},
+    )
+    assert packed_too_small == _ReservePlan(776, "actual-only", False)
+
+
+def test_provider_update_or_copy_pressure_retries_without_padding() -> None:
+    proposed = _bounded_glyph_reserve(
+        max_records=8192,
+        control_count=142,
+        actual_glyph_count=776,
+        active_glyph_slots=0,
+        cell_capacity=280 * 84,
+        glyph_item_capacity=280 * 84,
+        glyph_ref_capacity=280 * 84,
+        source_text_bytes=1376,
+        glyph_text_bytes=24526,
+        object_limit=16384,
+        op_limit=16385,
+    )
+    assert proposed == _ReservePlan(1021, "new-full", True)
+
+    admitted, status, attempts = _preflight_reserved_candidate(
+        proposed,
+        actual_glyph_count=776,
+        padded_status="CAPACITY",
+        unpadded_status="OK",
+    )
+    assert (admitted, status, attempts) == (
+        _ReservePlan(776, "actual-only", False),
+        "OK",
+        2,
+    )
+
+    unchanged, status, attempts = _preflight_reserved_candidate(
+        proposed,
+        actual_glyph_count=776,
+        padded_status="OK",
+    )
+    assert (unchanged, status, attempts) == (proposed, "OK", 1)
+
+
 def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
     source = _source()
     records = (
@@ -545,7 +798,7 @@ def test_visible_document_directory_is_caller_bounded_copied_and_appended() -> N
     assert "_RTHP.CONTROLS-A" in wrap_control
 
 
-def test_candidate_is_copied_planned_and_admitted_once_before_owner_open() -> None:
+def test_candidate_is_copied_planned_reserved_and_admitted_before_owner_open() -> None:
     source = _source()
     build = _word(source, "_RTHP-BUILD-CANDIDATE")
     attempt = _word(source, "_RTHP-TRY-CANDIDATE")
@@ -554,6 +807,7 @@ def test_candidate_is_copied_planned_and_admitted_once_before_owner_open() -> No
         "_RTHP-BUILD-CONTROLS?",
         "_RTHP-BUILD-CLAIMS?",
         "_RTHP-BUILD-GLYPHS?",
+        "_RTHP-RESERVE-GLYPHS?",
         "_RTHP-WRAP-HYBRID",
         "RTE-HYBRID-PREFLIGHT",
         "_RTHP-DRAW-CURRENT?",
@@ -567,6 +821,103 @@ def test_candidate_is_copied_planned_and_admitted_once_before_owner_open() -> No
     assert _source().count("RTE-HYBRID-PREFLIGHT") == 1
     assert "RTE-CONTROL-PREFLIGHT" not in source
     assert "RTE-GLYPH-RUN-PREFLIGHT" not in source
+
+
+def test_glyph_reserve_is_dynamic_ack_aware_and_recoverably_admitted() -> None:
+    source = _source()
+    bank = _word(source, "_RTHP-R-BANK-CEILING?")
+    slots = _word(source, "_RTHP-R-SLOT-CEILING?")
+    reserve = _word(source, "_RTHP-RESERVE-GLYPHS?")
+    strip = _word(source, "_RTHP-STRIP-GLYPH-RESERVE")
+    build = _word(source, "_RTHP-BUILD-CANDIDATE")
+    delta_run = _word(source, "_RTHP-D-RUN!")
+    glyph_run = _word(source, "_RTHP-GLYPH-RUN!")
+
+    # Before point targets exist, the compact-bank proof pays for the worst
+    # case of one target per control.  Every byte family from the independent
+    # oracle participates, and each extra slot costs one item plus one ref.
+    for bound in (
+        "_RTHP.MAX-RECORDS",
+        "_RTHP-TARGET-BANK-BYTES?",
+        "_RTHP-TARGET-BANK-HEADER-SIZE",
+        "_RTHP.CONTROL-COUNT",
+        "_RTHP-TARGET-ENTRY-SIZE",
+        "RTE-CONTROL-SIZE",
+        "RUCP-CORRELATION-SIZE",
+        "_RTHP.SOURCE-TEXT-USED",
+        "_RTHP.GLYPH-TEXT-USED",
+        "_RTHP-ALIGN8?",
+        "RTE-GLYPH-RUN-PLAN-ITEM-SIZE",
+        "RGRP-TEXT-REF-SIZE",
+    ):
+        assert bound in bank
+    assert bank.count("_RTHP.CONTROL-COUNT") == 3
+
+    for bound in (
+        "_RTHP-R-BANK-CEILING?",
+        "_RTHP.COLS",
+        "_RTHP.ROWS",
+        "_RTHP.GLYPH-ITEMS-U",
+        "_RTHP.GLYPH-REFS-U",
+        "RTE-LIMITS-OBJECTS@",
+        "RTE-LIMITS-OPS@",
+    ):
+        assert bound in slots
+    assert slots.count("_RTHP-R-LIMIT") >= 3
+    assert not re.search(
+        r"(?m)^\s*(?:0x[0-9A-Fa-f]+|\d+)\s+CONSTANT\s+\S*RESERVE",
+        source,
+    )
+
+    # A fitting ACK slot bank is the identity ceiling.  Actual growth beyond
+    # that bank deliberately skips this cap so the full path can establish a
+    # larger dynamically bounded bank.
+    assert "_RTHP.TARGET-ACTIVE" in reserve
+    assert "_RTHP-TARGET-BANK-HEADER?" in reserve
+    assert reserve.count("_RTHP-TB.GLYPH-SLOT-COUNT") == 2
+    assert "_RTHP-R-ACTUAL @" in reserve
+    assert "U> 0= IF" in reserve
+    assert "_RTHP-UMIN" in reserve
+    assert reserve.index("_RTHP-R-SLOT-CEILING?") < reserve.index(
+        "_RTHP.TARGET-ACTIVE"
+    )
+
+    # Appended slots are valid contiguous, invisible, text-empty glyphs.  A
+    # zero-length run receives no borrowed text pointer at emission time.
+    assert "?DO" in reserve
+    assert "RTE-GLYPH-RUN-PLAN-ITEM-SIZE 0 FILL" in reserve
+    assert "RGRP-TEXT-REF-SIZE 0 FILL" in reserve
+    assert "_RTE-LPI.OBJECT !" in reserve
+    assert "_RTE-LPI.ROOT-HEIGHT !" in reserve
+    assert "_RTE-LPI.ROOT-WIDTH !" in reserve
+    assert "_RGRP-T.OFFSET !" in reserve
+    assert "_RTHP-U32+?" in reserve
+    assert "_RTE-LPI.VISIBLE !" not in reserve
+    assert "_RTE-LPI.TEXT-CAPACITY !" not in reserve
+    assert "0 OVER _RTE-GLYPH-RUN.TEXT-A !" in delta_run
+    assert "_RTHP-D-EXPECTED-P @ SWAP _RTE-GLYPH-RUN.TEXT-U !" in delta_run
+    assert "0 _RTHP-E-P @ _RTHP.RUN _RTE-GLYPH-RUN.TEXT-A !" in glyph_run
+    assert "_RTHP-E-NEXT @ _RTHP-E-P @ _RTHP.RUN _RTE-GLYPH-RUN.TEXT-U !" in (
+        glyph_run
+    )
+
+    # Backend-specific update and copy capacity stays behind exact preflight.
+    # CAPACITY strips all padding, rewraps the original plan, and can iterate
+    # only once because GLYPH-COUNT then equals the saved actual count.
+    assert "_RTHP-R-ACTUAL" in strip
+    assert "_RTHP-R-PLAN-SLOTS?" in strip
+    assert "_RTHP.GLYPH-COUNT !" in strip
+    assert "RTE-LIMITS-UPDATE-BYTES@" not in bank + slots + reserve
+    assert build.count("RTE-HYBRID-PREFLIGHT") == 1
+    assert build.count("_RTHP-STRIP-GLYPH-RESERVE") == 1
+    assert "DUP RTE-S-CAPACITY =" in build
+    assert "_RTHP.GLYPH-COUNT @ _RTHP-R-ACTUAL @ U> AND" in build
+    assert build.index("_RTHP-RESERVE-GLYPHS?") < build.index(
+        "_RTHP-WRAP-HYBRID"
+    ) < build.index("RTE-HYBRID-PREFLIGHT")
+    assert build.index("_RTHP-STRIP-GLYPH-RESERVE") < build.rindex(
+        "_RTHP-WRAP-HYBRID"
+    )
 
 
 def test_owner_open_reserves_one_frame_independently_of_current_content() -> None:

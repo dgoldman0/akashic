@@ -1649,6 +1649,166 @@ VARIABLE _RTHP-C-RESULT
     _RTHP-W-TEXT @ _RTHP-W-P @ _RTHP.GLYPH-TEXT-USED !
     -1 ;
 
+\ A full START may carry invisible, text-empty glyph definitions beyond the
+\ currently visible runs.  Those acknowledged slots let a later retained
+\ DELTA absorb ordinary glyph growth without changing object topology.  The
+\ reserve is opportunistic and derived entirely from the current candidate's
+\ bounded storage and negotiated public quotas; it is never a fixed count.
+VARIABLE _RTHP-R-P
+VARIABLE _RTHP-R-ACTUAL
+VARIABLE _RTHP-R-CEILING
+VARIABLE _RTHP-R-BANK-U
+VARIABLE _RTHP-R-USED
+VARIABLE _RTHP-R-BYTES
+VARIABLE _RTHP-R-TARGET
+VARIABLE _RTHP-R-SLOTS
+VARIABLE _RTHP-R-ACTIVE
+VARIABLE _RTHP-R-ITEM
+VARIABLE _RTHP-R-REF
+
+: _RTHP-R-ADD?  ( bytes -- flag )
+    _RTHP-R-USED @ SWAP _RTHP-U32+? 0= IF DROP 0 EXIT THEN
+    _RTHP-R-USED ! -1 ;
+
+: _RTHP-R-MUL-ADD?  ( count item-bytes -- flag )
+    _RTHP-U32*? 0= IF DROP 0 EXIT THEN _RTHP-R-ADD? ;
+
+: _RTHP-R-LIMIT  ( slots -- )
+    _RTHP-R-CEILING @ _RTHP-UMIN _RTHP-R-CEILING ! ;
+
+: _RTHP-R-REMAINING-LIMIT  ( total used -- )
+    2DUP U< IF 2DROP 0 ELSE - THEN _RTHP-R-LIMIT ;
+
+: _RTHP-R-BANK-CEILING?  ( -- flag )
+    _RTHP-R-P @ _RTHP.MAX-RECORDS @ _RTHP-TARGET-BANK-BYTES?
+        0= IF DROP 0 EXIT THEN _RTHP-R-BANK-U !
+    _RTHP-TARGET-BANK-HEADER-SIZE _RTHP-R-USED !
+    \ TARGET-CANDIDATE has not run yet.  At most one target can be emitted
+    \ for each control, so reserve the conservative complete target prefix.
+    _RTHP-R-P @ _RTHP.CONTROL-COUNT @ _RTHP-TARGET-ENTRY-SIZE
+        _RTHP-R-MUL-ADD? 0= IF 0 EXIT THEN
+    _RTHP-R-P @ _RTHP.CONTROL-COUNT @ RTE-CONTROL-SIZE
+        _RTHP-R-MUL-ADD? 0= IF 0 EXIT THEN
+    _RTHP-R-P @ _RTHP.CONTROL-COUNT @ RUCP-CORRELATION-SIZE
+        _RTHP-R-MUL-ADD? 0= IF 0 EXIT THEN
+    _RTHP-R-P @ _RTHP.SOURCE-TEXT-USED @ _RTHP-ALIGN8?
+        0= IF DROP 0 EXIT THEN _RTHP-R-ADD? 0= IF 0 EXIT THEN
+    _RTHP-R-P @ _RTHP.GLYPH-TEXT-USED @ _RTHP-ALIGN8?
+        0= IF DROP 0 EXIT THEN _RTHP-R-ADD? 0= IF 0 EXIT THEN
+    _RTHP-R-USED @ _RTHP-R-BANK-U @ U> IF 0 EXIT THEN
+    _RTHP-R-BANK-U @ _RTHP-R-USED @ -
+    RTE-GLYPH-RUN-PLAN-ITEM-SIZE RGRP-TEXT-REF-SIZE + /
+        _RTHP-R-CEILING !
+    -1 ;
+
+: _RTHP-R-SLOT-CEILING?  ( -- flag )
+    _RTHP-R-BANK-CEILING? 0= IF 0 EXIT THEN
+    _RTHP-R-P @ _RTHP.COLS @ _RTHP-R-P @ _RTHP.ROWS @ _RTHP-U32*?
+        0= IF DROP 0 EXIT THEN _RTHP-R-LIMIT
+    _RTHP-R-P @ _RTHP.GLYPH-ITEMS-U @
+        RTE-GLYPH-RUN-PLAN-ITEM-SIZE / _RTHP-R-LIMIT
+    _RTHP-R-P @ _RTHP.GLYPH-REFS-U @ RGRP-TEXT-REF-SIZE /
+        _RTHP-R-LIMIT
+    _RTHP-R-P @ _RTHP.LIMITS RTE-LIMITS-OBJECTS@
+    _RTHP-R-P @ _RTHP.CONTROL-COUNT @ _RTHP-R-REMAINING-LIMIT
+    _RTHP-R-P @ _RTHP.CONTROL-COUNT @ 1 _RTHP-U32+?
+        0= IF DROP 0 EXIT THEN
+    _RTHP-R-P @ _RTHP.LIMITS RTE-LIMITS-OPS@ SWAP
+        _RTHP-R-REMAINING-LIMIT
+    -1 ;
+
+: _RTHP-R-PLAN-SLOTS?  ( slots -- flag )
+    DUP _RTHP-R-SLOTS !
+    RTE-GLYPH-RUN-PLAN-ITEM-SIZE _RTHP-U32*?
+        0= IF DROP 0 EXIT THEN _RTHP-R-BYTES !
+    _RTHP-R-P @ _RTHP.GLYPH-PLAN RTE-GLYPH-RUN-PLAN-SIZE 0 FILL
+    _RTHP-R-SLOTS @ 0= IF -1 EXIT THEN
+    _RTHP-R-P @ _RTHP.OWNER @
+        _RTHP-R-P @ _RTHP.GLYPH-PLAN _RTE-LP.OWNER !
+    _RTHP-R-P @ _RTHP.OWNER-GEN @
+        _RTHP-R-P @ _RTHP.GLYPH-PLAN _RTE-LP.GENERATION !
+    _RTHP-R-P @ _RTHP.COLS @
+        _RTHP-R-P @ _RTHP.GLYPH-PLAN _RTE-LP.SURFACE-COLS !
+    _RTHP-R-P @ _RTHP.ROWS @
+        _RTHP-R-P @ _RTHP.GLYPH-PLAN _RTE-LP.SURFACE-ROWS !
+    _RTHP-R-P @ _RTHP.REGION @
+        _RTHP-R-P @ _RTHP.GLYPH-PLAN _RTE-LP.REGION-ID !
+    _RTHP-R-P @ _RTHP.COLS @
+        _RTHP-R-P @ _RTHP.GLYPH-PLAN _RTE-LP.REGION-COLS !
+    _RTHP-R-P @ _RTHP.ROWS @
+        _RTHP-R-P @ _RTHP.GLYPH-PLAN _RTE-LP.REGION-ROWS !
+    3 _RTHP-R-P @ _RTHP.GLYPH-PLAN _RTE-LP.REGION-FLAGS !
+    _RTHP-R-P @ _RTHP.GLYPH-ITEMS-A @
+        _RTHP-R-P @ _RTHP.GLYPH-PLAN _RTE-LP.ITEMS-A !
+    _RTHP-R-BYTES @ _RTHP-R-P @ _RTHP.GLYPH-PLAN _RTE-LP.ITEMS-U !
+    -1 ;
+
+: _RTHP-STRIP-GLYPH-RESERVE  ( producer -- )
+    _RTHP-R-P !
+    _RTHP-R-ACTUAL @ _RTHP-R-PLAN-SLOTS? DROP
+    _RTHP-R-ACTUAL @ _RTHP-R-P @ _RTHP.GLYPH-COUNT ! ;
+
+: _RTHP-RESERVE-GLYPHS?  ( producer -- flag )
+    _RTHP-R-P !
+    _RTHP-R-P @ _RTHP.GLYPH-COUNT @ DUP _RTHP-R-ACTUAL !
+        _RTHP-R-TARGET !
+    _RTHP-R-SLOT-CEILING? 0= IF -1 EXIT THEN
+    _RTHP-R-CEILING @ _RTHP-R-TARGET !
+
+    \ A live candidate cannot grow past its acknowledged topology.  When the
+    \ real glyphs already exceed it, however, replacement is inevitable and
+    \ the new START may establish a larger dynamically bounded reserve.
+    0 _RTHP-R-ACTIVE !
+    _RTHP-R-P @ _RTHP.TARGET-ACTIVE @ DUP IF
+        DUP _RTHP-R-P @ _RTHP-TARGET-BANK-HEADER? IF
+            _RTHP-R-ACTIVE !
+        ELSE
+            DROP
+        THEN
+    ELSE
+        DROP
+    THEN
+    _RTHP-R-ACTIVE @ IF
+        _RTHP-R-ACTUAL @
+        _RTHP-R-ACTIVE @ _RTHP-TB.GLYPH-SLOT-COUNT @ U> 0= IF
+            _RTHP-R-TARGET @
+            _RTHP-R-ACTIVE @ _RTHP-TB.GLYPH-SLOT-COUNT @ _RTHP-UMIN
+                _RTHP-R-TARGET !
+        THEN
+    THEN
+    _RTHP-R-TARGET @ _RTHP-R-ACTUAL @ U< IF
+        _RTHP-R-ACTUAL @ _RTHP-R-TARGET !
+    THEN
+    _RTHP-R-TARGET @ _RTHP-R-ACTUAL @ = IF -1 EXIT THEN
+
+    \ Prove the next object ID as well as the last reserved ID so padding can
+    \ never turn a valid real candidate into an ID-wrap failure later.
+    _RTHP-W-GLYPH-FIRST @ DUP 0= IF DROP -1 EXIT THEN
+    _RTHP-R-TARGET @ _RTHP-U32+? 0= IF DROP -1 EXIT THEN DROP
+
+    _RTHP-R-TARGET @ _RTHP-R-ACTUAL @ ?DO
+        _RTHP-R-P @ _RTHP.GLYPH-ITEMS-A @
+            I RTE-GLYPH-RUN-PLAN-ITEM-SIZE * + DUP _RTHP-R-ITEM !
+            RTE-GLYPH-RUN-PLAN-ITEM-SIZE 0 FILL
+        _RTHP-W-GLYPH-FIRST @ I +
+            _RTHP-R-ITEM @ _RTE-LPI.OBJECT !
+        _RTHP-R-P @ _RTHP.ROWS @
+            _RTHP-R-ITEM @ _RTE-LPI.ROOT-HEIGHT !
+        _RTHP-R-P @ _RTHP.COLS @
+            _RTHP-R-ITEM @ _RTE-LPI.ROOT-WIDTH !
+        _RTHP-R-P @ _RTHP.GLYPH-REFS-A @
+            I RGRP-TEXT-REF-SIZE * + DUP _RTHP-R-REF !
+            RGRP-TEXT-REF-SIZE 0 FILL
+        _RTHP-R-P @ _RTHP.GLYPH-TEXT-USED @
+            _RTHP-R-REF @ _RGRP-T.OFFSET !
+    LOOP
+    _RTHP-R-TARGET @ _RTHP-R-PLAN-SLOTS? 0= IF
+        _RTHP-R-P @ _RTHP-STRIP-GLYPH-RESERVE
+        -1 EXIT
+    THEN
+    _RTHP-R-TARGET @ _RTHP-R-P @ _RTHP.GLYPH-COUNT !
+    -1 ;
+
 : _RTHP-WRAP-HYBRID  ( producer -- )
     _RTHP-W-P !
     _RTHP-W-P @ _RTHP.HYBRID RTE-HYBRID-PLAN-SIZE 0 FILL
@@ -1788,11 +1948,20 @@ VARIABLE _RTHP-O-TEXT
     _RTHP-W-P @ _RTHP-BUILD-CONTROLS? 0= IF RTE-S-INVALID 0 EXIT THEN
     _RTHP-W-P @ _RTHP-BUILD-CLAIMS? 0= IF RTE-S-INVALID 0 EXIT THEN
     _RTHP-W-P @ _RTHP-BUILD-GLYPHS? 0= IF RTE-S-INVALID 0 EXIT THEN
+    _RTHP-W-P @ _RTHP-RESERVE-GLYPHS? 0= IF RTE-S-INVALID 0 EXIT THEN
     _RTHP-W-P @ _RTHP-WRAP-HYBRID
-    _RTHP-W-P @ _RTHP.ADMISSION RTE-HYBRID-ADMISSION-SIZE 0 FILL
-    _RTHP-W-P @ _RTHP.HYBRID _RTHP-W-P @ _RTHP.ADMISSION
-    _RTHP-W-P @ _RTHP.FACADE @ RTE-HYBRID-PREFLIGHT
+    BEGIN
+        _RTHP-W-P @ _RTHP.ADMISSION RTE-HYBRID-ADMISSION-SIZE 0 FILL
+        _RTHP-W-P @ _RTHP.HYBRID _RTHP-W-P @ _RTHP.ADMISSION
+        _RTHP-W-P @ _RTHP.FACADE @ RTE-HYBRID-PREFLIGHT
         DUP _RTHP-W-STATUS !
+        DUP RTE-S-CAPACITY =
+        _RTHP-W-P @ _RTHP.GLYPH-COUNT @ _RTHP-R-ACTUAL @ U> AND
+    WHILE
+        DROP
+        _RTHP-W-P @ _RTHP-STRIP-GLYPH-RESERVE
+        _RTHP-W-P @ _RTHP-WRAP-HYBRID
+    REPEAT
     DUP RTE-S-OK <> IF 0 EXIT THEN DROP
     _RTHP-W-P @ _RTHP-CANDIDATE-NEXT? 0= IF
         2DROP RTE-S-INVALID 0 EXIT
@@ -2624,8 +2793,12 @@ VARIABLE _RTHP-D-RUN-P
     _RTHP-D-RUN-ITEM @ _RTE-LPI.OBJECT @ OVER _RTE-GLYPH-RUN.OBJECT !
     _RTHP-D-RUN-P @ _RTHP.REGION @ OVER _RTE-GLYPH-RUN.REGION !
     _RTHP-D-RUN-ITEM @ 8 + OVER 32 + 96 MOVE
-    _RTHP-D-RUN-TEXT @ _RTHP-D-OFFSET-P @ +
-        OVER _RTE-GLYPH-RUN.TEXT-A !
+    _RTHP-D-EXPECTED-P @ IF
+        _RTHP-D-RUN-TEXT @ _RTHP-D-OFFSET-P @ +
+            OVER _RTE-GLYPH-RUN.TEXT-A !
+    ELSE
+        0 OVER _RTE-GLYPH-RUN.TEXT-A !
+    THEN
     _RTHP-D-EXPECTED-P @ SWAP _RTE-GLYPH-RUN.TEXT-U !
     -1 ;
 
@@ -2736,10 +2909,14 @@ VARIABLE _RTHP-D-RUN-P
     _RTHP-E-ITEM @ _RTE-LPI.OBJECT @ OVER _RTE-GLYPH-RUN.OBJECT !
     _RTHP-E-P @ _RTHP.REGION @ OVER _RTE-GLYPH-RUN.REGION !
     _RTHP-E-ITEM @ 8 + OVER 32 + 96 MOVE
-    _RTHP-E-P @ _RTHP.GLYPH-TEXT-A @ _RTHP-E-TEXT @ +
-        OVER _RTE-GLYPH-RUN.TEXT-A !
-    _RTHP-E-REF @ RGRP-TEXT-REF-LENGTH@
-        SWAP _RTE-GLYPH-RUN.TEXT-U !
+    DROP
+    _RTHP-E-NEXT @ IF
+        _RTHP-E-P @ _RTHP.GLYPH-TEXT-A @ _RTHP-E-TEXT @ +
+            _RTHP-E-P @ _RTHP.RUN _RTE-GLYPH-RUN.TEXT-A !
+    ELSE
+        0 _RTHP-E-P @ _RTHP.RUN _RTE-GLYPH-RUN.TEXT-A !
+    THEN
+    _RTHP-E-NEXT @ _RTHP-E-P @ _RTHP.RUN _RTE-GLYPH-RUN.TEXT-U !
     -1 ;
 
 : _RTHP-EMIT-GLYPHS  ( producer -- rte-status )
