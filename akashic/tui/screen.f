@@ -153,6 +153,7 @@ VARIABLE _SCR-SD-BUF-U
 VARIABLE _SCR-SD-FRONT
 VARIABLE _SCR-SD-BACK
 VARIABLE _SCR-SD-BACKEND
+VARIABLE _SCR-BACK-PLANE-XT
 
 \ =====================================================================
 \ 4. Internal helpers
@@ -300,6 +301,20 @@ VARIABLE _SCR-SIZE-H
 
 : SCR-DRAW-GENERATION@  ( -- generation )
     _SCR-CUR @ ?DUP IF _SCR-O-DRAW-GENERATION + @ ELSE 0 THEN ;
+
+\ SCR-WITH-BACK-PLANE ( xt -- ... )
+\   Execute XT with one read-only borrow of the current back plane:
+\     xt: ( cells-a cols rows -- ... )
+\   The address is valid only for the dynamic extent of XT and must not be
+\   retained or mutated.  Guarded builds hold the screen guard across the
+\   complete callback, allowing bulk readers to avoid one acquisition per
+\   cell while preventing concurrent drawing, resize, or screen replacement.
+: SCR-WITH-BACK-PLANE  ( xt -- ... )
+    _SCR-BACK-PLANE-XT !
+    _SCR-CUR @ DUP _SCR-O-BACK + @
+    OVER _SCR-O-W + @
+    ROT _SCR-O-H + @
+    _SCR-BACK-PLANE-XT @ EXECUTE ;
 
 \ =====================================================================
 \ 8. Cell read/write
@@ -926,6 +941,7 @@ GUARD _scr-guard
 ' SCR-H               CONSTANT _scr-h-xt
 ' SCR-DRAW-COMPLETE   CONSTANT _scr-draw-complete-xt
 ' SCR-DRAW-GENERATION@ CONSTANT _scr-draw-generation-get-xt
+' SCR-WITH-BACK-PLANE CONSTANT _scr-with-back-plane-xt
 ' SCR-SET             CONSTANT _scr-set-xt
 ' SCR-GET             CONSTANT _scr-get-xt
 ' SCR-FILL            CONSTANT _scr-fill-xt
@@ -952,6 +968,8 @@ GUARD _scr-guard
 : SCR-DRAW-COMPLETE   _scr-draw-complete-xt _scr-guard WITH-GUARD ;
 : SCR-DRAW-GENERATION@
     _scr-draw-generation-get-xt _scr-guard WITH-GUARD ;
+: SCR-WITH-BACK-PLANE
+    _scr-with-back-plane-xt _scr-guard WITH-GUARD ;
 : SCR-SET             _scr-set-xt    _scr-guard WITH-GUARD ;
 : SCR-GET             _scr-get-xt    _scr-guard WITH-GUARD ;
 : SCR-FILL            _scr-fill-xt   _scr-guard WITH-GUARD ;

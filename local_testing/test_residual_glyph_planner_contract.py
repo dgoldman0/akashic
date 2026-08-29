@@ -7,6 +7,7 @@ import struct
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "akashic/tui/rich-terminal/residual-glyph-planner.f"
+SCREEN = ROOT / "akashic/tui/screen.f"
 
 
 def _word(source: str, name: str) -> str:
@@ -224,7 +225,12 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
     ):
         assert forbidden not in code
     assert re.search(r"(?m)^\s*FREE\b", code) is None
-    assert code.count("SCR-GET") == 1
+    assert "SCR-GET" not in code
+    load_cell = _word(source, "_RGRP-LOAD-CELL?")
+    assert "_RGRP-PLANE-A" in load_cell
+    assert "_RGRP-PLANE-W" in load_cell
+    scoped = _word(source, "_RGRP-BUILD-SCOPED")
+    assert "SCR-WITH-BACK-PLANE" in scoped
 
     authority = _word(source, "_RGRP-RANGE-AUTHORITY?")
     body = _word(source, "_RGRP-BUILD-BODY")
@@ -262,6 +268,19 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
     assert "CW-CELL-CP" in _word(source, "_RGRP-LOAD-CELL?")
     assert "TUI-PALETTE>RGBA" not in _word(source, "_RGRP-STYLE-SAME?")
     assert _word(source, "_RGRP-WRITE-ITEM").count("TUI-PALETTE>RGBA") == 2
+
+    screen = SCREEN.read_text(encoding="utf-8")
+    borrow = _word(screen, "SCR-WITH-BACK-PLANE")
+    assert "_SCR-O-BACK" in borrow
+    assert "_SCR-O-W" in borrow
+    assert "_SCR-O-H" in borrow
+    assert "_SCR-BACK-PLANE-XT @ EXECUTE" in borrow
+    assert "' SCR-WITH-BACK-PLANE CONSTANT _scr-with-back-plane-xt" in screen
+    assert re.search(
+        r"(?ms)^: SCR-WITH-BACK-PLANE\s*\n"
+        r"\s+_scr-with-back-plane-xt _scr-guard WITH-GUARD ;$",
+        screen,
+    )
 
     loop_section = source[source.index(": _RGRP-BUILD-EVENTS?") :]
     loop_code = "\n".join(line.split("\\", 1)[0] for line in loop_section.splitlines())

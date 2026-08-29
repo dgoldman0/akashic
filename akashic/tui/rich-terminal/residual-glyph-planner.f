@@ -6,7 +6,8 @@
 \  final screen.  Accepted semantic rectangles arrive as pointer-free RUCL
 \  claims.  A single claim pass validates them and schedules row events;
 \  row-local difference counts then exclude the union of overlapping claims
-\  while each remaining cell is read exactly once with SCR-GET.
+\  while each remaining cell is read exactly once from one scoped, read-only
+\  screen-plane borrow.
 \
 \  Equal raw CELL style is coalesced until a claim, row, style, or negotiated
 \  UTF-8 byte boundary.  Text is copied into a caller arena and paired with a
@@ -205,6 +206,9 @@ VARIABLE _RGRP-REFS-A
 VARIABLE _RGRP-REFS-U
 VARIABLE _RGRP-TEXT-A
 VARIABLE _RGRP-TEXT-U
+VARIABLE _RGRP-PLANE-A
+VARIABLE _RGRP-PLANE-W
+VARIABLE _RGRP-PLANE-H
 
 VARIABLE _RGRP-REGION-COL-END
 VARIABLE _RGRP-REGION-ROW-END
@@ -438,7 +442,9 @@ VARIABLE _RGRP-CHECK-U
     _RGRP-U32? 0= IF 0 EXIT THEN
     _RGRP-SURFACE-H @ DUP 0= IF DROP 0 EXIT THEN
     _RGRP-U32? 0= IF 0 EXIT THEN
-    SCR-W _RGRP-SURFACE-W @ <> SCR-H _RGRP-SURFACE-H @ <> OR IF
+    _RGRP-PLANE-A @ 0= IF 0 EXIT THEN
+    _RGRP-PLANE-W @ _RGRP-SURFACE-W @ <>
+    _RGRP-PLANE-H @ _RGRP-SURFACE-H @ <> OR IF
         0 EXIT
     THEN
     _RGRP-REGION-X @ _RGRP-U32? 0= IF 0 EXIT THEN
@@ -786,8 +792,9 @@ VARIABLE _RGRP-REF
     -1 ;
 
 : _RGRP-LOAD-CELL?  ( -- flag )
-    _RGRP-ROW @ _RGRP-REGION-Y @ +
-    _RGRP-COL @ _RGRP-REGION-X @ + SCR-GET _RGRP-CELL !
+    _RGRP-ROW @ _RGRP-REGION-Y @ + _RGRP-PLANE-W @ *
+    _RGRP-COL @ _RGRP-REGION-X @ + + 8 *
+    _RGRP-PLANE-A @ + @ _RGRP-CELL !
     _RGRP-CELL @ CELL-ATTRS@ DUP
     _RGRP-CELL-ATTR-MASK INVERT AND IF DROP _RGRP-SET-INVALID 0 EXIT THEN
     DUP CELL-A-BLINK AND IF DROP _RGRP-SET-UNREPRESENTABLE 0 EXIT THEN
@@ -967,6 +974,7 @@ VARIABLE _RGRP-REF
     0 _RGRP-ITEMS-A ! 0 _RGRP-ITEMS-U !
     0 _RGRP-REFS-A ! 0 _RGRP-REFS-U !
     0 _RGRP-TEXT-A ! 0 _RGRP-TEXT-U !
+    0 _RGRP-PLANE-A ! 0 _RGRP-PLANE-W ! 0 _RGRP-PLANE-H !
     0 _RGRP-REGION-COL-END ! 0 _RGRP-REGION-ROW-END !
     0 _RGRP-CLAIM-COUNT ! 0 _RGRP-HEAD-CAP !
     0 _RGRP-EVENT-CAP ! 0 _RGRP-DIFF-CAP !
@@ -996,13 +1004,22 @@ VARIABLE _RGRP-REF
     0 _RGRP-OBJECT ! 0 _RGRP-ITEM ! 0 _RGRP-REF !
     _RGRP-UTF8 8 0 FILL ;
 
+: _RGRP-BUILD-IN-PLANE
+  ( cells-a cols rows -- count text aligned max last status )
+    _RGRP-PLANE-H ! _RGRP-PLANE-W ! _RGRP-PLANE-A !
+    _RGRP-BUILD-BODY ;
+
+: _RGRP-BUILD-SCOPED
+  ( -- count text aligned max last status )
+    ['] _RGRP-BUILD-IN-PLANE SCR-WITH-BACK-PLANE ;
+
 : RGRP-BUILD
     ( request -- run-count text-used aligned-text max-run-text last-object status )
     _RGRP-Q !
     _RGRP-Q @ RGRP-REQUEST-SIZE _RGRP-SPAN? 0= IF
         _RGRP-SCRUB 0 0 0 0 0 RGRP-S-INVALID EXIT
     THEN
-    ['] _RGRP-BUILD-BODY CATCH ?DUP IF
+    ['] _RGRP-BUILD-SCOPED CATCH ?DUP IF
         DROP _RGRP-SET-INVALID _RGRP-FAIL-RESULT
     THEN
     _RGRP-SCRUB ;
