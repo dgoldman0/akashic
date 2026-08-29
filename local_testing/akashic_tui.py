@@ -28828,7 +28828,10 @@ def smoke(
             ):
                 session.send_text("Ship the smoke journey")
                 session.send_key("enter")
-                if wait_screen(
+                if wait_screen_gone(
+                    "New task:",
+                    "Daybook did not restore its status row after task submit",
+                ) and wait_screen(
                     "Ship the smoke journey",
                     "Daybook did not add the submitted task",
                 ):

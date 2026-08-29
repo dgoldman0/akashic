@@ -1020,6 +1020,9 @@ VARIABLE _DB-SUB-MINUTE
 
 : _DB-PROMPT-SUBMIT  ( prompt -- )
     PRM-GET-TEXT _DB-SUB-U ! _DB-SUB-A !
+    \ The direct-paint prompt has just gone inactive.  Repaint the UIDL
+    \ status owner so it clears the whole overlaid row before any early exit.
+    _DB-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     _DB-PROMPT-MODE @ _DB-SUB-MODE !
     _DB-PRM-NONE _DB-PROMPT-MODE !
     _DB-SUB-MODE @ _DB-PRM-DISCARD-CLOSE = IF
@@ -1083,6 +1086,7 @@ VARIABLE _DB-SUB-MINUTE
 
 : _DB-PROMPT-CANCEL  ( prompt -- )
     DROP _DB-PRM-NONE _DB-PROMPT-MODE !
+    _DB-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN
     _DB-E-BODY @ ?DUP IF UTUI-FOCUS! THEN
     _DB-INVALIDATE ;
 

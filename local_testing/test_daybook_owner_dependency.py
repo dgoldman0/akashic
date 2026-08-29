@@ -135,3 +135,18 @@ def test_daybook_releases_embedded_session_before_ui_teardown() -> None:
     assert release < shutdown.index("UTUI-WIDGET-SET")
     assert release < shutdown.index("PRM-FREE")
     assert release < shutdown.index("RGN-FREE")
+
+
+def test_daybook_prompt_dismissal_repaints_the_status_owner() -> None:
+    text = DAYBOOK_APPLET.read_text(encoding="utf-8")
+    forth_code = re.sub(r"\\[^\n]*", "", text)
+    status_repaint = "_DB-E-SBAR @ ?DUP IF UIDL-DIRTY! THEN"
+
+    for callback in ("_DB-PROMPT-SUBMIT", "_DB-PROMPT-CANCEL"):
+        callback_match = re.search(
+            rf": {callback}\b(.*?);", forth_code, re.DOTALL
+        )
+        assert callback_match is not None
+        body = callback_match.group(1)
+        assert status_repaint in body
+        assert body.index(status_repaint) < body.index("_DB-INVALIDATE")
