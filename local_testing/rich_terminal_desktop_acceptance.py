@@ -40,9 +40,11 @@ from session import TerminalDisplayOffer
 from session_viewer import (
     _GuestKeyboardForwarder,
     _RetainedDisplayState,
+    _SemanticPointerInteractor,
     _accept_screen_update,
     _accept_status_update,
     _display_claimed,
+    _pygame_apt_modifiers,
     compose_terminal_frame_result,
     draw_flip_and_present,
 )
@@ -396,7 +398,8 @@ def _require_canonical_pad_file_entries(menu: MenuDraw) -> None:
     )
     if signature != PAD_FILE_ENTRY_SIGNATURE:
         raise PhysicalDesktopAcceptanceError(
-            "open Pad File menu does not contain its exact canonical entries"
+            "open Pad File menu does not contain its exact canonical entries: "
+            f"expected={PAD_FILE_ENTRY_SIGNATURE!r} actual={signature!r}"
         )
     ordinary_item_state = ControlState.VISIBLE | ControlState.ENABLED
     selected_item_state = ordinary_item_state | ControlState.SELECTED
@@ -1550,21 +1553,83 @@ def _fit_viewer_font(
     )
 
 
-def _keep_window_visible(
+def _dispatch_semantic_pointer_event(
     pygame_module,
+    semantic_pointer: _SemanticPointerInteractor,
+    keyboard: _GuestKeyboardForwarder,
+    event,
+    terminal_size: tuple[int, int],
+) -> bool:
+    """Route one physical event through the normal ACK-bound control path."""
+
+    if event.type == getattr(pygame_module, "MOUSEMOTION", -1):
+        semantic_pointer.move(event.pos, terminal_size)
+        return True
+    if (
+        event.type == getattr(pygame_module, "MOUSEBUTTONDOWN", -1)
+        and event.button == 1
+    ):
+        semantic_pointer.left_down(event.pos, terminal_size)
+        return True
+    if (
+        event.type == getattr(pygame_module, "MOUSEBUTTONUP", -1)
+        and event.button == 1
+    ):
+        semantic_pointer.left_up(
+            event.pos,
+            terminal_size,
+            modifiers=_pygame_apt_modifiers(pygame_module, event),
+        )
+        return True
+    if event.type in {
+        getattr(pygame_module, "WINDOWFOCUSLOST", -1),
+        getattr(pygame_module, "WINDOWFOCUSGAINED", -2),
+    }:
+        semantic_pointer.clear()
+        if event.type == getattr(pygame_module, "WINDOWFOCUSLOST", -1):
+            keyboard.reset()
+        return True
+    return False
+
+
+def _pump_physical_viewer_events(
+    pygame_module,
+    semantic_pointer: _SemanticPointerInteractor,
+    keyboard: _GuestKeyboardForwarder,
+    terminal_size: tuple[int, int],
+    *,
+    closing_is_error: bool,
+) -> bool:
+    """Process viewer events without discarding semantic pointer input."""
+
+    for event in pygame_module.event.get():
+        if event.type == pygame_module.QUIT:
+            if closing_is_error:
+                raise PhysicalDesktopAcceptanceError(
+                    "physical acceptance window was closed"
+                )
+            return False
+        _dispatch_semantic_pointer_event(
+            pygame_module,
+            semantic_pointer,
+            keyboard,
+            event,
+            terminal_size,
+        )
+    keyboard.flush_pending()
+    return True
+
+
+def _keep_window_visible(
     seconds: float,
     *,
+    event_pump: Callable[[bool], bool],
     closing_is_error: bool,
 ) -> None:
     until = time.monotonic() + seconds
     while time.monotonic() < until:
-        for event in pygame_module.event.get():
-            if event.type == pygame_module.QUIT:
-                if closing_is_error:
-                    raise PhysicalDesktopAcceptanceError(
-                        "physical acceptance window was closed"
-                    )
-                return
+        if not event_pump(closing_is_error):
+            return
         time.sleep(min(0.02, max(0.0, until - time.monotonic())))
 
 
@@ -1794,6 +1859,7 @@ def run_physical_desktop_acceptance(
             input_enabled=True,
             display_required=display_required,
         )
+        semantic_pointer = _SemanticPointerInteractor(display_state, keyboard)
 
         os.environ.setdefault("SDL_VIDEO_CENTERED", "1")
         pygame.display.init()
@@ -1851,6 +1917,18 @@ def run_physical_desktop_acceptance(
         chrome_background = (96, 28, 28)
         chrome_foreground = (255, 238, 238)
 
+        def pump_events(closing_is_error: bool) -> bool:
+            return _pump_physical_viewer_events(
+                pygame,
+                semantic_pointer,
+                keyboard,
+                (
+                    terminal.cols * cell_width,
+                    terminal.rows * cell_height,
+                ),
+                closing_is_error=closing_is_error,
+            )
+
         def announce(state: AcceptanceDiagnosticState) -> None:
             nonlocal diagnostic_state, chrome_text
             nonlocal chrome_background, chrome_foreground
@@ -1888,8 +1966,8 @@ def run_physical_desktop_acceptance(
             input_generation: int,
         ) -> str:
             _keep_window_visible(
-                pygame,
                 action_delay,
+                event_pump=pump_events,
                 closing_is_error=True,
             )
             input_status, evidence = _request_acceptance_input(
@@ -1906,11 +1984,7 @@ def run_physical_desktop_acceptance(
             return input_status
 
         while time.monotonic() < deadline:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    raise PhysicalDesktopAcceptanceError(
-                        "physical acceptance window was closed"
-                    )
+            pump_events(True)
 
             status = client.request("status", detailed=False)
             revision, _ = _accept_status_update(
@@ -2079,6 +2153,8 @@ def run_physical_desktop_acceptance(
                     show_cursor=True,
                     glyph_cache=glyph_cache,
                     control_font=chrome_font,
+                    hovered=semantic_pointer.hovered,
+                    pressed=semantic_pointer.pressed,
                 )
                 composed_surface = frame_result.surface
                 window.blit(composed_surface, (0, 0))
@@ -2190,8 +2266,8 @@ def run_physical_desktop_acceptance(
                     f"({fitted_font_size}px)"
                 )
                 _keep_window_visible(
-                    pygame,
                     hold_seconds,
+                    event_pump=pump_events,
                     closing_is_error=False,
                 )
                 return PhysicalDesktopAcceptanceEvidence(

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import inspect
+import re
 import time
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -221,6 +223,15 @@ def _projection(text: str) -> RichScreenProjection:
         menu_bar_count=len(acceptance_runner.DESKTOP_MENU_SIGNATURES),
         menu_signatures=acceptance_runner.DESKTOP_MENU_SIGNATURES,
     )
+
+
+def _uidl_attribute(source: str, name: str) -> str:
+    match = re.search(
+        rf"\b{re.escape(name)}=(?:\"([^\"]*)\"|([^\s/>]+))",
+        source,
+    )
+    assert match is not None, (name, source)
+    return next(value for value in match.groups() if value is not None)
 
 
 def _pad_file_target(offer: TerminalDisplayOffer) -> ControlHitTarget:
@@ -570,6 +581,144 @@ def test_open_pad_file_requires_normal_uidl_selection_state() -> None:
     )
     with pytest.raises(PhysicalDesktopAcceptanceError, match="order and state"):
         acceptance_runner._pad_file_menu_is_open(wrong_item_state)
+
+
+def test_pad_file_acceptance_signature_matches_the_ordinary_uidl_source() -> None:
+    uidl = (
+        Path(acceptance_runner.__file__).resolve().parents[1]
+        / "akashic/tui/applets/pad/pad.uidl"
+    ).read_text(encoding="utf-8")
+    file_menu = uidl.split("<menu label=File>", 1)[1].split("</menu>", 1)[0]
+    signature = []
+    for kind, attributes in re.findall(
+        r"<(item|separator)\b([^>]*)/>",
+        file_menu,
+    ):
+        if kind == "separator":
+            signature.append(("SEPARATOR", "", ""))
+            continue
+        shortcut = (
+            _uidl_attribute(attributes, "key")
+            if re.search(r"\bkey=", attributes)
+            else ""
+        )
+        signature.append(
+            ("ITEM", _uidl_attribute(attributes, "text"), shortcut)
+        )
+
+    assert tuple(signature) == acceptance_runner.PAD_FILE_ENTRY_SIGNATURE
+
+
+def test_open_pad_file_signature_failure_reports_the_actual_source_values() -> None:
+    offer = _offer("READY", offer_id=3, pad_menu=True, file_open=True)
+    region = offer.retained.regions[0]
+    *glyphs, menu_bar = region.draws
+    file_menu, *other_menus = menu_bar.menus
+    first, *remaining = file_menu.entries
+    wrong_label = replace(first, label="New_File")
+    mismatched = replace(
+        offer,
+        retained=replace(
+            offer.retained,
+            regions=(
+                replace(
+                    region,
+                    draws=(
+                        *glyphs,
+                        replace(
+                            menu_bar,
+                            menus=(
+                                replace(
+                                    file_menu,
+                                    entries=(wrong_label, *remaining),
+                                ),
+                                *other_menus,
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError,
+        match=r"actual=.*New_File",
+    ):
+        acceptance_runner._pad_file_menu_is_open(mismatched)
+
+
+def test_physical_event_pump_routes_mouse_without_discarding_action_delay_input(
+) -> None:
+    class Events:
+        @staticmethod
+        def get():
+            return [
+                SimpleNamespace(type=2, pos=(12, 8)),
+                SimpleNamespace(type=3, button=1, pos=(12, 8)),
+                SimpleNamespace(type=4, button=1, pos=(12, 8), mod=0x10),
+                SimpleNamespace(type=5),
+            ]
+
+    class Pygame:
+        QUIT = 1
+        MOUSEMOTION = 2
+        MOUSEBUTTONDOWN = 3
+        MOUSEBUTTONUP = 4
+        WINDOWFOCUSLOST = 5
+        WINDOWFOCUSGAINED = 6
+        KMOD_SHIFT = 0x10
+        KMOD_CTRL = 0x20
+        KMOD_ALT = 0x40
+        KMOD_GUI = 0x80
+        KMOD_CAPS = 0x100
+        KMOD_NUM = 0x200
+        event = Events()
+
+    class Pointer:
+        def __init__(self):
+            self.calls = []
+
+        def move(self, position, extent):
+            self.calls.append(("move", position, extent))
+
+        def left_down(self, position, extent):
+            self.calls.append(("down", position, extent))
+
+        def left_up(self, position, extent, *, modifiers):
+            self.calls.append(("up", position, extent, modifiers))
+
+        def clear(self):
+            self.calls.append(("clear",))
+
+    class Keyboard:
+        resets = 0
+        flushes = 0
+
+        def reset(self):
+            self.resets += 1
+
+        def flush_pending(self):
+            self.flushes += 1
+
+    pointer = Pointer()
+    keyboard = Keyboard()
+    extent = (2800, 1680)
+
+    assert acceptance_runner._pump_physical_viewer_events(
+        Pygame,
+        pointer,
+        keyboard,
+        extent,
+        closing_is_error=True,
+    )
+    assert pointer.calls == [
+        ("move", (12, 8), extent),
+        ("down", (12, 8), extent),
+        ("up", (12, 8), extent, 1),
+        ("clear",),
+    ]
+    assert keyboard.resets == 1
+    assert keyboard.flushes == 1
 
 
 def test_pad_file_activation_uses_exact_acknowledged_hit_identity() -> None:

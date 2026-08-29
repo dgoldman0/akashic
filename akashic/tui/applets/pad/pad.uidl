@@ -3,15 +3,15 @@
 <!-- ===== Menu Bar ===== -->
 <menubar id=mbar>
 <menu label=File>
-<item text=New_File do=new key=Ctrl+N/>
-<item text=Open_File do=open key=Ctrl+O/>
+<item text="New File" do=new key=Ctrl+N/>
+<item text="Open File" do=open key=Ctrl+O/>
 <separator/>
 <item text=Save do=save key=Ctrl+S/>
-<item text=Save_As do=save-as key=Ctrl+Shift+S/>
-<item text=Save_All do=save-all/>
+<item text="Save As" do=save-as key=Ctrl+Shift+S/>
+<item text="Save All" do=save-all/>
 <separator/>
-<item text=Close_Tab do=close-tab key=Ctrl+W/>
-<item text=Close_All do=close-all/>
+<item text="Close Tab" do=close-tab key=Ctrl+W/>
+<item text="Close All" do=close-all/>
 <separator/>
 <item text=Quit do=quit key=Ctrl+Q/>
 </menu>
