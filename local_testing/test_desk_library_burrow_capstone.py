@@ -109,9 +109,9 @@ def _assert_static_contracts() -> None:
     streams = STREAMS_SOURCE.read_text(encoding="utf-8")
 
     assert profile.linked is True
-    assert profile.cold_source_packed is True
+    assert profile.cold_source_codec == harness.COLD_SOURCE_CODEC_STORED
     assert profile.include_large_sample is False
-    assert profile.total_sectors == checkpoint4.TOTAL_SECTORS == 8192
+    assert profile.total_sectors == checkpoint4.TOTAL_SECTORS == 65536
     assert checkpoint4.NUM_CORES == 1
     assert checkpoint4.EXT_MEMORY_BYTES == 128 << 20
     assert checkpoint4.TOTAL_MAX_STEPS == 24_000_000_000
@@ -139,10 +139,10 @@ def _assert_static_contracts() -> None:
         assert root in profile.roots
     assert profile.initial_files == ()
     assert tuple(path for path, _ in profile.cold_source_initial_files) == (
-        "c5-srbprov.f.lz",
-        "c5-dlburrow.f.lz",
-        "c5-slrabbit.f.lz",
-        "c5-dlcap.f.lz",
+        "c5-srbprov.f.src",
+        "c5-dlburrow.f.src",
+        "c5-slrabbit.f.src",
+        "c5-dlcap.f.src",
     )
     for path, source in profile.cold_source_initial_files:
         assert path in profile.autoexec

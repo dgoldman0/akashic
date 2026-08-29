@@ -21,7 +21,8 @@ if str(LOCAL_TESTING) not in sys.path:
 from akashic_tui import (  # noqa: E402
     APP_SHELL_MODULE,
     COLD_SOURCE_CHUNK_TEMPLATE,
-    COLD_SOURCE_FLAGS,
+    COLD_SOURCE_CODEC_LZSS,
+    COLD_SOURCE_CODEC_STORED,
     COLD_SOURCE_HEADER,
     COLD_SOURCE_HEADER_BYTES,
     COLD_SOURCE_LOADER_PATH,
@@ -66,7 +67,7 @@ from akashic_tui import (  # noqa: E402
     _minify_forth,
     _matched_failure_markers,
     _pack_cold_source,
-    _packed_linked_chunks,
+    _container_linked_chunks,
     _parser,
     _rich_terminal_server_arguments,
     _rich_terminal_smoke_ready,
@@ -160,26 +161,33 @@ def test_link_unit_lexer_omits_parser_payload_tokens() -> None:
 
 def test_cold_source_container_is_deterministic_exact_and_crc_checked() -> None:
     source = b"123456789" + (b" overlap-safe source" * 64)
-    packed = _pack_cold_source(source)
-    assert packed == _pack_cold_source(source)
-    assert _unpack_cold_source(packed) == source
+    compressed = _pack_cold_source(source, codec=COLD_SOURCE_CODEC_LZSS)
+    stored = _pack_cold_source(source, codec=COLD_SOURCE_CODEC_STORED)
+    assert compressed == _pack_cold_source(
+        source, codec=COLD_SOURCE_CODEC_LZSS
+    )
+    assert stored == _pack_cold_source(
+        source, codec=COLD_SOURCE_CODEC_STORED
+    )
+    assert _unpack_cold_source(compressed) == source
+    assert _unpack_cold_source(stored) == source
 
     (
         magic,
         version,
-        flags,
+        codec,
         header_bytes,
         raw_bytes,
         payload_bytes,
         raw_crc32,
         reserved,
-    ) = COLD_SOURCE_HEADER.unpack_from(packed)
-    assert magic == COLD_SOURCE_MAGIC == b"AKLZSS01"
+    ) = COLD_SOURCE_HEADER.unpack_from(stored)
+    assert magic == COLD_SOURCE_MAGIC == b"AKSRC001"
     assert version == COLD_SOURCE_VERSION == 1
-    assert flags == COLD_SOURCE_FLAGS == 0
+    assert codec == COLD_SOURCE_CODEC_STORED == 1
     assert header_bytes == COLD_SOURCE_HEADER_BYTES == 40
     assert raw_bytes == len(source) <= COLD_SOURCE_RAW_MAX_BYTES
-    assert payload_bytes == len(packed) - COLD_SOURCE_HEADER_BYTES
+    assert payload_bytes == raw_bytes == len(stored) - COLD_SOURCE_HEADER_BYTES
     assert reserved == 0
     assert _unpack_cold_source(_pack_cold_source(b"123456789")) == b"123456789"
     assert COLD_SOURCE_HEADER.unpack_from(
@@ -187,7 +195,7 @@ def test_cold_source_container_is_deterministic_exact_and_crc_checked() -> None:
     )[6] == 0xCBF43926
     assert raw_crc32 != 0
 
-    corrupt = bytearray(packed)
+    corrupt = bytearray(stored)
     corrupt[32] ^= 0x01
     with pytest.raises(ValueError, match="CRC mismatch"):
         _unpack_cold_source(bytes(corrupt))
@@ -205,7 +213,7 @@ def test_cold_source_container_rejects_every_fixed_header_violation() -> None:
     malformed = (
         (bytes([valid[0] ^ 1]) + valid[1:], "magic"),
         (changed(8, "<H", 2), "version"),
-        (changed(10, "<H", 1), "flags"),
+        (changed(10, "<H", 2), "codec"),
         (changed(12, "<I", COLD_SOURCE_HEADER_BYTES + 1), "header size"),
         (changed(16, "<Q", 0), "raw size"),
         (
@@ -218,6 +226,15 @@ def test_cold_source_container_rejects_every_fixed_header_violation() -> None:
     for packed, message in malformed:
         with pytest.raises(ValueError, match=message):
             _unpack_cold_source(packed)
+
+    stored_mismatch = bytearray(
+        _pack_cold_source(source, codec=COLD_SOURCE_CODEC_STORED)
+    )
+    struct.pack_into("<Q", stored_mismatch, 16, len(source) + 1)
+    with pytest.raises(ValueError, match="Stored.*size mismatch"):
+        _unpack_cold_source(bytes(stored_mismatch))
+    with pytest.raises(ValueError, match="Unsupported cold source codec"):
+        _pack_cold_source(source, codec=True)
 
 
 def test_cold_source_lzss_enforces_canonical_and_bounded_streams() -> None:
@@ -259,7 +276,7 @@ def test_cold_source_autoexec_is_opt_in_and_preserves_source_order() -> None:
         autoexec,
         (chunk,),
         ("one.f",),
-        cold_source_packed=True,
+        cold_source_codec=COLD_SOURCE_CODEC_STORED,
     )
     assert packed.count(f"REQUIRE {COLD_SOURCE_LOADER_PATH}") == 1
     assert "COLD SOURCE LOAD FAIL status=" in packed
@@ -267,15 +284,18 @@ def test_cold_source_autoexec_is_opt_in_and_preserves_source_order() -> None:
     assert packed.index(f"REQUIRE {COLD_SOURCE_LOADER_PATH}") < packed.index(
         f"_BOOT-COLD-SOURCE {chunk}"
     ) < packed.index("REQUIRE local_testing/fixture.f")
-    assert PROFILES["desktop-library-burrow-capstone"].cold_source_packed
-    assert not PROFILES["desktop-library-burrow"].cold_source_packed
-    assert PROFILES["desktop"].cold_source_packed
+    assert (
+        PROFILES["desktop-library-burrow-capstone"].cold_source_codec
+        == COLD_SOURCE_CODEC_STORED
+    )
+    assert PROFILES["desktop-library-burrow"].cold_source_codec is None
+    assert PROFILES["desktop"].cold_source_codec == COLD_SOURCE_CODEC_STORED
     with pytest.raises(RuntimeError, match="no linked REQUIRE"):
         _linked_autoexec(
             "ENTER-USERLAND\nREQUIRE local_testing/fixture.f\n",
             (chunk,),
             ("one.f",),
-            cold_source_packed=True,
+            cold_source_codec=COLD_SOURCE_CODEC_STORED,
         )
 
 
@@ -294,7 +314,9 @@ def test_cp5_cold_source_image_roundtrips_the_real_linked_closure(
         profile.link_chunk_bytes,
         profile.audited_link_line_bytes,
     )
-    packed = _packed_linked_chunks(linked)
+    packed = _container_linked_chunks(
+        linked, codec=profile.cold_source_codec
+    )
     image = build_image(profile_name, tmp_path / "cp5-cold-source.img")
     filesystem = MP64FS(bytearray(image.read_bytes()))
 
@@ -378,7 +400,7 @@ def test_injected_forth_provided_keys_share_module_collision_validation() -> Non
         _validate_module_ids(
             (),
             (
-                ("first.f.lz", f"PROVIDED {prefix}-first\n".encode()),
+                ("first.f.src", f"PROVIDED {prefix}-first\n".encode()),
                 ("second.f", f"PROVIDED {prefix}-second\n".encode()),
             ),
         )
@@ -1543,7 +1565,7 @@ def test_desk_library_burrow_profile_is_product_composed() -> None:
     )
     assert profile.linked is True
     assert profile.include_large_sample is False
-    assert profile.total_sectors == PROFILES["desktop"].total_sectors == 8192
+    assert profile.total_sectors == PROFILES["desktop"].total_sectors == 65536
     assert tuple(path for path, _ in profile.initial_files) == (
         "local_testing/streams-burrow-prov.f",
         "local_testing/desk-library-burrow.f",
@@ -1705,7 +1727,7 @@ def test_rich_terminal_boot_load_follows_networking_and_owns_capacities() -> Non
 
 
 def test_rich_desktop_boot_progress_brackets_each_cold_source_chunk() -> None:
-    chunks = ("source-00.lz", "source-01.lz", "source-02.lz")
+    chunks = ("source-00.src", "source-01.src", "source-02.src")
     autoexec = (
         "ENTER-USERLAND\n"
         f"{MEGAPAD_NETWORKING_BOOT_LINE}\n"
@@ -1777,6 +1799,8 @@ def test_desktop_apt1_profile_has_complete_additive_rich_closure() -> None:
     assert baseline.rich_terminal is None
     assert not baseline.rich_boot_progress
     assert profile.rich_terminal is DESKTOP_APT1_RICH_TERMINAL
+    assert profile.total_sectors == 65536
+    assert profile.cold_source_codec == COLD_SOURCE_CODEC_STORED
     assert profile.rich_boot_progress
     expected_roots = tuple(
         "tui/desk-apt1.f"
@@ -2010,9 +2034,17 @@ def test_desktop_apt1_build_is_an_external_additive_composition(
     packed_names = sorted(
         entry.name
         for entry in filesystem.list_files()
-        if re.fullmatch(r"source-[0-9]{2}\.lz", entry.name)
+        if re.fullmatch(r"source-[0-9]{2}\.src", entry.name)
     )
     assert packed_names
+    for name in packed_names:
+        container = filesystem.read_file(name)
+        header = COLD_SOURCE_HEADER.unpack_from(container)
+        assert header[2] == COLD_SOURCE_CODEC_STORED
+        assert header[4] == header[5]
+        assert container[COLD_SOURCE_HEADER_BYTES:] == _unpack_cold_source(
+            container
+        )
     width = max(2, len(str(len(packed_names))))
     for number, name in enumerate(packed_names, start=1):
         marker = (
@@ -2386,14 +2418,14 @@ def test_abstract_http_profile_omits_native_networking(
     assert "FSLOAD networking.f" not in autoexec
 
 
-def test_complete_desktop_fits_fixed_mp64fs_with_reserve(
+def test_complete_desktop_uses_stored_checked_source_on_32_mib_mp64fs(
     tmp_path: Path,
 ) -> None:
     image = build_image("desktop", tmp_path / "akashic-desktop.img")
-    assert image.stat().st_size == 8192 * 512
+    assert image.stat().st_size == 65536 * 512
     filesystem = MP64FS(bytearray(image.read_bytes()))
     info = filesystem.info()
-    assert info["total_sectors"] == 8192
+    assert info["total_sectors"] == 65536
     assert info["free_sectors"] * 512 >= 1 << 20
     assert filesystem.read_file("networking.f") == pack_forth_source(
         (MEGAPAD_ROOT / "networking.f").read_bytes()
@@ -2412,9 +2444,17 @@ def test_complete_desktop_fits_fixed_mp64fs_with_reserve(
     packed_names = sorted(
         entry.name
         for entry in filesystem.list_files()
-        if re.fullmatch(r"source-[0-9]{2}\.lz", entry.name)
+        if re.fullmatch(r"source-[0-9]{2}\.src", entry.name)
     )
     assert packed_names and packed_names[0] == first_chunk
+    for name in packed_names:
+        container = filesystem.read_file(name)
+        header = COLD_SOURCE_HEADER.unpack_from(container)
+        assert header[2] == COLD_SOURCE_CODEC_STORED
+        assert header[4] == header[5]
+        assert container[COLD_SOURCE_HEADER_BYTES:] == _unpack_cold_source(
+            container
+        )
     linked_source = b"".join(
         _unpack_cold_source(filesystem.read_file(name))
         for name in packed_names
@@ -2430,8 +2470,8 @@ def test_codex_desktop_profiles_inherit_capacity_and_build(
     for profile_name in ("desktop-codex", "desktop-codex-live"):
         profile = PROFILES[profile_name]
         assert profile.total_sectors == PROFILES["desktop"].total_sectors
-        assert profile.cold_source_packed
+        assert profile.cold_source_codec == COLD_SOURCE_CODEC_STORED
         image = build_image(profile_name, tmp_path / f"{profile_name}.img")
-        assert image.stat().st_size == 8192 * 512
+        assert image.stat().st_size == 65536 * 512
         filesystem = MP64FS(bytearray(image.read_bytes()))
         assert filesystem.info()["free_sectors"] * 512 >= 1 << 20

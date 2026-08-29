@@ -343,7 +343,7 @@ def _profile() -> harness.Profile:
         ),
         initial_files=((PROVIDER_IMAGE_PATH, _provider_bytes()),),
         linked=True,
-        cold_source_packed=True,
+        cold_source_codec=harness.COLD_SOURCE_CODEC_LZSS,
         include_large_sample=False,
         total_sectors=4096,
     )
@@ -353,7 +353,7 @@ def _assert_static_contracts() -> None:
     profile = harness.PROFILES[PROFILE]
     capstone = harness.PROFILES["desktop-library-burrow-capstone"]
     deployed_provider = dict(capstone.cold_source_initial_files)[
-        "c5-slrabbit.f.lz"
+        "c5-slrabbit.f.src"
     ]
     provider_source = PROVIDER.read_text(encoding="utf-8")
     library_capabilities = LIBRARY_CAPABILITIES.read_text(encoding="utf-8")
@@ -375,7 +375,7 @@ def _assert_static_contracts() -> None:
 
     assert profile.roots == ROOTS
     assert profile.linked is True
-    assert profile.cold_source_packed is True
+    assert profile.cold_source_codec == harness.COLD_SOURCE_CODEC_LZSS
     assert profile.include_large_sample is False
     assert profile.total_sectors == 4096
     assert profile.audited_link_line_bytes is None

@@ -51,8 +51,9 @@ The canonical Desktop remains on that ordinary 15-descriptor boundary and does
 not acquire the Rabbit closure or change its 2,048-sector free-space reserve.
 The later secure-network integration preserves that same component and reserve
 contract by storing the canonical Desktop's Akashic source in the checked
-`AKLZSS01` cold-source representation. Every module is still compiled from
-source at boot; this is not a compiled dictionary cache.
+`AKSRC001` stored-source representation on its 32 MiB MP64FS volume. Every
+module is still compiled from source at boot; this is not a compiled
+dictionary cache.
 
 The profile provisions a normal Practice head only on blank qualification
 media. It then registers and queues exactly three real applet descriptors

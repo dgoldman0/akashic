@@ -84,8 +84,8 @@ second Library owner.
 
 The descriptive host fixture filenames exceed MP64FS's 23-byte component
 limit. The product image therefore carries the four Checkpoint-4/5 leaves as
-the explicit qualification-only containers `c5-srbprov.f.lz`,
-`c5-dlburrow.f.lz`, `c5-slrabbit.f.lz`, and `c5-dlcap.f.lz`. The sources
+the explicit qualification-only containers `c5-srbprov.f.src`,
+`c5-dlburrow.f.src`, `c5-slrabbit.f.src`, and `c5-dlcap.f.src`. The sources
 retain their host paths and `PROVIDED` identities. The capstone now declares
 the prefix-distinct bounded identity `akashic-test-c5-dlb`: its former
 descriptive identity collided with the Checkpoint-4 fixture after KDOS reduced
@@ -95,29 +95,30 @@ module-key namespace.
 
 ## Cold-source image representation
 
-The generic complete-Desktop packaging path now owns the bounded
-compressed-at-rest source representation; it is not a Checkpoint-5-only
-facility. Checkpoint 5 uses that ordinary path for the linked Akashic source
-chunks and adds only its four qualification leaves. This promotion followed
-the earlier CP5 image-pressure finding that an ordinary linked build needed
-239 sectors when only 236 remained. The filesystem geometry and canonical
-Desktop mutable reserve were not weakened, and no CP5-only generic loader API
-remains.
+The generic complete-Desktop packaging path owns a bounded checked-source
+representation; it is not a Checkpoint-5-only facility. Checkpoint 5 uses
+that ordinary path for the linked Akashic source chunks and adds only its four
+qualification leaves. The 32 MiB MP64FS image has sufficient capacity for the
+stored codec, so the normal Desktop and this capstone no longer spend guest
+boot time decompressing their source.
 
-Each root-level data container has a fixed 40-byte `AKLZSS01` header, positive
-raw and payload lengths, an at-most-122,880-byte raw bound, and mandatory raw
-CRC32-IEEE. The canonical LSB-first LZSS stream has a 4 KiB back-reference
-window, 3 through 18 byte matches, exact input/output exhaustion, and zero
-unused final control bits. The uncompressed root alias `coldsrc.f` validates
-the single-extent file, decodes into format-bounded allocations, verifies CRC,
-and compiles each raw source through `SOURCE-EVALUATE-CHECKED`. A generated
+Each root-level data container has a fixed 40-byte `AKSRC001` header, an
+explicit stored-or-LZSS codec, positive raw and payload lengths, an
+at-most-122,880-byte raw bound, and mandatory raw CRC32-IEEE. Stored payloads
+must have exactly the raw length. The optional canonical LSB-first LZSS codec
+retains its 4 KiB back-reference window, 3 through 18 byte matches, exact
+input/output exhaustion, and zero unused final control bits for focused images
+that explicitly select it. The uncompressed root alias `coldsrc.f` validates
+the single-extent file, reads stored source directly into its evaluation
+allocation, verifies CRC, and compiles it through
+`SOURCE-EVALUATE-CHECKED`. A generated
 `_BOOT-COLD-SOURCE` wrapper reports the checked evaluator status, line, column,
 throw, and token before aborting a failed boot load. Read-only descriptors are
 released without rewriting MP64FS metadata.
 
 This remains a cold source build. It is not a compiled Forth shard, warm
-dictionary cache, or source-timing substitute: every module is decoded and
-compiled at boot. On a fatal packaged-source error the loader restores its
+dictionary cache, or source-timing substitute: every module is loaded and
+compiled at boot. On a fatal checked-source error the loader restores its
 dictionary and evaluator checkpoint before boot aborts; that statement does
 not claim rollback of module registrations or arbitrary load-time side
 effects.

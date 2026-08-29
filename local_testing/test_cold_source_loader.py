@@ -39,23 +39,28 @@ def _failure_fixtures() -> tuple[tuple[str, bytes], ...]:
 
     bad_crc = bytearray(
         harness._pack_cold_source(
-            b": _CSLC-CRC-SHOULD-NOT-LAND 1 ;\n"
+            b": _CSLC-CRC-SHOULD-NOT-LAND 1 ;\n",
+            codec=harness.COLD_SOURCE_CODEC_STORED,
         )
     )
     bad_crc[32] ^= 0x01
 
     bad_evaluate = harness._pack_cold_source(
         b": _CSLC-ROLLBACK-PREFIX 91 ;\n"
-        b": _CSLC-UNFINISHED\n"
+        b": _CSLC-UNFINISHED\n",
+        codec=harness.COLD_SOURCE_CODEC_STORED,
     )
-    retry = harness._pack_cold_source(b": _CSLC-RETRY-WORD 37 ;\n")
+    retry = harness._pack_cold_source(
+        b": _CSLC-RETRY-WORD 37 ;\n",
+        codec=harness.COLD_SOURCE_CODEC_STORED,
+    )
 
     fixtures = (
-        ("csl-dist.lz", bytes(bad_distance)),
-        ("csl-canon.lz", bytes(bad_canonical)),
-        ("csl-crc.lz", bytes(bad_crc)),
-        ("csl-eval.lz", bad_evaluate),
-        ("csl-retry.lz", retry),
+        ("csl-dist.src", bytes(bad_distance)),
+        ("csl-canon.src", bytes(bad_canonical)),
+        ("csl-crc.src", bytes(bad_crc)),
+        ("csl-eval.src", bad_evaluate),
+        ("csl-retry.src", retry),
     )
     maximum_container_bytes = (
         header_bytes
@@ -117,15 +122,15 @@ _cslc-resources-recovered? _cslc-assert
 ." COLD SOURCE LOADER VALID PASS" CR TX-FLUSH
 
 \ Decode failures must release their descriptor and both bounded allocations.
-COLD-SOURCE-LOAD csl-dist.lz CSL-S-DISTANCE = _cslc-assert
+COLD-SOURCE-LOAD csl-dist.src CSL-S-DISTANCE = _cslc-assert
 _cslc-resources-recovered? _cslc-assert
 ." COLD SOURCE LOADER DISTANCE PASS" CR TX-FLUSH
-COLD-SOURCE-LOAD csl-canon.lz CSL-S-CANONICAL = _cslc-assert
+COLD-SOURCE-LOAD csl-canon.src CSL-S-CANONICAL = _cslc-assert
 _cslc-resources-recovered? _cslc-assert
 ." COLD SOURCE LOADER CANONICAL PASS" CR TX-FLUSH
 
 \ A complete decode with the wrong raw checksum must fail before evaluation.
-COLD-SOURCE-LOAD csl-crc.lz CSL-S-CHECKSUM = _cslc-assert
+COLD-SOURCE-LOAD csl-crc.src CSL-S-CHECKSUM = _cslc-assert
 _cslc-resources-recovered? _cslc-assert
 ." COLD SOURCE LOADER CHECKSUM PASS" CR TX-FLUSH
 
@@ -149,7 +154,7 @@ def _profile() -> harness.Profile:
             "? (not found)",
         ),
         linked=True,
-        cold_source_packed=True,
+        cold_source_codec=harness.COLD_SOURCE_CODEC_LZSS,
         include_large_sample=False,
         initial_files=FAILURE_FIXTURES,
         total_sectors=1024,
@@ -173,11 +178,11 @@ def _assert_static_contracts() -> None:
     assert not re.search(r"(?m)^.*\bDO\b.*\bR(?:@|>)\b", executable)
     assert max(map(len, source.splitlines())) <= 255
     assert tuple(name for name, _ in FAILURE_FIXTURES) == (
-        "csl-dist.lz",
-        "csl-canon.lz",
-        "csl-crc.lz",
-        "csl-eval.lz",
-        "csl-retry.lz",
+        "csl-dist.src",
+        "csl-canon.src",
+        "csl-crc.src",
+        "csl-eval.src",
+        "csl-retry.src",
     )
 
 
@@ -254,7 +259,7 @@ def _run(timeout: float) -> int:
         transcript.append(machine.raw_text())
         machine.clear_output()
 
-        _send_line(machine, "COLD-SOURCE-LOAD csl-eval.lz")
+        _send_line(machine, "COLD-SOURCE-LOAD csl-eval.src")
         if not run_until("evaluation failure", "> "):
             transcript.append(machine.raw_text())
             return _report(False, reports, transcript, machine, profile)
@@ -284,7 +289,7 @@ def _run(timeout: float) -> int:
         # allocation ownership is reusable in the same machine.
         _send_line(
             machine,
-            "COLD-SOURCE-LOAD csl-retry.lz CSL-S-OK = _cslc-assert "
+            "COLD-SOURCE-LOAD csl-retry.src CSL-S-OK = _cslc-assert "
             "_CSLC-RETRY-WORD 37 = _cslc-assert",
         )
         _send_line(

@@ -1,5 +1,5 @@
 \ =====================================================================
-\  cold-source-loader.f - bounded AKLZSS01 cold source loader
+\  cold-source-loader.f - bounded AKSRC001 checked source loader
 \ =====================================================================
 \  Public API:
 \    COLD-SOURCE-LOAD  ( i*x "filename" -- j*x status )
@@ -11,6 +11,9 @@
 \  Success commits its definitions.  Every evaluation failure or throw
 \  restores HERE, LATEST, and evaluator depth; packaged boot source is
 \  trusted, so callers abort rather than rely on failure stack restoration.
+\
+\  Stored payloads are read directly into the evaluation buffer.  LZSS
+\  payloads retain the bounded decoder for explicitly compressed profiles.
 \
 \  Required resident words are OPEN/FSIZE/FREAD/(FCLOSE-NOFS),
 \  ALLOCATE/FREE,
@@ -39,6 +42,8 @@ PROVIDED akashic-cold-source-loader
 
 40 CONSTANT _CSL-HEADER-U
 122880 CONSTANT _CSL-RAW-MAX
+0 CONSTANT _CSL-CODEC-LZSS
+1 CONSTANT _CSL-CODEC-STORED
 
 -28001 CONSTANT _CSL-X-EVAL
 -28003 CONSTANT _CSL-X-ROLLBACK
@@ -52,6 +57,7 @@ VARIABLE _CSL-PAYLOAD-U
 VARIABLE _CSL-RAW-A
 VARIABLE _CSL-RAW-U
 VARIABLE _CSL-CRC
+VARIABLE _CSL-CODEC
 VARIABLE _CSL-PRIMARY
 VARIABLE _CSL-BUSY
 
@@ -87,7 +93,7 @@ VARIABLE _CSL-ZN
 : CSL-LAST-CLEANUP@  ( -- throw-code ) _CSL-CLEAN-THROW @ ;
 
 \ =====================================================================
-\ Exact I/O and audited AKLZSS01 header
+\ Exact I/O and audited AKSRC001 header
 \ =====================================================================
 
 : _CSL-READ-EXACT  ( address length -- status )
@@ -96,7 +102,7 @@ VARIABLE _CSL-ZN
     _CSL-READ-U @ = IF CSL-S-OK ELSE CSL-S-READ THEN ;
 
 : _CSL-MAGIC?  ( -- flag )
-    S" AKLZSS01" _CSL-HEADER 8 COMPARE 0= ;
+    S" AKSRC001" _CSL-HEADER 8 COMPARE 0= ;
 
 : _CSL-PAYLOAD-MAX  ( raw-length -- max-packed-length )
     DUP 7 + 8 / + ;
@@ -104,7 +110,9 @@ VARIABLE _CSL-ZN
 : _CSL-HEADER?  ( -- flag )
     _CSL-MAGIC? 0= IF 0 EXIT THEN
     _CSL-HEADER 8 + W@ 1 <> IF 0 EXIT THEN
-    _CSL-HEADER 10 + W@ 0<> IF 0 EXIT THEN
+    _CSL-HEADER 10 + W@ DUP _CSL-CODEC !
+    DUP _CSL-CODEC-LZSS = SWAP _CSL-CODEC-STORED = OR
+    0= IF 0 EXIT THEN
     _CSL-HEADER 12 + L@ _CSL-HEADER-U <> IF 0 EXIT THEN
     _CSL-HEADER 36 + L@ 0<> IF 0 EXIT THEN
 
@@ -112,7 +120,13 @@ VARIABLE _CSL-ZN
     DUP 0= SWAP _CSL-RAW-MAX U> OR IF 0 EXIT THEN
     _CSL-HEADER 24 + @ DUP _CSL-PAYLOAD-U !
     DUP 0= IF DROP 0 EXIT THEN
-    _CSL-RAW-U @ _CSL-PAYLOAD-MAX U> IF 0 EXIT THEN
+    _CSL-CODEC @ _CSL-CODEC-STORED = IF
+        _CSL-PAYLOAD-U @ _CSL-RAW-U @ <> IF 0 EXIT THEN
+    ELSE
+        _CSL-PAYLOAD-U @ _CSL-RAW-U @ _CSL-PAYLOAD-MAX U> IF
+            0 EXIT
+        THEN
+    THEN
     _CSL-FILE-U @ _CSL-HEADER-U - _CSL-PAYLOAD-U @ <> IF
         0 EXIT
     THEN
@@ -131,7 +145,7 @@ VARIABLE _CSL-ZN
     DROP _CSL-RAW-A ! CSL-S-OK ;
 
 \ =====================================================================
-\ Canonical LSB-first AKLZSS01 decoder
+\ Canonical LSB-first LZSS decoder
 \ =====================================================================
 
 : _CSL-ZIN?  ( count -- flag )
@@ -268,7 +282,7 @@ VARIABLE _CSL-ZN
 : _CSL-RESET  ( -- )
     0 _CSL-FD ! 0 _CSL-FILE-U !
     0 _CSL-PAYLOAD-A ! 0 _CSL-PAYLOAD-U !
-    0 _CSL-RAW-A ! 0 _CSL-RAW-U ! 0 _CSL-CRC !
+    0 _CSL-RAW-A ! 0 _CSL-RAW-U ! 0 _CSL-CRC ! 0 _CSL-CODEC !
     0 _CSL-PRIMARY ! 0 _CSL-MARKED !
     0 _CSL-SAVED-HERE ! 0 _CSL-SAVED-LATEST !
     0 _CSL-SAVED-EDEPTH !
@@ -292,15 +306,20 @@ _CSL-RESET 0 _CSL-BUSY !
     DUP IF EXIT THEN DROP
     _CSL-HEADER? 0= IF CSL-S-HEADER EXIT THEN
 
-    _CSL-ALLOC-PAYLOAD DUP IF EXIT THEN DROP
-    _CSL-PAYLOAD-A @ _CSL-PAYLOAD-U @ _CSL-READ-EXACT
-    DUP IF EXIT THEN DROP
-    _CSL-CLOSE-OWNER
-
     _CSL-ALLOC-RAW DUP IF EXIT THEN DROP
-    _CSL-PAYLOAD-A @ _CSL-PAYLOAD-U @
-    _CSL-RAW-A @ _CSL-RAW-U @ _CSL-DECODE
-    DUP IF EXIT THEN DROP
+    _CSL-CODEC @ _CSL-CODEC-STORED = IF
+        _CSL-RAW-A @ _CSL-RAW-U @ _CSL-READ-EXACT
+        DUP IF EXIT THEN DROP
+        _CSL-CLOSE-OWNER
+    ELSE
+        _CSL-ALLOC-PAYLOAD DUP IF EXIT THEN DROP
+        _CSL-PAYLOAD-A @ _CSL-PAYLOAD-U @ _CSL-READ-EXACT
+        DUP IF EXIT THEN DROP
+        _CSL-CLOSE-OWNER
+        _CSL-PAYLOAD-A @ _CSL-PAYLOAD-U @
+        _CSL-RAW-A @ _CSL-RAW-U @ _CSL-DECODE
+        DUP IF EXIT THEN DROP
+    THEN
     _CSL-RAW-A @ _CSL-RAW-U @ CRC32-IEEE-BUF
     _CSL-CRC @ <> IF CSL-S-CHECKSUM EXIT THEN
     _CSL-EVALUATE ;

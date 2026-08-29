@@ -819,15 +819,16 @@ operand seal's canonical length, SHA3-256 digest, and seal state. A zero
 resource ID is the legacy/non-lens default. Precompiled code that allocates an
 older request-record size must be rebuilt.
 
-MP64FS test images support 15 through 8192 sectors. The guest derives a one- or
-two-sector allocation bitmap from media capacity, and the directory and data
-starts follow that bitmap uniformly. Profiles declare their required media
-capacity; the complete Desktop family uses 8192 sectors while smaller focused
-profiles retain the 4096-sector default. The complete Desktop family stores
-its linked Akashic source in checked `AKLZSS01` containers so the substantially
-larger secure MegaPad networking source does not consume the fixed 2,048-sector
-mutable reserve. This remains a cold build: `coldsrc.f` validates, expands,
-checksums, and compiles every source chunk through `SOURCE-EVALUATE-CHECKED`.
+MP64FS test images support 15 through 65,536 sectors (32 MiB). The guest derives
+a one- through sixteen-sector allocation bitmap from media capacity, and the
+directory and data starts follow that bitmap uniformly. Profiles declare their
+required media capacity; the complete Desktop family uses the full 65,536
+sectors while smaller focused profiles retain only the capacity they need. The
+complete Desktop family stores its linked Akashic source verbatim in checked
+`AKSRC001` containers. The stored codec removes decompression from cold boot
+without weakening source integrity or evaluation. This remains a cold build:
+`coldsrc.f` validates, checksums, and compiles every source chunk through
+`SOURCE-EVALUATE-CHECKED`.
 It is not a compiled dictionary cache. Focused profiles may omit unrelated
 large-file fixtures, but they must not omit production modules or resources in
 their declared scope. Generated images also omit non-executable blank/comment

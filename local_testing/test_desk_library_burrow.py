@@ -45,7 +45,7 @@ STREAMS: Final = SOURCE_ROOT / "tui" / "applets" / "streams" / "streams.f"
 AGENT: Final = SOURCE_ROOT / "tui" / "applets" / "agent" / "agent.f"
 
 IMAGE: Final = Path("/tmp/akashic-desk-library-burrow.img")
-TOTAL_SECTORS: Final = 8192
+TOTAL_SECTORS: Final = 65536
 EXT_MEMORY_BYTES: Final = 128 << 20
 NUM_CORES: Final = 1
 COLS: Final = 132
@@ -260,7 +260,7 @@ def _assert_static_contracts() -> None:
     )
     assert profile.linked is True
     assert profile.include_large_sample is False
-    assert profile.total_sectors == TOTAL_SECTORS == 8192
+    assert profile.total_sectors == TOTAL_SECTORS == 65536
     assert NUM_CORES == 1
     assert EXT_MEMORY_BYTES == 128 << 20
     assert TOTAL_MAX_STEPS == 24_000_000_000
@@ -738,7 +738,10 @@ def _run_product(
     profile = harness.PROFILES[profile_name]
     built = harness.build_image(profile_name, image)
     if built.stat().st_size != TOTAL_SECTORS * 512:
-        raise JourneyFailure("focused product image is not exactly 8192 sectors")
+        raise JourneyFailure(
+            "focused product image is not exactly "
+            f"{TOTAL_SECTORS} sectors"
+        )
     ledger = SpaceLedger(built.read_bytes())
     started = time.monotonic()
 

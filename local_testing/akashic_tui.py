@@ -204,13 +204,21 @@ FORTH_CONDITIONAL_TOKENS = frozenset(("[IF]", "[ELSE]", "[THEN]"))
 # transfers.  This bounds source prescan/evaluation work and leaves room for
 # profile growth without changing the generated chunk topology on every edit.
 LINK_CHUNK_BYTES = 120 * 1024
-COLD_SOURCE_MAGIC = b"AKLZSS01"
+COLD_SOURCE_MAGIC = b"AKSRC001"
 COLD_SOURCE_VERSION = 1
-COLD_SOURCE_FLAGS = 0
+COLD_SOURCE_CODEC_LZSS = 0
+COLD_SOURCE_CODEC_STORED = 1
+COLD_SOURCE_CODECS = frozenset(
+    (COLD_SOURCE_CODEC_LZSS, COLD_SOURCE_CODEC_STORED)
+)
+COLD_SOURCE_CODEC_NAMES = {
+    COLD_SOURCE_CODEC_LZSS: "lzss",
+    COLD_SOURCE_CODEC_STORED: "stored",
+}
 COLD_SOURCE_HEADER_BYTES = 40
 COLD_SOURCE_RAW_MAX_BYTES = LINK_CHUNK_BYTES
 COLD_SOURCE_LOADER_PATH = "coldsrc.f"
-COLD_SOURCE_CHUNK_TEMPLATE = "source-{index:02d}.lz"
+COLD_SOURCE_CHUNK_TEMPLATE = "source-{index:02d}.src"
 COLD_SOURCE_HEADER = struct.Struct("<8sHHIQQII")
 MEGAPAD_EVALUATE_SOURCE_MAX_BYTES = 255
 FORTH_LINE_COALESCE_BARRIERS = frozenset(
@@ -322,7 +330,7 @@ class Profile:
     requires_tap: bool = False
     failure_markers: tuple[str, ...] = ()
     initial_files: tuple[tuple[str, bytes], ...] = ()
-    # Raw Forth sources deployed as checked AKLZSS01 data containers.  Each
+    # Raw Forth sources deployed as checked AKSRC001 data containers.  Each
     # tuple names the on-image container, not the host source.  This keeps
     # qualification leaves on the same checked cold-compile path as linked
     # production modules instead of routing them through KDOS's unchecked
@@ -333,10 +341,12 @@ class Profile:
     link_chunk_bytes: int = LINK_CHUNK_BYTES
     smoke_max_steps: int | None = None
     smoke_timeout: float | None = None
-    # Cold-source packing is an opt-in filesystem representation.  The guest
-    # expands each linked source chunk and compiles it through the checked
-    # source evaluator; this is not a compiled dictionary cache.
-    cold_source_packed: bool = False
+    # A cold-source codec opts linked source into the checked container path.
+    # The guest validates and compiles each source chunk through the checked
+    # evaluator; this is not a compiled dictionary cache.  Stored containers
+    # avoid guest decompression while retaining the same integrity and
+    # failure-atomic evaluation contract.
+    cold_source_codec: int | None = None
     # Physical-line joining is safe only for a source closure audited for
     # line-sensitive custom parsing words.  It is never a default transform.
     audited_link_line_bytes: int | None = None
@@ -344,6 +354,19 @@ class Profile:
     rich_terminal: RichTerminalProfile | None = None
     rich_boot_progress: bool = False
     minimum_free_bytes: int = 0
+
+    def __post_init__(self) -> None:
+        if (
+            self.cold_source_codec is not None
+            and (
+                isinstance(self.cold_source_codec, bool)
+                or self.cold_source_codec not in COLD_SOURCE_CODECS
+            )
+        ):
+            raise ValueError(
+                "cold_source_codec must be None, "
+                "COLD_SOURCE_CODEC_LZSS, or COLD_SOURCE_CODEC_STORED"
+            )
 
 
 # Akashic modules that bind directly to the networking surface exported by
@@ -10996,10 +11019,10 @@ THEN
             "Agent",
         ),
         linked=True,
-        cold_source_packed=True,
+        cold_source_codec=COLD_SOURCE_CODEC_STORED,
         smoke_max_steps=DESKTOP_SMOKE_MAX_STEPS,
         smoke_timeout=DESKTOP_SMOKE_TIMEOUT,
-        total_sectors=8192,
+        total_sectors=65536,
         minimum_free_bytes=1 << 20,
     ),
     "agent-widgets": Profile(
@@ -20965,7 +20988,7 @@ DESK-QUEUE-BUILTIN
         if marker != "Entry"
     ),
     linked=PROFILES["desktop"].linked,
-    cold_source_packed=PROFILES["desktop"].cold_source_packed,
+    cold_source_codec=PROFILES["desktop"].cold_source_codec,
     smoke_max_steps=PROFILES["desktop"].smoke_max_steps,
     smoke_timeout=PROFILES["desktop"].smoke_timeout,
     include_large_sample=False,
@@ -21151,13 +21174,13 @@ REQUIRE tui/applets/agent/providers/devtools/scripted.f
 REQUIRE tui/applets/streams/rabbit-library-profile.f
 REQUIRE net/transports/memory-duplex.f
 REQUIRE tui/applets/streams/rabbit-connector.f
-_BOOT-COLD-SOURCE c5-srbprov.f.lz
+_BOOT-COLD-SOURCE c5-srbprov.f.src
 ." DESK LIBRARY RABBIT LOAD C4 PROVIDER PASS" CR TX-FLUSH
-_BOOT-COLD-SOURCE c5-dlburrow.f.lz
+_BOOT-COLD-SOURCE c5-dlburrow.f.src
 ." DESK LIBRARY RABBIT LOAD C4 PRODUCT PASS" CR TX-FLUSH
-_BOOT-COLD-SOURCE c5-slrabbit.f.lz
+_BOOT-COLD-SOURCE c5-slrabbit.f.src
 ." DESK LIBRARY RABBIT LOAD C5 PROVIDER PASS" CR TX-FLUSH
-_BOOT-COLD-SOURCE c5-dlcap.f.lz
+_BOOT-COLD-SOURCE c5-dlcap.f.src
 ." DESK LIBRARY RABBIT LOAD C5 CAPSTONE PASS" CR TX-FLUSH
 
 CREATE _boot-practice-head PHEAD-SIZE ALLOT
@@ -21202,19 +21225,19 @@ DESK-LIBRARY-BURROW-RUN
     ),
     cold_source_initial_files=(
         (
-            "c5-srbprov.f.lz",
+            "c5-srbprov.f.src",
             (
                 AKASHIC_ROOT / "local_testing" / "streams-burrow-prov.f"
             ).read_bytes(),
         ),
         (
-            "c5-dlburrow.f.lz",
+            "c5-dlburrow.f.src",
             (
                 AKASHIC_ROOT / "local_testing" / "desk-library-burrow.f"
             ).read_bytes(),
         ),
         (
-            "c5-slrabbit.f.lz",
+            "c5-slrabbit.f.src",
             (
                 AKASHIC_ROOT
                 / "local_testing"
@@ -21222,7 +21245,7 @@ DESK-LIBRARY-BURROW-RUN
             ).read_bytes(),
         ),
         (
-            "c5-dlcap.f.lz",
+            "c5-dlcap.f.src",
             (
                 AKASHIC_ROOT
                 / "local_testing"
@@ -21231,7 +21254,7 @@ DESK-LIBRARY-BURROW-RUN
         ),
     ),
     linked=True,
-    cold_source_packed=True,
+    cold_source_codec=COLD_SOURCE_CODEC_STORED,
     include_large_sample=False,
     total_sectors=PROFILES["desktop"].total_sectors,
 )
@@ -21432,7 +21455,7 @@ PROFILES["desktop-local-applet"] = Profile(
     ready_markers=PROFILES["desktop"].ready_markers,
     stable_markers=PROFILES["desktop"].stable_markers,
     linked=PROFILES["desktop"].linked,
-    cold_source_packed=PROFILES["desktop"].cold_source_packed,
+    cold_source_codec=PROFILES["desktop"].cold_source_codec,
     smoke_max_steps=PROFILES["desktop"].smoke_max_steps,
     smoke_timeout=PROFILES["desktop"].smoke_timeout,
     initial_files=(
@@ -21457,7 +21480,7 @@ PROFILES["desktop-recovery"] = Profile(
     ready_markers=("[Practice: recovery]",),
     stable_markers=("[Practice: recovery]",),
     linked=True,
-    cold_source_packed=PROFILES["desktop"].cold_source_packed,
+    cold_source_codec=PROFILES["desktop"].cold_source_codec,
     smoke_max_steps=PROFILES["desktop"].smoke_max_steps,
     smoke_timeout=PROFILES["desktop"].smoke_timeout,
     initial_files=(
@@ -21476,7 +21499,7 @@ PROFILES["desktop-fallback"] = Profile(
     ready_markers=PROFILES["desktop"].ready_markers + ("[Practice: fallback]",),
     stable_markers=PROFILES["desktop"].stable_markers + ("[Practice: fallback]",),
     linked=True,
-    cold_source_packed=PROFILES["desktop"].cold_source_packed,
+    cold_source_codec=PROFILES["desktop"].cold_source_codec,
     smoke_max_steps=PROFILES["desktop"].smoke_max_steps,
     smoke_timeout=PROFILES["desktop"].smoke_timeout,
     initial_files=(
@@ -21507,7 +21530,7 @@ PROFILES["desktop-codex"] = Profile(
     ready_markers=PROFILES["desktop"].ready_markers,
     stable_markers=PROFILES["desktop"].stable_markers,
     linked=True,
-    cold_source_packed=PROFILES["desktop"].cold_source_packed,
+    cold_source_codec=PROFILES["desktop"].cold_source_codec,
     smoke_max_steps=PROFILES["desktop"].smoke_max_steps,
     smoke_timeout=PROFILES["desktop"].smoke_timeout,
     total_sectors=PROFILES["desktop"].total_sectors,
@@ -21527,7 +21550,7 @@ PROFILES["desktop-codex-live"] = Profile(
     ready_markers=PROFILES["desktop-codex"].ready_markers,
     stable_markers=PROFILES["desktop-codex"].stable_markers,
     linked=True,
-    cold_source_packed=PROFILES["desktop-codex"].cold_source_packed,
+    cold_source_codec=PROFILES["desktop-codex"].cold_source_codec,
     smoke_max_steps=PROFILES["desktop-codex"].smoke_max_steps,
     smoke_timeout=PROFILES["desktop-codex"].smoke_timeout,
     requires_tap=True,
@@ -25558,18 +25581,27 @@ def _cold_source_lzss_decode(payload: bytes, raw_bytes: int) -> bytes:
 def _pack_cold_source(
     source: bytes,
     maximum_raw_bytes: int = COLD_SOURCE_RAW_MAX_BYTES,
+    *,
+    codec: int = COLD_SOURCE_CODEC_LZSS,
 ) -> bytes:
-    """Wrap one linked source chunk in the checked AKLZSS01 container."""
+    """Wrap one linked source chunk in the checked AKSRC001 container."""
     if not 0 < len(source) <= maximum_raw_bytes:
         raise ValueError(
             "Cold source raw size must be between 1 and "
             f"{maximum_raw_bytes} bytes"
         )
-    payload = _cold_source_lzss_encode(source)
+    if isinstance(codec, bool):
+        raise ValueError(f"Unsupported cold source codec: {codec}")
+    if codec == COLD_SOURCE_CODEC_LZSS:
+        payload = _cold_source_lzss_encode(source)
+    elif codec == COLD_SOURCE_CODEC_STORED:
+        payload = source
+    else:
+        raise ValueError(f"Unsupported cold source codec: {codec}")
     header = COLD_SOURCE_HEADER.pack(
         COLD_SOURCE_MAGIC,
         COLD_SOURCE_VERSION,
-        COLD_SOURCE_FLAGS,
+        codec,
         COLD_SOURCE_HEADER_BYTES,
         len(source),
         len(payload),
@@ -25586,13 +25618,13 @@ def _unpack_cold_source(
     packed: bytes,
     maximum_raw_bytes: int = COLD_SOURCE_RAW_MAX_BYTES,
 ) -> bytes:
-    """Validate and expand one AKLZSS01 container on the host."""
+    """Validate and expand one AKSRC001 container on the host."""
     if len(packed) < COLD_SOURCE_HEADER_BYTES:
         raise ValueError("Truncated cold source header")
     (
         magic,
         version,
-        flags,
+        codec,
         header_bytes,
         raw_bytes,
         payload_bytes,
@@ -25603,30 +25635,39 @@ def _unpack_cold_source(
         raise ValueError("Invalid cold source magic")
     if version != COLD_SOURCE_VERSION:
         raise ValueError("Unsupported cold source version")
-    if flags != COLD_SOURCE_FLAGS or reserved != 0:
-        raise ValueError("Unsupported cold source flags")
+    if codec not in COLD_SOURCE_CODECS or reserved != 0:
+        raise ValueError("Unsupported cold source codec or reserved flags")
     if header_bytes != COLD_SOURCE_HEADER_BYTES:
         raise ValueError("Invalid cold source header size")
     if not 0 < raw_bytes <= maximum_raw_bytes:
         raise ValueError("Invalid cold source raw size")
     if payload_bytes <= 0 or payload_bytes != len(packed) - header_bytes:
         raise ValueError("Invalid cold source payload size")
-    source = _cold_source_lzss_decode(
-        packed[header_bytes:], raw_bytes
-    )
+    payload = packed[header_bytes:]
+    if codec == COLD_SOURCE_CODEC_LZSS:
+        maximum_payload_bytes = raw_bytes + (raw_bytes + 7) // 8
+        if payload_bytes > maximum_payload_bytes:
+            raise ValueError("Invalid compressed cold source payload size")
+        source = _cold_source_lzss_decode(payload, raw_bytes)
+    else:
+        if payload_bytes != raw_bytes:
+            raise ValueError("Stored cold source payload size mismatch")
+        source = payload
     if zlib.crc32(source) & 0xFFFFFFFF != raw_crc32:
         raise ValueError("Cold source CRC mismatch")
     return source
 
 
-def _packed_linked_chunks(
+def _container_linked_chunks(
     linked_chunks: dict[str, bytes],
     maximum_raw_bytes: int = COLD_SOURCE_RAW_MAX_BYTES,
+    *,
+    codec: int,
 ) -> dict[str, bytes]:
-    """Replace linked source files with short, root-level containers."""
+    """Replace linked source files with checked root-level containers."""
     return {
         COLD_SOURCE_CHUNK_TEMPLATE.format(index=index): _pack_cold_source(
-            source, maximum_raw_bytes
+            source, maximum_raw_bytes, codec=codec
         )
         for index, source in enumerate(linked_chunks.values())
     }
@@ -25637,11 +25678,11 @@ def _linked_autoexec(
     chunk_names: tuple[str, ...],
     modules: tuple[str, ...],
     *,
-    cold_source_packed: bool = False,
+    cold_source_codec: int | None = None,
 ) -> str:
     """Replace linked source REQUIREs while retaining injected test leaves."""
     load_lines = [f"REQUIRE {name}" for name in chunk_names]
-    if cold_source_packed:
+    if cold_source_codec is not None:
         load_lines = [
             f"REQUIRE {COLD_SOURCE_LOADER_PATH}",
             "VARIABLE _BOOT-COLD-SOURCE-STATUS",
@@ -25672,14 +25713,14 @@ def _linked_autoexec(
             continue
         lines.append(line)
     if not inserted:
-        if cold_source_packed:
+        if cold_source_codec is not None:
             raise RuntimeError(
                 "Cold source profile autoexec has no linked REQUIRE insertion "
                 "point"
             )
         lines[0:0] = load_lines
     linked_autoexec = _minify_forth("\n".join(lines) + "\n")
-    if cold_source_packed:
+    if cold_source_codec is not None:
         enter = linked_autoexec.find("ENTER-USERLAND")
         loader = linked_autoexec.find(f"REQUIRE {COLD_SOURCE_LOADER_PATH}")
         if enter < 0 or loader < enter:
@@ -25763,7 +25804,7 @@ def _validate_module_ids(
     sources.extend(
         (path, content.decode("utf-8"))
         for path, content in initial_files
-        if path.lower().endswith((".f", ".f.lz"))
+        if path.lower().endswith((".f", ".f.src"))
     )
     for source_path, text in sources:
         for match in PROVIDED_RE.finditer(text):
@@ -25913,17 +25954,20 @@ def build_image(
     cold_source_initial_files: dict[str, bytes] = {}
     cold_source_raw_bytes = 0
     cold_source_container_bytes = 0
-    if profile.cold_source_packed:
+    if profile.cold_source_codec is not None:
         if not profile.linked:
-            raise RuntimeError("Cold source packing requires a linked profile")
+            raise RuntimeError(
+                "Checked cold source requires a linked profile"
+            )
         if profile.link_chunk_bytes > COLD_SOURCE_RAW_MAX_BYTES:
             raise RuntimeError(
                 "Cold source chunk limit exceeds the audited guest decoder "
                 f"bound of {COLD_SOURCE_RAW_MAX_BYTES} bytes"
             )
-        deployed_chunks = _packed_linked_chunks(
+        deployed_chunks = _container_linked_chunks(
             linked_chunks,
             COLD_SOURCE_RAW_MAX_BYTES,
+            codec=profile.cold_source_codec,
         )
         cold_source_raw_bytes = sum(map(len, linked_chunks.values()))
         cold_source_container_bytes = sum(map(len, deployed_chunks.values()))
@@ -25941,14 +25985,14 @@ def build_image(
             (COLD_SOURCE_LOADER_PATH, loader_content),
         )
     if profile.cold_source_initial_files:
-        if not profile.cold_source_packed:
+        if profile.cold_source_codec is None:
             raise RuntimeError(
-                "Checked cold-source leaves require cold source packing"
+                "Checked cold-source leaves require a cold source codec"
             )
         for path, source in profile.cold_source_initial_files:
-            if not path.endswith(".f.lz"):
+            if not path.endswith(".f.src"):
                 raise RuntimeError(
-                    "Checked cold-source leaf names must end in .f.lz: "
+                    "Checked cold-source leaf names must end in .f.src: "
                     f"{path}"
                 )
             if path in cold_source_initial_files:
@@ -25958,6 +26002,7 @@ def build_image(
             cold_source_initial_files[path] = _pack_cold_source(
                 source,
                 COLD_SOURCE_RAW_MAX_BYTES,
+                codec=profile.cold_source_codec,
             )
         cold_source_raw_bytes += sum(
             len(source) for _, source in profile.cold_source_initial_files
@@ -25970,7 +26015,7 @@ def build_image(
             autoexec,
             tuple(deployed_chunks),
             akashic_modules,
-            cold_source_packed=profile.cold_source_packed,
+            cold_source_codec=profile.cold_source_codec,
         )
     if requires_networking:
         autoexec = _with_megapad_networking(autoexec)
@@ -26008,7 +26053,7 @@ def build_image(
             "Generated image paths collide with profile files: "
             + ", ".join(sorted(overlap))
         )
-    if profile.cold_source_packed:
+    if profile.cold_source_codec is not None:
         reserved_root_paths = set(SAMPLE_FILES) | {
             "autoexec.f",
             "kdos.f",
@@ -26090,7 +26135,8 @@ def build_image(
             content = source.read_bytes()
         disk_path = PurePosixPath(path)
         is_cold_source_chunk = (
-            profile.cold_source_packed and path in deployed_chunks
+            profile.cold_source_codec is not None
+            and path in deployed_chunks
         )
         if is_cold_source_chunk:
             file_type = FTYPE_DATA
@@ -26172,11 +26218,17 @@ def build_image(
             f"{profile.minimum_free_bytes:,} bytes of mutable MP64FS space; "
             f"only {info['free_sectors'] * 512:,} bytes remain"
         )
+    cold_source_summary = (
+        "checked cold-source "
+        f"{COLD_SOURCE_CODEC_NAMES[profile.cold_source_codec]}, "
+        if profile.cold_source_codec is not None
+        else ""
+    )
     print(
         f"Built {profile_name} image: {target}\n"
         f"  {len(modules)} modules"
         f"{f' linked in {len(linked_chunks)} chunks' if profile.linked else ''}, "
-        f"{'cold-source packed, ' if profile.cold_source_packed else ''}"
+        f"{cold_source_summary}"
         f"{'MegaPad networking, ' if requires_networking else ''}"
         f"{'MegaPad rich terminal, ' if requires_rich_terminal else ''}"
         f"{len(resources)} resources, "
@@ -26186,9 +26238,9 @@ def build_image(
             f"{cold_source_raw_bytes:,} raw bytes -> "
             f"{cold_source_container_bytes:,} container bytes "
             f"({cold_source_container_bytes / cold_source_raw_bytes:.1%}, "
-            f"{cold_source_raw_bytes - cold_source_container_bytes:,} "
-            "bytes saved)\n"
-            if profile.cold_source_packed
+            f"{cold_source_container_bytes - cold_source_raw_bytes:+,} "
+            "bytes versus raw)\n"
+            if profile.cold_source_codec is not None
             else ""
         )
         +
