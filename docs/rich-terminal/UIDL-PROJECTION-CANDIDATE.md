@@ -1,29 +1,35 @@
 # Hybrid UIDL projection candidates
 
-Status: normative target contract. The hybrid candidate is not implemented end
-to end. MegaPad has the terminal-side semantic-control protocol and renderer,
-but Akashic does not yet publish ordinary UIDL controls into that path. The
-first neutral supporting rung, `akashic/tui/uidl-menu-snapshot.f`, now captures
+Status: normative implemented pre-acceptance contract. Akashic now publishes
+ordinary UIDL menu controls and coalesced residual glyph spans through the
+selected Desk APT-1 composition. `akashic/tui/uidl-menu-snapshot.f` captures
 ordinary UIDL-TUI menu trees through one coherent resolved-tree visit into
 caller-bounded, pointer-free work storage and ascending-key canonical records.
 Local semantic visibility remains distinct from effective paintability, so a
 closed menu can retain truthful row state without proposing claims for rows it
-did not paint. The next checked-in rung,
-`akashic/tui/rich-terminal/uidl-control-planner.f`, now converts those records
-into one caller-bounded initial RTE CONTROL plan in parent-first wire order and
-a separate canonical, attachment-token-scoped source-key correlation bank. It
-does not call the facade or decide claims. The next pure rung,
-`akashic/tui/rich-terminal/uidl-claim-ledger.f`, applies an all-or-none
-admission result to the same frozen UMSN family and, in one canonical source
-pass, emits only nonempty PAINTABLE rectangles clipped to the source clip and
-surface. Its pointer-free claims retain the attachment, source key, generation,
-and paint z needed by later residual composition. The claim consumer,
-`akashic/tui/rich-terminal/residual-glyph-planner.f`, now unions concatenated
-claim families through caller-bounded row events and emits maximal equal-style
+did not paint. `akashic/tui/rich-terminal/uidl-control-planner.f` converts
+those records into one caller-bounded initial RTE CONTROL plan in parent-first
+wire order and a separate canonical, attachment-token-scoped source-key
+correlation bank. It does not call the facade or decide claims.
+`akashic/tui/rich-terminal/uidl-claim-ledger.f` applies an all-or-none admission
+result to the same frozen UMSN family and, in one canonical source pass, emits
+only nonempty PAINTABLE rectangles clipped to the source clip and surface. Its
+pointer-free claims retain the attachment, source key, generation, and paint z
+needed by later residual composition. The claim consumer,
+`akashic/tui/rich-terminal/residual-glyph-planner.f`, unions concatenated claim
+families through caller-bounded row events and emits maximal equal-style
 GLYPH_RUN plan items plus copied UTF-8 references from one row-major scan of
-only the unclaimed ordinary screen cells. These pure planning rungs still do
-not call the facade or attach to the projection lifecycle; those seams remain
-incomplete.
+only the unclaimed ordinary screen cells. The draw-keyed
+`uidl-hybrid-adapter.f` aggregates every visible attached UCTX into complete
+double-buffered directory and record/text banks. `hybrid-screen-producer.f`
+copies that aggregate, builds one neutral candidate, and uses full hidden
+replacement to publish every later completed ordinary draw atomically.
+
+The remaining proof is the physical canonical Desk/Pad/Daybook journey,
+including revision-bound activation of Pad's real File menu and resulting
+repeat frames. Menus are the currently implemented semantic family. Native
+window/pane semantics come next, followed by the existing UIDL tab semantics;
+other unclaimed content remains visible through residual glyph spans.
 
 This document defines the renderer-neutral boundary between the ordinary
 UIDL/TUI draw lifecycle and an optional rich output adapter. The boundary is
@@ -80,13 +86,13 @@ must not advance independently.
 
 ### 2.1 Semantic proposals
 
-`ED.SEMANTICS` remains the generic element capture registry. It must grow
-beyond LABEL to cover existing controls whose ordinary model already has real
-renderer-independent meaning, including menubars, menus, items, dialogs, text
-areas, focus, selection, and activation state. A corresponding generic mounted
-widget hook may expose the same kind of copied snapshot for widgets reached
-through `UTUI-WIDGET-SET`; it must not be specific to Pad, Daybook, Desk, or
-APT-1.
+`ED.SEMANTICS` remains the generic element capture registry. The current
+product path captures menubars, menus, items, separators, selection, open, and
+activation state through the ordinary UIDL menu snapshot. Future families such
+as windows, panes, tabs, dialogs, and text areas must extend the same generic
+renderer-independent boundary. A corresponding generic mounted-widget hook
+may expose the same kind of copied snapshot for widgets reached through
+`UTUI-WIDGET-SET`; it must not be specific to Pad, Daybook, Desk, or APT-1.
 
 Each semantic proposal contains at least:
 
@@ -245,25 +251,18 @@ from the candidate or terminal model.
 
 ## 6. Forward-refactor boundary
 
-The implementation sequence is intentionally forward-only:
+The selected composition now contains the generic menu snapshot, linear claim
+planner, residual span coalescer, visible-UCTX aggregate adapter, unified hybrid
+producer, and repeat hidden replacement. `desk-apt1.f` no longer composes the
+per-cell producer. The uncomposed `screen-plane.f` bootstrap and dormant
+LABEL-only driver/projector remain superseded implementation residue; remove
+them after the physical journey establishes that no lower-stack diagnostic
+still depends on them, rather than retaining parallel product paths.
 
-1. keep `screen-plane.f` temporarily as lower-stack publication evidence while
-   the hybrid interfaces are built;
-2. add the generic semantic control and mounted-widget snapshot seams needed by
-   the real Desk/Pad/Daybook journey;
-3. add a caller-bounded linear claim planner and residual span coalescer with
-   focused structural and off-screen tests;
-4. bind that one producer to the existing UIDL-TUI lifecycle and unified
-   publisher, reusing current owner, hidden replace/reveal, acknowledgement,
-   reset, and teardown machinery;
-5. switch `desk-apt1.f` from the per-cell producer to the hybrid producer; and
-6. delete superseded per-cell product machinery and the dormant LABEL-only
-   driver/projector rather than retaining parallel legacy paths.
-
-This sequence does not revert the working horizontal transport and physical
-sink. It changes the candidate source at a coherent composition boundary. The
-current GLYPH_RUN encoder remains useful for residual spans, style conversion,
-and byte-oracle coverage, but its one-object-per-cell topology is not reused.
+This forward refactor did not revert the working horizontal transport or
+physical sink. The current GLYPH_RUN encoder remains useful for residual spans,
+style conversion, and byte-oracle coverage, but its one-object-per-cell
+topology is not reused.
 
 The blocking proof remains the ordinary Desk composition with canonical Pad
 and Daybook launched through their real descriptors and UCTX lifecycle. The

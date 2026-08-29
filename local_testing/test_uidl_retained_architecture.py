@@ -1168,10 +1168,9 @@ def test_retained_contract_requires_internal_uidl_projection_now() -> None:
     assert "Desk, Pad, and Daybook acceptance checkpoint" in contract
     assert "normal TUI draw lifecycle" in contract
     assert "CELL does not qualify the rich path" in contract
-    assert (
-        "semantic vertical described here is not implemented yet"
-        in normalized_contract
-    )
+    assert "menu-semantic hybrid publication" in normalized_contract
+    assert "aggregation of every visible attached UCTX" in normalized_contract
+    assert "Physical Desk/Pad/Daybook acceptance" in normalized_contract
     assert (
         "A full-screen one-object-per-cell frame is specifically forbidden "
         "as product proof"
@@ -1193,10 +1192,14 @@ def test_retained_contract_requires_internal_uidl_projection_now() -> None:
         "product storage must not be derived from `rows * columns`"
         in normalized_candidate
     )
-    assert "This is `O(new-items + old-items)`" in normalized_candidate
-    assert "only allowed repeated full traversal" in normalized_candidate
     assert (
-        "switch `desk-apt1.f` from the per-cell producer"
+        "This is `O(new-items + old-items + source-high-water)`"
+        in normalized_candidate
+    )
+    assert "only allowed repeated full traversal" in normalized_candidate
+    assert "visible-UCTX aggregate adapter" in normalized_candidate
+    assert (
+        "`desk-apt1.f` no longer composes the per-cell producer"
         in normalized_candidate
     )
     assert "First visible root-LABEL checkpoint" not in contract

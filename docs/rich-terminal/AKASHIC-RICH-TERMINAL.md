@@ -1,8 +1,11 @@
 # Akashic rich-terminal engine and UIDL output contract
 
-Status: normative pre-vertical contract and course correction for the Phase 3
-Akashic rich-terminal mode and its UIDL output integration. The semantic
-vertical described here is not implemented yet.
+Status: normative implementation and pre-acceptance contract for the Phase 3
+Akashic rich-terminal mode and its UIDL output integration. The selected Desk
+composition now implements menu-semantic hybrid publication, repeat full-frame
+replacement, and draw-keyed aggregation of every visible attached UCTX.
+Physical Desk/Pad/Daybook acceptance and additional native semantic families
+remain open.
 
 This document defines the Akashic architecture, storage, ownership, projection,
 and lifecycle contract for optional rich-terminal output. It does not define
@@ -18,14 +21,24 @@ ANSI fallback.
 
 ## 0. Current implementation status and course correction
 
-The checked-in APT-1 Desk composition currently reaches the physical retained
-path through `tui/rich-terminal/screen-plane.f`. That temporary bootstrap
-converts the final CELL back buffer to one `GLYPH_RUN` object per cell. It is
-valuable evidence for owner admission, hidden replacement, unified CELL/rich
-publication, physical acknowledgement, teardown, and failure capture. It is
-not the product projection architecture and it cannot qualify the
-Desk/Pad/Daybook vertical. A full-screen one-object-per-cell frame is
-specifically forbidden as product proof.
+The checked-in APT-1 Desk composition now reaches the retained path through
+`tui/rich-terminal/uidl-hybrid-adapter.f` and
+`tui/rich-terminal/hybrid-screen-producer.f`. The adapter captures a complete,
+draw-keyed directory of menu semantics from every visible attached UCTX. The
+producer combines those accepted controls with maximal residual glyph spans
+from the same completed ordinary draw, then recaptures and atomically replaces
+the hidden retained target after later completed draws. The earlier
+`screen-plane.f` one-object-per-cell bootstrap is no longer composed. A
+full-screen one-object-per-cell frame is specifically forbidden as product
+proof.
+
+This implementation is not acceptance evidence by itself. The canonical
+Desk/Pad/Daybook journey must still show the exact hybrid frame in the physical
+viewer, activate Pad's real File menu through revision-bound normal input,
+publish the resulting draw, edit Pad, interact with Daybook, and acknowledge
+each exact displayed revision. Custom editor, calendar, and Desk areas remain
+truthfully visible through residual spans until their own generic semantic
+families land.
 
 The intended product producer is one renderer-neutral **hybrid projection**
 derived from the ordinary UIDL and draw lifecycle:
@@ -1303,12 +1316,11 @@ against a physically displayed revision as required by RETAINED-1.
 
 Any explicit rich product composition may construct the generic engine and
 bind an appropriate consumer adapter. The Desktop APT-1 profile does so from
-`tui/desk-apt1.f`. Today that leaf binds the temporary final-screen producer;
-the required next composition binds the hybrid producer through UIDL-TUI's
-private lifecycle seam. Both are product composition, not engine ownership by
-Desk. A standalone shell or another non-UIDL Akashic consumer may compose the
-same engine without loading Desk or UIDL-TUI. The baseline `desktop` profile
-does not load the APT-1 engine or construct rich-terminal state.
+`tui/desk-apt1.f`, binding the hybrid producer through UIDL-TUI's private
+lifecycle seam. This is product composition, not engine ownership by Desk. A
+standalone shell or another non-UIDL Akashic consumer may compose the same
+engine without loading Desk or UIDL-TUI. The baseline `desktop` profile does
+not load the APT-1 engine or construct rich-terminal state.
 
 The deployment boundary is strict. MegaPad owns the optional boot-loaded
 `rich-terminal.f`; a rich product profile loads it before any Akashic
@@ -1317,19 +1329,17 @@ modules consume only the already-loaded public PT ABI. Baseline profiles load
 neither the optional PT module nor the Akashic rich modules, so their source
 closure, startup, storage, and output behavior remain unaffected.
 
-The Desktop leaf constructs its current concrete layers in dependency order:
-PT session, neutral `APTSCB`, caller-bounded `RTAPT`, immutable `RTE` facade,
-unified `RTAPTSCB` publisher attachment, the temporary `RTSCREEN` producer,
-and finally the `APTAS` shell owner. Its current per-cell operation/copy/plan
-banks derive from the maximum bootstrap surface. That sizing is an exact bound
-for the checked-in bootstrap only; it is not the capacity model of the hybrid
-product. The forward composition supplies caller-owned semantic, identity,
-claim-scratch, residual-span, and frozen-attempt spans based on its actual
-candidate contract, installs one hybrid `STEP`/`PREPARE` producer in the same
-publisher seam, and attaches it through the existing private UIDL-TUI
-lifecycle. Setup and release continue to publish explicit phases so a
-constructor or destructor refusal retains the smallest exact retry authority
-rather than clearing an uncertain terminal-output lifecycle.
+The Desktop leaf constructs its concrete layers in dependency order: PT
+session, neutral `APTSCB`, caller-bounded `RTAPT`, immutable `RTE` facade,
+unified `RTAPTSCB` publisher attachment, the draw-keyed `RUHA` aggregate
+adapter, the `RTHP` hybrid producer, and finally the `APTAS` shell owner. Desk
+sizes aggregate directory, semantic record/text, claim, residual-span, and
+frozen-attempt storage from its installed-document and screen bounds. The
+producer installs one hybrid `STEP`/`PREPARE` contribution in the existing
+publisher seam; it does not create another session or application scene. Setup
+and release continue to publish explicit phases so a constructor or destructor
+refusal retains the smallest exact retry authority rather than clearing an
+uncertain terminal-output lifecycle.
 
 The name `desk-apt1.f` identifies that opt-in product composition, not a second
 Desk implementation or a rich Desk behavior. Both baseline and APT-1 products
