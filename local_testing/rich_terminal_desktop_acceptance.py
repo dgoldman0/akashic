@@ -98,6 +98,8 @@ SESSION_REQUEST_TIMEOUT_SECONDS = 15.0
 CELL_FALLBACK_MODE = "CELL FALLBACK: waiting for retained frame"
 RETAINED_PENDING_MODE = "RICH RETAINED: pending physical acknowledgment"
 RETAINED_ACKNOWLEDGED_MODE = "RICH RETAINED: physically acknowledged"
+PERFORMANCE_TRACE_SCHEMA = "akashic-rich-terminal-performance-v1"
+PERFORMANCE_TRACE_FILENAME = "performance-trace.json"
 
 _GUEST_DIAGNOSTIC_WORDS = (
     "_A1D-PHASE",
@@ -259,6 +261,128 @@ _GUEST_LIVE_RECORD_POINTERS = {
 
 class PhysicalDesktopAcceptanceError(RuntimeError):
     """The physical Desk/Pad/Daybook contract was not completed."""
+
+
+def _performance_counter(value) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _performance_counter_map(value) -> dict[str, int] | None:
+    if not isinstance(value, dict):
+        return None
+    result = {}
+    for key, value_count in sorted(value.items(), key=lambda item: str(item[0])):
+        count = _performance_counter(value_count)
+        if count is not None:
+            result[str(key)] = count
+    return result
+
+
+def _performance_status_snapshot(status) -> dict[str, object] | None:
+    """Copy only cumulative machine/transport counters used for timing."""
+
+    if not isinstance(status, dict):
+        return None
+    rich = status.get("rich_terminal")
+    if not isinstance(rich, dict):
+        rich = {}
+    return {
+        "generation": _performance_counter(status.get("generation")),
+        "steps": _performance_counter(status.get("steps")),
+        "batches": _performance_counter(status.get("batches")),
+        "revision": _performance_counter(status.get("revision")),
+        "rich_terminal": {
+            "machine_publications": _performance_counter(
+                rich.get("machine_publications")
+            ),
+            "machine_publication_bytes": _performance_counter(
+                rich.get("machine_publication_bytes")
+            ),
+            "frames": _performance_counter(rich.get("frames")),
+            "frame_bytes": _performance_counter(rich.get("frame_bytes")),
+            "frames_by_type": _performance_counter_map(
+                rich.get("frames_by_type")
+            ),
+            "frame_bytes_by_type": _performance_counter_map(
+                rich.get("frame_bytes_by_type")
+            ),
+            "decoder_buffered_bytes": _performance_counter(
+                rich.get("decoder_buffered_bytes")
+            ),
+        },
+    }
+
+
+class _PerformanceTrace:
+    """Small, non-normative monotonic trace for one physical journey."""
+
+    def __init__(
+        self,
+        artifact_root: Path,
+        *,
+        clock_ns: Callable[[], int] = time.monotonic_ns,
+    ):
+        self.path = Path(artifact_root).resolve() / PERFORMANCE_TRACE_FILENAME
+        self._clock_ns = clock_ns
+        self.origin_ns = clock_ns()
+        self.events: list[dict[str, object]] = []
+
+    def now(self) -> int:
+        return self._clock_ns()
+
+    def mark(
+        self,
+        event: str,
+        *,
+        status=None,
+        started_ns: int | None = None,
+        **detail,
+    ) -> None:
+        try:
+            now_ns = self.now()
+            item: dict[str, object] = {
+                "sequence": len(self.events),
+                "event": event,
+                "elapsed_ns": max(now_ns - self.origin_ns, 0),
+            }
+            if started_ns is not None:
+                item["duration_ns"] = max(now_ns - started_ns, 0)
+            counters = _performance_status_snapshot(status)
+            if counters is not None:
+                item["counters"] = counters
+            item.update(detail)
+            self.events.append(item)
+        except Exception:
+            pass
+
+    def write(self, outcome: str) -> Path | None:
+        """Atomically write diagnostics without becoming an acceptance gate."""
+
+        temporary = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
+        try:
+            payload = {
+                "schema": PERFORMANCE_TRACE_SCHEMA,
+                "normative": False,
+                "clock": "time.monotonic_ns",
+                "origin_ns": self.origin_ns,
+                "outcome": outcome,
+                "events": self.events,
+            }
+            temporary.write_text(
+                json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(self.path)
+            return self.path
+        except Exception as exc:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            print(f"Performance trace unavailable: {exc}")
+            return None
 
 
 @dataclass(frozen=True)
@@ -1877,10 +2001,24 @@ def run_physical_desktop_acceptance(
         raise ValueError("hold_seconds must not be negative")
     artifact_root = Path(artifact_root).resolve()
     artifact_root.mkdir(parents=True, exist_ok=True)
+    trace = _PerformanceTrace(artifact_root)
+    trace.mark(
+        "acceptance_started",
+        cols=cols,
+        rows=rows,
+        timeout_seconds=timeout,
+        action_delay_seconds=action_delay,
+        hold_seconds=hold_seconds,
+    )
+    trace_outcome = "failure"
+    last_status = None
     deadline = time.monotonic() + timeout
-    client = _connect(socket_path, deadline, expected_server_pid)
+    client: SessionClient | None = None
     pygame_initialized = False
+    connect_started_ns = trace.now()
     try:
+        client = _connect(socket_path, deadline, expected_server_pid)
+        trace.mark("session_connected", started_ns=connect_started_ns)
         try:
             import pygame
         except ImportError as exc:
@@ -1893,8 +2031,15 @@ def run_physical_desktop_acceptance(
                 "physical acceptance could not claim the display lease"
             )
         status = client.request("status", detailed=False)
+        last_status = status
         generation = int(status["generation"])
         display_required = bool(status["rich_terminal"]["display_required"])
+        trace.mark(
+            "initial_status",
+            status=status,
+            generation=generation,
+            display_required=display_required,
+        )
         terminal = VirtualTerminal(cols=cols, rows=rows)
         revision = -1
         display_state = _RetainedDisplayState()
@@ -2016,6 +2161,7 @@ def run_physical_desktop_acceptance(
                 event_pump=pump_events,
                 closing_is_error=True,
             )
+            input_started_ns = trace.now()
             input_status, evidence = _request_acceptance_input(
                 client,
                 method,
@@ -2025,25 +2171,41 @@ def run_physical_desktop_acceptance(
                 display_state=display_state,
                 display_ack=keyboard.display_ack,
             )
+            input_ended_ns = trace.now()
             if evidence is not None:
                 inputs.append(evidence)
+            trace.mark(
+                "input_result",
+                status=last_status,
+                method=method,
+                value_utf8_bytes=len(value.encode("utf-8")),
+                authorizing_offer_id=offer.offer_id,
+                generation=input_generation,
+                journey_stage=journey.stage,
+                result=input_status,
+                rpc_duration_ns=max(input_ended_ns - input_started_ns, 0),
+                counter_sample="latest_status_before_input",
+            )
             return input_status
 
         while time.monotonic() < deadline:
             pump_events(True)
 
             status = client.request("status", detailed=False)
+            last_status = status
             revision, _ = _accept_status_update(
                 status,
                 keyboard=keyboard,
                 display_state=display_state,
                 revision=revision,
             )
+            screen_started_ns = trace.now()
             update = client.request(
                 "screen",
                 since=revision,
                 since_offer=display_state.since_offer,
             )
+            screen_ended_ns = trace.now()
             revision, resized = _accept_screen_update(
                 update,
                 display_holder=True,
@@ -2104,6 +2266,30 @@ def run_physical_desktop_acceptance(
                 if display_state.pending_generation is None
                 else display_state.pending_generation
             )
+            new_offer = (
+                frame_offer is not None
+                and frame_offer.offer_id != last_seen_offer_id
+            )
+            if new_offer:
+                assert frame_offer is not None
+                offers_seen += 1
+                last_seen_offer_id = frame_offer.offer_id
+                trace.mark(
+                    "offer_observed",
+                    status=status,
+                    offer_id=frame_offer.offer_id,
+                    generation=frame_generation,
+                    scope=display_scope_to_wire(frame_offer.scope),
+                    journey_stage=journey.stage,
+                    screen_rpc_duration_ns=max(
+                        screen_ended_ns - screen_started_ns,
+                        0,
+                    ),
+                    counter_sample="status_before_screen",
+                )
+            projection_started_ns = (
+                None if frame_offer is None else trace.now()
+            )
             frame_projection = (
                 None
                 if frame_offer is None
@@ -2111,6 +2297,13 @@ def run_physical_desktop_acceptance(
             )
             if frame_projection is not None:
                 _require_canonical_desktop_geometry(frame_projection)
+                trace.mark(
+                    "projection_complete",
+                    started_ns=projection_started_ns,
+                    offer_id=frame_offer.offer_id,
+                    draw_count=frame_projection.draw_count,
+                    journey_stage=journey.stage,
+                )
             if frame_offer is None and display_state.retained_plane is None:
                 announce(
                     AcceptanceDiagnosticState(
@@ -2143,9 +2336,6 @@ def run_physical_desktop_acceptance(
                     )
                 )
             else:
-                if frame_offer.offer_id != last_seen_offer_id:
-                    offers_seen += 1
-                    last_seen_offer_id = frame_offer.offer_id
                 assert frame_projection is not None
                 latest_retained_text = frame_projection.text
                 latest_retained_draw_count = frame_projection.draw_count
@@ -2168,6 +2358,7 @@ def run_physical_desktop_acceptance(
                     )
                 )
             composed_surface = None
+            compose_duration_ns = None
 
             def draw_host_chrome() -> tuple[int, int, int, int]:
                 terminal_height = terminal.rows * cell_height
@@ -2187,8 +2378,9 @@ def run_physical_desktop_acceptance(
                 return chrome_rect
 
             def draw_frame() -> None:
-                nonlocal composed_surface
+                nonlocal composed_surface, compose_duration_ns
                 window.fill((0, 0, 0))
+                compose_started_ns = trace.now()
                 frame_result = compose_terminal_frame_result(
                     pygame,
                     terminal,
@@ -2202,6 +2394,7 @@ def run_physical_desktop_acceptance(
                     hovered=semantic_pointer.hovered,
                     pressed=semantic_pointer.pressed,
                 )
+                compose_duration_ns = max(trace.now() - compose_started_ns, 0)
                 composed_surface = frame_result.surface
                 window.blit(composed_surface, (0, 0))
                 # Host diagnostics occupy separate window rows.  The composed
@@ -2213,6 +2406,9 @@ def run_physical_desktop_acceptance(
                         frame_result.hit_targets,
                     )
 
+            presentation_started_ns = (
+                None if frame_offer is None else trace.now()
+            )
             presentation = draw_flip_and_present(
                 pygame,
                 client,
@@ -2236,6 +2432,13 @@ def run_physical_desktop_acceptance(
                 continue
             accepted_revision = display_state.finish_presentation(presentation)
             if accepted_revision is None:
+                trace.mark(
+                    "presentation_rejected",
+                    started_ns=presentation_started_ns,
+                    offer_id=frame_offer.offer_id,
+                    compose_duration_ns=compose_duration_ns,
+                    journey_stage=journey.stage,
+                )
                 revision = -1
                 keyboard.clear_display_context(waiting=True)
                 time.sleep(0.01)
@@ -2244,6 +2447,14 @@ def run_physical_desktop_acceptance(
             keyboard.acknowledge_display_offer(
                 frame_offer.offer_id,
                 frame_offer.scope,
+            )
+            trace.mark(
+                "offer_acknowledged",
+                started_ns=presentation_started_ns,
+                offer_id=frame_offer.offer_id,
+                generation=frame_generation,
+                compose_duration_ns=compose_duration_ns,
+                journey_stage=journey.stage,
             )
             if frame_projection is None:
                 raise PhysicalDesktopAcceptanceError(
@@ -2285,27 +2496,43 @@ def run_physical_desktop_acceptance(
                     raise PhysicalDesktopAcceptanceError(
                         "physical compositor produced no frame surface"
                     )
+                artifact_started_ns = trace.now()
+                recorded_frame = _record_frame(
+                    pygame,
+                    font,
+                    cell_width,
+                    cell_height,
+                    artifact_root,
+                    progress.milestone,
+                    frame_offer,
+                    frame_generation,
+                    frame_projection,
+                    composed_surface,
+                )
                 _store_milestone_frame(
                     frames,
-                    _record_frame(
-                        pygame,
-                        font,
-                        cell_width,
-                        cell_height,
-                        artifact_root,
-                        progress.milestone,
-                        frame_offer,
-                        frame_generation,
-                        frame_projection,
-                        composed_surface,
-                    ),
+                    recorded_frame,
+                )
+                trace.mark(
+                    "artifact_recorded",
+                    started_ns=artifact_started_ns,
+                    offer_id=frame_offer.offer_id,
+                    milestone=progress.milestone,
+                    journey_stage=journey.stage,
                 )
             if progress.complete:
+                manifest_started_ns = trace.now()
                 manifest = write_acceptance_manifest(
                     artifact_root,
                     driver,
                     tuple(frames),
                     tuple(inputs),
+                )
+                trace.mark(
+                    "manifest_recorded",
+                    started_ns=manifest_started_ns,
+                    offer_id=frame_offer.offer_id,
+                    journey_stage=journey.stage,
                 )
                 pygame.display.set_caption(
                     "Akashic rich-terminal acceptance — PASS "
@@ -2316,6 +2543,7 @@ def run_physical_desktop_acceptance(
                     event_pump=pump_events,
                     closing_is_error=False,
                 )
+                trace_outcome = "pass"
                 return PhysicalDesktopAcceptanceEvidence(
                     manifest,
                     driver,
@@ -2323,6 +2551,7 @@ def run_physical_desktop_acceptance(
                     tuple(inputs),
                 )
             time.sleep(0.01)
+        trace_outcome = "timeout"
         timeout_detail = _write_timeout_diagnostics(
             artifact_root,
             cell_text=latest_cell_text,
@@ -2346,11 +2575,21 @@ def run_physical_desktop_acceptance(
             f"{timeout_detail}\n  {state_detail}"
         )
     except PhysicalDesktopAcceptanceError:
+        trace.mark("acceptance_failed", status=last_status, outcome=trace_outcome)
         raise
     except (ConnectionError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        trace.mark(
+            "acceptance_failed",
+            status=last_status,
+            outcome=trace_outcome,
+            error_type=type(exc).__name__,
+        )
         raise PhysicalDesktopAcceptanceError(str(exc)) from exc
     finally:
-        client.close()
+        trace.mark("acceptance_finished", status=last_status, outcome=trace_outcome)
+        trace.write(trace_outcome)
+        if client is not None:
+            client.close()
         if pygame_initialized:
             try:
                 pygame.quit()

@@ -61,6 +61,92 @@ UINT32_MAX = 0xFFFFFFFF
 UINT64_MAX = 0xFFFFFFFFFFFFFFFF
 
 
+def _performance_status_fixture() -> dict:
+    return {
+        "generation": 3,
+        "steps": 12_345,
+        "batches": 17,
+        "revision": 9,
+        "rich_terminal": {
+            "machine_publications": 7,
+            "machine_publication_bytes": 700,
+            "frames": 5,
+            "frame_bytes": 500,
+            "frames_by_type": {"0x0101": 4, "0x0110": 1},
+            "frame_bytes_by_type": {"0x0101": 444, "0x0110": 56},
+            "decoder_buffered_bytes": 0,
+        },
+    }
+
+
+def test_performance_status_snapshot_copies_exact_transport_counters() -> None:
+    status = _performance_status_fixture()
+
+    snapshot = acceptance_runner._performance_status_snapshot(status)
+
+    assert snapshot == status
+    status["rich_terminal"]["frames_by_type"]["0x0101"] = 99
+    status["rich_terminal"]["frame_bytes_by_type"] = {}
+    assert snapshot["rich_terminal"]["frames_by_type"]["0x0101"] == 4
+    assert snapshot["rich_terminal"]["frame_bytes_by_type"] == {
+        "0x0101": 444,
+        "0x0110": 56,
+    }
+
+    missing_optional = _performance_status_fixture()
+    del missing_optional["rich_terminal"]["frame_bytes_by_type"]
+    assert acceptance_runner._performance_status_snapshot(missing_optional)[
+        "rich_terminal"
+    ]["frame_bytes_by_type"] is None
+
+
+def test_performance_trace_writes_ordered_relative_events(tmp_path) -> None:
+    now = [10_000]
+    trace = acceptance_runner._PerformanceTrace(
+        tmp_path,
+        clock_ns=lambda: now[0],
+    )
+    now[0] = 10_025
+    trace.mark("offer_observed", status=_performance_status_fixture(), offer_id=4)
+    started_ns = trace.now()
+    now[0] = 10_065
+    trace.mark(
+        "offer_acknowledged",
+        started_ns=started_ns,
+        offer_id=4,
+        compose_duration_ns=11,
+    )
+
+    path = trace.write("pass")
+
+    assert path == tmp_path / "performance-trace.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["schema"] == "akashic-rich-terminal-performance-v1"
+    assert payload["normative"] is False
+    assert payload["clock"] == "time.monotonic_ns"
+    assert payload["origin_ns"] == 10_000
+    assert payload["outcome"] == "pass"
+    assert [event["sequence"] for event in payload["events"]] == [0, 1]
+    assert [event["elapsed_ns"] for event in payload["events"]] == [25, 65]
+    assert payload["events"][0]["counters"]["steps"] == 12_345
+    assert payload["events"][1]["duration_ns"] == 40
+    assert payload["events"][1]["compose_duration_ns"] == 11
+    assert path.read_bytes().endswith(b"\n")
+
+
+def test_performance_trace_write_failure_is_non_normative(tmp_path) -> None:
+    missing_root = tmp_path / "missing"
+    trace = acceptance_runner._PerformanceTrace(
+        missing_root,
+        clock_ns=lambda: 1,
+    )
+    trace.mark("acceptance_started")
+
+    assert trace.write("failure") is None
+    missing_root.mkdir()
+    assert trace.write("failure") == missing_root / "performance-trace.json"
+
+
 def test_hybrid_producer_diagnostic_schema_matches_the_forth_layout() -> None:
     source = (
         Path(acceptance_runner.__file__).resolve().parents[1]
