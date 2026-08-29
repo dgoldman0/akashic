@@ -2943,8 +2943,12 @@ CREATE _UDM-EV 3 CELLS ALLOT
         DUP _UTUI-MENU-OPEN @ = IF
             DROP _UTUI-MENU-CLOSE
         ELSE
-            DUP UTUI-FOCUS!
-            _UTUI-MENU-OPEN!
+            \ Preserve the focus that owned ordinary input before a pointer
+            \ opened the menu.  _UTUI-MENU-OPEN! records that focus for the
+            \ close path; focusing the menu first would make Escape restore
+            \ the menu instead of the editor or widget that invoked it.
+            DUP _UTUI-MENU-OPEN!
+            UTUI-FOCUS!
             _UTUI-MENU-FIRST-ITEM ?DUP IF UTUI-FOCUS! THEN
         THEN
         -1 EXIT
