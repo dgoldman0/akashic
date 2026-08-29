@@ -7,7 +7,7 @@
 \  through a transactional backend.  ANSI is the constructed default;
 \  outer composition may bind another transactional backend explicitly.
 \
-\  Screen Descriptor (12 cells = 96 bytes):
+\  Screen Descriptor (13 cells = 104 bytes):
 \    +0   width         Columns
 \    +8   height        Rows
 \    +16  front         Address of front buffer (w×h cells)
@@ -20,6 +20,7 @@
 \    +72  backend       Borrowed transactional backend descriptor
 \    +80  flush-request Retained-only work needs a neutral transaction
 \    +88  draw-generation Last completed ordinary top-level draw
+\    +96  front-generation Draw whose CELL plane is committed in front
 \
 \  Each cell is 8 bytes (one CELL-MAKE value), so a buffer for
 \  80×24 is 15,360 bytes × 2 = 30,720 bytes (~30 KiB).
@@ -54,8 +55,9 @@ REQUIRE ../utils/memory-span.f
 72 CONSTANT _SCR-O-BACKEND
 80 CONSTANT _SCR-O-FLUSH-REQUEST
 88 CONSTANT _SCR-O-DRAW-GENERATION
+96 CONSTANT _SCR-O-FRONT-GENERATION
 
-96 CONSTANT _SCR-DESC-SIZE
+104 CONSTANT _SCR-DESC-SIZE
 
 \ =====================================================================
 \ 2. Transactional backend ABI
@@ -154,6 +156,7 @@ VARIABLE _SCR-SD-FRONT
 VARIABLE _SCR-SD-BACK
 VARIABLE _SCR-SD-BACKEND
 VARIABLE _SCR-BACK-PLANE-XT
+VARIABLE _SCR-FRAME-PLANES-XT
 
 \ =====================================================================
 \ 4. Internal helpers
@@ -259,6 +262,7 @@ VARIABLE _SCR-SIZE-H
     0           _SCR-TMP3 @ _SCR-O-FORCE  + !
     0           _SCR-TMP3 @ _SCR-O-FLUSH-REQUEST + !
     0           _SCR-TMP3 @ _SCR-O-DRAW-GENERATION + !
+    0           _SCR-TMP3 @ _SCR-O-FRONT-GENERATION + !
     _SCR-ANSI-BACKEND
                 _SCR-TMP3 @ _SCR-O-BACKEND + !
 
@@ -315,6 +319,29 @@ VARIABLE _SCR-SIZE-H
     OVER _SCR-O-W + @
     ROT _SCR-O-H + @
     _SCR-BACK-PLANE-XT @ EXECUTE ;
+
+\ SCR-WITH-FRAME-PLANES ( xt -- ... )
+\   Execute XT with one read-only view of the complete current frame state:
+\     xt: ( front-a back-a cols rows front-draw draw force? -- ... )
+\   FRONT-DRAW identifies the last draw accepted into FRONT.  DRAW identifies
+\   the latest completed ordinary top-level draw represented by BACK.  FORCE?
+\   says the next accepted flush must replace the complete CELL plane.
+\
+\   Both addresses are valid only for the dynamic extent of XT and must not
+\   be retained or mutated.  Guarded builds hold the screen guard across the
+\   callback, so a selected renderer can derive its own caller-bounded damage
+\   without racing drawing, resize, or screen replacement.
+: SCR-WITH-FRAME-PLANES  ( xt -- ... )
+    _SCR-FRAME-PLANES-XT !
+    _SCR-CUR @ >R
+    R@ _SCR-O-FRONT + @
+    R@ _SCR-O-BACK + @
+    R@ _SCR-O-W + @
+    R@ _SCR-O-H + @
+    R@ _SCR-O-FRONT-GENERATION + @
+    R@ _SCR-O-DRAW-GENERATION + @
+    R> _SCR-O-FORCE + @ IF -1 ELSE 0 THEN
+    _SCR-FRAME-PLANES-XT @ EXECUTE ;
 
 \ =====================================================================
 \ 8. Cell read/write
@@ -812,6 +839,11 @@ VARIABLE _SCR-FLUSH-STATUS
     THEN
     0 _SCR-CUR @ _SCR-O-DIRTY + !
     0 _SCR-CUR @ _SCR-O-FORCE + !
+    \ An accepted NONE is legal only when FRONT already equals BACK.  It can
+    \ therefore watermark that identical plane with the newer completed draw
+    \ just as truthfully as DELTA or SNAPSHOT.  Refusals never reach here.
+    _SCR-CUR @ _SCR-O-DRAW-GENERATION + @
+        _SCR-CUR @ _SCR-O-FRONT-GENERATION + !
     \ This is the sole runtime retirement point for a neutral request.
     0 _SCR-CUR @ _SCR-O-FLUSH-REQUEST + ! ;
 
@@ -915,6 +947,10 @@ VARIABLE _SCR-COPY-H
     _SCR-TMP2 @      _SCR-CUR @ _SCR-O-H     + !
     _SCR-NEW-FRONT @ _SCR-CUR @ _SCR-O-FRONT + !
     _SCR-NEW-BACK  @ _SCR-CUR @ _SCR-O-BACK  + !
+    \ The replacement FRONT is blank while BACK contains the copied logical
+    \ screen.  No completed draw is a legal incremental baseline until the
+    \ forced snapshot below is accepted.
+    0 _SCR-CUR @ _SCR-O-FRONT-GENERATION + !
 
     \ Keep the logical cursor valid for the replacement geometry.
     _SCR-CUR @ _SCR-O-CROW + DUP @ 0 MAX SCR-H 1- MIN SWAP !
@@ -942,6 +978,7 @@ GUARD _scr-guard
 ' SCR-DRAW-COMPLETE   CONSTANT _scr-draw-complete-xt
 ' SCR-DRAW-GENERATION@ CONSTANT _scr-draw-generation-get-xt
 ' SCR-WITH-BACK-PLANE CONSTANT _scr-with-back-plane-xt
+' SCR-WITH-FRAME-PLANES CONSTANT _scr-with-frame-planes-xt
 ' SCR-SET             CONSTANT _scr-set-xt
 ' SCR-GET             CONSTANT _scr-get-xt
 ' SCR-FILL            CONSTANT _scr-fill-xt
@@ -970,6 +1007,8 @@ GUARD _scr-guard
     _scr-draw-generation-get-xt _scr-guard WITH-GUARD ;
 : SCR-WITH-BACK-PLANE
     _scr-with-back-plane-xt _scr-guard WITH-GUARD ;
+: SCR-WITH-FRAME-PLANES
+    _scr-with-frame-planes-xt _scr-guard WITH-GUARD ;
 : SCR-SET             _scr-set-xt    _scr-guard WITH-GUARD ;
 : SCR-GET             _scr-get-xt    _scr-guard WITH-GUARD ;
 : SCR-FILL            _scr-fill-xt   _scr-guard WITH-GUARD ;

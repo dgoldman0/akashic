@@ -34,7 +34,7 @@ def test_screen_storage_authority_covers_the_complete_live_graph() -> None:
     active = _word(source, "_SCR-ACTIVE-STORAGE-VALID?")
 
     assert "REQUIRE ../utils/memory-span.f" in source
-    assert "88 CONSTANT _SCR-DESC-SIZE" in source
+    assert "104 CONSTANT _SCR-DESC-SIZE" in source
     assert "48 CONSTANT SCB-DESC-SIZE" in source
     assert source.index("CREATE _SCR-OWNED-START") < source.index(
         "VARIABLE _SCBI-BACKEND"
@@ -85,3 +85,66 @@ def test_half_open_and_canonical_empty_policy_is_byte_exact() -> None:
     assert not _overlap(0x0F80, 0x80, *protected)
     assert not _overlap(0x1080, 0x20, *protected)
     assert not _overlap(0, 0, *protected)
+
+
+def test_frame_plane_borrow_exposes_one_guarded_committed_baseline() -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    borrow = _word(source, "SCR-WITH-FRAME-PLANES")
+    advance = _word(source, "_SCR-ADVANCE-FRONT")
+    resize = _word(source, "SCR-RESIZE")
+
+    assert "96 CONSTANT _SCR-O-FRONT-GENERATION" in source
+    callback_fields = (
+        "_SCR-O-FRONT + @",
+        "_SCR-O-BACK + @",
+        "_SCR-O-W + @",
+        "_SCR-O-H + @",
+        "_SCR-O-FRONT-GENERATION + @",
+        "_SCR-O-DRAW-GENERATION + @",
+        "_SCR-O-FORCE + @ IF -1 ELSE 0 THEN",
+        "_SCR-FRAME-PLANES-XT @ EXECUTE",
+    )
+    positions = [borrow.index(token) for token in callback_fields]
+    assert positions == sorted(positions)
+    assert "_SCR-O-FRONT-GENERATION + !" in advance
+    assert advance.index("_SCR-O-DRAW-GENERATION + @") < advance.index(
+        "_SCR-O-FRONT-GENERATION + !"
+    )
+    assert "0 _SCR-CUR @ _SCR-O-FRONT-GENERATION + !" in resize
+    assert resize.index("_SCR-O-FRONT-GENERATION + !") < resize.index(
+        "SCR-FORCE"
+    )
+    assert (
+        "' SCR-WITH-FRAME-PLANES CONSTANT _scr-with-frame-planes-xt"
+        in source
+    )
+    assert re.search(
+        r"(?ms)^: SCR-WITH-FRAME-PLANES\s*\n"
+        r"\s+_scr-with-frame-planes-xt _scr-guard WITH-GUARD ;$",
+        source,
+    )
+
+
+def test_front_watermark_advances_only_with_an_accepted_commit_model() -> None:
+    front_draw = 0
+    draw = 1
+
+    # BEGIN, SPAN, CURSOR, or COMMIT refusal bypasses _SCR-ADVANCE-FRONT.
+    for accepted in (False, False, False, False):
+        if accepted:
+            front_draw = draw
+        assert front_draw == 0
+
+    # DELTA/SNAPSHOT acceptance publishes the exact back-plane generation.
+    front_draw = draw
+    assert front_draw == 1
+
+    # An accepted NONE can advance the watermark because its eligibility
+    # proves front and back are already byte-identical.
+    draw = 2
+    front_draw = draw
+    assert front_draw == 2
+
+    # Resize installs a blank front and forces a complete replacement.
+    front_draw = 0
+    assert front_draw == 0

@@ -118,7 +118,7 @@ def test_neutral_screen_request_is_independent_and_commit_persistent() -> None:
     source = CORE_SCREEN.read_text(encoding="utf-8")
 
     assert "80 CONSTANT _SCR-O-FLUSH-REQUEST" in source
-    assert "88 CONSTANT _SCR-DESC-SIZE" in source
+    assert "104 CONSTANT _SCR-DESC-SIZE" in source
     assert "2 CONSTANT SCB-M-NONE" in source
 
     request = _definition(source, "SCR-REQUEST-FLUSH")
