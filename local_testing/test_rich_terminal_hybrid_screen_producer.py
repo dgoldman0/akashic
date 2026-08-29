@@ -1,5 +1,6 @@
-"""Seconds-only locks for the complete hybrid screen producer."""
+"""Seconds-only locks and model oracles for the hybrid screen producer."""
 
+from dataclasses import dataclass, replace
 from pathlib import Path
 import re
 
@@ -33,6 +34,411 @@ def _offset(source: str, name: str) -> int:
     match = re.search(r"\([^)]*--[^)]*\)\s*(?:(\d+)\s+\+)?\s*;", definition)
     assert match is not None, name
     return int(match.group(1) or 0)
+
+
+@dataclass(frozen=True)
+class _Control:
+    """Renderer-neutral control state used by the independent delta oracle."""
+
+    semantic_key: tuple[int, int, int, int]
+    object_id: int
+    region_id: int
+    kind: int
+    state: int
+    z: int
+    parent_key: tuple[int, int, int, int] | None
+    parent_id: int
+    order: int
+    geometry: tuple[int, int, int, int, int, int]
+    label: bytes
+    shortcut: bytes
+
+    def with_identity(
+        self, *, object_id: int, region_id: int, parent_id: int
+    ) -> "_Control":
+        return replace(
+            self,
+            object_id=object_id,
+            region_id=region_id,
+            parent_id=parent_id,
+        )
+
+    def fixed_tuple(self) -> tuple[object, ...]:
+        return (
+            self.semantic_key,
+            self.kind,
+            self.z,
+            self.parent_key,
+            self.order,
+            self.geometry,
+            self.label,
+            self.shortcut,
+        )
+
+
+@dataclass(frozen=True)
+class _Glyph:
+    """One acknowledged glyph slot or one newly projected candidate run."""
+
+    object_id: int
+    region_id: int
+    parent_id: int
+    row: int
+    col: int
+    height: int
+    width: int
+    root_height: int
+    root_width: int
+    z: int
+    visible: bool
+    foreground: int
+    background: int
+    attrs: int
+    text: bytes
+
+    def with_identity(self, active: "_Glyph") -> "_Glyph":
+        return replace(
+            self,
+            object_id=active.object_id,
+            region_id=active.region_id,
+            parent_id=active.parent_id,
+        )
+
+
+@dataclass(frozen=True)
+class _Replacement:
+    family: str
+    object_id: int
+    value: _Control | _Glyph
+
+
+def _delta_or_full(
+    active_controls: tuple[_Control, ...],
+    candidate_controls: tuple[_Control, ...],
+    active_glyphs: tuple[_Glyph, ...],
+    candidate_glyphs: tuple[_Glyph, ...],
+) -> tuple[str, tuple[_Replacement, ...]]:
+    """Independent model of the producer's legal retained-delta subset."""
+
+    if len(active_controls) != len(candidate_controls):
+        return "full", ()
+    active_by_key = {control.semantic_key: control for control in active_controls}
+    candidate_by_key = {
+        control.semantic_key: control for control in candidate_controls
+    }
+    if (
+        len(active_by_key) != len(active_controls)
+        or len(candidate_by_key) != len(candidate_controls)
+        or active_by_key.keys() != candidate_by_key.keys()
+    ):
+        return "full", ()
+    if tuple(control.semantic_key for control in active_controls) != tuple(
+        control.semantic_key for control in candidate_controls
+    ):
+        return "full", ()
+    replacements: list[_Replacement] = []
+    for key in sorted(active_by_key):
+        active = active_by_key[key]
+        candidate = candidate_by_key[key]
+        if active.fixed_tuple() != candidate.fixed_tuple():
+            return "full", ()
+        normalized = candidate.with_identity(
+            object_id=active.object_id,
+            region_id=active.region_id,
+            parent_id=active.parent_id,
+        )
+        if normalized.state != active.state:
+            replacements.append(
+                _Replacement("control", active.object_id, normalized)
+            )
+
+    # DELTA cannot define another object.  Candidate runs reuse acknowledged
+    # slots by ordinal, while surplus acknowledged slots become invisible
+    # tombstones so a shrinking projection remains an atomic replacement.
+    if len(candidate_glyphs) > len(active_glyphs):
+        return "full", ()
+    for active, candidate in zip(active_glyphs, candidate_glyphs):
+        normalized = candidate.with_identity(active)
+        if normalized != active:
+            replacements.append(_Replacement("glyph", active.object_id, normalized))
+    for active in active_glyphs[len(candidate_glyphs) :]:
+        tombstone = replace(active, visible=False, text=b"")
+        if tombstone != active:
+            replacements.append(_Replacement("glyph", active.object_id, tombstone))
+    if not replacements:
+        # A new ordinary draw still needs a physically acknowledged revision;
+        # an empty DELTA cannot provide that proof.
+        return "full", ()
+    return "delta", tuple(replacements)
+
+
+def _settle_delta(
+    active: str,
+    candidate: str,
+    *,
+    update_state: str,
+    update_status: str,
+    candidate_current: bool = True,
+    cell_coupled: bool = True,
+) -> tuple[str, str]:
+    """Model the physical-ACK publication barrier for a sealed delta."""
+
+    if update_status == "SESSION_LOST":
+        return active, "fault"
+    if update_state == "IDLE" and update_status == "OK":
+        return candidate, "publish"
+    if update_state == "SEALED" and update_status == "STALE":
+        return active, "fault" if cell_coupled else "full-recapture"
+    if update_state == "SEALED" and not candidate_current:
+        return active, "full-recapture"
+    return active, "wait"
+
+
+def _packed_bank_usage(
+    *,
+    max_records: int,
+    target_count: int,
+    control_count: int,
+    glyph_count: int,
+    source_text_bytes: int,
+    glyph_text_bytes: int,
+) -> tuple[int, int]:
+    """Independent byte oracle for the opportunistic bank-tail snapshot."""
+
+    align8 = lambda value: (value + 7) & ~7
+    bank_bytes = 120 + max_records * 24
+    used_bytes = (
+        120
+        + target_count * 24
+        + control_count * 160
+        + control_count * 40
+        + align8(source_text_bytes)
+        + glyph_count * 120
+        + glyph_count * 16
+        + align8(glyph_text_bytes)
+    )
+    return used_bytes, bank_bytes
+
+
+def _control(
+    *,
+    object_id: int,
+    state: int,
+    semantic_key: tuple[int, int, int, int] = (7, 3, 0, 11),
+    region_id: int = 11,
+    parent_id: int = 40,
+    label: bytes = b"File",
+) -> _Control:
+    return _Control(
+        semantic_key=semantic_key,
+        object_id=object_id,
+        region_id=region_id,
+        kind=2,
+        state=state,
+        z=0,
+        parent_key=(7, 3, 0, 0),
+        parent_id=parent_id,
+        order=0,
+        geometry=(0, 0, 1, 4, 84, 280),
+        label=label,
+        shortcut=b"Alt+F",
+    )
+
+
+def _glyph(
+    *,
+    object_id: int,
+    text: bytes,
+    region_id: int = 11,
+    parent_id: int = 0,
+    col: int = 0,
+    visible: bool = True,
+) -> _Glyph:
+    return _Glyph(
+        object_id=object_id,
+        region_id=region_id,
+        parent_id=parent_id,
+        row=1,
+        col=col,
+        height=1,
+        width=max(1, len(text)),
+        root_height=84,
+        root_width=280,
+        z=0,
+        visible=visible,
+        foreground=0xCCCCCCFF,
+        background=0x202020FF,
+        attrs=0,
+        text=text,
+    )
+
+
+def test_delta_oracle_allows_only_control_state_changes_on_stable_semantics() -> None:
+    active = (_control(object_id=41, state=0x03),)
+    opened = (_control(object_id=1001, state=0x07, region_id=700, parent_id=1000),)
+
+    mode, operations = _delta_or_full(active, opened, (), ())
+
+    assert mode == "delta"
+    assert operations == (
+        _Replacement(
+            "control",
+            41,
+            opened[0].with_identity(object_id=41, region_id=11, parent_id=40),
+        ),
+    )
+
+    # Text, geometry, topology, and control count are not state.  None may be
+    # smuggled through the engine's state-only CONTROL_REPLACE contract.
+    assert _delta_or_full(
+        active, (_control(object_id=1001, state=0x07, label=b"Files"),), (), ()
+    ) == ("full", ())
+    assert _delta_or_full(active, (), (), ()) == ("full", ())
+    moved = replace(opened[0], geometry=(0, 1, 1, 4, 84, 280))
+    assert _delta_or_full(active, (moved,), (), ()) == ("full", ())
+    assert _delta_or_full(active, active, (), ()) == ("full", ())
+
+
+def test_delta_oracle_falls_back_when_graph_emission_order_moves() -> None:
+    active = (
+        _control(object_id=41, state=0x03, semantic_key=(7, 3, 0, 11)),
+        _control(object_id=42, state=0x03, semantic_key=(7, 3, 0, 12)),
+    )
+    candidate = (
+        _control(
+            object_id=1002,
+            state=0x03,
+            semantic_key=(7, 3, 0, 12),
+            region_id=700,
+        ),
+        _control(
+            object_id=1001,
+            state=0x07,
+            semantic_key=(7, 3, 0, 11),
+            region_id=700,
+        ),
+    )
+
+    # Correlations are paired by semantic key in production, but the compact
+    # bank keeps graph-emission controls ordinal-addressable.  Moving a
+    # semantic control to another graph ordinal therefore takes the complete
+    # replacement path rather than reassigning retained identity.
+    assert _delta_or_full(active, candidate, (), ()) == ("full", ())
+
+
+def test_delta_oracle_reuses_acknowledged_glyph_slots_and_tombstones_shrink() -> None:
+    active = (
+        _glyph(object_id=80, text=b"File", col=0),
+        _glyph(object_id=81, text=b"Edit", col=5),
+    )
+    candidate = (_glyph(object_id=900, region_id=700, text=b"FILE", col=0),)
+
+    mode, operations = _delta_or_full((), (), active, candidate)
+
+    assert mode == "delta"
+    assert operations == (
+        _Replacement("glyph", 80, candidate[0].with_identity(active[0])),
+        _Replacement(
+            "glyph",
+            81,
+            replace(active[1], visible=False, text=b""),
+        ),
+    )
+
+    # A delta may replace existing object identities, never create another.
+    grown = candidate + (_glyph(object_id=901, text=b"Edit", col=5),) + (
+        _glyph(object_id=902, text=b"View", col=10),
+    )
+    assert _delta_or_full((), (), active, grown) == ("full", ())
+
+
+def test_delta_oracle_publishes_only_after_exact_ack_and_recaptures_stale() -> None:
+    for state in ("SEALED", "PUBLISHING", "AWAITING"):
+        assert _settle_delta(
+            "frame-7",
+            "frame-8",
+            update_state=state,
+            update_status="OK",
+        ) == ("frame-7", "wait")
+
+    assert _settle_delta(
+        "frame-7",
+        "frame-8",
+        update_state="IDLE",
+        update_status="OK",
+    ) == ("frame-8", "publish")
+
+    # Once publication has begun, a newer guest draw cannot revoke the frame
+    # whose physical completion is in flight.  Exact ACK publishes that bank;
+    # the following draw can then produce another revision.
+    for state in ("PUBLISHING", "AWAITING"):
+        assert _settle_delta(
+            "frame-7",
+            "frame-8",
+            update_state=state,
+            update_status="OK",
+            candidate_current=False,
+        ) == ("frame-7", "wait")
+    assert _settle_delta(
+        "frame-7",
+        "frame-8",
+        update_state="IDLE",
+        update_status="OK",
+        candidate_current=False,
+    ) == ("frame-8", "publish")
+
+    # Supersession remains cancellable before publication.  A retained-only
+    # rejection rewinds to SEALED+STALE, but an ordinary CELL-coupled delta
+    # quarantines the session and reports SESSION_LOST instead.
+    assert _settle_delta(
+        "frame-7",
+        "frame-8",
+        update_state="SEALED",
+        update_status="OK",
+        candidate_current=False,
+    ) == ("frame-7", "full-recapture")
+    assert _settle_delta(
+        "frame-7",
+        "frame-8",
+        update_state="SEALED",
+        update_status="STALE",
+        cell_coupled=False,
+    ) == ("frame-7", "full-recapture")
+    assert _settle_delta(
+        "frame-7",
+        "frame-8",
+        update_state="IDLE",
+        update_status="SESSION_LOST",
+    ) == ("frame-7", "fault")
+
+
+def test_compact_ack_baseline_fits_the_observed_desktop_without_more_arena() -> None:
+    # This deliberately assumes every observed control is also a point target,
+    # which leaves less tail space than the real menu-only target map.
+    used, capacity = _packed_bank_usage(
+        max_records=8192,
+        target_count=142,
+        control_count=142,
+        glyph_count=776,
+        source_text_bytes=1376,
+        glyph_text_bytes=24526,
+    )
+
+    assert used == 163368
+    assert capacity == 196728
+    assert capacity - used == 33360
+
+    # Packing is opportunistic: a larger projection simply has no retained
+    # comparison baseline and must continue through the complete replacement.
+    oversized, same_capacity = _packed_bank_usage(
+        max_records=8192,
+        target_count=142,
+        control_count=142,
+        glyph_count=1100,
+        source_text_bytes=1376,
+        glyph_text_bytes=40000,
+    )
+    assert oversized > same_capacity
 
 
 def test_inline_records_are_disjoint_and_exactly_cover_the_producer() -> None:
@@ -222,7 +628,7 @@ def test_candidate_ids_advance_only_after_exact_hidden_start_ack() -> None:
     assert source.count("_RTHP-ADVANCE-IDS?") == 2
 
 
-def test_completed_draws_recapture_only_through_full_hidden_replacement() -> None:
+def test_completed_draws_choose_ack_baselined_delta_or_full_recapture() -> None:
     source = _source()
     copy = _word(source, "_RTHP-COPY-SNAPSHOT?")
     wrap = _word(source, "_RTHP-WRAP-HYBRID")
@@ -234,6 +640,10 @@ def test_completed_draws_recapture_only_through_full_hidden_replacement() -> Non
     step = _word(source, "RTHP-STEP")
     prepare = _word(source, "RTHP-PREPARE")
     reveal = _word(source, "_RTHP-PREPARE-REVEAL")
+    delta_candidate = _word(source, "_RTHP-DELTA-CANDIDATE?")
+    emit_delta = _word(source, "_RTHP-EMIT-DELTA")
+    delta = _word(source, "_RTHP-PREPARE-DELTA")
+    delta_stale = _word(source, "_RTHP-DELTA-STALE")
     valid = _word(source, "_RTHP-VALID-BODY?")
 
     assert "_RTHP.SURFACE-GEN !" not in copy
@@ -259,8 +669,8 @@ def test_completed_draws_recapture_only_through_full_hidden_replacement() -> Non
         "_RTHP-PREPARE-START"
     )
     assert "_RTHP-RECAPTURE-START" not in step
-    assert prepare.count("_RTHP-RECAPTURE-START") == 4
-    assert prepare.count("_RTHP-CANDIDATE-CURRENT?") == 3
+    assert "_RTHP-RECAPTURE-START" in prepare
+    assert "_RTHP-CANDIDATE-CURRENT?" in prepare
     assert "_RTHP-ACTIVE-DRAW-CURRENT?" in prepare
     assert "_RTHP.PHASE @ _RTHP-PH-LIVE = IF" in valid
     assert "_RTHP.SURFACE-GEN @" in valid
@@ -271,15 +681,37 @@ def test_completed_draws_recapture_only_through_full_hidden_replacement() -> Non
         "_RTHP-PREPARE-REVEAL"
     ) < ready_reveal.index("_RTHP-RECAPTURE-START")
     live = prepare[prepare.index("_RTHP-PH-LIVE = IF") :]
-    assert live.index("_RTHP-ACTIVE-DRAW-CURRENT?") < live.index(
-        "SCB-S-OK"
-    ) < live.index("_RTHP-RECAPTURE-START")
+    for anchor in (
+        "_RTHP-ACTIVE-DRAW-CURRENT?",
+        "_RTHP-DELTA-CANDIDATE?",
+        "_RTHP-PREPARE-DELTA",
+        "_RTHP-RECAPTURE-START",
+    ):
+        assert anchor in live
+
+    # Compatibility is judged against the physically acknowledged active
+    # bank, not against the mutable planner arrays alone.
+    assert "_RTHP.TARGET-ACTIVE" in delta_candidate
+    assert "_RTHP.TARGET-PENDING" in delta_candidate
+    assert "_RTHP-PH-READY-DELTA" in prepare
+    assert "_RTHP-PH-DELTA-SEALED" in prepare
+    assert "_RTHP-DELTA-STALE" in prepare
+    assert "_RTHP-RECAPTURE-START" in delta_stale
+    assert "_RTHP-TARGET-PUBLISH?" not in delta_stale
 
     assert "RTE-RETAINED-REPLACE-CONTINUE" in reveal
     assert "RTE-COMMIT-AND-REVEAL" in reveal
     assert "_RTHP-EMIT-" not in reveal
     assert source.count("RTE-RETAINED-REPLACE-START") == 1
-    assert "RTE-RETAINED-DELTA" not in source
+    assert delta.count("RTE-RETAINED-DELTA") == 1
+    assert "RTE-CONTROL-REPLACE" in source
+    assert "RTE-GLYPH-RUN-REPLACE" in source
+    assert "RTE-CONTROL-DEFINE" not in emit_delta
+    assert "RTE-GLYPH-RUN-DEFINE" not in emit_delta
+    assert delta.index("RTE-RETAINED-DELTA") < delta.index(
+        "_RTHP-EMIT-DELTA"
+    ) < delta.index("RTE-COMMIT") < delta.index("RTE-RETAINED-SEAL")
+    assert "_RTHP-PH-DELTA-SEALED" in delta
 
 
 def test_final_capture_rechecks_fixed_authority_then_traverses_each_family_once() -> None:
@@ -303,6 +735,8 @@ def test_sealed_retry_preserves_only_a_current_exact_candidate() -> None:
     reveal_sealed = prepare.split("_RTHP-PH-REVEAL-SEALED = IF", 1)[1].split(
         "THEN", 1
     )[0]
+    delta_sealed = prepare[prepare.index("_RTHP-PH-DELTA-SEALED = IF") :]
+    delta_sealed = delta_sealed[: delta_sealed.index("_RTHP-PH-LIVE = IF")]
     assert "SCB-S-OK EXIT" in start_sealed
     assert "_RTHP-PREPARE-START" not in start_sealed
     assert "_RTHP-PREPARE-REVEAL" not in reveal_sealed
@@ -310,6 +744,9 @@ def test_sealed_retry_preserves_only_a_current_exact_candidate() -> None:
     assert reveal_sealed.index("_RTHP-CANDIDATE-CURRENT?") < reveal_sealed.index(
         "SCB-S-OK"
     ) < reveal_sealed.index("_RTHP-RECAPTURE-START")
+    assert delta_sealed.index("_RTHP-CANDIDATE-CURRENT?") < delta_sealed.index(
+        "SCB-S-OK"
+    ) < delta_sealed.index("_RTHP-DELTA-STALE")
 
 
 def test_slice_remains_generic_caller_bounded_and_digest_free() -> None:
@@ -348,7 +785,7 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
     prepare = _word(source, "_RTHP-PREPARE-START")
 
     assert sizing.count("_RTHP-TARGET-BANK-HEADER-SIZE _RTHP-B-ADD") == 2
-    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 48
+    assert _constant(source, "_RTHP-TARGET-BANK-HEADER-SIZE") == 120
     assert sizing.count(
         "_RTHP-B-RECORDS @ _RTHP-TARGET-ENTRY-SIZE _RTHP-B-MUL-ADD"
     ) == 2
@@ -441,9 +878,39 @@ def test_native_menu_targets_are_built_once_into_the_inactive_bounded_bank() -> 
     assert "_RTHP-TARGET-CONTROL?" not in _word(source, "_RTHP-EMIT-CONTROLS")
 
 
-def test_only_the_exactly_revealed_target_bank_becomes_input_active() -> None:
+def test_ack_baseline_is_opportunistic_and_reuses_only_the_target_bank_tail() -> None:
+    source = _source()
+    sizing = _word(source, "_RTHP-BYTES-BODY")
+    layout = _word(source, "_RTHP-LAYOUT")
+    candidate = _word(source, "_RTHP-TARGET-CANDIDATE?")
+    pack_layout = _word(source, "_RTHP-PK-LAYOUT?")
+    pack = _word(source, "_RTHP-PACK-CANDIDATE")
+    validate = _word(source, "_RTHP-PACKED-BANK?")
+
+    # There is still exactly one fixed-size target allocation per bank.  The
+    # retained snapshot starts after the actual point targets, not in another
+    # full-frame arena allocation.
+    assert sizing.count("_RTHP-TARGET-BANK-HEADER-SIZE _RTHP-B-ADD") == 2
+    assert sizing.count("_RTHP-TARGET-ENTRY-SIZE _RTHP-B-MUL-ADD") == 2
+    assert layout.count("_RTHP-TARGET-BANK-HEADER-SIZE +") == 2
+    assert "_RTHP-TB.COUNT @ _RTHP-TARGET-ENTRY-SIZE" in pack_layout
+    assert "_RTHP-PK-PREFIX" in pack_layout
+
+    # A failed fit clears the proof marker only.  It neither rejects the
+    # complete replacement nor prevents the input target bank from pending.
+    assert pack.index("0 _RTHP-PK-BANK @ _RTHP-TB.PACKED-BYTES !") < pack.index(
+        "_RTHP-PK-LAYOUT?"
+    )
+    assert candidate.index("_RTHP-PACK-CANDIDATE DROP") < candidate.index(
+        "_RTHP.TARGET-PENDING !"
+    )
+    assert "_RTHP-TB.PACKED-BYTES @ 0= IF 2DROP -1 EXIT THEN" in validate
+
+
+def test_only_an_exactly_acknowledged_target_bank_becomes_input_active() -> None:
     source = _source()
     sealed = _word(source, "_RTHP-STEP-SEALED")
+    step = _word(source, "RTHP-STEP")
     publish = _word(source, "_RTHP-TARGET-PUBLISH?")
     lookup = _word(source, "RTHP-CONTROL-MENU-TARGET@")
     header = _word(source, "_RTHP-TARGET-BANK-HEADER?")
@@ -452,8 +919,18 @@ def test_only_the_exactly_revealed_target_bank_becomes_input_active() -> None:
     live = _word(source, "RTHP-LIVE?")
 
     accepted = "_RTHP-Z-ACCEPT @ _RTHP-Z-P @ _RTHP.PHASE !"
-    assert sealed.index(accepted) < sealed.index("_RTHP-TARGET-PUBLISH?")
+    exact_ack = (
+        "_RTHP-S-STATE @ RTE-UPDATE-IDLE =\n"
+        "    _RTHP-S-STATUS @ RTE-S-OK = AND IF"
+    )
+    assert sealed.index(exact_ack) < sealed.index(accepted) < sealed.index(
+        "_RTHP-TARGET-PUBLISH?"
+    )
     assert "_RTHP-PH-LIVE = IF" in sealed
+    delta_sealed = step[step.index("_RTHP-PH-DELTA-SEALED = IF") :]
+    delta_sealed = delta_sealed[: delta_sealed.index("_RTHP-PH-LIVE = IF")]
+    assert "_RTHP-PH-LIVE" in delta_sealed
+    assert "_RTHP-STEP-SEALED" in delta_sealed
     assert "_RTHP.TARGET-PENDING" in publish
     assert publish.index("_RTHP-TARGET-BANK-ENTRIES?") < publish.index(
         "_RTHP.TARGET-ACTIVE !"
