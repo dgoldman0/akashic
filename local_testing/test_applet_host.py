@@ -78,6 +78,10 @@ VARIABLE _ah-close-target
 VARIABLE _ah-close-reason
 VARIABLE _ah-expected-close-reason
 VARIABLE _ah-relayout-before
+VARIABLE _ah-semantic-menu-b
+VARIABLE _ah-semantic-row
+VARIABLE _ah-semantic-col
+CREATE _ah-semantic-event 3 CELLS ALLOT
 
 : _ah-known-instance?  ( instance -- flag )
     DUP _ah-inst-a @ = SWAP _ah-inst-b @ = OR ;
@@ -146,7 +150,8 @@ CREATE _ah-app APP-DESC ALLOT
     DROP 1 _ah-inits +! ;
 
 : _ah-activate  ( instance -- )
-    _ah-known-instance? _ah-assert
+    DUP _ah-known-instance?
+    SWAP CINST-DESC _ah-comp = OR _ah-assert
     1 _ah-activates +! ;
 
 : _ah-event  ( event instance -- handled? )
@@ -228,6 +233,8 @@ CREATE _ah-app APP-DESC ALLOT
     ['] _ah-state-fini _ah-comp COMP.STATE-FINI-XT !
     _ah-app APP-DESC-INIT
     _ah-comp _ah-app APP.COMP-DESC !
+    S" <uidl><menubar><menu id=semantic-menu label=File><item text=New/></menu></menubar></uidl>"
+        _ah-app APP.UIDL-U ! _ah-app APP.UIDL-A !
     ['] _ah-init _ah-app APP.INIT-XT !
     ['] _ah-activate _ah-app APP.ACTIVATE-XT !
     ['] _ah-event _ah-app APP.EVENT-XT !
@@ -235,6 +242,11 @@ CREATE _ah-app APP-DESC ALLOT
     ['] _ah-paint _ah-app APP.PAINT-XT !
     ['] _ah-request-close _ah-app APP.REQUEST-CLOSE-XT !
     ['] _ah-shutdown _ah-app APP.SHUTDOWN-XT ! ;
+
+: _ah-semantic-event!  ( row col -- )
+    KEY-T-MOUSE _ah-semantic-event !
+    KEY-MOUSE-LEFT _ah-semantic-event 8 + !
+    SWAP 16 LSHIFT OR _ah-semantic-event 16 + ! ;
 
 : _ah-try-launch  ( -- )
     _ah-app _ah-host AHOST-TRY-LAUNCH
@@ -380,6 +392,39 @@ VARIABLE _ah-ew
     _ah-id-a @ _ah-host AHOST-FOCUS-ID
     _ah-stack
     ." AH-M5-LAUNCHED" CR
+
+    \ A semantic rich-control activation resolves to an absolute cell in
+    \ the acknowledged target's UIDL context.  Prove that when that cell
+    \ belongs to a nonfocused child, one ordinary synthetic mouse event both
+    \ moves host focus and opens that child's real UIDL menu.
+    _ah-slot-b @ AHS-CTX-SWITCH
+    S" semantic-menu" UTUI-BY-ID
+    DUP 0<> _ah-assert DUP _ah-semantic-menu-b !
+    _UTUI-SIDECAR
+    DUP _UTUI-SC-ROW@ _ah-semantic-row !
+    _UTUI-SC-COL@ _ah-semantic-col !
+    _ah-semantic-row @ _ah-semantic-col @ _ah-host AHOST-TILE-AT
+        _ah-slot-b @ = _ah-assert
+    _ah-id-a @ _ah-host AHOST-FOCUS-ID
+    _ah-host AHOST.FOCUS @ _ah-slot-a @ = _ah-assert
+    _ah-slot-a @ AHS-CTX-SWITCH
+    _UTUI-MENU-OPEN @ 0= _ah-assert
+    _ah-semantic-row @ _ah-semantic-col @ _ah-semantic-event!
+    _ah-semantic-event _ah-host AHOST-DISPATCH-MOUSE _ah-assert
+    _ah-host AHOST.FOCUS @ _ah-slot-b @ = _ah-assert
+    _ah-slot-b @ AHS-CTX-SWITCH
+    _UTUI-MENU-OPEN @ _ah-semantic-menu-b @ = _ah-assert
+    _ah-slot-b @ AHS.DIRTY @ -1 = _ah-assert
+    _ah-slot-a @ AHS-CTX-SWITCH
+    _UTUI-MENU-OPEN @ 0= _ah-assert
+    \ Restore a closed-menu, first-child-focused baseline for later host
+    \ lifecycle assertions.
+    _ah-semantic-event _ah-host AHOST-DISPATCH-MOUSE _ah-assert
+    _ah-slot-b @ AHS-CTX-SWITCH
+    _UTUI-MENU-OPEN @ 0= _ah-assert
+    _ah-id-a @ _ah-host AHOST-FOCUS-ID
+    _ah-stack
+    ." AH-M5B-CROSS-FOCUS-MENU" CR
 
     \ Event, tick, paint and revision/dirty accounting remain host-generic.
     ASHELL-CANCEL-QUIT

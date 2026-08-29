@@ -1052,6 +1052,179 @@ def test_physical_event_pump_routes_mouse_without_discarding_action_delay_input(
     assert keyboard.flushes == 1
 
 
+def test_manual_pointer_trace_records_exact_target_and_backpressure_result(
+    tmp_path,
+) -> None:
+    class Events:
+        items = []
+
+        @classmethod
+        def get(cls):
+            return list(cls.items)
+
+    class Pygame:
+        QUIT = 1
+        MOUSEMOTION = 2
+        MOUSEBUTTONDOWN = 3
+        MOUSEBUTTONUP = 4
+        WINDOWFOCUSLOST = 5
+        WINDOWFOCUSGAINED = 6
+        KMOD_SHIFT = 0x10
+        KMOD_CTRL = 0x20
+        KMOD_ALT = 0x40
+        KMOD_GUI = 0x80
+        KMOD_CAPS = 0x100
+        KMOD_NUM = 0x200
+        event = Events
+
+    class Client:
+        def __init__(self):
+            self.statuses = ["backpressured", "progress"]
+
+        def request(self, method, **params):
+            assert method == "send_control_event"
+            return {"status": self.statuses.pop(0)}
+
+    now = [1_000]
+    trace = acceptance_runner._PerformanceTrace(
+        tmp_path,
+        clock_ns=lambda: now.__setitem__(0, now[0] + 1) or now[0],
+    )
+    traced_client = acceptance_runner._ManualInputTraceClient(Client(), trace)
+    offer = _offer("READY", offer_id=7, pad_menu=True)
+    target = _pad_file_target(offer)
+    display_state, display_ack = _acknowledged_hit_state(offer, target)
+    keyboard = acceptance_runner._GuestKeyboardForwarder(
+        Pygame,
+        traced_client,
+        generation=9,
+        display_required=True,
+    )
+    keyboard.acknowledge_display_offer(*display_ack)
+    pointer = acceptance_runner._SemanticPointerInteractor(
+        display_state,
+        keyboard,
+    )
+    Events.items = [
+        SimpleNamespace(type=Pygame.MOUSEBUTTONDOWN, button=1, pos=(12, 8)),
+        SimpleNamespace(
+            type=Pygame.MOUSEBUTTONUP,
+            button=1,
+            pos=(12, 8),
+            mod=Pygame.KMOD_SHIFT,
+        ),
+    ]
+
+    assert acceptance_runner._pump_physical_viewer_events(
+        Pygame,
+        pointer,
+        keyboard,
+        (100, 80),
+        closing_is_error=True,
+        trace=trace,
+    )
+
+    events = trace.events
+    assert [item["event"] for item in events] == [
+        "manual_pointer_down",
+        "manual_input_rpc",
+        "manual_pointer_up",
+        "manual_input_rpc",
+    ]
+    expected_identity = {
+        "owner_id": target.identity.owner_id,
+        "owner_generation": target.identity.owner_generation,
+        "control_id": target.identity.control_id,
+    }
+    assert events[0]["semantic_target"] == expected_identity
+    assert events[0]["result"] == "targeted"
+    assert events[1]["semantic_target"] == expected_identity
+    assert events[1]["result"] == "backpressured"
+    assert events[2]["pressed_target"] == expected_identity
+    assert events[2]["semantic_target"] == expected_identity
+    assert events[2]["result"] == "rpc_submitted"
+    assert events[2]["pending_events"] == 1
+    assert events[3]["result"] == "progress"
+    assert keyboard.pending_events == 0
+
+
+def test_manual_pointer_trace_names_offer_supersession_drop_reason(
+    tmp_path,
+) -> None:
+    class Pygame:
+        KMOD_SHIFT = 0x10
+        KMOD_CTRL = 0x20
+        KMOD_ALT = 0x40
+        KMOD_GUI = 0x80
+        KMOD_CAPS = 0x100
+        KMOD_NUM = 0x200
+
+    class Client:
+        @staticmethod
+        def request(method, **params):
+            return {"status": "backpressured"}
+
+    trace = acceptance_runner._PerformanceTrace(tmp_path)
+    traced_client = acceptance_runner._ManualInputTraceClient(Client(), trace)
+    offer = _offer("READY", offer_id=7, pad_menu=True)
+    target = _pad_file_target(offer)
+    display_state, display_ack = _acknowledged_hit_state(offer, target)
+    keyboard = acceptance_runner._GuestKeyboardForwarder(
+        Pygame,
+        traced_client,
+        generation=9,
+        display_required=True,
+    )
+    keyboard.acknowledge_display_offer(*display_ack)
+    pointer = acceptance_runner._SemanticPointerInteractor(
+        display_state,
+        keyboard,
+    )
+    down = SimpleNamespace(type=3, button=1, pos=(12, 8))
+    up = SimpleNamespace(type=4, button=1, pos=(12, 8), mod=0)
+    Pygame.MOUSEMOTION = 2
+    Pygame.MOUSEBUTTONDOWN = 3
+    Pygame.MOUSEBUTTONUP = 4
+    Pygame.WINDOWFOCUSLOST = 5
+    Pygame.WINDOWFOCUSGAINED = 6
+
+    assert acceptance_runner._dispatch_semantic_pointer_event(
+        Pygame,
+        pointer,
+        keyboard,
+        down,
+        (100, 80),
+        trace=trace,
+    )
+    assert acceptance_runner._dispatch_semantic_pointer_event(
+        Pygame,
+        pointer,
+        keyboard,
+        up,
+        (100, 80),
+        trace=trace,
+    )
+    assert keyboard.pending_events == 1
+
+    pending_before = keyboard.pending_events
+    keyboard.begin_display_offer()
+    acceptance_runner._trace_pending_input_drop(
+        trace,
+        keyboard,
+        pending_before,
+        reason="new_display_offer",
+        offer_id=8,
+    )
+
+    dropped = trace.events[-1]
+    assert dropped["event"] == "manual_input_dropped"
+    assert dropped["reason"] == "new_display_offer"
+    assert dropped["dropped_events"] == 1
+    assert dropped["pending_before"] == 1
+    assert dropped["pending_after"] == 0
+    assert dropped["offer_id"] == 8
+
+
 def test_pad_file_activation_uses_exact_acknowledged_hit_identity() -> None:
     offer = _offer("READY", offer_id=7, pad_menu=True)
     target = _pad_file_target(offer)

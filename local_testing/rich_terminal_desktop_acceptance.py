@@ -385,6 +385,92 @@ class _PerformanceTrace:
             return None
 
 
+def _trace_control_identity(
+    identity: ControlIdentity | None,
+) -> dict[str, int] | None:
+    if identity is None:
+        return None
+    return {
+        "owner_id": identity.owner_id,
+        "owner_generation": identity.owner_generation,
+        "control_id": identity.control_id,
+    }
+
+
+class _ManualInputTraceClient:
+    """Observe physical-viewer input RPCs without changing their results."""
+
+    def __init__(self, client, trace: _PerformanceTrace):
+        self.client = client
+        self.trace = trace
+        self.request_count = 0
+
+    def request(self, method: str, **params):
+        started_ns = self.trace.now()
+        self.request_count += 1
+        detail: dict[str, object] = {
+            "method": method,
+            "generation": params.get("generation"),
+            "authorizing_offer_id": params.get("display_offer_id"),
+            "display_scope": params.get("display_scope"),
+        }
+        if method == "send_control_event":
+            detail["semantic_target"] = {
+                "owner_id": params.get("owner_id"),
+                "owner_generation": params.get("owner_generation"),
+                "control_id": params.get("control_id"),
+            }
+            detail["modifiers"] = params.get("modifiers")
+        elif method == "send_key":
+            detail["key"] = params.get("key")
+        elif method == "send_text":
+            text_value = params.get("text")
+            detail["text_utf8_bytes"] = (
+                len(text_value.encode("utf-8"))
+                if isinstance(text_value, str)
+                else None
+            )
+        try:
+            result = self.client.request(method, **params)
+        except Exception as exc:
+            self.trace.mark(
+                "manual_input_rpc",
+                started_ns=started_ns,
+                result="exception",
+                exception_type=type(exc).__name__,
+                **detail,
+            )
+            raise
+        self.trace.mark(
+            "manual_input_rpc",
+            started_ns=started_ns,
+            result=(result.get("status") if isinstance(result, dict) else None),
+            **detail,
+        )
+        return result
+
+
+def _trace_pending_input_drop(
+    trace: _PerformanceTrace,
+    keyboard: _GuestKeyboardForwarder,
+    pending_before: int,
+    *,
+    reason: str,
+    **detail,
+) -> None:
+    pending_after = keyboard.pending_events
+    if pending_after >= pending_before:
+        return
+    trace.mark(
+        "manual_input_dropped",
+        reason=reason,
+        dropped_events=pending_before - pending_after,
+        pending_before=pending_before,
+        pending_after=pending_after,
+        **detail,
+    )
+
+
 @dataclass(frozen=True)
 class RichScreenProjection:
     """Validated logical text reconstructed only from retained draw values."""
@@ -1729,6 +1815,8 @@ def _dispatch_semantic_pointer_event(
     keyboard: _GuestKeyboardForwarder,
     event,
     terminal_size: tuple[int, int],
+    *,
+    trace: _PerformanceTrace | None = None,
 ) -> bool:
     """Route one physical event through the normal ACK-bound control path."""
 
@@ -1739,16 +1827,80 @@ def _dispatch_semantic_pointer_event(
         event.type == getattr(pygame_module, "MOUSEBUTTONDOWN", -1)
         and event.button == 1
     ):
-        semantic_pointer.left_down(event.pos, terminal_size)
+        targeted = semantic_pointer.left_down(event.pos, terminal_size)
+        if trace is not None:
+            trace.mark(
+                "manual_pointer_down",
+                position=tuple(event.pos),
+                semantic_target=_trace_control_identity(
+                    semantic_pointer.pressed
+                ),
+                result="targeted" if targeted else "miss",
+            )
         return True
     if (
         event.type == getattr(pygame_module, "MOUSEBUTTONUP", -1)
         and event.button == 1
     ):
-        semantic_pointer.left_up(
+        if trace is None:
+            semantic_pointer.left_up(
+                event.pos,
+                terminal_size,
+                modifiers=_pygame_apt_modifiers(pygame_module, event),
+            )
+            return True
+        pressed = semantic_pointer.pressed
+        pending_before = keyboard.pending_events
+        error_before = keyboard.last_error
+        request_count_before = getattr(
+            keyboard.client,
+            "request_count",
+            None,
+        )
+        activated = semantic_pointer.left_up(
             event.pos,
             terminal_size,
             modifiers=_pygame_apt_modifiers(pygame_module, event),
+        )
+        released = semantic_pointer.hovered
+        reason = None
+        if not activated:
+            if pressed is None:
+                reason = "no_pressed_target"
+            elif released is None:
+                reason = "release_miss"
+            elif released != pressed:
+                reason = "release_target_changed"
+            else:
+                reason = "display_authority_changed"
+            result = "not_activated"
+        else:
+            request_count_after = getattr(
+                keyboard.client,
+                "request_count",
+                None,
+            )
+            if (
+                request_count_before is not None
+                and request_count_after is not None
+                and request_count_after > request_count_before
+            ):
+                result = "rpc_submitted"
+            elif keyboard.pending_events > pending_before:
+                result = "queued"
+            elif keyboard.last_error != error_before or keyboard.last_error:
+                result = "locally_dropped"
+                reason = keyboard.last_error
+            else:
+                result = "handled_without_rpc"
+        trace.mark(
+            "manual_pointer_up",
+            position=tuple(event.pos),
+            pressed_target=_trace_control_identity(pressed),
+            semantic_target=_trace_control_identity(released),
+            result=result,
+            reason=reason,
+            pending_events=keyboard.pending_events,
         )
         return True
     if event.type in {
@@ -1769,6 +1921,7 @@ def _pump_physical_viewer_events(
     terminal_size: tuple[int, int],
     *,
     closing_is_error: bool,
+    trace: _PerformanceTrace | None = None,
 ) -> bool:
     """Process viewer events without discarding semantic pointer input."""
 
@@ -1785,6 +1938,7 @@ def _pump_physical_viewer_events(
             keyboard,
             event,
             terminal_size,
+            trace=trace,
         )
     keyboard.flush_pending()
     return True
@@ -2043,9 +2197,10 @@ def run_physical_desktop_acceptance(
         terminal = VirtualTerminal(cols=cols, rows=rows)
         revision = -1
         display_state = _RetainedDisplayState()
+        manual_input_client = _ManualInputTraceClient(client, trace)
         keyboard = _GuestKeyboardForwarder(
             pygame,
-            client,
+            manual_input_client,
             generation=generation,
             input_enabled=True,
             display_required=display_required,
@@ -2118,6 +2273,7 @@ def run_physical_desktop_acceptance(
                     terminal.rows * cell_height,
                 ),
                 closing_is_error=closing_is_error,
+                trace=trace,
             )
 
         def announce(state: AcceptanceDiagnosticState) -> None:
@@ -2193,11 +2349,27 @@ def run_physical_desktop_acceptance(
 
             status = client.request("status", detailed=False)
             last_status = status
+            pending_before_status = keyboard.pending_events
+            generation_before_status = keyboard.generation
+            display_required_before_status = keyboard.display_required
             revision, _ = _accept_status_update(
                 status,
                 keyboard=keyboard,
                 display_state=display_state,
                 revision=revision,
+            )
+            if keyboard.generation != generation_before_status:
+                status_drop_reason = "status_generation_changed"
+            elif keyboard.display_required != display_required_before_status:
+                status_drop_reason = "display_requirement_changed"
+            else:
+                status_drop_reason = "status_context_changed"
+            _trace_pending_input_drop(
+                trace,
+                keyboard,
+                pending_before_status,
+                reason=status_drop_reason,
+                generation=keyboard.generation,
             )
             screen_started_ns = trace.now()
             update = client.request(
@@ -2206,6 +2378,8 @@ def run_physical_desktop_acceptance(
                 since_offer=display_state.since_offer,
             )
             screen_ended_ns = trace.now()
+            pending_before_screen = keyboard.pending_events
+            generation_before_screen = keyboard.generation
             revision, resized = _accept_screen_update(
                 update,
                 display_holder=True,
@@ -2213,6 +2387,25 @@ def run_physical_desktop_acceptance(
                 keyboard=keyboard,
                 display_state=display_state,
                 revision=revision,
+            )
+            if keyboard.generation != generation_before_screen:
+                screen_drop_reason = "screen_generation_changed"
+            elif "display_offer" in update:
+                screen_drop_reason = "new_display_offer"
+            elif "snapshot" in update:
+                screen_drop_reason = "cell_snapshot_replaced_display"
+            else:
+                screen_drop_reason = "screen_context_changed"
+            _trace_pending_input_drop(
+                trace,
+                keyboard,
+                pending_before_screen,
+                reason=screen_drop_reason,
+                offer_id=(
+                    update["display_offer"].get("offer_id")
+                    if isinstance(update.get("display_offer"), dict)
+                    else None
+                ),
             )
             guest_failure = _guest_boot_failure(_terminal_text(terminal))
             if guest_failure is not None:
@@ -2440,13 +2633,29 @@ def run_physical_desktop_acceptance(
                     journey_stage=journey.stage,
                 )
                 revision = -1
+                pending_before_rejection = keyboard.pending_events
                 keyboard.clear_display_context(waiting=True)
+                _trace_pending_input_drop(
+                    trace,
+                    keyboard,
+                    pending_before_rejection,
+                    reason="presentation_rejected",
+                    offer_id=frame_offer.offer_id,
+                )
                 time.sleep(0.01)
                 continue
             revision = accepted_revision
+            pending_before_ack = keyboard.pending_events
             keyboard.acknowledge_display_offer(
                 frame_offer.offer_id,
                 frame_offer.scope,
+            )
+            _trace_pending_input_drop(
+                trace,
+                keyboard,
+                pending_before_ack,
+                reason="display_ack_changed",
+                offer_id=frame_offer.offer_id,
             )
             trace.mark(
                 "offer_acknowledged",
