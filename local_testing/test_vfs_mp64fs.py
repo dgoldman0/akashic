@@ -54,6 +54,7 @@ FTYPE_RAW = 1
 FTYPE_TEXT = 2
 FTYPE_FORTH = 3
 USERLAND_EXT_MEM_MIB = 64
+MARKER1_MAX_SECTORS = 65536
 
 def make_entry(name, start_sec, sec_count, used_bytes, ftype, parent):
     """Build a 48-byte directory entry."""
@@ -238,6 +239,28 @@ def build_last_slot_image():
     image[directory:directory + DIR_ENTRY_SIZE] = bytes(DIR_ENTRY_SIZE)
     final = directory + (MAX_FILES - 1) * DIR_ENTRY_SIZE
     image[final:final + DIR_ENTRY_SIZE] = entry
+    return bytes(image)
+
+
+def build_last_sector_file_image():
+    """Build a maximum marker-1 volume with one file in its final sector."""
+    image = bytearray(build_disk_image([], total_sectors=MARKER1_MAX_SECTORS))
+    bmap_sectors = (MARKER1_MAX_SECTORS + 4095) // 4096
+    directory = (BMAP_START + bmap_sectors) * SECTOR
+    last_sector = MARKER1_MAX_SECTORS - 1
+    content = b"last"
+
+    image[SECTOR + last_sector // 8] |= 1 << (last_sector % 8)
+    entry = make_entry(
+        "last.bin",
+        last_sector,
+        1,
+        len(content),
+        FTYPE_RAW,
+        PARENT_ROOT,
+    )
+    image[directory:directory + DIR_ENTRY_SIZE] = entry
+    image[last_sector * SECTOR:last_sector * SECTOR + len(content)] = content
     return bytes(image)
 
 
@@ -579,6 +602,29 @@ def check(name, forth_lines, expected, disk_image=None, storage_faults=None):
 #  Tests
 # =====================================================================
 
+def test_marker1_context_caches_cover_32m_bitmap_geometry():
+    """Both mount-local bitmaps derive from marker-1's 16-sector ceiling."""
+    with open(VFS_MP_F, encoding="utf-8") as source_file:
+        source = source_file.read()
+
+    assert re.search(
+        r"(?m)^16\s+CONSTANT _VMP-MAX-BMAP-SECTORS$",
+        source,
+    )
+    assert re.search(r"(?m)^65536 CONSTANT _VMP-MAX-SECTORS$", source)
+    assert (
+        "_VMP-MAX-BMAP-SECTORS _VMP-SECTOR *\n"
+        "    CONSTANT _VMP-BMAP-CACHE-SIZE"
+    ) in source
+    assert (
+        "_VMP-C.BMAP _VMP-BMAP-CACHE-SIZE + CONSTANT _VMP-C.DIR"
+    ) in source
+    assert (
+        "_VMP-C.PFREE _VMP-BMAP-CACHE-SIZE + CONSTANT _VMP-C.DFREE"
+    ) in source
+    assert "_VMP-C.DFREE 1 CELLS + CONSTANT _VMP-CTX-SIZE" in source
+
+
 def test_range_alias_policy_uses_shared_checked_algebra():
     """MP64FS maps malformed extent geometry to an alias rejection."""
     with open(VFS_MP_F, encoding="utf-8") as source_file:
@@ -857,6 +903,37 @@ def test_constructor_adopts_volume_geometry():
         '_VMP-C.DSTART + @ 15 = AND',
         'IF ." GEOMETRY-OK" THEN',
     ], "GEOMETRY-OK", disk_image=image)
+
+
+def test_constructor_adopts_maximum_marker1_geometry_and_bitmap_maps():
+    """The final marker-1 sector is covered by both live allocation maps."""
+    image = build_last_sector_file_image()
+    last_sector = MARKER1_MAX_SECTORS - 1
+    check("maximum marker-1 bitmap geometry", [
+        'VARIABLE _MAX-OK -1 _MAX-OK !',
+        ': _MAX-CHECK  ( flag -- ) 0= IF 0 _MAX-OK ! THEN ;',
+        'T-ARENA T-VOLUME VMP-NEW CONSTANT _IOR CONSTANT _V',
+        '_IOR 0= _MAX-CHECK',
+        '_V V.BCTX @ CONSTANT _MAX-CTX',
+        f'_MAX-CTX _VMP-C.TOTAL + @ {MARKER1_MAX_SECTORS} = _MAX-CHECK',
+        '_MAX-CTX _VMP-C.BN + @ 16 = _MAX-CHECK',
+        '_MAX-CTX _VMP-C.DIRSTART + @ 17 = _MAX-CHECK',
+        '_MAX-CTX _VMP-C.DSTART + @ 29 = _MAX-CHECK',
+        '_VMP-BMAP-CACHE-SIZE 8192 = _MAX-CHECK',
+        '_VMP-CTX-SIZE 23632 = _MAX-CHECK',
+        'S" /last.bin" VFS-FF-READ _V VFS-OPEN? THROW CONSTANT _MAX-FD',
+        '_RB 4 _MAX-FD VFS-READ? THROW 4 = _MAX-CHECK',
+        '_RB 4 S" last" COMPARE 0= _MAX-CHECK',
+        '_MAX-FD VFS-CLOSE? THROW',
+        'S" /last.bin" _V VFS-RM 0= _MAX-CHECK',
+        f'_MAX-CTX _VMP-PFREE-BITSET {last_sector} '
+        'BITSET-TEST? AND _MAX-CHECK',
+        '_MAX-CTX _VMP-APPLY-DEFERRED-FREES',
+        f'{last_sector} _MAX-CTX _VMP-BIT-FREE? _MAX-CHECK',
+        f'_MAX-CTX _VMP-PFREE-BITSET {last_sector} '
+        'BITSET-TEST? AND 0= _MAX-CHECK',
+        '_MAX-OK @ IF ." MAX-GEOMETRY-OK" THEN',
+    ], "MAX-GEOMETRY-OK", disk_image=image)
 
 
 def test_constructor_rejects_malformed_media():
@@ -1580,6 +1657,7 @@ def main():
     test_constructor_requires_volume()
     test_constructor_propagates_checked_read_failure()
     test_constructor_adopts_volume_geometry()
+    test_constructor_adopts_maximum_marker1_geometry_and_bitmap_maps()
     test_constructor_rejects_malformed_media()
     test_constructor_reports_core_arena_exhaustion()
     test_final_directory_slot_mounts_without_pair_loop_wrap()

@@ -30,6 +30,15 @@ binding's mount callback. A separate `VMP-INIT` call is not required;
 The same API accepts a checked `VOL-SLICE`, so filesystem LBA zero is volume
 LBA zero rather than parent-device LBA zero.
 
+Marker 1 volumes may contain 15 through 65,536 512-byte sectors (through
+32 MiB). The allocation bitmap is derived as
+`ceil(total_sectors / 4096)`, from one through sixteen sectors. Each mount
+reserves a fixed, caller-arena-bounded 23,632-byte binding context: one maximum
+8 KiB live bitmap cache, one independent maximum 8 KiB deferred-free cache,
+the fixed directory and superblock caches, one scratch sector, and parsed
+state. Smaller volumes retain the same bounded context but read, scan, and
+publish only their geometry-selected bitmap sectors.
+
 Mount validates all of the following before exposing files:
 
 - the volume descriptor, cookie, media generation, and 512-byte sector size;
@@ -152,13 +161,15 @@ semantics.
 | Region | Contents |
 |---|---|
 | volume sector 0 | `MP64` superblock and geometry |
-| sector 1 onward | one or two allocation-bitmap sectors |
+| sector 1 onward | one through sixteen allocation-bitmap sectors |
 | next 12 sectors | 128 directory entries × 48 bytes |
 | remaining sectors | file extents |
 
 A directory entry stores a 24-byte NUL-padded name, primary sector/count,
 used-byte count, type, parent slot, and optional secondary sector/count.
-Directory parent `0xFF` denotes the VFS root.
+Directory parent `0xFF` denotes the VFS root. The u16 extent starts make sector
+65,535 the final representable LBA, so 65,536 sectors is marker 1's natural
+capacity ceiling rather than an arbitrary adapter limit.
 
 ## Public reference
 

@@ -189,7 +189,7 @@ component as filename.  Up to 16 levels of nested `LOAD`/`REQUIRE`.
 ### MP64FS
 
 The native filesystem.  It uses one marker and derived bitmap geometry from
-15 through 8192 sectors; the host default remains 2048 sectors (1 MiB).
+15 through 65,536 sectors; the host default remains 2048 sectors (1 MiB).
 
 **Disk layout:**
 

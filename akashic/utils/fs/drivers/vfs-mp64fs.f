@@ -23,9 +23,14 @@ REQUIRE ../../bitset.f
 128  CONSTANT _VMP-MAX-FILES
 48   CONSTANT _VMP-ENTRY-SIZE
 12   CONSTANT _VMP-DIR-SECTORS
-2    CONSTANT _VMP-MAX-BMAP-SECTORS
-8192 CONSTANT _VMP-MAX-SECTORS
+16    CONSTANT _VMP-MAX-BMAP-SECTORS
+65536 CONSTANT _VMP-MAX-SECTORS
 255  CONSTANT _VMP-ROOT-PARENT     \ parent=0xFF means root dir
+
+_VMP-MAX-BMAP-SECTORS _VMP-SECTOR *
+    CONSTANT _VMP-BMAP-CACHE-SIZE
+_VMP-MAX-FILES _VMP-ENTRY-SIZE *
+    CONSTANT _VMP-DIR-CACHE-SIZE
 
 \ File types
 0 CONSTANT _VMP-T-FREE
@@ -39,35 +44,35 @@ REQUIRE ../../bitset.f
 \  Allocated from the VFS arena by VMP-INIT, stored in V.BCTX.
 \
 \    +0      superblock cache   (512 bytes)
-\    +512    bitmap cache        (2 × 512 bytes maximum)
-\    +1536   directory cache     (128 × 48 = 6144 bytes)
-\    +7680   scratch buffer      (512 bytes)
-\    +8192   parsed geometry     (6 cells)
-\    +8240   dirty-bmap flag     (8 bytes)
-\    +8248   dirty-dir flag      (8 bytes)
-\    +8256   validated/ready     (8 bytes)
-\    +8264   deferred-free map   (2 × 512 bytes maximum)
-\    +9288   deferred-free flag  (8 bytes)
-\  = 9296 bytes
+\    +512    bitmap cache        (16 × 512 bytes maximum)
+\    +8704   directory cache     (128 × 48 = 6144 bytes)
+\    +14848  scratch buffer      (512 bytes)
+\    +15360  parsed geometry     (6 cells)
+\    +15408  dirty-bmap flag     (8 bytes)
+\    +15416  dirty-dir flag      (8 bytes)
+\    +15424  validated/ready     (8 bytes)
+\    +15432  deferred-free map   (16 × 512 bytes maximum)
+\    +23624  deferred-free flag  (8 bytes)
+\  = 23632 bytes
 
-9296 CONSTANT _VMP-CTX-SIZE
-
-\ Context field offsets
+\ Context field offsets are derived from the format ceilings so the live and
+\ deferred-free bitmap caches cannot silently diverge when geometry changes.
    0 CONSTANT _VMP-C.SUPER
- 512 CONSTANT _VMP-C.BMAP
-1536 CONSTANT _VMP-C.DIR
-7680 CONSTANT _VMP-C.SCRATCH
-8192 CONSTANT _VMP-C.TOTAL
-8200 CONSTANT _VMP-C.DSTART
-8208 CONSTANT _VMP-C.BSTART
-8216 CONSTANT _VMP-C.BN
-8224 CONSTANT _VMP-C.DIRSTART
-8232 CONSTANT _VMP-C.DIRN
-8240 CONSTANT _VMP-C.DBMAP
-8248 CONSTANT _VMP-C.DDIR
-8256 CONSTANT _VMP-C.READY
-8264 CONSTANT _VMP-C.PFREE
-9288 CONSTANT _VMP-C.DFREE
+_VMP-C.SUPER _VMP-SECTOR + CONSTANT _VMP-C.BMAP
+_VMP-C.BMAP _VMP-BMAP-CACHE-SIZE + CONSTANT _VMP-C.DIR
+_VMP-C.DIR _VMP-DIR-CACHE-SIZE + CONSTANT _VMP-C.SCRATCH
+_VMP-C.SCRATCH _VMP-SECTOR + CONSTANT _VMP-C.TOTAL
+_VMP-C.TOTAL 1 CELLS + CONSTANT _VMP-C.DSTART
+_VMP-C.DSTART 1 CELLS + CONSTANT _VMP-C.BSTART
+_VMP-C.BSTART 1 CELLS + CONSTANT _VMP-C.BN
+_VMP-C.BN 1 CELLS + CONSTANT _VMP-C.DIRSTART
+_VMP-C.DIRSTART 1 CELLS + CONSTANT _VMP-C.DIRN
+_VMP-C.DIRN 1 CELLS + CONSTANT _VMP-C.DBMAP
+_VMP-C.DBMAP 1 CELLS + CONSTANT _VMP-C.DDIR
+_VMP-C.DDIR 1 CELLS + CONSTANT _VMP-C.READY
+_VMP-C.READY 1 CELLS + CONSTANT _VMP-C.PFREE
+_VMP-C.PFREE _VMP-BMAP-CACHE-SIZE + CONSTANT _VMP-C.DFREE
+_VMP-C.DFREE 1 CELLS + CONSTANT _VMP-CTX-SIZE
 
 \ Accessor: ( vfs -- ctx )
 : _VMP-CTX  ( vfs -- ctx )  V.BCTX @ ;
