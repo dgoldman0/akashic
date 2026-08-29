@@ -229,6 +229,13 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
     load_cell = _word(source, "_RGRP-LOAD-CELL?")
     assert "_RGRP-PLANE-A" in load_cell
     assert "_RGRP-PLANE-W" in load_cell
+    assert "_RGRP-ENCODE-CELL?" in load_cell
+    encode_cell = _word(source, "_RGRP-ENCODE-CELL?")
+    assert "0x20 >=" in encode_cell
+    assert "0x7E <=" in encode_cell
+    assert encode_cell.index("_RGRP-UTF8 C!") < encode_cell.index("ELSE")
+    assert "CW-CELL-CP" in encode_cell
+    assert "UTF8-ENCODE" in encode_cell
     scoped = _word(source, "_RGRP-BUILD-SCOPED")
     assert "SCR-WITH-BACK-PLANE" in scoped
 
@@ -265,7 +272,8 @@ def test_residual_plan_is_byte_exact_linear_and_claim_exclusive() -> None:
     assert "_RGRP-RUN-COUNT @ 0= IF -1 EXIT THEN" in publish
     assert "_RGRP-PUBLISH-PLAN?" not in _word(source, "_RGRP-SCAN?")
     assert "CELL-A-BLINK" in _word(source, "_RGRP-LOAD-CELL?")
-    assert "CW-CELL-CP" in _word(source, "_RGRP-LOAD-CELL?")
+    assert "CW-CELL-CP" in encode_cell
+    assert "UTF8-ENCODE" in encode_cell
     assert "TUI-PALETTE>RGBA" not in _word(source, "_RGRP-STYLE-SAME?")
     assert _word(source, "_RGRP-WRITE-ITEM").count("TUI-PALETTE>RGBA") == 2
 

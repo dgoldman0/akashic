@@ -791,6 +791,27 @@ VARIABLE _RGRP-REF
     0 _RGRP-RUN-OPEN !
     -1 ;
 
+: _RGRP-ENCODE-CELL?  ( cp -- flag )
+    DUP 0= IF DROP 32 THEN
+    DUP 0x20 >= OVER 0x7E <= AND IF
+        \ CW-CELL-CP and UTF8-ENCODE both preserve printable ASCII.
+        \ Keep the overwhelmingly common Desktop path pure and retain the
+        \ guarded Unicode projection below for every other codepoint.
+        DUP _RGRP-CELL-CP !
+        _RGRP-UTF8 C!
+        1
+    ELSE
+        CW-CELL-CP DUP _RGRP-CELL-CP !
+        _RGRP-UTF8 UTF8-ENCODE _RGRP-UTF8 -
+    THEN
+    DUP 0> 0= IF
+        DROP _RGRP-SET-INVALID 0 EXIT
+    THEN
+    DUP _RGRP-CELL-U ! _RGRP-MAX-RUN-U @ U> IF
+        _RGRP-SET-UNREPRESENTABLE 0 EXIT
+    THEN
+    -1 ;
+
 : _RGRP-LOAD-CELL?  ( -- flag )
     _RGRP-ROW @ _RGRP-REGION-Y @ + _RGRP-PLANE-W @ *
     _RGRP-COL @ _RGRP-REGION-X @ + + 8 *
@@ -799,14 +820,7 @@ VARIABLE _RGRP-REF
     _RGRP-CELL-ATTR-MASK INVERT AND IF DROP _RGRP-SET-INVALID 0 EXIT THEN
     DUP CELL-A-BLINK AND IF DROP _RGRP-SET-UNREPRESENTABLE 0 EXIT THEN
     _RGRP-RICH-ATTR-MASK AND _RGRP-CELL-ATTRS !
-    _RGRP-CELL @ CELL-CP@ DUP 0= IF DROP 32 THEN
-        CW-CELL-CP DUP _RGRP-CELL-CP !
-    _RGRP-UTF8 UTF8-ENCODE _RGRP-UTF8 - DUP 0> 0= IF
-        DROP _RGRP-SET-INVALID 0 EXIT
-    THEN
-    DUP _RGRP-CELL-U ! _RGRP-MAX-RUN-U @ U> IF
-        _RGRP-SET-UNREPRESENTABLE 0 EXIT
-    THEN
+    _RGRP-CELL @ CELL-CP@ _RGRP-ENCODE-CELL? 0= IF 0 EXIT THEN
     _RGRP-CELL @ CELL-FG@ _RGRP-CELL-FG !
     _RGRP-CELL @ CELL-BG@ _RGRP-CELL-BG !
     -1 ;

@@ -148,36 +148,11 @@ HEX FFFF000000000000 INVERT CONSTANT _CELL-ATTRS-CLR DECIMAL
     CELL-ATTRS@ AND 0<> ;
 
 \ =====================================================================
-\ 7. Guard
+\ 7. Concurrency classification
 \ =====================================================================
-
-[DEFINED] GUARDED [IF] GUARDED [IF]
-REQUIRE ../concurrency/guard.f
-GUARD _cell-guard
-
-' CELL-MAKE           CONSTANT _cell-make-xt
-' CELL-CP@            CONSTANT _cell-cp-xt
-' CELL-FG@            CONSTANT _cell-fg-xt
-' CELL-BG@            CONSTANT _cell-bg-xt
-' CELL-ATTRS@         CONSTANT _cell-attrs-xt
-' CELL-FG!            CONSTANT _cell-fgset-xt
-' CELL-BG!            CONSTANT _cell-bgset-xt
-' CELL-ATTRS!         CONSTANT _cell-attrset-xt
-' CELL-CP!            CONSTANT _cell-cpset-xt
-' CELL-EQUAL?         CONSTANT _cell-eq-xt
-' CELL-EMPTY?         CONSTANT _cell-empty-xt
-' CELL-HAS-ATTR?      CONSTANT _cell-hasattr-xt
-
-: CELL-MAKE           _cell-make-xt    _cell-guard WITH-GUARD ;
-: CELL-CP@            _cell-cp-xt      _cell-guard WITH-GUARD ;
-: CELL-FG@            _cell-fg-xt      _cell-guard WITH-GUARD ;
-: CELL-BG@            _cell-bg-xt      _cell-guard WITH-GUARD ;
-: CELL-ATTRS@         _cell-attrs-xt   _cell-guard WITH-GUARD ;
-: CELL-FG!            _cell-fgset-xt   _cell-guard WITH-GUARD ;
-: CELL-BG!            _cell-bgset-xt   _cell-guard WITH-GUARD ;
-: CELL-ATTRS!         _cell-attrset-xt _cell-guard WITH-GUARD ;
-: CELL-CP!            _cell-cpset-xt   _cell-guard WITH-GUARD ;
-: CELL-EQUAL?         _cell-eq-xt      _cell-guard WITH-GUARD ;
-: CELL-EMPTY?         _cell-empty-xt   _cell-guard WITH-GUARD ;
-: CELL-HAS-ATTR?      _cell-hasattr-xt _cell-guard WITH-GUARD ;
-[THEN] [THEN]
+\
+\ CELL values and every word in this module are pure stack computation over
+\ immutable constants.  They neither own nor dereference shared storage, so a
+\ module guard would add synchronization without protecting any state.  The
+\ owner of the buffer containing a CELL remains responsible for synchronizing
+\ that buffer; screen.f provides that boundary for screen planes.
