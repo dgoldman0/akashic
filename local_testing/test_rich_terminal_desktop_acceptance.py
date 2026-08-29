@@ -315,6 +315,52 @@ def test_journey_advances_only_across_new_physically_presented_frames() -> None:
     ]
 
 
+def test_journey_mutation_markers_are_distinct_single_scalars() -> None:
+    assert len(PAD_ACCEPTANCE_TEXT) == 1
+    assert len(DAYBOOK_ACCEPTANCE_TASK) == 1
+    assert PAD_ACCEPTANCE_TEXT != DAYBOOK_ACCEPTANCE_TASK
+    assert PAD_ACCEPTANCE_TEXT.isprintable()
+    assert DAYBOOK_ACCEPTANCE_TASK.isprintable()
+
+
+def test_journey_rejects_preexisting_mutation_markers() -> None:
+    def sender(_method, _value, _offer, _generation):
+        return "progress"
+
+    pad = DesktopAcceptanceJourney(("READY",))
+    pad.after_present(_offer("X", offer_id=1), 1, _projection("READY"), sender)
+    with pytest.raises(PhysicalDesktopAcceptanceError, match="Pad acceptance"):
+        pad.after_present(
+            _offer("X", offer_id=2),
+            1,
+            _projection(PAD_FOCUS_MARKER + PAD_ACCEPTANCE_TEXT),
+            sender,
+        )
+
+    daybook = DesktopAcceptanceJourney(("READY",))
+    daybook.after_present(
+        _offer("X", offer_id=1), 1, _projection("READY"), sender
+    )
+    daybook.after_present(
+        _offer("X", offer_id=2), 1, _projection(PAD_FOCUS_MARKER), sender
+    )
+    daybook.after_present(
+        _offer("X", offer_id=3), 1, _projection(PAD_ACCEPTANCE_TEXT), sender
+    )
+    daybook.after_present(
+        _offer("X", offer_id=4), 1, _projection(DAYBOOK_FOCUS_MARKER), sender
+    )
+    with pytest.raises(
+        PhysicalDesktopAcceptanceError, match="Daybook acceptance"
+    ):
+        daybook.after_present(
+            _offer("X", offer_id=5),
+            1,
+            _projection(DAYBOOK_PROMPT_MARKER + DAYBOOK_ACCEPTANCE_TASK),
+            sender,
+        )
+
+
 def test_backpressured_action_retries_against_same_acknowledged_frame() -> None:
     journey = DesktopAcceptanceJourney(("READY",))
     statuses = iter(("backpressured", "progress", "progress"))

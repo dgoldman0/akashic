@@ -38,8 +38,12 @@ from session_viewer import (
 from shared_session import SessionClient, display_scope_to_wire
 
 
-PAD_ACCEPTANCE_TEXT = "rich vertical"
-DAYBOOK_ACCEPTANCE_TASK = "Rich terminal acceptance"
+# A PT TEXT scalar advances through the ordinary shell once per event loop,
+# and every accepted edit may produce a complete retained replacement.  One
+# distinctive scalar is sufficient to prove a real mutation in each app
+# without turning vertical acceptance into a full-frame cadence stress test.
+PAD_ACCEPTANCE_TEXT = "~"
+DAYBOOK_ACCEPTANCE_TASK = "^"
 PAD_FOCUS_MARKER = "[1:Akashic Pa*]"
 DAYBOOK_FOCUS_MARKER = "[3:Daybook*]"
 DAYBOOK_PROMPT_MARKER = "New task:"
@@ -824,6 +828,10 @@ class DesktopAcceptanceJourney:
             self._send("send_key", "alt+1", 1, offer, generation, sender)
             return JourneyProgress(milestone)
         if self.stage == 1 and PAD_FOCUS_MARKER in text:
+            if PAD_ACCEPTANCE_TEXT in text:
+                raise PhysicalDesktopAcceptanceError(
+                    "Pad acceptance marker was visible before editor input"
+                )
             self._send(
                 "send_text",
                 PAD_ACCEPTANCE_TEXT,
@@ -841,6 +849,10 @@ class DesktopAcceptanceJourney:
             self._send("send_key", "ctrl+n", 4, offer, generation, sender)
             return JourneyProgress()
         if self.stage == 4 and DAYBOOK_PROMPT_MARKER in text:
+            if DAYBOOK_ACCEPTANCE_TASK in text:
+                raise PhysicalDesktopAcceptanceError(
+                    "Daybook acceptance marker was visible before task input"
+                )
             self._send(
                 "send_text",
                 DAYBOOK_ACCEPTANCE_TASK,
@@ -1093,7 +1105,7 @@ def run_physical_desktop_acceptance(
     cols: int,
     rows: int,
     ready_markers: tuple[str, ...],
-    timeout: float = 180.0,
+    timeout: float,
     font_path: Path | None = None,
     font_size: int = 18,
     action_delay: float = 0.75,

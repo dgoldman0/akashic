@@ -262,6 +262,10 @@ DEFAULT_SMOKE_TIMEOUT = 120.0
 # their established watchdogs.
 DESKTOP_SMOKE_MAX_STEPS = 15_000_000_000
 DESKTOP_SMOKE_TIMEOUT = 420.0
+# The latest cold physical run reached its first complete retained frame near
+# 373 seconds.  Keep a finite post-boot runway for the six revision-bound
+# Pad/Daybook interactions without changing the Desktop smoke watchdog.
+DESKTOP_ACCEPTANCE_TIMEOUT = 600.0
 sys.path.insert(0, str(MEGAPAD_ROOT))
 
 from diskutil import (  # noqa: E402
@@ -31828,7 +31832,13 @@ def _parser() -> argparse.ArgumentParser:
                 default=OUTPUT_ROOT / "desktop-apt1-physical-acceptance",
             )
             command.add_argument(
-                "--timeout", type=_positive_seconds, default=420.0
+                "--timeout",
+                type=_positive_seconds,
+                default=DESKTOP_ACCEPTANCE_TIMEOUT,
+                help=(
+                    "overall physical journey timeout including cold boot "
+                    f"(default: {DESKTOP_ACCEPTANCE_TIMEOUT:g}s)"
+                ),
             )
             command.add_argument("--font", type=Path)
             command.add_argument(

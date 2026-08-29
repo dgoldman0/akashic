@@ -1946,6 +1946,9 @@ def test_session_server_command_is_the_serve_policy_source() -> None:
 def test_accept_parser_is_desktop_apt1_only_and_carries_viewer_options(
     tmp_path: Path,
 ) -> None:
+    defaults = _parser().parse_args(["accept"])
+    assert defaults.timeout == 600.0
+
     artifact_root = tmp_path / "physical-evidence"
     font = tmp_path / "font.ttf"
     args = _parser().parse_args(
